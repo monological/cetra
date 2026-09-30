@@ -19,12 +19,28 @@
 // streak; above the ceiling it breaks up before it reaches terminal velocity.
 #define RAIN_DROP_MIN_MM 0.5f
 #define RAIN_DROP_MAX_MM 6.0f
+// Nested boxes of falling drops round the camera, each three times the last.
+#define RAIN_STREAK_BOXES 3
+
+// The drops that SPLASH. On a wet surface a drop throws a crown once We Oh^-0.4 passes about
+// 2100 (Cossali, Coghe and Marengo 1997), which at terminal velocity is 2063 for a 1 mm drop;
+// smaller ones merge into the film. A splash is drawn as the droplets its crown sheds, each a
+// small drop on a ballistic arc, and a splash slot lives as long as its highest droplet flies.
+#define RAIN_SPLASH_MIN_MM 1.0f
+#define RAIN_SPLASH_DROPLETS 6
+#define RAIN_SPLASH_LIFE 0.4f
 
 // Half the depth the occlusion map spans along the rain's travel, either side of the camera,
 // in metres; and how far above the surface the map holds a point may sit and still count as
 // open sky. The map stores the surface nearest the sky, so a point ON it compares equal.
 #define RAIN_OCCLUSION_REACH 250.0f
 #define RAIN_EXPOSED_BIAS 0.02f
+// The polygon offset the map is drawn with, glPolygonOffset's factor and units: the shadow
+// pass's. A surface under slanted rain is stored this many depth steps a texel deeper than it
+// is, which a lookup that needs the SURFACE itself, not only which side of it a point is on,
+// has to take back out.
+#define RAIN_MAP_SLOPE_BIAS 2.0f
+#define RAIN_MAP_CONSTANT_BIAS 2.0f
 // How far off a surface, along its normal, its cover is asked for, in metres: a texel of the
 // map (9.4 cm at the default extent) and a little over. Asked AT the surface, a wall the rain
 // strikes at a grazing angle compares against its own depth quantised across a texel it

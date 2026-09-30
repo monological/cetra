@@ -1926,7 +1926,7 @@ void shadow_render_rain_layer(Engine* engine, Scene* scene) {
     // sky and let the lookup's bias absorb the rest.
     glCullFace(GL_BACK);
     glEnable(GL_POLYGON_OFFSET_FILL);
-    glPolygonOffset(SHADOW_DEPTH_SLOPE_BIAS, SHADOW_DEPTH_CONSTANT_BIAS);
+    glPolygonOffset(RAIN_MAP_SLOPE_BIAS, RAIN_MAP_CONSTANT_BIAS);
     glUseProgram(ss->depth_program->id);
     engine_upload_displacement_uniforms(engine, scene, ss->depth_program->uniforms);
     SubmitState state = {0};

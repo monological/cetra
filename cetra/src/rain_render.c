@@ -16,12 +16,9 @@
 #include "ext/log.h"
 
 // RAIN_DROP_MIN_MM: the smallest drop drawn, which is what the density a streak stands for
-// is counted above.
+// is counted above. RAIN_STREAK_BOXES and the splash's numbers: rain_vert.glsl reads which
+// kind of drop an instance is from its index, so both sides count the same instances.
 #include "../shaders/include/rain_constants.glsl"
-
-// Nested boxes around the camera, each three times the last: rain_vert.glsl reads the box
-// from the instance index, so the count lives only in the draw.
-#define RAIN_STREAK_BOXES 3
 
 // This program's units, its own ledger: 0 the scene depth, 1 the frame copy, 2 the fog volume,
 // and 10 and 15 the shadow arrays bind_shadow_maps_to_program fills.
@@ -96,12 +93,17 @@ static ShaderProgram* _rain_program(RainRenderer* rr, Engine* engine) {
     return program;
 }
 
-void rain_render_streaks(RainRenderer* rr, Engine* engine, Scene* scene,
-                         const PostFXLateDraw* late) {
+void rain_render_drops(RainRenderer* rr, Engine* engine, Scene* scene, const PostFXLateDraw* late) {
     if (!rr || !engine || !scene || !late)
         return;
     const Rain* rain = scene->rain;
-    if (!rain || !(rain->rate_mmh > 0.0f) || rain->streak_count <= 0 || !engine->camera) {
+    const int falling =
+        rain ? RAIN_STREAK_BOXES * (rain->streak_count > 0 ? rain->streak_count : 0) : 0;
+    // The splash slots are a square grid, whose side the shader reads a slot's cell from.
+    const int splash_side =
+        rain && rain->splash_count > 0 ? (int)floorf(sqrtf((float)rain->splash_count)) : 0;
+    const int droplets = splash_side * splash_side * RAIN_SPLASH_DROPLETS;
+    if (!rain || !(rain->rate_mmh > 0.0f) || falling + droplets == 0 || !engine->camera) {
         rr->prev_valid = false;
         return;
     }
@@ -159,11 +161,28 @@ void rain_render_streaks(RainRenderer* rr, Engine* engine, Scene* scene,
     uniform_set_float(u, "fallScale", fmaxf(rain->fall_scale, 0.0f));
     uniform_set_float(u, "shutter", rain->shutter_s);
     uniform_set_float(u, "boxHalf", rain->streak_radius);
-    uniform_set_int(u, "dropsPerBox", rain->streak_count);
+    uniform_set_int(u, "dropsPerBox", falling / RAIN_STREAK_BOXES);
     const float side = 2.0f * rain->streak_radius;
     uniform_set_float(u, "dropsPerStreak",
-                      rain_drop_density(rain->rate_mmh, RAIN_DROP_MIN_MM) * side * side * side /
-                          (float)rain->streak_count);
+                      falling > 0 ? rain_drop_density(rain->rate_mmh, RAIN_DROP_MIN_MM) * side *
+                                        side * side * RAIN_STREAK_BOXES / (float)falling
+                                  : 0.0f);
+
+    // How many drops big enough to splash land in one slot's cell over its life. A slot draws
+    // at most one splash a life: it fires with that count as its chance when there are fewer,
+    // and when there are more it fires every life and stands for all of them.
+    const float cell = splash_side > 0 ? 2.0f * rain->splash_radius / (float)splash_side : 1.0f;
+    const float per_life = rain_splash_flux(rain->rate_mmh) * cell * cell * RAIN_SPLASH_LIFE *
+                           fmaxf(rain->splash_amount, 0.0f);
+    uniform_set_int(u, "splashSide", splash_side);
+    uniform_set_float(u, "splashCell", cell);
+    uniform_set_float(u, "splashFire", fminf(per_life, 1.0f));
+    uniform_set_float(u, "splashStandsFor", fmaxf(per_life, 1.0f));
+    uniform_set_float(u, "splashSize", fmaxf(rain->splash_size, 0.0f));
+    // Down the rain from above a cell to what the occlusion map says it lands on.
+    vec3 travel = GLM_VEC3_ZERO_INIT;
+    rain_fall_direction(rain, travel);
+    uniform_set_vec3(u, "rainTravel", travel);
     uniform_set_float(u, "streakWidth", rain->streak_width);
     uniform_set_float(u, "streakBrightness", rain->streak_brightness);
     uniform_set_float(u, "forwardG", rain->streak_forward_g);
@@ -200,7 +219,7 @@ void rain_render_streaks(RainRenderer* rr, Engine* engine, Scene* scene,
     glEnable(GL_BLEND);
     glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
     glBindVertexArray(rr->vao);
-    glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, RAIN_STREAK_BOXES * rain->streak_count);
+    glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, falling + droplets);
     glBindVertexArray(0);
     // Back to the chain's resting state, which every composite there restores to.
     glDisable(GL_BLEND);
@@ -209,7 +228,7 @@ void rain_render_streaks(RainRenderer* rr, Engine* engine, Scene* scene,
         glEnable(GL_DEPTH_TEST);
     if (cull)
         glEnable(GL_CULL_FACE);
-    check_gl_error("rain streaks");
+    check_gl_error("rain drops");
     profiler_scope_end(engine->profiler);
 }
 

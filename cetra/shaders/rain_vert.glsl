@@ -33,6 +33,14 @@ uniform float streakBrightness;
 uniform float forwardG;
 uniform float glintShare;
 
+// The splashes: instances past the falling drops, RAIN_SPLASH_DROPLETS to a slot.
+uniform int splashSide;         // slots along each side of the square round the camera; 0 = none
+uniform float splashCell;       // metres across one slot's cell
+uniform float splashFire;       // the chance a slot splashes in a given life, 0..1
+uniform float splashStandsFor;  // the splashes each drawn one stands for, 1 or more
+uniform float splashSize;       // scale on the droplets' diameter
+uniform vec3 rainTravel;        // unit direction the rain, and the occlusion map, looks along
+
 out float vAcrossPx; // signed pixels from the streak's centre line
 out float vHalfWidth;
 out vec3 vLit;       // what the lights send toward the eye through the drop, pre-exposed
@@ -63,6 +71,10 @@ uniform sampler2DArray punctualShadowMaps;
 // times an exposure. Where between these two it rises is a judgment, not a measurement.
 const float RAIN_GLINT_D_MIN = 1.0;
 const float RAIN_GLINT_D_FULL = 2.5;
+// How far back up the rain's path from the camera's height a splash's landing is looked for
+// from, in metres: above anything near enough to splash on, and well inside the map's reach.
+const float RAIN_SPLASH_DROP_FROM = 50.0;
+const float RAIN_GRAVITY = 9.81;
 
 // A 4D integer hash (Jarzynski and Olano's pcg4d). Integer rather than the sin-fract form
 // noise.glsl carries, because here the SEEDS are consecutive integers by the ten thousand,
@@ -113,26 +125,154 @@ vec3 dropLit(vec3 P, vec3 toCamera, vec2 uv, float viewDepth) {
     return L * preExposure;
 }
 
-void main() {
-    int box = gl_InstanceID / dropsPerBox;
-    int idx = gl_InstanceID - box * dropsPerBox;
-    vec4 r = vec4(pcg4d(uvec4(uint(idx), uint(box), 0x9e3779b9u, 0x85ebca6bu))) / 4294967296.0;
+// A drop, as the streak below needs it: where it is, how fast it goes, its diameter in mm, how
+// far it has faded, how many real drops it stands for, and the hash its glints are keyed on.
+struct Drop {
+    vec3 P;
+    vec3 vel;
+    float dMm;
+    float fade;
+    float standsFor;
+    vec4 r;
+};
 
-    // Marshall-Palmer by inverting its CDF over the sizes drawn: most drops are small.
-    float span = 1.0 - exp(-mpLambda * (RAIN_DROP_MAX_MM - RAIN_DROP_MIN_MM));
-    float dMm = RAIN_DROP_MIN_MM - log(1.0 - r.w * span) / mpLambda;
-    float fall = max(0.0, RAIN_ATLAS_A - RAIN_ATLAS_B * exp(-RAIN_ATLAS_C * dMm)) * fallScale;
-    vec3 vel = rainWind - vec3(0.0, fall, 0.0);
+// Marshall-Palmer by inverting its CDF from `dMin`: most drops are the small ones.
+float mpDiameter(float u, float dMin) {
+    float span = 1.0 - exp(-mpLambda * (RAIN_DROP_MAX_MM - dMin));
+    return dMin - log(1.0 - u * span) / mpLambda;
+}
+
+float atlasSpeed(float dMm) {
+    return max(0.0, RAIN_ATLAS_A - RAIN_ATLAS_B * exp(-RAIN_ATLAS_C * dMm));
+}
+
+Drop fallingDrop(int instance) {
+    int box = instance / dropsPerBox;
+    int idx = instance - box * dropsPerBox;
+    Drop d;
+    d.r = vec4(pcg4d(uvec4(uint(idx), uint(box), 0x9e3779b9u, 0x85ebca6bu))) / 4294967296.0;
+    d.dMm = mpDiameter(d.r.w, RAIN_DROP_MIN_MM);
+    d.vel = rainWind - vec3(0.0, atlasSpeed(d.dMm) * fallScale, 0.0);
 
     // Every drop falls in a straight line through the world and is wrapped into a box that
     // follows the camera, so the rain stays put while the camera moves through it.
     float halfSize = boxHalf * pow(3.0, float(box));
     float size = 2.0 * halfSize;
-    vec3 rel = mod(r.xyz * size + vel * rainTime - cameraPos, size) - halfSize;
-    vec3 P = cameraPos + rel;
+    vec3 rel = mod(d.r.xyz * size + d.vel * rainTime - cameraPos, size) - halfSize;
+    d.P = cameraPos + rel;
     // A drop is fading out as it nears its box's face, where it wraps to the opposite one.
     float edge = max(abs(rel.x), max(abs(rel.y), abs(rel.z))) / halfSize;
-    float fade = 1.0 - smoothstep(0.75, 1.0, edge);
+    d.fade = 1.0 - smoothstep(0.75, 1.0, edge);
+    d.standsFor = dropsPerStreak * pow(27.0, float(box));
+    return d;
+}
+
+// The tallest step, in metres along the rain, between two neighbouring texels of the map that
+// is still one surface rather than the drop off its edge.
+const float RAIN_SPLASH_MAX_STEP = 0.25;
+
+/*
+ * The depth of the SURFACE the rain reaches at lookup uv `uv`, which the map does not hold
+ * directly: it was drawn with a slope bias, so a surface the rain meets at an angle is stored
+ * deeper than it is by RAIN_MAP_SLOPE_BIAS of its step a texel -- 5 cm on flat ground under
+ * a moderate wind, which buries a droplet that rises only a few. Three taps give the plane
+ * through the texel, which puts the depth at `uv` itself rather than at the texel's centre and
+ * takes the bias back out. False where there is nothing, or where the step is an edge.
+ */
+bool rainSurfaceDepth(vec2 uv, out float depth) {
+    vec2 size = vec2(textureSize(punctualShadowMaps, 0).xy);
+    vec2 at = uv * size - 0.5;
+    ivec2 texel = ivec2(floor(at));
+    vec2 frac = at - vec2(texel);
+    float m = texelFetch(punctualShadowMaps, ivec3(texel, rainOcclusionLayer), 0).r;
+    float mx = texelFetch(punctualShadowMaps, ivec3(texel + ivec2(1, 0), rainOcclusionLayer), 0).r;
+    float my = texelFetch(punctualShadowMaps, ivec3(texel + ivec2(0, 1), rainOcclusionLayer), 0).r;
+    if (max(m, max(mx, my)) >= 1.0)
+        return false;
+    vec2 step = vec2(mx - m, my - m);
+    float slope = max(abs(step.x), abs(step.y));
+    if (slope * 2.0 * RAIN_OCCLUSION_REACH > RAIN_SPLASH_MAX_STEP)
+        return false;
+    depth = m + dot(frac, step) - RAIN_MAP_SLOPE_BIAS * slope -
+            RAIN_MAP_CONSTANT_BIAS / 16777216.0; // one unit of a 24-bit depth
+    return true;
+}
+
+/*
+ * A droplet a splash throws. The slots are cells of a grid anchored in the WORLD, which the
+ * camera carries a whole cell at a time, and each cell is hashed on its world index -- so a
+ * splash stays where it landed as the eye walks past it. A cell's clock is offset by its hash,
+ * so the cells do not all splash on the same frame.
+ *
+ * What it lands on is the occlusion map's answer: from well above the cell, down the rain's
+ * travel by the depth the map holds there, which is the roof, the car or the road the rain
+ * actually reaches. Nothing under the map, or a map with no layer this frame, is no splash.
+ *
+ * The droplets leave at a fraction of the impact speed, steeply, round the whole circle: a
+ * judgment on the crown's shape rather than a measurement of it, which is what the speed and
+ * angle bands below are. The drop that made it is Marshall-Palmer above the splash floor.
+ */
+bool splashDroplet(int instance, out Drop d) {
+    int slot = instance / RAIN_SPLASH_DROPLETS;
+    int k = instance - slot * RAIN_SPLASH_DROPLETS;
+    int row = slot / splashSide;
+    ivec2 cell = ivec2(floor(cameraPos.xz / splashCell)) - splashSide / 2 +
+                 ivec2(slot - row * splashSide, row);
+    uvec2 key = uvec2(cell);
+    float clock = rainTime / RAIN_SPLASH_LIFE +
+                  float(pcg4d(uvec4(key, 0x51ed270bu, 0x2c1b3c6du)).x) / 4294967296.0;
+    float life = floor(clock);
+    float age = (clock - life) * RAIN_SPLASH_LIFE;
+    vec4 h = vec4(pcg4d(uvec4(key, uint(int(life)), 0x68e31da4u))) / 4294967296.0;
+    if (h.w >= splashFire || rainOcclusionLayer < 0)
+        return false;
+
+    // Back up the rain's own path, not straight up: in any wind a drop falls at an angle, and
+    // one followed down from overhead lands tens of metres downwind of the cell.
+    vec2 xz = (vec2(cell) + h.xy) * splashCell;
+    vec3 above = vec3(xz.x, cameraPos.y, xz.y) - rainTravel * RAIN_SPLASH_DROP_FROM;
+    vec3 pc = (rainOcclusionMatrix * vec4(above, 1.0)).xyz * 0.5 + 0.5;
+    float map;
+    if (!rainSurfaceDepth(pc.xy, map) || map <= pc.z)
+        return false;
+    vec3 hit = above + rainTravel * ((map - pc.z) * 2.0 * RAIN_OCCLUSION_REACH);
+
+    float impact = mpDiameter(h.z, RAIN_SPLASH_MIN_MM);
+    d.r = vec4(pcg4d(uvec4(key, uint(int(life)) * uint(RAIN_SPLASH_DROPLETS) + uint(k),
+                           0x1b873593u))) / 4294967296.0;
+    float az = 6.2831853 * (float(k) + d.r.x) / float(RAIN_SPLASH_DROPLETS);
+    float elev = mix(0.8, 1.3, d.r.y);
+    vec3 v0 = atlasSpeed(impact) * mix(0.08, 0.2, d.r.z) *
+              vec3(cos(elev) * cos(az), sin(elev), cos(elev) * sin(az));
+    d.vel = v0 - vec3(0.0, RAIN_GRAVITY * age, 0.0);
+    d.P = hit + v0 * age - vec3(0.0, 0.5 * RAIN_GRAVITY * age * age, 0.0);
+    if (d.P.y < hit.y)
+        return false; // landed
+    d.dMm = impact * mix(0.15, 0.35, d.r.w) * splashSize;
+    // Fading out toward the square's edge, where the camera's next step moves the grid.
+    vec2 rel = abs(xz - cameraPos.xz) / (0.5 * float(splashSide) * splashCell);
+    d.fade = 1.0 - smoothstep(0.75, 1.0, max(rel.x, rel.y));
+    d.standsFor = splashStandsFor;
+    return true;
+}
+
+void main() {
+    Drop d;
+    int falling = RAIN_STREAK_BOXES * dropsPerBox;
+    bool alive = true;
+    if (gl_InstanceID < falling)
+        d = fallingDrop(gl_InstanceID);
+    else
+        alive = splashSide > 0 && splashDroplet(gl_InstanceID - falling, d);
+    if (!alive) {
+        gl_Position = vec4(2.0, 2.0, 2.0, 1.0); // off every clip plane: nothing rasterizes
+        vAlpha = 0.0;
+        return;
+    }
+    vec3 P = d.P;
+    vec3 vel = d.vel;
+    float dMm = d.dMm;
+    vec4 r = d.r;
 
     // The streak: where the drop was when the shutter opened, relative to the camera then.
     vec3 tail = P - (vel - cameraVelocity) * shutter;
@@ -194,8 +334,7 @@ void main() {
     // Cover per END, so a streak crossing an eave is cut along its length rather than
     // dropped whole: the head is under the roof while the tail is still in the open.
     vec3 end = atHead ? P : tail;
-    float standsFor = dropsPerStreak * pow(27.0, float(box));
-    vAlpha = min(wPx * wPx / (drawW * drawL) * standsFor * streakBrightness, 1.0) * fade *
+    vAlpha = min(wPx * wPx / (drawW * drawL) * d.standsFor * streakBrightness, 1.0) * d.fade *
              rainExposure(end);
 
     vec3 toCamera = normalize(cameraPos - P);

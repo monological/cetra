@@ -92,6 +92,14 @@ typedef struct Rain {
     // dark shows only where light hits it; the default 2 = three times its surroundings, so
     // it shows everywhere there is anything to catch. A look, not a measurement.
     float streak_sheen;
+
+    // The splashes: `splash_count` slots on a grid `splash_radius` metres either way of the
+    // camera, each throwing the droplets of the drops big enough to splash that land in its
+    // cell, as often as the rate lands them there. 0 = none.
+    int splash_count;
+    float splash_radius;
+    float splash_amount; // scale on how many drops splash; 1 = physical
+    float splash_size;   // scale on the droplets' diameter; 1 = physical
 } Rain;
 
 // Created with a moderate rain's defaults at rate 0: nothing falls until a rate is set.
@@ -133,6 +141,7 @@ float rain_terminal_velocity(float d_mm);                // m/s, Atlas et al. 19
 float rain_extinction(float rate_mmh);                   // 1/m, geometric optics (Q_ext = 2)
 float rain_drop_density(float rate_mmh, float d_min_mm); // drops/m^3 above d_min
 float rain_median_diameter(float rate_mmh);              // mm, the volume-weighted median D0
+float rain_splash_flux(float rate_mmh); // drops over RAIN_SPLASH_MIN_MM landing, 1/(m^2 s)
 
 // --rain-probe: the physics at a fixed ladder of rates, an integration schedule run
 // twice at different pacing, and this rain's own rate and state. Needs no GL.

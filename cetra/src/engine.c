@@ -2245,7 +2245,7 @@ static void _engine_late_draw(void* user, const PostFXLateDraw* late) {
         return;
     if (!engine->rain_renderer)
         engine->rain_renderer = create_rain_renderer();
-    rain_render_streaks(engine->rain_renderer, engine, scene, late);
+    rain_render_drops(engine->rain_renderer, engine, scene, late);
 }
 
 void engine_set_overlay(Engine* engine, EngineOverlayFunc overlay, void* user) {

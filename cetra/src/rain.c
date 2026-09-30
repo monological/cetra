@@ -52,6 +52,13 @@ Rain* create_rain(void) {
     // leaves a night scene's rain invisible outside its lamps, which is true and is not what
     // a scene asking for rain wants.
     rain->streak_sheen = 2.0f;
+    // Moderate rain lands some 900 splashing drops a square metre a second, each throwing
+    // droplets for a few tenths of one: far more than any budget draws. A slot splashes once a
+    // life and stands for the rest, like a streak, over the ground a few steps round the eye.
+    rain->splash_count = 4096;
+    rain->splash_radius = 6.0f;
+    rain->splash_amount = 1.0f;
+    rain->splash_size = 1.0f;
     return rain;
 }
 
@@ -169,6 +176,20 @@ float rain_median_diameter(float rate_mmh) {
     return rate_mmh > 0.0f ? 3.672f / rain_mp_lambda(rate_mmh) : 0.0f;
 }
 
+// The number that land: the drops' density times their fall speed, integrated over the sizes
+// that splash. With Atlas's A - B exp(-C D) that is closed form,
+// N0 (A exp(-Lambda Dmin) / Lambda - B exp(-(Lambda + C) Dmin) / (Lambda + C)),
+// and the units come out per square metre per second: N0 per m^3 per mm times mm times m/s.
+float rain_splash_flux(float rate_mmh) {
+    if (!(rate_mmh > 0.0f))
+        return 0.0f;
+    float lambda = rain_mp_lambda(rate_mmh);
+    float d = RAIN_SPLASH_MIN_MM;
+    return RAIN_MP_N0 *
+           (RAIN_ATLAS_A * expf(-lambda * d) / lambda -
+            RAIN_ATLAS_B * expf(-(lambda + RAIN_ATLAS_C) * d) / (lambda + RAIN_ATLAS_C));
+}
+
 /*
  * The same wet-then-dry schedule at two frame rates. The state is integrated in closed
  * form per regime, so the two must agree to float rounding; a forward-Euler step, or a
@@ -199,9 +220,10 @@ void rain_probe_print(const Rain* rain) {
         const float r = rates[i];
         const float d0 = rain_median_diameter(r);
         printf("rain-probe physics rate=%.9g lambda=%.9g beta=%.9g density=%.9g d0=%.9g "
-               "v0=%.9g\n",
+               "v0=%.9g splash=%.9g\n",
                (double)r, (double)rain_mp_lambda(r), (double)rain_extinction(r),
-               (double)rain_drop_density(r, 0.5f), (double)d0, (double)rain_terminal_velocity(d0));
+               (double)rain_drop_density(r, 0.5f), (double)d0, (double)rain_terminal_velocity(d0),
+               (double)rain_splash_flux(r));
     }
     const float diameters[] = {0.5f, 1.0f, 2.0f, 4.0f};
     for (size_t i = 0; i < sizeof(diameters) / sizeof(diameters[0]); i++)
