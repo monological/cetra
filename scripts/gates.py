@@ -26926,6 +26926,9 @@ RAIN_SPLASH_ARM = {"splashRadius": 12.0, "splashSize": 3.0}
 RAIN_SPLASH_MIN = 0.0005
 # The fraction of a frame a feature has to move for it to count as there at all.
 RAIN_FEATURE_MIN = 0.01
+# Everything the rain draws in the air switched off, so a pair of frames differs only in what
+# lands on the surfaces.
+RAIN_SURFACES_ONLY = {"streakCount": 0, "splashCount": 0, "mist": 0.0}
 
 
 def _rain_twin(rate):
@@ -27022,6 +27025,9 @@ def run_rain_gate(workdir):
       rain-splashes from under the roof, splashes against none: they move the open ground
                     beyond it, and not a pixel of the ground under the roof nearest the
                     camera -- a splash lands where the occlusion map says the rain does.
+      rain-mist     the medium the post chain was handed is the rate's extinction times
+                    `mist`, handed over at the outermost streak box, and arms the volume;
+                    and on its own, in a fixture with no fog, it moves the frame.
       rain-ripples  the flooded twin seen from under the roof, rings against none: the open
                     water rings, and the covered water nearest the camera does not move by a
                     pixel. From the fixture's own camera that water is too far off for a
@@ -27174,12 +27180,14 @@ def run_rain_gate(workdir):
         failures.append("rain-determinism")
 
     # Sheen 0: these read the light a drop scatters, and the sheen is a look laid over what it
-    # refracts, which a lamp that lights the backdrop would move as well.
+    # refracts, which a lamp that lights the backdrop would move as well. No mist either: the
+    # medium past the streaks scatters the same lamp into the same sky, and these read streaks.
     def lamp_at(pos, cd, glint=None):
         def mutate(s):
             s["lights"] = [{"name": "rain_probe_lamp", "type": "point", "position": pos,
                             "color": [1.0, 1.0, 1.0], "intensity": cd, "range": 40.0}]
             s["rain"]["streakSheen"] = 0.0
+            s["rain"]["mist"] = 0.0
             if glint is not None:
                 s["rain"]["streakGlint"] = glint
         return mutate
@@ -27229,10 +27237,9 @@ def run_rain_gate(workdir):
     if not ok:
         failures.append("rain-glint")
 
-    # Surfaces only: no streaks and no splashes, so every difference between the two frames is
-    # the wetting.
-    surfaces = variant("surfaces", lambda s: s["rain"].update({"streakCount": 0,
-                                                               "splashCount": 0}))
+    # Surfaces only: no streaks, no splashes and no mist, so every difference between the two
+    # frames is the wetting.
+    surfaces = variant("surfaces", lambda s: s["rain"].update(RAIN_SURFACES_ONLY))
     wet_path = frame("wet", surfaces, RAIN_LINEAR)
     dry_path = frame("dry", surfaces, RAIN_LINEAR + ["--no-rain"])
     ratios = {}
@@ -27304,7 +27311,7 @@ def run_rain_gate(workdir):
     # Puddles against none, on the same soaked surfaces: rain_wet's frame is the puddled one.
     still_points = [p for n, p in RAIN_WET_POINTS if n.startswith("covered")] + RAIN_WALL_POINTS
     unpooled = frame("unpooled", variant("unpooled", lambda s: s["rain"].update(
-        {"streakCount": 0, "splashCount": 0, "puddleCoverage": 0.0})), RAIN_LINEAR)
+        {**RAIN_SURFACES_ONLY, "puddleCoverage": 0.0})), RAIN_LINEAR)
     frac, still_moved, still_total = 0.0, -1, 0
     if wet_path and unpooled:
         w, h, _ = _read_ppm(wet_path)
@@ -27325,7 +27332,7 @@ def run_rain_gate(workdir):
     def splashes(name, count):
         def mutate(s):
             s["camera"] = dict(RAIN_UNDER_ROOF_CAMERA)
-            s["rain"].update({"streakCount": 0, **RAIN_SPLASH_ARM})
+            s["rain"].update({"streakCount": 0, "mist": 0.0, **RAIN_SPLASH_ARM})
             if count is not None:
                 s["rain"]["splashCount"] = count
         return frame(name, variant(name, mutate), RAIN_LINEAR)
@@ -27345,6 +27352,38 @@ def run_rain_gate(workdir):
     if not ok:
         failures.append("rain-splashes")
 
+    # The rain as a medium: what the post chain was handed, against the rate's extinction and
+    # the streaks' reach as the scene sets them, and then that it reaches a frame on its own --
+    # the fixture has no fog, so nothing else arms the volume.
+    state = (got.get("state") or [{}])[0]
+    medium = (got.get("medium") or [{}])[0]
+    nan = float("nan")
+    want_sigma = _rain_twin(state["rate"])["beta"] * state["mist"] if "rate" in state else nan
+    want_near = (state.get("streak_radius", nan) * 3 ** (_rain_constant("RAIN_STREAK_BOXES") - 1)
+                 if state.get("streak_count", 0) > 0 else 0.0)
+    sigma_err = abs(medium.get("sigma", nan) - want_sigma) / want_sigma
+    near_err = abs(medium.get("near", nan) - want_near)
+
+    def misty(name, mist):
+        return frame(name, variant(name, lambda s: s["rain"].update(
+            {"streakCount": 0, "splashCount": 0, "mist": mist})), RAIN_LINEAR)
+
+    clear, misted = misty("clear", 0.0), misty("misted", 1.0)
+    frac = 0.0
+    if clear and misted:
+        w, h, _ = _read_ppm(clear)
+        ae, _ = compare(clear, misted)
+        frac = ae / (w * h)
+    ok = (sigma_err <= RAIN_TOL and near_err <= 1e-4 and medium.get("armed") == 1.0
+          and frac > RAIN_FEATURE_MIN)
+    print(f"  rain-mist {'PASS' if ok else 'FAIL'}  published extinction {medium.get('sigma', nan):.6g}"
+          f"/m against {want_sigma:.6g} ({sigma_err:.1e} apart, want <= {RAIN_TOL:g}), handover "
+          f"{medium.get('near', nan):g} m against {want_near:g}, armed {medium.get('armed', nan):g} "
+          f"(want 1); the medium alone moves {frac:.1%} of a fogless frame (want > "
+          f"{RAIN_FEATURE_MIN:.0%})")
+    if not ok:
+        failures.append("rain-mist")
+
     # Rings against none on the flooded twin, looking out from under the roof.
     water = asset(RAIN_WATER_FIXTURE)
     if not os.path.exists(water):
@@ -27354,7 +27393,7 @@ def run_rain_gate(workdir):
     def under_roof(name, strength):
         def mutate(s):
             s["camera"] = dict(RAIN_UNDER_ROOF_CAMERA)
-            s["rain"].update({"streakCount": 0, "splashCount": 0, "rippleSize": RAIN_RING_SIZE})
+            s["rain"].update({**RAIN_SURFACES_ONLY, "rippleSize": RAIN_RING_SIZE})
             if strength is not None:
                 s["rain"]["rippleStrength"] = strength
         path = os.path.join(workdir, f"rain_{name}.cscn")
