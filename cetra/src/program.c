@@ -746,6 +746,14 @@ ShaderProgram* create_xyz_program() {
     return program;
 }
 
+ShaderProgram* create_rain_program() {
+    ShaderProgram* program = create_program_from_source(CETRA_PROGRAM_RAIN, rain_vert_shader_str,
+                                                        rain_frag_shader_str, NULL);
+    if (!program)
+        log_error("Failed to initialize rain shader program");
+    return program;
+}
+
 ShaderProgram* create_shadow_depth_program() {
     ShaderProgram* program = NULL;
 

@@ -571,6 +571,20 @@ void apply_cscene_rain(Scene* scene, const CetraSceneDesc* cscn) {
         rain->puddle_coverage = r->puddle_coverage;
     if (r->has_occlusion_extent)
         rain->occlusion_extent = r->occlusion_extent;
+    if (r->has_streak_count)
+        rain->streak_count = r->streak_count;
+    if (r->has_streak_radius)
+        rain->streak_radius = r->streak_radius;
+    if (r->has_shutter)
+        rain->shutter_s = r->shutter;
+    if (r->has_streak_width)
+        rain->streak_width = r->streak_width;
+    if (r->has_streak_brightness)
+        rain->streak_brightness = r->streak_brightness;
+    if (r->has_streak_forward_g)
+        rain->streak_forward_g = r->streak_forward_g;
+    if (r->has_streak_glint)
+        rain->streak_glint = r->streak_glint;
     if (!r->has_settled || r->settled)
         rain_settle(rain);
     free_rain(scene->rain);

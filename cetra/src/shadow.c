@@ -1827,15 +1827,11 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     glViewport(prev_viewport[0], prev_viewport[1], prev_viewport[2], prev_viewport[3]);
 }
 
-// Half the depth the rain's map spans along the rain's travel, either side of the
-// camera. A tower above and a cellar below both fit, and 500 m in 24 bits is 30
-// microns a step, so the reach costs no resolution worth having.
-#define RAIN_OCCLUSION_REACH 250.0f
-
-// How far above the surface the map holds a point may sit and still count as open
-// sky, in metres. The map stores the surface nearest the sky, so a point ON that
-// surface compares equal to it, give or take the depth offset the pass renders with.
-#define RAIN_EXPOSED_BIAS 0.02f
+// RAIN_OCCLUSION_REACH and RAIN_EXPOSED_BIAS: the map's depth range and the lookup's
+// bias, shared with rain_occlusion.glsl, which has to invert the one and apply the other.
+// A tower above and a cellar below both fit in the reach, and 500 m in 24 bits is 30
+// microns a step, so it costs no resolution worth having.
+#include "../shaders/include/rain_constants.glsl"
 
 void shadow_render_rain_layer(Engine* engine, Scene* scene) {
     if (!engine || !scene || !scene->shadow_system)

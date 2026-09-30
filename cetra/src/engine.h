@@ -240,6 +240,9 @@ typedef struct Engine {
     // CPU masked occlusion culling (spec 11.98). Fixed working set, no GL;
     // rebuilt per camera frame, skipped under captures.
     struct OcclusionContext* occlusion;
+    // The rain's streaks (spec 13.9), drawn from postfx's late draw. Created the
+    // first frame a scene rains; NULL until then.
+    struct RainRenderer* rain_renderer;
     // ViewParams (spec 10.1): the working-space contract every pass writing
     // scene radiance reads. Engine-owned rather than PostFX-owned because it
     // must be live during the SCENE passes, which run before postfx does.

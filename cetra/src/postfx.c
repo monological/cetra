@@ -219,6 +219,13 @@ void postfx_set_fog_ambient(PostFX* fx, const vec3 rgb) {
     fx->fog_ambient_from_sky = false;
 }
 
+void postfx_set_late_draw(PostFX* fx, PostFXLateDrawFunc draw, void* user) {
+    if (!fx)
+        return;
+    fx->late_draw = draw;
+    fx->late_draw_user = user;
+}
+
 // Depth-only FBO used as the blit target when resolving the MSAA depth
 // buffer. The format must match the engine's GL_DEPTH24_STENCIL8 exactly
 // (multisample blits require identical formats), and a color-less FBO is
@@ -2778,7 +2785,10 @@ static void postfx_build_fog_volume(PostFX* fx, mat4 projection, mat4 view, bool
 // Either medium runs without the other. The fog layer and its history stay at
 // RENDER res so the jitter-cancelling accumulator reads the aux depth 1:1
 // (spec 9.5.1); only the stabilized layer magnifies at the fold.
-static void postfx_run_atmosphere(PostFX* fx, GLuint canvas_fbo, bool aux_written,
+//
+// Returns whether the fog volume was built this frame, which is what tells a late draw
+// whether it holds this frame's medium or a stale one.
+static bool postfx_run_atmosphere(PostFX* fx, GLuint canvas_fbo, bool aux_written,
                                   bool taa_resolving, mat4 projection, mat4 view,
                                   const PostFXGBufferWrites* writes) {
     // Both need the aux buffer: it is the only source of the linear depth the
@@ -2792,7 +2802,7 @@ static void postfx_run_atmosphere(PostFX* fx, GLuint canvas_fbo, bool aux_writte
     // air the sight line never crosses down there.
     const bool aerial_on = fx->aerial_volume != 0 && !fx->water_suppress_aerial;
     if (!aux_written || (!fog_on && !aerial_on))
-        return;
+        return false;
     // Inside the callee, below its early return: this function is a no-op on
     // most frames, and a scope at the call site would file a 0.000 ms row for
     // every one of them. Absent has to mean off.
@@ -2885,6 +2895,7 @@ static void postfx_run_atmosphere(PostFX* fx, GLuint canvas_fbo, bool aux_writte
 
     check_gl_error("postfx atmosphere");
     profiler_scope_end(fx->profiler);
+    return fog_on;
 }
 
 // Screen-space reflections: rebuild the Hi-Z min-depth pyramid, march the
@@ -3652,7 +3663,8 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             profiler_scope_end(fx->profiler);
         }
 
-        postfx_run_atmosphere(fx, canvas_fbo, aux_written, taa_resolving, projection, view, writes);
+        const bool fog_built = postfx_run_atmosphere(fx, canvas_fbo, aux_written, taa_resolving,
+                                                     projection, view, writes);
 
         // Separable SSS: blur the resolved skin-diffuse buffer and fold
         // blur - diffuse into the canvas, softening diffuse while specular
@@ -3672,6 +3684,24 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             profiler_scope_begin(fx->profiler, "motion blur");
             postfx_run_motion_blur(fx, canvas_fbo, canvas_tex);
             profiler_scope_end(fx->profiler);
+        }
+
+        // The late draw (spec 13.9): past the temporal seam and past motion blur, so what
+        // draws here is neither reprojected nor blurred a second time, and before DoF so
+        // it defocuses with the frame. The callee owns its GL state and restores blending.
+        if (fx->late_draw) {
+            glBindFramebuffer(GL_FRAMEBUFFER, canvas_fbo);
+            glViewport(0, 0, fx->post_width, fx->post_height);
+            const PostFXLateDraw late = {
+                .width = fx->post_width,
+                .height = fx->post_height,
+                .fog_volume = fog_built ? fx->froxel_integrated : 0,
+                .fog_slices = fog_built ? fx->froxel_built_z : 0,
+                .fog_near = postfx_fog_near(fx, projection),
+                .fog_far = fx->fog_far,
+                .fog_depth_dist = fx->fog_depth_dist,
+            };
+            fx->late_draw(fx->late_draw_user, &late);
         }
 
         // Depth of field replaces the scene that bloom and tone mapping read.

@@ -244,6 +244,20 @@ typedef struct CSceneRain {
     float puddle_coverage;
     bool has_occlusion_extent;
     float occlusion_extent; // metres, the width of the square cover is known over
+    bool has_streak_count;
+    int streak_count; // drops per nested box
+    bool has_streak_radius;
+    float streak_radius; // metres, the innermost box's half-width
+    bool has_shutter;
+    float shutter; // seconds
+    bool has_streak_width;
+    float streak_width;
+    bool has_streak_brightness;
+    float streak_brightness;
+    bool has_streak_forward_g;
+    float streak_forward_g;
+    bool has_streak_glint;
+    float streak_glint;
     // false = the world starts dry and wets as the scene runs; absent = already soaked
     bool has_settled;
     bool settled;

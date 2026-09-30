@@ -6,6 +6,9 @@
 
 #include "ext/log.h"
 
+// The Atlas fit's coefficients, which the streak shader draws every drop's fall with.
+#include "../shaders/include/rain_constants.glsl"
+
 Rain* create_rain(void) {
     Rain* rain = calloc(1, sizeof(Rain));
     if (!rain) {
@@ -25,6 +28,19 @@ Rain* create_rain(void) {
     // the frame, and a 1024-texel map spent over it is 9.4 cm a texel -- under the
     // overhang of an eave.
     rain->occlusion_extent = 96.0f;
+    // Real rain is about 900 drops a cubic metre at 10 mm/h; this draws some 30 in the
+    // nearest box, and the rest of it is the medium's to carry (the fog, phase 7). The
+    // shutter is a camera's 1/60 s, which streaks a 2 mm drop over 11 cm.
+    rain->streak_count = 16384;
+    rain->streak_radius = 4.0f;
+    rain->shutter_s = 1.0f / 60.0f;
+    rain->streak_width = 1.0f;
+    rain->streak_brightness = 1.0f;
+    rain->streak_forward_g = 0.8f;
+    // The lamp's image in a drop is a point, so nearly all of what it sends arrives as the
+    // flashes; the rest is smoothed by the drop's own blur and the lens's. A judgement, not
+    // a measurement: the energy is the same at any value.
+    rain->streak_glint = 0.8f;
     return rain;
 }
 
@@ -106,9 +122,8 @@ float rain_mp_lambda(float rate_mmh) {
     return rate_mmh > 0.0f ? 4.1f * powf(rate_mmh, -0.21f) : INFINITY;
 }
 
-// Negative below 0.11 mm, where the fit no longer describes anything that falls.
 float rain_terminal_velocity(float d_mm) {
-    return fmaxf(0.0f, 9.65f - 10.3f * expf(-0.6f * d_mm));
+    return fmaxf(0.0f, RAIN_ATLAS_A - RAIN_ATLAS_B * expf(-RAIN_ATLAS_C * d_mm));
 }
 
 // Integral of Q_ext * pi D^2 / 4 over N0 exp(-Lambda D), with Q_ext = 2 for drops this
