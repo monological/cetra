@@ -3044,17 +3044,24 @@ static void postfx_run_ssr(PostFX* fx, GLuint canvas_fbo, GLuint canvas_tex, boo
     int ssr_seed = ssr_temporal_on ? fx->frame_index % 4096 : 0;
     uniform_set_int(fx->ssr_program->uniforms, "ssrFrameIndex", ssr_seed);
     uniform_set_float(fx->ssr_program->uniforms, "ssrJitter", fx->ssr_jitter);
-    // Local-probe fallback for rays the march cannot answer. The
-    // probe lives in world space while SSR is view-space, so this is
-    // the only postfx consumer of the view matrix.
+    // The probes live in world space, and so does the height fog a replacing wet pair's hit
+    // is seen through, while SSR marches in view space.
+    mat4 inv_view;
+    glm_mat4_inv(view, inv_view);
+    uniform_set_mat4(fx->ssr_program->uniforms, "invView", (float*)inv_view);
+    // That fog: the global height medium the environment's reflection is baked through.
+    uniform_set_float(fx->ssr_program->uniforms, "ssrFogDensity",
+                      wet_replace && fx->fog_enabled ? fx->fog_density : 0.0f);
+    uniform_set_float(fx->ssr_program->uniforms, "ssrFogFalloff",
+                      fmaxf(fx->fog_height_falloff, 1e-3f));
+    uniform_set_float(fx->ssr_program->uniforms, "ssrFogFloorY", fx->fog_floor_y);
+    uniform_set_vec3(fx->ssr_program->uniforms, "ssrFogInscatter", fx->fog_ambient);
+    // Local-probe fallback for rays the march cannot answer.
     uniform_set_int(fx->ssr_program->uniforms, "probeEnabled", fx->probe_enabled ? 1 : 0);
     if (fx->probe_enabled) {
-        mat4 inv_view;
-        glm_mat4_inv(view, inv_view);
         glActiveTexture(GL_TEXTURE3);
         glBindTexture(GL_TEXTURE_CUBE_MAP, fx->probe_cubemap);
         glActiveTexture(GL_TEXTURE0);
-        uniform_set_mat4(fx->ssr_program->uniforms, "invView", (float*)inv_view);
         uniform_set_vec3(fx->ssr_program->uniforms, "probePos", fx->probe_pos);
         uniform_set_vec3(fx->ssr_program->uniforms, "probeBoxMin", fx->probe_box_min);
         uniform_set_vec3(fx->ssr_program->uniforms, "probeBoxMax", fx->probe_box_max);
@@ -3066,13 +3073,10 @@ static void postfx_run_ssr(PostFX* fx, GLuint canvas_fbo, GLuint canvas_tex, boo
     // pass needs is the atlas and the flag that arms the branch.
     uniform_set_int(fx->ssr_program->uniforms, "probeMulti", fx->probe_multi ? 1 : 0);
     if (fx->probe_multi) {
-        mat4 inv_view;
-        glm_mat4_inv(view, inv_view);
         glActiveTexture(GL_TEXTURE5);
         glBindTexture(GL_TEXTURE_2D, fx->probe_atlas);
         glActiveTexture(GL_TEXTURE0);
         uniform_set_int(fx->ssr_program->uniforms, "probeAtlasTex", 5);
-        uniform_set_mat4(fx->ssr_program->uniforms, "invView", (float*)inv_view);
     }
     draw_fullscreen_quad(fx->quad_vao);
 
