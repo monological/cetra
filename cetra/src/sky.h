@@ -146,9 +146,9 @@ typedef struct SkyAtmosphere {
     // moon_dir), zenith_radiance, the slicer, and the cycle's own clock state.
     //
     // BY FUNCTION: sun_elevation_deg, sun_azimuth_deg, night_floor_enabled,
-    // night_floor_brightness and overcast are written directly and then
-    // re-derived through sky_update_sun and then
-    // scene_environment_changed(scene, engine): the sky-view LUT, the env cube,
+    // night_floor_brightness and overcast are written directly, then re-derived
+    // through sky_update_sun and scene_environment_changed(scene, engine): the
+    // sky-view LUT, the env cube,
     // the sky-mirroring probes and the GI sweep all descend from them, and a
     // write without the call reaches the background alone. Everything else the
     // sky draws from is read live each frame, the moon included.
@@ -191,10 +191,10 @@ typedef struct SkyAtmosphere {
     bool night_floor_enabled;
     float night_floor_brightness; // scale on the baked radiance (1 = default)
 
-    // How much of the sky is under cloud (spec 13.7): 0 the clear sky, 1 a
-    // deck with no direct sun at all, lit as the CIE standard overcast dome.
-    // Baked into the sky-view LUT like the night floor, and it re-baked
-    // through the same chain.
+    // How much of the sky is under cloud (spec 13.7), taken clamped to 0..1: 0
+    // the clear sky, 1 a deck with no direct sun at all, lit as the CIE
+    // standard overcast dome. Baked into the sky-view LUT like the night floor,
+    // so it takes the same re-bake chain.
     float overcast;
 
     // The day/night cycle (spec 11.81). One clock: cycle_hour (0-24, solar
@@ -418,14 +418,18 @@ int sky_bake(SkyAtmosphere* sky, struct IBLResources* ibl, struct Engine* engine
 // shared by the app's setup and the GUI's live re-bake.
 void sky_apply_sun_to_light(SkyAtmosphere* sky);
 
-// The overcast as every consumer takes it, shaders included: `overcast`
-// clamped to 0..1.
+// `overcast` as it takes effect: clamped to 0..1.
 float sky_overcast_amount(const SkyAtmosphere* sky);
 
 // The overcast dome's zenith radiance at the current sun, on the sky's scale
 // (spec 13.7): the Lz of the CIE overcast sky's L = Lz (1 + 2 cos theta) / 3,
-// whatever `overcast` is set to. For readouts and diagnostics.
+// whatever `overcast` is set to.
 float sky_overcast_zenith(const SkyAtmosphere* sky);
+
+// Upload what the overcast deck does, for a sun at sin(elevation) sun_y, to a
+// program that includes sky_deck.glsl (spec 13.7). The program must be in use.
+// The only way the deck reaches a shader, so the model has one owner.
+void sky_bind_deck(const SkyAtmosphere* sky, ShaderProgram* program, float sun_y);
 
 // The moon's brightness as a fraction of a full moon's, from the current sun
 // and moon directions. 1 at full, ~0.09 at quarter, ~0 at new -- a real moon

@@ -217,21 +217,26 @@ static float sky_night_factor(const SkyAtmosphere* sky) {
 }
 
 /*
- * The overcast dome's zenith radiance (spec 13.7) for a sun at sin(elevation)
- * sun_y, on the sky's scale. Krochmann's fit for the CIE overcast sky,
- * Lz = 8.6 sin h + 0.123 kcd/m^2, divided by the 127.5 klux an unattenuated sun
- * delivers, so it lands per unit of SKY_SUN_ILLUMINANCE like everything else
- * the sky emits.
- *
- * A parameter rather than the live sun because the cycle's slicer bakes from a
- * LATCHED sun, and a dome read from the live one would seam the env faces. The
- * fit's constant is the dome at a horizon sun; it fades through twilight on the
- * night ramp, so an overcast night is the night floor's alone.
+ * The overcast dome (spec 13.7): Krochmann's fit for the zenith radiance of the
+ * CIE standard overcast sky, Lz = 8.6 sin h + 0.123 kcd/m^2 at sun elevation h.
+ * Divided by what an unattenuated sun delivers, it lands per unit of
+ * SKY_SUN_ILLUMINANCE like everything else the sky emits.
  */
+#define SKY_SUN_KLUX          127.5f // an unattenuated sun's illuminance, klux
+#define SKY_OVERCAST_LZ_SIN   8.6f   // kcd/m^2 per unit sin(elevation)
+#define SKY_OVERCAST_LZ_FLOOR 0.123f // kcd/m^2 with the sun at the horizon
+// The CIE dome puts (7/9) pi Lz onto a horizontal plane; this is that over pi.
+#define SKY_OVERCAST_FLOOR (7.0f / 9.0f)
+
+// Lz for a sun at sin(elevation) sun_y. A parameter rather than the live sun
+// because the cycle's slicer bakes from a LATCHED sun, and a dome read from the
+// live one would seam the env faces. The horizon constant fades through
+// twilight on the night ramp, so an overcast night is the night floor's alone.
 static float sky_overcast_zenith_at(float sun_y) {
     const float y = glm_clamp(sun_y, -1.0f, 1.0f);
     const float day = 1.0f - sky_night_factor_at(glm_deg(asinf(y)));
-    return SKY_SUN_ILLUMINANCE / 127.5f * (8.6f * fmaxf(y, 0.0f) + 0.123f * day);
+    return SKY_SUN_ILLUMINANCE / SKY_SUN_KLUX *
+           (SKY_OVERCAST_LZ_SIN * fmaxf(y, 0.0f) + SKY_OVERCAST_LZ_FLOOR * day);
 }
 
 float sky_overcast_zenith(const SkyAtmosphere* sky) {
@@ -242,12 +247,39 @@ float sky_overcast_amount(const SkyAtmosphere* sky) {
     return sky ? glm_clamp(sky->overcast, 0.0f, 1.0f) : 0.0f;
 }
 
-// What of the sky is still clear: the ONE weight everything the sun drives
-// fades by under a deck -- its light, its disc, the LUT's clear part -- and the
-// stars and moon with them, so nothing comes through the cloud that the sky
-// does not show. Exactly 1 at no overcast.
-static float sky_clear_fraction(const SkyAtmosphere* sky) {
-    return 1.0f - sky_overcast_amount(sky);
+/*
+ * What a deck does, stated once (spec 13.7). Every consumer takes these numbers
+ * and never the setting, so the model lives here and the shaders only apply it
+ * (include/sky_deck.glsl).
+ *
+ * `clear` is the deck's transmission, which the sun, the stars and the moon all
+ * come through. `sun_scale` is what arrives of the sun's own radiance -- the
+ * sky's scatter, its disc, its light -- and is `clear` until the sky has a
+ * photometric scale. `zenith` and `floor` are the dome's zenith radiance and its
+ * irradiance over pi, already weighted by the deck, so a clear sky adds exact
+ * zeros and the default path is the arithmetic it always was.
+ */
+typedef struct SkyDeck {
+    float clear;
+    float sun_scale;
+    float zenith;
+    float floor;
+} SkyDeck;
+
+static SkyDeck sky_deck_at(const SkyAtmosphere* sky, float sun_y) {
+    const float o = sky_overcast_amount(sky);
+    const float lz = sky_overcast_zenith_at(sun_y);
+    return (SkyDeck){.clear = 1.0f - o,
+                     .sun_scale = 1.0f - o,
+                     .zenith = o * lz,
+                     .floor = o * SKY_OVERCAST_FLOOR * lz};
+}
+
+void sky_bind_deck(const SkyAtmosphere* sky, ShaderProgram* program, float sun_y) {
+    const SkyDeck deck = sky_deck_at(sky, sun_y);
+    uniform_set_float(program->uniforms, "deckSunScale", deck.sun_scale);
+    uniform_set_float(program->uniforms, "deckZenith", deck.zenith);
+    uniform_set_float(program->uniforms, "deckFloor", deck.floor);
 }
 
 // The horizon fade a sky body's LIGHT rides out on: 1 at and above +3
@@ -353,14 +385,11 @@ void sky_sun_transmittance(const SkyAtmosphere* sky, vec3 out_color) {
     sky_transmittance_at(sky ? sky->sun_dir[1] : -1.0f, out_color);
 }
 
-// The clear sky's single-scattering integral straight up, ADDED into `out`.
-// Accumulating into the caller's vector rather than returning its own keeps the
-// sum's order what it always was when the floor is already in it.
-static void sky_clear_zenith_add(const SkyAtmosphere* sky, vec3 out);
-
 // Zenith sky radiance: what an isotropic medium at ground level receives from
-// the sky, read by the fog ambient and the water as irradiance over pi. Cached
-// on sun move by sky_update_sun_dir; never call this per frame.
+// the sky, read by the fog ambient and the water as irradiance over pi. The
+// sun's transmittance is taken at ground level for every sample -- it varies
+// with altitude, but this feeds a flat ambient term, not a shading model.
+// Cached on sun move by sky_update_sun_dir; never call this per frame.
 static void sky_zenith_radiance(const SkyAtmosphere* sky, vec3 out) {
     glm_vec3_zero(out);
     // The floor first (spec 11.80): an isotropic radiance field's ambient IS
@@ -370,25 +399,9 @@ static void sky_zenith_radiance(const SkyAtmosphere* sky, vec3 out) {
     vec3 nf = {0};
     sky_night_floor(sky, nf);
     glm_vec3_add(out, nf, out);
-    if (sky_overcast_amount(sky) <= 0.0f) {
-        sky_clear_zenith_add(sky, out);
-        return;
-    }
-    // Under a deck (spec 13.7) the clear sky gives way to the dome, which
-    // delivers (7/9) pi Lz onto a horizontal plane -- so (7/9) Lz, not Lz, is
-    // the irradiance over pi its readers take this for.
-    vec3 sky_clear = {0};
-    sky_clear_zenith_add(sky, sky_clear);
-    const float clear = sky_clear_fraction(sky);
-    const float dome = (7.0f / 9.0f) * sky_overcast_zenith_at(sky->sun_dir[1]);
-    for (int c = 0; c < 3; c++)
-        out[c] += clear * sky_clear[c] + (1.0f - clear) * dome;
-}
-
-static void sky_clear_zenith_add(const SkyAtmosphere* sky, vec3 out) {
-    // The sun's transmittance is taken at ground level for every sample -- it
-    // varies with altitude, but this feeds a flat ambient term, not a shading
-    // model.
+    // The overcast dome's share, irradiance over pi as the readers take it.
+    const SkyDeck deck = sky_deck_at(sky, sky->sun_dir[1]);
+    glm_vec3_adds(out, deck.floor, out);
     if (sky->sun_dir[1] <= 0.0f)
         return; // sun below the horizon: no skylight to scatter
 
@@ -406,8 +419,10 @@ static void sky_clear_zenith_add(const SkyAtmosphere* sky, vec3 out) {
             float step_t = expf(-e[c] * dt);
             // Binds only in the topmost slices, where extinction falls to ~1e-7.
             float ext = fmaxf(e[c], 1e-7f);
-            out[c] += trans[c] * (s[c] * sun_t[c] * SKY_SUN_ILLUMINANCE * isotropic_phase / ext) *
-                      (1.0f - step_t);
+            out[c] +=
+                trans[c] *
+                (s[c] * sun_t[c] * SKY_SUN_ILLUMINANCE * deck.sun_scale * isotropic_phase / ext) *
+                (1.0f - step_t);
             trans[c] *= step_t;
         }
     }
@@ -536,8 +551,7 @@ void sky_update_aerial(SkyAtmosphere* sky, mat4 view, mat4 projection) {
     uniform_set_int(u, "transmittanceLut", 0);
     uniform_set_int(u, "multiscatterLut", 1);
     uniform_set_vec3(u, "sunDir", sky->sun_dir);
-    uniform_set_float(u, "overcast", sky_overcast_amount(sky));
-    uniform_set_float(u, "overcastZenith", sky_overcast_zenith_at(sky->sun_dir[1]));
+    sky_bind_deck(sky, sky->aerial_program, sky->sun_dir[1]);
     uniform_set_mat4(u, "invView", (float*)inv_view);
     uniform_set_mat4(u, "projection", (float*)projection);
     uniform_set_float(u, "aerialFar", sky_aerial_far_units(sky));
@@ -762,9 +776,7 @@ static void sky_bake_view_lut_to(SkyAtmosphere* sky, GLuint* dst, const vec3 sun
     vec3 nf = {0};
     sky_night_floor(sky, nf);
     uniform_set_vec3(sky->view_program->uniforms, "nightFloor", nf);
-    uniform_set_float(sky->view_program->uniforms, "overcast", sky_overcast_amount(sky));
-    uniform_set_float(sky->view_program->uniforms, "overcastZenith",
-                      sky_overcast_zenith_at(sun_dir[1]));
+    sky_bind_deck(sky, sky->view_program, sun_dir[1]);
     glActiveTexture(GL_TEXTURE0);
     bake_lut_2d(sky, sky->view_program, dst, SKY_VIEW_W, SKY_VIEW_H);
 }
@@ -820,7 +832,7 @@ static void sky_env_face_slice(SkyAtmosphere* sky, struct IBLResources* ibl, GLu
         uniform_set_float(env->uniforms, "cloudType", sky->clouds.cloud_type);
         uniform_set_float(env->uniforms, "densityScale", sky->clouds.density);
     }
-    uniform_set_float(env->uniforms, "overcast", sky_overcast_amount(sky));
+    sky_bind_deck(sky, env, sun_dir[1]);
     uniform_set_vec3(env->uniforms, "sunDir", (float*)sun_dir);
     uniform_set_mat4(env->uniforms, "projection", (float*)projection);
 
@@ -938,8 +950,8 @@ int sky_bake(SkyAtmosphere* sky, struct IBLResources* ibl, struct Engine* engine
  * Direction: the light travels away from the body. Colour: atmospheric
  * transmittance along the body's own air column, so both redden at the horizon
  * for one reason and through one march. Intensity: the base scaled by the
- * shared horizon fade and by whatever else the body brings. Shadows: on iff it
- * is delivering light.
+ * shared horizon fade, by the overcast deck both bodies shine through, and by
+ * whatever else the body brings. Shadows: on iff it is delivering light.
  *
  * ONE function rather than two near-twins, and the reason is the last line.
  * The cast test has to be the intensity the line above it just set -- written
@@ -956,8 +968,8 @@ int sky_bake(SkyAtmosphere* sky, struct IBLResources* ibl, struct Engine* engine
  */
 #define SKY_LIGHT_CAST_FLOOR 1e-3f
 
-static void sky_apply_body_to_light(struct Light* light, const vec3 dir, float elevation_deg,
-                                    float base, float scale) {
+static void sky_apply_body_to_light(const SkyAtmosphere* sky, struct Light* light, const vec3 dir,
+                                    float elevation_deg, float base, float scale) {
     if (!light)
         return;
 
@@ -969,7 +981,8 @@ static void sky_apply_body_to_light(struct Light* light, const vec3 dir, float e
     sky_transmittance_at(dir[1], color);
     glm_vec3_copy(color, light->color);
 
-    const float intensity = base * sky_horizon_fade(elevation_deg) * scale;
+    const float clear = sky_deck_at(sky, sky->sun_dir[1]).clear;
+    const float intensity = base * sky_horizon_fade(elevation_deg) * scale * clear;
     light->intensity = intensity;
     light->cast_shadows = intensity > base * SKY_LIGHT_CAST_FLOOR;
 }
@@ -977,8 +990,8 @@ static void sky_apply_body_to_light(struct Light* light, const vec3 dir, float e
 void sky_apply_sun_to_light(SkyAtmosphere* sky) {
     if (!sky)
         return;
-    sky_apply_body_to_light(sky->sun_light, sky->sun_dir, sky->sun_elevation_deg,
-                            sky->sun_base_intensity, sky_clear_fraction(sky));
+    sky_apply_body_to_light(sky, sky->sun_light, sky->sun_dir, sky->sun_elevation_deg,
+                            sky->sun_base_intensity, 1.0f);
 }
 
 /*
@@ -1041,11 +1054,11 @@ static float sky_moon_light_scale(const SkyAtmosphere* sky) {
     if (!sky->moon_enabled)
         return 0.0f;
     return SKY_MOON_LIGHT_FRACTION * sky->moon_brightness * sky_moon_phase_factor(sky) *
-           sky_night_factor(sky) * sky_clear_fraction(sky);
+           sky_night_factor(sky);
 }
 
 static void sky_apply_moon_to_light(SkyAtmosphere* sky) {
-    sky_apply_body_to_light(sky->moon_light, sky->moon_dir, sky->moon_elevation_deg,
+    sky_apply_body_to_light(sky, sky->moon_light, sky->moon_dir, sky->moon_elevation_deg,
                             sky->sun_base_intensity, sky_moon_light_scale(sky));
 }
 
@@ -1464,8 +1477,11 @@ void sky_render_background(SkyAtmosphere* sky, struct IBLResources* ibl, mat4 vi
     uniform_set_vec3(u, "sunDir", sky->sun_dir);
     float cos_radius = cosf(glm_rad(sky->sun_disc_deg * 0.5f));
     uniform_set_float(u, "sunCosRadius", cos_radius);
-    const float clear = sky_clear_fraction(sky);
-    uniform_set_float(u, "sunIntensity", 20.0f * clear);
+    // The disc is the sun's own radiance; the stars and the moon below only
+    // come through the same deck.
+    const SkyDeck deck = sky_deck_at(sky, sky->sun_dir[1]);
+    const float clear = deck.clear;
+    uniform_set_float(u, "sunIntensity", 20.0f * deck.sun_scale);
     // Stars fade in through the shared civil-twilight ramp. A visibility
     // ramp standing in for the exposure adaptation the engine refuses
     // (exposure_auto_gain caps at 1), not physics -- real stars are up all

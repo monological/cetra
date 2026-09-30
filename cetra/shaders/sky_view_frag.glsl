@@ -22,12 +22,9 @@ uniform float sunCosZenith; // dot(sunDir, up) -- the sun's elevation
 // -- already samples this LUT, and the LUT re-bakes exactly when the ramp's
 // one input (the sun) moves.
 uniform vec3 nightFloor;
-// The deck (spec 13.7): how much of the sky is under cloud, 0..1, and the
-// overcast dome's zenith radiance for the sun this bake is for.
-uniform float overcast;
-uniform float overcastZenith;
 
 #include "sky_lut.glsl"
+#include "sky_deck.glsl"
 
 // MIE_G, rayleighPhase, miePhase and multiscatterAt live in atmosphere.glsl:
 // the aerial-perspective volume marches the same medium and must not evaluate
@@ -108,18 +105,10 @@ void main()
 
     // Scale to the engine's linear range; keep HDR (bloom uses it) but
     // bound against fp16 overflow
-    vec3 sky = min(L * SUN_ILLUMINANCE, vec3(100.0));
-    // Under a deck the clear sky gives way to the CIE standard overcast sky,
-    // L = Lz (1 + 2 cos theta) / 3: grey, three times brighter overhead than at
-    // the horizon, and the same in every azimuth. A ray that meets the ground
-    // sees the floor that dome lights -- albedo x (7/9) Lz, the dome's
-    // irradiance over pi -- so the env cube's virtual ground can take this and
-    // add nothing.
-    if (overcast > 0.0) {
-        float dome = ground ? GROUND_ALBEDO * (7.0 / 9.0) * overcastZenith
-                            : overcastZenith * (1.0 + 2.0 * max(mu, 0.0)) / 3.0;
-        sky = mix(sky, vec3(dome), overcast);
-    }
+    vec3 sky = min(L * SUN_ILLUMINANCE * deckSunScale, vec3(100.0));
+    // Under a deck the clear sky gives way to the overcast dome, and a ray that
+    // meets the ground sees the floor the dome lights.
+    sky += vec3(ground ? GROUND_ALBEDO * deckFloor : deckDome(mu));
     // The floor sits above the atmosphere's bulk, so `through` -- this ray's
     // own transmittance to the top -- dims it toward the horizon with no new
     // lookup. The TINT rides at partial saturation, the stars' rule: full

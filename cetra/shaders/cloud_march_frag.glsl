@@ -18,7 +18,6 @@ uniform vec3 sunDir;
 uniform float coverage;
 uniform float cloudType;
 uniform float densityScale;
-uniform float overcast;    // the deck over the shell (spec 13.7), 0..1
 uniform vec3 windOffsetKm; // accumulated drift; the caller owns the clock
 
 // Screen-tier march quality. Consts, not uniforms: the trip counts must be
@@ -58,7 +57,7 @@ void main()
 
     vec4 result = cloud_march(camAltKm, rd, sunDir, shapeTex, detailTex, transmittanceLut,
                               skyViewLut, MARCH_STEPS, MARCH_LIGHT_STEPS, true, coverage,
-                              cloudType, densityScale, 1.0 - overcast, windOffsetKm, dither);
+                              cloudType, densityScale, windOffsetKm, dither);
 
     if (temporal == 1) {
         // Fetch history where this ray direction fell last frame. In front
