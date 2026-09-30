@@ -148,24 +148,26 @@ eye. OFF by default in the library, ON in tree (`--no-night-floor` off); `--nigh
 
 ## Overcast
 
-`include/sky_deck.glsl`, with `sky_deck_at` and `sky_bind_deck` in `sky.c` (spec 13.7).
+`include/sky_emission.glsl`, with `sky_emission_at` and `sky_bind_emission` in `sky.c` (spec 13.7).
+Named for what they hold rather than for the overcast: they carry the radiance scale too, and "deck"
+is the volumetric cloud layer's word in `clouds.glsl`.
 
 **The model is the CIE standard overcast sky,** L = Lz(1 + 2 cos θ)/3. Lz is Krochmann's zenith fit,
 (8.6 sin h + 0.123) kcd/m², carried onto the sky's scale by `SKY_SUN_ILLUMINANCE / SKY_SUN_KLUX`.
 Its horizon constant fades on the night ramp, so an overcast evening darkens with the cycle.
 
 **The model lives in C, and the shaders only apply it.**
-- `SkyDeck` = {clear, sun_scale, zenith, floor, store_max} is computed once, from the sun the bake is
-  FOR. The slicer bakes from a latched sun, and a dome read from the live one would seam the env
-  faces.
-- `sky_bind_deck` is its only upload: to the sky-view LUT, the aerial volume, the env faces and the
-  cloud march.
+- `SkyEmission` = {clear, sun_scale, dome_zenith, dome_floor, scatter_max} is computed once, from
+  the sun the bake is FOR. The slicer bakes from a latched sun, and a dome read from the live one
+  would seam the env faces.
+- `sky_bind_emission` is its only upload: to the sky-view LUT, the aerial volume, the env faces and
+  the cloud march.
 - The dome terms arrive PREMULTIPLIED by the amount, so a clear sky adds exact zeros and multiplies
   by exactly 1. No branch guards the default path, and none should: a branch around unchanged
   arithmetic is not byte-identical on this driver.
 
 **One weight:** the sun's scatter, its disc and its light (and with it the shadows), the stars and
-the moon disc all fade by the deck's clear fraction. The night floor does not, because a deck at
+the moon disc all fade by the overcast's clear fraction. The night floor does not, because cloud at
 night reflects a town.
 
 **Four places carry the dome, and each has a named asymptote:**
@@ -201,24 +203,40 @@ spec 10.2's open item. At `SKY_PHOTOMETRIC_SCALE` (`SKY_SUN_KLUX`·1000 / `SKY_S
   see the scaled sky;
 - stored relative and scaled at read, it sinks the night floor into fp16 subnormals.
 
-**So it rides the deck, and everything the SUN drives is stored absolute:** the LUTs, the dome,
-the cloud march, the disc (20·K), the zenith march and the sun light (`sun_base_intensity × K`).
-- **The stored ceiling is `min(100·K, 60000)`:** exactly the old 100 at K = 1, and never past fp16.
-  Past K = 600 the circumsolar sky clips in the LUT, deliberately: the key light carries the sun's
-  energy, and the IBL is not meant to.
+**So it rides `SkyEmission`, and everything the SUN drives is stored absolute:** the LUTs, the
+dome, the cloud march, the disc (20·K), the zenith march and the sun light
+(`sun_base_intensity × K`).
+- **The sun's scatter is held under `100·K`,** exactly the old 100 at K = 1: the key light carries
+  the sun's energy, and the IBL is not meant to.
+- **Storage is a separate bound, `SKY_STORE_FP16_MAX`, applied at every sky target's WRITE.** A sum
+  of bounded terms is not bounded -- the dome, the floor and a cloud composite are all added after
+  the scatter ceiling -- so one clamp on one term could not keep RGBA16F from overflowing.
 - **The background clamps in WORKING space, after the exposure,** because a photometric disc is
   850,000 nits.
+- **K is in the sun light's FULL level, not in its fade,** so the cast floor (a thousandth of the
+  full level) scales with it. As a fade it would have kept a photometric sun casting at 2.4e-8 of
+  its light.
 
 **The night terms are ABSOLUTE and do not take K:** the floor, the stars, the moon disc and the
 moon light. So a night frame is the same on either scale, and on the photometric one twilight sits
 K above the floor, where a meter can open for it.
 
 **The sun's base.** `sun_base_intensity = SKY_SUN_ILLUMINANCE` is the value at which the sun agrees
-with the sky. The render app keeps its 10, which is 3.3 times sun-heavy on either scale.
+with the sky. The render app keeps its 10, which is 3.3 times sun-heavy on either scale. The moon's
+light is a fraction of the same base WITHOUT the scale, so an app that zeroes the base loses its
+moonlight too.
+
+**K is a change of UNITS, not of look.** A scene-captured probe is shot once, at load, so a K that
+arrives after it leaves every reflection of the sky tens of thousands of times off. That is why the
+config snapshot carries K in its `source` block, applied before the load, as well as in the
+`sky.radiance_scale` row. The GUI's live checkbox leaves such probes as shot and says so, as an
+overcast drag does.
 
 **Reached by:** `--sky-scale <f|photometric>`, `environment.sky_scale` (a number or
-"photometric"), `sky.radiance_scale`, and a GUI "Photometric" checkbox. The `scale` group's `sky`
-entry holds it invariant at x1000, to 1 LSB.
+"photometric"), the snapshot's source block and `sky.radiance_scale` row, and a GUI "Photometric"
+checkbox. The flag and the file refuse a value outside `SKY_RADIANCE_SCALE_MIN..MAX`, and
+`sky_radiance_scale`, the accessor everything downstream reads, clamps whatever is stored to the
+same range. The `scale` group's `sky` entry holds it invariant at x1000, to 1 LSB.
 
 ## Stars
 

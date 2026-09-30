@@ -125,7 +125,9 @@ typedef struct Exposure {
     // nothing is clamped until a scene asks for it. Their job is to stop a
     // pathological frame (a camera inside geometry, a fully black loading frame)
     // walking the exposure somewhere it cannot walk back from within the
-    // adaptation rate.
+    // adaptation rate. The floor is also how far the meter may OPEN: the gain is
+    // key over the metered luminance, so a floor at log2(key / E) holds the
+    // exposure at or under the camera times E.
     //
     // Settable in code only for now; no CLI flag, .cscn key or slider reaches
     // them, unlike the six knobs above. Said plainly because the defaults being

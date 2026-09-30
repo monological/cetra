@@ -64,6 +64,28 @@ static bool get_bool(const cJSON* obj, const char* key, bool* out) {
     return true;
 }
 
+// A float refused if it is outside the range the consumer can act on. Absent
+// leaves the engine default; out of range warns by its FULL key and is
+// ignored, so the author sees the key they typed rather than a frame that is
+// subtly wrong.
+//
+// `block` is passed rather than baked in: this started as a post.metering
+// helper with that name in its format string, and the second caller would
+// otherwise have reported a bad post.lut value as a metering one.
+static bool _ranged_float(const cJSON* obj, const char* block, const char* key, float lo, float hi,
+                          float* out) {
+    float v = 0.0f;
+    if (!get_float(obj, key, &v))
+        return false;
+    if (!(v >= lo && v <= hi)) {
+        log_warn("cscene: %s.%s %g is outside [%g, %g]; ignored", block, key, (double)v, (double)lo,
+                 (double)hi);
+        return false;
+    }
+    *out = v;
+    return true;
+}
+
 /*
  * Report a key nothing read: a missing key and a MISSPELLED one are the same thing to
  * get_float, so without this a scene authoring "windspeed" gets the default and no
@@ -167,21 +189,25 @@ static void parse_environment(CetraSceneDesc* d, const cJSON* root) {
     // sky-mode overcast (spec 13.7): one value, how much of the sky is under
     // cloud, so a key rather than a block -- there is nothing to enable apart
     // from the amount, and 0 is the clear sky.
-    d->has_env_overcast = get_float(env, "overcast", &d->env_overcast);
+    d->has_env_overcast =
+        _ranged_float(env, "environment", "overcast", 0.0f, 1.0f, &d->env_overcast);
 
-    // sky-mode radiance scale (spec 13.7): a positive number, or "photometric"
-    // for the one value a file will usually want, by name rather than as
-    // 42500 copied from a header.
+    // sky-mode radiance scale (spec 13.7): a number, or "photometric" for the
+    // one value a file will usually want, by name rather than as 42500 copied
+    // from a header.
     const cJSON* sky_scale = cJSON_GetObjectItemCaseSensitive(env, "sky_scale");
-    if (cJSON_IsString(sky_scale) && strcmp(sky_scale->valuestring, "photometric") == 0) {
-        d->has_env_sky_scale = true;
-        d->env_sky_scale = SKY_PHOTOMETRIC_SCALE;
-    } else if (cJSON_IsNumber(sky_scale) && sky_scale->valuedouble > 0.0) {
-        d->has_env_sky_scale = true;
-        d->env_sky_scale = (float)sky_scale->valuedouble;
-    } else if (sky_scale) {
-        log_warn("cscene: environment.sky_scale is a positive number or \"photometric\"; "
-                 "ignored");
+    if (cJSON_IsString(sky_scale)) {
+        d->has_env_sky_scale = strcasecmp(sky_scale->valuestring, "photometric") == 0;
+        if (d->has_env_sky_scale)
+            d->env_sky_scale = SKY_PHOTOMETRIC_SCALE;
+        else
+            log_warn("cscene: environment.sky_scale '%s' is not \"photometric\" or a number; "
+                     "ignored",
+                     sky_scale->valuestring);
+    } else {
+        d->has_env_sky_scale =
+            _ranged_float(env, "environment", "sky_scale", SKY_RADIANCE_SCALE_MIN,
+                          SKY_RADIANCE_SCALE_MAX, &d->env_sky_scale);
     }
 
     // sky-mode day/night cycle (spec 11.81). `enabled` ARMS it, exactly as in
@@ -414,28 +440,6 @@ static void parse_light_overrides(CetraSceneDesc* d, const cJSON* root) {
         out->has_cast_shadows = get_bool(o, "cast_shadows", &out->cast_shadows);
         d->light_override_count++;
     }
-}
-
-// A float from a nested post block, refused if it is outside the range the
-// consumer can act on. Absent leaves the engine default; out of range warns by
-// its FULL key and is ignored, so the author sees the key they typed rather
-// than a frame that is subtly wrong.
-//
-// `block` is passed rather than baked in: this started as a post.metering
-// helper with that name in its format string, and the second caller would
-// otherwise have reported a bad post.lut value as a metering one.
-static bool _ranged_float(const cJSON* obj, const char* block, const char* key, float lo, float hi,
-                          float* out) {
-    float v = 0.0f;
-    if (!get_float(obj, key, &v))
-        return false;
-    if (!(v >= lo && v <= hi)) {
-        log_warn("cscene: %s.%s %g is outside [%g, %g]; ignored", block, key, (double)v, (double)lo,
-                 (double)hi);
-        return false;
-    }
-    *out = v;
-    return true;
 }
 
 static void parse_post(CetraSceneDesc* d, const cJSON* root) {

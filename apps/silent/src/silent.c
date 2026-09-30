@@ -109,10 +109,10 @@ static const InputAction ACTIONS[] = {
 };
 
 /*
- * The sky at night: the Hillaire atmosphere with the sun well under the
- * horizon, the moon and the stars up, and the IBL baked from it -- which is
- * what lights the street, and what the fog's ambient follows. apps/tree's
- * setup, with this world's metre.
+ * The sky: the Hillaire atmosphere in nits, and the IBL baked from it -- which
+ * is what lights the street, and what the fog's ambient follows. At night the
+ * sun is well under the horizon with the moon and the stars up; by day it is an
+ * overcast noon. apps/tree's setup, with this world's metre.
  */
 static void build_sky(Engine* engine) {
     SkyAtmosphere* sky = create_sky_atmosphere();
@@ -126,7 +126,7 @@ static void build_sky(Engine* engine) {
     // In nits, like every light in the house.
     sky->radiance_scale = SKY_PHOTOMETRIC_SCALE;
     if (g_args.day) {
-        // An overcast noon: the deck covers the whole sky, so no sun gets
+        // An overcast noon: cloud covers the whole sky, so no sun gets
         // through, nothing casts, and the dome lights everything evenly.
         sky->sun_elevation_deg = 35.0f;
         sky->sun_azimuth_deg = 150.0f;
@@ -158,27 +158,19 @@ static void build_sky(Engine* engine) {
     LightDesc sun_desc = {
         .name = "sun", .type = LIGHT_DIRECTIONAL, .size = {4.0f, 4.0f}, .cast_shadows = true};
     Light* sun = create_light(&sun_desc);
+    // Dark in both modes as authored -- under the deck by day, under the
+    // horizon at night -- and here so the GUI's sun and overcast still have a
+    // light to drive, at the level where the sun agrees with the sky.
     sky->sun_light = sun;
-    // The value at which the sun agrees with the sky. Zero at night, and the
-    // moon's light rides the same base, so the street is lit by its lamps and
-    // the night floor alone.
-    sky->sun_base_intensity = g_args.day ? SKY_SUN_ILLUMINANCE : 0.0f;
+    sky->sun_base_intensity = SKY_SUN_ILLUMINANCE;
     sky_apply_sun_to_light(sky);
     scene_add_light(g_scene, sun);
     SceneNode* sun_node = create_node();
     node_set_name(sun_node, "sun");
     node_set_light(sun_node, sun);
     node_add_child(g_scene->root_node, sun_node);
-
-    LightDesc moon_desc = {.name = "moon", .type = LIGHT_DIRECTIONAL, .size = {4.0f, 4.0f}};
-    Light* moon = create_light(&moon_desc);
-    sky->moon_light = moon;
-    sky_update_moon(sky); // owns its direction, tint, intensity and shadows
-    scene_add_light(g_scene, moon);
-    SceneNode* moon_node = create_node();
-    node_set_name(moon_node, "moon");
-    node_set_light(moon_node, moon);
-    node_add_child(g_scene->root_node, moon_node);
+    // No moon LIGHT: the street at night is its lamps and the night floor, and
+    // the moon is the disc in the sky.
 }
 
 /*
@@ -336,11 +328,12 @@ static void on_init(Game* game) {
     // the key on its own, so the camera is 1, and it is floored where that
     // key lands on the night's pin -- a dim room never opens past the night.
     Exposure* ex = &engine->exposure;
-    ex->automatic = g_args.day;
-    ex->multiplier = g_args.day ? 1.0f : EXPOSURE_NIGHT;
     if (g_args.day) {
         ex->key = DAY_METER_KEY;
         ex->meter_min_log2 = log2f(ex->key / EXPOSURE_NIGHT);
+    } else {
+        ex->automatic = false;
+        ex->multiplier = EXPOSURE_NIGHT;
     }
 
     build_post(engine, !g_args.day, !g_args.no_grade);

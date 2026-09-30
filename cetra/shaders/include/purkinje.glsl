@@ -17,11 +17,11 @@
  * code does not support.
  *
  * EVERY THRESHOLD HERE IS A LOOK CONSTANT. Literature places the photopic floor
- * near 3 cd/m^2 and full scotopic below 0.005, but this engine's sky is about
- * four decades under the real photometric scale (view.glsl) and its whole
- * day-to-night range is 4.2 stops where reality is ~17. So the ramps are
- * calibrated against this corpus, not against the eye, and purkinjeBiasEV is the
- * single knob that migrates them if the scale is ever fixed.
+ * near 3 cd/m^2 and full scotopic below 0.005, but this engine's sky runs about
+ * four decades under the real photometric scale unless it is set photometric
+ * (view.glsl), and its whole day-to-night range is 4.2 stops where reality is
+ * ~17. So the ramps are calibrated against this corpus, not against the eye,
+ * and purkinjeBiasEV is the single knob that migrates them for a sky in nits.
  */
 // view.glsl for oneOverPreExposure and WS_SCENE_MAX. Included rather than
 // inherited from the caller: include-once makes it free, and relying on

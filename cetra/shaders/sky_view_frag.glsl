@@ -24,7 +24,7 @@ uniform float sunCosZenith; // dot(sunDir, up) -- the sun's elevation
 uniform vec3 nightFloor;
 
 #include "sky_lut.glsl"
-#include "sky_deck.glsl"
+#include "sky_emission.glsl"
 
 // MIE_G, rayleighPhase, miePhase and multiscatterAt live in atmosphere.glsl:
 // the aerial-perspective volume marches the same medium and must not evaluate
@@ -103,12 +103,12 @@ void main()
         through *= stepTrans;
     }
 
-    // Onto the sky's radiance scale; kept HDR (bloom uses it) but bounded so
-    // fp16 cannot overflow at any scale.
-    vec3 sky = min(L * SUN_ILLUMINANCE * deckSunScale, vec3(deckStoreMax));
-    // Under a deck the clear sky gives way to the overcast dome, and a ray that
+    // Onto the sky's radiance scale; kept HDR (bloom uses it) but with the sun's
+    // scatter held under its ceiling.
+    vec3 sky = min(L * SKY_SUN_ILLUMINANCE * skySunScale, vec3(skyScatterMax));
+    // Under an overcast the clear sky gives way to the dome, and a ray that
     // meets the ground sees the floor the dome lights.
-    sky += vec3(ground ? GROUND_ALBEDO * deckFloor : deckDome(mu));
+    sky += vec3(ground ? GROUND_ALBEDO * skyDomeFloor : skyDome(mu));
     // The floor sits above the atmosphere's bulk, so `through` -- this ray's
     // own transmittance to the top -- dims it toward the horizon with no new
     // lookup. The TINT rides at partial saturation, the stars' rule: full
@@ -118,5 +118,5 @@ void main()
         vec3 t = mix(vec3(dot(through, vec3(0.2126, 0.7152, 0.0722))), through, 0.35);
         sky += nightFloor * t;
     }
-    FragColor = vec4(sky, 1.0);
+    FragColor = vec4(min(sky, vec3(SKY_STORE_FP16_MAX)), 1.0);
 }

@@ -26,12 +26,9 @@ const float VIEW_ALTITUDE = 0.5;
 
 const float GROUND_ALBEDO = 0.3;
 
-// Sun illuminance: the atmosphere integral is computed per unit sun
-// illuminance (physical sky radiance ~ 0.04), so scale into the engine's
-// linear range (daytime zenith ~ a couple units, comparable to a studio HDR).
-// Mirrors sky.h's SKY_SUN_ILLUMINANCE; the deck's sun scale is what carries
-// this relative scale into nits.
-const float SUN_ILLUMINANCE = 3.0;
+// SKY_SUN_ILLUMINANCE, the relative scale the atmosphere integral is carried
+// into, and the fp16 store ceiling.
+#include "sky_constants.glsl"
 
 // Rayleigh: scattering == extinction (no absorption), scale height 8 km
 const vec3 RAYLEIGH_SCATTER = vec3(5.802e-3, 13.558e-3, 33.1e-3);
