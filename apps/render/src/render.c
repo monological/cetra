@@ -32,6 +32,7 @@
 #include "cetra/gi_volume.h"
 #include "cetra/internal/emissive_light.h"
 #include "cetra/water.h"
+#include "cetra/rain.h"
 #include "cetra/ies.h"
 #include "cetra/wind.h"
 #include "cetra/config_snapshot.h"
@@ -188,6 +189,9 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --gi-debug         Blit the probe atlas into the frame corner\n");
     fprintf(stderr, "      --water            Water surface (spec 11.32)\n");
     fprintf(stderr, "      --no-water         Drop a surface the scene file asked for\n");
+    fprintf(stderr, "      --rain <mm/h>      Rain at this rate, already soaked (spec 13.9)\n");
+    fprintf(stderr, "      --no-rain          Drop the rain a scene file asked for\n");
+    fprintf(stderr, "      --rain-probe       Print the rain's physics, schedule and state\n");
     fprintf(stderr, "      --water-level <f>  Still-water plane, world Y (implies --water)\n");
     fprintf(stderr, "      --water-extent <f> Half-size of the shoaling bed (implies --water)\n");
     fprintf(stderr, "      --water-waves <m>  gerstner (default) or fft spectral cascades\n");
@@ -575,6 +579,7 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     // A water plane at y = 0 is the useful default and 0 is a legal level, so the
     // "unset" value has to sit outside every plausible one rather than at zero.
     args->water_level = -9999.0f;
+    args->rain_rate = -1.0f;        // -1 = keep the scene file's (0 is a legal rate)
     args->world_scale = -1.0f;      // -1 = keep the sky's default (1 unit = 1 metre)
     args->spec_occ_mode = -1;       // -1 = keep the engine default
     args->import_scale = 1.0f;      // 1 = none
@@ -1185,6 +1190,13 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             // Does NOT imply --water, obviously, and it wins over it: this is the
             // escape hatch from a scene file that authors a surface.
             args->no_water = 1;
+        } else if (strcmp(argv[i], "--rain") == 0) {
+            if (_ranged_arg(argc, argv, &i, 0.0f, 500.0f, &args->rain_rate) != 0)
+                return -1;
+        } else if (strcmp(argv[i], "--no-rain") == 0) {
+            args->no_rain = 1;
+        } else if (strcmp(argv[i], "--rain-probe") == 0) {
+            args->rain_probe = 1;
         } else if (strcmp(argv[i], "--no-water-caustics") == 0) {
             // The negative flags do NOT imply --water. A flag whose whole job is to turn
             // a feature off has no business turning the feature on, and `--no-water
@@ -4521,6 +4533,24 @@ int main(int argc, char** argv) {
     apply_cscene_fog_volumes(scene, cscn);
     apply_cscene_occluders(scene, cscn);
     // (decals were applied above, before the probe capture -- see the note there)
+
+    // The rain on the water's pattern: the file supplies it, --no-rain wins outright, and
+    // --rain either sets the rate of an authored rain or brings one of its own. A rate
+    // from the command line re-settles, so the frame shows that rate's soaked world
+    // rather than the file's.
+    apply_cscene_rain(scene, cscn);
+    if (args.no_rain) {
+        free_rain(scene->rain);
+        scene->rain = NULL;
+    } else if (args.rain_rate >= 0.0f) {
+        if (!scene->rain)
+            scene->rain = create_rain();
+        if (scene->rain) {
+            scene->rain->rate_mmh = args.rain_rate;
+            rain_settle(scene->rain);
+        }
+    }
+
     if (args.no_water) {
         free_water(scene->water);
         scene->water = NULL;
@@ -4751,6 +4781,10 @@ int main(int argc, char** argv) {
     // the sequence is a probe whose output a reader has to place before trusting.
     if (args.ies_probe)
         ies_library_probe(scene->ies_library);
+
+    // After the loop so the state row reports what the frames integrated to.
+    if (args.rain_probe)
+        rain_probe_print(scene->rain);
 
     // Beside the others, and for the same reason: the pool is fully populated by
     // now (the async drain that gates the mask-array build has run), so what it

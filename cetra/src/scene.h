@@ -34,6 +34,7 @@ struct ParticleSystem;
 struct AnimationState;
 // Directional wind field (wind.h); a scene-owned environmental object like sky.
 struct Wind;
+struct Rain;
 struct PostFX;
 struct EmissivePanels;
 // Held by pointer and named only here, so their headers stay out of every
@@ -305,6 +306,7 @@ typedef struct Scene {
     struct SkyAtmosphere* sky;     // procedural sky feeding ibl (optional)
     struct GIVolume* gi_volume;    // indirect-diffuse probe grid (optional)
     struct Water* water;           // ocean/lake surface (optional)
+    struct Rain* rain;             // falling rain and the wetness it leaves (optional)
 
     // What the walk seeds the root with -- where the whole scene sits. Identity
     // for most apps; a model viewer puts its recentre offset here.

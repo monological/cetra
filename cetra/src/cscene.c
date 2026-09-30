@@ -987,6 +987,37 @@ static void parse_water(CetraSceneDesc* d, const cJSON* root) {
 }
 
 /*
+ * rain -- a scene subsystem, top-level for water's reason. Ranged where a value outside
+ * the range means nothing to the consumer: a negative rate, a non-positive time
+ * constant, a coverage past full.
+ */
+static void parse_rain(CetraSceneDesc* d, const cJSON* root) {
+    const cJSON* rain = cJSON_GetObjectItemCaseSensitive(root, "rain");
+    if (!cJSON_IsObject(rain))
+        return;
+    CSceneRain* out = &d->rain;
+    out->enabled = true; // presence implies on unless "enabled": false
+    get_bool(rain, "enabled", &out->enabled);
+    out->has_rate = _ranged_float(rain, "rain", "rate", 0.0f, 500.0f, &out->rate);
+    out->has_wind = get_vec3(rain, "wind", out->wind);
+    out->has_wet_time = _ranged_float(rain, "rain", "wetTime", 1e-3f, 1e6f, &out->wet_time);
+    out->has_dry_time = _ranged_float(rain, "rain", "dryTime", 1e-3f, 1e6f, &out->dry_time);
+    out->has_puddle_fill_time =
+        _ranged_float(rain, "rain", "puddleFillTime", 1e-3f, 1e6f, &out->puddle_fill_time);
+    out->has_puddle_drain_time =
+        _ranged_float(rain, "rain", "puddleDrainTime", 1e-3f, 1e6f, &out->puddle_drain_time);
+    out->has_puddle_coverage =
+        _ranged_float(rain, "rain", "puddleCoverage", 0.0f, 1.0f, &out->puddle_coverage);
+    out->has_settled = get_bool(rain, "settled", &out->settled);
+
+    static const char* const known[] = {
+        "enabled",         "rate",           "wind",    "wetTime", "dryTime", "puddleFillTime",
+        "puddleDrainTime", "puddleCoverage", "settled",
+    };
+    warn_unknown_keys(rain, known, sizeof(known) / sizeof(known[0]), "rain");
+}
+
+/*
  * layers[] on a material -- an ordered set of surfaces the splat map blends between.
  *
  * ORDERED, which is why it is an array and not an object: layer 0 is the one that takes
@@ -1315,6 +1346,7 @@ CetraSceneDesc* cscene_load(const char* path) {
     parse_wind(d, root);
     parse_dust(d, root);
     parse_water(d, root);
+    parse_rain(d, root);
     parse_fog_volumes(d, root);
     parse_probes(d, root);
     parse_occluders(d, root);

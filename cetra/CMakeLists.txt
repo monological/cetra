@@ -36,7 +36,7 @@ set(CETRA_PUBLIC_HEADERS
     camera_rig.h
     ik.h import.h input.h light.h material.h mesh.h mesh_builder.h noise.h
     particle_emitter.h particle_module.h particle_renderer.h particle_sim.h
-    particle_system.h postfx.h probe.h probe_set.h program.h scene.h shader.h
+    particle_system.h postfx.h probe.h probe_set.h program.h rain.h scene.h shader.h
     shadow.h sky.h springbone.h text.h texture.h transform.h ui.h uniform.h util.h
     water.h wind.h
     ext/log.h ext/cwalk.h)

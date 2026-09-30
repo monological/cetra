@@ -224,6 +224,29 @@ typedef struct CSceneDust {
     float damping;
 } CSceneDust;
 
+// Falling rain (rain.h), a scene subsystem and so a top-level block. Presence-flagged
+// like water: an absent field keeps create_rain's value.
+typedef struct CSceneRain {
+    bool enabled;
+    bool has_rate;
+    float rate; // mm/h
+    bool has_wind;
+    float wind[3]; // m/s
+    bool has_wet_time;
+    float wet_time; // seconds, at RAIN_RATE_REFERENCE
+    bool has_dry_time;
+    float dry_time;
+    bool has_puddle_fill_time;
+    float puddle_fill_time; // seconds, at RAIN_RATE_REFERENCE
+    bool has_puddle_drain_time;
+    float puddle_drain_time;
+    bool has_puddle_coverage;
+    float puddle_coverage;
+    // false = the world starts dry and wets as the scene runs; absent = already soaked
+    bool has_settled;
+    bool settled;
+} CSceneRain;
+
 /*
  * One authored wave train (spec 11.48), mirroring WaterWaveTrain field for field.
  *
@@ -581,6 +604,7 @@ typedef struct CetraSceneDesc {
 
     CSceneDust dust;
     CSceneWater water;
+    CSceneRain rain;
 
     CSceneFogVolume fog_volumes[CSCENE_MAX_FOG_VOLUMES];
     int fog_volume_count;

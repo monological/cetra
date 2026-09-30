@@ -19,6 +19,7 @@
 #include "probe.h"
 #include "probe_set.h"
 #include "water.h"
+#include "rain.h"
 #include "postfx.h"
 #include "material_texture_array.h"
 #include "program.h"
@@ -91,6 +92,7 @@ Scene* create_scene() {
     scene->wind = NULL;
     scene->gi_volume = NULL;
     scene->water = NULL;
+    scene->rain = NULL;
     glm_vec3_zero(scene->ambient_radiance); // no IBL and no authored ambient = black
     glm_vec3_zero(scene->world_origin);
     glm_vec3_zero(scene->pending_origin);
@@ -231,6 +233,9 @@ void free_scene(Scene* scene) {
         free_water(scene->water);
         scene->water = NULL;
     }
+
+    free_rain(scene->rain);
+    scene->rain = NULL;
 
     // Free the material mask texture array
     if (scene->material_textures) {
