@@ -1214,6 +1214,13 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 return -1;
             }
             args->rain_probe_at_count++;
+        } else if (strcmp(argv[i], "--rain-ask") == 0) {
+            if (++i >= argc || sscanf(argv[i], "%f,%f,%f", &args->rain_ask[0], &args->rain_ask[1],
+                                      &args->rain_ask[2]) != 3) {
+                fprintf(stderr, "Error: --rain-ask needs x,y,z\n");
+                return -1;
+            }
+            args->rain_ask_set = 1;
         } else if (strcmp(argv[i], "--rain-map") == 0 && i + 1 < argc) {
             args->rain_map_path = argv[++i];
         } else if (strcmp(argv[i], "--no-water-caustics") == 0) {
@@ -2741,6 +2748,10 @@ void pre_render_callback(Engine* engine, Scene* current_scene) {
         return;
 
     frames_rendered++; // drives the --check-stretch gate below
+
+    // --rain-ask: the CPU cover query asked every frame, as a listener would ask it.
+    if (frame_schedule && frame_schedule->rain_ask_set)
+        shadow_rain_cover_ask(current_scene->shadow_system, frame_schedule->rain_ask);
 
     // The engine's frame clock: the wall clock live, a fixed 1/60 headless so
     // frame N is always pose N
@@ -4809,6 +4820,14 @@ int main(int argc, char** argv) {
         rain_probe_print(scene->rain);
         shadow_rain_probe(scene->shadow_system, (const vec3*)args.rain_probe_at,
                           args.rain_probe_at_count, args.rain_map_path);
+        // The CPU cover query's answer at the asked point, beside the exact readback above.
+        if (args.rain_ask_set) {
+            float open = -1.0f;
+            const bool answered = shadow_rain_cover_answer(scene->shadow_system, &open);
+            printf("rain-probe ask x=%.9g y=%.9g z=%.9g answered=%d open=%.9g\n",
+                   (double)args.rain_ask[0], (double)args.rain_ask[1], (double)args.rain_ask[2],
+                   answered ? 1 : 0, (double)open);
+        }
         // The medium as the post chain holds it, which is what the fog volume was built from:
         // the rain's publish, read back rather than recomputed.
         if (engine->postfx)

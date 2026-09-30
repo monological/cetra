@@ -158,6 +158,10 @@ typedef struct {
     int rain_probe;             // Print the rain's physics, an integration schedule and state
     float rain_probe_at[16][3]; // --rain-probe-at points whose cover the probe reports
     int rain_probe_at_count;
+    // --rain-ask: a point the CPU cover query is asked about every frame, whose answer the
+    // probe prints. rain_ask_set 0 = none.
+    float rain_ask[3];
+    int rain_ask_set;
     const char* rain_map_path;    // --rain-map: the occlusion map as a greyscale PPM
     int water_probe;              // Print the CPU wave query over a grid, then continue
     int water_fft_probe;          // Print the transformed spectrum's measured statistics
