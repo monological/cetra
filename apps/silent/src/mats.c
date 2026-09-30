@@ -31,18 +31,24 @@ typedef struct MatSpec {
  * Glass: what it transmits, how thick a path through it is, and the colour
  * that path leaves. The containers' contents are opaque meshes inside them,
  * which the refraction pass sees through the shell.
+ *
+ * A container is HOLLOW, so its thickness is its wall's. The refraction pass
+ * bends the view ray through `thickness` before it samples what is behind,
+ * and a jar's diameter there sampled well past the jam standing right behind
+ * the wall, so a full jar read as empty glass over a band of fill. The
+ * absorption distances are the walls' too, so the tint survives the thin path.
  */
 typedef struct GlassSpec {
     MatId id;
     float transmission;
-    float thickness;      // metres: about a jar's diameter
+    float thickness;      // metres
     float attenuation[3]; // what survives `distance` of glass
     float distance;
 } GlassSpec;
 
 static const GlassSpec GLASS[] = {
-    {MAT_GLASS_AMBER, 0.95f, 0.1f, {0.80f, 0.50f, 0.22f}, 0.2f},
-    {MAT_GLASS_CLEAR, 0.97f, 0.08f, {0.90f, 0.97f, 0.90f}, 0.5f},
+    {MAT_GLASS_AMBER, 0.95f, 0.004f, {0.80f, 0.50f, 0.22f}, 0.008f},
+    {MAT_GLASS_CLEAR, 0.97f, 0.004f, {0.90f, 0.97f, 0.90f}, 0.025f},
     // A window pane is THIN glass: no volume, so no bend and no absorption,
     // only the tint and the smear.
     {MAT_WINDOW_GLASS, 0.9f, 0.0f, {1.0f, 1.0f, 1.0f}, 0.0f},
@@ -66,10 +72,12 @@ static const GlowSpec GLOWS[] = {
 };
 
 /*
- * Dirt round the edges (spec 13.8), for the surfaces that are furniture: every
- * box of these is a real object, so every edge the kit darkens is a real edge.
+ * Dirt round the edges (spec 13.8), for the surfaces that are objects: every
+ * box of these is a real thing, so every edge the kit darkens is a real edge.
  * Walls are not here, and cannot be -- a wall is cut into slabs round its
- * openings, and the seams between slabs are edges nobody built.
+ * openings, and the seams between slabs are edges nobody built. On glass the
+ * dirt tints what shows through as well as the surface, which is how a film
+ * of grease looks.
  */
 typedef struct GrimeSpec {
     MatId id;
@@ -77,8 +85,9 @@ typedef struct GrimeSpec {
 } GrimeSpec;
 
 static const GrimeSpec GRIME[] = {
-    {MAT_ENAMEL, 0.75f}, {MAT_APPLIANCE, 0.6f}, {MAT_TRIM, 0.55f},
-    {MAT_WOOD, 0.45f},   {MAT_TABLE, 0.5f},     {MAT_STAINLESS, 0.5f},
+    {MAT_ENAMEL, 0.75f},      {MAT_APPLIANCE, 0.6f}, {MAT_TRIM, 0.55f}, {MAT_WOOD, 0.45f},
+    {MAT_TABLE, 0.5f},        {MAT_STAINLESS, 0.5f}, {MAT_STEEL, 0.5f}, {MAT_GLASS_CLEAR, 0.35f},
+    {MAT_GLASS_AMBER, 0.35f}, {MAT_PAPER, 0.35f},    {MAT_TOWEL, 0.4f},
 };
 
 static float grime_of(int id) {
