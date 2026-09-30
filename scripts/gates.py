@@ -26929,6 +26929,15 @@ RAIN_FEATURE_MIN = 0.01
 # Everything the rain draws in the air switched off, so a pair of frames differs only in what
 # lands on the surfaces.
 RAIN_SURFACES_ONLY = {"streakCount": 0, "splashCount": 0, "mist": 0.0}
+# The SSR arm's regions, from the fixture's own camera: open wet ground in front of the roof
+# (ground x and z extents), dry ground under it, and the wall the wet ground runs up to, from
+# a few centimetres above its base -- where a wet pair's coverage folded across the silhouette
+# would darken it.
+RAIN_SSR_OPEN = ((-3.0, 3.0), (1.0, 4.0))
+RAIN_SSR_COVERED = ((-2.0, 2.0), (-5.5, -3.0))
+RAIN_SSR_WALL = [(x, y, -11.25) for x in (-3.0, 3.0) for y in (0.05, 1.5)]
+# The fixture's own camera sees these regions smaller than the under-roof camera sees its patch.
+RAIN_SSR_MIN_PX = 1000
 
 
 def _rain_twin(rate):
@@ -27025,6 +27034,10 @@ def run_rain_gate(workdir):
       rain-splashes from under the roof, splashes against none: they move the open ground
                     beyond it, and not a pixel of the ground under the roof nearest the
                     camera -- a splash lands where the occlusion map says the rain does.
+      rain-ssr      the soaked surfaces with SSR against without: the open wet ground moves,
+                    and not a pixel of the dry ground under the roof or of the wall the wet
+                    ground runs up to -- the replacing fold averages each class only with its
+                    own, so a wet pair's coverage cannot darken the wall above a puddle.
       rain-mist     the medium the post chain was handed is the rate's extinction times
                     `mist`, handed over at the outermost streak box, and arms the volume;
                     and on its own, in a fixture with no fog, it moves the frame.
@@ -27282,24 +27295,19 @@ def run_rain_gate(workdir):
                     total += 1
         return moved, total
 
-    def moved_in_patch(a_path, b_path, y):
-        """(pixels differing, pixels) in the screen rectangle inscribed in RAIN_COVERED_PATCH's
-        image at height y, from RAIN_UNDER_ROOF_CAMERA. Inscribed, so every pixel counted is
-        of the patch: its far edge is the narrower, and the rectangle takes that width."""
+    def moved_in_quad(a_path, b_path, cam, quad):
+        """(pixels differing, pixels) in the screen rectangle inscribed in the image of a world
+        quadrilateral, from a .cscn-shaped camera. Inscribed, so every pixel counted is of the
+        quad: a ground patch seen in perspective is a trapezoid whose far edge is the narrower,
+        and the rectangle takes that width. The inner two of the four projected x and of the
+        four projected y bound it, whichever way the camera maps world axes to the screen."""
         w, h, pa = _read_ppm(a_path)
         _, _, pb = _read_ppm(b_path)
-        cam = RAIN_UNDER_ROOF_CAMERA
         project = _projector({"eye": tuple(cam["eye"]), "target": tuple(cam["target"]),
                               "fovy_deg": float(cam["fov"])}, w, h)
-        # Per edge of the patch, the pair of screen coordinates its two ends land on; the
-        # inscribed rectangle is the innermost of each. Whether +x lands left or right on screen
-        # is the camera's business, so neither is assumed.
-        (xa, xb), (za, zb) = RAIN_COVERED_PATCH
-        at = {(x, z): project((x, y, z)) for x in (xa, xb) for z in (za, zb)}
-        x0 = max(min(at[(xa, z)][0], at[(xb, z)][0]) for z in (za, zb))
-        x1 = min(max(at[(xa, z)][0], at[(xb, z)][0]) for z in (za, zb))
-        y0 = max(min(at[(x, za)][1], at[(x, zb)][1]) for x in (xa, xb))
-        y1 = min(max(at[(x, za)][1], at[(x, zb)][1]) for x in (xa, xb))
+        at = [project(p) for p in quad]
+        xs, ys = sorted(p[0] for p in at), sorted(p[1] for p in at)
+        x0, x1, y0, y1 = xs[1], xs[2], ys[1], ys[2]
         moved = total = 0
         for py in range(max(0, int(math.ceil(y0))), min(h, int(y1))):
             for px in range(max(0, int(math.ceil(x0))), min(w, int(x1))):
@@ -27307,6 +27315,10 @@ def run_rain_gate(workdir):
                 moved += pa[i:i + 3] != pb[i:i + 3]
                 total += 1
         return moved, total
+
+    def ground_quad(extents, y):
+        (xa, xb), (za, zb) = extents
+        return [(xa, y, za), (xb, y, za), (xa, y, zb), (xb, y, zb)]
 
     # Puddles against none, on the same soaked surfaces: rain_wet's frame is the puddled one.
     still_points = [p for n, p in RAIN_WET_POINTS if n.startswith("covered")] + RAIN_WALL_POINTS
@@ -27343,7 +27355,8 @@ def run_rain_gate(workdir):
         w, h, _ = _read_ppm(splashed)
         ae, _ = compare(splashed, unsplashed)
         frac = ae / (w * h)
-        covered_moved, covered_total = moved_in_patch(splashed, unsplashed, 0.0)
+        covered_moved, covered_total = moved_in_quad(splashed, unsplashed, RAIN_UNDER_ROOF_CAMERA,
+                                                     ground_quad(RAIN_COVERED_PATCH, 0.0))
     ok = (frac > RAIN_SPLASH_MIN and covered_total >= RAIN_COVERED_MIN_PX
           and covered_moved == 0)
     print(f"  rain-splashes {'PASS' if ok else 'FAIL'}  splashes move {frac:.2%} of the frame "
@@ -27384,6 +27397,29 @@ def run_rain_gate(workdir):
     if not ok:
         failures.append("rain-mist")
 
+    # Wet ground in SSR, on the soaked surfaces alone: traced where the ground is wet, and not a
+    # pixel moved where it is dry or on the wall above it.
+    surfaces_ssr = frame("ssr_on", surfaces, RAIN_LINEAR)
+    surfaces_nossr = frame("ssr_off", surfaces, RAIN_LINEAR + ["--no-ssr"])
+    regions = {}
+    if surfaces_ssr and surfaces_nossr:
+        cam = _cscn_camera(RAIN_FIXTURE)
+        cam = {"eye": cam["eye"], "target": cam["target"], "fov": cam["fovy_deg"]}
+        for name, quad in (("open", ground_quad(RAIN_SSR_OPEN, 0.0)),
+                           ("covered", ground_quad(RAIN_SSR_COVERED, 0.0)),
+                           ("wall", RAIN_SSR_WALL)):
+            regions[name] = moved_in_quad(surfaces_ssr, surfaces_nossr, cam, quad)
+    moved = {k: m / t if t else float("nan") for k, (m, t) in regions.items()}
+    ok = (len(regions) == 3 and all(t >= RAIN_SSR_MIN_PX for _, t in regions.values())
+          and moved["open"] > RAIN_FEATURE_MIN and regions["covered"][0] == 0
+          and regions["wall"][0] == 0)
+    detail = ", ".join(f"{k} {m} of {t}" for k, (m, t) in regions.items()) or "no frames"
+    print(f"  rain-ssr {'PASS' if ok else 'FAIL'}  SSR against none, pixels moved: {detail} (want "
+          f"the open ground over {RAIN_FEATURE_MIN:.0%}, the covered ground and the wall 0, each "
+          f"region at least {RAIN_SSR_MIN_PX} px)")
+    if not ok:
+        failures.append("rain-ssr")
+
     # Rings against none on the flooded twin, looking out from under the roof.
     water = asset(RAIN_WATER_FIXTURE)
     if not os.path.exists(water):
@@ -27406,7 +27442,8 @@ def run_rain_gate(workdir):
         w, h, _ = _read_ppm(ringed)
         ae, _ = compare(ringed, calm)
         frac = ae / (w * h)
-        covered_moved, covered_total = moved_in_patch(ringed, calm, 0.05)
+        covered_moved, covered_total = moved_in_quad(ringed, calm, RAIN_UNDER_ROOF_CAMERA,
+                                                     ground_quad(RAIN_COVERED_PATCH, 0.05))
     ok = (frac > RAIN_FEATURE_MIN and covered_total >= RAIN_COVERED_MIN_PX
           and covered_moved == 0)
     print(f"  rain-ripples {'PASS' if ok else 'FAIL'}  rings move {frac:.1%} of the frame (want > "
