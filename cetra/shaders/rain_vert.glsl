@@ -32,16 +32,9 @@ uniform float streakBrightness;
 uniform float forwardG;
 uniform float glintShare;
 
-// The environment a drop shows: the scene's IBL where it has one, its ambient otherwise.
-uniform samplerCube irradianceMap;
-uniform int iblEnabled;
-uniform float iblIntensity;
-uniform vec3 ambientRadiance;
-
 out float vAcrossPx; // signed pixels from the streak's centre line
 out float vHalfWidth;
 out vec3 vLit;       // what the lights send toward the eye through the drop, pre-exposed
-out vec3 vSky;       // the environment beyond any fog, pre-exposed; the fragment stage fogs it
 out float vAlpha;    // its opacity, physical, before the depth and edge fades
 out float vViewDepth; // planar, positive
 out float vAlongPx;  // pixels from the tail toward the head
@@ -87,17 +80,8 @@ float dropPhase(float cosTheta) {
     return mix(1.0 / (4.0 * PI), phaseHG(cosTheta, forwardG), RAIN_REFRACT_SHARE);
 }
 
-// What refraction shows through a drop is the scene BEHIND it, squeezed from a wide field
-// (Garg and Nayar 2003). Its sky half is here -- the irradiance map's average about the view
-// ray -- and its air half is in the fragment stage, which has the fog: in a fog the thing
-// behind a drop is mostly glowing air, and a drop showing the night sky instead reads as a
-// dark dash against it.
-vec3 dropSky(vec3 toCamera) {
-    return (iblEnabled > 0 ? texture(irradianceMap, -toCamera).rgb * iblIntensity
-                           : ambientRadiance) *
-           preExposure;
-}
-
+// The light the lamps and the sun put into a drop and it sends on toward the eye. What it
+// REFRACTS -- the scene behind it -- is the fragment stage's, read from the frame itself.
 vec3 dropLit(vec3 P, vec3 toCamera, vec2 uv, float viewDepth) {
     vec3 L = vec3(0.0);
     for (int j = 0; j < lightCounts.x; j++) {
@@ -206,5 +190,4 @@ void main() {
 
     vec3 toCamera = normalize(cameraPos - P);
     vLit = dropLit(P, toCamera, sHead / viewport, -vHead.z);
-    vSky = dropSky(toCamera);
 }

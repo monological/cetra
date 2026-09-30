@@ -6,7 +6,6 @@
 in float vAcrossPx;
 in float vHalfWidth;
 in vec3 vLit;
-in vec3 vSky;
 in float vAlpha;
 in float vViewDepth;
 in float vAlongPx;
@@ -20,6 +19,13 @@ out vec4 FragColor;
 uniform mat4 projection;      // read by depth.glsl
 uniform vec2 viewport;        // post-resolution pixels
 uniform sampler2D sceneDepth; // resolved scene depth, at RENDER resolution
+
+// The frame before any drop drew, mipped, and the level a drop reads it at. A drop refracts
+// a field of about 165 degrees (Garg and Nayar 2003), so what it shows is the frame's AVERAGE
+// round it, not the pixel behind it -- which is why rain in front of a lit wall is a faint
+// darkening and rain in front of a dark one a faint brightening, and neither is a black line.
+uniform sampler2D behindTex;
+uniform float behindLod;
 
 // The fog the frame integrated, so a drop is fogged at its own depth rather than at the
 // surface behind it. fogSlices 0 = none this frame, which reads as the identity.
@@ -68,17 +74,14 @@ void main() {
     a *= clamp((surface - vViewDepth) / RAIN_SOFT_DEPTH, 0.0, 1.0);
     if (a <= 0.0)
         discard;
-    // The column to the drop, and the column to what is behind it. Their difference, seen
-    // from the drop, is the air a drop refracts: its in-scatter, and the sky dimmed by it.
+    // The drop's own light is dimmed by the air between it and the eye, and added to by that
+    // air's in-scatter. What it refracts needs neither: the frame already carries its fog.
     vec4 front = froxelSampleMedium(fogVolume, uv, vViewDepth, fogNear, fogFar, fogSlices,
                                     fogDepthDist);
-    vec4 whole = froxelSampleMedium(fogVolume, uv, surface, fogNear, fogFar, fogSlices,
-                                    fogDepthDist);
-    float tFront = max(front.a, 1e-4);
-    vec3 behind = (whole.rgb - front.rgb) / tFront + vSky * (whole.a / tFront);
-    // Only the lit half flashes: the glint is the lamp's image in the drop, and the air it
+    vec3 behind = textureLod(behindTex, uv, behindLod).rgb;
+    // Only the lit half flashes: the glint is the lamp's image in the drop, and what it
     // refracts is smooth.
     float s = clamp(vAlongPx / max(vLengthPx, 1.0), 0.0, 1.0);
     vec3 lit = vLit * mix(1.0, glintProfile(s), vGlintShare);
-    FragColor = vec4(a * ((lit + behind) * front.a + front.rgb), a);
+    FragColor = vec4(a * (lit * front.a + behind), a);
 }
