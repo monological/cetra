@@ -21,6 +21,7 @@
 #include "postfx.h"
 #include "probe.h"
 #include "probe_set.h"
+#include "rain.h"
 #include "scene.h"
 #include "shadow.h"
 #include "sky.h"
@@ -48,6 +49,7 @@ typedef enum ConfigOwner {
     CFG_WATER,
     CFG_WATER_WINDSEA,
     CFG_WATER_SWELL,
+    CFG_RAIN,
     // Owners below address ONE ELEMENT of a scene array rather than a
     // singleton, so the resolver cannot answer them -- the array walk supplies
     // each base in turn. Kept in the same table anyway: a probe's fields drift
@@ -65,7 +67,7 @@ typedef enum ConfigOwner {
 // and skipped by the singleton walk -- including its "this scene has no '%s'"
 // warning, which is why testing `_owner_base() == NULL` alone will not do.
 #define CFG_FIRST_ELEM_OWNER CFG_PROBE_ELEM
-_Static_assert(CFG_FIRST_ELEM_OWNER > CFG_WATER_SWELL, "element owners must sort last");
+_Static_assert(CFG_FIRST_ELEM_OWNER > CFG_RAIN, "element owners must sort last");
 
 typedef enum ConfigType {
     CFG_BOOL = 0,
@@ -150,6 +152,7 @@ typedef struct ConfigField {
 #define CFG_STRUCT_CFG_WATER         Water
 #define CFG_STRUCT_CFG_WATER_WINDSEA WaterWaveTrain
 #define CFG_STRUCT_CFG_WATER_SWELL   WaterWaveTrain
+#define CFG_STRUCT_CFG_RAIN          Rain
 #define CFG_STRUCT_CFG_PROBE_ELEM    ReflectionProbe
 #define CFG_STRUCT_CFG_DECAL_ELEM    Decal
 #define CFG_STRUCT_CFG_LIGHT_ELEM    Light
@@ -744,6 +747,37 @@ static const ConfigField CFG_FIELDS[] = {
     CFG_ROW(CFG_WATER_SWELL, CFG_FLOAT, "water.swell", "spread_gain", spread_gain),
     CFG_ROW(CFG_WATER_SWELL, CFG_FLOAT, "water.swell", "spread_blend", spread_blend),
 
+    // The rain (spec 13.9), under the .cscn's own keys. Its wetness and puddle level are left
+    // out, as the temporal histories are: they are what the settings integrated to, and a
+    // restored session re-derives them from the rate and the scene's `settled`.
+    CFG_ROW(CFG_RAIN, CFG_FLOAT, "rain", "rate", rate_mmh),
+    CFG_ROW(CFG_RAIN, CFG_VEC3, "rain", "wind", wind),
+    CFG_ROW(CFG_RAIN, CFG_FLOAT, "rain", "fallScale", fall_scale),
+    CFG_ROW(CFG_RAIN, CFG_FLOAT, "rain", "wetTime", wet_time),
+    CFG_ROW(CFG_RAIN, CFG_FLOAT, "rain", "dryTime", dry_time),
+    CFG_ROW(CFG_RAIN, CFG_FLOAT, "rain", "puddleFillTime", puddle_fill_time),
+    CFG_ROW(CFG_RAIN, CFG_FLOAT, "rain", "puddleDrainTime", puddle_drain_time),
+    CFG_ROW(CFG_RAIN, CFG_FLOAT, "rain", "puddleCoverage", puddle_coverage),
+    CFG_ROW(CFG_RAIN, CFG_FLOAT, "rain", "puddleScale", puddle_scale),
+    CFG_ROW(CFG_RAIN, CFG_FLOAT, "rain", "rippleStrength", ripple_strength),
+    CFG_ROW(CFG_RAIN, CFG_FLOAT, "rain", "rippleSize", ripple_size),
+    CFG_ROW(CFG_RAIN, CFG_FLOAT, "rain", "wetDarkening", wet_darkening),
+    CFG_ROW(CFG_RAIN, CFG_FLOAT, "rain", "occlusionExtent", occlusion_extent),
+    CFG_ROW(CFG_RAIN, CFG_FLOAT, "rain", "occlusionSoftness", occlusion_softness),
+    CFG_ROW(CFG_RAIN, CFG_INT, "rain", "streakCount", streak_count),
+    CFG_ROW(CFG_RAIN, CFG_FLOAT, "rain", "streakRadius", streak_radius),
+    CFG_ROW(CFG_RAIN, CFG_FLOAT, "rain", "shutter", shutter_s),
+    CFG_ROW(CFG_RAIN, CFG_FLOAT, "rain", "streakWidth", streak_width),
+    CFG_ROW(CFG_RAIN, CFG_FLOAT, "rain", "streakBrightness", streak_brightness),
+    CFG_ROW(CFG_RAIN, CFG_FLOAT, "rain", "streakForwardG", streak_forward_g),
+    CFG_ROW(CFG_RAIN, CFG_FLOAT, "rain", "streakGlint", streak_glint),
+    CFG_ROW(CFG_RAIN, CFG_FLOAT, "rain", "streakSheen", streak_sheen),
+    CFG_ROW(CFG_RAIN, CFG_INT, "rain", "splashCount", splash_count),
+    CFG_ROW(CFG_RAIN, CFG_FLOAT, "rain", "splashRadius", splash_radius),
+    CFG_ROW(CFG_RAIN, CFG_FLOAT, "rain", "splashAmount", splash_amount),
+    CFG_ROW(CFG_RAIN, CFG_FLOAT, "rain", "splashSize", splash_size),
+    CFG_ROW(CFG_RAIN, CFG_FLOAT, "rain", "mist", mist),
+
     /*
      * --- array elements. `section` is the ARRAY's name here, not a path: the
      * walk makes one object per element and writes these rows into it.
@@ -949,6 +983,8 @@ static void* _owner_base(ConfigOwner owner, Engine* engine, Scene* scene) {
             return scene && scene->water ? &scene->water->sea.wind_sea : NULL;
         case CFG_WATER_SWELL:
             return scene && scene->water ? &scene->water->sea.swell : NULL;
+        case CFG_RAIN:
+            return scene ? scene->rain : NULL;
         case CFG_PROBE_ELEM:
         case CFG_DECAL_ELEM:
         case CFG_LIGHT_ELEM:
