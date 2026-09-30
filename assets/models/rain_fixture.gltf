@@ -1,0 +1,340 @@
+{
+ "asset": {
+  "version": "2.0",
+  "generator": "gen_rain_fixture.py"
+ },
+ "scene": 0,
+ "scenes": [
+  {
+   "nodes": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8
+   ]
+  }
+ ],
+ "nodes": [
+  {
+   "name": "ground_porous",
+   "mesh": 0,
+   "translation": [
+    -5.0,
+    -0.1,
+    0.0
+   ],
+   "scale": [
+    10.0,
+    0.2,
+    24.0
+   ]
+  },
+  {
+   "name": "ground_sealed",
+   "mesh": 1,
+   "translation": [
+    5.0,
+    -0.1,
+    0.0
+   ],
+   "scale": [
+    10.0,
+    0.2,
+    24.0
+   ]
+  },
+  {
+   "name": "roof",
+   "mesh": 2,
+   "translation": [
+    0.0,
+    3.1,
+    -4.0
+   ],
+   "scale": [
+    8.0,
+    0.2,
+    6.0
+   ]
+  },
+  {
+   "name": "post_a",
+   "mesh": 3,
+   "translation": [
+    -3.8,
+    1.5,
+    -1.2
+   ],
+   "scale": [
+    0.2,
+    3.0,
+    0.2
+   ]
+  },
+  {
+   "name": "post_b",
+   "mesh": 3,
+   "translation": [
+    3.8,
+    1.5,
+    -1.2
+   ],
+   "scale": [
+    0.2,
+    3.0,
+    0.2
+   ]
+  },
+  {
+   "name": "post_c",
+   "mesh": 3,
+   "translation": [
+    -3.8,
+    1.5,
+    -6.8
+   ],
+   "scale": [
+    0.2,
+    3.0,
+    0.2
+   ]
+  },
+  {
+   "name": "post_d",
+   "mesh": 3,
+   "translation": [
+    3.8,
+    1.5,
+    -6.8
+   ],
+   "scale": [
+    0.2,
+    3.0,
+    0.2
+   ]
+  },
+  {
+   "name": "wall",
+   "mesh": 4,
+   "translation": [
+    0.0,
+    2.0,
+    -11.5
+   ],
+   "scale": [
+    20.0,
+    4.0,
+    0.4
+   ]
+  },
+  {
+   "name": "lamp_pole",
+   "mesh": 3,
+   "translation": [
+    6.5,
+    2.2,
+    -3.0
+   ],
+   "scale": [
+    0.12,
+    4.4,
+    0.12
+   ]
+  }
+ ],
+ "meshes": [
+  {
+   "name": "rain_porous",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1
+     },
+     "indices": 2,
+     "material": 0
+    }
+   ]
+  },
+  {
+   "name": "rain_sealed",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1
+     },
+     "indices": 2,
+     "material": 1
+    }
+   ]
+  },
+  {
+   "name": "rain_roof",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1
+     },
+     "indices": 2,
+     "material": 2
+    }
+   ]
+  },
+  {
+   "name": "rain_post",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1
+     },
+     "indices": 2,
+     "material": 3
+    }
+   ]
+  },
+  {
+   "name": "rain_wall",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1
+     },
+     "indices": 2,
+     "material": 4
+    }
+   ]
+  }
+ ],
+ "materials": [
+  {
+   "name": "rain_porous",
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     0.35,
+     0.35,
+     0.35,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 0.85
+   }
+  },
+  {
+   "name": "rain_sealed",
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     0.35,
+     0.35,
+     0.35,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 0.85
+   }
+  },
+  {
+   "name": "rain_roof",
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     0.12,
+     0.12,
+     0.13,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 0.7
+   }
+  },
+  {
+   "name": "rain_post",
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     0.3,
+     0.28,
+     0.25,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 0.8
+   }
+  },
+  {
+   "name": "rain_wall",
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     0.45,
+     0.28,
+     0.22,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 0.9
+   }
+  }
+ ],
+ "accessors": [
+  {
+   "bufferView": 0,
+   "componentType": 5126,
+   "count": 24,
+   "type": "VEC3",
+   "min": [
+    -0.5,
+    -0.5,
+    -0.5
+   ],
+   "max": [
+    0.5,
+    0.5,
+    0.5
+   ]
+  },
+  {
+   "bufferView": 1,
+   "componentType": 5126,
+   "count": 24,
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 2,
+   "componentType": 5123,
+   "count": 36,
+   "type": "SCALAR"
+  }
+ ],
+ "bufferViews": [
+  {
+   "buffer": 0,
+   "byteOffset": 0,
+   "byteLength": 288,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 288,
+   "byteLength": 288,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 576,
+   "byteLength": 72,
+   "target": 34963
+  }
+ ],
+ "buffers": [
+  {
+   "uri": "data:application/octet-stream;base64,AAAAPwAAAL8AAAA/AAAAPwAAAL8AAAC/AAAAPwAAAD8AAAC/AAAAPwAAAD8AAAA/AAAAvwAAAL8AAAC/AAAAvwAAAL8AAAA/AAAAvwAAAD8AAAA/AAAAvwAAAD8AAAC/AAAAvwAAAD8AAAA/AAAAPwAAAD8AAAA/AAAAPwAAAD8AAAC/AAAAvwAAAD8AAAC/AAAAvwAAAL8AAAC/AAAAPwAAAL8AAAC/AAAAPwAAAL8AAAA/AAAAvwAAAL8AAAA/AAAAvwAAAL8AAAA/AAAAPwAAAL8AAAA/AAAAPwAAAD8AAAA/AAAAvwAAAD8AAAA/AAAAPwAAAL8AAAC/AAAAvwAAAL8AAAC/AAAAvwAAAD8AAAC/AAAAPwAAAD8AAAC/AACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAABAAIAAAACAAMABAAFAAYABAAGAAcACAAJAAoACAAKAAsADAANAA4ADAAOAA8AEAARABIAEAASABMAFAAVABYAFAAWABcA",
+   "byteLength": 648
+  }
+ ]
+}

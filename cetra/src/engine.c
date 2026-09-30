@@ -27,6 +27,7 @@
 #include "shadow.h"
 #include "sky.h"
 #include "water.h"
+#include "rain.h"
 #include "gi_volume.h"
 #include "probe_atlas.h"
 #include "layers_vt.h"
@@ -2996,9 +2997,13 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
         // because a substituted clock still leaves render_time and render_delta valid, and a
         // film that stops stepping under one is the frozen-swash case this placement fixes.
         Scene* water_scene = engine_get_scene(engine);
-        if (water_scene)
+        if (water_scene) {
             water_update(water_scene->water, water_scene, (float)engine->render_time,
                          (float)engine->render_delta);
+            // Beside the water for the same reasons: the state it accumulates is read by
+            // both scene passes, and a substituted clock must not freeze it.
+            rain_update(water_scene->rain, (float)engine->render_time, (float)engine->render_delta);
+        }
 
         // Per-frame update (input, physics, fixed-timestep sim for game apps),
         // before the shadow pass so transform/particle updates land first.

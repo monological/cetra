@@ -25,6 +25,7 @@
 #include "cetra/postfx.h"
 #include "cetra/probe.h"
 #include "cetra/probe_set.h"
+#include "cetra/rain.h"
 #include "cetra/scene.h"
 #include "cetra/shadow.h"
 #include "cetra/sky.h"
@@ -64,6 +65,9 @@
 // middle grey, where a camera in fog is opened a stop and a third so the fog
 // reads white.
 #define DAY_METER_KEY 0.45f
+// Moderate rain, by the meteorologists' bands (rain.h): steady enough to soak the
+// street and fill its gutters, short of a downpour that would hide it.
+#define DEFAULT_RAIN_MMH 6.0f
 
 typedef struct SilentArgs {
     bool headless;
@@ -85,6 +89,7 @@ typedef struct SilentArgs {
     bool no_flicker;
     bool flashlight;
     bool mute;
+    float rain_mmh; // 0 = dry
 } SilentArgs;
 
 static SilentArgs g_args;
@@ -321,6 +326,15 @@ static void on_init(Game* game) {
 
     build_sky(engine);
 
+    // Already soaked: the game opens in the middle of the rain, not at its start.
+    if (g_args.rain_mmh > 0.0f) {
+        g_scene->rain = create_rain();
+        if (g_scene->rain) {
+            g_scene->rain->rate_mmh = g_args.rain_mmh;
+            rain_settle(g_scene->rain);
+        }
+    }
+
     ShadowSystem* ss = g_scene->shadow_system;
     if (ss) {
         ss->enabled = true;
@@ -439,6 +453,9 @@ static void print_usage(const char* prog) {
     printf("      --no-flicker        Keep the failing ceiling tube steady\n");
     printf("      --flashlight        Start with the flashlight on (F toggles it)\n");
     printf("      --mute              Without sound\n");
+    printf("      --rain MM           Rain rate in mm/h (default %.0f)\n",
+           (double)DEFAULT_RAIN_MMH);
+    printf("      --no-rain           A dry night\n");
     printf("  In the window: click to capture the mouse, Tab to release it. WASD\n");
     printf("  walks, Shift hurries, the arrows or the mouse look, G shows the GUI.\n");
     printf("  -h, --help              This message\n");
@@ -450,6 +467,7 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
     a->height = DEFAULT_HEIGHT;
     a->seed = 7;
     a->render_scale = DEFAULT_RENDER_SCALE;
+    a->rain_mmh = DEFAULT_RAIN_MMH;
     for (int i = 1; i < argc; i++) {
         const char* s = argv[i];
         const bool has_next = i + 1 < argc;
@@ -495,6 +513,10 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
             a->flashlight = true;
         } else if (!strcmp(s, "--mute")) {
             a->mute = true;
+        } else if (!strcmp(s, "--rain") && has_next) {
+            a->rain_mmh = fmaxf(0.0f, (float)atof(argv[++i]));
+        } else if (!strcmp(s, "--no-rain")) {
+            a->rain_mmh = 0.0f;
         } else if (!strcmp(s, "-h") || !strcmp(s, "--help")) {
             print_usage(argv[0]);
             return false;

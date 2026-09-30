@@ -46,6 +46,9 @@ void apply_cscene_material_overrides(Scene* scene, const CetraSceneDesc* cscn);
 // Attach the scene file's water surface (if the .cscn declares a water block).
 // Runs BEFORE the CLI water block, which overrides whatever it finds.
 void apply_cscene_water(Scene* scene, const CetraSceneDesc* cscn);
+// Attach the scene file's rain (spec 13.9). Runs BEFORE --rain / --no-rain, which
+// override it.
+void apply_cscene_rain(Scene* scene, const CetraSceneDesc* cscn);
 void apply_cscene_fog_volumes(Scene* scene, const CetraSceneDesc* cscn);
 void apply_cscene_occluders(Scene* scene, const CetraSceneDesc* cscn);
 

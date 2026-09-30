@@ -23,6 +23,7 @@
 #include "cetra/probe.h"
 #include "cetra/probe_set.h"
 #include "cetra/program.h"
+#include "cetra/rain.h"
 #include "cetra/scene.h"
 #include "cetra/texture.h"
 #include "cetra/util.h"
@@ -540,6 +541,41 @@ void apply_cscene_water(Scene* scene, const CetraSceneDesc* cscn) {
     scene->water = water;
     printf("Scene file: water level %.2f, extent %.1f, %s waves\n", (double)water->level,
            (double)water->extent, water->wave_model == WATER_WAVES_FFT ? "spectral" : "gerstner");
+}
+
+/*
+ * The scene file's rain. Settled unless the file says otherwise: a scene that opens in
+ * a storm is already wet, and a headless frame of it does not depend on how many
+ * frames it waited.
+ */
+void apply_cscene_rain(Scene* scene, const CetraSceneDesc* cscn) {
+    if (!scene || !cscn || !cscn->rain.enabled)
+        return;
+    const CSceneRain* r = &cscn->rain;
+    Rain* rain = create_rain();
+    if (!rain)
+        return;
+    if (r->has_rate)
+        rain->rate_mmh = r->rate;
+    if (r->has_wind)
+        glm_vec3_copy((float*)r->wind, rain->wind);
+    if (r->has_wet_time)
+        rain->wet_time = r->wet_time;
+    if (r->has_dry_time)
+        rain->dry_time = r->dry_time;
+    if (r->has_puddle_fill_time)
+        rain->puddle_fill_time = r->puddle_fill_time;
+    if (r->has_puddle_drain_time)
+        rain->puddle_drain_time = r->puddle_drain_time;
+    if (r->has_puddle_coverage)
+        rain->puddle_coverage = r->puddle_coverage;
+    if (!r->has_settled || r->settled)
+        rain_settle(rain);
+    free_rain(scene->rain);
+    scene->rain = rain;
+    printf("Scene file: rain %.2f mm/h, wind (%.2f, %.2f, %.2f) m/s%s\n", (double)rain->rate_mmh,
+           (double)rain->wind[0], (double)rain->wind[1], (double)rain->wind[2],
+           r->has_settled && !r->settled ? ", starting dry" : "");
 }
 
 /*

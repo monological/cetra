@@ -152,6 +152,9 @@ typedef struct {
     int shore_probe;              // Print the CPU twin of the run-up, the film's own drive
     int water_bed_dome;           // Install the analytic dome bed provider (shoaling)
     int no_water;                 // Drop a water surface a scene file asked for
+    float rain_rate;              // Rain in mm/h (spec 13.9); negative = keep the scene file's
+    int no_rain;                  // Drop the rain a scene file asked for
+    int rain_probe;               // Print the rain's physics, an integration schedule and state
     int water_probe;              // Print the CPU wave query over a grid, then continue
     int water_fft_probe;          // Print the transformed spectrum's measured statistics
     int water_caustic_debug;      // Water.caustic_debug: 2 = the raw caustics target

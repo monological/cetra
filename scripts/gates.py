@@ -26852,6 +26852,134 @@ def run_camera_gate(workdir):
 
     return failed
 
+
+RAIN_FIXTURE = "rain_fixture.cscn"
+RAIN_TOL = 1e-5        # relative, float32 physics against its double twin
+RAIN_PACE_TOL = 1e-4   # absolute, one schedule sliced at 60 and at 30 fps
+RAIN_TICK_FRAMES = 60
+
+
+def _rain_twin(rate):
+    """The physics rain.c derives, in double: Marshall-Palmer and Atlas 1973."""
+    lam = 4.1 * rate ** -0.21
+    d0 = 3.672 / lam
+    return {"lambda": lam,
+            "beta": math.pi * 8000.0 / lam ** 3 * 1e-6,
+            "density": 8000.0 / lam * math.exp(-lam * 0.5),
+            "d0": d0,
+            "v0": _rain_velocity(d0)}
+
+
+def _rain_velocity(d_mm):
+    return max(0.0, 9.65 - 10.3 * math.exp(-0.6 * d_mm))
+
+
+def _rain_rows(scene, extra=None, frames=2):
+    rows, _ = _probe_render(scene, "--rain-probe", "rain-probe", frames=frames, extra=extra)
+    out = {}
+    for rec in rows:
+        kind = rec.pop("kind", None)
+        vals = {k: float(v) for k, v in rec.items()}
+        out.setdefault(kind, []).append(vals)
+    return out
+
+
+def run_rain_gate(workdir):
+    """Rain (spec 13.9): the physics it derives and the state it accumulates.
+
+      rain-physics  Marshall-Palmer's slope, the extinction pi N0 / Lambda^3, the drop
+                    density above 0.5 mm, the median volume diameter 3.672 / Lambda and
+                    Atlas's terminal velocity, at five rates and four diameters, against
+                    this file's twin. Heavier rain must also mean bigger, faster drops
+                    and a dimmer sky -- the ladder has to be monotone, since a twin that
+                    shared a sign error with the C would pass the first half.
+      rain-wetting  one schedule -- ten seconds of 10 mm/h, thirty of none -- sliced at
+                    60 and at 30 fps lands on the same state, and that state is the
+                    closed form: a film with a time constant shortened by the rate, and
+                    a puddle level heading for coverage x (1 - exp(-R / R_ref)).
+      rain-tick     the fixture opened DRY rather than settled, after sixty headless
+                    frames, reads the same closed form at one second -- so the engine
+                    advances the state once a frame on the frame's own clock, and a
+                    settled scene lands exactly on the rate's steady state.
+    """
+    scene = asset(RAIN_FIXTURE)
+    if not os.path.exists(scene):
+        print(f"  rain-physics SKIP  ({RAIN_FIXTURE} not present)")
+        return []
+    failures = []
+    got = _rain_rows(scene)
+
+    errs, rows = [], got.get("physics", [])
+    for row in rows:
+        want = _rain_twin(row["rate"])
+        errs += [abs(row[k] - want[k]) / want[k] for k in want]
+    for row in got.get("velocity", []):
+        want = _rain_velocity(row["d"])
+        errs.append(abs(row["v"] - want) / want)
+    ladder = sorted(rows, key=lambda r: r["rate"])
+    monotone = all(b[k] > a[k] for a, b in zip(ladder, ladder[1:])
+                   for k in ("beta", "density", "d0", "v0"))
+    worst = (float("inf") if len(rows) != 5 or any(math.isnan(e) for e in errs)
+             else max(errs))
+    ok = worst <= RAIN_TOL and monotone
+    at10 = next((r for r in rows if r["rate"] == 10.0), {})
+    print(f"  rain-physics {'PASS' if ok else 'FAIL'}  worst relative error {worst:.2e} over "
+          f"{len(rows)} rates and {len(got.get('velocity', []))} diameters (want "
+          f"<={RAIN_TOL}); the ladder is {'monotone' if monotone else 'NOT MONOTONE'}; at "
+          f"10 mm/h beta {at10.get('beta', float('nan')):.4g}/m, a meteorological "
+          f"visibility of {3.912 / at10.get('beta', float('nan')) / 1000.0:.2f} km")
+    if not ok:
+        failures.append("rain-physics")
+
+    d = (got.get("defaults") or [{}])[0]
+    sched = {int(r["fps"]): r for r in got.get("schedule", [])}
+    if d and 60 in sched and 30 in sched:
+        rate, ref = sched[60]["rate"], d["reference"]
+        wet_mid = 1.0 - math.exp(-sched[60]["rain_s"] / (d["wet_time"] * ref / rate))
+        target = d["coverage"] * (1.0 - math.exp(-rate / ref))
+        puddle_mid = target * (1.0 - math.exp(-sched[60]["rain_s"] / (d["fill_time"] * ref / rate)))
+        want = {"wet_mid": wet_mid, "puddle_mid": puddle_mid,
+                "wet_end": wet_mid * math.exp(-sched[60]["dry_s"] / d["dry_time"]),
+                "puddle_end": puddle_mid * math.exp(-sched[60]["dry_s"] / d["drain_time"])}
+        pace = max(abs(sched[60][k] - sched[30][k]) for k in want)
+        closed = max(abs(sched[60][k] - v) for k, v in want.items())
+        ok = pace <= RAIN_PACE_TOL and closed <= RAIN_PACE_TOL
+        detail = (f"60 against 30 fps differ by {pace:.2e} and the 60 fps run misses the "
+                  f"closed form by {closed:.2e} (want <={RAIN_PACE_TOL}); film "
+                  f"{sched[60]['wet_mid']:.4f} after the rain and {sched[60]['wet_end']:.4f} "
+                  f"after drying, puddles {sched[60]['puddle_mid']:.4f} then "
+                  f"{sched[60]['puddle_end']:.4f}")
+    else:
+        ok, detail = False, "the probe printed no schedule or no defaults"
+    print(f"  rain-wetting {'PASS' if ok else 'FAIL'}  {detail}")
+    if not ok:
+        failures.append("rain-wetting")
+
+    dry = os.path.join(workdir, "rain_dry.cscn")
+    cscn_copy(scene, dry, lambda s: s["rain"].update({"settled": False}))
+    settled = (got.get("state") or [{}])[0]
+    state = (_rain_rows(dry, frames=RAIN_TICK_FRAMES).get("state") or [{}])[0]
+    if state.get("present") == 1.0 and settled.get("present") == 1.0 and d:
+        rate, ref = state["rate"], d["reference"]
+        elapsed = RAIN_TICK_FRAMES / 60.0
+        wet = 1.0 - math.exp(-elapsed / (state["wet_time"] * ref / rate))
+        puddle_target = state["coverage"] * (1.0 - math.exp(-rate / ref))
+        puddle = puddle_target * (1.0 - math.exp(-elapsed / (state["fill_time"] * ref / rate)))
+        err = max(abs(state["wetness"] - wet), abs(state["puddle"] - puddle),
+                  abs(settled["wetness"] - 1.0), abs(settled["puddle"] - puddle_target))
+        ok = err <= RAIN_PACE_TOL
+        detail = (f"from dry, {RAIN_TICK_FRAMES} frames leave a film of {state['wetness']:.5f} "
+                  f"(want {wet:.5f}) and puddles of {state['puddle']:.5f} (want {puddle:.5f}); "
+                  f"settled, {settled['wetness']:.5f} and {settled['puddle']:.5f} (want 1 and "
+                  f"{puddle_target:.5f}); worst {err:.2e}")
+    else:
+        ok, detail = False, "the fixture's rain did not reach the scene"
+    print(f"  rain-tick {'PASS' if ok else 'FAIL'}  {detail}")
+    if not ok:
+        failures.append("rain-tick")
+    return failures
+
+
 GATE_GROUPS = [
     ("scale", "scale invariance (lights x1000, exposure /1000):", run_scale_gates),
     ("penumbra", "area shadow (analytic penumbra):", run_penumbra_gate),
@@ -26896,6 +27024,8 @@ GATE_GROUPS = [
     ("water-night", "the sea after dark: which light it takes, and what it does with none "
      "(spec 11.84):",
      run_water_night_gate),
+    ("rain", "rain: the physics it derives and the state it accumulates (spec 13.9):",
+     run_rain_gate),
     ("emissive", "emissive geometry as area lights (fit, intent, light; spec 11.49):",
      run_emissive_gate),
     ("probe-set", "clustered specular probes (selection, blend, tenancy; spec 11.70):",
