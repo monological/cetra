@@ -26886,6 +26886,13 @@ RAIN_LOBE_MIN = 10.0
 # Glints move light along a streak and add none, but a streak need not hold whole cycles of
 # its pattern, so the frame's total agrees only on average over its streaks.
 RAIN_GLINT_TOL = 0.05
+# The wet-surface arm's points, (name, world point): two under the roof, more than a metre
+# inside the dry patch's soft edge, and two in the open, one on each ground half.
+RAIN_WET_POINTS = [("covered porous", (-2.0, 0.0, -4.5)), ("covered sealed", (2.0, 0.0, -4.5)),
+                   ("open porous", (-5.0, 0.0, 3.0)), ("open sealed", (5.0, 0.0, 3.0))]
+# A fully porous, fully wet surface loses half its albedo and then takes the hue power
+# (0.35^0.55 = 0.56 on this grey), about 0.28 of its dry diffuse in all.
+RAIN_WET_POROUS_MAX = 0.5
 RAIN_COVER_POINTS = [
     ((0.0, 0.0, -4.0), False), ((-2.0, 0.0, -4.0), False), ((2.0, 0.0, -4.0), False),
     ((0.0, 0.0, 4.0), True), ((-6.0, 0.0, 4.0), True), ((6.0, 0.0, 4.0), True),
@@ -26957,6 +26964,13 @@ def run_rain_gate(workdir):
                     glints and with none, within RAIN_GLINT_TOL and with no pixel clipped:
                     the glints redistribute it, and a pattern that added light would read as
                     rain that brightened when it sparkled.
+      rain-wet      the soaked fixture against itself dry, surfaces only: under the roof the
+                    ground is EXACTLY as it was on both halves, and in the open the porous
+                    half falls below RAIN_WET_POROUS_MAX of its dry brightness while the
+                    sealed half, which only takes a film, stays well above the porous one.
+      rain-ledger   the rain variant declares no more samplers than the dry variant of the
+                    same materials: the cover is a tenant of the punctual array, and a unit
+                    spent on it would be one the full variant does not have.
 
     Everything here runs on rain_fixture, whose answers are known from its geometry and
     its closed forms; the streak arms read the fixture at sheen 0, since the sheen is a look
@@ -27156,6 +27170,48 @@ def run_rain_gate(workdir):
           f"{RAIN_GLINT_TOL:.0%}); {clipped} pixels clip (want 0)")
     if not ok:
         failures.append("rain-glint")
+
+    # Surfaces only: no streaks, so every difference between the two frames is the wetting.
+    surfaces = variant("surfaces", lambda s: s["rain"].update({"streakCount": 0}))
+    wet_path = frame("wet", surfaces, RAIN_LINEAR)
+    dry_path = frame("dry", surfaces, RAIN_LINEAR + ["--no-rain"])
+    ratios = {}
+    if wet_path and dry_path:
+        w, h, wet_pix = _read_ppm(wet_path)
+        _, _, dry_pix = _read_ppm(dry_path)
+        project = _projector(_cscn_camera(RAIN_FIXTURE), w, h)
+        for name, point in RAIN_WET_POINTS:
+            x, y = project(point)
+            box = ((x - 3) / w, (y - 3) / h, (x + 4) / w, (y + 4) / h)
+            dry = _box_luma_dense(dry_pix, w, h, box, _DISPLAY_TO_LINEAR)
+            ratios[name] = (_box_luma_dense(wet_pix, w, h, box, _DISPLAY_TO_LINEAR) / dry
+                            if dry > 0 else float("nan"))
+    covered = [ratios.get(n, float("nan")) for n in ("covered porous", "covered sealed")]
+    porous = ratios.get("open porous", float("nan"))
+    sealed = ratios.get("open sealed", float("nan"))
+    ok = (all(r == 1.0 for r in covered) and porous < RAIN_WET_POROUS_MAX
+          and sealed > 1.5 * porous)
+    print(f"  rain-wet {'PASS' if ok else 'FAIL'}  wet over dry: under the roof "
+          f"{covered[0]:.4f} and {covered[1]:.4f} (want exactly 1), in the open porous "
+          f"{porous:.3f} (want < {RAIN_WET_POROUS_MAX}) and sealed {sealed:.3f} (want over 1.5x "
+          f"the porous)")
+    if not ok:
+        failures.append("rain-wet")
+
+    def samplers(extra):
+        _, text = _probe_render(scene, "--rain-probe", "rain-probe", frames=2, extra=extra)
+        found = re.findall(r"pbr variant (pbr-\d+): features \d+ of \d+ samplers (\d+)", text)
+        return {name: int(n) for name, n in found}
+
+    wet_variants, dry_variants = samplers([]), samplers(["--no-rain"])
+    wet_count = max(wet_variants.values(), default=-1)
+    dry_count = max(dry_variants.values(), default=-1)
+    ok = (wet_count >= 0 and dry_count >= 0 and wet_count == dry_count
+          and any(int(n.split("-")[1]) & 64 for n in wet_variants))
+    print(f"  rain-ledger {'PASS' if ok else 'FAIL'}  wet {wet_variants or 'none'} against dry "
+          f"{dry_variants or 'none'} (want the rain bit set wet, and the same sampler count)")
+    if not ok:
+        failures.append("rain-ledger")
     return failures
 
 
