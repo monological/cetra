@@ -26947,6 +26947,10 @@ RAIN_FEATURE_MIN = 0.01
 # its readback ring to have answered (three slots) several times over.
 RAIN_ASK_POINTS = [(0.0, 0.05, -4.5), (0.0, 0.05, 4.0)]
 RAIN_ASK_FRAMES = 8
+# Values nothing defaults to, so a restore that did nothing cannot pass by landing on them; the
+# .cscn key each is authored under, against the probe's state-row name it reads back as.
+RAIN_CONFIG_TUNED = {"rate": 3.3, "mist": 2.5, "streakRadius": 3.1}
+RAIN_CONFIG_READ = {"rate": "rate", "mist": "mist", "streakRadius": "streak_radius"}
 # Everything the rain draws in the air switched off, so a pair of frames differs only in what
 # lands on the surfaces.
 RAIN_SURFACES_ONLY = {"streakCount": 0, "splashCount": 0, "mist": 0.0}
@@ -27033,6 +27037,9 @@ def run_rain_gate(workdir):
                     latency, which is what a listener under a roof asks -- asked every frame
                     at a point under the roof and at one in the open, answers as the exact
                     readback of the same point does.
+      rain-config   a variant's rain settings dumped by the session snapshot and restored
+                    over the plain fixture read back as the variant's -- a row that writes
+                    and does not apply fails.
       rain-tenant   the same ten answers and the same stored depths with the lamp CASTING,
                     which puts its six cube faces ahead of the rain in the punctual array,
                     and with shadows switched off, which leaves the rain alone in it. The
@@ -27195,6 +27202,22 @@ def run_rain_gate(workdir):
           f"readback's answer: one covered, one open)")
     if not ok:
         failures.append("rain-ask")
+
+    # The session snapshot carries the rain: a variant's settings dumped, then restored over the
+    # plain fixture, read back through the probe's own state row.
+    tuned = os.path.join(workdir, "rain_tuned.cscn")
+    cscn_copy(scene, tuned, lambda s: s["rain"].update(RAIN_CONFIG_TUNED))
+    dump = os.path.join(workdir, "rain_config.json")
+    _rain_rows(tuned, extra=["--config-dump", dump], frames=2)
+    restored = (_rain_rows(scene, extra=["--config", dump], frames=2).get("state") or [{}])[0]
+    want = {RAIN_CONFIG_READ[k]: v for k, v in RAIN_CONFIG_TUNED.items()}
+    back = {k: restored.get(k) for k in want}
+    ok = os.path.exists(dump) and all(
+        back[k] is not None and abs(back[k] - v) <= 1e-6 * max(1.0, abs(v))
+        for k, v in want.items())
+    print(f"  rain-config {'PASS' if ok else 'FAIL'}  restored {back} (want {want})")
+    if not ok:
+        failures.append("rain-config")
 
     casting = os.path.join(workdir, "rain_casting.cscn")
     cscn_copy(scene, casting, lambda s: s["lights"][0].update({"cast_shadows": True}))
