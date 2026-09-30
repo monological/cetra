@@ -129,8 +129,81 @@ static void jar(Kit* kit, const KitFrame* f, KitRng* rng, float a, float d, floa
     kit_frame_prism(kit, f, MAT_STEEL, a, d, y + h, y + h + 0.02f, r * 0.92f, 12);
 }
 
+#define COUNT(arr) ((int)(sizeof(arr) / sizeof((arr)[0])))
+
+/*
+ * A stainless stockpot, 20 cm across: a base rounding into the wall, a rim
+ * rolled outward into a bead, and a domed lid with a black knob. The lid sits
+ * inside the bead, so the pot's open inside is never seen and is not built.
+ */
+static const vec2 POT_BODY[] = {
+    {0.0f, 0.0f},       {0.088f, 0.0f},   {0.096f, 0.003f},   {0.1f, 0.012f},
+    {0.1f, 0.112f},     {0.103f, 0.114f}, {0.1058f, 0.1152f}, {0.107f, 0.118f},
+    {0.1058f, 0.1208f}, {0.103f, 0.122f}, {0.1002f, 0.1208f}, {0.099f, 0.118f},
+};
+static const vec2 POT_LID[] = {
+    {0.0f, 0.119f},   {0.101f, 0.119f}, {0.102f, 0.122f}, {0.098f, 0.126f},
+    {0.085f, 0.132f}, {0.06f, 0.138f},  {0.03f, 0.141f},  {0.0f, 0.142f},
+};
+static const vec2 POT_KNOB[] = {
+    {0.0f, 0.142f},   {0.008f, 0.142f}, {0.008f, 0.15f}, {0.017f, 0.156f},
+    {0.018f, 0.162f}, {0.012f, 0.166f}, {0.0f, 0.167f},
+};
+
 static void pot(Kit* kit, const KitFrame* f, float a, float d, float y) {
-    kit_frame_prism(kit, f, MAT_STEEL, a, d, y, y + 0.13f, 0.11f, 10);
+    kit_frame_lathe(kit, f, MAT_STAINLESS, a, d, y, POT_BODY, COUNT(POT_BODY), 40);
+    kit_frame_lathe(kit, f, MAT_STAINLESS, a, d, y, POT_LID, COUNT(POT_LID), 40);
+    kit_frame_lathe(kit, f, MAT_BLACK, a, d, y, POT_KNOB, COUNT(POT_KNOB), 20);
+    // A loop handle each side: half an ellipse out from the wall and back.
+    enum { LOOP = 9 };
+    for (int s = -1; s <= 1; s += 2) {
+        vec3 path[LOOP];
+        for (int i = 0; i < LOOP; i++) {
+            const float t = GLM_PIf * ((float)i / (float)(LOOP - 1) - 0.5f);
+            path[i][0] = a + (float)s * (0.098f + 0.036f * cosf(t));
+            path[i][1] = y + 0.088f + 0.006f * cosf(t);
+            path[i][2] = d + 0.032f * sinf(t);
+        }
+        kit_frame_pipe(kit, f, MAT_STAINLESS, path, LOOP, 0.005f, 12);
+    }
+}
+
+/*
+ * A gooseneck mixer tap: a flared base, a riser that turns through a half
+ * circle out over the basin and down to an aerator, and a lever each side on
+ * its own post.
+ */
+static const vec2 TAP_BASE[] = {
+    {0.0f, 0.0f},     {0.03f, 0.0f},    {0.03f, 0.006f}, {0.026f, 0.013f},
+    {0.017f, 0.019f}, {0.012f, 0.022f}, {0.0f, 0.023f},
+};
+static const vec2 TAP_POST[] = {
+    {0.0f, 0.0f},     {0.018f, 0.0f},   {0.018f, 0.004f}, {0.015f, 0.008f},
+    {0.015f, 0.032f}, {0.012f, 0.036f}, {0.0f, 0.037f},
+};
+
+static void faucet(Kit* kit, const KitFrame* f, float a, float d, float y) {
+    const float r = 0.011f, rise = y + 0.26f, bend = 0.11f, spout = d + 2.0f * bend;
+    enum { ARC = 13 };
+    kit_frame_lathe(kit, f, MAT_STAINLESS, a, d, y, TAP_BASE, COUNT(TAP_BASE), 32);
+    vec3 neck[ARC + 2];
+    glm_vec3_copy((vec3){a, y + 0.02f, d}, neck[0]);
+    for (int k = 0; k < ARC; k++) {
+        const float t = GLM_PIf * (1.0f - (float)k / (float)(ARC - 1));
+        glm_vec3_copy((vec3){a, rise + bend * sinf(t), d + bend + bend * cosf(t)}, neck[k + 1]);
+    }
+    glm_vec3_copy((vec3){a, rise - 0.04f, spout}, neck[ARC + 1]);
+    kit_frame_pipe(kit, f, MAT_STAINLESS, neck, ARC + 2, r, 20);
+    kit_frame_pipe(kit, f, MAT_STAINLESS,
+                   (vec3[]){{a, rise - 0.028f, spout}, {a, rise - 0.048f, spout}}, 2, 0.0135f, 20);
+    for (int s = -1; s <= 1; s += 2) {
+        const float la = a + 0.1f * (float)s;
+        kit_frame_lathe(kit, f, MAT_STAINLESS, la, d, y, TAP_POST, COUNT(TAP_POST), 24);
+        kit_frame_pipe(
+            kit, f, MAT_STAINLESS,
+            (vec3[]){{la, y + 0.03f, d}, {la, y + 0.04f, d + 0.04f}, {la, y + 0.044f, d + 0.075f}},
+            3, 0.0055f, 12);
+    }
 }
 
 // A frying pan with its handle reaching out toward the room.
@@ -268,23 +341,31 @@ static void window_wall(Kit* kit, KitRng* rng) {
     counter(kit, &f, MAT_TRIM, SINK_A0, SINK_A1, 0.0f, SINK_D0);
     counter(kit, &f, MAT_TRIM, SINK_A0, SINK_A1, SINK_D1, COUNTER_D);
 
-    // The basin: a floor and four walls, below the counter's opening.
-    const float t = 0.015f;
-    kit_frame_box(kit, &f, MAT_STEEL, SINK_A0, SINK_A1, 0.70f, 0.72f, SINK_D0, SINK_D1, false);
-    kit_frame_box(kit, &f, MAT_STEEL, SINK_A0, SINK_A1, 0.72f, COUNTER_TOP, SINK_D0, SINK_D0 + t,
-                  false);
-    kit_frame_box(kit, &f, MAT_STEEL, SINK_A0, SINK_A1, 0.72f, COUNTER_TOP, SINK_D1 - t, SINK_D1,
-                  false);
-    kit_frame_box(kit, &f, MAT_STEEL, SINK_A0, SINK_A0 + t, 0.72f, COUNTER_TOP, SINK_D0, SINK_D1,
-                  false);
-    kit_frame_box(kit, &f, MAT_STEEL, SINK_A1 - t, SINK_A1, 0.72f, COUNTER_TOP, SINK_D0, SINK_D1,
-                  false);
-    // The tap: a riser, a spout reaching over the basin, two handles.
+    // The basin: a floor and four walls below the counter's opening, a drop-in
+    // rim round the opening on the counter, and the drain.
+    const float t = 0.015f, lip = 0.02f;
+    kit_frame_box(kit, &f, MAT_STAINLESS, SINK_A0, SINK_A1, 0.70f, 0.72f, SINK_D0, SINK_D1, false);
+    kit_frame_box(kit, &f, MAT_STAINLESS, SINK_A0, SINK_A1, 0.72f, COUNTER_TOP, SINK_D0,
+                  SINK_D0 + t, false);
+    kit_frame_box(kit, &f, MAT_STAINLESS, SINK_A0, SINK_A1, 0.72f, COUNTER_TOP, SINK_D1 - t,
+                  SINK_D1, false);
+    kit_frame_box(kit, &f, MAT_STAINLESS, SINK_A0, SINK_A0 + t, 0.72f, COUNTER_TOP, SINK_D0,
+                  SINK_D1, false);
+    kit_frame_box(kit, &f, MAT_STAINLESS, SINK_A1 - t, SINK_A1, 0.72f, COUNTER_TOP, SINK_D0,
+                  SINK_D1, false);
+    const float rim = COUNTER_TOP + 0.004f;
+    kit_frame_box(kit, &f, MAT_STAINLESS, SINK_A0 - lip, SINK_A1 + lip, COUNTER_TOP, rim,
+                  SINK_D0 - lip, SINK_D0, false);
+    kit_frame_box(kit, &f, MAT_STAINLESS, SINK_A0 - lip, SINK_A1 + lip, COUNTER_TOP, rim, SINK_D1,
+                  SINK_D1 + lip, false);
+    kit_frame_box(kit, &f, MAT_STAINLESS, SINK_A0 - lip, SINK_A0, COUNTER_TOP, rim, SINK_D0,
+                  SINK_D1, false);
+    kit_frame_box(kit, &f, MAT_STAINLESS, SINK_A1, SINK_A1 + lip, COUNTER_TOP, rim, SINK_D0,
+                  SINK_D1, false);
     const float am = 0.5f * (SINK_A0 + SINK_A1);
-    kit_frame_prism(kit, &f, MAT_STEEL, am, 0.05f, COUNTER_TOP, 1.18f, 0.013f, 8);
-    kit_frame_box(kit, &f, MAT_STEEL, am - 0.012f, am + 0.012f, 1.155f, 1.18f, 0.05f, 0.24f, false);
-    kit_frame_prism(kit, &f, MAT_STEEL, am - 0.11f, 0.05f, COUNTER_TOP, 0.97f, 0.018f, 6);
-    kit_frame_prism(kit, &f, MAT_STEEL, am + 0.11f, 0.05f, COUNTER_TOP, 0.97f, 0.018f, 6);
+    kit_frame_prism(kit, &f, MAT_BLACK, am, 0.5f * (SINK_D0 + SINK_D1), 0.72f, 0.722f, 0.03f, 12);
+    // Clear of the sill's front edge, which the riser would otherwise pass through.
+    faucet(kit, &f, am, 0.065f, COUNTER_TOP);
 
     // Tile up the wall behind the counter, and under the sill.
     kit_frame_box(kit, &f, MAT_BACKSPLASH, 0.0f, w0 - 0.08f, COUNTER_TOP, UPPER_Y0, 0.0f, 0.012f,
@@ -373,9 +454,15 @@ static void stove_wall(Kit* kit, KitRng* rng) {
     }
     kit_frame_box(kit, &f, MAT_BLACK, s0 + 0.04f, s1 - 0.04f, 0.12f, 0.68f, 0.60f, 0.62f, false);
     kit_frame_bar(kit, &f, MAT_STEEL, s0 + 0.08f, s1 - 0.08f, 0.72f, 0.66f, 0.01f);
+    // The knobs: a skirt on the panel, the knob, and a line to read it by.
     for (int i = 0; i < 4; i++) {
-        const float a = s0 + 0.14f + 0.16f * (float)i;
-        kit_frame_box(kit, &f, MAT_BLACK, a - 0.02f, a + 0.02f, 0.78f, 0.83f, 0.60f, 0.635f, false);
+        const float a = s0 + 0.14f + 0.16f * (float)i, ky = 0.805f;
+        kit_frame_pipe(kit, &f, MAT_STAINLESS, (vec3[]){{a, ky, 0.60f}, {a, ky, 0.606f}}, 2, 0.027f,
+                       28);
+        kit_frame_pipe(kit, &f, MAT_STAINLESS, (vec3[]){{a, ky, 0.60f}, {a, ky, 0.63f}}, 2, 0.021f,
+                       28);
+        kit_frame_box(kit, &f, MAT_BLACK, a - 0.002f, a + 0.002f, ky + 0.004f, ky + 0.019f, 0.63f,
+                      0.6315f, false);
     }
     kit_frame_box(kit, &f, MAT_TOWEL, s0 + 0.2f, s0 + 0.44f, 0.36f, 0.73f, 0.672f, 0.68f, false);
     kit_frame_box(kit, &f, MAT_TOWEL, s0 + 0.2f, s0 + 0.44f, 0.71f, 0.745f, 0.64f, 0.68f, false);
