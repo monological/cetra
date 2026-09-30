@@ -19,6 +19,7 @@
 #include "material.h"
 #include "postfx.h"
 #include "probe.h"
+#include "rain.h"
 #include "water.h"
 #include "scene.h"
 #include "shadow.h"
@@ -714,6 +715,34 @@ static void _engine_gui_panel(Engine* engine) {
                 igSliderFloat("Foam decay", &water->foam_decay, 0.05f, 2.0f, "%.2f", 0);
             }
             _end_effect_group();
+        }
+
+        // The rain (spec 13.9). No master switch: a rate of 0 is the rain stopping, which is
+        // also what lets the world dry, and a switch beside it would be a second way to say so.
+        if (scene->rain) {
+            Rain* rain = scene->rain;
+            igSeparatorText("Rain");
+            igIndent(0.0f);
+            igSliderFloat("Rate (mm/h)", &rain->rate_mmh, 0.0f, 100.0f, "%.1f",
+                          ImGuiSliderFlags_Logarithmic);
+            igSliderFloat3("Wind (m/s)", rain->wind, -10.0f, 10.0f, "%.1f", 0);
+            igSliderFloat("Fall speed", &rain->fall_scale, 0.1f, 2.0f, "%.2f", 0);
+            igSliderFloat("Streak brightness", &rain->streak_brightness, 0.0f, 10.0f, "%.2f", 0);
+            igSliderFloat("Streak width", &rain->streak_width, 0.0f, 4.0f, "%.2f", 0);
+            igSliderFloat("Sheen", &rain->streak_sheen, 0.0f, 5.0f, "%.2f", 0);
+            igSliderFloat("Glint", &rain->streak_glint, 0.0f, 1.0f, "%.2f", 0);
+            igSliderFloat("Forward lobe", &rain->streak_forward_g, 0.0f, 0.95f, "%.2f", 0);
+            igSliderFloat("Wet darkening", &rain->wet_darkening, 0.0f, 2.0f, "%.2f", 0);
+            igSliderFloat("Puddle coverage", &rain->puddle_coverage, 0.0f, 1.0f, "%.2f", 0);
+            igSliderFloat("Puddle scale (m)", &rain->puddle_scale, 0.5f, 10.0f, "%.2f", 0);
+            igSliderFloat("Ripple strength", &rain->ripple_strength, 0.0f, 3.0f, "%.2f", 0);
+            igSliderFloat("Ripple size (m)", &rain->ripple_size, 0.05f, 2.0f, "%.2f", 0);
+            igSliderFloat("Splash amount", &rain->splash_amount, 0.0f, 4.0f, "%.2f", 0);
+            igSliderFloat("Splash size", &rain->splash_size, 0.0f, 4.0f, "%.2f", 0);
+            igSliderFloat("Mist", &rain->mist, 0.0f, 50.0f, "%.1f", ImGuiSliderFlags_Logarithmic);
+            // What the settings have integrated to, which a slider must not write.
+            igText("wetness %.2f, puddles %.2f", (double)rain->wetness, (double)rain->puddle_level);
+            igUnindent(0.0f);
         }
 
         if (scene->gi_volume) {
