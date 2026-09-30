@@ -435,6 +435,11 @@ bool bind_outermost_cascades_to_program(const ShadowSystem* system, ShaderProgra
 // Shadow map binding for main render pass
 void bind_shadow_maps_to_program(ShadowSystem* system, ShaderProgram* program);
 
+// The rain's cover (rain_occlusion.glsl) alone, for a program that samples no punctual
+// shadows: the punctual array on `unit` as punctualShadowMaps, and the lookup's uniforms. A
+// NULL system is no rain cover, every point open sky.
+void shadow_bind_rain_cover(const ShadowSystem* system, ShaderProgram* program, int unit);
+
 // Main shadow rendering function
 void render_shadow_depth_pass(struct Engine* engine, struct Scene* scene);
 
