@@ -125,6 +125,8 @@ int cscene_setup(RenderArgs* args, CetraSceneDesc** out_cscn) {
         args->night_floor_brightness = cscn->env_night_floor_brightness;
     if (cscn->has_env_overcast && args->overcast < 0.0f)
         args->overcast = cscn->env_overcast;
+    if (cscn->has_env_sky_scale && args->sky_scale <= 0.0f)
+        args->sky_scale = cscn->env_sky_scale;
     // The `enabled` key arms it; day_seconds is only a rate, so authoring a
     // rate without the switch leaves the cycle off. --no-day-cycle drops the
     // WHOLE authored block including its hour: the block is one thing a file

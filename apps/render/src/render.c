@@ -248,6 +248,9 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --overcast <f>     How much of the sky is under cloud, 0..1: the\n");
     fprintf(stderr,
             "                         CIE overcast dome, no direct sun at 1 (implies --sky)\n");
+    fprintf(stderr, "      --sky-scale <f|photometric> Sky nits per relative unit; photometric\n");
+    fprintf(stderr,
+            "                         puts the sky and its sun in nits and lux (implies --sky)\n");
     fprintf(stderr, "      --day-cycle <s>    Day/night cycle: real seconds per 24h day\n");
     fprintf(stderr, "                         (0 = frozen clock; implies --sky)\n");
     fprintf(stderr, "      --no-day-cycle     Drop a cycle a scene file asked for\n");
@@ -554,6 +557,7 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->night_floor = -1;
     args->night_floor_brightness = -1.0f;
     args->overcast = -1.0f;
+    args->sky_scale = -1.0f;
     args->day_cycle = -1.0f; // <0 = cycle off; 0 is a legal request (frozen)
     args->time_of_day = -1.0f;
     args->cycle_rebake_at = -1;
@@ -1369,6 +1373,14 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
         } else if (strcmp(argv[i], "--overcast") == 0) {
             if (_ranged_arg(argc, argv, &i, 0.0f, 1.0f, &args->overcast) != 0)
                 return -1;
+            args->sky = 1;
+        } else if (strcmp(argv[i], "--sky-scale") == 0) {
+            if (i + 1 < argc && strcmp(argv[i + 1], "photometric") == 0) {
+                args->sky_scale = SKY_PHOTOMETRIC_SCALE;
+                i++;
+            } else if (_ranged_arg(argc, argv, &i, 1e-6f, 1e9f, &args->sky_scale) != 0) {
+                return -1;
+            }
             args->sky = 1;
         } else if (strcmp(argv[i], "--moon") == 0) {
             args->moon = 1;
@@ -3655,6 +3667,8 @@ int main(int argc, char** argv) {
                 sky->night_floor_brightness = args.night_floor_brightness;
             if (args.overcast >= 0.0f)
                 sky->overcast = args.overcast;
+            if (args.sky_scale > 0.0f)
+                sky->radiance_scale = args.sky_scale;
             if (args.day_cycle >= 0.0f && !args.no_day_cycle) {
                 sky->cycle_enabled = true;
                 sky->cycle_day_seconds = args.day_cycle;
@@ -4764,18 +4778,19 @@ int main(int argc, char** argv) {
     }
 
     /*
-     * --sky-probe: the overcast dome and the two bodies' lights, printed (spec
-     * 13.7). The dome's level is Krochmann's fit carried onto the sky's scale
-     * and the lights fade with the clear sky -- both NUMERIC claims, and a
-     * wrong constant or a light the deck never reached renders a plausible
-     * grey day either way. After the loop for --moon-probe's reason.
+     * --sky-probe: the overcast dome, the radiance scale and the two bodies'
+     * lights, printed (spec 13.7). The dome's level is Krochmann's fit carried
+     * onto the sky's scale and the lights fade with the clear sky -- both
+     * NUMERIC claims, and a wrong constant or a light the deck never reached
+     * renders a plausible grey day either way. After the loop for
+     * --moon-probe's reason.
      */
     if (args.sky_probe && scene->sky) {
         const SkyAtmosphere* s = scene->sky;
         const Light* sun = s->sun_light;
         const Light* moon = s->moon_light;
-        printf("sky-probe sun el=%.6f overcast=%.6f\n", (double)s->sun_elevation_deg,
-               (double)sky_overcast_amount(s));
+        printf("sky-probe sun el=%.6f overcast=%.6f scale=%.9g\n", (double)s->sun_elevation_deg,
+               (double)sky_overcast_amount(s), (double)s->radiance_scale);
         printf("sky-probe dome lz=%.9g zenith=%.9g,%.9g,%.9g\n", (double)sky_overcast_zenith(s),
                (double)s->zenith_radiance[0], (double)s->zenith_radiance[1],
                (double)s->zenith_radiance[2]);

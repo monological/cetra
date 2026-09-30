@@ -7,17 +7,14 @@
 //   scene radiance  photometric, unbounded. A sun is ~1e5 lux, a bulb ~127 cd.
 //                   Lights, materials and import live here.
 //
-//                   ONE EXCEPTION, and it is not yet resolved: the atmosphere
-//                   is on an arbitrary scale. The procedural sky's sun is 10
-//                   lux (render.c KEY_LIGHT_TOTAL_INTENSITY), roughly four
-//                   decades under the real thing, and sky.c's own constants
-//                   match it rather than reality. That was harmless while
-//                   exposure was a hand-tuned multiplier at the tonemap; now
-//                   that the meter reads absolute nits against an absolute
-//                   key, a scene lit by an imported lamp and one lit by the
-//                   sky expose four decades apart, and a scene lit by BOTH
-//                   cannot be exposed correctly for either. Migrating the sky
-//                   to lux/nits is its own change (spec 10.2 phase 5).
+//                   The atmosphere carries its own scale (spec 13.7):
+//                   SkyAtmosphere.radiance_scale, nits per unit of the sky's
+//                   relative scale. At its default of 1 a sky scene sits
+//                   about four decades under a real sun, and so do the sun
+//                   lights apps couple to it -- so a scene lit by the sky and
+//                   by photometric lamps together cannot be exposed for both.
+//                   At SKY_PHOTOMETRIC_SCALE the sky and its sun are in nits
+//                   and lux beside them, and one exposure serves the frame.
 //   working space   pre-exposed. 1.0 IS DIFFUSE WHITE at the current exposure.
 //                   The scene HDR buffer and every post pass live here.
 //   display         tonemapped, 0..1. After tonemap; GUI and overlays too.

@@ -42,9 +42,10 @@ SkyAtmosphere* create_sky_atmosphere(void) {
     // sky, and the goldens' 0 px rests on the default being an exact zero.
     sky->night_floor_enabled = false;
     sky->night_floor_brightness = 1.0f;
-    // Clear, and the default path is the sky as it was: every overcast term
-    // sits behind a test on it.
+    // Clear, on the relative scale: the deck then multiplies by exactly 1 and
+    // adds exact zeros, and the default path is the sky as it was.
     sky->overcast = 0.0f;
+    sky->radiance_scale = 1.0f;
     // Cycle off, clock frozen, slicer idle. day_seconds 0 by default is what
     // keeps config-perturb's enabled-flip round-trippable, and -1 is the
     // slicer's idle state -- the memset's 0 would mean "in flight at item 0".
@@ -159,8 +160,9 @@ void free_sky_atmosphere(SkyAtmosphere* sky) {
 #define SKY_MIE_ALBEDO      0.9f
 #define SKY_OZONE_CENTER    25.0f
 #define SKY_OZONE_WIDTH     15.0f
-#define SKY_SUN_ILLUMINANCE 3.0f
 #define SKY_CPU_MARCH_STEPS 40
+// SKY_SUN_ILLUMINANCE is the set's too, and lives in sky.h because an app
+// matching its sun light to the sky needs it.
 static const float SKY_RAYLEIGH_SCATTER[3] = {5.802e-3f, 13.558e-3f, 33.1e-3f};
 static const float SKY_OZONE_ABSORB[3] = {0.650e-3f, 1.881e-3f, 0.085e-3f};
 
@@ -219,10 +221,9 @@ static float sky_night_factor(const SkyAtmosphere* sky) {
 /*
  * The overcast dome (spec 13.7): Krochmann's fit for the zenith radiance of the
  * CIE standard overcast sky, Lz = 8.6 sin h + 0.123 kcd/m^2 at sun elevation h.
- * Divided by what an unattenuated sun delivers, it lands per unit of
- * SKY_SUN_ILLUMINANCE like everything else the sky emits.
+ * Divided by what an unattenuated sun delivers, SKY_SUN_KLUX, it lands per
+ * unit of SKY_SUN_ILLUMINANCE like everything else the sky emits.
  */
-#define SKY_SUN_KLUX          127.5f // an unattenuated sun's illuminance, klux
 #define SKY_OVERCAST_LZ_SIN   8.6f   // kcd/m^2 per unit sin(elevation)
 #define SKY_OVERCAST_LZ_FLOOR 0.123f // kcd/m^2 with the sun at the horizon
 // The CIE dome puts (7/9) pi Lz onto a horizontal plane; this is that over pi.
@@ -240,7 +241,7 @@ static float sky_overcast_zenith_at(float sun_y) {
 }
 
 float sky_overcast_zenith(const SkyAtmosphere* sky) {
-    return sky ? sky_overcast_zenith_at(sky->sun_dir[1]) : 0.0f;
+    return sky ? sky->radiance_scale * sky_overcast_zenith_at(sky->sun_dir[1]) : 0.0f;
 }
 
 float sky_overcast_amount(const SkyAtmosphere* sky) {
@@ -254,25 +255,36 @@ float sky_overcast_amount(const SkyAtmosphere* sky) {
  *
  * `clear` is the deck's transmission, which the sun, the stars and the moon all
  * come through. `sun_scale` is what arrives of the sun's own radiance -- the
- * sky's scatter, its disc, its light -- and is `clear` until the sky has a
- * photometric scale. `zenith` and `floor` are the dome's zenith radiance and its
- * irradiance over pi, already weighted by the deck, so a clear sky adds exact
- * zeros and the default path is the arithmetic it always was.
+ * sky's scatter, its disc, its light -- on the sky's radiance scale.
+ * `zenith` and `floor` are the dome's zenith radiance and its irradiance over
+ * pi on that scale, already weighted by the deck, so a clear sky adds exact
+ * zeros and the default path is the arithmetic it always was. `store_max` is
+ * the ceiling a LUT holds that radiance under.
  */
 typedef struct SkyDeck {
     float clear;
     float sun_scale;
     float zenith;
     float floor;
+    float store_max;
 } SkyDeck;
+
+// The LUTs have always clamped the sun's radiance at 100 on the relative
+// scale. The scale carries that ceiling with it, short of what RGBA16F holds,
+// so past 600 the circumsolar sky clips in the LUT: the key light carries the
+// sun's energy, and the IBL is not meant to.
+#define SKY_STORE_MAX_RELATIVE 100.0f
+#define SKY_STORE_MAX_FP16     60000.0f
 
 static SkyDeck sky_deck_at(const SkyAtmosphere* sky, float sun_y) {
     const float o = sky_overcast_amount(sky);
-    const float lz = sky_overcast_zenith_at(sun_y);
+    const float k = sky->radiance_scale;
+    const float lz = k * sky_overcast_zenith_at(sun_y);
     return (SkyDeck){.clear = 1.0f - o,
-                     .sun_scale = 1.0f - o,
+                     .sun_scale = (1.0f - o) * k,
                      .zenith = o * lz,
-                     .floor = o * SKY_OVERCAST_FLOOR * lz};
+                     .floor = o * SKY_OVERCAST_FLOOR * lz,
+                     .store_max = fminf(SKY_STORE_MAX_RELATIVE * k, SKY_STORE_MAX_FP16)};
 }
 
 void sky_bind_deck(const SkyAtmosphere* sky, ShaderProgram* program, float sun_y) {
@@ -280,6 +292,7 @@ void sky_bind_deck(const SkyAtmosphere* sky, ShaderProgram* program, float sun_y
     uniform_set_float(program->uniforms, "deckSunScale", deck.sun_scale);
     uniform_set_float(program->uniforms, "deckZenith", deck.zenith);
     uniform_set_float(program->uniforms, "deckFloor", deck.floor);
+    uniform_set_float(program->uniforms, "deckStoreMax", deck.store_max);
 }
 
 // The horizon fade a sky body's LIGHT rides out on: 1 at and above +3
@@ -991,7 +1004,7 @@ void sky_apply_sun_to_light(SkyAtmosphere* sky) {
     if (!sky)
         return;
     sky_apply_body_to_light(sky, sky->sun_light, sky->sun_dir, sky->sun_elevation_deg,
-                            sky->sun_base_intensity, 1.0f);
+                            sky->sun_base_intensity, sky->radiance_scale);
 }
 
 /*

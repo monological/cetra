@@ -556,6 +556,13 @@ static void _engine_gui_panel(Engine* engine) {
             // the sky they were taken under; the env cube and GI follow.
             sun_moved |= igSliderFloat("Overcast", &sky->overcast, 0.0f, 1.0f, "%.2f", 0);
             sun_released |= igIsItemDeactivatedAfterEdit();
+            // The scale is a choice of two, not a dial: the relative sky, or
+            // one in nits beside photometric lights. A click is a release.
+            bool photometric_sky = sky->radiance_scale == SKY_PHOTOMETRIC_SCALE;
+            if (igCheckbox("Photometric", &photometric_sky)) {
+                sky->radiance_scale = photometric_sky ? SKY_PHOTOMETRIC_SCALE : 1.0f;
+                sun_moved = sun_released = true;
+            }
             if (sun_moved)
                 sky_update_sun(sky, scene->ibl, engine);
             if (sun_released)

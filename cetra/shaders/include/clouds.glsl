@@ -233,5 +233,7 @@ vec4 cloud_march(float obsAltKm, vec3 rd, vec3 sunDir, sampler3D shapeTex, sampl
     S *= tailFade;
     T = mix(1.0, T, tailFade);
 
-    return vec4(S, T);
+    // Both callers store this in fp16, the march target and the env cube, and
+    // the ambient alone is half again the sky it samples.
+    return vec4(min(S, vec3(deckStoreMax)), T);
 }

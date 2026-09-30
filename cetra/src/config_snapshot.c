@@ -643,8 +643,10 @@ static const ConfigField CFG_FIELDS[] = {
                _apply_night_floor_enabled),
     CFG_ROW_FN(CFG_SKY, CFG_FLOAT, "sky", "night_floor_brightness", night_floor_brightness,
                _apply_sun_angle),
-    // So is the overcast deck (spec 13.7): the LUT, the env cube and the lights.
+    // So are the overcast deck and the radiance scale (spec 13.7): the LUT, the
+    // env cube and the lights.
     CFG_ROW_FN(CFG_SKY, CFG_FLOAT, "sky", "overcast", overcast, _apply_sun_angle),
+    CFG_ROW_FN(CFG_SKY, CFG_FLOAT, "sky", "radiance_scale", radiance_scale, _apply_sun_angle),
     // The cycle (spec 11.81): plain stores. Nothing here needs the deferred
     // re-bake flags -- the tick reads all three next frame and drives the
     // bake itself, which is the whole point of it owning the sun.

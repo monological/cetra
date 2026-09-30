@@ -103,9 +103,9 @@ void main()
         through *= stepTrans;
     }
 
-    // Scale to the engine's linear range; keep HDR (bloom uses it) but
-    // bound against fp16 overflow
-    vec3 sky = min(L * SUN_ILLUMINANCE * deckSunScale, vec3(100.0));
+    // Onto the sky's radiance scale; kept HDR (bloom uses it) but bounded so
+    // fp16 cannot overflow at any scale.
+    vec3 sky = min(L * SUN_ILLUMINANCE * deckSunScale, vec3(deckStoreMax));
     // Under a deck the clear sky gives way to the overcast dome, and a ray that
     // meets the ground sees the floor the dome lights.
     sky += vec3(ground ? GROUND_ALBEDO * deckFloor : deckDome(mu));

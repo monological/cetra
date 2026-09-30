@@ -7,6 +7,7 @@
 #include "cscene.h"
 #include "ext/cJSON.h"
 #include "ext/log.h"
+#include "sky.h"
 #include "util.h"
 
 bool cscene_path_is_scene(const char* path) {
@@ -168,6 +169,21 @@ static void parse_environment(CetraSceneDesc* d, const cJSON* root) {
     // from the amount, and 0 is the clear sky.
     d->has_env_overcast = get_float(env, "overcast", &d->env_overcast);
 
+    // sky-mode radiance scale (spec 13.7): a positive number, or "photometric"
+    // for the one value a file will usually want, by name rather than as
+    // 42500 copied from a header.
+    const cJSON* sky_scale = cJSON_GetObjectItemCaseSensitive(env, "sky_scale");
+    if (cJSON_IsString(sky_scale) && strcmp(sky_scale->valuestring, "photometric") == 0) {
+        d->has_env_sky_scale = true;
+        d->env_sky_scale = SKY_PHOTOMETRIC_SCALE;
+    } else if (cJSON_IsNumber(sky_scale) && sky_scale->valuedouble > 0.0) {
+        d->has_env_sky_scale = true;
+        d->env_sky_scale = (float)sky_scale->valuedouble;
+    } else if (sky_scale) {
+        log_warn("cscene: environment.sky_scale is a positive number or \"photometric\"; "
+                 "ignored");
+    }
+
     // sky-mode day/night cycle (spec 11.81). `enabled` ARMS it, exactly as in
     // the stars and night_floor blocks above -- a file describes values, a
     // flag takes actions, and letting `day_seconds` arm would have made this
@@ -211,7 +227,7 @@ static void parse_environment(CetraSceneDesc* d, const cJSON* root) {
      */
     static const char* const known[] = {"mode",    "hdr",  "probe_scene", "intensity",
                                         "ambient", "sun",  "stars",       "night_floor",
-                                        "cycle",   "moon", "overcast"};
+                                        "cycle",   "moon", "overcast",    "sky_scale"};
     warn_unknown_keys(env, known, sizeof(known) / sizeof(known[0]), "environment");
 }
 
