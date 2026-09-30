@@ -60,8 +60,11 @@ SOURCES = {
     "dirty_carpet": {},
     "fabric_pattern_05": {"diffuse": "col_01"},  # ships colourways instead of one Diffuse
     # From ambientCG (https://ambientcg.com), also CC0: what Poly Haven has no
-    # scan of -- brushed stainless, paper, and a kitchen smear for the glass.
+    # scan of -- brushed stainless, paper, a kitchen smear for the glass, and
+    # the table's scratched enamel: a yellow paint with almost no rust, taken to
+    # grey and lifted to an off-white the material tints.
     "Metal009": {"source": "ambientcg"},
+    "PaintedMetal001": {"source": "ambientcg", "saturation": 0.0, "gain": 1.15},
     "Paper003": {"source": "ambientcg"},
     "Smear008": {"source": "ambientcg"},
 }

@@ -54,7 +54,10 @@
  * and the rooms: it closes for the overcast outside and opens indoors, never
  * past what the night is pinned at.
  */
-#define EXPOSURE_NIGHT 0.02f
+#define EXPOSURE_NIGHT 0.014f
+// How long the view takes to come up from black once the room's bounce light
+// is in.
+#define FADE_IN_SECONDS 1.0f
 // What a day's meter maps the frame's mean to. Middle grey puts a fog world at
 // middle grey, where a camera in fog is opened a stop and a third so the fog
 // reads white.
@@ -85,6 +88,7 @@ static SilentArgs g_args;
 static Scene* g_scene;
 static Player g_player;
 static Lights g_lights;
+static float g_fade_seconds; // since the bounce light came in
 
 // The spawn: in the kitchen, facing the window.
 static const vec3 SPAWN_FEET = {1.5f, FLOOR_Y, 13.2f};
@@ -376,6 +380,22 @@ static void on_pre_render(Game* game, double alpha) {
         build_gi();
         build_probes(engine);
     }
+
+    // Black until the volume's opening sweep has landed, then up. That sweep
+    // is one long frame, so without this the window holds the room unlit by
+    // its own bounce light for its whole length and then jumps. A volume that
+    // could not be built lets the view up rather than holding it dark forever.
+    // The fade rides the grade's gain, after the tonemap, so the exposure and
+    // the day's meter never see it. Each frame's step is capped because the
+    // frame after the sweep carries the sweep's whole length.
+    const GIVolume* gi = g_scene->gi_volume;
+    const bool lit =
+        engine->total_frames > 2 && (!gi || !gi->enabled || gi->failed || gi->dirty_count == 0);
+    if (lit)
+        g_fade_seconds += fminf((float)game->sim_clock.delta, 1.0f / 30.0f);
+    if (engine->postfx)
+        glm_vec3_fill(engine->postfx->grade_gain,
+                      glm_smoothstep(0.0f, FADE_IN_SECONDS, g_fade_seconds));
 }
 
 static void print_usage(const char* prog) {
