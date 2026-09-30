@@ -14,11 +14,12 @@ typedef enum {
     MAT_KITCHEN_FLOOR,
     MAT_WOOD_FLOOR,
     MAT_BACKSPLASH,
-    MAT_ENAMEL, // cabinets, the fridge, the stove
-    MAT_TRIM,   // door and window frames, skirting
-    MAT_STEEL,  // sink, hood, handles
-    MAT_WOOD,   // table, chairs, doors
-    MAT_SIDING, // three paints, one per house in turn
+    MAT_ENAMEL,    // the cabinets: painted steel gone to rust
+    MAT_APPLIANCE, // the fridge and the stove: grimy off-white enamel
+    MAT_TRIM,      // door and window frames, skirting
+    MAT_STEEL,     // sink, hood, handles
+    MAT_WOOD,      // table, chairs, doors
+    MAT_SIDING,    // three paints, one per house in turn
     MAT_SIDING_B,
     MAT_SIDING_C,
     MAT_PORCH,

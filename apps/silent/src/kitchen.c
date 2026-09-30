@@ -265,9 +265,9 @@ static void stove_wall(Kit* kit, KitRng* rng) {
 
     // The stove: body, cooktop, backguard, four burners, the oven door and
     // its bar, knobs, and a towel hung over the bar.
-    kit_frame_box(kit, &f, MAT_ENAMEL, s0, s1, 0.0f, 0.88f, 0.0f, 0.60f, true);
+    kit_frame_box(kit, &f, MAT_APPLIANCE, s0, s1, 0.0f, 0.88f, 0.0f, 0.60f, true);
     kit_frame_box(kit, &f, MAT_BLACK, s0, s1, 0.88f, COUNTER_TOP, 0.0f, 0.60f, false);
-    kit_frame_box(kit, &f, MAT_ENAMEL, s0, s1, COUNTER_TOP, 1.03f, 0.0f, 0.06f, false);
+    kit_frame_box(kit, &f, MAT_APPLIANCE, s0, s1, COUNTER_TOP, 1.03f, 0.0f, 0.06f, false);
     for (int i = 0; i < 4; i++) {
         const float a = (i & 1) ? s1 - 0.2f : s0 + 0.2f;
         const float d = (i & 2) ? 0.44f : 0.22f;
@@ -300,8 +300,8 @@ static void stove_wall(Kit* kit, KitRng* rng) {
 // bottle forgotten on top.
 static void fridge(Kit* kit, const KitFrame* f, KitRng* rng, float a0, float a1) {
     const float d = 0.68f, h = 1.72f;
-    kit_frame_box(kit, f, MAT_ENAMEL, a0, a1, 0.0f, h, 0.0f, d, true);
-    kit_frame_box(kit, f, MAT_ENAMEL, a0 + 0.03f, a1 - 0.03f, h, h + 0.04f, 0.03f, d - 0.03f,
+    kit_frame_box(kit, f, MAT_APPLIANCE, a0, a1, 0.0f, h, 0.0f, d, true);
+    kit_frame_box(kit, f, MAT_APPLIANCE, a0 + 0.03f, a1 - 0.03f, h, h + 0.04f, 0.03f, d - 0.03f,
                   false);
     kit_frame_box(kit, f, MAT_BLACK, a0 + 0.01f, a1 - 0.01f, 1.2f, 1.215f, d, d + 0.004f, false);
     kit_frame_prism(kit, f, MAT_STEEL, a0 + 0.06f, d + 0.035f, 1.3f, 1.55f, 0.012f, 6);

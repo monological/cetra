@@ -79,6 +79,9 @@ static const MatSpec SPECS[MAT_COUNT] = {
     [MAT_WOOD_FLOOR] = {"wood_floor", "old_wood_floor", {1, 1, 1}, 0.8f, 0.0f, 2.0f},
     [MAT_BACKSPLASH] = {"backsplash", "worn_tile_floor", {0.88f, 0.98f, 1.02f}, 0.45f, 0.0f, 0.6f},
     [MAT_ENAMEL] = {"enamel", "rusty_metal_02", {0.88f, 0.9f, 0.84f}, 0.8f, 0.0f, 1.0f},
+    // The dirty-white wall scan again, yellowed and matte: old enamel that has
+    // gone grey with grime rather than to rust.
+    [MAT_APPLIANCE] = {"appliance", "concrete_wall_003", {0.82f, 0.80f, 0.70f}, 1.0f, 0.0f, 1.5f},
     [MAT_TRIM] = {"trim", "concrete_wall_003", {0.82f, 0.86f, 0.80f}, 1.0f, 0.0f, 1.5f},
     [MAT_STEEL] = {"steel", "Metal009", {1, 1, 1}, 1.0f, 1.0f, 0.6f},
     [MAT_WOOD] = {"wood", "wood_table_worn", {1, 1, 1}, 1.0f, 0.0f, 0.8f},
@@ -109,7 +112,7 @@ static const MatSpec SPECS[MAT_COUNT] = {
     // Glazed and stained: the dirty-white wall scan at a small repeat, glossy.
     [MAT_CERAMIC] = {"ceramic", "concrete_wall_003", {1.0f, 1.0f, 0.97f}, 0.3f, 0.0f, 0.5f},
     [MAT_BLACK] = {"black_enamel", NULL, {0.03f, 0.03f, 0.03f}, 0.35f, 0.0f, 1.0f},
-    [MAT_TABLE] = {"table_enamel", "rusty_metal_02", {0.50f, 0.58f, 0.66f}, 0.7f, 0.0f, 1.0f},
+    [MAT_TABLE] = {"table_enamel", "PaintedMetal001", {0.50f, 0.58f, 0.66f}, 0.7f, 0.0f, 1.0f},
     [MAT_WINDOW_GLASS] =
         {"window_glass", "Smear008", {0.86f, 0.92f, 0.88f}, 0.25f, 0.0f, 0.6f, true},
     [MAT_DARK_GLASS] = {"dark_glass", "Smear008", {0.02f, 0.025f, 0.03f}, 0.15f, 0.0f, 0.6f, true},
