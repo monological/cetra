@@ -56,6 +56,14 @@ const float PI = 3.14159265359;
 uniform sampler2DArray punctualShadowMaps;
 #include "rain_occlusion.glsl"
 
+// The drop diameters, in mm, over which the glints come in. A small drop is held round by its
+// own surface tension and barely rings, and it rings fastest: given the same flash as a big
+// one, the Marshall-Palmer majority under a millimetre striped every streak with twenty to
+// thirty bands. The visible oscillation belongs to the big drops, which flash two to four
+// times an exposure. Where between these two it rises is a judgment, not a measurement.
+const float RAIN_GLINT_D_MIN = 1.0;
+const float RAIN_GLINT_D_FULL = 2.5;
+
 // A 4D integer hash (Jarzynski and Olano's pcg4d). Integer rather than the sin-fract form
 // noise.glsl carries, because here the SEEDS are consecutive integers by the ten thousand,
 // which is the regime a sin-fract hash lines up in.
@@ -180,7 +188,8 @@ void main() {
     vGlintBands = 2.0 * ringHz * shutter;
     vGlintPhase = fract(r.x * 7.13 + r.z * 3.71 + 2.0 * ringHz * rainTime);
     // Three pixels a flash at least, or the pattern aliases into noise between drops.
-    vGlintShare = glintShare * clamp(lPx / (3.0 * max(vGlintBands, 1.0)), 0.0, 1.0);
+    vGlintShare = glintShare * smoothstep(RAIN_GLINT_D_MIN, RAIN_GLINT_D_FULL, dMm) *
+                  clamp(lPx / (3.0 * max(vGlintBands, 1.0)), 0.0, 1.0);
     vViewDepth = -(atHead ? vHead.z : vTail.z);
     // Cover per END, so a streak crossing an eave is cut along its length rather than
     // dropped whole: the head is under the roof while the tail is still in the open.
