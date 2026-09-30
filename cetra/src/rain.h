@@ -67,6 +67,7 @@ typedef struct Rain {
     float occlusion_extent;
     // Metres over which a surface goes from dry under cover to wet in the open: the soft
     // edge of the dry patch under an eave, where wind and splash carry the rain in a little.
+    // Capped at a texel of the map (extent / 1024).
     float occlusion_softness;
 
     // The streaks: `streak_count` drops in each of three nested boxes around the camera,

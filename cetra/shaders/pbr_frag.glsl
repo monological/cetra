@@ -1572,7 +1572,8 @@ void main() {
     float rainFilm = 0.0;
     if (rainWetness > 0.0) {
         vec3 Ng = normalize(Normal);
-        float wet = rainWetness * rainExposureSoft(WorldPos + Ng * RAIN_NORMAL_OFFSET);
+        float wet = rainWetness * rainExposureSoft(WorldPos + Ng * RAIN_NORMAL_OFFSET,
+                                                   6.2831853 * ign(gl_FragCoord.xy));
         // Rough is porous, the Lagarde mapping: gloss 0.5 and above is sealed, 0.1 fully open.
         float porosity =
             uPorosity >= 0.0 ? uPorosity : clamp((roughnessMap - 0.5) / 0.4, 0.0, 1.0);
