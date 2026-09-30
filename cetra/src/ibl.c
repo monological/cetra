@@ -495,11 +495,20 @@ void ibl_irradiance_slice(IBLResources* ibl, GLuint src_cube, GLuint dst_cube, i
 // arithmetic, whatever the schedule. Leaves FBO 0 bound.
 void ibl_prefilter_slice(IBLResources* ibl, ShaderProgram* program, GLuint src_cube,
                          GLuint dst_cube, int dst_base_size, int mip_levels, int mip,
-                         int face_first, int face_count) {
+                         int face_first, int face_count, const IBLMedium* medium) {
     if (!program)
         return;
 
     glUseProgram(program->id);
+
+    // Stated on every call, none included: the environment and a probe's scene capture share
+    // this program, and a probe filtered after the environment would otherwise inherit its fog.
+    static const IBLMedium NO_MEDIUM = {0};
+    const IBLMedium* m = medium ? medium : &NO_MEDIUM;
+    uniform_set_float(program->uniforms, "envMediumDensity", m->density);
+    uniform_set_float(program->uniforms, "envMediumFalloff", m->falloff);
+    uniform_set_float(program->uniforms, "envMediumReach", m->reach);
+    uniform_set_vec3(program->uniforms, "envMediumInscatter", m->inscatter);
 
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_CUBE_MAP, src_cube);
@@ -555,7 +564,7 @@ void ibl_prefilter_slice(IBLResources* ibl, ShaderProgram* program, GLuint src_c
 // solid-angle mip selection. Uses the shared capture FBO/RBO and leaves FBO 0
 // bound; caller restores its own viewport.
 void ibl_prefilter_cubemap(IBLResources* ibl, ShaderProgram* program, GLuint src_cube, GLuint* dst,
-                           int dst_base_size, int mip_levels) {
+                           int dst_base_size, int mip_levels, const IBLMedium* medium) {
     if (!program)
         return;
 
@@ -564,7 +573,23 @@ void ibl_prefilter_cubemap(IBLResources* ibl, ShaderProgram* program, GLuint src
     ibl_create_prefilter_cubemap(dst, dst_base_size, mip_levels);
 
     for (int mip = 0; mip < mip_levels; ++mip)
-        ibl_prefilter_slice(ibl, program, src_cube, *dst, dst_base_size, mip_levels, mip, 0, 6);
+        ibl_prefilter_slice(ibl, program, src_cube, *dst, dst_base_size, mip_levels, mip, 0, 6,
+                            medium);
+}
+
+// What the reflection chains see the environment through, from PostFX's global fog as it
+// stands at this bake. No medium unless the environment asks for one AND the fog exists.
+static void ibl_resolve_medium(IBLResources* ibl, const Engine* engine) {
+    static const IBLMedium NO_MEDIUM = {0};
+    ibl->medium = NO_MEDIUM;
+    const PostFX* fx = engine->postfx;
+    if (!ibl->reflect_fog || !fx || !fx->fog_enabled || fx->fog_density <= 0.0f)
+        return;
+    ibl->medium.density = fx->fog_density;
+    // The shader divides by it; a zero falloff is a medium with no height at all.
+    ibl->medium.falloff = fmaxf(fx->fog_height_falloff, 1e-3f);
+    ibl->medium.reach = fx->fog_far;
+    glm_vec3_copy((float*)fx->fog_ambient, ibl->medium.inscatter);
 }
 
 // Bake the split-sum BRDF tables: GGX A/B in RG, the Charlie sheen
@@ -665,15 +690,16 @@ int ibl_bake_from_cubemap(IBLResources* ibl, Engine* engine, int env_size, int p
     ibl_irradiance_slice(ibl, ibl->environment_cubemap, ibl->irradiance_map, env_size);
 
     log_info("  Generating prefiltered environment map...");
+    ibl_resolve_medium(ibl, engine);
     ibl_prefilter_cubemap(ibl, ibl->prefilter_program, ibl->environment_cubemap,
-                          &ibl->prefilter_map, prefilter_size, prefilter_mips);
+                          &ibl->prefilter_map, prefilter_size, prefilter_mips, &ibl->medium);
     ibl->max_reflection_lod = (float)(prefilter_mips - 1);
 
     // The sheen environment: the same convolution through the Charlie kernel
     // (spec 10.7.1). Probes never get one -- sheen reads this global chain.
     ibl_prefilter_cubemap(ibl, ibl->charlie_prefilter_program, ibl->environment_cubemap,
                           &ibl->charlie_prefilter_map, IBL_CHARLIE_PREFILTER_SIZE,
-                          IBL_CHARLIE_PREFILTER_MIPS);
+                          IBL_CHARLIE_PREFILTER_MIPS, &ibl->medium);
 
     // Re-enable face culling and the engine's default blending
     glEnable(GL_CULL_FACE);
