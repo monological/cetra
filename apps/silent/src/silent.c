@@ -302,7 +302,7 @@ static void on_init(Game* game) {
                  g_args.flashlight);
     street_build(&kit, g_scene, (unsigned int)g_args.seed, !g_args.day);
     kit_finish(&kit, "world");
-    printf("silent: %d colliders\n", kit.collider_count);
+    printf("silent: %d colliders, %d vertices\n", kit.collider_count, kit.vertex_count);
 
     build_sky(engine);
 

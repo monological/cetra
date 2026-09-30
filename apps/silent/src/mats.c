@@ -66,6 +66,29 @@ static const GlowSpec GLOWS[] = {
 };
 
 /*
+ * Dirt round the edges (spec 13.8), for the surfaces that are furniture: every
+ * box of these is a real object, so every edge the kit darkens is a real edge.
+ * Walls are not here, and cannot be -- a wall is cut into slabs round its
+ * openings, and the seams between slabs are edges nobody built.
+ */
+typedef struct GrimeSpec {
+    MatId id;
+    float strength;
+} GrimeSpec;
+
+static const GrimeSpec GRIME[] = {
+    {MAT_ENAMEL, 0.75f}, {MAT_APPLIANCE, 0.6f}, {MAT_TRIM, 0.55f},
+    {MAT_WOOD, 0.45f},   {MAT_TABLE, 0.5f},
+};
+
+static float grime_of(int id) {
+    for (size_t g = 0; g < sizeof(GRIME) / sizeof(GRIME[0]); g++)
+        if ((int)GRIME[g].id == id)
+            return GRIME[g].strength;
+    return 0.0f;
+}
+
+/*
  * The repeats follow each scan's real size where that reads right and depart
  * from it where the reference asks: the kitchen's 30 cm floor tiles are the
  * scan's 50 cm ones at a shorter repeat, and the backsplash is the SAME floor
@@ -155,7 +178,7 @@ void mats_register(Kit* kit, Engine* engine, Scene* scene) {
             material_set_roughness_tex(m,
                                        load(scene->tex_pool, s->set, "rough", texture_desc(false)));
         }
-        kit_material(kit, m, s->repeat_m);
+        kit_material(kit, m, s->repeat_m, grime_of(i));
     }
     for (size_t g = 0; g < sizeof(GLASS) / sizeof(GLASS[0]); g++) {
         Material* m = kit->materials[GLASS[g].id];

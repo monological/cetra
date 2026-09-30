@@ -13,7 +13,7 @@ void kit_init(Kit* kit, Scene* scene, EntityManager* em, PhysicsWorld* physics) 
     kit->physics = physics;
 }
 
-int kit_material(Kit* kit, Material* material, float repeat_m) {
+int kit_material(Kit* kit, Material* material, float repeat_m, float grime) {
     if (kit->material_count >= KIT_MAX_MATERIALS) {
         fprintf(stderr, "silent: kit is out of material slots (%d)\n", KIT_MAX_MATERIALS);
         return 0;
@@ -21,8 +21,68 @@ int kit_material(Kit* kit, Material* material, float repeat_m) {
     const int slot = kit->material_count++;
     kit->materials[slot] = material;
     kit->repeat_m[slot] = repeat_m > 0.0f ? repeat_m : 1.0f;
-    mb_init(&kit->builders[slot], 256, 384, false);
+    kit->grime[slot] = glm_clamp(grime, 0.0f, 1.0f);
+    mb_init(&kit->builders[slot], 256, 384, kit->grime[slot] > 0.0f);
     return slot;
+}
+
+/*
+ * Grime (spec 13.8): dirt gathers where surfaces meet -- round a door's edge,
+ * in the gap between two doors, where a cupboard stands on the floor. A grimed
+ * box's face is cut into a grid: a ring GRIME_BAND wide round its edges, a cut
+ * inside that ring so the edge can carry a hard dark line with a softer tail,
+ * and the interior every GRIME_STEP so the noise has vertices to vary across.
+ *
+ * Uniform, that reads as a painted frame round every face, so three things
+ * break it up. A smooth PATCH field over the room decides how dirty each stretch
+ * of edge is at all, so some runs are caked and some nearly clean. The band's
+ * reach is jittered per vertex, so the dirt bleeds in further in places. And
+ * two edges ADD where they meet, so corners collect the most. Every amount is a
+ * pure function of the vertex's world position, so a seed is still one world.
+ */
+#define GRIME_BAND     0.06f // metres
+#define GRIME_STEP     0.12f // metres between interior cuts
+#define GRIME_BOTTOM   1.5f  // dirt settles: an upright face's lowest edge takes more
+#define GRIME_TOP      0.5f  // and its highest less
+#define GRIME_SMUDGE   0.35f // the most a smudge in a face's interior reaches
+#define GRIME_PATCH_M  0.45f // the patch field's cell, metres
+#define GRIME_MAX_CUTS 64
+static const float GRIME_TINT[3] = {0.28f, 0.22f, 0.15f}; // what the dirt is, sRGB
+
+// A value in [0, 1) from a world position, stable to the millimetre, so two
+// faces meeting at a corner agree about it.
+static float grime_hash(const vec3 p, uint32_t salt) {
+    uint32_t h = (uint32_t)(int32_t)lroundf(p[0] * 1000.0f) * 73856093u ^
+                 (uint32_t)(int32_t)lroundf(p[1] * 1000.0f) * 19349663u ^
+                 (uint32_t)(int32_t)lroundf(p[2] * 1000.0f) * 83492791u ^ salt;
+    h ^= h >> 13;
+    h *= 0x5bd1e995u;
+    h ^= h >> 15;
+    return (float)(h & 0xffffffu) * (1.0f / 16777216.0f);
+}
+
+// Smooth value noise over GRIME_PATCH_M cells, in [0, 1): the hash at the
+// lattice corners, blended trilinearly with a smoothstep, so neighbouring
+// vertices agree and the field has stretches rather than speckle.
+static float grime_patch(const vec3 p) {
+    float cell[3], f[3];
+    for (int k = 0; k < 3; k++) {
+        const float s = p[k] / GRIME_PATCH_M;
+        cell[k] = floorf(s);
+        const float t = s - cell[k];
+        f[k] = t * t * (3.0f - 2.0f * t);
+    }
+    float acc = 0.0f;
+    for (int c = 0; c < 8; c++) {
+        const vec3 corner = {(cell[0] + (float)(c & 1)) * GRIME_PATCH_M,
+                             (cell[1] + (float)((c >> 1) & 1)) * GRIME_PATCH_M,
+                             (cell[2] + (float)((c >> 2) & 1)) * GRIME_PATCH_M};
+        float w = 1.0f;
+        for (int k = 0; k < 3; k++)
+            w *= ((c >> k) & 1) ? f[k] : 1.0f - f[k];
+        acc += w * grime_hash(corner, 0x85ebca6bu);
+    }
+    return acc;
 }
 
 /*
@@ -42,12 +102,16 @@ static void face_frame(const vec3 n, vec3 t, vec3 b) {
     glm_vec3_cross((float*)n, t, b);
 }
 
+// `grime` is 0..1; a builder without colours ignores it.
 static unsigned int face_vertex(Kit* kit, int mat, const vec3 p, const vec3 n, const vec3 t,
-                                const vec3 b) {
+                                const vec3 b, float grime) {
     const float inv = 1.0f / kit->repeat_m[mat];
     const float u = glm_vec3_dot((float*)p, (float*)t) * inv;
     const float v = glm_vec3_dot((float*)p, (float*)b) * inv;
-    return mb_vertex(&kit->builders[mat], p, n, t, u, v, u, v, NULL);
+    const float rgba[4] = {1.0f + (GRIME_TINT[0] - 1.0f) * grime,
+                           1.0f + (GRIME_TINT[1] - 1.0f) * grime,
+                           1.0f + (GRIME_TINT[2] - 1.0f) * grime, 1.0f};
+    return mb_vertex(&kit->builders[mat], p, n, t, u, v, u, v, rgba);
 }
 
 static bool slot_ok(const Kit* kit, int mat) {
@@ -83,9 +147,110 @@ static void emit_face(Kit* kit, int mat, const vec3* in, int count, const vec3 o
     face_frame(n, t, bt);
     unsigned int idx[4];
     for (int i = 0; i < count; i++)
-        idx[i] = face_vertex(kit, mat, p[i], n, t, bt);
+        idx[i] = face_vertex(kit, mat, p[i], n, t, bt, 0.0f);
     for (int i = 2; i < count; i++)
         mb_tri(&kit->builders[mat], idx[0], idx[i - 1], idx[i]);
+}
+
+// Where to cut an edge `len` long: both ends, a cut a third of the way into
+// the ring and the ring's inner line at each, and the interior every
+// GRIME_STEP. Returns the count, at most GRIME_MAX_CUTS.
+static int grime_cuts(float len, float band, float* out) {
+    int n = 0;
+    out[n++] = 0.0f;
+    out[n++] = 0.35f * band;
+    out[n++] = band;
+    const float inner = len - 2.0f * band;
+    int steps = (int)floorf(inner / GRIME_STEP);
+    if (steps > GRIME_MAX_CUTS - 6)
+        steps = GRIME_MAX_CUTS - 6;
+    for (int i = 1; i <= steps; i++)
+        out[n++] = band + inner * (float)i / (float)(steps + 1);
+    out[n++] = len - band;
+    out[n++] = len - 0.35f * band;
+    out[n++] = len;
+    return n;
+}
+
+// Full on an edge and falling off fast: a hard dark line with a soft tail,
+// all but gone `reach` in.
+static float grime_falloff(float d, float reach) {
+    return expf(-3.0f * d / reach);
+}
+
+/*
+ * One face of a grimed box: the rectangle from c0 along edge_a and edge_b, cut
+ * by grime_cuts and wound to face `outward`. On a face that stands upright,
+ * the edge lowest in the world takes GRIME_BOTTOM and the highest GRIME_TOP.
+ */
+static void emit_grimed_face(Kit* kit, int mat, const vec3 c0, const vec3 edge_a, const vec3 edge_b,
+                             const vec3 outward) {
+    vec3 ea, eb, n;
+    glm_vec3_copy((float*)edge_a, ea);
+    glm_vec3_copy((float*)edge_b, eb);
+    glm_vec3_cross(ea, eb, n);
+    if (glm_vec3_norm2(n) < 1e-12f)
+        return;
+    if (glm_vec3_dot(n, (float*)outward) < 0.0f) {
+        glm_vec3_copy((float*)edge_b, ea);
+        glm_vec3_copy((float*)edge_a, eb);
+        glm_vec3_negate(n);
+    }
+    glm_vec3_normalize(n);
+    vec3 t = {0.0f, 0.0f, 0.0f}, bt = {0.0f, 0.0f, 0.0f};
+    face_frame(n, t, bt);
+
+    const float la = glm_vec3_norm(ea), lb = glm_vec3_norm(eb);
+    const float band_a = fminf(GRIME_BAND, 0.3f * la), band_b = fminf(GRIME_BAND, 0.3f * lb);
+    float cut_a[GRIME_MAX_CUTS], cut_b[GRIME_MAX_CUTS];
+    const int na = grime_cuts(la, band_a, cut_a), nb = grime_cuts(lb, band_b, cut_b);
+
+    // The four edges -- a = 0, a = la, b = 0, b = lb -- by the height of their
+    // midpoints, when the face stands.
+    float weight[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+    if (fabsf(n[1]) < 0.7f) {
+        const float mid[4] = {c0[1] + 0.5f * eb[1], c0[1] + ea[1] + 0.5f * eb[1],
+                              c0[1] + 0.5f * ea[1], c0[1] + eb[1] + 0.5f * ea[1]};
+        int lo = 0, hi = 0;
+        for (int e = 1; e < 4; e++) {
+            lo = mid[e] < mid[lo] ? e : lo;
+            hi = mid[e] > mid[hi] ? e : hi;
+        }
+        weight[lo] = GRIME_BOTTOM;
+        weight[hi] = GRIME_TOP;
+    }
+
+    const float strength = kit->grime[mat];
+    unsigned int row[2][GRIME_MAX_CUTS];
+    for (int j = 0; j < nb; j++) {
+        for (int i = 0; i < na; i++) {
+            const float a = cut_a[i], b = cut_b[j];
+            vec3 p;
+            glm_vec3_copy((float*)c0, p);
+            glm_vec3_muladds(ea, a / la, p);
+            glm_vec3_muladds(eb, b / lb, p);
+            // How far in the dirt reaches here, and how dirty this stretch is.
+            const float reach = 0.4f + 1.6f * grime_hash(p, 0u);
+            const float patch = 0.1f + 1.8f * glm_smoothstep(0.3f, 0.7f, grime_patch(p));
+            const float edge = weight[0] * grime_falloff(a, band_a * reach) +
+                               weight[1] * grime_falloff(la - a, band_a * reach) +
+                               weight[2] * grime_falloff(b, band_b * reach) +
+                               weight[3] * grime_falloff(lb - b, band_b * reach);
+            const float smudge =
+                GRIME_SMUDGE * fmaxf(0.0f, grime_hash(p, 0x9e3779b9u) - 0.7f) / 0.3f;
+            const float amount =
+                glm_clamp(strength * (patch * (edge + 0.12f) + smudge), 0.0f, 1.0f);
+            row[j & 1][i] = face_vertex(kit, mat, p, n, t, bt, amount);
+        }
+        if (j == 0)
+            continue;
+        const unsigned int* lo_row = row[(j - 1) & 1];
+        const unsigned int* hi_row = row[j & 1];
+        for (int i = 1; i < na; i++) {
+            mb_tri(&kit->builders[mat], lo_row[i - 1], lo_row[i], hi_row[i]);
+            mb_tri(&kit->builders[mat], lo_row[i - 1], hi_row[i], hi_row[i - 1]);
+        }
+    }
 }
 
 void kit_quad_facing(Kit* kit, int mat, const vec3 a, const vec3 b, const vec3 c, const vec3 d,
@@ -149,11 +314,20 @@ void kit_box(Kit* kit, int mat, const vec3 centre, const vec3 half, float yaw, b
     };
     static const float dirs[6][3] = {{1, 0, 0},  {-1, 0, 0}, {0, 1, 0},
                                      {0, -1, 0}, {0, 0, 1},  {0, 0, -1}};
+    const bool grimed = slot_ok(kit, mat) && kit->grime[mat] > 0.0f;
     for (int f = 0; f < 6; f++) {
         vec3 out = {0.0f, 0.0f, 0.0f};
         rotate_y(dirs[f], yaw, out);
-        kit_quad_facing(kit, mat, corner[faces[f][0]], corner[faces[f][1]], corner[faces[f][2]],
-                        corner[faces[f][3]], out);
+        const float* c0 = corner[faces[f][0]];
+        if (grimed) {
+            vec3 ea, eb;
+            glm_vec3_sub(corner[faces[f][1]], (float*)c0, ea);
+            glm_vec3_sub(corner[faces[f][3]], (float*)c0, eb);
+            emit_grimed_face(kit, mat, c0, ea, eb, out);
+        } else {
+            kit_quad_facing(kit, mat, c0, corner[faces[f][1]], corner[faces[f][2]],
+                            corner[faces[f][3]], out);
+        }
     }
     if (collide)
         kit_collider(kit, centre, half, yaw);
@@ -303,6 +477,7 @@ SceneNode* kit_finish(Kit* kit, const char* name) {
     node_set_name(node, name);
     for (int i = 0; i < kit->material_count; i++) {
         MeshBuilder* mb = &kit->builders[i];
+        kit->vertex_count += (int)mb->vcount;
         if (mb->vcount == 0) {
             mb_free(mb);
             free_material(kit->materials[i]);
