@@ -26913,19 +26913,46 @@ RAIN_RING_SIZE = 1.0
 # Points on the covered water, clear of the dry patch's softened edge: the roof's footprint
 # carried 0.84 m toward the wall by the wind, less the cover's spread from 3 m up.
 RAIN_COVERED_WATER = [(x, 0.05, z) for x in (-1.0, 0.0, 1.0) for z in (-4.0, -3.4, -2.8)]
+RAIN_COVERED_GROUND = [(x, 0.0, z) for x, _, z in RAIN_COVERED_WATER]
+# The splash arm's own knobs, from the same camera: a square wide enough that the open ground
+# beyond the roof is well inside it rather than in its fade, and droplets big enough to read
+# five metres off.
+RAIN_SPLASH_ARM = {"splashRadius": 12.0, "splashSize": 3.0}
+# Splash droplets are a few pixels each and fly for a fraction of a slot's life, so their share
+# of a frame is small; this floor is a tenth of what the arm reads, and zero is the failure.
+RAIN_SPLASH_MIN = 0.0005
 # The fraction of a frame a feature has to move for it to count as there at all.
 RAIN_FEATURE_MIN = 0.01
 
 
 def _rain_twin(rate):
-    """The physics rain.c derives, in double: Marshall-Palmer and Atlas 1973."""
+    """The physics rain.c derives, in double: Marshall-Palmer and Atlas 1973.
+
+    The splash flux is integrated NUMERICALLY here -- density times fall speed over the drops
+    that splash -- where the C uses its closed form, so a term dropped from one cannot be
+    dropped from both."""
     lam = 4.1 * rate ** -0.21
     d0 = 3.672 / lam
     return {"lambda": lam,
             "beta": math.pi * 8000.0 / lam ** 3 * 1e-6,
             "density": 8000.0 / lam * math.exp(-lam * 0.5),
             "d0": d0,
-            "v0": _rain_velocity(d0)}
+            "v0": _rain_velocity(d0),
+            "splash": _simpson(lambda d: 8000.0 * math.exp(-lam * d) * _rain_velocity(d),
+                               _rain_constant("RAIN_SPLASH_MIN_MM"), 40.0, 4000)}
+
+
+def _rain_constant(name):
+    """A number rain_constants.glsl shares with the C, read from the file rather than copied:
+    the splash floor is a choice, and a twin holding its own copy would follow the old one."""
+    with open(os.path.join(ROOT, "cetra", "shaders", "include", "rain_constants.glsl")) as f:
+        m = re.search(rf"#define {name} ([0-9.]+)f?\b", f.read())
+    return float(m.group(1))
+
+
+def _simpson(f, a, b, n):
+    h = (b - a) / n
+    return h / 3.0 * (f(a) + f(b) + sum((4 if i % 2 else 2) * f(a + i * h) for i in range(1, n)))
 
 
 def _rain_velocity(d_mm):
@@ -26946,11 +26973,13 @@ def run_rain_gate(workdir):
     """Rain (spec 13.9): the physics it derives and the state it accumulates.
 
       rain-physics  Marshall-Palmer's slope, the extinction pi N0 / Lambda^3, the drop
-                    density above 0.5 mm, the median volume diameter 3.672 / Lambda and
-                    Atlas's terminal velocity, at five rates and four diameters, against
-                    this file's twin. Heavier rain must also mean bigger, faster drops
-                    and a dimmer sky -- the ladder has to be monotone, since a twin that
-                    shared a sign error with the C would pass the first half.
+                    density above 0.5 mm, the median volume diameter 3.672 / Lambda,
+                    Atlas's terminal velocity and the flux of drops big enough to splash,
+                    at five rates and four diameters, against this file's twin -- which
+                    integrates the flux numerically where the C has a closed form. Heavier
+                    rain must also mean bigger, faster drops, more splashes and a dimmer
+                    sky -- the ladder has to be monotone, since a twin that shared a sign
+                    error with the C would pass the first half.
       rain-wetting  one schedule -- ten seconds of 10 mm/h, thirty of none -- sliced at
                     60 and at 30 fps lands on the same state, and that state is the
                     closed form: a film with a time constant shortened by the rate, and
@@ -26987,6 +27016,9 @@ def run_rain_gate(workdir):
       rain-puddles  puddles against none on the same soaked surfaces: they move more than
                     RAIN_FEATURE_MIN of the frame, and not one pixel round the ground under
                     the roof or on the wall -- standing water needs rain AND level ground.
+      rain-splashes from under the roof, splashes against none: they move the open ground
+                    beyond it, and not a pixel of the ground under the roof nearest the
+                    camera -- a splash lands where the occlusion map says the rain does.
       rain-ripples  the flooded twin seen from under the roof, rings against none: the open
                     water rings, and the covered water nearest the camera does not move by a
                     pixel. From the fixture's own camera that water is too far off for a
@@ -27015,7 +27047,7 @@ def run_rain_gate(workdir):
         errs.append(abs(row["v"] - want) / want)
     ladder = sorted(rows, key=lambda r: r["rate"])
     monotone = all(b[k] > a[k] for a, b in zip(ladder, ladder[1:])
-                   for k in ("beta", "density", "d0", "v0"))
+                   for k in ("beta", "density", "d0", "v0", "splash"))
     worst = (float("inf") if len(rows) != 5 or any(math.isnan(e) for e in errs)
              else max(errs))
     ok = worst <= RAIN_TOL and monotone
@@ -27194,8 +27226,10 @@ def run_rain_gate(workdir):
     if not ok:
         failures.append("rain-glint")
 
-    # Surfaces only: no streaks, so every difference between the two frames is the wetting.
-    surfaces = variant("surfaces", lambda s: s["rain"].update({"streakCount": 0}))
+    # Surfaces only: no streaks and no splashes, so every difference between the two frames is
+    # the wetting.
+    surfaces = variant("surfaces", lambda s: s["rain"].update({"streakCount": 0,
+                                                               "splashCount": 0}))
     wet_path = frame("wet", surfaces, RAIN_LINEAR)
     dry_path = frame("dry", surfaces, RAIN_LINEAR + ["--no-rain"])
     ratios = {}
@@ -27241,7 +27275,7 @@ def run_rain_gate(workdir):
     # Puddles against none, on the same soaked surfaces: rain_wet's frame is the puddled one.
     still_points = [p for n, p in RAIN_WET_POINTS if n.startswith("covered")] + RAIN_WALL_POINTS
     unpooled = frame("unpooled", variant("unpooled", lambda s: s["rain"].update(
-        {"streakCount": 0, "puddleCoverage": 0.0})), RAIN_LINEAR)
+        {"streakCount": 0, "splashCount": 0, "puddleCoverage": 0.0})), RAIN_LINEAR)
     frac, still_moved, still_total = 0.0, -1, 0
     if wet_path and unpooled:
         w, h, _ = _read_ppm(wet_path)
@@ -27257,6 +27291,35 @@ def run_rain_gate(workdir):
     if not ok:
         failures.append("rain-puddles")
 
+    # Splashes against none, from under the roof looking out: they land where the occlusion map
+    # says the rain reaches, so the ground under the roof, nearest the camera, cannot move.
+    def splashes(name, count):
+        def mutate(s):
+            s["camera"] = dict(RAIN_UNDER_ROOF_CAMERA)
+            s["rain"].update({"streakCount": 0, **RAIN_SPLASH_ARM})
+            if count is not None:
+                s["rain"]["splashCount"] = count
+        return frame(name, variant(name, mutate), RAIN_LINEAR)
+
+    splashed, unsplashed = splashes("splashed", None), splashes("unsplashed", 0)
+    frac, covered_moved, covered_total = 0.0, -1, 0
+    if splashed and unsplashed:
+        w, h, _ = _read_ppm(splashed)
+        ae, _ = compare(splashed, unsplashed)
+        frac = ae / (w * h)
+        cam = RAIN_UNDER_ROOF_CAMERA
+        project = _projector({"eye": tuple(cam["eye"]), "target": tuple(cam["target"]),
+                              "fovy_deg": float(cam["fov"])}, w, h)
+        covered_moved, covered_total = moved_round(splashed, unsplashed, project,
+                                                   RAIN_COVERED_GROUND)
+    ok = (frac > RAIN_SPLASH_MIN and covered_total == 49 * len(RAIN_COVERED_GROUND)
+          and covered_moved == 0)
+    print(f"  rain-splashes {'PASS' if ok else 'FAIL'}  splashes move {frac:.2%} of the frame "
+          f"(want > {RAIN_SPLASH_MIN:.2%}) and {covered_moved} of {covered_total} pixels on the "
+          f"ground under the roof (want 0 of {49 * len(RAIN_COVERED_GROUND)})")
+    if not ok:
+        failures.append("rain-splashes")
+
     # Rings against none on the flooded twin, looking out from under the roof.
     water = asset(RAIN_WATER_FIXTURE)
     if not os.path.exists(water):
@@ -27266,7 +27329,7 @@ def run_rain_gate(workdir):
     def under_roof(name, strength):
         def mutate(s):
             s["camera"] = dict(RAIN_UNDER_ROOF_CAMERA)
-            s["rain"].update({"streakCount": 0, "rippleSize": RAIN_RING_SIZE})
+            s["rain"].update({"streakCount": 0, "splashCount": 0, "rippleSize": RAIN_RING_SIZE})
             if strength is not None:
                 s["rain"]["rippleStrength"] = strength
         path = os.path.join(workdir, f"rain_{name}.cscn")
