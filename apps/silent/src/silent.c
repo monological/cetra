@@ -10,6 +10,7 @@
  * there.
  */
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -48,14 +49,16 @@
 #define DEFAULT_RENDER_SCALE 0.5f
 
 /*
- * Pinned exposure. Day's fog glows at about 400 nits where night's glows at 5,
- * so day sits about eighty times lower, where the street is a white fog world.
- * The rooms by day come out dark under it: the sky's radiance is on a relative
- * scale and the tubes on a physical one, and no single pin serves both. That
- * waits on an overcast sky with a physical brightness scale in the engine.
+ * The exposure at night, pinned, and the most a day's meter may open to. The
+ * sky is photometric, like the tubes, so by day one meter serves the street
+ * and the rooms: it closes for the overcast outside and opens indoors, never
+ * past what the night is pinned at.
  */
 #define EXPOSURE_NIGHT 0.02f
-#define EXPOSURE_DAY   0.0015f
+// What a day's meter maps the frame's mean to. Middle grey puts a fog world at
+// middle grey, where a camera in fog is opened a stop and a third so the fog
+// reads white.
+#define DAY_METER_KEY 0.45f
 
 typedef struct SilentArgs {
     bool headless;
@@ -120,10 +123,14 @@ static void build_sky(Engine* engine) {
         return;
     }
     sky->world_units_per_km = 1000.0f;
+    // In nits, like every light in the house.
+    sky->radiance_scale = SKY_PHOTOMETRIC_SCALE;
     if (g_args.day) {
-        // Overcast noon is the fog's own look; the sun is high and weak.
+        // An overcast noon: the deck covers the whole sky, so no sun gets
+        // through, nothing casts, and the dome lights everything evenly.
         sky->sun_elevation_deg = 35.0f;
         sky->sun_azimuth_deg = 150.0f;
+        sky->overcast = 1.0f;
         sky->moon_enabled = false;
     } else {
         sky->sun_elevation_deg = -18.0f;
@@ -152,7 +159,10 @@ static void build_sky(Engine* engine) {
         .name = "sun", .type = LIGHT_DIRECTIONAL, .size = {4.0f, 4.0f}, .cast_shadows = true};
     Light* sun = create_light(&sun_desc);
     sky->sun_light = sun;
-    sky->sun_base_intensity = g_args.day ? 3.0f : 0.0f;
+    // The value at which the sun agrees with the sky. Zero at night, and the
+    // moon's light rides the same base, so the street is lit by its lamps and
+    // the night floor alone.
+    sky->sun_base_intensity = g_args.day ? SKY_SUN_ILLUMINANCE : 0.0f;
     sky_apply_sun_to_light(sky);
     scene_add_light(g_scene, sun);
     SceneNode* sun_node = create_node();
@@ -266,10 +276,12 @@ static void build_post(const Engine* engine, bool night, bool grade) {
     fx->fog_floor_y = 0.0f;
     fx->fog_far = 60.0f;
     fx->fog_anisotropy = 0.7f;
-    // The fog's own glow, and not the sky's: the night sky's radiance is a
-    // deep navy, and fog lit by it swallows the street into black. A dim
+    // At night the fog's own glow, and not the sky's: the night sky's radiance
+    // is a deep navy, and fog lit by it swallows the street into black. A dim
     // grey-green veil is what the houses fade INTO, which is what reads as fog.
-    postfx_set_fog_ambient(fx, night ? (vec3){5.0f, 5.6f, 5.2f} : (vec3){400.0f, 420.0f, 410.0f});
+    // By day the overcast dome lights it, which is the sky the fog fades into.
+    if (night)
+        postfx_set_fog_ambient(fx, (vec3){5.0f, 5.6f, 5.2f});
 }
 
 static void on_init(Game* game) {
@@ -319,10 +331,17 @@ static void on_init(Game* game) {
     player_init(&g_player, game, physics, em, SPAWN_FEET, SPAWN_YAW);
     physics_world_optimize(physics);
 
-    // Pinned: a meter would open the dark back up, which is the one thing
-    // this place must not do.
-    engine->exposure.automatic = false;
-    engine->exposure.multiplier = g_args.day ? EXPOSURE_DAY : EXPOSURE_NIGHT;
+    // Pinned at night: a meter would open the dark back up, which is the one
+    // thing this place must not do. By day the meter maps what it reads to
+    // the key on its own, so the camera is 1, and it is floored where that
+    // key lands on the night's pin -- a dim room never opens past the night.
+    Exposure* ex = &engine->exposure;
+    ex->automatic = g_args.day;
+    ex->multiplier = g_args.day ? 1.0f : EXPOSURE_NIGHT;
+    if (g_args.day) {
+        ex->key = DAY_METER_KEY;
+        ex->meter_min_log2 = log2f(ex->key / EXPOSURE_NIGHT);
+    }
 
     build_post(engine, !g_args.day, !g_args.no_grade);
 }
@@ -375,8 +394,7 @@ static void print_usage(const char* prog) {
     printf("  -W, --width N           Window width (default %d)\n", DEFAULT_WIDTH);
     printf("  -H, --height N          Window height (default %d)\n", DEFAULT_HEIGHT);
     printf("      --seed N            Clutter and street seed\n");
-    printf("      --day               Day in the fog instead of night (unfinished: the rooms\n");
-    printf("                          come out dark)\n");
+    printf("      --day               An overcast day in the fog instead of night\n");
     printf("      --no-taa            No temporal AA, and so no upscale: full resolution, raw "
            "edges\n");
     printf("      --no-grade          Without the green-grey colour grade\n");
