@@ -573,6 +573,12 @@ void apply_cscene_rain(Scene* scene, const CetraSceneDesc* cscn) {
         rain->puddle_coverage = r->puddle_coverage;
     if (r->has_wet_darkening)
         rain->wet_darkening = r->wet_darkening;
+    if (r->has_puddle_scale)
+        rain->puddle_scale = r->puddle_scale;
+    if (r->has_ripple_strength)
+        rain->ripple_strength = r->ripple_strength;
+    if (r->has_ripple_size)
+        rain->ripple_size = r->ripple_size;
     if (r->has_occlusion_extent)
         rain->occlusion_extent = r->occlusion_extent;
     if (r->has_streak_count)

@@ -24,6 +24,9 @@ Rain* create_rain(void) {
     rain->puddle_fill_time = 90.0f;
     rain->puddle_drain_time = 900.0f;
     rain->puddle_coverage = 0.6f;
+    rain->puddle_scale = 3.0f;
+    rain->ripple_strength = 1.0f;
+    rain->ripple_size = 0.35f;
     rain->fall_scale = 1.0f;
     rain->wet_darkening = 1.0f;
     // A street's length either way of the player: past that the fog has taken most of
@@ -78,6 +81,15 @@ float rain_puddle_target(const Rain* rain) {
 bool rain_active(const Rain* rain) {
     return rain && (rain->rate_mmh > 0.0f || rain->wetness > RAIN_WET_FLOOR ||
                     rain->puddle_level > RAIN_WET_FLOOR);
+}
+
+// In proportion to the rate up to the moderate band's ceiling. Most of what lands in a puddle
+// is too small to ring visibly, so this counts the drops that do rather than all of them --
+// a shape choice, and the reason a drizzle rings sparsely.
+float rain_ripple_activity(const Rain* rain) {
+    if (!rain || !(rain->rate_mmh > 0.0f))
+        return 0.0f;
+    return fminf(rain->rate_mmh / RAIN_RATE_MODERATE, 1.0f);
 }
 
 void rain_fall_direction(const Rain* rain, vec3 out) {

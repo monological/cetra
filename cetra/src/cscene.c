@@ -1011,6 +1011,12 @@ static void parse_rain(CetraSceneDesc* d, const cJSON* root) {
         _ranged_float(rain, "rain", "puddleCoverage", 0.0f, 1.0f, &out->puddle_coverage);
     out->has_wet_darkening =
         _ranged_float(rain, "rain", "wetDarkening", 0.0f, 2.0f, &out->wet_darkening);
+    out->has_puddle_scale =
+        _ranged_float(rain, "rain", "puddleScale", 0.05f, 1000.0f, &out->puddle_scale);
+    out->has_ripple_strength =
+        _ranged_float(rain, "rain", "rippleStrength", 0.0f, 10.0f, &out->ripple_strength);
+    out->has_ripple_size =
+        _ranged_float(rain, "rain", "rippleSize", 0.02f, 10.0f, &out->ripple_size);
     out->has_occlusion_extent =
         _ranged_float(rain, "rain", "occlusionExtent", 1.0f, 4096.0f, &out->occlusion_extent);
     float count = 0.0f;
@@ -1036,6 +1042,7 @@ static void parse_rain(CetraSceneDesc* d, const cJSON* root) {
         "wetTime",          "dryTime",        "puddleFillTime", "puddleDrainTime", "puddleCoverage",
         "occlusionExtent",  "streakCount",    "streakRadius",   "shutter",         "streakWidth",
         "streakBrightness", "streakForwardG", "streakGlint",    "streakSheen",     "settled",
+        "puddleScale",      "rippleStrength", "rippleSize",
     };
     warn_unknown_keys(rain, known, sizeof(known) / sizeof(known[0]), "rain");
 }

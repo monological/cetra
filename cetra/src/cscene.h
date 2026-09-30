@@ -246,6 +246,12 @@ typedef struct CSceneRain {
     float puddle_coverage;
     bool has_wet_darkening;
     float wet_darkening;
+    bool has_puddle_scale;
+    float puddle_scale; // metres
+    bool has_ripple_strength;
+    float ripple_strength;
+    bool has_ripple_size;
+    float ripple_size; // metres
     bool has_occlusion_extent;
     float occlusion_extent; // metres, the width of the square cover is known over
     bool has_streak_count;
