@@ -869,6 +869,8 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     fx->ssr_program = create_ssr_program();
     fx->ssr_hiz_program = create_ssr_hiz_program();
     fx->upsample_tent_program = create_upsample_tent_program();
+    // Optional: without it wet ground folds by the plain tent's lerp, as the catcher does.
+    fx->ssr_fold_wet_program = create_ssr_fold_wet_program();
     fx->froxel_inject_program = create_froxel_inject_program();
     fx->froxel_integrate_program = create_froxel_integrate_program();
     fx->froxel_composite_program = create_froxel_composite_program();
@@ -1064,6 +1066,12 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
 
     glUseProgram(fx->upsample_tent_program->id);
     uniform_set_int(fx->upsample_tent_program->uniforms, "srcTex", 0);
+    if (fx->ssr_fold_wet_program) {
+        glUseProgram(fx->ssr_fold_wet_program->id);
+        uniform_set_int(fx->ssr_fold_wet_program->uniforms, "srcTex", 0);
+        uniform_set_int(fx->ssr_fold_wet_program->uniforms, "normalsTex", 1);
+        uniform_set_int(fx->ssr_fold_wet_program->uniforms, "specTex", 2);
+    }
 
     // temporal_accum, ssr_accum, and ssgi_accum are seeded entirely by
     // run_temporal_accum, which owns their unit layout and texelSize together.
@@ -2183,6 +2191,7 @@ void free_postfx(PostFX* fx) {
     free_program(fx->ssr_program);
     free_program(fx->ssr_hiz_program);
     free_program(fx->upsample_tent_program);
+    free_program(fx->ssr_fold_wet_program);
     free_program(fx->froxel_inject_program);
     free_program(fx->froxel_integrate_program);
     free_program(fx->froxel_composite_program);
@@ -2919,8 +2928,13 @@ static bool postfx_run_atmosphere(PostFX* fx, GLuint canvas_fbo, bool aux_writte
 // extracted-stage shape as postfx_run_atmosphere; inv_projection is passed in
 // (shared with DoF).
 static void postfx_run_ssr(PostFX* fx, GLuint canvas_fbo, GLuint canvas_tex, bool have_normals,
-                           bool aux_written, bool taa_resolving, mat4 projection,
+                           bool aux_written, bool split_live, bool taa_resolving, mat4 projection,
                            mat4 inv_projection, mat4 view) {
+    // Wet ground has its share of the environment's reflection REPLACED rather than being
+    // lerped toward the trace, which needs that share on its own -- the split composite's
+    // buffer -- and the program that folds it. Without either it lerps, as the catcher does.
+    const bool wet_replace =
+        fx->rain_wet && split_live && have_normals && fx->ssr_fold_wet_program != NULL;
     // SSR traces at full res (sharp) or half res, per ssr_full_res; the
     // buffer + Hi-Z pyramid were sized to match in create_ssr_buffers.
     int ssr_w = fx->ssr_full_res ? fx->width : fx->half_width;
@@ -2985,6 +2999,7 @@ static void postfx_run_ssr(PostFX* fx, GLuint canvas_fbo, GLuint canvas_tex, boo
     glBindTexture(GL_TEXTURE_2D, aux_written ? fx->aux_texture : 0);
     glActiveTexture(GL_TEXTURE0);
     uniform_set_int(fx->ssr_program->uniforms, "auxAvailable", aux_written ? 1 : 0);
+    uniform_set_int(fx->ssr_program->uniforms, "wetReplace", wet_replace ? 1 : 0);
     uniform_set_int(fx->ssr_program->uniforms, "hizWidth", ssr_w);
     uniform_set_int(fx->ssr_program->uniforms, "hizHeight", ssr_h);
     uniform_set_int(fx->ssr_program->uniforms, "hizMips", fx->hiz_mips);
@@ -3095,12 +3110,19 @@ static void postfx_run_ssr(PostFX* fx, GLuint canvas_fbo, GLuint canvas_tex, boo
     // and everything else assumes it.
     glBindFramebuffer(GL_FRAMEBUFFER, canvas_fbo);
     glViewport(0, 0, fx->post_width, fx->post_height);
-    glUseProgram(fx->upsample_tent_program->id);
+    ShaderProgram* fold = wet_replace ? fx->ssr_fold_wet_program : fx->upsample_tent_program;
+    glUseProgram(fold->id);
     // Sample the tent at the reflection buffer's own texel: full-res is
     // a 1px tent (light AA on the sharp reflection); half-res is the
     // upsample.
     const float ssr_texel[2] = {1.0f / (float)ssr_w, 1.0f / (float)ssr_h};
-    uniform_set_vec2(fx->upsample_tent_program->uniforms, "texelSize", ssr_texel);
+    uniform_set_vec2(fold->uniforms, "texelSize", ssr_texel);
+    if (wet_replace) {
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, fx->normal_texture);
+        glActiveTexture(GL_TEXTURE2);
+        glBindTexture(GL_TEXTURE_2D, fx->spec_texture);
+    }
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, ssr_result);
     glEnable(GL_BLEND);
@@ -3650,8 +3672,8 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
 
         if (ssr_active) {
             profiler_scope_begin(fx->profiler, "ssr");
-            postfx_run_ssr(fx, canvas_fbo, canvas_tex, have_normals, aux_written, taa_resolving,
-                           projection, inv_projection, view);
+            postfx_run_ssr(fx, canvas_fbo, canvas_tex, have_normals, aux_written, split_live,
+                           taa_resolving, projection, inv_projection, view);
             profiler_scope_end(fx->profiler);
         }
 

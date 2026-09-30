@@ -298,6 +298,7 @@ ShaderProgram* create_ssao_blur_program();
 ShaderProgram* create_ssr_program();
 ShaderProgram* create_ssr_hiz_program();
 ShaderProgram* create_upsample_tent_program();
+ShaderProgram* create_ssr_fold_wet_program();
 ShaderProgram* create_taa_resolve_program();
 // TAAU render-to-post upscaling resolve (render_scale < 1 only)
 ShaderProgram* create_taau_resolve_program();

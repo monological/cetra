@@ -277,6 +277,7 @@ typedef struct PostFX {
     ShaderProgram* ssr_program;
     ShaderProgram* ssr_hiz_program;
     ShaderProgram* upsample_tent_program;    // Shared tent composite (bloom mips, SSR)
+    ShaderProgram* ssr_fold_wet_program;     // SSR's fold when ground is wet (spec 13.9)
     ShaderProgram* froxel_inject_program;    // Per-cell scattering into the volume (spec 9.5)
     ShaderProgram* froxel_integrate_program; // Front-to-back gather along each slice column
     ShaderProgram* froxel_composite_program;
@@ -529,7 +530,10 @@ typedef struct PostFX {
 
     // Falling rain as a medium (spec 13.9), published per frame by rain_publish_to_postfx;
     // postfx never learns about Rain. A request that arms the froxel pass, as water's is.
-    float rain_sigma;     // extinction per world unit; 0 = no rain in the air
+    float rain_sigma; // extinction per world unit; 0 = no rain in the air
+    // true = surfaces may carry the wet SSR marker this frame, so SSR replaces their share of
+    // the environment's reflection rather than lerping them toward the trace
+    bool rain_wet;
     float rain_forward_g; // the drops' refracted lobe, the one the streaks are lit through
     // World units from the eye where the streaks stop standing for the rain and the medium
     // takes it; 0 = the medium from the eye out.
