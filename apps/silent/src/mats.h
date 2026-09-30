@@ -52,13 +52,13 @@ typedef enum {
     MAT_JAM,          // preserves: a dark red
     MAT_PLUM,         // and a purple nearly black
     MAT_PRUNE,        // and a brown nearly black
-    MAT_CARDS, // every picture placed whole -- photos, notes, the clock's dial -- cut up by cards.h
-    MAT_CUSHION,  // a foam seat pad gone yellow
-    MAT_CASE,     // the hall clock's dark lacquered body
-    MAT_ROSEWOOD, // its door, hood and mouldings
-    MAT_MAPLE,    // the pale stringing inlaid round its door
-    MAT_BRASS,    // capitals, finials, rosettes, weights, the bob: tarnished
-    MAT_BULB,     // the hall's bare bulb, lit
+    MAT_CARDS,        // pictures placed whole, photos to the clock's dial: see cards.h
+    MAT_CUSHION,      // a foam seat pad gone yellow
+    MAT_CASE,         // the hall clock's dark lacquered body
+    MAT_ROSEWOOD,     // its door, hood and mouldings
+    MAT_MAPLE,        // the pale stringing inlaid round its door
+    MAT_BRASS,        // capitals, finials, rosettes, weights, the bob: tarnished
+    MAT_BULB,         // the hall's bare bulb, lit
     MAT_COUNT
 } MatId;
 
