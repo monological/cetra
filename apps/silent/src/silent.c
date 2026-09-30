@@ -37,6 +37,7 @@
 #include "cetra/game/physics.h"
 
 #include "clock.h"
+#include "rain_bed.h"
 #include "house.h"
 #include "kitchen.h"
 #include "kit.h"
@@ -113,6 +114,7 @@ static Scene* g_scene;
 static Player g_player;
 static Lights g_lights;
 static Clock g_clock;
+static RainBed g_rain_bed;
 static float g_fade_seconds; // since the bounce light came in
 
 // The spawn: in the kitchen, facing the window.
@@ -367,6 +369,7 @@ static void on_init(Game* game) {
             rain_settle(g_scene->rain);
         }
     }
+    rain_bed_start(&g_rain_bed, audio, g_scene->rain);
 
     ShadowSystem* ss = g_scene->shadow_system;
     if (ss) {
@@ -432,6 +435,8 @@ static void on_pre_render(Game* game, double alpha) {
     player_eye(&g_player, eye, forward);
     lights_update(&g_lights, g_scene, game->time, (float)game->sim_clock.delta, eye, forward);
     clock_update(&g_clock, game->time);
+    rain_bed_update(&g_rain_bed, g_scene->rain, g_scene->shadow_system, eye,
+                    (float)game->sim_clock.delta);
 
     // The probes go in on the third frame, not at load. The tubes' panels are
     // derived during the first frame's draw and only cast from the next, and a
