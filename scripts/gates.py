@@ -26872,6 +26872,13 @@ RAIN_LAMP_CD = 60.0
 RAIN_LAMP_BACK = [0.0, 3.5, 3.0]
 RAIN_LAMP_FRONT = [0.0, 3.5, 19.0]
 RAIN_LINEAR = ["--tonemap", "linear", *NO_HALOS, "--no-dither", "--no-vignette", "-E", "1"]
+# The glint arm lights the rain from the SIDE, level with it and beside the camera. Backlit,
+# the few drops on the lamp's line of sight clip long before the rest leave the 8-bit floor,
+# and either end biases a sum: clipping loses glints and rounding loses spread light, so the
+# two readings disagree by the method rather than by the pattern. Side-lit rain has no such
+# peak, so one exposure can hold every lit pixel well inside the code range.
+RAIN_LAMP_SIDE = [9.0, 3.0, 11.0]
+RAIN_GLINT_CD = 400.0
 # Refraction throws 85% of a drop's light into a g = 0.8 lobe, which puts about two decades
 # between looking into the light and looking away from it. A phase evaluated with its angle
 # the wrong way round lands below 1.
@@ -26942,13 +26949,18 @@ def run_rain_gate(workdir):
                     falls, nothing is wet, and no layer is rendered.
       rain-determinism  two runs of the fixture are 0 px apart. The drops are functions of
                     their index and the frame's clock, so nothing may differ between runs.
-      rain-lobe     the light a lamp puts into the rain, read against bare sky: backlit, with
-                    the lamp beyond the rain, it is more than RAIN_LOBE_MIN times what the
-                    same lamp gives from behind the camera -- and nonzero there, since a
-                    fraction of every drop's light goes everywhere.
-      rain-glint    the same backlit light with every lit streak's light in glints and with
-                    none, within RAIN_GLINT_TOL: the glints redistribute it, and a pattern
-                    that added light would read as rain that brightened when it sparkled.
+      rain-lobe     the light a lamp puts into the rain, read against bare sky at sheen 0:
+                    backlit, with the lamp beyond the rain, it is more than RAIN_LOBE_MIN
+                    times what the same lamp gives from behind the camera -- and nonzero
+                    there, since a fraction of every drop's light goes everywhere.
+      rain-glint    a side-lit lamp's light in the rain with every lit streak's light in
+                    glints and with none, within RAIN_GLINT_TOL and with no pixel clipped:
+                    the glints redistribute it, and a pattern that added light would read as
+                    rain that brightened when it sparkled.
+
+    Everything here runs on rain_fixture, whose answers are known from its geometry and
+    its closed forms; the streak arms read the fixture at sheen 0, since the sheen is a look
+    laid over the physics rather than part of it.
     """
     scene = asset(RAIN_FIXTURE)
     if not os.path.exists(scene):
@@ -27089,49 +27101,59 @@ def run_rain_gate(workdir):
     if not ok:
         failures.append("rain-determinism")
 
+    # Sheen 0: these read the light a drop scatters, and the sheen is a look laid over what it
+    # refracts, which a lamp that lights the backdrop would move as well.
     def lamp_at(pos, cd, glint=None):
         def mutate(s):
             s["lights"] = [{"name": "rain_probe_lamp", "type": "point", "position": pos,
                             "color": [1.0, 1.0, 1.0], "intensity": cd, "range": 40.0}]
+            s["rain"]["streakSheen"] = 0.0
             if glint is not None:
                 s["rain"]["streakGlint"] = glint
         return mutate
 
-    def sky_light(name, mutate):
-        path = frame(name, variant(name, mutate), RAIN_LINEAR)
+    def sky_light(name, mutate, flags):
+        """(mean linear luma over the sky crop, pixels in it at code 255)."""
+        path = frame(name, variant(name, mutate), flags)
         if not path:
             return float("nan"), 0
         w, h, pix = _read_ppm(path)
         x0, y0, x1, y1 = RAIN_SKY_BOX
-        peak = max(max(pix[3 * (py * w + px):3 * (py * w + px) + 3])
-                   for py in range(int(y0 * h), int(y1 * h))
-                   for px in range(int(x0 * w), int(x1 * w)))
-        return _box_luma_dense(pix, w, h, RAIN_SKY_BOX, _DISPLAY_TO_LINEAR), peak
+        clipped = sum(1 for py in range(int(y0 * h), int(y1 * h))
+                      for px in range(int(x0 * w), int(x1 * w))
+                      if max(pix[3 * (py * w + px):3 * (py * w + px) + 3]) == 255)
+        return _box_luma_dense(pix, w, h, RAIN_SKY_BOX, _DISPLAY_TO_LINEAR), clipped
 
-    # Glints off for the lobe: it is a claim about the phase, and a glint piles a streak's
-    # light into a few pixels, which is where an 8-bit frame clips first.
-    dark, _ = sky_light("dark", lamp_at(RAIN_LAMP_BACK, 0.0))
-    back_on, back_peak = sky_light("back", lamp_at(RAIN_LAMP_BACK, RAIN_LAMP_CD, 0.0))
-    front_on, front_peak = sky_light("front", lamp_at(RAIN_LAMP_FRONT, RAIN_LAMP_CD, 0.0))
+    # Glints off for the lobe: it is a claim about the phase. The backlit frame clips where
+    # the eye looks straight through the rain at the lamp, and that is allowed: clipping can
+    # only UNDERSTATE the backlit light, so the ratio read off it is a lower bound.
+    dark, _ = sky_light("dark", lamp_at(RAIN_LAMP_BACK, 0.0), RAIN_LINEAR)
+    back_on, back_clip = sky_light("back", lamp_at(RAIN_LAMP_BACK, RAIN_LAMP_CD, 0.0),
+                                   RAIN_LINEAR)
+    front_on, _ = sky_light("front", lamp_at(RAIN_LAMP_FRONT, RAIN_LAMP_CD, 0.0), RAIN_LINEAR)
     back, front = back_on - dark, front_on - dark
     ratio = back / front if front > 0 else float("inf")
-    unclipped = max(back_peak, front_peak) < 255
-    ok = front > 0 and ratio > RAIN_LOBE_MIN and unclipped
+    ok = front > 0 and ratio > RAIN_LOBE_MIN
     print(f"  rain-lobe {'PASS' if ok else 'FAIL'}  the lamp adds {back:.3e} to the sky crop "
           f"backlit and {front:.3e} front-lit, a ratio of {ratio:.1f} (want > "
-          f"{RAIN_LOBE_MIN:g}, and front-lit above 0); peak code {max(back_peak, front_peak)} "
-          f"(want < 255, or the ratio is read off a clipped frame)")
+          f"{RAIN_LOBE_MIN:g}, and front-lit above 0); {back_clip} backlit pixels clip, which "
+          f"only lowers the ratio")
     if not ok:
         failures.append("rain-lobe")
 
-    sparkle_on, sparkle_peak = sky_light("sparkle", lamp_at(RAIN_LAMP_BACK, RAIN_LAMP_CD, 1.0))
-    sparkle = sparkle_on - dark
-    drift = abs(sparkle - back) / back if back > 0 else float("inf")
-    ok = drift <= RAIN_GLINT_TOL and sparkle_peak < 255
-    print(f"  rain-glint {'PASS' if ok else 'FAIL'}  backlit rain's light {back:.4e} with no "
+    # The glint arm must NOT clip -- a clipped glint would hide a pattern that adds light --
+    # which is why it lights the rain from the side (see RAIN_LAMP_SIDE).
+    smooth_on, smooth_clip = sky_light("smooth", lamp_at(RAIN_LAMP_SIDE, RAIN_GLINT_CD, 0.0),
+                                       RAIN_LINEAR)
+    sparkle_on, sparkle_clip = sky_light("sparkle", lamp_at(RAIN_LAMP_SIDE, RAIN_GLINT_CD, 1.0),
+                                         RAIN_LINEAR)
+    smooth, sparkle = smooth_on - dark, sparkle_on - dark
+    drift = abs(sparkle - smooth) / smooth if smooth > 0 else float("inf")
+    clipped = smooth_clip + sparkle_clip
+    ok = drift <= RAIN_GLINT_TOL and clipped == 0
+    print(f"  rain-glint {'PASS' if ok else 'FAIL'}  side-lit rain's light {smooth:.4e} with no "
           f"glints and {sparkle:.4e} with all of it in glints, {drift:.2%} apart (want <= "
-          f"{RAIN_GLINT_TOL:.0%}); peak code {sparkle_peak} (want < 255, or a clipped glint "
-          f"reads as light the pattern lost)")
+          f"{RAIN_GLINT_TOL:.0%}); {clipped} pixels clip (want 0)")
     if not ok:
         failures.append("rain-glint")
     return failures
@@ -27181,7 +27203,9 @@ GATE_GROUPS = [
     ("water-night", "the sea after dark: which light it takes, and what it does with none "
      "(spec 11.84):",
      run_water_night_gate),
-    ("rain", "rain: the physics it derives and the state it accumulates (spec 13.9):",
+    # "rainfall" rather than "rain": --only matches by substring, and "rain" is inside
+    # "terrain", which would take the terrain groups and the forest app along every time.
+    ("rainfall", "rain: the physics it derives and the state it accumulates (spec 13.9):",
      run_rain_gate),
     ("emissive", "emissive geometry as area lights (fit, intent, light; spec 11.49):",
      run_emissive_gate),
