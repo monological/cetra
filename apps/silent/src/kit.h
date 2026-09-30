@@ -23,6 +23,11 @@
  * its size, and neighbouring pieces continue one another's pattern. That
  * even, low density is most of what makes low-poly geometry read as one
  * console-era world rather than a set of stretched decals.
+ *
+ * A material registered with grime has its boxes' faces cut into a grid and
+ * the dirt baked into the vertex colours, darkest along each face's edges --
+ * the gaps round a door, where a cupboard meets the floor -- which is how the
+ * consoles this imitates shaded a room, and costs the renderer nothing new.
  */
 
 #define KIT_MAX_MATERIALS 64
@@ -32,6 +37,7 @@
 typedef struct Kit {
     Material* materials[KIT_MAX_MATERIALS];
     float repeat_m[KIT_MAX_MATERIALS]; // metres one texture repeat covers
+    float grime[KIT_MAX_MATERIALS];    // 0..1 edge dirt baked into its boxes; 0 = none
     MeshBuilder builders[KIT_MAX_MATERIALS];
     int material_count;
 
@@ -39,6 +45,7 @@ typedef struct Kit {
     EntityManager* em;
     PhysicsWorld* physics;
     int collider_count;
+    int vertex_count; // everything kit_finish handed over
 } Kit;
 
 // A hole in a wall: [from, to] along the wall's axis, [bottom, top] in world Y.
@@ -80,7 +87,7 @@ void kit_init(Kit* kit, Scene* scene, EntityManager* em, PhysicsWorld* physics);
 
 // Registers a material and returns its slot. The kit borrows the material
 // until kit_finish attaches it to a mesh.
-int kit_material(Kit* kit, Material* material, float repeat_m);
+int kit_material(Kit* kit, Material* material, float repeat_m, float grime);
 
 // A flat quad or triangle, wound to face `outward` whatever order the corners
 // come in, and fanned from the first corner.
