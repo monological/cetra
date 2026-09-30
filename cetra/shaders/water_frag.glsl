@@ -138,6 +138,12 @@ uniform float maxReflectionLOD;
 #include "fresnel.glsl"
 #include "depth.glsl"
 #include "noise.glsl" // hash21, for the foam value noise below
+// Rings from rain landing on the surface (spec 13.9), the same rings a puddle takes.
+#include "rain_ripples.glsl"
+uniform float rainTime;           // seconds, the rain's clock
+uniform float rainRippleActivity; // 0..1, the fraction of ripple cells live; 0 = no rain
+uniform float rainRippleSize;     // metres across a ripple cell
+uniform float rainRippleStrength; // scale on the rings' tilt
 // The surface definition, for its cascade samplers and its wave-model switch. The
 // fragment stage does not re-evaluate the surface -- the vertex stage's position
 // and normal are interpolated in -- but it reads the SHORT band, which by design
@@ -953,6 +959,13 @@ void main() {
     // On both models: the touch ripples tilt a Gerstner sea too (spec 13.4), and with none
     // simulated its mesh normal comes back unchanged.
     N = oceanShadingNormal(N, WorldPos.xz, fade, footprint);
+    // Behind the activity test rather than folded through a zero, so a sea with no rain on it
+    // takes none of the arithmetic -- a normalize of an unchanged normal still moves bits.
+    if (rainRippleActivity > 0.0) {
+        vec2 ring =
+            rainRippleSlope(WorldPos.xz, rainTime, rainRippleSize, rainRippleActivity, footprint);
+        N = normalize(N + vec3(-ring.x, 0.0, -ring.y) * rainRippleStrength);
+    }
     if (waveModel == 1) {
         // Roughness takes the slope variance the fade REMOVED, which is what makes this a
         // handover rather than two channels dimming together. Driving it from the faded
