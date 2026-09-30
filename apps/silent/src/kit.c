@@ -439,13 +439,18 @@ typedef struct RingAt {
     float nr, na; // the normal: the radial direction weighted nr, plus the axis weighted na
     float v;      // texture V, in repeats
     float joint;  // metres to the solid's nearest joint
+    bool planar;  // UVs from world X and Z: a face turned up or down, like a plate's
 } RingAt;
 
-// A ring of sides + 1 vertices. U runs round it `u_scale` per radian, and its
-// grime falls off from the joint over `band`.
+/*
+ * A ring of sides + 1 vertices. U runs round it `u_scale` per radian, and its
+ * grime falls off from the joint over `band`. A planar ring takes its UVs from
+ * the ground plane instead: running U round a face that closes on its axis
+ * squeezes the whole texture into a pinwheel at the middle.
+ */
 static void make_ring(Kit* kit, int mat, Ring* ring, const RingAt* at, float u_scale, float band,
                       int sides) {
-    const float strength = kit->grime[mat];
+    const float strength = kit->grime[mat], inv = 1.0f / kit->repeat_m[mat];
     for (int j = 0; j <= sides; j++) {
         const float a = (float)j / (float)sides * 2.0f * GLM_PIf;
         vec3 radial = {0.0f, 0.0f, 0.0f}, t = {0.0f, 0.0f, 0.0f};
@@ -462,7 +467,9 @@ static void make_ring(Kit* kit, int mat, Ring* ring, const RingAt* at, float u_s
             strength > 0.0f ? grime_amount(strength, ring->p[j],
                                            grime_falloff(at->joint, band * grime_reach(ring->p[j])))
                             : 0.0f;
-        ring->idx[j] = kit_vertex(kit, mat, ring->p[j], ring->n[j], t, a * u_scale, at->v, grime);
+        const float u = at->planar ? ring->p[j][0] * inv : a * u_scale;
+        const float v = at->planar ? ring->p[j][2] * inv : at->v;
+        ring->idx[j] = kit_vertex(kit, mat, ring->p[j], ring->n[j], t, u, v, grime);
     }
 }
 
@@ -618,9 +625,11 @@ static void lathe(Kit* kit, int mat, const vec3 base, const vec2* profile, int c
     const float band = fminf(GRIME_BAND, 0.3f * (hi - lo));
     RingAt at = {.axis = {0.0f, 1.0f, 0.0f}, .u = {1.0f, 0.0f, 0.0f}, .w = {0.0f, 0.0f, 1.0f}};
     for (int k = 0; k < count - 1; k++) {
-        vec2 n0 = {0.0f, 0.0f}, n1 = {0.0f, 0.0f};
+        vec2 n0 = {0.0f, 0.0f}, n1 = {0.0f, 0.0f}, ns = {0.0f, 0.0f};
         profile_joint(profile, count, k, k - 1, n0);
         profile_joint(profile, count, k, k + 1, n1);
+        profile_normal(profile, k, ns);
+        at.planar = fabsf(ns[1]) > 0.7f;
         const float seg = glm_vec2_distance((float*)profile[k + 1], (float*)profile[k]);
         const int pieces = ring_pieces(kit, mat, seg);
         Ring rings[2];
@@ -751,6 +760,31 @@ void kit_frame_lathe(Kit* kit, const KitFrame* f, int mat, float a, float d, flo
     vec3 base = {0.0f, 0.0f, 0.0f};
     kit_frame_point(f, a, y, d, base);
     lathe(kit, mat, base, profile, count, clamp_sides(sides));
+}
+
+void kit_frame_card(Kit* kit, const KitFrame* f, int mat, const vec3 corner, const vec3 across,
+                    const vec3 up, const float uv[4]) {
+    if (!slot_ok(kit, mat))
+        return;
+    vec3 p[4] = {{0.0f}}, along = {0.0f, 0.0f, 0.0f}, rise = {0.0f, 0.0f, 0.0f};
+    vec3 n = {0.0f, 0.0f, 0.0f};
+    kit_frame_point(f, corner[0], corner[1], corner[2], p[0]);
+    kit_frame_dir(f, across[0], across[1], across[2], along);
+    kit_frame_dir(f, up[0], up[1], up[2], rise);
+    glm_vec3_add(p[0], along, p[1]);
+    glm_vec3_add(p[1], rise, p[2]);
+    glm_vec3_add(p[0], rise, p[3]);
+    glm_vec3_cross(along, rise, n);
+    if (glm_vec3_norm2(n) < 1e-12f)
+        return;
+    glm_vec3_normalize(n);
+    glm_vec3_normalize(along);
+    const float u[4] = {uv[0], uv[2], uv[2], uv[0]}, v[4] = {uv[1], uv[1], uv[3], uv[3]};
+    unsigned int idx[4];
+    for (int i = 0; i < 4; i++)
+        idx[i] = kit_vertex(kit, mat, p[i], n, along, u[i], v[i], 0.0f);
+    mb_tri(&kit->builders[mat], idx[0], idx[1], idx[2]);
+    mb_tri(&kit->builders[mat], idx[0], idx[2], idx[3]);
 }
 
 SceneNode* kit_finish(Kit* kit, const char* name) {

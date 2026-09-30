@@ -87,7 +87,8 @@ typedef struct GrimeSpec {
 static const GrimeSpec GRIME[] = {
     {MAT_ENAMEL, 0.75f},      {MAT_APPLIANCE, 0.6f}, {MAT_TRIM, 0.55f}, {MAT_WOOD, 0.45f},
     {MAT_TABLE, 0.5f},        {MAT_STAINLESS, 0.5f}, {MAT_STEEL, 0.5f}, {MAT_GLASS_CLEAR, 0.35f},
-    {MAT_GLASS_AMBER, 0.35f}, {MAT_PAPER, 0.35f},    {MAT_TOWEL, 0.4f},
+    {MAT_GLASS_AMBER, 0.35f}, {MAT_PAPER, 0.35f},    {MAT_TOWEL, 0.4f}, {MAT_CUSHION, 0.5f},
+    {MAT_CERAMIC, 0.4f},
 };
 
 static float grime_of(int id) {
@@ -166,6 +167,10 @@ static const MatSpec SPECS[MAT_COUNT] = {
     [MAT_JAM] = {"jam", NULL, {0.24f, 0.02f, 0.025f}, 0.3f, 0.0f, 1.0f},
     [MAT_PLUM] = {"plum", NULL, {0.13f, 0.02f, 0.085f}, 0.3f, 0.0f, 1.0f},
     [MAT_PRUNE] = {"prune", NULL, {0.10f, 0.045f, 0.02f}, 0.35f, 0.0f, 1.0f},
+    // tools/make_cards.py's picture; the repeat is unused, since a card takes
+    // its UVs from cards.h rather than from the world.
+    [MAT_CARDS] = {"cards", "cards", {1, 1, 1}, 1.0f, 0.0f, 1.0f},
+    [MAT_CUSHION] = {"cushion", "Sponge002", {0.95f, 0.9f, 0.78f}, 1.0f, 0.0f, 0.25f},
 };
 
 static Texture* load(TexturePool* pool, const char* set, const char* map, TextureDesc desc) {
