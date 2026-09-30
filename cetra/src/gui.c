@@ -552,6 +552,10 @@ static void _engine_gui_panel(Engine* engine) {
             sun_moved |= igSliderFloat("Floor Brightness", &sky->night_floor_brightness, 0.0f, 4.0f,
                                        "%.2f", 0);
             sun_released |= igIsItemDeactivatedAfterEdit();
+            // The deck (spec 13.7) is baked too. Scene-captured probes keep
+            // the sky they were taken under; the env cube and GI follow.
+            sun_moved |= igSliderFloat("Overcast", &sky->overcast, 0.0f, 1.0f, "%.2f", 0);
+            sun_released |= igIsItemDeactivatedAfterEdit();
             if (sun_moved)
                 sky_update_sun(sky, scene->ibl, engine);
             if (sun_released)
