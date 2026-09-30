@@ -167,10 +167,24 @@ scene_desc = {
     "post": {"tonemap": "neutral", "exposure": 1.0},
 }
 
+# The WATER variant: the same yard flooded a few centimetres deep with a calm surface, so the
+# rings the rain leaves on water are the only thing moving it. The swell is kept long and
+# small -- a pond, not a sea -- because a wave the rings ride on would hide how they read.
+water_desc = dict(scene_desc)
+water_desc["_comment"] = [
+    "The rain instrument's water variant (spec 13.9): the yard flooded 5 cm deep under a",
+    "near-still surface, for the rings rain leaves on water. Same camera, lights and rain.",
+]
+water_desc["water"] = {"level": 0.05, "extent": 14.0, "waves": "gerstner", "wavelength": 8.0,
+                       "amplitude": 0.002, "steepness": 0.1}
+
 with open(asset_path("rain_fixture.gltf"), "w") as f:
     json.dump(gltf, f, indent=1)
     f.write("\n")
 with open(asset_path("rain_fixture.cscn"), "w") as f:
     json.dump(scene_desc, f, indent=1)
     f.write("\n")
-print("wrote rain_fixture.gltf + .cscn")
+with open(asset_path("rain_water_fixture.cscn"), "w") as f:
+    json.dump(water_desc, f, indent=1)
+    f.write("\n")
+print("wrote rain_fixture.gltf + .cscn + rain_water_fixture.cscn")

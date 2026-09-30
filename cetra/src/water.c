@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "water.h"
+#include "rain_render.h"
 
 #include "engine.h"
 #include "engine_internal.h"
@@ -3066,6 +3067,8 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
     // The advance of the SAME clock `time` came from, so the previous-frame
     // surface is one step back rather than one wall-clock tick back.
     uniform_set_float(u, "uDeltaTime", (float)engine->render_delta);
+    // Rings from the rain landing on it (spec 13.9); a scene with no rain publishes none.
+    rain_bind_surface(scene ? scene->rain : NULL, program);
 
     int rw, rh;
     engine_render_size(engine, &rw, &rh);

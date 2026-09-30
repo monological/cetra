@@ -1,0 +1,78 @@
+{
+ "version": 1,
+ "_comment": [
+  "The rain instrument's water variant (spec 13.9): the yard flooded 5 cm deep under a",
+  "near-still surface, for the rings rain leaves on water. Same camera, lights and rain."
+ ],
+ "models": [
+  {
+   "path": "../models/rain_fixture.gltf"
+  }
+ ],
+ "environment": {
+  "ambient": [
+   0.03,
+   0.03,
+   0.035
+  ]
+ },
+ "lights": [
+  {
+   "name": "rain_lamp",
+   "type": "point",
+   "position": [
+    6.5,
+    4.3,
+    -3.0
+   ],
+   "color": [
+    1.0,
+    0.85,
+    0.6
+   ],
+   "range": 14.0,
+   "profile": "../ies/ies_symmetric.ies"
+  }
+ ],
+ "rain": {
+  "rate": 10.0,
+  "wind": [
+   0.0,
+   0.0,
+   -1.5
+  ]
+ },
+ "materials": {
+  "rain_porous": {
+   "porosity": 1.0
+  },
+  "rain_sealed": {
+   "porosity": 0.0
+  }
+ },
+ "camera": {
+  "eye": [
+   0.0,
+   2.4,
+   11.0
+  ],
+  "target": [
+   0.0,
+   1.2,
+   -4.0
+  ],
+  "fov": 55
+ },
+ "post": {
+  "tonemap": "neutral",
+  "exposure": 1.0
+ },
+ "water": {
+  "level": 0.05,
+  "extent": 14.0,
+  "waves": "gerstner",
+  "wavelength": 8.0,
+  "amplitude": 0.002,
+  "steepness": 0.1
+ }
+}
