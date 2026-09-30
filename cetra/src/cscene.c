@@ -1000,6 +1000,7 @@ static void parse_rain(CetraSceneDesc* d, const cJSON* root) {
     get_bool(rain, "enabled", &out->enabled);
     out->has_rate = _ranged_float(rain, "rain", "rate", 0.0f, 500.0f, &out->rate);
     out->has_wind = get_vec3(rain, "wind", out->wind);
+    out->has_fall_scale = _ranged_float(rain, "rain", "fallScale", 0.0f, 10.0f, &out->fall_scale);
     out->has_wet_time = _ranged_float(rain, "rain", "wetTime", 1e-3f, 1e6f, &out->wet_time);
     out->has_dry_time = _ranged_float(rain, "rain", "dryTime", 1e-3f, 1e6f, &out->dry_time);
     out->has_puddle_fill_time =
@@ -1032,6 +1033,7 @@ static void parse_rain(CetraSceneDesc* d, const cJSON* root) {
         "enabled",
         "rate",
         "wind",
+        "fallScale",
         "wetTime",
         "dryTime",
         "puddleFillTime",

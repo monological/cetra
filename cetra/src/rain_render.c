@@ -156,6 +156,7 @@ void rain_render_streaks(RainRenderer* rr, Engine* engine, Scene* scene,
     uniform_set_float(u, "rainTime", rain->time);
     uniform_set_vec3(u, "rainWind", rain->wind);
     uniform_set_float(u, "mpLambda", rain_mp_lambda(rain->rate_mmh));
+    uniform_set_float(u, "fallScale", fmaxf(rain->fall_scale, 0.0f));
     uniform_set_float(u, "shutter", rain->shutter_s);
     uniform_set_float(u, "boxHalf", rain->streak_radius);
     uniform_set_int(u, "dropsPerBox", rain->streak_count);

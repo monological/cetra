@@ -559,6 +559,8 @@ void apply_cscene_rain(Scene* scene, const CetraSceneDesc* cscn) {
         rain->rate_mmh = r->rate;
     if (r->has_wind)
         glm_vec3_copy((float*)r->wind, rain->wind);
+    if (r->has_fall_scale)
+        rain->fall_scale = r->fall_scale;
     if (r->has_wet_time)
         rain->wet_time = r->wet_time;
     if (r->has_dry_time)

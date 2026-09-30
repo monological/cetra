@@ -24,6 +24,7 @@ Rain* create_rain(void) {
     rain->puddle_fill_time = 90.0f;
     rain->puddle_drain_time = 900.0f;
     rain->puddle_coverage = 0.6f;
+    rain->fall_scale = 1.0f;
     // A street's length either way of the player: past that the fog has taken most of
     // the frame, and a 1024-texel map spent over it is 9.4 cm a texel -- under the
     // overhang of an eave.
@@ -80,7 +81,8 @@ void rain_fall_direction(const Rain* rain, vec3 out) {
     glm_vec3_copy((vec3){0.0f, -1.0f, 0.0f}, out);
     if (!rain || !(rain->rate_mmh > 0.0f))
         return;
-    const float fall = rain_terminal_velocity(rain_median_diameter(rain->rate_mmh));
+    const float fall =
+        rain_terminal_velocity(rain_median_diameter(rain->rate_mmh)) * rain->fall_scale;
     vec3 v = {rain->wind[0], rain->wind[1] - fall, rain->wind[2]};
     if (glm_vec3_norm(v) > 1e-6f)
         glm_vec3_normalize_to(v, out);

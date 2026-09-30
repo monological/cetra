@@ -20,6 +20,7 @@ uniform vec2 viewport;       // post-resolution pixels
 uniform float rainTime;
 uniform vec3 rainWind;
 uniform float mpLambda; // Marshall-Palmer slope, 1/mm
+uniform float fallScale; // on the terminal velocity; 1 = physical
 uniform float shutter;
 uniform float boxHalf;  // the innermost box's half-width, m
 uniform int dropsPerBox;
@@ -112,7 +113,7 @@ void main() {
     // Marshall-Palmer by inverting its CDF over the sizes drawn: most drops are small.
     float span = 1.0 - exp(-mpLambda * (RAIN_DROP_MAX_MM - RAIN_DROP_MIN_MM));
     float dMm = RAIN_DROP_MIN_MM - log(1.0 - r.w * span) / mpLambda;
-    float fall = max(0.0, RAIN_ATLAS_A - RAIN_ATLAS_B * exp(-RAIN_ATLAS_C * dMm));
+    float fall = max(0.0, RAIN_ATLAS_A - RAIN_ATLAS_B * exp(-RAIN_ATLAS_C * dMm)) * fallScale;
     vec3 vel = rainWind - vec3(0.0, fall, 0.0);
 
     // Every drop falls in a straight line through the world and is wrapped into a box that
