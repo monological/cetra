@@ -17,10 +17,15 @@
 #define AUDIO_TONE_AMPLITUDE      0.25
 #define AUDIO_TONE_BEEP_SECONDS   0.18
 
+#define AUDIO_NOISE_AMPLITUDE 0.25
+#define AUDIO_NOISE_SEED      0x7a1c
+
 struct Sound {
     ma_sound sound;
     ma_waveform waveform; // backs a tone; unused for a file
+    ma_noise noise;       // backs a noise bed; unused otherwise
     bool is_tone;
+    bool is_noise;
     bool continuous; // tone: no auto-stop, so it plays until stopped
     ma_uint64 beep_frames;
     AudioSystem* audio; // borrowed; the tone stop-time and free_sound reach the engine here
@@ -66,6 +71,8 @@ static void sound_destroy(Sound* s) {
     ma_sound_uninit(&s->sound);
     if (s->is_tone)
         ma_waveform_uninit(&s->waveform);
+    if (s->is_noise)
+        ma_noise_uninit(&s->noise, NULL);
     free(s);
 }
 
@@ -216,6 +223,39 @@ Sound* audio_sound_from_tone(AudioSystem* audio, float hz, AudioBus bus) {
                                        &s->sound) != MA_SUCCESS) {
         log_error("audio: tone sound init failed");
         ma_waveform_uninit(&s->waveform);
+        free(s);
+        return NULL;
+    }
+    if (!track_sound(audio, s)) {
+        sound_destroy(s);
+        return NULL;
+    }
+    return s;
+}
+
+Sound* audio_sound_from_noise(AudioSystem* audio, AudioNoise colour, AudioBus bus) {
+    if (!audio)
+        return NULL;
+    Sound* s = calloc(1, sizeof(Sound));
+    if (!s)
+        return NULL;
+    s->audio = audio;
+    const ma_noise_type type = colour == AUDIO_NOISE_PINK    ? ma_noise_type_pink
+                               : colour == AUDIO_NOISE_BROWN ? ma_noise_type_brownian
+                                                             : ma_noise_type_white;
+    // Mono, so a positioned bed spatializes to stereo, as a tone does.
+    ma_noise_config nc =
+        ma_noise_config_init(ma_format_f32, 1, type, AUDIO_NOISE_SEED, AUDIO_NOISE_AMPLITUDE);
+    if (ma_noise_init(&nc, NULL, &s->noise) != MA_SUCCESS) {
+        log_error("audio: noise init failed");
+        free(s);
+        return NULL;
+    }
+    s->is_noise = true;
+    if (ma_sound_init_from_data_source(&audio->engine, &s->noise, MA_SOUND_FLAG_NO_SPATIALIZATION,
+                                       group_for(audio, bus), &s->sound) != MA_SUCCESS) {
+        log_error("audio: noise sound init failed");
+        ma_noise_uninit(&s->noise, NULL);
         free(s);
         return NULL;
     }
