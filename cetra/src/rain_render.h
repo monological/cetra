@@ -20,6 +20,10 @@ typedef struct RainRenderer {
     vec3 prev_eye;
     bool prev_valid;
     bool program_failed; // latched, so a program that will not build logs once
+    // The frame as it stood before the rain drew, mipped: what a drop refracts. Its own
+    // copy because the streaks draw onto the canvas they would otherwise be reading.
+    GLuint behind_fbo, behind_tex;
+    int behind_w, behind_h;
 } RainRenderer;
 
 RainRenderer* create_rain_renderer(void);
