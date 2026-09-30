@@ -1367,11 +1367,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->night_floor = 1;
             args->sky = 1;
         } else if (strcmp(argv[i], "--overcast") == 0) {
-            if (++i >= argc) {
-                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+            if (_ranged_arg(argc, argv, &i, 0.0f, 1.0f, &args->overcast) != 0)
                 return -1;
-            }
-            args->overcast = (float)atof(argv[i]);
             args->sky = 1;
         } else if (strcmp(argv[i], "--moon") == 0) {
             args->moon = 1;

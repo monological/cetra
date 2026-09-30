@@ -25,12 +25,9 @@ uniform float aerialFar; // far depth of the volume, WORLD units
 uniform float unitsPerKm;
 uniform int aerialDepth; // slice count; mirrors SKY_AERIAL_Z
 uniform int sliceIndex;
-// The deck (spec 13.7): how much of the sky is under cloud, and the overcast
-// dome's zenith radiance -- the same pair the sky-view LUT is baked with.
-uniform float overcast;
-uniform float overcastZenith;
 
 #include "atmosphere.glsl"
+#include "sky_deck.glsl"
 #include "froxel.glsl"
 
 // 16 is enough because the integrand is smooth over a single cell's span -- the
@@ -92,7 +89,7 @@ void main() {
     }
     // Scaled once at the end, and bounded against fp16 overflow on the way into
     // an RGBA16F volume -- both exactly as sky_view_frag does it.
-    L = min(L * SUN_ILLUMINANCE, vec3(100.0));
+    L = min(L * SUN_ILLUMINANCE * deckSunScale, vec3(100.0));
 
     // Transmittance collapses to a scalar because the composite folds this in
     // with glBlendFunc(GL_ONE, GL_SRC_ALPHA) -- one factor for the whole scene
@@ -103,11 +100,9 @@ void main() {
     float tLum = dot(T, vec3(0.2126, 0.7152, 0.0722));
 
     // Under a deck the air is lit by the overcast dome, not the sun, and a far
-    // enough surface must fade to the dome's HORIZON, Lz/3 -- the sky drawn
-    // right behind it -- by the same weight the sky-view LUT mixes with. Any
-    // other asymptote meets the horizon at a seam, and fading the sun's share
-    // alone would take distance to black.
-    if (overcast > 0.0)
-        L = mix(L, vec3((1.0 - tLum) * overcastZenith / 3.0), overcast);
+    // enough surface must fade to the dome's HORIZON -- the sky drawn right
+    // behind it. Any other asymptote meets the horizon at a seam, and fading the
+    // sun's share alone would take distance to black.
+    L += (1.0 - tLum) * deckDome(0.0);
     FragColor = vec4(L, tLum);
 }
