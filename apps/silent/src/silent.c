@@ -81,6 +81,9 @@
 #define RAIN_STREAK_SHEEN      1.0f
 // Wet ground at half the physical darkening: soaked, but the lamps still pool on it.
 #define RAIN_WET_DARKENING 0.5f
+// Splash droplets twice their physical size: at their own a splash on dark wet asphalt lifts
+// its pixels by a tenth, and the ground round the player's feet reads as still.
+#define RAIN_SPLASH_SIZE 2.0f
 
 typedef struct SilentArgs {
     bool headless;
@@ -360,6 +363,7 @@ static void on_init(Game* game) {
             g_scene->rain->fall_scale = RAIN_FALL_SCALE;
             g_scene->rain->streak_sheen = RAIN_STREAK_SHEEN;
             g_scene->rain->wet_darkening = RAIN_WET_DARKENING;
+            g_scene->rain->splash_size = RAIN_SPLASH_SIZE;
             rain_settle(g_scene->rain);
         }
     }
