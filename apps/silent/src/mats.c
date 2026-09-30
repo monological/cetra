@@ -151,6 +151,12 @@ static const MatSpec SPECS[MAT_COUNT] = {
     // relief, so it shines between dull smears and water spots. The colour is
     // what polished stainless reflects at normal incidence, about 0.6.
     [MAT_STAINLESS] = {"stainless", "Smear008", {0.6f, 0.6f, 0.58f}, 0.6f, 1.0f, 0.3f, true},
+    // Preserves: flat and glossy, since what shows through the glass is the
+    // colour and the shine off the top. Dark, but not so dark that the glass's
+    // own reflection hides them: under about 0.06 a full jar read as empty.
+    [MAT_JAM] = {"jam", NULL, {0.24f, 0.02f, 0.025f}, 0.3f, 0.0f, 1.0f},
+    [MAT_PLUM] = {"plum", NULL, {0.13f, 0.02f, 0.085f}, 0.3f, 0.0f, 1.0f},
+    [MAT_PRUNE] = {"prune", NULL, {0.10f, 0.045f, 0.02f}, 0.35f, 0.0f, 1.0f},
 };
 
 static Texture* load(TexturePool* pool, const char* set, const char* map, TextureDesc desc) {
