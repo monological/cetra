@@ -4809,6 +4809,13 @@ int main(int argc, char** argv) {
         rain_probe_print(scene->rain);
         shadow_rain_probe(scene->shadow_system, (const vec3*)args.rain_probe_at,
                           args.rain_probe_at_count, args.rain_map_path);
+        // The medium as the post chain holds it, which is what the fog volume was built from:
+        // the rain's publish, read back rather than recomputed.
+        if (engine->postfx)
+            printf("rain-probe medium sigma=%.9g near=%.9g g=%.9g cover_layer=%d armed=%d\n",
+                   (double)engine->postfx->rain_sigma, (double)engine->postfx->rain_near,
+                   (double)engine->postfx->rain_forward_g, engine->postfx->rain_cover_layer,
+                   postfx_has_medium(engine->postfx) ? 1 : 0);
     }
 
     // Beside the others, and for the same reason: the pool is fully populated by

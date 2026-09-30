@@ -605,6 +605,8 @@ void apply_cscene_rain(Scene* scene, const CetraSceneDesc* cscn) {
         rain->splash_amount = r->splash_amount;
     if (r->has_splash_size)
         rain->splash_size = r->splash_size;
+    if (r->has_mist)
+        rain->mist = r->mist;
     if (!r->has_settled || r->settled)
         rain_settle(rain);
     free_rain(scene->rain);

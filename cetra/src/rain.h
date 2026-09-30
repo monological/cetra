@@ -100,6 +100,9 @@ typedef struct Rain {
     float splash_radius;
     float splash_amount; // scale on how many drops splash; 1 = physical
     float splash_size;   // scale on the droplets' diameter; 1 = physical
+
+    // Scale on the rain's extinction as a medium past the streaks; 1 = physical, 0 = none.
+    float mist;
 } Rain;
 
 // Created with a moderate rain's defaults at rate 0: nothing falls until a rate is set.

@@ -63,6 +63,7 @@ const float PI = 3.14159265359;
 // punctual_shadow.glsl, whose lookup is a fragment-stage receiver-plane test.
 uniform sampler2DArray punctualShadowMaps;
 #include "rain_occlusion.glsl"
+#include "rain_phase.glsl"
 
 // The drop diameters, in mm, over which the glints come in. A small drop is held round by its
 // own surface tension and barely rings, and it rings fastest: given the same flash as a big
@@ -94,11 +95,9 @@ uvec4 pcg4d(uvec4 v) {
 }
 
 // The light a drop sends toward the camera from each source: its illuminance there times
-// the fraction scattered this way. Refraction throws most of it forward and the rest goes
-// everywhere, so rain between the eye and a lamp glitters and rain lit from the side is
-// barely there.
+// the fraction scattered this way.
 float dropPhase(float cosTheta) {
-    return mix(1.0 / (4.0 * PI), phaseHG(cosTheta, forwardG), RAIN_REFRACT_SHARE);
+    return rainDropPhase(cosTheta, forwardG);
 }
 
 // The light the lamps and the sun put into a drop and it sends on toward the eye. What it

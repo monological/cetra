@@ -527,6 +527,18 @@ typedef struct PostFX {
     vec3 water_extinction;     // per-channel, per world unit
     vec3 water_inscatter;      // colour the absorbed energy returns as
 
+    // Falling rain as a medium (spec 13.9), published per frame by rain_publish_to_postfx;
+    // postfx never learns about Rain. A request that arms the froxel pass, as water's is.
+    float rain_sigma;     // extinction per world unit; 0 = no rain in the air
+    float rain_forward_g; // the drops' refracted lobe, the one the streaks are lit through
+    // World units from the eye where the streaks stop standing for the rain and the medium
+    // takes it; 0 = the medium from the eye out.
+    float rain_near;
+    // Where the rain reaches, published by shadow_publish_to_postfx beside the spot's map:
+    // the occlusion map's layer of fog_punctual_shadow_maps, and its lookup. -1 = open sky.
+    int rain_cover_layer;
+    mat4 rain_cover_matrix;
+
     // Published per frame by shadow_publish_to_postfx (mirrors the probe
     // block; postfx never learns about the shadow system): the casters'
     // matrices, radiance, and map array. Count 0 = ambient-only fog.
@@ -567,7 +579,7 @@ typedef struct PostFX {
     // Perspective spot shadow (Phase 2): occludes the beam by geometry.
     bool fog_spot_shadowed;    // a spot shadow map was rendered this frame
     mat4 fog_spot_light_space; // perspective proj * lookAt from the spot
-    // GL_TEXTURE_2D_ARRAY of perspective depth maps (0 = none)
+    // GL_TEXTURE_2D_ARRAY of perspective depth maps, and the rain's occlusion map (0 = none)
     GLuint fog_punctual_shadow_maps;
     int fog_spot_shadow_layer; // Which layer of it holds this spot
 

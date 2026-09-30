@@ -2089,6 +2089,14 @@ void shadow_publish_to_postfx(const Scene* scene, PostFX* fx) {
         fx->fog_spot_shadow_layer = sp->shadow_layer;
         fx->fog_spot_shadowed = true;
     }
+    // The rain's cover rides the same array (spec 13.9), and like the surfaces' it is NOT
+    // gated on `enabled`: switching shadows off does not put a roof over the street.
+    fx->rain_cover_layer = -1;
+    if (ss && ss->rain_layer >= 0 && ss->punctual_map_array) {
+        fx->rain_cover_layer = ss->rain_layer;
+        glm_mat4_copy(ss->rain_lookup, fx->rain_cover_matrix);
+        fx->fog_punctual_shadow_maps = ss->punctual_map_array;
+    }
 
     // Publishing count 0 with a zero array handle is the single "no
     // shadowed in-scatter" state consumers rely on: a nonzero count
