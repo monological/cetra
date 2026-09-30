@@ -75,9 +75,6 @@
 // enough to read.
 #define RAIN_STREAK_BRIGHTNESS 6.0f
 #define RAIN_STREAK_RADIUS     2.5f
-// And every drop catches more of the street's light than it would, so the rain reads all
-// through the fog and not only under the lamps.
-#define RAIN_STREAK_SHEEN 2.0f
 
 typedef struct SilentArgs {
     bool headless;
@@ -343,7 +340,6 @@ static void on_init(Game* game) {
             g_scene->rain->rate_mmh = g_args.rain_mmh;
             g_scene->rain->streak_brightness = RAIN_STREAK_BRIGHTNESS;
             g_scene->rain->streak_radius = RAIN_STREAK_RADIUS;
-            g_scene->rain->streak_sheen = RAIN_STREAK_SHEEN;
             rain_settle(g_scene->rain);
         }
     }

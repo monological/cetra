@@ -41,7 +41,10 @@ Rain* create_rain(void) {
     // flashes; the rest is smoothed by the drop's own blur and the lens's. A judgement, not
     // a measurement: the energy is the same at any value.
     rain->streak_glint = 0.8f;
-    rain->streak_sheen = 0.0f;
+    // Rain that reads everywhere, not only where a lamp lights it: the physical answer (0)
+    // leaves a night scene's rain invisible outside its lamps, which is true and is not what
+    // a scene asking for rain wants.
+    rain->streak_sheen = 2.0f;
     return rain;
 }
 
