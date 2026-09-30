@@ -3138,6 +3138,10 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
             // all four -- flat scopes mean the coarser wrapper simply wins.
             render_shadow_depth_pass(engine, shadow_scene);
         }
+        // The rain's cover, into the punctual array after the lights' layers. Outside the
+        // `enabled` gate on purpose: that switches shadows off, not roofs.
+        if (shadow_scene)
+            shadow_render_rain_layer(engine, shadow_scene);
 
         glBindFramebuffer(GL_FRAMEBUFFER, engine->framebuffer);
         // The scene target is supersampled; the present pass left the viewport

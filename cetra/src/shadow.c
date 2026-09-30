@@ -1,4 +1,5 @@
 
+#include <stdio.h> // shadow_rain_probe prints to stdout, like the other probes
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -17,6 +18,7 @@
 #include "intersect.h"
 #include "shadow.h"
 #include "ies.h"
+#include "rain.h"
 #include "profiler.h"
 #include "texture.h"
 #include "render.h"
@@ -155,6 +157,9 @@ ShadowSystem* create_shadow_system(int default_map_size) {
     for (int i = 0; i < MAX_PUNCTUAL_SHADOW_LAYERS; i++) {
         glm_mat4_identity(system->punctual_matrices[i]);
     }
+    system->rain_layer = -1;
+    glm_mat4_identity(system->rain_matrix);
+    glm_mat4_identity(system->rain_lookup);
 
     system->shadow_bias = 0.005f;
 
@@ -229,19 +234,25 @@ static int punctual_size_for(int layers) {
     return PUNCTUAL_SHADOW_MIN_SIZE;
 }
 
-// Grow the punctual array to hold `layers` maps. Demand-driven, like the
-// cascade array: a spot-only scene builds one layer rather than the pool
-// ceiling, since every allocated layer is a scene traversal per frame.
+// Grow the punctual array to hold `layers` maps, `light_layers` of them the
+// lights'. Demand-driven, like the cascade array: a spot-only scene builds one
+// layer rather than the pool ceiling, since every allocated layer is a scene
+// traversal per frame.
 //
 // The size is part of what "grow" means here. A scene that gains a point light
 // goes from one layer to seven, and seven layers do not fit at the edge one
 // affords -- so the rebuild is triggered by EITHER a larger layer count or a
 // size the budget no longer allows, not by the count alone.
-static int init_punctual_shadow_array(ShadowSystem* system, int layers) {
-    if (layers < 1 || layers > MAX_PUNCTUAL_SHADOW_LAYERS)
+//
+// The edge comes from the LIGHT layers only. The rain's layer draws into a fixed
+// corner, so letting it count would halve a lone spot's resolution the moment it
+// started raining; with no light layers at all the edge is the minimum, which is
+// all the rain's corner needs.
+static int init_punctual_shadow_array(ShadowSystem* system, int layers, int light_layers) {
+    if (layers < 1 || layers > PUNCTUAL_ARRAY_LAYERS)
         return -1;
 
-    int size = punctual_size_for(layers);
+    int size = light_layers > 0 ? punctual_size_for(light_layers) : PUNCTUAL_SHADOW_MIN_SIZE;
     if (system->punctual_map_array && system->punctual_allocated_layers >= layers &&
         system->punctual_map_size == size)
         return 0;
@@ -544,6 +555,11 @@ void bind_shadow_maps_to_program(ShadowSystem* system, ShaderProgram* program) {
                                (const GLfloat*)system->punctual_matrices);
         uniform_set_float(u, "punctualShadowMapSize", (float)system->punctual_map_size);
     }
+    // The rain's cover rides the same array (spec 13.9), and is NOT gated on `on`:
+    // switching shadows off does not put a roof over the street.
+    uniform_set_int(u, "rainOcclusionLayer", system->rain_layer);
+    if (system->rain_layer >= 0)
+        uniform_set_mat4(u, "rainOcclusionMatrix", (const float*)system->rain_lookup);
 
     uniform_set_int(u, "numShadowLights", directional_on ? (int)system->directional_count : 0);
     if (!directional_on)
@@ -1451,6 +1467,7 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     // anywhere between here and there leaves the shader's bound at 0.
     ss->directional_count = 0;
     ss->punctual_layer_count = 0;
+    ss->punctual_light_layers = 0;
     // Cleared up front so every early return below leaves the lookup on the
     // depth array. Like punctual_layer_count above, this is what the pass
     // actually produced, not what was asked for.
@@ -1493,6 +1510,7 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
         light->shadow_layer = punctual_needed;
         punctual_needed += want;
     }
+    ss->punctual_light_layers = punctual_needed;
 
     // Latched so a misconfigured scene reports once rather than every frame,
     // and re-arms if the overflow clears. Named, because the alternative is a
@@ -1744,7 +1762,14 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     // Punctual maps (for surface shadows + the volumetric beam), one layer per
     // caster. Reuses the allocation (a no-op once it is large enough), the
     // bound depth program, and the depth policy set above.
-    if (punctual_needed > 0 && init_punctual_shadow_array(ss, punctual_needed) == 0) {
+    //
+    // The capacity asked for includes the rain's layer, and must: the rain pass
+    // after this one asks for the same count, and asking for fewer here would
+    // rebuild the array between the two -- wiping the lights' maps -- on every
+    // frame it rains.
+    const int rain_layers = rain_active(scene->rain) ? 1 : 0;
+    if (punctual_needed > 0 &&
+        init_punctual_shadow_array(ss, punctual_needed + rain_layers, punctual_needed) == 0) {
         profiler_scope_begin(engine->profiler, "shadow punctual");
         for (size_t i = 0; i < scene->light_count; ++i) {
             Light* light = scene->lights[i];
@@ -1800,6 +1825,167 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     profiler_scope_end(engine->profiler);
 
     glViewport(prev_viewport[0], prev_viewport[1], prev_viewport[2], prev_viewport[3]);
+}
+
+// Half the depth the rain's map spans along the rain's travel, either side of the
+// camera. A tower above and a cellar below both fit, and 500 m in 24 bits is 30
+// microns a step, so the reach costs no resolution worth having.
+#define RAIN_OCCLUSION_REACH 250.0f
+
+// How far above the surface the map holds a point may sit and still count as open
+// sky, in metres. The map stores the surface nearest the sky, so a point ON that
+// surface compares equal to it, give or take the depth offset the pass renders with.
+#define RAIN_EXPOSED_BIAS 0.02f
+
+void shadow_render_rain_layer(Engine* engine, Scene* scene) {
+    if (!engine || !scene || !scene->shadow_system)
+        return;
+    ShadowSystem* ss = scene->shadow_system;
+    ss->rain_layer = -1;
+    const Rain* rain = scene->rain;
+    if (!rain_active(rain) || !engine->camera || !(rain->occlusion_extent > 0.0f))
+        return;
+
+    // Past every light layer, and the same capacity the shadow pass asked for, so this
+    // is a no-op allocation on any frame after the first. With shadows off no light
+    // layer exists and the rain has the array to itself.
+    const int layer = ss->enabled ? ss->punctual_light_layers : 0;
+    if (init_punctual_shadow_array(ss, layer + 1, layer) != 0)
+        return;
+    if (!ss->depth_program) {
+        ss->depth_program = engine_get_program(engine, "shadow_depth");
+        if (!ss->depth_program)
+            return;
+    }
+    // A stamp compare when the shadow pass built it; the build when shadows are off.
+    engine_build_draw_list(engine, scene);
+
+    /*
+     * Looking along the rain, from the origin, so the camera's position in that view
+     * can be SNAPPED to the texel grid before the box is placed around it. The grid is
+     * then fixed in the world rather than riding the camera, and cover does not crawl
+     * along a roof edge as the player walks.
+     */
+    vec3 dir = GLM_VEC3_ZERO_INIT, up = GLM_VEC3_ZERO_INIT;
+    rain_fall_direction(rain, dir);
+    light_space_up(dir, up);
+    mat4 view, proj;
+    glm_lookat((vec3){0.0f, 0.0f, 0.0f}, dir, up, view);
+    vec4 c;
+    const float* eye = engine->camera->position;
+    glm_mat4_mulv(view, (vec4){eye[0], eye[1], eye[2], 1.0f}, c);
+    const float half = 0.5f * rain->occlusion_extent;
+    const float texel = rain->occlusion_extent / (float)RAIN_OCCLUSION_SIZE;
+    const float cx = floorf(c[0] / texel) * texel;
+    const float cy = floorf(c[1] / texel) * texel;
+    glm_ortho(cx - half, cx + half, cy - half, cy + half, -c[2] - RAIN_OCCLUSION_REACH,
+              -c[2] + RAIN_OCCLUSION_REACH, proj);
+    glm_mat4_mul(proj, view, ss->rain_matrix);
+
+    // The map fills the layer's corner, so a lookup's [0,1] has to land in [0,k]: NDC
+    // x -> k x + (k - 1), and the same in y. Depth is untouched.
+    const float k = (float)RAIN_OCCLUSION_SIZE / (float)ss->punctual_map_size;
+    mat4 corner = GLM_MAT4_IDENTITY_INIT;
+    corner[0][0] = k;
+    corner[1][1] = k;
+    corner[3][0] = k - 1.0f;
+    corner[3][1] = k - 1.0f;
+    glm_mat4_mul(corner, ss->rain_matrix, ss->rain_lookup);
+
+    GLint prev_viewport[4];
+    glGetIntegerv(GL_VIEWPORT, prev_viewport);
+    profiler_scope_begin(engine->profiler, "rain occlusion");
+    // The shadow pass's depth policy, for its reason: store the surface nearest the
+    // sky and let the lookup's bias absorb the rest.
+    glCullFace(GL_BACK);
+    glEnable(GL_POLYGON_OFFSET_FILL);
+    glPolygonOffset(SHADOW_DEPTH_SLOPE_BIAS, SHADOW_DEPTH_CONSTANT_BIAS);
+    glUseProgram(ss->depth_program->id);
+    engine_upload_displacement_uniforms(engine, scene, ss->depth_program->uniforms);
+    SubmitState state = {0};
+    submit_use_program(&state, ss->depth_program->id);
+    if (begin_depth_layer(ss->punctual_fbo, ss->punctual_map_array, layer, ss->punctual_map_size)) {
+        glViewport(0, 0, RAIN_OCCLUSION_SIZE, RAIN_OCCLUSION_SIZE);
+        // Glass is in the opaque set, and should be: a glass roof keeps the rain off.
+        draw_shadow_layer(ss, scene, scene->draw_list, ss->rain_matrix, &state,
+                          SHADOW_CASTERS_OPAQUE, engine);
+        ss->rain_layer = layer;
+    }
+    glDisable(GL_POLYGON_OFFSET_FILL);
+    glPolygonOffset(0.0f, 0.0f);
+    glUseProgram(0);
+    glBindVertexArray(0);
+    glViewport(prev_viewport[0], prev_viewport[1], prev_viewport[2], prev_viewport[3]);
+    profiler_scope_end(engine->profiler);
+}
+
+// A greyscale PPM of the map, stretched over the depths it actually holds: the whole
+// scene spans a few metres of a 500 m range, which is flat grey unstretched. Cleared
+// texels -- nothing there -- stay white.
+static void _write_rain_map(const float* depth, int n, const char* path) {
+    float lo = 1.0f, hi = 0.0f;
+    for (int i = 0; i < n * n; i++) {
+        if (depth[i] < 1.0f) {
+            lo = fminf(lo, depth[i]);
+            hi = fmaxf(hi, depth[i]);
+        }
+    }
+    FILE* f = fopen(path, "wb");
+    if (!f) {
+        log_warn("rain-probe: cannot write '%s'", path);
+        return;
+    }
+    fprintf(f, "P6\n%d %d\n255\n", n, n);
+    const float span = hi > lo ? hi - lo : 1.0f;
+    for (int y = n - 1; y >= 0; y--) { // GL rows run bottom-up
+        for (int x = 0; x < n; x++) {
+            const float d = depth[y * n + x];
+            const unsigned char g =
+                d >= 1.0f ? 255 : (unsigned char)(40.0f + 200.0f * (d - lo) / span);
+            const unsigned char px[3] = {g, g, g};
+            fwrite(px, 1, 3, f);
+        }
+    }
+    fclose(f);
+}
+
+void shadow_rain_probe(const ShadowSystem* ss, const vec3* points, int count,
+                       const char* image_path) {
+    if (!ss || ss->rain_layer < 0 || !ss->punctual_map_array) {
+        printf("rain-probe cover present=0\n");
+        return;
+    }
+    const int n = RAIN_OCCLUSION_SIZE;
+    float* depth = malloc((size_t)n * (size_t)n * sizeof(float));
+    if (!depth)
+        return;
+    glBindFramebuffer(GL_FRAMEBUFFER, ss->punctual_fbo);
+    glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, ss->punctual_map_array, 0,
+                              ss->rain_layer);
+    glReadPixels(0, 0, n, n, GL_DEPTH_COMPONENT, GL_FLOAT, depth);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    const float bias = RAIN_EXPOSED_BIAS / (2.0f * RAIN_OCCLUSION_REACH);
+    printf("rain-probe cover present=1 layer=%d size=%d edge=%d bias=%.9g\n", ss->rain_layer, n,
+           ss->punctual_map_size, (double)bias);
+    for (int i = 0; i < count; i++) {
+        vec4 p;
+        glm_mat4_mulv((vec4*)ss->rain_matrix,
+                      (vec4){points[i][0], points[i][1], points[i][2], 1.0f}, p);
+        const float u = p[0] * 0.5f + 0.5f, v = p[1] * 0.5f + 0.5f, z = p[2] * 0.5f + 0.5f;
+        const bool inside = u >= 0.0f && u < 1.0f && v >= 0.0f && v < 1.0f;
+        printf("rain-probe exposure x=%.9g y=%.9g z=%.9g inside=%d", (double)points[i][0],
+               (double)points[i][1], (double)points[i][2], inside ? 1 : 0);
+        if (inside) {
+            const float map = depth[(int)(v * (float)n) * n + (int)(u * (float)n)];
+            printf(" map=%.9g depth=%.9g exposed=%d", (double)map, (double)z,
+                   z <= map + bias ? 1 : 0);
+        }
+        printf("\n");
+    }
+    if (image_path)
+        _write_rain_map(depth, n, image_path);
+    free(depth);
 }
 
 // Flatten this frame's shadow casters + their lights into postfx's fog block.

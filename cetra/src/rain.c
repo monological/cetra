@@ -21,6 +21,10 @@ Rain* create_rain(void) {
     rain->puddle_fill_time = 90.0f;
     rain->puddle_drain_time = 900.0f;
     rain->puddle_coverage = 0.6f;
+    // A street's length either way of the player: past that the fog has taken most of
+    // the frame, and a 1024-texel map spent over it is 9.4 cm a texel -- under the
+    // overhang of an eave.
+    rain->occlusion_extent = 96.0f;
     return rain;
 }
 
@@ -41,6 +45,25 @@ float rain_puddle_target(const Rain* rain) {
     if (!rain || rain->rate_mmh <= 0.0f)
         return 0.0f;
     return rain->puddle_coverage * (1.0f - expf(-rain->rate_mmh / RAIN_RATE_REFERENCE));
+}
+
+// The state decays exponentially and never reaches zero, so "still wet" has a floor:
+// below a thousandth of a film nothing it drives is visible.
+#define RAIN_WET_FLOOR 1e-3f
+
+bool rain_active(const Rain* rain) {
+    return rain && (rain->rate_mmh > 0.0f || rain->wetness > RAIN_WET_FLOOR ||
+                    rain->puddle_level > RAIN_WET_FLOOR);
+}
+
+void rain_fall_direction(const Rain* rain, vec3 out) {
+    glm_vec3_copy((vec3){0.0f, -1.0f, 0.0f}, out);
+    if (!rain || !(rain->rate_mmh > 0.0f))
+        return;
+    const float fall = rain_terminal_velocity(rain_median_diameter(rain->rate_mmh));
+    vec3 v = {rain->wind[0], rain->wind[1] - fall, rain->wind[2]};
+    if (glm_vec3_norm(v) > 1e-6f)
+        glm_vec3_normalize_to(v, out);
 }
 
 // One exact step of a first-order approach to `target`: the closed form, so the

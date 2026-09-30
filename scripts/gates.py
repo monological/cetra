@@ -26857,6 +26857,17 @@ RAIN_FIXTURE = "rain_fixture.cscn"
 RAIN_TOL = 1e-5        # relative, float32 physics against its double twin
 RAIN_PACE_TOL = 1e-4   # absolute, one schedule sliced at 60 and at 30 fps
 RAIN_TICK_FRAMES = 60
+# Points on rain_fixture and whether rain reaches them. The roof spans x -4..4, z -7..-1
+# at 3 m, and the fixture's wind (1.5 m/s toward -z) against a 10 mm/h median drop's
+# 5.3 m/s fall carries the dry patch 0.84 m toward the wall. The last two points of the
+# first group sit half a metre either side of the roof's footprint, where a map rendered
+# straight down gives the OPPOSITE answer -- they are what holds the direction.
+RAIN_COVER_POINTS = [
+    ((0.0, 0.0, -4.0), False), ((-2.0, 0.0, -4.0), False), ((2.0, 0.0, -4.0), False),
+    ((0.0, 0.0, 4.0), True), ((-6.0, 0.0, 4.0), True), ((6.0, 0.0, 4.0), True),
+    ((0.0, 3.2, -4.0), True), ((0.0, 2.0, -11.25), True),
+    ((0.0, 0.0, -1.5), True), ((0.0, 0.0, -7.5), False),
+]
 
 
 def _rain_twin(rate):
@@ -26901,6 +26912,15 @@ def run_rain_gate(workdir):
                     frames, reads the same closed form at one second -- so the engine
                     advances the state once a frame on the frame's own clock, and a
                     settled scene lands exactly on the rate's steady state.
+      rain-exposure the occlusion map answers cover at ten points: dry under the roof on
+                    both ground halves, wet in the open, on the roof and on the wall the
+                    wind drives the rain at, and -- at the two points either side of the
+                    roof's footprint -- displaced along the wind, which a map rendered
+                    straight down gets backwards. A point 80 m out is off the map.
+      rain-tenant   the same ten answers and the same stored depths with the lamp CASTING,
+                    which puts its six cube faces ahead of the rain in the punctual array,
+                    and with shadows switched off, which leaves the rain alone in it. The
+                    layer moves (6, then 0); the cover does not.
     """
     scene = asset(RAIN_FIXTURE)
     if not os.path.exists(scene):
@@ -26977,6 +26997,42 @@ def run_rain_gate(workdir):
     print(f"  rain-tick {'PASS' if ok else 'FAIL'}  {detail}")
     if not ok:
         failures.append("rain-tick")
+
+    at = []
+    for (x, y, z), _ in RAIN_COVER_POINTS + [((80.0, 0.0, 0.0), None)]:
+        at += ["--rain-probe-at", f"{x},{y},{z}"]
+
+    def cover(scene_path, extra=()):
+        rows = _rain_rows(scene_path, extra=at + list(extra))
+        head = (rows.get("cover") or [{}])[0]
+        return head, rows.get("exposure", [])
+
+    head, pts = cover(scene)
+    wrong = [f"({p['x']:g},{p['y']:g},{p['z']:g})"
+             for p, (_, want) in zip(pts, RAIN_COVER_POINTS)
+             if p.get("inside") != 1.0 or bool(p.get("exposed")) != want]
+    off_map = len(pts) == len(RAIN_COVER_POINTS) + 1 and pts[-1].get("inside") == 0.0
+    ok = head.get("present") == 1.0 and not wrong and off_map
+    print(f"  rain-exposure {'PASS' if ok else 'FAIL'}  {len(RAIN_COVER_POINTS) - len(wrong)} of "
+          f"{len(RAIN_COVER_POINTS)} points answer as the geometry says (wrong: "
+          f"{', '.join(wrong) or 'none'}); the point 80 m out is "
+          f"{'off the map' if off_map else 'NOT off the map'}; layer "
+          f"{head.get('layer', float('nan')):g} of an array at {head.get('edge', float('nan')):g}^2")
+    if not ok:
+        failures.append("rain-exposure")
+
+    casting = os.path.join(workdir, "rain_casting.cscn")
+    cscn_copy(scene, casting, lambda s: s["lights"][0].update({"cast_shadows": True}))
+    runs = {"lamp casting": cover(casting), "shadows off": cover(scene, ["--no-shadows"])}
+    base = [(p.get("exposed"), p.get("map")) for p in pts]
+    same = {k: [(p.get("exposed"), p.get("map")) for p in v[1]] == base for k, v in runs.items()}
+    layers = {k: v[0].get("layer") for k, v in runs.items()}
+    ok = all(same.values()) and layers == {"lamp casting": 6.0, "shadows off": 0.0}
+    detail = "; ".join(f"{k}: layer {layers[k]:g}, cover and stored depth "
+                       f"{'identical' if same[k] else 'DIFFERENT'}" for k in runs)
+    print(f"  rain-tenant {'PASS' if ok else 'FAIL'}  {detail} (want layers 6 and 0)")
+    if not ok:
+        failures.append("rain-tenant")
     return failures
 
 

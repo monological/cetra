@@ -41,6 +41,16 @@
 #define PUNCTUAL_SHADOW_MAX_SIZE 4096
 // DEPTH_COMPONENT24 is one 4-byte texel, so this is layers * size^2 * 4.
 #define PUNCTUAL_SHADOW_VRAM_BUDGET (96u * 1024u * 1024u)
+// The punctual array's layer ceiling: the light pool plus ONE tenant, the rain's
+// occlusion map (spec 13.9), which rides here because pbr_frag has no unit to give it.
+// A layer of its own rather than one of the pool's, so rain never costs a light its
+// shadow, and the edge stays sized from the light layers alone so it never costs one
+// its resolution either -- which is why the array can exceed the budget by a layer.
+#define PUNCTUAL_ARRAY_LAYERS (MAX_PUNCTUAL_SHADOW_LAYERS + 1)
+// Edge of the rain's occlusion map, drawn into the corner of its layer whatever the
+// array's edge is. The minimum edge, so it always fits and never changes with the
+// light count -- cover known at 9.4 cm over the default 96 m.
+#define RAIN_OCCLUSION_SIZE PUNCTUAL_SHADOW_MIN_SIZE
 // Moment shadow maps (spec 11.22). Half the cascade edge, deliberately: the
 // whole claim of a filterable representation is that it survives being
 // averaged, so it does not need the depth array's texel density. The fog's ESM
@@ -258,7 +268,19 @@ typedef struct ShadowSystem {
     // UBO carries, so a pass that allocated but never drew must leave it 0
     // rather than point the lookup at an undrawn layer.
     int punctual_layer_count;
+    // Layers the lights ASKED for this frame, which is where the rain's layer goes: past
+    // every light layer, so no light's index can reach it. Stale while the system is
+    // off, since the pass that writes it does not run; the rain pass reads it only on.
+    int punctual_light_layers;
     bool punctual_pool_warned; // Latch so pool exhaustion logs once, not per frame
+
+    // The rain's occlusion map (spec 13.9): which layer holds it (-1 = none this frame),
+    // the matrix it was rendered with, and the matrix a lookup uses -- the same one with
+    // the corner it occupies folded in, since the map fills RAIN_OCCLUSION_SIZE of the
+    // layer rather than all of it.
+    int rain_layer;
+    mat4 rain_matrix;
+    mat4 rain_lookup;
 
     // Moment shadow maps (spec 11.22): a filterable RGBA16F copy of the depth
     // cascades, resolved after the depth pass and read in ONE tap where the
@@ -413,6 +435,19 @@ void bind_shadow_maps_to_program(ShadowSystem* system, ShaderProgram* program);
 
 // Main shadow rendering function
 void render_shadow_depth_pass(struct Engine* engine, struct Scene* scene);
+
+// The rain's occlusion map: an orthographic depth along the rain's travel, centred on
+// the camera, into its own layer of the punctual array. After render_shadow_depth_pass
+// and regardless of the system's `enabled`, which switches SHADOWS off and not cover.
+// Leaves rain_layer -1 when the scene has no active rain.
+void shadow_render_rain_layer(struct Engine* engine, struct Scene* scene);
+
+// --rain-probe's cover half: for each point, the depth the map holds along the rain and
+// the point's own, and whether the point is exposed. Writes the map as a greyscale PPM
+// when `image_path` is set. Reads the layer back, so it needs the GL context and a
+// frame that rendered one.
+void shadow_rain_probe(const ShadowSystem* system, const vec3* points, int count,
+                       const char* image_path);
 
 struct PostFX;
 
