@@ -33,6 +33,7 @@
 #define KIT_MAX_MATERIALS 64
 #define KIT_MAX_OPENINGS  6
 #define KIT_COLLIDER_ONLY (-1) // a material slot that draws nothing and always collides
+#define KIT_MAX_POINTS    32   // in a pipe's path or a lathe's profile
 
 typedef struct Kit {
     Material* materials[KIT_MAX_MATERIALS];
@@ -139,6 +140,19 @@ void kit_frame_prism(Kit* kit, const KitFrame* f, int mat, float a, float d, flo
 // A bar lying along the wall, from a0 to a1 at height y and distance d.
 void kit_frame_bar(Kit* kit, const KitFrame* f, int mat, float a0, float a1, float y, float d,
                    float r);
+/*
+ * The two SMOOTH solids, for what must read as round and polished rather than
+ * faceted -- a pot, a tap. Points are (a, y, d); at most KIT_MAX_POINTS.
+ */
+// A round pipe of radius r along a polyline, capped both ends. A bend is a run
+// of close points; the pipe stays round through it.
+void kit_frame_pipe(Kit* kit, const KitFrame* f, int mat, const vec3* path, int count, float r,
+                    int sides);
+// A surface of revolution about the upright through (a, d), from {radius,
+// height above y} points listed bottom to top up the outside. A radius of 0
+// closes it on the axis; a turn sharper than 60 degrees is a crease.
+void kit_frame_lathe(Kit* kit, const KitFrame* f, int mat, float a, float d, float y,
+                     const vec2* profile, int count, int sides);
 
 // Builds one mesh per used material under a node on the scene root.
 SceneNode* kit_finish(Kit* kit, const char* name);

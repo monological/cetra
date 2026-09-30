@@ -102,16 +102,21 @@ static void face_frame(const vec3 n, vec3 t, vec3 b) {
     glm_vec3_cross((float*)n, t, b);
 }
 
-// `grime` is 0..1; a builder without colours ignores it.
-static unsigned int face_vertex(Kit* kit, int mat, const vec3 p, const vec3 n, const vec3 t,
-                                const vec3 b, float grime) {
-    const float inv = 1.0f / kit->repeat_m[mat];
-    const float u = glm_vec3_dot((float*)p, (float*)t) * inv;
-    const float v = glm_vec3_dot((float*)p, (float*)b) * inv;
+// `grime` is 0..1; a builder without colours ignores it. UVs in repeats.
+static unsigned int kit_vertex(Kit* kit, int mat, const vec3 p, const vec3 n, const vec3 t, float u,
+                               float v, float grime) {
     const float rgba[4] = {1.0f + (GRIME_TINT[0] - 1.0f) * grime,
                            1.0f + (GRIME_TINT[1] - 1.0f) * grime,
                            1.0f + (GRIME_TINT[2] - 1.0f) * grime, 1.0f};
     return mb_vertex(&kit->builders[mat], p, n, t, u, v, u, v, rgba);
+}
+
+// A vertex of a flat face, UV'd by projecting onto the face's planar frame.
+static unsigned int face_vertex(Kit* kit, int mat, const vec3 p, const vec3 n, const vec3 t,
+                                const vec3 b, float grime) {
+    const float inv = 1.0f / kit->repeat_m[mat];
+    return kit_vertex(kit, mat, p, n, t, glm_vec3_dot((float*)p, (float*)t) * inv,
+                      glm_vec3_dot((float*)p, (float*)b) * inv, grime);
 }
 
 static bool slot_ok(const Kit* kit, int mat) {
@@ -386,6 +391,184 @@ void kit_prism_lying(Kit* kit, int mat, const vec3 centre, float half_len, float
     prism_between(kit, mat, end0, end1, ax, 1, along_x ? 2 : 0, r, sides);
 }
 
+/*
+ * Smooth surfaces, for the few things the eye knows are round and polished --
+ * a pot, a tap. Everything else in the kit is faceted on purpose; these carry
+ * a normal per vertex, so a surface of a few dozen sides shades as a curve.
+ * A surface is built as rings of sides + 1 vertices, the last repeating the
+ * first so the texture's U can run on past the seam instead of wrapping back.
+ */
+#define KIT_MAX_SIDES 64
+
+typedef struct Ring {
+    unsigned int idx[KIT_MAX_SIDES + 1];
+    vec3 p[KIT_MAX_SIDES + 1];
+    vec3 n[KIT_MAX_SIDES + 1];
+} Ring;
+
+/*
+ * A ring about `centre` in the plane of u and w. Each vertex's normal is its
+ * radial direction weighted `nr` plus `axis` weighted `na`, which is how a
+ * lathe's profile tilts it; U runs round the ring `u_scale` per radian.
+ */
+static void make_ring(Kit* kit, int mat, Ring* ring, const vec3 centre, const vec3 axis,
+                      const vec3 u, const vec3 w, float r, float nr, float na, float u_scale,
+                      float v, int sides) {
+    for (int j = 0; j <= sides; j++) {
+        const float a = (float)j / (float)sides * 2.0f * GLM_PIf;
+        vec3 radial, t;
+        glm_vec3_scale((float*)u, cosf(a), radial);
+        glm_vec3_muladds((float*)w, sinf(a), radial);
+        glm_vec3_scale((float*)u, -sinf(a), t);
+        glm_vec3_muladds((float*)w, cosf(a), t);
+        glm_vec3_copy((float*)centre, ring->p[j]);
+        glm_vec3_muladds(radial, r, ring->p[j]);
+        glm_vec3_scale(radial, nr, ring->n[j]);
+        glm_vec3_muladds((float*)axis, na, ring->n[j]);
+        glm_vec3_normalize(ring->n[j]);
+        ring->idx[j] = kit_vertex(kit, mat, ring->p[j], ring->n[j], t, a * u_scale, v, 0.0f);
+    }
+}
+
+// One triangle across two rings: skipped where it has no area (a ring closed
+// to a point on its axis), and wound to agree with its corners' normals, so a
+// profile may run in either direction.
+static void ring_tri(Kit* kit, int mat, const Ring* a, int ja, const Ring* b, int jb, const Ring* c,
+                     int jc) {
+    vec3 cross = {0.0f, 0.0f, 0.0f}, n = {0.0f, 0.0f, 0.0f};
+    corner_cross(a->p[ja], b->p[jb], c->p[jc], cross);
+    if (glm_vec3_norm2(cross) < 1e-20f)
+        return;
+    glm_vec3_add((float*)a->n[ja], (float*)b->n[jb], n);
+    glm_vec3_add(n, (float*)c->n[jc], n);
+    if (glm_vec3_dot(cross, n) >= 0.0f)
+        mb_tri(&kit->builders[mat], a->idx[ja], b->idx[jb], c->idx[jc]);
+    else
+        mb_tri(&kit->builders[mat], a->idx[ja], c->idx[jc], b->idx[jb]);
+}
+
+static void ring_band(Kit* kit, int mat, const Ring* a, const Ring* b, int sides) {
+    for (int j = 0; j < sides; j++) {
+        ring_tri(kit, mat, a, j, a, j + 1, b, j + 1);
+        ring_tri(kit, mat, a, j, b, j + 1, b, j);
+    }
+}
+
+// A flat cap over a ring, facing `out`.
+static void ring_cap(Kit* kit, int mat, const Ring* ring, const vec3 centre, const vec3 out,
+                     int sides) {
+    for (int j = 0; j < sides; j++)
+        kit_tri_facing(kit, mat, centre, ring->p[j], ring->p[j + 1], out);
+}
+
+static bool points_ok(int count) {
+    if (count >= 2 && count <= KIT_MAX_POINTS)
+        return true;
+    fprintf(stderr, "silent: a path or profile needs 2 to %d points, not %d\n", KIT_MAX_POINTS,
+            count);
+    return false;
+}
+
+/*
+ * A round pipe along a polyline, capped both ends. Each ring faces along the
+ * average of the segments either side of its point, and its orientation is
+ * carried from ring to ring by parallel transport, so a bent pipe neither
+ * pinches at a joint nor twists along its length.
+ */
+static void pipe(Kit* kit, int mat, const vec3* path, int count, float r, int sides) {
+    const float inv = 1.0f / kit->repeat_m[mat];
+    Ring rings[2];
+    vec3 u = {0.0f, 0.0f, 0.0f}, t = {0.0f, 0.0f, 0.0f};
+    float len = 0.0f;
+    for (int i = 0; i < count; i++) {
+        const int behind = i > 0 ? i - 1 : 0, ahead = i < count - 1 ? i + 1 : count - 1;
+        glm_vec3_sub((float*)path[ahead], (float*)path[behind], t);
+        if (glm_vec3_norm2(t) < 1e-12f)
+            return;
+        glm_vec3_normalize(t);
+        if (i == 0) {
+            // Any direction off the axis starts the section; up unless the
+            // pipe sets off nearly upright.
+            const vec3 ref = {fabsf(t[1]) < 0.9f ? 0.0f : 1.0f, fabsf(t[1]) < 0.9f ? 1.0f : 0.0f,
+                              0.0f};
+            glm_vec3_cross(t, (float*)ref, u);
+        } else {
+            glm_vec3_muladds(t, -glm_vec3_dot(u, t), u);
+            len += glm_vec3_distance((float*)path[i], (float*)path[i - 1]);
+        }
+        glm_vec3_normalize(u);
+        vec3 w = {0.0f, 0.0f, 0.0f};
+        glm_vec3_cross(t, u, w);
+        Ring* ring = &rings[i & 1];
+        make_ring(kit, mat, ring, path[i], t, u, w, r, 1.0f, 0.0f, r * inv, len * inv, sides);
+        if (i == 0) {
+            vec3 back = {0.0f, 0.0f, 0.0f};
+            glm_vec3_negate_to(t, back);
+            ring_cap(kit, mat, ring, path[0], back, sides);
+        } else {
+            ring_band(kit, mat, &rings[(i - 1) & 1], ring, sides);
+        }
+    }
+    ring_cap(kit, mat, &rings[(count - 1) & 1], path[count - 1], t, sides);
+}
+
+/*
+ * The profile's normal where two segments meet is their average when they
+ * turn by less than this -- a rolled rim, a domed lid -- and each keeps its
+ * own where they turn by more, which is a crease: a pot's base meets its wall.
+ */
+#define LATHE_SMOOTH_COS 0.5f // 60 degrees
+
+// Segment k's outward normal in (radius, height): the profile runs up the
+// outside, so a rising wall faces out and a bottom running outward faces down.
+static void profile_normal(const vec2* profile, int k, vec2 out) {
+    out[0] = profile[k + 1][1] - profile[k][1];
+    out[1] = profile[k][0] - profile[k + 1][0];
+    glm_vec2_normalize(out);
+}
+
+// The normal the profile carries at point k of segment `seg`, smoothed with the
+// neighbouring segment `other` unless the turn between them is a crease.
+static void profile_joint(const vec2* profile, int count, int seg, int other, vec2 out) {
+    profile_normal(profile, seg, out);
+    if (other < 0 || other > count - 2)
+        return;
+    vec2 n = {0.0f, 0.0f};
+    profile_normal(profile, other, n);
+    if (glm_vec2_dot(out, n) > LATHE_SMOOTH_COS) {
+        glm_vec2_add(out, n, out);
+        glm_vec2_normalize(out);
+    }
+}
+
+/*
+ * A surface of revolution about the upright through `base`, from a profile of
+ * {radius, height above base} points. Every segment is its own band, so a
+ * crease costs nothing extra; a radius of 0 closes the surface on its axis.
+ */
+static void lathe(Kit* kit, int mat, const vec3 base, const vec2* profile, int count, int sides) {
+    const float inv = 1.0f / kit->repeat_m[mat];
+    float rmax = 0.0f, len = 0.0f;
+    for (int k = 0; k < count; k++)
+        rmax = glm_max(rmax, profile[k][0]);
+    const vec3 up = {0.0f, 1.0f, 0.0f}, x = {1.0f, 0.0f, 0.0f}, z = {0.0f, 0.0f, 1.0f};
+    for (int k = 0; k < count - 1; k++) {
+        Ring ends[2];
+        for (int e = 0; e < 2; e++) {
+            vec2 n = {0.0f, 0.0f};
+            profile_joint(profile, count, k, e == 0 ? k - 1 : k + 1, n);
+            vec3 centre;
+            glm_vec3_copy((float*)base, centre);
+            centre[1] += profile[k + e][1];
+            make_ring(kit, mat, &ends[e], centre, up, x, z, profile[k + e][0], n[0], n[1],
+                      rmax * inv, len * inv, sides);
+            if (e == 0)
+                len += glm_vec2_distance((float*)profile[k + 1], (float*)profile[k]);
+        }
+        ring_band(kit, mat, &ends[0], &ends[1], sides);
+    }
+}
+
 // One slab of a wall layer, between `a` and `b` along the wall and `y0`..`y1`.
 static void wall_slab(Kit* kit, const KitWall* w, int mat, float offset, float thick, float a,
                       float b, float y0, float y1) {
@@ -470,6 +653,29 @@ void kit_frame_bar(Kit* kit, const KitFrame* f, int mat, float a0, float a1, flo
     // The frames here are quarter turns, so "along the wall" is world X or Z.
     const bool along_x = fabsf(cosf(f->yaw)) > 0.5f;
     kit_prism_lying(kit, mat, p, 0.5f * fabsf(a1 - a0), r, 6, along_x);
+}
+
+static int clamp_sides(int sides) {
+    return sides < 3 ? 3 : sides > KIT_MAX_SIDES ? KIT_MAX_SIDES : sides;
+}
+
+void kit_frame_pipe(Kit* kit, const KitFrame* f, int mat, const vec3* path, int count, float r,
+                    int sides) {
+    if (!slot_ok(kit, mat) || !points_ok(count))
+        return;
+    vec3 world[KIT_MAX_POINTS] = {{0.0f}};
+    for (int i = 0; i < count; i++)
+        kit_frame_point(f, path[i][0], path[i][1], path[i][2], world[i]);
+    pipe(kit, mat, world, count, r, clamp_sides(sides));
+}
+
+void kit_frame_lathe(Kit* kit, const KitFrame* f, int mat, float a, float d, float y,
+                     const vec2* profile, int count, int sides) {
+    if (!slot_ok(kit, mat) || !points_ok(count))
+        return;
+    vec3 base = {0.0f, 0.0f, 0.0f};
+    kit_frame_point(f, a, y, d, base);
+    lathe(kit, mat, base, profile, count, clamp_sides(sides));
 }
 
 SceneNode* kit_finish(Kit* kit, const char* name) {

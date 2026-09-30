@@ -147,6 +147,11 @@ static const MatSpec SPECS[MAT_COUNT] = {
     [MAT_CARDBOARD] = {"cardboard", "Cardboard003", {0.85f, 0.80f, 0.70f}, 1.0f, 0.0f, 0.6f},
     // A washed-out green, glossy: the one saturated thing by the sink.
     [MAT_PLASTIC] = {"plastic", NULL, {0.30f, 0.42f, 0.26f}, 0.35f, 0.0f, 1.0f},
+    // The brushed scan with its roughness taken most of the way out: the
+    // steel that is handled and wiped, so it still shines. The scan averages
+    // about 0.3 linear, half what polished stainless reflects at normal
+    // incidence (about 0.6), so the tint doubles it.
+    [MAT_STAINLESS] = {"stainless", "Metal009", {2.0f, 2.0f, 2.0f}, 0.3f, 1.0f, 0.6f},
 };
 
 static Texture* load(TexturePool* pool, const char* set, const char* map, TextureDesc desc) {
