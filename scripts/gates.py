@@ -26900,8 +26900,10 @@ RAIN_COVER_POINTS = [
     ((0.0, 0.0, -1.5), True), ((0.0, 0.0, -7.5), False),
 ]
 RAIN_WATER_FIXTURE = "rain_water_fixture.cscn"
-# The wall the wind drives the rain at, 2 m up: exposed, and vertical, so it sheds.
-RAIN_WALL_POINT = (0.0, 2.0, -11.25)
+# The wall the wind drives the rain at, 2 m up: exposed, and vertical, so it sheds. A ROW,
+# because the puddle field varies only in x across a wall facing z, and one point can sit
+# where the field would hold no water even if the wall were level.
+RAIN_WALL_POINTS = [(x, 2.0, -11.25) for x in (-4.0, -3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 4.0)]
 # The ripple arm looks OUT from under the roof, 1.2 m up, with rings a metre across. The
 # covered water is then the nearest in frame, where a ring could not hide; from the fixture's
 # own camera that water is 13 m out, where rings have already faded into their own footprint
@@ -27237,7 +27239,7 @@ def run_rain_gate(workdir):
         return moved, total
 
     # Puddles against none, on the same soaked surfaces: rain_wet's frame is the puddled one.
-    still_points = [p for n, p in RAIN_WET_POINTS if n.startswith("covered")] + [RAIN_WALL_POINT]
+    still_points = [p for n, p in RAIN_WET_POINTS if n.startswith("covered")] + RAIN_WALL_POINTS
     unpooled = frame("unpooled", variant("unpooled", lambda s: s["rain"].update(
         {"streakCount": 0, "puddleCoverage": 0.0})), RAIN_LINEAR)
     frac, still_moved, still_total = 0.0, -1, 0
