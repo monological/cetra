@@ -503,8 +503,78 @@ static void fridge(Kit* kit, const KitFrame* f, KitRng* rng, float a0, float a1)
     jar(kit, f, rng, a0 + 0.45f, 0.35f, h + 0.04f, 0.05f, 0.12f);
 }
 
-// The outside wall on the right: a low sideboard with open shelves of jars
-// over it.
+/*
+ * A jar of homemade preserves, turned on the lathe so its glass bends light as
+ * a round jar does: shouldered clear glass filled nearly to them with something
+ * dark, under a screw cap or a paper or cloth cover tied round the neck, and a
+ * paper label on most.
+ */
+static void preserve_jar(Kit* kit, const KitFrame* f, KitRng* rng, float a, float d, float y,
+                         float r, float h) {
+    const float neck = r - 0.008f;
+    const vec2 shell[] = {{0.0f, 0.0f},   {r - 0.006f, 0.0f},          {r, 0.006f},
+                          {r, h - 0.02f}, {neck + 0.002f, h - 0.008f}, {neck, h}};
+    const int g = kit_rnd(rng) < 0.8f ? MAT_GLASS_CLEAR : MAT_GLASS_AMBER;
+    kit_frame_lathe(kit, f, g, a, d, y, shell, COUNT(shell), 20);
+
+    // Filled to below the shoulder, where the glass turns in past the fill.
+    const float fill = fminf(h * kit_rrange(rng, 0.7f, 0.9f), h - 0.024f);
+    const vec2 inside[] = {{0.0f, 0.004f},
+                           {r - 0.005f, 0.004f},
+                           {r - 0.004f, 0.01f},
+                           {r - 0.004f, fill},
+                           {0.0f, fill}};
+    const float pick = kit_rnd(rng);
+    const int fruit = pick < 0.4f ? MAT_JAM : (pick < 0.7f ? MAT_PLUM : MAT_PRUNE);
+    kit_frame_lathe(kit, f, fruit, a, d, y, inside, COUNT(inside), 20);
+
+    const float lid = kit_rnd(rng);
+    if (lid < 0.6f) {
+        const vec2 cap[] = {{neck + 0.001f, h - 0.006f},
+                            {neck + 0.003f, h - 0.004f},
+                            {neck + 0.003f, h + 0.01f},
+                            {neck + 0.001f, h + 0.012f},
+                            {0.0f, h + 0.012f}};
+        kit_frame_lathe(kit, f, MAT_STEEL, a, d, y, cap, COUNT(cap), 16);
+    } else {
+        // A cover pulled down over the neck and tied, its skirt flaring out.
+        const vec2 cover[] = {{neck + 0.012f, h - 0.022f},
+                              {neck + 0.003f, h - 0.01f},
+                              {neck + 0.004f, h + 0.002f},
+                              {neck - 0.002f, h + 0.01f},
+                              {0.0f, h + 0.012f}};
+        const vec2 string[] = {{neck + 0.0045f, h - 0.013f}, {neck + 0.0045f, h - 0.009f}};
+        kit_frame_lathe(kit, f, lid < 0.85f ? MAT_PAPER : MAT_TOWEL, a, d, y, cover, COUNT(cover),
+                        16);
+        kit_frame_lathe(kit, f, MAT_CARDBOARD, a, d, y, string, COUNT(string), 16);
+    }
+    if (kit_rnd(rng) < 0.45f) {
+        const vec2 label[] = {{r + 0.0012f, h * 0.36f}, {r + 0.0012f, h * 0.58f}};
+        kit_frame_lathe(kit, f, MAT_PAPER, a, d, y, label, COUNT(label), 20);
+    }
+}
+
+// A board of preserves from a0 to a1 at height y: two staggered rows, the
+// taller jars at the back, with the odd gap where one has been taken.
+static void preserves(Kit* kit, const KitFrame* f, KitRng* rng, float a0, float a1, float y) {
+    for (int row = 0; row < 2; row++) {
+        const float d = row == 0 ? 0.075f : 0.185f;
+        float a = a0 + (row == 0 ? 0.0f : 0.045f);
+        for (;;) {
+            const float r = kit_rrange(rng, 0.034f, 0.046f);
+            if (a + 2.0f * r > a1)
+                break;
+            const float h =
+                row == 0 ? kit_rrange(rng, 0.11f, 0.15f) : kit_rrange(rng, 0.08f, 0.12f);
+            if (kit_rnd(rng) > 0.1f)
+                preserve_jar(kit, f, rng, a + r, d, y, r, h);
+            a += 2.0f * r + kit_rrange(rng, 0.004f, 0.03f);
+        }
+    }
+}
+
+// The outside wall on the right: a low sideboard with open shelves of
+// preserves over it.
 static void shelf_wall(Kit* kit, KitRng* rng) {
     const KitFrame f = {{KITCHEN_X1, FLOOR_Y, KITCHEN_Z0 + COUNTER_D}, -0.5f * GLM_PIf};
     const float s1 = 1.5f;
@@ -517,13 +587,7 @@ static void shelf_wall(Kit* kit, KitRng* rng) {
         kit_frame_box(kit, &f, MAT_WOOD, 0.05f, s1, y, y + 0.03f, 0.0f, 0.26f, false);
         kit_frame_box(kit, &f, MAT_STEEL, 0.15f, 0.18f, y - 0.12f, y, 0.0f, 0.2f, false);
         kit_frame_box(kit, &f, MAT_STEEL, s1 - 0.18f, s1 - 0.15f, y - 0.12f, y, 0.0f, 0.2f, false);
-        for (float a = 0.12f; a < s1 - 0.08f; a += kit_rrange(rng, 0.11f, 0.2f)) {
-            if (kit_rnd(rng) < 0.7f)
-                jar(kit, &f, rng, a, 0.13f, y + 0.03f, kit_rrange(rng, 0.04f, 0.06f),
-                    kit_rrange(rng, 0.12f, 0.26f));
-            else
-                bottle(kit, &f, rng, a, 0.13f, y + 0.03f, kit_rrange(rng, 0.18f, 0.26f));
-        }
+        preserves(kit, &f, rng, 0.08f, s1 - 0.02f, y + 0.03f);
     }
     clutter(kit, &f, rng, 0.15f, s1 - 0.15f, 0.0f, 0.0f, COUNTER_TOP, 3);
 }
