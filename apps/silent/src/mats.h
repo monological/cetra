@@ -46,6 +46,8 @@ typedef enum {
     MAT_LAMP_POST,    // painted iron gone to rust
     MAT_POLE,         // creosoted wood utility poles
     MAT_CAR,          // faded maroon paint
+    MAT_CARDBOARD,    // old boxes on top of the cupboards
+    MAT_PLASTIC,      // a dish-soap bottle
     MAT_COUNT
 } MatId;
 

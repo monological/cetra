@@ -65,6 +65,9 @@ SOURCES = {
     # grey and lifted to an off-white the material tints.
     "Metal009": {"source": "ambientcg"},
     "PaintedMetal001": {"source": "ambientcg", "saturation": 0.0, "gain": 1.15},
+    # Old boxes on top of the cupboards, torn at the corners; greyed and
+    # darkened from new cardboard's yellow.
+    "Cardboard003": {"source": "ambientcg", "saturation": 0.7, "gain": 0.8},
     "Paper003": {"source": "ambientcg"},
     "Smear008": {"source": "ambientcg"},
 }

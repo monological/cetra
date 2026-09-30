@@ -144,6 +144,9 @@ static const MatSpec SPECS[MAT_COUNT] = {
     [MAT_LAMP_POST] = {"lamp_post", "metal_plate_02", {0.7f, 0.72f, 0.7f}, 1.0f, 0.6f, 1.0f},
     [MAT_POLE] = {"utility_pole", "old_wood_floor", {0.55f, 0.52f, 0.5f}, 1.0f, 0.0f, 1.5f},
     [MAT_CAR] = {"car_paint", "rusty_metal_02", {0.45f, 0.14f, 0.11f}, 0.6f, 0.0f, 1.2f},
+    [MAT_CARDBOARD] = {"cardboard", "Cardboard003", {0.85f, 0.80f, 0.70f}, 1.0f, 0.0f, 0.6f},
+    // A washed-out green, glossy: the one saturated thing by the sink.
+    [MAT_PLASTIC] = {"plastic", NULL, {0.30f, 0.42f, 0.26f}, 0.35f, 0.0f, 1.0f},
 };
 
 static Texture* load(TexturePool* pool, const char* set, const char* map, TextureDesc desc) {
