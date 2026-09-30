@@ -216,7 +216,13 @@ void rain_render_streaks(RainRenderer* rr, Engine* engine, Scene* scene,
 void rain_bind_surface(const Rain* rain, ShaderProgram* program) {
     if (!program || !program->uniforms)
         return;
-    uniform_set_float(program->uniforms, "rainWetness", rain ? rain->wetness : 0.0f);
-    uniform_set_float(program->uniforms, "rainDarkening",
-                      rain ? fmaxf(rain->wet_darkening, 0.0f) : 1.0f);
+    UniformManager* u = program->uniforms;
+    uniform_set_float(u, "rainWetness", rain ? rain->wetness : 0.0f);
+    uniform_set_float(u, "rainDarkening", rain ? fmaxf(rain->wet_darkening, 0.0f) : 1.0f);
+    uniform_set_float(u, "rainPuddleLevel", rain ? rain->puddle_level : 0.0f);
+    uniform_set_float(u, "rainPuddleScale", rain ? fmaxf(rain->puddle_scale, 0.01f) : 1.0f);
+    uniform_set_float(u, "rainTime", rain ? rain->time : 0.0f);
+    uniform_set_float(u, "rainRippleActivity", rain_ripple_activity(rain));
+    uniform_set_float(u, "rainRippleSize", rain ? fmaxf(rain->ripple_size, 0.01f) : 1.0f);
+    uniform_set_float(u, "rainRippleStrength", rain ? fmaxf(rain->ripple_strength, 0.0f) : 0.0f);
 }

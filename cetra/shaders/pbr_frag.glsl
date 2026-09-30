@@ -248,9 +248,39 @@ uniform float uShoreWetness;
 // carries the bit declares the rest -- a scene without rain compiles the source it always did.
 #if CETRA_HAS(PBR_FEAT_RAIN)
 #include "rain_occlusion.glsl"
+#include "rain_ripples.glsl"
 uniform float rainWetness; // 0..1, how soaked the world is; see Rain.wetness
 uniform float rainDarkening; // scale on the albedo terms; 1 = physical, see Rain.wet_darkening
 uniform float uPorosity;   // Material.porosity; -1 = derive it from the roughness
+uniform float rainPuddleLevel;    // 0..1, how much of the ground the puddles have claimed
+uniform float rainPuddleScale;    // metres across a typical puddle
+uniform float rainTime;           // seconds, the rain's clock
+uniform float rainRippleActivity; // 0..1, the fraction of ripple cells live; 0 = none
+uniform float rainRippleSize;     // metres across a ripple cell
+uniform float rainRippleStrength; // scale on the rings' tilt
+
+// Where the ground holds water, 0..1: two octaves of value noise over the ground plane. A
+// puddle forms where this is BELOW the level, so a rising level grows the existing puddles
+// and joins them rather than scattering new ones.
+float rainPuddleNoise(vec2 xz) {
+    vec2 p = xz / rainPuddleScale;
+    float n = 0.0;
+    float weight = 0.65;
+    for (int octave = 0; octave < 2; octave++) {
+        vec2 i = floor(p);
+        vec2 f = fract(p);
+        vec2 u = f * f * (3.0 - 2.0 * f);
+        const vec2 K = vec2(269.5, 183.3);
+        float a = hash21(i, K);
+        float b = hash21(i + vec2(1.0, 0.0), K);
+        float c = hash21(i + vec2(0.0, 1.0), K);
+        float d = hash21(i + vec2(1.0, 1.0), K);
+        n += weight * mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+        p = p * 2.7 + 13.1;
+        weight = 0.35;
+    }
+    return n;
+}
 #endif
 
 /*
@@ -1573,6 +1603,8 @@ void main() {
     float rainFilm = 0.0;
     if (rainWetness > 0.0) {
         vec3 Ng = normalize(Normal);
+        // Here, in control flow uniform over the draw, because the puddle test below is not.
+        float footprint = length(fwidth(WorldPos.xz));
         float wet = rainWetness * rainExposureSoft(WorldPos + Ng * RAIN_NORMAL_OFFSET,
                                                    6.2831853 * ign(gl_FragCoord.xy));
         // Rough is porous, the Lagarde mapping: gloss 0.5 and above is sealed, 0.1 fully open.
@@ -1581,6 +1613,26 @@ void main() {
         rainFilm = wet * smoothstep(RAIN_FILM_UP_MIN, RAIN_FILM_UP_FULL, Ng.y);
         wetSurface(albedoMap, roughnessMap, N, Ng, porosity * RAIN_POROSITY_DARKEN,
                    wet * (1.0 - metallicMap) * rainDarkening, rainFilm);
+
+        /*
+         * PUDDLES: where flat ground holds standing water. Water deep enough to cover the
+         * surface's own relief is a mirror lying flat, whatever the surface under it was
+         * doing -- so a puddle takes the geometric normal whole and a still water's
+         * roughness, and the rain rings it.
+         *
+         * Only on ground within a few degrees of level: a pitched roof or a kerb sheds.
+         */
+        float puddle = wet * smoothstep(RAIN_PUDDLE_FLAT_MIN, RAIN_PUDDLE_FLAT_FULL, Ng.y) *
+                       smoothstep(-RAIN_PUDDLE_RIM, 0.0,
+                                  rainPuddleLevel - rainPuddleNoise(WorldPos.xz));
+        if (puddle > 0.0) {
+            roughnessMap = mix(roughnessMap, RAIN_PUDDLE_ROUGHNESS, puddle);
+            N = normalize(mix(N, Ng, puddle));
+            vec2 ring = rainRippleSlope(WorldPos.xz, rainTime, rainRippleSize, rainRippleActivity,
+                                        footprint);
+            N = normalize(N + vec3(-ring.x, 0.0, -ring.y) * (rainRippleStrength * puddle));
+            rainFilm = max(rainFilm, puddle);
+        }
     }
 #endif
 

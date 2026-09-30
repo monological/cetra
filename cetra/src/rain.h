@@ -61,6 +61,11 @@ typedef struct Rain {
     float puddle_drain_time;
     // The ceiling on the puddle level, reached only in heavy rain. 0 = no puddles.
     float puddle_coverage;
+    float puddle_scale; // metres across a typical puddle
+    // The rings drops leave in standing water: how far each tilts the surface (1 = the
+    // default tilt, 0 = still water) and how far apart they land, in metres.
+    float ripple_strength;
+    float ripple_size;
     // Scale on how much wetting darkens a surface; 1 = physical, where soaked rough concrete
     // falls to about a quarter of its dry brightness. The film's shine is untouched. A look.
     float wet_darkening;
@@ -109,6 +114,10 @@ float rain_puddle_target(const Rain* rain);
 // True while rain falls or anything it left is still wet: what decides whether cover
 // has to be known this frame. NULL is false.
 bool rain_active(const Rain* rain);
+
+// The fraction of the ripple cells a drop lands in, 0..1: none when nothing falls, all of
+// them from moderate rain up.
+float rain_ripple_activity(const Rain* rain);
 
 // The unit direction the rain travels: the median drop's fall speed carried sideways
 // by the wind. Straight down when nothing falls.
