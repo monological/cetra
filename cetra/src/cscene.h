@@ -232,6 +232,8 @@ typedef struct CSceneRain {
     float rate; // mm/h
     bool has_wind;
     float wind[3]; // m/s
+    bool has_fall_scale;
+    float fall_scale;
     bool has_wet_time;
     float wet_time; // seconds, at RAIN_RATE_REFERENCE
     bool has_dry_time;

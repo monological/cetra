@@ -47,6 +47,10 @@ typedef struct Rain {
     // SETTINGS: plain stores. Write them directly, at any time.
     float rate_mmh; // rain rate in mm/h; 0 = no rain falls (the state still dries)
     vec3 wind;      // m/s; the horizontal air speed the drops are carried at
+    // Scale on how fast drops fall; 1 = their terminal velocity. Below 1 is gentler rain on
+    // screen -- slower and shorter streaks -- at the same rate, and it tilts the cover with
+    // the fall so what shelters is still what the drops miss. A look, not a measurement.
+    float fall_scale;
 
     // Time constants of the accumulated state, in seconds. Wetting and filling are
     // quoted at RAIN_RATE_REFERENCE and shorten in proportion to the rate; drying and
