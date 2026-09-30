@@ -15855,6 +15855,7 @@ def _gametest_probe(flag, rx, case, env=None, extra=None):
 # real simplification and costs re-indexing those eleven; spec 12.5 recorded it rather
 # than doing it, since nothing else in that group was being changed.
 _AUDIO_PROBE = re.compile(r"^audio (\w+) (\w+) rms (-?[\d.]+) (-?[\d.]+)$", re.M)
+_AUDIO_NOISE = re.compile(r"^audio noise (\w+) rms (-?[\d.]+) bright (-?[\d.]+)$", re.M)
 
 
 def _audio_probe_run(case, extra=None):
@@ -15899,6 +15900,10 @@ def run_audio_gate(workdir):
                      volume that does not route fails.
       audio-decode   a synthesized WAV loaded from a file decodes to energy -- the
                      file path with no committed asset.
+      audio-noise    each colour of procedural noise (spec 13.9) is loud, and the
+                     energy of its sample-to-sample difference against its own falls
+                     white > pink > brown, with white's near sqrt 2, which is what a
+                     flat spectrum gives -- colours swapped or collapsed to one fail.
     """
     if not os.path.exists(GAMETEST):
         print("  audio        SKIP  (gametest not built)")
@@ -15975,6 +15980,18 @@ def run_audio_gate(workdir):
               f"(want > 0.05)")
         if not ok:
             failures.append("audio-decode")
+
+    # --- audio-noise -----------------------------------------------------------
+    text, code = _gametest_probe_text("--audio-probe", "noise")
+    noise = {c: (float(r), float(b)) for c, r, b in _AUDIO_NOISE.findall(text)}
+    order = [noise.get(c, (0.0, float("nan")))[1] for c in ("white", "pink", "brown")]
+    ok = (code == 0 and len(noise) == 3 and all(r > 0.02 for r, _ in noise.values())
+          and order[0] > order[1] > order[2] and abs(order[0] - math.sqrt(2.0)) < 0.1)
+    detail = ", ".join(f"{c} rms {r:.4f} bright {b:.3f}" for c, (r, b) in noise.items())
+    print(f"  audio-noise  {'PASS' if ok else 'FAIL'}  {detail or 'nothing measured'} (want each "
+          f"loud, darker white > pink > brown, and white's near sqrt 2)")
+    if not ok:
+        failures.append("audio-noise")
 
     return failures
 
@@ -26926,6 +26943,10 @@ RAIN_SPLASH_ARM = {"splashRadius": 12.0, "splashSize": 3.0}
 RAIN_SPLASH_MIN = 0.0005
 # The fraction of a frame a feature has to move for it to count as there at all.
 RAIN_FEATURE_MIN = 0.01
+# The CPU cover query's points, one under the roof and one in the open, and enough frames for
+# its readback ring to have answered (three slots) several times over.
+RAIN_ASK_POINTS = [(0.0, 0.05, -4.5), (0.0, 0.05, 4.0)]
+RAIN_ASK_FRAMES = 8
 # Everything the rain draws in the air switched off, so a pair of frames differs only in what
 # lands on the surfaces.
 RAIN_SURFACES_ONLY = {"streakCount": 0, "splashCount": 0, "mist": 0.0}
@@ -27008,6 +27029,10 @@ def run_rain_gate(workdir):
                     wind drives the rain at, and -- at the two points either side of the
                     roof's footprint -- displaced along the wind, which a map rendered
                     straight down gets backwards. A point 80 m out is off the map.
+      rain-ask      the CPU cover query -- a texel read back through a ring at fixed
+                    latency, which is what a listener under a roof asks -- asked every frame
+                    at a point under the roof and at one in the open, answers as the exact
+                    readback of the same point does.
       rain-tenant   the same ten answers and the same stored depths with the lamp CASTING,
                     which puts its six cube faces ahead of the rain in the punctual array,
                     and with shadows switched off, which leaves the rain alone in it. The
@@ -27151,6 +27176,25 @@ def run_rain_gate(workdir):
           f"{head.get('layer', float('nan')):g} of an array at {head.get('edge', float('nan')):g}^2")
     if not ok:
         failures.append("rain-exposure")
+
+    # The CPU cover query, asked every frame as a listener asks it, against the exact readback
+    # of the same point: one under the roof and one in the open, so it has to say both.
+    asks = []
+    for point in RAIN_ASK_POINTS:
+        where = ",".join(f"{c:g}" for c in point)
+        rows = _rain_rows(scene, extra=["--rain-ask", where, "--rain-probe-at", where],
+                          frames=RAIN_ASK_FRAMES)
+        ask = (rows.get("ask") or [{}])[0]
+        exact = (rows.get("exposure") or [{}])[0]
+        asks.append((where, ask.get("answered"), ask.get("open"), exact.get("exposed")))
+    ok = (all(answered == 1.0 and open_ == exact for _, answered, open_, exact in asks)
+          and sorted(exact for *_, exact in asks) == [0.0, 1.0])
+    detail = "; ".join(f"({w}) answered {a:g}, open {o:g} against {e:g}" for w, a, o, e in asks
+                       if None not in (a, o, e)) or "no answer"
+    print(f"  rain-ask {'PASS' if ok else 'FAIL'}  {detail} (want answered, and the exact "
+          f"readback's answer: one covered, one open)")
+    if not ok:
+        failures.append("rain-ask")
 
     casting = os.path.join(workdir, "rain_casting.cscn")
     cscn_copy(scene, casting, lambda s: s["lights"][0].update({"cast_shadows": True}))
