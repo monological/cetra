@@ -133,6 +133,82 @@ static void pot(Kit* kit, const KitFrame* f, float a, float d, float y) {
     kit_frame_prism(kit, f, MAT_STEEL, a, d, y, y + 0.13f, 0.11f, 10);
 }
 
+// A frying pan with its handle reaching out toward the room.
+static void pan(Kit* kit, const KitFrame* f, float a, float d, float y) {
+    kit_frame_prism(kit, f, MAT_BLACK, a, d, y, y + 0.04f, 0.12f, 12);
+    kit_frame_box(kit, f, MAT_BLACK, a - 0.012f, a + 0.012f, y + 0.02f, y + 0.035f, d + 0.12f,
+                  d + 0.30f, false);
+}
+
+// A block of knives against the wall, a handle standing out of each slot.
+static void knife_block(Kit* kit, const KitFrame* f, float a, float d, float y) {
+    kit_frame_box(kit, f, MAT_WOOD, a - 0.05f, a + 0.05f, y, y + 0.22f, d - 0.07f, d + 0.07f,
+                  false);
+    for (int i = 0; i < 4; i++) {
+        const float ka = a - 0.03f + 0.02f * (float)i;
+        const float top = y + 0.30f + 0.025f * (float)(i & 1);
+        kit_frame_box(kit, f, MAT_BLACK, ka - 0.007f, ka + 0.007f, y + 0.22f, top, d - 0.015f,
+                      d + 0.015f, false);
+    }
+}
+
+// A knife lying along the wall: the blade from a0, the handle after it.
+static void knife(Kit* kit, const KitFrame* f, float a0, float d, float y) {
+    kit_frame_box(kit, f, MAT_STEEL, a0, a0 + 0.19f, y, y + 0.003f, d - 0.012f, d + 0.012f, false);
+    kit_frame_box(kit, f, MAT_BLACK, a0 + 0.19f, a0 + 0.30f, y, y + 0.018f, d - 0.01f, d + 0.01f,
+                  false);
+}
+
+static void cutting_board(Kit* kit, const KitFrame* f, float a0, float d0, float y) {
+    kit_frame_box(kit, f, MAT_WOOD, a0, a0 + 0.38f, y, y + 0.02f, d0, d0 + 0.26f, false);
+    knife(kit, f, a0 + 0.04f, d0 + 0.13f, y + 0.02f);
+}
+
+// A steel can of utensils, heads up: a plastic spatula and two wooden spoons.
+static void utensil_can(Kit* kit, const KitFrame* f, float a, float d, float y) {
+    kit_frame_prism(kit, f, MAT_STEEL, a, d, y, y + 0.16f, 0.055f, 10);
+    kit_frame_prism(kit, f, MAT_BLACK, a + 0.018f, d + 0.01f, y + 0.02f, y + 0.30f, 0.007f, 6);
+    kit_frame_box(kit, f, MAT_BLACK, a - 0.017f, a + 0.053f, y + 0.30f, y + 0.39f, d + 0.004f,
+                  d + 0.016f, false);
+    for (int i = 0; i < 2; i++) {
+        const float sa = a - 0.02f + 0.012f * (float)i, sd = d - 0.015f + 0.02f * (float)i;
+        const float top = y + 0.29f + 0.03f * (float)i;
+        kit_frame_prism(kit, f, MAT_WOOD, sa, sd, y + 0.02f, top, 0.007f, 6);
+        kit_frame_box(kit, f, MAT_WOOD, sa - 0.022f, sa + 0.022f, top, top + 0.06f, sd - 0.008f,
+                      sd + 0.008f, false);
+    }
+}
+
+// Bowls stacked, the top one with something left in it. A narrow foot under a
+// wide body, so the stack steps out as bowls do; straight sides read as a tin.
+static void bowls(Kit* kit, const KitFrame* f, float a, float d, float y, int count) {
+    for (int i = 0; i < count; i++) {
+        const float y0 = y + 0.028f * (float)i;
+        kit_frame_prism(kit, f, MAT_CERAMIC, a, d, y0, y0 + 0.016f, 0.045f, 12);
+        kit_frame_prism(kit, f, MAT_CERAMIC, a, d, y0 + 0.016f, y0 + 0.05f, 0.085f, 12);
+    }
+    const float top = y + 0.028f * (float)(count - 1) + 0.05f;
+    kit_frame_prism(kit, f, MAT_CONTENTS, a, d, top - 0.004f, top + 0.001f, 0.075f, 12);
+}
+
+// A towel over the counter's front edge at d_edge: along the top, and down.
+static void towel_over(Kit* kit, const KitFrame* f, float a0, float a1, float d_edge, float y) {
+    kit_frame_box(kit, f, MAT_TOWEL, a0, a1, y, y + 0.012f, d_edge - 0.2f, d_edge + 0.012f, false);
+    kit_frame_box(kit, f, MAT_TOWEL, a0, a1, y - 0.3f, y + 0.012f, d_edge, d_edge + 0.012f, false);
+}
+
+// Dish soap with its pump, and a bar on a dish beside it.
+static void soap(Kit* kit, const KitFrame* f, float a, float d, float y) {
+    kit_frame_prism(kit, f, MAT_PLASTIC, a, d, y, y + 0.15f, 0.03f, 8);
+    kit_frame_prism(kit, f, MAT_BLACK, a, d, y + 0.15f, y + 0.19f, 0.009f, 6);
+    kit_frame_box(kit, f, MAT_BLACK, a - 0.004f, a + 0.004f, y + 0.175f, y + 0.19f, d, d + 0.04f,
+                  false);
+    kit_frame_box(kit, f, MAT_CERAMIC, a + 0.06f, a + 0.18f, y, y + 0.012f, d - 0.04f, d + 0.04f,
+                  false);
+    kit_frame_box(kit, f, MAT_PAPER, a + 0.08f, a + 0.16f, y + 0.012f, y + 0.035f, d - 0.025f,
+                  d + 0.025f, false);
+}
+
 /*
  * Clutter along a counter: `count` things from the vocabulary above, spaced
  * so none overlap, and never over [skip0, skip1] -- a sink, say.
@@ -240,10 +316,32 @@ static void window_wall(Kit* kit, KitRng* rng) {
     kit_frame_box(kit, &f, MAT_TRIM, w0 - 0.1f, w1 + 0.1f, sill - 0.02f, sill + 0.02f,
                   -0.5f * EXT_WALL, 0.05f, false);
 
-    clutter(kit, &f, rng, 0.15f, len - 0.15f, SINK_A0 - 0.12f, SINK_A1 + 0.12f, COUNTER_TOP, 8);
-    // Something on top of each run of uppers.
-    bottle(kit, &f, rng, 0.3f, 0.15f, UPPER_Y1, 0.22f);
-    jar(kit, &f, rng, len - 0.35f, 0.18f, UPPER_Y1, 0.07f, 0.2f);
+    // The counter, laid out rather than scattered: knives and the utensils at
+    // the back left, the board with a knife on it, bowls, a towel over the edge
+    // by the sink, soap on the far side of it, plates drying, a mug, a pot.
+    const float y = COUNTER_TOP;
+    knife_block(kit, &f, 0.28f, 0.12f, y);
+    utensil_can(kit, &f, 0.55f, 0.12f, y);
+    cutting_board(kit, &f, 0.85f, 0.22f, y);
+    bowls(kit, &f, 1.55f, 0.32f, y, 3);
+    towel_over(kit, &f, 1.78f, 2.02f, COUNTER_D, y);
+    soap(kit, &f, SINK_A1 + 0.1f, 0.1f, y);
+    plates(kit, &f, SINK_A1 + 0.5f, 0.32f, y, 4);
+    mug(kit, &f, 3.95f, 0.18f, y);
+    pot(kit, &f, 4.35f, 0.3f, y);
+    bottle(kit, &f, rng, 4.7f, 0.12f, y, 0.22f);
+
+    // What gets put on top of the cupboards and forgotten: boxes, a pot, a
+    // tin, bottles.
+    const float top = UPPER_Y1;
+    kit_frame_box(kit, &f, MAT_CARDBOARD, 0.04f, 0.46f, top, top + 0.2f, 0.02f, 0.31f, false);
+    kit_frame_box(kit, &f, MAT_CARDBOARD, 0.1f, 0.38f, top + 0.2f, top + 0.31f, 0.05f, 0.27f,
+                  false);
+    pot(kit, &f, 0.66f, 0.17f, top);
+    bottle(kit, &f, rng, 0.95f, 0.14f, top, 0.2f);
+    kit_frame_prism(kit, &f, MAT_STEEL, 3.98f, 0.16f, top, top + 0.15f, 0.07f, 10);
+    kit_frame_box(kit, &f, MAT_CARDBOARD, 4.15f, 4.68f, top, top + 0.25f, 0.03f, 0.3f, false);
+    jar(kit, &f, rng, 4.78f, 0.16f, top, 0.05f, 0.16f);
 }
 
 static void fridge(Kit* kit, const KitFrame* f, KitRng* rng, float a0, float a1);
@@ -282,6 +380,7 @@ static void stove_wall(Kit* kit, KitRng* rng) {
     kit_frame_box(kit, &f, MAT_TOWEL, s0 + 0.2f, s0 + 0.44f, 0.36f, 0.73f, 0.672f, 0.68f, false);
     kit_frame_box(kit, &f, MAT_TOWEL, s0 + 0.2f, s0 + 0.44f, 0.71f, 0.745f, 0.64f, 0.68f, false);
     pot(kit, &f, s0 + 0.2f, 0.22f, COUNTER_TOP + 0.015f);
+    pan(kit, &f, s1 - 0.2f, 0.44f, COUNTER_TOP + 0.015f);
 
     // The hood: a canopy, a shoulder, and the duct to the ceiling.
     kit_frame_box(kit, &f, MAT_STEEL, s0 - 0.04f, s1 + 0.04f, 1.62f, 1.74f, 0.0f, 0.5f, false);

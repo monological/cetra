@@ -53,9 +53,11 @@ static const Tube TUBES[] = {
      true,
      false},
     {"tube_hood",
-     {KITCHEN_X0 + 0.3f, FLOOR_Y + 1.605f, STOVE_Z},
+     // On the canopy's front lip, tipped toward the room: the underside is at
+     // eye height, so a strip lying flat under it is never seen from the room.
+     {KITCHEN_X0 + 0.46f, FLOOR_Y + 1.605f, STOVE_Z},
      {0.0f, 0.0f, 1.0f},
-     {0.0f, -1.0f, 0.0f},
+     {0.6f, -0.8f, 0.0f},
      0.55f,
      0.03f,
      3500.0f,
