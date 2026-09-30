@@ -26910,10 +26910,13 @@ RAIN_WALL_POINTS = [(x, 2.0, -11.25) for x in (-4.0, -3.0, -2.0, -1.0, 0.0, 1.0,
 # and a cover that did nothing passes.
 RAIN_UNDER_ROOF_CAMERA = {"eye": [0.0, 1.2, -5.5], "target": [0.0, 0.0, 1.0], "fov": 70}
 RAIN_RING_SIZE = 1.0
-# Points on the covered water, clear of the dry patch's softened edge: the roof's footprint
-# carried 0.84 m toward the wall by the wind, less the cover's spread from 3 m up.
-RAIN_COVERED_WATER = [(x, 0.05, z) for x in (-1.0, 0.0, 1.0) for z in (-4.0, -3.4, -2.8)]
-RAIN_COVERED_GROUND = [(x, 0.0, z) for x, _, z in RAIN_COVERED_WATER]
+# A patch under the roof, x and z extents, clear of the dry patch's softened edge: the roof's
+# footprint carried 0.84 m toward the wall by the wind, less the cover's spread from 3 m up.
+# An arm counts every pixel of its image, because droplets are sparse, and a few points a box
+# wide let a splash under the roof land between them.
+RAIN_COVERED_PATCH = ((-1.5, 1.5), (-4.0, -2.8))
+# Fewer pixels than this in the patch's image and the arm could not see it at all.
+RAIN_COVERED_MIN_PX = 20000
 # The splash arm's own knobs, from the same camera: a square wide enough that the open ground
 # beyond the roof is well inside it rather than in its fade, and droplets big enough to read
 # five metres off.
@@ -27272,6 +27275,32 @@ def run_rain_gate(workdir):
                     total += 1
         return moved, total
 
+    def moved_in_patch(a_path, b_path, y):
+        """(pixels differing, pixels) in the screen rectangle inscribed in RAIN_COVERED_PATCH's
+        image at height y, from RAIN_UNDER_ROOF_CAMERA. Inscribed, so every pixel counted is
+        of the patch: its far edge is the narrower, and the rectangle takes that width."""
+        w, h, pa = _read_ppm(a_path)
+        _, _, pb = _read_ppm(b_path)
+        cam = RAIN_UNDER_ROOF_CAMERA
+        project = _projector({"eye": tuple(cam["eye"]), "target": tuple(cam["target"]),
+                              "fovy_deg": float(cam["fov"])}, w, h)
+        # Per edge of the patch, the pair of screen coordinates its two ends land on; the
+        # inscribed rectangle is the innermost of each. Whether +x lands left or right on screen
+        # is the camera's business, so neither is assumed.
+        (xa, xb), (za, zb) = RAIN_COVERED_PATCH
+        at = {(x, z): project((x, y, z)) for x in (xa, xb) for z in (za, zb)}
+        x0 = max(min(at[(xa, z)][0], at[(xb, z)][0]) for z in (za, zb))
+        x1 = min(max(at[(xa, z)][0], at[(xb, z)][0]) for z in (za, zb))
+        y0 = max(min(at[(x, za)][1], at[(x, zb)][1]) for x in (xa, xb))
+        y1 = min(max(at[(x, za)][1], at[(x, zb)][1]) for x in (xa, xb))
+        moved = total = 0
+        for py in range(max(0, int(math.ceil(y0))), min(h, int(y1))):
+            for px in range(max(0, int(math.ceil(x0))), min(w, int(x1))):
+                i = 3 * (py * w + px)
+                moved += pa[i:i + 3] != pb[i:i + 3]
+                total += 1
+        return moved, total
+
     # Puddles against none, on the same soaked surfaces: rain_wet's frame is the puddled one.
     still_points = [p for n, p in RAIN_WET_POINTS if n.startswith("covered")] + RAIN_WALL_POINTS
     unpooled = frame("unpooled", variant("unpooled", lambda s: s["rain"].update(
@@ -27307,16 +27336,12 @@ def run_rain_gate(workdir):
         w, h, _ = _read_ppm(splashed)
         ae, _ = compare(splashed, unsplashed)
         frac = ae / (w * h)
-        cam = RAIN_UNDER_ROOF_CAMERA
-        project = _projector({"eye": tuple(cam["eye"]), "target": tuple(cam["target"]),
-                              "fovy_deg": float(cam["fov"])}, w, h)
-        covered_moved, covered_total = moved_round(splashed, unsplashed, project,
-                                                   RAIN_COVERED_GROUND)
-    ok = (frac > RAIN_SPLASH_MIN and covered_total == 49 * len(RAIN_COVERED_GROUND)
+        covered_moved, covered_total = moved_in_patch(splashed, unsplashed, 0.0)
+    ok = (frac > RAIN_SPLASH_MIN and covered_total >= RAIN_COVERED_MIN_PX
           and covered_moved == 0)
     print(f"  rain-splashes {'PASS' if ok else 'FAIL'}  splashes move {frac:.2%} of the frame "
-          f"(want > {RAIN_SPLASH_MIN:.2%}) and {covered_moved} of {covered_total} pixels on the "
-          f"ground under the roof (want 0 of {49 * len(RAIN_COVERED_GROUND)})")
+          f"(want > {RAIN_SPLASH_MIN:.2%}) and {covered_moved} of {covered_total} pixels of the "
+          f"ground under the roof (want 0, of at least {RAIN_COVERED_MIN_PX})")
     if not ok:
         failures.append("rain-splashes")
 
@@ -27342,15 +27367,12 @@ def run_rain_gate(workdir):
         w, h, _ = _read_ppm(ringed)
         ae, _ = compare(ringed, calm)
         frac = ae / (w * h)
-        cam = RAIN_UNDER_ROOF_CAMERA
-        project = _projector({"eye": tuple(cam["eye"]), "target": tuple(cam["target"]),
-                              "fovy_deg": float(cam["fov"])}, w, h)
-        covered_moved, covered_total = moved_round(ringed, calm, project, RAIN_COVERED_WATER)
-    ok = (frac > RAIN_FEATURE_MIN and covered_total == 49 * len(RAIN_COVERED_WATER)
+        covered_moved, covered_total = moved_in_patch(ringed, calm, 0.05)
+    ok = (frac > RAIN_FEATURE_MIN and covered_total >= RAIN_COVERED_MIN_PX
           and covered_moved == 0)
     print(f"  rain-ripples {'PASS' if ok else 'FAIL'}  rings move {frac:.1%} of the frame (want > "
-          f"{RAIN_FEATURE_MIN:.0%}) and {covered_moved} of {covered_total} pixels on the water "
-          f"under the roof (want 0 of {49 * len(RAIN_COVERED_WATER)})")
+          f"{RAIN_FEATURE_MIN:.0%}) and {covered_moved} of {covered_total} pixels of the water "
+          f"under the roof (want 0, of at least {RAIN_COVERED_MIN_PX})")
     if not ok:
         failures.append("rain-ripples")
 
