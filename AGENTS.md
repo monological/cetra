@@ -606,6 +606,10 @@ entry there before changing anything marked with a dagger.
 - **Shadows:** `shadow_depth_vert/frag`, `catcher_vert/frag` (shadow-catcher ground)
 - **IBL:** `ibl_cubemap_vert`, `ibl_equirect_frag`, `ibl_irradiance_frag`, `ibl_prefilter_frag`, `ibl_charlie_prefilter_frag` (sheen env), `ibl_brdf_frag`
 - **Atmospheric sky:** `sky_transmittance/multiscatter/view/env/background/debug_frag`
+- **Overcast and the sky's scale †:** `include/sky_deck.glsl`, uploaded only by `sky_bind_deck`
+  (spec 13.7). A CIE overcast dome, and nits per unit of the sky's relative scale. Both are baked,
+  and both reach the shaders as numbers already weighted, so a clear relative sky is the old
+  arithmetic exactly
 - **Day/night cycle †:** `sky_cycle_tick`, split into `sky_cycle_advance` + `sky_slicer_pump`;
   called from `engine.c` before the GI sweep and the shadow pass
 - **The moon †:** `include/moon.glsl` + one guarded block in `include/sky_radiance.glsl`, over the
@@ -1166,6 +1170,12 @@ speeds.
   multiple-scattering (32x32), and sky-view (192x108, re-baked when the sun moves) LUTs.
   Feeds the skybox, IBL, reflection probe, and fog; couples the directional key light
   via atmospheric transmittance.
+  - **Scale:** RELATIVE by default, about four decades under a real sun, and
+    `radiance_scale = SKY_PHOTOMETRIC_SCALE` puts it in nits beside photometric lights.
+  - **What takes the scale:** everything the sun drives. The night floor, the stars and the moon
+    are absolute, so a night frame is the same on either scale.
+  - **Overcast:** `overcast` (0..1) lays a CIE overcast dome under a deck the sun cannot get
+    through (spec 13.7).
 - **Reflection probes:** local prefiltered cubemaps with parallax-corrected AABBs
   (Lagarde 2012); consumed as PBR specular and as the SSR ray-miss fallback. **Needs a
   precomputed IBL to be created at all**, so `--probe-scene` on a scene with no `-e` and

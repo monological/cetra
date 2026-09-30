@@ -15,8 +15,8 @@ reason is recorded beside the flag rather than in whichever spec introduced it.
 - [apps/tree](#appstree) — its own flag set, and two defaults that read as bugs
 - [apps/forest](#appsforest) — instancing, LOD, culling, the island, erosion, streaming, origin
   shifting
-- [apps/silent](#appssilent) — the fog-street kitchen: framing, the look's A/B switches, and a
-  day mode that is parked
+- [apps/silent](#appssilent) — the fog-street kitchen: framing, the look's A/B switches, and its
+  overcast day
 - [The other apps](#the-other-apps-and-the-aa-mode-each-one-chose) — gametest, spores,
   shapes, pcb, and why splash is not in any of this
 
@@ -177,7 +177,9 @@ Gerstner `cpu_h=` is the closed form beside it at the instant that answer descri
 `WATER_PROBE_LATENCY` (2) passes late, so fewer than three frames prints `available=0
 reason=unfilled`. `--no-water-coverage` is the bisect lever for the shoreline's derivative coverage
 and reaches the pre-11.33 frame),
-`--film`, `--sky` (`--sun-elevation`, `--sun-azimuth`, `--sky-debug`), `-e/--env <hdr>`,
+`--film`, `--sky` (`--sun-elevation`, `--sun-azimuth`, `--sky-debug`; `--overcast <0..1>`,
+`--sky-scale <f|photometric>` and `--sky-probe`, spec 13.7, whose entries in
+`docs/shader-subsystems.md` say what each changes), `-e/--env <hdr>`,
 `--world-scale <units-per-km>` (atmosphere scale; 1000 = 1 unit is 1 metre), `--no-aerial`,
 `--no-cloud-shadows` (spec 11.39 — the deck casts into the froxel fog by default whenever
 `--clouds` is on, because a cloud that casts nothing is wrong rather than un-featured.
@@ -818,10 +820,13 @@ warning. `--fov <deg>` is the vertical field of view (default 68).
 `cetra/src/game/input.h` gives, and `--trace-player` prints the player's position every 30 steps.
 That is gametest's pair, so a walk can be driven and read back with no controller.
 
-**`--day` is parked, not finished.** It gives an overcast-white street under a pinned exposure, but
-the rooms are dark. The engine's sky has no physical brightness scale and the kitchen's tubes do,
-so no single exposure serves both. What it waits on is an overcast sky in the engine, with a
-brightness scale an app can match its lights to.
+**`--day` is an overcast day** (spec 13.7).
+- **The light:** the sky is photometric in both modes, like the tubes, and by day it is fully
+  overcast. No sun gets through and nothing casts, and the fog takes the dome's light.
+- **The exposure is metered by day, within a bound:** a room never opens past the night's pinned
+  exposure. So the kitchen by day is exposed as at night, plus its window's daylight, and the street
+  closes down to a light-grey fog world.
+- **The night is pinned exactly as before,** and moves by at most 1 LSB.
 
 ## The other apps, and the AA mode each one chose
 

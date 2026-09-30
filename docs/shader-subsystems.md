@@ -18,8 +18,8 @@ argument further than the address.
 ## Contents
 
 Sky and night: [Day/night cycle](#daynight-cycle) · [The moon](#the-moon) ·
-[Night floor](#night-floor) · [Stars](#stars) · [Cloud shadow](#cloud-shadow) ·
-[Atmosphere](#atmosphere)
+[Night floor](#night-floor) · [Overcast](#overcast) · [Sky scale](#sky-scale) · [Stars](#stars) ·
+[Cloud shadow](#cloud-shadow) · [Atmosphere](#atmosphere)
 
 Image finishing: [Tonemap / exposure](#tonemap--exposure) ·
 [Purkinje / scotopic shift](#purkinje--scotopic-shift) · [Diffraction glare](#diffraction-glare)
@@ -146,6 +146,80 @@ eye. OFF by default in the library, ON in tree (`--no-night-floor` off); `--nigh
 `--night-floor-brightness` on render; `environment.night_floor {enabled, brightness}` in a
 `.cscn`; GUI checkbox + slider ride the sun's re-bake chain, NOT the stars' live-uniform path.
 
+## Overcast
+
+`include/sky_deck.glsl`, with `sky_deck_at` and `sky_bind_deck` in `sky.c` (spec 13.7).
+
+**The model is the CIE standard overcast sky,** L = Lz(1 + 2 cos θ)/3. Lz is Krochmann's zenith fit,
+(8.6 sin h + 0.123) kcd/m², carried onto the sky's scale by `SKY_SUN_ILLUMINANCE / SKY_SUN_KLUX`.
+Its horizon constant fades on the night ramp, so an overcast evening darkens with the cycle.
+
+**The model lives in C, and the shaders only apply it.**
+- `SkyDeck` = {clear, sun_scale, zenith, floor, store_max} is computed once, from the sun the bake is
+  FOR. The slicer bakes from a latched sun, and a dome read from the live one would seam the env
+  faces.
+- `sky_bind_deck` is its only upload: to the sky-view LUT, the aerial volume, the env faces and the
+  cloud march.
+- The dome terms arrive PREMULTIPLIED by the amount, so a clear sky adds exact zeros and multiplies
+  by exactly 1. No branch guards the default path, and none should: a branch around unchanged
+  arithmetic is not byte-identical on this driver.
+
+**One weight:** the sun's scatter, its disc and its light (and with it the shadows), the stars and
+the moon disc all fade by the deck's clear fraction. The night floor does not, because a deck at
+night reflects a town.
+
+**Four places carry the dome, and each has a named asymptote:**
+- **The LUT.** Sky rays go toward the curve, and ground rays toward the floor it lights,
+  GROUND_ALBEDO·(7/9)·Lz.
+- **The virtual ground.** Its overcast share is linear in the amount; the first version weighted
+  it twice.
+- **The aerial volume converges on the HORIZON, Lz/3,** the sky drawn right behind a far surface.
+  Any other asymptote seams, and fading the sun's share alone takes distance to black.
+- **The CPU zenith march** adds (7/9)·Lz: the dome's horizontal irradiance over π, which is what
+  the fog ambient and the water read it as.
+
+**Reached by:**
+- `--overcast <0..1>` and `--sky-probe` (Lz, the zenith radiance, the scale, both bodies' lights)
+  on render;
+- `environment.overcast` in a `.cscn`, and `sky.overcast` in a config snapshot;
+- a GUI slider on the sun's re-bake chain.
+
+Scene-captured probes and probe sets keep the sky they were captured under. The `overcast` gate
+group holds the dome's level, shape and zero against the probe's Lz.
+
+## Sky scale
+
+`SkyAtmosphere.radiance_scale` K (spec 13.7): nits per unit of the sky's relative scale.
+
+**Why it exists.** On the relative scale a noon zenith is a couple of units, about four decades
+under a real sun, and so a sky scene and a photometric lamp could not share an exposure. That was
+spec 10.2's open item. At `SKY_PHOTOMETRIC_SCALE` (`SKY_SUN_KLUX`·1000 / `SKY_SUN_ILLUMINANCE` =
+42,500) an unattenuated sun delivers 127.5 klux.
+
+**K is applied where things are BAKED, never where they are read.** Both alternatives fail:
+- folded into the IBL intensity, it counts twice in GI and in scene-captured probes, which already
+  see the scaled sky;
+- stored relative and scaled at read, it sinks the night floor into fp16 subnormals.
+
+**So it rides the deck, and everything the SUN drives is stored absolute:** the LUTs, the dome,
+the cloud march, the disc (20·K), the zenith march and the sun light (`sun_base_intensity × K`).
+- **The stored ceiling is `min(100·K, 60000)`:** exactly the old 100 at K = 1, and never past fp16.
+  Past K = 600 the circumsolar sky clips in the LUT, deliberately: the key light carries the sun's
+  energy, and the IBL is not meant to.
+- **The background clamps in WORKING space, after the exposure,** because a photometric disc is
+  850,000 nits.
+
+**The night terms are ABSOLUTE and do not take K:** the floor, the stars, the moon disc and the
+moon light. So a night frame is the same on either scale, and on the photometric one twilight sits
+K above the floor, where a meter can open for it.
+
+**The sun's base.** `sun_base_intensity = SKY_SUN_ILLUMINANCE` is the value at which the sun agrees
+with the sky. The render app keeps its 10, which is 3.3 times sun-heavy on either scale.
+
+**Reached by:** `--sky-scale <f|photometric>`, `environment.sky_scale` (a number or
+"photometric"), `sky.radiance_scale`, and a GUI "Photometric" checkbox. The `scale` group's `sky`
+entry holds it invariant at x1000, to 1 LSB.
+
 ## Stars
 
 `include/stars.glsl` + one term in `include/sky_radiance.glsl` (spec 11.79) — a
@@ -215,8 +289,9 @@ luma enforced, and is **algebraically identical** to Kirk & O'Brien's per-cone i
 rather than an approximation of it, since rods are monochromats and the LMS round trip of
 a scalar collapses to one vector. Acuity and rod noise ship too, separately toggled.
 **Every threshold is a LOOK constant**: this engine's whole day-to-night range is 4.2
-stops where reality is ~17, and its sky is four decades under the real photometric scale,
-so `purkinjeBiasEV` is the one knob that migrates them if 10.2 phase 5 ever lands.
+stops where reality is ~17, and its sky runs four decades under the real photometric scale
+unless an app sets it photometric (spec 13.7), so `purkinjeBiasEV` is the one knob that migrates
+them for an app that does.
 OFF by default everywhere including `tree` (B15: its night sea is wrong, and a
 desaturating model over it reads as a partial fix that has not happened). `--purkinje`,
 `--no-purkinje`, `--purkinje-strength`, `--purkinje-bias`, `--purkinje-acuity`,
