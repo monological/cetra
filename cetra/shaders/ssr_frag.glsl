@@ -28,6 +28,10 @@ uniform float floorRoughness; // Roughness of the reflective floor
 // the floor's roughness rather than reading a stale one.
 uniform sampler2D auxTex;
 uniform int auxAvailable;
+// 1 = the fold REPLACES wet ground's share of the environment's reflection (ssr_fold_wet_frag),
+// so a wet pair carries its Fresnel on the colour and its coverage bare. 0 = every pair is
+// the lerp's, Fresnel in the weight.
+uniform int wetReplace;
 uniform float maxRoughness;   // Reflections fade out toward this roughness
 uniform float strength;       // Reflection strength (folded into the weight)
 
@@ -144,8 +148,9 @@ vec4 probeSample(vec3 fragPosV, vec3 n, vec3 RV, vec3 viewDir, float roughness, 
     float NdotV = max(dot(n, -viewDir), 0.0);
     float fresnel = surfaceFresnel(NdotV, wet);
     float roughnessFade = 1.0 - smoothstep(0.5 * maxRoughness, maxRoughness, roughness);
-    float w = clamp(fresnel * roughnessFade * strength, 0.0, 1.0);
-    return vec4(min(col, vec3(WS_REFLECT_MAX)) * w, w);
+    bool replace = wet && wetReplace != 0;
+    float w = clamp((replace ? 1.0 : fresnel) * roughnessFade * strength, 0.0, 1.0);
+    return vec4(min(col, vec3(WS_REFLECT_MAX)) * (replace ? fresnel : 1.0) * w, w);
 }
 
 // Ray-vs-cell boundary planes: the segment params at which the ray enters
@@ -452,12 +457,16 @@ void main()
     // premultiplied pair stays consistent (strength > 1 saturates toward a
     // full mirror instead of decoupling color from coverage). The sampled
     // color is clamped — HDR spikes read as white discs after upsampling.
-    float weight =
-        clamp(edgeFade * fresnel * roughnessFade * distFade * budgetFade * strength, 0.0, 1.0);
+    // A wet pair under the replacing fold takes its Fresnel on the colour, not the weight.
+    bool replace = wet && wetReplace != 0;
+    float weight = clamp(edgeFade * (replace ? 1.0 : fresnel) * roughnessFade * distFade *
+                             budgetFade * strength,
+                         0.0, 1.0);
     vec3 reflection = min(texture(hdrTex, hitUV).rgb, vec3(WS_REFLECT_MAX));
     // Partial fades (screen edge, march distance) blend toward the probe
     // instead of toward nothing — premultiplied "SSR over probe". The probe
     // term already carries floorFade, so scaling the SSR term by it makes
     // the whole composite exactly floorFade * (unfaded composite).
-    FragColor = vec4(reflection * weight, weight) * floorFade + probe * (1.0 - weight);
+    FragColor = vec4(reflection * (replace ? fresnel : 1.0) * weight, weight) * floorFade +
+                probe * (1.0 - weight);
 }

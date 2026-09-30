@@ -1247,6 +1247,10 @@ ShaderProgram* create_upsample_tent_program() {
     return create_post_program("upsample_tent", upsample_tent_frag_shader_str);
 }
 
+ShaderProgram* create_ssr_fold_wet_program() {
+    return create_post_program("ssr_fold_wet", ssr_fold_wet_frag_shader_str);
+}
+
 ShaderProgram* create_taa_resolve_program() {
     ShaderProgram* program = NULL;
 

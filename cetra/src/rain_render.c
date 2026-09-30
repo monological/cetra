@@ -236,6 +236,8 @@ void rain_publish_to_postfx(const Rain* rain, PostFX* fx) {
     if (!fx)
         return;
     fx->rain_sigma = 0.0f;
+    // After the rain stops as well as during it: what is still wet still carries the marker.
+    fx->rain_wet = rain_active(rain);
     if (!rain || !(rain->rate_mmh > 0.0f))
         return;
     fx->rain_sigma = rain_extinction(rain->rate_mmh) * fmaxf(rain->mist, 0.0f);
