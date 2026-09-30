@@ -437,6 +437,8 @@ typedef struct CetraSceneDesc {
     float env_night_floor_brightness;
     bool has_env_overcast; // spec 13.7
     float env_overcast;
+    bool has_env_sky_scale; // spec 13.7; "photometric" arrives as its value
+    float env_sky_scale;
     bool has_env_cycle; // the "enabled" key specifically was authored (spec 11.81)
     bool env_cycle_enabled;
     bool has_env_cycle_day_seconds;

@@ -37,5 +37,6 @@ void main()
     // preExposure applies to the sum below).
     vec3 col = sky * cloud.a + min(cloud.rgb, vec3(WS_MEDIA_MAX) / max(preExposure, 1e-6));
 
-    FragColor = vec4(min(col, vec3(30000.0)) * preExposure, 1.0);
+    // In working space, sky_background_frag's reason.
+    FragColor = vec4(min(col * preExposure, vec3(WS_SCENE_MAX)), 1.0);
 }

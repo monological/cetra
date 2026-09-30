@@ -20,6 +20,16 @@
 // from it (environment cubemap, irradiance, prefilter) re-bake when the
 // sun moves.
 
+// The sky's scale (spec 13.7). The atmosphere emits per unit of
+// SKY_SUN_ILLUMINANCE, a relative scale on which a noon zenith is a couple of
+// units, and `radiance_scale` carries that into nits. At SKY_PHOTOMETRIC_SCALE
+// an unattenuated sun delivers SKY_SUN_KLUX klux, which is where lights
+// authored in nits, candela and lux already sit. atmosphere.glsl mirrors the
+// first.
+#define SKY_SUN_ILLUMINANCE   3.0f
+#define SKY_SUN_KLUX          127.5f
+#define SKY_PHOTOMETRIC_SCALE (SKY_SUN_KLUX * 1000.0f / SKY_SUN_ILLUMINANCE)
+
 #define SKY_TRANSMITTANCE_W   256
 #define SKY_TRANSMITTANCE_H   64
 #define SKY_MULTISCATTER_SIZE 32
@@ -146,12 +156,12 @@ typedef struct SkyAtmosphere {
     // moon_dir), zenith_radiance, the slicer, and the cycle's own clock state.
     //
     // BY FUNCTION: sun_elevation_deg, sun_azimuth_deg, night_floor_enabled,
-    // night_floor_brightness and overcast are written directly, then re-derived
-    // through sky_update_sun and scene_environment_changed(scene, engine): the
-    // sky-view LUT, the env cube,
-    // the sky-mirroring probes and the GI sweep all descend from them, and a
-    // write without the call reaches the background alone. Everything else the
-    // sky draws from is read live each frame, the moon included.
+    // night_floor_brightness, overcast and radiance_scale are written directly,
+    // then re-derived through sky_update_sun and scene_environment_changed(scene,
+    // engine): the sky-view LUT, the env cube, the sky-mirroring probes and the
+    // GI sweep all descend from them, and a write without the call reaches the
+    // background alone. Everything else the sky draws from is read live each
+    // frame, the moon included.
     bool enabled;
     bool debug_luts; // blit the LUTs onto the composited frame
 
@@ -196,6 +206,12 @@ typedef struct SkyAtmosphere {
     // standard overcast dome. Baked into the sky-view LUT like the night floor,
     // so it takes the same re-bake chain.
     float overcast;
+
+    // Nits per unit of the sky's relative scale (spec 13.7): 1 keeps the
+    // relative sky, SKY_PHOTOMETRIC_SCALE sets it beside photometric lights.
+    // Everything the SUN drives takes it, so it is baked like overcast; the
+    // night floor, the stars and the moon are absolute and do not.
+    float radiance_scale;
 
     // The day/night cycle (spec 11.81). One clock: cycle_hour (0-24, solar
     // noon at 12, a DOUBLE so the gate's Python twin reproduces it exactly)
@@ -303,7 +319,10 @@ typedef struct SkyAtmosphere {
     // once; NULL = pure-IBL sky). sky_apply_sun_to_light retints/redirects it
     // from the atmosphere so a sun move drives the shadows and fog too.
     struct Light* sun_light;
-    float sun_base_intensity; // key-light intensity at full elevation
+    // Key-light intensity at full elevation on the relative scale; the light is
+    // this times radiance_scale. SKY_SUN_ILLUMINANCE is the value at which the
+    // light and the sky agree, and what a photometric sky wants.
+    float sun_base_intensity;
 
     // World units per kilometre. The atmosphere model is in km (Rg/Rt in
     // include/atmosphere.glsl) while a scene is in whatever units it was
@@ -421,7 +440,7 @@ void sky_apply_sun_to_light(SkyAtmosphere* sky);
 // `overcast` as it takes effect: clamped to 0..1.
 float sky_overcast_amount(const SkyAtmosphere* sky);
 
-// The overcast dome's zenith radiance at the current sun, on the sky's scale
+// The overcast dome's zenith radiance at the current sun, times radiance_scale
 // (spec 13.7): the Lz of the CIE overcast sky's L = Lz (1 + 2 cos theta) / 3,
 // whatever `overcast` is set to.
 float sky_overcast_zenith(const SkyAtmosphere* sky);

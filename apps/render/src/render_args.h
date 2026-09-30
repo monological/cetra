@@ -198,6 +198,8 @@ typedef struct {
     float night_floor_brightness; // Floor radiance scale (negative = keep the default)
     float overcast;               // How much of the sky is under cloud, 0..1 (negative =
                                   // keep the default); implies --sky
+    float sky_scale;              // Sky nits per relative unit (non-positive = keep the
+                                  // default); implies --sky
     float day_cycle;              // Real seconds per 24h day; 0 = frozen clock, enabled
                                   // either way. Negative = cycle off (the default)
     float time_of_day;            // Hours 0-24, solar noon at 12 (-1 = unset). Wins over

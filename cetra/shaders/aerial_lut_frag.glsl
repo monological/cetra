@@ -89,7 +89,7 @@ void main() {
     }
     // Scaled once at the end, and bounded against fp16 overflow on the way into
     // an RGBA16F volume -- both exactly as sky_view_frag does it.
-    L = min(L * SUN_ILLUMINANCE * deckSunScale, vec3(100.0));
+    L = min(L * SUN_ILLUMINANCE * deckSunScale, vec3(deckStoreMax));
 
     // Transmittance collapses to a scalar because the composite folds this in
     // with glBlendFunc(GL_ONE, GL_SRC_ALPHA) -- one factor for the whole scene

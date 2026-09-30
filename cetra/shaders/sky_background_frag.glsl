@@ -26,5 +26,8 @@ void main()
 
     vec3 sky = skyRadiance(dir, r, skyViewLut, transmittanceLut, moonSurfaceTex);
 
-    FragColor = vec4(min(sky, vec3(30000.0)) * preExposure, 1.0);
+    // Bounded in working space, after the exposure: a photometric sun disc is
+    // millions of nits, which an exposure brings back to range and a clamp on
+    // the absolute value would flatten first.
+    FragColor = vec4(min(sky * preExposure, vec3(WS_SCENE_MAX)), 1.0);
 }

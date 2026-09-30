@@ -175,6 +175,14 @@ SCALE_GATES = [
     # Fog's in-scatter radiance is a real emitter, so the scaler lifts
     # fog.ambient alongside the lights.
     ("fog", "assets/scenes/froxel_scale_fixture.cscn", ["--fog"]),
+    # The sky is an emitter through its radiance scale (spec 13.7): its LUTs,
+    # its disc, its zenith march and the sun light it couples all take it. The
+    # sun is turned into frame so the disc is read, and fog is on because the
+    # zenith march reaches a frame through the fog ambient and nowhere else.
+    # The circumsolar sky here stays under the stored ceiling at x1000 (60,000
+    # nits, 60 on the relative scale), the one place the legs may differ by
+    # design: a circumsolar sky past 60 relative would clip in the x1000 leg.
+    ("sky", "assets/scenes/aerial_fixture.cscn", ["--fog", "--sun-azimuth", "180"]),
 ]
 
 # Pass on PEAK error, not on a differing-pixel count.
@@ -244,7 +252,11 @@ def _scale_emitters(d, factor):
 
     env = d.get("environment")
     if env:
-        if "intensity" in env:
+        # A sky scene's environment IS the sky, so its scale carries the IBL
+        # already; scaling the intensity as well would count it twice.
+        if env.get("mode") == "sky":
+            env["sky_scale"] = env.get("sky_scale", 1.0) * factor
+        elif "intensity" in env:
             env["intensity"] *= factor
         if "ambient" in env:
             env["ambient"] = [c * factor for c in env["ambient"]]
@@ -18024,6 +18036,8 @@ CONFIG_GUI_LOCALS = {
     # tod_hour rather than hour: this map is keyed on the bare local, so a
     # generic name silently captures the next local that shares it.
     "tod_hour": "cycle_hour",
+    # A checkbox over a float: the sky is relative or photometric (spec 13.7).
+    "photometric_sky": "radiance_scale",
     "interp": "lut_interp",
     # The camera panel edits the RIG since spec 12.19, and the rig's aim and arm
     # are what produce the pose the snapshot carries as camera.eye/target. So
