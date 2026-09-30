@@ -61,6 +61,9 @@ typedef struct Rain {
     float puddle_drain_time;
     // The ceiling on the puddle level, reached only in heavy rain. 0 = no puddles.
     float puddle_coverage;
+    // Scale on how much wetting darkens a surface; 1 = physical, where soaked rough concrete
+    // falls to about a quarter of its dry brightness. The film's shine is untouched. A look.
+    float wet_darkening;
 
     // Width in metres of the square around the camera over which cover is known --
     // the occlusion map's footprint. Outside it every surface counts as open sky.

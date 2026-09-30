@@ -25,6 +25,7 @@ Rain* create_rain(void) {
     rain->puddle_drain_time = 900.0f;
     rain->puddle_coverage = 0.6f;
     rain->fall_scale = 1.0f;
+    rain->wet_darkening = 1.0f;
     // A street's length either way of the player: past that the fog has taken most of
     // the frame, and a 1024-texel map spent over it is 9.4 cm a texel -- under the
     // overhang of an eave.
