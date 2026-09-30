@@ -30,6 +30,8 @@ Lighting and occlusion: [Specular occlusion](#specular-occlusion) · [IES profil
 Surfaces: [Water](#water) · [Clustered decals](#clustered-decals) ·
 [Layered surfaces](#layered-surfaces) · [Roads](#roads) · [Composite cache](#composite-cache)
 
+Weather: [Rain](#rain)
+
 ---
 
 ## Day/night cycle
@@ -682,3 +684,67 @@ drawn INTO pages through the bake FBO. Flags: `--no-layers-vt-pages` (stage 1 ex
 `--layers-vt-page-budget` (bakes per frame, capped at 8), `--layers-vt-probe` (residency
 counters + digest), and `--cam-at <frame:ex,ey,ez,tx,ty,tz>` (the teleport — the worst case
 no walk can produce)
+
+## Rain
+
+Spec 13.9. One master knob, `Rain.rate_mmh`, from which Marshall-Palmer and Atlas derive the drop
+sizes, speeds, density, extinction and splash flux; every other knob is a scale that defaults to
+physical. The numbers the CPU and the GPU must agree on are `include/rain_constants.glsl`, the
+fourth include both languages compile.
+
+**Cover** is an orthographic depth map along the rain's travel, a TENANT of the punctual shadow
+array (its own layer past every light's, a fixed 1024² corner of it), so the rain costs the lit
+surface no sampler. The render matrix and the lookup matrix differ by that corner and must not be
+confused. `include/rain_occlusion.glsl` answers it two ways: one tap for a point (streak ends,
+splash droplets, fog cells) and, for a SURFACE, a PCSS-shaped blocker search then a 12-tap Vogel
+disk as wide as the rain's spread over the blocker's height. A regular grid of taps wider than a
+texel printed ghost copies of a lamp arm as dry stripes on the pavement. **The map is stored with
+the shadow pass's slope bias** (`RAIN_MAP_SLOPE_BIAS`), so anything that needs the SURFACE rather
+than a side of it has to take the bias back out -- splashes buried themselves 5 cm under a windy
+fixture until they did. `shadow_rain_cover_ask/answer` is the CPU half, a texel read back through
+a fixed-latency ring.
+
+**Streaks** (`rain_vert/frag`) are stateless: a drop's position is a function of its index and the
+rain's clock, wrapped into three nested boxes that follow the camera. Drawn from PostFX's late
+draw, after TAA -- thin, fast, motionless-to-the-velocity-buffer streaks are ghosted or clamped
+away by a temporal filter -- in HDR, each fogged at its own depth. Four things a plausible frame
+hid:
+- A streak's opacity is its drop's image area over the area drawn, times the drops it stands for.
+  At physical opacity and a drawable count the rain was invisible.
+- A drop refracts a MIPPED COPY of the frame, its field being about 165 degrees. Showing the sky or
+  the fog behind it drew black sticks in front of every lit wall.
+- `streak_sheen` lifts what a drop refracts. Physical rain at night is invisible outside its lamps.
+- Glints are Rayleigh's ringing, and only drops over a millimetre ring visibly. Given to every drop
+  the small-drop majority striped each streak with twenty to thirty bands.
+**Splashes** are the droplets a crown throws, drawn by the same program as small drops on
+ballistic arcs, from a world-anchored grid of slots firing at the flux of drops over 1 mm, landing
+on the map's surface found back up the rain's own path. Straight up in any wind lands them tens
+of metres downwind.
+
+**Wet surfaces** (`include/rain_surface.glsl`, one call in `pbr_frag` under `PBR_FEAT_RAIN`, bit
+64) run the shore's own model, `include/wet_surface.glsl`: porosity darkening, a Lekner-Dorf hue
+power, a film that smooths and flattens. Only up-facing surfaces hold a film, and open ground holds
+0.6 of one: with a full film everywhere every wet surface was already the mirror a puddle is, and
+no puddle could read. **Puddles** are value noise under a level, on ground within eight degrees of
+level, only where the rain lands, with a one-pixel waterline and rings from
+`include/rain_ripples.glsl`, which `water_frag` also takes -- through the cover, on unit 9, or water
+under a roof rang. Darkening the bed under standing water was rejected: the film's power already
+darkens at least as much as a flat water surface's internal reflection does.
+
+**Wet ground in SSR.** A wet texel marks the normals alpha BELOW -1, as `-(1 + film)`; the catcher
+keeps (-1, 0), and every test of the catcher is a range test. Three things make it right rather than
+merely visible:
+- SSR reads the texel's own roughness from the aux buffer and water's F0.
+- `ssr_fold_wet_frag` REPLACES the pixel's share of the environment's reflection -- adding the trace
+  and subtracting that fraction of the split ambient specular -- where the lerp dimmed the diffuse
+  by a Fresnel already applied. Its tent averages each marker class only with its own and gives an
+  unmarked pixel nothing, or a puddle's coverage darkens the wall above it.
+- A replacing hit is seen through the global height fog along its own reflected segment
+  (`reflectedThroughFog`), because the environment it replaces is baked through the same fog
+  (`include/env_medium.glsl`, `IBLResources.reflect_fog`). Unfogged, a puddle on a foggy street
+  mirrored the houses across it as holes.
+
+**The medium** past the streaks is a third medium in `froxel_inject_frag`: the Marshall-Palmer
+extinction times `mist`, lit through the drops' phase (`include/rain_phase.glsl`, which the streaks
+share), folded in by extinction like the local volumes, absent under cover, and coming in only past
+the outermost streak box, inside which the streaks already stand for every drop.

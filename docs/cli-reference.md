@@ -11,7 +11,7 @@ reason is recorded beside the flag rather than in whichever spec introduced it.
 ## Contents
 
 - [PostFX and environment flags](#postfx-and-environment-flags) — the render app: TAA, water, sky,
-  clouds, contact shadows, decals, IES, LUTs, layers, the probes
+  clouds, contact shadows, decals, IES, LUTs, layers, the probes, rain
 - [apps/tree](#appstree) — its own flag set, and two defaults that read as bugs
 - [apps/forest](#appsforest) — instancing, LOD, culling, the island, erosion, streaming, origin
   shifting
@@ -431,6 +431,21 @@ atlas, 156 MB at 640x400 on a Retina framebuffer, logged at allocation. Both are
 now ON by default, so `--oit` and `--oit-moments` are only useful for restating
 a default that a `.cscn` or another flag turned off.
 
+**Rain** (spec 13.9). `--rain <mm/h>` sets the rate of a scene's authored rain, or brings one of
+its own, and re-settles it, so the frame shows that rate's soaked world rather than the file's;
+`--no-rain` removes it; `--rain-sheen <f>` overrides the streaks' sheen. A `.cscn` authors it as a
+top-level `rain` block, every key a knob of the `Rain` struct: `rate`, `wind`, `fallScale`,
+`settled` (absent = already soaked), `wetTime`, `dryTime`, `puddleFillTime`, `puddleDrainTime`,
+`puddleCoverage`, `puddleScale`, `rippleStrength`, `rippleSize`, `wetDarkening`,
+`occlusionExtent`, `streakCount`, `streakRadius`, `shutter`, `streakWidth`, `streakBrightness`,
+`streakForwardG`, `streakGlint`, `streakSheen`, `splashCount`, `splashRadius`, `splashAmount`,
+`splashSize` and `mist`. Materials take `porosity` (-1 derives it from roughness). Instruments:
+`--rain-probe` prints the physics ladder, the state, the medium as the post chain was handed it
+and, with `--rain-probe-at x,y,z` (repeatable), whether the rain reaches each point;
+`--rain-map <ppm>` writes the occlusion map; `--rain-ask x,y,z` asks the CPU cover query about a
+point every frame and the probe prints its answer. `assets/scenes/rain_fixture.cscn` and
+`rain_water_fixture.cscn` are the fixtures, from `assets/generators/gen_rain_fixture.py`.
+
 ## apps/tree
 
 **apps/tree's own flags**, which went unlisted anywhere for a long time. Capture: `-x/--headless`,
@@ -827,6 +842,23 @@ That is gametest's pair, so a walk can be driven and read back with no controlle
   exposure. So the kitchen by day is exposed as at night, plus its window's daylight, and the street
   closes down to a light-grey fog world.
 - **The night is pinned exactly as before,** and moves by at most 1 LSB.
+
+**It rains, by default, at 6 mm/h** (spec 13.9), a moderate rain, and the world opens already
+soaked. `--rain <mm/h>` sets another rate and `--no-rain` gives the dry street back. What silent
+changes from the engine's physical rain is a look, and each is a constant in `silent.c`:
+- **Streaks** three times as bright as the drops they stand for, packed closer (a 2.5 m inner
+  box, 6144 a box), falling at half speed, with half the engine's sheen: a drizzle to walk
+  through. In fog this dense a drop refracts glowing air about as bright as itself, so at its
+  physical opacity rain shows only under a lamp.
+- **Wet ground at half the physical darkening,** so the lamps still pool on it.
+- **Splashes at twice their size:** at their own a splash on dark asphalt lifts its pixels by a
+  tenth.
+- **Reflections see the fog** (`IBLResources.reflect_fog`), and SSR reaches 40 m, so a puddle can
+  mirror a lamp head or a window across the street.
+
+**Sound:** the rain is two noise beds, pink for the patter and brown for the rumble, as loud as the
+log of the rate. Under a roof -- read from the rain's own occlusion map at the player's head -- the
+patter falls away over a doorway's walk and the rumble stays. `--mute` silences everything.
 
 ## The other apps, and the AA mode each one chose
 
