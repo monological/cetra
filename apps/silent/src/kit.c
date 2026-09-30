@@ -439,14 +439,15 @@ typedef struct RingAt {
     float nr, na; // the normal: the radial direction weighted nr, plus the axis weighted na
     float v;      // texture V, in repeats
     float joint;  // metres to the solid's nearest joint
-    bool planar;  // UVs from world X and Z: a face turned up or down, like a plate's
+    bool planar;  // UVs projected onto the plane of u and w: a face turned along the axis
 } RingAt;
 
 /*
  * A ring of sides + 1 vertices. U runs round it `u_scale` per radian, and its
  * grime falls off from the joint over `band`. A planar ring takes its UVs from
- * the ground plane instead: running U round a face that closes on its axis
- * squeezes the whole texture into a pinwheel at the middle.
+ * the plane across its axis instead -- a plate's top, a bob's face -- since
+ * running U round a face that closes on its axis squeezes the whole texture
+ * into a pinwheel at the middle.
  */
 static void make_ring(Kit* kit, int mat, Ring* ring, const RingAt* at, float u_scale, float band,
                       int sides) {
@@ -467,8 +468,8 @@ static void make_ring(Kit* kit, int mat, Ring* ring, const RingAt* at, float u_s
             strength > 0.0f ? grime_amount(strength, ring->p[j],
                                            grime_falloff(at->joint, band * grime_reach(ring->p[j])))
                             : 0.0f;
-        const float u = at->planar ? ring->p[j][0] * inv : a * u_scale;
-        const float v = at->planar ? ring->p[j][2] * inv : at->v;
+        const float u = at->planar ? glm_vec3_dot(ring->p[j], (float*)at->u) * inv : a * u_scale;
+        const float v = at->planar ? glm_vec3_dot(ring->p[j], (float*)at->w) * inv : at->v;
         ring->idx[j] = kit_vertex(kit, mat, ring->p[j], ring->n[j], t, u, v, grime);
     }
 }
@@ -512,6 +513,15 @@ static bool points_ok(int count) {
     return false;
 }
 
+// A section's first direction off `axis` (unit): up, unless the axis is nearly
+// upright itself.
+static void section_start(const vec3 axis, vec3 u) {
+    const bool upright = fabsf(axis[1]) >= 0.9f;
+    const vec3 ref = {upright ? 1.0f : 0.0f, upright ? 0.0f : 1.0f, 0.0f};
+    glm_vec3_cross((float*)axis, (float*)ref, u);
+    glm_vec3_normalize(u);
+}
+
 /*
  * A round pipe along a polyline, capped both ends. Each ring faces along the
  * average of the segments either side of its point, and its orientation is
@@ -550,11 +560,7 @@ static void pipe(Kit* kit, int mat, const vec3* path, int count, float r, int si
                 return;
             glm_vec3_normalize(at.axis);
             if (made == 0) {
-                // Any direction off the axis starts the section; up unless the
-                // pipe sets off nearly upright.
-                const bool upright = fabsf(at.axis[1]) >= 0.9f;
-                const vec3 ref = {upright ? 1.0f : 0.0f, upright ? 0.0f : 1.0f, 0.0f};
-                glm_vec3_cross(at.axis, (float*)ref, at.u);
+                section_start(at.axis, at.u);
             } else {
                 glm_vec3_muladds(at.axis, -glm_vec3_dot(at.u, at.axis), at.u);
                 len += glm_vec3_distance(at.centre, prev);
@@ -609,12 +615,14 @@ static void profile_joint(const vec2* profile, int count, int seg, int other, ve
 }
 
 /*
- * A surface of revolution about the upright through `base`, from a profile of
- * {radius, height above base} points. Every segment is its own run of bands,
- * so a crease costs nothing extra; a radius of 0 closes the surface on its
- * axis. It stands on its lowest point, so that is its joint.
+ * A surface of revolution about `axis` through `base`, from a profile of
+ * {radius, distance along the axis} points, the section starting along u and
+ * turning toward w. Every segment is its own run of bands, so a crease costs
+ * nothing extra; a radius of 0 closes the surface on its axis. It stands on
+ * its lowest point, so that is its joint.
  */
-static void lathe(Kit* kit, int mat, const vec3 base, const vec2* profile, int count, int sides) {
+static void lathe(Kit* kit, int mat, const vec3 base, const vec3 axis, const vec3 u, const vec3 w,
+                  const vec2* profile, int count, int sides) {
     const float inv = 1.0f / kit->repeat_m[mat];
     float rmax = 0.0f, lo = profile[0][1], hi = profile[0][1], len = 0.0f;
     for (int k = 0; k < count; k++) {
@@ -623,7 +631,10 @@ static void lathe(Kit* kit, int mat, const vec3 base, const vec2* profile, int c
         hi = glm_max(hi, profile[k][1]);
     }
     const float band = fminf(GRIME_BAND, 0.3f * (hi - lo));
-    RingAt at = {.axis = {0.0f, 1.0f, 0.0f}, .u = {1.0f, 0.0f, 0.0f}, .w = {0.0f, 0.0f, 1.0f}};
+    RingAt at = {0};
+    glm_vec3_copy((float*)axis, at.axis);
+    glm_vec3_copy((float*)u, at.u);
+    glm_vec3_copy((float*)w, at.w);
     for (int k = 0; k < count - 1; k++) {
         vec2 n0 = {0.0f, 0.0f}, n1 = {0.0f, 0.0f}, ns = {0.0f, 0.0f};
         profile_joint(profile, count, k, k - 1, n0);
@@ -639,7 +650,7 @@ static void lathe(Kit* kit, int mat, const vec3 base, const vec2* profile, int c
             glm_vec2_lerp((float*)profile[k], (float*)profile[k + 1], f, p);
             glm_vec2_lerp(n0, n1, f, n);
             glm_vec3_copy((float*)base, at.centre);
-            at.centre[1] += p[1];
+            glm_vec3_muladds((float*)axis, p[1], at.centre);
             at.r = p[0];
             at.nr = n[0];
             at.na = n[1];
@@ -759,7 +770,24 @@ void kit_frame_lathe(Kit* kit, const KitFrame* f, int mat, float a, float d, flo
         return;
     vec3 base = {0.0f, 0.0f, 0.0f};
     kit_frame_point(f, a, y, d, base);
-    lathe(kit, mat, base, profile, count, clamp_sides(sides));
+    const vec3 up = {0.0f, 1.0f, 0.0f}, x = {1.0f, 0.0f, 0.0f}, z = {0.0f, 0.0f, 1.0f};
+    lathe(kit, mat, base, up, x, z, profile, count, clamp_sides(sides));
+}
+
+void kit_frame_lathe_on(Kit* kit, const KitFrame* f, int mat, const vec3 base, const vec3 axis,
+                        const vec2* profile, int count, int sides) {
+    if (!slot_ok(kit, mat) || !points_ok(count))
+        return;
+    vec3 at = {0.0f, 0.0f, 0.0f}, dir = {0.0f, 0.0f, 0.0f}, u = {0.0f, 0.0f, 0.0f};
+    vec3 w = {0.0f, 0.0f, 0.0f};
+    kit_frame_point(f, base[0], base[1], base[2], at);
+    kit_frame_dir(f, axis[0], axis[1], axis[2], dir);
+    if (glm_vec3_norm2(dir) < 1e-12f)
+        return;
+    glm_vec3_normalize(dir);
+    section_start(dir, u);
+    glm_vec3_cross(dir, u, w);
+    lathe(kit, mat, at, dir, u, w, profile, count, clamp_sides(sides));
 }
 
 void kit_frame_card(Kit* kit, const KitFrame* f, int mat, const vec3 corner, const vec3 across,

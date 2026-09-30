@@ -59,6 +59,11 @@ SOURCES = {
     "brick_wall_006": {},
     "dirty_carpet": {},
     "fabric_pattern_05": {"diffuse": "col_01"},  # ships colourways instead of one Diffuse
+    # The hall clock's case: a dark lacquered body, flame-figured rosewood for
+    # its door, hood and panels, and pale maple for the inlaid stringing.
+    "lacquered_cherry_wood": {},
+    "rosewood_veneer1": {},
+    "white_maple_veneer": {},
     # From ambientCG (https://ambientcg.com), also CC0: what Poly Haven has no
     # scan of -- brushed stainless, paper, a kitchen smear for the glass, and
     # the table's scratched enamel: a yellow paint with almost no rust, taken to

@@ -29,11 +29,13 @@
 #include "cetra/shadow.h"
 #include "cetra/sky.h"
 
+#include "cetra/game/audio.h"
 #include "cetra/game/entity.h"
 #include "cetra/game/game.h"
 #include "cetra/game/input.h"
 #include "cetra/game/physics.h"
 
+#include "clock.h"
 #include "house.h"
 #include "kitchen.h"
 #include "kit.h"
@@ -82,12 +84,14 @@ typedef struct SilentArgs {
     bool trace_player;
     bool no_flicker;
     bool flashlight;
+    bool mute;
 } SilentArgs;
 
 static SilentArgs g_args;
 static Scene* g_scene;
 static Player g_player;
 static Lights g_lights;
+static Clock g_clock;
 static float g_fade_seconds; // since the bounce light came in
 
 // The spawn: in the kitchen, facing the window.
@@ -301,8 +305,19 @@ static void on_init(Game* game) {
     lights_build(&g_lights, &kit, engine, g_scene, (unsigned int)g_args.seed, !g_args.no_flicker,
                  g_args.flashlight);
     street_build(&kit, g_scene, (unsigned int)g_args.seed, !g_args.day);
+    clock_build(&kit);
     kit_finish(&kit, "world");
     printf("silent: %d colliders, %d vertices\n", kit.collider_count, kit.vertex_count);
+
+    // Sound: the clock's beat, heard from where it stands. Headless, the
+    // system opens no device, so a capture is unchanged by it.
+    AudioSystem* audio = create_audio_system(engine->headless);
+    if (audio) {
+        game_set_audio_system(game, audio);
+        if (g_args.mute)
+            audio_set_bus_volume(audio, AUDIO_BUS_MASTER, 0.0f);
+    }
+    clock_start(&g_clock, engine, g_scene, audio);
 
     build_sky(engine);
 
@@ -371,6 +386,7 @@ static void on_pre_render(Game* game, double alpha) {
     vec3 eye = {0.0f, 0.0f, 0.0f}, forward = {0.0f, 0.0f, -1.0f};
     player_eye(&g_player, eye, forward);
     lights_update(&g_lights, g_scene, game->time, (float)game->sim_clock.delta, eye, forward);
+    clock_update(&g_clock, game->time);
 
     // The probes go in on the third frame, not at load. The tubes' panels are
     // derived during the first frame's draw and only cast from the next, and a
@@ -422,6 +438,7 @@ static void print_usage(const char* prog) {
     printf("      --trace-player      Print the player's position every 30 steps\n");
     printf("      --no-flicker        Keep the failing ceiling tube steady\n");
     printf("      --flashlight        Start with the flashlight on (F toggles it)\n");
+    printf("      --mute              Without sound\n");
     printf("  In the window: click to capture the mouse, Tab to release it. WASD\n");
     printf("  walks, Shift hurries, the arrows or the mouse look, G shows the GUI.\n");
     printf("  -h, --help              This message\n");
@@ -476,6 +493,8 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
             a->no_flicker = true;
         } else if (!strcmp(s, "--flashlight")) {
             a->flashlight = true;
+        } else if (!strcmp(s, "--mute")) {
+            a->mute = true;
         } else if (!strcmp(s, "-h") || !strcmp(s, "--help")) {
             print_usage(argv[0]);
             return false;
