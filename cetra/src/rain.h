@@ -57,6 +57,10 @@ typedef struct Rain {
     float puddle_drain_time;
     // The ceiling on the puddle level, reached only in heavy rain. 0 = no puddles.
     float puddle_coverage;
+
+    // Width in metres of the square around the camera over which cover is known --
+    // the occlusion map's footprint. Outside it every surface counts as open sky.
+    float occlusion_extent;
 } Rain;
 
 // Created with a moderate rain's defaults at rate 0: nothing falls until a rate is set.
@@ -75,6 +79,14 @@ void rain_settle(Rain* rain);
 // the puddle level the rate's inflow holds up against drainage.
 float rain_wetness_target(const Rain* rain);
 float rain_puddle_target(const Rain* rain);
+
+// True while rain falls or anything it left is still wet: what decides whether cover
+// has to be known this frame. NULL is false.
+bool rain_active(const Rain* rain);
+
+// The unit direction the rain travels: the median drop's fall speed carried sideways
+// by the wind. Straight down when nothing falls.
+void rain_fall_direction(const Rain* rain, vec3 out);
 
 /*
  * The physics, as pure functions of the rate so a probe can print them for any rate

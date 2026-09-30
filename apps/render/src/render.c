@@ -192,6 +192,9 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --rain <mm/h>      Rain at this rate, already soaked (spec 13.9)\n");
     fprintf(stderr, "      --no-rain          Drop the rain a scene file asked for\n");
     fprintf(stderr, "      --rain-probe       Print the rain's physics, schedule and state\n");
+    fprintf(stderr, "      --rain-probe-at <x,y,z>  With --rain-probe: whether this point is\n"
+                    "                         under cover (repeatable, up to 16)\n");
+    fprintf(stderr, "      --rain-map <p>     With --rain-probe: the occlusion map as a PPM\n");
     fprintf(stderr, "      --water-level <f>  Still-water plane, world Y (implies --water)\n");
     fprintf(stderr, "      --water-extent <f> Half-size of the shoaling bed (implies --water)\n");
     fprintf(stderr, "      --water-waves <m>  gerstner (default) or fft spectral cascades\n");
@@ -1197,6 +1200,16 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->no_rain = 1;
         } else if (strcmp(argv[i], "--rain-probe") == 0) {
             args->rain_probe = 1;
+        } else if (strcmp(argv[i], "--rain-probe-at") == 0) {
+            float* p = args->rain_probe_at[args->rain_probe_at_count];
+            if (++i >= argc || args->rain_probe_at_count >= 16 ||
+                sscanf(argv[i], "%f,%f,%f", &p[0], &p[1], &p[2]) != 3) {
+                fprintf(stderr, "Error: --rain-probe-at needs x,y,z (at most 16)\n");
+                return -1;
+            }
+            args->rain_probe_at_count++;
+        } else if (strcmp(argv[i], "--rain-map") == 0 && i + 1 < argc) {
+            args->rain_map_path = argv[++i];
         } else if (strcmp(argv[i], "--no-water-caustics") == 0) {
             // The negative flags do NOT imply --water. A flag whose whole job is to turn
             // a feature off has no business turning the feature on, and `--no-water
@@ -4782,9 +4795,13 @@ int main(int argc, char** argv) {
     if (args.ies_probe)
         ies_library_probe(scene->ies_library);
 
-    // After the loop so the state row reports what the frames integrated to.
-    if (args.rain_probe)
+    // After the loop so the state row reports what the frames integrated to, and the
+    // cover rows read the map the last frame rendered.
+    if (args.rain_probe) {
         rain_probe_print(scene->rain);
+        shadow_rain_probe(scene->shadow_system, (const vec3*)args.rain_probe_at,
+                          args.rain_probe_at_count, args.rain_map_path);
+    }
 
     // Beside the others, and for the same reason: the pool is fully populated by
     // now (the async drain that gates the mask-array build has run), so what it
