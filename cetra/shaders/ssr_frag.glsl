@@ -32,6 +32,12 @@ uniform int auxAvailable;
 // so a wet pair carries its Fresnel on the colour and its coverage bare. 0 = every pair is
 // the lerp's, Fresnel in the weight.
 uniform int wetReplace;
+// The global height fog, which a replacing wet pair's hit is seen through (spec 13.9).
+// ssrFogDensity 0 = none.
+uniform float ssrFogDensity;  // extinction at the fog's floor, per world unit
+uniform float ssrFogFalloff;  // world units per 1/e of density above the floor
+uniform float ssrFogFloorY;   // world height of the floor
+uniform vec3 ssrFogInscatter; // the fog's ambient-lit glow, scene radiance
 uniform float maxRoughness;   // Reflections fade out toward this roughness
 uniform float strength;       // Reflection strength (folded into the weight)
 
@@ -107,6 +113,30 @@ float surfaceFresnel(float NdotV, bool wet)
 {
     float grazing = pow(clamp(1.0 - NdotV, 0.0, 1.0), 5.0);
     return wet ? 0.02 + 0.98 * grazing : 0.1 + 0.9 * grazing;
+}
+
+/*
+ * What a reflected ray sees of its hit through the air between (spec 13.9). The hit is read
+ * from a frame the atmosphere has not reached yet, so it has crossed no air at all -- and a
+ * replacing wet pair puts it IN PLACE OF the environment's reflection, which is baked through
+ * the fog (IBLResources.reflect_fog). Unfogged, a puddle on a foggy street mirrors the houses
+ * across it as though the air between were clear, and reads as a hole. The same medium the
+ * environment sees, the global height fog lit by its ambient, along the ray's own segment in
+ * closed form: density x L x H (e^-y0/H - e^-y1/H) / (y1 - y0).
+ */
+vec3 reflectedThroughFog(vec3 radiance, vec3 fromV, vec3 toV) {
+    if (ssrFogDensity <= 0.0)
+        return radiance;
+    float y0 = max((invView * vec4(fromV, 1.0)).y - ssrFogFloorY, 0.0);
+    float y1 = max((invView * vec4(toV, 1.0)).y - ssrFogFloorY, 0.0);
+    float len = length(toV - fromV);
+    float e0 = exp(-y0 / ssrFogFalloff);
+    float dy = y1 - y0;
+    float tau = abs(dy) < 1e-3 * ssrFogFalloff
+                    ? ssrFogDensity * e0 * len
+                    : ssrFogDensity * ssrFogFalloff * len / dy * (e0 - exp(-y1 / ssrFogFalloff));
+    float T = exp(-tau);
+    return radiance * T + ssrFogInscatter * preExposure * (1.0 - T);
 }
 
 // Probe fallback where the SSR ray misses (off-screen, grazing, occluded,
@@ -463,6 +493,9 @@ void main()
                              budgetFade * strength,
                          0.0, 1.0);
     vec3 reflection = min(texture(hdrTex, hitUV).rgb, vec3(WS_REFLECT_MAX));
+    if (replace)
+        reflection = reflectedThroughFog(
+            reflection, fragPos, viewPosFromDepth(hitUV, texture(depthTex, hitUV).r));
     // Partial fades (screen edge, march distance) blend toward the probe
     // instead of toward nothing — premultiplied "SSR over probe". The probe
     // term already carries floorFade, so scaling the SSR term by it makes
