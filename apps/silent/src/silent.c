@@ -170,6 +170,10 @@ static void build_sky(Engine* engine) {
     }
     sky_update_moon(sky);
     sky_update_sun_dir(sky);
+    // What a puddle or a wet car mirrors is the fog over the street, not the
+    // navy sky above it. Resolved from the post chain's fog at the bake, so
+    // build_post has to have run first.
+    ibl->reflect_fog = true;
     if (sky_bake_static_luts(sky, engine) != 0 || sky_bake(sky, ibl, engine) != 0) {
         free_sky_atmosphere(sky);
         free_ibl_resources(ibl);
@@ -341,6 +345,8 @@ static void on_init(Game* game) {
     }
     clock_start(&g_clock, engine, g_scene, audio);
 
+    // Before the sky: its reflections are baked through the fog set here.
+    build_post(engine, !g_args.day, !g_args.no_grade);
     build_sky(engine);
 
     // Already soaked: the game opens in the middle of the rain, not at its start.
@@ -391,8 +397,6 @@ static void on_init(Game* game) {
         ex->automatic = false;
         ex->multiplier = EXPOSURE_NIGHT;
     }
-
-    build_post(engine, !g_args.day, !g_args.no_grade);
 }
 
 static void on_update(Game* game, double dt) {
