@@ -43,6 +43,19 @@ _Static_assert(IBL_SKYBOX_TEXTURE_UNIT < 16,
 // Forward declarations
 struct Engine;
 
+/*
+ * The medium a reflection sees the environment through (spec 13.9): the global height fog,
+ * integrated from the fog's floor along each direction and lit by the fog's ambient, so wet
+ * ground in fog mirrors the fog and not the clear sky above it. Unreal's sky light gets the same
+ * by capturing its height fog. Density 0 is no medium.
+ */
+typedef struct IBLMedium {
+    float density;  // extinction at the fog's floor, per world unit; 0 = no medium
+    float falloff;  // world units per 1/e of density above the floor
+    float reach;    // world units along a ray the fog is integrated over
+    vec3 inscatter; // radiance the fog scatters toward the eye, scene units
+} IBLMedium;
+
 typedef struct IBLResources {
     // Source HDR environment
     GLuint hdr_texture;
@@ -75,6 +88,16 @@ typedef struct IBLResources {
     // Parameters
     float intensity;
     float max_reflection_lod;
+
+    /*
+     * true = the reflection chains (GGX and sheen) see the environment through the global
+     * height fog, resolved from PostFX at each bake into `medium`, which the day/night slicer
+     * reuses between bakes. The irradiance never does: the fog's glow is real fill light as
+     * well, but taking it into the irradiance re-lights every surface in the scene, which is a
+     * different decision from what a mirror sees.
+     */
+    bool reflect_fog;
+    IBLMedium medium; // engine-owned: what the last bake resolved
 
     /*
      * Solid-angle-weighted mean radiance of the environment's UPPER hemisphere, in
@@ -157,9 +180,11 @@ void ibl_create_cubemap_texture(GLuint* texture, int size, bool mipmap);
 // "ibl_charlie_prefilter" -- both share the environmentMap/roughness/
 // resolution contract): (re)allocates *dst with mip_levels manually-sized
 // levels from dst_base_size down, roughness = mip / (mip_levels - 1).
-// Requires precompute_ibl to have run (shares its capture FBO).
+// `medium` is what the source is seen through; NULL = nothing, which is right
+// for a probe's capture of the scene around it. Requires precompute_ibl to
+// have run (shares its capture FBO).
 void ibl_prefilter_cubemap(IBLResources* ibl, ShaderProgram* program, GLuint src_cube, GLuint* dst,
-                           int dst_base_size, int mip_levels);
+                           int dst_base_size, int mip_levels, const IBLMedium* medium);
 
 // The 90-degree frustum every cube-face draw shares -- the sky's env faces
 // and the prefilter integrating over them must agree on it.
@@ -180,6 +205,6 @@ void ibl_create_prefilter_cubemap(GLuint* texture, int size, int num_mip_levels)
 void ibl_irradiance_slice(IBLResources* ibl, GLuint src_cube, GLuint dst_cube, int env_size);
 void ibl_prefilter_slice(IBLResources* ibl, ShaderProgram* program, GLuint src_cube,
                          GLuint dst_cube, int dst_base_size, int mip_levels, int mip,
-                         int face_first, int face_count);
+                         int face_first, int face_count, const IBLMedium* medium);
 
 #endif // _IBL_H_

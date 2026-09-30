@@ -71,8 +71,8 @@ int reflection_probe_capture(ReflectionProbe* probe, struct Engine* engine, Scen
         glGetIntegerv(GL_FRAMEBUFFER_BINDING, &saved_env_fbo);
 
         ibl_prefilter_cubemap(ibl, ibl->prefilter_program, ibl->environment_cubemap,
-                              &probe->prefiltered, PROBE_PREFILTER_SIZE,
-                              PROBE_PREFILTER_MIP_LEVELS);
+                              &probe->prefiltered, PROBE_PREFILTER_SIZE, PROBE_PREFILTER_MIP_LEVELS,
+                              &ibl->medium);
 
         glBindFramebuffer(GL_FRAMEBUFFER, saved_env_fbo);
         glViewport(saved_env_viewport[0], saved_env_viewport[1], saved_env_viewport[2],
@@ -116,8 +116,10 @@ int reflection_probe_capture(ReflectionProbe* probe, struct Engine* engine, Scen
     glBindTexture(GL_TEXTURE_CUBE_MAP, probe->cubemap);
     glGenerateMipmap(GL_TEXTURE_CUBE_MAP);
 
+    // No medium: the capture is the scene round the probe, metres away, not the distant sky
+    // the fog stands in front of.
     ibl_prefilter_cubemap(ibl, ibl->prefilter_program, probe->cubemap, &probe->prefiltered,
-                          PROBE_PREFILTER_SIZE, PROBE_PREFILTER_MIP_LEVELS);
+                          PROBE_PREFILTER_SIZE, PROBE_PREFILTER_MIP_LEVELS, NULL);
 
     scene_capture_end(engine, scene, &saved_capture);
 

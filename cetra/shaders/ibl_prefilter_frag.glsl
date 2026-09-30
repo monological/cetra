@@ -7,6 +7,7 @@ uniform float roughness;
 uniform float resolution; // Face size of environmentMap mip 0
 
 #include "sampling.glsl"
+#include "env_medium.glsl"
 
 float DistributionGGX(vec3 N, vec3 H, float roughness)
 {
@@ -52,7 +53,8 @@ void main()
             float saSample = 1.0 / (float(SAMPLE_COUNT) * pdf + 0.0001);
             float mipLevel = roughness == 0.0 ? 0.0 : 0.5 * log2(saSample / saTexel);
 
-            prefilteredColor += textureLod(environmentMap, L, mipLevel).rgb * NdotL;
+            prefilteredColor +=
+                envThroughMedium(textureLod(environmentMap, L, mipLevel).rgb, L) * NdotL;
             totalWeight += NdotL;
         }
     }

@@ -15,6 +15,7 @@ uniform float resolution; // Face size of environmentMap mip 0
 
 #include "sampling.glsl"
 #include "sheen.glsl"
+#include "env_medium.glsl"
 
 // Importance-sample the Charlie NDF (inverse-CDF from the reference
 // renderer): sin(theta_h) = u^(alpha / (2*alpha + 1)). Tangent-basis
@@ -64,7 +65,8 @@ void main()
             float saSample = 1.0 / (float(SAMPLE_COUNT) * pdf + 0.0001);
             float mipLevel = roughness == 0.0 ? 0.0 : 0.5 * log2(saSample / saTexel);
 
-            prefilteredColor += textureLod(environmentMap, L, mipLevel).rgb * NdotL;
+            prefilteredColor +=
+                envThroughMedium(textureLod(environmentMap, L, mipLevel).rgb, L) * NdotL;
             totalWeight += NdotL;
         }
     }
