@@ -26899,6 +26899,20 @@ RAIN_COVER_POINTS = [
     ((0.0, 3.2, -4.0), True), ((0.0, 2.0, -11.25), True),
     ((0.0, 0.0, -1.5), True), ((0.0, 0.0, -7.5), False),
 ]
+RAIN_WATER_FIXTURE = "rain_water_fixture.cscn"
+# The wall the wind drives the rain at, 2 m up: exposed, and vertical, so it sheds.
+RAIN_WALL_POINT = (0.0, 2.0, -11.25)
+# The ripple arm looks OUT from under the roof, 1.2 m up, with rings a metre across. The
+# covered water is then the nearest in frame, where a ring could not hide; from the fixture's
+# own camera that water is 13 m out, where rings have already faded into their own footprint
+# and a cover that did nothing passes.
+RAIN_UNDER_ROOF_CAMERA = {"eye": [0.0, 1.2, -5.5], "target": [0.0, 0.0, 1.0], "fov": 70}
+RAIN_RING_SIZE = 1.0
+# Points on the covered water, clear of the dry patch's softened edge: the roof's footprint
+# carried 0.84 m toward the wall by the wind, less the cover's spread from 3 m up.
+RAIN_COVERED_WATER = [(x, 0.05, z) for x in (-1.0, 0.0, 1.0) for z in (-4.0, -3.4, -2.8)]
+# The fraction of a frame a feature has to move for it to count as there at all.
+RAIN_FEATURE_MIN = 0.01
 
 
 def _rain_twin(rate):
@@ -26968,13 +26982,20 @@ def run_rain_gate(workdir):
                     ground is EXACTLY as it was on both halves, and in the open the porous
                     half falls below RAIN_WET_POROUS_MAX of its dry brightness while the
                     sealed half, which only takes a film, stays well above the porous one.
+      rain-puddles  puddles against none on the same soaked surfaces: they move more than
+                    RAIN_FEATURE_MIN of the frame, and not one pixel round the ground under
+                    the roof or on the wall -- standing water needs rain AND level ground.
+      rain-ripples  the flooded twin seen from under the roof, rings against none: the open
+                    water rings, and the covered water nearest the camera does not move by a
+                    pixel. From the fixture's own camera that water is too far off for a
+                    ring to show, and a cover that did nothing would pass there.
       rain-ledger   the rain variant declares no more samplers than the dry variant of the
                     same materials: the cover is a tenant of the punctual array, and a unit
                     spent on it would be one the full variant does not have.
 
-    Everything here runs on rain_fixture, whose answers are known from its geometry and
-    its closed forms; the streak arms read the fixture at sheen 0, since the sheen is a look
-    laid over the physics rather than part of it.
+    Everything here runs on rain_fixture and its flooded twin, whose answers are known from
+    their geometry and their closed forms; the streak arms read the fixture at sheen 0, since
+    the sheen is a look laid over the physics rather than part of it.
     """
     scene = asset(RAIN_FIXTURE)
     if not os.path.exists(scene):
@@ -27197,6 +27218,76 @@ def run_rain_gate(workdir):
           f"the porous)")
     if not ok:
         failures.append("rain-wet")
+
+    def moved_round(a_path, b_path, project, points):
+        """(pixels differing in a 7x7 box round each point's image, pixels in those boxes).
+
+        The second count is how the caller knows every point was in frame: a point off the
+        edge contributes no pixels, and a box of none cannot have moved."""
+        w, h, pa = _read_ppm(a_path)
+        _, _, pb = _read_ppm(b_path)
+        moved = total = 0
+        for p in points:
+            x, y = project(p)
+            for py in range(max(0, int(y) - 3), min(h, int(y) + 4)):
+                for px in range(max(0, int(x) - 3), min(w, int(x) + 4)):
+                    i = 3 * (py * w + px)
+                    moved += pa[i:i + 3] != pb[i:i + 3]
+                    total += 1
+        return moved, total
+
+    # Puddles against none, on the same soaked surfaces: rain_wet's frame is the puddled one.
+    still_points = [p for n, p in RAIN_WET_POINTS if n.startswith("covered")] + [RAIN_WALL_POINT]
+    unpooled = frame("unpooled", variant("unpooled", lambda s: s["rain"].update(
+        {"streakCount": 0, "puddleCoverage": 0.0})), RAIN_LINEAR)
+    frac, still_moved, still_total = 0.0, -1, 0
+    if wet_path and unpooled:
+        w, h, _ = _read_ppm(wet_path)
+        ae, _ = compare(wet_path, unpooled)
+        frac = ae / (w * h)
+        still_moved, still_total = moved_round(wet_path, unpooled,
+                                               _projector(_cscn_camera(RAIN_FIXTURE), w, h),
+                                               still_points)
+    ok = frac > RAIN_FEATURE_MIN and still_total == 49 * len(still_points) and still_moved == 0
+    print(f"  rain-puddles {'PASS' if ok else 'FAIL'}  puddles move {frac:.1%} of the frame "
+          f"(want > {RAIN_FEATURE_MIN:.0%}) and {still_moved} of {still_total} pixels round the "
+          f"covered ground and the wall (want 0 of {49 * len(still_points)})")
+    if not ok:
+        failures.append("rain-puddles")
+
+    # Rings against none on the flooded twin, looking out from under the roof.
+    water = asset(RAIN_WATER_FIXTURE)
+    if not os.path.exists(water):
+        print(f"  rain-ripples SKIP  ({RAIN_WATER_FIXTURE} not present)")
+        return failures
+
+    def under_roof(name, strength):
+        def mutate(s):
+            s["camera"] = dict(RAIN_UNDER_ROOF_CAMERA)
+            s["rain"].update({"streakCount": 0, "rippleSize": RAIN_RING_SIZE})
+            if strength is not None:
+                s["rain"]["rippleStrength"] = strength
+        path = os.path.join(workdir, f"rain_{name}.cscn")
+        cscn_copy(water, path, mutate)
+        return frame(name, path, RAIN_LINEAR)
+
+    ringed, calm = under_roof("ringed", None), under_roof("calm", 0.0)
+    frac, covered_moved, covered_total = 0.0, -1, 0
+    if ringed and calm:
+        w, h, _ = _read_ppm(ringed)
+        ae, _ = compare(ringed, calm)
+        frac = ae / (w * h)
+        cam = RAIN_UNDER_ROOF_CAMERA
+        project = _projector({"eye": tuple(cam["eye"]), "target": tuple(cam["target"]),
+                              "fovy_deg": float(cam["fov"])}, w, h)
+        covered_moved, covered_total = moved_round(ringed, calm, project, RAIN_COVERED_WATER)
+    ok = (frac > RAIN_FEATURE_MIN and covered_total == 49 * len(RAIN_COVERED_WATER)
+          and covered_moved == 0)
+    print(f"  rain-ripples {'PASS' if ok else 'FAIL'}  rings move {frac:.1%} of the frame (want > "
+          f"{RAIN_FEATURE_MIN:.0%}) and {covered_moved} of {covered_total} pixels on the water "
+          f"under the roof (want 0 of {49 * len(RAIN_COVERED_WATER)})")
+    if not ok:
+        failures.append("rain-ripples")
 
     def samplers(extra):
         _, text = _probe_render(scene, "--rain-probe", "rain-probe", frames=2, extra=extra)
