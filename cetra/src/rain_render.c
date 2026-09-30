@@ -232,6 +232,23 @@ void rain_render_drops(RainRenderer* rr, Engine* engine, Scene* scene, const Pos
     profiler_scope_end(engine->profiler);
 }
 
+void rain_publish_to_postfx(const Rain* rain, PostFX* fx) {
+    if (!fx)
+        return;
+    fx->rain_sigma = 0.0f;
+    if (!rain || !(rain->rate_mmh > 0.0f))
+        return;
+    fx->rain_sigma = rain_extinction(rain->rate_mmh) * fmaxf(rain->mist, 0.0f);
+    // One lobe for a drop, whether it is drawn or is air: a knob of its own would let the
+    // rain in the distance scatter a lamp differently from the rain in front of it.
+    fx->rain_forward_g = rain->streak_forward_g;
+    // The outermost streak box's half-width. Inside it the streaks already stand for every
+    // drop, so a medium there too would count the rain twice.
+    fx->rain_near = rain->streak_count > 0
+                        ? rain->streak_radius * powf(3.0f, (float)(RAIN_STREAK_BOXES - 1))
+                        : 0.0f;
+}
+
 void rain_bind_surface(const Rain* rain, ShaderProgram* program) {
     if (!program || !program->uniforms)
         return;

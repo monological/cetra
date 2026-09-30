@@ -1044,6 +1044,7 @@ static void parse_rain(CetraSceneDesc* d, const cJSON* root) {
         _ranged_float(rain, "rain", "splashAmount", 0.0f, 100.0f, &out->splash_amount);
     out->has_splash_size =
         _ranged_float(rain, "rain", "splashSize", 0.0f, 100.0f, &out->splash_size);
+    out->has_mist = _ranged_float(rain, "rain", "mist", 0.0f, 1000.0f, &out->mist);
     out->has_settled = get_bool(rain, "settled", &out->settled);
 
     static const char* const known[] = {
@@ -1052,7 +1053,7 @@ static void parse_rain(CetraSceneDesc* d, const cJSON* root) {
         "occlusionExtent",  "streakCount",    "streakRadius",   "shutter",         "streakWidth",
         "streakBrightness", "streakForwardG", "streakGlint",    "streakSheen",     "settled",
         "puddleScale",      "rippleStrength", "rippleSize",     "splashCount",     "splashRadius",
-        "splashAmount",     "splashSize",
+        "splashAmount",     "splashSize",     "mist",
     };
     warn_unknown_keys(rain, known, sizeof(known) / sizeof(known[0]), "rain");
 }

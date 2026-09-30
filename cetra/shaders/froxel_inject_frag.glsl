@@ -99,6 +99,15 @@ uniform sampler2DArray punctualShadowMaps;
 uniform int spotShadowLayer;
 uniform mat4 spotLightSpaceMatrix;
 
+// Falling rain as a medium (spec 13.9), past the streaks: its own extinction and its own
+// phase, which is the drops' -- mostly a forward lobe from refraction, the rest everywhere --
+// and a third medium in any cell it shares. Absent where the occlusion map says the rain does
+// not reach, which is a layer of the array above.
+uniform float rainSigma;    // extinction per world unit; 0 = no rain in the air
+uniform float rainForwardG; // the drops' refracted lobe
+uniform float rainNear;     // world units from the eye where it takes over from the streaks
+#include "rain_occlusion.glsl"
+
 // Temporal reprojection against the previous frame's volume. 0 freezes the
 // jitter and skips the blend, so headless renders stay byte-deterministic --
 // the same contract every other accumulator in this stack honours.
@@ -134,6 +143,7 @@ float halton(int index, int base) {
 }
 
 #include "phase.glsl"
+#include "rain_phase.glsl"
 
 // Is the air at world position P lit by the caster whose cascade block starts
 // at layer0? Walks cascades in index order and taps the FIRST whose box
@@ -262,6 +272,19 @@ void main() {
     // because only one of them can be the sun.
     float cloudSun = cloudSunAt(P);
 
+    // The rain's extinction here: none under cover, and none inside the outermost streak box,
+    // where the streaks already stand for every drop. Its source function, R, sums the same
+    // lights as the fog's through the drops' phase in place of the fog's -- the one thing about
+    // it that differs -- and without the fog's sunBoost, which is the fog's look and not light.
+    float rainS = 0.0;
+    if (rainSigma > 0.0) {
+        float handover = rainNear > 0.0
+                             ? smoothstep(0.75 * rainNear, rainNear, length(P - camPos))
+                             : 1.0;
+        rainS = rainSigma * handover * rainExposure(P);
+    }
+    vec3 R = ambientColor;
+
     vec3 S = ambientColor;
     for (int j = 0; j < numLights; j++) {
         float phase = phaseHG(dot(lightDir[j], -rayDir), anisotropy) * sunBoost;
@@ -270,6 +293,8 @@ void main() {
         // and -1 states "the sun is not in this list", which a direction cannot.
         float cloud = (j == cloudShadowLight) ? cloudSun : 1.0;
         S += lightColor[j] * (phase * cloud * fogVisibility(j * cascadeCount, P));
+        R += lightColor[j] * (rainDropPhase(dot(lightDir[j], -rayDir), rainForwardG) * cloud *
+                              fogVisibility(j * cascadeCount, P));
     }
 
     // Spot in-scatter at P: inside the cone, falling off with distance, cut by
@@ -310,6 +335,10 @@ void main() {
             }
             float spotPhase = phaseHG(dot(spotDir, -rayDir), anisotropy) * sunBoost;
             S += spotColor * (cone * atten * spotPhase * vis);
+            // The light's own travel through P rather than the cone's axis: a drop's lobe is
+            // narrow enough that the difference is the beam's width.
+            R += spotColor * (cone * atten * rainDropPhase(dot(-spotL, -rayDir), rainForwardG) *
+                              vis);
         }
     }
 
@@ -344,6 +373,8 @@ void main() {
         // travels -- the punctual analogue of the directional phase above.
         float phase = phaseHG(dot(-pointL, -rayDir), anisotropy) * sunBoost;
         S += clusterLights[li].colorIntensity.xyz * (attenAngular * phase);
+        R += clusterLights[li].colorIntensity.xyz *
+             (attenAngular * rainDropPhase(dot(-pointL, -rayDir), rainForwardG));
     }
 
     /*
@@ -364,6 +395,13 @@ void main() {
      */
     if (localFogCount > 0 && sigma > 0.0)
         S *= sigmaTint / sigma;
+    // The rain is a third medium and folds in the same way, weighted by the extinction it
+    // brings. Guarded on its own extinction, which is what keeps a cell with no rain exactly
+    // the cell it was.
+    if (rainS > 0.0) {
+        S = (S * sigma + R * rainS) / (sigma + rainS);
+        sigma += rainS;
+    }
 
     // Scene radiance -> working space HERE, upstream of the clamp, for the same
     // reason pbr_frag pre-exposes its per-light radiance rather than its final

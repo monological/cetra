@@ -2284,6 +2284,7 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode) {
     const Scene* fx_scene = engine_get_scene(engine);
     probe_set_publish_to_postfx(fx_scene ? fx_scene->probe_set : NULL, engine->postfx);
     shadow_publish_to_postfx(fx_scene, engine->postfx);
+    rain_publish_to_postfx(fx_scene ? fx_scene->rain : NULL, engine->postfx);
     // Aerial perspective is a camera-frustum volume, so unlike the sky's other
     // LUTs it is rebuilt here every frame, immediately before it is published.
     // The unjittered projection: the bake reads only [0][0]/[1][1]/[2][2]/[3][2]

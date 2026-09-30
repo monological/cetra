@@ -36,6 +36,11 @@ void rain_render_drops(RainRenderer* renderer, struct Engine* engine, struct Sce
 
 struct Rain;
 struct ShaderProgram;
+struct PostFX;
+// The rain as a medium past the streaks, into the post chain's fog volume. NULL publishes the
+// off state, and must every frame: the request arms the volume for as long as it stands.
+void rain_publish_to_postfx(const struct Rain* rain, struct PostFX* fx);
+
 // How soaked the world is, for a lit-surface program. NULL publishes 0, the dry state, and
 // must: programs are cached across scenes, so a dry scene after a wet one would otherwise
 // inherit its wetness.

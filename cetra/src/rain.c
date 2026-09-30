@@ -59,6 +59,7 @@ Rain* create_rain(void) {
     rain->splash_radius = 6.0f;
     rain->splash_amount = 1.0f;
     rain->splash_size = 1.0f;
+    rain->mist = 1.0f;
     return rain;
 }
 
@@ -247,9 +248,11 @@ void rain_probe_print(const Rain* rain) {
         return;
     }
     printf("rain-probe state present=1 rate=%.9g wetness=%.9g puddle=%.9g time=%.9g "
-           "wet_time=%.9g dry_time=%.9g fill_time=%.9g drain_time=%.9g coverage=%.9g\n",
+           "wet_time=%.9g dry_time=%.9g fill_time=%.9g drain_time=%.9g coverage=%.9g "
+           "streak_count=%d streak_radius=%.9g mist=%.9g\n",
            (double)rain->rate_mmh, (double)rain->wetness, (double)rain->puddle_level,
            (double)rain->time, (double)rain->wet_time, (double)rain->dry_time,
            (double)rain->puddle_fill_time, (double)rain->puddle_drain_time,
-           (double)rain->puddle_coverage);
+           (double)rain->puddle_coverage, rain->streak_count, (double)rain->streak_radius,
+           (double)rain->mist);
 }

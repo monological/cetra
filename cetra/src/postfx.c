@@ -775,6 +775,7 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     fx->froxel_prev_frame = -1;   // no froxel frame yet; 0 would match frame 0
     fx->fog_layer_frame = -1;     // likewise for the composited layer's history
     fx->fog_spot_enabled = false; // published per frame by shadow_publish_to_postfx
+    fx->rain_cover_layer = -1;    // likewise; 0 is a layer, so the off state has to be said
     // -1 is "no profile"; a calloc'd 0 would name the first one.
     fx->fog_spot_ies_profile = -1;
 
@@ -2322,7 +2323,8 @@ bool postfx_has_medium(const PostFX* fx) {
     // cannot any more, because two of the three arming sources are republished every
     // frame. Without this the pass re-arms, re-fails and re-logs twice a frame forever.
     return fx && !fx->froxel_failed &&
-           (fx->fog_enabled || fx->water_medium != 0 || fx->local_fog_count > 0);
+           (fx->fog_enabled || fx->water_medium != 0 || fx->local_fog_count > 0 ||
+            fx->rain_sigma > 0.0f);
 }
 
 bool postfx_wants_aux_gbuffer(const PostFX* fx) {
@@ -2569,6 +2571,13 @@ static void upload_fog_uniforms(PostFX* fx, UniformManager* u, mat4 projection, 
     }
     uniform_set_float(u, "anisotropy", fx->fog_anisotropy);
     uniform_set_float(u, "sunBoost", fx->fog_sun_boost);
+    // The rain's medium, and where it reaches. rainSigma 0 is the off state and skips all of it.
+    uniform_set_float(u, "rainSigma", fx->rain_sigma);
+    uniform_set_float(u, "rainForwardG", fx->rain_forward_g);
+    uniform_set_float(u, "rainNear", fx->rain_near);
+    uniform_set_int(u, "rainOcclusionLayer", fx->rain_cover_layer);
+    if (fx->rain_cover_layer >= 0)
+        uniform_set_mat4(u, "rainOcclusionMatrix", (float*)fx->rain_cover_matrix);
     uniform_set_float(u, "shadowBias", fx->fog_shadow_bias);
     // Count 0 (shadows off or absent) degrades fog to ambient haze; the publish
     // guarantees the map array is valid whenever the count is nonzero.
