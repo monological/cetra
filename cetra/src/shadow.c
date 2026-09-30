@@ -505,6 +505,31 @@ bool bind_outermost_cascades_to_program(const ShadowSystem* system, ShaderProgra
 // before. Both were one condition at one call site trying to model four light
 // types. Point and area shadows add their own clauses HERE and no caller
 // changes.
+// The rain's cover rides the punctual array (spec 13.9), and is NOT gated on `enabled`:
+// switching shadows off does not put a roof over the street.
+static void upload_rain_cover(const ShadowSystem* system, UniformManager* u) {
+    uniform_set_int(u, "rainOcclusionLayer", system->rain_layer);
+    if (system->rain_layer >= 0) {
+        uniform_set_mat4(u, "rainOcclusionMatrix", (const float*)system->rain_lookup);
+        uniform_set_float(u, "rainCoverSpread", system->rain_cover_spread);
+        uniform_set_float(u, "rainUvPerMetre", system->rain_uv_per_metre);
+    }
+}
+
+void shadow_bind_rain_cover(const ShadowSystem* system, ShaderProgram* program, int unit) {
+    if (!program || !program->uniforms)
+        return;
+    if (!system) {
+        uniform_set_int(program->uniforms, "rainOcclusionLayer", -1);
+        return;
+    }
+    glActiveTexture(GL_TEXTURE0 + unit);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, system->punctual_map_array);
+    glActiveTexture(GL_TEXTURE0);
+    uniform_set_int(program->uniforms, "punctualShadowMaps", unit);
+    upload_rain_cover(system, program->uniforms);
+}
+
 void bind_shadow_maps_to_program(ShadowSystem* system, ShaderProgram* program) {
     if (!system || !program || !program->uniforms)
         return;
@@ -555,14 +580,7 @@ void bind_shadow_maps_to_program(ShadowSystem* system, ShaderProgram* program) {
                                (const GLfloat*)system->punctual_matrices);
         uniform_set_float(u, "punctualShadowMapSize", (float)system->punctual_map_size);
     }
-    // The rain's cover rides the same array (spec 13.9), and is NOT gated on `on`:
-    // switching shadows off does not put a roof over the street.
-    uniform_set_int(u, "rainOcclusionLayer", system->rain_layer);
-    if (system->rain_layer >= 0) {
-        uniform_set_mat4(u, "rainOcclusionMatrix", (const float*)system->rain_lookup);
-        uniform_set_float(u, "rainCoverSpread", system->rain_cover_spread);
-        uniform_set_float(u, "rainUvPerMetre", system->rain_uv_per_metre);
-    }
+    upload_rain_cover(system, u);
 
     uniform_set_int(u, "numShadowLights", directional_on ? (int)system->directional_count : 0);
     if (!directional_on)

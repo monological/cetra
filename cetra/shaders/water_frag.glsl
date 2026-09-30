@@ -144,6 +144,10 @@ uniform float rainTime;           // seconds, the rain's clock
 uniform float rainRippleActivity; // 0..1, the fraction of ripple cells live; 0 = no rain
 uniform float rainRippleSize;     // metres across a ripple cell
 uniform float rainRippleStrength; // scale on the rings' tilt
+// Where the rain reaches at all: the occlusion map, a layer of the punctual array, which this
+// program declares for that one layer and samples no shadows from.
+uniform sampler2DArray punctualShadowMaps;
+#include "rain_occlusion.glsl"
 // The surface definition, for its cascade samplers and its wave-model switch. The
 // fragment stage does not re-evaluate the surface -- the vertex stage's position
 // and normal are interpolated in -- but it reads the SHORT band, which by design
@@ -964,7 +968,10 @@ void main() {
     if (rainRippleActivity > 0.0) {
         vec2 ring =
             rainRippleSlope(WorldPos.xz, rainTime, rainRippleSize, rainRippleActivity, footprint);
-        N = normalize(N + vec3(-ring.x, 0.0, -ring.y) * rainRippleStrength);
+        // Softened as wet ground's cover is, so water under an eave rings up to the same edge
+        // the ground beside it wets to.
+        float open = rainExposureSoft(WorldPos, 6.2831853 * ign(gl_FragCoord.xy));
+        N = normalize(N + vec3(-ring.x, 0.0, -ring.y) * (rainRippleStrength * open));
     }
     if (waveModel == 1) {
         // Roughness takes the slope variance the fade REMOVED, which is what makes this a

@@ -3067,8 +3067,10 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
     // The advance of the SAME clock `time` came from, so the previous-frame
     // surface is one step back rather than one wall-clock tick back.
     uniform_set_float(u, "uDeltaTime", (float)engine->render_delta);
-    // Rings from the rain landing on it (spec 13.9); a scene with no rain publishes none.
+    // Rings from the rain landing on it (spec 13.9); a scene with no rain publishes none, and
+    // the cover says where it lands at all.
     rain_bind_surface(scene ? scene->rain : NULL, program);
+    shadow_bind_rain_cover(scene ? scene->shadow_system : NULL, program, WATER_RAIN_COVER_UNIT);
 
     int rw, rh;
     engine_render_size(engine, &rw, &rh);

@@ -123,6 +123,19 @@ _Static_assert(WATER_TOUCH_UNIT != WATER_CASCADE_UNIT && WATER_TOUCH_UNIT != WAT
                    WATER_TOUCH_UNIT != TEXUNIT_SCENE_COLOR &&
                    WATER_TOUCH_UNIT != SKY_CLOUD_SHADOW_UNIT,
                "the touch unit collides with one water already binds");
+// The rain's cover (spec 13.9): the punctual shadow ARRAY, bound here for the one layer the
+// occlusion map is, so rain does not ring water under a roof. 9 is TEXUNIT_SHEEN's Charlie
+// CUBE in pbr, a different binding point, and water declares nothing else there.
+#define WATER_RAIN_COVER_UNIT 9
+_Static_assert(
+    WATER_RAIN_COVER_UNIT != WATER_CASCADE_UNIT && WATER_RAIN_COVER_UNIT != WATER_PREV_UNIT &&
+        WATER_RAIN_COVER_UNIT != WATER_DEPTH_UNIT && WATER_RAIN_COVER_UNIT != WATER_BED_UNIT &&
+        WATER_RAIN_COVER_UNIT != WATER_FOAM_PATTERN_UNIT &&
+        WATER_RAIN_COVER_UNIT != WATER_SHADOW_UNIT && WATER_RAIN_COVER_UNIT != WATER_FOAM_UNIT &&
+        WATER_RAIN_COVER_UNIT != WATER_CAUSTIC_UNIT && WATER_RAIN_COVER_UNIT != WATER_RIPPLE_UNIT &&
+        WATER_RAIN_COVER_UNIT != WATER_TOUCH_UNIT && WATER_RAIN_COVER_UNIT != TEXUNIT_SCENE_COLOR &&
+        WATER_RAIN_COVER_UNIT != SKY_CLOUD_SHADOW_UNIT,
+    "the rain cover unit collides with one water already binds");
 // The touch simulation's square: texels a side, metres a side, steps a second, and how many
 // drops one step presses in (shared with the step shader). 7 m at 256 is 2.7 cm a texel,
 // Clearwater's.
