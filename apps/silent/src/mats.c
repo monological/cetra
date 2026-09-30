@@ -69,6 +69,9 @@ typedef struct GlowSpec {
 static const GlowSpec GLOWS[] = {
     {MAT_WINDOW_LIT, {1.0f, 0.70f, 0.40f}, 30.0f},
     {MAT_LAMP_GLOW, {0.85f, 1.0f, 0.90f}, 4000.0f},
+    // A 25 W filament through frosted glass; its light is the point light
+    // lights.c hangs inside it.
+    {MAT_BULB, {1.0f, 0.72f, 0.42f}, 1500.0f},
 };
 
 /*
@@ -85,10 +88,11 @@ typedef struct GrimeSpec {
 } GrimeSpec;
 
 static const GrimeSpec GRIME[] = {
-    {MAT_ENAMEL, 0.75f},      {MAT_APPLIANCE, 0.6f}, {MAT_TRIM, 0.55f}, {MAT_WOOD, 0.45f},
-    {MAT_TABLE, 0.5f},        {MAT_STAINLESS, 0.5f}, {MAT_STEEL, 0.5f}, {MAT_GLASS_CLEAR, 0.35f},
-    {MAT_GLASS_AMBER, 0.35f}, {MAT_PAPER, 0.35f},    {MAT_TOWEL, 0.4f}, {MAT_CUSHION, 0.5f},
-    {MAT_CERAMIC, 0.4f},
+    {MAT_ENAMEL, 0.75f},      {MAT_APPLIANCE, 0.6f}, {MAT_TRIM, 0.55f},    {MAT_WOOD, 0.45f},
+    {MAT_TABLE, 0.5f},        {MAT_STAINLESS, 0.5f}, {MAT_STEEL, 0.5f},    {MAT_GLASS_CLEAR, 0.35f},
+    {MAT_GLASS_AMBER, 0.35f}, {MAT_PAPER, 0.35f},    {MAT_TOWEL, 0.4f},    {MAT_CUSHION, 0.5f},
+    {MAT_CERAMIC, 0.4f},      {MAT_CASE, 0.45f},     {MAT_ROSEWOOD, 0.4f}, {MAT_MAPLE, 0.3f},
+    {MAT_BRASS, 0.5f},
 };
 
 static float grime_of(int id) {
@@ -171,6 +175,16 @@ static const MatSpec SPECS[MAT_COUNT] = {
     // its UVs from cards.h rather than from the world.
     [MAT_CARDS] = {"cards", "cards", {1, 1, 1}, 1.0f, 0.0f, 1.0f},
     [MAT_CUSHION] = {"cushion", "Sponge002", {0.95f, 0.9f, 0.78f}, 1.0f, 0.0f, 0.25f},
+    // The clock. Veneer under old varnish: rougher than the scans' fresh
+    // lacquer, which would mirror the hall. Rosewood's scan covers 2.4 m, so a
+    // shorter repeat brings its flame figure down to a panel's size.
+    [MAT_CASE] = {"clock_case", "lacquered_cherry_wood", {1, 1, 1}, 1.4f, 0.0f, 0.8f},
+    [MAT_ROSEWOOD] = {"rosewood", "rosewood_veneer1", {1, 1, 1}, 1.4f, 0.0f, 1.0f},
+    [MAT_MAPLE] = {"maple", "white_maple_veneer", {1, 1, 1}, 1.2f, 0.0f, 0.5f},
+    // Brass gone dull: the smear scan's roughness and relief under brass's
+    // reflectance, darkened by tarnish.
+    [MAT_BRASS] = {"brass", "Smear008", {0.72f, 0.58f, 0.3f}, 0.8f, 1.0f, 0.3f, true},
+    [MAT_BULB] = {"bulb", NULL, {0.95f, 0.9f, 0.8f}, 0.2f, 0.0f, 1.0f},
 };
 
 static Texture* load(TexturePool* pool, const char* set, const char* map, TextureDesc desc) {

@@ -21,6 +21,14 @@ static const float TUBE_COLOUR[3] = {0.80f, 1.0f, 0.84f};
 
 #define FLASHLIGHT_CANDELA 900.0f
 
+/*
+ * The hall's one light: a bare 25 W bulb on its flex, near the kitchen door,
+ * so the clock opposite the door reads from the doorway and the hall stays
+ * dim. Warm, the way a filament is beside a fluorescent tube.
+ */
+static const vec3 BULB_AT = {-0.75f, CEIL_Y - 0.5f, 13.75f};
+#define BULB_CANDELA 30.0f
+
 typedef struct Tube {
     const char* name; // the node's name, which the derived light takes
     vec3 centre;
@@ -130,6 +138,29 @@ static void tube_fixture(Kit* kit, const Tube* t) {
     kit_box(kit, MAT_STEEL, centre, half, 0.0f, false);
 }
 
+// The bulb: its flex, a black socket, and the frosted glass hanging from it,
+// lit by a point light inside that casts no shadow.
+static void hall_bulb(Kit* kit, Scene* scene) {
+    const float x = BULB_AT[0], y = BULB_AT[1], z = BULB_AT[2];
+    kit_frame_pipe(kit, &KIT_WORLD, MAT_BLACK, (vec3[]){{x, CEIL_Y, z}, {x, y + 0.08f, z}}, 2,
+                   0.003f, 6);
+    const vec2 socket[] = {
+        {0.0f, 0.0f}, {0.014f, 0.0f}, {0.014f, 0.04f}, {0.008f, 0.05f}, {0.0f, 0.05f}};
+    kit_frame_lathe(kit, &KIT_WORLD, MAT_BLACK, x, z, y + 0.03f, socket,
+                    (int)(sizeof(socket) / sizeof(socket[0])), 12);
+    const vec2 glass[] = {{0.0f, 0.0f},    {0.012f, 0.004f}, {0.025f, 0.018f}, {0.03f, 0.035f},
+                          {0.026f, 0.05f}, {0.014f, 0.062f}, {0.012f, 0.075f}, {0.0f, 0.075f}};
+    kit_frame_lathe(kit, &KIT_WORLD, MAT_BULB, x, z, y - 0.045f, glass,
+                    (int)(sizeof(glass) / sizeof(glass[0])), 16);
+    LightDesc desc = {.name = "hall_bulb",
+                      .type = LIGHT_POINT,
+                      .position = {x, y, z},
+                      .color = {1.0f, 0.72f, 0.42f},
+                      .intensity = BULB_CANDELA,
+                      .range = 7.0f};
+    scene_add_light(scene, create_light(&desc));
+}
+
 void lights_build(Lights* lights, Kit* kit, Engine* engine, Scene* scene, unsigned int seed,
                   bool flicker, bool flashlight_on) {
     memset(lights, 0, sizeof(*lights));
@@ -153,6 +184,7 @@ void lights_build(Lights* lights, Kit* kit, Engine* engine, Scene* scene, unsign
     lights->flashlight_on = flashlight_on;
     glm_vec3_copy((vec3){0.0f, 0.0f, -1.0f}, lights->flashlight_dir);
 
+    hall_bulb(kit, scene);
     for (int i = 0; i < TUBE_COUNT; i++) {
         tube_fixture(kit, &TUBES[i]);
         Material* m = tube_strip(scene, pbr, &TUBES[i]);

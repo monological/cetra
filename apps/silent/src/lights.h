@@ -12,7 +12,8 @@
 #include "kit.h"
 
 /*
- * The kitchen's light: fluorescent tubes and the player's flashlight.
+ * The house's light: the kitchen's fluorescent tubes, a bare bulb in the hall,
+ * and the player's flashlight.
  *
  * A tube is a flat EMISSIVE strip in a mesh of its own, and the engine's
  * emissive-light pass turns each one into an LTC area panel every frame from

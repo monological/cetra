@@ -155,6 +155,10 @@ void kit_frame_pipe(Kit* kit, const KitFrame* f, int mat, const vec3* path, int 
 // closes it on the axis; a turn sharper than 60 degrees is a crease.
 void kit_frame_lathe(Kit* kit, const KitFrame* f, int mat, float a, float d, float y,
                      const vec2* profile, int count, int sides);
+// The same about any axis, from `base` along `axis`, both (a, y, d): a disc
+// facing the room, a finial on its side.
+void kit_frame_lathe_on(Kit* kit, const KitFrame* f, int mat, const vec3 base, const vec3 axis,
+                        const vec2* profile, int count, int sides);
 
 // A flat card from `corner` along `across` and `up`, all (a, y, d), facing
 // cross(across, up). It shows `uv` = {u0, v0, u1, v1} of its material's

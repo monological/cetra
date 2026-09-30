@@ -1,17 +1,21 @@
-"""Make the cards apps/silent pins to its fridge and leaves on its table.
+"""Make the pictures apps/silent places whole rather than tiles.
 
-Snapshots, a handwritten list and a typed letter, all packed into one
-picture, cards_albedo.png, with its roughness and normal beside it so the
-material loads like every other set. Where each card sits in the picture and
-how big it is in the world are written to apps/silent/src/cards.h, which the
-kitchen places them by -- this file is the one statement of both, so the
-header is generated and never edited.
+Snapshots, a handwritten list and a typed letter for the kitchen, and the hall
+clock's painted dial, its marquetry base panel and its fretted frieze, all
+packed into one picture, cards_albedo.png, with its roughness and normal
+beside it so the material loads like every other set. Where each card sits in
+the picture and how big it is in the world are written to
+apps/silent/src/cards.h, which the kitchen and the clock place them by -- this
+file is the one statement of both, so the header is generated and never
+edited.
 
 The snapshots are cut from the horizon band of CC0 HDRI previews from Poly
 Haven (https://polyhaven.com) and aged as prints that spent years on a fridge
-door: faded, gone warm, and given a white border. The list is in Reenie
-Beanie, an OFL font from Google Fonts, downloaded and cached rather than
-committed; the letter is in Cousine, which ships with Dear ImGui.
+door: faded, gone warm, and given a white border. The clock's woods are the
+Poly Haven veneers its case is made of, at 1k. The list is in Reenie Beanie
+and the dial in IM Fell English, OFL fonts from Google Fonts, downloaded and
+cached rather than committed; the letter is in Cousine, which ships with Dear
+ImGui.
 
 Stored BOTTOM ROW FIRST, as fetch_textures.py explains, so V runs up.
 Downloads are cached under out/polyhaven_cache. Run from anywhere:
@@ -20,29 +24,40 @@ Downloads are cached under out/polyhaven_cache. Run from anywhere:
 """
 
 import io
+import math
 import os
 import sys
 import textwrap
-import urllib.request
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+from fetch_textures import CACHE_DIR, ROOT, fetch, open_polyhaven
+
 OUT_DIR = os.path.join(ROOT, "assets", "textures", "silent")
 HEADER = os.path.join(ROOT, "apps", "silent", "src", "cards.h")
-CACHE_DIR = os.path.join(ROOT, "out", "polyhaven_cache")
 HDRI = "https://cdn.polyhaven.com/asset_img/primary/%s.png?height=1024"
-HAND_FONT = "https://raw.githubusercontent.com/google/fonts/main/ofl/reeniebeanie/ReenieBeanie.ttf"
+FONTS = "https://raw.githubusercontent.com/google/fonts/main/ofl/"
+HAND_FONT = FONTS + "reeniebeanie/ReenieBeanie.ttf"
+SERIF = FONTS + "imfellenglish/IMFeENrm28P.ttf"
+SERIF_ITALIC = FONTS + "imfellenglish/IMFeENit28P.ttf"
 TYPE_FONT = os.path.join(ROOT, "cetra", "src", "ext", "cimgui", "imgui", "misc", "fonts",
                          "Cousine-Regular.ttf")
 
-ATLAS = 1024
+ATLAS_W, ATLAS_H = 2048, 1024  # wide rather than square: the cards fill a band
 PAD = 6  # pixels between cards, so a mip does not reach its neighbour
 
-# How rough each kind of surface is: prints are glossy, paper is not.
+# How rough each kind of surface is: prints are glossy, paper is not, and the
+# clock's paint and veneer sit under old varnish between the two.
 ROUGH_PRINT = 0.35
 ROUGH_PAPER = 0.92
+ROUGH_ENAMEL = 0.45
+ROUGH_LACQUER = 0.4
+ROUGH_SCALE = 4  # the roughness map is this much smaller than the picture
+
+# The clock's art, in pixels a metre: fine enough to read the dial from a step
+# away through its glass.
+CLOCK_PX_PER_M = 1600
 
 PAPER = np.array([0.93, 0.90, 0.80])  # a sheet gone yellow
 INK = (38, 46, 92)                    # a ballpoint's blue-black
@@ -89,18 +104,6 @@ pay, you may contact our office during business hours to arrange a payment
 plan. Meter readings indicate continued use at the property.
 
 Collections Office"""
-
-
-def fetch(url, cache_name):
-    path = os.path.join(CACHE_DIR, cache_name)
-    if not os.path.exists(path):
-        req = urllib.request.Request(url, headers={"User-Agent": "cetra-silent/1.0"})
-        with urllib.request.urlopen(req, timeout=60) as r:
-            data = r.read()
-        with open(path, "wb") as f:
-            f.write(data)
-    with open(path, "rb") as f:
-        return f.read()
 
 
 def to_image(a):
@@ -194,19 +197,240 @@ def typed_letter(rng):
     return age_paper(a, rng), ROUGH_PAPER
 
 
+def clock_px(metres):
+    return int(round(metres * CLOCK_PX_PER_M))
+
+
+def veneer(name, w, h, turn=False):
+    """A w x h patch of one of the case's Poly Haven veneers at 1k, grain
+    along its length, or across it when turned."""
+    img = open_polyhaven(name, {})[0]["albedo"].convert("RGB")
+    if turn:
+        img = img.transpose(Image.Transpose.ROTATE_90)
+    a = to_array(img)
+    reps = (h // a.shape[0] + 1, w // a.shape[1] + 1, 1)
+    return np.tile(a, reps)[:h, :w]
+
+
+def paint_text(img, xy, text, font, fill, angle=0.0):
+    """Text centred on xy, turned `angle` degrees clockwise."""
+    box = font.getbbox(text)
+    tw, th = box[2] - box[0], box[3] - box[1]
+    layer = Image.new("L", (tw + 8, th + 8), 0)
+    ImageDraw.Draw(layer).text((4 - box[0], 4 - box[1]), text, font=font, fill=255)
+    layer = layer.rotate(-angle, resample=Image.Resampling.BICUBIC, expand=True)
+    img.paste(Image.new("RGB", layer.size, fill),
+              (int(xy[0] - layer.width / 2), int(xy[1] - layer.height / 2)), layer)
+
+
+def painted_rose(draw, cx, cy, s, rng):
+    """A spandrel rose as a dial painter did them: leaves, then petals round a
+    dark heart."""
+    for k in range(4):
+        a = k * math.pi / 2 + math.pi / 4 + rng.uniform(-0.3, 0.3)
+        lx, ly = cx + math.cos(a) * s * 1.1, cy + math.sin(a) * s * 1.1
+        draw.ellipse([lx - s * 0.55, ly - s * 0.3, lx + s * 0.55, ly + s * 0.3],
+                     fill=(74, 96, 52))
+    for k in range(7):
+        a = k * 2 * math.pi / 7
+        px, py = cx + math.cos(a) * s * 0.45, cy + math.sin(a) * s * 0.45
+        draw.ellipse([px - s * 0.5, py - s * 0.5, px + s * 0.5, py + s * 0.5],
+                     fill=(178, 58, 52), outline=(120, 30, 30))
+    draw.ellipse([cx - s * 0.4, cy - s * 0.4, cx + s * 0.4, cy + s * 0.4], fill=(140, 36, 36))
+    draw.ellipse([cx - s * 0.15, cy - s * 0.15, cx + s * 0.15, cy + s * 0.15], fill=(90, 20, 20))
+
+
+def clock_dial(rng):
+    """The hood's painted break-arch dial, seen through the rosewood mask its
+    door frames: a square dial with a round arch over it, Roman hours set
+    radially, a minute track, a seconds ring and a date, roses in the four
+    spandrels, and in the arch a moon's face in a starry sky over two
+    hemispheres. The hands are geometry, turned by the app about the two
+    arbors this returns as anchors, since only the painting knows where its
+    rings are."""
+    w, h, m = clock_px(0.34), clock_px(0.49), clock_px(0.02)
+    s = w - 2 * m
+    cx, cy = w // 2, h - m - s // 2  # the chapter ring's centre
+    base = h - m - s                 # where the square meets the arch
+    img = to_image(veneer("rosewood_veneer1", w, h))
+    draw = ImageDraw.Draw(img)
+    cream, black, gold = (232, 222, 194), (28, 24, 20), (176, 136, 64)
+    draw.rectangle([m, base, w - m - 1, h - m - 1], fill=cream)
+    draw.pieslice([cx - s // 2, base - s // 2, cx + s // 2, base + s // 2], 180, 360, fill=cream)
+
+    # The arch: a night sky, a moon's face, and the two hemispheres it rises
+    # between.
+    sky = s // 2 - 22
+    draw.pieslice([cx - sky, base - sky, cx + sky, base + sky], 180, 360, fill=(34, 44, 84))
+    for _ in range(40):
+        a, r = rng.uniform(math.pi, 2 * math.pi), rng.uniform(0.25, 0.95) * sky
+        x, y = cx + math.cos(a) * r, base + math.sin(a) * r
+        draw.ellipse([x - 1.5, y - 1.5, x + 1.5, y + 1.5], fill=(236, 218, 150))
+    mr, my = 62, base - 118
+    draw.ellipse([cx - mr, my - mr, cx + mr, my + mr], fill=(238, 214, 146), outline=gold, width=2)
+    face = (150, 112, 60)
+    for side in (-1, 1):
+        draw.arc([cx + side * 24 - 12, my - 22, cx + side * 24 + 12, my - 6], 200, 340, fill=face,
+                 width=3)
+        draw.ellipse([cx + side * 34 - 9, my + 8, cx + side * 34 + 9, my + 20],
+                     fill=(226, 170, 120))
+    draw.line([(cx, my - 10), (cx - 6, my + 12), (cx + 2, my + 14)], fill=face, width=2)
+    draw.arc([cx - 18, my + 12, cx + 18, my + 34], 20, 160, fill=face, width=3)
+    hr = 92
+    for side in (-1, 1):
+        hx = cx + side * 118
+        draw.pieslice([hx - hr, base - hr, hx + hr, base + hr], 180, 360, fill=(70, 104, 118))
+        for k in range(1, 4):
+            draw.arc([hx - hr * k / 4, base - hr, hx + hr * k / 4, base + hr], 180, 360, fill=gold)
+        for k in range(1, 3):
+            y = base - hr * k / 3
+            half = math.sqrt(max(hr * hr - (base - y) ** 2, 0))
+            draw.line([(hx - half, y), (hx + half, y)], fill=gold)
+        draw.arc([hx - hr, base - hr, hx + hr, base + hr], 180, 360, fill=gold, width=3)
+    draw.arc([cx - sky, base - sky, cx + sky, base + sky], 180, 360, fill=gold, width=3)
+    draw.line([(m, base), (w - m, base)], fill=gold, width=3)
+
+    # The spandrels, outside the chapter ring.
+    inset = 58
+    for x, y in ((m + inset, base + inset), (w - m - inset, base + inset),
+                 (m + inset, h - m - inset), (w - m - inset, h - m - inset)):
+        painted_rose(draw, x, y, 20, rng)
+
+    # The chapter ring: a minute track, Arabic minutes outside it, Roman hours
+    # inside, the hours' feet toward the centre.
+    ring_in, ring_out = 196, 210
+    for r in (ring_in, ring_out, 138):
+        draw.ellipse([cx - r, cy - r, cx + r, cy + r], outline=black, width=2)
+    for k in range(60):
+        a = k * math.pi / 30
+        inner = ring_in if k % 5 else ring_in - 6
+        draw.line([(cx + math.sin(a) * inner, cy - math.cos(a) * inner),
+                   (cx + math.sin(a) * ring_out, cy - math.cos(a) * ring_out)], fill=black,
+                  width=3 if k % 5 == 0 else 1)
+    serif = ImageFont.truetype(io.BytesIO(fetch(SERIF, "IMFeENrm28P.ttf")), 44)
+    small = ImageFont.truetype(io.BytesIO(fetch(SERIF, "IMFeENrm28P.ttf")), 17)
+    italic = ImageFont.truetype(io.BytesIO(fetch(SERIF_ITALIC, "IMFeENit28P.ttf")), 26)
+    hours = ["XII", "I", "II", "III", "IIII", "V", "VI", "VII", "VIII", "IX", "X", "XI"]
+    for k, numeral in enumerate(hours):
+        a = k * 30.0
+        r = 166
+        paint_text(img, (cx + math.sin(math.radians(a)) * r, cy - math.cos(math.radians(a)) * r),
+                   numeral, serif, black, a)
+    for k in range(1, 13):
+        a = k * 30.0
+        r = 223
+        paint_text(img, (cx + math.sin(math.radians(a)) * r, cy - math.cos(math.radians(a)) * r),
+                   str(5 * k), small, black, a)
+
+    # The seconds ring above the centre, the maker below it, and the date.
+    sy, sr = cy - 78, 40
+    draw.ellipse([cx - sr, sy - sr, cx + sr, sy + sr], outline=black, width=2)
+    for k in range(60):
+        a = k * math.pi / 30
+        inner = sr - (8 if k % 5 == 0 else 4)
+        draw.line([(cx + math.sin(a) * inner, sy - math.cos(a) * inner),
+                   (cx + math.sin(a) * sr, sy - math.cos(a) * sr)], fill=black)
+    paint_text(img, (cx, cy + 64), "Jas. Harrow", italic, black)
+    paint_text(img, (cx, cy + 90), "KINGSBRIDGE", small, black)
+    draw.rectangle([cx - 15, cy + 104, cx + 15, cy + 126], fill=(246, 240, 224), outline=black)
+    paint_text(img, (cx, cy + 115), "17", small, black)
+
+    a = to_array(img)
+    # A century of varnish and smoke: yellowed toward the edges, mottled.
+    anchors = {"hands": (cx, cy), "seconds": (cx, sy)}
+    return age_paper(a * np.array([1.0, 0.97, 0.9]), rng, edge=0.22), ROUGH_ENAMEL, anchors
+
+
+def sand_shaded(ang, rad, lobes, span, reach):
+    """Maple lobes fanning over `span` radians and scorched dark at one edge,
+    as marquetry shells are shaded in hot sand. Returns (inside, shade)."""
+    f = ang / span * lobes
+    lobe = np.floor(f)
+    frac = f - lobe
+    edge = reach * (0.9 + 0.1 * np.sin(np.pi * frac))
+    inside = (ang >= 0) & (ang <= span) & (rad <= edge)
+    shade = 1.0 - 0.6 * (1.0 - frac) ** 3 - 0.25 * np.clip(1.0 - rad / (0.35 * reach), 0, 1)
+    shade = np.where(frac < 0.05, 0.35, shade)
+    return inside, np.clip(shade, 0.2, 1.0)
+
+
+def clock_panel(rng):
+    """The plinth's panel: a rosewood field inside cross-banding of the case's
+    darker wood, maple stringing either side of it, a shell in an oval at the
+    centre and a quarter fan in each corner."""
+    w, h, band, line = clock_px(0.40), clock_px(0.30), clock_px(0.02), 3
+    a = veneer("rosewood_veneer1", w, h)
+    across = veneer("lacquered_cherry_wood", w, band, turn=True)
+    down = veneer("lacquered_cherry_wood", band, h)
+    a[:band], a[h - band:] = across, across
+    a[:, :band], a[:, w - band:] = down, down
+    maple = veneer("white_maple_veneer", w, h)
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    for inset in (0, band - line):
+        ring = ((xx >= inset) & (xx < w - inset) & (yy >= inset) & (yy < h - inset)
+                & ~((xx >= inset + line) & (xx < w - inset - line)
+                    & (yy >= inset + line) & (yy < h - inset - line)))
+        a[ring] = maple[ring]
+
+    # The oval, its stringing and its shell, fanning up from the oval's foot.
+    cx, cy, rx, ry = w / 2, h / 2, w * 0.27, h * 0.3
+    e = ((xx - cx) / rx) ** 2 + ((yy - cy) / ry) ** 2
+    a[e <= 1.0] = maple[e <= 1.0] * 0.92
+    a[(e > 0.93) & (e <= 1.0)] *= 0.35
+    ox, oy = cx, cy + ry * 0.62
+    rad = np.hypot(xx - ox, yy - oy)
+    ang = np.arctan2(-(yy - oy), xx - ox)
+    inside, shade = sand_shaded(ang, rad, 11, math.pi, ry * 1.3)
+    inside &= e < 0.9
+    a[inside] = maple[inside] * shade[inside][:, None]
+    a[(rad < ry * 0.18) & (yy < oy) & (e < 0.9)] *= 0.4
+
+    # A quarter fan in each corner of the field.
+    for fx, fy, turn in ((band, band, 0.0), (w - band, band, 0.5 * math.pi),
+                         (w - band, h - band, math.pi), (band, h - band, 1.5 * math.pi)):
+        rad = np.hypot(xx - fx, yy - fy)
+        ang = np.mod(np.arctan2(yy - fy, xx - fx) - turn, 2 * math.pi)
+        inside, shade = sand_shaded(ang, rad, 5, 0.5 * math.pi, band * 2.6)
+        a[inside] = maple[inside] * shade[inside][:, None]
+    return age_paper(a, rng, edge=0.15), ROUGH_LACQUER, {}
+
+
+def clock_frieze(rng):
+    """The hood's frieze under its cornice: a key pattern cut shallow into the
+    rosewood -- blind fretwork, shadowed below each line and caught by the
+    light above it."""
+    w, h, unit = clock_px(0.52), clock_px(0.05), clock_px(0.025)
+    a = veneer("rosewood_veneer1", w, h, turn=True)
+    cut = Image.new("L", (w, h), 0)
+    draw = ImageDraw.Draw(cut)
+    top, bottom = h * 0.18, h * 0.82
+    draw.line([(0, top), (w, top)], fill=255, width=3)
+    draw.line([(0, bottom), (w, bottom)], fill=255, width=3)
+    step = (bottom - top) / 5
+    for x in range(0, w, unit):
+        draw.line([(x, bottom), (x, top + step), (x + unit * 0.75, top + step),
+                   (x + unit * 0.75, bottom - step), (x + unit * 0.3, bottom - step),
+                   (x + unit * 0.3, top + 2.5 * step), (x + unit * 0.5, top + 2.5 * step)],
+                  fill=255, width=3, joint="curve")
+    c = np.asarray(cut, dtype=np.float32) / 255.0
+    lit = np.roll(c, -2, axis=0) * (1.0 - c)
+    a = a * (1.0 - 0.6 * c[..., None]) + 0.12 * lit[..., None]
+    return age_paper(a, rng, edge=0.1), ROUGH_LACQUER, {}
+
+
 def pack(sizes):
     """Skyline packing: each card at the lowest place it fits, leftmost first."""
-    sky = np.zeros(ATLAS, dtype=np.int32)
+    sky = np.zeros(ATLAS_W, dtype=np.int32)
     spots = []
     for w, h in sizes:
         best = None
-        for x in range(0, ATLAS - w + 1, 2):
+        for x in range(0, ATLAS_W - w + 1, 2):
             y = int(sky[x:x + w].max())
             if best is None or y < best[1]:
                 best = (x, y)
         x, y = best
-        if y + h > ATLAS:
-            raise SystemExit("the cards do not fit a %d atlas" % ATLAS)
+        if y + h > ATLAS_H:
+            raise SystemExit("the cards do not fit a %dx%d atlas" % (ATLAS_W, ATLAS_H))
         sky[x:x + w] = y + h + PAD
         spots.append((x, y))
     return spots
@@ -235,11 +459,18 @@ def write_header(cards, spots):
     ]
     for c, (x, y) in zip(cards, spots):
         h, w = c["pixels"].shape[:2]
-        u0, u1 = x / ATLAS, (x + w) / ATLAS
-        v0, v1 = 1.0 - (y + h) / ATLAS, 1.0 - y / ATLAS
+        u0, u1 = x / ATLAS_W, (x + w) / ATLAS_W
+        v0, v1 = 1.0 - (y + h) / ATLAS_H, 1.0 - y / ATLAS_H
         lines.append("    [CARD_%s] = {{%.6ff, %.6ff, %.6ff, %.6ff}, {%.4ff, %.4ff}}," % (
             c["name"].upper(), u0, v0, u1, v1, c["m"][0], c["m"][1]))
-    lines += ["};", "", "#endif // _SILENT_CARDS_H_", ""]
+    lines += ["};", ""]
+    for c in cards:
+        for key, (x, y) in c.get("anchors", {}).items():
+            lines.append("// Metres from the card's lower left.")
+            lines.append("static const float CARD_%s_%s[2] = {%.4ff, %.4ff};" % (
+                c["name"].upper(), key.upper(), x, y))
+            lines.append("")
+    lines += ["#endif // _SILENT_CARDS_H_", ""]
     with open(HEADER, "w") as f:
         f.write("\n".join(lines))
     print(HEADER)
@@ -257,6 +488,14 @@ def main():
         pixels, rough = photo(name, hdri, cx, cy, span, fmt, rng)
         cards.append({"name": "photo_" + name, "pixels": pixels, "rough": rough,
                       "m": FORMATS[fmt]["m"]})
+    for name, paint in (("clock_dial", clock_dial), ("clock_panel", clock_panel),
+                        ("clock_frieze", clock_frieze)):
+        pixels, rough, anchors = paint(rng)
+        h, w = pixels.shape[:2]
+        cards.append({"name": name, "pixels": pixels, "rough": rough,
+                      "m": (w / CLOCK_PX_PER_M, h / CLOCK_PX_PER_M),
+                      "anchors": {k: (x / CLOCK_PX_PER_M, (h - y) / CLOCK_PX_PER_M)
+                                  for k, (x, y) in anchors.items()}})
 
     # Tallest first packs tightest; the header keeps the order above.
     order = sorted(range(len(cards)), key=lambda i: -cards[i]["pixels"].shape[0])
@@ -265,17 +504,22 @@ def main():
     for i, spot in zip(order, placed):
         spots[i] = spot
 
-    albedo = np.ones((ATLAS, ATLAS, 3), dtype=np.float32) * PAPER * 0.8
-    rough = np.full((ATLAS, ATLAS), ROUGH_PAPER, dtype=np.float32)
+    albedo = np.ones((ATLAS_H, ATLAS_W, 3), dtype=np.float32) * PAPER * 0.8
+    rough = np.full((ATLAS_H, ATLAS_W), ROUGH_PAPER, dtype=np.float32)
     for c, (x, y) in zip(cards, spots):
         h, w = c["pixels"].shape[:2]
         albedo[y:y + h, x:x + w] = c["pixels"]
         rough[y:y + h, x:x + w] = c["rough"]
     flip = Image.Transpose.FLIP_TOP_BOTTOM
     to_image(albedo).transpose(flip).save(os.path.join(OUT_DIR, "cards_albedo.png"))
-    to_image(np.repeat(rough[..., None], 3, axis=-1)).transpose(flip).save(
+    # The roughness only changes card to card, so a quarter the size carries
+    # it -- and it has to: a roughness map is a layer of the engine's material
+    # array, which brings every layer up to its largest, so at the albedo's
+    # size it made every material's masks 2048 wide.
+    to_image(np.repeat(rough[..., None], 3, axis=-1)).transpose(flip).resize(
+        (ATLAS_W // ROUGH_SCALE, ATLAS_H // ROUGH_SCALE), Image.Resampling.BOX).save(
         os.path.join(OUT_DIR, "cards_rough.png"))
-    flat = np.zeros((ATLAS, ATLAS, 3), dtype=np.uint8) + np.array([128, 128, 255], dtype=np.uint8)
+    flat = np.zeros((32, 64, 3), dtype=np.uint8) + np.array([128, 128, 255], dtype=np.uint8)
     Image.fromarray(flat).save(os.path.join(OUT_DIR, "cards_normal.png"))
     print(os.path.join(OUT_DIR, "cards_albedo.png"))
     write_header(cards, spots)
