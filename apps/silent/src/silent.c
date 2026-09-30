@@ -278,6 +278,10 @@ static void build_post(const Engine* engine, bool night, bool grade) {
         return;
     postfx_apply_film_look(fx);
     fx->contact_shadows_enabled = true;
+    // A puddle in the road mirrors a lamp head or a window across the street,
+    // ten to twenty metres up its reflected ray. The default reach of eight fades
+    // those out and leaves wet ground reflecting nothing.
+    fx->ssr_max_distance = 40.0f;
     // The film look warms the highlights; this place is green-grey, and the
     // grade that makes it so is the LUT (tools/make_grade.py).
     glm_vec3_one(fx->grade_gain);
