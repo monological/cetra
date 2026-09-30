@@ -37,6 +37,10 @@ typedef enum {
     AUDIO_BUS_COUNT
 } AudioBus;
 
+// The colours of procedural noise, by their slope: white is flat, pink falls 3 dB an octave
+// and brown 6 -- hiss, the patter of rain, and a rumble.
+typedef enum { AUDIO_NOISE_WHITE, AUDIO_NOISE_PINK, AUDIO_NOISE_BROWN } AudioNoise;
+
 // A headless game opens no device and renders offline; NULL on failure.
 AudioSystem* create_audio_system(bool headless);
 void free_audio_system(AudioSystem* audio);
@@ -62,6 +66,9 @@ Sound* audio_play_music(AudioSystem* audio, const char* path, bool loop);
 // on. Both return NULL on failure.
 Sound* audio_sound_from_file(AudioSystem* audio, const char* path, AudioBus bus);
 Sound* audio_sound_from_tone(AudioSystem* audio, float hz, AudioBus bus);
+// Endless procedural noise, 2D until positioned like a tone, from a fixed seed so an offline
+// render is the same every run: a bed -- rain, wind, a room's hum -- rather than an event.
+Sound* audio_sound_from_noise(AudioSystem* audio, AudioNoise colour, AudioBus bus);
 // Plays from the start, so calling it again re-triggers. A tone stops itself
 // after a short beep unless set_looping made it continuous.
 void audio_sound_play(Sound* sound);
