@@ -27066,13 +27066,13 @@ def run_rain_gate(workdir):
       rain-splashes from under the roof, splashes against none: they move the open ground
                     beyond it, and not a pixel of the ground under the roof nearest the
                     camera -- a splash lands where the occlusion map says the rain does.
+      rain-mist     the medium the post chain was handed is the rate's extinction times
+                    `mist`, handed over at the outermost streak box, and arms the volume;
+                    and on its own, in a fixture with no fog, it moves the frame.
       rain-ssr      the soaked surfaces with SSR against without: the open wet ground moves,
                     and not a pixel of the dry ground under the roof or of the wall the wet
                     ground runs up to -- the replacing fold averages each class only with its
                     own, so a wet pair's coverage cannot darken the wall above a puddle.
-      rain-mist     the medium the post chain was handed is the rate's extinction times
-                    `mist`, handed over at the outermost streak box, and arms the volume;
-                    and on its own, in a fixture with no fog, it moves the frame.
       rain-ripples  the flooded twin seen from under the roof, rings against none: the open
                     water rings, and the covered water nearest the camera does not move by a
                     pixel. From the fixture's own camera that water is too far off for a
