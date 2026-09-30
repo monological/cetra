@@ -962,6 +962,8 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     // is an INVALID_OPERATION at draw. This pass has the units to spare -- it is
     // pbr_frag that does not.
     uniform_set_int(fx->ssr_program->uniforms, "probeAtlasTex", 5);
+    // Wet ground's per-pixel roughness (spec 13.9).
+    uniform_set_int(fx->ssr_program->uniforms, "auxTex", 6);
     glUseProgram(fx->ssr_hiz_program->id);
     uniform_set_int(fx->ssr_hiz_program->uniforms, "srcTex", 0);
     glUseProgram(fx->froxel_inject_program->id);
@@ -2908,7 +2910,8 @@ static bool postfx_run_atmosphere(PostFX* fx, GLuint canvas_fbo, bool aux_writte
 // extracted-stage shape as postfx_run_atmosphere; inv_projection is passed in
 // (shared with DoF).
 static void postfx_run_ssr(PostFX* fx, GLuint canvas_fbo, GLuint canvas_tex, bool have_normals,
-                           bool taa_resolving, mat4 projection, mat4 inv_projection, mat4 view) {
+                           bool aux_written, bool taa_resolving, mat4 projection,
+                           mat4 inv_projection, mat4 view) {
     // SSR traces at full res (sharp) or half res, per ssr_full_res; the
     // buffer + Hi-Z pyramid were sized to match in create_ssr_buffers.
     int ssr_w = fx->ssr_full_res ? fx->width : fx->half_width;
@@ -2969,7 +2972,10 @@ static void postfx_run_ssr(PostFX* fx, GLuint canvas_fbo, GLuint canvas_tex, boo
     glBindTexture(GL_TEXTURE_2D, canvas_tex);
     glActiveTexture(GL_TEXTURE4);
     glBindTexture(GL_TEXTURE_2D, fx->hiz_texture);
+    glActiveTexture(GL_TEXTURE6);
+    glBindTexture(GL_TEXTURE_2D, aux_written ? fx->aux_texture : 0);
     glActiveTexture(GL_TEXTURE0);
+    uniform_set_int(fx->ssr_program->uniforms, "auxAvailable", aux_written ? 1 : 0);
     uniform_set_int(fx->ssr_program->uniforms, "hizWidth", ssr_w);
     uniform_set_int(fx->ssr_program->uniforms, "hizHeight", ssr_h);
     uniform_set_int(fx->ssr_program->uniforms, "hizMips", fx->hiz_mips);
@@ -3635,8 +3641,8 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
 
         if (ssr_active) {
             profiler_scope_begin(fx->profiler, "ssr");
-            postfx_run_ssr(fx, canvas_fbo, canvas_tex, have_normals, taa_resolving, projection,
-                           inv_projection, view);
+            postfx_run_ssr(fx, canvas_fbo, canvas_tex, have_normals, aux_written, taa_resolving,
+                           projection, inv_projection, view);
             profiler_scope_end(fx->profiler);
         }
 

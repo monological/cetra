@@ -23,6 +23,11 @@ uniform mat4 invProjection;
 uniform float maxDistance;   // March length in view-space units
 uniform float thicknessMin;  // Acceptance-slab floor behind a surface (view units)
 uniform float floorRoughness; // Roughness of the reflective floor
+// Wet ground's roughness is its own, per pixel, from the aux G-buffer's .w (spec 13.9).
+// auxAvailable 0 = the aux buffer was not written this frame, and wet ground falls back to
+// the floor's roughness rather than reading a stale one.
+uniform sampler2D auxTex;
+uniform int auxAvailable;
 uniform float maxRoughness;   // Reflections fade out toward this roughness
 uniform float strength;       // Reflection strength (folded into the weight)
 
@@ -90,13 +95,23 @@ vec3 viewPosFromDepth(vec2 uv, float depth)
 // Analytic view-space Z from an NDC depth (cglm right-handed perspective)
 #include "depth.glsl"
 
+// Schlick with the surface's F0: the catcher is a glossy coating at 0.1, wet ground an
+// air/water interface at 0.02 (spec 13.9) -- which is why a puddle barely reflects looking
+// down into it and is a mirror at a grazing angle. Two literal forms rather than one with a
+// variable F0, so the catcher's arithmetic is the expression it always was.
+float surfaceFresnel(float NdotV, bool wet)
+{
+    float grazing = pow(clamp(1.0 - NdotV, 0.0, 1.0), 5.0);
+    return wet ? 0.02 + 0.98 * grazing : 0.1 + 0.9 * grazing;
+}
+
 // Probe fallback where the SSR ray misses (off-screen, grazing, occluded,
 // iteration cap): parallax-correct the world reflection ray against the probe's
 // proxy box and return the hit path's premultiplied (color*weight, weight)
 // contract. The screen-space fades don't apply — the probe has data in
 // every direction. Exact vec4(0) when the probe is off, so the miss sites
 // write today's values bit-identically.
-vec4 probeSample(vec3 fragPosV, vec3 n, vec3 RV, vec3 viewDir)
+vec4 probeSample(vec3 fragPosV, vec3 n, vec3 RV, vec3 viewDir, float roughness, bool wet)
 {
     if (probeEnabled == 0 && probeMulti == 0)
         return vec4(0.0);
@@ -110,7 +125,7 @@ vec4 probeSample(vec3 fragPosV, vec3 n, vec3 RV, vec3 viewDir)
         // decision recorded in probe.c -- an invisible catcher mirroring the sky
         // prints as a glowing pool the size of its quad.
         vec4 probes =
-            probeSetSpecular(probeAtlasTex, PROBE_MASK_ALL, worldPos, worldR, floorRoughness);
+            probeSetSpecular(probeAtlasTex, PROBE_MASK_ALL, worldPos, worldR, roughness);
         col = probes.rgb * preExposure;
     } else {
         vec3 invR = 1.0 / worldR;
@@ -123,12 +138,12 @@ vec4 probeSample(vec3 fragPosV, vec3 n, vec3 RV, vec3 viewDir)
         // unlike the hdrTex hit path this one converts. Without it the fallback
         // would sit at scene scale while the hit it substitutes for sits at working
         // scale, and a ray crossing the screen edge would step in brightness.
-        col = textureLod(probeTex, dir, floorRoughness * probeMaxLOD).rgb * probeIntensity *
+        col = textureLod(probeTex, dir, roughness * probeMaxLOD).rgb * probeIntensity *
               preExposure;
     }
     float NdotV = max(dot(n, -viewDir), 0.0);
-    float fresnel = 0.1 + 0.9 * pow(clamp(1.0 - NdotV, 0.0, 1.0), 5.0);
-    float roughnessFade = 1.0 - smoothstep(0.5 * maxRoughness, maxRoughness, floorRoughness);
+    float fresnel = surfaceFresnel(NdotV, wet);
+    float roughnessFade = 1.0 - smoothstep(0.5 * maxRoughness, maxRoughness, roughness);
     float w = clamp(fresnel * roughnessFade * strength, 0.0, 1.0);
     return vec4(min(col, vec3(WS_REFLECT_MAX)) * w, w);
 }
@@ -169,14 +184,19 @@ void main()
 
     vec4 nr = texture(normalsTex, TexCoords);
     vec3 n = nr.xyz;
-    // Only surfaces the catcher marked reflective trace: the marker is the
-    // SIGN of the G-buffer alpha (negative = reflective floor), and its
-    // magnitude is the catcher's edge falloff — the reflectivity fades to
-    // zero at the quad boundary exactly like the shadow does. Model
-    // surfaces write non-negative alpha and rely on IBL — screen-space rays
-    // off curved geometry graze their own silhouettes and sparkle. The
-    // floor's roughness is a scalar uniform, not carried per-texel.
-    float floorFade = clamp(-nr.a, 0.0, 1.0);
+    // Only surfaces marked reflective trace, and the marker is the G-buffer alpha's RANGE.
+    // Model surfaces write non-negative alpha and rely on IBL -- screen-space rays off curved
+    // geometry graze their own silhouettes and sparkle. Two kinds are marked:
+    //
+    //   (-1, 0)  the shadow catcher; the magnitude is its edge falloff, so the reflectivity
+    //            fades to zero at the quad boundary exactly like the shadow does, and its
+    //            roughness is the scalar floorRoughness.
+    //   < -1     wet ground (spec 13.9), -(1 + film): flat, filmed or standing water, whose
+    //            roughness is its own, per pixel, in the aux buffer.
+    bool wet = nr.a < -1.0;
+    float floorFade = wet ? clamp(-nr.a - 1.0, 0.0, 1.0) : clamp(-nr.a, 0.0, 1.0);
+    float roughness =
+        wet && auxAvailable != 0 ? texture(auxTex, TexCoords).w : floorRoughness;
     // This cutoff must stay above catcher_frag's 0.002 marker floor: the
     // catcher stamps that floor on its dead outer ring precisely so it
     // lands below here and never traces.
@@ -185,7 +205,7 @@ void main()
         return;
     }
     n = normalize(n);
-    if (floorRoughness > maxRoughness) {
+    if (roughness > maxRoughness) {
         FragColor = vec4(0.0);
         return;
     }
@@ -210,7 +230,7 @@ void main()
         // ray -- migrating was measured at 31,800 px on a no-TAA render.
         float r0 = fract(52.9829189 * fract(0.06711056 * fc.x + 0.00583715 * fc.y));
         float r1 = fract(52.9829189 * fract(0.06711056 * (fc.y + 41.0) + 0.00583715 * fc.x));
-        float spread = max(floorRoughness, ssrJitter);
+        float spread = max(roughness, ssrJitter);
         float ang = 6.2831853 * r0;
         float rad = spread * sqrt(r1);
         vec3 up = abs(R.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
@@ -223,7 +243,7 @@ void main()
     // full fallback on a miss, the faded tail's filler on a partial hit.
     // Exact vec4(0) with the probe off, keeping every path bit-identical.
     // The catcher's edge falloff rides along here so every exit fades.
-    vec4 probe = probeSample(fragPos, n, R, viewDir) * floorFade;
+    vec4 probe = probeSample(fragPos, n, R, viewDir, roughness, wet) * floorFade;
 
     // Start biased along the normal so the ray does not immediately test
     // against its own surface. The bias must grow with view distance: a
@@ -409,8 +429,9 @@ void main()
         return;
     }
 
-    // Fades: screen-edge (information runs out), Fresnel (glossy coating,
-    // F0 = 0.1), roughness tail, march distance, and iteration budget. The
+    // Fades: screen-edge (information runs out), Fresnel (surfaceFresnel:
+    // the catcher's coating or wet ground's water), roughness tail, march
+    // distance, and iteration budget. The
     // budget fade is what keeps exhaustion invisible: a column whose ray
     // dies unhit composites nothing, so without it the neighbouring column
     // that hit on its LAST iterations keeps mid-strength weight and the
@@ -420,8 +441,8 @@ void main()
     vec2 edge = min(hitUV, 1.0 - hitUV);
     float edgeFade = smoothstep(0.0, 0.1, min(edge.x, edge.y));
     float NdotV = max(dot(n, -viewDir), 0.0);
-    float fresnel = 0.1 + 0.9 * pow(clamp(1.0 - NdotV, 0.0, 1.0), 5.0);
-    float roughnessFade = 1.0 - smoothstep(0.5 * maxRoughness, maxRoughness, floorRoughness);
+    float fresnel = surfaceFresnel(NdotV, wet);
+    float roughnessFade = 1.0 - smoothstep(0.5 * maxRoughness, maxRoughness, roughness);
     float distFade = 1.0 - clamp(sHit, 0.0, 1.0);
     float budgetFade = 1.0 - smoothstep(0.75, 1.0, float(itersUsed) / float(marchBudget));
 

@@ -33,6 +33,9 @@ const float RAIN_PUDDLE_FLAT_FULL = 0.9986;
 const float RAIN_PUDDLE_RIM = 0.06;
 // Still water: very nearly a mirror.
 const float RAIN_PUDDLE_ROUGHNESS = 0.03;
+// The film below which a surface is not marked for screen-space reflection: a trace per pixel
+// is not worth a two-percent reflection off a damp wall.
+const float RAIN_SSR_MIN_FILM = 0.05;
 
 // Where the ground holds water, 0..1: two octaves of value noise over the ground plane. A
 // puddle forms where this is BELOW the level, so a rising level grows the existing puddles

@@ -381,7 +381,9 @@ float aoVisibility()
     // reads -- its magnitude is the catcher's edge falloff, so a threshold
     // at -0.5 would hand the plane's whole outer ring to the paths below,
     // which is where a mirror-roughness catcher meets the cone term.
-    if (dot(nrm.xyz, nrm.xyz) < 0.01 || nrm.a < 0.0)
+    // Only (-1, 0) is the catcher: below -1 is wet ground (spec 13.9), a real surface that
+    // takes the paths below like any other.
+    if (dot(nrm.xyz, nrm.xyz) < 0.01 || (nrm.a < 0.0 && nrm.a >= -1.0))
         return ao;
     vec4 aux = texture(auxTex, TexCoords); // .w = effective roughness
     // View direction from screen UV. normalize(-viewPos) is independent of depth
