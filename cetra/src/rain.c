@@ -10,11 +10,17 @@
 #include "../shaders/include/rain_constants.glsl"
 
 Rain* create_rain(void) {
-    Rain* rain = calloc(1, sizeof(Rain));
+    Rain* rain = malloc(sizeof(Rain));
     if (!rain) {
         log_error("Failed to allocate Rain");
         return NULL;
     }
+    rain_init_defaults(rain);
+    return rain;
+}
+
+void rain_init_defaults(Rain* rain) {
+    *rain = (Rain){0};
     // Game time, not weather time: a real pavement takes minutes to wet and most of an
     // hour to dry, and a scene that waited that long would never be seen to change. The
     // ORDER is what is kept -- a film comes and goes faster than a puddle does, and
@@ -60,15 +66,18 @@ Rain* create_rain(void) {
     rain->splash_amount = 1.0f;
     rain->splash_size = 1.0f;
     rain->mist = 1.0f;
-    return rain;
 }
 
 void free_rain(Rain* rain) {
     free(rain);
 }
 
+bool rain_falling(const Rain* rain) {
+    return rain && rain->rate_mmh > 0.0f;
+}
+
 float rain_wetness_target(const Rain* rain) {
-    return rain && rain->rate_mmh > 0.0f ? 1.0f : 0.0f;
+    return rain_falling(rain) ? 1.0f : 0.0f;
 }
 
 // The level a rate's inflow holds up against drainage. The exponential is a SHAPE
@@ -77,35 +86,36 @@ float rain_wetness_target(const Rain* rain) {
 // the ground can hold. Its scale is the reference rate, so moderate rain stands at
 // about two thirds of the ceiling.
 float rain_puddle_target(const Rain* rain) {
-    if (!rain || rain->rate_mmh <= 0.0f)
+    if (!rain_falling(rain))
         return 0.0f;
     return rain->puddle_coverage * (1.0f - expf(-rain->rate_mmh / RAIN_RATE_REFERENCE));
 }
 
 // The state decays exponentially and never reaches zero, so "still wet" has a floor:
-// below a thousandth of a film nothing it drives is visible.
+// below a thousandth of a film nothing it drives is visible. The puddle level is not
+// asked: a puddle is drawn in proportion to the wetness, and drains far more slowly.
 #define RAIN_WET_FLOOR 1e-3f
 
 bool rain_active(const Rain* rain) {
-    return rain && (rain->rate_mmh > 0.0f || rain->wetness > RAIN_WET_FLOOR ||
-                    rain->puddle_level > RAIN_WET_FLOOR);
+    return rain_falling(rain) || (rain && rain->wetness > RAIN_WET_FLOOR);
 }
 
 // In proportion to the rate up to the moderate band's ceiling. Most of what lands in a puddle
 // is too small to ring visibly, so this counts the drops that do rather than all of them --
 // a shape choice, and the reason a drizzle rings sparsely.
 float rain_ripple_activity(const Rain* rain) {
-    if (!rain || !(rain->rate_mmh > 0.0f))
+    if (!rain_falling(rain))
         return 0.0f;
     return fminf(rain->rate_mmh / RAIN_RATE_MODERATE, 1.0f);
 }
 
 void rain_fall_direction(const Rain* rain, vec3 out) {
     glm_vec3_copy((vec3){0.0f, -1.0f, 0.0f}, out);
-    if (!rain || !(rain->rate_mmh > 0.0f))
+    if (!rain_falling(rain))
         return;
-    const float fall =
-        rain_terminal_velocity(rain_median_diameter(rain->rate_mmh)) * rain->fall_scale;
+    // Clamped as the streaks' copy is, so the cover tilts with the drops that are drawn.
+    const float fall = rain_terminal_velocity(rain_median_diameter(rain->rate_mmh)) *
+                       fmaxf(rain->fall_scale, 0.0f);
     vec3 v = {rain->wind[0], rain->wind[1] - fall, rain->wind[2]};
     if (glm_vec3_norm(v) > 1e-6f)
         glm_vec3_normalize_to(v, out);

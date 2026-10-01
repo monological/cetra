@@ -1221,7 +1221,6 @@ static int _engine_init(Engine* engine, const EngineConfig* cfg) {
     engine->postfx->exposure = &engine->exposure;
     engine->postfx->profiler = engine->profiler;
     engine->postfx->taa_enabled = cfg->taa;
-    postfx_set_late_draw(engine->postfx, _engine_late_draw, engine);
 
     // Record what init just built at, or the first frame-top sync would see
     // zeroes, decide the sizes had changed, and rebuild everything once for
@@ -1943,6 +1942,11 @@ static int _create_default_shaders_for_engine(Engine* engine) {
         engine_add_program(engine, water_program);
     }
 
+    ShaderProgram* rain_program = create_rain_program();
+    if (rain_program) {
+        engine_add_program(engine, rain_program);
+    }
+
     ShaderProgram* water_spectrum_program = create_water_spectrum_program();
     if (water_spectrum_program) {
         engine_add_program(engine, water_spectrum_program);
@@ -2236,16 +2240,13 @@ void engine_set_render_clock(Engine* engine, const EngineFrameClock* clock) {
         engine->render_clock = clock;
 }
 
-// What the engine draws after the temporal seam: the scene's rain, today. Postfx calls this
-// with its canvas bound; the renderer comes into being the first frame a scene rains.
+// What the engine draws after the temporal seam, published only on frames that have
+// something to draw. The renderer comes into being the first frame a scene rains.
 static void _engine_late_draw(void* user, const PostFXLateDraw* late) {
     Engine* engine = user;
-    Scene* scene = engine_get_scene(engine);
-    if (!scene || !scene->rain || !(scene->rain->rate_mmh > 0.0f))
-        return;
     if (!engine->rain_renderer)
         engine->rain_renderer = create_rain_renderer();
-    rain_render_drops(engine->rain_renderer, engine, scene, late);
+    rain_render_drops(engine->rain_renderer, engine, engine_get_scene(engine), late);
 }
 
 void engine_set_overlay(Engine* engine, EngineOverlayFunc overlay, void* user) {
@@ -2285,6 +2286,8 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode) {
     probe_set_publish_to_postfx(fx_scene ? fx_scene->probe_set : NULL, engine->postfx);
     shadow_publish_to_postfx(fx_scene, engine->postfx);
     rain_publish_to_postfx(fx_scene ? fx_scene->rain : NULL, engine->postfx);
+    engine->postfx->late_draw = fx_scene && rain_falling(fx_scene->rain) ? _engine_late_draw : NULL;
+    engine->postfx->late_draw_user = engine;
     // Aerial perspective is a camera-frustum volume, so unlike the sky's other
     // LUTs it is rebuilt here every frame, immediately before it is published.
     // The unjittered projection: the bake reads only [0][0]/[1][1]/[2][2]/[3][2]

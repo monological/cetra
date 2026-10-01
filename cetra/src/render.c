@@ -1880,6 +1880,11 @@ void engine_render_scene(Engine* engine, Scene* scene) {
     // reason. Done here (not in the engine loop) so every render path keeps it.
     glm_mat4_copy(engine->view_proj, engine->prev_view_proj);
     if (engine->camera) {
+        if (engine->prev_camera_valid)
+            glm_vec3_sub(engine->camera->position, engine->prev_camera_position,
+                         engine->camera_travel);
+        else
+            glm_vec3_zero(engine->camera_travel);
         glm_vec3_copy(engine->camera->position, engine->prev_camera_position);
         engine->prev_camera_valid = true;
     }

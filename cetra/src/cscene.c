@@ -987,10 +987,52 @@ static void parse_water(CetraSceneDesc* d, const cJSON* root) {
 }
 
 /*
- * rain -- a scene subsystem, top-level for water's reason. Ranged where a value outside
- * the range means nothing to the consumer: a negative rate, a non-positive time
- * constant, a coverage past full.
+ * rain -- a scene subsystem, top-level for water's reason. Every scalar is one row: the key,
+ * the Rain field it fills, and the range outside which the value means nothing to the
+ * consumer -- a negative rate, a non-positive time constant, a coverage past full. The keys
+ * are the config snapshot's rain keys, so a dumped block pastes into a scene file.
  */
+typedef struct CSceneRainKey {
+    const char* key;
+    size_t offset;
+    bool integer; // an int field, read as a JSON number like the rest
+    float lo, hi;
+} CSceneRainKey;
+
+#define RAIN_FLOAT_KEY(k, field, lo, hi) {k, offsetof(Rain, field), false, lo, hi}
+#define RAIN_INT_KEY(k, field, lo, hi)   {k, offsetof(Rain, field), true, lo, hi}
+static const CSceneRainKey RAIN_KEYS[] = {
+    RAIN_FLOAT_KEY("rate", rate_mmh, 0.0f, 500.0f),
+    RAIN_FLOAT_KEY("fallScale", fall_scale, 0.0f, 10.0f),
+    RAIN_FLOAT_KEY("wetTime", wet_time, 1e-3f, 1e6f),
+    RAIN_FLOAT_KEY("dryTime", dry_time, 1e-3f, 1e6f),
+    RAIN_FLOAT_KEY("puddleFillTime", puddle_fill_time, 1e-3f, 1e6f),
+    RAIN_FLOAT_KEY("puddleDrainTime", puddle_drain_time, 1e-3f, 1e6f),
+    RAIN_FLOAT_KEY("puddleCoverage", puddle_coverage, 0.0f, 1.0f),
+    RAIN_FLOAT_KEY("puddleScale", puddle_scale, 0.05f, 1000.0f),
+    RAIN_FLOAT_KEY("rippleStrength", ripple_strength, 0.0f, 10.0f),
+    RAIN_FLOAT_KEY("rippleSize", ripple_size, 0.02f, 10.0f),
+    RAIN_FLOAT_KEY("wetDarkening", wet_darkening, 0.0f, 2.0f),
+    RAIN_FLOAT_KEY("occlusionExtent", occlusion_extent, 1.0f, 4096.0f),
+    RAIN_FLOAT_KEY("occlusionSoftness", occlusion_softness, 0.0f, 100.0f),
+    RAIN_INT_KEY("streakCount", streak_count, 0.0f, 262144.0f),
+    RAIN_FLOAT_KEY("streakRadius", streak_radius, 0.1f, 1000.0f),
+    RAIN_FLOAT_KEY("shutter", shutter_s, 1e-4f, 1.0f),
+    RAIN_FLOAT_KEY("streakWidth", streak_width, 0.0f, 100.0f),
+    RAIN_FLOAT_KEY("streakBrightness", streak_brightness, 0.0f, 1000.0f),
+    RAIN_FLOAT_KEY("streakForwardG", streak_forward_g, -0.99f, 0.99f),
+    RAIN_FLOAT_KEY("streakGlint", streak_glint, 0.0f, 1.0f),
+    RAIN_FLOAT_KEY("streakSheen", streak_sheen, 0.0f, 100.0f),
+    RAIN_INT_KEY("splashCount", splash_count, 0.0f, 65536.0f),
+    RAIN_FLOAT_KEY("splashRadius", splash_radius, 0.1f, 1000.0f),
+    RAIN_FLOAT_KEY("splashAmount", splash_amount, 0.0f, 100.0f),
+    RAIN_FLOAT_KEY("splashSize", splash_size, 0.0f, 100.0f),
+    RAIN_FLOAT_KEY("mist", mist, 0.0f, 1000.0f),
+};
+#undef RAIN_FLOAT_KEY
+#undef RAIN_INT_KEY
+#define RAIN_KEY_COUNT (sizeof(RAIN_KEYS) / sizeof(RAIN_KEYS[0]))
+
 static void parse_rain(CetraSceneDesc* d, const cJSON* root) {
     const cJSON* rain = cJSON_GetObjectItemCaseSensitive(root, "rain");
     if (!cJSON_IsObject(rain))
@@ -998,64 +1040,29 @@ static void parse_rain(CetraSceneDesc* d, const cJSON* root) {
     CSceneRain* out = &d->rain;
     out->enabled = true; // presence implies on unless "enabled": false
     get_bool(rain, "enabled", &out->enabled);
-    out->has_rate = _ranged_float(rain, "rain", "rate", 0.0f, 500.0f, &out->rate);
-    out->has_wind = get_vec3(rain, "wind", out->wind);
-    out->has_fall_scale = _ranged_float(rain, "rain", "fallScale", 0.0f, 10.0f, &out->fall_scale);
-    out->has_wet_time = _ranged_float(rain, "rain", "wetTime", 1e-3f, 1e6f, &out->wet_time);
-    out->has_dry_time = _ranged_float(rain, "rain", "dryTime", 1e-3f, 1e6f, &out->dry_time);
-    out->has_puddle_fill_time =
-        _ranged_float(rain, "rain", "puddleFillTime", 1e-3f, 1e6f, &out->puddle_fill_time);
-    out->has_puddle_drain_time =
-        _ranged_float(rain, "rain", "puddleDrainTime", 1e-3f, 1e6f, &out->puddle_drain_time);
-    out->has_puddle_coverage =
-        _ranged_float(rain, "rain", "puddleCoverage", 0.0f, 1.0f, &out->puddle_coverage);
-    out->has_wet_darkening =
-        _ranged_float(rain, "rain", "wetDarkening", 0.0f, 2.0f, &out->wet_darkening);
-    out->has_puddle_scale =
-        _ranged_float(rain, "rain", "puddleScale", 0.05f, 1000.0f, &out->puddle_scale);
-    out->has_ripple_strength =
-        _ranged_float(rain, "rain", "rippleStrength", 0.0f, 10.0f, &out->ripple_strength);
-    out->has_ripple_size =
-        _ranged_float(rain, "rain", "rippleSize", 0.02f, 10.0f, &out->ripple_size);
-    out->has_occlusion_extent =
-        _ranged_float(rain, "rain", "occlusionExtent", 1.0f, 4096.0f, &out->occlusion_extent);
-    float count = 0.0f;
-    out->has_streak_count = _ranged_float(rain, "rain", "streakCount", 0.0f, 262144.0f, &count);
-    out->streak_count = (int)count;
-    out->has_streak_radius =
-        _ranged_float(rain, "rain", "streakRadius", 0.1f, 1000.0f, &out->streak_radius);
-    out->has_shutter = _ranged_float(rain, "rain", "shutter", 1e-4f, 1.0f, &out->shutter);
-    out->has_streak_width =
-        _ranged_float(rain, "rain", "streakWidth", 0.0f, 100.0f, &out->streak_width);
-    out->has_streak_brightness =
-        _ranged_float(rain, "rain", "streakBrightness", 0.0f, 1000.0f, &out->streak_brightness);
-    out->has_streak_forward_g =
-        _ranged_float(rain, "rain", "streakForwardG", -0.99f, 0.99f, &out->streak_forward_g);
-    out->has_streak_glint =
-        _ranged_float(rain, "rain", "streakGlint", 0.0f, 1.0f, &out->streak_glint);
-    out->has_streak_sheen =
-        _ranged_float(rain, "rain", "streakSheen", 0.0f, 100.0f, &out->streak_sheen);
-    float splashes = 0.0f;
-    out->has_splash_count = _ranged_float(rain, "rain", "splashCount", 0.0f, 65536.0f, &splashes);
-    out->splash_count = (int)splashes;
-    out->has_splash_radius =
-        _ranged_float(rain, "rain", "splashRadius", 0.1f, 1000.0f, &out->splash_radius);
-    out->has_splash_amount =
-        _ranged_float(rain, "rain", "splashAmount", 0.0f, 100.0f, &out->splash_amount);
-    out->has_splash_size =
-        _ranged_float(rain, "rain", "splashSize", 0.0f, 100.0f, &out->splash_size);
-    out->has_mist = _ranged_float(rain, "rain", "mist", 0.0f, 1000.0f, &out->mist);
+    rain_init_defaults(&out->rain);
+    vec3 wind = GLM_VEC3_ZERO_INIT;
+    if (get_vec3(rain, "wind", wind))
+        glm_vec3_copy(wind, out->rain.wind);
+    for (size_t i = 0; i < RAIN_KEY_COUNT; i++) {
+        const CSceneRainKey* k = &RAIN_KEYS[i];
+        float v = 0.0f;
+        if (!_ranged_float(rain, "rain", k->key, k->lo, k->hi, &v))
+            continue;
+        // Through void*, as config_snapshot's _field_ptr does: a char* cast straight to a
+        // float* is what a portability checker reads as reinterpreting bytes.
+        void* field = (unsigned char*)&out->rain + k->offset;
+        if (k->integer)
+            *(int*)field = (int)v;
+        else
+            *(float*)field = v;
+    }
     out->has_settled = get_bool(rain, "settled", &out->settled);
 
-    static const char* const known[] = {
-        "enabled",          "rate",           "wind",           "fallScale",       "wetDarkening",
-        "wetTime",          "dryTime",        "puddleFillTime", "puddleDrainTime", "puddleCoverage",
-        "occlusionExtent",  "streakCount",    "streakRadius",   "shutter",         "streakWidth",
-        "streakBrightness", "streakForwardG", "streakGlint",    "streakSheen",     "settled",
-        "puddleScale",      "rippleStrength", "rippleSize",     "splashCount",     "splashRadius",
-        "splashAmount",     "splashSize",     "mist",
-    };
-    warn_unknown_keys(rain, known, sizeof(known) / sizeof(known[0]), "rain");
+    const char* known[RAIN_KEY_COUNT + 3] = {"enabled", "wind", "settled"};
+    for (size_t i = 0; i < RAIN_KEY_COUNT; i++)
+        known[3 + i] = RAIN_KEYS[i].key;
+    warn_unknown_keys(rain, known, RAIN_KEY_COUNT + 3, "rain");
 }
 
 /*

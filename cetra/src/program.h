@@ -172,7 +172,7 @@ bool program_accepts_draw_mode(const ShaderProgram* program, GLenum draw_mode);
 #define CETRA_PROGRAM_SHAPE       "shape"
 #define CETRA_PROGRAM_XYZ         "xyz"
 #define CETRA_PROGRAM_PARTICLE    "particle"
-// Not one an app asks for: the engine registers it the first time it draws rain.
+// Registered at creation like the rest, though not one an app has reason to ask for.
 #define CETRA_PROGRAM_RAIN "rain"
 
 // Longest "pbr_skinned-<mask>" plus its terminator, with room to spare.

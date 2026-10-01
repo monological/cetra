@@ -108,6 +108,8 @@ typedef struct Rain {
 // Created with a moderate rain's defaults at rate 0: nothing falls until a rate is set.
 Rain* create_rain(void);
 void free_rain(Rain* rain);
+// The same defaults written over a Rain the caller holds, dry.
+void rain_init_defaults(Rain* rain);
 
 // Advance the accumulated state by `dt` seconds and latch the clock to `t`. NULL is a
 // no-op, which is the no-rain scene.
@@ -121,6 +123,9 @@ void rain_settle(Rain* rain);
 // the puddle level the rate's inflow holds up against drainage.
 float rain_wetness_target(const Rain* rain);
 float rain_puddle_target(const Rain* rain);
+
+// True while rain falls: a positive rate. NULL is false.
+bool rain_falling(const Rain* rain);
 
 // True while rain falls or anything it left is still wet: what decides whether cover
 // has to be known this frame. NULL is false.
