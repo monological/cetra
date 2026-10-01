@@ -1971,7 +1971,7 @@ void shadow_render_rain_layer(Engine* engine, Scene* scene) {
      * along a roof edge as the player walks.
      */
     vec3 dir = GLM_VEC3_ZERO_INIT, up = GLM_VEC3_ZERO_INIT;
-    rain_fall_direction(rain, dir);
+    glm_vec3_copy((float*)rain->travel, dir);
     light_space_up(dir, up);
     mat4 view, proj;
     glm_lookat((vec3){0.0f, 0.0f, 0.0f}, dir, up, view);

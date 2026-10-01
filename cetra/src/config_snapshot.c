@@ -752,6 +752,7 @@ static const ConfigField CFG_FIELDS[] = {
     // restored session re-derives them from the rate and the scene's `settled`.
     CFG_ROW(CFG_RAIN, CFG_FLOAT, "rain", "rate", rate_mmh),
     CFG_ROW(CFG_RAIN, CFG_VEC3, "rain", "wind", wind),
+    CFG_ROW(CFG_RAIN, CFG_BOOL, "rain", "followSceneWind", follow_scene_wind),
     CFG_ROW(CFG_RAIN, CFG_FLOAT, "rain", "fallScale", fall_scale),
     CFG_ROW(CFG_RAIN, CFG_FLOAT, "rain", "wetTime", wet_time),
     CFG_ROW(CFG_RAIN, CFG_FLOAT, "rain", "dryTime", dry_time),
@@ -777,6 +778,7 @@ static const ConfigField CFG_FIELDS[] = {
     CFG_ROW(CFG_RAIN, CFG_FLOAT, "rain", "splashAmount", splash_amount),
     CFG_ROW(CFG_RAIN, CFG_FLOAT, "rain", "splashSize", splash_size),
     CFG_ROW(CFG_RAIN, CFG_FLOAT, "rain", "mist", mist),
+    CFG_ROW(CFG_RAIN, CFG_FLOAT, "rain", "mistForwardG", mist_forward_g),
 
     /*
      * --- array elements. `section` is the ARRAY's name here, not a path: the

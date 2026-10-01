@@ -29,6 +29,7 @@
 #include "cetra/scene.h"
 #include "cetra/shadow.h"
 #include "cetra/sky.h"
+#include "cetra/wind.h"
 
 #include "cetra/game/audio.h"
 #include "cetra/game/entity.h"
@@ -86,6 +87,12 @@
 // Splash droplets twice their physical size: at their own a splash on dark wet asphalt lifts
 // its pixels by a tenth, and the ground round the player's feet reads as still.
 #define RAIN_SPLASH_SIZE 2.0f
+// A breeze off the street onto the front of the house, gusting. In still air the eave keeps
+// the rain off the facade and the kitchen window; this drives it onto their lower halves. The
+// speed is a gust's peak, and the lulls between are half of it.
+#define WIND_AIR_SPEED      2.5f
+#define WIND_GUST_FREQUENCY 0.6f
+#define WIND_GUST_AMOUNT    0.5f
 
 typedef struct SilentArgs {
     bool headless;
@@ -108,6 +115,7 @@ typedef struct SilentArgs {
     bool flashlight;
     bool mute;
     float rain_mmh;         // 0 = dry
+    bool no_wind;           // still air: the rain falls straight
     const char* audio_dump; // headless: write what the listener hears here
 } SilentArgs;
 
@@ -367,6 +375,17 @@ static void on_init(Game* game) {
     build_post(engine, !g_args.day, !g_args.no_grade);
     build_sky(engine);
 
+    if (!g_args.no_wind) {
+        Wind* wind = create_wind("street");
+        if (wind) {
+            glm_vec3_copy((vec3){0.0f, 0.0f, 1.0f}, wind->direction);
+            wind->air_speed = WIND_AIR_SPEED;
+            wind->gust_frequency = WIND_GUST_FREQUENCY;
+            wind->gust_amount = WIND_GUST_AMOUNT;
+            scene_set_wind(g_scene, wind);
+        }
+    }
+
     // Already soaked: the game opens in the middle of the rain, not at its start.
     if (g_args.rain_mmh > 0.0f) {
         g_scene->rain = create_rain();
@@ -558,6 +577,7 @@ static void print_usage(const char* prog) {
     printf("      --rain MM           Rain rate in mm/h (default %.0f)\n",
            (double)DEFAULT_RAIN_MMH);
     printf("      --no-rain           A dry night\n");
+    printf("      --no-wind           Still air: the rain falls straight\n");
     printf("  In the window: click to capture the mouse, Tab to release it. WASD\n");
     printf("  walks, Shift hurries, the arrows or the mouse look, G shows the GUI.\n");
     printf("  -h, --help              This message\n");
@@ -621,6 +641,8 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
             a->rain_mmh = fmaxf(0.0f, (float)atof(argv[++i]));
         } else if (!strcmp(s, "--no-rain")) {
             a->rain_mmh = 0.0f;
+        } else if (!strcmp(s, "--no-wind")) {
+            a->no_wind = true;
         } else if (!strcmp(s, "-h") || !strcmp(s, "--help")) {
             print_usage(argv[0]);
             return false;

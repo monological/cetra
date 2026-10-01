@@ -36,12 +36,20 @@ typedef struct Wind {
     // have -- wind is evaluated in object space from per-mesh uniforms, so
     // without this a thousand scattered trees beat as one.
     float phase_variation;
+    // m/s the air moves at a gust's peak, for what it carries (rain); 0 = no air speed stated.
+    float air_speed;
 } Wind;
 
 // Created with gentle-draft defaults.
 Wind* create_wind(const char* name);
 void free_wind(Wind* wind);
 void wind_set_name(Wind* wind, const char* name);
+
+// The gust envelope at time `t`, 1 - gust_amount .. 1: windOffset's own (wind.glsl), on the
+// CPU. NULL is 1.
+float wind_gust(const Wind* wind, float t);
+// Its mean over a cycle, which is what a quantity that must not swing with every gust reads.
+float wind_gust_mean(const Wind* wind);
 
 // Location-guarded upload of the global wind uniforms to a program (mirrors
 // shadow_upload_cascade_uniforms). A NULL wind uploads uWindStrength = 0, so
