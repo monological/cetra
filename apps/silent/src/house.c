@@ -19,7 +19,7 @@ static void pane(Kit* kit, const KitOpening* o) {
 #define DOWNPIPE_X     4.75f
 #define DOWNPIPE_R     0.035f
 #define JOINT_DRIPS    3.0f
-#define OVERFLOW_DRIPS 15.0f
+#define OVERFLOW_DRIPS 40.0f
 #define SPOUT_DRIPS    40.0f
 
 /*
