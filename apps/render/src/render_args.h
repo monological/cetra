@@ -18,6 +18,9 @@
 #define RENDER_WATER_DROP_RADIUS_M 0.154f
 #define RENDER_WATER_DROP_DEPTH_M  0.07f
 
+// --rain-probe-at points one run may name
+#define RAIN_PROBE_AT_MAX 16
+
 typedef struct {
     const char* model_path;
     const char* texture_dir;
@@ -143,20 +146,20 @@ typedef struct {
     // WaterFoamDebug (water.h), as an int since args structs here don't carry engine
     // headers. The instrument whitecap coverage is measured with; see Water.foam_debug.
     int water_foam_debug;
-    int no_water_surf;          // Bisect lever: no incident wave at the shore
-    int no_water_foam_history;  // Bisect lever: foam from this frame's fold only
-    int no_water_coverage;      // Bisect lever: hard shoreline cutoff, no coverage
-    int no_water_lod;           // Bisect lever: full wave detail at any cell footprint
-    int no_water_wetness;       // Bisect lever: the swash wets no material it runs over
-    int no_water_film;          // Bisect lever: the closed-form run-up, with no swash solver
-    int shore_probe;            // Print the CPU twin of the run-up, the film's own drive
-    int water_bed_dome;         // Install the analytic dome bed provider (shoaling)
-    int no_water;               // Drop a water surface a scene file asked for
-    float rain_rate;            // Rain in mm/h (spec 13.9); negative = keep the scene file's
-    int no_rain;                // Drop the rain a scene file asked for
-    float rain_sheen;           // Rain.streak_sheen; negative = keep the scene file's
-    int rain_probe;             // Print the rain's physics, an integration schedule and state
-    float rain_probe_at[16][3]; // --rain-probe-at points whose cover the probe reports
+    int no_water_surf;         // Bisect lever: no incident wave at the shore
+    int no_water_foam_history; // Bisect lever: foam from this frame's fold only
+    int no_water_coverage;     // Bisect lever: hard shoreline cutoff, no coverage
+    int no_water_lod;          // Bisect lever: full wave detail at any cell footprint
+    int no_water_wetness;      // Bisect lever: the swash wets no material it runs over
+    int no_water_film;         // Bisect lever: the closed-form run-up, with no swash solver
+    int shore_probe;           // Print the CPU twin of the run-up, the film's own drive
+    int water_bed_dome;        // Install the analytic dome bed provider (shoaling)
+    int no_water;              // Drop a water surface a scene file asked for
+    float rain_rate;           // Rain in mm/h (spec 13.9); negative = keep the scene file's
+    int no_rain;               // Drop the rain a scene file asked for
+    float rain_sheen;          // Rain.streak_sheen; negative = keep the scene file's
+    int rain_probe;            // Print the rain's physics, an integration schedule and state
+    float rain_probe_at[RAIN_PROBE_AT_MAX][3]; // --rain-probe-at points whose cover it reports
     int rain_probe_at_count;
     // --rain-ask: a point the CPU cover query is asked about every frame, whose answer the
     // probe prints. rain_ask_set 0 = none.

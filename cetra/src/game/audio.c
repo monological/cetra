@@ -20,12 +20,16 @@
 #define AUDIO_NOISE_AMPLITUDE 0.25
 #define AUDIO_NOISE_SEED      0x7a1c
 
+// What a Sound plays from: a file miniaudio decodes, or a source the Sound holds itself.
+typedef enum SoundKind { SOUND_FILE, SOUND_TONE, SOUND_NOISE } SoundKind;
+
 struct Sound {
     ma_sound sound;
-    ma_waveform waveform; // backs a tone; unused for a file
-    ma_noise noise;       // backs a noise bed; unused otherwise
-    bool is_tone;
-    bool is_noise;
+    SoundKind kind;
+    union {
+        ma_waveform waveform; // SOUND_TONE
+        ma_noise noise;       // SOUND_NOISE
+    };
     bool continuous; // tone: no auto-stop, so it plays until stopped
     ma_uint64 beep_frames;
     AudioSystem* audio; // borrowed; the tone stop-time and free_sound reach the engine here
@@ -65,15 +69,39 @@ static bool track_sound(AudioSystem* audio, Sound* s) {
     return true;
 }
 
+static void sound_source_uninit(Sound* s) {
+    if (s->kind == SOUND_TONE)
+        ma_waveform_uninit(&s->waveform);
+    else if (s->kind == SOUND_NOISE)
+        ma_noise_uninit(&s->noise, NULL);
+}
+
 static void sound_destroy(Sound* s) {
     if (!s)
         return;
     ma_sound_uninit(&s->sound);
-    if (s->is_tone)
-        ma_waveform_uninit(&s->waveform);
-    if (s->is_noise)
-        ma_noise_uninit(&s->noise, NULL);
+    sound_source_uninit(s);
     free(s);
+}
+
+// The playable sound over the source `s` already holds, tracked for teardown. 2D until
+// positioned: a beep or a bed should not attenuate with the listener. On failure `s` and its
+// source are released.
+static Sound* sound_over_source(AudioSystem* audio, Sound* s, AudioBus bus, const char* what) {
+    ma_data_source* source =
+        s->kind == SOUND_TONE ? (ma_data_source*)&s->waveform : (ma_data_source*)&s->noise;
+    if (ma_sound_init_from_data_source(&audio->engine, source, MA_SOUND_FLAG_NO_SPATIALIZATION,
+                                       group_for(audio, bus), &s->sound) != MA_SUCCESS) {
+        log_error("audio: %s sound init failed", what);
+        sound_source_uninit(s);
+        free(s);
+        return NULL;
+    }
+    if (!track_sound(audio, s)) {
+        sound_destroy(s);
+        return NULL;
+    }
+    return s;
 }
 
 AudioSystem* create_audio_system(bool headless) {
@@ -205,7 +233,7 @@ Sound* audio_sound_from_tone(AudioSystem* audio, float hz, AudioBus bus) {
     if (!s)
         return NULL;
     s->audio = audio;
-    s->is_tone = true;
+    s->kind = SOUND_TONE;
     ma_uint32 rate = ma_engine_get_sample_rate(&audio->engine);
     s->beep_frames = (ma_uint64)(AUDIO_TONE_BEEP_SECONDS * rate);
 
@@ -217,20 +245,7 @@ Sound* audio_sound_from_tone(AudioSystem* audio, float hz, AudioBus bus) {
         free(s);
         return NULL;
     }
-    // 2D until positioned: a beep should not attenuate with the listener.
-    if (ma_sound_init_from_data_source(&audio->engine, &s->waveform,
-                                       MA_SOUND_FLAG_NO_SPATIALIZATION, group_for(audio, bus),
-                                       &s->sound) != MA_SUCCESS) {
-        log_error("audio: tone sound init failed");
-        ma_waveform_uninit(&s->waveform);
-        free(s);
-        return NULL;
-    }
-    if (!track_sound(audio, s)) {
-        sound_destroy(s);
-        return NULL;
-    }
-    return s;
+    return sound_over_source(audio, s, bus, "tone");
 }
 
 Sound* audio_sound_from_noise(AudioSystem* audio, AudioNoise colour, AudioBus bus) {
@@ -240,6 +255,7 @@ Sound* audio_sound_from_noise(AudioSystem* audio, AudioNoise colour, AudioBus bu
     if (!s)
         return NULL;
     s->audio = audio;
+    s->kind = SOUND_NOISE;
     const ma_noise_type type = colour == AUDIO_NOISE_PINK    ? ma_noise_type_pink
                                : colour == AUDIO_NOISE_BROWN ? ma_noise_type_brownian
                                                              : ma_noise_type_white;
@@ -251,26 +267,14 @@ Sound* audio_sound_from_noise(AudioSystem* audio, AudioNoise colour, AudioBus bu
         free(s);
         return NULL;
     }
-    s->is_noise = true;
-    if (ma_sound_init_from_data_source(&audio->engine, &s->noise, MA_SOUND_FLAG_NO_SPATIALIZATION,
-                                       group_for(audio, bus), &s->sound) != MA_SUCCESS) {
-        log_error("audio: noise sound init failed");
-        ma_noise_uninit(&s->noise, NULL);
-        free(s);
-        return NULL;
-    }
-    if (!track_sound(audio, s)) {
-        sound_destroy(s);
-        return NULL;
-    }
-    return s;
+    return sound_over_source(audio, s, bus, "noise");
 }
 
 void audio_sound_play(Sound* sound) {
     if (!sound)
         return;
     ma_sound_seek_to_pcm_frame(&sound->sound, 0);
-    if (sound->is_tone && !sound->continuous) {
+    if (sound->kind == SOUND_TONE && !sound->continuous) {
         ma_uint64 now = ma_engine_get_time_in_pcm_frames(&sound->audio->engine);
         ma_sound_set_stop_time_in_pcm_frames(&sound->sound, now + sound->beep_frames);
     }
@@ -285,7 +289,7 @@ void audio_sound_stop(Sound* sound) {
 void audio_sound_set_looping(Sound* sound, bool loop) {
     if (!sound)
         return;
-    if (sound->is_tone)
+    if (sound->kind == SOUND_TONE)
         sound->continuous = loop; // an endless waveform needs no auto-stop to loop
     else
         ma_sound_set_looping(&sound->sound, loop ? MA_TRUE : MA_FALSE);
