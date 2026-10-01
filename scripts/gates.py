@@ -27000,13 +27000,41 @@ def _rain_velocity(d_mm):
 
 
 def _rain_rows(scene, extra=None, frames=2):
-    rows, _ = _probe_render(scene, "--rain-probe", "rain-probe", frames=frames, extra=extra)
+    """The --rain-probe rows by kind, and the run's whole output for what else it logged."""
+    rows, text = _probe_render(scene, "--rain-probe", "rain-probe", frames=frames, extra=extra)
     out = {}
     for rec in rows:
         kind = rec.pop("kind", None)
         vals = {k: float(v) for k, v in rec.items()}
         out.setdefault(kind, []).append(vals)
-    return out
+    return out, text
+
+
+def _moved_in_rect(pa, pb, w, h, x0, y0, x1, y1):
+    """(pixels differing, pixels) between two frames' pixels over the rectangle [x0, x1) x
+    [y0, y1), clipped to the frame."""
+    moved = total = 0
+    for py in range(max(0, y0), min(h, y1)):
+        for px in range(max(0, x0), min(w, x1)):
+            i = 3 * (py * w + px)
+            moved += pa[i:i + 3] != pb[i:i + 3]
+            total += 1
+    return moved, total
+
+
+def _moved_fraction(a_path, b_path):
+    """The fraction of the frame two renders differ in; 0 when either is missing."""
+    if not (a_path and b_path):
+        return 0.0
+    w, h, _ = _read_ppm(a_path)
+    ae, _ = compare(a_path, b_path)
+    return ae / (w * h)
+
+
+def _cscn_view(cam):
+    """A .cscn camera block in the shape _projector takes."""
+    return {"eye": tuple(cam["eye"]), "target": tuple(cam["target"]),
+            "fovy_deg": float(cam["fov"])}
 
 
 def run_rain_gate(workdir):
@@ -27090,7 +27118,11 @@ def run_rain_gate(workdir):
         print(f"  rain-physics SKIP  ({RAIN_FIXTURE} not present)")
         return []
     failures = []
-    got = _rain_rows(scene)
+    # The cover points ride the first run: the physics, the state and the medium do not care.
+    at = []
+    for (x, y, z), _ in RAIN_COVER_POINTS + [((80.0, 0.0, 0.0), None)]:
+        at += ["--rain-probe-at", f"{x},{y},{z}"]
+    got, got_text = _rain_rows(scene, extra=at)
 
     errs, rows = [], got.get("physics", [])
     for row in rows:
@@ -27138,21 +27170,21 @@ def run_rain_gate(workdir):
     if not ok:
         failures.append("rain-wetting")
 
-    dry = os.path.join(workdir, "rain_dry.cscn")
-    cscn_copy(scene, dry, lambda s: s["rain"].update({"settled": False}))
+    unsettled = os.path.join(workdir, "rain_dry.cscn")
+    cscn_copy(scene, unsettled, lambda s: s["rain"].update({"settled": False}))
     settled = (got.get("state") or [{}])[0]
-    state = (_rain_rows(dry, frames=RAIN_TICK_FRAMES).get("state") or [{}])[0]
-    if state.get("present") == 1.0 and settled.get("present") == 1.0 and d:
-        rate, ref = state["rate"], d["reference"]
+    ticked = (_rain_rows(unsettled, frames=RAIN_TICK_FRAMES)[0].get("state") or [{}])[0]
+    if ticked.get("present") == 1.0 and settled.get("present") == 1.0 and d:
+        rate, ref = ticked["rate"], d["reference"]
         elapsed = RAIN_TICK_FRAMES / 60.0
-        wet = 1.0 - math.exp(-elapsed / (state["wet_time"] * ref / rate))
-        puddle_target = state["coverage"] * (1.0 - math.exp(-rate / ref))
-        puddle = puddle_target * (1.0 - math.exp(-elapsed / (state["fill_time"] * ref / rate)))
-        err = max(abs(state["wetness"] - wet), abs(state["puddle"] - puddle),
+        wet = 1.0 - math.exp(-elapsed / (ticked["wet_time"] * ref / rate))
+        puddle_target = ticked["coverage"] * (1.0 - math.exp(-rate / ref))
+        puddle = puddle_target * (1.0 - math.exp(-elapsed / (ticked["fill_time"] * ref / rate)))
+        err = max(abs(ticked["wetness"] - wet), abs(ticked["puddle"] - puddle),
                   abs(settled["wetness"] - 1.0), abs(settled["puddle"] - puddle_target))
         ok = err <= RAIN_PACE_TOL
-        detail = (f"from dry, {RAIN_TICK_FRAMES} frames leave a film of {state['wetness']:.5f} "
-                  f"(want {wet:.5f}) and puddles of {state['puddle']:.5f} (want {puddle:.5f}); "
+        detail = (f"from dry, {RAIN_TICK_FRAMES} frames leave a film of {ticked['wetness']:.5f} "
+                  f"(want {wet:.5f}) and puddles of {ticked['puddle']:.5f} (want {puddle:.5f}); "
                   f"settled, {settled['wetness']:.5f} and {settled['puddle']:.5f} (want 1 and "
                   f"{puddle_target:.5f}); worst {err:.2e}")
     else:
@@ -27161,16 +27193,13 @@ def run_rain_gate(workdir):
     if not ok:
         failures.append("rain-tick")
 
-    at = []
-    for (x, y, z), _ in RAIN_COVER_POINTS + [((80.0, 0.0, 0.0), None)]:
-        at += ["--rain-probe-at", f"{x},{y},{z}"]
+    def cover_of(rows):
+        return (rows.get("cover") or [{}])[0], rows.get("exposure", [])
 
     def cover(scene_path, extra=()):
-        rows = _rain_rows(scene_path, extra=at + list(extra))
-        head = (rows.get("cover") or [{}])[0]
-        return head, rows.get("exposure", [])
+        return cover_of(_rain_rows(scene_path, extra=at + list(extra))[0])
 
-    head, pts = cover(scene)
+    head, pts = cover_of(got)
     wrong = [f"({p['x']:g},{p['y']:g},{p['z']:g})"
              for p, (_, want) in zip(pts, RAIN_COVER_POINTS)
              if p.get("inside") != 1.0 or bool(p.get("exposed")) != want]
@@ -27189,8 +27218,8 @@ def run_rain_gate(workdir):
     asks = []
     for point in RAIN_ASK_POINTS:
         where = ",".join(f"{c:g}" for c in point)
-        rows = _rain_rows(scene, extra=["--rain-ask", where, "--rain-probe-at", where],
-                          frames=RAIN_ASK_FRAMES)
+        rows, _ = _rain_rows(scene, extra=["--rain-ask", where, "--rain-probe-at", where],
+                             frames=RAIN_ASK_FRAMES)
         ask = (rows.get("ask") or [{}])[0]
         exact = (rows.get("exposure") or [{}])[0]
         asks.append((where, ask.get("answered"), ask.get("open"), exact.get("exposed")))
@@ -27209,7 +27238,7 @@ def run_rain_gate(workdir):
     cscn_copy(scene, tuned, lambda s: s["rain"].update(RAIN_CONFIG_TUNED))
     dump = os.path.join(workdir, "rain_config.json")
     _rain_rows(tuned, extra=["--config-dump", dump], frames=2)
-    restored = (_rain_rows(scene, extra=["--config", dump], frames=2).get("state") or [{}])[0]
+    restored = (_rain_rows(scene, extra=["--config", dump], frames=2)[0].get("state") or [{}])[0]
     want = {RAIN_CONFIG_READ[k]: v for k, v in RAIN_CONFIG_TUNED.items()}
     back = {k: restored.get(k) for k in want}
     ok = os.path.exists(dump) and all(
@@ -27232,9 +27261,9 @@ def run_rain_gate(workdir):
     if not ok:
         failures.append("rain-tenant")
 
-    def variant(name, mutate):
+    def variant(name, mutate, base=scene):
         path = os.path.join(workdir, f"rain_{name}.cscn")
-        cscn_copy(scene, path, mutate)
+        cscn_copy(base, path, mutate)
         return path
 
     def frame(name, scene_path, extra=()):
@@ -27242,9 +27271,9 @@ def run_rain_gate(workdir):
         err = render(scene_path, out, list(extra))
         return None if err else out
 
-    dry = variant("none", lambda s: s.pop("rain"))
+    no_rain = variant("none", lambda s: s.pop("rain"))
     still = variant("still", lambda s: s["rain"].update({"rate": 0.0}))
-    a, b = frame("none", dry), frame("still", still)
+    a, b = frame("none", no_rain), frame("still", still)
     ae, pae = compare(a, b) if a and b else (sys.maxsize, 1.0)
     ok = ae == 0
     print(f"  rain-off {'PASS' if ok else 'FAIL'}  rate 0 against no rain block: {ae} px "
@@ -27330,9 +27359,9 @@ def run_rain_gate(workdir):
         for name, point in RAIN_WET_POINTS:
             x, y = project(point)
             box = ((x - 3) / w, (y - 3) / h, (x + 4) / w, (y + 4) / h)
-            dry = _box_luma_dense(dry_pix, w, h, box, _DISPLAY_TO_LINEAR)
-            ratios[name] = (_box_luma_dense(wet_pix, w, h, box, _DISPLAY_TO_LINEAR) / dry
-                            if dry > 0 else float("nan"))
+            dry_luma = _box_luma_dense(dry_pix, w, h, box, _DISPLAY_TO_LINEAR)
+            ratios[name] = (_box_luma_dense(wet_pix, w, h, box, _DISPLAY_TO_LINEAR) / dry_luma
+                            if dry_luma > 0 else float("nan"))
     covered = [ratios.get(n, float("nan")) for n in ("covered porous", "covered sealed")]
     porous = ratios.get("open porous", float("nan"))
     sealed = ratios.get("open sealed", float("nan"))
@@ -27345,43 +27374,34 @@ def run_rain_gate(workdir):
     if not ok:
         failures.append("rain-wet")
 
-    def moved_round(a_path, b_path, project, points):
+    def moved_round(a_path, b_path, view, points):
         """(pixels differing in a 7x7 box round each point's image, pixels in those boxes).
 
         The second count is how the caller knows every point was in frame: a point off the
         edge contributes no pixels, and a box of none cannot have moved."""
         w, h, pa = _read_ppm(a_path)
         _, _, pb = _read_ppm(b_path)
+        project = _projector(view, w, h)
         moved = total = 0
         for p in points:
-            x, y = project(p)
-            for py in range(max(0, int(y) - 3), min(h, int(y) + 4)):
-                for px in range(max(0, int(x) - 3), min(w, int(x) + 4)):
-                    i = 3 * (py * w + px)
-                    moved += pa[i:i + 3] != pb[i:i + 3]
-                    total += 1
+            x, y = (int(c) for c in project(p))
+            m, t = _moved_in_rect(pa, pb, w, h, x - 3, y - 3, x + 4, y + 4)
+            moved, total = moved + m, total + t
         return moved, total
 
-    def moved_in_quad(a_path, b_path, cam, quad):
+    def moved_in_quad(a_path, b_path, view, quad):
         """(pixels differing, pixels) in the screen rectangle inscribed in the image of a world
-        quadrilateral, from a .cscn-shaped camera. Inscribed, so every pixel counted is of the
-        quad: a ground patch seen in perspective is a trapezoid whose far edge is the narrower,
-        and the rectangle takes that width. The inner two of the four projected x and of the
-        four projected y bound it, whichever way the camera maps world axes to the screen."""
+        quadrilateral. Inscribed, so every pixel counted is of the quad: a ground patch seen in
+        perspective is a trapezoid whose far edge is the narrower, and the rectangle takes that
+        width. The inner two of the four projected x and of the four projected y bound it,
+        whichever way the camera maps world axes to the screen."""
         w, h, pa = _read_ppm(a_path)
         _, _, pb = _read_ppm(b_path)
-        project = _projector({"eye": tuple(cam["eye"]), "target": tuple(cam["target"]),
-                              "fovy_deg": float(cam["fov"])}, w, h)
+        project = _projector(view, w, h)
         at = [project(p) for p in quad]
         xs, ys = sorted(p[0] for p in at), sorted(p[1] for p in at)
-        x0, x1, y0, y1 = xs[1], xs[2], ys[1], ys[2]
-        moved = total = 0
-        for py in range(max(0, int(math.ceil(y0))), min(h, int(y1))):
-            for px in range(max(0, int(math.ceil(x0))), min(w, int(x1))):
-                i = 3 * (py * w + px)
-                moved += pa[i:i + 3] != pb[i:i + 3]
-                total += 1
-        return moved, total
+        return _moved_in_rect(pa, pb, w, h, int(math.ceil(xs[1])), int(math.ceil(ys[1])),
+                              int(xs[2]), int(ys[2]))
 
     def ground_quad(extents, y):
         (xa, xb), (za, zb) = extents
@@ -27391,13 +27411,9 @@ def run_rain_gate(workdir):
     still_points = [p for n, p in RAIN_WET_POINTS if n.startswith("covered")] + RAIN_WALL_POINTS
     unpooled = frame("unpooled", variant("unpooled", lambda s: s["rain"].update(
         {**RAIN_SURFACES_ONLY, "puddleCoverage": 0.0})), RAIN_LINEAR)
-    frac, still_moved, still_total = 0.0, -1, 0
+    frac, still_moved, still_total = _moved_fraction(wet_path, unpooled), -1, 0
     if wet_path and unpooled:
-        w, h, _ = _read_ppm(wet_path)
-        ae, _ = compare(wet_path, unpooled)
-        frac = ae / (w * h)
-        still_moved, still_total = moved_round(wet_path, unpooled,
-                                               _projector(_cscn_camera(RAIN_FIXTURE), w, h),
+        still_moved, still_total = moved_round(wet_path, unpooled, _cscn_camera(RAIN_FIXTURE),
                                                still_points)
     ok = frac > RAIN_FEATURE_MIN and still_total == 49 * len(still_points) and still_moved == 0
     print(f"  rain-puddles {'PASS' if ok else 'FAIL'}  puddles move {frac:.1%} of the frame "
@@ -27417,13 +27433,11 @@ def run_rain_gate(workdir):
         return frame(name, variant(name, mutate), RAIN_LINEAR)
 
     splashed, unsplashed = splashes("splashed", None), splashes("unsplashed", 0)
-    frac, covered_moved, covered_total = 0.0, -1, 0
+    frac, covered_moved, covered_total = _moved_fraction(splashed, unsplashed), -1, 0
     if splashed and unsplashed:
-        w, h, _ = _read_ppm(splashed)
-        ae, _ = compare(splashed, unsplashed)
-        frac = ae / (w * h)
-        covered_moved, covered_total = moved_in_quad(splashed, unsplashed, RAIN_UNDER_ROOF_CAMERA,
-                                                     ground_quad(RAIN_COVERED_PATCH, 0.0))
+        covered_moved, covered_total = moved_in_quad(
+            splashed, unsplashed, _cscn_view(RAIN_UNDER_ROOF_CAMERA),
+            ground_quad(RAIN_COVERED_PATCH, 0.0))
     ok = (frac > RAIN_SPLASH_MIN and covered_total >= RAIN_COVERED_MIN_PX
           and covered_moved == 0)
     print(f"  rain-splashes {'PASS' if ok else 'FAIL'}  splashes move {frac:.2%} of the frame "
@@ -27435,25 +27449,20 @@ def run_rain_gate(workdir):
     # The rain as a medium: what the post chain was handed, against the rate's extinction and
     # the streaks' reach as the scene sets them, and then that it reaches a frame on its own --
     # the fixture has no fog, so nothing else arms the volume.
-    state = (got.get("state") or [{}])[0]
     medium = (got.get("medium") or [{}])[0]
     nan = float("nan")
-    want_sigma = _rain_twin(state["rate"])["beta"] * state["mist"] if "rate" in state else nan
-    want_near = (state.get("streak_radius", nan) * 3 ** (_rain_constant("RAIN_STREAK_BOXES") - 1)
-                 if state.get("streak_count", 0) > 0 else 0.0)
+    want_sigma = (_rain_twin(settled["rate"])["beta"] * settled["mist"] if "rate" in settled
+                  else nan)
+    want_near = (settled.get("streak_radius", nan) * _rain_constant("RAIN_STREAK_BOX_SCALE") **
+                 (_rain_constant("RAIN_STREAK_BOXES") - 1)
+                 if settled.get("streak_count", 0) > 0 else 0.0)
     sigma_err = abs(medium.get("sigma", nan) - want_sigma) / want_sigma
     near_err = abs(medium.get("near", nan) - want_near)
 
-    def misty(name, mist):
-        return frame(name, variant(name, lambda s: s["rain"].update(
-            {"streakCount": 0, "splashCount": 0, "mist": mist})), RAIN_LINEAR)
-
-    clear, misted = misty("clear", 0.0), misty("misted", 1.0)
-    frac = 0.0
-    if clear and misted:
-        w, h, _ = _read_ppm(clear)
-        ae, _ = compare(clear, misted)
-        frac = ae / (w * h)
+    # Against the surfaces-only frame, which is this fixture with the medium at 0.
+    misted = frame("misted", variant("misted", lambda s: s["rain"].update(
+        {**RAIN_SURFACES_ONLY, "mist": 1.0})), RAIN_LINEAR)
+    frac = _moved_fraction(wet_path, misted)
     ok = (sigma_err <= RAIN_TOL and near_err <= 1e-4 and medium.get("armed") == 1.0
           and frac > RAIN_FEATURE_MIN)
     print(f"  rain-mist {'PASS' if ok else 'FAIL'}  published extinction {medium.get('sigma', nan):.6g}"
@@ -27465,17 +27474,15 @@ def run_rain_gate(workdir):
         failures.append("rain-mist")
 
     # Wet ground in SSR, on the soaked surfaces alone: traced where the ground is wet, and not a
-    # pixel moved where it is dry or on the wall above it.
-    surfaces_ssr = frame("ssr_on", surfaces, RAIN_LINEAR)
+    # pixel moved where it is dry or on the wall above it. The surfaces frame has SSR on.
     surfaces_nossr = frame("ssr_off", surfaces, RAIN_LINEAR + ["--no-ssr"])
     regions = {}
-    if surfaces_ssr and surfaces_nossr:
-        cam = _cscn_camera(RAIN_FIXTURE)
-        cam = {"eye": cam["eye"], "target": cam["target"], "fov": cam["fovy_deg"]}
+    if wet_path and surfaces_nossr:
         for name, quad in (("open", ground_quad(RAIN_SSR_OPEN, 0.0)),
                            ("covered", ground_quad(RAIN_SSR_COVERED, 0.0)),
                            ("wall", RAIN_SSR_WALL)):
-            regions[name] = moved_in_quad(surfaces_ssr, surfaces_nossr, cam, quad)
+            regions[name] = moved_in_quad(wet_path, surfaces_nossr, _cscn_camera(RAIN_FIXTURE),
+                                          quad)
     moved = {k: m / t if t else float("nan") for k, (m, t) in regions.items()}
     ok = (len(regions) == 3 and all(t >= RAIN_SSR_MIN_PX for _, t in regions.values())
           and moved["open"] > RAIN_FEATURE_MIN and regions["covered"][0] == 0
@@ -27499,17 +27506,13 @@ def run_rain_gate(workdir):
             s["rain"].update({**RAIN_SURFACES_ONLY, "rippleSize": RAIN_RING_SIZE})
             if strength is not None:
                 s["rain"]["rippleStrength"] = strength
-        path = os.path.join(workdir, f"rain_{name}.cscn")
-        cscn_copy(water, path, mutate)
-        return frame(name, path, RAIN_LINEAR)
+        return frame(name, variant(name, mutate, base=water), RAIN_LINEAR)
 
     ringed, calm = under_roof("ringed", None), under_roof("calm", 0.0)
-    frac, covered_moved, covered_total = 0.0, -1, 0
+    frac, covered_moved, covered_total = _moved_fraction(ringed, calm), -1, 0
     if ringed and calm:
-        w, h, _ = _read_ppm(ringed)
-        ae, _ = compare(ringed, calm)
-        frac = ae / (w * h)
-        covered_moved, covered_total = moved_in_quad(ringed, calm, RAIN_UNDER_ROOF_CAMERA,
+        covered_moved, covered_total = moved_in_quad(ringed, calm,
+                                                     _cscn_view(RAIN_UNDER_ROOF_CAMERA),
                                                      ground_quad(RAIN_COVERED_PATCH, 0.05))
     ok = (frac > RAIN_FEATURE_MIN and covered_total >= RAIN_COVERED_MIN_PX
           and covered_moved == 0)
@@ -27519,16 +27522,23 @@ def run_rain_gate(workdir):
     if not ok:
         failures.append("rain-ripples")
 
-    def samplers(extra):
-        _, text = _probe_render(scene, "--rain-probe", "rain-probe", frames=2, extra=extra)
-        found = re.findall(r"pbr variant (pbr-\d+): features \d+ of \d+ samplers (\d+)", text)
-        return {name: int(n) for name, n in found}
+    bits, full = _pbr_feature_bits()
+    rain_bit = bits["rain"]
 
-    wet_variants, dry_variants = samplers([]), samplers(["--no-rain"])
+    def samplers(text):
+        """{variant name: (feature mask, samplers declared)} for every variant the materials
+        resolved to -- not the full uber-shaders, which declare every sampler whatever rains."""
+        return {m.group(1): (int(m.group(2)), int(m.group(4))) for m in _PBR_VARIANT.finditer(text)
+                if int(m.group(2)) != full}
+
+    wet_logged = samplers(got_text)
+    dry_logged = samplers(_rain_rows(scene, extra=["--no-rain"])[1])
+    wet_variants = {n: count for n, (_, count) in wet_logged.items()}
+    dry_variants = {n: count for n, (_, count) in dry_logged.items()}
     wet_count = max(wet_variants.values(), default=-1)
     dry_count = max(dry_variants.values(), default=-1)
     ok = (wet_count >= 0 and dry_count >= 0 and wet_count == dry_count
-          and any(int(n.split("-")[1]) & 64 for n in wet_variants))
+          and any(mask & rain_bit for mask, _ in wet_logged.values()))
     print(f"  rain-ledger {'PASS' if ok else 'FAIL'}  wet {wet_variants or 'none'} against dry "
           f"{dry_variants or 'none'} (want the rain bit set wet, and the same sampler count)")
     if not ok:
