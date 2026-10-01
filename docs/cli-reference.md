@@ -452,8 +452,8 @@ point every frame and the probe prints its answer. `assets/scenes/rain_fixture.c
   `airSpeed` (m/s) carry the rain in place of the block's own `wind`.
 - **The mist:** `mistForwardG` (default 0.8) is the medium's own lobe, apart from the streaks'.
 - **Glass:** `glassLens` (1 = physical) scales how far a drop bends what is seen through it, and
-  `glassDropSize` the drops' size; a material's `rainBeads` (-1 derives it: 1 on transmissive
-  glass) says whether it beads at all.
+  `glassDropSize` the drops' size; a material's `rainBeads` -- `auto`, `off` or `on`, auto
+  meaning glass that transmits -- says whether it beads at all.
 - **Drips:** `drips: [{from, to, rate, ground}]` (a point when `to` is left out), `dripCount`
   (the slots they share) and `dripBrightness`.
 - **After the rain:** `dryFor <s>` opens the scene that long after the rain stopped.
