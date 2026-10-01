@@ -437,7 +437,8 @@ its own, and re-settles it, so the frame shows that rate's soaked world rather t
 top-level `rain` block, every key a knob of the `Rain` struct: `rate`, `wind`, `fallScale`,
 `settled` (absent = already soaked), `wetTime`, `dryTime`, `puddleFillTime`, `puddleDrainTime`,
 `puddleCoverage`, `puddleScale`, `rippleStrength`, `rippleSize`, `wetDarkening`,
-`occlusionExtent`, `streakCount`, `streakRadius`, `shutter`, `streakWidth`, `streakBrightness`,
+`occlusionExtent`, `occlusionSoftness`, `streakCount`, `streakRadius`, `shutter`, `streakWidth`,
+`streakBrightness`,
 `streakForwardG`, `streakGlint`, `streakSheen`, `splashCount`, `splashRadius`, `splashAmount`,
 `splashSize` and `mist`. Materials take `porosity` (-1 derives it from roughness). Instruments:
 `--rain-probe` prints the physics ladder, the state, the medium as the post chain was handed it

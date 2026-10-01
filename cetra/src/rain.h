@@ -38,11 +38,10 @@
 #define RAIN_MP_N0 8000.0f
 
 typedef struct Rain {
-    // ENGINE-OWNED: the rain's accumulated state and its clock. Read freely, never
-    // write; rain_settle is how a caller asks for a world already soaked.
+    // ENGINE-OWNED: the rain's accumulated state. Read freely, never write; rain_settle
+    // is how a caller asks for a world already soaked.
     float wetness;      // 0 = dry, 1 = every exposed surface carries a film
     float puddle_level; // 0 = no standing water, puddle_coverage = full at this rate
-    float time;         // seconds of rain clock, the engine's render time
 
     // SETTINGS: plain stores. Write them directly, at any time.
     float rate_mmh; // rain rate in mm/h; 0 = no rain falls (the state still dries)
@@ -111,9 +110,8 @@ void free_rain(Rain* rain);
 // The same defaults written over a Rain the caller holds, dry.
 void rain_init_defaults(Rain* rain);
 
-// Advance the accumulated state by `dt` seconds and latch the clock to `t`. NULL is a
-// no-op, which is the no-rain scene.
-void rain_update(Rain* rain, float t, float dt);
+// Advance the accumulated state by `dt` seconds. NULL is a no-op, which is the no-rain scene.
+void rain_update(Rain* rain, float dt);
 
 // Put the state where this rate settles it, as though it had been raining for ever --
 // the scene that opens in a storm. At rate 0 that is dry.

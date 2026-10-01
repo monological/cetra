@@ -2926,8 +2926,7 @@ static void postfx_run_ssr(PostFX* fx, GLuint canvas_fbo, GLuint canvas_tex, boo
     // Wet ground has its share of the environment's reflection REPLACED rather than being
     // lerped toward the trace, which needs that share on its own -- the split composite's
     // buffer -- and the program that folds it. Without either it lerps, as the catcher does.
-    const bool wet_replace =
-        fx->rain_wet && split_live && have_normals && fx->ssr_fold_wet_program != NULL;
+    const bool wet_replace = fx->rain_wet && split_live && fx->ssr_fold_wet_program != NULL;
     // SSR traces at full res (sharp) or half res, per ssr_full_res; the
     // buffer + Hi-Z pyramid were sized to match in create_ssr_buffers.
     int ssr_w = fx->ssr_full_res ? fx->width : fx->half_width;
@@ -3044,7 +3043,7 @@ static void postfx_run_ssr(PostFX* fx, GLuint canvas_fbo, GLuint canvas_tex, boo
     uniform_set_mat4(fx->ssr_program->uniforms, "invView", (float*)inv_view);
     // That fog: the global height medium the environment's reflection is baked through.
     uniform_set_float(fx->ssr_program->uniforms, "ssrFogDensity",
-                      wet_replace && fx->fog_enabled ? fx->fog_density : 0.0f);
+                      fx->fog_enabled ? fx->fog_density : 0.0f);
     uniform_set_float(fx->ssr_program->uniforms, "ssrFogFalloff",
                       fmaxf(fx->fog_height_falloff, 1e-3f));
     uniform_set_float(fx->ssr_program->uniforms, "ssrFogFloorY", fx->fog_floor_y);

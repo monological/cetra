@@ -71,6 +71,7 @@ uniform int probeMulti;
 // WS_REFLECT_MAX below is read in the same space it was written in.
 #include "view.glsl"
 #include "probe_specular.glsl"
+#include "ssr_marker.glsl"
 
 // Acceptance slab behind a surface: floor thicknessMin (absolute view units,
 // covering depth quantization and the start bias) plus the ray's own view-z
@@ -144,8 +145,9 @@ vec3 reflectedThroughFog(vec3 radiance, vec3 fromV, vec3 toV) {
 // proxy box and return the hit path's premultiplied (color*weight, weight)
 // contract. The screen-space fades don't apply — the probe has data in
 // every direction. Exact vec4(0) when the probe is off, so the miss sites
-// write today's values bit-identically.
-vec4 probeSample(vec3 fragPosV, vec3 n, vec3 RV, vec3 viewDir, float roughness, bool wet)
+// write today's values bit-identically. `split` and `roughnessFade` are the
+// surface's, as main() works them out for the hit.
+vec4 probeSample(vec3 fragPosV, vec3 RV, float roughness, vec2 split, float roughnessFade)
 {
     if (probeEnabled == 0 && probeMulti == 0)
         return vec4(0.0);
@@ -175,12 +177,8 @@ vec4 probeSample(vec3 fragPosV, vec3 n, vec3 RV, vec3 viewDir, float roughness, 
         col = textureLod(probeTex, dir, roughness * probeMaxLOD).rgb * probeIntensity *
               preExposure;
     }
-    float NdotV = max(dot(n, -viewDir), 0.0);
-    float fresnel = surfaceFresnel(NdotV, wet);
-    float roughnessFade = 1.0 - smoothstep(0.5 * maxRoughness, maxRoughness, roughness);
-    bool replace = wet && wetReplace != 0;
-    float w = clamp((replace ? 1.0 : fresnel) * roughnessFade * strength, 0.0, 1.0);
-    return vec4(min(col, vec3(WS_REFLECT_MAX)) * (replace ? fresnel : 1.0) * w, w);
+    float w = clamp(split.x * roughnessFade * strength, 0.0, 1.0);
+    return vec4(min(col, vec3(WS_REFLECT_MAX)) * split.y * w, w);
 }
 
 // Ray-vs-cell boundary planes: the segment params at which the ray enters
@@ -219,19 +217,14 @@ void main()
 
     vec4 nr = texture(normalsTex, TexCoords);
     vec3 n = nr.xyz;
-    // Only surfaces marked reflective trace, and the marker is the G-buffer alpha's RANGE.
-    // Model surfaces write non-negative alpha and rely on IBL -- screen-space rays off curved
-    // geometry graze their own silhouettes and sparkle. Two kinds are marked:
-    //
-    //   (-1, 0)  the shadow catcher; the magnitude is its edge falloff, so the reflectivity
-    //            fades to zero at the quad boundary exactly like the shadow does, and its
-    //            roughness is the scalar floorRoughness.
-    //   < -1     wet ground (spec 13.9), -(1 + film): flat, filmed or standing water, whose
-    //            roughness is its own, per pixel, in the aux buffer.
-    bool wet = nr.a < -1.0;
-    float floorFade = wet ? clamp(-nr.a - 1.0, 0.0, 1.0) : clamp(-nr.a, 0.0, 1.0);
-    float roughness =
-        wet && auxAvailable != 0 ? texture(auxTex, TexCoords).w : floorRoughness;
+    // Only surfaces marked reflective trace (ssr_marker.glsl). Model surfaces stay unmarked
+    // and rely on IBL -- screen-space rays off curved geometry graze their own silhouettes
+    // and sparkle. The shadow catcher's fade is its edge falloff, so its reflectivity fades to
+    // zero at the quad boundary exactly like the shadow does, and its roughness is the scalar
+    // floorRoughness; wet ground's fade is its film, and its roughness is its own, per pixel,
+    // in the aux buffer.
+    bool wet = ssrMarkerIsWet(nr.a);
+    float floorFade = ssrMarkerFade(nr.a);
     // This cutoff must stay above catcher_frag's 0.002 marker floor: the
     // catcher stamps that floor on its dead outer ring precisely so it
     // lands below here and never traces.
@@ -240,6 +233,10 @@ void main()
         return;
     }
     n = normalize(n);
+    // After the exit above, which most pixels take; lod 0 since the exit leaves the
+    // derivatives undefined.
+    float roughness =
+        wet && auxAvailable != 0 ? textureLod(auxTex, TexCoords, 0.0).w : floorRoughness;
     if (roughness > maxRoughness) {
         FragColor = vec4(0.0);
         return;
@@ -252,6 +249,17 @@ void main()
     vec3 fragPos = viewPosFromDepth(TexCoords, depth);
     vec3 viewDir = -viewDirToCamera(fragPos); // from the camera
     vec3 R = normalize(reflect(viewDir, n));
+
+    // The surface's reflectance, which the hit and the probe share: Fresnel with its F0
+    // (surfaceFresnel: the catcher's coating or wet ground's water), and the fade toward
+    // maxRoughness. `split` is where the Fresnel goes, (in the weight, on the colour): a wet
+    // pair under the replacing fold takes it on the colour and its coverage bare, every other
+    // pair in the weight.
+    float NdotV = max(dot(n, -viewDir), 0.0);
+    float fresnel = surfaceFresnel(NdotV, wet);
+    float roughnessFade = 1.0 - smoothstep(0.5 * maxRoughness, maxRoughness, roughness);
+    bool replace = wet && wetReplace != 0;
+    vec2 split = replace ? vec2(1.0, fresnel) : vec2(fresnel, 1.0);
 
     if (ssrStochastic == 1) {
         // Cosine-ish disk jitter in R's tangent frame, spread by roughness with
@@ -278,7 +286,7 @@ void main()
     // full fallback on a miss, the faded tail's filler on a partial hit.
     // Exact vec4(0) with the probe off, keeping every path bit-identical.
     // The catcher's edge falloff rides along here so every exit fades.
-    vec4 probe = probeSample(fragPos, n, R, viewDir, roughness, wet) * floorFade;
+    vec4 probe = probeSample(fragPos, R, roughness, split, roughnessFade) * floorFade;
 
     // Start biased along the normal so the ray does not immediately test
     // against its own surface. The bias must grow with view distance: a
@@ -464,9 +472,8 @@ void main()
         return;
     }
 
-    // Fades: screen-edge (information runs out), Fresnel (surfaceFresnel:
-    // the catcher's coating or wet ground's water), roughness tail, march
-    // distance, and iteration budget. The
+    // Fades: screen-edge (information runs out), the surface's Fresnel and
+    // roughness tail, march distance, and iteration budget. The
     // budget fade is what keeps exhaustion invisible: a column whose ray
     // dies unhit composites nothing, so without it the neighbouring column
     // that hit on its LAST iterations keeps mid-strength weight and the
@@ -475,9 +482,6 @@ void main()
     // meet at zero.
     vec2 edge = min(hitUV, 1.0 - hitUV);
     float edgeFade = smoothstep(0.0, 0.1, min(edge.x, edge.y));
-    float NdotV = max(dot(n, -viewDir), 0.0);
-    float fresnel = surfaceFresnel(NdotV, wet);
-    float roughnessFade = 1.0 - smoothstep(0.5 * maxRoughness, maxRoughness, roughness);
     float distFade = 1.0 - clamp(sHit, 0.0, 1.0);
     float budgetFade = 1.0 - smoothstep(0.75, 1.0, float(itersUsed) / float(marchBudget));
 
@@ -487,11 +491,8 @@ void main()
     // premultiplied pair stays consistent (strength > 1 saturates toward a
     // full mirror instead of decoupling color from coverage). The sampled
     // color is clamped — HDR spikes read as white discs after upsampling.
-    // A wet pair under the replacing fold takes its Fresnel on the colour, not the weight.
-    bool replace = wet && wetReplace != 0;
-    float weight = clamp(edgeFade * (replace ? 1.0 : fresnel) * roughnessFade * distFade *
-                             budgetFade * strength,
-                         0.0, 1.0);
+    float weight =
+        clamp(edgeFade * split.x * roughnessFade * distFade * budgetFade * strength, 0.0, 1.0);
     vec3 reflection = min(texture(hdrTex, hitUV).rgb, vec3(WS_REFLECT_MAX));
     if (replace)
         reflection = reflectedThroughFog(
@@ -500,6 +501,5 @@ void main()
     // instead of toward nothing — premultiplied "SSR over probe". The probe
     // term already carries floorFade, so scaling the SSR term by it makes
     // the whole composite exactly floorFade * (unfaded composite).
-    FragColor = vec4(reflection * (replace ? fresnel : 1.0) * weight, weight) * floorFade +
-                probe * (1.0 - weight);
+    FragColor = vec4(reflection * split.y * weight, weight) * floorFade + probe * (1.0 - weight);
 }

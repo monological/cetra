@@ -243,7 +243,6 @@ uniform float time;
 // 0 = this material is never wetted, whatever the sea does. See Material.shore_wetness.
 uniform float uShoreWetness;
 
-
 /*
  * By-example stochastic albedo (spec 11.46). Declares no sampler of its own -- it re-reads
  * albedoTex, whose contents a material opting in has had transformed -- and keeps its inverse
@@ -292,6 +291,7 @@ const float SHORE_FOAM_ROUGHNESS = 0.85;
 // it always did.
 #if CETRA_HAS(PBR_FEAT_RAIN)
 #include "rain_surface.glsl"
+#include "ssr_marker.glsl"
 #endif
 
 uniform int clusterDebug; // Tint fragments by cluster light count (heatmap)
@@ -2628,10 +2628,10 @@ void main() {
     // between operate on the scale they were written for.
     FragColor = vec4(color, finalOpacity);
 
-    // G-buffer: view-space normal (xyz) for SSAO; alpha is a non-negative
-    // reflective marker — only the shadow catcher's negative alpha traces in
-    // SSR, so model surfaces stamp 0 (never reflected in screen space; they
-    // rely on IBL). Alpha-to-coverage surfaces (hair) stamp zero normals
+    // G-buffer: view-space normal (xyz) for SSAO; alpha is the SSR marker
+    // (ssr_marker.glsl). Model surfaces stamp 0 -- never reflected in screen
+    // space, they rely on IBL -- except wet ground under the rain variant,
+    // below. Alpha-to-coverage surfaces (hair) stamp zero normals
     // instead: consumers must not trust normals at strand scale, and leaving
     // the buffer unwritten is worse (stale normals of whatever drew behind
     // the hair, under the hair's depth). Their alpha must mirror FragColor's:
@@ -2650,11 +2650,10 @@ void main() {
                     ? vec4(0.0, 0.0, 0.0, finalOpacity)
                     : vec4(normalize(mat3(view) * N), 0.0);
 #if CETRA_HAS(PBR_FEAT_RAIN)
-    // Wet ground traces in SSR (spec 13.9). Marked BELOW -1, as -(1 + film), so the catcher's
-    // (-1, 0) stays the catcher's; its roughness rides the aux buffer. Never on a masked
-    // surface, whose alpha is its coverage.
+    // Wet ground traces in SSR (spec 13.9); its roughness rides the aux buffer. Never on a
+    // masked surface, whose alpha is its coverage.
     if (alphaMasked == 0 && rainFilm > RAIN_SSR_MIN_FILM)
-        NormalOut.a = -(1.0 + rainFilm);
+        NormalOut.a = ssrMarkWet(rainFilm);
 #endif
 
     // Auxiliary G-buffer: screen-space motion vector (.xy, un-jittered current

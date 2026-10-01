@@ -3022,7 +3022,7 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
                          (float)engine->render_delta);
             // Beside the water for the same reasons: the state it accumulates is read by
             // both scene passes, and a substituted clock must not freeze it.
-            rain_update(water_scene->rain, (float)engine->render_time, (float)engine->render_delta);
+            rain_update(water_scene->rain, (float)engine->render_delta);
         }
 
         // Per-frame update (input, physics, fixed-timestep sim for game apps),

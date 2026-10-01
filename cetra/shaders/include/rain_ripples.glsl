@@ -6,6 +6,14 @@
 // the cell, a random moment in the cycle -- and the ring spreads, fading, until the next.
 // How many cells are live is the rain's rate, so a drizzle rings here and there and a
 // downpour rings everywhere.
+//
+// Requires `time`, the engine's clock in seconds, declared first.
+
+#include "pcg4d.glsl"
+
+uniform float rainRippleActivity; // 0..1, the fraction of ripple cells live; 0 = no rain
+uniform float rainRippleSize;     // metres across a ripple cell
+uniform float rainRippleStrength; // scale on the rings' tilt
 
 // A ring's life, in seconds, and how far it spreads in that time, in cells: capillary rings
 // run at a few tenths of a metre a second, so 0.45 of a 0.35 m cell in 0.6 s is 0.26 m/s.
@@ -18,43 +26,31 @@ const float RAIN_RIPPLE_WIDTH = 0.06;
 const float RAIN_RIPPLE_SLOPE = 0.35;
 const int RAIN_RIPPLE_LAYERS = 2;
 
-// Jarzynski and Olano's pcg4d over a cell, its layer and a seed, to [0,1)^4. Integer, because
-// cell coordinates are consecutive integers, the regime a sin-fract hash lines up in.
+// A cell, its layer and a seed, to [0,1)^4.
 vec4 rainRippleHash(vec2 cell, int layer) {
-    uvec4 v = uvec4(ivec4(ivec2(cell), layer, 0x2545f491));
-    v = v * 1664525u + 1013904223u;
-    v.x += v.y * v.w;
-    v.y += v.z * v.x;
-    v.z += v.x * v.y;
-    v.w += v.y * v.z;
-    v ^= v >> 16u;
-    v.x += v.y * v.w;
-    v.y += v.z * v.x;
-    v.z += v.x * v.y;
-    v.w += v.y * v.z;
-    return vec4(v) / 4294967296.0;
+    return vec4(pcg4d(uvec4(ivec4(ivec2(cell), layer, 0x2545f491)))) / 4294967296.0;
 }
 
-// The slope (dh/dx, dh/dz) the rings put on a horizontal surface at world `xz` and time `t`.
-// `activity` is the fraction of cells live, 0 for none; `footprint` the metres a pixel spans,
-// which fades the rings out where they would alias into noise.
-vec2 rainRippleSlope(vec2 xz, float t, float size, float activity, float footprint) {
-    float resolve = 1.0 - smoothstep(0.5, 1.5, footprint / (RAIN_RIPPLE_WIDTH * size));
-    if (activity <= 0.0 || resolve <= 0.0)
+// The slope (dh/dx, dh/dz) the rings put on a horizontal surface at world `xz` now.
+// `footprint` is the metres a pixel spans, which fades the rings out where they would alias
+// into noise.
+vec2 rainRippleSlope(vec2 xz, float footprint) {
+    float resolve = 1.0 - smoothstep(0.5, 1.5, footprint / (RAIN_RIPPLE_WIDTH * rainRippleSize));
+    if (rainRippleActivity <= 0.0 || resolve <= 0.0)
         return vec2(0.0);
     const float K = 6.2831853 / RAIN_RIPPLE_WAVELENGTH;
     const float INV_W2 = 1.0 / (RAIN_RIPPLE_WIDTH * RAIN_RIPPLE_WIDTH);
     vec2 slope = vec2(0.0);
     for (int layer = 0; layer < RAIN_RIPPLE_LAYERS; layer++) {
-        vec2 p = xz / size + vec2(0.37, 0.61) * float(layer);
+        vec2 p = xz / rainRippleSize + vec2(0.37, 0.61) * float(layer);
         vec2 base = floor(p);
         for (int j = -1; j <= 1; j++) {
             for (int i = -1; i <= 1; i++) {
                 vec2 cell = base + vec2(i, j);
                 vec4 h = rainRippleHash(cell, layer);
-                if (h.w >= activity)
+                if (h.w >= rainRippleActivity)
                     continue;
-                float phase = fract(t / RAIN_RIPPLE_LIFE + h.z);
+                float phase = fract(time / RAIN_RIPPLE_LIFE + h.z);
                 vec2 d = p - (cell + 0.2 + 0.6 * h.xy);
                 float dist = length(d);
                 float x = dist - phase * RAIN_RIPPLE_REACH;
@@ -69,4 +65,10 @@ vec2 rainRippleSlope(vec2 xz, float t, float size, float activity, float footpri
     }
     // Normalised so that strength 1 tilts the steepest crest by RAIN_RIPPLE_SLOPE.
     return slope * (RAIN_RIPPLE_SLOPE / K) * resolve;
+}
+
+// `N` with the rings' slope `ring` tilted into it, at `weight` of their strength: how much of
+// the surface is water the rain reaches.
+vec3 rainRippleTilt(vec3 N, vec2 ring, float weight) {
+    return normalize(N + vec3(-ring.x, 0.0, -ring.y) * (rainRippleStrength * weight));
 }

@@ -3,20 +3,16 @@
 // pbr_frag includes this under PBR_FEAT_RAIN and makes one call.
 //
 // Requires, included first: wet_surface.glsl (the water model the shore shares), noise.glsl
-// (hash21, ign) and `punctualShadowMaps` (the array the cover is a layer of).
+// (hash21, ign), `punctualShadowMaps` (the array the cover is a layer of) and `time`.
 
 #include "rain_occlusion.glsl"
 #include "rain_ripples.glsl"
 
-uniform float rainWetness;        // 0..1, how soaked the world is; see Rain.wetness
-uniform float rainDarkening;      // scale on the albedo terms; 1 = physical, see wet_darkening
-uniform float uPorosity;          // Material.porosity; -1 = derive it from the roughness
-uniform float rainPuddleLevel;    // 0..1, how much of the ground the puddles have claimed
-uniform float rainPuddleScale;    // metres across a typical puddle
-uniform float rainTime;           // seconds, the rain's clock
-uniform float rainRippleActivity; // 0..1, the fraction of ripple cells live; 0 = none
-uniform float rainRippleSize;     // metres across a ripple cell
-uniform float rainRippleStrength; // scale on the rings' tilt
+uniform float rainWetness;     // 0..1, how soaked the world is; see Rain.wetness
+uniform float rainDarkening;   // scale on the albedo terms; 1 = physical, see wet_darkening
+uniform float uPorosity;       // Material.porosity; -1 = derive it from the roughness
+uniform float rainPuddleLevel; // 0..1, how much of the ground the puddles have claimed
+uniform float rainPuddleScale; // metres across a typical puddle
 
 // What a fully porous, fully wet surface loses of its diffuse albedo: the top of the 25-50%
 // band Lagarde gives for natural materials. The shore's sand is 0.38 of the same scale.
@@ -112,9 +108,7 @@ float rainWetSurface(inout vec3 albedo, inout float roughness, inout vec3 N, vec
     if (puddle > 0.0) {
         roughness = mix(roughness, RAIN_PUDDLE_ROUGHNESS, puddle);
         N = normalize(mix(N, Ng, puddle));
-        vec2 ring =
-            rainRippleSlope(worldPos.xz, rainTime, rainRippleSize, rainRippleActivity, footprint);
-        N = normalize(N + vec3(-ring.x, 0.0, -ring.y) * (rainRippleStrength * puddle));
+        N = rainRippleTilt(N, rainRippleSlope(worldPos.xz, footprint), puddle);
         film = max(film, puddle);
     }
     return film;

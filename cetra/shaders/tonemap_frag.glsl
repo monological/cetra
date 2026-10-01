@@ -342,6 +342,7 @@ vec3 toneSelect(vec3 c)
 // Mode 0 returns raw ao -> byte-identical to the pre-feature path.
 #include "ao_upsample.glsl"
 #include "spec_occ.glsl"
+#include "ssr_marker.glsl"
 // After the `projection` uniform it reads; for the view ray under either projection.
 #include "depth.glsl"
 
@@ -375,15 +376,13 @@ float aoVisibility()
     if (specOccMode == 0)
         return ao;
     vec4 nrm = texture(normalsTex, TexCoords);
-    // Real model surfaces only: a zero normal excludes sky/hair, and a
-    // NEGATIVE marker excludes the shadow-catcher floor. The test is the
-    // marker's sign, matching what the catcher writes and the SSR march
-    // reads -- its magnitude is the catcher's edge falloff, so a threshold
-    // at -0.5 would hand the plane's whole outer ring to the paths below,
-    // which is where a mirror-roughness catcher meets the cone term.
-    // Only (-1, 0) is the catcher: below -1 is wet ground (spec 13.9), a real surface that
-    // takes the paths below like any other.
-    if (dot(nrm.xyz, nrm.xyz) < 0.01 || (nrm.a < 0.0 && nrm.a >= -1.0))
+    // Real model surfaces only: a zero normal excludes sky/hair, and the
+    // catcher's marker excludes the shadow-catcher floor -- the whole of its
+    // range, since its magnitude is the edge falloff and a threshold at -0.5
+    // would hand the plane's outer ring to the paths below, which is where a
+    // mirror-roughness catcher meets the cone term. Wet ground is a real
+    // surface and takes the paths below like any other.
+    if (dot(nrm.xyz, nrm.xyz) < 0.01 || ssrMarkerIsCatcher(nrm.a))
         return ao;
     vec4 aux = texture(auxTex, TexCoords); // .w = effective roughness
     // View direction from screen UV. normalize(-viewPos) is independent of depth

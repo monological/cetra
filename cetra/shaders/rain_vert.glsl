@@ -17,7 +17,7 @@ uniform vec3 cameraPos;
 uniform vec3 cameraVelocity; // m/s; a streak is the drop's motion RELATIVE to the camera
 uniform vec2 viewport;       // post-resolution pixels
 
-uniform float rainTime;
+uniform float time; // seconds, the engine's clock
 uniform vec3 rainWind;
 uniform float mpLambda; // Marshall-Palmer slope, 1/mm
 uniform float fallScale; // on the terminal velocity; 1 = physical
@@ -77,22 +77,7 @@ const float RAIN_GLINT_D_FULL = 2.5;
 const float RAIN_SPLASH_DROP_FROM = 50.0;
 const float RAIN_GRAVITY = 9.81;
 
-// A 4D integer hash (Jarzynski and Olano's pcg4d). Integer rather than the sin-fract form
-// noise.glsl carries, because here the SEEDS are consecutive integers by the ten thousand,
-// which is the regime a sin-fract hash lines up in.
-uvec4 pcg4d(uvec4 v) {
-    v = v * 1664525u + 1013904223u;
-    v.x += v.y * v.w;
-    v.y += v.z * v.x;
-    v.z += v.x * v.y;
-    v.w += v.y * v.z;
-    v ^= v >> 16u;
-    v.x += v.y * v.w;
-    v.y += v.z * v.x;
-    v.z += v.x * v.y;
-    v.w += v.y * v.z;
-    return v;
-}
+#include "pcg4d.glsl"
 
 // The light the lamps and the sun put into a drop and it sends on toward the eye: each
 // source's illuminance there times the fraction scattered this way. What it REFRACTS -- the
@@ -153,7 +138,7 @@ Drop fallingDrop(int instance) {
     // follows the camera, so the rain stays put while the camera moves through it.
     float halfSize = boxHalf * pow(RAIN_STREAK_BOX_SCALE, float(box));
     float size = 2.0 * halfSize;
-    vec3 rel = mod(d.r.xyz * size + d.vel * rainTime - cameraPos, size) - halfSize;
+    vec3 rel = mod(d.r.xyz * size + d.vel * time - cameraPos, size) - halfSize;
     d.P = cameraPos + rel;
     // A drop is fading out as it nears its box's face, where it wraps to the opposite one.
     float edge = max(abs(rel.x), max(abs(rel.y), abs(rel.z))) / halfSize;
@@ -215,7 +200,7 @@ bool splashDroplet(int instance, out Drop d) {
     ivec2 cell = ivec2(floor(cameraPos.xz / splashCell)) - splashSide / 2 +
                  ivec2(slot - row * splashSide, row);
     uvec2 key = uvec2(cell);
-    float clock = rainTime / RAIN_SPLASH_LIFE +
+    float clock = time / RAIN_SPLASH_LIFE +
                   float(pcg4d(uvec4(key, 0x51ed270bu, 0x2c1b3c6du)).x) / 4294967296.0;
     float life = floor(clock);
     float age = (clock - life) * RAIN_SPLASH_LIFE;
@@ -313,7 +298,7 @@ void main() {
     float ringHz = sqrt(8.0 * RAIN_SURFACE_TENSION / (RAIN_WATER_DENSITY * radiusM * radiusM *
                                                       radiusM)) / (2.0 * PI);
     vGlintBands = 2.0 * ringHz * shutter;
-    vGlintPhase = fract(d.r.x * 7.13 + d.r.z * 3.71 + 2.0 * ringHz * rainTime);
+    vGlintPhase = fract(d.r.x * 7.13 + d.r.z * 3.71 + 2.0 * ringHz * time);
     // Three pixels a flash at least, or the pattern aliases into noise between drops.
     vGlintShare = glintShare * smoothstep(RAIN_GLINT_D_MIN, RAIN_GLINT_D_FULL, d.dMm) *
                   clamp(lPx / (3.0 * max(vGlintBands, 1.0)), 0.0, 1.0);
