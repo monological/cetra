@@ -5,13 +5,38 @@
 
 #define FLOOR_RISE 0.45f // foundation: the ground floor sits this far up
 #define STOREY_H   2.7f
+// Drops a second a metre of bare eave and of porch roof edge drips at the reference rain:
+// far below the hundred and more a real eave sheds, which is a sheet rather than drips.
+#define EAVE_DRIPS_PER_M  0.6f
+#define PORCH_DRIPS_PER_M 1.0f
+
+void drips_add(Drips* drips, const KitFrame* f, const vec3 from, const vec3 to, float rate,
+               float ground) {
+    if (!drips)
+        return;
+    if (drips->count < RAIN_DRIP_MAX) {
+        RainDripLine* l = &drips->lines[drips->count];
+        kit_frame_point(f, from[0], from[1], from[2], l->from);
+        kit_frame_point(f, to[0], to[1], to[2], l->to);
+        l->rate = rate;
+        l->ground = ground;
+    }
+    drips->count++;
+}
+
+// A bare eave's drips along a in [a0, a1] at the bottom of its fascia, the edge the water
+// leaves from, if there is enough of it.
+static void eave_drips(Drips* drips, const KitFrame* f, float a0, float a1, float y, float d) {
+    if (a1 - a0 > 0.3f)
+        drips_add(drips, f, (vec3){a0, y, d}, (vec3){a1, y, d}, EAVE_DRIPS_PER_M * (a1 - a0), 0.0f);
+}
 
 // One roof slope from the eave (d_eave) up to the ridge (d_ridge): the
 // shingled top and, a roof's thickness under it, the soffit you see from the
 // street under the overhang.
 static void slope(Kit* kit, const KitFrame* f, float a0, float a1, float d_eave, float y_eave,
                   float d_ridge, float y_ridge, float toward) {
-    const float t = 0.1f;
+    const float t = HOUSE_ROOF_THICK;
     vec3 p[4] = {{0.0f}}, q[4] = {{0.0f}}, up = {0.0f, 0.0f, 0.0f}, down = {0.0f, 0.0f, 0.0f};
     kit_frame_point(f, a0, y_eave, d_eave, p[0]);
     kit_frame_point(f, a1, y_eave, d_eave, p[1]);
@@ -33,11 +58,16 @@ static void slope(Kit* kit, const KitFrame* f, float a0, float a1, float d_eave,
     kit_quad_facing(kit, MAT_TRIM, p[0], p[1], q[1], q[0], edge);
 }
 
+// The ridge rises ROOF_PITCH of the depth over half of it, so every roof falls 2 * ROOF_PITCH
+// a metre whatever its size.
+float house_eave_tip_y(float eave_y, float overhang) {
+    return eave_y - 2.0f * ROOF_PITCH * overhang;
+}
+
 void house_gable_roof(Kit* kit, const KitFrame* f, float w, float depth, float eave_y,
                       float overhang, int mat_gable) {
     const float rise = ROOF_PITCH * depth;
-    const float slope_k = rise / (0.5f * depth);
-    const float y_tip = eave_y - slope_k * overhang; // the eave, carried out to the overhang
+    const float y_tip = house_eave_tip_y(eave_y, overhang);
     const float y_ridge = eave_y + rise;
     const float d_mid = -0.5f * depth;
     slope(kit, f, -overhang, w + overhang, overhang, y_tip, d_mid, y_ridge, 1.0f);
@@ -84,7 +114,7 @@ static void window(Kit* kit, const KitFrame* f, KitRng* rng, float a0, float a1,
     kit_frame_box(kit, f, MAT_TRIM, a0 - 0.12f, a1 + 0.12f, y0 - 0.1f, y0, 0.0f, 0.12f, false);
 }
 
-void house_neighbour(Kit* kit, const KitFrame* f, KitRng* rng, bool night) {
+void house_neighbour(Kit* kit, const KitFrame* f, KitRng* rng, bool night, Drips* drips) {
     // The frame arrives with its origin at the lot's front centre; the house
     // is measured from its own corner, so shift along the facade by half.
     const float w = kit_rrange(rng, 7.5f, 10.0f);
@@ -100,7 +130,8 @@ void house_neighbour(Kit* kit, const KitFrame* f, KitRng* rng, bool night) {
     kit_frame_box(kit, &h, MAT_BRICK, -0.06f, w + 0.06f, 0.0f, FLOOR_RISE, -depth - 0.06f, 0.06f,
                   false);
     kit_frame_box(kit, &h, siding, 0.0f, w, FLOOR_RISE, eave, -depth, 0.0f, true);
-    house_gable_roof(kit, &h, w, depth, eave, 0.45f, siding);
+    const float overhang = 0.45f;
+    house_gable_roof(kit, &h, w, depth, eave, overhang, siding);
     if (kit_rnd(rng) < 0.6f) {
         const float c = kit_rrange(rng, 1.0f, w - 1.7f);
         kit_frame_box(kit, &h, MAT_BRICK, c, c + 0.7f, eave, eave + ROOF_PITCH * depth + 0.9f,
@@ -117,8 +148,9 @@ void house_neighbour(Kit* kit, const KitFrame* f, KitRng* rng, bool night) {
                   0.0f, 0.08f, false);
     kit_frame_box(kit, &h, MAT_TRIM, door - 0.1f, door + 1.05f, FLOOR_RISE + 2.1f,
                   FLOOR_RISE + 2.2f, 0.0f, 0.08f, false);
-    if (kit_rnd(rng) < 0.7f) {
-        const float p0 = door - 1.0f, p1 = door + 1.95f;
+    const bool porch = kit_rnd(rng) < 0.7f;
+    const float p0 = door - 1.0f, p1 = door + 1.95f;
+    if (porch) {
         kit_frame_box(kit, &h, MAT_PORCH, p0, p1, 0.0f, FLOOR_RISE, 0.0f, 1.8f, true);
         kit_frame_box(kit, &h, MAT_ROOF, p0 - 0.1f, p1 + 0.1f, FLOOR_RISE + 2.55f,
                       FLOOR_RISE + 2.7f, 0.0f, 1.95f, false);
@@ -129,6 +161,20 @@ void house_neighbour(Kit* kit, const KitFrame* f, KitRng* rng, bool night) {
     } else {
         kit_frame_box(kit, &h, MAT_CONCRETE, door - 0.2f, door + 1.15f, 0.0f, 0.5f * FLOOR_RISE,
                       0.0f, 0.6f, true);
+    }
+
+    // The bare front eave drips, but not over the porch roof, which takes what falls there and
+    // drips from its own front edge past the porch floor.
+    const float edge_y = house_eave_tip_y(eave, overhang) - HOUSE_ROOF_THICK;
+    const float a0 = -overhang + 0.05f, a1 = w + overhang - 0.05f;
+    if (porch) {
+        eave_drips(drips, &h, a0, p0 - 0.15f, edge_y, overhang);
+        eave_drips(drips, &h, p1 + 0.15f, a1, edge_y, overhang);
+        const float porch_y = FLOOR_RISE + 2.55f;
+        drips_add(drips, &h, (vec3){p0 - 0.05f, porch_y, 1.95f}, (vec3){p1 + 0.05f, porch_y, 1.95f},
+                  PORCH_DRIPS_PER_M * (p1 - p0 + 0.1f), 0.0f);
+    } else {
+        eave_drips(drips, &h, a0, a1, edge_y, overhang);
     }
 
     // Windows in a row per storey, clear of the door.

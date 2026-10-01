@@ -76,6 +76,8 @@ void uniform_set_mat4(UniformManager* mgr, const char* name, const float* value)
 // write it therefore cannot skip is the price, which is why this is for tables a material
 // changes rarely and not for anything set per draw.
 void uniform_set_vec3_array(UniformManager* mgr, const char* name, const float* values, int count);
+// The same for vec4, and uncached for the same reason.
+void uniform_set_vec4_array(UniformManager* mgr, const char* name, const float* values, int count);
 
 // Four ints from a tightly packed array. CACHED, unlike the vec3 array above -- four
 // values fit the cache slot, so a repeated upload of an unchanged set costs no GL call.

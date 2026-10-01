@@ -79,20 +79,60 @@ static bool _ensure_behind(RainRenderer* rr, int w, int h) {
     return true;
 }
 
+/*
+ * The drip lines as the vertex stage reads them, one vec4 of each kind a line: its ends, with
+ * the running end of its slots and the height its drops land at in the fourth components, and
+ * its cycle and the chance a slot drips in one. A slot drips at most once a cycle, so a line
+ * whose rate outruns its slots drips from every one and no faster.
+ *
+ * The cycle is reckoned onto the water when it lies above the line's ground, which only ever
+ * shortens it.
+ */
+static void _upload_drips(const Rain* rain, UniformManager* u, const int* slots, int total,
+                          float water_level) {
+    if (total <= 0)
+        return;
+    const float flow = rain_drip_flow(rain);
+    vec4 from[RAIN_DRIP_MAX], to[RAIN_DRIP_MAX], cycle[RAIN_DRIP_MAX];
+    int end = 0;
+    for (int i = 0; i < rain->drip_line_count; i++) {
+        const RainDripLine* l = &rain->drips[i];
+        end += slots[i];
+        const float land = fmaxf(l->ground, water_level);
+        const float period = rain_drip_period(l, land, fmaxf(rain->fall_scale, 0.0f));
+        glm_vec4((float*)l->from, (float)end, from[i]);
+        glm_vec4((float*)l->to, land, to[i]);
+        const float chance = slots[i] > 0 ? l->rate * flow * period / (float)slots[i] : 0.0f;
+        glm_vec4_copy((vec4){period, fminf(chance, 1.0f), 0.0f, 0.0f}, cycle[i]);
+    }
+    uniform_set_int(u, "dripLines", rain->drip_line_count);
+    uniform_set_vec4_array(u, "dripFrom", (const float*)from, rain->drip_line_count);
+    uniform_set_vec4_array(u, "dripTo", (const float*)to, rain->drip_line_count);
+    uniform_set_vec4_array(u, "dripCycle", (const float*)cycle, rain->drip_line_count);
+    uniform_set_float(u, "dripTerminal",
+                      rain_terminal_velocity(RAIN_DRIP_MM) * fmaxf(rain->fall_scale, 0.0f));
+    uniform_set_float(u, "dripBrightness", fmaxf(rain->drip_brightness, 0.0f));
+}
+
 void rain_render_drops(RainRenderer* rr, Engine* engine, const Scene* scene,
                        const PostFXLateDraw* late) {
     if (!rr || !engine || !scene || !late || !engine->camera)
         return;
     const Rain* rain = scene->rain;
-    const int per_box = rain && rain->streak_count > 0 ? rain->streak_count : 0;
+    // Streaks and splashes while rain falls; the drips for as long as there is water to drip.
+    const bool falls = rain_falling(rain);
+    const int per_box = falls && rain->streak_count > 0 ? rain->streak_count : 0;
     const int falling = RAIN_STREAK_BOXES * per_box;
     // The splash slots are a square grid, whose side the shader reads a slot's cell from.
     const int splash_side =
-        rain && rain->splash_count > 0 ? (int)floorf(sqrtf((float)rain->splash_count)) : 0;
+        falls && rain->splash_count > 0 ? (int)floorf(sqrtf((float)rain->splash_count)) : 0;
     const int droplets = splash_side * splash_side * RAIN_SPLASH_DROPLETS;
+    int drip_slots[RAIN_DRIP_MAX];
+    const int drips = rain_draws(rain) ? rain_drip_slots(rain, drip_slots) : 0;
     // A build failure was logged when the engine registered the program.
     ShaderProgram* program = engine_find_program(engine, CETRA_PROGRAM_RAIN);
-    if (!rain_falling(rain) || falling + droplets == 0 || !program || !late->scene_depth)
+    const int instances = falling + droplets + drips * (1 + RAIN_SPLASH_DROPLETS);
+    if (!rain_draws(rain) || instances == 0 || !program || !late->scene_depth)
         return;
 
     // The camera's own motion over the frame: a streak is the drop's path relative to it,
@@ -131,7 +171,8 @@ void rain_render_drops(RainRenderer* rr, Engine* engine, const Scene* scene,
     uniform_set_vec2(u, "viewport", (vec2){(float)late->width, (float)late->height});
     uniform_set_float(u, "time", (float)engine->render_time);
     uniform_set_vec3(u, "rainWind", rain->wind_now);
-    uniform_set_float(u, "mpLambda", rain_mp_lambda(rain->rate_mmh));
+    // Infinite once nothing falls, which no instance then reads.
+    uniform_set_float(u, "mpLambda", falls ? rain_mp_lambda(rain->rate_mmh) : 1.0f);
     uniform_set_float(u, "fallScale", fmaxf(rain->fall_scale, 0.0f));
     uniform_set_float(u, "shutter", rain->shutter_s);
     uniform_set_float(u, "boxHalf", rain->streak_radius);
@@ -162,6 +203,7 @@ void rain_render_drops(RainRenderer* rr, Engine* engine, const Scene* scene,
     const bool water = water_will_draw(scene->water, engine, engine->current_render_mode);
     uniform_set_int(u, "rainWaterPresent", water ? 1 : 0);
     uniform_set_float(u, "rainWaterLevel", water ? scene->water->level : 0.0f);
+    _upload_drips(rain, u, drip_slots, drips, water ? scene->water->level : -INFINITY);
     uniform_set_float(u, "streakWidth", rain->streak_width);
     uniform_set_float(u, "streakBrightness", rain->streak_brightness);
     uniform_set_float(u, "forwardG", rain->streak_forward_g);
@@ -197,7 +239,7 @@ void rain_render_drops(RainRenderer* rr, Engine* engine, const Scene* scene,
     glEnable(GL_BLEND);
     glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
     glBindVertexArray(rr->vao);
-    glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, falling + droplets);
+    glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, instances);
     glBindVertexArray(0);
     // Back to the chain's resting state, which every composite there restores to.
     glDisable(GL_BLEND);

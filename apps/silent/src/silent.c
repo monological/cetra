@@ -90,6 +90,10 @@
 // Drops on glass at twice and a half their size: physical beads are a few millimetres, under
 // a pixel of the kitchen window from anywhere in the kitchen at the render scale this runs at.
 #define RAIN_GLASS_DROP_SIZE 2.5f
+// Drips at four times their opacity: one drop smeared over the shutter is a faint line a few
+// pixels wide even at arm's length, and the gutter's leaks past the kitchen window would not
+// read as water.
+#define RAIN_DRIP_BRIGHTNESS 16.0f
 // A breeze off the street onto the front of the house, gusting. In still air the eave keeps
 // the rain off the facade and the kitchen window; this drives it onto their lower halves. The
 // speed is a gust's peak, and the lulls between are half of it.
@@ -351,11 +355,13 @@ static void on_init(Game* game) {
     Kit kit;
     kit_init(&kit, g_scene, em, physics);
     mats_register(&kit, engine, g_scene);
-    house_build(&kit);
+    // The edges that drip in the rain, gathered as the street goes up.
+    Drips drips = {0};
+    house_build(&kit, &drips);
     kitchen_build(&kit, (unsigned int)g_args.seed);
     lights_build(&g_lights, &kit, engine, g_scene, (unsigned int)g_args.seed, !g_args.no_flicker,
                  g_args.flashlight);
-    street_build(&kit, g_scene, (unsigned int)g_args.seed, !g_args.day);
+    street_build(&kit, g_scene, (unsigned int)g_args.seed, !g_args.day, &drips);
     clock_build(&kit);
     kit_finish(&kit, "world");
     printf("silent: %d colliders, %d vertices\n", kit.collider_count, kit.vertex_count);
@@ -402,6 +408,8 @@ static void on_init(Game* game) {
             g_scene->rain->wet_darkening = RAIN_WET_DARKENING;
             g_scene->rain->splash_size = RAIN_SPLASH_SIZE;
             g_scene->rain->glass_drop_size = RAIN_GLASS_DROP_SIZE;
+            g_scene->rain->drip_brightness = RAIN_DRIP_BRIGHTNESS;
+            rain_set_drip_lines(g_scene->rain, drips.lines, drips.count);
             rain_settle(g_scene->rain);
         }
     }

@@ -781,6 +781,9 @@ static const ConfigField CFG_FIELDS[] = {
     CFG_ROW(CFG_RAIN, CFG_FLOAT, "rain", "mistForwardG", mist_forward_g),
     CFG_ROW(CFG_RAIN, CFG_FLOAT, "rain", "glassLens", glass_lens),
     CFG_ROW(CFG_RAIN, CFG_FLOAT, "rain", "glassDropSize", glass_drop_size),
+    // The count and not the lines: those are authored geometry, like a probe's box.
+    CFG_ROW(CFG_RAIN, CFG_INT, "rain", "dripCount", drip_count),
+    CFG_ROW(CFG_RAIN, CFG_FLOAT, "rain", "dripBrightness", drip_brightness),
 
     /*
      * --- array elements. `section` is the ARRAY's name here, not a path: the

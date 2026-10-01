@@ -43,6 +43,17 @@ uniform vec3 rainTravel;        // unit direction the rain, and the occlusion ma
 uniform int rainWaterPresent;   // 1 = a water surface draws this frame, at rainWaterLevel
 uniform float rainWaterLevel;   // its still plane, world Y
 
+// The drips (spec 13.12): instances past the splashes, 1 + RAIN_SPLASH_DROPLETS to a slot.
+// Per line: its ends, with the running end of its slots in .w of the first and the height its
+// drops land at in .w of the second; and its cycle in seconds and the chance a slot drips in
+// one.
+uniform int dripLines;
+uniform vec4 dripFrom[RAIN_DRIP_MAX];
+uniform vec4 dripTo[RAIN_DRIP_MAX];
+uniform vec4 dripCycle[RAIN_DRIP_MAX];
+uniform float dripTerminal;   // m/s, a RAIN_DRIP_MM drop's terminal velocity, look and all
+uniform float dripBrightness; // scale on a drip's opacity, where streakBrightness scales a streak's
+
 out float vAcrossPx; // signed pixels from the streak's centre line
 out float vHalfWidth;
 out vec3 vLit;       // what the lights send toward the eye through the drop, pre-exposed
@@ -77,7 +88,6 @@ const float RAIN_GLINT_D_FULL = 2.5;
 // How far back up the rain's path from the camera's height a splash's landing is looked for
 // from, in metres: above anything near enough to splash on, and well inside the map's reach.
 const float RAIN_SPLASH_DROP_FROM = 50.0;
-const float RAIN_GRAVITY = 9.81;
 
 #include "pcg4d.glsl"
 
@@ -252,14 +262,99 @@ bool splashDroplet(int instance, out Drop d) {
     return true;
 }
 
+// A drip's fall under linear drag, the curve rain_drip_fall_time solves on the CPU: how far a
+// drop let go from rest has fallen after `s` seconds, and the time to fall `h`. Straight down,
+// where the streaks drift: a drip leaves from the lee of what it drips off, where the wind is
+// broken, and carried with the open air a gutter's drops cross the wall under it.
+float dripFallen(float s) {
+    float tau = dripTerminal / RAIN_GRAVITY;
+    return dripTerminal * (s - tau * (1.0 - exp(-s / tau)));
+}
+
+float dripFallTime(float h) {
+    if (h <= 0.0)
+        return 0.0;
+    float tau = dripTerminal / RAIN_GRAVITY;
+    float t = sqrt(2.0 * h / RAIN_GRAVITY);
+    for (int i = 0; i < 8; i++) {
+        float e = exp(-t / tau);
+        t -= (dripTerminal * (t - tau * (1.0 - e)) - h) / (dripTerminal * (1.0 - e));
+    }
+    return t;
+}
+
+/*
+ * A drip: slot `instance` / (1 + RAIN_SPLASH_DROPLETS) of the line whose running end first
+ * passes it, the drop itself at 0 and its splash's droplets after. Each cycle the slot drips
+ * with its line's chance, from a point hashed along the line: the drop hangs from the edge
+ * growing as its volume does, lets go, falls, and throws a crown where it lands. A slot's clock
+ * is offset by its hash, so a gutter's drips do not keep time with each other.
+ */
+bool dripInstance(int instance, out Drop d) {
+    int slot = instance / (1 + RAIN_SPLASH_DROPLETS);
+    int k = instance - slot * (1 + RAIN_SPLASH_DROPLETS);
+    int line = 0;
+    for (int i = 0; i < RAIN_DRIP_MAX - 1; i++) {
+        if (i >= dripLines - 1 || float(slot) < dripFrom[i].w)
+            break;
+        line = i + 1;
+    }
+    float period = dripCycle[line].x;
+    uvec2 key = uvec2(uint(slot), 0x7feb352du);
+    float clock = time / period +
+                  float(pcg4d(uvec4(key, 0x2c1b3c6du, 0x297a2d39u)).x) / 4294967296.0;
+    float life = floor(clock);
+    float t = (clock - life) * period;
+    vec4 h = vec4(pcg4d(uvec4(key, uint(int(life)), 0x68e31da4u))) / 4294967296.0;
+    if (h.w >= dripCycle[line].y)
+        return false;
+
+    vec3 at = mix(dripFrom[line].xyz, dripTo[line].xyz, h.x);
+    float fall = dripFallTime(at.y - dripTo[line].w);
+    float letGo = period - RAIN_SPLASH_LIFE - fall;
+    d.fade = 1.0;
+    d.standsFor = 1.0;
+    if (k > 0) {
+        float age = t - letGo - fall;
+        float impact = dripTerminal * (1.0 - exp(-fall * RAIN_GRAVITY / dripTerminal));
+        vec3 hit = vec3(at.x, dripTo[line].w, at.z);
+        bool flying = age >= 0.0 &&
+                      crownDroplet(hit, RAIN_DRIP_MM, impact, age, k - 1,
+                                   uvec3(key.x, uint(int(life)), 0x165667b1u), d);
+        d.fade = 1.0;
+        d.standsFor = 1.0;
+        return flying;
+    }
+    d.r = h;
+    if (t < letGo) {
+        // Hanging, fed at a steady rate, so its diameter goes as the cube root of the time.
+        d.dMm = RAIN_DRIP_MM * pow(t / letGo, 1.0 / 3.0);
+        d.vel = vec3(0.0);
+        d.P = at - vec3(0.0, 0.5e-3 * d.dMm, 0.0);
+        return true;
+    }
+    float s = t - letGo;
+    if (s >= fall)
+        return false;
+    d.dMm = RAIN_DRIP_MM;
+    d.vel = vec3(0.0, -dripTerminal * (1.0 - exp(-s * RAIN_GRAVITY / dripTerminal)), 0.0);
+    d.P = at - vec3(0.0, dripFallen(s), 0.0);
+    return true;
+}
+
 void main() {
     Drop d;
     int falling = RAIN_STREAK_BOXES * dropsPerBox;
+    int splashes = splashSide * splashSide * RAIN_SPLASH_DROPLETS;
     bool alive = true;
+    // A drip comes off something that is itself the shelter, so it does not ask the cover.
+    bool dripping = gl_InstanceID >= falling + splashes;
     if (gl_InstanceID < falling)
         d = fallingDrop(gl_InstanceID);
+    else if (!dripping)
+        alive = splashDroplet(gl_InstanceID - falling, d);
     else
-        alive = splashSide > 0 && splashDroplet(gl_InstanceID - falling, d);
+        alive = dripInstance(gl_InstanceID - falling - splashes, d);
 
     // The streak: where the drop was when the shutter opened, relative to the camera then.
     vec3 tail = d.P - (d.vel - cameraVelocity) * shutter;
@@ -321,8 +416,10 @@ void main() {
     // Cover per END, so a streak crossing an eave is cut along its length rather than
     // dropped whole: the head is under the roof while the tail is still in the open.
     vec3 end = atHead ? d.P : tail;
-    vAlpha = min(wPx * wPx / (drawW * drawL) * d.standsFor * streakBrightness, 1.0) * d.fade *
-             rainExposure(end);
+    vAlpha = min(wPx * wPx / (drawW * drawL) * d.standsFor *
+                     (dripping ? dripBrightness : streakBrightness),
+                 1.0) *
+             d.fade * (dripping ? 1.0 : rainExposure(end));
 
     vec3 toCamera = normalize(cameraPos - d.P);
     vLit = dropLit(d.P, toCamera, sHead / viewport, -vHead.z);
