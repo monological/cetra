@@ -26,9 +26,14 @@ const float RAIN_RIPPLE_WIDTH = 0.06;
 const float RAIN_RIPPLE_SLOPE = 0.35;
 const int RAIN_RIPPLE_LAYERS = 2;
 
-// A cell, its layer and a seed, to [0,1)^4.
+// A cell and two seeds, to [0,1)^4.
+vec4 rainCellHash(vec2 cell, uint a, uint b) {
+    return vec4(pcg4d(uvec4(uvec2(ivec2(cell)), a, b))) / 4294967296.0;
+}
+
+// A ripple cell and its layer.
 vec4 rainRippleHash(vec2 cell, int layer) {
-    return vec4(pcg4d(uvec4(ivec4(ivec2(cell), layer, 0x2545f491)))) / 4294967296.0;
+    return rainCellHash(cell, uint(layer), 0x2545f491u);
 }
 
 // The slope (dh/dx, dh/dz) the rings put on a horizontal surface at world `xz` now.

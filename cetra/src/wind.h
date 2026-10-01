@@ -36,7 +36,7 @@ typedef struct Wind {
     // have -- wind is evaluated in object space from per-mesh uniforms, so
     // without this a thousand scattered trees beat as one.
     float phase_variation;
-    // m/s the air moves at a gust's peak, for what it carries (rain); 0 = no air speed stated.
+    // m/s the air moves at a gust's peak, for what it carries; 0 = no air speed stated.
     float air_speed;
 } Wind;
 

@@ -6,6 +6,7 @@
 
 #include "cetra/material.h"
 #include "cetra/mesh_builder.h"
+#include "cetra/rain.h"
 #include "cetra/scene.h"
 #include "cetra/game/entity.h"
 #include "cetra/game/physics.h"
@@ -49,6 +50,10 @@ typedef struct Kit {
     PhysicsWorld* physics;
     int collider_count;
     int vertex_count; // everything kit_finish handed over
+
+    // The edges water drips from in the rain (spec 13.12), in world space, for the rain to take.
+    RainDripLine drips[RAIN_DRIP_MAX];
+    int drip_count;
 } Kit;
 
 // A hole in a wall: [from, to] along the wall's axis, [bottom, top] in world Y.
@@ -133,6 +138,10 @@ static const KitFrame KIT_WORLD = {{0.0f, 0.0f, 0.0f}, 0.0f};
 void kit_frame_point(const KitFrame* f, float a, float y, float d, vec3 out);
 // A direction turned by the frame's yaw, without its origin.
 void kit_frame_dir(const KitFrame* f, float a, float y, float d, vec3 out);
+// A drip line from `from` to `to`, (a, y, d) in frame `f` -- the same point twice for a single
+// source -- dripping `rate` drops a second at the reference rain onto world Y `ground`.
+void kit_drip(Kit* kit, const KitFrame* f, const vec3 from, const vec3 to, float rate,
+              float ground);
 // The box a0..a1 along, y0..y1 up, d0..d1 out.
 void kit_frame_box(Kit* kit, const KitFrame* f, int mat, float a0, float a1, float y0, float y1,
                    float d0, float d1, bool collide);

@@ -144,7 +144,7 @@ static void fog(Scene* scene, bool night) {
     }
 }
 
-void street_build(Kit* kit, Scene* scene, unsigned int seed, bool night, Drips* drips) {
+void street_build(Kit* kit, Scene* scene, unsigned int seed, bool night) {
     const float kerb = ROAD_HALF_WIDTH;
     const float walk = ROAD_HALF_WIDTH + SIDEWALK_WIDTH;
     ground(kit, MAT_ASPHALT, -kerb, kerb, ROAD_Y);
@@ -163,12 +163,12 @@ void street_build(Kit* kit, Scene* scene, unsigned int seed, bool night, Drips* 
     const float near_side[] = {-28.0f, -14.0f, 14.0f, 28.0f};
     for (int i = 0; i < 4; i++) {
         const KitFrame f = {{near_side[i], 0.0f, HOUSE_FRONT_Z}, GLM_PIf};
-        house_neighbour(kit, &f, &rng, night, drips);
+        house_neighbour(kit, &f, &rng, night);
     }
     const float far_side[] = {-35.0f, -21.0f, -7.0f, 7.0f, 21.0f, 35.0f};
     for (int i = 0; i < 6; i++) {
         const KitFrame f = {{far_side[i], 0.0f, -HOUSE_FRONT_Z}, 0.0f};
-        house_neighbour(kit, &f, &rng, night, drips);
+        house_neighbour(kit, &f, &rng, night);
     }
     fence(kit, -34.5f, -8.0f, walk + 1.6f);
     fence(kit, 8.0f, 34.5f, walk + 1.6f);

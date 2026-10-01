@@ -3,9 +3,10 @@
 // pbr_frag includes this under PBR_FEAT_RAIN and makes one call.
 //
 // Requires, included first: wet_surface.glsl (the water model the shore shares), noise.glsl
-// (hash21, ign), pbr_features.glsl (the relief bit), `punctualShadowMaps` (the array the cover
-// is a layer of), `time` and the material's `transmission`.
+// (hash21, ign), `punctualShadowMaps` (the array the cover is a layer of), `time`, the
+// material's `transmission`, and under the relief bit its `heightTex`.
 
+#include "pbr_features.glsl"
 #include "rain_occlusion.glsl"
 #include "rain_ripples.glsl"
 
@@ -16,6 +17,10 @@ uniform float rainPuddleLevel; // 0..1, how much of the ground the puddles have 
 uniform float rainPuddleScale; // metres across a typical puddle
 #if CETRA_HAS(PBR_FEAT_RELIEF)
 uniform float rainPuddleRelief; // 0..1, how far the height map places the puddles
+// How far a height map's full range moves the puddle line at full relief, in the puddle noise's
+// units (0..1): half of it, so the map reshapes the puddles the noise places rather than
+// replacing them with a copy of its own tile.
+const float RAIN_RELIEF_RANGE = 0.5;
 #endif
 
 // What a fully porous, fully wet surface loses of its diffuse albedo: the top of the 25-50%
@@ -78,13 +83,12 @@ float rainPuddleNoise(vec2 xz) {
  * and a transmissive surface's albedo is the tint of what shows through it, which water on
  * glass does not darken either.
  *
- * `relief` raises the ground above the puddle line, in the puddle noise's units: the
- * surface's own height about its mean, 0 where it has none. `exposure` is the cover the point
- * read, 0 to 1, for a caller that asks about the same spot.
+ * `uv` is where the material's height map is read under the relief bit. `exposure` is the
+ * cover the point read, 0 to 1, for a caller that asks about the same spot.
  * Call it from control flow uniform over the draw: it takes a screen derivative.
  */
 float rainWetSurface(inout vec3 albedo, inout float roughness, inout vec3 N, vec3 Ng,
-                     vec3 worldPos, float metallic, vec2 fragCoord, float relief,
+                     vec3 worldPos, float metallic, vec2 fragCoord, vec2 uv,
                      out float exposure) {
     exposure = 0.0;
     if (rainWetness <= 0.0)
@@ -92,7 +96,14 @@ float rainWetSurface(inout vec3 albedo, inout float roughness, inout vec3 N, vec
     // Both here, above the puddle test, because that test is not uniform over the draw.
     float footprint = length(fwidth(worldPos.xz));
     // How far below the puddle level this point lies: positive is under standing water.
-    float depth = rainPuddleLevel - rainPuddleNoise(worldPos.xz) - relief;
+    float depth = rainPuddleLevel - rainPuddleNoise(worldPos.xz);
+#if CETRA_HAS(PBR_FEAT_RELIEF)
+    // Where the material's own height map is low its puddles stand first (spec 13.12), measured
+    // from the map's mean -- its coarsest mip -- so the map lowers as much ground as it raises:
+    // it gathers the puddles into the lows rather than flooding or draining the whole surface.
+    depth -= rainPuddleRelief * RAIN_RELIEF_RANGE *
+             (texture(heightTex, uv).r - textureLod(heightTex, uv, 16.0).r);
+#endif
     // The waterline is one pixel wide wherever it falls, so it is sharp underfoot and does not
     // alias in the distance.
     float waterline = max(fwidth(depth), 1e-4);

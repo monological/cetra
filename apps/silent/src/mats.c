@@ -103,23 +103,47 @@ static float grime_of(int id) {
 }
 
 /*
- * How open to water each surface the rain reaches is, 0 sealed to 1 fully porous: what
- * darkens it as it wets (Material.porosity). The engine derives it from roughness, rough
- * being porous, and that is wrong for every painted surface here -- a scan of weathered
- * paint is rough and the paint still sheds water, so the siding darkened like soaked
- * concrete. Paint and slate take a little, bare wood and masonry much more. Indoors nothing
- * is rained on, so it is left to the derivation.
+ * What the rain does to each surface it reaches.
+ *
+ * POROSITY, 0 sealed to 1 fully porous, is what darkens it as it wets (Material.porosity).
+ * The engine derives it from roughness, rough being porous, and that is wrong for every
+ * painted surface here -- a scan of weathered paint is rough and the paint still sheds water,
+ * so the siding darkened like soaked concrete. Paint and slate take a little, bare wood and
+ * masonry much more. Indoors nothing is rained on, so it is left to the derivation (-1).
+ *
+ * RELIEF stands the puddles in the scan's own lows (spec 13.12): the asphalt's dips and the
+ * yard's hollows, from the displacement map the scan brings. No parallax: the map shapes the
+ * puddles and nothing else.
+ *
+ * BEADS: glass drawn opaque -- the dark panes and the car's, the lit windows -- beads like the
+ * glass that transmits, which the engine finds for itself. The jars and bottles are indoors
+ * and never will, so they skip asking.
  */
-typedef struct PorositySpec {
+typedef struct RainSpec {
     MatId id;
     float porosity;
-} PorositySpec;
+    bool relief;
+    MaterialRainBeads beads;
+} RainSpec;
 
-static const PorositySpec POROSITY[] = {
-    {MAT_ASPHALT, 0.9f},   {MAT_CONCRETE, 0.7f},   {MAT_DIRT, 1.0f},  {MAT_BRICK, 0.6f},
-    {MAT_PORCH, 0.7f},     {MAT_POLE, 0.4f},       {MAT_ROOF, 0.25f}, {MAT_SIDING, 0.25f},
-    {MAT_SIDING_B, 0.25f}, {MAT_SIDING_C, 0.25f},  {MAT_WOOD, 0.2f},  {MAT_TRIM, 0.15f},
-    {MAT_CAR, 0.0f},       {MAT_WINDOW_LIT, 0.0f},
+static const RainSpec RAIN[] = {
+    {MAT_ASPHALT, 0.9f, true},
+    {MAT_CONCRETE, 0.7f, true},
+    {MAT_DIRT, 1.0f, true},
+    {MAT_BRICK, 0.6f},
+    {MAT_PORCH, 0.7f},
+    {MAT_POLE, 0.4f},
+    {MAT_ROOF, 0.25f},
+    {MAT_SIDING, 0.25f},
+    {MAT_SIDING_B, 0.25f},
+    {MAT_SIDING_C, 0.25f},
+    {MAT_WOOD, 0.2f},
+    {MAT_TRIM, 0.15f},
+    {MAT_CAR, 0.0f},
+    {MAT_WINDOW_LIT, 0.0f, .beads = RAIN_BEADS_ON},
+    {MAT_DARK_GLASS, -1.0f, .beads = RAIN_BEADS_ON},
+    {MAT_GLASS_AMBER, -1.0f, .beads = RAIN_BEADS_OFF},
+    {MAT_GLASS_CLEAR, -1.0f, .beads = RAIN_BEADS_OFF},
 };
 
 /*
@@ -255,20 +279,14 @@ void mats_register(Kit* kit, Engine* engine, Scene* scene) {
         m->emissive_strength = GLOWS[g].nits;
         m->emissive_light = 1; // decoration: never a derived panel
     }
-    for (size_t p = 0; p < sizeof(POROSITY) / sizeof(POROSITY[0]); p++)
-        kit->materials[POROSITY[p].id]->porosity = POROSITY[p].porosity;
-    // The ground the rain puddles on takes its scan's height map, so the water stands in the
-    // asphalt's dips and the yard's hollows (spec 13.12). No parallax: the map shapes the
-    // puddles and nothing else.
-    static const MatId HEIGHT[] = {MAT_DIRT, MAT_ASPHALT, MAT_CONCRETE};
-    for (size_t h = 0; h < sizeof(HEIGHT) / sizeof(HEIGHT[0]); h++)
-        material_set_height_tex(
-            kit->materials[HEIGHT[h]],
-            load(scene->tex_pool, SPECS[HEIGHT[h]].set, "disp", texture_desc(false)));
-    // Glass drawn opaque -- the dark panes and the car's, the lit windows -- beads in the rain
-    // like the glass that transmits, which the engine finds for itself.
-    kit->materials[MAT_DARK_GLASS]->rain_beads = 1.0f;
-    kit->materials[MAT_WINDOW_LIT]->rain_beads = 1.0f;
+    for (size_t r = 0; r < sizeof(RAIN) / sizeof(RAIN[0]); r++) {
+        Material* m = kit->materials[RAIN[r].id];
+        m->porosity = RAIN[r].porosity;
+        m->rain_beads = RAIN[r].beads;
+        if (RAIN[r].relief)
+            material_set_height_tex(
+                m, load(scene->tex_pool, SPECS[RAIN[r].id].set, "disp", texture_desc(false)));
+    }
 }
 
 void mats_lamps_out(Kit* kit) {

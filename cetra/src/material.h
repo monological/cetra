@@ -67,6 +67,14 @@ typedef enum MaterialSplatSpace {
     SPLAT_SPACE_WORLD_XZ,
 } MaterialSplatSpace;
 
+// Whether rain beads on a surface. Zero derives it, so a calloc'd material is asked rather than
+// told.
+typedef enum MaterialRainBeads {
+    RAIN_BEADS_AUTO = 0,
+    RAIN_BEADS_OFF,
+    RAIN_BEADS_ON,
+} MaterialRainBeads;
+
 // How many material layers a layered surface can blend between.
 //
 // Four because the splat map carries three weights and the first layer is the
@@ -215,9 +223,9 @@ typedef struct Material {
     // surface darkens as it wets, a sealed one only takes a film. -1 = derive it from the
     // roughness, rough being porous (Lagarde).
     float porosity;
-    // Whether rain beads on this surface and runs down it (spec 13.12): 1 = it does, 0 = it
-    // does not, -1 = derive it, which is yes for anything that transmits.
-    float rain_beads;
+    // Whether rain beads on this surface and runs down it (spec 13.12), a MaterialRainBeads:
+    // derived by default, which is yes for anything that transmits.
+    int rain_beads;
 
     /*
      * Stochastic albedo sampling (see include/stochastic.glsl), in UV units per lattice cell.

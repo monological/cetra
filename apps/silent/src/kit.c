@@ -726,6 +726,19 @@ void kit_frame_dir(const KitFrame* f, float a, float y, float d, vec3 out) {
     rotate_y(local, f->yaw, out);
 }
 
+void kit_drip(Kit* kit, const KitFrame* f, const vec3 from, const vec3 to, float rate,
+              float ground) {
+    if (kit->drip_count >= RAIN_DRIP_MAX) {
+        fprintf(stderr, "silent: kit is out of drip lines (%d)\n", RAIN_DRIP_MAX);
+        return;
+    }
+    RainDripLine* l = &kit->drips[kit->drip_count++];
+    kit_frame_point(f, from[0], from[1], from[2], l->from);
+    kit_frame_point(f, to[0], to[1], to[2], l->to);
+    l->rate = rate;
+    l->ground = ground;
+}
+
 void kit_frame_box(Kit* kit, const KitFrame* f, int mat, float a0, float a1, float y0, float y1,
                    float d0, float d1, bool collide) {
     vec3 centre = {0.0f, 0.0f, 0.0f};

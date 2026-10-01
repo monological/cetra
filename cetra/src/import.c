@@ -1909,16 +1909,12 @@ void resolve_height_maps(Scene* scene) {
             // path begins with, so it is handed the rest. Handed all of `cand` it falls back
             // to stripping leading segments, which only ever shortens a name: a texture in
             // another directory from its model (`../textures/`, spec 12.8) is never reached.
-            const char* dir = scene->tex_pool->directory;
-            size_t dir_len = dir ? strlen(dir) : 0;
-            const char* rel = (dir_len && strncmp(cand, dir, dir_len) == 0 && cand[dir_len] == '/')
-                                  ? cand + dir_len + 1
-                                  : cand;
+            const char* rel = path_under_base(scene->tex_pool->directory, cand);
             // Linear, and its `use` is left UNSTATED, which means COLOUR and so
             // uncompressed. A displacement field is data and wants BC4 -- but
             // saying so changes what is stored, and this sweep is meant to
             // change nothing. A saving left, in the shape 11.85 left several.
-            Texture* h = texture_load_file(scene->tex_pool, rel, texture_desc(false));
+            Texture* h = texture_load_file(scene->tex_pool, rel ? rel : cand, texture_desc(false));
             if (h) {
                 material_set_height_tex(mat, h);
                 // Auto-enable POM with the default depth (glTF/FBX carry no POM

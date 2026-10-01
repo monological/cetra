@@ -126,6 +126,9 @@ const char* path_last_sep(const char* path);
 // count excluding the terminator.
 char* read_entire_file(const char* path, long* out_len);
 bool find_existing_subpath(const char* base_dir, char** subpath_ptr);
+// The inverse of the join find_existing_subpath resolves to: `path` past `base_dir` and its
+// separator when it begins with them, NULL otherwise.
+const char* path_under_base(const char* base_dir, const char* path);
 char* convert_windows_path_to_unix(const char* windows_path);
 char* convert_and_normalize_path(const char* input_path);
 

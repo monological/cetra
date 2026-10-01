@@ -146,10 +146,11 @@ bool program_accepts_draw_mode(const ShaderProgram* program, GLenum draw_mode);
 // restated so a mask emitted here cannot mean something else there.
 #include "../shaders/include/pbr_features.glsl"
 
-// DECALS and AREA are the scene's, SHEEN, ANISO and PARALLAX the material's --
-// which is the split _scene_pbr_features and _material_pbr_features are named
-// for. A material cannot know whether the scene has a decal, so the mask is the
-// union of the two and a scene gaining its first decal changes every material.
+// DECALS, AREA and RAIN are the scene's, SHEEN, ANISO, PARALLAX and LAYERS the
+// material's -- which is the split _scene_pbr_features and _material_pbr_features
+// are named for. RELIEF is the material's, asked only in a scene that rains. A
+// material cannot know whether the scene has a decal, so the mask is the union of
+// the two and a scene gaining its first decal changes every material.
 
 // PbrFamily (declared above, beside the struct that carries one) is which VERTEX
 // stage a variant is built on. The two families share pbr_frag EXACTLY, so a

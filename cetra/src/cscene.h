@@ -229,7 +229,7 @@ typedef struct CSceneDust {
 // with rain_init_defaults, so an absent key keeps the default.
 typedef struct CSceneRain {
     bool enabled;
-    Rain rain; // SETTINGS only; its state is the engine's, and starts dry
+    Rain rain; // its settings and drip lines; its state is the engine's, and starts dry
     // false = the world starts dry and wets as the scene runs; absent = already soaked
     bool has_settled;
     bool settled;

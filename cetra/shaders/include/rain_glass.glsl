@@ -6,7 +6,9 @@
 // below are physical; rainGlassSize scales them all.
 //
 // Requires, included first: rain_surface.glsl (the cover, the wetness, the ripple activity and
-// pcg4d), depth.glsl (projectionIsOrtho), `time`, `view`, `projection` and `passMode`.
+// the cell hash), depth.glsl (projectionIsOrtho), `time`, `view`, `projection`, and the
+// transmission's `transmission`, `sceneColorAvailable`, `sceneColorTex` and
+// TRANSMISSION_MAX_LOD.
 
 uniform float uRainBeads;    // 1 = rain beads on this surface; see Material.rain_beads
 uniform vec3 rainTravel;     // unit direction the rain travels, held after it stops
@@ -25,12 +27,18 @@ const float RAIN_BEAD_LIFE_S = 4.0;
 // The share of cells that hold a bead on a pane fully exposed and soaked.
 const float RAIN_BEAD_FILL_L = 0.55;
 const float RAIN_BEAD_FILL_S = 0.75;
-// The running drops: lanes this wide across the pane, drops this far apart down each, and the
-// trail of small beads one leaves behind it.
+// The running drops: lanes this wide across the pane, drops this far apart down each, the trail
+// of small beads one leaves behind it, and the radii a head is drawn between.
 const float RAIN_RUN_LANE = 0.06;
 const float RAIN_RUN_SPACING = 1.5;
 const float RAIN_RUN_TRAIL = 0.25;
 const float RAIN_RUN_FILL = 0.35;
+const float RAIN_RUN_R_MIN = 0.0025;
+const float RAIN_RUN_R_MAX = 0.004;
+// Water on glass: nearly a mirror, though not the still water of a puddle; and how much
+// roughness a field of beads too fine to resolve adds where it is soaked.
+const float RAIN_GLASS_WATER_ROUGHNESS = 0.05;
+const float RAIN_GLASS_UNRESOLVED_VARIANCE = 0.05;
 // A cap's height over its radius. A bead on glass meets it at about 50 degrees, which a
 // paraboloid this tall reaches at its rim.
 const float RAIN_BEAD_HEIGHT = 0.7;
@@ -42,10 +50,6 @@ const float RAIN_LENS_MAX = 0.6;
 // angle, 48.6 degrees for water into air, and is reflected whole: tan(48.6 deg).
 const float RAIN_TIR_SLOPE = 1.134;
 
-vec4 rainBeadHash(vec2 cell, uint a, uint b) {
-    return vec4(pcg4d(uvec4(uvec2(ivec2(cell)), a, b))) / 4294967296.0;
-}
-
 /*
  * One layer of beads at plane coordinates `st`, in metres: the slope of the water's surface
  * there (.xy, along the plane's axes) and how much of the point it covers (.z). A cell holds a
@@ -56,10 +60,10 @@ vec4 rainBeadHash(vec2 cell, uint a, uint b) {
 vec3 rainBeadLayer(vec2 st, float cell, float rMax, float life, float fill, uint seed,
                    float footprint) {
     vec2 id = floor(st / cell);
-    float u = rainBeadClock / life + rainBeadHash(id, seed, 0x632be5abu).z;
+    float u = rainBeadClock / life + rainCellHash(id, seed, 0x632be5abu).z;
     float phase = fract(u);
     uint lifeKey = uint(mod(floor(u), RAIN_BEAD_CLOCK_WRAP / life));
-    vec4 h = rainBeadHash(id, seed + lifeKey * 7919u, 0x85ebca77u);
+    vec4 h = rainCellHash(id, seed + lifeKey * 7919u, 0x85ebca77u);
     // Grows in, sits, and is absorbed into the film at the end of its life.
     float r = rMax * mix(0.35, 1.0, h.x) * smoothstep(0.0, 0.2, phase) *
               (1.0 - smoothstep(0.85, 1.0, phase));
@@ -80,18 +84,18 @@ vec3 rainBeadLayer(vec2 st, float cell, float rMax, float life, float fill, uint
  */
 vec3 rainRunLayer(float s, float t, float slide, float fill, float footprint) {
     float lane = floor(s / RAIN_RUN_LANE);
-    vec4 hl = rainBeadHash(vec2(lane, 0.0), 0x9e3779b9u, 0x7f4a7c15u);
+    vec4 hl = rainCellHash(vec2(lane, 0.0), 0x9e3779b9u, 0x7f4a7c15u);
     float speed = mix(0.05, 0.25, hl.x) * smoothstep(0.35, 0.7, slide);
     float rate = 6.2831853 * mix(0.3, 0.9, hl.y);
     float tau = time + 0.6 * sin(rate * time + 6.2831853 * hl.z) / rate;
     float u = (t + speed * tau) / RAIN_RUN_SPACING + hl.w;
     float above = fract(u) * RAIN_RUN_SPACING; // metres above this drop's head
-    vec4 hc = rainBeadHash(vec2(lane, floor(u)), 0x2545f491u, 0x1b873593u);
+    vec4 hc = rainCellHash(vec2(lane, floor(u)), 0x2545f491u, 0x1b873593u);
     float live = hc.x < fill ? 1.0 : 0.0;
     float x = s - (lane + 0.5) * RAIN_RUN_LANE - 0.012 * sin(t * 9.0 + 6.2831853 * hl.z) -
               0.006 * sin(t * 23.0 + 6.2831853 * hl.w);
 
-    float rx = mix(0.0025, 0.004, hc.y);
+    float rx = mix(RAIN_RUN_R_MIN, RAIN_RUN_R_MAX, hc.y);
     float ry = 1.4 * rx;
     vec2 e = vec2(x / rx, (above - ry) / ry);
     float headCover = 1.0 - smoothstep(1.0 - footprint / rx, 1.0, length(e));
@@ -140,11 +144,13 @@ struct RainGlass {
 RainGlass rainGlassDrops(inout vec3 N, inout float roughness, vec3 Ng, vec3 P, vec3 V,
                          vec2 fragCoord, float exposure) {
     RainGlass g = RainGlass(vec2(0.0), 0.0, 0.0);
-    if (uRainBeads <= 0.0 || rainWetness <= 0.0 || passMode >= 2)
+    if (uRainBeads <= 0.0 || rainWetness <= 0.0)
         return g;
     float footprint = length(fwidth(P));
 
-    vec3 Nf = dot(rainTravel, Ng) <= 0.0 ? Ng : -Ng;
+    // Seen from the side the rain does not strike: through the pane, or from under it.
+    bool lee = dot(rainTravel, Ng) > 0.0;
+    vec3 Nf = lee ? -Ng : Ng;
     vec3 fall = vec3(0.0, -1.0, 0.0) - Nf * -Nf.y;
     float slide = length(fall);
     vec3 down = slide > 0.05 ? fall / slide
@@ -158,19 +164,28 @@ RainGlass rainGlassDrops(inout vec3 N, inout float roughness, vec3 Ng, vec3 P, v
     footprint /= size;
 
     float struck = exposure;
-    if (dot(Nf, Ng) < 0.0)
+    // The second cover lookup turns its taps off the first's, so the two do not share a pattern.
+    if (lee)
         struck = rainExposureSoft(P - Ng * RAIN_NORMAL_OFFSET, 6.2831853 * ign(fragCoord) + 1.7);
     float reach = struck * clamp(-dot(rainTravel, Nf) + RAIN_SPREAD_TAN, 0.0, 1.0);
     float fill = rainWetness * reach;
 
-    vec3 big = rainBeadLayer(st, RAIN_BEAD_CELL_L, RAIN_BEAD_R_L, RAIN_BEAD_LIFE_L,
-                             RAIN_BEAD_FILL_L * fill, 1u, footprint);
-    vec3 small = rainBeadLayer(st + 0.37, RAIN_BEAD_CELL_S, RAIN_BEAD_R_S, RAIN_BEAD_LIFE_S,
-                               RAIN_BEAD_FILL_S * fill, 2u, footprint);
-    vec3 run = rainRunLayer(st.x, st.y, slide, RAIN_RUN_FILL * rainRippleActivity * reach,
-                            footprint);
-    vec3 beads = big.z >= small.z ? big : small;
-    vec3 drop = run.z >= beads.z ? run : beads;
+    // None of the layers takes a derivative, so they are skipped where nothing can be on the
+    // glass: under cover, and for the running drops once the rain has stopped.
+    vec3 drop = vec3(0.0);
+    if (reach > 0.0) {
+        vec3 big = rainBeadLayer(st, RAIN_BEAD_CELL_L, RAIN_BEAD_R_L, RAIN_BEAD_LIFE_L,
+                                 RAIN_BEAD_FILL_L * fill, 1u, footprint);
+        // The small beads' grid is offset off the big ones', so their cells do not line up.
+        vec3 small = rainBeadLayer(st + 0.37, RAIN_BEAD_CELL_S, RAIN_BEAD_R_S, RAIN_BEAD_LIFE_S,
+                                   RAIN_BEAD_FILL_S * fill, 2u, footprint);
+        drop = big.z >= small.z ? big : small;
+        if (rainRippleActivity > 0.0) {
+            vec3 run = rainRunLayer(st.x, st.y, slide, RAIN_RUN_FILL * rainRippleActivity * reach,
+                                    footprint);
+            drop = run.z >= drop.z ? run : drop;
+        }
+    }
 
     // A pixel wider than a bead sees the beads' average: their tilt washes out into roughness.
     float resolve = 1.0 - smoothstep(0.5, 1.5, footprint / RAIN_BEAD_R_S);
@@ -184,28 +199,44 @@ RainGlass rainGlassDrops(inout vec3 N, inout float roughness, vec3 Ng, vec3 P, v
     if (drop.z * resolve > 0.0) {
         vec3 n = normalize(Nf - slope);
         N = normalize(mix(N, dot(N, Nf) >= 0.0 ? n : -n, drop.z * resolve));
-        roughness = mix(roughness, 0.05, drop.z * resolve);
+        roughness = mix(roughness, RAIN_GLASS_WATER_ROUGHNESS, drop.z * resolve);
     }
     if (resolve < 1.0 && fill > 0.0)
-        roughness = sqrt(roughness * roughness + (1.0 - resolve) * 0.05 * fill);
+        roughness = sqrt(roughness * roughness +
+                         (1.0 - resolve) * RAIN_GLASS_UNRESOLVED_VARIANCE * fill);
 
-    // The lens, from the image at infinity: the view bent toward the drop's thicker middle,
-    // which is up its slope. Not faded with the resolve, unlike the tilt: where the drops are
-    // smaller than a pixel the bend changes within it, and the spread that leaves in the
-    // shift is what raises the transmission's mip -- a field of beads too fine to see is
-    // still a diffuser, which is how a wet window reads from across a room.
-    vec3 dir = -V;
-    vec3 bend = RAIN_WATER_BEND * rainGlassLens * slope;
-    float amount = length(bend);
-    if (amount > RAIN_LENS_MAX)
-        bend *= RAIN_LENS_MAX / amount;
-    if (amount > 0.0 && !projectionIsOrtho())
-        g.shift = rainViewUv(normalize(dir + bend)) - rainViewUv(dir);
-    g.shiftPerPx = length(fwidth(g.shift));
-    // The rim: steep enough that what comes through the pane is reflected back by the bead's
-    // surface rather than passed, which draws each bead's dark outline. Not faded with the
-    // resolve -- unresolved, it is the darkening a beaded pane has on average.
-    g.blocked = drop.z * smoothstep(0.9 * RAIN_TIR_SLOPE, 1.1 * RAIN_TIR_SLOPE, length(drop.xy) /
-                                                                               max(drop.z, 1e-4));
+    // What the drops do to the view THROUGH the pane, which only a pane the transmission sample
+    // reads from has.
+    if (transmission > 0.0 && sceneColorAvailable > 0) {
+        // The lens, from the image at infinity: the view bent toward the drop's thicker middle,
+        // which is up its slope. Not faded with the resolve, unlike the tilt: where the drops
+        // are smaller than a pixel the bend changes within it, and the spread that leaves in the
+        // shift is what raises the transmission's mip -- a field of beads too fine to see is
+        // still a diffuser, which is how a wet window reads from across a room.
+        vec3 dir = -V;
+        vec3 bend = RAIN_WATER_BEND * rainGlassLens * slope;
+        float amount = length(bend);
+        if (amount > RAIN_LENS_MAX)
+            bend *= RAIN_LENS_MAX / amount;
+        if (amount > 0.0 && !projectionIsOrtho())
+            g.shift = rainViewUv(normalize(dir + bend)) - rainViewUv(dir);
+        g.shiftPerPx = length(fwidth(g.shift));
+        // The rim: steep enough that what comes through the pane is reflected back by the
+        // bead's surface rather than passed, which draws each bead's dark outline. Not faded
+        // with the resolve -- unresolved, it is the darkening a beaded pane has on average.
+        g.blocked = drop.z * smoothstep(0.9 * RAIN_TIR_SLOPE, 1.1 * RAIN_TIR_SLOPE,
+                                        length(drop.xy) / max(drop.z, 1e-4));
+    }
     return g;
+}
+
+// The scene through the pane at `uv`, bent and spread by the drops on it, at no finer a mip
+// than `lod`: the mip rises with how far the bent view moves across a pixel, or a magnified
+// image speckles.
+vec3 rainGlassTransmit(RainGlass g, vec2 uv, float lod) {
+    float spread = log2(max(g.shiftPerPx * float(textureSize(sceneColorTex, 0).x), 1.0));
+    return textureLod(sceneColorTex, clamp(uv + g.shift, 0.0, 1.0),
+                      min(max(lod, spread), TRANSMISSION_MAX_LOD))
+               .rgb *
+           (1.0 - g.blocked);
 }
