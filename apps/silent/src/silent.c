@@ -87,6 +87,9 @@
 // Splash droplets twice their physical size: at their own a splash on dark wet asphalt lifts
 // its pixels by a tenth, and the ground round the player's feet reads as still.
 #define RAIN_SPLASH_SIZE 2.0f
+// Drops on glass at twice and a half their size: physical beads are a few millimetres, under
+// a pixel of the kitchen window from anywhere in the kitchen at the render scale this runs at.
+#define RAIN_GLASS_DROP_SIZE 2.5f
 // A breeze off the street onto the front of the house, gusting. In still air the eave keeps
 // the rain off the facade and the kitchen window; this drives it onto their lower halves. The
 // speed is a gust's peak, and the lulls between are half of it.
@@ -398,6 +401,7 @@ static void on_init(Game* game) {
             g_scene->rain->streak_sheen = RAIN_STREAK_SHEEN;
             g_scene->rain->wet_darkening = RAIN_WET_DARKENING;
             g_scene->rain->splash_size = RAIN_SPLASH_SIZE;
+            g_scene->rain->glass_drop_size = RAIN_GLASS_DROP_SIZE;
             rain_settle(g_scene->rain);
         }
     }

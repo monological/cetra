@@ -233,6 +233,7 @@ typedef struct CSceneRain {
     // false = the world starts dry and wets as the scene runs; absent = already soaked
     bool has_settled;
     bool settled;
+    float dry_for; // seconds since the rain stopped, soaked before it; 0 = still raining
 } CSceneRain;
 
 /*

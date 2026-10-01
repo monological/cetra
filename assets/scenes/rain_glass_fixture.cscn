@@ -1,0 +1,76 @@
+{
+ "version": 1,
+ "_comment": [
+  "The rain instrument's glass variant (spec 13.12): the yard with three thin panes facing",
+  "the wind -- one in the open, one under the roof and one at the roof's front edge -- for",
+  "the drops rain leaves on glass. Same camera, lights and rain."
+ ],
+ "models": [
+  {
+   "path": "../models/rain_glass_fixture.gltf"
+  }
+ ],
+ "environment": {
+  "ambient": [
+   0.03,
+   0.03,
+   0.035
+  ]
+ },
+ "lights": [
+  {
+   "name": "rain_lamp",
+   "type": "point",
+   "position": [
+    6.5,
+    4.3,
+    -3.0
+   ],
+   "color": [
+    1.0,
+    0.85,
+    0.6
+   ],
+   "range": 14.0,
+   "profile": "../ies/ies_symmetric.ies"
+  }
+ ],
+ "rain": {
+  "rate": 10.0,
+  "wind": [
+   0.0,
+   0.0,
+   -1.5
+  ]
+ },
+ "materials": {
+  "rain_porous": {
+   "porosity": 1.0
+  },
+  "rain_sealed": {
+   "porosity": 0.0
+  },
+  "rain_glass": {
+   "transmission": 1.0,
+   "thickness": 0.0,
+   "ior": 1.5
+  }
+ },
+ "camera": {
+  "eye": [
+   0.0,
+   2.4,
+   11.0
+  ],
+  "target": [
+   0.0,
+   1.2,
+   -4.0
+  ],
+  "fov": 55
+ },
+ "post": {
+  "tonemap": "neutral",
+  "exposure": 1.0
+ }
+}

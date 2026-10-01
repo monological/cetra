@@ -3,7 +3,8 @@
 // pbr_frag includes this under PBR_FEAT_RAIN and makes one call.
 //
 // Requires, included first: wet_surface.glsl (the water model the shore shares), noise.glsl
-// (hash21, ign), `punctualShadowMaps` (the array the cover is a layer of) and `time`.
+// (hash21, ign), `punctualShadowMaps` (the array the cover is a layer of), `time` and the
+// material's `transmission`.
 
 #include "rain_occlusion.glsl"
 #include "rain_ripples.glsl"
@@ -70,12 +71,16 @@ float rainPuddleNoise(vec2 xz) {
  * a little way out along the geometric normal `Ng`. Everything the rain reaches wets, walls
  * included; only what faces UP holds a film, because a wall sheds its water as fast as it
  * arrives. A metal's albedo is its reflectance, not a diffuse colour water can darken, so the
- * porosity and hue terms fade out with the metalness and a wet metal only takes the film.
+ * porosity and hue terms fade out with the metalness and a wet metal only takes the film --
+ * and a transmissive surface's albedo is the tint of what shows through it, which water on
+ * glass does not darken either.
  *
+ * `exposure` is the cover the point read, 0 to 1, for a caller that asks about the same spot.
  * Call it from control flow uniform over the draw: it takes a screen derivative.
  */
 float rainWetSurface(inout vec3 albedo, inout float roughness, inout vec3 N, vec3 Ng,
-                     vec3 worldPos, float metallic, vec2 fragCoord) {
+                     vec3 worldPos, float metallic, vec2 fragCoord, out float exposure) {
+    exposure = 0.0;
     if (rainWetness <= 0.0)
         return 0.0;
     // Both here, above the puddle test, because that test is not uniform over the draw.
@@ -86,8 +91,9 @@ float rainWetSurface(inout vec3 albedo, inout float roughness, inout vec3 N, vec
     // alias in the distance.
     float waterline = max(fwidth(depth), 1e-4);
 
-    float wet = rainWetness *
-                rainExposureSoft(worldPos + Ng * RAIN_NORMAL_OFFSET, 6.2831853 * ign(fragCoord));
+    exposure =
+        rainExposureSoft(worldPos + Ng * RAIN_NORMAL_OFFSET, 6.2831853 * ign(fragCoord));
+    float wet = rainWetness * exposure;
     // Rough is porous, the Lagarde mapping: gloss 0.5 and above is sealed, 0.1 fully open.
     float porosity = uPorosity >= 0.0 ? uPorosity : clamp((roughness - 0.5) / 0.4, 0.0, 1.0);
     float flatness = smoothstep(RAIN_PUDDLE_FLAT_MIN, RAIN_PUDDLE_FLAT_FULL, Ng.y);
@@ -96,7 +102,7 @@ float rainWetSurface(inout vec3 albedo, inout float roughness, inout vec3 N, vec
     float film = wet * smoothstep(RAIN_FILM_UP_MIN, RAIN_FILM_UP_FULL, Ng.y) *
                  mix(RAIN_SURFACE_FILM, 1.0, soaked);
     wetSurface(albedo, roughness, N, Ng, porosity * RAIN_POROSITY_DARKEN,
-               wet * (1.0 - metallic) * rainDarkening, film);
+               wet * (1.0 - metallic) * (1.0 - transmission) * rainDarkening, film);
 
     /*
      * PUDDLES: where flat ground holds standing water. Water deep enough to cover the

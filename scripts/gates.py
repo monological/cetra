@@ -26972,6 +26972,26 @@ RAIN_SCENE_WIND = {"direction": [0.0, 0.0, -1.0], "airSpeed": 3.0, "gustAmount":
 RAIN_GUST_FRAMES = 40
 # Deeper than a splash crown rises off the bed (a 6 mm drop's droplets top out near 0.2 m).
 RAIN_DEEP_WATER = 0.5
+# The glazed twin's panes, each an inscribed quad on the face a camera sees, a few centimetres in
+# from its edges: the open pane's street face, the covered pane's, and two bands of the edge
+# pane's INNER face -- the lower one, which the slanted rain reaches past the roof's front edge,
+# and the upper one, which it does not. The rain reaches the edge pane below about 1.3 m, a line
+# the cover map's texels blur by a third of a metre either way, and each band clears that.
+# From inside, the camera looks down through the lower band at the wet ground: through glass
+# with nothing but even sky behind it, a drop's lens has nothing to bend.
+RAIN_GLASS_FIXTURE = "rain_glass_fixture.cscn"
+RAIN_GLASS_CAMERA = {"eye": [0.5, 1.6, 8.0], "target": [0.5, 1.4, -2.0], "fov": 55}
+RAIN_GLASS_INSIDE_CAMERA = {"eye": [0.0, 1.6, -5.5], "target": [0.0, 0.6, 2.0], "fov": 60}
+RAIN_GLASS_OPEN = [(x, y, 4.003) for x in (1.2, 2.8) for y in (0.45, 1.65)]
+RAIN_GLASS_COVERED = [(x, y, -3.997) for x in (-2.8, -1.6) for y in (0.45, 1.65)]
+RAIN_GLASS_EDGE_LOW = [(x, y, -1.603) for x in (-0.8, 0.8) for y in (0.4, 0.85)]
+RAIN_GLASS_EDGE_HIGH = [(x, y, -1.603) for x in (-0.8, 0.8) for y in (1.9, 2.7)]
+# Fewer pixels than this in a pane's image and the arm could not see it.
+RAIN_GLASS_MIN_PX = 500
+# Seconds since the rain stopped: soon enough that the panes are still beaded, and long enough
+# that the film is under the floor rain_active() keeps and nothing of the rain is left.
+RAIN_GLASS_DAMP_S = 20.0
+RAIN_GLASS_DRIED_S = 5000.0
 
 
 def _rain_twin(rate):
@@ -27129,10 +27149,22 @@ def run_rain_gate(workdir):
       rain-ledger   the rain variant declares no more samplers than the dry variant of the
                     same materials: the cover is a tenant of the punctual array, and a unit
                     spent on it would be one the full variant does not have.
+      rain-glass    the glazed twin, beaded panes against bare ones: the pane in the open moves,
+                    and not a pixel of the pane under the roof's middle -- drops form where the
+                    occlusion map says the rain strikes, and nowhere else.
+      rain-glass-inner  from under the roof, the INNER face of the pane at the roof's edge: its
+                    lower band shows the drops the slanted rain leaves on the outer face, though
+                    the point just behind that face is sheltered by the pane itself; its upper
+                    band, which the rain cannot reach past the roof, moves 0 px.
+      rain-glass-lens  the drops' lens at 1 against 0 moves the view through the open pane: a
+                    drop bends what is seen through it, not only how it reflects.
+      rain-glass-dry  RAIN_GLASS_DAMP_S after the rain stopped the open pane is still beaded;
+                    RAIN_GLASS_DRIED_S after, the frame is 0 px from the twin with no rain at all.
+      rain-glass-determinism  two runs of the beaded panes are 0 px apart.
 
-    Everything here runs on rain_fixture and its flooded twin, whose answers are known from
-    their geometry and their closed forms; the streak arms read the fixture at sheen 0, since
-    the sheen is a look laid over the physics rather than part of it.
+    Everything here runs on rain_fixture and its flooded and glazed twins, whose answers are
+    known from their geometry and their closed forms; the streak arms read the fixture at sheen
+    0, since the sheen is a look laid over the physics rather than part of it.
     """
     scene = asset(RAIN_FIXTURE)
     if not os.path.exists(scene):
@@ -27657,6 +27689,82 @@ def run_rain_gate(workdir):
           f"{dry_variants or 'none'} (want the rain bit set wet, and the same sampler count)")
     if not ok:
         failures.append("rain-ledger")
+
+    # Drops on glass, on the glazed twin with nothing in the air, so a pair of frames differs only
+    # in what the rain leaves on the panes.
+    glazed = asset(RAIN_GLASS_FIXTURE)
+    if not os.path.exists(glazed):
+        print(f"  rain-glass SKIP  ({RAIN_GLASS_FIXTURE} not present)")
+        return failures
+
+    def glass(name, camera, rain=None, beads=None, dry=False):
+        def mutate(s):
+            s["camera"] = dict(camera)
+            if dry:
+                s.pop("rain")
+                return
+            s["rain"].update({**RAIN_SURFACES_ONLY, **(rain or {})})
+            if beads is not None:
+                s["materials"]["rain_glass"]["rainBeads"] = beads
+        return frame(name, variant(name, mutate, base=glazed), RAIN_LINEAR)
+
+    def on_pane(a, b, camera, quad):
+        """(fraction of the pane's pixels moved, pixels moved, pixels), or (nan, -1, 0)."""
+        if not (a and b):
+            return float("nan"), -1, 0
+        m, t = moved_in_quad(a, b, _cscn_view(camera), quad)
+        return (m / t if t else float("nan")), m, t
+
+    beaded, bare = glass("beaded", RAIN_GLASS_CAMERA), glass("bare", RAIN_GLASS_CAMERA, beads=0.0)
+    open_f, _, open_t = on_pane(beaded, bare, RAIN_GLASS_CAMERA, RAIN_GLASS_OPEN)
+    _, cov_m, cov_t = on_pane(beaded, bare, RAIN_GLASS_CAMERA, RAIN_GLASS_COVERED)
+    ok = (open_t >= RAIN_GLASS_MIN_PX and open_f > RAIN_FEATURE_MIN and cov_t >= RAIN_GLASS_MIN_PX
+          and cov_m == 0)
+    print(f"  rain-glass {'PASS' if ok else 'FAIL'}  beads move {open_f:.1%} of the open pane's "
+          f"{open_t} px (want > {RAIN_FEATURE_MIN:.0%}) and {cov_m} of the covered pane's {cov_t} "
+          f"(want 0, each pane at least {RAIN_GLASS_MIN_PX} px)")
+    if not ok:
+        failures.append("rain-glass")
+
+    inside = glass("inside_beaded", RAIN_GLASS_INSIDE_CAMERA)
+    inside_bare = glass("inside_bare", RAIN_GLASS_INSIDE_CAMERA, beads=0.0)
+    low_f, _, low_t = on_pane(inside, inside_bare, RAIN_GLASS_INSIDE_CAMERA, RAIN_GLASS_EDGE_LOW)
+    _, high_m, high_t = on_pane(inside, inside_bare, RAIN_GLASS_INSIDE_CAMERA, RAIN_GLASS_EDGE_HIGH)
+    ok = (low_t >= RAIN_GLASS_MIN_PX and low_f > RAIN_FEATURE_MIN and high_t >= RAIN_GLASS_MIN_PX
+          and high_m == 0)
+    print(f"  rain-glass-inner {'PASS' if ok else 'FAIL'}  seen from inside, the edge pane's struck "
+          f"band moves {low_f:.1%} of {low_t} px (want > {RAIN_FEATURE_MIN:.0%}) and its sheltered "
+          f"band {high_m} of {high_t} (want 0, each at least {RAIN_GLASS_MIN_PX} px)")
+    if not ok:
+        failures.append("rain-glass-inner")
+
+    unbent = glass("unbent", RAIN_GLASS_CAMERA, rain={"glassLens": 0.0})
+    lens_f, _, lens_t = on_pane(beaded, unbent, RAIN_GLASS_CAMERA, RAIN_GLASS_OPEN)
+    ok = lens_t >= RAIN_GLASS_MIN_PX and lens_f > RAIN_FEATURE_MIN
+    print(f"  rain-glass-lens {'PASS' if ok else 'FAIL'}  the lens at 1 against 0 moves "
+          f"{lens_f:.1%} of the open pane's {lens_t} px (want > {RAIN_FEATURE_MIN:.0%})")
+    if not ok:
+        failures.append("rain-glass-lens")
+
+    damp = glass("damp", RAIN_GLASS_CAMERA, rain={"dryFor": RAIN_GLASS_DAMP_S})
+    damp_bare = glass("damp_bare", RAIN_GLASS_CAMERA, rain={"dryFor": RAIN_GLASS_DAMP_S}, beads=0.0)
+    damp_f, _, damp_t = on_pane(damp, damp_bare, RAIN_GLASS_CAMERA, RAIN_GLASS_OPEN)
+    dried = glass("dried", RAIN_GLASS_CAMERA, rain={"dryFor": RAIN_GLASS_DRIED_S})
+    never = glass("never", RAIN_GLASS_CAMERA, dry=True)
+    dried_ae = compare(dried, never)[0] if dried and never else sys.maxsize
+    ok = damp_t >= RAIN_GLASS_MIN_PX and damp_f > RAIN_FEATURE_MIN and dried_ae == 0
+    print(f"  rain-glass-dry {'PASS' if ok else 'FAIL'}  {RAIN_GLASS_DAMP_S:g} s after the rain the "
+          f"beads still move {damp_f:.1%} of the open pane (want > {RAIN_FEATURE_MIN:.0%}); "
+          f"{RAIN_GLASS_DRIED_S:g} s after, {dried_ae} px from no rain at all (want 0)")
+    if not ok:
+        failures.append("rain-glass-dry")
+
+    again = glass("beaded_again", RAIN_GLASS_CAMERA)
+    ae = compare(beaded, again)[0] if beaded and again else sys.maxsize
+    ok = ae == 0
+    print(f"  rain-glass-determinism {'PASS' if ok else 'FAIL'}  two runs {ae} px apart (want 0)")
+    if not ok:
+        failures.append("rain-glass-determinism")
     return failures
 
 

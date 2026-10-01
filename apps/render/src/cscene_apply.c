@@ -558,13 +558,17 @@ void apply_cscene_rain(Scene* scene, const CetraSceneDesc* cscn) {
     if (!rain)
         return;
     *rain = r->rain;
-    if (!r->has_settled || r->settled)
+    if (r->dry_for > 0.0f)
+        rain_settle_dry(rain, scene->wind, r->dry_for);
+    else if (!r->has_settled || r->settled)
         rain_settle(rain);
     free_rain(scene->rain);
     scene->rain = rain;
-    printf("Scene file: rain %.2f mm/h, wind (%.2f, %.2f, %.2f) m/s%s\n", (double)rain->rate_mmh,
+    printf("Scene file: rain %.2f mm/h, wind (%.2f, %.2f, %.2f) m/s%s\n", (double)r->rain.rate_mmh,
            (double)rain->wind[0], (double)rain->wind[1], (double)rain->wind[2],
-           r->has_settled && !r->settled ? ", starting dry" : "");
+           r->dry_for > 0.0f               ? ", stopped"
+           : r->has_settled && !r->settled ? ", starting dry"
+                                           : "");
 }
 
 /*

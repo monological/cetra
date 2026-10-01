@@ -359,6 +359,11 @@ uniform int parallaxEnabled;  // Global POM toggle (--no-parallax, §4.11)
 // a depth-only draw at once. As two uniforms that pairing was expressible and
 // its behaviour fell out of which early return happened to be written first.
 uniform int passMode;
+// Drops on glass (spec 13.12), after the pass mode they stand down in; the rest of the rain is
+// included above.
+#if CETRA_HAS(PBR_FEAT_RAIN)
+#include "rain_glass.glsl"
+#endif
 // 1 = weight the accumulate by measured transmittance rather than the depth
 // curve. Orthogonal to which pass is drawing, and separate from passMode for
 // that reason; oit_resolve_frag carries the same bit under the same name.
@@ -1560,8 +1565,13 @@ void main() {
 #if CETRA_HAS(PBR_FEAT_RAIN)
     // WET FROM THE RAIN (spec 13.9): the same water as the swash's, from the sky; its film
     // goes on to the Fresnel below. See rain_surface.glsl.
+    float rainCover;
     float rainFilm = rainWetSurface(albedoMap, roughnessMap, N, normalize(Normal), WorldPos,
-                                    metallicMap, gl_FragCoord.xy);
+                                    metallicMap, gl_FragCoord.xy, rainCover);
+    // And on glass, beads and running drops (spec 13.12): the shift goes on to the
+    // transmission sample below. See rain_glass.glsl.
+    RainGlass rainGlass = rainGlassDrops(N, roughnessMap, normalize(Normal), WorldPos, V,
+                                         gl_FragCoord.xy, rainCover);
 #endif
 
     /*
@@ -2481,8 +2491,20 @@ void main() {
         vec2 refrUV = clamp(refrClip.xy / refrClip.w * 0.5 + 0.5, 0.0, 1.0);
         // Box mips: one level per doubling of blur width; frosted surfaces
         // read a progressively softer background
+#if CETRA_HAS(PBR_FEAT_RAIN)
+        // Through a drop on the pane the view is bent, and spread: the mip rises with how far
+        // the bent view moves across a pixel, or a magnified image speckles.
+        float rainLod =
+            log2(max(rainGlass.shiftPerPx * float(textureSize(sceneColorTex, 0).x), 1.0));
+        vec3 sceneSample =
+            textureLod(sceneColorTex, clamp(refrUV + rainGlass.shift, 0.0, 1.0),
+                       min(max(roughnessMap * TRANSMISSION_MAX_LOD, rainLod), TRANSMISSION_MAX_LOD))
+                .rgb *
+            (1.0 - rainGlass.blocked);
+#else
         vec3 sceneSample =
             textureLod(sceneColorTex, refrUV, roughnessMap * TRANSMISSION_MAX_LOD).rgb;
+#endif
         // KHR_materials_volume absorption, over the same path the bend above
         // travelled. attenuationColor is defined as what survives exactly
         // attenuationDistance, so the extinction reproducing it is

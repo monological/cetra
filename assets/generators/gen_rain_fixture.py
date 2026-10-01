@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Generate rain_fixture.gltf + .cscn, the rain instrument, and rain_water_fixture.cscn,
-its flooded variant for the rings rain leaves on water (spec 13.9).
+"""Generate rain_fixture.gltf + .cscn, the rain instrument, rain_water_fixture.cscn, its
+flooded variant for the rings rain leaves on water (spec 13.9), and rain_glass_fixture.gltf
++ .cscn, its glazed variant for the drops rain leaves on glass (spec 13.12).
 
 A night yard in metres, built so that every question the rain gate asks has an answer
 known from the geometry alone:
@@ -63,7 +64,7 @@ MATERIALS = [
     ("rain_post", [0.3, 0.28, 0.25, 1.0], 0.8),
     ("rain_wall", [0.45, 0.28, 0.22, 1.0], 0.9),
 ]
-MAT = {name: i for i, (name, _, _) in enumerate(MATERIALS)}
+GLASS_MATERIALS = MATERIALS + [("rain_glass", [0.9, 0.95, 0.92, 1.0], 0.05)]
 
 # The yard, in metres: (name, material, centre, size).
 ROOF_Y = 3.0  # underside; the slab spans x -4..4 and z -7..-1
@@ -79,64 +80,80 @@ PIECES = [
     ("lamp_pole", "rain_post", (6.5, 2.2, -3.0), (0.12, 4.4, 0.12)),
 ]
 
-gltf = {
-    "asset": {"version": "2.0", "generator": "gen_rain_fixture.py"},
-    "scene": 0,
-    "scenes": [{"nodes": list(range(len(PIECES)))}],
-    "nodes": [
-        {"name": name, "mesh": MAT[mat], "translation": list(t), "scale": list(s)}
-        for name, mat, t, s in PIECES
-    ],
-    "meshes": [
-        {
-            "name": name,
-            "primitives": [
-                {"attributes": {"POSITION": 0, "NORMAL": 1}, "indices": 2, "material": i}
-            ],
-        }
-        for i, (name, _, _) in enumerate(MATERIALS)
-    ],
-    "materials": [
-        {
-            "name": name,
-            "pbrMetallicRoughness": {
-                "baseColorFactor": color,
-                "metallicFactor": 0.0,
-                "roughnessFactor": rough,
+# The GLASS twin's panes (spec 13.12), thin -- 6 mm -- and facing +z, the side the rain
+# strikes: one in the open, one under the middle of the roof, and one standing 0.6 m inside the
+# roof's front edge. The slanted rain reaches that one's outer face below about 1.3 m and not
+# above it -- a line the rain's cover map blurs by a third of a metre either way, its texels
+# being 9.4 cm across and the rain falling 3.5 m for every metre it drifts. Kept to x ranges of
+# their own so each reads alone from the fixture's camera.
+PANES = [
+    ("pane_open", "rain_glass", (2.0, 1.05, 4.0), (2.0, 1.5, 0.006)),
+    ("pane_covered", "rain_glass", (-2.0, 1.05, -4.0), (2.0, 1.5, 0.006)),
+    ("pane_edge", "rain_glass", (0.0, 1.55, -1.6), (2.0, 2.5, 0.006)),
+]
+
+
+def gltf_of(pieces, materials):
+    mat = {name: i for i, (name, _, _) in enumerate(materials)}
+    return {
+        "asset": {"version": "2.0", "generator": "gen_rain_fixture.py"},
+        "scene": 0,
+        "scenes": [{"nodes": list(range(len(pieces)))}],
+        "nodes": [
+            {"name": name, "mesh": mat[m], "translation": list(t), "scale": list(s)}
+            for name, m, t, s in pieces
+        ],
+        "meshes": [
+            {
+                "name": name,
+                "primitives": [
+                    {"attributes": {"POSITION": 0, "NORMAL": 1}, "indices": 2, "material": i}
+                ],
+            }
+            for i, (name, _, _) in enumerate(materials)
+        ],
+        "materials": [
+            {
+                "name": name,
+                "pbrMetallicRoughness": {
+                    "baseColorFactor": color,
+                    "metallicFactor": 0.0,
+                    "roughnessFactor": rough,
+                },
+            }
+            for name, color, rough in materials
+        ],
+        "accessors": [
+            {
+                "bufferView": 0,
+                "componentType": 5126,
+                "count": len(positions),
+                "type": "VEC3",
+                "min": [-0.5, -0.5, -0.5],
+                "max": [0.5, 0.5, 0.5],
             },
-        }
-        for name, color, rough in MATERIALS
-    ],
-    "accessors": [
-        {
-            "bufferView": 0,
-            "componentType": 5126,
-            "count": len(positions),
-            "type": "VEC3",
-            "min": [-0.5, -0.5, -0.5],
-            "max": [0.5, 0.5, 0.5],
-        },
-        {"bufferView": 1, "componentType": 5126, "count": len(normals), "type": "VEC3"},
-        {"bufferView": 2, "componentType": 5123, "count": len(indices), "type": "SCALAR"},
-    ],
-    "bufferViews": [
-        {"buffer": 0, "byteOffset": 0, "byteLength": len(pos_bytes), "target": 34962},
-        {"buffer": 0, "byteOffset": len(pos_bytes), "byteLength": len(nrm_bytes), "target": 34962},
-        {
-            "buffer": 0,
-            "byteOffset": len(pos_bytes) + len(nrm_bytes),
-            "byteLength": len(idx_bytes),
-            "target": 34963,
-        },
-    ],
-    "buffers": [
-        {
-            "uri": "data:application/octet-stream;base64,"
-            + base64.b64encode(buffer_bytes).decode("ascii"),
-            "byteLength": len(buffer_bytes),
-        }
-    ],
-}
+            {"bufferView": 1, "componentType": 5126, "count": len(normals), "type": "VEC3"},
+            {"bufferView": 2, "componentType": 5123, "count": len(indices), "type": "SCALAR"},
+        ],
+        "bufferViews": [
+            {"buffer": 0, "byteOffset": 0, "byteLength": len(pos_bytes), "target": 34962},
+            {"buffer": 0, "byteOffset": len(pos_bytes), "byteLength": len(nrm_bytes),
+             "target": 34962},
+            {
+                "buffer": 0,
+                "byteOffset": len(pos_bytes) + len(nrm_bytes),
+                "byteLength": len(idx_bytes),
+                "target": 34963,
+            },
+        ],
+        "buffers": [
+            {
+                "uri": "data:application/octet-stream;base64,"
+                + base64.b64encode(buffer_bytes).decode("ascii"),
+                "byteLength": len(buffer_bytes),
+            }
+        ],
+    }
 
 RATE_MMH = 10.0
 WIND = [0.0, 0.0, -1.5]
@@ -180,8 +197,28 @@ water_desc["_comment"] = [
 water_desc["water"] = {"level": 0.05, "extent": 14.0, "waves": "gerstner", "wavelength": 8.0,
                        "amplitude": 0.002, "steepness": 0.1}
 
+# The GLASS variant (spec 13.12): the same yard with three thin panes, for the drops rain
+# leaves on glass. The panes are thin transmissive glass, so what is seen through one is the
+# refraction resolve at its own pixel, shifted only by the drops; the yard and the lamp give
+# that resolve something to show.
+glass_desc = dict(scene_desc)
+glass_desc["_comment"] = [
+    "The rain instrument's glass variant (spec 13.12): the yard with three thin panes facing",
+    "the wind -- one in the open, one under the roof and one at the roof's front edge -- for",
+    "the drops rain leaves on glass. Same camera, lights and rain.",
+]
+glass_desc["models"] = [{"path": asset_ref("rain_glass_fixture.gltf")}]
+glass_desc["materials"] = dict(scene_desc["materials"])
+glass_desc["materials"]["rain_glass"] = {"transmission": 1.0, "thickness": 0.0, "ior": 1.5}
+
 with open(asset_path("rain_fixture.gltf"), "w") as f:
-    json.dump(gltf, f, indent=1)
+    json.dump(gltf_of(PIECES, MATERIALS), f, indent=1)
+    f.write("\n")
+with open(asset_path("rain_glass_fixture.gltf"), "w") as f:
+    json.dump(gltf_of(PIECES + PANES, GLASS_MATERIALS), f, indent=1)
+    f.write("\n")
+with open(asset_path("rain_glass_fixture.cscn"), "w") as f:
+    json.dump(glass_desc, f, indent=1)
     f.write("\n")
 with open(asset_path("rain_fixture.cscn"), "w") as f:
     json.dump(scene_desc, f, indent=1)
@@ -189,4 +226,4 @@ with open(asset_path("rain_fixture.cscn"), "w") as f:
 with open(asset_path("rain_water_fixture.cscn"), "w") as f:
     json.dump(water_desc, f, indent=1)
     f.write("\n")
-print("wrote rain_fixture.gltf + .cscn + rain_water_fixture.cscn")
+print("wrote rain_fixture.gltf + .cscn, rain_water_fixture.cscn, rain_glass_fixture.gltf + .cscn")

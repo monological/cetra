@@ -257,6 +257,10 @@ void mats_register(Kit* kit, Engine* engine, Scene* scene) {
     }
     for (size_t p = 0; p < sizeof(POROSITY) / sizeof(POROSITY[0]); p++)
         kit->materials[POROSITY[p].id]->porosity = POROSITY[p].porosity;
+    // Glass drawn opaque -- the dark panes and the car's, the lit windows -- beads in the rain
+    // like the glass that transmits, which the engine finds for itself.
+    kit->materials[MAT_DARK_GLASS]->rain_beads = 1.0f;
+    kit->materials[MAT_WINDOW_LIT]->rain_beads = 1.0f;
 }
 
 void mats_lamps_out(Kit* kit) {

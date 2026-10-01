@@ -1031,6 +1031,8 @@ static const CSceneRainKey RAIN_KEYS[] = {
     RAIN_FLOAT_KEY("splashSize", splash_size, 0.0f, 100.0f),
     RAIN_FLOAT_KEY("mist", mist, 0.0f, 1000.0f),
     RAIN_FLOAT_KEY("mistForwardG", mist_forward_g, -0.99f, 0.99f),
+    RAIN_FLOAT_KEY("glassLens", glass_lens, 0.0f, 10.0f),
+    RAIN_FLOAT_KEY("glassDropSize", glass_drop_size, 0.1f, 20.0f),
 };
 #undef RAIN_FLOAT_KEY
 #undef RAIN_INT_KEY
@@ -1062,8 +1064,10 @@ static void parse_rain(CetraSceneDesc* d, const cJSON* root) {
             *(float*)field = v;
     }
     out->has_settled = get_bool(rain, "settled", &out->settled);
+    _ranged_float(rain, "rain", "dryFor", 0.0f, 1e6f, &out->dry_for);
 
-    static const char* const OTHER_KEYS[] = {"enabled", "wind", "settled", "followSceneWind"};
+    static const char* const OTHER_KEYS[] = {"enabled", "wind", "settled", "followSceneWind",
+                                             "dryFor"};
 #define RAIN_OTHER_COUNT (sizeof(OTHER_KEYS) / sizeof(OTHER_KEYS[0]))
     const char* known[RAIN_KEY_COUNT + RAIN_OTHER_COUNT];
     for (size_t i = 0; i < RAIN_OTHER_COUNT; i++)

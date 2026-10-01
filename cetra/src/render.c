@@ -244,6 +244,10 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
     // a material that did not ask for it resets the uniform and the shader early-outs.
     uniform_set_float(u, "uShoreWetness", material->shore_wetness);
     uniform_set_float(u, "uPorosity", material->porosity);
+    uniform_set_float(u, "uRainBeads",
+                      material->rain_beads >= 0.0f    ? material->rain_beads
+                      : material->transmission > 0.0f ? 1.0f
+                                                      : 0.0f);
     // Stochastic albedo sampling (0 = a plain lookup). The table goes up whenever the scale
     // does rather than being cached per material: it is 768 bytes, where deciding whether to
     // skip it would need per-program state this call deliberately does not keep.

@@ -59,6 +59,10 @@
 // and the same rain lit from the side is barely there.
 #define RAIN_REFRACT_SHARE 0.85f
 
+// Where the clock beads on glass live by wraps, in seconds of that clock. Every bead's life
+// divides it, so nothing jumps when it wraps.
+#define RAIN_BEAD_CLOCK_WRAP 1024.0f
+
 // A falling drop oscillates, and the image of a lamp in it flashes as it does (Garg and Nayar
 // 2006): Rayleigh's lowest mode rings at (1/2pi) sqrt(8 sigma / (rho a^3)) for radius a, so a
 // 1 mm drop flashes about eleven times across a 1/60 s streak and a 4 mm drop once or twice.

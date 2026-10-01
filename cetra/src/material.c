@@ -98,6 +98,7 @@ const MaterialParam MATERIAL_PARAMS[] = {
     {"shoreWetness", "Maps and wind", MP(shore_wetness, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
     // From -1 so the control can return a material to "derive it from the roughness".
     {"porosity", "Maps and wind", MP(porosity, MATERIAL_PARAM_FLOAT, -1.0f, 1.0f)},
+    {"rainBeads", "Maps and wind", MP(rain_beads, MATERIAL_PARAM_FLOAT, -1.0f, 1.0f)},
     {"windMode", "Maps and wind", .offset = offsetof(Material, wind_mode),
      .type = MATERIAL_PARAM_INT, .enum_labels = WIND_MODE_NAMES,
      .enum_count = (int)(sizeof(WIND_MODE_NAMES) / sizeof(WIND_MODE_NAMES[0]))},
@@ -283,6 +284,7 @@ static const Material MATERIAL_DEFAULTS = {
     // -1, not 0: zero is a sealed surface, and a material nobody described should take its
     // porosity from its roughness rather than be declared waterproof.
     .porosity = -1.0f,
+    .rain_beads = -1.0f,
 };
 _Static_assert(MATERIAL_MAX_LAYERS == 4,
                "MATERIAL_DEFAULTS spells out four layer slots; a fifth would be left zeroed, "
