@@ -141,12 +141,14 @@ uniform sampler2D emissiveTex;
 uniform sampler2D sheenTex;          // KHR sheen color (sRGB, unit 8)
 #endif
 uniform sampler2D clearcoatNormalTex; // clearcoat normal map (freed unit)
-// TWO features on one declaration, so it takes both: POM marches it, and a
+// THREE features on one declaration, so it takes all of them: POM marches it, a
 // layered material aliases it as vtPageSurfaceTex for the virtual-texture page
-// pair (spec 11.67). The two can never be live together -- render.c refuses
-// units 3/4 to a layered material -- but "not both" is not "neither", and a
-// variant carrying either one still needs the unit.
-#if CETRA_HAS(PBR_FEAT_PARALLAX) || CETRA_HAS(PBR_FEAT_LAYERS)
+// pair (spec 11.67), and the rain's relief reads where the puddles stand from it
+// (spec 13.12). Layers can never be live with either of the others -- render.c
+// refuses units 3/4 to a layered material, and the resolver refuses it the relief
+// -- but "not both" is not "neither", and a variant carrying any one still needs
+// the unit.
+#if CETRA_HAS(PBR_FEAT_PARALLAX) || CETRA_HAS(PBR_FEAT_LAYERS) || CETRA_HAS(PBR_FEAT_RELIEF)
 uniform sampler2D heightTex;          // POM height field (unit 4, §4.11); white = raised
 #endif
 
@@ -1566,8 +1568,18 @@ void main() {
     // WET FROM THE RAIN (spec 13.9): the same water as the swash's, from the sky; its film
     // goes on to the Fresnel below. See rain_surface.glsl.
     float rainCover;
+#if CETRA_HAS(PBR_FEAT_RELIEF)
+    // Where the material's own height map is low, its puddles stand first (spec 13.12).
+    // Measured from the map's mean -- its coarsest mip -- so the map lowers as much ground as
+    // it raises: it gathers the puddles into the lows rather than flooding or draining the
+    // whole surface.
+    float rainRelief = rainPuddleRelief * RAIN_RELIEF_RANGE *
+                       (texture(heightTex, uv).r - textureLod(heightTex, uv, 16.0).r);
+#else
+    const float rainRelief = 0.0;
+#endif
     float rainFilm = rainWetSurface(albedoMap, roughnessMap, N, normalize(Normal), WorldPos,
-                                    metallicMap, gl_FragCoord.xy, rainCover);
+                                    metallicMap, gl_FragCoord.xy, rainRelief, rainCover);
     // And on glass, beads and running drops (spec 13.12): the shift goes on to the
     // transmission sample below. See rain_glass.glsl.
     RainGlass rainGlass = rainGlassDrops(N, roughnessMap, normalize(Normal), WorldPos, V,

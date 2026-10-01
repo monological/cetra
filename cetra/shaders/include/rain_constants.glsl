@@ -74,6 +74,11 @@
 #define RAIN_DRIP_HANG_MIN 0.25f
 #define RAIN_GRAVITY 9.81f
 
+// How far a height map's full range moves the puddle line at full relief, in the puddle
+// noise's units (0..1): half of it, so the map reshapes the puddles the noise places rather
+// than replacing them with a copy of its own tile.
+#define RAIN_RELIEF_RANGE 0.5f
+
 // A falling drop oscillates, and the image of a lamp in it flashes as it does (Garg and Nayar
 // 2006): Rayleigh's lowest mode rings at (1/2pi) sqrt(8 sigma / (rho a^3)) for radius a, so a
 // 1 mm drop flashes about eleven times across a 1/60 s streak and a 4 mm drop once or twice.

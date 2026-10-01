@@ -257,6 +257,14 @@ void mats_register(Kit* kit, Engine* engine, Scene* scene) {
     }
     for (size_t p = 0; p < sizeof(POROSITY) / sizeof(POROSITY[0]); p++)
         kit->materials[POROSITY[p].id]->porosity = POROSITY[p].porosity;
+    // The ground the rain puddles on takes its scan's height map, so the water stands in the
+    // asphalt's dips and the yard's hollows (spec 13.12). No parallax: the map shapes the
+    // puddles and nothing else.
+    static const MatId HEIGHT[] = {MAT_DIRT, MAT_ASPHALT, MAT_CONCRETE};
+    for (size_t h = 0; h < sizeof(HEIGHT) / sizeof(HEIGHT[0]); h++)
+        material_set_height_tex(
+            kit->materials[HEIGHT[h]],
+            load(scene->tex_pool, SPECS[HEIGHT[h]].set, "disp", texture_desc(false)));
     // Glass drawn opaque -- the dark panes and the car's, the lit windows -- beads in the rain
     // like the glass that transmits, which the engine finds for itself.
     kit->materials[MAT_DARK_GLASS]->rain_beads = 1.0f;

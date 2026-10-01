@@ -291,6 +291,7 @@ void rain_bind_surface(const Rain* rain, ShaderProgram* program) {
     uniform_set_float(u, "rainDarkening", fmaxf(rain->wet_darkening, 0.0f));
     uniform_set_float(u, "rainPuddleLevel", rain->puddle_level);
     uniform_set_float(u, "rainPuddleScale", fmaxf(rain->puddle_scale, 0.01f));
+    uniform_set_float(u, "rainPuddleRelief", glm_clamp(rain->puddle_relief, 0.0f, 1.0f));
     uniform_set_float(u, "rainRippleActivity", rain_ripple_activity(rain));
     uniform_set_float(u, "rainRippleSize", fmaxf(rain->ripple_size, 0.01f));
     uniform_set_float(u, "rainRippleStrength", fmaxf(rain->ripple_strength, 0.0f));

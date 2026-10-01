@@ -52,9 +52,13 @@ SOURCES = {
     "old_wood_floor": {},
     "white_planks_clean": {"rotate": True},
     "blue_painted_planks": {},
-    "grass_ground": {},
-    "asphalt_02": {},
-    "concrete_pavement": {},
+    # The three the rain stands puddles on also bring their displacement, so the water
+    # gathers in each surface's own lows (spec 13.12). Saved as `_disp`, never `_height`:
+    # the engine gives any material with a `_height` sibling of its albedo parallax, and
+    # the jars' contents share the grass's albedo.
+    "grass_ground": {"height": True},
+    "asphalt_02": {"height": True},
+    "concrete_pavement": {"height": True},
     "roof_slates_02": {},
     "brick_wall_006": {},
     "dirty_carpet": {},
@@ -121,6 +125,8 @@ def open_polyhaven(name, spec):
     files = json.loads(fetch(API % name, name + "_files.json"))
     info = json.loads(fetch(INFO % name, name + "_info.json"))
     keys = {"albedo": spec.get("diffuse", "Diffuse"), "normal": "nor_gl", "rough": "Rough"}
+    if spec.get("height"):
+        keys["disp"] = "Displacement"
     out = {kind: Image.open(io.BytesIO(fetch(files[key]["1k"]["jpg"]["url"])))
            for kind, key in keys.items()}
     dims = info.get("dimensions") or [0, 0]
@@ -165,8 +171,14 @@ def rough(img, spec):
     return out.resize((SIZE, SIZE), Image.Resampling.LANCZOS).convert("RGB")
 
 
+def disp(img, spec):
+    # White is raised, as the engine reads a height map; grey in all three channels, like
+    # the roughness.
+    return rough(img, spec)
+
+
 # What each kind of map goes through on its way in.
-PROCESS = {"albedo": albedo, "normal": normal, "rough": rough}
+PROCESS = {"albedo": albedo, "normal": normal, "rough": rough, "disp": disp}
 
 
 def write_sheet(path, names):
@@ -188,10 +200,13 @@ def write_sheet(path, names):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--sheet", help="also write every albedo to one labelled PNG")
+    parser.add_argument("sets", nargs="*", help="only these sets (default: every one)")
     args = parser.parse_args()
     os.makedirs(OUT_DIR, exist_ok=True)
     os.makedirs(CACHE_DIR, exist_ok=True)
     for name, spec in SOURCES.items():
+        if args.sets and name not in args.sets:
+            continue
         open_set = open_ambientcg if spec.get("source") == "ambientcg" else open_polyhaven
         raw, note = open_set(name, spec)
         print("%-24s %s" % (name, note))

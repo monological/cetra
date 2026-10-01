@@ -1012,6 +1012,7 @@ static const CSceneRainKey RAIN_KEYS[] = {
     RAIN_FLOAT_KEY("puddleDrainTime", puddle_drain_time, 1e-3f, 1e6f),
     RAIN_FLOAT_KEY("puddleCoverage", puddle_coverage, 0.0f, 1.0f),
     RAIN_FLOAT_KEY("puddleScale", puddle_scale, 0.05f, 1000.0f),
+    RAIN_FLOAT_KEY("puddleRelief", puddle_relief, 0.0f, 1.0f),
     RAIN_FLOAT_KEY("rippleStrength", ripple_strength, 0.0f, 10.0f),
     RAIN_FLOAT_KEY("rippleSize", ripple_size, 0.02f, 10.0f),
     RAIN_FLOAT_KEY("wetDarkening", wet_darkening, 0.0f, 2.0f),

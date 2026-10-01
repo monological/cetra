@@ -829,6 +829,10 @@ void engine_resolve_material_variants(Engine* engine, Scene* scene) {
             continue;
 
         unsigned want = scene_mask | _material_pbr_features(engine, mat);
+        // A layered material's unit 4 is the virtual-texture page, not a height map.
+        if ((scene_mask & PBR_FEAT_RAIN) && scene->rain->puddle_relief > 0.0f && mat->height_tex &&
+            mat->layer_count == 0)
+            want |= PBR_FEAT_RELIEF;
         if ((unsigned)mat->shader_program->pbr_features == want)
             continue;
 

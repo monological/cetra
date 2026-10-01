@@ -93,6 +93,10 @@ typedef struct Rain {
     // The ceiling on the puddle level, reached only in heavy rain. 0 = no puddles.
     float puddle_coverage;
     float puddle_scale; // metres across a typical puddle
+    // 0..1, how far a surface's own height map decides where its puddles stand: 0 = the
+    // puddle noise alone; 1 = the map's lows fill first. Reaches only materials with a height
+    // map that are not layered.
+    float puddle_relief;
     // The rings drops leave in standing water: how far each tilts the surface (1 = the
     // default tilt, 0 = still water) and how far apart they land, in metres.
     float ripple_strength;
