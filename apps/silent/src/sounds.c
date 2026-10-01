@@ -7,7 +7,7 @@
 
 // Every loop is levelled alike by tools/fetch_sounds.py, so these are the
 // whole statement of how loud each one is.
-#define FRIDGE_VOLUME 0.35f
+#define FRIDGE_VOLUME 0.15f
 #define WIND_VOLUME   0.6f
 
 #define WALL_BLEND     1.0f // metres across which INSIDE goes from 0 to 1, centred on the walls
