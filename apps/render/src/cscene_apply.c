@@ -555,58 +555,7 @@ void apply_cscene_rain(Scene* scene, const CetraSceneDesc* cscn) {
     Rain* rain = create_rain();
     if (!rain)
         return;
-    if (r->has_rate)
-        rain->rate_mmh = r->rate;
-    if (r->has_wind)
-        glm_vec3_copy((float*)r->wind, rain->wind);
-    if (r->has_fall_scale)
-        rain->fall_scale = r->fall_scale;
-    if (r->has_wet_time)
-        rain->wet_time = r->wet_time;
-    if (r->has_dry_time)
-        rain->dry_time = r->dry_time;
-    if (r->has_puddle_fill_time)
-        rain->puddle_fill_time = r->puddle_fill_time;
-    if (r->has_puddle_drain_time)
-        rain->puddle_drain_time = r->puddle_drain_time;
-    if (r->has_puddle_coverage)
-        rain->puddle_coverage = r->puddle_coverage;
-    if (r->has_wet_darkening)
-        rain->wet_darkening = r->wet_darkening;
-    if (r->has_puddle_scale)
-        rain->puddle_scale = r->puddle_scale;
-    if (r->has_ripple_strength)
-        rain->ripple_strength = r->ripple_strength;
-    if (r->has_ripple_size)
-        rain->ripple_size = r->ripple_size;
-    if (r->has_occlusion_extent)
-        rain->occlusion_extent = r->occlusion_extent;
-    if (r->has_streak_count)
-        rain->streak_count = r->streak_count;
-    if (r->has_streak_radius)
-        rain->streak_radius = r->streak_radius;
-    if (r->has_shutter)
-        rain->shutter_s = r->shutter;
-    if (r->has_streak_width)
-        rain->streak_width = r->streak_width;
-    if (r->has_streak_brightness)
-        rain->streak_brightness = r->streak_brightness;
-    if (r->has_streak_forward_g)
-        rain->streak_forward_g = r->streak_forward_g;
-    if (r->has_streak_glint)
-        rain->streak_glint = r->streak_glint;
-    if (r->has_streak_sheen)
-        rain->streak_sheen = r->streak_sheen;
-    if (r->has_splash_count)
-        rain->splash_count = r->splash_count;
-    if (r->has_splash_radius)
-        rain->splash_radius = r->splash_radius;
-    if (r->has_splash_amount)
-        rain->splash_amount = r->splash_amount;
-    if (r->has_splash_size)
-        rain->splash_size = r->splash_size;
-    if (r->has_mist)
-        rain->mist = r->mist;
+    *rain = r->rain;
     if (!r->has_settled || r->settled)
         rain_settle(rain);
     free_rain(scene->rain);

@@ -174,10 +174,8 @@ void free_shadow_system(ShadowSystem* system) {
     free_depth_array(&system->punctual_map_array, &system->punctual_fbo);
     free_msm_resources(system);
     free_tsm_resources(system);
-    if (system->rain_ask_fbo) {
-        glDeleteFramebuffers(1, &system->rain_ask_fbo);
+    if (system->rain_ask_pbo[0])
         glDeleteBuffers(SHADOW_RAIN_ASK_LATENCY, system->rain_ask_pbo);
-    }
     free(system->caster_order);
 
     free(system);
@@ -270,6 +268,19 @@ static int init_punctual_shadow_array(ShadowSystem* system, int layers, int ligh
     log_info("Punctual shadow array: %d layer(s) at %d^2 (%.0f MB) -- %d scene traversal(s)/frame",
              layers, size, (double)layers * size * size * 4.0 / (1024.0 * 1024.0), layers);
     return 0;
+}
+
+// The rain's layer: past every light layer, or the first when shadows are off and no light
+// holds one.
+static int rain_layer_index(const ShadowSystem* system) {
+    return system->enabled ? system->punctual_light_layers : 0;
+}
+
+// The punctual array's capacity this frame, which the shadow pass and the rain pass both ask
+// for. Two counts would rebuild the array between the passes on every frame it rains, wiping
+// the lights' maps.
+static int punctual_capacity(const ShadowSystem* system, const Scene* scene) {
+    return rain_layer_index(system) + (rain_active(scene->rain) ? 1 : 0);
 }
 
 static bool begin_punctual_shadow_pass(ShadowSystem* system, int layer) {
@@ -499,16 +510,6 @@ bool bind_outermost_cascades_to_program(const ShadowSystem* system, ShaderProgra
     return true;
 }
 
-// Bind whatever this frame's depth pass produced. Call UNCONDITIONALLY: every
-// per-light-type gate lives here, so a caller never has to know which types can
-// cast. That is deliberate. The gate used to sit at the call site, testing a
-// field then named `active_count` -- which counts DIRECTIONAL casters only, a
-// fact the name hid. A spot-lit scene with no directional light never reached
-// this function, so its map was rendered and never sampled; and turning shadows
-// off left spotShadowActive and a stale depth texture bound from the frame
-// before. Both were one condition at one call site trying to model four light
-// types. Point and area shadows add their own clauses HERE and no caller
-// changes.
 // The rain's cover rides the punctual array (spec 13.9), and is NOT gated on `enabled`:
 // switching shadows off does not put a roof over the street.
 static void upload_rain_cover(const ShadowSystem* system, UniformManager* u) {
@@ -523,6 +524,9 @@ static void upload_rain_cover(const ShadowSystem* system, UniformManager* u) {
 void shadow_bind_rain_cover(const ShadowSystem* system, ShaderProgram* program, int unit) {
     if (!program || !program->uniforms)
         return;
+    // Pointed at its unit either way, or the sampler sits on unit 0 beside whatever 2D
+    // texture the program keeps there.
+    uniform_set_int(program->uniforms, "punctualShadowMaps", unit);
     if (!system) {
         uniform_set_int(program->uniforms, "rainOcclusionLayer", -1);
         return;
@@ -530,10 +534,19 @@ void shadow_bind_rain_cover(const ShadowSystem* system, ShaderProgram* program, 
     glActiveTexture(GL_TEXTURE0 + unit);
     glBindTexture(GL_TEXTURE_2D_ARRAY, system->punctual_map_array);
     glActiveTexture(GL_TEXTURE0);
-    uniform_set_int(program->uniforms, "punctualShadowMaps", unit);
     upload_rain_cover(system, program->uniforms);
 }
 
+// Bind whatever this frame's depth pass produced. Call UNCONDITIONALLY: every
+// per-light-type gate lives here, so a caller never has to know which types can
+// cast. That is deliberate. The gate used to sit at the call site, testing a
+// field then named `active_count` -- which counts DIRECTIONAL casters only, a
+// fact the name hid. A spot-lit scene with no directional light never reached
+// this function, so its map was rendered and never sampled; and turning shadows
+// off left spotShadowActive and a stale depth texture bound from the frame
+// before. Both were one condition at one call site trying to model four light
+// types. Point and area shadows add their own clauses HERE and no caller
+// changes.
 void bind_shadow_maps_to_program(ShadowSystem* system, ShaderProgram* program) {
     if (!system || !program || !program->uniforms)
         return;
@@ -1787,14 +1800,8 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     // Punctual maps (for surface shadows + the volumetric beam), one layer per
     // caster. Reuses the allocation (a no-op once it is large enough), the
     // bound depth program, and the depth policy set above.
-    //
-    // The capacity asked for includes the rain's layer, and must: the rain pass
-    // after this one asks for the same count, and asking for fewer here would
-    // rebuild the array between the two -- wiping the lights' maps -- on every
-    // frame it rains.
-    const int rain_layers = rain_active(scene->rain) ? 1 : 0;
     if (punctual_needed > 0 &&
-        init_punctual_shadow_array(ss, punctual_needed + rain_layers, punctual_needed) == 0) {
+        init_punctual_shadow_array(ss, punctual_capacity(ss, scene), punctual_needed) == 0) {
         profiler_scope_begin(engine->profiler, "shadow punctual");
         for (size_t i = 0; i < scene->light_count; ++i) {
             Light* light = scene->lights[i];
@@ -1858,18 +1865,42 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
 // microns a step, so it costs no resolution worth having.
 #include "../shaders/include/rain_constants.glsl"
 
+// Where a world point falls on the rain's map: its uv over the map and its depth along the
+// rain, each 0..1. The map fills the layer's corner, so the unfolded matrix addresses it
+// directly. False off the map, which is open sky.
+static bool rain_map_point(const ShadowSystem* ss, const vec3 point, float* u, float* v, float* z) {
+    vec4 p;
+    glm_mat4_mulv((vec4*)ss->rain_matrix, (vec4){point[0], point[1], point[2], 1.0f}, p);
+    *u = p[0] * 0.5f + 0.5f;
+    *v = p[1] * 0.5f + 0.5f;
+    *z = p[2] * 0.5f + 0.5f;
+    return *u >= 0.0f && *u < 1.0f && *v >= 0.0f && *v < 1.0f;
+}
+
+// Whether rain reaches a point at depth `z` where the map holds `map`: rainOpenAt's test.
+static bool rain_map_open(float z, float map) {
+    return z <= map + RAIN_EXPOSED_DEPTH_BIAS;
+}
+
+// Whether a slot of the ring has been issued long enough ago to answer.
+static bool rain_ask_answered(const ShadowSystem* ss) {
+    return ss->rain_ask_passes > SHADOW_RAIN_ASK_LATENCY;
+}
+
 /*
  * The cover at the asked point: retire the slot issued SHADOW_RAIN_ASK_LATENCY passes ago, then
  * queue this pass's texel into it. No fence, for water's surface query's reason: mapping a slot
  * whose read has not landed stalls rather than answering early, so the latency decides how
  * often that happens and never what the answer is. The point's own depth is kept per slot, so
  * a listener that moved between is answered for where it was.
+ *
+ * Read through the punctual framebuffer, which the map was just drawn through with the layer
+ * still attached.
  */
 static void _rain_ask_pass(ShadowSystem* ss) {
     if (!ss->rain_ask_set || ss->rain_layer < 0 || !ss->punctual_map_array)
         return;
-    if (!ss->rain_ask_fbo) {
-        glGenFramebuffers(1, &ss->rain_ask_fbo);
+    if (!ss->rain_ask_pbo[0]) {
         glGenBuffers(SHADOW_RAIN_ASK_LATENCY, ss->rain_ask_pbo);
         for (int i = 0; i < SHADOW_RAIN_ASK_LATENCY; i++) {
             glBindBuffer(GL_PIXEL_PACK_BUFFER, ss->rain_ask_pbo[i]);
@@ -1878,7 +1909,6 @@ static void _rain_ask_pass(ShadowSystem* ss) {
         glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
     }
     const int slot = (int)(ss->rain_ask_passes % SHADOW_RAIN_ASK_LATENCY);
-    const float bias = RAIN_EXPOSED_BIAS / (2.0f * RAIN_OCCLUSION_REACH);
     if (ss->rain_ask_passes >= SHADOW_RAIN_ASK_LATENCY) {
         // Off the map, or a map texel with nothing in it, is open sky.
         float map = 1.0f;
@@ -1892,32 +1922,20 @@ static void _rain_ask_pass(ShadowSystem* ss) {
             }
             glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
         }
-        ss->rain_ask_open = ss->rain_ask_issued_depth[slot] <= map + bias ? 1.0f : 0.0f;
-        ss->rain_ask_answered = true;
+        ss->rain_ask_open = rain_map_open(ss->rain_ask_issued_depth[slot], map) ? 1.0f : 0.0f;
     }
 
-    // The map fills the layer's corner, so the unfolded matrix addresses it in texels directly.
-    vec4 p;
-    glm_mat4_mulv(ss->rain_matrix,
-                  (vec4){ss->rain_ask_point[0], ss->rain_ask_point[1], ss->rain_ask_point[2], 1.0f},
-                  p);
-    const float u = p[0] * 0.5f + 0.5f, v = p[1] * 0.5f + 0.5f;
-    const bool inside = u >= 0.0f && u < 1.0f && v >= 0.0f && v < 1.0f;
+    float u, v;
+    const bool inside =
+        rain_map_point(ss, ss->rain_ask_point, &u, &v, &ss->rain_ask_issued_depth[slot]);
     ss->rain_ask_issued_valid[slot] = inside;
-    ss->rain_ask_issued_depth[slot] = p[2] * 0.5f + 0.5f;
     if (inside) {
-        GLint prev_read = 0;
-        glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prev_read);
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, ss->rain_ask_fbo);
-        glFramebufferTextureLayer(GL_READ_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, ss->punctual_map_array,
-                                  0, ss->rain_layer);
-        glReadBuffer(GL_NONE);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, ss->punctual_fbo);
         glBindBuffer(GL_PIXEL_PACK_BUFFER, ss->rain_ask_pbo[slot]);
         glReadPixels((GLint)(u * (float)RAIN_OCCLUSION_SIZE),
                      (GLint)(v * (float)RAIN_OCCLUSION_SIZE), 1, 1, GL_DEPTH_COMPONENT, GL_FLOAT,
                      NULL);
         glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)prev_read);
     }
     ss->rain_ask_passes++;
 }
@@ -1931,16 +1949,12 @@ void shadow_render_rain_layer(Engine* engine, Scene* scene) {
     if (!rain_active(rain) || !engine->camera || !(rain->occlusion_extent > 0.0f)) {
         // No map, so no answer -- and the ring starts over, so the first answer once it rains
         // again is not a slot issued before it stopped.
-        ss->rain_ask_answered = false;
         ss->rain_ask_passes = 0;
         return;
     }
 
-    // Past every light layer, and the same capacity the shadow pass asked for, so this
-    // is a no-op allocation on any frame after the first. With shadows off no light
-    // layer exists and the rain has the array to itself.
-    const int layer = ss->enabled ? ss->punctual_light_layers : 0;
-    if (init_punctual_shadow_array(ss, layer + 1, layer) != 0)
+    const int layer = rain_layer_index(ss);
+    if (init_punctual_shadow_array(ss, punctual_capacity(ss, scene), layer) != 0)
         return;
     if (!ss->depth_program) {
         ss->depth_program = engine_get_program(engine, "shadow_depth");
@@ -2028,7 +2042,7 @@ void shadow_rain_cover_ask(ShadowSystem* ss, const vec3 point) {
 }
 
 bool shadow_rain_cover_answer(const ShadowSystem* ss, float* open) {
-    if (!ss || !ss->rain_ask_answered)
+    if (!ss || !rain_ask_answered(ss))
         return false;
     if (open)
         *open = ss->rain_ask_open;
@@ -2081,21 +2095,17 @@ void shadow_rain_probe(const ShadowSystem* ss, const vec3* points, int count,
     glReadPixels(0, 0, n, n, GL_DEPTH_COMPONENT, GL_FLOAT, depth);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
-    const float bias = RAIN_EXPOSED_BIAS / (2.0f * RAIN_OCCLUSION_REACH);
     printf("rain-probe cover present=1 layer=%d size=%d edge=%d bias=%.9g\n", ss->rain_layer, n,
-           ss->punctual_map_size, (double)bias);
+           ss->punctual_map_size, (double)RAIN_EXPOSED_DEPTH_BIAS);
     for (int i = 0; i < count; i++) {
-        vec4 p;
-        glm_mat4_mulv((vec4*)ss->rain_matrix,
-                      (vec4){points[i][0], points[i][1], points[i][2], 1.0f}, p);
-        const float u = p[0] * 0.5f + 0.5f, v = p[1] * 0.5f + 0.5f, z = p[2] * 0.5f + 0.5f;
-        const bool inside = u >= 0.0f && u < 1.0f && v >= 0.0f && v < 1.0f;
+        float u, v, z;
+        const bool inside = rain_map_point(ss, points[i], &u, &v, &z);
         printf("rain-probe exposure x=%.9g y=%.9g z=%.9g inside=%d", (double)points[i][0],
                (double)points[i][1], (double)points[i][2], inside ? 1 : 0);
         if (inside) {
             const float map = depth[(int)(v * (float)n) * n + (int)(u * (float)n)];
             printf(" map=%.9g depth=%.9g exposed=%d", (double)map, (double)z,
-                   z <= map + bias ? 1 : 0);
+                   rain_map_open(z, map) ? 1 : 0);
         }
         printf("\n");
     }

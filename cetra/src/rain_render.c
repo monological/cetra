@@ -4,7 +4,6 @@
 #include <stdlib.h>
 
 #include "engine.h"
-#include "engine_internal.h"
 #include "postfx.h"
 #include "profiler.h"
 #include "program.h"
@@ -21,9 +20,10 @@
 #include "../shaders/include/rain_constants.glsl"
 
 // This program's units, its own ledger: 0 the scene depth, 1 the frame copy, 2 the fog volume,
-// and 10 and 15 the shadow arrays bind_shadow_maps_to_program fills.
+// 3 the punctual array the cover is a layer of.
 #define RAIN_BEHIND_UNIT 1
 #define RAIN_FOG_UNIT    2
+#define RAIN_COVER_UNIT  3
 
 // Faster than this the camera did not move, it was placed: a cut or a respawn is not a streak
 // across the whole frame.
@@ -78,62 +78,35 @@ static bool _ensure_behind(RainRenderer* rr, int w, int h) {
     return true;
 }
 
-// The program, registered the first time it is asked for. A failed build is not retried:
-// the log line is the answer, once.
-static ShaderProgram* _rain_program(RainRenderer* rr, Engine* engine) {
-    ShaderProgram* program = engine_find_program(engine, CETRA_PROGRAM_RAIN);
-    if (program || rr->program_failed)
-        return program;
-    program = create_rain_program();
-    if (!program) {
-        rr->program_failed = true;
-        return NULL;
-    }
-    engine_add_program(engine, program);
-    return program;
-}
-
-void rain_render_drops(RainRenderer* rr, Engine* engine, Scene* scene, const PostFXLateDraw* late) {
-    if (!rr || !engine || !scene || !late)
+void rain_render_drops(RainRenderer* rr, Engine* engine, const Scene* scene,
+                       const PostFXLateDraw* late) {
+    if (!rr || !engine || !scene || !late || !engine->camera)
         return;
     const Rain* rain = scene->rain;
-    const int falling =
-        rain ? RAIN_STREAK_BOXES * (rain->streak_count > 0 ? rain->streak_count : 0) : 0;
+    const int per_box = rain && rain->streak_count > 0 ? rain->streak_count : 0;
+    const int falling = RAIN_STREAK_BOXES * per_box;
     // The splash slots are a square grid, whose side the shader reads a slot's cell from.
     const int splash_side =
         rain && rain->splash_count > 0 ? (int)floorf(sqrtf((float)rain->splash_count)) : 0;
     const int droplets = splash_side * splash_side * RAIN_SPLASH_DROPLETS;
-    if (!rain || !(rain->rate_mmh > 0.0f) || falling + droplets == 0 || !engine->camera) {
-        rr->prev_valid = false;
-        return;
-    }
-    ShaderProgram* program = _rain_program(rr, engine);
-    if (!program)
+    // A build failure was logged when the engine registered the program.
+    ShaderProgram* program = engine_find_program(engine, CETRA_PROGRAM_RAIN);
+    if (!rain_falling(rain) || falling + droplets == 0 || !program || !late->scene_depth)
         return;
 
     // The camera's own motion over the frame: a streak is the drop's path relative to it,
     // so walking into the rain slants it toward the eye.
-    const float* eye = engine->camera->position;
     vec3 cam_vel = GLM_VEC3_ZERO_INIT;
     const float dt = (float)engine->render_delta;
-    if (rr->prev_valid && dt > 0.0f) {
-        glm_vec3_sub((float*)eye, rr->prev_eye, cam_vel);
-        glm_vec3_scale(cam_vel, 1.0f / dt, cam_vel);
+    if (dt > 0.0f) {
+        glm_vec3_scale(engine->camera_travel, 1.0f / dt, cam_vel);
         if (glm_vec3_norm(cam_vel) > RAIN_MAX_CAMERA_SPEED)
             glm_vec3_zero(cam_vel);
     }
-    glm_vec3_copy((float*)eye, rr->prev_eye);
-    rr->prev_valid = true;
 
-    // The resolve rebinds the scene framebuffer, so the canvas postfx bound is put back.
+    // The canvas postfx bound, put back after the copy.
     GLint canvas = 0;
     glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &canvas);
-    const GLuint depth = engine_resolve_scene_depth(engine);
-    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)canvas);
-    glViewport(0, 0, late->width, late->height);
-    if (!depth)
-        return;
-
     profiler_scope_begin(engine->profiler, "rain");
     // What the drops refract, taken before any of them draws.
     if (!_ensure_behind(rr, late->width, late->height)) {
@@ -152,7 +125,7 @@ void rain_render_drops(RainRenderer* rr, Engine* engine, Scene* scene, const Pos
     UniformManager* u = program->uniforms;
     uniform_set_mat4(u, "view", (const float*)engine->view_matrix);
     uniform_set_mat4(u, "projection", (const float*)engine->projection_matrix);
-    uniform_set_vec3(u, "cameraPos", eye);
+    uniform_set_vec3(u, "cameraPos", engine->camera->position);
     uniform_set_vec3(u, "cameraVelocity", cam_vel);
     uniform_set_vec2(u, "viewport", (vec2){(float)late->width, (float)late->height});
     uniform_set_float(u, "rainTime", rain->time);
@@ -161,11 +134,13 @@ void rain_render_drops(RainRenderer* rr, Engine* engine, Scene* scene, const Pos
     uniform_set_float(u, "fallScale", fmaxf(rain->fall_scale, 0.0f));
     uniform_set_float(u, "shutter", rain->shutter_s);
     uniform_set_float(u, "boxHalf", rain->streak_radius);
-    uniform_set_int(u, "dropsPerBox", falling / RAIN_STREAK_BOXES);
+    uniform_set_int(u, "dropsPerBox", per_box);
+    // Each box holds the same count over a volume RAIN_STREAK_BOX_SCALE^3 the last's, which is
+    // the shader's to scale by: what a streak stands for is counted against the innermost.
     const float side = 2.0f * rain->streak_radius;
     uniform_set_float(u, "dropsPerStreak",
-                      falling > 0 ? rain_drop_density(rain->rate_mmh, RAIN_DROP_MIN_MM) * side *
-                                        side * side * RAIN_STREAK_BOXES / (float)falling
+                      per_box > 0 ? rain_drop_density(rain->rate_mmh, RAIN_DROP_MIN_MM) * side *
+                                        side * side / (float)per_box
                                   : 0.0f);
 
     // How many drops big enough to splash land in one slot's cell over its life. A slot draws
@@ -189,8 +164,7 @@ void rain_render_drops(RainRenderer* rr, Engine* engine, Scene* scene, const Pos
     uniform_set_float(u, "glintShare", glm_clamp(rain->streak_glint, 0.0f, 1.0f));
     uniform_set_float(u, "sheen", fmaxf(rain->streak_sheen, 0.0f));
 
-    // The cover first: the binder leaves another unit active.
-    bind_shadow_maps_to_program(scene->shadow_system, program);
+    shadow_bind_rain_cover(scene->shadow_system, program, RAIN_COVER_UNIT);
 
     // A drop refracts a wide field -- about 165 degrees -- so what it shows is an average of
     // the frame round it rather than the pixel behind it: a level whose texel is a
@@ -209,7 +183,7 @@ void rain_render_drops(RainRenderer* rr, Engine* engine, Scene* scene, const Pos
     uniform_set_float(u, "fogFar", late->fog_far);
     uniform_set_float(u, "fogDepthDist", late->fog_depth_dist);
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, depth);
+    glBindTexture(GL_TEXTURE_2D, late->scene_depth);
     uniform_set_int(u, "sceneDepth", 0);
 
     const GLboolean depth_test = glIsEnabled(GL_DEPTH_TEST);
@@ -238,7 +212,7 @@ void rain_publish_to_postfx(const Rain* rain, PostFX* fx) {
     fx->rain_sigma = 0.0f;
     // After the rain stops as well as during it: what is still wet still carries the marker.
     fx->rain_wet = rain_active(rain);
-    if (!rain || !(rain->rate_mmh > 0.0f))
+    if (!rain_falling(rain))
         return;
     fx->rain_sigma = rain_extinction(rain->rate_mmh) * fmaxf(rain->mist, 0.0f);
     // One lobe for a drop, whether it is drawn or is air: a knob of its own would let the
@@ -246,21 +220,31 @@ void rain_publish_to_postfx(const Rain* rain, PostFX* fx) {
     fx->rain_forward_g = rain->streak_forward_g;
     // The outermost streak box's half-width. Inside it the streaks already stand for every
     // drop, so a medium there too would count the rain twice.
-    fx->rain_near = rain->streak_count > 0
-                        ? rain->streak_radius * powf(3.0f, (float)(RAIN_STREAK_BOXES - 1))
-                        : 0.0f;
+    fx->rain_near =
+        rain->streak_count > 0
+            ? rain->streak_radius * powf(RAIN_STREAK_BOX_SCALE, (float)(RAIN_STREAK_BOXES - 1))
+            : 0.0f;
 }
+
+// What a scene with no rain binds: dry, and every look at its neutral.
+static const Rain RAIN_DRY = {
+    .wet_darkening = 1.0f,
+    .puddle_scale = 1.0f,
+    .ripple_size = 1.0f,
+};
 
 void rain_bind_surface(const Rain* rain, ShaderProgram* program) {
     if (!program || !program->uniforms)
         return;
+    if (!rain)
+        rain = &RAIN_DRY;
     UniformManager* u = program->uniforms;
-    uniform_set_float(u, "rainWetness", rain ? rain->wetness : 0.0f);
-    uniform_set_float(u, "rainDarkening", rain ? fmaxf(rain->wet_darkening, 0.0f) : 1.0f);
-    uniform_set_float(u, "rainPuddleLevel", rain ? rain->puddle_level : 0.0f);
-    uniform_set_float(u, "rainPuddleScale", rain ? fmaxf(rain->puddle_scale, 0.01f) : 1.0f);
-    uniform_set_float(u, "rainTime", rain ? rain->time : 0.0f);
+    uniform_set_float(u, "rainWetness", rain->wetness);
+    uniform_set_float(u, "rainDarkening", fmaxf(rain->wet_darkening, 0.0f));
+    uniform_set_float(u, "rainPuddleLevel", rain->puddle_level);
+    uniform_set_float(u, "rainPuddleScale", fmaxf(rain->puddle_scale, 0.01f));
+    uniform_set_float(u, "rainTime", rain->time);
     uniform_set_float(u, "rainRippleActivity", rain_ripple_activity(rain));
-    uniform_set_float(u, "rainRippleSize", rain ? fmaxf(rain->ripple_size, 0.01f) : 1.0f);
-    uniform_set_float(u, "rainRippleStrength", rain ? fmaxf(rain->ripple_strength, 0.0f) : 0.0f);
+    uniform_set_float(u, "rainRippleSize", fmaxf(rain->ripple_size, 0.01f));
+    uniform_set_float(u, "rainRippleStrength", fmaxf(rain->ripple_strength, 0.0f));
 }

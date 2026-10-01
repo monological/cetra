@@ -293,13 +293,11 @@ typedef struct ShadowSystem {
     // answered by shadow_rain_cover_answer; everything below is the query's own state.
     vec3 rain_ask_point;
     bool rain_ask_set;
-    GLuint rain_ask_fbo;
     GLuint rain_ask_pbo[SHADOW_RAIN_ASK_LATENCY];
     float rain_ask_issued_depth[SHADOW_RAIN_ASK_LATENCY]; // the point's own, per slot
     bool rain_ask_issued_valid[SHADOW_RAIN_ASK_LATENCY];  // false = off the map: open sky
-    unsigned rain_ask_passes;
-    float rain_ask_open; // 1 = rain reaches it, 0 = covered
-    bool rain_ask_answered;
+    unsigned rain_ask_passes; // passes since the ring last started; past the latency, answered
+    float rain_ask_open;      // 1 = rain reaches it, 0 = covered
 
     // Moment shadow maps (spec 11.22): a filterable RGBA16F copy of the depth
     // cascades, resolved after the depth pass and read in ONE tap where the

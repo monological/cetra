@@ -19,8 +19,10 @@
 // streak; above the ceiling it breaks up before it reaches terminal velocity.
 #define RAIN_DROP_MIN_MM 0.5f
 #define RAIN_DROP_MAX_MM 6.0f
-// Nested boxes of falling drops round the camera, each three times the last.
+// Nested boxes of falling drops round the camera, each RAIN_STREAK_BOX_SCALE times as wide as the
+// last: where the outermost ends is where the rain in the air takes over from the streaks.
 #define RAIN_STREAK_BOXES 3
+#define RAIN_STREAK_BOX_SCALE 3.0f
 
 // The drops that SPLASH. On a wet surface a drop throws a crown once We Oh^-0.4 passes about
 // 2100 (Cossali, Coghe and Marengo 1997), which at terminal velocity is 2063 for a 1 mm drop;
@@ -35,6 +37,10 @@
 // open sky. The map stores the surface nearest the sky, so a point ON it compares equal.
 #define RAIN_OCCLUSION_REACH 250.0f
 #define RAIN_EXPOSED_BIAS 0.02f
+// The same two in the map's own units: the metres one unit of stored depth spans, and the bias
+// as stored depth.
+#define RAIN_MAP_DEPTH_METRES (2.0f * RAIN_OCCLUSION_REACH)
+#define RAIN_EXPOSED_DEPTH_BIAS (RAIN_EXPOSED_BIAS / RAIN_MAP_DEPTH_METRES)
 // The polygon offset the map is drawn with, glPolygonOffset's factor and units: the shadow
 // pass's. A surface under slanted rain is stored this many depth steps a texel deeper than it
 // is, which a lookup that needs the SURFACE itself, not only which side of it a point is on,

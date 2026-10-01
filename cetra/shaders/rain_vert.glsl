@@ -25,8 +25,8 @@ uniform float shutter;
 uniform float boxHalf;  // the innermost box's half-width, m
 uniform int dropsPerBox;
 // How many real drops each streak in the innermost box stands for: the rain's density times
-// the box's volume over the streaks drawn in it. Each next box is 27 times the volume with
-// the same count, so it stands for 27 times as many.
+// the box's volume over the streaks drawn in it. Each next box is RAIN_STREAK_BOX_SCALE cubed
+// the volume with the same count, so it stands for that many times as many.
 uniform float dropsPerStreak;
 uniform float streakWidth;
 uniform float streakBrightness;
@@ -94,19 +94,14 @@ uvec4 pcg4d(uvec4 v) {
     return v;
 }
 
-// The light a drop sends toward the camera from each source: its illuminance there times
-// the fraction scattered this way.
-float dropPhase(float cosTheta) {
-    return rainDropPhase(cosTheta, forwardG);
-}
-
-// The light the lamps and the sun put into a drop and it sends on toward the eye. What it
-// REFRACTS -- the scene behind it -- is the fragment stage's, read from the frame itself.
+// The light the lamps and the sun put into a drop and it sends on toward the eye: each
+// source's illuminance there times the fraction scattered this way. What it REFRACTS -- the
+// scene behind it -- is the fragment stage's, read from the frame itself.
 vec3 dropLit(vec3 P, vec3 toCamera, vec2 uv, float viewDepth) {
     vec3 L = vec3(0.0);
     for (int j = 0; j < lightCounts.x; j++) {
         vec3 travel = dirLights[j].dirShadow.xyz;
-        L += dirLights[j].colorIntensity.xyz * dropPhase(dot(travel, toCamera));
+        L += dirLights[j].colorIntensity.xyz * rainDropPhase(dot(travel, toCamera), forwardG);
     }
     // Points and spots from the cluster the drop sits in. Area panels are skipped, like
     // the fog skips them: they light surfaces through an integral the drop does not have.
@@ -119,7 +114,8 @@ vec3 dropLit(vec3 P, vec3 toCamera, vec2 uv, float viewDepth) {
         float d2 = dot(toL, toL);
         vec3 dirToL = toL * inversesqrt(max(d2, 1e-8));
         float e = getDistanceAtt(d2, clusterLights[li].attenCutoff.x) * punctualAngular(li, dirToL);
-        L += clusterLights[li].colorIntensity.xyz * (e * dropPhase(dot(-dirToL, toCamera)));
+        L += clusterLights[li].colorIntensity.xyz *
+             (e * rainDropPhase(dot(-dirToL, toCamera), forwardG));
     }
     return L * preExposure;
 }
@@ -155,14 +151,15 @@ Drop fallingDrop(int instance) {
 
     // Every drop falls in a straight line through the world and is wrapped into a box that
     // follows the camera, so the rain stays put while the camera moves through it.
-    float halfSize = boxHalf * pow(3.0, float(box));
+    float halfSize = boxHalf * pow(RAIN_STREAK_BOX_SCALE, float(box));
     float size = 2.0 * halfSize;
     vec3 rel = mod(d.r.xyz * size + d.vel * rainTime - cameraPos, size) - halfSize;
     d.P = cameraPos + rel;
     // A drop is fading out as it nears its box's face, where it wraps to the opposite one.
     float edge = max(abs(rel.x), max(abs(rel.y), abs(rel.z))) / halfSize;
     d.fade = 1.0 - smoothstep(0.75, 1.0, edge);
-    d.standsFor = dropsPerStreak * pow(27.0, float(box));
+    d.standsFor = dropsPerStreak * pow(RAIN_STREAK_BOX_SCALE * RAIN_STREAK_BOX_SCALE *
+                                           RAIN_STREAK_BOX_SCALE, float(box));
     return d;
 }
 
@@ -190,7 +187,7 @@ bool rainSurfaceDepth(vec2 uv, out float depth) {
         return false;
     vec2 step = vec2(mx - m, my - m);
     float slope = max(abs(step.x), abs(step.y));
-    if (slope * 2.0 * RAIN_OCCLUSION_REACH > RAIN_SPLASH_MAX_STEP)
+    if (slope * RAIN_MAP_DEPTH_METRES > RAIN_SPLASH_MAX_STEP)
         return false;
     depth = m + dot(frac, step) - RAIN_MAP_SLOPE_BIAS * slope -
             RAIN_MAP_CONSTANT_BIAS / 16777216.0; // one unit of a 24-bit depth
@@ -230,11 +227,11 @@ bool splashDroplet(int instance, out Drop d) {
     // one followed down from overhead lands tens of metres downwind of the cell.
     vec2 xz = (vec2(cell) + h.xy) * splashCell;
     vec3 above = vec3(xz.x, cameraPos.y, xz.y) - rainTravel * RAIN_SPLASH_DROP_FROM;
-    vec3 pc = (rainOcclusionMatrix * vec4(above, 1.0)).xyz * 0.5 + 0.5;
+    vec3 pc = rainMapCoord(above);
     float map;
     if (!rainSurfaceDepth(pc.xy, map) || map <= pc.z)
         return false;
-    vec3 hit = above + rainTravel * ((map - pc.z) * 2.0 * RAIN_OCCLUSION_REACH);
+    vec3 hit = above + rainTravel * ((map - pc.z) * RAIN_MAP_DEPTH_METRES);
 
     float impact = mpDiameter(h.z, RAIN_SPLASH_MIN_MM);
     d.r = vec4(pcg4d(uvec4(key, uint(int(life)) * uint(RAIN_SPLASH_DROPLETS) + uint(k),
@@ -263,22 +260,13 @@ void main() {
         d = fallingDrop(gl_InstanceID);
     else
         alive = splashSide > 0 && splashDroplet(gl_InstanceID - falling, d);
-    if (!alive) {
-        gl_Position = vec4(2.0, 2.0, 2.0, 1.0); // off every clip plane: nothing rasterizes
-        vAlpha = 0.0;
-        return;
-    }
-    vec3 P = d.P;
-    vec3 vel = d.vel;
-    float dMm = d.dMm;
-    vec4 r = d.r;
 
     // The streak: where the drop was when the shutter opened, relative to the camera then.
-    vec3 tail = P - (vel - cameraVelocity) * shutter;
-    vec4 vHead = view * vec4(P, 1.0);
+    vec3 tail = d.P - (d.vel - cameraVelocity) * shutter;
+    vec4 vHead = view * vec4(d.P, 1.0);
     vec4 vTail = view * vec4(tail, 1.0);
     float near = nearPlaneDist();
-    if (-vHead.z <= near || -vTail.z <= near) {
+    if (!alive || -vHead.z <= near || -vTail.z <= near) {
         gl_Position = vec4(2.0, 2.0, 2.0, 1.0); // off every clip plane: nothing rasterizes
         vAlpha = 0.0;
         return;
@@ -296,8 +284,8 @@ void main() {
     // Then times the drops it stands for, so the rain's total light is the real rain's
     // whatever count is drawn: fewer streaks, each carrying more. Capped at opaque, which
     // is where a far box's stand-in stops conserving and the medium takes the rest.
-    float pxPerM = projection[1][1] * 0.5 * viewport.y * (projectionIsOrtho() ? 1.0 : 1.0 / -vHead.z);
-    float wPx = dMm * 1e-3 * streakWidth * pxPerM;
+    float pxPerM = projection[1][1] * 0.5 * viewport.y / clipWAt(vHead.z);
+    float wPx = d.dMm * 1e-3 * streakWidth * pxPerM;
     float lPx = length(sHead - sTail);
     float drawW = max(wPx, 1.0);
     float drawL = max(lPx + wPx, 1.0);
@@ -321,21 +309,21 @@ void main() {
     // Rayleigh's n = 2 mode, flashing twice a cycle, over the exposure. The phase moves with
     // the rain's clock at that frequency, so each frame's exposure catches another part of
     // the ring and the glints flicker the way real ones do.
-    float radiusM = 0.5e-3 * dMm;
+    float radiusM = 0.5e-3 * d.dMm;
     float ringHz = sqrt(8.0 * RAIN_SURFACE_TENSION / (RAIN_WATER_DENSITY * radiusM * radiusM *
                                                       radiusM)) / (2.0 * PI);
     vGlintBands = 2.0 * ringHz * shutter;
-    vGlintPhase = fract(r.x * 7.13 + r.z * 3.71 + 2.0 * ringHz * rainTime);
+    vGlintPhase = fract(d.r.x * 7.13 + d.r.z * 3.71 + 2.0 * ringHz * rainTime);
     // Three pixels a flash at least, or the pattern aliases into noise between drops.
-    vGlintShare = glintShare * smoothstep(RAIN_GLINT_D_MIN, RAIN_GLINT_D_FULL, dMm) *
+    vGlintShare = glintShare * smoothstep(RAIN_GLINT_D_MIN, RAIN_GLINT_D_FULL, d.dMm) *
                   clamp(lPx / (3.0 * max(vGlintBands, 1.0)), 0.0, 1.0);
     vViewDepth = -(atHead ? vHead.z : vTail.z);
     // Cover per END, so a streak crossing an eave is cut along its length rather than
     // dropped whole: the head is under the roof while the tail is still in the open.
-    vec3 end = atHead ? P : tail;
+    vec3 end = atHead ? d.P : tail;
     vAlpha = min(wPx * wPx / (drawW * drawL) * d.standsFor * streakBrightness, 1.0) * d.fade *
              rainExposure(end);
 
-    vec3 toCamera = normalize(cameraPos - P);
-    vLit = dropLit(P, toCamera, sHead / viewport, -vHead.z);
+    vec3 toCamera = normalize(cameraPos - d.P);
+    vLit = dropLit(d.P, toCamera, sHead / viewport, -vHead.z);
 }

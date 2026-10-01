@@ -219,13 +219,6 @@ void postfx_set_fog_ambient(PostFX* fx, const vec3 rgb) {
     fx->fog_ambient_from_sky = false;
 }
 
-void postfx_set_late_draw(PostFX* fx, PostFXLateDrawFunc draw, void* user) {
-    if (!fx)
-        return;
-    fx->late_draw = draw;
-    fx->late_draw_user = user;
-}
-
 // Depth-only FBO used as the blit target when resolving the MSAA depth
 // buffer. The format must match the engine's GL_DEPTH24_STENCIL8 exactly
 // (multisample blits require identical formats), and a color-less FBO is
@@ -3418,7 +3411,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         if (!cs_accum_ran)
             fx->cs_history.valid = false;
 
-        // Depth (and its inverse) serve SSR and DoF's circle-of-confusion. GTAO
+        // Depth (and its inverse) serve SSR, DoF's circle-of-confusion and the late draw. GTAO
         // no longer needs it -- it reconstructs from the aux buffer's linear Z.
         bool ssr_active = postfx_ssr_active(fx, have_normals);
         bool dof_active = fx->dof_enabled;
@@ -3428,7 +3421,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         // that is nowhere -- which the gather then divides its blur radius by.
         bool sss_active = sss_written && fx->sss_ready;
         mat4 inv_projection;
-        if (ssr_active || dof_active || sss_active) {
+        if (ssr_active || dof_active || sss_active || fx->late_draw) {
             // Resolve depth alongside color so screen-space passes can
             // reconstruct view-space positions (formats match: both are
             // DEPTH24_STENCIL8)
@@ -3736,6 +3729,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             const PostFXLateDraw late = {
                 .width = fx->post_width,
                 .height = fx->post_height,
+                .scene_depth = fx->depth_texture,
                 .fog_volume = fog_built ? fx->froxel_integrated : 0,
                 .fog_slices = fog_built ? fx->froxel_built_z : 0,
                 .fog_near = postfx_fog_near(fx, projection),

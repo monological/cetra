@@ -19,10 +19,19 @@ uniform float rainUvPerMetre;     // lookup uv across one metre of the map's foo
 const float RAIN_SPREAD_TAN = 0.14;
 const int RAIN_COVER_TAPS = 12;
 
+// Where a world point falls on the map: its lookup uv, and its depth along the rain.
+vec3 rainMapCoord(vec3 P) {
+    return (rainOcclusionMatrix * vec4(P, 1.0)).xyz * 0.5 + 0.5;
+}
+
+// The depth the map holds at `uv`: the surface nearest the sky.
+float rainMapDepth(vec2 uv) {
+    return textureLod(punctualShadowMaps, vec3(uv, float(rainOcclusionLayer)), 0.0).r;
+}
+
 // One tap: whether the map puts anything between the sky and a point at `uv`, depth `z`.
 float rainOpenAt(vec2 uv, float z) {
-    float map = textureLod(punctualShadowMaps, vec3(uv, float(rainOcclusionLayer)), 0.0).r;
-    return z <= map + RAIN_EXPOSED_BIAS / (2.0 * RAIN_OCCLUSION_REACH) ? 1.0 : 0.0;
+    return z <= rainMapDepth(uv) + RAIN_EXPOSED_DEPTH_BIAS ? 1.0 : 0.0;
 }
 
 // 1 = rain reaches P, 0 = something above keeps it off. A point off the map reads the
@@ -31,7 +40,7 @@ float rainOpenAt(vec2 uv, float z) {
 float rainExposure(vec3 P) {
     if (rainOcclusionLayer < 0)
         return 1.0;
-    vec3 pc = (rainOcclusionMatrix * vec4(P, 1.0)).xyz * 0.5 + 0.5;
+    vec3 pc = rainMapCoord(P);
     return rainOpenAt(pc.xy, pc.z);
 }
 
@@ -43,15 +52,13 @@ float rainExposure(vec3 P) {
 float rainExposureSoft(vec3 P, float rotation) {
     if (rainOcclusionLayer < 0)
         return 1.0;
-    vec3 pc = (rainOcclusionMatrix * vec4(P, 1.0)).xyz * 0.5 + 0.5;
-    float bias = RAIN_EXPOSED_BIAS / (2.0 * RAIN_OCCLUSION_REACH);
+    vec3 pc = rainMapCoord(P);
     float blockers = 0.0;
     float blockerDepth = 0.0;
     for (int y = -1; y <= 1; y++) {
         for (int x = -1; x <= 1; x++) {
-            vec2 uv = pc.xy + vec2(x, y) * rainCoverSpread;
-            float map = textureLod(punctualShadowMaps, vec3(uv, float(rainOcclusionLayer)), 0.0).r;
-            if (pc.z > map + bias) {
+            float map = rainMapDepth(pc.xy + vec2(x, y) * rainCoverSpread);
+            if (pc.z > map + RAIN_EXPOSED_DEPTH_BIAS) {
                 blockers += 1.0;
                 blockerDepth += map;
             }
@@ -60,7 +67,7 @@ float rainExposureSoft(vec3 P, float rotation) {
     if (blockers == 0.0)
         return 1.0;
     // Metres between the surface and what covers it, along the rain's own travel.
-    float height = (pc.z - blockerDepth / blockers) * 2.0 * RAIN_OCCLUSION_REACH;
+    float height = (pc.z - blockerDepth / blockers) * RAIN_MAP_DEPTH_METRES;
     float radius = max(rainCoverSpread, height * RAIN_SPREAD_TAN * rainUvPerMetre);
     float open = 0.0;
     for (int i = 0; i < RAIN_COVER_TAPS; i++) {

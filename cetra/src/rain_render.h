@@ -17,10 +17,6 @@ struct PostFXLateDraw;
  */
 typedef struct RainRenderer {
     GLuint vao; // empty: a core profile needs one bound, and the streaks read no attributes
-    // The camera a frame ago, for the velocity a streak is drawn relative to.
-    vec3 prev_eye;
-    bool prev_valid;
-    bool program_failed; // latched, so a program that will not build logs once
     // The frame as it stood before the rain drew, mipped: what a drop refracts. Its own
     // copy because the streaks draw onto the canvas they would otherwise be reading.
     GLuint behind_fbo, behind_tex;
@@ -31,7 +27,7 @@ RainRenderer* create_rain_renderer(void);
 void free_rain_renderer(RainRenderer* renderer);
 
 // Draw the scene's rain onto the bound canvas. Nothing when the scene has no rain falling.
-void rain_render_drops(RainRenderer* renderer, struct Engine* engine, struct Scene* scene,
+void rain_render_drops(RainRenderer* renderer, struct Engine* engine, const struct Scene* scene,
                        const struct PostFXLateDraw* late);
 
 struct Rain;

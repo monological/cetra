@@ -5,6 +5,7 @@
 #include <stddef.h>
 
 #include "light.h" // LightUnits: authored intensity units carry through to Light
+#include "rain.h"  // Rain: an authored rain block IS the runtime rain, over its defaults
 #include "roads.h" // MaterialRoad: an authored road IS the runtime road, verbatim
 
 /*
@@ -224,62 +225,11 @@ typedef struct CSceneDust {
     float damping;
 } CSceneDust;
 
-// Falling rain (rain.h), a scene subsystem and so a top-level block. Presence-flagged
-// like water: an absent field keeps create_rain's value.
+// Falling rain (rain.h), a scene subsystem and so a top-level block. The rain itself, seeded
+// with rain_init_defaults, so an absent key keeps the default.
 typedef struct CSceneRain {
     bool enabled;
-    bool has_rate;
-    float rate; // mm/h
-    bool has_wind;
-    float wind[3]; // m/s
-    bool has_fall_scale;
-    float fall_scale;
-    bool has_wet_time;
-    float wet_time; // seconds, at RAIN_RATE_REFERENCE
-    bool has_dry_time;
-    float dry_time;
-    bool has_puddle_fill_time;
-    float puddle_fill_time; // seconds, at RAIN_RATE_REFERENCE
-    bool has_puddle_drain_time;
-    float puddle_drain_time;
-    bool has_puddle_coverage;
-    float puddle_coverage;
-    bool has_wet_darkening;
-    float wet_darkening;
-    bool has_puddle_scale;
-    float puddle_scale; // metres
-    bool has_ripple_strength;
-    float ripple_strength;
-    bool has_ripple_size;
-    float ripple_size; // metres
-    bool has_occlusion_extent;
-    float occlusion_extent; // metres, the width of the square cover is known over
-    bool has_streak_count;
-    int streak_count; // drops per nested box
-    bool has_streak_radius;
-    float streak_radius; // metres, the innermost box's half-width
-    bool has_shutter;
-    float shutter; // seconds
-    bool has_streak_width;
-    float streak_width;
-    bool has_streak_brightness;
-    float streak_brightness;
-    bool has_streak_forward_g;
-    float streak_forward_g;
-    bool has_streak_glint;
-    float streak_glint;
-    bool has_streak_sheen;
-    float streak_sheen;
-    bool has_splash_count;
-    int splash_count;
-    bool has_splash_radius;
-    float splash_radius;
-    bool has_splash_amount;
-    float splash_amount;
-    bool has_splash_size;
-    float splash_size;
-    bool has_mist;
-    float mist;
+    Rain rain; // SETTINGS only; its state is the engine's, and starts dry
     // false = the world starts dry and wets as the scene runs; absent = already soaked
     bool has_settled;
     bool settled;

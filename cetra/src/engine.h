@@ -401,6 +401,9 @@ typedef struct Engine {
     // and it would be strange for the branch to answer it one way for nodes and
     // another way here.
     bool prev_camera_valid;
+    // How far the camera moved over the frame just drawn, in storage space: zero on the first
+    // frame. An origin shift moves both ends of it, so it is never counted as travel.
+    vec3 camera_travel;
 
     // What the scene target is cleared to each frame, linear, where nothing
     // draws: the backdrop of a scene with no sky. 0.1 grey by default; write
