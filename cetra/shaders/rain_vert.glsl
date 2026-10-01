@@ -40,6 +40,8 @@ uniform float splashFire;       // the chance a slot splashes in a given life, 0
 uniform float splashStandsFor;  // the splashes each drawn one stands for, 1 or more
 uniform float splashSize;       // scale on the droplets' diameter
 uniform vec3 rainTravel;        // unit direction the rain, and the occlusion map, looks along
+uniform int rainWaterPresent;   // 1 = a water surface draws this frame, at rainWaterLevel
+uniform float rainWaterLevel;   // its still plane, world Y
 
 out float vAcrossPx; // signed pixels from the streak's centre line
 out float vHalfWidth;
@@ -180,6 +182,26 @@ bool rainSurfaceDepth(vec2 uv, out float depth) {
 }
 
 /*
+ * Droplet `k` of the crown a drop `impactMm` across throws on striking at `impactSpeed`,
+ * `age` seconds after it struck at `hit`. The droplets leave at a fraction of the impact
+ * speed, steeply, round the whole circle: a judgment on the crown's shape rather than a
+ * measurement of it, which is what the speed and angle bands below are. `key` names the
+ * strike. False once the droplet has landed.
+ */
+bool crownDroplet(vec3 hit, float impactMm, float impactSpeed, float age, int k, uvec3 key,
+                  out Drop d) {
+    d.r = vec4(pcg4d(uvec4(key.xy, key.z + uint(k), 0x1b873593u))) / 4294967296.0;
+    float az = 6.2831853 * (float(k) + d.r.x) / float(RAIN_SPLASH_DROPLETS);
+    float elev = mix(0.8, 1.3, d.r.y);
+    vec3 v0 = impactSpeed * mix(0.08, 0.2, d.r.z) *
+              vec3(cos(elev) * cos(az), sin(elev), cos(elev) * sin(az));
+    d.vel = v0 - vec3(0.0, RAIN_GRAVITY * age, 0.0);
+    d.P = hit + v0 * age - vec3(0.0, 0.5 * RAIN_GRAVITY * age * age, 0.0);
+    d.dMm = impactMm * mix(0.15, 0.35, d.r.w) * splashSize;
+    return d.P.y >= hit.y;
+}
+
+/*
  * A droplet a splash throws. The slots are cells of a grid anchored in the WORLD, which the
  * camera carries a whole cell at a time, and each cell is hashed on its world index -- so a
  * splash stays where it landed as the eye walks past it. A cell's clock is offset by its hash,
@@ -188,10 +210,7 @@ bool rainSurfaceDepth(vec2 uv, out float depth) {
  * What it lands on is the occlusion map's answer: from well above the cell, down the rain's
  * travel by the depth the map holds there, which is the roof, the car or the road the rain
  * actually reaches. Nothing under the map, or a map with no layer this frame, is no splash.
- *
- * The droplets leave at a fraction of the impact speed, steeply, round the whole circle: a
- * judgment on the crown's shape rather than a measurement of it, which is what the speed and
- * angle bands below are. The drop that made it is Marshall-Palmer above the splash floor.
+ * The drop that made it is Marshall-Palmer above the splash floor.
  */
 bool splashDroplet(int instance, out Drop d) {
     int slot = instance / RAIN_SPLASH_DROPLETS;
@@ -217,19 +236,15 @@ bool splashDroplet(int instance, out Drop d) {
     if (!rainSurfaceDepth(pc.xy, map) || map <= pc.z)
         return false;
     vec3 hit = above + rainTravel * ((map - pc.z) * RAIN_MAP_DEPTH_METRES);
+    // Water is not in the occlusion map, so over flooded ground the map answers the bed: the
+    // drop strikes the surface first, back up its own path. Waves are not followed.
+    if (rainWaterPresent != 0 && hit.y < rainWaterLevel)
+        hit += rainTravel * ((rainWaterLevel - hit.y) / rainTravel.y);
 
     float impact = mpDiameter(h.z, RAIN_SPLASH_MIN_MM);
-    d.r = vec4(pcg4d(uvec4(key, uint(int(life)) * uint(RAIN_SPLASH_DROPLETS) + uint(k),
-                           0x1b873593u))) / 4294967296.0;
-    float az = 6.2831853 * (float(k) + d.r.x) / float(RAIN_SPLASH_DROPLETS);
-    float elev = mix(0.8, 1.3, d.r.y);
-    vec3 v0 = atlasSpeed(impact) * mix(0.08, 0.2, d.r.z) *
-              vec3(cos(elev) * cos(az), sin(elev), cos(elev) * sin(az));
-    d.vel = v0 - vec3(0.0, RAIN_GRAVITY * age, 0.0);
-    d.P = hit + v0 * age - vec3(0.0, 0.5 * RAIN_GRAVITY * age * age, 0.0);
-    if (d.P.y < hit.y)
-        return false; // landed
-    d.dMm = impact * mix(0.15, 0.35, d.r.w) * splashSize;
+    if (!crownDroplet(hit, impact, atlasSpeed(impact), age, k,
+                      uvec3(key, uint(int(life)) * uint(RAIN_SPLASH_DROPLETS)), d))
+        return false;
     // Fading out toward the square's edge, where the camera's next step moves the grid.
     vec2 rel = abs(xz - cameraPos.xz) / (0.5 * float(splashSide) * splashCell);
     d.fade = 1.0 - smoothstep(0.75, 1.0, max(rel.x, rel.y));

@@ -12,6 +12,7 @@
 #include "shadow.h"
 #include "uniform.h"
 #include "util.h"
+#include "water.h"
 #include "ext/log.h"
 
 // RAIN_DROP_MIN_MM: the smallest drop drawn, which is what the density a streak stands for
@@ -155,8 +156,12 @@ void rain_render_drops(RainRenderer* rr, Engine* engine, const Scene* scene,
     uniform_set_float(u, "splashStandsFor", fmaxf(per_life, 1.0f));
     uniform_set_float(u, "splashSize", fmaxf(rain->splash_size, 0.0f));
     // Down the rain from above a cell to what the occlusion map says it lands on: the
-    // direction the map was cast along.
+    // direction the map was cast along. The map does not hold water, so a surface that draws
+    // this frame is handed over as its still plane.
     uniform_set_vec3(u, "rainTravel", rain->travel);
+    const bool water = water_will_draw(scene->water, engine, engine->current_render_mode);
+    uniform_set_int(u, "rainWaterPresent", water ? 1 : 0);
+    uniform_set_float(u, "rainWaterLevel", water ? scene->water->level : 0.0f);
     uniform_set_float(u, "streakWidth", rain->streak_width);
     uniform_set_float(u, "streakBrightness", rain->streak_brightness);
     uniform_set_float(u, "forwardG", rain->streak_forward_g);
