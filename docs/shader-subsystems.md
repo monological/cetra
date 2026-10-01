@@ -748,4 +748,50 @@ visible:
 **The medium** past the streaks is a third medium in `froxel_inject_frag`: the Marshall-Palmer
 extinction times `mist`, lit through the drops' phase (`include/rain_phase.glsl`, which the streaks
 share), folded in by extinction like the local volumes, absent under cover, and coming in only past
-the outermost streak box, inside which the streaks already stand for every drop.
+the outermost streak box, inside which the streaks already stand for every drop. Its lobe is its
+own, `mist_forward_g`, since 13.12.
+
+### What spec 13.12 added
+
+**Wind.** A scene `Wind` that states `air_speed` carries the rain. The cover map and the splashes
+read the gust cycle's MEAN, `1 - a + a * 5/16` of the peak, and the drops read this instant's
+air: a cover that followed the gusts would crawl across the ground. `Rain.travel` is the
+direction the rain last fell, and the cover keeps it after the rain stops. Without it the map
+snapped to vertical as the rain ended, and a window the wind had wet under an eave read as
+covered from that frame on, its beads gone at once rather than drying.
+
+**Splashes on water** land on the water's plane, met by walking up the rain's travel from the
+map's surface. Water is not in the occlusion map, so a crown thrown from the bed under half a
+metre of water never broke the surface.
+
+**Drops on glass** (`include/rain_glass.glsl`, pure arithmetic, no sampler):
+- **The beads:** two layers of jittered cells.
+- **The running drops:** lanes with a stick-slip motion and a trail.
+- **The optics:** a paraboloid cap tilts the normal and clears the smear's roughness. Each drop
+  is a lens that shifts the transmission sample, and a dark rim marks total internal reflection
+  past water's critical angle. That rim is what outlines a bead against a lit street.
+
+Four things a plausible frame hid:
+- **The cover is asked on the STRUCK side.** A glass roof shelters its own underside, so asked
+  where it is seen it never beads from below.
+- **A VERTICAL pane does not shelter its own lee** in the map. The rain meets it nearly edge on,
+  and the slope-scaled offset stores it deeper than the point behind it. This is why the arm
+  that reads the struck side uses a flat canopy.
+- **The lens is not faded where the beads are unresolved, and the tilt is.** Sub-pixel beads
+  still spread the view inside a pixel, which is what raises the transmission's mip and makes a
+  wet window across a room a diffuser.
+- **Zero-weight steps are skipped,** not run with a weight of zero. A renormalised normal is not
+  bit-equal to the one it started as.
+
+**Drips** are a third instance range in `rain_vert`, after the splash droplets. Each drip is a
+hanging bead that grows as the cube root of its time, then a fall under linear drag, then the
+splash crown, shared with the splashes through `crownDroplet`. The fall time is solved by Newton
+on both sides. A line's slots are shared by rate times cycle. Drips skip the cover, since a
+drip comes off the edge that made the cover. They fall straight down: drifted with the open
+air, a gutter's drop crossed the wall into the kitchen. And they take light from area panels as
+small sources, or the drips past a lit window took none from its tubes.
+
+**Puddle relief** (`PBR_FEAT_RELIEF`, bit 128) moves a puddle's depth by a material's height map
+about the map's own mean, read from its coarsest mip. It is a bit of its own because it declares
+`heightTex`, and on `PBR_FEAT_RAIN` that unit would be paid by every material in a wet world.
+Layered materials are refused it: their unit 4 is the virtual-texture page.

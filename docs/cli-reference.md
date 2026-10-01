@@ -447,6 +447,23 @@ and, with `--rain-probe-at x,y,z` (repeatable), whether the rain reaches each po
 point every frame and the probe prints its answer. `assets/scenes/rain_fixture.cscn` and
 `rain_water_fixture.cscn` are the fixtures, from `assets/generators/gen_rain_fixture.py`.
 
+**What spec 13.12 added**, all in the same block:
+- **The scene's wind:** `followSceneWind` (default true) lets a `.cscn` `wind` block that states
+  `airSpeed` (m/s) carry the rain in place of the block's own `wind`.
+- **The mist:** `mistForwardG` (default 0.8) is the medium's own lobe, apart from the streaks'.
+- **Glass:** `glassLens` (1 = physical) scales how far a drop bends what is seen through it, and
+  `glassDropSize` the drops' size; a material's `rainBeads` (-1 derives it: 1 on transmissive
+  glass) says whether it beads at all.
+- **Drips:** `drips: [{from, to, rate, ground}]` (a point when `to` is left out), `dripCount`
+  (the slots they share) and `dripBrightness`.
+- **After the rain:** `dryFor <s>` opens the scene that long after the rain stopped.
+- **Puddle relief:** `puddleRelief` (0..1, default 0), or `--rain-relief <f>`, stands a material's
+  puddles in its own height map's lows. A `.cscn` has no height key; a model's material gets a map
+  through `<albedo stem>_height.png` beside its albedo, which also turns parallax on, so compare
+  relief with `--no-parallax`.
+
+`rain_glass_fixture.cscn` and `rain_relief_fixture.cscn` are the glazed and relief twins.
+
 ## apps/tree
 
 **apps/tree's own flags**, which went unlisted anywhere for a long time. Capture: `-x/--headless`,
@@ -864,6 +881,20 @@ changes from the engine's physical rain is a look, and each is a constant in `si
   tenth.
 - **Reflections see the fog** (`IBLResources.reflect_fog`), and SSR reaches 40 m, so a puddle can
   mirror a lamp head or a window across the street.
+- **Drips sixteen times as bright** as one drop's physical share of its pixels, which is a few
+  hundredths: a single drop smeared over the shutter does not otherwise read.
+
+Since spec 13.12, two switches and the drips:
+- **`--no-wind`:** still air. By default a gusting breeze off the street drives the rain onto the
+  house, which is what wets the facade and beads the kitchen window under its eave.
+- **`--no-relief`:** puddles where the noise puts them, not in the lows of the road's, the
+  pavement's and the yard's own scans.
+- **The drips** (no switch of their own): the gutter's leaks, the downpipe's shoe and the
+  neighbours' eaves. Pinned views of them, with `-W 960 -H 540`:
+  - **Through the kitchen window:** `--cam-eye 2.6,1.75,11.0 --cam-target 2.6,1.6,8.0`.
+  - **Outside, the overflow past that window:** `--cam-eye 2.0,1.7,7.9 --cam-target 2.6,2.0,9.6`.
+  - **The downpipe's shoe:** `--cam-eye 3.6,0.9,8.3 --cam-target 4.8,0.5,9.7`.
+  - **A neighbour's eaves:** `--cam-eye 9.0,1.7,6.5 --cam-target 14.0,2.5,10.0`.
 
 **Sound:** the rain is two noise beds, pink for the patter and brown for the rumble, as loud as the
 log of the rate. Under a roof -- read from the rain's own occlusion map at the player's head -- the
