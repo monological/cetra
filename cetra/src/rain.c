@@ -71,6 +71,8 @@ void rain_init_defaults(Rain* rain) {
     rain->mist = 1.0f;
     // The streaks' lobe: the same drops, so the same lobe until somebody means otherwise.
     rain->mist_forward_g = 0.8f;
+    rain->glass_lens = 1.0f;
+    rain->glass_drop_size = 1.0f;
 }
 
 void free_rain(Rain* rain) {
@@ -170,6 +172,8 @@ void rain_update(Rain* rain, const Wind* wind, float t, float dt) {
         glm_vec3_copy((vec3){0.0f, -1.0f, 0.0f}, rain->travel);
     if (!(dt > 0.0f))
         return;
+    rain->bead_clock =
+        fmodf(rain->bead_clock + dt * rain_ripple_activity(rain), RAIN_BEAD_CLOCK_WRAP);
     rain->wetness = _approach(rain->wetness, rain_wetness_target(rain),
                               _rate_scaled(rain->wet_time, rain->rate_mmh), rain->dry_time, dt);
     rain->puddle_level = _approach(rain->puddle_level, rain_puddle_target(rain),
@@ -182,6 +186,18 @@ void rain_settle(Rain* rain) {
         return;
     rain->wetness = rain_wetness_target(rain);
     rain->puddle_level = rain_puddle_target(rain);
+}
+
+void rain_settle_dry(Rain* rain, const Wind* wind, float seconds) {
+    if (!rain)
+        return;
+    rain_settle(rain);
+    _resolve_wind(rain, wind, 0.0f);
+    rain_fall_direction(rain, rain->travel);
+    rain->rate_mmh = 0.0f;
+    rain->wetness = _approach(rain->wetness, 0.0f, 0.0f, rain->dry_time, seconds);
+    rain->puddle_level =
+        _approach(rain->puddle_level, 0.0f, 0.0f, rain->puddle_drain_time, seconds);
 }
 
 float rain_mp_lambda(float rate_mmh) {

@@ -48,6 +48,10 @@ typedef struct Rain {
     // The unit direction the rain last fell along, held after it stops while anything is
     // still wet, so what sheltered a surface still shelters it. Straight down when dry.
     vec3 travel;
+    // Seconds of the clock drops on glass live by: it runs at the rain's ripple activity,
+    // so beads form in rain and stand still once it stops, and wraps at
+    // RAIN_BEAD_CLOCK_WRAP to keep its precision.
+    float bead_clock;
 
     // SETTINGS: plain stores. Write them directly, at any time.
     float rate_mmh; // rain rate in mm/h; 0 = no rain falls (the state still dries)
@@ -111,6 +115,11 @@ typedef struct Rain {
     // Scale on the rain's extinction as a medium past the streaks; 1 = physical, 0 = none.
     float mist;
     float mist_forward_g; // Henyey-Greenstein asymmetry of the medium's lobe
+
+    // Scale on how far a drop on glass bends the view through it; 1 = physical, 0 = none.
+    float glass_lens;
+    // Scale on the size of the drops on glass, and how far apart they sit; 1 = physical.
+    float glass_drop_size;
 } Rain;
 
 // Created with a moderate rain's defaults at rate 0: nothing falls until a rate is set.
@@ -129,6 +138,10 @@ void rain_update(Rain* rain, const struct Wind* wind, float t, float dt);
 // Put the state where this rate settles it, as though it had been raining for ever --
 // the scene that opens in a storm. At rate 0 that is dry.
 void rain_settle(Rain* rain);
+// The same rain, stopped `seconds` ago: the rate goes to 0, the state is what that long has
+// dried it to, and the direction it fell along through `wind` (NULL for none) is what the
+// cover keeps.
+void rain_settle_dry(Rain* rain, const struct Wind* wind, float seconds);
 
 // Where the state is heading at this rate: 1 while any rain falls, 0 otherwise, and
 // the puddle level the rate's inflow holds up against drainage.

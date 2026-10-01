@@ -215,6 +215,9 @@ typedef struct Material {
     // surface darkens as it wets, a sealed one only takes a film. -1 = derive it from the
     // roughness, rough being porous (Lagarde).
     float porosity;
+    // Whether rain beads on this surface and runs down it (spec 13.12): 1 = it does, 0 = it
+    // does not, -1 = derive it, which is yes for anything that transmits.
+    float rain_beads;
 
     /*
      * Stochastic albedo sampling (see include/stochastic.glsl), in UV units per lattice cell.

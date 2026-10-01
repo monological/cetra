@@ -742,6 +742,8 @@ static void _engine_gui_panel(Engine* engine) {
             igSliderFloat("Splash size", &rain->splash_size, 0.0f, 4.0f, "%.2f", 0);
             igSliderFloat("Mist", &rain->mist, 0.0f, 50.0f, "%.1f", ImGuiSliderFlags_Logarithmic);
             igSliderFloat("Mist lobe", &rain->mist_forward_g, 0.0f, 0.95f, "%.2f", 0);
+            igSliderFloat("Glass lens", &rain->glass_lens, 0.0f, 3.0f, "%.2f", 0);
+            igSliderFloat("Glass drop size", &rain->glass_drop_size, 0.25f, 5.0f, "%.2f", 0);
             // What the settings have integrated to, which a slider must not write.
             igText("wetness %.2f, puddles %.2f", (double)rain->wetness, (double)rain->puddle_level);
             igText("air now (%.1f, %.1f) m/s, mean (%.1f, %.1f)", (double)rain->wind_now[0],
