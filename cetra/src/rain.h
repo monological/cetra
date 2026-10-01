@@ -4,6 +4,9 @@
 #include <cglm/cglm.h>
 #include <stdbool.h>
 
+// RAIN_DRIP_MAX, which the vertex stage's drip arrays are sized by.
+#include "../shaders/include/rain_constants.glsl"
+
 /*
  * Falling rain and what it leaves behind (spec 13.9).
  *
@@ -37,6 +40,19 @@
 // Marshall-Palmer's intercept, drops per cubic metre per millimetre of diameter.
 #define RAIN_MP_N0 8000.0f
 
+/*
+ * A line water drips from (spec 13.12): a roof's edge, a gutter's leaking joint, a downpipe's
+ * spout. The drops leave from points along it, in world metres; `from == to` is a single
+ * source. `rate` is drops a second from the whole line at RAIN_RATE_REFERENCE, and `ground`
+ * the world Y they land on, unless a water surface lies higher.
+ */
+typedef struct RainDripLine {
+    vec3 from;
+    vec3 to;
+    float rate;
+    float ground;
+} RainDripLine;
+
 typedef struct Rain {
     // ENGINE-OWNED: the rain's accumulated state, and the air it falls through as
     // rain_update resolved it. Read freely, never write; rain_settle is how a caller asks
@@ -52,6 +68,10 @@ typedef struct Rain {
     // so beads form in rain and stand still once it stops, and wraps at
     // RAIN_BEAD_CLOCK_WRAP to keep its precision.
     float bead_clock;
+
+    // BY FUNCTION: the lines water drips from, rain_set_drip_lines.
+    RainDripLine drips[RAIN_DRIP_MAX];
+    int drip_line_count;
 
     // SETTINGS: plain stores. Write them directly, at any time.
     float rate_mmh; // rain rate in mm/h; 0 = no rain falls (the state still dries)
@@ -120,6 +140,13 @@ typedef struct Rain {
     float glass_lens;
     // Scale on the size of the drops on glass, and how far apart they sit; 1 = physical.
     float glass_drop_size;
+
+    // The drip slots shared out over the drip lines, each a point that grows a drop, lets it
+    // fall and throws its splash; 0 = no drips.
+    int drip_count;
+    // Scale on a drip's opacity; 1 = physical, where one drop smeared over the shutter is
+    // faint. Separate from the streaks', which each stand for many drops. A look.
+    float drip_brightness;
 } Rain;
 
 // Created with a moderate rain's defaults at rate 0: nothing falls until a rate is set.
@@ -155,6 +182,29 @@ bool rain_falling(const Rain* rain);
 // has to be known this frame. NULL is false.
 bool rain_active(const Rain* rain);
 
+// True while there is anything to draw in the air: rain falling, or water still dripping
+// from the drip lines after it stopped. NULL is false.
+bool rain_draws(const Rain* rain);
+
+// Copy `count` drip lines in, replacing what was there. Past RAIN_DRIP_MAX the rest are
+// dropped, with a warning; a negative rate or a NULL list counts as none.
+void rain_set_drip_lines(Rain* rain, const RainDripLine* lines, int count);
+
+// How hard the drip lines run now, as a multiple of their rates: the rain's rate over the
+// reference while it falls, and half the remaining film once it stops.
+float rain_drip_flow(const Rain* rain);
+
+// The cycle one slot of `line` runs, in seconds: long enough for a drop to hang a moment, fall
+// from the line's higher end to `land` and throw its splash, so a slot never has two drops in
+// the air at once.
+float rain_drip_period(const RainDripLine* line, float land, float fall_scale);
+
+// The drip slots each line gets of `drip_count`, written to `out` (RAIN_DRIP_MAX entries):
+// in proportion to the drops it keeps in the air -- its rate times its cycle onto its own
+// ground -- so every slot drips with the same chance, one each first when there are enough to
+// go round, the rest by largest remainder. A line with no rate gets none. Returns the total.
+int rain_drip_slots(const Rain* rain, int* out);
+
 // The fraction of the ripple cells a drop lands in, 0..1: none when nothing falls, all of
 // them from moderate rain up.
 float rain_ripple_activity(const Rain* rain);
@@ -174,6 +224,10 @@ float rain_extinction(float rate_mmh);                   // 1/m, geometric optic
 float rain_drop_density(float rate_mmh, float d_min_mm); // drops/m^3 above d_min
 float rain_median_diameter(float rate_mmh);              // mm, the volume-weighted median D0
 float rain_splash_flux(float rate_mmh); // drops over RAIN_SPLASH_MIN_MM landing, 1/(m^2 s)
+// Seconds a drip takes to fall `height_m` from rest: a RAIN_DRIP_MM drop under linear drag,
+// which reaches its terminal velocity -- times `fall_scale`, Rain's look -- smoothly rather
+// than at a corner.
+float rain_drip_fall_time(float height_m, float fall_scale);
 
 // --rain-probe: the physics at a fixed ladder of rates, an integration schedule run
 // twice at different pacing, and this rain's own rate and state. Needs no GL.

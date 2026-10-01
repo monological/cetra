@@ -7,9 +7,6 @@
 #include "ext/log.h"
 #include "wind.h"
 
-// The Atlas fit's coefficients, which the streak shader draws every drop's fall with.
-#include "../shaders/include/rain_constants.glsl"
-
 Rain* create_rain(void) {
     Rain* rain = malloc(sizeof(Rain));
     if (!rain) {
@@ -73,6 +70,9 @@ void rain_init_defaults(Rain* rain) {
     rain->mist_forward_g = 0.8f;
     rain->glass_lens = 1.0f;
     rain->glass_drop_size = 1.0f;
+    // A few dozen drip points on each of a street's worth of eaves.
+    rain->drip_count = 512;
+    rain->drip_brightness = 1.0f;
 }
 
 void free_rain(Rain* rain) {
@@ -105,6 +105,85 @@ float rain_puddle_target(const Rain* rain) {
 
 bool rain_active(const Rain* rain) {
     return rain_falling(rain) || (rain && rain->wetness > RAIN_WET_FLOOR);
+}
+
+bool rain_draws(const Rain* rain) {
+    return rain_falling(rain) ||
+           (rain_active(rain) && rain->drip_line_count > 0 && rain->drip_count > 0);
+}
+
+void rain_set_drip_lines(Rain* rain, const RainDripLine* lines, int count) {
+    if (!rain)
+        return;
+    rain->drip_line_count = 0;
+    if (!lines || count <= 0)
+        return;
+    if (count > RAIN_DRIP_MAX) {
+        log_warn("Rain: %d drip lines, of which only the first %d drip", count, RAIN_DRIP_MAX);
+        count = RAIN_DRIP_MAX;
+    }
+    for (int i = 0; i < count; i++) {
+        rain->drips[i] = lines[i];
+        rain->drips[i].rate = fmaxf(lines[i].rate, 0.0f);
+    }
+    rain->drip_line_count = count;
+}
+
+// The water reaching an edge comes off it as the rain brings it. Once the rain stops it is the
+// film running off what is still wet, at half the pace the reference rain drove it.
+float rain_drip_flow(const Rain* rain) {
+    if (!rain)
+        return 0.0f;
+    if (rain_falling(rain))
+        return rain->rate_mmh / RAIN_RATE_REFERENCE;
+    return rain_active(rain) ? 0.5f * rain->wetness : 0.0f;
+}
+
+float rain_drip_period(const RainDripLine* line, float land, float fall_scale) {
+    const float fall = rain_drip_fall_time(fmaxf(line->from[1], line->to[1]) - land, fall_scale);
+    return fmaxf(RAIN_DRIP_PERIOD_MIN, RAIN_DRIP_HANG_MIN + fall + RAIN_SPLASH_LIFE);
+}
+
+int rain_drip_slots(const Rain* rain, int* out) {
+    for (int i = 0; i < RAIN_DRIP_MAX; i++)
+        out[i] = 0;
+    const int lines = rain ? rain->drip_line_count : 0;
+    const int total = rain ? rain->drip_count : 0;
+    float weight[RAIN_DRIP_MAX] = {0};
+    float sum = 0.0f;
+    int live = 0;
+    for (int i = 0; i < lines; i++) {
+        const RainDripLine* l = &rain->drips[i];
+        weight[i] = l->rate * rain_drip_period(l, l->ground, fmaxf(rain->fall_scale, 0.0f));
+        sum += weight[i];
+        live += weight[i] > 0.0f;
+    }
+    if (total <= 0 || !(sum > 0.0f))
+        return 0;
+    // One each first, so a short line among long ones still drips at all.
+    const int base = total >= live ? 1 : 0;
+    const int left = total - base * live;
+    float remainder[RAIN_DRIP_MAX] = {0};
+    int given = 0;
+    for (int i = 0; i < lines; i++) {
+        if (!(weight[i] > 0.0f))
+            continue;
+        const float quota = (float)left * weight[i] / sum;
+        out[i] = base + (int)floorf(quota);
+        remainder[i] = quota - floorf(quota);
+        given += out[i];
+    }
+    for (; given < total; given++) {
+        int best = -1;
+        for (int i = 0; i < lines; i++)
+            if (weight[i] > 0.0f && (best < 0 || remainder[i] > remainder[best]))
+                best = i;
+        if (best < 0)
+            break;
+        out[best]++;
+        remainder[best] = -1.0f;
+    }
+    return given;
 }
 
 // In proportion to the rate up to the moderate band's ceiling. Most of what lands in a puddle
@@ -244,6 +323,22 @@ float rain_splash_flux(float rate_mmh) {
             RAIN_ATLAS_B * expf(-(lambda + RAIN_ATLAS_C) * d) / (lambda + RAIN_ATLAS_C));
 }
 
+// Linear drag: v = vt (1 - exp(-t / tau)) with tau = vt / g, so the distance fallen is
+// vt (t - tau (1 - exp(-t / tau))), which is convex in t. Newton from the drag-free time,
+// which is short of the answer, lands past it on the first step and closes from there.
+float rain_drip_fall_time(float height_m, float fall_scale) {
+    const float vt = rain_terminal_velocity(RAIN_DRIP_MM) * fall_scale;
+    if (!(height_m > 0.0f) || !(vt > 0.0f))
+        return 0.0f;
+    const float tau = vt / RAIN_GRAVITY;
+    float t = sqrtf(2.0f * height_m / RAIN_GRAVITY);
+    for (int i = 0; i < 8; i++) {
+        const float e = expf(-t / tau);
+        t -= (vt * (t - tau * (1.0f - e)) - height_m) / (vt * (1.0f - e));
+    }
+    return t;
+}
+
 /*
  * The same wet-then-dry schedule at two frame rates. The state is integrated in closed
  * form per regime, so the two must agree to float rounding; a forward-Euler step, or a
@@ -282,6 +377,10 @@ void rain_probe_print(const Rain* rain) {
     for (size_t i = 0; i < sizeof(diameters) / sizeof(diameters[0]); i++)
         printf("rain-probe velocity d=%.9g v=%.9g\n", (double)diameters[i],
                (double)rain_terminal_velocity(diameters[i]));
+    const float heights[] = {0.5f, 3.0f, 10.0f};
+    for (size_t i = 0; i < sizeof(heights) / sizeof(heights[0]); i++)
+        printf("rain-probe dripfall h=%.9g t=%.9g\n", (double)heights[i],
+               (double)rain_drip_fall_time(heights[i], 1.0f));
 
     Rain* defaults = create_rain();
     if (defaults) {
@@ -311,4 +410,14 @@ void rain_probe_print(const Rain* rain) {
            (double)rain->wind_now[0], (double)rain->wind_now[2], (double)rain->wind_mean[0],
            (double)rain->wind_mean[2], (double)rain->travel[0], (double)rain->travel[1],
            (double)rain->travel[2], (double)rain->streak_forward_g, (double)rain->mist_forward_g);
+    int slots[RAIN_DRIP_MAX];
+    const int given = rain_drip_slots(rain, slots);
+    printf("rain-probe drips lines=%d count=%d given=%d flow=%.9g draws=%d\n",
+           rain->drip_line_count, rain->drip_count, given, (double)rain_drip_flow(rain),
+           rain_draws(rain) ? 1 : 0);
+    for (int i = 0; i < rain->drip_line_count; i++) {
+        const RainDripLine* l = &rain->drips[i];
+        printf("rain-probe drip i=%d rate=%.9g length=%.9g slots=%d\n", i, (double)l->rate,
+               (double)glm_vec3_distance((float*)l->from, (float*)l->to), slots[i]);
+    }
 }

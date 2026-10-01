@@ -2286,7 +2286,7 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode) {
     probe_set_publish_to_postfx(fx_scene ? fx_scene->probe_set : NULL, engine->postfx);
     shadow_publish_to_postfx(fx_scene, engine->postfx);
     rain_publish_to_postfx(fx_scene ? fx_scene->rain : NULL, engine->postfx);
-    engine->postfx->late_draw = fx_scene && rain_falling(fx_scene->rain) ? _engine_late_draw : NULL;
+    engine->postfx->late_draw = fx_scene && rain_draws(fx_scene->rain) ? _engine_late_draw : NULL;
     engine->postfx->late_draw_user = engine;
     // Aerial perspective is a camera-frustum volume, so unlike the sky's other
     // LUTs it is rebuilt here every frame, immediately before it is published.

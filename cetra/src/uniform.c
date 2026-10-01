@@ -248,6 +248,14 @@ void uniform_set_vec3_array(UniformManager* mgr, const char* name, const float* 
         glUniform3fv(loc, (GLsizei)count, values);
 }
 
+void uniform_set_vec4_array(UniformManager* mgr, const char* name, const float* values, int count) {
+    if (!mgr || !values || count <= 0)
+        return;
+    const GLint loc = uniform_location(mgr, name);
+    if (loc >= 0)
+        glUniform4fv(loc, (GLsizei)count, values);
+}
+
 void uniform_set_ivec4(UniformManager* mgr, const char* name, const int* value) {
     // Compared as floats for the same reason uniform_set_int is: these carry
     // small indices and a -1 sentinel, all exact far inside the mantissa.

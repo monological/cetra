@@ -1033,10 +1033,48 @@ static const CSceneRainKey RAIN_KEYS[] = {
     RAIN_FLOAT_KEY("mistForwardG", mist_forward_g, -0.99f, 0.99f),
     RAIN_FLOAT_KEY("glassLens", glass_lens, 0.0f, 10.0f),
     RAIN_FLOAT_KEY("glassDropSize", glass_drop_size, 0.1f, 20.0f),
+    RAIN_INT_KEY("dripCount", drip_count, 0.0f, 65536.0f),
+    RAIN_FLOAT_KEY("dripBrightness", drip_brightness, 0.0f, 1000.0f),
 };
 #undef RAIN_FLOAT_KEY
 #undef RAIN_INT_KEY
 #define RAIN_KEY_COUNT (sizeof(RAIN_KEYS) / sizeof(RAIN_KEYS[0]))
+
+/*
+ * rain.drips[] -- the lines water drips from (spec 13.12): {from, to, rate, ground}. `from` is
+ * REQUIRED, since a line nobody placed drips from the world origin; `to` defaults to it, which
+ * is a single source; `rate` to one drop a second and `ground` to y = 0.
+ */
+static void parse_drips(Rain* out, const cJSON* rain) {
+    static const char* known[] = {"from", "to", "rate", "ground"};
+    const cJSON* drips = cJSON_GetObjectItemCaseSensitive(rain, "drips");
+    if (!cJSON_IsArray(drips))
+        return;
+    RainDripLine lines[RAIN_DRIP_MAX];
+    int count = 0;
+    const cJSON* l = NULL;
+    cJSON_ArrayForEach(l, drips) {
+        if (!cJSON_IsObject(l)) {
+            log_warn("cscene: rain drip line that is not an object; skipped");
+            continue;
+        }
+        warn_unknown_keys(l, known, sizeof(known) / sizeof(known[0]), "rain drip line");
+        RainDripLine line = {.rate = 1.0f};
+        if (!get_vec3(l, "from", line.from)) {
+            log_warn("cscene: rain drip line needs from; skipped");
+            continue;
+        }
+        if (!get_vec3(l, "to", line.to))
+            glm_vec3_copy(line.from, line.to);
+        _ranged_float(l, "rain drip line", "rate", 0.0f, 1e4f, &line.rate);
+        get_float(l, "ground", &line.ground);
+        // Counted past the cap so rain_set_drip_lines can say how many were dropped.
+        if (count < RAIN_DRIP_MAX)
+            lines[count] = line;
+        count++;
+    }
+    rain_set_drip_lines(out, lines, count);
+}
 
 static void parse_rain(CetraSceneDesc* d, const cJSON* root) {
     const cJSON* rain = cJSON_GetObjectItemCaseSensitive(root, "rain");
@@ -1065,9 +1103,10 @@ static void parse_rain(CetraSceneDesc* d, const cJSON* root) {
     }
     out->has_settled = get_bool(rain, "settled", &out->settled);
     _ranged_float(rain, "rain", "dryFor", 0.0f, 1e6f, &out->dry_for);
+    parse_drips(&out->rain, rain);
 
-    static const char* const OTHER_KEYS[] = {"enabled", "wind", "settled", "followSceneWind",
-                                             "dryFor"};
+    static const char* const OTHER_KEYS[] = {"enabled",         "wind",   "settled",
+                                             "followSceneWind", "dryFor", "drips"};
 #define RAIN_OTHER_COUNT (sizeof(OTHER_KEYS) / sizeof(OTHER_KEYS[0]))
     const char* known[RAIN_KEY_COUNT + RAIN_OTHER_COUNT];
     for (size_t i = 0; i < RAIN_OTHER_COUNT; i++)
