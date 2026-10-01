@@ -193,6 +193,8 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --no-rain          Drop the rain a scene file asked for\n");
     fprintf(stderr, "      --rain-sheen <f>   How much brighter than its surroundings a drop\n"
                     "                         reads (0 = physical: only lit rain shows)\n");
+    fprintf(stderr, "      --rain-relief <f>  0..1, how far a material's height map decides\n"
+                    "                         where its puddles stand (spec 13.12)\n");
     fprintf(stderr, "      --rain-probe       Print the rain's physics, schedule and state\n");
     fprintf(stderr,
             "      --rain-probe-at <x,y,z>  With --rain-probe: whether this point is\n"
@@ -590,6 +592,7 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->water_level = -9999.0f;
     args->rain_rate = -1.0f;        // -1 = keep the scene file's (0 is a legal rate)
     args->rain_sheen = -1.0f;       // -1 = keep the scene file's
+    args->rain_relief = -1.0f;      // -1 = keep the scene file's
     args->world_scale = -1.0f;      // -1 = keep the sky's default (1 unit = 1 metre)
     args->spec_occ_mode = -1;       // -1 = keep the engine default
     args->import_scale = 1.0f;      // 1 = none
@@ -1205,6 +1208,9 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 return -1;
         } else if (strcmp(argv[i], "--no-rain") == 0) {
             args->no_rain = 1;
+        } else if (strcmp(argv[i], "--rain-relief") == 0) {
+            if (_ranged_arg(argc, argv, &i, 0.0f, 1.0f, &args->rain_relief) != 0)
+                return -1;
         } else if (strcmp(argv[i], "--rain-sheen") == 0) {
             if (_ranged_arg(argc, argv, &i, 0.0f, 100.0f, &args->rain_sheen) != 0)
                 return -1;
@@ -4587,6 +4593,8 @@ int main(int argc, char** argv) {
     }
     if (scene->rain && args.rain_sheen >= 0.0f)
         scene->rain->streak_sheen = args.rain_sheen;
+    if (scene->rain && args.rain_relief >= 0.0f)
+        scene->rain->puddle_relief = args.rain_relief;
 
     if (args.no_water) {
         free_water(scene->water);

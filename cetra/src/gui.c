@@ -736,6 +736,7 @@ static void _engine_gui_panel(Engine* engine) {
             igSliderFloat("Wet darkening", &rain->wet_darkening, 0.0f, 2.0f, "%.2f", 0);
             igSliderFloat("Puddle coverage", &rain->puddle_coverage, 0.0f, 1.0f, "%.2f", 0);
             igSliderFloat("Puddle scale (m)", &rain->puddle_scale, 0.5f, 10.0f, "%.2f", 0);
+            igSliderFloat("Puddle relief", &rain->puddle_relief, 0.0f, 1.0f, "%.2f", 0);
             igSliderFloat("Ripple strength", &rain->ripple_strength, 0.0f, 3.0f, "%.2f", 0);
             igSliderFloat("Ripple size (m)", &rain->ripple_size, 0.05f, 2.0f, "%.2f", 0);
             igSliderFloat("Splash amount", &rain->splash_amount, 0.0f, 4.0f, "%.2f", 0);

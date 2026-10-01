@@ -27006,6 +27006,23 @@ RAIN_DRIP_LINE = {"from": [-3.5, 3.0, -1.0], "to": [3.5, 3.0, -1.0], "rate": 400
 RAIN_DRIP_ARM = {"dripCount": 2048, "dripBrightness": 50.0}
 # The column under that line, and the open ground well in front of it.
 RAIN_DRIP_COLUMN = [(x, y, -1.0) for x in (-3.0, 3.0) for y in (0.3, 2.7)]
+# The relief twin (spec 13.12): one ground whose height map is trenches and plateaus in bands
+# across z, 2 m each -- trenches centred on z = 2 + 4k, plateaus on z = 4k. These are the open
+# ground's bands, a metre in from either edge so the map's filtered step stays out of them.
+RAIN_RELIEF_FIXTURE = "rain_relief_fixture.cscn"
+RAIN_RELIEF_TRENCHES = [((-3.0, 3.0), (1.5, 2.5)), ((-3.0, 3.0), (5.5, 6.5))]
+RAIN_RELIEF_PLATEAUS = [((-3.0, 3.0), (-0.5, 0.5)), ((-3.0, 3.0), (3.5, 4.5))]
+# The roughness view's green, as a byte, below which a pixel is standing water: a puddle is
+# still water's 0.03 (8), and the fullest film the open ground takes is 0.12 (31).
+RAIN_RELIEF_PUDDLE_G = 20
+# How much of a band the relief must fill or drain: the map moves the ground a quarter of the
+# noise's range either way, which takes a band at the fixture's level from about half puddled
+# to nearly all or nearly none.
+RAIN_RELIEF_TRENCH_MIN = 0.8
+RAIN_RELIEF_PLATEAU_MAX = 0.2
+# The two kinds of band at relief 0, which differ only by the noise each happens to hold.
+RAIN_RELIEF_AGREE = 0.15
+RAIN_RELIEF_FLAGS = ["--render-mode", "8", "--no-parallax"]
 
 
 def _rain_twin(rate):
@@ -27229,10 +27246,18 @@ def run_rain_gate(workdir):
                     ground under the water is 0 px from the same line dripping onto the water's
                     surface: a drop meets the water first, as a splash does.
       rain-drips-determinism  two runs of the dripping fixture are 0 px apart.
+      rain-relief   the relief twin, in the roughness view: at relief 1 the trenches in its
+                    height map stand nearly all under water and the plateaus nearly none, where
+                    at relief 0 the two kinds of band hold the same share -- the puddles stand
+                    in the ground's own lows, from the same noise.
+      rain-relief-off  on the plain fixture, whose grounds carry no height map, relief 1 is 0 px
+                    from relief 0 and no variant compiles the relief bit.
+      rain-relief-ledger  each relief variant declares one sampler more than the same mask without
+                    the bit -- the height map's -- and at relief 0 no variant carries it.
 
-    Everything here runs on rain_fixture and its flooded and glazed twins, whose answers are
-    known from their geometry and their closed forms; the streak arms read the fixture at sheen
-    0, since the sheen is a look laid over the physics rather than part of it.
+    Everything here runs on rain_fixture and its flooded, glazed and relief twins, whose answers
+    are known from their geometry and their closed forms; the streak arms read the fixture at
+    sheen 0, since the sheen is a look laid over the physics rather than part of it.
     """
     scene = asset(RAIN_FIXTURE)
     if not os.path.exists(scene):
@@ -27917,6 +27942,84 @@ def run_rain_gate(workdir):
     print(f"  rain-drips-determinism {'PASS' if ok else 'FAIL'}  two runs {ae} px apart (want 0)")
     if not ok:
         failures.append("rain-drips-determinism")
+
+    # Puddles from the ground's own lows, read in the roughness view: still water's roughness is
+    # below anything a film reaches, so every pixel is puddled or not. No parallax, which the
+    # engine arms for any ground with a height map and which would declare the same sampler.
+    reliefed = asset(RAIN_RELIEF_FIXTURE)
+    if not os.path.exists(reliefed):
+        print(f"  rain-relief SKIP  ({RAIN_RELIEF_FIXTURE} not present)")
+        return failures
+
+    def puddled(path, bands):
+        """(fraction of pixels standing water, pixels) over the rectangles inscribed in the
+        images of the ground bands."""
+        if not path:
+            return float("nan"), 0
+        w, h, pix = _read_ppm(path)
+        project = _projector(_cscn_camera(RAIN_RELIEF_FIXTURE), w, h)
+        wet = total = 0
+        for band in bands:
+            at = [project(p) for p in ground_quad(band, 0.0)]
+            xs, ys = sorted(p[0] for p in at), sorted(p[1] for p in at)
+            for py in range(max(0, int(math.ceil(ys[1]))), min(h, int(ys[2]))):
+                for px in range(max(0, int(math.ceil(xs[1]))), min(w, int(xs[2]))):
+                    wet += pix[3 * (py * w + px) + 1] < RAIN_RELIEF_PUDDLE_G
+                    total += 1
+        return (wet / total if total else float("nan")), total
+
+    def relief_frame(name, amount):
+        path = variant(name, lambda s: s["rain"].update({"puddleRelief": amount}),
+                       base=reliefed)
+        return frame(name, path, RAIN_RELIEF_FLAGS), path
+
+    relief_on, relief_on_scene = relief_frame("relief_on", 1.0)
+    relief_off, relief_off_scene = relief_frame("relief_off", 0.0)
+    trench1, trench_px = puddled(relief_on, RAIN_RELIEF_TRENCHES)
+    plateau1, plateau_px = puddled(relief_on, RAIN_RELIEF_PLATEAUS)
+    trench0, _ = puddled(relief_off, RAIN_RELIEF_TRENCHES)
+    plateau0, _ = puddled(relief_off, RAIN_RELIEF_PLATEAUS)
+    ok = (min(trench_px, plateau_px) >= RAIN_COVERED_MIN_PX and trench1 > RAIN_RELIEF_TRENCH_MIN
+          and plateau1 < RAIN_RELIEF_PLATEAU_MAX and abs(trench0 - plateau0) < RAIN_RELIEF_AGREE)
+    print(f"  rain-relief {'PASS' if ok else 'FAIL'}  at relief 1 the trenches stand "
+          f"{trench1:.1%} under water (want > {RAIN_RELIEF_TRENCH_MIN:.0%}) and the plateaus "
+          f"{plateau1:.1%} (want < {RAIN_RELIEF_PLATEAU_MAX:.0%}); at 0, {trench0:.1%} and "
+          f"{plateau0:.1%} (want within {RAIN_RELIEF_AGREE:.0%}); {trench_px} and {plateau_px} px "
+          f"read (want >= {RAIN_COVERED_MIN_PX} each)")
+    if not ok:
+        failures.append("rain-relief")
+
+    # A ground with no height map has no lows to find: the knob is inert on it, and no material
+    # compiles the relief bit.
+    relief_bit = bits["relief"]
+    flat_on = variant("flat_relief_on", lambda s: s["rain"].update({"puddleRelief": 1.0}))
+    flat_off = variant("flat_relief_off", lambda s: s["rain"].update({"puddleRelief": 0.0}))
+    a, b = frame("flat_relief_on", flat_on), frame("flat_relief_off", flat_off)
+    ae = compare(a, b)[0] if a and b else sys.maxsize
+    flat_logged = samplers(_rain_rows(flat_on)[1])
+    carried = sorted(n for n, (mask, _) in flat_logged.items() if mask & relief_bit)
+    ok = ae == 0 and bool(flat_logged) and not carried
+    print(f"  rain-relief-off {'PASS' if ok else 'FAIL'}  relief 1 against 0 on {RAIN_FIXTURE}, "
+          f"whose grounds carry no height map: {ae} px (want 0); variants carrying the relief "
+          f"bit: {carried or 'none'} (want none)")
+    if not ok:
+        failures.append("rain-relief-off")
+
+    # The relief bit costs exactly the height map's unit, and only where a material carries it.
+    on_logged = samplers(_rain_rows(relief_on_scene, extra=["--no-parallax"])[1])
+    off_logged = samplers(_rain_rows(relief_off_scene, extra=["--no-parallax"])[1])
+    by_mask = {mask: count for mask, count in off_logged.values()}
+    pairs = [(mask, count, by_mask.get(mask & ~relief_bit))
+             for mask, count in on_logged.values() if mask & relief_bit]
+    leaked = sorted(n for n, (mask, _) in off_logged.items() if mask & relief_bit)
+    ok = (bool(pairs) and all(dry is not None and count == dry + 1 for _, count, dry in pairs)
+          and not leaked)
+    shown = ", ".join(f"{mask}: {count} against {dry}" for mask, count, dry in pairs) or "none"
+    print(f"  rain-relief-ledger {'PASS' if ok else 'FAIL'}  relief variants against the same mask "
+          f"without the bit: {shown} (want one more each); at relief 0 the bit is carried by "
+          f"{leaked or 'none'} (want none)")
+    if not ok:
+        failures.append("rain-relief-ledger")
     return failures
 
 

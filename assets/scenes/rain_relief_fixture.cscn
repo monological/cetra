@@ -1,0 +1,66 @@
+{
+ "version": 1,
+ "_comment": [
+  "The rain instrument's relief variant (spec 13.12): the yard on one ground whose height",
+  "map is trenches and plateaus in bands across z, for puddles that stand in the lows. Same",
+  "lights and rain; a camera above the open ground."
+ ],
+ "models": [
+  {
+   "path": "../models/rain_relief_fixture.gltf"
+  }
+ ],
+ "environment": {
+  "ambient": [
+   0.03,
+   0.03,
+   0.035
+  ]
+ },
+ "lights": [
+  {
+   "name": "rain_lamp",
+   "type": "point",
+   "position": [
+    6.5,
+    4.3,
+    -3.0
+   ],
+   "color": [
+    1.0,
+    0.85,
+    0.6
+   ],
+   "range": 14.0,
+   "profile": "../ies/ies_symmetric.ies"
+  }
+ ],
+ "rain": {
+  "rate": 10.0,
+  "wind": [
+   0.0,
+   0.0,
+   -1.5
+  ],
+  "puddleRelief": 1.0,
+  "puddleScale": 0.5
+ },
+ "materials": {},
+ "camera": {
+  "eye": [
+   0.0,
+   6.0,
+   10.0
+  ],
+  "target": [
+   0.0,
+   0.0,
+   2.0
+  ],
+  "fov": 55
+ },
+ "post": {
+  "tonemap": "neutral",
+  "exposure": 1.0
+ }
+}

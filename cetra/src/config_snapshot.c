@@ -760,6 +760,7 @@ static const ConfigField CFG_FIELDS[] = {
     CFG_ROW(CFG_RAIN, CFG_FLOAT, "rain", "puddleDrainTime", puddle_drain_time),
     CFG_ROW(CFG_RAIN, CFG_FLOAT, "rain", "puddleCoverage", puddle_coverage),
     CFG_ROW(CFG_RAIN, CFG_FLOAT, "rain", "puddleScale", puddle_scale),
+    CFG_ROW(CFG_RAIN, CFG_FLOAT, "rain", "puddleRelief", puddle_relief),
     CFG_ROW(CFG_RAIN, CFG_FLOAT, "rain", "rippleStrength", ripple_strength),
     CFG_ROW(CFG_RAIN, CFG_FLOAT, "rain", "rippleSize", ripple_size),
     CFG_ROW(CFG_RAIN, CFG_FLOAT, "rain", "wetDarkening", wet_darkening),

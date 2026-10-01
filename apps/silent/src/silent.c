@@ -94,6 +94,8 @@
 // pixels wide even at arm's length, and the gutter's leaks past the kitchen window would not
 // read as water.
 #define RAIN_DRIP_BRIGHTNESS 16.0f
+// The puddles stand in the road's and the yard's own lows, fully.
+#define RAIN_PUDDLE_RELIEF 1.0f
 // A breeze off the street onto the front of the house, gusting. In still air the eave keeps
 // the rain off the facade and the kitchen window; this drives it onto their lower halves. The
 // speed is a gust's peak, and the lulls between are half of it.
@@ -123,6 +125,7 @@ typedef struct SilentArgs {
     bool mute;
     float rain_mmh;         // 0 = dry
     bool no_wind;           // still air: the rain falls straight
+    bool no_relief;         // puddles from the noise alone, not the ground's own lows
     const char* audio_dump; // headless: write what the listener hears here
 } SilentArgs;
 
@@ -409,6 +412,7 @@ static void on_init(Game* game) {
             g_scene->rain->splash_size = RAIN_SPLASH_SIZE;
             g_scene->rain->glass_drop_size = RAIN_GLASS_DROP_SIZE;
             g_scene->rain->drip_brightness = RAIN_DRIP_BRIGHTNESS;
+            g_scene->rain->puddle_relief = g_args.no_relief ? 0.0f : RAIN_PUDDLE_RELIEF;
             rain_set_drip_lines(g_scene->rain, drips.lines, drips.count);
             rain_settle(g_scene->rain);
         }
@@ -590,6 +594,8 @@ static void print_usage(const char* prog) {
            (double)DEFAULT_RAIN_MMH);
     printf("      --no-rain           A dry night\n");
     printf("      --no-wind           Still air: the rain falls straight\n");
+    printf("      --no-relief         Puddles stand where the noise puts them, not in the\n"
+           "                          ground's own lows\n");
     printf("  In the window: click to capture the mouse, Tab to release it. WASD\n");
     printf("  walks, Shift hurries, the arrows or the mouse look, G shows the GUI.\n");
     printf("  -h, --help              This message\n");
@@ -655,6 +661,8 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
             a->rain_mmh = 0.0f;
         } else if (!strcmp(s, "--no-wind")) {
             a->no_wind = true;
+        } else if (!strcmp(s, "--no-relief")) {
+            a->no_relief = true;
         } else if (!strcmp(s, "-h") || !strcmp(s, "--help")) {
             print_usage(argv[0]);
             return false;

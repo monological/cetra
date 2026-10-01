@@ -37,11 +37,16 @@
 // scene bit like DECALS and AREA -- every material in a wet world is wet -- and it
 // declares no sampler, since the cover is a layer of the punctual array.
 #define PBR_FEAT_RAIN     64
+// Whether this material's puddles stand in its own height map's lows (spec 13.12): a
+// material bit set only in a raining scene that asks for it, on a material with a height map.
+// It is its own bit rather than part of RAIN because it declares heightTex, and a rain
+// variant that did would spend a sampler on every material in a wet world.
+#define PBR_FEAT_RELIEF   128
 
 // The union, written out rather than OR-ed together, because an expression here
 // would have to parse identically in C, GLSL and the Python that reads this file
 // for scripts/gates.py. A literal is the only form all three agree on.
-#define PBR_FEAT_ALL 127
+#define PBR_FEAT_ALL 255
 
 // The mask this compilation carries, and the test for a bit in it.
 //
