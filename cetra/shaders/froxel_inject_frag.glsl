@@ -276,25 +276,30 @@ void main() {
     // where the streaks already stand for every drop. Its source function, R, sums the same
     // lights as the fog's through the drops' phase in place of the fog's -- the one thing about
     // it that differs -- and without the fog's sunBoost, which is the fog's look and not light.
+    // R is only summed where the rain has an extinction to fold it in by.
     float rainS = 0.0;
     if (rainSigma > 0.0) {
         float handover = rainNear > 0.0
                              ? smoothstep(0.75 * rainNear, rainNear, length(P - camPos))
                              : 1.0;
-        rainS = rainSigma * handover * rainExposure(P);
+        rainS = rainSigma * handover;
+        if (rainS > 0.0)
+            rainS *= rainExposure(P);
     }
     vec3 R = ambientColor;
 
     vec3 S = ambientColor;
     for (int j = 0; j < numLights; j++) {
-        float phase = phaseHG(dot(lightDir[j], -rayDir), anisotropy) * sunBoost;
+        float cosLight = dot(lightDir[j], -rayDir);
+        float phase = phaseHG(cosLight, anisotropy) * sunBoost;
         // The deck occludes one light and the publisher says which, so this is a slot
         // compare rather than a direction compare -- exact where a dot needed an epsilon,
         // and -1 states "the sun is not in this list", which a direction cannot.
         float cloud = (j == cloudShadowLight) ? cloudSun : 1.0;
-        S += lightColor[j] * (phase * cloud * fogVisibility(j * cascadeCount, P));
-        R += lightColor[j] * (rainDropPhase(dot(lightDir[j], -rayDir), rainForwardG) * cloud *
-                              fogVisibility(j * cascadeCount, P));
+        float vis = fogVisibility(j * cascadeCount, P);
+        S += lightColor[j] * (phase * cloud * vis);
+        if (rainS > 0.0)
+            R += lightColor[j] * (rainDropPhase(cosLight, rainForwardG) * cloud * vis);
     }
 
     // Spot in-scatter at P: inside the cone, falling off with distance, cut by
@@ -337,8 +342,9 @@ void main() {
             S += spotColor * (cone * atten * spotPhase * vis);
             // The light's own travel through P rather than the cone's axis: a drop's lobe is
             // narrow enough that the difference is the beam's width.
-            R += spotColor * (cone * atten * rainDropPhase(dot(-spotL, -rayDir), rainForwardG) *
-                              vis);
+            if (rainS > 0.0)
+                R += spotColor *
+                     (cone * atten * rainDropPhase(dot(-spotL, -rayDir), rainForwardG) * vis);
         }
     }
 
@@ -373,8 +379,9 @@ void main() {
         // travels -- the punctual analogue of the directional phase above.
         float phase = phaseHG(dot(-pointL, -rayDir), anisotropy) * sunBoost;
         S += clusterLights[li].colorIntensity.xyz * (attenAngular * phase);
-        R += clusterLights[li].colorIntensity.xyz *
-             (attenAngular * rainDropPhase(dot(-pointL, -rayDir), rainForwardG));
+        if (rainS > 0.0)
+            R += clusterLights[li].colorIntensity.xyz *
+                 (attenAngular * rainDropPhase(dot(-pointL, -rayDir), rainForwardG));
     }
 
     /*

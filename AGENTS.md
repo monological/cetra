@@ -244,8 +244,9 @@ and `--no-ssr` moves **0 px** on a water frame. Water's reflection is its own sp
 lookup inside `water_frag`, which already selects its mip from the per-texel roughness.
 **The marker is a RANGE since spec 13.9, and every test of it is a range test**: (-1, 0) is
 the catcher, whose magnitude is its edge falloff, and below -1 is wet ground, as
-`-(1 + film)`, whose roughness SSR reads per texel from the aux buffer. A sign test anywhere
-(the tonemap's AO guard, `spec_occ`) hands wet ground the catcher's treatment. Wet ground's
+`-(1 + film)`, whose roughness SSR reads per texel from the aux buffer. Every reader asks
+`include/ssr_marker.glsl`: a sign test anywhere (the tonemap's AO guard, `spec_occ`) hands wet
+ground the catcher's treatment. Wet ground's
 reflection REPLACES its share of the environment's in `ssr_fold_wet_frag` rather than
 lerping the pixel -- see `docs/shader-subsystems.md`, Rain.
 

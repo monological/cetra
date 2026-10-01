@@ -732,8 +732,9 @@ under a roof rang. Darkening the bed under standing water was rejected: the film
 darkens at least as much as a flat water surface's internal reflection does.
 
 **Wet ground in SSR.** A wet texel marks the normals alpha BELOW -1, as `-(1 + film)`; the catcher
-keeps (-1, 0), and every test of the catcher is a range test. Three things make it right rather than
-merely visible:
+keeps (-1, 0), and every reader asks `include/ssr_marker.glsl` rather than testing the value -- a
+sign test hands wet ground the catcher's treatment. Three things make it right rather than merely
+visible:
 - SSR reads the texel's own roughness from the aux buffer and water's F0.
 - `ssr_fold_wet_frag` REPLACES the pixel's share of the environment's reflection -- adding the trace
   and subtracting that fraction of the split ambient specular -- where the lerp dimmed the diffuse

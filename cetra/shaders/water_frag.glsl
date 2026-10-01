@@ -140,10 +140,6 @@ uniform float maxReflectionLOD;
 #include "noise.glsl" // hash21, for the foam value noise below
 // Rings from rain landing on the surface (spec 13.9), the same rings a puddle takes.
 #include "rain_ripples.glsl"
-uniform float rainTime;           // seconds, the rain's clock
-uniform float rainRippleActivity; // 0..1, the fraction of ripple cells live; 0 = no rain
-uniform float rainRippleSize;     // metres across a ripple cell
-uniform float rainRippleStrength; // scale on the rings' tilt
 // Where the rain reaches at all: the occlusion map, a layer of the punctual array, which this
 // program declares for that one layer and samples no shadows from.
 uniform sampler2DArray punctualShadowMaps;
@@ -966,12 +962,14 @@ void main() {
     // Behind the activity test rather than folded through a zero, so a sea with no rain on it
     // takes none of the arithmetic -- a normalize of an unchanged normal still moves bits.
     if (rainRippleActivity > 0.0) {
-        vec2 ring =
-            rainRippleSlope(WorldPos.xz, rainTime, rainRippleSize, rainRippleActivity, footprint);
+        vec2 ring = rainRippleSlope(WorldPos.xz, footprint);
         // Softened as wet ground's cover is, so water under an eave rings up to the same edge
-        // the ground beside it wets to.
-        float open = rainExposureSoft(WorldPos, 6.2831853 * ign(gl_FragCoord.xy));
-        N = normalize(N + vec3(-ring.x, 0.0, -ring.y) * (rainRippleStrength * open));
+        // the ground beside it wets to -- and asked only where a ring tilts anything, which
+        // past a few centimetres of footprint is nowhere.
+        if (ring != vec2(0.0)) {
+            float open = rainExposureSoft(WorldPos, 6.2831853 * ign(gl_FragCoord.xy));
+            N = rainRippleTilt(N, ring, open);
+        }
     }
     if (waveModel == 1) {
         // Roughness takes the slope variance the fade REMOVED, which is what makes this a

@@ -22,16 +22,16 @@
 // and carried as the estimator's two sums so the denoise chain averages
 // quantities that are linear in visibility. All this owes it is the divide and
 // the guard.
+#include "ssr_marker.glsl"
+
 float specOccSplitAt(vec2 uv, vec4 aoSample, vec2 specPair)
 {
     // Sky/hair (zero normal) and the shadow-catcher floor: no trustworthy
-    // reflection direction, so the plain AO answer serves. The catcher test
-    // is the marker's SIGN, matching what the catcher writes and the SSR
-    // march reads -- its magnitude is the edge falloff, so any threshold
-    // would hand part of the plane's outer ring to the specular term.
-    // Only (-1, 0) is the catcher: below -1 is wet ground (spec 13.9), a real surface.
+    // reflection direction, so the plain AO answer serves. The whole of the
+    // catcher's range: its magnitude is the edge falloff, so any threshold
+    // inside it would hand part of the plane's outer ring to the specular term.
     vec4 nrm = texture(normalsTex, uv);
-    if (dot(nrm.xyz, nrm.xyz) < 0.01 || (nrm.a < 0.0 && nrm.a >= -1.0))
+    if (dot(nrm.xyz, nrm.xyz) < 0.01 || ssrMarkerIsCatcher(nrm.a))
         return aoSample.r;
     // No lobe above the horizon anywhere in the sweep -- including every pixel
     // whose sums came from the early-outs' (0,0) neutral. Nothing to occlude,

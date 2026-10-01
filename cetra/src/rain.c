@@ -137,11 +137,8 @@ static float _rate_scaled(float tau, float rate_mmh) {
     return rate_mmh > 0.0f ? tau * RAIN_RATE_REFERENCE / rate_mmh : tau;
 }
 
-void rain_update(Rain* rain, float t, float dt) {
-    if (!rain)
-        return;
-    rain->time = t;
-    if (!(dt > 0.0f))
+void rain_update(Rain* rain, float dt) {
+    if (!rain || !(dt > 0.0f))
         return;
     rain->wetness = _approach(rain->wetness, rain_wetness_target(rain),
                               _rate_scaled(rain->wet_time, rain->rate_mmh), rain->dry_time, dt);
@@ -212,13 +209,12 @@ static void _probe_schedule(int fps) {
         return;
     const float dt = 1.0f / (float)fps;
     r->rate_mmh = 10.0f;
-    float t = 0.0f;
     for (int i = 0; i < fps * 10; i++)
-        rain_update(r, t += dt, dt);
+        rain_update(r, dt);
     const float wet_mid = r->wetness, puddle_mid = r->puddle_level;
     r->rate_mmh = 0.0f;
     for (int i = 0; i < fps * 30; i++)
-        rain_update(r, t += dt, dt);
+        rain_update(r, dt);
     printf("rain-probe schedule fps=%d rate=10 rain_s=10 dry_s=30 wet_mid=%.9g puddle_mid=%.9g "
            "wet_end=%.9g puddle_end=%.9g\n",
            fps, (double)wet_mid, (double)puddle_mid, (double)r->wetness, (double)r->puddle_level);
@@ -257,12 +253,11 @@ void rain_probe_print(const Rain* rain) {
         printf("rain-probe state present=0\n");
         return;
     }
-    printf("rain-probe state present=1 rate=%.9g wetness=%.9g puddle=%.9g time=%.9g "
+    printf("rain-probe state present=1 rate=%.9g wetness=%.9g puddle=%.9g "
            "wet_time=%.9g dry_time=%.9g fill_time=%.9g drain_time=%.9g coverage=%.9g "
            "streak_count=%d streak_radius=%.9g mist=%.9g\n",
            (double)rain->rate_mmh, (double)rain->wetness, (double)rain->puddle_level,
-           (double)rain->time, (double)rain->wet_time, (double)rain->dry_time,
-           (double)rain->puddle_fill_time, (double)rain->puddle_drain_time,
-           (double)rain->puddle_coverage, rain->streak_count, (double)rain->streak_radius,
-           (double)rain->mist);
+           (double)rain->wet_time, (double)rain->dry_time, (double)rain->puddle_fill_time,
+           (double)rain->puddle_drain_time, (double)rain->puddle_coverage, rain->streak_count,
+           (double)rain->streak_radius, (double)rain->mist);
 }

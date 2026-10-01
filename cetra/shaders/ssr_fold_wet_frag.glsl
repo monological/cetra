@@ -23,14 +23,14 @@ out vec4 FragColor;
 // The canvas carries the ambient specular after the split composite's occlusion; what comes
 // out here is the unoccluded share, which is the same under open sky, where wet ground is.
 uniform sampler2D srcTex;     // the SSR buffer, premultiplied pairs (see above)
-uniform sampler2D normalsTex; // view normal .xyz + the SSR marker .a: below -1 is wet
+uniform sampler2D normalsTex; // view normal .xyz + the SSR marker .a (ssr_marker.glsl)
 uniform sampler2D specTex;    // the ambient specular, working space
 uniform vec2 texelSize;       // one SSR-buffer texel
 
-// The SSR marker's class: 2 wet ground (below -1), 1 the shadow catcher (-1 to 0), 0 unmarked.
+#include "ssr_marker.glsl"
+
 int classAt(vec2 uv) {
-    float a = texture(normalsTex, uv).a;
-    return a < -1.0 ? 2 : (a < 0.0 ? 1 : 0);
+    return ssrMarkerClass(texture(normalsTex, uv).a);
 }
 
 void main()

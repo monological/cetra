@@ -128,7 +128,7 @@ void rain_render_drops(RainRenderer* rr, Engine* engine, const Scene* scene,
     uniform_set_vec3(u, "cameraPos", engine->camera->position);
     uniform_set_vec3(u, "cameraVelocity", cam_vel);
     uniform_set_vec2(u, "viewport", (vec2){(float)late->width, (float)late->height});
-    uniform_set_float(u, "rainTime", rain->time);
+    uniform_set_float(u, "time", (float)engine->render_time);
     uniform_set_vec3(u, "rainWind", rain->wind);
     uniform_set_float(u, "mpLambda", rain_mp_lambda(rain->rate_mmh));
     uniform_set_float(u, "fallScale", fmaxf(rain->fall_scale, 0.0f));
@@ -243,7 +243,6 @@ void rain_bind_surface(const Rain* rain, ShaderProgram* program) {
     uniform_set_float(u, "rainDarkening", fmaxf(rain->wet_darkening, 0.0f));
     uniform_set_float(u, "rainPuddleLevel", rain->puddle_level);
     uniform_set_float(u, "rainPuddleScale", fmaxf(rain->puddle_scale, 0.01f));
-    uniform_set_float(u, "rainTime", rain->time);
     uniform_set_float(u, "rainRippleActivity", rain_ripple_activity(rain));
     uniform_set_float(u, "rainRippleSize", fmaxf(rain->ripple_size, 0.01f));
     uniform_set_float(u, "rainRippleStrength", fmaxf(rain->ripple_strength, 0.0f));
