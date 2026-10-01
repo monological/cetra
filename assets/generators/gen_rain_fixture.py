@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Generate assets/rain_fixture.gltf + .cscn, the rain instrument (spec 13.9).
+"""Generate rain_fixture.gltf + .cscn, the rain instrument, and rain_water_fixture.cscn,
+its flooded variant for the rings rain leaves on water (spec 13.9).
 
 A night yard in metres, built so that every question the rain gate asks has an answer
 known from the geometry alone:
@@ -16,9 +17,10 @@ known from the geometry alone:
                       something to be seen against at night.
 
 The wind is light and blows toward the wall (-z), so the roof's dry patch is displaced
-by (roof height) x (wind / fall speed) toward the wall -- about 0.7 m at the rate
-authored here. The gate reads points at least 2 m inside the patch, so that shift
-never decides an arm.
+by (roof height) x (wind / fall speed) toward the wall -- 0.84 m at the rate authored
+here. Most of the gate's points sit well inside or outside the patch; two sit just
+either side of the roof's own footprint, where that shift decides the answer, and are
+what hold the map to the rain's direction.
 
 Everything the probe prints is a function of the rate, and the physics arms hold it
 against closed forms written out in gates.py rather than read back from here.

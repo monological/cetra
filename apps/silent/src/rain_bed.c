@@ -16,7 +16,7 @@
 // Loudness in proportion to the LOG of the rate, the way a sense of loudness goes: a drizzle is
 // audible at all, and a downpour is not ten times a moderate rain.
 static float rain_bed_level(const Rain* rain) {
-    if (!rain || !(rain->rate_mmh > 0.0f))
+    if (!rain_falling(rain))
         return 0.0f;
     float l = log1pf(rain->rate_mmh) / log1pf(RAIN_BED_LOUDEST_MMH);
     return RAIN_BED_GAIN * fminf(l, 1.0f);
@@ -25,7 +25,7 @@ static float rain_bed_level(const Rain* rain) {
 void rain_bed_start(RainBed* bed, AudioSystem* audio, const Rain* rain) {
     bed->patter = bed->rumble = NULL;
     bed->open = 1.0f;
-    if (!audio || !rain || !(rain->rate_mmh > 0.0f))
+    if (!audio || !rain_falling(rain))
         return;
     bed->patter = audio_sound_from_noise(audio, AUDIO_NOISE_PINK, AUDIO_BUS_SFX);
     bed->rumble = audio_sound_from_noise(audio, AUDIO_NOISE_BROWN, AUDIO_BUS_SFX);

@@ -194,8 +194,12 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --rain-sheen <f>   How much brighter than its surroundings a drop\n"
                     "                         reads (0 = physical: only lit rain shows)\n");
     fprintf(stderr, "      --rain-probe       Print the rain's physics, schedule and state\n");
-    fprintf(stderr, "      --rain-probe-at <x,y,z>  With --rain-probe: whether this point is\n"
-                    "                         under cover (repeatable, up to 16)\n");
+    fprintf(stderr,
+            "      --rain-probe-at <x,y,z>  With --rain-probe: whether this point is\n"
+            "                         under cover (repeatable, up to %d)\n",
+            RAIN_PROBE_AT_MAX);
+    fprintf(stderr, "      --rain-ask <x,y,z> Ask the CPU cover query about this point every\n"
+                    "                         frame; --rain-probe prints its answer\n");
     fprintf(stderr, "      --rain-map <p>     With --rain-probe: the occlusion map as a PPM\n");
     fprintf(stderr, "      --water-level <f>  Still-water plane, world Y (implies --water)\n");
     fprintf(stderr, "      --water-extent <f> Half-size of the shoaling bed (implies --water)\n");
@@ -1208,9 +1212,10 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->rain_probe = 1;
         } else if (strcmp(argv[i], "--rain-probe-at") == 0) {
             float* p = args->rain_probe_at[args->rain_probe_at_count];
-            if (++i >= argc || args->rain_probe_at_count >= 16 ||
+            if (++i >= argc || args->rain_probe_at_count >= RAIN_PROBE_AT_MAX ||
                 sscanf(argv[i], "%f,%f,%f", &p[0], &p[1], &p[2]) != 3) {
-                fprintf(stderr, "Error: --rain-probe-at needs x,y,z (at most 16)\n");
+                fprintf(stderr, "Error: --rain-probe-at needs x,y,z (at most %d)\n",
+                        RAIN_PROBE_AT_MAX);
                 return -1;
             }
             args->rain_probe_at_count++;

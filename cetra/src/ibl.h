@@ -91,13 +91,13 @@ typedef struct IBLResources {
 
     /*
      * true = the reflection chains (GGX and sheen) see the environment through the global
-     * height fog, resolved from PostFX at each bake into `medium`, which the day/night slicer
-     * reuses between bakes. The irradiance never does: the fog's glow is real fill light as
-     * well, but taking it into the irradiance re-lights every surface in the scene, which is a
-     * different decision from what a mirror sees.
+     * height fog, resolved from PostFX at each atomic bake into `medium` and held until the
+     * next. The irradiance never does: the fog's glow is real fill light as well, but taking
+     * it into the irradiance re-lights every surface in the scene, which is a different
+     * decision from what a mirror sees.
      */
     bool reflect_fog;
-    IBLMedium medium; // engine-owned: what the last bake resolved
+    IBLMedium medium; // engine-owned: what the last atomic bake resolved
 
     /*
      * Solid-angle-weighted mean radiance of the environment's UPPER hemisphere, in
@@ -180,11 +180,11 @@ void ibl_create_cubemap_texture(GLuint* texture, int size, bool mipmap);
 // "ibl_charlie_prefilter" -- both share the environmentMap/roughness/
 // resolution contract): (re)allocates *dst with mip_levels manually-sized
 // levels from dst_base_size down, roughness = mip / (mip_levels - 1).
-// `medium` is what the source is seen through; NULL = nothing, which is right
-// for a probe's capture of the scene around it. Requires precompute_ibl to
-// have run (shares its capture FBO).
+// `through_medium`: true = the source is the distant environment, seen through
+// ibl->medium; false = it is a capture of the scene around a point, seen through
+// nothing. Requires precompute_ibl to have run (shares its capture FBO).
 void ibl_prefilter_cubemap(IBLResources* ibl, ShaderProgram* program, GLuint src_cube, GLuint* dst,
-                           int dst_base_size, int mip_levels, const IBLMedium* medium);
+                           int dst_base_size, int mip_levels, bool through_medium);
 
 // The 90-degree frustum every cube-face draw shares -- the sky's env faces
 // and the prefilter integrating over them must agree on it.
@@ -205,6 +205,6 @@ void ibl_create_prefilter_cubemap(GLuint* texture, int size, int num_mip_levels)
 void ibl_irradiance_slice(IBLResources* ibl, GLuint src_cube, GLuint dst_cube, int env_size);
 void ibl_prefilter_slice(IBLResources* ibl, ShaderProgram* program, GLuint src_cube,
                          GLuint dst_cube, int dst_base_size, int mip_levels, int mip,
-                         int face_first, int face_count, const IBLMedium* medium);
+                         int face_first, int face_count, bool through_medium);
 
 #endif // _IBL_H_

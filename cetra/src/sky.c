@@ -1296,14 +1296,13 @@ static bool sky_slicer_run_item(SkyAtmosphere* sky, struct IBLResources* ibl,
             // resolve one from, and the fog is not what a day/night cycle moves.
             ibl_prefilter_slice(ibl, ibl->prefilter_program, sky->slicer.shadow_env,
                                 sky->slicer.shadow_prefilter, SKY_PREFILTER_SIZE,
-                                SKY_PREFILTER_MIPS, it->mip, it->face_first, it->face_count,
-                                &ibl->medium);
+                                SKY_PREFILTER_MIPS, it->mip, it->face_first, it->face_count, true);
             break;
         case SKY_SLICE_CHARLIE:
             ibl_prefilter_slice(ibl, ibl->charlie_prefilter_program, sky->slicer.shadow_env,
                                 sky->slicer.shadow_charlie, IBL_CHARLIE_PREFILTER_SIZE,
                                 IBL_CHARLIE_PREFILTER_MIPS, it->mip, it->face_first, it->face_count,
-                                &ibl->medium);
+                                true);
             break;
         case SKY_SLICE_SWAP: {
             // The two chains trade places -- together with max_reflection_lod,

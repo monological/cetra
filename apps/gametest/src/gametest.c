@@ -4292,33 +4292,13 @@ static void mouse_button_callback(Engine* engine, int button, int action, int mo
 // the file-decode path with no device and no committed audio. Headless only.
 #define AUDIO_PROBE_WINDOW 9600 // frames per measurement, 0.2s at the offline 48 kHz
 
-static void probe_measure(AudioSystem* audio, float* rms_l, float* rms_r) {
+// Each channel's rms over one window, and optionally the left channel's BRIGHTNESS: the rms of
+// the sample-to-sample difference over the rms of the signal, which a flat spectrum puts near
+// sqrt(2) and a spectrum falling with frequency puts lower -- the one number that tells noise
+// colours apart.
+static void probe_measure(AudioSystem* audio, float* rms_l, float* rms_r, float* bright) {
     float buf[1024]; // up to 512 interleaved stereo frames
-    double sum_l = 0.0, sum_r = 0.0;
-    long total = 0;
-    int remaining = AUDIO_PROBE_WINDOW;
-    while (remaining > 0) {
-        size_t want = remaining < 512 ? (size_t)remaining : 512;
-        size_t got = audio_system_read_pcm(audio, buf, want);
-        if (got == 0)
-            break;
-        for (size_t i = 0; i < got; i++) {
-            sum_l += (double)buf[i * 2] * buf[i * 2];
-            sum_r += (double)buf[i * 2 + 1] * buf[i * 2 + 1];
-        }
-        total += (long)got;
-        remaining -= (int)got;
-    }
-    *rms_l = total ? sqrtf((float)(sum_l / total)) : 0.0f;
-    *rms_r = total ? sqrtf((float)(sum_r / total)) : 0.0f;
-}
-
-// The left channel's rms and its BRIGHTNESS: the rms of the sample-to-sample difference over
-// the rms of the signal, which a flat spectrum puts near sqrt(2) and a spectrum falling with
-// frequency puts lower -- the one number that tells noise colours apart.
-static void probe_measure_bright(AudioSystem* audio, float* rms, float* bright) {
-    float buf[1024];
-    double sum = 0.0, diff = 0.0;
+    double sum_l = 0.0, sum_r = 0.0, diff = 0.0;
     float prev = 0.0f;
     long total = 0;
     int remaining = AUDIO_PROBE_WINDOW;
@@ -4329,7 +4309,8 @@ static void probe_measure_bright(AudioSystem* audio, float* rms, float* bright) 
             break;
         for (size_t i = 0; i < got; i++) {
             const float s = buf[i * 2];
-            sum += (double)s * s;
+            sum_l += (double)s * s;
+            sum_r += (double)buf[i * 2 + 1] * buf[i * 2 + 1];
             if (total + (long)i > 0)
                 diff += (double)(s - prev) * (s - prev);
             prev = s;
@@ -4337,8 +4318,10 @@ static void probe_measure_bright(AudioSystem* audio, float* rms, float* bright) 
         total += (long)got;
         remaining -= (int)got;
     }
-    *rms = total ? sqrtf((float)(sum / total)) : 0.0f;
-    *bright = sum > 0.0 ? sqrtf((float)(diff / sum)) : 0.0f;
+    *rms_l = total ? sqrtf((float)(sum_l / total)) : 0.0f;
+    *rms_r = total ? sqrtf((float)(sum_r / total)) : 0.0f;
+    if (bright)
+        *bright = sum_l > 0.0 ? sqrtf((float)(diff / sum_l)) : 0.0f;
 }
 
 static int run_audio_probe(Game* game, const char* which, const char* file) {
@@ -4359,10 +4342,10 @@ static int run_audio_probe(Game* game, const char* which, const char* file) {
         // A centred 2D tone: silent until played, then energetic.
         Sound* t = audio_sound_from_tone(audio, 440.0f, AUDIO_BUS_SFX);
         audio_sound_set_looping(t, true);
-        probe_measure(audio, &l, &r);
+        probe_measure(audio, &l, &r, NULL);
         printf("audio onset pre rms %.6f %.6f\n", l, r);
         audio_sound_play(t);
-        probe_measure(audio, &l, &r);
+        probe_measure(audio, &l, &r, NULL);
         printf("audio onset post rms %.6f %.6f\n", l, r);
     } else if (!strcmp(which, "pan")) {
         // Same distance either side, so only the pan differs.
@@ -4370,10 +4353,10 @@ static int run_audio_probe(Game* game, const char* which, const char* file) {
         audio_sound_set_looping(t, true);
         audio_sound_play(t);
         audio_sound_set_position(t, (vec3){10.0f, 0.0f, 0.0f});
-        probe_measure(audio, &l, &r);
+        probe_measure(audio, &l, &r, NULL);
         printf("audio pan right rms %.6f %.6f\n", l, r);
         audio_sound_set_position(t, (vec3){-10.0f, 0.0f, 0.0f});
-        probe_measure(audio, &l, &r);
+        probe_measure(audio, &l, &r, NULL);
         printf("audio pan left rms %.6f %.6f\n", l, r);
     } else if (!strcmp(which, "distance")) {
         // Straight ahead, so panning is even; only the distance differs.
@@ -4381,20 +4364,20 @@ static int run_audio_probe(Game* game, const char* which, const char* file) {
         audio_sound_set_looping(t, true);
         audio_sound_play(t);
         audio_sound_set_position(t, (vec3){0.0f, 0.0f, -1.0f});
-        probe_measure(audio, &l, &r);
+        probe_measure(audio, &l, &r, NULL);
         printf("audio distance near rms %.6f %.6f\n", l, r);
         audio_sound_set_position(t, (vec3){0.0f, 0.0f, -20.0f});
-        probe_measure(audio, &l, &r);
+        probe_measure(audio, &l, &r, NULL);
         printf("audio distance far rms %.6f %.6f\n", l, r);
     } else if (!strcmp(which, "master")) {
         Sound* t = audio_sound_from_tone(audio, 440.0f, AUDIO_BUS_SFX);
         audio_sound_set_looping(t, true);
         audio_sound_play(t);
         audio_set_bus_volume(audio, AUDIO_BUS_MASTER, 1.0f);
-        probe_measure(audio, &l, &r);
+        probe_measure(audio, &l, &r, NULL);
         printf("audio master on rms %.6f %.6f\n", l, r);
         audio_set_bus_volume(audio, AUDIO_BUS_MASTER, 0.0f);
-        probe_measure(audio, &l, &r);
+        probe_measure(audio, &l, &r, NULL);
         printf("audio master off rms %.6f %.6f\n", l, r);
     } else if (!strcmp(which, "noise")) {
         // Each colour alone, from the same seed: loud, and each darker than the last.
@@ -4406,9 +4389,9 @@ static int run_audio_probe(Game* game, const char* which, const char* file) {
         for (size_t i = 0; i < sizeof(COLOURS) / sizeof(COLOURS[0]); i++) {
             Sound* n = audio_sound_from_noise(audio, COLOURS[i].colour, AUDIO_BUS_SFX);
             audio_sound_play(n);
-            float rms = 0.0f, bright = 0.0f;
-            probe_measure_bright(audio, &rms, &bright);
-            printf("audio noise %s rms %.6f bright %.6f\n", COLOURS[i].name, rms, bright);
+            float bright = 0.0f;
+            probe_measure(audio, &l, &r, &bright);
+            printf("audio noise %s rms %.6f bright %.6f\n", COLOURS[i].name, l, bright);
             audio_sound_stop(n);
         }
     } else if (!strcmp(which, "decode")) {
@@ -4422,7 +4405,7 @@ static int run_audio_probe(Game* game, const char* which, const char* file) {
                 rc = 1;
             } else {
                 audio_sound_play(s);
-                probe_measure(audio, &l, &r);
+                probe_measure(audio, &l, &r, NULL);
                 printf("audio decode result rms %.6f %.6f\n", l, r);
             }
         }
