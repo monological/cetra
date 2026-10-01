@@ -37,7 +37,8 @@ import zlib
 from fixture_paths import asset_path, asset_ref
 
 # A unit cube centred on the origin, one quad per face so each face carries its own
-# normal. Every piece of the yard is this cube, translated and scaled by its node.
+# normal. Every piece of the yard but the relief twin's ground is this cube, translated and
+# scaled by its node.
 FACES = [
     ((1, 0, 0), [(0.5, -0.5, 0.5), (0.5, -0.5, -0.5), (0.5, 0.5, -0.5), (0.5, 0.5, 0.5)]),
     ((-1, 0, 0), [(-0.5, -0.5, -0.5), (-0.5, -0.5, 0.5), (-0.5, 0.5, 0.5), (-0.5, 0.5, -0.5)]),
@@ -53,25 +54,45 @@ for n, quad in FACES:
     normals += [n] * 4
     indices += [base, base + 1, base + 2, base, base + 2, base + 3]
 
-pos_bytes = b"".join(struct.pack("<3f", *p) for p in positions)
-nrm_bytes = b"".join(struct.pack("<3f", *map(float, n)) for n in normals)
-idx_bytes = b"".join(struct.pack("<H", i) for i in indices)
 
+def bounds(points):
+    """A POSITION accessor's min and max."""
+    return ([min(p[i] for p in points) for i in range(3)],
+            [max(p[i] for p in points) for i in range(3)])
+
+
+def pack(fmt, rows):
+    return b"".join(struct.pack(fmt, *row) for row in rows)
+
+
+# A geometry is its attributes -- (name, bytes, type, count, bounds or None) -- and its indices.
+CUBE = {
+    "attributes": [("POSITION", pack("<3f", positions), "VEC3", len(positions), bounds(positions)),
+                   ("NORMAL", pack("<3f", [map(float, n) for n in normals]), "VEC3",
+                    len(normals), None)],
+    "indices": (pack("<H", [(i,) for i in indices]), len(indices)),
+}
+
+# Name -> (base colour, roughness[, albedo image]).
 GREY = [0.35, 0.35, 0.35, 1.0]
-MATERIALS = [
-    ("rain_porous", GREY, 0.85),
-    ("rain_sealed", GREY, 0.85),
-    ("rain_roof", [0.12, 0.12, 0.13, 1.0], 0.7),
-    ("rain_post", [0.3, 0.28, 0.25, 1.0], 0.8),
-    ("rain_wall", [0.45, 0.28, 0.22, 1.0], 0.9),
-]
-GLASS_MATERIALS = MATERIALS + [("rain_glass", [0.9, 0.95, 0.92, 1.0], 0.05)]
+MATERIALS = {
+    "rain_porous": (GREY, 0.85),
+    "rain_sealed": (GREY, 0.85),
+    "rain_roof": ([0.12, 0.12, 0.13, 1.0], 0.7),
+    "rain_post": ([0.3, 0.28, 0.25, 1.0], 0.8),
+    "rain_wall": ([0.45, 0.28, 0.22, 1.0], 0.9),
+    "rain_glass": ([0.9, 0.95, 0.92, 1.0], 0.05),
+    "rain_relief": (GREY, 0.85, "rain_relief_albedo.png"),
+}
 
-# The yard, in metres: (name, material, centre, size).
+# The yard, in metres: (name, material, centre, size[, geometry]), a cube when no geometry is
+# given.
 ROOF_Y = 3.0  # underside; the slab spans x -4..4 and z -7..-1
-PIECES = [
+GROUNDS = [
     ("ground_porous", "rain_porous", (-5.0, -0.1, 0.0), (10.0, 0.2, 24.0)),
     ("ground_sealed", "rain_sealed", (5.0, -0.1, 0.0), (10.0, 0.2, 24.0)),
+]
+YARD = [
     ("roof", "rain_roof", (0.0, ROOF_Y + 0.1, -4.0), (8.0, 0.2, 6.0)),
     ("post_a", "rain_post", (-3.8, ROOF_Y / 2, -1.2), (0.2, ROOF_Y, 0.2)),
     ("post_b", "rain_post", (3.8, ROOF_Y / 2, -1.2), (0.2, ROOF_Y, 0.2)),
@@ -80,6 +101,7 @@ PIECES = [
     ("wall", "rain_wall", (0.0, 2.0, -11.5), (20.0, 4.0, 0.4)),
     ("lamp_pole", "rain_post", (6.5, 2.2, -3.0), (0.12, 4.4, 0.12)),
 ]
+PIECES = GROUNDS + YARD
 
 # The GLASS twin's panes (spec 13.12), thin -- 6 mm. Two stand facing +z, the side the rain
 # strikes: one in the open and one under the middle of the roof. The third lies FLAT, a glass
@@ -89,7 +111,7 @@ PIECES = [
 PANES = [
     ("pane_open", "rain_glass", (2.0, 1.05, 4.0), (2.0, 1.5, 0.006)),
     ("pane_covered", "rain_glass", (-2.0, 1.05, -4.0), (2.0, 1.5, 0.006)),
-    ("pane_roof", "rain_glass", (0.0, 2.4, 1.0), (2.0, 0.006, 2.0)),
+    ("pane_canopy", "rain_glass", (0.0, 2.4, 1.0), (2.0, 0.006, 2.0)),
 ]
 
 
@@ -100,14 +122,22 @@ PANES = [
 # lands in the same place whichever way an importer flips V: trenches centred on z = 2 + 4k,
 # plateaus on z = 4k. Its mean is exactly a half.
 RELIEF_PERIOD = 4.0
-RELIEF_X = (-10.0, 10.0)
-RELIEF_Z = (-12.0, 12.0)
 RELIEF_MAP = 64
-RELIEF_ALBEDO = "rain_relief_albedo.png"
 # The engine pairs a material with `<albedo stem>_height.png` beside its albedo, and only that
 # way: a .cscn has no height key.
 RELIEF_HEIGHT = "rain_relief_height.png"
-RELIEF_MATERIALS = MATERIALS + [("rain_relief", GREY, 0.85)]
+RELIEF_CORNERS = [(-10.0, 12.0), (10.0, 12.0), (10.0, -12.0), (-10.0, -12.0)]  # CCW from above
+RELIEF_POSITIONS = [(x, 0.0, z) for x, z in RELIEF_CORNERS]
+PLANE = {
+    "attributes": [
+        ("POSITION", pack("<3f", RELIEF_POSITIONS), "VEC3", 4, bounds(RELIEF_POSITIONS)),
+        ("NORMAL", pack("<3f", [(0.0, 1.0, 0.0)] * 4), "VEC3", 4, None),
+        ("TEXCOORD_0", pack("<2f", [(x / RELIEF_PERIOD, z / RELIEF_PERIOD)
+                                    for x, z in RELIEF_CORNERS]), "VEC2", 4, None),
+    ],
+    "indices": (pack("<H", [(i,) for i in (0, 1, 2, 0, 2, 3)]), 6),
+}
+RELIEF_GROUND = ("ground_relief", "rain_relief", None, None, PLANE)
 
 
 def png_grey(size, rows):
@@ -123,64 +153,63 @@ def png_grey(size, rows):
             chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
 
 
-def plane_bytes():
-    """The relief ground's quad: positions, normals, texture coordinates and indices."""
-    (x0, x1), (z0, z1) = RELIEF_X, RELIEF_Z
-    corners = [(x0, z1), (x1, z1), (x1, z0), (x0, z0)]  # counter-clockwise from above
-    return (b"".join(struct.pack("<3f", x, 0.0, z) for x, z in corners),
-            struct.pack("<3f", 0.0, 1.0, 0.0) * 4,
-            b"".join(struct.pack("<2f", x / RELIEF_PERIOD, z / RELIEF_PERIOD)
-                     for x, z in corners),
-            struct.pack("<6H", 0, 1, 2, 0, 2, 3))
+def gltf_of(pieces):
+    """The pieces as a glTF: each geometry packed once, one mesh per geometry and material, and
+    the materials -- with their images -- in the order the pieces first use them."""
+    geometries, materials, meshes, mesh_of = [], [], [], {}
+    for _, material, _, _, *geometry in pieces:
+        geometry = geometry[0] if geometry else CUBE
+        if not any(g is geometry for g in geometries):
+            geometries.append(geometry)
+        if material not in materials:
+            materials.append(material)
 
+    data, buffer_views, accessors, primitive_of = b"", [], [], []
+    for geometry in geometries:
+        chunks = [(name, blob, kind, count, box, 5126, 34962)
+                  for name, blob, kind, count, box in geometry["attributes"]]
+        chunks.append((None, geometry["indices"][0], "SCALAR", geometry["indices"][1], None, 5123,
+                       34963))
+        attributes = {}
+        for name, blob, kind, count, box, component, target in chunks:
+            buffer_views.append({"buffer": 0, "byteOffset": len(data), "byteLength": len(blob),
+                                 "target": target})
+            data += blob
+            accessor = {"bufferView": len(buffer_views) - 1, "componentType": component,
+                        "count": count, "type": kind}
+            if box:
+                accessor["min"], accessor["max"] = box
+            accessors.append(accessor)
+            if name:
+                attributes[name] = len(accessors) - 1
+        primitive_of.append((attributes, len(accessors) - 1))
 
-def gltf_of(pieces, materials, relief=False):
-    mat = {name: i for i, (name, _, _) in enumerate(materials)}
-    views = [(pos_bytes, 34962), (nrm_bytes, 34962), (idx_bytes, 34963)]
-    accessors = [
-        {"bufferView": 0, "componentType": 5126, "count": len(positions), "type": "VEC3",
-         "min": [-0.5, -0.5, -0.5], "max": [0.5, 0.5, 0.5]},
-        {"bufferView": 1, "componentType": 5126, "count": len(normals), "type": "VEC3"},
-        {"bufferView": 2, "componentType": 5123, "count": len(indices), "type": "SCALAR"},
-    ]
-    meshes = [
-        {"name": name,
-         "primitives": [{"attributes": {"POSITION": 0, "NORMAL": 1}, "indices": 2,
-                         "material": i}]}
-        for i, (name, _, _) in enumerate(materials)
-    ]
-    nodes = [
-        {"name": name, "mesh": mat[m], "translation": list(t), "scale": list(s)}
-        for name, m, t, s in pieces
-    ]
-    extra = {}
-    if relief:
-        p, n, uv, idx = plane_bytes()
-        views += [(p, 34962), (n, 34962), (uv, 34962), (idx, 34963)]
-        accessors += [
-            {"bufferView": 3, "componentType": 5126, "count": 4, "type": "VEC3",
-             "min": [RELIEF_X[0], 0.0, RELIEF_Z[0]], "max": [RELIEF_X[1], 0.0, RELIEF_Z[1]]},
-            {"bufferView": 4, "componentType": 5126, "count": 4, "type": "VEC3"},
-            {"bufferView": 5, "componentType": 5126, "count": 4, "type": "VEC2"},
-            {"bufferView": 6, "componentType": 5123, "count": 6, "type": "SCALAR"},
-        ]
-        meshes.append({"name": "ground_relief",
-                       "primitives": [{"attributes": {"POSITION": 3, "NORMAL": 4,
-                                                      "TEXCOORD_0": 5},
-                                       "indices": 6, "material": mat["rain_relief"]}]})
-        nodes.append({"name": "ground_relief", "mesh": len(meshes) - 1})
-        extra = {"textures": [{"source": 0}], "images": [{"uri": asset_ref(RELIEF_ALBEDO)}]}
-    data, buffer_views = b"", []
-    for chunk, target in views:
-        buffer_views.append({"buffer": 0, "byteOffset": len(data), "byteLength": len(chunk),
-                             "target": target})
-        data += chunk
-    materials_out = []
-    for name, color, rough in materials:
+    nodes = []
+    for name, material, t, s, *geometry in pieces:
+        g = next(i for i, x in enumerate(geometries) if x is (geometry[0] if geometry else CUBE))
+        if (g, material) not in mesh_of:
+            attributes, index = primitive_of[g]
+            mesh_of[(g, material)] = len(meshes)
+            meshes.append({"name": material,
+                           "primitives": [{"attributes": attributes, "indices": index,
+                                           "material": materials.index(material)}]})
+        node = {"name": name, "mesh": mesh_of[(g, material)]}
+        if t:
+            node["translation"], node["scale"] = list(t), list(s)
+        nodes.append(node)
+
+    materials_out, images = [], []
+    for name in materials:
+        color, rough, *image = MATERIALS[name]
         pbr = {"baseColorFactor": color, "metallicFactor": 0.0, "roughnessFactor": rough}
-        if name == "rain_relief":
-            pbr["baseColorTexture"] = {"index": 0}
+        if image:
+            pbr["baseColorTexture"] = {"index": len(images)}
+            images.append(image[0])
         materials_out.append({"name": name, "pbrMetallicRoughness": pbr})
+    extra = {}
+    if images:
+        extra = {"textures": [{"source": i} for i in range(len(images))],
+                 "images": [{"uri": asset_ref(image)} for image in images]}
     return {
         "asset": {"version": "2.0", "generator": "gen_rain_fixture.py"},
         "scene": 0,
@@ -245,14 +274,16 @@ water_desc["water"] = {"level": 0.05, "extent": 14.0, "waves": "gerstner", "wave
 # The GLASS variant (spec 13.12): the same yard with three thin panes, for the drops rain
 # leaves on glass. The panes are thin transmissive glass, so what is seen through one is the
 # refraction resolve at its own pixel, shifted only by the drops; the yard and the lamp give
-# that resolve something to show.
+# that resolve something to show. Seen from in front of the open pane, low enough that the
+# covered one shows under the roof.
 glass_desc = dict(scene_desc)
 glass_desc["_comment"] = [
-    "The rain instrument's glass variant (spec 13.12): the yard with three thin panes facing",
-    "the wind -- one in the open, one under the roof and one at the roof's front edge -- for",
-    "the drops rain leaves on glass. Same camera, lights and rain.",
+    "The rain instrument's glass variant (spec 13.12): the yard with three thin panes -- one",
+    "facing the wind in the open, one facing it under the roof, and a flat canopy in the open",
+    "-- for the drops rain leaves on glass. Same lights and rain; a camera on the panes.",
 ]
 glass_desc["models"] = [{"path": asset_ref("rain_glass_fixture.gltf")}]
+glass_desc["camera"] = {"eye": [0.5, 1.6, 8.0], "target": [0.5, 1.4, -2.0], "fov": 55}
 glass_desc["materials"] = dict(scene_desc["materials"])
 glass_desc["materials"]["rain_glass"] = {"transmission": 1.0, "thickness": 0.0, "ior": 1.5}
 
@@ -271,32 +302,25 @@ relief_desc["materials"] = {}
 relief_desc["rain"] = dict(scene_desc["rain"], puddleRelief=1.0, puddleScale=0.5)
 relief_desc["camera"] = {"eye": [0.0, 6.0, 10.0], "target": [0.0, 0.0, 2.0], "fov": 55}
 
-with open(asset_path(RELIEF_ALBEDO), "wb") as f:
+
+
+def write_json(name, obj):
+    with open(asset_path(name), "w") as f:
+        json.dump(obj, f, indent=1)
+        f.write("\n")
+
+
+with open(asset_path(MATERIALS["rain_relief"][2]), "wb") as f:
     f.write(png_grey(4, [255] * 4))
 with open(asset_path(RELIEF_HEIGHT), "wb") as f:
     q = RELIEF_MAP // 4
     f.write(png_grey(RELIEF_MAP, [0 if q <= y < 3 * q else 255 for y in range(RELIEF_MAP)]))
-with open(asset_path("rain_relief_fixture.gltf"), "w") as f:
-    json.dump(gltf_of([p for p in PIECES if not p[0].startswith("ground")], RELIEF_MATERIALS,
-                      relief=True), f, indent=1)
-    f.write("\n")
-with open(asset_path("rain_relief_fixture.cscn"), "w") as f:
-    json.dump(relief_desc, f, indent=1)
-    f.write("\n")
-with open(asset_path("rain_fixture.gltf"), "w") as f:
-    json.dump(gltf_of(PIECES, MATERIALS), f, indent=1)
-    f.write("\n")
-with open(asset_path("rain_glass_fixture.gltf"), "w") as f:
-    json.dump(gltf_of(PIECES + PANES, GLASS_MATERIALS), f, indent=1)
-    f.write("\n")
-with open(asset_path("rain_glass_fixture.cscn"), "w") as f:
-    json.dump(glass_desc, f, indent=1)
-    f.write("\n")
-with open(asset_path("rain_fixture.cscn"), "w") as f:
-    json.dump(scene_desc, f, indent=1)
-    f.write("\n")
-with open(asset_path("rain_water_fixture.cscn"), "w") as f:
-    json.dump(water_desc, f, indent=1)
-    f.write("\n")
+write_json("rain_relief_fixture.gltf", gltf_of([RELIEF_GROUND] + YARD))
+write_json("rain_relief_fixture.cscn", relief_desc)
+write_json("rain_fixture.gltf", gltf_of(PIECES))
+write_json("rain_glass_fixture.gltf", gltf_of(PIECES + PANES))
+write_json("rain_glass_fixture.cscn", glass_desc)
+write_json("rain_fixture.cscn", scene_desc)
+write_json("rain_water_fixture.cscn", water_desc)
 print("wrote rain_fixture.gltf + .cscn, rain_water_fixture.cscn, rain_glass_fixture.gltf + .cscn, "
       "rain_relief_fixture.gltf + .cscn and its two maps")

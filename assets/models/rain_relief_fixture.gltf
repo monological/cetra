@@ -20,8 +20,12 @@
  ],
  "nodes": [
   {
+   "name": "ground_relief",
+   "mesh": 0
+  },
+  {
    "name": "roof",
-   "mesh": 2,
+   "mesh": 1,
    "translation": [
     0.0,
     3.1,
@@ -35,7 +39,7 @@
   },
   {
    "name": "post_a",
-   "mesh": 3,
+   "mesh": 2,
    "translation": [
     -3.8,
     1.5,
@@ -49,7 +53,7 @@
   },
   {
    "name": "post_b",
-   "mesh": 3,
+   "mesh": 2,
    "translation": [
     3.8,
     1.5,
@@ -63,7 +67,7 @@
   },
   {
    "name": "post_c",
-   "mesh": 3,
+   "mesh": 2,
    "translation": [
     -3.8,
     1.5,
@@ -77,7 +81,7 @@
   },
   {
    "name": "post_d",
-   "mesh": 3,
+   "mesh": 2,
    "translation": [
     3.8,
     1.5,
@@ -91,7 +95,7 @@
   },
   {
    "name": "wall",
-   "mesh": 4,
+   "mesh": 3,
    "translation": [
     0.0,
     2.0,
@@ -105,7 +109,7 @@
   },
   {
    "name": "lamp_pole",
-   "mesh": 3,
+   "mesh": 2,
    "translation": [
     6.5,
     2.2,
@@ -116,36 +120,20 @@
     4.4,
     0.12
    ]
-  },
-  {
-   "name": "ground_relief",
-   "mesh": 6
   }
  ],
  "meshes": [
   {
-   "name": "rain_porous",
+   "name": "rain_relief",
    "primitives": [
     {
      "attributes": {
       "POSITION": 0,
-      "NORMAL": 1
+      "NORMAL": 1,
+      "TEXCOORD_0": 2
      },
-     "indices": 2,
+     "indices": 3,
      "material": 0
-    }
-   ]
-  },
-  {
-   "name": "rain_sealed",
-   "primitives": [
-    {
-     "attributes": {
-      "POSITION": 0,
-      "NORMAL": 1
-     },
-     "indices": 2,
-     "material": 1
     }
    ]
   },
@@ -154,11 +142,11 @@
    "primitives": [
     {
      "attributes": {
-      "POSITION": 0,
-      "NORMAL": 1
+      "POSITION": 4,
+      "NORMAL": 5
      },
-     "indices": 2,
-     "material": 2
+     "indices": 6,
+     "material": 1
     }
    ]
   },
@@ -167,11 +155,11 @@
    "primitives": [
     {
      "attributes": {
-      "POSITION": 0,
-      "NORMAL": 1
+      "POSITION": 4,
+      "NORMAL": 5
      },
-     "indices": 2,
-     "material": 3
+     "indices": 6,
+     "material": 2
     }
    ]
   },
@@ -180,45 +168,18 @@
    "primitives": [
     {
      "attributes": {
-      "POSITION": 0,
-      "NORMAL": 1
-     },
-     "indices": 2,
-     "material": 4
-    }
-   ]
-  },
-  {
-   "name": "rain_relief",
-   "primitives": [
-    {
-     "attributes": {
-      "POSITION": 0,
-      "NORMAL": 1
-     },
-     "indices": 2,
-     "material": 5
-    }
-   ]
-  },
-  {
-   "name": "ground_relief",
-   "primitives": [
-    {
-     "attributes": {
-      "POSITION": 3,
-      "NORMAL": 4,
-      "TEXCOORD_0": 5
+      "POSITION": 4,
+      "NORMAL": 5
      },
      "indices": 6,
-     "material": 5
+     "material": 3
     }
    ]
   }
  ],
  "materials": [
   {
-   "name": "rain_porous",
+   "name": "rain_relief",
    "pbrMetallicRoughness": {
     "baseColorFactor": [
      0.35,
@@ -227,20 +188,10 @@
      1.0
     ],
     "metallicFactor": 0.0,
-    "roughnessFactor": 0.85
-   }
-  },
-  {
-   "name": "rain_sealed",
-   "pbrMetallicRoughness": {
-    "baseColorFactor": [
-     0.35,
-     0.35,
-     0.35,
-     1.0
-    ],
-    "metallicFactor": 0.0,
-    "roughnessFactor": 0.85
+    "roughnessFactor": 0.85,
+    "baseColorTexture": {
+     "index": 0
+    }
    }
   },
   {
@@ -281,22 +232,6 @@
     "metallicFactor": 0.0,
     "roughnessFactor": 0.9
    }
-  },
-  {
-   "name": "rain_relief",
-   "pbrMetallicRoughness": {
-    "baseColorFactor": [
-     0.35,
-     0.35,
-     0.35,
-     1.0
-    ],
-    "metallicFactor": 0.0,
-    "roughnessFactor": 0.85,
-    "baseColorTexture": {
-     "index": 0
-    }
-   }
   }
  ],
  "textures": [
@@ -313,34 +248,6 @@
   {
    "bufferView": 0,
    "componentType": 5126,
-   "count": 24,
-   "type": "VEC3",
-   "min": [
-    -0.5,
-    -0.5,
-    -0.5
-   ],
-   "max": [
-    0.5,
-    0.5,
-    0.5
-   ]
-  },
-  {
-   "bufferView": 1,
-   "componentType": 5126,
-   "count": 24,
-   "type": "VEC3"
-  },
-  {
-   "bufferView": 2,
-   "componentType": 5123,
-   "count": 36,
-   "type": "SCALAR"
-  },
-  {
-   "bufferView": 3,
-   "componentType": 5126,
    "count": 4,
    "type": "VEC3",
    "min": [
@@ -355,21 +262,49 @@
    ]
   },
   {
-   "bufferView": 4,
+   "bufferView": 1,
    "componentType": 5126,
    "count": 4,
    "type": "VEC3"
   },
   {
-   "bufferView": 5,
+   "bufferView": 2,
    "componentType": 5126,
    "count": 4,
    "type": "VEC2"
   },
   {
-   "bufferView": 6,
+   "bufferView": 3,
    "componentType": 5123,
    "count": 6,
+   "type": "SCALAR"
+  },
+  {
+   "bufferView": 4,
+   "componentType": 5126,
+   "count": 24,
+   "type": "VEC3",
+   "min": [
+    -0.5,
+    -0.5,
+    -0.5
+   ],
+   "max": [
+    0.5,
+    0.5,
+    0.5
+   ]
+  },
+  {
+   "bufferView": 5,
+   "componentType": 5126,
+   "count": 24,
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 6,
+   "componentType": 5123,
+   "count": 36,
    "type": "SCALAR"
   }
  ],
@@ -377,49 +312,49 @@
   {
    "buffer": 0,
    "byteOffset": 0,
-   "byteLength": 288,
-   "target": 34962
-  },
-  {
-   "buffer": 0,
-   "byteOffset": 288,
-   "byteLength": 288,
-   "target": 34962
-  },
-  {
-   "buffer": 0,
-   "byteOffset": 576,
-   "byteLength": 72,
-   "target": 34963
-  },
-  {
-   "buffer": 0,
-   "byteOffset": 648,
    "byteLength": 48,
    "target": 34962
   },
   {
    "buffer": 0,
-   "byteOffset": 696,
+   "byteOffset": 48,
    "byteLength": 48,
    "target": 34962
   },
   {
    "buffer": 0,
-   "byteOffset": 744,
+   "byteOffset": 96,
    "byteLength": 32,
    "target": 34962
   },
   {
    "buffer": 0,
-   "byteOffset": 776,
+   "byteOffset": 128,
    "byteLength": 12,
+   "target": 34963
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 140,
+   "byteLength": 288,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 428,
+   "byteLength": 288,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 716,
+   "byteLength": 72,
    "target": 34963
   }
  ],
  "buffers": [
   {
-   "uri": "data:application/octet-stream;base64,AAAAPwAAAL8AAAA/AAAAPwAAAL8AAAC/AAAAPwAAAD8AAAC/AAAAPwAAAD8AAAA/AAAAvwAAAL8AAAC/AAAAvwAAAL8AAAA/AAAAvwAAAD8AAAA/AAAAvwAAAD8AAAC/AAAAvwAAAD8AAAA/AAAAPwAAAD8AAAA/AAAAPwAAAD8AAAC/AAAAvwAAAD8AAAC/AAAAvwAAAL8AAAC/AAAAPwAAAL8AAAC/AAAAPwAAAL8AAAA/AAAAvwAAAL8AAAA/AAAAvwAAAL8AAAA/AAAAPwAAAL8AAAA/AAAAPwAAAD8AAAA/AAAAvwAAAD8AAAA/AAAAPwAAAL8AAAC/AAAAvwAAAL8AAAC/AAAAvwAAAD8AAAC/AAAAPwAAAD8AAAC/AACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAABAAIAAAACAAMABAAFAAYABAAGAAcACAAJAAoACAAKAAsADAANAA4ADAAOAA8AEAARABIAEAASABMAFAAVABYAFAAWABcAAAAgwQAAAAAAAEBBAAAgQQAAAAAAAEBBAAAgQQAAAAAAAEDBAAAgwQAAAAAAAEDBAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAgwAAAQEAAACBAAABAQAAAIEAAAEDAAAAgwAAAQMAAAAEAAgAAAAIAAwA=",
+   "uri": "data:application/octet-stream;base64,AAAgwQAAAAAAAEBBAAAgQQAAAAAAAEBBAAAgQQAAAAAAAEDBAAAgwQAAAAAAAEDBAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAgwAAAQEAAACBAAABAQAAAIEAAAEDAAAAgwAAAQMAAAAEAAgAAAAIAAwAAAAA/AAAAvwAAAD8AAAA/AAAAvwAAAL8AAAA/AAAAPwAAAL8AAAA/AAAAPwAAAD8AAAC/AAAAvwAAAL8AAAC/AAAAvwAAAD8AAAC/AAAAPwAAAD8AAAC/AAAAPwAAAL8AAAC/AAAAPwAAAD8AAAA/AAAAPwAAAD8AAAA/AAAAPwAAAL8AAAC/AAAAPwAAAL8AAAC/AAAAvwAAAL8AAAA/AAAAvwAAAL8AAAA/AAAAvwAAAD8AAAC/AAAAvwAAAD8AAAC/AAAAvwAAAD8AAAA/AAAAvwAAAD8AAAA/AAAAPwAAAD8AAAC/AAAAPwAAAD8AAAA/AAAAvwAAAL8AAAC/AAAAvwAAAL8AAAC/AAAAPwAAAL8AAAA/AAAAPwAAAL8AAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAEAAgAAAAIAAwAEAAUABgAEAAYABwAIAAkACgAIAAoACwAMAA0ADgAMAA4ADwAQABEAEgAQABIAEwAUABUAFgAUABYAFwA=",
    "byteLength": 788
   }
  ]
