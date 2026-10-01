@@ -244,10 +244,10 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
     // a material that did not ask for it resets the uniform and the shader early-outs.
     uniform_set_float(u, "uShoreWetness", material->shore_wetness);
     uniform_set_float(u, "uPorosity", material->porosity);
-    uniform_set_float(u, "uRainBeads",
-                      material->rain_beads >= 0.0f    ? material->rain_beads
-                      : material->transmission > 0.0f ? 1.0f
-                                                      : 0.0f);
+    const bool beads = material->rain_beads == RAIN_BEADS_AUTO
+                           ? material->transmission > 0.0f
+                           : material->rain_beads == RAIN_BEADS_ON;
+    uniform_set_float(u, "uRainBeads", beads ? 1.0f : 0.0f);
     // Stochastic albedo sampling (0 = a plain lookup). The table goes up whenever the scale
     // does rather than being cached per material: it is 768 bytes, where deciding whether to
     // skip it would need per-program state this call deliberately does not keep.
@@ -767,7 +767,7 @@ static size_t _visible_run(const DrawList* list, size_t first, unsigned lanes,
     return n;
 }
 
-// The features THIS material can reach, as a PbrFeature mask.
+// The features THIS material can reach in this scene, as a PbrFeature mask.
 //
 // Conservative by construction, and it has to be: a bit set for a feature the
 // material never uses costs occupancy, which is slow. A bit MISSING for one it
@@ -775,7 +775,8 @@ static size_t _visible_run(const DrawList* list, size_t first, unsigned lanes,
 // frame. Every test below is therefore the shader's own gate widened -- it drops
 // the per-fragment terms (a texel's coherence, a height map's contents) that the
 // CPU cannot see and keeps only what a material declares.
-static unsigned _material_pbr_features(const Engine* engine, const Material* mat) {
+static unsigned _material_pbr_features(const Engine* engine, const Scene* scene,
+                                       const Material* mat) {
     unsigned mask = 0;
     if (engine->sheen_enabled &&
         (mat->sheen_color_factor[0] > 0.0f || mat->sheen_color_factor[1] > 0.0f ||
@@ -793,6 +794,10 @@ static unsigned _material_pbr_features(const Engine* engine, const Material* mat
     // layered paths runs, not whether the material is layered at all.
     if (mat->layer_count > 0)
         mask |= PBR_FEAT_LAYERS;
+    // A layered material's unit 4 is the virtual-texture page, not a height map, so the one
+    // material fact the rain's relief needs is refused it.
+    else if (mat->height_tex && rain_active(scene->rain) && scene->rain->puddle_relief > 0.0f)
+        mask |= PBR_FEAT_RELIEF;
     return mask;
 }
 
@@ -828,11 +833,7 @@ void engine_resolve_material_variants(Engine* engine, Scene* scene) {
         if (!mat || !mat->shader_program || mat->shader_program->pbr_features < 0)
             continue;
 
-        unsigned want = scene_mask | _material_pbr_features(engine, mat);
-        // A layered material's unit 4 is the virtual-texture page, not a height map.
-        if ((scene_mask & PBR_FEAT_RAIN) && scene->rain->puddle_relief > 0.0f && mat->height_tex &&
-            mat->layer_count == 0)
-            want |= PBR_FEAT_RELIEF;
+        const unsigned want = scene_mask | _material_pbr_features(engine, scene, mat);
         if ((unsigned)mat->shader_program->pbr_features == want)
             continue;
 

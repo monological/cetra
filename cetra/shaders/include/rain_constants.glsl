@@ -64,8 +64,8 @@
 #define RAIN_BEAD_CLOCK_WRAP 1024.0f
 
 // Drips (spec 13.12): the most lines a rain carries, set by the vertex stage's uniform
-// arrays -- three of vec4, 576 of the 1024 components GL guarantees that stage -- rather than
-// by anything a scene would want; the diameter a drop leaves an edge at,
+// arrays -- three of four components a line, 576 of the 1024 GL guarantees that stage --
+// rather than by anything a scene would want; the diameter a drop leaves an edge at,
 // where its weight overcomes the surface tension holding it (about 4.5 mm for water); and the
 // shortest cycle a drip point runs and the least time a drop hangs growing before it falls.
 #define RAIN_DRIP_MAX 48
@@ -73,11 +73,11 @@
 #define RAIN_DRIP_PERIOD_MIN 1.5f
 #define RAIN_DRIP_HANG_MIN 0.25f
 #define RAIN_GRAVITY 9.81f
-
-// How far a height map's full range moves the puddle line at full relief, in the puddle
-// noise's units (0..1): half of it, so the map reshapes the puddles the noise places rather
-// than replacing them with a copy of its own tile.
-#define RAIN_RELIEF_RANGE 0.5f
+// The instances a drip slot draws: the drop, then its splash's droplets.
+#define RAIN_DRIP_INSTANCES (1 + RAIN_SPLASH_DROPLETS)
+// Newton steps on a drip's fall time, the same on both sides: the first lands past the root,
+// and the rest close on it from there.
+#define RAIN_DRIP_NEWTON_STEPS 8
 
 // A falling drop oscillates, and the image of a lamp in it flashes as it does (Garg and Nayar
 // 2006): Rayleigh's lowest mode rings at (1/2pi) sqrt(8 sigma / (rho a^3)) for radius a, so a

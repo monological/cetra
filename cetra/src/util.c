@@ -350,6 +350,15 @@ bool find_existing_subpath(const char* base_dir, char** subpath_ptr) {
     return path_found;
 }
 
+const char* path_under_base(const char* base_dir, const char* path) {
+    if (!base_dir || !path)
+        return NULL;
+    const size_t len = strlen(base_dir);
+    if (len == 0 || strncmp(path, base_dir, len) != 0 || path[len] != '/')
+        return NULL;
+    return path + len + 1;
+}
+
 char* convert_windows_path_to_unix(const char* windows_path) {
     if (windows_path == NULL) {
         log_error("Error: Input path is NULL");

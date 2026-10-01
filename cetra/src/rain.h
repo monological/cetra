@@ -60,7 +60,7 @@ typedef struct Rain {
     float wetness;      // 0 = dry, 1 = every exposed surface carries a film
     float puddle_level; // 0 = no standing water, puddle_coverage = full at this rate
     vec3 wind_now;      // m/s, this instant's air, gusts and all: what the drops are drawn in
-    vec3 wind_mean;     // m/s, the air over a gust cycle: what the cover is cast along
+    vec3 wind_mean;     // m/s, the air over a gust cycle: what `travel` is taken from
     // The unit direction the rain last fell along, held after it stops while anything is
     // still wet, so what sheltered a surface still shelters it. Straight down when dry.
     vec3 travel;
@@ -194,28 +194,30 @@ bool rain_draws(const Rain* rain);
 // dropped, with a warning; a negative rate or a NULL list counts as none.
 void rain_set_drip_lines(Rain* rain, const RainDripLine* lines, int count);
 
-// How hard the drip lines run now, as a multiple of their rates: the rain's rate over the
-// reference while it falls, and half the remaining film once it stops.
-float rain_drip_flow(const Rain* rain);
+/*
+ * What the drip lines do this frame, per line. A slot runs one CYCLE of `period` seconds --
+ * long enough for a drop to hang a moment, fall from the line's higher end to `land` and throw
+ * its splash, so it never has two drops in the air -- and drips in it with `chance`. The slots
+ * are shared in proportion to the drops each line keeps in the air, its rate times its cycle,
+ * so every slot drips with the same chance: one each first when there are enough to go round,
+ * the rest by largest remainder. A line with no rate gets none, and a rain whose drops do not
+ * fall drips nothing.
+ */
+typedef struct RainDripSchedule {
+    int slots[RAIN_DRIP_MAX];
+    float land[RAIN_DRIP_MAX]; // world Y: the line's ground, or the water's surface above it
+    float period[RAIN_DRIP_MAX];
+    float chance[RAIN_DRIP_MAX];
+    int total;      // slots handed out
+    float terminal; // m/s, a RAIN_DRIP_MM drop's terminal velocity times `fall_scale`
+} RainDripSchedule;
 
-// The cycle one slot of `line` runs, in seconds: long enough for a drop to hang a moment, fall
-// from the line's higher end to `land` and throw its splash, so a slot never has two drops in
-// the air at once.
-float rain_drip_period(const RainDripLine* line, float land, float fall_scale);
-
-// The drip slots each line gets of `drip_count`, written to `out` (RAIN_DRIP_MAX entries):
-// in proportion to the drops it keeps in the air -- its rate times its cycle onto its own
-// ground -- so every slot drips with the same chance, one each first when there are enough to
-// go round, the rest by largest remainder. A line with no rate gets none. Returns the total.
-int rain_drip_slots(const Rain* rain, int* out);
+// `water_level` is the world Y of a still water surface, -FLT_MAX for none.
+void rain_drip_schedule(const Rain* rain, float water_level, RainDripSchedule* out);
 
 // The fraction of the ripple cells a drop lands in, 0..1: none when nothing falls, all of
 // them from moderate rain up.
 float rain_ripple_activity(const Rain* rain);
-
-// The unit direction the rain travels now: the median drop's fall speed carried sideways
-// by the mean wind. Straight down when nothing falls; `Rain.travel` is what outlasts it.
-void rain_fall_direction(const Rain* rain, vec3 out);
 
 /*
  * The physics, as pure functions of the rate so a probe can print them for any rate
@@ -228,10 +230,6 @@ float rain_extinction(float rate_mmh);                   // 1/m, geometric optic
 float rain_drop_density(float rate_mmh, float d_min_mm); // drops/m^3 above d_min
 float rain_median_diameter(float rate_mmh);              // mm, the volume-weighted median D0
 float rain_splash_flux(float rate_mmh); // drops over RAIN_SPLASH_MIN_MM landing, 1/(m^2 s)
-// Seconds a drip takes to fall `height_m` from rest: a RAIN_DRIP_MM drop under linear drag,
-// which reaches its terminal velocity -- times `fall_scale`, Rain's look -- smoothly rather
-// than at a corner.
-float rain_drip_fall_time(float height_m, float fall_scale);
 
 // --rain-probe: the physics at a fixed ladder of rates, an integration schedule run
 // twice at different pacing, and this rain's own rate and state. Needs no GL.

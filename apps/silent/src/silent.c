@@ -90,15 +90,15 @@
 // Drops on glass at twice and a half their size: physical beads are a few millimetres, under
 // a pixel of the kitchen window from anywhere in the kitchen at the render scale this runs at.
 #define RAIN_GLASS_DROP_SIZE 2.5f
-// Drips at four times their opacity: one drop smeared over the shutter is a faint line a few
-// pixels wide even at arm's length, and the gutter's leaks past the kitchen window would not
-// read as water.
+// Drips at sixteen times their opacity: one drop smeared over the shutter is a faint line a
+// few pixels wide even at arm's length, and the gutter's leaks past the kitchen window would
+// not read as water.
 #define RAIN_DRIP_BRIGHTNESS 16.0f
 // The puddles stand in the road's and the yard's own lows, fully.
 #define RAIN_PUDDLE_RELIEF 1.0f
 // A breeze off the street onto the front of the house, gusting. In still air the eave keeps
 // the rain off the facade and the kitchen window; this drives it onto their lower halves. The
-// speed is a gust's peak, and the lulls between are half of it.
+// speed is a gust's peak; the lulls between fall to 1 - WIND_GUST_AMOUNT of it.
 #define WIND_AIR_SPEED      2.5f
 #define WIND_GUST_FREQUENCY 0.6f
 #define WIND_GUST_AMOUNT    0.5f
@@ -358,13 +358,11 @@ static void on_init(Game* game) {
     Kit kit;
     kit_init(&kit, g_scene, em, physics);
     mats_register(&kit, engine, g_scene);
-    // The edges that drip in the rain, gathered as the street goes up.
-    Drips drips = {0};
-    house_build(&kit, &drips);
+    house_build(&kit);
     kitchen_build(&kit, (unsigned int)g_args.seed);
     lights_build(&g_lights, &kit, engine, g_scene, (unsigned int)g_args.seed, !g_args.no_flicker,
                  g_args.flashlight);
-    street_build(&kit, g_scene, (unsigned int)g_args.seed, !g_args.day, &drips);
+    street_build(&kit, g_scene, (unsigned int)g_args.seed, !g_args.day);
     clock_build(&kit);
     kit_finish(&kit, "world");
     printf("silent: %d colliders, %d vertices\n", kit.collider_count, kit.vertex_count);
@@ -413,7 +411,7 @@ static void on_init(Game* game) {
             g_scene->rain->glass_drop_size = RAIN_GLASS_DROP_SIZE;
             g_scene->rain->drip_brightness = RAIN_DRIP_BRIGHTNESS;
             g_scene->rain->puddle_relief = g_args.no_relief ? 0.0f : RAIN_PUDDLE_RELIEF;
-            rain_set_drip_lines(g_scene->rain, drips.lines, drips.count);
+            rain_set_drip_lines(g_scene->rain, kit.drips, kit.drip_count);
             rain_settle(g_scene->rain);
         }
     }

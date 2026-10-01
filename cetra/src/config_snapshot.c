@@ -749,7 +749,8 @@ static const ConfigField CFG_FIELDS[] = {
 
     // The rain (spec 13.9), under the .cscn's own keys. Its wetness and puddle level are left
     // out, as the temporal histories are: they are what the settings integrated to, and a
-    // restored session re-derives them from the rate and the scene's `settled`.
+    // restored session re-derives them from the rate and the scene's `settled` and `dryFor`.
+    // The drip lines are authored in the scene file, like probes, and not carried.
     CFG_ROW(CFG_RAIN, CFG_FLOAT, "rain", "rate", rate_mmh),
     CFG_ROW(CFG_RAIN, CFG_VEC3, "rain", "wind", wind),
     CFG_ROW(CFG_RAIN, CFG_BOOL, "rain", "followSceneWind", follow_scene_wind),

@@ -1049,9 +1049,14 @@ static const CSceneRainKey RAIN_KEYS[] = {
 static void parse_drips(Rain* out, const cJSON* rain) {
     static const char* known[] = {"from", "to", "rate", "ground"};
     const cJSON* drips = cJSON_GetObjectItemCaseSensitive(rain, "drips");
-    if (!cJSON_IsArray(drips))
+    if (!cJSON_IsArray(drips) || cJSON_GetArraySize(drips) == 0)
         return;
-    RainDripLine lines[RAIN_DRIP_MAX];
+    // Every line the file names, so the rain can say how many it has no room for.
+    RainDripLine* lines = malloc((size_t)cJSON_GetArraySize(drips) * sizeof(RainDripLine));
+    if (!lines) {
+        log_error("cscene: out of memory for the rain's drip lines");
+        return;
+    }
     int count = 0;
     const cJSON* l = NULL;
     cJSON_ArrayForEach(l, drips) {
@@ -1069,12 +1074,10 @@ static void parse_drips(Rain* out, const cJSON* rain) {
             glm_vec3_copy(line.from, line.to);
         _ranged_float(l, "rain drip line", "rate", 0.0f, 1e4f, &line.rate);
         get_float(l, "ground", &line.ground);
-        // Counted past the cap so rain_set_drip_lines can say how many were dropped.
-        if (count < RAIN_DRIP_MAX)
-            lines[count] = line;
-        count++;
+        lines[count++] = line;
     }
     rain_set_drip_lines(out, lines, count);
+    free(lines);
 }
 
 static void parse_rain(CetraSceneDesc* d, const cJSON* root) {

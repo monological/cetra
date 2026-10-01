@@ -1,5 +1,6 @@
 #include "rain_render.h"
 
+#include <float.h>
 #include <math.h>
 #include <stdlib.h>
 
@@ -79,38 +80,26 @@ static bool _ensure_behind(RainRenderer* rr, int w, int h) {
     return true;
 }
 
-/*
- * The drip lines as the vertex stage reads them, one vec4 of each kind a line: its ends, with
- * the running end of its slots and the height its drops land at in the fourth components, and
- * its cycle and the chance a slot drips in one. A slot drips at most once a cycle, so a line
- * whose rate outruns its slots drips from every one and no faster.
- *
- * The cycle is reckoned onto the water when it lies above the line's ground, which only ever
- * shortens it.
- */
-static void _upload_drips(const Rain* rain, UniformManager* u, const int* slots, int total,
-                          float water_level) {
-    if (total <= 0)
+// The drip lines as the vertex stage reads them: each line's ends, and its schedule -- cycle,
+// chance, the running end of its slots and the height its drops land at.
+static void _upload_drips(const Rain* rain, UniformManager* u, const RainDripSchedule* sched) {
+    if (sched->total <= 0)
         return;
-    const float flow = rain_drip_flow(rain);
-    vec4 from[RAIN_DRIP_MAX], to[RAIN_DRIP_MAX], cycle[RAIN_DRIP_MAX];
+    vec3 from[RAIN_DRIP_MAX], to[RAIN_DRIP_MAX];
+    vec4 schedule[RAIN_DRIP_MAX];
     int end = 0;
     for (int i = 0; i < rain->drip_line_count; i++) {
-        const RainDripLine* l = &rain->drips[i];
-        end += slots[i];
-        const float land = fmaxf(l->ground, water_level);
-        const float period = rain_drip_period(l, land, fmaxf(rain->fall_scale, 0.0f));
-        glm_vec4((float*)l->from, (float)end, from[i]);
-        glm_vec4((float*)l->to, land, to[i]);
-        const float chance = slots[i] > 0 ? l->rate * flow * period / (float)slots[i] : 0.0f;
-        glm_vec4_copy((vec4){period, fminf(chance, 1.0f), 0.0f, 0.0f}, cycle[i]);
+        end += sched->slots[i];
+        glm_vec3_copy((float*)rain->drips[i].from, from[i]);
+        glm_vec3_copy((float*)rain->drips[i].to, to[i]);
+        glm_vec4_copy((vec4){sched->period[i], sched->chance[i], (float)end, sched->land[i]},
+                      schedule[i]);
     }
     uniform_set_int(u, "dripLines", rain->drip_line_count);
-    uniform_set_vec4_array(u, "dripFrom", (const float*)from, rain->drip_line_count);
-    uniform_set_vec4_array(u, "dripTo", (const float*)to, rain->drip_line_count);
-    uniform_set_vec4_array(u, "dripCycle", (const float*)cycle, rain->drip_line_count);
-    uniform_set_float(u, "dripTerminal",
-                      rain_terminal_velocity(RAIN_DRIP_MM) * fmaxf(rain->fall_scale, 0.0f));
+    uniform_set_vec3_array(u, "dripFrom", (const float*)from, rain->drip_line_count);
+    uniform_set_vec3_array(u, "dripTo", (const float*)to, rain->drip_line_count);
+    uniform_set_vec4_array(u, "dripSchedule", (const float*)schedule, rain->drip_line_count);
+    uniform_set_float(u, "dripTerminal", sched->terminal);
     uniform_set_float(u, "dripBrightness", fmaxf(rain->drip_brightness, 0.0f));
 }
 
@@ -127,12 +116,18 @@ void rain_render_drops(RainRenderer* rr, Engine* engine, const Scene* scene,
     const int splash_side =
         falls && rain->splash_count > 0 ? (int)floorf(sqrtf((float)rain->splash_count)) : 0;
     const int droplets = splash_side * splash_side * RAIN_SPLASH_DROPLETS;
-    int drip_slots[RAIN_DRIP_MAX];
-    const int drips = rain_draws(rain) ? rain_drip_slots(rain, drip_slots) : 0;
+    // The map does not hold water, so a surface that draws this frame is handed over as its
+    // still plane, which splashes and drips land on before the bed under it.
+    const float water_level = water_will_draw(scene->water, engine, engine->current_render_mode)
+                                  ? scene->water->level
+                                  : -FLT_MAX;
+    RainDripSchedule sched = {0};
+    if (rain_active(rain))
+        rain_drip_schedule(rain, water_level, &sched);
     // A build failure was logged when the engine registered the program.
     ShaderProgram* program = engine_find_program(engine, CETRA_PROGRAM_RAIN);
-    const int instances = falling + droplets + drips * (1 + RAIN_SPLASH_DROPLETS);
-    if (!rain_draws(rain) || instances == 0 || !program || !late->scene_depth)
+    const int instances = falling + droplets + sched.total * RAIN_DRIP_INSTANCES;
+    if (instances == 0 || !program || !late->scene_depth)
         return;
 
     // The camera's own motion over the frame: a streak is the drop's path relative to it,
@@ -171,39 +166,39 @@ void rain_render_drops(RainRenderer* rr, Engine* engine, const Scene* scene,
     uniform_set_vec2(u, "viewport", (vec2){(float)late->width, (float)late->height});
     uniform_set_float(u, "time", (float)engine->render_time);
     uniform_set_vec3(u, "rainWind", rain->wind_now);
-    // Infinite once nothing falls, which no instance then reads.
-    uniform_set_float(u, "mpLambda", falls ? rain_mp_lambda(rain->rate_mmh) : 1.0f);
-    uniform_set_float(u, "fallScale", fmaxf(rain->fall_scale, 0.0f));
     uniform_set_float(u, "shutter", rain->shutter_s);
-    uniform_set_float(u, "boxHalf", rain->streak_radius);
+    // What every instance range is sized from, so set whether or not anything falls.
     uniform_set_int(u, "dropsPerBox", per_box);
-    // Each box holds the same count over a volume RAIN_STREAK_BOX_SCALE^3 the last's, which is
-    // the shader's to scale by: what a streak stands for is counted against the innermost.
-    const float side = 2.0f * rain->streak_radius;
-    uniform_set_float(u, "dropsPerStreak",
-                      per_box > 0 ? rain_drop_density(rain->rate_mmh, RAIN_DROP_MIN_MM) * side *
-                                        side * side / (float)per_box
-                                  : 0.0f);
-
-    // How many drops big enough to splash land in one slot's cell over its life. A slot draws
-    // at most one splash a life: it fires with that count as its chance when there are fewer,
-    // and when there are more it fires every life and stands for all of them.
-    const float cell = splash_side > 0 ? 2.0f * rain->splash_radius / (float)splash_side : 1.0f;
-    const float per_life = rain_splash_flux(rain->rate_mmh) * cell * cell * RAIN_SPLASH_LIFE *
-                           fmaxf(rain->splash_amount, 0.0f);
     uniform_set_int(u, "splashSide", splash_side);
-    uniform_set_float(u, "splashCell", cell);
-    uniform_set_float(u, "splashFire", fminf(per_life, 1.0f));
-    uniform_set_float(u, "splashStandsFor", fmaxf(per_life, 1.0f));
+    if (falls) {
+        uniform_set_float(u, "mpLambda", rain_mp_lambda(rain->rate_mmh));
+        uniform_set_float(u, "fallScale", fmaxf(rain->fall_scale, 0.0f));
+        uniform_set_float(u, "boxHalf", rain->streak_radius);
+        // Each box holds the same count over a volume RAIN_STREAK_BOX_SCALE^3 the last's,
+        // which is the shader's to scale by: what a streak stands for is counted against the
+        // innermost.
+        const float side = 2.0f * rain->streak_radius;
+        uniform_set_float(u, "dropsPerStreak",
+                          per_box > 0 ? rain_drop_density(rain->rate_mmh, RAIN_DROP_MIN_MM) * side *
+                                            side * side / (float)per_box
+                                      : 0.0f);
+        // How many drops big enough to splash land in one slot's cell over its life. A slot
+        // draws at most one splash a life: it fires with that count as its chance when there
+        // are fewer, and when there are more it fires every life and stands for all of them.
+        const float cell = splash_side > 0 ? 2.0f * rain->splash_radius / (float)splash_side : 1.0f;
+        const float per_life = rain_splash_flux(rain->rate_mmh) * cell * cell * RAIN_SPLASH_LIFE *
+                               fmaxf(rain->splash_amount, 0.0f);
+        uniform_set_float(u, "splashCell", cell);
+        uniform_set_float(u, "splashFire", fminf(per_life, 1.0f));
+        uniform_set_float(u, "splashStandsFor", fmaxf(per_life, 1.0f));
+    }
+    // A splash's droplets and a drip's crown alike.
     uniform_set_float(u, "splashSize", fmaxf(rain->splash_size, 0.0f));
     // Down the rain from above a cell to what the occlusion map says it lands on: the
-    // direction the map was cast along. The map does not hold water, so a surface that draws
-    // this frame is handed over as its still plane.
+    // direction the map was cast along.
     uniform_set_vec3(u, "rainTravel", rain->travel);
-    const bool water = water_will_draw(scene->water, engine, engine->current_render_mode);
-    uniform_set_int(u, "rainWaterPresent", water ? 1 : 0);
-    uniform_set_float(u, "rainWaterLevel", water ? scene->water->level : 0.0f);
-    _upload_drips(rain, u, drip_slots, drips, water ? scene->water->level : -INFINITY);
+    uniform_set_float(u, "rainWaterLevel", water_level);
+    _upload_drips(rain, u, &sched);
     uniform_set_float(u, "streakWidth", rain->streak_width);
     uniform_set_float(u, "streakBrightness", rain->streak_brightness);
     uniform_set_float(u, "forwardG", rain->streak_forward_g);

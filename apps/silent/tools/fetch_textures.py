@@ -15,7 +15,7 @@ Flipping the rows is the whole correction: +Y in an OpenGL normal map means
 Downloads are cached under out/polyhaven_cache (the build tree, gitignored);
 the results land in assets/textures/silent/. Run from anywhere:
 
-    python3 apps/silent/tools/fetch_textures.py [--sheet PATH]
+    python3 apps/silent/tools/fetch_textures.py [--sheet PATH] [SET ...]
 """
 
 import argparse
@@ -40,7 +40,7 @@ FONT = "/System/Library/Fonts/Supplemental/Arial.ttf"
 
 # Poly Haven id -> what is done to it. `saturation` scales chroma (1 = as
 # shot); `gain` scales the albedo; `rotate` turns the set a quarter turn
-# clockwise, normal map included.
+# clockwise, normal map included; `disp` brings a Poly Haven set's displacement map too.
 SOURCES = {
     "grey_plaster_02": {},
     "white_plaster_rough_02": {"saturation": 0.5},
@@ -56,9 +56,9 @@ SOURCES = {
     # gathers in each surface's own lows (spec 13.12). Saved as `_disp`, never `_height`:
     # the engine gives any material with a `_height` sibling of its albedo parallax, and
     # the jars' contents share the grass's albedo.
-    "grass_ground": {"height": True},
-    "asphalt_02": {"height": True},
-    "concrete_pavement": {"height": True},
+    "grass_ground": {"disp": True},
+    "asphalt_02": {"disp": True},
+    "concrete_pavement": {"disp": True},
     "roof_slates_02": {},
     "brick_wall_006": {},
     "dirty_carpet": {},
@@ -120,12 +120,12 @@ def open_ambientcg(name, spec):
 
 
 def open_polyhaven(name, spec):
-    """A Poly Haven set's three maps at 1k, by this app's names, and a line
-    giving the size of what was scanned."""
+    """A Poly Haven set's maps at 1k, by this app's names, and a line giving the
+    size of what was scanned."""
     files = json.loads(fetch(API % name, name + "_files.json"))
     info = json.loads(fetch(INFO % name, name + "_info.json"))
     keys = {"albedo": spec.get("diffuse", "Diffuse"), "normal": "nor_gl", "rough": "Rough"}
-    if spec.get("height"):
+    if spec.get("disp"):
         keys["disp"] = "Displacement"
     out = {kind: Image.open(io.BytesIO(fetch(files[key]["1k"]["jpg"]["url"])))
            for kind, key in keys.items()}
@@ -171,14 +171,9 @@ def rough(img, spec):
     return out.resize((SIZE, SIZE), Image.Resampling.LANCZOS).convert("RGB")
 
 
-def disp(img, spec):
-    # White is raised, as the engine reads a height map; grey in all three channels, like
-    # the roughness.
-    return rough(img, spec)
-
-
-# What each kind of map goes through on its way in.
-PROCESS = {"albedo": albedo, "normal": normal, "rough": rough, "disp": disp}
+# What each kind of map goes through on its way in. A displacement map is a single
+# channel like the roughness, white raised as the engine reads a height map.
+PROCESS = {"albedo": albedo, "normal": normal, "rough": rough, "disp": rough}
 
 
 def write_sheet(path, names):
