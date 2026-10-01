@@ -836,6 +836,14 @@ warning. `--fov <deg>` is the vertical field of view (default 68).
 `cetra/src/game/input.h` gives, and `--trace-player` prints the player's position every 30 steps.
 That is gametest's pair, so a walk can be driven and read back with no controller.
 
+**Sound** (specs 13.10 and 13.11): the hall clock's tick, the tubes' buzz, the fridge's hum and the
+wind, each heard from where it is.
+- **`--mute`:** silences all of it.
+- **`--audio-dump <path>`:** with `-x`, writes what the listener hears as a 48 kHz stereo WAV,
+  pulled a frame at a time so it keeps step with the picture. Pinned with `--cam-eye` and
+  `--cam-target`, it is how a spot sounds without a window. Without `-x` it is ignored, since a
+  windowed run plays to the device and leaves nothing to pull.
+
 **`--day` is an overcast day** (spec 13.7).
 - **The light:** the sky is photometric in both modes, like the tubes, and by day it is fully
   overcast. No sun gets through and nothing casts, and the fog takes the dome's light.
