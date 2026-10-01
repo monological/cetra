@@ -26990,6 +26990,22 @@ RAIN_GLASS_MIN_PX = 500
 # that the film is under the floor rain_active() keeps and nothing of the rain is left.
 RAIN_GLASS_DAMP_S = 20.0
 RAIN_GLASS_DRIED_S = 5000.0
+# Three drip lines unlike in every way that matters to their share of the slots -- a point at
+# 2 m, a 2 m line at 5 m dripping fast, and a 6 m line at 3 m dripping slowly onto ground 1 m
+# up -- and few enough slots that the shares are small integers the twin must hit exactly.
+RAIN_DRIP_SHARE_LINES = [
+    {"from": [0.0, 2.0, 0.0], "rate": 3.0},
+    {"from": [-1.0, 5.0, 2.0], "to": [1.0, 5.0, 2.0], "rate": 10.0},
+    {"from": [-3.0, 3.0, 4.0], "to": [3.0, 3.0, 4.0], "rate": 1.0, "ground": 1.0},
+]
+RAIN_DRIP_SHARE_COUNT = 100
+# A line along the fixture roof's front edge, dripping hard and drawn bright: a single drop at
+# its physical opacity is a few hundredths of the pixels it crosses, which an 8-bit frame
+# rounds away often enough to leave an arm reading noise.
+RAIN_DRIP_LINE = {"from": [-3.5, 3.0, -1.0], "to": [3.5, 3.0, -1.0], "rate": 400.0}
+RAIN_DRIP_ARM = {"dripCount": 2048, "dripBrightness": 50.0}
+# The column under that line, and the open ground well in front of it.
+RAIN_DRIP_COLUMN = [(x, y, -1.0) for x in (-3.0, 3.0) for y in (0.3, 2.7)]
 
 
 def _rain_twin(rate):
@@ -27024,6 +27040,49 @@ def _simpson(f, a, b, n):
 
 def _rain_velocity(d_mm):
     return max(0.0, 9.65 - 10.3 * math.exp(-0.6 * d_mm))
+
+
+def _drip_fall_time(height):
+    """Seconds a drip takes to fall `height` metres from rest under linear drag, in double: the
+    distance fallen is vt (t - tau (1 - exp(-t / tau))) with tau = vt / g, solved by Newton."""
+    vt = _rain_velocity(_rain_constant("RAIN_DRIP_MM"))
+    if height <= 0.0:
+        return 0.0
+    g = _rain_constant("RAIN_GRAVITY")
+    tau = vt / g
+    t = math.sqrt(2.0 * height / g)
+    for _ in range(50):
+        e = math.exp(-t / tau)
+        t -= (vt * (t - tau * (1.0 - e)) - height) / (vt * (1.0 - e))
+    return t
+
+
+def _drip_shares(lines, count):
+    """The slots each drip line gets of `count`: one each when there are enough, the rest in
+    proportion to its rate times its cycle onto its own ground, by largest remainder, ties to
+    the earlier line."""
+    weights = []
+    for line in lines:
+        top = max(line["from"][1], line.get("to", line["from"])[1])
+        period = max(_rain_constant("RAIN_DRIP_PERIOD_MIN"),
+                     _rain_constant("RAIN_DRIP_HANG_MIN") +
+                     _drip_fall_time(top - line.get("ground", 0.0)) +
+                     _rain_constant("RAIN_SPLASH_LIFE"))
+        weights.append(line.get("rate", 1.0) * period)
+    live = [w > 0.0 for w in weights]
+    base = 1 if count >= sum(live) else 0
+    left = count - base * sum(live)
+    total = sum(weights)
+    out, rem = [], []
+    for w, alive in zip(weights, live):
+        quota = left * w / total if alive else 0.0
+        out.append(base + math.floor(quota) if alive else 0)
+        rem.append(quota - math.floor(quota) if alive else -2.0)
+    while sum(out) < count:
+        best = max(range(len(out)), key=lambda i: (rem[i], -i))
+        out[best] += 1
+        rem[best] = -1.0
+    return out
 
 
 def _rain_rows(scene, extra=None, frames=2):
@@ -27158,6 +27217,18 @@ def run_rain_gate(workdir):
       rain-glass-dry  RAIN_GLASS_DAMP_S after the rain stopped the open pane is still beaded;
                     RAIN_GLASS_DRIED_S after, the frame is 0 px from the twin with no rain at all.
       rain-glass-determinism  two runs of the beaded panes are 0 px apart.
+      rain-drips-share  three drip lines' slots, as the probe reports them, are exactly what a
+                    twin shares out -- one each, then the rest by largest remainder in proportion
+                    to each line's rate times its cycle onto its own ground, the cycle built
+                    from a fall time solved here in double -- and those fall times agree.
+      rain-drips    a line along the roof's front edge moves the column under it, and not a
+                    pixel of the open ground in front or the bare sky.
+      rain-drips-dry  RAIN_GLASS_DAMP_S after the rain stopped the line still drips; at
+                    RAIN_GLASS_DRIED_S the frame is 0 px from no rain at all.
+      rain-drips-water  on the flooded twin, RAIN_DEEP_WATER deep, the line dripping onto the
+                    ground under the water is 0 px from the same line dripping onto the water's
+                    surface: a drop meets the water first, as a splash does.
+      rain-drips-determinism  two runs of the dripping fixture are 0 px apart.
 
     Everything here runs on rain_fixture and its flooded and glazed twins, whose answers are
     known from their geometry and their closed forms; the streak arms read the fixture at sheen
@@ -27760,6 +27831,92 @@ def run_rain_gate(workdir):
     print(f"  rain-glass-determinism {'PASS' if ok else 'FAIL'}  two runs {ae} px apart (want 0)")
     if not ok:
         failures.append("rain-glass-determinism")
+
+    # Drips: the share of the slots each line gets, against the twin, and the fall time behind it.
+    share_rows, _ = _rain_rows(variant("drip_share", lambda s: s["rain"].update(
+        {"drips": RAIN_DRIP_SHARE_LINES, "dripCount": RAIN_DRIP_SHARE_COUNT})))
+    got_slots = [int(r["slots"]) for r in share_rows.get("drip", [])]
+    want_slots = _drip_shares(RAIN_DRIP_SHARE_LINES, RAIN_DRIP_SHARE_COUNT)
+    falls = share_rows.get("dripfall", [])
+    fall_err = max((abs(r["t"] - _drip_fall_time(r["h"])) / _drip_fall_time(r["h"])
+                    for r in falls), default=float("inf"))
+    given = (share_rows.get("drips") or [{}])[0].get("given")
+    ok = got_slots == want_slots and given == RAIN_DRIP_SHARE_COUNT and fall_err <= RAIN_TOL
+    print(f"  rain-drips-share {'PASS' if ok else 'FAIL'}  slots {got_slots} against the twin's "
+          f"{want_slots}, {given} handed out of {RAIN_DRIP_SHARE_COUNT}; fall times "
+          f"{fall_err:.1e} off the twin's (want <= {RAIN_TOL:g})")
+    if not ok:
+        failures.append("rain-drips-share")
+
+    # The drips on their own: no streaks, no splashes, no mist, so a pair of frames differs only
+    # in a line's drops and their crowns.
+    def drips(name, line, rain=None, base=scene, mutate=None):
+        def m(s):
+            s["rain"].update({**RAIN_SURFACES_ONLY, **RAIN_DRIP_ARM, **(rain or {})})
+            if line is not None:
+                s["rain"]["drips"] = [line]
+            if mutate is not None:
+                mutate(s)
+        return frame(name, variant(name, m, base=base), RAIN_LINEAR)
+
+    def column_moved(a, b):
+        if not (a and b):
+            return float("nan"), 0
+        m, t = moved_in_quad(a, b, _cscn_camera(RAIN_FIXTURE), RAIN_DRIP_COLUMN)
+        return (m / t if t else float("nan")), t
+
+    dripping, bare_edge = drips("dripping", RAIN_DRIP_LINE), drips("bare_edge", None)
+    col_f, col_t = column_moved(dripping, bare_edge)
+    open_m, open_t, sky_m = -1, 0, -1
+    if dripping and bare_edge:
+        open_m, open_t = moved_in_quad(dripping, bare_edge, _cscn_camera(RAIN_FIXTURE),
+                                       ground_quad(RAIN_SSR_OPEN, 0.0))
+        w, h, pa = _read_ppm(dripping)
+        _, _, pb = _read_ppm(bare_edge)
+        x0, y0, x1, y1 = RAIN_SKY_BOX
+        sky_m, _ = _moved_in_rect(pa, pb, w, h, int(x0 * w), int(y0 * h), int(x1 * w), int(y1 * h))
+    ok = (col_t >= RAIN_GLASS_MIN_PX and col_f > RAIN_FEATURE_MIN and open_t >= RAIN_SSR_MIN_PX
+          and open_m == 0 and sky_m == 0)
+    print(f"  rain-drips {'PASS' if ok else 'FAIL'}  the line moves {col_f:.1%} of the column's "
+          f"{col_t} px under it (want > {RAIN_FEATURE_MIN:.0%}), {open_m} of {open_t} px of the "
+          f"open ground and {sky_m} of the sky (want 0)")
+    if not ok:
+        failures.append("rain-drips")
+
+    damp_f, _ = column_moved(drips("drip_damp", RAIN_DRIP_LINE, {"dryFor": RAIN_GLASS_DAMP_S}),
+                             drips("drip_damp_bare", None, {"dryFor": RAIN_GLASS_DAMP_S}))
+    dried = drips("drip_dried", RAIN_DRIP_LINE, {"dryFor": RAIN_GLASS_DRIED_S})
+    never = frame("drip_never", no_rain, RAIN_LINEAR)
+    dried_ae = compare(dried, never)[0] if dried and never else sys.maxsize
+    ok = damp_f > RAIN_FEATURE_MIN and dried_ae == 0
+    print(f"  rain-drips-dry {'PASS' if ok else 'FAIL'}  {RAIN_GLASS_DAMP_S:g} s after the rain the "
+          f"line still moves {damp_f:.1%} of its column (want > {RAIN_FEATURE_MIN:.0%}); "
+          f"{RAIN_GLASS_DRIED_S:g} s after, {dried_ae} px from no rain at all (want 0)")
+    if not ok:
+        failures.append("rain-drips-dry")
+
+    def flood(s):
+        s["water"]["level"] = RAIN_DEEP_WATER
+
+    under = drips("drip_under", {**RAIN_DRIP_LINE, "ground": 0.0}, base=water, mutate=flood)
+    onto = drips("drip_onto", {**RAIN_DRIP_LINE, "ground": RAIN_DEEP_WATER}, base=water,
+                 mutate=flood)
+    flood_bare = drips("drip_flood_bare", None, base=water, mutate=flood)
+    ae = compare(under, onto)[0] if under and onto else sys.maxsize
+    shown = _moved_fraction(onto, flood_bare)
+    ok = ae == 0 and shown > 0.0
+    print(f"  rain-drips-water {'PASS' if ok else 'FAIL'}  dripping onto the ground under "
+          f"{RAIN_DEEP_WATER:g} m of water against onto its surface: {ae} px (want 0); the drips "
+          f"move {shown:.2%} of the flooded frame (want > 0)")
+    if not ok:
+        failures.append("rain-drips-water")
+
+    again = drips("dripping_again", RAIN_DRIP_LINE)
+    ae = compare(dripping, again)[0] if dripping and again else sys.maxsize
+    ok = ae == 0
+    print(f"  rain-drips-determinism {'PASS' if ok else 'FAIL'}  two runs {ae} px apart (want 0)")
+    if not ok:
+        failures.append("rain-drips-determinism")
     return failures
 
 
