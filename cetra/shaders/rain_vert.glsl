@@ -100,17 +100,28 @@ vec3 dropLit(vec3 P, vec3 toCamera, vec2 uv, float viewDepth) {
         vec3 travel = dirLights[j].dirShadow.xyz;
         L += dirLights[j].colorIntensity.xyz * rainDropPhase(dot(travel, toCamera), forwardG);
     }
-    // Points and spots from the cluster the drop sits in. Area panels are skipped, like
-    // the fog skips them: they light surfaces through an integral the drop does not have.
+    // Points, spots and area panels from the cluster the drop sits in.
     uvec2 list = clusterLightListUv(uv, viewDepth);
     for (uint k = 0u; k < list.y; k++) {
         uint li = lightIndexAt(list.x + k);
-        if (clusterLights[li].dirType.w == 3.0)
-            continue;
         vec3 toL = clusterLights[li].posRange.xyz - P;
         float d2 = dot(toL, toL);
         vec3 dirToL = toL * inversesqrt(max(d2, 1e-8));
-        float e = getDistanceAtt(d2, clusterLights[li].attenCutoff.x) * punctualAngular(li, dirToL);
+        float e;
+        if (clusterLights[li].dirType.w == 3.0) {
+            // A panel, as the small source it is at a drop's distance: its luminance over its
+            // area, foreshortened as its face turns from the drop, falling as the square of
+            // the distance -- floored at the area, so a drop against the panel cannot take
+            // more than the panel's own luminance. Unshadowed, like every light here, so the
+            // panel reaches drops through the walls round it as well as through its window.
+            vec2 size = clusterLights[li].shadowMisc.zw;
+            float area = size.x * size.y;
+            float facing = max(dot(clusterLights[li].dirType.xyz, -dirToL), 0.0);
+            e = area * facing *
+                getDistanceAtt(max(d2, area), clusterLights[li].attenCutoff.x);
+        } else {
+            e = getDistanceAtt(d2, clusterLights[li].attenCutoff.x) * punctualAngular(li, dirToL);
+        }
         L += clusterLights[li].colorIntensity.xyz *
              (e * rainDropPhase(dot(-dirToL, toCamera), forwardG));
     }
