@@ -451,15 +451,18 @@ static void window_wall(Kit* kit, KitRng* rng) {
 
 static void fridge(Kit* kit, const KitFrame* f, KitRng* rng, float a0, float a1);
 
+// The hall wall's run, along -z from just short of the doorway to where the
+// window run's counter begins; the fridge stands first in it.
+static const KitFrame STOVE_WALL = {{KITCHEN_X0, FLOOR_Y, STOVE_RUN_Z}, 0.5f * GLM_PIf};
+#define FRIDGE_W 0.72f
+
 // The hall wall on the left, as you come in: the fridge, the stove under its
 // hood, and a short run to the corner.
 static void stove_wall(Kit* kit, KitRng* rng) {
-    // Along -z from just short of the doorway to where the window run's
-    // counter begins.
     const float start = STOVE_RUN_Z;
-    const KitFrame f = {{KITCHEN_X0, FLOOR_Y, start}, 0.5f * GLM_PIf};
+    const KitFrame f = STOVE_WALL;
     const float len = start - (KITCHEN_Z0 + COUNTER_D);
-    const float fridge_w = 0.72f;
+    const float fridge_w = FRIDGE_W;
     const float s0 = start - STOVE_Z - 0.38f, s1 = start - STOVE_Z + 0.38f;
 
     fridge(kit, &f, rng, 0.0f, fridge_w);
@@ -716,6 +719,11 @@ static void table(Kit* kit) {
     chair(kit, 2.38f, 12.95f, 0.5f * GLM_PIf);
     chair(kit, 3.35f, 12.12f, 0.35f);
     cushion(kit, 3.35f, 12.12f, 0.35f + 0.12f);
+}
+
+void kitchen_fridge_motor(vec3 out) {
+    // Behind the fridge and near the floor, where the compressor sits.
+    kit_frame_point(&STOVE_WALL, 0.5f * FRIDGE_W, 0.2f, 0.08f, out);
 }
 
 void kitchen_build(Kit* kit, unsigned int seed) {

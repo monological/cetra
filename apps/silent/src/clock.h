@@ -32,6 +32,7 @@ void clock_build(Kit* kit);
 void clock_start(Clock* clock, Engine* engine, Scene* scene, AudioSystem* audio);
 
 // Per frame, before the transform walk: the swing, the hands and the beat.
-void clock_update(Clock* clock, double time);
+// `hearing` scales the beat for where the listener is.
+void clock_update(Clock* clock, double time, float hearing);
 
 #endif // _SILENT_CLOCK_H_

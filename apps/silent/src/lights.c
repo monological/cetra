@@ -73,6 +73,17 @@ static const Tube TUBES[] = {
      false},
 };
 #define TUBE_COUNT ((int)(sizeof(TUBES) / sizeof(TUBES[0])))
+_Static_assert(TUBE_COUNT <= LIGHTS_MAX_TUBES, "every tube needs a buzz slot");
+
+/*
+ * Each tube's ballast hums, louder for a brighter tube, and the failing one's
+ * hum drops out and catches with its light. One recording serves every tube,
+ * so each starts BUZZ_STAGGER after the last, or three copies of one loop
+ * would play in step and sound like one source smeared across the room.
+ */
+#define BUZZ_VOLUME  0.25f // for a tube of BUZZ_NITS
+#define BUZZ_NITS    6000.0f
+#define BUZZ_STAGGER 1.9 // seconds
 
 // The strip itself: one quad, alone in its mesh so the engine can fit a
 // panel to it, facing where the tube throws its light. Returns its material.
@@ -164,6 +175,7 @@ static void hall_bulb(Kit* kit, Scene* scene) {
 void lights_build(Lights* lights, Kit* kit, Engine* engine, Scene* scene, unsigned int seed,
                   bool flicker, bool flashlight_on) {
     memset(lights, 0, sizeof(*lights));
+    lights->flicker_tube = -1;
     lights->seed = seed;
     ShaderProgram* pbr = engine_get_program(engine, CETRA_PROGRAM_PBR);
     // The panels come from the strips: this is what turns them into light.
@@ -191,6 +203,7 @@ void lights_build(Lights* lights, Kit* kit, Engine* engine, Scene* scene, unsign
         if (flicker && TUBES[i].flicker) {
             lights->flicker = m;
             lights->flicker_nits = TUBES[i].nits;
+            lights->flicker_tube = i;
         }
     }
 }
@@ -222,11 +235,37 @@ static float flicker_level(double t, unsigned int seed) {
     return h < 0.45f ? 0.04f : (h < 0.6f ? 0.5f : 1.0f);
 }
 
+void lights_start_audio(Lights* lights, AudioSystem* audio) {
+    if (!audio)
+        return;
+    for (int t = 0; t < TUBE_COUNT; t++) {
+        Sound* s =
+            audio_sound_from_file(audio, "assets/audio/silent/tube_buzz.flac", AUDIO_BUS_SFX);
+        if (!s)
+            continue;
+        audio_sound_set_looping(s, true);
+        audio_sound_set_position(s, (float*)TUBES[t].centre);
+        lights->buzz[t] = s;
+    }
+}
+
 void lights_update(Lights* lights, Scene* scene, double time, float dt, const vec3 eye,
-                   const vec3 forward) {
+                   const vec3 forward, float hearing) {
+    const float level = lights->flicker ? flicker_level(time, lights->seed) : 1.0f;
     if (lights->flicker)
-        lights->flicker->emissive_strength =
-            lights->flicker_nits * flicker_level(time, lights->seed);
+        lights->flicker->emissive_strength = lights->flicker_nits * level;
+
+    for (int t = 0; t < TUBE_COUNT; t++) {
+        Sound* s = lights->buzz[t];
+        if (!s)
+            continue;
+        if (!lights->buzzing[t] && time >= BUZZ_STAGGER * (double)t) {
+            audio_sound_play(s);
+            lights->buzzing[t] = true;
+        }
+        const float lit = t == lights->flicker_tube ? level : 1.0f;
+        audio_sound_set_volume(s, BUZZ_VOLUME * (TUBES[t].nits / BUZZ_NITS) * lit * hearing);
+    }
 
     // The derived panels are the engine's, created on the first frame and kept
     // after, and named for their strips' nodes; their reach and their casting
