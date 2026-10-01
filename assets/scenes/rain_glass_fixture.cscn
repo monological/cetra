@@ -1,9 +1,9 @@
 {
  "version": 1,
  "_comment": [
-  "The rain instrument's glass variant (spec 13.12): the yard with three thin panes facing",
-  "the wind -- one in the open, one under the roof and one at the roof's front edge -- for",
-  "the drops rain leaves on glass. Same camera, lights and rain."
+  "The rain instrument's glass variant (spec 13.12): the yard with three thin panes -- one",
+  "facing the wind in the open, one facing it under the roof, and a flat canopy in the open",
+  "-- for the drops rain leaves on glass. Same lights and rain; a camera on the panes."
  ],
  "models": [
   {
@@ -58,14 +58,14 @@
  },
  "camera": {
   "eye": [
-   0.0,
-   2.4,
-   11.0
+   0.5,
+   1.6,
+   8.0
   ],
   "target": [
-   0.0,
-   1.2,
-   -4.0
+   0.5,
+   1.4,
+   -2.0
   ],
   "fov": 55
  },

@@ -26972,24 +26972,25 @@ RAIN_SCENE_WIND = {"direction": [0.0, 0.0, -1.0], "airSpeed": 3.0, "gustAmount":
 RAIN_GUST_FRAMES = 40
 # Deeper than a splash crown rises off the bed (a 6 mm drop's droplets top out near 0.2 m).
 RAIN_DEEP_WATER = 0.5
-# The glazed twin's panes, each an inscribed quad on the face a camera sees, a few centimetres in
-# from its edges: the open pane's street face, the covered pane's, and the UNDERSIDE of the flat
-# glass canopy, seen from below. The canopy shelters the point a hand under it, as any roof
-# does, so the underside's own cover is none and only the side the rain strikes beads it. A
-# wall pane cannot show that: the rain meets it nearly edge on and the cover map's slope bias
-# stores it deeper than the point behind it, which therefore reads as open sky either way.
+# The glazed twin's panes, each an inscribed quad on the face a camera sees, inset from its
+# edges: the open pane's street face, the covered pane's, and the UNDERSIDE of the flat glass
+# canopy, seen from below. The canopy shelters the point a hand under it, as any roof does, so
+# the underside's own cover is none and only the side the rain strikes beads it. A wall pane
+# cannot show that: the rain meets it nearly edge on and the cover map's slope bias stores it
+# deeper than the point behind it, which therefore reads as open sky either way. The twin's own
+# camera sees the two that stand; this one sees the canopy from under it.
 RAIN_GLASS_FIXTURE = "rain_glass_fixture.cscn"
-RAIN_GLASS_CAMERA = {"eye": [0.5, 1.6, 8.0], "target": [0.5, 1.4, -2.0], "fov": 55}
 RAIN_GLASS_BELOW_CAMERA = {"eye": [0.0, 0.8, 3.2], "target": [0.0, 3.0, -2.0], "fov": 60}
 RAIN_GLASS_OPEN = [(x, y, 4.003) for x in (1.2, 2.8) for y in (0.45, 1.65)]
 RAIN_GLASS_COVERED = [(x, y, -3.997) for x in (-2.8, -1.9) for y in (0.45, 1.65)]
 RAIN_GLASS_CANOPY = [(x, 2.397, z) for x in (-0.8, 0.8) for z in (0.2, 1.8)]
-# Fewer pixels than this in a pane's image and the arm could not see it.
-RAIN_GLASS_MIN_PX = 500
-# Seconds since the rain stopped: soon enough that the panes are still beaded, and long enough
-# that the film is under the floor rain_active() keeps and nothing of the rain is left.
-RAIN_GLASS_DAMP_S = 20.0
-RAIN_GLASS_DRIED_S = 5000.0
+# Fewer pixels than this in a pane's or a drip column's image and the arm could not see it.
+RAIN_REGION_MIN_PX = 500
+# Seconds since the rain stopped: soon enough that the panes are still beaded and the edges
+# still dripping, and long enough that the film is under the floor rain_active() keeps and
+# nothing of the rain is left.
+RAIN_DAMP_S = 20.0
+RAIN_DRIED_S = 5000.0
 # Three drip lines unlike in every way that matters to their share of the slots -- a point at
 # 2 m, a 2 m line at 5 m dripping fast, and a 6 m line at 3 m dripping slowly onto ground 1 m
 # up -- and few enough slots that the shares are small integers the twin must hit exactly.
@@ -27004,17 +27005,19 @@ RAIN_DRIP_SHARE_COUNT = 100
 # rounds away often enough to leave an arm reading noise.
 RAIN_DRIP_LINE = {"from": [-3.5, 3.0, -1.0], "to": [3.5, 3.0, -1.0], "rate": 400.0}
 RAIN_DRIP_ARM = {"dripCount": 2048, "dripBrightness": 50.0}
-# The column under that line, and the open ground well in front of it.
-RAIN_DRIP_COLUMN = [(x, y, -1.0) for x in (-3.0, 3.0) for y in (0.3, 2.7)]
+# The column under that line, half a metre in from its ends and 0.3 m clear of the edge and
+# the ground.
+RAIN_DRIP_COLUMN = [(x, y, RAIN_DRIP_LINE["from"][2])
+                    for x in (RAIN_DRIP_LINE["from"][0] + 0.5, RAIN_DRIP_LINE["to"][0] - 0.5)
+                    for y in (0.3, RAIN_DRIP_LINE["from"][1] - 0.3)]
 # The relief twin (spec 13.12): one ground whose height map is trenches and plateaus in bands
 # across z, 2 m each -- trenches centred on z = 2 + 4k, plateaus on z = 4k. These are the open
 # ground's bands, a metre in from either edge so the map's filtered step stays out of them.
 RAIN_RELIEF_FIXTURE = "rain_relief_fixture.cscn"
 RAIN_RELIEF_TRENCHES = [((-3.0, 3.0), (1.5, 2.5)), ((-3.0, 3.0), (5.5, 6.5))]
 RAIN_RELIEF_PLATEAUS = [((-3.0, 3.0), (-0.5, 0.5)), ((-3.0, 3.0), (3.5, 4.5))]
-# The roughness view's green, as a byte, below which a pixel is standing water: a puddle is
-# still water's 0.03 (8), and the fullest film the open ground takes is 0.12 (31).
-RAIN_RELIEF_PUDDLE_G = 20
+# Fewer pixels than this read in either kind of band and the arm could not tell them apart.
+RAIN_RELIEF_MIN_PX = 20000
 # How much of a band the relief must fill or drain: the map moves the ground a quarter of the
 # noise's range either way, which takes a band at the fixture's level from about half puddled
 # to nearly all or nearly none.
@@ -27061,17 +27064,38 @@ def _rain_velocity(d_mm):
 
 def _drip_fall_time(height):
     """Seconds a drip takes to fall `height` metres from rest under linear drag, in double: the
-    distance fallen is vt (t - tau (1 - exp(-t / tau))) with tau = vt / g, solved by Newton."""
+    speed vt (1 - exp(-t g / vt)) integrated NUMERICALLY for the distance, and the time found by
+    bisection -- where the C solves the closed-form distance by Newton, so a term dropped from
+    one cannot be dropped from both. Falling for h / vt + vt / g covers any height, since the
+    drop is never more than vt / g seconds' worth of terminal speed behind."""
     vt = _rain_velocity(_rain_constant("RAIN_DRIP_MM"))
     if height <= 0.0:
         return 0.0
     g = _rain_constant("RAIN_GRAVITY")
-    tau = vt / g
-    t = math.sqrt(2.0 * height / g)
-    for _ in range(50):
-        e = math.exp(-t / tau)
-        t -= (vt * (t - tau * (1.0 - e)) - height) / (vt * (1.0 - e))
-    return t
+
+    def fallen(t):
+        return _simpson(lambda s: vt * (1.0 - math.exp(-s * g / vt)), 0.0, t, 200)
+
+    lo, hi = 0.0, height / vt + vt / g
+    for _ in range(60):
+        mid = 0.5 * (lo + hi)
+        lo, hi = (mid, hi) if fallen(mid) < height else (lo, mid)
+    return 0.5 * (lo + hi)
+
+
+def _gust_mean():
+    """The scene wind's gust envelope averaged over a cycle, integrated numerically: wind.glsl's
+    mix(1 - a, 1, s^3) for s = (1 + sin) / 2, with a = RAIN_SCENE_WIND's gust amount."""
+    a = RAIN_SCENE_WIND["gustAmount"]
+    return _simpson(lambda th: 1.0 - a + a * ((1.0 + math.sin(th)) / 2.0) ** 3, 0.0,
+                    2.0 * math.pi, 64) / (2.0 * math.pi)
+
+
+def _glsl_const(name, include):
+    """A `const float` from one of the shader includes, read rather than copied."""
+    with open(os.path.join(ROOT, "cetra", "shaders", "include", include)) as f:
+        m = re.search(rf"const float {name} = ([0-9.]+);", f.read())
+    return float(m.group(1))
 
 
 def _drip_shares(lines, count):
@@ -27111,6 +27135,17 @@ def _rain_rows(scene, extra=None, frames=2):
         vals = {k: float(v) for k, v in rec.items()}
         out.setdefault(kind, []).append(vals)
     return out, text
+
+
+def _inscribed_rect(project, quad):
+    """The screen rectangle inscribed in the image of a world quadrilateral, (x0, y0, x1, y1) with
+    the far bounds exclusive. Inscribed, so every pixel in it is of the quad: a ground patch seen
+    in perspective is a trapezoid whose far edge is the narrower, and the rectangle takes that
+    width. The inner two of the four projected x and of the four projected y bound it, whichever
+    way the camera maps world axes to the screen."""
+    at = [project(p) for p in quad]
+    xs, ys = sorted(p[0] for p in at), sorted(p[1] for p in at)
+    return int(math.ceil(xs[1])), int(math.ceil(ys[1])), int(xs[2]), int(ys[2])
 
 
 def _moved_in_rect(pa, pb, w, h, x0, y0, x1, y1):
@@ -27231,8 +27266,8 @@ def run_rain_gate(workdir):
                     side the rain strikes, not the side that is seen.
       rain-glass-lens  the drops' lens at 1 against 0 moves the view through the open pane: a
                     drop bends what is seen through it, not only how it reflects.
-      rain-glass-dry  RAIN_GLASS_DAMP_S after the rain stopped the open pane is still beaded;
-                    RAIN_GLASS_DRIED_S after, the frame is 0 px from the twin with no rain at all.
+      rain-glass-dry  RAIN_DAMP_S after the rain stopped the open pane is still beaded;
+                    RAIN_DRIED_S after, the frame is 0 px from the twin with no rain at all.
       rain-glass-determinism  two runs of the beaded panes are 0 px apart.
       rain-drips-share  three drip lines' slots, as the probe reports them, are exactly what a
                     twin shares out -- one each, then the rest by largest remainder in proportion
@@ -27240,8 +27275,8 @@ def run_rain_gate(workdir):
                     from a fall time solved here in double -- and those fall times agree.
       rain-drips    a line along the roof's front edge moves the column under it, and not a
                     pixel of the open ground in front or the bare sky.
-      rain-drips-dry  RAIN_GLASS_DAMP_S after the rain stopped the line still drips; at
-                    RAIN_GLASS_DRIED_S the frame is 0 px from no rain at all.
+      rain-drips-dry  RAIN_DAMP_S after the rain stopped the line still drips; at
+                    RAIN_DRIED_S the frame is 0 px from no rain at all.
       rain-drips-water  on the flooded twin, RAIN_DEEP_WATER deep, the line dripping onto the
                     ground under the water is 0 px from the same line dripping onto the water's
                     surface: a drop meets the water first, as a splash does.
@@ -27407,15 +27442,27 @@ def run_rain_gate(workdir):
     if not ok:
         failures.append("rain-tenant")
 
-    def variant(name, mutate, base=scene):
+    def variant(name, mutate=None, base=scene, camera=None, rain=None):
+        """`base` copied as `name`: its camera replaced, its rain updated, then `mutate`."""
+        def edit(s):
+            if camera is not None:
+                s["camera"] = dict(camera)
+            if rain is not None:
+                s["rain"].update(rain)
+            if mutate is not None:
+                mutate(s)
         path = os.path.join(workdir, f"rain_{name}.cscn")
-        cscn_copy(base, path, mutate)
+        cscn_copy(base, path, edit)
         return path
 
     def frame(name, scene_path, extra=()):
         out = os.path.join(workdir, f"rain_{name}.ppm")
         err = render(scene_path, out, list(extra))
         return None if err else out
+
+    def shot(name, flags=RAIN_LINEAR, **kw):
+        """A frame of variant(name, **kw)."""
+        return frame(name, variant(name, **kw), flags)
 
     no_rain = variant("none", lambda s: s.pop("rain"))
     still = variant("still", lambda s: s["rain"].update({"rate": 0.0}))
@@ -27536,18 +27583,22 @@ def run_rain_gate(workdir):
         return moved, total
 
     def moved_in_quad(a_path, b_path, view, quad):
-        """(pixels differing, pixels) in the screen rectangle inscribed in the image of a world
-        quadrilateral. Inscribed, so every pixel counted is of the quad: a ground patch seen in
-        perspective is a trapezoid whose far edge is the narrower, and the rectangle takes that
-        width. The inner two of the four projected x and of the four projected y bound it,
-        whichever way the camera maps world axes to the screen."""
+        """(pixels differing, pixels) in the rectangle inscribed in a world quad's image."""
         w, h, pa = _read_ppm(a_path)
         _, _, pb = _read_ppm(b_path)
-        project = _projector(view, w, h)
-        at = [project(p) for p in quad]
-        xs, ys = sorted(p[0] for p in at), sorted(p[1] for p in at)
-        return _moved_in_rect(pa, pb, w, h, int(math.ceil(xs[1])), int(math.ceil(ys[1])),
-                              int(xs[2]), int(ys[2]))
+        return _moved_in_rect(pa, pb, w, h, *_inscribed_rect(_projector(view, w, h), quad))
+
+    def quad_moved(a_path, b_path, view, quad):
+        """(fraction of the quad's pixels moved, pixels moved, pixels), or (nan, -1, 0) when a
+        frame is missing."""
+        if not (a_path and b_path):
+            return float("nan"), -1, 0
+        m, t = moved_in_quad(a_path, b_path, view, quad)
+        return (m / t if t else float("nan")), m, t
+
+    def apart(a_path, b_path):
+        """Pixels two frames differ in; the most there could be when either is missing."""
+        return compare(a_path, b_path)[0] if a_path and b_path else sys.maxsize
 
     def ground_quad(extents, y):
         (xa, xb), (za, zb) = extents
@@ -27570,20 +27621,18 @@ def run_rain_gate(workdir):
 
     # Splashes against none, from under the roof looking out: they land where the occlusion map
     # says the rain reaches, so the ground under the roof, nearest the camera, cannot move.
-    def splashes(name, count):
-        def mutate(s):
-            s["camera"] = dict(RAIN_UNDER_ROOF_CAMERA)
-            s["rain"].update({"streakCount": 0, "mist": 0.0, **RAIN_SPLASH_ARM})
-            if count is not None:
-                s["rain"]["splashCount"] = count
-        return frame(name, variant(name, mutate), RAIN_LINEAR)
+    def splashes_under_roof(name, base=scene, rain=None, floor_y=0.0):
+        """Splashes against none, seen from under the roof: (fraction of the frame they move,
+        pixels moved, pixels) of the floor under the roof nearest the camera, at `floor_y`."""
+        splashing = {"streakCount": 0, "mist": 0.0, **RAIN_SPLASH_ARM, **(rain or {})}
+        on = shot(name, base=base, camera=RAIN_UNDER_ROOF_CAMERA, rain=splashing)
+        off = shot(name + "_none", base=base, camera=RAIN_UNDER_ROOF_CAMERA,
+                   rain={**splashing, "splashCount": 0})
+        _, moved, total = quad_moved(on, off, _cscn_view(RAIN_UNDER_ROOF_CAMERA),
+                                     ground_quad(RAIN_COVERED_PATCH, floor_y))
+        return _moved_fraction(on, off), moved, total
 
-    splashed, unsplashed = splashes("splashed", None), splashes("unsplashed", 0)
-    frac, covered_moved, covered_total = _moved_fraction(splashed, unsplashed), -1, 0
-    if splashed and unsplashed:
-        covered_moved, covered_total = moved_in_quad(
-            splashed, unsplashed, _cscn_view(RAIN_UNDER_ROOF_CAMERA),
-            ground_quad(RAIN_COVERED_PATCH, 0.0))
+    frac, covered_moved, covered_total = splashes_under_roof("splashed")
     ok = (frac > RAIN_SPLASH_MIN and covered_total >= RAIN_COVERED_MIN_PX
           and covered_moved == 0)
     print(f"  rain-splashes {'PASS' if ok else 'FAIL'}  splashes move {frac:.2%} of the frame "
@@ -27622,25 +27671,22 @@ def run_rain_gate(workdir):
     # The medium's lobe on its own: handed to the post chain, the streaks keeping theirs. A frame
     # with no medium cannot see it; one with the medium has to -- with no streaks, so the medium
     # starts at the eye rather than past the fixture's far wall.
-    def lobed(name, rain):
-        return variant(name, lambda s: s["rain"].update(rain))
-
-    lobe_rows, _ = _rain_rows(lobed("mist_g", {"mistForwardG": RAIN_MIST_G}))
+    lobe_rows, _ = _rain_rows(variant("mist_g", rain={"mistForwardG": RAIN_MIST_G}))
     lobe_medium = (lobe_rows.get("medium") or [{}])[0]
     lobe_air = (lobe_rows.get("air") or [{}])[0]
-    still_a = frame("lobe_dry_a", lobed("lobe_dry_a", {"mist": 0.0}), RAIN_LINEAR)
-    still_b = frame("lobe_dry_b", lobed("lobe_dry_b", {"mist": 0.0, "mistForwardG": RAIN_MIST_G}),
-                    RAIN_LINEAR)
-    misty_b = frame("lobe_misty", lobed("lobe_misty", {**RAIN_SURFACES_ONLY, "mist": 1.0,
-                                                       "mistForwardG": RAIN_MIST_G}), RAIN_LINEAR)
-    still_ae = compare(still_a, still_b)[0] if still_a and still_b else sys.maxsize
+    streak_g = (got.get("air") or [{}])[0].get("streak_g", nan)
+    still_a = shot("lobe_dry_a", rain={"mist": 0.0})
+    still_b = shot("lobe_dry_b", rain={"mist": 0.0, "mistForwardG": RAIN_MIST_G})
+    misty_b = shot("lobe_misty",
+                   rain={**RAIN_SURFACES_ONLY, "mist": 1.0, "mistForwardG": RAIN_MIST_G})
+    still_ae = apart(still_a, still_b)
     misty_frac = _moved_fraction(misted, misty_b)
     ok = (abs(lobe_medium.get("g", nan) - RAIN_MIST_G) <= 1e-6
-          and abs(lobe_air.get("streak_g", nan) - 0.8) <= 1e-6 and still_ae == 0 and misty_frac > 0)
+          and lobe_air.get("streak_g", nan) == streak_g and still_ae == 0 and misty_frac > 0)
     print(f"  rain-mist-g {'PASS' if ok else 'FAIL'}  published lobe {lobe_medium.get('g', nan):g} "
-          f"(want {RAIN_MIST_G:g}), the streaks' {lobe_air.get('streak_g', nan):g} (want 0.8); with "
-          f"no medium {still_ae} px moved (want 0), with it {misty_frac:.2%} of the frame (want "
-          f"> 0)")
+          f"(want {RAIN_MIST_G:g}), the streaks' {lobe_air.get('streak_g', nan):g} (want theirs "
+          f"unchanged, {streak_g:g}); with no medium {still_ae} px moved (want 0), with it "
+          f"{misty_frac:.2%} of the frame (want > 0)")
     if not ok:
         failures.append("rain-mist-g")
 
@@ -27661,7 +27707,7 @@ def run_rain_gate(workdir):
     d = RAIN_SCENE_WIND["direction"]
     across = math.hypot(d[0], d[2])
     peak, depth = RAIN_SCENE_WIND["airSpeed"], RAIN_SCENE_WIND["gustAmount"]
-    mean = peak * (1.0 - depth + depth * 5.0 / 16.0)
+    mean = peak * _gust_mean()
     want_mean = (d[0] / across * mean, d[2] / across * mean)
     fall = _rain_twin(settled.get("rate", nan))["v0"]
     norm = math.sqrt(want_mean[0] ** 2 + fall ** 2 + want_mean[1] ** 2)
@@ -27735,23 +27781,11 @@ def run_rain_gate(workdir):
         failures.append("rain-ripples")
 
     # Splashes on the water's surface rather than on the bed under it: the twin flooded deep
-    # enough that a crown thrown from the bed never reaches the surface, from under the roof.
-    def flooded(name, count):
-        def mutate(s):
-            s["camera"] = dict(RAIN_UNDER_ROOF_CAMERA)
-            s["water"]["level"] = RAIN_DEEP_WATER
-            s["rain"].update({"streakCount": 0, "mist": 0.0, "rippleStrength": 0.0,
-                              **RAIN_SPLASH_ARM})
-            if count is not None:
-                s["rain"]["splashCount"] = count
-        return frame(name, variant(name, mutate, base=water), RAIN_LINEAR)
-
-    struck, unstruck = flooded("struck", None), flooded("unstruck", 0)
-    frac, covered_moved, covered_total = _moved_fraction(struck, unstruck), -1, 0
-    if struck and unstruck:
-        covered_moved, covered_total = moved_in_quad(
-            struck, unstruck, _cscn_view(RAIN_UNDER_ROOF_CAMERA),
-            ground_quad(RAIN_COVERED_PATCH, RAIN_DEEP_WATER))
+    # enough that a crown thrown from the bed never reaches the surface. Still water, so the
+    # rings do not move it either way.
+    deep = variant("deep", lambda s: s["water"].update({"level": RAIN_DEEP_WATER}), base=water)
+    frac, covered_moved, covered_total = splashes_under_roof(
+        "struck", base=deep, rain={"rippleStrength": 0.0}, floor_y=RAIN_DEEP_WATER)
     ok = (frac > RAIN_SPLASH_MIN and covered_total >= RAIN_COVERED_MIN_PX
           and covered_moved == 0)
     print(f"  rain-splash-water {'PASS' if ok else 'FAIL'}  splashes on water {RAIN_DEEP_WATER:g} m "
@@ -27786,80 +27820,66 @@ def run_rain_gate(workdir):
     # Drops on glass, on the glazed twin with nothing in the air, so a pair of frames differs only
     # in what the rain leaves on the panes.
     glazed = asset(RAIN_GLASS_FIXTURE)
-    if not os.path.exists(glazed):
-        print(f"  rain-glass SKIP  ({RAIN_GLASS_FIXTURE} not present)")
-        return failures
+    glass_view = _cscn_camera(RAIN_GLASS_FIXTURE)
+    below_view = _cscn_view(RAIN_GLASS_BELOW_CAMERA)
 
-    def glass(name, camera, rain=None, beads=None, dry=False):
-        def mutate(s):
-            s["camera"] = dict(camera)
-            if dry:
-                s.pop("rain")
-                return
-            s["rain"].update({**RAIN_SURFACES_ONLY, **(rain or {})})
-            if beads is not None:
-                s["materials"]["rain_glass"]["rainBeads"] = beads
-        return frame(name, variant(name, mutate, base=glazed), RAIN_LINEAR)
+    def unbeaded(s):
+        s["materials"]["rain_glass"]["rainBeads"] = "off"
 
-    def on_pane(a, b, camera, quad):
-        """(fraction of the pane's pixels moved, pixels moved, pixels), or (nan, -1, 0)."""
-        if not (a and b):
-            return float("nan"), -1, 0
-        m, t = moved_in_quad(a, b, _cscn_view(camera), quad)
-        return (m / t if t else float("nan")), m, t
+    def glass(name, rain=None, **kw):
+        return shot(name, base=glazed, rain={**RAIN_SURFACES_ONLY, **(rain or {})}, **kw)
 
-    beaded, bare = glass("beaded", RAIN_GLASS_CAMERA), glass("bare", RAIN_GLASS_CAMERA, beads=0.0)
-    open_f, _, open_t = on_pane(beaded, bare, RAIN_GLASS_CAMERA, RAIN_GLASS_OPEN)
-    _, cov_m, cov_t = on_pane(beaded, bare, RAIN_GLASS_CAMERA, RAIN_GLASS_COVERED)
-    ok = (open_t >= RAIN_GLASS_MIN_PX and open_f > RAIN_FEATURE_MIN and cov_t >= RAIN_GLASS_MIN_PX
-          and cov_m == 0)
+    beaded, bare = glass("beaded"), glass("bare", mutate=unbeaded)
+    open_f, _, open_t = quad_moved(beaded, bare, glass_view, RAIN_GLASS_OPEN)
+    _, cov_m, cov_t = quad_moved(beaded, bare, glass_view, RAIN_GLASS_COVERED)
+    ok = (open_t >= RAIN_REGION_MIN_PX and open_f > RAIN_FEATURE_MIN
+          and cov_t >= RAIN_REGION_MIN_PX and cov_m == 0)
     print(f"  rain-glass {'PASS' if ok else 'FAIL'}  beads move {open_f:.1%} of the open pane's "
           f"{open_t} px (want > {RAIN_FEATURE_MIN:.0%}) and {cov_m} of the covered pane's {cov_t} "
-          f"(want 0, each pane at least {RAIN_GLASS_MIN_PX} px)")
+          f"(want 0, each pane at least {RAIN_REGION_MIN_PX} px)")
     if not ok:
         failures.append("rain-glass")
 
-    below = glass("below_beaded", RAIN_GLASS_BELOW_CAMERA)
-    below_bare = glass("below_bare", RAIN_GLASS_BELOW_CAMERA, beads=0.0)
-    under_f, _, under_t = on_pane(below, below_bare, RAIN_GLASS_BELOW_CAMERA, RAIN_GLASS_CANOPY)
-    ok = under_t >= RAIN_GLASS_MIN_PX and under_f > RAIN_FEATURE_MIN
+    below = glass("below_beaded", camera=RAIN_GLASS_BELOW_CAMERA)
+    below_bare = glass("below_bare", camera=RAIN_GLASS_BELOW_CAMERA, mutate=unbeaded)
+    under_f, _, under_t = quad_moved(below, below_bare, below_view, RAIN_GLASS_CANOPY)
+    ok = under_t >= RAIN_REGION_MIN_PX and under_f > RAIN_FEATURE_MIN
     print(f"  rain-glass-inner {'PASS' if ok else 'FAIL'}  seen from below, the beads on the "
           f"canopy's top move {under_f:.1%} of its underside's {under_t} px (want > "
           f"{RAIN_FEATURE_MIN:.0%})")
     if not ok:
         failures.append("rain-glass-inner")
 
-    unbent = glass("unbent", RAIN_GLASS_CAMERA, rain={"glassLens": 0.0})
-    lens_f, _, lens_t = on_pane(beaded, unbent, RAIN_GLASS_CAMERA, RAIN_GLASS_OPEN)
-    ok = lens_t >= RAIN_GLASS_MIN_PX and lens_f > RAIN_FEATURE_MIN
+    unbent = glass("unbent", rain={"glassLens": 0.0})
+    lens_f, _, lens_t = quad_moved(beaded, unbent, glass_view, RAIN_GLASS_OPEN)
+    ok = lens_t >= RAIN_REGION_MIN_PX and lens_f > RAIN_FEATURE_MIN
     print(f"  rain-glass-lens {'PASS' if ok else 'FAIL'}  the lens at 1 against 0 moves "
           f"{lens_f:.1%} of the open pane's {lens_t} px (want > {RAIN_FEATURE_MIN:.0%})")
     if not ok:
         failures.append("rain-glass-lens")
 
-    damp = glass("damp", RAIN_GLASS_CAMERA, rain={"dryFor": RAIN_GLASS_DAMP_S})
-    damp_bare = glass("damp_bare", RAIN_GLASS_CAMERA, rain={"dryFor": RAIN_GLASS_DAMP_S}, beads=0.0)
-    damp_f, _, damp_t = on_pane(damp, damp_bare, RAIN_GLASS_CAMERA, RAIN_GLASS_OPEN)
-    dried = glass("dried", RAIN_GLASS_CAMERA, rain={"dryFor": RAIN_GLASS_DRIED_S})
-    never = glass("never", RAIN_GLASS_CAMERA, dry=True)
-    dried_ae = compare(dried, never)[0] if dried and never else sys.maxsize
-    ok = damp_t >= RAIN_GLASS_MIN_PX and damp_f > RAIN_FEATURE_MIN and dried_ae == 0
-    print(f"  rain-glass-dry {'PASS' if ok else 'FAIL'}  {RAIN_GLASS_DAMP_S:g} s after the rain the "
+    damp = glass("damp", rain={"dryFor": RAIN_DAMP_S})
+    damp_bare = glass("damp_bare", rain={"dryFor": RAIN_DAMP_S}, mutate=unbeaded)
+    damp_f, _, damp_t = quad_moved(damp, damp_bare, glass_view, RAIN_GLASS_OPEN)
+    dried = glass("dried", rain={"dryFor": RAIN_DRIED_S})
+    never = shot("never", base=glazed, mutate=lambda s: s.pop("rain"))
+    dried_ae = apart(dried, never)
+    ok = damp_t >= RAIN_REGION_MIN_PX and damp_f > RAIN_FEATURE_MIN and dried_ae == 0
+    print(f"  rain-glass-dry {'PASS' if ok else 'FAIL'}  {RAIN_DAMP_S:g} s after the rain the "
           f"beads still move {damp_f:.1%} of the open pane (want > {RAIN_FEATURE_MIN:.0%}); "
-          f"{RAIN_GLASS_DRIED_S:g} s after, {dried_ae} px from no rain at all (want 0)")
+          f"{RAIN_DRIED_S:g} s after, {dried_ae} px from no rain at all (want 0)")
     if not ok:
         failures.append("rain-glass-dry")
 
-    again = glass("beaded_again", RAIN_GLASS_CAMERA)
-    ae = compare(beaded, again)[0] if beaded and again else sys.maxsize
-    ok = ae == 0
-    print(f"  rain-glass-determinism {'PASS' if ok else 'FAIL'}  two runs {ae} px apart (want 0)")
+    twice = apart(beaded, glass("beaded_again"))
+    ok = twice == 0
+    print(f"  rain-glass-determinism {'PASS' if ok else 'FAIL'}  two runs {twice} px apart (want 0)")
     if not ok:
         failures.append("rain-glass-determinism")
 
     # Drips: the share of the slots each line gets, against the twin, and the fall time behind it.
-    share_rows, _ = _rain_rows(variant("drip_share", lambda s: s["rain"].update(
-        {"drips": RAIN_DRIP_SHARE_LINES, "dripCount": RAIN_DRIP_SHARE_COUNT})))
+    share_rows, _ = _rain_rows(variant(
+        "drip_share", rain={"drips": RAIN_DRIP_SHARE_LINES, "dripCount": RAIN_DRIP_SHARE_COUNT}))
     got_slots = [int(r["slots"]) for r in share_rows.get("drip", [])]
     want_slots = _drip_shares(RAIN_DRIP_SHARE_LINES, RAIN_DRIP_SHARE_COUNT)
     falls = share_rows.get("dripfall", [])
@@ -27874,33 +27894,24 @@ def run_rain_gate(workdir):
         failures.append("rain-drips-share")
 
     # The drips on their own: no streaks, no splashes, no mist, so a pair of frames differs only
-    # in a line's drops and their crowns.
-    def drips(name, line, rain=None, base=scene, mutate=None):
-        def m(s):
-            s["rain"].update({**RAIN_SURFACES_ONLY, **RAIN_DRIP_ARM, **(rain or {})})
-            if line is not None:
-                s["rain"]["drips"] = [line]
-            if mutate is not None:
-                mutate(s)
-        return frame(name, variant(name, m, base=base), RAIN_LINEAR)
+    # in a line's drops and their crowns. With no line the same rain draws nothing at all, which
+    # is the surfaces frame rendered above.
+    def drips(name, line=None, rain=None, base=scene):
+        return shot(name, base=base, rain={**RAIN_SURFACES_ONLY, **RAIN_DRIP_ARM,
+                                           "drips": [line] if line else [], **(rain or {})})
 
-    def column_moved(a, b):
-        if not (a and b):
-            return float("nan"), 0
-        m, t = moved_in_quad(a, b, _cscn_camera(RAIN_FIXTURE), RAIN_DRIP_COLUMN)
-        return (m / t if t else float("nan")), t
-
-    dripping, bare_edge = drips("dripping", RAIN_DRIP_LINE), drips("bare_edge", None)
-    col_f, col_t = column_moved(dripping, bare_edge)
-    open_m, open_t, sky_m = -1, 0, -1
-    if dripping and bare_edge:
-        open_m, open_t = moved_in_quad(dripping, bare_edge, _cscn_camera(RAIN_FIXTURE),
-                                       ground_quad(RAIN_SSR_OPEN, 0.0))
+    fixture_view = _cscn_camera(RAIN_FIXTURE)
+    dripping = drips("dripping", RAIN_DRIP_LINE)
+    col_f, _, col_t = quad_moved(dripping, wet_path, fixture_view, RAIN_DRIP_COLUMN)
+    _, open_m, open_t = quad_moved(dripping, wet_path, fixture_view,
+                                   ground_quad(RAIN_SSR_OPEN, 0.0))
+    sky_m = -1
+    if dripping and wet_path:
         w, h, pa = _read_ppm(dripping)
-        _, _, pb = _read_ppm(bare_edge)
+        _, _, pb = _read_ppm(wet_path)
         x0, y0, x1, y1 = RAIN_SKY_BOX
         sky_m, _ = _moved_in_rect(pa, pb, w, h, int(x0 * w), int(y0 * h), int(x1 * w), int(y1 * h))
-    ok = (col_t >= RAIN_GLASS_MIN_PX and col_f > RAIN_FEATURE_MIN and open_t >= RAIN_SSR_MIN_PX
+    ok = (col_t >= RAIN_REGION_MIN_PX and col_f > RAIN_FEATURE_MIN and open_t >= RAIN_SSR_MIN_PX
           and open_m == 0 and sky_m == 0)
     print(f"  rain-drips {'PASS' if ok else 'FAIL'}  the line moves {col_f:.1%} of the column's "
           f"{col_t} px under it (want > {RAIN_FEATURE_MIN:.0%}), {open_m} of {open_t} px of the "
@@ -27908,38 +27919,32 @@ def run_rain_gate(workdir):
     if not ok:
         failures.append("rain-drips")
 
-    damp_f, _ = column_moved(drips("drip_damp", RAIN_DRIP_LINE, {"dryFor": RAIN_GLASS_DAMP_S}),
-                             drips("drip_damp_bare", None, {"dryFor": RAIN_GLASS_DAMP_S}))
-    dried = drips("drip_dried", RAIN_DRIP_LINE, {"dryFor": RAIN_GLASS_DRIED_S})
-    never = frame("drip_never", no_rain, RAIN_LINEAR)
-    dried_ae = compare(dried, never)[0] if dried and never else sys.maxsize
+    damp_f, _, _ = quad_moved(drips("drip_damp", RAIN_DRIP_LINE, {"dryFor": RAIN_DAMP_S}),
+                              drips("drip_damp_bare", rain={"dryFor": RAIN_DAMP_S}), fixture_view,
+                              RAIN_DRIP_COLUMN)
+    dried_ae = apart(drips("drip_dried", RAIN_DRIP_LINE, {"dryFor": RAIN_DRIED_S}),
+                     frame("drip_never", no_rain, RAIN_LINEAR))
     ok = damp_f > RAIN_FEATURE_MIN and dried_ae == 0
-    print(f"  rain-drips-dry {'PASS' if ok else 'FAIL'}  {RAIN_GLASS_DAMP_S:g} s after the rain the "
+    print(f"  rain-drips-dry {'PASS' if ok else 'FAIL'}  {RAIN_DAMP_S:g} s after the rain the "
           f"line still moves {damp_f:.1%} of its column (want > {RAIN_FEATURE_MIN:.0%}); "
-          f"{RAIN_GLASS_DRIED_S:g} s after, {dried_ae} px from no rain at all (want 0)")
+          f"{RAIN_DRIED_S:g} s after, {dried_ae} px from no rain at all (want 0)")
     if not ok:
         failures.append("rain-drips-dry")
 
-    def flood(s):
-        s["water"]["level"] = RAIN_DEEP_WATER
-
-    under = drips("drip_under", {**RAIN_DRIP_LINE, "ground": 0.0}, base=water, mutate=flood)
-    onto = drips("drip_onto", {**RAIN_DRIP_LINE, "ground": RAIN_DEEP_WATER}, base=water,
-                 mutate=flood)
-    flood_bare = drips("drip_flood_bare", None, base=water, mutate=flood)
-    ae = compare(under, onto)[0] if under and onto else sys.maxsize
-    shown = _moved_fraction(onto, flood_bare)
-    ok = ae == 0 and shown > 0.0
+    under = drips("drip_under", {**RAIN_DRIP_LINE, "ground": 0.0}, base=deep)
+    onto = drips("drip_onto", {**RAIN_DRIP_LINE, "ground": RAIN_DEEP_WATER}, base=deep)
+    landed = apart(under, onto)
+    shown = _moved_fraction(onto, drips("drip_flood_bare", base=deep))
+    ok = landed == 0 and shown > 0.0
     print(f"  rain-drips-water {'PASS' if ok else 'FAIL'}  dripping onto the ground under "
-          f"{RAIN_DEEP_WATER:g} m of water against onto its surface: {ae} px (want 0); the drips "
-          f"move {shown:.2%} of the flooded frame (want > 0)")
+          f"{RAIN_DEEP_WATER:g} m of water against onto its surface: {landed} px (want 0); the "
+          f"drips move {shown:.2%} of the flooded frame (want > 0)")
     if not ok:
         failures.append("rain-drips-water")
 
-    again = drips("dripping_again", RAIN_DRIP_LINE)
-    ae = compare(dripping, again)[0] if dripping and again else sys.maxsize
-    ok = ae == 0
-    print(f"  rain-drips-determinism {'PASS' if ok else 'FAIL'}  two runs {ae} px apart (want 0)")
+    twice = apart(dripping, drips("dripping_again", RAIN_DRIP_LINE))
+    ok = twice == 0
+    print(f"  rain-drips-determinism {'PASS' if ok else 'FAIL'}  two runs {twice} px apart (want 0)")
     if not ok:
         failures.append("rain-drips-determinism")
 
@@ -27947,9 +27952,10 @@ def run_rain_gate(workdir):
     # below anything a film reaches, so every pixel is puddled or not. No parallax, which the
     # engine arms for any ground with a height map and which would declare the same sampler.
     reliefed = asset(RAIN_RELIEF_FIXTURE)
-    if not os.path.exists(reliefed):
-        print(f"  rain-relief SKIP  ({RAIN_RELIEF_FIXTURE} not present)")
-        return failures
+    # The roughness view's green, as a byte, below which a pixel is standing water: halfway
+    # between still water's roughness and the fullest film the open ground takes.
+    puddle_g = 255.0 * 0.5 * (_glsl_const("RAIN_PUDDLE_ROUGHNESS", "rain_surface.glsl") +
+                              _glsl_const("WET_ROUGHNESS", "wet_surface.glsl"))
 
     def puddled(path, bands):
         """(fraction of pixels standing water, pixels) over the rectangles inscribed in the
@@ -27960,54 +27966,49 @@ def run_rain_gate(workdir):
         project = _projector(_cscn_camera(RAIN_RELIEF_FIXTURE), w, h)
         wet = total = 0
         for band in bands:
-            at = [project(p) for p in ground_quad(band, 0.0)]
-            xs, ys = sorted(p[0] for p in at), sorted(p[1] for p in at)
-            for py in range(max(0, int(math.ceil(ys[1]))), min(h, int(ys[2]))):
-                for px in range(max(0, int(math.ceil(xs[1]))), min(w, int(xs[2]))):
-                    wet += pix[3 * (py * w + px) + 1] < RAIN_RELIEF_PUDDLE_G
+            x0, y0, x1, y1 = _inscribed_rect(project, ground_quad(band, 0.0))
+            for py in range(max(0, y0), min(h, y1)):
+                for px in range(max(0, x0), min(w, x1)):
+                    wet += pix[3 * (py * w + px) + 1] < puddle_g
                     total += 1
         return (wet / total if total else float("nan")), total
 
-    def relief_frame(name, amount):
-        path = variant(name, lambda s: s["rain"].update({"puddleRelief": amount}),
-                       base=reliefed)
-        return frame(name, path, RAIN_RELIEF_FLAGS), path
-
-    relief_on, relief_on_scene = relief_frame("relief_on", 1.0)
-    relief_off, relief_off_scene = relief_frame("relief_off", 0.0)
+    relief_on_scene = variant("relief_on", base=reliefed, rain={"puddleRelief": 1.0})
+    relief_off_scene = variant("relief_off", base=reliefed, rain={"puddleRelief": 0.0})
+    relief_on = frame("relief_on", relief_on_scene, RAIN_RELIEF_FLAGS)
+    relief_off = frame("relief_off", relief_off_scene, RAIN_RELIEF_FLAGS)
     trench1, trench_px = puddled(relief_on, RAIN_RELIEF_TRENCHES)
     plateau1, plateau_px = puddled(relief_on, RAIN_RELIEF_PLATEAUS)
     trench0, _ = puddled(relief_off, RAIN_RELIEF_TRENCHES)
     plateau0, _ = puddled(relief_off, RAIN_RELIEF_PLATEAUS)
-    ok = (min(trench_px, plateau_px) >= RAIN_COVERED_MIN_PX and trench1 > RAIN_RELIEF_TRENCH_MIN
+    ok = (min(trench_px, plateau_px) >= RAIN_RELIEF_MIN_PX and trench1 > RAIN_RELIEF_TRENCH_MIN
           and plateau1 < RAIN_RELIEF_PLATEAU_MAX and abs(trench0 - plateau0) < RAIN_RELIEF_AGREE)
     print(f"  rain-relief {'PASS' if ok else 'FAIL'}  at relief 1 the trenches stand "
           f"{trench1:.1%} under water (want > {RAIN_RELIEF_TRENCH_MIN:.0%}) and the plateaus "
           f"{plateau1:.1%} (want < {RAIN_RELIEF_PLATEAU_MAX:.0%}); at 0, {trench0:.1%} and "
           f"{plateau0:.1%} (want within {RAIN_RELIEF_AGREE:.0%}); {trench_px} and {plateau_px} px "
-          f"read (want >= {RAIN_COVERED_MIN_PX} each)")
+          f"read (want >= {RAIN_RELIEF_MIN_PX} each)")
     if not ok:
         failures.append("rain-relief")
 
     # A ground with no height map has no lows to find: the knob is inert on it, and no material
     # compiles the relief bit.
     relief_bit = bits["relief"]
-    flat_on = variant("flat_relief_on", lambda s: s["rain"].update({"puddleRelief": 1.0}))
-    flat_off = variant("flat_relief_off", lambda s: s["rain"].update({"puddleRelief": 0.0}))
-    a, b = frame("flat_relief_on", flat_on), frame("flat_relief_off", flat_off)
-    ae = compare(a, b)[0] if a and b else sys.maxsize
+    flat_on = variant("flat_relief_on", rain={"puddleRelief": 1.0})
+    flat_ae = apart(frame("flat_relief_on", flat_on, RAIN_LINEAR),
+                    shot("flat_relief_off", rain={"puddleRelief": 0.0}))
     flat_logged = samplers(_rain_rows(flat_on)[1])
     carried = sorted(n for n, (mask, _) in flat_logged.items() if mask & relief_bit)
-    ok = ae == 0 and bool(flat_logged) and not carried
+    ok = flat_ae == 0 and bool(flat_logged) and not carried
     print(f"  rain-relief-off {'PASS' if ok else 'FAIL'}  relief 1 against 0 on {RAIN_FIXTURE}, "
-          f"whose grounds carry no height map: {ae} px (want 0); variants carrying the relief "
-          f"bit: {carried or 'none'} (want none)")
+          f"whose grounds carry no height map: {flat_ae} px (want 0); variants carrying the "
+          f"relief bit: {carried or 'none'} (want none)")
     if not ok:
         failures.append("rain-relief-off")
 
     # The relief bit costs exactly the height map's unit, and only where a material carries it.
-    on_logged = samplers(_rain_rows(relief_on_scene, extra=["--no-parallax"])[1])
-    off_logged = samplers(_rain_rows(relief_off_scene, extra=["--no-parallax"])[1])
+    on_logged = samplers(_rain_rows(relief_on_scene, extra=RAIN_RELIEF_FLAGS)[1])
+    off_logged = samplers(_rain_rows(relief_off_scene, extra=RAIN_RELIEF_FLAGS)[1])
     by_mask = {mask: count for mask, count in off_logged.values()}
     pairs = [(mask, count, by_mask.get(mask & ~relief_bit))
              for mask, count in on_logged.values() if mask & relief_bit]
