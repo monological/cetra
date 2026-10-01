@@ -8,8 +8,11 @@
 #include "cetra/light.h"
 #include "cetra/material.h"
 #include "cetra/scene.h"
+#include "cetra/game/audio.h"
 
 #include "kit.h"
+
+#define LIGHTS_MAX_TUBES 4
 
 /*
  * The house's light: the kitchen's fluorescent tubes, a bare bulb in the hall,
@@ -24,7 +27,11 @@
 typedef struct Lights {
     Material* flicker;  // the failing tube's strip, or NULL when none flickers
     float flicker_nits; // and its brightness when it holds
+    int flicker_tube;   // which tube that is; -1 when none
     unsigned int seed;
+
+    Sound* buzz[LIGHTS_MAX_TUBES]; // each tube's ballast, NULL without audio
+    bool buzzing[LIGHTS_MAX_TUBES];
 
     Light* flashlight;
     bool flashlight_on;
@@ -36,10 +43,14 @@ typedef struct Lights {
 void lights_build(Lights* lights, Kit* kit, Engine* engine, Scene* scene, unsigned int seed,
                   bool flicker, bool flashlight_on);
 
-// Per frame, before the frame draws: the flicker, the tubes' shadows, and the
-// flashlight riding the eye.
+// A buzz at each tube, from `audio`, which may be NULL.
+void lights_start_audio(Lights* lights, AudioSystem* audio);
+
+// Per frame, before the frame draws: the flicker, the tubes' shadows and
+// buzz, and the flashlight riding the eye. `hearing` scales the buzz for
+// where the listener is.
 void lights_update(Lights* lights, Scene* scene, double time, float dt, const vec3 eye,
-                   const vec3 forward);
+                   const vec3 forward, float hearing);
 
 void lights_toggle_flashlight(Lights* lights);
 

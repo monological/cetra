@@ -348,15 +348,17 @@ void clock_start(Clock* clock, Engine* engine, Scene* scene, AudioSystem* audio)
  * where the pendulum stops: so that is when the clock ticks and the seconds
  * hand steps. The other hands creep, geared down from the same train.
  */
-void clock_update(Clock* clock, double time) {
+void clock_update(Clock* clock, double time, float hearing) {
     const float swing = SWING * (float)sin(2.0 * GLM_PI * time / PERIOD);
     turn(clock->pendulum, PIVOT_Y, PIVOT_D, swing);
 
     const long beat = (long)floor(time * 2.0 / PERIOD + 0.5);
     if (clock->beat >= 0 && beat != clock->beat) {
         Sound* s = (beat & 1) ? clock->tock : clock->tick;
-        if (s)
+        if (s) {
+            audio_sound_set_volume(s, BEAT_VOLUME * hearing);
             audio_sound_play(s);
+        }
     }
     clock->beat = beat;
 

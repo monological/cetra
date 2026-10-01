@@ -45,6 +45,7 @@
 #include "lights.h"
 #include "mats.h"
 #include "player.h"
+#include "sounds.h"
 #include "street.h"
 
 #define DEFAULT_WIDTH  1600
@@ -106,7 +107,8 @@ typedef struct SilentArgs {
     bool no_flicker;
     bool flashlight;
     bool mute;
-    float rain_mmh; // 0 = dry
+    float rain_mmh;         // 0 = dry
+    const char* audio_dump; // headless: write what the listener hears here
 } SilentArgs;
 
 static SilentArgs g_args;
@@ -115,6 +117,13 @@ static Player g_player;
 static Lights g_lights;
 static Clock g_clock;
 static RainBed g_rain_bed;
+static Sounds g_sounds;
+
+// --audio-dump: the offline mix, pulled a frame's worth at a time so it keeps
+// step with the sim clock, as interleaved stereo at the engine's rate.
+#define DUMP_RATE 48000
+static float* g_dump;
+static size_t g_dump_frames, g_dump_cap;
 static float g_fade_seconds; // since the bounce light came in
 
 // The spawn: in the kitchen, facing the window.
@@ -340,8 +349,9 @@ static void on_init(Game* game) {
     kit_finish(&kit, "world");
     printf("silent: %d colliders, %d vertices\n", kit.collider_count, kit.vertex_count);
 
-    // Sound: the clock's beat, heard from where it stands. Headless, the
-    // system opens no device, so a capture is unchanged by it.
+    // Sound: the clock's beat, the tubes' buzz, the fridge and the wind, each
+    // heard from where it is. Headless, the system opens no device, so a
+    // capture is unchanged by it.
     AudioSystem* audio = create_audio_system(engine->headless);
     if (audio) {
         game_set_audio_system(game, audio);
@@ -349,6 +359,9 @@ static void on_init(Game* game) {
             audio_set_bus_volume(audio, AUDIO_BUS_MASTER, 0.0f);
     }
     clock_start(&g_clock, engine, g_scene, audio);
+    lights_start_audio(&g_lights, audio);
+    const vec3 spawn_eye = {SPAWN_FEET[0], SPAWN_FEET[1] + PLAYER_EYE_HEIGHT, SPAWN_FEET[2]};
+    sounds_start(&g_sounds, audio, spawn_eye);
 
     // Before the sky: its reflections are baked through the fog set here.
     build_post(engine, !g_args.day, !g_args.no_grade);
@@ -420,6 +433,54 @@ static void on_update(Game* game, double dt) {
     }
 }
 
+// The mix up to the sim clock's now, pulled from the offline device: as many
+// frames as the clock has run since the last pull, so the sound and the
+// picture keep step at any frame rate.
+static void dump_audio(Game* game) {
+    if (!g_args.audio_dump || !game->audio)
+        return;
+    const size_t due = (size_t)llround(game->time * DUMP_RATE);
+    if (due <= g_dump_frames)
+        return;
+    const size_t want = due - g_dump_frames;
+    if (g_dump_frames + want > g_dump_cap) {
+        const size_t cap = 2 * (g_dump_frames + want);
+        float* grown = realloc(g_dump, cap * 2 * sizeof(float));
+        if (!grown)
+            return;
+        g_dump = grown;
+        g_dump_cap = cap;
+    }
+    g_dump_frames += audio_system_read_pcm(game->audio, g_dump + 2 * g_dump_frames, want);
+}
+
+static bool write_dump(const char* path) {
+    FILE* f = fopen(path, "wb");
+    if (!f)
+        return false;
+    const uint32_t bytes = (uint32_t)(g_dump_frames * 2 * sizeof(int16_t));
+    const uint32_t rate = DUMP_RATE, byte_rate = DUMP_RATE * 4, fmt_size = 16, riff = 36 + bytes;
+    const uint16_t pcm = 1, channels = 2, align = 4, bits = 16;
+    fwrite("RIFF", 1, 4, f);
+    fwrite(&riff, 4, 1, f);
+    fwrite("WAVEfmt ", 1, 8, f);
+    fwrite(&fmt_size, 4, 1, f);
+    fwrite(&pcm, 2, 1, f);
+    fwrite(&channels, 2, 1, f);
+    fwrite(&rate, 4, 1, f);
+    fwrite(&byte_rate, 4, 1, f);
+    fwrite(&align, 2, 1, f);
+    fwrite(&bits, 2, 1, f);
+    fwrite("data", 1, 4, f);
+    fwrite(&bytes, 4, 1, f);
+    for (size_t i = 0; i < 2 * g_dump_frames; i++) {
+        const float v = glm_clamp(g_dump[i], -1.0f, 1.0f);
+        const int16_t s = (int16_t)lrintf(v * 32767.0f);
+        fwrite(&s, 2, 1, f);
+    }
+    return fclose(f) == 0;
+}
+
 static void on_pre_render(Game* game, double alpha) {
     (void)alpha;
     Engine* engine = game->engine;
@@ -433,10 +494,14 @@ static void on_pre_render(Game* game, double alpha) {
         lights_toggle_flashlight(&g_lights);
     vec3 eye = {0.0f, 0.0f, 0.0f}, forward = {0.0f, 0.0f, -1.0f};
     player_eye(&g_player, eye, forward);
-    lights_update(&g_lights, g_scene, game->time, (float)game->sim_clock.delta, eye, forward);
-    clock_update(&g_clock, game->time);
+    sounds_update(&g_sounds, eye, (float)game->sim_clock.delta);
+    const float hearing = sounds_indoor_gain(&g_sounds);
+    lights_update(&g_lights, g_scene, game->time, (float)game->sim_clock.delta, eye, forward,
+                  hearing);
+    clock_update(&g_clock, game->time, hearing);
     rain_bed_update(&g_rain_bed, g_scene->rain, g_scene->shadow_system, eye,
                     (float)game->sim_clock.delta);
+    dump_audio(game);
 
     // The probes go in on the third frame, not at load. The tubes' panels are
     // derived during the first frame's draw and only cast from the next, and a
@@ -489,6 +554,7 @@ static void print_usage(const char* prog) {
     printf("      --no-flicker        Keep the failing ceiling tube steady\n");
     printf("      --flashlight        Start with the flashlight on (F toggles it)\n");
     printf("      --mute              Without sound\n");
+    printf("      --audio-dump PATH   Headless: write what the listener hears as a WAV\n");
     printf("      --rain MM           Rain rate in mm/h (default %.0f)\n",
            (double)DEFAULT_RAIN_MMH);
     printf("      --no-rain           A dry night\n");
@@ -549,6 +615,8 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
             a->flashlight = true;
         } else if (!strcmp(s, "--mute")) {
             a->mute = true;
+        } else if (!strcmp(s, "--audio-dump") && has_next) {
+            a->audio_dump = argv[++i];
         } else if (!strcmp(s, "--rain") && has_next) {
             a->rain_mmh = fmaxf(0.0f, (float)atof(argv[++i]));
         } else if (!strcmp(s, "--no-rain")) {
@@ -564,6 +632,11 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
     }
     if (a->cam_eye_set != a->cam_target_set)
         fprintf(stderr, "silent: --cam-eye and --cam-target go together; ignoring the pose\n");
+    if (a->audio_dump && !a->headless) {
+        fprintf(stderr, "silent: --audio-dump needs --headless, which renders sound offline; "
+                        "ignoring it\n");
+        a->audio_dump = NULL;
+    }
     return true;
 }
 
@@ -611,6 +684,14 @@ int main(int argc, char** argv) {
     game_set_update(game, on_update);
     game_set_pre_render(game, on_pre_render);
     game_run(game);
+    if (g_args.audio_dump) {
+        if (write_dump(g_args.audio_dump))
+            printf("silent: %.1f s of sound in %s\n", (double)g_dump_frames / DUMP_RATE,
+                   g_args.audio_dump);
+        else
+            fprintf(stderr, "silent: cannot write %s\n", g_args.audio_dump);
+        free(g_dump);
+    }
     free_game(game);
     return 0;
 }
