@@ -26963,6 +26963,15 @@ RAIN_SSR_COVERED = ((-2.0, 2.0), (-5.5, -3.0))
 RAIN_SSR_WALL = [(x, y, -11.25) for x in (-3.0, 3.0) for y in (0.05, 1.5)]
 # The fixture's own camera sees these regions smaller than the under-roof camera sees its patch.
 RAIN_SSR_MIN_PX = 1000
+# A medium lobe well off the streaks' 0.8, so a frame that read the wrong one would show it.
+RAIN_MIST_G = 0.3
+# A scene wind that gusts fast enough for two probe runs a few frames apart to sit at different
+# points of its envelope, toward the wall as the fixture's own rain wind blows.
+RAIN_SCENE_WIND = {"direction": [0.0, 0.0, -1.0], "airSpeed": 3.0, "gustAmount": 0.5,
+                   "gustFrequency": 2.0}
+RAIN_GUST_FRAMES = 40
+# Deeper than a splash crown rises off the bed (a 6 mm drop's droplets top out near 0.2 m).
+RAIN_DEEP_WATER = 0.5
 
 
 def _rain_twin(rate):
@@ -27097,6 +27106,14 @@ def run_rain_gate(workdir):
       rain-mist     the medium the post chain was handed is the rate's extinction times
                     `mist`, handed over at the outermost streak box, and arms the volume;
                     and on its own, in a fixture with no fog, it moves the frame.
+      rain-mist-g   the medium's lobe is its own knob: the post chain is handed it, the streaks
+                    keep theirs, a streaks-only frame does not move by a pixel, and a misty
+                    frame does.
+      rain-wind     a gusting scene wind that states an air speed carries the rain: the cover
+                    and the splashes travel along the gust cycle's mean, which the probe holds
+                    against its closed form, and the drops in this instant's air, which gusts;
+                    the cover map is the same at two frames a gust apart; and a rain told not
+                    to follow falls along its own wind.
       rain-ssr      the soaked surfaces with SSR against without: the open wet ground moves,
                     and not a pixel of the dry ground under the roof or of the wall the wet
                     ground runs up to -- the replacing fold averages each class only with its
@@ -27105,6 +27122,10 @@ def run_rain_gate(workdir):
                     water rings, and the covered water nearest the camera does not move by a
                     pixel. From the fixture's own camera that water is too far off for a
                     ring to show, and a cover that did nothing would pass there.
+      rain-splash-water  the twin flooded RAIN_DEEP_WATER deep, splashes against none: they
+                    move the open water, which a crown thrown from the bed never reaches -- the
+                    occlusion map holds no water, so the drop has to be met at the surface --
+                    and not a pixel of the water under the roof.
       rain-ledger   the rain variant declares no more samplers than the dry variant of the
                     same materials: the cover is a tenant of the punctual array, and a unit
                     spent on it would be one the full variant does not have.
@@ -27473,6 +27494,72 @@ def run_rain_gate(workdir):
     if not ok:
         failures.append("rain-mist")
 
+    # The medium's lobe on its own: handed to the post chain, the streaks keeping theirs. A frame
+    # with no medium cannot see it; one with the medium has to -- with no streaks, so the medium
+    # starts at the eye rather than past the fixture's far wall.
+    def lobed(name, rain):
+        return variant(name, lambda s: s["rain"].update(rain))
+
+    lobe_rows, _ = _rain_rows(lobed("mist_g", {"mistForwardG": RAIN_MIST_G}))
+    lobe_medium = (lobe_rows.get("medium") or [{}])[0]
+    lobe_air = (lobe_rows.get("air") or [{}])[0]
+    still_a = frame("lobe_dry_a", lobed("lobe_dry_a", {"mist": 0.0}), RAIN_LINEAR)
+    still_b = frame("lobe_dry_b", lobed("lobe_dry_b", {"mist": 0.0, "mistForwardG": RAIN_MIST_G}),
+                    RAIN_LINEAR)
+    misty_b = frame("lobe_misty", lobed("lobe_misty", {**RAIN_SURFACES_ONLY, "mist": 1.0,
+                                                       "mistForwardG": RAIN_MIST_G}), RAIN_LINEAR)
+    still_ae = compare(still_a, still_b)[0] if still_a and still_b else sys.maxsize
+    misty_frac = _moved_fraction(misted, misty_b)
+    ok = (abs(lobe_medium.get("g", nan) - RAIN_MIST_G) <= 1e-6
+          and abs(lobe_air.get("streak_g", nan) - 0.8) <= 1e-6 and still_ae == 0 and misty_frac > 0)
+    print(f"  rain-mist-g {'PASS' if ok else 'FAIL'}  published lobe {lobe_medium.get('g', nan):g} "
+          f"(want {RAIN_MIST_G:g}), the streaks' {lobe_air.get('streak_g', nan):g} (want 0.8); with "
+          f"no medium {still_ae} px moved (want 0), with it {misty_frac:.2%} of the frame (want "
+          f"> 0)")
+    if not ok:
+        failures.append("rain-mist-g")
+
+    # The scene's wind, gusting, and no wind of the rain's own: what carries it is the scene's.
+    def windy(name, follow=True):
+        def mutate(s):
+            s["wind"] = dict(RAIN_SCENE_WIND)
+            s["rain"].update({"wind": [0.0, 0.0, 0.0], "followSceneWind": follow})
+        return variant(name, mutate)
+
+    def air_at(path, frames):
+        rows, _ = _rain_rows(path, extra=at, frames=frames)
+        return ((rows.get("air") or [{}])[0], [p.get("map") for p in rows.get("exposure", [])])
+
+    blowing = windy("windy")
+    (air_a, map_a), (air_b, map_b) = air_at(blowing, 2), air_at(blowing, RAIN_GUST_FRAMES)
+    calm_air, _ = air_at(windy("windy_unfollowed", follow=False), 2)
+    d = RAIN_SCENE_WIND["direction"]
+    across = math.hypot(d[0], d[2])
+    peak, depth = RAIN_SCENE_WIND["airSpeed"], RAIN_SCENE_WIND["gustAmount"]
+    mean = peak * (1.0 - depth + depth * 5.0 / 16.0)
+    want_mean = (d[0] / across * mean, d[2] / across * mean)
+    fall = _rain_twin(settled.get("rate", nan))["v0"]
+    norm = math.sqrt(want_mean[0] ** 2 + fall ** 2 + want_mean[1] ** 2)
+    want_travel = (want_mean[0] / norm, -fall / norm, want_mean[1] / norm)
+    mean_err = max(abs(air_a.get("mean_x", nan) - want_mean[0]),
+                   abs(air_a.get("mean_z", nan) - want_mean[1]))
+    travel_err = max(abs(air_a.get(k, nan) - w)
+                     for k, w in zip(("travel_x", "travel_y", "travel_z"), want_travel))
+    now = [math.hypot(a.get("now_x", nan), a.get("now_z", nan)) for a in (air_a, air_b)]
+    gusts = (all(peak * (1.0 - depth) - 1e-4 <= n <= peak + 1e-4 for n in now)
+             and abs(now[0] - now[1]) > 0.05 * peak)
+    still_cover = bool(map_a) and map_a == map_b
+    straight = abs(calm_air.get("travel_y", nan) + 1.0) <= 1e-6
+    ok = mean_err <= 1e-5 and travel_err <= 1e-5 and gusts and still_cover and straight
+    print(f"  rain-wind {'PASS' if ok else 'FAIL'}  mean air ({air_a.get('mean_x', nan):.4f}, "
+          f"{air_a.get('mean_z', nan):.4f}) m/s against ({want_mean[0]:.4f}, {want_mean[1]:.4f}), "
+          f"travel {travel_err:.1e} off its closed form (want <= 1e-5); this instant's air "
+          f"{now[0]:.3f} then {now[1]:.3f} m/s (want inside the envelope and moving); the cover "
+          f"{'identical' if still_cover else 'DIFFERENT'} a gust apart; unfollowed, travel_y "
+          f"{calm_air.get('travel_y', nan):.6f} (want -1)")
+    if not ok:
+        failures.append("rain-wind")
+
     # Wet ground in SSR, on the soaked surfaces alone: traced where the ground is wet, and not a
     # pixel moved where it is dry or on the wall above it. The surfaces frame has SSR on.
     surfaces_nossr = frame("ssr_off", surfaces, RAIN_LINEAR + ["--no-ssr"])
@@ -27521,6 +27608,33 @@ def run_rain_gate(workdir):
           f"under the roof (want 0, of at least {RAIN_COVERED_MIN_PX})")
     if not ok:
         failures.append("rain-ripples")
+
+    # Splashes on the water's surface rather than on the bed under it: the twin flooded deep
+    # enough that a crown thrown from the bed never reaches the surface, from under the roof.
+    def flooded(name, count):
+        def mutate(s):
+            s["camera"] = dict(RAIN_UNDER_ROOF_CAMERA)
+            s["water"]["level"] = RAIN_DEEP_WATER
+            s["rain"].update({"streakCount": 0, "mist": 0.0, "rippleStrength": 0.0,
+                              **RAIN_SPLASH_ARM})
+            if count is not None:
+                s["rain"]["splashCount"] = count
+        return frame(name, variant(name, mutate, base=water), RAIN_LINEAR)
+
+    struck, unstruck = flooded("struck", None), flooded("unstruck", 0)
+    frac, covered_moved, covered_total = _moved_fraction(struck, unstruck), -1, 0
+    if struck and unstruck:
+        covered_moved, covered_total = moved_in_quad(
+            struck, unstruck, _cscn_view(RAIN_UNDER_ROOF_CAMERA),
+            ground_quad(RAIN_COVERED_PATCH, RAIN_DEEP_WATER))
+    ok = (frac > RAIN_SPLASH_MIN and covered_total >= RAIN_COVERED_MIN_PX
+          and covered_moved == 0)
+    print(f"  rain-splash-water {'PASS' if ok else 'FAIL'}  splashes on water {RAIN_DEEP_WATER:g} m "
+          f"deep move {frac:.2%} of the frame (want > {RAIN_SPLASH_MIN:.2%}) and {covered_moved} "
+          f"of {covered_total} pixels of the water under the roof (want 0, of at least "
+          f"{RAIN_COVERED_MIN_PX})")
+    if not ok:
+        failures.append("rain-splash-water")
 
     bits, full = _pbr_feature_bits()
     rain_bit = bits["rain"]

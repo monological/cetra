@@ -103,6 +103,26 @@ static float grime_of(int id) {
 }
 
 /*
+ * How open to water each surface the rain reaches is, 0 sealed to 1 fully porous: what
+ * darkens it as it wets (Material.porosity). The engine derives it from roughness, rough
+ * being porous, and that is wrong for every painted surface here -- a scan of weathered
+ * paint is rough and the paint still sheds water, so the siding darkened like soaked
+ * concrete. Paint and slate take a little, bare wood and masonry much more. Indoors nothing
+ * is rained on, so it is left to the derivation.
+ */
+typedef struct PorositySpec {
+    MatId id;
+    float porosity;
+} PorositySpec;
+
+static const PorositySpec POROSITY[] = {
+    {MAT_ASPHALT, 0.9f},   {MAT_CONCRETE, 0.7f},   {MAT_DIRT, 1.0f},  {MAT_BRICK, 0.6f},
+    {MAT_PORCH, 0.7f},     {MAT_POLE, 0.4f},       {MAT_ROOF, 0.25f}, {MAT_SIDING, 0.25f},
+    {MAT_SIDING_B, 0.25f}, {MAT_SIDING_C, 0.25f},  {MAT_WOOD, 0.2f},  {MAT_TRIM, 0.15f},
+    {MAT_CAR, 0.0f},       {MAT_WINDOW_LIT, 0.0f},
+};
+
+/*
  * The repeats follow each scan's real size where that reads right and depart
  * from it where the reference asks: the kitchen's 30 cm floor tiles are the
  * scan's 50 cm ones at a shorter repeat, and the backsplash is the SAME floor
@@ -235,6 +255,8 @@ void mats_register(Kit* kit, Engine* engine, Scene* scene) {
         m->emissive_strength = GLOWS[g].nits;
         m->emissive_light = 1; // decoration: never a derived panel
     }
+    for (size_t p = 0; p < sizeof(POROSITY) / sizeof(POROSITY[0]); p++)
+        kit->materials[POROSITY[p].id]->porosity = POROSITY[p].porosity;
 }
 
 void mats_lamps_out(Kit* kit) {
