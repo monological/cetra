@@ -29,7 +29,23 @@ Wind* create_wind(const char* name) {
     wind->turbulence = 0.2f;
     // Lockstep, which is what every scene authored before this existed had.
     wind->phase_variation = 0.0f;
+    wind->air_speed = 0.0f;
     return wind;
+}
+
+float wind_gust(const Wind* wind, float t) {
+    if (!wind)
+        return 1.0f;
+    const float s = 0.5f + 0.5f * sinf(t * wind->gust_frequency);
+    return glm_lerp(1.0f - wind->gust_amount, 1.0f, s * s * s);
+}
+
+// The cube of (1 + sin) / 2 averages to 5/16 over a cycle: the odd powers of sin vanish and
+// sin^2 averages to a half.
+float wind_gust_mean(const Wind* wind) {
+    if (!wind)
+        return 1.0f;
+    return glm_lerp(1.0f - wind->gust_amount, 1.0f, 5.0f / 16.0f);
 }
 
 void free_wind(Wind* wind) {

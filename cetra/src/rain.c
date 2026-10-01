@@ -5,6 +5,7 @@
 #include <stdlib.h>
 
 #include "ext/log.h"
+#include "wind.h"
 
 // The Atlas fit's coefficients, which the streak shader draws every drop's fall with.
 #include "../shaders/include/rain_constants.glsl"
@@ -21,6 +22,8 @@ Rain* create_rain(void) {
 
 void rain_init_defaults(Rain* rain) {
     *rain = (Rain){0};
+    glm_vec3_copy((vec3){0.0f, -1.0f, 0.0f}, rain->travel);
+    rain->follow_scene_wind = true;
     // Game time, not weather time: a real pavement takes minutes to wet and most of an
     // hour to dry, and a scene that waited that long would never be seen to change. The
     // ORDER is what is kept -- a film comes and goes faster than a puddle does, and
@@ -66,6 +69,8 @@ void rain_init_defaults(Rain* rain) {
     rain->splash_amount = 1.0f;
     rain->splash_size = 1.0f;
     rain->mist = 1.0f;
+    // The streaks' lobe: the same drops, so the same lobe until somebody means otherwise.
+    rain->mist_forward_g = 0.8f;
 }
 
 void free_rain(Rain* rain) {
@@ -116,9 +121,27 @@ void rain_fall_direction(const Rain* rain, vec3 out) {
     // Clamped as the streaks' copy is, so the cover tilts with the drops that are drawn.
     const float fall = rain_terminal_velocity(rain_median_diameter(rain->rate_mmh)) *
                        fmaxf(rain->fall_scale, 0.0f);
-    vec3 v = {rain->wind[0], rain->wind[1] - fall, rain->wind[2]};
+    vec3 v = {rain->wind_mean[0], rain->wind_mean[1] - fall, rain->wind_mean[2]};
     if (glm_vec3_norm(v) > 1e-6f)
         glm_vec3_normalize_to(v, out);
+}
+
+// The air the rain falls through. A scene wind states a direction and, when it states one, a
+// speed at a gust's peak; the cover reads the cycle's mean, because a cover that swung with
+// every gust would crawl across the ground under a still eave.
+static void _resolve_wind(Rain* rain, const Wind* wind, float t) {
+    if (rain->follow_scene_wind && wind && wind->air_speed > 0.0f) {
+        vec3 across = {wind->direction[0], 0.0f, wind->direction[2]};
+        const float len = glm_vec3_norm(across);
+        if (len > 1e-6f) {
+            glm_vec3_scale(across, wind->air_speed / len, across);
+            glm_vec3_scale(across, wind_gust_mean(wind), rain->wind_mean);
+            glm_vec3_scale(across, wind_gust(wind, t), rain->wind_now);
+            return;
+        }
+    }
+    glm_vec3_copy(rain->wind, rain->wind_mean);
+    glm_vec3_copy(rain->wind, rain->wind_now);
 }
 
 // One exact step of a first-order approach to `target`: the closed form, so the
@@ -137,8 +160,15 @@ static float _rate_scaled(float tau, float rate_mmh) {
     return rate_mmh > 0.0f ? tau * RAIN_RATE_REFERENCE / rate_mmh : tau;
 }
 
-void rain_update(Rain* rain, float dt) {
-    if (!rain || !(dt > 0.0f))
+void rain_update(Rain* rain, const Wind* wind, float t, float dt) {
+    if (!rain)
+        return;
+    _resolve_wind(rain, wind, t);
+    if (rain_falling(rain))
+        rain_fall_direction(rain, rain->travel);
+    else if (!rain_active(rain))
+        glm_vec3_copy((vec3){0.0f, -1.0f, 0.0f}, rain->travel);
+    if (!(dt > 0.0f))
         return;
     rain->wetness = _approach(rain->wetness, rain_wetness_target(rain),
                               _rate_scaled(rain->wet_time, rain->rate_mmh), rain->dry_time, dt);
@@ -210,11 +240,11 @@ static void _probe_schedule(int fps) {
     const float dt = 1.0f / (float)fps;
     r->rate_mmh = 10.0f;
     for (int i = 0; i < fps * 10; i++)
-        rain_update(r, dt);
+        rain_update(r, NULL, 0.0f, dt);
     const float wet_mid = r->wetness, puddle_mid = r->puddle_level;
     r->rate_mmh = 0.0f;
     for (int i = 0; i < fps * 30; i++)
-        rain_update(r, dt);
+        rain_update(r, NULL, 0.0f, dt);
     printf("rain-probe schedule fps=%d rate=10 rain_s=10 dry_s=30 wet_mid=%.9g puddle_mid=%.9g "
            "wet_end=%.9g puddle_end=%.9g\n",
            fps, (double)wet_mid, (double)puddle_mid, (double)r->wetness, (double)r->puddle_level);
@@ -260,4 +290,9 @@ void rain_probe_print(const Rain* rain) {
            (double)rain->wet_time, (double)rain->dry_time, (double)rain->puddle_fill_time,
            (double)rain->puddle_drain_time, (double)rain->puddle_coverage, rain->streak_count,
            (double)rain->streak_radius, (double)rain->mist);
+    printf("rain-probe air now_x=%.9g now_z=%.9g mean_x=%.9g mean_z=%.9g travel_x=%.9g "
+           "travel_y=%.9g travel_z=%.9g streak_g=%.9g mist_g=%.9g\n",
+           (double)rain->wind_now[0], (double)rain->wind_now[2], (double)rain->wind_mean[0],
+           (double)rain->wind_mean[2], (double)rain->travel[0], (double)rain->travel[1],
+           (double)rain->travel[2], (double)rain->streak_forward_g, (double)rain->mist_forward_g);
 }

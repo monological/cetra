@@ -634,10 +634,12 @@ static void parse_wind(CetraSceneDesc* d, const cJSON* root) {
     d->has_wind_gust_amount = get_float(wind, "gustAmount", &d->wind_gust_amount);
     d->has_wind_turbulence = get_float(wind, "turbulence", &d->wind_turbulence);
     d->has_wind_phase_variation = get_float(wind, "phaseVariation", &d->wind_phase_variation);
+    d->has_wind_air_speed =
+        _ranged_float(wind, "wind", "airSpeed", 0.0f, 100.0f, &d->wind_air_speed);
 
     static const char* const known[] = {
-        "enabled",       "direction",  "strength",   "speed",
-        "gustFrequency", "gustAmount", "turbulence", "phaseVariation",
+        "enabled",    "direction",  "strength",       "speed",    "gustFrequency",
+        "gustAmount", "turbulence", "phaseVariation", "airSpeed",
     };
     warn_unknown_keys(wind, known, sizeof(known) / sizeof(known[0]), "wind");
 }
@@ -1028,6 +1030,7 @@ static const CSceneRainKey RAIN_KEYS[] = {
     RAIN_FLOAT_KEY("splashAmount", splash_amount, 0.0f, 100.0f),
     RAIN_FLOAT_KEY("splashSize", splash_size, 0.0f, 100.0f),
     RAIN_FLOAT_KEY("mist", mist, 0.0f, 1000.0f),
+    RAIN_FLOAT_KEY("mistForwardG", mist_forward_g, -0.99f, 0.99f),
 };
 #undef RAIN_FLOAT_KEY
 #undef RAIN_INT_KEY
@@ -1044,6 +1047,7 @@ static void parse_rain(CetraSceneDesc* d, const cJSON* root) {
     vec3 wind = GLM_VEC3_ZERO_INIT;
     if (get_vec3(rain, "wind", wind))
         glm_vec3_copy(wind, out->rain.wind);
+    get_bool(rain, "followSceneWind", &out->rain.follow_scene_wind);
     for (size_t i = 0; i < RAIN_KEY_COUNT; i++) {
         const CSceneRainKey* k = &RAIN_KEYS[i];
         float v = 0.0f;
@@ -1059,10 +1063,15 @@ static void parse_rain(CetraSceneDesc* d, const cJSON* root) {
     }
     out->has_settled = get_bool(rain, "settled", &out->settled);
 
-    const char* known[RAIN_KEY_COUNT + 3] = {"enabled", "wind", "settled"};
+    static const char* const OTHER_KEYS[] = {"enabled", "wind", "settled", "followSceneWind"};
+#define RAIN_OTHER_COUNT (sizeof(OTHER_KEYS) / sizeof(OTHER_KEYS[0]))
+    const char* known[RAIN_KEY_COUNT + RAIN_OTHER_COUNT];
+    for (size_t i = 0; i < RAIN_OTHER_COUNT; i++)
+        known[i] = OTHER_KEYS[i];
     for (size_t i = 0; i < RAIN_KEY_COUNT; i++)
-        known[3 + i] = RAIN_KEYS[i].key;
-    warn_unknown_keys(rain, known, RAIN_KEY_COUNT + 3, "rain");
+        known[RAIN_OTHER_COUNT + i] = RAIN_KEYS[i].key;
+    warn_unknown_keys(rain, known, RAIN_KEY_COUNT + RAIN_OTHER_COUNT, "rain");
+#undef RAIN_OTHER_COUNT
 }
 
 /*

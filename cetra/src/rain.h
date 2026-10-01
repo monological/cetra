@@ -38,14 +38,22 @@
 #define RAIN_MP_N0 8000.0f
 
 typedef struct Rain {
-    // ENGINE-OWNED: the rain's accumulated state. Read freely, never write; rain_settle
-    // is how a caller asks for a world already soaked.
+    // ENGINE-OWNED: the rain's accumulated state, and the air it falls through as
+    // rain_update resolved it. Read freely, never write; rain_settle is how a caller asks
+    // for a world already soaked.
     float wetness;      // 0 = dry, 1 = every exposed surface carries a film
     float puddle_level; // 0 = no standing water, puddle_coverage = full at this rate
+    vec3 wind_now;      // m/s, this instant's air, gusts and all: what the drops are drawn in
+    vec3 wind_mean;     // m/s, the air over a gust cycle: what the cover is cast along
+    // The unit direction the rain last fell along, held after it stops while anything is
+    // still wet, so what sheltered a surface still shelters it. Straight down when dry.
+    vec3 travel;
 
     // SETTINGS: plain stores. Write them directly, at any time.
     float rate_mmh; // rain rate in mm/h; 0 = no rain falls (the state still dries)
     vec3 wind;      // m/s; the horizontal air speed the drops are carried at
+    // true = a scene wind that states an air speed carries the rain in place of `wind`.
+    bool follow_scene_wind;
     // Scale on how fast drops fall; 1 = their terminal velocity. Below 1 is gentler rain on
     // screen -- slower and shorter streaks -- at the same rate, and it tilts the cover with
     // the fall so what shelters is still what the drops miss. A look, not a measurement.
@@ -102,6 +110,7 @@ typedef struct Rain {
 
     // Scale on the rain's extinction as a medium past the streaks; 1 = physical, 0 = none.
     float mist;
+    float mist_forward_g; // Henyey-Greenstein asymmetry of the medium's lobe
 } Rain;
 
 // Created with a moderate rain's defaults at rate 0: nothing falls until a rate is set.
@@ -110,8 +119,12 @@ void free_rain(Rain* rain);
 // The same defaults written over a Rain the caller holds, dry.
 void rain_init_defaults(Rain* rain);
 
-// Advance the accumulated state by `dt` seconds. NULL is a no-op, which is the no-rain scene.
-void rain_update(Rain* rain, float dt);
+struct Wind;
+// Resolve the air the rain falls through at time `t` -- the scene's `wind` when it states an
+// air speed and the rain follows it, `Rain.wind` otherwise -- and the direction it travels,
+// then advance the accumulated state by `dt` seconds. NULL is a no-op, which is the no-rain
+// scene.
+void rain_update(Rain* rain, const struct Wind* wind, float t, float dt);
 
 // Put the state where this rate settles it, as though it had been raining for ever --
 // the scene that opens in a storm. At rate 0 that is dry.
@@ -133,8 +146,8 @@ bool rain_active(const Rain* rain);
 // them from moderate rain up.
 float rain_ripple_activity(const Rain* rain);
 
-// The unit direction the rain travels: the median drop's fall speed carried sideways
-// by the wind. Straight down when nothing falls.
+// The unit direction the rain travels now: the median drop's fall speed carried sideways
+// by the mean wind. Straight down when nothing falls; `Rain.travel` is what outlasts it.
 void rain_fall_direction(const Rain* rain, vec3 out);
 
 /*

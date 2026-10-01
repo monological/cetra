@@ -129,7 +129,7 @@ void rain_render_drops(RainRenderer* rr, Engine* engine, const Scene* scene,
     uniform_set_vec3(u, "cameraVelocity", cam_vel);
     uniform_set_vec2(u, "viewport", (vec2){(float)late->width, (float)late->height});
     uniform_set_float(u, "time", (float)engine->render_time);
-    uniform_set_vec3(u, "rainWind", rain->wind);
+    uniform_set_vec3(u, "rainWind", rain->wind_now);
     uniform_set_float(u, "mpLambda", rain_mp_lambda(rain->rate_mmh));
     uniform_set_float(u, "fallScale", fmaxf(rain->fall_scale, 0.0f));
     uniform_set_float(u, "shutter", rain->shutter_s);
@@ -154,10 +154,9 @@ void rain_render_drops(RainRenderer* rr, Engine* engine, const Scene* scene,
     uniform_set_float(u, "splashFire", fminf(per_life, 1.0f));
     uniform_set_float(u, "splashStandsFor", fmaxf(per_life, 1.0f));
     uniform_set_float(u, "splashSize", fmaxf(rain->splash_size, 0.0f));
-    // Down the rain from above a cell to what the occlusion map says it lands on.
-    vec3 travel = GLM_VEC3_ZERO_INIT;
-    rain_fall_direction(rain, travel);
-    uniform_set_vec3(u, "rainTravel", travel);
+    // Down the rain from above a cell to what the occlusion map says it lands on: the
+    // direction the map was cast along.
+    uniform_set_vec3(u, "rainTravel", rain->travel);
     uniform_set_float(u, "streakWidth", rain->streak_width);
     uniform_set_float(u, "streakBrightness", rain->streak_brightness);
     uniform_set_float(u, "forwardG", rain->streak_forward_g);
@@ -215,9 +214,10 @@ void rain_publish_to_postfx(const Rain* rain, PostFX* fx) {
     if (!rain_falling(rain))
         return;
     fx->rain_sigma = rain_extinction(rain->rate_mmh) * fmaxf(rain->mist, 0.0f);
-    // One lobe for a drop, whether it is drawn or is air: a knob of its own would let the
-    // rain in the distance scatter a lamp differently from the rain in front of it.
-    fx->rain_forward_g = rain->streak_forward_g;
+    // Its own knob, though the drops are the same drops: a lobe that differs from the
+    // streaks' scatters a lamp differently in the distance than in front of it, which is a
+    // look rather than physics. The default is the streaks'.
+    fx->rain_forward_g = rain->mist_forward_g;
     // The outermost streak box's half-width. Inside it the streaks already stand for every
     // drop, so a medium there too would count the rain twice.
     fx->rain_near =
@@ -228,6 +228,7 @@ void rain_publish_to_postfx(const Rain* rain, PostFX* fx) {
 
 // What a scene with no rain binds: dry, and every look at its neutral.
 static const Rain RAIN_DRY = {
+    .travel = {0.0f, -1.0f, 0.0f},
     .wet_darkening = 1.0f,
     .puddle_scale = 1.0f,
     .ripple_size = 1.0f,

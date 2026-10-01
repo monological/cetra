@@ -725,6 +725,7 @@ static void _engine_gui_panel(Engine* engine) {
             igIndent(0.0f);
             igSliderFloat("Rate (mm/h)", &rain->rate_mmh, 0.0f, 100.0f, "%.1f",
                           ImGuiSliderFlags_Logarithmic);
+            igCheckbox("Follow the scene wind", &rain->follow_scene_wind);
             igSliderFloat3("Wind (m/s)", rain->wind, -10.0f, 10.0f, "%.1f", 0);
             igSliderFloat("Fall speed", &rain->fall_scale, 0.1f, 2.0f, "%.2f", 0);
             igSliderFloat("Streak brightness", &rain->streak_brightness, 0.0f, 10.0f, "%.2f", 0);
@@ -740,8 +741,12 @@ static void _engine_gui_panel(Engine* engine) {
             igSliderFloat("Splash amount", &rain->splash_amount, 0.0f, 4.0f, "%.2f", 0);
             igSliderFloat("Splash size", &rain->splash_size, 0.0f, 4.0f, "%.2f", 0);
             igSliderFloat("Mist", &rain->mist, 0.0f, 50.0f, "%.1f", ImGuiSliderFlags_Logarithmic);
+            igSliderFloat("Mist lobe", &rain->mist_forward_g, 0.0f, 0.95f, "%.2f", 0);
             // What the settings have integrated to, which a slider must not write.
             igText("wetness %.2f, puddles %.2f", (double)rain->wetness, (double)rain->puddle_level);
+            igText("air now (%.1f, %.1f) m/s, mean (%.1f, %.1f)", (double)rain->wind_now[0],
+                   (double)rain->wind_now[2], (double)rain->wind_mean[0],
+                   (double)rain->wind_mean[2]);
             igUnindent(0.0f);
         }
 
