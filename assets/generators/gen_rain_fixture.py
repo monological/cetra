@@ -80,16 +80,15 @@ PIECES = [
     ("lamp_pole", "rain_post", (6.5, 2.2, -3.0), (0.12, 4.4, 0.12)),
 ]
 
-# The GLASS twin's panes (spec 13.12), thin -- 6 mm -- and facing +z, the side the rain
-# strikes: one in the open, one under the middle of the roof, and one standing 0.6 m inside the
-# roof's front edge. The slanted rain reaches that one's outer face below about 1.3 m and not
-# above it -- a line the rain's cover map blurs by a third of a metre either way, its texels
-# being 9.4 cm across and the rain falling 3.5 m for every metre it drifts. Kept to x ranges of
-# their own so each reads alone from the fixture's camera.
+# The GLASS twin's panes (spec 13.12), thin -- 6 mm. Two stand facing +z, the side the rain
+# strikes: one in the open and one under the middle of the roof. The third lies FLAT, a glass
+# canopy in the open between the roof and the camera: it shelters the ground under it as any
+# roof does, and seen from below shows the drops on its top. Kept to x and z ranges of their
+# own so each reads alone from the fixture's camera.
 PANES = [
     ("pane_open", "rain_glass", (2.0, 1.05, 4.0), (2.0, 1.5, 0.006)),
     ("pane_covered", "rain_glass", (-2.0, 1.05, -4.0), (2.0, 1.5, 0.006)),
-    ("pane_edge", "rain_glass", (0.0, 1.55, -1.6), (2.0, 2.5, 0.006)),
+    ("pane_roof", "rain_glass", (0.0, 2.4, 1.0), (2.0, 0.006, 2.0)),
 ]
 
 

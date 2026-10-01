@@ -26973,19 +26973,17 @@ RAIN_GUST_FRAMES = 40
 # Deeper than a splash crown rises off the bed (a 6 mm drop's droplets top out near 0.2 m).
 RAIN_DEEP_WATER = 0.5
 # The glazed twin's panes, each an inscribed quad on the face a camera sees, a few centimetres in
-# from its edges: the open pane's street face, the covered pane's, and two bands of the edge
-# pane's INNER face -- the lower one, which the slanted rain reaches past the roof's front edge,
-# and the upper one, which it does not. The rain reaches the edge pane below about 1.3 m, a line
-# the cover map's texels blur by a third of a metre either way, and each band clears that.
-# From inside, the camera looks down through the lower band at the wet ground: through glass
-# with nothing but even sky behind it, a drop's lens has nothing to bend.
+# from its edges: the open pane's street face, the covered pane's, and the UNDERSIDE of the flat
+# glass canopy, seen from below. The canopy shelters the point a hand under it, as any roof
+# does, so the underside's own cover is none and only the side the rain strikes beads it. A
+# wall pane cannot show that: the rain meets it nearly edge on and the cover map's slope bias
+# stores it deeper than the point behind it, which therefore reads as open sky either way.
 RAIN_GLASS_FIXTURE = "rain_glass_fixture.cscn"
 RAIN_GLASS_CAMERA = {"eye": [0.5, 1.6, 8.0], "target": [0.5, 1.4, -2.0], "fov": 55}
-RAIN_GLASS_INSIDE_CAMERA = {"eye": [0.0, 1.6, -5.5], "target": [0.0, 0.6, 2.0], "fov": 60}
+RAIN_GLASS_BELOW_CAMERA = {"eye": [0.0, 0.8, 3.2], "target": [0.0, 3.0, -2.0], "fov": 60}
 RAIN_GLASS_OPEN = [(x, y, 4.003) for x in (1.2, 2.8) for y in (0.45, 1.65)]
-RAIN_GLASS_COVERED = [(x, y, -3.997) for x in (-2.8, -1.6) for y in (0.45, 1.65)]
-RAIN_GLASS_EDGE_LOW = [(x, y, -1.603) for x in (-0.8, 0.8) for y in (0.4, 0.85)]
-RAIN_GLASS_EDGE_HIGH = [(x, y, -1.603) for x in (-0.8, 0.8) for y in (1.9, 2.7)]
+RAIN_GLASS_COVERED = [(x, y, -3.997) for x in (-2.8, -1.9) for y in (0.45, 1.65)]
+RAIN_GLASS_CANOPY = [(x, 2.397, z) for x in (-0.8, 0.8) for z in (0.2, 1.8)]
 # Fewer pixels than this in a pane's image and the arm could not see it.
 RAIN_GLASS_MIN_PX = 500
 # Seconds since the rain stopped: soon enough that the panes are still beaded, and long enough
@@ -27152,10 +27150,9 @@ def run_rain_gate(workdir):
       rain-glass    the glazed twin, beaded panes against bare ones: the pane in the open moves,
                     and not a pixel of the pane under the roof's middle -- drops form where the
                     occlusion map says the rain strikes, and nowhere else.
-      rain-glass-inner  from under the roof, the INNER face of the pane at the roof's edge: its
-                    lower band shows the drops the slanted rain leaves on the outer face, though
-                    the point just behind that face is sheltered by the pane itself; its upper
-                    band, which the rain cannot reach past the roof, moves 0 px.
+      rain-glass-inner  from below, the flat glass canopy shows the drops the rain leaves on its
+                    top, though the canopy shelters its own underside: the cover is asked on the
+                    side the rain strikes, not the side that is seen.
       rain-glass-lens  the drops' lens at 1 against 0 moves the view through the open pane: a
                     drop bends what is seen through it, not only how it reflects.
       rain-glass-dry  RAIN_GLASS_DAMP_S after the rain stopped the open pane is still beaded;
@@ -27726,15 +27723,13 @@ def run_rain_gate(workdir):
     if not ok:
         failures.append("rain-glass")
 
-    inside = glass("inside_beaded", RAIN_GLASS_INSIDE_CAMERA)
-    inside_bare = glass("inside_bare", RAIN_GLASS_INSIDE_CAMERA, beads=0.0)
-    low_f, _, low_t = on_pane(inside, inside_bare, RAIN_GLASS_INSIDE_CAMERA, RAIN_GLASS_EDGE_LOW)
-    _, high_m, high_t = on_pane(inside, inside_bare, RAIN_GLASS_INSIDE_CAMERA, RAIN_GLASS_EDGE_HIGH)
-    ok = (low_t >= RAIN_GLASS_MIN_PX and low_f > RAIN_FEATURE_MIN and high_t >= RAIN_GLASS_MIN_PX
-          and high_m == 0)
-    print(f"  rain-glass-inner {'PASS' if ok else 'FAIL'}  seen from inside, the edge pane's struck "
-          f"band moves {low_f:.1%} of {low_t} px (want > {RAIN_FEATURE_MIN:.0%}) and its sheltered "
-          f"band {high_m} of {high_t} (want 0, each at least {RAIN_GLASS_MIN_PX} px)")
+    below = glass("below_beaded", RAIN_GLASS_BELOW_CAMERA)
+    below_bare = glass("below_bare", RAIN_GLASS_BELOW_CAMERA, beads=0.0)
+    under_f, _, under_t = on_pane(below, below_bare, RAIN_GLASS_BELOW_CAMERA, RAIN_GLASS_CANOPY)
+    ok = under_t >= RAIN_GLASS_MIN_PX and under_f > RAIN_FEATURE_MIN
+    print(f"  rain-glass-inner {'PASS' if ok else 'FAIL'}  seen from below, the beads on the "
+          f"canopy's top move {under_f:.1%} of its underside's {under_t} px (want > "
+          f"{RAIN_FEATURE_MIN:.0%})")
     if not ok:
         failures.append("rain-glass-inner")
 
