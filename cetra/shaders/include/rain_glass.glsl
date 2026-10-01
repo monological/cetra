@@ -123,10 +123,12 @@ struct RainGlass {
  * Bead the surface with rain and return what the transmission sample needs. `exposure` is the
  * cover rainWetSurface read at `P + Ng * RAIN_NORMAL_OFFSET`.
  *
- * The drops sit on the side the rain STRIKES, which is the face looking against its travel --
- * and a thin pane seen from inside shows its inner face, whose own cover point is indoors and
- * covered, so the struck side's cover is asked for on whichever side that is. How squarely the
- * rain meets the pane sets how many there are, with the cover's spread for what wind and
+ * The drops sit on the side the rain STRIKES, which is the face looking against its travel, so
+ * that side's cover is asked for whichever face is seen. Glass the rain falls on shelters its
+ * own underside -- a glass roof seen from below, asked about the point under it, would never
+ * bead. (A wall pane does not shelter its lee in the cover map: the rain meets it nearly edge
+ * on, and the map's slope bias stores it deeper than a point a hand behind it.) How squarely
+ * the rain meets the pane sets how many there are, with the cover's spread for what wind and
  * turbulence carry onto a pane the mean rain only grazes.
  *
  * A drop's surface lights like any water, from either side of the pane, and is a lens: it
