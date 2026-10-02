@@ -20,6 +20,7 @@
 #include "scene.h"
 #include "shadow.h" // the cascades, for the glitter's shadow
 #include "sky.h"    // sky_bind_cloud_shadow (the deck dims the caustics)
+#include "spectrum.h"
 #include "texture.h"
 #include "uniform.h"
 #include "util.h"
@@ -508,16 +509,11 @@ static void _water_build_twiddle(int size, int log2_size, float* twiddle) {
  * and 1.3311 at 656.3 nm, which puts 404.7 nm at 1.3430 against a measured 1.3428. Offsets from
  * 550 nm rather than absolute values, so a scene that authors another IOR keeps its own.
  *
- * The colour is the CIE 1931 observer by Wyman, Sloan and Shirley's multi-lobe fit, taken to
- * linear sRGB and clamped at zero: the sRGB primaries cannot reach the spectral colours between
- * blue and green, whose negative red is dropped rather than subtracted. An equal-energy source,
- * since the key's own colour is applied where the pattern is used.
+ * The colour is the CIE 1931 observer (spectrum.h) taken to linear sRGB and clamped at zero:
+ * the sRGB primaries cannot reach the spectral colours between blue and green, whose negative
+ * red is dropped rather than subtracted. An equal-energy source, since the key's own colour is
+ * applied where the pattern is used.
  */
-static float _water_cie_lobe(float x, float mu, float s_lo, float s_hi) {
-    const float t = (x - mu) / (x < mu ? s_lo : s_hi);
-    return expf(-0.5f * t * t);
-}
-
 static void _water_caustic_spectrum(int count, float* dn, vec3* weight) {
     const float cauchy_b =
         (1.3371f - 1.3311f) / (1.0f / (0.4861f * 0.4861f) - 1.0f / (0.6563f * 0.6563f));
@@ -526,16 +522,11 @@ static void _water_caustic_spectrum(int count, float* dn, vec3* weight) {
         const float nm = 400.0f + ((float)i + 0.5f) * 300.0f / (float)count;
         const float um = nm / 1000.0f;
         dn[i] = cauchy_b * (1.0f / (um * um) - 1.0f / (0.55f * 0.55f));
-        const float x = 1.056f * _water_cie_lobe(nm, 599.8f, 37.9f, 31.0f) +
-                        0.362f * _water_cie_lobe(nm, 442.0f, 16.0f, 26.7f) -
-                        0.065f * _water_cie_lobe(nm, 501.1f, 20.4f, 26.2f);
-        const float y = 0.821f * _water_cie_lobe(nm, 568.8f, 46.9f, 40.5f) +
-                        0.286f * _water_cie_lobe(nm, 530.9f, 16.3f, 31.1f);
-        const float z = 1.217f * _water_cie_lobe(nm, 437.0f, 11.8f, 36.0f) +
-                        0.681f * _water_cie_lobe(nm, 459.0f, 26.0f, 13.8f);
-        weight[i][0] = fmaxf(0.0f, 3.2406f * x - 1.5372f * y - 0.4986f * z);
-        weight[i][1] = fmaxf(0.0f, -0.9689f * x + 1.8758f * y + 0.0415f * z);
-        weight[i][2] = fmaxf(0.0f, 0.0557f * x - 0.2040f * y + 1.0570f * z);
+        vec3 xyz = {0.0f, 0.0f, 0.0f};
+        spectrum_cie_xyz(nm, xyz);
+        spectrum_xyz_to_rec709(xyz, weight[i]);
+        for (int c = 0; c < 3; c++)
+            weight[i][c] = fmaxf(0.0f, weight[i][c]);
         glm_vec3_add(sum, weight[i], sum);
     }
     // A channel no band reaches -- blue, with a single band at 550 nm -- takes every band
@@ -2030,57 +2021,6 @@ static void _water_bind_ocean(const Water* water, const struct Scene* scene,
     uniform_set_int(u, "prevAvailable", prev_ready ? 1 : 0);
 }
 
-/*
- * The state an offscreen water pass changes and must hand back: the framebuffer, the viewport,
- * the blend function, and the depth test, blend and face culling every such pass wants off.
- * Begin saves and disables; end restores, on every exit including the failure ones, so a pass
- * never leaves the pipeline in a state its caller did not put it in -- including one it turned
- * ON, which is why each switch is restored in both directions.
- */
-typedef struct WaterPassState {
-    GLint viewport[4];
-    GLint fbo;
-    GLint blend_func[4]; // src RGB, dst RGB, src alpha, dst alpha
-    GLboolean depth;
-    GLboolean blend;
-    GLboolean cull;
-} WaterPassState;
-
-static WaterPassState _water_pass_begin(void) {
-    WaterPassState s;
-    glGetIntegerv(GL_VIEWPORT, s.viewport);
-    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &s.fbo);
-    glGetIntegerv(GL_BLEND_SRC_RGB, &s.blend_func[0]);
-    glGetIntegerv(GL_BLEND_DST_RGB, &s.blend_func[1]);
-    glGetIntegerv(GL_BLEND_SRC_ALPHA, &s.blend_func[2]);
-    glGetIntegerv(GL_BLEND_DST_ALPHA, &s.blend_func[3]);
-    s.depth = glIsEnabled(GL_DEPTH_TEST);
-    s.blend = glIsEnabled(GL_BLEND);
-    s.cull = glIsEnabled(GL_CULL_FACE);
-    glDisable(GL_DEPTH_TEST);
-    glDisable(GL_BLEND);
-    glDisable(GL_CULL_FACE);
-    return s;
-}
-
-static void _water_gl_set(GLenum cap, GLboolean on) {
-    if (on)
-        glEnable(cap);
-    else
-        glDisable(cap);
-}
-
-static void _water_pass_end(const WaterPassState* s) {
-    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)s->fbo);
-    glViewport(s->viewport[0], s->viewport[1], s->viewport[2], s->viewport[3]);
-    glBlendFuncSeparate((GLenum)s->blend_func[0], (GLenum)s->blend_func[1],
-                        (GLenum)s->blend_func[2], (GLenum)s->blend_func[3]);
-    _water_gl_set(GL_DEPTH_TEST, s->depth);
-    _water_gl_set(GL_BLEND, s->blend);
-    _water_gl_set(GL_CULL_FACE, s->cull);
-    glActiveTexture(GL_TEXTURE0);
-}
-
 // The fullscreen quad every offscreen water pass draws, made on first use by whichever needs it
 // -- the spectral chain on one model, the surface query on either.
 static GLuint _water_quad(Water* water) {
@@ -2121,7 +2061,7 @@ static void _water_advance_band(ShaderProgram* evolve, ShaderProgram* fft, const
                          b->cfg->bound_gain, fmaxf(b->height_var, 0.0f));
 }
 
-// Runs inside the caller's _water_pass_begin/_end.
+// Runs inside the caller's gl_pass_begin/_end.
 static void _water_run_spectral(Water* water, const struct Scene* scene, struct Engine* engine,
                                 float time) {
     ShaderProgram* evolve = engine_get_program(engine, "water_spectrum");
@@ -2361,7 +2301,7 @@ bool water_probe_result(const Water* water, int slot, WaterSample* out) {
 /*
  * Retire the slot issued WATER_PROBE_LATENCY passes ago, then render this pass's answers and
  * queue their readback into the slot just freed. Runs inside the caller's
- * _water_pass_begin/_end.
+ * gl_pass_begin/_end.
  *
  * No fence, deliberately: mapping a slot whose read has not landed STALLS rather than
  * returning early, so the latency is a correctness-free choice about how often that happens
@@ -2706,7 +2646,7 @@ static void _water_run_caustic_level(Water* water, const struct Scene* scene,
 /*
  * Refract the key light through a lattice over the water onto the floor, into the caustics
  * targets (spec 13.2), one per level (spec 13.3). Runs inside the caller's
- * _water_pass_begin/_end, which clears caustic_ready first.
+ * gl_pass_begin/_end, which clears caustic_ready first.
  *
  * Skipped -- leaving caustic_ready false, so the surface reads no caustics -- when there is no
  * key light or it is at or below the horizon. That is what keeps a dark night exactly dark:
@@ -2999,7 +2939,7 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
         return;
     // Then the surface query and the caustics, which read those bands complete, on either
     // model. One bracket for all three, since they run back to back and change the same state.
-    const WaterPassState pass = _water_pass_begin();
+    const GLPassState pass = gl_pass_begin();
     if (fft)
         _water_run_spectral(water, scene, engine, (float)engine->render_time);
     // The touch ripples on either model, before the probe and the caustics read the normal.
@@ -3019,7 +2959,7 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
         _water_run_caustics(water, scene, engine, caustic_land, caustic_draw, fft);
         check_gl_error("water caustics");
     }
-    _water_pass_end(&pass);
+    gl_pass_end(&pass);
 
     ShaderProgram* program = engine_get_program(engine, "water");
     if (!program) {
@@ -3294,7 +3234,7 @@ static bool _water_fft_impulse(const Water* water, struct Engine* engine, int si
     // Restored on every exit including the failure ones. The only caller runs after the loop
     // has stopped, so nothing downstream would notice -- but a diagnostic that leaves the
     // pipeline in a different state than it found it cannot later be called from anywhere else.
-    const WaterPassState pass = _water_pass_begin();
+    const GLPassState pass = gl_pass_begin();
 
     // Scratch shaped exactly like the real thing -- two ping-pong ARRAYS of two layers, the
     // pair one cascade occupies. The transform under test indexes layers, so a scratch built
@@ -3355,7 +3295,7 @@ static bool _water_fft_impulse(const Water* water, struct Engine* engine, int si
 
     glDeleteFramebuffers(2, fbo);
     glDeleteTextures(2, arr);
-    _water_pass_end(&pass);
+    gl_pass_end(&pass);
     glBindTexture(GL_TEXTURE_2D, 0);
     return complete;
 }

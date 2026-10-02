@@ -88,6 +88,41 @@ void draw_fullscreen_quad(GLuint vao) {
     glBindVertexArray(0);
 }
 
+GLPassState gl_pass_begin(void) {
+    GLPassState s;
+    glGetIntegerv(GL_VIEWPORT, s.viewport);
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &s.fbo);
+    glGetIntegerv(GL_BLEND_SRC_RGB, &s.blend_func[0]);
+    glGetIntegerv(GL_BLEND_DST_RGB, &s.blend_func[1]);
+    glGetIntegerv(GL_BLEND_SRC_ALPHA, &s.blend_func[2]);
+    glGetIntegerv(GL_BLEND_DST_ALPHA, &s.blend_func[3]);
+    s.depth = glIsEnabled(GL_DEPTH_TEST);
+    s.blend = glIsEnabled(GL_BLEND);
+    s.cull = glIsEnabled(GL_CULL_FACE);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_BLEND);
+    glDisable(GL_CULL_FACE);
+    return s;
+}
+
+static void _gl_set(GLenum cap, GLboolean on) {
+    if (on)
+        glEnable(cap);
+    else
+        glDisable(cap);
+}
+
+void gl_pass_end(const GLPassState* s) {
+    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)s->fbo);
+    glViewport(s->viewport[0], s->viewport[1], s->viewport[2], s->viewport[3]);
+    glBlendFuncSeparate((GLenum)s->blend_func[0], (GLenum)s->blend_func[1],
+                        (GLenum)s->blend_func[2], (GLenum)s->blend_func[3]);
+    _gl_set(GL_DEPTH_TEST, s->depth);
+    _gl_set(GL_BLEND, s->blend);
+    _gl_set(GL_CULL_FACE, s->cull);
+    glActiveTexture(GL_TEXTURE0);
+}
+
 void gl_delete_fbo(GLuint* fbo) {
     glDeleteFramebuffers(1, fbo);
     *fbo = 0;

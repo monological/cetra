@@ -24,6 +24,25 @@ GLint get_gl_max_texture_size(void);
 void create_fullscreen_quad_vao(GLuint* vao, GLuint* vbo);
 void draw_fullscreen_quad(GLuint vao);
 
+/*
+ * The state an offscreen pass changes and must hand back: the framebuffer, the viewport, the
+ * blend function, and the depth test, blend and face culling every such pass wants off. Begin
+ * saves and disables; end restores, on every exit including the failure ones, so a pass never
+ * leaves the pipeline in a state its caller did not put it in -- including one it turned ON,
+ * which is why each switch is restored in both directions. Shared by the water's passes and the
+ * fire's.
+ */
+typedef struct GLPassState {
+    GLint viewport[4];
+    GLint fbo;
+    GLint blend_func[4]; // src RGB, dst RGB, src alpha, dst alpha
+    GLboolean depth;
+    GLboolean blend;
+    GLboolean cull;
+} GLPassState;
+GLPassState gl_pass_begin(void);
+void gl_pass_end(const GLPassState* state);
+
 // Delete a GL object and zero the handle. The zeroing is what makes these
 // worth a helper: a handle holding a deleted name is a double-delete once the
 // driver recycles it, and any "is this allocated?" test on the handle reads
