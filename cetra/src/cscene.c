@@ -1135,35 +1135,35 @@ typedef struct CSceneFireKey {
 #define FIRE_PARAM_KEY(k, field, lo, hi) {k, offsetof(FireParams, field), lo, hi}
 static const CSceneFireKey FIRE_PARAM_KEYS[] = {
     FIRE_PARAM_KEY("ambient", ambient, 150.0f, 400.0f),
-    FIRE_PARAM_KEY("ignition", ignition, 300.0f, 3000.0f),
-    FIRE_PARAM_KEY("burnRate", burn_rate, 0.0f, 1000.0f),
-    FIRE_PARAM_KEY("heat", heat, 0.0f, 5000.0f),
-    FIRE_PARAM_KEY("sootYield", soot_yield, 0.0f, 100.0f),
-    FIRE_PARAM_KEY("buoyancy", buoyancy, 0.0f, 100.0f),
-    FIRE_PARAM_KEY("sootWeight", soot_weight, 0.0f, 100.0f),
+    FIRE_PARAM_KEY("temperature", temperature, 600.0f, 4000.0f),
+    FIRE_PARAM_KEY("reactionRate", reaction_rate, 0.01f, 100.0f),
     FIRE_PARAM_KEY("cooling", cooling, 0.0f, 1e6f),
-    FIRE_PARAM_KEY("vorticity", vorticity, 0.0f, 100.0f),
+    FIRE_PARAM_KEY("core", core, 0.0f, 10.0f),
+    FIRE_PARAM_KEY("expansion", expansion, 0.0f, 1000.0f),
+    FIRE_PARAM_KEY("sootYield", soot_yield, 0.0f, 1000.0f),
     FIRE_PARAM_KEY("sootBurnout", soot_burnout, 0.0f, 1000.0f),
     FIRE_PARAM_KEY("sootBurnoutAt", soot_burnout_at, 300.0f, 4000.0f),
     FIRE_PARAM_KEY("smokeFade", smoke_fade, 0.0f, 1000.0f),
+    FIRE_PARAM_KEY("buoyancy", buoyancy, 0.0f, 100.0f),
+    FIRE_PARAM_KEY("vorticity", vorticity, 0.0f, 100.0f),
     FIRE_PARAM_KEY("windResponse", wind_response, 0.0f, 10.0f),
     FIRE_PARAM_KEY("sootAbsorption", soot_absorption, 0.0f, 1000.0f),
     FIRE_PARAM_KEY("smokeAlbedo", smoke_albedo, 0.0f, 0.99f),
-    FIRE_PARAM_KEY("blueCore", blue_core, 0.0f, 1e6f),
+    FIRE_PARAM_KEY("blueCore", blue_core, 0.0f, 1e7f),
+    FIRE_PARAM_KEY("adaptation", adaptation, 0.0f, 1.0f),
     FIRE_PARAM_KEY("brightness", brightness, 0.0f, 1000.0f),
     FIRE_PARAM_KEY("shimmer", shimmer, 0.0f, 100.0f),
-    FIRE_PARAM_KEY("flameTemperature", flame_temperature, 300.0f, 4000.0f),
     FIRE_PARAM_KEY("flameSoot", flame_soot, 0.0f, 1000.0f),
     FIRE_PARAM_KEY("flicker", flicker, 0.0f, 10.0f),
 };
 #undef FIRE_PARAM_KEY
 #define FIRE_PARAM_KEY_COUNT (sizeof(FIRE_PARAM_KEYS) / sizeof(FIRE_PARAM_KEYS[0]))
 
-// sources[] on a fire: {shape, center, halfSize, from, to, radius, rate, temperature, lift}. A box
-// takes center and halfSize, a sphere center and radius, a capsule from, to and radius.
+// sources[] on a fire: {shape, center, halfSize, from, to, radius, coverage, lift}. A box takes
+// center and halfSize, a sphere center and radius, a capsule from, to and radius.
 static void parse_fire_sources(Fire* fire, const cJSON* f) {
-    static const char* known[] = {"shape",  "center", "halfSize",    "from", "to",
-                                  "radius", "rate",   "temperature", "lift"};
+    static const char* known[] = {"shape", "center", "halfSize", "from",
+                                  "to",    "radius", "coverage", "lift"};
     const cJSON* sources = cJSON_GetObjectItemCaseSensitive(f, "sources");
     const cJSON* s = NULL;
     cJSON_ArrayForEach(s, sources) {
@@ -1175,8 +1175,7 @@ static void parse_fire_sources(Fire* fire, const cJSON* f) {
                      FIRE_MAX_SOURCES);
             break;
         }
-        FireSource src = {
-            .shape = FIRE_SHAPE_BOX, .rate = 1.0f, .temperature = 900.0f, .lift = 0.3f};
+        FireSource src = {.shape = FIRE_SHAPE_BOX, .coverage = 0.5f, .lift = 0.5f};
         char shape[16] = "box";
         copy_string(shape, sizeof(shape), cJSON_GetObjectItemCaseSensitive(s, "shape"));
         if (strcmp(shape, "sphere") == 0) {
@@ -1201,8 +1200,7 @@ static void parse_fire_sources(Fire* fire, const cJSON* f) {
             glm_vec3_copy((vec3){0.05f, 0.05f, 0.05f}, src.b);
         src.radius = 0.05f;
         _ranged_float(s, "fire source", "radius", 0.0f, 100.0f, &src.radius);
-        _ranged_float(s, "fire source", "rate", 0.0f, 1e4f, &src.rate);
-        _ranged_float(s, "fire source", "temperature", 0.0f, 4000.0f, &src.temperature);
+        _ranged_float(s, "fire source", "coverage", 0.0f, 1.0f, &src.coverage);
         _ranged_float(s, "fire source", "lift", -100.0f, 100.0f, &src.lift);
         fire->sources[fire->source_count++] = src;
     }
@@ -1255,9 +1253,9 @@ static void parse_fire(CetraSceneDesc* d, const cJSON* root) {
                                         "jacobi",  "maccormack", "fires"};
     warn_unknown_keys(block, block_known, sizeof(block_known) / sizeof(block_known[0]), "fire");
 
-    static const char* const FIRE_OTHER_KEYS[] = {"name",        "kind",    "enabled",  "center",
-                                                  "size",        "cell",    "floor",    "light",
-                                                  "lightOffset", "sources", "obstacles"};
+    static const char* const FIRE_OTHER_KEYS[] = {"name",        "kind",    "enabled",   "center",
+                                                  "size",        "cell",    "floor",     "light",
+                                                  "lightOffset", "sources", "obstacles", "draft"};
 #define FIRE_OTHER_COUNT (sizeof(FIRE_OTHER_KEYS) / sizeof(FIRE_OTHER_KEYS[0]))
     const char* known[FIRE_PARAM_KEY_COUNT + FIRE_OTHER_COUNT];
     for (size_t i = 0; i < FIRE_OTHER_COUNT; i++)
@@ -1299,6 +1297,16 @@ static void parse_fire(CetraSceneDesc* d, const cJSON* root) {
         }
         parse_fire_sources(fire, f);
         parse_fire_obstacles(fire, f);
+        // draft: {min, max, speed}, the chimney's flue and how fast it draws.
+        const cJSON* draft = cJSON_GetObjectItemCaseSensitive(f, "draft");
+        if (cJSON_IsObject(draft)) {
+            static const char* draft_known[] = {"min", "max", "speed"};
+            warn_unknown_keys(draft, draft_known, 3, "fire draft");
+            if (get_vec3(draft, "min", fire->draft.min) && get_vec3(draft, "max", fire->draft.max))
+                _ranged_float(draft, "fire draft", "speed", 0.0f, 100.0f, &fire->draft_speed);
+            else
+                log_warn("cscene: fire '%s' draft needs min and max; ignored", fire->name);
+        }
     }
 #undef FIRE_OTHER_COUNT
 }

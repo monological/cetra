@@ -41,15 +41,21 @@ typedef enum FireShape {
     FIRE_SHAPE_CAPSULE = 2, // `a` to `b`, `radius`: a log
 } FireShape;
 
-// Where fuel enters a GRID fire, in world metres.
+/*
+ * Where a GRID fire burns, in world metres: where gas crosses the reaction front -- Nguyen et
+ * al.'s implicit surface -- and leaves it at the fire's peak temperature with its reaction
+ * coordinate at 1. `coverage` is the share of the shape alight at any moment, under a noise
+ * that drifts in space and time, which is what breaks a log's length into separate tongues;
+ * `lift` is the speed the gas leaves at (Nguyen's injection speed v_f, which with the reaction
+ * sets how big the flame is).
+ */
 typedef struct FireSource {
     FireShape shape;
     vec3 a;
     vec3 b;
     float radius;
-    float rate;        // fuel added per second inside the shape; 1 fills a cell in a second
-    float temperature; // K the fuel arrives at, which is what lights it
-    float lift;        // m/s upward the gas leaves the shape at
+    float coverage; // 0..1
+    float lift;     // m/s
 } FireSource;
 
 // A solid box no flow passes, in world metres: a firebox's back and sides, a hearth.
@@ -59,33 +65,42 @@ typedef struct FireBox {
 } FireBox;
 
 /*
- * What a fire burns like. Every field defaults to a wood fire's; a scale that defaults to 1
- * is a look, and a quantity with units is physics.
+ * What a fire burns like, after Nguyen, Fedkiw and Jensen 2002 (section numbers theirs).
+ * Every field defaults to a wood fire's (a candle's where a FLAME differs). A field marked
+ * TASTE has no measurement behind its default: it shapes the flame, and the paper hands it to
+ * the animator too.
  */
 typedef struct FireParams {
-    float ambient;         // K, the air the fire burns in
-    float ignition;        // K above which fuel burns
-    float burn_rate;       // 1/s, the fraction of the fuel in a hot cell burnt each second
-    float heat;            // K the air rises by per unit of fuel burnt
-    float soot_yield;      // soot left per unit of fuel burnt, in parts per million by volume
-    float buoyancy;        // scale on Boussinesq lift, g (T - T_amb) / T_amb; 1 = physical
-    float soot_weight;     // m/s^2 of fall per ppm of soot
-    float cooling;         // K/s the air sheds at FIRE_COOLING_REF above ambient, going as T^4
-    float vorticity;       // confinement: the curls a coarse grid loses, put back
+    float ambient;     // K, the air the fire burns in
+    float temperature; // K the gas leaves the reaction front at, its peak (sec. 4.3)
+    // 1/s the reaction coordinate falls at once gas has crossed the front: Nguyen's k, which
+    // with the paper is 1, so the coordinate is one less the time since the gas ignited
+    float reaction_rate;
+    // K/s the hot gas sheds at its peak, falling as the fourth power of its rise above ambient:
+    // Nguyen's c_T (eq. 17). TASTE -- with the lift, it sets how tall the visible flame is.
+    float cooling;
+    float core;            // seconds after crossing the front a gas glows blue: the core's depth
+    float expansion;       // 1/s the gas expands at in the core (sec. 3.2), filling the flame
+    float soot_yield;      // ppm/s soot forms at while the gas reacts
     float soot_burnout;    // 1/s soot oxidises at in the flame's hot zone
     float soot_burnout_at; // K above which it does
     float smoke_fade;      // 1/s smoke thins at once it has cooled
+    float buoyancy;        // scale on Boussinesq lift, g (T - T_amb) / T_amb; 1 = physical
+    float vorticity;       // confinement (Fedkiw et al. 2001): the curls the grid loses, put back
     float wind_response;   // 0..1, how much of the scene's wind blows through the box
 
     float soot_absorption; // 1/m per ppm: soot's absorption coefficient in the visible
     float smoke_albedo;    // the share of what smoke takes from the light that it scatters
-    float blue_core;       // nits per unit of fuel burnt per second: the reaction zone's own glow
-    float brightness;      // scale on the emission drawn and the light cast; 1 = physical
-    float shimmer;         // heat haze: how far the hot air bends the view through it; 0 = none
+    float blue_core;       // nits per metre the core glows at: CH* and C2* emission (sec. 3)
+    // 0..1, how far the eye has adapted to the fire: 1 = Nguyen's von Kries transform to the
+    // white of a blackbody at `temperature` (sec. 5, eq. 23), which is what makes a fire read
+    // yellow-white rather than the deep red its spectrum is; 0 = the spectrum as it is. TASTE
+    // between the two, since a fire is rarely the only thing an eye is adapted to.
+    float adaptation;
+    float brightness; // scale on the emission drawn and the light cast; 1 = physical
+    float shimmer;    // heat haze: how far the hot air bends the view through it; 0 = none
 
-    // FLAME only: the soot's peak temperature and amount, how far the flame flickers
-    // (0 = still), and how it answers the scene's wind.
-    float flame_temperature;
+    // FLAME only: the soot's peak amount, and how far the flame flickers (0 = still).
     float flame_soot;
     float flicker;
 } FireParams;
@@ -100,8 +115,8 @@ typedef struct Fire {
     bool answered;      // the light below has been read back at least once
     float intensity;    // cd, the luminous intensity of the emission, optically thin
     vec3 centroid;      // world metres, the emission-weighted centre
-    vec3 color;         // linear Rec.709, luminance 1: the emission's colour
-    float heat_release; // W, the heat the burning adds to the air
+    vec3 color;         // linear Rec.709, luminance 1: the emission's colour, as adapted
+    float heat_release; // W, the heat the hot gas sheds, which in balance is what burning adds
     int grid[3];        // GRID: the cells simulated, from `size` and `cell`
     // FLAME: the spine, base to tip -- xyz and the radius there -- and each point's velocity.
     vec4 spine[FIRE_SPINE_POINTS];
@@ -122,6 +137,12 @@ typedef struct Fire {
     int source_count;
     FireBox obstacles[FIRE_MAX_OBSTACLES];
     int obstacle_count;
+    // A chimney's draw: inside `draft` the air is driven up at `draft_speed` m/s, and keeping
+    // the flow incompressible pulls the room's air in through the firebox's mouth to replace
+    // it -- which is what takes a fireplace's smoke up the flue instead of into the room. A
+    // speed of 0 is no chimney.
+    FireBox draft;
+    float draft_speed;
     FireParams params;
     // A light the fire drives, borrowed: its intensity and colour each frame, and a point or
     // spot's position too. Its type, shadows and range stay the caller's. NULL drives none.
@@ -157,7 +178,13 @@ FireSystem* create_fire_system(void);
 void free_fire_system(FireSystem* fs);
 
 // A wood fire's parameters.
-void fire_params_defaults(FireParams* params);
+void fire_params_defaults(FireParams* params, FireKind kind);
+
+// The fire's chromatic adaptation as a matrix on linear Rec.709: Nguyen's von Kries transform,
+// in Hunt-Pointer-Estevez cone space, from the white of a blackbody at the fire's peak
+// temperature to D65, mixed with the identity by `adaptation` and scaled to keep that white's
+// luminance. Applied to what the fire emits and to the light it casts.
+void fire_adaptation(const FireParams* params, mat3 out);
 
 // A new fire of `kind` with the defaults, named, appended; NULL past FIRE_MAX.
 Fire* fire_system_add(FireSystem* fs, FireKind kind, const char* name);
@@ -200,8 +227,12 @@ void fire_flame_field(const Fire* fire, const vec3 p, float* kelvin, float* soot
 // chromaticity (rgb over luminance) and log10 of the luminance, over FIRE_BB_T_MIN..MAX K.
 const float* fire_blackbody_table(void);
 // A blackbody at `kelvin` read from that table as the shader reads it: nits per channel into
-// `rgb`, and the luminance returned. Black below FIRE_BB_T_MIN.
+// `rgb`, UNCLAMPED (blue goes negative below about 1900 K), and the luminance returned. Black
+// below FIRE_BB_T_MIN.
 float fire_blackbody(float kelvin, vec3 rgb);
+// The blue core's colour, its band emission through the observer: Rec.709, luminance 1,
+// unclamped like the blackbody.
+void fire_blue_color(vec3 out);
 
 // --fire-probe: the blackbody at a ladder of temperatures, and every fire's state.
 void fire_probe_print(const FireSystem* fs);

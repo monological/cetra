@@ -96,10 +96,9 @@
        0.25,
        -1.46
       ],
-      "radius": 0.06,
-      "rate": 3.0,
-      "temperature": 1000.0,
-      "lift": 0.4
+      "radius": 0.05,
+      "coverage": 0.7,
+      "lift": 0.8
      },
      {
       "shape": "capsule",
@@ -113,10 +112,9 @@
        0.25,
        -1.3
       ],
-      "radius": 0.06,
-      "rate": 3.0,
-      "temperature": 1000.0,
-      "lift": 0.4
+      "radius": 0.05,
+      "coverage": 0.7,
+      "lift": 0.8
      }
     ],
     "obstacles": [
@@ -204,7 +202,20 @@
        -1.24
       ]
      }
-    ]
+    ],
+    "draft": {
+     "min": [
+      -0.25,
+      1.0,
+      -1.7
+     ],
+     "max": [
+      0.25,
+      3.0,
+      -1.3
+     ],
+     "speed": 1.2
+    }
    },
    {
     "name": "candle",

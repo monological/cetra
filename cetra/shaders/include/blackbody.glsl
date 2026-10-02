@@ -9,7 +9,9 @@
 
 uniform sampler2D blackbodyLut; // FIRE_BB_LUT_SIZE x 1, RGBA32F
 
-// Nits per channel; black below FIRE_BB_T_MIN, where a body glows too faintly to matter.
+// Nits per channel, UNCLAMPED: below about 1900 K a blackbody lies outside Rec.709 and its blue
+// is negative, which the fire's adaptation needs to see before anything clamps. Black below
+// FIRE_BB_T_MIN, where a body glows too faintly to matter.
 vec3 blackbodyNits(float kelvin, out float luminance) {
     luminance = 0.0;
     if (!(kelvin >= FIRE_BB_T_MIN))
@@ -24,7 +26,3 @@ vec3 blackbodyNits(float kelvin, out float luminance) {
     luminance = pow(10.0, texel.w);
     return texel.rgb * luminance;
 }
-
-// The reaction zone's own glow, CH* and C2* chemiluminescence: a flame's blue base. Luminance
-// 1; fire.c's FIRE_BLUE.
-const vec3 FIRE_BLUE = vec3(0.31, 0.68, 6.2);

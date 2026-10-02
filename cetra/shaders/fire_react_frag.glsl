@@ -1,15 +1,19 @@
 #version 330 core
 
-// A GRID fire's sources, combustion and forces (spec 13.14), one step's worth, written as the
-// two targets the advection reads next.
+// A GRID fire's burning and forces (spec 13.14), one step, after Nguyen, Fedkiw and Jensen 2002
+// as GPU Gems 3 ch. 30 runs it -- written as the two targets the advection reads next.
 //
-// Scalars are (temperature above ambient K, fuel, soot ppm, reaction in fuel per second).
-// Fuel breathes in from the sources; where the air is past ignition it burns, a fraction of
-// what is there each second, heating the air and leaving soot; the reaction is the rate it
-// burnt at, which is what the blue base glows with. The air sheds heat as the fourth power of
-// its rise (Nguyen et al. 2002), and soot oxidises fast in the flame's hot zone and fades slowly
-// as smoke. The heat lifts the air (Boussinesq), and vorticity confinement puts back the curls
-// the grid's own dissipation takes out (Fedkiw, Stam and Jensen 2001).
+// Scalars are (temperature above ambient K, reaction coordinate Y, soot ppm, blue core weight).
+//   - Where a source is alight, gas crosses the reaction front: Y is set to 1 and the gas
+//     leaves at the fire's peak temperature -- Nguyen's shortcut for flames too large to resolve
+//     the temperature's rise across the front (sec. 4.3).
+//   - Y then falls at k a second (eq. 16), so 1 - Y over k is the time since the gas ignited.
+//     The blue core is the gas within `core` seconds of the front (sec. 3.1); soot forms in the
+//     reacting gas after it.
+//   - The gas cools as the fourth power of its rise above ambient (eq. 17), solved exactly over
+//     the step; soot oxidises fast in the flame's hot zone and thins slowly as smoke.
+//   - Heat lifts the air (Boussinesq), and vorticity confinement puts back the curls the grid's
+//     own dissipation takes out (Fedkiw, Stam and Jensen 2001).
 
 #include "fire_constants.glsl"
 #include "fire_grid.glsl"
@@ -22,27 +26,29 @@ uniform sampler2D curlTex;
 uniform float dt;
 uniform float cell;
 uniform vec3 boxMin; // world metres
-uniform int stepIndex;
+uniform float time;  // seconds of the fire's own clock
 
 uniform float ambient;
-uniform float ignition;
-uniform float burnRate;
-uniform float heat;
-uniform float sootYield;
-uniform float buoyancy;
-uniform float sootWeight;
+uniform float peakRise; // the peak temperature's rise above ambient, K
+uniform float reactionRate;
 uniform float cooling;
-uniform float vorticity;
+uniform float core;
+uniform float sootYield;
 uniform float sootBurnout;
 uniform float sootBurnoutAt;
 uniform float smokeFade;
+uniform float buoyancy;
+uniform float vorticity;
+uniform vec3 draftMin; // world metres: the chimney's flue
+uniform vec3 draftMax;
+uniform float draftSpeed; // m/s; 0 = no chimney
 
 // The sources: a = (centre or first end, shape), b = (half-extents or second end, radius),
-// rate = (fuel per second, temperature K, lift m/s, unused).
+// params = (coverage, lift, unused, unused).
 uniform int sourceCount;
 uniform vec4 sourceA[FIRE_MAX_SOURCES];
 uniform vec4 sourceB[FIRE_MAX_SOURCES];
-uniform vec4 sourceRate[FIRE_MAX_SOURCES];
+uniform vec4 sourceParams[FIRE_MAX_SOURCES];
 
 layout(location = 0) out vec4 outVelocity;
 layout(location = 1) out vec4 outScalars;
@@ -63,6 +69,29 @@ float sourceDistance(int i, vec3 w) {
     return length(w - (a + s * ab)) - sourceB[i].w;
 }
 
+float latticeHash(ivec4 p) {
+    return float(pcg4d(uvec4(p)).x) / 4294967296.0;
+}
+
+// Value noise in 0..1 over cells and seconds: a lattice FIRE_SOURCE_NOISE_CELLS cells and
+// FIRE_SOURCE_NOISE_SECONDS seconds across, smoothly interpolated, so a source's tongues are
+// regions that come and go rather than a per-cell, per-step speckle.
+float sourceNoise(vec3 c, float t) {
+    vec4 p = vec4(c / FIRE_SOURCE_NOISE_CELLS, t / FIRE_SOURCE_NOISE_SECONDS);
+    ivec4 i = ivec4(floor(p));
+    vec4 f = p - floor(p);
+    f = f * f * (3.0 - 2.0 * f);
+    float slices[2];
+    for (int w = 0; w < 2; w++) {
+        float c00 = mix(latticeHash(i + ivec4(0, 0, 0, w)), latticeHash(i + ivec4(1, 0, 0, w)), f.x);
+        float c10 = mix(latticeHash(i + ivec4(0, 1, 0, w)), latticeHash(i + ivec4(1, 1, 0, w)), f.x);
+        float c01 = mix(latticeHash(i + ivec4(0, 0, 1, w)), latticeHash(i + ivec4(1, 0, 1, w)), f.x);
+        float c11 = mix(latticeHash(i + ivec4(0, 1, 1, w)), latticeHash(i + ivec4(1, 1, 1, w)), f.x);
+        slices[w] = mix(mix(c00, c10, f.y), mix(c01, c11, f.y), f.z);
+    }
+    return mix(slices[0], slices[1], f.w);
+}
+
 void main() {
     ivec3 c;
     if (!fireFragmentCell(c) || fireSolid(c)) {
@@ -74,41 +103,41 @@ void main() {
     vec3 u = texelFetch(velocityTex, t, 0).xyz;
     vec4 s = texelFetch(scalarTex, t, 0);
     float theta = max(s.x, 0.0);
-    float fuel = max(s.y, 0.0);
+    float Y = max(s.y, 0.0);
     float soot = max(s.z, 0.0);
     vec3 w = boxMin + (vec3(c) + 0.5) * cell;
 
-    // Each cell's draw of fuel varies from step to step, which is what the turbulence turns
-    // into flicker; its mean is the authored rate.
-    float jitter = 2.0 * float(pcg4d(uvec4(uvec3(c), uint(stepIndex))).x) / 4294967296.0;
     for (int i = 0; i < sourceCount; i++) {
         float cover = clamp(0.5 - sourceDistance(i, w) / cell, 0.0, 1.0);
         if (cover <= 0.0)
             continue;
-        fuel += sourceRate[i].x * cover * jitter * dt;
-        theta = max(theta, (sourceRate[i].y - ambient) * cover);
-        u += (vec3(0.0, sourceRate[i].z, 0.0) - u) * cover * min(dt * 20.0, 1.0);
+        // Alight where the noise clears the share not burning: `coverage` of the shape at once.
+        float n = sourceNoise(vec3(c), time + float(i) * 17.0);
+        float alight = cover * smoothstep(1.0 - sourceParams[i].x - 0.25,
+                                          1.0 - sourceParams[i].x + 0.25, n);
+        if (alight <= 0.0)
+            continue;
+        Y = max(Y, alight);
+        theta = max(theta, peakRise * alight);
+        u = mix(u, vec3(0.0, sourceParams[i].y, 0.0), alight * min(dt * 20.0, 1.0));
     }
 
-    // Combustion, smooth across ignition so the flame front does not stair-step.
-    float kelvin = ambient + theta;
-    float lit = smoothstep(ignition - 50.0, ignition + 50.0, kelvin);
-    float burnt = fuel * (1.0 - exp(-burnRate * dt)) * lit;
-    fuel -= burnt;
-    theta += heat * burnt;
-    soot += sootYield * burnt;
-    float reaction = burnt / dt;
+    // The reaction coordinate runs down; soot forms in the reacting gas past the core.
+    float coreDepth = max(reactionRate * core, 1e-4);
+    float blue = clamp((Y - (1.0 - coreDepth)) / coreDepth, 0.0, 1.0);
+    float reacting = Y > 0.0 ? 1.0 - blue : 0.0;
+    soot += sootYield * reacting * dt;
+    Y = max(Y - reactionRate * dt, 0.0);
 
-    // Radiative cooling, the exact solution of d(theta)/dt = -a theta^4 over the step, so a
-    // large step cannot overshoot below ambient.
-    float a = cooling / (FIRE_COOLING_REF * FIRE_COOLING_REF * FIRE_COOLING_REF * FIRE_COOLING_REF);
+    // d(theta)/dt = -c_T (theta / peak)^4, exactly over the step.
+    float a = cooling / max(peakRise * peakRise * peakRise * peakRise, 1.0);
     theta = theta / pow(1.0 + 3.0 * a * theta * theta * theta * dt, 1.0 / 3.0);
 
     float hot = smoothstep(sootBurnoutAt - 100.0, sootBurnoutAt + 100.0, ambient + theta);
     soot *= exp(-mix(smokeFade, sootBurnout, hot) * dt);
 
-    // Buoyancy, g (T - T_amb) / T_amb, less the soot's weight.
-    float lift = buoyancy * 9.81 * theta / ambient - sootWeight * soot;
+    // Buoyancy, g (T - T_amb) / T_amb.
+    float lift = buoyancy * 9.81 * theta / ambient;
     // Vorticity confinement: push along N x omega, N the direction |omega| grows in.
     vec4 omega = texelFetch(curlTex, t, 0);
     vec3 grad = vec3(fireFetch(curlTex, c + ivec3(1, 0, 0), vec4(0.0)).w -
@@ -123,6 +152,11 @@ void main() {
         confine = vorticity * cell * cross(grad / gl, omega.xyz);
     u += dt * (vec3(0.0, lift, 0.0) + confine);
 
+    // The chimney's draw: the flue's air relaxed toward rising at the draft speed. The
+    // projection that follows is what turns this into a room drawing in through the mouth.
+    if (draftSpeed > 0.0 && all(greaterThanEqual(w, draftMin)) && all(lessThanEqual(w, draftMax)))
+        u = mix(u, vec3(0.0, max(u.y, draftSpeed), 0.0), min(dt * 10.0, 1.0));
+
     outVelocity = vec4(u, 0.0);
-    outScalars = vec4(theta, fuel, soot, reaction);
+    outScalars = vec4(theta, Y, soot, blue);
 }

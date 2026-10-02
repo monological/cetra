@@ -25,9 +25,10 @@
 #define FIRE_SCALAR_UNIT    2
 #define FIRE_FOG_UNIT       3
 
-// Samples a metre of ray takes through a GRID fire, per cell: under one a cell, so no cell is
-// stepped over, and over a half, since the field is trilinear and finer buys nothing.
-#define FIRE_MARCH_PER_CELL 0.6f
+// A GRID fire's march step, in cells: under half a cell, since the march is not dithered (it
+// draws after the temporal seam, where nothing would average a dither away) and a coarser fixed
+// step prints the slices it takes as bands.
+#define FIRE_MARCH_PER_CELL 0.4f
 #define FIRE_MARCH_MAX      512
 // A FLAME is marched at a tenth of its width.
 #define FLAME_MARCH_PER_WIDTH 0.1f
@@ -331,33 +332,36 @@ static void _step(FireRenderer* r, FireGridGPU* g, Fire* fire, const FireSystem*
     _bind(u, 1, S[3], "scalarTex");
     _bind(u, 2, g->curl, "curlTex");
     uniform_set_vec3(u, "boxMin", (float*)box_min);
-    uniform_set_int(u, "stepIndex", fire->start_step + fire->steps);
+    // The fire's own clock, from its step count, so a headless run's noise is its own.
+    uniform_set_float(u, "time", (float)(fire->start_step + fire->steps) * dt);
     uniform_set_float(u, "ambient", p->ambient);
-    uniform_set_float(u, "ignition", p->ignition);
-    uniform_set_float(u, "burnRate", p->burn_rate);
-    uniform_set_float(u, "heat", p->heat);
-    uniform_set_float(u, "sootYield", p->soot_yield);
-    uniform_set_float(u, "buoyancy", p->buoyancy);
-    uniform_set_float(u, "sootWeight", p->soot_weight);
+    uniform_set_float(u, "peakRise", fmaxf(p->temperature - p->ambient, 1.0f));
+    uniform_set_float(u, "reactionRate", p->reaction_rate);
     uniform_set_float(u, "cooling", p->cooling);
-    uniform_set_float(u, "vorticity", p->vorticity);
+    uniform_set_float(u, "core", p->core);
+    uniform_set_float(u, "sootYield", p->soot_yield);
     uniform_set_float(u, "sootBurnout", p->soot_burnout);
     uniform_set_float(u, "sootBurnoutAt", p->soot_burnout_at);
     uniform_set_float(u, "smokeFade", p->smoke_fade);
-    vec4 sa[FIRE_MAX_SOURCES], sb[FIRE_MAX_SOURCES], sr[FIRE_MAX_SOURCES];
+    uniform_set_float(u, "buoyancy", p->buoyancy);
+    uniform_set_float(u, "vorticity", p->vorticity);
+    uniform_set_vec3(u, "draftMin", (float*)fire->draft.min);
+    uniform_set_vec3(u, "draftMax", (float*)fire->draft.max);
+    uniform_set_float(u, "draftSpeed", fmaxf(fire->draft_speed, 0.0f));
+    vec4 sa[FIRE_MAX_SOURCES], sb[FIRE_MAX_SOURCES], sp[FIRE_MAX_SOURCES];
     const int sources =
         fire->source_count < FIRE_MAX_SOURCES ? fire->source_count : FIRE_MAX_SOURCES;
     for (int i = 0; i < sources; i++) {
         const FireSource* s = &fire->sources[i];
         glm_vec4_copy((vec4){s->a[0], s->a[1], s->a[2], (float)s->shape}, sa[i]);
         glm_vec4_copy((vec4){s->b[0], s->b[1], s->b[2], s->radius}, sb[i]);
-        glm_vec4_copy((vec4){s->rate, s->temperature, s->lift, 0.0f}, sr[i]);
+        glm_vec4_copy((vec4){glm_clamp(s->coverage, 0.0f, 1.0f), s->lift, 0.0f, 0.0f}, sp[i]);
     }
     uniform_set_int(u, "sourceCount", sources);
     if (sources > 0) {
         uniform_set_vec4_array(u, "sourceA", (const float*)sa, sources);
         uniform_set_vec4_array(u, "sourceB", (const float*)sb, sources);
-        uniform_set_vec4_array(u, "sourceRate", (const float*)sr, sources);
+        uniform_set_vec4_array(u, "sourceParams", (const float*)sp, sources);
     }
     _draw(r);
 
@@ -365,6 +369,8 @@ static void _step(FireRenderer* r, FireGridGPU* g, Fire* fire, const FireSystem*
     _grid_uniforms(u, g, fire, wind, dt, cell);
     _target(r, g->divergence, 0, 0, 0, w, h);
     _bind(u, 0, V[0], "velocityTex");
+    _bind(u, 1, S[0], "scalarTex");
+    uniform_set_float(u, "expansion", p->expansion);
     _draw(r);
 
     u = _use(r, FIRE_PROGRAM_JACOBI);
@@ -401,8 +407,15 @@ static void _reduce(FireRenderer* r, FireGridGPU* g, const Fire* fire, int index
     uniform_set_float(u, "ambient", p->ambient);
     uniform_set_float(u, "sootAbsorption", p->soot_absorption);
     uniform_set_float(u, "blueCore", p->blue_core);
-    uniform_set_float(u, "heat", p->heat);
+    uniform_set_float(u, "peakRise", fmaxf(p->temperature - p->ambient, 1.0f));
+    uniform_set_float(u, "cooling", p->cooling);
     uniform_set_float(u, "brightness", p->brightness);
+    mat3 adapt = GLM_MAT3_IDENTITY_INIT;
+    fire_adaptation(p, adapt);
+    uniform_set_mat3(u, "adaptation", (const float*)adapt);
+    vec3 blue = {0.0f, 0.0f, 0.0f};
+    fire_blue_color(blue);
+    uniform_set_vec3(u, "blueColor", blue);
     _bind(u, 1, r->blackbody_lut, "blackbodyLut");
 
     uniform_set_int(u, "mode", 0);
@@ -611,12 +624,18 @@ void fire_render_draw(FireRenderer* r, Engine* engine, const Scene* scene,
         uniform_set_float(u, "smokeAlbedo", glm_clamp(p->smoke_albedo, 0.0f, 0.99f));
         uniform_set_float(u, "blueCore", p->blue_core);
         uniform_set_float(u, "brightness", p->brightness);
+        mat3 adapt = GLM_MAT3_IDENTITY_INIT;
+        fire_adaptation(p, adapt);
+        uniform_set_mat3(u, "adaptation", (const float*)adapt);
+        vec3 blue = {0.0f, 0.0f, 0.0f};
+        fire_blue_color(blue);
+        uniform_set_vec3(u, "blueColor", blue);
         const float diag = glm_vec3_distance(lo, hi);
         if (fire->kind == FIRE_FLAME) {
             const float step = fmaxf(fire->size[0] * FLAME_MARCH_PER_WIDTH, 1e-4f);
             uniform_set_int(u, "fireKind", 1);
             uniform_set_vec4_array(u, "spine", (const float*)fire->spine, FIRE_SPINE_POINTS);
-            uniform_set_float(u, "flameTemperature", p->flame_temperature);
+            uniform_set_float(u, "flameTemperature", p->temperature);
             uniform_set_float(u, "flameSoot", p->flame_soot);
             uniform_set_float(u, "stepLength", step);
             uniform_set_int(u, "maxSteps", _steps_through(diag, step, FLAME_MARCH_MAX));
@@ -627,6 +646,7 @@ void fire_render_draw(FireRenderer* r, Engine* engine, const Scene* scene,
             const float step = cell * FIRE_MARCH_PER_CELL;
             const int dims[4] = {g->dims[0], g->dims[1], g->dims[2], g->tiles[0]};
             uniform_set_int(u, "fireKind", 0);
+            uniform_set_int(u, "floorSolid", fire->floor ? 1 : 0);
             uniform_set_ivec4(u, "gridDims", dims);
             uniform_set_float(u, "cell", cell);
             uniform_set_float(u, "stepLength", step);
@@ -771,7 +791,8 @@ void fire_render_probe(FireRenderer* r, Engine* engine, const Scene* scene) {
                         }
                         d += v[0] - v[1];
                     }
-                    d /= 2.0 * (double)cell;
+                    // Less the expansion the core asks for, which is what the solve aims at.
+                    d = d / (2.0 * (double)cell) - (double)(p->expansion * fmaxf(s[3], 0.0f));
                     post_max = fmax(post_max, fabs(d));
                     post_sq += d * d;
                     pre_max = fmax(pre_max, fabs((double)div[t]));
