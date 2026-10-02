@@ -6,12 +6,14 @@
 #define FIRE_MAX           8
 #define FIRE_MAX_SOURCES   8
 #define FIRE_MAX_OBSTACLES 16
+#define FIRE_MAX_CARDS     6
 
-// The largest grid one fire simulates, in cells. A grid is stored as a 2D atlas of its z
-// slices side by side, so this bounds an atlas at 512 x 1024 texels.
-#define FIRE_GRID_MAX_X 64
-#define FIRE_GRID_MAX_Y 128
-#define FIRE_GRID_MAX_Z 64
+// The largest grid one fire simulates, in cells: as fine as a flipbook BAKE asks for, which runs
+// offline. A live fire keeps a coarse cell and comes nowhere near it. A grid is stored as a 2D
+// atlas of its z slices side by side, so this bounds an atlas at about 1450 x 2900 texels.
+#define FIRE_GRID_MAX_X 128
+#define FIRE_GRID_MAX_Y 256
+#define FIRE_GRID_MAX_Z 128
 
 // The blackbody table: FIRE_BB_LUT_SIZE texels over [FIRE_BB_T_MIN, FIRE_BB_T_MAX] kelvin,
 // each the Rec.709 chromaticity (rgb / luminance) with log10 of the luminance in alpha. Below
@@ -27,8 +29,8 @@
 // sheds into the watts a fire releases.
 #define FIRE_AIR_RHO_CP 1206.0f
 
-// The source noise's lattice, in cells and in seconds: coarse enough that a log's length breaks
-// into a few tongues rather than a cell-by-cell shimmer, and slow enough that a tongue lives
-// a moment rather than a step.
-#define FIRE_SOURCE_NOISE_CELLS   4.0f
+// The source noise's lattice, in metres and in seconds: coarse enough that a log's length breaks
+// into a few tongues rather than a cell-by-cell shimmer, and slow enough that a tongue lives a
+// moment rather than a step. In metres, so a bake on fine cells makes the same tongues finer.
+#define FIRE_SOURCE_NOISE_METRES  0.1f
 #define FIRE_SOURCE_NOISE_SECONDS 0.15f

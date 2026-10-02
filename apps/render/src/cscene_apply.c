@@ -574,8 +574,9 @@ void apply_cscene_rain(Scene* scene, const CetraSceneDesc* cscn) {
 /*
  * The scene file's fires (spec 13.14). After the lights, since a fire drives one of them by
  * name: the light keeps its type, shadows and placement, and the fire writes its brightness and
- * colour, and a point light's position, every frame. A name no light carries is said once, since
- * a fire that lights nothing looks exactly like one whose light is simply dim.
+ * colour, and a point light's position, every frame. Its embers are a material of the model's,
+ * also by name. A name the scene does not carry is said once, since a fire that lights nothing
+ * looks exactly like one whose light is simply dim.
  */
 void apply_cscene_fire(Scene* scene, const CetraSceneDesc* cscn) {
     if (!scene || !cscn || !cscn->fire.enabled)
@@ -585,16 +586,21 @@ void apply_cscene_fire(Scene* scene, const CetraSceneDesc* cscn) {
         return;
     *fs = cscn->fire.system;
     for (int i = 0; i < fs->count; i++) {
-        const char* want = cscn->fire.light[i];
-        if (!want[0])
-            continue;
-        for (size_t l = 0; l < scene->light_count && !fs->fires[i].light; l++)
-            if (scene->lights[l]->name && strcmp(scene->lights[l]->name, want) == 0)
-                fs->fires[i].light = scene->lights[l];
-        if (!fs->fires[i].light)
+        Fire* fire = &fs->fires[i];
+        const char* light = cscn->fire.light[i];
+        if (light[0] && !(fire->light = scene_find_light(scene, light)))
             fprintf(stderr,
                     "Scene file: fire '%s' drives light '%s', which the scene does not have\n",
-                    fs->fires[i].name, want);
+                    fire->name, light);
+        const char* embers = cscn->fire.embers[i];
+        for (size_t m = 0; embers[0] && m < scene->material_count && !fire->embers; m++)
+            if (scene->materials[m]->name && strcmp(scene->materials[m]->name, embers) == 0)
+                fire->embers = scene->materials[m];
+        if (embers[0] && !fire->embers)
+            fprintf(stderr,
+                    "Scene file: fire '%s' glows through material '%s', which the scene does not "
+                    "have\n",
+                    fire->name, embers);
     }
     free_fire_system(scene->fire);
     scene->fire = fs;

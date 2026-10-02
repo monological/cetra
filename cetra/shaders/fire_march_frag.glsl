@@ -50,7 +50,17 @@ uniform float brightness;
 uniform mat3 adaptation;      // fire_adaptation: the eye's adaptation to the fire, on Rec.709
 uniform vec3 ambientRadiance; // nits, the scene's flat ambient
 
-out vec4 FragColor;
+// A flipbook BAKE (spec 13.14): absolute nits with no pre-exposure and no fog, and a second
+// target holding the gas's emission-weighted motion across the image, in pixels a flipbook frame
+// -- the gas velocity on the image's right and up axes times `motionScale`.
+uniform int bakeMode;
+uniform sampler2D velocityTex; // GRID, bake: the velocity atlas
+uniform vec3 cameraRight;
+uniform vec3 cameraUp;
+uniform float motionScale; // seconds a flipbook frame over metres a pixel
+
+layout(location = 0) out vec4 FragColor;
+layout(location = 1) out vec4 FragMotion;
 
 const float PI = 3.14159265359;
 
@@ -163,6 +173,7 @@ void main() {
     vec3 color = vec3(0.0);
     float transmittance = 1.0;
     float weight = 0.0, weightedZ = 0.0;
+    vec2 motion = vec2(0.0);
     // No dither: drawn after the temporal seam, nothing would average it, and it reads as grain.
     // The step is finer than the field's own detail instead.
     float t = t0;
@@ -190,6 +201,10 @@ void main() {
             float w = dot(added, vec3(0.2126, 0.7152, 0.0722));
             weight += w;
             weightedZ += w * -(view * vec4(P, 1.0)).z;
+            if (bakeMode != 0) {
+                vec3 v = fireSample(velocityTex, (P - boxMin) / cell, vec4(0.0)).xyz;
+                motion += w * vec2(dot(v, cameraRight), dot(v, cameraUp));
+            }
             transmittance *= through;
             if (transmittance < 0.003)
                 break;
@@ -199,6 +214,12 @@ void main() {
     float alpha = 1.0 - transmittance;
     if (weight <= 0.0 && alpha <= 0.0)
         discard;
+    if (bakeMode != 0) {
+        // Absolute nits, premultiplied by the coverage the blend gives it: what the flipbook stores.
+        FragColor = vec4(color, alpha);
+        FragMotion = vec4(weight > 0.0 ? motion / weight * motionScale : vec2(0.0), 0.0, 1.0);
+        return;
+    }
     float z = weight > 0.0 ? weightedZ / weight : midZ;
     vec4 front = froxelSampleMedium(fogVolume, uv, z, fogNear, fogFar, fogSlices, fogDepthDist);
     // The fog in front dims the fire, and its own in-scatter in front of the smoke -- which the

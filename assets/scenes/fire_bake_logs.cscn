@@ -1,0 +1,155 @@
+{
+ "version": 1,
+ "_comment": [
+  "The log fire tools/bake_fire_flipbook.py bakes the fire_logs flipbook from (spec 13.14).",
+  "Not a scene to look at: the room model is loaded only because a scene needs one.",
+  "",
+  "Regenerate with: python3 assets/generators/gen_fire_fixture.py"
+ ],
+ "models": [
+  {
+   "path": "../models/fire_fixture.gltf"
+  }
+ ],
+ "environment": {
+  "ambient": [
+   0.0,
+   0.0,
+   0.0
+  ]
+ },
+ "lights": [
+  {
+   "name": "none",
+   "type": "directional",
+   "direction": [
+    0.0,
+    -1.0,
+    0.0
+   ],
+   "intensity": 0.0
+  }
+ ],
+ "fire": {
+  "warmup": 3.0,
+  "fires": [
+   {
+    "name": "logs",
+    "kind": "grid",
+    "center": [
+     0.0,
+     0.5,
+     0.0
+    ],
+    "size": [
+     0.8,
+     1.0,
+     0.4
+    ],
+    "cell": 0.00625,
+    "floor": true,
+    "sources": [
+     {
+      "shape": "capsule",
+      "from": [
+       -0.27,
+       0.12,
+       -0.08
+      ],
+      "to": [
+       0.27,
+       0.12,
+       -0.08
+      ],
+      "radius": 0.05,
+      "coverage": 0.7,
+      "lift": 0.8
+     },
+     {
+      "shape": "capsule",
+      "from": [
+       -0.25,
+       0.12,
+       0.08
+      ],
+      "to": [
+       0.25,
+       0.12,
+       0.08
+      ],
+      "radius": 0.05,
+      "coverage": 0.7,
+      "lift": 0.8
+     },
+     {
+      "shape": "capsule",
+      "from": [
+       -0.21000000000000002,
+       0.22,
+       0.0
+      ],
+      "to": [
+       0.21000000000000002,
+       0.22,
+       0.0
+      ],
+      "radius": 0.05,
+      "coverage": 0.7,
+      "lift": 0.8
+     }
+    ],
+    "obstacles": [
+     {
+      "min": [
+       -0.32,
+       0.0,
+       -0.13
+      ],
+      "max": [
+       0.32,
+       0.11,
+       -0.03
+      ]
+     },
+     {
+      "min": [
+       -0.3,
+       0.0,
+       0.03
+      ],
+      "max": [
+       0.3,
+       0.11,
+       0.13
+      ]
+     },
+     {
+      "min": [
+       -0.26,
+       0.11,
+       -0.05
+      ],
+      "max": [
+       0.26,
+       0.21,
+       0.05
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ "camera": {
+  "eye": [
+   0.0,
+   0.5,
+   2.0
+  ],
+  "target": [
+   0.0,
+   0.5,
+   0.0
+  ],
+  "fov": 50
+ }
+}

@@ -31,9 +31,43 @@
  */
 
 typedef enum FireKind {
-    FIRE_GRID = 0,  // a simulated box of cells
-    FIRE_FLAME = 1, // a candle's structural flame
+    FIRE_GRID = 0,     // a simulated box of cells
+    FIRE_FLAME = 1,    // a candle's structural flame
+    FIRE_FLIPBOOK = 2, // a sheet of frames played on camera-facing cards
 } FireKind;
+
+/*
+ * One card of a FLIPBOOK fire: a quad standing on `base` (its bottom centre, world metres),
+ * `size` wide and tall, turned about the vertical to face the camera, playing the fire's sheet
+ * `phase` of a loop out of step with the others so no two cards flicker together.
+ */
+typedef struct FireCard {
+    vec3 base;
+    vec2 size;
+    float phase; // 0..1
+} FireCard;
+
+/*
+ * A flipbook's sidecar, read from `<flipbook>.json` the first frame the fire runs: the sheet's
+ * layout and playback, the luminance its brightest texel stands for, the physical size a frame
+ * was made at, and each frame's luminous intensity at that size, centroid height (a fraction
+ * of the frame) and the sheet's mean colour. ENGINE-OWNED.
+ */
+typedef struct FireFlipbook {
+    bool loaded;
+    bool failed; // the sidecar would not read; the fire draws and casts nothing
+    int frames, cols, rows;
+    int width, height; // pixels a frame
+    float fps;
+    float peak_nits;
+    float motion_range;   // pixels a frame the motion sheet's full range is; 0 = no motion sheet
+    vec2 box;             // metres a frame spans, wide and tall
+    float* intensity;     // cd a frame at `box`
+    float* centroid_y;    // 0..1 up the frame
+    float mean_intensity; // cd over the loop at `box`
+    float mean_cast;      // cd over the loop from this fire's cards, as they are sized
+    vec3 color;
+} FireFlipbook;
 
 typedef enum FireShape {
     FIRE_SHAPE_BOX = 0,     // `a` the centre, `b` the half-extents
@@ -79,6 +113,10 @@ typedef struct FireParams {
     // K/s the hot gas sheds at its peak, falling as the fourth power of its rise above ambient:
     // Nguyen's c_T (eq. 17). TASTE -- with the lift, it sets how tall the visible flame is.
     float cooling;
+    // 1/s the hot gas mixes with the room's air, cooling it and thinning its soot in proportion,
+    // whatever the cell size: the entrainment a plume draws in. A coarse grid's own numerical
+    // blur did this unasked and a fine one does not, so without it a bake's plume stays hot.
+    float entrainment;
     float core;            // seconds after crossing the front a gas glows blue: the core's depth
     float expansion;       // 1/s the gas expands at in the core (sec. 3.2), filling the flame
     float soot_yield;      // ppm/s soot forms at while the gas reacts
@@ -121,6 +159,8 @@ typedef struct Fire {
     // FLAME: the spine, base to tip -- xyz and the radius there -- and each point's velocity.
     vec4 spine[FIRE_SPINE_POINTS];
     vec3 spine_velocity[FIRE_SPINE_POINTS];
+    FireFlipbook book; // FLIPBOOK: the sidecar, once read
+    float embers_base; // the embers' authored emissive strength, taken the first frame
 
     // SETTINGS: plain stores. Write them directly, at any time.
     char name[32];
@@ -144,10 +184,18 @@ typedef struct Fire {
     FireBox draft;
     float draft_speed;
     FireParams params;
+    // FLIPBOOK: the sheet's path without its suffixes -- `<flipbook>_color.png`, an optional
+    // `<flipbook>_motion.png` and `<flipbook>.json` -- and the cards it plays on.
+    char flipbook[256];
+    FireCard cards[FIRE_MAX_CARDS];
+    int card_count;
     // A light the fire drives, borrowed: its intensity and colour each frame, and a point or
     // spot's position too. Its type, shadows and range stay the caller's. NULL drives none.
     struct Light* light;
     vec3 light_offset; // added to the centroid where a point or spot is placed
+    // A material the fire makes glow, borrowed: logs whose emissive strength rises and falls
+    // with the fire's intensity about the strength they were authored with. NULL drives none.
+    struct Material* embers;
 } Fire;
 
 typedef struct FireSystem {
@@ -219,6 +267,14 @@ void fire_flame_light(Fire* fire);
 struct Light;
 void fire_drive_light(const Fire* fire, struct Light* light);
 
+// The fire's embers' emissive strength, following its intensity about the strength the
+// material was authored with. Nothing before the first answer, or with no embers.
+void fire_drive_embers(Fire* fire);
+
+// Where `card` is in its flipbook's loop at time `t`, in frames, 0..frames: what it casts and
+// what it draws are both read there.
+double fire_card_frame(const FireFlipbook* book, const FireCard* card, double t);
+
 // The emission a FLAME has at world point `p`: its temperature in K and its soot in ppm. The
 // C twin of the shader's, used for the light and by the probe.
 void fire_flame_field(const Fire* fire, const vec3 p, float* kelvin, float* soot);
@@ -243,5 +299,17 @@ struct Scene;
 // back whole and checked, and the lights the fires drive. Needs a live GL context; nothing
 // before the first frame with fires.
 void fire_probe_grids(struct Engine* engine, const struct Scene* scene);
+
+/*
+ * --fire-bake: one flipbook frame of the scene's first GRID fire, as it stands, marched
+ * orthographically from in front of its box into a frame `width` pixels wide (the height from
+ * the box's aspect). Appended to <dir>/frames.f32 as the frame's RGBA colour floats -- absolute
+ * nits, adapted and premultiplied by coverage -- then its RGBA motion floats (pixels a frame on
+ * the image's right and up, over `frame_seconds`); and to <dir>/frames.txt as a line of the
+ * frame's intensity in cd, its centroid and its colour. <dir>/bake.txt holds the layout. False
+ * when there is no grid to bake or a file will not open. Needs a live GL context.
+ */
+bool fire_bake_capture(struct Engine* engine, const struct Scene* scene, const char* dir, int width,
+                       float frame_seconds);
 
 #endif // _FIRE_H_

@@ -779,6 +779,13 @@ ShaderProgram* create_fire_program(FireProgram which) {
                 log_error("Failed to initialize fire_march shader program");
             return program;
         }
+        case FIRE_PROGRAM_CARD: {
+            ShaderProgram* program = create_program_from_source(
+                "fire_card", fire_card_vert_shader_str, fire_card_frag_shader_str, NULL);
+            if (!program)
+                log_error("Failed to initialize fire_card shader program");
+            return program;
+        }
         default:
             return NULL;
     }
