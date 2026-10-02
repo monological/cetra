@@ -88,6 +88,9 @@ static const GlowSpec GLOWS[] = {
      * from inside; and a pane only colours what comes through it, which at night is nothing.
      */
     {MAT_STAINED, {1.0f, 1.0f, 1.0f}, STAINED_NIGHT_NITS, true},
+    // The study lamp's shade, its green glass lit faintly by the bulb inside; the lamp's light
+    // is the spot study.c hangs under it.
+    {MAT_SHADE, {0.3f, 1.0f, 0.45f}, 8.0f},
 };
 
 /*
@@ -276,6 +279,9 @@ static const MatSpec SPECS[MAT_COUNT] = {
     // The castle stone blackened: its scan's mean, about (0.19, 0.15, 0.10) linear, taken to
     // soot's 0.02 and its warmth taken out.
     [MAT_SOOT] = {"soot", "medieval_blocks_03", {0.1f, 0.12f, 0.17f}, 1.0f, 0.0f, 2.0f},
+    // Old candles gone to ivory; a banker's lamp's shade, green over white glass and glossy.
+    [MAT_WAX] = {"wax", NULL, {0.80f, 0.74f, 0.58f}, 0.45f, 0.0f, 1.0f},
+    [MAT_SHADE] = {"lamp_shade", NULL, {0.03f, 0.16f, 0.07f}, 0.15f, 0.0f, 1.0f},
 };
 
 static Texture* load(TexturePool* pool, const char* set, const char* map, TextureDesc desc) {

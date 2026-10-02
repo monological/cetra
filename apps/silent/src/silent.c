@@ -52,6 +52,7 @@
 #include "player.h"
 #include "sounds.h"
 #include "street.h"
+#include "study.h"
 
 #define DEFAULT_WIDTH  1600
 #define DEFAULT_HEIGHT 900
@@ -403,6 +404,7 @@ static void on_init(Game* game) {
                  g_args.flashlight);
     street_build(&kit, g_scene, (unsigned int)g_args.seed, !g_args.day);
     clock_build(&kit);
+    study_build(&kit, g_scene, (unsigned int)g_args.seed);
     kit_finish(&kit, "world");
     printf("silent: %d colliders, %d vertices, %d of %d drip lines\n", kit.collider_count,
            kit.vertex_count, kit.drip_count, RAIN_DRIP_MAX);

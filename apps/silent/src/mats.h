@@ -71,6 +71,8 @@ typedef enum {
     MAT_STAINED,      // gothic.h's lancets: thin glass, its colour in the picture
     MAT_LEADED,       // diamond quarries in lead, laid by the metre
     MAT_SOOT,         // a firebox's blackened stone
+    MAT_WAX,          // candles
+    MAT_SHADE,        // the study lamp's green cased glass, faintly lit from inside
     MAT_COUNT
 } MatId;
 
