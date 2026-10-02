@@ -31,16 +31,17 @@ static void copy_string(char* dst, size_t cap, const cJSON* item) {
     }
 }
 
+// Exactly `n` numbers into `out`, or false with `out` untouched: an array with one bad element
+// leaves the default whole rather than half replaced.
 static bool get_floats(const cJSON* obj, const char* key, float* out, int n) {
     const cJSON* arr = cJSON_GetObjectItemCaseSensitive(obj, key);
     if (!cJSON_IsArray(arr) || cJSON_GetArraySize(arr) != n)
         return false;
-    for (int i = 0; i < n; i++) {
-        const cJSON* v = cJSON_GetArrayItem(arr, i);
-        if (!cJSON_IsNumber(v))
+    for (int i = 0; i < n; i++)
+        if (!cJSON_IsNumber(cJSON_GetArrayItem(arr, i)))
             return false;
-        out[i] = (float)v->valuedouble;
-    }
+    for (int i = 0; i < n; i++)
+        out[i] = (float)cJSON_GetArrayItem(arr, i)->valuedouble;
     return true;
 }
 
@@ -1063,34 +1064,36 @@ static int word_index(const char* word, const char* const* names, int count) {
 }
 
 /*
- * The objects of `obj`'s list `key`, up to `cap` of them into `out`, and how many: each checked
- * against `known`, one that is not an object warned and skipped, and any past the cap warned
- * once and dropped. A `key` that is there and is not a list is warned too.
+ * Each object of `obj`'s list `key` handed to `take`, which appends what it accepts to `into`
+ * and counts it in `*count`, until `cap` are taken: each checked against `known`, one that is
+ * not an object warned and skipped, and any past the cap warned once and dropped. Only what
+ * `take` accepted counts against the cap, so an item it refuses costs a later one nothing. A
+ * `key` that is there and is not a list is warned too.
  */
-static int list_objects(const cJSON* obj, const char* key, const char* what,
-                        const char* const* known, size_t known_count, const cJSON** out, int cap) {
+typedef void (*ListTake)(const cJSON* item, void* into);
+
+static void take_list(const cJSON* obj, const char* key, const char* what, const char* const* known,
+                      size_t known_count, const int* count, int cap, ListTake take, void* into) {
     const cJSON* list = cJSON_GetObjectItemCaseSensitive(obj, key);
     if (!list)
-        return 0;
+        return;
     if (!cJSON_IsArray(list)) {
         log_warn("cscene: %s's %s is not a list; ignored", what, key);
-        return 0;
+        return;
     }
-    int n = 0;
     const cJSON* item = NULL;
     cJSON_ArrayForEach(item, list) {
         if (!cJSON_IsObject(item)) {
             log_warn("cscene: a %s that is not an object; skipped", what);
             continue;
         }
-        if (n == cap) {
+        if (*count >= cap) {
             log_warn("cscene: more than %d of %s; the rest are ignored", cap, what);
             break;
         }
         warn_unknown_keys(item, known, known_count, what);
-        out[n++] = item;
+        take(item, into);
     }
-    return n;
 }
 
 /*
@@ -1282,87 +1285,85 @@ static const char* const FIRE_KIND_NAMES[FIRE_KIND_COUNT] = {
 static const char* const FIRE_SHAPE_NAMES[] = {
     [FIRE_SHAPE_BOX] = "box", [FIRE_SHAPE_SPHERE] = "sphere", [FIRE_SHAPE_CAPSULE] = "capsule"};
 
-// A box authored as {min, max}: a fire's obstacles and its chimney's draft.
+// A box authored as {min, max}, both or neither: a fire's obstacles and its chimney's draft.
 static bool get_min_max(const cJSON* obj, vec3 min, vec3 max) {
-    return get_vec3(obj, "min", min) && get_vec3(obj, "max", max);
+    vec3 lo = {0.0f, 0.0f, 0.0f}, hi = {0.0f, 0.0f, 0.0f};
+    if (!get_vec3(obj, "min", lo) || !get_vec3(obj, "max", hi))
+        return false;
+    glm_vec3_copy(lo, min);
+    glm_vec3_copy(hi, max);
+    return true;
 }
 
 // sources[] on a GRID fire: {shape, center, halfSize, from, to, radius, coverage, lift}. A box
 // takes center and halfSize, a sphere center and radius, a capsule from, to and radius.
-static void parse_fire_sources(FireGrid* grid, const cJSON* f) {
-    static const char* known[] = {"shape", "center", "halfSize", "from",
-                                  "to",    "radius", "coverage", "lift"};
-    const cJSON* items[FIRE_MAX_SOURCES];
-    const int n = list_objects(f, "sources", "fire source", known, sizeof(known) / sizeof(known[0]),
-                               items, FIRE_MAX_SOURCES);
-    for (int i = 0; i < n; i++) {
-        const cJSON* s = items[i];
-        FireSource src = fire_source_default();
-        char shape[16] = "box";
-        copy_string(shape, sizeof(shape), cJSON_GetObjectItemCaseSensitive(s, "shape"));
-        const int shape_index =
-            word_index(shape, FIRE_SHAPE_NAMES, (int)(sizeof(FIRE_SHAPE_NAMES) / sizeof(char*)));
-        if (shape_index < 0) {
-            log_warn("cscene: fire source shape '%s' is not box, sphere or capsule; skipped",
-                     shape);
-            continue;
-        }
-        src.shape = (FireShape)shape_index;
-        if (src.shape == FIRE_SHAPE_CAPSULE) {
-            if (!get_vec3(s, "from", src.a) || !get_vec3(s, "to", src.b)) {
-                log_warn("cscene: a capsule fire source needs from and to; skipped");
-                continue;
-            }
-        } else if (!get_vec3(s, "center", src.a)) {
-            log_warn("cscene: a fire source needs a center; skipped");
-            continue;
-        }
-        if (src.shape == FIRE_SHAPE_BOX)
-            get_vec3(s, "halfSize", src.b);
-        _ranged_float(s, "fire source", "radius", 0.0f, 100.0f, &src.radius);
-        _ranged_float(s, "fire source", "coverage", 0.0f, 1.0f, &src.coverage);
-        _ranged_float(s, "fire source", "lift", -100.0f, 100.0f, &src.lift);
-        grid->sources[grid->source_count++] = src;
+static void take_fire_source(const cJSON* s, void* into) {
+    FireGrid* grid = into;
+    FireSource src = fire_source_default();
+    char shape[16] = "box";
+    copy_string(shape, sizeof(shape), cJSON_GetObjectItemCaseSensitive(s, "shape"));
+    const int shape_index =
+        word_index(shape, FIRE_SHAPE_NAMES, (int)(sizeof(FIRE_SHAPE_NAMES) / sizeof(char*)));
+    if (shape_index < 0) {
+        log_warn("cscene: fire source shape '%s' is not box, sphere or capsule; skipped", shape);
+        return;
     }
+    src.shape = (FireShape)shape_index;
+    if (src.shape == FIRE_SHAPE_CAPSULE) {
+        if (!get_vec3(s, "from", src.a) || !get_vec3(s, "to", src.b)) {
+            log_warn("cscene: a capsule fire source needs from and to; skipped");
+            return;
+        }
+    } else if (!get_vec3(s, "center", src.a)) {
+        log_warn("cscene: a fire source needs a center; skipped");
+        return;
+    }
+    if (src.shape == FIRE_SHAPE_BOX)
+        get_vec3(s, "halfSize", src.b);
+    _ranged_float(s, "fire source", "radius", 0.0f, 100.0f, &src.radius);
+    _ranged_float(s, "fire source", "coverage", 0.0f, 1.0f, &src.coverage);
+    _ranged_float(s, "fire source", "lift", -100.0f, 100.0f, &src.lift);
+    grid->sources[grid->source_count++] = src;
 }
 
 // cards[] on a FLIPBOOK fire: {base, size, phase}, each a quad standing on its bottom centre;
 // no size is the size the sheet's frames were made at.
-static void parse_fire_cards(FireCards* cards, const cJSON* f) {
-    static const char* known[] = {"base", "size", "phase"};
-    const cJSON* items[FIRE_MAX_CARDS];
-    const int n = list_objects(f, "cards", "fire card", known, sizeof(known) / sizeof(known[0]),
-                               items, FIRE_MAX_CARDS);
-    for (int i = 0; i < n; i++) {
-        FireCard card = {.base = {0.0f, 0.0f, 0.0f}, .size = {0.0f, 0.0f}, .phase = 0.0f};
-        if (!get_vec3(items[i], "base", card.base)) {
-            log_warn("cscene: a fire card needs a base; skipped");
-            continue;
-        }
-        get_floats(items[i], "size", card.size, 2);
-        _ranged_float(items[i], "fire card", "phase", 0.0f, 1.0f, &card.phase);
-        cards->list[cards->count++] = card;
+static void take_fire_card(const cJSON* c, void* into) {
+    FireCards* cards = into;
+    FireCard card = {.base = {0.0f, 0.0f, 0.0f}, .size = {0.0f, 0.0f}, .phase = 0.0f};
+    if (!get_vec3(c, "base", card.base)) {
+        log_warn("cscene: a fire card needs a base; skipped");
+        return;
     }
+    get_floats(c, "size", card.size, 2);
+    _ranged_float(c, "fire card", "phase", 0.0f, 1.0f, &card.phase);
+    cards->list[cards->count++] = card;
 }
 
-// A GRID fire's box (center, size), its sources, the solids no flow passes ({min, max}), and its
-// chimney ({min, max, speed}, the flue and how fast it draws).
+// obstacles[] on a GRID fire: {min, max}, the solids no flow passes.
+static void take_fire_obstacle(const cJSON* o, void* into) {
+    FireGrid* grid = into;
+    FireBox* b = &grid->obstacles[grid->obstacle_count];
+    if (get_min_max(o, b->min, b->max))
+        grid->obstacle_count++;
+    else
+        log_warn("cscene: a fire obstacle needs min and max; skipped");
+}
+
+// A GRID fire's box (center, size), its sources, its obstacles, and its chimney ({min, max,
+// speed}, the flue and how fast it draws).
 static void parse_fire_grid(Fire* fire, const cJSON* f) {
+    static const char* source_known[] = {"shape", "center", "halfSize", "from",
+                                         "to",    "radius", "coverage", "lift"};
+    static const char* box_known[] = {"min", "max"};
     FireGrid* grid = &fire->grid;
     get_vec3(f, "center", grid->center);
     get_vec3(f, "size", grid->size);
-    parse_fire_sources(grid, f);
-    static const char* box_known[] = {"min", "max"};
-    const cJSON* items[FIRE_MAX_OBSTACLES];
-    const int n =
-        list_objects(f, "obstacles", "fire obstacle", box_known, 2, items, FIRE_MAX_OBSTACLES);
-    for (int i = 0; i < n; i++) {
-        FireBox* b = &grid->obstacles[grid->obstacle_count];
-        if (get_min_max(items[i], b->min, b->max))
-            grid->obstacle_count++;
-        else
-            log_warn("cscene: a fire obstacle needs min and max; skipped");
-    }
+    take_list(f, "sources", "fire source", source_known,
+              sizeof(source_known) / sizeof(source_known[0]), &grid->source_count, FIRE_MAX_SOURCES,
+              take_fire_source, grid);
+    take_list(f, "obstacles", "fire obstacle", box_known, 2, &grid->obstacle_count,
+              FIRE_MAX_OBSTACLES, take_fire_obstacle, grid);
     const cJSON* draft = cJSON_GetObjectItemCaseSensitive(f, "draft");
     if (cJSON_IsObject(draft)) {
         static const char* draft_known[] = {"min", "max", "speed"};
@@ -1374,17 +1375,21 @@ static void parse_fire_grid(Fire* fire, const cJSON* f) {
     }
 }
 
-// A FLAME's wick tip (center), and its width and height (size's first two).
+// A FLAME's wick tip (center), and its width and height (size: two numbers, or three as a GRID
+// fire's box is written, the third unread).
 static void parse_fire_flame(FireFlame* flame, const cJSON* f) {
     get_vec3(f, "center", flame->wick);
     vec3 size = {flame->width, flame->height, 0.0f};
-    if (get_vec3(f, "size", size)) {
+    if (get_floats(f, "size", size, 2) || get_vec3(f, "size", size)) {
         flame->width = size[0];
         flame->height = size[1];
+    } else if (cJSON_GetObjectItemCaseSensitive(f, "size")) {
+        log_warn("cscene: a flame's size is two or three numbers; ignored");
     }
 }
 
 static void parse_fire(CetraSceneDesc* d, const cJSON* root) {
+    static const char* card_known[] = {"base", "size", "phase"};
     const cJSON* block = cJSON_GetObjectItemCaseSensitive(root, "fire");
     if (!cJSON_IsObject(block))
         return;
@@ -1437,7 +1442,9 @@ static void parse_fire(CetraSceneDesc* d, const cJSON* root) {
                              fire->name);
                 copy_string(out->flipbook[index], CSCENE_MAX_PATH,
                             cJSON_GetObjectItemCaseSensitive(f, "flipbook"));
-                parse_fire_cards(&fire->cards, f);
+                take_list(f, "cards", "fire card", card_known,
+                          sizeof(card_known) / sizeof(card_known[0]), &fire->cards.count,
+                          FIRE_MAX_CARDS, take_fire_card, &fire->cards);
                 break;
             case FIRE_KIND_COUNT:
                 break;
