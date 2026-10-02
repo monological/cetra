@@ -60,6 +60,9 @@
 #define FRONT_DOOR_X0 (-1.15f)
 #define FRONT_DOOR_X1 (-0.30f)
 #define DOOR_HEAD     (FLOOR_Y + 2.05f)
+// The front door's pointed head: where it springs, and how far it rises above that.
+#define FRONT_DOOR_SPRING (FLOOR_Y + 1.95f)
+#define FRONT_DOOR_RISE   0.45f
 
 // The doorway from the hall into the kitchen, in the x = HALL_X1 wall.
 #define KITCHEN_DOOR_Z0 12.75f

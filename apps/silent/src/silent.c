@@ -38,6 +38,8 @@
 #include "cetra/game/physics.h"
 
 #include "clock.h"
+#include "door.h"
+#include "prompt.h"
 #include "rain_bed.h"
 #include "house.h"
 #include "kitchen.h"
@@ -137,6 +139,15 @@ static Clock g_clock;
 static RainBed g_rain_bed;
 static Sounds g_sounds;
 
+// The doors that open, and the line that says what the action key would do. A door answers
+// when the eye is within DOOR_REACH of its leaf's middle and looking within DOOR_CONE of it.
+#define MAX_DOORS  4
+#define DOOR_REACH 1.9f
+#define DOOR_CONE  0.6f // radians
+static Door g_doors[MAX_DOORS];
+static int g_door_count;
+static Prompt g_prompt;
+
 // --audio-dump: the offline mix, pulled a frame's worth at a time so it keeps
 // step with the sim clock, as interleaved stereo at the engine's rate.
 #define DUMP_RATE 48000
@@ -162,6 +173,7 @@ static const InputAction ACTIONS[] = {
     {"look_x", {INPUT_AXIS(RIGHT_X, 1), INPUT_KEY(RIGHT, 1), INPUT_KEY(LEFT, -1)}},
     {"look_y", {INPUT_AXIS(RIGHT_Y, -1), INPUT_KEY(UP, 1), INPUT_KEY(DOWN, -1)}},
     {"flashlight", {INPUT_KEY(F, 1), INPUT_PAD(Y, 1)}},
+    {"interact", {INPUT_KEY(E, 1), INPUT_PAD(X, 1)}},
     {"release_cursor", {INPUT_KEY(TAB, 1)}},
     {"toggle_gui", {INPUT_KEY(GRAVE_ACCENT, 1), INPUT_KEY(G, 1)}},
 };
@@ -382,6 +394,8 @@ static void on_init(Game* game) {
     kit_finish(&kit, "world");
     printf("silent: %d colliders, %d vertices, %d of %d drip lines\n", kit.collider_count,
            kit.vertex_count, kit.drip_count, RAIN_DRIP_MAX);
+    g_door_count = house_doors(g_doors, MAX_DOORS, engine, g_scene, em, physics);
+    prompt_start(&g_prompt, engine);
 
     // Sound: the clock's beat, the tubes' buzz, the fridge and the wind, each
     // heard from where it is. Headless, the system opens no device, so a
@@ -470,6 +484,8 @@ static void on_init(Game* game) {
 
 static void on_update(Game* game, double dt) {
     player_update(&g_player, game, dt);
+    for (int i = 0; i < g_door_count; i++)
+        door_update(&g_doors[i], (float)dt);
     // Where the capsule is: the camera rides it, so from inside the frame a
     // player stopped by a wall and one walking on the spot look the same.
     if (g_args.trace_player && g_player.entity) {
@@ -543,6 +559,23 @@ static void on_pre_render(Game* game, double alpha) {
         lights_toggle_flashlight(&g_lights);
     vec3 eye = {0.0f, 0.0f, 0.0f}, forward = {0.0f, 0.0f, -1.0f};
     player_eye(&g_player, eye, forward);
+
+    // The nearest door the player is looking at says what the action key would do to it, and
+    // the key does it.
+    Door* door = NULL;
+    float nearest = DOOR_REACH;
+    for (int i = 0; i < g_door_count; i++) {
+        const float dist = glm_vec3_distance(g_doors[i].entity->position, eye);
+        if (dist < nearest && door_in_reach(&g_doors[i], eye, forward, DOOR_REACH, DOOR_CONE)) {
+            door = &g_doors[i];
+            nearest = dist;
+        }
+    }
+    if (door && input_action_pressed(&game->input, "interact"))
+        door_toggle(door);
+    prompt_show(&g_prompt, !door                  ? NULL
+                           : door_will_open(door) ? "E   Open door"
+                                                  : "E   Close door");
     sounds_update(&g_sounds, eye, (float)game->sim_clock.delta);
     const float hearing = sounds_indoor_gain(&g_sounds);
     lights_update(&g_lights, g_scene, game->time, (float)game->sim_clock.delta, eye, forward,
@@ -578,6 +611,12 @@ static void on_pre_render(Game* game, double alpha) {
                       glm_smoothstep(0.0f, FADE_IN_SECONDS, g_fade_seconds));
 }
 
+// Before the engine goes: the prompt draws through its overlay hook.
+static void on_shutdown(Game* game) {
+    (void)game;
+    prompt_free(&g_prompt);
+}
+
 static void print_usage(const char* prog) {
     printf("Usage: %s [options]\n", prog);
     printf("  -x, --headless          Hidden window, for capture\n");
@@ -611,7 +650,8 @@ static void print_usage(const char* prog) {
     printf("      --no-relief         Puddles stand where the noise puts them, not in the\n"
            "                          ground's own lows\n");
     printf("  In the window: click to capture the mouse, Tab to release it. WASD\n");
-    printf("  walks, Shift hurries, the arrows or the mouse look, G shows the GUI.\n");
+    printf("  walks, Shift hurries, the arrows or the mouse look, E opens and shuts\n");
+    printf("  a door you are facing, F the flashlight, G shows the GUI.\n");
     printf("  -h, --help              This message\n");
 }
 
@@ -739,6 +779,7 @@ int main(int argc, char** argv) {
     game_set_init(game, on_init);
     game_set_update(game, on_update);
     game_set_pre_render(game, on_pre_render);
+    game_set_shutdown(game, on_shutdown);
     game_run(game);
     if (g_args.audio_dump) {
         if (write_dump(g_args.audio_dump))

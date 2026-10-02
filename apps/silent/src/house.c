@@ -281,8 +281,8 @@ static void exterior_walls(Kit* kit) {
         .inner = 1,
         .mat_inner = MAT_PLASTER,
         .mat_outer = MAT_SIDING_DARK,
-        .openings = {{FRONT_DOOR_X0, FRONT_DOOR_X1, FLOOR_Y, FLOOR_Y + 1.95f, KIT_ARCH_POINTED,
-                      0.45f},
+        .openings = {{FRONT_DOOR_X0, FRONT_DOOR_X1, FLOOR_Y, FRONT_DOOR_SPRING, KIT_ARCH_POINTED,
+                      FRONT_DOOR_RISE},
                      {KITCHEN_WIN_X0, KITCHEN_WIN_X1, KITCHEN_WIN_SILL, KITCHEN_WIN_HEAD},
                      lancet(1.75f, 2.35f, up_sill, up_spring, 0.6f),
                      lancet(2.65f, 3.25f, up_sill, up_spring, 0.6f),
@@ -292,6 +292,12 @@ static void exterior_walls(Kit* kit) {
     pane_in(kit, &front, 1, MAT_WINDOW_GLASS);
     for (int i = 2; i < front.opening_count; i++)
         pane_in(kit, &front, i, MAT_DARK_GLASS);
+    // Inside, the front door's oak casing and its stone threshold; the leaf is door.c's.
+    const KitOpening* door = &front.openings[0];
+    const float inner = HOUSE_FRONT_Z + CORNER;
+    kit_frame_surround(kit, &KIT_WORLD, MAT_WOOD, door, 0.08f, false, inner, inner + 0.03f);
+    kit_frame_box(kit, &KIT_WORLD, MAT_STONE, door->from, door->to, FLOOR_Y - 0.02f,
+                  FLOOR_Y + 0.015f, HOUSE_FRONT_Z - CORNER - 0.04f, inner, false);
     // Each wall's dressing runs from the tower's face, or past the corner it shares.
     const float lap = CORNER + 0.05f;
     dress(kit, &front, FRONT_FROM + CORNER, HOUSE_X1 + lap);
@@ -505,6 +511,31 @@ void house_build(Kit* kit) {
     chimney(kit);
     porch(kit);
     tower_build(kit);
+}
+
+/*
+ * The front door, hung on its west jamb in the inner half of the wall so it swings into the
+ * hall and stands open against it, short of the hall's wall. It fills its opening shy of a
+ * leaf's clearance all round.
+ */
+#define DOOR_THICK     0.05f
+#define DOOR_CLEARANCE 0.008f
+#define DOOR_SWING     1.7f // about 97 degrees
+
+int house_doors(Door* doors, int max, Engine* engine, Scene* scene, EntityManager* em,
+                PhysicsWorld* physics) {
+    if (max < 1)
+        return 0;
+    const KitFrame hinge = {
+        {FRONT_DOOR_X0, 0.0f, HOUSE_FRONT_Z + CORNER - 0.5f * DOOR_THICK - 0.005f}, 0.0f};
+    const KitOpening opening = {
+        0.0f,           FRONT_DOOR_X1 - FRONT_DOOR_X0, FLOOR_Y, FRONT_DOOR_SPRING, KIT_ARCH_POINTED,
+        FRONT_DOOR_RISE};
+    KitOpening leaf = kit_opening_grow(&opening, -DOOR_CLEARANCE);
+    leaf.bottom = FLOOR_Y + 0.02f;
+    door_build(&doors[0], engine, scene, em, physics, "front_door", &hinge, &leaf, DOOR_THICK,
+               DOOR_SWING);
+    return 1;
 }
 
 float house_outside_distance(const vec3 p) {

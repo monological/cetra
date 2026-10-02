@@ -17,7 +17,12 @@
  * the length of the tube.
  */
 static const float TUBE_COLOUR[3] = {0.80f, 1.0f, 0.84f};
-#define TUBE_RANGE 9.0f // metres: across the kitchen and down the hall
+// Metres a tube reaches: the room's two across the kitchen and down the hall, and the hood's
+// only round the stove under it. A light index is spent on every cluster a tube's reach
+// touches, and three at nine metres, with the opening light probes sweep's views from inside
+// the kitchen, overflowed the cluster pool.
+#define TUBE_RANGE      9.0f
+#define TUBE_RANGE_HOOD 4.5f
 
 #define FLASHLIGHT_CANDELA 900.0f
 
@@ -37,6 +42,7 @@ typedef struct Tube {
     vec3 facing; // the side the strip emits from
     float length, width;
     float nits;
+    float range;
     bool shadows;
     bool flicker;
 } Tube;
@@ -50,6 +56,7 @@ static const Tube TUBES[] = {
      1.2f,
      0.035f,
      6000.0f,
+     TUBE_RANGE,
      true,
      true},
     {"tube_window",
@@ -59,6 +66,7 @@ static const Tube TUBES[] = {
      1.2f,
      0.035f,
      6000.0f,
+     TUBE_RANGE,
      true,
      false},
     {"tube_hood",
@@ -70,6 +78,7 @@ static const Tube TUBES[] = {
      0.55f,
      0.03f,
      3500.0f,
+     TUBE_RANGE_HOOD,
      false,
      false},
 };
@@ -277,7 +286,7 @@ void lights_update(Lights* lights, Scene* scene, double time, float dt, const ve
         Light* l = scene_find_light(scene, TUBES[t].name);
         if (!l || l->type != LIGHT_AREA)
             continue;
-        l->range = TUBE_RANGE;
+        l->range = TUBES[t].range;
         l->cast_shadows = TUBES[t].shadows;
     }
 
