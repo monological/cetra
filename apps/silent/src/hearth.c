@@ -1,5 +1,6 @@
 #include <math.h>
 
+#include "candles.h"
 #include "gothic.h"
 #include "hearth.h"
 #include "house.h"
@@ -46,6 +47,10 @@ static const KitFrame HEARTH = {{HEARTH_X, 0.0f, GREAT_Z1}, GLM_PIf};
 
 #define ARCADE      8 // pointed arches carved across the lintel's face
 #define ARCADE_HALF 1.6f
+
+// The floor stands either side: their middles along the wall from the hearth's, and out from it.
+#define STAND_A (HEARTH_HALF + 0.4f)
+#define STAND_D 0.31f
 
 // The faces of a piece standing against the wall, and of one standing on another.
 #define BACKED   (KIT_FACES_ALL & ~KIT_FACE_IN)
@@ -149,9 +154,10 @@ static void lintel(Kit* kit) {
 
 /*
  * Merlons along the front and both returns of a cornice whose top is at y, `half` either side
- * of the middle and `front` out from the wall: a castle's battlements, in miniature.
+ * of the middle and `front` out from the wall: a castle's battlements, in miniature. Returns
+ * the pitch along the front.
  */
-static void battlements(Kit* kit, float y, float half, float front) {
+static float battlements(Kit* kit, float y, float half, float front) {
     const int n = (int)roundf((2.0f * half - MERLON_W) / MERLON_PITCH) + 1;
     const float pitch = (2.0f * half - MERLON_W) / (float)(n - 1);
     for (int i = 0; i < n; i++) {
@@ -164,6 +170,7 @@ static void battlements(Kit* kit, float y, float half, float front) {
             kit_frame_box_faces(kit, &HEARTH, MAT_STONE, (float)s * (half - MERLON_D),
                                 (float)s * half, y, y + MERLON_H, d - 0.5f * MERLON_W,
                                 d + 0.5f * MERLON_W, STANDING);
+    return pitch;
 }
 
 // The hood's face, from the lower cornice up and back to its own: how high, how far back, and
@@ -290,7 +297,19 @@ void hearth_build(Kit* kit) {
     jamb(kit, -1.0f);
     jamb(kit, 1.0f);
     lintel(kit);
-    battlements(kit, CORNICE_Y, HEARTH_HALF + 0.08f, DEPTH + 0.08f);
+    const float half = HEARTH_HALF + 0.08f, front = DEPTH + 0.08f;
+    const float pitch = battlements(kit, CORNICE_Y, half, front);
     hood(kit);
     firebox(kit);
+
+    // The candles that frame it: a stand on the floor either side, out past the hearth's stone,
+    // and a candlestick in the cornice's outermost crenel either side of the hood.
+    for (int s = -1; s <= 1; s += 2) {
+        const float sf = (float)s;
+        candle_build(kit, &HEARTH, CANDLE_STAND, sf * STAND_A, FLOOR_Y, STAND_D,
+                     s < 0 ? 0.22f : 0.19f);
+        const float crenel = half - 0.5f * MERLON_W - 0.5f * pitch;
+        candle_build(kit, &HEARTH, CANDLE_STICK, sf * crenel, CORNICE_Y, front - 0.5f * MERLON_D,
+                     s < 0 ? 0.15f : 0.13f);
+    }
 }

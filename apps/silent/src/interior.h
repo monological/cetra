@@ -8,7 +8,8 @@
  * great hall and along the gallery, dressed stone above it in the great hall, beams over the
  * hall and open trusses over the great hall, casings round every doorway, the gallery's and
  * the stair's balustrades, runners down the hall, the gallery and the stair, and the Persian
- * rug. The kitchen is kitchen.c's, the hearth hearth.c's and the study study.c's.
+ * rug; and candles (spec 13.15) on the stair's newels and in sconces either side of the study's
+ * door. The kitchen is kitchen.c's, the hearth hearth.c's and the study study.c's.
  */
 void interior_build(Kit* kit);
 

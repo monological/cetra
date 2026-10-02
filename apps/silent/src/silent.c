@@ -38,6 +38,7 @@
 #include "cetra/game/input.h"
 #include "cetra/game/physics.h"
 
+#include "candles.h"
 #include "clock.h"
 #include "door.h"
 #include "hearth.h"
@@ -132,6 +133,7 @@ typedef struct SilentArgs {
     float rain_mmh;         // 0 = dry
     bool no_wind;           // still air: the rain falls straight
     bool no_relief;         // puddles from the noise alone, not the ground's own lows
+    bool no_candles;        // the candles stand unlit
     const char* audio_dump; // headless: write what the listener hears here
 } SilentArgs;
 
@@ -429,8 +431,10 @@ static void on_init(Game* game) {
     clock_build(&kit);
     study_build(&kit, g_scene, (unsigned int)g_args.seed);
     kit_finish(&kit, "world");
-    printf("silent: %d colliders, %d vertices, %d of %d drip lines\n", kit.collider_count,
-           kit.vertex_count, kit.drip_count, RAIN_DRIP_MAX);
+    printf("silent: %d colliders, %d vertices, %d of %d drip lines, %d candles\n",
+           kit.collider_count, kit.vertex_count, kit.drip_count, RAIN_DRIP_MAX, kit.wick_count);
+    if (!g_args.no_candles)
+        candles_light(g_scene, &kit);
     g_door_hung = house_front_door(&g_door, engine, g_scene, em, physics);
     prompt_start(&g_prompt, engine);
 
@@ -681,6 +685,7 @@ static void print_usage(const char* prog) {
     printf("      --no-wind           Still air: the rain falls straight\n");
     printf("      --no-relief         Puddles stand where the noise puts them, not in the\n"
            "                          ground's own lows\n");
+    printf("      --no-candles        The candles stand unlit\n");
     printf("  In the window: click to capture the mouse, Tab to release it. WASD\n");
     printf("  walks, Shift hurries, the arrows or the mouse look, E opens and shuts\n");
     printf("  a door you are facing, F the flashlight, G shows the GUI.\n");
@@ -749,6 +754,8 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
             a->no_wind = true;
         } else if (!strcmp(s, "--no-relief")) {
             a->no_relief = true;
+        } else if (!strcmp(s, "--no-candles")) {
+            a->no_candles = true;
         } else if (!strcmp(s, "-h") || !strcmp(s, "--help")) {
             print_usage(argv[0]);
             return false;

@@ -1208,6 +1208,16 @@ void kit_drip_run(Kit* kit, const KitFrame* f, const vec3 from, const vec3 to, f
     kit_drip(kit, f, from, to, per_m * glm_vec3_distance((float*)from, (float*)to), ground);
 }
 
+void kit_wick(Kit* kit, const KitFrame* f, float a, float y, float d, float size) {
+    if (kit->wick_count >= FIRE_MAX) {
+        fprintf(stderr, "silent: kit is out of wicks (%d)\n", FIRE_MAX);
+        return;
+    }
+    KitWick* w = &kit->wicks[kit->wick_count++];
+    kit_frame_point(f, a, y, d, w->tip);
+    w->size = size;
+}
+
 void kit_frame_box(Kit* kit, const KitFrame* f, int mat, float a0, float a1, float y0, float y1,
                    float d0, float d1, bool collide) {
     vec3 centre = {0.0f, 0.0f, 0.0f};
