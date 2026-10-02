@@ -189,6 +189,7 @@ bool fire_set_flipbook(Fire* fire, TexturePool* pool, const char* path) {
     b->rows = json_int_or(root, "rows", 0);
     b->width = json_int_or(root, "width", 0);
     b->height = json_int_or(root, "height", 0);
+    b->gutter = json_int_or(root, "gutter", 0);
     b->fps = json_float_or(root, "fps", 30.0f);
     b->peak_nits = json_float_or(root, "peak_nits", 1.0f);
     float box[2] = {1.0f, 1.0f};
@@ -200,8 +201,8 @@ bool fire_set_flipbook(Fire* fire, TexturePool* pool, const char* path) {
     const char* sheet = json_string_or(root, "sheet");
     char sheet_path[FIRE_PATH_MAX] = "";
     bool ok = sheet && b->frames > 0 && b->cols > 0 && b->rows > 0 &&
-              b->frames <= b->cols * b->rows && b->width > 0 && b->height > 0 && b->box[0] > 0.0f &&
-              b->box[1] > 0.0f;
+              b->frames <= b->cols * b->rows && b->width > 0 && b->height > 0 && b->gutter >= 0 &&
+              b->box[0] > 0.0f && b->box[1] > 0.0f;
     if (ok) {
         const char* slash = path_last_sep(path);
         const int n = slash ? snprintf(sheet_path, sizeof(sheet_path), "%.*s/%s",

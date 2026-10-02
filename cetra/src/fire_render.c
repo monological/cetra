@@ -213,6 +213,7 @@ static void _draw_card(FireRenderer* r, const Engine* engine, const Fire* fire, 
     const int layout[4] = {b->frames, b->cols, b->rows, 0};
     uniform_set_ivec4(u, "sheetLayout", layout);
     uniform_set_vec2(u, "frameTexels", (vec2){(float)b->width, (float)b->height});
+    uniform_set_float(u, "sheetGutter", (float)b->gutter);
     uniform_set_float(u, "framePos", (float)fire_card_frame(b, card, engine->render_time));
     uniform_set_float(u, "peakNits", b->peak_nits);
     uniform_set_float(u, "brightness", fire->params.brightness);
