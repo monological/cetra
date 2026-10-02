@@ -11,36 +11,116 @@
 #include "wind.h"
 #include "ext/log.h"
 
-void fire_params_defaults(FireParams* p) {
+void fire_params_defaults(FireParams* p, FireKind kind) {
     memset(p, 0, sizeof(*p));
     p->ambient = 293.0f;
-    // Wood's volatiles light at about 550-650 K.
-    p->ignition = 600.0f;
-    p->burn_rate = 6.0f;
-    // Enough that fuel burning undiluted would reach about 1700 K, a wood flame's adiabatic
-    // temperature; mixing with the air round it keeps the soot nearer 1100-1400 K.
-    p->heat = 1400.0f;
-    p->soot_yield = 1.5f;
-    p->buoyancy = 1.0f;
-    p->soot_weight = 0.0f;
-    p->cooling = 2500.0f;
-    p->vorticity = 1.5f;
+    // The soot in a wood fire's flames measures about 1100-1500 K; a candle's luminous zone runs
+    // hotter, near 1700-1800 K.
+    p->temperature = kind == FIRE_FLAME ? 1750.0f : 1400.0f;
+    p->reaction_rate = 1.0f;
+    // TASTE. Visible emission falls about twelvefold for every tenth below the peak, so the
+    // flame is the gas within a tenth or so of it: at 600 K/s that lasts a few tenths of a
+    // second, which with the lift is a hand's breadth to a forearm of flame.
+    p->cooling = 600.0f;
+    // A frame or two of gas: thin, as the core is (sec. 3.1). TASTE.
+    p->core = 0.04f;
+    p->expansion = 4.0f;
+    // TASTE, against a measurement: soot in wood flames runs to about 1 ppm by volume, and the
+    // reacting gas carries this for under a second.
+    p->soot_yield = 4.0f;
+    // Soot oxidises above about 1000-1300 K wherever there is oxygen; a fire burning clean in a
+    // drawing chimney leaves little smoke to see. TASTE in the rates.
     p->soot_burnout = 4.0f;
-    p->soot_burnout_at = 1100.0f;
-    p->smoke_fade = 0.4f;
+    p->soot_burnout_at = 1000.0f;
+    p->smoke_fade = 1.5f;
+    p->buoyancy = 1.0f;
+    p->vorticity = 2.0f;
     p->wind_response = 1.0f;
     // 6 pi E(m) / lambda at 550 nm with E(m) = 0.26, per part per million by volume: soot's
     // Rayleigh absorption, about 9 per metre for every ppm.
     p->soot_absorption = 8.9f;
     // Fresh soot absorbs nearly everything it intercepts.
     p->smoke_albedo = 0.25f;
-    p->blue_core = 20.0f;
+    // TASTE: faint against the soot, as a wood fire's blue is, and the adaptation lifts blue a
+    // long way against a white this red; a candle's base shows more.
+    p->blue_core = kind == FIRE_FLAME ? 150.0f : 6.0f;
+    p->adaptation = 0.85f;
     p->brightness = 1.0f;
     p->shimmer = 0.0f;
-    // A candle's luminous zone: soot near 1600 K, at a few ppm.
-    p->flame_temperature = 1600.0f;
     p->flame_soot = 6.0f;
     p->flicker = 0.3f;
+}
+
+// Linear Rec.709 to CIE XYZ, D65, row-major; spectrum_xyz_to_rec709 is its inverse.
+static const float REC709_TO_XYZ[3][3] = {
+    {0.4124f, 0.3576f, 0.1805f}, {0.2126f, 0.7152f, 0.0722f}, {0.0193f, 0.1192f, 0.9505f}};
+// XYZ to Hunt-Pointer-Estevez cone responses, normalised to D65 (Fairchild 1998), row-major.
+static const float XYZ_TO_LMS[3][3] = {
+    {0.4002f, 0.7076f, -0.0808f}, {-0.2263f, 1.1653f, 0.0457f}, {0.0f, 0.0f, 0.9182f}};
+static const vec3 D65_XYZ = {0.95047f, 1.0f, 1.08883f};
+
+static void _mul33(const float a[3][3], const float b[3][3], float out[3][3]) {
+    float t[3][3];
+    for (int r = 0; r < 3; r++)
+        for (int c = 0; c < 3; c++)
+            t[r][c] = a[r][0] * b[0][c] + a[r][1] * b[1][c] + a[r][2] * b[2][c];
+    memcpy(out, t, sizeof(t));
+}
+
+static void _inv33(const float a[3][3], float out[3][3]) {
+    mat3 m, inv;
+    for (int r = 0; r < 3; r++)
+        for (int c = 0; c < 3; c++)
+            m[c][r] = a[r][c];
+    glm_mat3_inv(m, inv);
+    for (int r = 0; r < 3; r++)
+        for (int c = 0; c < 3; c++)
+            out[r][c] = inv[c][r];
+}
+
+static void _mulv(const float a[3][3], const vec3 v, vec3 out) {
+    vec3 t;
+    for (int r = 0; r < 3; r++)
+        t[r] = a[r][0] * v[0] + a[r][1] * v[1] + a[r][2] * v[2];
+    glm_vec3_copy(t, out);
+}
+
+void fire_adaptation(const FireParams* p, mat3 out) {
+    // The white the eye adapts to: a blackbody at the fire's peak, in cone space, against D65.
+    vec3 white = {0.0f, 0.0f, 0.0f}, lms_white = {0.0f, 0.0f, 0.0f}, lms_d65 = {0.0f, 0.0f, 0.0f};
+    spectrum_blackbody_xyz(p->temperature, white);
+    if (!(white[1] > 0.0f)) {
+        glm_mat3_identity(out);
+        return;
+    }
+    glm_vec3_scale(white, 1.0f / white[1], white);
+    _mulv(XYZ_TO_LMS, white, lms_white);
+    _mulv(XYZ_TO_LMS, D65_XYZ, lms_d65);
+    const float scale[3][3] = {{lms_d65[0] / lms_white[0], 0.0f, 0.0f},
+                               {0.0f, lms_d65[1] / lms_white[1], 0.0f},
+                               {0.0f, 0.0f, lms_d65[2] / lms_white[2]}};
+    float lms_to_xyz[3][3], xyz_to_rec709[3][3], a[3][3];
+    _inv33(XYZ_TO_LMS, lms_to_xyz);
+    _inv33(REC709_TO_XYZ, xyz_to_rec709);
+    _mul33(scale, XYZ_TO_LMS, a);
+    _mul33(lms_to_xyz, a, a);
+    _mul33(xyz_to_rec709, a, a);
+    _mul33(a, REC709_TO_XYZ, a);
+    // Mixed with the identity by how far the eye has adapted, then scaled so the white keeps
+    // its luminance: adaptation changes what colour the fire reads as, not how bright it is.
+    const float k = glm_clamp(p->adaptation, 0.0f, 1.0f);
+    for (int r = 0; r < 3; r++)
+        for (int c = 0; c < 3; c++)
+            a[r][c] = (r == c ? 1.0f - k : 0.0f) + k * a[r][c];
+    vec3 white_rgb = {0.0f, 0.0f, 0.0f}, adapted = {0.0f, 0.0f, 0.0f};
+    _mulv(xyz_to_rec709, white, white_rgb);
+    _mulv(a, white_rgb, adapted);
+    const float before = glm_vec3_dot(white_rgb, (vec3){0.2126f, 0.7152f, 0.0722f});
+    const float after = glm_vec3_dot(adapted, (vec3){0.2126f, 0.7152f, 0.0722f});
+    const float norm = after > 0.0f ? before / after : 1.0f;
+    for (int r = 0; r < 3; r++)
+        for (int c = 0; c < 3; c++)
+            out[c][r] = a[r][c] * norm;
 }
 
 FireSystem* create_fire_system(void) {
@@ -50,7 +130,9 @@ FireSystem* create_fire_system(void) {
         return NULL;
     }
     fs->sim_hz = 60.0f;
-    fs->max_steps = 4;
+    // A slow frame skips the time it lost rather than spending the next frame catching up,
+    // which would make it slower still.
+    fs->max_steps = 2;
     fs->jacobi_iterations = 24;
     fs->maccormack = true;
     fs->warmup = 2.0f;
@@ -76,7 +158,7 @@ Fire* fire_system_add(FireSystem* fs, FireKind kind, const char* name) {
     fire->kind = kind;
     fire->enabled = true;
     fire->floor = true;
-    fire_params_defaults(&fire->params);
+    fire_params_defaults(&fire->params, kind);
     if (kind == FIRE_FLAME) {
         glm_vec3_copy((vec3){0.012f, 0.035f, 0.012f}, fire->size);
     } else {
@@ -149,9 +231,12 @@ const float* fire_blackbody_table(void) {
             vec3 xyz = {0.0f, 0.0f, 0.0f}, rgb = {0.0f, 0.0f, 0.0f};
             spectrum_blackbody_xyz(kelvin, xyz);
             spectrum_xyz_to_rec709(xyz, rgb);
+            // Unclamped: below about 1900 K a blackbody lies outside Rec.709 on the red side and
+            // its blue is negative, and the adaptation has to see that negative to bring the
+            // fire's white back to white. The clamp comes after it.
             const float y = fmaxf(xyz[1], 1e-30f);
             for (int c = 0; c < 3; c++)
-                g_blackbody[4 * i + c] = fmaxf(rgb[c], 0.0f) / y;
+                g_blackbody[4 * i + c] = rgb[c] / y;
             g_blackbody[4 * i + 3] = log10f(y);
         }
         g_blackbody_built = true;
@@ -180,9 +265,17 @@ float fire_blackbody(float kelvin, vec3 rgb) {
     return lum;
 }
 
-// The reaction zone's own light, CH* and C2* chemiluminescence: what makes a flame's base
-// blue. Its colour, luminance 1; the shader's FIRE_BLUE.
-static const vec3 FIRE_BLUE = {0.31f, 0.68f, 6.2f};
+void fire_blue_color(vec3 out) {
+    // The reaction zone's own light is band emission from intermediate radicals (Nguyen et al.
+    // sec. 3): CH* at 431 nm and C2*'s Swan band at 516 nm, taken here as equal parts of
+    // radiance, through the observer -- unclamped, like the blackbody, and luminance 1.
+    vec3 ch = {0.0f, 0.0f, 0.0f}, c2 = {0.0f, 0.0f, 0.0f}, xyz = {0.0f, 0.0f, 0.0f};
+    spectrum_cie_xyz(431.0f, ch);
+    spectrum_cie_xyz(516.0f, c2);
+    glm_vec3_add(ch, c2, xyz);
+    glm_vec3_scale(xyz, 1.0f / xyz[1], xyz);
+    spectrum_xyz_to_rec709(xyz, out);
+}
 
 /*
  * A FLAME's profile at height `u` (0 the wick, 1 the tip) and normalised distance `q` from its
@@ -195,9 +288,11 @@ static void _flame_profile(const FireParams* p, float u, float q, float* kelvin,
     const float inside = q < 1.0f ? 1.0f - q * q : 0.0f;
     const float lit = glm_smoothstep(0.08f, 0.32f, u) * (1.0f - glm_smoothstep(0.7f, 1.0f, u));
     *soot = p->flame_soot * inside * lit;
-    *kelvin = p->ambient + (p->flame_temperature - p->ambient) * (1.0f - 0.35f * q * q) *
+    *kelvin = p->ambient + (p->temperature - p->ambient) * (1.0f - 0.35f * q * q) *
                                (1.0f - 0.4f * glm_smoothstep(0.6f, 1.0f, u));
-    *blue = inside * (1.0f - glm_smoothstep(0.05f, 0.3f, u));
+    // The blue is the reaction zone, a thin shell round the base: strongest at the flame's
+    // edge, where fuel meets air, and gone by the time soot has formed.
+    *blue = inside * q * q * (1.0f - glm_smoothstep(0.05f, 0.3f, u));
 }
 
 // The flame's radius at `u`, as a fraction of its half-width: a teardrop, widest a third up.
@@ -295,6 +390,8 @@ void fire_flame_field(const Fire* fire, const vec3 p, float* kelvin, float* soot
 
 void fire_flame_light(Fire* fire) {
     const FireParams* p = &fire->params;
+    vec3 blue_rgb = {0.0f, 0.0f, 0.0f};
+    fire_blue_color(blue_rgb);
     float total = 0.0f;
     vec3 rgb_sum = GLM_VEC3_ZERO_INIT;
     vec3 weighted = GLM_VEC3_ZERO_INIT;
@@ -322,11 +419,11 @@ void fire_flame_light(Fire* fire) {
             vec3 rgb = {0.0f, 0.0f, 0.0f};
             const float lum = fire_blackbody(kelvin, rgb);
             const float sigma = soot * p->soot_absorption;
-            const float glow = p->blue_core * FIRE_FLAME_REACTION * blue;
+            const float glow = p->blue_core * blue;
             const float area = 2.0f * GLM_PIf * radius * radius * q / (float)FLAME_QUAD_Q;
             ring_lum += (sigma * lum + glow) * area;
             glm_vec3_muladds(rgb, sigma * area, ring_rgb);
-            glm_vec3_muladds((float*)FIRE_BLUE, glow * area, ring_rgb);
+            glm_vec3_muladds(blue_rgb, glow * area, ring_rgb);
         }
         const float dl = du_len / (float)FLAME_QUAD_U;
         total += ring_lum * dl;
@@ -336,6 +433,12 @@ void fire_flame_light(Fire* fire) {
     fire->intensity = total * p->brightness;
     if (total > 0.0f) {
         glm_vec3_scale(weighted, 1.0f / total, fire->centroid);
+        // The light takes the colour the flame is drawn in, adapted as it is, then clamped into
+        // the gamut a light can carry.
+        mat3 adapt = GLM_MAT3_IDENTITY_INIT;
+        fire_adaptation(p, adapt);
+        glm_mat3_mulv(adapt, rgb_sum, rgb_sum);
+        glm_vec3_maxv(rgb_sum, GLM_VEC3_ZERO, rgb_sum);
         const float lum = 0.2126f * rgb_sum[0] + 0.7152f * rgb_sum[1] + 0.0722f * rgb_sum[2];
         if (lum > 0.0f)
             glm_vec3_scale(rgb_sum, 1.0f / lum, fire->color);
@@ -453,6 +556,26 @@ void fire_probe_print(const FireSystem* fs) {
     printf("fire-probe system count=%d sim_hz=%.9g jacobi=%d maccormack=%d warmup=%.9g\n",
            fs->count, (double)fs->sim_hz, fs->jacobi_iterations, fs->maccormack ? 1 : 0,
            (double)fs->warmup);
+    for (int i = 0; i < fs->count; i++) {
+        // The adaptation as a matrix, and what it makes of the peak's blackbody (which must come
+        // out white) and of one 20% cooler.
+        mat3 adapt = GLM_MAT3_IDENTITY_INIT;
+        fire_adaptation(&fs->fires[i].params, adapt);
+        vec3 peak = {0.0f, 0.0f, 0.0f}, cool = {0.0f, 0.0f, 0.0f};
+        const float t_peak = fs->fires[i].params.temperature;
+        fire_blackbody(t_peak, peak);
+        fire_blackbody(0.8f * t_peak, cool);
+        glm_mat3_mulv(adapt, peak, peak);
+        glm_mat3_mulv(adapt, cool, cool);
+        glm_vec3_scale(peak, 1.0f / fmaxf(glm_vec3_max(peak), 1e-30f), peak);
+        glm_vec3_scale(cool, 1.0f / fmaxf(glm_vec3_max(cool), 1e-30f), cool);
+        printf("fire-probe adaptation index=%d r0=%.4g,%.4g,%.4g r1=%.4g,%.4g,%.4g "
+               "r2=%.4g,%.4g,%.4g peak=%.4g,%.4g,%.4g cooler=%.4g,%.4g,%.4g\n",
+               i, (double)adapt[0][0], (double)adapt[1][0], (double)adapt[2][0],
+               (double)adapt[0][1], (double)adapt[1][1], (double)adapt[2][1], (double)adapt[0][2],
+               (double)adapt[1][2], (double)adapt[2][2], (double)peak[0], (double)peak[1],
+               (double)peak[2], (double)cool[0], (double)cool[1], (double)cool[2]);
+    }
     for (int i = 0; i < fs->count; i++) {
         const Fire* f = &fs->fires[i];
         printf("fire-probe fire index=%d kind=%d enabled=%d steps=%d start=%d answered=%d "

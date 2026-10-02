@@ -23,14 +23,12 @@
 // The points a FLAME's spine is drawn through, base to tip.
 #define FIRE_SPINE_POINTS 8
 
-// The burn rate, fuel per second, a FLAME's blue base stands for: what `blue_core` is
-// multiplied by where a grid fire has a measured reaction to multiply it by.
-#define FIRE_FLAME_REACTION 250.0f
-
-// Air's volumetric heat capacity, rho * c_p, J / (m^3 K): what turns the grid's temperature
-// rise into the watts a fire releases.
+// Air's volumetric heat capacity, rho * c_p, J / (m^3 K): what turns the heat the grid's gas
+// sheds into the watts a fire releases.
 #define FIRE_AIR_RHO_CP 1206.0f
 
-// The temperature the cooling law is quoted at, K above ambient: `cooling` is the rate there,
-// and it goes as the fourth power of the rise (Nguyen et al. 2002).
-#define FIRE_COOLING_REF 1000.0f
+// The source noise's lattice, in cells and in seconds: coarse enough that a log's length breaks
+// into a few tongues rather than a cell-by-cell shimmer, and slow enough that a tongue lives
+// a moment rather than a step.
+#define FIRE_SOURCE_NOISE_CELLS   4.0f
+#define FIRE_SOURCE_NOISE_SECONDS 0.15f

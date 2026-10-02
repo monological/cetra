@@ -160,11 +160,11 @@ def gltf_of(pieces):
 
 
 def log_source(lo, hi):
-    """Fuel breathing from a log's top, along its length."""
+    """Where a log burns: along its top, a little over half of it alight at once."""
     y = hi[1] + 0.01
     z = (lo[2] + hi[2]) / 2
     return {"shape": "capsule", "from": [lo[0] + 0.05, y, z], "to": [hi[0] - 0.05, y, z],
-            "radius": 0.06, "rate": 3.0, "temperature": 1000.0, "lift": 0.4}
+            "radius": 0.05, "coverage": 0.7, "lift": 0.8}
 
 
 LOGS = [p for p in SOLIDS if p[0].startswith("log")]
@@ -178,6 +178,10 @@ HEARTH = {
     "light": "hearth_light",
     "sources": [log_source(p[4], p[5]) for p in LOGS],
     "obstacles": [{"min": list(p[4]), "max": list(p[5])} for p in SOLIDS],
+    # The flue draws at a little over a metre a second, a domestic chimney's order once warm:
+    # that is what pulls the room's air in through the mouth and the smoke up, not out.
+    "draft": {"min": [FLUE[0], OPENING_Y, FLUE[2]], "max": [FLUE[1], 3.0, FLUE[3]],
+              "speed": 1.2},
 }
 CANDLE = {
     "name": "candle",
