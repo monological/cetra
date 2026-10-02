@@ -902,6 +902,21 @@ void kit_arch_outline(KitArchShape shape, float a0, float a1, float spring, floa
     out[n][1] = spring + rise;
 }
 
+int kit_opening_outline(const KitOpening* o, vec2 out[KIT_OPENING_POINTS]) {
+    glm_vec2_copy((vec2){o->from, o->bottom}, out[0]);
+    glm_vec2_copy((vec2){o->to, o->bottom}, out[1]);
+    if (o->arch == KIT_ARCH_FLAT || o->rise <= 0.0f) {
+        glm_vec2_copy((vec2){o->to, o->top}, out[2]);
+        glm_vec2_copy((vec2){o->from, o->top}, out[3]);
+        return 4;
+    }
+    vec2 head[KIT_ARCH_POINTS];
+    kit_arch_outline(o->arch, o->from, o->to, o->top, o->rise, head);
+    for (int i = 0; i < KIT_ARCH_POINTS; i++)
+        glm_vec2_copy(head[KIT_ARCH_POINTS - 1 - i], out[2 + i]);
+    return KIT_OPENING_POINTS;
+}
+
 // The frame a wall is drawn in: KitWall's own for kit_frame_wall, and for an axis-aligned one
 // the quarter turn that runs a along its axis, with `at` and `inner` restated along d.
 typedef struct WallFrame {
@@ -942,52 +957,88 @@ static void wall_spandrels(Kit* kit, const WallFrame* wf, const KitOpening* o, i
     kit_frame_extrude(kit, &wf->f, mat, half, n + 2, d - 0.5f * thick, d + 0.5f * thick);
 }
 
-// The wall between openings, and under and over each one, for one layer. `sorted` holds the
-// wall's `n` openings in order along it. The body through the whole wall treats an arch's head
-// as solid from its springing line: nothing walks through the top of an arch.
-static void wall_layer(Kit* kit, const KitWall* w, const WallFrame* wf, const KitOpening* sorted,
-                       int n, int mat, float offset, float thick) {
-    float cursor = w->from;
+static bool arched(const KitOpening* o) {
+    return o->arch != KIT_ARCH_FLAT && o->rise > 0.0f;
+}
+
+/*
+ * One layer of the wall, round its openings. A storeyed wall stacks openings -- a window over
+ * a door -- so the wall is cut into COLUMNS at every opening's edges, and each column is solid
+ * from the floor up, between the openings that span it, to the top. Openings side by side make
+ * one column each and a solid one between, which is the wall a row of them always made.
+ * Openings must not overlap. The body through the whole wall treats an arch's head as solid
+ * from its springing line: nothing walks through the top of an arch.
+ */
+static void wall_layer(Kit* kit, const KitWall* w, const WallFrame* wf, int mat, float offset,
+                       float thick) {
+    const int n = w->opening_count < KIT_MAX_OPENINGS ? w->opening_count : KIT_MAX_OPENINGS;
+    float cuts[2 * KIT_MAX_OPENINGS + 2];
+    int nc = 0;
+    cuts[nc++] = w->from;
+    cuts[nc++] = w->to;
     for (int i = 0; i < n; i++) {
-        const KitOpening* o = &sorted[i];
-        const bool arched = o->arch != KIT_ARCH_FLAT && o->rise > 0.0f && mat != KIT_COLLIDER_ONLY;
-        wall_slab(kit, wf, mat, offset, thick, cursor, o->from, w->y0, w->y1);
-        wall_slab(kit, wf, mat, offset, thick, o->from, o->to, w->y0, o->bottom);
-        wall_slab(kit, wf, mat, offset, thick, o->from, o->to, arched ? o->top + o->rise : o->top,
-                  w->y1);
-        if (arched)
-            wall_spandrels(kit, wf, o, mat, offset, thick);
-        cursor = o->to;
+        cuts[nc++] = glm_clamp(w->openings[i].from, w->from, w->to);
+        cuts[nc++] = glm_clamp(w->openings[i].to, w->from, w->to);
     }
-    wall_slab(kit, wf, mat, offset, thick, cursor, w->to, w->y0, w->y1);
+    for (int i = 1; i < nc; i++)
+        for (int j = i; j > 0 && cuts[j] < cuts[j - 1]; j--) {
+            const float t = cuts[j];
+            cuts[j] = cuts[j - 1];
+            cuts[j - 1] = t;
+        }
+    for (int c = 0; c + 1 < nc; c++) {
+        const float a0 = cuts[c], a1 = cuts[c + 1];
+        if (a1 - a0 < 1e-4f)
+            continue;
+        // The openings spanning this column, bottom first.
+        const KitOpening* stack[KIT_MAX_OPENINGS];
+        int ns = 0;
+        for (int i = 0; i < n; i++) {
+            const KitOpening* o = &w->openings[i];
+            if (o->from <= a0 + 1e-4f && o->to >= a1 - 1e-4f)
+                stack[ns++] = o;
+        }
+        for (int i = 1; i < ns; i++)
+            for (int j = i; j > 0 && stack[j]->bottom < stack[j - 1]->bottom; j--) {
+                const KitOpening* t = stack[j];
+                stack[j] = stack[j - 1];
+                stack[j - 1] = t;
+            }
+        float y = w->y0;
+        for (int i = 0; i < ns; i++) {
+            const KitOpening* o = stack[i];
+            wall_slab(kit, wf, mat, offset, thick, a0, a1, y, o->bottom);
+            y = arched(o) && mat != KIT_COLLIDER_ONLY ? o->top + o->rise : o->top;
+        }
+        wall_slab(kit, wf, mat, offset, thick, a0, a1, y, w->y1);
+    }
+    if (mat == KIT_COLLIDER_ONLY)
+        return;
+    for (int i = 0; i < n; i++)
+        if (arched(&w->openings[i]))
+            wall_spandrels(kit, wf, &w->openings[i], mat, offset, thick);
 }
 
 static void wall_in(Kit* kit, const KitWall* w, const WallFrame* wf) {
-    // Openings in order along the wall, so the solid spans are the gaps.
-    KitOpening sorted[KIT_MAX_OPENINGS];
-    const int n = w->opening_count < KIT_MAX_OPENINGS ? w->opening_count : KIT_MAX_OPENINGS;
-    memcpy(sorted, w->openings, (size_t)n * sizeof(KitOpening));
-    for (int i = 1; i < n; i++)
-        for (int j = i; j > 0 && sorted[j].from < sorted[j - 1].from; j--) {
-            KitOpening t = sorted[j];
-            sorted[j] = sorted[j - 1];
-            sorted[j - 1] = t;
-        }
     const float q = 0.25f * w->thick;
     const float s = wf->inner >= 0 ? 1.0f : -1.0f;
-    wall_layer(kit, w, wf, sorted, n, w->mat_inner, s * q, 0.5f * w->thick);
-    wall_layer(kit, w, wf, sorted, n, w->mat_outer, -s * q, 0.5f * w->thick);
+    wall_layer(kit, w, wf, w->mat_inner, s * q, 0.5f * w->thick);
+    wall_layer(kit, w, wf, w->mat_outer, -s * q, 0.5f * w->thick);
     // One body per span through the whole thickness, rather than one per layer:
     // two coplanar bodies meeting mid-wall buy nothing.
-    wall_layer(kit, w, wf, sorted, n, KIT_COLLIDER_ONLY, 0.0f, w->thick);
+    wall_layer(kit, w, wf, KIT_COLLIDER_ONLY, 0.0f, w->thick);
+}
+
+void kit_wall_frame(const KitWall* w, KitFrame* f, float* at) {
+    // Along X, the world frame already runs a along x and d along z. Along Z, a quarter turn
+    // the other way runs a along +z, and d then points along -x.
+    *f = w->along_x ? KIT_WORLD : (KitFrame){{0.0f, 0.0f, 0.0f}, -0.5f * GLM_PIf};
+    *at = w->along_x ? w->at : -w->at;
 }
 
 void kit_wall(Kit* kit, const KitWall* w) {
-    // Along X, the world frame already runs a along x and d along z. Along Z, a quarter turn
-    // the other way runs a along +z, and d then points along -x.
-    const WallFrame wf =
-        w->along_x ? (WallFrame){KIT_WORLD, w->at, w->inner}
-                   : (WallFrame){{{0.0f, 0.0f, 0.0f}, -0.5f * GLM_PIf}, -w->at, -w->inner};
+    WallFrame wf = {.inner = w->along_x ? w->inner : -w->inner};
+    kit_wall_frame(w, &wf.f, &wf.at);
     wall_in(kit, w, &wf);
 }
 
@@ -1055,6 +1106,15 @@ void kit_frame_extrude(Kit* kit, const KitFrame* f, int mat, const vec2* outline
         return;
     kit_frame_dir(f, 0.0f, 0.0f, d1 - d0, offset);
     extrude(kit, mat, base, count, offset);
+}
+
+void kit_frame_pane(Kit* kit, const KitFrame* f, int mat, const KitOpening* o, float d,
+                    float thick) {
+    vec2 outline[KIT_OPENING_POINTS];
+    const int n = kit_opening_outline(o, outline);
+    kit_frame_extrude(kit, f, mat, outline, n, d - 0.003f, d + 0.003f);
+    kit_frame_box(kit, f, KIT_COLLIDER_ONLY, o->from, o->to, o->bottom, o->top + o->rise,
+                  d - 0.5f * thick, d + 0.5f * thick, true);
 }
 
 void kit_frame_stair(Kit* kit, const KitFrame* f, int mat, float a0, float a1, float y0, float d0,

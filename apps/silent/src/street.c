@@ -123,7 +123,10 @@ static void fence(Kit* kit, float x0, float x1, float z) {
 static void fog(Scene* scene, bool night) {
     const float density = night ? FOG_NIGHT : FOG_DAY;
     const float F = FOG_FEATHER, top = 40.0f; // high enough that the sky is fogged out too
-    const float house_gap = 6.0f, front = HOUSE_FRONT_Z - 0.5f, back = HOUSE_BACK_Z + 1.0f;
+    // Clear of the tower too, which stands out past the front and the west side: a fog
+    // volume does not stop at a wall, and inside one the study would be full of it.
+    const float house_gap = -(TOWER_X - TOWER_APOTHEM) + 0.7f;
+    const float front = TOWER_Z - TOWER_APOTHEM - 0.7f, back = HOUSE_BACK_Z + 1.0f;
     const float far = 45.0f, wide = 60.0f;
     const float boxes[4][4] = {
         // x0, x1, z0, z1

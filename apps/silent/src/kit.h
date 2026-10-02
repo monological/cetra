@@ -81,6 +81,12 @@ typedef struct KitOpening {
     float rise;
 } KitOpening;
 
+#define KIT_OPENING_POINTS (KIT_ARCH_POINTS + 2)
+
+// The opening's outline in (a, y), counter-clockwise from its bottom-left corner: across the
+// sill, up a jamb, round the head and down. Returns its corner count.
+int kit_opening_outline(const KitOpening* o, vec2 out[KIT_OPENING_POINTS]);
+
 // An axis-aligned wall. It runs along X when `along_x`, at z = `at`, or along Z
 // at x = `at`, from `from` to `to`. `inner` is the sign of the side the inner
 // material faces (+1 toward +z/+x). Two layers of half the thickness each, so
@@ -175,6 +181,13 @@ void kit_frame_box(Kit* kit, const KitFrame* f, int mat, float a0, float a1, flo
                    float d0, float d1, bool collide);
 // A wall in frame `f`: see KitWall.
 void kit_frame_wall(Kit* kit, const KitFrame* f, const KitWall* wall);
+// The frame an axis-aligned wall is drawn in, and the d of its middle there: what puts a
+// pane or a door in one of its openings.
+void kit_wall_frame(const KitWall* wall, KitFrame* f, float* at);
+// A pane of `mat` filling an opening of a wall `thick` through, 6 mm thick in the wall's
+// middle at d, and a body through the whole wall so nobody climbs through.
+void kit_frame_pane(Kit* kit, const KitFrame* f, int mat, const KitOpening* o, float d,
+                    float thick);
 // A flat polygon of (a, y) corners at distance d, facing out (+d).
 void kit_frame_polygon(Kit* kit, const KitFrame* f, int mat, const vec2* outline, int count,
                        float d);
