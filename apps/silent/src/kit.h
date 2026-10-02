@@ -86,7 +86,18 @@ static inline bool kit_opening_arched(const KitOpening* o) {
     return o->arch != KIT_ARCH_FLAT && o->rise > 0.0f;
 }
 
+// The opening's highest point: its apex, or its lintel.
+static inline float kit_opening_crown(const KitOpening* o) {
+    return kit_opening_arched(o) ? o->top + o->rise : o->top;
+}
+
 #define KIT_OPENING_POINTS (KIT_ARCH_POINTS + 2)
+
+// A band between two elliptical arcs about c in (a, y), from angle t0 to t1: out along the
+// outer arc of radii (rx_out, ry_out), `seg` pieces, and back along the inner. A negative
+// radius mirrors its axis. Returns its corner count, 2 * (seg + 1), into `out`.
+int kit_arc_band(const vec2 c, float rx_out, float ry_out, float rx_in, float ry_in, float t0,
+                 float t1, int seg, vec2* out);
 
 // The opening's outline in (a, y), counter-clockwise from its bottom-left corner: across the
 // sill, up a jamb, round the head and down. Returns its corner count.
@@ -127,6 +138,10 @@ static inline float kit_rrange(KitRng* r, float lo, float hi) {
     return lo + (hi - lo) * kit_rnd(r);
 }
 
+// The parts of lo..hi clear of the `n` intervals `blocked` (each {from, to}, in any order and
+// overlapping or not), in order, into `out`, which holds n + 1. Returns their count.
+int kit_clear_spans(float lo, float hi, const vec2* blocked, int n, vec2* out);
+
 // How far `p` is in plan, (x, z), from the segment a..b.
 static inline float kit_plan_distance(const vec3 p, const vec2 a, const vec2 b) {
     const float dx = b[0] - a[0], dz = b[1] - a[1], len2 = dx * dx + dz * dz;
@@ -151,6 +166,11 @@ void kit_tri_facing(Kit* kit, int mat, const vec3 a, const vec3 b, const vec3 c,
 // A flat polygon of `count` coplanar corners, concave or not but never crossing itself, cut
 // into triangles by ear clipping and wound to face `outward`.
 void kit_polygon_facing(Kit* kit, int mat, const vec3* corners, int count, const vec3 outward);
+
+// A prism over a flat outline of `count` world corners: the outline in mat_base, facing away
+// from `offset`, its copy `offset` along in mat_cap, and a flat quad up each edge in mat_side.
+void kit_extrude(Kit* kit, int mat_base, int mat_cap, int mat_side, const vec3* base, int count,
+                 const vec3 offset);
 
 // A horizontal slab whose outline is `count` (x, z) corners, from y0 to y1. `collide` adds a
 // body for it, one box per edge reaching in to the corners' average, which is exact only where
@@ -188,6 +208,8 @@ typedef struct KitFrame {
 
 // The world itself as a frame: (a, y, d) is (x, y, z).
 static const KitFrame KIT_WORLD = {{0.0f, 0.0f, 0.0f}, 0.0f};
+// The world turned a quarter: a runs along +z and d along -x.
+static const KitFrame KIT_WORLD_Z = {{0.0f, 0.0f, 0.0f}, -0.5f * GLM_PIf};
 
 void kit_frame_point(const KitFrame* f, float a, float y, float d, vec3 out);
 // A direction turned by the frame's yaw, without its origin.
@@ -196,6 +218,9 @@ void kit_frame_dir(const KitFrame* f, float a, float y, float d, vec3 out);
 // source -- dripping `rate` drops a second at the reference rain onto world Y `ground`.
 void kit_drip(Kit* kit, const KitFrame* f, const vec3 from, const vec3 to, float rate,
               float ground);
+// The same along an edge, `per_m` drops a second a metre of it.
+void kit_drip_run(Kit* kit, const KitFrame* f, const vec3 from, const vec3 to, float per_m,
+                  float ground);
 // The box a0..a1 along, y0..y1 up, d0..d1 out, each range in either order.
 void kit_frame_box(Kit* kit, const KitFrame* f, int mat, float a0, float a1, float y0, float y1,
                    float d0, float d1, bool collide);
@@ -214,6 +239,8 @@ typedef enum KitFace {
 // The same box with only the KitFace bits `shown`, and no body.
 void kit_frame_box_faces(Kit* kit, const KitFrame* f, int mat, float a0, float a1, float y0,
                          float y1, float d0, float d1, unsigned shown);
+// A flat quad through four (a, y, d) corners, wound to face `out`, also (a, y, d).
+void kit_frame_quad(Kit* kit, const KitFrame* f, int mat, const vec3 p[4], const vec3 out);
 // A wall in frame `f`: see KitWall. A wall is never grimed, whatever its materials: the seams
 // between the slabs it is cut into round its openings are edges nobody built.
 void kit_frame_wall(Kit* kit, const KitFrame* f, const KitWall* wall);
@@ -296,6 +323,10 @@ void kit_frame_lathe_on(Kit* kit, const KitFrame* f, int mat, const vec3 base, c
 // one picture, not a pattern.
 void kit_frame_card(Kit* kit, const KitFrame* f, int mat, const vec3 corner, const vec3 across,
                     const vec3 up, const float uv[4]);
+// A card of `uv`, w by h, lying face up at height y, centred at (a, d) and turned `turn`
+// radians; its top is away from someone standing at +d.
+void kit_frame_card_lying(Kit* kit, const KitFrame* f, int mat, const float uv[4], float w, float h,
+                          float a, float y, float d, float turn);
 // A card of `uv` filling a0..a1 and y0..y1 at d, facing +d, or -d when `toward` is negative --
 // the right way up and round seen from the side it faces.
 void kit_frame_card_rect(Kit* kit, const KitFrame* f, int mat, const float uv[4], float a0,

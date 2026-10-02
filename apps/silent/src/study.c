@@ -33,22 +33,10 @@
 
 // The desk, the lamp on it, and their light.
 #define DESK_H       0.76f
+#define DESK_TOP     (DESK_H + 0.003f) // its leather inset's top, where things stand
 #define LAMP_CANDELA 60.0f // a reading lamp's pool: about 940 lux on the desk 0.25 m under it
 #define LAMP_RANGE   5.0f
 static const float LAMP_COLOUR[3] = {1.0f, 0.74f, 0.45f};
-
-typedef struct Strip {
-    GothicId id;
-    const float* edges;
-    int books;
-} Strip;
-
-static const Strip STRIPS[4] = {
-    {GOTHIC_SPINES_0, GOTHIC_SPINES_0_EDGES, GOTHIC_SPINES_0_BOOKS},
-    {GOTHIC_SPINES_1, GOTHIC_SPINES_1_EDGES, GOTHIC_SPINES_1_BOOKS},
-    {GOTHIC_SPINES_2, GOTHIC_SPINES_2_EDGES, GOTHIC_SPINES_2_BOOKS},
-    {GOTHIC_SPINES_3, GOTHIC_SPINES_3_EDGES, GOTHIC_SPINES_3_BOOKS},
-};
 
 /*
  * A shelf of books from a0 to a1, standing on y under `clear` of headroom: each a leather box
@@ -64,7 +52,8 @@ static void books(Kit* kit, KitRng* rng, const KitFrame* f, float a0, float a1, 
             a += kit_rrange(rng, 0.03f, 0.14f);
             continue;
         }
-        const Strip* s = &STRIPS[(int)(kit_rnd(rng) * 4.0f) & 3];
+        const GothicStrip* s =
+            &GOTHIC_STRIPS[(int)(kit_rnd(rng) * (float)GOTHIC_STRIP_COUNT) % GOTHIC_STRIP_COUNT];
         const int i = (int)(kit_rnd(rng) * (float)s->books) % s->books;
         const float w = s->edges[i + 1] - s->edges[i];
         if (a + w > a1)
@@ -159,7 +148,7 @@ static void knob(Kit* kit, const KitFrame* f, float a, float y, float d, const v
 static void desk(Kit* kit, const KitFrame* f) {
     const float top = DESK_H, under = top - 0.045f, front = -0.36f, face = -0.372f;
     kit_frame_box(kit, f, MAT_MAHOGANY, -0.8f, 0.8f, under, top, -0.4f, 0.4f, false);
-    kit_frame_box(kit, f, MAT_LEATHER, -0.66f, 0.66f, top, top + 0.003f, -0.3f, 0.28f, false);
+    kit_frame_box(kit, f, MAT_LEATHER, -0.66f, 0.66f, top, DESK_TOP, -0.3f, 0.28f, false);
     const vec3 toward = {0.0f, 0.0f, -1.0f};
     const GothicSpec* fold = &GOTHICS[GOTHIC_PANEL_LINENFOLD];
     for (int s = -1; s <= 1; s += 2) {
@@ -228,7 +217,7 @@ static void chair(Kit* kit, const KitFrame* f) {
  * spot, without shadows, which the shade's own cut-off makes wide.
  */
 static void lamp(Kit* kit, Scene* scene, const KitFrame* f, float a, float d) {
-    const float y = DESK_H + 0.003f;
+    const float y = DESK_TOP;
     const vec2 column[] = {{0.0f, 0.0f},     {0.075f, 0.0f},  {0.075f, 0.012f}, {0.05f, 0.03f},
                            {0.016f, 0.045f}, {0.012f, 0.05f}, {0.009f, 0.33f},  {0.016f, 0.34f},
                            {0.016f, 0.36f},  {0.0f, 0.36f}};
@@ -256,7 +245,7 @@ static void lamp(Kit* kit, Scene* scene, const KitFrame* f, float a, float d) {
 
 // A brass candlestick `h` tall with an unlit candle burnt down to `wax`.
 static void candlestick(Kit* kit, const KitFrame* f, float a, float d, float h, float wax) {
-    const float y = DESK_H + 0.003f;
+    const float y = DESK_TOP;
     const vec2 stick[] = {{0.0f, 0.0f},       {0.055f, 0.0f},      {0.055f, 0.01f},
                           {0.035f, 0.025f},   {0.012f, 0.04f},     {0.01f, 0.08f},
                           {0.02f, 0.095f},    {0.01f, 0.11f},      {0.009f, h - 0.03f},
@@ -272,17 +261,14 @@ static void candlestick(Kit* kit, const KitFrame* f, float a, float d, float h, 
 // A card lying face up on the desk at (a, d), turned `yaw`, read from the sitter's side.
 static void lying(Kit* kit, const KitFrame* f, CardId id, float a, float d, float lift, float yaw,
                   float scale) {
-    vec3 at = {0.0f, 0.0f, 0.0f};
-    kit_frame_point(f, a, DESK_H + 0.003f + lift, d, at);
-    const KitFrame p = {{at[0], at[1], at[2]}, f->yaw + yaw};
-    const float w = scale * CARDS[id].size[0], h = scale * CARDS[id].size[1];
-    kit_frame_card(kit, &p, MAT_CARDS, (vec3){0.5f * w, 0.0f, -0.5f * h}, (vec3){-w, 0.0f, 0.0f},
-                   (vec3){0.0f, 0.0f, h}, CARDS[id].uv);
+    // The sitter is at -d, so the card's top is turned half round from the kit's default.
+    kit_frame_card_lying(kit, f, MAT_CARDS, CARDS[id].uv, scale * CARDS[id].size[0],
+                         scale * CARDS[id].size[1], a, DESK_TOP + lift, d, GLM_PIf - yaw);
 }
 
 // The journal lying open: leather boards, two page blocks, and a written page on each.
 static void journal(Kit* kit, const KitFrame* f, float a, float d) {
-    const float y = DESK_H + 0.003f;
+    const float y = DESK_TOP;
     kit_frame_box(kit, f, MAT_LEATHER, a - 0.18f, a + 0.18f, y, y + 0.005f, d - 0.125f, d + 0.125f,
                   false);
     const float pages = 0.022f; // the page blocks' top, over the boards' foot
@@ -304,7 +290,7 @@ static void desk_things(Kit* kit, Scene* scene, const KitFrame* f) {
     journal(kit, f, 0.0f, -0.12f);
     lying(kit, f, CARD_LETTER, 0.38f, -0.1f, 0.001f, 0.35f, 1.0f);
     lying(kit, f, CARD_NOTE, 0.3f, 0.06f, 0.002f, -0.2f, 1.0f);
-    const float y = DESK_H + 0.003f;
+    const float y = DESK_TOP;
     const vec2 well[] = {{0.0f, 0.0f},    {0.032f, 0.0f},   {0.032f, 0.035f}, {0.02f, 0.045f},
                          {0.012f, 0.05f}, {0.012f, 0.058f}, {0.0f, 0.058f}};
     kit_frame_lathe(kit, f, MAT_BLACK, -0.26f, 0.04f, y, well, KIT_COUNT(well), 12);

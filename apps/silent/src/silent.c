@@ -143,13 +143,12 @@ static Clock g_clock;
 static RainBed g_rain_bed;
 static Sounds g_sounds;
 
-// The doors that open, and the line that says what the action key would do. A door answers
-// when the eye is within DOOR_REACH of its leaf's middle and looking within DOOR_CONE of it.
-#define MAX_DOORS  4
+// The door that opens, and the line that says what the action key would do. It answers when
+// the eye is within DOOR_REACH of its leaf's middle and looking within DOOR_CONE of it.
 #define DOOR_REACH 1.9f
 #define DOOR_CONE  0.6f // radians
-static Door g_doors[MAX_DOORS];
-static int g_door_count;
+static Door g_door;
+static bool g_door_hung;
 static Prompt g_prompt;
 
 // --audio-dump: the offline mix, pulled a frame's worth at a time so it keeps
@@ -426,7 +425,7 @@ static void on_init(Game* game) {
     kit_finish(&kit, "world");
     printf("silent: %d colliders, %d vertices, %d of %d drip lines\n", kit.collider_count,
            kit.vertex_count, kit.drip_count, RAIN_DRIP_MAX);
-    g_door_count = house_doors(g_doors, MAX_DOORS, engine, g_scene, em, physics);
+    g_door_hung = house_front_door(&g_door, engine, g_scene, em, physics);
     prompt_start(&g_prompt, engine);
 
     // Sound: the clock's beat, the tubes' buzz, the fridge and the wind, each
@@ -516,8 +515,8 @@ static void on_init(Game* game) {
 
 static void on_update(Game* game, double dt) {
     player_update(&g_player, game, dt);
-    for (int i = 0; i < g_door_count; i++)
-        door_update(&g_doors[i], (float)dt);
+    if (g_door_hung)
+        door_update(&g_door, (float)dt);
     // Where the capsule is: the camera rides it, so from inside the frame a
     // player stopped by a wall and one walking on the spot look the same.
     if (g_args.trace_player && g_player.entity) {
@@ -592,17 +591,12 @@ static void on_pre_render(Game* game, double alpha) {
     vec3 eye = {0.0f, 0.0f, 0.0f}, forward = {0.0f, 0.0f, -1.0f};
     player_eye(&g_player, eye, forward);
 
-    // The nearest door the player is looking at says what the action key would do to it, and
+    // The door, if the player is looking at it, says what the action key would do to it, and
     // the key does it.
-    Door* door = NULL;
-    float nearest = FLT_MAX;
-    for (int i = 0; i < g_door_count; i++) {
-        const float dist = door_reach_distance(&g_doors[i], eye, forward, DOOR_REACH, DOOR_CONE);
-        if (dist < nearest) {
-            door = &g_doors[i];
-            nearest = dist;
-        }
-    }
+    Door* door =
+        g_door_hung && door_reach_distance(&g_door, eye, forward, DOOR_REACH, DOOR_CONE) < FLT_MAX
+            ? &g_door
+            : NULL;
     if (door && input_action_pressed(&game->input, "interact"))
         door_toggle(door);
     prompt_show(&g_prompt, !door                  ? NULL

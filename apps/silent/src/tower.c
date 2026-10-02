@@ -141,8 +141,7 @@ static void dress(Kit* kit, const KitFrame* f, const KitWall* w, int h0, int h1)
     const int brackets = (int)floorf((a1 - a0) / CORBEL_PITCH);
     for (int i = 0; i < brackets; i++) {
         const float a = a0 + (a1 - a0) * ((float)i + 0.5f) / (float)brackets;
-        kit_frame_box(kit, f, MAT_SIDING_DARK, a - 0.035f, a + 0.035f, cy, cy + 0.17f, sf,
-                      sf + 0.09f, false);
+        facade_box(kit, &s, MAT_SIDING_DARK, a - 0.035f, a + 0.035f, cy, cy + 0.17f, 0.09f);
     }
 }
 

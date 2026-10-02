@@ -75,4 +75,18 @@ static const float GOTHIC_SPINES_3_EDGES[] = {
     0.9238f, 0.9714f, 0.9929f, 1.0143f, 1.0405f, 1.0881f, 1.1452f};
 #define GOTHIC_SPINES_3_BOOKS 30
 
+// Every strip, for a shelf to pick from.
+typedef struct GothicStrip {
+    GothicId id;
+    const float* edges;
+    int books;
+} GothicStrip;
+#define GOTHIC_STRIP_COUNT 4
+static const GothicStrip GOTHIC_STRIPS[GOTHIC_STRIP_COUNT] = {
+    {GOTHIC_SPINES_0, GOTHIC_SPINES_0_EDGES, GOTHIC_SPINES_0_BOOKS},
+    {GOTHIC_SPINES_1, GOTHIC_SPINES_1_EDGES, GOTHIC_SPINES_1_BOOKS},
+    {GOTHIC_SPINES_2, GOTHIC_SPINES_2_EDGES, GOTHIC_SPINES_2_BOOKS},
+    {GOTHIC_SPINES_3, GOTHIC_SPINES_3_EDGES, GOTHIC_SPINES_3_BOOKS},
+};
+
 #endif // _SILENT_GOTHICS_H_

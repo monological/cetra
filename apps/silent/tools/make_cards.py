@@ -114,16 +114,20 @@ def to_array(img):
     return np.asarray(img.convert("RGB"), dtype=np.float32) / 255.0
 
 
+def noise(h, w, cell, rng):
+    """Smooth value noise in 0..1, `cell` pixels to a feature."""
+    small = rng.random((max(2, h // cell + 2), max(2, w // cell + 2))).astype(np.float32)
+    img = Image.fromarray((small * 255).astype(np.uint8)).resize((w, h), Image.Resampling.BICUBIC)
+    return np.asarray(img, dtype=np.float32) / 255.0
+
+
 def age_paper(a, rng, edge=0.18):
     """Darken toward the edges and lay a faint mottle, as handled paper goes."""
     h, w = a.shape[:2]
     y, x = np.mgrid[0:h, 0:w].astype(np.float32)
     d = np.minimum(np.minimum(x, w - 1 - x) / w, np.minimum(y, h - 1 - y) / h)
     a = a * (1.0 - edge * np.exp(-d / 0.04))[..., None]
-    mottle = to_array(Image.fromarray(
-        (rng.random((h // 16 + 2, w // 16 + 2)) * 255).astype(np.uint8)).resize(
-            (w, h), Image.Resampling.BICUBIC))[..., :1]
-    return a * (0.95 + 0.05 * mottle)
+    return a * (0.95 + 0.05 * noise(h, w, 16, rng)[..., None])
 
 
 def photo(name, hdri, cx, cy, span, fmt, rng):
@@ -458,10 +462,12 @@ def save_rough(rough, path, scale=ROUGH_SCALE):
         (w // scale, h // scale), Image.Resampling.BOX).save(path)
 
 
-def write_header(cards, spots, path=HEADER, prefix="CARD", kind="Card", picture="cards_albedo.png",
-                 tool="make_cards.py", atlas=(ATLAS_W, ATLAS_H), extra=()):
+def write_header(cards, spots, path=HEADER, prefix="CARD", picture="cards_albedo.png",
+                 atlas=(ATLAS_W, ATLAS_H), extra=()):
     """The header naming each card in a picture: an enum, and per card its UVs and its size
-    in metres, then any anchors the cards carry and any `extra` lines."""
+    in metres, then any anchors the cards carry and any `extra` lines. Its types are named for
+    the prefix, and it says it was made by the script that is running."""
+    kind, tool = prefix.capitalize(), os.path.basename(sys.argv[0])
     atlas_w, atlas_h = atlas
     guard = "_SILENT_%sS_H_" % prefix
     lines = [

@@ -28,54 +28,30 @@
 #define RUNNER_END (GOTHICS[GOTHIC_RUNNER_END].size[1])
 #define RUNNER_LEN (GOTHICS[GOTHIC_RUNNER].size[1])
 
-typedef struct Span {
-    float a0, a1;
-} Span;
+// A point in the hall and one in the great hall, in plan: which side of a wall a room's
+// dressing goes on is the side facing its point.
+#define HALL_AT_X  (0.5f * (HALL_X0 + HALL_X1))
+#define HALL_AT_Z  (0.5f * (BAND_Z0 + BAND_Z1))
+#define GREAT_AT_Z (0.5f * (GREAT_Z0 + GREAT_Z1))
 
 /*
- * The parts of a0..a1 clear of every hole reaching into the band y0..y1, in order. A hole
+ * One band of the panelling, y up `h`, standing `proud` off the face along a0..a1 where no hole
+ * reaches into it, and carved with `card` (GOTHIC_COUNT for plain) at `width` a card. A hole
  * stops the panelling at its own edges: one with a casing round it is passed grown by it.
- */
-static int clear_spans(float a0, float a1, float y0, float y1, const KitOpening* holes, int n,
-                       Span* out) {
-    Span blocked[KIT_MAX_OPENINGS + 1];
-    int nb = 0;
-    for (int i = 0; i < n; i++) {
-        const KitOpening* o = &holes[i];
-        if (o->bottom >= y1 || o->top + o->rise <= y0 || o->to <= a0 || o->from >= a1)
-            continue;
-        blocked[nb++] = (Span){fmaxf(o->from, a0), fminf(o->to, a1)};
-        for (int j = nb - 1; j > 0 && blocked[j].a0 < blocked[j - 1].a0; j--) {
-            const Span t = blocked[j];
-            blocked[j] = blocked[j - 1];
-            blocked[j - 1] = t;
-        }
-    }
-    int count = 0;
-    float cursor = a0;
-    for (int i = 0; i < nb; i++) {
-        if (blocked[i].a0 > cursor)
-            out[count++] = (Span){cursor, blocked[i].a0};
-        cursor = fmaxf(cursor, blocked[i].a1);
-    }
-    if (a1 > cursor)
-        out[count++] = (Span){cursor, a1};
-    return count;
-}
-
-/*
- * One band of the panelling, y up `h`, standing `proud` off the face along every clear span of
- * a0..a1, and carved with `card` (GOTHIC_COUNT for plain) at `width` a card. Returns its top.
+ * Returns its top.
  */
 static float band(Kit* kit, const Facade* s, float a0, float a1, float y, float h, float proud,
                   GothicId card, float width, const KitOpening* holes, int n) {
-    Span spans[KIT_MAX_OPENINGS + 2];
-    const int count = clear_spans(a0, a1, y, y + h, holes, n, spans);
+    vec2 blocked[KIT_MAX_OPENINGS + 1] = {{0.0f}}, spans[KIT_MAX_OPENINGS + 2];
+    int nb = 0;
+    for (int i = 0; i < n; i++)
+        if (holes[i].bottom < y + h && kit_opening_crown(&holes[i]) > y)
+            glm_vec2_copy((vec2){holes[i].from, holes[i].to}, blocked[nb++]);
+    const int count = kit_clear_spans(a0, a1, blocked, nb, spans);
     for (int i = 0; i < count; i++) {
-        kit_frame_box(kit, &s->f, MAT_MAHOGANY, spans[i].a0, spans[i].a1, y, y + h, s->face,
-                      s->face + s->out * proud, false);
-        if (card != GOTHIC_COUNT && spans[i].a1 - spans[i].a0 >= MIN_SPAN)
-            kit_frame_card_row(kit, &s->f, MAT_GOTHIC, GOTHICS[card].uv, spans[i].a0, spans[i].a1,
+        facade_box(kit, s, MAT_MAHOGANY, spans[i][0], spans[i][1], y, y + h, proud);
+        if (card != GOTHIC_COUNT && spans[i][1] - spans[i][0] >= MIN_SPAN)
+            kit_frame_card_row(kit, &s->f, MAT_GOTHIC, GOTHICS[card].uv, spans[i][0], spans[i][1],
                                y, y + h, s->face + s->out * PANEL_DEPTH, s->out, width);
     }
     return y + h;
@@ -110,7 +86,7 @@ static int cased(const KitWall* w, KitOpening* out) {
  * stone's. It runs on behind the hearth, buried in its stone.
  */
 static void lining(Kit* kit, const KitWall* w, float a0, float a1, float y0) {
-    const Facade s = facade_inner(w);
+    const Facade s = facade_toward(w, 0.0f, GREAT_AT_Z);
     KitWall stone = *w;
     stone.at = s.face + s.out * 0.015f;
     stone.from = a0;
@@ -132,7 +108,9 @@ static void hall(Kit* kit) {
     const KitWall* back = house_wall(HOUSE_WALL_GREAT_FRONT);
     KitOpening holes[KIT_MAX_OPENINGS];
 
-    const Facade w = facade_inner(west), e = facade_of(east), f = facade_inner(front);
+    const Facade w = facade_toward(west, HALL_AT_X, HALL_AT_Z);
+    const Facade e = facade_toward(east, HALL_AT_X, HALL_AT_Z);
+    const Facade f = facade_toward(front, HALL_AT_X, HALL_AT_Z);
     int n = cased(west, holes);
     wainscot(kit, &w, BAND_Z0, BAND_Z1, FLOOR_Y, true, holes, n);
     n = cased(east, holes);
@@ -142,12 +120,14 @@ static void hall(Kit* kit) {
     ornament_casing(kit, &w, MAT_MAHOGANY, &west->openings[OPENING_PARLOUR_DOOR]);
     ornament_casing(kit, &e, MAT_MAHOGANY, &east->openings[OPENING_KITCHEN_DOOR]);
     ornament_casing(kit, &f, MAT_MAHOGANY, &front->openings[OPENING_FRONT_DOOR]);
-    const Facade arch_hall = facade_inner(back), arch_great = facade_of(back);
+    const Facade arch_hall = facade_toward(back, HALL_AT_X, HALL_AT_Z);
+    const Facade arch_great = facade_toward(back, HALL_AT_X, GREAT_AT_Z);
     ornament_casing(kit, &arch_hall, MAT_MAHOGANY, &back->openings[OPENING_GREAT_ARCH]);
     ornament_casing(kit, &arch_great, MAT_MAHOGANY, &back->openings[OPENING_GREAT_ARCH]);
 
-    for (int i = 0; i < 4; i++) {
-        const float z = 10.6f + 0.9f * (float)i;
+    enum { BEAMS = 4 };
+    for (int i = 0; i < BEAMS; i++) {
+        const float z = BAND_Z0 + ((float)i + 0.5f) * (BAND_Z1 - BAND_Z0) / (float)BEAMS;
         kit_frame_box(kit, &KIT_WORLD, MAT_MAHOGANY, HALL_IN_X0, HALL_IN_X1, CEIL_Y - 0.14f, CEIL_Y,
                       z - 0.06f, z + 0.06f, false);
     }
@@ -180,16 +160,9 @@ static void truss(Kit* kit, float z) {
                       z - TRUSS_HALF, z + TRUSS_HALF, false);
         enum { SEG = 10 };
         vec2 brace[2 * (SEG + 1)];
-        const float bx = wall + inward * 1.5f, by = EAVE_Y - 1.5f;
-        int n = 0;
-        for (int i = 0; i <= SEG; i++) {
-            const float t = 0.5f * GLM_PIf * (float)i / SEG;
-            glm_vec2_copy((vec2){bx - inward * 1.5f * cosf(t), by + 1.22f * sinf(t)}, brace[n++]);
-        }
-        for (int i = SEG; i >= 0; i--) {
-            const float t = 0.5f * GLM_PIf * (float)i / SEG;
-            glm_vec2_copy((vec2){bx - inward * 1.34f * cosf(t), by + 1.06f * sinf(t)}, brace[n++]);
-        }
+        const vec2 c = {wall + inward * 1.5f, EAVE_Y - 1.5f};
+        const int n = kit_arc_band(c, -inward * 1.5f, 1.22f, -inward * 1.34f, 1.06f, 0.0f,
+                                   0.5f * GLM_PIf, SEG, brace);
         kit_frame_extrude(kit, w, MAT_MAHOGANY, brace, n, z - 0.07f, z + 0.07f);
     }
 }
@@ -205,7 +178,7 @@ static void great_hall(Kit* kit) {
     const KitWall* east = house_wall(HOUSE_WALL_EAST);
     const KitWall* front = house_wall(HOUSE_WALL_GREAT_FRONT);
 
-    const Facade w = facade_inner(west);
+    const Facade w = facade_toward(west, 0.0f, GREAT_AT_Z);
     const float top =
         wainscot(kit, &w, GREAT_Z0, GREAT_Z1, FLOOR_Y, true, west->openings, west->opening_count);
     lining(kit, west, GREAT_Z0, GREAT_Z1, top);
@@ -214,7 +187,7 @@ static void great_hall(Kit* kit) {
     KitWall dressed = *back;
     dressed.openings[dressed.opening_count++] =
         (KitOpening){HEARTH_X - HEARTH_HALF, HEARTH_X + HEARTH_HALF, FLOOR_Y, EAVE_Y};
-    const Facade b = facade_inner(back);
+    const Facade b = facade_toward(back, 0.0f, GREAT_AT_Z);
     wainscot(kit, &b, GREAT_X0, GREAT_X1, FLOOR_Y, true, dressed.openings, dressed.opening_count);
     lining(kit, back, GREAT_X0, GREAT_X1, top);
 
@@ -223,7 +196,7 @@ static void great_hall(Kit* kit) {
     dressed = *east;
     dressed.openings[dressed.opening_count++] =
         (KitOpening){GALLERY_Z1, STAIR_FOOT_Z, FLOOR_Y, FLOOR2_Y + 1.0f};
-    const Facade e = facade_inner(east);
+    const Facade e = facade_toward(east, 0.0f, GREAT_AT_Z);
     wainscot(kit, &e, GREAT_Z0, GREAT_Z1, FLOOR_Y, true, dressed.openings, dressed.opening_count);
     lining(kit, east, GREAT_Z0, GALLERY_Z1, top);
     lining(kit, east, GALLERY_Z1, STAIR_FOOT_Z, FLOOR_Y);
@@ -232,7 +205,7 @@ static void great_hall(Kit* kit) {
     // Under the gallery, across the hall's front either side of the cased arch.
     KitOpening holes[KIT_MAX_OPENINGS];
     const int n = cased(front, holes);
-    const Facade fr = facade_of(front);
+    const Facade fr = facade_toward(front, 0.0f, GREAT_AT_Z);
     wainscot(kit, &fr, GREAT_X0, GREAT_X1, FLOOR_Y, true, holes, n);
 
     truss(kit, TRUSS_Z0);
@@ -294,36 +267,40 @@ static void rug(Kit* kit) {
 }
 
 /*
+ * The next `len` of the stair's runner, from `corner` across `across` and along `up`: the
+ * stretch of the runner's picture after what is already laid, or from its start where the rest
+ * of the picture would not cover it.
+ */
+static void stair_runner(Kit* kit, float* laid, float len, const vec3 corner, const vec3 across,
+                         const vec3 up) {
+    const float* uv = GOTHICS[GOTHIC_RUNNER].uv;
+    float v = fmodf(*laid, RUNNER_LEN);
+    if (v + len > RUNNER_LEN)
+        v = 0.0f;
+    const float slice[4] = {uv[0], uv[1] + (uv[3] - uv[1]) * v / RUNNER_LEN, uv[2],
+                            uv[1] + (uv[3] - uv[1]) * (v + len) / RUNNER_LEN};
+    kit_frame_card(kit, &KIT_WORLD, MAT_GOTHIC, corner, across, up, slice);
+    *laid += len;
+}
+
+/*
  * The stair dressed: a runner up its middle, over each tread and up each riser, held by a brass
  * rod at every step; a balustrade up its open side between newels at its foot and its head;
  * and the gallery's balustrade from that head to the west wall.
  */
 static void stair_dressing(Kit* kit) {
     const float x0 = 0.5f * (STAIR_X0 + GREAT_X1) - 0.35f, x1 = x0 + 0.7f;
-    const float* uv = GOTHICS[GOTHIC_RUNNER].uv;
-    float along = 0.0f; // metres of runner laid, for where in its picture each piece comes from
+    const vec3 across = {x1 - x0, 0.0f, 0.0f};
+    float laid = 0.0f;
     for (int i = 1; i <= STAIR_RISERS; i++) {
         const float y_lo = FLOOR_Y + (float)(i - 1) * STAIR_RISE, y_hi = y_lo + STAIR_RISE;
         const float z_front = STAIR_FOOT_Z - (float)(i - 1) * STAIR_GOING;
-        const float pieces[2] = {STAIR_RISE, i < STAIR_RISERS ? STAIR_GOING : 0.0f};
-        for (int p = 0; p < 2; p++) {
-            if (pieces[p] <= 0.0f)
-                continue;
-            float v = fmodf(along, RUNNER_LEN);
-            if (v + pieces[p] > RUNNER_LEN)
-                v = 0.0f;
-            const float slice[4] = {uv[0], uv[1] + (uv[3] - uv[1]) * v / RUNNER_LEN, uv[2],
-                                    uv[1] + (uv[3] - uv[1]) * (v + pieces[p]) / RUNNER_LEN};
-            if (p == 0)
-                kit_frame_card(kit, &KIT_WORLD, MAT_GOTHIC, (vec3){x0, y_lo, z_front + 0.004f},
-                               (vec3){x1 - x0, 0.0f, 0.0f}, (vec3){0.0f, STAIR_RISE, 0.0f}, slice);
-            else
-                kit_frame_card(kit, &KIT_WORLD, MAT_GOTHIC, (vec3){x0, y_hi + 0.004f, z_front},
-                               (vec3){x1 - x0, 0.0f, 0.0f}, (vec3){0.0f, 0.0f, -STAIR_GOING},
-                               slice);
-            along += pieces[p];
-        }
+        stair_runner(kit, &laid, STAIR_RISE, (vec3){x0, y_lo, z_front + 0.004f}, across,
+                     (vec3){0.0f, STAIR_RISE, 0.0f});
+        // The last riser lands on the gallery: no tread of its own, and no rod.
         if (i < STAIR_RISERS) {
+            stair_runner(kit, &laid, STAIR_GOING, (vec3){x0, y_hi + 0.004f, z_front}, across,
+                         (vec3){0.0f, 0.0f, -STAIR_GOING});
             const float z = z_front - STAIR_GOING + 0.012f;
             const vec3 rod[2] = {{x0 - 0.04f, y_hi + 0.012f, z}, {x1 + 0.04f, y_hi + 0.012f, z}};
             kit_frame_pipe(kit, &KIT_WORLD, MAT_BRASS, rod, 2, 0.007f, 8);
@@ -367,7 +344,7 @@ static void gallery(Kit* kit) {
     const KitWall* front = house_wall(HOUSE_WALL_GREAT_FRONT);
     KitOpening holes[KIT_MAX_OPENINGS];
     const int n = cased(front, holes);
-    const Facade f = facade_of(front);
+    const Facade f = facade_toward(front, 0.0f, GREAT_AT_Z);
     wainscot(kit, &f, GREAT_X0, GREAT_X1, FLOOR2_Y, false, holes, n);
     for (int i = OPENING_STUDY_DOOR; i <= OPENING_BEDROOM_DOOR; i++)
         ornament_casing(kit, &f, MAT_MAHOGANY, &front->openings[i]);
@@ -379,8 +356,7 @@ void interior_build(Kit* kit) {
     gallery(kit);
     stair_dressing(kit);
     rug(kit);
-    const float hall_x = 0.5f * (HALL_X0 + HALL_X1);
-    runner(kit, (vec2){hall_x, HOUSE_FRONT_Z + 0.35f}, (vec2){hall_x, KITCHEN_BACK_Z - 0.1f},
+    runner(kit, (vec2){HALL_AT_X, HOUSE_FRONT_Z + 0.35f}, (vec2){HALL_AT_X, KITCHEN_BACK_Z - 0.1f},
            FLOOR_Y);
     const float gallery_z = 0.5f * (KITCHEN_BACK_Z + GALLERY_Z1);
     runner(kit, (vec2){GREAT_X0 + 0.4f, gallery_z}, (vec2){STAIR_X0 - 0.2f, gallery_z}, FLOOR2_Y);
