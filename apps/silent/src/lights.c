@@ -19,8 +19,8 @@
 static const float TUBE_COLOUR[3] = {0.80f, 1.0f, 0.84f};
 // Metres a tube reaches: the room's two across the kitchen and down the hall, and the hood's
 // only round the stove under it. A light index is spent on every cluster a tube's reach
-// touches, and three at nine metres, with the opening light probes sweep's views from inside
-// the kitchen, overflowed the cluster pool.
+// touches, and three tubes at nine metres overflowed the cluster pool in the irradiance
+// probes' opening sweep, whose views look out from inside the kitchen.
 #define TUBE_RANGE      9.0f
 #define TUBE_RANGE_HOOD 4.5f
 

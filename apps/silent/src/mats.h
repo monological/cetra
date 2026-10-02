@@ -63,12 +63,12 @@ typedef enum {
     MAT_SLATE,        // its fish-scale slate
     MAT_STONE,        // dressed grey ashlar: the hearth, the great hall, the gargoyles
     MAT_FOUNDATION,   // the rubble base under it all
-    MAT_IRON,         // cresting, finials, the hearth's irons: black paint gone dull
+    MAT_IRON,         // cresting, finials, straps, the fireback: black paint gone dull
     MAT_LEATHER,      // book covers, the desk's top
     MAT_MAHOGANY,     // panelling's stiles and rails, beams, trusses, doors' casings
     MAT_CARVED,       // gothic.h's carved panels and frieze, placed whole
     MAT_PERSIAN,      // gothic.h's rug and runners
-    MAT_STAINED,      // gothic.h's lancets: thin glass, its colour in the picture
+    MAT_STAINED,      // gothic.h's lancets: opaque, lit through by its own picture
     MAT_LEADED,       // diamond quarries in lead, laid by the metre
     MAT_SOOT,         // a firebox's blackened stone
     MAT_WAX,          // candles

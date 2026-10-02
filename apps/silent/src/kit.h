@@ -41,6 +41,8 @@
 #define KIT_ARCH_SEGMENTS 8    // segments in each half of an arch's head
 #define KIT_ARCH_POINTS   (2 * KIT_ARCH_SEGMENTS + 1)
 
+#define KIT_COUNT(arr) ((int)(sizeof(arr) / sizeof((arr)[0])))
+
 typedef struct Kit {
     Material* materials[KIT_MAX_MATERIALS];
     float repeat_m[KIT_MAX_MATERIALS]; // metres one texture repeat covers
@@ -67,11 +69,6 @@ typedef struct Kit {
  */
 typedef enum KitArchShape { KIT_ARCH_FLAT = 0, KIT_ARCH_POINTED, KIT_ARCH_TUDOR } KitArchShape;
 
-// The head over [a0, a1] in (a, y): KIT_ARCH_POINTS points from (a0, spring) over its apex,
-// `rise` above the springing line, to (a1, spring). FLAT runs straight across at `spring`.
-void kit_arch_outline(KitArchShape shape, float a0, float a1, float spring, float rise,
-                      vec2 out[KIT_ARCH_POINTS]);
-
 // A hole in a wall: [from, to] along the wall's axis, [bottom, top] in world Y. An arched one
 // springs at `top` and rises `rise` above it, so its head is cut into the wall over it.
 typedef struct KitOpening {
@@ -80,6 +77,12 @@ typedef struct KitOpening {
     KitArchShape arch;
     float rise;
 } KitOpening;
+
+// Whether the opening has a head above its springing line; a FLAT one, or one of no rise, has
+// a lintel at `top`.
+static inline bool kit_opening_arched(const KitOpening* o) {
+    return o->arch != KIT_ARCH_FLAT && o->rise > 0.0f;
+}
 
 #define KIT_OPENING_POINTS (KIT_ARCH_POINTS + 2)
 
@@ -139,8 +142,9 @@ void kit_tri_facing(Kit* kit, int mat, const vec3 a, const vec3 b, const vec3 c,
 void kit_polygon_facing(Kit* kit, int mat, const vec3* corners, int count, const vec3 outward);
 
 // A horizontal slab whose outline is `count` (x, z) corners, from y0 to y1. `collide` adds a
-// body for it, which is exact only for a CONVEX outline: one box per edge, reaching in to the
-// centroid.
+// body for it, one box per edge reaching in to the corners' average, which is exact only where
+// every corner is at least a right angle and that average lies inside every edge, as in a
+// regular polygon.
 void kit_slab(Kit* kit, int mat, const vec2* xz, int count, float y0, float y1, bool collide);
 
 // A box turned `yaw` radians about +Y. `collide` adds a static body for it.
@@ -181,16 +185,27 @@ void kit_frame_dir(const KitFrame* f, float a, float y, float d, vec3 out);
 // source -- dripping `rate` drops a second at the reference rain onto world Y `ground`.
 void kit_drip(Kit* kit, const KitFrame* f, const vec3 from, const vec3 to, float rate,
               float ground);
-// The box a0..a1 along, y0..y1 up, d0..d1 out.
+// The box a0..a1 along, y0..y1 up, d0..d1 out, each range in either order.
 void kit_frame_box(Kit* kit, const KitFrame* f, int mat, float a0, float a1, float y0, float y1,
                    float d0, float d1, bool collide);
-// A wall in frame `f`: see KitWall.
+// A wall in frame `f`: see KitWall. A wall is never grimed, whatever its materials: the seams
+// between the slabs it is cut into round its openings are edges nobody built.
 void kit_frame_wall(Kit* kit, const KitFrame* f, const KitWall* wall);
-// The frame an axis-aligned wall is drawn in, and the d of its middle there: what puts a
-// pane or a door in one of its openings.
-void kit_wall_frame(const KitWall* wall, KitFrame* f, float* at);
-// A pane of `mat` filling an opening of a wall `thick` through, 6 mm thick in the wall's
-// middle at d, and a body through the whole wall so nobody climbs through.
+
+// The frame a wall is drawn in, the d of its middle there, and which way along d (+1 or -1)
+// its inner side lies.
+typedef struct KitWallFrame {
+    KitFrame f;
+    float at;
+    int inner;
+} KitWallFrame;
+
+// An axis-aligned wall's: what puts a pane, a door or a dressing on it.
+KitWallFrame kit_wall_frame(const KitWall* wall);
+// A body filling an opening of a wall `thick` through, its middle at d, so nobody walks or
+// climbs through what fills it; an arch's head is solid to its crown.
+void kit_frame_plug(Kit* kit, const KitFrame* f, const KitOpening* o, float d, float thick);
+// A pane of `mat` 6 mm thick at d, filling an opening of a wall `thick` through, and its plug.
 void kit_frame_pane(Kit* kit, const KitFrame* f, int mat, const KitOpening* o, float d,
                     float thick);
 // A flat polygon of (a, y) corners at distance d, facing out (+d).
@@ -251,6 +266,13 @@ void kit_frame_lathe_on(Kit* kit, const KitFrame* f, int mat, const vec3 base, c
 // one picture, not a pattern.
 void kit_frame_card(Kit* kit, const KitFrame* f, int mat, const vec3 corner, const vec3 across,
                     const vec3 up, const float uv[4]);
+// A card of `uv` filling a0..a1 and y0..y1 at d, facing +d, or -d when `toward` is negative --
+// the right way up and round seen from the side it faces.
+void kit_frame_card_rect(Kit* kit, const KitFrame* f, int mat, const float uv[4], float a0,
+                         float a1, float y0, float y1, float d, float toward);
+// Cards of `uv` end to end across a0..a1 the same way, as many as come nearest `width` each.
+void kit_frame_card_row(Kit* kit, const KitFrame* f, int mat, const float uv[4], float a0, float a1,
+                        float y0, float y1, float d, float toward, float width);
 
 // Builds one mesh per used material under a node on the scene root.
 SceneNode* kit_finish(Kit* kit, const char* name);

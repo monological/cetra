@@ -44,7 +44,8 @@ void player_init(Player* p, Game* game, PhysicsWorld* physics, EntityManager* em
     CharacterControllerConfig cc = character_controller_default_config();
     cc.capsule_radius = CAPSULE_RADIUS;
     cc.capsule_half_height = CAPSULE_HALF_HEIGHT;
-    // Porch steps are 15 cm; a kerb is 15. Nothing in the world asks for more.
+    // The great hall's stair rises 19 cm a step, porch steps and kerbs 15: the stair is what
+    // this has to clear.
     cc.step_height = 0.25f;
     cc.max_slope_angle = glm_rad(45.0f);
     entity_add_character_controller(p->entity, physics, &cc);

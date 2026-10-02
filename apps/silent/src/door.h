@@ -25,8 +25,7 @@ typedef struct Door {
     vec3 hinge;
     float yaw;
     KitOpening shape; // the leaf's outline: a from the hinge (0..width), y in the world
-    float thick;
-    float swing; // radians it turns, toward +d, to stand open
+    float swing;      // radians it turns, toward +d, to stand open
     // How far along its swing it is, 0 shut .. 1 open, travelling toward `want`.
     float travel;
     float want;
@@ -35,7 +34,8 @@ typedef struct Door {
 
 // Builds the leaf as a node and a body of its own, shut, hung at `hinge`'s origin in its
 // frame. `shape`'s from/to are along the frame from the hinge, its bottom and top in world y.
-void door_build(Door* door, Engine* engine, Scene* scene, EntityManager* em, PhysicsWorld* physics,
+// False if it has no body, and is then no door.
+bool door_build(Door* door, Engine* engine, Scene* scene, EntityManager* em, PhysicsWorld* physics,
                 const char* name, const KitFrame* hinge, const KitOpening* shape, float thick,
                 float swing);
 
@@ -51,8 +51,9 @@ bool door_will_open(const Door* door);
 // Per fixed step: eases the leaf and moves its body and node.
 void door_update(Door* door, float dt);
 
-// How near the eye is to the middle of the leaf's face, and how squarely it looks at it:
-// a door in reach is within `reach` metres and less than `cone` radians off the view.
-bool door_in_reach(const Door* door, const vec3 eye, const vec3 forward, float reach, float cone);
+// How far the eye is from the middle of the leaf's face when the door is in reach -- within
+// `reach` metres and less than `cone` radians off the view -- and FLT_MAX when it is not.
+float door_reach_distance(const Door* door, const vec3 eye, const vec3 forward, float reach,
+                          float cone);
 
 #endif // _SILENT_DOOR_H_

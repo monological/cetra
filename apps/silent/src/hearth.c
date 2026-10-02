@@ -3,11 +3,8 @@
 #include "gothic.h"
 #include "hearth.h"
 #include "house.h"
-#include "houses.h"
 #include "layout.h"
 #include "mats.h"
-
-#define COUNT(arr) ((int)(sizeof(arr) / sizeof((arr)[0])))
 
 /*
  * The hearth's own frame: a along the back wall from its middle, increasing to the right as
@@ -16,7 +13,6 @@
 static const KitFrame HEARTH = {{HEARTH_X, 0.0f, GREAT_Z1}, GLM_PIf};
 
 #define HEARTH_TOP (FLOOR_Y + 0.06f) // the raised hearth's stone
-#define FRONT      0.92f             // how far that stone runs out, short of the rug
 #define JAMB_W     0.5f
 #define MOUTH      (HEARTH_HALF - JAMB_W) // half the firebox's mouth
 #define PIER_D     0.72f                  // the jambs' cores; their shafts stand on the fronts
@@ -30,7 +26,8 @@ static const KitFrame HEARTH = {{HEARTH_X, 0.0f, GREAT_Z1}, GLM_PIf};
 
 /*
  * The hood slopes back from behind the lower battlements to its own cornice; the breast above
- * it stands BREAST_D out, behind the trusses' tie beams, which stand 0.51 m off this wall.
+ * it stands BREAST_D out, behind the back truss's timbers, which come nearest this wall at
+ * GREAT_Z1 - TRUSS_Z1 - TRUSS_HALF.
  */
 #define HOOD_Y      4.75f
 #define HOOD_D0     (DEPTH - 0.06f)
@@ -49,13 +46,6 @@ static const KitFrame HEARTH = {{HEARTH_X, 0.0f, GREAT_Z1}, GLM_PIf};
 
 #define ARCADE      8 // pointed arches carved across the lintel's face
 #define ARCADE_HALF 1.6f
-
-// A box from a0 to a1 on side s, +1 to the right of the middle and -1 its mirror.
-static void box(Kit* kit, int mat, float s, float a0, float a1, float y0, float y1, float d0,
-                float d1, bool collide) {
-    kit_frame_box(kit, &HEARTH, mat, fminf(s * a0, s * a1), fmaxf(s * a0, s * a1), y0, y1, d0, d1,
-                  collide);
-}
 
 // A flat face through four (a, y, d) corners, facing `out`.
 static void face(Kit* kit, int mat, const vec3 p[4], const vec3 out) {
@@ -89,7 +79,7 @@ static void shaft(Kit* kit, float a, float d, float r) {
                             {1.62f * r, h - 0.02f},
                             {1.62f * r, h},
                             {0.0f, h}};
-    kit_frame_lathe(kit, &HEARTH, MAT_STONE, a, d, y0, profile, COUNT(profile), 14);
+    kit_frame_lathe(kit, &HEARTH, MAT_STONE, a, d, y0, profile, KIT_COUNT(profile), 14);
 }
 
 /*
@@ -98,18 +88,19 @@ static void shaft(Kit* kit, float a, float d, float r) {
  * mouth's top corner carrying the lintel's end. One body for all of it.
  */
 static void jamb(Kit* kit, float s) {
-    box(kit, MAT_STONE, s, MOUTH - 0.05f, HEARTH_HALF + 0.03f, HEARTH_TOP, HEARTH_TOP + PLINTH_H,
-        0.0f, DEPTH + 0.05f, false);
-    box(kit, MAT_STONE, s, MOUTH, HEARTH_HALF, HEARTH_TOP + PLINTH_H, LINTEL_Y0 - ABACUS_H, 0.0f,
-        PIER_D, false);
+    const KitFrame* f = &HEARTH;
+    kit_frame_box(kit, f, MAT_STONE, s * (MOUTH - 0.05f), s * (HEARTH_HALF + 0.03f), HEARTH_TOP,
+                  HEARTH_TOP + PLINTH_H, 0.0f, DEPTH + 0.05f, false);
+    kit_frame_box(kit, f, MAT_STONE, s * MOUTH, s * HEARTH_HALF, HEARTH_TOP + PLINTH_H,
+                  LINTEL_Y0 - ABACUS_H, 0.0f, PIER_D, false);
     const float mid = s * 0.5f * (MOUTH + HEARTH_HALF);
     shaft(kit, mid, DEPTH - 0.11f, 0.11f);
     shaft(kit, mid - 0.17f, PIER_D + 0.035f, 0.065f);
     shaft(kit, mid + 0.17f, PIER_D + 0.035f, 0.065f);
-    box(kit, MAT_STONE, s, MOUTH - 0.04f, HEARTH_HALF + 0.04f, LINTEL_Y0 - ABACUS_H, LINTEL_Y0,
-        0.0f, DEPTH + 0.08f, false);
-    box(kit, KIT_COLLIDER_ONLY, s, MOUTH - 0.05f, HEARTH_HALF + 0.04f, HEARTH_TOP, LINTEL_Y0, 0.0f,
-        DEPTH + 0.08f, true);
+    kit_frame_box(kit, f, MAT_STONE, s * (MOUTH - 0.04f), s * (HEARTH_HALF + 0.04f),
+                  LINTEL_Y0 - ABACUS_H, LINTEL_Y0, 0.0f, DEPTH + 0.08f, false);
+    kit_frame_box(kit, f, KIT_COLLIDER_ONLY, s * (MOUTH - 0.05f), s * (HEARTH_HALF + 0.04f),
+                  HEARTH_TOP, LINTEL_Y0, 0.0f, DEPTH + 0.08f, true);
 
     enum { SEG = 8 };
     vec2 corbel[SEG + 2];
@@ -135,7 +126,7 @@ static void lintel(Kit* kit) {
                          {DEPTH + 0.03f, y + 0.035f},
                          {DEPTH + 0.02f, y + 0.06f},
                          {DEPTH, y + 0.07f}};
-    kit_frame_run(kit, &HEARTH, MAT_STONE, bead, COUNT(bead), -HEARTH_HALF, HEARTH_HALF);
+    kit_frame_run(kit, &HEARTH, MAT_STONE, bead, KIT_COUNT(bead), -HEARTH_HALF, HEARTH_HALF);
     kit_frame_box(kit, &HEARTH, MAT_STONE, -ARCADE_HALF - 0.02f, ARCADE_HALF + 0.02f, y + 0.095f,
                   y + 0.12f, DEPTH, DEPTH + 0.03f, false);
 
@@ -151,7 +142,7 @@ static void lintel(Kit* kit) {
     for (int i = 0; i <= ARCADE; i++)
         kit_frame_lathe_on(kit, &HEARTH, MAT_STONE,
                            (vec3){-ARCADE_HALF + span * (float)i, y + 0.47f, DEPTH},
-                           (vec3){0.0f, 0.0f, 1.0f}, boss, COUNT(boss), 10);
+                           (vec3){0.0f, 0.0f, 1.0f}, boss, KIT_COUNT(boss), 10);
 
     kit_frame_box(kit, &HEARTH, MAT_STONE, -HEARTH_HALF - 0.03f, HEARTH_HALF + 0.03f, LINTEL_Y1,
                   LINTEL_Y1 + 0.05f, 0.0f, DEPTH + 0.03f, false);
@@ -173,8 +164,8 @@ static void battlements(Kit* kit, float y, float half, float front) {
     }
     for (int s = -1; s <= 1; s += 2)
         for (float d = front - 0.5f * MERLON_W - pitch; d - 0.5f * MERLON_W > 0.05f; d -= pitch)
-            box(kit, MAT_STONE, (float)s, half - MERLON_D, half, y, y + MERLON_H,
-                d - 0.5f * MERLON_W, d + 0.5f * MERLON_W, false);
+            kit_frame_box(kit, &HEARTH, MAT_STONE, (float)s * (half - MERLON_D), (float)s * half, y,
+                          y + MERLON_H, d - 0.5f * MERLON_W, d + 0.5f * MERLON_W, false);
 }
 
 // The point on the hood's face at a, `s` up its slope from the cornice, `lift` off it.
@@ -247,12 +238,10 @@ static void hood(Kit* kit) {
     int n = 0;
     glm_vec2_copy((vec2){-BREAST_HALF, HOOD_TOP}, breast[n++]);
     glm_vec2_copy((vec2){BREAST_HALF, HOOD_TOP}, breast[n++]);
-    glm_vec2_copy((vec2){BREAST_HALF, house_roof_y(HEARTH_X - BREAST_HALF) - ROOF_THICK},
-                  breast[n++]);
+    glm_vec2_copy((vec2){BREAST_HALF, house_roof_under_y(HEARTH_X - BREAST_HALF)}, breast[n++]);
     if (fabsf(ridge_a) < BREAST_HALF)
-        glm_vec2_copy((vec2){ridge_a, house_roof_y(0.0f) - ROOF_THICK}, breast[n++]);
-    glm_vec2_copy((vec2){-BREAST_HALF, house_roof_y(HEARTH_X + BREAST_HALF) - ROOF_THICK},
-                  breast[n++]);
+        glm_vec2_copy((vec2){ridge_a, house_roof_under_y(0.0f)}, breast[n++]);
+    glm_vec2_copy((vec2){-BREAST_HALF, house_roof_under_y(HEARTH_X + BREAST_HALF)}, breast[n++]);
     kit_frame_extrude(kit, &HEARTH, MAT_STONE, breast, n, 0.0f, BREAST_D);
 }
 
@@ -287,13 +276,13 @@ static void firebox(Kit* kit) {
     const float w = plate->size[0], h = plate->size[1];
     kit_frame_box(kit, &HEARTH, MAT_IRON, -0.5f * w - 0.01f, 0.5f * w + 0.01f, HEARTH_TOP,
                   HEARTH_TOP + h + 0.01f, back, back + 0.015f, false);
-    kit_frame_card(kit, &HEARTH, MAT_CARVED, (vec3){-0.5f * w, HEARTH_TOP + 0.005f, back + 0.016f},
-                   (vec3){w, 0.0f, 0.0f}, (vec3){0.0f, h, 0.0f}, plate->uv);
+    kit_frame_card_rect(kit, &HEARTH, MAT_CARVED, plate->uv, -0.5f * w, 0.5f * w,
+                        HEARTH_TOP + 0.005f, HEARTH_TOP + 0.005f + h, back + 0.016f, 1.0f);
 }
 
 void hearth_build(Kit* kit) {
     kit_frame_box(kit, &HEARTH, MAT_STONE, -HEARTH_HALF - 0.1f, HEARTH_HALF + 0.1f, FLOOR_Y,
-                  HEARTH_TOP, 0.0f, FRONT, true);
+                  HEARTH_TOP, 0.0f, HEARTH_FRONT, true);
     jamb(kit, -1.0f);
     jamb(kit, 1.0f);
     lintel(kit);
