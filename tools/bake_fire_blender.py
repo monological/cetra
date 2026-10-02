@@ -1,7 +1,7 @@
 """A log fire simulated and rendered in Blender, for a fire flipbook (spec 13.14).
 
     /Applications/Blender.app/Contents/MacOS/Blender -b --factory-startup \
-        -P tools/bake_fire_blender.py -- [--resolution 128 --frames 16]
+        -P tools/bake_fire_blender.py -- [--resolution 128 --frames 48]
     ... -- --render-only     # re-render the last bake, no re-simulation
     python3 tools/fire_flipbook.py out/fire_blender     # then the sheet
 
@@ -131,10 +131,14 @@ def fuel_texture(scale, cover):
     # - 0.5, and fuel follows only the positive part. So the intensity that puts zero at the
     # (1 - cover) quantile of the pattern is 1 minus that quantile at intensity 1.
     tex.intensity = 1.0
+    # Measured unclamped: clamped, every sample past 1 reads as 1 and a small cover's quantile
+    # lands among them.
+    tex.use_clamp = False
     rng = random.Random(7)
     samples = sorted(tex.evaluate((rng.uniform(-1, 1), rng.uniform(-1, 1), rng.uniform(-1, 1)))[3]
                      for _ in range(4000))
     tex.intensity = 1.0 - samples[int((1.0 - cover) * (len(samples) - 1))]
+    tex.use_clamp = True
     lit = sum(1 for _ in range(4000)
               if tex.evaluate((rng.uniform(-1, 1), rng.uniform(-1, 1), rng.uniform(-1, 1)))[3] > 0)
     print(f"fuel texture: intensity {tex.intensity:.3f}, {lit / 40:.0f}% of the pattern alight",
@@ -211,7 +215,12 @@ def fire_material(flame_gain):
     nodes.clear()
     out = nodes.new("ShaderNodeOutputMaterial")
     volume = nodes.new("ShaderNodeVolumePrincipled")
-    volume.inputs["Color"].default_value = (1.0, 1.0, 1.0, 1.0)
+    # Soot, which absorbs most of what it takes and scatters a quarter of it, the engine's
+    # smoke albedo: a white Color scatters everything and absorbs nothing.
+    volume.inputs["Color"].default_value = (0.25, 0.25, 0.25, 1.0)
+    # The ramp below IS the density. The node multiplies its Density by its Density Attribute,
+    # which defaults to the very field the ramp reads, and left set it squares the smoke away.
+    volume.inputs["Density Attribute"].default_value = ""
     volume.inputs["Temperature"].default_value = 885.0
 
     density = nodes.new("ShaderNodeAttribute")
@@ -297,6 +306,9 @@ def setup_render(scene, args):
 
 
 def render_frames(scene, warmup, frames):
+    if frames < 1:
+        # Before anything is written: an export of nothing would overwrite the last good one.
+        sys.exit(f"no frames to render after a warmup of {warmup}")
     frames_dir = os.path.join(OUT, "frames")
     os.makedirs(frames_dir, exist_ok=True)
     for k in range(frames):
@@ -344,8 +356,11 @@ def main():
         domain = bpy.data.objects["domain"]
         domain.data.materials[0] = fire_material(args.flame_gain)
         setup_render(scene, args)
-        end = domain.modifiers["Fluid"].domain_settings.cache_frame_end
-        render_frames(scene, args.warmup, min(args.frames, end - args.warmup))
+        # The warmup the bake was run with, and its frames, as it recorded them: a command line
+        # that differs would render spin-up frames or none.
+        warmup = int(scene.get("fire_warmup", args.warmup))
+        frames = min(args.frames, int(scene.get("fire_frames", args.frames)))
+        render_frames(scene, warmup, frames)
         return
 
     os.makedirs(OUT, exist_ok=True)
@@ -356,6 +371,8 @@ def main():
     scene = bpy.context.scene
     end = args.warmup + args.frames
     scene.frame_start, scene.frame_end = 1, end
+    scene["fire_warmup"] = args.warmup
+    scene["fire_frames"] = args.frames
 
     domain = setup_domain(args)
     texture = None if args.no_fuel_texture else fuel_texture(args.fuel_scale, args.fuel_cover)

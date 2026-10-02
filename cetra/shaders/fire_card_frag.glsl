@@ -14,6 +14,7 @@ in float vViewDepth;
 uniform sampler2D sheet;   // SRGB8_ALPHA8: premultiplied colour over the peak, coverage
 uniform ivec4 sheetLayout; // frames, columns, rows, unused
 uniform vec2 frameTexels;   // a frame's width and height in pixels
+uniform float sheetGutter;  // transparent pixels round each frame in the sheet
 uniform float framePos;     // this card's place in the loop, in frames
 uniform float peakNits;
 uniform float brightness;
@@ -35,12 +36,14 @@ out vec4 FragColor;
 // Metres over which a card fades into the surface behind it.
 const float FIRE_CARD_SOFT_DEPTH = 0.08;
 
-// A frame's texel in the sheet, held half a texel inside the frame so a neighbour never bleeds in.
+// A frame's texel in the sheet, held half a texel inside the frame so a neighbour never bleeds in
+// at full size; the gutter round each frame is what keeps one out as the sheet is minified.
 vec2 sheetUv(int f, vec2 uv) {
     vec2 inset = 0.5 / frameTexels;
     uv = clamp(uv, inset, 1.0 - inset);
+    vec2 cell = frameTexels + 2.0 * sheetGutter;
     vec2 tile = vec2(float(f % sheetLayout.y), float(f / sheetLayout.y));
-    return (tile + uv) / vec2(sheetLayout.yz);
+    return (tile * cell + sheetGutter + uv * frameTexels) / (cell * vec2(sheetLayout.yz));
 }
 
 void main() {

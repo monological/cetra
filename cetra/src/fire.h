@@ -137,6 +137,7 @@ typedef struct FireFlipbook {
     struct Texture* sheet;
     int frames, cols, rows;
     int width, height; // pixels a frame
+    int gutter;        // transparent pixels round each frame in the sheet
     float fps;
     float peak_nits;
     vec2 box;             // metres a frame spans, wide and tall

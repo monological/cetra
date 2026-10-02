@@ -14,7 +14,9 @@ first, as tools/bake_fire_blender.py exports them -- and:
     and a wood flame's luminance is of the order of 1e3-1e4;
   - packs the frames into one sheet, frame k at column k % cols of row k // cols, row 0 at the
     bottom -- the engine uploads a PNG's first row at v = 0 -- the colour sRGB-encoded against
-    the peak and the alpha the smoke's coverage;
+    the peak and the alpha the smoke's coverage, with --gutter transparent texels round every
+    frame: the sheet is mipmapped, and without them a card seen small filters its neighbours'
+    bright bases into its top edge;
   - writes a sidecar naming the sheet, with the layout, the fps, the peak, the size a frame spans
     in metres, and each frame's luminous intensity at that size (its luminance summed over each
     pixel's area) and centroid height, and the loop's colour, all of it from what the sheet holds.
@@ -89,6 +91,8 @@ def main():
     ap.add_argument("--width", type=int, default=256, help="a frame's width in the sheet, pixels")
     ap.add_argument("--peak-nits", type=float, default=4000.0,
                     help="the luminance the brightest texel stands for")
+    ap.add_argument("--gutter", type=int, default=8,
+                    help="transparent texels round each frame: 2^k keeps mip k clean")
     ap.add_argument("--publish", action="store_true", help="write into the asset tree")
     args = ap.parse_args()
 
@@ -96,8 +100,10 @@ def main():
         manifest = json.load(f)
     frames = np.load(os.path.join(args.bake, "frames.npy")).astype(np.float64)
     count = len(frames) - args.loop
-    if count < 1:
-        sys.exit(f"{len(frames)} frames leave none past a loop of {args.loop}")
+    if count < max(args.loop, 1):
+        # The loop's last frames fade into its first, so there must be as many before them.
+        sys.exit(f"{len(frames)} frames are too few for a loop of {args.loop}: "
+                 f"a bake needs at least {2 * max(args.loop, 1)}")
     frames = scale(crossfade(frames, count, args.loop), args.width)
     n, h, w, _ = frames.shape
 
@@ -119,6 +125,8 @@ def main():
     rgb8 = np.round(srgb_encode(nits / args.peak_nits) * 255.0)
     a8 = np.round(alpha * 255.0)
     rgba8 = np.concatenate([rgb8, a8[..., None]], axis=-1).astype(np.uint8)
+    g = max(args.gutter, 0)
+    rgba8 = np.pad(rgba8, ((0, 0), (g, g), (g, g), (0, 0)))
     cols = int(math.ceil(math.sqrt(n)))
     rows = int(math.ceil(n / cols))
     sheet_name, sidecar_name = f"{args.name}_color.png", f"{args.name}.json"
@@ -141,6 +149,7 @@ def main():
         "rows": rows,
         "width": w,
         "height": h,
+        "gutter": g,
         "fps": manifest["fps"],
         "peak_nits": args.peak_nits,
         "box": [round(float(v), 6) for v in metres],
