@@ -917,6 +917,23 @@ int kit_opening_outline(const KitOpening* o, vec2 out[KIT_OPENING_POINTS]) {
     return KIT_OPENING_POINTS;
 }
 
+KitOpening kit_opening_grow(const KitOpening* o, float w) {
+    KitOpening g = *o;
+    g.from -= w;
+    g.to += w;
+    const float half = 0.5f * (o->to - o->from);
+    if (o->arch == KIT_ARCH_FLAT || o->rise <= 0.0f) {
+        g.top += w;
+    } else if (o->arch == KIT_ARCH_POINTED) {
+        // Each arc keeps its centre and gains w of radius.
+        const float r = (half * half + o->rise * o->rise) / (2.0f * half);
+        g.rise = sqrtf((r + w) * (r + w) - (r - half) * (r - half));
+    } else {
+        g.rise += 0.6f * w;
+    }
+    return g;
+}
+
 // The frame a wall is drawn in: KitWall's own for kit_frame_wall, and for an axis-aligned one
 // the quarter turn that runs a along its axis, with `at` and `inner` restated along d.
 typedef struct WallFrame {
@@ -1106,6 +1123,53 @@ void kit_frame_extrude(Kit* kit, const KitFrame* f, int mat, const vec2* outline
         return;
     kit_frame_dir(f, 0.0f, 0.0f, d1 - d0, offset);
     extrude(kit, mat, base, count, offset);
+}
+
+void kit_frame_run(Kit* kit, const KitFrame* f, int mat, const vec2* profile, int count, float a0,
+                   float a1) {
+    if (count < 3 || count > KIT_MAX_OUTLINE)
+        return;
+    // A quarter turn: this frame's a runs along the old -d and its d along the old a, so the
+    // profile's (d, y) is (-a, y) here and the run is an extrusion along d.
+    const KitFrame g = {{f->origin[0], f->origin[1], f->origin[2]}, f->yaw + 0.5f * GLM_PIf};
+    vec2 outline[KIT_MAX_OUTLINE];
+    for (int i = 0; i < count; i++) {
+        outline[i][0] = -profile[i][0];
+        outline[i][1] = profile[i][1];
+    }
+    kit_frame_extrude(kit, &g, mat, outline, count, a0, a1);
+}
+
+void kit_frame_surround(Kit* kit, const KitFrame* f, int mat, const KitOpening* o, float w,
+                        bool head_only, float d0, float d1) {
+    const KitOpening g = kit_opening_grow(o, w);
+    if (o->arch == KIT_ARCH_FLAT || o->rise <= 0.0f) {
+        kit_frame_box(kit, f, mat, g.from, g.to, o->top, g.top, d0, d1, false);
+        if (head_only)
+            return;
+        kit_frame_box(kit, f, mat, g.from, o->from, o->bottom, o->top, d0, d1, false);
+        kit_frame_box(kit, f, mat, o->to, g.to, o->bottom, o->top, d0, d1, false);
+        return;
+    }
+    vec2 in[KIT_ARCH_POINTS], out[KIT_ARCH_POINTS];
+    kit_arch_outline(o->arch, o->from, o->to, o->top, o->rise, in);
+    kit_arch_outline(g.arch, g.from, g.to, g.top, g.rise, out);
+    // Each half as one polygon: up its inner edge to the inner crown, across to the outer
+    // crown and back down its outer edge -- with the jamb below, unless only the head.
+    const int n = KIT_ARCH_SEGMENTS;
+    vec2 half[2 * KIT_ARCH_SEGMENTS + 6];
+    for (int side = 0; side < 2; side++) {
+        int c = 0;
+        if (!head_only)
+            glm_vec2_copy((vec2){side ? o->to : o->from, o->bottom}, half[c++]);
+        for (int i = 0; i <= n; i++)
+            glm_vec2_copy(in[side ? 2 * n - i : i], half[c++]);
+        for (int i = n; i >= 0; i--)
+            glm_vec2_copy(out[side ? 2 * n - i : i], half[c++]);
+        if (!head_only)
+            glm_vec2_copy((vec2){side ? g.to : g.from, o->bottom}, half[c++]);
+        kit_frame_extrude(kit, f, mat, half, c, d0, d1);
+    }
 }
 
 void kit_frame_pane(Kit* kit, const KitFrame* f, int mat, const KitOpening* o, float d,

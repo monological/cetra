@@ -92,7 +92,7 @@ static const GrimeSpec GRIME[] = {
     {MAT_TABLE, 0.5f},        {MAT_STAINLESS, 0.5f}, {MAT_STEEL, 0.5f},    {MAT_GLASS_CLEAR, 0.35f},
     {MAT_GLASS_AMBER, 0.35f}, {MAT_PAPER, 0.35f},    {MAT_TOWEL, 0.4f},    {MAT_CUSHION, 0.5f},
     {MAT_CERAMIC, 0.4f},      {MAT_CASE, 0.45f},     {MAT_ROSEWOOD, 0.4f}, {MAT_MAPLE, 0.3f},
-    {MAT_BRASS, 0.5f},
+    {MAT_BRASS, 0.5f},        {MAT_STONE, 0.45f},    {MAT_IRON, 0.3f},
 };
 
 static float grime_of(int id) {
@@ -144,6 +144,11 @@ static const RainSpec RAIN[] = {
     {MAT_DARK_GLASS, -1.0f, .beads = RAIN_BEADS_ON},
     {MAT_GLASS_AMBER, -1.0f, .beads = RAIN_BEADS_OFF},
     {MAT_GLASS_CLEAR, -1.0f, .beads = RAIN_BEADS_OFF},
+    {MAT_SIDING_DARK, 0.25f},
+    {MAT_SLATE, 0.25f},
+    {MAT_STONE, 0.6f},
+    {MAT_FOUNDATION, 0.7f},
+    {MAT_IRON, 0.1f},
 };
 
 /*
@@ -157,7 +162,8 @@ static const MatSpec SPECS[MAT_COUNT] = {
     [MAT_CEILING] = {"ceiling", "white_plaster_rough_02", {0.75f, 0.75f, 0.72f}, 1.0f, 0.0f, 1.5f},
     [MAT_KITCHEN_FLOOR] =
         {"kitchen_floor", "worn_tile_floor", {0.95f, 1.0f, 0.97f}, 0.32f, 0.0f, 1.25f},
-    [MAT_WOOD_FLOOR] = {"wood_floor", "old_wood_floor", {1, 1, 1}, 0.8f, 0.0f, 2.0f},
+    // Old dark boards under lacquer: the Gothic house's hardwood (spec 13.13).
+    [MAT_WOOD_FLOOR] = {"wood_floor", "old_wooden_floor_02", {1, 1, 1}, 0.8f, 0.0f, 2.0f},
     [MAT_BACKSPLASH] = {"backsplash", "worn_tile_floor", {0.88f, 0.98f, 1.02f}, 0.45f, 0.0f, 0.6f},
     [MAT_ENAMEL] = {"enamel", "rusty_metal_02", {0.88f, 0.9f, 0.84f}, 0.8f, 0.0f, 1.0f},
     // The dirty-white wall scan again, yellowed and matte: old enamel that has
@@ -229,6 +235,18 @@ static const MatSpec SPECS[MAT_COUNT] = {
     // reflectance, darkened by tarnish.
     [MAT_BRASS] = {"brass", "Smear008", {0.72f, 0.58f, 0.3f}, 0.8f, 1.0f, 0.3f, true},
     [MAT_BULB] = {"bulb", NULL, {0.95f, 0.9f, 0.8f}, 0.2f, 0.0f, 1.0f},
+    // The Gothic house (spec 13.13), after a weathered charcoal Carpenter Gothic in fog: the
+    // boards laid upright, the battens the same paint, slates cut to fish scales. The paint is
+    // lifted from the scan's near-black -- about 0.012 linear -- to a weathered charcoal near
+    // 0.05, or every carving on the house is a silhouette in the fog.
+    [MAT_SIDING_DARK] =
+        {"siding_dark", "black_painted_planks", {4.0f, 4.0f, 4.0f}, 1.0f, 0.0f, 1.6f},
+    [MAT_SLATE] = {"slate", "RoofingTiles002", {1, 1, 1}, 1.0f, 0.0f, 1.5f},
+    [MAT_STONE] = {"castle_stone", "medieval_blocks_03", {1, 1, 1}, 1.0f, 0.0f, 2.0f},
+    [MAT_FOUNDATION] = {"foundation", "castle_wall_varriation", {1, 1, 1}, 1.0f, 0.0f, 2.0f},
+    // Wrought iron under black paint: the painted-metal scan's wear, taken dark.
+    [MAT_IRON] = {"iron", "PaintedMetal001", {0.07f, 0.07f, 0.07f}, 0.6f, 0.0f, 0.5f},
+    [MAT_LEATHER] = {"leather", "brown_leather", {1, 1, 1}, 0.7f, 0.0f, 0.4f},
 };
 
 static Texture* load(TexturePool* pool, const char* set, const char* map, TextureDesc desc) {
