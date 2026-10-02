@@ -508,6 +508,7 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
             // specular must stay inline or it is silently discarded.
             uniform_set_int(u, "splitAmbientSpec",
                             engine->spec_this_frame && !alpha_pass && !engine->capturing ? 1 : 0);
+            uniform_set_int(u, "captureDiffuseOnly", engine->capturing ? 1 : 0);
             // The jittered alpha lookup (spec 11.101) is live only while TAA
             // accumulates -- with no accumulator its per-frame noise arrives
             // raw -- and never in a capture, where a probe would bake one
@@ -638,8 +639,8 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
             // probe this rebinds the IBL prefilter unit to its capture, exactly
             // as it always did; above one the atlas and the froxel masks answer
             // instead and the prefilter unit keeps the global environment the
-            // blend falls back to. A set joins the scene only after every probe
-            // has captured, so the capture pass itself never consumes one.
+            // blend falls back to. A set is inert until every probe has
+            // captured, so the capture pass itself never consumes one.
             probe_set_bind(scene ? scene->probe_set : NULL, program);
 
             // Indirect diffuse from the probe grid, replacing the flat
