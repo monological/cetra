@@ -2,7 +2,8 @@
 
     /Applications/Blender.app/Contents/MacOS/Blender -b --factory-startup \
         -P tools/bake_fire_blender.py -- [--resolution 128 --frames 16]
-    ... -- --render-only [--exposure -1]     # re-render the last bake, no re-simulation
+    ... -- --render-only     # re-render the last bake, no re-simulation
+    python3 tools/fire_flipbook.py out/fire_blender     # then the sheet
 
 Builds its own scene from nothing, so nothing in a user's Blender reaches it, after the way a log
 fire is commonly built in Blender's Mantaflow:
@@ -18,13 +19,18 @@ fire is commonly built in Blender's Mantaflow:
     quarters of real time, which reads as a calmer fire.
 
 Rendered in Cycles from in front through an orthographic camera onto a transparent film, so a
-frame's alpha is how much the smoke covers, through Blender's AgX view to 8-bit RGBA PNG -- what a
-camera makes of it, a hot core compressing to yellow-white as it does on film.
+frame's alpha is how much the smoke covers, to OpenEXR in linear light with no view transform:
+the engine tone maps the fire with the rest of its frame, so a picture tone mapped here would be
+tone mapped twice. The frames are then read back in Blender's own Python, which reads EXR where
+the system's may not, into frames.npy -- premultiplied RGBA, rows bottom first -- beside a
+manifest.json saying what they are, which tools/fire_flipbook.py turns into a sheet.
 
-Writes to out/fire_blender/: the bake cache, frames/, and fire_bake.blend to open and look at.
+Writes to out/fire_blender/: the bake cache, frames/, frames.npy, manifest.json, and
+fire_bake.blend to open and look at.
 """
 
 import argparse
+import json
 import math
 import os
 import random
@@ -44,11 +50,17 @@ LOGS = [(-0.075, 0.06, 0.06, 0.64), (0.075, 0.06, 0.06, 0.60), (0.0, 0.147, 0.05
 # How much larger than its log a source cylinder is, and how far it is raised, in log radii.
 SOURCE_GROWTH = 1.2
 SOURCE_RAISE = 0.35
-# The fuel source along the crevice between the floor logs, in metres.
-CREVICE_RADIUS = 0.015
 # What the camera frames: the full width, from the floor logs' centre line up.
 FRAME_BOTTOM = 0.06
 FRAME_HEIGHT = 0.75
+FPS = 30
+
+# What a sheet made from these frames credits: cetra's own work, under its licence.
+PROVENANCE = {
+    "source": "tools/bake_fire_blender.py",
+    "credit": "Simulated and rendered in Blender by cetra's tools/bake_fire_blender.py",
+    "license": "MIT, as cetra",
+}
 
 
 def args_after_dashes():
@@ -61,7 +73,6 @@ def args_after_dashes():
     ap.add_argument("--frames", type=int, default=80, help="frames kept, the loop's overlap included")
     ap.add_argument("--width", type=int, default=512, help="rendered frame width in pixels")
     ap.add_argument("--samples", type=int, default=64)
-    ap.add_argument("--exposure", type=float, default=0.0, help="stops, into the AgX view")
     ap.add_argument("--flame-gain", type=float, default=20.0,
                     help="blackbody intensity per unit of the flame field")
     ap.add_argument("--no-fuel-texture", action="store_true",
@@ -70,8 +81,6 @@ def args_after_dashes():
                     help="size of the fuel texture's patches, in its own units over a log")
     ap.add_argument("--fuel-cover", type=float, default=0.25,
                     help="share of the fuel texture that gives off fuel at all")
-    ap.add_argument("--no-crevice", action="store_true",
-                    help="no fuel from the crevice between the floor logs")
     ap.add_argument("--render-only", action="store_true",
                     help="re-render the last bake from out/fire_blender/fire_bake.blend")
     argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
@@ -143,15 +152,6 @@ def make_source(index, y, z, radius, length, texture):
     set_fuel(source, index, texture)
 
 
-def make_crevice(index, texture):
-    """Fuel from the crevice between the two floor logs, under the third: where logs touch is
-    where a fire burns hardest, and its flames come out round the log above."""
-    y0, z0, r0, length = LOGS[0]
-    source = cylinder_along_x(f"crevice_{index}", 0.0, z0 + 0.25 * r0, CREVICE_RADIUS,
-                              length * 0.8, 12)
-    set_fuel(source, index, texture)
-
-
 def set_fuel(source, index, texture):
     mod = source.modifiers.new("Fluid", "FLUID")
     mod.fluid_type = "FLOW"
@@ -175,7 +175,7 @@ def set_fuel(source, index, texture):
         driver.expression = f"{0.37 * index:.2f} + frame * {0.7 / 150:.6f}"
 
 
-def setup_domain(scene, args):
+def setup_domain(args):
     domain = box_object("domain", DOMAIN_MIN, DOMAIN_MAX)
     mod = domain.modifiers.new("Fluid", "FLUID")
     mod.fluid_type = "DOMAIN"
@@ -278,14 +278,14 @@ def setup_render(scene, args):
     scene.cycles.caustics_refractive = False
     scene.cycles.seed = 0
     scene.render.film_transparent = True
-    scene.view_settings.view_transform = "AgX"
+    scene.view_settings.view_transform = "Standard"
     scene.view_settings.look = "None"
-    scene.view_settings.exposure = args.exposure
+    scene.view_settings.exposure = 0.0
     fmt = scene.render.image_settings
-    fmt.file_format = "PNG"
+    fmt.file_format = "OPEN_EXR"
     fmt.color_mode = "RGBA"
-    fmt.color_depth = "8"
-    scene.render.fps = 30
+    fmt.color_depth = "32"
+    scene.render.fps = FPS
     # A new world renders through a Background node of its own, grey, whatever its colour says.
     world = scene.world or bpy.data.worlds.new("black")
     scene.world = world
@@ -301,9 +301,36 @@ def render_frames(scene, warmup, frames):
     os.makedirs(frames_dir, exist_ok=True)
     for k in range(frames):
         scene.frame_set(warmup + 1 + k)
-        scene.render.filepath = os.path.join(frames_dir, f"frame_{k:04d}.png")
+        scene.render.filepath = os.path.join(frames_dir, f"frame_{k:04d}.exr")
         bpy.ops.render.render(write_still=True)
         print(f"rendered {k + 1}/{frames}", flush=True)
+    export_frames(scene, frames)
+
+
+def export_frames(scene, frames):
+    """The rendered frames as tools/fire_flipbook.py reads them: frames.npy, every frame's
+    premultiplied RGBA in linear light with its rows bottom first, which is Blender's own pixel
+    order, and manifest.json, what they are and where they came from."""
+    import numpy as np
+
+    stack = None
+    for k in range(frames):
+        img = bpy.data.images.load(os.path.join(OUT, "frames", f"frame_{k:04d}.exr"))
+        w, h = img.size
+        px = np.empty(w * h * 4, dtype=np.float32)
+        img.pixels.foreach_get(px)
+        bpy.data.images.remove(img)
+        if stack is None:
+            stack = np.empty((frames, h, w, 4), dtype=np.float32)
+        stack[k] = px.reshape(h, w, 4)
+    np.save(os.path.join(OUT, "frames.npy"), stack)
+    width = DOMAIN_MAX[0] - DOMAIN_MIN[0]
+    manifest = dict(PROVENANCE, frames=frames, fps=float(scene.render.fps),
+                    metres=[width, width * scene.render.resolution_y / scene.render.resolution_x])
+    with open(os.path.join(OUT, "manifest.json"), "w") as f:
+        json.dump(manifest, f, indent=1)
+        f.write("\n")
+    print(f"exported {frames} frames of {stack.shape[2]}x{stack.shape[1]}", flush=True)
 
 
 def main():
@@ -330,13 +357,11 @@ def main():
     end = args.warmup + args.frames
     scene.frame_start, scene.frame_end = 1, end
 
-    domain = setup_domain(scene, args)
+    domain = setup_domain(args)
     texture = None if args.no_fuel_texture else fuel_texture(args.fuel_scale, args.fuel_cover)
     for i, log in enumerate(LOGS):
         make_log(i, *log)
         make_source(i, *log, texture)
-    if not args.no_crevice:
-        make_crevice(len(LOGS), texture)
     setup_camera(scene, args)
     setup_render(scene, args)
     bpy.ops.wm.save_as_mainfile(filepath=blend)
