@@ -271,8 +271,8 @@ static void journal(Kit* kit, const KitFrame* f, float a, float d) {
  */
 static void desk_things(Kit* kit, Scene* scene, const KitFrame* f) {
     lamp(kit, scene, f, -0.66f, 0.2f);
-    candle_build(kit, f, CANDLE_STICK, 0.62f, DESK_TOP, 0.2f, 0.14f);
-    candle_build(kit, f, CANDLE_STICK, 0.48f, DESK_TOP, 0.26f, 0.09f);
+    candle_stick(kit, f, 0.62f, DESK_TOP, 0.2f, 0.14f);
+    candle_stick(kit, f, 0.48f, DESK_TOP, 0.26f, 0.09f);
     journal(kit, f, 0.0f, -0.12f);
     lying(kit, f, CARD_LETTER, 0.38f, -0.1f, 0.001f, 0.35f, 1.0f);
     lying(kit, f, CARD_NOTE, 0.3f, 0.06f, 0.002f, -0.2f, 1.0f);
@@ -334,15 +334,8 @@ void study_build(Kit* kit, Scene* scene, unsigned int seed) {
     // Along the east wall from the front corner to the back: four bays, and the ladder.
     const KitFrame east = {{EAST_X, FLOOR2_Y, BAND_Z0}, -0.5f * GLM_PIf};
     const float east_len = BAND_Z1 - BAND_Z0;
-    const int east_bays = 4;
-    bookcase(kit, &rng, &east, 0.0f, east_len, east_bays);
+    bookcase(kit, &rng, &east, 0.0f, east_len, 4);
     ladder(kit, &east, 2.4f, 0.0f, east_len);
-    // A chamberstick under the arch of each end bay, on the top shelf, which holds no books: a
-    // pair bracketing the case.
-    const float end_bay = 0.5f * east_len / (float)east_bays,
-                shelf = PLINTH + SHELVES * SHELF_PITCH;
-    candle_build(kit, &east, CANDLE_CHAMBER, end_bay, shelf, 0.5f * CASE_D, 0.1f);
-    candle_build(kit, &east, CANDLE_CHAMBER, east_len - end_bay, shelf, 0.5f * CASE_D, 0.11f);
 
     // The doorway's casing on this side, and along the back from the west corner to 4 cm short
     // of it, and down the west wall from in front of that one to the tower.

@@ -433,8 +433,10 @@ static void on_init(Game* game) {
     kit_finish(&kit, "world");
     printf("silent: %d colliders, %d vertices, %d of %d drip lines, %d candles\n",
            kit.collider_count, kit.vertex_count, kit.drip_count, RAIN_DRIP_MAX, kit.wick_count);
-    if (!g_args.no_candles)
-        candles_light(g_scene, &kit);
+    if (!g_args.no_candles) {
+        g_scene->fire = create_fire_system();
+        candles_light(g_scene->fire, g_scene, &kit);
+    }
     g_door_hung = house_front_door(&g_door, engine, g_scene, em, physics);
     prompt_start(&g_prompt, engine);
 

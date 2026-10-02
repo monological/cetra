@@ -36,6 +36,7 @@ enum {
     OPENING_STUDY_DOOR = 1,     // the study's doorway, open,
     OPENING_BOX_ROOM_DOOR = 2,  // and the two shut off the gallery
     OPENING_BEDROOM_DOOR = 3,
+    OPENING_STAIR_LANCET = 0, // HOUSE_WALL_EAST: over the stair
 };
 
 const KitWall* house_wall(HouseWall which);

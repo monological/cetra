@@ -44,7 +44,7 @@
 
 #define KIT_COUNT(arr) ((int)(sizeof(arr) / sizeof((arr)[0])))
 
-// A candle's wick, in world space, and the flame it burns as a multiple of a taper's.
+// A wick, in world space, and the flame it burns as a multiple of the fire's default FLAME.
 typedef struct KitWick {
     vec3 tip;
     float size;
@@ -68,7 +68,7 @@ typedef struct Kit {
     RainDripLine drips[RAIN_DRIP_MAX];
     int drip_count;
 
-    // The wicks a flame burns on (spec 13.15), in world space, for the fire to take.
+    // The candles' wicks (spec 13.15), in world space, each to burn a flame on.
     KitWick wicks[FIRE_MAX];
     int wick_count;
 } Kit;
