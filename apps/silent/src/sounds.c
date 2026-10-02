@@ -1,8 +1,8 @@
 #include <math.h>
 #include <stdio.h>
 
+#include "house.h"
 #include "kitchen.h"
-#include "layout.h"
 #include "sounds.h"
 
 // Every loop is levelled alike by tools/fetch_sounds.py, so these are the
@@ -34,10 +34,7 @@ static Sound* loop(AudioSystem* audio, const char* path) {
  * listener standing in it is half outside, which is right.
  */
 static float inside_target(const vec3 eye) {
-    const float cx = 0.5f * (HOUSE_X0 + HOUSE_X1), cz = 0.5f * (HOUSE_FRONT_Z + HOUSE_BACK_Z);
-    const float hx = 0.5f * (HOUSE_X1 - HOUSE_X0), hz = 0.5f * (HOUSE_BACK_Z - HOUSE_FRONT_Z);
-    const float out = fmaxf(fabsf(eye[0] - cx) - hx, fabsf(eye[2] - cz) - hz);
-    return glm_smoothstep(0.5f * WALL_BLEND, -0.5f * WALL_BLEND, out);
+    return glm_smoothstep(0.5f * WALL_BLEND, -0.5f * WALL_BLEND, house_outside_distance(eye));
 }
 
 void sounds_start(Sounds* sounds, AudioSystem* audio, const vec3 eye) {

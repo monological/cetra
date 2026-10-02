@@ -6,21 +6,34 @@
  * at z = 0; the player's house stands on the +z side, its front wall facing the
  * road. Wall coordinates are wall CENTRE lines.
  *
- *     z
- *     ^   back wall (HOUSE_BACK_Z)
- *     |  +---------------+-----+-------------+
- *     |  |  living room  |hall |  back room  |
- *     |  |               |     +-------------+  KITCHEN_BACK_Z
- *     |  |               |     =  kitchen    |
- *     |  +----[win]------+-[d]-+---[window]--+  HOUSE_FRONT_Z
- *     |                  porch
+ * Two storeys (spec 13.13). The front band holds the parlour, the hall and the
+ * kitchen below, and the study, a box room and a bedroom above; behind it the
+ * great hall rises through both, open to the roof, with the stair up its east
+ * wall to a gallery along its front. An octagonal tower stands on the front
+ * corner west of the door, the parlour's bay below and the study's above.
+ *
+ *     z            ground floor                         upper floor
+ *     ^   +-----------------------------+    +-----------------------------+
+ *     |   |   great hall     [hearth]   |    |    (open to the roof)       |
+ *     |   |                           S |    |                             |
+ *     |   |                           S |    |========= gallery ==========S|
+ *     |   +---------+==arch==+----------+    +---------+---------+---------+
+ *     |  /  parlour |  hall  =  kitchen |   /  study   | box rm  | bedroom |
+ *     | (  tower    |        |          |  (  tower    |         |         |
+ *     |  \          |        |          |   \          |         |         |
+ *     |   +---------+--[d]---+--[win]---+    +---------+---------+---------+
+ *     |                porch                       S = the stair
  *     |  ======================= sidewalk
  *     |  -----------------------  road (centre z = 0)
  *     +--------------------------------------------> x
  */
 
-#define FLOOR_Y 0.30f // the house floor; the porch is level with it
-#define CEIL_Y  2.90f
+#define FLOOR_Y  0.30f // the house floor; the porch is level with it
+#define CEIL_Y   2.90f // the ground storey's ceiling
+#define FLOOR2_Y 3.15f // the upper floor; its boards and joists fill CEIL_Y..FLOOR2_Y
+#define CEIL2_Y  5.75f // the upper storey's ceiling
+#define EAVE_Y   5.90f // where the walls stop and the roof starts
+#define SLAB     0.12f // a ceiling's thickness under a floor or the attic
 
 #define EXT_WALL 0.18f // exterior wall thickness
 #define INT_WALL 0.10f // interior
@@ -28,11 +41,12 @@
 #define HOUSE_X0      (-5.0f)
 #define HOUSE_X1      5.0f
 #define HOUSE_FRONT_Z 10.0f
-#define HOUSE_BACK_Z  16.0f
+#define HOUSE_BACK_Z  19.5f
 
-#define HALL_X0 (-1.5f) // the hall runs front to back between these
+#define HALL_X0 (-1.5f) // the hall runs from the front door to the great hall between these
 #define HALL_X1 0.0f    // and this is also the kitchen's west wall
 
+// The front band's back wall, which is the great hall's front.
 #define KITCHEN_BACK_Z 13.8f
 
 // The kitchen window, in the front wall, and the front door.
@@ -60,6 +74,39 @@
 // hangs over.
 #define STOVE_RUN_Z (KITCHEN_DOOR_Z0 - 0.2f)
 #define STOVE_Z     (STOVE_RUN_Z - 1.12f)
+
+// The great hall's inner faces.
+#define GREAT_X0 (HOUSE_X0 + 0.5f * EXT_WALL)
+#define GREAT_X1 (HOUSE_X1 - 0.5f * EXT_WALL)
+#define GREAT_Z0 (KITCHEN_BACK_Z + 0.5f * INT_WALL)
+#define GREAT_Z1 (HOUSE_BACK_Z - 0.5f * EXT_WALL)
+
+// The gallery along the great hall's front at the upper floor, out to its rail.
+#define GALLERY_Z1 15.05f
+
+// The stair up the great hall's east wall: STAIR_RISERS of STAIR_RISE from the
+// floor to the gallery, climbing toward -z and landing at its edge. Its going
+// leaves room at its foot, by the back wall, to stand and face up it.
+#define STAIR_X0     3.9f
+#define STAIR_RISERS 15
+#define STAIR_RISE   ((FLOOR2_Y - FLOOR_Y) / (float)STAIR_RISERS)
+#define STAIR_GOING  0.25f
+#define STAIR_FOOT_Z (GALLERY_Z1 + (float)(STAIR_RISERS - 1) * STAIR_GOING)
+
+// The hearth, centred on the back wall on the hall's axis, so it is what the
+// arch frames as you come down the hall.
+#define HEARTH_X (0.5f * (HALL_X0 + HALL_X1))
+
+// The tower: a regular octagon centred on the front corner west of the door,
+// its faces' centre lines TOWER_APOTHEM from the middle. The house's front and
+// west walls butt into the middles of its east and north faces.
+#define TOWER_X       HOUSE_X0
+#define TOWER_Z       HOUSE_FRONT_Z
+#define TOWER_APOTHEM 2.3f
+#define TOWER_HALF    (TOWER_APOTHEM * 0.41421356f) // half a face: apothem x tan 22.5
+#define TOWER_TOP     9.6f                          // the walls' top, under the spire
+#define TOWER_CEIL_Y  9.0f                          // the study's tower bay rises to this
+#define TOWER_SPIRE_Y 15.5f
 
 #define PORCH_X0 (-2.4f)
 #define PORCH_X1 0.8f

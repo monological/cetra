@@ -11,6 +11,11 @@
  */
 
 #define ROOF_PITCH 0.36f // a roof's rise, as a fraction of the house's depth
+#define ROOF_THICK 0.1f  // a roof slope's, its fascia hanging this far under its edge
+// Drops a second a metre of bare eave and of porch roof edge drips at the reference rain:
+// far below the hundred and more a real eave sheds, which is a sheet rather than drips.
+#define EAVE_DRIPS_PER_M  0.6f
+#define PORCH_DRIPS_PER_M 1.0f
 
 // A pitched roof over a box: two slopes and the two gable ends, the ridge
 // running along the facade, overhanging by `overhang` all round. The frame's

@@ -5,11 +5,6 @@
 
 #define FLOOR_RISE 0.45f // foundation: the ground floor sits this far up
 #define STOREY_H   2.7f
-#define ROOF_THICK 0.1f // a roof slope's, its fascia hanging this far under its edge
-// Drops a second a metre of bare eave and of porch roof edge drips at the reference rain:
-// far below the hundred and more a real eave sheds, which is a sheet rather than drips.
-#define EAVE_DRIPS_PER_M  0.6f
-#define PORCH_DRIPS_PER_M 1.0f
 
 // An edge's drips along a in [a0, a1] at (y, d), `per_m` drops a second a metre of it, if
 // there is enough of it to drip from.

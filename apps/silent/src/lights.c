@@ -26,7 +26,8 @@ static const float TUBE_COLOUR[3] = {0.80f, 1.0f, 0.84f};
  * so the clock opposite the door reads from the doorway and the hall stays
  * dim. Warm, the way a filament is beside a fluorescent tube.
  */
-static const vec3 BULB_AT = {-0.75f, CEIL_Y - 0.5f, 13.75f};
+// Opposite the clock, short of the arch into the great hall.
+static const vec3 BULB_AT = {-0.75f, CEIL_Y - 0.5f, 13.15f};
 #define BULB_CANDELA 30.0f
 
 typedef struct Tube {

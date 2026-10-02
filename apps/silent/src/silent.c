@@ -240,44 +240,59 @@ static void build_sky(Engine* engine) {
  * tubes' light off its own walls, and not the sky, which the environment's
  * irradiance would otherwise pour into every closed room through the roof.
  *
- * The grid is placed so no probe centre lands in a wall. Probes sit at cell
- * centres, so with a one-metre cell across X from -5.75 the columns fall at
- * -5.25 ... 5.75, a quarter metre off every wall line (-5, -1.5, 0, 5); across
- * Z from 8.1 the rows fall at 8.6 ... 16.6, clear of 10, 13.8 and 16. A probe
- * inside a wall sees only backfaces and darkens everything near it.
+ * The grid is placed so no probe centre lands in a wall or a floor. Probes sit
+ * at cell centres, and the walls of two storeys and an octagonal tower leave no
+ * one-metre spacing clear of all of them; 1.21 m cells from (-7.45, 7.58) put
+ * every column at least 0.15 m off every wall's face, the tower's eight
+ * included, and seven layers to 9.4 m keep every row off the floors, the
+ * ceilings and the tower's. A probe inside a wall sees only backfaces and
+ * darkens everything near it.
  *
  * Outside the grid a query clamps to the nearest edge probes, which stand in
  * the front yard -- the right kind of answer for the street, which is lit
  * mostly by its own lamps and the moon rather than by what bounces.
  */
+#define GI_CELL 1.21f
+#define GI_COLS 11
+#define GI_ROWS 7
+#define GI_TOP  9.4f
+
 static void build_gi(void) {
-    GIVolume* gi = create_gi_volume(12, 3, 9);
+    GIVolume* gi = create_gi_volume(GI_COLS, GI_ROWS, GI_COLS);
     if (!gi)
         return;
-    gi_volume_fit(gi, (vec3){-5.75f, FLOOR_Y, 8.1f}, (vec3){6.25f, CEIL_Y, 17.1f});
+    const vec3 lo = {-7.45f, 0.0f, 7.58f};
+    gi_volume_fit(gi, lo, (vec3){lo[0] + GI_COLS * GI_CELL, GI_TOP, lo[2] + GI_COLS * GI_CELL});
     g_scene->gi_volume = gi;
 }
 
 /*
- * Reflection probes in the kitchen and the hall. Without them every metal and
- * every wet surface indoors reflects the only environment there is, the night
- * sky, and the hood, the sink and the floor go black. Captured once, like the
- * irradiance probes, and after them: the two share an atlas, which the probes
- * allocate with the volume's columns reserved.
+ * Reflection probes in the kitchen, the hall, the great hall and the study.
+ * Without them every metal and every wet surface indoors reflects the only
+ * environment there is, the night sky, and the hood, the sink and the floor go
+ * black. Captured once, like the irradiance probes, and after them: the two
+ * share an atlas, which the probes allocate with the volume's columns reserved.
+ * The study's box takes in its tower bay, up to the bay's high ceiling.
  */
 static void build_probes(Engine* engine) {
     if (!g_scene->ibl || !g_scene->ibl->precomputed)
         return;
-    enum { ROOMS = 2 };
+    enum { ROOMS = 4 };
     const struct {
         vec3 pos, lo, hi;
     } rooms[ROOMS] = {
         {{2.48f, FLOOR_Y + 1.5f, 11.9f},
          {KITCHEN_X0, FLOOR_Y, KITCHEN_Z0},
          {KITCHEN_X1, CEIL_Y, KITCHEN_Z1}},
-        {{-0.75f, FLOOR_Y + 1.5f, 13.0f},
+        {{-0.75f, FLOOR_Y + 1.5f, 12.0f},
          {HALL_X0 + 0.5f * INT_WALL, FLOOR_Y, HOUSE_FRONT_Z + 0.5f * EXT_WALL},
-         {HALL_X1 - 0.5f * INT_WALL, CEIL_Y, HOUSE_BACK_Z - 0.5f * EXT_WALL}},
+         {HALL_X1 - 0.5f * INT_WALL, CEIL_Y, KITCHEN_BACK_Z - 0.5f * INT_WALL}},
+        {{HEARTH_X, FLOOR_Y + 1.8f, 16.6f},
+         {GREAT_X0, FLOOR_Y, GREAT_Z0},
+         {GREAT_X1, EAVE_Y, GREAT_Z1}},
+        {{-4.2f, FLOOR2_Y + 1.6f, 11.4f},
+         {TOWER_X - TOWER_APOTHEM, FLOOR2_Y, TOWER_Z - TOWER_APOTHEM},
+         {HALL_X0 - 0.5f * INT_WALL, TOWER_CEIL_Y, KITCHEN_BACK_Z - 0.5f * INT_WALL}},
     };
     ReflectionProbeSet* set = create_reflection_probe_set();
     if (!set)
@@ -365,7 +380,8 @@ static void on_init(Game* game) {
     street_build(&kit, g_scene, (unsigned int)g_args.seed, !g_args.day);
     clock_build(&kit);
     kit_finish(&kit, "world");
-    printf("silent: %d colliders, %d vertices\n", kit.collider_count, kit.vertex_count);
+    printf("silent: %d colliders, %d vertices, %d of %d drip lines\n", kit.collider_count,
+           kit.vertex_count, kit.drip_count, RAIN_DRIP_MAX);
 
     // Sound: the clock's beat, the tubes' buzz, the fridge and the wind, each
     // heard from where it is. Headless, the system opens no device, so a
