@@ -28,12 +28,14 @@
  *     +--------------------------------------------> x
  */
 
-#define FLOOR_Y  0.30f // the house floor; the porch is level with it
-#define CEIL_Y   2.90f // the ground storey's ceiling
-#define FLOOR2_Y 3.15f // the upper floor; its boards and joists fill CEIL_Y..FLOOR2_Y
-#define CEIL2_Y  5.75f // the upper storey's ceiling
-#define EAVE_Y   5.90f // where the walls stop and the roof starts
-#define SLAB     0.12f // a ceiling's thickness under a floor or the attic
+#define FLOOR_Y  0.30f              // the house floor; the porch is level with it
+#define CEIL_Y   2.90f              // the ground storey's ceiling
+#define FLOOR2_Y 3.15f              // the upper floor; its boards and joists fill CEIL_Y..FLOOR2_Y
+#define CEIL2_Y  5.75f              // the upper storey's ceiling
+#define EAVE_Y   5.90f              // where the walls stop and the roof starts
+#define SLAB     0.12f              // a ceiling's thickness under a floor or the attic
+#define BASE_TOP (FLOOR_Y + 0.4f)   // the rubble base round the outside walls
+#define BOARDS_Y (BASE_TOP + 0.09f) // where the boards start, over the base's water table
 
 #define EXT_WALL 0.18f // exterior wall thickness
 #define INT_WALL 0.10f // interior

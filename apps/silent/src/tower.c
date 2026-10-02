@@ -1,7 +1,9 @@
 #include <math.h>
 
+#include "gargoyle.h"
 #include "layout.h"
 #include "mats.h"
+#include "ornament.h"
 #include "tower.h"
 
 /*
@@ -12,12 +14,31 @@
  */
 #define FACES 8
 
-// Past each corner, so two faces' outer skins meet at 135 degrees with no notch between them:
-// half a wall's thickness times tan 22.5.
-#define CORNER_LAP (0.5f * EXT_WALL * 0.41421356f)
-
 // The spire's eave, out past the walls' outer faces.
 #define SPIRE_EAVE 0.35f
+
+// The cornice under the eave, and the brackets it stands on.
+#define CORNICE_H    0.36f
+#define CORBEL_PITCH 0.32f
+
+// The gargoyles crouch on the outer corners between the study's lancets and the cornice, their
+// folded wings clear of it and their jaws over the yard, each pouring what the spire sheds: a
+// stream, at the reference rain.
+#define GARGOYLE_Y     (TOWER_TOP - CORNICE_H - 1.0f)
+#define GARGOYLE_DRIPS 25.0f
+
+// How far past a corner a face's wall, or its ornament `depth` proud of its outer skin, runs
+// so the two faces' meet at 135 degrees with no notch: from the wall's middle out, times
+// tan 22.5.
+static float corner_lap(float depth) {
+    return (0.5f * EXT_WALL + depth) * 0.41421356f;
+}
+
+// The face's extent along a, lapped past whichever ends are corners.
+static void lapped(float a0, float a1, float depth, float* from, float* to) {
+    *from = a0 <= -TOWER_HALF + 1e-4f ? a0 - corner_lap(depth) : a0;
+    *to = a1 >= TOWER_HALF - 1e-4f ? a1 + corner_lap(depth) : a1;
+}
 
 static KitFrame face_at(int k) {
     const float phi = 0.25f * GLM_PIf * (float)k, nx = cosf(phi), nz = sinf(phi);
@@ -76,20 +97,51 @@ static const KitOpening STUDY_LANCET = {-0.35f,           0.35f, FLOOR2_Y + 0.8f
 // A face's wall from `a0` to `a1`, from y0 to y1, lapped past any end that is a corner.
 static void face_wall(Kit* kit, const KitFrame* f, float a0, float a1, float y0, float y1,
                       const KitOpening* openings, int count) {
-    const float h = TOWER_HALF;
     KitWall w = {.at = 0.0f,
-                 .from = a0 <= -h + 1e-4f ? a0 - CORNER_LAP : a0,
-                 .to = a1 >= h - 1e-4f ? a1 + CORNER_LAP : a1,
                  .y0 = y0,
                  .y1 = y1,
                  .thick = EXT_WALL,
                  .inner = -1,
                  .mat_inner = MAT_PLASTER,
-                 .mat_outer = MAT_SIDING,
+                 .mat_outer = MAT_SIDING_DARK,
                  .opening_count = count};
+    lapped(a0, a1, 0.0f, &w.from, &w.to);
     for (int i = 0; i < count; i++)
         w.openings[i] = openings[i];
     kit_frame_wall(kit, f, &w);
+}
+
+/*
+ * A face's dressing outside: the base, boards and battens up to the cornice, its windows cased
+ * and hooded, a string course at the study's floor, and the cornice on its brackets.
+ */
+static void dress(Kit* kit, const KitFrame* f, float a0, float a1, const KitOpening* open, int n) {
+    const Facade s = {*f, 0.5f * EXT_WALL, 0.0f, 1.0f};
+    float from = 0.0f, to = 0.0f;
+    lapped(a0, a1, 0.08f, &from, &to);
+    ornament_base(kit, &s, from, to, NULL, 0);
+    ornament_battens(kit, &s, a0, a1, BOARDS_Y, TOWER_TOP - CORNICE_H, open, n);
+    for (int i = 0; i < n; i++)
+        ornament_window(kit, &s, &open[i]);
+    const float sf = s.face, y = FLOOR2_Y - 0.1f;
+    lapped(a0, a1, 0.06f, &from, &to);
+    const vec2 course[4] = {
+        {sf, y}, {sf + 0.06f, y + 0.03f}, {sf + 0.06f, y + 0.09f}, {sf, y + 0.12f}};
+    kit_frame_run(kit, f, MAT_SIDING_DARK, course, 4, from, to);
+    const float cy = TOWER_TOP - CORNICE_H;
+    lapped(a0, a1, 0.14f, &from, &to);
+    const vec2 cornice[5] = {{sf, cy + 0.16f},
+                             {sf + 0.1f, cy + 0.2f},
+                             {sf + 0.14f, cy + 0.28f},
+                             {sf + 0.14f, TOWER_TOP},
+                             {sf, TOWER_TOP}};
+    kit_frame_run(kit, f, MAT_SIDING_DARK, cornice, 5, from, to);
+    const int brackets = (int)floorf((a1 - a0) / CORBEL_PITCH);
+    for (int i = 0; i < brackets; i++) {
+        const float a = a0 + (a1 - a0) * ((float)i + 0.5f) / (float)brackets;
+        kit_frame_box(kit, f, MAT_SIDING_DARK, a - 0.035f, a + 0.035f, cy, cy + 0.17f, sf,
+                      sf + 0.09f, false);
+    }
 }
 
 static void walls(Kit* kit) {
@@ -108,9 +160,23 @@ static void walls(Kit* kit) {
                 kit_frame_pane(kit, &f,
                                open[i].bottom < FLOOR2_Y ? MAT_DARK_GLASS : MAT_WINDOW_GLASS,
                                &open[i], 0.0f, EXT_WALL);
+            dress(kit, &f, s.out0, s.out1, open, n);
         }
         if (s.in1 > s.in0)
             face_wall(kit, &f, s.in0, s.in1, CEIL2_Y, TOWER_TOP, NULL, 0);
+    }
+}
+
+// On the four outer corners, under the cornice, each with its drip.
+static void gargoyles(Kit* kit) {
+    const float r = (TOWER_APOTHEM + 0.5f * EXT_WALL) / cosf(GLM_PIf / 8.0f);
+    for (int k = 3; k <= 6; k++) {
+        const float t = GLM_PIf / 8.0f + 0.25f * GLM_PIf * (float)k;
+        const float nx = cosf(t), nz = sinf(t);
+        const KitFrame f = {{TOWER_X + r * nx, GARGOYLE_Y, TOWER_Z + r * nz}, atan2f(nx, nz)};
+        vec3 mouth = {0.0f, 0.0f, 0.0f};
+        gargoyle_build(kit, &f, mouth);
+        kit_drip(kit, &KIT_WORLD, mouth, mouth, GARGOYLE_DRIPS, 0.0f);
     }
 }
 
@@ -131,7 +197,7 @@ static void spire(Kit* kit) {
     const float base = TOWER_TOP + 0.12f;
     vec2 eave[FACES];
     tower_octagon(out, eave);
-    kit_slab(kit, MAT_TRIM, eave, FACES, TOWER_TOP, base, false);
+    kit_slab(kit, MAT_SIDING_DARK, eave, FACES, TOWER_TOP, base, false);
     const vec3 apex = {TOWER_X, TOWER_SPIRE_Y, TOWER_Z};
     for (int k = 0; k < FACES; k++) {
         const float* p = eave[k];
@@ -140,14 +206,16 @@ static void spire(Kit* kit) {
         // Corners k and k + 1 bound the face looking 45 (k + 1) degrees round.
         const float phi = 0.25f * GLM_PIf * (float)(k + 1);
         const vec3 outward = {cosf(phi), 0.5f, sinf(phi)};
-        kit_tri_facing(kit, MAT_ROOF, a, b, apex, outward);
+        kit_tri_facing(kit, MAT_SLATE, a, b, apex, outward);
     }
+    ornament_finial(kit, &KIT_WORLD, MAT_IRON, TOWER_X, TOWER_SPIRE_Y - 0.1f, TOWER_Z, 1.3f, 0.0f);
 }
 
 void tower_build(Kit* kit) {
     walls(kit);
     floors(kit);
     spire(kit);
+    gargoyles(kit);
 }
 
 // Where the octagon's outline crosses the line at `value` along axis `ax` (0 = x, 1 = z),

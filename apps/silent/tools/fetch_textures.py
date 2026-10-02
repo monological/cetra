@@ -68,6 +68,15 @@ SOURCES = {
     "lacquered_cherry_wood": {},
     "rosewood_veneer1": {},
     "white_maple_veneer": {},
+    # The Gothic house (spec 13.13): dark lacquered boards indoors, near-black painted
+    # boards laid upright for the board-and-batten outside, grey dressed ashlar for the
+    # hearth and the great hall's upper walls and the gargoyles, a rubble base under it
+    # all, and leather for the books.
+    "old_wooden_floor_02": {},
+    "black_painted_planks": {},
+    "medieval_blocks_03": {},
+    "castle_wall_varriation": {},
+    "brown_leather": {},
     # From ambientCG (https://ambientcg.com), also CC0: what Poly Haven has no
     # scan of -- brushed stainless, paper, a kitchen smear for the glass, and
     # the table's scratched enamel: a yellow paint with almost no rust, taken to
@@ -82,6 +91,8 @@ SOURCES = {
     # A foam seat pad, from the most used of ambientCG's sponges: already
     # yellowed and grubby, and taken a little further.
     "Sponge002": {"source": "ambientcg", "saturation": 0.75, "gain": 0.9},
+    # Fish-scale slates for the Gothic house's roofs and its tower's spire.
+    "RoofingTiles002": {"source": "ambientcg"},
 }
 
 ACG_ZIP = "https://ambientcg.com/get?file=%s_1K-JPG.zip"

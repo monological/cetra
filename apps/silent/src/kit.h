@@ -87,6 +87,11 @@ typedef struct KitOpening {
 // sill, up a jamb, round the head and down. Returns its corner count.
 int kit_opening_outline(const KitOpening* o, vec2 out[KIT_OPENING_POINTS]);
 
+// The opening grown by `w` at its jambs and its head, its sill where it was. A pointed head
+// grows concentrically, so a frame round it keeps its width all the way over; a Tudor one
+// only nearly.
+KitOpening kit_opening_grow(const KitOpening* o, float w);
+
 // An axis-aligned wall. It runs along X when `along_x`, at z = `at`, or along Z
 // at x = `at`, from `from` to `to`. `inner` is the sign of the side the inner
 // material faces (+1 toward +z/+x). Two layers of half the thickness each, so
@@ -194,6 +199,16 @@ void kit_frame_polygon(Kit* kit, const KitFrame* f, int mat, const vec2* outline
 // The (a, y) outline extruded from d0 to d1: both faces and its edges, which are flat.
 void kit_frame_extrude(Kit* kit, const KitFrame* f, int mat, const vec2* outline, int count,
                        float d0, float d1);
+// A (d, y) profile swept straight along a from a0 to a1: a moulding, a sill, a cornice.
+void kit_frame_run(Kit* kit, const KitFrame* f, int mat, const vec2* profile, int count, float a0,
+                   float a1);
+/*
+ * The band `w` wide round an opening, from d0 to d1: its casing. `head_only` stops it at the
+ * springing line, which is a hood over the opening or a bar of tracery across it; otherwise it
+ * runs down both jambs to the sill. Exactly as wide all round on a pointed head.
+ */
+void kit_frame_surround(Kit* kit, const KitFrame* f, int mat, const KitOpening* o, float w,
+                        bool head_only, float d0, float d1);
 /*
  * A solid flight of `risers` steps, each `rise` high and `going` deep, climbing along +d from
  * d0 at floor height y0 between a0 and a1. The last riser lands on the floor above, so there

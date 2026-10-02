@@ -59,6 +59,12 @@ typedef enum {
     MAT_MAPLE,        // the pale stringing inlaid round its door
     MAT_BRASS,        // capitals, finials, rosettes, weights, the bob: tarnished
     MAT_BULB,         // the hall's bare bulb, lit
+    MAT_SIDING_DARK,  // the Gothic house's near-black board-and-batten, and its carpentry
+    MAT_SLATE,        // its fish-scale slate
+    MAT_STONE,        // dressed grey ashlar: the hearth, the great hall, the gargoyles
+    MAT_FOUNDATION,   // the rubble base under it all
+    MAT_IRON,         // cresting, finials, the hearth's irons: black paint gone dull
+    MAT_LEATHER,      // book covers, the desk's top
     MAT_COUNT
 } MatId;
 
