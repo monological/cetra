@@ -52,7 +52,6 @@ void fire_params_defaults(FireParams* p, FireKind kind) {
     p->blue_core = kind == FIRE_FLAME ? 150.0f : 6.0f;
     p->adaptation = 0.85f;
     p->brightness = 1.0f;
-    p->shimmer = 0.0f;
     p->flame_soot = 6.0f;
     p->flicker = 0.3f;
 }
@@ -191,10 +190,8 @@ static void _flipbook_load(Fire* fire) {
     b->height = json_int_or(root, "height", 0);
     const cJSON* fps = cJSON_GetObjectItemCaseSensitive(root, "fps");
     const cJSON* peak = cJSON_GetObjectItemCaseSensitive(root, "peak_nits");
-    const cJSON* motion = cJSON_GetObjectItemCaseSensitive(root, "motion_range");
     b->fps = cJSON_IsNumber(fps) ? (float)fps->valuedouble : 30.0f;
     b->peak_nits = cJSON_IsNumber(peak) ? (float)peak->valuedouble : 1.0f;
-    b->motion_range = cJSON_IsNumber(motion) ? (float)motion->valuedouble : 0.0f;
     float box[3] = {1.0f, 1.0f, 0.0f};
     _json_floats(root, "box", box, 3);
     glm_vec2_copy((vec2){box[0], box[1]}, b->box);
@@ -294,15 +291,6 @@ Fire* fire_system_add(FireSystem* fs, FireKind kind, const char* name) {
     }
     glm_vec3_copy((vec3){1.0f, 1.0f, 1.0f}, fire->color);
     return fire;
-}
-
-Fire* fire_system_find(FireSystem* fs, const char* name) {
-    if (!fs || !name)
-        return NULL;
-    for (int i = 0; i < fs->count; i++)
-        if (strcmp(fs->fires[i].name, name) == 0)
-            return &fs->fires[i];
-    return NULL;
 }
 
 bool fire_system_active(const FireSystem* fs) {
@@ -485,32 +473,6 @@ static void _flame_step(Fire* fire, int index, const vec3 wind, float dt) {
     fire->spine[0][3] = 0.0f;
 }
 
-void fire_flame_field(const Fire* fire, const vec3 p, float* kelvin, float* soot) {
-    // The nearest point on the spine, and how far along it that is.
-    float best = 1e30f, best_u = 0.0f, best_r = 0.0f;
-    for (int i = 0; i + 1 < FIRE_SPINE_POINTS; i++) {
-        vec3 a, b, ab, ap;
-        glm_vec3_copy((float*)fire->spine[i], a);
-        glm_vec3_copy((float*)fire->spine[i + 1], b);
-        glm_vec3_sub(b, a, ab);
-        glm_vec3_sub((float*)p, a, ap);
-        const float len2 = fmaxf(glm_vec3_dot(ab, ab), 1e-12f);
-        const float s = glm_clamp(glm_vec3_dot(ap, ab) / len2, 0.0f, 1.0f);
-        vec3 c = {0.0f, 0.0f, 0.0f};
-        glm_vec3_copy(a, c);
-        glm_vec3_muladds(ab, s, c);
-        const float d2 = glm_vec3_distance2((float*)p, c);
-        if (d2 < best) {
-            best = d2;
-            best_u = ((float)i + s) / (float)(FIRE_SPINE_POINTS - 1);
-            best_r = fire->spine[i][3] + (fire->spine[i + 1][3] - fire->spine[i][3]) * s;
-        }
-    }
-    const float q = best_r > 1e-6f ? sqrtf(best) / best_r : 2.0f;
-    float blue;
-    _flame_profile(&fire->params, best_u, q, kelvin, soot, &blue);
-}
-
 // Radial and lengthwise samples of the profile the light integrates.
 #define FLAME_QUAD_U 24
 #define FLAME_QUAD_Q 12
@@ -594,7 +556,6 @@ void fire_update(FireSystem* fs, const Wind* wind, double t) {
     // The step the clock is on, from the absolute time rather than an accumulator, so a
     // headless run takes exactly the same steps however its frames are paced.
     const int target = (int)floor(t * hz + 1e-6);
-    fs->clock_step = target;
     vec3 air = {0.0f, 0.0f, 0.0f};
     fire_wind_air(wind, t, air);
     for (int i = 0; i < fs->count; i++) {

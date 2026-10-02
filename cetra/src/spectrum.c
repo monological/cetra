@@ -62,11 +62,3 @@ void spectrum_blackbody_xyz(float kelvin, vec3 out) {
     for (int c = 0; c < 3; c++)
         out[c] = (float)(sum[c] * SPECTRUM_KM);
 }
-
-void spectrum_blackbody_rec709(float kelvin, vec3 out) {
-    vec3 xyz = {0.0f, 0.0f, 0.0f};
-    spectrum_blackbody_xyz(kelvin, xyz);
-    spectrum_xyz_to_rec709(xyz, out);
-    for (int c = 0; c < 3; c++)
-        out[c] = fmaxf(out[c], 0.0f);
-}

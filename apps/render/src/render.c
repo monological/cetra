@@ -34,6 +34,7 @@
 #include "cetra/water.h"
 #include "cetra/rain.h"
 #include "cetra/fire.h"
+#include "cetra/internal/fire_render.h"
 #include "cetra/ies.h"
 #include "cetra/wind.h"
 #include "cetra/config_snapshot.h"
@@ -209,14 +210,8 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --fire-probe       Print the blackbody, each fire's state, its grid\n"
                     "                         read back whole, and the lights it drives\n");
     fprintf(stderr, "      --fire-warmup <s>  Seconds a fire has burnt when it starts\n");
-    fprintf(stderr, "      --fire-shimmer <f> Heat haze through every fire; 0 = none\n");
     fprintf(stderr, "      --fire-slice <field>,<z>[,<fire>]  One slice of a grid fire's\n"
                     "                         temperature, soot, fuel, speed or reaction\n");
-    fprintf(stderr,
-            "      --fire-bake <dir>  Bake the first grid fire's flipbook frames, raw, into\n"
-            "                         <dir>; tools/bake_fire_flipbook.py encodes them\n");
-    fprintf(stderr, "      --fire-bake-size <px>    Bake frame width (default 256)\n");
-    fprintf(stderr, "      --fire-bake-stride <n>   Frames between baked frames (default 2)\n");
     fprintf(stderr, "      --water-level <f>  Still-water plane, world Y (implies --water)\n");
     fprintf(stderr, "      --water-extent <f> Half-size of the shoaling bed (implies --water)\n");
     fprintf(stderr, "      --water-waves <m>  gerstner (default) or fft spectral cascades\n");
@@ -604,14 +599,11 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     // A water plane at y = 0 is the useful default and 0 is a legal level, so the
     // "unset" value has to sit outside every plausible one rather than at zero.
     args->water_level = -9999.0f;
-    args->rain_rate = -1.0f;    // -1 = keep the scene file's (0 is a legal rate)
-    args->rain_sheen = -1.0f;   // -1 = keep the scene file's
-    args->rain_relief = -1.0f;  // -1 = keep the scene file's
-    args->fire_warmup = -1.0f;  // -1 = keep the scene file's
-    args->fire_shimmer = -1.0f; // -1 = keep the scene file's
-    args->fire_slice[0] = -1;   // no slice drawn
-    args->fire_bake_size = 256;
-    args->fire_bake_stride = 2;     // 30 flipbook frames a second from a 60 Hz simulation
+    args->rain_rate = -1.0f;        // -1 = keep the scene file's (0 is a legal rate)
+    args->rain_sheen = -1.0f;       // -1 = keep the scene file's
+    args->rain_relief = -1.0f;      // -1 = keep the scene file's
+    args->fire_warmup = -1.0f;      // -1 = keep the scene file's
+    args->fire_slice[0] = -1;       // no slice drawn
     args->world_scale = -1.0f;      // -1 = keep the sky's default (1 unit = 1 metre)
     args->spec_occ_mode = -1;       // -1 = keep the engine default
     args->import_scale = 1.0f;      // 1 = none
@@ -1255,25 +1247,10 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->rain_map_path = argv[++i];
         } else if (strcmp(argv[i], "--no-fire") == 0) {
             args->no_fire = 1;
-        } else if (strcmp(argv[i], "--fire-bake") == 0 && i + 1 < argc) {
-            args->fire_bake_dir = argv[++i];
-        } else if (strcmp(argv[i], "--fire-bake-size") == 0) {
-            float size = 0.0f;
-            if (_ranged_arg(argc, argv, &i, 16.0f, 2048.0f, &size) != 0)
-                return -1;
-            args->fire_bake_size = (int)size;
-        } else if (strcmp(argv[i], "--fire-bake-stride") == 0) {
-            float stride = 0.0f;
-            if (_ranged_arg(argc, argv, &i, 1.0f, 60.0f, &stride) != 0)
-                return -1;
-            args->fire_bake_stride = (int)stride;
         } else if (strcmp(argv[i], "--fire-probe") == 0) {
             args->fire_probe = 1;
         } else if (strcmp(argv[i], "--fire-warmup") == 0) {
             if (_ranged_arg(argc, argv, &i, 0.0f, 60.0f, &args->fire_warmup) != 0)
-                return -1;
-        } else if (strcmp(argv[i], "--fire-shimmer") == 0) {
-            if (_ranged_arg(argc, argv, &i, 0.0f, 100.0f, &args->fire_shimmer) != 0)
                 return -1;
         } else if (strcmp(argv[i], "--fire-slice") == 0) {
             static const char* fields[] = {"temperature", "soot", "fuel", "speed", "reaction"};
@@ -2600,17 +2577,6 @@ void key_callback(Engine* engine, int key, int scancode, int action, int mods) {
 // one at a fixed frame (the equivalence gate, specs/11.8).
 static void render_frame_update(Engine* engine, float dt) {
     (void)dt;
-    // --fire-bake (spec 13.14): a flipbook frame every `stride` frames, after the frame's fire
-    // steps have run at its top.
-    if (frame_schedule->fire_bake_dir &&
-        engine->total_frames % (unsigned long)frame_schedule->fire_bake_stride == 0) {
-        const Scene* bake_scene = engine_get_scene(engine);
-        if (bake_scene && bake_scene->fire &&
-            !fire_bake_capture(engine, bake_scene, frame_schedule->fire_bake_dir,
-                               frame_schedule->fire_bake_size,
-                               (float)frame_schedule->fire_bake_stride / bake_scene->fire->sim_hz))
-            fprintf(stderr, "frame %lu: nothing baked\n", (unsigned long)engine->total_frames);
-    }
     // --cook exits when the async loader has DRAINED rather than at a frame
     // count: uploads publish at <=5 per frame and the workers may still be
     // decoding at frame 1, so a one-frame run under-warms any texture-heavy
@@ -4653,8 +4619,6 @@ int main(int argc, char** argv) {
     if (scene->fire) {
         if (args.fire_warmup >= 0.0f)
             scene->fire->warmup = args.fire_warmup;
-        for (int f = 0; f < scene->fire->count && args.fire_shimmer >= 0.0f; f++)
-            scene->fire->fires[f].params.shimmer = args.fire_shimmer;
         scene->fire->debug_field = args.fire_slice[0];
         scene->fire->debug_slice = args.fire_slice[1];
         scene->fire->debug_fire = args.fire_slice[2];
@@ -4894,7 +4858,7 @@ int main(int argc, char** argv) {
     // After the loop, so the state and the grids are what the frames simulated to.
     if (args.fire_probe) {
         fire_probe_print(scene->fire);
-        fire_probe_grids(engine, scene);
+        fire_render_probe(engine->fire_renderer, scene);
     }
 
     // After the loop so the state row reports what the frames integrated to, and the

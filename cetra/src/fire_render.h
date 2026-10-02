@@ -39,14 +39,12 @@ typedef struct FireGridGPU {
     GLuint obstacle;       // R8, 1 inside a solid
     GLuint partial[2];     // RGBA32F, one texel a slice: the reduction's first pass
     uint32_t obstacle_key; // what the obstacle atlas was voxelised from
-    bool checked;          // the framebuffer has been found complete over these targets
 } FireGridGPU;
 
-// A FLIPBOOK fire's sheets on the GPU, loaded from the path the fire names and kept while it does.
+// A FLIPBOOK fire's sheet on the GPU, loaded from the path the fire names and kept while it does.
 typedef struct FireBookGPU {
     GLuint sheet;   // SRGB8_ALPHA8, mipped; 0 = the sheet would not load, said once for this path
-    GLuint motion;  // RGBA8, linear; 0 = the flipbook has none
-    char path[256]; // what the sheets were loaded from
+    char path[256]; // what the sheet was loaded from
 } FireBookGPU;
 
 typedef struct FireRenderer {
@@ -66,11 +64,6 @@ typedef struct FireRenderer {
     GLuint pbo[FIRE_READBACK_LATENCY];
     int ring_passes;
     bool slot_issued[FIRE_READBACK_LATENCY][FIRE_MAX];
-
-    // --fire-bake's targets: a frame's colour and motion, RGBA32F, and a 1x1 depth of 1, which is
-    // a scene with nothing in front of the fire.
-    GLuint bake_fbo, bake_color, bake_motion, bake_depth;
-    int bake_w, bake_h;
 } FireRenderer;
 
 FireRenderer* create_fire_renderer(void);
@@ -88,6 +81,6 @@ void fire_render_draw(FireRenderer* renderer, struct Engine* engine, const struc
 // --fire-probe's GPU half: each GRID fire's fields read back whole -- the peak temperature, the
 // heat and soot inside solids, the divergence before and after the last projection, and what
 // it casts reduced on the GPU against the same sum on the CPU. Needs a live GL context.
-void fire_render_probe(FireRenderer* renderer, struct Engine* engine, const struct Scene* scene);
+void fire_render_probe(FireRenderer* renderer, const struct Scene* scene);
 
 #endif // _FIRE_RENDER_H_

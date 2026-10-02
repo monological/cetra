@@ -60,7 +60,6 @@ typedef struct FireFlipbook {
     int width, height; // pixels a frame
     float fps;
     float peak_nits;
-    float motion_range;   // pixels a frame the motion sheet's full range is; 0 = no motion sheet
     vec2 box;             // metres a frame spans, wide and tall
     float* intensity;     // cd a frame at `box`
     float* centroid_y;    // 0..1 up the frame
@@ -136,7 +135,6 @@ typedef struct FireParams {
     // between the two, since a fire is rarely the only thing an eye is adapted to.
     float adaptation;
     float brightness; // scale on the emission drawn and the light cast; 1 = physical
-    float shimmer;    // heat haze: how far the hot air bends the view through it; 0 = none
 
     // FLAME only: the soot's peak amount, and how far the flame flickers (0 = still).
     float flame_soot;
@@ -184,8 +182,8 @@ typedef struct Fire {
     FireBox draft;
     float draft_speed;
     FireParams params;
-    // FLIPBOOK: the sheet's path without its suffixes -- `<flipbook>_color.png`, an optional
-    // `<flipbook>_motion.png` and `<flipbook>.json` -- and the cards it plays on.
+    // FLIPBOOK: the sheet's path without its suffixes -- `<flipbook>_color.png` and
+    // `<flipbook>.json` -- and the cards it plays on.
     char flipbook[256];
     FireCard cards[FIRE_MAX_CARDS];
     int card_count;
@@ -199,9 +197,6 @@ typedef struct Fire {
 } Fire;
 
 typedef struct FireSystem {
-    // ENGINE-OWNED: the step the clock was on at the last fire_update.
-    int clock_step;
-
     // BY FUNCTION: fire_system_add.
     Fire fires[FIRE_MAX];
     int count;
@@ -236,8 +231,6 @@ void fire_adaptation(const FireParams* params, mat3 out);
 
 // A new fire of `kind` with the defaults, named, appended; NULL past FIRE_MAX.
 Fire* fire_system_add(FireSystem* fs, FireKind kind, const char* name);
-// The named fire, or NULL.
-Fire* fire_system_find(FireSystem* fs, const char* name);
 
 // True while any fire is enabled: what decides whether anything simulates or draws. NULL is
 // false.
@@ -275,10 +268,6 @@ void fire_drive_embers(Fire* fire);
 // what it draws are both read there.
 double fire_card_frame(const FireFlipbook* book, const FireCard* card, double t);
 
-// The emission a FLAME has at world point `p`: its temperature in K and its soot in ppm. The
-// C twin of the shader's, used for the light and by the probe.
-void fire_flame_field(const Fire* fire, const vec3 p, float* kelvin, float* soot);
-
 // The blackbody table the GPU is handed, FIRE_BB_LUT_SIZE RGBA texels: the Rec.709
 // chromaticity (rgb over luminance) and log10 of the luminance, over FIRE_BB_T_MIN..MAX K.
 const float* fire_blackbody_table(void);
@@ -292,24 +281,5 @@ void fire_blue_color(vec3 out);
 
 // --fire-probe: the blackbody at a ladder of temperatures, and every fire's state.
 void fire_probe_print(const FireSystem* fs);
-
-struct Engine;
-struct Scene;
-// --fire-probe's GPU half, through the engine's fire renderer: each GRID fire's fields read
-// back whole and checked, and the lights the fires drive. Needs a live GL context; nothing
-// before the first frame with fires.
-void fire_probe_grids(struct Engine* engine, const struct Scene* scene);
-
-/*
- * --fire-bake: one flipbook frame of the scene's first GRID fire, as it stands, marched
- * orthographically from in front of its box into a frame `width` pixels wide (the height from
- * the box's aspect). Appended to <dir>/frames.f32 as the frame's RGBA colour floats -- absolute
- * nits, adapted and premultiplied by coverage -- then its RGBA motion floats (pixels a frame on
- * the image's right and up, over `frame_seconds`); and to <dir>/frames.txt as a line of the
- * frame's intensity in cd, its centroid and its colour. <dir>/bake.txt holds the layout. False
- * when there is no grid to bake or a file will not open. Needs a live GL context.
- */
-bool fire_bake_capture(struct Engine* engine, const struct Scene* scene, const char* dir, int width,
-                       float frame_seconds);
 
 #endif // _FIRE_H_

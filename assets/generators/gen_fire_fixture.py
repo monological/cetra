@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Generate the fire instruments (spec 13.14): a night room in metres with a stone fireplace
-burning two logs, and a candle on its mantel. One model, three scenes.
+burning two logs, and a candle on its mantel. Two scenes, each with its model.
 
     room          6 x 5 m, 3 m high, stone back wall, plaster sides, a wooden floor; nothing
                   lights it but the fire and the candle, so whatever the room shows is what
@@ -13,12 +13,11 @@ burning two logs, and a candle on its mantel. One model, three scenes.
                   intensity along its normal is the fire's.
     candle        a FLAME on the mantel's right, driving a small point light.
 
-fire_fixture.cscn burns the hearth from FILMED fire, the fire_hearth flipbook played on cards
-standing in the firebox. fire_grid_fixture.cscn burns it as a combustion GRID instead, 1.1 x
-1.6 x 0.8 m at 2.5 cm cells, whose obstacles are the breast, the jambs and the logs: what burns
-in the box has to go up the flue or roll out of the opening, and the gate's obstacle arm reads
-that no heat is found inside them. fire_bake_logs.cscn is the log fire
-tools/bake_fire_flipbook.py bakes from.
+fire_fixture.cscn burns the hearth as a FLIPBOOK, the fire_hearth sheet played on a card standing
+behind the logs. fire_grid_fixture.cscn burns it as a combustion GRID instead, 1.1 x 1.6 x 0.8 m
+at 2.5 cm cells, whose obstacles are the breast, the jambs and the logs: what burns in the box
+has to go up the flue or roll out of the opening, and the gate's obstacle arm reads that no heat
+is found inside them.
 
 Regenerate with: python3 assets/generators/gen_fire_fixture.py
 """
@@ -261,45 +260,6 @@ grid_desc = room_scene("fire_grid_fixture.gltf", HEARTH_GRID, [
 ])
 
 
-# The flipbook BAKE scene (spec 13.14's revision): a log fire alone, simulated finely enough to
-# be drawn from -- 6.25 mm cells over 0.8 x 1.0 x 0.4 m, 128 x 160 x 64 -- and baked by
-# tools/bake_fire_flipbook.py from in front. Three logs: two side by side and one across their
-# tops, each an obstacle and a source along its upper face. No walls: a flipbook is a fire that
-# can stand in any hearth, and the hearth's own walls would bake into it.
-BAKE_LOGS = [
-    ((-0.32, 0.0, -0.13), (0.32, 0.11, -0.03)),
-    ((-0.30, 0.0, 0.03), (0.30, 0.11, 0.13)),
-    ((-0.26, 0.11, -0.05), (0.26, 0.21, 0.05)),
-]
-bake_desc = {
-    "version": 1,
-    "_comment": [
-        "The log fire tools/bake_fire_flipbook.py bakes the fire_logs flipbook from (spec 13.14).",
-        "Not a scene to look at: the room model is loaded only because a scene needs one.",
-        "",
-        "Regenerate with: python3 assets/generators/gen_fire_fixture.py",
-    ],
-    "models": [{"path": asset_ref("fire_fixture.gltf")}],
-    "environment": {"ambient": [0.0, 0.0, 0.0]},
-    "lights": [{"name": "none", "type": "directional", "direction": [0.0, -1.0, 0.0],
-                "intensity": 0.0}],
-    "fire": {
-        "warmup": 3.0,
-        "fires": [{
-            "name": "logs",
-            "kind": "grid",
-            "center": [0.0, 0.5, 0.0],
-            "size": [0.8, 1.0, 0.4],
-            "cell": 0.00625,
-            "floor": True,
-            "sources": [log_source(lo, hi) for lo, hi in BAKE_LOGS],
-            "obstacles": [{"min": list(lo), "max": list(hi)} for lo, hi in BAKE_LOGS],
-        }],
-    },
-    "camera": {"eye": [0.0, 0.5, 2.0], "target": [0.0, 0.5, 0.0], "fov": 50},
-}
-
-
 def write_json(name, obj):
     with open(asset_path(name), "w") as f:
         json.dump(obj, f, indent=1)
@@ -310,5 +270,4 @@ write_json("fire_fixture.gltf", gltf_of(FILM_PIECES))
 write_json("fire_grid_fixture.gltf", gltf_of(GRID_PIECES))
 write_json("fire_fixture.cscn", scene_desc)
 write_json("fire_grid_fixture.cscn", grid_desc)
-write_json("fire_bake_logs.cscn", bake_desc)
-print("wrote fire_fixture and fire_grid_fixture (.gltf + .cscn) and fire_bake_logs.cscn")
+print("wrote fire_fixture and fire_grid_fixture (.gltf + .cscn)")

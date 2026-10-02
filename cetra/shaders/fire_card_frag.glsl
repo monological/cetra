@@ -3,22 +3,16 @@
 // One card of a FLIPBOOK fire (spec 13.14), composited premultiplied onto the HDR canvas after the
 // temporal seam (blend ONE, ONE_MINUS_SRC_ALPHA).
 //
-// Two frames of the sheet either side of the card's place in the loop, mixed. Where the sheet has
-// a motion sheet beside it, each frame is first pushed along the gas's motion toward the other --
-// the frame before forward by the blend, the frame after back by the rest -- so a tongue moves
-// between frames rather than one fading out while the next fades in. The colour is sRGB-encoded
-// against the sheet's peak, decoded by the texture's format; the card fades where it meets
-// geometry, so its flat edge never shows where it stands in a hearth; and it is fogged at its own
-// depth, as the march is.
+// Two frames of the sheet either side of the card's place in the loop, mixed. The colour is
+// sRGB-encoded against the sheet's peak, decoded by the texture's format; the card fades where it
+// meets geometry, so its flat edge never shows where it stands in a hearth; and it is fogged at
+// its own depth, as the march is.
 
 in vec2 vUv;
 in float vViewDepth;
 
-uniform sampler2D sheet;  // SRGB8_ALPHA8: premultiplied colour over the peak, coverage
-uniform sampler2D motion; // RGBA8, linear: pixels a frame on red and green about one half
-uniform int hasMotion;
-uniform float motionRange;  // pixels a frame the motion's full range stands for
-uniform ivec4 sheetLayout;  // frames, columns, rows, unused
+uniform sampler2D sheet;   // SRGB8_ALPHA8: premultiplied colour over the peak, coverage
+uniform ivec4 sheetLayout; // frames, columns, rows, unused
 uniform vec2 frameTexels;   // a frame's width and height in pixels
 uniform float framePos;     // this card's place in the loop, in frames
 uniform float peakNits;
@@ -55,14 +49,7 @@ void main() {
     int f0 = int(floor(pos));
     int f1 = (f0 + 1) % frames;
     float t = pos - floor(pos);
-    vec2 uv0 = vUv, uv1 = vUv;
-    if (hasMotion != 0) {
-        vec2 flow = (textureLod(motion, sheetUv(f0, vUv), 0.0).rg * 2.0 - 1.0) * motionRange /
-                    frameTexels;
-        uv0 = vUv - flow * t;
-        uv1 = vUv + flow * (1.0 - t);
-    }
-    vec4 c = mix(texture(sheet, sheetUv(f0, uv0)), texture(sheet, sheetUv(f1, uv1)), t);
+    vec4 c = mix(texture(sheet, sheetUv(f0, vUv)), texture(sheet, sheetUv(f1, vUv)), t);
 
     vec2 screen = gl_FragCoord.xy / viewport;
     float surface = -viewZFromNdcZ(2.0 * texture(sceneDepth, screen).r - 1.0);

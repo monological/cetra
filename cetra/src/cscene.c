@@ -1153,7 +1153,6 @@ static const CSceneFireKey FIRE_PARAM_KEYS[] = {
     FIRE_PARAM_KEY("blueCore", blue_core, 0.0f, 1e7f),
     FIRE_PARAM_KEY("adaptation", adaptation, 0.0f, 1.0f),
     FIRE_PARAM_KEY("brightness", brightness, 0.0f, 1000.0f),
-    FIRE_PARAM_KEY("shimmer", shimmer, 0.0f, 100.0f),
     FIRE_PARAM_KEY("flameSoot", flame_soot, 0.0f, 1000.0f),
     FIRE_PARAM_KEY("flicker", flicker, 0.0f, 10.0f),
 };
