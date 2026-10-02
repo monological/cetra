@@ -274,10 +274,11 @@ static void build_sky(Engine* engine) {
  * the front yard -- the right kind of answer for the street, which is lit
  * mostly by its own lamps and the moon rather than by what bounces.
  */
-#define GI_CELL 1.21f
-#define GI_COLS 11
-#define GI_ROWS 7
-#define GI_TOP  9.4f
+#define GI_CELL  1.21f
+#define GI_COLS  11
+#define GI_ROWS  7
+#define GI_TOP   9.4f
+#define GI_CLEAR 0.15f // how near a probe centre may come to a wall's or a slab's face
 
 static void build_gi(void) {
     GIVolume* gi = create_gi_volume(GI_COLS, GI_ROWS, GI_COLS);
@@ -286,6 +287,25 @@ static void build_gi(void) {
     const vec3 lo = {-7.45f, 0.0f, 7.58f};
     gi_volume_fit(gi, lo, (vec3){lo[0] + GI_COLS * GI_CELL, GI_TOP, lo[2] + GI_COLS * GI_CELL});
     g_scene->gi_volume = gi;
+
+    // Every centre against the walls and slabs, so a layout change that walks one into a wall
+    // says so here rather than as a dark patch.
+    int near = 0;
+    for (int i = 0; i < gi->counts[0]; i++)
+        for (int j = 0; j < gi->counts[1]; j++)
+            for (int k = 0; k < gi->counts[2]; k++) {
+                const vec3 c = {gi->grid_min[0] + ((float)i + 0.5f) * gi->spacing[0],
+                                gi->grid_min[1] + ((float)j + 0.5f) * gi->spacing[1],
+                                gi->grid_min[2] + ((float)k + 0.5f) * gi->spacing[2]};
+                const float d = house_clearance(c);
+                if (d >= GI_CLEAR)
+                    continue;
+                if (near++ < 8)
+                    printf("silent: GI probe at (%.2f, %.2f, %.2f) is %.2f m from a wall or slab\n",
+                           (double)c[0], (double)c[1], (double)c[2], (double)d);
+            }
+    printf("silent: GI %d probes, %d nearer than %.2f m to a wall or slab\n",
+           gi->counts[0] * gi->counts[1] * gi->counts[2], near, (double)GI_CLEAR);
 }
 
 /*

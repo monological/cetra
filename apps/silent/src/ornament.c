@@ -10,6 +10,9 @@
 #define BATTEN_T     0.025f
 #define HOOD_W       0.06f // the hood moulding over the casing
 #define HOOD_T       0.07f
+#define STOP_OUT     0.05f // how far a hood's stop stands out past the hood
+#define SILL_DROP    0.07f // the sill's depth under the opening's foot
+#define DRESS_CLEAR  0.02f // how far a batten stops short of a window's dressing
 #define MULLION      0.05f // tracery's bars, either side of the glass
 #define TRACERY_T    0.03f
 // A lancet at least this wide is two lights under a ring.
@@ -42,10 +45,6 @@ void ornament_casing(Kit* kit, const Facade* s, int mat, const KitOpening* o) {
                        s->face + s->out * ORNAMENT_CASING_T);
 }
 
-static bool doorway(const KitOpening* o) {
-    return o->bottom <= FLOOR_Y + 0.01f;
-}
-
 // The water table: a dressed stone sloping off the base's top, out from the face.
 static void water_table(Kit* kit, const Facade* s, float a0, float a1) {
     const float f = s->face, o = s->out;
@@ -64,7 +63,7 @@ void ornament_base(Kit* kit, const Facade* s, float a0, float a1, const KitOpeni
         // The next doorway along, if any is left.
         const KitOpening* next = NULL;
         for (int i = 0; i < count; i++)
-            if (doorway(&openings[i]) && openings[i].from >= cursor - 1e-4f &&
+            if (openings[i].door && openings[i].from >= cursor - 1e-4f &&
                 (!next || openings[i].from < next->from))
                 next = &openings[i];
         const float end = next ? next->from : a1;
@@ -81,18 +80,28 @@ void ornament_base(Kit* kit, const Facade* s, float a0, float a1, const KitOpeni
     }
 }
 
-// Where the batten at `a` is interrupted by openings, as y ranges: each opening whose casing
+// What ornament_window draws round an opening, as the opening it would be: out to the hood
+// stops either side, up to the hood's crown and down to the sill's foot.
+static KitOpening dressed(const KitOpening* o) {
+    KitOpening d = kit_opening_grow(o, ORNAMENT_CASING_W + HOOD_W);
+    d.from -= STOP_OUT;
+    d.to += STOP_OUT;
+    d.bottom = o->bottom - SILL_DROP;
+    return d;
+}
+
+// Where the batten at `a` is interrupted by openings, as y ranges: each opening whose dressing
 // it would cross, from under its sill to over its hood. Returns the count, sorted.
 static int blocked(float a, const KitOpening* openings, int count, float lo[], float hi[]) {
     int n = 0;
-    const float margin = ORNAMENT_CASING_W + HOOD_W + 0.02f;
     for (int i = 0; i < count; i++) {
         const KitOpening* o = &openings[i];
-        if (a + 0.5f * BATTEN_W < o->from - margin || a - 0.5f * BATTEN_W > o->to + margin)
+        const KitOpening d = dressed(o);
+        if (a + 0.5f * BATTEN_W <= d.from - DRESS_CLEAR ||
+            a - 0.5f * BATTEN_W >= d.to + DRESS_CLEAR)
             continue;
-        const KitOpening grown = kit_opening_grow(o, margin);
-        lo[n] = doorway(o) ? -1.0f : o->bottom - 0.12f;
-        hi[n] = grown.top + grown.rise + 0.02f;
+        lo[n] = o->door ? -1.0f : d.bottom - DRESS_CLEAR;
+        hi[n] = d.top + d.rise + DRESS_CLEAR;
         for (int j = n; j > 0 && lo[j] < lo[j - 1]; j--) {
             const float tl = lo[j], th = hi[j];
             lo[j] = lo[j - 1];
@@ -192,9 +201,9 @@ void ornament_window(Kit* kit, const Facade* s, const KitOpening* o) {
     // The sill, deeper than the casing and past it either side, tipped under the glass, and
     // standing a centimetre over the opening's foot so the wall's own sill face is under it, not
     // in the same plane. A doorway has its threshold instead.
-    if (!doorway(o))
+    if (!o->door)
         kit_frame_box(kit, &s->f, MAT_TRIM, o->from - ORNAMENT_CASING_W - 0.05f,
-                      o->to + ORNAMENT_CASING_W + 0.05f, o->bottom - 0.07f, o->bottom + 0.01f,
+                      o->to + ORNAMENT_CASING_W + 0.05f, o->bottom - SILL_DROP, o->bottom + 0.01f,
                       s->mid, f + out * 0.09f, false);
     // The hood over the casing, and its two stops dropping past the springing line.
     const KitOpening casing = kit_opening_grow(o, ORNAMENT_CASING_W);
@@ -202,11 +211,11 @@ void ornament_window(Kit* kit, const Facade* s, const KitOpening* o) {
     const float stop = casing.top, over = kit_opening_arched(o) ? 0.0f : HOOD_W;
     for (int side = -1; side <= 1; side += 2) {
         const float edge = side < 0 ? casing.from : casing.to;
-        kit_frame_box(kit, &s->f, MAT_TRIM, edge, edge + (float)side * (HOOD_W + 0.05f),
+        kit_frame_box(kit, &s->f, MAT_TRIM, edge, edge + (float)side * (HOOD_W + STOP_OUT),
                       stop - 0.16f, stop + over, f, f + out * HOOD_T, false);
     }
     // Tracery is a window's: a doorway is left clear to walk through.
-    if (o->arch == KIT_ARCH_POINTED && o->to - o->from >= TWO_LIGHTS && !doorway(o))
+    if (o->arch == KIT_ARCH_POINTED && o->to - o->from >= TWO_LIGHTS && !o->door)
         two_lights(kit, s, o);
 }
 
@@ -307,36 +316,39 @@ void ornament_arch_board(Kit* kit, const KitFrame* f, int mat, float a0, float a
                            .y0 = spring,
                            .y1 = top,
                            .thick = 0.05f,
-                           .inner = 1,
-                           .mat_inner = mat,
-                           .mat_outer = mat,
                            .openings = {{a0, a1, spring, spring, arch, rise}},
                            .opening_count = 1};
-    kit_frame_wall(kit, f, &board);
+    kit_frame_panel(kit, f, mat, &board);
 }
 
-void ornament_balustrade(Kit* kit, const KitFrame* f, float a0, float a1, float y, float d) {
+void ornament_baluster(Kit* kit, const KitFrame* f, int mat, float a, float y, float d, float h) {
+    // Heights as fractions of the whole.
+    static const vec2 TURNED[] = {
+        {0.0f, 0.0f},     {0.028f, 0.0f},  {0.028f, 0.08f},  {0.016f, 0.133f}, {0.03f, 0.4f},
+        {0.016f, 0.667f}, {0.02f, 0.827f}, {0.026f, 0.933f}, {0.026f, 1.0f},   {0.0f, 1.0f}};
+    vec2 turned[KIT_COUNT(TURNED)];
+    for (int k = 0; k < KIT_COUNT(TURNED); k++)
+        glm_vec2_copy((vec2){TURNED[k][0], TURNED[k][1] * h}, turned[k]);
+    kit_frame_lathe(kit, f, mat, a, d, y, turned, KIT_COUNT(turned), 8);
+}
+
+void ornament_balustrade(Kit* kit, const KitFrame* f, int mat, float a0, float a1, float y,
+                         float d) {
     const float rail = y + 0.86f;
-    kit_frame_box(kit, f, MAT_SIDING_DARK, a0, a1, rail, rail + 0.06f, d - 0.045f, d + 0.045f,
-                  false);
-    kit_frame_box(kit, f, MAT_SIDING_DARK, a0, a1, y + 0.06f, y + 0.11f, d - 0.035f, d + 0.035f,
-                  false);
-    const vec2 turned[] = {{0.0f, 0.0f},    {0.028f, 0.0f}, {0.028f, 0.06f}, {0.016f, 0.1f},
-                           {0.03f, 0.3f},   {0.016f, 0.5f}, {0.02f, 0.62f},  {0.026f, 0.7f},
-                           {0.026f, 0.75f}, {0.0f, 0.75f}};
+    kit_frame_box(kit, f, mat, a0, a1, rail, rail + 0.06f, d - 0.045f, d + 0.045f, false);
+    kit_frame_box(kit, f, mat, a0, a1, y + 0.06f, y + 0.11f, d - 0.035f, d + 0.035f, false);
     const int n = (int)floorf((a1 - a0) / 0.14f);
-    for (int i = 1; i < n; i++) {
-        const float a = a0 + (a1 - a0) * (float)i / (float)n;
-        kit_frame_lathe(kit, f, MAT_SIDING_DARK, a, d, y + 0.11f, turned, KIT_COUNT(turned), 8);
-    }
+    for (int i = 1; i < n; i++)
+        ornament_baluster(kit, f, mat, a0 + (a1 - a0) * (float)i / (float)n, y + 0.11f, d, 0.75f);
     kit_frame_box(kit, f, KIT_COLLIDER_ONLY, a0, a1, y, rail + 0.1f, d - 0.05f, d + 0.05f, true);
 }
 
-void ornament_post(Kit* kit, const KitFrame* f, float a, float d, float y0, float y1, float r) {
+void ornament_post(Kit* kit, const KitFrame* f, int mat, float a, float d, float y0, float y1,
+                   float r) {
     // A square plinth, then a turned shaft with a ring at its middle and a capital.
     const float plinth = 0.16f, l = y1 - y0 - plinth;
-    kit_frame_box(kit, f, MAT_SIDING_DARK, a - 1.5f * r, a + 1.5f * r, y0, y0 + plinth,
-                  d - 1.5f * r, d + 1.5f * r, false);
+    kit_frame_box(kit, f, mat, a - 1.5f * r, a + 1.5f * r, y0, y0 + plinth, d - 1.5f * r,
+                  d + 1.5f * r, false);
     const vec2 turned[] = {{0.0f, 0.0f},
                            {1.2f * r, 0.0f},
                            {1.2f * r, 0.05f},
@@ -350,6 +362,6 @@ void ornament_post(Kit* kit, const KitFrame* f, float a, float d, float y0, floa
                            {1.6f * r, l - 0.04f},
                            {1.6f * r, l},
                            {0.0f, l}};
-    kit_frame_lathe(kit, f, MAT_SIDING_DARK, a, d, y0 + plinth, turned, KIT_COUNT(turned), 10);
+    kit_frame_lathe(kit, f, mat, a, d, y0 + plinth, turned, KIT_COUNT(turned), 10);
     kit_frame_box(kit, f, KIT_COLLIDER_ONLY, a - r, a + r, y0, y1, d - r, d + r, true);
 }

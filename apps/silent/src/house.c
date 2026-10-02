@@ -208,7 +208,7 @@ static void pent_roof(Kit* kit) {
     const float post_z = PORCH_Z0 + 0.1f, post_top = y0 + PENT_PITCH * post_z - PENT_THICK;
     const float posts[2] = {PORCH_X0 + 0.1f, PORCH_X1 - 0.1f};
     for (int i = 0; i < 2; i++)
-        ornament_post(kit, &KIT_WORLD, posts[i], post_z, FLOOR_Y, post_top, 0.06f);
+        ornament_post(kit, &KIT_WORLD, MAT_SIDING_DARK, posts[i], post_z, FLOOR_Y, post_top, 0.06f);
     const float spring = post_top - 0.5f;
     ornament_arch_board(kit, &KIT_WORLD, MAT_SIDING_DARK, posts[0] + 0.07f, posts[1] - 0.07f,
                         spring, post_top, KIT_ARCH_TUDOR, 0.36f, post_z);
@@ -217,10 +217,13 @@ static void pent_roof(Kit* kit) {
         ornament_arch_board(kit, &side, MAT_SIDING_DARK, post_z + 0.07f, wall, spring, post_top,
                             KIT_ARCH_POINTED, 0.36f, -posts[i]);
     // Open where the path comes up to the steps.
-    ornament_balustrade(kit, &KIT_WORLD, posts[0] + 0.08f, PATH_X0 + 0.05f, FLOOR_Y, post_z);
-    ornament_balustrade(kit, &KIT_WORLD, PATH_X1, posts[1] - 0.08f, FLOOR_Y, post_z);
+    ornament_balustrade(kit, &KIT_WORLD, MAT_SIDING_DARK, posts[0] + 0.08f, PATH_X0 + 0.05f,
+                        FLOOR_Y, post_z);
+    ornament_balustrade(kit, &KIT_WORLD, MAT_SIDING_DARK, PATH_X1, posts[1] - 0.08f, FLOOR_Y,
+                        post_z);
     for (int i = 0; i < 2; i++)
-        ornament_balustrade(kit, &side, post_z + 0.08f, wall - 0.02f, FLOOR_Y, -posts[i]);
+        ornament_balustrade(kit, &side, MAT_SIDING_DARK, post_z + 0.08f, wall - 0.02f, FLOOR_Y,
+                            -posts[i]);
     kit_drip(kit, &KIT_WORLD, (vec3){tower_face + 0.1f, porch_under, porch_edge},
              (vec3){PORCH_ROOF_X1 - 0.05f, porch_under, porch_edge},
              PORCH_DRIPS_PER_M * (PORCH_ROOF_X1 - tower_face), 0.0f);
@@ -289,7 +292,8 @@ static const KitWall WALLS[HOUSE_WALL_COUNT] = {
                           .mat_outer = MAT_SIDING_DARK,
                           .openings = {[OPENING_FRONT_DOOR] = {FRONT_DOOR_X0, FRONT_DOOR_X1,
                                                                FLOOR_Y, FRONT_DOOR_SPRING,
-                                                               KIT_ARCH_POINTED, FRONT_DOOR_RISE},
+                                                               KIT_ARCH_POINTED, FRONT_DOOR_RISE,
+                                                               true},
                                        [OPENING_KITCHEN_WINDOW] = {KITCHEN_WIN_X0, KITCHEN_WIN_X1,
                                                                    KITCHEN_WIN_SILL,
                                                                    KITCHEN_WIN_HEAD},
@@ -352,7 +356,8 @@ static const KitWall WALLS[HOUSE_WALL_COUNT] = {
                               .mat_outer = MAT_PLASTER,
                               .openings = {[OPENING_KITCHEN_DOOR] = {KITCHEN_DOOR_Z0,
                                                                      KITCHEN_DOOR_Z1, FLOOR_Y,
-                                                                     DOOR_HEAD}},
+                                                                     DOOR_HEAD, KIT_ARCH_FLAT, 0.0f,
+                                                                     true}},
                               .opening_count = 1},
     [HOUSE_WALL_HALL_WEST] = {.along_x = false,
                               .at = HALL_X0,
@@ -366,7 +371,7 @@ static const KitWall WALLS[HOUSE_WALL_COUNT] = {
                               .mat_outer = MAT_PLASTER,
                               .openings = {[OPENING_PARLOUR_DOOR] = {10.55f, 11.4f, FLOOR_Y,
                                                                      FLOOR_Y + 1.9f,
-                                                                     KIT_ARCH_POINTED, 0.4f}},
+                                                                     KIT_ARCH_POINTED, 0.4f, true}},
                               .opening_count = 1},
     // Upstairs, the same two lines part the study, the box room and the bedroom.
     [HOUSE_WALL_UP_EAST] = {.along_x = false,
@@ -403,13 +408,13 @@ static const KitWall WALLS[HOUSE_WALL_COUNT] = {
          .mat_inner = MAT_PLASTER,
          .mat_outer = MAT_PLASTER,
          .openings = {[OPENING_GREAT_ARCH] = {HALL_IN_X0, HALL_IN_X1, FLOOR_Y, FLOOR_Y + 2.0f,
-                                              KIT_ARCH_TUDOR, 0.5f},
+                                              KIT_ARCH_TUDOR, 0.5f, true},
                       [OPENING_STUDY_DOOR] = {-3.0f, -2.1f, DOOR2_SILL, DOOR2_SPRING,
-                                              KIT_ARCH_POINTED, 0.45f},
+                                              KIT_ARCH_POINTED, 0.45f, true},
                       [OPENING_BOX_ROOM_DOOR] = {-1.2f, -0.35f, DOOR2_SILL, DOOR2_SPRING,
-                                                 KIT_ARCH_POINTED, 0.45f},
+                                                 KIT_ARCH_POINTED, 0.45f, true},
                       [OPENING_BEDROOM_DOOR] = {1.6f, 2.45f, DOOR2_SILL, DOOR2_SPRING,
-                                                KIT_ARCH_POINTED, 0.45f}},
+                                                KIT_ARCH_POINTED, 0.45f, true}},
          .opening_count = 4},
 };
 
@@ -610,9 +615,29 @@ int house_doors(Door* doors, int max, Engine* engine, Scene* scene, EntityManage
                : 0;
 }
 
+float house_clearance(const vec3 p) {
+    float d = tower_wall_distance(p);
+    for (int i = 0; i < HOUSE_WALL_COUNT; i++) {
+        const KitWall* w = &WALLS[i];
+        const vec2 a = {w->along_x ? w->from : w->at, w->along_x ? w->at : w->from};
+        const vec2 b = {w->along_x ? w->to : w->at, w->along_x ? w->at : w->to};
+        d = fminf(d, kit_plan_distance(p, a, b) - 0.5f * w->thick);
+    }
+    // The floor and the ceilings, each as a band of height over the whole plan.
+    static const float SLABS[][2] = {{0.0f, FLOOR_Y},
+                                     {CEIL_Y, FLOOR2_Y},
+                                     {CEIL2_Y, CEIL2_Y + SLAB},
+                                     {TOWER_CEIL_Y, TOWER_CEIL_Y + SLAB}};
+    for (int i = 0; i < KIT_COUNT(SLABS); i++)
+        d = fminf(d, fmaxf(SLABS[i][0] - p[1], p[1] - SLABS[i][1]));
+    return d;
+}
+
 float house_outside_distance(const vec3 p) {
     const float cx = 0.5f * (HOUSE_X0 + HOUSE_X1), cz = 0.5f * (HOUSE_FRONT_Z + HOUSE_BACK_Z);
-    const float hx = 0.5f * (HOUSE_X1 - HOUSE_X0), hz = 0.5f * (HOUSE_BACK_Z - HOUSE_FRONT_Z);
+    // To the outer faces, as the tower's is: HOUSE_* are the walls' middles.
+    const float hx = 0.5f * (HOUSE_X1 - HOUSE_X0) + CORNER;
+    const float hz = 0.5f * (HOUSE_BACK_Z - HOUSE_FRONT_Z) + CORNER;
     const float body = fmaxf(fabsf(p[0] - cx) - hx, fabsf(p[2] - cz) - hz);
     return fminf(body, tower_outside_distance(p));
 }

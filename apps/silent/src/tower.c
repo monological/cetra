@@ -293,6 +293,15 @@ int tower_notch(float x0, float z0, float x1, float z1, float apothem, vec2* out
     return n;
 }
 
+float tower_wall_distance(const vec3 p) {
+    vec2 c[FACES];
+    octagon(TOWER_APOTHEM, c);
+    float d = 1e9f;
+    for (int k = 0; k < FACES; k++)
+        d = fminf(d, kit_plan_distance(p, c[(k + FACES - 1) % FACES], c[k]));
+    return d - 0.5f * EXT_WALL;
+}
+
 float tower_outside_distance(const vec3 p) {
     float d = -1e9f;
     for (int k = 0; k < FACES; k++) {

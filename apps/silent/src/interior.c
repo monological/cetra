@@ -75,7 +75,7 @@ static float band(Kit* kit, const Facade* s, float a0, float a1, float y, float 
         kit_frame_box(kit, &s->f, MAT_MAHOGANY, spans[i].a0, spans[i].a1, y, y + h, s->face,
                       s->face + s->out * proud, false);
         if (card != GOTHIC_COUNT && spans[i].a1 - spans[i].a0 >= MIN_SPAN)
-            kit_frame_card_row(kit, &s->f, MAT_CARVED, GOTHICS[card].uv, spans[i].a0, spans[i].a1,
+            kit_frame_card_row(kit, &s->f, MAT_GOTHIC, GOTHICS[card].uv, spans[i].a0, spans[i].a1,
                                y, y + h, s->face + s->out * PANEL_DEPTH, s->out, width);
     }
     return y + h;
@@ -106,8 +106,8 @@ static int cased(const KitWall* w, KitOpening* out) {
 
 /*
  * Dressed stone up a wall's inner face from y0 to the eave, a few centimetres thick, cut round
- * the wall's own openings -- a wall of its own standing on the face, so a lancet's arched
- * reveal is the stone's.
+ * the wall's own openings -- a panel standing on the face, so a lancet's arched reveal is the
+ * stone's. It runs on behind the hearth, buried in its stone.
  */
 static void lining(Kit* kit, const KitWall* w, float a0, float a1, float y0) {
     const Facade s = facade_inner(w);
@@ -118,10 +118,7 @@ static void lining(Kit* kit, const KitWall* w, float a0, float a1, float y0) {
     stone.y0 = y0;
     stone.y1 = EAVE_Y;
     stone.thick = 0.03f;
-    stone.inner = 1;
-    stone.mat_inner = MAT_STONE;
-    stone.mat_outer = MAT_STONE;
-    kit_frame_wall(kit, &s.f, &stone);
+    kit_frame_panel(kit, &s.f, MAT_STONE, &stone);
 }
 
 /*
@@ -256,7 +253,7 @@ static void great_hall(Kit* kit) {
  */
 static void runner_piece(Kit* kit, const vec3 corner, const vec3 across, const vec3 up,
                          GothicId id) {
-    kit_frame_card(kit, &KIT_WORLD, MAT_PERSIAN, corner, across, up, GOTHICS[id].uv);
+    kit_frame_card(kit, &KIT_WORLD, MAT_GOTHIC, corner, across, up, GOTHICS[id].uv);
 }
 
 static void runner(Kit* kit, const vec2 from, const vec2 to, float y) {
@@ -318,10 +315,10 @@ static void stair_dressing(Kit* kit) {
             const float slice[4] = {uv[0], uv[1] + (uv[3] - uv[1]) * v / RUNNER_LEN, uv[2],
                                     uv[1] + (uv[3] - uv[1]) * (v + pieces[p]) / RUNNER_LEN};
             if (p == 0)
-                kit_frame_card(kit, &KIT_WORLD, MAT_PERSIAN, (vec3){x0, y_lo, z_front + 0.004f},
+                kit_frame_card(kit, &KIT_WORLD, MAT_GOTHIC, (vec3){x0, y_lo, z_front + 0.004f},
                                (vec3){x1 - x0, 0.0f, 0.0f}, (vec3){0.0f, STAIR_RISE, 0.0f}, slice);
             else
-                kit_frame_card(kit, &KIT_WORLD, MAT_PERSIAN, (vec3){x0, y_hi + 0.004f, z_front},
+                kit_frame_card(kit, &KIT_WORLD, MAT_GOTHIC, (vec3){x0, y_hi + 0.004f, z_front},
                                (vec3){x1 - x0, 0.0f, 0.0f}, (vec3){0.0f, 0.0f, -STAIR_GOING},
                                slice);
             along += pieces[p];
@@ -336,35 +333,31 @@ static void stair_dressing(Kit* kit) {
     // The balustrade up the open side: the rail along the rake, a baluster on every tread.
     const float bx = STAIR_X0 + 0.05f, rail = 0.88f;
     const float foot_z = STAIR_FOOT_Z - 0.5f * STAIR_GOING, foot_y = FLOOR_Y + STAIR_RISE;
-    ornament_post(kit, &KIT_WORLD, bx, foot_z, foot_y, foot_y + rail + 0.35f, 0.065f);
-    ornament_post(kit, &KIT_WORLD, bx, GALLERY_Z1 - 0.05f, FLOOR2_Y, FLOOR2_Y + rail + 0.35f,
+    const float head_z = GALLERY_Z1 - 0.05f; // the gallery's balustrade line, and the stair's head
+    ornament_post(kit, &KIT_WORLD, MAT_MAHOGANY, bx, foot_z, foot_y, foot_y + rail + 0.35f, 0.065f);
+    ornament_post(kit, &KIT_WORLD, MAT_MAHOGANY, bx, head_z, FLOOR2_Y, FLOOR2_Y + rail + 0.35f,
                   0.065f);
     const KitFrame along_z = {{bx, 0.0f, 0.0f}, -0.5f * GLM_PIf}; // a is z, d is -x
     const float top_y = FLOOR2_Y + rail;
-    const vec2 handrail[4] = {{GALLERY_Z1 - 0.05f, top_y},
+    const vec2 handrail[4] = {{head_z, top_y},
                               {foot_z, foot_y + rail},
                               {foot_z, foot_y + rail + 0.07f},
-                              {GALLERY_Z1 - 0.05f, top_y + 0.07f}};
+                              {head_z, top_y + 0.07f}};
     kit_frame_extrude(kit, &along_z, MAT_MAHOGANY, handrail, 4, -0.035f, 0.035f);
-    const vec2 turned[] = {{0.0f, 0.0f},    {0.026f, 0.0f},  {0.026f, 0.05f}, {0.015f, 0.09f},
-                           {0.028f, 0.28f}, {0.015f, 0.47f}, {0.024f, 0.6f},  {0.0f, 0.62f}};
     for (int i = 2; i < STAIR_RISERS; i++) {
         const float z = STAIR_FOOT_Z - ((float)i - 0.5f) * STAIR_GOING;
         const float y = FLOOR_Y + (float)i * STAIR_RISE;
-        const float t = (z - foot_z) / (GALLERY_Z1 - 0.05f - foot_z);
+        const float t = (z - foot_z) / (head_z - foot_z);
         const float to = foot_y + rail + t * (top_y - foot_y - rail);
-        vec2 scaled[KIT_COUNT(turned)];
-        for (int k = 0; k < KIT_COUNT(turned); k++)
-            glm_vec2_copy((vec2){turned[k][0], turned[k][1] * (to - y) / 0.62f}, scaled[k]);
-        kit_frame_lathe(kit, &KIT_WORLD, MAT_MAHOGANY, bx, z, y, scaled, KIT_COUNT(scaled), 8);
+        ornament_baluster(kit, &KIT_WORLD, MAT_MAHOGANY, bx, y, z, to - y);
         kit_frame_box(kit, &KIT_WORLD, KIT_COLLIDER_ONLY, bx - 0.04f, bx + 0.04f, y, to + 0.1f,
                       z - 0.5f * STAIR_GOING, z + 0.5f * STAIR_GOING, true);
     }
 
     // The gallery's, from the stair's head newel to a half-post on the west wall.
-    ornament_balustrade(kit, &KIT_WORLD, GREAT_X0 + 0.05f, STAIR_X0 - 0.03f, FLOOR2_Y,
-                        GALLERY_Z1 - 0.05f);
-    ornament_post(kit, &KIT_WORLD, GREAT_X0 + 0.07f, GALLERY_Z1 - 0.05f, FLOOR2_Y,
+    ornament_balustrade(kit, &KIT_WORLD, MAT_MAHOGANY, GREAT_X0 + 0.05f, STAIR_X0 - 0.03f, FLOOR2_Y,
+                        head_z);
+    ornament_post(kit, &KIT_WORLD, MAT_MAHOGANY, GREAT_X0 + 0.07f, head_z, FLOOR2_Y,
                   FLOOR2_Y + rail + 0.35f, 0.065f);
 }
 
