@@ -406,6 +406,19 @@ static void _update_camera_uniforms(ShaderProgram* program, Camera* camera) {
     // built. Post passes reconstruct view-Z from the projection matrix instead.
 }
 
+// The rain a pass shades with: none for a capture taken before the rain's cover has been
+// drawn. The cover is drawn after the frame's captures, so a capture in the first frame
+// would read every surface as open sky, and a probe never re-captures -- a roofed floor
+// would stay soaked in it. Only where a cover is coming: with no shadow system, or a rain
+// that draws none, the camera reads open sky everywhere too, and a capture should agree.
+static const Rain* _rain_for_pass(const Engine* engine, const Scene* scene) {
+    const Rain* rain = scene ? scene->rain : NULL;
+    if (engine->capturing && rain_active(rain) && rain->occlusion_extent > 0.0f &&
+        scene->shadow_system && scene->shadow_system->rain_layer < 0)
+        return NULL;
+    return rain;
+}
+
 // Draws one item, carrying `instances` objects. Visibility is the caller's:
 // once a run is formed the chunk holds exactly these objects, so nothing here
 // may decline to draw.
@@ -557,7 +570,7 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
             // describe a different instant of the swash than the water surface draws.
             water_bind_sea(scene ? scene->water : NULL, scene, program);
             // And how soaked the world is, for the same reason and on the same switch.
-            rain_bind_surface(scene ? scene->rain : NULL, program);
+            rain_bind_surface(_rain_for_pass(engine, scene), program);
             // Both are read only inside an OIT sub-pass, so they upload only
             // there: the warp interval the moments are stated over, and (where
             // the atlas is actually bound) the reciprocal FRAME size. The atlas
@@ -2026,6 +2039,14 @@ void scene_capture_faces(Engine* engine, Scene* scene, struct IBLResources* ibl,
     }
     bool saved_refraction = engine->refraction_enabled;
     bool saved_capturing = engine->capturing;
+    // A capture runs inside the frame, after the frame top has applied the overlays, and the
+    // wireframe overlay draws lines in the albedo mode. A probe or a converged GI probe never
+    // re-captures, so a capture taken under it would keep the wireframe for the whole run.
+    const RenderMode saved_render_mode = engine->current_render_mode;
+    GLint saved_polygon_mode[2] = {GL_FILL, GL_FILL};
+    glGetIntegerv(GL_POLYGON_MODE, saved_polygon_mode);
+    engine->current_render_mode = RENDER_MODE_PBR;
+    glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
 
     GLint saved_viewport[4];
     GLint saved_fbo;
@@ -2145,6 +2166,8 @@ void scene_capture_faces(Engine* engine, Scene* scene, struct IBLResources* ibl,
     camera->far_clip = saved_far;
     engine->refraction_enabled = saved_refraction;
     engine->capturing = saved_capturing;
+    engine->current_render_mode = saved_render_mode;
+    glPolygonMode(GL_FRONT_AND_BACK, (GLenum)saved_polygon_mode[0]);
     if (engine->postfx) {
         engine->postfx->taa_enabled = saved_taa;
         engine->postfx->taau_jitter_px[0] = saved_jitter[0];

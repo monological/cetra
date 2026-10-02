@@ -162,6 +162,9 @@ bool probe_atlas_project(ProbeAtlas* atlas, const ReflectionProbe* probe, int in
     GLint saved_fbo;
     glGetIntegerv(GL_VIEWPORT, saved_viewport);
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &saved_fbo);
+    // Put back as found: a set is captured inside the frame, after the frame top has
+    // set the culling the shadow and scene passes draw with.
+    const GLboolean saved_cull = glIsEnabled(GL_CULL_FACE);
 
     glBindFramebuffer(GL_FRAMEBUFFER, atlas->fbo);
     glDisable(GL_BLEND);
@@ -195,6 +198,8 @@ bool probe_atlas_project(ProbeAtlas* atlas, const ReflectionProbe* probe, int in
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glEnable(GL_DEPTH_TEST);
+    if (saved_cull)
+        glEnable(GL_CULL_FACE);
     glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)saved_fbo);
     glViewport(saved_viewport[0], saved_viewport[1], saved_viewport[2], saved_viewport[3]);
 
