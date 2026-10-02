@@ -90,7 +90,8 @@ DirectXTex's 8 is 4x the work per bisection step per level for a smoother estima
 ### Yuksel, *Alpha Distribution for Alpha Testing*, I3D 2018
 
 - <http://www.cemyuksel.com/research/alphadistribution/> — fetched 2026-08-27
-- [`yuksel-2018-alpha-distribution-for-alpha-testing.md`](yuksel-2018-alpha-distribution-for-alpha-testing.md)
+- Local: `yuksel-2018-alpha-distribution-for-alpha-testing.md`. ACM copyright, whose notice
+  requires permission "to post on servers"; committed until spec 13.14.
 - The supplementary document is figure plates with no extractable text (`pdf2md` reports it
   needs OCR); not converted, and nothing here depends on it.
 
@@ -151,7 +152,8 @@ the four-way table.
 - <https://casual-effects.com/research/Wyman2017Improved/Wyman2017Improved.pdf> — fetched
   2026-08-27. The extended journal version of *Hashed Alpha Testing* (I3D 2017); it supersedes
   the short paper and additionally covers alpha-to-coverage, which is the path cetra renders on.
-- [`wyman-mcguire-2017-improved-alpha-testing-hashed-sampling.md`](wyman-mcguire-2017-improved-alpha-testing-hashed-sampling.md)
+- Local: `wyman-mcguire-2017-improved-alpha-testing-hashed-sampling.md`. IEEE copyright;
+  committed until spec 13.14.
 
 **What cetra takes from it:** nothing implemented. It is the *rejected alternative* — spec 11.31
 deferred to it, 11.87 chose alpha-to-coverage plus sharpening instead, and this is the document
@@ -188,9 +190,10 @@ live method; the bent cone is the predecessor it retired. Read across specs 4.2.
 ### Therrien, Levesque & Gilet, *Screen Space Indirect Lighting with Visibility Bitmask*, The Visual Computer (2023)
 
 - arXiv:2301.11376v2, DOI 10.1007/s00371-022-02703-y. Reference implementation and code
-  notes: <https://cdrinmatane.github.io/posts/ssaovb-code/>. Converted from the arXiv PDF;
-  committed 2026-08-23, and the file records no fetch date.
-- [`therrien-2023-screen-space-visibility-bitmask.md`](therrien-2023-screen-space-visibility-bitmask.md)
+  notes: <https://cdrinmatane.github.io/posts/ssaovb-code/>. Converted from the arXiv PDF
+  around 2026-08-23 (the file records no fetch date). arXiv's default non-exclusive licence,
+  which grants rights to arXiv and nobody else; committed until spec 13.14.
+- Local: `therrien-2023-screen-space-visibility-bitmask.md`
 
 **What cetra takes from it — the method itself.** `gtao_frag.glsl` replaces GTAO's two
 horizon angles with the paper's visibility bitmask: 32 angular sectors per hemisphere slice
@@ -224,7 +227,8 @@ jittered slice per frame.
 - DOI 10.2312/PE/VMV/VMV11/177-182 (Vision, Modeling, and Visualization 2011, pp. 177–182).
   The committed copy records only the DOI — no source URL and no fetch date, unlike the
   entries above; add the author-hosted PDF link before trusting this bullet.
-- [`klehm-2011-bent-normals-and-cones-screen-space.md`](klehm-2011-bent-normals-and-cones-screen-space.md)
+- Local: `klehm-2011-bent-normals-and-cones-screen-space.md`. Eurographics copyright;
+  committed until spec 13.14.
 
 **What cetra took from it, and retired.** Spec 11.3 built a specular-occlusion term from the
 paper's bent cone — the AO chain's bent normal plus a length-derived aperture (§3.2)
