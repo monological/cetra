@@ -35,6 +35,14 @@ cetra_config.json
 # CETRA_COOK_DIR.
 cooked/
 
+# Papers converted with pdf2md. The repository is public and almost every paper's
+# copyright forbids reposting it, so the texts stay on the machine that fetched them
+# and the README, which says where each came from, is what is committed. A paper
+# under an open licence (CC-BY and the like) is un-ignored by name below it.
+docs/papers/*
+!docs/papers/README.md
+!docs/papers/wrede-2025-fire-x-stoichiometric-heat-release.md
+
 # Where the Playwright MCP browser drops downloads, screenshots and console logs
 # when it is driven from this directory. Nothing here is an input to anything --
 # a file that is wanted gets moved into assets/ and committed from there.

@@ -8,8 +8,18 @@ Each entry records the citation, where it came from, when, and **the one claim c
 it**. That last field is the point of this directory: a paper in a repo with no statement of
 what was used from it is decoration.
 
-Papers are converted with `pdf2md` and committed as markdown rather than PDF — diffable,
-greppable, and a fraction of the size. The originals are author-hosted and linked below.
+Papers are converted with `pdf2md` to markdown rather than kept as PDF — greppable, and a
+fraction of the size. **The texts are NOT committed**: this repository is public, and a paper
+an author hosts for reading is not one we may repost — nearly every copyright notice below
+says so in as many words. `.gitignore` keeps `docs/papers/*` on the machine that fetched it,
+and this README is what is committed, so each entry's source link is how to rebuild the
+directory:
+
+    curl -sL -o paper.pdf <source URL>
+    pdf2md paper.pdf > docs/papers/<the file name the entry gives>
+
+The one exception is a paper under an OPEN licence (CC-BY or the like), which is committed in
+full with an attribution header and un-ignored by name in `.gitignore`. The entry says which.
 
 ---
 
@@ -233,3 +243,107 @@ one cone.
 
 **Kept for its derivations, not its code.** The bent *normal* production still lives in
 `gtao_frag` (a debug view, booked for SSGI / SSR / DDGI); the bent *cone* does not.
+
+---
+
+## Fire
+
+Read for spec 13.14: a GPU combustion grid rendered as an emitting, absorbing volume, the light
+it casts derived from what it draws, and structural flames for candles. All fetched 2026-10-01.
+**The "takes" fields are what the spec INTENDS to take**, written before any of it was built;
+each is corrected in the phase that uses it, the way 11.88 found its blog post and its
+reference code disagreeing.
+
+### Nguyen, Fedkiw & Jensen, *Physically Based Modeling and Animation of Fire*, SIGGRAPH 2002
+
+- <http://graphics.ucsd.edu/~henrik/papers/fire/fire.pdf> (Jensen's page). ACM copyright.
+- Local: `nguyen-fedkiw-jensen-2002-physically-based-modeling-and-animation-of-fire.md`
+
+**What cetra takes from it:** the base model. Fuel that burns into hot products and soot; those
+rise by buoyancy; they are drawn by BLACKBODY emission from temperature; the reaction zone has
+its own blue core; and products cool by a T⁴ radiative term. Phases 2 and 3.
+
+### Fedkiw, Stam & Jensen, *Visual Simulation of Smoke*, SIGGRAPH 2001
+
+- <http://graphics.ucsd.edu/~henrik/papers/smoke/smoke.pdf> (Jensen's page). ACM copyright.
+- Local: `fedkiw-stam-jensen-2001-visual-simulation-of-smoke.md`
+
+**What cetra takes from it:** Boussinesq buoyancy (temperature lifts, soot weighs) and
+VORTICITY CONFINEMENT, the term that puts back the curls a coarse grid's numerical dissipation
+takes out. Phase 2.
+
+### Stam, *Stable Fluids*, SIGGRAPH 1999
+
+- <http://www.dgp.toronto.edu/people/stam/reality/Research/pdf/ns.pdf> (Stam's page). ACM copyright.
+- Local: `stam-1999-stable-fluids.md`
+
+**What cetra takes from it:** semi-Lagrangian advection and the pressure projection, the
+unconditionally stable skeleton every other step hangs on. Phase 2.
+
+### Selle, Fedkiw, Kim, Liu & Rossignac, *An Unconditionally Stable MacCormack Method*, J. Sci. Comput. 2008
+
+- <https://faculty.cc.gatech.edu/~jarek/papers/maccormack.pdf> (Rossignac's page). Springer copyright.
+- Local: `selle-2008-unconditionally-stable-maccormack-method.md`
+
+**What cetra takes from it:** second-order advection at semi-Lagrangian's cost plus one
+backward pass, with the clamp to the source cell's range that keeps it stable. Detail at the
+same grid resolution, which on GL 4.1 is the cheaper currency. Phase 2.
+
+### Crane, Llamas & Tariq, *Real-Time Simulation and Rendering of 3D Fluids*, GPU Gems 3 ch. 30, 2007
+
+- <https://www.cs.cmu.edu/~kmcrane/Projects/GPUFluid/paper.pdf> (Crane's page). Book copyright
+  NVIDIA / Addison-Wesley; also readable free at
+  <https://developer.nvidia.com/gpugems/gpugems3/part-v-physics-simulation/chapter-30-real-time-simulation-and-rendering-3d-fluids>.
+- Local: `crane-llamas-tariq-2007-real-time-simulation-and-rendering-of-3d-fluids.md`
+
+**What cetra takes from it:** the template. The whole solver as rasterised passes over 3D
+texture slices, written for DX10 before compute shaders existed, which is exactly GL 4.1's
+position: obstacles voxelised into the grid, fire as a combustion field, and the volume
+ray-marched against the scene's depth. Phases 2 and 3.
+
+### Pegoraro & Parker, *Physically-Based Realistic Fire Rendering*, EG Natural Phenomena 2006
+
+- <https://www.sci.utah.edu/~vpegorar/research/2006_EGWNP.pdf> (Pegoraro's page). Eurographics copyright.
+- Local: `pegoraro-parker-2006-physically-based-realistic-fire-rendering.md`
+
+**What cetra takes from it:** emission as the soot's absorption coefficient times Planck
+radiance, in absolute units, so a flame's brightness is a physical quantity beside the
+engine's nits rather than a tuned colour ramp. Phases 1 and 3.
+
+### Chadwick & James, *Animating Fire with Sound*, SIGGRAPH 2011
+
+- <https://www.cs.cornell.edu/projects/Sound/fire/FireSound2011.pdf> (project page, which says
+  its documents "may not be reposted without the explicit permission of the copyright holder").
+- Local: `chadwick-james-2011-animating-fire-with-sound.md`
+
+**What cetra takes from it:** the premise only — a flame's sound follows its heat release —
+which is why the fire publishes `heat_release` for an app to swell a recorded crackle by. The
+paper's synthesis is not built. Phase 4.
+
+### Wrede, Wagner, Mahfuz, Pałubicki, Michels & Pirk, *Fire-X: Extinguishing Fire with Stoichiometric Heat Release*, ACM TOG 44(6), SIGGRAPH Asia 2025
+
+- <https://helgewrede.github.io/firex/data/FireXExtinguishingFireWithStoichiometricHeatRelease.pdf>,
+  DOI 10.1145/3763338.
+- **CC BY 4.0, so committed:**
+  [`wrede-2025-fire-x-stoichiometric-heat-release.md`](wrede-2025-fire-x-stoichiometric-heat-release.md),
+  with its attribution in the file's header.
+
+**What cetra takes from it:** nothing built. It is the current frontier — multi-species
+thermodynamics, stoichiometric heat release, a hybrid SPH-grid for water on fire — and is on
+hand as what the real-time model is a simplification OF, and for its flame colours
+(blue-to-orange with mixture) as a reference to judge the blue core against.
+
+### Linked only: no copy that may be fetched
+
+- **Lamorlette & Foster, *Structural Modeling of Flames for a Production Environment*,
+  SIGGRAPH 2002.** <https://dl.acm.org/doi/abs/10.1145/566570.566644>. ACM, no author copy
+  found. Intended take: flames as SPINES with stochastic flicker and Kolmogorov noise, the
+  candle tier of phase 6.
+- **Horvath & Geiger, *Directable, High-Resolution Simulation of Fire on the GPU*,
+  SIGGRAPH 2009.** <https://dl.acm.org/doi/10.1145/1576246.1531347>. ACM, no author copy
+  found. Kept in reserve: a coarse 3D sim refined by view-aligned 2D slices, if the grid's
+  detail falls short.
+- **Nielsen, Bojsen-Hansen, Stamatelos & Bridson, *Physics-Based Combustion Simulation*,
+  ACM TOG 41(5), 2022.** <https://dl.acm.org/doi/full/10.1145/3526213>. The ACM library
+  refuses a scripted download and no author copy was found. Intended take: real fuels'
+  adiabatic flame temperatures, as a source for the default temperatures.
