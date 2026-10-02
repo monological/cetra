@@ -46,7 +46,7 @@ void player_init(Player* p, Game* game, PhysicsWorld* physics, EntityManager* em
     cc.capsule_half_height = CAPSULE_HALF_HEIGHT;
     // Porch steps are 15 cm; a kerb is 15. Nothing in the world asks for more.
     cc.step_height = 0.25f;
-    cc.max_slope_angle = 45.0f;
+    cc.max_slope_angle = glm_rad(45.0f);
     entity_add_character_controller(p->entity, physics, &cc);
 
     p->rig = create_camera_rig();

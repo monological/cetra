@@ -33,10 +33,13 @@
  * base, a pipe at both ends.
  */
 
-#define KIT_MAX_MATERIALS 64
-#define KIT_MAX_OPENINGS  6
+#define KIT_MAX_MATERIALS 96
+#define KIT_MAX_OPENINGS  8
 #define KIT_COLLIDER_ONLY (-1) // a material slot that draws nothing and always collides
 #define KIT_MAX_POINTS    32   // in a pipe's path or a lathe's profile
+#define KIT_MAX_OUTLINE   128  // corners of a flat polygon or an extruded outline
+#define KIT_ARCH_SEGMENTS 8    // segments in each half of an arch's head
+#define KIT_ARCH_POINTS   (2 * KIT_ARCH_SEGMENTS + 1)
 
 typedef struct Kit {
     Material* materials[KIT_MAX_MATERIALS];
@@ -56,16 +59,33 @@ typedef struct Kit {
     int drip_count;
 } Kit;
 
-// A hole in a wall: [from, to] along the wall's axis, [bottom, top] in world Y.
+/*
+ * The head of an arch: FLAT is a lintel; POINTED is two arcs meeting at an apex, an
+ * equilateral arch when its rise is the span's sqrt(3)/2 and a lancet above that; TUDOR is the
+ * four-centred arch of late Gothic, a tight haunch rolling into a long, low arc, for a rise up
+ * to about 0.39 of the span (a higher one is drawn POINTED).
+ */
+typedef enum KitArchShape { KIT_ARCH_FLAT = 0, KIT_ARCH_POINTED, KIT_ARCH_TUDOR } KitArchShape;
+
+// The head over [a0, a1] in (a, y): KIT_ARCH_POINTS points from (a0, spring) over its apex,
+// `rise` above the springing line, to (a1, spring). FLAT runs straight across at `spring`.
+void kit_arch_outline(KitArchShape shape, float a0, float a1, float spring, float rise,
+                      vec2 out[KIT_ARCH_POINTS]);
+
+// A hole in a wall: [from, to] along the wall's axis, [bottom, top] in world Y. An arched one
+// springs at `top` and rises `rise` above it, so its head is cut into the wall over it.
 typedef struct KitOpening {
     float from, to;
     float bottom, top;
+    KitArchShape arch;
+    float rise;
 } KitOpening;
 
 // An axis-aligned wall. It runs along X when `along_x`, at z = `at`, or along Z
 // at x = `at`, from `from` to `to`. `inner` is the sign of the side the inner
 // material faces (+1 toward +z/+x). Two layers of half the thickness each, so
-// a room's plaster and a house's siding are one wall.
+// a room's plaster and a house's siding are one wall. In a frame (kit_frame_wall)
+// it runs along a at d = `at`, and `inner` is the sign along d; `along_x` is unused.
 typedef struct KitWall {
     bool along_x;
     float at, from, to;
@@ -103,6 +123,14 @@ void kit_quad_facing(Kit* kit, int mat, const vec3 a, const vec3 b, const vec3 c
                      const vec3 outward);
 void kit_tri_facing(Kit* kit, int mat, const vec3 a, const vec3 b, const vec3 c,
                     const vec3 outward);
+// A flat polygon of `count` coplanar corners, concave or not but never crossing itself, cut
+// into triangles by ear clipping and wound to face `outward`.
+void kit_polygon_facing(Kit* kit, int mat, const vec3* corners, int count, const vec3 outward);
+
+// A horizontal slab whose outline is `count` (x, z) corners, from y0 to y1. `collide` adds a
+// body for it, which is exact only for a CONVEX outline: one box per edge, reaching in to the
+// centroid.
+void kit_slab(Kit* kit, int mat, const vec2* xz, int count, float y0, float y1, bool collide);
 
 // A box turned `yaw` radians about +Y. `collide` adds a static body for it.
 void kit_box(Kit* kit, int mat, const vec3 centre, const vec3 half, float yaw, bool collide);
@@ -145,6 +173,21 @@ void kit_drip(Kit* kit, const KitFrame* f, const vec3 from, const vec3 to, float
 // The box a0..a1 along, y0..y1 up, d0..d1 out.
 void kit_frame_box(Kit* kit, const KitFrame* f, int mat, float a0, float a1, float y0, float y1,
                    float d0, float d1, bool collide);
+// A wall in frame `f`: see KitWall.
+void kit_frame_wall(Kit* kit, const KitFrame* f, const KitWall* wall);
+// A flat polygon of (a, y) corners at distance d, facing out (+d).
+void kit_frame_polygon(Kit* kit, const KitFrame* f, int mat, const vec2* outline, int count,
+                       float d);
+// The (a, y) outline extruded from d0 to d1: both faces and its edges, which are flat.
+void kit_frame_extrude(Kit* kit, const KitFrame* f, int mat, const vec2* outline, int count,
+                       float d0, float d1);
+/*
+ * A solid flight of `risers` steps, each `rise` high and `going` deep, climbing along +d from
+ * d0 at floor height y0 between a0 and a1. The last riser lands on the floor above, so there
+ * are risers - 1 treads; each step is a box down to y0, and collides.
+ */
+void kit_frame_stair(Kit* kit, const KitFrame* f, int mat, float a0, float a1, float y0, float d0,
+                     float rise, float going, int risers);
 // An upright prism standing at (a, d).
 void kit_frame_prism(Kit* kit, const KitFrame* f, int mat, float a, float d, float y0, float y1,
                      float r, int sides);
