@@ -1514,42 +1514,11 @@ Texture* texture_pool_publish(TexturePool* pool, const char* key, const unsigned
     return texture;
 }
 
-Texture* texture_load_file(TexturePool* pool, const char* filepath, TextureDesc desc) {
-    if (!pool || !filepath) {
-        log_error("Invalid pool or filepath");
-        return NULL;
-    }
-
-    if (pool->directory == NULL) {
-        log_error("Texture pool directory not set");
-        return NULL;
-    }
-
-    // Normalize and work on a copy of the filepath
-    char* normalized_path = convert_and_normalize_path(filepath);
-    if (!normalized_path) {
-        log_error("Failed to normalize path: '%s'", filepath);
-        return NULL;
-    }
-
-    char* subpath = safe_strdup(normalized_path);
-    if (!subpath) {
-        log_error("Memory allocation failed for subpath.");
-        free(normalized_path);
-        return NULL;
-    }
-
-    // Use find_existing_subpath to find a valid subpath
-    if (!find_existing_subpath(pool->directory, &subpath)) {
-        log_error("No valid subpath found for texture: '%s'", subpath);
-        free(normalized_path);
-        free(subpath);
-        return NULL;
-    }
-
+// The file at `path`, which names it already, into the pool: cached by that path.
+static Texture* _load_resolved(TexturePool* pool, const char* path, TextureDesc desc) {
     int width, height, nrChannels;
 
-    Texture* cached_texture = get_texture_from_pool(pool, subpath);
+    Texture* cached_texture = get_texture_from_pool(pool, path);
     if (cached_texture) {
         /*
          * The pool keys on PATH, so a second consumer wanting the same file in a
@@ -1568,17 +1537,13 @@ Texture* texture_load_file(TexturePool* pool, const char* filepath, TextureDesc 
         if (cached_srgb != desc.is_srgb)
             log_warn("texture '%s' is already loaded as %s and is now wanted as %s; "
                      "the pool keys on path, so the first load wins",
-                     subpath, cached_srgb ? "sRGB" : "linear", desc.is_srgb ? "sRGB" : "linear");
-        free(normalized_path);
-        free(subpath);
+                     path, cached_srgb ? "sRGB" : "linear", desc.is_srgb ? "sRGB" : "linear");
         return cached_texture;
     }
 
-    unsigned char* data = stbi_load(subpath, &width, &height, &nrChannels, 0);
+    unsigned char* data = stbi_load(path, &width, &height, &nrChannels, 0);
     if (!data) {
-        log_error("Failed to load texture: %s", subpath);
-        free(normalized_path);
-        free(subpath);
+        log_error("Failed to load texture: %s", path);
         return NULL;
     }
 
@@ -1594,14 +1559,55 @@ Texture* texture_load_file(TexturePool* pool, const char* filepath, TextureDesc 
         texture_dilate_transparent_rgb(data, width, height);
     }
 
-    Texture* new_texture =
-        texture_pool_publish(pool, subpath, data, width, height, nrChannels, desc);
+    Texture* new_texture = texture_pool_publish(pool, path, data, width, height, nrChannels, desc);
 
     stbi_image_free(data);
-    free(normalized_path);
-    free(subpath);
 
     return new_texture;
+}
+
+Texture* texture_load_file(TexturePool* pool, const char* filepath, TextureDesc desc) {
+    if (!pool || !filepath) {
+        log_error("Invalid pool or filepath");
+        return NULL;
+    }
+
+    if (pool->directory == NULL) {
+        log_error("Texture pool directory not set");
+        return NULL;
+    }
+
+    char* subpath = convert_and_normalize_path(filepath);
+    if (!subpath) {
+        log_error("Failed to normalize path: '%s'", filepath);
+        return NULL;
+    }
+
+    // Use find_existing_subpath to find a valid subpath
+    if (!find_existing_subpath(pool->directory, &subpath)) {
+        log_error("No valid subpath found for texture: '%s'", subpath);
+        free(subpath);
+        return NULL;
+    }
+
+    Texture* texture = _load_resolved(pool, subpath, desc);
+    free(subpath);
+    return texture;
+}
+
+Texture* texture_load_path(TexturePool* pool, const char* path, TextureDesc desc) {
+    if (!pool || !path) {
+        log_error("Invalid pool or path");
+        return NULL;
+    }
+    char* normalized = convert_and_normalize_path(path);
+    if (!normalized) {
+        log_error("Failed to normalize path: '%s'", path);
+        return NULL;
+    }
+    Texture* texture = _load_resolved(pool, normalized, desc);
+    free(normalized);
+    return texture;
 }
 
 Texture* texture_load_memory(TexturePool* pool, const char* key, const unsigned char* pixels,

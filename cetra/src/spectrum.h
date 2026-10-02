@@ -18,6 +18,13 @@ void spectrum_cie_xyz(float nm, vec3 out);
 // channel, which is the caller's to handle.
 void spectrum_xyz_to_rec709(const vec3 xyz, vec3 out);
 
+// The two conversions as matrices, the first with the same coefficients as the function above.
+void spectrum_xyz_to_rec709_matrix(mat3 out);
+void spectrum_rec709_to_xyz_matrix(mat3 out);
+
+// A linear Rec.709 colour's luminance: its Y.
+float spectrum_luminance(const vec3 rgb);
+
 // Planck's law: a blackbody's spectral radiance at `nm` nanometres and `kelvin`, in
 // W / (sr m^2 nm).
 double spectrum_planck(double nm, double kelvin);

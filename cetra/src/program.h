@@ -200,21 +200,17 @@ ShaderProgram* create_particle_program();
 // Falling rain's streaks (spec 13.9): instanced, with no vertex data at all
 ShaderProgram* create_rain_program();
 // Fire (spec 13.14): a GRID fire's simulation passes, the reduction that reads back what it
-// casts, the debug slice, and the march that draws every fire.
-typedef enum FireProgram {
-    FIRE_PROGRAM_ADVECT,
-    FIRE_PROGRAM_CURL,
-    FIRE_PROGRAM_REACT,
-    FIRE_PROGRAM_DIVERGENCE,
-    FIRE_PROGRAM_JACOBI,
-    FIRE_PROGRAM_PROJECT,
-    FIRE_PROGRAM_REDUCE,
-    FIRE_PROGRAM_SLICE,
-    FIRE_PROGRAM_MARCH,
-    FIRE_PROGRAM_CARD,
-    FIRE_PROGRAM_COUNT
-} FireProgram;
-ShaderProgram* create_fire_program(FireProgram which);
+// casts, and the debug slice; the march that draws a GRID or FLAME fire, and a flipbook's cards.
+ShaderProgram* create_fire_advect_program();
+ShaderProgram* create_fire_curl_program();
+ShaderProgram* create_fire_react_program();
+ShaderProgram* create_fire_divergence_program();
+ShaderProgram* create_fire_jacobi_program();
+ShaderProgram* create_fire_project_program();
+ShaderProgram* create_fire_reduce_program();
+ShaderProgram* create_fire_slice_program();
+ShaderProgram* create_fire_march_program();
+ShaderProgram* create_fire_card_program();
 // Particle GPU-sim UPDATE program (transform feedback; vertex-only, spec 5.2)
 ShaderProgram* create_particle_sim_program();
 // Captures windOffset itself (transform feedback; vertex-only, spec 11.54), so

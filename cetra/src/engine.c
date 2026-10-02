@@ -3037,14 +3037,6 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
             // both scene passes, and a substituted clock must not freeze it.
             rain_update(water_scene->rain, water_scene->wind, (float)engine->render_time,
                         (float)engine->render_delta);
-            // The fires' fixed steps, on the GPU, and the lights they drive -- here, before the
-            // shadow pass, so a driven light is final before anything is rendered from it.
-            if (water_scene->fire) {
-                fire_update(water_scene->fire, water_scene->wind, engine->render_time);
-                if (!engine->fire_renderer)
-                    engine->fire_renderer = create_fire_renderer();
-                fire_simulate(engine->fire_renderer, engine, water_scene);
-            }
         }
 
         // Per-frame update (input, physics, fixed-timestep sim for game apps),
@@ -3158,6 +3150,19 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
         if (engine->camera)
             camera_rig_apply(engine->camera_rig, engine->camera);
         _engine_derive_camera(engine);
+
+        // The fires: their steps, on the GPU, and what they cast handed to the lights and
+        // embers they drive. After the walk, because a fire burns where its node is this frame
+        // and its light is placed in its own node's frame; before the GI capture and the shadow
+        // pass, so a driven light is final before anything is rendered from it.
+        if (shadow_scene && shadow_scene->fire) {
+            fire_update(shadow_scene->fire, shadow_scene->wind, engine->render_time);
+            if (!engine->fire_renderer)
+                engine->fire_renderer = create_fire_renderer();
+            fire_simulate(engine->fire_renderer, engine, shadow_scene);
+            fire_system_drive(shadow_scene->fire, shadow_scene->root_node,
+                              (float)engine->render_delta);
+        }
 
         // GI probe captures, while the volume is dirty. Deliberately BEFORE the
         // shadow pass: a capture needs the camera-independent single-cascade map

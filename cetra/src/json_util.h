@@ -28,6 +28,13 @@ const char* json_string_or(const cJSON* obj, const char* key);
 // The number at `key` as an int, or `fallback` when it is absent or not a number.
 int json_int_or(const cJSON* obj, const char* key, int fallback);
 
+// The number at `key` as a float, or `fallback` when it is absent or not a number.
+float json_float_or(const cJSON* obj, const char* key, float fallback);
+
+// The array at `key` into `out`, when it holds exactly `n` numbers; false, `out` untouched past
+// what was read, otherwise.
+bool json_floats(const cJSON* obj, const char* key, float* out, int n);
+
 /*
  * A float, written at the shortest precision that still round-trips exactly.
  *

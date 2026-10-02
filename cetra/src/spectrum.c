@@ -38,6 +38,23 @@ void spectrum_xyz_to_rec709(const vec3 xyz, vec3 out) {
     out[2] = 0.0557f * x - 0.2040f * y + 1.0570f * z;
 }
 
+// cglm's matrices are column-major: each inner triple below is a COLUMN.
+void spectrum_xyz_to_rec709_matrix(mat3 out) {
+    const mat3 m = {
+        {3.2406f, -0.9689f, 0.0557f}, {-1.5372f, 1.8758f, -0.2040f}, {-0.4986f, 0.0415f, 1.0570f}};
+    glm_mat3_copy((vec3*)m, out);
+}
+
+void spectrum_rec709_to_xyz_matrix(mat3 out) {
+    const mat3 m = {
+        {0.4124f, 0.2126f, 0.0193f}, {0.3576f, 0.7152f, 0.1192f}, {0.1805f, 0.0722f, 0.9505f}};
+    glm_mat3_copy((vec3*)m, out);
+}
+
+float spectrum_luminance(const vec3 rgb) {
+    return 0.2126f * rgb[0] + 0.7152f * rgb[1] + 0.0722f * rgb[2];
+}
+
 double spectrum_planck(double nm, double kelvin) {
     if (!(kelvin > 0.0) || !(nm > 0.0))
         return 0.0;

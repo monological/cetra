@@ -966,6 +966,19 @@ SceneNode* node_find(SceneNode* root, const char* name) {
     return NULL;
 }
 
+SceneNode* node_find_light(SceneNode* root, const Light* light) {
+    if (!root || !light)
+        return NULL;
+    if (root->light == light)
+        return root;
+    for (size_t i = 0; i < root->children_count; i++) {
+        SceneNode* found = node_find_light(root->children[i], light);
+        if (found)
+            return found;
+    }
+    return NULL;
+}
+
 void node_set_program(SceneNode* node, ShaderProgram* program) {
     if (!node) {
         return;

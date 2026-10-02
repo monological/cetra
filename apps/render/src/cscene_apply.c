@@ -593,14 +593,18 @@ void apply_cscene_fire(Scene* scene, const CetraSceneDesc* cscn) {
                     "Scene file: fire '%s' drives light '%s', which the scene does not have\n",
                     fire->name, light);
         const char* embers = cscn->fire.embers[i];
-        for (size_t m = 0; embers[0] && m < scene->material_count && !fire->embers; m++)
+        Material* glow = NULL;
+        for (size_t m = 0; embers[0] && m < scene->material_count && !glow; m++)
             if (scene->materials[m]->name && strcmp(scene->materials[m]->name, embers) == 0)
-                fire->embers = scene->materials[m];
-        if (embers[0] && !fire->embers)
+                glow = scene->materials[m];
+        if (embers[0] && !glow)
             fprintf(stderr,
                     "Scene file: fire '%s' glows through material '%s', which the scene does not "
                     "have\n",
                     fire->name, embers);
+        fire_set_embers(fire, glow);
+        if (fire->kind == FIRE_FLIPBOOK)
+            fire_set_flipbook(fire, scene->tex_pool, cscn->fire.flipbook[i]);
     }
     free_fire_system(scene->fire);
     scene->fire = fs;

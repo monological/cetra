@@ -25,17 +25,17 @@ void create_fullscreen_quad_vao(GLuint* vao, GLuint* vbo);
 void draw_fullscreen_quad(GLuint vao);
 
 /*
- * The state an offscreen pass changes and must hand back: the framebuffer, the viewport, the
- * blend function, and the depth test, blend and face culling every such pass wants off. Begin
- * saves and disables; end restores, on every exit including the failure ones, so a pass never
- * leaves the pipeline in a state its caller did not put it in -- including one it turned ON,
- * which is why each switch is restored in both directions. Shared by the water's passes and the
- * fire's.
+ * The state a pass changes and must hand back: the framebuffer, the viewport, the blend
+ * function, the face culled, and the depth test, blend and face culling every such pass wants
+ * off. Begin saves and disables; end restores, on every exit including the failure ones, so a
+ * pass never leaves the pipeline in a state its caller did not put it in -- including one it
+ * turned ON, which is why each switch is restored in both directions.
  */
 typedef struct GLPassState {
     GLint viewport[4];
     GLint fbo;
     GLint blend_func[4]; // src RGB, dst RGB, src alpha, dst alpha
+    GLint cull_face;     // GL_BACK, GL_FRONT or both
     GLboolean depth;
     GLboolean blend;
     GLboolean cull;

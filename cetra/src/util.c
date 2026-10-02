@@ -96,6 +96,7 @@ GLPassState gl_pass_begin(void) {
     glGetIntegerv(GL_BLEND_DST_RGB, &s.blend_func[1]);
     glGetIntegerv(GL_BLEND_SRC_ALPHA, &s.blend_func[2]);
     glGetIntegerv(GL_BLEND_DST_ALPHA, &s.blend_func[3]);
+    glGetIntegerv(GL_CULL_FACE_MODE, &s.cull_face);
     s.depth = glIsEnabled(GL_DEPTH_TEST);
     s.blend = glIsEnabled(GL_BLEND);
     s.cull = glIsEnabled(GL_CULL_FACE);
@@ -117,6 +118,7 @@ void gl_pass_end(const GLPassState* s) {
     glViewport(s->viewport[0], s->viewport[1], s->viewport[2], s->viewport[3]);
     glBlendFuncSeparate((GLenum)s->blend_func[0], (GLenum)s->blend_func[1],
                         (GLenum)s->blend_func[2], (GLenum)s->blend_func[3]);
+    glCullFace((GLenum)s->cull_face);
     _gl_set(GL_DEPTH_TEST, s->depth);
     _gl_set(GL_BLEND, s->blend);
     _gl_set(GL_CULL_FACE, s->cull);
