@@ -500,8 +500,11 @@ static void _flame_rest(Fire* fire) {
 static void _flame_step(Fire* fire, int index, const vec3 wind, float dt) {
     const FireParams* p = &fire->params;
     const float seg = fire->flame.height / (float)(FIRE_SPINE_POINTS - 1);
-    // Height breathes with the flicker: a flame that pulls itself up and drops back.
-    const float stretch = 1.0f + 0.15f * p->flicker * _hash_signed((uint32_t)fire->steps, 977u);
+    // Height breathes with the flicker: a flame that pulls itself up and drops back. Seeded by
+    // the fire's index, at the slot of its row the spine's points below leave free, or every
+    // flame lit on one frame breathes in unison.
+    const float stretch =
+        1.0f + 0.15f * p->flicker * _hash_signed((uint32_t)fire->steps, (uint32_t)(index * 131));
     const int pieces = (int)ceilf(dt / FLAME_MAX_DT - 1e-4f);
     const int n = pieces > 1 ? pieces : 1;
     const float h = dt / (float)n;
