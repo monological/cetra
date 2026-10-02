@@ -13,6 +13,8 @@
 #include "../shaders/include/fire_constants.glsl"
 
 struct Engine;
+struct Fire;
+struct FireSystem;
 struct Scene;
 struct PostFXLateDraw;
 
@@ -29,12 +31,14 @@ struct PostFXLateDraw;
 
 typedef enum FireProgram {
     FIRE_PROGRAM_ADVECT,
+    FIRE_PROGRAM_CORRECT,
     FIRE_PROGRAM_CURL,
     FIRE_PROGRAM_REACT,
     FIRE_PROGRAM_DIVERGENCE,
     FIRE_PROGRAM_JACOBI,
     FIRE_PROGRAM_PROJECT,
     FIRE_PROGRAM_REDUCE,
+    FIRE_PROGRAM_SUM,
     FIRE_PROGRAM_SLICE,
     FIRE_PROGRAM_MARCH,
     FIRE_PROGRAM_CARD,
@@ -52,11 +56,14 @@ typedef struct FireGridGPU {
     // [0] the state, the rest MacCormack's intermediates and the projection's output.
     GLuint velocity[4];
     GLuint scalars[4];
-    GLuint pressure[2];    // R32F ping-pong, kept between steps as the next solve's first guess
-    GLuint divergence;     // R32F
-    GLuint curl;           // RGBA16F, vorticity and its magnitude
-    GLuint obstacle;       // R8, 1 inside a solid
-    GLuint partial[2];     // RGBA32F, one texel a slice: the reduction's first pass
+    GLuint pressure[2]; // R32F ping-pong, kept between steps as the next solve's first guess
+    GLuint divergence;  // R32F
+    GLuint curl;        // RGBA16F, vorticity and its magnitude
+    GLuint obstacle;    // R8, 1 inside a solid
+    // RGBA32F, the light's two sums staged: a texel per row of cells (y across, z down), then
+    // a texel per slice.
+    GLuint rows[2];
+    GLuint slices[2];
     uint32_t obstacle_key; // what the obstacle atlas was voxelised from
     bool failed;           // its targets would not attach: this fire does not simulate, said once
 } FireGridGPU;
@@ -89,6 +96,9 @@ void free_fire_renderer(FireRenderer* renderer);
 UniformManager* fire_use(FireRenderer* renderer, FireProgram which);
 // `tex` on texture unit `unit` as `name`.
 void fire_bind(UniformManager* u, int unit, GLuint tex, const char* name);
+// fire_emission.glsl's uniforms for `fire`, its blackbody table on `blackbody_unit`.
+void fire_emission_uniforms(FireRenderer* renderer, UniformManager* u, const struct Fire* fire,
+                            int blackbody_unit);
 
 // Take each GRID fire's pending steps on the GPU and read back what the fires cast. Every frame
 // there are fires, after fire_update and before fire_system_drive.
@@ -99,6 +109,10 @@ void fire_grid_gpu_free(FireGridGPU* grid);
 // Draw the scene's fires onto the bound canvas, from the late draw.
 void fire_render_draw(FireRenderer* renderer, struct Engine* engine, const struct Scene* scene,
                       const struct PostFXLateDraw* late);
+
+// --fire-slice (FireSystem.debug_field): the slice, opaque, into the lower-left corner of a
+// finished frame `height` pixels tall -- after the tone map, so its ramp is the colour shown.
+void fire_render_slice(FireRenderer* renderer, const struct FireSystem* fs, int height);
 
 // --fire-probe's GPU half: each GRID fire's fields read back whole -- the peak temperature, the
 // heat and soot inside solids, the divergence before and after the last projection, and what

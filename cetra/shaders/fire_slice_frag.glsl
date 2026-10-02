@@ -1,9 +1,11 @@
 #version 330 core
 
 // --fire-slice (spec 13.14): one z slice of a GRID fire's fields, drawn flat into a corner of the
-// frame -- the only way to see the simulation apart from how it is lit and drawn.
+// frame -- the only way to see the simulation apart from how it is lit and drawn. `field` is
+// fire.h's FireField:
 //   0 temperature above ambient, black to white over 0..1500 K
-//   1 soot, 0..2 ppm      2 fuel, 0..1      3 speed, 0..4 m/s      4 reaction, 0..20 per second
+//   1 soot, 0..2 ppm      2 reaction coordinate Y, 0..1      3 speed, 0..4 m/s
+//   4 the blue core's weight, 0..1
 
 in vec2 TexCoords;
 
@@ -26,17 +28,17 @@ void main() {
     ivec3 c = ivec3(int(TexCoords.x * float(gridSize.x)), int(TexCoords.y * float(gridSize.y)),
                     clamp(slice, 0, gridSize.z - 1));
     c = min(c, gridSize - 1);
-    vec4 s = texelFetch(scalarTex, fireAtlasTexel(c), 0);
+    FireGas g = fireGas(texelFetch(scalarTex, fireAtlasTexel(c), 0));
     float v;
     if (field == 0)
-        v = s.x / 1500.0;
+        v = g.rise / 1500.0;
     else if (field == 1)
-        v = s.z / 2.0;
+        v = g.soot / 2.0;
     else if (field == 2)
-        v = s.y;
+        v = g.Y;
     else if (field == 3)
         v = length(texelFetch(velocityTex, fireAtlasTexel(c), 0).xyz) / 4.0;
     else
-        v = s.w / 20.0;
+        v = g.core;
     FragColor = vec4(ramp(v), 1.0);
 }

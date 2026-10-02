@@ -6,11 +6,10 @@
 // front (sec. 3.2), and asking for it is what pushes the flame out full rather than letting it
 // rise as a thin column. A solid neighbour contributes a wall's zero velocity.
 
-#include "fire_grid.glsl"
 #include "fire_sim.glsl"
 
 uniform sampler2D velocityTex;
-uniform sampler2D scalarTex; // w: the blue core's weight
+uniform sampler2D scalarTex;
 uniform float cell;
 uniform float expansion; // 1/s
 
@@ -22,12 +21,9 @@ void main() {
         outDivergence = vec4(0.0);
         return;
     }
-    float div = fireNeighbourVelocity(velocityTex, c + ivec3(1, 0, 0)).x -
-                fireNeighbourVelocity(velocityTex, c - ivec3(1, 0, 0)).x +
-                fireNeighbourVelocity(velocityTex, c + ivec3(0, 1, 0)).y -
-                fireNeighbourVelocity(velocityTex, c - ivec3(0, 1, 0)).y +
-                fireNeighbourVelocity(velocityTex, c + ivec3(0, 0, 1)).z -
-                fireNeighbourVelocity(velocityTex, c - ivec3(0, 0, 1)).z;
-    float grow = expansion * texelFetch(scalarTex, fireAtlasTexel(c), 0).w;
+    float div = fireVelocityDifference(velocityTex, c, ivec3(1, 0, 0)).x +
+                fireVelocityDifference(velocityTex, c, ivec3(0, 1, 0)).y +
+                fireVelocityDifference(velocityTex, c, ivec3(0, 0, 1)).z;
+    float grow = expansion * fireGas(texelFetch(scalarTex, fireAtlasTexel(c), 0)).core;
     outDivergence = vec4(div / (2.0 * cell) - grow, 0.0, 0.0, 0.0);
 }

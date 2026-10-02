@@ -6,16 +6,19 @@
 
 uniform mat4 viewProj;
 uniform mat4 view;
+uniform mat4 projection; // read by depth.glsl
 uniform vec3 cameraPos;
 uniform vec3 cardBase; // bottom centre, world metres
 uniform vec2 cardSize; // width, height
+
+#include "depth.glsl"
 
 out vec2 vUv; // 0..1 across the card, bottom to top
 out float vViewDepth;
 
 void main() {
     vec2 corner = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1));
-    vec3 toCamera = cameraPos - cardBase;
+    vec3 toCamera = worldDirToCamera(cardBase, cameraPos, view);
     toCamera.y = 0.0;
     vec3 right = dot(toCamera, toCamera) > 1e-8 ? normalize(cross(vec3(0.0, 1.0, 0.0), toCamera))
                                                 : vec3(1.0, 0.0, 0.0);

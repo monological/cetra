@@ -16,22 +16,33 @@
 //     own dissipation takes out (Fedkiw, Stam and Jensen 2001).
 
 #include "fire_constants.glsl"
-#include "fire_grid.glsl"
 #include "fire_sim.glsl"
 #include "pcg4d.glsl"
+
+const float FIRE_GRAVITY = 9.81; // m/s^2
+// 1/s a burning source's gas is brought to its lift at, and the flue's air to the draft: fast
+// against a step, so both hold their speed rather than nudging toward it.
+const float FIRE_SOURCE_RELAX = 20.0;
+const float FIRE_DRAFT_RELAX = 10.0;
+// How soft the noise's edge is about a source's coverage threshold, in the noise's own 0..1.
+const float FIRE_COVERAGE_BAND = 0.25;
+// Seconds between one source's noise and the next's, so no two sources flicker together.
+const float FIRE_SOURCE_STAGGER = 17.0;
+// K either side of sootBurnoutAt over which soot's oxidation turns on.
+const float FIRE_BURNOUT_BAND = 100.0;
 
 uniform sampler2D velocityTex;
 uniform sampler2D scalarTex;
 uniform sampler2D curlTex;
 uniform float dt;
 uniform float cell;
-uniform vec3 boxMin; // world metres
+uniform vec3 boxMin; // metres, local to the fire's origin, as every position here is
 uniform float time;  // seconds of the fire's own clock
 
 uniform float ambient;
 uniform float peakRise; // the peak temperature's rise above ambient, K
 uniform float reactionRate;
-uniform float cooling;
+uniform float coolingRate; // fire_cooling_rate
 uniform float entrainment;
 uniform float core;
 uniform float sootYield;
@@ -40,7 +51,7 @@ uniform float sootBurnoutAt;
 uniform float smokeFade;
 uniform float buoyancy;
 uniform float vorticity;
-uniform vec3 draftMin; // world metres: the chimney's flue
+uniform vec3 draftMin; // the chimney's flue
 uniform vec3 draftMax;
 uniform float draftSpeed; // m/s; 0 = no chimney
 
@@ -102,10 +113,10 @@ void main() {
     }
     ivec2 t = fireAtlasTexel(c);
     vec3 u = texelFetch(velocityTex, t, 0).xyz;
-    vec4 s = texelFetch(scalarTex, t, 0);
-    float theta = max(s.x, 0.0);
-    float Y = max(s.y, 0.0);
-    float soot = max(s.z, 0.0);
+    FireGas gas = fireGas(texelFetch(scalarTex, t, 0));
+    float theta = max(gas.rise, 0.0);
+    float Y = max(gas.Y, 0.0);
+    float soot = max(gas.soot, 0.0);
     vec3 w = boxMin + (vec3(c) + 0.5) * cell;
 
     for (int i = 0; i < sourceCount; i++) {
@@ -113,14 +124,14 @@ void main() {
         if (cover <= 0.0)
             continue;
         // Alight where the noise clears the share not burning: `coverage` of the shape at once.
-        float n = sourceNoise(w, time + float(i) * 17.0);
-        float alight = cover * smoothstep(1.0 - sourceParams[i].x - 0.25,
-                                          1.0 - sourceParams[i].x + 0.25, n);
+        float n = sourceNoise(w, time + float(i) * FIRE_SOURCE_STAGGER);
+        float alight = cover * smoothstep(1.0 - sourceParams[i].x - FIRE_COVERAGE_BAND,
+                                          1.0 - sourceParams[i].x + FIRE_COVERAGE_BAND, n);
         if (alight <= 0.0)
             continue;
         Y = max(Y, alight);
         theta = max(theta, peakRise * alight);
-        u = mix(u, vec3(0.0, sourceParams[i].y, 0.0), alight * min(dt * 20.0, 1.0));
+        u = mix(u, vec3(0.0, sourceParams[i].y, 0.0), alight * min(dt * FIRE_SOURCE_RELAX, 1.0));
     }
 
     // The reaction coordinate runs down; soot forms in the reacting gas past the core.
@@ -131,27 +142,27 @@ void main() {
     Y = max(Y - reactionRate * dt, 0.0);
 
     // d(theta)/dt = -c_T (theta / peak)^4, exactly over the step.
-    float a = cooling / max(peakRise * peakRise * peakRise * peakRise, 1.0);
-    theta = theta / pow(1.0 + 3.0 * a * theta * theta * theta * dt, 1.0 / 3.0);
+    theta = theta / pow(1.0 + 3.0 * coolingRate * theta * theta * theta * dt, 1.0 / 3.0);
 
     // Entrainment: room air mixed in, diluting the heat and the soot alike.
     float diluted = exp(-entrainment * dt);
     theta *= diluted;
     soot *= diluted;
 
-    float hot = smoothstep(sootBurnoutAt - 100.0, sootBurnoutAt + 100.0, ambient + theta);
+    float hot = smoothstep(sootBurnoutAt - FIRE_BURNOUT_BAND, sootBurnoutAt + FIRE_BURNOUT_BAND,
+                           ambient + theta);
     soot *= exp(-mix(smokeFade, sootBurnout, hot) * dt);
 
     // Buoyancy, g (T - T_amb) / T_amb.
-    float lift = buoyancy * 9.81 * theta / ambient;
+    float lift = buoyancy * FIRE_GRAVITY * theta / ambient;
     // Vorticity confinement: push along N x omega, N the direction |omega| grows in.
     vec4 omega = texelFetch(curlTex, t, 0);
-    vec3 grad = vec3(fireFetch(curlTex, c + ivec3(1, 0, 0), vec4(0.0)).w -
-                         fireFetch(curlTex, c - ivec3(1, 0, 0), vec4(0.0)).w,
-                     fireFetch(curlTex, c + ivec3(0, 1, 0), vec4(0.0)).w -
-                         fireFetch(curlTex, c - ivec3(0, 1, 0), vec4(0.0)).w,
-                     fireFetch(curlTex, c + ivec3(0, 0, 1), vec4(0.0)).w -
-                         fireFetch(curlTex, c - ivec3(0, 0, 1), vec4(0.0)).w);
+    vec3 grad;
+    for (int a = 0; a < 3; a++) {
+        ivec3 e = ivec3(0);
+        e[a] = 1;
+        grad[a] = fireFetch(curlTex, c + e, vec4(0.0)).w - fireFetch(curlTex, c - e, vec4(0.0)).w;
+    }
     vec3 confine = vec3(0.0);
     float gl = length(grad);
     if (gl > 1e-6)
@@ -161,8 +172,8 @@ void main() {
     // The chimney's draw: the flue's air relaxed toward rising at the draft speed. The
     // projection that follows is what turns this into a room drawing in through the mouth.
     if (draftSpeed > 0.0 && all(greaterThanEqual(w, draftMin)) && all(lessThanEqual(w, draftMax)))
-        u = mix(u, vec3(0.0, max(u.y, draftSpeed), 0.0), min(dt * 10.0, 1.0));
+        u = mix(u, vec3(0.0, max(u.y, draftSpeed), 0.0), min(dt * FIRE_DRAFT_RELAX, 1.0));
 
     outVelocity = vec4(u, 0.0);
-    outScalars = vec4(theta, Y, soot, blue);
+    outScalars = fireGasPack(FireGas(theta, Y, soot, blue));
 }

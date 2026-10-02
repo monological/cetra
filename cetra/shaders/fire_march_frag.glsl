@@ -10,9 +10,7 @@
 // the fire's own. The fire is fogged at its own depth, which is the emission-weighted depth along
 // the ray, from the volume the frame integrated.
 
-#include "fire_constants.glsl"
-#include "fire_grid.glsl"
-#include "blackbody.glsl"
+#include "fire_emission.glsl"
 #include "view.glsl"
 
 uniform mat4 projection; // read by depth.glsl, through froxel.glsl
@@ -34,20 +32,13 @@ uniform vec3 boxMin;
 uniform vec3 boxMax;
 uniform float stepLength; // metres between samples
 uniform int maxSteps;
-uniform sampler2D scalarTex; // GRID: (temperature above ambient, Y, soot, blue core weight)
+uniform sampler2D scalarTex; // GRID: the gas, as fire_grid.glsl's FireGas
 uniform float cell;          // GRID
-uniform int floorSolid;      // GRID: 1 = the box's bottom face is a floor, not an open face
 uniform vec4 spine[FIRE_SPINE_POINTS]; // FLAME: xyz and radius, base to tip
 uniform float flameTemperature;
 uniform float flameSoot;
 
-uniform float ambient;
-uniform float sootAbsorption;
 uniform float smokeAlbedo;
-uniform float blueCore;
-uniform vec3 blueColor; // fire_blue_color: unclamped, luminance 1
-uniform float brightness;
-uniform mat3 adaptation;      // fire_adaptation: the eye's adaptation to the fire, on Rec.709
 uniform vec3 ambientRadiance; // nits, the scene's flat ambient
 
 out vec4 FragColor;
@@ -57,15 +48,16 @@ const float PI = 3.14159265359;
 // fire.c's _flame_profile, line for line.
 void flameProfile(float u, float q, out float kelvin, out float soot, out float blue) {
     float inside = q < 1.0 ? 1.0 - q * q : 0.0;
-    float lit = smoothstep(0.08, 0.32, u) * (1.0 - smoothstep(0.7, 1.0, u));
+    float lit = smoothstep(FIRE_FLAME_SOOT_FROM, FIRE_FLAME_SOOT_FULL, u) *
+                (1.0 - smoothstep(FIRE_FLAME_BURNOUT, 1.0, u));
     soot = flameSoot * inside * lit;
-    kelvin = ambient + (flameTemperature - ambient) * (1.0 - 0.35 * q * q) *
-                           (1.0 - 0.4 * smoothstep(0.6, 1.0, u));
-    blue = inside * q * q * (1.0 - smoothstep(0.05, 0.3, u));
+    kelvin = ambient + (flameTemperature - ambient) * (1.0 - FIRE_FLAME_EDGE_COOLING * q * q) *
+                           (1.0 - FIRE_FLAME_TIP_COOLING * smoothstep(FIRE_FLAME_TIP_FROM, 1.0, u));
+    blue = inside * q * q * (1.0 - smoothstep(FIRE_FLAME_BLUE_FROM, FIRE_FLAME_BLUE_TO, u));
 }
 
-// The flame's field at P, through the nearest point on its spine: fire_flame_field.
-vec4 flameAt(vec3 P) {
+// The flame's gas at P, through the nearest point on its spine.
+FireGas flameAt(vec3 P) {
     float best = 1e30, bestU = 0.0, bestR = 0.0;
     for (int i = 0; i + 1 < FIRE_SPINE_POINTS; i++) {
         vec3 a = spine[i].xyz;
@@ -82,26 +74,14 @@ vec4 flameAt(vec3 P) {
     float q = bestR > 1e-6 ? sqrt(best) / bestR : 2.0;
     float kelvin, soot, blue;
     flameProfile(bestU, q, kelvin, soot, blue);
-    // In a grid fire's layout: temperature above ambient, Y (unused), soot, blue core weight.
-    return vec4(kelvin - ambient, 0.0, soot, blue);
+    return FireGas(kelvin - ambient, 0.0, soot, blue);
 }
 
-// Cells over which a GRID fire thins to nothing before an open face of its box. The box is
-// where the simulation ends, not where the gas does, and without this whatever reaches a face
-// -- a plume, a wisp of smoke -- is drawn cut off flat there.
-const float FIRE_EDGE_FADE_CELLS = 3.0;
-
-vec4 fieldAt(vec3 P) {
+FireGas gasAt(vec3 P) {
     if (fireKind == 1)
         return flameAt(P);
     vec3 p = (P - boxMin) / cell;
-    vec4 f = fireSample(scalarTex, p, vec4(0.0));
-    vec3 far = vec3(gridSize) - p;
-    float edge = min(min(min(p.x, far.x), min(p.z, far.z)), far.y);
-    if (floorSolid == 0)
-        edge = min(edge, p.y);
-    float fade = smoothstep(0.0, FIRE_EDGE_FADE_CELLS, edge);
-    return vec4(f.x, f.y, f.z * fade, f.w * fade);
+    return fireFadeAtEdge(fireGas(fireSample(scalarTex, p, vec4(0.0))), p);
 }
 
 // The light smoke in-scatters, as radiance: the ambient, plus every light's illuminance at P
@@ -169,25 +149,18 @@ void main() {
     for (int i = 0; i < maxSteps && t < t1; i++) {
         float ds = min(stepLength, t1 - t);
         vec3 P = origin + dir * (t + 0.5 * ds);
-        vec4 f = fieldAt(P);
-        float soot = max(f.z, 0.0);
-        float glow = blueCore * max(f.w, 0.0);
-        if (soot > 0.0 || glow > 0.0) {
-            float lum;
-            vec3 bb = blackbodyNits(ambient + max(f.x, 0.0), lum);
-            float sa = soot * sootAbsorption;
+        float sa;
+        vec3 emitted = fireEmission(gasAt(P), sa);
+        if (sa > 0.0 || fireLuminance(emitted) > 0.0) {
             float ss = sa * scatterShare;
             float st = sa + ss;
-            // Adapted, then clamped: the spectrum's colour as the adapted eye sees it, brought
-            // into the gamut only after.
-            vec3 emitted = max(adaptation * (sa * bb + glow * blueColor), vec3(0.0));
-            vec3 source = emitted * brightness + ss * lightIn;
+            vec3 source = emitted + ss * lightIn;
             float through = exp(-st * ds);
             // The source integrated exactly across the step at its constant extinction.
             float path = st > 1e-6 ? (1.0 - through) / st : ds;
             vec3 added = transmittance * source * path;
             color += added;
-            float w = dot(added, vec3(0.2126, 0.7152, 0.0722));
+            float w = fireLuminance(added);
             weight += w;
             weightedZ += w * -(view * vec4(P, 1.0)).z;
             transmittance *= through;

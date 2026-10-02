@@ -758,6 +758,10 @@ ShaderProgram* create_fire_advect_program() {
     return create_post_program("fire_advect", fire_advect_frag_shader_str);
 }
 
+ShaderProgram* create_fire_correct_program() {
+    return create_post_program("fire_correct", fire_correct_frag_shader_str);
+}
+
 ShaderProgram* create_fire_curl_program() {
     return create_post_program("fire_curl", fire_curl_frag_shader_str);
 }
@@ -780,6 +784,10 @@ ShaderProgram* create_fire_project_program() {
 
 ShaderProgram* create_fire_reduce_program() {
     return create_post_program("fire_reduce", fire_reduce_frag_shader_str);
+}
+
+ShaderProgram* create_fire_sum_program() {
+    return create_post_program("fire_sum", fire_sum_frag_shader_str);
 }
 
 ShaderProgram* create_fire_slice_program() {
