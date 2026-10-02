@@ -266,6 +266,7 @@ Fire* fire_system_add(FireSystem* fs, FireKind kind, const char* name) {
     snprintf(fire->name, sizeof(fire->name), "%s", name ? name : "fire");
     fire->kind = kind;
     fire->enabled = true;
+    fire->light_scale = 1.0f;
     _params_defaults(&fire->params, kind);
     glm_vec3_one(fire->color);
     glm_mat3_identity(fire->adaptation);
@@ -500,11 +501,12 @@ static void _flame_rest(Fire* fire) {
 static void _flame_step(Fire* fire, int index, const vec3 wind, float dt) {
     const FireParams* p = &fire->params;
     const float seg = fire->flame.height / (float)(FIRE_SPINE_POINTS - 1);
-    // Height breathes with the flicker: a flame that pulls itself up and drops back. Seeded by
-    // the fire's index, at the slot of its row the spine's points below leave free, or every
-    // flame lit on one frame breathes in unison.
-    const float stretch =
-        1.0f + 0.15f * p->flicker * _hash_signed((uint32_t)fire->steps, (uint32_t)(index * 131));
+    // Each fire's noise is seeded from a row of its own -- slot 0 for its height, one slot a
+    // spine point after that for its sideways impulses -- or every flame lit on one frame would
+    // move in unison.
+    const uint32_t row = (uint32_t)index * 131u;
+    // Height breathes with the flicker: a flame that pulls itself up and drops back.
+    const float stretch = 1.0f + 0.15f * p->flicker * _hash_signed((uint32_t)fire->steps, row);
     const int pieces = (int)ceilf(dt / FLAME_MAX_DT - 1e-4f);
     const int n = pieces > 1 ? pieces : 1;
     const float h = dt / (float)n;
@@ -523,7 +525,7 @@ static void _flame_step(Fire* fire, int index, const vec3 wind, float dt) {
                 accel[a] = k * (target[a] - fire->spine[i][a]) - 9.0f * fire->spine_velocity[i][a];
             }
             // The flicker's impulses grow up the flame, which is where a candle visibly moves.
-            const uint32_t seed = (uint32_t)(index * 131 + i);
+            const uint32_t seed = row + (uint32_t)i;
             accel[0] += p->flicker * 6.0f * u * _hash_signed((uint32_t)fire->steps, seed);
             accel[2] += p->flicker * 6.0f * u * _hash_signed((uint32_t)fire->steps, seed + 7919u);
             for (int a = 0; a < 3; a++) {
@@ -717,7 +719,7 @@ static void _drive_light(const Fire* fire, SceneNode* root) {
     if (!light)
         return;
     const bool casting = fire->enabled && fire->answered;
-    const float intensity = casting ? fmaxf(fire->intensity, 0.0f) : 0.0f;
+    const float intensity = casting ? fmaxf(fire->intensity, 0.0f) * fire->light_scale : 0.0f;
     if (casting)
         glm_vec3_copy((float*)fire->color, light->color);
     switch (light->type) {

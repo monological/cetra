@@ -233,6 +233,7 @@ typedef struct Fire {
     // spot's position too. Its type, shadows and range stay the caller's. NULL drives none.
     struct Light* light;
     vec3 light_offset; // added to the centroid where a point or spot is placed
+    float light_scale; // the light's intensity over what the fire casts; 1 = physical
     // What the kind burns from, local to the origin: the one member `kind` names.
     union {
         FireGrid grid;

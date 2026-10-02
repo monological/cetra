@@ -1238,6 +1238,7 @@ static const CSceneKey FIRE_KEYS[] = {
     FIRE_OWN("kind", 0),
     FIRE_OWN("light", 0),
     FIRE_OWN("lightOffset", 0),
+    FIRE_KEY("lightScale", light_scale, CSCENE_KEY_FLOAT, 0.0f, 1000.0f, 0),
     FIRE_OWN("embers", 0),
     FIRE_KEY("enabled", enabled, CSCENE_KEY_BOOL, 0.0f, 0.0f, 0),
     FIRE_OWN("center", ON_GRID | ON_FLAME),
