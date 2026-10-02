@@ -39,7 +39,7 @@ typedef struct ReflectionProbeSet {
     // written, and blending against those shows as black rooms.
     bool ready;
 
-    struct ProbeAtlas* atlas; // owned; NULL until the first multi-probe sweep
+    struct ProbeAtlas* atlas; // owned; NULL until a set of two or more reserves or sweeps
 
     // Captures attempted across the set's life. The converge-then-idle claim
     // is only worth making if it is checkable from outside the process.
@@ -67,16 +67,33 @@ static inline bool probe_set_multi(const ReflectionProbeSet* set) {
 ReflectionProbeSet* create_reflection_probe_set(void);
 void free_reflection_probe_set(ReflectionProbeSet* set);
 
-// Takes ownership. Refuses past PROBE_SET_MAX (warns once) and refuses NULL.
+// Takes ownership. Refuses past PROBE_SET_MAX (warns once), refuses NULL, and
+// refuses once the atlas is allocated, which is sized to the count it saw.
 bool probe_set_add(ReflectionProbeSet* set, ReflectionProbe* probe);
 
-// Capture every probe, then project each into the atlas. Sequential and
-// synchronous, at load: the set is published only once all of them succeed, so
-// no probe is ever photographed into another's capture and a headless run sees
-// a converged set from its first frame.
+// Allocate the atlas a set of two or more will project into, and hand the
+// scene's GI volume its region of it, without capturing anything. A no-op for
+// one probe, which needs no atlas, and for a set already holding one.
 //
-// row0 is the atlas row-0 tile size (0 = the default). near/far are per probe,
-// derived by the caller from each probe's own proxy box.
+// What it is for: a capture lights what it sees with the GI volume only once
+// the volume has converged, and before that with the environment's ambient --
+// by day the open sky's, in every closed room. So a set whose rooms the volume
+// lights reserves here, before the volume's first update (the only time the
+// volume can adopt the texture), and captures once the volume has converged.
+// A set reserved and not yet captured is inert, so it may be installed on the
+// scene straight away; every consumer gates on `ready`.
+bool probe_set_reserve_atlas(ReflectionProbeSet* set, struct Engine* engine, struct Scene* scene,
+                             int row0);
+
+// Capture every probe, then project each into the atlas, reserving it first if
+// probe_set_reserve_atlas has not. Sequential and synchronous: the set is
+// published only once all of them succeed, so no probe is ever photographed
+// into another's capture and a headless run sees a converged set from its first
+// frame.
+//
+// row0 is the atlas row-0 tile size (0 = the default), read only where the atlas
+// is allocated here. near/far are per probe, derived by the caller from each
+// probe's own proxy box.
 bool probe_set_capture_all(ReflectionProbeSet* set, struct Engine* engine, struct Scene* scene,
                            const float* near_clips, const float* far_clips, const bool* env_only,
                            int row0);
