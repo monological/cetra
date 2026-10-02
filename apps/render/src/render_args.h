@@ -170,9 +170,11 @@ typedef struct {
     int no_fire;               // Drop the fires a scene file asked for (spec 13.14)
     int fire_probe;            // Print the blackbody ladder, every fire's state and grid
     float fire_warmup;         // FireSystem.warmup; negative = keep the scene file's
-    // --fire-slice: draw one slice of a GRID fire's field into the frame's corner.
-    // fire_slice[0] = field (-1 = off), [1] = the slice, [2] = the fire.
-    int fire_slice[3];
+    // --fire-slice: draw one slice of a GRID fire's field into the frame's corner, as
+    // FireSystem's debug_field (-1 = off), debug_slice and debug_fire.
+    int fire_slice_field;
+    int fire_slice_z;
+    int fire_slice_fire;
     int water_probe;              // Print the CPU wave query over a grid, then continue
     int water_fft_probe;          // Print the transformed spectrum's measured statistics
     int water_caustic_debug;      // Water.caustic_debug: 2 = the raw caustics target
