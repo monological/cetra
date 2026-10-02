@@ -27,6 +27,8 @@
 #include "shadow.h"
 #include "sky.h"
 #include "water.h"
+#include "fire.h"
+#include "fire_render.h"
 #include "rain.h"
 #include "rain_render.h"
 #include "gi_volume.h"
@@ -410,6 +412,7 @@ void free_engine(Engine* engine) {
         free_light_cluster_context(engine->light_cluster);
         free_occlusion_context(engine->occlusion);
         free_rain_renderer(engine->rain_renderer);
+        free_fire_renderer(engine->fire_renderer);
         free_ubo(engine->view_ubo);
         free_ubo(engine->instance_ubo);
         free_ubo(engine->vt_pages_ubo);
@@ -2241,12 +2244,19 @@ void engine_set_render_clock(Engine* engine, const EngineFrameClock* clock) {
 }
 
 // What the engine draws after the temporal seam, published only on frames that have
-// something to draw. The renderer comes into being the first frame a scene rains.
+// something to draw. The rain's renderer comes into being the first frame a scene rains; the
+// fire's already exists, since its simulation ran at the frame top. Fire first, so rain falling
+// in front of a fire draws over it and refracts it.
 static void _engine_late_draw(void* user, const PostFXLateDraw* late) {
     Engine* engine = user;
-    if (!engine->rain_renderer)
-        engine->rain_renderer = create_rain_renderer();
-    rain_render_drops(engine->rain_renderer, engine, engine_get_scene(engine), late);
+    const Scene* scene = engine_get_scene(engine);
+    if (scene && fire_system_active(scene->fire))
+        fire_render_draw(engine->fire_renderer, engine, scene, late);
+    if (scene && rain_draws(scene->rain)) {
+        if (!engine->rain_renderer)
+            engine->rain_renderer = create_rain_renderer();
+        rain_render_drops(engine->rain_renderer, engine, scene, late);
+    }
 }
 
 void engine_set_overlay(Engine* engine, EngineOverlayFunc overlay, void* user) {
@@ -2286,7 +2296,10 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode) {
     probe_set_publish_to_postfx(fx_scene ? fx_scene->probe_set : NULL, engine->postfx);
     shadow_publish_to_postfx(fx_scene, engine->postfx);
     rain_publish_to_postfx(fx_scene ? fx_scene->rain : NULL, engine->postfx);
-    engine->postfx->late_draw = fx_scene && rain_draws(fx_scene->rain) ? _engine_late_draw : NULL;
+    engine->postfx->late_draw =
+        fx_scene && (rain_draws(fx_scene->rain) || fire_system_active(fx_scene->fire))
+            ? _engine_late_draw
+            : NULL;
     engine->postfx->late_draw_user = engine;
     // Aerial perspective is a camera-frustum volume, so unlike the sky's other
     // LUTs it is rebuilt here every frame, immediately before it is published.
@@ -3024,6 +3037,14 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
             // both scene passes, and a substituted clock must not freeze it.
             rain_update(water_scene->rain, water_scene->wind, (float)engine->render_time,
                         (float)engine->render_delta);
+            // The fires' fixed steps, on the GPU, and the lights they drive -- here, before the
+            // shadow pass, so a driven light is final before anything is rendered from it.
+            if (water_scene->fire) {
+                fire_update(water_scene->fire, water_scene->wind, engine->render_time);
+                if (!engine->fire_renderer)
+                    engine->fire_renderer = create_fire_renderer();
+                fire_simulate(engine->fire_renderer, engine, water_scene);
+            }
         }
 
         // Per-frame update (input, physics, fixed-timestep sim for game apps),

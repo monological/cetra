@@ -243,6 +243,9 @@ typedef struct Engine {
     // The rain's streaks (spec 13.9), drawn from postfx's late draw. Created the
     // first frame a scene rains; NULL until then.
     struct RainRenderer* rain_renderer;
+    // Fires (spec 13.14): their simulations stepped and their light read back each frame, and
+    // drawn from the late draw. Created the first frame a scene has fires; NULL until then.
+    struct FireRenderer* fire_renderer;
     // ViewParams (spec 10.1): the working-space contract every pass writing
     // scene radiance reads. Engine-owned rather than PostFX-owned because it
     // must be live during the SCENE passes, which run before postfx does.

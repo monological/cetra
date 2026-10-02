@@ -6,6 +6,7 @@
 
 #include "light.h" // LightUnits: authored intensity units carry through to Light
 #include "rain.h"  // Rain: an authored rain block IS the runtime rain, over its defaults
+#include "fire.h"  // FireSystem: likewise the authored fire block
 #include "roads.h" // MaterialRoad: an authored road IS the runtime road, verbatim
 
 /*
@@ -235,6 +236,15 @@ typedef struct CSceneRain {
     bool settled;
     float dry_for; // seconds since the rain stopped, soaked before it; 0 = still raining
 } CSceneRain;
+
+// Fire (fire.h, spec 13.14), a scene subsystem and so a top-level block: the simulation's
+// settings and `fires`, each fire over its kind's defaults.
+typedef struct CSceneFire {
+    bool enabled; // the block was present and not "enabled": false
+    FireSystem system;
+    // The authored light each fire drives, by its `lights[]` name; "" = none.
+    char light[FIRE_MAX][CSCENE_MAX_NAME];
+} CSceneFire;
 
 /*
  * One authored wave train (spec 11.48), mirroring WaterWaveTrain field for field.
@@ -596,6 +606,7 @@ typedef struct CetraSceneDesc {
     CSceneDust dust;
     CSceneWater water;
     CSceneRain rain;
+    CSceneFire fire;
 
     CSceneFogVolume fog_volumes[CSCENE_MAX_FOG_VOLUMES];
     int fog_volume_count;

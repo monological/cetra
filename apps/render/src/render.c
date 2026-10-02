@@ -33,6 +33,7 @@
 #include "cetra/internal/emissive_light.h"
 #include "cetra/water.h"
 #include "cetra/rain.h"
+#include "cetra/fire.h"
 #include "cetra/ies.h"
 #include "cetra/wind.h"
 #include "cetra/config_snapshot.h"
@@ -203,6 +204,14 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --rain-ask <x,y,z> Ask the CPU cover query about this point every\n"
                     "                         frame; --rain-probe prints its answer\n");
     fprintf(stderr, "      --rain-map <p>     With --rain-probe: the occlusion map as a PPM\n");
+    fprintf(stderr,
+            "      --no-fire          Drop the fires a scene file asked for (spec 13.14)\n");
+    fprintf(stderr, "      --fire-probe       Print the blackbody, each fire's state, its grid\n"
+                    "                         read back whole, and the lights it drives\n");
+    fprintf(stderr, "      --fire-warmup <s>  Seconds a fire has burnt when it starts\n");
+    fprintf(stderr, "      --fire-shimmer <f> Heat haze through every fire; 0 = none\n");
+    fprintf(stderr, "      --fire-slice <field>,<z>[,<fire>]  One slice of a grid fire's\n"
+                    "                         temperature, soot, fuel, speed or reaction\n");
     fprintf(stderr, "      --water-level <f>  Still-water plane, world Y (implies --water)\n");
     fprintf(stderr, "      --water-extent <f> Half-size of the shoaling bed (implies --water)\n");
     fprintf(stderr, "      --water-waves <m>  gerstner (default) or fft spectral cascades\n");
@@ -593,6 +602,9 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->rain_rate = -1.0f;        // -1 = keep the scene file's (0 is a legal rate)
     args->rain_sheen = -1.0f;       // -1 = keep the scene file's
     args->rain_relief = -1.0f;      // -1 = keep the scene file's
+    args->fire_warmup = -1.0f;      // -1 = keep the scene file's
+    args->fire_shimmer = -1.0f;     // -1 = keep the scene file's
+    args->fire_slice[0] = -1;       // no slice drawn
     args->world_scale = -1.0f;      // -1 = keep the sky's default (1 unit = 1 metre)
     args->spec_occ_mode = -1;       // -1 = keep the engine default
     args->import_scale = 1.0f;      // 1 = none
@@ -1234,6 +1246,33 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->rain_ask_set = 1;
         } else if (strcmp(argv[i], "--rain-map") == 0 && i + 1 < argc) {
             args->rain_map_path = argv[++i];
+        } else if (strcmp(argv[i], "--no-fire") == 0) {
+            args->no_fire = 1;
+        } else if (strcmp(argv[i], "--fire-probe") == 0) {
+            args->fire_probe = 1;
+        } else if (strcmp(argv[i], "--fire-warmup") == 0) {
+            if (_ranged_arg(argc, argv, &i, 0.0f, 60.0f, &args->fire_warmup) != 0)
+                return -1;
+        } else if (strcmp(argv[i], "--fire-shimmer") == 0) {
+            if (_ranged_arg(argc, argv, &i, 0.0f, 100.0f, &args->fire_shimmer) != 0)
+                return -1;
+        } else if (strcmp(argv[i], "--fire-slice") == 0) {
+            static const char* fields[] = {"temperature", "soot", "fuel", "speed", "reaction"};
+            char field[16] = "";
+            int slice = 0, fire = 0;
+            const int got =
+                ++i < argc ? sscanf(argv[i], "%15[a-z],%d,%d", field, &slice, &fire) : 0;
+            args->fire_slice[0] = -1;
+            for (int f = 0; f < 5 && got >= 2; f++)
+                if (strcmp(field, fields[f]) == 0)
+                    args->fire_slice[0] = f;
+            if (args->fire_slice[0] < 0) {
+                fprintf(stderr, "Error: --fire-slice needs <temperature|soot|fuel|speed|reaction>,"
+                                "<slice>[,<fire>]\n");
+                return -1;
+            }
+            args->fire_slice[1] = slice;
+            args->fire_slice[2] = got >= 3 ? fire : 0;
         } else if (strcmp(argv[i], "--no-water-caustics") == 0) {
             // The negative flags do NOT imply --water. A flag whose whole job is to turn
             // a feature off has no business turning the feature on, and `--no-water
@@ -4575,6 +4614,22 @@ int main(int argc, char** argv) {
     if (scene->rain && args.rain_relief >= 0.0f)
         scene->rain->puddle_relief = args.rain_relief;
 
+    // The fires, after the lights they drive: the file supplies them and --no-fire wins.
+    apply_cscene_fire(scene, cscn);
+    if (args.no_fire) {
+        free_fire_system(scene->fire);
+        scene->fire = NULL;
+    }
+    if (scene->fire) {
+        if (args.fire_warmup >= 0.0f)
+            scene->fire->warmup = args.fire_warmup;
+        for (int f = 0; f < scene->fire->count && args.fire_shimmer >= 0.0f; f++)
+            scene->fire->fires[f].params.shimmer = args.fire_shimmer;
+        scene->fire->debug_field = args.fire_slice[0];
+        scene->fire->debug_slice = args.fire_slice[1];
+        scene->fire->debug_fire = args.fire_slice[2];
+    }
+
     if (args.no_water) {
         free_water(scene->water);
         scene->water = NULL;
@@ -4805,6 +4860,12 @@ int main(int argc, char** argv) {
     // the sequence is a probe whose output a reader has to place before trusting.
     if (args.ies_probe)
         ies_library_probe(scene->ies_library);
+
+    // After the loop, so the state and the grids are what the frames simulated to.
+    if (args.fire_probe) {
+        fire_probe_print(scene->fire);
+        fire_probe_grids(engine, scene);
+    }
 
     // After the loop so the state row reports what the frames integrated to, and the
     // cover rows read the map the last frame rendered.
