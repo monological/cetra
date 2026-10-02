@@ -24,6 +24,9 @@ static const KitFrame HEARTH = {{HEARTH_X, 0.0f, GREAT_Z1}, GLM_PIf};
 #define LINTEL_Y0  (HEARTH_TOP + 1.75f)
 #define LINTEL_Y1  (LINTEL_Y0 + 0.55f)
 #define CORNICE_Y  (LINTEL_Y1 + 0.16f) // the cornice's top, where the hood stands
+// How far the cornice runs either side of the middle, and out from the wall.
+#define CORNICE_HALF  (HEARTH_HALF + 0.08f)
+#define CORNICE_FRONT (DEPTH + 0.08f)
 
 /*
  * The hood slopes back from behind the lower battlements to its own cornice; the breast above
@@ -148,14 +151,14 @@ static void lintel(Kit* kit) {
 
     kit_frame_box_faces(kit, &HEARTH, MAT_STONE, -HEARTH_HALF - 0.03f, HEARTH_HALF + 0.03f,
                         LINTEL_Y1, LINTEL_Y1 + 0.05f, 0.0f, DEPTH + 0.03f, BACKED);
-    kit_frame_box_faces(kit, &HEARTH, MAT_STONE, -HEARTH_HALF - 0.08f, HEARTH_HALF + 0.08f,
-                        LINTEL_Y1 + 0.05f, CORNICE_Y, 0.0f, DEPTH + 0.08f, BACKED);
+    kit_frame_box_faces(kit, &HEARTH, MAT_STONE, -CORNICE_HALF, CORNICE_HALF, LINTEL_Y1 + 0.05f,
+                        CORNICE_Y, 0.0f, CORNICE_FRONT, BACKED);
 }
 
 /*
  * Merlons along the front and both returns of a cornice whose top is at y, `half` either side
  * of the middle and `front` out from the wall: a castle's battlements, in miniature. Returns
- * the pitch along the front.
+ * how far from the middle the outermost crenels along the front are centred.
  */
 static float battlements(Kit* kit, float y, float half, float front) {
     const int n = (int)roundf((2.0f * half - MERLON_W) / MERLON_PITCH) + 1;
@@ -170,7 +173,7 @@ static float battlements(Kit* kit, float y, float half, float front) {
             kit_frame_box_faces(kit, &HEARTH, MAT_STONE, (float)s * (half - MERLON_D),
                                 (float)s * half, y, y + MERLON_H, d - 0.5f * MERLON_W,
                                 d + 0.5f * MERLON_W, STANDING);
-    return pitch;
+    return half - 0.5f * MERLON_W - 0.5f * pitch;
 }
 
 // The hood's face, from the lower cornice up and back to its own: how high, how far back, and
@@ -297,8 +300,7 @@ void hearth_build(Kit* kit) {
     jamb(kit, -1.0f);
     jamb(kit, 1.0f);
     lintel(kit);
-    const float half = HEARTH_HALF + 0.08f, front = DEPTH + 0.08f;
-    const float pitch = battlements(kit, CORNICE_Y, half, front);
+    const float crenel = battlements(kit, CORNICE_Y, CORNICE_HALF, CORNICE_FRONT);
     hood(kit);
     firebox(kit);
 
@@ -306,10 +308,8 @@ void hearth_build(Kit* kit) {
     // and a candlestick in the cornice's outermost crenel either side of the hood.
     for (int s = -1; s <= 1; s += 2) {
         const float sf = (float)s;
-        candle_build(kit, &HEARTH, CANDLE_STAND, sf * STAND_A, FLOOR_Y, STAND_D,
-                     s < 0 ? 0.22f : 0.19f);
-        const float crenel = half - 0.5f * MERLON_W - 0.5f * pitch;
-        candle_build(kit, &HEARTH, CANDLE_STICK, sf * crenel, CORNICE_Y, front - 0.5f * MERLON_D,
+        candle_stand(kit, &HEARTH, sf * STAND_A, FLOOR_Y, STAND_D, s < 0 ? 0.22f : 0.19f);
+        candle_stick(kit, &HEARTH, sf * crenel, CORNICE_Y, CORNICE_FRONT - 0.5f * MERLON_D,
                      s < 0 ? 0.15f : 0.13f);
     }
 }

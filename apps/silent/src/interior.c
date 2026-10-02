@@ -20,6 +20,12 @@
 #define BAY_W    0.55f
 #define BACKING  (PANEL_DEPTH - 0.001f)
 #define MIN_SPAN 0.25f // a run of panelling shorter than this between holes is left uncarved
+#define LINING   0.03f // the dressed stone's thickness over a wall's face
+
+// A sconce's backplate is centred this far over the panelling's cap, or on the stair this far
+// over the line of its nosings, which clears a head under the plate.
+#define SCONCE_OVER        0.35f
+#define SCONCE_ABOVE_STAIR 2.1f
 
 #define BAY_H    (GOTHICS[GOTHIC_PANEL_LINENFOLD].size[1])
 #define FRIEZE_H (GOTHICS[GOTHIC_FRIEZE].size[1])
@@ -89,13 +95,20 @@ static int cased(const KitWall* w, KitOpening* out) {
 static void lining(Kit* kit, const KitWall* w, float a0, float a1, float y0) {
     const Facade s = facade_toward(w, 0.0f, GREAT_AT_Z);
     KitWall stone = *w;
-    stone.at = s.face + s.out * 0.015f;
+    stone.at = s.face + s.out * 0.5f * LINING;
     stone.from = a0;
     stone.to = a1;
     stone.y0 = y0;
     stone.y1 = EAVE_Y;
-    stone.thick = 0.03f;
+    stone.thick = LINING;
     kit_frame_panel(kit, &s.f, MAT_STONE, &stone);
+}
+
+// The face of a wall's stone lining as the great hall sees it.
+static Facade lined(const KitWall* w) {
+    Facade s = facade_toward(w, 0.0f, GREAT_AT_Z);
+    s.face += s.out * LINING;
+    return s;
 }
 
 /*
@@ -171,7 +184,8 @@ static void truss(Kit* kit, float z) {
 /*
  * The great hall: two rows of panelling round its walls, stopping at the hearth and the
  * stair, dressed stone from the panelling to the eave -- and down to the floor behind the
- * stair -- two trusses, purlins and a ridge beam, and the Persian rug before the hearth.
+ * stair -- two trusses, purlins and a ridge beam, a sconce on the west wall under each truss,
+ * and the Persian rug before the hearth.
  */
 static void great_hall(Kit* kit) {
     const KitWall* west = house_wall(HOUSE_WALL_WEST);
@@ -183,6 +197,11 @@ static void great_hall(Kit* kit) {
     const float top =
         wainscot(kit, &w, GREAT_Z0, GREAT_Z1, FLOOR_Y, true, west->openings, west->opening_count);
     lining(kit, west, GREAT_Z0, GREAT_Z1, top);
+    // A sconce on the stone under each truss, where its post comes down the wall between the
+    // lancets' bays.
+    const Facade stone = lined(west);
+    candle_sconce(kit, &stone, TRUSS_Z0, top + SCONCE_OVER, 0.15f);
+    candle_sconce(kit, &stone, TRUSS_Z1, top + SCONCE_OVER, 0.13f);
 
     // Up to the fireplace's jambs.
     KitWall dressed = *back;
@@ -287,7 +306,8 @@ static void stair_runner(Kit* kit, float* laid, float len, const vec3 corner, co
 /*
  * The stair dressed: a runner up its middle, over each tread and up each riser, held by a brass
  * rod at every step; a balustrade up its open side between newels at its foot and its head;
- * and the gallery's balustrade from that head to the west wall.
+ * the gallery's balustrade from that head to the west wall; and a sconce either side of the
+ * lancet over the flight.
  */
 static void stair_dressing(Kit* kit) {
     const float x0 = 0.5f * (STAIR_X0 + GREAT_X1) - 0.35f, x1 = x0 + 0.7f;
@@ -314,9 +334,6 @@ static void stair_dressing(Kit* kit) {
     const float head_z = GALLERY_Z1 - 0.05f; // the gallery's balustrade line, and the stair's head
     ornament_post(kit, &KIT_WORLD, MAT_MAHOGANY, bx, foot_z, foot_y, foot_y + newel, 0.065f);
     ornament_post(kit, &KIT_WORLD, MAT_MAHOGANY, bx, head_z, FLOOR2_Y, FLOOR2_Y + newel, 0.065f);
-    // A candlestick on each newel's cap, marking the way up from the hall to the gallery.
-    candle_build(kit, &KIT_WORLD, CANDLE_STICK, bx, foot_y + newel, foot_z, 0.17f);
-    candle_build(kit, &KIT_WORLD, CANDLE_STICK, bx, FLOOR2_Y + newel, head_z, 0.12f);
     const KitFrame along_z = {{bx, 0.0f, 0.0f}, -0.5f * GLM_PIf}; // a is z, d is -x
     const float top_y = FLOOR2_Y + rail;
     const vec2 handrail[4] = {{head_z, top_y},
@@ -338,7 +355,19 @@ static void stair_dressing(Kit* kit) {
     ornament_balustrade(kit, &KIT_WORLD, MAT_MAHOGANY, GREAT_X0 + 0.05f, STAIR_X0 - 0.03f, FLOOR2_Y,
                         head_z);
     ornament_post(kit, &KIT_WORLD, MAT_MAHOGANY, GREAT_X0 + 0.07f, head_z, FLOOR2_Y,
-                  FLOOR2_Y + rail + 0.35f, 0.065f);
+                  FLOOR2_Y + newel, 0.065f);
+
+    // A sconce on the stone either side of the lancet over the stair, the upper one far enough
+    // down the flight to keep off the near truss's corbel.
+    const KitWall* east = house_wall(HOUSE_WALL_EAST);
+    const Facade stone = lined(east);
+    const KitOpening* lancet = &east->openings[OPENING_STAIR_LANCET];
+    const float mid = 0.5f * (lancet->from + lancet->to), spread = 1.25f;
+    for (int s = -1; s <= 1; s += 2) {
+        const float z = mid + (float)s * spread;
+        const float nosing = FLOOR_Y + (STAIR_FOOT_Z - z) / STAIR_GOING * STAIR_RISE;
+        candle_sconce(kit, &stone, z, nosing + SCONCE_ABOVE_STAIR, s < 0 ? 0.12f : 0.16f);
+    }
 }
 
 /*
@@ -355,13 +384,11 @@ static void gallery(Kit* kit) {
     for (int i = OPENING_STUDY_DOOR; i <= OPENING_BEDROOM_DOOR; i++)
         ornament_casing(kit, &f, MAT_MAHOGANY, &front->openings[i]);
 
-    // The wall's face as the great hall sees it, +d out into the hall.
-    const KitFrame face = {{0.0f, 0.0f, GREAT_Z0}, 0.0f};
     const KitOpening* door = &front->openings[OPENING_STUDY_DOOR];
     const float mid = 0.5f * (door->from + door->to);
     const float off = 0.5f * (door->to - door->from) + ORNAMENT_CASING_W + 0.25f;
     for (int s = -1; s <= 1; s += 2)
-        candle_build(kit, &face, CANDLE_SCONCE, mid + (float)s * off, top + 0.35f, 0.0f, 0.15f);
+        candle_sconce(kit, &f, mid + (float)s * off, top + SCONCE_OVER, 0.15f);
 }
 
 void interior_build(Kit* kit) {

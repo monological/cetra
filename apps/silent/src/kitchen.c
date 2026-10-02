@@ -714,7 +714,7 @@ static void table(Kit* kit) {
     lay_card(kit, &f, CARD_LETTER, 0.2f, -0.08f, 0.7812f, GLM_PIf + 0.35f);
     lay_card(kit, &f, CARD_PHOTO_SNOW, -0.36f, 0.2f, 0.7806f, GLM_PIf - 0.5f);
     // A chamberstick at the far side, its candle half gone: somebody sat up with the letter.
-    candle_build(kit, &f, CANDLE_CHAMBER, -0.05f, 0.78f, 0.27f, 0.07f);
+    candle_chamber(kit, &f, -0.05f, 0.78f, 0.27f, 0.07f);
 
     chair(kit, 2.38f, 12.95f, 0.5f * GLM_PIf);
     chair(kit, 3.35f, 12.12f, 0.35f);

@@ -10,8 +10,8 @@
  * its three plain walls, filled with books whose spines are cut from gothic.h's strips, seeded;
  * a library ladder on a brass rail; and in the bay under the stained glass a carved desk with
  * its chair, a green-shaded lamp, a pair of candlesticks, an open journal, letters, an inkwell,
- * and a globe on its stand; and a chamberstick in each end bay of the long case. The lamp's
- * light goes into the scene, so this comes after the flashlight.
+ * and a globe on its stand. The lamp's light goes into the scene, so this comes after the
+ * flashlight.
  */
 void study_build(Kit* kit, Scene* scene, unsigned int seed);
 
