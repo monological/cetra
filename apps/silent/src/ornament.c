@@ -195,7 +195,8 @@ void ornament_window(Kit* kit, const Facade* s, const KitOpening* o) {
                   stop + (o->arch == KIT_ARCH_FLAT ? HOOD_W : 0.0f), f, f + out * HOOD_T, false);
     kit_frame_box(kit, &s->f, MAT_TRIM, casing.to, casing.to + HOOD_W + 0.05f, stop - 0.16f,
                   stop + (o->arch == KIT_ARCH_FLAT ? HOOD_W : 0.0f), f, f + out * HOOD_T, false);
-    if (o->arch == KIT_ARCH_POINTED && o->to - o->from >= TWO_LIGHTS)
+    // Tracery is a window's: a doorway is left clear to walk through.
+    if (o->arch == KIT_ARCH_POINTED && o->to - o->from >= TWO_LIGHTS && !doorway(o))
         two_lights(kit, s, o);
 }
 
