@@ -603,7 +603,7 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->rain_sheen = -1.0f;       // -1 = keep the scene file's
     args->rain_relief = -1.0f;      // -1 = keep the scene file's
     args->fire_warmup = -1.0f;      // -1 = keep the scene file's
-    args->fire_slice[0] = -1;       // no slice drawn
+    args->fire_slice_field = -1;    // no slice drawn
     args->world_scale = -1.0f;      // -1 = keep the sky's default (1 unit = 1 metre)
     args->spec_occ_mode = -1;       // -1 = keep the engine default
     args->import_scale = 1.0f;      // 1 = none
@@ -1257,11 +1257,11 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             int slice = 0, fire = 0;
             const int got =
                 ++i < argc ? sscanf(argv[i], "%15[a-z],%d,%d", field, &slice, &fire) : 0;
-            args->fire_slice[0] = -1;
+            args->fire_slice_field = -1;
             for (int f = 0; f < FIRE_FIELD_COUNT && got >= 2; f++)
                 if (strcmp(field, FIRE_FIELD_NAMES[f]) == 0)
-                    args->fire_slice[0] = f;
-            if (args->fire_slice[0] < 0) {
+                    args->fire_slice_field = f;
+            if (args->fire_slice_field < 0) {
                 fprintf(stderr,
                         "Error: --fire-slice needs <field>,<slice>[,<fire>], the field one of");
                 for (int f = 0; f < FIRE_FIELD_COUNT; f++)
@@ -1269,8 +1269,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 fprintf(stderr, "\n");
                 return -1;
             }
-            args->fire_slice[1] = slice;
-            args->fire_slice[2] = got >= 3 ? fire : 0;
+            args->fire_slice_z = slice;
+            args->fire_slice_fire = got >= 3 ? fire : 0;
         } else if (strcmp(argv[i], "--no-water-caustics") == 0) {
             // The negative flags do NOT imply --water. A flag whose whole job is to turn
             // a feature off has no business turning the feature on, and `--no-water
@@ -4621,9 +4621,9 @@ int main(int argc, char** argv) {
     if (scene->fire) {
         if (args.fire_warmup >= 0.0f)
             scene->fire->warmup = args.fire_warmup;
-        scene->fire->debug_field = args.fire_slice[0];
-        scene->fire->debug_slice = args.fire_slice[1];
-        scene->fire->debug_fire = args.fire_slice[2];
+        scene->fire->debug_field = args.fire_slice_field;
+        scene->fire->debug_slice = args.fire_slice_z;
+        scene->fire->debug_fire = args.fire_slice_fire;
     }
 
     if (args.no_water) {

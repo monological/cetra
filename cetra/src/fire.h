@@ -40,6 +40,7 @@ typedef enum FireKind {
     FIRE_GRID = 0,     // a simulated box of cells
     FIRE_FLAME = 1,    // a candle's structural flame
     FIRE_FLIPBOOK = 2, // a sheet of frames played on camera-facing cards
+    FIRE_KIND_COUNT
 } FireKind;
 
 typedef enum FireShape {

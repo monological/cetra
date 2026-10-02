@@ -989,21 +989,126 @@ static void parse_water(CetraSceneDesc* d, const cJSON* root) {
 }
 
 /*
- * rain -- a scene subsystem, top-level for water's reason. Every scalar is one row: the key,
- * the Rain field it fills, and the range outside which the value means nothing to the
- * consumer -- a negative rate, a non-positive time constant, a coverage past full. The keys
- * are the config snapshot's rain keys, so a dumped block pastes into a scene file.
+ * A block's keys as one table: every key it accepts is a row, so the table is the closed list
+ * warn_unknown_keys needs and a key cannot be read without being known or known without being
+ * read. A scalar row names the field it fills, by offset into the block's struct, and for a
+ * number the range outside which the value means nothing to the consumer; an OWN row is a key
+ * the block's own code reads. `only` limits a row to some of a block's variants -- a fire's
+ * kinds -- as a bit set over them, 0 being every variant: a key the variant does not read is
+ * then unknown and warned about, rather than read into a field nothing uses.
  */
-typedef struct CSceneRainKey {
+typedef enum CSceneKeyType {
+    CSCENE_KEY_FLOAT,
+    CSCENE_KEY_INT, // an int field, read as a JSON number like the rest
+    CSCENE_KEY_BOOL,
+    CSCENE_KEY_OWN,
+} CSceneKeyType;
+
+typedef struct CSceneKey {
     const char* key;
     size_t offset;
-    bool integer; // an int field, read as a JSON number like the rest
+    CSceneKeyType type;
     float lo, hi;
-} CSceneRainKey;
+    unsigned only;
+} CSceneKey;
 
-#define RAIN_FLOAT_KEY(k, field, lo, hi) {k, offsetof(Rain, field), false, lo, hi}
-#define RAIN_INT_KEY(k, field, lo, hi)   {k, offsetof(Rain, field), true, lo, hi}
-static const CSceneRainKey RAIN_KEYS[] = {
+// The most rows a block's table holds, which sizes the known-key list built from it.
+#define CSCENE_MAX_BLOCK_KEYS 64
+
+static bool _key_reads(const CSceneKey* k, unsigned variant) {
+    return !k->only || (k->only & variant);
+}
+
+// The scalar rows of `keys` that `variant` reads and `obj` carries, into the struct at `base`.
+static void apply_keys(const cJSON* obj, const char* what, const CSceneKey* keys, size_t count,
+                       unsigned variant, void* base) {
+    for (size_t i = 0; i < count; i++) {
+        const CSceneKey* k = &keys[i];
+        if (k->type == CSCENE_KEY_OWN || !_key_reads(k, variant))
+            continue;
+        // Through void*, as config_snapshot's _field_ptr does: a char* cast straight to a
+        // float* is what a portability checker reads as reinterpreting bytes.
+        void* field = (unsigned char*)base + k->offset;
+        if (k->type == CSCENE_KEY_BOOL) {
+            get_bool(obj, k->key, (bool*)field);
+            continue;
+        }
+        float v = 0.0f;
+        if (!_ranged_float(obj, what, k->key, k->lo, k->hi, &v))
+            continue;
+        if (k->type == CSCENE_KEY_INT)
+            *(int*)field = (int)v;
+        else
+            *(float*)field = v;
+    }
+}
+
+// Every key of `obj` that no row `variant` reads, warned about.
+static void warn_unknown_table_keys(const cJSON* obj, const char* what, const CSceneKey* keys,
+                                    size_t count, unsigned variant) {
+    const char* known[CSCENE_MAX_BLOCK_KEYS] = {NULL};
+    size_t n = 0;
+    for (size_t i = 0; i < count; i++)
+        if (_key_reads(&keys[i], variant))
+            known[n++] = keys[i].key;
+    warn_unknown_keys(obj, known, n, what);
+}
+
+// `word`'s index in `names`, ignoring case as the file's other enum words do; -1 for none.
+static int word_index(const char* word, const char* const* names, int count) {
+    for (int i = 0; i < count; i++)
+        if (names[i] && strcasecmp(word, names[i]) == 0)
+            return i;
+    return -1;
+}
+
+/*
+ * The objects of `obj`'s list `key`, up to `cap` of them into `out`, and how many: each checked
+ * against `known`, one that is not an object warned and skipped, and any past the cap warned
+ * once and dropped. A `key` that is there and is not a list is warned too.
+ */
+static int list_objects(const cJSON* obj, const char* key, const char* what,
+                        const char* const* known, size_t known_count, const cJSON** out, int cap) {
+    const cJSON* list = cJSON_GetObjectItemCaseSensitive(obj, key);
+    if (!list)
+        return 0;
+    if (!cJSON_IsArray(list)) {
+        log_warn("cscene: %s's %s is not a list; ignored", what, key);
+        return 0;
+    }
+    int n = 0;
+    const cJSON* item = NULL;
+    cJSON_ArrayForEach(item, list) {
+        if (!cJSON_IsObject(item)) {
+            log_warn("cscene: a %s that is not an object; skipped", what);
+            continue;
+        }
+        if (n == cap) {
+            log_warn("cscene: more than %d of %s; the rest are ignored", cap, what);
+            break;
+        }
+        warn_unknown_keys(item, known, known_count, what);
+        out[n++] = item;
+    }
+    return n;
+}
+
+/*
+ * rain -- a scene subsystem, top-level for water's reason. Every scalar is one row, with the
+ * range outside which the value means nothing to the consumer -- a negative rate, a
+ * non-positive time constant, a coverage past full. The keys are the config snapshot's rain
+ * keys, so a dumped block pastes into a scene file.
+ */
+#define RAIN_FLOAT_KEY(k, field, lo, hi) {k, offsetof(Rain, field), CSCENE_KEY_FLOAT, lo, hi, 0}
+#define RAIN_INT_KEY(k, field, lo, hi)   {k, offsetof(Rain, field), CSCENE_KEY_INT, lo, hi, 0}
+#define RAIN_OWN_KEY(k)                  {k, 0, CSCENE_KEY_OWN, 0.0f, 0.0f, 0}
+static const CSceneKey RAIN_KEYS[] = {
+    RAIN_OWN_KEY("enabled"),
+    RAIN_OWN_KEY("wind"),
+    RAIN_OWN_KEY("settled"),
+    RAIN_OWN_KEY("dryFor"),
+    RAIN_OWN_KEY("drips"),
+    {"followSceneWind", offsetof(Rain, follow_scene_wind), CSCENE_KEY_BOOL, 0.0f, 0.0f, 0},
     RAIN_FLOAT_KEY("rate", rate_mmh, 0.0f, 500.0f),
     RAIN_FLOAT_KEY("fallScale", fall_scale, 0.0f, 10.0f),
     RAIN_FLOAT_KEY("wetTime", wet_time, 1e-3f, 1e6f),
@@ -1039,7 +1144,9 @@ static const CSceneRainKey RAIN_KEYS[] = {
 };
 #undef RAIN_FLOAT_KEY
 #undef RAIN_INT_KEY
+#undef RAIN_OWN_KEY
 #define RAIN_KEY_COUNT (sizeof(RAIN_KEYS) / sizeof(RAIN_KEYS[0]))
+_Static_assert(RAIN_KEY_COUNT <= CSCENE_MAX_BLOCK_KEYS, "rain's keys overflow the known list");
 
 /*
  * rain.drips[] -- the lines water drips from (spec 13.12): {from, to, rate, ground}. `from` is
@@ -1091,103 +1198,116 @@ static void parse_rain(CetraSceneDesc* d, const cJSON* root) {
     vec3 wind = GLM_VEC3_ZERO_INIT;
     if (get_vec3(rain, "wind", wind))
         glm_vec3_copy(wind, out->rain.wind);
-    get_bool(rain, "followSceneWind", &out->rain.follow_scene_wind);
-    for (size_t i = 0; i < RAIN_KEY_COUNT; i++) {
-        const CSceneRainKey* k = &RAIN_KEYS[i];
-        float v = 0.0f;
-        if (!_ranged_float(rain, "rain", k->key, k->lo, k->hi, &v))
-            continue;
-        // Through void*, as config_snapshot's _field_ptr does: a char* cast straight to a
-        // float* is what a portability checker reads as reinterpreting bytes.
-        void* field = (unsigned char*)&out->rain + k->offset;
-        if (k->integer)
-            *(int*)field = (int)v;
-        else
-            *(float*)field = v;
-    }
+    apply_keys(rain, "rain", RAIN_KEYS, RAIN_KEY_COUNT, 0, &out->rain);
     out->has_settled = get_bool(rain, "settled", &out->settled);
     _ranged_float(rain, "rain", "dryFor", 0.0f, 1e6f, &out->dry_for);
     parse_drips(&out->rain, rain);
-
-    static const char* const OTHER_KEYS[] = {"enabled",         "wind",   "settled",
-                                             "followSceneWind", "dryFor", "drips"};
-#define RAIN_OTHER_COUNT (sizeof(OTHER_KEYS) / sizeof(OTHER_KEYS[0]))
-    const char* known[RAIN_KEY_COUNT + RAIN_OTHER_COUNT];
-    for (size_t i = 0; i < RAIN_OTHER_COUNT; i++)
-        known[i] = OTHER_KEYS[i];
-    for (size_t i = 0; i < RAIN_KEY_COUNT; i++)
-        known[RAIN_OTHER_COUNT + i] = RAIN_KEYS[i].key;
-    warn_unknown_keys(rain, known, RAIN_KEY_COUNT + RAIN_OTHER_COUNT, "rain");
-#undef RAIN_OTHER_COUNT
+    warn_unknown_table_keys(rain, "rain", RAIN_KEYS, RAIN_KEY_COUNT, 0);
 }
 
 /*
  * fire -- the scene's fires (spec 13.14): the simulation's settings, and `fires`, each a GRID
- * fire or a candle's FLAME over its kind's defaults. A fire's physics and optics are a closed
- * table over FireParams, so the file's key and the field cannot drift apart.
+ * fire, a candle's FLAME or a FLIPBOOK over its kind's defaults. Each kind reads its own keys --
+ * the table's `only` -- so a key that does nothing on the kind it is written on is warned about
+ * as unknown rather than taken silently.
  */
-typedef struct CSceneFireKey {
-    const char* key;
-    size_t offset;
-    float lo, hi;
-} CSceneFireKey;
-
-#define FIRE_PARAM_KEY(k, field, lo, hi) {k, offsetof(FireParams, field), lo, hi}
-static const CSceneFireKey FIRE_PARAM_KEYS[] = {
-    FIRE_PARAM_KEY("ambient", ambient, 150.0f, 400.0f),
-    FIRE_PARAM_KEY("temperature", temperature, 600.0f, 4000.0f),
-    FIRE_PARAM_KEY("reactionRate", reaction_rate, 0.01f, 100.0f),
-    FIRE_PARAM_KEY("cooling", cooling, 0.0f, 1e6f),
-    FIRE_PARAM_KEY("entrainment", entrainment, 0.0f, 1000.0f),
-    FIRE_PARAM_KEY("core", core, 0.0f, 10.0f),
-    FIRE_PARAM_KEY("expansion", expansion, 0.0f, 1000.0f),
-    FIRE_PARAM_KEY("sootYield", soot_yield, 0.0f, 1000.0f),
-    FIRE_PARAM_KEY("sootBurnout", soot_burnout, 0.0f, 1000.0f),
-    FIRE_PARAM_KEY("sootBurnoutAt", soot_burnout_at, 300.0f, 4000.0f),
-    FIRE_PARAM_KEY("smokeFade", smoke_fade, 0.0f, 1000.0f),
-    FIRE_PARAM_KEY("buoyancy", buoyancy, 0.0f, 100.0f),
-    FIRE_PARAM_KEY("vorticity", vorticity, 0.0f, 100.0f),
-    FIRE_PARAM_KEY("windResponse", wind_response, 0.0f, 10.0f),
-    FIRE_PARAM_KEY("sootAbsorption", soot_absorption, 0.0f, 1000.0f),
-    FIRE_PARAM_KEY("smokeAlbedo", smoke_albedo, 0.0f, 0.99f),
-    FIRE_PARAM_KEY("blueCore", blue_core, 0.0f, 1e7f),
-    FIRE_PARAM_KEY("adaptation", adaptation, 0.0f, 1.0f),
-    FIRE_PARAM_KEY("brightness", brightness, 0.0f, 1000.0f),
-    FIRE_PARAM_KEY("flameSoot", flame_soot, 0.0f, 1000.0f),
-    FIRE_PARAM_KEY("flicker", flicker, 0.0f, 10.0f),
+#define FIRE_SYSTEM_KEY(k, field, type, lo, hi) {k, offsetof(FireSystem, field), type, lo, hi, 0}
+static const CSceneKey FIRE_SYSTEM_KEYS[] = {
+    {"enabled", 0, CSCENE_KEY_OWN, 0.0f, 0.0f, 0},
+    {"fires", 0, CSCENE_KEY_OWN, 0.0f, 0.0f, 0},
+    FIRE_SYSTEM_KEY("simHz", sim_hz, CSCENE_KEY_FLOAT, 1.0f, 1000.0f),
+    FIRE_SYSTEM_KEY("warmup", warmup, CSCENE_KEY_FLOAT, 0.0f, 60.0f),
+    FIRE_SYSTEM_KEY("jacobi", jacobi_iterations, CSCENE_KEY_INT, 1.0f, 500.0f),
+    FIRE_SYSTEM_KEY("maccormack", maccormack, CSCENE_KEY_BOOL, 0.0f, 0.0f),
 };
-#undef FIRE_PARAM_KEY
-#define FIRE_PARAM_KEY_COUNT (sizeof(FIRE_PARAM_KEYS) / sizeof(FIRE_PARAM_KEYS[0]))
+#undef FIRE_SYSTEM_KEY
+#define FIRE_SYSTEM_KEY_COUNT (sizeof(FIRE_SYSTEM_KEYS) / sizeof(FIRE_SYSTEM_KEYS[0]))
+
+#define ON_GRID                                 (1u << FIRE_GRID)
+#define ON_FLAME                                (1u << FIRE_FLAME)
+#define ON_FLIPBOOK                             (1u << FIRE_FLIPBOOK)
+#define FIRE_KEY(k, field, type, lo, hi, kinds) {k, offsetof(Fire, field), type, lo, hi, kinds}
+#define FIRE_PARAM(k, field, lo, hi, kinds) \
+    FIRE_KEY(k, params.field, CSCENE_KEY_FLOAT, lo, hi, kinds)
+#define FIRE_OWN(k, kinds) {k, 0, CSCENE_KEY_OWN, 0.0f, 0.0f, kinds}
+static const CSceneKey FIRE_KEYS[] = {
+    FIRE_OWN("name", 0),
+    FIRE_OWN("kind", 0),
+    FIRE_OWN("light", 0),
+    FIRE_OWN("lightOffset", 0),
+    FIRE_OWN("embers", 0),
+    FIRE_KEY("enabled", enabled, CSCENE_KEY_BOOL, 0.0f, 0.0f, 0),
+    FIRE_OWN("center", ON_GRID | ON_FLAME),
+    FIRE_OWN("size", ON_GRID | ON_FLAME),
+    FIRE_KEY("cell", grid.cell, CSCENE_KEY_FLOAT, 0.002f, 1.0f, ON_GRID),
+    FIRE_KEY("floor", grid.floor, CSCENE_KEY_BOOL, 0.0f, 0.0f, ON_GRID),
+    FIRE_OWN("sources", ON_GRID),
+    FIRE_OWN("obstacles", ON_GRID),
+    FIRE_OWN("draft", ON_GRID),
+    FIRE_OWN("flipbook", ON_FLIPBOOK),
+    FIRE_OWN("cards", ON_FLIPBOOK),
+    FIRE_PARAM("ambient", ambient, 150.0f, 400.0f, ON_GRID | ON_FLAME),
+    FIRE_PARAM("temperature", temperature, 600.0f, 4000.0f, ON_GRID | ON_FLAME),
+    FIRE_PARAM("reactionRate", reaction_rate, 0.01f, 100.0f, ON_GRID),
+    FIRE_PARAM("cooling", cooling, 0.0f, 1e6f, ON_GRID),
+    FIRE_PARAM("entrainment", entrainment, 0.0f, 1000.0f, ON_GRID),
+    FIRE_PARAM("core", core, 0.0f, 10.0f, ON_GRID),
+    FIRE_PARAM("expansion", expansion, 0.0f, 1000.0f, ON_GRID),
+    FIRE_PARAM("sootYield", soot_yield, 0.0f, 1000.0f, ON_GRID),
+    FIRE_PARAM("sootBurnout", soot_burnout, 0.0f, 1000.0f, ON_GRID),
+    FIRE_PARAM("sootBurnoutAt", soot_burnout_at, 300.0f, 4000.0f, ON_GRID),
+    FIRE_PARAM("smokeFade", smoke_fade, 0.0f, 1000.0f, ON_GRID),
+    FIRE_PARAM("buoyancy", buoyancy, 0.0f, 100.0f, ON_GRID),
+    FIRE_PARAM("vorticity", vorticity, 0.0f, 100.0f, ON_GRID),
+    FIRE_PARAM("windResponse", wind_response, 0.0f, 10.0f, ON_GRID | ON_FLAME),
+    FIRE_PARAM("sootAbsorption", soot_absorption, 0.0f, 1000.0f, ON_GRID | ON_FLAME),
+    FIRE_PARAM("smokeAlbedo", smoke_albedo, 0.0f, 0.99f, ON_GRID | ON_FLAME),
+    FIRE_PARAM("blueCore", blue_core, 0.0f, 1e7f, ON_GRID | ON_FLAME),
+    FIRE_PARAM("adaptation", adaptation, 0.0f, 1.0f, ON_GRID | ON_FLAME),
+    FIRE_PARAM("brightness", brightness, 0.0f, 1000.0f, 0),
+    FIRE_PARAM("flameSoot", flame_soot, 0.0f, 1000.0f, ON_FLAME),
+    FIRE_PARAM("flicker", flicker, 0.0f, 10.0f, ON_FLAME),
+};
+#undef FIRE_KEY
+#undef FIRE_PARAM
+#undef FIRE_OWN
+#undef ON_GRID
+#undef ON_FLAME
+#undef ON_FLIPBOOK
+#define FIRE_KEY_COUNT (sizeof(FIRE_KEYS) / sizeof(FIRE_KEYS[0]))
+_Static_assert(FIRE_KEY_COUNT <= CSCENE_MAX_BLOCK_KEYS, "fire's keys overflow the known list");
+
+static const char* const FIRE_KIND_NAMES[FIRE_KIND_COUNT] = {
+    [FIRE_GRID] = "grid", [FIRE_FLAME] = "flame", [FIRE_FLIPBOOK] = "flipbook"};
+static const char* const FIRE_SHAPE_NAMES[] = {
+    [FIRE_SHAPE_BOX] = "box", [FIRE_SHAPE_SPHERE] = "sphere", [FIRE_SHAPE_CAPSULE] = "capsule"};
+
+// A box authored as {min, max}: a fire's obstacles and its chimney's draft.
+static bool get_min_max(const cJSON* obj, vec3 min, vec3 max) {
+    return get_vec3(obj, "min", min) && get_vec3(obj, "max", max);
+}
 
 // sources[] on a GRID fire: {shape, center, halfSize, from, to, radius, coverage, lift}. A box
 // takes center and halfSize, a sphere center and radius, a capsule from, to and radius.
-static void parse_fire_sources(Fire* fire, const cJSON* f) {
+static void parse_fire_sources(FireGrid* grid, const cJSON* f) {
     static const char* known[] = {"shape", "center", "halfSize", "from",
                                   "to",    "radius", "coverage", "lift"};
-    FireGrid* grid = &fire->grid;
-    const cJSON* sources = cJSON_GetObjectItemCaseSensitive(f, "sources");
-    const cJSON* s = NULL;
-    cJSON_ArrayForEach(s, sources) {
-        if (!cJSON_IsObject(s))
-            continue;
-        warn_unknown_keys(s, known, sizeof(known) / sizeof(known[0]), "fire source");
-        if (grid->source_count >= FIRE_MAX_SOURCES) {
-            log_warn("cscene: fire '%s' has more than %d sources; the rest are ignored", fire->name,
-                     FIRE_MAX_SOURCES);
-            break;
-        }
+    const cJSON* items[FIRE_MAX_SOURCES];
+    const int n = list_objects(f, "sources", "fire source", known, sizeof(known) / sizeof(known[0]),
+                               items, FIRE_MAX_SOURCES);
+    for (int i = 0; i < n; i++) {
+        const cJSON* s = items[i];
         FireSource src = fire_source_default();
         char shape[16] = "box";
         copy_string(shape, sizeof(shape), cJSON_GetObjectItemCaseSensitive(s, "shape"));
-        if (strcmp(shape, "sphere") == 0) {
-            src.shape = FIRE_SHAPE_SPHERE;
-        } else if (strcmp(shape, "capsule") == 0) {
-            src.shape = FIRE_SHAPE_CAPSULE;
-        } else if (strcmp(shape, "box") != 0) {
+        const int shape_index =
+            word_index(shape, FIRE_SHAPE_NAMES, (int)(sizeof(FIRE_SHAPE_NAMES) / sizeof(char*)));
+        if (shape_index < 0) {
             log_warn("cscene: fire source shape '%s' is not box, sphere or capsule; skipped",
                      shape);
             continue;
         }
+        src.shape = (FireShape)shape_index;
         if (src.shape == FIRE_SHAPE_CAPSULE) {
             if (!get_vec3(s, "from", src.a) || !get_vec3(s, "to", src.b)) {
                 log_warn("cscene: a capsule fire source needs from and to; skipped");
@@ -1208,85 +1328,59 @@ static void parse_fire_sources(Fire* fire, const cJSON* f) {
 
 // cards[] on a FLIPBOOK fire: {base, size, phase}, each a quad standing on its bottom centre;
 // no size is the size the sheet's frames were made at.
-static void parse_fire_cards(Fire* fire, const cJSON* f) {
+static void parse_fire_cards(FireCards* cards, const cJSON* f) {
     static const char* known[] = {"base", "size", "phase"};
-    FireCards* cards = &fire->cards;
-    const cJSON* list = cJSON_GetObjectItemCaseSensitive(f, "cards");
-    const cJSON* c = NULL;
-    cJSON_ArrayForEach(c, list) {
-        if (!cJSON_IsObject(c))
-            continue;
-        warn_unknown_keys(c, known, sizeof(known) / sizeof(known[0]), "fire card");
-        if (cards->count >= FIRE_MAX_CARDS) {
-            log_warn("cscene: fire '%s' has more than %d cards; the rest are ignored", fire->name,
-                     FIRE_MAX_CARDS);
-            break;
-        }
+    const cJSON* items[FIRE_MAX_CARDS];
+    const int n = list_objects(f, "cards", "fire card", known, sizeof(known) / sizeof(known[0]),
+                               items, FIRE_MAX_CARDS);
+    for (int i = 0; i < n; i++) {
         FireCard card = {.base = {0.0f, 0.0f, 0.0f}, .size = {0.0f, 0.0f}, .phase = 0.0f};
-        if (!get_vec3(c, "base", card.base)) {
+        if (!get_vec3(items[i], "base", card.base)) {
             log_warn("cscene: a fire card needs a base; skipped");
             continue;
         }
-        get_floats(c, "size", card.size, 2);
-        _ranged_float(c, "fire card", "phase", 0.0f, 1.0f, &card.phase);
+        get_floats(items[i], "size", card.size, 2);
+        _ranged_float(items[i], "fire card", "phase", 0.0f, 1.0f, &card.phase);
         cards->list[cards->count++] = card;
     }
 }
 
-// obstacles[] on a GRID fire: {min, max}, boxes no flow passes.
-static void parse_fire_obstacles(Fire* fire, const cJSON* f) {
-    static const char* known[] = {"min", "max"};
-    FireGrid* grid = &fire->grid;
-    const cJSON* obstacles = cJSON_GetObjectItemCaseSensitive(f, "obstacles");
-    const cJSON* o = NULL;
-    cJSON_ArrayForEach(o, obstacles) {
-        if (!cJSON_IsObject(o))
-            continue;
-        warn_unknown_keys(o, known, sizeof(known) / sizeof(known[0]), "fire obstacle");
-        if (grid->obstacle_count >= FIRE_MAX_OBSTACLES) {
-            log_warn("cscene: fire '%s' has more than %d obstacles; the rest are ignored",
-                     fire->name, FIRE_MAX_OBSTACLES);
-            break;
-        }
-        FireBox b = {{0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}};
-        if (!get_vec3(o, "min", b.min) || !get_vec3(o, "max", b.max)) {
-            log_warn("cscene: a fire obstacle needs min and max; skipped");
-            continue;
-        }
-        grid->obstacles[grid->obstacle_count++] = b;
-    }
-}
-
-// What a GRID or FLAME fire's `center`, `size`, `cell`, `floor`, sources, obstacles and draft
-// mean for its kind. A FLAME's center is its wick's tip, and size its width and height.
-static void parse_fire_shape(Fire* fire, const cJSON* f) {
-    if (fire->kind == FIRE_FLAME) {
-        get_vec3(f, "center", fire->flame.wick);
-        vec3 size = {fire->flame.width, fire->flame.height, 0.0f};
-        if (get_vec3(f, "size", size)) {
-            fire->flame.width = size[0];
-            fire->flame.height = size[1];
-        }
-        return;
-    }
-    if (fire->kind != FIRE_GRID)
-        return;
+// A GRID fire's box (center, size), its sources, the solids no flow passes ({min, max}), and its
+// chimney ({min, max, speed}, the flue and how fast it draws).
+static void parse_fire_grid(Fire* fire, const cJSON* f) {
     FireGrid* grid = &fire->grid;
     get_vec3(f, "center", grid->center);
     get_vec3(f, "size", grid->size);
-    _ranged_float(f, "fire", "cell", 0.002f, 1.0f, &grid->cell);
-    get_bool(f, "floor", &grid->floor);
-    parse_fire_sources(fire, f);
-    parse_fire_obstacles(fire, f);
-    // draft: {min, max, speed}, the chimney's flue and how fast it draws.
+    parse_fire_sources(grid, f);
+    static const char* box_known[] = {"min", "max"};
+    const cJSON* items[FIRE_MAX_OBSTACLES];
+    const int n =
+        list_objects(f, "obstacles", "fire obstacle", box_known, 2, items, FIRE_MAX_OBSTACLES);
+    for (int i = 0; i < n; i++) {
+        FireBox* b = &grid->obstacles[grid->obstacle_count];
+        if (get_min_max(items[i], b->min, b->max))
+            grid->obstacle_count++;
+        else
+            log_warn("cscene: a fire obstacle needs min and max; skipped");
+    }
     const cJSON* draft = cJSON_GetObjectItemCaseSensitive(f, "draft");
     if (cJSON_IsObject(draft)) {
         static const char* draft_known[] = {"min", "max", "speed"};
         warn_unknown_keys(draft, draft_known, 3, "fire draft");
-        if (get_vec3(draft, "min", grid->draft.min) && get_vec3(draft, "max", grid->draft.max))
+        if (get_min_max(draft, grid->draft.min, grid->draft.max))
             _ranged_float(draft, "fire draft", "speed", 0.0f, 100.0f, &grid->draft_speed);
         else
             log_warn("cscene: fire '%s' draft needs min and max; ignored", fire->name);
+    }
+}
+
+// A FLAME's wick tip (center), and its width and height (size's first two).
+static void parse_fire_flame(FireFlame* flame, const cJSON* f) {
+    get_vec3(f, "center", flame->wick);
+    vec3 size = {flame->width, flame->height, 0.0f};
+    if (get_vec3(f, "size", size)) {
+        flame->width = size[0];
+        flame->height = size[1];
     }
 }
 
@@ -1299,41 +1393,20 @@ static void parse_fire(CetraSceneDesc* d, const cJSON* root) {
     get_bool(block, "enabled", &out->enabled);
     FireSystem* fs = &out->system;
     fire_system_init(fs);
-    _ranged_float(block, "fire", "simHz", 1.0f, 1000.0f, &fs->sim_hz);
-    _ranged_float(block, "fire", "warmup", 0.0f, 60.0f, &fs->warmup);
-    float jacobi = (float)fs->jacobi_iterations;
-    if (_ranged_float(block, "fire", "jacobi", 1.0f, 500.0f, &jacobi))
-        fs->jacobi_iterations = (int)jacobi;
-    get_bool(block, "maccormack", &fs->maccormack);
-    static const char* block_known[] = {"enabled", "simHz",      "warmup",
-                                        "jacobi",  "maccormack", "fires"};
-    warn_unknown_keys(block, block_known, sizeof(block_known) / sizeof(block_known[0]), "fire");
-
-    static const char* const FIRE_OTHER_KEYS[] = {
-        "name",        "kind",    "enabled",   "center", "size",     "cell",  "floor", "light",
-        "lightOffset", "sources", "obstacles", "draft",  "flipbook", "cards", "embers"};
-#define FIRE_OTHER_COUNT (sizeof(FIRE_OTHER_KEYS) / sizeof(FIRE_OTHER_KEYS[0]))
-    const char* known[FIRE_PARAM_KEY_COUNT + FIRE_OTHER_COUNT];
-    for (size_t i = 0; i < FIRE_OTHER_COUNT; i++)
-        known[i] = FIRE_OTHER_KEYS[i];
-    for (size_t i = 0; i < FIRE_PARAM_KEY_COUNT; i++)
-        known[FIRE_OTHER_COUNT + i] = FIRE_PARAM_KEYS[i].key;
+    apply_keys(block, "fire", FIRE_SYSTEM_KEYS, FIRE_SYSTEM_KEY_COUNT, 0, fs);
+    warn_unknown_table_keys(block, "fire", FIRE_SYSTEM_KEYS, FIRE_SYSTEM_KEY_COUNT, 0);
 
     const cJSON* fires = cJSON_GetObjectItemCaseSensitive(block, "fires");
     const cJSON* f = NULL;
     cJSON_ArrayForEach(f, fires) {
-        if (!cJSON_IsObject(f))
+        if (!cJSON_IsObject(f)) {
+            log_warn("cscene: a fire that is not an object; skipped");
             continue;
-        warn_unknown_keys(f, known, FIRE_PARAM_KEY_COUNT + FIRE_OTHER_COUNT, "fire");
+        }
         char kind[16] = "grid";
         copy_string(kind, sizeof(kind), cJSON_GetObjectItemCaseSensitive(f, "kind"));
-        static const char* const KIND_NAMES[] = {
-            [FIRE_GRID] = "grid", [FIRE_FLAME] = "flame", [FIRE_FLIPBOOK] = "flipbook"};
-        const int kinds = (int)(sizeof(KIND_NAMES) / sizeof(KIND_NAMES[0]));
-        int kind_index = 0;
-        while (kind_index < kinds && strcmp(kind, KIND_NAMES[kind_index]) != 0)
-            kind_index++;
-        if (kind_index == kinds) {
+        const int kind_index = word_index(kind, FIRE_KIND_NAMES, FIRE_KIND_COUNT);
+        if (kind_index < 0) {
             log_warn("cscene: fire kind '%s' is not grid, flame or flipbook; skipped", kind);
             continue;
         }
@@ -1343,28 +1416,33 @@ static void parse_fire(CetraSceneDesc* d, const cJSON* root) {
         Fire* fire = fire_system_add(fs, (FireKind)kind_index, name);
         if (!fire)
             break;
-        if (fire->kind == FIRE_FLIPBOOK &&
-            !cJSON_IsString(cJSON_GetObjectItemCaseSensitive(f, "flipbook")))
-            log_warn("cscene: flipbook fire '%s' names no flipbook; it draws nothing", fire->name);
-        copy_string(out->flipbook[index], CSCENE_MAX_PATH,
-                    cJSON_GetObjectItemCaseSensitive(f, "flipbook"));
-        copy_string(out->embers[index], CSCENE_MAX_NAME,
-                    cJSON_GetObjectItemCaseSensitive(f, "embers"));
-        if (fire->kind == FIRE_FLIPBOOK)
-            parse_fire_cards(fire, f);
-        parse_fire_shape(fire, f);
-        get_bool(f, "enabled", &fire->enabled);
+        const unsigned variant = 1u << fire->kind;
+        warn_unknown_table_keys(f, "fire", FIRE_KEYS, FIRE_KEY_COUNT, variant);
+        apply_keys(f, "fire", FIRE_KEYS, FIRE_KEY_COUNT, variant, fire);
         get_vec3(f, "lightOffset", fire->light_offset);
         copy_string(out->light[index], CSCENE_MAX_NAME,
                     cJSON_GetObjectItemCaseSensitive(f, "light"));
-        for (size_t i = 0; i < FIRE_PARAM_KEY_COUNT; i++) {
-            const CSceneFireKey* k = &FIRE_PARAM_KEYS[i];
-            float v = 0.0f;
-            if (_ranged_float(f, "fire", k->key, k->lo, k->hi, &v))
-                *(float*)(void*)((unsigned char*)&fire->params + k->offset) = v;
+        copy_string(out->embers[index], CSCENE_MAX_NAME,
+                    cJSON_GetObjectItemCaseSensitive(f, "embers"));
+        switch (fire->kind) {
+            case FIRE_GRID:
+                parse_fire_grid(fire, f);
+                break;
+            case FIRE_FLAME:
+                parse_fire_flame(&fire->flame, f);
+                break;
+            case FIRE_FLIPBOOK:
+                if (!cJSON_IsString(cJSON_GetObjectItemCaseSensitive(f, "flipbook")))
+                    log_warn("cscene: flipbook fire '%s' names no flipbook; it draws nothing",
+                             fire->name);
+                copy_string(out->flipbook[index], CSCENE_MAX_PATH,
+                            cJSON_GetObjectItemCaseSensitive(f, "flipbook"));
+                parse_fire_cards(&fire->cards, f);
+                break;
+            case FIRE_KIND_COUNT:
+                break;
         }
     }
-#undef FIRE_OTHER_COUNT
 }
 
 /*

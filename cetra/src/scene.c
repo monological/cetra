@@ -395,6 +395,17 @@ Light* scene_find_light(Scene* scene, const char* name) {
     return NULL;
 }
 
+Material* scene_find_material(Scene* scene, const char* name) {
+    if (!scene || !name)
+        return NULL;
+    for (size_t i = 0; i < scene->material_count; ++i) {
+        Material* material = scene->materials[i];
+        if (material && material->name && strcmp(material->name, name) == 0)
+            return material;
+    }
+    return NULL;
+}
+
 void scene_add_particle_system(Scene* scene, struct ParticleSystem* sys) {
     if (!scene || !sys)
         return;

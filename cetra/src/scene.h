@@ -405,6 +405,9 @@ bool scene_add_light(Scene* scene, Light* light);
 bool scene_remove_light(Scene* scene, Light* light);
 
 Light* scene_find_light(Scene* scene, const char* name);
+// The first registered material named `name`, or NULL. Names need not be unique; a caller that
+// means every material of a name walks the registry itself.
+Material* scene_find_material(Scene* scene, const char* name);
 
 /*
  * The directional DELIVERING most light here, ranked by light_effective_intensity.

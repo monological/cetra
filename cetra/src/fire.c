@@ -242,6 +242,11 @@ Fire* fire_system_add(FireSystem* fs, FireKind kind, const char* name) {
                  FIRE_MAX);
         return NULL;
     }
+    if ((unsigned)kind >= FIRE_KIND_COUNT) {
+        log_warn("Fire: %s refused, kind %d is none of grid, flame or flipbook",
+                 name ? name : "(unnamed)", (int)kind);
+        return NULL;
+    }
     Fire* fire = &fs->fires[fs->count++];
     memset(fire, 0, sizeof(*fire));
     snprintf(fire->name, sizeof(fire->name), "%s", name ? name : "fire");
@@ -262,6 +267,7 @@ Fire* fire_system_add(FireSystem* fs, FireKind kind, const char* name) {
             fire->flame.height = 0.035f;
             break;
         case FIRE_FLIPBOOK:
+        case FIRE_KIND_COUNT:
             break;
     }
     return fire;

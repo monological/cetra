@@ -593,10 +593,7 @@ void apply_cscene_fire(Scene* scene, const CetraSceneDesc* cscn) {
                     "Scene file: fire '%s' drives light '%s', which the scene does not have\n",
                     fire->name, light);
         const char* embers = cscn->fire.embers[i];
-        Material* glow = NULL;
-        for (size_t m = 0; embers[0] && m < scene->material_count && !glow; m++)
-            if (scene->materials[m]->name && strcmp(scene->materials[m]->name, embers) == 0)
-                glow = scene->materials[m];
+        Material* glow = embers[0] ? scene_find_material(scene, embers) : NULL;
         if (embers[0] && !glow)
             fprintf(stderr,
                     "Scene file: fire '%s' glows through material '%s', which the scene does not "
