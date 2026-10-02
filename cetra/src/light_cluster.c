@@ -122,10 +122,18 @@ static bool _sphere_touches_cluster(const float* sphere, float radius_sq, int x,
     return cx * cx + cy * cy + cz * cz <= radius_sq;
 }
 
-// Conservative screen-tile bound for the fill loops: project the sphere's four
-// extreme points at its closest depth (max magnification over its depth range),
-// clamp to NDC, map to tiles. Purely an optimization -- _sphere_touches_cluster
-// rejects whatever this over-covers.
+// Conservative screen-tile bound for the fill loops: project the eight corners
+// of the sphere's view-space box, clamp to NDC, map to tiles. Purely an
+// optimization -- _sphere_touches_cluster rejects whatever this over-covers --
+// but it must never UNDER-cover, since a tile outside it is never tested.
+//
+// All eight, not the four at the closest depth. Nearest is the widest only for
+// the edge facing away from the screen centre: perspective pulls deeper points
+// toward the centre, so the edge facing it reaches furthest at the box's FAR
+// depth. Projecting the near four alone cut any sphere lying wholly to one side
+// of the view short on that side, and every tile in between lost it along a
+// hard line on the grid. With every corner in front of the eye, a box's
+// projection is bounded by its corners', so the eight cannot miss.
 static void _tile_range_for_sphere(mat4 projection, const vec3 view_center, float radius,
                                    float near_clip, LightClusterRange* range) {
     float zc = -view_center[2]; // view depth (camera looks down -Z)
@@ -141,11 +149,11 @@ static void _tile_range_for_sphere(mat4 projection, const vec3 view_center, floa
         return;
     }
 
-    float zproj = zc - radius;
     float ndc_min_x = 1.0f, ndc_max_x = -1.0f, ndc_min_y = 1.0f, ndc_max_y = -1.0f;
-    for (int corner = 0; corner < 4; corner++) {
+    for (int corner = 0; corner < 8; corner++) {
         vec4 p = {view_center[0] + ((corner & 1) ? radius : -radius),
-                  view_center[1] + ((corner & 2) ? radius : -radius), -zproj, 1.0f};
+                  view_center[1] + ((corner & 2) ? radius : -radius),
+                  -(zc + ((corner & 4) ? radius : -radius)), 1.0f};
         vec4 clip;
         glm_mat4_mulv(projection, p, clip);
         if (clip[3] <= 1e-6f)
@@ -497,12 +505,16 @@ static void _fill_index_pool(LightClusterContext* ctx) {
  * touched bitset -- that exists because the light path walks its cells twice,
  * and this one writes its answer on the first pass.
  *
- * Each probe's parallax box is bounded by its own sphere and handed to the
- * light path's own tests unchanged. The bound over-covers a box badly at the
- * corners, and that is harmless here in a way it would not be for a light: the
- * fragment recomputes the exact box weight anyway, and outside the box that
- * weight is zero. What the mask decides is only which probes a fragment
- * BOTHERS to weigh.
+ * Each probe's reach is bounded by its own sphere and handed to the light path's
+ * own tests unchanged. Over-covering is harmless -- the fragment recomputes the
+ * exact box weight anyway, so the mask decides only which probes a fragment
+ * BOTHERS to weigh -- but under-covering is not: a probe left out of a froxel it
+ * reaches drops its reflection along a hard line on the grid.
+ *
+ * So the sphere bounds the box GROWN BY ITS FADE, not the box. The weight falls
+ * off OUTWARD from the faces (probe_specular.glsl), so it is still near 1 just
+ * past a corner, and a sphere through the corners of the bare box ends exactly
+ * there.
  */
 static void _mark_probe_clusters(LightClusterContext* ctx, const struct Scene* scene, mat4 view,
                                  mat4 projection, float near_clip, const ClusterFrame* cf) {
@@ -534,7 +546,8 @@ static void _mark_probe_clusters(LightClusterContext* ctx, const struct Scene* s
         glm_vec3_add((float*)probe->box_min, (float*)probe->box_max, center);
         glm_vec3_scale(center, 0.5f, center);
         glm_vec3_sub((float*)probe->box_max, center, half);
-        const float radius = glm_vec3_norm(half);
+        // The fade floored as probeFade floors it, so a fade of 0 is covered too.
+        const float radius = (1.0f + fmaxf(probe->box_fade, 1e-3f)) * glm_vec3_norm(half);
 
         vec3 view_center;
         glm_mat4_mulv3(view, center, 1.0f, view_center);
