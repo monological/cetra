@@ -3152,6 +3152,17 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
             profiler_scope_end(engine->profiler);
         }
 
+        // The reflection probes, once: after the GI sweep, so a capture in the frame the
+        // volume converges already sees its light, and before the shadow pass for the GI
+        // capture's reason. No-op on a ready set.
+        if (shadow_scene && shadow_scene->probe_set) {
+            ReflectionProbeSet* probes = shadow_scene->probe_set;
+            profiler_scope_begin_if(engine->profiler, !probes->ready && !probes->failed,
+                                    "probe capture");
+            probe_set_update(probes, engine, shadow_scene);
+            profiler_scope_end(engine->profiler);
+        }
+
         // Shadow depth pass (before main render)
         if (shadow_scene && shadow_scene->shadow_system && shadow_scene->shadow_system->enabled) {
             // Unscoped here on purpose: render_shadow_depth_pass opens its own

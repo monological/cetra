@@ -4442,28 +4442,11 @@ int main(int argc, char** argv) {
         }
     }
 
-    /*
-     * DECALS BEFORE THE PROBES, and the order is load-bearing: a probe captures
-     * its cube here, once, at load. A decal applied after that is absent from
-     * every capture -- so a poster is missing from its own reflection, forever,
-     * with the frame otherwise correct.
-     *
-     * That is exactly the property the material-array tenancy was chosen FOR
-     * over a unit-6 alias (which is unbound during captures and could not have
-     * had it at all), so shipping it broken would have made the design argument
-     * false in the one place it is checkable.
-     *
-     * Guarded rather than applied-then-cleared: the apply decodes, dilates and
-     * uploads every image, and dirties the material array for them.
-     */
-    if (!args.no_decals)
-        apply_cscene_decals(scene, cscn);
-
     // A scene file that authored its own probes wins over the flag, and says so:
     // --probe (or environment.probe_scene, which is the same request) asks for
     // ONE auto-placed probe, and a file carrying a probes[] array has already
     // answered where its rooms are.
-    const bool authored_probes = apply_cscene_probes(engine, scene, cscn, args.probe_set_res);
+    const bool authored_probes = apply_cscene_probes(scene, cscn, args.probe_set_res);
     if (authored_probes && args.probe) {
         fprintf(stderr, "Warning: the scene file authors reflection probes; --probe ignored\n");
     }
@@ -4533,25 +4516,17 @@ int main(int argc, char** argv) {
 
             // Capture frustum: scene-scaled near, far past the dome so the
             // projected environment lands in the capture
-            float probe_near = fmaxf(0.005f * scene_radius, 0.01f);
-            float probe_far = (scene->render_skybox && scene->skybox_ground_projection)
+            probe->near_clip = fmaxf(0.005f * scene_radius, 0.01f);
+            probe->far_clip = (scene->render_skybox && scene->skybox_ground_projection)
                                   ? 2.0f * scene->skybox_gp_radius
                                   : 10.0f * fmaxf(scene_radius, 1.0f);
-            // Attach only after a successful capture: consumers treat an
-            // attached probe as ready, and the capture pass itself must
-            // never see one
-            if (reflection_probe_capture(probe, engine, scene, probe_near, probe_far,
-                                         probe_env_only) == 0) {
-                ReflectionProbeSet* set = create_reflection_probe_set();
-                if (set && probe_set_add(set, probe)) {
-                    set->captures_total = 1;
-                    set->ready = true;
-                    scene->probe_set = set;
-                } else {
-                    free_reflection_probe_set(set);
-                    free_reflection_probe(probe);
-                }
+            probe->environment_only = probe_env_only;
+            // Installed uncaptured: the engine captures it in the first frame.
+            ReflectionProbeSet* set = create_reflection_probe_set();
+            if (set && probe_set_add(set, probe)) {
+                scene->probe_set = set;
             } else {
+                free_reflection_probe_set(set);
                 free_reflection_probe(probe);
             }
         }
@@ -4573,7 +4548,11 @@ int main(int argc, char** argv) {
     apply_cscene_water(scene, cscn);
     apply_cscene_fog_volumes(scene, cscn);
     apply_cscene_occluders(scene, cscn);
-    // (decals were applied above, before the probe capture -- see the note there)
+    // Guarded rather than applied-then-cleared: the apply decodes, dilates and uploads every
+    // image, and dirties the material array for them. The probes are captured in the first
+    // frame, so every decal applied at load is in their captures.
+    if (!args.no_decals)
+        apply_cscene_decals(scene, cscn);
 
     // The rain on the water's pattern: the file supplies it, --no-rain wins outright, and
     // --rain either sets the rate of an authored rain or brings one of its own. A rate

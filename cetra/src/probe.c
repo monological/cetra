@@ -45,11 +45,9 @@ void free_reflection_probe(ReflectionProbe* probe) {
 // The scene path reuses the full pipeline (engine_render_scene) with
 // substituted per-face view/projection and the camera moved to the probe
 // position, into the shared ibl capture FBO. Everything touched is saved
-// and restored so a capture at load leaves the first real frame
-// bit-identical. Skinned meshes capture at bind pose (no animation state
-// has been evaluated at load).
-int reflection_probe_capture(ReflectionProbe* probe, struct Engine* engine, Scene* scene,
-                             float near_clip, float far_clip, bool environment_only) {
+// and restored so the frame the capture runs in draws as it would have
+// without it.
+int reflection_probe_capture(ReflectionProbe* probe, struct Engine* engine, Scene* scene) {
     if (!probe || !engine || !scene || !engine->camera) {
         log_error("Invalid state for probe capture");
         return -1;
@@ -62,7 +60,7 @@ int reflection_probe_capture(ReflectionProbe* probe, struct Engine* engine, Scen
 
     probe->max_lod = (float)(PROBE_PREFILTER_MIP_LEVELS - 1);
 
-    if (environment_only) {
+    if (probe->environment_only) {
         // No scene render: the probe is the global environment, re-prefiltered
         // into a probe-owned chain so the parallax box can ground it
         GLint saved_env_viewport[4];
@@ -111,7 +109,7 @@ int reflection_probe_capture(ReflectionProbe* probe, struct Engine* engine, Scen
     // aliasing at its horizon bakes in as stripe moire that mirror reflections
     // then magnify into banded streaks.
     scene_capture_faces(engine, scene, ibl, probe->position, probe->cubemap, 0, PROBE_CUBEMAP_SIZE,
-                        near_clip, far_clip);
+                        probe->near_clip, probe->far_clip);
 
     glBindTexture(GL_TEXTURE_CUBE_MAP, probe->cubemap);
     glGenerateMipmap(GL_TEXTURE_CUBE_MAP);

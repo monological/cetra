@@ -38,6 +38,9 @@ typedef struct ReflectionProbeSet {
     // on count: a half-swept set holds probes whose atlas columns were never
     // written, and blending against those shows as black rooms.
     bool ready;
+    bool failed; // one-shot: a capture that failed is not retried every frame
+
+    int row0; // the atlas's row-0 tile size; 0 = the default
 
     struct ProbeAtlas* atlas; // owned; NULL until the first multi-probe sweep
 
@@ -51,10 +54,11 @@ typedef struct ReflectionProbeSet {
     bool debug_atlas; // draw the raw atlas over the composited frame
 } ReflectionProbeSet;
 
-// The probe every single-probe consumer means. NULL on an empty set, so the
-// callers that used to test scene->probe keep their shape.
+// The probe every single-probe consumer means. NULL on an empty set and on one
+// not yet captured, so the callers that used to test scene->probe keep their
+// shape and an installed set is inert until it is ready.
 static inline ReflectionProbe* probe_set_primary(const ReflectionProbeSet* set) {
-    return (set && set->count > 0) ? set->probes[0] : NULL;
+    return (set && set->ready && set->count > 0) ? set->probes[0] : NULL;
 }
 
 // True once two or more probes have captured -- the state that arms the atlas
@@ -70,20 +74,28 @@ void free_reflection_probe_set(ReflectionProbeSet* set);
 // Takes ownership. Refuses past PROBE_SET_MAX (warns once) and refuses NULL.
 bool probe_set_add(ReflectionProbeSet* set, ReflectionProbe* probe);
 
-// Capture every probe, then project each into the atlas. Sequential and
-// synchronous, at load: the set is published only once all of them succeed, so
-// no probe is ever photographed into another's capture and a headless run sees
-// a converged set from its first frame.
-//
-// row0 is the atlas row-0 tile size (0 = the default). near/far are per probe,
-// derived by the caller from each probe's own proxy box.
-bool probe_set_capture_all(ReflectionProbeSet* set, struct Engine* engine, struct Scene* scene,
-                           const float* near_clips, const float* far_clips, const bool* env_only,
-                           int row0);
+/*
+ * Capture an installed set that is not yet ready: every probe, then each
+ * projected into the atlas, and the set marked ready only once all of them
+ * succeed. A no-op on a ready or failed set, and while the scene's GI volume
+ * has its opening sweep still to run.
+ *
+ * That wait is the point of capturing here rather than where the set is built.
+ * A capture lights what it sees with the volume only once the volume has an
+ * answer, and with the environment's ambient before it, so a set captured
+ * alongside the volume photographs every closed room lit by the open sky --
+ * by day many times the volume's light, which every dark glossy surface then
+ * reflects as a grey wash. The volume adopts the atlas when this allocates it.
+ *
+ * Runs in the frame before the shadow pass, after the GI sweep. A set is
+ * installed uncaptured and is inert until this has run; a headless run sees it
+ * from the frame the volume converges in, its first frame without one.
+ */
+void probe_set_update(ReflectionProbeSet* set, struct Engine* engine, struct Scene* scene);
 
-// Re-arm the whole set for re-capture. The seam relight will need; nothing
-// calls it yet, and a scene-captured probe is deliberately left stale by the
-// sun slider exactly as the single probe always was.
+// Re-arm the whole set for re-capture at the next update. The seam relight will
+// need; nothing calls it yet, and a scene-captured probe is deliberately left
+// stale by the sun slider exactly as the single probe always was.
 void probe_set_mark_dirty(ReflectionProbeSet* set);
 
 // Pack what a probe IS -- position, box, intensity, where its column sits --

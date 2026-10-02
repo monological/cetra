@@ -116,6 +116,10 @@ bool gi_volume_active(const GIVolume* gi) {
     return gi && gi->enabled && gi->atlas && !gi->failed && !gi->first_pass;
 }
 
+bool gi_volume_pending(const GIVolume* gi) {
+    return gi && gi->enabled && !gi->failed && gi->first_pass && gi->dirty_count > 0;
+}
+
 // Cubemap with no mips, LINEAR, clamped -- the capture scratch, reused per probe.
 static GLuint gi_make_cubemap(int size, GLenum internal_format, GLenum format, GLenum type) {
     GLuint tex = 0;

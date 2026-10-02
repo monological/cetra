@@ -17781,6 +17781,18 @@ def _probe_set_rows(text):
             for m in _PROBE_SET_ROW.findall(text)]
 
 
+def _probe_set_captured_rows(text):
+    """The rows from once the set was captured, and whether it was ever pending past frame 0.
+
+    The engine captures an installed set in the first frame (spec 13.13), after the app's
+    update hook has printed frame 0, so that row alone may read "pending". A set still
+    pending at any later frame was never captured.
+    """
+    rows = _probe_set_rows(text)
+    late = any(r["mode"] == "pending" and r["frame"] > 0 for r in rows)
+    return [r for r in rows if r["mode"] != "pending"], late
+
+
 def _probe_run(workdir, tag, mutate=None, extra=None, frames=30, fixture=None):
     """Render the two-room fixture, optionally through a mutation.
 
@@ -17909,15 +17921,15 @@ def run_probe_set_gate(workdir):
         print(f"  probe-set-single ERROR  {(out_a if pix_a is None else out_b)[-300:]}")
         failures.append("probe-set-single")
     else:
-        rows = _probe_set_rows(out_a)
+        rows, late = _probe_set_captured_rows(out_a)
         modes = {r["mode"] for r in rows}
         masks = {r["mask_bits"] for r in rows}
         counts = {r["count"] for r in rows}
         identical = pix_a == pix_b
         lit = sum(1 for i in range(0, len(pix_a), 3)
                   if pix_a[i:i + 3] != pix_bare[i:i + 3])
-        ok = (bool(rows) and modes == {"single"} and masks == {0} and counts == {1}
-              and identical and lit >= PROBE_SINGLE_EFFECT_MIN)
+        ok = (bool(rows) and not late and modes == {"single"} and masks == {0}
+              and counts == {1} and identical and lit >= PROBE_SINGLE_EFFECT_MIN)
         print(f"  probe-set-single {'PASS' if ok else 'FAIL'}  mode={sorted(modes)} "
               f"count={sorted(counts)} mask_bits={sorted(masks)} want single/1/0; "
               f"two runs identical={identical}; the one probe moves {lit} px against no "
@@ -17978,8 +17990,8 @@ def run_probe_set_gate(workdir):
                                     ["--probe-set-probe", "10"], frames=60)
     _, _, _, out_c2 = _probe_run(workdir, "converge2", None,
                                  ["--probe-set-probe", "10"], frames=60)
-    rows_c = _probe_set_rows(out_c)
-    rows_c2 = _probe_set_rows(out_c2)
+    rows_c, late_c = _probe_set_captured_rows(out_c)
+    rows_c2, _ = _probe_set_captured_rows(out_c2)
     if pix_c is None or not rows_c:
         print(f"  probe-set-converge ERROR  {out_c[-300:]}")
         failures.append("probe-set-converge")
@@ -17993,10 +18005,11 @@ def run_probe_set_gate(workdir):
         # stop AT the probe count", and a fixture that grows a third probe should
         # keep testing that rather than failing for having grown.
         want = rows_c[0]["count"]
-        ok = caps == {want} and len(digs) == 1 and digs == digs2
+        ok = not late_c and caps == {want} and len(digs) == 1 and digs == digs2
         print(f"  probe-set-converge {'PASS' if ok else 'FAIL'}  captures {sorted(caps)} "
-              f"want exactly [{want}] (the probe count) across {len(rows_c)} frames; mask "
-              f"digest {sorted(digs)} stable and equal across two processes ({sorted(digs2)})")
+              f"want exactly [{want}] (the probe count) across {len(rows_c)} frames, "
+              f"captured in the first: {not late_c}; mask digest {sorted(digs)} stable and "
+              f"equal across two processes ({sorted(digs2)})")
         if not ok:
             failures.append("probe-set-converge")
 

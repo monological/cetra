@@ -703,16 +703,15 @@ void apply_cscene_decals(Scene* scene, const CetraSceneDesc* cscn) {
  * than a flag can carry -- `--probe` asks for one auto-placed probe and cannot say where
  * the rooms are.
  *
- * Captures the whole set here, at load, before the render loop: the set publishes only
- * once every probe has succeeded, so no probe is ever photographed into another's capture
- * and a headless frame sees a converged set. Returns false when the scene authored none,
+ * Installs the set uncaptured: the engine captures it in the first frame, after the GI
+ * volume's opening sweep if the scene has one. Returns false when the scene authored none,
  * which is what leaves the auto-placement path below untouched.
  */
 _Static_assert(CSCENE_MAX_PROBES <= PROBE_SET_MAX,
                "the parser cannot author more probes than a set can hold");
 
-bool apply_cscene_probes(Engine* engine, Scene* scene, const CetraSceneDesc* cscn, int row0) {
-    if (!engine || !scene || !cscn || cscn->probe_count <= 0)
+bool apply_cscene_probes(Scene* scene, const CetraSceneDesc* cscn, int row0) {
+    if (!scene || !cscn || cscn->probe_count <= 0)
         return false;
 
     if (!scene->ibl || !scene->ibl->precomputed) {
@@ -726,10 +725,7 @@ bool apply_cscene_probes(Engine* engine, Scene* scene, const CetraSceneDesc* csc
     ReflectionProbeSet* set = create_reflection_probe_set();
     if (!set)
         return false;
-
-    float near_clips[CSCENE_MAX_PROBES];
-    float far_clips[CSCENE_MAX_PROBES];
-    bool env_only[CSCENE_MAX_PROBES];
+    set->row0 = row0;
 
     for (int i = 0; i < cscn->probe_count; i++) {
         const CSceneProbe* p = &cscn->probes[i];
@@ -750,10 +746,10 @@ bool apply_cscene_probes(Engine* engine, Scene* scene, const CetraSceneDesc* csc
         vec3 span;
         glm_vec3_sub(probe->box_max, probe->box_min, span);
         const float radius = 0.5f * glm_vec3_norm(span);
+        probe->near_clip = fmaxf(0.005f * radius, 0.01f);
+        probe->far_clip = 10.0f * fmaxf(radius, 1.0f);
+        probe->environment_only = p->env_only;
         const int n = set->count;
-        near_clips[n] = fmaxf(0.005f * radius, 0.01f);
-        far_clips[n] = 10.0f * fmaxf(radius, 1.0f);
-        env_only[n] = p->env_only;
 
         if (!probe_set_add(set, probe)) {
             free_reflection_probe(probe);
@@ -768,8 +764,7 @@ bool apply_cscene_probes(Engine* engine, Scene* scene, const CetraSceneDesc* csc
                p->env_only ? " (environment only)" : "");
     }
 
-    if (set->count <= 0 ||
-        !probe_set_capture_all(set, engine, scene, near_clips, far_clips, env_only, row0)) {
+    if (set->count <= 0) {
         free_reflection_probe_set(set);
         return false;
     }

@@ -618,15 +618,16 @@ void scene_environment_changed(Scene* scene, struct Engine* engine) {
      * A SET is refused wholesale and separately, because the question is not per
      * probe there: its members have had their capture cubes released into the
      * atlas, so none of them could re-prefilter even if it wanted to, and
-     * re-running the sweep is what relight will be.
+     * re-running the sweep is what relight will be. One not yet captured has
+     * nothing to refresh: its capture is still to come, and will see this sky.
      */
     const ReflectionProbeSet* probes = scene->probe_set;
     if (probe_set_multi(probes)) {
         log_info("Sky: %d-probe set not refreshed (relight is deferred)", probes->count);
-    } else {
-        for (int i = 0; probes && i < probes->count; ++i) {
-            if (probes->probes[i]->cubemap == 0)
-                reflection_probe_capture(probes->probes[i], engine, scene, 0.1f, 100.0f, true);
+    } else if (probes && probes->ready) {
+        for (int i = 0; i < probes->count; ++i) {
+            if (probes->probes[i]->environment_only)
+                reflection_probe_capture(probes->probes[i], engine, scene);
             else
                 log_info("Sky: scene-captured probe %d not refreshed", i);
         }

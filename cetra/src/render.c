@@ -1368,7 +1368,7 @@ void engine_render_scene(Engine* engine, Scene* scene) {
         glGetIntegerv(GL_VIEWPORT, cluster_viewport);
         light_cluster_build_and_upload(engine->light_cluster, scene, *view, *projection,
                                        cluster_viewport[2], cluster_viewport[3], camera->near_clip,
-                                       camera->far_clip);
+                                       camera->far_clip, engine->capturing);
         profiler_scope_end(engine->profiler);
     }
 
