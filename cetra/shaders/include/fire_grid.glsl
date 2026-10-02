@@ -78,8 +78,11 @@ vec4 fireFetch(sampler2D t, ivec3 c, vec4 outside) {
 // Trilinear at continuous position `p`: a hardware-bilinear tap in each of the two slices
 // either side, mixed. The tap stays half a texel inside its tile, so it never blends in the
 // neighbouring slice that sits beside it in the atlas -- which holds the grid's edge cells'
-// values out to the edge, as CLAMP_TO_EDGE would. Past the grid is `outside`.
+// values out to the edge, as CLAMP_TO_EDGE would. Past the grid is `outside`, but under a solid
+// floor is the floor: what is there is the bottom row's, not the air's.
 vec4 fireSample(sampler2D t, vec3 p, vec4 outside) {
+    if (floorSolid != 0)
+        p.y = max(p.y, 0.0);
     if (any(lessThan(p, vec3(0.0))) || any(greaterThan(p, vec3(gridSize))))
         return outside;
     vec2 xy = clamp(p.xy, vec2(0.5), vec2(gridSize.xy) - 0.5);

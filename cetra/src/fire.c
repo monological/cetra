@@ -165,9 +165,18 @@ bool fire_set_flipbook(Fire* fire, TexturePool* pool, const char* path) {
         return false;
     FireFlipbook* b = &fire->flipbook;
     _flipbook_release(b);
+    // What the old book cast goes with it, so a set that fails leaves a fire casting nothing.
+    fire->answered = false;
+    fire->intensity = 0.0f;
+    fire->mean_intensity = 0.0f;
+    fire->vigour = 1.0f;
     if (!path || !path[0])
         return false;
-    snprintf(b->path, sizeof(b->path), "%s", path);
+    if (snprintf(b->path, sizeof(b->path), "%s", path) >= (int)sizeof(b->path)) {
+        log_error("Fire: '%s''s flipbook path is longer than %d", fire->name, FIRE_PATH_MAX - 1);
+        _flipbook_release(b);
+        return false;
+    }
     char* text = read_entire_file(path, NULL);
     cJSON* root = text ? cJSON_Parse(text) : NULL;
     free(text);
@@ -187,16 +196,20 @@ bool fire_set_flipbook(Fire* fire, TexturePool* pool, const char* path) {
     glm_vec2_copy(box, b->box);
     glm_vec3_one(b->color);
     json_floats(root, "color", b->color, 3);
-    // The sheet sits beside its sidecar.
+    // The sheet sits beside its sidecar, and holds every frame it says it does.
     const char* sheet = json_string_or(root, "sheet");
-    char sheet_path[sizeof(b->path) + 64] = "";
-    bool ok = sheet && b->frames > 0 && b->cols > 0 && b->rows > 0;
+    char sheet_path[FIRE_PATH_MAX] = "";
+    bool ok = sheet && b->frames > 0 && b->cols > 0 && b->rows > 0 &&
+              b->frames <= b->cols * b->rows && b->width > 0 && b->height > 0 && b->box[0] > 0.0f &&
+              b->box[1] > 0.0f;
     if (ok) {
         const char* slash = path_last_sep(path);
-        if (slash)
-            snprintf(sheet_path, sizeof(sheet_path), "%.*s/%s", (int)(slash - path), path, sheet);
-        else
-            snprintf(sheet_path, sizeof(sheet_path), "%s", sheet);
+        const int n = slash ? snprintf(sheet_path, sizeof(sheet_path), "%.*s/%s",
+                                       (int)(slash - path), path, sheet)
+                            : snprintf(sheet_path, sizeof(sheet_path), "%s", sheet);
+        ok = n < (int)sizeof(sheet_path);
+    }
+    if (ok) {
         b->intensity = calloc((size_t)b->frames, sizeof(float));
         b->centroid_y = calloc((size_t)b->frames, sizeof(float));
         ok = b->intensity && b->centroid_y &&
@@ -478,33 +491,43 @@ static void _flame_rest(Fire* fire) {
  * sways; the wind leans it, and seeded impulses -- a draught, the wick's own puffing -- set it
  * flickering. The base stays on the wick, so a flame carried along trails behind it.
  */
+// The longest stretch of time a FLAME's spine is integrated over at once: its stiff spring is
+// stable under semi-implicit Euler only below about 0.057 s, so a coarser sim rate is taken in
+// pieces.
+#define FLAME_MAX_DT (1.0f / 60.0f)
+
 static void _flame_step(Fire* fire, int index, const vec3 wind, float dt) {
     const FireParams* p = &fire->params;
     const float seg = fire->flame.height / (float)(FIRE_SPINE_POINTS - 1);
     // Height breathes with the flicker: a flame that pulls itself up and drops back.
     const float stretch = 1.0f + 0.15f * p->flicker * _hash_signed((uint32_t)fire->steps, 977u);
-    _flame_wick(fire, fire->spine[0]);
-    for (int i = 1; i < FIRE_SPINE_POINTS; i++) {
-        const float u = (float)i / (float)(FIRE_SPINE_POINTS - 1);
-        vec3 target = {fire->spine[i - 1][0], fire->spine[i - 1][1] + seg * stretch,
-                       fire->spine[i - 1][2]};
-        // The wind leans the upper flame further than the base.
-        target[0] += wind[0] * p->wind_response * 0.004f * u;
-        target[2] += wind[2] * p->wind_response * 0.004f * u;
-        vec3 accel = {0.0f, 0.0f, 0.0f};
-        for (int a = 0; a < 3; a++) {
-            const float k = a == 1 ? 900.0f : 220.0f;
-            accel[a] = k * (target[a] - fire->spine[i][a]) - 9.0f * fire->spine_velocity[i][a];
+    const int pieces = (int)ceilf(dt / FLAME_MAX_DT - 1e-4f);
+    const int n = pieces > 1 ? pieces : 1;
+    const float h = dt / (float)n;
+    for (int piece = 0; piece < n; piece++) {
+        _flame_wick(fire, fire->spine[0]);
+        for (int i = 1; i < FIRE_SPINE_POINTS; i++) {
+            const float u = (float)i / (float)(FIRE_SPINE_POINTS - 1);
+            vec3 target = {fire->spine[i - 1][0], fire->spine[i - 1][1] + seg * stretch,
+                           fire->spine[i - 1][2]};
+            // The wind leans the upper flame further than the base.
+            target[0] += wind[0] * p->wind_response * 0.004f * u;
+            target[2] += wind[2] * p->wind_response * 0.004f * u;
+            vec3 accel = {0.0f, 0.0f, 0.0f};
+            for (int a = 0; a < 3; a++) {
+                const float k = a == 1 ? 900.0f : 220.0f;
+                accel[a] = k * (target[a] - fire->spine[i][a]) - 9.0f * fire->spine_velocity[i][a];
+            }
+            // The flicker's impulses grow up the flame, which is where a candle visibly moves.
+            const uint32_t seed = (uint32_t)(index * 131 + i);
+            accel[0] += p->flicker * 6.0f * u * _hash_signed((uint32_t)fire->steps, seed);
+            accel[2] += p->flicker * 6.0f * u * _hash_signed((uint32_t)fire->steps, seed + 7919u);
+            for (int a = 0; a < 3; a++) {
+                fire->spine_velocity[i][a] += accel[a] * h;
+                fire->spine[i][a] += fire->spine_velocity[i][a] * h;
+            }
+            fire->spine[i][3] = 0.5f * fire->flame.width * _flame_radius(u);
         }
-        // The flicker's impulses grow up the flame, which is where a candle visibly moves.
-        const uint32_t seed = (uint32_t)(index * 131 + i);
-        accel[0] += p->flicker * 6.0f * u * _hash_signed((uint32_t)fire->steps, seed);
-        accel[2] += p->flicker * 6.0f * u * _hash_signed((uint32_t)fire->steps, seed + 7919u);
-        for (int a = 0; a < 3; a++) {
-            fire->spine_velocity[i][a] += accel[a] * dt;
-            fire->spine[i][a] += fire->spine_velocity[i][a] * dt;
-        }
-        fire->spine[i][3] = 0.5f * fire->flame.width * _flame_radius(u);
     }
     fire->spine[0][3] = 0.0f;
 }
@@ -573,7 +596,7 @@ static void _flipbook_light(Fire* fire, double t) {
     const FireFlipbook* b = &fire->flipbook;
     float total = 0.0f, mean = 0.0f;
     vec3 weighted = GLM_VEC3_ZERO_INIT;
-    for (int c = 0; c < fire->cards.count; c++) {
+    for (int c = 0; c < fire_card_count(fire); c++) {
         const FireCard* card = &fire->cards.list[c];
         const double pos = fire_card_frame(b, card, t);
         const int f0 = (int)pos % b->frames;
@@ -683,28 +706,31 @@ void fire_update(FireSystem* fs, const Wind* wind, double t) {
 
 // The fire's light onto its light: a point or spot gets the intensity in candela at the
 // centroid, placed in the frame of the node it hangs on; an area panel gets the luminance that
-// gives the same intensity along its normal, and keeps its place.
-static void _drive_light(Fire* fire, SceneNode* root) {
+// gives the same intensity along its normal, and keeps its place. A fire that is out, or has not
+// yet said what it casts, darkens it and leaves it where it is.
+static void _drive_light(const Fire* fire, SceneNode* root) {
     Light* light = fire->light;
-    if (!light || !fire->answered)
+    if (!light)
         return;
-    if (fire->light_seen != light) {
-        fire->light_node = node_find_light(root, light);
-        fire->light_seen = light;
-    }
-    const float intensity = fire->enabled ? fmaxf(fire->intensity, 0.0f) : 0.0f;
-    glm_vec3_copy(fire->color, light->color);
+    const bool casting = fire->enabled && fire->answered;
+    const float intensity = casting ? fmaxf(fire->intensity, 0.0f) : 0.0f;
+    if (casting)
+        glm_vec3_copy((float*)fire->color, light->color);
     switch (light->type) {
         case LIGHT_POINT:
         case LIGHT_SPOT: {
             // Stored in the type's canonical unit, candela, whatever the light was authored in.
             light->intensity = intensity;
+            if (!casting)
+                break;
             vec3 at = {0.0f, 0.0f, 0.0f}, local = {0.0f, 0.0f, 0.0f};
-            glm_vec3_add(fire->centroid, fire->light_offset, at);
+            glm_vec3_add((float*)fire->centroid, (float*)fire->light_offset, at);
             glm_vec3_copy(at, local);
-            if (fire->light_node) {
+            // Found each time rather than kept, since the node is the scene's to free or move.
+            SceneNode* node = node_find_light(root, light);
+            if (node) {
                 mat4 inv;
-                glm_mat4_inv(fire->light_node->global_transform, inv);
+                glm_mat4_inv(node->global_transform, inv);
                 glm_mat4_mulv3(inv, at, 1.0f, local);
             }
             // The authored copy in its node's frame, which the next walk carries back to `at`,
@@ -730,20 +756,34 @@ void fire_system_drive(FireSystem* fs, SceneNode* root, float dt) {
     const float follow = 1.0f - expf(-fmaxf(dt, 0.0f) / FIRE_VIGOUR_SECONDS);
     for (int i = 0; i < fs->count; i++) {
         Fire* fire = &fs->fires[i];
-        if (fire->answered) {
-            // A flipbook's mean is its loop's; the others' is a running one.
+        if (fire->answered && fire->enabled) {
+            // A flipbook's mean is its loop's; the others' is a running one, a plain average of
+            // the answers so far until there are enough of them for the exponential to weigh.
             if (fire->kind != FIRE_FLIPBOOK) {
-                if (fire->mean_intensity > 0.0f)
-                    fire->mean_intensity += (fire->intensity - fire->mean_intensity) * follow;
-                else
-                    fire->mean_intensity = fire->intensity;
+                fire->mean_samples++;
+                const float weight = fmaxf(follow, 1.0f / (float)fire->mean_samples);
+                fire->mean_intensity += (fire->intensity - fire->mean_intensity) * weight;
             }
-            fire->vigour =
-                fire->mean_intensity > 0.0f ? fire->intensity / fire->mean_intensity : 1.0f;
+            fire->vigour = fire->mean_intensity > 0.0f
+                               ? fminf(fire->intensity / fire->mean_intensity, FIRE_VIGOUR_MAX)
+                               : 1.0f;
         }
         _drive_light(fire, root);
         if (fire->embers)
             fire->embers->emissive_drive = fire->enabled ? fire->vigour : 0.0f;
+    }
+}
+
+void fire_system_shift_origin(FireSystem* fs, const vec3 delta) {
+    if (!fs)
+        return;
+    for (int i = 0; i < fs->count; i++) {
+        Fire* fire = &fs->fires[i];
+        // The origin is read from the node every frame; what is kept between frames is not.
+        glm_vec3_sub(fire->centroid, (float*)delta, fire->centroid);
+        if (fire->kind == FIRE_FLAME)
+            for (int p = 0; p < FIRE_SPINE_POINTS; p++)
+                glm_vec3_sub(fire->spine[p], (float*)delta, fire->spine[p]);
     }
 }
 

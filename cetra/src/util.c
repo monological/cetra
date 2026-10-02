@@ -97,12 +97,16 @@ GLPassState gl_pass_begin(void) {
     glGetIntegerv(GL_BLEND_SRC_ALPHA, &s.blend_func[2]);
     glGetIntegerv(GL_BLEND_DST_ALPHA, &s.blend_func[3]);
     glGetIntegerv(GL_CULL_FACE_MODE, &s.cull_face);
+    GLint modes[2] = {GL_FILL, GL_FILL}; // front and back, which the engine never sets apart
+    glGetIntegerv(GL_POLYGON_MODE, modes);
+    s.polygon_mode = modes[0];
     s.depth = glIsEnabled(GL_DEPTH_TEST);
     s.blend = glIsEnabled(GL_BLEND);
     s.cull = glIsEnabled(GL_CULL_FACE);
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_BLEND);
     glDisable(GL_CULL_FACE);
+    glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
     return s;
 }
 
@@ -119,6 +123,7 @@ void gl_pass_end(const GLPassState* s) {
     glBlendFuncSeparate((GLenum)s->blend_func[0], (GLenum)s->blend_func[1],
                         (GLenum)s->blend_func[2], (GLenum)s->blend_func[3]);
     glCullFace((GLenum)s->cull_face);
+    glPolygonMode(GL_FRONT_AND_BACK, (GLenum)s->polygon_mode);
     _gl_set(GL_DEPTH_TEST, s->depth);
     _gl_set(GL_BLEND, s->blend);
     _gl_set(GL_CULL_FACE, s->cull);

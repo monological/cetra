@@ -555,6 +555,7 @@ void scene_apply_origin_delta(Scene* scene, const vec3 delta) {
     gi_volume_shift_origin(scene->gi_volume, delta);
     for (size_t i = 0; i < scene->particle_system_count; ++i)
         particle_system_shift_origin(scene->particle_systems[i], delta);
+    fire_system_shift_origin(scene->fire, delta);
 
     glm_vec3_add(scene->world_origin, (float*)delta, scene->world_origin);
 }

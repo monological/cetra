@@ -78,6 +78,9 @@ typedef struct FireRenderer {
     GLuint quad_vao; // the fullscreen quad every simulation pass draws
     GLuint quad_vbo;
     GLuint blackbody_lut; // fire_blackbody_table, RGBA32F
+    // Each GRID fire's fields, by its index in `system`: the fire system they were kept for,
+    // since a fire at the same index in another system has nothing to do with this one's gas.
+    const struct FireSystem* system;
     FireGridGPU grids[FIRE_MAX];
 
     // What every GRID fire casts, read back through a ring: two texels a fire (FireAnswer),

@@ -29,7 +29,9 @@
  * A fire's geometry is LOCAL to its origin: the world position of the node it hangs on, or the
  * world's origin with none. Only the node's position is taken, not its rotation or scale: a
  * flame rises against gravity whatever the carrier does -- a tilted torch still burns upright --
- * and a simulated box stays aligned with the world its buoyancy is stated in.
+ * and a simulated box stays aligned with the world its buoyancy is stated in. A fire on no node
+ * stays at the world's origin through an origin shift, since it has no place of its own to move:
+ * a fire in a world that shifts hangs on a node.
  *
  * WORLD UNITS ARE METRES and temperatures are KELVIN. What this file owns is the fire, not
  * how it is drawn or stepped on the GPU (fire_render.h): no GL here. The one texture a fire
@@ -122,8 +124,14 @@ typedef struct FireCards {
  * fraction of the frame). The sheet is stored bottom row first: frame k sits at column
  * k % cols of row k / cols, row 0 at the bottom.
  */
+// The longest path a flipbook's sidecar or sheet may have, as a scene file's paths.
+#define FIRE_PATH_MAX 1024
+// The most a fire's vigour reads: twice as hard as it usually burns is a fire flaring, and a
+// mean taken over only a few answers should not make a spark read as a blaze.
+#define FIRE_VIGOUR_MAX 2.0f
+
 typedef struct FireFlipbook {
-    char path[256]; // the sidecar; "" = none
+    char path[FIRE_PATH_MAX]; // the sidecar; "" = none
     // The sheet, from the scene's texture pool, held: NULL until a sidecar and its sheet have
     // both read, which is what every use of the rest asks.
     struct Texture* sheet;
@@ -194,8 +202,8 @@ typedef struct Fire {
     vec3 centroid;   // world metres, the emission-weighted centre
     vec3 color;      // linear Rec.709, luminance 1: the emission's colour, as adapted
     // How hard the fire is burning against how it usually does: its intensity over a running
-    // mean (a FLIPBOOK's over its loop's), 1 = as usual. What its embers glow with, and what a
-    // crackle can swell with.
+    // mean (a FLIPBOOK's over its loop's), 1 = as usual, at most FIRE_VIGOUR_MAX. What its
+    // embers glow with, and what a crackle can swell with.
     float vigour;
     float heat_release; // GRID only: W, the heat the hot gas sheds, which in balance is what
                         // burning adds
@@ -232,11 +240,12 @@ typedef struct Fire {
     };
 
     // ENGINE-OWNED, behind the settings they follow: the cache keys of `adaptation`, and the
-    // node `light` hangs on, found when `light` changes.
+    // mean `vigour` is taken against -- a plain average of the first answers until there have
+    // been enough for the running one, so a fire that lights small is not measured against its
+    // first flicker.
     float adapted_for[2];
-    struct Light* light_seen;
-    struct SceneNode* light_node;
-    float mean_intensity; // the running mean `vigour` is taken against
+    float mean_intensity;
+    int mean_samples;
 } Fire;
 
 typedef struct FireSystem {
@@ -310,8 +319,11 @@ void fire_update(FireSystem* fs, const struct Wind* wind, double t);
 struct SceneNode;
 // Hand what every fire cast to what it drives, once this frame's light is known: its light,
 // placed in the frame of the node it hangs on under `root`, its vigour over `dt` seconds, and
-// its embers.
+// its embers. A fire that is out, or has cast nothing yet, darkens its light.
 void fire_system_drive(FireSystem* fs, struct SceneNode* root, float dt);
+
+// The world moved by -`delta` (an origin shift): what fires hold in world space moves with it.
+void fire_system_shift_origin(FireSystem* fs, const vec3 delta);
 
 // --fire-probe: the blackbody at a ladder of temperatures, and every fire's state.
 void fire_probe_print(const FireSystem* fs);
