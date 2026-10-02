@@ -272,8 +272,7 @@ static const MatSpec SPECS[MAT_COUNT] = {
     [MAT_MAHOGANY] = {"mahogany", "lacquered_cherry_wood", {1.1f, 0.61f, 0.40f}, 1.4f, 0.0f, 0.8f},
     // tools/make_gothic.py's picture, each card placed whole by gothic.h's UVs; the repeat is
     // unused. The stained glass glows by the same picture (GLOWS).
-    [MAT_CARVED] = {"carved_mahogany", "gothic", {1, 1, 1}, 1.0f, 0.0f, 1.0f},
-    [MAT_PERSIAN] = {"persian_rug", "gothic", {1, 1, 1}, 1.0f, 0.0f, 1.0f},
+    [MAT_GOTHIC] = {"gothic_pictures", "gothic", {1, 1, 1}, 1.0f, 0.0f, 1.0f},
     [MAT_STAINED] = {"stained_glass", "gothic", {1, 1, 1}, 1.0f, 0.0f, 1.0f},
     [MAT_LEADED] = {"leaded_glass", "leaded_glass", {1, 1, 1}, 1.0f, 0.0f, 0.4f},
     // The castle stone blackened: its scan's mean, about (0.19, 0.15, 0.10) linear, taken to

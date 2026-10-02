@@ -66,8 +66,7 @@ typedef enum {
     MAT_IRON,         // cresting, finials, straps, the fireback: black paint gone dull
     MAT_LEATHER,      // book covers, the desk's top
     MAT_MAHOGANY,     // panelling's stiles and rails, beams, trusses, doors' casings
-    MAT_CARVED,       // gothic.h's carved panels and frieze, placed whole
-    MAT_PERSIAN,      // gothic.h's rug and runners
+    MAT_GOTHIC,       // gothic.h's pictures placed whole: carvings, spines, the rug and runners
     MAT_STAINED,      // gothic.h's lancets: opaque, lit through by its own picture
     MAT_LEADED,       // diamond quarries in lead, laid by the metre
     MAT_SOOT,         // a firebox's blackened stone

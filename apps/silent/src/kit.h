@@ -55,6 +55,7 @@ typedef struct Kit {
     PhysicsWorld* physics;
     int collider_count;
     int vertex_count; // everything kit_finish handed over
+    bool warned_nonfinite;
 
     // The edges water drips from in the rain (spec 13.12), in world space, for the rain to take.
     RainDripLine drips[RAIN_DRIP_MAX];
@@ -76,6 +77,7 @@ typedef struct KitOpening {
     float bottom, top;
     KitArchShape arch;
     float rise;
+    bool door; // a doorway, walked through, rather than a window
 } KitOpening;
 
 // Whether the opening has a head above its springing line; a FLAT one, or one of no rise, has
@@ -123,6 +125,15 @@ static inline float kit_rnd(KitRng* r) {
 
 static inline float kit_rrange(KitRng* r, float lo, float hi) {
     return lo + (hi - lo) * kit_rnd(r);
+}
+
+// How far `p` is in plan, (x, z), from the segment a..b.
+static inline float kit_plan_distance(const vec3 p, const vec2 a, const vec2 b) {
+    const float dx = b[0] - a[0], dz = b[1] - a[1], len2 = dx * dx + dz * dz;
+    const float t = len2 > 0.0f
+                        ? glm_clamp(((p[0] - a[0]) * dx + (p[2] - a[1]) * dz) / len2, 0.0f, 1.0f)
+                        : 0.0f;
+    return hypotf(p[0] - (a[0] + t * dx), p[2] - (a[1] + t * dz));
 }
 
 void kit_init(Kit* kit, Scene* scene, EntityManager* em, PhysicsWorld* physics);
@@ -188,9 +199,28 @@ void kit_drip(Kit* kit, const KitFrame* f, const vec3 from, const vec3 to, float
 // The box a0..a1 along, y0..y1 up, d0..d1 out, each range in either order.
 void kit_frame_box(Kit* kit, const KitFrame* f, int mat, float a0, float a1, float y0, float y1,
                    float d0, float d1, bool collide);
+
+// A box's faces in its frame, to leave out the ones nothing can see: against a wall, on a
+// shelf, under a card.
+typedef enum KitFace {
+    KIT_FACE_A_POS = 1 << 0,
+    KIT_FACE_A_NEG = 1 << 1,
+    KIT_FACE_UP = 1 << 2,
+    KIT_FACE_DOWN = 1 << 3,
+    KIT_FACE_OUT = 1 << 4, // +d
+    KIT_FACE_IN = 1 << 5,  // -d
+    KIT_FACES_ALL = (1 << 6) - 1,
+} KitFace;
+// The same box with only the KitFace bits `shown`, and no body.
+void kit_frame_box_faces(Kit* kit, const KitFrame* f, int mat, float a0, float a1, float y0,
+                         float y1, float d0, float d1, unsigned shown);
 // A wall in frame `f`: see KitWall. A wall is never grimed, whatever its materials: the seams
 // between the slabs it is cut into round its openings are edges nobody built.
 void kit_frame_wall(Kit* kit, const KitFrame* f, const KitWall* wall);
+// One layer of `mat` the wall's whole thickness through, cut round its openings, with no body: a
+// board cut to an arch, a lining on a wall that already stops the player. The wall's materials
+// and inner side are unused.
+void kit_frame_panel(Kit* kit, const KitFrame* f, int mat, const KitWall* wall);
 
 // The frame a wall is drawn in, the d of its middle there, and which way along d (+1 or -1)
 // its inner side lies.

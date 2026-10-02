@@ -102,9 +102,17 @@ static void face_frame(const vec3 n, vec3 t, vec3 b) {
     glm_vec3_cross((float*)n, t, b);
 }
 
-// `grime` is 0..1; a builder without colours ignores it. UVs in repeats.
+// `grime` is 0..1; a builder without colours ignores it. UVs in repeats. A position that is not
+// finite is reported, once a kit, naming its material: it reaches the GPU as a band of black
+// that the tonemap clamps, nowhere near the solid that made it.
 static unsigned int kit_vertex(Kit* kit, int mat, const vec3 p, const vec3 n, const vec3 t, float u,
                                float v, float grime) {
+    if (!kit->warned_nonfinite && !(isfinite(p[0]) && isfinite(p[1]) && isfinite(p[2]))) {
+        const Material* m = kit->materials[mat];
+        fprintf(stderr, "silent: a vertex of %s is not finite\n",
+                m && m->name ? m->name : "an unnamed material");
+        kit->warned_nonfinite = true;
+    }
     const float rgba[4] = {1.0f + (GRIME_TINT[0] - 1.0f) * grime,
                            1.0f + (GRIME_TINT[1] - 1.0f) * grime,
                            1.0f + (GRIME_TINT[2] - 1.0f) * grime, 1.0f};
@@ -159,10 +167,18 @@ static void emit_face(Kit* kit, int mat, const vec3* in, int count, const vec3 o
 
 // Where to cut an edge `len` long: both ends, a cut a third of the way into
 // the ring and the ring's inner line at each, and the interior every
-// GRIME_STEP. Returns the count, at most GRIME_MAX_CUTS.
+// GRIME_STEP. An edge shorter than one step -- a stud, a sill's end, a merlon --
+// is cut once across its middle, so its dirt fades to the middle rather than
+// drawing a rim, for a ninth of the vertices on a face short both ways.
+// Returns the count, at most GRIME_MAX_CUTS.
 static int grime_cuts(float len, float band, float* out) {
     int n = 0;
     out[n++] = 0.0f;
+    if (len < GRIME_STEP) {
+        out[n++] = 0.5f * len;
+        out[n++] = len;
+        return n;
+    }
     out[n++] = 0.35f * band;
     out[n++] = band;
     const float inner = len - 2.0f * band;
@@ -347,6 +363,14 @@ static void newell(const vec3* corners, int count, vec3 n) {
     }
 }
 
+// Whether an outline has a corner count the kit can take, saying so when it has not.
+static bool outline_ok(int count) {
+    if (count >= 3 && count <= KIT_MAX_OUTLINE)
+        return true;
+    fprintf(stderr, "silent: an outline needs 3 to %d corners, not %d\n", KIT_MAX_OUTLINE, count);
+    return false;
+}
+
 /*
  * A flat polygon, ear-clipped and wound to face `outward`. Its UVs are the face's world
  * projection, or `uv` per corner with `tangent` the direction U runs, for a picture laid on
@@ -354,13 +378,8 @@ static void newell(const vec3* corners, int count, vec3 n) {
  */
 static void polygon(Kit* kit, int mat, const vec3* corners, int count, const vec3 outward,
                     const vec2* uv, const vec3 tangent) {
-    if (!slot_ok(kit, mat))
+    if (!slot_ok(kit, mat) || !outline_ok(count))
         return;
-    if (count < 3 || count > KIT_MAX_OUTLINE) {
-        fprintf(stderr, "silent: a polygon needs 3 to %d corners, not %d\n", KIT_MAX_OUTLINE,
-                count);
-        return;
-    }
     vec3 n = {0.0f, 0.0f, 0.0f};
     newell(corners, count, n);
     if (glm_vec3_norm2(n) < 1e-12f)
@@ -394,12 +413,11 @@ void kit_polygon_facing(Kit* kit, int mat, const vec3* corners, int count, const
 
 /*
  * A prism over a flat base: the base and its copy `offset` along, which face away from each
- * other, and a flat quad up each edge facing out of the outline.
+ * other, and a flat quad up each edge facing out of the outline. The caller has checked the
+ * outline.
  */
 static void extrude(Kit* kit, int mat, const vec3* base, int count, const vec3 offset) {
-    if (count < 3 || count > KIT_MAX_OUTLINE)
-        return;
-    vec3 top[KIT_MAX_OUTLINE], n = {0.0f, 0.0f, 0.0f}, back = {0.0f, 0.0f, 0.0f};
+    vec3 top[KIT_MAX_OUTLINE] = {{0.0f}}, n = {0.0f, 0.0f, 0.0f}, back = {0.0f, 0.0f, 0.0f};
     for (int i = 0; i < count; i++)
         glm_vec3_add((float*)base[i], (float*)offset, top[i]);
     glm_vec3_negate_to((float*)offset, back);
@@ -419,7 +437,7 @@ static void extrude(Kit* kit, int mat, const vec3* base, int count, const vec3 o
 }
 
 void kit_slab(Kit* kit, int mat, const vec2* xz, int count, float y0, float y1, bool collide) {
-    if (count < 3 || count > KIT_MAX_OUTLINE)
+    if (!outline_ok(count))
         return;
     vec3 base[KIT_MAX_OUTLINE];
     vec2 centre = {0.0f, 0.0f};
@@ -482,9 +500,10 @@ void kit_collider(Kit* kit, const vec3 centre, const vec3 half, float yaw) {
     entity_add_rigid_body(e, kit->physics, &shape, MOTION_STATIC, OBJ_LAYER_STATIC);
 }
 
-// A box, its material's grime baked into it unless `clean`.
+// A box of the KitFace bits `shown` (its local +x, -x, +y, -y, +z, -z), its material's grime
+// baked into it unless `clean`.
 static void box(Kit* kit, int mat, const vec3 centre, const vec3 half, float yaw, bool collide,
-                bool clean) {
+                bool clean, unsigned shown) {
     if (mat == KIT_COLLIDER_ONLY) {
         kit_collider(kit, centre, half, yaw);
         return;
@@ -507,6 +526,8 @@ static void box(Kit* kit, int mat, const vec3 centre, const vec3 half, float yaw
                                      {0, -1, 0}, {0, 0, 1},  {0, 0, -1}};
     const bool grimed = !clean && slot_ok(kit, mat) && kit->grime[mat] > 0.0f;
     for (int f = 0; f < 6; f++) {
+        if (!(shown & (1u << f)))
+            continue;
         vec3 out = {0.0f, 0.0f, 0.0f};
         rotate_y(dirs[f], yaw, out);
         const float* c0 = corner[faces[f][0]];
@@ -525,7 +546,7 @@ static void box(Kit* kit, int mat, const vec3 centre, const vec3 half, float yaw
 }
 
 void kit_box(Kit* kit, int mat, const vec3 centre, const vec3 half, float yaw, bool collide) {
-    box(kit, mat, centre, half, yaw, collide, false);
+    box(kit, mat, centre, half, yaw, collide, false, KIT_FACES_ALL);
 }
 
 /*
@@ -601,17 +622,29 @@ typedef struct Ring {
  * ends of a pipe -- which is where it meets whatever it is fixed to: the tap
  * where it enters the counter, a pot where it sits on the burner, a handle
  * where it is riveted on. The dirt needs rings to fade across, so a grimed
- * solid is cut every GRIME_RING along its length; a clean one keeps only the
- * rings its shape asks for.
+ * solid is cut every GRIME_RING while it is near a joint, and every GRIME_STEP
+ * past that, as a box face's interior is; a clean one keeps only the rings its
+ * shape asks for.
  */
-#define GRIME_RING 0.01f // metres
+#define GRIME_RING      0.01f               // metres
+#define GRIME_RING_NEAR (2.0f * GRIME_BAND) // past this from a joint the falloff is spent
 
-// How many pieces a stretch `len` long is cut into.
-static int ring_pieces(const Kit* kit, int mat, float len) {
-    if (kit->grime[mat] <= 0.0f)
-        return 1;
-    const int n = (int)ceilf(len / GRIME_RING);
-    return n < 1 ? 1 : n > GRIME_MAX_CUTS ? GRIME_MAX_CUTS : n;
+// The rings along a stretch `len` long whose ends are j0 and j1 from the solid's nearest joint,
+// as fractions of it from 0 to 1 into `out`, which holds GRIME_MAX_CUTS + 1. Returns the count.
+static int ring_cuts(const Kit* kit, int mat, float len, float j0, float j1, float* out) {
+    int n = 0;
+    out[n++] = 0.0f;
+    if (kit->grime[mat] > 0.0f && len > 0.0f) {
+        float s = 0.0f;
+        while (n < GRIME_MAX_CUTS) {
+            s += j0 + (j1 - j0) * s / len < GRIME_RING_NEAR ? GRIME_RING : GRIME_STEP;
+            if (s >= len - 0.25f * GRIME_RING)
+                break;
+            out[n++] = s / len;
+        }
+    }
+    out[n++] = 1.0f;
+    return n;
 }
 
 // Where one ring sits and how it shades.
@@ -719,18 +752,23 @@ static void pipe(Kit* kit, int mat, const vec3* path, int count, float r, int si
     Ring rings[2];
     RingAt at = {.r = r, .nr = 1.0f};
     vec3 prev = {0.0f, 0.0f, 0.0f};
-    float len = 0.0f;
+    float len = 0.0f, before = 0.0f; // along the rings so far, and to the start of the segment
     int made = 0;
     for (int i = 0; i < count; i++) {
         // The segment arriving at point i, cut into pieces; point 0 is one ring.
-        const int pieces =
-            i == 0 ? 1
-                   : ring_pieces(kit, mat, glm_vec3_distance((float*)path[i], (float*)path[i - 1]));
+        float cut[GRIME_MAX_CUTS + 1] = {0.0f};
+        int pieces = 1;
+        if (i > 0) {
+            const float seg = glm_vec3_distance((float*)path[i], (float*)path[i - 1]);
+            pieces = ring_cuts(kit, mat, seg, fminf(before, total - before),
+                               fminf(before + seg, total - before - seg), cut) -
+                     1;
+            before += seg;
+        }
         for (int s = i == 0 ? pieces : 1; s <= pieces; s++) {
             if (s < pieces) {
                 // Inside a segment, a ring faces along it.
-                glm_vec3_lerp((float*)path[i - 1], (float*)path[i], (float)s / (float)pieces,
-                              at.centre);
+                glm_vec3_lerp((float*)path[i - 1], (float*)path[i], cut[s], at.centre);
                 glm_vec3_sub((float*)path[i], (float*)path[i - 1], at.axis);
             } else {
                 // At a point, along the segments either side of it.
@@ -824,10 +862,12 @@ static void lathe(Kit* kit, int mat, const vec3 base, const vec3 axis, const vec
         profile_normal(profile, k, ns);
         at.planar = fabsf(ns[1]) > 0.7f;
         const float seg = glm_vec2_distance((float*)profile[k + 1], (float*)profile[k]);
-        const int pieces = ring_pieces(kit, mat, seg);
+        float cut[GRIME_MAX_CUTS + 1] = {0.0f};
+        const int pieces =
+            ring_cuts(kit, mat, seg, profile[k][1] - lo, profile[k + 1][1] - lo, cut) - 1;
         Ring rings[2];
         for (int s = 0; s <= pieces; s++) {
-            const float f = (float)s / (float)pieces;
+            const float f = cut[s];
             vec2 p = {0.0f, 0.0f}, n = {0.0f, 0.0f};
             glm_vec2_lerp((float*)profile[k], (float*)profile[k + 1], f, p);
             glm_vec2_lerp(n0, n1, f, n);
@@ -857,37 +897,54 @@ static void lathe(Kit* kit, int mat, const vec3 base, const vec3 axis, const vec
 #define TUDOR_TURN   (GLM_PIf / 3.0f)
 #define TUDOR_ARCS   3 // of a half's segments, on the haunch
 
+/*
+ * A four-centred half of half-span w and `rise`: from the haunch's end, (dx, dy) to the apex,
+ * and the denominator of the long arc's radius, which is at or below zero for an arch too high
+ * to be four-centred.
+ */
+static float tudor_span(float w, float rise, float* dx, float* dy) {
+    const float r1 = TUDOR_HAUNCH * w;
+    *dx = w - r1 + r1 * cosf(TUDOR_TURN);
+    *dy = rise - r1 * sinf(TUDOR_TURN);
+    return *dx * cosf(TUDOR_TURN) - *dy * sinf(TUDOR_TURN);
+}
+
+// The head an arch of half-span w is drawn with: a Tudor too high to be four-centred is pointed.
+static KitArchShape arch_drawn(KitArchShape shape, float w, float rise) {
+    float dx, dy;
+    if (shape == KIT_ARCH_TUDOR && tudor_span(w, rise, &dx, &dy) <= 1e-4f)
+        return KIT_ARCH_POINTED;
+    return shape;
+}
+
 // One half, from (a0, spring) up to the apex over the mid-span: `out` gets
 // KIT_ARCH_SEGMENTS + 1 points. `dir` is +1 for the left half, -1 for the right, mirrored.
 static void arch_half(KitArchShape shape, float a0, float w, float spring, float rise, float dir,
                       vec2* out) {
     const int n = KIT_ARCH_SEGMENTS;
-    if (shape == KIT_ARCH_TUDOR) {
+    if (arch_drawn(shape, w, rise) == KIT_ARCH_TUDOR) {
         const float r1 = TUDOR_HAUNCH * w;
         const vec2 c1 = {a0 + dir * r1, spring};
         const vec2 p1 = {c1[0] - dir * r1 * cosf(TUDOR_TURN), spring + r1 * sinf(TUDOR_TURN)};
-        const float dx = w - r1 + r1 * cosf(TUDOR_TURN), dy = rise - r1 * sinf(TUDOR_TURN);
-        const float den = dx * cosf(TUDOR_TURN) - dy * sinf(TUDOR_TURN);
-        if (den > 1e-4f) {
-            // The long arc's centre lies on the line through the haunch's end and its centre.
-            const float r2 = (dx * dx + dy * dy) / (2.0f * den);
-            const vec2 c2 = {p1[0] + dir * r2 * cosf(TUDOR_TURN), p1[1] - r2 * sinf(TUDOR_TURN)};
-            const float end = atan2f(spring + rise - c2[1], dir * (a0 + dir * w - c2[0]));
-            for (int i = 0; i <= n; i++) {
-                if (i <= TUDOR_ARCS) {
-                    const float t = GLM_PIf - TUDOR_TURN * (float)i / (float)TUDOR_ARCS;
-                    out[i][0] = c1[0] + dir * r1 * cosf(t);
-                    out[i][1] = c1[1] + r1 * sinf(t);
-                } else {
-                    const float f = (float)(i - TUDOR_ARCS) / (float)(n - TUDOR_ARCS);
-                    const float t = (GLM_PIf - TUDOR_TURN) + f * (end - (GLM_PIf - TUDOR_TURN));
-                    out[i][0] = c2[0] + dir * r2 * cosf(t);
-                    out[i][1] = c2[1] + r2 * sinf(t);
-                }
+        float dx, dy;
+        const float den = tudor_span(w, rise, &dx, &dy);
+        // The long arc's centre lies on the line through the haunch's end and its centre.
+        const float r2 = (dx * dx + dy * dy) / (2.0f * den);
+        const vec2 c2 = {p1[0] + dir * r2 * cosf(TUDOR_TURN), p1[1] - r2 * sinf(TUDOR_TURN)};
+        const float end = atan2f(spring + rise - c2[1], dir * (a0 + dir * w - c2[0]));
+        for (int i = 0; i <= n; i++) {
+            if (i <= TUDOR_ARCS) {
+                const float t = GLM_PIf - TUDOR_TURN * (float)i / (float)TUDOR_ARCS;
+                out[i][0] = c1[0] + dir * r1 * cosf(t);
+                out[i][1] = c1[1] + r1 * sinf(t);
+            } else {
+                const float f = (float)(i - TUDOR_ARCS) / (float)(n - TUDOR_ARCS);
+                const float t = (GLM_PIf - TUDOR_TURN) + f * (end - (GLM_PIf - TUDOR_TURN));
+                out[i][0] = c2[0] + dir * r2 * cosf(t);
+                out[i][1] = c2[1] + r2 * sinf(t);
             }
-            return;
         }
-        // Too high for a four-centred arch.
+        return;
     }
     const float r = (w * w + rise * rise) / (2.0f * w);
     const vec2 c = {a0 + dir * r, spring};
@@ -944,11 +1001,13 @@ KitOpening kit_opening_grow(const KitOpening* o, float w) {
     const float half = 0.5f * (o->to - o->from);
     if (!kit_opening_arched(o)) {
         g.top += w;
-    } else if (o->arch == KIT_ARCH_POINTED) {
+    } else if (arch_drawn(o->arch, half, o->rise) == KIT_ARCH_POINTED) {
         // Each arc keeps its centre and gains w of radius.
         const float r = (half * half + o->rise * o->rise) / (2.0f * half);
         g.rise = sqrtf((r + w) * (r + w) - (r - half) * (r - half));
     } else {
+        // A four-centred head's haunch is a fixed share of its span, so it cannot grow
+        // concentrically; this keeps the band near enough its width over the crown.
         g.rise += 0.6f * w;
     }
     return g;
@@ -963,7 +1022,7 @@ static void wall_slab(Kit* kit, const KitWallFrame* wf, int mat, float offset, f
     vec3 centre = {0.0f, 0.0f, 0.0f};
     kit_frame_point(&wf->f, 0.5f * (a + b), 0.5f * (y0 + y1), wf->at + offset, centre);
     const vec3 half = {0.5f * (b - a), 0.5f * (y1 - y0), 0.5f * thick};
-    box(kit, mat, centre, half, wf->f.yaw, false, true);
+    box(kit, mat, centre, half, wf->f.yaw, false, true, KIT_FACES_ALL);
 }
 
 /*
@@ -1078,6 +1137,11 @@ void kit_frame_wall(Kit* kit, const KitFrame* f, const KitWall* w) {
     wall_in(kit, w, &wf);
 }
 
+void kit_frame_panel(Kit* kit, const KitFrame* f, int mat, const KitWall* w) {
+    const KitWallFrame wf = {*f, w->at, 1};
+    wall_layer(kit, w, &wf, mat, 0.0f, w->thick);
+}
+
 void kit_frame_point(const KitFrame* f, float a, float y, float d, vec3 out) {
     kit_frame_dir(f, a, y, d, out);
     glm_vec3_add(out, (float*)f->origin, out);
@@ -1109,13 +1173,18 @@ void kit_frame_box(Kit* kit, const KitFrame* f, int mat, float a0, float a1, flo
     kit_box(kit, mat, centre, half, f->yaw, collide);
 }
 
+void kit_frame_box_faces(Kit* kit, const KitFrame* f, int mat, float a0, float a1, float y0,
+                         float y1, float d0, float d1, unsigned shown) {
+    vec3 centre = {0.0f, 0.0f, 0.0f};
+    kit_frame_point(f, 0.5f * (a0 + a1), 0.5f * (y0 + y1), 0.5f * (d0 + d1), centre);
+    const vec3 half = {0.5f * fabsf(a1 - a0), 0.5f * fabsf(y1 - y0), 0.5f * fabsf(d1 - d0)};
+    box(kit, mat, centre, half, f->yaw, false, false, shown);
+}
+
 // An (a, y) outline at distance d, in the world.
 static bool outline_at(const KitFrame* f, const vec2* outline, int count, float d, vec3* out) {
-    if (count < 3 || count > KIT_MAX_OUTLINE) {
-        fprintf(stderr, "silent: an outline needs 3 to %d corners, not %d\n", KIT_MAX_OUTLINE,
-                count);
+    if (!outline_ok(count))
         return false;
-    }
     for (int i = 0; i < count; i++)
         kit_frame_point(f, outline[i][0], outline[i][1], d, out[i]);
     return true;
@@ -1162,12 +1231,12 @@ void kit_frame_extrude(Kit* kit, const KitFrame* f, int mat, const vec2* outline
 
 void kit_frame_run(Kit* kit, const KitFrame* f, int mat, const vec2* profile, int count, float a0,
                    float a1) {
-    if (count < 3 || count > KIT_MAX_OUTLINE)
+    if (!outline_ok(count))
         return;
     // A quarter turn: this frame's a runs along the old -d and its d along the old a, so the
     // profile's (d, y) is (-a, y) here and the run is an extrusion along d.
     const KitFrame g = {{f->origin[0], f->origin[1], f->origin[2]}, f->yaw + 0.5f * GLM_PIf};
-    vec2 outline[KIT_MAX_OUTLINE];
+    vec2 outline[KIT_MAX_OUTLINE] = {{0.0f}};
     for (int i = 0; i < count; i++) {
         outline[i][0] = -profile[i][0];
         outline[i][1] = profile[i][1];

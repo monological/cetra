@@ -13,6 +13,7 @@
 
 bool prompt_start(Prompt* prompt, Engine* engine) {
     memset(prompt, 0, sizeof(*prompt));
+    prompt->engine = engine;
     Font* font = load_font(engine->text_renderer->font_pool, PROMPT_FONT, 64.0f, true);
     if (!font) {
         fprintf(stderr, "silent: cannot load %s; no prompts\n", PROMPT_FONT);
@@ -32,7 +33,6 @@ bool prompt_start(Prompt* prompt, Engine* engine) {
     root->dir = UI_COLUMN;
     root->align_main = UI_ALIGN_END;
     root->align_cross = UI_ALIGN_CENTER;
-    root->padding[2] = PROMPT_LIFT * (float)engine->win_height;
 
     // A dim plate behind the words, so they read over a lamp or the fog alike.
     UIElement* plate = ui_panel(root);
@@ -60,6 +60,8 @@ void prompt_show(Prompt* prompt, const char* text) {
         snprintf(prompt->text, sizeof(prompt->text), "%s", text);
         ui_set_text(prompt->label, prompt->text);
     }
+    // From the window as it is now: a change of window mode resizes it.
+    ui_screen_root(prompt->screen)->padding[2] = PROMPT_LIFT * (float)prompt->engine->win_height;
     if (!prompt->shown)
         ui_push(prompt->ui, prompt->screen);
     prompt->shown = true;

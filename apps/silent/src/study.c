@@ -73,11 +73,13 @@ static void books(Kit* kit, KitRng* rng, const KitFrame* f, float a0, float a1, 
         const float h = fminf(clear - 0.025f, g->size[1] * kit_rrange(rng, 0.78f, 1.0f));
         const float front = CASE_D - kit_rrange(rng, 0.015f, 0.04f);
         const float back = front - kit_rrange(rng, 0.16f, 0.24f);
-        kit_frame_box(kit, f, MAT_LEATHER, a, a + w, y, y + h, back, front, false);
+        // Its front is under the spine, its foot on the shelf and its back to the case.
+        kit_frame_box_faces(kit, f, MAT_LEATHER, a, a + w, y, y + h, back, front,
+                            KIT_FACE_A_POS | KIT_FACE_A_NEG | KIT_FACE_UP);
         const float du = (g->uv[2] - g->uv[0]) / g->size[0];
         const float slice[4] = {g->uv[0] + du * s->edges[i], g->uv[1],
                                 g->uv[0] + du * s->edges[i + 1], g->uv[3]};
-        kit_frame_card(kit, f, MAT_CARVED, (vec3){a, y, front + 0.001f}, (vec3){w, 0.0f, 0.0f},
+        kit_frame_card(kit, f, MAT_GOTHIC, (vec3){a, y, front + 0.001f}, (vec3){w, 0.0f, 0.0f},
                        (vec3){0.0f, h, 0.0f}, slice);
         a += w + kit_rrange(rng, 0.0f, 0.004f);
     }
@@ -108,7 +110,7 @@ static void bookcase(Kit* kit, KitRng* rng, const KitFrame* f, float a0, float a
     }
 
     kit_frame_box(kit, f, MAT_MAHOGANY, a0, a1, HEAD_TOP, FRIEZE_TOP, 0.0f, CASE_D, false);
-    kit_frame_card_row(kit, f, MAT_CARVED, GOTHICS[GOTHIC_FRIEZE].uv, a0, a1, HEAD_TOP, FRIEZE_TOP,
+    kit_frame_card_row(kit, f, MAT_GOTHIC, GOTHICS[GOTHIC_FRIEZE].uv, a0, a1, HEAD_TOP, FRIEZE_TOP,
                        CASE_D + 0.001f, 1.0f, GOTHICS[GOTHIC_FRIEZE].size[0]);
     const vec2 cornice[] = {{0.0f, FRIEZE_TOP},
                             {CASE_D, FRIEZE_TOP},
@@ -174,7 +176,7 @@ static void desk(Kit* kit, const KitFrame* f) {
         }
         // The outer side, carved, facing out along a.
         const float side = 0.761f * sf;
-        kit_frame_card(kit, f, MAT_CARVED, (vec3){side, 0.08f, 0.33f * sf},
+        kit_frame_card(kit, f, MAT_GOTHIC, (vec3){side, 0.08f, 0.33f * sf},
                        (vec3){0.0f, 0.0f, -0.66f * sf}, (vec3){0.0f, under - 0.12f, 0.0f},
                        fold->uv);
     }
@@ -183,7 +185,7 @@ static void desk(Kit* kit, const KitFrame* f) {
                   false);
     knob(kit, f, 0.0f, top - 0.1f, face, toward);
     kit_frame_box(kit, f, MAT_MAHOGANY, -0.3f, 0.3f, 0.1f, top - 0.15f, 0.33f, 0.36f, false);
-    kit_frame_card_row(kit, f, MAT_CARVED, fold->uv, -0.76f, 0.76f, 0.08f, under - 0.04f, 0.361f,
+    kit_frame_card_row(kit, f, MAT_GOTHIC, fold->uv, -0.76f, 0.76f, 0.08f, under - 0.04f, 0.361f,
                        1.0f, fold->size[0]);
     kit_frame_box(kit, f, KIT_COLLIDER_ONLY, -0.8f, 0.8f, 0.0f, top, -0.4f, 0.4f, true);
 }
@@ -210,7 +212,7 @@ static void chair(Kit* kit, const KitFrame* f) {
     const int n = kit_opening_outline(&shape, outline);
     kit_frame_extrude(kit, f, MAT_MAHOGANY, outline, n, back0, back1);
     const GothicSpec* tracery = &GOTHICS[GOTHIC_PANEL_TRACERY];
-    kit_frame_card(kit, f, MAT_CARVED, (vec3){-0.21f, seat + 0.06f, back1 + 0.001f},
+    kit_frame_card(kit, f, MAT_GOTHIC, (vec3){-0.21f, seat + 0.06f, back1 + 0.001f},
                    (vec3){0.42f, 0.0f, 0.0f}, (vec3){0.0f, 1.1f - seat - 0.06f, 0.0f}, tracery->uv);
     const vec2 finial[] = {{0.0f, 0.0f},    {0.022f, 0.0f}, {0.022f, 0.02f}, {0.012f, 0.035f},
                            {0.026f, 0.07f}, {0.01f, 0.1f},  {0.006f, 0.15f}, {0.0f, 0.16f}};

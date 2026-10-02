@@ -13,6 +13,7 @@
  * tonemap so the grade and the fog never touch it.
  */
 typedef struct Prompt {
+    const Engine* engine; // borrowed: the window it is placed in
     UISystem* ui;
     UIScreen* screen;
     UIElement* label;

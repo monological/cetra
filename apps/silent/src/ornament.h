@@ -66,9 +66,13 @@ void ornament_arch_board(Kit* kit, const KitFrame* f, int mat, float a0, float a
 
 // Turned balusters under a handrail from a0 to a1, standing on a floor at y, at distance d, and
 // a body so nobody falls past it.
-void ornament_balustrade(Kit* kit, const KitFrame* f, float a0, float a1, float y, float d);
+void ornament_balustrade(Kit* kit, const KitFrame* f, int mat, float a0, float a1, float y,
+                         float d);
+// One turned baluster standing at (a, y, d), `h` tall.
+void ornament_baluster(Kit* kit, const KitFrame* f, int mat, float a, float y, float d, float h);
 
 // A turned post from y0 to y1 at (a, d), `r` its shaft's radius, and its body.
-void ornament_post(Kit* kit, const KitFrame* f, float a, float d, float y0, float y1, float r);
+void ornament_post(Kit* kit, const KitFrame* f, int mat, float a, float d, float y0, float y1,
+                   float r);
 
 #endif // _SILENT_ORNAMENT_H_
