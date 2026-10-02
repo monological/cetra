@@ -39,6 +39,8 @@ void main() {
     vec4 vmin = vec4(1e30), vmax = vec4(-1e30), smin = vec4(1e30), smax = vec4(-1e30);
     for (int k = 0; k < 8; k++) {
         ivec3 n = lo + ivec3(k & 1, (k >> 1) & 1, (k >> 2) & 1);
+        if (floorSolid != 0)
+            n.y = max(n.y, 0); // under the floor is the floor, as fireSample has it
         vec4 nv = fireFetch(baseVelocity, n, air);
         vec4 ns = fireFetch(baseScalars, n, vec4(0.0));
         vmin = min(vmin, nv);

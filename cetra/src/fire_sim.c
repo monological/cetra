@@ -140,7 +140,7 @@ static bool _ensure_grid(FireRenderer* r, FireGridGPU* g, const int dims[3], con
 
 static uint32_t _obstacle_key(const Fire* fire) {
     const FireGrid* grid = &fire->grid;
-    uint32_t h = fnv1a_bytes(grid->obstacles, sizeof(FireBox) * (size_t)grid->obstacle_count);
+    uint32_t h = fnv1a_bytes(grid->obstacles, sizeof(FireBox) * (size_t)fire_obstacle_count(fire));
     h ^= fnv1a_bytes(grid->center, sizeof(vec3)) * 31u;
     h ^= fnv1a_bytes(grid->size, sizeof(vec3)) * 131u;
     h ^= fnv1a_bytes(&grid->cell, sizeof(float)) * 1031u;
@@ -166,7 +166,7 @@ static void _build_obstacles(FireGridGPU* g, const Fire* fire) {
                 const vec3 p = {g->lo[0] + ((float)x + 0.5f) * g->cell,
                                 g->lo[1] + ((float)y + 0.5f) * g->cell,
                                 g->lo[2] + ((float)z + 0.5f) * g->cell};
-                for (int o = 0; o < fire->grid.obstacle_count; o++) {
+                for (int o = 0; o < fire_obstacle_count(fire); o++) {
                     const FireBox* b = &fire->grid.obstacles[o];
                     if (p[0] >= b->min[0] && p[0] <= b->max[0] && p[1] >= b->min[1] &&
                         p[1] <= b->max[1] && p[2] >= b->min[2] && p[2] <= b->max[2]) {
@@ -420,6 +420,14 @@ void fire_simulate(FireRenderer* r, Engine* engine, Scene* scene) {
     FireSystem* fs = scene ? scene->fire : NULL;
     if (!r || !fs)
         return;
+    if (r->system != fs) {
+        // Another scene's fires, or a new system: none of the gas or the answers in flight are
+        // theirs.
+        for (int i = 0; i < FIRE_MAX; i++)
+            fire_grid_gpu_free(&r->grids[i]);
+        memset(r->slot_issued, 0, sizeof(r->slot_issued));
+        r->system = fs;
+    }
     bool any_grid = false;
     for (int i = 0; i < fs->count; i++)
         any_grid |= fs->fires[i].kind == FIRE_GRID && fs->fires[i].enabled;

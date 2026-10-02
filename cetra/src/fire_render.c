@@ -314,7 +314,7 @@ void fire_render_draw(FireRenderer* r, Engine* engine, const Scene* scene,
         if (fire->kind == FIRE_FLIPBOOK) {
             if (!fire->flipbook.sheet)
                 continue;
-            for (int c = 0; c < fire->cards.count; c++) {
+            for (int c = 0; c < fire_card_count(fire); c++) {
                 vec3 base = {0.0f, 0.0f, 0.0f};
                 vec2 size = {0.0f, 0.0f};
                 _card_world(fire, &fire->cards.list[c], base, size);

@@ -8,6 +8,18 @@
  * either, and nothing an app reaches for.
  */
 
+// How many of a GRID fire's obstacles and a FLIPBOOK's cards are read: the counts, which are
+// plain stores, held to the arrays they count.
+static inline int fire_obstacle_count(const Fire* fire) {
+    const int n = fire->grid.obstacle_count;
+    return n < 0 ? 0 : (n > FIRE_MAX_OBSTACLES ? FIRE_MAX_OBSTACLES : n);
+}
+
+static inline int fire_card_count(const Fire* fire) {
+    const int n = fire->cards.count;
+    return n < 0 ? 0 : (n > FIRE_MAX_CARDS ? FIRE_MAX_CARDS : n);
+}
+
 // A GRID fire's cells along each axis, from its size and cell and capped at FIRE_GRID_MAX_*;
 // the cell size taken; and its box, local to the fire's origin: those cells about `center`.
 void fire_grid_cells(const Fire* fire, int cells[3]);
