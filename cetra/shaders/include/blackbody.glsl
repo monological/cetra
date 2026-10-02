@@ -4,8 +4,8 @@
 // between two neighbours is interpolating the exponent rather than a curve that climbs five
 // decades across the table. Read by texelFetch and interpolated here, in exactly fire.c's
 // arithmetic, so the light the CPU derives and the emission drawn agree.
-//
-// Needs fire_constants.glsl.
+
+#include "fire_constants.glsl"
 
 uniform sampler2D blackbodyLut; // FIRE_BB_LUT_SIZE x 1, RGBA32F
 

@@ -48,8 +48,10 @@ void fire_grid_gpu_free(FireGridGPU* g) {
     gl_delete_texture(&g->divergence);
     gl_delete_texture(&g->curl);
     gl_delete_texture(&g->obstacle);
-    gl_delete_texture(&g->partial[0]);
-    gl_delete_texture(&g->partial[1]);
+    for (int i = 0; i < 2; i++) {
+        gl_delete_texture(&g->rows[i]);
+        gl_delete_texture(&g->slices[i]);
+    }
     memset(g, 0, sizeof(*g));
 }
 
@@ -104,8 +106,10 @@ static bool _ensure_grid(FireRenderer* r, FireGridGPU* g, const int dims[3], con
     g->pressure[1] = _atlas_texture(w, h, GL_R32F);
     g->divergence = _atlas_texture(w, h, GL_R32F);
     g->curl = _atlas_texture(w, h, GL_RGBA16F);
-    g->partial[0] = _atlas_texture(g->tiles[0], g->tiles[1], GL_RGBA32F);
-    g->partial[1] = _atlas_texture(g->tiles[0], g->tiles[1], GL_RGBA32F);
+    for (int i = 0; i < 2; i++) {
+        g->rows[i] = _atlas_texture(dims[1], dims[2], GL_RGBA32F);
+        g->slices[i] = _atlas_texture(dims[2], 1, GL_RGBA32F);
+    }
     glGenTextures(1, &g->obstacle);
     glBindTexture(GL_TEXTURE_2D, g->obstacle);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, w, h, 0, GL_RED, GL_UNSIGNED_BYTE, NULL);
@@ -211,31 +215,32 @@ static void _step(FireRenderer* r, FireGridGPU* g, const Fire* fire, const FireS
     GLuint* S = g->scalars;
     const FireGrid* grid = &fire->grid;
 
-    // Advection: a semi-Lagrangian trace into the final pair, or MacCormack's forward and back
-    // traces and their correction.
+    // Advection: a semi-Lagrangian trace into the final pair, or MacCormack's forward trace, the
+    // trace back from it, and their correction.
     UniformManager* u = fire_use(r, FIRE_PROGRAM_ADVECT);
     _grid_uniforms(u, g, fire, wind, dt);
     fire_bind(u, 0, V[0], "velocityTex");
     fire_bind(u, 1, V[0], "fromVelocity");
     fire_bind(u, 2, S[0], "fromScalars");
-    fire_bind(u, 3, V[0], "baseVelocity");
-    fire_bind(u, 4, S[0], "baseScalars");
-    fire_bind(u, 5, V[0], "backVelocity");
-    fire_bind(u, 6, S[0], "backScalars");
-    uniform_set_int(u, "mode", 0);
     const int first = fs->maccormack ? 1 : 3;
     _target(r, V[first], S[first], 0, 0, w, h);
     _draw(r);
     if (fs->maccormack) {
-        _target(r, V[2], S[2], 0, 0, w, h);
-        uniform_set_int(u, "mode", 1);
+        uniform_set_float(u, "dt", -dt);
         fire_bind(u, 1, V[1], "fromVelocity");
         fire_bind(u, 2, S[1], "fromScalars");
+        _target(r, V[2], S[2], 0, 0, w, h);
         _draw(r);
-        _target(r, V[3], S[3], 0, 0, w, h);
-        uniform_set_int(u, "mode", 2);
+        u = fire_use(r, FIRE_PROGRAM_CORRECT);
+        _grid_uniforms(u, g, fire, wind, dt);
+        fire_bind(u, 0, V[0], "velocityTex");
+        fire_bind(u, 1, V[1], "fromVelocity");
+        fire_bind(u, 2, S[1], "fromScalars");
+        fire_bind(u, 3, V[0], "baseVelocity");
+        fire_bind(u, 4, S[0], "baseScalars");
         fire_bind(u, 5, V[2], "backVelocity");
         fire_bind(u, 6, S[2], "backScalars");
+        _target(r, V[3], S[3], 0, 0, w, h);
         _draw(r);
     }
 
@@ -258,7 +263,7 @@ static void _step(FireRenderer* r, FireGridGPU* g, const Fire* fire, const FireS
     uniform_set_float(u, "ambient", p->ambient);
     uniform_set_float(u, "peakRise", fmaxf(p->temperature - p->ambient, 1.0f));
     uniform_set_float(u, "reactionRate", p->reaction_rate);
-    uniform_set_float(u, "cooling", p->cooling);
+    uniform_set_float(u, "coolingRate", fire_cooling_rate(p));
     uniform_set_float(u, "entrainment", p->entrainment);
     uniform_set_float(u, "core", p->core);
     uniform_set_float(u, "sootYield", p->soot_yield);
@@ -314,40 +319,36 @@ static void _step(FireRenderer* r, FireGridGPU* g, const Fire* fire, const FireS
     _swap(&V[0], &V[1]);
 }
 
+// The `count` texels along each row of `from` summed into `to`, `rows` of them from texel `x`.
+static void _sum(FireRenderer* r, UniformManager* u, GLuint from, int count, GLuint to, int x,
+                 int rows) {
+    _target(r, to, 0, x, 0, rows, 1);
+    fire_bind(u, 0, from, "sumTex");
+    uniform_set_int(u, "count", count);
+    uniform_set_int(u, "outBase", x);
+    _draw(r);
+}
+
 // A GRID fire's two sums, into its two texels of the result row: what the ring reads back and
-// what the probe compares against the CPU.
+// what the probe compares against the CPU. Each row of cells, then each slice's rows, then the
+// slices -- spread across fragments where one fragment a slice left the GPU nearly idle.
 static void _reduce(FireRenderer* r, FireGridGPU* g, const Fire* fire, int index) {
-    const FireParams* p = &fire->params;
     UniformManager* u = fire_use(r, FIRE_PROGRAM_REDUCE);
     _grid_dims(u, g);
     uniform_set_vec3(u, "boxMin", g->lo);
     uniform_set_float(u, "cell", g->cell);
-    uniform_set_float(u, "ambient", p->ambient);
-    uniform_set_float(u, "sootAbsorption", p->soot_absorption);
-    uniform_set_float(u, "blueCore", p->blue_core);
-    uniform_set_float(u, "peakRise", fmaxf(p->temperature - p->ambient, 1.0f));
-    uniform_set_float(u, "cooling", p->cooling);
-    uniform_set_float(u, "brightness", p->brightness);
-    uniform_set_mat3(u, "adaptation", (const float*)fire->adaptation);
-    uniform_set_vec3(u, "blueColor", (float*)fire_blue_color());
-    fire_bind(u, 1, r->blackbody_lut, "blackbodyLut");
-
-    uniform_set_int(u, "mode", 0);
-    _target(r, g->partial[0], g->partial[1], 0, 0, g->tiles[0], g->tiles[1]);
+    uniform_set_int(u, "floorSolid", fire->grid.floor ? 1 : 0);
+    uniform_set_float(u, "coolingRate", fire_cooling_rate(&fire->params));
+    fire_emission_uniforms(r, u, fire, 1);
     fire_bind(u, 0, g->scalars[0], "scalarTex");
-    // Not read in this mode, and bound away from the targets it writes.
-    fire_bind(u, 2, r->blackbody_lut, "partial0");
-    fire_bind(u, 3, r->blackbody_lut, "partial1");
+    _target(r, g->rows[0], g->rows[1], 0, 0, g->dims[1], g->dims[2]);
     _draw(r);
 
-    uniform_set_int(u, "mode", 1);
-    const int tiles[4] = {g->tiles[0], g->tiles[1], 0, 0};
-    uniform_set_ivec4(u, "tiles", tiles);
-    uniform_set_int(u, "resultBase", 2 * index);
-    _target(r, r->result_tex, 0, 2 * index, 0, 2, 1);
-    fire_bind(u, 2, g->partial[0], "partial0");
-    fire_bind(u, 3, g->partial[1], "partial1");
-    _draw(r);
+    u = fire_use(r, FIRE_PROGRAM_SUM);
+    for (int i = 0; i < 2; i++)
+        _sum(r, u, g->rows[i], g->dims[1], g->slices[i], 0, g->dims[2]);
+    for (int i = 0; i < 2; i++)
+        _sum(r, u, g->slices[i], g->dims[2], r->result_tex, 2 * index + i, 1);
 }
 
 // One fire's two texels, decoded onto it: the centroid placed in the world.
@@ -406,8 +407,9 @@ static void _readback(FireRenderer* r, FireSystem* fs, const bool stepped[FIRE_M
 // The programs a GRID fire steps and is summed with, built; false when any will not.
 static bool _sim_ready(FireRenderer* r) {
     static const FireProgram SIM[] = {
-        FIRE_PROGRAM_ADVECT, FIRE_PROGRAM_CURL,    FIRE_PROGRAM_REACT, FIRE_PROGRAM_DIVERGENCE,
-        FIRE_PROGRAM_JACOBI, FIRE_PROGRAM_PROJECT, FIRE_PROGRAM_REDUCE};
+        FIRE_PROGRAM_ADVECT,  FIRE_PROGRAM_CORRECT,    FIRE_PROGRAM_CURL,
+        FIRE_PROGRAM_REACT,   FIRE_PROGRAM_DIVERGENCE, FIRE_PROGRAM_JACOBI,
+        FIRE_PROGRAM_PROJECT, FIRE_PROGRAM_REDUCE,     FIRE_PROGRAM_SUM};
     for (size_t i = 0; i < sizeof(SIM) / sizeof(SIM[0]); i++)
         if (!fire_use(r, SIM[i]))
             return false;
@@ -505,11 +507,11 @@ static void _probe_grid(FireRenderer* r, Fire* fire, int index) {
                 peak = fmax(peak, (double)s[0]);
                 reaction += (double)s[1];
                 soot += (double)s[2];
+                const vec3 at = {(float)x + 0.5f, (float)y + 0.5f, (float)z + 0.5f};
+                const float fade = fire_edge_fade(fire, g->dims, at);
                 vec3 rgb = {0.0f, 0.0f, 0.0f};
-                const float lum = fire_blackbody(p->ambient + fmaxf(s[0], 0.0f), rgb);
-                const double e = ((double)(fmaxf(s[2], 0.0f) * p->soot_absorption * lum) +
-                                  (double)(p->blue_core * fmaxf(s[3], 0.0f))) *
-                                 (double)volume * (double)p->brightness;
+                const double e = (double)fire_emission(fire, s[0], s[2] * fade, s[3] * fade, rgb) *
+                                 (double)volume;
                 intensity += e;
                 m[0] += e * (double)(g->lo[0] + ((float)x + 0.5f) * g->cell);
                 m[1] += e * (double)(g->lo[1] + ((float)y + 0.5f) * g->cell);

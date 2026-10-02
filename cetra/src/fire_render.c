@@ -34,12 +34,14 @@
 
 static ShaderProgram* (*const FIRE_PROGRAM_BUILD[FIRE_PROGRAM_COUNT])(void) = {
     [FIRE_PROGRAM_ADVECT] = create_fire_advect_program,
+    [FIRE_PROGRAM_CORRECT] = create_fire_correct_program,
     [FIRE_PROGRAM_CURL] = create_fire_curl_program,
     [FIRE_PROGRAM_REACT] = create_fire_react_program,
     [FIRE_PROGRAM_DIVERGENCE] = create_fire_divergence_program,
     [FIRE_PROGRAM_JACOBI] = create_fire_jacobi_program,
     [FIRE_PROGRAM_PROJECT] = create_fire_project_program,
     [FIRE_PROGRAM_REDUCE] = create_fire_reduce_program,
+    [FIRE_PROGRAM_SUM] = create_fire_sum_program,
     [FIRE_PROGRAM_SLICE] = create_fire_slice_program,
     [FIRE_PROGRAM_MARCH] = create_fire_march_program,
     [FIRE_PROGRAM_CARD] = create_fire_card_program,
@@ -113,6 +115,18 @@ void fire_bind(UniformManager* u, int unit, GLuint tex, const char* name) {
     uniform_set_int(u, name, unit);
 }
 
+void fire_emission_uniforms(FireRenderer* r, UniformManager* u, const Fire* fire,
+                            int blackbody_unit) {
+    const FireParams* p = &fire->params;
+    uniform_set_float(u, "ambient", p->ambient);
+    uniform_set_float(u, "sootAbsorption", p->soot_absorption);
+    uniform_set_float(u, "blueCore", p->blue_core);
+    uniform_set_vec3(u, "blueColor", (float*)fire_blue_color());
+    uniform_set_float(u, "brightness", p->brightness);
+    uniform_set_mat3(u, "adaptation", (const float*)fire->adaptation);
+    fire_bind(u, blackbody_unit, r->blackbody_lut, "blackbodyLut");
+}
+
 static int _steps_through(float length, float step, int cap) {
     const int n = (int)ceilf(length / step) + 2;
     return n < cap ? n : cap;
@@ -145,8 +159,15 @@ static void _march_box(const FireRenderer* r, const Fire* fire, int index, vec3 
 typedef struct FireDrawable {
     int fire;
     int card;
-    float dist2;
+    float depth; // view-space, metres in front of the eye: what back to front means under either
+                 // projection
 } FireDrawable;
+
+static float _view_depth(const Engine* engine, const vec3 p) {
+    vec3 v = {0.0f, 0.0f, 0.0f};
+    glm_mat4_mulv3((vec4*)engine->view_matrix, (float*)p, 1.0f, v);
+    return -v[2];
+}
 
 // The frame's view, the same for every drawable.
 typedef struct FireView {
@@ -219,17 +240,11 @@ static void _draw_marched(FireRenderer* r, const Engine* engine, const Scene* sc
     uniform_set_vec2(u, "viewport", (float*)fv->viewport);
     uniform_set_vec3(u, "ambientRadiance", (float*)scene->ambient_radiance);
     _fog_uniforms(u, late);
-    fire_bind(u, FIRE_BLACKBODY_UNIT, r->blackbody_lut, "blackbodyLut");
+    fire_emission_uniforms(r, u, fire, FIRE_BLACKBODY_UNIT);
     fire_bind(u, FIRE_DEPTH_UNIT, late->scene_depth, "sceneDepth");
     uniform_set_vec3(u, "boxMin", lo);
     uniform_set_vec3(u, "boxMax", hi);
-    uniform_set_float(u, "ambient", p->ambient);
-    uniform_set_float(u, "sootAbsorption", p->soot_absorption);
     uniform_set_float(u, "smokeAlbedo", glm_clamp(p->smoke_albedo, 0.0f, 0.99f));
-    uniform_set_float(u, "blueCore", p->blue_core);
-    uniform_set_float(u, "brightness", p->brightness);
-    uniform_set_mat3(u, "adaptation", (const float*)fire->adaptation);
-    uniform_set_vec3(u, "blueColor", (float*)fire_blue_color());
     const float diag = glm_vec3_distance(lo, hi);
     if (fire->kind == FIRE_FLAME) {
         const float step = fmaxf(fire->flame.width * FLAME_MARCH_PER_WIDTH, 1e-4f);
@@ -258,8 +273,9 @@ static void _draw_marched(FireRenderer* r, const Engine* engine, const Scene* sc
     glDrawArrays(GL_TRIANGLES, 0, 36);
 }
 
-// --fire-slice, opaque, into the frame's lower-left third.
-static void _draw_slice(FireRenderer* r, const FireSystem* fs, const PostFXLateDraw* late) {
+void fire_render_slice(FireRenderer* r, const FireSystem* fs, int height) {
+    if (!r || !fs)
+        return;
     const int d = fs->debug_fire;
     if (fs->debug_field < 0 || d < 0 || d >= fs->count || fs->fires[d].kind != FIRE_GRID ||
         !r->grids[d].velocity[0])
@@ -268,8 +284,8 @@ static void _draw_slice(FireRenderer* r, const FireSystem* fs, const PostFXLateD
     if (!u)
         return;
     const FireGridGPU* g = &r->grids[d];
-    glDisable(GL_BLEND);
-    const int h = late->height / 2;
+    const GLPassState pass = gl_pass_begin();
+    const int h = height / 2;
     glViewport(0, 0, h * g->dims[0] / g->dims[1], h);
     const int dims[4] = {g->dims[0], g->dims[1], g->dims[2], g->tiles[0]};
     uniform_set_ivec4(u, "gridDims", dims);
@@ -278,6 +294,7 @@ static void _draw_slice(FireRenderer* r, const FireSystem* fs, const PostFXLateD
     fire_bind(u, 0, g->scalars[0], "scalarTex");
     fire_bind(u, 1, g->velocity[0], "velocityTex");
     draw_fullscreen_quad(r->quad_vao);
+    gl_pass_end(&pass);
 }
 
 void fire_render_draw(FireRenderer* r, Engine* engine, const Scene* scene,
@@ -302,8 +319,7 @@ void fire_render_draw(FireRenderer* r, Engine* engine, const Scene* scene,
                 vec2 size = {0.0f, 0.0f};
                 _card_world(fire, &fire->cards.list[c], base, size);
                 base[1] += 0.5f * size[1];
-                list[n++] =
-                    (FireDrawable){i, c, glm_vec3_distance2(base, engine->camera->position)};
+                list[n++] = (FireDrawable){i, c, _view_depth(engine, base)};
             }
             continue;
         }
@@ -312,12 +328,12 @@ void fire_render_draw(FireRenderer* r, Engine* engine, const Scene* scene,
         vec3 lo = {0.0f, 0.0f, 0.0f}, hi = {0.0f, 0.0f, 0.0f}, mid = {0.0f, 0.0f, 0.0f};
         _march_box(r, fire, i, lo, hi);
         glm_vec3_center(lo, hi, mid);
-        list[n++] = (FireDrawable){i, -1, glm_vec3_distance2(mid, engine->camera->position)};
+        list[n++] = (FireDrawable){i, -1, _view_depth(engine, mid)};
     }
     for (int a = 1; a < n; a++) {
         const FireDrawable d = list[a];
         int at = a;
-        while (at > 0 && list[at - 1].dist2 < d.dist2) {
+        while (at > 0 && list[at - 1].depth < d.depth) {
             list[at] = list[at - 1];
             at--;
         }
@@ -339,7 +355,6 @@ void fire_render_draw(FireRenderer* r, Engine* engine, const Scene* scene,
             _draw_marched(r, engine, scene, fire, list[k].fire, late, &fv);
     }
     glBindVertexArray(0);
-    _draw_slice(r, fs, late);
     gl_pass_end(&pass);
     check_gl_error("fire draw");
     profiler_scope_end(engine->profiler);

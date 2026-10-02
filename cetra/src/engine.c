@@ -2344,6 +2344,8 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode) {
         probe_atlas_debug_blit(fx_scene->probe_set->atlas, engine, engine->fb_width,
                                engine->fb_height);
     }
+    if (fx_scene && fx_scene->fire && fx_scene->fire->debug_field >= 0)
+        fire_render_slice(engine->fire_renderer, fx_scene->fire, engine->fb_height);
 
     // The app's overlay, then the GUI: both draw after tone mapping, and the
     // debug panel goes over the game's own screens rather than under them.

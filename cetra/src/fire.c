@@ -384,6 +384,37 @@ const float* fire_blue_color(void) {
     return blue;
 }
 
+float fire_emission(const Fire* fire, float rise, float soot, float core, vec3 rgb) {
+    const FireParams* p = &fire->params;
+    const float absorption = fmaxf(soot, 0.0f) * p->soot_absorption;
+    const float glow = p->blue_core * fmaxf(core, 0.0f);
+    glm_vec3_zero(rgb);
+    if (!(absorption > 0.0f) && !(glow > 0.0f))
+        return 0.0f;
+    vec3 e = {0.0f, 0.0f, 0.0f};
+    fire_blackbody(p->ambient + fmaxf(rise, 0.0f), e);
+    glm_vec3_scale(e, absorption, e);
+    glm_vec3_muladds((float*)fire_blue_color(), glow, e);
+    glm_mat3_mulv((vec3*)fire->adaptation, e, e);
+    glm_vec3_maxv(e, GLM_VEC3_ZERO, e);
+    glm_vec3_scale(e, p->brightness, rgb);
+    return spectrum_luminance(rgb);
+}
+
+float fire_edge_fade(const Fire* fire, const int cells[3], const vec3 p) {
+    float edge =
+        fminf(fminf(fminf(p[0], (float)cells[0] - p[0]), fminf(p[2], (float)cells[2] - p[2])),
+              (float)cells[1] - p[1]);
+    if (!fire->grid.floor)
+        edge = fminf(edge, p[1]);
+    return glm_smoothstep(0.0f, FIRE_EDGE_FADE_CELLS, edge);
+}
+
+float fire_cooling_rate(const FireParams* p) {
+    const float rise = fmaxf(p->temperature - p->ambient, 1.0f);
+    return p->cooling / fmaxf(rise * rise * rise * rise, 1.0f);
+}
+
 /*
  * A FLAME's profile at height `u` (0 the wick, 1 the tip) and normalised distance `q` from its
  * axis (1 the edge): temperature, soot and the blue core's strength. The base burns blue
@@ -393,13 +424,15 @@ const float* fire_blue_color(void) {
 static void _flame_profile(const FireParams* p, float u, float q, float* kelvin, float* soot,
                            float* blue) {
     const float inside = q < 1.0f ? 1.0f - q * q : 0.0f;
-    const float lit = glm_smoothstep(0.08f, 0.32f, u) * (1.0f - glm_smoothstep(0.7f, 1.0f, u));
+    const float lit = glm_smoothstep(FIRE_FLAME_SOOT_FROM, FIRE_FLAME_SOOT_FULL, u) *
+                      (1.0f - glm_smoothstep(FIRE_FLAME_BURNOUT, 1.0f, u));
     *soot = p->flame_soot * inside * lit;
-    *kelvin = p->ambient + (p->temperature - p->ambient) * (1.0f - 0.35f * q * q) *
-                               (1.0f - 0.4f * glm_smoothstep(0.6f, 1.0f, u));
+    *kelvin = p->ambient +
+              (p->temperature - p->ambient) * (1.0f - FIRE_FLAME_EDGE_COOLING * q * q) *
+                  (1.0f - FIRE_FLAME_TIP_COOLING * glm_smoothstep(FIRE_FLAME_TIP_FROM, 1.0f, u));
     // The blue is the reaction zone, a thin shell round the base: strongest at the flame's
     // edge, where fuel meets air, and gone by the time soot has formed.
-    *blue = inside * q * q * (1.0f - glm_smoothstep(0.05f, 0.3f, u));
+    *blue = inside * q * q * (1.0f - glm_smoothstep(FIRE_FLAME_BLUE_FROM, FIRE_FLAME_BLUE_TO, u));
 }
 
 // The flame's radius at `u`, as a fraction of its half-width: a teardrop, widest a third up.
@@ -474,11 +507,10 @@ static void _flame_step(Fire* fire, int index, const vec3 wind, float dt) {
 #define FLAME_QUAD_U 24
 #define FLAME_QUAD_Q 12
 
-// What a FLAME casts, from its spine: intensity, centroid and colour. Exact against what is
-// drawn, since the same profile is integrated.
+// What a FLAME casts, from its spine: intensity, centroid and colour -- the same profile, through
+// the same emission, that is drawn.
 static void _flame_light(Fire* fire) {
     const FireParams* p = &fire->params;
-    const float* blue_rgb = fire_blue_color();
     float total = 0.0f;
     vec3 rgb_sum = GLM_VEC3_ZERO_INIT;
     vec3 weighted = GLM_VEC3_ZERO_INIT;
@@ -504,29 +536,20 @@ static void _flame_light(Fire* fire) {
             float kelvin, soot, blue;
             _flame_profile(p, u, q, &kelvin, &soot, &blue);
             vec3 rgb = {0.0f, 0.0f, 0.0f};
-            const float lum = fire_blackbody(kelvin, rgb);
-            const float sigma = soot * p->soot_absorption;
-            const float glow = p->blue_core * blue;
+            const float lum = fire_emission(fire, kelvin - p->ambient, soot, blue, rgb);
             const float area = 2.0f * GLM_PIf * radius * radius * q / (float)FLAME_QUAD_Q;
-            ring_lum += (sigma * lum + glow) * area;
-            glm_vec3_muladds(rgb, sigma * area, ring_rgb);
-            glm_vec3_muladds((float*)blue_rgb, glow * area, ring_rgb);
+            ring_lum += lum * area;
+            glm_vec3_muladds(rgb, area, ring_rgb);
         }
         const float dl = du_len / (float)FLAME_QUAD_U;
         total += ring_lum * dl;
         glm_vec3_muladds(ring_rgb, dl, rgb_sum);
         glm_vec3_muladds(at, ring_lum * dl, weighted);
     }
-    fire->intensity = total * p->brightness;
+    fire->intensity = total;
     if (total > 0.0f) {
         glm_vec3_scale(weighted, 1.0f / total, fire->centroid);
-        // The light takes the colour the flame is drawn in, adapted as it is, then clamped into
-        // the gamut a light can carry.
-        glm_mat3_mulv(fire->adaptation, rgb_sum, rgb_sum);
-        glm_vec3_maxv(rgb_sum, GLM_VEC3_ZERO, rgb_sum);
-        const float lum = spectrum_luminance(rgb_sum);
-        if (lum > 0.0f)
-            glm_vec3_scale(rgb_sum, 1.0f / lum, fire->color);
+        glm_vec3_scale(rgb_sum, 1.0f / total, fire->color);
     } else {
         _flame_wick(fire, fire->centroid);
     }

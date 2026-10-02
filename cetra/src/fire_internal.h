@@ -31,6 +31,21 @@ float fire_blackbody(float kelvin, vec3 rgb);
 // unclamped like the blackbody.
 const float* fire_blue_color(void);
 
+// What a length of gas emits, nits per metre into `rgb`, and its luminance: fire_emission.glsl's
+// fireEmission, in the same arithmetic -- the blackbody at ambient + `rise` times the soot's
+// absorption, plus the core's blue, through the fire's adaptation, clamped there, scaled by its
+// brightness.
+float fire_emission(const Fire* fire, float rise, float soot, float core, vec3 rgb);
+
+// fire_grid.glsl's fireFadeAtEdge as a factor: how much of a GRID fire's soot and core at `p`,
+// in cells, is drawn and cast, falling to 0 over the last FIRE_EDGE_FADE_CELLS before an open
+// face of its `cells` box.
+float fire_edge_fade(const Fire* fire, const int cells[3], const vec3 p);
+
+// The cooling law's coefficient, 1 / (s K^3): Nguyen's c_T over the peak's rise to the fourth,
+// what the simulation cools by and the light's sum counts the heat it sheds by.
+float fire_cooling_rate(const FireParams* params);
+
 // The two texels a fire's light sums to, as the GPU writes them and the CPU reads them back:
 // (intensity, its first moments in the box's local frame) and (emitted rgb, heat release).
 typedef struct FireAnswer {

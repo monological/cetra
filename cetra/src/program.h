@@ -202,12 +202,14 @@ ShaderProgram* create_rain_program();
 // Fire (spec 13.14): a GRID fire's simulation passes, the reduction that reads back what it
 // casts, and the debug slice; the march that draws a GRID or FLAME fire, and a flipbook's cards.
 ShaderProgram* create_fire_advect_program();
+ShaderProgram* create_fire_correct_program();
 ShaderProgram* create_fire_curl_program();
 ShaderProgram* create_fire_react_program();
 ShaderProgram* create_fire_divergence_program();
 ShaderProgram* create_fire_jacobi_program();
 ShaderProgram* create_fire_project_program();
 ShaderProgram* create_fire_reduce_program();
+ShaderProgram* create_fire_sum_program();
 ShaderProgram* create_fire_slice_program();
 ShaderProgram* create_fire_march_program();
 ShaderProgram* create_fire_card_program();

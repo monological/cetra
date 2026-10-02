@@ -50,6 +50,10 @@ void main() {
     int f1 = (f0 + 1) % frames;
     float t = pos - floor(pos);
     vec4 c = mix(texture(sheet, sheetUv(f0, vUv)), texture(sheet, sheetUv(f1, vUv)), t);
+    // Most of a sheet is empty, and an empty texel adds nothing under this blend: skip its fog
+    // and its write.
+    if (c == vec4(0.0))
+        discard;
 
     vec2 screen = gl_FragCoord.xy / viewport;
     float surface = -viewZFromNdcZ(2.0 * texture(sceneDepth, screen).r - 1.0);

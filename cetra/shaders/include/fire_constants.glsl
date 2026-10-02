@@ -14,6 +14,11 @@
 #define FIRE_GRID_MAX_Y 128
 #define FIRE_GRID_MAX_Z 64
 
+// Cells over which a GRID fire's gas thins to nothing before an open face of its box, in what is
+// drawn and what is cast alike. The box is where the simulation ends, not where the gas does, and
+// without it whatever reaches a face -- a plume, a wisp of smoke -- is drawn cut off flat there.
+#define FIRE_EDGE_FADE_CELLS 3.0f
+
 // The blackbody table: FIRE_BB_LUT_SIZE texels over [FIRE_BB_T_MIN, FIRE_BB_T_MAX] kelvin,
 // each the Rec.709 chromaticity (rgb / luminance) with log10 of the luminance in alpha. Below
 // the low end a body glows too faintly to matter and is drawn black.
@@ -23,6 +28,17 @@
 
 // The points a FLAME's spine is drawn through, base to tip.
 #define FIRE_SPINE_POINTS 8
+
+// A FLAME's profile, which the march draws and fire.c integrates for the light it casts, so the
+// two read one set of numbers. Heights are fractions of the flame, wick to tip.
+#define FIRE_FLAME_SOOT_FROM    0.08f // soot starts forming here
+#define FIRE_FLAME_SOOT_FULL    0.32f // and has formed by here
+#define FIRE_FLAME_BURNOUT      0.7f  // it burns out from here to the tip
+#define FIRE_FLAME_EDGE_COOLING 0.35f // the share of its rise the gas loses from axis to edge
+#define FIRE_FLAME_TIP_FROM     0.6f  // the gas cools from here to the tip
+#define FIRE_FLAME_TIP_COOLING  0.4f  // by this share of its rise
+#define FIRE_FLAME_BLUE_FROM    0.05f // the blue base fades from here
+#define FIRE_FLAME_BLUE_TO      0.3f  // and is gone by here
 
 // Air's volumetric heat capacity, rho * c_p, J / (m^3 K): what turns the heat the grid's gas
 // sheds into the watts a fire releases.
