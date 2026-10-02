@@ -34,9 +34,23 @@ bool probe_set_add(ReflectionProbeSet* set, ReflectionProbe* probe) {
         log_warn("Reflection probe set is full at %d; ignoring the rest", PROBE_SET_MAX);
         return false;
     }
+    if (set->atlas) {
+        log_warn("Reflection probe set's atlas is sized for %d; ignoring another", set->count);
+        return false;
+    }
 
     set->probes[set->count++] = probe;
     return true;
+}
+
+bool probe_set_reserve_atlas(ReflectionProbeSet* set, struct Engine* engine, struct Scene* scene,
+                             int row0) {
+    if (!set || !engine)
+        return false;
+    if (set->count < 2 || set->atlas)
+        return true;
+    set->atlas = create_probe_atlas(engine, scene, set->count, row0);
+    return set->atlas != NULL;
 }
 
 void probe_set_mark_dirty(ReflectionProbeSet* set) {
@@ -62,8 +76,7 @@ bool probe_set_capture_all(ReflectionProbeSet* set, struct Engine* engine, struc
     // One probe consumes its own cubemap directly on the prefilter unit, so it
     // needs no atlas and pays none of its memory.
     if (set->count >= 2) {
-        set->atlas = create_probe_atlas(engine, scene, set->count, row0);
-        if (!set->atlas)
+        if (!probe_set_reserve_atlas(set, engine, scene, row0))
             return false;
 
         for (int i = 0; i < set->count; ++i) {

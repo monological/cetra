@@ -620,8 +620,9 @@ void scene_environment_changed(Scene* scene, struct Engine* engine) {
      * atlas, so none of them could re-prefilter even if it wanted to, and
      * re-running the sweep is what relight will be.
      */
+    // Ready or not: a set reserved and awaiting its sweep has no capture to refresh either.
     const ReflectionProbeSet* probes = scene->probe_set;
-    if (probe_set_multi(probes)) {
+    if (probes && probes->count >= 2) {
         log_info("Sky: %d-probe set not refreshed (relight is deferred)", probes->count);
     } else {
         for (int i = 0; probes && i < probes->count; ++i) {
