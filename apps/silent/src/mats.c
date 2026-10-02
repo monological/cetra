@@ -273,6 +273,9 @@ static const MatSpec SPECS[MAT_COUNT] = {
     [MAT_PERSIAN] = {"persian_rug", "gothic", {1, 1, 1}, 1.0f, 0.0f, 1.0f},
     [MAT_STAINED] = {"stained_glass", "gothic", {1, 1, 1}, 1.0f, 0.0f, 1.0f},
     [MAT_LEADED] = {"leaded_glass", "leaded_glass", {1, 1, 1}, 1.0f, 0.0f, 0.4f},
+    // The castle stone blackened: its scan's mean, about (0.19, 0.15, 0.10) linear, taken to
+    // soot's 0.02 and its warmth taken out.
+    [MAT_SOOT] = {"soot", "medieval_blocks_03", {0.1f, 0.12f, 0.17f}, 1.0f, 0.0f, 2.0f},
 };
 
 static Texture* load(TexturePool* pool, const char* set, const char* map, TextureDesc desc) {

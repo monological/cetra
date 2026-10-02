@@ -39,6 +39,7 @@
 
 #include "clock.h"
 #include "door.h"
+#include "hearth.h"
 #include "prompt.h"
 #include "rain_bed.h"
 #include "house.h"
@@ -261,6 +262,12 @@ static void build_sky(Engine* engine) {
  * ceilings and the tower's. A probe inside a wall sees only backfaces and
  * darkens everything near it.
  *
+ * The fireplace's hood and breast stand out of the back wall further than any
+ * spacing could clear, so a row of probes is inside them. That is harmless as
+ * a wall's is not: a wall is two layers, and a probe in one sees the other's
+ * face, while the hearth's solids are closed shells, culled from inside, so a
+ * probe there sees the room past them.
+ *
  * Outside the grid a query clamps to the nearest edge probes, which stand in
  * the front yard -- the right kind of answer for the street, which is lit
  * mostly by its own lamps and the moon rather than by what bounces.
@@ -390,6 +397,7 @@ static void on_init(Game* game) {
     mats_register(&kit, engine, g_scene);
     house_build(&kit);
     interior_build(&kit);
+    hearth_build(&kit);
     kitchen_build(&kit, (unsigned int)g_args.seed);
     lights_build(&g_lights, &kit, engine, g_scene, (unsigned int)g_args.seed, !g_args.no_flicker,
                  g_args.flashlight);

@@ -249,8 +249,6 @@ static void truss(Kit* kit, float z) {
  * stair, dressed stone from the panelling to the eave -- and down to the floor behind the
  * stair -- two trusses, purlins and a ridge beam, and the Persian rug before the hearth.
  */
-#define HEARTH_HALF 1.75f // the hearth's surround either side of its middle, hearth.c's
-
 static void great_hall(Kit* kit) {
     const KitWall* west = house_wall(HOUSE_WALL_WEST);
     const KitWall* back = house_wall(HOUSE_WALL_BACK);
@@ -263,7 +261,10 @@ static void great_hall(Kit* kit) {
         wainscot(kit, &w, GREAT_Z0, GREAT_Z1, FLOOR_Y, 2, west->openings, west->opening_count);
     lining(kit, west, GREAT_Z0, GREAT_Z1, top);
 
-    const KitOpening hearth = {HEARTH_X - HEARTH_HALF, HEARTH_X + HEARTH_HALF, FLOOR_Y, EAVE_Y};
+    // Narrowed by a casing's width, which the panelling leaves round a hole, so it butts
+    // against the fireplace's jambs.
+    const KitOpening hearth = {HEARTH_X - HEARTH_HALF + CASING_W, HEARTH_X + HEARTH_HALF - CASING_W,
+                               FLOOR_Y, EAVE_Y};
     const Facade b = facade_inner(back);
     int n = holes_of(back, &hearth, 1, holes);
     wainscot(kit, &b, GREAT_X0, GREAT_X1, FLOOR_Y, 2, holes, n);

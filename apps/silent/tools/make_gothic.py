@@ -557,8 +557,9 @@ def spines(name, rng):
 
 def coat_of_arms(rng):
     """The hearth hood's carving: a heater shield in a moulded border, a chevron across it
-    between three rosettes, under a helm's crest of leaves -- dressed grey stone, the relief in
-    its height."""
+    between three rosettes, under a helm's crest of leaves -- the relief in its height, on a
+    ground of the hood's own stone, the castle scan's mean colour, so the panel reads as cut
+    into it rather than laid on it."""
     w, h = int(0.7 * STONE_PX), int(0.85 * STONE_PX)
     shape = Image.new("L", (w, h), 0)
     draw = ImageDraw.Draw(shape)
@@ -581,8 +582,12 @@ def coat_of_arms(rng):
         draw.line([(0.5 * w, sy0), (ex, ey)], fill=200, width=10)
         draw.ellipse([ex - 9, ey - 9, ex + 9, ey + 9], fill=210)
     height = soften(mask_of(shape), 2.0)
-    stone = np.array([0.52, 0.50, 0.46]) * (0.85 + 0.25 * noise(h, w, 10, rng)[..., None])
-    a = stone * (0.55 + 0.45 * height[..., None] / max(1e-3, height.max()))
+    scan = Image.open(os.path.join(OUT_DIR, "medieval_blocks_03_albedo.png"))
+    ground = to_array(scan).reshape(-1, 3).mean(axis=0)
+    stone = ground * (0.85 + 0.25 * noise(h, w, 10, rng)[..., None])
+    # The sunk ground a little darker than the face round it, the relief a little lighter: the
+    # normal map carries the carving, and a ground much darker than the hood was a dark tile.
+    a = stone * (0.9 + 0.2 * height[..., None] / max(1e-3, height.max()))
     return card("coat_of_arms", a, height, STONE_PX, 0.04, 0.85)
 
 

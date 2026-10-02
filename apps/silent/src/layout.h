@@ -104,7 +104,8 @@
 
 // The hearth, centred on the back wall on the hall's axis, so it is what the
 // arch frames as you come down the hall.
-#define HEARTH_X (0.5f * (HALL_X0 + HALL_X1))
+#define HEARTH_X    (0.5f * (HALL_X0 + HALL_X1))
+#define HEARTH_HALF 1.75f // the fireplace's half width along the wall, which the panelling meets
 
 // The tower: a regular octagon centred on the front corner west of the door,
 // its faces' centre lines TOWER_APOTHEM from the middle. The house's front and
