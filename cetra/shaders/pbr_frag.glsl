@@ -390,6 +390,10 @@ uniform vec2 oitNearFar; // Camera near/far, the interval the depth warp spans
 // capture, the late/OIT passes, every non-split mode -- keeps its specular
 // energy in color even where attachment 7 is not bound.
 uniform int splitAmbientSpec;
+// A capture is lit diffuse only, a metal's colour taken as its diffuse. A reflection belongs to
+// the eye that sees it, and a probe's or the irradiance volume's photograph has none -- nor,
+// while it is taken, anything but the open sky for a glossy surface to reflect.
+uniform int captureDiffuseOnly;
 uniform int sssEnabled;       // Global separable-SSS toggle (--no-sss)
 uniform float subsurface;     // Per-material SSS strength (0 = off; also the skin flag)
 uniform int sssProfileIndex;  // This material's scatter-profile slot; written into DiffuseOut.a so
@@ -1433,6 +1437,9 @@ void main() {
         // glTF: B channel contains metallic (works for grayscale too since R=G=B)
         metallicMap = metallic * texture(materialArray, vec3(uv, float(metallicLayer))).b;
     }
+    // A metal's reflection taken as diffuse in a capture: its base colour IS its specular colour.
+    if (captureDiffuseOnly > 0)
+        metallicMap = 0.0;
 
     float aoMap = ao;
     if (layered) {
@@ -1770,8 +1777,8 @@ void main() {
     // downstream follows automatically. That is the shape all five gates use:
     // gating the USES one by one leaves the next added use ungated, and leaves
     // the declaration alive besides.
-    bool sheenActive = CETRA_HAS(PBR_FEAT_SHEEN) &&
-                       sheenEnabled > 0 && maxComp(sheenColorFactor) > 0.0;
+    bool sheenActive = CETRA_HAS(PBR_FEAT_SHEEN) && sheenEnabled > 0 &&
+                       maxComp(sheenColorFactor) > 0.0 && captureDiffuseOnly == 0;
     vec3 sheenColorPx;
     float sheenRough;
     float sheenE;
@@ -1979,6 +1986,8 @@ void main() {
                         (albedoMap * ltcAmp.x + (1.0 - albedoMap) * ltcAmp.y) * ff.y;
                     areaSpec = mix(areaExt, areaMetal, metallicMap);
                 }
+                if (captureDiffuseOnly > 0)
+                    areaSpec = vec3(0.0);
                 vec3 areaDiff =
                     (1.0 - metallicMap) * (1.0 - transmissionEff) * albedoMap * ff.x;
 
@@ -2104,6 +2113,11 @@ void main() {
             // Replace F entirely with strong iridescent reflection
             F = iridescence * (0.6 + fresnel * 0.4);
         }
+        // No specular lobe in a capture, and so nothing taken from the diffuse for one.
+        if (captureDiffuseOnly > 0) {
+            F = vec3(0.0);
+            specFdLight = vec3(0.0);
+        }
 
         float NdotL = max(dot(N, L), 0.0);
 
@@ -2171,7 +2185,7 @@ void main() {
         // reaches it (Kelemen-Szirmay-Kalos / Filament layering).
         vec3 coatSpec = vec3(0.0);
         float coatAtten = 0.0;
-        if (clearcoatEnabled > 0 && clearcoat > 0.0) {
+        if (clearcoatEnabled > 0 && clearcoat > 0.0 && captureDiffuseOnly == 0) {
             vec3 Nc = clearcoatNormal(uv);
             float ccR = clamp(clearcoatRoughness, 0.04, 1.0);
             float Dc = distributionGGX(Nc, H, ccR);
@@ -2280,14 +2294,16 @@ void main() {
         // no such lobe, so nothing is taken and all the non-metal energy stays
         // diffuse. That single substitution is the entire difference between an
         // environment-lit surface and a probe-lit one.
-        vec3 F = iblEnabled > 0 ? fresnelSchlickRoughness(NdotV, F0, roughnessMap) : vec3(0.0);
+        // A capture has no such lobe either (captureDiffuseOnly).
+        bool envLobe = iblEnabled > 0 && captureDiffuseOnly == 0;
+        vec3 F = envLobe ? fresnelSchlickRoughness(NdotV, F0, roughnessMap) : vec3(0.0);
         // KHR_materials_specular, ambient side: the factor COMPOSES with the
         // engine's roughness-grazing f90 convention (max(1-r, f0) * factor)
         // rather than replacing it -- at factor 1 and white color this
         // reduces exactly to the default path, the extension's no-op
         // invariant. Pure dielectric vs pure metal, per the analytic site.
         vec3 specFdAmbient = vec3(0.0);
-        if (specExt && iblEnabled > 0) {
+        if (specExt && envLobe) {
             vec3 f90a =
                 max(vec3(1.0 - roughnessMap), specDielectricF0) * specularFactor;
             specFdAmbient = fresnelSchlickF90(NdotV, specDielectricF0, f90a);
@@ -2312,6 +2328,20 @@ void main() {
                                         : envIrradiance(N);
         vec3 diffuse = irradiance * albedoMap;
 
+        // How much of the environment reaches this point. The environment's reflection cannot
+        // say -- it is a sky at infinity that no roof blocks, so on its own it lights every
+        // floor of a closed room as if it stood outside. The volume can, having photographed
+        // the room, so its irradiance over the sky's is how far the sky is trusted as a
+        // reflection: the part a lightmap plays in Unreal's mixing of its reflection captures.
+        // It scales the environment's share and never a probe's, which saw the room itself.
+        // 1 with no volume, and outdoors, where the two agree.
+        float envVisible = 1.0;
+        if (giEnabled > 0 && envLobe) {
+            const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
+            envVisible = clamp(dot(irradiance, LUMA) / max(dot(envIrradiance(N), LUMA), 1e-6),
+                               0.0, 1.0);
+        }
+
         // The environment's strength knob, and 1.0 when there is no environment
         // for it to describe. Note it currently scales probe irradiance too,
         // which is arguably double-counting -- the captures the volume
@@ -2325,7 +2355,7 @@ void main() {
         vec3 R = reflect(-V, N);
 
         vec3 specular = vec3(0.0);
-        if (iblEnabled > 0) {
+        if (envLobe) {
         vec3 prefilteredColor;
         if (probeEnabled > 0) {
             // prefilteredMap holds the PROBE's prefilter here, bound over the
@@ -2364,11 +2394,11 @@ void main() {
                                  WorldPos, R, roughnessMap);
             prefilteredColor =
                 probes.rgb +
-                (1.0 - probes.a) *
+                (1.0 - probes.a) * envVisible *
                     envRadiance(prefilteredMap, R, roughnessMap * maxReflectionLOD);
         } else {
             prefilteredColor =
-                envRadiance(prefilteredMap, R, roughnessMap * maxReflectionLOD);
+                envVisible * envRadiance(prefilteredMap, R, roughnessMap * maxReflectionLOD);
         }
         // Reuses the brdf fetched before the light loop (same coordinates).
         // brdf.y is the split-sum's f90 = 1 lobe; KHR_materials_specular
@@ -2410,14 +2440,14 @@ void main() {
         // split-sum with F0 = 0.04) around the coat normal Nc, attenuating the
         // base ambient by the coat's grazing Fresnel. Reuses the prefiltered env
         // + BRDF LUT -- no new sampler. Plain reflection (no parallax proxy).
-        if (clearcoatEnabled > 0 && clearcoat > 0.0) {
+        if (clearcoatEnabled > 0 && clearcoat > 0.0 && captureDiffuseOnly == 0) {
             vec3 Nc = clearcoatNormal(uv);
             float ccR = clamp(clearcoatRoughness, 0.04, 1.0);
             float NcdotVi = max(dot(Nc, V), 0.0);
             vec3 Rc = reflect(-V, Nc);
             float ccF = fresnelSchlickRoughness(NcdotVi, vec3(0.04), ccR).r * clearcoat;
             vec2 ccBrdf = texture(brdfLUT, vec2(NcdotVi, ccR)).rg;
-            vec3 ccPre = envRadiance(prefilteredMap, Rc, ccR * maxReflectionLOD);
+            vec3 ccPre = envVisible * envRadiance(prefilteredMap, Rc, ccR * maxReflectionLOD);
             vec3 coatIBL = clearcoat * ccPre * (0.04 * ccBrdf.x + ccBrdf.y);
             // The coat dims BOTH shares (it sits over the whole surface); its
             // own lobe is specular, so it joins ambSpec when splitting.
@@ -2442,7 +2472,7 @@ void main() {
 #if CETRA_HAS(PBR_FEAT_SHEEN)
         if (sheenActive) {
             vec3 sheenPre =
-                envRadiance(charliePrefilteredMap, R, sheenRough * maxCharlieLOD);
+                envVisible * envRadiance(charliePrefilteredMap, R, sheenRough * maxCharlieLOD);
             // Sheen dims BOTH shares (same layer-over-base convention as the
             // coat); the sheen lobe itself is specular.
             if (splitAmbientSpec > 0) {
