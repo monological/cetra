@@ -3,7 +3,7 @@
 // so C does not promote the expression it lands in to double. See shore_constants.glsl.
 
 // How many fires a scene holds, and what each may carry.
-#define FIRE_MAX           8
+#define FIRE_MAX           32
 #define FIRE_MAX_SOURCES   8
 #define FIRE_MAX_OBSTACLES 16
 #define FIRE_MAX_CARDS     6
