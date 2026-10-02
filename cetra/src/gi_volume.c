@@ -152,10 +152,37 @@ void gi_volume_atlas_extent(const GIVolume* gi, int* out_w, int* out_h) {
 void gi_volume_adopt_atlas(GIVolume* gi, GLuint texture, int atlas_w, int atlas_h) {
     if (!gi || !texture)
         return;
-    if (gi->atlas) {
-        log_warn("GI volume already allocated its atlas; the specular probes cannot share it");
+    if (gi->atlas && !gi->owns_atlas) {
+        log_warn("GI volume already shares an atlas; the specular probes cannot take it too");
         return;
     }
+    if (gi->atlas && gi->targets_ready) {
+        // Swept already, into a texture of its own: its region is the same texels of both,
+        // so it goes across exactly, and the tiles are written into the new one from here on.
+        // (One allocated but never made ready is the failed state, and is simply freed.)
+        GLint read_fbo = 0, draw_fbo = 0;
+        glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &read_fbo);
+        glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &draw_fbo);
+        const GLboolean scissor = glIsEnabled(GL_SCISSOR_TEST);
+        glDisable(GL_SCISSOR_TEST);
+        GLuint copy = 0;
+        glGenFramebuffers(1, &copy);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, copy);
+        glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture,
+                               0);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, gi->tile_fbo);
+        glBlitFramebuffer(0, 0, gi->atlas_w, gi->atlas_h, 0, 0, gi->atlas_w, gi->atlas_h,
+                          GL_COLOR_BUFFER_BIT, GL_NEAREST);
+        glBindFramebuffer(GL_FRAMEBUFFER, gi->tile_fbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+        glDeleteFramebuffers(1, &copy);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)read_fbo);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)draw_fbo);
+        if (scissor)
+            glEnable(GL_SCISSOR_TEST);
+    }
+    if (gi->atlas)
+        glDeleteTextures(1, &gi->atlas);
     gi->atlas = texture;
     gi->atlas_w = atlas_w;
     gi->atlas_h = atlas_h;

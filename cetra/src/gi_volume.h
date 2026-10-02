@@ -117,10 +117,10 @@ void gi_volume_atlas_extent(const GIVolume* gi, int* out_w, int* out_h);
 // computes: those are texel offsets, and giAtlasSize is a uniform, so a wider
 // texture moves nothing it addresses.
 //
-// Must be called before the first gi_volume_update, which allocates otherwise
-// and then early-returns forever -- leaving two textures fighting over one
-// sampler unit. The probe sweep runs at load, before the loop's first frame,
-// so the ordering holds by construction; this warns rather than trusting it.
+// At any time: a volume that has already swept into an atlas of its own copies
+// that region across and frees its own, so a probe set may be captured after
+// the volume has converged -- which is what lets its captures see the volume's
+// light rather than the environment's. A volume already sharing one refuses.
 void gi_volume_adopt_atlas(GIVolume* gi, GLuint texture, int atlas_w, int atlas_h);
 
 // Fit the grid to a scene AABB and arm a full convergence sweep.
