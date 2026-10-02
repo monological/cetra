@@ -8,12 +8,11 @@
 #define FIRE_MAX_OBSTACLES 16
 #define FIRE_MAX_CARDS     6
 
-// The largest grid one fire simulates, in cells: as fine as a flipbook BAKE asks for, which runs
-// offline. A live fire keeps a coarse cell and comes nowhere near it. A grid is stored as a 2D
-// atlas of its z slices side by side, so this bounds an atlas at about 1450 x 2900 texels.
-#define FIRE_GRID_MAX_X 128
-#define FIRE_GRID_MAX_Y 256
-#define FIRE_GRID_MAX_Z 128
+// The largest grid one fire simulates, in cells. A grid is stored as a 2D atlas of its z
+// slices side by side, so this bounds an atlas at 512 x 1024 texels.
+#define FIRE_GRID_MAX_X 64
+#define FIRE_GRID_MAX_Y 128
+#define FIRE_GRID_MAX_Z 64
 
 // The blackbody table: FIRE_BB_LUT_SIZE texels over [FIRE_BB_T_MIN, FIRE_BB_T_MAX] kelvin,
 // each the Rec.709 chromaticity (rgb / luminance) with log10 of the luminance in alpha. Below
