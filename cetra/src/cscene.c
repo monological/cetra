@@ -1122,6 +1122,188 @@ static void parse_rain(CetraSceneDesc* d, const cJSON* root) {
 }
 
 /*
+ * fire -- the scene's fires (spec 13.14): the simulation's settings, and `fires`, each a GRID
+ * fire or a candle's FLAME over its kind's defaults. A fire's physics and optics are a closed
+ * table over FireParams, so the file's key and the field cannot drift apart.
+ */
+typedef struct CSceneFireKey {
+    const char* key;
+    size_t offset;
+    float lo, hi;
+} CSceneFireKey;
+
+#define FIRE_PARAM_KEY(k, field, lo, hi) {k, offsetof(FireParams, field), lo, hi}
+static const CSceneFireKey FIRE_PARAM_KEYS[] = {
+    FIRE_PARAM_KEY("ambient", ambient, 150.0f, 400.0f),
+    FIRE_PARAM_KEY("ignition", ignition, 300.0f, 3000.0f),
+    FIRE_PARAM_KEY("burnRate", burn_rate, 0.0f, 1000.0f),
+    FIRE_PARAM_KEY("heat", heat, 0.0f, 5000.0f),
+    FIRE_PARAM_KEY("sootYield", soot_yield, 0.0f, 100.0f),
+    FIRE_PARAM_KEY("buoyancy", buoyancy, 0.0f, 100.0f),
+    FIRE_PARAM_KEY("sootWeight", soot_weight, 0.0f, 100.0f),
+    FIRE_PARAM_KEY("cooling", cooling, 0.0f, 1e6f),
+    FIRE_PARAM_KEY("vorticity", vorticity, 0.0f, 100.0f),
+    FIRE_PARAM_KEY("sootBurnout", soot_burnout, 0.0f, 1000.0f),
+    FIRE_PARAM_KEY("sootBurnoutAt", soot_burnout_at, 300.0f, 4000.0f),
+    FIRE_PARAM_KEY("smokeFade", smoke_fade, 0.0f, 1000.0f),
+    FIRE_PARAM_KEY("windResponse", wind_response, 0.0f, 10.0f),
+    FIRE_PARAM_KEY("sootAbsorption", soot_absorption, 0.0f, 1000.0f),
+    FIRE_PARAM_KEY("smokeAlbedo", smoke_albedo, 0.0f, 0.99f),
+    FIRE_PARAM_KEY("blueCore", blue_core, 0.0f, 1e6f),
+    FIRE_PARAM_KEY("brightness", brightness, 0.0f, 1000.0f),
+    FIRE_PARAM_KEY("shimmer", shimmer, 0.0f, 100.0f),
+    FIRE_PARAM_KEY("flameTemperature", flame_temperature, 300.0f, 4000.0f),
+    FIRE_PARAM_KEY("flameSoot", flame_soot, 0.0f, 1000.0f),
+    FIRE_PARAM_KEY("flicker", flicker, 0.0f, 10.0f),
+};
+#undef FIRE_PARAM_KEY
+#define FIRE_PARAM_KEY_COUNT (sizeof(FIRE_PARAM_KEYS) / sizeof(FIRE_PARAM_KEYS[0]))
+
+// sources[] on a fire: {shape, center, halfSize, from, to, radius, rate, temperature, lift}. A box
+// takes center and halfSize, a sphere center and radius, a capsule from, to and radius.
+static void parse_fire_sources(Fire* fire, const cJSON* f) {
+    static const char* known[] = {"shape",  "center", "halfSize",    "from", "to",
+                                  "radius", "rate",   "temperature", "lift"};
+    const cJSON* sources = cJSON_GetObjectItemCaseSensitive(f, "sources");
+    const cJSON* s = NULL;
+    cJSON_ArrayForEach(s, sources) {
+        if (!cJSON_IsObject(s))
+            continue;
+        warn_unknown_keys(s, known, sizeof(known) / sizeof(known[0]), "fire source");
+        if (fire->source_count >= FIRE_MAX_SOURCES) {
+            log_warn("cscene: fire '%s' has more than %d sources; the rest are ignored", fire->name,
+                     FIRE_MAX_SOURCES);
+            break;
+        }
+        FireSource src = {
+            .shape = FIRE_SHAPE_BOX, .rate = 1.0f, .temperature = 900.0f, .lift = 0.3f};
+        char shape[16] = "box";
+        copy_string(shape, sizeof(shape), cJSON_GetObjectItemCaseSensitive(s, "shape"));
+        if (strcmp(shape, "sphere") == 0) {
+            src.shape = FIRE_SHAPE_SPHERE;
+        } else if (strcmp(shape, "capsule") == 0) {
+            src.shape = FIRE_SHAPE_CAPSULE;
+        } else if (strcmp(shape, "box") != 0) {
+            log_warn("cscene: fire source shape '%s' is not box, sphere or capsule; skipped",
+                     shape);
+            continue;
+        }
+        if (src.shape == FIRE_SHAPE_CAPSULE) {
+            if (!get_vec3(s, "from", src.a) || !get_vec3(s, "to", src.b)) {
+                log_warn("cscene: a capsule fire source needs from and to; skipped");
+                continue;
+            }
+        } else if (!get_vec3(s, "center", src.a)) {
+            log_warn("cscene: a fire source needs a center; skipped");
+            continue;
+        }
+        if (src.shape == FIRE_SHAPE_BOX && !get_vec3(s, "halfSize", src.b))
+            glm_vec3_copy((vec3){0.05f, 0.05f, 0.05f}, src.b);
+        src.radius = 0.05f;
+        _ranged_float(s, "fire source", "radius", 0.0f, 100.0f, &src.radius);
+        _ranged_float(s, "fire source", "rate", 0.0f, 1e4f, &src.rate);
+        _ranged_float(s, "fire source", "temperature", 0.0f, 4000.0f, &src.temperature);
+        _ranged_float(s, "fire source", "lift", -100.0f, 100.0f, &src.lift);
+        fire->sources[fire->source_count++] = src;
+    }
+}
+
+// obstacles[] on a fire: {min, max}, world-space boxes no flow passes.
+static void parse_fire_obstacles(Fire* fire, const cJSON* f) {
+    static const char* known[] = {"min", "max"};
+    const cJSON* obstacles = cJSON_GetObjectItemCaseSensitive(f, "obstacles");
+    const cJSON* o = NULL;
+    cJSON_ArrayForEach(o, obstacles) {
+        if (!cJSON_IsObject(o))
+            continue;
+        warn_unknown_keys(o, known, sizeof(known) / sizeof(known[0]), "fire obstacle");
+        if (fire->obstacle_count >= FIRE_MAX_OBSTACLES) {
+            log_warn("cscene: fire '%s' has more than %d obstacles; the rest are ignored",
+                     fire->name, FIRE_MAX_OBSTACLES);
+            break;
+        }
+        FireBox b = {{0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}};
+        if (!get_vec3(o, "min", b.min) || !get_vec3(o, "max", b.max)) {
+            log_warn("cscene: a fire obstacle needs min and max; skipped");
+            continue;
+        }
+        fire->obstacles[fire->obstacle_count++] = b;
+    }
+}
+
+static void parse_fire(CetraSceneDesc* d, const cJSON* root) {
+    const cJSON* block = cJSON_GetObjectItemCaseSensitive(root, "fire");
+    if (!cJSON_IsObject(block))
+        return;
+    CSceneFire* out = &d->fire;
+    out->enabled = true;
+    get_bool(block, "enabled", &out->enabled);
+    FireSystem* fs = &out->system;
+    // create_fire_system's defaults, on the description's own storage.
+    FireSystem* defaults = create_fire_system();
+    if (!defaults)
+        return;
+    *fs = *defaults;
+    free_fire_system(defaults);
+    _ranged_float(block, "fire", "simHz", 1.0f, 1000.0f, &fs->sim_hz);
+    _ranged_float(block, "fire", "warmup", 0.0f, 60.0f, &fs->warmup);
+    float jacobi = (float)fs->jacobi_iterations;
+    if (_ranged_float(block, "fire", "jacobi", 1.0f, 500.0f, &jacobi))
+        fs->jacobi_iterations = (int)jacobi;
+    get_bool(block, "maccormack", &fs->maccormack);
+    static const char* block_known[] = {"enabled", "simHz",      "warmup",
+                                        "jacobi",  "maccormack", "fires"};
+    warn_unknown_keys(block, block_known, sizeof(block_known) / sizeof(block_known[0]), "fire");
+
+    static const char* const FIRE_OTHER_KEYS[] = {"name",        "kind",    "enabled",  "center",
+                                                  "size",        "cell",    "floor",    "light",
+                                                  "lightOffset", "sources", "obstacles"};
+#define FIRE_OTHER_COUNT (sizeof(FIRE_OTHER_KEYS) / sizeof(FIRE_OTHER_KEYS[0]))
+    const char* known[FIRE_PARAM_KEY_COUNT + FIRE_OTHER_COUNT];
+    for (size_t i = 0; i < FIRE_OTHER_COUNT; i++)
+        known[i] = FIRE_OTHER_KEYS[i];
+    for (size_t i = 0; i < FIRE_PARAM_KEY_COUNT; i++)
+        known[FIRE_OTHER_COUNT + i] = FIRE_PARAM_KEYS[i].key;
+
+    const cJSON* fires = cJSON_GetObjectItemCaseSensitive(block, "fires");
+    const cJSON* f = NULL;
+    cJSON_ArrayForEach(f, fires) {
+        if (!cJSON_IsObject(f))
+            continue;
+        warn_unknown_keys(f, known, FIRE_PARAM_KEY_COUNT + FIRE_OTHER_COUNT, "fire");
+        char kind[16] = "grid";
+        copy_string(kind, sizeof(kind), cJSON_GetObjectItemCaseSensitive(f, "kind"));
+        if (strcmp(kind, "grid") != 0 && strcmp(kind, "flame") != 0) {
+            log_warn("cscene: fire kind '%s' is not grid or flame; skipped", kind);
+            continue;
+        }
+        char name[32] = "fire";
+        copy_string(name, sizeof(name), cJSON_GetObjectItemCaseSensitive(f, "name"));
+        const int index = fs->count;
+        Fire* fire = fire_system_add(fs, strcmp(kind, "flame") == 0 ? FIRE_FLAME : FIRE_GRID, name);
+        if (!fire)
+            break;
+        get_bool(f, "enabled", &fire->enabled);
+        get_vec3(f, "center", fire->center);
+        get_vec3(f, "size", fire->size);
+        _ranged_float(f, "fire", "cell", 0.002f, 1.0f, &fire->cell);
+        get_bool(f, "floor", &fire->floor);
+        get_vec3(f, "lightOffset", fire->light_offset);
+        copy_string(out->light[index], CSCENE_MAX_NAME,
+                    cJSON_GetObjectItemCaseSensitive(f, "light"));
+        for (size_t i = 0; i < FIRE_PARAM_KEY_COUNT; i++) {
+            const CSceneFireKey* k = &FIRE_PARAM_KEYS[i];
+            float v = 0.0f;
+            if (_ranged_float(f, "fire", k->key, k->lo, k->hi, &v))
+                *(float*)(void*)((unsigned char*)&fire->params + k->offset) = v;
+        }
+        parse_fire_sources(fire, f);
+        parse_fire_obstacles(fire, f);
+    }
+#undef FIRE_OTHER_COUNT
+}
+
+/*
  * layers[] on a material -- an ordered set of surfaces the splat map blends between.
  *
  * ORDERED, which is why it is an array and not an object: layer 0 is the one that takes
@@ -1451,6 +1633,7 @@ CetraSceneDesc* cscene_load(const char* path) {
     parse_dust(d, root);
     parse_water(d, root);
     parse_rain(d, root);
+    parse_fire(d, root);
     parse_fog_volumes(d, root);
     parse_probes(d, root);
     parse_occluders(d, root);

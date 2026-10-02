@@ -166,7 +166,14 @@ typedef struct {
     // probe prints. rain_ask_set 0 = none.
     float rain_ask[3];
     int rain_ask_set;
-    const char* rain_map_path;    // --rain-map: the occlusion map as a greyscale PPM
+    const char* rain_map_path; // --rain-map: the occlusion map as a greyscale PPM
+    int no_fire;               // Drop the fires a scene file asked for (spec 13.14)
+    int fire_probe;            // Print the blackbody ladder, every fire's state and grid
+    float fire_warmup;         // FireSystem.warmup; negative = keep the scene file's
+    float fire_shimmer;        // every fire's shimmer; negative = keep the scene file's
+    // --fire-slice: draw one slice of a GRID fire's field into the frame's corner.
+    // fire_slice[0] = field (-1 = off), [1] = the slice, [2] = the fire.
+    int fire_slice[3];
     int water_probe;              // Print the CPU wave query over a grid, then continue
     int water_fft_probe;          // Print the transformed spectrum's measured statistics
     int water_caustic_debug;      // Water.caustic_debug: 2 = the raw caustics target

@@ -49,6 +49,10 @@ void apply_cscene_water(Scene* scene, const CetraSceneDesc* cscn);
 // Attach the scene file's rain (spec 13.9). Runs BEFORE --rain / --no-rain, which
 // override it.
 void apply_cscene_rain(Scene* scene, const CetraSceneDesc* cscn);
+
+// Attach the scene file's fires (spec 13.14), each bound to the light it drives by name -- so
+// after the lights are created. --no-fire removes them after.
+void apply_cscene_fire(Scene* scene, const CetraSceneDesc* cscn);
 void apply_cscene_fog_volumes(Scene* scene, const CetraSceneDesc* cscn);
 void apply_cscene_occluders(Scene* scene, const CetraSceneDesc* cscn);
 

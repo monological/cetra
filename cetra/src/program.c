@@ -754,6 +754,36 @@ ShaderProgram* create_rain_program() {
     return program;
 }
 
+ShaderProgram* create_fire_program(FireProgram which) {
+    switch (which) {
+        case FIRE_PROGRAM_ADVECT:
+            return create_post_program("fire_advect", fire_advect_frag_shader_str);
+        case FIRE_PROGRAM_CURL:
+            return create_post_program("fire_curl", fire_curl_frag_shader_str);
+        case FIRE_PROGRAM_REACT:
+            return create_post_program("fire_react", fire_react_frag_shader_str);
+        case FIRE_PROGRAM_DIVERGENCE:
+            return create_post_program("fire_divergence", fire_divergence_frag_shader_str);
+        case FIRE_PROGRAM_JACOBI:
+            return create_post_program("fire_jacobi", fire_jacobi_frag_shader_str);
+        case FIRE_PROGRAM_PROJECT:
+            return create_post_program("fire_project", fire_project_frag_shader_str);
+        case FIRE_PROGRAM_REDUCE:
+            return create_post_program("fire_reduce", fire_reduce_frag_shader_str);
+        case FIRE_PROGRAM_SLICE:
+            return create_post_program("fire_slice", fire_slice_frag_shader_str);
+        case FIRE_PROGRAM_MARCH: {
+            ShaderProgram* program = create_program_from_source(
+                "fire_march", fire_march_vert_shader_str, fire_march_frag_shader_str, NULL);
+            if (!program)
+                log_error("Failed to initialize fire_march shader program");
+            return program;
+        }
+        default:
+            return NULL;
+    }
+}
+
 ShaderProgram* create_shadow_depth_program() {
     ShaderProgram* program = NULL;
 

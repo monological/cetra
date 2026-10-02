@@ -307,6 +307,7 @@ typedef struct Scene {
     struct GIVolume* gi_volume;    // indirect-diffuse probe grid (optional)
     struct Water* water;           // ocean/lake surface (optional)
     struct Rain* rain;             // falling rain and the wetness it leaves (optional)
+    struct FireSystem* fire;       // fires and candle flames, and the lights they drive (optional)
 
     // What the walk seeds the root with -- where the whole scene sits. Identity
     // for most apps; a model viewer puts its recentre offset here.

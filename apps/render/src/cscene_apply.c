@@ -572,6 +572,36 @@ void apply_cscene_rain(Scene* scene, const CetraSceneDesc* cscn) {
 }
 
 /*
+ * The scene file's fires (spec 13.14). After the lights, since a fire drives one of them by
+ * name: the light keeps its type, shadows and placement, and the fire writes its brightness and
+ * colour, and a point light's position, every frame. A name no light carries is said once, since
+ * a fire that lights nothing looks exactly like one whose light is simply dim.
+ */
+void apply_cscene_fire(Scene* scene, const CetraSceneDesc* cscn) {
+    if (!scene || !cscn || !cscn->fire.enabled)
+        return;
+    FireSystem* fs = create_fire_system();
+    if (!fs)
+        return;
+    *fs = cscn->fire.system;
+    for (int i = 0; i < fs->count; i++) {
+        const char* want = cscn->fire.light[i];
+        if (!want[0])
+            continue;
+        for (size_t l = 0; l < scene->light_count && !fs->fires[i].light; l++)
+            if (scene->lights[l]->name && strcmp(scene->lights[l]->name, want) == 0)
+                fs->fires[i].light = scene->lights[l];
+        if (!fs->fires[i].light)
+            fprintf(stderr,
+                    "Scene file: fire '%s' drives light '%s', which the scene does not have\n",
+                    fs->fires[i].name, want);
+    }
+    free_fire_system(scene->fire);
+    scene->fire = fs;
+    printf("Scene file: %d fire(s)\n", fs->count);
+}
+
+/*
  * The scene file's local fog volumes (spec 11.39). No CLI counterpart: a box needs a
  * place and a size, which is more than a flag can carry, so authoring is the only way in.
  * Printed because a volume that lands somewhere the camera never enters is invisible and
