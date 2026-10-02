@@ -187,8 +187,8 @@ def log_source(lo, hi):
 
 LOGS = [p for p in SOLIDS if p[0].startswith("log")]
 
-# The flipbook's three files share a stem, which routes like the sheet beside it.
-FLIPBOOK = asset_ref("fire_hearth_color.png")[:-len("_color.png")]
+# The flipbook's sidecar, which names its sheet beside itself.
+FLIPBOOK = asset_ref("fire_hearth.json")
 
 # Filmed fire, on a card standing in the middle of the firebox. The film's frame is 0.9 m across
 # at the scale it was cut to, which is the firebox's width less its jambs' reveal.

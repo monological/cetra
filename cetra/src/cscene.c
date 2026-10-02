@@ -1159,23 +1159,24 @@ static const CSceneFireKey FIRE_PARAM_KEYS[] = {
 #undef FIRE_PARAM_KEY
 #define FIRE_PARAM_KEY_COUNT (sizeof(FIRE_PARAM_KEYS) / sizeof(FIRE_PARAM_KEYS[0]))
 
-// sources[] on a fire: {shape, center, halfSize, from, to, radius, coverage, lift}. A box takes
-// center and halfSize, a sphere center and radius, a capsule from, to and radius.
+// sources[] on a GRID fire: {shape, center, halfSize, from, to, radius, coverage, lift}. A box
+// takes center and halfSize, a sphere center and radius, a capsule from, to and radius.
 static void parse_fire_sources(Fire* fire, const cJSON* f) {
     static const char* known[] = {"shape", "center", "halfSize", "from",
                                   "to",    "radius", "coverage", "lift"};
+    FireGrid* grid = &fire->grid;
     const cJSON* sources = cJSON_GetObjectItemCaseSensitive(f, "sources");
     const cJSON* s = NULL;
     cJSON_ArrayForEach(s, sources) {
         if (!cJSON_IsObject(s))
             continue;
         warn_unknown_keys(s, known, sizeof(known) / sizeof(known[0]), "fire source");
-        if (fire->source_count >= FIRE_MAX_SOURCES) {
+        if (grid->source_count >= FIRE_MAX_SOURCES) {
             log_warn("cscene: fire '%s' has more than %d sources; the rest are ignored", fire->name,
                      FIRE_MAX_SOURCES);
             break;
         }
-        FireSource src = {.shape = FIRE_SHAPE_BOX, .coverage = 0.5f, .lift = 0.5f};
+        FireSource src = fire_source_default();
         char shape[16] = "box";
         copy_string(shape, sizeof(shape), cJSON_GetObjectItemCaseSensitive(s, "shape"));
         if (strcmp(shape, "sphere") == 0) {
@@ -1196,51 +1197,53 @@ static void parse_fire_sources(Fire* fire, const cJSON* f) {
             log_warn("cscene: a fire source needs a center; skipped");
             continue;
         }
-        if (src.shape == FIRE_SHAPE_BOX && !get_vec3(s, "halfSize", src.b))
-            glm_vec3_copy((vec3){0.05f, 0.05f, 0.05f}, src.b);
-        src.radius = 0.05f;
+        if (src.shape == FIRE_SHAPE_BOX)
+            get_vec3(s, "halfSize", src.b);
         _ranged_float(s, "fire source", "radius", 0.0f, 100.0f, &src.radius);
         _ranged_float(s, "fire source", "coverage", 0.0f, 1.0f, &src.coverage);
         _ranged_float(s, "fire source", "lift", -100.0f, 100.0f, &src.lift);
-        fire->sources[fire->source_count++] = src;
+        grid->sources[grid->source_count++] = src;
     }
 }
 
-// cards[] on a FLIPBOOK fire: {base, size, phase}, each a quad standing on its bottom centre.
+// cards[] on a FLIPBOOK fire: {base, size, phase}, each a quad standing on its bottom centre;
+// no size is the size the sheet's frames were made at.
 static void parse_fire_cards(Fire* fire, const cJSON* f) {
     static const char* known[] = {"base", "size", "phase"};
-    const cJSON* cards = cJSON_GetObjectItemCaseSensitive(f, "cards");
+    FireCards* cards = &fire->cards;
+    const cJSON* list = cJSON_GetObjectItemCaseSensitive(f, "cards");
     const cJSON* c = NULL;
-    cJSON_ArrayForEach(c, cards) {
+    cJSON_ArrayForEach(c, list) {
         if (!cJSON_IsObject(c))
             continue;
         warn_unknown_keys(c, known, sizeof(known) / sizeof(known[0]), "fire card");
-        if (fire->card_count >= FIRE_MAX_CARDS) {
+        if (cards->count >= FIRE_MAX_CARDS) {
             log_warn("cscene: fire '%s' has more than %d cards; the rest are ignored", fire->name,
                      FIRE_MAX_CARDS);
             break;
         }
-        FireCard card = {.base = {0.0f, 0.0f, 0.0f}, .size = {0.5f, 0.5f}, .phase = 0.0f};
+        FireCard card = {.base = {0.0f, 0.0f, 0.0f}, .size = {0.0f, 0.0f}, .phase = 0.0f};
         if (!get_vec3(c, "base", card.base)) {
             log_warn("cscene: a fire card needs a base; skipped");
             continue;
         }
         get_floats(c, "size", card.size, 2);
         _ranged_float(c, "fire card", "phase", 0.0f, 1.0f, &card.phase);
-        fire->cards[fire->card_count++] = card;
+        cards->list[cards->count++] = card;
     }
 }
 
-// obstacles[] on a fire: {min, max}, world-space boxes no flow passes.
+// obstacles[] on a GRID fire: {min, max}, boxes no flow passes.
 static void parse_fire_obstacles(Fire* fire, const cJSON* f) {
     static const char* known[] = {"min", "max"};
+    FireGrid* grid = &fire->grid;
     const cJSON* obstacles = cJSON_GetObjectItemCaseSensitive(f, "obstacles");
     const cJSON* o = NULL;
     cJSON_ArrayForEach(o, obstacles) {
         if (!cJSON_IsObject(o))
             continue;
         warn_unknown_keys(o, known, sizeof(known) / sizeof(known[0]), "fire obstacle");
-        if (fire->obstacle_count >= FIRE_MAX_OBSTACLES) {
+        if (grid->obstacle_count >= FIRE_MAX_OBSTACLES) {
             log_warn("cscene: fire '%s' has more than %d obstacles; the rest are ignored",
                      fire->name, FIRE_MAX_OBSTACLES);
             break;
@@ -1250,7 +1253,40 @@ static void parse_fire_obstacles(Fire* fire, const cJSON* f) {
             log_warn("cscene: a fire obstacle needs min and max; skipped");
             continue;
         }
-        fire->obstacles[fire->obstacle_count++] = b;
+        grid->obstacles[grid->obstacle_count++] = b;
+    }
+}
+
+// What a GRID or FLAME fire's `center`, `size`, `cell`, `floor`, sources, obstacles and draft
+// mean for its kind. A FLAME's center is its wick's tip, and size its width and height.
+static void parse_fire_shape(Fire* fire, const cJSON* f) {
+    if (fire->kind == FIRE_FLAME) {
+        get_vec3(f, "center", fire->flame.wick);
+        vec3 size = {fire->flame.width, fire->flame.height, 0.0f};
+        if (get_vec3(f, "size", size)) {
+            fire->flame.width = size[0];
+            fire->flame.height = size[1];
+        }
+        return;
+    }
+    if (fire->kind != FIRE_GRID)
+        return;
+    FireGrid* grid = &fire->grid;
+    get_vec3(f, "center", grid->center);
+    get_vec3(f, "size", grid->size);
+    _ranged_float(f, "fire", "cell", 0.002f, 1.0f, &grid->cell);
+    get_bool(f, "floor", &grid->floor);
+    parse_fire_sources(fire, f);
+    parse_fire_obstacles(fire, f);
+    // draft: {min, max, speed}, the chimney's flue and how fast it draws.
+    const cJSON* draft = cJSON_GetObjectItemCaseSensitive(f, "draft");
+    if (cJSON_IsObject(draft)) {
+        static const char* draft_known[] = {"min", "max", "speed"};
+        warn_unknown_keys(draft, draft_known, 3, "fire draft");
+        if (get_vec3(draft, "min", grid->draft.min) && get_vec3(draft, "max", grid->draft.max))
+            _ranged_float(draft, "fire draft", "speed", 0.0f, 100.0f, &grid->draft_speed);
+        else
+            log_warn("cscene: fire '%s' draft needs min and max; ignored", fire->name);
     }
 }
 
@@ -1262,12 +1298,7 @@ static void parse_fire(CetraSceneDesc* d, const cJSON* root) {
     out->enabled = true;
     get_bool(block, "enabled", &out->enabled);
     FireSystem* fs = &out->system;
-    // create_fire_system's defaults, on the description's own storage.
-    FireSystem* defaults = create_fire_system();
-    if (!defaults)
-        return;
-    *fs = *defaults;
-    free_fire_system(defaults);
+    fire_system_init(fs);
     _ranged_float(block, "fire", "simHz", 1.0f, 1000.0f, &fs->sim_hz);
     _ranged_float(block, "fire", "warmup", 0.0f, 60.0f, &fs->warmup);
     float jacobi = (float)fs->jacobi_iterations;
@@ -1315,16 +1346,14 @@ static void parse_fire(CetraSceneDesc* d, const cJSON* root) {
         if (fire->kind == FIRE_FLIPBOOK &&
             !cJSON_IsString(cJSON_GetObjectItemCaseSensitive(f, "flipbook")))
             log_warn("cscene: flipbook fire '%s' names no flipbook; it draws nothing", fire->name);
-        copy_string(fire->flipbook, sizeof(fire->flipbook),
+        copy_string(out->flipbook[index], CSCENE_MAX_PATH,
                     cJSON_GetObjectItemCaseSensitive(f, "flipbook"));
         copy_string(out->embers[index], CSCENE_MAX_NAME,
                     cJSON_GetObjectItemCaseSensitive(f, "embers"));
-        parse_fire_cards(fire, f);
+        if (fire->kind == FIRE_FLIPBOOK)
+            parse_fire_cards(fire, f);
+        parse_fire_shape(fire, f);
         get_bool(f, "enabled", &fire->enabled);
-        get_vec3(f, "center", fire->center);
-        get_vec3(f, "size", fire->size);
-        _ranged_float(f, "fire", "cell", 0.002f, 1.0f, &fire->cell);
-        get_bool(f, "floor", &fire->floor);
         get_vec3(f, "lightOffset", fire->light_offset);
         copy_string(out->light[index], CSCENE_MAX_NAME,
                     cJSON_GetObjectItemCaseSensitive(f, "light"));
@@ -1333,18 +1362,6 @@ static void parse_fire(CetraSceneDesc* d, const cJSON* root) {
             float v = 0.0f;
             if (_ranged_float(f, "fire", k->key, k->lo, k->hi, &v))
                 *(float*)(void*)((unsigned char*)&fire->params + k->offset) = v;
-        }
-        parse_fire_sources(fire, f);
-        parse_fire_obstacles(fire, f);
-        // draft: {min, max, speed}, the chimney's flue and how fast it draws.
-        const cJSON* draft = cJSON_GetObjectItemCaseSensitive(f, "draft");
-        if (cJSON_IsObject(draft)) {
-            static const char* draft_known[] = {"min", "max", "speed"};
-            warn_unknown_keys(draft, draft_known, 3, "fire draft");
-            if (get_vec3(draft, "min", fire->draft.min) && get_vec3(draft, "max", fire->draft.max))
-                _ranged_float(draft, "fire draft", "speed", 0.0f, 100.0f, &fire->draft_speed);
-            else
-                log_warn("cscene: fire '%s' draft needs min and max; ignored", fire->name);
         }
     }
 #undef FIRE_OTHER_COUNT
@@ -1712,10 +1729,9 @@ CetraSceneDesc* cscene_load(const char* path) {
     // A .cube is the same kind of thing as the two above and for the same
     // reason: not a texture, never through the pool, no second resolver.
     resolve_in_place(d->lut_path, CSCENE_MAX_PATH, dir);
-    // A flipbook's sheets are read straight from disk by the fire renderer, never through the pool.
+    // A flipbook's sidecar is the same again; the sheet it names resolves beside the sidecar.
     for (int i = 0; i < d->fire.system.count; i++)
-        resolve_in_place(d->fire.system.fires[i].flipbook, sizeof(d->fire.system.fires[i].flipbook),
-                         dir);
+        resolve_in_place(d->fire.flipbook[i], CSCENE_MAX_PATH, dir);
     // Material texture paths are deliberately NOT resolved here. Every texture
     // the engine loads resolves against the texture pool's directory (the -t
     // argument) through find_existing_subpath, and a material's textures are

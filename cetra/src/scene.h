@@ -128,6 +128,8 @@ void node_set_pose(SceneNode* node, struct AnimationState* pose);
 
 // find
 SceneNode* node_find(SceneNode* root, const char* name);
+// The node under `root` that carries `light`, or NULL.
+SceneNode* node_find_light(SceneNode* root, const struct Light* light);
 
 // shaders
 void node_set_program(SceneNode* node, ShaderProgram* program);

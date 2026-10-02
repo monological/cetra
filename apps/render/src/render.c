@@ -211,7 +211,7 @@ static void print_usage(const char* prog) {
                     "                         read back whole, and the lights it drives\n");
     fprintf(stderr, "      --fire-warmup <s>  Seconds a fire has burnt when it starts\n");
     fprintf(stderr, "      --fire-slice <field>,<z>[,<fire>]  One slice of a grid fire's\n"
-                    "                         temperature, soot, fuel, speed or reaction\n");
+                    "                         temperature, soot, reaction, speed or core\n");
     fprintf(stderr, "      --water-level <f>  Still-water plane, world Y (implies --water)\n");
     fprintf(stderr, "      --water-extent <f> Half-size of the shoaling bed (implies --water)\n");
     fprintf(stderr, "      --water-waves <m>  gerstner (default) or fft spectral cascades\n");
@@ -1253,18 +1253,20 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             if (_ranged_arg(argc, argv, &i, 0.0f, 60.0f, &args->fire_warmup) != 0)
                 return -1;
         } else if (strcmp(argv[i], "--fire-slice") == 0) {
-            static const char* fields[] = {"temperature", "soot", "fuel", "speed", "reaction"};
             char field[16] = "";
             int slice = 0, fire = 0;
             const int got =
                 ++i < argc ? sscanf(argv[i], "%15[a-z],%d,%d", field, &slice, &fire) : 0;
             args->fire_slice[0] = -1;
-            for (int f = 0; f < 5 && got >= 2; f++)
-                if (strcmp(field, fields[f]) == 0)
+            for (int f = 0; f < FIRE_FIELD_COUNT && got >= 2; f++)
+                if (strcmp(field, FIRE_FIELD_NAMES[f]) == 0)
                     args->fire_slice[0] = f;
             if (args->fire_slice[0] < 0) {
-                fprintf(stderr, "Error: --fire-slice needs <temperature|soot|fuel|speed|reaction>,"
-                                "<slice>[,<fire>]\n");
+                fprintf(stderr,
+                        "Error: --fire-slice needs <field>,<slice>[,<fire>], the field one of");
+                for (int f = 0; f < FIRE_FIELD_COUNT; f++)
+                    fprintf(stderr, " %s", FIRE_FIELD_NAMES[f]);
+                fprintf(stderr, "\n");
                 return -1;
             }
             args->fire_slice[1] = slice;

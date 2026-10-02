@@ -1,4 +1,5 @@
 #include "fire.h"
+#include "fire_internal.h"
 
 #include <math.h>
 #include <stdint.h>
@@ -9,13 +10,22 @@
 #include "json_util.h"
 #include "light.h"
 #include "material.h"
+#include "scene.h"
 #include "spectrum.h"
+#include "texture.h"
 #include "util.h"
 #include "wind.h"
 #include "ext/cJSON.h"
 #include "ext/log.h"
 
-void fire_params_defaults(FireParams* p, FireKind kind) {
+const char* const FIRE_FIELD_NAMES[FIRE_FIELD_COUNT] = {"temperature", "soot", "reaction", "speed",
+                                                        "core"};
+
+// Seconds the running mean a fire's vigour is taken against settles over: long against a
+// flicker, short against a fire dying down.
+#define FIRE_VIGOUR_SECONDS 4.0f
+
+static void _params_defaults(FireParams* p, FireKind kind) {
     memset(p, 0, sizeof(*p));
     p->ambient = 293.0f;
     // The soot in a wood fire's flames measures about 1100-1500 K; a candle's luminous zone runs
@@ -56,84 +66,56 @@ void fire_params_defaults(FireParams* p, FireKind kind) {
     p->flicker = 0.3f;
 }
 
-// Linear Rec.709 to CIE XYZ, D65, row-major; spectrum_xyz_to_rec709 is its inverse.
-static const float REC709_TO_XYZ[3][3] = {
-    {0.4124f, 0.3576f, 0.1805f}, {0.2126f, 0.7152f, 0.0722f}, {0.0193f, 0.1192f, 0.9505f}};
-// XYZ to Hunt-Pointer-Estevez cone responses, normalised to D65 (Fairchild 1998), row-major.
-static const float XYZ_TO_LMS[3][3] = {
-    {0.4002f, 0.7076f, -0.0808f}, {-0.2263f, 1.1653f, 0.0457f}, {0.0f, 0.0f, 0.9182f}};
+// XYZ to Hunt-Pointer-Estevez cone responses, normalised to D65 (Fairchild 1998). cglm's matrices
+// are column-major: each inner triple is a COLUMN.
+static const mat3 XYZ_TO_LMS = {
+    {0.4002f, -0.2263f, 0.0f}, {0.7076f, 1.1653f, 0.0f}, {-0.0808f, 0.0457f, 0.9182f}};
 static const vec3 D65_XYZ = {0.95047f, 1.0f, 1.08883f};
 
-static void _mul33(const float a[3][3], const float b[3][3], float out[3][3]) {
-    float t[3][3];
-    for (int r = 0; r < 3; r++)
-        for (int c = 0; c < 3; c++)
-            t[r][c] = a[r][0] * b[0][c] + a[r][1] * b[1][c] + a[r][2] * b[2][c];
-    memcpy(out, t, sizeof(t));
-}
-
-static void _inv33(const float a[3][3], float out[3][3]) {
-    mat3 m, inv;
-    for (int r = 0; r < 3; r++)
-        for (int c = 0; c < 3; c++)
-            m[c][r] = a[r][c];
-    glm_mat3_inv(m, inv);
-    for (int r = 0; r < 3; r++)
-        for (int c = 0; c < 3; c++)
-            out[r][c] = inv[c][r];
-}
-
-static void _mulv(const float a[3][3], const vec3 v, vec3 out) {
-    vec3 t;
-    for (int r = 0; r < 3; r++)
-        t[r] = a[r][0] * v[0] + a[r][1] * v[1] + a[r][2] * v[2];
-    glm_vec3_copy(t, out);
-}
-
-void fire_adaptation(const FireParams* p, mat3 out) {
-    // The white the eye adapts to: a blackbody at the fire's peak, in cone space, against D65.
-    vec3 white = {0.0f, 0.0f, 0.0f}, lms_white = {0.0f, 0.0f, 0.0f}, lms_d65 = {0.0f, 0.0f, 0.0f};
+/*
+ * Nguyen's von Kries transform (sec. 5, eq. 23) as a matrix on linear Rec.709: in
+ * Hunt-Pointer-Estevez cone space, from the white of a blackbody at the fire's peak temperature
+ * to D65, mixed with the identity by how far the eye has adapted, and scaled so that white
+ * keeps its luminance -- adaptation changes what colour the fire reads as, not how bright it
+ * is. Through the same Rec.709 matrices the blackbody table is built with.
+ */
+static void _adaptation(const FireParams* p, mat3 out) {
+    vec3 white = {0.0f, 0.0f, 0.0f};
     spectrum_blackbody_xyz(p->temperature, white);
     if (!(white[1] > 0.0f)) {
         glm_mat3_identity(out);
         return;
     }
     glm_vec3_scale(white, 1.0f / white[1], white);
-    _mulv(XYZ_TO_LMS, white, lms_white);
-    _mulv(XYZ_TO_LMS, D65_XYZ, lms_d65);
-    const float scale[3][3] = {{lms_d65[0] / lms_white[0], 0.0f, 0.0f},
-                               {0.0f, lms_d65[1] / lms_white[1], 0.0f},
-                               {0.0f, 0.0f, lms_d65[2] / lms_white[2]}};
-    float lms_to_xyz[3][3], xyz_to_rec709[3][3], a[3][3];
-    _inv33(XYZ_TO_LMS, lms_to_xyz);
-    _inv33(REC709_TO_XYZ, xyz_to_rec709);
-    _mul33(scale, XYZ_TO_LMS, a);
-    _mul33(lms_to_xyz, a, a);
-    _mul33(xyz_to_rec709, a, a);
-    _mul33(a, REC709_TO_XYZ, a);
-    // Mixed with the identity by how far the eye has adapted, then scaled so the white keeps
-    // its luminance: adaptation changes what colour the fire reads as, not how bright it is.
+    vec3 lms_white = {0.0f, 0.0f, 0.0f}, lms_d65 = {0.0f, 0.0f, 0.0f};
+    glm_mat3_mulv((vec3*)XYZ_TO_LMS, white, lms_white);
+    glm_mat3_mulv((vec3*)XYZ_TO_LMS, (float*)D65_XYZ, lms_d65);
+    mat3 scale = GLM_MAT3_ZERO_INIT;
+    for (int c = 0; c < 3; c++)
+        scale[c][c] = lms_d65[c] / lms_white[c];
+    mat3 lms_to_xyz, a;
+    mat3 xyz_to_rgb = GLM_MAT3_ZERO_INIT, rgb_to_xyz = GLM_MAT3_ZERO_INIT;
+    glm_mat3_inv((vec3*)XYZ_TO_LMS, lms_to_xyz);
+    spectrum_xyz_to_rec709_matrix(xyz_to_rgb);
+    spectrum_rec709_to_xyz_matrix(rgb_to_xyz);
+    glm_mat3_mul(scale, (vec3*)XYZ_TO_LMS, a);
+    glm_mat3_mul(lms_to_xyz, a, a);
+    glm_mat3_mul(xyz_to_rgb, a, a);
+    glm_mat3_mul(a, rgb_to_xyz, a);
     const float k = glm_clamp(p->adaptation, 0.0f, 1.0f);
-    for (int r = 0; r < 3; r++)
-        for (int c = 0; c < 3; c++)
-            a[r][c] = (r == c ? 1.0f - k : 0.0f) + k * a[r][c];
+    for (int c = 0; c < 3; c++)
+        for (int r = 0; r < 3; r++)
+            a[c][r] = (r == c ? 1.0f - k : 0.0f) + k * a[c][r];
     vec3 white_rgb = {0.0f, 0.0f, 0.0f}, adapted = {0.0f, 0.0f, 0.0f};
-    _mulv(xyz_to_rec709, white, white_rgb);
-    _mulv(a, white_rgb, adapted);
-    const float before = glm_vec3_dot(white_rgb, (vec3){0.2126f, 0.7152f, 0.0722f});
-    const float after = glm_vec3_dot(adapted, (vec3){0.2126f, 0.7152f, 0.0722f});
-    const float norm = after > 0.0f ? before / after : 1.0f;
-    for (int r = 0; r < 3; r++)
-        for (int c = 0; c < 3; c++)
-            out[c][r] = a[r][c] * norm;
+    glm_mat3_mulv(xyz_to_rgb, white, white_rgb);
+    glm_mat3_mulv(a, white_rgb, adapted);
+    const float after = spectrum_luminance(adapted);
+    glm_mat3_scale(a, after > 0.0f ? spectrum_luminance(white_rgb) / after : 1.0f);
+    glm_mat3_copy(a, out);
 }
 
-FireSystem* create_fire_system(void) {
-    FireSystem* fs = calloc(1, sizeof(FireSystem));
-    if (!fs) {
-        log_error("Failed to allocate FireSystem");
-        return NULL;
-    }
+void fire_system_init(FireSystem* fs) {
+    memset(fs, 0, sizeof(*fs));
     fs->sim_hz = 60.0f;
     // A slow frame skips the time it lost rather than spending the next frame catching up,
     // which would make it slower still.
@@ -142,127 +124,114 @@ FireSystem* create_fire_system(void) {
     fs->maccormack = true;
     fs->warmup = 2.0f;
     fs->debug_field = -1;
+}
+
+FireSystem* create_fire_system(void) {
+    FireSystem* fs = malloc(sizeof(FireSystem));
+    if (!fs) {
+        log_error("Failed to allocate FireSystem");
+        return NULL;
+    }
+    fire_system_init(fs);
     return fs;
+}
+
+// What a flipbook read, released, and its hold on the sheet with it.
+static void _flipbook_release(FireFlipbook* b) {
+    texture_release(b->sheet);
+    free(b->intensity);
+    free(b->centroid_y);
+    memset(b, 0, sizeof(*b));
 }
 
 void free_fire_system(FireSystem* fs) {
     if (!fs)
         return;
-    for (int i = 0; i < fs->count; i++) {
-        free(fs->fires[i].book.intensity);
-        free(fs->fires[i].book.centroid_y);
-    }
+    for (int i = 0; i < fs->count; i++)
+        _flipbook_release(&fs->fires[i].flipbook);
     free(fs);
 }
 
-static bool _json_floats(const cJSON* obj, const char* key, float* out, int n) {
-    const cJSON* arr = cJSON_GetObjectItemCaseSensitive(obj, key);
-    if (!cJSON_IsArray(arr) || cJSON_GetArraySize(arr) < n)
-        return false;
-    for (int i = 0; i < n; i++) {
-        const cJSON* v = cJSON_GetArrayItem(arr, i);
-        if (!cJSON_IsNumber(v))
-            return false;
-        out[i] = (float)v->valuedouble;
-    }
-    return true;
+FireSource fire_source_default(void) {
+    return (FireSource){.shape = FIRE_SHAPE_BOX,
+                        .b = {0.05f, 0.05f, 0.05f},
+                        .radius = 0.05f,
+                        .coverage = 0.5f,
+                        .lift = 0.5f};
 }
 
-// A FLIPBOOK's sidecar into fire->book; a failure is said once and latched.
-static void _flipbook_load(Fire* fire) {
-    FireFlipbook* b = &fire->book;
-    if (b->loaded || b->failed)
-        return;
-    b->failed = true;
-    char path[300];
-    snprintf(path, sizeof(path), "%s.json", fire->flipbook);
+bool fire_set_flipbook(Fire* fire, TexturePool* pool, const char* path) {
+    if (!fire)
+        return false;
+    FireFlipbook* b = &fire->flipbook;
+    _flipbook_release(b);
+    if (!path || !path[0])
+        return false;
+    snprintf(b->path, sizeof(b->path), "%s", path);
     char* text = read_entire_file(path, NULL);
     cJSON* root = text ? cJSON_Parse(text) : NULL;
     free(text);
     if (!root) {
-        log_error("Fire: '%s' has no flipbook at %s", fire->name, path);
-        return;
+        log_error("Fire: '%s' has no flipbook sidecar at %s", fire->name, path);
+        return false;
     }
     b->frames = json_int_or(root, "frames", 0);
     b->cols = json_int_or(root, "cols", 0);
     b->rows = json_int_or(root, "rows", 0);
     b->width = json_int_or(root, "width", 0);
     b->height = json_int_or(root, "height", 0);
-    const cJSON* fps = cJSON_GetObjectItemCaseSensitive(root, "fps");
-    const cJSON* peak = cJSON_GetObjectItemCaseSensitive(root, "peak_nits");
-    b->fps = cJSON_IsNumber(fps) ? (float)fps->valuedouble : 30.0f;
-    b->peak_nits = cJSON_IsNumber(peak) ? (float)peak->valuedouble : 1.0f;
-    float box[3] = {1.0f, 1.0f, 0.0f};
-    _json_floats(root, "box", box, 3);
-    glm_vec2_copy((vec2){box[0], box[1]}, b->box);
+    b->fps = json_float_or(root, "fps", 30.0f);
+    b->peak_nits = json_float_or(root, "peak_nits", 1.0f);
+    float box[2] = {1.0f, 1.0f};
+    json_floats(root, "box", box, 2);
+    glm_vec2_copy(box, b->box);
     glm_vec3_one(b->color);
-    _json_floats(root, "color", b->color, 3);
-    if (b->frames > 0 && b->cols > 0 && b->rows > 0) {
+    json_floats(root, "color", b->color, 3);
+    // The sheet sits beside its sidecar.
+    const char* sheet = json_string_or(root, "sheet");
+    char sheet_path[sizeof(b->path) + 64] = "";
+    bool ok = sheet && b->frames > 0 && b->cols > 0 && b->rows > 0;
+    if (ok) {
+        const char* slash = path_last_sep(path);
+        if (slash)
+            snprintf(sheet_path, sizeof(sheet_path), "%.*s/%s", (int)(slash - path), path, sheet);
+        else
+            snprintf(sheet_path, sizeof(sheet_path), "%s", sheet);
         b->intensity = calloc((size_t)b->frames, sizeof(float));
         b->centroid_y = calloc((size_t)b->frames, sizeof(float));
-        if (b->intensity && b->centroid_y &&
-            _json_floats(root, "intensity", b->intensity, b->frames) &&
-            _json_floats(root, "centroid_y", b->centroid_y, b->frames)) {
-            b->mean_intensity = 0.0f;
-            for (int f = 0; f < b->frames; f++)
-                b->mean_intensity += b->intensity[f] / (float)b->frames;
-            b->failed = false;
-            b->loaded = true;
-        }
+        ok = b->intensity && b->centroid_y &&
+             json_floats(root, "intensity", b->intensity, b->frames) &&
+             json_floats(root, "centroid_y", b->centroid_y, b->frames);
     }
     cJSON_Delete(root);
-    if (b->failed)
+    if (!ok) {
         log_error("Fire: '%s''s flipbook sidecar %s is incomplete", fire->name, path);
-}
-
-double fire_card_frame(const FireFlipbook* b, const FireCard* card, double t) {
-    double pos = fmod(t * (double)b->fps + (double)card->phase * (double)b->frames, b->frames);
-    return pos < 0.0 ? pos + (double)b->frames : pos;
-}
-
-/*
- * What a FLIPBOOK fire casts: each card's baked intensity at its own frame, scaled by its area
- * against the area the frame was made at, summed -- a card twice as wide and tall is four times
- * the light -- at the cards' intensity-weighted centroid, in the sheet's colour.
- */
-static void _flipbook_light(Fire* fire, double t) {
-    FireFlipbook* b = &fire->book;
-    float total = 0.0f;
-    vec3 weighted = GLM_VEC3_ZERO_INIT;
-    b->mean_cast = 0.0f;
-    for (int c = 0; c < fire->card_count; c++) {
-        const FireCard* card = &fire->cards[c];
-        const double pos = fire_card_frame(b, card, t);
-        const int f0 = (int)pos % b->frames;
-        const int f1 = (f0 + 1) % b->frames;
-        const float blend = (float)(pos - floor(pos));
-        const float scale = card->size[0] * card->size[1] / fmaxf(b->box[0] * b->box[1], 1e-6f);
-        const float i = (b->intensity[f0] + (b->intensity[f1] - b->intensity[f0]) * blend) * scale;
-        const float y = b->centroid_y[f0] + (b->centroid_y[f1] - b->centroid_y[f0]) * blend;
-        total += i;
-        b->mean_cast += b->mean_intensity * scale * fire->params.brightness;
-        glm_vec3_muladds((vec3){card->base[0], card->base[1] + y * card->size[1], card->base[2]}, i,
-                         weighted);
+        _flipbook_release(b);
+        return false;
     }
-    fire->intensity = total * fire->params.brightness;
-    if (total > 0.0f)
-        glm_vec3_scale(weighted, 1.0f / total, fire->centroid);
-    glm_vec3_copy((float*)b->color, fire->color);
-    fire->heat_release = 0.0f;
-    fire->answered = true;
+    // Premultiplied, so its alpha is coverage and not a cutout's to dilate; clamped, so the
+    // sheet's outer frames do not filter in the far edge's.
+    Texture* tex = texture_load_path(
+        pool, sheet_path,
+        (TextureDesc){.is_srgb = true, .alpha = TEXTURE_ALPHA_DATA, .use = TEXTURE_USE_COLOUR});
+    if (!tex) {
+        log_error("Fire: '%s' has no flipbook sheet at %s", fire->name, sheet_path);
+        _flipbook_release(b);
+        return false;
+    }
+    texture_apply_wrap(tex, GL_CLAMP_TO_EDGE, GL_CLAMP_TO_EDGE);
+    b->sheet = texture_retain(tex);
+    for (int f = 0; f < b->frames; f++)
+        b->mean_intensity += b->intensity[f] / (float)b->frames;
+    return true;
 }
 
-void fire_drive_embers(Fire* fire) {
-    if (!fire || !fire->embers || !fire->answered)
+void fire_set_embers(Fire* fire, Material* embers) {
+    if (!fire)
         return;
-    if (!(fire->embers_base > 0.0f))
-        fire->embers_base = fire->embers->emissive_strength;
-    // About the authored strength, following the fire: at its mean intensity the embers glow as
-    // authored, brighter as it flares and dimmer as it dies back. A fire with no mean to go by
-    // holds them steady.
-    const float mean = fire->book.loaded ? fire->book.mean_cast : 0.0f;
-    const float ratio = mean > 0.0f ? fire->intensity / mean : 1.0f;
-    fire->embers->emissive_strength = fire->enabled ? fire->embers_base * ratio : 0.0f;
+    if (fire->embers && fire->embers != embers)
+        fire->embers->emissive_drive = 1.0f;
+    fire->embers = embers;
 }
 
 Fire* fire_system_add(FireSystem* fs, FireKind kind, const char* name) {
@@ -278,18 +247,23 @@ Fire* fire_system_add(FireSystem* fs, FireKind kind, const char* name) {
     snprintf(fire->name, sizeof(fire->name), "%s", name ? name : "fire");
     fire->kind = kind;
     fire->enabled = true;
-    fire->floor = true;
-    fire_params_defaults(&fire->params, kind);
-    if (kind == FIRE_FLAME) {
-        glm_vec3_copy((vec3){0.012f, 0.035f, 0.012f}, fire->size);
-    } else if (kind == FIRE_FLIPBOOK) {
-        // Filmed or baked, a flipbook's colour is already what the eye sees.
-        fire->params.adaptation = 0.0f;
-    } else {
-        glm_vec3_copy((vec3){0.8f, 1.2f, 0.8f}, fire->size);
-        fire->cell = 0.025f;
+    _params_defaults(&fire->params, kind);
+    glm_vec3_one(fire->color);
+    glm_mat3_identity(fire->adaptation);
+    fire->vigour = 1.0f;
+    switch (kind) {
+        case FIRE_GRID:
+            glm_vec3_copy((vec3){0.8f, 1.2f, 0.8f}, fire->grid.size);
+            fire->grid.cell = 0.025f;
+            fire->grid.floor = true;
+            break;
+        case FIRE_FLAME:
+            fire->flame.width = 0.012f;
+            fire->flame.height = 0.035f;
+            break;
+        case FIRE_FLIPBOOK:
+            break;
     }
-    glm_vec3_copy((vec3){1.0f, 1.0f, 1.0f}, fire->color);
     return fire;
 }
 
@@ -308,25 +282,37 @@ static int _cells(float extent, float cell, int max) {
 }
 
 // A cell size of zero or less is the default's, rather than a division by zero.
-static float _cell(const Fire* fire) {
-    return fire->cell > 0.0f ? fire->cell : 0.025f;
+float fire_grid_cell(const Fire* fire) {
+    return fire->grid.cell > 0.0f ? fire->grid.cell : 0.025f;
 }
 
 void fire_grid_cells(const Fire* fire, int cells[3]) {
-    const float cell = _cell(fire);
-    cells[0] = _cells(fire->size[0], cell, FIRE_GRID_MAX_X);
-    cells[1] = _cells(fire->size[1], cell, FIRE_GRID_MAX_Y);
-    cells[2] = _cells(fire->size[2], cell, FIRE_GRID_MAX_Z);
+    const float cell = fire_grid_cell(fire);
+    cells[0] = _cells(fire->grid.size[0], cell, FIRE_GRID_MAX_X);
+    cells[1] = _cells(fire->grid.size[1], cell, FIRE_GRID_MAX_Y);
+    cells[2] = _cells(fire->grid.size[2], cell, FIRE_GRID_MAX_Z);
 }
 
 void fire_grid_bounds(const Fire* fire, vec3 min, vec3 max) {
-    const float cell = _cell(fire);
+    const float cell = fire_grid_cell(fire);
     int n[3];
     fire_grid_cells(fire, n);
     for (int a = 0; a < 3; a++) {
-        min[a] = fire->center[a] - 0.5f * (float)n[a] * cell;
-        max[a] = fire->center[a] + 0.5f * (float)n[a] * cell;
+        min[a] = fire->grid.center[a] - 0.5f * (float)n[a] * cell;
+        max[a] = fire->grid.center[a] + 0.5f * (float)n[a] * cell;
     }
+}
+
+double fire_card_frame(const FireFlipbook* b, const FireCard* card, double t) {
+    double pos = fmod(t * (double)b->fps + (double)card->phase * (double)b->frames, b->frames);
+    return pos < 0.0 ? pos + (double)b->frames : pos;
+}
+
+void fire_card_size(const Fire* fire, const FireCard* card, vec2 out) {
+    if (card->size[0] > 0.0f && card->size[1] > 0.0f)
+        glm_vec2_copy((float*)card->size, out);
+    else
+        glm_vec2_copy((float*)fire->flipbook.box, out);
 }
 
 /*
@@ -380,16 +366,22 @@ float fire_blackbody(float kelvin, vec3 rgb) {
     return lum;
 }
 
-void fire_blue_color(vec3 out) {
+const float* fire_blue_color(void) {
     // The reaction zone's own light is band emission from intermediate radicals (Nguyen et al.
     // sec. 3): CH* at 431 nm and C2*'s Swan band at 516 nm, taken here as equal parts of
     // radiance, through the observer -- unclamped, like the blackbody, and luminance 1.
-    vec3 ch = {0.0f, 0.0f, 0.0f}, c2 = {0.0f, 0.0f, 0.0f}, xyz = {0.0f, 0.0f, 0.0f};
-    spectrum_cie_xyz(431.0f, ch);
-    spectrum_cie_xyz(516.0f, c2);
-    glm_vec3_add(ch, c2, xyz);
-    glm_vec3_scale(xyz, 1.0f / xyz[1], xyz);
-    spectrum_xyz_to_rec709(xyz, out);
+    static vec3 blue;
+    static bool built;
+    if (!built) {
+        vec3 ch = {0.0f, 0.0f, 0.0f}, c2 = {0.0f, 0.0f, 0.0f}, xyz = {0.0f, 0.0f, 0.0f};
+        spectrum_cie_xyz(431.0f, ch);
+        spectrum_cie_xyz(516.0f, c2);
+        glm_vec3_add(ch, c2, xyz);
+        glm_vec3_scale(xyz, 1.0f / xyz[1], xyz);
+        spectrum_xyz_to_rec709(xyz, blue);
+        built = true;
+    }
+    return blue;
 }
 
 /*
@@ -423,14 +415,20 @@ static float _hash_signed(uint32_t a, uint32_t b) {
     return (float)h / 2147483647.5f - 1.0f;
 }
 
+// A FLAME's wick, in the world.
+static void _flame_wick(const Fire* fire, vec3 out) {
+    glm_vec3_add((float*)fire->origin, (float*)fire->flame.wick, out);
+}
+
 static void _flame_rest(Fire* fire) {
-    const float h = fire->size[1];
+    vec3 wick = {0.0f, 0.0f, 0.0f};
+    _flame_wick(fire, wick);
     for (int i = 0; i < FIRE_SPINE_POINTS; i++) {
         const float u = (float)i / (float)(FIRE_SPINE_POINTS - 1);
-        fire->spine[i][0] = fire->center[0];
-        fire->spine[i][1] = fire->center[1] + u * h;
-        fire->spine[i][2] = fire->center[2];
-        fire->spine[i][3] = 0.5f * fire->size[0] * _flame_radius(u);
+        fire->spine[i][0] = wick[0];
+        fire->spine[i][1] = wick[1] + u * fire->flame.height;
+        fire->spine[i][2] = wick[2];
+        fire->spine[i][3] = 0.5f * fire->flame.width * _flame_radius(u);
         glm_vec3_zero(fire->spine_velocity[i]);
     }
 }
@@ -439,15 +437,14 @@ static void _flame_rest(Fire* fire) {
  * One fixed step of a FLAME's spine. Each point is held a rest length above the one below
  * it by a stiff spring, so the flame keeps its height, and sideways by a soft one, so it
  * sways; the wind leans it, and seeded impulses -- a draught, the wick's own puffing -- set it
- * flickering. The base stays on the wick.
+ * flickering. The base stays on the wick, so a flame carried along trails behind it.
  */
 static void _flame_step(Fire* fire, int index, const vec3 wind, float dt) {
     const FireParams* p = &fire->params;
-    const float h = fire->size[1];
-    const float seg = h / (float)(FIRE_SPINE_POINTS - 1);
+    const float seg = fire->flame.height / (float)(FIRE_SPINE_POINTS - 1);
     // Height breathes with the flicker: a flame that pulls itself up and drops back.
     const float stretch = 1.0f + 0.15f * p->flicker * _hash_signed((uint32_t)fire->steps, 977u);
-    glm_vec3_copy(fire->center, fire->spine[0]);
+    _flame_wick(fire, fire->spine[0]);
     for (int i = 1; i < FIRE_SPINE_POINTS; i++) {
         const float u = (float)i / (float)(FIRE_SPINE_POINTS - 1);
         vec3 target = {fire->spine[i - 1][0], fire->spine[i - 1][1] + seg * stretch,
@@ -468,7 +465,7 @@ static void _flame_step(Fire* fire, int index, const vec3 wind, float dt) {
             fire->spine_velocity[i][a] += accel[a] * dt;
             fire->spine[i][a] += fire->spine_velocity[i][a] * dt;
         }
-        fire->spine[i][3] = 0.5f * fire->size[0] * _flame_radius(u);
+        fire->spine[i][3] = 0.5f * fire->flame.width * _flame_radius(u);
     }
     fire->spine[0][3] = 0.0f;
 }
@@ -477,10 +474,11 @@ static void _flame_step(Fire* fire, int index, const vec3 wind, float dt) {
 #define FLAME_QUAD_U 24
 #define FLAME_QUAD_Q 12
 
-void fire_flame_light(Fire* fire) {
+// What a FLAME casts, from its spine: intensity, centroid and colour. Exact against what is
+// drawn, since the same profile is integrated.
+static void _flame_light(Fire* fire) {
     const FireParams* p = &fire->params;
-    vec3 blue_rgb = {0.0f, 0.0f, 0.0f};
-    fire_blue_color(blue_rgb);
+    const float* blue_rgb = fire_blue_color();
     float total = 0.0f;
     vec3 rgb_sum = GLM_VEC3_ZERO_INIT;
     vec3 weighted = GLM_VEC3_ZERO_INIT;
@@ -512,7 +510,7 @@ void fire_flame_light(Fire* fire) {
             const float area = 2.0f * GLM_PIf * radius * radius * q / (float)FLAME_QUAD_Q;
             ring_lum += (sigma * lum + glow) * area;
             glm_vec3_muladds(rgb, sigma * area, ring_rgb);
-            glm_vec3_muladds(blue_rgb, glow * area, ring_rgb);
+            glm_vec3_muladds((float*)blue_rgb, glow * area, ring_rgb);
         }
         const float dl = du_len / (float)FLAME_QUAD_U;
         total += ring_lum * dl;
@@ -524,21 +522,60 @@ void fire_flame_light(Fire* fire) {
         glm_vec3_scale(weighted, 1.0f / total, fire->centroid);
         // The light takes the colour the flame is drawn in, adapted as it is, then clamped into
         // the gamut a light can carry.
-        mat3 adapt = GLM_MAT3_IDENTITY_INIT;
-        fire_adaptation(p, adapt);
-        glm_mat3_mulv(adapt, rgb_sum, rgb_sum);
+        glm_mat3_mulv(fire->adaptation, rgb_sum, rgb_sum);
         glm_vec3_maxv(rgb_sum, GLM_VEC3_ZERO, rgb_sum);
-        const float lum = 0.2126f * rgb_sum[0] + 0.7152f * rgb_sum[1] + 0.0722f * rgb_sum[2];
+        const float lum = spectrum_luminance(rgb_sum);
         if (lum > 0.0f)
             glm_vec3_scale(rgb_sum, 1.0f / lum, fire->color);
     } else {
-        glm_vec3_copy(fire->center, fire->centroid);
+        _flame_wick(fire, fire->centroid);
     }
     fire->heat_release = 0.0f;
     fire->answered = true;
 }
 
-void fire_wind_air(const Wind* wind, double t, vec3 out) {
+/*
+ * What a FLIPBOOK fire casts: each card's baked intensity at its own frame, scaled by its area
+ * against the area the frame was made at, summed -- a card twice as wide and tall is four times
+ * the light -- at the cards' intensity-weighted centroid, in the sheet's colour. Its loop's mean
+ * is known, so that is what its vigour is taken against.
+ */
+static void _flipbook_light(Fire* fire, double t) {
+    const FireFlipbook* b = &fire->flipbook;
+    float total = 0.0f, mean = 0.0f;
+    vec3 weighted = GLM_VEC3_ZERO_INIT;
+    for (int c = 0; c < fire->cards.count; c++) {
+        const FireCard* card = &fire->cards.list[c];
+        const double pos = fire_card_frame(b, card, t);
+        const int f0 = (int)pos % b->frames;
+        const int f1 = (f0 + 1) % b->frames;
+        const float blend = (float)(pos - floor(pos));
+        vec2 size = {0.0f, 0.0f};
+        fire_card_size(fire, card, size);
+        const float scale = size[0] * size[1] / fmaxf(b->box[0] * b->box[1], 1e-6f);
+        const float i = (b->intensity[f0] + (b->intensity[f1] - b->intensity[f0]) * blend) * scale;
+        const float y = b->centroid_y[f0] + (b->centroid_y[f1] - b->centroid_y[f0]) * blend;
+        total += i;
+        mean += b->mean_intensity * scale;
+        vec3 at = {0.0f, 0.0f, 0.0f};
+        glm_vec3_add((float*)fire->origin, (float*)card->base, at);
+        at[1] += y * size[1];
+        glm_vec3_muladds(at, i, weighted);
+    }
+    fire->intensity = total * fire->params.brightness;
+    fire->mean_intensity = mean * fire->params.brightness;
+    if (total > 0.0f)
+        glm_vec3_scale(weighted, 1.0f / total, fire->centroid);
+    else
+        glm_vec3_copy(fire->origin, fire->centroid);
+    glm_vec3_copy((float*)b->color, fire->color);
+    fire->heat_release = 0.0f;
+    fire->answered = true;
+}
+
+// The air a scene's wind moves at time `t`, m/s, horizontal: what blows through a fire. Zero
+// for no wind, or one that states no air speed.
+static void _wind_air(const Wind* wind, double t, vec3 out) {
     glm_vec3_zero(out);
     if (!wind || !(wind->air_speed > 0.0f))
         return;
@@ -548,76 +585,103 @@ void fire_wind_air(const Wind* wind, double t, vec3 out) {
         glm_vec3_scale(across, wind->air_speed * wind_gust(wind, (float)t) / len, out);
 }
 
+// The steps a GRID or FLAME fire owes at the clock's step `target`, and the fire started.
+static int _steps_due(Fire* fire, const FireSystem* fs, int target) {
+    if (!fire->started) {
+        // A fire that starts has already burnt `warmup` seconds, taken in one go and uncapped,
+        // so the scene opens on it burning.
+        const int warm = (int)lroundf(fmaxf(fs->warmup, 0.0f) * fs->sim_hz);
+        fire->started = true;
+        fire->start_step = target - warm;
+        fire->steps = 0;
+        if (fire->kind == FIRE_FLAME)
+            _flame_rest(fire);
+        return warm;
+    }
+    int due = target - fire->start_step - fire->steps;
+    if (due > fs->max_steps) {
+        // Behind by more than a frame may catch up: skip the rest. A fire that stalled for a
+        // second resumes rather than racing through it.
+        fire->steps += due - fs->max_steps;
+        due = fs->max_steps;
+    }
+    return due > 0 ? due : 0;
+}
+
 void fire_update(FireSystem* fs, const Wind* wind, double t) {
     if (!fs || !(fs->sim_hz > 0.0f))
         return;
-    const double hz = (double)fs->sim_hz;
     const float dt = 1.0f / fs->sim_hz;
     // The step the clock is on, from the absolute time rather than an accumulator, so a
     // headless run takes exactly the same steps however its frames are paced.
-    const int target = (int)floor(t * hz + 1e-6);
-    vec3 air = {0.0f, 0.0f, 0.0f};
-    fire_wind_air(wind, t, air);
+    const int target = (int)floor(t * (double)fs->sim_hz + 1e-6);
+    _wind_air(wind, t, fs->air);
     for (int i = 0; i < fs->count; i++) {
         Fire* fire = &fs->fires[i];
-        if (fire->kind == FIRE_GRID)
-            fire_grid_cells(fire, fire->grid);
-        if (!fire->enabled) {
-            fire->pending = 0;
+        if (fire->node)
+            glm_vec3_copy(fire->node->global_transform[3], fire->origin);
+        else
+            glm_vec3_zero(fire->origin);
+        fire->pending = 0;
+        if (!fire->enabled)
+            continue;
+        if (fire->kind == FIRE_FLIPBOOK) {
+            // Nothing to step: the frame is a function of the clock.
+            fire->started = true;
+            if (fire->flipbook.sheet)
+                _flipbook_light(fire, t);
             continue;
         }
-        int due;
-        if (!fire->started) {
-            // A fire that starts has already burnt `warmup` seconds, taken in one go and
-            // uncapped, so the scene opens on it burning.
-            const int warm = (int)lroundf(fmaxf(fs->warmup, 0.0f) * fs->sim_hz);
-            fire->started = true;
-            fire->start_step = target - warm;
-            fire->steps = 0;
-            if (fire->kind == FIRE_FLAME)
-                _flame_rest(fire);
-            due = warm;
-        } else {
-            due = target - fire->start_step - fire->steps;
-            if (due > fs->max_steps) {
-                // Behind by more than a frame may catch up: skip the rest. A fire that
-                // stalled for a second resumes rather than racing through it.
-                fire->steps += due - fs->max_steps;
-                due = fs->max_steps;
-            }
+        const FireParams* p = &fire->params;
+        if (fire->adapted_for[0] != p->temperature || fire->adapted_for[1] != p->adaptation) {
+            _adaptation(p, fire->adaptation);
+            fire->adapted_for[0] = p->temperature;
+            fire->adapted_for[1] = p->adaptation;
         }
-        fire->pending = due > 0 ? due : 0;
+        fire->pending = _steps_due(fire, fs, target);
         if (fire->kind == FIRE_FLAME) {
+            const bool stepped = fire->pending > 0;
             for (int s = 0; s < fire->pending; s++) {
-                _flame_step(fire, i, air, dt);
+                _flame_step(fire, i, fs->air, dt);
                 fire->steps++;
             }
             fire->pending = 0;
-            fire_flame_light(fire);
-        } else if (fire->kind == FIRE_FLIPBOOK) {
-            // Nothing to step: the frame is a function of the clock.
-            fire->steps += fire->pending;
-            fire->pending = 0;
-            _flipbook_load(fire);
-            if (fire->book.loaded)
-                _flipbook_light(fire, t);
+            if (stepped || !fire->answered)
+                _flame_light(fire);
         }
     }
 }
 
-void fire_drive_light(const Fire* fire, Light* light) {
-    if (!fire || !light || !fire->answered)
+// The fire's light onto its light: a point or spot gets the intensity in candela at the
+// centroid, placed in the frame of the node it hangs on; an area panel gets the luminance that
+// gives the same intensity along its normal, and keeps its place.
+static void _drive_light(Fire* fire, SceneNode* root) {
+    Light* light = fire->light;
+    if (!light || !fire->answered)
         return;
+    if (fire->light_seen != light) {
+        fire->light_node = node_find_light(root, light);
+        fire->light_seen = light;
+    }
     const float intensity = fire->enabled ? fmaxf(fire->intensity, 0.0f) : 0.0f;
-    glm_vec3_copy((float*)fire->color, light->color);
+    glm_vec3_copy(fire->color, light->color);
     switch (light->type) {
         case LIGHT_POINT:
         case LIGHT_SPOT: {
             // Stored in the type's canonical unit, candela, whatever the light was authored in.
             light->intensity = intensity;
-            vec3 at = {0.0f, 0.0f, 0.0f};
-            glm_vec3_add((float*)fire->centroid, (float*)fire->light_offset, at);
-            light_set_position(light, at);
+            vec3 at = {0.0f, 0.0f, 0.0f}, local = {0.0f, 0.0f, 0.0f};
+            glm_vec3_add(fire->centroid, fire->light_offset, at);
+            glm_vec3_copy(at, local);
+            if (fire->light_node) {
+                mat4 inv;
+                glm_mat4_inv(fire->light_node->global_transform, inv);
+                glm_mat4_mulv3(inv, at, 1.0f, local);
+            }
+            // The authored copy in its node's frame, which the next walk carries back to `at`,
+            // and this frame's world copy, since this frame's walk has already run.
+            light_set_position(light, local);
+            glm_vec3_copy(at, light->global_position);
             break;
         }
         case LIGHT_AREA: {
@@ -629,6 +693,42 @@ void fire_drive_light(const Fire* fire, Light* light) {
         default:
             break;
     }
+}
+
+void fire_system_drive(FireSystem* fs, SceneNode* root, float dt) {
+    if (!fs)
+        return;
+    const float follow = 1.0f - expf(-fmaxf(dt, 0.0f) / FIRE_VIGOUR_SECONDS);
+    for (int i = 0; i < fs->count; i++) {
+        Fire* fire = &fs->fires[i];
+        if (fire->answered) {
+            // A flipbook's mean is its loop's; the others' is a running one.
+            if (fire->kind != FIRE_FLIPBOOK) {
+                if (fire->mean_intensity > 0.0f)
+                    fire->mean_intensity += (fire->intensity - fire->mean_intensity) * follow;
+                else
+                    fire->mean_intensity = fire->intensity;
+            }
+            fire->vigour =
+                fire->mean_intensity > 0.0f ? fire->intensity / fire->mean_intensity : 1.0f;
+        }
+        _drive_light(fire, root);
+        if (fire->embers)
+            fire->embers->emissive_drive = fire->enabled ? fire->vigour : 0.0f;
+    }
+}
+
+FireAnswer fire_answer_decode(const float t[8], const vec3 fallback_centroid) {
+    FireAnswer a = {.intensity = t[0], .color = {1.0f, 1.0f, 1.0f}, .heat_release = t[7]};
+    if (t[0] > 0.0f)
+        glm_vec3_scale((vec3){t[1], t[2], t[3]}, 1.0f / t[0], a.centroid);
+    else
+        glm_vec3_copy((float*)fallback_centroid, a.centroid);
+    const vec3 rgb = {t[4], t[5], t[6]};
+    const float lum = spectrum_luminance(rgb);
+    if (lum > 0.0f)
+        glm_vec3_scale((float*)rgb, 1.0f / lum, a.color);
+    return a;
 }
 
 // The ladder the blackbody rows are printed at: the visible threshold, a wood flame, the
@@ -654,30 +754,32 @@ void fire_probe_print(const FireSystem* fs) {
     for (int i = 0; i < fs->count; i++) {
         // The adaptation as a matrix, and what it makes of the peak's blackbody (which must come
         // out white) and of one 20% cooler.
-        mat3 adapt = GLM_MAT3_IDENTITY_INIT;
-        fire_adaptation(&fs->fires[i].params, adapt);
+        const Fire* f = &fs->fires[i];
         vec3 peak = {0.0f, 0.0f, 0.0f}, cool = {0.0f, 0.0f, 0.0f};
-        const float t_peak = fs->fires[i].params.temperature;
+        const float t_peak = f->params.temperature;
         fire_blackbody(t_peak, peak);
         fire_blackbody(0.8f * t_peak, cool);
-        glm_mat3_mulv(adapt, peak, peak);
-        glm_mat3_mulv(adapt, cool, cool);
+        glm_mat3_mulv((vec3*)f->adaptation, peak, peak);
+        glm_mat3_mulv((vec3*)f->adaptation, cool, cool);
         glm_vec3_scale(peak, 1.0f / fmaxf(glm_vec3_max(peak), 1e-30f), peak);
         glm_vec3_scale(cool, 1.0f / fmaxf(glm_vec3_max(cool), 1e-30f), cool);
         printf("fire-probe adaptation index=%d r0=%.4g,%.4g,%.4g r1=%.4g,%.4g,%.4g "
                "r2=%.4g,%.4g,%.4g peak=%.4g,%.4g,%.4g cooler=%.4g,%.4g,%.4g\n",
-               i, (double)adapt[0][0], (double)adapt[1][0], (double)adapt[2][0],
-               (double)adapt[0][1], (double)adapt[1][1], (double)adapt[2][1], (double)adapt[0][2],
-               (double)adapt[1][2], (double)adapt[2][2], (double)peak[0], (double)peak[1],
-               (double)peak[2], (double)cool[0], (double)cool[1], (double)cool[2]);
+               i, (double)f->adaptation[0][0], (double)f->adaptation[1][0],
+               (double)f->adaptation[2][0], (double)f->adaptation[0][1],
+               (double)f->adaptation[1][1], (double)f->adaptation[2][1],
+               (double)f->adaptation[0][2], (double)f->adaptation[1][2],
+               (double)f->adaptation[2][2], (double)peak[0], (double)peak[1], (double)peak[2],
+               (double)cool[0], (double)cool[1], (double)cool[2]);
     }
     for (int i = 0; i < fs->count; i++) {
         const Fire* f = &fs->fires[i];
         printf("fire-probe fire index=%d kind=%d enabled=%d steps=%d start=%d answered=%d "
-               "intensity=%.9g cx=%.9g cy=%.9g cz=%.9g r=%.9g g=%.9g b=%.9g heat=%.9g\n",
+               "intensity=%.9g cx=%.9g cy=%.9g cz=%.9g r=%.9g g=%.9g b=%.9g heat=%.9g "
+               "vigour=%.9g\n",
                i, (int)f->kind, f->enabled ? 1 : 0, f->steps, f->start_step, f->answered ? 1 : 0,
                (double)f->intensity, (double)f->centroid[0], (double)f->centroid[1],
                (double)f->centroid[2], (double)f->color[0], (double)f->color[1],
-               (double)f->color[2], (double)f->heat_release);
+               (double)f->color[2], (double)f->heat_release, (double)f->vigour);
     }
 }

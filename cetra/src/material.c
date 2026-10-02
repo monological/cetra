@@ -146,9 +146,10 @@ void material_emissive_factor(const Material* material, vec3 out) {
     glm_vec3_zero(out);
     if (!material)
         return;
-    glm_vec3_scale((float*)material->emissive, material->emissive_strength, out);
+    const float strength = material->emissive_strength * material->emissive_drive;
+    glm_vec3_scale((float*)material->emissive, strength, out);
     if (material->emissive_tex && glm_vec3_norm2((float*)material->emissive) < 1e-8f)
-        glm_vec3_fill(out, material->emissive_strength);
+        glm_vec3_fill(out, strength);
 }
 
 const MaterialParam* material_param_find(const char* key) {
@@ -250,6 +251,7 @@ static unsigned g_next_material_id = 1;
 static const Material MATERIAL_DEFAULTS = {
     .albedo = {1.0f, 1.0f, 1.0f},
     .emissive_strength = 1.0f,
+    .emissive_drive = 1.0f,
     .roughness = 1.0f,
     .ao = 1.0f,
     .opacity = 1.0f,

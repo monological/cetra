@@ -309,6 +309,13 @@ void texture_pool_probe(const TexturePool* pool, const char* label);
 Texture* texture_load_file(TexturePool* pool, const char* filepath, TextureDesc desc);
 
 /*
+ * The same for a path that already names its file, relative to the working directory or
+ * absolute, never searched for under the pool's directory: for an image another file names
+ * beside itself, which the pool's directory says nothing about. Cached by the normalised path.
+ */
+Texture* texture_load_path(TexturePool* pool, const char* path, TextureDesc desc);
+
+/*
  * The same from pixels already in memory, cached by `key`.
  *
  * The pool does NOT keep `pixels`. GL takes its own copy and Texture stores no

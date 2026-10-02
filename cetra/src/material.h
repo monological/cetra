@@ -115,8 +115,8 @@ typedef struct MaterialLayer {
 typedef struct Material {
     // SETTINGS throughout, in feature order, except:
     //
-    // ENGINE-OWNED, read only: id, owner, every *_layer index into the scene's
-    // material texture array, roads_armed, and the layers_vt cache.
+    // ENGINE-OWNED, read only: id, owner, emissive_drive, every *_layer index into
+    // the scene's material texture array, roads_armed, and the layers_vt cache.
     //
     // BY FUNCTION: every Texture* (material_set_<x>_tex, and the two indexed
     // layer setters: each retains the new texture and releases the old), and
@@ -136,6 +136,9 @@ typedef struct Material {
     vec3 albedo;
     vec3 emissive;           // Emissive color factor (multiplied with emissive texture)
     float emissive_strength; // HDR multiplier (KHR_materials_emissive_strength), feeds bloom
+    // A driver's scale over the authored emission, 1 = none: a fire's embers glowing with it.
+    // Kept apart from emissive_strength so what a scene or a GUI set is never overwritten.
+    float emissive_drive;
     float metallic;
     float roughness;
     float ao;

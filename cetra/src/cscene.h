@@ -246,6 +246,8 @@ typedef struct CSceneFire {
     char light[FIRE_MAX][CSCENE_MAX_NAME];
     // The material each fire's embers glow through, by name; "" = none.
     char embers[FIRE_MAX][CSCENE_MAX_NAME];
+    // Each FLIPBOOK fire's sidecar, resolved against the scene file; "" = none.
+    char flipbook[FIRE_MAX][CSCENE_MAX_PATH];
 } CSceneFire;
 
 /*

@@ -12,6 +12,24 @@ int json_int_or(const cJSON* obj, const char* key, int fallback) {
     return cJSON_IsNumber(item) ? (int)item->valuedouble : fallback;
 }
 
+float json_float_or(const cJSON* obj, const char* key, float fallback) {
+    const cJSON* item = cJSON_GetObjectItemCaseSensitive(obj, key);
+    return cJSON_IsNumber(item) ? (float)item->valuedouble : fallback;
+}
+
+bool json_floats(const cJSON* obj, const char* key, float* out, int n) {
+    const cJSON* arr = cJSON_GetObjectItemCaseSensitive(obj, key);
+    if (!cJSON_IsArray(arr) || cJSON_GetArraySize(arr) != n)
+        return false;
+    for (int i = 0; i < n; i++) {
+        const cJSON* v = cJSON_GetArrayItem(arr, i);
+        if (!cJSON_IsNumber(v))
+            return false;
+        out[i] = (float)v->valuedouble;
+    }
+    return true;
+}
+
 cJSON* json_float_item(float value) {
     // 9 significant digits, a sign, a point, an exponent and a terminator fit
     // inside 32 with room to spare; snprintf truncates rather than overruns if

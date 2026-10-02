@@ -7,21 +7,17 @@
 
 #include "engine.h"
 #include "fire.h"
-#include "light.h"
+#include "fire_internal.h"
+#include "mesh.h"
 #include "postfx.h"
 #include "profiler.h"
 #include "scene.h"
 #include "texture.h"
-#include "uniform.h"
 #include "util.h"
 #include "ext/log.h"
-#include "ext/stb_image.h"
 
-// The units the simulation passes bind, each pass its own ledger: inputs from 0, the solids on
-// FIRE_OBSTACLE_UNIT in every pass.
-#define FIRE_OBSTACLE_UNIT 7
-// The march's and the cards': the scene depth, the blackbody table, a GRID fire's scalars or a
-// flipbook's sheet, the fog volume.
+// The march's and the cards' units: the scene depth, the blackbody table, a GRID fire's scalars
+// or a flipbook's sheet, the fog volume.
 #define FIRE_DEPTH_UNIT     0
 #define FIRE_BLACKBODY_UNIT 1
 #define FIRE_SCALAR_UNIT    2
@@ -36,24 +32,18 @@
 #define FLAME_MARCH_PER_WIDTH 0.1f
 #define FLAME_MARCH_MAX       128
 
-static void _read_texture(GLuint tex, GLenum format, GLenum type, void* out);
-
-static int _steps_through(float length, float step, int cap) {
-    const int n = (int)ceilf(length / step) + 2;
-    return n < cap ? n : cap;
-}
-
-static GLuint _atlas_texture(int w, int h, GLenum format) {
-    GLuint tex = create_texture_2d_float(w, h, format, gl_transfer_format(format), NULL);
-    if (format == GL_R32F) {
-        // Read by texelFetch only.
-        glBindTexture(GL_TEXTURE_2D, tex);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glBindTexture(GL_TEXTURE_2D, 0);
-    }
-    return tex;
-}
+static ShaderProgram* (*const FIRE_PROGRAM_BUILD[FIRE_PROGRAM_COUNT])(void) = {
+    [FIRE_PROGRAM_ADVECT] = create_fire_advect_program,
+    [FIRE_PROGRAM_CURL] = create_fire_curl_program,
+    [FIRE_PROGRAM_REACT] = create_fire_react_program,
+    [FIRE_PROGRAM_DIVERGENCE] = create_fire_divergence_program,
+    [FIRE_PROGRAM_JACOBI] = create_fire_jacobi_program,
+    [FIRE_PROGRAM_PROJECT] = create_fire_project_program,
+    [FIRE_PROGRAM_REDUCE] = create_fire_reduce_program,
+    [FIRE_PROGRAM_SLICE] = create_fire_slice_program,
+    [FIRE_PROGRAM_MARCH] = create_fire_march_program,
+    [FIRE_PROGRAM_CARD] = create_fire_card_program,
+};
 
 FireRenderer* create_fire_renderer(void) {
     FireRenderer* r = calloc(1, sizeof(FireRenderer));
@@ -61,13 +51,6 @@ FireRenderer* create_fire_renderer(void) {
         log_error("Failed to allocate FireRenderer");
         return NULL;
     }
-    for (int i = 0; i < FIRE_PROGRAM_COUNT; i++) {
-        r->programs[i] = create_fire_program((FireProgram)i);
-        if (!r->programs[i])
-            r->failed = true;
-    }
-    if (r->failed)
-        log_error("Fire: a program failed to build; fires will not simulate or draw");
     glGenFramebuffers(1, &r->fbo);
     glGenVertexArrays(1, &r->vao);
     create_fullscreen_quad_vao(&r->quad_vao, &r->quad_vbo);
@@ -88,31 +71,14 @@ FireRenderer* create_fire_renderer(void) {
     return r;
 }
 
-static void _free_grid(FireGridGPU* g) {
-    for (int i = 0; i < 4; i++) {
-        gl_delete_texture(&g->velocity[i]);
-        gl_delete_texture(&g->scalars[i]);
-    }
-    gl_delete_texture(&g->pressure[0]);
-    gl_delete_texture(&g->pressure[1]);
-    gl_delete_texture(&g->divergence);
-    gl_delete_texture(&g->curl);
-    gl_delete_texture(&g->obstacle);
-    gl_delete_texture(&g->partial[0]);
-    gl_delete_texture(&g->partial[1]);
-    memset(g, 0, sizeof(*g));
-}
-
 void free_fire_renderer(FireRenderer* r) {
     if (!r)
         return;
     for (int i = 0; i < FIRE_PROGRAM_COUNT; i++)
         if (r->programs[i])
             free_program(r->programs[i]);
-    for (int i = 0; i < FIRE_MAX; i++) {
-        _free_grid(&r->grids[i]);
-        gl_delete_texture(&r->books[i].sheet);
-    }
+    for (int i = 0; i < FIRE_MAX; i++)
+        fire_grid_gpu_free(&r->grids[i]);
     gl_delete_fbo(&r->fbo);
     if (r->vao)
         glDeleteVertexArrays(1, &r->vao);
@@ -126,522 +92,53 @@ void free_fire_renderer(FireRenderer* r) {
     free(r);
 }
 
-// Attach up to two targets and point the draw at them.
-static void _target(FireRenderer* r, GLuint t0, GLuint t1, int x, int y, int w, int h) {
-    glBindFramebuffer(GL_FRAMEBUFFER, r->fbo);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, t0, 0);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, t1, 0);
-    static const GLenum bufs[2] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1};
-    glDrawBuffers(t1 ? 2 : 1, bufs);
-    glViewport(x, y, w, h);
+UniformManager* fire_use(FireRenderer* r, FireProgram which) {
+    if (!r->programs[which]) {
+        if (r->program_failed[which])
+            return NULL;
+        r->programs[which] = FIRE_PROGRAM_BUILD[which]();
+        if (!r->programs[which]) {
+            log_error("Fire: a program would not build; what needs it will not simulate or draw");
+            r->program_failed[which] = true;
+            return NULL;
+        }
+    }
+    glUseProgram(r->programs[which]->id);
+    return r->programs[which]->uniforms;
 }
 
-static void _bind(UniformManager* u, int unit, GLuint tex, const char* name) {
+void fire_bind(UniformManager* u, int unit, GLuint tex, const char* name) {
     glActiveTexture(GL_TEXTURE0 + (GLenum)unit);
     glBindTexture(GL_TEXTURE_2D, tex);
     uniform_set_int(u, name, unit);
 }
 
-static void _clear(FireRenderer* r, GLuint tex, int w, int h) {
-    _target(r, tex, 0, 0, 0, w, h);
-    glClear(GL_COLOR_BUFFER_BIT);
+static int _steps_through(float length, float step, int cap) {
+    const int n = (int)ceilf(length / step) + 2;
+    return n < cap ? n : cap;
 }
 
-// A grid's targets, allocated for `dims` cells and cleared; kept while the cells do not change.
-static bool _ensure_grid(FireRenderer* r, FireGridGPU* g, const int dims[3]) {
-    if (g->velocity[0] && g->dims[0] == dims[0] && g->dims[1] == dims[1] && g->dims[2] == dims[2])
-        return true;
-    _free_grid(g);
-    memcpy(g->dims, dims, sizeof(g->dims));
-    // Square-ish, so neither side of the atlas runs into the texture size limit first.
-    int across = (int)lroundf(sqrtf((float)dims[2] * (float)dims[1] / (float)dims[0]));
-    across = across < 1 ? 1 : (across > dims[2] ? dims[2] : across);
-    g->tiles[0] = across;
-    g->tiles[1] = (dims[2] + across - 1) / across;
-    g->atlas[0] = g->tiles[0] * dims[0];
-    g->atlas[1] = g->tiles[1] * dims[1];
-    const int w = g->atlas[0], h = g->atlas[1];
-    for (int i = 0; i < 4; i++) {
-        g->velocity[i] = _atlas_texture(w, h, GL_RGBA16F);
-        g->scalars[i] = _atlas_texture(w, h, GL_RGBA16F);
-    }
-    g->pressure[0] = _atlas_texture(w, h, GL_R32F);
-    g->pressure[1] = _atlas_texture(w, h, GL_R32F);
-    g->divergence = _atlas_texture(w, h, GL_R32F);
-    g->curl = _atlas_texture(w, h, GL_RGBA16F);
-    g->partial[0] = _atlas_texture(g->tiles[0], g->tiles[1], GL_RGBA32F);
-    g->partial[1] = _atlas_texture(g->tiles[0], g->tiles[1], GL_RGBA32F);
-    glGenTextures(1, &g->obstacle);
-    glBindTexture(GL_TEXTURE_2D, g->obstacle);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, w, h, 0, GL_RED, GL_UNSIGNED_BYTE, NULL);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glBindTexture(GL_TEXTURE_2D, 0);
-
-    // Freshly allocated memory is undefined, and the state starts still, cold and empty.
-    GLfloat clear[4];
-    glGetFloatv(GL_COLOR_CLEAR_VALUE, clear);
-    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
-    _target(r, g->velocity[0], 0, 0, 0, w, h);
-    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-        log_error("Fire: a grid's framebuffer is incomplete; fires will not simulate");
-        glClearColor(clear[0], clear[1], clear[2], clear[3]);
-        _free_grid(g);
-        r->failed = true;
-        return false;
-    }
-    for (int i = 0; i < 4; i++) {
-        _clear(r, g->velocity[i], w, h);
-        _clear(r, g->scalars[i], w, h);
-    }
-    _clear(r, g->pressure[0], w, h);
-    _clear(r, g->pressure[1], w, h);
-    _clear(r, g->divergence, w, h);
-    _clear(r, g->curl, w, h);
-    glClearColor(clear[0], clear[1], clear[2], clear[3]);
-    return true;
-}
-
-static uint32_t _obstacle_key(const Fire* fire) {
-    uint32_t h = fnv1a_bytes(fire->obstacles, sizeof(FireBox) * (size_t)fire->obstacle_count);
-    h ^= fnv1a_bytes(fire->center, sizeof(vec3)) * 31u;
-    h ^= fnv1a_bytes(fire->size, sizeof(vec3)) * 131u;
-    h ^= fnv1a_bytes(&fire->cell, sizeof(float)) * 1031u;
-    // Never 0, which is what a grid that has not been voxelised holds.
-    return h | 1u;
-}
-
-// The solids, a cell solid when its centre is inside any obstacle box.
-static void _build_obstacles(FireGridGPU* g, const Fire* fire) {
-    vec3 lo = {0.0f, 0.0f, 0.0f}, hi = {0.0f, 0.0f, 0.0f};
-    fire_grid_bounds(fire, lo, hi);
-    const float cell = (hi[0] - lo[0]) / (float)g->dims[0];
-    const int w = g->atlas[0], h = g->atlas[1];
-    unsigned char* data = calloc((size_t)w * (size_t)h, 1);
-    if (!data)
-        return;
-    for (int z = 0; z < g->dims[2]; z++) {
-        const int tx = (z % g->tiles[0]) * g->dims[0];
-        const int ty = (z / g->tiles[0]) * g->dims[1];
-        for (int y = 0; y < g->dims[1]; y++) {
-            for (int x = 0; x < g->dims[0]; x++) {
-                const vec3 p = {lo[0] + ((float)x + 0.5f) * cell, lo[1] + ((float)y + 0.5f) * cell,
-                                lo[2] + ((float)z + 0.5f) * cell};
-                for (int o = 0; o < fire->obstacle_count; o++) {
-                    const FireBox* b = &fire->obstacles[o];
-                    if (p[0] >= b->min[0] && p[0] <= b->max[0] && p[1] >= b->min[1] &&
-                        p[1] <= b->max[1] && p[2] >= b->min[2] && p[2] <= b->max[2]) {
-                        data[(size_t)(ty + y) * (size_t)w + (size_t)(tx + x)] = 255;
-                        break;
-                    }
-                }
-            }
-        }
-    }
-    glBindTexture(GL_TEXTURE_2D, g->obstacle);
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RED, GL_UNSIGNED_BYTE, data);
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
-    glBindTexture(GL_TEXTURE_2D, 0);
-    free(data);
-    g->obstacle_key = _obstacle_key(fire);
-}
-
-// What every simulation pass reads about the grid it runs over.
-static void _grid_uniforms(UniformManager* u, const FireGridGPU* g, const Fire* fire,
-                           const vec3 wind, float dt, float cell) {
-    const int dims[4] = {g->dims[0], g->dims[1], g->dims[2], g->tiles[0]};
-    uniform_set_ivec4(u, "gridDims", dims);
-    uniform_set_float(u, "dt", dt);
-    uniform_set_float(u, "cell", cell);
-    uniform_set_vec3(u, "wind", wind);
-    uniform_set_int(u, "floorSolid", fire->floor ? 1 : 0);
-    _bind(u, FIRE_OBSTACLE_UNIT, g->obstacle, "obstacleTex");
-}
-
-static UniformManager* _use(FireRenderer* r, FireProgram which) {
-    ShaderProgram* p = r->programs[which];
-    glUseProgram(p->id);
-    return p->uniforms;
-}
-
-static void _draw(FireRenderer* r) {
-    glBindVertexArray(r->quad_vao);
-    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-}
-
-static void _swap(GLuint* a, GLuint* b) {
-    const GLuint t = *a;
-    *a = *b;
-    *b = t;
-}
-
-/*
- * One fixed step of a GRID fire: advect, then react and force, then project. The state is in
- * index 0 of each pair before and after; every pass writes a texture none of its samplers is
- * bound to, which is why each pass binds all of them.
- */
-static void _step(FireRenderer* r, FireGridGPU* g, Fire* fire, const FireSystem* fs,
-                  const vec3 wind, float dt, float cell, const vec3 box_min) {
-    const int w = g->atlas[0], h = g->atlas[1];
-    GLuint* V = g->velocity;
-    GLuint* S = g->scalars;
-
-    UniformManager* u = _use(r, FIRE_PROGRAM_ADVECT);
-    _grid_uniforms(u, g, fire, wind, dt, cell);
-    _bind(u, 0, V[0], "velocityTex");
-    if (fs->maccormack) {
-        _target(r, V[1], S[1], 0, 0, w, h);
-        uniform_set_int(u, "mode", 0);
-        _bind(u, 1, V[0], "fromVelocity");
-        _bind(u, 2, S[0], "fromScalars");
-        _bind(u, 3, V[0], "baseVelocity");
-        _bind(u, 4, S[0], "baseScalars");
-        _bind(u, 5, V[0], "backVelocity");
-        _bind(u, 6, S[0], "backScalars");
-        _draw(r);
-        _target(r, V[2], S[2], 0, 0, w, h);
-        uniform_set_int(u, "mode", 1);
-        _bind(u, 1, V[1], "fromVelocity");
-        _bind(u, 2, S[1], "fromScalars");
-        _draw(r);
-        _target(r, V[3], S[3], 0, 0, w, h);
-        uniform_set_int(u, "mode", 2);
-        _bind(u, 5, V[2], "backVelocity");
-        _bind(u, 6, S[2], "backScalars");
-        _draw(r);
-    } else {
-        _target(r, V[3], S[3], 0, 0, w, h);
-        uniform_set_int(u, "mode", 0);
-        _bind(u, 1, V[0], "fromVelocity");
-        _bind(u, 2, S[0], "fromScalars");
-        _bind(u, 3, V[0], "baseVelocity");
-        _bind(u, 4, S[0], "baseScalars");
-        _bind(u, 5, V[0], "backVelocity");
-        _bind(u, 6, S[0], "backScalars");
-        _draw(r);
-    }
-
-    u = _use(r, FIRE_PROGRAM_CURL);
-    _grid_uniforms(u, g, fire, wind, dt, cell);
-    _target(r, g->curl, 0, 0, 0, w, h);
-    _bind(u, 0, V[3], "velocityTex");
-    _draw(r);
-
-    const FireParams* p = &fire->params;
-    u = _use(r, FIRE_PROGRAM_REACT);
-    _grid_uniforms(u, g, fire, wind, dt, cell);
-    _target(r, V[0], S[0], 0, 0, w, h);
-    _bind(u, 0, V[3], "velocityTex");
-    _bind(u, 1, S[3], "scalarTex");
-    _bind(u, 2, g->curl, "curlTex");
-    uniform_set_vec3(u, "boxMin", (float*)box_min);
-    // The fire's own clock, from its step count, so a headless run's noise is its own.
-    uniform_set_float(u, "time", (float)(fire->start_step + fire->steps) * dt);
-    uniform_set_float(u, "ambient", p->ambient);
-    uniform_set_float(u, "peakRise", fmaxf(p->temperature - p->ambient, 1.0f));
-    uniform_set_float(u, "reactionRate", p->reaction_rate);
-    uniform_set_float(u, "cooling", p->cooling);
-    uniform_set_float(u, "entrainment", p->entrainment);
-    uniform_set_float(u, "core", p->core);
-    uniform_set_float(u, "sootYield", p->soot_yield);
-    uniform_set_float(u, "sootBurnout", p->soot_burnout);
-    uniform_set_float(u, "sootBurnoutAt", p->soot_burnout_at);
-    uniform_set_float(u, "smokeFade", p->smoke_fade);
-    uniform_set_float(u, "buoyancy", p->buoyancy);
-    uniform_set_float(u, "vorticity", p->vorticity);
-    uniform_set_vec3(u, "draftMin", (float*)fire->draft.min);
-    uniform_set_vec3(u, "draftMax", (float*)fire->draft.max);
-    uniform_set_float(u, "draftSpeed", fmaxf(fire->draft_speed, 0.0f));
-    vec4 sa[FIRE_MAX_SOURCES], sb[FIRE_MAX_SOURCES], sp[FIRE_MAX_SOURCES];
-    const int sources =
-        fire->source_count < FIRE_MAX_SOURCES ? fire->source_count : FIRE_MAX_SOURCES;
-    for (int i = 0; i < sources; i++) {
-        const FireSource* s = &fire->sources[i];
-        glm_vec4_copy((vec4){s->a[0], s->a[1], s->a[2], (float)s->shape}, sa[i]);
-        glm_vec4_copy((vec4){s->b[0], s->b[1], s->b[2], s->radius}, sb[i]);
-        glm_vec4_copy((vec4){glm_clamp(s->coverage, 0.0f, 1.0f), s->lift, 0.0f, 0.0f}, sp[i]);
-    }
-    uniform_set_int(u, "sourceCount", sources);
-    if (sources > 0) {
-        uniform_set_vec4_array(u, "sourceA", (const float*)sa, sources);
-        uniform_set_vec4_array(u, "sourceB", (const float*)sb, sources);
-        uniform_set_vec4_array(u, "sourceParams", (const float*)sp, sources);
-    }
-    _draw(r);
-
-    u = _use(r, FIRE_PROGRAM_DIVERGENCE);
-    _grid_uniforms(u, g, fire, wind, dt, cell);
-    _target(r, g->divergence, 0, 0, 0, w, h);
-    _bind(u, 0, V[0], "velocityTex");
-    _bind(u, 1, S[0], "scalarTex");
-    uniform_set_float(u, "expansion", p->expansion);
-    _draw(r);
-
-    u = _use(r, FIRE_PROGRAM_JACOBI);
-    _grid_uniforms(u, g, fire, wind, dt, cell);
-    _bind(u, 1, g->divergence, "divergenceTex");
-    for (int i = 0; i < fs->jacobi_iterations; i++) {
-        _target(r, g->pressure[1], 0, 0, 0, w, h);
-        _bind(u, 0, g->pressure[0], "pressureTex");
-        _draw(r);
-        _swap(&g->pressure[0], &g->pressure[1]);
-    }
-
-    u = _use(r, FIRE_PROGRAM_PROJECT);
-    _grid_uniforms(u, g, fire, wind, dt, cell);
-    _target(r, V[1], 0, 0, 0, w, h);
-    _bind(u, 0, V[0], "velocityTex");
-    _bind(u, 1, g->pressure[0], "pressureTex");
-    _draw(r);
-    _swap(&V[0], &V[1]);
-}
-
-// A GRID fire's two sums, into its two texels of the result row: what the ring reads back and
-// what the probe compares against the CPU.
-static void _reduce(FireRenderer* r, FireGridGPU* g, const Fire* fire, int index) {
-    vec3 lo = {0.0f, 0.0f, 0.0f}, hi = {0.0f, 0.0f, 0.0f};
-    fire_grid_bounds(fire, lo, hi);
-    const float cell = (hi[0] - lo[0]) / (float)g->dims[0];
-    const FireParams* p = &fire->params;
-    UniformManager* u = _use(r, FIRE_PROGRAM_REDUCE);
-    const int dims[4] = {g->dims[0], g->dims[1], g->dims[2], g->tiles[0]};
-    uniform_set_ivec4(u, "gridDims", dims);
-    uniform_set_vec3(u, "boxMin", lo);
-    uniform_set_float(u, "cell", cell);
-    uniform_set_float(u, "ambient", p->ambient);
-    uniform_set_float(u, "sootAbsorption", p->soot_absorption);
-    uniform_set_float(u, "blueCore", p->blue_core);
-    uniform_set_float(u, "peakRise", fmaxf(p->temperature - p->ambient, 1.0f));
-    uniform_set_float(u, "cooling", p->cooling);
-    uniform_set_float(u, "brightness", p->brightness);
-    mat3 adapt = GLM_MAT3_IDENTITY_INIT;
-    fire_adaptation(p, adapt);
-    uniform_set_mat3(u, "adaptation", (const float*)adapt);
-    vec3 blue = {0.0f, 0.0f, 0.0f};
-    fire_blue_color(blue);
-    uniform_set_vec3(u, "blueColor", blue);
-    _bind(u, 1, r->blackbody_lut, "blackbodyLut");
-
-    uniform_set_int(u, "mode", 0);
-    _target(r, g->partial[0], g->partial[1], 0, 0, g->tiles[0], g->tiles[1]);
-    _bind(u, 0, g->scalars[0], "scalarTex");
-    // Not read in this mode, and bound away from the targets it writes.
-    _bind(u, 2, r->blackbody_lut, "partial0");
-    _bind(u, 3, r->blackbody_lut, "partial1");
-    _draw(r);
-
-    uniform_set_int(u, "mode", 1);
-    const int tiles[4] = {g->tiles[0], g->tiles[1], 0, 0};
-    uniform_set_ivec4(u, "tiles", tiles);
-    uniform_set_int(u, "resultBase", 2 * index);
-    _target(r, r->result_tex, 0, 2 * index, 0, 2, 1);
-    _bind(u, 2, g->partial[0], "partial0");
-    _bind(u, 3, g->partial[1], "partial1");
-    _draw(r);
-}
-
-// One fire's two texels, as fire.h states them.
-static void _take(Fire* fire, const float* t) {
-    fire->intensity = t[0];
-    if (t[0] > 0.0f)
-        glm_vec3_scale((vec3){t[1], t[2], t[3]}, 1.0f / t[0], fire->centroid);
-    else
-        glm_vec3_copy(fire->center, fire->centroid);
-    const float lum = 0.2126f * t[4] + 0.7152f * t[5] + 0.0722f * t[6];
-    if (lum > 0.0f)
-        glm_vec3_scale((vec3){t[4], t[5], t[6]}, 1.0f / lum, fire->color);
-    fire->heat_release = t[7];
-    fire->answered = true;
-}
-
-/*
- * The ring: retire the slot issued FIRE_READBACK_LATENCY frames ago, then issue this frame's
- * sums into it. No fence: the slot is always that old, and a read that has not landed stalls
- * the map rather than answering early, so the latency changes only how often a stall happens and
- * never the answer -- which is what keeps a headless run equal to itself.
- */
-static void _readback(FireRenderer* r, FireSystem* fs) {
-    const int slot = r->ring_passes % FIRE_READBACK_LATENCY;
-    const GLsizeiptr bytes = (GLsizeiptr)(2 * FIRE_MAX * 4 * sizeof(float));
-    if (r->ring_passes >= FIRE_READBACK_LATENCY) {
-        glBindBuffer(GL_PIXEL_PACK_BUFFER, r->pbo[slot]);
-        const float* data = glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, bytes, GL_MAP_READ_BIT);
-        if (data) {
-            for (int i = 0; i < fs->count; i++)
-                if (r->slot_issued[slot][i])
-                    _take(&fs->fires[i], data + 8 * i);
-            glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
-        } else {
-            log_error("Fire: the light readback could not be mapped");
-        }
-        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
-    }
-    for (int i = 0; i < FIRE_MAX; i++) {
-        const Fire* fire = i < fs->count ? &fs->fires[i] : NULL;
-        const bool issue = fire && fire->kind == FIRE_GRID && fire->enabled &&
-                           r->grids[i].velocity[0] && fire->steps > 0;
-        r->slot_issued[slot][i] = issue;
-        if (issue)
-            _reduce(r, &r->grids[i], fire, i);
-    }
-    _target(r, r->result_tex, 0, 0, 0, 2 * FIRE_MAX, 1);
-    glReadBuffer(GL_COLOR_ATTACHMENT0);
-    glBindBuffer(GL_PIXEL_PACK_BUFFER, r->pbo[slot]);
-    glReadPixels(0, 0, 2 * FIRE_MAX, 1, GL_RGBA, GL_FLOAT, NULL);
-    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
-    r->ring_passes++;
-}
-
-void fire_simulate(FireRenderer* r, Engine* engine, Scene* scene) {
-    FireSystem* fs = scene ? scene->fire : NULL;
-    if (!r || !fs)
-        return;
-    bool any_grid = false;
-    for (int i = 0; i < fs->count; i++)
-        any_grid |= fs->fires[i].kind == FIRE_GRID && fs->fires[i].enabled;
-    if (any_grid && !r->failed) {
-        profiler_scope_begin(engine->profiler, "fire sim");
-        const GLPassState pass = gl_pass_begin();
-        vec3 air = {0.0f, 0.0f, 0.0f};
-        fire_wind_air(scene->wind, engine->render_time, air);
-        const float dt = 1.0f / fs->sim_hz;
-        for (int i = 0; i < fs->count && !r->failed; i++) {
-            Fire* fire = &fs->fires[i];
-            if (fire->kind != FIRE_GRID || !fire->enabled)
-                continue;
-            FireGridGPU* g = &r->grids[i];
-            if (!_ensure_grid(r, g, fire->grid))
-                break;
-            if (g->obstacle_key != _obstacle_key(fire))
-                _build_obstacles(g, fire);
-            vec3 lo = {0.0f, 0.0f, 0.0f}, hi = {0.0f, 0.0f, 0.0f}, wind = {0.0f, 0.0f, 0.0f};
-            fire_grid_bounds(fire, lo, hi);
-            const float cell = (hi[0] - lo[0]) / (float)g->dims[0];
-            glm_vec3_scale(air, fire->params.wind_response, wind);
-            for (int s = 0; s < fire->pending; s++) {
-                _step(r, g, fire, fs, wind, dt, cell, lo);
-                fire->steps++;
-            }
-            fire->pending = 0;
-        }
-        if (!r->failed)
-            _readback(r, fs);
-        gl_pass_end(&pass);
-        check_gl_error("fire sim");
-        profiler_scope_end(engine->profiler);
-    }
-    for (int i = 0; i < fs->count; i++) {
-        fire_drive_light(&fs->fires[i], fs->fires[i].light);
-        fire_drive_embers(&fs->fires[i]);
-    }
-}
-
-// A FLAME's box: its spine's, padded by the widest radius.
-static void _flame_box(const Fire* fire, vec3 lo, vec3 hi) {
-    glm_vec3_copy((vec3){1e30f, 1e30f, 1e30f}, lo);
-    glm_vec3_copy((vec3){-1e30f, -1e30f, -1e30f}, hi);
-    float pad = 0.0f;
-    for (int i = 0; i < FIRE_SPINE_POINTS; i++) {
-        glm_vec3_minv(lo, (float*)fire->spine[i], lo);
-        glm_vec3_maxv(hi, (float*)fire->spine[i], hi);
-        pad = fmaxf(pad, fire->spine[i][3]);
-    }
-    glm_vec3_subs(lo, pad, lo);
-    glm_vec3_adds(hi, pad, hi);
-}
-
-static void _box(const Fire* fire, vec3 lo, vec3 hi) {
-    if (fire->kind == FIRE_FLAME)
-        _flame_box(fire, lo, hi);
-    else
-        fire_grid_bounds(fire, lo, hi);
-}
-
-// What the march reads about one fire: its box, its optics, and its field -- a grid's scalars or
-// a flame's spine.
-static void _march_uniforms(FireRenderer* r, UniformManager* u, const Fire* fire, int index) {
-    const FireParams* p = &fire->params;
-    vec3 lo = {0.0f, 0.0f, 0.0f}, hi = {0.0f, 0.0f, 0.0f};
-    _box(fire, lo, hi);
-    uniform_set_vec3(u, "boxMin", lo);
-    uniform_set_vec3(u, "boxMax", hi);
-    uniform_set_float(u, "ambient", p->ambient);
-    uniform_set_float(u, "sootAbsorption", p->soot_absorption);
-    uniform_set_float(u, "smokeAlbedo", glm_clamp(p->smoke_albedo, 0.0f, 0.99f));
-    uniform_set_float(u, "blueCore", p->blue_core);
-    uniform_set_float(u, "brightness", p->brightness);
-    mat3 adapt = GLM_MAT3_IDENTITY_INIT;
-    fire_adaptation(p, adapt);
-    uniform_set_mat3(u, "adaptation", (const float*)adapt);
-    vec3 blue = {0.0f, 0.0f, 0.0f};
-    fire_blue_color(blue);
-    uniform_set_vec3(u, "blueColor", blue);
-    const float diag = glm_vec3_distance(lo, hi);
+// The world box a GRID or FLAME fire is marched through: a grid's cells, or a flame's spine
+// padded by its widest radius.
+static void _march_box(const FireRenderer* r, const Fire* fire, int index, vec3 lo, vec3 hi) {
     if (fire->kind == FIRE_FLAME) {
-        const float step = fmaxf(fire->size[0] * FLAME_MARCH_PER_WIDTH, 1e-4f);
-        uniform_set_int(u, "fireKind", 1);
-        uniform_set_vec4_array(u, "spine", (const float*)fire->spine, FIRE_SPINE_POINTS);
-        uniform_set_float(u, "flameTemperature", p->temperature);
-        uniform_set_float(u, "flameSoot", p->flame_soot);
-        uniform_set_float(u, "stepLength", step);
-        uniform_set_int(u, "maxSteps", _steps_through(diag, step, FLAME_MARCH_MAX));
-        _bind(u, FIRE_SCALAR_UNIT, r->blackbody_lut, "scalarTex");
-    } else {
-        const FireGridGPU* g = &r->grids[index];
-        const float cell = (hi[0] - lo[0]) / (float)g->dims[0];
-        const float step = cell * FIRE_MARCH_PER_CELL;
-        const int dims[4] = {g->dims[0], g->dims[1], g->dims[2], g->tiles[0]};
-        uniform_set_int(u, "fireKind", 0);
-        uniform_set_int(u, "floorSolid", fire->floor ? 1 : 0);
-        uniform_set_ivec4(u, "gridDims", dims);
-        uniform_set_float(u, "cell", cell);
-        uniform_set_float(u, "stepLength", step);
-        uniform_set_int(u, "maxSteps", _steps_through(diag, step, FIRE_MARCH_MAX));
-        _bind(u, FIRE_SCALAR_UNIT, g->scalars[0], "scalarTex");
+        AABB box;
+        aabb_empty(&box);
+        float pad = 0.0f;
+        for (int i = 0; i < FIRE_SPINE_POINTS; i++) {
+            aabb_add_point(&box, fire->spine[i]);
+            pad = fmaxf(pad, fire->spine[i][3]);
+        }
+        aabb_expand(&box, pad);
+        glm_vec3_copy(box.min, lo);
+        glm_vec3_copy(box.max, hi);
+        return;
     }
-}
-
-static GLuint _load_sheet(const char* path) {
-    int w = 0, h = 0, n = 0;
-    unsigned char* px = stbi_load(path, &w, &h, &n, 4);
-    if (!px)
-        return 0;
-    GLuint tex = 0;
-    glGenTextures(1, &tex);
-    glBindTexture(GL_TEXTURE_2D, tex);
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_SRGB8_ALPHA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
-    // Mipped, since a hearth seen from across a room minifies it.
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glGenerateMipmap(GL_TEXTURE_2D);
-    glBindTexture(GL_TEXTURE_2D, 0);
-    stbi_image_free(px);
-    return tex;
-}
-
-// A FLIPBOOK fire's sheets, loaded the first time it draws from a path; a missing sheet is said
-// once.
-static bool _ensure_book(FireRenderer* r, int index, const Fire* fire) {
-    FireBookGPU* b = &r->books[index];
-    if (strcmp(b->path, fire->flipbook) == 0)
-        return b->sheet != 0;
-    gl_delete_texture(&b->sheet);
-    snprintf(b->path, sizeof(b->path), "%s", fire->flipbook);
-    char path[300];
-    snprintf(path, sizeof(path), "%s_color.png", fire->flipbook);
-    b->sheet = _load_sheet(path);
-    if (!b->sheet) {
-        log_error("Fire: '%s' has no flipbook sheet at %s", fire->name, path);
-        return false;
+    const FireGridGPU* g = &r->grids[index];
+    for (int a = 0; a < 3; a++) {
+        lo[a] = fire->origin[a] + g->lo[a];
+        hi[a] = lo[a] + (float)g->dims[a] * g->cell;
     }
-    return true;
 }
 
 // One thing the late draw composites: a marched fire (card -1) or one card of a flipbook.
@@ -651,8 +148,17 @@ typedef struct FireDrawable {
     float dist2;
 } FireDrawable;
 
-static void _card_centre(const FireCard* card, vec3 out) {
-    glm_vec3_copy((vec3){card->base[0], card->base[1] + 0.5f * card->size[1], card->base[2]}, out);
+// The frame's view, the same for every drawable.
+typedef struct FireView {
+    mat4 view_proj;
+    mat4 inv_view_proj;
+    vec2 viewport;
+} FireView;
+
+// A card's bottom centre in the world, and its size.
+static void _card_world(const Fire* fire, const FireCard* card, vec3 base, vec2 size) {
+    glm_vec3_add((float*)fire->origin, (float*)card->base, base);
+    fire_card_size(fire, card, size);
 }
 
 // The fog the late draw was handed, onto whichever program is drawing.
@@ -666,27 +172,31 @@ static void _fog_uniforms(UniformManager* u, const PostFXLateDraw* late) {
     uniform_set_float(u, "fogDepthDist", late->fog_depth_dist);
 }
 
-static void _draw_card(FireRenderer* r, const Engine* engine, const Fire* fire, int index, int c,
-                       const PostFXLateDraw* late, const mat4 view_proj) {
-    const FireBookGPU* gpu = &r->books[index];
-    const FireFlipbook* b = &fire->book;
-    const FireCard* card = &fire->cards[c];
-    UniformManager* u = _use(r, FIRE_PROGRAM_CARD);
-    uniform_set_mat4(u, "viewProj", (const float*)view_proj);
+static void _draw_card(FireRenderer* r, const Engine* engine, const Fire* fire, int c,
+                       const PostFXLateDraw* late, const FireView* fv) {
+    UniformManager* u = fire_use(r, FIRE_PROGRAM_CARD);
+    if (!u)
+        return;
+    const FireFlipbook* b = &fire->flipbook;
+    const FireCard* card = &fire->cards.list[c];
+    vec3 base = {0.0f, 0.0f, 0.0f};
+    vec2 size = {0.0f, 0.0f};
+    _card_world(fire, card, base, size);
+    uniform_set_mat4(u, "viewProj", (const float*)fv->view_proj);
     uniform_set_mat4(u, "view", (const float*)engine->view_matrix);
     uniform_set_mat4(u, "projection", (const float*)engine->projection_matrix);
     uniform_set_vec3(u, "cameraPos", engine->camera->position);
-    uniform_set_vec3(u, "cardBase", (float*)card->base);
-    uniform_set_vec2(u, "cardSize", (float*)card->size);
-    uniform_set_vec2(u, "viewport", (vec2){(float)late->width, (float)late->height});
+    uniform_set_vec3(u, "cardBase", base);
+    uniform_set_vec2(u, "cardSize", size);
+    uniform_set_vec2(u, "viewport", (float*)fv->viewport);
     const int layout[4] = {b->frames, b->cols, b->rows, 0};
     uniform_set_ivec4(u, "sheetLayout", layout);
     uniform_set_vec2(u, "frameTexels", (vec2){(float)b->width, (float)b->height});
     uniform_set_float(u, "framePos", (float)fire_card_frame(b, card, engine->render_time));
     uniform_set_float(u, "peakNits", b->peak_nits);
     uniform_set_float(u, "brightness", fire->params.brightness);
-    _bind(u, FIRE_DEPTH_UNIT, late->scene_depth, "sceneDepth");
-    _bind(u, FIRE_SCALAR_UNIT, gpu->sheet, "sheet");
+    fire_bind(u, FIRE_DEPTH_UNIT, late->scene_depth, "sceneDepth");
+    fire_bind(u, FIRE_SCALAR_UNIT, b->sheet->id, "sheet");
     _fog_uniforms(u, late);
     glDisable(GL_CULL_FACE);
     glBindVertexArray(r->vao);
@@ -695,30 +205,85 @@ static void _draw_card(FireRenderer* r, const Engine* engine, const Fire* fire, 
 
 static void _draw_marched(FireRenderer* r, const Engine* engine, const Scene* scene,
                           const Fire* fire, int index, const PostFXLateDraw* late,
-                          const mat4 view_proj) {
-    UniformManager* u = _use(r, FIRE_PROGRAM_MARCH);
-    mat4 inv_view_proj;
-    glm_mat4_inv((vec4*)view_proj, inv_view_proj);
+                          const FireView* fv) {
+    UniformManager* u = fire_use(r, FIRE_PROGRAM_MARCH);
+    if (!u)
+        return;
+    const FireParams* p = &fire->params;
+    vec3 lo = {0.0f, 0.0f, 0.0f}, hi = {0.0f, 0.0f, 0.0f};
+    _march_box(r, fire, index, lo, hi);
     uniform_set_mat4(u, "view", (const float*)engine->view_matrix);
     uniform_set_mat4(u, "projection", (const float*)engine->projection_matrix);
-    uniform_set_mat4(u, "viewProj", (const float*)view_proj);
-    uniform_set_mat4(u, "invViewProj", (const float*)inv_view_proj);
-    uniform_set_vec2(u, "viewport", (vec2){(float)late->width, (float)late->height});
+    uniform_set_mat4(u, "viewProj", (const float*)fv->view_proj);
+    uniform_set_mat4(u, "invViewProj", (const float*)fv->inv_view_proj);
+    uniform_set_vec2(u, "viewport", (float*)fv->viewport);
     uniform_set_vec3(u, "ambientRadiance", (float*)scene->ambient_radiance);
     _fog_uniforms(u, late);
-    _bind(u, FIRE_BLACKBODY_UNIT, r->blackbody_lut, "blackbodyLut");
-    _bind(u, FIRE_DEPTH_UNIT, late->scene_depth, "sceneDepth");
-    _march_uniforms(r, u, fire, index);
+    fire_bind(u, FIRE_BLACKBODY_UNIT, r->blackbody_lut, "blackbodyLut");
+    fire_bind(u, FIRE_DEPTH_UNIT, late->scene_depth, "sceneDepth");
+    uniform_set_vec3(u, "boxMin", lo);
+    uniform_set_vec3(u, "boxMax", hi);
+    uniform_set_float(u, "ambient", p->ambient);
+    uniform_set_float(u, "sootAbsorption", p->soot_absorption);
+    uniform_set_float(u, "smokeAlbedo", glm_clamp(p->smoke_albedo, 0.0f, 0.99f));
+    uniform_set_float(u, "blueCore", p->blue_core);
+    uniform_set_float(u, "brightness", p->brightness);
+    uniform_set_mat3(u, "adaptation", (const float*)fire->adaptation);
+    uniform_set_vec3(u, "blueColor", (float*)fire_blue_color());
+    const float diag = glm_vec3_distance(lo, hi);
+    if (fire->kind == FIRE_FLAME) {
+        const float step = fmaxf(fire->flame.width * FLAME_MARCH_PER_WIDTH, 1e-4f);
+        uniform_set_int(u, "fireKind", 1);
+        uniform_set_vec4_array(u, "spine", (const float*)fire->spine, FIRE_SPINE_POINTS);
+        uniform_set_float(u, "flameTemperature", p->temperature);
+        uniform_set_float(u, "flameSoot", p->flame_soot);
+        uniform_set_float(u, "stepLength", step);
+        uniform_set_int(u, "maxSteps", _steps_through(diag, step, FLAME_MARCH_MAX));
+        fire_bind(u, FIRE_SCALAR_UNIT, r->blackbody_lut, "scalarTex");
+    } else {
+        const FireGridGPU* g = &r->grids[index];
+        const float step = g->cell * FIRE_MARCH_PER_CELL;
+        const int dims[4] = {g->dims[0], g->dims[1], g->dims[2], g->tiles[0]};
+        uniform_set_int(u, "fireKind", 0);
+        uniform_set_int(u, "floorSolid", fire->grid.floor ? 1 : 0);
+        uniform_set_ivec4(u, "gridDims", dims);
+        uniform_set_float(u, "cell", g->cell);
+        uniform_set_float(u, "stepLength", step);
+        uniform_set_int(u, "maxSteps", _steps_through(diag, step, FIRE_MARCH_MAX));
+        fire_bind(u, FIRE_SCALAR_UNIT, g->scalars[0], "scalarTex");
+    }
     glEnable(GL_CULL_FACE);
     glCullFace(GL_FRONT);
     glBindVertexArray(r->vao);
     glDrawArrays(GL_TRIANGLES, 0, 36);
 }
 
+// --fire-slice, opaque, into the frame's lower-left third.
+static void _draw_slice(FireRenderer* r, const FireSystem* fs, const PostFXLateDraw* late) {
+    const int d = fs->debug_fire;
+    if (fs->debug_field < 0 || d < 0 || d >= fs->count || fs->fires[d].kind != FIRE_GRID ||
+        !r->grids[d].velocity[0])
+        return;
+    UniformManager* u = fire_use(r, FIRE_PROGRAM_SLICE);
+    if (!u)
+        return;
+    const FireGridGPU* g = &r->grids[d];
+    glDisable(GL_BLEND);
+    const int h = late->height / 2;
+    glViewport(0, 0, h * g->dims[0] / g->dims[1], h);
+    const int dims[4] = {g->dims[0], g->dims[1], g->dims[2], g->tiles[0]};
+    uniform_set_ivec4(u, "gridDims", dims);
+    uniform_set_int(u, "field", fs->debug_field);
+    uniform_set_int(u, "slice", fs->debug_slice);
+    fire_bind(u, 0, g->scalars[0], "scalarTex");
+    fire_bind(u, 1, g->velocity[0], "velocityTex");
+    draw_fullscreen_quad(r->quad_vao);
+}
+
 void fire_render_draw(FireRenderer* r, Engine* engine, const Scene* scene,
                       const PostFXLateDraw* late) {
     const FireSystem* fs = scene ? scene->fire : NULL;
-    if (!r || r->failed || !fs || !late || !late->scene_depth || !engine->camera)
+    if (!r || !fs || !late || !late->scene_depth || !engine->camera)
         return;
     profiler_scope_begin(engine->profiler, "fire");
     // Every marched fire and every card, back to front, so what is seen through what composites
@@ -729,20 +294,23 @@ void fire_render_draw(FireRenderer* r, Engine* engine, const Scene* scene,
         const Fire* fire = &fs->fires[i];
         if (!fire->enabled || !fire->started)
             continue;
-        if (fire->kind == FIRE_GRID && !r->grids[i].velocity[0])
-            continue;
         if (fire->kind == FIRE_FLIPBOOK) {
-            if (!fire->book.loaded || !_ensure_book(r, i, fire))
+            if (!fire->flipbook.sheet)
                 continue;
-            for (int c = 0; c < fire->card_count; c++) {
-                vec3 mid = {0.0f, 0.0f, 0.0f};
-                _card_centre(&fire->cards[c], mid);
-                list[n++] = (FireDrawable){i, c, glm_vec3_distance2(mid, engine->camera->position)};
+            for (int c = 0; c < fire->cards.count; c++) {
+                vec3 base = {0.0f, 0.0f, 0.0f};
+                vec2 size = {0.0f, 0.0f};
+                _card_world(fire, &fire->cards.list[c], base, size);
+                base[1] += 0.5f * size[1];
+                list[n++] =
+                    (FireDrawable){i, c, glm_vec3_distance2(base, engine->camera->position)};
             }
             continue;
         }
+        if (fire->kind == FIRE_GRID && !r->grids[i].velocity[0])
+            continue;
         vec3 lo = {0.0f, 0.0f, 0.0f}, hi = {0.0f, 0.0f, 0.0f}, mid = {0.0f, 0.0f, 0.0f};
-        _box(fire, lo, hi);
+        _march_box(r, fire, i, lo, hi);
         glm_vec3_center(lo, hi, mid);
         list[n++] = (FireDrawable){i, -1, glm_vec3_distance2(mid, engine->camera->position)};
     }
@@ -756,196 +324,23 @@ void fire_render_draw(FireRenderer* r, Engine* engine, const Scene* scene,
         list[at] = d;
     }
 
-    mat4 view_proj;
-    glm_mat4_mul(engine->projection_matrix, engine->view_matrix, view_proj);
-    const GLboolean depth_test = glIsEnabled(GL_DEPTH_TEST);
-    const GLboolean cull = glIsEnabled(GL_CULL_FACE);
-    GLint cull_mode = GL_BACK;
-    glGetIntegerv(GL_CULL_FACE_MODE, &cull_mode);
-    glDisable(GL_DEPTH_TEST);
+    FireView fv;
+    glm_mat4_copy(engine->view_proj, fv.view_proj);
+    glm_mat4_inv(fv.view_proj, fv.inv_view_proj);
+    glm_vec2_copy((vec2){(float)late->width, (float)late->height}, fv.viewport);
+    const GLPassState pass = gl_pass_begin();
     glEnable(GL_BLEND);
     glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
     for (int k = 0; k < n; k++) {
         const Fire* fire = &fs->fires[list[k].fire];
         if (list[k].card >= 0)
-            _draw_card(r, engine, fire, list[k].fire, list[k].card, late, view_proj);
+            _draw_card(r, engine, fire, list[k].card, late, &fv);
         else
-            _draw_marched(r, engine, scene, fire, list[k].fire, late, view_proj);
+            _draw_marched(r, engine, scene, fire, list[k].fire, late, &fv);
     }
     glBindVertexArray(0);
-    glCullFace((GLenum)cull_mode);
-    if (cull)
-        glEnable(GL_CULL_FACE);
-    else
-        glDisable(GL_CULL_FACE);
-    if (depth_test)
-        glEnable(GL_DEPTH_TEST);
-
-    // --fire-slice, opaque, into the frame's lower-left third.
-    const int d = fs->debug_fire;
-    if (fs->debug_field >= 0 && d >= 0 && d < fs->count && fs->fires[d].kind == FIRE_GRID &&
-        r->grids[d].velocity[0]) {
-        const FireGridGPU* g = &r->grids[d];
-        glDisable(GL_BLEND);
-        GLint vp[4];
-        glGetIntegerv(GL_VIEWPORT, vp);
-        const int h = late->height / 2;
-        const int w = h * g->dims[0] / g->dims[1];
-        glViewport(0, 0, w, h);
-        UniformManager* u = _use(r, FIRE_PROGRAM_SLICE);
-        const int dims[4] = {g->dims[0], g->dims[1], g->dims[2], g->tiles[0]};
-        uniform_set_ivec4(u, "gridDims", dims);
-        uniform_set_int(u, "field", fs->debug_field);
-        uniform_set_int(u, "slice", fs->debug_slice);
-        _bind(u, 0, g->scalars[0], "scalarTex");
-        _bind(u, 1, g->velocity[0], "velocityTex");
-        _draw(r);
-        glBindVertexArray(0);
-        glViewport(vp[0], vp[1], vp[2], vp[3]);
-    }
-    // Back to the chain's resting state, as the rain leaves it.
-    glDisable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glActiveTexture(GL_TEXTURE0);
+    _draw_slice(r, fs, late);
+    gl_pass_end(&pass);
     check_gl_error("fire draw");
     profiler_scope_end(engine->profiler);
-}
-
-static void _read_texture(GLuint tex, GLenum format, GLenum type, void* out) {
-    glBindTexture(GL_TEXTURE_2D, tex);
-    glPixelStorei(GL_PACK_ALIGNMENT, 1);
-    glGetTexImage(GL_TEXTURE_2D, 0, format, type, out);
-    glPixelStorei(GL_PACK_ALIGNMENT, 4);
-    glBindTexture(GL_TEXTURE_2D, 0);
-}
-
-void fire_render_probe(FireRenderer* r, const Scene* scene) {
-    FireSystem* fs = scene ? scene->fire : NULL;
-    if (!r || !fs || r->failed)
-        return;
-    const GLPassState pass = gl_pass_begin();
-    for (int i = 0; i < fs->count; i++) {
-        Fire* fire = &fs->fires[i];
-        FireGridGPU* g = &r->grids[i];
-        if (fire->kind != FIRE_GRID || !g->velocity[0])
-            continue;
-        const int w = g->atlas[0], h = g->atlas[1];
-        const size_t texels = (size_t)w * (size_t)h;
-        float* sca = malloc(texels * 4 * sizeof(float));
-        float* vel = malloc(texels * 4 * sizeof(float));
-        float* div = malloc(texels * sizeof(float));
-        unsigned char* solid = malloc(texels);
-        if (!sca || !vel || !div || !solid) {
-            free(sca);
-            free(vel);
-            free(div);
-            free(solid);
-            continue;
-        }
-        _read_texture(g->scalars[0], GL_RGBA, GL_FLOAT, sca);
-        _read_texture(g->velocity[0], GL_RGBA, GL_FLOAT, vel);
-        _read_texture(g->divergence, GL_RED, GL_FLOAT, div);
-        _read_texture(g->obstacle, GL_RED, GL_UNSIGNED_BYTE, solid);
-
-        vec3 lo = {0.0f, 0.0f, 0.0f}, hi = {0.0f, 0.0f, 0.0f};
-        fire_grid_bounds(fire, lo, hi);
-        const float cell = (hi[0] - lo[0]) / (float)g->dims[0];
-        const float volume = cell * cell * cell;
-        const FireParams* p = &fire->params;
-        const int X = g->dims[0], Y = g->dims[1], Z = g->dims[2];
-#define TEXEL(x, y, z) \
-    ((size_t)(((z) / g->tiles[0]) * Y + (y)) * (size_t)w + (size_t)(((z) % g->tiles[0]) * X + (x)))
-        double peak = 0.0, fuel = 0.0, soot = 0.0, solid_heat = 0.0, solid_soot = 0.0;
-        double pre_max = 0.0, pre_sq = 0.0, post_max = 0.0, post_sq = 0.0, intensity = 0.0;
-        double m[3] = {0.0, 0.0, 0.0};
-        int fluid = 0;
-        for (int z = 0; z < Z; z++) {
-            for (int y = 0; y < Y; y++) {
-                for (int x = 0; x < X; x++) {
-                    const size_t t = TEXEL(x, y, z);
-                    const float* s = &sca[4 * t];
-                    if (solid[t]) {
-                        solid_heat = fmax(solid_heat, (double)s[0]);
-                        solid_soot = fmax(solid_soot, (double)s[2]);
-                        continue;
-                    }
-                    peak = fmax(peak, (double)s[0]);
-                    fuel += (double)s[1];
-                    soot += (double)s[2];
-                    vec3 rgb = {0.0f, 0.0f, 0.0f};
-                    const float lum = fire_blackbody(p->ambient + fmaxf(s[0], 0.0f), rgb);
-                    const double e = ((double)(fmaxf(s[2], 0.0f) * p->soot_absorption * lum) +
-                                      (double)(p->blue_core * fmaxf(s[3], 0.0f))) *
-                                     (double)volume * (double)p->brightness;
-                    intensity += e;
-                    m[0] += e * (double)(lo[0] + ((float)x + 0.5f) * cell);
-                    m[1] += e * (double)(lo[1] + ((float)y + 0.5f) * cell);
-                    m[2] += e * (double)(lo[2] + ((float)z + 0.5f) * cell);
-                    // The divergence the last projection left, by the stencil the GPU used.
-                    double d = 0.0;
-                    for (int a = 0; a < 3; a++) {
-                        int q[2][3] = {{x, y, z}, {x, y, z}};
-                        q[0][a] += 1;
-                        q[1][a] -= 1;
-                        double v[2];
-                        for (int k = 0; k < 2; k++) {
-                            // fireNeighbourVelocity: a solid floor is still, an open face takes
-                            // the edge cell's own velocity.
-                            if (q[k][1] < 0 && fire->floor) {
-                                v[k] = 0.0;
-                                continue;
-                            }
-                            const int qx = q[k][0] < 0 ? 0 : (q[k][0] >= X ? X - 1 : q[k][0]);
-                            const int qy = q[k][1] < 0 ? 0 : (q[k][1] >= Y ? Y - 1 : q[k][1]);
-                            const int qz = q[k][2] < 0 ? 0 : (q[k][2] >= Z ? Z - 1 : q[k][2]);
-                            const size_t qt = TEXEL(qx, qy, qz);
-                            const bool inside = qx == q[k][0] && qy == q[k][1] && qz == q[k][2];
-                            v[k] = inside && solid[qt] ? 0.0 : (double)vel[4 * qt + (size_t)a];
-                        }
-                        d += v[0] - v[1];
-                    }
-                    // Less the expansion the core asks for, which is what the solve aims at.
-                    d = d / (2.0 * (double)cell) - (double)(p->expansion * fmaxf(s[3], 0.0f));
-                    post_max = fmax(post_max, fabs(d));
-                    post_sq += d * d;
-                    pre_max = fmax(pre_max, fabs((double)div[t]));
-                    pre_sq += (double)div[t] * (double)div[t];
-                    fluid++;
-                }
-            }
-        }
-#undef TEXEL
-        // The same sums on the GPU, this frame, rather than the ring's three frames ago.
-        _reduce(r, g, fire, i);
-        float res[2 * FIRE_MAX * 4];
-        _read_texture(r->result_tex, GL_RGBA, GL_FLOAT, res);
-        const float* got = &res[8 * i];
-        const double inv = intensity > 0.0 ? 1.0 / intensity : 0.0;
-        printf("fire-probe grid index=%d nx=%d ny=%d nz=%d tiles=%dx%d cell=%.9g fluid=%d "
-               "peak_kelvin=%.9g fuel=%.9g soot=%.9g solid_heat=%.9g solid_soot=%.9g "
-               "div_pre_max=%.9g div_pre_rms=%.9g div_post_max=%.9g div_post_rms=%.9g "
-               "cpu_intensity=%.9g gpu_intensity=%.9g cpu_cx=%.9g cpu_cy=%.9g cpu_cz=%.9g "
-               "gpu_cx=%.9g gpu_cy=%.9g gpu_cz=%.9g heat_release=%.9g\n",
-               i, X, Y, Z, g->tiles[0], g->tiles[1], (double)cell, fluid, (double)p->ambient + peak,
-               fuel, soot, solid_heat, solid_soot, pre_max, fluid ? sqrt(pre_sq / fluid) : 0.0,
-               post_max, fluid ? sqrt(post_sq / fluid) : 0.0, intensity, (double)got[0], m[0] * inv,
-               m[1] * inv, m[2] * inv, got[0] > 0.0f ? (double)(got[1] / got[0]) : 0.0,
-               got[0] > 0.0f ? (double)(got[2] / got[0]) : 0.0,
-               got[0] > 0.0f ? (double)(got[3] / got[0]) : 0.0, (double)got[7]);
-        free(sca);
-        free(vel);
-        free(div);
-        free(solid);
-    }
-    for (int i = 0; i < fs->count; i++) {
-        const Light* l = fs->fires[i].light;
-        if (!l)
-            continue;
-        printf("fire-probe light index=%d type=%d intensity=%.9g x=%.9g y=%.9g z=%.9g "
-               "area=%.9g\n",
-               i, (int)l->type, (double)l->intensity, (double)l->global_position[0],
-               (double)l->global_position[1], (double)l->global_position[2],
-               (double)(l->size[0] * l->size[1]));
-    }
-    gl_pass_end(&pass);
 }

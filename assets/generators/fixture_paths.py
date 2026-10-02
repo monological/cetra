@@ -31,9 +31,11 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ASSETS = os.path.dirname(HERE)
 
 
+# A .json is a flipbook's sidecar, which names its sheet beside itself and so sits with it.
 KIND = {".gltf": "models", ".glb": "models", ".fbx": "models",
         ".cscn": "scenes", ".ies": "ies", ".cube": "lut", ".r16": "data",
-        ".png": "textures", ".jpg": "textures", ".jpeg": "textures", ".hdr": "textures"}
+        ".png": "textures", ".jpg": "textures", ".jpeg": "textures", ".hdr": "textures",
+        ".json": "textures"}
 
 
 def asset_subpath(filename):
