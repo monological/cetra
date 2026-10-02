@@ -302,9 +302,17 @@ bool punctualNeedsFrame(uint li) {
 // invSqrAttRadius is 1/range^2, precomputed on the CPU into attenCutoff.x; 0
 // means unbounded. The near floor is a 1 cm sphere, since 1/d^2 is singular at
 // the light's own position and one INF pixel survives every clamp downstream.
+//
+// rangeFade is the window's root, and the window is its square. Split out for
+// an area panel, whose LTC integral carries its own falloff and takes the
+// window alone; returned unsquared so this function's arithmetic is unchanged.
+float rangeFade(float sqrDist, float invSqrAttRadius) {
+    float factor = sqrDist * invSqrAttRadius;
+    return clamp(1.0 - factor * factor, 0.0, 1.0);
+}
+
 float getDistanceAtt(float sqrDist, float invSqrAttRadius) {
     float atten = 1.0 / max(sqrDist, 1e-4);
-    float factor = sqrDist * invSqrAttRadius;
-    float smoothFactor = clamp(1.0 - factor * factor, 0.0, 1.0);
+    float smoothFactor = rangeFade(sqrDist, invSqrAttRadius);
     return atten * smoothFactor * smoothFactor;
 }

@@ -968,6 +968,9 @@ float oitWeight(float z) {
 float fresnelOpacity(float coverage, float materialOpacity, float iorF0, float NdotV) {
     if (materialOpacity >= 1.0)
         return coverage;
+    // A capture has no reflection for the grazing rise to stand for (captureDiffuseOnly).
+    if (captureDiffuseOnly > 0)
+        return coverage * materialOpacity;
     float f = iorF0 + (1.0 - iorF0) * pow(clamp(1.0 - NdotV, 0.0, 1.0), 5.0);
     return coverage * mix(materialOpacity, 1.0, f);
 }
@@ -1437,9 +1440,6 @@ void main() {
         // glTF: B channel contains metallic (works for grayscale too since R=G=B)
         metallicMap = metallic * texture(materialArray, vec3(uv, float(metallicLayer))).b;
     }
-    // A metal's reflection taken as diffuse in a capture: its base colour IS its specular colour.
-    if (captureDiffuseOnly > 0)
-        metallicMap = 0.0;
 
     float aoMap = ao;
     if (layered) {
@@ -1578,6 +1578,12 @@ void main() {
     RainGlass rainGlass = rainGlassDrops(N, roughnessMap, normalize(Normal), WorldPos, V,
                                          gl_FragCoord.xy, rainCover);
 #endif
+
+    // A metal's reflection taken as diffuse in a capture: its base colour IS its specular
+    // colour. After the rain, which wets only a surface's non-metal share -- zeroed before it, a
+    // wet gutter came out darker in every probe than on screen.
+    if (captureDiffuseOnly > 0)
+        metallicMap = 0.0;
 
     /*
      * DECALS, the second half: the surface a mark makes, rather than its colour.
@@ -1969,6 +1975,12 @@ void main() {
                                    clusterLights[li].dirType.xyz,
                                    clusterLights[li].upArea.xyz,
                                    clusterLights[li].shadowMisc.zw * 0.5);
+                // An authored range bounds a panel as it bounds a point light: the grid lists
+                // the panel only that far from its centre (light_cull_radius), so its light has
+                // to reach zero there too, or it ends in steps on the froxel grid.
+                vec3 toPanel = lightPos - WorldPos;
+                float panelFade = rangeFade(dot(toPanel, toPanel), clusterLights[li].attenCutoff.x);
+                ff *= panelFade * panelFade;
 
                 // See the normalization contract in ltc.glsl: no 2*pi, no 1/pi
                 vec3 areaSpec = (F0 * ltcAmp.x + (1.0 - F0) * ltcAmp.y) * ff.y;
@@ -2447,7 +2459,10 @@ void main() {
             vec3 Rc = reflect(-V, Nc);
             float ccF = fresnelSchlickRoughness(NcdotVi, vec3(0.04), ccR).r * clearcoat;
             vec2 ccBrdf = texture(brdfLUT, vec2(NcdotVi, ccR)).rg;
-            vec3 ccPre = envVisible * envRadiance(prefilteredMap, Rc, ccR * maxReflectionLOD);
+            // With one probe, prefilteredMap holds the probe's own chain, which saw the room
+            // and is never scaled; past one, it is the environment's.
+            float ccEnv = probeEnabled > 0 ? 1.0 : envVisible;
+            vec3 ccPre = ccEnv * envRadiance(prefilteredMap, Rc, ccR * maxReflectionLOD);
             vec3 coatIBL = clearcoat * ccPre * (0.04 * ccBrdf.x + ccBrdf.y);
             // The coat dims BOTH shares (it sits over the whole surface); its
             // own lobe is specular, so it joins ambSpec when splitting.
