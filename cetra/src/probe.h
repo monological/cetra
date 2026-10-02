@@ -41,14 +41,24 @@ typedef struct ReflectionProbe {
     float box_fade; // feather the parallax correction off toward the box
                     // faces, as a fraction of the box half-extent
 
+    // The scene capture's frustum planes, scene-scaled and chosen by whoever
+    // places the probe; unused by an environment-only probe.
+    float near_clip, far_clip;
+
+    // Prefilter the global environment instead of rendering the scene: on an
+    // open dome stage the imported meshes are near-field heroes a single
+    // parallax box cannot place (their baked image smears into ghosts), and SSR
+    // already reflects them on-screen -- the probe's job there is the grounded
+    // environment. A scene capture is for scenes that ARE their own environment
+    // (interiors).
+    bool environment_only;
+
     bool enabled; // runtime consumption toggle
     bool debug_background;
 
 } ReflectionProbe;
 
-// A probe is consumable once its prefiltered chain exists; keep it off the
-// scene until reflection_probe_capture succeeds and this needs no lifecycle
-// flag beyond the GUI's enabled toggle.
+// A probe is consumable once its prefiltered chain exists and it is switched on.
 static inline bool reflection_probe_active(const ReflectionProbe* probe) {
     return probe && probe->prefiltered && probe->enabled;
 }
@@ -56,21 +66,10 @@ static inline bool reflection_probe_active(const ReflectionProbe* probe) {
 ReflectionProbe* create_reflection_probe(void);
 void free_reflection_probe(ReflectionProbe* probe);
 
-// One-shot capture + GGX prefilter into probe->prefiltered. Call at load,
-// after lights/shadows/IBL and any scene-graph transforms are final; attach
-// the probe to the scene only after this succeeds. Requires precomputed IBL.
-//
-// environment_only skips the scene render and prefilters the global
-// environment cubemap instead: on an open dome stage the imported meshes
-// are near-field heroes a single parallax box cannot place (their baked
-// image smears into ghosts), and SSR already reflects them on-screen — the
-// probe's job there is the grounded environment. Scene capture (into
-// probe->cubemap, supersampled 2x, with the async texture loader drained
-// first) is for scenes that ARE their own environment (interiors). Near/far
-// are the scene-capture frustum planes (scene-scaled, chosen by the app;
-// unused for environment_only).
-int reflection_probe_capture(ReflectionProbe* probe, struct Engine* engine, struct Scene* scene,
-                             float near_clip, float far_clip, bool environment_only);
+// Capture + GGX prefilter into probe->prefiltered, at the probe's own planes.
+// A scene capture renders into probe->cubemap, supersampled 2x, with the async
+// texture loader drained first. Requires precomputed IBL.
+int reflection_probe_capture(ReflectionProbe* probe, struct Engine* engine, struct Scene* scene);
 
 // Drop the raw scene capture, keeping the prefiltered chain. For a probe whose
 // radiance has been resampled into the atlas the capture is spent: it is ~50 MB

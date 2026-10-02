@@ -249,7 +249,10 @@ typedef struct LightClusterContext {
     const char* packed_names[LC_MAX_CLUSTER_LIGHTS];
     bool warned_dir_overflow;
     bool warned_packed_overflow;
-    bool warned_index_overflow;
+    // Once for the camera's view and once for a scene capture's faces: an overflow
+    // is the VIEW's, and a sweep of capture faces at load would otherwise spend the
+    // only warning before the camera ever overflowed.
+    bool warned_index_overflow[2];
     bool logged_first_build;
     bool area_lights_enabled; // false = LIGHT_AREA lights are skipped at gather
 } LightClusterContext;
@@ -259,10 +262,11 @@ void free_light_cluster_context(LightClusterContext* ctx);
 
 // Build the three blocks from scene->lights for this invocation's camera and
 // upload them. fb_width/fb_height are the render-target dimensions
-// gl_FragCoord is measured in (the current viewport).
+// gl_FragCoord is measured in (the current viewport). `capture` = the view is a
+// scene capture's face rather than the camera's.
 void light_cluster_build_and_upload(LightClusterContext* ctx, struct Scene* scene, mat4 view,
                                     mat4 projection, int fb_width, int fb_height, float near_clip,
-                                    float far_clip);
+                                    float far_clip, bool capture);
 
 // What the last build's decal masks came to, for --decal-probe. Accessors rather
 // than a reach into the struct, because the digest is the one thing about this

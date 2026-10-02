@@ -5,6 +5,7 @@
 #include "probe_atlas.h"
 #include "light_cluster.h" // GpuProbeBlock, the block this fills half of
 #include "engine.h"
+#include "gi_volume.h"
 #include "postfx.h"
 #include "util.h"
 #include "ext/log.h"
@@ -40,20 +41,18 @@ bool probe_set_add(ReflectionProbeSet* set, ReflectionProbe* probe) {
 }
 
 void probe_set_mark_dirty(ReflectionProbeSet* set) {
-    if (set)
+    if (set) {
         set->ready = false;
+        set->failed = false;
+    }
 }
 
-bool probe_set_capture_all(ReflectionProbeSet* set, struct Engine* engine, struct Scene* scene,
-                           const float* near_clips, const float* far_clips, const bool* env_only,
-                           int row0) {
-    if (!set || set->count <= 0 || !engine || !scene)
-        return false;
-
+// Sequential and synchronous: the set is published only once all of them
+// succeed, so no probe is ever photographed into another's capture.
+static bool capture_all(ReflectionProbeSet* set, struct Engine* engine, struct Scene* scene) {
     for (int i = 0; i < set->count; ++i) {
         set->captures_total++;
-        if (reflection_probe_capture(set->probes[i], engine, scene, near_clips[i], far_clips[i],
-                                     env_only[i]) != 0) {
+        if (reflection_probe_capture(set->probes[i], engine, scene) != 0) {
             log_error("Reflection probe %d failed to capture; the set stays unpublished", i);
             return false;
         }
@@ -62,7 +61,8 @@ bool probe_set_capture_all(ReflectionProbeSet* set, struct Engine* engine, struc
     // One probe consumes its own cubemap directly on the prefilter unit, so it
     // needs no atlas and pays none of its memory.
     if (set->count >= 2) {
-        set->atlas = create_probe_atlas(engine, scene, set->count, row0);
+        if (!set->atlas)
+            set->atlas = create_probe_atlas(engine, scene, set->count, set->row0);
         if (!set->atlas)
             return false;
 
@@ -75,9 +75,18 @@ bool probe_set_capture_all(ReflectionProbeSet* set, struct Engine* engine, struc
             probe_release_capture_scratch(set->probes[i]);
         }
     }
-
-    set->ready = true;
     return true;
+}
+
+void probe_set_update(ReflectionProbeSet* set, struct Engine* engine, struct Scene* scene) {
+    if (!set || set->ready || set->failed || set->count <= 0 || !engine || !scene)
+        return;
+    if (gi_volume_pending(scene->gi_volume))
+        return;
+    if (capture_all(set, engine, scene))
+        set->ready = true;
+    else
+        set->failed = true;
 }
 
 void probe_set_fill_descriptors(const ReflectionProbeSet* set, GpuProbeBlock* out) {
@@ -167,8 +176,14 @@ void probe_set_probe_print(const ReflectionProbeSet* set, int frame, bool final)
     if (!set)
         return;
 
+    // An installed set reads "pending" until the engine has captured it, which a print from
+    // before the first frame's capture sees.
     const char* mode = "none";
-    if (probe_set_multi(set))
+    if (set->failed)
+        mode = "failed";
+    else if (set->count > 0 && !set->ready)
+        mode = "pending";
+    else if (probe_set_multi(set))
         mode = "multi";
     else if (set->count > 0)
         mode = "single";

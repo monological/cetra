@@ -152,6 +152,11 @@ void gi_volume_bind(const GIVolume* gi, ShaderProgram* program);
 // sweep's worth of data.
 bool gi_volume_active(const GIVolume* gi);
 
+// Its opening sweep is still to run: a capture now would see the scene without
+// the light this volume will give it. False for NULL and for a volume disabled,
+// failed or never fitted, none of which will ever have an answer to wait for.
+bool gi_volume_pending(const GIVolume* gi);
+
 // Draw the raw atlas over the composited frame, for acceptance.
 void gi_volume_debug_blit(const GIVolume* gi, struct Engine* engine, int screen_w, int screen_h);
 

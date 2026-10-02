@@ -158,7 +158,6 @@ static Prompt g_prompt;
 static float* g_dump;
 static size_t g_dump_frames, g_dump_cap;
 static float g_fade_seconds; // since the bounce light came in
-static bool g_probes_tried;  // the reflection probes are captured once, whether or not they took
 
 // The spawn: in the kitchen, facing the window.
 static const vec3 SPAWN_FEET = {1.5f, FLOOR_Y, 13.2f};
@@ -297,14 +296,10 @@ static void build_gi(void) {
  * and the great hall's goes up to the ridge, since the hall is open to its
  * roof: a roof outside every box reflects the sky.
  *
- * Captured once the irradiance volume has converged, and after it: a capture
- * lights what it sees with the volume only once the volume has an answer, and
- * with the open sky's ambient before that -- by day many times the volume's
- * light, so a set captured alongside the volume made every dark, glossy surface
- * in the house reflect a sky-lit room and wash out grey. The two share an
- * atlas, which the volume takes over from its own when the set allocates it.
+ * The engine captures them once the irradiance volume has converged, so they
+ * see the rooms lit by it rather than by the open sky's ambient.
  */
-static void build_probes(Engine* engine) {
+static void build_probes(void) {
     if (!g_scene->ibl || !g_scene->ibl->precomputed)
         return;
     enum { ROOMS = 4 };
@@ -327,8 +322,6 @@ static void build_probes(Engine* engine) {
     ReflectionProbeSet* set = create_reflection_probe_set();
     if (!set)
         return;
-    float near_clips[ROOMS], far_clips[ROOMS];
-    const bool env_only[ROOMS] = {false};
     for (int i = 0; i < ROOMS; i++) {
         ReflectionProbe* p = create_reflection_probe();
         if (!p)
@@ -338,15 +331,14 @@ static void build_probes(Engine* engine) {
         glm_vec3_copy((float*)rooms[i].hi, p->box_max);
         vec3 span;
         glm_vec3_sub(p->box_max, p->box_min, span);
-        near_clips[set->count] = 0.02f;
-        far_clips[set->count] = 2.0f * glm_vec3_norm(span);
+        p->near_clip = 0.02f;
+        p->far_clip = 2.0f * glm_vec3_norm(span);
         if (!probe_set_add(set, p)) {
             free_reflection_probe(p);
             break;
         }
     }
-    if (set->count == ROOMS &&
-        probe_set_capture_all(set, engine, g_scene, near_clips, far_clips, env_only, 0))
+    if (set->count == ROOMS)
         g_scene->probe_set = set;
     else
         free_reflection_probe_set(set);
@@ -609,16 +601,13 @@ static void on_pre_render(Game* game, double alpha) {
     // derived during the first frame's draw and only cast from the next, and a
     // volume's FIRST sweep is the only one taken at full weight -- a re-arm
     // blends into what is already there -- so it has to see the lit room. The
-    // reflection probes follow once, on the first frame it has converged.
-    if (engine->total_frames == 2 && !g_scene->gi_volume)
+    // reflection probes go in with it, since they are captured once it has
+    // converged and a set installed with no volume would be captured unlit.
+    if (engine->total_frames == 2 && !g_scene->gi_volume) {
         build_gi();
-    const GIVolume* gi = g_scene->gi_volume;
-    const bool lit =
-        engine->total_frames > 2 && (!gi || !gi->enabled || gi->failed || gi->dirty_count == 0);
-    if (lit && !g_probes_tried) {
-        g_probes_tried = true;
-        build_probes(engine);
+        build_probes();
     }
+    const bool lit = engine->total_frames > 2 && !gi_volume_pending(g_scene->gi_volume);
 
     // Black until the volume's opening sweep has landed, then up. That sweep
     // is one long frame, so without this the window holds the room unlit by

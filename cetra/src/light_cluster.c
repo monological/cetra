@@ -386,7 +386,9 @@ static int _popcount8(uint8_t b) {
  * one whose range wants bounding, and its radius says by how much. Counted off
  * the touch bitset the build already filled, on a path that runs once.
  */
-static void _warn_index_overflow(const LightClusterContext* ctx, int starved, uint32_t dropped) {
+static void _warn_index_overflow(const LightClusterContext* ctx, int starved, uint32_t dropped,
+                                 bool capture) {
+    const char* view = capture ? " in a scene capture" : "";
     const int num_packed = ctx->lights.light_counts[1];
     int worst = -1, worst_cover = -1;
     for (int li = 0; li < num_packed; li++) {
@@ -400,18 +402,19 @@ static void _warn_index_overflow(const LightClusterContext* ctx, int starved, ui
     }
 
     if (worst < 0) {
-        log_warn("Cluster index pool (%d) overflowed: %d of %d clusters starved, %u slots dropped",
-                 LC_MAX_CLUSTER_INDICES, starved, LC_CLUSTER_COUNT, dropped);
+        log_warn("Cluster index pool (%d) overflowed%s: %d of %d clusters starved, %u slots "
+                 "dropped",
+                 LC_MAX_CLUSTER_INDICES, view, starved, LC_CLUSTER_COUNT, dropped);
         return;
     }
 
     const char* name = ctx->packed_names[worst] ? ctx->packed_names[worst] : "unnamed";
     const float radius = ctx->view_spheres[worst][3];
-    log_warn("Cluster index pool (%d) overflowed: %d of %d clusters starved, %u slots dropped. "
+    log_warn("Cluster index pool (%d) overflowed%s: %d of %d clusters starved, %u slots dropped. "
              "Widest reach is light %d '%s', covering %d of %d clusters at radius %.0f -- bound "
              "its range",
-             LC_MAX_CLUSTER_INDICES, starved, LC_CLUSTER_COUNT, dropped, worst, name, worst_cover,
-             LC_CLUSTER_COUNT, (double)(radius < 0.0f ? 0.0f : radius));
+             LC_MAX_CLUSTER_INDICES, view, starved, LC_CLUSTER_COUNT, dropped, worst, name,
+             worst_cover, LC_CLUSTER_COUNT, (double)(radius < 0.0f ? 0.0f : radius));
 }
 
 /*
@@ -427,7 +430,7 @@ static void _warn_index_overflow(const LightClusterContext* ctx, int starved, ui
  *
  * Returns the live index count.
  */
-static uint32_t _assign_index_offsets(LightClusterContext* ctx) {
+static uint32_t _assign_index_offsets(LightClusterContext* ctx, bool capture) {
     uint32_t total = 0;
     uint32_t dropped = 0;
     int starved = 0;
@@ -445,9 +448,9 @@ static uint32_t _assign_index_offsets(LightClusterContext* ctx) {
         total += count;
     }
 
-    if (starved && !ctx->warned_index_overflow) {
-        _warn_index_overflow(ctx, starved, dropped);
-        ctx->warned_index_overflow = true;
+    if (starved && !ctx->warned_index_overflow[capture]) {
+        _warn_index_overflow(ctx, starved, dropped, capture);
+        ctx->warned_index_overflow[capture] = true;
     }
     return total;
 }
@@ -653,7 +656,7 @@ static void _mark_decal_clusters(LightClusterContext* ctx, const struct Scene* s
 
 void light_cluster_build_and_upload(LightClusterContext* ctx, struct Scene* scene, mat4 view,
                                     mat4 projection, int fb_width, int fb_height, float near_clip,
-                                    float far_clip) {
+                                    float far_clip, bool capture) {
     if (!ctx || !scene)
         return;
     // The viewport is read live, so a minimized window hands us 0 here and the
@@ -698,7 +701,7 @@ void light_cluster_build_and_upload(LightClusterContext* ctx, struct Scene* scen
 
     _gather_lights(ctx, scene, &frustum, view, projection, &cf);
     _mark_touched_clusters(ctx, &cf);
-    uint32_t total_indices = _assign_index_offsets(ctx);
+    uint32_t total_indices = _assign_index_offsets(ctx, capture);
     _fill_index_pool(ctx);
 
     // Strictly after the light pass and touching none of its three arrays: the
