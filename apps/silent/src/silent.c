@@ -42,6 +42,7 @@
 #include "prompt.h"
 #include "rain_bed.h"
 #include "house.h"
+#include "interior.h"
 #include "kitchen.h"
 #include "kit.h"
 #include "layout.h"
@@ -284,7 +285,9 @@ static void build_gi(void) {
  * environment there is, the night sky, and the hood, the sink and the floor go
  * black. Captured once, like the irradiance probes, and after them: the two
  * share an atlas, which the probes allocate with the volume's columns reserved.
- * The study's box takes in its tower bay, up to the bay's high ceiling.
+ * The study's box takes in its tower bay, up to the bay's high ceiling, and the
+ * great hall's goes up to the ridge, since the hall is open to its roof: a roof
+ * outside every box reflects the sky.
  */
 static void build_probes(Engine* engine) {
     if (!g_scene->ibl || !g_scene->ibl->precomputed)
@@ -301,7 +304,7 @@ static void build_probes(Engine* engine) {
          {HALL_X1 - 0.5f * INT_WALL, CEIL_Y, KITCHEN_BACK_Z - 0.5f * INT_WALL}},
         {{HEARTH_X, FLOOR_Y + 1.8f, 16.6f},
          {GREAT_X0, FLOOR_Y, GREAT_Z0},
-         {GREAT_X1, EAVE_Y, GREAT_Z1}},
+         {GREAT_X1, house_roof_y(0.0f), GREAT_Z1}},
         {{-4.2f, FLOOR2_Y + 1.6f, 11.4f},
          {TOWER_X - TOWER_APOTHEM, FLOOR2_Y, TOWER_Z - TOWER_APOTHEM},
          {HALL_X0 - 0.5f * INT_WALL, TOWER_CEIL_Y, KITCHEN_BACK_Z - 0.5f * INT_WALL}},
@@ -386,6 +389,7 @@ static void on_init(Game* game) {
     kit_init(&kit, g_scene, em, physics);
     mats_register(&kit, engine, g_scene);
     house_build(&kit);
+    interior_build(&kit);
     kitchen_build(&kit, (unsigned int)g_args.seed);
     lights_build(&g_lights, &kit, engine, g_scene, (unsigned int)g_args.seed, !g_args.no_flicker,
                  g_args.flashlight);

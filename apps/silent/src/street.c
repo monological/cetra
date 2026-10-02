@@ -215,5 +215,5 @@ void street_build(Kit* kit, Scene* scene, unsigned int seed, bool night) {
 
     fog(scene, night);
     if (!night)
-        mats_lamps_out(kit);
+        mats_daytime(kit);
 }

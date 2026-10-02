@@ -1,6 +1,7 @@
 #include <math.h>
 
 #include "gargoyle.h"
+#include "gothic.h"
 #include "layout.h"
 #include "mats.h"
 #include "ornament.h"
@@ -144,6 +145,23 @@ static void dress(Kit* kit, const KitFrame* f, float a0, float a1, const KitOpen
     }
 }
 
+/*
+ * The study's lancets take gothic.h's stained glass, one design to a face round from the
+ * north-west -- the rose on the face looking at the street's corner -- and each pane is the
+ * picture twice, facing out and facing in, so from inside it reads mirrored as glass does.
+ */
+static const GothicId STUDY_GLASS[5] = {GOTHIC_GLASS_STAR, GOTHIC_GLASS_LILY, GOTHIC_GLASS_ROSE,
+                                        GOTHIC_GLASS_LILY, GOTHIC_GLASS_STAR};
+
+static void stained_pane(Kit* kit, const KitFrame* f, const KitOpening* o, GothicId design) {
+    vec2 outline[KIT_OPENING_POINTS];
+    const int n = kit_opening_outline(o, outline);
+    kit_frame_card_polygon(kit, f, MAT_STAINED, outline, n, 0.003f, GOTHICS[design].uv, false);
+    kit_frame_card_polygon(kit, f, MAT_STAINED, outline, n, -0.003f, GOTHICS[design].uv, true);
+    kit_frame_box(kit, f, KIT_COLLIDER_ONLY, o->from, o->to, o->bottom, o->top + o->rise,
+                  -0.5f * EXT_WALL, 0.5f * EXT_WALL, true);
+}
+
 static void walls(Kit* kit) {
     for (int k = 0; k < FACES; k++) {
         const KitFrame f = face_at(k);
@@ -156,10 +174,12 @@ static void walls(Kit* kit) {
             if (study_window(k))
                 open[n++] = STUDY_LANCET;
             face_wall(kit, &f, s.out0, s.out1, 0.0f, TOWER_TOP, open, n);
-            for (int i = 0; i < n; i++)
-                kit_frame_pane(kit, &f,
-                               open[i].bottom < FLOOR2_Y ? MAT_DARK_GLASS : MAT_WINDOW_GLASS,
-                               &open[i], 0.0f, EXT_WALL);
+            for (int i = 0; i < n; i++) {
+                if (open[i].bottom < FLOOR2_Y)
+                    kit_frame_pane(kit, &f, MAT_DARK_GLASS, &open[i], 0.0f, EXT_WALL);
+                else
+                    stained_pane(kit, &f, &open[i], STUDY_GLASS[k - 3]);
+            }
             dress(kit, &f, s.out0, s.out1, open, n);
         }
         if (s.in1 > s.in0)

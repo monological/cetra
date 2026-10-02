@@ -34,12 +34,10 @@ static float head_at(const vec2* outline, int count, float a) {
     return top;
 }
 
-/*
- * The leaf, in a frame whose origin is its middle: oak boards with dark seams down both faces,
- * two iron straps across the outside ending in spear points, studded, with their knuckles at
- * the hinge, and a ring to pull on either side by the latch.
- */
-static void leaf(Kit* kit, const KitFrame* f, const KitOpening* o, float t) {
+// Oak boards with dark seams down both faces, two iron straps across the outside (-d) ending
+// in spear points, studded, with their knuckles at the hinge (`from`), and a ring to pull on
+// either side by the latch.
+void door_leaf(Kit* kit, const KitFrame* f, const KitOpening* o, float t) {
     vec2 outline[KIT_OPENING_POINTS];
     const int n = kit_opening_outline(o, outline);
     kit_frame_extrude(kit, f, MAT_WOOD, outline, n, -0.5f * t, 0.5f * t);
@@ -106,7 +104,7 @@ void door_build(Door* door, Engine* engine, Scene* scene, EntityManager* em, Phy
     Kit kit;
     kit_init(&kit, scene, NULL, NULL);
     mats_register(&kit, engine, scene);
-    leaf(&kit, &local, shape, thick);
+    door_leaf(&kit, &local, shape, thick);
     SceneNode* node = kit_finish(&kit, name);
 
     door->entity = create_entity(em, name);

@@ -52,6 +52,9 @@ static const GlassSpec GLASS[] = {
     // A window pane is THIN glass: no volume, so no bend and no absorption,
     // only the tint and the smear.
     {MAT_WINDOW_GLASS, 0.9f, 0.0f, {1.0f, 1.0f, 1.0f}, 0.0f},
+    // The great hall's leaded quarries, thin too: the lead is a dark albedo the light through
+    // them is multiplied by. (The study's stained glass is opaque and glows; see GLOWS.)
+    {MAT_LEADED, 0.9f, 0.0f, {1.0f, 1.0f, 1.0f}, 0.0f},
 };
 
 /*
@@ -59,12 +62,17 @@ static const GlassSpec GLASS[] = {
  * lens glow, but the light they throw is authored separately (or not at all),
  * so they are kept out of the engine's derived area panels -- which would
  * otherwise try to fit a rectangle to every lit window on the street at once.
+ * One glowing by its own picture takes its albedo map as its emissive map.
  */
 typedef struct GlowSpec {
     MatId id;
     float colour[3];
     float nits;
+    bool own_picture;
 } GlowSpec;
+
+#define STAINED_NIGHT_NITS 25.0f
+#define STAINED_DAY_NITS   1500.0f
 
 static const GlowSpec GLOWS[] = {
     {MAT_WINDOW_LIT, {1.0f, 0.70f, 0.40f}, 30.0f},
@@ -72,6 +80,14 @@ static const GlowSpec GLOWS[] = {
     // A 25 W filament through frosted glass; its light is the point light
     // lights.c hangs inside it.
     {MAT_BULB, {1.0f, 0.72f, 0.42f}, 1500.0f},
+    /*
+     * The study's stained glass, lit through by its own picture: by night faintly, as though
+     * the moon and the street were behind it, and by day (mats_daytime) as the overcast sky
+     * through it. It is OPAQUE, not a transmissive pane: the late pass writes no depth for the
+     * fog, so a pane took the fog of the whole lamp-lit street behind it and washed to grey
+     * from inside; and a pane only colours what comes through it, which at night is nothing.
+     */
+    {MAT_STAINED, {1.0f, 1.0f, 1.0f}, STAINED_NIGHT_NITS, true},
 };
 
 /*
@@ -142,6 +158,7 @@ static const RainSpec RAIN[] = {
     {MAT_CAR, 0.0f},
     {MAT_WINDOW_LIT, 0.0f, .beads = RAIN_BEADS_ON},
     {MAT_DARK_GLASS, -1.0f, .beads = RAIN_BEADS_ON},
+    {MAT_STAINED, -1.0f, .beads = RAIN_BEADS_ON},
     {MAT_GLASS_AMBER, -1.0f, .beads = RAIN_BEADS_OFF},
     {MAT_GLASS_CLEAR, -1.0f, .beads = RAIN_BEADS_OFF},
     {MAT_SIDING_DARK, 0.25f},
@@ -247,6 +264,15 @@ static const MatSpec SPECS[MAT_COUNT] = {
     // Wrought iron under black paint: the painted-metal scan's wear, taken dark.
     [MAT_IRON] = {"iron", "PaintedMetal001", {0.07f, 0.07f, 0.07f}, 0.6f, 0.0f, 0.5f},
     [MAT_LEATHER] = {"leather", "brown_leather", {1, 1, 1}, 0.7f, 0.0f, 0.4f},
+    // The clock case's lacquered cherry taken to the carved panels' red-brown, which
+    // make_gothic.py tints the same scan to, so the frames and the carving are one wood.
+    [MAT_MAHOGANY] = {"mahogany", "lacquered_cherry_wood", {1.1f, 0.61f, 0.40f}, 1.4f, 0.0f, 0.8f},
+    // tools/make_gothic.py's picture, each card placed whole by gothic.h's UVs; the repeat is
+    // unused. The glass's colour is in the picture, since a thin pane's absorption is nothing.
+    [MAT_CARVED] = {"carved_mahogany", "gothic", {1, 1, 1}, 1.0f, 0.0f, 1.0f},
+    [MAT_PERSIAN] = {"persian_rug", "gothic", {1, 1, 1}, 1.0f, 0.0f, 1.0f},
+    [MAT_STAINED] = {"stained_glass", "gothic", {1, 1, 1}, 1.0f, 0.0f, 1.0f},
+    [MAT_LEADED] = {"leaded_glass", "leaded_glass", {1, 1, 1}, 1.0f, 0.0f, 0.4f},
 };
 
 static Texture* load(TexturePool* pool, const char* set, const char* map, TextureDesc desc) {
@@ -296,6 +322,8 @@ void mats_register(Kit* kit, Engine* engine, Scene* scene) {
         glm_vec3_copy((float*)GLOWS[g].colour, m->emissive);
         m->emissive_strength = GLOWS[g].nits;
         m->emissive_light = 1; // decoration: never a derived panel
+        if (GLOWS[g].own_picture)
+            material_set_emissive_tex(m, m->albedo_tex);
     }
     for (size_t r = 0; r < sizeof(RAIN) / sizeof(RAIN[0]); r++) {
         Material* m = kit->materials[RAIN[r].id];
@@ -307,6 +335,7 @@ void mats_register(Kit* kit, Engine* engine, Scene* scene) {
     }
 }
 
-void mats_lamps_out(Kit* kit) {
+void mats_daytime(Kit* kit) {
     kit->materials[MAT_LAMP_GLOW]->emissive_strength = 0.0f;
+    kit->materials[MAT_STAINED]->emissive_strength = STAINED_DAY_NITS;
 }
