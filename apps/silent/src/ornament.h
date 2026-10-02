@@ -22,8 +22,14 @@ typedef struct Facade {
 // room sees it.
 Facade facade_of(const KitWall* w);
 Facade facade_inner(const KitWall* w);
+// The side of an axis-aligned wall facing the point (x, z) in plan: what a room there sees.
+Facade facade_toward(const KitWall* w, float x, float z);
 // The outside of a wall built in frame `f` (kit_frame_wall).
 Facade facade_of_frame(const KitFrame* f, const KitWall* w);
+
+// A box standing `proud` off the face, a0..a1 along it and y0..y1 up.
+void facade_box(Kit* kit, const Facade* s, int mat, float a0, float a1, float y0, float y1,
+                float proud);
 
 // A casing round an opening: a band this wide, standing this far off the face.
 #define ORNAMENT_CASING_W 0.08f

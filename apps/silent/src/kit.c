@@ -411,18 +411,16 @@ void kit_polygon_facing(Kit* kit, int mat, const vec3* corners, int count, const
     polygon(kit, mat, corners, count, outward, NULL, NULL);
 }
 
-/*
- * A prism over a flat base: the base and its copy `offset` along, which face away from each
- * other, and a flat quad up each edge facing out of the outline. The caller has checked the
- * outline.
- */
-static void extrude(Kit* kit, int mat, const vec3* base, int count, const vec3 offset) {
+void kit_extrude(Kit* kit, int mat_base, int mat_cap, int mat_side, const vec3* base, int count,
+                 const vec3 offset) {
+    if (!outline_ok(count))
+        return;
     vec3 top[KIT_MAX_OUTLINE] = {{0.0f}}, n = {0.0f, 0.0f, 0.0f}, back = {0.0f, 0.0f, 0.0f};
     for (int i = 0; i < count; i++)
         glm_vec3_add((float*)base[i], (float*)offset, top[i]);
     glm_vec3_negate_to((float*)offset, back);
-    kit_polygon_facing(kit, mat, top, count, offset);
-    kit_polygon_facing(kit, mat, base, count, back);
+    kit_polygon_facing(kit, mat_cap, top, count, offset);
+    kit_polygon_facing(kit, mat_base, base, count, back);
     // Which way round the outline runs about the offset decides which side of an edge is out.
     newell(base, count, n);
     const float turn = glm_vec3_dot(n, (float*)offset) >= 0.0f ? 1.0f : -1.0f;
@@ -432,7 +430,7 @@ static void extrude(Kit* kit, int mat, const vec3* base, int count, const vec3 o
         glm_vec3_sub((float*)base[j], (float*)base[i], edge);
         glm_vec3_cross(edge, (float*)offset, out);
         glm_vec3_scale(out, turn, out);
-        kit_quad_facing(kit, mat, base[i], base[j], top[j], top[i], out);
+        kit_quad_facing(kit, mat_side, base[i], base[j], top[j], top[i], out);
     }
 }
 
@@ -447,7 +445,7 @@ void kit_slab(Kit* kit, int mat, const vec2* xz, int count, float y0, float y1, 
         centre[1] += xz[i][1] / (float)count;
     }
     if (mat != KIT_COLLIDER_ONLY)
-        extrude(kit, mat, base, count, (vec3){0.0f, y1 - y0, 0.0f});
+        kit_extrude(kit, mat, mat, mat, base, count, (vec3){0.0f, y1 - y0, 0.0f});
     if (!collide && mat != KIT_COLLIDER_ONLY)
         return;
     // A convex outline is the union of, for each edge, the strip from that edge in to the
@@ -979,6 +977,46 @@ static void arch_outline(KitArchShape shape, float a0, float a1, float spring, f
     out[n][1] = spring + rise;
 }
 
+int kit_clear_spans(float lo, float hi, const vec2* blocked, int n, vec2* out) {
+    // Walked in order of where each starts, so one sort settles overlaps and gaps alike.
+    int order[KIT_MAX_OPENINGS + 2];
+    if (n > KIT_MAX_OPENINGS + 2)
+        n = KIT_MAX_OPENINGS + 2;
+    for (int i = 0; i < n; i++) {
+        order[i] = i;
+        for (int j = i; j > 0 && blocked[order[j]][0] < blocked[order[j - 1]][0]; j--) {
+            const int t = order[j];
+            order[j] = order[j - 1];
+            order[j - 1] = t;
+        }
+    }
+    int count = 0;
+    float cursor = lo;
+    for (int i = 0; i < n; i++) {
+        const float* b = blocked[order[i]];
+        if (fminf(b[0], hi) > cursor)
+            glm_vec2_copy((vec2){cursor, fminf(b[0], hi)}, out[count++]);
+        cursor = fmaxf(cursor, b[1]);
+    }
+    if (hi > cursor)
+        glm_vec2_copy((vec2){cursor, hi}, out[count++]);
+    return count;
+}
+
+int kit_arc_band(const vec2 c, float rx_out, float ry_out, float rx_in, float ry_in, float t0,
+                 float t1, int seg, vec2* out) {
+    int n = 0;
+    for (int i = 0; i <= seg; i++) {
+        const float t = t0 + (t1 - t0) * (float)i / (float)seg;
+        glm_vec2_copy((vec2){c[0] + rx_out * cosf(t), c[1] + ry_out * sinf(t)}, out[n++]);
+    }
+    for (int i = seg; i >= 0; i--) {
+        const float t = t0 + (t1 - t0) * (float)i / (float)seg;
+        glm_vec2_copy((vec2){c[0] + rx_in * cosf(t), c[1] + ry_in * sinf(t)}, out[n++]);
+    }
+    return n;
+}
+
 int kit_opening_outline(const KitOpening* o, vec2 out[KIT_OPENING_POINTS]) {
     glm_vec2_copy((vec2){o->from, o->bottom}, out[0]);
     glm_vec2_copy((vec2){o->to, o->bottom}, out[1]);
@@ -1035,7 +1073,7 @@ static void wall_spandrels(Kit* kit, const KitWallFrame* wf, const KitOpening* o
                            float offset, float thick) {
     vec2 head[KIT_ARCH_POINTS], half[KIT_ARCH_SEGMENTS + 2];
     arch_outline(o->arch, o->from, o->to, o->top, o->rise, head);
-    const float d = wf->at + offset, crown = o->top + o->rise;
+    const float d = wf->at + offset, crown = kit_opening_crown(o);
     const int n = KIT_ARCH_SEGMENTS;
     for (int i = 0; i <= n; i++)
         glm_vec2_copy(head[i], half[i]);
@@ -1095,7 +1133,7 @@ static void wall_layer(Kit* kit, const KitWall* w, const KitWallFrame* wf, int m
         for (int i = 0; i < ns; i++) {
             const KitOpening* o = stack[i];
             wall_slab(kit, wf, mat, offset, thick, a0, a1, y, o->bottom);
-            y = kit_opening_arched(o) && mat != KIT_COLLIDER_ONLY ? o->top + o->rise : o->top;
+            y = mat != KIT_COLLIDER_ONLY ? kit_opening_crown(o) : o->top;
         }
         wall_slab(kit, wf, mat, offset, thick, a0, a1, y, w->y1);
     }
@@ -1124,7 +1162,7 @@ KitWallFrame kit_wall_frame(const KitWall* w) {
     const int inner = w->inner >= 0 ? 1 : -1;
     if (w->along_x)
         return (KitWallFrame){KIT_WORLD, w->at, inner};
-    return (KitWallFrame){{{0.0f, 0.0f, 0.0f}, -0.5f * GLM_PIf}, -w->at, -inner};
+    return (KitWallFrame){KIT_WORLD_Z, -w->at, -inner};
 }
 
 void kit_wall(Kit* kit, const KitWall* w) {
@@ -1165,12 +1203,25 @@ void kit_drip(Kit* kit, const KitFrame* f, const vec3 from, const vec3 to, float
     l->ground = ground;
 }
 
+void kit_drip_run(Kit* kit, const KitFrame* f, const vec3 from, const vec3 to, float per_m,
+                  float ground) {
+    kit_drip(kit, f, from, to, per_m * glm_vec3_distance((float*)from, (float*)to), ground);
+}
+
 void kit_frame_box(Kit* kit, const KitFrame* f, int mat, float a0, float a1, float y0, float y1,
                    float d0, float d1, bool collide) {
     vec3 centre = {0.0f, 0.0f, 0.0f};
     kit_frame_point(f, 0.5f * (a0 + a1), 0.5f * (y0 + y1), 0.5f * (d0 + d1), centre);
     const vec3 half = {0.5f * fabsf(a1 - a0), 0.5f * fabsf(y1 - y0), 0.5f * fabsf(d1 - d0)};
     kit_box(kit, mat, centre, half, f->yaw, collide);
+}
+
+void kit_frame_quad(Kit* kit, const KitFrame* f, int mat, const vec3 p[4], const vec3 out) {
+    vec3 w[4] = {{0.0f}}, o = {0.0f, 0.0f, 0.0f};
+    for (int i = 0; i < 4; i++)
+        kit_frame_point(f, p[i][0], p[i][1], p[i][2], w[i]);
+    kit_frame_dir(f, out[0], out[1], out[2], o);
+    kit_quad_facing(kit, mat, w[0], w[1], w[2], w[3], o);
 }
 
 void kit_frame_box_faces(Kit* kit, const KitFrame* f, int mat, float a0, float a1, float y0,
@@ -1226,7 +1277,7 @@ void kit_frame_extrude(Kit* kit, const KitFrame* f, int mat, const vec2* outline
     if (!slot_ok(kit, mat) || !outline_at(f, outline, count, d0, base))
         return;
     kit_frame_dir(f, 0.0f, 0.0f, d1 - d0, offset);
-    extrude(kit, mat, base, count, offset);
+    kit_extrude(kit, mat, mat, mat, base, count, offset);
 }
 
 void kit_frame_run(Kit* kit, const KitFrame* f, int mat, const vec2* profile, int count, float a0,
@@ -1277,7 +1328,7 @@ void kit_frame_surround(Kit* kit, const KitFrame* f, int mat, const KitOpening* 
 }
 
 void kit_frame_plug(Kit* kit, const KitFrame* f, const KitOpening* o, float d, float thick) {
-    kit_frame_box(kit, f, KIT_COLLIDER_ONLY, o->from, o->to, o->bottom, o->top + o->rise,
+    kit_frame_box(kit, f, KIT_COLLIDER_ONLY, o->from, o->to, o->bottom, kit_opening_crown(o),
                   d - 0.5f * thick, d + 0.5f * thick, true);
 }
 
@@ -1354,8 +1405,6 @@ void kit_frame_lathe_on(Kit* kit, const KitFrame* f, int mat, const vec3 base, c
 
 void kit_frame_card(Kit* kit, const KitFrame* f, int mat, const vec3 corner, const vec3 across,
                     const vec3 up, const float uv[4]) {
-    if (!slot_ok(kit, mat))
-        return;
     vec3 p[4] = {{0.0f}}, along = {0.0f, 0.0f, 0.0f}, rise = {0.0f, 0.0f, 0.0f};
     vec3 n = {0.0f, 0.0f, 0.0f};
     kit_frame_point(f, corner[0], corner[1], corner[2], p[0]);
@@ -1365,16 +1414,17 @@ void kit_frame_card(Kit* kit, const KitFrame* f, int mat, const vec3 corner, con
     glm_vec3_add(p[1], rise, p[2]);
     glm_vec3_add(p[0], rise, p[3]);
     glm_vec3_cross(along, rise, n);
-    if (glm_vec3_norm2(n) < 1e-12f)
-        return;
-    glm_vec3_normalize(n);
     glm_vec3_normalize(along);
-    const float u[4] = {uv[0], uv[2], uv[2], uv[0]}, v[4] = {uv[1], uv[1], uv[3], uv[3]};
-    unsigned int idx[4];
-    for (int i = 0; i < 4; i++)
-        idx[i] = kit_vertex(kit, mat, p[i], n, along, u[i], v[i], 0.0f);
-    mb_tri(&kit->builders[mat], idx[0], idx[1], idx[2]);
-    mb_tri(&kit->builders[mat], idx[0], idx[2], idx[3]);
+    const vec2 tex[4] = {{uv[0], uv[1]}, {uv[2], uv[1]}, {uv[2], uv[3]}, {uv[0], uv[3]}};
+    polygon(kit, mat, p, 4, n, tex, along);
+}
+
+void kit_frame_card_lying(Kit* kit, const KitFrame* f, int mat, const float uv[4], float w, float h,
+                          float a, float y, float d, float turn) {
+    const float c = cosf(turn), s = sinf(turn);
+    const vec3 across = {w * c, 0.0f, w * s}, up = {h * s, 0.0f, -h * c};
+    const vec3 corner = {a - 0.5f * (across[0] + up[0]), y, d - 0.5f * (across[2] + up[2])};
+    kit_frame_card(kit, f, mat, corner, across, up, uv);
 }
 
 void kit_frame_card_rect(Kit* kit, const KitFrame* f, int mat, const float uv[4], float a0,

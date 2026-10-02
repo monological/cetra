@@ -26,7 +26,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFilter
 
 from fetch_textures import CACHE_DIR, ROOT, open_polyhaven
-from make_cards import place, save_rough, to_array, to_image, veneer, write_header
+from make_cards import noise, place, save_rough, to_array, to_image, veneer, write_header
 
 OUT_DIR = os.path.join(ROOT, "assets", "textures", "silent")
 HEADER = os.path.join(ROOT, "apps", "silent", "src", "gothic.h")
@@ -51,13 +51,6 @@ def grid(h, w):
     """Pixel centres as (u, v) in 0..1 across and DOWN the card, top row first."""
     v, u = np.mgrid[0:h, 0:w].astype(np.float32)
     return (u + 0.5) / w, (v + 0.5) / h
-
-
-def noise(h, w, cell, rng):
-    """Smooth value noise in 0..1, `cell` pixels to a feature."""
-    small = rng.random((max(2, h // cell + 2), max(2, w // cell + 2))).astype(np.float32)
-    img = Image.fromarray((small * 255).astype(np.uint8)).resize((w, h), Image.Resampling.BICUBIC)
-    return np.asarray(img, dtype=np.float32) / 255.0
 
 
 def mask_of(img):
@@ -371,6 +364,19 @@ CLEAR = (0.84, 0.88, 0.80)
 LANCET_W, LANCET_SPRING, LANCET_RISE = 0.7, 1.8, 0.7
 
 
+def quarries(draw, ld, w, h, q, base, tone, spread, width, rng):
+    """Diamond panes `q` pixels across over w by h, a pane past every edge, each `base` toned by
+    tone..tone + spread, and their lead `width` pixels wide."""
+    for gy in range(-q, h + q, q):
+        for gx in range(-q, w + q, q):
+            for off in (0, q // 2):
+                cx, cy = gx + off, gy + off
+                t = tone + spread * rng.random()
+                poly = [(cx, cy - q // 2), (cx + q // 2, cy), (cx, cy + q // 2), (cx - q // 2, cy)]
+                draw.polygon(poly, fill=tuple(int(255 * min(1.0, k * t)) for k in base))
+                ld.line(poly + [poly[0]], fill=255, width=width)
+
+
 def lancet(name, scheme, rng):
     """A lancet's glass, laid out for its tracery: each light a column of roundels on a field
     in diamond leading inside a border of short panes; a rose in the ring; the spandrels
@@ -385,16 +391,7 @@ def lancet(name, scheme, rng):
     mull = 0.05 * px
     light_w = (w - mull) * 0.5
     # The field: diamond panes in the background colour, a little varied.
-    q = int(0.09 * px)
-    for gy in range(-q, h + q, q):
-        for gx in range(-q, w + q, q):
-            for off in (0, q // 2):
-                cx, cy = gx + off, gy + (q // 2 if off else 0)
-                tone = 0.85 + 0.25 * rng.random()
-                c = tuple(int(255 * min(1.0, k * tone)) for k in field)
-                poly = [(cx, cy - q // 2), (cx + q // 2, cy), (cx, cy + q // 2), (cx - q // 2, cy)]
-                draw.polygon(poly, fill=c)
-                ld.line(poly + [poly[0]], fill=255, width=2)
+    quarries(draw, ld, w, h, int(0.09 * px), field, 0.85, 0.25, 2, rng)
     # Each light: a border of short panes, alternating, and three roundels up it.
     for side in (0, 1):
         x0 = side * (light_w + mull)
@@ -460,16 +457,8 @@ def leaded_glass(rng):
     img = Image.new("RGB", (s, s))
     lead = Image.new("L", (s, s), 0)
     draw, ld = ImageDraw.Draw(img), ImageDraw.Draw(lead)
-    q = s // 4  # four quarries across the tile, so it repeats
-    for gy in range(-1, 5):
-        for gx in range(-1, 5):
-            for off in (0, 1):
-                cx, cy = gx * q + off * q // 2, gy * q + off * q // 2
-                tone = 0.9 + 0.12 * rng.random()
-                tint = (0.78 * tone, 0.84 * tone, 0.76 * tone)
-                poly = [(cx, cy - q // 2), (cx + q // 2, cy), (cx, cy + q // 2), (cx - q // 2, cy)]
-                draw.polygon(poly, fill=tuple(int(255 * min(1.0, k)) for k in tint))
-                ld.line(poly + [poly[0]], fill=255, width=3)
+    # Four quarries across the tile, so it repeats.
+    quarries(draw, ld, s, s, s // 4, (0.78, 0.84, 0.76), 0.9, 0.12, 3, rng)
     a = to_array(img) * (0.9 + 0.12 * noise(s, s, 12, rng)[..., None])
     lines = mask_of(lead)
     a = a * (1 - lines[..., None]) + lines[..., None] * LEAD
@@ -487,6 +476,7 @@ LEATHERS = [np.array(c) for c in ((0.36, 0.07, 0.06), (0.10, 0.20, 0.12), (0.10,
                                   (0.28, 0.16, 0.08), (0.08, 0.06, 0.05), (0.42, 0.30, 0.16),
                                   (0.22, 0.06, 0.10))]
 STRIP_W, STRIP_H = 1.2, 0.3
+SPINE_STRIPS = 4
 
 
 def spines(name, rng):
@@ -631,13 +621,24 @@ def main():
     cards += [lancet(name, scheme, rng) for name, scheme in GLASS_SCHEMES.items()]
     extra = ["// The spines in each strip: the edges between books, in metres from its left.",
              "// Book i of a strip is between edges i and i + 1."]
-    for k in range(4):
+    for k in range(SPINE_STRIPS):
         c, edges = spines("spines_%d" % k, rng)
         cards.append(c)
         extra.append("static const float GOTHIC_SPINES_%d_EDGES[] = {%s};" % (
             k, ", ".join("%.4ff" % e for e in edges)))
         extra.append("#define GOTHIC_SPINES_%d_BOOKS %d" % (k, len(edges) - 1))
-    extra.append("")
+    extra += ["",
+              "// Every strip, for a shelf to pick from.",
+              "typedef struct GothicStrip {",
+              "    GothicId id;",
+              "    const float* edges;",
+              "    int books;",
+              "} GothicStrip;",
+              "#define GOTHIC_STRIP_COUNT %d" % SPINE_STRIPS,
+              "static const GothicStrip GOTHIC_STRIPS[GOTHIC_STRIP_COUNT] = {"]
+    extra += ["    {GOTHIC_SPINES_%d, GOTHIC_SPINES_%d_EDGES, GOTHIC_SPINES_%d_BOOKS}," % (k, k, k)
+              for k in range(SPINE_STRIPS)]
+    extra += ["};", ""]
     cards += [coat_of_arms(rng), fireback(rng), flame("flame_a", rng), flame("flame_b", rng)]
 
     spots = place(cards, ATLAS)
@@ -668,8 +669,8 @@ def main():
         out("leaded_glass_rough.png"))
     print(out("leaded_glass_albedo.png"))
 
-    write_header(cards, spots, path=HEADER, prefix="GOTHIC", kind="Gothic",
-                 picture="gothic_albedo.png", tool="make_gothic.py", atlas=ATLAS, extra=extra)
+    write_header(cards, spots, path=HEADER, prefix="GOTHIC", picture="gothic_albedo.png",
+                 atlas=ATLAS, extra=extra)
     return 0
 
 

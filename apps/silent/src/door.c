@@ -14,7 +14,7 @@ static void pose(const Door* door, vec3 centre, float* yaw) {
     const float eased = glm_smoothstep(0.0f, 1.0f, door->travel);
     *yaw = door->yaw - door->swing * eased;
     const float half_w = 0.5f * (door->shape.to - door->shape.from);
-    const float half_h = 0.5f * (door->shape.top + door->shape.rise - door->shape.bottom);
+    const float half_h = 0.5f * (kit_opening_crown(&door->shape) - door->shape.bottom);
     const KitFrame now = {{door->hinge[0], door->hinge[1], door->hinge[2]}, *yaw};
     kit_frame_point(&now, door->shape.from + half_w, 0.0f, 0.0f, centre);
     centre[1] = door->shape.bottom + half_h;
@@ -49,7 +49,7 @@ void door_leaf(Kit* kit, const KitFrame* f, const KitOpening* o, float t) {
                           d + (float)side * 0.001f, false);
         }
     }
-    const float out = -0.5f * t, h = o->top + o->rise - o->bottom;
+    const float out = -0.5f * t, h = kit_opening_crown(o) - o->bottom;
     const float heights[2] = {o->bottom + 0.28f, o->bottom + 0.62f * h};
     for (int s = 0; s < 2; s++) {
         const float y = heights[s], end = o->from + 0.76f * w;
@@ -105,7 +105,7 @@ bool door_build(Door* door, Engine* engine, Scene* scene, EntityManager* em, Phy
 
     // Built round the leaf's middle, so the node's transform is the leaf's place and turn.
     const float half_w = 0.5f * (shape->to - shape->from);
-    const float half_h = 0.5f * (shape->top + shape->rise - shape->bottom);
+    const float half_h = 0.5f * (kit_opening_crown(shape) - shape->bottom);
     const KitFrame local = {{-(shape->from + half_w), -(shape->bottom + half_h), 0.0f}, 0.0f};
     Kit kit;
     kit_init(&kit, scene, NULL, NULL);

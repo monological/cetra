@@ -524,11 +524,8 @@ static void pin_card(Kit* kit, const KitFrame* f, CardId card, float a, float y,
 // radians; its top is away from someone standing at +d.
 static void lay_card(Kit* kit, const KitFrame* f, CardId card, float a, float d, float y,
                      float turn) {
-    const float w = CARDS[card].size[0], h = CARDS[card].size[1];
-    const float c = cosf(turn), s = sinf(turn);
-    const vec3 across = {w * c, 0.0f, w * s}, up = {h * s, 0.0f, -h * c};
-    const vec3 corner = {a - 0.5f * (across[0] + up[0]), y, d - 0.5f * (across[2] + up[2])};
-    kit_frame_card(kit, f, MAT_CARDS, corner, across, up, CARDS[card].uv);
+    kit_frame_card_lying(kit, f, MAT_CARDS, CARDS[card].uv, CARDS[card].size[0],
+                         CARDS[card].size[1], a, y, d, turn);
 }
 
 // A round fridge magnet on a surface facing out at d.

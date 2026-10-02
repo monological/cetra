@@ -40,9 +40,9 @@ enum {
 
 const KitWall* house_wall(HouseWall which);
 
-// The doors that open, hung in their openings into `doors`, at most `max`; returns how many.
-int house_doors(Door* doors, int max, Engine* engine, Scene* scene, EntityManager* em,
-                PhysicsWorld* physics);
+// The one door that opens, the front door, hung in its opening; false if it could not be.
+bool house_front_door(Door* door, Engine* engine, Scene* scene, EntityManager* em,
+                      PhysicsWorld* physics);
 
 // The main roof's top over x, and its underside: its ridge runs front to back on x = 0, and
 // the slopes fall to the side walls.

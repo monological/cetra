@@ -58,24 +58,11 @@ float house_roof_under_y(float x) {
  */
 static void roof_slab(Kit* kit, const vec2* xz, int count, float y0, float gx, float gz,
                       float thick) {
-    vec3 top[KIT_MAX_OUTLINE] = {{0.0f}}, under[KIT_MAX_OUTLINE] = {{0.0f}};
-    float area = 0.0f;
-    for (int i = 0; i < count; i++) {
-        const float y = y0 + gx * xz[i][0] + gz * xz[i][1];
-        glm_vec3_copy((vec3){xz[i][0], y, xz[i][1]}, top[i]);
-        glm_vec3_copy((vec3){xz[i][0], y - thick, xz[i][1]}, under[i]);
-        const float* q = xz[(i + 1) % count];
-        area += xz[i][0] * q[1] - q[0] * xz[i][1];
-    }
-    kit_polygon_facing(kit, MAT_SLATE, top, count, (vec3){-gx, 1.0f, -gz});
-    kit_polygon_facing(kit, MAT_MAHOGANY, under, count, (vec3){gx, -1.0f, gz});
-    // Out of the outline is to the right of each edge when it runs counter-clockwise.
-    const float turn = area > 0.0f ? 1.0f : -1.0f;
-    for (int i = 0; i < count; i++) {
-        const int j = (i + 1) % count;
-        const vec3 out = {turn * (xz[j][1] - xz[i][1]), 0.0f, -turn * (xz[j][0] - xz[i][0])};
-        kit_quad_facing(kit, MAT_SIDING_DARK, top[i], top[j], under[j], under[i], out);
-    }
+    vec3 top[KIT_MAX_OUTLINE] = {{0.0f}};
+    for (int i = 0; i < count && i < KIT_MAX_OUTLINE; i++)
+        glm_vec3_copy((vec3){xz[i][0], y0 + gx * xz[i][0] + gz * xz[i][1], xz[i][1]}, top[i]);
+    kit_extrude(kit, MAT_SLATE, MAT_MAHOGANY, MAT_SIDING_DARK, top, count,
+                (vec3){0.0f, -thick, 0.0f});
 }
 
 /*
@@ -94,16 +81,6 @@ static void main_roof(Kit* kit) {
     const vec2 east[4] = {{0.0f, z0}, {x_eave, z0}, {x_eave, z1}, {0.0f, z1}};
     roof_slab(kit, east, 4, ridge, -MAIN_PITCH, 0.0f, ROOF_THICK);
 
-    const float side = HOUSE_X1 + CORNER;
-    const vec2 front[4] = {{FRONT_FROM, EAVE_Y},
-                           {side, EAVE_Y},
-                           {0.0f, ridge},
-                           {FRONT_FROM, house_roof_y(FRONT_FROM)}};
-    kit_frame_extrude(kit, &KIT_WORLD, MAT_SIDING_DARK, front, 4, HOUSE_FRONT_Z - CORNER,
-                      HOUSE_FRONT_Z + CORNER);
-    const vec2 back[3] = {{-side, EAVE_Y}, {side, EAVE_Y}, {0.0f, ridge}};
-    kit_frame_extrude(kit, &KIT_WORLD, MAT_SIDING_DARK, back, 3, HOUSE_BACK_Z - CORNER,
-                      HOUSE_BACK_Z + CORNER);
     const vec2 inner[5] = {{HOUSE_X0, EAVE_Y},
                            {HOUSE_X1, EAVE_Y},
                            {HOUSE_X1, house_roof_y(HOUSE_X1)},
@@ -112,35 +89,47 @@ static void main_roof(Kit* kit) {
     kit_frame_extrude(kit, &KIT_WORLD, MAT_PLASTER, inner, 5, KITCHEN_BACK_Z - 0.5f * INT_WALL,
                       KITCHEN_BACK_Z + 0.5f * INT_WALL);
 
-    // The gables dressed: boards up to the rakes, a cusped bargeboard down each one at the
-    // roof's edge, and a finial at each apex with its pendant; iron cresting along the ridge.
-    const Facade fronts[2] = {facade_of(house_wall(HOUSE_WALL_FRONT)),
-                              facade_of(house_wall(HOUSE_WALL_BACK))};
-    const float edges[2] = {z0, z1};
-    const float tower_face = FRONT_FROM + CORNER;
+    /*
+     * The gables, each a wall up to the roof from the eave and dressed: boards up to the rakes,
+     * a cusped bargeboard down each one at the roof's edge, and a finial at its apex with its
+     * pendant. The front one stops at the tower's face, its boards and its west rake with it.
+     */
+    const float side = HOUSE_X1 + CORNER, tower_face = FRONT_FROM + CORNER;
+    const struct {
+        HouseWall wall;
+        float z, edge;  // the wall's middle, and the roof's edge over it
+        float from;     // where the wall starts along x, the west end
+        float boards;   // where its boards start
+        float rake_end; // where its west bargeboard ends
+    } gables[2] = {{HOUSE_WALL_FRONT, HOUSE_FRONT_Z, z0, FRONT_FROM, tower_face, tower_face},
+                   {HOUSE_WALL_BACK, HOUSE_BACK_Z, z1, -side, -side, -x_eave}};
     for (int g = 0; g < 2; g++) {
-        const float from = g == 0 ? tower_face : -side;
-        ornament_gable_battens(kit, &fronts[g], from + 0.1f, side - 0.1f, EAVE_Y + 0.04f, 0.0f,
+        const float from = gables[g].from, d = gables[g].edge;
+        // A back gable starting at the corner has no fourth corner: the rake starts there.
+        const vec2 wall[4] = {
+            {from, EAVE_Y}, {side, EAVE_Y}, {0.0f, ridge}, {from, house_roof_y(from)}};
+        kit_frame_extrude(kit, &KIT_WORLD, MAT_SIDING_DARK, wall, from > -side ? 4 : 3,
+                          gables[g].z - CORNER, gables[g].z + CORNER);
+        const Facade s = facade_of(house_wall(gables[g].wall));
+        ornament_gable_battens(kit, &s, gables[g].boards + 0.1f, side - 0.1f, EAVE_Y + 0.04f, 0.0f,
                                ridge, MAIN_PITCH);
-        const float d = edges[g];
         const vec2 apex = {0.0f, ridge + 0.03f};
         const vec2 right = {x_eave, house_roof_y(x_eave) + 0.03f};
-        const float left_x = g == 0 ? tower_face : -x_eave;
-        const vec2 left = {left_x, house_roof_y(left_x) + 0.03f};
+        const vec2 left = {gables[g].rake_end, house_roof_y(gables[g].rake_end) + 0.03f};
         ornament_bargeboard(kit, &KIT_WORLD, right, apex, d - 0.02f, d + 0.02f);
         ornament_bargeboard(kit, &KIT_WORLD, left, apex, d - 0.02f, d + 0.02f);
         ornament_finial(kit, &KIT_WORLD, MAT_SIDING_DARK, 0.0f, ridge + 0.03f, d, 1.2f, 0.7f);
     }
-    const KitFrame ridge_line = {{0.0f, 0.0f, 0.0f}, -0.5f * GLM_PIf};
+    const KitFrame ridge_line = KIT_WORLD_Z;
     ornament_cresting(kit, &ridge_line, z0 + 0.3f, z1 - 0.3f, ridge, 0.0f);
 
     // The bare side eaves drip, the west one from past the tower.
     const float drip_y = house_roof_under_y(x_eave);
     const float west_from = TOWER_Z + TOWER_OUTER + 0.1f;
-    kit_drip(kit, &KIT_WORLD, (vec3){-x_eave, drip_y, west_from}, (vec3){-x_eave, drip_y, z1},
-             EAVE_DRIPS_PER_M * (z1 - west_from), 0.0f);
-    kit_drip(kit, &KIT_WORLD, (vec3){x_eave, drip_y, z0}, (vec3){x_eave, drip_y, z1},
-             EAVE_DRIPS_PER_M * (z1 - z0), 0.0f);
+    kit_drip_run(kit, &KIT_WORLD, (vec3){-x_eave, drip_y, west_from}, (vec3){-x_eave, drip_y, z1},
+                 EAVE_DRIPS_PER_M, 0.0f);
+    kit_drip_run(kit, &KIT_WORLD, (vec3){x_eave, drip_y, z0}, (vec3){x_eave, drip_y, z1},
+                 EAVE_DRIPS_PER_M, 0.0f);
 }
 
 /*
@@ -212,7 +201,7 @@ static void pent_roof(Kit* kit) {
     const float spring = post_top - 0.5f;
     ornament_arch_board(kit, &KIT_WORLD, MAT_SIDING_DARK, posts[0] + 0.07f, posts[1] - 0.07f,
                         spring, post_top, KIT_ARCH_TUDOR, 0.36f, post_z);
-    const KitFrame side = {{0.0f, 0.0f, 0.0f}, -0.5f * GLM_PIf}; // a runs along z, d along -x
+    const KitFrame side = KIT_WORLD_Z;
     for (int i = 0; i < 2; i++)
         ornament_arch_board(kit, &side, MAT_SIDING_DARK, post_z + 0.07f, wall, spring, post_top,
                             KIT_ARCH_POINTED, 0.36f, -posts[i]);
@@ -224,9 +213,8 @@ static void pent_roof(Kit* kit) {
     for (int i = 0; i < 2; i++)
         ornament_balustrade(kit, &side, MAT_SIDING_DARK, post_z + 0.08f, wall - 0.02f, FLOOR_Y,
                             -posts[i]);
-    kit_drip(kit, &KIT_WORLD, (vec3){tower_face + 0.1f, porch_under, porch_edge},
-             (vec3){PORCH_ROOF_X1 - 0.05f, porch_under, porch_edge},
-             PORCH_DRIPS_PER_M * (PORCH_ROOF_X1 - tower_face), 0.0f);
+    kit_drip_run(kit, &KIT_WORLD, (vec3){tower_face + 0.1f, porch_under, porch_edge},
+                 (vec3){PORCH_ROOF_X1 - 0.05f, porch_under, porch_edge}, PORCH_DRIPS_PER_M, 0.0f);
     gutter(kit, PORCH_ROOF_X1 + 0.05f, x_end - 0.05f, y0 + PENT_PITCH * strip_edge - PENT_THICK,
            strip_edge);
 }
@@ -439,39 +427,45 @@ static void dress(Kit* kit, const KitWall* w, float a0, float a1) {
     kit_frame_run(kit, &s.f, MAT_SIDING_DARK, frieze, 4, a0, a1);
 }
 
+#define NO_PANE (-1)
+#define LAP     (CORNER + 0.05f)
+
+/*
+ * The outside walls: what glazes each opening, and where each wall's dressing runs -- from the
+ * tower's face, or past the corner it shares. The kitchen keeps its window, the rooms upstairs
+ * are dark, and the great hall's lancets take leaded quarries, the one over the stair too.
+ */
+static const struct {
+    HouseWall wall;
+    int glass[KIT_MAX_OPENINGS];
+    float dress_from, dress_to;
+} OUTSIDE[] = {
+    {HOUSE_WALL_FRONT,
+     {[OPENING_FRONT_DOOR] = NO_PANE,
+      [OPENING_KITCHEN_WINDOW] = MAT_WINDOW_GLASS,
+      MAT_DARK_GLASS,
+      MAT_DARK_GLASS,
+      MAT_DARK_GLASS},
+     FRONT_FROM + CORNER,
+     HOUSE_X1 + LAP},
+    {HOUSE_WALL_BACK, {MAT_LEADED, MAT_LEADED}, HOUSE_X0 - LAP, HOUSE_X1 + LAP},
+    {HOUSE_WALL_WEST, {MAT_LEADED, MAT_LEADED}, WEST_FROM + CORNER, HOUSE_BACK_Z + LAP},
+    {HOUSE_WALL_EAST, {MAT_LEADED, MAT_DARK_GLASS}, HOUSE_FRONT_Z - LAP, HOUSE_BACK_Z + LAP},
+};
+
 static void exterior_walls(Kit* kit) {
-    const KitWall* front = &WALLS[HOUSE_WALL_FRONT];
-    kit_wall(kit, front);
-    pane_in(kit, front, OPENING_KITCHEN_WINDOW, MAT_WINDOW_GLASS);
-    for (int i = OPENING_KITCHEN_WINDOW + 1; i < front->opening_count; i++)
-        pane_in(kit, front, i, MAT_DARK_GLASS);
+    for (int k = 0; k < KIT_COUNT(OUTSIDE); k++) {
+        const KitWall* w = &WALLS[OUTSIDE[k].wall];
+        kit_wall(kit, w);
+        for (int i = 0; i < w->opening_count; i++)
+            if (OUTSIDE[k].glass[i] != NO_PANE)
+                pane_in(kit, w, i, OUTSIDE[k].glass[i]);
+        dress(kit, w, OUTSIDE[k].dress_from, OUTSIDE[k].dress_to);
+    }
     // Inside, the front door's stone threshold, under the leaf.
-    const KitOpening* door = &front->openings[OPENING_FRONT_DOOR];
+    const KitOpening* door = &WALLS[HOUSE_WALL_FRONT].openings[OPENING_FRONT_DOOR];
     kit_frame_box(kit, &KIT_WORLD, MAT_STONE, door->from, door->to, FLOOR_Y - 0.02f,
                   FLOOR_Y + 0.015f, HOUSE_FRONT_Z - CORNER - 0.04f, HOUSE_FRONT_Z + CORNER, false);
-    // Each wall's dressing runs from the tower's face, or past the corner it shares.
-    const float lap = CORNER + 0.05f;
-    dress(kit, front, FRONT_FROM + CORNER, HOUSE_X1 + lap);
-
-    // The great hall's tall lancets take leaded quarries.
-    const KitWall* back = &WALLS[HOUSE_WALL_BACK];
-    kit_wall(kit, back);
-    pane_in(kit, back, 0, MAT_LEADED);
-    pane_in(kit, back, 1, MAT_LEADED);
-    dress(kit, back, HOUSE_X0 - lap, HOUSE_X1 + lap);
-
-    const KitWall* west = &WALLS[HOUSE_WALL_WEST];
-    kit_wall(kit, west);
-    pane_in(kit, west, 0, MAT_LEADED);
-    pane_in(kit, west, 1, MAT_LEADED);
-    dress(kit, west, WEST_FROM + CORNER, HOUSE_BACK_Z + lap);
-
-    // The one over the stair too; the bedroom's stays dark.
-    const KitWall* east = &WALLS[HOUSE_WALL_EAST];
-    kit_wall(kit, east);
-    pane_in(kit, east, 0, MAT_LEADED);
-    pane_in(kit, east, 1, MAT_DARK_GLASS);
-    dress(kit, east, HOUSE_FRONT_Z - lap, HOUSE_BACK_Z + lap);
 }
 
 static void interior_walls(Kit* kit) {
@@ -597,10 +591,8 @@ void house_build(Kit* kit) {
 #define DOOR_CLEARANCE 0.008f
 #define DOOR_SWING     1.7f // about 97 degrees
 
-int house_doors(Door* doors, int max, Engine* engine, Scene* scene, EntityManager* em,
-                PhysicsWorld* physics) {
-    if (max < 1)
-        return 0;
+bool house_front_door(Door* door, Engine* engine, Scene* scene, EntityManager* em,
+                      PhysicsWorld* physics) {
     // The opening as the wall has it, along the frame from its hinge jamb.
     KitOpening opening = WALLS[HOUSE_WALL_FRONT].openings[OPENING_FRONT_DOOR];
     const KitFrame hinge = {
@@ -609,10 +601,8 @@ int house_doors(Door* doors, int max, Engine* engine, Scene* scene, EntityManage
     opening.from = 0.0f;
     KitOpening leaf = kit_opening_grow(&opening, -DOOR_CLEARANCE);
     leaf.bottom = FLOOR_Y + 0.02f;
-    return door_build(&doors[0], engine, scene, em, physics, "front_door", &hinge, &leaf,
-                      DOOR_THICK, DOOR_SWING)
-               ? 1
-               : 0;
+    return door_build(door, engine, scene, em, physics, "front_door", &hinge, &leaf, DOOR_THICK,
+                      DOOR_SWING);
 }
 
 float house_clearance(const vec3 p) {

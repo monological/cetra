@@ -11,7 +11,7 @@
 static void edge_drips(Kit* kit, const KitFrame* f, float a0, float a1, float y, float d,
                        float per_m) {
     if (a1 - a0 > 0.3f)
-        kit_drip(kit, f, (vec3){a0, y, d}, (vec3){a1, y, d}, per_m * (a1 - a0), 0.0f);
+        kit_drip_run(kit, f, (vec3){a0, y, d}, (vec3){a1, y, d}, per_m, 0.0f);
 }
 
 // One roof slope from the eave (d_eave) up to the ridge (d_ridge): the
@@ -20,25 +20,22 @@ static void edge_drips(Kit* kit, const KitFrame* f, float a0, float a1, float y,
 static void slope(Kit* kit, const KitFrame* f, float a0, float a1, float d_eave, float y_eave,
                   float d_ridge, float y_ridge, float toward) {
     const float t = ROOF_THICK;
-    vec3 p[4] = {{0.0f}}, q[4] = {{0.0f}}, up = {0.0f, 0.0f, 0.0f}, down = {0.0f, 0.0f, 0.0f};
-    kit_frame_point(f, a0, y_eave, d_eave, p[0]);
-    kit_frame_point(f, a1, y_eave, d_eave, p[1]);
-    kit_frame_point(f, a1, y_ridge, d_ridge, p[2]);
-    kit_frame_point(f, a0, y_ridge, d_ridge, p[3]);
-    for (int i = 0; i < 4; i++) {
-        glm_vec3_copy(p[i], q[i]);
-        q[i][1] -= t;
-    }
+    const vec3 p[4] = {
+        {a0, y_eave, d_eave}, {a1, y_eave, d_eave}, {a1, y_ridge, d_ridge}, {a0, y_ridge, d_ridge}};
+    const vec3 q[4] = {{a0, y_eave - t, d_eave},
+                       {a1, y_eave - t, d_eave},
+                       {a1, y_ridge - t, d_ridge},
+                       {a0, y_ridge - t, d_ridge}};
     // Outward is up and toward the eave the slope falls to.
     const float run = fabsf(d_ridge - d_eave), rise = y_ridge - y_eave;
-    kit_frame_dir(f, 0.0f, run, toward * rise, up);
-    glm_vec3_negate_to(up, down);
-    kit_quad_facing(kit, MAT_ROOF, p[0], p[1], p[2], p[3], up);
-    kit_quad_facing(kit, MAT_TRIM, q[0], q[1], q[2], q[3], down);
+    kit_frame_quad(kit, f, MAT_ROOF, p, (vec3){0.0f, run, toward * rise});
+    kit_frame_quad(kit, f, MAT_TRIM, q, (vec3){0.0f, -run, -toward * rise});
     // The fascia board along the eave's edge.
-    vec3 edge = {0.0f, 0.0f, 0.0f};
-    kit_frame_dir(f, 0.0f, 0.0f, toward, edge);
-    kit_quad_facing(kit, MAT_TRIM, p[0], p[1], q[1], q[0], edge);
+    const vec3 fascia[4] = {{a0, y_eave, d_eave},
+                            {a1, y_eave, d_eave},
+                            {a1, y_eave - t, d_eave},
+                            {a0, y_eave - t, d_eave}};
+    kit_frame_quad(kit, f, MAT_TRIM, fascia, (vec3){0.0f, 0.0f, toward});
 }
 
 float house_gable_roof(Kit* kit, const KitFrame* f, float w, float depth, float eave_y,

@@ -36,6 +36,18 @@ static void lathe(Kit* kit, const KitFrame* f, int mat, const vec3 base, const v
     kit_frame_lathe_on(kit, f, mat, base, dir, p, count, sides);
 }
 
+// A (d, y) profile of the sculpt swept along a from a0 to a1.
+static void run(Kit* kit, const KitFrame* f, const vec2* profile, int count, float a0, float a1) {
+    vec2 p[KIT_MAX_POINTS];
+    scaled(profile, count, p);
+    kit_frame_run(kit, f, MAT_STONE, p, count, a0 * SCULPT_SCALE, a1 * SCULPT_SCALE);
+}
+
+// A limb of radius r through points already taken into the frame by at().
+static void tube(Kit* kit, const KitFrame* f, const vec3* path, int count, float r, int sides) {
+    kit_frame_pipe(kit, f, MAT_STONE, path, count, r * SCULPT_SCALE, sides);
+}
+
 // A cone `len` long, `r` across its base, from `base` along `dir`: a horn, a fang, a claw.
 static void cone(Kit* kit, const KitFrame* f, const vec3 base, const vec3 dir, float r, float len) {
     const vec2 p[] = {{0.0f, 0.0f}, {r, 0.0f}, {0.6f * r, 0.45f * len}, {0.0f, len}};
@@ -90,7 +102,7 @@ static void legs(Kit* kit, const KitFrame* f) {
         at(0.15f * a, -0.08f, 0.44f, arm[1]);
         at(0.14f * a, -0.14f, 0.5f, arm[2]);
         at(0.12f * a, -0.17f, 0.53f, arm[3]);
-        kit_frame_pipe(kit, f, MAT_STONE, arm, 4, 0.034f * SCULPT_SCALE, 8);
+        tube(kit, f, arm, 4, 0.034f, 8);
         block(kit, f, 0.08f * a, 0.16f * a, -0.18f, -0.15f, 0.5f, 0.58f);
         // Three claws over the stone's edge.
         for (int c = -1; c <= 1; c++) {
@@ -111,10 +123,7 @@ static void head(Kit* kit, const KitFrame* f) {
     lathe(kit, f, MAT_STONE, p, axis, skull, KIT_COUNT(skull), SIDES);
     // The lower jaw, dropped open: the spout's lip.
     const vec2 jaw[] = {{0.52f, -0.02f}, {0.74f, -0.08f}, {0.76f, -0.115f}, {0.55f, -0.075f}};
-    vec2 jaw_s[KIT_COUNT(jaw)];
-    scaled(jaw, KIT_COUNT(jaw), jaw_s);
-    kit_frame_run(kit, f, MAT_STONE, jaw_s, KIT_COUNT(jaw), -0.045f * SCULPT_SCALE,
-                  0.045f * SCULPT_SCALE);
+    run(kit, f, jaw, KIT_COUNT(jaw), -0.045f, 0.045f);
     vec3 fang = {0.0f, 0.0f, 0.0f};
     unit(0.0f, -1.0f, 0.15f, fang);
     for (int s = -1; s <= 1; s += 2) {
@@ -143,17 +152,14 @@ static void wings(Kit* kit, const KitFrame* f) {
                                 {0.18f, 0.48f}, {0.1f, 0.52f},  {0.06f, 0.36f}, {-0.02f, 0.4f},
                                 {0.0f, 0.2f},   {0.06f, 0.04f}, {0.2f, 0.0f}};
     static const int TIPS[] = {3, 5, 7}; // the fingers' ends among WING's points
-    vec2 wing[KIT_COUNT(WING)];
-    scaled(WING, KIT_COUNT(WING), wing);
     for (int s = -1; s <= 1; s += 2) {
         const float a = (float)s;
-        kit_frame_run(kit, f, MAT_STONE, wing, KIT_COUNT(WING), 0.13f * a * SCULPT_SCALE,
-                      0.15f * a * SCULPT_SCALE);
+        run(kit, f, WING, KIT_COUNT(WING), 0.13f * a, 0.15f * a);
         for (int t = 0; t < KIT_COUNT(TIPS); t++) {
             vec3 bone[2];
             at(0.155f * a, 0.04f, 0.38f, bone[0]);
             at(0.155f * a, WING[TIPS[t]][1], WING[TIPS[t]][0], bone[1]);
-            kit_frame_pipe(kit, f, MAT_STONE, bone, 2, 0.012f * SCULPT_SCALE, 5);
+            tube(kit, f, bone, 2, 0.012f, 5);
         }
     }
 }

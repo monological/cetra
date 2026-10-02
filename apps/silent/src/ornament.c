@@ -35,9 +35,19 @@ Facade facade_inner(const KitWall* w) {
     return side_of(&wf, w->thick, 1);
 }
 
+Facade facade_toward(const KitWall* w, float x, float z) {
+    const float across = (w->along_x ? z : x) - w->at;
+    return (across >= 0.0f) == (w->inner >= 0) ? facade_inner(w) : facade_of(w);
+}
+
 Facade facade_of_frame(const KitFrame* f, const KitWall* w) {
     const KitWallFrame wf = {*f, w->at, w->inner >= 0 ? 1 : -1};
     return side_of(&wf, w->thick, -1);
+}
+
+void facade_box(Kit* kit, const Facade* s, int mat, float a0, float a1, float y0, float y1,
+                float proud) {
+    kit_frame_box(kit, &s->f, mat, a0, a1, y0, y1, s->face, s->face + s->out * proud, false);
 }
 
 void ornament_casing(Kit* kit, const Facade* s, int mat, const KitOpening* o) {
@@ -68,14 +78,12 @@ void ornament_base(Kit* kit, const Facade* s, float a0, float a1, const KitOpeni
                 next = &openings[i];
         const float end = next ? next->from : a1;
         if (end - cursor > 1e-3f) {
-            kit_frame_box(kit, &s->f, MAT_FOUNDATION, cursor, end, 0.0f, BASE_TOP, s->face,
-                          s->face + s->out * BASE_OUT, false);
+            facade_box(kit, s, MAT_FOUNDATION, cursor, end, 0.0f, BASE_TOP, BASE_OUT);
             water_table(kit, s, cursor, end);
         }
         if (!next)
             break;
-        kit_frame_box(kit, &s->f, MAT_FOUNDATION, next->from, next->to, 0.0f, next->bottom, s->face,
-                      s->face + s->out * BASE_OUT, false);
+        facade_box(kit, s, MAT_FOUNDATION, next->from, next->to, 0.0f, next->bottom, BASE_OUT);
         cursor = next->to;
     }
 }
@@ -91,8 +99,8 @@ static KitOpening dressed(const KitOpening* o) {
 }
 
 // Where the batten at `a` is interrupted by openings, as y ranges: each opening whose dressing
-// it would cross, from under its sill to over its hood. Returns the count, sorted.
-static int blocked(float a, const KitOpening* openings, int count, float lo[], float hi[]) {
+// it would cross, from under its sill to over its hood. Returns the count.
+static int blocked(float a, const KitOpening* openings, int count, vec2* out) {
     int n = 0;
     for (int i = 0; i < count; i++) {
         const KitOpening* o = &openings[i];
@@ -100,16 +108,9 @@ static int blocked(float a, const KitOpening* openings, int count, float lo[], f
         if (a + 0.5f * BATTEN_W <= d.from - DRESS_CLEAR ||
             a - 0.5f * BATTEN_W >= d.to + DRESS_CLEAR)
             continue;
-        lo[n] = o->door ? -1.0f : d.bottom - DRESS_CLEAR;
-        hi[n] = d.top + d.rise + DRESS_CLEAR;
-        for (int j = n; j > 0 && lo[j] < lo[j - 1]; j--) {
-            const float tl = lo[j], th = hi[j];
-            lo[j] = lo[j - 1];
-            hi[j] = hi[j - 1];
-            lo[j - 1] = tl;
-            hi[j - 1] = th;
-        }
-        n++;
+        glm_vec2_copy(
+            (vec2){o->door ? -1.0f : d.bottom - DRESS_CLEAR, kit_opening_crown(&d) + DRESS_CLEAR},
+            out[n++]);
     }
     return n;
 }
@@ -117,8 +118,7 @@ static int blocked(float a, const KitOpening* openings, int count, float lo[], f
 static void batten(Kit* kit, const Facade* s, float a, float y0, float y1) {
     if (y1 - y0 < 0.08f)
         return;
-    kit_frame_box(kit, &s->f, MAT_SIDING_DARK, a - 0.5f * BATTEN_W, a + 0.5f * BATTEN_W, y0, y1,
-                  s->face, s->face + s->out * BATTEN_T, false);
+    facade_box(kit, s, MAT_SIDING_DARK, a - 0.5f * BATTEN_W, a + 0.5f * BATTEN_W, y0, y1, BATTEN_T);
 }
 
 void ornament_battens(Kit* kit, const Facade* s, float a0, float a1, float y0, float y1,
@@ -127,14 +127,11 @@ void ornament_battens(Kit* kit, const Facade* s, float a0, float a1, float y0, f
     const float start = a0 + 0.5f * ((a1 - a0) - (float)(n - 1) * BATTEN_PITCH);
     for (int i = 0; i < n; i++) {
         const float a = start + (float)i * BATTEN_PITCH;
-        float lo[KIT_MAX_OPENINGS], hi[KIT_MAX_OPENINGS];
-        const int nb = blocked(a, openings, count, lo, hi);
-        float y = y0;
-        for (int b = 0; b < nb; b++) {
-            batten(kit, s, a, y, fminf(lo[b], y1));
-            y = fmaxf(y, hi[b]);
-        }
-        batten(kit, s, a, y, y1);
+        vec2 cut[KIT_MAX_OPENINGS], run[KIT_MAX_OPENINGS + 1];
+        const int n_cut = blocked(a, openings, count, cut);
+        const int n_run = kit_clear_spans(y0, y1, cut, n_cut, run);
+        for (int r = 0; r < n_run; r++)
+            batten(kit, s, a, run[r][0], run[r][1]);
     }
 }
 
@@ -155,17 +152,11 @@ void ornament_gable_battens(Kit* kit, const Facade* s, float a0, float a1, float
 static void ring(Kit* kit, const KitFrame* f, int mat, const vec2 c, float r_out, float r_in,
                  float d0, float d1) {
     enum { SEG = 10 };
-    for (int side = 0; side < 2; side++) {
+    for (int side = -1; side <= 1; side += 2) {
         vec2 pts[2 * (SEG + 1)];
-        int n = 0;
-        for (int i = 0; i <= SEG; i++) {
-            const float t = 0.5f * GLM_PIf + (side ? -1.0f : 1.0f) * GLM_PIf * (float)i / SEG;
-            glm_vec2_copy((vec2){c[0] + r_out * cosf(t), c[1] + r_out * sinf(t)}, pts[n++]);
-        }
-        for (int i = SEG; i >= 0; i--) {
-            const float t = 0.5f * GLM_PIf + (side ? -1.0f : 1.0f) * GLM_PIf * (float)i / SEG;
-            glm_vec2_copy((vec2){c[0] + r_in * cosf(t), c[1] + r_in * sinf(t)}, pts[n++]);
-        }
+        const float top = 0.5f * GLM_PIf;
+        const int n =
+            kit_arc_band(c, r_out, r_out, r_in, r_in, top, top + (float)side * GLM_PIf, SEG, pts);
         kit_frame_extrude(kit, f, mat, pts, n, d0, d1);
     }
 }
@@ -189,7 +180,7 @@ static void two_lights(Kit* kit, const Facade* s, const KitOpening* o) {
     kit_frame_surround(kit, &s->f, MAT_TRIM, &left, 0.035f, true, d0, d1);
     kit_frame_surround(kit, &s->f, MAT_TRIM, &right, 0.035f, true, d0, d1);
     // The ring sits midway between the lights' crowns and the window's.
-    const float low = o->top + sub_rise + 0.035f, high = o->top + o->rise;
+    const float low = o->top + sub_rise + 0.035f, high = kit_opening_crown(o);
     const float r = fminf(0.42f * (high - low), 0.3f * w);
     if (r > 0.04f)
         ring(kit, &s->f, MAT_TRIM, (vec2){mid, 0.5f * (low + high)}, r, r - 0.03f, d0, d1);
@@ -211,8 +202,8 @@ void ornament_window(Kit* kit, const Facade* s, const KitOpening* o) {
     const float stop = casing.top, over = kit_opening_arched(o) ? 0.0f : HOOD_W;
     for (int side = -1; side <= 1; side += 2) {
         const float edge = side < 0 ? casing.from : casing.to;
-        kit_frame_box(kit, &s->f, MAT_TRIM, edge, edge + (float)side * (HOOD_W + STOP_OUT),
-                      stop - 0.16f, stop + over, f, f + out * HOOD_T, false);
+        facade_box(kit, s, MAT_TRIM, edge, edge + (float)side * (HOOD_W + STOP_OUT), stop - 0.16f,
+                   stop + over, HOOD_T);
     }
     // Tracery is a window's: a doorway is left clear to walk through.
     if (o->arch == KIT_ARCH_POINTED && o->to - o->from >= TWO_LIGHTS && !o->door)

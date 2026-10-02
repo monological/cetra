@@ -51,15 +51,6 @@ static const KitFrame HEARTH = {{HEARTH_X, 0.0f, GREAT_Z1}, GLM_PIf};
 #define BACKED   (KIT_FACES_ALL & ~KIT_FACE_IN)
 #define STANDING (KIT_FACES_ALL & ~KIT_FACE_DOWN)
 
-// A flat face through four (a, y, d) corners, facing `out`.
-static void face(Kit* kit, int mat, const vec3 p[4], const vec3 out) {
-    vec3 w[4] = {{0.0f}}, o = {0.0f, 0.0f, 0.0f};
-    for (int i = 0; i < 4; i++)
-        kit_frame_point(&HEARTH, p[i][0], p[i][1], p[i][2], w[i]);
-    kit_frame_dir(&HEARTH, out[0], out[1], out[2], o);
-    kit_quad_facing(kit, mat, w[0], w[1], w[2], w[3], o);
-}
-
 /*
  * One of a jamb's shafts, from the plinth to the abacus, turned: a base of two rolls, the
  * shaft, a ring at its neck, and a bell capital flaring out under the abacus. Radii are in the
@@ -175,12 +166,16 @@ static void battlements(Kit* kit, float y, float half, float front) {
                                 d + 0.5f * MERLON_W, STANDING);
 }
 
+// The hood's face, from the lower cornice up and back to its own: how high, how far back, and
+// how long a slope.
+#define HOOD_RISE (HOOD_Y - CORNICE_Y)
+#define HOOD_BACK (HOOD_D0 - HOOD_D1)
+#define HOOD_LEN  sqrtf(HOOD_RISE* HOOD_RISE + HOOD_BACK * HOOD_BACK)
+
 // The point on the hood's face at a, `s` up its slope from the cornice, `lift` off it.
 static void on_hood(float a, float s, float lift, vec3 out) {
-    const float rise = HOOD_Y - CORNICE_Y, back = HOOD_D0 - HOOD_D1;
-    const float len = sqrtf(rise * rise + back * back);
-    glm_vec3_copy((vec3){a, CORNICE_Y + (s * rise + lift * back) / len,
-                         HOOD_D0 + (lift * rise - s * back) / len},
+    glm_vec3_copy((vec3){a, CORNICE_Y + (s * HOOD_RISE + lift * HOOD_BACK) / HOOD_LEN,
+                         HOOD_D0 + (lift * HOOD_RISE - s * HOOD_BACK) / HOOD_LEN},
                   out);
 }
 
@@ -196,15 +191,16 @@ static void hood(Kit* kit) {
                            {HOOD_HALF0, y0, HOOD_D0},
                            {HOOD_HALF1, y1, HOOD_D1},
                            {-HOOD_HALF1, y1, HOOD_D1}};
-    const float rise = y1 - y0, back = HOOD_D0 - HOOD_D1, len = sqrtf(rise * rise + back * back);
-    face(kit, MAT_STONE, front, (vec3){0.0f, back, rise});
+    const float rise = HOOD_RISE, back = HOOD_BACK, len = HOOD_LEN;
+    kit_frame_quad(kit, &HEARTH, MAT_STONE, front, (vec3){0.0f, back, rise});
     for (int s = -1; s <= 1; s += 2) {
         const float sf = (float)s;
         const vec3 side[4] = {{sf * HOOD_HALF0, y0, 0.0f},
                               {sf * HOOD_HALF0, y0, HOOD_D0},
                               {sf * HOOD_HALF1, y1, HOOD_D1},
                               {sf * HOOD_HALF1, y1, 0.0f}};
-        face(kit, MAT_STONE, side, (vec3){sf * rise, HOOD_HALF0 - HOOD_HALF1, 0.0f});
+        kit_frame_quad(kit, &HEARTH, MAT_STONE, side,
+                       (vec3){sf * rise, HOOD_HALF0 - HOOD_HALF1, 0.0f});
         kit_frame_pipe(kit, &HEARTH, MAT_STONE,
                        (vec3[]){{sf * HOOD_HALF0, y0, HOOD_D0}, {sf * HOOD_HALF1, y1, HOOD_D1}}, 2,
                        0.045f, 10);
@@ -267,17 +263,18 @@ static void firebox(Kit* kit) {
                                {sf * BACK_HALF, HEARTH_TOP, back},
                                {sf * BACK_HALF, LINTEL_Y0, back},
                                {sf * MOUTH, LINTEL_Y0, front}};
-        face(kit, MAT_SOOT, cheek, (vec3){-sf * (front - back), 0.0f, MOUTH - BACK_HALF});
+        kit_frame_quad(kit, &HEARTH, MAT_SOOT, cheek,
+                       (vec3){-sf * (front - back), 0.0f, MOUTH - BACK_HALF});
     }
     const float floor_y = HEARTH_TOP + 0.002f, under = LINTEL_Y0 - 0.002f;
     const vec3 floor[4] = {{-MOUTH, floor_y, front},
                            {MOUTH, floor_y, front},
                            {BACK_HALF, floor_y, back},
                            {-BACK_HALF, floor_y, back}};
-    face(kit, MAT_SOOT, floor, (vec3){0.0f, 1.0f, 0.0f});
+    kit_frame_quad(kit, &HEARTH, MAT_SOOT, floor, (vec3){0.0f, 1.0f, 0.0f});
     const vec3 soffit[4] = {
         {-MOUTH, under, front}, {MOUTH, under, front}, {MOUTH, under, back}, {-MOUTH, under, back}};
-    face(kit, MAT_SOOT, soffit, (vec3){0.0f, -1.0f, 0.0f});
+    kit_frame_quad(kit, &HEARTH, MAT_SOOT, soffit, (vec3){0.0f, -1.0f, 0.0f});
 
     const GothicSpec* plate = &GOTHICS[GOTHIC_FIREBACK];
     const float w = plate->size[0], h = plate->size[1];
