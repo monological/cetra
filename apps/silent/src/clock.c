@@ -228,36 +228,16 @@ void clock_build(Kit* kit) {
     kit_frame_box(kit, f, KIT_COLLIDER_ONLY, -0.28f, 0.28f, 0.0f, 2.30f, 0.0f, 0.325f, true);
 }
 
-/*
- * A flat convex polygon of (a, y) points at depth d, facing out of the case --
- * the hands are cut from sheet steel, so a hand is a few of these.
- */
-static void plate(Kit* kit, const KitFrame* f, int mat, const vec2* pts, int n, float d) {
-    vec3 c = {0.0f, 0.0f, 0.0f}, out = {0.0f, 0.0f, 0.0f};
-    for (int i = 0; i < n; i++) {
-        c[0] += pts[i][0] / (float)n;
-        c[1] += pts[i][1] / (float)n;
-    }
-    vec3 centre = {0.0f, 0.0f, 0.0f};
-    kit_frame_point(f, c[0], c[1], d, centre);
-    kit_frame_dir(f, 0.0f, 0.0f, 1.0f, out);
-    for (int i = 0; i < n; i++) {
-        vec3 p0 = {0.0f, 0.0f, 0.0f}, p1 = {0.0f, 0.0f, 0.0f};
-        kit_frame_point(f, pts[i][0], pts[i][1], d, p0);
-        kit_frame_point(f, pts[(i + 1) % n][0], pts[(i + 1) % n][1], d, p1);
-        kit_tri_facing(kit, mat, centre, p0, p1, out);
-    }
-}
-
+// The hands are cut from sheet steel, so each is a few flat polygons facing out of the case.
 // The hour hand: a stem to a spade, and a round tail to balance it.
 static void hour_hand(Kit* kit, const KitFrame* f) {
     const vec2 stem[] = {{-0.004f, -0.02f}, {0.004f, -0.02f}, {0.003f, 0.06f}, {-0.003f, 0.06f}};
     const vec2 spade[] = {{0.0f, 0.052f}, {0.016f, 0.074f}, {0.0f, 0.108f}, {-0.016f, 0.074f}};
     const vec2 tail[] = {{0.0f, -0.034f}, {0.009f, -0.028f},  {0.009f, -0.016f},
                          {0.0f, -0.01f},  {-0.009f, -0.016f}, {-0.009f, -0.028f}};
-    plate(kit, f, MAT_BLACK, stem, COUNT(stem), 0.004f);
-    plate(kit, f, MAT_BLACK, spade, COUNT(spade), 0.004f);
-    plate(kit, f, MAT_BLACK, tail, COUNT(tail), 0.004f);
+    kit_frame_polygon(kit, f, MAT_BLACK, stem, COUNT(stem), 0.004f);
+    kit_frame_polygon(kit, f, MAT_BLACK, spade, COUNT(spade), 0.004f);
+    kit_frame_polygon(kit, f, MAT_BLACK, tail, COUNT(tail), 0.004f);
 }
 
 // The minute hand: long and fine, a lozenge near its tip.
@@ -266,15 +246,15 @@ static void minute_hand(Kit* kit, const KitFrame* f) {
         {-0.004f, -0.035f}, {0.004f, -0.035f}, {0.0018f, 0.17f}, {-0.0018f, 0.17f}};
     const vec2 lozenge[] = {{0.0f, 0.12f}, {0.007f, 0.135f}, {0.0f, 0.15f}, {-0.007f, 0.135f}};
     const vec2 tip[] = {{-0.0018f, 0.17f}, {0.0018f, 0.17f}, {0.0f, 0.192f}};
-    plate(kit, f, MAT_BLACK, stem, COUNT(stem), 0.0075f);
-    plate(kit, f, MAT_BLACK, lozenge, COUNT(lozenge), 0.0075f);
-    plate(kit, f, MAT_BLACK, tip, COUNT(tip), 0.0075f);
+    kit_frame_polygon(kit, f, MAT_BLACK, stem, COUNT(stem), 0.0075f);
+    kit_frame_polygon(kit, f, MAT_BLACK, lozenge, COUNT(lozenge), 0.0075f);
+    kit_frame_polygon(kit, f, MAT_BLACK, tip, COUNT(tip), 0.0075f);
 }
 
 static void second_hand(Kit* kit, const KitFrame* f) {
     const vec2 needle[] = {
         {-0.0012f, -0.01f}, {0.0012f, -0.01f}, {0.0006f, 0.036f}, {-0.0006f, 0.036f}};
-    plate(kit, f, MAT_BLACK, needle, COUNT(needle), 0.003f);
+    kit_frame_polygon(kit, f, MAT_BLACK, needle, COUNT(needle), 0.003f);
 }
 
 /*

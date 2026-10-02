@@ -279,6 +279,170 @@ void kit_tri_facing(Kit* kit, int mat, const vec3 a, const vec3 b, const vec3 c,
     emit_face(kit, mat, p, 3, outward);
 }
 
+// Twice the signed area of the triangle a b c in the plane: positive when counter-clockwise.
+static float area2(const vec2 a, const vec2 b, const vec2 c) {
+    return (b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1]);
+}
+
+// Whether p lies inside or on the counter-clockwise triangle a b c.
+static bool in_triangle(const vec2 p, const vec2 a, const vec2 b, const vec2 c) {
+    return area2(a, b, p) >= 0.0f && area2(b, c, p) >= 0.0f && area2(c, a, p) >= 0.0f;
+}
+
+/*
+ * Ear clipping: a counter-clockwise polygon's `n` corners into n - 2 triangles, as indices
+ * into `pts`. An ear is a convex corner whose triangle holds no other corner; cutting one
+ * leaves a smaller polygon that still has one, which is what makes the loop end. Corners in a
+ * straight line make ears of no area, which are cut like any other. Should the outline cross
+ * itself and leave no ear, the rest is fanned rather than looped on forever.
+ */
+static int ear_clip(const vec2* pts, int n, unsigned int (*tris)[3]) {
+    int left[KIT_MAX_OUTLINE];
+    for (int i = 0; i < n; i++)
+        left[i] = i;
+    int count = 0, m = n;
+    while (m > 3) {
+        int ear = -1;
+        for (int i = 0; i < m && ear < 0; i++) {
+            const int a = left[(i + m - 1) % m], b = left[i], c = left[(i + 1) % m];
+            if (area2(pts[a], pts[b], pts[c]) < 0.0f)
+                continue;
+            bool empty = true;
+            for (int j = 0; j < m && empty; j++) {
+                const int q = left[j];
+                if (q != a && q != b && q != c && in_triangle(pts[q], pts[a], pts[b], pts[c]))
+                    empty = false;
+            }
+            if (empty)
+                ear = i;
+        }
+        if (ear < 0)
+            break;
+        tris[count][0] = (unsigned int)left[(ear + m - 1) % m];
+        tris[count][1] = (unsigned int)left[ear];
+        tris[count][2] = (unsigned int)left[(ear + 1) % m];
+        count++;
+        memmove(&left[ear], &left[ear + 1], (size_t)(m - ear - 1) * sizeof(int));
+        m--;
+    }
+    for (int i = 1; i + 1 < m; i++) {
+        tris[count][0] = (unsigned int)left[0];
+        tris[count][1] = (unsigned int)left[i];
+        tris[count][2] = (unsigned int)left[i + 1];
+        count++;
+    }
+    return count;
+}
+
+void kit_polygon_facing(Kit* kit, int mat, const vec3* corners, int count, const vec3 outward) {
+    if (!slot_ok(kit, mat))
+        return;
+    if (count < 3 || count > KIT_MAX_OUTLINE) {
+        fprintf(stderr, "silent: a polygon needs 3 to %d corners, not %d\n", KIT_MAX_OUTLINE,
+                count);
+        return;
+    }
+    // Newell's normal, which a concave outline's first three corners cannot be trusted for.
+    vec3 n = {0.0f, 0.0f, 0.0f};
+    for (int i = 0; i < count; i++) {
+        const float* p = corners[i];
+        const float* q = corners[(i + 1) % count];
+        n[0] += (p[1] - q[1]) * (p[2] + q[2]);
+        n[1] += (p[2] - q[2]) * (p[0] + q[0]);
+        n[2] += (p[0] - q[0]) * (p[1] + q[1]);
+    }
+    if (glm_vec3_norm2(n) < 1e-12f)
+        return;
+    const bool flip = glm_vec3_dot(n, (float*)outward) < 0.0f;
+    if (flip)
+        glm_vec3_negate(n);
+    glm_vec3_normalize(n);
+    vec3 t = {0.0f, 0.0f, 0.0f}, b = {0.0f, 0.0f, 0.0f};
+    face_frame(n, t, b);
+    // In the face's own (t, b) plane, which turns counter-clockwise about n.
+    vec2 flat[KIT_MAX_OUTLINE] = {{0.0f}};
+    unsigned int idx[KIT_MAX_OUTLINE];
+    for (int i = 0; i < count; i++) {
+        const float* p = corners[flip ? count - 1 - i : i];
+        flat[i][0] = glm_vec3_dot((float*)p, t);
+        flat[i][1] = glm_vec3_dot((float*)p, b);
+        idx[i] = face_vertex(kit, mat, p, n, t, b, 0.0f);
+    }
+    unsigned int tris[KIT_MAX_OUTLINE][3] = {{0}};
+    const int made = ear_clip(flat, count, tris);
+    for (int i = 0; i < made; i++)
+        mb_tri(&kit->builders[mat], idx[tris[i][0]], idx[tris[i][1]], idx[tris[i][2]]);
+}
+
+/*
+ * A prism over a flat base: the base and its copy `offset` along, which face away from each
+ * other, and a flat quad up each edge facing out of the outline.
+ */
+static void extrude(Kit* kit, int mat, const vec3* base, int count, const vec3 offset) {
+    if (count < 3 || count > KIT_MAX_OUTLINE)
+        return;
+    vec3 top[KIT_MAX_OUTLINE], n = {0.0f, 0.0f, 0.0f}, back = {0.0f, 0.0f, 0.0f};
+    for (int i = 0; i < count; i++)
+        glm_vec3_add((float*)base[i], (float*)offset, top[i]);
+    glm_vec3_negate_to((float*)offset, back);
+    kit_polygon_facing(kit, mat, top, count, offset);
+    kit_polygon_facing(kit, mat, base, count, back);
+    // Which way round the outline runs about the offset decides which side of an edge is out.
+    for (int i = 0; i < count; i++) {
+        const float* p = base[i];
+        const float* q = base[(i + 1) % count];
+        n[0] += (p[1] - q[1]) * (p[2] + q[2]);
+        n[1] += (p[2] - q[2]) * (p[0] + q[0]);
+        n[2] += (p[0] - q[0]) * (p[1] + q[1]);
+    }
+    const float turn = glm_vec3_dot(n, (float*)offset) >= 0.0f ? 1.0f : -1.0f;
+    for (int i = 0; i < count; i++) {
+        const int j = (i + 1) % count;
+        vec3 edge = {0.0f, 0.0f, 0.0f}, out = {0.0f, 0.0f, 0.0f};
+        glm_vec3_sub((float*)base[j], (float*)base[i], edge);
+        glm_vec3_cross(edge, (float*)offset, out);
+        glm_vec3_scale(out, turn, out);
+        kit_quad_facing(kit, mat, base[i], base[j], top[j], top[i], out);
+    }
+}
+
+void kit_slab(Kit* kit, int mat, const vec2* xz, int count, float y0, float y1, bool collide) {
+    if (count < 3 || count > KIT_MAX_OUTLINE)
+        return;
+    vec3 base[KIT_MAX_OUTLINE];
+    vec2 centre = {0.0f, 0.0f};
+    for (int i = 0; i < count; i++) {
+        glm_vec3_copy((vec3){xz[i][0], y0, xz[i][1]}, base[i]);
+        centre[0] += xz[i][0] / (float)count;
+        centre[1] += xz[i][1] / (float)count;
+    }
+    if (mat != KIT_COLLIDER_ONLY)
+        extrude(kit, mat, base, count, (vec3){0.0f, y1 - y0, 0.0f});
+    if (!collide && mat != KIT_COLLIDER_ONLY)
+        return;
+    // A convex outline is the union of, for each edge, the strip from that edge in to the
+    // line through the centroid parallel to it, as wide as the edge.
+    for (int i = 0; i < count; i++) {
+        const float* p = xz[i];
+        const float* q = xz[(i + 1) % count];
+        vec2 along = {q[0] - p[0], q[1] - p[1]};
+        const float len = glm_vec2_norm(along);
+        if (len < 1e-4f)
+            continue;
+        glm_vec2_scale(along, 1.0f / len, along);
+        const vec2 to_centre = {centre[0] - p[0], centre[1] - p[1]};
+        const float depth = fabsf(along[0] * to_centre[1] - along[1] * to_centre[0]);
+        // Inward is the side of the edge the centroid lies on.
+        const float side = along[0] * to_centre[1] - along[1] * to_centre[0] >= 0.0f ? 1.0f : -1.0f;
+        const vec2 in = {-along[1] * side, along[0] * side};
+        const vec3 mid = {0.5f * (p[0] + q[0]) + 0.5f * depth * in[0], 0.5f * (y0 + y1),
+                          0.5f * (p[1] + q[1]) + 0.5f * depth * in[1]};
+        // The yaw that turns local +x along the edge, the sense rotate_y turns.
+        const float yaw = atan2f(-along[1], along[0]);
+        kit_collider(kit, mid, (vec3){0.5f * len, 0.5f * (y1 - y0), 0.5f * depth}, yaw);
+    }
+}
+
 // Turned about +Y by `yaw`, the same sense entity_set_rotation_euler turns a body.
 static void rotate_y(const vec3 in, float yaw, vec3 out) {
     const float c = cosf(yaw), s = sinf(yaw);
@@ -664,39 +828,141 @@ static void lathe(Kit* kit, int mat, const vec3 base, const vec3 axis, const vec
     }
 }
 
-// One slab of a wall layer, between `a` and `b` along the wall and `y0`..`y1`.
-static void wall_slab(Kit* kit, const KitWall* w, int mat, float offset, float thick, float a,
+/*
+ * The arch's two arcs, sampled KIT_ARCH_SEGMENTS each from a springing point to the apex.
+ * POINTED: each half is an arc whose centre sits on the springing line at the far side's
+ * distance r, r = (w^2 + rise^2) / 2w for half-span w -- w itself is a round arch. TUDOR: a
+ * haunch of radius TUDOR_HAUNCH * w turning TUDOR_TURN, then the tangent arc that reaches
+ * the apex, whose radius the apex fixes.
+ */
+#define TUDOR_HAUNCH 0.35f
+#define TUDOR_TURN   (GLM_PIf / 3.0f)
+#define TUDOR_ARCS   3 // of a half's segments, on the haunch
+
+// One half, from (a0, spring) up to the apex over the mid-span: `out` gets
+// KIT_ARCH_SEGMENTS + 1 points. `dir` is +1 for the left half, -1 for the right, mirrored.
+static void arch_half(KitArchShape shape, float a0, float w, float spring, float rise, float dir,
+                      vec2* out) {
+    const int n = KIT_ARCH_SEGMENTS;
+    if (shape == KIT_ARCH_TUDOR) {
+        const float r1 = TUDOR_HAUNCH * w;
+        const vec2 c1 = {a0 + dir * r1, spring};
+        const vec2 p1 = {c1[0] - dir * r1 * cosf(TUDOR_TURN), spring + r1 * sinf(TUDOR_TURN)};
+        const float dx = w - r1 + r1 * cosf(TUDOR_TURN), dy = rise - r1 * sinf(TUDOR_TURN);
+        const float den = dx * cosf(TUDOR_TURN) - dy * sinf(TUDOR_TURN);
+        if (den > 1e-4f) {
+            // The long arc's centre lies on the line through the haunch's end and its centre.
+            const float r2 = (dx * dx + dy * dy) / (2.0f * den);
+            const vec2 c2 = {p1[0] + dir * r2 * cosf(TUDOR_TURN), p1[1] - r2 * sinf(TUDOR_TURN)};
+            const float end = atan2f(spring + rise - c2[1], dir * (a0 + dir * w - c2[0]));
+            for (int i = 0; i <= n; i++) {
+                if (i <= TUDOR_ARCS) {
+                    const float t = GLM_PIf - TUDOR_TURN * (float)i / (float)TUDOR_ARCS;
+                    out[i][0] = c1[0] + dir * r1 * cosf(t);
+                    out[i][1] = c1[1] + r1 * sinf(t);
+                } else {
+                    const float f = (float)(i - TUDOR_ARCS) / (float)(n - TUDOR_ARCS);
+                    const float t = (GLM_PIf - TUDOR_TURN) + f * (end - (GLM_PIf - TUDOR_TURN));
+                    out[i][0] = c2[0] + dir * r2 * cosf(t);
+                    out[i][1] = c2[1] + r2 * sinf(t);
+                }
+            }
+            return;
+        }
+        // Too high for a four-centred arch.
+    }
+    const float r = (w * w + rise * rise) / (2.0f * w);
+    const vec2 c = {a0 + dir * r, spring};
+    const float end = atan2f(rise, dir * (a0 + dir * w - c[0]));
+    for (int i = 0; i <= n; i++) {
+        const float t = GLM_PIf + (end - GLM_PIf) * (float)i / (float)n;
+        out[i][0] = c[0] + dir * r * cosf(t);
+        out[i][1] = c[1] + r * sinf(t);
+    }
+}
+
+void kit_arch_outline(KitArchShape shape, float a0, float a1, float spring, float rise,
+                      vec2 out[KIT_ARCH_POINTS]) {
+    const int n = KIT_ARCH_SEGMENTS;
+    const float w = 0.5f * (a1 - a0);
+    if (shape == KIT_ARCH_FLAT || rise <= 0.0f || w <= 0.0f) {
+        for (int i = 0; i < KIT_ARCH_POINTS; i++) {
+            out[i][0] = a0 + (a1 - a0) * (float)i / (float)(KIT_ARCH_POINTS - 1);
+            out[i][1] = spring;
+        }
+        return;
+    }
+    vec2 right[KIT_ARCH_SEGMENTS + 1];
+    arch_half(shape, a0, w, spring, rise, 1.0f, out);
+    arch_half(shape, a1, w, spring, rise, -1.0f, right);
+    // The right half runs up from a1; it is wanted coming down, and the apex only once.
+    for (int i = 1; i <= n; i++)
+        glm_vec2_copy(right[n - i], out[n + i]);
+    out[n][0] = a0 + w;
+    out[n][1] = spring + rise;
+}
+
+// The frame a wall is drawn in: KitWall's own for kit_frame_wall, and for an axis-aligned one
+// the quarter turn that runs a along its axis, with `at` and `inner` restated along d.
+typedef struct WallFrame {
+    KitFrame f;
+    float at;
+    int inner;
+} WallFrame;
+
+// One slab of a wall layer, between `a` and `b` along the wall and `y0`..`y1`, centred
+// `offset` out of the wall's middle.
+static void wall_slab(Kit* kit, const WallFrame* wf, int mat, float offset, float thick, float a,
                       float b, float y0, float y1) {
     if (b - a < 1e-4f || y1 - y0 < 1e-4f)
         return;
-    const float mid = 0.5f * (a + b), half_len = 0.5f * (b - a);
-    vec3 centre, half;
-    if (w->along_x) {
-        glm_vec3_copy((vec3){mid, 0.5f * (y0 + y1), w->at + offset}, centre);
-        glm_vec3_copy((vec3){half_len, 0.5f * (y1 - y0), 0.5f * thick}, half);
-    } else {
-        glm_vec3_copy((vec3){w->at + offset, 0.5f * (y0 + y1), mid}, centre);
-        glm_vec3_copy((vec3){0.5f * thick, 0.5f * (y1 - y0), half_len}, half);
-    }
-    kit_box(kit, mat, centre, half, 0.0f, false);
+    const float d = wf->at + offset;
+    kit_frame_box(kit, &wf->f, mat, a, b, y0, y1, d - 0.5f * thick, d + 0.5f * thick, false);
 }
 
-// The wall between openings, and under and over each one, for one layer.
-// `sorted` holds the wall's `n` openings in order along it.
-static void wall_layer(Kit* kit, const KitWall* w, const KitOpening* sorted, int n, int mat,
-                       float offset, float thick) {
+/*
+ * The wall left over an arched opening's springing line, either side of its head: from the
+ * springing point round the arch to its apex, then out along the apex's height, back down to
+ * the springing line. Each is a flat polygon through the layer, whose curved edge is the
+ * underside of the arch.
+ */
+static void wall_spandrels(Kit* kit, const WallFrame* wf, const KitOpening* o, int mat,
+                           float offset, float thick) {
+    vec2 head[KIT_ARCH_POINTS], half[KIT_ARCH_SEGMENTS + 2];
+    kit_arch_outline(o->arch, o->from, o->to, o->top, o->rise, head);
+    const float d = wf->at + offset, crown = o->top + o->rise;
+    const int n = KIT_ARCH_SEGMENTS;
+    for (int i = 0; i <= n; i++)
+        glm_vec2_copy(head[i], half[i]);
+    glm_vec2_copy((vec2){o->from, crown}, half[n + 1]);
+    kit_frame_extrude(kit, &wf->f, mat, half, n + 2, d - 0.5f * thick, d + 0.5f * thick);
+    for (int i = 0; i <= n; i++)
+        glm_vec2_copy(head[n + i], half[i]);
+    glm_vec2_copy((vec2){o->to, crown}, half[n + 1]);
+    kit_frame_extrude(kit, &wf->f, mat, half, n + 2, d - 0.5f * thick, d + 0.5f * thick);
+}
+
+// The wall between openings, and under and over each one, for one layer. `sorted` holds the
+// wall's `n` openings in order along it. The body through the whole wall treats an arch's head
+// as solid from its springing line: nothing walks through the top of an arch.
+static void wall_layer(Kit* kit, const KitWall* w, const WallFrame* wf, const KitOpening* sorted,
+                       int n, int mat, float offset, float thick) {
     float cursor = w->from;
     for (int i = 0; i < n; i++) {
         const KitOpening* o = &sorted[i];
-        wall_slab(kit, w, mat, offset, thick, cursor, o->from, w->y0, w->y1);
-        wall_slab(kit, w, mat, offset, thick, o->from, o->to, w->y0, o->bottom);
-        wall_slab(kit, w, mat, offset, thick, o->from, o->to, o->top, w->y1);
+        const bool arched = o->arch != KIT_ARCH_FLAT && o->rise > 0.0f && mat != KIT_COLLIDER_ONLY;
+        wall_slab(kit, wf, mat, offset, thick, cursor, o->from, w->y0, w->y1);
+        wall_slab(kit, wf, mat, offset, thick, o->from, o->to, w->y0, o->bottom);
+        wall_slab(kit, wf, mat, offset, thick, o->from, o->to, arched ? o->top + o->rise : o->top,
+                  w->y1);
+        if (arched)
+            wall_spandrels(kit, wf, o, mat, offset, thick);
         cursor = o->to;
     }
-    wall_slab(kit, w, mat, offset, thick, cursor, w->to, w->y0, w->y1);
+    wall_slab(kit, wf, mat, offset, thick, cursor, w->to, w->y0, w->y1);
 }
 
-void kit_wall(Kit* kit, const KitWall* w) {
+static void wall_in(Kit* kit, const KitWall* w, const WallFrame* wf) {
     // Openings in order along the wall, so the solid spans are the gaps.
     KitOpening sorted[KIT_MAX_OPENINGS];
     const int n = w->opening_count < KIT_MAX_OPENINGS ? w->opening_count : KIT_MAX_OPENINGS;
@@ -708,12 +974,26 @@ void kit_wall(Kit* kit, const KitWall* w) {
             sorted[j - 1] = t;
         }
     const float q = 0.25f * w->thick;
-    const float s = w->inner >= 0 ? 1.0f : -1.0f;
-    wall_layer(kit, w, sorted, n, w->mat_inner, s * q, 0.5f * w->thick);
-    wall_layer(kit, w, sorted, n, w->mat_outer, -s * q, 0.5f * w->thick);
+    const float s = wf->inner >= 0 ? 1.0f : -1.0f;
+    wall_layer(kit, w, wf, sorted, n, w->mat_inner, s * q, 0.5f * w->thick);
+    wall_layer(kit, w, wf, sorted, n, w->mat_outer, -s * q, 0.5f * w->thick);
     // One body per span through the whole thickness, rather than one per layer:
     // two coplanar bodies meeting mid-wall buy nothing.
-    wall_layer(kit, w, sorted, n, KIT_COLLIDER_ONLY, 0.0f, w->thick);
+    wall_layer(kit, w, wf, sorted, n, KIT_COLLIDER_ONLY, 0.0f, w->thick);
+}
+
+void kit_wall(Kit* kit, const KitWall* w) {
+    // Along X, the world frame already runs a along x and d along z. Along Z, a quarter turn
+    // the other way runs a along +z, and d then points along -x.
+    const WallFrame wf =
+        w->along_x ? (WallFrame){KIT_WORLD, w->at, w->inner}
+                   : (WallFrame){{{0.0f, 0.0f, 0.0f}, -0.5f * GLM_PIf}, -w->at, -w->inner};
+    wall_in(kit, w, &wf);
+}
+
+void kit_frame_wall(Kit* kit, const KitFrame* f, const KitWall* w) {
+    const WallFrame wf = {*f, w->at, w->inner};
+    wall_in(kit, w, &wf);
 }
 
 void kit_frame_point(const KitFrame* f, float a, float y, float d, vec3 out) {
@@ -745,6 +1025,43 @@ void kit_frame_box(Kit* kit, const KitFrame* f, int mat, float a0, float a1, flo
     kit_frame_point(f, 0.5f * (a0 + a1), 0.5f * (y0 + y1), 0.5f * (d0 + d1), centre);
     const vec3 half = {0.5f * fabsf(a1 - a0), 0.5f * fabsf(y1 - y0), 0.5f * fabsf(d1 - d0)};
     kit_box(kit, mat, centre, half, f->yaw, collide);
+}
+
+// An (a, y) outline at distance d, in the world.
+static bool outline_at(const KitFrame* f, const vec2* outline, int count, float d, vec3* out) {
+    if (count < 3 || count > KIT_MAX_OUTLINE) {
+        fprintf(stderr, "silent: an outline needs 3 to %d corners, not %d\n", KIT_MAX_OUTLINE,
+                count);
+        return false;
+    }
+    for (int i = 0; i < count; i++)
+        kit_frame_point(f, outline[i][0], outline[i][1], d, out[i]);
+    return true;
+}
+
+void kit_frame_polygon(Kit* kit, const KitFrame* f, int mat, const vec2* outline, int count,
+                       float d) {
+    vec3 world[KIT_MAX_OUTLINE], out = {0.0f, 0.0f, 0.0f};
+    if (!outline_at(f, outline, count, d, world))
+        return;
+    kit_frame_dir(f, 0.0f, 0.0f, 1.0f, out);
+    kit_polygon_facing(kit, mat, world, count, out);
+}
+
+void kit_frame_extrude(Kit* kit, const KitFrame* f, int mat, const vec2* outline, int count,
+                       float d0, float d1) {
+    vec3 base[KIT_MAX_OUTLINE], offset = {0.0f, 0.0f, 0.0f};
+    if (!slot_ok(kit, mat) || !outline_at(f, outline, count, d0, base))
+        return;
+    kit_frame_dir(f, 0.0f, 0.0f, d1 - d0, offset);
+    extrude(kit, mat, base, count, offset);
+}
+
+void kit_frame_stair(Kit* kit, const KitFrame* f, int mat, float a0, float a1, float y0, float d0,
+                     float rise, float going, int risers) {
+    for (int i = 1; i < risers; i++)
+        kit_frame_box(kit, f, mat, a0, a1, y0, y0 + (float)i * rise, d0 + (float)(i - 1) * going,
+                      d0 + (float)i * going, true);
 }
 
 void kit_frame_prism(Kit* kit, const KitFrame* f, int mat, float a, float d, float y0, float y1,
