@@ -26,7 +26,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFilter
 
 from fetch_textures import CACHE_DIR, ROOT, open_polyhaven
-from make_cards import pack, to_array, to_image, write_header
+from make_cards import place, save_rough, to_array, to_image, veneer, write_header
 
 OUT_DIR = os.path.join(ROOT, "assets", "textures", "silent")
 HEADER = os.path.join(ROOT, "apps", "silent", "src", "gothic.h")
@@ -69,15 +69,6 @@ def soften(m, radius):
     return mask_of(img.filter(ImageFilter.GaussianBlur(radius)))
 
 
-def tiled(name, w, h, turn=False):
-    """A w x h patch of a Poly Haven set's albedo at 1k, repeated to fill it."""
-    img = open_polyhaven(name, {})[0]["albedo"].convert("RGB")
-    if turn:
-        img = img.transpose(Image.Transpose.ROTATE_90)
-    a = to_array(img)
-    reps = (h // a.shape[0] + 1, w // a.shape[1] + 1, 1)
-    return np.tile(a, reps)[:h, :w]
-
 
 def normal_from_height(height, px_per_m, depth_m):
     """An OpenGL normal map from a 0..1 height field `depth_m` deep at most: +Y toward the
@@ -107,7 +98,7 @@ def card(name, albedo, height, px, depth, rough, alpha=None):
 
 def mahogany(w, h):
     """The clock case's lacquered cherry, deepened toward mahogany's red-brown."""
-    return tiled("lacquered_cherry_wood", w, h, turn=True) * np.array([1.05, 0.8, 0.66])
+    return veneer("lacquered_cherry_wood", w, h, turn=True) * np.array([1.05, 0.8, 0.66])
 
 
 def framed(w, h, border):
@@ -393,7 +384,6 @@ def lancet(name, scheme, rng):
     px = GLASS_PX
     mull = 0.05 * px
     light_w = (w - mull) * 0.5
-    spring_y = h - LANCET_SPRING * px
     # The field: diamond panes in the background colour, a little varied.
     q = int(0.09 * px)
     for gy in range(-q, h + q, q):
@@ -410,7 +400,7 @@ def lancet(name, scheme, rng):
         x0 = side * (light_w + mull)
         x1 = x0 + light_w
         b = 0.035 * px
-        for y in range(int(spring_y * 0.0), h, int(0.06 * px)):
+        for y in range(0, h, int(0.06 * px)):
             c = border_a if (y // int(0.06 * px)) % 2 else border_b
             colour = tuple(int(255 * k) for k in c)
             for xa, xb in ((x0, x0 + b), (x1 - b, x1)):
@@ -504,7 +494,7 @@ def spines(name, rng):
     rules, a dark title label with gilt in it, and wear at head and foot. Returns the card and
     the edges between spines in metres from the strip's left."""
     w, h = int(STRIP_W * BOOK_PX), int(STRIP_H * BOOK_PX)
-    leather = tiled("brown_leather", w, h)
+    leather = veneer("brown_leather", w, h)
     lum = leather.mean(axis=-1, keepdims=True)
     a = np.zeros((h, w, 3), dtype=np.float32)
     height = np.full((h, w), 0.5, dtype=np.float32)
@@ -650,13 +640,7 @@ def main():
     extra.append("")
     cards += [coat_of_arms(rng), fireback(rng), flame("flame_a", rng), flame("flame_b", rng)]
 
-    order = sorted(range(len(cards)), key=lambda i: -cards[i]["pixels"].shape[0])
-    placed = pack([(cards[i]["pixels"].shape[1], cards[i]["pixels"].shape[0]) for i in order],
-                  ATLAS)
-    spots = [None] * len(cards)
-    for i, spot in zip(order, placed):
-        spots[i] = spot
-
+    spots = place(cards, ATLAS)
     W, H = ATLAS
     albedo = np.zeros((H, W, 4), dtype=np.float32)
     albedo[..., :3] = 0.2
@@ -674,8 +658,7 @@ def main():
     Image.fromarray(np.clip(albedo * 255 + 0.5, 0, 255).astype(np.uint8), "RGBA").transpose(
         flip).save(out("gothic_albedo.png"))
     to_image(normal).transpose(flip).save(out("gothic_normal.png"))
-    to_image(np.repeat(rough[..., None], 3, axis=-1)).transpose(flip).resize(
-        (W // ROUGH_SCALE, H // ROUGH_SCALE), Image.Resampling.BOX).save(out("gothic_rough.png"))
+    save_rough(rough, out("gothic_rough.png"), ROUGH_SCALE)
     print(out("gothic_albedo.png"))
 
     glass, glass_n, glass_r = leaded_glass(rng)

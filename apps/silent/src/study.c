@@ -10,13 +10,9 @@
 #include "ornament.h"
 #include "study.h"
 
-#define COUNT(arr) ((int)(sizeof(arr) / sizeof((arr)[0])))
-
 // The study's three plain walls, their faces as the room sees them.
-#define EAST_X  (HALL_X0 - 0.5f * INT_WALL)
-#define BACK_Z  (KITCHEN_BACK_Z - 0.5f * INT_WALL)
-#define WEST_X  (HOUSE_X0 + 0.5f * EXT_WALL)
-#define FRONT_Z (HOUSE_FRONT_Z + 0.5f * EXT_WALL)
+#define EAST_X (HALL_X0 - 0.5f * INT_WALL)
+#define WEST_X (HOUSE_X0 + 0.5f * EXT_WALL)
 
 /*
  * A bookcase, in a frame on the floor at a wall's face: a plinth, a back, uprights parting it
@@ -112,21 +108,15 @@ static void bookcase(Kit* kit, KitRng* rng, const KitFrame* f, float a0, float a
     }
 
     kit_frame_box(kit, f, MAT_MAHOGANY, a0, a1, HEAD_TOP, FRIEZE_TOP, 0.0f, CASE_D, false);
-    const float fw = GOTHICS[GOTHIC_FRIEZE].size[0];
-    const int n = (int)fmaxf(1.0f, roundf((a1 - a0) / fw));
-    for (int i = 0; i < n; i++) {
-        const float c0 = a0 + (a1 - a0) * (float)i / (float)n;
-        kit_frame_card(kit, f, MAT_CARVED, (vec3){c0, HEAD_TOP, CASE_D + 0.001f},
-                       (vec3){(a1 - a0) / (float)n, 0.0f, 0.0f},
-                       (vec3){0.0f, FRIEZE_TOP - HEAD_TOP, 0.0f}, GOTHICS[GOTHIC_FRIEZE].uv);
-    }
+    kit_frame_card_row(kit, f, MAT_CARVED, GOTHICS[GOTHIC_FRIEZE].uv, a0, a1, HEAD_TOP, FRIEZE_TOP,
+                       CASE_D + 0.001f, 1.0f, GOTHICS[GOTHIC_FRIEZE].size[0]);
     const vec2 cornice[] = {{0.0f, FRIEZE_TOP},
                             {CASE_D, FRIEZE_TOP},
                             {CASE_D + 0.03f, FRIEZE_TOP + 0.015f},
                             {CASE_D + 0.06f, FRIEZE_TOP + 0.05f},
                             {CASE_D + 0.06f, CASE_TOP},
                             {0.0f, CASE_TOP}};
-    kit_frame_run(kit, f, MAT_MAHOGANY, cornice, COUNT(cornice), a0, a1);
+    kit_frame_run(kit, f, MAT_MAHOGANY, cornice, KIT_COUNT(cornice), a0, a1);
     kit_frame_box(kit, f, KIT_COLLIDER_ONLY, a0, a1, 0.0f, CASE_TOP, 0.0f, CASE_D + 0.02f, true);
 }
 
@@ -156,7 +146,7 @@ static void ladder(Kit* kit, const KitFrame* f, float a, float a0, float a1) {
 static void knob(Kit* kit, const KitFrame* f, float a, float y, float d, const vec3 axis) {
     const vec2 profile[] = {{0.0f, 0.0f},     {0.011f, 0.0f},   {0.011f, 0.005f},
                             {0.007f, 0.011f}, {0.013f, 0.021f}, {0.0f, 0.025f}};
-    kit_frame_lathe_on(kit, f, MAT_BRASS, (vec3){a, y, d}, axis, profile, COUNT(profile), 10);
+    kit_frame_lathe_on(kit, f, MAT_BRASS, (vec3){a, y, d}, axis, profile, KIT_COUNT(profile), 10);
 }
 
 /*
@@ -193,12 +183,8 @@ static void desk(Kit* kit, const KitFrame* f) {
                   false);
     knob(kit, f, 0.0f, top - 0.1f, face, toward);
     kit_frame_box(kit, f, MAT_MAHOGANY, -0.3f, 0.3f, 0.1f, top - 0.15f, 0.33f, 0.36f, false);
-    for (int i = 0; i < 3; i++) {
-        const float a0 = -0.76f + 1.52f * (float)i / 3.0f;
-        kit_frame_card(kit, f, MAT_CARVED, (vec3){a0, 0.08f, 0.361f},
-                       (vec3){1.52f / 3.0f, 0.0f, 0.0f}, (vec3){0.0f, under - 0.12f, 0.0f},
-                       fold->uv);
-    }
+    kit_frame_card_row(kit, f, MAT_CARVED, fold->uv, -0.76f, 0.76f, 0.08f, under - 0.04f, 0.361f,
+                       1.0f, fold->size[0]);
     kit_frame_box(kit, f, KIT_COLLIDER_ONLY, -0.8f, 0.8f, 0.0f, top, -0.4f, 0.4f, true);
 }
 
@@ -230,7 +216,7 @@ static void chair(Kit* kit, const KitFrame* f) {
                            {0.026f, 0.07f}, {0.01f, 0.1f},  {0.006f, 0.15f}, {0.0f, 0.16f}};
     for (int s = -1; s <= 1; s += 2)
         kit_frame_lathe(kit, f, MAT_MAHOGANY, 0.23f * (float)s, 0.5f * (back0 + back1), 1.12f,
-                        finial, COUNT(finial), 8);
+                        finial, KIT_COUNT(finial), 8);
     kit_frame_box(kit, f, KIT_COLLIDER_ONLY, -0.27f, 0.27f, 0.0f, 1.0f, -0.26f, 0.25f, true);
 }
 
@@ -244,12 +230,12 @@ static void lamp(Kit* kit, Scene* scene, const KitFrame* f, float a, float d) {
     const vec2 column[] = {{0.0f, 0.0f},     {0.075f, 0.0f},  {0.075f, 0.012f}, {0.05f, 0.03f},
                            {0.016f, 0.045f}, {0.012f, 0.05f}, {0.009f, 0.33f},  {0.016f, 0.34f},
                            {0.016f, 0.36f},  {0.0f, 0.36f}};
-    kit_frame_lathe(kit, f, MAT_BRASS, a, d, y, column, COUNT(column), 16);
+    kit_frame_lathe(kit, f, MAT_BRASS, a, d, y, column, KIT_COUNT(column), 16);
     const float top = y + 0.35f, at = a + 0.2f, rim = top - 0.12f;
     kit_frame_pipe(kit, f, MAT_BRASS, (vec3[]){{a, top, d}, {at, top, d}}, 2, 0.008f, 8);
     const vec2 shade[] = {{0.13f, 0.0f},  {0.125f, 0.02f}, {0.1f, 0.06f},
                           {0.055f, 0.1f}, {0.02f, 0.118f}, {0.0f, 0.12f}};
-    kit_frame_lathe(kit, f, MAT_SHADE, at, d, rim, shade, COUNT(shade), 20);
+    kit_frame_lathe(kit, f, MAT_SHADE, at, d, rim, shade, KIT_COUNT(shade), 20);
     kit_frame_prism(kit, f, MAT_BULB, at, d, rim + 0.01f, rim + 0.014f, 0.12f, 16);
 
     vec3 pos = {0.0f, 0.0f, 0.0f};
@@ -274,10 +260,10 @@ static void candlestick(Kit* kit, const KitFrame* f, float a, float d, float h, 
                           {0.02f, 0.095f},    {0.01f, 0.11f},      {0.009f, h - 0.03f},
                           {0.03f, h - 0.02f}, {0.032f, h - 0.01f}, {0.013f, h},
                           {0.0f, h}};
-    kit_frame_lathe(kit, f, MAT_BRASS, a, d, y, stick, COUNT(stick), 14);
+    kit_frame_lathe(kit, f, MAT_BRASS, a, d, y, stick, KIT_COUNT(stick), 14);
     const vec2 candle[] = {
         {0.0f, 0.0f}, {0.011f, 0.0f}, {0.011f, wax}, {0.007f, wax + 0.006f}, {0.0f, wax + 0.008f}};
-    kit_frame_lathe(kit, f, MAT_WAX, a, d, y + h, candle, COUNT(candle), 10);
+    kit_frame_lathe(kit, f, MAT_WAX, a, d, y + h, candle, KIT_COUNT(candle), 10);
     kit_frame_prism(kit, f, MAT_BLACK, a, d, y + h + wax, y + h + wax + 0.016f, 0.0015f, 4);
 }
 
@@ -297,11 +283,11 @@ static void journal(Kit* kit, const KitFrame* f, float a, float d) {
     const float y = DESK_H + 0.003f;
     kit_frame_box(kit, f, MAT_LEATHER, a - 0.18f, a + 0.18f, y, y + 0.005f, d - 0.125f, d + 0.125f,
                   false);
+    const float pages = 0.022f; // the page blocks' top, over the boards' foot
     for (int s = -1; s <= 1; s += 2) {
-        const float g = a + 0.004f * (float)s, e = a + 0.17f * (float)s;
-        kit_frame_box(kit, f, MAT_PAPER, fminf(g, e), fmaxf(g, e), y + 0.005f, y + 0.022f,
-                      d - 0.117f, d + 0.117f, false);
-        lying(kit, f, CARD_LETTER, a + 0.087f * (float)s, d, 0.0195f, 0.0f, 0.76f);
+        kit_frame_box(kit, f, MAT_PAPER, a + 0.004f * (float)s, a + 0.17f * (float)s, y + 0.005f,
+                      y + pages, d - 0.117f, d + 0.117f, false);
+        lying(kit, f, CARD_LETTER, a + 0.087f * (float)s, d, pages + 0.0005f, 0.0f, 0.76f);
     }
 }
 
@@ -319,7 +305,7 @@ static void desk_things(Kit* kit, Scene* scene, const KitFrame* f) {
     const float y = DESK_H + 0.003f;
     const vec2 well[] = {{0.0f, 0.0f},    {0.032f, 0.0f},   {0.032f, 0.035f}, {0.02f, 0.045f},
                          {0.012f, 0.05f}, {0.012f, 0.058f}, {0.0f, 0.058f}};
-    kit_frame_lathe(kit, f, MAT_BLACK, -0.26f, 0.04f, y, well, COUNT(well), 12);
+    kit_frame_lathe(kit, f, MAT_BLACK, -0.26f, 0.04f, y, well, KIT_COUNT(well), 12);
     kit_frame_pipe(kit, f, MAT_PAPER,
                    (vec3[]){{-0.26f, y + 0.03f, 0.04f}, {-0.32f, y + 0.22f, 0.09f}}, 2, 0.003f, 6);
 }
@@ -342,7 +328,7 @@ static void globe(Kit* kit, float x, float z) {
     const vec2 column[] = {{0.0f, 0.0f},   {0.05f, 0.0f},  {0.05f, 0.04f}, {0.025f, 0.08f},
                            {0.04f, 0.2f},  {0.02f, 0.35f}, {0.03f, 0.45f}, {0.018f, 0.55f},
                            {0.026f, 0.6f}, {0.0f, 0.6f}};
-    kit_frame_lathe(kit, &f, MAT_MAHOGANY, 0.0f, 0.0f, 0.0f, column, COUNT(column), 10);
+    kit_frame_lathe(kit, &f, MAT_MAHOGANY, 0.0f, 0.0f, 0.0f, column, KIT_COUNT(column), 10);
 
     // The meridian stands upright in the column's slot, and the axis tilts inside it.
     enum { LOOP = 25, ARC = 14 };
@@ -372,17 +358,21 @@ void study_build(Kit* kit, Scene* scene, unsigned int seed) {
     KitRng rng = {seed * 2654435761u + 977u};
 
     // Along the east wall from the front corner to the back: four bays, and the ladder.
-    const KitFrame east = {{EAST_X, FLOOR2_Y, FRONT_Z}, -0.5f * GLM_PIf};
-    const float east_len = BACK_Z - FRONT_Z;
+    const KitFrame east = {{EAST_X, FLOOR2_Y, BAND_Z0}, -0.5f * GLM_PIf};
+    const float east_len = BAND_Z1 - BAND_Z0;
     bookcase(kit, &rng, &east, 0.0f, east_len, 4);
     ladder(kit, &east, 2.4f, 0.0f, east_len);
 
-    // Along the back from the west corner to the doorway's casing, and down the west wall from
-    // in front of that one to the tower.
-    const float door_x = house_wall(HOUSE_WALL_GREAT_FRONT)->openings[1].from - 0.12f;
-    const KitFrame back = {{door_x, FLOOR2_Y, BACK_Z}, GLM_PIf};
+    // The doorway's casing on this side, and along the back from the west corner to 4 cm short
+    // of it, and down the west wall from in front of that one to the tower.
+    const KitWall* front = house_wall(HOUSE_WALL_GREAT_FRONT);
+    const KitOpening* door = &front->openings[OPENING_STUDY_DOOR];
+    const Facade inside = facade_inner(front);
+    ornament_casing(kit, &inside, MAT_MAHOGANY, door);
+    const float door_x = door->from - ORNAMENT_CASING_W - 0.04f;
+    const KitFrame back = {{door_x, FLOOR2_Y, BAND_Z1}, GLM_PIf};
     bookcase(kit, &rng, &back, 0.0f, door_x - WEST_X, 2);
-    const float west_from = BACK_Z - CASE_D, west_to = TOWER_Z + TOWER_APOTHEM + 0.05f;
+    const float west_from = BAND_Z1 - CASE_D, west_to = TOWER_Z + TOWER_APOTHEM + 0.05f;
     const KitFrame west = {{WEST_X, FLOOR2_Y, west_from}, 0.5f * GLM_PIf};
     bookcase(kit, &rng, &west, 0.0f, west_from - west_to, 1);
 

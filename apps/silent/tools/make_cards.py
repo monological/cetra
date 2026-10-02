@@ -437,6 +437,27 @@ def pack(sizes, atlas=(ATLAS_W, ATLAS_H)):
     return spots
 
 
+def place(cards, atlas=(ATLAS_W, ATLAS_H)):
+    """Each card's spot, in the cards' own order: packed tallest first, which packs tightest."""
+    order = sorted(range(len(cards)), key=lambda i: -cards[i]["pixels"].shape[0])
+    placed = pack([(cards[i]["pixels"].shape[1], cards[i]["pixels"].shape[0]) for i in order],
+                  atlas)
+    spots = [None] * len(cards)
+    for i, spot in zip(order, placed):
+        spots[i] = spot
+    return spots
+
+
+def save_rough(rough, path, scale=ROUGH_SCALE):
+    """An atlas's roughness at 1/scale its size, box-filtered. It only changes card to card, so
+    the small map carries it -- and it has to: a roughness map is a layer of the engine's
+    material array, which brings every layer up to its largest."""
+    h, w = rough.shape
+    flip = Image.Transpose.FLIP_TOP_BOTTOM
+    to_image(np.repeat(rough[..., None], 3, axis=-1)).transpose(flip).resize(
+        (w // scale, h // scale), Image.Resampling.BOX).save(path)
+
+
 def write_header(cards, spots, path=HEADER, prefix="CARD", kind="Card", picture="cards_albedo.png",
                  tool="make_cards.py", atlas=(ATLAS_W, ATLAS_H), extra=()):
     """The header naming each card in a picture: an enum, and per card its UVs and its size
@@ -504,13 +525,7 @@ def main():
                       "anchors": {k: (x / CLOCK_PX_PER_M, (h - y) / CLOCK_PX_PER_M)
                                   for k, (x, y) in anchors.items()}})
 
-    # Tallest first packs tightest; the header keeps the order above.
-    order = sorted(range(len(cards)), key=lambda i: -cards[i]["pixels"].shape[0])
-    placed = pack([(cards[i]["pixels"].shape[1], cards[i]["pixels"].shape[0]) for i in order])
-    spots = [None] * len(cards)
-    for i, spot in zip(order, placed):
-        spots[i] = spot
-
+    spots = place(cards)
     albedo = np.ones((ATLAS_H, ATLAS_W, 3), dtype=np.float32) * PAPER * 0.8
     rough = np.full((ATLAS_H, ATLAS_W), ROUGH_PAPER, dtype=np.float32)
     for c, (x, y) in zip(cards, spots):
@@ -519,13 +534,7 @@ def main():
         rough[y:y + h, x:x + w] = c["rough"]
     flip = Image.Transpose.FLIP_TOP_BOTTOM
     to_image(albedo).transpose(flip).save(os.path.join(OUT_DIR, "cards_albedo.png"))
-    # The roughness only changes card to card, so a quarter the size carries
-    # it -- and it has to: a roughness map is a layer of the engine's material
-    # array, which brings every layer up to its largest, so at the albedo's
-    # size it made every material's masks 2048 wide.
-    to_image(np.repeat(rough[..., None], 3, axis=-1)).transpose(flip).resize(
-        (ATLAS_W // ROUGH_SCALE, ATLAS_H // ROUGH_SCALE), Image.Resampling.BOX).save(
-        os.path.join(OUT_DIR, "cards_rough.png"))
+    save_rough(rough, os.path.join(OUT_DIR, "cards_rough.png"))
     flat = np.zeros((32, 64, 3), dtype=np.uint8) + np.array([128, 128, 255], dtype=np.uint8)
     Image.fromarray(flat).save(os.path.join(OUT_DIR, "cards_normal.png"))
     print(os.path.join(OUT_DIR, "cards_albedo.png"))

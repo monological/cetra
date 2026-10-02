@@ -9,10 +9,6 @@
 // parlour's bay below and the study's above, the study's high ceiling, and the spire.
 void tower_build(Kit* kit);
 
-// The tower's eight corners in (x, z), counter-clockwise from the east face's north end, for
-// an octagon whose faces stand `apothem` from its middle.
-void tower_octagon(float apothem, vec2 out[8]);
-
 /*
  * The rectangle x0..x1, z0..z1 with the tower taken out of its corner at (x0, z0), which must
  * lie inside the octagon of `apothem` while the rest of the outline crosses the rectangle's

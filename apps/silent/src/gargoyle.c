@@ -1,8 +1,6 @@
 #include "gargoyle.h"
 #include "mats.h"
 
-#define COUNT(arr) ((int)(sizeof(arr) / sizeof((arr)[0])))
-
 // Lathed parts are coarse on purpose: the beast is seen from the street, nine metres down.
 #define SIDES 10
 
@@ -41,7 +39,7 @@ static void lathe(Kit* kit, const KitFrame* f, int mat, const vec3 base, const v
 // A cone `len` long, `r` across its base, from `base` along `dir`: a horn, a fang, a claw.
 static void cone(Kit* kit, const KitFrame* f, const vec3 base, const vec3 dir, float r, float len) {
     const vec2 p[] = {{0.0f, 0.0f}, {r, 0.0f}, {0.6f * r, 0.45f * len}, {0.0f, len}};
-    lathe(kit, f, MAT_STONE, base, dir, p, COUNT(p), 6);
+    lathe(kit, f, MAT_STONE, base, dir, p, KIT_COUNT(p), 6);
 }
 
 // The box a0..a1, y0..y1, d0..d1 of the sculpt.
@@ -63,7 +61,7 @@ static void body(Kit* kit, const KitFrame* f) {
     const vec2 torso[] = {{0.0f, 0.0f},   {0.1f, 0.02f},  {0.15f, 0.1f}, {0.17f, 0.22f},
                           {0.16f, 0.34f}, {0.12f, 0.44f}, {0.07f, 0.5f}, {0.0f, 0.52f}};
     at(0.0f, -0.1f, 0.02f, p);
-    lathe(kit, f, MAT_STONE, p, axis, torso, COUNT(torso), SIDES);
+    lathe(kit, f, MAT_STONE, p, axis, torso, KIT_COUNT(torso), SIDES);
     // A ridge of knobs down its spine.
     const vec3 up = {0.0f, axis[2], -axis[1]};
     for (int i = 0; i < 3; i++) {
@@ -77,7 +75,7 @@ static void body(Kit* kit, const KitFrame* f) {
     for (int s = -1; s <= 1; s += 2) {
         unit(0.15f * (float)s, 0.2f, 1.0f, axis);
         at(0.11f * (float)s, -0.12f, 0.0f, p);
-        lathe(kit, f, MAT_STONE, p, axis, haunch, COUNT(haunch), SIDES);
+        lathe(kit, f, MAT_STONE, p, axis, haunch, KIT_COUNT(haunch), SIDES);
         block(kit, f, 0.08f * (float)s, 0.17f * (float)s, -0.18f, -0.13f, 0.12f, 0.26f);
     }
 }
@@ -110,12 +108,12 @@ static void head(Kit* kit, const KitFrame* f) {
                           {0.11f, 0.12f}, {0.09f, 0.18f}, {0.06f, 0.24f},
                           {0.045f, 0.3f}, {0.03f, 0.33f}, {0.0f, 0.34f}};
     at(0.0f, 0.04f, 0.42f, p);
-    lathe(kit, f, MAT_STONE, p, axis, skull, COUNT(skull), SIDES);
+    lathe(kit, f, MAT_STONE, p, axis, skull, KIT_COUNT(skull), SIDES);
     // The lower jaw, dropped open: the spout's lip.
     const vec2 jaw[] = {{0.52f, -0.02f}, {0.74f, -0.08f}, {0.76f, -0.115f}, {0.55f, -0.075f}};
-    vec2 jaw_s[COUNT(jaw)];
-    scaled(jaw, COUNT(jaw), jaw_s);
-    kit_frame_run(kit, f, MAT_STONE, jaw_s, COUNT(jaw), -0.045f * SCULPT_SCALE,
+    vec2 jaw_s[KIT_COUNT(jaw)];
+    scaled(jaw, KIT_COUNT(jaw), jaw_s);
+    kit_frame_run(kit, f, MAT_STONE, jaw_s, KIT_COUNT(jaw), -0.045f * SCULPT_SCALE,
                   0.045f * SCULPT_SCALE);
     vec3 fang = {0.0f, 0.0f, 0.0f};
     unit(0.0f, -1.0f, 0.15f, fang);
@@ -134,7 +132,7 @@ static void head(Kit* kit, const KitFrame* f) {
         // Eyes sunk under the brow.
         const vec2 eye[] = {{0.0f, 0.0f}, {0.02f, 0.006f}, {0.02f, 0.022f}, {0.0f, 0.028f}};
         at(0.05f * a, 0.06f, 0.6f, p);
-        lathe(kit, f, MAT_BLACK, p, axis, eye, COUNT(eye), 6);
+        lathe(kit, f, MAT_BLACK, p, axis, eye, KIT_COUNT(eye), 6);
     }
 }
 
@@ -144,17 +142,17 @@ static void wings(Kit* kit, const KitFrame* f) {
     static const vec2 WING[] = {{0.4f, 0.02f},  {0.36f, 0.22f}, {0.3f, 0.44f},  {0.24f, 0.62f},
                                 {0.18f, 0.48f}, {0.1f, 0.52f},  {0.06f, 0.36f}, {-0.02f, 0.4f},
                                 {0.0f, 0.2f},   {0.06f, 0.04f}, {0.2f, 0.0f}};
-    static const vec2 TIPS[] = {{0.24f, 0.62f}, {0.1f, 0.52f}, {-0.02f, 0.4f}};
-    vec2 wing[COUNT(WING)];
-    scaled(WING, COUNT(WING), wing);
+    static const int TIPS[] = {3, 5, 7}; // the fingers' ends among WING's points
+    vec2 wing[KIT_COUNT(WING)];
+    scaled(WING, KIT_COUNT(WING), wing);
     for (int s = -1; s <= 1; s += 2) {
         const float a = (float)s;
-        kit_frame_run(kit, f, MAT_STONE, wing, COUNT(WING), 0.13f * a * SCULPT_SCALE,
+        kit_frame_run(kit, f, MAT_STONE, wing, KIT_COUNT(WING), 0.13f * a * SCULPT_SCALE,
                       0.15f * a * SCULPT_SCALE);
-        for (int t = 0; t < COUNT(TIPS); t++) {
+        for (int t = 0; t < KIT_COUNT(TIPS); t++) {
             vec3 bone[2];
             at(0.155f * a, 0.04f, 0.38f, bone[0]);
-            at(0.155f * a, TIPS[t][1], TIPS[t][0], bone[1]);
+            at(0.155f * a, WING[TIPS[t]][1], WING[TIPS[t]][0], bone[1]);
             kit_frame_pipe(kit, f, MAT_STONE, bone, 2, 0.012f * SCULPT_SCALE, 5);
         }
     }

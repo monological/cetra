@@ -18,11 +18,17 @@ typedef struct Facade {
     float out; // +1 or -1
 } Facade;
 
-// An axis-aligned wall's outside, and a frame wall's.
+// An axis-aligned wall's outside, and its inner side -- the one its `inner` points to -- as a
+// room sees it.
 Facade facade_of(const KitWall* w);
-Facade facade_in(const KitFrame* f, const KitWall* w);
-// An axis-aligned wall's inner side, the one its `inner` points to, as a room sees it.
 Facade facade_inner(const KitWall* w);
+// The outside of a wall built in frame `f` (kit_frame_wall).
+Facade facade_of_frame(const KitFrame* f, const KitWall* w);
+
+// A casing round an opening: a band this wide, standing this far off the face.
+#define ORNAMENT_CASING_W 0.08f
+#define ORNAMENT_CASING_T 0.04f
+void ornament_casing(Kit* kit, const Facade* s, int mat, const KitOpening* o);
 
 // The rubble base along the foot of a wall from a0 to a1, and the dressed water table that
 // sheds the rain off it; across a doorway it stops at the sill.

@@ -1,9 +1,8 @@
+#include <float.h>
 #include <math.h>
 
 #include "door.h"
 #include "mats.h"
-
-#define COUNT(arr) ((int)(sizeof(arr) / sizeof((arr)[0])))
 
 #define DOOR_SECONDS 1.2f  // shut to open, eased at both ends: a heavy door
 #define PLANK        0.17f // the boards' width, seams between them
@@ -61,7 +60,7 @@ void door_leaf(Kit* kit, const KitFrame* f, const KitOpening* o, float t) {
                               {end + 0.04f, y + STRAP_H},
                               {end, y + 0.5f * STRAP_H},
                               {o->from + 0.01f, y + 0.5f * STRAP_H}};
-        kit_frame_extrude(kit, f, MAT_IRON, strap, COUNT(strap), out, out - STRAP_T);
+        kit_frame_extrude(kit, f, MAT_IRON, strap, KIT_COUNT(strap), out, out - STRAP_T);
         for (float a = o->from + 0.08f; a < end; a += 0.13f)
             kit_frame_box(kit, f, MAT_IRON, a - 0.01f, a + 0.01f, y - 0.01f, y + 0.01f,
                           out - STRAP_T, out - STRAP_T - 0.008f, false);
@@ -76,7 +75,7 @@ void door_leaf(Kit* kit, const KitFrame* f, const KitOpening* o, float t) {
     for (int side = -1; side <= 1; side += 2) {
         const float d = (float)side * 0.5f * t;
         kit_frame_lathe_on(kit, f, MAT_IRON, (vec3){ra, ry, d}, (vec3){0.0f, 0.0f, (float)side},
-                           boss, COUNT(boss), 10);
+                           boss, KIT_COUNT(boss), 10);
         enum { LOOP = 13 };
         vec3 ring[LOOP];
         for (int i = 0; i < LOOP; i++) {
@@ -91,10 +90,17 @@ void door_leaf(Kit* kit, const KitFrame* f, const KitOpening* o, float t) {
     }
 }
 
-void door_build(Door* door, Engine* engine, Scene* scene, EntityManager* em, PhysicsWorld* physics,
+// The body and the node where the swing puts them.
+static void place(Door* door) {
+    float yaw = 0.0f;
+    pose(door, door->entity->position, &yaw);
+    entity_set_rotation_euler(door->entity, (vec3){0.0f, yaw, 0.0f});
+}
+
+bool door_build(Door* door, Engine* engine, Scene* scene, EntityManager* em, PhysicsWorld* physics,
                 const char* name, const KitFrame* hinge, const KitOpening* shape, float thick,
                 float swing) {
-    *door = (Door){.yaw = hinge->yaw, .shape = *shape, .thick = thick, .swing = swing};
+    *door = (Door){.yaw = hinge->yaw, .shape = *shape, .swing = swing};
     glm_vec3_copy((float*)hinge->origin, door->hinge);
 
     // Built round the leaf's middle, so the node's transform is the leaf's place and turn.
@@ -109,14 +115,13 @@ void door_build(Door* door, Engine* engine, Scene* scene, EntityManager* em, Phy
 
     door->entity = create_entity(em, name);
     if (!door->entity)
-        return;
+        return false;
     door->entity->node = node;
-    float yaw = 0.0f;
-    pose(door, door->entity->position, &yaw);
-    entity_set_rotation_euler(door->entity, (vec3){0.0f, yaw, 0.0f});
+    place(door);
     PhysicsShapeDesc box = {
         .type = SHAPE_BOX, .box.half_extents = {half_w, half_h, 0.5f * thick}, .density = 0.0f};
     entity_add_rigid_body(door->entity, physics, &box, MOTION_KINEMATIC, OBJ_LAYER_KINEMATIC);
+    return true;
 }
 
 bool door_will_open(const Door* door) {
@@ -133,18 +138,17 @@ void door_update(Door* door, float dt) {
     const float step = dt / DOOR_SECONDS;
     door->travel = door->want > door->travel ? fminf(door->want, door->travel + step)
                                              : fmaxf(door->want, door->travel - step);
-    float yaw = 0.0f;
-    pose(door, door->entity->position, &yaw);
-    entity_set_rotation_euler(door->entity, (vec3){0.0f, yaw, 0.0f});
+    place(door);
 }
 
-bool door_in_reach(const Door* door, const vec3 eye, const vec3 forward, float reach, float cone) {
+float door_reach_distance(const Door* door, const vec3 eye, const vec3 forward, float reach,
+                          float cone) {
     if (!door->entity)
-        return false;
+        return FLT_MAX;
     vec3 to = {0.0f, 0.0f, 0.0f};
     glm_vec3_sub(door->entity->position, (float*)eye, to);
     const float dist = glm_vec3_norm(to);
-    if (dist > reach || dist < 1e-4f)
-        return false;
-    return glm_vec3_dot(to, (float*)forward) / dist >= cosf(cone);
+    if (dist > reach || dist < 1e-4f || glm_vec3_dot(to, (float*)forward) / dist < cosf(cone))
+        return FLT_MAX;
+    return dist;
 }

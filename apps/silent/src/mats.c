@@ -271,7 +271,7 @@ static const MatSpec SPECS[MAT_COUNT] = {
     // make_gothic.py tints the same scan to, so the frames and the carving are one wood.
     [MAT_MAHOGANY] = {"mahogany", "lacquered_cherry_wood", {1.1f, 0.61f, 0.40f}, 1.4f, 0.0f, 0.8f},
     // tools/make_gothic.py's picture, each card placed whole by gothic.h's UVs; the repeat is
-    // unused. The glass's colour is in the picture, since a thin pane's absorption is nothing.
+    // unused. The stained glass glows by the same picture (GLOWS).
     [MAT_CARVED] = {"carved_mahogany", "gothic", {1, 1, 1}, 1.0f, 0.0f, 1.0f},
     [MAT_PERSIAN] = {"persian_rug", "gothic", {1, 1, 1}, 1.0f, 0.0f, 1.0f},
     [MAT_STAINED] = {"stained_glass", "gothic", {1, 1, 1}, 1.0f, 0.0f, 1.0f},

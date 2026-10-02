@@ -4,14 +4,10 @@
 #include "mats.h"
 #include "ornament.h"
 
-#define COUNT(arr) ((int)(sizeof(arr) / sizeof((arr)[0])))
-
 #define BASE_OUT     0.05f // how far the base stands proud of the boards
 #define BATTEN_PITCH 0.42f
 #define BATTEN_W     0.05f
 #define BATTEN_T     0.025f
-#define CASING_W     0.08f // a window's casing, round the opening
-#define CASING_T     0.04f
 #define HOOD_W       0.06f // the hood moulding over the casing
 #define HOOD_T       0.07f
 #define MULLION      0.05f // tracery's bars, either side of the glass
@@ -19,28 +15,31 @@
 // A lancet at least this wide is two lights under a ring.
 #define TWO_LIGHTS 0.65f
 
-static Facade facade(const KitFrame* f, float at, float inner, float thick) {
-    return (Facade){*f, at - inner * 0.5f * thick, at, -inner};
+// The side of a wall drawn in `wf` that lies `side` along its inner axis: +1 its inner side,
+// -1 its outer.
+static Facade side_of(const KitWallFrame* wf, float thick, int side) {
+    const float out = (float)(side * wf->inner);
+    return (Facade){wf->f, wf->at + out * 0.5f * thick, wf->at, out};
 }
 
 Facade facade_of(const KitWall* w) {
-    KitFrame f;
-    float at = 0.0f;
-    kit_wall_frame(w, &f, &at);
-    const float inner = (w->along_x ? 1.0f : -1.0f) * (w->inner >= 0 ? 1.0f : -1.0f);
-    return facade(&f, at, inner, w->thick);
-}
-
-Facade facade_in(const KitFrame* f, const KitWall* w) {
-    return facade(f, w->at, w->inner >= 0 ? 1.0f : -1.0f, w->thick);
+    const KitWallFrame wf = kit_wall_frame(w);
+    return side_of(&wf, w->thick, -1);
 }
 
 Facade facade_inner(const KitWall* w) {
-    KitFrame f;
-    float at = 0.0f;
-    kit_wall_frame(w, &f, &at);
-    const float inner = (w->along_x ? 1.0f : -1.0f) * (w->inner >= 0 ? 1.0f : -1.0f);
-    return facade(&f, at, -inner, w->thick);
+    const KitWallFrame wf = kit_wall_frame(w);
+    return side_of(&wf, w->thick, 1);
+}
+
+Facade facade_of_frame(const KitFrame* f, const KitWall* w) {
+    const KitWallFrame wf = {*f, w->at, w->inner >= 0 ? 1 : -1};
+    return side_of(&wf, w->thick, -1);
+}
+
+void ornament_casing(Kit* kit, const Facade* s, int mat, const KitOpening* o) {
+    kit_frame_surround(kit, &s->f, mat, o, ORNAMENT_CASING_W, false, s->face,
+                       s->face + s->out * ORNAMENT_CASING_T);
 }
 
 static bool doorway(const KitOpening* o) {
@@ -86,7 +85,7 @@ void ornament_base(Kit* kit, const Facade* s, float a0, float a1, const KitOpeni
 // it would cross, from under its sill to over its hood. Returns the count, sorted.
 static int blocked(float a, const KitOpening* openings, int count, float lo[], float hi[]) {
     int n = 0;
-    const float margin = CASING_W + HOOD_W + 0.02f;
+    const float margin = ORNAMENT_CASING_W + HOOD_W + 0.02f;
     for (int i = 0; i < count; i++) {
         const KitOpening* o = &openings[i];
         if (a + 0.5f * BATTEN_W < o->from - margin || a - 0.5f * BATTEN_W > o->to + margin)
@@ -189,20 +188,23 @@ static void two_lights(Kit* kit, const Facade* s, const KitOpening* o) {
 
 void ornament_window(Kit* kit, const Facade* s, const KitOpening* o) {
     const float f = s->face, out = s->out;
-    kit_frame_surround(kit, &s->f, MAT_TRIM, o, CASING_W, false, f, f + out * CASING_T);
-    // The sill, deeper than the casing and past it either side, tipped under the glass. A
-    // doorway has its threshold instead.
+    ornament_casing(kit, s, MAT_TRIM, o);
+    // The sill, deeper than the casing and past it either side, tipped under the glass, and
+    // standing a centimetre over the opening's foot so the wall's own sill face is under it, not
+    // in the same plane. A doorway has its threshold instead.
     if (!doorway(o))
-        kit_frame_box(kit, &s->f, MAT_TRIM, o->from - CASING_W - 0.05f, o->to + CASING_W + 0.05f,
-                      o->bottom - 0.07f, o->bottom, s->mid, f + out * 0.09f, false);
+        kit_frame_box(kit, &s->f, MAT_TRIM, o->from - ORNAMENT_CASING_W - 0.05f,
+                      o->to + ORNAMENT_CASING_W + 0.05f, o->bottom - 0.07f, o->bottom + 0.01f,
+                      s->mid, f + out * 0.09f, false);
     // The hood over the casing, and its two stops dropping past the springing line.
-    const KitOpening casing = kit_opening_grow(o, CASING_W);
+    const KitOpening casing = kit_opening_grow(o, ORNAMENT_CASING_W);
     kit_frame_surround(kit, &s->f, MAT_TRIM, &casing, HOOD_W, true, f, f + out * HOOD_T);
-    const float stop = casing.top;
-    kit_frame_box(kit, &s->f, MAT_TRIM, casing.from - HOOD_W - 0.05f, casing.from, stop - 0.16f,
-                  stop + (o->arch == KIT_ARCH_FLAT ? HOOD_W : 0.0f), f, f + out * HOOD_T, false);
-    kit_frame_box(kit, &s->f, MAT_TRIM, casing.to, casing.to + HOOD_W + 0.05f, stop - 0.16f,
-                  stop + (o->arch == KIT_ARCH_FLAT ? HOOD_W : 0.0f), f, f + out * HOOD_T, false);
+    const float stop = casing.top, over = kit_opening_arched(o) ? 0.0f : HOOD_W;
+    for (int side = -1; side <= 1; side += 2) {
+        const float edge = side < 0 ? casing.from : casing.to;
+        kit_frame_box(kit, &s->f, MAT_TRIM, edge, edge + (float)side * (HOOD_W + 0.05f),
+                      stop - 0.16f, stop + over, f, f + out * HOOD_T, false);
+    }
     // Tracery is a window's: a doorway is left clear to walk through.
     if (o->arch == KIT_ARCH_POINTED && o->to - o->from >= TWO_LIGHTS && !doorway(o))
         two_lights(kit, s, o);
@@ -266,7 +268,7 @@ void ornament_finial(Kit* kit, const KitFrame* f, int mat, float a, float y, flo
                           {0.018f, 0.56f * h},
                           {0.012f, 0.85f * h},
                           {0.0f, h}};
-    kit_frame_lathe(kit, f, mat, a, d, y, spire, COUNT(spire), 10);
+    kit_frame_lathe(kit, f, mat, a, d, y, spire, KIT_COUNT(spire), 10);
     if (drop <= 0.0f)
         return;
     const vec2 pendant[] = {{0.0f, 0.0f},
@@ -277,7 +279,7 @@ void ornament_finial(Kit* kit, const KitFrame* f, int mat, float a, float y, flo
                             {0.03f, 0.85f * drop},
                             {0.0f, drop}};
     kit_frame_lathe_on(kit, f, mat, (vec3){a, y, d}, (vec3){0.0f, -1.0f, 0.0f}, pendant,
-                       COUNT(pendant), 10);
+                       KIT_COUNT(pendant), 10);
 }
 
 void ornament_cresting(Kit* kit, const KitFrame* f, float a0, float a1, float y, float d) {
@@ -290,10 +292,10 @@ void ornament_cresting(Kit* kit, const KitFrame* f, float a0, float a1, float y,
     const int n = (int)floorf((a1 - a0) / 0.3f);
     for (int i = 0; i <= n; i++) {
         const float a = a0 + (a1 - a0) * (float)i / (float)(n > 0 ? n : 1);
-        vec2 pts[COUNT(SPIKE)];
-        for (int k = 0; k < COUNT(SPIKE); k++)
+        vec2 pts[KIT_COUNT(SPIKE)];
+        for (int k = 0; k < KIT_COUNT(SPIKE); k++)
             glm_vec2_copy((vec2){a + SPIKE[k][0], y + 0.035f + SPIKE[k][1]}, pts[k]);
-        kit_frame_extrude(kit, f, MAT_IRON, pts, COUNT(SPIKE), d - 0.007f, d + 0.007f);
+        kit_frame_extrude(kit, f, MAT_IRON, pts, KIT_COUNT(SPIKE), d - 0.007f, d + 0.007f);
     }
 }
 
@@ -325,7 +327,7 @@ void ornament_balustrade(Kit* kit, const KitFrame* f, float a0, float a1, float 
     const int n = (int)floorf((a1 - a0) / 0.14f);
     for (int i = 1; i < n; i++) {
         const float a = a0 + (a1 - a0) * (float)i / (float)n;
-        kit_frame_lathe(kit, f, MAT_SIDING_DARK, a, d, y + 0.11f, turned, COUNT(turned), 8);
+        kit_frame_lathe(kit, f, MAT_SIDING_DARK, a, d, y + 0.11f, turned, KIT_COUNT(turned), 8);
     }
     kit_frame_box(kit, f, KIT_COLLIDER_ONLY, a0, a1, y, rail + 0.1f, d - 0.05f, d + 0.05f, true);
 }
@@ -348,6 +350,6 @@ void ornament_post(Kit* kit, const KitFrame* f, float a, float d, float y0, floa
                            {1.6f * r, l - 0.04f},
                            {1.6f * r, l},
                            {0.0f, l}};
-    kit_frame_lathe(kit, f, MAT_SIDING_DARK, a, d, y0 + plinth, turned, COUNT(turned), 10);
+    kit_frame_lathe(kit, f, MAT_SIDING_DARK, a, d, y0 + plinth, turned, KIT_COUNT(turned), 10);
     kit_frame_box(kit, f, KIT_COLLIDER_ONLY, a - r, a + r, y0, y1, d - r, d + r, true);
 }

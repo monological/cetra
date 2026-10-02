@@ -157,8 +157,10 @@ void street_build(Kit* kit, Scene* scene, unsigned int seed, bool night) {
     ground(kit, MAT_DIRT, -walk - YARD_DEPTH, -walk, 0.0f);
 
     // Our path from the sidewalk to the porch steps.
-    kit_box(kit, MAT_CONCRETE, (vec3){-0.8f, 0.01f, 0.5f * (walk + PORCH_Z0 - 0.32f)},
-            (vec3){0.55f, 0.01f, 0.5f * (PORCH_Z0 - 0.32f - walk)}, 0.0f, false);
+    kit_box(kit, MAT_CONCRETE,
+            (vec3){0.5f * (PATH_X0 + PATH_X1), 0.01f, 0.5f * (walk + PORCH_Z0 - 0.32f)},
+            (vec3){0.5f * (PATH_X1 - PATH_X0), 0.01f, 0.5f * (PORCH_Z0 - 0.32f - walk)}, 0.0f,
+            false);
 
     // The neighbours: this side of the street either side of us, fronts in
     // line with ours, and the far side facing back.

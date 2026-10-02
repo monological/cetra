@@ -47,9 +47,15 @@
 
 #define HALL_X0 (-1.5f) // the hall runs from the front door to the great hall between these
 #define HALL_X1 0.0f    // and this is also the kitchen's west wall
+// The hall's inner faces.
+#define HALL_IN_X0 (HALL_X0 + 0.5f * INT_WALL)
+#define HALL_IN_X1 (HALL_X1 - 0.5f * INT_WALL)
 
 // The front band's back wall, which is the great hall's front.
 #define KITCHEN_BACK_Z 13.8f
+// The front band's inner faces, which every room in it shares: the kitchen, the hall, the study.
+#define BAND_Z0 (HOUSE_FRONT_Z + 0.5f * EXT_WALL)
+#define BAND_Z1 (KITCHEN_BACK_Z - 0.5f * INT_WALL)
 
 // The kitchen window, in the front wall, and the front door.
 #define KITCHEN_WIN_X0   1.5f
@@ -71,8 +77,8 @@
 // The kitchen's inner faces: where the room actually is.
 #define KITCHEN_X0 (HALL_X1 + 0.5f * INT_WALL)
 #define KITCHEN_X1 (HOUSE_X1 - 0.5f * EXT_WALL)
-#define KITCHEN_Z0 (HOUSE_FRONT_Z + 0.5f * EXT_WALL)
-#define KITCHEN_Z1 (KITCHEN_BACK_Z - 0.5f * INT_WALL)
+#define KITCHEN_Z0 BAND_Z0
+#define KITCHEN_Z1 BAND_Z1
 
 // The hall wall's run, from just short of the kitchen doorway toward the
 // window wall: the fridge first, then the stove, whose centre the hood tube
@@ -104,8 +110,15 @@
 
 // The hearth, centred on the back wall on the hall's axis, so it is what the
 // arch frames as you come down the hall.
-#define HEARTH_X    (0.5f * (HALL_X0 + HALL_X1))
-#define HEARTH_HALF 1.75f // the fireplace's half width along the wall, which the panelling meets
+#define HEARTH_X     (0.5f * (HALL_X0 + HALL_X1))
+#define HEARTH_HALF  1.75f // the fireplace's half width along the wall, which the panelling meets
+#define HEARTH_FRONT 0.92f // how far its stone runs out into the hall, short of the rug
+
+// The great hall's two trusses, clear of the lancets down its sides, and how far each one's
+// timbers reach either side of its middle.
+#define TRUSS_Z0   16.25f
+#define TRUSS_Z1   18.8f
+#define TRUSS_HALF 0.1f
 
 // The tower: a regular octagon centred on the front corner west of the door,
 // its faces' centre lines TOWER_APOTHEM from the middle. The house's front and
@@ -113,14 +126,19 @@
 #define TOWER_X       HOUSE_X0
 #define TOWER_Z       HOUSE_FRONT_Z
 #define TOWER_APOTHEM 2.3f
-#define TOWER_HALF    (TOWER_APOTHEM * 0.41421356f) // half a face: apothem x tan 22.5
-#define TOWER_TOP     9.6f                          // the walls' top, under the spire
-#define TOWER_CEIL_Y  9.0f                          // the study's tower bay rises to this
+#define TOWER_TAN     0.41421356f // tan 22.5: half a face over the apothem, for any apothem
+#define TOWER_HALF    (TOWER_APOTHEM * TOWER_TAN)       // half a face
+#define TOWER_OUTER   (TOWER_APOTHEM + 0.5f * EXT_WALL) // the apothem of the walls' outer faces
+#define TOWER_TOP     9.6f                              // the walls' top, under the spire
+#define TOWER_CEIL_Y  9.0f                              // the study's tower bay rises to this
 #define TOWER_SPIRE_Y 15.5f
 
 #define PORCH_X0 (-2.4f)
 #define PORCH_X1 0.8f
 #define PORCH_Z0 8.5f
+// The front path's edges, from the pavement up to the porch steps.
+#define PATH_X0 (-1.35f)
+#define PATH_X1 (-0.25f)
 
 // The street.
 #define ROAD_HALF_WIDTH 4.0f     // asphalt, centre line at z = 0
