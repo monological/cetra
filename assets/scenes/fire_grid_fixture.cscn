@@ -1,0 +1,255 @@
+{
+ "version": 1,
+ "_comment": [
+  "The fire instrument's GRID twin (spec 13.14): the same room with its hearth burning as a",
+  "combustion grid whose obstacles are the chimney breast and the logs. It drives the same",
+  "area light and embers.",
+  "The candle is a structural flame driving a small point light. Every light's",
+  "intensity here is 0 because the fires write it each frame.",
+  "",
+  "Regenerate with: python3 assets/generators/gen_fire_fixture.py"
+ ],
+ "models": [
+  {
+   "path": "../models/fire_grid_fixture.gltf"
+  }
+ ],
+ "environment": {
+  "ambient": [
+   0.0,
+   0.0,
+   0.0
+  ]
+ },
+ "lights": [
+  {
+   "name": "hearth_light",
+   "type": "area",
+   "position": [
+    0.0,
+    0.55,
+    -1.08
+   ],
+   "direction": [
+    0.0,
+    0.0,
+    1.0
+   ],
+   "size": [
+    1.0,
+    0.9
+   ],
+   "color": [
+    1.0,
+    0.6,
+    0.3
+   ],
+   "intensity": 0.0,
+   "cast_shadows": true
+  },
+  {
+   "name": "candle_light",
+   "type": "point",
+   "position": [
+    0.7,
+    1.4,
+    -1.0
+   ],
+   "color": [
+    1.0,
+    0.6,
+    0.3
+   ],
+   "intensity": 0.0,
+   "range": 6.0,
+   "cast_shadows": false
+  }
+ ],
+ "fire": {
+  "fires": [
+   {
+    "name": "hearth",
+    "kind": "grid",
+    "center": [
+     0.0,
+     0.9,
+     -1.3
+    ],
+    "size": [
+     1.1,
+     1.6,
+     0.8
+    ],
+    "cell": 0.025,
+    "floor": true,
+    "light": "hearth_light",
+    "embers": "fire_embers",
+    "sources": [
+     {
+      "shape": "capsule",
+      "from": [
+       -0.3,
+       0.25,
+       -1.46
+      ],
+      "to": [
+       0.3,
+       0.25,
+       -1.46
+      ],
+      "radius": 0.05,
+      "coverage": 0.7,
+      "lift": 0.8
+     },
+     {
+      "shape": "capsule",
+      "from": [
+       -0.25,
+       0.25,
+       -1.3
+      ],
+      "to": [
+       0.25,
+       0.25,
+       -1.3
+      ],
+      "radius": 0.05,
+      "coverage": 0.7,
+      "lift": 0.8
+     }
+    ],
+    "obstacles": [
+     {
+      "min": [
+       -1.0,
+       0.1,
+       -1.7
+      ],
+      "max": [
+       -0.5,
+       1.0,
+       -1.1
+      ]
+     },
+     {
+      "min": [
+       0.5,
+       0.1,
+       -1.7
+      ],
+      "max": [
+       1.0,
+       1.0,
+       -1.1
+      ]
+     },
+     {
+      "min": [
+       -1.0,
+       1.0,
+       -1.7
+      ],
+      "max": [
+       -0.25,
+       3.0,
+       -1.1
+      ]
+     },
+     {
+      "min": [
+       0.25,
+       1.0,
+       -1.7
+      ],
+      "max": [
+       1.0,
+       3.0,
+       -1.1
+      ]
+     },
+     {
+      "min": [
+       -0.25,
+       1.0,
+       -1.3
+      ],
+      "max": [
+       0.25,
+       3.0,
+       -1.1
+      ]
+     },
+     {
+      "min": [
+       -0.35,
+       0.12000000000000001,
+       -1.52
+      ],
+      "max": [
+       0.35,
+       0.24000000000000002,
+       -1.4
+      ]
+     },
+     {
+      "min": [
+       -0.3,
+       0.12000000000000001,
+       -1.36
+      ],
+      "max": [
+       0.3,
+       0.24000000000000002,
+       -1.24
+      ]
+     }
+    ],
+    "draft": {
+     "min": [
+      -0.25,
+      1.0,
+      -1.7
+     ],
+     "max": [
+      0.25,
+      3.0,
+      -1.3
+     ],
+     "speed": 1.2
+    }
+   },
+   {
+    "name": "candle",
+    "kind": "flame",
+    "center": [
+     0.7,
+     1.4,
+     -1.0
+    ],
+    "size": [
+     0.012,
+     0.035,
+     0.012
+    ],
+    "light": "candle_light"
+   }
+  ]
+ },
+ "camera": {
+  "eye": [
+   0.6,
+   1.25,
+   2.4
+  ],
+  "target": [
+   0.0,
+   0.65,
+   -1.3
+  ],
+  "fov": 50
+ },
+ "post": {
+  "tonemap": "neutral",
+  "exposure": 0.25
+ }
+}

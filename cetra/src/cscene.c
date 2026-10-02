@@ -1138,6 +1138,7 @@ static const CSceneFireKey FIRE_PARAM_KEYS[] = {
     FIRE_PARAM_KEY("temperature", temperature, 600.0f, 4000.0f),
     FIRE_PARAM_KEY("reactionRate", reaction_rate, 0.01f, 100.0f),
     FIRE_PARAM_KEY("cooling", cooling, 0.0f, 1e6f),
+    FIRE_PARAM_KEY("entrainment", entrainment, 0.0f, 1000.0f),
     FIRE_PARAM_KEY("core", core, 0.0f, 10.0f),
     FIRE_PARAM_KEY("expansion", expansion, 0.0f, 1000.0f),
     FIRE_PARAM_KEY("sootYield", soot_yield, 0.0f, 1000.0f),
@@ -1206,6 +1207,31 @@ static void parse_fire_sources(Fire* fire, const cJSON* f) {
     }
 }
 
+// cards[] on a FLIPBOOK fire: {base, size, phase}, each a quad standing on its bottom centre.
+static void parse_fire_cards(Fire* fire, const cJSON* f) {
+    static const char* known[] = {"base", "size", "phase"};
+    const cJSON* cards = cJSON_GetObjectItemCaseSensitive(f, "cards");
+    const cJSON* c = NULL;
+    cJSON_ArrayForEach(c, cards) {
+        if (!cJSON_IsObject(c))
+            continue;
+        warn_unknown_keys(c, known, sizeof(known) / sizeof(known[0]), "fire card");
+        if (fire->card_count >= FIRE_MAX_CARDS) {
+            log_warn("cscene: fire '%s' has more than %d cards; the rest are ignored", fire->name,
+                     FIRE_MAX_CARDS);
+            break;
+        }
+        FireCard card = {.base = {0.0f, 0.0f, 0.0f}, .size = {0.5f, 0.5f}, .phase = 0.0f};
+        if (!get_vec3(c, "base", card.base)) {
+            log_warn("cscene: a fire card needs a base; skipped");
+            continue;
+        }
+        get_floats(c, "size", card.size, 2);
+        _ranged_float(c, "fire card", "phase", 0.0f, 1.0f, &card.phase);
+        fire->cards[fire->card_count++] = card;
+    }
+}
+
 // obstacles[] on a fire: {min, max}, world-space boxes no flow passes.
 static void parse_fire_obstacles(Fire* fire, const cJSON* f) {
     static const char* known[] = {"min", "max"};
@@ -1253,9 +1279,9 @@ static void parse_fire(CetraSceneDesc* d, const cJSON* root) {
                                         "jacobi",  "maccormack", "fires"};
     warn_unknown_keys(block, block_known, sizeof(block_known) / sizeof(block_known[0]), "fire");
 
-    static const char* const FIRE_OTHER_KEYS[] = {"name",        "kind",    "enabled",   "center",
-                                                  "size",        "cell",    "floor",     "light",
-                                                  "lightOffset", "sources", "obstacles", "draft"};
+    static const char* const FIRE_OTHER_KEYS[] = {
+        "name",        "kind",    "enabled",   "center", "size",     "cell",  "floor", "light",
+        "lightOffset", "sources", "obstacles", "draft",  "flipbook", "cards", "embers"};
 #define FIRE_OTHER_COUNT (sizeof(FIRE_OTHER_KEYS) / sizeof(FIRE_OTHER_KEYS[0]))
     const char* known[FIRE_PARAM_KEY_COUNT + FIRE_OTHER_COUNT];
     for (size_t i = 0; i < FIRE_OTHER_COUNT; i++)
@@ -1271,16 +1297,30 @@ static void parse_fire(CetraSceneDesc* d, const cJSON* root) {
         warn_unknown_keys(f, known, FIRE_PARAM_KEY_COUNT + FIRE_OTHER_COUNT, "fire");
         char kind[16] = "grid";
         copy_string(kind, sizeof(kind), cJSON_GetObjectItemCaseSensitive(f, "kind"));
-        if (strcmp(kind, "grid") != 0 && strcmp(kind, "flame") != 0) {
-            log_warn("cscene: fire kind '%s' is not grid or flame; skipped", kind);
+        static const char* const KIND_NAMES[] = {
+            [FIRE_GRID] = "grid", [FIRE_FLAME] = "flame", [FIRE_FLIPBOOK] = "flipbook"};
+        const int kinds = (int)(sizeof(KIND_NAMES) / sizeof(KIND_NAMES[0]));
+        int kind_index = 0;
+        while (kind_index < kinds && strcmp(kind, KIND_NAMES[kind_index]) != 0)
+            kind_index++;
+        if (kind_index == kinds) {
+            log_warn("cscene: fire kind '%s' is not grid, flame or flipbook; skipped", kind);
             continue;
         }
         char name[32] = "fire";
         copy_string(name, sizeof(name), cJSON_GetObjectItemCaseSensitive(f, "name"));
         const int index = fs->count;
-        Fire* fire = fire_system_add(fs, strcmp(kind, "flame") == 0 ? FIRE_FLAME : FIRE_GRID, name);
+        Fire* fire = fire_system_add(fs, (FireKind)kind_index, name);
         if (!fire)
             break;
+        if (fire->kind == FIRE_FLIPBOOK &&
+            !cJSON_IsString(cJSON_GetObjectItemCaseSensitive(f, "flipbook")))
+            log_warn("cscene: flipbook fire '%s' names no flipbook; it draws nothing", fire->name);
+        copy_string(fire->flipbook, sizeof(fire->flipbook),
+                    cJSON_GetObjectItemCaseSensitive(f, "flipbook"));
+        copy_string(out->embers[index], CSCENE_MAX_NAME,
+                    cJSON_GetObjectItemCaseSensitive(f, "embers"));
+        parse_fire_cards(fire, f);
         get_bool(f, "enabled", &fire->enabled);
         get_vec3(f, "center", fire->center);
         get_vec3(f, "size", fire->size);
@@ -1673,6 +1713,10 @@ CetraSceneDesc* cscene_load(const char* path) {
     // A .cube is the same kind of thing as the two above and for the same
     // reason: not a texture, never through the pool, no second resolver.
     resolve_in_place(d->lut_path, CSCENE_MAX_PATH, dir);
+    // A flipbook's sheets are read straight from disk by the fire renderer, never through the pool.
+    for (int i = 0; i < d->fire.system.count; i++)
+        resolve_in_place(d->fire.system.fires[i].flipbook, sizeof(d->fire.system.fires[i].flipbook),
+                         dir);
     // Material texture paths are deliberately NOT resolved here. Every texture
     // the engine loads resolves against the texture pool's directory (the -t
     // argument) through find_existing_subpath, and a material's textures are

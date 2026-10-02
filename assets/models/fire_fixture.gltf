@@ -3,6 +3,9 @@
   "version": "2.0",
   "generator": "gen_fire_fixture.py"
  },
+ "extensionsUsed": [
+  "KHR_materials_emissive_strength"
+ ],
  "scene": 0,
  "scenes": [
   {

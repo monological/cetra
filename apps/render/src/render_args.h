@@ -174,6 +174,11 @@ typedef struct {
     // --fire-slice: draw one slice of a GRID fire's field into the frame's corner.
     // fire_slice[0] = field (-1 = off), [1] = the slice, [2] = the fire.
     int fire_slice[3];
+    // --fire-bake: where a flipbook's raw frames go, NULL = no bake; one every `stride` frames,
+    // `size` pixels wide.
+    const char* fire_bake_dir;
+    int fire_bake_size;
+    int fire_bake_stride;
     int water_probe;              // Print the CPU wave query over a grid, then continue
     int water_fft_probe;          // Print the transformed spectrum's measured statistics
     int water_caustic_debug;      // Water.caustic_debug: 2 = the raw caustics target

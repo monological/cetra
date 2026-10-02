@@ -42,8 +42,16 @@ typedef struct FireGridGPU {
     bool checked;          // the framebuffer has been found complete over these targets
 } FireGridGPU;
 
+// A FLIPBOOK fire's sheets on the GPU, loaded from the path the fire names and kept while it does.
+typedef struct FireBookGPU {
+    GLuint sheet;   // SRGB8_ALPHA8, mipped; 0 = the sheet would not load, said once for this path
+    GLuint motion;  // RGBA8, linear; 0 = the flipbook has none
+    char path[256]; // what the sheets were loaded from
+} FireBookGPU;
+
 typedef struct FireRenderer {
     ShaderProgram* programs[FIRE_PROGRAM_COUNT];
+    FireBookGPU books[FIRE_MAX];
     bool failed; // a program would not build, or a target would not attach: nothing runs
     GLuint fbo;
     GLuint vao;      // empty: the march reads no attributes
@@ -58,6 +66,11 @@ typedef struct FireRenderer {
     GLuint pbo[FIRE_READBACK_LATENCY];
     int ring_passes;
     bool slot_issued[FIRE_READBACK_LATENCY][FIRE_MAX];
+
+    // --fire-bake's targets: a frame's colour and motion, RGBA32F, and a 1x1 depth of 1, which is
+    // a scene with nothing in front of the fire.
+    GLuint bake_fbo, bake_color, bake_motion, bake_depth;
+    int bake_w, bake_h;
 } FireRenderer;
 
 FireRenderer* create_fire_renderer(void);

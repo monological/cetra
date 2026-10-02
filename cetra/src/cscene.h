@@ -244,6 +244,8 @@ typedef struct CSceneFire {
     FireSystem system;
     // The authored light each fire drives, by its `lights[]` name; "" = none.
     char light[FIRE_MAX][CSCENE_MAX_NAME];
+    // The material each fire's embers glow through, by name; "" = none.
+    char embers[FIRE_MAX][CSCENE_MAX_NAME];
 } CSceneFire;
 
 /*

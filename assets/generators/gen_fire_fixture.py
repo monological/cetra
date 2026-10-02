@@ -1,23 +1,24 @@
 #!/usr/bin/env python3
-"""Generate fire_fixture.gltf + .cscn, the fire instrument (spec 13.14): a night room in metres
-with a stone fireplace burning two logs, and a candle on its mantel.
+"""Generate the fire instruments (spec 13.14): a night room in metres with a stone fireplace
+burning two logs, and a candle on its mantel. One model, three scenes.
 
     room          6 x 5 m, 3 m high, stone back wall, plaster sides, a wooden floor; nothing
                   lights it but the fire and the candle, so whatever the room shows is what
                   they cast.
     fireplace     a firebox 1.0 m wide, 0.9 m high and 0.6 m deep in a chimney breast, with
-                  a FLUE 0.5 x 0.4 m rising from the back of its roof. The breast and jambs are
-                  the fire's OBSTACLES: what burns in the box has to go up the flue or roll out
-                  of the opening, and the gate's obstacle arm reads that no heat is found inside
-                  them.
-    logs          two, side by side, as obstacles and as capsule SOURCES along their tops.
+                  a FLUE 0.5 x 0.4 m rising from the back of its roof.
+    logs          two, side by side, over a bed of embers whose glow follows the fire.
     hearth light  an area panel across the firebox's mouth facing the room, casting shadows:
                   the light the fire drives, its luminance set each frame so the panel's
                   intensity along its normal is the fire's.
     candle        a FLAME on the mantel's right, driving a small point light.
 
-The grid's box is 1.1 x 1.6 x 0.8 m at 2.5 cm cells: the firebox, the flue's first 0.6 m and
-a lip in front of the opening, where flames lick out.
+fire_fixture.cscn burns the hearth from FILMED fire, the fire_hearth flipbook played on cards
+standing in the firebox. fire_grid_fixture.cscn burns it as a combustion GRID instead, 1.1 x
+1.6 x 0.8 m at 2.5 cm cells, whose obstacles are the breast, the jambs and the logs: what burns
+in the box has to go up the flue or roll out of the opening, and the gate's obstacle arm reads
+that no heat is found inside them. fire_bake_logs.cscn is the log fire
+tools/bake_fire_flipbook.py bakes from.
 
 Regenerate with: python3 assets/generators/gen_fire_fixture.py
 """
@@ -61,7 +62,14 @@ MATERIALS = {
     "fire_plaster": ([0.6, 0.57, 0.52, 1.0], 0.85),
     "fire_floor": ([0.28, 0.17, 0.10, 1.0], 0.6),
     "fire_log": ([0.12, 0.08, 0.05, 1.0], 0.9),
+    "fire_embers": ([0.05, 0.03, 0.02, 1.0], 0.95),
     "fire_wax": ([0.85, 0.8, 0.7, 1.0], 0.5),
+}
+
+# Name -> (emissive colour, strength): the embers, at about 65 cd/m^2 as authored, which is
+# what a bed of coals near 1100 K shows. A fire naming them as its embers swings them about it.
+EMISSIVE = {
+    "fire_embers": ([1.0, 0.32, 0.06], 150.0),
 }
 
 
@@ -101,10 +109,15 @@ SOLIDS = [
     box("log_front", "fire_log", (-0.3, HEARTH_Y + 0.02, -1.36), (0.3, HEARTH_Y + 0.14, -1.24)),
 ]
 
-# Inside the firebox the stone is blackened.
+# Inside the firebox the stone is blackened, and under the logs the coals glow.
 SOOT = [box("firebox_back", "fire_soot", (-0.5, HEARTH_Y, WALL_Z), (0.5, OPENING_Y, WALL_Z + 0.01))]
+EMBERS = [box("embers", "fire_embers", (-0.4, HEARTH_Y, -1.58), (0.4, HEARTH_Y + 0.04, -1.2))]
 
-PIECES = ROOM + SOLIDS + SOOT
+# A flipbook is flames only, so its room keeps the logs: they stand in front of the card and
+# hide where its flames were cut from whatever burned under them. The grid burns the logs it is
+# given, as obstacles and sources, over a bed of embers.
+FILM_PIECES = ROOM + SOLIDS + SOOT
+GRID_PIECES = ROOM + SOLIDS + SOOT + EMBERS
 
 CUBE = {
     "attributes": [("POSITION", pack("<3f", positions), "VEC3", len(positions), bounds(positions)),
@@ -145,8 +158,14 @@ def gltf_of(pieces):
     materials_out = [{"name": m, "pbrMetallicRoughness": {
         "baseColorFactor": MATERIALS[m][0], "metallicFactor": 0.0,
         "roughnessFactor": MATERIALS[m][1]}} for m in materials]
+    for out in materials_out:
+        if out["name"] in EMISSIVE:
+            colour, strength = EMISSIVE[out["name"]]
+            out["emissiveFactor"] = colour
+            out["extensions"] = {"KHR_materials_emissive_strength": {"emissiveStrength": strength}}
     return {
         "asset": {"version": "2.0", "generator": "gen_fire_fixture.py"},
+        "extensionsUsed": ["KHR_materials_emissive_strength"],
         "scene": 0,
         "scenes": [{"nodes": list(range(len(nodes)))}],
         "nodes": nodes,
@@ -168,7 +187,20 @@ def log_source(lo, hi):
 
 
 LOGS = [p for p in SOLIDS if p[0].startswith("log")]
+
+# The flipbook's three files share a stem, which routes like the sheet beside it.
+FLIPBOOK = asset_ref("fire_hearth_color.png")[:-len("_color.png")]
+
+# Filmed fire, on a card standing in the middle of the firebox. The film's frame is 0.9 m across
+# at the scale it was cut to, which is the firebox's width less its jambs' reveal.
 HEARTH = {
+    "name": "hearth",
+    "kind": "flipbook",
+    "flipbook": FLIPBOOK,
+    "cards": [{"base": [0.0, HEARTH_Y, -1.4], "size": [0.9, 0.707], "phase": 0.0}],
+    "light": "hearth_light",
+}
+HEARTH_GRID = {
     "name": "hearth",
     "kind": "grid",
     "center": [0.0, 0.9, -1.3],
@@ -176,6 +208,7 @@ HEARTH = {
     "cell": 0.025,
     "floor": True,
     "light": "hearth_light",
+    "embers": "fire_embers",
     "sources": [log_source(p[4], p[5]) for p in LOGS],
     "obstacles": [{"min": list(p[4]), "max": list(p[5])} for p in SOLIDS],
     # The flue draws at a little over a metre a second, a domestic chimney's order once warm:
@@ -191,29 +224,79 @@ CANDLE = {
     "light": "candle_light",
 }
 
-scene_desc = {
+def room_scene(model, hearth, comment):
+    """The room around one hearth fire and the candle."""
+    return {
+        "version": 1,
+        "_comment": comment + [
+            "The candle is a structural flame driving a small point light. Every light's",
+            "intensity here is 0 because the fires write it each frame.",
+            "",
+            "Regenerate with: python3 assets/generators/gen_fire_fixture.py",
+        ],
+        "models": [{"path": asset_ref(model)}],
+        "environment": {"ambient": [0.0, 0.0, 0.0]},
+        "lights": [
+            {"name": "hearth_light", "type": "area", "position": [0.0, 0.55, BREAST_Z + 0.02],
+             "direction": [0.0, 0.0, 1.0], "size": [1.0, 0.9], "color": [1.0, 0.6, 0.3],
+             "intensity": 0.0, "cast_shadows": True},
+            {"name": "candle_light", "type": "point", "position": list(CANDLE["center"]),
+             "color": [1.0, 0.6, 0.3], "intensity": 0.0, "range": 6.0, "cast_shadows": False},
+        ],
+        "fire": {"fires": [hearth, CANDLE]},
+        "camera": {"eye": [0.6, 1.25, 2.4], "target": [0.0, 0.65, -1.3], "fov": 50},
+        "post": {"tonemap": "neutral", "exposure": 0.25},
+    }
+
+
+scene_desc = room_scene("fire_fixture.gltf", HEARTH, [
+    "The fire instrument (spec 13.14): a night room lit only by a fire in its stone fireplace",
+    "and a candle on the mantel. The fire is a flipbook, the fire_hearth sheet on a card behind",
+    "the logs, driving the area light across the firebox's mouth.",
+])
+grid_desc = room_scene("fire_grid_fixture.gltf", HEARTH_GRID, [
+    "The fire instrument's GRID twin (spec 13.14): the same room with its hearth burning as a",
+    "combustion grid whose obstacles are the chimney breast and the logs. It drives the same",
+    "area light and embers.",
+])
+
+
+# The flipbook BAKE scene (spec 13.14's revision): a log fire alone, simulated finely enough to
+# be drawn from -- 6.25 mm cells over 0.8 x 1.0 x 0.4 m, 128 x 160 x 64 -- and baked by
+# tools/bake_fire_flipbook.py from in front. Three logs: two side by side and one across their
+# tops, each an obstacle and a source along its upper face. No walls: a flipbook is a fire that
+# can stand in any hearth, and the hearth's own walls would bake into it.
+BAKE_LOGS = [
+    ((-0.32, 0.0, -0.13), (0.32, 0.11, -0.03)),
+    ((-0.30, 0.0, 0.03), (0.30, 0.11, 0.13)),
+    ((-0.26, 0.11, -0.05), (0.26, 0.21, 0.05)),
+]
+bake_desc = {
     "version": 1,
     "_comment": [
-        "The fire instrument (spec 13.14): a night room lit only by a fire in its stone",
-        "fireplace and a candle on the mantel. The fire is a combustion grid whose obstacles are",
-        "the chimney breast and the logs, and it drives the area light across the firebox's",
-        "mouth; the candle is a structural flame driving a small point light. Every light's",
-        "intensity here is 0 because the fires write it each frame.",
+        "The log fire tools/bake_fire_flipbook.py bakes the fire_logs flipbook from (spec 13.14).",
+        "Not a scene to look at: the room model is loaded only because a scene needs one.",
         "",
         "Regenerate with: python3 assets/generators/gen_fire_fixture.py",
     ],
     "models": [{"path": asset_ref("fire_fixture.gltf")}],
     "environment": {"ambient": [0.0, 0.0, 0.0]},
-    "lights": [
-        {"name": "hearth_light", "type": "area", "position": [0.0, 0.55, BREAST_Z + 0.02],
-         "direction": [0.0, 0.0, 1.0], "size": [1.0, 0.9], "color": [1.0, 0.6, 0.3],
-         "intensity": 0.0, "cast_shadows": True},
-        {"name": "candle_light", "type": "point", "position": list(CANDLE["center"]),
-         "color": [1.0, 0.6, 0.3], "intensity": 0.0, "range": 6.0, "cast_shadows": False},
-    ],
-    "fire": {"fires": [HEARTH, CANDLE]},
-    "camera": {"eye": [0.6, 1.25, 2.4], "target": [0.0, 0.65, -1.3], "fov": 50},
-    "post": {"tonemap": "neutral", "exposure": 0.25},
+    "lights": [{"name": "none", "type": "directional", "direction": [0.0, -1.0, 0.0],
+                "intensity": 0.0}],
+    "fire": {
+        "warmup": 3.0,
+        "fires": [{
+            "name": "logs",
+            "kind": "grid",
+            "center": [0.0, 0.5, 0.0],
+            "size": [0.8, 1.0, 0.4],
+            "cell": 0.00625,
+            "floor": True,
+            "sources": [log_source(lo, hi) for lo, hi in BAKE_LOGS],
+            "obstacles": [{"min": list(lo), "max": list(hi)} for lo, hi in BAKE_LOGS],
+        }],
+    },
+    "camera": {"eye": [0.0, 0.5, 2.0], "target": [0.0, 0.5, 0.0], "fov": 50},
 }
 
 
@@ -223,6 +306,9 @@ def write_json(name, obj):
         f.write("\n")
 
 
-write_json("fire_fixture.gltf", gltf_of(PIECES))
+write_json("fire_fixture.gltf", gltf_of(FILM_PIECES))
+write_json("fire_grid_fixture.gltf", gltf_of(GRID_PIECES))
 write_json("fire_fixture.cscn", scene_desc)
-print("wrote fire_fixture.gltf + .cscn")
+write_json("fire_grid_fixture.cscn", grid_desc)
+write_json("fire_bake_logs.cscn", bake_desc)
+print("wrote fire_fixture and fire_grid_fixture (.gltf + .cscn) and fire_bake_logs.cscn")

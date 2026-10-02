@@ -211,6 +211,7 @@ typedef enum FireProgram {
     FIRE_PROGRAM_REDUCE,
     FIRE_PROGRAM_SLICE,
     FIRE_PROGRAM_MARCH,
+    FIRE_PROGRAM_CARD,
     FIRE_PROGRAM_COUNT
 } FireProgram;
 ShaderProgram* create_fire_program(FireProgram which);

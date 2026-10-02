@@ -32,6 +32,7 @@ uniform float ambient;
 uniform float peakRise; // the peak temperature's rise above ambient, K
 uniform float reactionRate;
 uniform float cooling;
+uniform float entrainment;
 uniform float core;
 uniform float sootYield;
 uniform float sootBurnout;
@@ -73,11 +74,11 @@ float latticeHash(ivec4 p) {
     return float(pcg4d(uvec4(p)).x) / 4294967296.0;
 }
 
-// Value noise in 0..1 over cells and seconds: a lattice FIRE_SOURCE_NOISE_CELLS cells and
-// FIRE_SOURCE_NOISE_SECONDS seconds across, smoothly interpolated, so a source's tongues are
-// regions that come and go rather than a per-cell, per-step speckle.
-float sourceNoise(vec3 c, float t) {
-    vec4 p = vec4(c / FIRE_SOURCE_NOISE_CELLS, t / FIRE_SOURCE_NOISE_SECONDS);
+// Value noise in 0..1 over world metres and seconds: a lattice FIRE_SOURCE_NOISE_METRES and
+// FIRE_SOURCE_NOISE_SECONDS across, smoothly interpolated, so a source's tongues are regions that
+// come and go rather than a per-cell, per-step speckle.
+float sourceNoise(vec3 w, float t) {
+    vec4 p = vec4(w / FIRE_SOURCE_NOISE_METRES, t / FIRE_SOURCE_NOISE_SECONDS);
     ivec4 i = ivec4(floor(p));
     vec4 f = p - floor(p);
     f = f * f * (3.0 - 2.0 * f);
@@ -112,7 +113,7 @@ void main() {
         if (cover <= 0.0)
             continue;
         // Alight where the noise clears the share not burning: `coverage` of the shape at once.
-        float n = sourceNoise(vec3(c), time + float(i) * 17.0);
+        float n = sourceNoise(w, time + float(i) * 17.0);
         float alight = cover * smoothstep(1.0 - sourceParams[i].x - 0.25,
                                           1.0 - sourceParams[i].x + 0.25, n);
         if (alight <= 0.0)
@@ -132,6 +133,11 @@ void main() {
     // d(theta)/dt = -c_T (theta / peak)^4, exactly over the step.
     float a = cooling / max(peakRise * peakRise * peakRise * peakRise, 1.0);
     theta = theta / pow(1.0 + 3.0 * a * theta * theta * theta * dt, 1.0 / 3.0);
+
+    // Entrainment: room air mixed in, diluting the heat and the soot alike.
+    float diluted = exp(-entrainment * dt);
+    theta *= diluted;
+    soot *= diluted;
 
     float hot = smoothstep(sootBurnoutAt - 100.0, sootBurnoutAt + 100.0, ambient + theta);
     soot *= exp(-mix(smokeFade, sootBurnout, hot) * dt);

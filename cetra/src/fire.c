@@ -6,9 +6,13 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "json_util.h"
 #include "light.h"
+#include "material.h"
 #include "spectrum.h"
+#include "util.h"
 #include "wind.h"
+#include "ext/cJSON.h"
 #include "ext/log.h"
 
 void fire_params_defaults(FireParams* p, FireKind kind) {
@@ -22,6 +26,8 @@ void fire_params_defaults(FireParams* p, FireKind kind) {
     // flame is the gas within a tenth or so of it: at 600 K/s that lasts a few tenths of a
     // second, which with the lift is a hand's breadth to a forearm of flame.
     p->cooling = 600.0f;
+    // TASTE: a third of the hot gas replaced by room air every tenth of a second or so.
+    p->entrainment = 3.0f;
     // A frame or two of gas: thin, as the core is (sec. 3.1). TASTE.
     p->core = 0.04f;
     p->expansion = 4.0f;
@@ -141,7 +147,125 @@ FireSystem* create_fire_system(void) {
 }
 
 void free_fire_system(FireSystem* fs) {
+    if (!fs)
+        return;
+    for (int i = 0; i < fs->count; i++) {
+        free(fs->fires[i].book.intensity);
+        free(fs->fires[i].book.centroid_y);
+    }
     free(fs);
+}
+
+static bool _json_floats(const cJSON* obj, const char* key, float* out, int n) {
+    const cJSON* arr = cJSON_GetObjectItemCaseSensitive(obj, key);
+    if (!cJSON_IsArray(arr) || cJSON_GetArraySize(arr) < n)
+        return false;
+    for (int i = 0; i < n; i++) {
+        const cJSON* v = cJSON_GetArrayItem(arr, i);
+        if (!cJSON_IsNumber(v))
+            return false;
+        out[i] = (float)v->valuedouble;
+    }
+    return true;
+}
+
+// A FLIPBOOK's sidecar into fire->book; a failure is said once and latched.
+static void _flipbook_load(Fire* fire) {
+    FireFlipbook* b = &fire->book;
+    if (b->loaded || b->failed)
+        return;
+    b->failed = true;
+    char path[300];
+    snprintf(path, sizeof(path), "%s.json", fire->flipbook);
+    char* text = read_entire_file(path, NULL);
+    cJSON* root = text ? cJSON_Parse(text) : NULL;
+    free(text);
+    if (!root) {
+        log_error("Fire: '%s' has no flipbook at %s", fire->name, path);
+        return;
+    }
+    b->frames = json_int_or(root, "frames", 0);
+    b->cols = json_int_or(root, "cols", 0);
+    b->rows = json_int_or(root, "rows", 0);
+    b->width = json_int_or(root, "width", 0);
+    b->height = json_int_or(root, "height", 0);
+    const cJSON* fps = cJSON_GetObjectItemCaseSensitive(root, "fps");
+    const cJSON* peak = cJSON_GetObjectItemCaseSensitive(root, "peak_nits");
+    const cJSON* motion = cJSON_GetObjectItemCaseSensitive(root, "motion_range");
+    b->fps = cJSON_IsNumber(fps) ? (float)fps->valuedouble : 30.0f;
+    b->peak_nits = cJSON_IsNumber(peak) ? (float)peak->valuedouble : 1.0f;
+    b->motion_range = cJSON_IsNumber(motion) ? (float)motion->valuedouble : 0.0f;
+    float box[3] = {1.0f, 1.0f, 0.0f};
+    _json_floats(root, "box", box, 3);
+    glm_vec2_copy((vec2){box[0], box[1]}, b->box);
+    glm_vec3_one(b->color);
+    _json_floats(root, "color", b->color, 3);
+    if (b->frames > 0 && b->cols > 0 && b->rows > 0) {
+        b->intensity = calloc((size_t)b->frames, sizeof(float));
+        b->centroid_y = calloc((size_t)b->frames, sizeof(float));
+        if (b->intensity && b->centroid_y &&
+            _json_floats(root, "intensity", b->intensity, b->frames) &&
+            _json_floats(root, "centroid_y", b->centroid_y, b->frames)) {
+            b->mean_intensity = 0.0f;
+            for (int f = 0; f < b->frames; f++)
+                b->mean_intensity += b->intensity[f] / (float)b->frames;
+            b->failed = false;
+            b->loaded = true;
+        }
+    }
+    cJSON_Delete(root);
+    if (b->failed)
+        log_error("Fire: '%s''s flipbook sidecar %s is incomplete", fire->name, path);
+}
+
+double fire_card_frame(const FireFlipbook* b, const FireCard* card, double t) {
+    double pos = fmod(t * (double)b->fps + (double)card->phase * (double)b->frames, b->frames);
+    return pos < 0.0 ? pos + (double)b->frames : pos;
+}
+
+/*
+ * What a FLIPBOOK fire casts: each card's baked intensity at its own frame, scaled by its area
+ * against the area the frame was made at, summed -- a card twice as wide and tall is four times
+ * the light -- at the cards' intensity-weighted centroid, in the sheet's colour.
+ */
+static void _flipbook_light(Fire* fire, double t) {
+    FireFlipbook* b = &fire->book;
+    float total = 0.0f;
+    vec3 weighted = GLM_VEC3_ZERO_INIT;
+    b->mean_cast = 0.0f;
+    for (int c = 0; c < fire->card_count; c++) {
+        const FireCard* card = &fire->cards[c];
+        const double pos = fire_card_frame(b, card, t);
+        const int f0 = (int)pos % b->frames;
+        const int f1 = (f0 + 1) % b->frames;
+        const float blend = (float)(pos - floor(pos));
+        const float scale = card->size[0] * card->size[1] / fmaxf(b->box[0] * b->box[1], 1e-6f);
+        const float i = (b->intensity[f0] + (b->intensity[f1] - b->intensity[f0]) * blend) * scale;
+        const float y = b->centroid_y[f0] + (b->centroid_y[f1] - b->centroid_y[f0]) * blend;
+        total += i;
+        b->mean_cast += b->mean_intensity * scale * fire->params.brightness;
+        glm_vec3_muladds((vec3){card->base[0], card->base[1] + y * card->size[1], card->base[2]}, i,
+                         weighted);
+    }
+    fire->intensity = total * fire->params.brightness;
+    if (total > 0.0f)
+        glm_vec3_scale(weighted, 1.0f / total, fire->centroid);
+    glm_vec3_copy((float*)b->color, fire->color);
+    fire->heat_release = 0.0f;
+    fire->answered = true;
+}
+
+void fire_drive_embers(Fire* fire) {
+    if (!fire || !fire->embers || !fire->answered)
+        return;
+    if (!(fire->embers_base > 0.0f))
+        fire->embers_base = fire->embers->emissive_strength;
+    // About the authored strength, following the fire: at its mean intensity the embers glow as
+    // authored, brighter as it flares and dimmer as it dies back. A fire with no mean to go by
+    // holds them steady.
+    const float mean = fire->book.loaded ? fire->book.mean_cast : 0.0f;
+    const float ratio = mean > 0.0f ? fire->intensity / mean : 1.0f;
+    fire->embers->emissive_strength = fire->enabled ? fire->embers_base * ratio : 0.0f;
 }
 
 Fire* fire_system_add(FireSystem* fs, FireKind kind, const char* name) {
@@ -161,6 +285,9 @@ Fire* fire_system_add(FireSystem* fs, FireKind kind, const char* name) {
     fire_params_defaults(&fire->params, kind);
     if (kind == FIRE_FLAME) {
         glm_vec3_copy((vec3){0.012f, 0.035f, 0.012f}, fire->size);
+    } else if (kind == FIRE_FLIPBOOK) {
+        // Filmed or baked, a flipbook's colour is already what the eye sees.
+        fire->params.adaptation = 0.0f;
     } else {
         glm_vec3_copy((vec3){0.8f, 1.2f, 0.8f}, fire->size);
         fire->cell = 0.025f;
@@ -506,6 +633,13 @@ void fire_update(FireSystem* fs, const Wind* wind, double t) {
             }
             fire->pending = 0;
             fire_flame_light(fire);
+        } else if (fire->kind == FIRE_FLIPBOOK) {
+            // Nothing to step: the frame is a function of the clock.
+            fire->steps += fire->pending;
+            fire->pending = 0;
+            _flipbook_load(fire);
+            if (fire->book.loaded)
+                _flipbook_light(fire, t);
         }
     }
 }
