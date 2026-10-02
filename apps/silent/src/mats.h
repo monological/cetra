@@ -72,6 +72,7 @@ typedef enum {
     MAT_SOOT,         // a firebox's blackened stone
     MAT_WAX,          // candles
     MAT_SHADE,        // the study lamp's green cased glass, faintly lit from inside
+    MAT_BRASS_BRIGHT, // candlesticks and sconces: brass kept polished
     MAT_COUNT
 } MatId;
 

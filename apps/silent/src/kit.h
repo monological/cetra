@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <cglm/cglm.h>
 
+#include "cetra/fire.h"
 #include "cetra/material.h"
 #include "cetra/mesh_builder.h"
 #include "cetra/rain.h"
@@ -43,6 +44,12 @@
 
 #define KIT_COUNT(arr) ((int)(sizeof(arr) / sizeof((arr)[0])))
 
+// A candle's wick, in world space, and the flame it burns as a multiple of a taper's.
+typedef struct KitWick {
+    vec3 tip;
+    float size;
+} KitWick;
+
 typedef struct Kit {
     Material* materials[KIT_MAX_MATERIALS];
     float repeat_m[KIT_MAX_MATERIALS]; // metres one texture repeat covers
@@ -60,6 +67,10 @@ typedef struct Kit {
     // The edges water drips from in the rain (spec 13.12), in world space, for the rain to take.
     RainDripLine drips[RAIN_DRIP_MAX];
     int drip_count;
+
+    // The wicks a flame burns on (spec 13.15), in world space, for the fire to take.
+    KitWick wicks[FIRE_MAX];
+    int wick_count;
 } Kit;
 
 /*
@@ -221,6 +232,8 @@ void kit_drip(Kit* kit, const KitFrame* f, const vec3 from, const vec3 to, float
 // The same along an edge, `per_m` drops a second a metre of it.
 void kit_drip_run(Kit* kit, const KitFrame* f, const vec3 from, const vec3 to, float per_m,
                   float ground);
+// A wick at (a, y, d) in frame `f`, the foot of a flame `size` times a taper's.
+void kit_wick(Kit* kit, const KitFrame* f, float a, float y, float d, float size);
 // The box a0..a1 along, y0..y1 up, d0..d1 out, each range in either order.
 void kit_frame_box(Kit* kit, const KitFrame* f, int mat, float a0, float a1, float y0, float y1,
                    float d0, float d1, bool collide);

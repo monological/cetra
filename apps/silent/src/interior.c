@@ -1,5 +1,6 @@
 #include <math.h>
 
+#include "candles.h"
 #include "gothic.h"
 #include "house.h"
 #include "interior.h"
@@ -308,12 +309,14 @@ static void stair_dressing(Kit* kit) {
     }
 
     // The balustrade up the open side: the rail along the rake, a baluster on every tread.
-    const float bx = STAIR_X0 + 0.05f, rail = 0.88f;
+    const float bx = STAIR_X0 + 0.05f, rail = 0.88f, newel = rail + 0.35f;
     const float foot_z = STAIR_FOOT_Z - 0.5f * STAIR_GOING, foot_y = FLOOR_Y + STAIR_RISE;
     const float head_z = GALLERY_Z1 - 0.05f; // the gallery's balustrade line, and the stair's head
-    ornament_post(kit, &KIT_WORLD, MAT_MAHOGANY, bx, foot_z, foot_y, foot_y + rail + 0.35f, 0.065f);
-    ornament_post(kit, &KIT_WORLD, MAT_MAHOGANY, bx, head_z, FLOOR2_Y, FLOOR2_Y + rail + 0.35f,
-                  0.065f);
+    ornament_post(kit, &KIT_WORLD, MAT_MAHOGANY, bx, foot_z, foot_y, foot_y + newel, 0.065f);
+    ornament_post(kit, &KIT_WORLD, MAT_MAHOGANY, bx, head_z, FLOOR2_Y, FLOOR2_Y + newel, 0.065f);
+    // A candlestick on each newel's cap, marking the way up from the hall to the gallery.
+    candle_build(kit, &KIT_WORLD, CANDLE_STICK, bx, foot_y + newel, foot_z, 0.17f);
+    candle_build(kit, &KIT_WORLD, CANDLE_STICK, bx, FLOOR2_Y + newel, head_z, 0.12f);
     const KitFrame along_z = {{bx, 0.0f, 0.0f}, -0.5f * GLM_PIf}; // a is z, d is -x
     const float top_y = FLOOR2_Y + rail;
     const vec2 handrail[4] = {{head_z, top_y},
@@ -338,16 +341,27 @@ static void stair_dressing(Kit* kit) {
                   FLOOR2_Y + rail + 0.35f, 0.065f);
 }
 
-// The gallery: one row of panelling along the great hall's front wall, round its three
-// doorways, and their casings.
+/*
+ * The gallery: one row of panelling along the great hall's front wall, round its three
+ * doorways, and their casings; and a sconce either side of the study's doorway over the
+ * panelling, framing the one door off the gallery that stands open.
+ */
 static void gallery(Kit* kit) {
     const KitWall* front = house_wall(HOUSE_WALL_GREAT_FRONT);
     KitOpening holes[KIT_MAX_OPENINGS];
     const int n = cased(front, holes);
     const Facade f = facade_toward(front, 0.0f, GREAT_AT_Z);
-    wainscot(kit, &f, GREAT_X0, GREAT_X1, FLOOR2_Y, false, holes, n);
+    const float top = wainscot(kit, &f, GREAT_X0, GREAT_X1, FLOOR2_Y, false, holes, n);
     for (int i = OPENING_STUDY_DOOR; i <= OPENING_BEDROOM_DOOR; i++)
         ornament_casing(kit, &f, MAT_MAHOGANY, &front->openings[i]);
+
+    // The wall's face as the great hall sees it, +d out into the hall.
+    const KitFrame face = {{0.0f, 0.0f, GREAT_Z0}, 0.0f};
+    const KitOpening* door = &front->openings[OPENING_STUDY_DOOR];
+    const float mid = 0.5f * (door->from + door->to);
+    const float off = 0.5f * (door->to - door->from) + ORNAMENT_CASING_W + 0.25f;
+    for (int s = -1; s <= 1; s += 2)
+        candle_build(kit, &face, CANDLE_SCONCE, mid + (float)s * off, top + 0.35f, 0.0f, 0.15f);
 }
 
 void interior_build(Kit* kit) {

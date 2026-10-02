@@ -359,6 +359,12 @@ static const MatSpec SPECS[MAT_COUNT] = {
                    0.0f,
                    1.0f,
                    .glow = {{0.3f, 1.0f, 0.45f}, 8.0f}},
+    // Brass somebody still polishes, for what holds a candle: polished brass reflects about
+    // (0.91, 0.78, 0.42) linear at normal incidence, taken down a little for age, under the
+    // smear scan's relief at about half the tarnished brass's roughness. Grime only at the foot,
+    // where the cloth does not reach.
+    [MAT_BRASS_BRIGHT] =
+        {"brass_bright", "Smear008", {0.84f, 0.69f, 0.34f}, 0.45f, 1.0f, 0.3f, true, .grime = 0.3f},
 };
 
 static Texture* load(TexturePool* pool, const char* set, const char* map, TextureDesc desc) {

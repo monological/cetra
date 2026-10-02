@@ -2,6 +2,7 @@
 
 #include "cetra/light.h"
 
+#include "candles.h"
 #include "cards.h"
 #include "gothic.h"
 #include "house.h"
@@ -243,21 +244,6 @@ static void lamp(Kit* kit, Scene* scene, const KitFrame* f, float a, float d) {
     scene_add_light(scene, create_light(&desc));
 }
 
-// A brass candlestick `h` tall with an unlit candle burnt down to `wax`.
-static void candlestick(Kit* kit, const KitFrame* f, float a, float d, float h, float wax) {
-    const float y = DESK_TOP;
-    const vec2 stick[] = {{0.0f, 0.0f},       {0.055f, 0.0f},      {0.055f, 0.01f},
-                          {0.035f, 0.025f},   {0.012f, 0.04f},     {0.01f, 0.08f},
-                          {0.02f, 0.095f},    {0.01f, 0.11f},      {0.009f, h - 0.03f},
-                          {0.03f, h - 0.02f}, {0.032f, h - 0.01f}, {0.013f, h},
-                          {0.0f, h}};
-    kit_frame_lathe(kit, f, MAT_BRASS, a, d, y, stick, KIT_COUNT(stick), 14);
-    const vec2 candle[] = {
-        {0.0f, 0.0f}, {0.011f, 0.0f}, {0.011f, wax}, {0.007f, wax + 0.006f}, {0.0f, wax + 0.008f}};
-    kit_frame_lathe(kit, f, MAT_WAX, a, d, y + h, candle, KIT_COUNT(candle), 10);
-    kit_frame_prism(kit, f, MAT_BLACK, a, d, y + h + wax, y + h + wax + 0.016f, 0.0015f, 4);
-}
-
 // A card lying face up on the desk at (a, d), turned `yaw`, read from the sitter's side.
 static void lying(Kit* kit, const KitFrame* f, CardId id, float a, float d, float lift, float yaw,
                   float scale) {
@@ -285,8 +271,8 @@ static void journal(Kit* kit, const KitFrame* f, float a, float d) {
  */
 static void desk_things(Kit* kit, Scene* scene, const KitFrame* f) {
     lamp(kit, scene, f, -0.66f, 0.2f);
-    candlestick(kit, f, 0.62f, 0.2f, 0.26f, 0.14f);
-    candlestick(kit, f, 0.48f, 0.26f, 0.22f, 0.09f);
+    candle_build(kit, f, CANDLE_STICK, 0.62f, DESK_TOP, 0.2f, 0.14f);
+    candle_build(kit, f, CANDLE_STICK, 0.48f, DESK_TOP, 0.26f, 0.09f);
     journal(kit, f, 0.0f, -0.12f);
     lying(kit, f, CARD_LETTER, 0.38f, -0.1f, 0.001f, 0.35f, 1.0f);
     lying(kit, f, CARD_NOTE, 0.3f, 0.06f, 0.002f, -0.2f, 1.0f);
@@ -348,8 +334,15 @@ void study_build(Kit* kit, Scene* scene, unsigned int seed) {
     // Along the east wall from the front corner to the back: four bays, and the ladder.
     const KitFrame east = {{EAST_X, FLOOR2_Y, BAND_Z0}, -0.5f * GLM_PIf};
     const float east_len = BAND_Z1 - BAND_Z0;
-    bookcase(kit, &rng, &east, 0.0f, east_len, 4);
+    const int east_bays = 4;
+    bookcase(kit, &rng, &east, 0.0f, east_len, east_bays);
     ladder(kit, &east, 2.4f, 0.0f, east_len);
+    // A chamberstick under the arch of each end bay, on the top shelf, which holds no books: a
+    // pair bracketing the case.
+    const float end_bay = 0.5f * east_len / (float)east_bays,
+                shelf = PLINTH + SHELVES * SHELF_PITCH;
+    candle_build(kit, &east, CANDLE_CHAMBER, end_bay, shelf, 0.5f * CASE_D, 0.1f);
+    candle_build(kit, &east, CANDLE_CHAMBER, east_len - end_bay, shelf, 0.5f * CASE_D, 0.11f);
 
     // The doorway's casing on this side, and along the back from the west corner to 4 cm short
     // of it, and down the west wall from in front of that one to the tower.
