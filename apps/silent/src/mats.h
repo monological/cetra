@@ -65,6 +65,11 @@ typedef enum {
     MAT_FOUNDATION,   // the rubble base under it all
     MAT_IRON,         // cresting, finials, the hearth's irons: black paint gone dull
     MAT_LEATHER,      // book covers, the desk's top
+    MAT_MAHOGANY,     // panelling's stiles and rails, beams, trusses, doors' casings
+    MAT_CARVED,       // gothic.h's carved panels and frieze, placed whole
+    MAT_PERSIAN,      // gothic.h's rug and runners
+    MAT_STAINED,      // gothic.h's lancets: thin glass, its colour in the picture
+    MAT_LEADED,       // diamond quarries in lead, laid by the metre
     MAT_COUNT
 } MatId;
 
@@ -72,7 +77,7 @@ typedef enum {
 // materials with the kit, slot for slot with MatId. The kit must be empty.
 void mats_register(Kit* kit, Engine* engine, Scene* scene);
 
-// Daytime: the street lamps' lenses go dark.
-void mats_lamps_out(Kit* kit);
+// Daytime: the street lamps' lenses go dark, and the stained glass is lit by the sky.
+void mats_daytime(Kit* kit);
 
 #endif // _SILENT_MATS_H_

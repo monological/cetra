@@ -7,14 +7,15 @@
 #include "mats.h"
 
 /*
- * Against the hall's west wall, opposite the kitchen door, facing into the
- * hall. The frame's a runs along the wall and d out of it, so the case is
- * drawn as if it stood against any wall. It is kept inside z 12.87..13.43,
- * clear of the GI probes at z 12.6 and 13.6: a probe inside solid geometry
- * darkens everything it lights.
+ * Against the hall's west wall, standing on the panelling's face, opposite the
+ * kitchen door, facing into the hall. The frame's a runs along the wall and d
+ * out of it, so the case is drawn as if it stood against any wall. It is kept
+ * inside z 12.87..13.43, and its front 0.3 m short of the GI probe column down
+ * the hall's middle at x -0.795: a probe inside solid geometry darkens
+ * everything it lights.
  */
 static const KitFrame CLOCK = {
-    {HALL_X0 + 0.5f * INT_WALL, FLOOR_Y, 0.5f * (KITCHEN_DOOR_Z0 + KITCHEN_DOOR_Z1)},
+    {HALL_X0 + 0.5f * INT_WALL + PANEL_DEPTH, FLOOR_Y, 0.5f * (KITCHEN_DOOR_Z0 + KITCHEN_DOOR_Z1)},
     0.5f * GLM_PIf};
 
 #define COUNT(arr) ((int)(sizeof(arr) / sizeof((arr)[0])))

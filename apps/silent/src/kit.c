@@ -334,7 +334,13 @@ static int ear_clip(const vec2* pts, int n, unsigned int (*tris)[3]) {
     return count;
 }
 
-void kit_polygon_facing(Kit* kit, int mat, const vec3* corners, int count, const vec3 outward) {
+/*
+ * A flat polygon, ear-clipped and wound to face `outward`. Its UVs are the face's world
+ * projection, or `uv` per corner with `tangent` the direction U runs, for a picture laid on
+ * it.
+ */
+static void polygon(Kit* kit, int mat, const vec3* corners, int count, const vec3 outward,
+                    const vec2* uv, const vec3 tangent) {
     if (!slot_ok(kit, mat))
         return;
     if (count < 3 || count > KIT_MAX_OUTLINE) {
@@ -363,15 +369,21 @@ void kit_polygon_facing(Kit* kit, int mat, const vec3* corners, int count, const
     vec2 flat[KIT_MAX_OUTLINE] = {{0.0f}};
     unsigned int idx[KIT_MAX_OUTLINE];
     for (int i = 0; i < count; i++) {
-        const float* p = corners[flip ? count - 1 - i : i];
+        const int k = flip ? count - 1 - i : i;
+        const float* p = corners[k];
         flat[i][0] = glm_vec3_dot((float*)p, t);
         flat[i][1] = glm_vec3_dot((float*)p, b);
-        idx[i] = face_vertex(kit, mat, p, n, t, b, 0.0f);
+        idx[i] = uv ? kit_vertex(kit, mat, p, n, tangent, uv[k][0], uv[k][1], 0.0f)
+                    : face_vertex(kit, mat, p, n, t, b, 0.0f);
     }
     unsigned int tris[KIT_MAX_OUTLINE][3] = {{0}};
     const int made = ear_clip(flat, count, tris);
     for (int i = 0; i < made; i++)
         mb_tri(&kit->builders[mat], idx[tris[i][0]], idx[tris[i][1]], idx[tris[i][2]]);
+}
+
+void kit_polygon_facing(Kit* kit, int mat, const vec3* corners, int count, const vec3 outward) {
+    polygon(kit, mat, corners, count, outward, NULL, NULL);
 }
 
 /*
@@ -1114,6 +1126,27 @@ void kit_frame_polygon(Kit* kit, const KitFrame* f, int mat, const vec2* outline
         return;
     kit_frame_dir(f, 0.0f, 0.0f, 1.0f, out);
     kit_polygon_facing(kit, mat, world, count, out);
+}
+
+void kit_frame_card_polygon(Kit* kit, const KitFrame* f, int mat, const vec2* outline, int count,
+                            float d, const float uv[4], bool back) {
+    vec3 world[KIT_MAX_OUTLINE], out = {0.0f, 0.0f, 0.0f}, along = {0.0f, 0.0f, 0.0f};
+    if (!outline_at(f, outline, count, d, world))
+        return;
+    float lo[2] = {outline[0][0], outline[0][1]}, hi[2] = {outline[0][0], outline[0][1]};
+    for (int i = 1; i < count; i++)
+        for (int k = 0; k < 2; k++) {
+            lo[k] = fminf(lo[k], outline[i][k]);
+            hi[k] = fmaxf(hi[k], outline[i][k]);
+        }
+    vec2 tex[KIT_MAX_OUTLINE] = {{0.0f, 0.0f}};
+    for (int i = 0; i < count; i++) {
+        tex[i][0] = uv[0] + (uv[2] - uv[0]) * (outline[i][0] - lo[0]) / fmaxf(hi[0] - lo[0], 1e-6f);
+        tex[i][1] = uv[1] + (uv[3] - uv[1]) * (outline[i][1] - lo[1]) / fmaxf(hi[1] - lo[1], 1e-6f);
+    }
+    kit_frame_dir(f, 0.0f, 0.0f, back ? -1.0f : 1.0f, out);
+    kit_frame_dir(f, 1.0f, 0.0f, 0.0f, along);
+    polygon(kit, mat, world, count, out, tex, along);
 }
 
 void kit_frame_extrude(Kit* kit, const KitFrame* f, int mat, const vec2* outline, int count,

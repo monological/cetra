@@ -196,6 +196,11 @@ void kit_frame_pane(Kit* kit, const KitFrame* f, int mat, const KitOpening* o, f
 // A flat polygon of (a, y) corners at distance d, facing out (+d).
 void kit_frame_polygon(Kit* kit, const KitFrame* f, int mat, const vec2* outline, int count,
                        float d);
+// The same polygon showing `uv` = {u0, v0, u1, v1} of its material's picture stretched over
+// the outline's bounds, as kit_frame_card does a rectangle -- facing +d, or -d when `back`, in
+// which case the picture reads mirrored, as glass does from behind.
+void kit_frame_card_polygon(Kit* kit, const KitFrame* f, int mat, const vec2* outline, int count,
+                            float d, const float uv[4], bool back);
 // The (a, y) outline extruded from d0 to d1: both faces and its edges, which are flat.
 void kit_frame_extrude(Kit* kit, const KitFrame* f, int mat, const vec2* outline, int count,
                        float d0, float d1);

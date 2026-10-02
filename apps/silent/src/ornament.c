@@ -35,6 +35,14 @@ Facade facade_in(const KitFrame* f, const KitWall* w) {
     return facade(f, w->at, w->inner >= 0 ? 1.0f : -1.0f, w->thick);
 }
 
+Facade facade_inner(const KitWall* w) {
+    KitFrame f;
+    float at = 0.0f;
+    kit_wall_frame(w, &f, &at);
+    const float inner = (w->along_x ? 1.0f : -1.0f) * (w->inner >= 0 ? 1.0f : -1.0f);
+    return facade(&f, at, -inner, w->thick);
+}
+
 static bool doorway(const KitOpening* o) {
     return o->bottom <= FLOOR_Y + 0.01f;
 }

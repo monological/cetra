@@ -50,7 +50,8 @@ static float main_roof_y(float x) {
 
 /*
  * A roof slab under the plane y = y0 + gx x + gz z, over the outline `xz` in plan: slate on
- * top, and a roof's thickness under it the soffit, with a fascia down every edge.
+ * top, and a roof's thickness under it boarding -- the soffit outside, and over the great hall
+ * the ceiling it is open to -- with a fascia down every edge.
  */
 static void roof_slab(Kit* kit, const vec2* xz, int count, float y0, float gx, float gz,
                       float thick) {
@@ -64,7 +65,7 @@ static void roof_slab(Kit* kit, const vec2* xz, int count, float y0, float gx, f
         area += xz[i][0] * q[1] - q[0] * xz[i][1];
     }
     kit_polygon_facing(kit, MAT_SLATE, top, count, (vec3){-gx, 1.0f, -gz});
-    kit_polygon_facing(kit, MAT_SIDING_DARK, under, count, (vec3){gx, -1.0f, gz});
+    kit_polygon_facing(kit, MAT_MAHOGANY, under, count, (vec3){gx, -1.0f, gz});
     // Out of the outline is to the right of each edge when it runs counter-clockwise.
     const float turn = area > 0.0f ? 1.0f : -1.0f;
     for (int i = 0; i < count; i++) {
@@ -230,23 +231,180 @@ static void pane_in(Kit* kit, const KitWall* w, int i, int glass) {
     kit_frame_pane(kit, &f, glass, &w->openings[i], at, w->thick);
 }
 
-// A shut door filling opening `i` of the axis-aligned wall `w`, 5 cm thick, and its body.
-static void door_in(Kit* kit, const KitWall* w, int i) {
+/*
+ * A shut door filling opening `i` of the axis-aligned wall `w`: door.c's Gothic leaf, built
+ * in the house's kit since it never moves, and a body through the wall. Its strapped face is
+ * toward the side it is seen from: the wall's inner side when `inner_face`, else its outer.
+ */
+static void door_in(Kit* kit, const KitWall* w, int i, bool inner_face) {
     KitFrame f;
     float at = 0.0f;
     kit_wall_frame(w, &f, &at);
     const KitOpening* o = &w->openings[i];
-    vec2 outline[KIT_OPENING_POINTS];
-    const int n = kit_opening_outline(o, outline);
-    kit_frame_extrude(kit, &f, MAT_WOOD, outline, n, at - 0.025f, at + 0.025f);
+    // In the wall's frame the inner side is this sign of d, and the leaf's straps are on its
+    // own -d face; turn the leaf half round when they would face the wrong way, which runs its
+    // a the other way too.
+    const int inner_d = w->along_x ? w->inner : -w->inner;
+    const int seen = inner_face ? inner_d : -inner_d;
+    const bool turn = seen > 0;
+    KitFrame leaf = {{0.0f, 0.0f, 0.0f}, f.yaw + (turn ? GLM_PIf : 0.0f)};
+    kit_frame_point(&f, 0.0f, 0.0f, at, leaf.origin);
+    KitOpening shape = *o;
+    if (turn) {
+        shape.from = -o->to;
+        shape.to = -o->from;
+    }
+    door_leaf(kit, &leaf, &shape, 0.05f);
     kit_frame_box(kit, &f, KIT_COLLIDER_ONLY, o->from, o->to, o->bottom, o->top + o->rise,
                   at - 0.5f * w->thick, at + 0.5f * w->thick, true);
 }
 
 // A lancet from a0 to a1 along a wall, its sill at `sill`, springing at `spring` and rising
 // `rise` to its point.
-static KitOpening lancet(float a0, float a1, float sill, float spring, float rise) {
-    return (KitOpening){a0, a1, sill, spring, KIT_ARCH_POINTED, rise};
+#define LANCET(a0, a1, sill, spring, rise) {a0, a1, sill, spring, KIT_ARCH_POINTED, rise}
+#define UP_SILL                            (FLOOR2_Y + 0.85f)
+#define UP_SPRING                          (FLOOR2_Y + 1.85f)
+#define HALL_SILL                          (FLOOR_Y + 1.2f)
+#define HALL_SPRING                        (FLOOR_Y + 4.1f)
+#define DOOR2_SPRING                       (FLOOR2_Y + 2.0f)
+
+/*
+ * Every wall of the house that has a face worth dressing, in one table, so what is built and
+ * what is laid on it later -- panelling, a stone lining -- read the same openings.
+ */
+static const KitWall WALLS[HOUSE_WALL_COUNT] = {
+    // The front: the door under a pointed head, the kitchen's window as it was, and upstairs
+    // a pair of lancets into the bedroom and one into the box room.
+    [HOUSE_WALL_FRONT] = {.along_x = true,
+                          .at = HOUSE_FRONT_Z,
+                          .from = FRONT_FROM,
+                          .to = HOUSE_X1 + CORNER,
+                          .y0 = 0.0f,
+                          .y1 = EAVE_Y,
+                          .thick = EXT_WALL,
+                          .inner = 1,
+                          .mat_inner = MAT_PLASTER,
+                          .mat_outer = MAT_SIDING_DARK,
+                          .openings = {{FRONT_DOOR_X0, FRONT_DOOR_X1, FLOOR_Y, FRONT_DOOR_SPRING,
+                                        KIT_ARCH_POINTED, FRONT_DOOR_RISE},
+                                       {KITCHEN_WIN_X0, KITCHEN_WIN_X1, KITCHEN_WIN_SILL,
+                                        KITCHEN_WIN_HEAD},
+                                       LANCET(1.75f, 2.35f, UP_SILL, UP_SPRING, 0.6f),
+                                       LANCET(2.65f, 3.25f, UP_SILL, UP_SPRING, 0.6f),
+                                       LANCET(-1.0f, -0.5f, UP_SILL + 0.1f, UP_SPRING, 0.5f)},
+                          .opening_count = 5},
+    // The back, either side of the hearth: two tall lancets into the great hall.
+    [HOUSE_WALL_BACK] = {.along_x = true,
+                         .at = HOUSE_BACK_Z,
+                         .from = HOUSE_X0 - CORNER,
+                         .to = HOUSE_X1 + CORNER,
+                         .y0 = 0.0f,
+                         .y1 = EAVE_Y,
+                         .thick = EXT_WALL,
+                         .inner = -1,
+                         .mat_inner = MAT_PLASTER,
+                         .mat_outer = MAT_SIDING_DARK,
+                         .openings = {LANCET(-4.1f, -3.3f, HALL_SILL, HALL_SPRING, 1.0f),
+                                      LANCET(1.9f, 2.7f, HALL_SILL, HALL_SPRING, 1.0f)},
+                         .opening_count = 2},
+    // The west side, from the tower back: two more into the great hall.
+    [HOUSE_WALL_WEST] = {.along_x = false,
+                         .at = HOUSE_X0,
+                         .from = WEST_FROM,
+                         .to = HOUSE_BACK_Z,
+                         .y0 = 0.0f,
+                         .y1 = EAVE_Y,
+                         .thick = EXT_WALL,
+                         .inner = 1,
+                         .mat_inner = MAT_PLASTER,
+                         .mat_outer = MAT_SIDING_DARK,
+                         .openings = {LANCET(15.1f, 15.9f, HALL_SILL, HALL_SPRING, 1.0f),
+                                      LANCET(17.3f, 18.1f, HALL_SILL, HALL_SPRING, 1.0f)},
+                         .opening_count = 2},
+    // The east side: one over the stair, lit as you climb, and the bedroom's.
+    [HOUSE_WALL_EAST] = {.along_x = false,
+                         .at = HOUSE_X1,
+                         .from = HOUSE_FRONT_Z,
+                         .to = HOUSE_BACK_Z,
+                         .y0 = 0.0f,
+                         .y1 = EAVE_Y,
+                         .thick = EXT_WALL,
+                         .inner = -1,
+                         .mat_inner = MAT_PLASTER,
+                         .mat_outer = MAT_SIDING_DARK,
+                         .openings = {LANCET(16.6f, 17.4f, FLOOR_Y + 2.0f, FLOOR_Y + 4.3f, 0.9f),
+                                      LANCET(11.6f, 12.2f, UP_SILL, UP_SPRING, 0.6f)},
+                         .opening_count = 2},
+    // Downstairs, the hall's two sides: the kitchen's door in one, the parlour's in the other.
+    [HOUSE_WALL_HALL_EAST] = {.along_x = false,
+                              .at = HALL_X1,
+                              .from = HOUSE_FRONT_Z,
+                              .to = KITCHEN_BACK_Z,
+                              .y0 = FLOOR_Y,
+                              .y1 = CEIL_Y,
+                              .thick = INT_WALL,
+                              .inner = 1,
+                              .mat_inner = MAT_PLASTER,
+                              .mat_outer = MAT_PLASTER,
+                              .openings = {{KITCHEN_DOOR_Z0, KITCHEN_DOOR_Z1, FLOOR_Y, DOOR_HEAD}},
+                              .opening_count = 1},
+    [HOUSE_WALL_HALL_WEST] = {.along_x = false,
+                              .at = HALL_X0,
+                              .from = HOUSE_FRONT_Z,
+                              .to = KITCHEN_BACK_Z,
+                              .y0 = FLOOR_Y,
+                              .y1 = CEIL_Y,
+                              .thick = INT_WALL,
+                              .inner = 1,
+                              .mat_inner = MAT_PLASTER,
+                              .mat_outer = MAT_PLASTER,
+                              .openings = {{10.55f, 11.4f, FLOOR_Y, FLOOR_Y + 1.9f,
+                                            KIT_ARCH_POINTED, 0.4f}},
+                              .opening_count = 1},
+    // Upstairs, the same two lines part the study, the box room and the bedroom.
+    [HOUSE_WALL_UP_EAST] = {.along_x = false,
+                            .at = HALL_X1,
+                            .from = HOUSE_FRONT_Z,
+                            .to = KITCHEN_BACK_Z,
+                            .y0 = FLOOR2_Y,
+                            .y1 = CEIL2_Y,
+                            .thick = INT_WALL,
+                            .inner = 1,
+                            .mat_inner = MAT_PLASTER,
+                            .mat_outer = MAT_PLASTER},
+    [HOUSE_WALL_UP_WEST] = {.along_x = false,
+                            .at = HALL_X0,
+                            .from = HOUSE_FRONT_Z,
+                            .to = KITCHEN_BACK_Z,
+                            .y0 = FLOOR2_Y,
+                            .y1 = CEIL2_Y,
+                            .thick = INT_WALL,
+                            .inner = 1,
+                            .mat_inner = MAT_PLASTER,
+                            .mat_outer = MAT_PLASTER},
+    // The great hall's front, through both storeys: the hall's arch under the gallery, and off
+    // the gallery the study's open doorway and the box room's and the bedroom's, shut.
+    [HOUSE_WALL_GREAT_FRONT] =
+        {.along_x = true,
+         .at = KITCHEN_BACK_Z,
+         .from = HOUSE_X0,
+         .to = HOUSE_X1,
+         .y0 = FLOOR_Y,
+         .y1 = EAVE_Y,
+         .thick = INT_WALL,
+         .inner = -1,
+         .mat_inner = MAT_PLASTER,
+         .mat_outer = MAT_PLASTER,
+         .openings = {{HALL_X0 + 0.5f * INT_WALL, HALL_X1 - 0.5f * INT_WALL, FLOOR_Y,
+                       FLOOR_Y + 2.0f, KIT_ARCH_TUDOR, 0.5f},
+                      {-3.0f, -2.1f, FLOOR2_Y, DOOR2_SPRING, KIT_ARCH_POINTED, 0.45f},
+                      {-1.2f, -0.35f, FLOOR2_Y, DOOR2_SPRING, KIT_ARCH_POINTED, 0.45f},
+                      {1.6f, 2.45f, FLOOR2_Y, DOOR2_SPRING, KIT_ARCH_POINTED, 0.45f}},
+         .opening_count = 4},
+};
+
+const KitWall* house_wall(HouseWall which) {
+    return &WALLS[which];
 }
 
 /*
@@ -267,143 +425,50 @@ static void dress(Kit* kit, const KitWall* w, float a0, float a1) {
 }
 
 static void exterior_walls(Kit* kit) {
-    // The front: the door under a pointed head, the kitchen's window as it was, and upstairs
-    // a pair of lancets into the bedroom and one into the box room.
-    const float up_sill = FLOOR2_Y + 0.85f, up_spring = FLOOR2_Y + 1.85f;
-    const KitWall front = {
-        .along_x = true,
-        .at = HOUSE_FRONT_Z,
-        .from = FRONT_FROM,
-        .to = HOUSE_X1 + CORNER,
-        .y0 = 0.0f,
-        .y1 = EAVE_Y,
-        .thick = EXT_WALL,
-        .inner = 1,
-        .mat_inner = MAT_PLASTER,
-        .mat_outer = MAT_SIDING_DARK,
-        .openings = {{FRONT_DOOR_X0, FRONT_DOOR_X1, FLOOR_Y, FRONT_DOOR_SPRING, KIT_ARCH_POINTED,
-                      FRONT_DOOR_RISE},
-                     {KITCHEN_WIN_X0, KITCHEN_WIN_X1, KITCHEN_WIN_SILL, KITCHEN_WIN_HEAD},
-                     lancet(1.75f, 2.35f, up_sill, up_spring, 0.6f),
-                     lancet(2.65f, 3.25f, up_sill, up_spring, 0.6f),
-                     lancet(-1.0f, -0.5f, up_sill + 0.1f, up_spring, 0.5f)},
-        .opening_count = 5};
-    kit_wall(kit, &front);
-    pane_in(kit, &front, 1, MAT_WINDOW_GLASS);
-    for (int i = 2; i < front.opening_count; i++)
-        pane_in(kit, &front, i, MAT_DARK_GLASS);
-    // Inside, the front door's oak casing and its stone threshold; the leaf is door.c's.
-    const KitOpening* door = &front.openings[0];
-    const float inner = HOUSE_FRONT_Z + CORNER;
-    kit_frame_surround(kit, &KIT_WORLD, MAT_WOOD, door, 0.08f, false, inner, inner + 0.03f);
+    const KitWall* front = &WALLS[HOUSE_WALL_FRONT];
+    kit_wall(kit, front);
+    pane_in(kit, front, 1, MAT_WINDOW_GLASS);
+    for (int i = 2; i < front->opening_count; i++)
+        pane_in(kit, front, i, MAT_DARK_GLASS);
+    // Inside, the front door's stone threshold; the leaf is door.c's, its casing interior.c's.
+    const KitOpening* door = &front->openings[0];
     kit_frame_box(kit, &KIT_WORLD, MAT_STONE, door->from, door->to, FLOOR_Y - 0.02f,
-                  FLOOR_Y + 0.015f, HOUSE_FRONT_Z - CORNER - 0.04f, inner, false);
+                  FLOOR_Y + 0.015f, HOUSE_FRONT_Z - CORNER - 0.04f, HOUSE_FRONT_Z + CORNER, false);
     // Each wall's dressing runs from the tower's face, or past the corner it shares.
     const float lap = CORNER + 0.05f;
-    dress(kit, &front, FRONT_FROM + CORNER, HOUSE_X1 + lap);
+    dress(kit, front, FRONT_FROM + CORNER, HOUSE_X1 + lap);
 
-    // The back, either side of the hearth: two tall lancets into the great hall.
-    const float hall_sill = FLOOR_Y + 1.2f, hall_spring = FLOOR_Y + 4.1f;
-    KitWall back = front;
-    back.at = HOUSE_BACK_Z;
-    back.from = HOUSE_X0 - CORNER;
-    back.inner = -1;
-    back.openings[0] = lancet(-4.1f, -3.3f, hall_sill, hall_spring, 1.0f);
-    back.openings[1] = lancet(1.9f, 2.7f, hall_sill, hall_spring, 1.0f);
-    back.opening_count = 2;
-    kit_wall(kit, &back);
-    pane_in(kit, &back, 0, MAT_WINDOW_GLASS);
-    pane_in(kit, &back, 1, MAT_WINDOW_GLASS);
-    dress(kit, &back, HOUSE_X0 - lap, HOUSE_X1 + lap);
+    // The great hall's tall lancets take leaded quarries; the bedroom's stays dark.
+    const KitWall* back = &WALLS[HOUSE_WALL_BACK];
+    kit_wall(kit, back);
+    pane_in(kit, back, 0, MAT_LEADED);
+    pane_in(kit, back, 1, MAT_LEADED);
+    dress(kit, back, HOUSE_X0 - lap, HOUSE_X1 + lap);
 
-    // The west side, from the tower back: two more into the great hall.
-    const KitWall west = {.along_x = false,
-                          .at = HOUSE_X0,
-                          .from = WEST_FROM,
-                          .to = HOUSE_BACK_Z,
-                          .y0 = 0.0f,
-                          .y1 = EAVE_Y,
-                          .thick = EXT_WALL,
-                          .inner = 1,
-                          .mat_inner = MAT_PLASTER,
-                          .mat_outer = MAT_SIDING_DARK,
-                          .openings = {lancet(15.1f, 15.9f, hall_sill, hall_spring, 1.0f),
-                                       lancet(17.3f, 18.1f, hall_sill, hall_spring, 1.0f)},
-                          .opening_count = 2};
-    kit_wall(kit, &west);
-    pane_in(kit, &west, 0, MAT_WINDOW_GLASS);
-    pane_in(kit, &west, 1, MAT_WINDOW_GLASS);
-    dress(kit, &west, WEST_FROM + CORNER, HOUSE_BACK_Z + lap);
+    const KitWall* west = &WALLS[HOUSE_WALL_WEST];
+    kit_wall(kit, west);
+    pane_in(kit, west, 0, MAT_LEADED);
+    pane_in(kit, west, 1, MAT_LEADED);
+    dress(kit, west, WEST_FROM + CORNER, HOUSE_BACK_Z + lap);
 
-    // The east side: one over the stair, lit as you climb, and the bedroom's.
-    KitWall east = west;
-    east.at = HOUSE_X1;
-    east.from = HOUSE_FRONT_Z;
-    east.inner = -1;
-    east.openings[0] = lancet(16.6f, 17.4f, FLOOR_Y + 2.0f, FLOOR_Y + 4.3f, 0.9f);
-    east.openings[1] = lancet(11.6f, 12.2f, up_sill, up_spring, 0.6f);
-    east.opening_count = 2;
-    kit_wall(kit, &east);
-    pane_in(kit, &east, 0, MAT_WINDOW_GLASS);
-    pane_in(kit, &east, 1, MAT_DARK_GLASS);
-    dress(kit, &east, HOUSE_FRONT_Z - lap, HOUSE_BACK_Z + lap);
+    const KitWall* east = &WALLS[HOUSE_WALL_EAST];
+    kit_wall(kit, east);
+    pane_in(kit, east, 0, MAT_LEADED);
+    pane_in(kit, east, 1, MAT_DARK_GLASS);
+    dress(kit, east, HOUSE_FRONT_Z - lap, HOUSE_BACK_Z + lap);
 }
 
 static void interior_walls(Kit* kit) {
-    // Downstairs: the hall's two sides, the kitchen's door in one and the parlour's, shut, in
-    // the other.
-    KitWall hall_east = {.along_x = false,
-                         .at = HALL_X1,
-                         .from = HOUSE_FRONT_Z,
-                         .to = KITCHEN_BACK_Z,
-                         .y0 = FLOOR_Y,
-                         .y1 = CEIL_Y,
-                         .thick = INT_WALL,
-                         .inner = 1,
-                         .mat_inner = MAT_PLASTER,
-                         .mat_outer = MAT_PLASTER,
-                         .openings = {{KITCHEN_DOOR_Z0, KITCHEN_DOOR_Z1, FLOOR_Y, DOOR_HEAD}},
-                         .opening_count = 1};
-    kit_wall(kit, &hall_east);
-    KitWall hall_west = hall_east;
-    hall_west.at = HALL_X0;
-    hall_west.openings[0] =
-        (KitOpening){10.55f, 11.4f, FLOOR_Y, FLOOR_Y + 1.9f, KIT_ARCH_POINTED, 0.4f};
-    kit_wall(kit, &hall_west);
-    door_in(kit, &hall_west, 0);
-
-    // Upstairs, the same two lines part the study, the box room and the bedroom.
-    KitWall up = hall_east;
-    up.y0 = FLOOR2_Y;
-    up.y1 = CEIL2_Y;
-    up.opening_count = 0;
-    kit_wall(kit, &up);
-    up.at = HALL_X0;
-    kit_wall(kit, &up);
-
-    // The great hall's front, through both storeys: the hall's arch under the gallery, and
-    // off the gallery the study's open doorway and the other two shut.
-    const float up_spring = FLOOR2_Y + 2.0f;
-    const KitWall great_front = {
-        .along_x = true,
-        .at = KITCHEN_BACK_Z,
-        .from = HOUSE_X0,
-        .to = HOUSE_X1,
-        .y0 = FLOOR_Y,
-        .y1 = EAVE_Y,
-        .thick = INT_WALL,
-        .inner = -1,
-        .mat_inner = MAT_PLASTER,
-        .mat_outer = MAT_PLASTER,
-        .openings = {{HALL_X0 + 0.5f * INT_WALL, HALL_X1 - 0.5f * INT_WALL, FLOOR_Y, FLOOR_Y + 2.0f,
-                      KIT_ARCH_TUDOR, 0.5f},
-                     {-3.0f, -2.1f, FLOOR2_Y, up_spring, KIT_ARCH_POINTED, 0.45f},
-                     {-1.2f, -0.35f, FLOOR2_Y, up_spring, KIT_ARCH_POINTED, 0.45f},
-                     {1.6f, 2.45f, FLOOR2_Y, up_spring, KIT_ARCH_POINTED, 0.45f}},
-        .opening_count = 4};
-    kit_wall(kit, &great_front);
-    door_in(kit, &great_front, 2);
-    door_in(kit, &great_front, 3);
+    kit_wall(kit, &WALLS[HOUSE_WALL_HALL_EAST]);
+    // The parlour's door seen from the hall, the wall's inner side; the box room's and the
+    // bedroom's from the gallery, the great hall's front's outer side.
+    kit_wall(kit, &WALLS[HOUSE_WALL_HALL_WEST]);
+    door_in(kit, &WALLS[HOUSE_WALL_HALL_WEST], 0, true);
+    kit_wall(kit, &WALLS[HOUSE_WALL_UP_EAST]);
+    kit_wall(kit, &WALLS[HOUSE_WALL_UP_WEST]);
+    kit_wall(kit, &WALLS[HOUSE_WALL_GREAT_FRONT]);
+    door_in(kit, &WALLS[HOUSE_WALL_GREAT_FRONT], 2, false);
+    door_in(kit, &WALLS[HOUSE_WALL_GREAT_FRONT], 3, false);
 }
 
 /*
@@ -435,28 +500,18 @@ static void floors(Kit* kit) {
                   KITCHEN_BACK_Z, true);
     kit_slab(kit, MAT_CEILING, notch, n, CEIL2_Y, CEIL2_Y + SLAB, false);
 
-    // The gallery, the same sandwich out over the great hall, and its rail.
+    // The gallery, the same sandwich out over the great hall; its balustrade is interior.c's.
     kit_frame_box(kit, w, MAT_CEILING, HOUSE_X0, HOUSE_X1, CEIL_Y, CEIL_Y + SLAB, KITCHEN_BACK_Z,
                   GALLERY_Z1, false);
     kit_frame_box(kit, w, MAT_WOOD_FLOOR, HOUSE_X0, HOUSE_X1, CEIL_Y + SLAB, FLOOR2_Y,
                   KITCHEN_BACK_Z, GALLERY_Z1, true);
-    const float rail = FLOOR2_Y + 0.95f;
-    kit_frame_box(kit, w, MAT_WOOD, GREAT_X0, STAIR_X0, rail - 0.06f, rail, GALLERY_Z1 - 0.05f,
-                  GALLERY_Z1 + 0.05f, false);
-    for (float x = GREAT_X0 + 0.04f; x < STAIR_X0; x += 1.1f)
-        kit_frame_box(kit, w, MAT_WOOD, x, x + 0.08f, FLOOR2_Y, rail, GALLERY_Z1 - 0.04f,
-                      GALLERY_Z1 + 0.04f, false);
-    kit_frame_box(kit, w, MAT_WOOD, STAIR_X0, STAIR_X0 + 0.1f, FLOOR2_Y, rail + 0.15f,
-                  GALLERY_Z1 - 0.05f, GALLERY_Z1 + 0.05f, false);
-    kit_frame_box(kit, w, KIT_COLLIDER_ONLY, GREAT_X0, STAIR_X0, FLOOR2_Y, rail + 0.05f,
-                  GALLERY_Z1 - 0.05f, GALLERY_Z1 + 0.05f, true);
 }
 
 // The stair up the great hall's east wall, from its foot near the back to the gallery.
 static void stair(Kit* kit) {
     // Turned half round, so d climbs toward -z and a runs west off the wall.
     const KitFrame f = {{GREAT_X1, 0.0f, STAIR_FOOT_Z}, GLM_PIf};
-    kit_frame_stair(kit, &f, MAT_WOOD, 0.0f, GREAT_X1 - STAIR_X0, FLOOR_Y, 0.0f, STAIR_RISE,
+    kit_frame_stair(kit, &f, MAT_MAHOGANY, 0.0f, GREAT_X1 - STAIR_X0, FLOOR_Y, 0.0f, STAIR_RISE,
                     STAIR_GOING, STAIR_RISERS);
 }
 
@@ -536,6 +591,10 @@ int house_doors(Door* doors, int max, Engine* engine, Scene* scene, EntityManage
     door_build(&doors[0], engine, scene, em, physics, "front_door", &hinge, &leaf, DOOR_THICK,
                DOOR_SWING);
     return 1;
+}
+
+float house_roof_y(float x) {
+    return main_roof_y(x);
 }
 
 float house_outside_distance(const vec3 p) {

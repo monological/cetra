@@ -80,6 +80,10 @@
 #define STOVE_RUN_Z (KITCHEN_DOOR_Z0 - 0.2f)
 #define STOVE_Z     (STOVE_RUN_Z - 1.12f)
 
+// How far the mahogany panelling stands off a wall: what stands against a panelled wall
+// stands this far out.
+#define PANEL_DEPTH 0.021f
+
 // The great hall's inner faces.
 #define GREAT_X0 (HOUSE_X0 + 0.5f * EXT_WALL)
 #define GREAT_X1 (HOUSE_X1 - 0.5f * EXT_WALL)

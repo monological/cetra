@@ -39,6 +39,10 @@ void door_build(Door* door, Engine* engine, Scene* scene, EntityManager* em, Phy
                 const char* name, const KitFrame* hinge, const KitOpening* shape, float thick,
                 float swing);
 
+// A leaf of `o`'s outline, `t` thick about d = 0 in frame `f`, as a door that never moves is
+// built: the same leaf, in the kit it is given.
+void door_leaf(Kit* kit, const KitFrame* f, const KitOpening* o, float t);
+
 // Toward open if it is shut or shutting, toward shut otherwise.
 void door_toggle(Door* door);
 // Whether the next toggle opens it.

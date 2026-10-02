@@ -21,6 +21,8 @@ typedef struct Facade {
 // An axis-aligned wall's outside, and a frame wall's.
 Facade facade_of(const KitWall* w);
 Facade facade_in(const KitFrame* f, const KitWall* w);
+// An axis-aligned wall's inner side, the one its `inner` points to, as a room sees it.
+Facade facade_inner(const KitWall* w);
 
 // The rubble base along the foot of a wall from a0 to a1, and the dressed water table that
 // sheds the rain off it; across a doorway it stops at the sill.
