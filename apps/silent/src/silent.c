@@ -352,6 +352,12 @@ static void build_probes(void) {
         glm_vec3_sub(p->box_max, p->box_min, span);
         p->near_clip = 0.02f;
         p->far_clip = 2.0f * glm_vec3_norm(span);
+        // A probe's weight fades OUTWARD past its box, by this fraction of the
+        // box's half-size on each axis. The default fifth carried the kitchen's
+        // reflection 0.37 m out, through its 0.1 m wall and onto the great hall's
+        // panelling, which reflected a lit kitchen as a grey sheen. Each fade
+        // stops halfway into the thinnest wall instead.
+        p->box_fade = 0.5f * INT_WALL / (0.5f * glm_vec3_max(span));
         if (!probe_set_add(set, p)) {
             free_reflection_probe(p);
             break;
