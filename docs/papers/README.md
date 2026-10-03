@@ -351,3 +351,43 @@ hand as what the real-time model is a simplification OF, and for its flame colou
   ACM TOG 41(5), 2022.** <https://dl.acm.org/doi/full/10.1145/3526213>. The ACM library
   refuses a scripted download and no author copy was found. Intended take: real fuels'
   adiabatic flame temperatures, as a source for the default temperatures.
+
+---
+
+## Local exposure
+
+Read for spec 13.19: local tone mapping layered on the camera exposure, after Unreal 5's
+bilateral Local Exposure. Fetched 2026-10-03.
+
+### Durand & Dorsey, *Fast Bilateral Filtering for the Display of High-Dynamic-Range Images*, SIGGRAPH 2002
+
+- <https://people.csail.mit.edu/fredo/PUBLI/Siggraph2002/DurandBilateral.pdf> (Durand's page).
+  ACM copyright.
+- Local: `durand-dorsey-2002-fast-bilateral-filtering-hdr.md`
+
+**What cetra takes from it:** the method. Log luminance split into a bilateral-filtered BASE and
+a DETAIL; only the base's contrast is reduced; colour recomposed by ratios. Also its account of
+the halos that survive at antialiased edges and around flare, which is what the blurred-luminance
+blend answers.
+
+### Chen, Paris & Durand, *Real-time Edge-Aware Image Processing with the Bilateral Grid*, SIGGRAPH 2007
+
+- <https://people.csail.mit.edu/sparis/publi/2007/siggraph/Chen_07_Bilateral_Grid.pdf> (Paris's
+  page). ACM copyright.
+- Local: `chen-paris-durand-2007-bilateral-grid.md`
+
+**What cetra takes from it:** the GPU data structure. Homogeneous `(sum, weight)` cells, a
+separable 5-tap Gaussian over the grid in a fragment shader, slicing by the pixel's own
+luminance, and z levels tiled across one 2D texture so a slice is two bilinear taps.
+
+### Unreal Engine 5, *Local Exposure* (Epic documentation), and its port in kansei PR #49
+
+- <https://dev.epicgames.com/documentation/en-us/unreal-engine/auto-exposure-in-unreal-engine>
+- <https://github.com/Siroko/kansei/pull/49>, a port of Unreal's bilateral local exposure that
+  states its grid sizes and per-pixel formula.
+- Web pages, no PDF.
+
+**What cetra takes from them:** the engine shape. Cells of 64x64 half-res texels, 32 bins over
+30 stops, each texel split between its two nearest bins; a base blended with a heavily blurred
+luminance (default 0.6) against ringing; highlight and shadow contrast scaled separately about
+middle grey, plus a detail strength; and defaults that change nothing.
