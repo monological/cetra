@@ -250,6 +250,10 @@ static void _pack_cluster_light(GpuPackedLight* dst, const struct Light* light, 
     glm_vec3_copy(dir, dst->dir_type);
     glm_vec3_copy(up, dst->up_area);
     dst->up_area[3] = 0.0f;
+
+    // No light has a cached shadow yet (spec 13.16).
+    glm_vec3_zero(dst->shadow_tile);
+    dst->shadow_tile[3] = -1.0f;
 }
 
 // Classify, cull and pack scene->lights. Directionals shade unclustered (they

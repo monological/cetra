@@ -8,6 +8,9 @@
 
 #include "program.h"
 
+// The cached point-light tiles' numbers, shared with the shaders (spec 13.16).
+#include "../shaders/include/shadow_tile_constants.glsl"
+
 #define MAX_SHADOW_LIGHTS       3
 #define SHADOW_CASCADES         3 // Compile-time cascade ceiling (runtime: cascade_count)
 #define DEFAULT_SHADOW_MAP_SIZE 2048
@@ -19,6 +22,8 @@
 // no signal at all. Allocation is demand-driven, so a spot-only scene builds
 // one layer.
 #define MAX_PUNCTUAL_SHADOW_LAYERS 8
+_Static_assert(SHADOW_TILE_MARK >= MAX_PUNCTUAL_SHADOW_LAYERS,
+               "a cached light's marker must be past every per-frame punctual layer");
 // Punctual map size bounds and the VRAM the array is allowed to spend.
 //
 // One GL_TEXTURE_2D_ARRAY carries one size for every layer, and a second array

@@ -61,6 +61,11 @@ typedef struct Light {
     // the depth pass.
     int shadow_map_index;
     int shadow_layer;
+    // A cached point light's six faces (spec 13.16): its first tile in the
+    // punctual array's tile region, -1 for none, reassigned by the depth pass
+    // like the two above, and where those faces were drawn from.
+    int shadow_tile;
+    vec3 shadow_origin;
     // The Mesh whose emissive surface this panel was derived from (spec 11.49),
     // by that mesh's stable `id`. 0 means AUTHORED -- a light somebody made --
     // and the emissive reconcile will not touch one, so the two populations
@@ -115,6 +120,12 @@ typedef struct Light {
     vec2 size;
 
     bool cast_shadows;
+    // With cast_shadows, a point light whose shadow is drawn once and kept rather
+    // than every frame (spec 13.16): it and what it lights stand still. Needs a
+    // range, which is where its shadow ends.
+    bool shadow_cache;
+    float emitter_size; // metres across the emitting body; past 0 its shadow's edges soften
+    float shadow_near;  // metres from the light that nothing nearer casts; 0 = from the range
 
     // Index into the scene's IesLibrary, or -1 for none (spec 11.57). An IES
     // profile is the measured angular distribution of a real luminaire and
@@ -155,6 +166,9 @@ typedef struct LightDesc {
     // penumbra; 0 = 50 by 50
     vec2 size;
     bool cast_shadows;
+    bool shadow_cache;  // with cast_shadows, a point light's shadow drawn once and kept
+    float emitter_size; // metres across the emitter; 0 = a hard-edged shadow
+    float shadow_near;  // metres; 0 = derived from the range
 } LightDesc;
 
 // NULL means every default: a white directional pointing down, emitting nothing.
