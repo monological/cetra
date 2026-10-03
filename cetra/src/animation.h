@@ -184,6 +184,7 @@ AnimationChannel* get_channel_for_bone_name(Animation* animation, const char* bo
 
 struct SpringBoneSystem;
 struct IkSystem;
+struct LookAtSystem;
 
 // A skeleton's live pose and the buffers a frame skins from. WHAT PLAYS is
 // not here -- an Animator owns the clock, the blend and the fades (animator.h),
@@ -209,6 +210,10 @@ typedef struct AnimationState {
 
     // Optional two-bone IK, applied after the springs (see ik.h)
     struct IkSystem* ik;
+
+    // Optional head look-at, applied after the IK (see look_at.h). Owned from
+    // assignment, like the two above.
+    struct LookAtSystem* look_at;
 
     // Optional ragdoll (see ragdoll.h). Owned from assignment, like the two
     // above, and an ALTERNATIVE to them: while one is simulating it replaces the
