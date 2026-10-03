@@ -481,6 +481,13 @@ out.
 - **A store taken mid-frame landed past the array** until the region grew, and its blit was an
   invalid framebuffer. Stores are now taken with every other block, before the region is laid
   out.
+- **A rebuild inside a capture lost the rain's cover.** The array carries the kept tiles across a
+  rebuild, and the per-frame layers are redrawn by the same pass, but the rain's layer is drawn
+  only by the rain pass, which a capture does not run. Silent's GI sweep rebuilt the array on its
+  first frame, every probe was lit under a layer nothing drew, and the volume kept the hall 3.6
+  per cent darker. The cover now moves with the tiles, folded for the new edge. `--no-gi` in
+  silent is what found it: a change that only moved the rebuild's timing put two builds 3.6 per
+  cent apart, and identical with the volume left out.
 - **Jittered reads at a corner** slide off the receiver's plane into the surface beside it; a guard
   for it was built, moved nothing measured, and was removed. If it shows, that is the place.
 
