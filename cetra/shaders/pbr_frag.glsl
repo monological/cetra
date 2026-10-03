@@ -912,8 +912,7 @@ float calculateShadow(int shadowIndex, int cascade, vec3 worldPos, float lightSi
     return visibility;
 }
 
-// A cached point light's faces, tiles of the same punctual array (spec 13.16). Below the
-// cascades' PCSS, whose disk and rotation its soft edge shares.
+// A cached point light's faces, tiles of the same punctual array (spec 13.16).
 #if CETRA_HAS(PBR_FEAT_SHADOW_TILES)
 #include "punctual_tiles.glsl"
 #endif

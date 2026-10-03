@@ -242,11 +242,13 @@ static void _pack_cluster_light(GpuPackedLight* dst, const struct Light* light, 
     if (tile >= 0) {
         dst->shadow_misc[2] = fmaxf(light->source_radius, 0.0f);
         dst->shadow_misc[3] = fmaxf(light->source_length, 0.0f);
-        // And the step between its views, zero for one: in the reserved slot and the two cone
-        // cosines, which only a spot reads, and only a point light is cached.
-        dst->atten_cutoff[2] = light->shadow_step[0];
-        dst->atten_cutoff[3] = light->shadow_step[1];
-        dst->shadow_misc[0] = light->shadow_step[2];
+        // And the body its views were drawn over, which the lookup places them on: its segment
+        // in the reserved slot and the two cone cosines, which only a spot reads, and only a
+        // point light is cached; its radius in the colour's unread fourth.
+        dst->atten_cutoff[2] = light->shadow_segment[0];
+        dst->atten_cutoff[3] = light->shadow_segment[1];
+        dst->shadow_misc[0] = light->shadow_segment[2];
+        dst->color_intensity[3] = light->shadow_radius;
     } else {
         glm_vec2_copy((float*)light->size, &dst->shadow_misc[2]);
     }

@@ -123,16 +123,17 @@ static bool begin_depth_layer(GLuint fbo, GLuint tex, int layer, int size) {
     return true;
 }
 
-// Bind one tile of a layer and clear that tile alone, which takes the scissor: a clear
-// ignores the viewport, so without it a tile's clear wipes every tile beside it. Leaves
-// the scissor on for the draw; end_depth_tile turns it off.
-static bool begin_depth_tile(GLuint fbo, GLuint tex, int layer, int x, int y) {
+// Bind one tile of a layer and, with `clear`, clear that tile alone, which takes the scissor:
+// a clear ignores the viewport, so without it a tile's clear wipes every tile beside it.
+// Leaves the scissor on for the draw; end_depth_tile turns it off.
+static bool begin_depth_tile(GLuint fbo, GLuint tex, int layer, int x, int y, bool clear) {
     if (!bind_depth_layer(fbo, tex, layer))
         return false;
     glEnable(GL_SCISSOR_TEST);
     glScissor(x, y, SHADOW_TILE_SIZE, SHADOW_TILE_SIZE);
     glViewport(x, y, SHADOW_TILE_SIZE, SHADOW_TILE_SIZE);
-    glClear(GL_DEPTH_BUFFER_BIT);
+    if (clear)
+        glClear(GL_DEPTH_BUFFER_BIT);
     return true;
 }
 
@@ -203,6 +204,8 @@ void free_shadow_system(ShadowSystem* system) {
     free_tsm_resources(system);
     if (system->rain_ask_pbo[0])
         glDeleteBuffers(SHADOW_RAIN_ASK_LATENCY, system->rain_ask_pbo);
+    if (system->tile_copy_fbo)
+        glDeleteFramebuffers(1, &system->tile_copy_fbo);
     free(system->caster_order);
 
     free(system);
@@ -296,6 +299,8 @@ static int punctual_edge_for(int light_layers) {
 // The cached tiles (spec 13.16) ride past both and do not count toward the edge either: a
 // tile is the same size at any edge, so the edge decides only how many fit in a layer.
 static void tiles_migrate(ShadowSystem* ss, GLuint old_tex, GLuint old_fbo, int old_edge);
+static int tile_reference_count(const ShadowSystem* ss);
+static int tile_shading_views(const ShadowSystem* ss);
 
 static int init_punctual_shadow_array(ShadowSystem* system, int layers, int light_layers) {
     if (layers < 1 || layers > PUNCTUAL_ARRAY_LAYERS + (int)PUNCTUAL_TILE_MAX_LAYERS)
@@ -394,11 +399,12 @@ void shadow_system_shift_origin(ShadowSystem* system, const vec3 delta) {
     if (!system)
         return;
     glm_vec3_sub(system->scene_center, (float*)delta, system->scene_center);
-    // A cached face is drawn about its origin, so it moves with the world unredrawn; `seen`
-    // moves too, or every light would read as moving on the shifted frame.
+    // A cached face is drawn about its view, and every view is placed from the body's centre,
+    // so it moves with the world unredrawn; `seen` moves too, or every light would read as
+    // moving on the shifted frame.
     for (int b = 0; b < system->tile_block_count; ++b) {
         ShadowTileBlock* block = &system->tile_blocks[b];
-        glm_vec3_sub(block->origin, (float*)delta, block->origin);
+        glm_vec3_sub(block->centre, (float*)delta, block->centre);
         glm_vec3_sub(block->seen, (float*)delta, block->seen);
     }
 }
@@ -659,6 +665,10 @@ void bind_shadow_maps_to_program(ShadowSystem* system, ShaderProgram* program) {
     glActiveTexture(GL_TEXTURE0 + PUNCTUAL_SHADOW_MAP_TEXTURE_UNIT);
     glBindTexture(GL_TEXTURE_2D_ARRAY, system->punctual_map_array);
     uniform_set_int(u, "punctualShadowMaps", PUNCTUAL_SHADOW_MAP_TEXTURE_UNIT);
+    // How many views every cached light with a body was drawn from, and whether each is blurred
+    // to meet its neighbours -- not for the reference, whose average is exact by its count.
+    uniform_set_int(u, "tileViewCount", tile_shading_views(system));
+    uniform_set_int(u, "tileViewBlur", tile_reference_count(system) > 0 ? 0 : 1);
     uniform_set_int(u, "punctualShadowCount", punctual_on);
     if (punctual_on > 0) {
         GLint ploc = uniform_location(u, "punctualShadowMatrix[0]");
@@ -791,6 +801,22 @@ static bool caster_set_wants(ShadowCasterSet set, uint8_t lane, uint8_t flags) {
     return !(set == SHADOW_CASTERS_OPAQUE_TSM && translucent);
 }
 
+// Whether a node has moved lately, so a kept face draws it over a copy of its still casters.
+static bool tile_node_moves(const ShadowSystem* ss, const SceneNode* node) {
+    for (int k = 0; k < ss->tile_mover_count; ++k) {
+        if (ss->tile_movers[k] == node)
+            return true;
+    }
+    return false;
+}
+
+// Whether the tile draw in progress wants this item: every one, the still, or the movers.
+static bool tile_mover_filter_wants(const ShadowSystem* ss, const DrawItem* item) {
+    if (ss->tile_mover_filter == 0)
+        return true;
+    return tile_node_moves(ss, item->node) == (ss->tile_mover_filter == 2);
+}
+
 // Whether two items belong in one span: everything draw_run_key_equal wants
 // EXCEPT the level, which the bucket pass sorts within a span rather than
 // splitting on. Derived from that function by construction -- temporarily equal
@@ -881,7 +907,7 @@ static size_t _build_caster_order(ShadowSystem* ss, const DrawList* list, Shadow
     size_t n = 0;
     for (size_t i = 0; i < list->count; ++i) {
         const DrawItem* item = &list->items[i];
-        if (!caster_set_wants(set, item->lane, item->flags))
+        if (!caster_set_wants(set, item->lane, item->flags) || !tile_mover_filter_wants(ss, item))
             continue;
         if (stats)
             stats->meshes_seen++;
@@ -1237,48 +1263,121 @@ static int tile_block_first_cell(const ShadowSystem* ss, int edge, int block) {
     return ss->tile_base_layer * tiles_per_layer(edge) + ss->tile_blocks[block].first;
 }
 
-// The views a light is drawn from: SHADOW_TILE_VIEWS along a shape longer than it is wide, one
-// otherwise -- a round source's views would all stand at its centre.
+// The reference's view count, 0 when it is off.
+static int tile_reference_count(const ShadowSystem* ss) {
+    return ss->tile_reference < 0                           ? 0
+           : ss->tile_reference > SHADOW_TILE_REFERENCE_MAX ? SHADOW_TILE_REFERENCE_MAX
+                                                            : ss->tile_reference;
+}
+
+static bool light_has_body(const Light* light) {
+    return light->source_radius > 0.0f || light->source_length > 0.0f;
+}
+
+// The views a light's kept block is drawn from: SHADOW_TILE_VIEWS spread over a body, its
+// centre alone for a light with none.
 static int tile_views_for(const ShadowSystem* ss, const Light* light) {
-    if (ss->tile_views == 1 || !(light->source_length > 2.0f * light->source_radius))
-        return 1;
-    return SHADOW_TILE_VIEWS;
+    return ss->tile_views == 1 || !light_has_body(light) ? 1 : SHADOW_TILE_VIEWS;
 }
 
-// Where a light's views stand now: the middle one at the light, and a step along its axis to
-// each neighbour, so each view is the centre of one equal part of its length.
-static void tile_views_place(const Light* light, int views, vec3 origin, vec3 step) {
-    glm_vec3_copy((float*)light->global_position, origin);
-    glm_vec3_zero(step);
-    if (views > 1)
-        glm_vec3_scale((float*)light->direction, light->source_length / (float)views, step);
+// The views every light with a body is shaded from this frame, kept or the reference's -- one
+// count for all of them, which the lookup is told rather than packed per light.
+static int tile_shading_views(const ShadowSystem* ss) {
+    const int reference = tile_reference_count(ss);
+    return reference > 0 ? reference : ss->tile_views == 1 ? 1 : SHADOW_TILE_VIEWS;
 }
 
-// How many steps view v of `views` stands from the middle one: -1, 0, +1 for three.
-static int tile_view_offset(int view, int views) {
-    return view - (views - 1) / 2;
+// The cells a light's block needs: six a view, or six for each of the reference's.
+static int tile_cells_for(const ShadowSystem* ss, const Light* light) {
+    const int reference = tile_reference_count(ss);
+    return 6 * (reference > 0 ? reference : tile_views_for(ss, light));
+}
+
+// A light's body as it is now: its centre, its segment end to end, its radius.
+static void tile_body_now(const Light* light, vec3 centre, vec3 segment, float* radius) {
+    glm_vec3_copy((float*)light->global_position, centre);
+    glm_vec3_scale((float*)light->direction, light->source_length, segment);
+    *radius = light->source_radius;
+}
+
+// View m of `count` over a body: the centre for m = 0, else u stratified along the segment and
+// a point of the ball from R3. punctual_tiles.glsl's tileBodyPoint places the same points, so
+// the lookup finds each view where it was drawn from.
+static void tile_body_point(const vec3 centre, const vec3 segment, float radius, int m, int count,
+                            vec3 dest) {
+    glm_vec3_copy((float*)centre, dest);
+    if (m == 0)
+        return;
+    const float u = ((float)m - 0.5f) / (float)(count - 1);
+    const float i = (float)(m - 1);
+    const float qx = 0.5f + i * SHADOW_TILE_R3_X, qy = 0.5f + i * SHADOW_TILE_R3_Y,
+                qz = 0.5f + i * SHADOW_TILE_R3_Z;
+    const float q[3] = {qx - floorf(qx), qy - floorf(qy), qz - floorf(qz)};
+    const float rho = radius * cbrtf(q[0]);
+    const float cos_t = 1.0f - 2.0f * q[1];
+    const float sin_t = sqrtf(fmaxf(1.0f - cos_t * cos_t, 0.0f));
+    const float phi = 2.0f * GLM_PIf * q[2];
+    const vec3 ball = {sin_t * cosf(phi), cos_t, sin_t * sinf(phi)};
+    glm_vec3_muladds((float*)segment, u - 0.5f, dest);
+    glm_vec3_muladds((float*)ball, rho, dest);
 }
 
 // View v's origin in a block.
 static void tile_view_origin(const ShadowTileBlock* block, int view, vec3 dest) {
-    glm_vec3_copy((float*)block->origin, dest);
-    glm_vec3_muladds((float*)block->step, (float)tile_view_offset(view, block->views), dest);
+    tile_body_point(block->centre, block->segment, block->radius, view, block->views, dest);
 }
 
-static uint32_t tile_full_mask(int views) {
-    return (uint32_t)((1ull << (6 * views)) - 1ull);
+// Set a block's views over the light's body as it is now.
+static void tile_block_place(ShadowTileBlock* block, int views) {
+    block->views = views;
+    tile_body_now(block->light, block->centre, block->segment, &block->radius);
 }
 
-// Whether a block's views have drifted past the tolerance from where the light's shape would
-// place them now -- the light moved, or its shape turned or stretched.
+static bool tile_face_valid(const ShadowTileBlock* block, int face) {
+    return (block->valid[face >> 6] >> (face & 63)) & 1u;
+}
+
+static void tile_face_mark(ShadowTileBlock* block, int face) {
+    block->valid[face >> 6] |= 1ull << (face & 63);
+}
+
+static void tile_face_unmark(ShadowTileBlock* block, int face) {
+    block->valid[face >> 6] &= ~(1ull << (face & 63));
+}
+
+static void tile_faces_unmark(ShadowTileBlock* block) {
+    memset(block->valid, 0, sizeof(block->valid));
+}
+
+static bool tile_faces_any(const ShadowTileBlock* block) {
+    for (int w = 0; w < SHADOW_TILE_VALID_WORDS; ++w) {
+        if (block->valid[w])
+            return true;
+    }
+    return false;
+}
+
+// Whether every face of every view a block was drawn with is in.
+static bool tile_block_whole(const ShadowTileBlock* block) {
+    if (block->views <= 0)
+        return false;
+    for (int f = 0; f < 6 * block->views; ++f) {
+        if (!tile_face_valid(block, f))
+            return false;
+    }
+    return true;
+}
+
+// Whether a block's views have drifted past the tolerance from where the light's body would
+// place them now -- the light moved, or its body turned or stretched.
 static bool tile_views_drifted(const ShadowSystem* ss, const ShadowTileBlock* block) {
-    vec3 origin = GLM_VEC3_ZERO_INIT, step = GLM_VEC3_ZERO_INIT;
-    tile_views_place(block->light, block->views, origin, step);
+    vec3 centre = GLM_VEC3_ZERO_INIT, segment = GLM_VEC3_ZERO_INIT;
+    float radius = 0.0f;
+    tile_body_now(block->light, centre, segment, &radius);
     for (int v = 0; v < block->views; ++v) {
-        vec3 drawn = GLM_VEC3_ZERO_INIT, now;
+        vec3 drawn = GLM_VEC3_ZERO_INIT, now = GLM_VEC3_ZERO_INIT;
         tile_view_origin(block, v, drawn);
-        glm_vec3_copy(origin, now);
-        glm_vec3_muladds(step, (float)tile_view_offset(v, block->views), now);
+        tile_body_point(centre, segment, radius, v, block->views, now);
         if (glm_vec3_distance(drawn, now) > ss->tile_tolerance)
             return true;
     }
@@ -1308,13 +1407,20 @@ void shadow_tile_face_matrix(const vec3 origin, int face, float near_plane, floa
                                     dest);
 }
 
-// A light's kept block, or its hero block, or -1.
+// A light's kept block, or its hero block, or -1; never a store, which holds its light's name
+// only so that its cells go with the light.
 static int tile_block_of(const ShadowSystem* ss, const Light* light, bool hero) {
     for (int b = 0; b < ss->tile_block_count; ++b) {
-        if (ss->tile_blocks[b].light == light && ss->tile_blocks[b].hero == hero)
+        const ShadowTileBlock* block = &ss->tile_blocks[b];
+        if (block->light == light && block->hero == hero && block->owner < 0)
             return b;
     }
     return -1;
+}
+
+// A block holding nothing, at `first` for `cells`.
+static ShadowTileBlock tile_block_blank(int first, int cells) {
+    return (ShadowTileBlock){.first = first, .cells = cells, .store = -1, .owner = -1};
 }
 
 // Cells the region's blocks reach, which is what sizes it: blocks are only ever appended, so
@@ -1339,19 +1445,20 @@ static int tile_block_take(ShadowSystem* ss, int cells) {
         first + cells > (int)SHADOW_TILE_MAX_CELLS)
         return -1;
     const int b = ss->tile_block_count++;
-    ss->tile_blocks[b] = (ShadowTileBlock){.first = first, .cells = cells};
+    ss->tile_blocks[b] = tile_block_blank(first, cells);
     return b;
 }
 
 // Give a block's cells back, keeping where they are.
 static void tile_block_free(ShadowTileBlock* block) {
-    *block = (ShadowTileBlock){.first = block->first, .cells = block->cells};
+    *block = tile_block_blank(block->first, block->cells);
 }
 
 // Hand block `b` to a light, as its kept block or its hero.
 static void tile_block_hold(ShadowTileBlock* block, Light* light, bool hero) {
-    *block = (ShadowTileBlock){
-        .first = block->first, .cells = block->cells, .light = light, .hero = hero};
+    *block = tile_block_blank(block->first, block->cells);
+    block->light = light;
+    block->hero = hero;
     glm_vec3_copy(light->global_position, block->seen);
 }
 
@@ -1367,7 +1474,7 @@ static int tiles_reconcile(ShadowSystem* ss, const Scene* scene) {
         if (!light || !shadow_light_takes_tiles(light))
             continue;
         // A light whose shape now wants more views than its block holds takes a bigger one.
-        const int cells = 6 * tile_views_for(ss, light);
+        const int cells = tile_cells_for(ss, light);
         int b = tile_block_of(ss, light, false);
         if (b >= 0 && ss->tile_blocks[b].cells < cells) {
             tile_block_free(&ss->tile_blocks[b]);
@@ -1387,6 +1494,12 @@ static int tiles_reconcile(ShadowSystem* ss, const Scene* scene) {
         glm_vec3_copy(light->global_position, block->seen);
         held[b] = true;
         count++;
+    }
+    // A store lives exactly as long as the block it stores for.
+    for (int b = 0; b < ss->tile_block_count; ++b) {
+        const int owner = ss->tile_blocks[b].owner;
+        if (owner >= 0)
+            held[b] = held[owner] && ss->tile_blocks[owner].store == b;
     }
     for (int b = 0; b < ss->tile_block_count; ++b) {
         if (!held[b] && !ss->tile_blocks[b].hero)
@@ -1412,8 +1525,9 @@ static int tiles_reconcile(ShadowSystem* ss, const Scene* scene) {
 // is let go when its light stops being cached or is freed -- compared by pointer only, never
 // read through.
 static void tiles_pick_heroes(ShadowSystem* ss, const vec3 eye) {
-    const int want = ss->tile_heroes < (int)SHADOW_TILE_MAX_BLOCKS ? ss->tile_heroes
-                                                                   : (int)SHADOW_TILE_MAX_BLOCKS;
+    // The reference redraws every light every frame already.
+    const int heroes = tile_reference_count(ss) > 0 ? 0 : ss->tile_heroes;
+    const int want = heroes < (int)SHADOW_TILE_MAX_BLOCKS ? heroes : (int)SHADOW_TILE_MAX_BLOCKS;
     Light* chosen[SHADOW_TILE_MAX_BLOCKS];
     float rank[SHADOW_TILE_MAX_BLOCKS];
     int n = 0;
@@ -1483,18 +1597,22 @@ static void tiles_migrate(ShadowSystem* ss, GLuint old_tex, GLuint old_fbo, int 
     const int new_edge = ss->punctual_map_size;
     for (int b = 0; b < ss->tile_block_count; ++b) {
         ShadowTileBlock* block = &ss->tile_blocks[b];
-        if (!block->light || block->hero || block->generation != ss->tile_generation)
+        // A store's copies are not carried: the faces they serve are rebuilt every frame
+        // anyway, so drawing the still casters once more costs a frame's churn, once.
+        memset(block->stored, 0, sizeof(block->stored));
+        if (!block->light || block->hero || block->owner >= 0 ||
+            block->generation != ss->tile_generation)
             continue;
         const int src = ss->tile_held_base * tiles_per_layer(old_edge) + block->first;
         const int dst = ss->tile_base_layer * tiles_per_layer(new_edge) + block->first;
-        for (int f = 0; f < 6 * block->views && block->valid; ++f) {
-            if (!(block->valid & (1u << f)))
+        for (int f = 0; f < 6 * block->views; ++f) {
+            if (!tile_face_valid(block, f))
                 continue;
             int sl, sx, sy, dl, dx, dy;
             tile_cell_at(src + f, old_edge, &sl, &sx, &sy);
             tile_cell_at(dst + f, new_edge, &dl, &dx, &dy);
             if (dl >= ss->punctual_allocated_layers) {
-                block->valid = 0;
+                tile_faces_unmark(block);
                 break;
             }
             glBindFramebuffer(GL_READ_FRAMEBUFFER, old_fbo);
@@ -1515,17 +1633,34 @@ void shadow_tiles_invalidate(ShadowSystem* system) {
         system->tile_generation++;
 }
 
-void shadow_tiles_invalidate_box(ShadowSystem* system, const vec3 box_min, const vec3 box_max) {
-    if (!system)
-        return;
+static bool tile_face_dynamic(const ShadowTileBlock* block, int face) {
+    return (block->dynamic[face >> 6] >> (face & 63)) & 1u;
+}
+
+static bool tile_face_stored(const ShadowTileBlock* block, int face) {
+    return (block->stored[face >> 6] >> (face & 63)) & 1u;
+}
+
+// What a box does to the kept faces that see it: they are drawn again; they are drawn from now
+// on as their still casters with the movers over them; or their store's copy of the still
+// casters is drawn again, because it held one that has started to move.
+typedef enum { TILE_BOX_INVALIDATE, TILE_BOX_DYNAMIC, TILE_BOX_UNSTORE } TileBoxMark;
+
+static void tiles_mark_box(ShadowSystem* ss, const vec3 box_min, const vec3 box_max,
+                           TileBoxMark mark) {
     mat4 identity = GLM_MAT4_IDENTITY_INIT;
-    for (int b = 0; b < system->tile_block_count; ++b) {
-        ShadowTileBlock* block = &system->tile_blocks[b];
-        if (!block->light || block->hero || !block->valid)
+    vec3 middle = GLM_VEC3_ZERO_INIT;
+    glm_vec3_center((float*)box_min, (float*)box_max, middle);
+    const float half = 0.5f * glm_vec3_distance((float*)box_min, (float*)box_max);
+    for (int b = 0; b < ss->tile_block_count; ++b) {
+        ShadowTileBlock* block = &ss->tile_blocks[b];
+        if (!block->light || block->hero || block->owner >= 0 || block->views <= 0)
+            continue;
+        // A box past every view's far plane, with the body's reach, is in none of its faces.
+        const float reach = block->far_plane + glm_vec3_norm(block->segment) + block->radius;
+        if (glm_vec3_distance(middle, block->centre) > reach + half)
             continue;
         for (int f = 0; f < 6 * block->views; ++f) {
-            if (!(block->valid & (1u << f)))
-                continue;
             // The face's own volume, which is exactly what it drew: nothing outside it is in
             // the tile to go stale.
             vec3 origin = GLM_VEC3_ZERO_INIT;
@@ -1534,24 +1669,70 @@ void shadow_tiles_invalidate_box(ShadowSystem* system, const vec3 box_min, const
             shadow_tile_face_matrix(origin, f % 6, block->near_plane, block->far_plane, matrix);
             Frustum volume;
             frustum_extract_from_vp(matrix, &volume);
-            if (frustum_test_aabb_transformed(&volume, (float*)box_min, (float*)box_max, identity))
-                block->valid &= ~(1u << f);
+            if (!frustum_test_aabb_transformed(&volume, (float*)box_min, (float*)box_max, identity))
+                continue;
+            const uint64_t bit = 1ull << (f & 63);
+            if (mark == TILE_BOX_DYNAMIC) {
+                block->dynamic[f >> 6] |= bit;
+            } else {
+                block->stored[f >> 6] &= ~bit;
+                if (mark == TILE_BOX_INVALIDATE)
+                    tile_face_unmark(block, f);
+            }
         }
     }
 }
 
-// What the kept faces hold that is no longer true: every face that sees a caster whose node
-// moved this frame, where it was and where it is now, and every face when the graph changed
-// -- a node added or freed has no previous frame for the draw list to show. Moving bodies are
-// the KEPT set's casters only, so a skinned or swaying mesh, which a kept face never held,
-// redraws nothing.
+void shadow_tiles_invalidate_box(ShadowSystem* system, const vec3 box_min, const vec3 box_max) {
+    if (system)
+        tiles_mark_box(system, box_min, box_max, TILE_BOX_INVALIDATE);
+}
+
+// Let go of the movers that have held still for SHADOW_TILE_MOVER_HOLD frames. A face that
+// drew one over its store is then wrong whole -- the store left it out -- so every face drawn
+// that way is drawn whole again, the one that stopped where it stopped; the movers still
+// moving mark theirs again at once. A block left with no such face lets its store go.
+static void tiles_expire_movers(ShadowSystem* ss) {
+    int kept = 0;
+    for (int k = 0; k < ss->tile_mover_count; ++k) {
+        if (ss->tile_frame - ss->tile_mover_moved[k] > SHADOW_TILE_MOVER_HOLD)
+            continue;
+        ss->tile_movers[kept] = ss->tile_movers[k];
+        ss->tile_mover_moved[kept++] = ss->tile_mover_moved[k];
+    }
+    if (kept == ss->tile_mover_count)
+        return;
+    ss->tile_mover_count = kept;
+    for (int b = 0; b < ss->tile_block_count; ++b) {
+        ShadowTileBlock* block = &ss->tile_blocks[b];
+        for (int w = 0; w < SHADOW_TILE_VALID_WORDS; ++w)
+            block->valid[w] &= ~block->dynamic[w];
+        memset(block->dynamic, 0, sizeof(block->dynamic));
+        memset(block->stored, 0, sizeof(block->stored));
+        block->store = -1;
+    }
+}
+
+// What the kept faces hold that is no longer true, every frame. A node added or freed changes
+// the graph and every face is drawn again: it has no previous frame for the draw list to show.
+// A KEPT caster whose node moves becomes a MOVER, and every face that sees it, where it was and
+// where it is, is drawn from then on as a copy of its still casters with the movers over them
+// (render_shadow_movers). Skinned, swaying and morphing meshes are not in the KEPT set, so they
+// mark nothing.
 static void tiles_note_changes(ShadowSystem* ss, const Scene* scene) {
+    ss->tile_frame++;
     const uint64_t epoch = scene_graph_epoch();
     if (epoch != ss->tile_epoch) {
         ss->tile_epoch = epoch;
         ss->tile_generation++;
+        ss->tile_mover_count = 0;
+        for (int b = 0; b < ss->tile_block_count; ++b) {
+            memset(ss->tile_blocks[b].dynamic, 0, sizeof(ss->tile_blocks[b].dynamic));
+            memset(ss->tile_blocks[b].stored, 0, sizeof(ss->tile_blocks[b].stored));
+        }
         return;
     }
+    tiles_expire_movers(ss);
     const DrawList* list = scene->draw_list;
     for (size_t i = 0; list && i < list->count; ++i) {
         const DrawItem* item = &list->items[i];
@@ -1559,34 +1740,90 @@ static void tiles_note_changes(ShadowSystem* ss, const Scene* scene) {
         if (!caster_set_wants(SHADOW_CASTERS_KEPT, item->lane, item->flags) ||
             memcmp(node->global_transform, node->prev_global_transform, sizeof(mat4)) == 0)
             continue;
+        int k = 0;
+        while (k < ss->tile_mover_count && ss->tile_movers[k] != node)
+            ++k;
+        TileBoxMark mark = TILE_BOX_DYNAMIC;
+        if (k == ss->tile_mover_count) {
+            // A new mover was drawn into the stores as still; with no room for another, the
+            // faces that see it are simply drawn again, every frame it moves.
+            if (k < SHADOW_TILE_MAX_MOVERS) {
+                ss->tile_movers[ss->tile_mover_count++] = node;
+                mark = TILE_BOX_UNSTORE;
+            } else {
+                mark = TILE_BOX_INVALIDATE;
+            }
+        }
+        if (k < SHADOW_TILE_MAX_MOVERS)
+            ss->tile_mover_moved[k] = ss->tile_frame;
         vec3 lo = GLM_VEC3_ZERO_INIT, hi = GLM_VEC3_ZERO_INIT;
-        aabb_transform(item->mesh->aabb.min, item->mesh->aabb.max,
-                       (vec4*)node->prev_global_transform, lo, hi);
-        shadow_tiles_invalidate_box(ss, lo, hi);
-        aabb_transform(item->mesh->aabb.min, item->mesh->aabb.max, (vec4*)node->global_transform,
-                       lo, hi);
-        shadow_tiles_invalidate_box(ss, lo, hi);
+        for (int when = 0; when < 2; ++when) {
+            aabb_transform(
+                item->mesh->aabb.min, item->mesh->aabb.max,
+                when ? (vec4*)node->global_transform : (vec4*)node->prev_global_transform, lo, hi);
+            tiles_mark_box(ss, lo, hi, mark);
+            if (mark == TILE_BOX_UNSTORE)
+                tiles_mark_box(ss, lo, hi, TILE_BOX_DYNAMIC);
+        }
     }
 }
 
-// Draw face `face` of block `b` -- counted across its views, six a view -- into its tile, from
-// that view's origin and the block's planes. False when the tile could not be bound, so
-// nothing was drawn.
-static bool draw_tile_face(ShadowSystem* ss, const Engine* engine, const Scene* scene,
-                           SubmitState* state, int b, int face, ShadowCasterSet set) {
+// Draw cube face `face` (0-5) from `origin` into cell `cell` of block `b`, counted from the
+// block's first, over what the cell holds unless `clear`. False when the tile could not be
+// bound, so nothing was drawn.
+static bool draw_tile_cell(ShadowSystem* ss, const Engine* engine, const Scene* scene,
+                           SubmitState* state, int b, int cell, const vec3 origin, int face,
+                           ShadowCasterSet set, bool clear) {
     const ShadowTileBlock* block = &ss->tile_blocks[b];
     const int edge = ss->punctual_map_size;
     int layer, x, y;
-    tile_cell_at(tile_block_first_cell(ss, edge, b) + face, edge, &layer, &x, &y);
+    tile_cell_at(tile_block_first_cell(ss, edge, b) + cell, edge, &layer, &x, &y);
     if (layer >= ss->punctual_allocated_layers ||
-        !begin_depth_tile(ss->punctual_fbo, ss->punctual_map_array, layer, x, y))
+        !begin_depth_tile(ss->punctual_fbo, ss->punctual_map_array, layer, x, y, clear))
         return false;
-    vec3 origin = GLM_VEC3_ZERO_INIT;
-    tile_view_origin(block, face / 6, origin);
     mat4 matrix = GLM_MAT4_IDENTITY_INIT;
-    shadow_tile_face_matrix(origin, face % 6, block->near_plane, block->far_plane, matrix);
+    shadow_tile_face_matrix(origin, face, block->near_plane, block->far_plane, matrix);
     draw_shadow_layer(ss, scene, scene->draw_list, matrix, state, set, engine);
     end_depth_tile();
+    return true;
+}
+
+// Draw face `face` of block `b` -- counted across its views, six a view -- from that view's
+// origin and the block's planes.
+static bool draw_tile_face(ShadowSystem* ss, const Engine* engine, const Scene* scene,
+                           SubmitState* state, int b, int face, ShadowCasterSet set) {
+    vec3 origin = GLM_VEC3_ZERO_INIT;
+    tile_view_origin(&ss->tile_blocks[b], face / 6, origin);
+    return draw_tile_cell(ss, engine, scene, state, b, face, origin, face % 6, set, true);
+}
+
+// Copy cell `src` to cell `dst`, both counted across the whole array. Blitting reads through a
+// second framebuffer, since the punctual one is what the copy is drawn into. False when either
+// cell is past the array -- a store taken this frame lands there until the region grows.
+static bool tile_copy_cell(ShadowSystem* ss, int src, int dst) {
+    if (!ss->tile_copy_fbo) {
+        // Depth alone, so no colour buffer to read or draw, or it is incomplete.
+        glGenFramebuffers(1, &ss->tile_copy_fbo);
+        glBindFramebuffer(GL_FRAMEBUFFER, ss->tile_copy_fbo);
+        glDrawBuffer(GL_NONE);
+        glReadBuffer(GL_NONE);
+    }
+    const int edge = ss->punctual_map_size;
+    int sl, sx, sy, dl, dx, dy;
+    tile_cell_at(src, edge, &sl, &sx, &sy);
+    tile_cell_at(dst, edge, &dl, &dx, &dy);
+    if (sl >= ss->punctual_allocated_layers || dl >= ss->punctual_allocated_layers)
+        return false;
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, ss->tile_copy_fbo);
+    glFramebufferTextureLayer(GL_READ_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, ss->punctual_map_array, 0,
+                              sl);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, ss->punctual_fbo);
+    glFramebufferTextureLayer(GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, ss->punctual_map_array, 0,
+                              dl);
+    glBlitFramebuffer(sx, sy, sx + SHADOW_TILE_SIZE, sy + SHADOW_TILE_SIZE, dx, dy,
+                      dx + SHADOW_TILE_SIZE, dy + SHADOW_TILE_SIZE, GL_DEPTH_BUFFER_BIT,
+                      GL_NEAREST);
+    glBindFramebuffer(GL_FRAMEBUFFER, ss->punctual_fbo);
     return true;
 }
 
@@ -1634,11 +1871,10 @@ static void render_shadow_heroes(ShadowSystem* ss, const Engine* engine, const S
         ShadowTileBlock* block = &ss->tile_blocks[b];
         if (!block->hero || !block->light)
             continue;
-        block->views = tile_views_for(ss, block->light);
-        tile_views_place(block->light, block->views, block->origin, block->step);
+        tile_block_place(block, tile_views_for(ss, block->light));
         tile_planes(block->light, &block->near_plane, &block->far_plane);
         block->generation = ss->tile_generation;
-        block->valid = 0;
+        tile_faces_unmark(block);
         for (int f = 0; f < 6 * block->views; ++f) {
             // A face out of view keeps whatever it last held; nothing on screen reads it.
             vec3 origin = GLM_VEC3_ZERO_INIT;
@@ -1647,29 +1883,31 @@ static void render_shadow_heroes(ShadowSystem* ss, const Engine* engine, const S
                 !engine->camera || tile_face_in_view(&view, origin, f % 6, block->far_plane);
             if (in_view && draw_tile_face(ss, engine, scene, state, b, f, SHADOW_CASTERS_HERO))
                 ss->hero_faces_drawn++;
-            block->valid |= 1u << f;
+            tile_face_mark(block, f);
         }
     }
 }
 
-// Whether every face of every view a block was drawn with is in.
-static bool tile_block_whole(const ShadowTileBlock* block) {
-    return block->views > 0 && block->valid == tile_full_mask(block->views);
+// Point a cached light's lookup at block `b`: its first view, and the body its views were
+// drawn over, from which the lookup places them.
+static void publish_tile_block(ShadowSystem* ss, int b) {
+    const ShadowTileBlock* block = &ss->tile_blocks[b];
+    Light* light = block->light;
+    light->shadow_tile = tile_block_first_cell(ss, ss->punctual_map_size, b);
+    glm_vec3_copy((float*)block->centre, light->shadow_origin);
+    glm_vec3_copy((float*)block->segment, light->shadow_segment);
+    light->shadow_radius = block->radius;
 }
 
-// Point each cached light's lookup at its block's middle view: the hero's when it has one,
-// else the kept block once it is whole.
+// Point each cached light's lookup at its hero's block when it has one, else its kept block
+// once it is whole.
 static void publish_shadow_tiles(ShadowSystem* ss) {
-    const int edge = ss->punctual_map_size;
     for (int pass = 0; pass < 2; ++pass) {
         for (int b = 0; b < ss->tile_block_count; ++b) {
             const ShadowTileBlock* block = &ss->tile_blocks[b];
-            if (!block->light || block->hero != (pass == 1) || !tile_block_whole(block))
-                continue;
-            block->light->shadow_tile =
-                tile_block_first_cell(ss, edge, b) - 6 * tile_view_offset(0, block->views);
-            glm_vec3_copy((float*)block->origin, block->light->shadow_origin);
-            glm_vec3_copy((float*)block->step, block->light->shadow_step);
+            if (block->light && block->owner < 0 && block->hero == (pass == 1) &&
+                tile_block_whole(block))
+                publish_tile_block(ss, b);
         }
     }
 }
@@ -1688,14 +1926,16 @@ static void render_shadow_tiles(ShadowSystem* ss, const Engine* engine, const Sc
 
     for (int b = 0; b < ss->tile_block_count; ++b) {
         ShadowTileBlock* block = &ss->tile_blocks[b];
-        if (!block->light || block->hero)
+        if (!block->light || block->hero || block->owner >= 0)
             continue;
         float near_p, far_p;
         tile_planes(block->light, &near_p, &far_p);
         if (ss->tile_refresh || block->generation != ss->tile_generation ||
             block->near_plane != near_p || block->far_plane != far_p ||
-            block->views != tile_views_for(ss, block->light) || tile_views_drifted(ss, block))
-            block->valid = 0;
+            block->views != tile_views_for(ss, block->light) || tile_views_drifted(ss, block)) {
+            tile_faces_unmark(block);
+            memset(block->stored, 0, sizeof(block->stored));
+        }
         if (tile_block_whole(block) || !(block->light->intensity > 0.0f))
             continue;
         // Insertion, by distance: there are at most a few dozen.
@@ -1713,19 +1953,120 @@ static void render_shadow_tiles(ShadowSystem* ss, const Engine* engine, const Sc
         ss->tile_fill_budget > 0 ? ss->tile_fill_budget : 6 * SHADOW_TILE_VIEWS * pending;
     for (int k = 0; k < pending && ss->tile_faces_drawn < budget; ++k) {
         ShadowTileBlock* block = &ss->tile_blocks[order[k]];
-        if (block->valid == 0) {
-            block->views = tile_views_for(ss, block->light);
-            tile_views_place(block->light, block->views, block->origin, block->step);
+        if (!tile_faces_any(block)) {
+            tile_block_place(block, tile_views_for(ss, block->light));
             tile_planes(block->light, &block->near_plane, &block->far_plane);
             block->generation = ss->tile_generation;
         }
+        // A face that sees a mover is rebuilt every frame by render_shadow_movers instead.
         for (int f = 0; f < 6 * block->views && ss->tile_faces_drawn < budget; ++f) {
-            if ((block->valid & (1u << f)) ||
+            if (tile_face_valid(block, f) || tile_face_dynamic(block, f) ||
                 !draw_tile_face(ss, engine, scene, state, order[k], f, SHADOW_CASTERS_KEPT))
                 continue;
-            block->valid |= 1u << f;
+            tile_face_mark(block, f);
             ss->tile_faces_drawn++;
         }
+    }
+}
+
+// The kept faces that see a mover, every frame: each is a copy of its store's face, which holds
+// the still casters alone and is drawn only when it is not, with the movers drawn over the copy.
+// What a pendulum costs a frame is then a copy and its own draws, where drawing the face whole
+// costs every caster in the room. A block with no room for a store draws such faces whole. A
+// face out of the camera's view keeps its last copy, which nothing on screen reads, as a hero's
+// face does.
+static void render_shadow_movers(ShadowSystem* ss, const Engine* engine, const Scene* scene,
+                                 SubmitState* state) {
+    const int edge = ss->punctual_map_size;
+    mat4 view_proj;
+    glm_mat4_mul((vec4*)engine->projection_matrix, (vec4*)engine->view_matrix, view_proj);
+    Frustum view;
+    frustum_extract_from_vp(view_proj, &view);
+    for (int b = 0; b < ss->tile_block_count; ++b) {
+        ShadowTileBlock* block = &ss->tile_blocks[b];
+        if (!block->light || block->hero || block->owner >= 0 || block->views <= 0 ||
+            block->generation != ss->tile_generation || !(block->light->intensity > 0.0f))
+            continue;
+        bool any = false;
+        for (int w = 0; w < SHADOW_TILE_VALID_WORDS; ++w)
+            any |= block->dynamic[w] != 0;
+        if (!any)
+            continue;
+        if (block->store < 0) {
+            const int s = tile_block_take(ss, block->cells);
+            block = &ss->tile_blocks[b];
+            if (s >= 0) {
+                tile_block_hold(&ss->tile_blocks[s], block->light, false);
+                ss->tile_blocks[s].owner = b;
+                block->store = s;
+                memset(block->stored, 0, sizeof(block->stored));
+            }
+        }
+        ShadowTileBlock* store = block->store >= 0 ? &ss->tile_blocks[block->store] : NULL;
+        if (store) {
+            store->near_plane = block->near_plane;
+            store->far_plane = block->far_plane;
+        }
+        for (int f = 0; f < 6 * block->views; ++f) {
+            if (!tile_face_dynamic(block, f))
+                continue;
+            vec3 origin = GLM_VEC3_ZERO_INIT;
+            tile_view_origin(block, f / 6, origin);
+            if (tile_face_valid(block, f) && engine->camera &&
+                !tile_face_in_view(&view, origin, f % 6, block->far_plane))
+                continue;
+            if (store && !tile_face_stored(block, f)) {
+                ss->tile_mover_filter = 1;
+                if (draw_tile_cell(ss, engine, scene, state, block->store, f, origin, f % 6,
+                                   SHADOW_CASTERS_KEPT, true))
+                    block->stored[f >> 6] |= 1ull << (f & 63);
+            }
+            bool drawn;
+            if (store && tile_face_stored(block, f) &&
+                tile_copy_cell(ss, tile_block_first_cell(ss, edge, block->store) + f,
+                               tile_block_first_cell(ss, edge, b) + f)) {
+                ss->tile_mover_filter = 2;
+                drawn = draw_tile_cell(ss, engine, scene, state, b, f, origin, f % 6,
+                                       SHADOW_CASTERS_KEPT, false);
+            } else {
+                ss->tile_mover_filter = 0;
+                drawn = draw_tile_face(ss, engine, scene, state, b, f, SHADOW_CASTERS_KEPT);
+            }
+            ss->tile_mover_filter = 0;
+            if (drawn) {
+                tile_face_mark(block, f);
+                ss->mover_faces_drawn++;
+            }
+        }
+    }
+}
+
+// --tile-reference: every cached light drawn this frame from `count` points of its body as it
+// is now, with the kept casters, and published; the lookup places the same points. Its views
+// fill the block's faces but are not the block's kept views, so leaving the reference redraws.
+static void render_shadow_reference(ShadowSystem* ss, const Engine* engine, const Scene* scene,
+                                    SubmitState* state, int count) {
+    for (int b = 0; b < ss->tile_block_count; ++b) {
+        ShadowTileBlock* block = &ss->tile_blocks[b];
+        if (!block->light || block->hero || block->cells < 6 * count ||
+            !(block->light->intensity > 0.0f))
+            continue;
+        tile_block_place(block, count);
+        tile_planes(block->light, &block->near_plane, &block->far_plane);
+        tile_faces_unmark(block);
+        bool whole = true;
+        for (int m = 0; m < count; ++m) {
+            vec3 origin = GLM_VEC3_ZERO_INIT;
+            tile_view_origin(block, m, origin);
+            for (int f = 0; f < 6; ++f) {
+                whole &= draw_tile_cell(ss, engine, scene, state, b, 6 * m + f, origin, f,
+                                        SHADOW_CASTERS_KEPT, true);
+                ss->tile_faces_drawn++;
+            }
+        }
+        if (whole)
+            publish_tile_block(ss, b);
+        block->views = 0;
     }
 }
 
@@ -2149,6 +2490,7 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     ss->tsm_live = false;
     ss->tile_faces_drawn = 0;
     ss->hero_faces_drawn = 0;
+    ss->mover_faces_drawn = 0;
     int punctual_needed = 0;
     const Light* pool_overflow = NULL;
     const Light* dir_overflow = NULL;
@@ -2161,7 +2503,8 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
         light->shadow_map_index = -1;
         light->shadow_layer = -1;
         light->shadow_tile = -1;
-        glm_vec3_zero(light->shadow_step);
+        glm_vec3_zero(light->shadow_segment);
+        light->shadow_radius = 0.0f;
         if (!light->cast_shadows || shadow_light_takes_tiles(light))
             continue;
         if (light->shadow_cache && light->type == LIGHT_POINT && !rangeless)
@@ -2489,10 +2832,15 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     }
 
     // The cached lights' tiles, under the same program and depth policy.
-    if (punctual_ready && tiled > 0) {
+    if (punctual_ready && tiled > 0 && tile_reference_count(ss) > 0) {
+        render_shadow_reference(ss, engine, scene, &state, tile_reference_count(ss));
+    } else if (punctual_ready && tiled > 0) {
         profiler_scope_begin(engine->profiler, "shadow tiles");
         tiles_note_changes(ss, scene);
         render_shadow_tiles(ss, engine, scene, &state);
+        profiler_scope_end(engine->profiler);
+        profiler_scope_begin_if(engine->profiler, ss->tile_mover_count > 0, "shadow movers");
+        render_shadow_movers(ss, engine, scene, &state);
         profiler_scope_end(engine->profiler);
         profiler_scope_begin_if(engine->profiler, ss->tile_heroes > 0, "shadow heroes");
         render_shadow_heroes(ss, engine, scene, &state);
@@ -2789,35 +3137,43 @@ void shadow_tiles_probe(const ShadowSystem* ss, const Scene* scene) {
     }
     const int edge = ss->punctual_map_size;
     printf("tiles-probe region base=%d layers=%d edge=%d per_layer=%d allocated=%d "
-           "generation=%u blocks=%d cells=%d faces_drawn=%d heroes=%d hero_faces_drawn=%d\n",
+           "generation=%u blocks=%d cells=%d faces_drawn=%d heroes=%d hero_faces_drawn=%d "
+           "movers=%d mover_faces_drawn=%d reference=%d\n",
            ss->tile_base_layer, ss->tile_layers, edge, edge > 0 ? tiles_per_layer(edge) : 0,
            ss->punctual_allocated_layers, ss->tile_generation, ss->tile_block_count,
-           tile_cells_used(ss), ss->tile_faces_drawn, ss->tile_heroes, ss->hero_faces_drawn);
+           tile_cells_used(ss), ss->tile_faces_drawn, ss->tile_heroes, ss->hero_faces_drawn,
+           ss->tile_mover_count, ss->mover_faces_drawn, tile_reference_count(ss));
     for (int b = 0; b < ss->tile_block_count; ++b) {
         const ShadowTileBlock* block = &ss->tile_blocks[b];
         if (!block->light)
             continue;
         const Light* light = block->light;
-        printf("tiles-probe block=%d light=%s hero=%d moving=%d first=%d cells=%d views=%d "
-               "valid=0x%05x published=%d radius=%.9g length=%.9g axis=%.9g,%.9g,%.9g "
-               "origin=%.9g,%.9g,%.9g step=%.9g,%.9g,%.9g drift=%.9g near=%.9g far=%.9g "
-               "current=%d\n",
+        int kept = 0, dynamic = 0;
+        for (int f = 0; f < 6 * block->views; ++f) {
+            kept += tile_face_valid(block, f) ? 1 : 0;
+            dynamic += tile_face_dynamic(block, f) ? 1 : 0;
+        }
+        printf("tiles-probe block=%d light=%s hero=%d moving=%d store=%d owner=%d dynamic=%d "
+               "first=%d cells=%d views=%d "
+               "faces=%d whole=%d published=%d radius=%.9g length=%.9g axis=%.9g,%.9g,%.9g "
+               "centre=%.9g,%.9g,%.9g segment=%.9g,%.9g,%.9g drawn_radius=%.9g drift=%.9g "
+               "near=%.9g far=%.9g current=%d\n",
                b, light->name ? light->name : "unnamed", block->hero ? 1 : 0, block->moving ? 1 : 0,
-               tile_block_first_cell(ss, edge, b), block->cells, block->views, block->valid,
+               block->store, block->owner, dynamic, tile_block_first_cell(ss, edge, b),
+               block->cells, block->views, kept, tile_block_whole(block) ? 1 : 0,
                light->shadow_tile, (double)light->source_radius, (double)light->source_length,
                (double)light->direction[0], (double)light->direction[1],
-               (double)light->direction[2], (double)block->origin[0], (double)block->origin[1],
-               (double)block->origin[2], (double)block->step[0], (double)block->step[1],
-               (double)block->step[2],
-               (double)glm_vec3_distance((float*)block->origin, (float*)light->global_position),
+               (double)light->direction[2], (double)block->centre[0], (double)block->centre[1],
+               (double)block->centre[2], (double)block->segment[0], (double)block->segment[1],
+               (double)block->segment[2], (double)block->radius,
+               (double)glm_vec3_distance((float*)block->centre, (float*)light->global_position),
                (double)block->near_plane, (double)block->far_plane,
                block->generation == ss->tile_generation ? 1 : 0);
         for (int v = 0; v < block->views && edge > 0; ++v) {
             vec3 origin = GLM_VEC3_ZERO_INIT;
             tile_view_origin(block, v, origin);
-            printf("tiles-probe   view=%d offset=%d origin=%.9g,%.9g,%.9g", v,
-                   tile_view_offset(v, block->views), (double)origin[0], (double)origin[1],
-                   (double)origin[2]);
+            printf("tiles-probe   view=%d origin=%.9g,%.9g,%.9g", v, (double)origin[0],
+                   (double)origin[1], (double)origin[2]);
             for (int f = 0; f < 6; ++f) {
                 int layer, x, y;
                 tile_cell_at(tile_block_first_cell(ss, edge, b) + 6 * v + f, edge, &layer, &x, &y);
