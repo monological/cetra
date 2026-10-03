@@ -131,6 +131,7 @@ typedef struct SilentArgs {
     bool no_grade;
     int local_exposure;  // 1 on, 0 off; -1 = this mode's own choice
     float le_highlights; // the local exposure's highlight contrast; below 0 = this mode's own
+    float le_shadows;    // and below it
     float le_blend;      // and its blurred-luminance blend
     bool le_probe;       // print the frame's luminance percentiles it is asked to fit
     bool exposure_probe; // print what the meter decided, every frame it decides
@@ -445,6 +446,8 @@ static void build_post(const Engine* engine, bool night, bool grade) {
     fx->local_exposure_enabled = g_args.local_exposure == 1;
     if (g_args.le_highlights >= 0.0f)
         fx->local_exposure_highlights = g_args.le_highlights;
+    if (g_args.le_shadows >= 0.0f)
+        fx->local_exposure_shadows = g_args.le_shadows;
     if (g_args.le_blend >= 0.0f)
         fx->local_exposure_blend = g_args.le_blend;
     fx->local_exposure_probe = g_args.le_probe;
@@ -767,6 +770,7 @@ static void print_usage(const char* prog) {
     printf("      --local-exposure    An exposure per pixel on top of the camera's\n");
     printf("      --no-local-exposure Without it\n");
     printf("      --le-highlights F   Its contrast above middle grey (1 = none)\n");
+    printf("      --le-shadows F      And below it\n");
     printf("      --le-blend F        Its share of the base from the blurred luminance\n");
     printf("      --le-probe          Print the frame's luminance percentiles, in stops from\n"
            "                          middle grey, while it is on\n");
@@ -844,6 +848,7 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
     a->cat_seed = 1;
     a->local_exposure = -1;
     a->le_highlights = -1.0f;
+    a->le_shadows = -1.0f;
     a->le_blend = -1.0f;
     for (int i = 1; i < argc; i++) {
         const char* s = argv[i];
@@ -874,6 +879,8 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
             a->local_exposure = 0;
         } else if (!strcmp(s, "--le-highlights") && has_next) {
             a->le_highlights = (float)atof(argv[++i]);
+        } else if (!strcmp(s, "--le-shadows") && has_next) {
+            a->le_shadows = (float)atof(argv[++i]);
         } else if (!strcmp(s, "--le-blend") && has_next) {
             a->le_blend = (float)atof(argv[++i]);
         } else if (!strcmp(s, "--le-probe")) {
