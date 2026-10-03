@@ -13,7 +13,8 @@
 // so a light's first cell and the array's edge are its whole address.
 //
 // Needs punctual_shadow.glsl (the sampler, punctualCubeFace, the plane bias and the grazing
-// fade) and lights_ubo.glsl above it.
+// fade), lights_ubo.glsl, noise.glsl's ign, and pbr_frag's POISSON16 and pcssStochastic
+// above it.
 
 #include "shadow_tile_constants.glsl"
 
@@ -45,6 +46,11 @@ vec3 tileFaceProject(int face, vec3 rel, float nearP, float farP) {
     return vec3(ndc, z) * 0.5 + 0.5;
 }
 
+// Metres along the face's axis from a stored depth: tileFaceProject's z, inverted.
+float tileLinearDepth(float z01, float nearP, float farP) {
+    return 2.0 * farP * nearP / ((farP + nearP) - (2.0 * z01 - 1.0) * (farP - nearP));
+}
+
 // Where cell `cell` sits in an array `edge` texels across: xy its corner in layer uv, z its
 // layer.
 vec3 tileCell(int cell, int edge) {
@@ -55,9 +61,81 @@ vec3 tileCell(int cell, int edge) {
     return vec3(corner / float(edge), float(cell / perLayer));
 }
 
+// One tile's depth at a uv over the tile, clamped to the tile and never to the face: the
+// guard band past the face's edge is this face's own depth, and past the tile is another
+// light's. `span` is a tile's extent in layer uv.
+float tileDepthAt(vec3 cell, float span, vec2 uv) {
+    float texel = 1.0 / float(SHADOW_TILE_SIZE);
+    uv = clamp(uv, 0.5 * texel, 1.0 - 0.5 * texel);
+    return texture(punctualShadowMaps, vec3(cell.xy + uv * span, cell.z)).r;
+}
+
+// How far a soft edge's disk may reach, in tile uv: the guard band, so a fragment on a face's
+// edge still filters this face's own depth.
+const float TILE_GUARD_UV = float(SHADOW_TILE_GUARD) / float(SHADOW_TILE_SIZE);
+// A blocker must be this much nearer the light than the receiver's plane, as a fraction of
+// the receiver's distance -- the cascades' reason (CSM_BLOCKER_SEPARATION): a receiver lies
+// within its own filter bias, and counting it as its own blocker collapses the penumbra.
+#define TILE_BLOCKER_SEPARATION 0.99
+
+// The soft edge (PCSS) for an emitter `emitter` metres across, at a receiver `dRecv` metres
+// along the face: a blocker search over the cone from the receiver to the emitter, then a
+// filter as wide as the penumbra the found blockers cast. Both are physical rather than
+// scaled -- the penumbra is the emitter's width carried past the blockers by similar
+// triangles -- so the edge is as wide as the emitter makes it, where the cascades'
+// PCSS_PENUMBRA_SCALE sets it by eye. Both radii stop at the guard band.
+float tileSoft(vec3 cell, float span, vec3 pc, vec2 duv_dz, float emitter, float dRecv,
+               float nearP, float farP) {
+    float halfW = 0.5 * emitter;
+    float texel = 1.0 / float(SHADOW_TILE_SIZE);
+    // Where a blocker could reach farthest is at the near plane: the cone's cross-section
+    // there, in uv at that depth.
+    float searchUV =
+        min(halfW * (dRecv - nearP) / dRecv * TILE_INNER / (2.0 * nearP), TILE_GUARD_UV);
+
+    // The cascades' rotation, for their reason: identity unless TAA is there to average it.
+    mat2 rot = mat2(1.0);
+    if (pcssStochastic == 1) {
+        vec2 fc = gl_FragCoord.xy + vec2(float(pcssFrameIndex) * 5.588238);
+        float ang = 6.2831853 * ign(fc);
+        float c = cos(ang);
+        float s = sin(ang);
+        rot = mat2(c, s, -s, c);
+    }
+
+    float blockerSum = 0.0;
+    float blockerCount = 0.0;
+    for (int i = 0; i < 16; i++) {
+        vec2 off = rot * POISSON16[i] * searchUV;
+        float zTap = tileLinearDepth(tileDepthAt(cell, span, pc.xy + off), nearP, farP);
+        float zPlane = tileLinearDepth(pc.z + receiverPlaneBias(duv_dz, off), nearP, farP);
+        if (zTap < zPlane * TILE_BLOCKER_SEPARATION) {
+            blockerSum += zTap;
+            blockerCount += 1.0;
+        }
+    }
+    if (blockerCount < 0.5)
+        return 1.0;
+    float zBlocker = blockerSum / blockerCount;
+
+    // Half the penumbra each side of the edge, in uv at the receiver's depth.
+    float filterUV = clamp(halfW * (dRecv - zBlocker) / zBlocker * TILE_INNER / (2.0 * dRecv),
+                           texel, TILE_GUARD_UV);
+    float ref = pc.z - SHADOW_PLANE_BIAS_FLOOR;
+    float sum = 0.0;
+    for (int i = 0; i < 16; i++) {
+        vec2 off = rot * POISSON16[i] * filterUV;
+        sum += (ref + receiverPlaneBias(duv_dz, off) > tileDepthAt(cell, span, pc.xy + off))
+                   ? 0.0
+                   : 1.0;
+    }
+    return sum / 16.0;
+}
+
 // Occlusion for light `li` through its cached faces: 1 = lit, 0 = occluded. The same lookup
 // punctualShadow is for a per-frame map -- a 3x3 PCF under the receiver's own plane, faded
-// out at grazing -- with the face found and projected here rather than by a matrix.
+// out at grazing -- with the face found and projected here rather than by a matrix, and a
+// soft edge in place of the 3x3 wherever the light states an emitter size.
 //
 // The receiver's plane is projected onto the SAME face as the point, never re-chosen per
 // derivative: near a face boundary the two neighbours would otherwise land on different
@@ -85,20 +163,25 @@ float tileShadow(uint li, vec3 worldPos, vec3 N, vec3 L, vec3 ddxWorld, vec3 ddy
         duv_dz = receiverPlaneGradient(px, py);
     }
 
-    // Taps clamped to the tile, never to the face: the guard band past the face's edge is
-    // this face's own depth, and past the tile is another light's.
     int edge = textureSize(punctualShadowMaps, 0).x;
     vec3 cell = tileCell(int(clusterLights[li].shadowTile.w) + face, edge);
     float span = float(SHADOW_TILE_SIZE) / float(edge);
+
+    float emitter = clusterLights[li].attenCutoff.z;
+    if (emitter > 0.0) {
+        float soft = tileSoft(cell, span, pc, duv_dz, emitter, dot(rel, axis), nearP, farP);
+        return mix(1.0, soft, trust);
+    }
+
     float texel = 1.0 / float(SHADOW_TILE_SIZE);
     float ref = pc.z - SHADOW_PLANE_BIAS_FLOOR;
     float sum = 0.0;
     for (int y = -1; y <= 1; ++y) {
         for (int x = -1; x <= 1; ++x) {
             vec2 off = vec2(x, y) * texel;
-            vec2 uv = clamp(pc.xy + off, 0.5 * texel, 1.0 - 0.5 * texel);
-            float d = texture(punctualShadowMaps, vec3(cell.xy + uv * span, cell.z)).r;
-            sum += (ref + receiverPlaneBias(duv_dz, off) > d) ? 0.0 : 1.0;
+            sum += (ref + receiverPlaneBias(duv_dz, off) > tileDepthAt(cell, span, pc.xy + off))
+                       ? 0.0
+                       : 1.0;
         }
     }
     return mix(1.0, sum / 9.0, trust);

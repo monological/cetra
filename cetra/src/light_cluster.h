@@ -56,7 +56,7 @@ typedef struct GpuPackedLight {
     // The attenuation triple this used to carry is gone -- punctual falloff is
     // inverse-square windowed by `range`, and slot [1] now holds a live index.
     float atten_cutoff[4]; // 1/range^2 (0 = unbounded), IES profile index
-                           // (-1 = none), reserved, cos inner cone
+                           // (-1 = none), a cached light's emitter size, cos inner cone
     float shadow_misc[4];  // cos outer cone, punctual shadow layer, size.xy
     // Roll reference, unit and orthonormal to dir: a panel's height axis
     // (spec 9.2), an asymmetric IES profile's azimuth zero (spec 11.57); w = a

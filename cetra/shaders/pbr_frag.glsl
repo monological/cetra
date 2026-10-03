@@ -211,10 +211,6 @@ uniform int pcssFrameIndex; // Advances the per-frame rotation; frozen when off
 // through these UBOs -- directionals in a small unconditional array, the
 // point/spot/area set via the per-fragment cluster index list.
 #include "lights_ubo.glsl"
-// A cached point light's faces, tiles of the same punctual array (spec 13.16).
-#if CETRA_HAS(PBR_FEAT_SHADOW_TILES)
-#include "punctual_tiles.glsl"
-#endif
 #include "view.glsl"
 #include "depth.glsl"
 #include "velocity.glsl"
@@ -915,6 +911,12 @@ float calculateShadow(int shadowIndex, int cascade, vec3 worldPos, float lightSi
     }
     return visibility;
 }
+
+// A cached point light's faces, tiles of the same punctual array (spec 13.16). Below the
+// cascades' PCSS, whose disk and rotation its soft edge shares.
+#if CETRA_HAS(PBR_FEAT_SHADOW_TILES)
+#include "punctual_tiles.glsl"
+#endif
 
 // Clearcoat normal: the geometric normal, perturbed by the coat normal map if
 // present (glTF: the coat normal is independent of the base normal map). Only

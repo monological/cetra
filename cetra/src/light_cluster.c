@@ -202,6 +202,7 @@ static void _pack_dir_light(GpuDirLight* dst, const struct Light* light) {
 
 static void _pack_cluster_light(GpuPackedLight* dst, const struct Light* light, float radius,
                                 const ShadowSystem* shadows) {
+    const int tile = shadow_live_tile(shadows, light);
     glm_vec3_copy((float*)light->global_position, dst->pos_range);
     dst->pos_range[3] = radius > 0.0f ? radius : 0.0f; // 0 = unbounded
     dst->dir_type[3] = (float)light->type;             // 1 point / 2 spot / 3 area
@@ -218,7 +219,8 @@ static void _pack_cluster_light(GpuPackedLight* dst, const struct Light* light, 
     // a distribution its shading never applies. The contact-shadow fold is
     // exactly that consumer, and a wrong denominator is invisible in the frame.
     dst->atten_cutoff[1] = light->type == LIGHT_AREA ? -1.0f : (float)light->ies_profile;
-    dst->atten_cutoff[2] = 0.0f;
+    // A cached light's emitter, which its tiles' soft edge is sized by (spec 13.16).
+    dst->atten_cutoff[2] = tile >= 0 ? fmaxf(light->emitter_size, 0.0f) : 0.0f;
     dst->atten_cutoff[3] = light->cutOff;
     dst->shadow_misc[0] = light->outerCutOff;
     // The punctual base layer, not the CSM slot: only directionals reach the
@@ -233,7 +235,6 @@ static void _pack_cluster_light(GpuPackedLight* dst, const struct Light* light, 
     // A cached light (spec 13.16) carries SHADOW_TILE_MARK there instead: past every
     // per-frame layer, so every "has a map" test holds and the per-frame lookup reads
     // it as lit before it indexes anything, and its tiles ride in shadow_tile below.
-    const int tile = shadow_live_tile(shadows, light);
     dst->shadow_misc[1] =
         (float)(tile >= 0 ? SHADOW_TILE_MARK : shadow_live_punctual_layer(shadows, light));
     glm_vec2_copy((float*)light->size, &dst->shadow_misc[2]);
