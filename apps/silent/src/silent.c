@@ -44,6 +44,7 @@
 #include "candles.h"
 #include "cat.h"
 #include "cat_brain.h"
+#include "cat_debug.h"
 #include "cat_voice.h"
 #include "clock.h"
 #include "door.h"
@@ -86,9 +87,6 @@
 #define DEFAULT_RAIN_MMH 6.0f
 // Rain the cat finds as interesting as rain gets, mm/h: the default is about half of it.
 #define CAT_HEAVY_RAIN 12.0f
-// How far the cat must have come to like the player before it purrs for them: a little past
-// where it starts, 0.5, so a purr is earned.
-#define CAT_PURRS_ABOVE 0.55f
 // The rain is art-directed here, and has to be. In fog this dense a drop refracts glowing air
 // about as bright as itself, so rain at its physical opacity shows only right under a lamp --
 // true of real rain in fog, and not what this street is for. So each streak is brighter than
@@ -483,7 +481,7 @@ static void on_init(Game* game) {
                        .eyeshine = !g_args.no_eyeshine};
         glm_vec3_copy(g_args.cat_fur, cat.fur);
         glm_vec3_copy(g_args.cat_eyes, cat.eyes);
-        cat_create(&g_cat, &cat, game, g_scene, physics);
+        cat_create(&g_cat, &cat, game, physics);
     }
 
     // Sound: the clock's beat, the tubes' buzz, the fridge and the wind, each
@@ -560,7 +558,7 @@ static void on_init(Game* game) {
     physics_world_optimize(physics);
     // Sent somewhere or holding a clip from the command line, the cat has no mind of its own.
     if (g_cat.entity && !g_args.cat_go[0] && !g_args.cat_clip[0])
-        cat_mind_create(&g_mind, &g_cat, game, g_player.entity, g_args.cat_seed, g_args.cat_blind,
+        cat_mind_create(&g_mind, &g_cat, game, &g_player, g_args.cat_seed, g_args.cat_blind,
                         g_args.cat_doing);
 
     // Pinned at night: a meter would open the dark back up, which is the one
@@ -578,14 +576,16 @@ static void on_init(Game* game) {
 }
 
 static void on_update(Game* game, double dt) {
+    // The cat first, while the player's body still holds the last step's solved velocity, which
+    // the player's own update replaces with the one it asks for.
+    vec3 feet = {0.0f, 0.0f, 0.0f};
+    player_feet(&g_player, feet);
+    cat_step(&g_cat, feet, (float)dt);
+    // What it senses is decided here, and what it does about it by its brain after this hook.
+    cat_mind_sense(&g_mind, g_args.rain_mmh / CAT_HEAVY_RAIN, (float)dt);
     player_update(&g_player, game, dt);
     if (g_door_hung)
         door_update(&g_door, (float)dt);
-    vec3 eye = {0.0f, 0.0f, 0.0f}, forward = {0.0f, 0.0f, -1.0f};
-    player_eye(&g_player, eye, forward);
-    cat_step(&g_cat, (vec3){eye[0], eye[1] - PLAYER_EYE_HEIGHT, eye[2]}, (float)dt);
-    // What it senses is decided here, and what it does about it by its brain after this hook.
-    cat_mind_sense(&g_mind, eye, forward, g_args.rain_mmh / CAT_HEAVY_RAIN, (float)dt);
     if (g_args.trace_cat) {
         static int step;
         if (step++ % 30 == 0) {
@@ -691,12 +691,10 @@ static void on_pre_render(Game* game, double alpha) {
     lights_update(&g_lights, g_scene, game->time, (float)game->sim_clock.delta, eye, forward,
                   hearing);
     cat_mind_frame(&g_mind, game->time);
-    cat_mind_panel(&g_mind, engine);
+    cat_debug_draw(&g_cat, &g_mind, engine);
     cat_update(&g_cat, game, g_scene, &g_lights, eye, (float)game->sim_clock.delta);
-    // It purrs for someone it trusts who is not hurrying; with no mind it has no one to mistrust.
-    const bool at_ease =
-        !g_mind.brain || (g_mind.affinity >= CAT_PURRS_ABOVE && g_mind.player_speed < 1.0f);
-    cat_voice_update(&g_voice, eye, hearing, at_ease, (float)game->sim_clock.delta);
+    cat_voice_update(&g_voice, &g_sounds, eye, cat_mind_at_ease(&g_mind),
+                     (float)game->sim_clock.delta);
     clock_update(&g_clock, game->time, hearing);
     rain_bed_update(&g_rain_bed, g_scene->rain, g_scene->shadow_system, eye,
                     (float)game->sim_clock.delta);
@@ -735,6 +733,7 @@ static void on_shutdown(Game* game) {
     if (g_args.tiles_probe && g_scene)
         shadow_tiles_probe(g_scene->shadow_system, g_scene);
     prompt_free(&g_prompt);
+    cat_free(&g_cat);
 }
 
 static void print_usage(const char* prog) {

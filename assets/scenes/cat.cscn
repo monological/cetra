@@ -3,7 +3,7 @@
   "_comment": [
     "silent's cat (spec 13.17) in the render app with its coat on: the glb carries the body and",
     "the clips, and a coat of fur shells is a material setting the file format has no word for.",
-    "silent sets the same values from C; apps/silent/tools/cat_sheet.py renders through this."
+    "silent reads this block for its coat; apps/silent/tools/cat_sheet.py renders through it."
   ],
   "models": [ { "path": "../models/cat.glb" } ],
   "materials": {

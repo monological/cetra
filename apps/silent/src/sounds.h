@@ -33,4 +33,12 @@ void sounds_update(Sounds* sounds, const vec3 eye, float dt);
 // from the street.
 float sounds_indoor_gain(const Sounds* sounds);
 
+// The same for a sound made at `source`, which is quieter again a storey away from the
+// listener, unless the listener stands in the great hall, which is open to the gallery.
+float sounds_gain_at(const Sounds* sounds, const vec3 listener, const vec3 source);
+
+// A loop from a file, playing silent until its volume is set; NULL, with a line on stderr, when
+// it cannot be loaded, and NULL without audio.
+Sound* sounds_loop(AudioSystem* audio, const char* path);
+
 #endif // _SILENT_SOUNDS_H_

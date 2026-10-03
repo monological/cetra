@@ -34,7 +34,8 @@ static const KitFrame CLOCK = {
 #define SWING       0.07f // radians of swing each side: about four degrees
 #define PIVOT_Y     1.64f
 #define PIVOT_D     0.14f
-#define PENDULUM_L  0.97f // pivot to the bob's middle
+#define PENDULUM_L  0.97f   // pivot to the bob's middle
+#define BOB_D       -0.012f // the bob's middle, off the rod along the case's depth
 #define START_TIME  (3.0 * 3600.0 + 7.0 * 60.0)
 #define BEAT_VOLUME 0.5f
 
@@ -269,7 +270,7 @@ static void pendulum(Kit* kit, const KitFrame* f) {
                    8);
     const vec2 bob[] = {{0.0f, 0.0f},     {0.05f, 0.004f}, {0.078f, 0.01f}, {0.082f, 0.012f},
                         {0.078f, 0.014f}, {0.05f, 0.02f},  {0.0f, 0.024f}};
-    kit_frame_lathe_on(kit, f, MAT_BRASS, (vec3){0.0f, -PENDULUM_L, -0.012f},
+    kit_frame_lathe_on(kit, f, MAT_BRASS, (vec3){0.0f, -PENDULUM_L, BOB_D},
                        (vec3){0.0f, 0.0f, 1.0f}, bob, COUNT(bob), 32);
 }
 
@@ -314,7 +315,7 @@ void clock_bob(double time, vec3 out) {
     part_transform(PIVOT_Y, PIVOT_D, swing_at(time), m);
     const KitFrame f = {{0.0f, 0.0f, 0.0f}, CLOCK.yaw};
     vec3 bob = {0.0f, 0.0f, 0.0f};
-    kit_frame_point(&f, 0.0f, -PENDULUM_L, -0.012f, bob);
+    kit_frame_point(&f, 0.0f, -PENDULUM_L, BOB_D, bob);
     glm_mat4_mulv3(m, bob, 1.0f, out);
 }
 

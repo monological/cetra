@@ -7,7 +7,6 @@
 
 #include "cetra/animation.h"
 #include "cetra/animator.h"
-#include "cetra/look_at.h"
 #include "cetra/material.h"
 #include "cetra/nav_graph.h"
 #include "cetra/scene.h"
@@ -17,13 +16,19 @@
 #include "cetra/game/physics.h"
 
 #include "cat_clips.h"
+#include "cat_places.h"
 #include "lights.h"
 
 /*
  * The house's cat (spec 13.17): the body tools/make_cat_blender.py builds, brought in from
- * assets/models/cat.glb, given its colours and its coat, set down at one of its places, and
- * sent from place to place over the house's graph (cat_places.h).
+ * assets/models/cat.glb, given its colours and its coat (cat_body.c), set down at one of its
+ * places, and sent from place to place over the house's graph (cat_places.h) by the controller
+ * here.
  */
+
+// Half the height of the body the player bumps into: the entity stands at its middle, so the
+// feet are this far below it.
+#define CAT_HALF_HEIGHT 0.16f
 
 // How fast it goes along a level walk; a flight and a jump go at their own pace.
 typedef enum { CAT_WALK, CAT_TROT, CAT_RUN } CatGait;
@@ -52,9 +57,9 @@ typedef enum {
 } CatMode;
 
 typedef struct Cat {
+    // The body (cat_body.c).
     Entity* entity;     // NULL when there is no cat
     Animator* animator; // the entity's
-    SceneNode* holder;  // the entity's node, in the scene once attached
     SceneNode* skin;    // the node carrying the skinned meshes
     Material* eye;      // what glows when the flashlight catches it
     Material* fur;
@@ -66,44 +71,32 @@ typedef struct Cat {
     bool eyeshine;
     float shine; // the eyes' glow now, nits
     bool attached;
-
     const Animation* clips[CAT_CLIP_COUNT];
-    int clip;           // what the base layer plays
-    float clip_seconds; // how far into it
-    bool held;          // a clip held from the command line: nothing moves the cat
-
-    NavGraph* places; // owned
-    NavFollower follower;
-    CatMode mode;
-    CatPosture posture; // what it holds, or is shifting from
-    CatPosture want;    // what it is shifting to
-    int shift_dir;      // the transition under way goes up a posture (1) or down one (-1)
-    int at;             // the place it is at, or last left
-    int goal;           // where it is going, -1 for nowhere
-    CatGait gait;
-    int settle;                 // the posture to take on arriving, -1 for the one the place says
-    float yaw;                  // which way it faces, radians about +y, 0 facing +z
-    float face;                 // the facing a turn on the spot is turning it to
-    bool turn_clip;             // turning by a quarter-turn clip, rather than easing round
-    int leg;                    // the link whose clip is playing
-    bool landed;                // the jump under way has put the cat down at its far end
-    float jump_yaw0, jump_yaw1; // the facing a jump takes off with and lands with
-    float blocked;              // seconds the player has stood in its way
-    const char* go;             // where to set off for once it is in the house, or NULL
-    CatGait go_gait;
-
-    int act;             // the clip played in place, -1 for none
-    int act_pending;     // an act waiting for the cat to stand up, -1 for none
-    CatPosture act_ends; // the posture the act leaves it in
-    int vocal;           // what the override layer plays, -1 for nothing
-    float vocal_seconds; // how far into it
-    LookAtSystem* look;  // the animation state's; NULL without a neck
     bool look_on;
     vec3 look_target; // world
 
-    // Told every event its clips carry -- a paw down, a landing, a meow -- or NULL.
-    void (*heard)(void* user, const char* name);
-    void* heard_user;
+    // What it does (cat.c).
+    int clip;             // what the base layer plays
+    float clip_seconds;   // how far into it
+    bool held;            // a clip held from the command line: nothing moves the cat
+    NavGraph* places;     // owned
+    NavFollower follower; // the one record of where it is: at a place, or along a link
+    CatMode mode;
+    CatPosture posture;   // what it holds, or is shifting from
+    CatPosture want;      // what it is making for once whatever it is doing is done
+    CatPosture arrive_as; // what it takes up on arriving
+    int goal;             // where it is going, -1 for nowhere
+    CatGait gait;
+    float yaw;                  // which way it faces, radians about +y, 0 facing +z
+    float face;                 // the facing a turn on the spot is turning it to
+    int leg;                    // the link whose clip is playing
+    bool landed;                // the jump under way has put the cat down at its far end
+    float jump_yaw0, jump_yaw1; // the facing a jump takes off with and lands with
+    float takeoff, land;        // when in its clip the jump under way leaves and lands
+    bool waiting;               // the player stands in its way
+    int act;                    // the clip it plays in place, or stands up to play; -1 for none
+    int go;                     // where to set off for once it is in the house, -1 to stay
+    CatGait go_gait;
 } Cat;
 
 // The places a cat rests at, comma-separated, for the usage line.
@@ -111,15 +104,23 @@ const char* cat_place_list(void);
 
 // Load the cat and stand it at its place, its body solid to the player but not yet drawn: see
 // cat_update. False, with a line on stderr, when the model cannot be loaded.
-bool cat_create(Cat* cat, const CatDesc* desc, Game* game, Scene* scene, PhysicsWorld* physics);
+bool cat_create(Cat* cat, const CatDesc* desc, Game* game, PhysicsWorld* physics);
+// What the cat owns that its entity does not.
+void cat_free(Cat* cat);
 
-// Send it to a place by name, by the cheapest way there, to take `settle` on arriving (-1 for
-// the posture the place says). From part way along a walk it goes on or turns back, whichever
-// is shorter. False when there is no such place, or no way to it.
-bool cat_go(Cat* cat, const char* place, CatGait gait, int settle);
+// Send it to a place, by the cheapest way there, to take `settle` on arriving (-1 for the
+// posture the place says). From part way along a walk it goes on or turns back, whichever is
+// shorter. False when there is no way there.
+bool cat_go(Cat* cat, CatPlaceId place, CatGait gait, int settle);
 // The same, by way of the gallery's hand rail where that is the way there: what a cat does
 // when it means to walk the rail, and never on the way to anywhere else.
-bool cat_go_by_rail(Cat* cat, const char* place, int settle);
+bool cat_go_by_rail(Cat* cat, CatPlaceId place, CatGait gait, int settle);
+// The route cat_go would take there, by the rail or not; false when there is none.
+bool cat_route(const Cat* cat, CatPlaceId place, bool by_rail, NavRoute* out);
+
+// Take a posture where it is: at once out of a looping act, after a one-shot act or a transition
+// under way. False while it is on its way somewhere.
+bool cat_settle(Cat* cat, CatPosture posture);
 
 // Play a clip in place: CAT_CLIP_STRETCH (standing up first), CAT_CLIP_STARTLE (from anything
 // but a jump, a flight or a turn, stopping where it is), CAT_CLIP_HISS (standing), or
@@ -134,12 +135,16 @@ bool cat_vocal(Cat* cat, int clip);
 // Turn the head toward a world point while it can, or back to the clip with NULL.
 void cat_look(Cat* cat, const vec3 world);
 
-// Its coat and its eyes, sRGB 0..1, while it runs: a light coat takes pink ears and nose.
+// Its colours, sRGB 0..1, while it runs: a light coat takes pink ears and nose.
 void cat_set_fur(Cat* cat, const vec3 srgb);
 void cat_set_eyes(Cat* cat, const vec3 srgb);
 
+// The place it stands at, or -1 between two.
+int cat_place(const Cat* cat);
 // At rest where it was going, nothing under way.
 bool cat_settled(const Cat* cat);
+// Where it was going and doing what it does there: resting, or an act in place.
+bool cat_here(const Cat* cat);
 // Asleep, or with its eyes shut.
 bool cat_eyes_shut(const Cat* cat);
 // Where its eyes are, between them, and the way its head faces, from the pose last drawn.
@@ -152,8 +157,8 @@ void cat_feet(const Cat* cat, vec3 out);
 void cat_step(Cat* cat, const vec3 player, float dt);
 
 // Once a frame before the frame draws, after the flashlight has moved: puts the cat in the
-// scene once the reflection probes have their pictures, and its eyes' glow. `viewer` is the
-// player's eye.
+// scene once the reflection probes have their pictures, its eyes' glow, and where its head
+// turns. `viewer` is the player's eye.
 void cat_update(Cat* cat, Game* game, Scene* scene, const Lights* lights, const vec3 viewer,
                 float dt);
 
