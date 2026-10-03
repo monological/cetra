@@ -464,6 +464,27 @@ point every frame and the probe prints its answer. `assets/scenes/rain_fixture.c
 
 `rain_glass_fixture.cscn` and `rain_relief_fixture.cscn` are the glazed and relief twins.
 
+**Cached point-light shadows** (spec 13.16). A `.cscn` point light with `"cast_shadows": true`,
+`"shadow_cache": true` and a `range` keeps its shadow in tiles drawn once; `shadow_near` (metres)
+is where its faces start, for a lamp inside its own glass, and `source_radius` / `source_length`
+give it a body -- a capsule, the length between its caps -- whose shadow is soft. A fire's flame
+writes its own body into its light each frame. Instruments:
+- **`--tiles-probe`:** prints the tile region and every cached light's block at exit: its views,
+  cells, faces kept, the body they were drawn over, and each view's origin and tiles.
+- **`--tile-map <light> <ppm>`:** the light's faces as a picture, two rows a view, grey by metres.
+- **`--tile-views 1`:** every cached light shaded from one view, the comparison the eight are
+  measured against.
+- **`--tile-reference <n>`:** every cached light drawn each frame from n views of its body as it is
+  now (at most 64), averaged with no blur -- the soft shadow by its definition.
+- **`--tile-heroes <n>`:** the n moving cached lights nearest the camera redraw their views every
+  frame; **`--tiles-refresh`** redraws every cached face every frame.
+- **`--node-swing <node> <m>`:** swings a named node along x by up to m metres once a second, a
+  caster that moves under a cached light.
+
+`tile_core_fixture.cscn` (from `gen_tile_core_fixture.py`) is a flame-sized light just past a
+candle-sized rim over a wall; render it with `--ortho 0.8 --tonemap linear` and the full shadow's
+radius reads off the wall in pixels. The `shadow-tiles` gate group traces its truth.
+
 ## apps/tree
 
 **apps/tree's own flags**, which went unlisted anywhere for a long time. Capture: `-x/--headless`,
@@ -899,6 +920,20 @@ Since spec 13.12, two switches and the drips:
 **Sound:** the rain is two noise beds, pink for the patter and brown for the rumble, as loud as the
 log of the rate. Under a roof -- read from the rain's own occlusion map at the player's head -- the
 patter falls away over a doorway's walk and the rumble stays. `--mute` silences everything.
+
+**The candles and the hall bulb cast shadows** (spec 13.16), kept in tiles rather than drawn every
+frame, so a candle lights only what it can see. Switches:
+- **`--no-candle-shadows`:** the candles light through walls again; the bulb keeps its shadow.
+- **`--tile-heroes <n>`** (default 0): the n candles nearest you redraw their shadows every frame.
+- **`--tile-views 1`:** every cached light from one view rather than eight over its body: harder,
+  darker pools under the candlesticks.
+- **`--tiles-probe`:** the tiles and each light's block, at exit.
+
+Pinned views of them, with `-W 960 -H 540`:
+- **The study desk's candlesticks:** `--cam-eye -4.0,4.7,11.0 --cam-target -4.45,3.92,10.1`.
+- **A great hall floor stand against the panelling:** `--cam-eye -2.3,1.75,17.5 --cam-target
+  -2.9,1.5,19.3`.
+- **The hall clock under the bulb:** `--cam-eye -0.2,1.5,14.6 --cam-target -1.45,1.0,12.9`.
 
 ## The other apps, and the AA mode each one chose
 

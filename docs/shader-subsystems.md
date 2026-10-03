@@ -25,7 +25,9 @@ Image finishing: [Tonemap / exposure](#tonemap--exposure) ·
 [Purkinje / scotopic shift](#purkinje--scotopic-shift) · [Diffraction glare](#diffraction-glare)
 
 Lighting and occlusion: [Specular occlusion](#specular-occlusion) · [IES profiles](#ies-profiles) ·
-[Contact shadows](#contact-shadows) · [Clustered specular probes](#clustered-specular-probes)
+[Contact shadows](#contact-shadows) ·
+[Cached point-light shadows](#cached-point-light-shadows) ·
+[Clustered specular probes](#clustered-specular-probes)
 
 Surfaces: [Water](#water) · [Clustered decals](#clustered-decals) ·
 [Layered surfaces](#layered-surfaces) · [Roads](#roads) · [Composite cache](#composite-cache)
@@ -408,6 +410,76 @@ blocked practical beside a bright mapped spot take 23% off a pixel that should l
 Reads the cluster list through `#include "lights_ubo.glsl"` with **no C-side binding work**:
 `create_post_program` links through `ubo_wire_blocks` against buffers bound for the
 context's lifetime, which `froxel_inject` has relied on since 9.5.
+A CACHED point light (spec 13.16) holds tiles rather than a layer and counts as mapped:
+the mapless count asks `shadow_light_mapped`, never the layer field.
+
+## Cached point-light shadows
+
+`include/punctual_tiles.glsl` over `include/tile_lookup.glsl` (spec 13.16). A point light with
+`cast_shadows`, `shadow_cache` and a range keeps its cube faces as 256² tiles of the punctual
+array, drawn once by `shadow.c` and kept. The lookup projects onto a face ANALYTICALLY from
+the view's origin, the near plane and the far, with per-face axis/right/up tables written from
+`glm_lookat` over `light_space_up` -- six matrices a light would not fit in any uniform array,
+where a projection is three dot products and a divide -- and finds the tile from the array's
+own size. A light with no body takes the per-frame map's 3x3 receiver-plane PCF.
+
+**A light with a body is the average of views over it.** Eight views, each a real cube map from
+a point of the body as it was when drawn: view 0 at its centre (which keeps the fog's single tap
+and a bodiless light's one view on the same origin with no new packing) and the rest by R3,
+stratified along the segment with a point of the ball each. `tile_body_point` in C and
+`tileBodyPoint` here are two copies of one formula, and a drift between them reads as views
+projected from the wrong point -- loud, which is why two copies are allowed. The drawn body is
+packed whole: centre in `shadowTile.xyz`, segment in `attenCutoff.zw` and `shadowMisc.x` (the
+reserved slot and the cone cosines, which only a spot reads), radius in `colorIntensity.w`.
+
+**Three designs were measured and refused before this one**, on `tile_core_fixture` against a
+trace of the same body against the rim with no shadow map (the trace is `tiles-truth`'s):
+- **PCSS capped at the guard band** (the first soft edge): 8 texels of a 256 tile is about 2.7 cm
+  each side on a desk 40 cm under a candle, where the flame spreads the edge over tens.
+- **A march through one view** (Unreal's SMRT): a march decides a ray is blocked when a step is
+  behind a stored surface, and every ray from a point the view cannot see starts there -- so the
+  full shadow is the size of the CENTRE'S hard shadow, 25.5 cm against 12.5 traced. One view
+  cannot tell "hidden from me" from "solid".
+- **A march through three views along the flame**: each view still cannot light what it cannot
+  see, so the result was the views' hard shadows stacked -- a staircase, full shadow to 18.6 cm.
+  Unreal closes this with an unpublished gap-filling guess; worked through, the depth-jump form
+  of it lets light through the rim wherever a ray enters its face near its edge.
+
+**The blur, and the two ways it failed while plausible.** A finite count draws the shadow as
+overlapping copies, one in eight at each view's hard edge. Each view stands for about
+s = cbrt(volume / 8) of the body, whose own penumbra is a ramp s (dR - dB) / dB wide on the
+receiver, so a second pass reads each view at a point jittered across the receiver's plane by
+that, and the jitter averages to the ramp under TAA. dB comes from the first pass: each view that
+finds the receiver hidden reports its occluder's depth.
+- **Without TAA the jitter does not turn**, and a fixed jitter moves each view's copy bodily,
+  sheared by the spread -- worse than the copies. Off TAA the result is the plain average.
+- **A first pass at the receiver alone cut the outer half of every ramp**: past the last view's
+  edge no view is hidden, the lookup returns 1, and where the views' edges coincide (beside a
+  candle's vertical side) that half is most of the step, so the edge came back crisp. The first
+  pass reads at jittered points too, its width the ramp an occluder a body's length from the
+  light would cast.
+
+**The dance is a read, not a redraw.** A light moved by D casts its shadow -D (dR - dB) / dB from
+where it was, so the kept views are read at the receiver moved +D (dR - dB) / dB, D being the
+centre's move since drawing. It is first order: a flame's LEAN is a rotation one shift of the
+centre cannot express, and is what remains of the gap to the current flame's reference
+(`tiles-dance`: 0.135 with it, 0.398 without).
+
+**Movers are drawn over a copy.** A face that sees a kept caster which has moved in the last
+120 frames keeps its still casters in the same face of a STORE block, and each frame it is that
+copy plus the movers. A 0 px match against the scene never moved, at the swing's rest frame, is
+what `tiles-movers` holds; it fails if the overlay is skipped, since the store leaves the mover
+out.
+
+**What else rendered a plausible frame on the way:**
+- **The body a diameter too long**: the fire wrote the whole spine as `source_length`, and the caps
+  carried it 6 mm into the wax, where views inside the candle saw straight through it.
+- **Glass drawn solid**: the depth pass has no transmittance, so a clear pane put the hall clock's
+  dial in shadow. The kept and hero caster sets leave glass out.
+- **A store taken mid-frame lands past the array** until the region grows; the copy refuses the
+  cell as the draw always did, or the blit is an invalid framebuffer.
+- **Jittered reads at a corner** slide off the receiver's plane into the surface beside it; a guard
+  for it was built, moved nothing measured, and was removed. If it shows, that is the place.
 
 ## Water
 
