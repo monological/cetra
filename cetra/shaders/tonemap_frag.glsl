@@ -2,18 +2,19 @@
 in vec2 TexCoords;
 out vec4 FragColor;
 
-// Final post pass: composite bloom onto the linear HDR scene, then apply
-// exposure, ACES tone mapping, and gamma. Mode 0 is a raw copy for frames
-// that are already display-ready (debug render modes, LDR-authored apps).
-// hdrTex arrives pre-exposed; this pass reads it in working space and only
-// applies the residual EV bias, so WS_SCENE_MAX below is the same ceiling the
-// shading passes wrote under.
+// Final post pass: composite bloom onto the linear HDR scene, then the local
+// exposure where it is on, the tone curve and the finishing stack. hdrTex
+// arrives pre-exposed -- the camera's exposure is applied at the scene passes --
+// so this pass reads it in working space, and WS_SCENE_MAX below is the same
+// ceiling the shading passes wrote under.
 #include "view.glsl"
 #include "noise.glsl"
 #include "glare_threshold.glsl"
-// Declares purkinjeAdaptTex on unit 7 -- the metering 1x1. With the glare on 13
-// (spec 13.4), this program samples 14 of 16.
+// Declares purkinjeAdaptTex on unit 7 -- the metering 1x1.
 #include "purkinje.glsl"
+// Declares localExposureTex on unit 14 (spec 13.19). With the glare on 13, this
+// program samples 15 of 16.
+#include "local_exposure.glsl"
 
 uniform sampler2D hdrTex;
 uniform sampler2D bloomTex;
@@ -521,8 +522,9 @@ vec3 purkinjePooled(vec2 uv, float aoFactor, vec3 bloomAdd, float w)
 // both let a caller hand over a uv that did not produce the hdr -- a wrong
 // unsharp mask that still looks exactly like a sharpen. Under --sharpen this
 // runs at five different taps, and each must pool its OWN neighbourhood or the
-// mask measures nothing.
-vec3 sceneToToned(vec2 uv, float aoFactor, vec3 bloomAdd)
+// mask measures nothing. `localExposure` is the centre's, like aoFactor, so the
+// mask measures the scene's edges and not the exposure's.
+vec3 sceneToToned(vec2 uv, float aoFactor, vec3 bloomAdd, float localExposure)
 {
     vec3 c = sceneComposite(uv, aoFactor, bloomAdd);
     /*
@@ -552,7 +554,9 @@ vec3 sceneToToned(vec2 uv, float aoFactor, vec3 bloomAdd)
             }
         }
     }
-    return toneSelect(c);
+    // After the retina, which reads the light as it is, and before the curve:
+    // an exposure, applied to the whole composite with bloom in it.
+    return toneSelect(c * localExposure);
 }
 
 void main()
@@ -679,14 +683,19 @@ void main()
         return;
     }
 
-    vec3 color = sceneToToned(TexCoords, aoFactor, bloomAdd);
+    float localExposure = 1.0;
+    if (localExposureEnabled == 1)
+        localExposure =
+            localExposureFactor(TexCoords, sceneComposite(TexCoords, aoFactor, bloomAdd));
+    vec3 color = sceneToToned(TexCoords, aoFactor, bloomAdd, localExposure);
 
     // Sharpen: unsharp mask on the tonemapped result (4-tap cross)
     if (sharpenEnabled == 1) {
-        vec3 blur = sceneToToned(TexCoords + vec2(texelSize.x, 0.0), aoFactor, bloomAdd) +
-                    sceneToToned(TexCoords - vec2(texelSize.x, 0.0), aoFactor, bloomAdd) +
-                    sceneToToned(TexCoords + vec2(0.0, texelSize.y), aoFactor, bloomAdd) +
-                    sceneToToned(TexCoords - vec2(0.0, texelSize.y), aoFactor, bloomAdd);
+        vec2 dx = vec2(texelSize.x, 0.0), dy = vec2(0.0, texelSize.y);
+        vec3 blur = sceneToToned(TexCoords + dx, aoFactor, bloomAdd, localExposure) +
+                    sceneToToned(TexCoords - dx, aoFactor, bloomAdd, localExposure) +
+                    sceneToToned(TexCoords + dy, aoFactor, bloomAdd, localExposure) +
+                    sceneToToned(TexCoords - dy, aoFactor, bloomAdd, localExposure);
         color = clamp(color + sharpenStrength * (color - blur * 0.25), 0.0, 1.0);
     }
 

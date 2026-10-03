@@ -328,6 +328,19 @@ typedef struct PostFX {
     struct Glare* glare;   // engine-owned; made on first use
     bool glare_failed;     // could not be made; never retried
 
+    // Local exposure (spec 13.19): an exposure per pixel on top of the camera's, from the
+    // frame's luminance split into an edge-aware base and its detail. Off by default; at the
+    // defaults below it is the identity.
+    bool local_exposure_enabled;
+    float local_exposure_highlights;      // base contrast above middle grey, 1 = unchanged (0.6-1)
+    float local_exposure_shadows;         // and below it
+    float local_exposure_detail;          // detail contrast, 1 = unchanged
+    float local_exposure_blend;           // share of the base from the blurred luminance, 0..1
+    float local_exposure_kernel;          // the blurred luminance's kernel, a share of frame width
+    float local_exposure_grey_bias;       // stops added to the middle grey the base scales about
+    struct LocalExposure* local_exposure; // engine-owned; made on first use
+    bool local_exposure_failed;           // could not be made; never retried
+
     bool ssao_enabled;
     float ssao_radius; // Occlusion reach in view-space units
     float ssao_strength;
