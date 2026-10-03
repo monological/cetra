@@ -291,14 +291,31 @@ static void pivot_at(float y, float d, vec3 pivot) {
     kit_frame_point(&CLOCK, 0.0f, y, d, pivot);
 }
 
-static void turn(SceneNode* node, float y, float d, float angle) {
-    if (!node)
-        return;
+// A part's transform: its pivot's place, turned by `angle` about the case's d.
+static void part_transform(float y, float d, float angle, mat4 out) {
     vec3 pivot = {0.0f, 0.0f, 0.0f}, axis = {0.0f, 0.0f, 0.0f};
     pivot_at(y, d, pivot);
     kit_frame_dir(&CLOCK, 0.0f, 0.0f, 1.0f, axis);
-    glm_translate_make(node->original_transform, pivot);
-    glm_rotate(node->original_transform, angle, axis);
+    glm_translate_make(out, pivot);
+    glm_rotate(out, angle, axis);
+}
+
+static void turn(SceneNode* node, float y, float d, float angle) {
+    if (node)
+        part_transform(y, d, angle, node->original_transform);
+}
+
+static float swing_at(double time) {
+    return SWING * (float)sin(2.0 * GLM_PI * time / PERIOD);
+}
+
+void clock_bob(double time, vec3 out) {
+    mat4 m = GLM_MAT4_IDENTITY_INIT;
+    part_transform(PIVOT_Y, PIVOT_D, swing_at(time), m);
+    const KitFrame f = {{0.0f, 0.0f, 0.0f}, CLOCK.yaw};
+    vec3 bob = {0.0f, 0.0f, 0.0f};
+    kit_frame_point(&f, 0.0f, -PENDULUM_L, -0.012f, bob);
+    glm_mat4_mulv3(m, bob, 1.0f, out);
 }
 
 static Sound* beat_sound(AudioSystem* audio, const char* path) {
@@ -330,8 +347,7 @@ void clock_start(Clock* clock, Engine* engine, Scene* scene, AudioSystem* audio)
  * hand steps. The other hands creep, geared down from the same train.
  */
 void clock_update(Clock* clock, double time, float hearing) {
-    const float swing = SWING * (float)sin(2.0 * GLM_PI * time / PERIOD);
-    turn(clock->pendulum, PIVOT_Y, PIVOT_D, swing);
+    turn(clock->pendulum, PIVOT_Y, PIVOT_D, swing_at(time));
 
     const long beat = (long)floor(time * 2.0 / PERIOD + 0.5);
     if (clock->beat >= 0 && beat != clock->beat) {

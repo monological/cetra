@@ -13,19 +13,28 @@
  * that join them.
  */
 
-// The kinds of link, as the graph numbers them.
-enum { CAT_LINK_WALK, CAT_LINK_STAIR, CAT_LINK_JUMP, CAT_LINK_KINDS };
+// The kinds of link, as the graph numbers them. A RAIL link is walked along the gallery's hand
+// rail, one way, and only by a cat that set out to walk it: a route for anything else leaves
+// it out.
+enum { CAT_LINK_WALK, CAT_LINK_STAIR, CAT_LINK_JUMP, CAT_LINK_RAIL, CAT_LINK_KINDS };
 
 // How the cat rests at a place, if it stops there at all.
 typedef enum { CAT_REST_NONE, CAT_REST_CURL, CAT_REST_LIE, CAT_REST_SIT } CatRest;
+
+// A place's tag: somewhere too narrow to turn round on, so every turn there is made in the air.
+#define CAT_TAG_BEAM 1u
 
 typedef struct CatPlace {
     const char* name;
     vec3 feet;    // where its feet are standing there
     float radius; // the clear ground round it, which a corner is rounded inside
     CatRest rest;
-    float yaw; // which way it faces resting there, radians about +y, 0 facing +z
+    float yaw;     // which way it faces resting there, radians about +y, 0 facing +z
+    uint32_t tags; // CAT_TAG_*
 } CatPlace;
+
+// What a route may use: everything but the rail, or everything.
+NavQuery cat_places_query(bool rail);
 
 // Node i of the graph is CAT_PLACES[i].
 extern const CatPlace CAT_PLACES[];

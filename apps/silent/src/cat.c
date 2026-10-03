@@ -30,7 +30,8 @@ static const vec3 CAT_BOX = {0.07f, 0.16f, 0.20f};
 #define TURN_ON_SPOT (100.0f * GLM_PIf / 180.0f)
 #define TURN_BY_CLIP (70.0f * GLM_PIf / 180.0f)
 #define SQUARE       (6.0f * GLM_PIf / 180.0f)
-#define EASE_ROUND   2.5f  // radians a second
+#define TURN_IN_AIR  (100.0f * GLM_PIf / 180.0f) // the most a jump turns between its two ends
+#define EASE_ROUND   2.5f                        // radians a second
 #define WALK_STEER   8.0f  // how fast a walk's facing follows its path, per second
 #define GRAVITY      9.81f // what a jump's arc is flown under, for its time of flight
 
@@ -103,9 +104,10 @@ static void dress(Material* m, const Coat* coat) {
 }
 
 // A material of silent's own standing in for an imported one: every value the import gave it,
-// then the cat's colours and coat. Its own because a material belongs to the scene that first
-// registers it, and the import's belong to the model's scene, which is never drawn.
-static Material* own_material(const Material* imported, const CatDesc* desc) {
+// then the cat's coat; its colours are cat_set_fur's and cat_set_eyes'. Its own because a
+// material belongs to the scene that first registers it, and the import's belong to the
+// model's scene, which is never drawn.
+static Material* own_material(const Material* imported) {
     Material* m = create_material();
     if (!m)
         return NULL;
@@ -122,44 +124,71 @@ static Material* own_material(const Material* imported, const CatDesc* desc) {
     m->doubleSided = imported->doubleSided;
     const char* name = imported->name ? imported->name : "";
     m->name = strdup(name);
-
-    vec3 fur = {0.0f, 0.0f, 0.0f};
-    linear(desc->fur, fur);
-    const float luminance = 0.2126f * fur[0] + 0.7152f * fur[1] + 0.0722f * fur[2];
-    const bool pink = luminance > PINK_ABOVE;
     if (!strcmp(name, "cat_fur")) {
-        glm_vec3_copy(fur, m->albedo);
         dress(m, &BODY_COAT);
     } else if (!strcmp(name, "cat_eye")) {
-        linear(desc->eyes, m->albedo);
         // Its glow is the eyeshine, which lights nothing: no panel is derived from it.
-        glm_vec3_copy(m->albedo, m->emissive);
         m->emissive_strength = 0.0f;
         m->emissive_light = 1;
     } else if (!strcmp(name, "cat_ear")) {
-        if (pink)
-            linear((vec3){0.82f, 0.6f, 0.6f}, m->albedo);
         dress(m, &EAR_COAT);
-    } else if (!strcmp(name, "cat_nose") && pink) {
-        linear((vec3){0.79f, 0.55f, 0.55f}, m->albedo);
     }
     return m;
 }
 
-static void own_materials(SceneNode* node, const CatDesc* desc, Cat* cat) {
+static void own_materials(SceneNode* node, Cat* cat) {
     for (size_t i = 0; i < node->mesh_count; i++) {
         Mesh* mesh = node->meshes[i];
-        Material* m = mesh->material ? own_material(mesh->material, desc) : NULL;
+        Material* m = mesh->material ? own_material(mesh->material) : NULL;
         if (!m)
             continue;
         mesh->material = m;
-        if (m->name && !strcmp(m->name, "cat_eye"))
+        const char* name = m->name ? m->name : "";
+        if (!strcmp(name, "cat_eye")) {
             cat->eye = m;
+        } else if (!strcmp(name, "cat_fur")) {
+            cat->fur = m;
+        } else if (!strcmp(name, "cat_ear")) {
+            cat->ear = m;
+            glm_vec3_copy(m->albedo, cat->ear_dark);
+        } else if (!strcmp(name, "cat_nose")) {
+            cat->nose = m;
+            glm_vec3_copy(m->albedo, cat->nose_dark);
+        }
         if (mesh->is_skinned && !cat->skin)
             cat->skin = node;
     }
     for (size_t i = 0; i < node->children_count; i++)
-        own_materials(node->children[i], desc, cat);
+        own_materials(node->children[i], cat);
+}
+
+void cat_set_fur(Cat* cat, const vec3 srgb) {
+    glm_vec3_copy((float*)srgb, cat->fur_srgb);
+    vec3 fur = {0.0f, 0.0f, 0.0f};
+    linear(srgb, fur);
+    if (cat->fur)
+        glm_vec3_copy(fur, cat->fur->albedo);
+    const bool pink = 0.2126f * fur[0] + 0.7152f * fur[1] + 0.0722f * fur[2] > PINK_ABOVE;
+    if (cat->ear) {
+        if (pink)
+            linear((vec3){0.82f, 0.6f, 0.6f}, cat->ear->albedo);
+        else
+            glm_vec3_copy(cat->ear_dark, cat->ear->albedo);
+    }
+    if (cat->nose) {
+        if (pink)
+            linear((vec3){0.79f, 0.55f, 0.55f}, cat->nose->albedo);
+        else
+            glm_vec3_copy(cat->nose_dark, cat->nose->albedo);
+    }
+}
+
+void cat_set_eyes(Cat* cat, const vec3 srgb) {
+    glm_vec3_copy((float*)srgb, cat->eyes_srgb);
+    if (!cat->eye)
+        return;
+    linear(srgb, cat->eye->albedo);
+    glm_vec3_copy(cat->eye->albedo, cat->eye->emissive);
 }
 
 // The model as a node that is not its scene's root, which cannot be moved under one of its
@@ -241,15 +270,25 @@ static bool eyes_shut(const Cat* cat) {
            (cat->clip == CAT_CLIP_UNCURL && cat->clip_seconds < 0.4f);
 }
 
+bool cat_eyes_shut(const Cat* cat) {
+    return cat->entity && eyes_shut(cat);
+}
+
 // ---------------------------------------------------------------------------------------------
 // Going from place to place
 
 static void next_leg(Cat* cat);
+static void begin_act(Cat* cat, int clip);
 
-// Up or down its postures, a transition at a time, to `want`, then holding it.
+// Up or down its postures, a transition at a time, to `want`, then holding it -- or, standing
+// with an act waiting for it, playing that.
 static void shift_to(Cat* cat, CatPosture want) {
     cat->want = want;
     if (cat->posture == want) {
+        if (want == CAT_STAND && cat->act_pending >= 0) {
+            begin_act(cat, cat->act_pending);
+            return;
+        }
         play(cat, HOLD[want], 0.25f);
         cat->mode = CAT_RESTING;
         if (want == CAT_STAND && cat->goal >= 0)
@@ -257,14 +296,130 @@ static void shift_to(Cat* cat, CatPosture want) {
         return;
     }
     cat->mode = CAT_SHIFTING;
-    play(cat, want > cat->posture ? UP[cat->posture] : DOWN[cat->posture], 0.15f);
+    cat->shift_dir = want > cat->posture ? 1 : -1;
+    play(cat, cat->shift_dir > 0 ? UP[cat->posture] : DOWN[cat->posture], 0.15f);
 }
 
+// The transition under way is finished, whichever way `want` has turned since it began.
 static void step_shift(Cat* cat) {
     if (!played(cat))
         return;
-    cat->posture = cat->want > cat->posture ? cat->posture + 1 : cat->posture - 1;
+    cat->posture = (CatPosture)((int)cat->posture + cat->shift_dir);
     shift_to(cat, cat->want);
+}
+
+// ---------------------------------------------------------------------------------------------
+// In place
+
+static bool looping_act(int clip) {
+    return clip >= 0 && CAT_CLIPS[clip].looping;
+}
+
+static void begin_act(Cat* cat, int clip) {
+    cat->act_pending = -1;
+    cat->act = clip;
+    cat->act_ends = clip == CAT_CLIP_GROOM ? CAT_SIT : CAT_STAND;
+    cat->mode = CAT_ACTING;
+    play(cat, clip, clip == CAT_CLIP_STARTLE ? 0.08f : 0.25f);
+}
+
+// Out of an act into the posture it leaves the cat in, and on if it has been sent somewhere.
+static void end_act(Cat* cat) {
+    cat->act = -1;
+    cat->posture = cat->want = cat->act_ends;
+    shift_to(cat, cat->goal >= 0 ? CAT_STAND : cat->posture);
+}
+
+bool cat_act(Cat* cat, int clip) {
+    if (!cat->entity || !cat->attached || cat->held || clip < 0 || clip >= CAT_CLIP_COUNT)
+        return false;
+    const bool travelling =
+        cat->mode == CAT_WALKING || cat->mode == CAT_TURNING || cat->mode == CAT_JUMPING;
+    if (clip == CAT_CLIP_STARTLE) {
+        // Anywhere it has its feet under it on the level: not in the air, on the stair, or
+        // part way through a quarter turn.
+        NavSample s;
+        nav_follower_sample(&cat->follower, &s);
+        if (cat->mode == CAT_JUMPING || (cat->mode == CAT_TURNING && cat->turn_clip) ||
+            (cat->mode == CAT_WALKING && s.kind != CAT_LINK_WALK))
+            return false;
+        cat->goal = -1;
+        cat->posture = cat->want = CAT_STAND;
+        begin_act(cat, clip);
+        return true;
+    }
+    if (travelling || cat->act_pending >= 0)
+        return false;
+    if (clip == CAT_CLIP_GROOM) {
+        if (cat->posture != CAT_SIT || (cat->mode != CAT_RESTING && cat->act != CAT_CLIP_GROOM))
+            return false;
+        begin_act(cat, clip);
+        return true;
+    }
+    if (clip == CAT_CLIP_HISS) {
+        if (cat->posture != CAT_STAND && cat->act != CAT_CLIP_STARTLE)
+            return false;
+        cat->posture = cat->want = CAT_STAND;
+        begin_act(cat, clip);
+        return true;
+    }
+    if (clip == CAT_CLIP_STRETCH) {
+        if (cat->mode == CAT_ACTING)
+            return false;
+        cat->act_pending = clip;
+        shift_to(cat, CAT_STAND);
+        return true;
+    }
+    return false;
+}
+
+static void step_act(Cat* cat) {
+    if (!looping_act(cat->act) && played(cat))
+        end_act(cat);
+}
+
+// The bones a vocal moves, so the body under it goes on with what it was doing.
+static void vocal_mask(const Cat* cat, int clip, float* mask) {
+    static const char* MOUTH[] = {"Jaw", "Ear.L", "Ear.R", NULL};
+    static const char* YAWN[] = {"Jaw", "Ear.L", "Ear.R", "Lid.L", "Lid.R", NULL};
+    static const char* LIDS[] = {"Lid.L", "Lid.R", NULL};
+    static const char* EAR_L[] = {"Ear.L", NULL};
+    static const char* EAR_R[] = {"Ear.R", NULL};
+    const char** bones = clip == CAT_CLIP_YAWN                                   ? YAWN
+                         : clip == CAT_CLIP_BLINK || clip == CAT_CLIP_SLOW_BLINK ? LIDS
+                         : clip == CAT_CLIP_EAR_FLICK_L                          ? EAR_L
+                         : clip == CAT_CLIP_EAR_FLICK_R                          ? EAR_R
+                                                                                 : MOUTH;
+    Skeleton* skeleton = cat->animator->state->skeleton;
+    memset(mask, 0, sizeof(float) * MAX_BONES);
+    for (int i = 0; bones[i]; i++) {
+        const int b = get_bone_index_by_name(skeleton, bones[i]);
+        if (b >= 0)
+            mask[b] = 1.0f;
+    }
+}
+
+bool cat_vocal(Cat* cat, int clip) {
+    if (!cat->entity || !cat->attached || clip < 0 || clip >= CAT_CLIP_COUNT || !cat->clips[clip])
+        return false;
+    if (cat->vocal >= 0 && cat->vocal_seconds < CAT_CLIPS[cat->vocal].seconds)
+        return false;
+    float mask[MAX_BONES];
+    vocal_mask(cat, clip, mask);
+    animator_play_layer(cat->animator, cat->clips[clip], mask, 0.06f, 0.1f, false);
+    cat->vocal = clip;
+    cat->vocal_seconds = 0.0f;
+    return true;
+}
+
+void cat_look(Cat* cat, const vec3 world) {
+    cat->look_on = world != NULL;
+    if (world)
+        glm_vec3_copy((float*)world, cat->look_target);
+}
+
+bool cat_settled(const Cat* cat) {
+    return cat->entity && cat->goal < 0 && cat->mode == CAT_RESTING && cat->act_pending < 0;
 }
 
 // A turn on the spot toward `face`: a quarter-turn clip while much is left, easing round once
@@ -279,6 +434,11 @@ static void turn_to(Cat* cat, float face) {
          0.15f);
 }
 
+// What it takes up on arriving: what it was told to, or what the place says.
+static CatPosture arrival_posture(const Cat* cat) {
+    return cat->settle >= 0 ? (CatPosture)cat->settle : resting(CAT_PLACES[cat->at].rest);
+}
+
 // Arrived where it was going: round to face the way it rests there, and down into its posture.
 static void arrive(Cat* cat) {
     cat->at = cat->follower.at;
@@ -288,7 +448,7 @@ static void arrive(Cat* cat) {
         turn_to(cat, p->yaw);
         return;
     }
-    shift_to(cat, resting(p->rest));
+    shift_to(cat, arrival_posture(cat));
 }
 
 static float link_heading(const Cat* cat, int link) {
@@ -313,6 +473,17 @@ static void jump(Cat* cat, int link) {
     cat->mode = CAT_JUMPING;
     cat->landed = false;
     cat->leg = link;
+    // It turns in the air to land facing the way it goes on, within a quarter turn and a bit
+    // of the way it jumped -- onto the hand rail that is the only place to turn at all.
+    const float heading = link_heading(cat, link);
+    const NavFollower* f = &cat->follower;
+    cat->jump_yaw0 = cat->yaw;
+    cat->jump_yaw1 = heading;
+    if (f->leg + 1 < f->route.count) {
+        const float next = link_heading(cat, f->route.links[f->leg + 1]);
+        if (fabsf(wrap_angle(next - heading)) <= TURN_IN_AIR)
+            cat->jump_yaw1 = next;
+    }
 }
 
 // The next link of the route, from standing at its start: squared up to it first if it needs
@@ -324,10 +495,15 @@ static void next_leg(Cat* cat) {
         arrive(cat);
         return;
     }
-    const int kind = cat->places->links[s.link].kind;
+    const NavLink* l = &cat->places->links[s.link];
+    const int kind = l->kind;
     const float heading = link_heading(cat, s.link);
     const float off = fabsf(wrap_angle(heading - cat->yaw));
-    if (off > (kind == CAT_LINK_WALK ? TURN_ON_SPOT : SQUARE)) {
+    // Nothing turns on the spot on a beam: along it the way is straight ahead, and off it the
+    // turn is made in the air.
+    const bool beam = (cat->places->nodes[l->from].tags & CAT_TAG_BEAM) != 0;
+    const float square = beam ? GLM_PIf : kind == CAT_LINK_WALK ? TURN_ON_SPOT : SQUARE;
+    if (off > square) {
         turn_to(cat, heading);
         return;
     }
@@ -337,12 +513,13 @@ static void next_leg(Cat* cat) {
         return;
     }
     cat->mode = CAT_WALKING;
-    const NavLink* l = &cat->places->links[s.link];
     const bool up = cat->places->nodes[l->to].position[1] > cat->places->nodes[l->from].position[1];
+    static const int GAIT[] = {
+        [CAT_WALK] = CAT_CLIP_WALK, [CAT_TROT] = CAT_CLIP_TROT, [CAT_RUN] = CAT_CLIP_RUN};
     play(cat,
-         kind == CAT_LINK_STAIR ? (up ? CAT_CLIP_STAIR_UP : CAT_CLIP_STAIR_DOWN)
-         : cat->trot            ? CAT_CLIP_TROT
-                                : CAT_CLIP_WALK,
+         kind == CAT_LINK_STAIR  ? (up ? CAT_CLIP_STAIR_UP : CAT_CLIP_STAIR_DOWN)
+         : kind == CAT_LINK_RAIL ? CAT_CLIP_BEAM_WALK
+                                 : GAIT[cat->gait],
          0.2f);
 }
 
@@ -361,7 +538,7 @@ static void step_turn(Cat* cat, float turned, float dt) {
     }
     cat->yaw = cat->face;
     if (cat->follower.arrived)
-        shift_to(cat, resting(CAT_PLACES[cat->at].rest));
+        shift_to(cat, arrival_posture(cat));
     else
         next_leg(cat);
 }
@@ -401,6 +578,11 @@ static void step_walk(Cat* cat, float moved, const vec3 player, float dt) {
         next_leg(cat);
         return;
     }
+    // Along the rail it faces exactly the way the rail runs.
+    if (s.kind == CAT_LINK_RAIL) {
+        cat->yaw = s.heading;
+        return;
+    }
     cat->yaw =
         wrap_angle(cat->yaw + wrap_angle(s.heading - cat->yaw) * (1.0f - expf(-dt * WALK_STEER)));
 }
@@ -415,12 +597,25 @@ static void step_jump(Cat* cat) {
         } else {
             nav_follower_set_progress(&cat->follower, fmaxf(u, 0.0f));
         }
+        const float turned = glm_smoothstep(0.0f, 1.0f, glm_clamp(u, 0.0f, 1.0f));
+        cat->yaw =
+            wrap_angle(cat->jump_yaw0 + turned * wrap_angle(cat->jump_yaw1 - cat->jump_yaw0));
     }
     if (played(cat))
         next_leg(cat);
 }
 
-bool cat_go(Cat* cat, const char* place, bool trot) {
+static bool go_with(Cat* cat, const char* place, CatGait gait, int settle, NavQuery query);
+
+bool cat_go(Cat* cat, const char* place, CatGait gait, int settle) {
+    return go_with(cat, place, gait, settle, cat_places_query(false));
+}
+
+bool cat_go_by_rail(Cat* cat, const char* place, int settle) {
+    return go_with(cat, place, CAT_WALK, settle, cat_places_query(true));
+}
+
+static bool go_with(Cat* cat, const char* place, CatGait gait, int settle, NavQuery query) {
     if (!cat->entity || cat->held)
         return false;
     const int goal = nav_graph_find(cat->places, place);
@@ -428,19 +623,46 @@ bool cat_go(Cat* cat, const char* place, bool trot) {
         fprintf(stderr, "silent: the cat knows no place called '%s'\n", place);
         return false;
     }
-    if (cat->mode == CAT_RESTING || cat->mode == CAT_SHIFTING) {
-        if (!nav_follower_start(&cat->follower, cat->places, cat->at, goal, NULL)) {
-            fprintf(stderr, "silent: the cat has no way from %s to %s\n", CAT_PLACES[cat->at].name,
-                    place);
-            return false;
+    cat->settle = settle;
+    // Already there: only the posture changes.
+    if (cat->follower.arrived && goal == cat->at && cat->mode != CAT_TURNING) {
+        cat->goal = -1;
+        if (cat->mode == CAT_ACTING && looping_act(cat->act)) {
+            cat->act = -1;
+            cat->posture = cat->want = cat->act_ends;
+            cat->mode = CAT_RESTING;
         }
-    } else if (!nav_follower_replan(&cat->follower, goal)) {
+        if (cat->mode == CAT_RESTING)
+            shift_to(cat, arrival_posture(cat));
+        else if (cat->mode == CAT_SHIFTING)
+            cat->want = arrival_posture(cat);
+        return true;
+    }
+    // From a place it starts afresh; from part way along a link it replans from there, under
+    // the new query, keeping the old one if there is no way.
+    const NavQuery was = cat->follower.query;
+    if (!cat->follower.arrived)
+        cat->follower.query = query;
+    if (cat->follower.arrived
+            ? !nav_follower_start(&cat->follower, cat->places, cat->at, goal, &query)
+            : !nav_follower_replan(&cat->follower, goal)) {
+        cat->follower.query = was;
+        fprintf(stderr, "silent: the cat has no way from %s to %s\n", CAT_PLACES[cat->at].name,
+                place);
         return false;
     }
     cat->goal = goal;
-    cat->trot = trot;
+    cat->gait = gait;
+    cat->leg = -1; // whatever plays, the next link's clip is the gait's
+    if (cat->mode == CAT_ACTING && looping_act(cat->act)) {
+        cat->act = -1;
+        cat->posture = cat->want = cat->act_ends;
+        cat->mode = CAT_RESTING;
+    }
     if (cat->mode == CAT_RESTING)
         shift_to(cat, CAT_STAND);
+    else if (cat->mode == CAT_SHIFTING)
+        cat->want = CAT_STAND;
     return true;
 }
 
@@ -448,6 +670,7 @@ void cat_step(Cat* cat, const vec3 player, float dt) {
     if (!cat->entity || !cat->attached || cat->held)
         return;
     cat->clip_seconds += dt * cat->animator->speed;
+    cat->vocal_seconds += dt;
     vec3 travel = {0.0f, 0.0f, 0.0f};
     float turned = 0.0f;
     animator_take_root_motion(cat->animator, travel, &turned);
@@ -467,6 +690,9 @@ void cat_step(Cat* cat, const vec3 player, float dt) {
         case CAT_JUMPING:
             step_jump(cat);
             break;
+        case CAT_ACTING:
+            step_act(cat);
+            break;
     }
     NavSample s;
     nav_follower_sample(&cat->follower, &s);
@@ -478,7 +704,7 @@ void cat_step(Cat* cat, const vec3 player, float dt) {
 void cat_trace(const Cat* cat, int step) {
     if (!cat->entity)
         return;
-    static const char* MODES[] = {"resting", "shifting", "turning", "walking", "jumping"};
+    static const char* MODES[] = {"resting", "shifting", "turning", "walking", "jumping", "acting"};
     const float* p = cat->entity->position;
     char link[80] = "-";
     NavSample s;
@@ -501,6 +727,8 @@ bool cat_create(Cat* cat, const CatDesc* desc, Game* game, Scene* scene, Physics
     cat->eye_bones[0] = cat->eye_bones[1] = -1;
     cat->goal = -1;
     cat->leg = -1;
+    cat->settle = -1;
+    cat->act = cat->act_pending = cat->vocal = -1;
     Engine* engine = game->engine;
     (void)scene;
 
@@ -542,7 +770,9 @@ bool cat_create(Cat* cat, const CatDesc* desc, Game* game, Scene* scene, Physics
     SceneNode* model = take_model(library);
     if (!model)
         return false;
-    own_materials(model, desc, cat);
+    own_materials(model, cat);
+    cat_set_fur(cat, desc->fur);
+    cat_set_eyes(cat, desc->eyes);
     ShaderProgram* skinned = engine_find_program(engine, CETRA_PROGRAM_PBR_SKINNED);
     if (!skinned) {
         skinned = create_pbr_skinned_program();
@@ -594,9 +824,22 @@ bool cat_create(Cat* cat, const CatDesc* desc, Game* game, Scene* scene, Physics
     cat->eye_bones[0] = get_bone_index_by_name(skeleton, "Eye.L");
     cat->eye_bones[1] = get_bone_index_by_name(skeleton, "Eye.R");
     cat->eyeshine = desc->eyeshine && cat->eye && cat->skin;
+
+    // The head turns on the neck: the upper neck takes a share and the head the rest, so a
+    // glance over the shoulder bends the neck rather than screwing the head round on it.
+    LookAtSystem* look = create_look_at_system(skeleton);
+    if (look && look_at_add_bone(look, "Neck2", 0.4f) && look_at_add_bone(look, "Head", 0.6f)) {
+        glm_vec3_copy((vec3){0.0f, CAT_EYE_Y, CAT_EYE_Z}, look->eye);
+        look->blend_rate = 3.0f;
+        cat->animator->state->look_at = look;
+        cat->look = look;
+    } else {
+        free_look_at_system(look);
+    }
+
     printf("silent: the cat at %s, %s\n", place->name, CAT_CLIPS[clip].name);
     cat->go = desc->go;
-    cat->go_trot = desc->trot;
+    cat->go_gait = desc->gait;
     return true;
 }
 
@@ -657,6 +900,50 @@ static float shine_now(const Cat* cat, Game* game, const Lights* lights, const v
     return fminf(SHINE_MAX, SHINE_GAIN * lux * facing);
 }
 
+bool cat_eye(const Cat* cat, vec3 at, vec3 forward) {
+    if (!cat->entity || !cat->skin)
+        return false;
+    glm_vec3_zero(at);
+    glm_vec3_zero(forward);
+    for (int side = 0; side < 2; side++) {
+        vec3 a = {0.0f, 0.0f, 0.0f}, g = {0.0f, 0.0f, 0.0f};
+        if (!eye_world(cat, side, a, g))
+            return false;
+        glm_vec3_muladds(a, 0.5f, at);
+        glm_vec3_muladds(g, 0.5f, forward);
+    }
+    glm_vec3_normalize(forward);
+    return true;
+}
+
+void cat_feet(const Cat* cat, vec3 out) {
+    glm_vec3_copy((float*)cat->entity->position, out);
+    out[1] -= CAT_BOX[1];
+}
+
+// Where the rig's model space is in the world now: the entity's pose this step, carried down
+// the fixed chain of nodes between it and the skin -- not the skin's global, which is the last
+// frame's until the walk after this hook.
+static void rig_to_world(const Cat* cat, mat4 out) {
+    mat4 chain;
+    glm_mat4_identity(chain);
+    for (const SceneNode* n = cat->skin; n && n != cat->holder; n = n->parent)
+        glm_mat4_mul((vec4*)n->original_transform, chain, chain);
+    mat4 entity;
+    entity_get_transform_matrix(cat->entity, entity);
+    glm_mat4_mul(entity, chain, out);
+}
+
+// Whether the head is its own to turn: not asleep, in the air, through a quarter turn, or
+// busy in a stretch, a startle or grooming.
+static bool head_free(const Cat* cat) {
+    if (eyes_shut(cat) || cat->mode == CAT_JUMPING || (cat->mode == CAT_TURNING && cat->turn_clip))
+        return false;
+    if (cat->mode == CAT_ACTING && cat->act != CAT_CLIP_HISS)
+        return false;
+    return cat->posture != CAT_CURL;
+}
+
 void cat_update(Cat* cat, Game* game, Scene* scene, const Lights* lights, const vec3 viewer,
                 float dt) {
     if (!cat->entity)
@@ -670,10 +957,20 @@ void cat_update(Cat* cat, Game* game, Scene* scene, const Lights* lights, const 
         cat->attached = true;
         // Sent somewhere from the command line: it sets off once it can be seen to.
         if (cat->go)
-            cat_go(cat, cat->go, cat->go_trot);
+            go_with(cat, cat->go, cat->go_gait, -1, cat_places_query(true));
     }
     const float target = shine_now(cat, game, lights, viewer);
     cat->shine += (target - cat->shine) * (1.0f - expf(-dt / SHINE_EASE));
     if (cat->eye)
         cat->eye->emissive_strength = cat->shine;
+
+    if (cat->look) {
+        mat4 world = GLM_MAT4_IDENTITY_INIT;
+        rig_to_world(cat, world);
+        look_at_set_world(cat->look, world);
+        if (cat->look_on && head_free(cat))
+            look_at_set_target(cat->look, cat->look_target);
+        else
+            look_at_clear_target(cat->look);
+    }
 }
