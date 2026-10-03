@@ -32,8 +32,18 @@ struct Sound {
     };
     bool continuous; // tone: no auto-stop, so it plays until stopped
     ma_uint64 beep_frames;
+    AudioBus bus;       // what a voice copied from it is routed through
     AudioSystem* audio; // borrowed; the tone stop-time and free_sound reach the engine here
 };
+
+// One pooled voice: a copy of a decoded sound, playing once and reaped at its end.
+typedef struct AudioVoice {
+    ma_sound sound;
+    bool live;
+    uint32_t follow;  // the entity it rides, by id, or 0
+    vec3 offset;      // in that entity's frame
+    uint64_t started; // the order voices were started in, for stealing the oldest
+} AudioVoice;
 
 struct AudioSystem {
     ma_engine engine;
@@ -47,11 +57,16 @@ struct AudioSystem {
     Sound** sounds; // every held Sound, for teardown
     size_t sound_count;
     size_t sound_cap;
+    AudioVoice voices[AUDIO_VOICE_MAX];
+    uint64_t voices_started;
 };
 
-// The AUDIO_SOURCE component payload: a Sound placed at its entity every frame.
+// The AUDIO_SOURCE component payload: up to AUDIO_SOURCE_MAX Sounds, each placed every frame
+// at its own offset in the entity's frame.
 typedef struct AudioSource {
-    Sound* sound; // owned; released with the component (the Sound knows its system)
+    Sound* sounds[AUDIO_SOURCE_MAX]; // owned; released with the component
+    vec3 offsets[AUDIO_SOURCE_MAX];
+    int count;
 } AudioSource;
 
 // MASTER routes to the engine endpoint (NULL group); the rest to their group.
@@ -90,6 +105,7 @@ static void sound_destroy(Sound* s) {
 static Sound* sound_over_source(AudioSystem* audio, Sound* s, AudioBus bus, const char* what) {
     ma_data_source* source =
         s->kind == SOUND_TONE ? (ma_data_source*)&s->waveform : (ma_data_source*)&s->noise;
+    s->bus = bus;
     if (ma_sound_init_from_data_source(&audio->engine, source, MA_SOUND_FLAG_NO_SPATIALIZATION,
                                        group_for(audio, bus), &s->sound) != MA_SUCCESS) {
         log_error("audio: %s sound init failed", what);
@@ -145,6 +161,9 @@ AudioSystem* create_audio_system(bool headless) {
 void free_audio_system(AudioSystem* audio) {
     if (!audio)
         return;
+    for (int i = 0; i < AUDIO_VOICE_MAX; i++)
+        if (audio->voices[i].live)
+            ma_sound_uninit(&audio->voices[i].sound);
     for (size_t i = 0; i < audio->sound_count; i++)
         sound_destroy(audio->sounds[i]);
     free(audio->sounds);
@@ -176,11 +195,76 @@ void audio_set_bus_volume(AudioSystem* audio, AudioBus bus, float volume) {
         ma_sound_group_set_volume(group, volume);
 }
 
+// A free voice, or the oldest playing one stopped and handed over.
+static AudioVoice* take_voice(AudioSystem* audio) {
+    AudioVoice* oldest = NULL;
+    for (int i = 0; i < AUDIO_VOICE_MAX; i++) {
+        AudioVoice* v = &audio->voices[i];
+        if (!v->live)
+            return v;
+        if (!oldest || v->started < oldest->started)
+            oldest = v;
+    }
+    ma_sound_uninit(&oldest->sound);
+    oldest->live = false;
+    return oldest;
+}
+
+static void place_voice(AudioVoice* v, struct Entity* e) {
+    vec3 p;
+    glm_vec3_copy(v->offset, p);
+    if (e) {
+        mat4 m = GLM_MAT4_IDENTITY_INIT;
+        entity_get_transform_matrix(e, m);
+        glm_mat4_mulv3(m, v->offset, 1.0f, p);
+    }
+    ma_sound_set_position(&v->sound, p[0], p[1], p[2]);
+}
+
+// Start a voice whose sound is initialised: its gain, rate and place from the desc.
+static void start_voice(AudioSystem* audio, AudioVoice* v, const AudioVoiceDesc* d) {
+    v->live = true;
+    v->started = ++audio->voices_started;
+    v->follow = d && d->follow ? d->follow->id : 0;
+    glm_vec3_zero(v->offset);
+    if (d)
+        glm_vec3_copy((float*)d->position, v->offset);
+    ma_sound_set_volume(&v->sound, d && d->volume > 0.0f ? d->volume : 1.0f);
+    ma_sound_set_pitch(&v->sound, d && d->pitch > 0.0f ? d->pitch : 1.0f);
+    if (d && !d->flat)
+        place_voice(v, (struct Entity*)d->follow);
+    ma_sound_start(&v->sound);
+}
+
+bool audio_play_voice(AudioSystem* audio, const Sound* prototype, const AudioVoiceDesc* desc) {
+    if (!audio || !prototype)
+        return false;
+    if (prototype->kind != SOUND_FILE) {
+        log_error("audio_play_voice: a voice copies a sound from a file; this one is generated");
+        return false;
+    }
+    AudioVoice* v = take_voice(audio);
+    const ma_uint32 flags = desc && !desc->flat ? 0 : MA_SOUND_FLAG_NO_SPATIALIZATION;
+    if (ma_sound_init_copy(&audio->engine, &prototype->sound, flags,
+                           group_for(audio, prototype->bus), &v->sound) != MA_SUCCESS) {
+        log_error("audio_play_voice: could not copy the sound");
+        return false;
+    }
+    start_voice(audio, v, desc);
+    return true;
+}
+
 void audio_play_oneshot(AudioSystem* audio, const char* path, AudioBus bus) {
     if (!audio || !path)
         return;
-    if (ma_engine_play_sound(&audio->engine, path, group_for(audio, bus)) != MA_SUCCESS)
+    AudioVoice* v = take_voice(audio);
+    if (ma_sound_init_from_file(&audio->engine, path,
+                                MA_SOUND_FLAG_DECODE | MA_SOUND_FLAG_NO_SPATIALIZATION,
+                                group_for(audio, bus), NULL, &v->sound) != MA_SUCCESS) {
         log_error("audio: could not play %s", path);
+        return;
+    }
+    start_voice(audio, v, &(AudioVoiceDesc){.flat = true});
 }
 
 Sound* audio_play_music(AudioSystem* audio, const char* path, bool loop) {
@@ -190,6 +274,7 @@ Sound* audio_play_music(AudioSystem* audio, const char* path, bool loop) {
     if (!s)
         return NULL;
     s->audio = audio;
+    s->bus = AUDIO_BUS_MUSIC;
     ma_uint32 flags = MA_SOUND_FLAG_STREAM | MA_SOUND_FLAG_NO_SPATIALIZATION;
     if (ma_sound_init_from_file(&audio->engine, path, flags, group_for(audio, AUDIO_BUS_MUSIC),
                                 NULL, &s->sound) != MA_SUCCESS) {
@@ -213,6 +298,7 @@ Sound* audio_sound_from_file(AudioSystem* audio, const char* path, AudioBus bus)
     if (!s)
         return NULL;
     s->audio = audio;
+    s->bus = bus;
     if (ma_sound_init_from_file(&audio->engine, path, MA_SOUND_FLAG_DECODE, group_for(audio, bus),
                                 NULL, &s->sound) != MA_SUCCESS) {
         log_error("audio: could not load %s", path);
@@ -323,9 +409,15 @@ void free_sound(Sound* sound) {
 static void audio_sync_source_cb(Entity* entity, void* user_data) {
     (void)user_data;
     AudioSource* src = (AudioSource*)entity_get_component(entity, COMPONENT_AUDIO_SOURCE);
-    if (src && src->sound)
-        ma_sound_set_position(&src->sound->sound, entity->position[0], entity->position[1],
-                              entity->position[2]);
+    if (!src)
+        return;
+    mat4 m = GLM_MAT4_IDENTITY_INIT;
+    entity_get_transform_matrix(entity, m);
+    for (int i = 0; i < src->count; i++) {
+        vec3 p;
+        glm_mat4_mulv3(m, src->offsets[i], 1.0f, p);
+        ma_sound_set_position(&src->sounds[i]->sound, p[0], p[1], p[2]);
+    }
 }
 
 void audio_system_update(AudioSystem* audio, struct EntityManager* em, vec3 listener_pos,
@@ -339,6 +431,22 @@ void audio_system_update(AudioSystem* audio, struct EntityManager* em, vec3 list
     if (em)
         entity_manager_foreach_with(em, COMPONENT_BIT(COMPONENT_AUDIO_SOURCE), audio_sync_source_cb,
                                     NULL);
+    // Voices are reaped here, on the main thread, rather than from miniaudio's end callback,
+    // which runs on the mixing thread and may not uninit the sound it is called for. A voice
+    // whose entity has gone stays where it last was.
+    for (int i = 0; i < AUDIO_VOICE_MAX; i++) {
+        AudioVoice* v = &audio->voices[i];
+        if (!v->live)
+            continue;
+        if (ma_sound_at_end(&v->sound)) {
+            ma_sound_uninit(&v->sound);
+            v->live = false;
+            continue;
+        }
+        Entity* e = v->follow && em ? find_entity_by_id(em, v->follow) : NULL;
+        if (e)
+            place_voice(v, e);
+    }
 }
 
 size_t audio_system_read_pcm(AudioSystem* audio, float* out, size_t frames) {
@@ -353,27 +461,67 @@ static void audio_source_free(void* data) {
     AudioSource* src = (AudioSource*)data;
     if (!src)
         return;
-    if (src->sound)
-        free_sound(src->sound);
+    for (int i = 0; i < src->count; i++)
+        free_sound(src->sounds[i]);
     free(src);
 }
 
-Sound* entity_add_audio_source(struct Entity* entity, Sound* sound) {
-    if (!entity || !sound)
+Sound* entity_add_audio_source_at(struct Entity* entity, Sound* sound, const vec3 offset) {
+    if (!entity || !sound || !offset)
         return NULL;
-    audio_sound_set_position(sound, entity->position);
-    AudioSource* src = calloc(1, sizeof(AudioSource));
-    if (!src)
+    AudioSource* src = (AudioSource*)entity_get_component(entity, COMPONENT_AUDIO_SOURCE);
+    if (!src) {
+        src = calloc(1, sizeof(AudioSource));
+        if (!src)
+            return NULL;
+        entity_add_component(entity, COMPONENT_AUDIO_SOURCE, src);
+        entity_set_component_free(entity, COMPONENT_AUDIO_SOURCE, audio_source_free);
+    }
+    if (src->count >= AUDIO_SOURCE_MAX) {
+        log_error("Entity '%s' already holds %d sounds", entity->name, AUDIO_SOURCE_MAX);
         return NULL;
-    src->sound = sound;
-    entity_add_component(entity, COMPONENT_AUDIO_SOURCE, src);
-    entity_set_component_free(entity, COMPONENT_AUDIO_SOURCE, audio_source_free);
+    }
+    src->sounds[src->count] = sound;
+    glm_vec3_copy((float*)offset, src->offsets[src->count]);
+    src->count++;
+    mat4 m = GLM_MAT4_IDENTITY_INIT;
+    vec3 p;
+    entity_get_transform_matrix(entity, m);
+    glm_mat4_mulv3(m, (float*)offset, 1.0f, p);
+    audio_sound_set_position(sound, p);
     return sound;
 }
 
-Sound* entity_get_audio_source(struct Entity* entity) {
-    if (!entity)
-        return NULL;
-    AudioSource* src = (AudioSource*)entity_get_component(entity, COMPONENT_AUDIO_SOURCE);
-    return src ? src->sound : NULL;
+Sound* entity_add_audio_source(struct Entity* entity, Sound* sound) {
+    return entity_add_audio_source_at(entity, sound, (vec3){0.0f, 0.0f, 0.0f});
+}
+
+int entity_audio_source_count(struct Entity* entity) {
+    AudioSource* src =
+        entity ? (AudioSource*)entity_get_component(entity, COMPONENT_AUDIO_SOURCE) : NULL;
+    return src ? src->count : 0;
+}
+
+Sound* entity_get_audio_source(struct Entity* entity, int index) {
+    AudioSource* src =
+        entity ? (AudioSource*)entity_get_component(entity, COMPONENT_AUDIO_SOURCE) : NULL;
+    return src && index >= 0 && index < src->count ? src->sounds[index] : NULL;
+}
+
+void entity_remove_audio_source(struct Entity* entity, Sound* sound) {
+    AudioSource* src =
+        entity ? (AudioSource*)entity_get_component(entity, COMPONENT_AUDIO_SOURCE) : NULL;
+    if (!src || !sound)
+        return;
+    for (int i = 0; i < src->count; i++) {
+        if (src->sounds[i] != sound)
+            continue;
+        free_sound(sound);
+        for (int j = i + 1; j < src->count; j++) {
+            src->sounds[j - 1] = src->sounds[j];
+            glm_vec3_copy(src->offsets[j], src->offsets[j - 1]);
+        }
+        src->count--;
+        return;
+    }
 }
