@@ -1,6 +1,7 @@
 #include "local_exposure.h"
 
 #include <math.h>
+#include <stdio.h> // local_exposure_probe prints to stdout, like the other probes
 #include <stdlib.h>
 
 #include "ext/log.h"
@@ -151,6 +152,33 @@ static void _le_pass(ShaderProgram* p, GLuint fbo, int x, int y, int w, int h, c
     glBindTexture(GL_TEXTURE_2D, src);
     uniform_set_int(p->uniforms, src_name, 0);
     draw_fullscreen_quad(quad);
+}
+
+static int _le_float_order(const void* a, const void* b) {
+    const float x = *(const float*)a, y = *(const float*)b;
+    return (x > y) - (x < y);
+}
+
+void local_exposure_probe(const LocalExposure* le, float middle_grey) {
+    if (!le || !le->half_tex)
+        return;
+    const size_t n = (size_t)le->half_w * le->half_h;
+    float* px = malloc(sizeof(float) * n * 4);
+    float* lum = malloc(sizeof(float) * n);
+    if (px && lum) {
+        glBindTexture(GL_TEXTURE_2D, le->half_tex);
+        glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_FLOAT, px);
+        for (size_t i = 0; i < n; i++)
+            lum[i] = px[i * 4 + 3] - middle_grey;
+        qsort(lum, n, sizeof(float), _le_float_order);
+        static const float at[] = {0.01f, 0.10f, 0.25f, 0.50f, 0.75f, 0.90f, 0.95f, 0.99f};
+        printf("le-probe grey=%.3f", middle_grey);
+        for (size_t k = 0; k < sizeof(at) / sizeof(at[0]); k++)
+            printf(" p%02d=%.2f", (int)lroundf(at[k] * 100.0f), lum[(size_t)(at[k] * (n - 1))]);
+        printf(" max=%.2f\n", lum[n - 1]);
+    }
+    free(px);
+    free(lum);
 }
 
 GLuint local_exposure_run(LocalExposure* le, GLuint hdr_tex, int frame_w, int frame_h,

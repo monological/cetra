@@ -132,6 +132,8 @@ typedef struct SilentArgs {
     int local_exposure;  // 1 on, 0 off; -1 = this mode's own choice
     float le_highlights; // the local exposure's highlight contrast; below 0 = this mode's own
     float le_blend;      // and its blurred-luminance blend
+    bool le_probe;       // print the frame's luminance percentiles it is asked to fit
+    bool exposure_probe; // print what the meter decided, every frame it decides
     float render_scale;
     int msaa;
     bool cam_eye_set, cam_target_set;
@@ -445,6 +447,7 @@ static void build_post(const Engine* engine, bool night, bool grade) {
         fx->local_exposure_highlights = g_args.le_highlights;
     if (g_args.le_blend >= 0.0f)
         fx->local_exposure_blend = g_args.le_blend;
+    fx->local_exposure_probe = g_args.le_probe;
 }
 
 static void on_init(Game* game) {
@@ -584,6 +587,7 @@ static void on_init(Game* game) {
         ex->automatic = false;
         ex->multiplier = EXPOSURE_NIGHT;
     }
+    ex->probe = g_args.exposure_probe;
 }
 
 static void on_update(Game* game, double dt) {
@@ -764,6 +768,9 @@ static void print_usage(const char* prog) {
     printf("      --no-local-exposure Without it\n");
     printf("      --le-highlights F   Its contrast above middle grey (1 = none)\n");
     printf("      --le-blend F        Its share of the base from the blurred luminance\n");
+    printf("      --le-probe          Print the frame's luminance percentiles, in stops from\n"
+           "                          middle grey, while it is on\n");
+    printf("      --exposure-probe    Print what the meter decided, every frame it decides\n");
     printf("      --render-scale F    Render at F of the window and upscale (0.5-1, default\n");
     printf("                          %.1f): the softer frame of the consoles it imitates\n",
            (double)DEFAULT_RENDER_SCALE);
@@ -869,6 +876,10 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
             a->le_highlights = (float)atof(argv[++i]);
         } else if (!strcmp(s, "--le-blend") && has_next) {
             a->le_blend = (float)atof(argv[++i]);
+        } else if (!strcmp(s, "--le-probe")) {
+            a->le_probe = true;
+        } else if (!strcmp(s, "--exposure-probe")) {
+            a->exposure_probe = true;
         } else if (!strcmp(s, "--render-scale") && has_next) {
             a->render_scale = (float)atof(argv[++i]);
         } else if (!strcmp(s, "--msaa") && has_next) {

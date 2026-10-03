@@ -3872,6 +3872,8 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
                                             fx->post_height, le_grey, fx->local_exposure_kernel,
                                             fx->quad_vao);
                 profiler_scope_end(fx->profiler);
+                if (le_tex && fx->local_exposure_probe)
+                    local_exposure_probe(fx->local_exposure, le_grey);
             }
             if (!le_tex)
                 fx->local_exposure_failed = true;

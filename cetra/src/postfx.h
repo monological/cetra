@@ -338,6 +338,7 @@ typedef struct PostFX {
     float local_exposure_blend;           // share of the base from the blurred luminance, 0..1
     float local_exposure_kernel;          // the blurred luminance's kernel, a share of frame width
     float local_exposure_grey_bias;       // stops added to the middle grey the base scales about
+    bool local_exposure_probe;            // print the frame's luminance percentiles, once a frame
     struct LocalExposure* local_exposure; // engine-owned; made on first use
     bool local_exposure_failed;           // could not be made; never retried
 
