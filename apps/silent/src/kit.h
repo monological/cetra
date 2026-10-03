@@ -61,7 +61,9 @@ typedef struct Kit {
     EntityManager* em;
     PhysicsWorld* physics;
     int collider_count;
-    int vertex_count; // everything kit_finish handed over
+    int vertex_count;      // everything kit_finish handed over to be drawn
+    int mesh_count;        // the meshes it handed it over as
+    int shadow_cell_count; // and the shape-only meshes the shadows draw in their place
     bool warned_nonfinite;
 
     // The edges water drips from in the rain (spec 13.12), in world space, for the rain to take.

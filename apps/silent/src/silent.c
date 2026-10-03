@@ -435,8 +435,10 @@ static void on_init(Game* game) {
     clock_build(&kit);
     study_build(&kit, g_scene, (unsigned int)g_args.seed);
     kit_finish(&kit, "world");
-    printf("silent: %d colliders, %d vertices, %d of %d drip lines, %d candles\n",
-           kit.collider_count, kit.vertex_count, kit.drip_count, RAIN_DRIP_MAX, kit.wick_count);
+    printf("silent: %d colliders, %d vertices in %d meshes and %d shadow cells, %d of %d drip "
+           "lines, %d candles\n",
+           kit.collider_count, kit.vertex_count, kit.mesh_count, kit.shadow_cell_count,
+           kit.drip_count, RAIN_DRIP_MAX, kit.wick_count);
     if (!g_args.no_candles) {
         g_scene->fire = create_fire_system();
         candles_light(g_scene->fire, g_scene, &kit);
