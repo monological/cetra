@@ -1,5 +1,7 @@
 #include <math.h>
+#include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "cetra/mesh.h"
@@ -1454,9 +1456,158 @@ void kit_frame_card_row(Kit* kit, const KitFrame* f, int mat, const float uv[4],
                             a0 + len * (float)(i + 1) / (float)n, y0, y1, d, toward);
 }
 
+/*
+ * What shadows draw in place of the kit's meshes (MESH_SHADOW_ONLY): the triangles of every
+ * material that casts plainly, merged across materials into one mesh per cell of a grid, by
+ * where each triangle's centroid falls. A shadow face that sees a corner of the world -- a
+ * candle's, above all -- then draws that corner in a few draws, where the per-material meshes
+ * the camera draws each span the street and are in every face. Cutting those meshes instead
+ * multiplied the camera's draws by the materials in a cell and slowed the frame (spec 13.16).
+ * A triangle longer than KIT_CELL_LARGE on any axis goes to one large cell, where it cannot
+ * stretch a cell's bounds across the street. Within a cell, triangles keep the order built.
+ */
+#define KIT_CELL_XZ    3.0f
+#define KIT_CELL_Y     3.5f
+#define KIT_CELL_LARGE 6.0f
+#define KIT_CELL_BIAS  (1 << 20) // keeps a cell index positive in its 21 bits of key
+
+typedef struct CellTri {
+    int64_t key;
+    unsigned int mat;
+    unsigned int tri;
+} CellTri;
+
+static int cell_tri_order(const void* a, const void* b) {
+    const CellTri* x = a;
+    const CellTri* y = b;
+    if (x->key != y->key)
+        return x->key < y->key ? -1 : 1;
+    if (x->mat != y->mat)
+        return x->mat < y->mat ? -1 : 1;
+    return x->tri < y->tri ? -1 : (x->tri > y->tri ? 1 : 0);
+}
+
+static int64_t cell_key(const MeshBuilder* mb, unsigned int tri) {
+    AABB bounds;
+    aabb_empty(&bounds);
+    vec3 c = {0.0f, 0.0f, 0.0f};
+    for (int k = 0; k < 3; k++) {
+        const float* p = &mb->pos[mb->idx[tri * 3 + k] * 3];
+        aabb_add_point(&bounds, p);
+        glm_vec3_add(c, (float*)p, c);
+    }
+    vec3 extent = {0.0f, 0.0f, 0.0f};
+    glm_vec3_sub(bounds.max, bounds.min, extent);
+    if (glm_vec3_max(extent) > KIT_CELL_LARGE)
+        return INT64_MAX;
+    glm_vec3_scale(c, 1.0f / 3.0f, c);
+    const int64_t ix = (int64_t)floorf(c[0] / KIT_CELL_XZ) + KIT_CELL_BIAS;
+    const int64_t iy = (int64_t)floorf(c[1] / KIT_CELL_Y) + KIT_CELL_BIAS;
+    const int64_t iz = (int64_t)floorf(c[2] / KIT_CELL_XZ) + KIT_CELL_BIAS;
+    return (ix << 42) | (iy << 21) | iz;
+}
+
+// Whether a material's shadow can be the cells': opaque, single-sided and still. Anything else
+// -- glass, a cutout, a swaying leaf -- keeps casting from its own mesh exactly as before.
+static bool casts_plainly(const Material* m) {
+    return m->alpha_mode == ALPHA_OPAQUE && m->opacity >= 1.0f && !m->opacity_tex &&
+           m->transmission <= 0.0f && !m->doubleSided && m->wind_response == 0.0f;
+}
+
+// One cell's triangles, `count` of them from any of the builders, as one shape-only mesh on
+// `node`. `remap` is each builder's vertex index into the cell, -1 where not yet copied, and is
+// left all -1 again. Returns 1, or 0 if it could not be built.
+static int shadow_cell(Kit* kit, SceneNode* node, Material* shape, const CellTri* tris,
+                       size_t count, int* const* remap) {
+    MeshBuilder part;
+    if (!mb_init(&part, count * 2, count * 3, false))
+        return 0;
+    for (size_t i = 0; i < count; i++) {
+        const MeshBuilder* mb = &kit->builders[tris[i].mat];
+        int* map = remap[tris[i].mat];
+        unsigned int v[3];
+        for (int k = 0; k < 3; k++) {
+            const unsigned int s = mb->idx[tris[i].tri * 3 + k];
+            if (map[s] < 0)
+                map[s] = (int)mb_vertex(&part, &mb->pos[s * 3], &mb->nrm[s * 3], &mb->tan[s * 4],
+                                        mb->uv0[s * 2], mb->uv0[s * 2 + 1], mb->uv1[s * 2],
+                                        mb->uv1[s * 2 + 1], NULL);
+            v[k] = (unsigned int)map[s];
+        }
+        mb_tri(&part, v[0], v[1], v[2]);
+    }
+    // A vertex the next cell shares is copied again for it.
+    for (size_t i = 0; i < count; i++)
+        for (int k = 0; k < 3; k++)
+            remap[tris[i].mat][kit->builders[tris[i].mat].idx[tris[i].tri * 3 + k]] = -1;
+    Mesh* mesh = create_mesh();
+    if (!mb_transfer(&part, mesh)) {
+        free_mesh(mesh);
+        return 0;
+    }
+    mesh->material = shape;
+    mesh->shadow_role = MESH_SHADOW_ONLY;
+    node_add_mesh(node, mesh);
+    return 1;
+}
+
+// The shadow cells on `node`. Returns how many: 0 leaves every material casting from its own
+// mesh.
+static int shadow_cells(Kit* kit, SceneNode* node) {
+    size_t tris = 0;
+    int first = -1;
+    for (int i = 0; i < kit->material_count; i++) {
+        const MeshBuilder* mb = &kit->builders[i];
+        if (!mb->ok || mb->icount == 0 || !casts_plainly(kit->materials[i]))
+            continue;
+        tris += mb->icount / 3;
+        if (first < 0)
+            first = i;
+    }
+    if (tris == 0)
+        return 0;
+    CellTri* order = malloc(tris * sizeof(*order));
+    int* remap[KIT_MAX_MATERIALS] = {NULL};
+    bool ok = order != NULL;
+    size_t n = 0;
+    for (int i = 0; ok && i < kit->material_count; i++) {
+        const MeshBuilder* mb = &kit->builders[i];
+        if (!mb->ok || mb->icount == 0 || !casts_plainly(kit->materials[i]))
+            continue;
+        remap[i] = malloc(mb->vcount * sizeof(int));
+        ok = remap[i] != NULL;
+        for (size_t v = 0; ok && v < mb->vcount; v++)
+            remap[i][v] = -1;
+        for (size_t t = 0; ok && t < mb->icount / 3; t++)
+            order[n++] = (CellTri){cell_key(mb, (unsigned int)t), (unsigned int)i, (unsigned int)t};
+    }
+    int cells = 0;
+    Material* shape = ok ? create_material() : NULL;
+    if (shape) {
+        shape->name = safe_strdup("shadow_cells");
+        material_set_program(shape, kit->materials[first]->shader_program);
+        qsort(order, n, sizeof(*order), cell_tri_order);
+        for (size_t run = 0; run < n;) {
+            size_t end = run;
+            while (end < n && order[end].key == order[run].key)
+                end++;
+            cells += shadow_cell(kit, node, shape, order + run, end - run, remap);
+            run = end;
+        }
+        if (cells == 0)
+            free_material(shape);
+    }
+    free(order);
+    for (int i = 0; i < KIT_MAX_MATERIALS; i++)
+        free(remap[i]);
+    return cells;
+}
+
 SceneNode* kit_finish(Kit* kit, const char* name) {
     SceneNode* node = create_node();
     node_set_name(node, name);
+    // The cells first: they read the builders, which handing a mesh over empties.
+    kit->shadow_cell_count = shadow_cells(kit, node);
     for (int i = 0; i < kit->material_count; i++) {
         MeshBuilder* mb = &kit->builders[i];
         kit->vertex_count += (int)mb->vcount;
@@ -1472,7 +1623,11 @@ SceneNode* kit_finish(Kit* kit, const char* name) {
             continue;
         }
         mesh->material = kit->materials[i];
+        // What the camera draws; where the cells were built, they are its shadow.
+        if (kit->shadow_cell_count > 0 && casts_plainly(mesh->material))
+            mesh->shadow_role = MESH_SHADOW_NONE;
         node_add_mesh(node, mesh);
+        kit->mesh_count++;
     }
     node_add_child(kit->scene->root_node, node);
     return node;
