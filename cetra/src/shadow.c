@@ -764,14 +764,14 @@ void bind_shadow_maps_to_program(ShadowSystem* system, ShaderProgram* program) {
 // says what casts for light, and the rain lands on the surfaces the camera sees,
 // not on shapes standing in for them. The cover spans the street, so stand-ins
 // cut small for a light's reach would only be more draws to it.
-// KEPT is a cached light's face, drawn once (spec 13.16): OPAQUE without glass, and without
-// anything whose surface moves under its node -- a skinned, swaying or morphing mesh -- since a
-// face drawn once would hold that surface wherever it was on that frame; and at level 0 for
-// the same reason, since the camera's level is wherever the camera was. Glass casts nothing
-// because a pane passing nearly all the light, drawn solid, puts what stands behind it in full
-// shadow -- a clock's dial behind its door -- and the tiles have no transmittance map to say
-// otherwise. KEPT_STILL and KEPT_MOVERS split KEPT by whether a caster's node has moved
-// lately, for a face drawn as a copy of its still casters with the movers over it.
+// KEPT is a cached light's face (spec 13.16): OPAQUE without glass, at level 0, since the
+// camera's level is wherever the camera was. Glass casts nothing because a pane passing nearly
+// all the light, drawn solid, puts what stands behind it in full shadow -- a clock's dial behind
+// its door -- and the tiles have no transmittance map to say otherwise. KEPT_STILL and
+// KEPT_MOVERS split KEPT by whether a caster MOVES (kept_caster_moves), for a face drawn as a
+// copy of its still casters with the movers over it. A skinned, swaying or morphing mesh moves
+// on every frame, whether or not its node does, so it is never in the copy: a face drawn once
+// would hold that surface wherever it was on that frame (spec 13.18).
 typedef enum ShadowCasterSet {
     SHADOW_CASTERS_OPAQUE = 0,
     SHADOW_CASTERS_OPAQUE_TSM,
@@ -834,8 +834,6 @@ static void _upload_shadow_material(UniformManager* u, const Material* mat, bool
 static bool caster_set_wants(ShadowCasterSet set, uint8_t lane, uint8_t flags) {
     if (set == SHADOW_CASTERS_RAIN ? lane == DRAW_LANE_SHADOW_ONLY : (flags & DRAW_NO_CAST) != 0)
         return false;
-    if (caster_set_kept(set) && !(flags & DRAW_STILL))
-        return false;
     bool masked_only = (flags & DRAW_ALPHA_MASKED) && !(flags & DRAW_FOLIAGE);
     // What a transmittance map represents instead of a depth map: geometry that
     // casts NOTHING on the depth path (masked without foliage) or casts SOLID
@@ -864,13 +862,19 @@ static bool tile_node_moves(const ShadowSystem* ss, const SceneNode* node) {
     return false;
 }
 
-// Whether this caster set wants this node: the still or the movers for the two that split
-// KEPT, every node for any other.
-static bool caster_set_wants_node(const ShadowSystem* ss, ShadowCasterSet set,
-                                  const SceneNode* node) {
+// Whether a kept face draws this caster over its copy rather than in it: its surface moves under
+// its node, or its node has moved lately.
+static bool kept_caster_moves(const ShadowSystem* ss, const DrawItem* item) {
+    return !(item->flags & DRAW_STILL) || tile_node_moves(ss, item->node);
+}
+
+// Whether this caster set wants this item for where it is: the still or the movers for the two
+// that split KEPT, every item for any other.
+static bool caster_set_wants_motion(const ShadowSystem* ss, ShadowCasterSet set,
+                                    const DrawItem* item) {
     if (set != SHADOW_CASTERS_KEPT_STILL && set != SHADOW_CASTERS_KEPT_MOVERS)
         return true;
-    return tile_node_moves(ss, node) == (set == SHADOW_CASTERS_KEPT_MOVERS);
+    return kept_caster_moves(ss, item) == (set == SHADOW_CASTERS_KEPT_MOVERS);
 }
 
 // Whether two items belong in one span: everything draw_run_key_equal wants
@@ -964,7 +968,7 @@ static size_t _build_caster_order(ShadowSystem* ss, const DrawList* list, Shadow
     for (size_t i = 0; i < list->count; ++i) {
         const DrawItem* item = &list->items[i];
         if (!caster_set_wants(set, item->lane, item->flags) ||
-            !caster_set_wants_node(ss, set, item->node))
+            !caster_set_wants_motion(ss, set, item))
             continue;
         if (stats)
             stats->meshes_seen++;
@@ -1633,6 +1637,7 @@ static void tiles_mark_box(ShadowSystem* ss, const vec3 box_min, const vec3 box_
             if (!frustum_test_aabb_transformed(&volume, (float*)box_min, (float*)box_max, identity))
                 continue;
             const uint64_t bit = 1ull << f;
+            block->touched |= bit;
             if (marks & TILE_BOX_DYNAMIC)
                 block->dynamic |= bit;
             if (marks & (TILE_BOX_UNSTORE | TILE_BOX_INVALIDATE))
@@ -1670,13 +1675,20 @@ static void tiles_expire_movers(ShadowSystem* ss) {
 
 // What the kept faces hold that is no longer true, every frame. A node added or freed changes
 // the graph and every face is drawn again: it has no previous frame for the draw list to show.
-// A KEPT caster whose node moves becomes a MOVER, and every face that sees it, where it was and
-// where it is, is drawn from then on as a copy of its still casters with the movers over them
-// (render_shadow_movers). Skinned, swaying and morphing meshes are not in the KEPT set, so they
-// mark nothing. `frame` is the engine's, so the hold counts frames and not depth passes, which
-// a burst of captures multiplies.
-static void tiles_note_changes(ShadowSystem* ss, const Scene* scene, uint64_t frame) {
+// A KEPT caster that moves becomes a MOVER, and every face that sees it is drawn from then on as
+// a copy of its still casters with the movers over them (render_shadow_movers). A caster whose
+// node moves marks where it was and where it is, and leaves the stores, which drew it as still.
+// One whose surface moves under its node -- skinned, swaying, morphing -- moves every frame and
+// marks where its surface is now: it was never in a store, and a face it has left is still
+// dynamic from the frame it was there, so is drawn once more without it. That happens on the
+// frame the graph changes too, or a face drawn whole that frame would keep the surface for good.
+// `frame` is the engine's, so the hold counts frames and not depth passes, which a burst of
+// captures multiplies.
+static void tiles_note_changes(ShadowSystem* ss, const Engine* engine, const Scene* scene,
+                               uint64_t frame) {
     ss->tile_frame = frame;
+    for (int b = 0; b < ss->tile_block_count; ++b)
+        ss->tile_blocks[b].touched = 0;
     const uint64_t epoch = scene_graph_epoch();
     if (epoch != ss->tile_epoch) {
         ss->tile_epoch = epoch;
@@ -1686,26 +1698,29 @@ static void tiles_note_changes(ShadowSystem* ss, const Scene* scene, uint64_t fr
             ss->tile_blocks[b].dynamic = 0;
             ss->tile_blocks[b].stored = 0;
         }
-        return;
+    } else {
+        tiles_expire_movers(ss);
     }
-    tiles_expire_movers(ss);
+    const CullView view = render_cull_view(engine, scene, NULL);
     const DrawList* list = scene->draw_list;
     for (size_t i = 0; list && i < list->count; ++i) {
         const DrawItem* item = &list->items[i];
         const SceneNode* node = item->node;
+        const bool deforms = !(item->flags & DRAW_STILL);
         if (!caster_set_wants(SHADOW_CASTERS_KEPT, item->lane, item->flags) ||
-            memcmp(node->global_transform, node->prev_global_transform, sizeof(mat4)) == 0)
+            (!deforms &&
+             memcmp(node->global_transform, node->prev_global_transform, sizeof(mat4)) == 0))
             continue;
         int k = 0;
         while (k < ss->tile_mover_count && ss->tile_movers[k] != node)
             ++k;
         unsigned marks = TILE_BOX_DYNAMIC;
         if (k == ss->tile_mover_count) {
-            // A new mover was drawn into the stores as still; with no room for another, the
-            // faces that see it are simply drawn again, every frame it moves.
+            // A new mover whose node moved was drawn into the stores as still; with no room for
+            // another, the faces that see it are simply drawn again, every frame it moves.
             if (k < SHADOW_TILE_MAX_MOVERS) {
                 ss->tile_movers[ss->tile_mover_count++] = node;
-                marks = TILE_BOX_DYNAMIC | TILE_BOX_UNSTORE;
+                marks = deforms ? TILE_BOX_DYNAMIC : TILE_BOX_DYNAMIC | TILE_BOX_UNSTORE;
             } else {
                 marks = TILE_BOX_INVALIDATE;
             }
@@ -1713,6 +1728,16 @@ static void tiles_note_changes(ShadowSystem* ss, const Scene* scene, uint64_t fr
         if (k < SHADOW_TILE_MAX_MOVERS)
             ss->tile_mover_moved[k] = ss->tile_frame;
         vec3 lo = GLM_VEC3_ZERO_INIT, hi = GLM_VEC3_ZERO_INIT;
+        if (deforms) {
+            // The surface as drawn, posed and displaced: the import box is the bind pose, which a
+            // curled body or a swung tail leaves. With no bound to be had, the import box.
+            AABB box;
+            if (!draw_item_bounds(item, &view, &box))
+                box = item->mesh->aabb;
+            aabb_transform(box.min, box.max, (vec4*)node->global_transform, lo, hi);
+            tiles_mark_box(ss, lo, hi, marks);
+            continue;
+        }
         for (int when = 0; when < 2; ++when) {
             aabb_transform(
                 item->mesh->aabb.min, item->mesh->aabb.max,
@@ -1850,7 +1875,9 @@ static void render_shadow_tiles(ShadowSystem* ss, const Engine* engine, const Sc
 // the still casters alone and is drawn only when it is not, with the movers drawn over the copy.
 // What a pendulum costs a frame is then a copy and its own draws, where drawing the face whole
 // costs every caster in the room. A block with no store draws such faces whole. A face out of
-// the camera's view keeps its last copy, which nothing on screen reads.
+// the camera's view keeps its last copy, which nothing on screen reads. A face drawn when no
+// moving caster reached it this frame holds what drawing it whole would, so it is kept from then
+// on: without that, every face a cat ever walked through would be drawn again every frame.
 static void render_shadow_movers(ShadowSystem* ss, const Engine* engine, const Scene* scene,
                                  SubmitState* state) {
     const int edge = ss->punctual_map_size;
@@ -1888,6 +1915,8 @@ static void render_shadow_movers(ShadowSystem* ss, const Engine* engine, const S
                                over_copy ? SHADOW_CASTERS_KEPT_MOVERS : SHADOW_CASTERS_KEPT,
                                !over_copy)) {
                 block->valid |= 1ull << f;
+                if (!tile_face_in(block->touched, f))
+                    block->dynamic &= ~(1ull << f);
                 ss->mover_faces_drawn++;
             }
         }
@@ -2416,7 +2445,7 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     // drawn this frame is in the array it is drawn into.
     const int tiled = tiles_reconcile(ss, scene);
     if (tiled > 0 && tile_reference_count(ss) == 0) {
-        tiles_note_changes(ss, scene, engine->total_frames);
+        tiles_note_changes(ss, engine, scene, engine->total_frames);
         tiles_take_stores(ss);
     }
     if (ss->tile_block_count > 0)
