@@ -8,6 +8,8 @@
  * survival horror game: few polygons, low texel density, the dirt in the
  * textures rather than modelled, and darkness and fog hiding how little is
  * there.
+ *
+ * It names one internal header, the profiler, for --profiler's report.
  */
 
 #include <float.h>
@@ -31,6 +33,7 @@
 #include "cetra/shadow.h"
 #include "cetra/sky.h"
 #include "cetra/wind.h"
+#include "cetra/internal/profiler.h"
 
 #include "cetra/game/audio.h"
 #include "cetra/game/entity.h"
@@ -134,6 +137,7 @@ typedef struct SilentArgs {
     bool no_wind;           // still air: the rain falls straight
     bool no_relief;         // puddles from the noise alone, not the ground's own lows
     bool no_candles;        // the candles stand unlit
+    bool profiler;          // per-pass timing and submission counts, reported at exit
     const char* audio_dump; // headless: write what the listener hears here
 } SilentArgs;
 
@@ -651,7 +655,8 @@ static void on_pre_render(Game* game, double alpha) {
 
 // Before the engine goes: the prompt draws through its overlay hook.
 static void on_shutdown(Game* game) {
-    (void)game;
+    if (game && game->engine)
+        profiler_report(game->engine->profiler);
     prompt_free(&g_prompt);
 }
 
@@ -688,6 +693,7 @@ static void print_usage(const char* prog) {
     printf("      --no-relief         Puddles stand where the noise puts them, not in the\n"
            "                          ground's own lows\n");
     printf("      --no-candles        The candles stand unlit\n");
+    printf("      --profiler          Per-pass timing and submission counts, at exit\n");
     printf("  In the window: click to capture the mouse, Tab to release it. WASD\n");
     printf("  walks, Shift hurries, the arrows or the mouse look, E opens and shuts\n");
     printf("  a door you are facing, F the flashlight, G shows the GUI.\n");
@@ -758,6 +764,8 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
             a->no_relief = true;
         } else if (!strcmp(s, "--no-candles")) {
             a->no_candles = true;
+        } else if (!strcmp(s, "--profiler")) {
+            a->profiler = true;
         } else if (!strcmp(s, "-h") || !strcmp(s, "--help")) {
             print_usage(argv[0]);
             return false;
@@ -784,7 +792,8 @@ int main(int argc, char** argv) {
     GameConfig config = {.engine = {.title = "silent",
                                     .width = g_args.width,
                                     .height = g_args.height,
-                                    .headless = g_args.headless}};
+                                    .headless = g_args.headless,
+                                    .profiler = g_args.profiler}};
     // One sample under TAA, headless as in the window, so a screenshot is what
     // a player sees. Not MSAA: in fog this dense the fog composite takes ONE
     // depth for a multisampled edge pixel, and where half its samples are sky
