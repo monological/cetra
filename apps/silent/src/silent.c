@@ -129,6 +129,9 @@ typedef struct SilentArgs {
     bool day;
     bool no_taa;
     bool no_grade;
+    int local_exposure;  // 1 on, 0 off; -1 = this mode's own choice
+    float le_highlights; // the local exposure's highlight contrast; below 0 = this mode's own
+    float le_blend;      // and its blurred-luminance blend
     float render_scale;
     int msaa;
     bool cam_eye_set, cam_target_set;
@@ -434,6 +437,14 @@ static void build_post(const Engine* engine, bool night, bool grade) {
     // By day the overcast dome lights it, which is the sky the fog fades into.
     if (night)
         postfx_set_fog_ambient(fx, (vec3){5.0f, 5.6f, 5.2f});
+
+    // An exposure per pixel on top of the camera's (spec 13.19), which is what lets a window onto
+    // the day come down without the kitchen around it going dark.
+    fx->local_exposure_enabled = g_args.local_exposure == 1;
+    if (g_args.le_highlights >= 0.0f)
+        fx->local_exposure_highlights = g_args.le_highlights;
+    if (g_args.le_blend >= 0.0f)
+        fx->local_exposure_blend = g_args.le_blend;
 }
 
 static void on_init(Game* game) {
@@ -749,6 +760,10 @@ static void print_usage(const char* prog) {
     printf("      --no-taa            No temporal AA, and so no upscale: full resolution, raw "
            "edges\n");
     printf("      --no-grade          Without the green-grey colour grade\n");
+    printf("      --local-exposure    An exposure per pixel on top of the camera's\n");
+    printf("      --no-local-exposure Without it\n");
+    printf("      --le-highlights F   Its contrast above middle grey (1 = none)\n");
+    printf("      --le-blend F        Its share of the base from the blurred luminance\n");
     printf("      --render-scale F    Render at F of the window and upscale (0.5-1, default\n");
     printf("                          %.1f): the softer frame of the consoles it imitates\n",
            (double)DEFAULT_RENDER_SCALE);
@@ -820,6 +835,9 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
     parse_hex("E8B923", a->cat_eyes);
     a->cat_clip_seconds = -1.0f;
     a->cat_seed = 1;
+    a->local_exposure = -1;
+    a->le_highlights = -1.0f;
+    a->le_blend = -1.0f;
     for (int i = 1; i < argc; i++) {
         const char* s = argv[i];
         const bool has_next = i + 1 < argc;
@@ -843,6 +861,14 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
             a->no_taa = true;
         } else if (!strcmp(s, "--no-grade")) {
             a->no_grade = true;
+        } else if (!strcmp(s, "--local-exposure")) {
+            a->local_exposure = 1;
+        } else if (!strcmp(s, "--no-local-exposure")) {
+            a->local_exposure = 0;
+        } else if (!strcmp(s, "--le-highlights") && has_next) {
+            a->le_highlights = (float)atof(argv[++i]);
+        } else if (!strcmp(s, "--le-blend") && has_next) {
+            a->le_blend = (float)atof(argv[++i]);
         } else if (!strcmp(s, "--render-scale") && has_next) {
             a->render_scale = (float)atof(argv[++i]);
         } else if (!strcmp(s, "--msaa") && has_next) {

@@ -1231,6 +1231,26 @@ ShaderProgram* create_glare_output_program() {
     return create_post_program("glare_output", glare_output_frag_shader_str);
 }
 
+ShaderProgram* create_le_half_program() {
+    return create_post_program("le_half", le_half_frag_shader_str);
+}
+
+ShaderProgram* create_le_grid_program() {
+    return create_post_program("le_grid", le_grid_frag_shader_str);
+}
+
+ShaderProgram* create_le_grid_blur_program() {
+    return create_post_program("le_grid_blur", le_grid_blur_frag_shader_str);
+}
+
+ShaderProgram* create_le_block_program() {
+    return create_post_program("le_block", le_block_frag_shader_str);
+}
+
+ShaderProgram* create_le_blur_program() {
+    return create_post_program("le_blur", le_blur_frag_shader_str);
+}
+
 ShaderProgram* create_bloom_down_program() {
     return create_post_program("bloom_downsample", bloom_downsample_frag_shader_str);
 }

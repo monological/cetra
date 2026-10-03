@@ -373,6 +373,19 @@ static void print_usage(const char* prog) {
     fprintf(stderr,
             "      --glare-threshold <f> Working-space radiance a point must pass to star\n");
     fprintf(stderr, "      --glare-probe      Print the glare's light against its source's\n");
+    fprintf(stderr, "      --local-exposure   An exposure per pixel on top of the camera's (off by "
+                    "default; the identity until a contrast is lowered)\n");
+    fprintf(stderr, "      --no-local-exposure  None, whatever the scene file says\n");
+    fprintf(stderr,
+            "      --le-highlights <f> Contrast of the base above middle grey (1; 0.6-1)\n");
+    fprintf(stderr, "      --le-shadows <f>   Contrast of the base below middle grey (1; 0.6-1)\n");
+    fprintf(stderr, "      --le-detail <f>    Contrast of the detail above the base (1)\n");
+    fprintf(stderr,
+            "      --le-blend <f>     Share of the base from the blurred luminance (0.6)\n");
+    fprintf(stderr, "      --le-kernel <f>    The blurred luminance's kernel, a share of the "
+                    "frame's width (0.5)\n");
+    fprintf(stderr,
+            "      --le-grey-bias <f> Stops added to the middle grey it scales about (0)\n");
     fprintf(stderr, "      --bloom-strength <f> Bloom strength (default: engine)\n");
     fprintf(stderr, "      --bloom-threshold <f> Bloom threshold (default: engine)\n");
     fprintf(stderr, "      --fog-anisotropy <f> Fog scatter anisotropy -1..1 (implies --fog)\n");
@@ -612,18 +625,24 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     // A water plane at y = 0 is the useful default and 0 is a legal level, so the
     // "unset" value has to sit outside every plausible one rather than at zero.
     args->water_level = -9999.0f;
-    args->rain_rate = -1.0f;        // -1 = keep the scene file's (0 is a legal rate)
-    args->rain_sheen = -1.0f;       // -1 = keep the scene file's
-    args->rain_relief = -1.0f;      // -1 = keep the scene file's
-    args->fire_warmup = -1.0f;      // -1 = keep the scene file's
-    args->fire_slice_field = -1;    // no slice drawn
-    args->world_scale = -1.0f;      // -1 = keep the sky's default (1 unit = 1 metre)
-    args->spec_occ_mode = -1;       // -1 = keep the engine default
-    args->import_scale = 1.0f;      // 1 = none
-    args->bloom_enable = -1;        // -1 = keep the engine default
-    args->glare_enable = -1;        // -1 = keep the engine default
-    args->glare_strength = -1.0f;   // -1 = keep the engine default
-    args->glare_threshold = -1.0f;  // -1 = keep the engine default
+    args->rain_rate = -1.0f;       // -1 = keep the scene file's (0 is a legal rate)
+    args->rain_sheen = -1.0f;      // -1 = keep the scene file's
+    args->rain_relief = -1.0f;     // -1 = keep the scene file's
+    args->fire_warmup = -1.0f;     // -1 = keep the scene file's
+    args->fire_slice_field = -1;   // no slice drawn
+    args->world_scale = -1.0f;     // -1 = keep the sky's default (1 unit = 1 metre)
+    args->spec_occ_mode = -1;      // -1 = keep the engine default
+    args->import_scale = 1.0f;     // 1 = none
+    args->bloom_enable = -1;       // -1 = keep the engine default
+    args->glare_enable = -1;       // -1 = keep the engine default
+    args->glare_strength = -1.0f;  // -1 = keep the engine default
+    args->glare_threshold = -1.0f; // -1 = keep the engine default
+    args->le_enable = -1;          // -1 = keep the engine default
+    args->le_highlights = -1.0f;   // -1 = keep the engine default, as below
+    args->le_shadows = -1.0f;
+    args->le_detail = -1.0f;
+    args->le_blend = -1.0f;
+    args->le_kernel = -1.0f;
     args->bloom_strength = -1.0f;   // -1 = keep the engine default
     args->bloom_threshold = -1.0f;  // -1 = keep the engine default
     args->fog_anisotropy = -999.0f; // -999 = keep default (-1..1 is valid)
@@ -1862,6 +1881,34 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->glare_threshold = (float)atof(argv[i]);
         } else if (strcmp(argv[i], "--glare-probe") == 0) {
             args->glare_probe = 1;
+        } else if (strcmp(argv[i], "--local-exposure") == 0) {
+            args->le_enable = 1;
+        } else if (strcmp(argv[i], "--no-local-exposure") == 0) {
+            args->le_enable = 0;
+        } else if (strcmp(argv[i], "--le-highlights") == 0 ||
+                   strcmp(argv[i], "--le-shadows") == 0 || strcmp(argv[i], "--le-detail") == 0 ||
+                   strcmp(argv[i], "--le-blend") == 0 || strcmp(argv[i], "--le-kernel") == 0 ||
+                   strcmp(argv[i], "--le-grey-bias") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            const char* flag = argv[i - 1];
+            const float value = (float)atof(argv[i]);
+            if (strcmp(flag, "--le-highlights") == 0)
+                args->le_highlights = value;
+            else if (strcmp(flag, "--le-shadows") == 0)
+                args->le_shadows = value;
+            else if (strcmp(flag, "--le-detail") == 0)
+                args->le_detail = value;
+            else if (strcmp(flag, "--le-blend") == 0)
+                args->le_blend = value;
+            else if (strcmp(flag, "--le-kernel") == 0)
+                args->le_kernel = value;
+            else {
+                args->le_grey_bias = value;
+                args->le_grey_bias_set = 1;
+            }
         } else if (strcmp(argv[i], "--bloom-strength") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -3564,6 +3611,20 @@ int main(int argc, char** argv) {
         if (args.glare_threshold >= 0.0f)
             fx->glare_threshold = args.glare_threshold;
         fx->glare_probe = args.glare_probe != 0;
+        if (args.le_enable >= 0)
+            fx->local_exposure_enabled = args.le_enable != 0;
+        if (args.le_highlights >= 0.0f)
+            fx->local_exposure_highlights = args.le_highlights;
+        if (args.le_shadows >= 0.0f)
+            fx->local_exposure_shadows = args.le_shadows;
+        if (args.le_detail >= 0.0f)
+            fx->local_exposure_detail = args.le_detail;
+        if (args.le_blend >= 0.0f)
+            fx->local_exposure_blend = args.le_blend;
+        if (args.le_kernel >= 0.0f)
+            fx->local_exposure_kernel = args.le_kernel;
+        if (args.le_grey_bias_set)
+            fx->local_exposure_grey_bias = args.le_grey_bias;
         if (args.no_bloom) {
             fx->bloom_enabled = false;
         } else if (args.bloom_enable >= 0) {

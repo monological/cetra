@@ -331,16 +331,24 @@ typedef struct {
     float glare_strength;         // -1 = keep engine default
     float glare_threshold;        // -1 = keep engine default
     int glare_probe;              // Print the glare's light against its source's, per frame
-    int bloom_enable;             // -1 = keep default; 0/1 force (scene file)
-    float bloom_strength;         // -1 = keep engine default
-    float bloom_threshold;        // -1 = keep engine default
-    float ibl_intensity;          // -1 = keep engine default
-    int no_scene_file;            // Ignore any .cscn (input still allowed, look skipped)
-    int tonemap_mode;             // PostFXTonemapMode override (0 = keep default;
-                                  // coincides with PASSTHROUGH, which is a blit
-                                  // path and never user-set)
-    int ssaa;                     // Supersampling factor (0 = keep engine default)
-    float render_scale;           // TAAU render-res scale [0.5, 1) (0 = full res)
+    int le_enable;                // -1 = keep default (off); 0/1 force (--local-exposure, scene)
+    float le_highlights;          // -1 = keep engine default
+    float le_shadows;             // -1 = keep engine default
+    float le_detail;              // -1 = keep engine default
+    float le_blend;               // -1 = keep engine default
+    float le_kernel;              // -1 = keep engine default
+    float le_grey_bias;           // used when le_grey_bias_set; any sign is a value
+    int le_grey_bias_set;
+    int bloom_enable;      // -1 = keep default; 0/1 force (scene file)
+    float bloom_strength;  // -1 = keep engine default
+    float bloom_threshold; // -1 = keep engine default
+    float ibl_intensity;   // -1 = keep engine default
+    int no_scene_file;     // Ignore any .cscn (input still allowed, look skipped)
+    int tonemap_mode;      // PostFXTonemapMode override (0 = keep default;
+                           // coincides with PASSTHROUGH, which is a blit
+                           // path and never user-set)
+    int ssaa;              // Supersampling factor (0 = keep engine default)
+    float render_scale;    // TAAU render-res scale [0.5, 1) (0 = full res)
     // Diagnostic render-scale schedule (--render-scale-at): switch to
     // scale_at_value[i] on frame scale_at_frame[i]. Empty on a normal run.
     int scale_at_count;

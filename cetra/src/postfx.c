@@ -5,6 +5,7 @@
 
 #include "postfx.h"
 #include "glare.h"
+#include "local_exposure.h"
 #include "lut.h"
 #include "profiler.h"
 #include "texture.h"
@@ -648,6 +649,16 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     fx->glare_enabled = false;
     fx->glare_strength = 1.0f;
     fx->glare_threshold = 8.8f;
+
+    // Unreal's defaults, every one of which leaves the frame as it was: switching it on asks for
+    // nothing until a contrast is turned down.
+    fx->local_exposure_enabled = false;
+    fx->local_exposure_highlights = 1.0f;
+    fx->local_exposure_shadows = 1.0f;
+    fx->local_exposure_detail = 1.0f;
+    fx->local_exposure_blend = 0.6f;
+    fx->local_exposure_kernel = 0.5f;
+    fx->local_exposure_grey_bias = 0.0f;
 
     fx->flare_enabled = false;
     // Measured on the flare fixture: 0.02 is present but easy to miss, 0.06
@@ -2168,6 +2179,8 @@ void free_postfx(PostFX* fx) {
     free_program(fx->flare_program);
     free_glare(fx->glare);
     fx->glare = NULL;
+    free_local_exposure(fx->local_exposure);
+    fx->local_exposure = NULL;
     free_program(fx->tonemap_program);
     free_program(fx->spec_occ_composite_program);
     free_program(fx->gtao_program);
@@ -3844,6 +3857,25 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             if (!glare_tex)
                 fx->glare_failed = true;
         }
+        // Local exposure (spec 13.19): this frame's grid and blurred luminance, from the frame the
+        // tonemap is about to read, centred on the middle grey the camera maps the frame's mean
+        // to. Latched off where it cannot be built, as the glare is.
+        GLuint le_tex = 0;
+        const float le_grey =
+            log2f(fx->exposure ? fx->exposure->key : 0.18f) + fx->local_exposure_grey_bias;
+        if (fx->local_exposure_enabled && !fx->local_exposure_failed) {
+            if (!fx->local_exposure)
+                fx->local_exposure = create_local_exposure();
+            if (fx->local_exposure) {
+                profiler_scope_begin(fx->profiler, "local exposure");
+                le_tex = local_exposure_run(fx->local_exposure, scene_tex, fx->post_width,
+                                            fx->post_height, le_grey, fx->local_exposure_kernel,
+                                            fx->quad_vao);
+                profiler_scope_end(fx->profiler);
+            }
+            if (!le_tex)
+                fx->local_exposure_failed = true;
+        }
 
         // Composite + tone map into the target framebuffer. The quad runs at
         // the display size while sampling the supersampled HDR texture, so each
@@ -3891,7 +3923,19 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         glBindTexture(GL_TEXTURE_2D, fx->spec_occ_ready ? fx->spec_occ_texture : 0);
         glActiveTexture(GL_TEXTURE13);
         glBindTexture(GL_TEXTURE_2D, glare_tex);
+        glActiveTexture(GL_TEXTURE14);
+        glBindTexture(GL_TEXTURE_2D, le_tex);
         UniformManager* tm = fx->tonemap_program->uniforms;
+        uniform_set_int(tm, "localExposureTex", 14);
+        uniform_set_int(tm, "localExposureEnabled", le_tex ? 1 : 0);
+        if (le_tex) {
+            local_exposure_upload_layout(fx->local_exposure, tm);
+            uniform_set_float(tm, "leMiddleGrey", le_grey);
+            uniform_set_float(tm, "leHighlights", fx->local_exposure_highlights);
+            uniform_set_float(tm, "leShadows", fx->local_exposure_shadows);
+            uniform_set_float(tm, "leDetail", fx->local_exposure_detail);
+            uniform_set_float(tm, "leBlend", fminf(fmaxf(fx->local_exposure_blend, 0.0f), 1.0f));
+        }
         uniform_set_int(tm, "glareTex", 13);
         uniform_set_float(tm, "glareStrength", fminf(fmaxf(fx->glare_strength, 0.0f), 1.0f));
         uniform_set_int(tm, "glareEnabled", glare_tex ? 1 : 0);
@@ -3949,7 +3993,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         uniform_set_int(tm, "debugView", (int)debug_view);
         uniform_set_int(tm, "tonemapMode", (int)mode);
 
-        // Finishing grade (sharpen -> grade -> vignette -> gamma -> grain)
+        // Finishing stack (sharpen -> grade -> vignette -> gamma -> LUT -> grain -> dither)
         const float texel[2] = {1.0f / (float)fx->out_width, 1.0f / (float)fx->out_height};
         uniform_set_vec2(tm, "texelSize", texel);
         uniform_set_int(tm, "sharpenEnabled", fx->sharpen_enabled ? 1 : 0);
