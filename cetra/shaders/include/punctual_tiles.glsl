@@ -74,6 +74,12 @@ bool tileReadHidden(vec2 read) {
 // The blur is taken only where TAA averages it (`pcssStochastic`): a jitter that does not turn
 // moves each view's copy bodily, sheared by the spread, which reads worse than the copies
 // themselves, so without TAA the average is the views' plain one, as the reference's.
+//
+// The kept views stay where they were drawn while the body moves -- a flame breathes and leans
+// -- and the shadow moves with it: a light moved by D casts its shadow -D (dR - dB) / dB from
+// where it was on the receiver, so the views read at the receiver moved +D (dR - dB) / dB give
+// the moved body's shadow, to first order, with no face drawn again. The reference is drawn
+// from the body as it is, and does not move its reads.
 float tileViewsShadow(uint li, vec3 X, vec3 Nf, float nearP, float farP, int edge, float span) {
     vec3 centre = clusterLights[li].shadowTile.xyz;
     int first = int(clusterLights[li].shadowTile.w);
@@ -83,7 +89,8 @@ float tileViewsShadow(uint li, vec3 X, vec3 Nf, float nearP, float farP, int edg
 
     float dRecv = max(length(X - centre), nearP);
     vec3 start = X + Nf * (TILE_START_TEXELS * tileTexelMetres(dRecv));
-    bool blur = tileViewBlur == 1 && pcssStochastic == 1;
+    bool kept = tileViewBlur == 1;
+    bool blur = kept && pcssStochastic == 1;
 
     // The part of the body each view stands for: the body's volume shared n ways, or its
     // length for a body with no radius.
@@ -101,8 +108,16 @@ float tileViewsShadow(uint li, vec3 X, vec3 Nf, float nearP, float farP, int edg
     float turn = 6.2831853 * ign(gl_FragCoord.xy + vec2(float(pcssFrameIndex) * 5.588238));
     const vec2 R2 = vec2(0.7548776662, 0.5698402910);
 
-    // The first pass's jitter: the ramp an occluder a body's length from the light would cast.
-    float probe = blur ? 0.5 * s * max(dRecv / (len + 2.0 * radius) - 1.0, 0.0) : 0.0;
+    // How far the body has moved since its views were drawn, across the light's direction and
+    // carried onto the receiver's plane, as the jitter is.
+    vec3 moved = kept ? clusterLights[li].posRange.xyz - centre : vec3(0.0);
+    moved -= w * dot(moved, w);
+    moved -= w * (dot(moved, Nf) / wn);
+
+    // The first pass's reads, before any view has said where its occluder is: moved, and
+    // jittered by the ramp, as an occluder a body's length from the light would have them.
+    float guess = max(dRecv / (len + 2.0 * radius) - 1.0, 0.0);
+    float probe = blur ? 0.5 * s * guess : 0.0;
     int hidden = 0;
     float spread = 0.0; // the mean of (dR - dB) / dB over the views that find it hidden
     for (int m = 0; m < n; ++m) {
@@ -111,7 +126,7 @@ float tileViewsShadow(uint li, vec3 X, vec3 Nf, float nearP, float farP, int edg
         vec3 delta = probe * sqrt(q.x) * (cos(a) * t1 + sin(a) * t2);
         delta -= w * (dot(delta, Nf) / wn);
         vec2 read = tileViewRead(first + 6 * m, tileBodyPoint(centre, segment, radius, m, n),
-                                 start + delta, nearP, farP, edge, span);
+                                 start + moved * guess + delta, nearP, farP, edge, span);
         if (tileReadHidden(read)) {
             hidden++;
             spread += (read.y - read.x) / read.x;
@@ -119,9 +134,10 @@ float tileViewsShadow(uint li, vec3 X, vec3 Nf, float nearP, float farP, int edg
     }
     if (hidden == 0)
         return 1.0;
-    if (!blur)
+    if (!kept)
         return 1.0 - float(hidden) / float(n);
-    float halfWidth = 0.5 * s * spread / float(hidden);
+    spread /= float(hidden);
+    float halfWidth = blur ? 0.5 * s * spread : 0.0;
 
     float lit = 0.0;
     for (int m = 0; m < n; ++m) {
@@ -130,7 +146,7 @@ float tileViewsShadow(uint li, vec3 X, vec3 Nf, float nearP, float farP, int edg
         vec3 delta = halfWidth * sqrt(q.x) * (cos(a) * t1 + sin(a) * t2);
         delta -= w * (dot(delta, Nf) / wn);
         vec2 read = tileViewRead(first + 6 * m, tileBodyPoint(centre, segment, radius, m, n),
-                                 start + delta, nearP, farP, edge, span);
+                                 start + moved * spread + delta, nearP, farP, edge, span);
         lit += tileReadHidden(read) ? 0.0 : 1.0;
     }
     return lit / float(n);
