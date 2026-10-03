@@ -923,6 +923,8 @@ patter falls away over a doorway's walk and the rumble stays. `--mute` silences 
 **The candles and the hall bulb cast shadows** (spec 13.16), kept in tiles rather than drawn every
 frame, so a candle lights only what it can see. Switches:
 - **`--no-candle-shadows`:** the candles light through walls again; the bulb keeps its shadow.
+- **`--no-gi`:** no bounce light: no GI volume, and no reflection probes, which are captured
+  from its light. What separates a change in the direct light from one in what the captures saw.
 - **`--tile-views <n>`:** every cached light from n views over its body rather than eight. At 1,
   harder, darker pools under the candlesticks.
 - **`--tiles-probe`:** the tiles and each light's block, at exit.
