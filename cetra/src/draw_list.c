@@ -410,6 +410,10 @@ bool draw_item_bounds(const DrawItem* item, const CullView* view, AABB* out) {
     // vertically and conservative horizontally. Summed with wind's rather than
     // maxed: nothing stops a mesh carrying both, and the two add.
     margin += mesh->morph_max_offset;
+    // The third displacer, a fur coat's shells, which stand at most fur_length off the skin
+    // whichever way they lean: a vertex's share of it is its colour's alpha, at most 1.
+    if (mesh->material->fur_layers > 0)
+        margin += mesh->material->fur_length;
     if (margin > 0.0f)
         aabb_expand(out, margin);
     return true;

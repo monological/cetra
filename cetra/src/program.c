@@ -569,13 +569,18 @@ static ShaderProgram* _create_pbr_variant(const char* name, PbrFamily family, un
     // The families differ in the VERTEX stage and nowhere else: same pbr_frag,
     // same mask, same gates. That is what makes a second family an argument here
     // rather than a second copy of the feature system.
-    const char* vert =
-        family == PBR_FAMILY_SKINNED ? pbr_skinned_vert_shader_str : pbr_vert_shader_str;
-
+    // Into BOTH stages: the fur bit gates vertex code too, and a vertex stage that never saw the
+    // mask would default it to the full set and carry that code into every variant.
+    char* vert = shader_source_with_defines(
+        family == PBR_FAMILY_SKINNED ? pbr_skinned_vert_shader_str : pbr_vert_shader_str, defines);
     char* frag = shader_source_with_defines(pbr_frag_shader_str, defines);
-    if (!frag)
+    if (!vert || !frag) {
+        free(vert);
+        free(frag);
         return NULL;
+    }
     ShaderProgram* program = create_program_from_source(name, vert, frag, NULL);
+    free(vert);
     free(frag);
 
     if (program == NULL) {

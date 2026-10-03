@@ -228,6 +228,8 @@ void instance_chunk_upload_ordered(Ubo* ubo, InstanceChunk* chunk, const DrawLis
                                    size_t run, bool shading);
 
 // One draw of `instances` copies of `item`, plus the counters that describe it.
+// `layers` above 1 repeats a single object as the shells of a fur coat instead, which only the
+// shading pass asks for; a batch of objects with layers is refused to the bare objects.
 //
 // Shared because "what a draw is" must not be able to differ between the passes:
 // the depth prepass writes depth the shading pass then tests against, and the
@@ -241,7 +243,7 @@ void instance_chunk_upload_ordered(Ubo* ubo, InstanceChunk* chunk, const DrawLis
 // re-enable it mid-pass and halve the absorbance of everything after the first
 // two-sided caster.
 void submit_draw_run(SubmitState* state, UniformManager* u, const DrawItem* item, size_t instances,
-                     bool two_sided, SubmitStats* stats);
+                     size_t layers, bool two_sided, SubmitStats* stats);
 
 static inline void submit_bind_vao(SubmitState* state, GLuint vao) {
     if (state->vao != vao) {

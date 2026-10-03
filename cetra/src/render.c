@@ -232,6 +232,16 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
     uniform_set_vec3(u, "subsurfaceColor", (const float*)&material->subsurface_color);
     uniform_set_int(u, "sssProfileIndex", material->subsurface_profile); // scatter-profile slot
     uniform_set_float(u, "curvatureScale", material->curvature_scale);   // pre-integrated skin
+    // The fur coat. Location-guarded, so only the fur variant takes them; the layer count is
+    // what spaces the shells, and a draw of one instance never reaches a shell whatever it says.
+    uniform_set_int(u, "furLayers", material->fur_layers);
+    uniform_set_float(u, "furLength", material->fur_length);
+    uniform_set_vec3(u, "furComb", (const float*)&material->fur_comb);
+    uniform_set_float(u, "furLie", material->fur_lie);
+    uniform_set_float(u, "furDensity", material->fur_density);
+    uniform_set_float(u, "furThickness", material->fur_thickness);
+    uniform_set_float(u, "furRootShade", material->fur_root_shade);
+    uniform_set_float(u, "furClump", material->fur_clump);
     uniform_set_vec2(u, "uvOffset", (const float*)&material->uvOffset);
     uniform_set_vec2(u, "uvScale", (const float*)&material->uvScale);
     uniform_set_float(u, "uvRotation", material->uvRotation);
@@ -739,7 +749,13 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
         // Resolved here, as render.h asks: under wireframe the whole pass runs
         // with culling off, so no item may toggle it.
         bool two_sided = (item->flags & DRAW_DOUBLE_SIDED) && !engine->show_wireframe;
-        submit_draw_run(state, u, item, instances, two_sided, stats);
+        // A fur coat's shells: in this pass alone and never in a capture, and only on the
+        // skinned stage, whose draw carries one object and leaves gl_InstanceID to be the layer.
+        size_t layers = 1;
+        if (pass == SUBMIT_PASS_SHADE && !engine->capturing && instances == 1 &&
+            mat->fur_layers > 0 && mesh->is_skinned && program->pbr_family == PBR_FAMILY_SKINNED)
+            layers = (size_t)mat->fur_layers + 1;
+        submit_draw_run(state, u, item, instances, layers, two_sided, stats);
 
         if (use_a2c) {
             glDisable(GL_SAMPLE_ALPHA_TO_COVERAGE);
@@ -812,6 +828,8 @@ static unsigned _material_pbr_features(const Engine* engine, const Scene* scene,
     // material fact the rain's relief needs is refused it.
     else if (mat->height_tex && rain_active(scene->rain) && scene->rain->puddle_relief > 0.0f)
         mask |= PBR_FEAT_RELIEF;
+    if (mat->fur_layers > 0)
+        mask |= PBR_FEAT_FUR;
     return mask;
 }
 
@@ -941,8 +959,15 @@ void instance_chunk_upload_ordered(Ubo* ubo, InstanceChunk* chunk, const DrawLis
 }
 
 void submit_draw_run(SubmitState* state, UniformManager* u, const DrawItem* item, size_t instances,
-                     bool two_sided, SubmitStats* stats) {
+                     size_t layers, bool two_sided, SubmitStats* stats) {
     Mesh* mesh = item->mesh;
+    if (instances > 1 && layers > 1) {
+        // Both would be gl_InstanceID: a batch of objects reads it as its object, a coat as its
+        // layer, and one draw cannot mean both.
+        log_error("draw run of %zu objects asked for %zu layers; drawing the objects bare",
+                  instances, layers);
+        layers = 1;
+    }
     if (two_sided)
         glDisable(GL_CULL_FACE);
 
@@ -954,16 +979,17 @@ void submit_draw_run(SubmitState* state, UniformManager* u, const DrawItem* item
 
     submit_bind_vao(state, mesh->vao);
     uniform_set_int(u, "uInstanced", instances > 1 ? 1 : 0);
-    if (instances > 1)
+    const size_t copies = instances > 1 ? instances : layers;
+    if (copies > 1)
         glDrawElementsInstanced(mesh->draw_mode, index_count, GL_UNSIGNED_INT, index_offset,
-                                (GLsizei)instances);
+                                (GLsizei)copies);
     else
         glDrawElements(mesh->draw_mode, index_count, GL_UNSIGNED_INT, index_offset);
 
     if (stats) {
         stats->draws++;
         stats->instances += instances;
-        stats->triangles += (size_t)(index_count / 3) * instances;
+        stats->triangles += (size_t)(index_count / 3) * copies;
     }
 
     if (two_sided)
@@ -985,9 +1011,14 @@ void submit_draw_run(SubmitState* state, UniformManager* u, const DrawItem* item
 // MATERIAL's alpha mode, so it says nothing about which vertex stage will shade
 // the mesh -- `shape` meshes are ALPHA_OPAQUE and would otherwise be prepassed
 // with a program whose position they do not use. See ShaderProgram.
+//
+// A fur coat sits out too. Its skin is layer 0 of a program that differs from the prepass's by
+// the shell code, and on this driver a difference that never executes still re-lowers the
+// position -- a bit of drift the prepass's depth then rejects, deleting the skin.
 static bool item_is_prepassable(const DrawItem* item) {
-    return item->lane == DRAW_LANE_OPAQUE &&
-           item->mesh->material->shader_program->depth_prepass_safe;
+    const Material* mat = item->mesh->material;
+    return item->lane == DRAW_LANE_OPAQUE && mat->shader_program->depth_prepass_safe &&
+           mat->fur_layers <= 0;
 }
 
 // Depth for the whole opaque lane, so the shading pass rejects hidden fragments
@@ -1096,7 +1127,7 @@ static bool _submit_depth_prepass(Engine* engine, Scene* scene, const DrawList* 
         render_update_skinning_uniforms(program, mesh, item->pose);
 
         bool two_sided = (item->flags & DRAW_DOUBLE_SIDED) && !engine->show_wireframe;
-        submit_draw_run(&state, u, item, run, two_sided, stats);
+        submit_draw_run(&state, u, item, run, 1, two_sided, stats);
         drew = true;
         i += run - 1;
     }

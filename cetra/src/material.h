@@ -189,6 +189,19 @@ typedef struct Material {
     // and without a map there is no direction that is not the whole card's.
     float anisotropy;
 
+    // A coat of fur SHELLS (spec 13.17): the skinned mesh drawn again as fur_layers layers
+    // standing off its skin, each keeping only its strands' cross-sections. Skinned meshes only.
+    // The coat's length at a vertex is fur_length times the vertex colour's alpha, which an
+    // opaque surface reads for nothing else -- 0 leaves the skin bare there.
+    int fur_layers;       // shells over the skin; 0 = no coat
+    float fur_length;     // metres from root to tip at a vertex alpha of 1
+    float fur_density;    // strands per metre of skin
+    float fur_thickness;  // a strand's root radius in strand spacings; past 0.5 they overlap
+    float fur_root_shade; // the albedo at a strand's root against 1 at its tip
+    float fur_clump;      // 0 = every strand its own length, 1 = lengths gathered in tufts
+    vec3 fur_comb;        // object-space direction the coat lies toward
+    float fur_lie;        // 0 = strands stand straight out, 1 = they lie along the comb
+
     vec2 uvOffset;    // Texture coordinate offset (KHR_texture_transform)
     vec2 uvScale;     // Texture coordinate scale (KHR_texture_transform)
     float uvRotation; // Texture coordinate rotation in radians (KHR_texture_transform)
