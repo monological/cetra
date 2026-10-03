@@ -14,4 +14,7 @@
  */
 void interior_build(Kit* kit);
 
+// Whether a point on a floor stands on cloth: the rug, a runner, or the stair's runner.
+bool interior_on_cloth(const vec3 p);
+
 #endif // _SILENT_INTERIOR_H_

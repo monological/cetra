@@ -100,6 +100,10 @@ typedef struct Cat {
     LookAtSystem* look;  // the animation state's; NULL without a neck
     bool look_on;
     vec3 look_target; // world
+
+    // Told every event its clips carry -- a paw down, a landing, a meow -- or NULL.
+    void (*heard)(void* user, const char* name);
+    void* heard_user;
 } Cat;
 
 // The places a cat rests at, comma-separated, for the usage line.

@@ -11,4 +11,7 @@ void kitchen_build(Kit* kit, unsigned int seed);
 // Where the fridge's motor is, in the world: what its hum comes from.
 void kitchen_fridge_motor(vec3 out);
 
+// Whether a point on the kitchen floor stands on the mat in front of the stove.
+bool kitchen_on_mat(const vec3 p);
+
 #endif // _SILENT_KITCHEN_H_

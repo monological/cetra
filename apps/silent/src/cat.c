@@ -722,6 +722,13 @@ void cat_trace(const Cat* cat, int step) {
 
 // ---------------------------------------------------------------------------------------------
 
+static void cat_event(Animator* animator, const char* name, void* user) {
+    (void)animator;
+    const Cat* cat = user;
+    if (cat->heard)
+        cat->heard(cat->heard_user, name);
+}
+
 bool cat_create(Cat* cat, const CatDesc* desc, Game* game, Scene* scene, PhysicsWorld* physics) {
     memset(cat, 0, sizeof(*cat));
     cat->eye_bones[0] = cat->eye_bones[1] = -1;
@@ -811,10 +818,18 @@ bool cat_create(Cat* cat, const CatDesc* desc, Game* game, Scene* scene, Physics
     // The walks, the flights and the turns state where they take the body, and it goes there.
     cat->animator->root_motion = true;
     for (int i = 0; i < CAT_CLIP_COUNT; i++) {
-        cat->clips[i] = scene_find_animation(library, CAT_CLIPS[i].name);
-        if (!cat->clips[i])
+        Animation* a = scene_find_animation(library, CAT_CLIPS[i].name);
+        cat->clips[i] = a;
+        if (!a) {
             fprintf(stderr, "silent: the cat's model has no clip '%s'\n", CAT_CLIPS[i].name);
+            continue;
+        }
+        // The events the build wrote down in seconds, onto the clip in its own ticks.
+        for (int e = 0; e < CAT_CLIPS[i].event_count; e++)
+            animation_add_event(a, CAT_CLIPS[i].events[e].seconds * a->ticks_per_second,
+                                CAT_CLIPS[i].events[e].name);
     }
+    animator_set_event_callback(cat->animator, cat_event, cat);
     cat->clip = -1;
     play(cat, clip, 0.0f);
     if (cat->held && desc->clip_seconds >= 0.0f) {
