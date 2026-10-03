@@ -452,6 +452,22 @@ void scene_add_material(Scene* scene, Material* material) {
     scene->material_textures_dirty = true; // a new material's textures must be (re)packed
 }
 
+bool scene_release_material(Scene* scene, Material* material) {
+    if (!scene || !material || material->owner != scene)
+        return false;
+    for (size_t i = 0; i < scene->material_count; i++) {
+        if (scene->materials[i] != material)
+            continue;
+        memmove(&scene->materials[i], &scene->materials[i + 1],
+                (scene->material_count - i - 1) * sizeof(Material*));
+        scene->material_count--;
+        material->owner = NULL;
+        scene->material_textures_dirty = true;
+        return true;
+    }
+    return false;
+}
+
 void scene_set_wind(Scene* scene, struct Wind* wind) {
     if (!scene)
         return;

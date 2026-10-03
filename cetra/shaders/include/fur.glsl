@@ -1,16 +1,44 @@
-// The fragment half of a coat of fur shells (spec 13.17): which texels of a shell are coat, and
-// how a strand is shaded along its length. The vertex half is pbr_skinned_vert's, which stands
-// each shell off the skin and hands over the layer and the bind-pose position.
+// A coat of fur SHELLS (spec 13.17), both halves: the draw is repeated as layers with
+// gl_InstanceID the layer, and layer k of N stands k/N of a strand's length off the skin, layer 0
+// being the skin itself; the fragment keeps only the strands' cross-sections. A vertex stage
+// defines FUR_VERTEX before including this, as skin.glsl's includers define SKIN_PREV_POSE.
 //
 // Gated on its own bit, as ltc.glsl gates ltcTex: an includer without fur keeps none of this,
-// declarations included, so the varyings below exist exactly when a vertex stage writes them.
+// declarations included, so the varyings exist exactly when both stages carry them.
 #include "pbr_features.glsl"
+// hash13. Outside the gate: includes are expanded once, ahead of the preprocessor, so one inside
+// a branch some stage drops would take the hashes from every later include in that stage.
+#include "noise.glsl"
 
 #if CETRA_HAS(PBR_FEAT_FUR)
-in vec3 FurRest;        // bind-pose position: the strands ride the skin, not the world
-flat in float FurLayer; // 0 for the skin itself, k/N for shell k of N
-in float FurLen;        // this vertex's share of the coat's length
+uniform int furLayers; // shells over the skin; 0 is a material with no coat
 
+#ifdef FUR_VERTEX
+#define FUR_VARYING out
+#else
+#define FUR_VARYING in
+#endif
+FUR_VARYING vec3 FurRest;        // bind-pose position: the strands ride the skin, not the world
+flat FUR_VARYING float FurLayer; // 0 for the skin itself, k/N for shell k of N
+FUR_VARYING float FurLen;        // this vertex's share of the coat's length
+
+#ifdef FUR_VERTEX
+uniform float furLength; // metres from root to tip, before the vertex's own share of it
+uniform vec3 furComb;    // object-space direction the coat lies toward
+uniform float furLie;    // 0 = strands stand straight out, 1 = they lie along the comb
+
+// Where a strand's point at height h stands off the skin under `bone`: out along the normal,
+// bending over toward the comb -- flattened onto the bind surface, then carried by the bone -- as
+// it rises. Called once per pose with that pose's bone, so the two cannot bend differently.
+vec3 furShellOffset(mat3 bone, vec3 normal, float h, float share) {
+    vec3 n = normalize(bone * normal);
+    vec3 comb = bone * (furComb - normal * dot(normal, furComb));
+    float cl = length(comb);
+    vec3 c = cl > 1e-6 ? comb / cl : n;
+    return normalize(mix(n, c, furLie * h)) * (furLength * share * h);
+}
+
+#else
 uniform float furDensity;   // strands per metre of skin
 uniform float furThickness; // a strand's radius at its root, in strand spacings
 uniform float furRootShade; // the albedo at a strand's root against 1 at its tip
@@ -44,6 +72,7 @@ float furTufts(vec3 p) {
 // toward an uneven top -- a coat, where thin roots read as separate hairs over bare skin.
 // Worley on the bind pose, so no texture, no sampler unit and nothing to unwrap.
 bool furStrand(vec3 p, float h, out float tone) {
+    tone = 1.0;
     vec3 base = floor(p - 0.5);
     float best = 1e9;
     vec3 owner = base;
@@ -58,12 +87,18 @@ bool furStrand(vec3 p, float h, out float tone) {
             owner = cell;
         }
     }
+    // No strand is shorter than nothing, so none is wider here than one of full length: past
+    // that radius this texel is bare whatever the strand's own length, and the tufts need not
+    // be asked.
+    if (best >= furThickness * mix(1.0, FUR_TIP, h))
+        return false;
     float own = mix(0.45, 1.0, hash13(owner, vec3(26.651, 64.553, 17.849)));
     float tuft = mix(1.0, 0.5 + 0.7 * furTufts(owner / FUR_TUFT), furClump);
     float len = min(own * tuft, 1.0);
-    tone = mix(0.85, 1.1, hash13(owner, vec3(91.733, 23.471, 58.117)));
-    if (h > len)
+    if (h > len || best >= furThickness * mix(1.0, FUR_TIP, h / len))
         return false;
-    return best < furThickness * mix(1.0, FUR_TIP, h / len);
+    tone = mix(0.85, 1.1, hash13(owner, vec3(91.733, 23.471, 58.117)));
+    return true;
 }
+#endif
 #endif

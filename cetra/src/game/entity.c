@@ -249,16 +249,16 @@ void entity_rotate(Entity* entity, float angle, vec3 axis) {
     }
 }
 
-void entity_get_transform_matrix(Entity* entity, mat4 out) {
+void entity_get_transform_matrix(const Entity* entity, mat4 out) {
     if (!entity) {
         glm_mat4_identity(out);
         return;
     }
 
     glm_mat4_identity(out);
-    glm_translate(out, entity->position);
-    glm_quat_rotate(out, entity->rotation, out);
-    glm_scale(out, entity->scale);
+    glm_translate(out, (float*)entity->position);
+    glm_quat_rotate(out, (float*)entity->rotation, out);
+    glm_scale(out, (float*)entity->scale);
 }
 
 void sync_entity_transforms(EntityManager* em) {

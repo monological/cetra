@@ -40,28 +40,27 @@
 typedef struct LookAtBone {
     int bone;
     float share;                // of the rotation; the shares need not sum to 1
-    uint8_t subtree[MAX_BONES]; // this bone and every bone below it
+    uint8_t carried[MAX_BONES]; // this bone and every bone below it
+    size_t carried_count;
 } LookAtBone;
 
 typedef struct LookAtSystem {
     // ENGINE-OWNED
     Skeleton* skeleton;
-    LookAtBone bones[LOOK_AT_MAX_BONES];
+    bool tracking; // following the target, which it stops past give_up
+    float weight;  // how far the head is turned from the clip toward the target, 0..1
+    vec3 gaze;     // the eased world direction the head is turned toward, while weight > 0
+
+    // BY FUNCTION
+    LookAtBone bones[LOOK_AT_MAX_BONES]; // look_at_add_bone
     int bone_count;
     int parent; // the first bone's parent, whose forward the limits are measured from; -1 is
                 // the model's own forward
-    mat4 model_to_world, world_to_model;
-    vec3 target; // world, or model space until a world is set
-    bool has_target;
-    bool tracking; // following the target, which it stops past give_up
-    float weight;  // how far the head is turned from the clip toward the target, 0..1
-    vec3 gaze;     // the eased world direction the head is turned toward
-    bool gaze_valid;
-
-    // BY FUNCTION: look_at_add_bone, look_at_set_world, look_at_set_target,
-    // look_at_clear_target.
+    mat4 model_to_world, world_to_model; // look_at_set_world
 
     // SETTINGS
+    bool has_target;  // false lets the head go back to the clip
+    vec3 target;      // world, or model space until a world is set
     vec3 forward;     // the way the rig faces in model space; all zero is +z
     vec3 up;          // the rig's up in model space; all zero is +y
     vec3 eye;         // the bind-pose point a gaze is measured from; all zero is the last bone's
@@ -86,13 +85,8 @@ bool look_at_add_bone(LookAtSystem* system, const char* name, float share);
 // is in model space, and a target held in model space rides along with the body.
 void look_at_set_world(LookAtSystem* system, mat4 model_to_world);
 
-// Look at a world point, from now until cleared or replaced.
-void look_at_set_target(LookAtSystem* system, const vec3 world);
-// Let the head go back to the clip.
-void look_at_clear_target(LookAtSystem* system);
-
-// Turn the chain toward the target on the pose's globals: the seam inside
-// animation_state_apply_pose. dt drives the easing; 0 holds it where it is.
+// Turn the chain toward the target on the pose's globals. dt drives the easing; 0 holds it
+// where it is.
 void look_at_solve(LookAtSystem* system, mat4* global_transforms, float dt);
 
 #endif // _LOOK_AT_H_

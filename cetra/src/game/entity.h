@@ -73,7 +73,7 @@ void entity_set_rotation_euler(Entity* entity, vec3 euler); // pitch, yaw, roll 
 void entity_rotate(Entity* entity, float angle, vec3 axis);
 
 // Get transform matrix
-void entity_get_transform_matrix(Entity* entity, mat4 out);
+void entity_get_transform_matrix(const Entity* entity, mat4 out);
 
 // Sync entity transforms to scene nodes (call after update)
 void sync_entity_transforms(EntityManager* em);

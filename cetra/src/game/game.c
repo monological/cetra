@@ -290,6 +290,11 @@ static void game_pre_render(Engine* engine, Scene* scene) {
         // draws there cannot see them disagree.
         game->on_pre_render(game, game->accumulator / game->fixed_timestep);
     }
+    // The engine puts the camera rig's pose on the camera after this hook, and what follows
+    // reads the camera, so it goes on now too: the apply is idempotent and a NULL rig writes
+    // nothing.
+    if (engine->camera)
+        camera_rig_apply(engine->camera_rig, engine->camera);
     // After the app has decided what plays, and once per rendered frame rather
     // than per fixed step: the tick begins with the prev-pose latch, which is
     // the skinned analogue of scene_latch_prev_transforms and carries the same
@@ -297,18 +302,14 @@ static void game_pre_render(Engine* engine, Scene* scene) {
     // fixed steps, 0 on a frame that took none and 0 while paused.
     if (game->entity_manager)
         update_all_animators(game->entity_manager, (float)game->sim_clock.delta);
-    // After the app has posed the camera (which the engine reads next), point
-    // the listener along it and push the frame's positions into the sources.
+    // Point the listener along the posed camera and push the frame's positions into the
+    // sources.
     if (game->audio) {
         Camera* cam = engine->camera;
         vec3 pos = {0.0f, 0.0f, 0.0f};
         vec3 fwd = {0.0f, 0.0f, -1.0f};
         vec3 up = {0.0f, 1.0f, 0.0f};
         if (cam) {
-            // The engine puts the rig's pose on the camera after this hook; put it there now
-            // too, or the listener hears from where the camera was last frame. The apply is
-            // idempotent and a NULL rig writes nothing.
-            camera_rig_apply(engine->camera_rig, cam);
             glm_vec3_copy(cam->position, pos);
             camera_forward(cam, fwd);
             glm_vec3_copy(cam->up_vector, up);

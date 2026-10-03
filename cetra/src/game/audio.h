@@ -19,7 +19,6 @@
 
 #include <stdbool.h>
 #include <stddef.h>
-#include <stdint.h>
 #include <cglm/types.h>
 
 struct EntityManager;
@@ -56,13 +55,12 @@ void audio_set_bus_volume(AudioSystem* audio, AudioBus bus, float volume);
 // first time it is touched.
 float audio_get_bus_volume(const AudioSystem* audio, AudioBus bus);
 
-// Fire-and-forget 2D, from a file: a pooled voice (audio_play_voice), decoded on this thread so
-// an offline render does not depend on when a loader finishes.
+// Fire-and-forget 2D: miniaudio owns the voice and reaps it at the end.
 void audio_play_oneshot(AudioSystem* audio, const char* path, AudioBus bus);
 
-// The pool every fire-and-forget voice comes from. Full, the oldest voice is stopped for the
-// new one: a headless run that pulls no PCM never reaches a voice's end, so nothing would ever
-// come free otherwise.
+// The pool positional fire-and-forget voices come from. Full, a voice that has played out is
+// taken, else the oldest still playing is stopped for the new one: a headless run that pulls
+// no PCM never reaches a voice's end, so nothing would ever come free otherwise.
 #define AUDIO_VOICE_MAX 32
 
 // A voice played from a sound, as zero means the default named here.
@@ -70,13 +68,12 @@ typedef struct AudioVoiceDesc {
     vec3 position;               // world, or in `follow`'s frame when it follows an entity
     const struct Entity* follow; // carried by this entity while it lives, or NULL to stay put
     float volume;                // linear gain; 0 is 1
-    float pitch;                 // playback rate; 0 is 1
-    bool flat;                   // 2D: no position, no attenuation
 } AudioVoiceDesc;
 
-// Play a copy of a sound decoded from a file, on that sound's bus, once, and reap it at its
-// end. Any number may overlap. The prototype keeps its own volume and position, which a voice
-// does not take. False, logged, for a sound that is not from a file.
+// Play a positioned copy of a sound decoded from a file, on that sound's bus, once, and reap
+// it at its end. Any number may overlap, and none decodes anything: the copies share the
+// prototype's samples. The prototype keeps its own volume and position, which a voice does not
+// take. False, logged, for a sound generated or streamed rather than decoded.
 bool audio_play_voice(AudioSystem* audio, const Sound* prototype, const AudioVoiceDesc* desc);
 // A held music voice, streamed and unspatialized; returned so a game can stop it.
 Sound* audio_play_music(AudioSystem* audio, const char* path, bool loop);
@@ -111,18 +108,14 @@ void audio_system_update(AudioSystem* audio, struct EntityManager* em, vec3 list
 // each) into `out`. Returns frames produced; 0 in device mode. The gate's readout.
 size_t audio_system_read_pcm(AudioSystem* audio, float* out, size_t frames);
 
-// The AUDIO_SOURCE entity component (spec 12.0): Sounds attached to an entity -- up to
-// AUDIO_SOURCE_MAX since spec 13.17, each at its own offset in the entity's frame, so a cat
-// purrs from its chest -- whose world positions are pushed from the entity each frame.
-// Spatialization is turned on. The component owns each Sound and releases it on teardown.
-// Adding appends; returns the sound, or NULL when the entity holds AUDIO_SOURCE_MAX already.
-#define AUDIO_SOURCE_MAX 8
+// The AUDIO_SOURCE entity component (spec 12.0): attach a Sound (from a file or
+// a tone) to an entity, and its world position is pushed from the entity each
+// frame -- at an offset in the entity's frame, since spec 13.17, or at its origin.
+// Spatialization is turned on. The component takes ownership of the Sound and
+// releases it on teardown. Returns the sound, or NULL on failure or when the
+// entity has a source already.
 Sound* entity_add_audio_source(struct Entity* entity, Sound* sound);
 Sound* entity_add_audio_source_at(struct Entity* entity, Sound* sound, const vec3 offset);
-int entity_audio_source_count(struct Entity* entity);
-// The index-th sound, in the order they were added, or NULL.
-Sound* entity_get_audio_source(struct Entity* entity, int index);
-// Detach a sound and free it; the ones after it move up an index.
-void entity_remove_audio_source(struct Entity* entity, Sound* sound);
+Sound* entity_get_audio_source(struct Entity* entity);
 
 #endif // _AUDIO_H_

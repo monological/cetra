@@ -89,6 +89,25 @@ static inline void skeleton_rotate_global(mat4 dest, mat4 src, versor q, const v
     dest[3][3] = 1.0f;
 }
 
+// Turn the listed bones rigidly by q about `pivot`, on their globals alone: each one turned,
+// and its head carried round the pivot -- what everything below a turned joint undergoes, which
+// needs no local transforms. static inline for the reason above.
+static inline void skeleton_rotate_bones(mat4* globals, const uint8_t* bones, size_t count,
+                                         versor q, const vec3 pivot) {
+    if (count == 0)
+        return;
+    mat4 r;
+    glm_quat_mat4(q, r);
+    for (size_t k = 0; k < count; k++) {
+        const int i = bones[k];
+        vec3 head;
+        glm_vec3_sub(globals[i][3], (float*)pivot, head);
+        glm_mat4_mulv3(r, head, 0.0f, head);
+        glm_vec3_add((float*)pivot, head, head);
+        skeleton_rotate_global(globals[i], globals[i], q, head);
+    }
+}
+
 // --- Keyframes ---
 
 typedef struct PositionKey {

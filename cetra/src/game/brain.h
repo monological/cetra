@@ -1,7 +1,6 @@
 #ifndef _BRAIN_H_
 #define _BRAIN_H_
 
-#include <cglm/cglm.h>
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -11,9 +10,14 @@
  * one, held for at least its minimum time, until something beats it by a margin or it ends.
  * What the activities MEAN is the game's; the brain knows only scores, clocks and seeds.
  *
- * Three things are decided here rather than in each game, because each is easy to get
+ * Four things are decided here rather than in each game, because each is easy to get
  * subtly wrong and the failure looks like temperament rather than a bug:
  *
+ *  - COMMITMENT. A running activity is held at the score it was chosen with, or its live
+ *    score if that is higher. Doing a thing uses up the want for it -- a visit spends a place's
+ *    novelty, a sleep spends tiredness -- so a live score falls the moment the thing starts, and
+ *    measured against that every activity would be abandoned half done. One started by
+ *    brain_start is held as high as the best of the others then.
  *  - HYSTERESIS. A challenger must beat the running activity's score by `hysteresis`. Two
  *    activities whose scores cross slowly otherwise trade places on every re-score, and the
  *    entity dithers between them at the re-score interval.
@@ -23,11 +27,12 @@
  *    makes a creature that always does the same thing.
  *  - A FAILED begin falls through to the next best in the same tick and puts the failed one
  *    on its fail cooldown, so a choice that cannot start (no way there, say) costs neither a
- *    frame of standing still nor a retry every tick.
+ *    frame of standing still nor a retry every tick. The activity a challenger was replacing
+ *    is not among them: it has just been ended.
  *
- * The brain is ticked once per fixed step by the game loop, after the app's update. Its
- * activities must not read per-frame edges (an animator's finished flag, an input press):
- * a frame runs any number of steps, and an edge is seen by all or none of them.
+ * The brain is ticked once per fixed step, after the app's update. Its activities must not
+ * read per-frame edges (an animator's finished flag, an input press): a frame runs any number
+ * of steps, and an edge is seen by all or none of them.
  *
  * Teardown frees only the brain's own memory. It never calls an activity's `end`, because
  * components go after the app's shutdown, in component order, and an `end` reaching into
@@ -35,12 +40,10 @@
  */
 
 #define BRAIN_MAX_ACTIVITIES 16
-#define BRAIN_MEMORY_SLOTS   4
 
 typedef struct Brain Brain;
 struct Entity;
 struct EntityManager;
-struct PhysicsWorld;
 
 typedef enum {
     BRAIN_RUNNING = 0,
@@ -64,36 +67,25 @@ typedef struct BrainActivity {
     void* user;
 } BrainActivity;
 
-// Something remembered: an entity, where it was, and how long ago.
-typedef struct BrainMemory {
-    uint32_t entity; // 0 is an empty slot
-    vec3 where;
-    float seconds; // since it was last noticed
-} BrainMemory;
-
 struct Brain {
     // ENGINE-OWNED
-    BrainActivity activities[BRAIN_MAX_ACTIVITIES];
-    int activity_count;
     float scores[BRAIN_MAX_ACTIVITIES];    // as last scored
     float cooldowns[BRAIN_MAX_ACTIVITIES]; // seconds left
     int current;                           // -1 for none
     float current_seconds;
+    float held; // the score the running activity is held at
     float since_scored;
-    bool interrupted;
     uint32_t rng;
-    BrainMemory memory[BRAIN_MEMORY_SLOTS];
-    struct Entity* entity; // the owner, once added
 
-    // BY FUNCTION: brain_add_activity, brain_start, brain_interrupt, brain_notice.
+    // BY FUNCTION
+    BrainActivity activities[BRAIN_MAX_ACTIVITIES]; // brain_add_activity
+    int activity_count;
+    bool interrupted; // brain_interrupt
 
     // SETTINGS
     float interval;   // seconds between re-scorings while an activity runs
     float hysteresis; // a challenger must beat the running activity by this much
     float tie_band;   // scores this close to the best are drawn between
-    float forget;     // seconds after which a memory is gone
-    float sight_range;
-    float sight_half_angle; // radians either side of the eye's forward
 };
 
 // A brain with no activities, seeded: the same seed makes the same choices.
@@ -102,10 +94,9 @@ void free_brain(Brain* brain);
 
 // Register an activity, copied. Its index, or -1 when the brain is full.
 int brain_add_activity(Brain* brain, const BrainActivity* activity);
-int brain_find_activity(const Brain* brain, const char* name);
 
-// One step: cooldowns and memories age, the running activity steps, and the brain re-scores
-// when its interval is up, the activity ended, or something interrupted it.
+// One step: cooldowns age, the running activity steps, and the brain re-scores when its
+// interval is up, the activity ended, or something interrupted it.
 void brain_update(Brain* brain, float dt);
 
 // Re-score on the next step, ignoring the running activity's minimum time.
@@ -121,23 +112,11 @@ const char* brain_current_name(const Brain* brain);
 // 0..1 from the brain's own sequence, for an activity's choices.
 float brain_random(Brain* brain);
 
-// Remember an entity, by id, as seen at `where` just now.
-void brain_notice(Brain* brain, uint32_t entity, const vec3 where);
-// Where it was and how long ago, if it is remembered at all.
-bool brain_recall(const Brain* brain, uint32_t entity, vec3 where, float* seconds);
-
-// Whether `point` is inside the brain's field of view from an eye looking along `forward`.
-bool brain_in_view(const Brain* brain, const vec3 eye, const vec3 forward, const vec3 point);
-// Whether nothing but `target` stands between the eye and `point`. The owner's own body is
-// never in the way. A NULL target asks whether the point itself is in clear sight.
-bool brain_can_see(const Brain* brain, struct PhysicsWorld* world, const vec3 eye, const vec3 point,
-                   const struct Entity* target);
-
 // The BRAIN component: the entity owns the brain from here.
 Brain* entity_add_brain(struct Entity* entity, Brain* brain);
 Brain* entity_get_brain(struct Entity* entity);
 
-// Every brain, one step: the game loop's call, after the app's update.
+// Every brain, one step.
 void update_all_brains(struct EntityManager* em, float dt);
 
 #endif // _BRAIN_H_

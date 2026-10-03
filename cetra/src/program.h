@@ -52,6 +52,11 @@ typedef struct ShaderProgram {
     // depth along unexpanded lines that nothing ever shades. Its meshes are
     // ALPHA_OPAQUE, so the lane alone cannot tell them apart.
     bool depth_prepass_safe;
+    // Draws a furred mesh as its skin and the shells of its coat, one instance each, with
+    // gl_InstanceID as the shell (spec 13.17). Set by the variant builder on the skinned stage
+    // carrying the fur bit -- which is also what makes such a variant unsafe to prepass: the
+    // shell code changes the position the prepass would have to match.
+    bool fur_shells;
     // Which lit-surface features this program was compiled with, or -1 for a
     // program that is not a variant at all (spec 11.93). A third derived fact
     // beside the two above, and for their reason: it is settled at build time,

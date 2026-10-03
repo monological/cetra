@@ -182,6 +182,9 @@ static void _material_param_control(Material* material, const MaterialParam* p) 
         case MATERIAL_PARAM_COLOR:
             changed = igColorEdit3(p->key, v, ImGuiColorEditFlags_Float);
             break;
+        case MATERIAL_PARAM_VEC3:
+            changed = igSliderFloat3(p->key, v, p->min, p->max, "%.3f", 0);
+            break;
         case MATERIAL_PARAM_FLOAT:
             changed = igSliderFloat(p->key, v, p->min, p->max, "%.3f", 0);
             break;

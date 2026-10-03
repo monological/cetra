@@ -62,15 +62,10 @@ uniform float uDeltaTime; // render clock advance, for the previous-frame positi
 #include "tbn.glsl"
 #include "instancing.glsl"
 #include "object_position.glsl"
-#include "pbr_features.glsl"
-
-#if CETRA_HAS(PBR_FEAT_FUR)
-// pbr_frag's fur inputs, which a rigid mesh never grows: shells are drawn by pbr_skinned_vert alone,
-// layering a draw that carries no instance block, where this stage's instances ARE objects.
-out vec3 FurRest;
-flat out float FurLayer;
-out float FurLen;
-#endif
+// The coat's varyings, which a rigid mesh never grows: here an instance is an object, not a
+// shell, so this stage only says it is bare skin.
+#define FUR_VERTEX
+#include "fur.glsl"
 
 // The depth prepass rasterizes these same triangles and this pass then tests
 // against its depth with GL_LEQUAL, so this value has to be bit-identical

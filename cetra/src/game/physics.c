@@ -1064,6 +1064,21 @@ bool physics_world_raycast_ignore(PhysicsWorld* world, vec3 origin, vec3 directi
     return hit;
 }
 
+bool physics_world_line_of_sight(PhysicsWorld* world, const vec3 from, const vec3 to,
+                                 const RigidBody* ignore, const struct Entity* target) {
+    vec3 dir;
+    glm_vec3_sub((float*)to, (float*)from, dir);
+    const float d = glm_vec3_norm(dir);
+    if (d < 1e-4f)
+        return true;
+    glm_vec3_scale(dir, 1.0f / d, dir);
+    RaycastHit hit;
+    if (!physics_world_raycast_ignore(world, (float*)from, dir, d, ignore, &hit) || !hit.hit)
+        return true;
+    // A hit at the far end is what is being looked at, a surface or a body.
+    return (target && hit.entity == target) || hit.distance >= d - 0.02f;
+}
+
 // Shape cast collector context for finding closest hit (stores full result)
 typedef struct ShapeCastContext {
     float closest_fraction;

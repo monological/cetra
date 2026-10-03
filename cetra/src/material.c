@@ -102,7 +102,7 @@ const MaterialParam MATERIAL_PARAMS[] = {
     {"furRootShade", "Fur", MP(fur_root_shade, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
     {"furClump", "Fur", MP(fur_clump, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
     // A direction rather than a colour, so it reaches below zero.
-    {"furComb", "Fur", MP(fur_comb, MATERIAL_PARAM_COLOR, -1.0f, 1.0f)},
+    {"furComb", "Fur", MP(fur_comb, MATERIAL_PARAM_VEC3, -1.0f, 1.0f)},
     {"furLie", "Fur", MP(fur_lie, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
 
     {"normalScale", "Maps and wind", MP(normalScale, MATERIAL_PARAM_FLOAT, 0.0f, 2.0f)},
@@ -190,12 +190,29 @@ static void* material_param_field(Material* material, const MaterialParam* param
     return (void*)((char*)material + param->offset);
 }
 
+int material_param_components(const MaterialParam* param) {
+    if (!param)
+        return 0;
+    switch (param->type) {
+        case MATERIAL_PARAM_COLOR:
+        case MATERIAL_PARAM_VEC3:
+            return 3;
+        case MATERIAL_PARAM_FLOAT:
+        case MATERIAL_PARAM_INT:
+            return 1;
+        case MATERIAL_PARAM_TEXTURE:
+            return 0;
+    }
+    return 0;
+}
+
 void material_param_get(const Material* material, const MaterialParam* param, float* values) {
     if (!material || !param || !values || param->type == MATERIAL_PARAM_TEXTURE)
         return;
     const void* field = material_param_field_const(material, param);
     switch (param->type) {
         case MATERIAL_PARAM_COLOR:
+        case MATERIAL_PARAM_VEC3:
             memcpy(values, field, sizeof(vec3));
             break;
         case MATERIAL_PARAM_FLOAT:
@@ -222,6 +239,7 @@ void material_param_set(Material* material, const MaterialParam* param, const fl
     void* field = material_param_field(material, param);
     switch (param->type) {
         case MATERIAL_PARAM_COLOR:
+        case MATERIAL_PARAM_VEC3:
             memcpy(field, values, sizeof(vec3));
             break;
         case MATERIAL_PARAM_FLOAT:

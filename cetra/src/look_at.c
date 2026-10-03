@@ -12,14 +12,6 @@
 // yaw about the up axis turns nothing.
 #define LOOK_AT_ELEVATION_MAX 1.4f
 
-static float wrap_angle(float a) {
-    while (a > GLM_PIf)
-        a -= 2.0f * GLM_PIf;
-    while (a < -GLM_PIf)
-        a += 2.0f * GLM_PIf;
-    return a;
-}
-
 LookAtSystem* create_look_at_system(Skeleton* skeleton) {
     if (!skeleton) {
         log_error("create_look_at_system: no skeleton");
@@ -64,7 +56,10 @@ bool look_at_add_bone(LookAtSystem* system, const char* name, float share) {
     }
     if (system->bone_count > 0) {
         const LookAtBone* above = &system->bones[system->bone_count - 1];
-        if (bone == above->bone || !above->subtree[bone]) {
+        bool below = false;
+        for (size_t k = 1; k < above->carried_count && !below; k++)
+            below = above->carried[k] == bone;
+        if (!below) {
             log_error("look_at_add_bone: '%s' does not descend from '%s'", name,
                       sk->bones[above->bone].name);
             return false;
@@ -75,7 +70,12 @@ bool look_at_add_bone(LookAtSystem* system, const char* name, float share) {
     LookAtBone* b = &system->bones[system->bone_count++];
     b->bone = bone;
     b->share = share;
-    skeleton_mark_subtree(sk, bone, b->subtree);
+    uint8_t mask[MAX_BONES];
+    skeleton_mark_subtree(sk, bone, mask);
+    b->carried_count = 0;
+    for (size_t i = 0; i < sk->bone_count; i++)
+        if (mask[i])
+            b->carried[b->carried_count++] = (uint8_t)i;
     return true;
 }
 
@@ -86,20 +86,6 @@ void look_at_set_world(LookAtSystem* system, mat4 model_to_world) {
     }
     glm_mat4_copy(model_to_world, system->model_to_world);
     glm_mat4_inv(system->model_to_world, system->world_to_model);
-}
-
-void look_at_set_target(LookAtSystem* system, const vec3 world) {
-    if (!system || !world) {
-        log_error("look_at_set_target: a null argument");
-        return;
-    }
-    glm_vec3_copy((float*)world, system->target);
-    system->has_target = true;
-}
-
-void look_at_clear_target(LookAtSystem* system) {
-    if (system)
-        system->has_target = false;
 }
 
 // The rig's frame: forward, up, and the right they make, with the zero defaults applied.
@@ -167,25 +153,18 @@ static void turn_bone(const LookAtSystem* s, mat4* g, const LookAtBone* b, const
     glm_vec3_cross(level, (float*)f->up, axis);
     glm_quatv(qp, pitch, axis);
     glm_quat_mul(qp, qy, q);
-
-    mat4 r;
-    glm_quat_mat4(q, r);
     vec3 pivot;
     glm_vec3_copy(g[b->bone][3], pivot);
-    for (size_t j = 0; j < s->skeleton->bone_count; j++) {
-        if (!b->subtree[j])
-            continue;
-        vec3 head;
-        glm_vec3_sub(g[j][3], pivot, head);
-        glm_mat4_mulv3(r, head, 0.0f, head);
-        glm_vec3_add(pivot, head, head);
-        skeleton_rotate_global(g[j], g[j], q, head);
-    }
+    skeleton_rotate_bones(g, b->carried, b->carried_count, q, pivot);
 }
 
 void look_at_solve(LookAtSystem* s, mat4* g, float dt) {
     if (!s || !g || s->bone_count == 0)
         return;
+    if (!s->has_target && s->weight == 0.0f) {
+        s->tracking = false;
+        return;
+    }
     Frame f;
     rig_frame(s, &f);
     const int last = s->bones[s->bone_count - 1].bone;
@@ -210,7 +189,7 @@ void look_at_solve(LookAtSystem* s, mat4* g, float dt) {
     if (want) {
         // Let go past give_up and take it back only once it is within reach again, so a
         // target on the boundary does not flick the head back and forth.
-        const float off = fabsf(wrap_angle(heading_of(&f, to) - ref_heading));
+        const float off = fabsf(wrap_pi(heading_of(&f, to) - ref_heading));
         if (off > s->give_up)
             s->tracking = false;
         else if (off <= s->max_yaw)
@@ -220,22 +199,20 @@ void look_at_solve(LookAtSystem* s, mat4* g, float dt) {
         s->tracking = false;
     }
 
+    const bool fresh = s->weight == 0.0f;
     const float ease = dt > 0.0f ? 1.0f - expf(-s->blend_rate * dt) : 0.0f;
     s->weight += ((want ? 1.0f : 0.0f) - s->weight) * ease;
     if (!want && s->weight < LOOK_AT_WEIGHT_EPS)
         s->weight = 0.0f;
-    if (s->weight == 0.0f) {
-        s->gaze_valid = false;
+    if (s->weight == 0.0f)
         return;
-    }
 
     vec3 aim = {0.0f, 0.0f, 1.0f};
     bone_forward(s, g, last, &f, aim);
-    if (!s->gaze_valid) {
+    if (fresh) {
         // Taken up from wherever the clip has the head, so nothing snaps.
         glm_mat4_mulv3(s->model_to_world, aim, 0.0f, s->gaze);
         glm_vec3_normalize(s->gaze);
-        s->gaze_valid = true;
     }
     if (want) {
         vec3 to_world;
@@ -256,14 +233,14 @@ void look_at_solve(LookAtSystem* s, mat4* g, float dt) {
     // Where the head is to point, clamped against the parent, then as much of the way there
     // from the clip as the weight says.
     const float yaw =
-        glm_clamp(wrap_angle(heading_of(&f, gaze) - ref_heading), -s->max_yaw, s->max_yaw);
+        glm_clamp(wrap_pi(heading_of(&f, gaze) - ref_heading), -s->max_yaw, s->max_yaw);
     const float pitch =
         glm_clamp(elevation_of(&f, gaze) - ref_elevation, -s->max_pitch, s->max_pitch);
     const float want_heading = ref_heading + yaw;
     const float want_elevation =
         glm_clamp(ref_elevation + pitch, -LOOK_AT_ELEVATION_MAX, LOOK_AT_ELEVATION_MAX);
     const float aim_heading = heading_of(&f, aim), aim_elevation = elevation_of(&f, aim);
-    const float goal_heading = aim_heading + s->weight * wrap_angle(want_heading - aim_heading);
+    const float goal_heading = aim_heading + s->weight * wrap_pi(want_heading - aim_heading);
     const float goal_elevation = aim_elevation + s->weight * (want_elevation - aim_elevation);
 
     // Down the chain, each bone taking its share of what is LEFT, read from the aim as the
@@ -284,7 +261,7 @@ void look_at_solve(LookAtSystem* s, mat4* g, float dt) {
         vec3 now = {0.0f, 0.0f, 1.0f};
         bone_forward(s, g, last, &f, now);
         const float h = heading_of(&f, now), e = elevation_of(&f, now);
-        turn_bone(s, g, b, &f, h, part * wrap_angle(goal_heading - h), part * (goal_elevation - e));
+        turn_bone(s, g, b, &f, h, part * wrap_pi(goal_heading - h), part * (goal_elevation - e));
         if (remaining <= 0.0f)
             break;
     }

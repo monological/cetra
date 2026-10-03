@@ -594,14 +594,20 @@ static ShaderProgram* _create_pbr_variant(const char* name, PbrFamily family, un
     // chunk depth_prepass_vert uses, and declare `invariant gl_Position`; the
     // skinned one's skinning matches the prepass's because both call skin.glsl's
     // skinMatrix on the same uniforms. Set here rather than by the caller because
-    // EVERY variant owes the same answer, and
+    // every variant owes an answer, and
     // one that missed it lets the prepass stamp depth with no coverage test --
     // which deletes alpha-masked geometry rather than shading it wrong, and is
     // invisible in whichever variant happened to get tested.
     //
+    // The one exception is the skinned stage with the fur bit: its shell code sits between the
+    // skinning and gl_Position, and on this driver code that never runs for the skin still
+    // re-lowers the position the prepass would have to match, so the skin would lose to its
+    // own prepass depth.
+    //
     // `instanced` is not set here and never was: setup_program_uniforms resolves
     // it from the linked program, for every program in the engine.
-    program->depth_prepass_safe = true;
+    program->fur_shells = family == PBR_FAMILY_SKINNED && (features & PBR_FEAT_FUR);
+    program->depth_prepass_safe = !program->fur_shells;
 
     // Parsed by scripts/gates.py::_PBR_VARIANT. It is the only way from outside
     // to see which variant a scene resolved to, because a correct variant and
