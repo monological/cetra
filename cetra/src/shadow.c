@@ -295,21 +295,34 @@ static int punctual_edge_for(int light_layers) {
 //
 // The cached tiles (spec 13.16) ride past both and do not count toward the edge either: a
 // tile is the same size at any edge, so the edge decides only how many fit in a layer.
+static void tiles_migrate(ShadowSystem* ss, GLuint old_tex, GLuint old_fbo, int old_edge);
+
 static int init_punctual_shadow_array(ShadowSystem* system, int layers, int light_layers) {
     if (layers < 1 || layers > PUNCTUAL_ARRAY_LAYERS + (int)PUNCTUAL_TILE_MAX_LAYERS)
         return -1;
 
     int size = punctual_edge_for(light_layers);
     if (system->punctual_map_array && system->punctual_allocated_layers >= layers &&
-        system->punctual_map_size == size)
+        system->punctual_map_size == size) {
+        // The array stays. Its tiles stay too unless the region's base has risen under them,
+        // which without a new texture to copy into loses them.
+        if (system->tile_held_base != system->tile_base_layer) {
+            system->tile_generation++;
+            system->tile_held_base = system->tile_base_layer;
+        }
         return 0;
+    }
 
-    free_depth_array(&system->punctual_map_array, &system->punctual_fbo);
+    GLuint old_tex = system->punctual_map_array, old_fbo = system->punctual_fbo;
+    const int old_size = system->punctual_map_size;
+    system->punctual_map_array = 0;
+    system->punctual_fbo = 0;
     init_depth_array(&system->punctual_map_array, &system->punctual_fbo, size, layers);
     system->punctual_allocated_layers = layers;
     system->punctual_map_size = size;
-    // Every kept tile went with the old texture.
-    system->tile_generation++;
+    tiles_migrate(system, old_tex, old_fbo, old_size);
+    free_depth_array(&old_tex, &old_fbo);
+    system->tile_held_base = system->tile_base_layer;
     // Both costs, stated rather than assumed: the traversals (every light layer is
     // re-rendered each frame) and the VRAM the budget just spent.
     log_info("Punctual shadow array: %d layer(s) at %d^2 (%.0f MB) -- %d light layer(s) redrawn "
@@ -381,6 +394,13 @@ void shadow_system_shift_origin(ShadowSystem* system, const vec3 delta) {
     if (!system)
         return;
     glm_vec3_sub(system->scene_center, (float*)delta, system->scene_center);
+    // A cached face is drawn about its origin, so it moves with the world unredrawn; `seen`
+    // moves too, or every light would read as moving on the shifted frame.
+    for (int b = 0; b < system->tile_block_count; ++b) {
+        ShadowTileBlock* block = &system->tile_blocks[b];
+        glm_vec3_sub(block->origin, (float*)delta, block->origin);
+        glm_vec3_sub(block->seen, (float*)delta, block->seen);
+    }
 }
 
 void compute_directional_light_space_matrix(vec3 direction, vec3 scene_center, float ortho_size,
@@ -1349,17 +1369,110 @@ static void tiles_pick_heroes(ShadowSystem* ss, const vec3 eye) {
 
 // Lay the region out for the edge the array is about to be built at: its base past every
 // per-frame layer and the rain's, and layers enough for every block. Moving the base moves
-// every tile, which loses them as surely as a rebuild does, so it only ever rises -- but it
-// leaves room for the rain only once it has rained, since at the largest edge a layer held
-// for rain that never falls is 64 MB of nothing.
+// every tile -- carried across when the array is rebuilt for it, lost when it is not -- so it
+// only ever rises; but it leaves room for the rain only once it has rained, since at the
+// largest edge a layer held for rain that never falls is 64 MB of nothing.
 static void tiles_layout(ShadowSystem* ss, const Scene* scene, int light_layers) {
     const int base = light_layers + (rain_active(scene->rain) ? 1 : 0);
-    if (base > ss->tile_base_layer) {
+    if (base > ss->tile_base_layer)
         ss->tile_base_layer = base;
-        ss->tile_generation++;
-    }
     const int per_layer = tiles_per_layer(punctual_edge_for(light_layers));
     ss->tile_layers = (6 * ss->tile_block_count + per_layer - 1) / per_layer;
+}
+
+// Carry the kept tiles from an array being replaced into its replacement, each under the new
+// layout -- the region's new base, the new edge's tiles per layer -- so a rebuild for one
+// more light layer, or a new edge, does not cost every cached light its faces in one frame.
+// silent rebuilds when its probes are installed and when the flashlight is first switched
+// on. A block whose cells no longer fit is dropped, to be drawn again.
+static void tiles_migrate(ShadowSystem* ss, GLuint old_tex, GLuint old_fbo, int old_edge) {
+    if (!old_tex || old_edge <= 0)
+        return;
+    const int new_edge = ss->punctual_map_size;
+    for (int b = 0; b < ss->tile_block_count; ++b) {
+        ShadowTileBlock* block = &ss->tile_blocks[b];
+        if (!block->light || block->hero || block->generation != ss->tile_generation)
+            continue;
+        const int src = ss->tile_held_base * tiles_per_layer(old_edge) + 6 * b;
+        const int dst = ss->tile_base_layer * tiles_per_layer(new_edge) + 6 * b;
+        for (int f = 0; f < 6 && block->valid; ++f) {
+            if (!(block->valid & (1u << f)))
+                continue;
+            int sl, sx, sy, dl, dx, dy;
+            tile_cell_at(src + f, old_edge, &sl, &sx, &sy);
+            tile_cell_at(dst + f, new_edge, &dl, &dx, &dy);
+            if (dl >= ss->punctual_allocated_layers) {
+                block->valid = 0;
+                break;
+            }
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, old_fbo);
+            glFramebufferTextureLayer(GL_READ_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, old_tex, 0, sl);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, ss->punctual_fbo);
+            glFramebufferTextureLayer(GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                                      ss->punctual_map_array, 0, dl);
+            glBlitFramebuffer(sx, sy, sx + SHADOW_TILE_SIZE, sy + SHADOW_TILE_SIZE, dx, dy,
+                              dx + SHADOW_TILE_SIZE, dy + SHADOW_TILE_SIZE, GL_DEPTH_BUFFER_BIT,
+                              GL_NEAREST);
+        }
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+void shadow_tiles_invalidate(ShadowSystem* system) {
+    if (system)
+        system->tile_generation++;
+}
+
+void shadow_tiles_invalidate_box(ShadowSystem* system, const vec3 box_min, const vec3 box_max) {
+    if (!system)
+        return;
+    mat4 identity = GLM_MAT4_IDENTITY_INIT;
+    for (int b = 0; b < system->tile_block_count; ++b) {
+        ShadowTileBlock* block = &system->tile_blocks[b];
+        if (!block->light || block->hero || !block->valid)
+            continue;
+        for (int f = 0; f < 6; ++f) {
+            if (!(block->valid & (1u << f)))
+                continue;
+            // The face's own volume, which is exactly what it drew: nothing outside it is in
+            // the tile to go stale.
+            mat4 matrix = GLM_MAT4_IDENTITY_INIT;
+            shadow_tile_face_matrix(block->origin, f, block->near_plane, block->far_plane, matrix);
+            Frustum volume;
+            frustum_extract_from_vp(matrix, &volume);
+            if (frustum_test_aabb_transformed(&volume, (float*)box_min, (float*)box_max, identity))
+                block->valid &= (uint8_t)~(1u << f);
+        }
+    }
+}
+
+// What the kept faces hold that is no longer true: every face that sees a caster whose node
+// moved this frame, where it was and where it is now, and every face when the graph changed
+// -- a node added or freed has no previous frame for the draw list to show. Moving bodies are
+// the KEPT set's casters only, so a skinned or swaying mesh, which a kept face never held,
+// redraws nothing.
+static void tiles_note_changes(ShadowSystem* ss, const Scene* scene) {
+    const uint64_t epoch = scene_graph_epoch();
+    if (epoch != ss->tile_epoch) {
+        ss->tile_epoch = epoch;
+        ss->tile_generation++;
+        return;
+    }
+    const DrawList* list = scene->draw_list;
+    for (size_t i = 0; list && i < list->count; ++i) {
+        const DrawItem* item = &list->items[i];
+        const SceneNode* node = item->node;
+        if (!caster_set_wants(SHADOW_CASTERS_KEPT, item->lane, item->flags) ||
+            memcmp(node->global_transform, node->prev_global_transform, sizeof(mat4)) == 0)
+            continue;
+        vec3 lo = GLM_VEC3_ZERO_INIT, hi = GLM_VEC3_ZERO_INIT;
+        aabb_transform(item->mesh->aabb.min, item->mesh->aabb.max,
+                       (vec4*)node->prev_global_transform, lo, hi);
+        shadow_tiles_invalidate_box(ss, lo, hi);
+        aabb_transform(item->mesh->aabb.min, item->mesh->aabb.max, (vec4*)node->global_transform,
+                       lo, hi);
+        shadow_tiles_invalidate_box(ss, lo, hi);
+    }
 }
 
 // Draw one face of block `b` into its tile, from the block's origin and planes. False when
@@ -2267,6 +2380,7 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     // The cached lights' tiles, under the same program and depth policy.
     if (punctual_ready && tiled > 0) {
         profiler_scope_begin(engine->profiler, "shadow tiles");
+        tiles_note_changes(ss, scene);
         render_shadow_tiles(ss, engine, scene, &state);
         profiler_scope_end(engine->profiler);
         profiler_scope_begin_if(engine->profiler, ss->tile_heroes > 0, "shadow heroes");
