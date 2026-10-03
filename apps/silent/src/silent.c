@@ -138,6 +138,7 @@ typedef struct SilentArgs {
     bool no_relief;         // puddles from the noise alone, not the ground's own lows
     bool no_candles;        // the candles stand unlit
     bool no_candle_shadows; // the candles light through walls, as before spec 13.16
+    bool no_gi;             // no bounce light: no GI volume, and no reflection probes from it
     int tile_views;         // views over each cached light's body; 0 = the engine's, 1 = one
     bool tiles_probe;       // print the cached shadow tiles at exit
     bool profiler;          // per-pass timing and submission counts, reported at exit
@@ -639,7 +640,7 @@ static void on_pre_render(Game* game, double alpha) {
     // blends into what is already there -- so it has to see the lit room. The
     // reflection probes go in with it, since they are captured once it has
     // converged and a set installed with no volume would be captured unlit.
-    if (engine->total_frames == 2 && !g_scene->gi_volume) {
+    if (engine->total_frames == 2 && !g_scene->gi_volume && !g_args.no_gi) {
         build_gi();
         build_probes();
     }
@@ -702,6 +703,8 @@ static void print_usage(const char* prog) {
            "                          ground's own lows\n");
     printf("      --no-candles        The candles stand unlit\n");
     printf("      --no-candle-shadows The candles light through walls\n");
+    printf("      --no-gi             No bounce light: no GI volume, and no reflection probes,\n"
+           "                          which are captured from its light\n");
     printf("      --profiler          Per-pass timing and submission counts, at exit\n");
     printf("      --tile-views N      Shade every cached light from N views over its body\n"
            "                          rather than 8; 1 is its centre alone\n");
@@ -778,6 +781,8 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
             a->no_candles = true;
         } else if (!strcmp(s, "--no-candle-shadows")) {
             a->no_candle_shadows = true;
+        } else if (!strcmp(s, "--no-gi")) {
+            a->no_gi = true;
         } else if (!strcmp(s, "--tile-views") && has_next) {
             a->tile_views = atoi(argv[++i]);
         } else if (!strcmp(s, "--tiles-probe")) {
