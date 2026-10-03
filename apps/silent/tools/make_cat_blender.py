@@ -2148,6 +2148,219 @@ def clip_blink(rig, t):
     return p
 
 
+def clip_trill(rig, t):
+    """A chirrup with the mouth barely open, the ears pricked forward."""
+    p = stand(rig)
+    add_rot(p, "Jaw", pitch=-jaw_open(t, [(0.14, 9.0, 0.12)]))
+    e = bump(t, 0.18, 0.3)
+    add_rot(p, "Ear.L", pitch=10.0 * e)
+    add_rot(p, "Ear.R", pitch=10.0 * e)
+    return p
+
+
+def clip_yawn(rig, t):
+    """The mouth wide and held, the eyes squeezed half shut and the ears laid back with it."""
+    p = stand(rig)
+    wide = window(t, 0.25, 0.7) * (1.0 - window(t, 1.2, 1.6))
+    add_rot(p, "Jaw", pitch=-46.0 * wide)
+    lids(p, 0.65 * wide)
+    add_rot(p, "Ear.L", pitch=-25.0 * wide)
+    add_rot(p, "Ear.R", pitch=-25.0 * wide)
+    return p
+
+
+def clip_slow_blink(rig, t):
+    """What a cat says to someone it trusts: the lids down slowly, held, up slowly."""
+    p = stand(rig)
+    lids(p, window(t, 0.0, 0.55) * (1.0 - window(t, 1.0, 1.55)))
+    return p
+
+
+def clip_ear_flick(rig, t, side):
+    p = stand(rig)
+    sign = 1.0 if side == "L" else -1.0
+    e = bump(t, 0.1, 0.16)
+    add_rot(p, f"Ear.{side}", yaw=sign * 32.0 * e, pitch=-8.0 * e)
+    return p
+
+
+def clip_ear_flick_l(rig, t):
+    return clip_ear_flick(rig, t, "L")
+
+
+def clip_ear_flick_r(rig, t):
+    return clip_ear_flick(rig, t, "R")
+
+
+# The run: a half-bound, the hind pair landing close together and then the fore pair, at
+# 2.5 m/s. The spine gathers the hind paws under it and stretches the fore paws out.
+RUN_STRIDE = 0.9
+RUN_SECONDS = 0.36
+RUN_DUTY = 0.3
+RUN_FOOTFALL = {"HL": 0.02, "HR": 0.1, "FL": 0.48, "FR": 0.58}
+
+
+def clip_run(rig, t):
+    T, stride = RUN_SECONDS, RUN_STRIDE
+    p, s = gait(rig, t, T, stride, RUN_DUTY, RUN_FOOTFALL, 0.06, 0.06)
+    flex = math.sin(2.0 * math.pi * (s - 0.1))
+    p.rump = Vector((0.0, -0.012 + 0.012 * math.cos(4.0 * math.pi * (s - 0.25)), 0.0))
+    add_rot(p, "Rump", pitch=-4.0 * flex)
+    add_rot(p, "Spine1", pitch=7.0 * flex)
+    add_rot(p, "Spine2", pitch=5.0 * flex)
+    add_rot(p, "Chest", pitch=-8.0 * flex)
+    add_rot(p, "Neck1", pitch=-10.0 + 4.0 * flex)
+    add_rot(p, "Head", pitch=6.0 - 3.0 * flex)
+    for i, pitch in enumerate(TAIL_UP):
+        add_rot(p, f"Tail{i + 1}", pitch=pitch * 0.15)
+    tail_wave(p, t, T, 3.0)
+    return p
+
+
+# Along the gallery's hand rail, 9 cm wide: slow and low, every paw set down on the line the
+# body travels along, the tail straight out behind for balance.
+BEAM_STRIDE = 0.40
+BEAM_SECONDS = 1.0
+BEAM_DUTY = 0.72
+BEAM_LINE = 0.012  # how far either side of the centre line a paw lands
+
+
+def clip_beam_walk(rig, t):
+    T, stride = BEAM_SECONDS, BEAM_STRIDE
+    p, s = gait(rig, t, T, stride, BEAM_DUTY, FOOTFALL, 0.025, 0.022)
+    for leg in LEGS:
+        x, y, z = p.legs[leg]["paw"]
+        p.legs[leg]["paw"] = (BEAM_LINE if x > 0.0 else -BEAM_LINE, y, z)
+        # The knees and elbows go out to let the paws in under the body.
+        px, py, pz = p.legs[leg]["pole"]
+        p.legs[leg]["pole"] = (px + (0.35 if x > 0.0 else -0.35), py, pz)
+    p.rump = Vector((0.0, -0.025 + 0.002 * math.cos(4.0 * math.pi * s), 0.0))
+    add_rot(p, "Rump", roll=1.0 * math.sin(2.0 * math.pi * s))
+    add_rot(p, "Chest", roll=-1.0 * math.sin(2.0 * math.pi * s))
+    add_rot(p, "Neck1", pitch=-12.0)
+    add_rot(p, "Head", pitch=-6.0)
+    for i, pitch in enumerate((-35.0, 4.0, 4.0, 3.0, 2.0, 2.0)):
+        add_rot(p, f"Tail{i + 1}", pitch=pitch)
+    tail_wave(p, t, T, 6.0, lag=0.3)
+    return p
+
+
+# A rest-pose point on the face: where the tongue meets the paw.
+MOUTH = (0.0, 0.249, 0.244)
+EAR_FRONT_R = (-0.022, 0.29, 0.205)
+
+
+def head_point(rig, M, point):
+    """Where a rest-pose point on the head is in posed matrices M, model coordinates."""
+    return mv(M["Head"] @ rig.rest["Head"].inverted() @ bv(*point))
+
+
+GROOM_SECONDS = 4.0
+
+
+def clip_groom(rig, t):
+    """Sitting, the right fore paw up at the mouth and licked, then drawn over the ear and down
+    the cheek, and back to the mouth. The paw stays up for the whole loop."""
+    u = t / GROOM_SECONDS
+    p = sit(rig)
+    breathe(p, t, 3.0, 0.8)
+    wipe = window(u, 0.48, 0.58) * (1.0 - window(u, 0.86, 0.97))
+    lick = 1.0 - wipe
+    pulse = max(0.0, math.sin(2.0 * math.pi * t / 0.45))
+    add_rot(p, "Neck1", pitch=-8.0 * lick)
+    add_rot(p, "Neck2", pitch=-6.0 * lick, yaw=-12.0 * wipe)
+    add_rot(p, "Head", pitch=-12.0 * lick - 5.0 * pulse * lick, yaw=-10.0 * wipe, roll=-16.0 * wipe)
+    add_rot(p, "Jaw", pitch=-7.0 * pulse * lick)
+    add_rot(p, "Ear.R", pitch=-20.0 * wipe)
+    M = rig.solve(p)
+    mouth = head_point(rig, M, MOUTH)
+    ear = head_point(rig, M, EAR_FRONT_R)
+    lick_at = mouth + Vector((-0.008, -0.016, 0.01 + 0.004 * pulse))
+    sweep = smooth((u - 0.58) / 0.26)
+    wipe_at = ear.lerp(mouth, sweep) + Vector((-0.016, 0.006, 0.012))
+    paw = lick_at.lerp(wipe_at, wipe)
+    p.legs["FR"].update(paw=tuple(paw), meta=150.0, toe=120.0, pole=(-0.2, -1.0, -0.4))
+    return p
+
+
+STRETCH_SECONDS = 2.4
+
+
+def clip_stretch(rig, t):
+    """The bow, fore paws walked out and the chest down with the rump up, then forward over
+    them with a hind leg drawn out straight behind. Starts and ends standing."""
+    u = t / STRETCH_SECONDS
+    p = stand(rig)
+    bow = window(u, 0.06, 0.3) * (1.0 - window(u, 0.42, 0.56))
+    reach = window(u, 0.56, 0.7) * (1.0 - window(u, 0.86, 0.98))
+    p.rump = Vector((0.0, 0.012 * bow - 0.01 * reach, 0.0))
+    add_rot(p, "Spine1", pitch=-5.0 * bow + 3.0 * reach)
+    add_rot(p, "Spine2", pitch=-8.0 * bow + 3.0 * reach)
+    add_rot(p, "Chest", pitch=-10.0 * bow + 4.0 * reach)
+    add_rot(p, "Neck1", pitch=22.0 * bow + 6.0 * reach)
+    add_rot(p, "Head", pitch=8.0 * bow)
+    for leg in ("FL", "FR"):
+        x, y, z = p.legs[leg]["paw"]
+        w = window(u, 0.04 if leg == "FL" else 0.12, 0.2 if leg == "FL" else 0.28)
+        back = window(u, 0.44 if leg == "FL" else 0.5, 0.56 if leg == "FL" else 0.62)
+        out = w * (1.0 - back)
+        lift = 0.025 * (math.sin(math.pi * w) if back == 0.0 else math.sin(math.pi * back))
+        p.legs[leg].update(paw=(x, y + lift, z + 0.13 * out),
+                           meta=p.legs[leg]["meta"] + 40.0 * bow)
+    x, y, z = p.legs["HL"]["paw"]
+    p.legs["HL"].update(paw=(x, y + 0.03 * reach, z - 0.13 * reach),
+                        meta=p.legs["HL"]["meta"] - 50.0 * reach,
+                        toe=p.legs["HL"]["toe"] - 60.0 * reach)
+    for i, pitch in enumerate(TAIL_UP):
+        add_rot(p, f"Tail{i + 1}", pitch=pitch * 0.7 * bow)
+    lids(p, 0.5 * bow)
+    return p
+
+
+def arched(rig, amount):
+    """Startled: up on straight legs with the back humped, the head low, the ears flat and
+    the tail up in an arch."""
+    # The hump peaks over the middle of the back: the spine climbs steeply off the hips, runs
+    # level for one segment, and comes down as steeply to the shoulders.
+    p = stand(rig)
+    p.rump = Vector((0.0, 0.03 * amount, 0.0))
+    add_rot(p, "Spine1", pitch=28.0 * amount)
+    add_rot(p, "Spine2", pitch=-26.0 * amount)
+    add_rot(p, "Chest", pitch=-26.0 * amount)
+    add_rot(p, "Neck1", pitch=-4.0 * amount)
+    add_rot(p, "Neck2", pitch=4.0 * amount)
+    add_rot(p, "Head", pitch=14.0 * amount)
+    for s in ("L", "R"):
+        add_rot(p, f"Ear.{s}", pitch=-50.0 * amount, yaw=(22.0 if s == "L" else -22.0) * amount)
+    arch = (-80.0, -20.0, 10.0, 25.0, 30.0, 20.0)
+    for i, pitch in enumerate(arch):
+        add_rot(p, f"Tail{i + 1}", pitch=pitch * amount)
+    return p
+
+
+def clip_startle(rig, t):
+    """A flinch down and back, then straight up into the arch, held at the end."""
+    p = arched(rig, smooth(window(t, 0.08, 0.32)))
+    flinch = bump(t, 0.06, 0.14)
+    p.rump = p.rump + Vector((0.0, -0.03 * flinch, -0.02 * flinch))
+    lids(p, 0.0)
+    return p
+
+
+HISS_SECONDS = 2.0
+
+
+def clip_hiss(rig, t):
+    """Arched, the head thrust low and forward with the mouth wide, swaying a little."""
+    p = arched(rig, 1.0)
+    open_ = window(t, 0.1, 0.3) * (1.0 - window(t, 1.3, 1.6))
+    add_rot(p, "Jaw", pitch=-34.0 * open_)
+    add_rot(p, "Neck1", pitch=-8.0 * open_)
+    add_rot(p, "Head", pitch=10.0 * open_)
+    add_rot(p, "Rump", yaw=2.0 * math.sin(2.0 * math.pi * t / HISS_SECONDS))
+    return p
+
+
 # name: (seconds, looping, pose function, events [(name, seconds)])
 CLIPS = {
     "idle": (4.0, True, clip_idle, []),
@@ -2179,6 +2392,21 @@ CLIPS = {
     "turn_r90": (TURN_SECONDS, False, clip_turn_r90, []),
     "jump_up": (JUMP_SECONDS, False, clip_jump_up, list(JUMP_UP_EVENTS)),
     "jump_down": (JUMP_SECONDS, False, clip_jump_down, list(JUMP_DOWN_EVENTS)),
+    "run": (RUN_SECONDS, True, clip_run,
+            [(f"paw_{k.lower()[1]}{k.lower()[0]}", RUN_FOOTFALL[k] * RUN_SECONDS)
+             for k in ("HL", "HR", "FL", "FR")]),
+    "beam_walk": (BEAM_SECONDS, True, clip_beam_walk,
+                  [(f"paw_{k.lower()[1]}{k.lower()[0]}", FOOTFALL[k] * BEAM_SECONDS)
+                   for k in ("HL", "FL", "HR", "FR")]),
+    "groom": (GROOM_SECONDS, True, clip_groom, []),
+    "stretch": (STRETCH_SECONDS, False, clip_stretch, []),
+    "startle": (0.7, False, clip_startle, []),
+    "hiss": (HISS_SECONDS, True, clip_hiss, [("hiss", 0.12)]),
+    "trill": (0.5, False, clip_trill, [("trill", 0.04)]),
+    "yawn": (1.8, False, clip_yawn, []),
+    "slow_blink": (1.6, False, clip_slow_blink, []),
+    "ear_flick_l": (0.35, False, clip_ear_flick_l, []),
+    "ear_flick_r": (0.35, False, clip_ear_flick_r, []),
 }
 
 

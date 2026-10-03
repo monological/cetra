@@ -14,6 +14,11 @@
 #define STUDY_SEAT   (FLOOR2_Y + 0.505f)
 #define COUNTER_TOP  (FLOOR_Y + 0.9f)
 #define KITCHEN_SEAT (FLOOR_Y + 0.516f)
+// The gallery's hand rail: the top of its wood, and the line along its middle; the stair's
+// head newel's cap.
+#define RAIL_TOP  4.07f
+#define RAIL_Z    15.0f
+#define NEWEL_TOP 4.38f
 
 const CatPlace CAT_PLACES[] = {
     // The study: home is the master's chair at the desk in the bay, under the stained glass.
@@ -24,12 +29,24 @@ const CatPlace CAT_PLACES[] = {
     {"study_bay_w", {-6.35f, FLOOR2_Y, 9.1f}, 0.3f, CAT_REST_LIE, 0.8f},
     {"study_mid", {-3.2f, FLOOR2_Y, 12.0f}, 0.35f, CAT_REST_SIT, 2.6f},
     {"study_door", {-2.55f, FLOOR2_Y, 13.55f}, 0.2f, CAT_REST_NONE, 0.0f},
-    // The gallery, along the great hall's front at the upper floor.
+    // The gallery, along the great hall's front at the upper floor, with a place a hop down
+    // from each stretch of the rail.
     {"gal_study", {-2.55f, FLOOR2_Y, 14.4f}, 0.25f, CAT_REST_NONE, 0.0f},
     {"gal_w", {-4.35f, FLOOR2_Y, 14.5f}, 0.25f, CAT_REST_SIT, 0.0f},
+    {"gal_1", {-1.5f, FLOOR2_Y, 14.45f}, 0.3f, CAT_REST_NONE, 0.0f},
     {"gallery", {0.0f, FLOOR2_Y, 14.45f}, 0.3f, CAT_REST_LIE, 0.5f * GLM_PIf},
+    {"gal_2", {0.8f, FLOOR2_Y, 14.45f}, 0.3f, CAT_REST_NONE, 0.0f},
     {"gal_3", {2.4f, FLOOR2_Y, 14.45f}, 0.3f, CAT_REST_NONE, 0.0f},
+    {"gal_4", {2.9f, FLOOR2_Y, 14.45f}, 0.2f, CAT_REST_NONE, 0.0f},
     {"gal_e", {3.3f, FLOOR2_Y, 14.45f}, 0.25f, CAT_REST_NONE, 0.0f},
+    // The hand rail over the drop into the great hall, walked one way, east, on the wood rather
+    // than the collider standing 4 cm above it, to the stair's head newel at its end.
+    {"rail_w", {-4.15f, RAIL_TOP, RAIL_Z}, 0.0f, CAT_REST_NONE, 0.0f, CAT_TAG_BEAM},
+    {"rail_1", {-2.0f, RAIL_TOP, RAIL_Z}, 0.0f, CAT_REST_NONE, 0.0f, CAT_TAG_BEAM},
+    {"rail_2", {0.3f, RAIL_TOP, RAIL_Z}, 0.0f, CAT_REST_NONE, 0.0f, CAT_TAG_BEAM},
+    {"rail_3", {2.4f, RAIL_TOP, RAIL_Z}, 0.0f, CAT_REST_NONE, 0.0f, CAT_TAG_BEAM},
+    {"rail_e", {3.7f, RAIL_TOP, RAIL_Z}, 0.0f, CAT_REST_NONE, 0.0f, CAT_TAG_BEAM},
+    {"newel_cap", {3.95f, NEWEL_TOP, RAIL_Z}, 0.05f, CAT_REST_SIT, 0.0f},
     // The stair: a level approach at either end, straight into the flight.
     {"stair_head", {STAIR_MID_X, FLOOR2_Y, 14.55f}, 0.15f, CAT_REST_NONE, 0.0f},
     {"stair_top", {STAIR_MID_X, FLOOR2_Y, STAIR_TOP_Z}, 0.1f, CAT_REST_NONE, 0.0f},
@@ -60,11 +77,23 @@ const int CAT_PLACE_COUNT = (int)(sizeof(CAT_PLACES) / sizeof(CAT_PLACES[0]));
 typedef struct CatLinkDef {
     const char *a, *b;
     int kind;
-    float apex; // a jump's arc above its higher end
+    float apex;   // a jump's arc above its higher end
+    bool one_way; // from a to b only
 } CatLinkDef;
 
-// Every link goes both ways.
+// Every link goes both ways but the rail's: on along it, up onto the newel, and down off
+// either. Nothing turns round on a hand rail.
 static const CatLinkDef LINKS[] = {
+    {"gal_w", "rail_w", CAT_LINK_JUMP, 0.1f, true},
+    {"rail_w", "rail_1", CAT_LINK_RAIL, 0.0f, true},
+    {"rail_1", "rail_2", CAT_LINK_RAIL, 0.0f, true},
+    {"rail_2", "rail_3", CAT_LINK_RAIL, 0.0f, true},
+    {"rail_3", "rail_e", CAT_LINK_RAIL, 0.0f, true},
+    {"rail_e", "newel_cap", CAT_LINK_JUMP, 0.08f, true},
+    {"newel_cap", "stair_head", CAT_LINK_JUMP, 0.06f, true},
+    {"rail_1", "gal_1", CAT_LINK_JUMP, 0.04f, true},
+    {"rail_2", "gal_2", CAT_LINK_JUMP, 0.04f, true},
+    {"rail_3", "gal_4", CAT_LINK_JUMP, 0.04f, true},
     {"study_chair", "chair_jump", CAT_LINK_JUMP, 0.12f},
     {"chair_jump", "study_bay", CAT_LINK_WALK, 0.0f},
     {"chair_jump", "study_window", CAT_LINK_WALK, 0.0f},
@@ -73,9 +102,12 @@ static const CatLinkDef LINKS[] = {
     {"study_mid", "study_door", CAT_LINK_WALK, 0.0f},
     {"study_door", "gal_study", CAT_LINK_WALK, 0.0f},
     {"gal_study", "gal_w", CAT_LINK_WALK, 0.0f},
-    {"gal_study", "gallery", CAT_LINK_WALK, 0.0f},
-    {"gallery", "gal_3", CAT_LINK_WALK, 0.0f},
-    {"gal_3", "gal_e", CAT_LINK_WALK, 0.0f},
+    {"gal_study", "gal_1", CAT_LINK_WALK, 0.0f},
+    {"gal_1", "gallery", CAT_LINK_WALK, 0.0f},
+    {"gallery", "gal_2", CAT_LINK_WALK, 0.0f},
+    {"gal_2", "gal_3", CAT_LINK_WALK, 0.0f},
+    {"gal_3", "gal_4", CAT_LINK_WALK, 0.0f},
+    {"gal_4", "gal_e", CAT_LINK_WALK, 0.0f},
     {"gal_e", "stair_head", CAT_LINK_WALK, 0.0f},
     {"stair_head", "stair_top", CAT_LINK_WALK, 0.0f},
     {"stair_top", "stair_bottom", CAT_LINK_STAIR, 0.0f},
@@ -112,8 +144,10 @@ NavGraph* cat_places_build(void) {
     nav_graph_set_kind(g, CAT_LINK_STAIR, &(NavKind){.name = "stair", .cost_scale = 1.5f});
     nav_graph_set_kind(g, CAT_LINK_JUMP,
                        &(NavKind){.name = "jump", .cost_scale = 3.0f, .drive = NAV_DRIVE_PROGRESS});
+    nav_graph_set_kind(g, CAT_LINK_RAIL, &(NavKind){.name = "rail", .cost_scale = 1.2f});
     for (int i = 0; i < CAT_PLACE_COUNT; i++)
-        nav_graph_add_node(g, CAT_PLACES[i].name, CAT_PLACES[i].feet, CAT_PLACES[i].radius, 0);
+        nav_graph_add_node(g, CAT_PLACES[i].name, CAT_PLACES[i].feet, CAT_PLACES[i].radius,
+                           CAT_PLACES[i].tags);
     for (size_t i = 0; i < sizeof(LINKS) / sizeof(LINKS[0]); i++) {
         const CatLinkDef* d = &LINKS[i];
         NavShapeDesc shape = {.shape = NAV_SHAPE_LINE};
@@ -126,10 +160,19 @@ NavGraph* cat_places_build(void) {
         else if (d->kind == CAT_LINK_JUMP)
             shape = (NavShapeDesc){.shape = NAV_SHAPE_ARC, .apex = d->apex};
         const int a = nav_graph_find(g, d->a), b = nav_graph_find(g, d->b);
-        if (a < 0 || b < 0 || nav_graph_link_both(g, a, b, d->kind, &shape) < 0)
+        if (a < 0 || b < 0 ||
+            (d->one_way ? nav_graph_link(g, a, b, d->kind, &shape)
+                        : nav_graph_link_both(g, a, b, d->kind, &shape)) < 0)
             fprintf(stderr, "silent: the cat's link %s - %s is refused\n", d->a, d->b);
     }
     return g;
+}
+
+NavQuery cat_places_query(bool rail) {
+    NavQuery q = {0};
+    if (!rail)
+        q.kinds = ((1u << CAT_LINK_KINDS) - 1u) & ~(1u << CAT_LINK_RAIL);
+    return q;
 }
 
 static bool probe_static(const vec3 a, const vec3 b, void* user) {

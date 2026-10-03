@@ -35,4 +35,7 @@ void clock_start(Clock* clock, Engine* engine, Scene* scene, AudioSystem* audio)
 // `hearing` scales the beat for where the listener is.
 void clock_update(Clock* clock, double time, float hearing);
 
+// Where the pendulum's bob is in the world at sim time `time`: what a cat watches.
+void clock_bob(double time, vec3 out);
+
 #endif // _SILENT_CLOCK_H_

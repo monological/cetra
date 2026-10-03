@@ -43,6 +43,7 @@
 
 #include "candles.h"
 #include "cat.h"
+#include "cat_brain.h"
 #include "clock.h"
 #include "door.h"
 #include "hearth.h"
@@ -82,6 +83,8 @@
 // Moderate rain, by the meteorologists' bands (rain.h): steady enough to soak the
 // street and fill its gutters, short of a downpour that would hide it.
 #define DEFAULT_RAIN_MMH 6.0f
+// Rain the cat finds as interesting as rain gets, mm/h: the default is about half of it.
+#define CAT_HEAVY_RAIN 12.0f
 // The rain is art-directed here, and has to be. In fog this dense a drop refracts glowing air
 // about as bright as itself, so rain at its physical opacity shows only right under a lamp --
 // true of real rain in fog, and not what this street is for. So each streak is brighter than
@@ -150,10 +153,13 @@ typedef struct SilentArgs {
     char cat_clip[32];      // a clip by name, or empty for the place's own
     float cat_clip_seconds; // held this far in; below 0 it plays
     bool no_eyeshine;
-    char cat_go[32]; // a place it sets off for, or empty to stay
-    bool cat_trot;   // and at a trot
-    bool cat_cam;    // the camera follows the cat
-    bool trace_cat;  // print what it is doing every 30 steps
+    char cat_go[32];       // a place it sets off for, or empty to stay
+    CatGait cat_gait;      // and how fast
+    bool cat_cam;          // the camera follows the cat
+    bool trace_cat;        // print what it is doing every 30 steps
+    unsigned int cat_seed; // its mind's seed
+    bool cat_blind;        // it does not see or hear the player
+    const char* cat_doing; // the activity it starts with, or NULL to choose
 } SilentArgs;
 
 static SilentArgs g_args;
@@ -164,6 +170,7 @@ static Clock g_clock;
 static RainBed g_rain_bed;
 static Sounds g_sounds;
 static Cat g_cat;
+static CatMind g_mind;
 
 // The door that opens, and the line that says what the action key would do. It answers when
 // the eye is within DOOR_REACH of its leaf's middle and looking within DOOR_CONE of it.
@@ -466,7 +473,7 @@ static void on_init(Game* game) {
                        .clip = g_args.cat_clip[0] ? g_args.cat_clip : NULL,
                        .clip_seconds = g_args.cat_clip_seconds,
                        .go = g_args.cat_go[0] ? g_args.cat_go : NULL,
-                       .trot = g_args.cat_trot,
+                       .gait = g_args.cat_gait,
                        .eyeshine = !g_args.no_eyeshine};
         glm_vec3_copy(g_args.cat_fur, cat.fur);
         glm_vec3_copy(g_args.cat_eyes, cat.eyes);
@@ -544,6 +551,10 @@ static void on_init(Game* game) {
 
     player_init(&g_player, game, physics, em, SPAWN_FEET, SPAWN_YAW);
     physics_world_optimize(physics);
+    // Sent somewhere or holding a clip from the command line, the cat has no mind of its own.
+    if (g_cat.entity && !g_args.cat_go[0] && !g_args.cat_clip[0])
+        cat_mind_create(&g_mind, &g_cat, game, g_player.entity, g_args.cat_seed, g_args.cat_blind,
+                        g_args.cat_doing);
 
     // Pinned at night: a meter would open the dark back up, which is the one
     // thing this place must not do. By day the meter maps what it reads to
@@ -566,10 +577,14 @@ static void on_update(Game* game, double dt) {
     vec3 eye = {0.0f, 0.0f, 0.0f}, forward = {0.0f, 0.0f, -1.0f};
     player_eye(&g_player, eye, forward);
     cat_step(&g_cat, (vec3){eye[0], eye[1] - PLAYER_EYE_HEIGHT, eye[2]}, (float)dt);
+    // What it senses is decided here, and what it does about it by its brain after this hook.
+    cat_mind_sense(&g_mind, eye, forward, g_args.rain_mmh / CAT_HEAVY_RAIN, (float)dt);
     if (g_args.trace_cat) {
         static int step;
-        if (step++ % 30 == 0)
+        if (step++ % 30 == 0) {
             cat_trace(&g_cat, step - 1);
+            cat_mind_trace(&g_mind);
+        }
     }
     // Where the capsule is: the camera rides it, so from inside the frame a
     // player stopped by a wall and one walking on the spot look the same.
@@ -668,6 +683,8 @@ static void on_pre_render(Game* game, double alpha) {
     const float hearing = sounds_indoor_gain(&g_sounds);
     lights_update(&g_lights, g_scene, game->time, (float)game->sim_clock.delta, eye, forward,
                   hearing);
+    cat_mind_frame(&g_mind, game->time);
+    cat_mind_panel(&g_mind, engine);
     cat_update(&g_cat, game, g_scene, &g_lights, eye, (float)game->sim_clock.delta);
     clock_update(&g_clock, game->time, hearing);
     rain_bed_update(&g_rain_bed, g_scene->rain, g_scene->shadow_system, eye,
@@ -754,7 +771,11 @@ static void print_usage(const char* prog) {
     printf("      --cat-eyes RRGGBB   Its eyes (default E8B923)\n");
     printf("      --cat-at PLACE      Where it is: %s\n", cat_place_list());
     printf("      --cat-clip NAME[@S] Hold that clip there, playing or S seconds in\n");
-    printf("      --cat-goto PLACE[:trot]  Send it there once it is in the house\n");
+    printf("      --cat-goto PLACE[:trot|:run]  Send it there once it is in the house, and\n"
+           "                          nowhere else: it has no mind of its own then\n");
+    printf("      --cat-activity NAME Start it on one of: %s\n", cat_mind_activities());
+    printf("      --cat-seed N        Its mind's seed (default 1)\n");
+    printf("      --cat-blind         It neither sees nor hears you\n");
     printf("      --cat-cam           The camera follows the cat\n");
     printf("      --trace-cat         Print what the cat is doing every 30 steps\n");
     printf("      --no-eyeshine       Its eyes do not throw the flashlight back\n");
@@ -786,6 +807,7 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
     parse_hex("262424", a->cat_fur);
     parse_hex("E8B923", a->cat_eyes);
     a->cat_clip_seconds = -1.0f;
+    a->cat_seed = 1;
     for (int i = 1; i < argc; i++) {
         const char* s = argv[i];
         const bool has_next = i + 1 < argc;
@@ -877,8 +899,16 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
             char* how = strchr(a->cat_go, ':');
             if (how) {
                 *how = '\0';
-                a->cat_trot = !strcmp(how + 1, "trot");
+                a->cat_gait = !strcmp(how + 1, "trot")  ? CAT_TROT
+                              : !strcmp(how + 1, "run") ? CAT_RUN
+                                                        : CAT_WALK;
             }
+        } else if (!strcmp(s, "--cat-activity") && has_next) {
+            a->cat_doing = argv[++i];
+        } else if (!strcmp(s, "--cat-seed") && has_next) {
+            a->cat_seed = (unsigned int)strtoul(argv[++i], NULL, 10);
+        } else if (!strcmp(s, "--cat-blind")) {
+            a->cat_blind = true;
         } else if (!strcmp(s, "--cat-cam")) {
             a->cat_cam = true;
         } else if (!strcmp(s, "--trace-cat")) {
