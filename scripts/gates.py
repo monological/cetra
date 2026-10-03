@@ -12506,9 +12506,9 @@ def _ladder_lifts(gen, pix, w, h, row, cards):
     return [_alphacov_mean(pix, w, h, _ladder_card_box(gen, row, k)) - sky for k in cards]
 
 
-def _ladder_flips(pix_a, pix_b, w, h, box):
-    """Pixels inside a fractional box that move by more than LADDER_FLIP_CODES
-    on any channel between two frames -- the churn a dither shows under TAA."""
+def _pixels_past(pix_a, pix_b, w, h, box, codes):
+    """Pixels inside a fractional box that differ by more than `codes` on any channel between
+    two frames: the churn a dither shows under TAA, or how far apart two pictures are."""
     x0, y0 = int(w * box[0]), int(h * box[1])
     x1, y1 = int(w * box[2]), int(h * box[3])
     n = 0
@@ -12516,7 +12516,7 @@ def _ladder_flips(pix_a, pix_b, w, h, box):
         for x in range(x0, x1):
             o = (y * w + x) * 3
             if max(abs(pix_a[o] - pix_b[o]), abs(pix_a[o + 1] - pix_b[o + 1]),
-                   abs(pix_a[o + 2] - pix_b[o + 2])) > LADDER_FLIP_CODES:
+                   abs(pix_a[o + 2] - pix_b[o + 2])) > codes:
                 n += 1
     return n
 
@@ -12645,7 +12645,7 @@ def run_ladder_gate(workdir):
 
     row_box = (0.0, 0.5 - 0.5 * gen.ROW_Y[dots] - gen.CARD_H * 0.5, 1.0,
                0.5 - 0.5 * gen.ROW_Y[dots] + gen.CARD_H * 0.5)
-    flips = _ladder_flips(pa, pb, w, h, row_box)
+    flips = _pixels_past(pa, pb, w, h, row_box, LADDER_FLIP_CODES)
     ok = flips <= LADDER_A2C_CHURN_MAX
     print(f"  ladder-still {'PASS' if ok else 'FAIL'}  MSAA 4 + TAA, {flips} dots-row pixels move "
           f"more than {LADDER_FLIP_CODES} codes between adjacent frames (want <= "
@@ -12658,7 +12658,7 @@ def run_ladder_gate(workdir):
     if one is None:
         return failures + list(arms[4:])
     qa, qb, _, _ = one
-    flips = _ladder_flips(qa, qb, w, h, row_box)
+    flips = _pixels_past(qa, qb, w, h, row_box, LADDER_FLIP_CODES)
     ok = flips <= LADDER_CHURN_MAX
     print(f"  ladder-churn {'PASS' if ok else 'FAIL'}  one sample + TAA with the jittered lookup, "
           f"{flips} dots-row pixels move between adjacent frames (want <= {LADDER_CHURN_MAX}; "
@@ -27059,12 +27059,16 @@ def _rain_twin(rate):
                                _rain_constant("RAIN_SPLASH_MIN_MM"), 40.0, 4000)}
 
 
-def _rain_constant(name):
-    """A number rain_constants.glsl shares with the C, read from the file rather than copied:
-    the splash floor is a choice, and a twin holding its own copy would follow the old one."""
-    with open(os.path.join(ROOT, "cetra", "shaders", "include", "rain_constants.glsl")) as f:
-        m = re.search(rf"#define {name} ([0-9.]+)f?\b", f.read())
+def _shared_constant(include, name):
+    """A number a both-language include shares with the C, read from the file rather than
+    copied: a twin holding its own copy would follow the old one."""
+    with open(os.path.join(ROOT, "cetra", "shaders", "include", include)) as f:
+        m = re.search(rf"#define {name} +([0-9.]+)f?\b", f.read())
     return float(m.group(1))
+
+
+def _rain_constant(name):
+    return _shared_constant("rain_constants.glsl", name)
 
 
 def _simpson(f, a, b, n):
@@ -28040,10 +28044,6 @@ def run_rain_gate(workdir):
 
 # Cached point-light shadows (spec 13.16). Every fixture is mutated in memory from a committed
 # one, so the cached half and its uncached twin differ in the light's flags and nothing else.
-TILES_LEAK_LAMP = {"name": "CornellLamp", "type": "point", "position": [-0.5, 1.9, 0.0],
-                   "color": [1.0, 0.95, 0.88], "intensity": 160.0, "intensity_unit": "lumens",
-                   "range": 10.0, "cast_shadows": True, "shadow_cache": True}
-TILES_LEAK_CAMERA = {"eye": [0.0, 1.0, 3.4], "target": [0.0, 0.95, 0.0], "fov": 40}
 # The lit room left of the partition and the dark one right of it, as fractions of the frame.
 TILES_NEAR_ROOM = (0.15, 0.30, 0.45, 0.80)
 TILES_FAR_ROOM = (0.58, 0.30, 0.88, 0.80)
@@ -28055,6 +28055,7 @@ TILES_LEAK_FALSIFIER_MIN = 0.2
 TILES_FOG_MAX = 0.6
 # A cached light against the per-frame map of the same light, at 8 codes: the grazing ceiling
 # edge and silhouette texels; unshadowed the two differ across most of the floor.
+TILES_MATCH_CODES = 8
 TILES_MATCH_MAX = 0.02
 TILES_MATCH_FALSIFIER_MIN = 0.1
 # The core fixture: the reference and the kept views against the traced profile, by distance
@@ -28065,6 +28066,8 @@ TILES_TRUTH_KEPT_MAX = 0.08
 TILES_CORE_KEPT_MAX = 0.025
 TILES_CORE_ONE_MIN = 0.06
 TILES_CORE_SAMPLES = 8000
+# The core fixture's frame, square and orthographic: its width in metres across the wall.
+TILES_CORE_ORTHO = 0.8
 # The candle against the reference of its current body, region by region: 0.135 with the dance,
 # 0.398 with its shift removed.
 TILES_DANCE_MAX = 0.25
@@ -28072,26 +28075,20 @@ TILES_DANCE_CAM = ["--cam-eye", "0.95,1.45,-0.55", "--cam-target", "0.7,1.3,-1.1
 TILES_DANCE_BOX = (0.234, 0.370, 0.599, 0.694)
 
 
-def _tiles_box_mean(img, box):
-    w, h, pix = img
-    fx0, fy0, fx1, fy1 = box
-    total, n = 0.0, 0
-    for y in range(int(fy0 * h), int(fy1 * h), 2):
-        for x in range(int(fx0 * w), int(fx1 * w), 2):
-            total += _linear_luma(pix, w, h, x, y)
-            n += 1
-    return total / max(n, 1)
-
-
 def _tiles_render(workdir, tag, scene, extra, frames=30, size=("400", "300")):
-    """Render, returning (image, probe rows) or (None, error)."""
+    """Render, returning ((image, probe rows, log, path), None) or (None, error)."""
     out = os.path.join(workdir, f"tiles_{tag}.ppm")
     cmd = [RENDER, "-m", scene, "-x", "-f", str(frames), "-W", size[0], "-H", size[1],
            "--tiles-probe", "-S", out] + extra
     r = _run(cmd, capture_output=True, text=True)
     if r.returncode != 0 or not os.path.exists(out):
         return None, (r.stdout + r.stderr).strip()[-300:]
-    return (_read_ppm(out), _probe_rows(r.stdout, "tiles-probe"), r.stdout + r.stderr), None
+    return (_read_ppm(out), _probe_rows(r.stdout, "tiles-probe"), r.stdout + r.stderr, out), None
+
+
+def _tiles_box_mean(img, box):
+    w, h, pix = img
+    return _box_luma_dense(pix, w, h, box)
 
 
 def _tiles_region(rows):
@@ -28099,35 +28096,26 @@ def _tiles_region(rows):
 
 
 def _tiles_blocks(rows):
-    return [row for row in rows if "block" in row and row.get("owner", "-1") == "-1"]
-
-
-def _tiles_share_past(a, b, codes=8):
-    """The share of pixels whose channels differ by more than `codes`."""
-    (w, h, pa), (_, _, pb) = a, b
-    n = w * h
-    past = sum(1 for i in range(n)
-               if max(abs(pa[3 * i + k] - pb[3 * i + k]) for k in range(3)) > codes)
-    return past / n
+    return [row for row in rows if "block" in row]
 
 
 def _tiles_profile(img, base):
     """Visibility across the core fixture's wall by distance from the axis: the render over its
-    unshadowed twin, along the four half-axes from the frame's centre, which --ortho 0.8 makes
-    0.8 m across."""
+    unshadowed twin, along the four half-axes from the frame's centre. Both are read through
+    --tonemap linear, so decoded with the display's own curve."""
     w, h, pix = img
     _, _, ref = base
     cx, cy = w // 2, h // 2
-    metres = 0.8 / w
+    metres = TILES_CORE_ORTHO / w
     prof = []
     for r in range(w // 2 - 1):
         vals = []
         for d in range(-6, 7):
             for x, y in ((cx + r, cy + d), (cx - 1 - r, cy + d), (cx + d, cy + r),
                          (cx + d, cy - 1 - r)):
-                lit = _linear_luma(ref, w, h, x, y)
+                lit = _linear_luma(ref, w, h, x, y, _DISPLAY_TO_LINEAR)
                 if lit > 1e-4:
-                    vals.append(_linear_luma(pix, w, h, x, y) / lit)
+                    vals.append(_linear_luma(pix, w, h, x, y, _DISPLAY_TO_LINEAR) / lit)
         prof.append(((r + 0.5) * metres, sum(vals) / max(len(vals), 1)))
     return prof
 
@@ -28138,7 +28126,8 @@ def _tiles_at(prof, m):
 
 def _tiles_core_edge(prof):
     """Where the full shadow ends: the first radius past the rim reaching 2 per cent."""
-    return next((r for r, v in prof if r > 0.02 and v >= 0.02), float("nan"))
+    past = [(r, v) for r, v in prof if r > 0.02]
+    return _crossing([r for r, _ in past], [v for _, v in past], 0.0, 1.0, 0.02)
 
 
 def _tiles_truth():
@@ -28149,11 +28138,13 @@ def _tiles_truth():
     with open(asset("tile_core_fixture.cscn")) as fh:
         light = json.load(fh)["lights"][0]
     with open(asset("tile_core_fixture.gltf")) as fh:
-        rim = next(n for n in json.load(fh)["nodes"] if n["name"] == "rim")
-    centre = light["position"]
+        nodes = {n["name"]: n for n in json.load(fh)["nodes"]}
+    rim, wall = nodes["rim"], nodes["wall"]
+    centre, axis = light["position"], light["direction"]
     radius, length = light["source_radius"], light["source_length"]
     lo = [rim["translation"][i] - 0.5 * rim["scale"][i] for i in range(3)]
     hi = [rim["translation"][i] + 0.5 * rim["scale"][i] for i in range(3)]
+    wall_z = wall["translation"][2] + 0.5 * wall["scale"][2]
 
     def blocked(a, b):
         t0, t1 = 0.0, 1.0
@@ -28176,13 +28167,12 @@ def _tiles_truth():
         if sum(c * c for c in p) > 1.0:
             continue
         along = (rng.random() - 0.5) * length
-        samples.append((centre[0] + radius * p[0], centre[1] + radius * p[1],
-                        centre[2] + along + radius * p[2]))
+        samples.append(tuple(centre[i] + axis[i] * along + radius * p[i] for i in range(3)))
     prof = []
     r = 0.0
     while r <= 0.40:
-        wall = (r, centre[1], 0.0)
-        prof.append((r, sum(0 if blocked(wall, s) else 1 for s in samples) / len(samples)))
+        at = (r, centre[1], wall_z)
+        prof.append((r, sum(0 if blocked(at, s) else 1 for s in samples) / len(samples)))
         r += 0.0025
     return prof
 
@@ -28221,8 +28211,8 @@ def run_shadow_tiles_gate(workdir):
     point = asset("cornell_point.cscn")
     core = asset("tile_core_fixture.cscn")
     fire = asset("fire_fixture.cscn")
-    leak_model = asset("cornell_leak.gltf")
-    if not all(os.path.exists(p) for p in (RENDER, point, core, fire, leak_model)):
+    leak = asset("cornell_leak.cscn")
+    if not all(os.path.exists(p) for p in (RENDER, point, core, fire, leak)):
         print("  tiles-off    SKIP  (render or a tiles fixture not present)")
         return []
     failures = []
@@ -28251,8 +28241,7 @@ def run_shadow_tiles_gate(workdir):
         failed("tiles-off", err or err2)
     else:
         blocks = _tiles_region(a[1]).get("blocks", "?")
-        differ = compare(os.path.join(workdir, "tiles_off_flag.ppm"),
-                         os.path.join(workdir, "tiles_off_none.ppm"))[0]
+        differ = compare(a[3], b[3])[0]
         ok = blocks == "0" and differ == 0
         print(f"  tiles-off    {'PASS' if ok else 'FAIL'}  blocks {blocks} (want 0) and {differ} "
               f"px against the same light unflagged (want 0)")
@@ -28260,16 +28249,16 @@ def run_shadow_tiles_gate(workdir):
             failures.append("tiles-off")
 
     # --- leak and fog ------------------------------------------------------------------------
-    def leak_scene(tag, light, fog=False):
-        d = {"version": 1, "models": [{"path": leak_model}], "lights": [light],
-             "camera": TILES_LEAK_CAMERA, "post": {"tonemap": "neutral", "exposure": 1.0}}
-        path = os.path.join(workdir, f"tiles_{tag}.cscn")
-        with open(path, "w") as fh:
-            json.dump(d, fh)
-        return path
+    # cornell_leak's spot made a point light, which a cache takes, with the same place and power.
+    def leak_point(cache):
+        def mutate(light):
+            light.pop("direction", None)
+            light.pop("cone", None)
+            light.update(type="point", shadow_cache=cache)
+        return lamp(mutate)
 
-    cached = leak_scene("leak_cached", TILES_LEAK_LAMP)
-    frame = leak_scene("leak_frame", dict(TILES_LEAK_LAMP, shadow_cache=False))
+    cached = scene("leak_cached", leak, leak_point(True))
+    frame = scene("leak_frame", leak, leak_point(False))
     lc, err = _tiles_render(workdir, "leak_cached", cached, [])
     ln, err2 = _tiles_render(workdir, "leak_none", cached, ["--no-shadows"])
     if err or err2:
@@ -28307,10 +28296,13 @@ def run_shadow_tiles_gate(workdir):
     if err or err2 or err3:
         failed("tiles-match", err or err2 or err3)
     else:
-        near = _tiles_share_past(pk[0], pf[0])
-        far = _tiles_share_past(pn[0], pf[0])
+        w, h, frame_pix = pf[0]
+        whole = (0.0, 0.0, 1.0, 1.0)
+        near = _pixels_past(pk[0][2], frame_pix, w, h, whole, TILES_MATCH_CODES) / (w * h)
+        far = _pixels_past(pn[0][2], frame_pix, w, h, whole, TILES_MATCH_CODES) / (w * h)
         ok = near <= TILES_MATCH_MAX and far >= TILES_MATCH_FALSIFIER_MIN
-        print(f"  tiles-match  {'PASS' if ok else 'FAIL'}  {near:.4f} of the frame past 8 codes "
+        print(f"  tiles-match  {'PASS' if ok else 'FAIL'}  {near:.4f} of the frame past "
+              f"{TILES_MATCH_CODES} codes "
               f"from the per-frame map (want <= {TILES_MATCH_MAX}); unshadowed {far:.4f} (want "
               f">= {TILES_MATCH_FALSIFIER_MIN})")
         if not ok:
@@ -28318,8 +28310,7 @@ def run_shadow_tiles_gate(workdir):
     if err or err4:
         failed("tiles-fresh", err or err4)
     else:
-        differ = compare(os.path.join(workdir, "tiles_point_kept.ppm"),
-                         os.path.join(workdir, "tiles_point_refresh.ppm"))[0]
+        differ = compare(pk[3], pr[3])[0]
         ok = differ == 0
         print(f"  tiles-fresh  {'PASS' if ok else 'FAIL'}  {differ} px between faces kept from "
               f"frame 1 and faces redrawn every frame (want 0)")
@@ -28337,8 +28328,8 @@ def run_shadow_tiles_gate(workdir):
             failures.append("tiles-draws")
 
     # --- the core fixture: views, truth, core ------------------------------------------------
-    ortho = ["--ortho", "0.8", "--tonemap", "linear", "--no-bloom", "--no-ssao", "--no-ssr",
-             "--no-vignette", "--no-dither"]
+    ortho = ["--ortho", str(TILES_CORE_ORTHO), "--tonemap", "linear", "--no-bloom", "--no-ssao",
+             "--no-ssr", "--no-vignette", "--no-dither"]
     square = ("400", "400")
     cn, err = _tiles_render(workdir, "core_none", core, ortho + ["--no-shadows"], size=square)
     cr, err2 = _tiles_render(workdir, "core_ref", core, ortho + ["--tile-reference", "32"],
@@ -28355,10 +28346,12 @@ def run_shadow_tiles_gate(workdir):
         body = _tiles_blocks(ct[1])
         flat = _tiles_blocks(pk[1])
         got = [(b.get("views"), b.get("cells")) for b in body + flat]
-        ok = bool(body and flat and body[0].get("views") == "8" and body[0].get("cells") == "48"
-                  and flat[0].get("views") == "1" and flat[0].get("cells") == "6")
-        print(f"  tiles-views  {'PASS' if ok else 'FAIL'}  (views, cells) {got} (want ('8', '48') "
-              f"for the flame, ('1', '6') for cornell_point's lamp)")
+        views = int(_shared_constant("shadow_tile_constants.glsl", "SHADOW_TILE_VIEWS"))
+        want = (str(views), str(6 * views))
+        ok = bool(body and flat and (body[0].get("views"), body[0].get("cells")) == want
+                  and (flat[0].get("views"), flat[0].get("cells")) == ("1", "6"))
+        print(f"  tiles-views  {'PASS' if ok else 'FAIL'}  (views, cells) {got} (want {want} for "
+              f"the flame, ('1', '6') for cornell_point's lamp)")
         if not ok:
             failures.append("tiles-views")
     if err or err2 or err3 or err4 or err5:
@@ -28394,10 +28387,8 @@ def run_shadow_tiles_gate(workdir):
         failed("tiles-movers", err or err2 or "cornell_point's cached render")
     else:
         region = _tiles_region(rest[1])
-        at_rest = compare(os.path.join(workdir, "tiles_swing_rest.ppm"),
-                          os.path.join(workdir, "tiles_point_kept.ppm"))[0]
-        moved = compare(os.path.join(workdir, "tiles_swing_mid.ppm"),
-                        os.path.join(workdir, "tiles_point_kept.ppm"))[0]
+        at_rest = compare(rest[3], pk[3])[0]
+        moved = compare(mid[3], pk[3])[0]
         ok = (at_rest == 0 and moved > 100 and region.get("movers") == "1"
               and region.get("faces_drawn") == "0" and region.get("mover_faces_drawn") != "0")
         print(f"  tiles-movers {'PASS' if ok else 'FAIL'}  at the swing's rest {at_rest} px from "
