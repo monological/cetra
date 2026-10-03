@@ -194,6 +194,10 @@ first.
 | **Animation blending** (`animator.c`, spec 12.1) | YES in headless -- every clock in it (the blend space's, the crossfade's envelope, the override layer's) advances by the same fixed dt, so frame N is blend state N. In the game framework the dt is the SIM clock's, a whole number of fixed steps, so a paused sim holds the pose and reads zero deformation velocity | (automatic); `--anim-probe` prints the weights and every bone's pose, `%.9g`, so a textual diff is a bit diff |
 | **The animation state machine** (`anim_graph.c`, spec 12.20) | YES in headless, and for a reason worth stating rather than inheriting: the graph ticks ONCE PER RENDERED FRAME, immediately before the animator it drives, and headless a frame is exactly one fixed step -- so state N is state N. **Windowed it is not**, and that is the one place this differs from the rows above: a frame that runs three steps or none still decides once, where the machine it replaced decided three times or zero. The time-in-state a row compares against is in seconds off the sim clock, which is a whole number of fixed steps headless and is not, windowed | (automatic); `--graph-probe` prints states and clocks at `%.9g`, and most of its cases create no engine at all; `--trace-player` appends the live state and its clock as the LAST two columns |
 | **The game UI** (`ui.c`, spec 12.2) | YES in headless -- every clock it has (hover, focus, a toggle's travel, a screen's entrance) advances by the FIXED frame dt rather than the wall clock, so frame N is transition state N. It draws AFTER tone mapping, so no post pass can move it and nothing in the chain needs pinning for it | (automatic); `--ui-probe` prints layout, navigation, capture and settings as numbers, and is the one probe that needs no window at all |
+| **The place graph** (`nav_graph.c`, spec 13.17) | YES -- routes break ties by node index, a follower advances by the root motion a clip states and a jump by its clip's clock, so a headless trip is the same trip every run | (automatic); silent's `--trace-cat` prints the link and how far along it every 30 steps |
+| **A brain** (`game/brain.c`, spec 13.17) | YES in headless, ticked once per fixed step: its only randomness is its own xorshift32 from the seed it was made with, and a sense is a ray against the physics world, which is exact. **Windowed it is not**: what it senses depends on where the player happens to be | (automatic); silent's `--cat-seed` picks the seed, and two `--trace-cat` runs on one seed diff byte-identical (measured over a minute, 240 lines) |
+| **Voices** (`audio_play_voice`, spec 13.17) | YES in an offline render: a voice is decoded on the calling thread, never by an async load, and reaped from the mix pulled, so a dump is a function of the frames. **A headless run that pulls no PCM never ends a voice** -- the pool steals the oldest instead, which changes nothing a picture can see | `--audio-dump`, pulled a frame at a time |
+| **The head look-at** (`look_at.c`, spec 13.17) | YES -- it eases by the animator's dt, and does nothing at all at weight zero, which kept every golden 0 px with it installed | (automatic) |
 | **TAA jitter** | YES -- disabled in headless unless `--headless-jitter` | (automatic) |
 | **Orbit camera** | YES -- auto-rotation disabled in headless | `--cam-eye`/`--cam-target` for exact repro |
 | GTAO / SSR temporal accumulation | frame-count driven, not wall-clock; no drift observed across builds | `--no-ssr --no-ssao` if isolating |
@@ -497,15 +501,19 @@ caller pulls with `audio_system_read_pcm`. Everything ABOVE the device -- the bu
 voices, the spatialization -- is what the `audio` gate group verifies, off that offline
 PCM, so it needs no sound card and is a pure function of the frames pulled.
 
-The `audio` group runs five arms through `gametest --audio-probe`, each a headless offline
+The `audio` group runs six arms through `gametest --audio-probe`, each a headless offline
 render measured as per-channel RMS: **onset** (a tone is silent before it is played and
 energetic after), **pan** (a source to the right is louder in the right channel, and to the
 left in the left -- a ratio each way, so a swapped channel fails), **distance** (the same
 tone is louder near than far and still audible far -- attenuation, not a cutoff), **master**
-(the master bus at 1 passes energy and at 0 passes silence), and **decode** (a WAV
-synthesized by the gate, with no committed binary, loads from a file and decodes to energy).
-All five drive procedural `ma_waveform` tones through the real spatializer, so the layer is
-exercised end to end with nothing on disk but the decode arm's temporary WAV.
+(the master bus at 1 passes energy and at 0 passes silence), **decode** (a WAV
+synthesized by the gate, with no committed binary, loads from a file and decodes to energy),
+and **noise** (spec 13.9: white, pink and brown each loud, each darker than the last). The
+tone arms drive procedural `ma_waveform` tones and the noise arm `ma_noise` beds through the
+real spatializer, so the layer is exercised end to end with nothing on disk but the decode
+arm's temporary WAV. **The voice pool and a source's several sounds (spec 13.17) have no arm**:
+the spec took none, by decision, and silent's offline dumps with `--cat-say` less the same
+dump with `--no-cat` are how they were checked.
 
 **What no suite covers is the OS device path** -- that a real speaker produces the sound, on
 each platform's backend (CoreAudio, ALSA/PulseAudio, WASAPI). The offline render proves the

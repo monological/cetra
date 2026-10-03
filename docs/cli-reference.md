@@ -936,6 +936,40 @@ Pinned views of them, with `-W 960 -H 540`:
   -2.9,1.5,19.3`.
 - **The hall clock under the bulb:** `--cam-eye -0.2,1.5,14.6 --cam-target -1.45,1.0,12.9`.
 
+**The cat** (spec 13.17): black with yellow eyes, asleep on the study chair, minding its own
+business round the house from there. **G** shows its panel -- what it is doing and every
+activity's score, its needs, what it senses, an activity or a place to send it to, and its
+colours -- and draws the place graph over the frame: links by kind, its route ahead, its sight
+line green or red, and what it is watching.
+- **`--no-cat`:** without it.
+- **`--cat-fur RRGGBB`**, **`--cat-eyes RRGGBB`:** its coat (default 262424) and eyes (E8B923),
+  sRGB hex. A light coat takes pink ears and nose.
+- **`--cat-at <place>`:** where it starts; the usage line lists the places it rests at.
+- **`--cat-clip <name>[@s]`:** hold one clip there, playing or `s` seconds in. Nothing moves it
+  and it has no mind.
+- **`--cat-goto <place>[:trot|:run]`:** send it there once it is in the house, by the rail if that
+  is the way. Scripted, so it has no mind.
+- **`--cat-activity <name>`:** start its mind on one activity -- sleep, stretch, loaf, explore,
+  watch_clock, window, avoid, startle, follow or rail.
+- **`--cat-seed <n>`:** its mind's seed (default 1). Two runs on one seed trace identically.
+- **`--cat-blind`:** it neither sees nor hears the player.
+- **`--cat-cam`:** the camera rides behind it. A fixed offset, so it goes into walls.
+- **`--cat-say`:** it makes every sound it has, one every 1.5 s, and purrs -- with `-x` and
+  `--audio-dump`, how its sounds are heard without a window. The dump less the same with
+  `--no-cat` is the cat alone.
+- **`--trace-cat`:** every 30 steps, where it is, what it plays, the link it is on, and what it
+  wants.
+- **`--no-eyeshine`:** its eyes do not throw the flashlight back.
+
+A pinned camera stands in for the player as far as the cat can tell, so a framing near it is also a
+test of it watching you. Pinned views that have been useful, with `-W 960 -H 540`:
+- **Asleep on the chair:** `--cam-eye -3.70,4.05,8.70 --cam-target -5.02,3.72,9.02`.
+- **At the clock, watching the pendulum:** `--cat-at hall_clock --cat-activity watch_clock
+  --cam-eye -0.25,0.75,12.45 --cam-target -1.00,0.80,13.15`; from in front, where it turns its
+  head to the camera, `--cam-eye -1.05,1.25,12.3 --cam-target -0.8,0.55,13.15`.
+- **On the rail, from the great hall:** `--cat-at gal_w --cat-goto newel_cap --fov 60 --cam-eye
+  0.40,1.70,18.00 --cam-target 0.40,4.10,15.00 -f 900`.
+
 ## The other apps, and the AA mode each one chose
 
 Spec 11.103 asked what anti-aliasing every app should run and got a different answer four times,
