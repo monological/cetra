@@ -180,6 +180,10 @@ struct Light;
 // One cached light's six faces: block b owns six consecutive tiles of the region, in the
 // +X -X +Y -Y +Z -Z order a point light's per-frame layers take. What it records is what
 // the tiles hold, so the pass can tell a face it may keep from one it must draw again.
+//
+// A HERO's block is a light's second one, redrawn every frame from where the light is now,
+// so the shadows of a flickering flame move with it; its first block stays as it was, ready
+// for when the light stops being a hero.
 typedef struct ShadowTileBlock {
     struct Light* light; // NULL = free; published to when whole
     vec3 origin;         // where the faces were drawn from
@@ -187,6 +191,11 @@ typedef struct ShadowTileBlock {
     float far_plane;
     unsigned generation; // the region's when drawn; any other means the tiles were lost
     uint8_t valid;       // faces drawn, one bit each
+    bool hero;
+    // A kept block's light where it was last frame, and whether it has moved since: a
+    // light that never moves -- a bulb -- is never worth redrawing every frame.
+    vec3 seen;
+    bool moving;
 } ShadowTileBlock;
 
 typedef struct ShadowSystem {
@@ -331,6 +340,7 @@ typedef struct ShadowSystem {
     float rain_ask_open;      // 1 = rain reaches it, 0 = covered
 
     // Cached point-light shadows (spec 13.16), in tiles of the punctual array.
+    int tile_heroes;      // moving cached lights nearest the camera redrawn every frame; 0 = none
     int tile_fill_budget; // faces drawn a frame while filling; 0 = every face that wants it
     float tile_tolerance; // metres a light may move from where its faces were drawn
     bool tile_refresh;    // redraw every face every frame: what a kept face must equal
@@ -343,7 +353,8 @@ typedef struct ShadowSystem {
     unsigned tile_generation;
     ShadowTileBlock tile_blocks[SHADOW_TILE_MAX_BLOCKS];
     int tile_block_count;  // blocks in use or freed, so the high-water mark of the region
-    int tile_faces_drawn;  // this frame
+    int tile_faces_drawn;  // this frame, kept faces filled
+    int hero_faces_drawn;  // this frame, heroes' faces redrawn
     bool tile_full_warned; // latches, as the pool's does
     bool tile_range_warned;
 
@@ -549,9 +560,9 @@ void shadow_tile_face_matrix(const vec3 origin, int face, float near_plane, floa
 // frame that drew them.
 void shadow_tiles_probe(const ShadowSystem* system, const struct Scene* scene);
 
-// A cached light's six faces as one greyscale PPM, three across and two down in face order,
-// grey by distance over its range and white where nothing was drawn. Reads the tiles back,
-// so it needs the GL context. False, named, when the light has no complete block.
+// A cached light's six kept faces as one greyscale PPM, three across and two down in face
+// order, grey by distance over its range and white where nothing was drawn. Reads the tiles
+// back, so it needs the GL context. False, named, when the light has no complete block.
 bool shadow_tiles_map(const ShadowSystem* system, const struct Light* light, const char* path);
 
 struct PostFX;

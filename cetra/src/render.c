@@ -1953,6 +1953,7 @@ void scene_capture_begin(Engine* engine, Scene* scene, SceneCaptureKind kind,
 
     saved->cascade_count = scene->shadow_system ? scene->shadow_system->cascade_count : 1;
     saved->msm_enabled = scene->shadow_system ? scene->shadow_system->msm_enabled : false;
+    saved->tile_heroes = scene->shadow_system ? scene->shadow_system->tile_heroes : 0;
     saved->render_time = engine->render_time;
     saved->render_delta = engine->render_delta;
     engine_set_render_time(engine, 0.0, 0.0);
@@ -1967,6 +1968,10 @@ void scene_capture_begin(Engine* engine, Scene* scene, SceneCaptureKind kind,
         // face, and because the moment array is sized from the cascade count it
         // would thrash between the bake's one layer and the frame's three.
         scene->shadow_system->msm_enabled = false;
+        // A capture is kept long after the frame it was taken in, so a cached light's shadow
+        // in it is the light's kept one, not a hero's flicker frozen at one instant -- and
+        // a hero's faces are culled to the camera's view, which a capture face does not share.
+        scene->shadow_system->tile_heroes = 0;
         render_shadow_depth_pass(engine, scene);
     }
 }
@@ -1980,6 +1985,7 @@ void scene_capture_end(Engine* engine, Scene* scene, const SceneCaptureState* sa
     if (scene->shadow_system) {
         scene->shadow_system->cascade_count = saved->cascade_count;
         scene->shadow_system->msm_enabled = saved->msm_enabled;
+        scene->shadow_system->tile_heroes = saved->tile_heroes;
     }
 }
 
