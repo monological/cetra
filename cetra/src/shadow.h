@@ -424,6 +424,21 @@ struct Light;
 // light silently keeps a map it lost.
 int shadow_live_punctual_layer(const ShadowSystem* system, const struct Light* light);
 
+// Whether a light's shadow is cached in tiles rather than drawn into the pool every frame:
+// a shadow-casting point light asking for it, with the range its faces end at.
+bool shadow_light_takes_tiles(const struct Light* light);
+
+// A cached light's first tile a consumer may actually sample, or -1 for none: shadow_tile
+// gated the same way, since it too is maintained only while the depth pass runs.
+int shadow_live_tile(const ShadowSystem* system, const struct Light* light);
+
+// The near plane a cached light's faces are drawn with, which its lookup has to invert.
+float shadow_tile_near(const struct Light* light);
+
+// Whether a light has a live map of either kind -- the question a consumer serving the
+// lights NO map covers has to ask, since a cached light holds a tile and no layer.
+bool shadow_light_mapped(const ShadowSystem* system, const struct Light* light);
+
 // Creation and destruction
 ShadowSystem* create_shadow_system(int default_map_size);
 void free_shadow_system(ShadowSystem* system);

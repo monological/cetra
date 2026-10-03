@@ -251,6 +251,16 @@ int shadow_live_punctual_layer(const ShadowSystem* system, const struct Light* l
     return light->shadow_layer;
 }
 
+int shadow_live_tile(const ShadowSystem* system, const struct Light* light) {
+    if (!system || !light || !system->enabled || light->shadow_tile < 0)
+        return -1;
+    return light->shadow_tile;
+}
+
+bool shadow_light_mapped(const ShadowSystem* system, const struct Light* light) {
+    return shadow_live_punctual_layer(system, light) >= 0 || shadow_live_tile(system, light) >= 0;
+}
+
 // Largest power-of-two edge the VRAM budget affords for `layers` depth layers.
 // Halving the size quarters the cost, so this walks down from the ceiling and
 // stops at the first size that fits -- and never below the floor, since a map
@@ -1169,7 +1179,7 @@ static void draw_shadow_layer(ShadowSystem* ss, const Scene* scene, const DrawLi
 
 // Whether a light's shadow goes in tiles rather than the per-frame pool. Its range is where
 // its faces end, so a cached light with none stays in the pool.
-static bool light_takes_tiles(const Light* light) {
+bool shadow_light_takes_tiles(const Light* light) {
     return light->cast_shadows && light->shadow_cache && light->type == LIGHT_POINT &&
            light->range > 0.0f;
 }
@@ -1194,11 +1204,15 @@ static int tile_block_first_cell(const ShadowSystem* ss, int edge, int block) {
 
 // A cached light's planes: the far is its range, the near what it states or a fraction of
 // the range.
+float shadow_tile_near(const Light* light) {
+    return light->shadow_near > 0.0f && light->shadow_near < light->range
+               ? light->shadow_near
+               : SHADOW_TILE_NEAR_RATIO * light->range;
+}
+
 static void tile_planes(const Light* light, float* near_plane, float* far_plane) {
     *far_plane = light->range;
-    *near_plane = light->shadow_near > 0.0f && light->shadow_near < light->range
-                      ? light->shadow_near
-                      : SHADOW_TILE_NEAR_RATIO * light->range;
+    *near_plane = shadow_tile_near(light);
 }
 
 void shadow_tile_face_matrix(const vec3 origin, int face, float near_plane, float far_plane,
@@ -1228,7 +1242,7 @@ static int tiles_reconcile(ShadowSystem* ss, const Scene* scene) {
     int count = 0;
     for (size_t i = 0; i < scene->light_count; ++i) {
         Light* light = scene->lights[i];
-        if (!light || !light_takes_tiles(light))
+        if (!light || !shadow_light_takes_tiles(light))
             continue;
         int b = tile_block_of(ss, light);
         for (int f = 0; b < 0 && f < (int)SHADOW_TILE_MAX_BLOCKS; ++f) {
@@ -1779,7 +1793,7 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
         light->shadow_map_index = -1;
         light->shadow_layer = -1;
         light->shadow_tile = -1;
-        if (!light->cast_shadows || light_takes_tiles(light))
+        if (!light->cast_shadows || shadow_light_takes_tiles(light))
             continue;
         if (light->shadow_cache && light->type == LIGHT_POINT && !rangeless)
             rangeless = light;
@@ -2516,7 +2530,7 @@ void shadow_publish_to_postfx(const Scene* scene, PostFX* fx) {
     }
 
     // The population no shadow map can serve: point and spot lights holding no
-    // LIVE punctual layer. Counted BEFORE the directional early-out below,
+    // LIVE map, a layer or a cached tile. Counted BEFORE the directional early-out below,
     // because a scene lit only by practicals has no directional and this is the
     // whole reason it still needs a contact-shadow pass (spec 11.56). The cull
     // radius is the same test the cluster build applies -- a light that never
@@ -2532,8 +2546,7 @@ void shadow_publish_to_postfx(const Scene* scene, PostFX* fx) {
         const Light* l = scene->lights[i];
         if (!l || (l->type != LIGHT_POINT && l->type != LIGHT_SPOT))
             continue;
-        if (shadow_live_punctual_layer(scene->shadow_system, l) < 0 &&
-            light_cull_radius(l) != 0.0f) {
+        if (!shadow_light_mapped(scene->shadow_system, l) && light_cull_radius(l) != 0.0f) {
             fx->cs_mapless_lights++;
         }
     }

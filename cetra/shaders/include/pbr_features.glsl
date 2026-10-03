@@ -42,11 +42,15 @@
 // It is its own bit rather than part of RAIN because it declares heightTex, and a rain
 // variant that did would spend a sampler on every material in a wet world.
 #define PBR_FEAT_RELIEF   128
+// Whether the SCENE has a light whose shadow is cached in tiles (spec 13.16): the lookup
+// that reads them. A scene bit, and it declares no sampler -- the tiles are layers of the
+// punctual array every variant already samples.
+#define PBR_FEAT_SHADOW_TILES 256
 
 // The union, written out rather than OR-ed together, because an expression here
 // would have to parse identically in C, GLSL and the Python that reads this file
 // for scripts/gates.py. A literal is the only form all three agree on.
-#define PBR_FEAT_ALL 255
+#define PBR_FEAT_ALL 511
 
 // The mask this compilation carries, and the test for a bit in it.
 //

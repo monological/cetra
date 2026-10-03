@@ -47,11 +47,9 @@ typedef struct GpuDirLight {
 } GpuDirLight;
 
 typedef struct GpuPackedLight {
-    // w = cull radius (0 = unbounded). Not sampled by any shader today -- the
-    // GPU never needs the radius, since cluster membership already answers
-    // "does this light reach me". Kept because it costs nothing (the vec4 row
-    // exists for the position regardless) and it is what a range-windowed
-    // falloff would read.
+    // w = cull radius (0 = unbounded). The light loop never needs it, since
+    // cluster membership already answers "does this light reach me"; a cached
+    // shadow's lookup reads it as its faces' far plane, which is the range.
     float pos_range[4];
     float dir_type[4];        // xyz = direction (world, UNIT), w = 1 point / 2 spot / 3 area
     float color_intensity[4]; // xyz = color * intensity (premultiplied)
@@ -61,7 +59,8 @@ typedef struct GpuPackedLight {
                            // (-1 = none), reserved, cos inner cone
     float shadow_misc[4];  // cos outer cone, punctual shadow layer, size.xy
     // Roll reference, unit and orthonormal to dir: a panel's height axis
-    // (spec 9.2), an asymmetric IES profile's azimuth zero (spec 11.57).
+    // (spec 9.2), an asymmetric IES profile's azimuth zero (spec 11.57); w = a
+    // cached light's near plane (spec 13.16).
     float up_area[4];
     // Where a cached light's faces were drawn from, and its first tile (-1 = none).
     float shadow_tile[4];

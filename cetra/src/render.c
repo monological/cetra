@@ -815,9 +815,9 @@ static unsigned _material_pbr_features(const Engine* engine, const Scene* scene,
     return mask;
 }
 
-// The three bits no material can answer for. A decal belongs to no material at
-// all, whether a scene has an area light is a fact about the light list, and
-// whether it rains -- or is still wet from it -- is a fact about the sky.
+// The bits no material can answer for. A decal belongs to no material at all,
+// whether a scene has an area light or a cached shadow is a fact about the light
+// list, and whether it rains -- or is still wet from it -- is a fact about the sky.
 static unsigned _scene_pbr_features(const Scene* scene) {
     unsigned mask = 0;
     if (scene->decal_count > 0)
@@ -825,10 +825,13 @@ static unsigned _scene_pbr_features(const Scene* scene) {
     if (rain_active(scene->rain))
         mask |= PBR_FEAT_RAIN;
     for (size_t i = 0; i < scene->light_count; ++i) {
-        if (scene->lights[i] && scene->lights[i]->type == LIGHT_AREA) {
+        const Light* light = scene->lights[i];
+        if (!light)
+            continue;
+        if (light->type == LIGHT_AREA)
             mask |= PBR_FEAT_AREA;
-            break;
-        }
+        if (shadow_light_takes_tiles(light))
+            mask |= PBR_FEAT_SHADOW_TILES;
     }
     return mask;
 }

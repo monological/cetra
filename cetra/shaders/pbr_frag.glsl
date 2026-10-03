@@ -211,6 +211,10 @@ uniform int pcssFrameIndex; // Advances the per-frame rotation; frozen when off
 // through these UBOs -- directionals in a small unconditional array, the
 // point/spot/area set via the per-fragment cluster index list.
 #include "lights_ubo.glsl"
+// A cached point light's faces, tiles of the same punctual array (spec 13.16).
+#if CETRA_HAS(PBR_FEAT_SHADOW_TILES)
+#include "punctual_tiles.glsl"
+#endif
 #include "view.glsl"
 #include "depth.glsl"
 #include "velocity.glsl"
@@ -1943,6 +1947,9 @@ void main() {
         vec2 lightSize; // PCSS emitter size (directional/spot) or panel extent (area)
         int dirShadowSlot = -1;
         int punctualLayer = -1; // Base layer in the punctual array, -1 = no map
+#if CETRA_HAS(PBR_FEAT_SHADOW_TILES)
+        uint tileLight = 0u; // the cluster light whose tiles to read, at SHADOW_TILE_MARK
+#endif
 
         if (k < numDir) {
             L = normalize(-dirLights[k].dirShadow.xyz);
@@ -2066,6 +2073,9 @@ void main() {
             lightCI = clusterLights[li].colorIntensity.xyz;
             lightSize = clusterLights[li].shadowMisc.zw;
             punctualLayer = int(clusterLights[li].shadowMisc.y);
+#if CETRA_HAS(PBR_FEAT_SHADOW_TILES)
+            tileLight = li;
+#endif
             // A point light owns six layers rather than one; resolve the face
             // here, where its direction is still in scope. -L is the
             // fragment-to-light direction reversed, i.e. light-to-fragment;
@@ -2169,7 +2179,14 @@ void main() {
         // Punctual shadow: this light's own perspective map. Overwrites rather
         // than multiplies because the two are exclusive -- dirShadowSlot is set
         // only on the directional path, punctualLayer only on the cluster one.
+        // A cached light's marker is past every per-frame layer, so a variant
+        // without the tiles reads it as lit there rather than indexing anything.
         if (punctualLayer >= 0 && alphaMasked == 0) {
+#if CETRA_HAS(PBR_FEAT_SHADOW_TILES)
+            if (punctualLayer >= SHADOW_TILE_MARK)
+                shadow = tileShadow(tileLight, WorldPos, N, L, ddxWorld, ddyWorld);
+            else
+#endif
             shadow = punctualShadow(punctualLayer, WorldPos, N, L, ddxWorld, ddyWorld);
         }
 
