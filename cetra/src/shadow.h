@@ -351,6 +351,8 @@ typedef struct ShadowSystem {
     int tile_base_layer;
     int tile_layers;
     unsigned tile_generation;
+    int tile_held_base;  // the base the array's tiles are laid out at; a rebuild moves them
+    uint64_t tile_epoch; // the scene graph's when the kept faces were last checked against it
     ShadowTileBlock tile_blocks[SHADOW_TILE_MAX_BLOCKS];
     int tile_block_count;  // blocks in use or freed, so the high-water mark of the region
     int tile_faces_drawn;  // this frame, kept faces filled
@@ -550,6 +552,13 @@ bool shadow_rain_cover_answer(const ShadowSystem* ss, float* open);
 // frame that rendered one.
 void shadow_rain_probe(const ShadowSystem* system, const vec3* points, int count,
                        const char* image_path);
+
+// Kept faces drawn again at the next depth pass: every one, or those whose view reaches a
+// world box. The pass already redraws the faces that see a caster whose node moved, and all
+// of them when the graph changes; these are for what it cannot see -- geometry edited in
+// place, a mesh whose vertices moved under a node that did not.
+void shadow_tiles_invalidate(ShadowSystem* system);
+void shadow_tiles_invalidate_box(ShadowSystem* system, const vec3 box_min, const vec3 box_max);
 
 // A cached face's light-space matrix: from `origin` down face `face` (+X -X +Y -Y +Z -Z),
 // across the face's 90 degrees plus the guard band each side, over [near, far].
