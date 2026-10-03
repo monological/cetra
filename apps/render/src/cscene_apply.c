@@ -316,7 +316,8 @@ void add_cscene_lights(Scene* scene, const CetraSceneDesc* cscn) {
                           .range = sl->has_range ? sl->range : 0.0f,
                           .cast_shadows = sl->cast_shadows,
                           .shadow_cache = sl->shadow_cache,
-                          .emitter_size = sl->emitter_size,
+                          .source_radius = sl->source_radius,
+                          .source_length = sl->source_length,
                           .shadow_near = sl->shadow_near};
         glm_vec3_copy((float*)sl->position, desc.position);
         glm_vec3_copy((float*)sl->color, desc.color);

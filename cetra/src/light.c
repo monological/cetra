@@ -49,7 +49,8 @@ Light* create_light(const LightDesc* desc) {
 
     light->cast_shadows = desc->cast_shadows;
     light->shadow_cache = desc->shadow_cache;
-    light->emitter_size = desc->emitter_size;
+    light->source_radius = desc->source_radius;
+    light->source_length = desc->source_length;
     light->shadow_near = desc->shadow_near;
     light->shadow_map_index = -1;
     light->shadow_layer = -1;

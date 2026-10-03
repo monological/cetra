@@ -219,8 +219,7 @@ static void _pack_cluster_light(GpuPackedLight* dst, const struct Light* light, 
     // a distribution its shading never applies. The contact-shadow fold is
     // exactly that consumer, and a wrong denominator is invisible in the frame.
     dst->atten_cutoff[1] = light->type == LIGHT_AREA ? -1.0f : (float)light->ies_profile;
-    // A cached light's emitter, which its tiles' soft edge is sized by (spec 13.16).
-    dst->atten_cutoff[2] = tile >= 0 ? fmaxf(light->emitter_size, 0.0f) : 0.0f;
+    dst->atten_cutoff[2] = 0.0f;
     dst->atten_cutoff[3] = light->cutOff;
     dst->shadow_misc[0] = light->outerCutOff;
     // The punctual base layer, not the CSM slot: only directionals reach the
@@ -237,7 +236,15 @@ static void _pack_cluster_light(GpuPackedLight* dst, const struct Light* light, 
     // it as lit before it indexes anything, and its tiles ride in shadow_tile below.
     dst->shadow_misc[1] =
         (float)(tile >= 0 ? SHADOW_TILE_MARK : shadow_live_punctual_layer(shadows, light));
-    glm_vec2_copy((float*)light->size, &dst->shadow_misc[2]);
+    // A panel's extent -- or, for a cached light, the shape its tiles' soft edge comes from:
+    // a point light has no extent for anything else to read, and every reader of these two
+    // takes them for a panel only.
+    if (tile >= 0) {
+        dst->shadow_misc[2] = fmaxf(light->source_radius, 0.0f);
+        dst->shadow_misc[3] = fmaxf(light->source_length, 0.0f);
+    } else {
+        glm_vec2_copy((float*)light->size, &dst->shadow_misc[2]);
+    }
 
     // EVERY type ships the full frame. Both halves used to be panels-only -- the
     // LTC plane test and corner frame assume a unit normal and a height axis --

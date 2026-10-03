@@ -164,15 +164,15 @@ void candles_light(FireSystem* fs, Scene* scene, const Kit* kit, bool shadows) {
         fire->params.adaptation = CANDLE_ADAPTATION;
         fire->light_scale = CANDLE_LIGHT_SCALE;
         // A candle stands still, so its shadow is drawn once and kept (spec 13.16), softened
-        // by the flame's own width -- which is what makes it sharp where a thing touches what
-        // it shadows and soft a hand away.
+        // by the flame's own body, which the fire keeps up to date as it burns.
         const LightDesc desc = {.name = name,
                                 .type = LIGHT_POINT,
                                 .position = {w->tip[0], w->tip[1], w->tip[2]},
                                 .range = CANDLE_RANGE,
                                 .cast_shadows = shadows,
                                 .shadow_cache = shadows,
-                                .emitter_size = fire->flame.width};
+                                .source_radius = 0.5f * fire->flame.width,
+                                .source_length = fire->flame.height};
         Light* light = create_light(&desc);
         if (!light)
             continue;

@@ -2696,10 +2696,14 @@ void shadow_tiles_probe(const ShadowSystem* ss, const Scene* scene) {
             continue;
         const Light* light = block->light;
         printf("tiles-probe block=%d light=%s hero=%d moving=%d first=%d valid=0x%02x "
-               "published=%d origin=%.9g,%.9g,%.9g drift=%.9g near=%.9g far=%.9g current=%d",
+               "published=%d radius=%.9g length=%.9g axis=%.9g,%.9g,%.9g "
+               "origin=%.9g,%.9g,%.9g drift=%.9g near=%.9g far=%.9g current=%d",
                b, light->name ? light->name : "unnamed", block->hero ? 1 : 0, block->moving ? 1 : 0,
                tile_block_first_cell(ss, edge, b), block->valid, light->shadow_tile,
-               (double)block->origin[0], (double)block->origin[1], (double)block->origin[2],
+               (double)light->source_radius, (double)light->source_length,
+               (double)light->direction[0], (double)light->direction[1],
+               (double)light->direction[2], (double)block->origin[0], (double)block->origin[1],
+               (double)block->origin[2],
                (double)glm_vec3_distance((float*)block->origin, (float*)light->global_position),
                (double)block->near_plane, (double)block->far_plane,
                block->generation == ss->tile_generation ? 1 : 0);
