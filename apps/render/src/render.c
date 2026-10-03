@@ -214,6 +214,9 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --tile-reference <n>  Shade every cached light from n views over its\n"
                     "                         body, redrawn each frame: the soft shadow's\n"
                     "                         reference (at most 64)\n");
+    fprintf(stderr,
+            "      --node-swing <node> <m>  Swing a node along x by up to m metres, once a\n"
+            "                         second, from frame 0: a caster that moves\n");
     fprintf(stderr, "      --tile-heroes <n>  Redraw the n moving cached lights nearest the\n"
                     "                         camera every frame, from where they are now\n");
     fprintf(stderr, "      --tiles-refresh    Redraw every cached face every frame\n");
@@ -1267,6 +1270,9 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->tile_views = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--tile-reference") == 0 && i + 1 < argc) {
             args->tile_reference = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--node-swing") == 0 && i + 2 < argc) {
+            args->node_swing = argv[++i];
+            args->node_swing_m = (float)atof(argv[++i]);
         } else if (strcmp(argv[i], "--tile-map") == 0 && i + 2 < argc) {
             args->tile_map_light = argv[++i];
             args->tile_map_path = argv[++i];
@@ -2825,6 +2831,21 @@ void pre_render_callback(Engine* engine, Scene* current_scene) {
     // --rain-ask: the CPU cover query asked every frame, as a listener would ask it.
     if (frame_schedule && frame_schedule->rain_ask_set)
         shadow_rain_cover_ask(current_scene->shadow_system, frame_schedule->rain_ask);
+
+    // --node-swing: a node moved by the frame index, so a headless run repeats.
+    if (frame_schedule && frame_schedule->node_swing) {
+        static SceneNode* swung = NULL;
+        static vec3 rest;
+        if (!swung && (swung = node_find(root_node, frame_schedule->node_swing)) != NULL)
+            glm_vec3_copy(swung->original_transform[3], rest);
+        if (swung) {
+            vec3 at = GLM_VEC3_ZERO_INIT;
+            glm_vec3_copy(rest, at);
+            at[0] += frame_schedule->node_swing_m *
+                     sinf(2.0f * GLM_PIf * (float)frames_rendered / 60.0f);
+            node_set_position(swung, at);
+        }
+    }
 
     // The engine's frame clock: the wall clock live, a fixed 1/60 headless so
     // frame N is always pose N
