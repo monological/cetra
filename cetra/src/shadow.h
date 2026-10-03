@@ -381,7 +381,7 @@ typedef struct ShadowSystem {
     const struct SceneNode* tile_movers[SHADOW_TILE_MAX_MOVERS];
     uint64_t tile_mover_moved[SHADOW_TILE_MAX_MOVERS]; // the tile frame each last moved
     int tile_mover_count;
-    uint64_t tile_frame;   // frames the tiles have been drawn
+    uint64_t tile_frame;   // the engine's frame the tiles were last drawn in
     GLuint tile_copy_fbo;  // reads one face while the punctual FBO writes its copy
     bool tile_full_warned; // latches, as the pool's does
     bool tile_range_warned;
