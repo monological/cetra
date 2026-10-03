@@ -3,7 +3,8 @@
 
     python3 apps/silent/tools/cat_sheet.py [--clips walk,sit] [--out out/cat_sheet.png]
 
-Renders each clip of assets/models/cat.glb headless through the render app, at a quarter, a
+Renders each clip of the cat headless through the render app and assets/scenes/cat.cscn, which
+turns its coat on, at a quarter, a
 half, three quarters and the end of its length, and tiles the frames with the clip's name. Run
 from the checkout whose build it should use: the render app is ./out/bin/render beside it.
 """
@@ -19,7 +20,8 @@ from PIL import Image, ImageDraw
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 RENDER = os.path.join(ROOT, "out", "bin", "render")
-GLB = os.path.join(ROOT, "assets", "models", "cat.glb")
+# The scene rather than the bare glb: it is what turns the coat on.
+SCENE = os.path.join(ROOT, "assets", "scenes", "cat.cscn")
 HEADER = os.path.join(ROOT, "apps", "silent", "src", "cat_clips.h")
 STEPS = 60  # the render app's fixed clock: frames a second
 PHASES = 4
@@ -45,7 +47,7 @@ def render(name, seconds, travel, view, work):
     # Framed on the middle of whatever ground the clip covers, so a walk stays in shot.
     mid = travel / 2.0
     ex, ey, ez = VIEWS[view]
-    cmd = [RENDER, "-m", GLB, "--anim-clip", name, "-x", "-f", str(every * PHASES),
+    cmd = [RENDER, "-m", SCENE, "--anim-clip", name, "-x", "-f", str(every * PHASES),
            "--screenshot-every", str(every), "--cam-eye", f"{ex},{ey},{ez + mid}",
            "--cam-target", f"0,0.14,{mid - 0.05}", "-W", "480", "-H", "320", "-S", base]
     subprocess.run(cmd, cwd=ROOT, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
