@@ -1,5 +1,6 @@
 #include "animation.h"
 #include "ik.h"
+#include "look_at.h"
 #include "ragdoll.h"
 #include "springbone.h"
 #include "util.h"
@@ -472,6 +473,7 @@ AnimationState* create_animation_state(Skeleton* skeleton) {
 
     state->springs = NULL;
     state->ik = NULL;
+    state->look_at = NULL;
 
     // Compute initial bind pose
     compute_bind_pose_matrices(state);
@@ -488,6 +490,7 @@ void free_animation_state(AnimationState* state) {
 
     if (state->ik)
         free_ik_system(state->ik);
+    free_look_at_system(state->look_at);
     if (state->ragdoll)
         free_ragdoll(state->ragdoll);
 
@@ -1385,6 +1388,12 @@ void animation_state_apply_pose(AnimationState* state, const Pose* pose, float d
         // from its parent and would erase a solve written before it (see ik.h).
         if (state->ik) {
             ik_solve(state->ik, state->global_transforms, delta_time);
+        }
+
+        // The head turned toward what it watches: after the IK, which may drop the
+        // pelvis the whole neck hangs from.
+        if (state->look_at) {
+            look_at_solve(state->look_at, state->global_transforms, delta_time);
         }
     }
 

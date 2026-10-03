@@ -11,6 +11,7 @@ typedef enum {
     COMPONENT_CHARACTER,     // Character controller
     COMPONENT_ANIMATOR,      // Skeletal animation: an Animator (animator_component.h)
     COMPONENT_AUDIO_SOURCE,  // 3D audio emitter
+    COMPONENT_BRAIN,         // Utility AI: a Brain (brain.h)
     COMPONENT_MAX
 } ComponentType;
 

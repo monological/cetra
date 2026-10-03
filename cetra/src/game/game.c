@@ -4,6 +4,7 @@
 #include "character.h"
 #include "audio.h"
 #include "animator_component.h"
+#include "brain.h"
 #include "../camera.h"
 #include "../cook.h"
 
@@ -223,6 +224,12 @@ static void game_frame_update(Engine* engine, float dt) {
             // User update callback
             if (game->on_update) {
                 game->on_update(game, game->fixed_timestep);
+            }
+
+            // Brains decide after the app has moved the world, so they decide on this
+            // step's state, and before physics, so what they decide moves this step.
+            if (game->entity_manager) {
+                update_all_brains(game->entity_manager, (float)game->fixed_timestep);
             }
 
             // Tick scene-attached particle systems (framework-driven, like physics)
