@@ -279,11 +279,50 @@ static void runner(Kit* kit, const vec2 from, const vec2 to, float y) {
 
 // The rug: 3 m across by 4 m long, laid up to the hearth's stone with its middle on the hall's
 // axis.
-static void rug(Kit* kit) {
+static void rug_extent(float* x0, float* z0, float* x1, float* z1) {
     const float w = GOTHICS[GOTHIC_RUG].size[0], l = GOTHICS[GOTHIC_RUG].size[1];
-    const float z0 = GREAT_Z1 - HEARTH_FRONT - 0.03f - l;
-    runner_piece(kit, (vec3){HEARTH_X + 0.5f * w, FLOOR_Y + 0.008f, z0}, (vec3){-w, 0.0f, 0.0f},
-                 (vec3){0.0f, 0.0f, l}, GOTHIC_RUG);
+    *z1 = GREAT_Z1 - HEARTH_FRONT - 0.03f;
+    *z0 = *z1 - l;
+    *x0 = HEARTH_X - 0.5f * w;
+    *x1 = HEARTH_X + 0.5f * w;
+}
+
+static void rug(Kit* kit) {
+    float x0, z0, x1, z1;
+    rug_extent(&x0, &z0, &x1, &z1);
+    runner_piece(kit, (vec3){x1, FLOOR_Y + 0.008f, z0}, (vec3){x0 - x1, 0.0f, 0.0f},
+                 (vec3){0.0f, 0.0f, z1 - z0}, GOTHIC_RUG);
+}
+
+// The runners on the level: down the hall, and along the gallery under the hand rail.
+typedef struct Runner {
+    float x0, z0, x1, z1, y;
+} Runner;
+#define GALLERY_RUNNER_Z (0.5f * (KITCHEN_BACK_Z + GALLERY_Z1))
+static const Runner RUNNERS[] = {
+    {HALL_AT_X, HOUSE_FRONT_Z + 0.35f, HALL_AT_X, KITCHEN_BACK_Z - 0.1f, FLOOR_Y},
+    {GREAT_X0 + 0.4f, GALLERY_RUNNER_Z, STAIR_X0 - 0.2f, GALLERY_RUNNER_Z, FLOOR2_Y},
+};
+
+// The stair runner's two edges, up the middle of the flight.
+#define STAIR_RUNNER_X0 (0.5f * (STAIR_X0 + GREAT_X1) - 0.35f)
+#define STAIR_RUNNER_X1 (STAIR_RUNNER_X0 + 0.7f)
+
+bool interior_on_cloth(const vec3 p) {
+    float x0, z0, x1, z1;
+    rug_extent(&x0, &z0, &x1, &z1);
+    if (fabsf(p[1] - FLOOR_Y) < 0.05f && p[0] > x0 && p[0] < x1 && p[2] > z0 && p[2] < z1)
+        return true;
+    for (size_t i = 0; i < sizeof(RUNNERS) / sizeof(RUNNERS[0]); i++) {
+        const Runner* r = &RUNNERS[i];
+        const float half = 0.5f * RUNNER_W;
+        if (fabsf(p[1] - r->y) < 0.05f && p[0] > fminf(r->x0, r->x1) - half &&
+            p[0] < fmaxf(r->x0, r->x1) + half && p[2] > fminf(r->z0, r->z1) - half &&
+            p[2] < fmaxf(r->z0, r->z1) + half)
+            return true;
+    }
+    return p[1] > FLOOR_Y + 0.05f && p[1] < FLOOR2_Y - 0.05f && p[0] > STAIR_RUNNER_X0 &&
+           p[0] < STAIR_RUNNER_X1 && p[2] > GALLERY_Z1 && p[2] < STAIR_FOOT_Z;
 }
 
 /*
@@ -310,7 +349,7 @@ static void stair_runner(Kit* kit, float* laid, float len, const vec3 corner, co
  * lancet over the flight.
  */
 static void stair_dressing(Kit* kit) {
-    const float x0 = 0.5f * (STAIR_X0 + GREAT_X1) - 0.35f, x1 = x0 + 0.7f;
+    const float x0 = STAIR_RUNNER_X0, x1 = STAIR_RUNNER_X1;
     const vec3 across = {x1 - x0, 0.0f, 0.0f};
     float laid = 0.0f;
     for (int i = 1; i <= STAIR_RISERS; i++) {
@@ -397,8 +436,8 @@ void interior_build(Kit* kit) {
     gallery(kit);
     stair_dressing(kit);
     rug(kit);
-    runner(kit, (vec2){HALL_AT_X, HOUSE_FRONT_Z + 0.35f}, (vec2){HALL_AT_X, KITCHEN_BACK_Z - 0.1f},
-           FLOOR_Y);
-    const float gallery_z = 0.5f * (KITCHEN_BACK_Z + GALLERY_Z1);
-    runner(kit, (vec2){GREAT_X0 + 0.4f, gallery_z}, (vec2){STAIR_X0 - 0.2f, gallery_z}, FLOOR2_Y);
+    for (size_t i = 0; i < sizeof(RUNNERS) / sizeof(RUNNERS[0]); i++) {
+        const Runner* r = &RUNNERS[i];
+        runner(kit, (vec2){r->x0, r->z0}, (vec2){r->x1, r->z1}, r->y);
+    }
 }

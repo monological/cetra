@@ -30,6 +30,10 @@
 #define SINK_D0 0.10f
 #define SINK_D1 0.50f
 
+// The mat in front of the stove: its middle and half its size.
+static const vec3 STOVE_MAT = {1.12f, FLOOR_Y + 0.004f, 11.72f};
+static const vec3 STOVE_MAT_HALF = {0.38f, 0.004f, 0.62f};
+
 /*
  * Base cabinets from a0 to a1: a dark recessed plinth, the carcass, a door per
  * unit with a drawer over every other one, and bar handles. The carcass drops
@@ -732,7 +736,10 @@ void kitchen_build(Kit* kit, unsigned int seed) {
     stove_wall(kit, &rng);
     shelf_wall(kit, &rng);
     table(kit);
-    // The mat in front of the stove.
-    kit_box(kit, MAT_RUG, (vec3){1.12f, FLOOR_Y + 0.004f, 11.72f}, (vec3){0.38f, 0.004f, 0.62f},
-            0.0f, false);
+    kit_box(kit, MAT_RUG, STOVE_MAT, STOVE_MAT_HALF, 0.0f, false);
+}
+
+bool kitchen_on_mat(const vec3 p) {
+    return fabsf(p[0] - STOVE_MAT[0]) < STOVE_MAT_HALF[0] &&
+           fabsf(p[2] - STOVE_MAT[2]) < STOVE_MAT_HALF[2] && fabsf(p[1] - FLOOR_Y) < 0.05f;
 }

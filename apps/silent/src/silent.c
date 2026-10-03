@@ -44,6 +44,7 @@
 #include "candles.h"
 #include "cat.h"
 #include "cat_brain.h"
+#include "cat_voice.h"
 #include "clock.h"
 #include "door.h"
 #include "hearth.h"
@@ -85,6 +86,9 @@
 #define DEFAULT_RAIN_MMH 6.0f
 // Rain the cat finds as interesting as rain gets, mm/h: the default is about half of it.
 #define CAT_HEAVY_RAIN 12.0f
+// How far the cat must have come to like the player before it purrs for them: a little past
+// where it starts, 0.5, so a purr is earned.
+#define CAT_PURRS_ABOVE 0.55f
 // The rain is art-directed here, and has to be. In fog this dense a drop refracts glowing air
 // about as bright as itself, so rain at its physical opacity shows only right under a lamp --
 // true of real rain in fog, and not what this street is for. So each streak is brighter than
@@ -157,6 +161,7 @@ typedef struct SilentArgs {
     CatGait cat_gait;      // and how fast
     bool cat_cam;          // the camera follows the cat
     bool trace_cat;        // print what it is doing every 30 steps
+    bool cat_say;          // it makes every sound it has, in turn
     unsigned int cat_seed; // its mind's seed
     bool cat_blind;        // it does not see or hear the player
     const char* cat_doing; // the activity it starts with, or NULL to choose
@@ -171,6 +176,7 @@ static RainBed g_rain_bed;
 static Sounds g_sounds;
 static Cat g_cat;
 static CatMind g_mind;
+static CatVoice g_voice;
 
 // The door that opens, and the line that says what the action key would do. It answers when
 // the eye is within DOOR_REACH of its leaf's middle and looking within DOOR_CONE of it.
@@ -493,6 +499,7 @@ static void on_init(Game* game) {
     lights_start_audio(&g_lights, audio);
     const vec3 spawn_eye = {SPAWN_FEET[0], SPAWN_FEET[1] + PLAYER_EYE_HEIGHT, SPAWN_FEET[2]};
     sounds_start(&g_sounds, audio, spawn_eye);
+    cat_voice_start(&g_voice, &g_cat, audio, g_args.cat_say);
 
     // Before the sky: its reflections are baked through the fog set here.
     build_post(engine, !g_args.day, !g_args.no_grade);
@@ -686,6 +693,10 @@ static void on_pre_render(Game* game, double alpha) {
     cat_mind_frame(&g_mind, game->time);
     cat_mind_panel(&g_mind, engine);
     cat_update(&g_cat, game, g_scene, &g_lights, eye, (float)game->sim_clock.delta);
+    // It purrs for someone it trusts who is not hurrying; with no mind it has no one to mistrust.
+    const bool at_ease =
+        !g_mind.brain || (g_mind.affinity >= CAT_PURRS_ABOVE && g_mind.player_speed < 1.0f);
+    cat_voice_update(&g_voice, eye, hearing, at_ease, (float)game->sim_clock.delta);
     clock_update(&g_clock, game->time, hearing);
     rain_bed_update(&g_rain_bed, g_scene->rain, g_scene->shadow_system, eye,
                     (float)game->sim_clock.delta);
@@ -776,6 +787,8 @@ static void print_usage(const char* prog) {
     printf("      --cat-activity NAME Start it on one of: %s\n", cat_mind_activities());
     printf("      --cat-seed N        Its mind's seed (default 1)\n");
     printf("      --cat-blind         It neither sees nor hears you\n");
+    printf("      --cat-say           It makes every sound it has in turn, and purrs, to be\n"
+           "                          listened to through --audio-dump\n");
     printf("      --cat-cam           The camera follows the cat\n");
     printf("      --trace-cat         Print what the cat is doing every 30 steps\n");
     printf("      --no-eyeshine       Its eyes do not throw the flashlight back\n");
@@ -909,6 +922,8 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
             a->cat_seed = (unsigned int)strtoul(argv[++i], NULL, 10);
         } else if (!strcmp(s, "--cat-blind")) {
             a->cat_blind = true;
+        } else if (!strcmp(s, "--cat-say")) {
+            a->cat_say = true;
         } else if (!strcmp(s, "--cat-cam")) {
             a->cat_cam = true;
         } else if (!strcmp(s, "--trace-cat")) {

@@ -63,6 +63,31 @@ RECORDINGS = {
     502879: ("Outdoors_Night_Windy_01.wav", "MrFossy", "502/502879_129727"),
     386823: ("Breezy night outdoors", "Clubadub", "386/386823_1984539"),
     843000: ("Winchester Wind ambience", "Paddywack0", "843/843000_1339853"),
+    # The cat (spec 13.17).
+    110011: ("cat meow", "tuberatanka", "110/110011_1537422"),
+    412017: ("cat meow short", "skymary", "412/412017_3652520"),
+    479272: ("New Cat Meow 1", "steffcaffrey", "479/479272_1844073"),
+    528197: ("Cat meow 1", "fthgurdy", "528/528197_3302313"),
+    455493: ("Cat Meow.aif", "Wrenasmir", "455/455493_1138747"),
+    66518: ("meow9.wav", "freemaster2", "66/66518_334103"),
+    850104: ("Cat trills shortly (calm/quiet)", "CatPhony", "850/850104_18444603"),
+    668825: ("Cat trill 4", "MBPL", "668/668825_14585550"),
+    200336: ("Cat trilling", "jsbarrett", "200/200336_3159560"),
+    485952: ("Cat Hissing", "aunrea", "485/485952_7932944"),
+    146963: ("catHisses1.wav", "Zabuhailo", "146/146963_2580450"),
+    819958: ("Cat hissing", "rickismyname", "819/819958_16011171"),
+    532225: ("cat hiss.wav", "patchytherat", "532/532225_5911297"),
+    455495: ("Cat Growl into Hiss.aif", "Wrenasmir", "455/455495_1138747"),
+    658429: ("Animal Footsteps", "IENBA", "658/658429_9616576"),
+    338352: ("Cat Running Stairs", "PhilllChabbb", "338/338352_4205952"),
+    569255: ("Claws animal (foley)", "Nakhas", "569/569255_717697"),
+    803297: ("cat_land_floor", "superEGsonic", "803/803297_663245"),
+    584442: ("Bag Drop Soft Surface 1", "BenjaminNelan", "584/584442_1196020"),
+    191957: ("pillow-throw01.flac", "Aiyumi", "191/191957_2326086"),
+    553962: ("Cat-purr.wav", "clareboots", "553/553962_11756852"),
+    463790: ("Cat Purr.wav", "shyguy014", "463/463790_7805928"),
+    656500: ("Cat purr", "druulian", "656/656500_6497685"),
+    575933: ("Cat Purr", "RazzleDizzle", "575/575933_1824398"),
 }
 PREVIEW = "https://cdn.freesound.org/previews/%s-hq.mp3"
 CLOCK = 125968
@@ -74,6 +99,7 @@ JOBS = {
     "fridge": {"seconds": 12.0, "stereo": False},
     "tube": {"seconds": 6.0, "stereo": False},
     "wind": {"seconds": 30.0, "stereo": True},
+    "purr": {"seconds": 4.0, "stereo": False},
 }
 
 # What --audition renders for each job, to be chosen by ear.
@@ -81,6 +107,7 @@ CANDIDATES = {
     "fridge": [635565, 353797, 573936],
     "tube": [676841, 125064, 273625, 830440],
     "wind": [502879, 386823, 843000],
+    "purr": [553962, 463790, 656500, 575933],
 }
 
 # What the game plays, chosen by ear from the candidates: file name -> (job,
@@ -89,7 +116,47 @@ LOOPS = {
     "fridge_hum": ("fridge", 635565),
     "tube_buzz": ("tube", 273625),
     "wind_outside": ("wind", 386823),
+    "cat_purr": ("purr", 656500),
 }
+
+# A ONESHOT, for a sound that happens once -- a meow, a footfall, a landing. The recording's
+# events are found by their envelope, each cut from just before its onset to a tail after it
+# falls away, faded, high-passed to take off handling rumble, and levelled like a loop: the
+# loud part to ONESHOT_RMS, short of ONESHOT_PEAK. Each kind: the longest an event may be,
+# the tail kept after it, the high-pass, and how many events a recording may give.
+ONESHOT_JOBS = {
+    "meow": {"longest": 1.6, "tail": 0.12, "highpass": 150.0, "per": 3},
+    "trill": {"longest": 1.0, "tail": 0.08, "highpass": 120.0, "per": 3},
+    "hiss": {"longest": 2.0, "tail": 0.1, "highpass": 200.0, "per": 2},
+    "paw": {"longest": 0.14, "tail": 0.03, "highpass": 80.0, "per": 8},
+    "land": {"longest": 0.5, "tail": 0.08, "highpass": 60.0, "per": 2},
+}
+ONESHOT_CANDIDATES = {
+    "meow": [110011, 412017, 479272, 528197, 455493, 66518],
+    "trill": [850104, 668825, 200336],
+    "hiss": [485952, 146963, 819958, 532225, 455495],
+    "paw": [658429, 338352, 569255],
+    "land": [803297, 584442, 191957],
+}
+# What the game plays: file name -> (job, recording, which event, by the order --audition
+# numbers them). Chosen by length and source, not yet by ear: the meows are one cat's three
+# rather than three cats', the paws four soft falls from the start of one recording.
+ONESHOTS = {
+    "cat_meow_1": ("meow", 455493, 0),
+    "cat_meow_2": ("meow", 455493, 1),
+    "cat_meow_3": ("meow", 455493, 2),
+    "cat_trill": ("trill", 850104, 0),
+    "cat_hiss": ("hiss", 146963, 0),
+    "cat_paw_1": ("paw", 658429, 0),
+    "cat_paw_2": ("paw", 658429, 2),
+    "cat_paw_3": ("paw", 658429, 3),
+    "cat_paw_4": ("paw", 658429, 5),
+    "cat_land_hard": ("land", 803297, 0),
+    "cat_land_soft": ("land", 584442, 0),
+}
+ONESHOT_RMS = 0.1    # the loud part's level, as a loop's
+ONESHOT_PEAK = 0.9   # unless its peaks would pass this first
+ONESHOT_LEAD = 0.01  # seconds kept before an event's onset
 
 # The layers heard through the house's walls: file name -> (loop, low-pass
 # Hz, level). A wall passes the low end and little of the rest.
@@ -298,6 +365,58 @@ def repeat(y, seconds):
     return np.concatenate([y] * turns)[:int(seconds * RATE)]
 
 
+def envelope(x, hz=30.0):
+    return signal.filtfilt(*signal.butter(2, hz / (RATE / 2)), np.abs(x))
+
+
+def events(x, job):
+    """The recording's events for `job`, cleanest first, as (start, end) samples: each a run of
+    the envelope above a sixth of the way from the recording's floor to its loudest, runs closer
+    than 60 ms joined, from just before the onset to the job's tail after it falls away, and no
+    longer than the job allows. Cleanest is loudest over the floor."""
+    j = ONESHOT_JOBS[job]
+    env = envelope(x)
+    floor = np.percentile(env, 20)
+    above = env > floor + (env.max() - floor) / 6.0
+    edges = np.diff(above.astype(np.int8))
+    starts = list(np.where(edges == 1)[0] + 1)
+    ends = list(np.where(edges == -1)[0] + 1)
+    if above[0]:
+        starts.insert(0, 0)
+    if above[-1]:
+        ends.append(x.size)
+    runs = []
+    for s, e in zip(starts, ends):
+        if runs and s - runs[-1][1] < int(0.06 * RATE):
+            runs[-1][1] = e
+        else:
+            runs.append([s, e])
+    found = []
+    for s, e in runs:
+        if e - s < int(0.01 * RATE):
+            continue
+        lead = max(0, s - int(ONESHOT_LEAD * RATE))
+        end = min(x.size, e + int(j["tail"] * RATE), lead + int(j["longest"] * RATE))
+        found.append((env[s:e].max() / max(floor, 1e-9), lead, end))
+    found.sort(key=lambda f: -f[0])
+    return [(s, e) for _, s, e in found[:j["per"]]]
+
+
+def oneshot(x, span, job):
+    """One event cut out, faded in over 3 ms and out over its last 40, high-passed, and its loud
+    part levelled to ONESHOT_RMS short of ONESHOT_PEAK."""
+    s, e = span
+    y = x[s:e].copy()
+    y *= np.minimum(1.0, np.arange(y.size) / (0.003 * RATE))
+    n = max(1, min(int(0.04 * RATE), y.size // 3))
+    y[-n:] *= 0.5 * (1.0 + np.cos(np.linspace(0.0, np.pi, n)))
+    y = signal.filtfilt(*signal.butter(2, ONESHOT_JOBS[job]["highpass"] / (RATE / 2), "high"), y)
+    env = envelope(y, 60.0)
+    loud = y[env > 0.25 * env.max()]
+    rms, peak = np.sqrt(np.mean(loud ** 2)), np.max(np.abs(y))
+    return y * min(ONESHOT_RMS / max(rms, 1e-9), ONESHOT_PEAK / max(peak, 1e-9))
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--audition",
@@ -319,6 +438,15 @@ def main():
                 write(os.path.join(args.audition, "%s_%d_%s_30s.wav" % (
                     job, sound, RECORDINGS[sound][1])), repeat(y, 30.0))
                 print("%-6s %s" % (job, credit(sound)))
+        for job, sounds in ONESHOT_CANDIDATES.items():
+            for sound in sounds:
+                x = decode(sound)
+                for k, span in enumerate(events(x, job)):
+                    y = oneshot(x, span, job)
+                    write(os.path.join(args.audition, "%s_%d_%s_%d.wav" % (
+                        job, sound, RECORDINGS[sound][1], k)), y)
+                    print("%-6s %d event %d: %.2f s at %.2f s" % (
+                        job, sound, k, y.size / RATE, span[0] / RATE))
         print(args.audition)
         return 0
 
@@ -333,6 +461,12 @@ def main():
         write_flac(os.path.join(OUT_DIR, name + ".flac"), loops[name])
     for name, (source, cut, gain) in MUFFLES.items():
         write_flac(os.path.join(OUT_DIR, name + ".flac"), muffle(loops[source], cut, gain))
+    for name, (job, sound, k) in ONESHOTS.items():
+        x = decode(sound)
+        y = oneshot(x, events(x, job)[k], job)
+        path = os.path.join(OUT_DIR, name + ".wav")
+        write(path, y)
+        print("%s: %s, event %d, %.2f s" % (path, credit(sound), k, y.size / RATE))
     return 0
 
 
