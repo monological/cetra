@@ -42,6 +42,7 @@
 #include "cetra/game/physics.h"
 
 #include "candles.h"
+#include "cat.h"
 #include "clock.h"
 #include "door.h"
 #include "hearth.h"
@@ -143,6 +144,12 @@ typedef struct SilentArgs {
     bool tiles_probe;       // print the cached shadow tiles at exit
     bool profiler;          // per-pass timing and submission counts, reported at exit
     const char* audio_dump; // headless: write what the listener hears here
+    bool no_cat;
+    vec3 cat_fur, cat_eyes; // sRGB
+    const char* cat_at;     // a place by name, or NULL for home
+    char cat_clip[32];      // a clip by name, or empty for the place's own
+    float cat_clip_seconds; // held this far in; below 0 it plays
+    bool no_eyeshine;
 } SilentArgs;
 
 static SilentArgs g_args;
@@ -152,6 +159,7 @@ static Lights g_lights;
 static Clock g_clock;
 static RainBed g_rain_bed;
 static Sounds g_sounds;
+static Cat g_cat;
 
 // The door that opens, and the line that says what the action key would do. It answers when
 // the eye is within DOOR_REACH of its leaf's middle and looking within DOOR_CONE of it.
@@ -449,6 +457,15 @@ static void on_init(Game* game) {
     }
     g_door_hung = house_front_door(&g_door, engine, g_scene, em, physics);
     prompt_start(&g_prompt, engine);
+    if (!g_args.no_cat) {
+        CatDesc cat = {.at = g_args.cat_at,
+                       .clip = g_args.cat_clip[0] ? g_args.cat_clip : NULL,
+                       .clip_seconds = g_args.cat_clip_seconds,
+                       .eyeshine = !g_args.no_eyeshine};
+        glm_vec3_copy(g_args.cat_fur, cat.fur);
+        glm_vec3_copy(g_args.cat_eyes, cat.eyes);
+        cat_create(&g_cat, &cat, game, g_scene, physics);
+    }
 
     // Sound: the clock's beat, the tubes' buzz, the fridge and the wind, each
     // heard from where it is. Headless, the system opens no device, so a
@@ -629,6 +646,7 @@ static void on_pre_render(Game* game, double alpha) {
     const float hearing = sounds_indoor_gain(&g_sounds);
     lights_update(&g_lights, g_scene, game->time, (float)game->sim_clock.delta, eye, forward,
                   hearing);
+    cat_update(&g_cat, game, g_scene, &g_lights, eye, (float)game->sim_clock.delta);
     clock_update(&g_clock, game->time, hearing);
     rain_bed_update(&g_rain_bed, g_scene->rain, g_scene->shadow_system, eye,
                     (float)game->sim_clock.delta);
@@ -709,10 +727,28 @@ static void print_usage(const char* prog) {
     printf("      --tile-views N      Shade every cached light from N views over its body\n"
            "                          rather than 8; 1 is its centre alone\n");
     printf("      --tiles-probe       The cached shadow tiles and each light's block, at exit\n");
+    printf("      --no-cat            Without the cat\n");
+    printf("      --cat-fur RRGGBB    The cat's coat, as sRGB hex (default 262424)\n");
+    printf("      --cat-eyes RRGGBB   Its eyes (default E8B923)\n");
+    printf("      --cat-at PLACE      Where it is: %s\n", CAT_PLACE_LIST);
+    printf("      --cat-clip NAME[@S] Play that clip there, or hold it S seconds in\n");
+    printf("      --no-eyeshine       Its eyes do not throw the flashlight back\n");
     printf("  In the window: click to capture the mouse, Tab to release it. WASD\n");
     printf("  walks, Shift hurries, the arrows or the mouse look, E opens and shuts\n");
     printf("  a door you are facing, F the flashlight, G shows the GUI.\n");
     printf("  -h, --help              This message\n");
+}
+
+// "RRGGBB", with or without a leading '#', as sRGB 0..1.
+static bool parse_hex(const char* s, vec3 out) {
+    unsigned int rgb;
+    if (*s == '#')
+        s++;
+    if (strlen(s) != 6 || sscanf(s, "%x", &rgb) != 1)
+        return false;
+    for (int i = 0; i < 3; i++)
+        out[i] = (float)((rgb >> (16 - 8 * i)) & 0xffu) / 255.0f;
+    return true;
 }
 
 static bool parse_args(int argc, char** argv, SilentArgs* a) {
@@ -722,6 +758,9 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
     a->seed = 7;
     a->render_scale = DEFAULT_RENDER_SCALE;
     a->rain_mmh = DEFAULT_RAIN_MMH;
+    parse_hex("262424", a->cat_fur);
+    parse_hex("E8B923", a->cat_eyes);
+    a->cat_clip_seconds = -1.0f;
     for (int i = 1; i < argc; i++) {
         const char* s = argv[i];
         const bool has_next = i + 1 < argc;
@@ -789,6 +828,25 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
             a->tiles_probe = true;
         } else if (!strcmp(s, "--profiler")) {
             a->profiler = true;
+        } else if (!strcmp(s, "--no-cat")) {
+            a->no_cat = true;
+        } else if (!strcmp(s, "--cat-fur") && has_next) {
+            if (!parse_hex(argv[++i], a->cat_fur))
+                fprintf(stderr, "silent: --cat-fur wants RRGGBB; keeping the default\n");
+        } else if (!strcmp(s, "--cat-eyes") && has_next) {
+            if (!parse_hex(argv[++i], a->cat_eyes))
+                fprintf(stderr, "silent: --cat-eyes wants RRGGBB; keeping the default\n");
+        } else if (!strcmp(s, "--cat-at") && has_next) {
+            a->cat_at = argv[++i];
+        } else if (!strcmp(s, "--cat-clip") && has_next) {
+            snprintf(a->cat_clip, sizeof(a->cat_clip), "%s", argv[++i]);
+            char* at = strchr(a->cat_clip, '@');
+            if (at) {
+                *at = '\0';
+                a->cat_clip_seconds = fmaxf(0.0f, (float)atof(at + 1));
+            }
+        } else if (!strcmp(s, "--no-eyeshine")) {
+            a->no_eyeshine = true;
         } else if (!strcmp(s, "-h") || !strcmp(s, "--help")) {
             print_usage(argv[0]);
             return false;
