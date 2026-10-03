@@ -36,4 +36,9 @@ GLuint local_exposure_run(LocalExposure* le, GLuint hdr_tex, int frame_w, int fr
 // The atlas's layout, onto the program that slices it. Valid once local_exposure_run has run.
 void local_exposure_upload_layout(const LocalExposure* le, UniformManager* u);
 
+// Print the frame's luminance as percentiles, in stops from `middle_grey`, from the half-res
+// frame local_exposure_run last built: the range a local exposure is being asked to fit, which is
+// the number its strength has to be judged against. Reads the frame back, so it stalls.
+void local_exposure_probe(const LocalExposure* le, float middle_grey);
+
 #endif
