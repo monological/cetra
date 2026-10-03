@@ -124,6 +124,12 @@ const float PI = 3.14159265359;
 #include "lights_ubo.glsl"
 #include "froxel.glsl"
 #include "view.glsl"
+// A cached point light's faces (spec 13.16), read through punctualShadowMaps above.
+#include "tile_lookup.glsl"
+// How far nearer the light than a cell of air a stored surface must be to shadow it, in
+// metres: a cell has no surface of its own to be acne on, so this need only clear the
+// stored depth's quantisation and the faces' polygon offset.
+#define FOG_TILE_BIAS 0.02
 
 // Van der Corput radical inverse in the given base: successive frames land at
 // low-discrepancy positions, so a fixed number of them average to an evenly
@@ -348,9 +354,10 @@ void main() {
         }
     }
 
-    // Clustered point lights (spec 9.1's list), unshadowed -- the engine has no
-    // shadow map for point lights. Attenuation matches pbr_frag so a light's
-    // glow in the air agrees with the pool it casts on the floor.
+    // Clustered point lights (spec 9.1's list), unshadowed unless cached: a per-frame
+    // point map is six layers the fog has no budget to read, and a cached light's faces
+    // (spec 13.16) take one tap. Attenuation matches pbr_frag so a light's glow in the
+    // air agrees with the pool it casts on the floor.
     // No enable flag: the UBOs are zero-initialised and always bound, so a
     // scene without clustered lights reports count 0 and this costs nothing --
     // the degradation to sun+spot coverage is structural, not a toggle.
@@ -375,6 +382,10 @@ void main() {
         // so the un-profiled fog is unchanged.
         vec3 pointL = toL / max(d, 1e-4);
         float attenAngular = atten * punctualAngular(li, pointL);
+        // One tap of a cached light's faces: the volume's own accumulator averages the cell's
+        // binary answers, as it does the cascades'.
+        if (clusterLights[li].shadowMisc.y >= float(SHADOW_TILE_MARK))
+            attenAngular *= tileVisibility(li, P, FOG_TILE_BIAS);
         // pointL points at the light, so its negation is the direction the light
         // travels -- the punctual analogue of the directional phase above.
         float phase = phaseHG(dot(-pointL, -rayDir), anisotropy) * sunBoost;
