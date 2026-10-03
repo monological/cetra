@@ -2839,6 +2839,15 @@ void shadow_publish_to_postfx(const Scene* scene, PostFX* fx) {
         glm_mat4_copy(ss->rain_lookup, fx->rain_cover_matrix);
         fx->fog_punctual_shadow_maps = ss->punctual_map_array;
     }
+    // And a cached light's faces (spec 13.16), which the medium finds through the lights
+    // block. Asked of the same function the packing asks, so the array is bound for exactly
+    // the lights that carry the marker the fog branches on.
+    for (size_t i = 0; ss && ss->punctual_map_array && i < scene->light_count; i++) {
+        if (shadow_live_tile(ss, scene->lights[i]) >= 0) {
+            fx->fog_punctual_shadow_maps = ss->punctual_map_array;
+            break;
+        }
+    }
 
     // Publishing count 0 with a zero array handle is the single "no
     // shadowed in-scatter" state consumers rely on: a nonzero count
