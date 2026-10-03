@@ -706,15 +706,20 @@ void bind_shadow_maps_to_program(ShadowSystem* system, ShaderProgram* program) {
 // says what casts for light, and the rain lands on the surfaces the camera sees,
 // not on shapes standing in for them. The cover spans the street, so stand-ins
 // cut small for a light's reach would only be more draws to it.
-// KEPT is a cached face's (spec 13.16): OPAQUE without anything whose surface moves
-// under its node -- a skinned, swaying or morphing mesh -- since a face drawn once
-// would hold that surface wherever it was on that frame, and at level 0 for the same
-// reason, since the camera's level is wherever the camera was.
+// HERO is a cached light's face redrawn every frame (spec 13.16): OPAQUE without glass. A
+// pane passing nearly all the light, drawn solid, puts what stands behind it in full shadow
+// -- a clock's dial behind its door -- and the tiles have no transmittance map to say
+// otherwise, so for them glass casting nothing is the nearer answer.
+// KEPT is a cached face drawn once: HERO without anything whose surface moves under its
+// node -- a skinned, swaying or morphing mesh -- since a face drawn once would hold that
+// surface wherever it was on that frame, and at level 0 for the same reason, since the
+// camera's level is wherever the camera was.
 typedef enum ShadowCasterSet {
     SHADOW_CASTERS_OPAQUE = 0,
     SHADOW_CASTERS_OPAQUE_TSM,
     SHADOW_CASTERS_TRANSLUCENT,
     SHADOW_CASTERS_RAIN,
+    SHADOW_CASTERS_HERO,
     SHADOW_CASTERS_KEPT,
 } ShadowCasterSet;
 
@@ -777,6 +782,8 @@ static bool caster_set_wants(ShadowCasterSet set, uint8_t lane, uint8_t flags) {
     if (set == SHADOW_CASTERS_TRANSLUCENT)
         return translucent;
     if (masked_only)
+        return false;
+    if ((set == SHADOW_CASTERS_HERO || set == SHADOW_CASTERS_KEPT) && translucent)
         return false;
     // Blend and transmission leave the depth pass ONLY when a transmittance map
     // will receive them. With the flag off this never fires and the depth
@@ -1525,7 +1532,8 @@ static bool tile_face_in_view(const Frustum* view, const vec3 origin, int face, 
 }
 
 // The heroes: every face the camera can see, from where the light is this frame, with every
-// caster at the camera's level -- a face drawn every frame has nothing it must keep still.
+// caster but glass at the camera's level -- a face drawn every frame has nothing it must keep
+// still.
 static void render_shadow_heroes(ShadowSystem* ss, const Engine* engine, const Scene* scene,
                                  SubmitState* state) {
     mat4 view_proj;
@@ -1544,7 +1552,7 @@ static void render_shadow_heroes(ShadowSystem* ss, const Engine* engine, const S
             // A face out of view keeps whatever it last held; nothing on screen reads it.
             const bool in_view =
                 !engine->camera || tile_face_in_view(&view, block->origin, f, block->far_plane);
-            if (in_view && draw_tile_face(ss, engine, scene, state, b, f, SHADOW_CASTERS_OPAQUE))
+            if (in_view && draw_tile_face(ss, engine, scene, state, b, f, SHADOW_CASTERS_HERO))
                 ss->hero_faces_drawn++;
             block->valid |= (uint8_t)(1u << f);
         }
