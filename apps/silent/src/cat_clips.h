@@ -50,7 +50,7 @@ typedef struct CatClipSpec {
     int looping;
     float travel; // metres forward, model space, from first frame to last
     int event_count;
-    CatClipEvent events[6];
+    CatClipEvent events[4];
 } CatClipSpec;
 
 static const CatClipSpec CAT_CLIPS[CAT_CLIP_COUNT] = {
@@ -69,12 +69,12 @@ static const CatClipSpec CAT_CLIPS[CAT_CLIP_COUNT] = {
         {"lie_down", 1.0000f, 0, 0.0000f, 2, {{"paw_lf", 0.4500f}, {"paw_rf", 0.6800f}}},
     [CAT_CLIP_SIT_UP] = {"sit_up", 1.0000f, 0, 0.0000f, 0, {{0}}},
     [CAT_CLIP_LIE] = {"lie", 5.0000f, 1, 0.0000f, 0, {{0}}},
-    [CAT_CLIP_CURL_UP] = {"curl_up", 1.6000f, 0, 0.0000f, 0, {{0}}},
-    [CAT_CLIP_UNCURL] = {"uncurl", 1.6000f, 0, 0.0000f, 0, {{0}}},
+    [CAT_CLIP_CURL_UP] = {"curl_up", 1.6000f, 0, 0.0000f, 1, {{"lids_shut", 1.2750f}}},
+    [CAT_CLIP_UNCURL] = {"uncurl", 1.6000f, 0, 0.0000f, 1, {{"lids_open", 0.3250f}}},
     [CAT_CLIP_SLEEP] = {"sleep", 6.0000f, 1, 0.0000f, 0, {{0}}},
     [CAT_CLIP_MEOW_SHORT] = {"meow_short", 0.6000f, 0, 0.0000f, 1, {{"meow", 0.0800f}}},
     [CAT_CLIP_MEOW_LONG] = {"meow_long", 1.1000f, 0, 0.0000f, 1, {{"meow", 0.0800f}}},
-    [CAT_CLIP_BLINK] = {"blink", 0.2500f, 0, 0.0000f, 0, {{0}}},
+    [CAT_CLIP_BLINK] = {"blink", 0.2667f, 0, 0.0000f, 0, {{0}}},
     [CAT_CLIP_TROT] =
         {"trot",
          0.5000f,
@@ -108,11 +108,11 @@ static const CatClipSpec CAT_CLIPS[CAT_CLIP_COUNT] = {
                             {{"takeoff", 0.4000f}, {"land", 0.7200f}, {"land_hind", 0.8000f}}},
     [CAT_CLIP_RUN] =
         {"run",
-         0.3600f,
+         0.3667f,
          1,
          0.9000f,
          4,
-         {{"paw_lh", 0.0072f}, {"paw_rh", 0.0360f}, {"paw_lf", 0.1728f}, {"paw_rf", 0.2088f}}},
+         {{"paw_lh", 0.0073f}, {"paw_rh", 0.0367f}, {"paw_lf", 0.1760f}, {"paw_rf", 0.2127f}}},
     [CAT_CLIP_BEAM_WALK] =
         {"beam_walk",
          1.0000f,
@@ -127,8 +127,8 @@ static const CatClipSpec CAT_CLIPS[CAT_CLIP_COUNT] = {
     [CAT_CLIP_TRILL] = {"trill", 0.5000f, 0, 0.0000f, 1, {{"trill", 0.0400f}}},
     [CAT_CLIP_YAWN] = {"yawn", 1.8000f, 0, 0.0000f, 0, {{0}}},
     [CAT_CLIP_SLOW_BLINK] = {"slow_blink", 1.6000f, 0, 0.0000f, 0, {{0}}},
-    [CAT_CLIP_EAR_FLICK_L] = {"ear_flick_l", 0.3500f, 0, 0.0000f, 0, {{0}}},
-    [CAT_CLIP_EAR_FLICK_R] = {"ear_flick_r", 0.3500f, 0, 0.0000f, 0, {{0}}},
+    [CAT_CLIP_EAR_FLICK_L] = {"ear_flick_l", 0.3333f, 0, 0.0000f, 0, {{0}}},
+    [CAT_CLIP_EAR_FLICK_R] = {"ear_flick_r", 0.3333f, 0, 0.0000f, 0, {{0}}},
 };
 
 // Model space: x the cat's left, y up, z forward, the feet at y = 0.

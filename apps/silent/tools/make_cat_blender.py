@@ -29,16 +29,20 @@ export to it.
 """
 
 import argparse
-import json
 import math
 import os
-import struct
+import re
 import sys
+from functools import partial
+from typing import NamedTuple
 
 import bpy
 import bmesh
 from mathutils import Matrix, Quaternion, Vector
 from mathutils.bvhtree import BVHTree
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from glb import accessor, read_glb  # noqa: E402 -- the tools' own module, found beside this one
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 OUT = os.path.join(ROOT, "out", "cat_blender")
@@ -75,6 +79,11 @@ def rot(pitch=0.0, yaw=0.0, roll=0.0):
             @ Quaternion(AZ, math.radians(roll)))
 
 
+def smooth(t):
+    t = min(max(t, 0.0), 1.0)
+    return t * t * (3.0 - 2.0 * t)
+
+
 # ---------------------------------------------------------------------------------------------
 # The skeleton, in model space: (name, parent, head, tail). Parent first.
 
@@ -94,7 +103,7 @@ def _tail_chain():
 # first guess; `place_eyes` sets it from the face the metaballs actually made, since blending
 # swells a surface by an amount no number written down beforehand knows, and a guess that lands
 # a few millimetres short buries the eyes.
-EYE_AT = (0.0215, 0.279, 0.233)
+EYE_GUESS = (0.0215, 0.279, 0.233)
 # How far the front of the eye stands proud of the face round it.
 EYE_PROUD = 0.003
 
@@ -128,8 +137,8 @@ def _sided(name, parent, head, tail):
     return out
 
 
-def skeleton():
-    """The bones, parent first, for the eye where EYE_AT now says it is."""
+def skeleton(eye_at):
+    """The bones, parent first, with the eyes at `eye_at` (the left one)."""
     return [
     # Hips points straight UP: the glTF export re-expresses a bone's frame in its own axes, and
     # only a vertical bone with no roll comes out with its local +Z forward and an identity
@@ -144,8 +153,8 @@ def skeleton():
     ("Head", "Neck2", (0.0, 0.27, 0.18), (0.0, 0.28, 0.255)),
     ("Jaw", "Head", (0.0, 0.252, 0.212), (0.0, 0.246, 0.248)),
     *_sided("Ear", "Head", (0.0249, 0.2958, 0.1964), (0.0332, 0.3307, 0.1936)),
-    *_sided("Eye", "Head", EYE_AT, (EYE_AT[0], EYE_AT[1], EYE_AT[2] + 0.016)),
-    *_sided("Lid", "Head", EYE_AT, (EYE_AT[0], EYE_AT[1], EYE_AT[2] + 0.016)),
+    *_sided("Eye", "Head", eye_at, (eye_at[0], eye_at[1], eye_at[2] + 0.016)),
+    *_sided("Lid", "Head", eye_at, (eye_at[0], eye_at[1], eye_at[2] + 0.016)),
     # Legs lie in planes of constant x, so a roll of 0 puts every leg bone's X along the model's.
     # Measured, not guessed: an adult domestic cat's humerus is about 98 mm, its radius 92, its
     # femur 105 (78-129), its tibia 112 (CT, Pantangco et al. 2026), its third metatarsal about
@@ -164,19 +173,27 @@ def skeleton():
     ]
 
 
-BONES = skeleton()
+class Leg(NamedTuple):
+    girdle: str  # the bone it hangs from, whose solve places it
+    body: str    # what a paw rides when the body carries it rather than the floor
+    fore: bool
+    upper: str
+    lower: str
+    meta: str    # the metapodial
+    toe: str
 
-# Bones the body's skin does not follow: each carries a separate part weighted to it alone, and
-# Hips carries travel, not flesh.
-PART_BONES = {"Hips", "Jaw", "Ear.L", "Ear.R", "Eye.L", "Eye.R", "Lid.L", "Lid.R"}
+    @property
+    def bones(self):
+        return (self.upper, self.lower, self.meta, self.toe)
 
-# The legs: (leg, upper bone, lower bone, metapodial bone, toe bone).
+
 LEGS = {
-    "FL": ("UpperArm.L", "Forearm.L", "Hand.L", "FrontToe.L"),
-    "FR": ("UpperArm.R", "Forearm.R", "Hand.R", "FrontToe.R"),
-    "HL": ("Thigh.L", "Shin.L", "Foot.L", "Toe.L"),
-    "HR": ("Thigh.R", "Shin.R", "Foot.R", "Toe.R"),
+    "FL": Leg("Shoulder.L", "Chest", True, "UpperArm.L", "Forearm.L", "Hand.L", "FrontToe.L"),
+    "FR": Leg("Shoulder.R", "Chest", True, "UpperArm.R", "Forearm.R", "Hand.R", "FrontToe.R"),
+    "HL": Leg("Rump", "Rump", False, "Thigh.L", "Shin.L", "Foot.L", "Toe.L"),
+    "HR": Leg("Rump", "Rump", False, "Thigh.R", "Shin.R", "Foot.R", "Toe.R"),
 }
+GIRDLES = {leg.girdle for leg in LEGS.values()}
 
 EYE_RADIUS = 0.0085   # the eye, a little over life so it reads at render scale 0.5
 EYE_SHAPE = (1.0, 0.66, 0.8)  # across, up and deep: an almond rather than a ball
@@ -221,24 +238,29 @@ NOSE_CORNER = 0.0016   # radius the shield's corners are rounded by
 NOSE_DOME = 0.0006     # how far its middle stands proud of the face under it
 MOUTH_CORNER = 0.0165  # x of the mouth's corners
 
-# The upper lip's lower edge, (x, y) from the middle out: where the whisker pads overhang the
-# chin, seen from the front. `measure_face` replaces this guess with what the metaballs made;
-# the jaw is everything in front below it.
-LIP = [(0.0, 0.2505), (0.008, 0.2478), (MOUTH_CORNER, 0.249)]
+class Lip:
+    """The upper lip's lower edge, (x, y) from the middle out: where the whisker pads overhang
+    the chin, seen from the front. The jaw is everything in front below it."""
+
+    def __init__(self, points):
+        self.points = points
+
+    def y(self, x):
+        """The edge at a distance x out from the middle."""
+        x = abs(x)
+        for (x0, y0), (x1, y1) in zip(self.points, self.points[1:]):
+            if x <= x1:
+                return y0 + (y1 - y0) * (x - x0) / max(x1 - x0, 1e-9)
+        return self.points[-1][1]
+
+    def jaw(self, p):
+        """Whether a model-space point is part of the lower jaw."""
+        return p.z > 0.226 and abs(p.x) < MOUTH_CORNER and p.y < self.y(p.x)
 
 
-def lip_y(x):
-    """The upper lip's edge at a distance x out from the middle."""
-    x = abs(x)
-    for (x0, y0), (x1, y1) in zip(LIP, LIP[1:]):
-        if x <= x1:
-            return y0 + (y1 - y0) * (x - x0) / max(x1 - x0, 1e-9)
-    return LIP[-1][1]
-
-
-def in_jaw(p):
-    """Whether a model-space point is part of the lower jaw."""
-    return p.z > 0.226 and abs(p.x) < MOUTH_CORNER and p.y < lip_y(p.x)
+# A guess at the lip, which `measure_lip` replaces with what the metaballs made wherever it can
+# find the edge.
+LIP_GUESS = Lip([(0.0, 0.2505), (0.008, 0.2478), (MOUTH_CORNER, 0.249)])
 
 
 def nose_outline(per=14):
@@ -314,13 +336,13 @@ def make_materials():
 # The armature
 
 
-def build_armature():
+def build_armature(bones):
     arm_data = bpy.data.armatures.new("cat_rig")
     arm = bpy.data.objects.new("cat", arm_data)
     bpy.context.scene.collection.objects.link(arm)
     bpy.context.view_layer.objects.active = arm
     bpy.ops.object.mode_set(mode="EDIT")
-    for name, parent, head, tail in BONES:
+    for name, parent, head, tail in bones:
         eb = arm_data.edit_bones.new(name)
         eb.head, eb.tail, eb.roll = bv(*head), bv(*tail), 0.0
         if parent:
@@ -336,8 +358,8 @@ def build_armature():
 # The body: metaballs blended, polygonised, decimated
 
 # Metaball elements in model space. ("ell", centre, semi-axes) and ("cap", end, end, radius),
-# sizes being the SURFACE the element would make alone; `calibrate` turns them into Blender's
-# influence radii.
+# sizes being the SURFACE the element would make alone; `build_body` turns them into Blender's
+# influence radii through SURFACE.
 BODY = [
     # torso
     # The belly stops short of the thighs and rides above the knees, so a swinging hind leg
@@ -412,7 +434,7 @@ UPPER_ARM = [(0.0, 0.018, 0.024, 0.02, 0.004), (0.6, 0.016, 0.024, 0.019, 0.003)
 FOREARM = [(0.0, 0.016, 0.016, 0.017, 0.002), (0.35, 0.015, 0.013, 0.016, 0.0),
            (1.0, 0.012, 0.01, 0.013, 0.0)]
 FORE_FOOT = [(0.0, 0.011, 0.012, 0.013, 0.0), (1.0, 0.01, 0.009, 0.013, 0.0)]
-PAW = (0.014, 0.011, 0.02)   # half breadth, height and length: 4 cm long with the coat
+PAW = (0.014, 0.011)   # half breadth and height, the ring the paw is grown through
 
 
 def _row(table, t):
@@ -495,14 +517,6 @@ def build_body(resolution):
             e.radius = 1.0 / SURFACE
             # Blender's sizes are in its own axes: model x, z and y are Blender x, y and z.
             e.size_x, e.size_y, e.size_z = semi[0] * k, semi[2] * k, semi[1] * k
-        elif el[0] == "rell":
-            # An ellipsoid laid along a direction: (across, deep, along) round a muscle's line.
-            _, c, (across, deep, along), d = el
-            e = mb.elements.new(type="ELLIPSOID")
-            e.co = bv(*c) * k
-            e.radius = 1.0 / SURFACE
-            e.size_x, e.size_y, e.size_z = across * k, along * k, deep * k
-            e.rotation = Vector((0.0, 1.0, 0.0)).rotation_difference(bv(*d).normalized())
         else:
             _, a, b, r = el
             a, b = bv(*a) * k, bv(*b) * k
@@ -564,6 +578,18 @@ def neck_ring(bm):
     return centre, across, tall
 
 
+class Seg(NamedTuple):
+    """A segment of the stick figure, between two of its points: which bones move the skin grown
+    round it -- its `kind`, SPINE, BRANCH or CHAIN, says how -- and the leg it belongs to."""
+    a: int
+    b: int
+    kind: str
+    bones: dict = None
+    ja: object = None  # a CHAIN's joint at a, eased into: bones, or SPINE
+    jb: dict = None    # and at b
+    leg: str = None    # "FL" and so on; None on the spine and the tail
+
+
 def cage_graph(neck):
     """The stick figure the body is grown on: points, each point's (half breadth, half depth
     across its chain), and the segments between them. A segment says which bones move the skin
@@ -577,33 +603,30 @@ def cage_graph(neck):
         rad.append(r)
         return len(pts) - 1
 
-    def link(a, b, kind, bones=None, ja=None, jb=None):
-        segs.append((a, b, kind, bones, ja, jb))
-
-    def chain(start, links, first):
+    def chain(start, links, first, leg=None):
         """A leg or the tail: `links` are (point, radii, bones, joint at its end)."""
         prev, joint = start, None
         for i, (p, r, bones, end_joint) in enumerate(links):
             k = node(p, r)
             if i == 0 and first == BRANCH:
-                link(prev, k, BRANCH, bones)
+                segs.append(Seg(prev, k, BRANCH, bones, leg=leg))
                 joint = bones
             else:
-                link(prev, k, CHAIN, bones, joint if i else first, end_joint)
+                segs.append(Seg(prev, k, CHAIN, bones, joint if i else first, end_joint, leg))
                 joint = end_joint
             prev = k
 
     # Along the torso from the tail's root, then two rings at the neck straddling the cut.
     ids = [node(c, (w, h)) for c, w, h in TORSO]
     for a, b in zip(ids, ids[1:]):
-        link(a, b, SPINE)
+        segs.append(Seg(a, b, SPINE))
     n = Vector(NECK_AXIS).normalized()
     centre, across, tall = neck
     # The far ring is well past the cut, so the end's rounding is cut away with it.
     n1 = node(centre - n * 0.008, (across, tall))
     n2 = node(centre + n * 0.03, (across, tall))
-    link(ids[-1], n1, SPINE)
-    link(n1, n2, SPINE)
+    segs.append(Seg(ids[-1], n1, SPINE))
+    segs.append(Seg(n1, n2, SPINE))
     tail = _tail_chain()
     links = []
     for i, (name, _, _, tl) in enumerate(tail):
@@ -630,7 +653,7 @@ def cage_graph(neck):
             (*bone_section(f[1], f[2], FOREARM, 0.0, s), one("UpperArm"), joint("UpperArm", "Forearm")),
             (*bone_section(f[1], f[2], FOREARM, 0.45, s), one("Forearm"), None),
             (*bone_section(f[2], f[3], FORE_FOOT, 0.0, s), one("Forearm"), joint("Forearm", "Hand")),
-            (f[3] + Vector((0.0, 0.005, 0.002)), PAW[:2], one("Hand"), joint("Hand", "FrontToe")),
+            (f[3] + Vector((0.0, 0.005, 0.002)), PAW, one("Hand"), joint("Hand", "FrontToe")),
             (Vector((f[4].x, 0.0075, f[4].z)), (0.011, 0.0065), one("FrontToe"), None),
         ]
         hind = [(*hind_section(h, s, HIND_LEVELS[0]), {b("Thigh"): 0.7, "Rump": 0.3}, None),
@@ -640,10 +663,10 @@ def cage_graph(neck):
                 (*hind_section(h, s, HIND_LEVELS[4]), one("Shin"), None),
                 (*bone_section(h[2], h[3], HIND_FOOT, 0.0, s), one("Shin"), joint("Shin", "Foot")),
                 (*bone_section(h[2], h[3], HIND_FOOT, 0.5, s), one("Foot"), None),
-                (h[3] + Vector((0.0, 0.005, 0.002)), PAW[:2], one("Foot"), joint("Foot", "Toe")),
+                (h[3] + Vector((0.0, 0.005, 0.002)), PAW, one("Foot"), joint("Foot", "Toe")),
                 (Vector((h[4].x, 0.0075, h[4].z)), (0.011, 0.0065), one("Toe"), None)]
-        chain(ids[5], fore, BRANCH)
-        chain(ids[1], hind, BRANCH)
+        chain(ids[5], fore, BRANCH, "F" + side)
+        chain(ids[1], hind, BRANCH, "H" + side)
     return pts, rad, segs
 
 
@@ -674,10 +697,9 @@ FORE_JOIN_REACH = 0.05
 FORE_JOIN_RELAX = 15
 
 
-def _fore(pts, seg):
+def _fore(seg):
     """Whether a segment belongs to a foreleg, its branch from the chest included."""
-    a, b = pts[seg[0]], pts[seg[1]]
-    return seg[2] != SPINE and min(a.z, b.z) > -0.02 and max(abs(a.x), abs(b.x)) > 1e-3
+    return seg.leg is not None and LEGS[seg.leg].fore
 
 
 def build_cage(graph):
@@ -688,12 +710,12 @@ def build_cage(graph):
     ridges down the chest and across the shoulder. The hind legs' first rings sit below the
     haunch's and their hull is clean, so they stay branches."""
     pts, rad, segs = graph
-    body = _tube(pts, rad, [s for s in segs if not _fore(pts, s)], 3)
-    fore = [s for s in segs if _fore(pts, s) and s[2] != BRANCH]
-    joins = [pts[s[0]].lerp(pts[s[1]], 0.5) for s in segs if _fore(pts, s) and s[2] == BRANCH]
-    for side in (1.0, -1.0):
-        mine = [s for s in fore if pts[s[0]].x * side > 0.0]
-        first = min({i for s in mine for i in s[:2]}, key=lambda i: -pts[i].y)
+    body = _tube(pts, rad, [s for s in segs if not _fore(s)], 3)
+    joins = [pts[s.a].lerp(pts[s.b], 0.5) for s in segs if _fore(s) and s.kind == BRANCH]
+    for name in ("FL", "FR"):
+        mine = [s for s in segs if s.leg == name and s.kind != BRANCH]
+        # Rooted where its branch off the chest ends, the leg's first ring.
+        first = next(s.b for s in segs if s.leg == name and s.kind == BRANCH)
         leg = _tube(pts, rad, mine, first)
         union = body.modifiers.new("union", "BOOLEAN")
         union.operation = "UNION"
@@ -758,28 +780,28 @@ def _blend_weights(a, b, t):
 
 def segment_weights(p, seg, pts):
     """The bones a point on the skin of one stick-figure segment follows."""
-    a, b, kind, bones, ja, jb = seg
-    A, B = pts[a], pts[b]
+    A, B = pts[seg.a], pts[seg.b]
     ab = B - A
     t = max(0.0, min(1.0, (p - A).dot(ab) / max(ab.dot(ab), 1e-12)))
-    if kind == SPINE:
+    if seg.kind == SPINE:
         return spine_weights(p)
-    if kind == BRANCH:
-        return _blend_weights(spine_weights(p), bones, smooth(t))
+    if seg.kind == BRANCH:
+        return _blend_weights(spine_weights(p), seg.bones, smooth(t))
     length = ab.length
-    if ja is not None and t * length < JOINT_EASE:
-        start = spine_weights(p) if ja == SPINE else ja
-        return _blend_weights(start, bones, smooth(t * length / JOINT_EASE))
-    if jb is not None and (1.0 - t) * length < JOINT_EASE:
-        return _blend_weights(jb, bones, smooth((1.0 - t) * length / JOINT_EASE))
-    return dict(bones)
+    if seg.ja is not None and t * length < JOINT_EASE:
+        start = spine_weights(p) if seg.ja == SPINE else seg.ja
+        return _blend_weights(start, seg.bones, smooth(t * length / JOINT_EASE))
+    if seg.jb is not None and (1.0 - t) * length < JOINT_EASE:
+        return _blend_weights(seg.jb, seg.bones, smooth((1.0 - t) * length / JOINT_EASE))
+    return dict(seg.bones)
 
 
 SURE = 0.3          # how much nearer one segment must be than the next for a vertex to be sure
 DIFFUSION = 300     # rounds of surface averaging that fill the unsure vertices in
+SMOOTHING = 2       # rounds of averaging every vertex with its neighbours, after the fill
 
 
-def body_weights(body, graph, smoothing=2):
+def body_weights(body, graph, head_vertices):
     """Every body vertex's bones. The head's come from `spine_weights`. A ring-mesh vertex
     plainly on one segment's surface -- nearer it, relative to its radius, than to any other by
     SURE -- takes that segment's. The rest lie where a leg joins the body, where nearness cannot
@@ -790,32 +812,32 @@ def body_weights(body, graph, smoothing=2):
 
     pts, rad, segs = graph
     me = body.data
-    head = body["head_vertices"]
     weights, sure = [], []
     for v in me.vertices:
         p = mv(v.co)
-        if v.index < head:
+        if v.index < head_vertices:
             weights.append(spine_weights(p))
             sure.append(True)
             continue
         ranked = []
         for seg in segs:
-            A, B = pts[seg[0]], pts[seg[1]]
             # A leg is only ever its own side's: under the belly a point near the middle is as
             # near one leg's root as the other's.
-            if seg[2] != SPINE and p.x * (A.x + B.x) < 0.0:
+            if seg.leg and p.x * (1.0 if seg.leg[1] == "L" else -1.0) < 0.0:
                 continue
+            A, B = pts[seg.a], pts[seg.b]
             ab = B - A
             t = max(0.0, min(1.0, (p - A).dot(ab) / max(ab.dot(ab), 1e-12)))
-            r = max(rad[seg[0]]) * (1.0 - t) + max(rad[seg[1]]) * t
+            r = max(rad[seg.a]) * (1.0 - t) + max(rad[seg.b]) * t
             ranked.append(((p - (A + ab * t)).length / max(r, 1e-6), seg))
         ranked.sort(key=lambda x: x[0])
-        weights.append(segment_weights(p, ranked[0][1], pts))
+        nearest, best = ranked[0]
+        weights.append(segment_weights(p, best, pts))
         # Two segments of one chain meet at a joint and are both near there; that is what the
         # joint easing is for, and not a doubt about which limb a vertex is on.
-        rival = next((q for q, seg in ranked[1:] if seg[0] not in ranked[0][1][:2]
-                      and seg[1] not in ranked[0][1][:2]), None)
-        sure.append(ranked[0][1][2] != BRANCH and (rival is None or rival - ranked[0][0] > SURE))
+        rival = next((q for q, seg in ranked[1:] if seg.a not in (best.a, best.b)
+                      and seg.b not in (best.a, best.b)), None)
+        sure.append(best.kind != BRANCH and (rival is None or rival - nearest > SURE))
     names = sorted({k for w in weights for k in w})
     col = {k: i for i, k in enumerate(names)}
     W = np.zeros((len(weights), len(names)))
@@ -836,7 +858,7 @@ def body_weights(body, graph, smoothing=2):
 
     for _ in range(DIFFUSION):
         W[free] = neighbour_mean(W)[free]
-    for _ in range(smoothing):
+    for _ in range(SMOOTHING):
         W = np.where(degree > 0, 0.5 * W + 0.5 * neighbour_mean(W), W)
     W /= np.maximum(W.sum(axis=1, keepdims=True), 1e-9)
     print(f"weights: {int(free.sum())} of {len(W)} vertices filled in from their neighbours",
@@ -855,19 +877,22 @@ def cut(bm, keep_head, offset=0.0):
 
 def rebuild_body(head_src):
     """The cat's body: the ring mesh below the neck, the metaball head above it, bridged.
-    Returns the body and the stick figure it was grown on, which says how it is weighted."""
-    bm = bmesh.new()
-    bm.from_mesh(head_src.data)
-    cut(bm, keep_head=True)
-    head_vertices = len(bm.verts)
-    graph = cage_graph(neck_ring(bm))
+    Returns the body, the stick figure it was grown on, which says how it is weighted, and how
+    many of its vertices, from the first, are the head's."""
+    head = bmesh.new()
+    head.from_mesh(head_src.data)
+    cut(head, keep_head=True)
+    head_vertices = len(head.verts)
+    graph = cage_graph(neck_ring(head))
     cage = build_cage(graph)
     body = bmesh.new()
     body.from_mesh(cage.data)
     cut(body, keep_head=False, offset=NECK_GAP)
-    # One mesh holding both, the head's vertices first.
+    # One mesh holding both, the head's vertices first. The head goes out to a mesh and back
+    # rather than being appended to: the trip settles what the cut left, and the bridge and the
+    # relaxing below come out differently on a bmesh that has not made it.
     me = bpy.data.meshes.new("cat_mesh")
-    bm.to_mesh(me)
+    head.to_mesh(me)
     joined = bmesh.new()
     joined.from_mesh(me)
     tmp = bpy.data.meshes.new("cat_body_part")
@@ -885,7 +910,7 @@ def rebuild_body(head_src):
                               use_axis_z=True)
     left_open = sum(1 for e in joined.edges if e.is_boundary)
     joined.to_mesh(me)
-    for b in (bm, body, joined):
+    for b in (head, body, joined):
         b.free()
     bpy.data.meshes.remove(tmp)
     bpy.data.objects.remove(cage)
@@ -893,9 +918,8 @@ def rebuild_body(head_src):
     bpy.data.meshes.remove(old)
     if left_open:
         sys.exit(f"rebuild_body: {left_open} edges left open after bridging the neck")
-    head_src["head_vertices"] = head_vertices
     print(f"body: {len(loops)} edges bridged at the neck, {len(me.polygons)} faces", flush=True)
-    return head_src, graph
+    return head_src, graph, head_vertices
 
 
 def in_head(p):
@@ -923,23 +947,15 @@ def triangle_count(obj, where=None):
 
 
 def place_eyes(body):
-    """Set the eye's depth from the face itself: a ray along the eye's line of sight finds the
-    surface at its height and breadth, and the eye is set so its front stands EYE_PROUD of it.
-    The skeleton is rebuilt round the result, so the eye bones follow."""
-    global EYE_AT, BONES
-    bm = bmesh.new()
-    bm.from_mesh(body.data)
-    tree = BVHTree.FromBMesh(bm)
-    bm.free()
-    x, y = EYE_AT[0], EYE_AT[1]
-    loc, *_ = tree.ray_cast(bv(x, y, 0.6), bv(0.0, 0.0, -1.0), 1.0)
-    if loc is None:
-        sys.exit(f"place_eyes: no face in front of ({x}, {y}); the head has moved")
-    surface = mv(loc).z
-    EYE_AT = (x, y, surface + EYE_PROUD - EYE_RADIUS * EYE_SHAPE[2])
-    BONES = skeleton()
-    print(f"eyes: the face is at z {surface:.4f} there, the eye centre at {EYE_AT[2]:.4f}",
+    """The left eye's centre, its depth found from the face itself: a ray along the eye's line
+    of sight finds the surface at its height and breadth, and the eye is set so its front stands
+    EYE_PROUD of it."""
+    x, y = EYE_GUESS[0], EYE_GUESS[1]
+    surface = Face(body).need(x, y)[0].z
+    eye_at = (x, y, surface + EYE_PROUD - EYE_RADIUS * EYE_SHAPE[2])
+    print(f"eyes: the face is at z {surface:.4f} there, the eye centre at {eye_at[2]:.4f}",
           flush=True)
+    return eye_at
 
 
 class Face:
@@ -964,34 +980,33 @@ class Face:
 
 
 def pad_edge(face, x, step=0.0001, drop=0.0015):
-    """The lowest point of the whisker pad a ray from in front still meets at x, with the
-    surface's normal there: the first height under the nose past which the ray falls back to
-    the chin. The first and not the largest drop, since the chin's own underside is a bigger
-    one. None where the pad does not overhang anything."""
+    """The lowest point of the whisker pad a ray from in front still meets at x: the first
+    height under the nose past which the ray falls back to the chin. The first and not the
+    largest drop, since the chin's own underside is a bigger one. None where the pad does not
+    overhang anything."""
     prev, y = None, NOSE_POINT
     while y > 0.243:
-        p, n = face.at(x, y)
-        if p is not None and prev is not None and prev[0].z - p.z > drop:
+        p, _ = face.at(x, y)
+        if p is not None and prev is not None and prev.z - p.z > drop:
             return prev
-        prev = (p, n) if p is not None else None
+        prev = p
         y -= step
     return None
 
 
-def measure_face(face):
-    """Set LIP from the face the metaballs made: the upper lip's edge, out from the middle."""
-    global LIP
+def measure_lip(face):
+    """The upper lip's edge on the face the metaballs made, out from the middle."""
     lip = []
     for i in range(12):
         x = MOUTH_CORNER * i / 11
         edge = pad_edge(face, x)
-        lip.append([x, edge[0].y if edge else lip_y(x)])
+        lip.append([x, edge.y if edge else LIP_GUESS.y(x)])
     ys = [y for _, y in lip]
     for i in range(len(lip)):
         near = ys[max(0, i - 1):i + 2]
         lip[i][1] = sum(near) / len(near)
-    LIP = [tuple(p) for p in lip]
-    print("lip: " + " ".join(f"{x:.4f}:{y:.4f}" for x, y in LIP), flush=True)
+    print("lip: " + " ".join(f"{x:.4f}:{y:.4f}" for x, y in lip), flush=True)
+    return Lip([tuple(p) for p in lip])
 
 
 def decimate(obj, triangles):
@@ -1097,14 +1112,12 @@ def sphere_points(rings, segments, radius, scale=(1.0, 1.0, 1.0), cap=math.pi):
     return verts, faces
 
 
-def placed(verts, origin, rotation=None):
+def placed(verts, origin, rotation):
     """Model-space vertices moved to `origin` after turning them by a model-space rotation
     (a Quaternion built by `rot`, which acts in Blender's space)."""
     out = []
     for v in verts:
-        b = Vector((v[0], -v[2], v[1]))  # model -> Blender without the origin
-        if rotation is not None:
-            b = rotation @ b
+        b = rotation @ Vector((v[0], -v[2], v[1]))  # model -> Blender without the origin
         m = mv(b)
         out.append((m.x + origin[0], m.y + origin[1], m.z + origin[2]))
     return out
@@ -1160,20 +1173,20 @@ def ribbon(name, path, widths, lift, face, mats):
                        keep_winding=True)
 
 
-def mouth_lines(face, mats, n=17):
+def mouth_lines(face, mats, lip, n=17):
     """The inverted Y under the nose: the philtrum down from the nose's point, and the upper
-    lip's two arcs out under the whisker pads, along the edge `measure_face` found."""
+    lip's two arcs out under the whisker pads, along the edge `measure_lip` found."""
     out = []
     line = lambda x, y: LINE_LIFT
     # The strip's lower edge stays a hair above the lip's: below it the view ray passes under
     # the pad and lays that corner on the chin.
     width = 0.0008
     above = width / 2.0 + 0.0005
-    top, bottom = NOSE_POINT + 0.0004, lip_y(0.0) + above
+    top, bottom = NOSE_POINT + 0.0004, lip.y(0.0) + above
     path = [(0.0, top + (bottom - top) * k / 4) for k in range(5)]
     out.append(ribbon("philtrum", path, [0.0006] * 5, line, face, mats))
     xs = [MOUTH_CORNER * (2.0 * k / (n - 1) - 1.0) for k in range(n)]
-    path = [(x, lip_y(x) + above) for x in xs]
+    path = [(x, lip.y(x) + above) for x in xs]
     widths = [width * (1.0 - 0.6 * (abs(x) / MOUTH_CORNER) ** 2) for x in xs]
     out.append(ribbon("lip", path, widths, line, face, mats))
     # The nostrils: commas along the leather's sides, open at the top and running down and in.
@@ -1186,10 +1199,10 @@ def mouth_lines(face, mats, n=17):
     return out
 
 
-def build_parts(mats, face):
-    parts = [nose(face, mats)] + mouth_lines(face, mats)
+def build_parts(mats, face, eye_at, lip):
+    parts = [nose(face, mats)] + mouth_lines(face, mats, lip)
     for side, s in (("L", 1.0), ("R", -1.0)):
-        eye = (EYE_AT[0] * s, EYE_AT[1], EYE_AT[2])
+        eye = (eye_at[0] * s, eye_at[1], eye_at[2])
         # Almond eyes: wide and shallow, looking forward and a little out, the outer corner
         # raised -- a cat's slant, where a sphere set on the face reads as an owl.
         turn = rot(yaw=14.0 * s, pitch=-2.0, roll=12.0 * s)
@@ -1341,7 +1354,7 @@ def whisker(name, root, direction, length, mats, segments=5, droop=0.012):
     return part_object(name, verts, faces, ["cat_whisker"] * len(faces), "Head", mats)
 
 
-def assign_body_materials(body, mats):
+def assign_body_materials(body, mats, lip):
     """Fur everywhere, the leather's colour under the nose part, pads under the paws, and the
     mouth along the line where the jaw parts from the head."""
     me = body.data
@@ -1350,7 +1363,7 @@ def assign_body_materials(body, mats):
         me.materials.append(mats[n])
     for p in me.polygons:
         c = mv(p.center)
-        jaw = [in_jaw(mv(me.vertices[i].co)) for i in p.vertices]
+        jaw = [lip.jaw(mv(me.vertices[i].co)) for i in p.vertices]
         idx = 0
         if c.z > 0.235 and nose_reach(c.x, c.y) < 1.0:
             idx = 1
@@ -1368,25 +1381,25 @@ def assign_body_materials(body, mats):
 # Skinning
 
 
-def skin(body, parts, arm, graph):
-    for i, w in enumerate(body_weights(body, graph)):
+def skin(body, parts, arm, graph, head_vertices, lip):
+    """The body weighted and the parts joined onto it, bound to the armature. Returns how many
+    of its vertices, from the first, are the body's own: the parts' follow them."""
+    for i, w in enumerate(body_weights(body, graph, head_vertices)):
         for name, x in w.items():
             group = body.vertex_groups.get(name) or body.vertex_groups.new(name=name)
             group.add([i], x, "REPLACE")
     # The chin below the mouth line goes wholly to the jaw.
     jaw = body.vertex_groups.new(name="Jaw")
     for v in body.data.vertices:
-        if in_jaw(mv(v.co)):
+        if lip.jaw(mv(v.co)):
             for g in list(v.groups):
                 body.vertex_groups[g.group].remove([v.index])
             jaw.add([v.index], 1.0, "REPLACE")
-    # The parts join the body: their one vertex group each comes along by name, and their vertices
-    # follow the body's, which is how they are told apart afterwards. The body needs the colour
-    # attribute the parts carry before the join, or theirs is dropped.
-    body["first_part_vertex"] = len(body.data.vertices)
-    col = body.data.color_attributes.new("Col", "BYTE_COLOR", "POINT")
-    for d in col.data:
-        d.color = (1.0, 1.0, 1.0, 1.0)
+    # The parts join the body: their one vertex group each comes along by name. The body needs
+    # the colour attribute the parts carry before the join, or theirs is dropped; its own colours
+    # are baked over it afterwards.
+    own = len(body.data.vertices)
+    body.data.color_attributes.new("Col", "BYTE_COLOR", "POINT")
     bpy.ops.object.select_all(action="DESELECT")
     for p in parts:
         p.select_set(True)
@@ -1397,11 +1410,7 @@ def skin(body, parts, arm, graph):
     mod = body.modifiers.new("armature", "ARMATURE")
     mod.object = arm
     body.parent = arm
-
-
-def normalised(w):
-    total = sum(w.values())
-    return {k: x / total for k, x in w.items()} if total > 0.0 else w
+    return own
 
 
 def limit_weights(obj, limit):
@@ -1426,7 +1435,7 @@ def limit_weights(obj, limit):
 # the coat's length in alpha, which the engine's fur shells read and nothing else does.
 
 
-def fur_share(p):
+def fur_share(p, eye_at, lip):
     """How much of the coat's full length grows at a model-space point, 0..1: bare round the
     eyes and on the nose, short over the face and down the legs, full on the body and tail."""
     s = 1.0
@@ -1435,30 +1444,32 @@ def fur_share(p):
         s *= 1.0 - 0.6 * smooth((p.z - 0.236) / 0.012)  # shortening over the muzzle
         # Bare round the eyes, and wider than the eye: the coat leans down and back, so the
         # brow's would otherwise hang over the eye, which is the same thing as having none.
-        for x in (EYE_AT[0], -EYE_AT[0]):
-            d = (p - Vector((x, EYE_AT[1], EYE_AT[2]))).length
+        for x in (eye_at[0], -eye_at[0]):
+            d = (p - Vector((x, eye_at[1], eye_at[2]))).length
             s *= smooth((d - 0.012) / 0.01)
         if p.z > 0.235:
             s *= smooth((nose_reach(p.x, p.y) - 1.0) / 0.3)   # none on the leather
             # Short along the lip line and the philtrum, or the coat hides the mouth.
-            lip = abs(p.y - lip_y(p.x)) if abs(p.x) < MOUTH_CORNER else 1.0
-            groove = abs(p.x) if lip_y(0.0) - 0.001 < p.y < NOSE_POINT else 1.0
-            s *= 0.25 + 0.75 * smooth((min(lip, groove) - 0.0008) / 0.003)
+            along = abs(p.y - lip.y(p.x)) if abs(p.x) < MOUTH_CORNER else 1.0
+            groove = abs(p.x) if lip.y(0.0) - 0.001 < p.y < NOSE_POINT else 1.0
+            s *= 0.25 + 0.75 * smooth((min(along, groove) - 0.0008) / 0.003)
     s *= 0.75 + 0.25 * smooth(p.y / 0.05)            # a little shorter at the paws
     return max(0.0, min(1.0, s))
 
 
-def crease(p):
+def crease(p, lip):
     """The soft shadow either side of the lip line and down the philtrum, which the strips
     drawn on them are too narrow to give: 1 away from both, darker toward them."""
     if p.z < 0.232:
         return 1.0
-    lip = abs(p.y - lip_y(p.x)) if abs(p.x) < MOUTH_CORNER else 1.0
-    groove = abs(p.x) if lip_y(0.0) < p.y < NOSE_POINT else 1.0
-    return 1.0 - 0.4 * math.exp(-(min(lip, groove) / 0.0014) ** 2)
+    along = abs(p.y - lip.y(p.x)) if abs(p.x) < MOUTH_CORNER else 1.0
+    groove = abs(p.x) if lip.y(0.0) < p.y < NOSE_POINT else 1.0
+    return 1.0 - 0.4 * math.exp(-(min(along, groove) / 0.0014) ** 2)
 
 
-def bake_vertex_colours(obj, rays=48, reach=0.12):
+def bake_vertex_colours(obj, own, eye_at, lip, rays=48, reach=0.12):
+    """Ambient occlusion and the coat's length into the first `own` vertices, the body's; the
+    parts, joined after them, keep the colours their builders gave them."""
     me = obj.data
     bm = bmesh.new()
     bm.from_mesh(me)
@@ -1471,13 +1482,9 @@ def bake_vertex_colours(obj, rays=48, reach=0.12):
         z = 1.0 - (i + 0.5) / rays
         r = math.sqrt(max(0.0, 1.0 - z * z))
         dirs.append(Vector((r * math.cos(golden * i), r * math.sin(golden * i), z)))
-    # The parts -- eyes, lids, ears, whiskers -- were joined after the body, so they are every
-    # vertex from the body's own count on, and they brought their colours with them: lit as
-    # they are, each with the coat its builder gave it.
-    first_part = obj["first_part_vertex"]
     attr = me.color_attributes["Col"]
     for v in me.vertices:
-        if v.index >= first_part:
+        if v.index >= own:
             continue
         n = v.normal
         frame = n.to_track_quat("Z", "Y")
@@ -1487,8 +1494,8 @@ def bake_vertex_colours(obj, rays=48, reach=0.12):
             loc, *_ = tree.ray_cast(v.co + n * 0.0015, w, reach)
             if loc is not None:
                 hit += 1
-        c = (0.72 + 0.28 * (1.0 - hit / rays)) * crease(mv(v.co))
-        attr.data[v.index].color = (c, c, c, fur_share(mv(v.co)))
+        c = (0.72 + 0.28 * (1.0 - hit / rays)) * crease(mv(v.co), lip)
+        attr.data[v.index].color = (c, c, c, fur_share(mv(v.co), eye_at, lip))
     me.color_attributes.active_color = attr
 
 
@@ -1499,18 +1506,34 @@ def bake_vertex_colours(obj, rays=48, reach=0.12):
 class Rig:
     """The armature's rest frames, and the pose they produce from a Pose's parameters."""
 
-    def __init__(self, arm):
+    def __init__(self, arm, bones):
         self.arm = arm
         self.rest = {b.name: b.matrix_local.copy() for b in arm.data.bones}
         self.parent = {b.name: (b.parent.name if b.parent else None) for b in arm.data.bones}
         self.length = {b.name: b.length for b in arm.data.bones}
-        self.order = [b[0] for b in BONES]
+        self.order = [b[0] for b in bones]
         self.rest_rel = {}
         for n in self.order:
             p = self.parent[n]
             self.rest_rel[n] = (self.rest[p].inverted() @ self.rest[n]) if p else self.rest[n]
+        # Each leg as it stands at rest, which every pose starts from.
+        self.rest_legs = {}
+        for name, leg in LEGS.items():
+            P = self.rest_point(leg.meta, "tail")
+            C = self.rest_point(leg.meta, "head")
+            m = C - P
+            tip = self.rest_point(leg.toe, "tail") - P
+            body = self.rest_point(leg.body, "head")
+            self.rest_legs[name] = {
+                "paw": (P.x, P.y, P.z),
+                "paw_rel": tuple(P - body),  # from the girdle, in its turned frame
+                "rel": 0.0,
+                "meta": math.degrees(math.atan2(-m.z, m.y)),
+                "toe": math.degrees(math.atan2(tip.y, tip.z)),
+                "pole": (0.0, 0.1, -1.0) if leg.fore else (0.0, 0.3, 1.0),
+            }
 
-    def rest_point(self, bone, end="tail"):
+    def rest_point(self, bone, end):
         b = self.arm.data.bones[bone]
         return mv(b.tail_local if end == "tail" else b.head_local)
 
@@ -1526,29 +1549,27 @@ class Rig:
             basis = Matrix.Translation(R.inverted() @ t) @ (R.inverted() @ q.to_matrix() @ R).to_4x4()
             M[n] = (M[p] if p else Matrix.Identity(4)) @ self.rest_rel[n] @ basis
             D[n] = (D[p] if p else Quaternion()) @ q
-            if n in ("Shoulder.L", "Shoulder.R", "Rump"):
+            if n in GIRDLES:
                 self._legs_from(n, pose, M, D)
         return M
 
     def _legs_from(self, girdle, pose, M, D):
-        legs = ("FL",) if girdle == "Shoulder.L" else ("FR",) if girdle == "Shoulder.R" else ("HL", "HR")
-        for leg in legs:
-            upper, lower, meta, toe = LEGS[leg]
-            L = pose.legs[leg]
-            A = (M[girdle] @ self.rest_rel[upper]).translation
+        for name, leg in LEGS.items():
+            if leg.girdle != girdle:
+                continue
+            L = pose.legs[name]
+            A = (M[girdle] @ self.rest_rel[leg.upper]).translation
             # A paw stands at a model-space point, or rides its girdle -- the chest for a fore
             # paw, the pelvis for a hind -- when the body bends round it; `rel` blends the two.
-            body = "Chest" if leg[0] == "F" else "Rump"
             rel = L["rel"]
-            turned = D[body]
+            turned = D[leg.body]
             model_fwd = Quaternion(AY, math.radians(pose.root_yaw)) @ AZ
             fwd = model_fwd.lerp(turned @ AZ, rel).normalized()
-            paw = bv(*L["paw"]).lerp(M[body].translation + turned @ bv(*L["paw_rel"]), rel)
+            paw = bv(*L["paw"]).lerp(M[leg.body].translation + turned @ bv(*L["paw_rel"]), rel)
             up = AY.lerp(turned @ AY, rel).normalized()
             a = math.radians(L["meta"])
             m_dir = (up * math.cos(a) - fwd * math.sin(a)).normalized()
-            side = Quaternion(fwd, math.radians(L.get("meta_side", 0.0)))
-            m_dir = side @ m_dir
+            upper, lower, meta, toe = leg.bones
             wrist = paw + m_dir * self.length[meta]
             pole = bv(*L["pole"]).lerp(turned @ bv(*L["pole"]), rel).normalized()
             B, C = two_bone(A, wrist, self.length[upper], self.length[lower], pole)
@@ -1586,28 +1607,14 @@ class Pose:
     """One frame's parameters. Rotations are degrees about the model axes (pitch, yaw, roll);
     offsets are metres in the parent's turned frame; paws are model-space points."""
 
-    ik_bones = {b for leg in LEGS.values() for b in leg}
+    ik_bones = {b for leg in LEGS.values() for b in leg.bones}
 
     def __init__(self, rig):
         self.root = Vector((0.0, 0.0, 0.0))
         self.root_yaw = 0.0
         self.rump = Vector((0.0, 0.0, 0.0))
         self.rot = {}
-        self.legs = {}
-        for leg, (upper, lower, meta, toe) in LEGS.items():
-            P = rig.rest_point(meta, "tail")
-            C = rig.rest_point(meta, "head")
-            m = C - P
-            tip = rig.rest_point(toe, "tail") - P
-            body = rig.rest_point("Chest" if leg[0] == "F" else "Rump", "head")
-            self.legs[leg] = {
-                "paw": (P.x, P.y, P.z),
-                "paw_rel": tuple(P - body),  # from the girdle, in its turned frame
-                "rel": 0.0,
-                "meta": math.degrees(math.atan2(-m.z, m.y)),
-                "toe": math.degrees(math.atan2(tip.y, tip.z)),
-                "pole": (0.0, 0.3, 1.0) if leg[0] == "H" else (0.0, 0.1, -1.0),
-            }
+        self.legs = {name: dict(rest) for name, rest in rig.rest_legs.items()}
 
     def local(self, bone):
         """The bone's rotation about the model axes and its offset in its parent's frame."""
@@ -1620,23 +1627,15 @@ class Pose:
             t = bv(*self.rump)
         return q, t
 
-    def copy(self, rig):
-        p = Pose(rig)
-        p.root, p.root_yaw, p.rump = self.root.copy(), self.root_yaw, self.rump.copy()
-        p.rot = dict(self.rot)
-        p.legs = {k: dict(v) for k, v in self.legs.items()}
-        return p
-
 
 def lerp_pose(rig, a, b, t):
     """Every parameter of two poses mixed by t: what a transition is between its ends."""
     p = Pose(rig)
     p.root = a.root.lerp(b.root, t)
-    p.root_yaw = a.root_yaw + (b.root_yaw - a.root_yaw) * t
+    p.root_yaw = _mix(a.root_yaw, b.root_yaw, t)
     p.rump = a.rump.lerp(b.rump, t)
     for n in set(a.rot) | set(b.rot):
-        ra, rb = a.rot.get(n, (0.0, 0.0, 0.0)), b.rot.get(n, (0.0, 0.0, 0.0))
-        p.rot[n] = tuple(x + (y - x) * t for x, y in zip(ra, rb))
+        p.rot[n] = _mix(a.rot.get(n, (0.0, 0.0, 0.0)), b.rot.get(n, (0.0, 0.0, 0.0)), t)
     for leg in LEGS:
         la, lb = a.legs[leg], b.legs[leg]
         p.legs[leg] = {k: _mix(la[k], lb[k], t) for k in la}
@@ -1647,11 +1646,6 @@ def _mix(x, y, t):
     if isinstance(x, tuple):
         return tuple(u + (v - u) * t for u, v in zip(x, y))
     return x + (y - x) * t
-
-
-def smooth(t):
-    t = min(max(t, 0.0), 1.0)
-    return t * t * (3.0 - 2.0 * t)
 
 
 def window(t, a, b):
@@ -1668,6 +1662,32 @@ def bump(t, at, width):
 def add_rot(p, bone, pitch=0.0, yaw=0.0, roll=0.0):
     r = p.rot.get(bone, (0.0, 0.0, 0.0))
     p.rot[bone] = (r[0] + pitch, r[1] + yaw, r[2] + roll)
+
+
+def tail(p, pitches, k=1.0, yaws=(0.0,) * 6):
+    """Each tail bone turned by its pitch, root first, times k; and by its yaw."""
+    for i, (pitch, yaw) in enumerate(zip(pitches, yaws)):
+        add_rot(p, f"Tail{i + 1}", pitch=pitch * k, yaw=yaw)
+
+
+def ears(p, pitch=0.0, yaw=0.0):
+    """Both ears turned alike: the same pitch, and a yaw outward on each side for a positive one
+    -- the left ear's to the left."""
+    add_rot(p, "Ear.L", pitch=pitch, yaw=yaw)
+    add_rot(p, "Ear.R", pitch=pitch, yaw=-yaw)
+
+
+def shoulders(p, pitch):
+    for s in ("L", "R"):
+        p.rot[f"Shoulder.{s}"] = (pitch, 0.0, 0.0)
+
+
+def paws(p, end, x, y, z, at="paw", **kw):
+    """The pair at one end, "F" or "H", set x either side of the middle at height y and depth
+    z -- a model-space point, or with at="paw_rel" one in the girdle's turned frame -- and the
+    rest of the leg's parameters as given."""
+    for side, s in (("L", 1.0), ("R", -1.0)):
+        p.legs[end + side].update({at: (s * x, y, z)}, **kw)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -1689,17 +1709,11 @@ def sit(rig):
     p.rot["Neck1"] = (-12.0, 0.0, 0.0)
     p.rot["Neck2"] = (-10.0, 0.0, 0.0)
     p.rot["Head"] = (-18.0, 0.0, 0.0)
-    p.rot["Shoulder.L"] = (-30.0, 0.0, 0.0)
-    p.rot["Shoulder.R"] = (-30.0, 0.0, 0.0)
-    for leg, x in (("FL", 0.03), ("FR", -0.03)):
-        p.legs[leg].update(paw=(x, 0.008, 0.075), meta=22.0, pole=(0.0, 0.0, -1.0))
-    for leg, x in (("HL", 0.05), ("HR", -0.05)):
-        p.legs[leg].update(paw=(x, 0.008, 0.0), meta=88.0, toe=-4.0, pole=(0.0, 1.0, 0.8))
+    shoulders(p, -30.0)
+    paws(p, "F", 0.03, 0.008, 0.075, meta=22.0, pole=(0.0, 0.0, -1.0))
+    paws(p, "H", 0.05, 0.008, 0.0, meta=88.0, toe=-4.0, pole=(0.0, 1.0, 0.8))
     # The tail lies along the floor and curls round the front paws.
-    tail = [(-55.0, 18.0, 0.0), (-8.0, 26.0, 0.0), (6.0, 30.0, 0.0), (6.0, 34.0, 0.0),
-            (4.0, 34.0, 0.0), (6.0, 30.0, 0.0)]
-    for i, r in enumerate(tail):
-        p.rot[f"Tail{i + 1}"] = r
+    tail(p, (-55.0, -8.0, 6.0, 6.0, 4.0, 6.0), yaws=(18.0, 26.0, 30.0, 34.0, 34.0, 30.0))
     return p
 
 
@@ -1714,16 +1728,10 @@ def sphinx(rig):
     p.rot["Neck1"] = (12.0, 0.0, 0.0)
     p.rot["Neck2"] = (6.0, 0.0, 0.0)
     p.rot["Head"] = (-12.0, 0.0, 0.0)
-    p.rot["Shoulder.L"] = (-30.0, 0.0, 0.0)
-    p.rot["Shoulder.R"] = (-30.0, 0.0, 0.0)
-    for leg, x in (("FL", 0.032), ("FR", -0.032)):
-        p.legs[leg].update(paw=(x, 0.009, 0.2), meta=86.0, toe=-6.0, pole=(0.0, -1.0, -0.6))
-    for leg, x in (("HL", 0.055), ("HR", -0.055)):
-        p.legs[leg].update(paw=(x, 0.009, -0.035), meta=90.0, toe=-4.0, pole=(0.0, 1.0, 0.8))
-    tail = [(-30.0, 14.0, 0.0), (-6.0, 20.0, 0.0), (2.0, 22.0, 0.0), (2.0, 24.0, 0.0),
-            (2.0, 22.0, 0.0), (4.0, 18.0, 0.0)]
-    for i, r in enumerate(tail):
-        p.rot[f"Tail{i + 1}"] = r
+    shoulders(p, -30.0)
+    paws(p, "F", 0.032, 0.009, 0.2, meta=86.0, toe=-6.0, pole=(0.0, -1.0, -0.6))
+    paws(p, "H", 0.055, 0.009, -0.035, meta=90.0, toe=-4.0, pole=(0.0, 1.0, 0.8))
+    tail(p, (-30.0, -6.0, 2.0, 2.0, 2.0, 4.0), yaws=(14.0, 20.0, 22.0, 24.0, 22.0, 18.0))
     return p
 
 
@@ -1741,18 +1749,14 @@ def curl(rig):
     for b, pitch in (("Spine1", -22.0), ("Spine2", -30.0), ("Chest", -30.0),
                      ("Neck1", -40.0), ("Neck2", -36.0), ("Head", -38.0)):
         p.rot[b] = (pitch, 0.0, 0.0)
-    p.rot["Shoulder.L"] = (-40.0, 0.0, 0.0)
-    p.rot["Shoulder.R"] = (-40.0, 0.0, 0.0)
+    shoulders(p, -40.0)
     # The legs fold against the belly, inside the ring, posed in the turned body's own frame.
-    for leg, x in (("FL", 0.03), ("FR", -0.03)):
-        p.legs[leg].update(rel=1.0, paw_rel=(x, -0.11, 0.06), meta=140.0, toe=-30.0,
-                           pole=(0.0, -0.3, -1.0))
-    for leg, x in (("HL", 0.05), ("HR", -0.05)):
-        p.legs[leg].update(rel=1.0, paw_rel=(x, -0.11, 0.07), meta=95.0, toe=-6.0,
-                           pole=(0.0, 1.0, 1.0))
+    paws(p, "F", 0.03, -0.11, 0.06, at="paw_rel", rel=1.0, meta=140.0, toe=-30.0,
+         pole=(0.0, -0.3, -1.0))
+    paws(p, "H", 0.05, -0.11, 0.07, at="paw_rel", rel=1.0, meta=95.0, toe=-6.0,
+         pole=(0.0, 1.0, 1.0))
     # The tail curls the same way as the spine, round the outside to the nose.
-    for i, pitch in enumerate((10.0, 30.0, 35.0, 35.0, 32.0, 25.0)):
-        p.rot[f"Tail{i + 1}"] = (pitch, 0.0, 0.0)
+    tail(p, (10.0, 30.0, 35.0, 35.0, 32.0, 25.0))
     lids(p, 1.0)
     return p
 
@@ -1773,10 +1777,9 @@ def breathe(p, t, period, amount=1.2):
     add_rot(p, "Neck1", pitch=amount * 0.5 * s)
 
 
-def tail_wave(p, t, period, amp, lag=0.6, start=1):
-    for i in range(start, 7):
-        k = (i - start + 1) / (7 - start)
-        add_rot(p, f"Tail{i}", yaw=amp * k * math.sin(2.0 * math.pi * t / period - lag * i))
+def tail_wave(p, t, period, amp, lag=0.6):
+    for i in range(1, 7):
+        add_rot(p, f"Tail{i}", yaw=amp * (i / 6) * math.sin(2.0 * math.pi * t / period - lag * i))
 
 
 def clip_idle(rig, t):
@@ -1796,63 +1799,77 @@ def clip_idle(rig, t):
     return p
 
 
-WALK_STRIDE = 0.44
-WALK_SECONDS = 0.80
-DUTY = 0.62
+class Gait(NamedTuple):
+    """A stepping gait: a cycle's length, how far the body goes in one, how much of it each
+    paw is down, when each paw lands, and how high a fore and a hind paw lift."""
+    seconds: float
+    stride: float
+    duty: float
+    footfall: dict  # leg -> where in the cycle it lands, in the order the paws come down
+    lift_fore: float
+    lift_hind: float
+
+
+def paw_events(g):
+    """A gait's footfalls as clip events, paw_lh for the left hind and so on."""
+    return [(f"paw_{leg[1].lower()}{leg[0].lower()}", at * g.seconds)
+            for leg, at in g.footfall.items()]
+
+
 # Lateral sequence: left hind, left fore, right hind, right fore, a quarter cycle apart; the
 # first footfall a frame in, so no event sits on the loop's seam.
 FOOTFALL = {"HL": 0.025, "FL": 0.275, "HR": 0.525, "FR": 0.775}
+WALK = Gait(0.80, 0.44, 0.62, FOOTFALL, 0.035, 0.03)
 
 
-def gait_paw(rig, leg, s, stride, duty, lift, footfall=FOOTFALL):
-    """Where a paw is at cycle position s (cycles since the start) for a body moving `stride`
-    a cycle: planted through its stance, carried along an arc through its swing. Also how far
-    through the swing it is, -1 in stance, and the z it took off from."""
-    base = Pose(rig).legs[leg]["paw"]
-    tau = s - footfall[leg]
+def gait_paw(rig, leg, s, g, lift):
+    """Where a paw is at cycle position s (cycles since the start) of gait g: planted through
+    its stance, carried along an arc through its swing. Also how far through the swing it is,
+    -1 in stance, and the z it took off from."""
+    base = rig.rest_legs[leg]["paw"]
+    tau = s - g.footfall[leg]
     n = math.floor(tau)
     u = tau - n
-    z0 = base[2] + stride * (n + footfall[leg] + duty / 2.0)
-    if u < duty:
+    z0 = base[2] + g.stride * (n + g.footfall[leg] + g.duty / 2.0)
+    if u < g.duty:
         return (base[0], base[1], z0), -1.0, z0
-    w = (u - duty) / (1.0 - duty)
-    z = z0 + stride * smooth(w)
+    w = (u - g.duty) / (1.0 - g.duty)
+    z = z0 + g.stride * smooth(w)
     y = base[1] + lift * math.sin(math.pi * w) ** 1.5
     return (base[0], y, z), w, z0
 
 
-def gait(rig, t, seconds, stride, duty, footfall, lift_fore, lift_hind, ground=None):
-    """A stepping gait over `seconds` a cycle: the body carried `stride` a cycle over paws
-    planted in model space, each rolling over its paw in stance and folding through its swing.
-    `ground(z)`, where given, is the height of what a paw stands on at model z, relative to
-    where the body's feet are carried: a flight's treads."""
+def gait(rig, t, g, ground=None):
+    """Gait g at time t: the body carried a stride a cycle over paws planted in model space,
+    each rolling over its paw in stance and folding through its swing. `ground(z)`, where given,
+    is the height of what a paw stands on at model z, relative to where the body's feet are
+    carried: a flight's treads."""
     p = stand(rig)
-    s = t / seconds
-    p.root = Vector((0.0, 0.0, stride * s))
-    for leg in LEGS:
-        lift = lift_fore if leg[0] == "F" else lift_hind
-        paw, w, z0 = gait_paw(rig, leg, s, stride, duty, lift, footfall)
+    s = t / g.seconds
+    p.root = Vector((0.0, 0.0, g.stride * s))
+    for name, leg in LEGS.items():
+        paw, w, z0 = gait_paw(rig, name, s, g, g.lift_fore if leg.fore else g.lift_hind)
         if ground is not None:
-            under = ground(z0) if w < 0.0 else _mix(ground(z0), ground(z0 + stride), smooth(w))
+            under = ground(z0) if w < 0.0 else _mix(ground(z0), ground(z0 + g.stride), smooth(w))
             paw = (paw[0], paw[1] + under, paw[2])
         # Paws are planted in model space; the body travels over them.
-        p.legs[leg]["paw"] = paw
-        rest = p.legs[leg]["meta"]
+        p.legs[name]["paw"] = paw
+        rest = p.legs[name]["meta"]
         if w < 0.0:
             # Through the stance the metapodial rolls forward over the paw.
-            tau = (s - footfall[leg]) % 1.0
-            p.legs[leg]["meta"] = rest + (tau / duty - 0.5) * (20.0 if leg[0] == "H" else 14.0)
+            tau = (s - g.footfall[name]) % 1.0
+            p.legs[name]["meta"] = rest + (tau / g.duty - 0.5) * (14.0 if leg.fore else 20.0)
         else:
             # Through the swing the paw folds back and opens again before it lands.
             fold = math.sin(math.pi * w)
-            p.legs[leg]["meta"] = rest + (60.0 if leg[0] == "F" else 35.0) * fold
-            p.legs[leg]["toe"] -= 25.0 * fold
+            p.legs[name]["meta"] = rest + (60.0 if leg.fore else 35.0) * fold
+            p.legs[name]["toe"] -= 25.0 * fold
     return p, s
 
 
 def clip_walk(rig, t):
-    T, stride = WALK_SECONDS, WALK_STRIDE
-    p, s = gait(rig, t, T, stride, DUTY, FOOTFALL, 0.035, 0.03)
+    T = WALK.seconds
+    p, s = gait(rig, t, WALK)
     # Two small rises a cycle, a roll that follows the hind legs, the spine swinging with them.
     p.rump = Vector((0.0, 0.004 * math.cos(4.0 * math.pi * (s - 0.15)), 0.0))
     add_rot(p, "Rump", roll=2.0 * math.sin(2.0 * math.pi * (s - 0.1)), yaw=2.5 * math.sin(2.0 * math.pi * s))
@@ -1862,31 +1879,26 @@ def clip_walk(rig, t):
     add_rot(p, "Neck1", pitch=-3.0)
     add_rot(p, "Head", yaw=1.5 * math.sin(2.0 * math.pi * s), pitch=1.0 * math.cos(4.0 * math.pi * s))
     # The tail up, as a cat carries it walking about the house, its tip curling over.
-    for i, pitch in enumerate(TAIL_UP):
-        add_rot(p, f"Tail{i + 1}", pitch=pitch)
+    tail(p, TAIL_UP)
     tail_wave(p, t, T, 5.0)
     return p
 
 
 # The trot: diagonal pairs together, left hind with right fore and then right hind with left
 # fore, at 1.2 m/s, each paw down for under half the cycle.
-TROT_STRIDE = 0.6
-TROT_SECONDS = 0.5
-TROT_DUTY = 0.45
-TROT_FOOTFALL = {"HL": 0.025, "FR": 0.025, "HR": 0.525, "FL": 0.525}
+TROT = Gait(0.5, 0.6, 0.45, {"HL": 0.025, "FR": 0.025, "HR": 0.525, "FL": 0.525}, 0.045, 0.04)
 
 
 def clip_trot(rig, t):
-    T, stride = TROT_SECONDS, TROT_STRIDE
-    p, s = gait(rig, t, T, stride, TROT_DUTY, TROT_FOOTFALL, 0.045, 0.04)
+    T = TROT.seconds
+    p, s = gait(rig, t, TROT)
     # A bounce at each pair's push, the body a little lower and longer than at a walk.
     p.rump = Vector((0.0, -0.006 + 0.006 * math.cos(4.0 * math.pi * (s - 0.2)), 0.0))
     add_rot(p, "Rump", roll=1.5 * math.sin(2.0 * math.pi * s))
     add_rot(p, "Chest", roll=-1.5 * math.sin(2.0 * math.pi * s))
     add_rot(p, "Neck1", pitch=-6.0)
     add_rot(p, "Head", pitch=2.0 + 1.5 * math.cos(4.0 * math.pi * s))
-    for i, pitch in enumerate(TAIL_UP):
-        add_rot(p, f"Tail{i + 1}", pitch=pitch * 0.6)
+    tail(p, TAIL_UP, 0.6)
     tail_wave(p, t, T, 4.0)
     return p
 
@@ -1894,10 +1906,20 @@ def clip_trot(rig, t):
 # The house's stairs, and how cat_places.c lays a flight's link: from half a tread before the
 # first riser to half a tread past the last, so its line through the treads' middles runs
 # from one end of the link to the other and a two-tread cycle lands every paw on a tread.
-STAIR_RISE = 0.19
-STAIR_GOING = 0.25
-STAIR_SECONDS = 0.8
-STAIR_STRIDE = 2.0 * STAIR_GOING
+def layout_number(name):
+    """A plain number apps/silent/src/layout.h #defines, so the clips stand on the house's own
+    stairs rather than a copy of them."""
+    path = os.path.join(ROOT, "apps", "silent", "src", "layout.h")
+    m = re.search(rf"^#define {name}\s+([0-9.]+)f?\b", open(path).read(), re.M)
+    if not m:
+        sys.exit(f"{path} defines no plain number {name}")
+    return float(m.group(1))
+
+
+STAIR_RISE = ((layout_number("FLOOR2_Y") - layout_number("FLOOR_Y"))
+              / layout_number("STAIR_RISERS"))
+STAIR_GOING = layout_number("STAIR_GOING")
+STAIR = Gait(0.8, 2.0 * STAIR_GOING, WALK.duty, FOOTFALL, 0.06, 0.05)
 STAIR_PITCH = 22.0  # degrees the body leans with the flight
 
 
@@ -1912,27 +1934,17 @@ def clip_stair(rig, t, sign):
     """Up (sign 1) or down a flight, two treads a cycle. The flight's rise is not in the clip:
     the root goes forward only, and the game lifts the body along the line through the treads,
     so here a paw stands at its tread's height less that line's at the body."""
-    T, stride = STAIR_SECONDS, STAIR_STRIDE
+    T = STAIR.seconds
     slope = STAIR_RISE / STAIR_GOING
-    root_z = stride * t / T
-    p, s = gait(rig, t, T, stride, DUTY, FOOTFALL, 0.06, 0.05,
-                ground=lambda z: tread_height(z, sign) - sign * slope * root_z)
+    root_z = STAIR.stride * t / T
+    p, s = gait(rig, t, STAIR, ground=lambda z: tread_height(z, sign) - sign * slope * root_z)
     add_rot(p, "Rump", pitch=sign * STAIR_PITCH, roll=1.5 * math.sin(2.0 * math.pi * s))
     # The head is held level against the lean, looking where the paws go next.
     add_rot(p, "Neck1", pitch=-sign * 0.5 * STAIR_PITCH)
     add_rot(p, "Head", pitch=-sign * 0.4 * STAIR_PITCH - 8.0)
-    for i, pitch in enumerate(TAIL_UP):
-        add_rot(p, f"Tail{i + 1}", pitch=pitch * (0.5 if sign > 0 else 0.3))
+    tail(p, TAIL_UP, 0.5 if sign > 0 else 0.3)
     tail_wave(p, t, T, 4.0)
     return p
-
-
-def clip_stair_up(rig, t):
-    return clip_stair(rig, t, 1.0)
-
-
-def clip_stair_down(rig, t):
-    return clip_stair(rig, t, -1.0)
 
 
 # A quarter turn on the spot: the body swings round over a quarter of a second more than half
@@ -1961,14 +1973,6 @@ def clip_turn(rig, t, sign):
     add_rot(p, "Neck2", yaw=sign * 12.0 * bump(u, 0.3, 0.5))
     tail_wave(p, t, T, 10.0)
     return p
-
-
-def clip_turn_l90(rig, t):
-    return clip_turn(rig, t, 1.0)
-
-
-def clip_turn_r90(rig, t):
-    return clip_turn(rig, t, -1.0)
 
 
 # Jumps, on the spot: the game carries the body along the arc between the clip's takeoff and
@@ -2006,8 +2010,7 @@ def clip_jump_up(rig, t):
         # The hind push out behind, then tuck under.
         hind = (x, _mix(-0.19, -0.12, smooth(air)), _mix(-0.17, -0.03, smooth(air)))
         _air(p, f"H{side}", flight, hind)
-    for i, pitch in enumerate(TAIL_UP):
-        add_rot(p, f"Tail{i + 1}", pitch=pitch * 0.3 * flight)
+    tail(p, [pitch * 0.3 for pitch in TAIL_UP], flight)
     return p
 
 
@@ -2028,8 +2031,7 @@ def clip_jump_down(rig, t):
         x = 0.045 if side == "L" else -0.045
         _air(p, f"F{side}", fore_air, (x, -0.25, _mix(0.13, 0.09, smooth(air))))
         _air(p, f"H{side}", hind_air, (x, _mix(-0.14, -0.19, smooth(air)), -0.06))
-    for i, pitch in enumerate(TAIL_UP):
-        add_rot(p, f"Tail{i + 1}", pitch=pitch * 0.4 * max(fore_air, hind_air))
+    tail(p, [pitch * 0.4 for pitch in TAIL_UP], max(fore_air, hind_air))
     return p
 
 
@@ -2038,9 +2040,21 @@ def clip_jump_down(rig, t):
 TAIL_UP = (-90.0, -22.0, -3.0, 15.0, 25.0, 40.0)
 
 
+SIT_DOWN_SECONDS = 0.8
+LIE_DOWN_SECONDS = 1.0
+CURL_UP_SECONDS = 1.6
+
+
+def reverse(name):
+    """A transition played backwards: the clip `name` in CLIPS from its end to its start."""
+    def played_back(rig, t):
+        seconds, _, forward, _ = CLIPS[name]
+        return forward(rig, seconds - t)
+    return played_back
+
+
 def clip_sit_down(rig, t):
-    T = 0.8
-    u = t / T
+    u = t / SIT_DOWN_SECONDS
     a, b = stand(rig), sit(rig)
     # The rump goes down first, the front legs straighten as it does.
     p = lerp_pose(rig, a, b, smooth(u))
@@ -2048,10 +2062,6 @@ def clip_sit_down(rig, t):
     p.rump = a.rump.lerp(b.rump, rump)
     p.rot["Rump"] = tuple(x * rump for x in b.rot["Rump"])
     return p
-
-
-def clip_stand_up(rig, t):
-    return clip_sit_down(rig, 0.8 - t)
 
 
 def clip_sit(rig, t):
@@ -2067,23 +2077,24 @@ def clip_sit(rig, t):
     return p
 
 
+# Lying down the front paws walk forward one at a time: when each starts, as a share of the
+# clip, and how long its step takes; each lands at the step's end.
+LIE_DOWN_STEPS = (("FL", 0.15), ("FR", 0.38))
+LIE_DOWN_STEP = 0.3
+
+
 def clip_lie_down(rig, t):
     """Sit to sphinx: the chest lowers while the front paws walk forward, left then right."""
-    T = 1.0
-    u = t / T
+    u = t / LIE_DOWN_SECONDS
     a, b = sit(rig), sphinx(rig)
     p = lerp_pose(rig, a, b, smooth(u))
-    for leg, start in (("FL", 0.15), ("FR", 0.38)):
-        w = window(u, start, start + 0.3)
+    for leg, start in LIE_DOWN_STEPS:
+        w = window(u, start, start + LIE_DOWN_STEP)
         pa, pb = a.legs[leg]["paw"], b.legs[leg]["paw"]
         p.legs[leg]["paw"] = (pa[0] + (pb[0] - pa[0]) * w,
                               pa[1] + (pb[1] - pa[1]) * w + 0.03 * math.sin(math.pi * w),
                               pa[2] + (pb[2] - pa[2]) * w)
     return p
-
-
-def clip_sit_up(rig, t):
-    return clip_lie_down(rig, 1.0 - t)
 
 
 def clip_lie(rig, t):
@@ -2096,16 +2107,16 @@ def clip_lie(rig, t):
     return p
 
 
+# Curling up the lids close over this stretch of the clip, and uncurling open over its mirror;
+# the game takes them as shut from its middle, which `lids_shut` and `lids_open` carry.
+CURL_LIDS = (1.15, 1.4)
+
+
 def clip_curl_up(rig, t):
-    T = 1.6
-    u = t / T
+    u = t / CURL_UP_SECONDS
     p = lerp_pose(rig, sphinx(rig), curl(rig), smooth(u))
-    lids(p, window(t, 1.15, 1.4))
+    lids(p, window(t, *CURL_LIDS))
     return p
-
-
-def clip_uncurl(rig, t):
-    return clip_curl_up(rig, 1.6 - t)
 
 
 def clip_sleep(rig, t):
@@ -2127,24 +2138,23 @@ def jaw_open(t, peaks):
 def clip_meow_short(rig, t):
     p = stand(rig)
     add_rot(p, "Jaw", pitch=-jaw_open(t, [(0.22, 24.0, 0.2)]))
-    e = bump(t, 0.25, 0.4)
-    add_rot(p, "Ear.L", yaw=-14.0 * e)
-    add_rot(p, "Ear.R", yaw=14.0 * e)
+    ears(p, yaw=-14.0 * bump(t, 0.25, 0.4))
     return p
 
 
 def clip_meow_long(rig, t):
     p = stand(rig)
     add_rot(p, "Jaw", pitch=-jaw_open(t, [(0.25, 18.0, 0.22), (0.62, 28.0, 0.42)]))
-    e = window(t, 0.05, 0.3) * (1.0 - window(t, 0.8, 1.05))
-    add_rot(p, "Ear.L", yaw=-16.0 * e)
-    add_rot(p, "Ear.R", yaw=16.0 * e)
+    ears(p, yaw=-16.0 * (window(t, 0.05, 0.3) * (1.0 - window(t, 0.8, 1.05))))
     return p
+
+
+BLINK_SECONDS = 8 / FPS
 
 
 def clip_blink(rig, t):
     p = stand(rig)
-    lids(p, math.sin(math.pi * min(t / 0.25, 1.0)))
+    lids(p, math.sin(math.pi * min(t / BLINK_SECONDS, 1.0)))
     return p
 
 
@@ -2152,9 +2162,7 @@ def clip_trill(rig, t):
     """A chirrup with the mouth barely open, the ears pricked forward."""
     p = stand(rig)
     add_rot(p, "Jaw", pitch=-jaw_open(t, [(0.14, 9.0, 0.12)]))
-    e = bump(t, 0.18, 0.3)
-    add_rot(p, "Ear.L", pitch=10.0 * e)
-    add_rot(p, "Ear.R", pitch=10.0 * e)
+    ears(p, pitch=10.0 * bump(t, 0.18, 0.3))
     return p
 
 
@@ -2164,8 +2172,7 @@ def clip_yawn(rig, t):
     wide = window(t, 0.25, 0.7) * (1.0 - window(t, 1.2, 1.6))
     add_rot(p, "Jaw", pitch=-46.0 * wide)
     lids(p, 0.65 * wide)
-    add_rot(p, "Ear.L", pitch=-25.0 * wide)
-    add_rot(p, "Ear.R", pitch=-25.0 * wide)
+    ears(p, pitch=-25.0 * wide)
     return p
 
 
@@ -2176,6 +2183,9 @@ def clip_slow_blink(rig, t):
     return p
 
 
+EAR_FLICK_SECONDS = 10 / FPS
+
+
 def clip_ear_flick(rig, t, side):
     p = stand(rig)
     sign = 1.0 if side == "L" else -1.0
@@ -2184,25 +2194,14 @@ def clip_ear_flick(rig, t, side):
     return p
 
 
-def clip_ear_flick_l(rig, t):
-    return clip_ear_flick(rig, t, "L")
-
-
-def clip_ear_flick_r(rig, t):
-    return clip_ear_flick(rig, t, "R")
-
-
 # The run: a half-bound, the hind pair landing close together and then the fore pair, at
-# 2.5 m/s. The spine gathers the hind paws under it and stretches the fore paws out.
-RUN_STRIDE = 0.9
-RUN_SECONDS = 0.36
-RUN_DUTY = 0.3
-RUN_FOOTFALL = {"HL": 0.02, "HR": 0.1, "FL": 0.48, "FR": 0.58}
+# 2.45 m/s. The spine gathers the hind paws under it and stretches the fore paws out.
+RUN = Gait(11 / FPS, 0.9, 0.3, {"HL": 0.02, "HR": 0.1, "FL": 0.48, "FR": 0.58}, 0.06, 0.06)
 
 
 def clip_run(rig, t):
-    T, stride = RUN_SECONDS, RUN_STRIDE
-    p, s = gait(rig, t, T, stride, RUN_DUTY, RUN_FOOTFALL, 0.06, 0.06)
+    T = RUN.seconds
+    p, s = gait(rig, t, RUN)
     flex = math.sin(2.0 * math.pi * (s - 0.1))
     p.rump = Vector((0.0, -0.012 + 0.012 * math.cos(4.0 * math.pi * (s - 0.25)), 0.0))
     add_rot(p, "Rump", pitch=-4.0 * flex)
@@ -2211,23 +2210,20 @@ def clip_run(rig, t):
     add_rot(p, "Chest", pitch=-8.0 * flex)
     add_rot(p, "Neck1", pitch=-10.0 + 4.0 * flex)
     add_rot(p, "Head", pitch=6.0 - 3.0 * flex)
-    for i, pitch in enumerate(TAIL_UP):
-        add_rot(p, f"Tail{i + 1}", pitch=pitch * 0.15)
+    tail(p, TAIL_UP, 0.15)
     tail_wave(p, t, T, 3.0)
     return p
 
 
 # Along the gallery's hand rail, 9 cm wide: slow and low, every paw set down on the line the
 # body travels along, the tail straight out behind for balance.
-BEAM_STRIDE = 0.40
-BEAM_SECONDS = 1.0
-BEAM_DUTY = 0.72
+BEAM = Gait(1.0, 0.40, 0.72, FOOTFALL, 0.025, 0.022)
 BEAM_LINE = 0.012  # how far either side of the centre line a paw lands
 
 
 def clip_beam_walk(rig, t):
-    T, stride = BEAM_SECONDS, BEAM_STRIDE
-    p, s = gait(rig, t, T, stride, BEAM_DUTY, FOOTFALL, 0.025, 0.022)
+    T = BEAM.seconds
+    p, s = gait(rig, t, BEAM)
     for leg in LEGS:
         x, y, z = p.legs[leg]["paw"]
         p.legs[leg]["paw"] = (BEAM_LINE if x > 0.0 else -BEAM_LINE, y, z)
@@ -2239,8 +2235,7 @@ def clip_beam_walk(rig, t):
     add_rot(p, "Chest", roll=-1.0 * math.sin(2.0 * math.pi * s))
     add_rot(p, "Neck1", pitch=-12.0)
     add_rot(p, "Head", pitch=-6.0)
-    for i, pitch in enumerate((-35.0, 4.0, 4.0, 3.0, 2.0, 2.0)):
-        add_rot(p, f"Tail{i + 1}", pitch=pitch)
+    tail(p, (-35.0, 4.0, 4.0, 3.0, 2.0, 2.0))
     tail_wave(p, t, T, 6.0, lag=0.3)
     return p
 
@@ -2311,8 +2306,7 @@ def clip_stretch(rig, t):
     p.legs["HL"].update(paw=(x, y + 0.03 * reach, z - 0.13 * reach),
                         meta=p.legs["HL"]["meta"] - 50.0 * reach,
                         toe=p.legs["HL"]["toe"] - 60.0 * reach)
-    for i, pitch in enumerate(TAIL_UP):
-        add_rot(p, f"Tail{i + 1}", pitch=pitch * 0.7 * bow)
+    tail(p, [pitch * 0.7 for pitch in TAIL_UP], bow)
     lids(p, 0.5 * bow)
     return p
 
@@ -2330,11 +2324,8 @@ def arched(rig, amount):
     add_rot(p, "Neck1", pitch=-4.0 * amount)
     add_rot(p, "Neck2", pitch=4.0 * amount)
     add_rot(p, "Head", pitch=14.0 * amount)
-    for s in ("L", "R"):
-        add_rot(p, f"Ear.{s}", pitch=-50.0 * amount, yaw=(22.0 if s == "L" else -22.0) * amount)
-    arch = (-80.0, -20.0, 10.0, 25.0, 30.0, 20.0)
-    for i, pitch in enumerate(arch):
-        add_rot(p, f"Tail{i + 1}", pitch=pitch * amount)
+    ears(p, pitch=-50.0 * amount, yaw=22.0 * amount)
+    tail(p, (-80.0, -20.0, 10.0, 25.0, 30.0, 20.0), amount)
     return p
 
 
@@ -2364,40 +2355,31 @@ def clip_hiss(rig, t):
 # name: (seconds, looping, pose function, events [(name, seconds)])
 CLIPS = {
     "idle": (4.0, True, clip_idle, []),
-    "walk": (WALK_SECONDS, True, clip_walk,
-             [(f"paw_{k.lower()[1]}{k.lower()[0]}", FOOTFALL[k] * WALK_SECONDS)
-              for k in ("HL", "FL", "HR", "FR")]),
-    "sit_down": (0.8, False, clip_sit_down, []),
-    "stand_up": (0.8, False, clip_stand_up, []),
+    "walk": (WALK.seconds, True, clip_walk, paw_events(WALK)),
+    "sit_down": (SIT_DOWN_SECONDS, False, clip_sit_down, []),
+    "stand_up": (SIT_DOWN_SECONDS, False, reverse("sit_down"), []),
     "sit": (6.0, True, clip_sit, []),
-    "lie_down": (1.0, False, clip_lie_down, [("paw_lf", 0.45), ("paw_rf", 0.68)]),
-    "sit_up": (1.0, False, clip_sit_up, []),
+    "lie_down": (LIE_DOWN_SECONDS, False, clip_lie_down,
+                 [(f"paw_{leg[1].lower()}{leg[0].lower()}",
+                   (start + LIE_DOWN_STEP) * LIE_DOWN_SECONDS) for leg, start in LIE_DOWN_STEPS]),
+    "sit_up": (LIE_DOWN_SECONDS, False, reverse("lie_down"), []),
     "lie": (5.0, True, clip_lie, []),
-    "curl_up": (1.6, False, clip_curl_up, []),
-    "uncurl": (1.6, False, clip_uncurl, []),
+    "curl_up": (CURL_UP_SECONDS, False, clip_curl_up, [("lids_shut", sum(CURL_LIDS) / 2.0)]),
+    "uncurl": (CURL_UP_SECONDS, False, reverse("curl_up"),
+               [("lids_open", CURL_UP_SECONDS - sum(CURL_LIDS) / 2.0)]),
     "sleep": (6.0, True, clip_sleep, []),
     "meow_short": (0.6, False, clip_meow_short, [("meow", 0.08)]),
     "meow_long": (1.1, False, clip_meow_long, [("meow", 0.08)]),
-    "blink": (0.25, False, clip_blink, []),
-    "trot": (TROT_SECONDS, True, clip_trot,
-             [(f"paw_{k.lower()[1]}{k.lower()[0]}", TROT_FOOTFALL[k] * TROT_SECONDS)
-              for k in ("HL", "FR", "HR", "FL")]),
-    "stair_up": (STAIR_SECONDS, True, clip_stair_up,
-                 [(f"paw_{k.lower()[1]}{k.lower()[0]}", FOOTFALL[k] * STAIR_SECONDS)
-                  for k in ("HL", "FL", "HR", "FR")]),
-    "stair_down": (STAIR_SECONDS, True, clip_stair_down,
-                   [(f"paw_{k.lower()[1]}{k.lower()[0]}", FOOTFALL[k] * STAIR_SECONDS)
-                    for k in ("HL", "FL", "HR", "FR")]),
-    "turn_l90": (TURN_SECONDS, False, clip_turn_l90, []),
-    "turn_r90": (TURN_SECONDS, False, clip_turn_r90, []),
+    "blink": (BLINK_SECONDS, False, clip_blink, []),
+    "trot": (TROT.seconds, True, clip_trot, paw_events(TROT)),
+    "stair_up": (STAIR.seconds, True, partial(clip_stair, sign=1.0), paw_events(STAIR)),
+    "stair_down": (STAIR.seconds, True, partial(clip_stair, sign=-1.0), paw_events(STAIR)),
+    "turn_l90": (TURN_SECONDS, False, partial(clip_turn, sign=1.0), []),
+    "turn_r90": (TURN_SECONDS, False, partial(clip_turn, sign=-1.0), []),
     "jump_up": (JUMP_SECONDS, False, clip_jump_up, list(JUMP_UP_EVENTS)),
     "jump_down": (JUMP_SECONDS, False, clip_jump_down, list(JUMP_DOWN_EVENTS)),
-    "run": (RUN_SECONDS, True, clip_run,
-            [(f"paw_{k.lower()[1]}{k.lower()[0]}", RUN_FOOTFALL[k] * RUN_SECONDS)
-             for k in ("HL", "HR", "FL", "FR")]),
-    "beam_walk": (BEAM_SECONDS, True, clip_beam_walk,
-                  [(f"paw_{k.lower()[1]}{k.lower()[0]}", FOOTFALL[k] * BEAM_SECONDS)
-                   for k in ("HL", "FL", "HR", "FR")]),
+    "run": (RUN.seconds, True, clip_run, paw_events(RUN)),
+    "beam_walk": (BEAM.seconds, True, clip_beam_walk, paw_events(BEAM)),
     "groom": (GROOM_SECONDS, True, clip_groom, []),
     "stretch": (STRETCH_SECONDS, False, clip_stretch, []),
     "startle": (0.7, False, clip_startle, []),
@@ -2405,8 +2387,8 @@ CLIPS = {
     "trill": (0.5, False, clip_trill, [("trill", 0.04)]),
     "yawn": (1.8, False, clip_yawn, []),
     "slow_blink": (1.6, False, clip_slow_blink, []),
-    "ear_flick_l": (0.35, False, clip_ear_flick_l, []),
-    "ear_flick_r": (0.35, False, clip_ear_flick_r, []),
+    "ear_flick_l": (EAR_FLICK_SECONDS, False, partial(clip_ear_flick, side="L"), []),
+    "ear_flick_r": (EAR_FLICK_SECONDS, False, partial(clip_ear_flick, side="R"), []),
 }
 
 
@@ -2425,6 +2407,8 @@ def pose_to_basis(rig, M):
 
 
 def key_clip(arm, rig, name, seconds, fn):
+    """The clip keyed into an action of its own, at every frame. Returns how far it carries
+    Hips along model z, first frame to last."""
     act = bpy.data.actions.new(name)
     act.use_fake_user = True
     arm.animation_data_create()
@@ -2435,6 +2419,8 @@ def key_clip(arm, rig, name, seconds, fn):
     for f in range(frames + 1):
         t = min(f / FPS, seconds)
         M = rig.solve(fn(rig, t))
+        if f == 0:
+            start = mv(M["Hips"].translation)
         basis = pose_to_basis(rig, M)
         for n, b in basis.items():
             loc, q, _ = b.decompose()
@@ -2458,7 +2444,7 @@ def key_clip(arm, rig, name, seconds, fn):
                 fc.keyframe_points.foreach_set("interpolation", [1] * len(keys))  # LINEAR
                 fc.update()
     arm.animation_data.action = None
-    return act
+    return (mv(M["Hips"].translation) - start).z
 
 
 # ---------------------------------------------------------------------------------------------
@@ -2484,35 +2470,6 @@ def export(path):
     bpy.ops.export_scene.gltf(**{k: v for k, v in want.items() if k in props})
 
 
-def read_glb(path):
-    with open(path, "rb") as f:
-        data = f.read()
-    magic, version, length = struct.unpack_from("<III", data, 0)
-    if magic != 0x46546C67:
-        sys.exit(f"{path} is not a GLB")
-    off, js, binary = 12, None, None
-    while off < length:
-        clen, ctype = struct.unpack_from("<II", data, off)
-        chunk = data[off + 8: off + 8 + clen]
-        if ctype == 0x4E4F534A:
-            js = json.loads(chunk)
-        elif ctype == 0x004E4942:
-            binary = chunk
-        off += 8 + clen
-    return js, binary
-
-
-def accessor(js, binary, index):
-    acc = js["accessors"][index]
-    view = js["bufferViews"][acc["bufferView"]]
-    comps = {"SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4, "MAT4": 16}[acc["type"]]
-    if acc["componentType"] != 5126:
-        sys.exit("self-check reads float accessors only")
-    start = view.get("byteOffset", 0) + acc.get("byteOffset", 0)
-    stride = view.get("byteStride", comps * 4)
-    return [struct.unpack_from(f"<{comps}f", binary, start + i * stride) for i in range(acc["count"])]
-
-
 def self_check(path, clips):
     """What the engine needs of the file, refused by name when it is not so."""
     js, binary = read_glb(path)
@@ -2524,7 +2481,7 @@ def self_check(path, clips):
     if abs(r[3]) < 0.99999:
         sys.exit(f"Hips binds with rotation {r}, not the identity: root motion would read it")
     anims = {a["name"]: a for a in js.get("animations", [])}
-    problems, travel = [], {}
+    problems = []
     for name in clips:
         a = anims.get(name)
         if not a:
@@ -2543,10 +2500,13 @@ def self_check(path, clips):
             continue
         out = accessor(js, binary, a["samplers"][tr]["output"])
         d = [out[-1][k] - out[0][k] for k in range(3)]
-        travel[name] = d
         stated = clips[name][4]
         if abs(d[2] - stated) > 1e-3 or abs(d[0]) > 1e-3:
             problems.append(f"{name}: Hips travels {d}, stated {stated}")
+        times = accessor(js, binary, a["samplers"][tr]["input"])
+        if abs(times[-1][0] - times[0][0] - clips[name][0]) > 1e-4:
+            problems.append(f"{name}: {times[-1][0] - times[0][0]:.4f} s long in the file, "
+                            f"{clips[name][0]:.4f} s in the header")
     if problems:
         sys.exit("self-check:\n  " + "\n  ".join(problems))
     tris = 0
@@ -2555,7 +2515,6 @@ def self_check(path, clips):
             tris += js["accessors"][prim["indices"]]["count"] // 3
     print(f"self-check: {len(joints)} joints, {len(clips)} clips, {tris} triangles, "
           f"{os.path.getsize(path) / 1024:.0f} KiB", flush=True)
-    return tris
 
 
 # ---------------------------------------------------------------------------------------------
@@ -2588,7 +2547,7 @@ def write_header(rig, clips, path=HEADER):
         "    int looping;",
         "    float travel; // metres forward, model space, from first frame to last",
         "    int event_count;",
-        "    CatClipEvent events[6];",
+        f"    CatClipEvent events[{max(len(c[3]) for c in clips.values())}];",
         "} CatClipSpec;",
         "",
         "static const CatClipSpec CAT_CLIPS[CAT_CLIP_COUNT] = {",
@@ -2619,8 +2578,26 @@ def write_header(rig, clips, path=HEADER):
 # Stills, to look at a pose without the engine
 
 
+def preview_names_ok(specs):
+    """Every preview spec names something it can show, or the run stops with what it could."""
+    bad = []
+    for spec in specs:
+        name = spec.partition("@")[0]
+        clip = name[5:] if name.startswith("legs:") else name
+        if clip not in CLIPS and name not in ("rest", "face"):
+            bad.append(spec)
+    if bad:
+        sys.exit(f"no preview of {', '.join(bad)}: a clip ({', '.join(CLIPS)}), rest, face, "
+                 "or legs:<clip>, each @seconds")
+
+
 def preview(arm, rig, specs, width=420):
-    """Workbench stills of `name@seconds` poses from the side, the front and three-quarters."""
+    """Workbench stills, a row of views for each spec, tiled into out/cat_blender/preview:
+      - `clip@seconds`, or `rest` for the bind pose: the whole cat from the side, in front,
+        three-quarters and above, and its face close up;
+      - `face`: the bind pose's head close up, from in front, the side, three-quarters and below;
+      - `legs:clip@seconds`: the hindquarters close up in that pose, from the near side, the far
+        side, behind and below."""
     import numpy as np
 
     scene = bpy.context.scene
@@ -2649,85 +2626,61 @@ def preview(arm, rig, specs, width=420):
     views = [("side", bv(-2.0, 0.17, 0.0)), ("front", bv(0.0, 0.25, 2.0)),
              ("threeq", bv(-1.3, 0.9, 1.3)), ("top", bv(0.0, 2.0, 0.001)),
              ("face", bv(-0.35, 0.3, 2.0))]
-    # `face` is the bind pose's head close up, from in front, the side, three-quarters and below.
     face_views = [("front", bv(0.0, 0.0, 2.0)), ("profile", bv(-2.0, 0.0, 0.0)),
                   ("threeq", bv(-1.4, 0.3, 1.4)), ("below", bv(-0.5, -0.8, 1.6))]
-    # `legs:<clip>@<seconds>` is the hindquarters close up in that pose: the near side, the
-    # far side, from behind and from below.
     leg_views = [("near", bv(-2.0, 0.1, 0.0)), ("far", bv(2.0, 0.1, 0.0)),
                  ("behind", bv(-0.8, 0.5, -1.8)), ("under", bv(-0.6, -1.5, 0.4))]
     os.makedirs(os.path.join(OUT, "preview"), exist_ok=True)
+
+    def pose_arm(clip, seconds):
+        """The armature in a clip's pose, or the bind pose; the pose's matrices."""
+        M = rig.solve(CLIPS[clip][2](rig, seconds) if clip in CLIPS else Pose(rig))
+        for n, b in pose_to_basis(rig, M).items():
+            arm.pose.bones[n].matrix_basis = b
+        bpy.context.view_layer.update()
+        return M
+
+    def shoot(eye, target, scale, stem):
+        """One still from `eye` looking at `target`, as pixels."""
+        cam_data.ortho_scale = scale
+        cam.location = eye
+        cam.rotation_euler = (target - eye).to_track_quat("-Z", "Y").to_euler()
+        scene.render.filepath = os.path.join(OUT, "preview", f"{stem}.png")
+        bpy.ops.render.render(write_still=True)
+        img = bpy.data.images.load(scene.render.filepath)
+        px = np.array(img.pixels[:], dtype=np.float32).reshape(img.size[1], img.size[0], 4)
+        bpy.data.images.remove(img)
+        return px
+
     tiles = []
     for spec in specs:
         name, _, at = spec.partition("@")
         seconds = float(at or 0.0)
+        row = []
         if name.startswith("legs:"):
             clip = name[5:]
-            pose = CLIPS[clip][2](rig, seconds) if clip in CLIPS else Pose(rig)
-            M = rig.solve(pose)
-            for n, b in pose_to_basis(rig, M).items():
-                arm.pose.bones[n].matrix_basis = b
-            bpy.context.view_layer.update()
-            root = mv(M["Hips"].translation)
-            row = []
+            root = mv(pose_arm(clip, seconds)["Hips"].translation)
+            target = bv(root.x, 0.12, root.z - 0.08)
             for vname, eye in leg_views:
-                target = bv(root.x, 0.12, root.z - 0.08)
-                cam_data.ortho_scale = 0.3
-                cam.location = eye + target
-                cam.rotation_euler = (target - cam.location).to_track_quat("-Z", "Y").to_euler()
-                file = os.path.join(OUT, "preview", f"legs_{clip}_{seconds:.2f}_{vname}.png")
-                scene.render.filepath = file
-                bpy.ops.render.render(write_still=True)
-                img = bpy.data.images.load(file)
-                row.append(np.array(img.pixels[:], dtype=np.float32)
-                           .reshape(img.size[1], img.size[0], 4))
-                bpy.data.images.remove(img)
-            tiles.append(np.concatenate(row, axis=1))
-            continue
-        if name == "face":
-            row = []
+                row.append(shoot(eye + target, target, 0.3, f"legs_{clip}_{seconds:.2f}_{vname}"))
+        elif name == "face":
+            pose_arm("rest", 0.0)
+            target = bv(0.0, 0.262, 0.228)
             for vname, eye in face_views:
-                target = bv(0.0, 0.262, 0.228)
-                cam_data.ortho_scale = 0.075
-                cam.location = eye + target
-                cam.rotation_euler = (target - cam.location).to_track_quat("-Z", "Y").to_euler()
-                file = os.path.join(OUT, "preview", f"face_{vname}.png")
-                scene.render.filepath = file
-                bpy.ops.render.render(write_still=True)
-                img = bpy.data.images.load(file)
-                row.append(np.array(img.pixels[:], dtype=np.float32)
-                           .reshape(img.size[1], img.size[0], 4))
-                bpy.data.images.remove(img)
-            tiles.append(np.concatenate(row, axis=1))
-            continue
-        fn = CLIPS[name][2] if name in CLIPS else None
-        pose = fn(rig, seconds) if fn else Pose(rig)
-        M = rig.solve(pose)
-        basis = pose_to_basis(rig, M)
-        for n, b in basis.items():
-            arm.pose.bones[n].matrix_basis = b
-        bpy.context.view_layer.update()
-        # The camera follows the body, so a walking frame is framed like a standing one.
-        root = mv(M["Hips"].translation)
-        row = []
-        for vname, eye in views:
-            target = bv(root.x, 0.17, root.z - 0.02)
-            cam_data.ortho_scale = 0.85
-            if vname == "face":
-                target = bv(*(mv(M["Head"].translation) + Vector((0.0, 0.0, 0.05))))
-                cam_data.ortho_scale = 0.16
-            elif vname == "front":
-                target = bv(root.x, 0.17, root.z)
-                cam_data.ortho_scale = 0.5
-            cam.location = eye + target - bv(0.0, 0.17, 0.0)
-            cam.rotation_euler = (target - cam.location).to_track_quat("-Z", "Y").to_euler()
-            file = os.path.join(OUT, "preview", f"{name}_{seconds:.2f}_{vname}.png")
-            scene.render.filepath = file
-            bpy.ops.render.render(write_still=True)
-            img = bpy.data.images.load(file)
-            px = np.array(img.pixels[:], dtype=np.float32).reshape(img.size[1], img.size[0], 4)
-            bpy.data.images.remove(img)
-            row.append(px)
+                row.append(shoot(eye + target, target, 0.075, f"face_{vname}"))
+        else:
+            M = pose_arm(name, seconds)
+            # The camera follows the body, so a walking frame is framed like a standing one.
+            root = mv(M["Hips"].translation)
+            for vname, eye in views:
+                target, scale = bv(root.x, 0.17, root.z - 0.02), 0.85
+                if vname == "face":
+                    target = bv(*(mv(M["Head"].translation) + Vector((0.0, 0.0, 0.05))))
+                    scale = 0.16
+                elif vname == "front":
+                    target, scale = bv(root.x, 0.17, root.z), 0.5
+                row.append(shoot(eye + target - bv(0.0, 0.17, 0.0), target, scale,
+                                 f"{name}_{seconds:.2f}_{vname}"))
         tiles.append(np.concatenate(row, axis=1))
     wide = max(t.shape[1] for t in tiles)
     tiles = [np.pad(t, ((0, 0), (0, wide - t.shape[1]), (0, 0))) for t in tiles]
@@ -2753,61 +2706,73 @@ def args_after_dashes():
                     help="comma-separated name@seconds stills to render, 'rest' for the bind pose")
     ap.add_argument("--no-export", action="store_true", help="build and preview only")
     ap.add_argument("--resolution", type=float, default=0.0025, help="metaball grid, metres")
-    ap.add_argument("--triangles", type=int, default=8000, help="the body's budget after decimation")
+    ap.add_argument("--triangles", type=int, default=8000,
+                    help="what the metaball mesh is collapsed to before its head is cut out; the "
+                         "head and face end at HEAD_TRIANGLES and FACE_TRIANGLES whatever it is")
     argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
     return ap.parse_args(argv)
 
 
 def main():
     args = args_after_dashes()
+    chosen = [c for c in args.clips.split(",") if c] or list(CLIPS)
+    unknown = [c for c in chosen if c not in CLIPS]
+    if unknown:
+        sys.exit(f"no clip named {', '.join(unknown)}; have {', '.join(CLIPS)}")
+    # A length between frames is keyed to the frame either side of it, and the file then says
+    # one length while the header says another.
+    ragged = [f"{c} ({CLIPS[c][0] * FPS:.2f} frames)" for c in chosen
+              if abs(CLIPS[c][0] * FPS - round(CLIPS[c][0] * FPS)) > 1e-6]
+    if ragged:
+        sys.exit(f"not a whole number of frames at {FPS} fps: {', '.join(ragged)}")
+    specs = [s for s in args.preview.split(",") if s]
+    preview_names_ok(specs)
     os.makedirs(OUT, exist_ok=True)
     bpy.ops.wm.read_factory_settings(use_empty=True)
     scene = bpy.context.scene
     scene.render.fps = FPS
     mats = make_materials()
     body = build_body(args.resolution)
-    place_eyes(body)
-    arm = build_armature()
+    eye_at = place_eyes(body)
+    bones = skeleton(eye_at)
+    arm = build_armature(bones)
     raw = sum(len(p.vertices) - 2 for p in body.data.polygons)
-    lo = [min(mv(v.co)[k] for v in body.data.vertices) for k in range(3)]
-    hi = [max(mv(v.co)[k] for v in body.data.vertices) for k in range(3)]
-    print("body bounds: " + ", ".join(f"{a:.3f}..{b:.3f}" for a, b in zip(lo, hi)), flush=True)
     decimate(body, args.triangles)
-    body, graph = rebuild_body(body)
+    body, graph, head_vertices = rebuild_body(body)
     for p in body.data.polygons:
         p.use_smooth = True
     face = Face(body)
-    measure_face(face)
-    assign_body_materials(body, mats)
-    parts = build_parts(mats, face)
-    skin(body, parts, arm, graph)
-    bake_vertex_colours(body)
+    lip = measure_lip(face)
+    assign_body_materials(body, mats, lip)
+    parts = build_parts(mats, face, eye_at, lip)
+    own = skin(body, parts, arm, graph, head_vertices, lip)
+    bake_vertex_colours(body, own, eye_at, lip)
     tris = sum(len(p.vertices) - 2 for p in body.data.polygons)
-    print(f"body: {raw} triangles from the metaballs, {tris} after decimation and parts", flush=True)
+    print(f"body: {raw} triangles from the metaballs, {tris} with the parts", flush=True)
 
-    rig = Rig(arm)
-    chosen = [c for c in args.clips.split(",") if c] or list(CLIPS)
-    unknown = [c for c in chosen if c not in CLIPS]
-    if unknown:
-        sys.exit(f"no clip named {', '.join(unknown)}; have {', '.join(CLIPS)}")
+    rig = Rig(arm, bones)
     clips = {}
     for name in chosen:
         seconds, looping, fn, events = CLIPS[name]
-        key_clip(arm, rig, name, seconds, fn)
-        travel = (mv(rig.solve(fn(rig, seconds))["Hips"].translation)
-                  - mv(rig.solve(fn(rig, 0.0))["Hips"].translation)).z
+        travel = key_clip(arm, rig, name, seconds, fn)
         clips[name] = (seconds, looping, fn, events, travel)
         print(f"clip {name}: {seconds:.2f} s, travel {travel:.3f}", flush=True)
     bpy.ops.wm.save_as_mainfile(filepath=os.path.join(OUT, "cat.blend"))
 
-    if args.preview:
-        preview(arm, rig, [s for s in args.preview.split(",") if s])
     if args.no_export:
-        return
-    export(GLB)
-    self_check(GLB, clips)
-    write_header(rig, clips)
-    print(f"wrote {GLB} and {HEADER}", flush=True)
+        print("not exported", flush=True)
+    elif chosen != list(CLIPS):
+        # The header names every clip the game plays, so a file of some of them would leave it
+        # one the game cannot build against.
+        print(f"not exported: only {len(chosen)} of the {len(CLIPS)} clips were keyed", flush=True)
+    else:
+        export(GLB)
+        self_check(GLB, clips)
+        write_header(rig, clips)
+        print(f"wrote {GLB} and {HEADER}", flush=True)
+    # Last, since it leaves a camera, a world and render settings in the scene an export walks.
+    if specs:
+        preview(arm, rig, specs)
 
 
 main()
