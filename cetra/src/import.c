@@ -1088,7 +1088,10 @@ void process_ai_mesh_bones(Mesh* mesh, const struct aiMesh* ai_mesh, Skeleton* s
             unsigned int vertex_id = weight->mVertexId;
             float bone_weight = weight->mWeight;
 
-            if (vertex_id >= vert_count)
+            // A zero weight is no influence, and must not take a slot: Assimp's glTF importer
+            // gives every joint that weights nothing a placeholder weight of 0 on vertex 0, and
+            // enough of those ahead of vertex 0's own bones push its real weights out.
+            if (vertex_id >= vert_count || bone_weight <= 0.0f)
                 continue;
 
             int slot = bone_counts[vertex_id];
