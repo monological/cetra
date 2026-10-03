@@ -21,7 +21,7 @@ wind. The steadiest stretch of the recording is taken, so a loop never
 repeats a car going by, and its tail is crossfaded into its head at equal
 power so it goes round with no seam. A loop can also be MUFFLED into the
 layer heard through a wall: low-passed and quieter, filtered round its own
-period so the seam survives. Every loop is levelled to LOOP_RMS, short of
+period so the seam survives. Every loop is levelled to LEVEL_RMS, short of
 clipping, so the gains in the app are the only statement of how loud
 anything is.
 
@@ -121,8 +121,8 @@ LOOPS = {
 
 # A ONESHOT, for a sound that happens once -- a meow, a footfall, a landing. The recording's
 # events are found by their envelope, each cut from just before its onset to a tail after it
-# falls away, faded, high-passed to take off handling rumble, and levelled like a loop: the
-# loud part to ONESHOT_RMS, short of ONESHOT_PEAK. Each kind: the longest an event may be,
+# falls away, faded, high-passed to take off handling rumble, and levelled like a loop by its
+# loud part. Each kind: the longest an event may be,
 # the tail kept after it, the high-pass, and how many events a recording may give.
 ONESHOT_JOBS = {
     "meow": {"longest": 1.6, "tail": 0.12, "highpass": 150.0, "per": 3},
@@ -154,8 +154,6 @@ ONESHOTS = {
     "cat_land_hard": ("land", 803297, 0),
     "cat_land_soft": ("land", 584442, 0),
 }
-ONESHOT_RMS = 0.1    # the loud part's level, as a loop's
-ONESHOT_PEAK = 0.9   # unless its peaks would pass this first
 ONESHOT_LEAD = 0.01  # seconds kept before an event's onset
 
 # The layers heard through the house's walls: file name -> (loop, low-pass
@@ -164,8 +162,11 @@ MUFFLES = {
     "wind_inside": ("wind_outside", 600.0, 0.5),
 }
 
-LOOP_RMS = 0.1    # every loop's level: about -20 dBFS
-LOOP_PEAK = 0.9   # unless its peaks would pass this first: a gusty wind comes out quieter
+# Every loop and every one-shot is levelled alike, so the volumes in the C files are the only
+# statement of loudness: its loud part to LEVEL_RMS, about -20 dBFS, unless its peaks would pass
+# LEVEL_PEAK first -- a gusty wind comes out quieter.
+LEVEL_RMS = 0.1
+LEVEL_PEAK = 0.9
 CROSSFADE = 0.75  # seconds of tail laid over the head at the loop's seam
 
 PRE = 0.004    # seconds kept before a beat's onset
@@ -220,7 +221,7 @@ def credit(sound):
 
 def beats(x):
     """Every beat's onset in samples, and how loud it is."""
-    env = signal.filtfilt(*signal.butter(2, 60.0 / (RATE / 2)), np.abs(x))
+    env = envelope(x, 60.0)
     peaks, props = signal.find_peaks(env, height=env.max() * 0.25, distance=int(0.4 * RATE))
     return peaks, props["peak_heights"], env
 
@@ -253,13 +254,24 @@ def onset(x, peak):
     return lo + int(np.argmax(seg > 0.2 * seg.max()))
 
 
+def shape(y, fade_in, fade_out, highpass):
+    """A cut sound faded in over `fade_in` seconds, straight, and out over its last `fade_out`
+    samples on a raised cosine, then high-passed at `highpass` Hz."""
+    y = y * np.minimum(1.0, np.arange(y.size) / (fade_in * RATE))
+    y[-fade_out:] *= 0.5 * (1.0 + np.cos(np.linspace(0.0, np.pi, fade_out)))
+    return signal.filtfilt(*signal.butter(2, highpass / (RATE / 2), "high"), y)
+
+
+def level(y, measured):
+    """y scaled so `measured`, the part of it its loudness is taken from, sits at LEVEL_RMS --
+    unless y's peaks would pass LEVEL_PEAK first."""
+    rms, peak = np.sqrt(np.mean(measured ** 2)), np.max(np.abs(y))
+    return y * min(LEVEL_RMS / max(rms, 1e-9), LEVEL_PEAK / max(peak, 1e-9))
+
+
 def cut(x, at):
     start = at - int(PRE * RATE)
-    y = x[start:start + int(LENGTH * RATE)].copy()
-    y *= np.minimum(1.0, np.arange(y.size) / (0.002 * RATE))
-    n = int(FADE * RATE)
-    y[-n:] *= 0.5 * (1.0 + np.cos(np.linspace(0.0, np.pi, n)))
-    return signal.filtfilt(*signal.butter(2, 40.0 / (RATE / 2), "high"), y)
+    return shape(x[start:start + int(LENGTH * RATE)], 0.002, int(FADE * RATE), 40.0)
 
 
 def case(y, preset):
@@ -326,7 +338,7 @@ def periodic(y, f):
 
 
 def loop(x, seconds):
-    """`seconds` of x that repeat with no seam, levelled to LOOP_RMS. The
+    """`seconds` of x that repeat with no seam, levelled. The
     stretch runs a crossfade's length past the loop, and that overrun is laid
     over the loop's head at equal power, so the end flows into the start."""
     fade = int(CROSSFADE * RATE)
@@ -340,8 +352,7 @@ def loop(x, seconds):
     out[:fade] = y[length:] * np.cos(t) + y[:fade] * np.sin(t)
     out = periodic(out, lambda z: signal.filtfilt(*signal.butter(2, 30.0 / (RATE / 2), "high"),
                                                   z, axis=0))
-    rms, peak = np.sqrt(np.mean(out ** 2)), np.max(np.abs(out))
-    return out * min(LOOP_RMS / max(rms, 1e-9), LOOP_PEAK / max(peak, 1e-9))
+    return level(out, out)
 
 
 def muffle(y, cut, gain):
@@ -403,18 +414,13 @@ def events(x, job):
 
 
 def oneshot(x, span, job):
-    """One event cut out, faded in over 3 ms and out over its last 40, high-passed, and its loud
-    part levelled to ONESHOT_RMS short of ONESHOT_PEAK."""
+    """One event cut out, faded in over 3 ms and out over its last 40, high-passed, and levelled
+    by its loud part."""
     s, e = span
-    y = x[s:e].copy()
-    y *= np.minimum(1.0, np.arange(y.size) / (0.003 * RATE))
-    n = max(1, min(int(0.04 * RATE), y.size // 3))
-    y[-n:] *= 0.5 * (1.0 + np.cos(np.linspace(0.0, np.pi, n)))
-    y = signal.filtfilt(*signal.butter(2, ONESHOT_JOBS[job]["highpass"] / (RATE / 2), "high"), y)
+    y = shape(x[s:e], 0.003, max(1, min(int(0.04 * RATE), (e - s) // 3)),
+              ONESHOT_JOBS[job]["highpass"])
     env = envelope(y, 60.0)
-    loud = y[env > 0.25 * env.max()]
-    rms, peak = np.sqrt(np.mean(loud ** 2)), np.max(np.abs(y))
-    return y * min(ONESHOT_RMS / max(rms, 1e-9), ONESHOT_PEAK / max(peak, 1e-9))
+    return level(y, y[env > 0.25 * env.max()])
 
 
 def main():

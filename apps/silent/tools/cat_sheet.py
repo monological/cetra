@@ -4,36 +4,29 @@
     python3 apps/silent/tools/cat_sheet.py [--clips walk,sit] [--out out/cat_sheet.png]
 
 Renders each clip of the cat headless through the render app and assets/scenes/cat.cscn, which
-turns its coat on, at a quarter, a
-half, three quarters and the end of its length, and tiles the frames with the clip's name. Run
-from the checkout whose build it should use: the render app is ./out/bin/render beside it.
+turns its coat on, at a quarter, a half, three quarters and the end of its length, and tiles the
+frames with the clip's name. Run from the checkout whose build it should use: the render app is
+./out/bin/render beside it.
 """
 
 import argparse
 import os
-import re
 import subprocess
 import sys
 import tempfile
 
 from PIL import Image, ImageDraw
 
+from glb import clips as clips_in
+
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 RENDER = os.path.join(ROOT, "out", "bin", "render")
 # The scene rather than the bare glb: it is what turns the coat on.
 SCENE = os.path.join(ROOT, "assets", "scenes", "cat.cscn")
-HEADER = os.path.join(ROOT, "apps", "silent", "src", "cat_clips.h")
+GLB = os.path.join(ROOT, "assets", "models", "cat.glb")
 STEPS = 60  # the render app's fixed clock: frames a second
 PHASES = 4
 TILE = (360, 240)
-
-
-def clips_in_header():
-    """Each clip's name, length and stated travel, from the header the Blender tool generated
-    with the file."""
-    text = open(HEADER).read()
-    return [(m.group(1), float(m.group(2)), float(m.group(3)))
-            for m in re.finditer(r'\{"(\w+)", ([0-9.]+)f, \d, (-?[0-9.]+)f, ', text)]
 
 
 # Where the camera stands, model space, the cat's travel aside: x its left, y up, z forward.
@@ -61,12 +54,12 @@ def main():
     ap.add_argument("--view", default="threeq", choices=sorted(VIEWS))
     ap.add_argument("--out", default=os.path.join(ROOT, "out", "cat_sheet.png"))
     args = ap.parse_args()
-    clips = clips_in_header()
+    clips = clips_in(GLB)
     if args.clips:
         want = args.clips.split(",")
         missing = [c for c in want if c not in {n for n, _, _ in clips}]
         if missing:
-            sys.exit(f"no clip named {', '.join(missing)} in {HEADER}")
+            sys.exit(f"no clip named {', '.join(missing)} in {GLB}")
         clips = [c for c in clips if c[0] in want]
     rows = []
     with tempfile.TemporaryDirectory() as work:
