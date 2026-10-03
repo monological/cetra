@@ -43,7 +43,6 @@ struct Scene;
 typedef struct SceneCaptureState {
     int cascade_count;
     bool msm_enabled;
-    int tile_heroes;
     double render_time;
     double render_delta;
     bool irradiance;

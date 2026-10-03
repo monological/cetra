@@ -72,6 +72,14 @@ typedef struct RainSpec {
     MaterialRainBeads beads;
 } RainSpec;
 
+// Light that wanders inside a surface before it leaves it: the engine's subsurface blur, its
+// strength, how far each channel goes relative to the others, and the widest's reach in metres.
+typedef struct ScatterSpec {
+    float strength; // 0 = none
+    float colour[3];
+    float radius;
+} ScatterSpec;
+
 /*
  * One surface, at its MatId's index in SPECS.
  *
@@ -81,14 +89,6 @@ typedef struct RainSpec {
  * openings are edges nobody built. On glass the dirt tints what shows through as well as the
  * surface, which is how a film of grease looks.
  */
-// Light that wanders inside a surface before it leaves it: the engine's subsurface blur, its
-// strength, how far each channel goes relative to the others, and the widest's reach in metres.
-typedef struct ScatterSpec {
-    float strength; // 0 = none
-    float colour[3];
-    float radius;
-} ScatterSpec;
-
 typedef struct MatSpec {
     const char* name; // the material's own name, for the GUI's editor
     const char* set;  // the photo set's base name; NULL is a flat colour

@@ -429,8 +429,10 @@ and a bodiless light's one view on the same origin with no new packing) and the 
 stratified along the segment with a point of the ball each. `tile_body_point` in C and
 `tileBodyPoint` here are two copies of one formula, and a drift between them reads as views
 projected from the wrong point -- loud, which is why two copies are allowed. The drawn body is
-packed whole: centre in `shadowTile.xyz`, segment in `attenCutoff.zw` and `shadowMisc.x` (the
-reserved slot and the cone cosines, which only a spot reads), radius in `colorIntensity.w`.
+packed whole, in what a point light leaves free: centre in `shadowTile.xyz`, segment in
+`attenCutoff.zw` and `shadowMisc.x` (the reserved slot and the cone cosines, which only a spot
+reads), radius and near plane in `shadowMisc.zw` (a panel's extent). `tileLightAt` in
+`tile_lookup.glsl` is the one place that decodes it, for the surface and the fog alike.
 
 **Three designs were measured and refused before this one**, on `tile_core_fixture` against a
 trace of the same body against the rim with no shadow map (the trace is `tiles-truth`'s):
@@ -466,8 +468,8 @@ centre cannot express, and is what remains of the gap to the current flame's ref
 (`tiles-dance`: 0.135 with it, 0.398 without).
 
 **Movers are drawn over a copy.** A face that sees a kept caster which has moved in the last
-120 frames keeps its still casters in the same face of a STORE block, and each frame it is that
-copy plus the movers. A 0 px match against the scene never moved, at the swing's rest frame, is
+120 frames keeps its still casters in the same face of a STORE -- cells its block holds beside
+its own -- and each frame it is that copy plus the movers. A 0 px match against the scene never moved, at the swing's rest frame, is
 what `tiles-movers` holds; it fails if the overlay is skipped, since the store leaves the mover
 out.
 
@@ -475,9 +477,10 @@ out.
 - **The body a diameter too long**: the fire wrote the whole spine as `source_length`, and the caps
   carried it 6 mm into the wax, where views inside the candle saw straight through it.
 - **Glass drawn solid**: the depth pass has no transmittance, so a clear pane put the hall clock's
-  dial in shadow. The kept and hero caster sets leave glass out.
-- **A store taken mid-frame lands past the array** until the region grows; the copy refuses the
-  cell as the draw always did, or the blit is an invalid framebuffer.
+  dial in shadow. The kept caster sets leave glass out.
+- **A store taken mid-frame landed past the array** until the region grew, and its blit was an
+  invalid framebuffer. Stores are now taken with every other block, before the region is laid
+  out.
 - **Jittered reads at a corner** slide off the receiver's plane into the surface beside it; a guard
   for it was built, moved nothing measured, and was removed. If it shows, that is the place.
 

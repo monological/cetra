@@ -63,9 +63,6 @@
 #define DEFAULT_HEIGHT 900
 // Half the window's pixels, upscaled: the engine's floor.
 #define DEFAULT_RENDER_SCALE 0.5f
-// No candle redraws its shadow every frame: each one's shadow follows its flame from the views
-// it keeps, and redrawing from the flame's centre swung a hard edge across the desk instead.
-#define DEFAULT_TILE_HEROES 0
 
 /*
  * The exposure at night, pinned, and the most a day's meter may open to. The
@@ -141,8 +138,7 @@ typedef struct SilentArgs {
     bool no_relief;         // puddles from the noise alone, not the ground's own lows
     bool no_candles;        // the candles stand unlit
     bool no_candle_shadows; // the candles light through walls, as before spec 13.16
-    int tile_heroes;        // candles whose shadows are redrawn every frame
-    int tile_views;         // 1 = every cached light shaded from one view, for comparison
+    int tile_views;         // views over each cached light's body; 0 = the engine's, 1 = one
     bool tiles_probe;       // print the cached shadow tiles at exit
     bool profiler;          // per-pass timing and submission counts, reported at exit
     const char* audio_dump; // headless: write what the listener hears here
@@ -512,9 +508,6 @@ static void on_init(Game* game) {
         ss->shadow_distance = 40.0f;
         ss->cascade_count = 2;
         ss->pcss_enabled = true;
-        // The candles' shadows follow their flames from the views they keep; heroes, if asked
-        // for, redraw those views every frame instead.
-        ss->tile_heroes = g_args.tile_heroes;
         ss->tile_views = g_args.tile_views;
     }
 
@@ -709,11 +702,9 @@ static void print_usage(const char* prog) {
            "                          ground's own lows\n");
     printf("      --no-candles        The candles stand unlit\n");
     printf("      --no-candle-shadows The candles light through walls\n");
-    printf("      --tile-heroes N     Candles whose shadows are redrawn every frame from where\n"
-           "                          their flames are, nearest first (default %d)\n",
-           DEFAULT_TILE_HEROES);
     printf("      --profiler          Per-pass timing and submission counts, at exit\n");
-    printf("      --tile-views 1      Shade every cached light from one view, not its body's\n");
+    printf("      --tile-views N      Shade every cached light from N views over its body\n"
+           "                          rather than 8; 1 is its centre alone\n");
     printf("      --tiles-probe       The cached shadow tiles and each light's block, at exit\n");
     printf("  In the window: click to capture the mouse, Tab to release it. WASD\n");
     printf("  walks, Shift hurries, the arrows or the mouse look, E opens and shuts\n");
@@ -728,7 +719,6 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
     a->seed = 7;
     a->render_scale = DEFAULT_RENDER_SCALE;
     a->rain_mmh = DEFAULT_RAIN_MMH;
-    a->tile_heroes = DEFAULT_TILE_HEROES;
     for (int i = 1; i < argc; i++) {
         const char* s = argv[i];
         const bool has_next = i + 1 < argc;
@@ -788,8 +778,6 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
             a->no_candles = true;
         } else if (!strcmp(s, "--no-candle-shadows")) {
             a->no_candle_shadows = true;
-        } else if (!strcmp(s, "--tile-heroes") && has_next) {
-            a->tile_heroes = atoi(argv[++i]);
         } else if (!strcmp(s, "--tile-views") && has_next) {
             a->tile_views = atoi(argv[++i]);
         } else if (!strcmp(s, "--tiles-probe")) {

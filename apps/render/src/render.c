@@ -209,16 +209,14 @@ static void print_usage(const char* prog) {
                     "                         block (spec 13.16)\n");
     fprintf(stderr, "      --tile-map <light> <p>  A cached light's faces as a PPM, two rows a\n"
                     "                         view\n");
-    fprintf(stderr, "      --tile-views <n>   1 draws every cached light from one view rather\n"
-                    "                         than along its shape\n");
+    fprintf(stderr, "      --tile-views <n>   Draw every cached light with a body from n views\n"
+                    "                         rather than 8; 1 is its centre alone\n");
     fprintf(stderr, "      --tile-reference <n>  Shade every cached light from n views over its\n"
                     "                         body, redrawn each frame: the soft shadow's\n"
                     "                         reference (at most 64)\n");
     fprintf(stderr,
             "      --node-swing <node> <m>  Swing a node along x by up to m metres, once a\n"
             "                         second, from frame 0: a caster that moves\n");
-    fprintf(stderr, "      --tile-heroes <n>  Redraw the n moving cached lights nearest the\n"
-                    "                         camera every frame, from where they are now\n");
     fprintf(stderr, "      --tiles-refresh    Redraw every cached face every frame\n");
     fprintf(stderr,
             "      --no-fire          Drop the fires a scene file asked for (spec 13.14)\n");
@@ -1262,8 +1260,6 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->rain_map_path = argv[++i];
         } else if (strcmp(argv[i], "--tiles-probe") == 0) {
             args->tiles_probe = 1;
-        } else if (strcmp(argv[i], "--tile-heroes") == 0 && i + 1 < argc) {
-            args->tile_heroes = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--tiles-refresh") == 0) {
             args->tiles_refresh = 1;
         } else if (strcmp(argv[i], "--tile-views") == 0 && i + 1 < argc) {
@@ -4265,7 +4261,6 @@ int main(int argc, char** argv) {
         if (args.csm_debug) {
             scene->shadow_system->csm_debug = true;
         }
-        scene->shadow_system->tile_heroes = args.tile_heroes;
         scene->shadow_system->tile_refresh = args.tiles_refresh != 0;
         scene->shadow_system->tile_views = args.tile_views;
         scene->shadow_system->tile_reference = args.tile_reference;

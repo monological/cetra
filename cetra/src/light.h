@@ -63,13 +63,8 @@ typedef struct Light {
     int shadow_layer;
     // A cached point light's faces (spec 13.16): its first tile in the punctual
     // array's tile region, -1 for none, reassigned by the depth pass like the
-    // two above; and the body its views were drawn over -- its centre, its
-    // segment end to end, its radius -- which is where its first view stands
-    // and from which a lookup places the rest.
+    // two above.
     int shadow_tile;
-    vec3 shadow_origin;
-    vec3 shadow_segment;
-    float shadow_radius;
     // The Mesh whose emissive surface this panel was derived from (spec 11.49),
     // by that mesh's stable `id`. 0 means AUTHORED -- a light somebody made --
     // and the emissive reconcile will not touch one, so the two populations

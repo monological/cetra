@@ -738,16 +738,12 @@ void fire_update(FireSystem* fs, const Wind* wind, double t) {
     }
 }
 
-// The fire's light onto its light: a point or spot gets the intensity in candela at the
-// centroid, placed in the frame of the node it hangs on; an area panel gets the luminance that
-// gives the same intensity along its normal, and keeps its place. A fire that is out, or has not
-// yet said what it casts, darkens it and leaves it where it is.
 // A point light's body from its flame, for the soft edge of its shadow: a capsule along the
 // spine, base to tip, as round as the flame's widest point. Written each frame, so as the
-// flame stretches, shrinks and leans its shadow's edge follows it. The direction is written
-// as the walk keeps it -- the authored copy in the light's node's frame, which the next walk
-// carries back, and this frame's world copy, since this frame's walk has already run.
-static void _drive_light_shape(const Fire* fire, Light* light, const SceneNode* node) {
+// flame stretches, shrinks and leans its shadow's edge follows it. Its direction is written as
+// _drive_light writes the position; `to_node` takes world into the light's node's frame, NULL
+// for a light on no node.
+static void _drive_light_shape(const Fire* fire, Light* light, vec4* to_node) {
     vec3 axis = GLM_VEC3_ZERO_INIT;
     glm_vec3_sub((float*)fire->spine[FIRE_SPINE_POINTS - 1], (float*)fire->spine[0], axis);
     const float length = glm_vec3_norm(axis);
@@ -763,16 +759,18 @@ static void _drive_light_shape(const Fire* fire, Light* light, const SceneNode* 
     glm_vec3_scale(axis, 1.0f / length, axis);
     vec3 local = GLM_VEC3_ZERO_INIT;
     glm_vec3_copy(axis, local);
-    if (node) {
-        mat4 inv;
-        glm_mat4_inv((vec4*)node->global_transform, inv);
-        glm_mat4_mulv3(inv, axis, 0.0f, local);
+    if (to_node) {
+        glm_mat4_mulv3(to_node, axis, 0.0f, local);
         glm_vec3_normalize(local);
     }
     light_set_direction(light, local);
     glm_vec3_copy(axis, light->direction);
 }
 
+// The fire's light onto its light: a point or spot gets the intensity in candela at the
+// centroid, placed in the frame of the node it hangs on; an area panel gets the luminance that
+// gives the same intensity along its normal, and keeps its place. A fire that is out, or has not
+// yet said what it casts, darkens it and leaves it where it is.
 static void _drive_light(const Fire* fire, SceneNode* root) {
     Light* light = fire->light;
     if (!light)
@@ -793,8 +791,8 @@ static void _drive_light(const Fire* fire, SceneNode* root) {
             glm_vec3_copy(at, local);
             // Found each time rather than kept, since the node is the scene's to free or move.
             SceneNode* node = node_find_light(root, light);
+            mat4 inv = GLM_MAT4_IDENTITY_INIT;
             if (node) {
-                mat4 inv;
                 glm_mat4_inv(node->global_transform, inv);
                 glm_mat4_mulv3(inv, at, 1.0f, local);
             }
@@ -803,7 +801,7 @@ static void _drive_light(const Fire* fire, SceneNode* root) {
             light_set_position(light, local);
             glm_vec3_copy(at, light->global_position);
             if (light->type == LIGHT_POINT && fire->kind == FIRE_FLAME)
-                _drive_light_shape(fire, light, node);
+                _drive_light_shape(fire, light, node ? inv : NULL);
             break;
         }
         case LIGHT_AREA: {

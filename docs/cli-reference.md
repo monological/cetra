@@ -472,12 +472,11 @@ writes its own body into its light each frame. Instruments:
 - **`--tiles-probe`:** prints the tile region and every cached light's block at exit: its views,
   cells, faces kept, the body they were drawn over, and each view's origin and tiles.
 - **`--tile-map <light> <ppm>`:** the light's faces as a picture, two rows a view, grey by metres.
-- **`--tile-views 1`:** every cached light shaded from one view, the comparison the eight are
-  measured against.
+- **`--tile-views <n>`:** every cached light with a body drawn from n views rather than eight;
+  `--tile-views 1` is its centre alone, the comparison the eight are measured against.
 - **`--tile-reference <n>`:** every cached light drawn each frame from n views of its body as it is
   now (at most 64), averaged with no blur -- the soft shadow by its definition.
-- **`--tile-heroes <n>`:** the n moving cached lights nearest the camera redraw their views every
-  frame; **`--tiles-refresh`** redraws every cached face every frame.
+- **`--tiles-refresh`:** every cached face redrawn every frame.
 - **`--node-swing <node> <m>`:** swings a named node along x by up to m metres once a second, a
   caster that moves under a cached light.
 
@@ -924,10 +923,10 @@ patter falls away over a doorway's walk and the rumble stays. `--mute` silences 
 **The candles and the hall bulb cast shadows** (spec 13.16), kept in tiles rather than drawn every
 frame, so a candle lights only what it can see. Switches:
 - **`--no-candle-shadows`:** the candles light through walls again; the bulb keeps its shadow.
-- **`--tile-heroes <n>`** (default 0): the n candles nearest you redraw their shadows every frame.
-- **`--tile-views 1`:** every cached light from one view rather than eight over its body: harder,
-  darker pools under the candlesticks.
+- **`--tile-views <n>`:** every cached light from n views over its body rather than eight. At 1,
+  harder, darker pools under the candlesticks.
 - **`--tiles-probe`:** the tiles and each light's block, at exit.
+- **`--profiler`:** per-pass timing and submission counts, at exit.
 
 Pinned views of them, with `-W 960 -H 540`:
 - **The study desk's candlesticks:** `--cam-eye -4.0,4.7,11.0 --cam-target -4.45,3.92,10.1`.
