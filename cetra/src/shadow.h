@@ -206,12 +206,14 @@ typedef struct ShadowTileBlock {
     unsigned generation; // the region's when drawn; any other means the tiles were lost
     uint64_t valid;      // faces drawn
     uint64_t dynamic;    // faces that see a mover, drawn over a copy of the store's
+    uint64_t touched;    // faces a moving caster's box reached this frame
     uint64_t stored;     // faces of the store that hold the still casters
     int store;           // the block that is its store, -1 for none
 } ShadowTileBlock;
 
 // The casters a kept face draws over a copy of its still ones rather than with them: nodes
-// that have moved within SHADOW_TILE_MOVER_HOLD frames.
+// that have moved within SHADOW_TILE_MOVER_HOLD frames, and nodes carrying a mesh whose surface
+// moves under them (skinned, swaying, morphing), which move on every frame.
 #define SHADOW_TILE_MAX_MOVERS 32
 #define SHADOW_TILE_MOVER_HOLD 120
 
