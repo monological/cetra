@@ -498,15 +498,44 @@ static void _flame_rest(Fire* fire) {
 // pieces.
 #define FLAME_MAX_DT (1.0f / 60.0f)
 
+/*
+ * Each spring of the spine is damped at 1/sqrt(2) of critical: the least damping whose response
+ * to what drives it has no resonant peak. That is the property that matters, because the spine
+ * is a chain -- each point aims one segment above the point below it -- so whatever a link
+ * passes up is passed up again by the next, and a peak multiplies: Q per link, Q^7 at the tip.
+ * At the 0.15 of critical the vertical springs once had (Q about 3.3) the tip of a 3.5 cm flame
+ * swung through 37 cm at the springs' own 4.8 Hz, folding below the wick.
+ */
+#define FLAME_DAMPING_RATIO 0.70710678f
+// How often the height's breath takes a new value, eased between: a flame that pulls itself up
+// and drops back a few times a second, rather than a kick every step.
+#define FLAME_BREATH_HZ 3.0f
+
+// The height's breath at `steps` of `dt`: smooth noise in -1..1 along time, a value per knot
+// eased into the next, from the fire's own row.
+static float _flame_breath(uint32_t steps, float dt, uint32_t row) {
+    const float x = (float)steps * dt * FLAME_BREATH_HZ;
+    const float knot = floorf(x);
+    const float f = x - knot;
+    const float ease = f * f * (3.0f - 2.0f * f);
+    const float a = _hash_signed((uint32_t)knot, row);
+    const float b = _hash_signed((uint32_t)knot + 1u, row);
+    return a + (b - a) * ease;
+}
+
 static void _flame_step(Fire* fire, int index, const vec3 wind, float dt) {
     const FireParams* p = &fire->params;
     const float seg = fire->flame.height / (float)(FIRE_SPINE_POINTS - 1);
-    // Each fire's noise is seeded from a row of its own -- slot 0 for its height, one slot a
-    // spine point after that for its sideways impulses -- or every flame lit on one frame would
-    // move in unison.
+    // Each fire's noise is seeded from a row of its own -- slot 0 for its height, slot 1 for its
+    // sideways kick -- or every flame lit on one frame would move in unison.
     const uint32_t row = (uint32_t)index * 131u;
     // Height breathes with the flicker: a flame that pulls itself up and drops back.
-    const float stretch = 1.0f + 0.15f * p->flicker * _hash_signed((uint32_t)fire->steps, row);
+    const float stretch = 1.0f + 0.15f * p->flicker * _flame_breath((uint32_t)fire->steps, dt, row);
+    // The flicker's sideways kick: one for the whole flame each step, growing up it, so the
+    // flame sways as one body with its tip furthest. A kick of its own at each point jostled
+    // the points apart and kinked the flame's outline.
+    const float kick_x = p->flicker * 6.0f * _hash_signed((uint32_t)fire->steps, row + 1u);
+    const float kick_z = p->flicker * 6.0f * _hash_signed((uint32_t)fire->steps, row + 7920u);
     const int pieces = (int)ceilf(dt / FLAME_MAX_DT - 1e-4f);
     const int n = pieces > 1 ? pieces : 1;
     const float h = dt / (float)n;
@@ -522,12 +551,11 @@ static void _flame_step(Fire* fire, int index, const vec3 wind, float dt) {
             vec3 accel = {0.0f, 0.0f, 0.0f};
             for (int a = 0; a < 3; a++) {
                 const float k = a == 1 ? 900.0f : 220.0f;
-                accel[a] = k * (target[a] - fire->spine[i][a]) - 9.0f * fire->spine_velocity[i][a];
+                const float c = 2.0f * FLAME_DAMPING_RATIO * sqrtf(k);
+                accel[a] = k * (target[a] - fire->spine[i][a]) - c * fire->spine_velocity[i][a];
             }
-            // The flicker's impulses grow up the flame, which is where a candle visibly moves.
-            const uint32_t seed = row + (uint32_t)i;
-            accel[0] += p->flicker * 6.0f * u * _hash_signed((uint32_t)fire->steps, seed);
-            accel[2] += p->flicker * 6.0f * u * _hash_signed((uint32_t)fire->steps, seed + 7919u);
+            accel[0] += kick_x * u;
+            accel[2] += kick_z * u;
             for (int a = 0; a < 3; a++) {
                 fire->spine_velocity[i][a] += accel[a] * h;
                 fire->spine[i][a] += fire->spine_velocity[i][a] * h;
