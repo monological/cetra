@@ -172,7 +172,8 @@ void candles_light(FireSystem* fs, Scene* scene, const Kit* kit, bool shadows) {
                                 .cast_shadows = shadows,
                                 .shadow_cache = shadows,
                                 .source_radius = 0.5f * fire->flame.width,
-                                .source_length = fire->flame.height};
+                                .source_length =
+                                    fmaxf(fire->flame.height - fire->flame.width, 0.0f)};
         Light* light = create_light(&desc);
         if (!light)
             continue;

@@ -754,8 +754,10 @@ static void _drive_light_shape(const Fire* fire, Light* light, const SceneNode* 
     float radius = 0.0f;
     for (int p = 0; p < FIRE_SPINE_POINTS; p++)
         radius = fmaxf(radius, fire->spine[p][3]);
+    // The body's length is between its end caps, which carry the radius past each end; the
+    // spine is the whole flame, so a body as long as the spine reached a radius into the wax.
     light->source_radius = radius;
-    light->source_length = length;
+    light->source_length = fmaxf(length - 2.0f * radius, 0.0f);
     if (!(length > 0.0f))
         return;
     glm_vec3_scale(axis, 1.0f / length, axis);
