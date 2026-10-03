@@ -961,12 +961,15 @@ line green or red, and what it is watching.
   wants.
 - **`--no-eyeshine`:** its eyes do not throw the flashlight back.
 
-A pinned camera stands in for the player as far as the cat can tell, so a framing near it is also a
-test of it watching you. Pinned views that have been useful, with `-W 960 -H 540`:
+The cat senses the player's BODY and not the camera, so a pinned camera, or `--cat-cam`, is only a
+view: the cat never turns its head to one, and what it watches for is the player wherever the body
+stands -- at the spawn point in a headless run. Pinned views that have been useful, with `-W 960
+-H 540`:
 - **Asleep on the chair:** `--cam-eye -3.70,4.05,8.70 --cam-target -5.02,3.72,9.02`.
 - **At the clock, watching the pendulum:** `--cat-at hall_clock --cat-activity watch_clock
-  --cam-eye -0.25,0.75,12.45 --cam-target -1.00,0.80,13.15`; from in front, where it turns its
-  head to the camera, `--cam-eye -1.05,1.25,12.3 --cam-target -0.8,0.55,13.15`.
+  --cam-eye -0.25,0.75,12.45 --cam-target -1.00,0.80,13.15`.
+- **Its eyes in the flashlight, lying on the great hall's rug:** `--flashlight --cat-at rug
+  --cat-clip lie --cam-eye -0.17,1.2,17.78 --cam-target -0.75,0.42,16.4`.
 - **On the rail, from the great hall:** `--cat-at gal_w --cat-goto newel_cap --fov 60 --cam-eye
   0.40,1.70,18.00 --cam-target 0.40,4.10,15.00 -f 900`.
 
