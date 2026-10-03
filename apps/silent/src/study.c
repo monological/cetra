@@ -209,7 +209,11 @@ static void chair(Kit* kit, const KitFrame* f) {
     for (int s = -1; s <= 1; s += 2)
         kit_frame_lathe(kit, f, MAT_MAHOGANY, 0.23f * (float)s, 0.5f * (back0 + back1), 1.12f,
                         finial, KIT_COUNT(finial), 8);
-    kit_frame_box(kit, f, KIT_COLLIDER_ONLY, -0.27f, 0.27f, 0.0f, 1.0f, -0.26f, 0.25f, true);
+    // Solid up to the cushion's top, and the back to its full height; the space over the
+    // cushion is left open, since the house's cat sleeps there and jumps up and down from it.
+    kit_frame_box(kit, f, KIT_COLLIDER_ONLY, -0.27f, 0.27f, 0.0f, seat + 0.045f, -0.26f, 0.25f,
+                  true);
+    kit_frame_box(kit, f, KIT_COLLIDER_ONLY, -0.27f, 0.27f, seat, 1.0f, -0.26f, back1, true);
 }
 
 /*
