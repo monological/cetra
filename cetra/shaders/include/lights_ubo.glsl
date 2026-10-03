@@ -24,16 +24,17 @@ struct DirLight {
 };
 
 struct PackedLight {
-    vec4 posRange;       // xyz = world position, w = cull radius
+    vec4 posRange;       // xyz = world position, w = cull radius (= range when it has one)
     vec4 dirType;        // xyz = direction (world, UNIT), w = 1 point / 2 spot / 3 area
     vec4 colorIntensity; // xyz = color * intensity (premultiplied on CPU)
     vec4 attenCutoff;    // x = 1/range^2 (0 = unbounded), y = IES profile index
                          //     (-1 = none), z = reserved, w = cos inner cone
     vec4 shadowMisc;     // x = cos outer cone, y = float(punctual shadow base layer),
-                         //     -1 = casts no shadow, zw = emitter/panel size
+                         //     -1 = casts no shadow, SHADOW_TILE_MARK = cached in tiles,
+                         //     zw = emitter/panel size
     vec4 upArea;         // xyz = roll reference, unit and orthonormal to dir: a panel's
                          //     height axis (spec 9.2), an asymmetric IES profile's
-                         //     azimuth zero (spec 11.57)
+                         //     azimuth zero (spec 11.57); w = a cached light's near plane
     vec4 shadowTile;     // xyz = where a cached light's faces were drawn from (world),
                          //     w = float(its first tile), -1 = none (spec 13.16)
 };

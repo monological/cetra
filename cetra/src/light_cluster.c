@@ -201,7 +201,7 @@ static void _pack_dir_light(GpuDirLight* dst, const struct Light* light) {
 }
 
 static void _pack_cluster_light(GpuPackedLight* dst, const struct Light* light, float radius,
-                                int live_layer) {
+                                const ShadowSystem* shadows) {
     glm_vec3_copy((float*)light->global_position, dst->pos_range);
     dst->pos_range[3] = radius > 0.0f ? radius : 0.0f; // 0 = unbounded
     dst->dir_type[3] = (float)light->type;             // 1 point / 2 spot / 3 area
@@ -229,7 +229,13 @@ static void _pack_cluster_light(GpuPackedLight* dst, const struct Light* light, 
     // so packing it raw hands every consumer a map that is no longer drawn. One
     // site, so the shading lookup and anything using this field as an eligibility
     // test cannot disagree about which lights have a map.
-    dst->shadow_misc[1] = (float)live_layer;
+    //
+    // A cached light (spec 13.16) carries SHADOW_TILE_MARK there instead: past every
+    // per-frame layer, so every "has a map" test holds and the per-frame lookup reads
+    // it as lit before it indexes anything, and its tiles ride in shadow_tile below.
+    const int tile = shadow_live_tile(shadows, light);
+    dst->shadow_misc[1] =
+        (float)(tile >= 0 ? SHADOW_TILE_MARK : shadow_live_punctual_layer(shadows, light));
     glm_vec2_copy((float*)light->size, &dst->shadow_misc[2]);
 
     // EVERY type ships the full frame. Both halves used to be panels-only -- the
@@ -251,9 +257,15 @@ static void _pack_cluster_light(GpuPackedLight* dst, const struct Light* light, 
     glm_vec3_copy(up, dst->up_area);
     dst->up_area[3] = 0.0f;
 
-    // No light has a cached shadow yet (spec 13.16).
+    // Where the faces were drawn from, which is what the lookup projects from -- never the
+    // light's position now, which a candle flame moves within the tolerance -- and the near
+    // plane they were drawn with; the far is the range, in pos_range[3].
     glm_vec3_zero(dst->shadow_tile);
-    dst->shadow_tile[3] = -1.0f;
+    dst->shadow_tile[3] = (float)tile;
+    if (tile >= 0) {
+        glm_vec3_copy((float*)light->shadow_origin, dst->shadow_tile);
+        dst->up_area[3] = shadow_tile_near(light);
+    }
 }
 
 // Classify, cull and pack scene->lights. Directionals shade unclustered (they
@@ -332,7 +344,7 @@ static void _gather_lights(LightClusterContext* ctx, struct Scene* scene, const 
         }
 
         _pack_cluster_light(&ctx->lights.cluster_lights[num_packed], light, radius,
-                            shadow_live_punctual_layer(scene->shadow_system, light));
+                            scene->shadow_system);
         // Borrowed, not owned: the light outlives this build, and the only reader
         // is the overflow warning, which runs before this function is called again.
         ctx->packed_names[num_packed] = light->name;
