@@ -17,6 +17,11 @@
 // A cached light's near plane as a fraction of its range, where the light states none.
 #define SHADOW_TILE_NEAR_RATIO 0.002f
 
+// The views a cached light longer than it is wide is drawn from, each a cube of six faces from
+// the centre of one equal part of its length, consecutive in its block with the middle one
+// published: a lookup reaches view k (-1, 0, +1) at six cells and one step per k from it.
+#define SHADOW_TILE_VIEWS 3
+
 // What a cached light packs as its per-frame punctual layer: past every per-frame layer, so
 // the per-frame lookup reads it as lit before it indexes anything, while every "does this light
 // have a map" test (layer >= 0) still holds.

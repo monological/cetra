@@ -28,7 +28,9 @@ struct PackedLight {
     vec4 dirType;        // xyz = direction (world, UNIT), w = 1 point / 2 spot / 3 area
     vec4 colorIntensity; // xyz = color * intensity (premultiplied on CPU)
     vec4 attenCutoff;    // x = 1/range^2 (0 = unbounded), y = IES profile index
-                         //     (-1 = none), z = reserved, w = cos inner cone
+                         //     (-1 = none), z = reserved, w = cos inner cone; a cached
+                         //     light's zw and shadowMisc.x are instead the step from
+                         //     its middle view to the next, zero for one view
     vec4 shadowMisc;     // x = cos outer cone, y = float(punctual shadow base layer),
                          //     -1 = casts no shadow, SHADOW_TILE_MARK = cached in tiles,
                          //     zw = a panel's size, or a cached light's source radius and

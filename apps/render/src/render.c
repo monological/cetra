@@ -207,7 +207,10 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --rain-map <p>     With --rain-probe: the occlusion map as a PPM\n");
     fprintf(stderr, "      --tiles-probe      Print the cached shadow tiles and each light's\n"
                     "                         block (spec 13.16)\n");
-    fprintf(stderr, "      --tile-map <light> <p>  A cached light's six faces as a PPM\n");
+    fprintf(stderr, "      --tile-map <light> <p>  A cached light's faces as a PPM, two rows a\n"
+                    "                         view\n");
+    fprintf(stderr, "      --tile-views <n>   1 draws every cached light from one view rather\n"
+                    "                         than along its shape\n");
     fprintf(stderr, "      --tile-heroes <n>  Redraw the n moving cached lights nearest the\n"
                     "                         camera every frame, from where they are now\n");
     fprintf(stderr, "      --tiles-refresh    Redraw every cached face every frame\n");
@@ -1257,6 +1260,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->tile_heroes = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--tiles-refresh") == 0) {
             args->tiles_refresh = 1;
+        } else if (strcmp(argv[i], "--tile-views") == 0 && i + 1 < argc) {
+            args->tile_views = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--tile-map") == 0 && i + 2 < argc) {
             args->tile_map_light = argv[++i];
             args->tile_map_path = argv[++i];
@@ -4236,6 +4241,7 @@ int main(int argc, char** argv) {
         }
         scene->shadow_system->tile_heroes = args.tile_heroes;
         scene->shadow_system->tile_refresh = args.tiles_refresh != 0;
+        scene->shadow_system->tile_views = args.tile_views;
         float light_size = args.light_size >= 0.0f ? args.light_size : scene_radius * 0.08f;
         for (size_t i = 0; i < scene->light_count; i++) {
             Light* light = scene->lights[i];

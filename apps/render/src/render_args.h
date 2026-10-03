@@ -170,6 +170,7 @@ typedef struct {
     int tiles_probe;           // Print the cached shadow tiles' region and blocks (spec 13.16)
     int tile_heroes;           // ShadowSystem.tile_heroes
     int tiles_refresh;         // ShadowSystem.tile_refresh
+    int tile_views;            // ShadowSystem.tile_views
     // --tile-map: one cached light's six faces as a greyscale PPM
     const char* tile_map_light;
     const char* tile_map_path;
