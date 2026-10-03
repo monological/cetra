@@ -187,9 +187,10 @@ struct Light;
 // draw again. Faces are bits of the masks, view by view.
 //
 // A block with no light is free, or a STORE: the cells another block keeps its still casters
-// in, for its faces that see a caster which has moved lately. Each such face is drawn every
-// frame as a copy of the store's with the movers drawn over it, so a swinging pendulum costs
-// its own draws a frame rather than the room's.
+// in, for its faces that see a caster which moves -- a node moved lately, or a pose. Each such
+// face is drawn every frame as a copy of the store's with the movers drawn over it, until it is
+// drawn with none in it, so a swinging pendulum costs its own draws a frame rather than the
+// room's.
 typedef struct ShadowTileBlock {
     struct Light* light; // NULL = free or a store; published to when whole
     bool is_store;       // another block's store, so not free though it has no light
@@ -205,15 +206,14 @@ typedef struct ShadowTileBlock {
     float far_plane;
     unsigned generation; // the region's when drawn; any other means the tiles were lost
     uint64_t valid;      // faces drawn
-    uint64_t dynamic;    // faces that see a mover, drawn over a copy of the store's
+    uint64_t dynamic;    // faces drawn over a copy of the store's until drawn with no mover in them
     uint64_t touched;    // faces a moving caster's box reached this frame
     uint64_t stored;     // faces of the store that hold the still casters
     int store;           // the block that is its store, -1 for none
 } ShadowTileBlock;
 
 // The casters a kept face draws over a copy of its still ones rather than with them: nodes
-// that have moved within SHADOW_TILE_MOVER_HOLD frames, and nodes carrying a mesh whose surface
-// moves under them (skinned, swaying, morphing), which move on every frame.
+// that have moved within SHADOW_TILE_MOVER_HOLD frames.
 #define SHADOW_TILE_MAX_MOVERS 32
 #define SHADOW_TILE_MOVER_HOLD 120
 

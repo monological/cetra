@@ -473,6 +473,14 @@ its own -- and each frame it is that copy plus the movers. A 0 px match against 
 what `tiles-movers` holds; it fails if the overlay is skipped, since the store leaves the mover
 out.
 
+**A pose is a mover on every frame** (spec 13.18). A skinned, swaying or morphing surface moves
+without its node moving, so a face drawn once would freeze it. It is in no store and no face
+drawn whole and kept: it is drawn only over a copy, into the faces its posed bounds reach this
+frame, which keeps it out of every face that is not drawn again the next. A face is drawn over
+its copy until a frame in which no moving caster reaches it, and is kept from then on, so a cat
+walking past a candle costs that candle's faces only while it is in them -- and a store whose
+faces no longer see anything moving is given back, since the budget holds only a few.
+
 **What else rendered a plausible frame on the way:**
 - **The body a diameter too long**: the fire wrote the whole spine as `source_length`, and the caps
   carried it 6 mm into the wax, where views inside the candle saw straight through it.
