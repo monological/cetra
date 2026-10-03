@@ -61,11 +61,14 @@ typedef struct Light {
     // the depth pass.
     int shadow_map_index;
     int shadow_layer;
-    // A cached point light's six faces (spec 13.16): its first tile in the
-    // punctual array's tile region, -1 for none, reassigned by the depth pass
-    // like the two above, and where those faces were drawn from.
+    // A cached point light's faces (spec 13.16): the first tile of its middle
+    // view in the punctual array's tile region, -1 for none, reassigned by the
+    // depth pass like the two above; where that view was drawn from; and the
+    // step to the next view along the light's shape, zero for a light drawn
+    // from one view.
     int shadow_tile;
     vec3 shadow_origin;
+    vec3 shadow_step;
     // The Mesh whose emissive surface this panel was derived from (spec 11.49),
     // by that mesh's stable `id`. 0 means AUTHORED -- a light somebody made --
     // and the emissive reconcile will not touch one, so the two populations

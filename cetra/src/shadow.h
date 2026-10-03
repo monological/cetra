@@ -57,14 +57,16 @@ _Static_assert(SHADOW_TILE_MARK >= MAX_PUNCTUAL_SHADOW_LAYERS,
 // array's edge is. The minimum edge, so it always fits and never changes with the
 // light count -- cover known at 9.4 cm over the default 96 m.
 #define RAIN_OCCLUSION_SIZE PUNCTUAL_SHADOW_MIN_SIZE
-// Cached point-light shadows (spec 13.16): six faces a light, each a SHADOW_TILE_SIZE tile
-// in layers of the punctual array past the per-frame ones and the rain's. A budget of its
-// own, because a tile is drawn once and kept: what it costs is memory, never a traversal,
-// which is the pool's whole limit. The tiles it affords, and the lights at six each.
-#define PUNCTUAL_TILE_VRAM_BUDGET (64u * 1024u * 1024u)
+// Cached point-light shadows (spec 13.16): six faces a view and one or SHADOW_TILE_VIEWS views
+// a light, each face a SHADOW_TILE_SIZE tile in layers of the punctual array past the
+// per-frame ones and the rain's. A budget of its own, because a tile is drawn once and kept:
+// what it costs is memory, never a traversal, which is the pool's whole limit. The tiles it
+// affords, and the lights at one view each.
+#define PUNCTUAL_TILE_VRAM_BUDGET (128u * 1024u * 1024u)
 #define SHADOW_TILE_MAX_CELLS \
     (PUNCTUAL_TILE_VRAM_BUDGET / (SHADOW_TILE_SIZE * SHADOW_TILE_SIZE * 4u))
 #define SHADOW_TILE_MAX_BLOCKS (SHADOW_TILE_MAX_CELLS / 6u)
+_Static_assert(6 * SHADOW_TILE_VIEWS <= 32, "a block's faces are one bit each of a uint32_t");
 // The most layers the tiles can take, which is the budget at the smallest edge; a larger
 // edge holds the same tiles in fewer.
 #define PUNCTUAL_TILE_MAX_LAYERS \
@@ -177,20 +179,26 @@ struct Scene;
 struct Engine;
 struct Light;
 
-// One cached light's six faces: block b owns six consecutive tiles of the region, in the
-// +X -X +Y -Y +Z -Z order a point light's per-frame layers take. What it records is what
-// the tiles hold, so the pass can tell a face it may keep from one it must draw again.
+// One cached light's faces: a run of consecutive tiles of the region, six a view, each view's
+// in the +X -X +Y -Y +Z -Z order a point light's per-frame layers take. A light longer than it
+// is wide is drawn from SHADOW_TILE_VIEWS views along its shape, any other from one. What it
+// records is what the tiles hold, so the pass can tell a face it may keep from one it must
+// draw again.
 //
 // A HERO's block is a light's second one, redrawn every frame from where the light is now,
 // so the shadows of a flickering flame move with it; its first block stays as it was, ready
 // for when the light stops being a hero.
 typedef struct ShadowTileBlock {
     struct Light* light; // NULL = free; published to when whole
-    vec3 origin;         // where the faces were drawn from
+    int first;           // its first cell, counted from the region's base
+    int cells;           // cells it owns, which a later light needing no more may reuse
+    int views;           // views drawn, 0 until first drawn
+    vec3 origin;         // where the middle view was drawn from
+    vec3 step;           // from one view to the next along the shape; zero for one view
     float near_plane;
     float far_plane;
     unsigned generation; // the region's when drawn; any other means the tiles were lost
-    uint8_t valid;       // faces drawn, one bit each
+    uint32_t valid;      // faces drawn, one bit each, view by view
     bool hero;
     // A kept block's light where it was last frame, and whether it has moved since: a
     // light that never moves -- a bulb -- is never worth redrawing every frame.
@@ -342,8 +350,9 @@ typedef struct ShadowSystem {
     // Cached point-light shadows (spec 13.16), in tiles of the punctual array.
     int tile_heroes;      // moving cached lights nearest the camera redrawn every frame; 0 = none
     int tile_fill_budget; // faces drawn a frame while filling; 0 = every face that wants it
-    float tile_tolerance; // metres a light may move from where its faces were drawn
+    float tile_tolerance; // metres a light's views may move from where they were drawn
     bool tile_refresh;    // redraw every face every frame: what a kept face must equal
+    int tile_views;       // 0 = from each light's shape; 1 forces one view for every light
     // ENGINE-OWNED. The region starts at tile_base_layer and runs tile_layers; both only
     // grow, since moving either moves every tile. tile_generation counts the times its
     // contents were lost -- an array rebuilt, the base moved -- and a block drawn under
