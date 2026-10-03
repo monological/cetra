@@ -205,6 +205,9 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --rain-ask <x,y,z> Ask the CPU cover query about this point every\n"
                     "                         frame; --rain-probe prints its answer\n");
     fprintf(stderr, "      --rain-map <p>     With --rain-probe: the occlusion map as a PPM\n");
+    fprintf(stderr, "      --tiles-probe      Print the cached shadow tiles and each light's\n"
+                    "                         block (spec 13.16)\n");
+    fprintf(stderr, "      --tile-map <light> <p>  A cached light's six faces as a PPM\n");
     fprintf(stderr,
             "      --no-fire          Drop the fires a scene file asked for (spec 13.14)\n");
     fprintf(stderr, "      --fire-probe       Print the blackbody, each fire's state, its grid\n"
@@ -1245,6 +1248,11 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->rain_ask_set = 1;
         } else if (strcmp(argv[i], "--rain-map") == 0 && i + 1 < argc) {
             args->rain_map_path = argv[++i];
+        } else if (strcmp(argv[i], "--tiles-probe") == 0) {
+            args->tiles_probe = 1;
+        } else if (strcmp(argv[i], "--tile-map") == 0 && i + 2 < argc) {
+            args->tile_map_light = argv[++i];
+            args->tile_map_path = argv[++i];
         } else if (strcmp(argv[i], "--no-fire") == 0) {
             args->no_fire = 1;
         } else if (strcmp(argv[i], "--fire-probe") == 0) {
@@ -4885,6 +4893,13 @@ int main(int argc, char** argv) {
                    (double)engine->postfx->rain_forward_g, engine->postfx->rain_cover_layer,
                    postfx_has_medium(engine->postfx) ? 1 : 0);
     }
+
+    // After the loop, so the blocks are what the last frame drew and kept.
+    if (args.tiles_probe)
+        shadow_tiles_probe(scene->shadow_system, scene);
+    if (args.tile_map_light)
+        shadow_tiles_map(scene->shadow_system, scene_find_light(scene, args.tile_map_light),
+                         args.tile_map_path);
 
     // Beside the others, and for the same reason: the pool is fully populated by
     // now (the async drain that gates the mask-array build has run), so what it

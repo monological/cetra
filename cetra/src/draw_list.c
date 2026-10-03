@@ -117,10 +117,12 @@ static void classify(const Mesh* mesh, uint8_t* lane, uint8_t* flags) {
     // shape is just "off"). doubleSided is deliberately allowed: a closed
     // double-sided crate occludes fine, and openness is the author's contract,
     // checked by the probe rather than guessed at here.
-    bool occluder = mat->occluder && !transmissive && !blend && !masked && !mesh->is_skinned &&
-                    mesh->morph_max_offset == 0.0f && mat->wind_response == 0.0f;
+    bool still = !mesh->is_skinned && mesh->morph_max_offset == 0.0f && mat->wind_response == 0.0f;
+    bool occluder = mat->occluder && !transmissive && !blend && !masked && still;
 
     *flags = 0;
+    if (still)
+        *flags |= DRAW_STILL;
     if (masked)
         *flags |= DRAW_ALPHA_MASKED;
     if (foliage)

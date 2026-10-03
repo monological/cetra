@@ -48,6 +48,7 @@ enum {
     DRAW_DOUBLE_SIDED = 1u << 2,
     DRAW_OCCLUDER = 1u << 3, // material claims the AABB as an occlusion proxy, guards passed
     DRAW_NO_CAST = 1u << 4,  // MESH_SHADOW_NONE: drawn, and no shadow pass takes it
+    DRAW_STILL = 1u << 5, // unskinned, unswayed, unmorphed: the surface is where its node puts it
 };
 
 // How a view picks a level out of a mesh's LOD chain.
