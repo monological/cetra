@@ -465,7 +465,7 @@ finds the receiver hidden reports its occluder's depth.
 where it was, so the kept views are read at the receiver moved +D (dR - dB) / dB, D being the
 centre's move since drawing. It is first order: a flame's LEAN is a rotation one shift of the
 centre cannot express, and is what remains of the gap to the current flame's reference
-(`tiles-dance`: 0.135 with it, 0.398 without).
+(`tiles-dance`: 0.145 with it, 0.376 without).
 
 **Movers are drawn over a copy.** A face that sees a kept caster which has moved in the last
 120 frames keeps its still casters in the same face of a STORE -- cells its block holds beside
