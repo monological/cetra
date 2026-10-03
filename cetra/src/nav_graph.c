@@ -186,6 +186,17 @@ static float link_heading(const NavGraph* g, int link) {
     return atan2f(b[0] - a[0], b[2] - a[2]);
 }
 
+// The enabled link of the same kind running the other way, or -1.
+static int reverse_link(const NavGraph* g, int link) {
+    const NavLink* l = &g->links[link];
+    for (int i = 0; i < g->link_count; i++) {
+        const NavLink* r = &g->links[i];
+        if (r->enabled && r->from == l->to && r->to == l->from && r->kind == l->kind)
+            return i;
+    }
+    return -1;
+}
+
 static float wrap_angle(float a) {
     while (a > GLM_PIf)
         a -= 2.0f * GLM_PIf;
@@ -425,10 +436,28 @@ bool nav_follower_replan(NavFollower* f, int to) {
         *f = fresh;
         return true;
     }
-    const int current = f->route.links[f->leg];
+    const NavGraph* g = f->graph;
+    int current = f->route.links[f->leg];
+    const NavLink* l = &g->links[current];
     NavRoute rest;
-    if (!nav_graph_route(f->graph, f->graph->links[current].to, to, &f->query, &rest) ||
-        rest.count + 1 > NAV_ROUTE_MAX)
+    const bool ahead = nav_graph_route(g, l->to, to, &f->query, &rest);
+    float left = l->length > 0.0f ? fmaxf(0.0f, 1.0f - f->along / l->length) : 0.0f;
+    // Part way along a level walk the way back is as open as the way on: turn round when that
+    // is the cheaper way there. Never in a flight or a jump.
+    const int back = reverse_link(g, current);
+    NavRoute behind;
+    if (back >= 0 && l->shape.shape == NAV_SHAPE_LINE &&
+        g->kinds[l->kind].drive == NAV_DRIVE_DISTANCE &&
+        nav_graph_route(g, l->from, to, &f->query, &behind) &&
+        (!ahead ||
+         (1.0f - left) * g->links[back].cost + behind.cost < left * l->cost + rest.cost)) {
+        f->along = fmaxf(0.0f, g->links[back].length - f->along);
+        current = back;
+        rest = behind;
+    } else if (!ahead) {
+        return false;
+    }
+    if (rest.count + 1 > NAV_ROUTE_MAX)
         return false;
     f->route.links[0] = current;
     for (int i = 0; i < rest.count; i++)

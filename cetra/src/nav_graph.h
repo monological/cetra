@@ -165,8 +165,10 @@ void nav_follower_set_progress(NavFollower* f, float progress);
 void nav_follower_sample(const NavFollower* f, NavSample* out);
 
 // Go somewhere else instead: the current link is finished first, so a follower half way up
-// a flight or through a jump does not turn round in it. False when there is no route from
-// there, and the follower keeps the one it had.
+// a flight or through a jump does not turn round in it -- unless it is part way along a
+// level link driven by distance that runs both ways, where it turns round when that is the
+// cheaper way there. False when there is no route from there, and the follower keeps the
+// one it had.
 bool nav_follower_replan(NavFollower* f, int to);
 
 // The graph against a world. Every enabled link's profile is walked in steps of `step`

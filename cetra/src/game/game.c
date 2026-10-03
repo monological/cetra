@@ -6,6 +6,7 @@
 #include "animator_component.h"
 #include "brain.h"
 #include "../camera.h"
+#include "../camera_rig.h"
 #include "../cook.h"
 
 #include <cglm/cglm.h>
@@ -304,6 +305,10 @@ static void game_pre_render(Engine* engine, Scene* scene) {
         vec3 fwd = {0.0f, 0.0f, -1.0f};
         vec3 up = {0.0f, 1.0f, 0.0f};
         if (cam) {
+            // The engine puts the rig's pose on the camera after this hook; put it there now
+            // too, or the listener hears from where the camera was last frame. The apply is
+            // idempotent and a NULL rig writes nothing.
+            camera_rig_apply(engine->camera_rig, cam);
             glm_vec3_copy(cam->position, pos);
             camera_forward(cam, fwd);
             glm_vec3_copy(cam->up_vector, up);
