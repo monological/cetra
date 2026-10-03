@@ -714,6 +714,35 @@ void fire_update(FireSystem* fs, const Wind* wind, double t) {
 // centroid, placed in the frame of the node it hangs on; an area panel gets the luminance that
 // gives the same intensity along its normal, and keeps its place. A fire that is out, or has not
 // yet said what it casts, darkens it and leaves it where it is.
+// A point light's body from its flame, for the soft edge of its shadow: a capsule along the
+// spine, base to tip, as round as the flame's widest point. Written each frame, so as the
+// flame stretches, shrinks and leans its shadow's edge follows it. The direction is written
+// as the walk keeps it -- the authored copy in the light's node's frame, which the next walk
+// carries back, and this frame's world copy, since this frame's walk has already run.
+static void _drive_light_shape(const Fire* fire, Light* light, const SceneNode* node) {
+    vec3 axis = GLM_VEC3_ZERO_INIT;
+    glm_vec3_sub((float*)fire->spine[FIRE_SPINE_POINTS - 1], (float*)fire->spine[0], axis);
+    const float length = glm_vec3_norm(axis);
+    float radius = 0.0f;
+    for (int p = 0; p < FIRE_SPINE_POINTS; p++)
+        radius = fmaxf(radius, fire->spine[p][3]);
+    light->source_radius = radius;
+    light->source_length = length;
+    if (!(length > 0.0f))
+        return;
+    glm_vec3_scale(axis, 1.0f / length, axis);
+    vec3 local = GLM_VEC3_ZERO_INIT;
+    glm_vec3_copy(axis, local);
+    if (node) {
+        mat4 inv;
+        glm_mat4_inv((vec4*)node->global_transform, inv);
+        glm_mat4_mulv3(inv, axis, 0.0f, local);
+        glm_vec3_normalize(local);
+    }
+    light_set_direction(light, local);
+    glm_vec3_copy(axis, light->direction);
+}
+
 static void _drive_light(const Fire* fire, SceneNode* root) {
     Light* light = fire->light;
     if (!light)
@@ -743,6 +772,8 @@ static void _drive_light(const Fire* fire, SceneNode* root) {
             // and this frame's world copy, since this frame's walk has already run.
             light_set_position(light, local);
             glm_vec3_copy(at, light->global_position);
+            if (light->type == LIGHT_POINT && fire->kind == FIRE_FLAME)
+                _drive_light_shape(fire, light, node);
             break;
         }
         case LIGHT_AREA: {

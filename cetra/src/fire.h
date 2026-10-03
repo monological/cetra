@@ -229,8 +229,10 @@ typedef struct Fire {
     // world's origin.
     struct SceneNode* node;
     FireParams params;
-    // A light the fire drives, borrowed: its intensity and colour each frame, and a point or
-    // spot's position too. Its type, shadows and range stay the caller's. NULL drives none.
+    // A light the fire drives, borrowed: its intensity and colour each frame, a point or
+    // spot's position too, and a FLAME's point light's body -- its direction, source radius and
+    // source length, from the spine. Its type, shadows and range stay the caller's. NULL drives
+    // none.
     struct Light* light;
     vec3 light_offset; // added to the centroid where a point or spot is placed
     float light_scale; // the light's intensity over what the fire casts; 1 = physical

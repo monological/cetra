@@ -28,11 +28,11 @@ struct PackedLight {
     vec4 dirType;        // xyz = direction (world, UNIT), w = 1 point / 2 spot / 3 area
     vec4 colorIntensity; // xyz = color * intensity (premultiplied on CPU)
     vec4 attenCutoff;    // x = 1/range^2 (0 = unbounded), y = IES profile index
-                         //     (-1 = none), z = a cached light's emitter size (metres),
-                         //     w = cos inner cone
+                         //     (-1 = none), z = reserved, w = cos inner cone
     vec4 shadowMisc;     // x = cos outer cone, y = float(punctual shadow base layer),
                          //     -1 = casts no shadow, SHADOW_TILE_MARK = cached in tiles,
-                         //     zw = emitter/panel size
+                         //     zw = a panel's size, or a cached light's source radius and
+                         //     length (metres, the capsule along dirType.xyz)
     vec4 upArea;         // xyz = roll reference, unit and orthonormal to dir: a panel's
                          //     height axis (spec 9.2), an asymmetric IES profile's
                          //     azimuth zero (spec 11.57); w = a cached light's near plane

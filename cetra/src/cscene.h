@@ -89,7 +89,8 @@ typedef struct CSceneLight {
     float cone[2];     // spot: inner, outer half-angle in DEGREES
     bool cast_shadows; // directional/spot (point/area cannot cast)
     bool shadow_cache; // a point light's shadow drawn once and kept (spec 13.16)
-    float emitter_size;
+    float source_radius;
+    float source_length;
     float shadow_near;
     // IESNA LM-63 photometric profile, resolved against the scene file's own
     // directory like `models` and `environment.hdr`. Inline rather than a

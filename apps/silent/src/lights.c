@@ -161,11 +161,11 @@ static void tube_fixture(Kit* kit, const Tube* t) {
 
 // The bulb: its flex, a black socket, and the frosted glass hanging from it, lit by a point
 // light inside. Its shadow is cached (spec 13.16), with a near plane past the glass it hangs
-// in -- which would otherwise shadow everything -- and softened by the glass's width, which is
-// what glows. The clock's pendulum and hands move every frame, so the faces that see them are
-// drawn again every frame: their shadows swing with them.
-#define BULB_SHADOW_NEAR 0.045f
-#define BULB_GLASS_WIDTH 0.06f
+// in -- which would otherwise shadow everything -- and softened by the glass, which is what
+// glows: a sphere its size. The clock's pendulum and hands move every frame, so the faces that
+// see them are drawn again every frame: their shadows swing with them.
+#define BULB_SHADOW_NEAR  0.045f
+#define BULB_GLASS_RADIUS 0.03f
 static void hall_bulb(Kit* kit, Scene* scene) {
     const float x = BULB_AT[0], y = BULB_AT[1], z = BULB_AT[2];
     kit_frame_pipe(kit, &KIT_WORLD, MAT_BLACK, (vec3[]){{x, CEIL_Y, z}, {x, y + 0.08f, z}}, 2,
@@ -186,7 +186,7 @@ static void hall_bulb(Kit* kit, Scene* scene) {
                       .range = 7.0f,
                       .cast_shadows = true,
                       .shadow_cache = true,
-                      .emitter_size = BULB_GLASS_WIDTH,
+                      .source_radius = BULB_GLASS_RADIUS,
                       .shadow_near = BULB_SHADOW_NEAR};
     scene_add_light(scene, create_light(&desc));
 }

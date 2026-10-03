@@ -124,8 +124,12 @@ typedef struct Light {
     // than every frame (spec 13.16): it and what it lights stand still. Needs a
     // range, which is where its shadow ends.
     bool shadow_cache;
-    float emitter_size; // metres across the emitting body; past 0 its shadow's edges soften
-    float shadow_near;  // metres from the light that nothing nearer casts; 0 = from the range
+    // The emitting body, in metres: a capsule centred on the light, `source_length` long along
+    // `direction` and `source_radius` round -- a bulb is a sphere, a tube a line, a flame both.
+    // What a soft shadow's edge comes from; both 0 is a point, whose shadow is hard.
+    float source_radius;
+    float source_length;
+    float shadow_near; // metres from the light that nothing nearer casts; 0 = from the range
 
     // Index into the scene's IesLibrary, or -1 for none (spec 11.57). An IES
     // profile is the measured angular distribution of a real luminaire and
@@ -166,9 +170,10 @@ typedef struct LightDesc {
     // penumbra; 0 = 50 by 50
     vec2 size;
     bool cast_shadows;
-    bool shadow_cache;  // with cast_shadows, a point light's shadow drawn once and kept
-    float emitter_size; // metres across the emitter; 0 = a hard-edged shadow
-    float shadow_near;  // metres; 0 = derived from the range
+    bool shadow_cache;   // with cast_shadows, a point light's shadow drawn once and kept
+    float source_radius; // the emitting capsule's radius, metres; 0 and 0 = a point
+    float source_length; // its length along `direction`, metres
+    float shadow_near;   // metres; 0 = derived from the range
 } LightDesc;
 
 // NULL means every default: a white directional pointing down, emitting nothing.

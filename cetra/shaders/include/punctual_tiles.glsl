@@ -72,7 +72,7 @@ float tileSoft(vec3 cell, float span, vec3 pc, vec2 duv_dz, float emitter, float
 // Occlusion for light `li` through its cached faces: 1 = lit, 0 = occluded. The same lookup
 // punctualShadow is for a per-frame map -- a 3x3 PCF under the receiver's own plane, faded
 // out at grazing -- with the face found and projected here rather than by a matrix, and a
-// soft edge in place of the 3x3 wherever the light states an emitter size.
+// soft edge in place of the 3x3 wherever the light has a body.
 //
 // The receiver's plane is projected onto the SAME face as the point, never re-chosen per
 // derivative: near a face boundary the two neighbours would otherwise land on different
@@ -104,7 +104,7 @@ float tileShadow(uint li, vec3 worldPos, vec3 N, vec3 L, vec3 ddxWorld, vec3 ddy
     vec3 cell = tileCell(int(clusterLights[li].shadowTile.w) + face, edge);
     float span = float(SHADOW_TILE_SIZE) / float(edge);
 
-    float emitter = clusterLights[li].attenCutoff.z;
+    float emitter = 2.0 * clusterLights[li].shadowMisc.z;
     if (emitter > 0.0) {
         float soft = tileSoft(cell, span, pc, duv_dz, emitter, dot(rel, axis), nearP, farP);
         return mix(1.0, soft, trust);
