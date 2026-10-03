@@ -48,8 +48,12 @@ Light* create_light(const LightDesc* desc) {
                   light->size);
 
     light->cast_shadows = desc->cast_shadows;
+    light->shadow_cache = desc->shadow_cache;
+    light->emitter_size = desc->emitter_size;
+    light->shadow_near = desc->shadow_near;
     light->shadow_map_index = -1;
     light->shadow_layer = -1;
+    light->shadow_tile = -1;
     light->ies_profile = -1; // assigned by whoever loads a profile into the scene
 
     return light;

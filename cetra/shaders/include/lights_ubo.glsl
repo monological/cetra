@@ -34,6 +34,8 @@ struct PackedLight {
     vec4 upArea;         // xyz = roll reference, unit and orthonormal to dir: a panel's
                          //     height axis (spec 9.2), an asymmetric IES profile's
                          //     azimuth zero (spec 11.57)
+    vec4 shadowTile;     // xyz = where a cached light's faces were drawn from (world),
+                         //     w = float(its first tile), -1 = none (spec 13.16)
 };
 
 layout(std140) uniform LightsBlock {

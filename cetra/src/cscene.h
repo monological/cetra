@@ -88,6 +88,9 @@ typedef struct CSceneLight {
     float range;       // point/spot cull radius (else derived from attenuation)
     float cone[2];     // spot: inner, outer half-angle in DEGREES
     bool cast_shadows; // directional/spot (point/area cannot cast)
+    bool shadow_cache; // a point light's shadow drawn once and kept (spec 13.16)
+    float emitter_size;
+    float shadow_near;
     // IESNA LM-63 photometric profile, resolved against the scene file's own
     // directory like `models` and `environment.hdr`. Inline rather than a
     // pointer because cscene_free is a bare free(desc) and the struct must stay

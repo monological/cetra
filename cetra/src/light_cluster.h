@@ -63,6 +63,8 @@ typedef struct GpuPackedLight {
     // Roll reference, unit and orthonormal to dir: a panel's height axis
     // (spec 9.2), an asymmetric IES profile's azimuth zero (spec 11.57).
     float up_area[4];
+    // Where a cached light's faces were drawn from, and its first tile (-1 = none).
+    float shadow_tile[4];
 } GpuPackedLight;
 
 typedef struct GpuLightsBlock {

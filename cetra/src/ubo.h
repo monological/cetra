@@ -42,7 +42,7 @@
 // GL_UNIFORM_BLOCK_DATA_SIZE by ubo_validate_program_block. None over the
 // GL 4.1 guaranteed GL_MAX_UNIFORM_BLOCK_SIZE minimum of 16384; the index pool
 // is exactly that.
-#define UBO_LIGHTS_BLOCK_SIZE          12512
+#define UBO_LIGHTS_BLOCK_SIZE          14560
 #define UBO_CLUSTERS_BLOCK_SIZE        12288
 #define UBO_CLUSTER_INDICES_BLOCK_SIZE 16384
 // Four floats, rounded up to std140's 16-byte block granularity.

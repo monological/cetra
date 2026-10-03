@@ -372,6 +372,9 @@ static void parse_lights(CetraSceneDesc* d, const cJSON* root) {
 
         // Optional everywhere they apply: absent = keep the engine default.
         get_bool(l, "cast_shadows", &out->cast_shadows);
+        get_bool(l, "shadow_cache", &out->shadow_cache);
+        get_float(l, "emitter_size", &out->emitter_size);
+        get_float(l, "shadow_near", &out->shadow_near);
         out->has_attenuation = get_floats(l, "attenuation", out->attenuation, 3);
         // The constant/linear/quadratic triple is the fixed-function falloff and
         // no longer reaches the shader: punctual lights are inverse-square,
@@ -416,9 +419,10 @@ static void parse_lights(CetraSceneDesc* d, const cJSON* root) {
         // has already been reported by name, and warning twice about the same
         // entry reads as two problems.
         static const char* const known[] = {
-            "name",           "type",      "position",     "color",       "intensity",
-            "intensity_unit", "direction", "cast_shadows", "attenuation", "range",
-            "size",           "up",        "cone",         "profile"};
+            "name",           "type",       "position",     "color",       "intensity",
+            "intensity_unit", "direction",  "cast_shadows", "attenuation", "range",
+            "size",           "up",         "cone",         "profile",     "shadow_cache",
+            "emitter_size",   "shadow_near"};
         warn_unknown_keys(l, known, sizeof(known) / sizeof(known[0]), "light");
         d->light_count++;
     }
