@@ -5,6 +5,7 @@
 #include <cglm/cglm.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #include "program.h"
 
@@ -56,6 +57,18 @@ _Static_assert(SHADOW_TILE_MARK >= MAX_PUNCTUAL_SHADOW_LAYERS,
 // array's edge is. The minimum edge, so it always fits and never changes with the
 // light count -- cover known at 9.4 cm over the default 96 m.
 #define RAIN_OCCLUSION_SIZE PUNCTUAL_SHADOW_MIN_SIZE
+// Cached point-light shadows (spec 13.16): six faces a light, each a SHADOW_TILE_SIZE tile
+// in layers of the punctual array past the per-frame ones and the rain's. A budget of its
+// own, because a tile is drawn once and kept: what it costs is memory, never a traversal,
+// which is the pool's whole limit. The tiles it affords, and the lights at six each.
+#define PUNCTUAL_TILE_VRAM_BUDGET (64u * 1024u * 1024u)
+#define SHADOW_TILE_MAX_CELLS \
+    (PUNCTUAL_TILE_VRAM_BUDGET / (SHADOW_TILE_SIZE * SHADOW_TILE_SIZE * 4u))
+#define SHADOW_TILE_MAX_BLOCKS (SHADOW_TILE_MAX_CELLS / 6u)
+// The most layers the tiles can take, which is the budget at the smallest edge; a larger
+// edge holds the same tiles in fewer.
+#define PUNCTUAL_TILE_MAX_LAYERS \
+    (PUNCTUAL_TILE_VRAM_BUDGET / (PUNCTUAL_SHADOW_MIN_SIZE * PUNCTUAL_SHADOW_MIN_SIZE * 4u))
 // Moment shadow maps (spec 11.22). Half the cascade edge, deliberately: the
 // whole claim of a filterable representation is that it survives being
 // averaged, so it does not need the depth array's texel density. The fog's ESM
@@ -162,6 +175,19 @@ _Static_assert(SHADOW_TILE_MARK >= MAX_PUNCTUAL_SHADOW_LAYERS,
 // Forward declarations
 struct Scene;
 struct Engine;
+struct Light;
+
+// One cached light's six faces: block b owns six consecutive tiles of the region, in the
+// +X -X +Y -Y +Z -Z order a point light's per-frame layers take. What it records is what
+// the tiles hold, so the pass can tell a face it may keep from one it must draw again.
+typedef struct ShadowTileBlock {
+    struct Light* light; // NULL = free; published to when whole
+    vec3 origin;         // where the faces were drawn from
+    float near_plane;
+    float far_plane;
+    unsigned generation; // the region's when drawn; any other means the tiles were lost
+    uint8_t valid;       // faces drawn, one bit each
+} ShadowTileBlock;
 
 typedef struct ShadowSystem {
     // SETTINGS throughout, in feature order, except:
@@ -303,6 +329,23 @@ typedef struct ShadowSystem {
     bool rain_ask_issued_valid[SHADOW_RAIN_ASK_LATENCY];  // false = off the map: open sky
     unsigned rain_ask_passes; // passes since the ring last started; past the latency, answered
     float rain_ask_open;      // 1 = rain reaches it, 0 = covered
+
+    // Cached point-light shadows (spec 13.16), in tiles of the punctual array.
+    int tile_fill_budget; // faces drawn a frame while filling; 0 = every face that wants it
+    float tile_tolerance; // metres a light may move from where its faces were drawn
+    bool tile_refresh;    // redraw every face every frame: what a kept face must equal
+    // ENGINE-OWNED. The region starts at tile_base_layer and runs tile_layers; both only
+    // grow, since moving either moves every tile. tile_generation counts the times its
+    // contents were lost -- an array rebuilt, the base moved -- and a block drawn under
+    // another generation holds nothing.
+    int tile_base_layer;
+    int tile_layers;
+    unsigned tile_generation;
+    ShadowTileBlock tile_blocks[SHADOW_TILE_MAX_BLOCKS];
+    int tile_block_count;  // blocks in use or freed, so the high-water mark of the region
+    int tile_faces_drawn;  // this frame
+    bool tile_full_warned; // latches, as the pool's does
+    bool tile_range_warned;
 
     // Moment shadow maps (spec 11.22): a filterable RGBA16F copy of the depth
     // cascades, resolved after the depth pass and read in ONE tap where the
@@ -481,6 +524,20 @@ bool shadow_rain_cover_answer(const ShadowSystem* ss, float* open);
 // frame that rendered one.
 void shadow_rain_probe(const ShadowSystem* system, const vec3* points, int count,
                        const char* image_path);
+
+// A cached face's light-space matrix: from `origin` down face `face` (+X -X +Y -Y +Z -Z),
+// across the face's 90 degrees plus the guard band each side, over [near, far].
+void shadow_tile_face_matrix(const vec3 origin, int face, float near_plane, float far_plane,
+                             mat4 dest);
+
+// --tiles-probe: the tile region and every cached light's block, one line each, after the
+// frame that drew them.
+void shadow_tiles_probe(const ShadowSystem* system, const struct Scene* scene);
+
+// A cached light's six faces as one greyscale PPM, three across and two down in face order,
+// grey by distance over its range and white where nothing was drawn. Reads the tiles back,
+// so it needs the GL context. False, named, when the light has no complete block.
+bool shadow_tiles_map(const ShadowSystem* system, const struct Light* light, const char* path);
 
 struct PostFX;
 

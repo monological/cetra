@@ -98,10 +98,10 @@ static void free_tsm_resources(ShadowSystem* system) {
     system->tsm_built = false;
 }
 
-// Point the FBO at one layer and clear it for a depth-only pass. False means
-// nothing was bound, so the caller must not draw -- the FBO is back to 0 and
-// drawing would land in the default framebuffer.
-static bool begin_depth_layer(GLuint fbo, GLuint tex, int layer, int size) {
+// Point the FBO at one layer. False means nothing was bound, so the caller must
+// not draw -- the FBO is back to 0 and drawing would land in the default
+// framebuffer.
+static bool bind_depth_layer(GLuint fbo, GLuint tex, int layer) {
     glBindFramebuffer(GL_FRAMEBUFFER, fbo);
     glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, tex, 0, layer);
 
@@ -111,10 +111,33 @@ static bool begin_depth_layer(GLuint fbo, GLuint tex, int layer, int size) {
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         return false;
     }
+    return true;
+}
 
+// Bind one layer and clear it for a depth-only pass.
+static bool begin_depth_layer(GLuint fbo, GLuint tex, int layer, int size) {
+    if (!bind_depth_layer(fbo, tex, layer))
+        return false;
     glViewport(0, 0, size, size);
     glClear(GL_DEPTH_BUFFER_BIT);
     return true;
+}
+
+// Bind one tile of a layer and clear that tile alone, which takes the scissor: a clear
+// ignores the viewport, so without it a tile's clear wipes every tile beside it. Leaves
+// the scissor on for the draw; end_depth_tile turns it off.
+static bool begin_depth_tile(GLuint fbo, GLuint tex, int layer, int x, int y) {
+    if (!bind_depth_layer(fbo, tex, layer))
+        return false;
+    glEnable(GL_SCISSOR_TEST);
+    glScissor(x, y, SHADOW_TILE_SIZE, SHADOW_TILE_SIZE);
+    glViewport(x, y, SHADOW_TILE_SIZE, SHADOW_TILE_SIZE);
+    glClear(GL_DEPTH_BUFFER_BIT);
+    return true;
+}
+
+static void end_depth_tile(void) {
+    glDisable(GL_SCISSOR_TEST);
 }
 
 ShadowSystem* create_shadow_system(int default_map_size) {
@@ -160,6 +183,10 @@ ShadowSystem* create_shadow_system(int default_map_size) {
     system->rain_layer = -1;
     glm_mat4_identity(system->rain_matrix);
     glm_mat4_identity(system->rain_lookup);
+    // Past three times the furthest a candle flame's centroid was measured moving from its
+    // mean (about a centimetre, mostly up and down), so a flicker never redraws a face and a
+    // light carried across a room does.
+    system->tile_tolerance = 0.05f;
 
     system->shadow_bias = 0.005f;
 
@@ -236,6 +263,11 @@ static int punctual_size_for(int layers) {
     return PUNCTUAL_SHADOW_MIN_SIZE;
 }
 
+// The edge the punctual array is built at for `light_layers` per-frame layers.
+static int punctual_edge_for(int light_layers) {
+    return light_layers > 0 ? punctual_size_for(light_layers) : PUNCTUAL_SHADOW_MIN_SIZE;
+}
+
 // Grow the punctual array to hold `layers` maps, `light_layers` of them the
 // lights'. Demand-driven, like the cascade array: a spot-only scene builds one
 // layer rather than the pool ceiling, since every allocated layer is a scene
@@ -250,11 +282,14 @@ static int punctual_size_for(int layers) {
 // corner, so letting it count would halve a lone spot's resolution the moment it
 // started raining; with no light layers at all the edge is the minimum, which is
 // all the rain's corner needs.
+//
+// The cached tiles (spec 13.16) ride past both and do not count toward the edge either: a
+// tile is the same size at any edge, so the edge decides only how many fit in a layer.
 static int init_punctual_shadow_array(ShadowSystem* system, int layers, int light_layers) {
-    if (layers < 1 || layers > PUNCTUAL_ARRAY_LAYERS)
+    if (layers < 1 || layers > PUNCTUAL_ARRAY_LAYERS + (int)PUNCTUAL_TILE_MAX_LAYERS)
         return -1;
 
-    int size = light_layers > 0 ? punctual_size_for(light_layers) : PUNCTUAL_SHADOW_MIN_SIZE;
+    int size = punctual_edge_for(light_layers);
     if (system->punctual_map_array && system->punctual_allocated_layers >= layers &&
         system->punctual_map_size == size)
         return 0;
@@ -263,10 +298,13 @@ static int init_punctual_shadow_array(ShadowSystem* system, int layers, int ligh
     init_depth_array(&system->punctual_map_array, &system->punctual_fbo, size, layers);
     system->punctual_allocated_layers = layers;
     system->punctual_map_size = size;
-    // Both costs, stated rather than assumed: the traversals (every layer is
+    // Every kept tile went with the old texture.
+    system->tile_generation++;
+    // Both costs, stated rather than assumed: the traversals (every light layer is
     // re-rendered each frame) and the VRAM the budget just spent.
-    log_info("Punctual shadow array: %d layer(s) at %d^2 (%.0f MB) -- %d scene traversal(s)/frame",
-             layers, size, (double)layers * size * size * 4.0 / (1024.0 * 1024.0), layers);
+    log_info("Punctual shadow array: %d layer(s) at %d^2 (%.0f MB) -- %d light layer(s) redrawn "
+             "every frame",
+             layers, size, (double)layers * size * size * 4.0 / (1024.0 * 1024.0), light_layers);
     return 0;
 }
 
@@ -278,9 +316,11 @@ static int rain_layer_index(const ShadowSystem* system) {
 
 // The punctual array's capacity this frame, which the shadow pass and the rain pass both ask
 // for. Two counts would rebuild the array between the passes on every frame it rains, wiping
-// the lights' maps.
+// the lights' maps -- and every kept tile with them.
 static int punctual_capacity(const ShadowSystem* system, const Scene* scene) {
-    return rain_layer_index(system) + (rain_active(scene->rain) ? 1 : 0);
+    const int lights_and_rain = rain_layer_index(system) + (rain_active(scene->rain) ? 1 : 0);
+    const int tiles = system->tile_layers > 0 ? system->tile_base_layer + system->tile_layers : 0;
+    return tiles > lights_and_rain ? tiles : lights_and_rain;
 }
 
 static bool begin_punctual_shadow_pass(ShadowSystem* system, int layer) {
@@ -634,11 +674,16 @@ void bind_shadow_maps_to_program(ShadowSystem* system, ShaderProgram* program) {
 // says what casts for light, and the rain lands on the surfaces the camera sees,
 // not on shapes standing in for them. The cover spans the street, so stand-ins
 // cut small for a light's reach would only be more draws to it.
+// KEPT is a cached face's (spec 13.16): OPAQUE without anything whose surface moves
+// under its node -- a skinned, swaying or morphing mesh -- since a face drawn once
+// would hold that surface wherever it was on that frame, and at level 0 for the same
+// reason, since the camera's level is wherever the camera was.
 typedef enum ShadowCasterSet {
     SHADOW_CASTERS_OPAQUE = 0,
     SHADOW_CASTERS_OPAQUE_TSM,
     SHADOW_CASTERS_TRANSLUCENT,
     SHADOW_CASTERS_RAIN,
+    SHADOW_CASTERS_KEPT,
 } ShadowCasterSet;
 
 // Everything about a caster that its MATERIAL decides, for whichever of the two
@@ -687,6 +732,8 @@ static void _upload_shadow_material(UniformManager* u, const Material* mat, bool
 // cards are centimetres across and an alpha test resolves them.
 static bool caster_set_wants(ShadowCasterSet set, uint8_t lane, uint8_t flags) {
     if (set == SHADOW_CASTERS_RAIN ? lane == DRAW_LANE_SHADOW_ONLY : (flags & DRAW_NO_CAST) != 0)
+        return false;
+    if (set == SHADOW_CASTERS_KEPT && !(flags & DRAW_STILL))
         return false;
     bool masked_only = (flags & DRAW_ALPHA_MASKED) && !(flags & DRAW_FOLIAGE);
     // What a transmittance map represents instead of a depth map: geometry that
@@ -971,8 +1018,12 @@ static void _draw_shadow_items(ShadowSystem* ss, const DrawList* list, ShaderPro
             // come out as its square root, and which meshes were affected
             // would depend on scene-graph order.
             bool two_sided = (item->flags & DRAW_DOUBLE_SIDED) && set != SHADOW_CASTERS_TRANSLUCENT;
-            // The camera's level, not one chosen for this light: see DrawItem.
-            submit_draw_run(state, u, item, run, two_sided, stats);
+            // The camera's level, not one chosen for this light: see DrawItem. A kept
+            // face takes level 0, since the camera's is wherever the camera was.
+            DrawItem level0 = *item;
+            level0.lod = 0;
+            submit_draw_run(state, u, set == SHADOW_CASTERS_KEPT ? &level0 : item, run, two_sided,
+                            stats);
             pos += run - 1;
         }
     }
@@ -1102,6 +1153,199 @@ static void draw_shadow_layer(ShadowSystem* ss, const Scene* scene, const DrawLi
     CullView cull = render_cull_view(engine, scene, &layer_frustum);
     _draw_shadow_items(ss, list, ss->depth_program, state, set, &cull, engine);
     end_shadow_pass(ss);
+}
+
+/*
+ * Cached point-light shadows (spec 13.16).
+ *
+ * A cached light's six faces are tiles of the punctual array past the per-frame layers and
+ * the rain's, each drawn once from where the light was and kept until something says it is
+ * wrong: the light moved past tile_tolerance, its planes changed, or the region lost its
+ * contents (tile_generation). Cells count from layer 0 across the whole array, row-major
+ * within a layer, so a light's first cell is the one number its lookup needs. The edge
+ * decides only how many tiles fit in a layer: a tile is the same size at any edge, so what
+ * it holds never depends on how many per-frame lights the scene has.
+ */
+
+// Whether a light's shadow goes in tiles rather than the per-frame pool. Its range is where
+// its faces end, so a cached light with none stays in the pool.
+static bool light_takes_tiles(const Light* light) {
+    return light->cast_shadows && light->shadow_cache && light->type == LIGHT_POINT &&
+           light->range > 0.0f;
+}
+
+static int tiles_per_layer(int edge) {
+    const int per_row = edge / SHADOW_TILE_SIZE;
+    return per_row * per_row;
+}
+
+// Where a cell is: its layer, and its corner in texels.
+static void tile_cell_at(int cell, int edge, int* layer, int* x, int* y) {
+    const int per_row = edge / SHADOW_TILE_SIZE;
+    const int within = cell % (per_row * per_row);
+    *layer = cell / (per_row * per_row);
+    *x = (within % per_row) * SHADOW_TILE_SIZE;
+    *y = (within / per_row) * SHADOW_TILE_SIZE;
+}
+
+static int tile_block_first_cell(const ShadowSystem* ss, int edge, int block) {
+    return ss->tile_base_layer * tiles_per_layer(edge) + 6 * block;
+}
+
+// A cached light's planes: the far is its range, the near what it states or a fraction of
+// the range.
+static void tile_planes(const Light* light, float* near_plane, float* far_plane) {
+    *far_plane = light->range;
+    *near_plane = light->shadow_near > 0.0f && light->shadow_near < light->range
+                      ? light->shadow_near
+                      : SHADOW_TILE_NEAR_RATIO * light->range;
+}
+
+void shadow_tile_face_matrix(const vec3 origin, int face, float near_plane, float far_plane,
+                             mat4 dest) {
+    // The field of view that lays the face's 90 degrees across the tile less its guard band
+    // each side: tan(half) = size / (size - 2 guard).
+    const float fov =
+        2.0f * atanf((float)SHADOW_TILE_SIZE / (float)(SHADOW_TILE_SIZE - 2 * SHADOW_TILE_GUARD));
+    compute_perspective_light_space(origin, PUNCTUAL_CUBE_DIR[face], fov, near_plane, far_plane,
+                                    dest);
+}
+
+static int tile_block_of(const ShadowSystem* ss, const Light* light) {
+    for (int b = 0; b < ss->tile_block_count; ++b) {
+        if (ss->tile_blocks[b].light == light)
+            return b;
+    }
+    return -1;
+}
+
+// Give every cached light a block and free the blocks of lights no longer cached. A light
+// keeps its block by identity from frame to frame, which is what lets its faces be kept.
+// Returns how many lights hold one.
+static int tiles_reconcile(ShadowSystem* ss, const Scene* scene) {
+    bool held[SHADOW_TILE_MAX_BLOCKS] = {false};
+    const Light* full = NULL;
+    int count = 0;
+    for (size_t i = 0; i < scene->light_count; ++i) {
+        Light* light = scene->lights[i];
+        if (!light || !light_takes_tiles(light))
+            continue;
+        int b = tile_block_of(ss, light);
+        for (int f = 0; b < 0 && f < (int)SHADOW_TILE_MAX_BLOCKS; ++f) {
+            if (!ss->tile_blocks[f].light) {
+                b = f;
+                ss->tile_blocks[b] = (ShadowTileBlock){.light = light};
+                if (b >= ss->tile_block_count)
+                    ss->tile_block_count = b + 1;
+            }
+        }
+        if (b < 0) {
+            if (!full)
+                full = light;
+            continue;
+        }
+        held[b] = true;
+        count++;
+    }
+    for (int b = 0; b < ss->tile_block_count; ++b) {
+        if (!held[b])
+            ss->tile_blocks[b] = (ShadowTileBlock){0};
+    }
+    if (full && !ss->tile_full_warned) {
+        log_warn("Cached shadow tiles full (%u lights in %u MB): '%s' and any further cached "
+                 "light will not cast",
+                 (unsigned)SHADOW_TILE_MAX_BLOCKS, PUNCTUAL_TILE_VRAM_BUDGET / (1024u * 1024u),
+                 full->name ? full->name : "unnamed light");
+    }
+    ss->tile_full_warned = full != NULL;
+    return count;
+}
+
+// Lay the region out for the edge the array is about to be built at: its base past every
+// per-frame layer and the rain's, and layers enough for every block. Moving the base moves
+// every tile, which loses them as surely as a rebuild does, so it only ever rises -- but it
+// leaves room for the rain only once it has rained, since at the largest edge a layer held
+// for rain that never falls is 64 MB of nothing.
+static void tiles_layout(ShadowSystem* ss, const Scene* scene, int light_layers) {
+    const int base = light_layers + (rain_active(scene->rain) ? 1 : 0);
+    if (base > ss->tile_base_layer) {
+        ss->tile_base_layer = base;
+        ss->tile_generation++;
+    }
+    const int per_layer = tiles_per_layer(punctual_edge_for(light_layers));
+    ss->tile_layers = (6 * ss->tile_block_count + per_layer - 1) / per_layer;
+}
+
+// Draw what the cached lights' blocks are missing, nearest the camera first so a fill
+// budget is spent where it shows, then publish the blocks that are whole. A light is not
+// drawn until it emits: a candle's light sits at the wick until its flame has burned a
+// frame, and a face drawn from there is a face drawn from the wrong place.
+static void render_shadow_tiles(ShadowSystem* ss, const Engine* engine, const Scene* scene,
+                                SubmitState* state) {
+    const int edge = ss->punctual_map_size;
+    const vec3 origin = GLM_VEC3_ZERO_INIT;
+    const float* eye = engine->camera ? engine->camera->position : origin;
+    int order[SHADOW_TILE_MAX_BLOCKS];
+    float near_d[SHADOW_TILE_MAX_BLOCKS];
+    int pending = 0;
+
+    for (int b = 0; b < ss->tile_block_count; ++b) {
+        ShadowTileBlock* block = &ss->tile_blocks[b];
+        if (!block->light)
+            continue;
+        float near_p, far_p;
+        tile_planes(block->light, &near_p, &far_p);
+        if (ss->tile_refresh || block->generation != ss->tile_generation ||
+            block->near_plane != near_p || block->far_plane != far_p ||
+            glm_vec3_distance(block->origin, block->light->global_position) > ss->tile_tolerance)
+            block->valid = 0;
+        if (block->valid == 0x3F || !(block->light->intensity > 0.0f))
+            continue;
+        // Insertion, by distance: there are at most a few dozen.
+        const float d = glm_vec3_distance(block->light->global_position, (float*)eye);
+        int k = pending++;
+        for (; k > 0 && near_d[k - 1] > d; --k) {
+            order[k] = order[k - 1];
+            near_d[k] = near_d[k - 1];
+        }
+        order[k] = b;
+        near_d[k] = d;
+    }
+
+    const int budget = ss->tile_fill_budget > 0 ? ss->tile_fill_budget : 6 * pending;
+    for (int k = 0; k < pending && ss->tile_faces_drawn < budget; ++k) {
+        ShadowTileBlock* block = &ss->tile_blocks[order[k]];
+        if (block->valid == 0) {
+            glm_vec3_copy(block->light->global_position, block->origin);
+            tile_planes(block->light, &block->near_plane, &block->far_plane);
+            block->generation = ss->tile_generation;
+        }
+        const int first = tile_block_first_cell(ss, edge, order[k]);
+        for (int f = 0; f < 6 && ss->tile_faces_drawn < budget; ++f) {
+            if (block->valid & (1u << f))
+                continue;
+            int layer, x, y;
+            tile_cell_at(first + f, edge, &layer, &x, &y);
+            if (layer >= ss->punctual_allocated_layers ||
+                !begin_depth_tile(ss->punctual_fbo, ss->punctual_map_array, layer, x, y))
+                continue;
+            mat4 matrix = GLM_MAT4_IDENTITY_INIT;
+            shadow_tile_face_matrix(block->origin, f, block->near_plane, block->far_plane, matrix);
+            draw_shadow_layer(ss, scene, scene->draw_list, matrix, state, SHADOW_CASTERS_KEPT,
+                              engine);
+            end_depth_tile();
+            block->valid |= (uint8_t)(1u << f);
+            ss->tile_faces_drawn++;
+        }
+    }
+
+    for (int b = 0; b < ss->tile_block_count; ++b) {
+        ShadowTileBlock* block = &ss->tile_blocks[b];
+        if (!block->light || block->valid != 0x3F)
+            continue;
+        block->light->shadow_tile = tile_block_first_cell(ss, edge, b);
+        glm_vec3_copy(block->origin, block->light->shadow_origin);
+    }
 }
 
 // One layer, three passes: depth -> moments into msm_array, then blur
@@ -1522,9 +1766,11 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     // reading occlusion alone rather than an array that was never filled.
     ss->tsm_built = false;
     ss->tsm_live = false;
+    ss->tile_faces_drawn = 0;
     int punctual_needed = 0;
     const Light* pool_overflow = NULL;
     const Light* dir_overflow = NULL;
+    const Light* rangeless = NULL;
 
     for (size_t i = 0; i < scene->light_count; ++i) {
         Light* light = scene->lights[i];
@@ -1532,8 +1778,11 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
             continue;
         light->shadow_map_index = -1;
         light->shadow_layer = -1;
-        if (!light->cast_shadows)
+        light->shadow_tile = -1;
+        if (!light->cast_shadows || light_takes_tiles(light))
             continue;
+        if (light->shadow_cache && light->type == LIGHT_POINT && !rangeless)
+            rangeless = light;
 
         if (light->type == LIGHT_DIRECTIONAL) {
             if (ss->directional_count < MAX_SHADOW_LIGHTS)
@@ -1581,6 +1830,18 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     }
     ss->dir_slot_warned = dir_overflow != NULL;
 
+    // A cached light with no range has no far plane for its faces, so it is drawn into the
+    // pool every frame instead -- which still casts, and costs six traversals a frame.
+    if (rangeless && !ss->tile_range_warned) {
+        log_warn("'%s' asks for a cached shadow and has no range; drawn every frame instead",
+                 rangeless->name ? rangeless->name : "unnamed light");
+    }
+    ss->tile_range_warned = rangeless != NULL;
+
+    const int tiled = tiles_reconcile(ss, scene);
+    if (ss->tile_block_count > 0)
+        tiles_layout(ss, scene, punctual_needed);
+
     // Clamp the runtime count into the compile-time ceiling: the splits and
     // matrix arrays are sized by SHADOW_CASCADES and the count is writable
     // from the GUI. Cascade fitting needs the camera; without one, fall
@@ -1618,7 +1879,7 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
 
     // Early exit if nothing casts - but the array texture is already initialized.
     // A punctual caster keeps the pass alive even with no directional casters.
-    if (ss->directional_count == 0 && punctual_needed == 0)
+    if (ss->directional_count == 0 && punctual_needed == 0 && tiled == 0)
         return;
 
     // Now get the depth program for shadow rendering
@@ -1808,8 +2069,10 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     // Punctual maps (for surface shadows + the volumetric beam), one layer per
     // caster. Reuses the allocation (a no-op once it is large enough), the
     // bound depth program, and the depth policy set above.
-    if (punctual_needed > 0 &&
-        init_punctual_shadow_array(ss, punctual_capacity(ss, scene), punctual_needed) == 0) {
+    const bool punctual_ready =
+        (punctual_needed > 0 || tiled > 0) &&
+        init_punctual_shadow_array(ss, punctual_capacity(ss, scene), punctual_needed) == 0;
+    if (punctual_ready && punctual_needed > 0) {
         profiler_scope_begin(engine->profiler, "shadow punctual");
         for (size_t i = 0; i < scene->light_count; ++i) {
             Light* light = scene->lights[i];
@@ -1837,6 +2100,13 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
                 ss->punctual_layer_count = layer + 1;
             }
         }
+        profiler_scope_end(engine->profiler);
+    }
+
+    // The cached lights' tiles, under the same program and depth policy.
+    if (punctual_ready && tiled > 0) {
+        profiler_scope_begin(engine->profiler, "shadow tiles");
+        render_shadow_tiles(ss, engine, scene, &state);
         profiler_scope_end(engine->profiler);
     }
 
@@ -2120,6 +2390,93 @@ void shadow_rain_probe(const ShadowSystem* ss, const vec3* points, int count,
     if (image_path)
         _write_rain_map(depth, n, image_path);
     free(depth);
+}
+
+void shadow_tiles_probe(const ShadowSystem* ss, const Scene* scene) {
+    if (!ss || !scene) {
+        printf("tiles-probe present=0\n");
+        return;
+    }
+    const int edge = ss->punctual_map_size;
+    printf("tiles-probe region base=%d layers=%d edge=%d per_layer=%d allocated=%d "
+           "generation=%u blocks=%d faces_drawn=%d\n",
+           ss->tile_base_layer, ss->tile_layers, edge, edge > 0 ? tiles_per_layer(edge) : 0,
+           ss->punctual_allocated_layers, ss->tile_generation, ss->tile_block_count,
+           ss->tile_faces_drawn);
+    for (int b = 0; b < ss->tile_block_count; ++b) {
+        const ShadowTileBlock* block = &ss->tile_blocks[b];
+        if (!block->light)
+            continue;
+        const Light* light = block->light;
+        printf("tiles-probe block=%d light=%s first=%d valid=0x%02x published=%d "
+               "origin=%.9g,%.9g,%.9g drift=%.9g near=%.9g far=%.9g current=%d",
+               b, light->name ? light->name : "unnamed", tile_block_first_cell(ss, edge, b),
+               block->valid, light->shadow_tile, (double)block->origin[0], (double)block->origin[1],
+               (double)block->origin[2],
+               (double)glm_vec3_distance((float*)block->origin, (float*)light->global_position),
+               (double)block->near_plane, (double)block->far_plane,
+               block->generation == ss->tile_generation ? 1 : 0);
+        for (int f = 0; f < 6 && edge > 0; ++f) {
+            int layer, x, y;
+            tile_cell_at(tile_block_first_cell(ss, edge, b) + f, edge, &layer, &x, &y);
+            printf(" face%d=%d:%d:%d", f, layer, x, y);
+        }
+        printf("\n");
+    }
+}
+
+bool shadow_tiles_map(const ShadowSystem* ss, const Light* light, const char* path) {
+    const int b = ss && light ? tile_block_of(ss, light) : -1;
+    if (b < 0 || !ss->punctual_map_array || ss->tile_blocks[b].valid != 0x3F) {
+        log_warn("tile-map: '%s' has no complete block of cached faces",
+                 light && light->name ? light->name : "(none)");
+        return false;
+    }
+    const ShadowTileBlock* block = &ss->tile_blocks[b];
+    const int n = SHADOW_TILE_SIZE;
+    float* depth = malloc(6u * (size_t)n * (size_t)n * sizeof(float));
+    if (!depth)
+        return false;
+    const int edge = ss->punctual_map_size;
+    glBindFramebuffer(GL_FRAMEBUFFER, ss->punctual_fbo);
+    for (int f = 0; f < 6; ++f) {
+        int layer, x, y;
+        tile_cell_at(tile_block_first_cell(ss, edge, b) + f, edge, &layer, &x, &y);
+        glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, ss->punctual_map_array, 0,
+                                  layer);
+        glReadPixels(x, y, n, n, GL_DEPTH_COMPONENT, GL_FLOAT, depth + (size_t)f * n * n);
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    FILE* out = fopen(path, "wb");
+    if (!out) {
+        log_warn("tile-map: cannot write '%s'", path);
+        free(depth);
+        return false;
+    }
+    // Grey by metres along the face's axis, which a perspective depth is not: linearised
+    // through the block's own planes, so the six read on one scale.
+    const float np = block->near_plane, fp = block->far_plane;
+    fprintf(out, "P6\n%d %d\n255\n", 3 * n, 2 * n);
+    for (int row = 0; row < 2; ++row) {
+        for (int y = n - 1; y >= 0; --y) { // GL rows run bottom-up
+            for (int col = 0; col < 3; ++col) {
+                const float* face = depth + (size_t)(row * 3 + col) * n * n;
+                for (int x = 0; x < n; ++x) {
+                    const float d = face[y * n + x];
+                    const float z_ndc = 2.0f * d - 1.0f;
+                    const float dist = 2.0f * np * fp / (fp + np - z_ndc * (fp - np));
+                    const unsigned char g =
+                        d >= 1.0f ? 255 : (unsigned char)(40.0f + 200.0f * fminf(dist / fp, 1.0f));
+                    const unsigned char px[3] = {g, g, g};
+                    fwrite(px, 1, 3, out);
+                }
+            }
+        }
+    }
+    fclose(out);
+    free(depth);
+    return true;
 }
 
 // Flatten this frame's shadow casters + their lights into postfx's fog block.

@@ -167,9 +167,13 @@ typedef struct {
     float rain_ask[3];
     int rain_ask_set;
     const char* rain_map_path; // --rain-map: the occlusion map as a greyscale PPM
-    int no_fire;               // Drop the fires a scene file asked for (spec 13.14)
-    int fire_probe;            // Print the blackbody ladder, every fire's state and grid
-    float fire_warmup;         // FireSystem.warmup; negative = keep the scene file's
+    int tiles_probe;           // Print the cached shadow tiles' region and blocks (spec 13.16)
+    // --tile-map: one cached light's six faces as a greyscale PPM
+    const char* tile_map_light;
+    const char* tile_map_path;
+    int no_fire;       // Drop the fires a scene file asked for (spec 13.14)
+    int fire_probe;    // Print the blackbody ladder, every fire's state and grid
+    float fire_warmup; // FireSystem.warmup; negative = keep the scene file's
     // --fire-slice: draw one slice of a GRID fire's field into the frame's corner, as
     // FireSystem's debug_field (-1 = off), debug_slice and debug_fire.
     int fire_slice_field;
