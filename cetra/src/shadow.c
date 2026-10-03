@@ -303,6 +303,7 @@ static int punctual_edge_for(int light_layers) {
 // The cached tiles (spec 13.16) ride past both and do not count toward the edge either: a
 // tile is the same size at any edge, so the edge decides only how many fit in a layer.
 static void tiles_migrate(ShadowSystem* ss, GLuint old_tex, GLuint old_fbo, int old_edge);
+static void rain_migrate(ShadowSystem* ss, GLuint old_tex, GLuint old_fbo, int old_edge);
 static int tile_reference_count(const ShadowSystem* ss);
 static int tile_shading_views(const ShadowSystem* ss);
 
@@ -330,6 +331,7 @@ static int init_punctual_shadow_array(ShadowSystem* system, int layers, int ligh
     system->punctual_allocated_layers = layers;
     system->punctual_map_size = size;
     tiles_migrate(system, old_tex, old_fbo, old_size);
+    rain_migrate(system, old_tex, old_fbo, old_size);
     free_depth_array(&old_tex, &old_fbo);
     system->tile_held_base = system->tile_base_layer;
     // Both costs, stated rather than assumed: the traversals (every light layer is
@@ -344,6 +346,49 @@ static int init_punctual_shadow_array(ShadowSystem* system, int layers, int ligh
 // holds one.
 static int rain_layer_index(const ShadowSystem* system) {
     return system->enabled ? system->punctual_light_layers : 0;
+}
+
+// The rain's map fills the corner of its layer, so a lookup's [0,1] has to land in [0,k] of an
+// array k times the map's edge: NDC x -> k x + (k - 1), and the same in y; depth is untouched.
+// Folds rain_matrix into rain_lookup for the array's edge as it is, and returns k.
+static float rain_fold_lookup(ShadowSystem* ss) {
+    const float k = (float)RAIN_OCCLUSION_SIZE / (float)ss->punctual_map_size;
+    mat4 corner = GLM_MAT4_IDENTITY_INIT;
+    corner[0][0] = k;
+    corner[1][1] = k;
+    corner[3][0] = k - 1.0f;
+    corner[3][1] = k - 1.0f;
+    glm_mat4_mul(corner, ss->rain_matrix, ss->rain_lookup);
+    return k;
+}
+
+// Carry the rain's cover across an array rebuild, into the layer the rain takes in the new
+// array, folded for its edge. A rebuild inside a capture's depth pass is followed by the
+// capture and not by a rain pass -- a capture takes the depth pass alone -- so a cover left
+// behind is read from a layer nothing was drawn into, and every probe of a GI sweep is lit
+// under a cover nobody drew, which the volume then keeps.
+static void rain_migrate(ShadowSystem* ss, GLuint old_tex, GLuint old_fbo, int old_edge) {
+    if (ss->rain_layer < 0 || !old_tex || old_edge <= 0)
+        return;
+    const int layer = rain_layer_index(ss);
+    if (layer >= ss->punctual_allocated_layers) {
+        ss->rain_layer = -1;
+        return;
+    }
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, old_fbo);
+    glFramebufferTextureLayer(GL_READ_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, old_tex, 0, ss->rain_layer);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, ss->punctual_fbo);
+    glFramebufferTextureLayer(GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, ss->punctual_map_array, 0,
+                              layer);
+    glBlitFramebuffer(0, 0, RAIN_OCCLUSION_SIZE, RAIN_OCCLUSION_SIZE, 0, 0, RAIN_OCCLUSION_SIZE,
+                      RAIN_OCCLUSION_SIZE, GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    ss->rain_layer = layer;
+    // Its spacing in uv goes as the corner does.
+    const float scale = (float)old_edge / (float)ss->punctual_map_size;
+    rain_fold_lookup(ss);
+    ss->rain_uv_per_metre *= scale;
+    ss->rain_cover_spread *= scale;
 }
 
 // The punctual array's capacity this frame, which the shadow pass and the rain pass both ask
@@ -2803,16 +2848,7 @@ void shadow_render_rain_layer(Engine* engine, Scene* scene) {
     glm_ortho(cx - half, cx + half, cy - half, cy + half, -c[2] - RAIN_OCCLUSION_REACH,
               -c[2] + RAIN_OCCLUSION_REACH, proj);
     glm_mat4_mul(proj, view, ss->rain_matrix);
-
-    // The map fills the layer's corner, so a lookup's [0,1] has to land in [0,k]: NDC
-    // x -> k x + (k - 1), and the same in y. Depth is untouched.
-    const float k = (float)RAIN_OCCLUSION_SIZE / (float)ss->punctual_map_size;
-    mat4 corner = GLM_MAT4_IDENTITY_INIT;
-    corner[0][0] = k;
-    corner[1][1] = k;
-    corner[3][0] = k - 1.0f;
-    corner[3][1] = k - 1.0f;
-    glm_mat4_mul(corner, ss->rain_matrix, ss->rain_lookup);
+    const float k = rain_fold_lookup(ss);
     // The softness in metres, as lookup uv: a fraction of the extent, carried into the corner.
     //
     // NEVER MORE THAN A TEXEL between taps. Wider, each row of the 3x3 finds the same thin
