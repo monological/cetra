@@ -28065,8 +28065,8 @@ TILES_TRUTH_KEPT_MAX = 0.08
 TILES_CORE_KEPT_MAX = 0.025
 TILES_CORE_ONE_MIN = 0.06
 TILES_CORE_SAMPLES = 8000
-# The candle against the reference of its current body, region by region: 0.20 with the dance,
-# 0.31 without it.
+# The candle against the reference of its current body, region by region: 0.135 with the dance,
+# 0.398 with its shift removed.
 TILES_DANCE_MAX = 0.25
 TILES_DANCE_CAM = ["--cam-eye", "0.95,1.45,-0.55", "--cam-target", "0.7,1.3,-1.1"]
 TILES_DANCE_BOX = (0.234, 0.370, 0.599, 0.694)
@@ -28215,8 +28215,8 @@ def run_shadow_tiles_gate(workdir):
 
     Falsified by hand at 13.16: tiles-truth and tiles-core fail on the march this spec built
     first (full shadow to 18.6 cm against 12.5 traced); tiles-dance fails with the dance's shift
-    removed (0.31); tiles-movers fails if the overlay is skipped, since the store leaves the box
-    out of the copy.
+    removed (0.398 against 0.135); tiles-movers fails if the overlay is skipped, since the store
+    leaves the box out of the copy.
     """
     point = asset("cornell_point.cscn")
     core = asset("tile_core_fixture.cscn")
@@ -28468,7 +28468,7 @@ def run_shadow_tiles_gate(workdir):
                     worst = max(worst, abs(_tiles_box_mean(fd[0], box) / ref_mean - 1.0))
         ok = worst <= TILES_DANCE_MAX
         print(f"  tiles-dance  {'PASS' if ok else 'FAIL'}  largest region gap to the reference of "
-              f"the flame as it is at frame 120: {worst:.3f} (want <= {TILES_DANCE_MAX}; 0.31 "
+              f"the flame as it is at frame 120: {worst:.3f} (want <= {TILES_DANCE_MAX}; 0.398 "
               f"with the dance removed)")
         if not ok:
             failures.append("tiles-dance")
