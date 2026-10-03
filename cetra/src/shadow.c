@@ -648,6 +648,10 @@ void bind_shadow_maps_to_program(ShadowSystem* system, ShaderProgram* program) {
         uniform_set_float(u, "punctualShadowMapSize", (float)system->punctual_map_size);
     }
     upload_rain_cover(system, u);
+    // The kernel rotation, which a cached light's soft edge reads too (spec 13.16), so it is
+    // set ahead of the directional early return like the two flags above.
+    uniform_set_int(u, "pcssStochastic", system->pcss_stochastic ? 1 : 0);
+    uniform_set_int(u, "pcssFrameIndex", system->pcss_frame_index);
 
     uniform_set_int(u, "numShadowLights", directional_on ? (int)system->directional_count : 0);
     if (!directional_on)
@@ -666,8 +670,6 @@ void bind_shadow_maps_to_program(ShadowSystem* system, ShaderProgram* program) {
     // the user got plain PCF back rather than the PCSS they started with.
     uniform_set_int(u, "pcssEnabled", (system->pcss_enabled && !msm_on) ? 1 : 0);
     uniform_set_float(u, "pcssSoftness", system->pcss_softness);
-    uniform_set_int(u, "pcssStochastic", system->pcss_stochastic ? 1 : 0);
-    uniform_set_int(u, "pcssFrameIndex", system->pcss_frame_index);
 
     uniform_set_int(u, "csmDebug", system->csm_debug ? 1 : 0);
     shadow_upload_cascade_uniforms(system, u);
