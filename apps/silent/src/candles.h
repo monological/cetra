@@ -23,8 +23,8 @@ void candle_stand(Kit* kit, const KitFrame* f, float a, float y, float d, float 
 // arm out into the room to a pan holding a taper. It collides.
 void candle_sconce(Kit* kit, const Facade* wall, float a, float y, float wax);
 
-// A flame on every wick the kit holds, added to `fs`, each driving an unshadowed point light it
-// adds to the scene.
-void candles_light(FireSystem* fs, Scene* scene, const Kit* kit);
+// A flame on every wick the kit holds, added to `fs`, each driving a point light it adds to the
+// scene: one with a cached shadow under `shadows`, an unshadowed one otherwise.
+void candles_light(FireSystem* fs, Scene* scene, const Kit* kit, bool shadows);
 
 #endif // _SILENT_CANDLES_H_

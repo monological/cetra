@@ -63,6 +63,9 @@
 #define DEFAULT_HEIGHT 900
 // Half the window's pixels, upscaled: the engine's floor.
 #define DEFAULT_RENDER_SCALE 0.5f
+// Two candles at a time redraw their shadows every frame: near enough to see the shadows
+// move, and few enough that the cost is twelve faces a frame whatever the house holds.
+#define DEFAULT_TILE_HEROES 2
 
 /*
  * The exposure at night, pinned, and the most a day's meter may open to. The
@@ -137,6 +140,8 @@ typedef struct SilentArgs {
     bool no_wind;           // still air: the rain falls straight
     bool no_relief;         // puddles from the noise alone, not the ground's own lows
     bool no_candles;        // the candles stand unlit
+    bool no_candle_shadows; // the candles light through walls, as before spec 13.16
+    int tile_heroes;        // candles whose shadows follow their flames every frame
     bool profiler;          // per-pass timing and submission counts, reported at exit
     const char* audio_dump; // headless: write what the listener hears here
 } SilentArgs;
@@ -441,7 +446,7 @@ static void on_init(Game* game) {
            kit.drip_count, RAIN_DRIP_MAX, kit.wick_count);
     if (!g_args.no_candles) {
         g_scene->fire = create_fire_system();
-        candles_light(g_scene->fire, g_scene, &kit);
+        candles_light(g_scene->fire, g_scene, &kit, !g_args.no_candle_shadows);
     }
     g_door_hung = house_front_door(&g_door, engine, g_scene, em, physics);
     prompt_start(&g_prompt, engine);
@@ -505,6 +510,9 @@ static void on_init(Game* game) {
         ss->shadow_distance = 40.0f;
         ss->cascade_count = 2;
         ss->pcss_enabled = true;
+        // The candles nearest you redraw their shadows from where their flames are each
+        // frame, so the shadows move with the flicker; the rest keep the ones they drew.
+        ss->tile_heroes = g_args.tile_heroes;
     }
 
     CameraDesc cam = {.position = {SPAWN_FEET[0], SPAWN_FEET[1] + PLAYER_EYE_HEIGHT, SPAWN_FEET[2]},
@@ -695,6 +703,10 @@ static void print_usage(const char* prog) {
     printf("      --no-relief         Puddles stand where the noise puts them, not in the\n"
            "                          ground's own lows\n");
     printf("      --no-candles        The candles stand unlit\n");
+    printf("      --no-candle-shadows The candles light through walls\n");
+    printf("      --tile-heroes N     Candles whose shadows follow their flames every frame,\n"
+           "                          nearest first (default %d; 0 keeps every shadow still)\n",
+           DEFAULT_TILE_HEROES);
     printf("      --profiler          Per-pass timing and submission counts, at exit\n");
     printf("  In the window: click to capture the mouse, Tab to release it. WASD\n");
     printf("  walks, Shift hurries, the arrows or the mouse look, E opens and shuts\n");
@@ -709,6 +721,7 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
     a->seed = 7;
     a->render_scale = DEFAULT_RENDER_SCALE;
     a->rain_mmh = DEFAULT_RAIN_MMH;
+    a->tile_heroes = DEFAULT_TILE_HEROES;
     for (int i = 1; i < argc; i++) {
         const char* s = argv[i];
         const bool has_next = i + 1 < argc;
@@ -766,6 +779,10 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
             a->no_relief = true;
         } else if (!strcmp(s, "--no-candles")) {
             a->no_candles = true;
+        } else if (!strcmp(s, "--no-candle-shadows")) {
+            a->no_candle_shadows = true;
+        } else if (!strcmp(s, "--tile-heroes") && has_next) {
+            a->tile_heroes = atoi(argv[++i]);
         } else if (!strcmp(s, "--profiler")) {
             a->profiler = true;
         } else if (!strcmp(s, "-h") || !strcmp(s, "--help")) {

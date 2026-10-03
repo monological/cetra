@@ -146,7 +146,7 @@ void candle_sconce(Kit* kit, const Facade* wall, float a, float y, float wax) {
                   face + o * 0.23f, true);
 }
 
-void candles_light(FireSystem* fs, Scene* scene, const Kit* kit) {
+void candles_light(FireSystem* fs, Scene* scene, const Kit* kit, bool shadows) {
     if (!fs)
         return;
     for (int i = 0; i < kit->wick_count; i++) {
@@ -163,10 +163,16 @@ void candles_light(FireSystem* fs, Scene* scene, const Kit* kit) {
         fire->params.wind_response = 0.0f;
         fire->params.adaptation = CANDLE_ADAPTATION;
         fire->light_scale = CANDLE_LIGHT_SCALE;
+        // A candle stands still, so its shadow is drawn once and kept (spec 13.16), softened
+        // by the flame's own width -- which is what makes it sharp where a thing touches what
+        // it shadows and soft a hand away.
         const LightDesc desc = {.name = name,
                                 .type = LIGHT_POINT,
                                 .position = {w->tip[0], w->tip[1], w->tip[2]},
-                                .range = CANDLE_RANGE};
+                                .range = CANDLE_RANGE,
+                                .cast_shadows = shadows,
+                                .shadow_cache = shadows,
+                                .emitter_size = fire->flame.width};
         Light* light = create_light(&desc);
         if (!light)
             continue;
