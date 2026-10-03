@@ -142,6 +142,7 @@ typedef struct SilentArgs {
     bool no_candles;        // the candles stand unlit
     bool no_candle_shadows; // the candles light through walls, as before spec 13.16
     int tile_heroes;        // candles whose shadows are redrawn every frame
+    int tile_views;         // 1 = every cached light shaded from one view, for comparison
     bool tiles_probe;       // print the cached shadow tiles at exit
     bool profiler;          // per-pass timing and submission counts, reported at exit
     const char* audio_dump; // headless: write what the listener hears here
@@ -511,9 +512,10 @@ static void on_init(Game* game) {
         ss->shadow_distance = 40.0f;
         ss->cascade_count = 2;
         ss->pcss_enabled = true;
-        // The candles nearest you redraw their shadows from where their flames are each
-        // frame, so the shadows move with the flicker; the rest keep the ones they drew.
+        // The candles' shadows follow their flames from the views they keep; heroes, if asked
+        // for, redraw those views every frame instead.
         ss->tile_heroes = g_args.tile_heroes;
+        ss->tile_views = g_args.tile_views;
     }
 
     CameraDesc cam = {.position = {SPAWN_FEET[0], SPAWN_FEET[1] + PLAYER_EYE_HEIGHT, SPAWN_FEET[2]},
@@ -711,6 +713,7 @@ static void print_usage(const char* prog) {
            "                          their flames are, nearest first (default %d)\n",
            DEFAULT_TILE_HEROES);
     printf("      --profiler          Per-pass timing and submission counts, at exit\n");
+    printf("      --tile-views 1      Shade every cached light from one view, not its body's\n");
     printf("      --tiles-probe       The cached shadow tiles and each light's block, at exit\n");
     printf("  In the window: click to capture the mouse, Tab to release it. WASD\n");
     printf("  walks, Shift hurries, the arrows or the mouse look, E opens and shuts\n");
@@ -787,6 +790,8 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
             a->no_candle_shadows = true;
         } else if (!strcmp(s, "--tile-heroes") && has_next) {
             a->tile_heroes = atoi(argv[++i]);
+        } else if (!strcmp(s, "--tile-views") && has_next) {
+            a->tile_views = atoi(argv[++i]);
         } else if (!strcmp(s, "--tiles-probe")) {
             a->tiles_probe = true;
         } else if (!strcmp(s, "--profiler")) {
