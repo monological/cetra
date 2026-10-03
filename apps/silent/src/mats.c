@@ -2,6 +2,7 @@
 #include <stdio.h>
 
 #include "cetra/material.h"
+#include "cetra/postfx.h"
 #include "cetra/program.h"
 #include "cetra/texture.h"
 #include "cetra/util.h"
@@ -80,6 +81,14 @@ typedef struct RainSpec {
  * openings are edges nobody built. On glass the dirt tints what shows through as well as the
  * surface, which is how a film of grease looks.
  */
+// Light that wanders inside a surface before it leaves it: the engine's subsurface blur, its
+// strength, how far each channel goes relative to the others, and the widest's reach in metres.
+typedef struct ScatterSpec {
+    float strength; // 0 = none
+    float colour[3];
+    float radius;
+} ScatterSpec;
+
 typedef struct MatSpec {
     const char* name; // the material's own name, for the GUI's editor
     const char* set;  // the photo set's base name; NULL is a flat colour
@@ -92,6 +101,7 @@ typedef struct MatSpec {
     GlassSpec glass;
     GlowSpec glow;
     RainSpec rain;
+    ScatterSpec scatter;
 } MatSpec;
 
 #define STAINED_NIGHT_NITS 25.0f
@@ -351,7 +361,16 @@ static const MatSpec SPECS[MAT_COUNT] = {
     [MAT_SOOT] = {"soot", "medieval_blocks_03", {0.1f, 0.12f, 0.17f}, 1.0f, 0.0f, 2.0f},
     // Old candles gone to ivory; a banker's lamp's shade, green over white glass and glossy,
     // lit faintly by the bulb inside -- the lamp's light is the spot study.c hangs under it.
-    [MAT_WAX] = {"wax", NULL, {0.80f, 0.74f, 0.58f}, 0.45f, 0.0f, 1.0f},
+    // Wax carries light a few millimetres under its surface, red furthest, which is what
+    // softens a candle's lit top into its sides; chosen by eye, there being no measured profile
+    // for paraffin to hand.
+    [MAT_WAX] = {"wax",
+                 NULL,
+                 {0.80f, 0.74f, 0.58f},
+                 0.45f,
+                 0.0f,
+                 1.0f,
+                 .scatter = {0.8f, {1.0f, 0.7f, 0.4f}, 0.006f}},
     [MAT_SHADE] = {"lamp_shade",
                    NULL,
                    {0.03f, 0.16f, 0.07f},
@@ -418,6 +437,12 @@ void mats_register(Kit* kit, Engine* engine, Scene* scene) {
             if (s->rain.relief)
                 material_set_height_tex(m,
                                         load(scene->tex_pool, s->set, "disp", texture_desc(false)));
+        }
+        if (s->scatter.strength > 0.0f && engine->postfx) {
+            m->subsurface = s->scatter.strength;
+            glm_vec3_copy((float*)s->scatter.colour, m->subsurface_color);
+            m->subsurface_profile =
+                postfx_add_sss_profile(engine->postfx, s->scatter.colour, s->scatter.radius);
         }
         kit_material(kit, m, s->repeat_m, s->grime);
     }
