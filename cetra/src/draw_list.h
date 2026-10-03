@@ -34,7 +34,7 @@ typedef enum DrawLane {
     DRAW_LANE_OPAQUE = 0,   // everything not blend and not transmissive
     DRAW_LANE_BLEND,        // ALPHA_BLEND without transmission: the OIT sub-passes
     DRAW_LANE_TRANSMISSIVE, // transmission > 0: keeps the refraction path
-    DRAW_LANE_SHADOW_ONLY,  // MESH_SHADOW_ONLY: casts, and no camera pass draws it
+    DRAW_LANE_SHADOW_ONLY,  // MESH_SHADOW_ONLY: casts for a light, and no camera pass draws it
     DRAW_LANE_COUNT
 } DrawLane;
 
@@ -47,7 +47,7 @@ enum {
     DRAW_FOLIAGE = 1u << 1, // alpha-masked and opted back into casting
     DRAW_DOUBLE_SIDED = 1u << 2,
     DRAW_OCCLUDER = 1u << 3, // material claims the AABB as an occlusion proxy, guards passed
-    DRAW_NO_CAST = 1u << 4,  // MESH_SHADOW_NONE: drawn, and no shadow pass takes it
+    DRAW_NO_CAST = 1u << 4,  // MESH_SHADOW_NONE: drawn, and no light's shadow takes it
     DRAW_STILL = 1u << 5, // unskinned, unswayed, unmorphed: the surface is where its node puts it
 };
 

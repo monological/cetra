@@ -66,8 +66,8 @@ _Static_assert(SHADOW_TILE_MARK >= MAX_PUNCTUAL_SHADOW_LAYERS,
 #define SHADOW_TILE_MAX_CELLS \
     (PUNCTUAL_TILE_VRAM_BUDGET / (SHADOW_TILE_SIZE * SHADOW_TILE_SIZE * 4u))
 #define SHADOW_TILE_MAX_BLOCKS (SHADOW_TILE_MAX_CELLS / 6u)
-// A block's kept faces, one bit each.
-#define SHADOW_TILE_VALID_WORDS ((6 * SHADOW_TILE_VIEWS + 63) / 64)
+// A block's faces are bits of one word: six a view.
+_Static_assert(6 * SHADOW_TILE_VIEWS <= 64, "a kept block's faces must fit one 64-bit mask");
 // The most layers the tiles can take, which is the budget at the smallest edge; a larger
 // edge holds the same tiles in fewer.
 #define PUNCTUAL_TILE_MAX_LAYERS \
@@ -184,13 +184,15 @@ struct Light;
 // in the +X -X +Y -Y +Z -Z order a point light's per-frame layers take. A light with a body is
 // drawn from SHADOW_TILE_VIEWS views spread over it, one without from its centre. What it
 // records is what the tiles hold, so the pass can tell a face it may keep from one it must
-// draw again.
+// draw again. Faces are bits of the masks, view by view.
 //
-// A HERO's block is a light's second one, redrawn every frame from where the light is now,
-// so the shadows of a flickering flame move with it; its first block stays as it was, ready
-// for when the light stops being a hero.
+// A block with no light is free, or a STORE: the cells another block keeps its still casters
+// in, for its faces that see a caster which has moved lately. Each such face is drawn every
+// frame as a copy of the store's with the movers drawn over it, so a swinging pendulum costs
+// its own draws a frame rather than the room's.
 typedef struct ShadowTileBlock {
-    struct Light* light; // NULL = free; published to when whole
+    struct Light* light; // NULL = free or a store; published to when whole
+    bool is_store;       // another block's store, so not free though it has no light
     int first;           // its first cell, counted from the region's base
     int cells;           // cells it owns, which a later light needing no more may reuse
     int views;           // views drawn, 0 until first drawn
@@ -202,20 +204,10 @@ typedef struct ShadowTileBlock {
     float near_plane;
     float far_plane;
     unsigned generation; // the region's when drawn; any other means the tiles were lost
-    uint64_t valid[SHADOW_TILE_VALID_WORDS]; // faces drawn, one bit each, view by view
-    bool hero;
-    // A kept block's light where it was last frame, and whether it has moved since: a
-    // light that never moves -- a bulb -- is never worth redrawing every frame.
-    vec3 seen;
-    bool moving;
-    // A kept block's faces that see a caster which has moved lately. Each is drawn every frame
-    // as a copy of the same face of the block's STORE, which holds its still casters alone,
-    // with the movers drawn over it: a swinging pendulum costs its own draws a frame rather
-    // than the room's. `stored` says which of the store's faces are drawn.
-    uint64_t dynamic[SHADOW_TILE_VALID_WORDS];
-    uint64_t stored[SHADOW_TILE_VALID_WORDS];
-    int store; // the block that is this one's store, -1 for none
-    int owner; // for a store, the block it stores for; -1 for any other
+    uint64_t valid;      // faces drawn
+    uint64_t dynamic;    // faces that see a mover, drawn over a copy of the store's
+    uint64_t stored;     // faces of the store that hold the still casters
+    int store;           // the block that is its store, -1 for none
 } ShadowTileBlock;
 
 // The casters a kept face draws over a copy of its still ones rather than with them: nodes
@@ -365,11 +357,10 @@ typedef struct ShadowSystem {
     float rain_ask_open;      // 1 = rain reaches it, 0 = covered
 
     // Cached point-light shadows (spec 13.16), in tiles of the punctual array.
-    int tile_heroes;      // moving cached lights nearest the camera redrawn every frame; 0 = none
-    int tile_fill_budget; // faces drawn a frame while filling; 0 = every face that wants it
     float tile_tolerance; // metres a light's views may move from where they were drawn
     bool tile_refresh;    // redraw every face every frame: what a kept face must equal
-    int tile_views;       // 0 = from each light's body; 1 forces one view for every light
+    // Views a light with a body is drawn from: 0 = SHADOW_TILE_VIEWS, at most that.
+    int tile_views;
     // An instrument: every cached light drawn each frame from this many points over its body
     // as it is now, each read with one hard tap and averaged with no blur -- the soft shadow
     // by its definition. 0 = off; at most SHADOW_TILE_REFERENCE_MAX.
@@ -386,14 +377,12 @@ typedef struct ShadowSystem {
     ShadowTileBlock tile_blocks[SHADOW_TILE_MAX_BLOCKS];
     int tile_block_count;  // blocks in use or freed, so the high-water mark of the region
     int tile_faces_drawn;  // this frame, kept faces filled
-    int hero_faces_drawn;  // this frame, heroes' faces redrawn
     int mover_faces_drawn; // this frame, kept faces copied from their store with movers over
     const struct SceneNode* tile_movers[SHADOW_TILE_MAX_MOVERS];
     uint64_t tile_mover_moved[SHADOW_TILE_MAX_MOVERS]; // the tile frame each last moved
     int tile_mover_count;
     uint64_t tile_frame;   // frames the tiles have been drawn
-    int tile_mover_filter; // for one tile draw: 0 every kept caster, 1 the still, 2 the movers
-    GLuint tile_copy_fbo;  // reads a store's face while the punctual FBO writes its copy
+    GLuint tile_copy_fbo;  // reads one face while the punctual FBO writes its copy
     bool tile_full_warned; // latches, as the pool's does
     bool tile_range_warned;
 
@@ -482,8 +471,18 @@ bool shadow_light_takes_tiles(const struct Light* light);
 // gated the same way, since it too is maintained only while the depth pass runs.
 int shadow_live_tile(const ShadowSystem* system, const struct Light* light);
 
-// The near plane a cached light's faces are drawn with, which its lookup has to invert.
-float shadow_tile_near(const struct Light* light);
+// What a lookup needs of a cached light's live tiles: the first, and the body and near plane
+// its views were drawn with -- never the light's own now, which a flame moves. False, with
+// `out` untouched, where shadow_live_tile answers -1.
+typedef struct ShadowTileLookup {
+    int first;
+    vec3 centre;
+    vec3 segment;
+    float radius;
+    float near_plane;
+} ShadowTileLookup;
+bool shadow_tile_lookup(const ShadowSystem* system, const struct Light* light,
+                        ShadowTileLookup* out);
 
 // Whether a light has a live map of either kind -- the question a consumer serving the
 // lights NO map covers has to ask, since a cached light holds a tile and no layer.
@@ -590,23 +589,11 @@ bool shadow_rain_cover_answer(const ShadowSystem* ss, float* open);
 void shadow_rain_probe(const ShadowSystem* system, const vec3* points, int count,
                        const char* image_path);
 
-// Kept faces drawn again at the next depth pass: every one, or those whose view reaches a
-// world box. The pass already redraws the faces that see a caster whose node moved, and all
-// of them when the graph changes; these are for what it cannot see -- geometry edited in
-// place, a mesh whose vertices moved under a node that did not.
-void shadow_tiles_invalidate(ShadowSystem* system);
-void shadow_tiles_invalidate_box(ShadowSystem* system, const vec3 box_min, const vec3 box_max);
-
-// A cached face's light-space matrix: from `origin` down face `face` (+X -X +Y -Y +Z -Z),
-// across the face's 90 degrees plus the guard band each side, over [near, far].
-void shadow_tile_face_matrix(const vec3 origin, int face, float near_plane, float far_plane,
-                             mat4 dest);
-
 // --tiles-probe: the tile region and every cached light's block, one line each, after the
 // frame that drew them.
 void shadow_tiles_probe(const ShadowSystem* system, const struct Scene* scene);
 
-// A cached light's six kept faces as one greyscale PPM, three across and two down in face
+// A cached light's kept faces as one greyscale PPM, a view's six in two rows of three in face
 // order, grey by distance over its range and white where nothing was drawn. Reads the tiles
 // back, so it needs the GL context. False, named, when the light has no complete block.
 bool shadow_tiles_map(const ShadowSystem* system, const struct Light* light, const char* path);

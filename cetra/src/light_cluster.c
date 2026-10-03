@@ -202,7 +202,8 @@ static void _pack_dir_light(GpuDirLight* dst, const struct Light* light) {
 
 static void _pack_cluster_light(GpuPackedLight* dst, const struct Light* light, float radius,
                                 const ShadowSystem* shadows) {
-    const int tile = shadow_live_tile(shadows, light);
+    ShadowTileLookup tile;
+    const bool cached = shadow_tile_lookup(shadows, light, &tile);
     glm_vec3_copy((float*)light->global_position, dst->pos_range);
     dst->pos_range[3] = radius > 0.0f ? radius : 0.0f; // 0 = unbounded
     dst->dir_type[3] = (float)light->type;             // 1 point / 2 spot / 3 area
@@ -233,25 +234,10 @@ static void _pack_cluster_light(GpuPackedLight* dst, const struct Light* light, 
     //
     // A cached light (spec 13.16) carries SHADOW_TILE_MARK there instead: past every
     // per-frame layer, so every "has a map" test holds and the per-frame lookup reads
-    // it as lit before it indexes anything, and its tiles ride in shadow_tile below.
+    // it as lit before it indexes anything, and its tiles ride in the slots below.
     dst->shadow_misc[1] =
-        (float)(tile >= 0 ? SHADOW_TILE_MARK : shadow_live_punctual_layer(shadows, light));
-    // A panel's extent -- or, for a cached light, the shape its tiles' soft edge comes from:
-    // a point light has no extent for anything else to read, and every reader of these two
-    // takes them for a panel only.
-    if (tile >= 0) {
-        dst->shadow_misc[2] = fmaxf(light->source_radius, 0.0f);
-        dst->shadow_misc[3] = fmaxf(light->source_length, 0.0f);
-        // And the body its views were drawn over, which the lookup places them on: its segment
-        // in the reserved slot and the two cone cosines, which only a spot reads, and only a
-        // point light is cached; its radius in the colour's unread fourth.
-        dst->atten_cutoff[2] = light->shadow_segment[0];
-        dst->atten_cutoff[3] = light->shadow_segment[1];
-        dst->shadow_misc[0] = light->shadow_segment[2];
-        dst->color_intensity[3] = light->shadow_radius;
-    } else {
-        glm_vec2_copy((float*)light->size, &dst->shadow_misc[2]);
-    }
+        (float)(cached ? SHADOW_TILE_MARK : shadow_live_punctual_layer(shadows, light));
+    glm_vec2_copy((float*)light->size, &dst->shadow_misc[2]); // a panel's extent
 
     // EVERY type ships the full frame. Both halves used to be panels-only -- the
     // LTC plane test and corner frame assume a unit normal and a height axis --
@@ -272,14 +258,21 @@ static void _pack_cluster_light(GpuPackedLight* dst, const struct Light* light, 
     glm_vec3_copy(up, dst->up_area);
     dst->up_area[3] = 0.0f;
 
-    // Where the faces were drawn from, which is what the lookup projects from -- never the
-    // light's position now, which a candle flame moves within the tolerance -- and the near
-    // plane they were drawn with; the far is the range, in pos_range[3].
+    // A cached light's tiles, in what a point light leaves free: the body its views were drawn
+    // over -- never the light's own now, which a flame moves -- its segment in the reserved
+    // slot and the two cone cosines, which only a spot reads, its radius and near plane in a
+    // panel's extent, and its centre, where view 0 stands, beside its first tile. The far
+    // plane is the range, in pos_range[3].
     glm_vec3_zero(dst->shadow_tile);
-    dst->shadow_tile[3] = (float)tile;
-    if (tile >= 0) {
-        glm_vec3_copy((float*)light->shadow_origin, dst->shadow_tile);
-        dst->up_area[3] = shadow_tile_near(light);
+    dst->shadow_tile[3] = -1.0f;
+    if (cached) {
+        dst->atten_cutoff[2] = tile.segment[0];
+        dst->atten_cutoff[3] = tile.segment[1];
+        dst->shadow_misc[0] = tile.segment[2];
+        dst->shadow_misc[2] = tile.radius;
+        dst->shadow_misc[3] = tile.near_plane;
+        glm_vec3_copy(tile.centre, dst->shadow_tile);
+        dst->shadow_tile[3] = (float)tile.first;
     }
 }
 

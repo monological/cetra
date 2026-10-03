@@ -168,13 +168,12 @@ typedef struct {
     int rain_ask_set;
     const char* rain_map_path; // --rain-map: the occlusion map as a greyscale PPM
     int tiles_probe;           // Print the cached shadow tiles' region and blocks (spec 13.16)
-    int tile_heroes;           // ShadowSystem.tile_heroes
     int tiles_refresh;         // ShadowSystem.tile_refresh
     int tile_views;            // ShadowSystem.tile_views
     int tile_reference;        // ShadowSystem.tile_reference
-    const char* node_swing;    // a node moved sideways every frame, for a gate; NULL = none
+    const char* node_swing;    // a node moved sideways every frame; NULL = none
     float node_swing_m;        // how far either way, metres
-    // --tile-map: one cached light's six faces as a greyscale PPM
+    // --tile-map: one cached light's faces as a greyscale PPM
     const char* tile_map_light;
     const char* tile_map_path;
     int no_fire;       // Drop the fires a scene file asked for (spec 13.14)

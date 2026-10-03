@@ -12,8 +12,9 @@ past an occluder, over a wall, so the size of the full shadow is a number on the
 
 From the flame's centre the rim hides the wall to about 26 cm from the axis, and from its tip
 to about 9 cm. A lookup that sees the flame from one point puts the edge of the full shadow at
-the first; the shadow itself has it nearer the second. core_truth.py traces the same body
-against the rim exactly, with no shadow map, and is what both are measured against.
+the first; the shadow itself has it nearer the second. The shadow-tiles gate group traces the
+same body against the rim exactly, with no shadow map, and that is what both are measured
+against.
 
 The camera is orthographic in practice: tile_core_fixture renders with --ortho 0.8, so a
 pixel is a fixed fraction of a metre across the wall, and --tonemap linear, which a scene file

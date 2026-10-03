@@ -5,10 +5,9 @@
 // NOTHING PER FACE IS UPLOADED. A face is projected analytically from where the faces were
 // drawn from, the near plane and the far, with the basis shadow.c's lookAt gives that face
 // (shadow_tile_face_matrix, over compute_perspective_light_space and light_space_up), written
-// out below as three tables. Matrices would be six per light, and silent alone caches
-// fourteen lights -- no uniform array in this shader has room for 84 of them, where the
-// projection is three dot products and a divide. The tables are the contract with C, and
-// shadow_tile_face_matrix is what they are checked against.
+// out below as three tables, which must reproduce it. Matrices would be six a view for every
+// cached light, which no uniform array in this shader has room for, where the projection is
+// three dot products and a divide.
 //
 // A tile is found from the array's own size: cells run row-major within a layer from layer 0,
 // so a light's first cell and the array's edge are its whole address.
@@ -33,17 +32,41 @@ const vec3 TILE_FACE_UP[6] = vec3[6](vec3(0.0, 1.0, 0.0), vec3(0.0, 1.0, 0.0),
                                      vec3(1.0, 0.0, 0.0), vec3(1.0, 0.0, 0.0),
                                      vec3(0.0, 1.0, 0.0), vec3(0.0, 1.0, 0.0));
 
-// The face's own 90 degrees as a fraction of the tile: the field of view is widened so the
-// guard band lies outside it, and a filter reaching past the face's edge still reads this
-// face's depth. 1 / tan(fov / 2).
-const float TILE_INNER =
-    float(SHADOW_TILE_SIZE - 2 * SHADOW_TILE_GUARD) / float(SHADOW_TILE_SIZE);
+// What a lookup needs of a cached light, decoded from its packed slots here and nowhere else:
+// the body its views were drawn over -- its centre, where view 0 stands, its segment end to
+// end and its radius -- its planes, its first tile, where it is now, and the array's address.
+struct TileLight {
+    vec3 centre;
+    vec3 segment;
+    float radius;
+    float nearP;
+    float farP;
+    int first;
+    vec3 current;
+    int edge;   // the array's edge in texels
+    float span; // a tile's extent in layer uv
+};
+
+TileLight tileLightAt(uint li) {
+    TileLight t;
+    t.centre = clusterLights[li].shadowTile.xyz;
+    t.segment = vec3(clusterLights[li].attenCutoff.zw, clusterLights[li].shadowMisc.x);
+    t.radius = clusterLights[li].shadowMisc.z;
+    t.nearP = clusterLights[li].shadowMisc.w;
+    t.farP = clusterLights[li].posRange.w;
+    t.first = int(clusterLights[li].shadowTile.w);
+    t.current = clusterLights[li].posRange.xyz;
+    t.edge = textureSize(punctualShadowMaps, 0).x;
+    t.span = float(SHADOW_TILE_SIZE) / float(t.edge);
+    return t;
+}
 
 // A point on face `face`, `rel` from where the faces were drawn: xy its uv over the tile and
 // z the depth the face's map stores for it. The caller keeps `rel` in front of the face.
 vec3 tileFaceProject(int face, vec3 rel, float nearP, float farP) {
     float d = dot(rel, TILE_FACE_AXIS[face]);
-    vec2 ndc = TILE_INNER * vec2(dot(rel, TILE_FACE_RIGHT[face]), dot(rel, TILE_FACE_UP[face])) / d;
+    vec2 ndc = SHADOW_TILE_INNER *
+               vec2(dot(rel, TILE_FACE_RIGHT[face]), dot(rel, TILE_FACE_UP[face])) / d;
     float z = ((farP + nearP) - 2.0 * farP * nearP / d) / (farP - nearP);
     return vec3(ndc, z) * 0.5 + 0.5;
 }
@@ -72,22 +95,27 @@ float tileDepthAt(vec3 cell, float span, vec2 uv) {
     return texture(punctualShadowMaps, vec3(cell.xy + uv * span, cell.z)).r;
 }
 
-// Whether light `li` reaches a point through its cached faces, in ONE tap: 1 lit, 0 not.
-// For a point that is not a surface -- a cell of air -- so there is no receiver plane, and
-// the bias is in METRES along the face rather than in depth, which is what keeps it the same
-// size near the light, where the stored depth is fine-grained, and near the range, where it
-// is coarse. A point past the range is lit; the light has reached zero there anyway.
-float tileVisibility(uint li, vec3 P, float biasMetres) {
-    float nearP = clusterLights[li].upArea.w;
-    float farP = clusterLights[li].posRange.w;
-    vec3 rel = P - clusterLights[li].shadowTile.xyz;
+// What view `view` of a light, standing at `origin`, stored in P's direction: x the stored
+// surface's depth and y P's, both along the face's axis. Nearer than the near plane or past the
+// far, nothing was drawn, so the stored depth reads as unbounded.
+vec2 tileViewRead(TileLight t, int view, vec3 origin, vec3 P) {
+    vec3 rel = P - origin;
     int face = punctualCubeFace(rel);
     float d = dot(rel, TILE_FACE_AXIS[face]);
-    if (d >= farP)
-        return 1.0;
-    vec3 pc = tileFaceProject(face, rel, nearP, farP);
-    int edge = textureSize(punctualShadowMaps, 0).x;
-    vec3 cell = tileCell(int(clusterLights[li].shadowTile.w) + face, edge);
-    float stored = tileDepthAt(cell, float(SHADOW_TILE_SIZE) / float(edge), pc.xy);
-    return tileLinearDepth(stored, nearP, farP) < d - biasMetres ? 0.0 : 1.0;
+    if (d <= t.nearP || d >= t.farP)
+        return vec2(1e30, d);
+    vec3 pc = tileFaceProject(face, rel, t.nearP, t.farP);
+    float stored = tileDepthAt(tileCell(t.first + 6 * view + face, t.edge), t.span, pc.xy);
+    return vec2(tileLinearDepth(stored, t.nearP, t.farP), d);
+}
+
+// Whether light `li` reaches a point through its cached faces, in ONE tap from its first view:
+// 1 lit, 0 not. For a point that is not a surface -- a cell of air -- so there is no receiver
+// plane, and the bias is in METRES along the face rather than in depth, which is what keeps it
+// the same size near the light, where the stored depth is fine-grained, and near the range,
+// where it is coarse. A point past the range is lit; the light has reached zero there anyway.
+float tileVisibility(uint li, vec3 P, float biasMetres) {
+    TileLight t = tileLightAt(li);
+    vec2 read = tileViewRead(t, 0, t.centre, P);
+    return read.x < read.y - biasMetres ? 0.0 : 1.0;
 }

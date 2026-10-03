@@ -13,6 +13,9 @@
 // depth and never a neighbouring tile's.
 #define SHADOW_TILE_SIZE  256
 #define SHADOW_TILE_GUARD 8
+// The face's own 90 degrees as a fraction of the tile, which is 1 / tan(fov / 2) of the field
+// of view that lays the face across the tile less the band each side.
+#define SHADOW_TILE_INNER ((SHADOW_TILE_SIZE - 2.0f * SHADOW_TILE_GUARD) / SHADOW_TILE_SIZE)
 
 // A cached light's near plane as a fraction of its range, where the light states none.
 #define SHADOW_TILE_NEAR_RATIO 0.002f

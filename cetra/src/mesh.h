@@ -20,11 +20,12 @@
 // Forward declaration
 struct Skeleton;
 
-// Whether a mesh is drawn, casts shadows, or both. Zero is both.
+// Whether a mesh is drawn, casts a light's shadows, or both. Zero is both.
 typedef enum MeshShadowRole {
     MESH_SHADOW_CASTS = 0, // drawn, and casts
-    MESH_SHADOW_NONE,      // drawn, and casts nothing
-    MESH_SHADOW_ONLY,      // casts, and is never drawn: what a shadow sees in place of geometry
+    MESH_SHADOW_NONE,      // drawn, and casts nothing for a light
+    MESH_SHADOW_ONLY,      // casts for a light and is never drawn: what it sees in place of
+                           // the drawn geometry
 } MeshShadowRole;
 
 // Levels in a mesh's LOD chain, level 0 (the original indices) included.
