@@ -129,6 +129,16 @@ static void classify(const Mesh* mesh, uint8_t* lane, uint8_t* flags) {
         *flags |= DRAW_DOUBLE_SIDED;
     if (occluder)
         *flags |= DRAW_OCCLUDER;
+
+    // A shadow-only mesh is drawn by no camera pass whatever its material, so it gets a lane of
+    // its own, which every camera pass already skips by naming the lanes it draws. It is not an
+    // occluder either: the camera never sees it to be hidden behind.
+    if (mesh->shadow_role == MESH_SHADOW_ONLY) {
+        *lane = DRAW_LANE_SHADOW_ONLY;
+        *flags &= (uint8_t)~DRAW_OCCLUDER;
+    } else if (mesh->shadow_role == MESH_SHADOW_NONE) {
+        *flags |= DRAW_NO_CAST;
+    }
 }
 
 // Projected size at which a level gives way to the next, as the ratio of a

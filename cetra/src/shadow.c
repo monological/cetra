@@ -630,10 +630,15 @@ void bind_shadow_maps_to_program(ShadowSystem* system, ShaderProgram* program) {
 // because the transmittance map is live to represent them instead; TRANSLUCENT
 // is that map's own pass. Three values rather than a pass plus a bool so the
 // "flag off is the path that was there" property is visible at the call site.
+// RAIN is the rain's cover: OPAQUE, but over what is DRAWN -- a mesh's shadow role
+// says what casts for light, and the rain lands on the surfaces the camera sees,
+// not on shapes standing in for them. The cover spans the street, so stand-ins
+// cut small for a light's reach would only be more draws to it.
 typedef enum ShadowCasterSet {
     SHADOW_CASTERS_OPAQUE = 0,
     SHADOW_CASTERS_OPAQUE_TSM,
     SHADOW_CASTERS_TRANSLUCENT,
+    SHADOW_CASTERS_RAIN,
 } ShadowCasterSet;
 
 // Everything about a caster that its MATERIAL decides, for whichever of the two
@@ -681,11 +686,14 @@ static void _upload_shadow_material(UniformManager* u, const Material* mat, bool
 // and their occlusion comes from AO instead. Foliage opts back in, because leaf
 // cards are centimetres across and an alpha test resolves them.
 static bool caster_set_wants(ShadowCasterSet set, uint8_t lane, uint8_t flags) {
+    if (set == SHADOW_CASTERS_RAIN ? lane == DRAW_LANE_SHADOW_ONLY : (flags & DRAW_NO_CAST) != 0)
+        return false;
     bool masked_only = (flags & DRAW_ALPHA_MASKED) && !(flags & DRAW_FOLIAGE);
     // What a transmittance map represents instead of a depth map: geometry that
     // casts NOTHING on the depth path (masked without foliage) or casts SOLID
-    // where it should not (blend, transmission -- i.e. any non-opaque lane).
-    bool translucent = masked_only || lane != DRAW_LANE_OPAQUE;
+    // where it should not (blend, transmission). A shadow-only mesh casts as
+    // opaque, whatever material it was given to be drawable at all.
+    bool translucent = masked_only || lane == DRAW_LANE_BLEND || lane == DRAW_LANE_TRANSMISSIVE;
 
     if (set == SHADOW_CASTERS_TRANSLUCENT)
         return translucent;
@@ -2021,8 +2029,8 @@ void shadow_render_rain_layer(Engine* engine, Scene* scene) {
     if (begin_depth_layer(ss->punctual_fbo, ss->punctual_map_array, layer, ss->punctual_map_size)) {
         glViewport(0, 0, RAIN_OCCLUSION_SIZE, RAIN_OCCLUSION_SIZE);
         // Glass is in the opaque set, and should be: a glass roof keeps the rain off.
-        draw_shadow_layer(ss, scene, scene->draw_list, ss->rain_matrix, &state,
-                          SHADOW_CASTERS_OPAQUE, engine);
+        draw_shadow_layer(ss, scene, scene->draw_list, ss->rain_matrix, &state, SHADOW_CASTERS_RAIN,
+                          engine);
         ss->rain_layer = layer;
     }
     glDisable(GL_POLYGON_OFFSET_FILL);
