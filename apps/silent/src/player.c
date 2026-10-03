@@ -116,6 +116,15 @@ void player_pre_render(Player* p, Game* game, const vec3* pin_eye, const vec3* p
                       input_action_value(&game->input, "look_y"));
 }
 
+void player_feet(const Player* p, vec3 out) {
+    glm_vec3_copy(p->entity->position, out);
+    out[1] -= CAPSULE_REST;
+}
+
+void player_velocity(const Player* p, vec3 out) {
+    character_controller_get_velocity(entity_get_character_controller(p->entity), out);
+}
+
 void player_eye(const Player* p, vec3 eye, vec3 forward) {
     // The rig's pose is this frame's once player_pre_render has run, before the
     // engine applies it -- which is what lets a light ride the head in the same

@@ -3,6 +3,7 @@
 
 #include "house.h"
 #include "kitchen.h"
+#include "layout.h"
 #include "sounds.h"
 
 // Every loop is levelled alike by tools/fetch_sounds.py, so these are the
@@ -14,7 +15,12 @@
 #define INSIDE_SECONDS 0.4f // how far behind the listener INSIDE lags, stepping through a door
 #define STREET_GAIN    0.3f // what is left of the house's own sounds out on the street
 
-static Sound* loop(AudioSystem* audio, const char* path) {
+// Above and below each other the floor between is most of the sound, except through the great
+// hall, which is open from its floor to the gallery.
+#define OTHER_STOREY 0.5f
+#define STOREY_APART 2.0f // metres between a listener and a source that put them a floor apart
+
+Sound* sounds_loop(AudioSystem* audio, const char* path) {
     if (!audio)
         return NULL;
     Sound* s = audio_sound_from_file(audio, path, AUDIO_BUS_SFX);
@@ -38,9 +44,9 @@ static float inside_target(const vec3 eye) {
 }
 
 void sounds_start(Sounds* sounds, AudioSystem* audio, const vec3 eye) {
-    sounds->fridge = loop(audio, "assets/audio/silent/fridge_hum.flac");
-    sounds->wind_outside = loop(audio, "assets/audio/silent/wind_outside.flac");
-    sounds->wind_inside = loop(audio, "assets/audio/silent/wind_inside.flac");
+    sounds->fridge = sounds_loop(audio, "assets/audio/silent/fridge_hum.flac");
+    sounds->wind_outside = sounds_loop(audio, "assets/audio/silent/wind_outside.flac");
+    sounds->wind_inside = sounds_loop(audio, "assets/audio/silent/wind_inside.flac");
     if (sounds->fridge) {
         vec3 motor = {0.0f, 0.0f, 0.0f};
         kitchen_fridge_motor(motor);
@@ -51,6 +57,13 @@ void sounds_start(Sounds* sounds, AudioSystem* audio, const vec3 eye) {
 
 float sounds_indoor_gain(const Sounds* sounds) {
     return STREET_GAIN + (1.0f - STREET_GAIN) * sounds->inside;
+}
+
+float sounds_gain_at(const Sounds* sounds, const vec3 listener, const vec3 source) {
+    const bool hall = listener[0] > GREAT_X0 && listener[0] < GREAT_X1 && listener[2] > GREAT_Z0 &&
+                      listener[2] < GREAT_Z1;
+    const bool apart = fabsf(listener[1] - source[1]) > STOREY_APART && !hall;
+    return sounds_indoor_gain(sounds) * (apart ? OTHER_STOREY : 1.0f);
 }
 
 void sounds_update(Sounds* sounds, const vec3 eye, float dt) {

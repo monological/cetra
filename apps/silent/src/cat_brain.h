@@ -6,13 +6,11 @@
 
 #include <cglm/cglm.h>
 
-#include "cetra/engine.h"
-
 #include "cetra/game/brain.h"
-#include "cetra/game/entity.h"
 #include "cetra/game/game.h"
 
 #include "cat.h"
+#include "player.h"
 
 /*
  * What the cat wants (spec 13.17): an aloof watcher. It sleeps, loafs, wanders, watches the
@@ -20,8 +18,6 @@
  * sight, moves off if rushed, and now and then follows at a distance. The choosing is the
  * engine's brain; what each activity means, and what the cat sees and wants, is here.
  */
-
-#define CAT_MIND_PLACES 48
 
 typedef enum {
     CAT_GAZE_NONE,
@@ -35,7 +31,7 @@ typedef struct CatMind {
     Brain* brain; // the cat entity's; NULL when there is none
     int first;    // the activity to start once the cat is in the house, -1 to choose
     Game* game;
-    const Entity* player;
+    const Player* player;
     bool blind;
     float rain; // 0..1, how hard it rains
 
@@ -44,23 +40,23 @@ typedef struct CatMind {
     float boredom;
     float alarm;
     float affinity;
-    float since[CAT_MIND_PLACES]; // seconds since it was last at each place
+    float since[CAT_PLACE_COUNT]; // seconds since it was last at each place
 
     // What it senses of the player.
     float sense_in; // seconds to the next look
     bool sees, hears;
-    float unseen; // seconds out of sight
-    vec3 player_eye, player_feet, player_vel;
-    float player_speed, distance, closing;
-    bool startled; // a startle is due
-    float still_look;
+    float unseen;                // seconds out of sight
+    vec3 player_eye;             // the body's, wherever the camera is
+    float player_speed, closing; // over the ground; closing is how fast they come on
+    float distance;              // across the ground, and half of any drop between
+    bool startled;               // a startle is due
+    float still_look;            // seconds of being looked at by a player standing still
 
     // The activity under way.
     int spot;      // the place it is at or going to, -1 for none
     float hold;    // seconds to stay once there
     float held;    // seconds there so far
-    float running; // its score when it began
-    float give_up; // seconds left before it stops trying
+    float give_up; // seconds left before it stops trying to get there
     bool asleep;
     bool want_stretch;
     bool groomed;
@@ -77,19 +73,19 @@ typedef struct CatMind {
 
 // The cat's mind, on the cat's entity, seeded: the same seed makes the same cat. `first`
 // names an activity to start with, or NULL to choose. False when there is no cat.
-bool cat_mind_create(CatMind* mind, Cat* cat, Game* game, const Entity* player, uint32_t seed,
+bool cat_mind_create(CatMind* mind, Cat* cat, Game* game, const Player* player, uint32_t seed,
                      bool blind, const char* first);
 
 // Each fixed step, before the brains: what it senses and how its needs change. `rain` is how
 // hard it is raining, 0..1.
-void cat_mind_sense(CatMind* mind, const vec3 player_eye, const vec3 player_forward, float rain,
-                    float dt);
+void cat_mind_sense(CatMind* mind, float rain, float dt);
 
 // Once a frame before the cat's update: where it looks.
 void cat_mind_frame(CatMind* mind, double time);
 
-// The panel and the graph drawn over the frame, while the GUI is up.
-void cat_mind_panel(CatMind* mind, Engine* engine);
+// Whether it would purr for the player now: someone it likes, not hurrying. With no mind it has
+// no one to mistrust.
+bool cat_mind_at_ease(const CatMind* mind);
 
 // One line of what it wants, for --trace-cat.
 void cat_mind_trace(const CatMind* mind);

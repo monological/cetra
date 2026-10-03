@@ -47,4 +47,9 @@ void player_pre_render(Player* p, Game* game, const vec3* pin_eye, const vec3* p
 // Where the eye is this frame, and which way it looks.
 void player_eye(const Player* p, vec3 eye, vec3 forward);
 
+// Where the body's feet are, and how fast it moved over the last step: the capsule's own, which
+// a camera pinned elsewhere does not move.
+void player_feet(const Player* p, vec3 out);
+void player_velocity(const Player* p, vec3 out);
+
 #endif // _SILENT_PLAYER_H_
