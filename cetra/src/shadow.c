@@ -1673,9 +1673,10 @@ static void tiles_expire_movers(ShadowSystem* ss) {
 // A KEPT caster whose node moves becomes a MOVER, and every face that sees it, where it was and
 // where it is, is drawn from then on as a copy of its still casters with the movers over them
 // (render_shadow_movers). Skinned, swaying and morphing meshes are not in the KEPT set, so they
-// mark nothing.
-static void tiles_note_changes(ShadowSystem* ss, const Scene* scene) {
-    ss->tile_frame++;
+// mark nothing. `frame` is the engine's, so the hold counts frames and not depth passes, which
+// a burst of captures multiplies.
+static void tiles_note_changes(ShadowSystem* ss, const Scene* scene, uint64_t frame) {
+    ss->tile_frame = frame;
     const uint64_t epoch = scene_graph_epoch();
     if (epoch != ss->tile_epoch) {
         ss->tile_epoch = epoch;
@@ -2415,7 +2416,7 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     // drawn this frame is in the array it is drawn into.
     const int tiled = tiles_reconcile(ss, scene);
     if (tiled > 0 && tile_reference_count(ss) == 0) {
-        tiles_note_changes(ss, scene);
+        tiles_note_changes(ss, scene, engine->total_frames);
         tiles_take_stores(ss);
     }
     if (ss->tile_block_count > 0)
