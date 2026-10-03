@@ -18,6 +18,13 @@ typedef enum {
     CAT_CLIP_MEOW_SHORT,
     CAT_CLIP_MEOW_LONG,
     CAT_CLIP_BLINK,
+    CAT_CLIP_TROT,
+    CAT_CLIP_STAIR_UP,
+    CAT_CLIP_STAIR_DOWN,
+    CAT_CLIP_TURN_L90,
+    CAT_CLIP_TURN_R90,
+    CAT_CLIP_JUMP_UP,
+    CAT_CLIP_JUMP_DOWN,
     CAT_CLIP_COUNT
 } CatClipId;
 
@@ -57,6 +64,37 @@ static const CatClipSpec CAT_CLIPS[CAT_CLIP_COUNT] = {
     [CAT_CLIP_MEOW_SHORT] = {"meow_short", 0.6000f, 0, 0.0000f, 1, {{"meow", 0.0800f}}},
     [CAT_CLIP_MEOW_LONG] = {"meow_long", 1.1000f, 0, 0.0000f, 1, {{"meow", 0.0800f}}},
     [CAT_CLIP_BLINK] = {"blink", 0.2500f, 0, 0.0000f, 0, {{0}}},
+    [CAT_CLIP_TROT] =
+        {"trot",
+         0.5000f,
+         1,
+         0.6000f,
+         4,
+         {{"paw_lh", 0.0125f}, {"paw_rf", 0.0125f}, {"paw_rh", 0.2625f}, {"paw_lf", 0.2625f}}},
+    [CAT_CLIP_STAIR_UP] =
+        {"stair_up",
+         0.8000f,
+         1,
+         0.5000f,
+         4,
+         {{"paw_lh", 0.0200f}, {"paw_lf", 0.2200f}, {"paw_rh", 0.4200f}, {"paw_rf", 0.6200f}}},
+    [CAT_CLIP_STAIR_DOWN] =
+        {"stair_down",
+         0.8000f,
+         1,
+         0.5000f,
+         4,
+         {{"paw_lh", 0.0200f}, {"paw_lf", 0.2200f}, {"paw_rh", 0.4200f}, {"paw_rf", 0.6200f}}},
+    [CAT_CLIP_TURN_L90] = {"turn_l90", 0.7000f, 0, 0.0000f, 0, {{0}}},
+    [CAT_CLIP_TURN_R90] = {"turn_r90", 0.7000f, 0, 0.0000f, 0, {{0}}},
+    [CAT_CLIP_JUMP_UP] =
+        {"jump_up", 1.1000f, 0, 0.0000f, 2, {{"takeoff", 0.4200f}, {"land", 0.8000f}}},
+    [CAT_CLIP_JUMP_DOWN] = {"jump_down",
+                            1.1000f,
+                            0,
+                            0.0000f,
+                            3,
+                            {{"takeoff", 0.4000f}, {"land", 0.7200f}, {"land_hind", 0.8000f}}},
 };
 
 // Model space: x the cat's left, y up, z forward, the feet at y = 0.

@@ -1804,42 +1804,55 @@ DUTY = 0.62
 FOOTFALL = {"HL": 0.025, "FL": 0.275, "HR": 0.525, "FR": 0.775}
 
 
-def gait_paw(rig, leg, s, stride, duty, lift):
+def gait_paw(rig, leg, s, stride, duty, lift, footfall=FOOTFALL):
     """Where a paw is at cycle position s (cycles since the start) for a body moving `stride`
     a cycle: planted through its stance, carried along an arc through its swing. Also how far
-    through the swing it is, -1 in stance."""
+    through the swing it is, -1 in stance, and the z it took off from."""
     base = Pose(rig).legs[leg]["paw"]
-    tau = s - FOOTFALL[leg]
+    tau = s - footfall[leg]
     n = math.floor(tau)
     u = tau - n
-    z0 = base[2] + stride * (n + FOOTFALL[leg] + duty / 2.0)
+    z0 = base[2] + stride * (n + footfall[leg] + duty / 2.0)
     if u < duty:
-        return (base[0], base[1], z0), -1.0
+        return (base[0], base[1], z0), -1.0, z0
     w = (u - duty) / (1.0 - duty)
     z = z0 + stride * smooth(w)
     y = base[1] + lift * math.sin(math.pi * w) ** 1.5
-    return (base[0], y, z), w
+    return (base[0], y, z), w, z0
 
 
-def clip_walk(rig, t):
+def gait(rig, t, seconds, stride, duty, footfall, lift_fore, lift_hind, ground=None):
+    """A stepping gait over `seconds` a cycle: the body carried `stride` a cycle over paws
+    planted in model space, each rolling over its paw in stance and folding through its swing.
+    `ground(z)`, where given, is the height of what a paw stands on at model z, relative to
+    where the body's feet are carried: a flight's treads."""
     p = stand(rig)
-    T, stride = WALK_SECONDS, WALK_STRIDE
-    s = t / T
+    s = t / seconds
     p.root = Vector((0.0, 0.0, stride * s))
     for leg in LEGS:
-        paw, w = gait_paw(rig, leg, s, stride, DUTY, 0.035 if leg[0] == "F" else 0.03)
+        lift = lift_fore if leg[0] == "F" else lift_hind
+        paw, w, z0 = gait_paw(rig, leg, s, stride, duty, lift, footfall)
+        if ground is not None:
+            under = ground(z0) if w < 0.0 else _mix(ground(z0), ground(z0 + stride), smooth(w))
+            paw = (paw[0], paw[1] + under, paw[2])
         # Paws are planted in model space; the body travels over them.
         p.legs[leg]["paw"] = paw
         rest = p.legs[leg]["meta"]
         if w < 0.0:
             # Through the stance the metapodial rolls forward over the paw.
-            tau = (s - FOOTFALL[leg]) % 1.0
-            p.legs[leg]["meta"] = rest + (tau / DUTY - 0.5) * (20.0 if leg[0] == "H" else 14.0)
+            tau = (s - footfall[leg]) % 1.0
+            p.legs[leg]["meta"] = rest + (tau / duty - 0.5) * (20.0 if leg[0] == "H" else 14.0)
         else:
             # Through the swing the paw folds back and opens again before it lands.
             fold = math.sin(math.pi * w)
             p.legs[leg]["meta"] = rest + (60.0 if leg[0] == "F" else 35.0) * fold
             p.legs[leg]["toe"] -= 25.0 * fold
+    return p, s
+
+
+def clip_walk(rig, t):
+    T, stride = WALK_SECONDS, WALK_STRIDE
+    p, s = gait(rig, t, T, stride, DUTY, FOOTFALL, 0.035, 0.03)
     # Two small rises a cycle, a roll that follows the hind legs, the spine swinging with them.
     p.rump = Vector((0.0, 0.004 * math.cos(4.0 * math.pi * (s - 0.15)), 0.0))
     add_rot(p, "Rump", roll=2.0 * math.sin(2.0 * math.pi * (s - 0.1)), yaw=2.5 * math.sin(2.0 * math.pi * s))
@@ -1852,6 +1865,171 @@ def clip_walk(rig, t):
     for i, pitch in enumerate(TAIL_UP):
         add_rot(p, f"Tail{i + 1}", pitch=pitch)
     tail_wave(p, t, T, 5.0)
+    return p
+
+
+# The trot: diagonal pairs together, left hind with right fore and then right hind with left
+# fore, at 1.2 m/s, each paw down for under half the cycle.
+TROT_STRIDE = 0.6
+TROT_SECONDS = 0.5
+TROT_DUTY = 0.45
+TROT_FOOTFALL = {"HL": 0.025, "FR": 0.025, "HR": 0.525, "FL": 0.525}
+
+
+def clip_trot(rig, t):
+    T, stride = TROT_SECONDS, TROT_STRIDE
+    p, s = gait(rig, t, T, stride, TROT_DUTY, TROT_FOOTFALL, 0.045, 0.04)
+    # A bounce at each pair's push, the body a little lower and longer than at a walk.
+    p.rump = Vector((0.0, -0.006 + 0.006 * math.cos(4.0 * math.pi * (s - 0.2)), 0.0))
+    add_rot(p, "Rump", roll=1.5 * math.sin(2.0 * math.pi * s))
+    add_rot(p, "Chest", roll=-1.5 * math.sin(2.0 * math.pi * s))
+    add_rot(p, "Neck1", pitch=-6.0)
+    add_rot(p, "Head", pitch=2.0 + 1.5 * math.cos(4.0 * math.pi * s))
+    for i, pitch in enumerate(TAIL_UP):
+        add_rot(p, f"Tail{i + 1}", pitch=pitch * 0.6)
+    tail_wave(p, t, T, 4.0)
+    return p
+
+
+# The house's stairs, and how cat_places.c lays a flight's link: from half a tread before the
+# first riser to half a tread past the last, so its line through the treads' middles runs
+# from one end of the link to the other and a two-tread cycle lands every paw on a tread.
+STAIR_RISE = 0.19
+STAIR_GOING = 0.25
+STAIR_SECONDS = 0.8
+STAIR_STRIDE = 2.0 * STAIR_GOING
+STAIR_PITCH = 22.0  # degrees the body leans with the flight
+
+
+def tread_height(z, sign):
+    """The tread under model z, up (sign 1) or down a flight starting at the body's feet,
+    relative to where the flight's line through the treads carries those feet at the same z."""
+    risers = math.floor((z - 0.5 * STAIR_GOING) / STAIR_GOING) + 1
+    return sign * STAIR_RISE * risers
+
+
+def clip_stair(rig, t, sign):
+    """Up (sign 1) or down a flight, two treads a cycle. The flight's rise is not in the clip:
+    the root goes forward only, and the game lifts the body along the line through the treads,
+    so here a paw stands at its tread's height less that line's at the body."""
+    T, stride = STAIR_SECONDS, STAIR_STRIDE
+    slope = STAIR_RISE / STAIR_GOING
+    root_z = stride * t / T
+    p, s = gait(rig, t, T, stride, DUTY, FOOTFALL, 0.06, 0.05,
+                ground=lambda z: tread_height(z, sign) - sign * slope * root_z)
+    add_rot(p, "Rump", pitch=sign * STAIR_PITCH, roll=1.5 * math.sin(2.0 * math.pi * s))
+    # The head is held level against the lean, looking where the paws go next.
+    add_rot(p, "Neck1", pitch=-sign * 0.5 * STAIR_PITCH)
+    add_rot(p, "Head", pitch=-sign * 0.4 * STAIR_PITCH - 8.0)
+    for i, pitch in enumerate(TAIL_UP):
+        add_rot(p, f"Tail{i + 1}", pitch=pitch * (0.5 if sign > 0 else 0.3))
+    tail_wave(p, t, T, 4.0)
+    return p
+
+
+def clip_stair_up(rig, t):
+    return clip_stair(rig, t, 1.0)
+
+
+def clip_stair_down(rig, t):
+    return clip_stair(rig, t, -1.0)
+
+
+# A quarter turn on the spot: the body swings round over a quarter of a second more than half
+# its length while the paws step to where they stand in the turned body, fore first.
+TURN_SECONDS = 0.7
+TURN_STEPS = (("FL", 0.05), ("FR", 0.22), ("HR", 0.38), ("HL", 0.52))
+TURN_STEP_LENGTH = 0.38
+
+
+def clip_turn(rig, t, sign):
+    T = TURN_SECONDS
+    u = t / T
+    p = stand(rig)
+    turn = sign * 90.0
+    p.root_yaw = turn * smooth(window(u, 0.05, 0.9))
+    a = math.radians(turn)
+    for leg, start in TURN_STEPS:
+        x, y, z = p.legs[leg]["paw"]
+        # Where the paw stands once the body has turned: its place in the body, turned with it.
+        end = (x * math.cos(a) + z * math.sin(a), y, -x * math.sin(a) + z * math.cos(a))
+        w = window(u, start, start + TURN_STEP_LENGTH)
+        p.legs[leg]["paw"] = (_mix(x, end[0], smooth(w)),
+                              y + 0.03 * math.sin(math.pi * w),
+                              _mix(z, end[2], smooth(w)))
+    add_rot(p, "Head", yaw=sign * 25.0 * bump(u, 0.3, 0.5))
+    add_rot(p, "Neck2", yaw=sign * 12.0 * bump(u, 0.3, 0.5))
+    tail_wave(p, t, T, 10.0)
+    return p
+
+
+def clip_turn_l90(rig, t):
+    return clip_turn(rig, t, 1.0)
+
+
+def clip_turn_r90(rig, t):
+    return clip_turn(rig, t, -1.0)
+
+
+# Jumps, on the spot: the game carries the body along the arc between the clip's takeoff and
+# its landing, and plays the clip at whatever rate makes the time between them the arc's own
+# time of flight. Up: a crouch with the eyes on the place, the push, the forelegs reaching,
+# the landing and its absorbing. Down: a crouch looking over the edge, a reach down, the fore
+# paws landing a moment before the hind.
+JUMP_SECONDS = 1.1
+JUMP_UP_EVENTS = (("takeoff", 0.42), ("land", 0.80))
+JUMP_DOWN_EVENTS = (("takeoff", 0.40), ("land", 0.72), ("land_hind", 0.80))
+
+
+def _air(p, leg, rel, paw_rel):
+    """A leg carried by its girdle through the air, `rel` of the way from where it stood."""
+    p.legs[leg]["rel"] = rel
+    p.legs[leg]["paw_rel"] = paw_rel
+
+
+def clip_jump_up(rig, t):
+    takeoff, land = (e[1] for e in JUMP_UP_EVENTS)
+    p = stand(rig)
+    crouch = smooth(window(t, 0.0, takeoff - 0.08)) * (1.0 - smooth(window(t, takeoff - 0.06, takeoff)))
+    absorb = bump(t, land + 0.06, 0.16)
+    p.rump = Vector((0.0, -0.06 * crouch - 0.035 * absorb, -0.01 * crouch))
+    flight = window(t, takeoff - 0.02, takeoff + 0.04) * (1.0 - window(t, land - 0.05, land))
+    air = (t - takeoff) / (land - takeoff)
+    add_rot(p, "Rump", pitch=18.0 * flight * (1.0 - air) + 6.0 * crouch)
+    add_rot(p, "Neck1", pitch=12.0 * crouch - 6.0 * flight)
+    add_rot(p, "Head", pitch=10.0 * crouch)
+    for side in ("L", "R"):
+        x = 0.045 if side == "L" else -0.045
+        # The fore reach up and forward for the edge, then come down onto it.
+        fore = (x, _mix(-0.1, -0.2, smooth(air)), _mix(0.17, 0.08, smooth(air)))
+        _air(p, f"F{side}", flight, fore)
+        # The hind push out behind, then tuck under.
+        hind = (x, _mix(-0.19, -0.12, smooth(air)), _mix(-0.17, -0.03, smooth(air)))
+        _air(p, f"H{side}", flight, hind)
+    for i, pitch in enumerate(TAIL_UP):
+        add_rot(p, f"Tail{i + 1}", pitch=pitch * 0.3 * flight)
+    return p
+
+
+def clip_jump_down(rig, t):
+    takeoff, land, land_hind = (e[1] for e in JUMP_DOWN_EVENTS)
+    p = stand(rig)
+    crouch = smooth(window(t, 0.0, takeoff - 0.1)) * (1.0 - smooth(window(t, takeoff - 0.06, takeoff)))
+    absorb = bump(t, land_hind + 0.05, 0.2)
+    p.rump = Vector((0.0, -0.04 * crouch - 0.04 * absorb, 0.0))
+    fore_air = window(t, takeoff - 0.02, takeoff + 0.04) * (1.0 - window(t, land - 0.04, land))
+    hind_air = window(t, takeoff, takeoff + 0.05) * (1.0 - window(t, land_hind - 0.04, land_hind))
+    air = (t - takeoff) / (land_hind - takeoff)
+    add_rot(p, "Rump", pitch=-16.0 * fore_air - 6.0 * crouch)
+    # Looking down over the edge, and at the floor coming up.
+    add_rot(p, "Neck1", pitch=-14.0 * crouch - 6.0 * fore_air)
+    add_rot(p, "Head", pitch=-18.0 * crouch - 8.0 * fore_air)
+    for side in ("L", "R"):
+        x = 0.045 if side == "L" else -0.045
+        _air(p, f"F{side}", fore_air, (x, -0.25, _mix(0.13, 0.09, smooth(air))))
+        _air(p, f"H{side}", hind_air, (x, _mix(-0.14, -0.19, smooth(air)), -0.06))
+    for i, pitch in enumerate(TAIL_UP):
+        add_rot(p, f"Tail{i + 1}", pitch=pitch * 0.4 * max(fore_air, hind_air))
     return p
 
 
@@ -1988,6 +2166,19 @@ CLIPS = {
     "meow_short": (0.6, False, clip_meow_short, [("meow", 0.08)]),
     "meow_long": (1.1, False, clip_meow_long, [("meow", 0.08)]),
     "blink": (0.25, False, clip_blink, []),
+    "trot": (TROT_SECONDS, True, clip_trot,
+             [(f"paw_{k.lower()[1]}{k.lower()[0]}", TROT_FOOTFALL[k] * TROT_SECONDS)
+              for k in ("HL", "FR", "HR", "FL")]),
+    "stair_up": (STAIR_SECONDS, True, clip_stair_up,
+                 [(f"paw_{k.lower()[1]}{k.lower()[0]}", FOOTFALL[k] * STAIR_SECONDS)
+                  for k in ("HL", "FL", "HR", "FR")]),
+    "stair_down": (STAIR_SECONDS, True, clip_stair_down,
+                   [(f"paw_{k.lower()[1]}{k.lower()[0]}", FOOTFALL[k] * STAIR_SECONDS)
+                    for k in ("HL", "FL", "HR", "FR")]),
+    "turn_l90": (TURN_SECONDS, False, clip_turn_l90, []),
+    "turn_r90": (TURN_SECONDS, False, clip_turn_r90, []),
+    "jump_up": (JUMP_SECONDS, False, clip_jump_up, list(JUMP_UP_EVENTS)),
+    "jump_down": (JUMP_SECONDS, False, clip_jump_down, list(JUMP_DOWN_EVENTS)),
 }
 
 

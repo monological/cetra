@@ -150,6 +150,10 @@ typedef struct SilentArgs {
     char cat_clip[32];      // a clip by name, or empty for the place's own
     float cat_clip_seconds; // held this far in; below 0 it plays
     bool no_eyeshine;
+    char cat_go[32]; // a place it sets off for, or empty to stay
+    bool cat_trot;   // and at a trot
+    bool cat_cam;    // the camera follows the cat
+    bool trace_cat;  // print what it is doing every 30 steps
 } SilentArgs;
 
 static SilentArgs g_args;
@@ -461,6 +465,8 @@ static void on_init(Game* game) {
         CatDesc cat = {.at = g_args.cat_at,
                        .clip = g_args.cat_clip[0] ? g_args.cat_clip : NULL,
                        .clip_seconds = g_args.cat_clip_seconds,
+                       .go = g_args.cat_go[0] ? g_args.cat_go : NULL,
+                       .trot = g_args.cat_trot,
                        .eyeshine = !g_args.no_eyeshine};
         glm_vec3_copy(g_args.cat_fur, cat.fur);
         glm_vec3_copy(g_args.cat_eyes, cat.eyes);
@@ -557,6 +563,14 @@ static void on_update(Game* game, double dt) {
     player_update(&g_player, game, dt);
     if (g_door_hung)
         door_update(&g_door, (float)dt);
+    vec3 eye = {0.0f, 0.0f, 0.0f}, forward = {0.0f, 0.0f, -1.0f};
+    player_eye(&g_player, eye, forward);
+    cat_step(&g_cat, (vec3){eye[0], eye[1] - PLAYER_EYE_HEIGHT, eye[2]}, (float)dt);
+    if (g_args.trace_cat) {
+        static int step;
+        if (step++ % 30 == 0)
+            cat_trace(&g_cat, step - 1);
+    }
     // Where the capsule is: the camera rides it, so from inside the frame a
     // player stopped by a wall and one walking on the spot look the same.
     if (g_args.trace_player && g_player.entity) {
@@ -623,8 +637,16 @@ static void on_pre_render(Game* game, double alpha) {
     if (input_action_pressed(&game->input, "toggle_gui"))
         engine->show_gui = !engine->show_gui;
     const bool pinned = g_args.cam_eye_set && g_args.cam_target_set;
-    player_pre_render(&g_player, game, pinned ? &g_args.cam_eye : NULL,
-                      pinned ? &g_args.cam_target : NULL);
+    if (g_args.cat_cam && g_cat.entity) {
+        // Over the cat's shoulder, looking where it is going.
+        const float* c = g_cat.entity->position;
+        vec3 target = {c[0], c[1] + 0.05f, c[2]};
+        vec3 behind = {c[0] - 1.1f * sinf(g_cat.yaw), c[1] + 0.6f, c[2] - 1.1f * cosf(g_cat.yaw)};
+        player_pre_render(&g_player, game, &behind, &target);
+    } else {
+        player_pre_render(&g_player, game, pinned ? &g_args.cam_eye : NULL,
+                          pinned ? &g_args.cam_target : NULL);
+    }
 
     if (input_action_pressed(&game->input, "flashlight"))
         lights_toggle_flashlight(&g_lights);
@@ -730,8 +752,11 @@ static void print_usage(const char* prog) {
     printf("      --no-cat            Without the cat\n");
     printf("      --cat-fur RRGGBB    The cat's coat, as sRGB hex (default 262424)\n");
     printf("      --cat-eyes RRGGBB   Its eyes (default E8B923)\n");
-    printf("      --cat-at PLACE      Where it is: %s\n", CAT_PLACE_LIST);
-    printf("      --cat-clip NAME[@S] Play that clip there, or hold it S seconds in\n");
+    printf("      --cat-at PLACE      Where it is: %s\n", cat_place_list());
+    printf("      --cat-clip NAME[@S] Hold that clip there, playing or S seconds in\n");
+    printf("      --cat-goto PLACE[:trot]  Send it there once it is in the house\n");
+    printf("      --cat-cam           The camera follows the cat\n");
+    printf("      --trace-cat         Print what the cat is doing every 30 steps\n");
     printf("      --no-eyeshine       Its eyes do not throw the flashlight back\n");
     printf("  In the window: click to capture the mouse, Tab to release it. WASD\n");
     printf("  walks, Shift hurries, the arrows or the mouse look, E opens and shuts\n");
@@ -847,6 +872,17 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
             }
         } else if (!strcmp(s, "--no-eyeshine")) {
             a->no_eyeshine = true;
+        } else if (!strcmp(s, "--cat-goto") && has_next) {
+            snprintf(a->cat_go, sizeof(a->cat_go), "%s", argv[++i]);
+            char* how = strchr(a->cat_go, ':');
+            if (how) {
+                *how = '\0';
+                a->cat_trot = !strcmp(how + 1, "trot");
+            }
+        } else if (!strcmp(s, "--cat-cam")) {
+            a->cat_cam = true;
+        } else if (!strcmp(s, "--trace-cat")) {
+            a->trace_cat = true;
         } else if (!strcmp(s, "-h") || !strcmp(s, "--help")) {
             print_usage(argv[0]);
             return false;
