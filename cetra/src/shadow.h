@@ -57,16 +57,17 @@ _Static_assert(SHADOW_TILE_MARK >= MAX_PUNCTUAL_SHADOW_LAYERS,
 // array's edge is. The minimum edge, so it always fits and never changes with the
 // light count -- cover known at 9.4 cm over the default 96 m.
 #define RAIN_OCCLUSION_SIZE PUNCTUAL_SHADOW_MIN_SIZE
-// Cached point-light shadows (spec 13.16): six faces a view and one or SHADOW_TILE_VIEWS views
-// a light, each face a SHADOW_TILE_SIZE tile in layers of the punctual array past the
-// per-frame ones and the rain's. A budget of its own, because a tile is drawn once and kept:
-// what it costs is memory, never a traversal, which is the pool's whole limit. The tiles it
-// affords, and the lights at one view each.
-#define PUNCTUAL_TILE_VRAM_BUDGET (128u * 1024u * 1024u)
+// Cached point-light shadows (spec 13.16): six faces a view, SHADOW_TILE_VIEWS views for a light
+// with a body and one for a light without, each face a SHADOW_TILE_SIZE tile in layers of the
+// punctual array past the per-frame ones and the rain's. A budget of its own, because a tile is
+// drawn once and kept: what it costs is memory, never a traversal, which is the pool's whole
+// limit. The tiles it affords, and the lights at one view each.
+#define PUNCTUAL_TILE_VRAM_BUDGET (192u * 1024u * 1024u)
 #define SHADOW_TILE_MAX_CELLS \
     (PUNCTUAL_TILE_VRAM_BUDGET / (SHADOW_TILE_SIZE * SHADOW_TILE_SIZE * 4u))
 #define SHADOW_TILE_MAX_BLOCKS (SHADOW_TILE_MAX_CELLS / 6u)
-_Static_assert(6 * SHADOW_TILE_VIEWS <= 32, "a block's faces are one bit each of a uint32_t");
+// A block's kept faces, one bit each.
+#define SHADOW_TILE_VALID_WORDS ((6 * SHADOW_TILE_VIEWS + 63) / 64)
 // The most layers the tiles can take, which is the budget at the smallest edge; a larger
 // edge holds the same tiles in fewer.
 #define PUNCTUAL_TILE_MAX_LAYERS \
@@ -180,8 +181,8 @@ struct Engine;
 struct Light;
 
 // One cached light's faces: a run of consecutive tiles of the region, six a view, each view's
-// in the +X -X +Y -Y +Z -Z order a point light's per-frame layers take. A light longer than it
-// is wide is drawn from SHADOW_TILE_VIEWS views along its shape, any other from one. What it
+// in the +X -X +Y -Y +Z -Z order a point light's per-frame layers take. A light with a body is
+// drawn from SHADOW_TILE_VIEWS views spread over it, one without from its centre. What it
 // records is what the tiles hold, so the pass can tell a face it may keep from one it must
 // draw again.
 //
@@ -193,18 +194,34 @@ typedef struct ShadowTileBlock {
     int first;           // its first cell, counted from the region's base
     int cells;           // cells it owns, which a later light needing no more may reuse
     int views;           // views drawn, 0 until first drawn
-    vec3 origin;         // where the middle view was drawn from
-    vec3 step;           // from one view to the next along the shape; zero for one view
+    // The body the views were drawn over: its centre, where view 0 stands, its segment end to
+    // end, and its radius.
+    vec3 centre;
+    vec3 segment;
+    float radius;
     float near_plane;
     float far_plane;
     unsigned generation; // the region's when drawn; any other means the tiles were lost
-    uint32_t valid;      // faces drawn, one bit each, view by view
+    uint64_t valid[SHADOW_TILE_VALID_WORDS]; // faces drawn, one bit each, view by view
     bool hero;
     // A kept block's light where it was last frame, and whether it has moved since: a
     // light that never moves -- a bulb -- is never worth redrawing every frame.
     vec3 seen;
     bool moving;
+    // A kept block's faces that see a caster which has moved lately. Each is drawn every frame
+    // as a copy of the same face of the block's STORE, which holds its still casters alone,
+    // with the movers drawn over it: a swinging pendulum costs its own draws a frame rather
+    // than the room's. `stored` says which of the store's faces are drawn.
+    uint64_t dynamic[SHADOW_TILE_VALID_WORDS];
+    uint64_t stored[SHADOW_TILE_VALID_WORDS];
+    int store; // the block that is this one's store, -1 for none
+    int owner; // for a store, the block it stores for; -1 for any other
 } ShadowTileBlock;
+
+// The casters a kept face draws over a copy of its still ones rather than with them: nodes
+// that have moved within SHADOW_TILE_MOVER_HOLD frames.
+#define SHADOW_TILE_MAX_MOVERS 32
+#define SHADOW_TILE_MOVER_HOLD 120
 
 typedef struct ShadowSystem {
     // SETTINGS throughout, in feature order, except:
@@ -352,7 +369,11 @@ typedef struct ShadowSystem {
     int tile_fill_budget; // faces drawn a frame while filling; 0 = every face that wants it
     float tile_tolerance; // metres a light's views may move from where they were drawn
     bool tile_refresh;    // redraw every face every frame: what a kept face must equal
-    int tile_views;       // 0 = from each light's shape; 1 forces one view for every light
+    int tile_views;       // 0 = from each light's body; 1 forces one view for every light
+    // An instrument: every cached light drawn each frame from this many points over its body
+    // as it is now, each read with one hard tap and averaged with no blur -- the soft shadow
+    // by its definition. 0 = off; at most SHADOW_TILE_REFERENCE_MAX.
+    int tile_reference;
     // ENGINE-OWNED. The region starts at tile_base_layer and runs tile_layers; both only
     // grow, since moving either moves every tile. tile_generation counts the times its
     // contents were lost -- an array rebuilt, the base moved -- and a block drawn under
@@ -366,6 +387,13 @@ typedef struct ShadowSystem {
     int tile_block_count;  // blocks in use or freed, so the high-water mark of the region
     int tile_faces_drawn;  // this frame, kept faces filled
     int hero_faces_drawn;  // this frame, heroes' faces redrawn
+    int mover_faces_drawn; // this frame, kept faces copied from their store with movers over
+    const struct SceneNode* tile_movers[SHADOW_TILE_MAX_MOVERS];
+    uint64_t tile_mover_moved[SHADOW_TILE_MAX_MOVERS]; // the tile frame each last moved
+    int tile_mover_count;
+    uint64_t tile_frame;   // frames the tiles have been drawn
+    int tile_mover_filter; // for one tile draw: 0 every kept caster, 1 the still, 2 the movers
+    GLuint tile_copy_fbo;  // reads a store's face while the punctual FBO writes its copy
     bool tile_full_warned; // latches, as the pool's does
     bool tile_range_warned;
 

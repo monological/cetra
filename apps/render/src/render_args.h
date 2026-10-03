@@ -171,6 +171,7 @@ typedef struct {
     int tile_heroes;           // ShadowSystem.tile_heroes
     int tiles_refresh;         // ShadowSystem.tile_refresh
     int tile_views;            // ShadowSystem.tile_views
+    int tile_reference;        // ShadowSystem.tile_reference
     // --tile-map: one cached light's six faces as a greyscale PPM
     const char* tile_map_light;
     const char* tile_map_path;

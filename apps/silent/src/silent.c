@@ -142,6 +142,7 @@ typedef struct SilentArgs {
     bool no_candles;        // the candles stand unlit
     bool no_candle_shadows; // the candles light through walls, as before spec 13.16
     int tile_heroes;        // candles whose shadows follow their flames every frame
+    bool tiles_probe;       // print the cached shadow tiles at exit
     bool profiler;          // per-pass timing and submission counts, reported at exit
     const char* audio_dump; // headless: write what the listener hears here
 } SilentArgs;
@@ -667,6 +668,8 @@ static void on_pre_render(Game* game, double alpha) {
 static void on_shutdown(Game* game) {
     if (game && game->engine)
         profiler_report(game->engine->profiler);
+    if (g_args.tiles_probe && g_scene)
+        shadow_tiles_probe(g_scene->shadow_system, g_scene);
     prompt_free(&g_prompt);
 }
 
@@ -708,6 +711,7 @@ static void print_usage(const char* prog) {
            "                          nearest first (default %d; 0 keeps every shadow still)\n",
            DEFAULT_TILE_HEROES);
     printf("      --profiler          Per-pass timing and submission counts, at exit\n");
+    printf("      --tiles-probe       The cached shadow tiles and each light's block, at exit\n");
     printf("  In the window: click to capture the mouse, Tab to release it. WASD\n");
     printf("  walks, Shift hurries, the arrows or the mouse look, E opens and shuts\n");
     printf("  a door you are facing, F the flashlight, G shows the GUI.\n");
@@ -783,6 +787,8 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
             a->no_candle_shadows = true;
         } else if (!strcmp(s, "--tile-heroes") && has_next) {
             a->tile_heroes = atoi(argv[++i]);
+        } else if (!strcmp(s, "--tiles-probe")) {
+            a->tiles_probe = true;
         } else if (!strcmp(s, "--profiler")) {
             a->profiler = true;
         } else if (!strcmp(s, "-h") || !strcmp(s, "--help")) {

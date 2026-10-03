@@ -61,14 +61,15 @@ typedef struct Light {
     // the depth pass.
     int shadow_map_index;
     int shadow_layer;
-    // A cached point light's faces (spec 13.16): the first tile of its middle
-    // view in the punctual array's tile region, -1 for none, reassigned by the
-    // depth pass like the two above; where that view was drawn from; and the
-    // step to the next view along the light's shape, zero for a light drawn
-    // from one view.
+    // A cached point light's faces (spec 13.16): its first tile in the punctual
+    // array's tile region, -1 for none, reassigned by the depth pass like the
+    // two above; and the body its views were drawn over -- its centre, its
+    // segment end to end, its radius -- which is where its first view stands
+    // and from which a lookup places the rest.
     int shadow_tile;
     vec3 shadow_origin;
-    vec3 shadow_step;
+    vec3 shadow_segment;
+    float shadow_radius;
     // The Mesh whose emissive surface this panel was derived from (spec 11.49),
     // by that mesh's stable `id`. 0 means AUTHORED -- a light somebody made --
     // and the emissive reconcile will not touch one, so the two populations
@@ -127,9 +128,10 @@ typedef struct Light {
     // than every frame (spec 13.16): it and what it lights stand still. Needs a
     // range, which is where its shadow ends.
     bool shadow_cache;
-    // The emitting body, in metres: a capsule centred on the light, `source_length` long along
-    // `direction` and `source_radius` round -- a bulb is a sphere, a tube a line, a flame both.
-    // What a soft shadow's edge comes from; both 0 is a point, whose shadow is hard.
+    // The emitting body, in metres: a capsule centred on the light, a segment `source_length`
+    // long along `direction` with every point of it `source_radius` round, so the whole body
+    // is the length plus a radius at each end -- a bulb is a sphere, a tube a line, a flame
+    // both. What a soft shadow's edge comes from; both 0 is a point, whose shadow is hard.
     float source_radius;
     float source_length;
     float shadow_near; // metres from the light that nothing nearer casts; 0 = from the range
@@ -175,7 +177,7 @@ typedef struct LightDesc {
     bool cast_shadows;
     bool shadow_cache;   // with cast_shadows, a point light's shadow drawn once and kept
     float source_radius; // the emitting capsule's radius, metres; 0 and 0 = a point
-    float source_length; // its length along `direction`, metres
+    float source_length; // its length along `direction` between the end caps, metres
     float shadow_near;   // metres; 0 = derived from the range
 } LightDesc;
 

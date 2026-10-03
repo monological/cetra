@@ -211,6 +211,9 @@ static void print_usage(const char* prog) {
                     "                         view\n");
     fprintf(stderr, "      --tile-views <n>   1 draws every cached light from one view rather\n"
                     "                         than along its shape\n");
+    fprintf(stderr, "      --tile-reference <n>  Shade every cached light from n views over its\n"
+                    "                         body, redrawn each frame: the soft shadow's\n"
+                    "                         reference (at most 64)\n");
     fprintf(stderr, "      --tile-heroes <n>  Redraw the n moving cached lights nearest the\n"
                     "                         camera every frame, from where they are now\n");
     fprintf(stderr, "      --tiles-refresh    Redraw every cached face every frame\n");
@@ -1262,6 +1265,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->tiles_refresh = 1;
         } else if (strcmp(argv[i], "--tile-views") == 0 && i + 1 < argc) {
             args->tile_views = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--tile-reference") == 0 && i + 1 < argc) {
+            args->tile_reference = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--tile-map") == 0 && i + 2 < argc) {
             args->tile_map_light = argv[++i];
             args->tile_map_path = argv[++i];
@@ -4242,6 +4247,7 @@ int main(int argc, char** argv) {
         scene->shadow_system->tile_heroes = args.tile_heroes;
         scene->shadow_system->tile_refresh = args.tiles_refresh != 0;
         scene->shadow_system->tile_views = args.tile_views;
+        scene->shadow_system->tile_reference = args.tile_reference;
         float light_size = args.light_size >= 0.0f ? args.light_size : scene_radius * 0.08f;
         for (size_t i = 0; i < scene->light_count; i++) {
             Light* light = scene->lights[i];

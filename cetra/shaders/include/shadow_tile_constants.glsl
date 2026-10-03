@@ -17,10 +17,23 @@
 // A cached light's near plane as a fraction of its range, where the light states none.
 #define SHADOW_TILE_NEAR_RATIO 0.002f
 
-// The views a cached light longer than it is wide is drawn from, each a cube of six faces from
-// the centre of one equal part of its length, consecutive in its block with the middle one
-// published: a lookup reaches view k (-1, 0, +1) at six cells and one step per k from it.
-#define SHADOW_TILE_VIEWS 3
+// The views a cached light with a body is drawn from, each a cube of six faces from a point of
+// the body, consecutive in its block: view 0 at the body's centre, the rest spread over it. Its
+// soft shadow is their average. A light with no body is drawn from its centre alone.
+#define SHADOW_TILE_VIEWS 8
+
+// The most views --tile-reference may draw a light from: 64 views of six faces is 96 MB at
+// 256 a face, within the tile budget for one light.
+#define SHADOW_TILE_REFERENCE_MAX 64
+
+// A light's body is a segment `source_length` long along its direction, centred on it, with a
+// ball of `source_radius` about every point. View m of n past the first stands at u along the
+// segment, stratified as (m - 0.5) / (n - 1), plus a point of the ball from the m-th triple of
+// Roberts' R3 sequence, fract(0.5 + (m - 1) * alpha), alpha the reciprocal powers of the root
+// of x^4 = x + 1. The kept views and the reference's are both placed this way.
+#define SHADOW_TILE_R3_X 0.8191725134f
+#define SHADOW_TILE_R3_Y 0.6710436067f
+#define SHADOW_TILE_R3_Z 0.5497004779f
 
 // What a cached light packs as its per-frame punctual layer: past every per-frame layer, so
 // the per-frame lookup reads it as lit before it indexes anything, while every "does this light
