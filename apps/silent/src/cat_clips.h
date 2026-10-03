@@ -60,9 +60,9 @@ static const CatClipSpec CAT_CLIPS[CAT_CLIP_COUNT] = {
 };
 
 // Model space: x the cat's left, y up, z forward, the feet at y = 0.
-#define CAT_EYE_X  0.0220f
-#define CAT_EYE_Y  0.2840f
-#define CAT_EYE_Z  0.2460f
+#define CAT_EYE_X  0.0215f
+#define CAT_EYE_Y  0.2790f
+#define CAT_EYE_Z  0.2331f
 #define CAT_HEAD_Y 0.2700f
 #define CAT_HEAD_Z 0.1800f
 

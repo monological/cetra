@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "_comment": [
+    "silent's cat (spec 13.17) in the render app with its coat on: the glb carries the body and",
+    "the clips, and a coat of fur shells is a material setting the file format has no word for.",
+    "silent sets the same values from C; apps/silent/tools/cat_sheet.py renders through this."
+  ],
+  "models": [ { "path": "../models/cat.glb" } ],
+  "materials": {
+    "cat_fur": {
+      "furLayers": 20,
+      "furLength": 0.011,
+      "furDensity": 900,
+      "furThickness": 0.75,
+      "furRootShade": 0.28,
+      "furClump": 0.85,
+      "furComb": [0.0, -0.5, -1.0],
+      "furLie": 0.75
+    },
+    "cat_ear": {
+      "furLayers": 10,
+      "furLength": 0.007,
+      "furDensity": 1100,
+      "furThickness": 0.4,
+      "furRootShade": 0.7,
+      "furClump": 0.6,
+      "furComb": [0.0, 1.0, 0.0],
+      "furLie": 0.3
+    }
+  }
+}
