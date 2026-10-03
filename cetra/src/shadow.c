@@ -764,14 +764,14 @@ void bind_shadow_maps_to_program(ShadowSystem* system, ShaderProgram* program) {
 // says what casts for light, and the rain lands on the surfaces the camera sees,
 // not on shapes standing in for them. The cover spans the street, so stand-ins
 // cut small for a light's reach would only be more draws to it.
-// KEPT is a cached light's face (spec 13.16): OPAQUE without glass, at level 0, since the
-// camera's level is wherever the camera was. Glass casts nothing because a pane passing nearly
-// all the light, drawn solid, puts what stands behind it in full shadow -- a clock's dial behind
-// its door -- and the tiles have no transmittance map to say otherwise. KEPT_STILL and
-// KEPT_MOVERS split KEPT by whether a caster MOVES (kept_caster_moves), for a face drawn as a
-// copy of its still casters with the movers over it. A skinned, swaying or morphing mesh moves
-// on every frame, whether or not its node does, so it is never in the copy: a face drawn once
-// would hold that surface wherever it was on that frame (spec 13.18).
+// KEPT is a cached light's face, drawn once (spec 13.16): OPAQUE without glass, and without
+// anything whose surface moves under its node -- a skinned, swaying or morphing mesh -- since a
+// face drawn once would hold that surface wherever it was on that frame; and at level 0 for
+// the same reason, since the camera's level is wherever the camera was. Glass casts nothing
+// because a pane passing nearly all the light, drawn solid, puts what stands behind it in full
+// shadow -- a clock's dial behind its door -- and the tiles have no transmittance map to say
+// otherwise. KEPT_STILL and KEPT_MOVERS split a face drawn every frame, as a copy of its still
+// casters with the movers over it; such a surface is a mover on every frame (spec 13.18).
 typedef enum ShadowCasterSet {
     SHADOW_CASTERS_OPAQUE = 0,
     SHADOW_CASTERS_OPAQUE_TSM,
@@ -862,19 +862,23 @@ static bool tile_node_moves(const ShadowSystem* ss, const SceneNode* node) {
     return false;
 }
 
-// Whether a kept face draws this caster over its copy rather than in it: its surface moves under
-// its node, or its node has moved lately.
-static bool kept_caster_moves(const ShadowSystem* ss, const DrawItem* item) {
-    return !(item->flags & DRAW_STILL) || tile_node_moves(ss, item->node);
-}
-
-// Whether this caster set wants this item for where it is: the still or the movers for the two
-// that split KEPT, every item for any other.
+// Which kept set takes a caster, by how it moves; every other set takes it whatever it does. A
+// face drawn whole and kept takes what stands where its node puts it. Split for a face drawn
+// every frame, the store takes what has not moved lately and the overlay the rest -- with every
+// pose, so a pose is only ever drawn into a face that is drawn again the next frame.
 static bool caster_set_wants_motion(const ShadowSystem* ss, ShadowCasterSet set,
                                     const DrawItem* item) {
-    if (set != SHADOW_CASTERS_KEPT_STILL && set != SHADOW_CASTERS_KEPT_MOVERS)
-        return true;
-    return kept_caster_moves(ss, item) == (set == SHADOW_CASTERS_KEPT_MOVERS);
+    const bool still = (item->flags & DRAW_STILL) != 0;
+    switch (set) {
+        case SHADOW_CASTERS_KEPT:
+            return still;
+        case SHADOW_CASTERS_KEPT_STILL:
+            return still && !tile_node_moves(ss, item->node);
+        case SHADOW_CASTERS_KEPT_MOVERS:
+            return !still || tile_node_moves(ss, item->node);
+        default:
+            return true;
+    }
 }
 
 // Whether two items belong in one span: everything draw_run_key_equal wants
@@ -1609,8 +1613,9 @@ static void tiles_migrate(ShadowSystem* ss, GLuint old_tex, GLuint old_fbo, int 
 }
 
 // What a box does to the kept faces that see it, any of: they are drawn again; they are drawn
-// from now on as their still casters with the movers over them; their store's copy of the
-// still casters is drawn again, because it held one that has started to move.
+// as their still casters with the movers over them, every frame until one is drawn with no
+// moving caster in it; their store's copy of the still casters is drawn again, because it held
+// one that has started to move.
 enum { TILE_BOX_INVALIDATE = 1, TILE_BOX_DYNAMIC = 2, TILE_BOX_UNSTORE = 4 };
 
 static void tiles_mark_box(ShadowSystem* ss, const vec3 box_min, const vec3 box_max,
@@ -1648,6 +1653,18 @@ static void tiles_mark_box(ShadowSystem* ss, const vec3 box_min, const vec3 box_
     }
 }
 
+// Every drawn face of every cached light, drawn over its copy: for a moving caster with no
+// bound, which may be anywhere, as draw_item_visible takes it.
+static void tiles_mark_all_dynamic(ShadowSystem* ss) {
+    for (int b = 0; b < ss->tile_block_count; ++b) {
+        ShadowTileBlock* block = &ss->tile_blocks[b];
+        if (!block->light || block->views <= 0)
+            continue;
+        block->touched |= tile_faces_of(block->views);
+        block->dynamic |= tile_faces_of(block->views);
+    }
+}
+
 // Let go of the movers that have held still for SHADOW_TILE_MOVER_HOLD frames. A face that
 // drew one over its store is then wrong whole -- the store left it out -- so every face drawn
 // that way is drawn whole again, the one that stopped where it stopped; the movers still
@@ -1675,15 +1692,13 @@ static void tiles_expire_movers(ShadowSystem* ss) {
 
 // What the kept faces hold that is no longer true, every frame. A node added or freed changes
 // the graph and every face is drawn again: it has no previous frame for the draw list to show.
-// A KEPT caster that moves becomes a MOVER, and every face that sees it is drawn from then on as
-// a copy of its still casters with the movers over them (render_shadow_movers). A caster whose
-// node moves marks where it was and where it is, and leaves the stores, which drew it as still.
-// One whose surface moves under its node -- skinned, swaying, morphing -- moves every frame and
-// marks where its surface is now: it was never in a store, and a face it has left is still
-// dynamic from the frame it was there, so is drawn once more without it. That happens on the
-// frame the graph changes too, or a face drawn whole that frame would keep the surface for good.
-// `frame` is the engine's, so the hold counts frames and not depth passes, which a burst of
-// captures multiplies.
+// A KEPT caster whose node moves becomes a MOVER, and every face that sees it, where it was and
+// where it is, is drawn from then on as a copy of its still casters with the movers over them
+// (render_shadow_movers). A surface that moves under its node -- skinned, swaying, morphing --
+// needs no place among the movers: it moves every frame and is in no store, so it marks where
+// it is now, and a face it has left is still marked from the frame it was there, which draws it
+// once more without it. `frame` is the engine's, so the hold counts frames and not depth passes,
+// which a burst of captures multiplies.
 static void tiles_note_changes(ShadowSystem* ss, const Engine* engine, const Scene* scene,
                                uint64_t frame) {
     ss->tile_frame = frame;
@@ -1698,46 +1713,47 @@ static void tiles_note_changes(ShadowSystem* ss, const Engine* engine, const Sce
             ss->tile_blocks[b].dynamic = 0;
             ss->tile_blocks[b].stored = 0;
         }
-    } else {
-        tiles_expire_movers(ss);
+        return;
     }
+    tiles_expire_movers(ss);
     const CullView view = render_cull_view(engine, scene, NULL);
     const DrawList* list = scene->draw_list;
     for (size_t i = 0; list && i < list->count; ++i) {
         const DrawItem* item = &list->items[i];
         const SceneNode* node = item->node;
-        const bool deforms = !(item->flags & DRAW_STILL);
-        if (!caster_set_wants(SHADOW_CASTERS_KEPT, item->lane, item->flags) ||
-            (!deforms &&
-             memcmp(node->global_transform, node->prev_global_transform, sizeof(mat4)) == 0))
+        if (!caster_set_wants(SHADOW_CASTERS_KEPT, item->lane, item->flags))
+            continue;
+        vec3 lo = GLM_VEC3_ZERO_INIT, hi = GLM_VEC3_ZERO_INIT;
+        if (!(item->flags & DRAW_STILL)) {
+            // The surface as drawn, posed and displaced: the import box is the bind pose, which a
+            // curled body or a swung tail leaves.
+            AABB box;
+            if (!draw_item_bounds(item, &view, &box)) {
+                tiles_mark_all_dynamic(ss);
+                continue;
+            }
+            aabb_transform(box.min, box.max, (vec4*)node->global_transform, lo, hi);
+            tiles_mark_box(ss, lo, hi, TILE_BOX_DYNAMIC);
+            continue;
+        }
+        if (memcmp(node->global_transform, node->prev_global_transform, sizeof(mat4)) == 0)
             continue;
         int k = 0;
         while (k < ss->tile_mover_count && ss->tile_movers[k] != node)
             ++k;
         unsigned marks = TILE_BOX_DYNAMIC;
         if (k == ss->tile_mover_count) {
-            // A new mover whose node moved was drawn into the stores as still; with no room for
-            // another, the faces that see it are simply drawn again, every frame it moves.
+            // A new mover was drawn into the stores as still; with no room for another, the
+            // faces that see it are simply drawn again, every frame it moves.
             if (k < SHADOW_TILE_MAX_MOVERS) {
                 ss->tile_movers[ss->tile_mover_count++] = node;
-                marks = deforms ? TILE_BOX_DYNAMIC : TILE_BOX_DYNAMIC | TILE_BOX_UNSTORE;
+                marks = TILE_BOX_DYNAMIC | TILE_BOX_UNSTORE;
             } else {
                 marks = TILE_BOX_INVALIDATE;
             }
         }
         if (k < SHADOW_TILE_MAX_MOVERS)
             ss->tile_mover_moved[k] = ss->tile_frame;
-        vec3 lo = GLM_VEC3_ZERO_INIT, hi = GLM_VEC3_ZERO_INIT;
-        if (deforms) {
-            // The surface as drawn, posed and displaced: the import box is the bind pose, which a
-            // curled body or a swung tail leaves. With no bound to be had, the import box.
-            AABB box;
-            if (!draw_item_bounds(item, &view, &box))
-                box = item->mesh->aabb;
-            aabb_transform(box.min, box.max, (vec4*)node->global_transform, lo, hi);
-            tiles_mark_box(ss, lo, hi, marks);
-            continue;
-        }
         for (int when = 0; when < 2; ++when) {
             aabb_transform(
                 item->mesh->aabb.min, item->mesh->aabb.max,
@@ -1749,8 +1765,14 @@ static void tiles_note_changes(ShadowSystem* ss, const Engine* engine, const Sce
 
 // Give every block whose faces see a mover a store for its still casters. Before the region is
 // laid out, so the store's cells are in the array the frame they are first drawn into; a
-// block the budget has no room for draws such faces whole.
+// block the budget has no room for draws such faces whole. A block whose faces no longer see
+// one gives its store back first: the budget holds a few, and a light a cat passed long ago
+// would otherwise keep one from the light it is passing now.
 static void tiles_take_stores(ShadowSystem* ss) {
+    for (int b = 0; b < ss->tile_block_count; ++b) {
+        if (ss->tile_blocks[b].light && !ss->tile_blocks[b].dynamic)
+            tile_block_drop_store(ss, &ss->tile_blocks[b]);
+    }
     for (int b = 0; b < ss->tile_block_count; ++b) {
         ShadowTileBlock* block = &ss->tile_blocks[b];
         if (!block->light || !block->dynamic || block->store >= 0)
@@ -1777,6 +1799,16 @@ static bool draw_tile_cell(ShadowSystem* ss, const Engine* engine, const Scene* 
     draw_shadow_layer(ss, scene, scene->draw_list, matrix, state, set, engine);
     end_depth_tile();
     return true;
+}
+
+// One face with everything a kept face casts -- its still casters, then what moves over them --
+// for a face that is drawn again the next frame, since a pose is in it.
+static bool draw_tile_cell_all(ShadowSystem* ss, const Engine* engine, const Scene* scene,
+                               SubmitState* state, int cell, mat4 matrix) {
+    return draw_tile_cell(ss, engine, scene, state, cell, matrix, SHADOW_CASTERS_KEPT_STILL,
+                          true) &&
+           draw_tile_cell(ss, engine, scene, state, cell, matrix, SHADOW_CASTERS_KEPT_MOVERS,
+                          false);
 }
 
 // The framebuffer a tile is read through while the punctual one draws its copy.
@@ -1853,8 +1885,12 @@ static void render_shadow_tiles(ShadowSystem* ss, const Engine* engine, const Sc
         }
         if (tile_block_whole(block) || !(block->light->intensity > 0.0f))
             continue;
-        if (!block->valid)
+        if (!block->valid) {
             tile_block_place(ss, block, tile_views_for(ss, block->light));
+            // This frame's marks were taken against the faces as they stood, so none of them
+            // may let a face go as holding no moving caster.
+            block->touched = tile_faces_of(block->views);
+        }
         // A face that sees a mover is rebuilt every frame by render_shadow_movers instead.
         const uint64_t missing = tile_faces_of(block->views) & ~block->valid & ~block->dynamic;
         for (int f = 0; f < 6 * block->views; ++f) {
@@ -1874,10 +1910,19 @@ static void render_shadow_tiles(ShadowSystem* ss, const Engine* engine, const Sc
 // The kept faces that see a mover, every frame: each is a copy of its store's face, which holds
 // the still casters alone and is drawn only when it is not, with the movers drawn over the copy.
 // What a pendulum costs a frame is then a copy and its own draws, where drawing the face whole
-// costs every caster in the room. A block with no store draws such faces whole. A face out of
-// the camera's view keeps its last copy, which nothing on screen reads. A face drawn when no
-// moving caster reached it this frame holds what drawing it whole would, so it is kept from then
-// on: without that, every face a cat ever walked through would be drawn again every frame.
+// costs every caster in the room. A block with no store draws such faces whole, still casters
+// and movers both. A face out of the camera's view keeps its last copy, which nothing on screen
+// reads. A face drawn when no moving caster reached it this frame holds nothing that moves, so it
+// is kept from then on: without that, every face a cat ever walked through would be drawn again
+// every frame.
+static bool tiles_any_dynamic(const ShadowSystem* ss) {
+    for (int b = 0; b < ss->tile_block_count; ++b) {
+        if (ss->tile_blocks[b].light && ss->tile_blocks[b].dynamic)
+            return true;
+    }
+    return false;
+}
+
 static void render_shadow_movers(ShadowSystem* ss, const Engine* engine, const Scene* scene,
                                  SubmitState* state) {
     const int edge = ss->punctual_map_size;
@@ -1911,9 +1956,9 @@ static void render_shadow_movers(ShadowSystem* ss, const Engine* engine, const S
                     tile_blit(tile_copy_fbo(ss), ss->punctual_map_array, stored, edge,
                               ss->punctual_fbo, ss->punctual_map_array, cell, edge);
             }
-            if (draw_tile_cell(ss, engine, scene, state, cell, matrix,
-                               over_copy ? SHADOW_CASTERS_KEPT_MOVERS : SHADOW_CASTERS_KEPT,
-                               !over_copy)) {
+            if (over_copy ? draw_tile_cell(ss, engine, scene, state, cell, matrix,
+                                           SHADOW_CASTERS_KEPT_MOVERS, false)
+                          : draw_tile_cell_all(ss, engine, scene, state, cell, matrix)) {
                 block->valid |= 1ull << f;
                 if (!tile_face_in(block->touched, f))
                     block->dynamic &= ~(1ull << f);
@@ -1924,8 +1969,8 @@ static void render_shadow_movers(ShadowSystem* ss, const Engine* engine, const S
 }
 
 // --tile-reference: every cached light drawn this frame from points of its body as it is now,
-// with the kept casters, and published; the lookup places the same points. Its views fill the
-// block's faces but are not the block's kept views, so leaving the reference redraws.
+// with everything a kept face casts, and published; the lookup places the same points. Its views
+// fill the block's faces but are not the block's kept views, so leaving the reference redraws.
 static void render_shadow_reference(ShadowSystem* ss, const Engine* engine, const Scene* scene,
                                     SubmitState* state) {
     const int edge = ss->punctual_map_size;
@@ -1939,9 +1984,8 @@ static void render_shadow_reference(ShadowSystem* ss, const Engine* engine, cons
         for (int f = 0; f < 6 * block->views; ++f) {
             mat4 matrix = GLM_MAT4_IDENTITY_INIT;
             tile_block_face_matrix(block, f, matrix);
-            whole &=
-                draw_tile_cell(ss, engine, scene, state, tile_block_first_cell(ss, edge, b) + f,
-                               matrix, SHADOW_CASTERS_KEPT, true);
+            whole &= draw_tile_cell_all(ss, engine, scene, state,
+                                        tile_block_first_cell(ss, edge, b) + f, matrix);
             ss->tile_faces_drawn++;
         }
         if (whole)
@@ -2719,7 +2763,7 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
         profiler_scope_begin(engine->profiler, "shadow tiles");
         render_shadow_tiles(ss, engine, scene, &state);
         profiler_scope_end(engine->profiler);
-        profiler_scope_begin_if(engine->profiler, ss->tile_mover_count > 0, "shadow movers");
+        profiler_scope_begin_if(engine->profiler, tiles_any_dynamic(ss), "shadow movers");
         render_shadow_movers(ss, engine, scene, &state);
         profiler_scope_end(engine->profiler);
         publish_shadow_tiles(ss);
