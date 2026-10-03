@@ -526,8 +526,10 @@ never fight over one file. Edit the `.glsl` sources, never the header.
 first thing to know before editing `pbr_frag.glsl`. `program.c` splices
 `#define CETRA_PBR_FEATURES <mask>` in after the `#version` line
 (`shader_source_with_defines`, plus a `#line 2` so every body line number survives), and the
-shader gates nine optional features on it, rain (bit 64, spec 13.9), its puddle relief
-(bit 128, spec 13.12) and cached point-light shadows (bit 256, spec 13.16) the latest. `render.c`'s
+shader gates ten optional features on it, rain (bit 64, spec 13.9), its puddle relief
+(bit 128, spec 13.12), cached point-light shadows (bit 256, spec 13.16) and a coat of fur shells
+(bit 512, spec 13.17 -- the one bit the vertex stage reads too, so the mask is spliced into both)
+the latest. `render.c`'s
 resolver recomputes each material's mask EVERY FRAME — the mask is a pure function of the
 material's fields and the scene's facts (decals, area panels, rain, cached lights), all of which a GUI slider
 moves with nothing marked dirty — and `engine_pbr_variant` compiles and caches one program per
