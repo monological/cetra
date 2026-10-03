@@ -20,6 +20,13 @@
 // Forward declaration
 struct Skeleton;
 
+// Whether a mesh is drawn, casts shadows, or both. Zero is both.
+typedef enum MeshShadowRole {
+    MESH_SHADOW_CASTS = 0, // drawn, and casts
+    MESH_SHADOW_NONE,      // drawn, and casts nothing
+    MESH_SHADOW_ONLY,      // casts, and is never drawn: what a shadow sees in place of geometry
+} MeshShadowRole;
+
 // Levels in a mesh's LOD chain, level 0 (the original indices) included.
 //
 // A budget, not a derived bound: the builder's own floor would allow more rungs
@@ -234,7 +241,8 @@ typedef struct Mesh {
     // read by mesh_upload, which attaching to a node does once; an array
     // edited in place afterwards wants mesh_upload again.
     MeshDrawMode draw_mode;
-    float line_width; // When draw_mode is lines
+    float line_width;           // When draw_mode is lines
+    MeshShadowRole shadow_role; // drawn, casting, or both
 
     float* vertices; // Array of vertex positions
     float* normals;  // Array of normals
