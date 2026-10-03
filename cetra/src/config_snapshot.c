@@ -1164,6 +1164,7 @@ static bool _material_row(const MaterialParam* p, ConfigField* out) {
             type = CFG_FLOAT;
             break;
         case MATERIAL_PARAM_COLOR:
+        case MATERIAL_PARAM_VEC3:
             type = CFG_VEC3;
             break;
         case MATERIAL_PARAM_INT:

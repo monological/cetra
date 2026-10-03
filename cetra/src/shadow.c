@@ -1144,8 +1144,7 @@ static void _draw_shadow_items(ShadowSystem* ss, const DrawList* list, ShaderPro
             // face takes level 0, since the camera's is wherever the camera was.
             DrawItem level0 = *item;
             level0.lod = 0;
-            submit_draw_run(state, u, caster_set_kept(set) ? &level0 : item, run, 1, two_sided,
-                            stats);
+            submit_draw_run(state, u, caster_set_kept(set) ? &level0 : item, run, two_sided, stats);
             pos += run - 1;
         }
     }

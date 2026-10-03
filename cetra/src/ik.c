@@ -376,7 +376,7 @@ static void rotate_global(mat4 m, versor q, const vec3 head) {
     skeleton_rotate_global(m, m, q, head);
 }
 
-// The same rotation, about a PIVOT, applied to every bone the mask names. What the three
+// The same rotation, about a PIVOT, applied to every bone below the ankle. What the three
 // chain writes do is this with the head stated directly; a descendant's head is not known
 // in advance, so it comes out of the rotation instead.
 //
@@ -384,20 +384,7 @@ static void rotate_global(mat4 m, versor q, const vec3 head) {
 // local_transforms (the header says why). A rigid rotation about a point needs only the
 // globals, which is exactly what a bone below the ankle undergoes.
 static void rotate_below(mat4* g, const IkFoot* f, versor q, const vec3 pivot) {
-    if (f->below_count == 0)
-        return; // a rig with nothing under the ankle pays for this feature exactly nothing
-    mat4 r;
-    glm_quat_mat4(q, r);
-    for (size_t k = 0; k < f->below_count; k++) {
-        const int i = f->below_ankle[k];
-        // The head this bone ends up at, which the three chain writes state directly and a
-        // descendant has to derive: the pivot plus its rotated offset from the pivot.
-        vec3 head;
-        glm_vec3_sub(g[i][3], (float*)pivot, head);
-        glm_mat4_mulv3(r, head, 0.0f, head);
-        glm_vec3_add((float*)pivot, head, head);
-        rotate_global(g[i], q, head);
-    }
+    skeleton_rotate_bones(g, f->below_ankle, f->below_count, q, pivot);
 }
 
 // Rotate hip and knee so the ankle lands on `target`. Model space throughout, and only

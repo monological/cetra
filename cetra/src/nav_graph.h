@@ -76,10 +76,10 @@ typedef struct NavLink {
     int kind;
     NavShapeDesc shape;
     float length; // the profile's length: horizontal for steps, chord for a line or an arc
-    float cost;   // length times the kind's scale, fixed when linked
-    bool enabled; // a disabled link is never routed through
 } NavLink;
 
+// ENGINE-OWNED, every field: read them freely; places, links and kinds go in through the
+// functions below.
 typedef struct NavGraph {
     NavNode* nodes;
     int node_count, node_cap;
@@ -108,11 +108,15 @@ int nav_graph_link_both(NavGraph* graph, int a, int b, int kind, const NavShapeD
 
 // Where a link's profile is a fraction u (0..1) along it.
 void nav_link_point(const NavGraph* graph, int link, float u, vec3 out);
+// Which way a link runs over the ground: yaw about +y from its start to its end, 0 facing +z.
+float nav_link_heading(const NavGraph* graph, int link);
+// How long a body takes to fly an ARC link's arc under `gravity`, up from one end to its top and
+// down to the other: the time a jump's clip has to spend in the air.
+float nav_link_flight_time(const NavGraph* graph, int link, float gravity);
 
-// What a route may use, and what it may cost. All zero is every kind at its own cost.
+// What a route may use. Zero is everything.
 typedef struct NavQuery {
-    uint32_t kinds;                 // bit k allows kind k; 0 allows all
-    float cost_scale[NAV_KIND_MAX]; // a kind's cost scale for this query; 0 is the kind's own
+    uint32_t kinds; // bit k allows kind k; 0 allows all
 } NavQuery;
 
 typedef struct NavRoute {
@@ -138,13 +142,14 @@ typedef struct NavSample {
     bool arrived;
 } NavSample;
 
+// ENGINE-OWNED, every field: a follower is moved by the functions below and read freely.
 typedef struct NavFollower {
     const NavGraph* graph;
     NavRoute route;
-    NavQuery query;
-    int leg;     // index into route.links
-    float along; // metres along the current link, or 0..1 on a PROGRESS link
-    int at;      // the node it stands at once arrived, or started from
+    NavQuery query; // what its route may use
+    int leg;        // index into route.links
+    float along;    // metres along the current link, or 0..1 on a PROGRESS link
+    int at;         // the node it stands at once arrived, or last passed
     int goal;
     bool arrived;
 } NavFollower;
@@ -156,24 +161,31 @@ bool nav_follower_start(NavFollower* f, const NavGraph* graph, int from, int to,
 
 // Along a DISTANCE link by `metres`, on into the next while the route goes on through
 // DISTANCE links. A follower that reaches a PROGRESS link waits at its start for
-// nav_follower_set_progress; what is left over is spent. Returns the metres used.
-float nav_follower_advance(NavFollower* f, float metres);
+// nav_follower_set_progress; what is left over is spent.
+void nav_follower_advance(NavFollower* f, float metres);
 
 // On a PROGRESS link, how far through it the follower is; 1 or more finishes the link.
 void nav_follower_set_progress(NavFollower* f, float progress);
 
 void nav_follower_sample(const NavFollower* f, NavSample* out);
 
-// Go somewhere else instead: the current link is finished first, so a follower half way up
-// a flight or through a jump does not turn round in it -- unless it is part way along a
-// level link driven by distance that runs both ways, where it turns round when that is the
-// cheaper way there. False when there is no route from there, and the follower keeps the
-// one it had.
-bool nav_follower_replan(NavFollower* f, int to);
+// The route a replan to `to` under `query` would take, without taking it: from a place the
+// follower has arrived at, the route from there; from part way along a link, the rest of that
+// link and on -- or, part way along a level link driven by distance that runs both ways, back
+// along it, when that is the cheaper way. A flight or a jump is always finished first. `out`'s
+// first link is the one the follower is on or turns back along, and its cost is counted from
+// where the follower stands. False when there is no route.
+bool nav_follower_plan(const NavFollower* f, int to, const NavQuery* query, NavRoute* out);
 
-// The graph against a world. Every enabled link's profile is walked in steps of `step`
-// metres, `lift` above the feet, and each step is a segment `probe` is asked about: true is
-// blocked. Each blocked link is logged by its places' names. Returns how many were blocked.
+// Go somewhere else instead, by nav_follower_plan's route, under `query` from now on (NULL
+// keeps the follower's own). False when there is no route, and the follower keeps the one it
+// had.
+bool nav_follower_replan(NavFollower* f, int to, const NavQuery* query);
+
+// The graph against a world. Every link's profile -- once for a link and its way back -- is
+// walked in steps of `step` metres, `lift` above the feet, and each step is a segment `probe` is
+// asked about: true is blocked. Each blocked link is logged by its places' names. Returns how
+// many were blocked.
 typedef bool (*NavProbeFn)(const vec3 a, const vec3 b, void* user);
 int nav_graph_check(const NavGraph* graph, NavProbeFn probe, void* user, float lift, float step);
 

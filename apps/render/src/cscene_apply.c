@@ -845,9 +845,10 @@ void apply_cscene_material_overrides(Scene* scene, const CetraSceneDesc* cscn) {
                 fprintf(stderr, "Warning: material '%s': key '%s' wants a path\n", mo->material,
                         prm->key);
                 slot = NULL;
-            } else if ((slot->type == MATERIAL_PARAM_COLOR) != (prm->components == 3)) {
+            } else if (material_param_components(slot) != prm->components) {
                 fprintf(stderr, "Warning: material '%s': key '%s' wants %s\n", mo->material,
-                        prm->key, slot->type == MATERIAL_PARAM_COLOR ? "3 numbers" : "one number");
+                        prm->key,
+                        material_param_components(slot) == 3 ? "3 numbers" : "one number");
                 slot = NULL;
             }
             slots[p] = slot;

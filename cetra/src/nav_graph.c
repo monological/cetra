@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "animation.h"
 #include "ext/log.h"
 
 // A corner sharper than this is not rounded: the agent stops at the place and turns there.
@@ -36,9 +37,13 @@ void nav_graph_set_kind(NavGraph* graph, int kind, const NavKind* desc) {
     graph->kinds[kind] = *desc;
 }
 
-static float kind_scale(const NavGraph* g, const NavQuery* q, int kind) {
-    float s = q && q->cost_scale[kind] > 0.0f ? q->cost_scale[kind] : g->kinds[kind].cost_scale;
+static float kind_scale(const NavGraph* g, int kind) {
+    const float s = g->kinds[kind].cost_scale;
     return s > 0.0f ? s : 1.0f;
+}
+
+static float link_cost(const NavGraph* g, const NavLink* l) {
+    return l->length * kind_scale(g, l->kind);
 }
 
 static bool kind_allowed(const NavQuery* q, int kind) {
@@ -106,7 +111,6 @@ int nav_graph_link(NavGraph* graph, int from, int to, int kind, const NavShapeDe
     l->to = to;
     l->kind = kind;
     l->shape = *shape;
-    l->enabled = true;
     const float* a = graph->nodes[from].position;
     const float* b = graph->nodes[to].position;
     // A walk or a flight is advanced by how far the agent went over the ground, and a line
@@ -118,7 +122,6 @@ int nav_graph_link(NavGraph* graph, int from, int to, int kind, const NavShapeDe
                   graph->nodes[to].name);
         return -1;
     }
-    l->cost = l->length * kind_scale(graph, NULL, kind);
     return graph->link_count++;
 }
 
@@ -156,12 +159,16 @@ static float steps_height(const NavShapeDesc* s, float y0, float y1, float x) {
     return glm_lerp(tread, pitch, glm_clamp(s->hop, 0.0f, 1.0f));
 }
 
+static float arc_top(float apex, float y0, float y1) {
+    return fmaxf(y0, y1) + fmaxf(apex, 0.0f);
+}
+
 // An arc's height a fraction u across: a parabola in u from y0 to y1 whose top is exactly
 // `apex` above the higher end. With u in proportion to time, as a follower driven by a jump's
 // clock has it, that is a body in free flight.
 static float arc_height(float apex, float y0, float y1, float u) {
     const float d = y1 - y0;
-    const float top = fmaxf(y0, y1) + fmaxf(apex, 0.0f);
+    const float top = arc_top(apex, y0, y1);
     const float m = top - y0 - 0.5f * d;
     const float k = 2.0f * m + sqrtf(fmaxf(4.0f * m * m - d * d, 0.0f));
     return y0 + d * u + k * u * (1.0f - u);
@@ -179,30 +186,31 @@ void nav_link_point(const NavGraph* graph, int link, float u, vec3 out) {
         out[1] = arc_height(l->shape.apex, a[1], b[1], u);
 }
 
-static float link_heading(const NavGraph* g, int link) {
-    const NavLink* l = &g->links[link];
-    const float* a = g->nodes[l->from].position;
-    const float* b = g->nodes[l->to].position;
+float nav_link_heading(const NavGraph* graph, int link) {
+    const NavLink* l = &graph->links[link];
+    const float* a = graph->nodes[l->from].position;
+    const float* b = graph->nodes[l->to].position;
     return atan2f(b[0] - a[0], b[2] - a[2]);
 }
 
-// The enabled link of the same kind running the other way, or -1.
+float nav_link_flight_time(const NavGraph* graph, int link, float gravity) {
+    const NavLink* l = &graph->links[link];
+    const float y0 = graph->nodes[l->from].position[1];
+    const float y1 = graph->nodes[l->to].position[1];
+    const float top = arc_top(l->shape.apex, y0, y1);
+    return gravity > 0.0f ? sqrtf(2.0f * (top - y0) / gravity) + sqrtf(2.0f * (top - y1) / gravity)
+                          : 0.0f;
+}
+
+// The link of the same kind running the other way, or -1.
 static int reverse_link(const NavGraph* g, int link) {
     const NavLink* l = &g->links[link];
     for (int i = 0; i < g->link_count; i++) {
         const NavLink* r = &g->links[i];
-        if (r->enabled && r->from == l->to && r->to == l->from && r->kind == l->kind)
+        if (r->from == l->to && r->to == l->from && r->kind == l->kind)
             return i;
     }
     return -1;
-}
-
-static float wrap_angle(float a) {
-    while (a > GLM_PIf)
-        a -= 2.0f * GLM_PIf;
-    while (a < -GLM_PIf)
-        a += 2.0f * GLM_PIf;
-    return a;
 }
 
 bool nav_graph_route(const NavGraph* graph, int from, int to, const NavQuery* query,
@@ -227,12 +235,13 @@ bool nav_graph_route(const NavGraph* graph, int from, int to, const NavQuery* qu
         log_error("nav_graph_route: out of memory");
         return false;
     }
-    // The cheapest a metre can be under this query, which keeps the straight-line estimate
-    // from ever overstating what is left.
+    // The cheapest a metre can be under this query, over the ground: no link is shorter than
+    // its ends are apart on the level (a flight's length IS that), so this estimate never
+    // overstates what is left.
     float cheapest = FLT_MAX;
     for (int k = 0; k < NAV_KIND_MAX; k++)
         if (kind_allowed(query, k))
-            cheapest = fminf(cheapest, kind_scale(graph, query, k));
+            cheapest = fminf(cheapest, kind_scale(graph, k));
     if (cheapest == FLT_MAX)
         cheapest = 1.0f;
     for (int i = 0; i < n; i++) {
@@ -241,7 +250,7 @@ bool nav_graph_route(const NavGraph* graph, int from, int to, const NavQuery* qu
     }
     const float* goal = graph->nodes[to].position;
     g[from] = 0.0f;
-    f[from] = glm_vec3_distance(graph->nodes[from].position, (float*)goal) * cheapest;
+    f[from] = horizontal(graph->nodes[from].position, goal) * cheapest;
     state[from] = 1;
     bool found = false;
     for (;;) {
@@ -258,14 +267,12 @@ bool nav_graph_route(const NavGraph* graph, int from, int to, const NavQuery* qu
         state[best] = 2;
         for (int li = 0; li < graph->link_count; li++) {
             const NavLink* l = &graph->links[li];
-            if (l->from != best || !l->enabled || !kind_allowed(query, l->kind) ||
-                state[l->to] == 2)
+            if (l->from != best || !kind_allowed(query, l->kind) || state[l->to] == 2)
                 continue;
-            const float cost = g[best] + l->length * kind_scale(graph, query, l->kind);
+            const float cost = g[best] + link_cost(graph, l);
             if (cost < g[l->to]) {
                 g[l->to] = cost;
-                f[l->to] =
-                    cost + glm_vec3_distance(graph->nodes[l->to].position, (float*)goal) * cheapest;
+                f[l->to] = cost + horizontal(graph->nodes[l->to].position, goal) * cheapest;
                 via[l->to] = li;
                 state[l->to] = 1;
             }
@@ -316,8 +323,7 @@ static void finish_link(NavFollower* f) {
         f->arrived = true;
 }
 
-float nav_follower_advance(NavFollower* f, float metres) {
-    float used = 0.0f;
+void nav_follower_advance(NavFollower* f, float metres) {
     while (metres > 0.0f && !f->arrived) {
         const NavLink* l = &f->graph->links[f->route.links[f->leg]];
         if (f->graph->kinds[l->kind].drive == NAV_DRIVE_PROGRESS)
@@ -325,14 +331,11 @@ float nav_follower_advance(NavFollower* f, float metres) {
         const float left = l->length - f->along;
         if (metres < left) {
             f->along += metres;
-            used += metres;
             break;
         }
         metres -= left;
-        used += left;
         finish_link(f);
     }
-    return used;
 }
 
 void nav_follower_set_progress(NavFollower* f, float progress) {
@@ -357,7 +360,7 @@ static float corner_reach(const NavGraph* g, int a, int b) {
     if (!ka->smooth || !kb->smooth || ka->drive != NAV_DRIVE_DISTANCE ||
         kb->drive != NAV_DRIVE_DISTANCE)
         return 0.0f;
-    if (fabsf(wrap_angle(link_heading(g, b) - link_heading(g, a))) > NAV_ROUND_LIMIT)
+    if (fabsf(wrap_pi(nav_link_heading(g, b) - nav_link_heading(g, a))) > NAV_ROUND_LIMIT)
         return 0.0f;
     const float r = g->nodes[la->to].radius;
     return fminf(r, NAV_ROUND_SHARE * fminf(la->length, lb->length));
@@ -388,7 +391,7 @@ void nav_follower_sample(const NavFollower* f, NavSample* out) {
         glm_vec3_copy(g->nodes[f->at].position, out->position);
         if (f->route.count > 0) {
             const int last = f->route.links[f->route.count - 1];
-            out->heading = link_heading(g, last);
+            out->heading = nav_link_heading(g, last);
         }
         out->tangent[0] = sinf(out->heading);
         out->tangent[2] = cosf(out->heading);
@@ -410,7 +413,7 @@ void nav_follower_sample(const NavFollower* f, NavSample* out) {
     const int next = f->leg + 1 < f->route.count ? f->route.links[f->leg + 1] : -1;
     const int prev = f->leg > 0 ? f->route.links[f->leg - 1] : -1;
     if (next >= 0)
-        out->turn = wrap_angle(link_heading(g, next) - link_heading(g, li));
+        out->turn = wrap_pi(nav_link_heading(g, next) - nav_link_heading(g, li));
     if (by_distance) {
         const float s = f->along;
         const float r_end = next >= 0 ? corner_reach(g, li, next) : 0.0f;
@@ -425,46 +428,75 @@ void nav_follower_sample(const NavFollower* f, NavSample* out) {
     out->heading = atan2f(out->tangent[0], out->tangent[2]);
     // Up or down a profile the level part may vanish; the link's own direction stands in.
     if (fabsf(out->tangent[0]) + fabsf(out->tangent[2]) < 1e-3f)
-        out->heading = link_heading(g, li);
+        out->heading = nav_link_heading(g, li);
 }
 
-bool nav_follower_replan(NavFollower* f, int to) {
+// A route that starts with `first`, `share` of which is still to go, then goes on by `rest`.
+static bool join(const NavGraph* g, int first, float share, const NavRoute* rest, NavRoute* out) {
+    if (rest->count + 1 > NAV_ROUTE_MAX)
+        return false;
+    out->links[0] = first;
+    memcpy(out->links + 1, rest->links, (size_t)rest->count * sizeof(int));
+    out->count = rest->count + 1;
+    out->cost = share * link_cost(g, &g->links[first]) + rest->cost;
+    return true;
+}
+
+bool nav_follower_plan(const NavFollower* f, int to, const NavQuery* query, NavRoute* out) {
+    const NavGraph* g = f->graph;
+    if (f->arrived)
+        return nav_graph_route(g, f->at, to, query, out);
+    const int current = f->route.links[f->leg];
+    const NavLink* l = &g->links[current];
+    const bool by_distance = g->kinds[l->kind].drive == NAV_DRIVE_DISTANCE;
+    const float left = 1.0f - glm_clamp(by_distance ? f->along / l->length : f->along, 0.0f, 1.0f);
+    const float cost = link_cost(g, l);
+    // The link under way is finished whatever the query allows; the query decides what comes
+    // after it.
+    NavRoute rest, behind;
+    const bool ahead = nav_graph_route(g, l->to, to, query, &rest);
+    // Part way along a level walk the way back is as open as the way on: turn round when that
+    // is the cheaper way there. Never in a flight or a jump.
+    const int back = reverse_link(g, current);
+    if (back >= 0 && l->shape.shape == NAV_SHAPE_LINE && by_distance &&
+        kind_allowed(query, l->kind) && nav_graph_route(g, l->from, to, query, &behind) &&
+        (!ahead || (1.0f - left) * cost + behind.cost < left * cost + rest.cost))
+        return join(g, back, 1.0f - left, &behind, out);
+    return ahead && join(g, current, left, &rest, out);
+}
+
+bool nav_follower_replan(NavFollower* f, int to, const NavQuery* query) {
+    const NavQuery q = query ? *query : f->query;
     if (f->arrived) {
         NavFollower fresh;
-        if (!nav_follower_start(&fresh, f->graph, f->at, to, &f->query))
+        if (!nav_follower_start(&fresh, f->graph, f->at, to, &q))
             return false;
         *f = fresh;
         return true;
     }
-    const NavGraph* g = f->graph;
-    int current = f->route.links[f->leg];
-    const NavLink* l = &g->links[current];
-    NavRoute rest;
-    const bool ahead = nav_graph_route(g, l->to, to, &f->query, &rest);
-    float left = l->length > 0.0f ? fmaxf(0.0f, 1.0f - f->along / l->length) : 0.0f;
-    // Part way along a level walk the way back is as open as the way on: turn round when that
-    // is the cheaper way there. Never in a flight or a jump.
-    const int back = reverse_link(g, current);
-    NavRoute behind;
-    if (back >= 0 && l->shape.shape == NAV_SHAPE_LINE &&
-        g->kinds[l->kind].drive == NAV_DRIVE_DISTANCE &&
-        nav_graph_route(g, l->from, to, &f->query, &behind) &&
-        (!ahead ||
-         (1.0f - left) * g->links[back].cost + behind.cost < left * l->cost + rest.cost)) {
-        f->along = fmaxf(0.0f, g->links[back].length - f->along);
-        current = back;
-        rest = behind;
-    } else if (!ahead) {
+    NavRoute plan;
+    if (!nav_follower_plan(f, to, &q, &plan))
         return false;
+    const int current = f->route.links[f->leg];
+    const int prev = f->leg > 0 ? f->route.links[f->leg - 1] : -1;
+    if (plan.links[0] != current) {
+        // Turned round: the same distance along the way back.
+        f->along = fmaxf(0.0f, f->graph->links[plan.links[0]].length - f->along);
+        f->route = plan;
+        f->leg = 0;
+    } else if (prev >= 0 && plan.count + 1 <= NAV_ROUTE_MAX) {
+        // Going on, the link it came by stays in front, so a follower rounding the corner out
+        // of it is still on the same curve.
+        f->route.links[0] = prev;
+        memcpy(f->route.links + 1, plan.links, (size_t)plan.count * sizeof(int));
+        f->route.count = plan.count + 1;
+        f->route.cost = plan.cost;
+        f->leg = 1;
+    } else {
+        f->route = plan;
+        f->leg = 0;
     }
-    if (rest.count + 1 > NAV_ROUTE_MAX)
-        return false;
-    f->route.links[0] = current;
-    for (int i = 0; i < rest.count; i++)
-        f->route.links[i + 1] = rest.links[i];
-    f->route.count = rest.count + 1;
-    f->route.cost = rest.cost;
-    f->leg = 0;
+    f->query = q;
     f->goal = to;
     return true;
 }
@@ -475,7 +507,9 @@ int nav_graph_check(const NavGraph* graph, NavProbeFn probe, void* user, float l
     int blocked = 0;
     for (int li = 0; li < graph->link_count; li++) {
         const NavLink* l = &graph->links[li];
-        if (!l->enabled)
+        // A link back the way of one already walked runs over the same profile.
+        const int back = reverse_link(graph, li);
+        if (back >= 0 && back < li)
             continue;
         // Steps and arcs are walked finer than their chord says: their profile is longer.
         const float span =

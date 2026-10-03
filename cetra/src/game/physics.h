@@ -347,6 +347,10 @@ bool physics_world_raycast_filtered(PhysicsWorld* world, vec3 origin, vec3 direc
                                     float max_distance, uint32_t layer_mask, RaycastHit* out_hit);
 bool physics_world_raycast_ignore(PhysicsWorld* world, vec3 origin, vec3 direction,
                                   float max_distance, const RigidBody* ignore, RaycastHit* out_hit);
+// Whether nothing but `target` stands between two points, `ignore` (the looker's own body,
+// say) never in the way. A NULL target asks whether the far point itself is in clear sight.
+bool physics_world_line_of_sight(PhysicsWorld* world, const vec3 from, const vec3 to,
+                                 const RigidBody* ignore, const struct Entity* target);
 
 // Shape casting (sweep test) - casts body shape along direction
 // Returns true if hit, populates out_hit with hit information

@@ -983,6 +983,14 @@ float fresnelOpacity(float coverage, float materialOpacity, float iorF0, float N
 }
 
 void main() {
+#if CETRA_HAS(PBR_FEAT_FUR)
+    // A fur shell keeps only its strands' cross-sections. First of all, so every debug view sees
+    // the coat that the shaded frame does rather than a stack of solid hulls.
+    float furTone = 1.0;
+    if (furLayers > 0 && FurLayer > 0.0 &&
+        (FurLen < FUR_BARE || !furStrand(FurRest * furDensity, FurLayer, furTone)))
+        discard;
+#endif
     // Early-out for simple render modes that don't need texture sampling
     if (renderMode == 5) {
         // Flat Color - no textures needed
@@ -1277,19 +1285,12 @@ void main() {
     }
 
 #if CETRA_HAS(PBR_FEAT_FUR)
-    // A fur shell keeps only its strands' cross-sections, darker toward their roots where the coat
-    // shades itself. Above the masked discard and every exit below it, as that one is.
-    if (FurLayer > 0.0) {
-        float tone;
-        if (FurLen < FUR_BARE || !furStrand(FurRest * furDensity, FurLayer, tone))
-            discard;
-        albedoMap *= mix(furRootShade, 1.0, FurLayer) * tone;
-    } else {
-        // The skin under a coat is what shows between its roots, so it takes their colour --
-        // and where the coat thins to nothing, round the eyes, it reads as short dark fur
-        // rather than a pale ring.
-        albedoMap *= furRootShade;
-    }
+    // A strand darkens toward its root, where the coat shades itself; and the skin under a coat
+    // is what shows between the roots, so it takes their colour -- where the coat thins to
+    // nothing, round the eyes, it reads as short dark fur rather than a pale ring. Only under a
+    // coat: the full variant carries this bit for every material.
+    if (furLayers > 0)
+        albedoMap *= FurLayer > 0.0 ? mix(furRootShade, 1.0, FurLayer) * furTone : furRootShade;
 #endif
 
     /*

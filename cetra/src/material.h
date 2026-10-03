@@ -130,8 +130,8 @@ typedef struct Material {
     // by allocator address.
     unsigned id;
     char* name; // authored material name (glTF/FBX); scene files match on it
-    // The scene whose registry holds this material and frees it, NULL until the
-    // first one registers it. A second scene's mesh carrying it is refused.
+    // The scene whose registry holds this material and frees it, NULL until one
+    // registers it or after it is released. A second scene's mesh carrying it is refused.
     struct Scene* owner;
     vec3 albedo;
     vec3 emissive;           // Emissive color factor (multiplied with emissive texture)
@@ -408,6 +408,7 @@ typedef enum MaterialParamType {
     MATERIAL_PARAM_COLOR, // a vec3 that is a colour; editors may pick accordingly
     MATERIAL_PARAM_INT,
     MATERIAL_PARAM_TEXTURE, // uses `set_tex`, not `offset`
+    MATERIAL_PARAM_VEC3,    // a vec3 that is NOT a colour: a direction, signed, within min..max
 } MaterialParamType;
 
 // One tunable material property: the name a scene file authors it under, where
@@ -508,8 +509,11 @@ extern const size_t MATERIAL_PARAM_COUNT;
 // Look a key up in the table above; NULL if the vocabulary has no such name.
 const MaterialParam* material_param_find(const char* key);
 
-// Read/write a parameter generically. `values` is 3 floats for COLOR and one
-// for the other value types; TEXTURE rows are not addressable this way.
+// How many floats a parameter reads and writes: 3 for COLOR and VEC3, one for the other value
+// types, and 0 for TEXTURE, which is not addressable this way.
+int material_param_components(const MaterialParam* param);
+
+// Read/write a parameter generically, as material_param_components floats.
 void material_param_get(const Material* material, const MaterialParam* param, float* values);
 
 // What a TEXTURE row currently points at; NULL for an unbound slot or a row of

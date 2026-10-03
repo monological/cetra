@@ -446,6 +446,10 @@ void scene_update_particle_systems(Scene* scene, float dt, float t);
 // registers it, and a mesh carrying another scene's material is refused, by
 // name, rather than drawn from a registry that will free it.
 void scene_add_material(Scene* scene, Material* material);
+// Give up a material this scene owns, which then belongs to whichever scene registers it next:
+// how a model loaded into a scene of its own lends its materials to the one that draws it.
+// False when this scene does not own it.
+bool scene_release_material(Scene* scene, Material* material);
 
 // wind (scene-owned; freed in free_scene). Replaces any existing wind.
 void scene_set_wind(Scene* scene, struct Wind* wind);
