@@ -94,6 +94,17 @@ const MaterialParam MATERIAL_PARAMS[] = {
 
     {"curvatureScale", "Skin", MP(curvature_scale, MATERIAL_PARAM_FLOAT, 0.0f, 2.0f)},
 
+    // A coat of shells over a skinned mesh (spec 13.17). furLayers is the switch: 0 draws none.
+    {"furLayers", "Fur", MP(fur_layers, MATERIAL_PARAM_INT, 0.0f, 32.0f)},
+    {"furLength", "Fur", MP(fur_length, MATERIAL_PARAM_FLOAT, 0.0f, 0.05f)},
+    {"furDensity", "Fur", MP(fur_density, MATERIAL_PARAM_FLOAT, 50.0f, 4000.0f)},
+    {"furThickness", "Fur", MP(fur_thickness, MATERIAL_PARAM_FLOAT, 0.05f, 1.0f)},
+    {"furRootShade", "Fur", MP(fur_root_shade, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
+    {"furClump", "Fur", MP(fur_clump, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
+    // A direction rather than a colour, so it reaches below zero.
+    {"furComb", "Fur", MP(fur_comb, MATERIAL_PARAM_COLOR, -1.0f, 1.0f)},
+    {"furLie", "Fur", MP(fur_lie, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
+
     {"normalScale", "Maps and wind", MP(normalScale, MATERIAL_PARAM_FLOAT, 0.0f, 2.0f)},
     {"aoStrength", "Maps and wind", MP(aoStrength, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
     {"parallaxScale", "Maps and wind", MP(parallax_scale, MATERIAL_PARAM_FLOAT, 0.0f, 0.1f)},
@@ -265,6 +276,15 @@ static const Material MATERIAL_DEFAULTS = {
     .specular_color_factor = {1.0f, 1.0f, 1.0f},
     .subsurface_color = {1.0f, 0.3f, 0.2f}, // skin-ish, until a material says otherwise
     .subsurface_profile = -1,               // no scatter profile until configured
+    // No coat until fur_layers asks for one; the rest is a short, dense, lying coat, so a
+    // material that turns the layers on and nothing else gets one rather than spines.
+    .fur_length = 0.009f,
+    .fur_density = 1400.0f,
+    .fur_thickness = 0.75f,
+    .fur_root_shade = 0.4f,
+    .fur_clump = 0.5f,
+    .fur_comb = {0.0f, -0.5f, -1.0f},
+    .fur_lie = 0.75f,
     .uvScale = {1.0f, 1.0f},
     // No array layer until the material texture array is built from loaded
     // textures; -1 is what makes the shader fall back to the scalar factor.

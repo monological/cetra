@@ -44,6 +44,31 @@ uniform float uDeltaTime; // render clock advance, for the previous-frame positi
 #define SKIN_PREV_POSE
 #include "skin.glsl"
 #include "object_position.glsl"
+#include "pbr_features.glsl"
+
+#if CETRA_HAS(PBR_FEAT_FUR)
+// A coat of fur SHELLS (spec 13.17): the draw is repeated as layers, gl_InstanceID the layer --
+// free here, since a skinned draw carries one object and no instance block. Layer 0 is the skin
+// itself, untouched; layer k of N stands k/N of a strand's length off it.
+uniform int furLayers;    // shells over the skin; the draw carries furLayers + 1 instances
+uniform float furLength;  // metres from root to tip, before the vertex's own share of it
+uniform vec3 furComb;     // object-space direction the coat lies toward
+uniform float furLie;     // 0 = strands stand straight out, 1 = they lie along the comb
+
+out vec3 FurRest;        // the bind-pose position, which the strand pattern is laid on
+flat out float FurLayer; // 0 for the skin, k/N for shell k
+out float FurLen;        // this vertex's share of furLength, from the vertex colour's alpha
+
+// Where a strand's point at height h stands off the skin: out along the normal, bending over
+// toward the comb as it rises. `comb` is the comb already flattened onto the bind surface and
+// carried by the same bones as the normal.
+vec3 furShellOffset(vec3 normal, vec3 comb, float h, float share) {
+    vec3 n = normalize(normal);
+    float cl = length(comb);
+    vec3 c = cl > 1e-6 ? comb / cl : n;
+    return normalize(mix(n, c, furLie * h)) * (furLength * share * h);
+}
+#endif
 
 // See pbr_vert: the depth prepass must reach the same clip position from a
 // different program, and GL_LEQUAL rejects anything that lands behind it.
@@ -95,6 +120,22 @@ void main() {
                                     model, uMorphEye);
     prevLocalPos.xyz += cetra_local_displacement(aPos, aTexCoords, aTexCoords2,
                                                  time - uDeltaTime, model, uMorphEyePrev);
+
+#if CETRA_HAS(PBR_FEAT_FUR)
+    FurRest = aPos;
+    FurLen = aColor.a;
+    FurLayer = furLayers > 0 ? float(gl_InstanceID) / float(furLayers) : 0.0;
+    if (FurLayer > 0.0) {
+        // The comb flattened onto the bind surface once, then carried by the bones like any
+        // other surface vector -- under both poses, or the motion vector would read the shell
+        // as standing still while the skin under it moved.
+        vec3 comb = furComb - aNormal * dot(aNormal, furComb);
+        mat3 prevBone = skinned ? mat3(skinMatrixPrev(aBoneIds, aBoneWeights)) : mat3(1.0);
+        mat3 bone = mat3(boneTransform);
+        localPos.xyz += furShellOffset(localNormal, bone * comb, FurLayer, FurLen);
+        prevLocalPos.xyz += furShellOffset(prevBone * aNormal, prevBone * comb, FurLayer, FurLen);
+    }
+#endif
 
     CetraObjectPos obj = cetra_object_position(model, view, projection, localPos);
     vec4 worldPos = obj.world;

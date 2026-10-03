@@ -183,6 +183,8 @@ uniform int clearcoatNormalExists;
 #include "receiver_plane.glsl"
 // ign() for the stochastic PCSS kernel rotation.
 #include "noise.glsl"
+// The strand cut of a fur shell; inert, declarations and all, without the fur bit.
+#include "fur.glsl"
 
 uniform vec4 cascadeSplits; // View-depth far bound per cascade (.xyz)
 uniform int csmDebug; // Tint fragments by selected cascade
@@ -1273,6 +1275,22 @@ void main() {
         albedoMap *= sRGBToLinear(VertexColor.rgb);
         texAlpha *= VertexColor.a;
     }
+
+#if CETRA_HAS(PBR_FEAT_FUR)
+    // A fur shell keeps only its strands' cross-sections, darker toward their roots where the coat
+    // shades itself. Above the masked discard and every exit below it, as that one is.
+    if (FurLayer > 0.0) {
+        float tone;
+        if (FurLen < FUR_BARE || !furStrand(FurRest * furDensity, FurLayer, tone))
+            discard;
+        albedoMap *= mix(furRootShade, 1.0, FurLayer) * tone;
+    } else {
+        // The skin under a coat is what shows between its roots, so it takes their colour --
+        // and where the coat thins to nothing, round the eyes, it reads as short dark fur
+        // rather than a pale ring.
+        albedoMap *= furRootShade;
+    }
+#endif
 
     /*
      * The masked silhouette, resolved to COVERAGE and written back into

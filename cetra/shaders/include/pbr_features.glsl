@@ -46,11 +46,16 @@
 // that reads them. A scene bit, and it declares no sampler -- the tiles are layers of the
 // punctual array every variant already samples.
 #define PBR_FEAT_SHADOW_TILES 256
+// Whether this material grows a coat of fur shells (spec 13.17): the shell offset in the vertex
+// stage, the strand cut in the fragment. The one bit that reaches the VERTEX stage as well, which
+// is why the mask is spliced into both: compiled in unconditionally it would re-lower the position
+// of every skinned program, and the depth prepass deletes what lands a bit behind it.
+#define PBR_FEAT_FUR      512
 
 // The union, written out rather than OR-ed together, because an expression here
 // would have to parse identically in C, GLSL and the Python that reads this file
 // for scripts/gates.py. A literal is the only form all three agree on.
-#define PBR_FEAT_ALL 511
+#define PBR_FEAT_ALL 1023
 
 // The mask this compilation carries, and the test for a bit in it.
 //
