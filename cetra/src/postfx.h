@@ -77,6 +77,7 @@ typedef struct PingPong {
     GLuint fbo[2];
     GLuint tex[2];
     bool valid;
+    float pre_exposure; // What tex[] was last written at; a radiance history is read at its ratio
 } PingPong;
 
 // Present an intermediate buffer instead of the composited scene (one view

@@ -8,6 +8,7 @@ uniform sampler2D historyTex;  // Accumulated previous frame
 uniform vec2 texelSize;        // 1/width, 1/height of the internal resolution
 
 uniform int reset;             // 1 on the very first frame: no valid history yet
+uniform float historyScale;    // This frame's pre-exposure over the history's (spec 13.20)
 
 // History weight at REST vs IN MOTION. A static pixel's dominant per-frame
 // variation is the TAA jitter itself -- exactly the signal to integrate --
@@ -88,7 +89,8 @@ void main() {
         return;
     }
 
-    vec3 history = sampleHistoryCatmullRom(historyTex, histUv, 1.0 / texelSize);
+    // At this frame's exposure before the clamp and the luma weights read it.
+    vec3 history = sampleHistoryCatmullRom(historyTex, histUv, 1.0 / texelSize) * historyScale;
 
     // Neighborhood clamp: bound the history to the 3x3 YCoCg min/max of the
     // current frame. Moving edges and disoccluded pixels whose history falls

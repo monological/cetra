@@ -18,6 +18,7 @@ uniform sampler2D velocityTex; // Screen-space motion .xy (UV units)
 uniform sampler2D historyTex;  // Last frame's accumulated GI (.rgb)
 uniform vec2 texelSize;        // 1 / GI resolution
 uniform int reset;             // 1 on the first frame -> no history yet
+uniform float historyScale;    // This frame's pre-exposure over the history's (spec 13.20)
 
 const float FEEDBACK = 0.9; // History weight; ~10-frame effective window
 
@@ -55,7 +56,8 @@ void main()
             nmax = max(nmax, n);
         }
     }
-    vec3 historyYCoCg = clamp(rgbToYCoCg(texture(historyTex, histUv).rgb), nmin, nmax);
+    vec3 historyYCoCg =
+        clamp(rgbToYCoCg(texture(historyTex, histUv).rgb * historyScale), nmin, nmax);
     vec3 history = yCoCgToRgb(historyYCoCg);
 
     // Inverse-luma weighted blend (Y = YCoCg.x): resolves gathered fireflies
