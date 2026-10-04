@@ -281,7 +281,7 @@ and no imageStore, so the alternative is additive blending of point primitives
 `x - 6.25x^2` of the smallest, which for a negative `x` ADDS to all three, and the local exposure
 takes a log and lifts what is dark tenfold; a few thousandths below zero from the wet SSR fold were
 invisible until the local exposure arrived and turned them into white dots along silent's porch
-rails. The tonemap, the glare source (which thresholds what the tonemap takes out, so the two must
+rails. 13.21 removed the fold's, and TAA still leaves a few beside a very bright window. The tonemap, the glare source (which thresholds what the tonemap takes out, so the two must
 read the same light) and the local exposure's grid all read through it. A NaN now comes out black
 where the bare `min` gave white; GLSL leaves either undefined.
 
@@ -880,21 +880,30 @@ keeps (-1, 0), and every reader asks `include/ssr_marker.glsl` rather than testi
 sign test hands wet ground the catcher's treatment. Three things make it right rather than merely
 visible:
 - SSR reads the texel's own roughness from the aux buffer and water's F0.
-- `ssr_fold_wet_frag` REPLACES the pixel's share of the environment's reflection -- adding the trace
-  and subtracting that fraction of the split ambient specular -- where the lerp dimmed the diffuse
-  by a Fresnel already applied. Its tent averages each marker class only with its own and gives an
-  unmarked pixel nothing, or a puddle's coverage darkens the wall above it.
-- **What it subtracts is what the split composite put back, under its occlusion** (spec 13.20),
-  read through the composite's own statement of it, `include/split_occlusion.glsl`. It subtracted
-  the unoccluded share, its comment assuming wet ground lies under open sky; under silent's pent
-  roof that was more than the frame held, and the kitchen sill's puddles went below zero -- black,
-  with red rims where only green and blue did. Negative pixels on that framing: 825 to 58.
-- **It still runs after TAA, and that is an open defect.** What it takes out is this frame's
-  render-res specular; what it takes it from has been resolved by TAA and, at a render scale,
-  upscaled. On open ground they agree; on a thin ripple or an object's edge they do not, and
-  silent's porch keeps about 3,100 negative pixels -- none with the subtraction off, none with TAA
-  off. The tonemap's `sceneLight` keeps them from turning white; the fix is to composite wet
-  ground's reflection before TAA from last frame's trace, reprojected, as Unreal does.
+- The reflection REPLACES the pixel's share of the environment's, where the lerp dimmed the diffuse
+  by a Fresnel already applied, and the replacement is made in the split composite, BEFORE TAA
+  (spec 13.21, `wetReflection` in `spec_occ_composite_frag`): `spec * SO * (1 - coverage) +
+  reflection`, every term non-negative. The pair carries the reflection with its Fresnel and the
+  coverage bare. On a wet frame the late fold (`ssr_fold_wet_frag`) folds only the catcher, its
+  tent averaging the catcher only with its own class, and gives wet and unmarked pixels nothing --
+  a puddle's coverage taken as a catcher's Fresnel would lerp the floor beside it.
+- **The pair is the frame before's** (`PostFX.ssr_prev`), the only trace there is when the
+  composite runs, read at the pixel less the surface's velocity and scaled to this frame's
+  pre-exposure. Only the frame immediately before will do, and the handle is kept rather than a
+  parity, since `frame_index` advances on frames that draw nothing; so the first wet frame, or the
+  first after SSR was off, shows the environment's reflection alone. A reflection moves with
+  parallax rather than with its surface, which the SSR accumulator's reprojection already accepts.
+  The trace reads the canvas after TAA, which now holds the frame before's wet reflections, so a
+  puddle can see another's, bounded by its Fresnel.
+- **Why before TAA.** Until 13.21 the late fold added the trace and SUBTRACTED the replaced share
+  after TAA. What it took out was this frame's render-res specular; what it took it from TAA had
+  resolved and, at a render scale, upscaled. On open ground they agreed; on a thin ripple or an
+  object's edge they did not, and silent's porch went 2,490-4,250 pixels below zero a frame: dark
+  outlines on the rails, a red arc, dark rings on the pavement. 13.20 had already made it take what
+  the composite put back UNDER its occlusion rather than the unoccluded share, which had taken the
+  kitchen sill's puddles under the pent roof black. Composited before TAA, the reflection and what
+  it replaces are one image, and `rain-ssr-taa` and `rain-ssr-taau` hold the frame at 0 pixels
+  below zero, where the old fold went to 1,369 and 1,330.
 - A replacing hit is seen through the global height fog along its own reflected segment
   (`reflectedThroughFog`), because the environment it replaces is baked through the same fog
   (`include/env_medium.glsl`, `IBLResources.reflect_fog`). Unfogged, a puddle on a foggy street

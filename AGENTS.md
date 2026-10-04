@@ -248,8 +248,12 @@ the catcher, whose magnitude is its edge falloff, and below -1 is wet ground, as
 `-(1 + film)`, whose roughness SSR reads per texel from the aux buffer. Every reader asks
 `include/ssr_marker.glsl`: a sign test anywhere (the tonemap's AO guard, `spec_occ`) hands wet
 ground the catcher's treatment. Wet ground's
-reflection REPLACES its share of the environment's in `ssr_fold_wet_frag` rather than
-lerping the pixel -- see `docs/shader-subsystems.md`, Rain.
+reflection REPLACES its share of the environment's rather than lerping the pixel, and **the
+replacement is made in the split composite, BEFORE TAA, from the frame before's trace** (spec
+13.21). Subtracted after TAA, it took this frame's share out of a frame TAA had already resolved,
+and every thin ripple and wet edge went below zero; `rain-ssr-taa` and `rain-ssr-taau` are what
+see that, since every other rain arm runs without TAA, where the two agree -- see
+`docs/shader-subsystems.md`, Rain.
 
 **PostFX chain** (`postfx_run`): MSAA resolve -> OIT composite -> G-buffer resolves ->
 contact shadows -> GTAO + SSGI sweep -> split spec-occ composite -> the TAA seam
@@ -766,7 +770,9 @@ entry there before changing anything marked with a dagger.
   post chain's late draw) + `include/rain_constants.glsl` (both languages) + `rain_occlusion.glsl`
   (the cover) + `rain_surface.glsl` (wet ground and puddles, over the shore's `wet_surface.glsl`) +
   `rain_ripples.glsl` + `rain_phase.glsl` (the drops' phase, shared with the fog inject), and
-  `ssr_fold_wet_frag` + `include/env_medium.glsl` for wet ground's reflections. Since 13.12
+  for wet ground's reflections `spec_occ_composite_frag`'s `wetReflection` (the replacement,
+  before TAA), `ssr_fold_wet_frag` (the catcher's fold on a wet frame) and
+  `include/env_medium.glsl`. Since 13.12
   `rain_glass.glsl` (beads and running drops on glass, pure arithmetic), and `rain_vert` draws
   DRIPS too, from authored edge lines, after the splash droplets. Declares no sampler in
   `pbr_frag`: the cover is a layer of the punctual array. The one exception is the RELIEF bit,
