@@ -1515,6 +1515,19 @@ on the `Scene`.
   volume one smooths what the volume itself generates, the 2D one cancels the
   jitter the composite inherits from the aux depth (which is why it is pointless
   without TAA). See `specs/9.5.1`.
+  **Every history of LIGHT follows the exposure** (spec 13.20). The buffer is pre-exposed,
+  so a history carries the exposure of the frame that wrote it, and unscaled an exposure
+  change reached it only as fast as its blend decayed: stepping outdoors in silent, the fog
+  volume's 0.9 took tens of frames to forget the room, longest where the fog was deepest, and
+  the frame settled as an expanding sphere. Each side of a `PingPong` remembers the
+  pre-exposure it was written at (the fog volume, `froxel_prev_pre`), and a history is read
+  at this frame's -- the scene pass publishes it as `postfx->pre_exposure` -- times that
+  ratio, on `.rgb` only and before any clamp or luma weight reads it. TAA, TAAU, SSGI, SSR,
+  SSS, the fog layer and the fog volume take it; AO, specular occlusion and contact shadows
+  are unitless and do not; the cloud march and the GI volume store absolute light and need
+  nothing. A 4x step is 0 px from a run at the new exposure on its first frame without TAA;
+  under it, what is left sits on edges, where TAA's inverse-luma weights depend on absolute
+  brightness. `--no-history-rescale` (render, silent) and `--exposure-at` are the A/B.
 - **SoA particle pools** with swap-remove compaction.
 - **Scene-citizen subsystems:** node borrows, scene owns (mirrors Light/Camera).
 - **Clustered forward light culling:** every LOCAL analytic light — point, spot, area — reaches a

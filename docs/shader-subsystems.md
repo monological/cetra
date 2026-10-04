@@ -276,6 +276,15 @@ the CPU reads back. A **gather** histogram, one fragment per bin looping the who
 is O(bins x texels) and still the right trade at 4096 texels -- GL 4.1 has no compute, no atomics
 and no imageStore, so the alternative is additive blending of point primitives
 
+**The finished frame is read through `sceneLight`** (`include/view.glsl`, spec 13.20): under
+`WS_SCENE_MAX`, and never below zero. The neutral curve's toe offsets every channel by
+`x - 6.25x^2` of the smallest, which for a negative `x` ADDS to all three, and the local exposure
+takes a log and lifts what is dark tenfold; a few thousandths below zero from the wet SSR fold were
+invisible until the local exposure arrived and turned them into white dots along silent's porch
+rails. The tonemap, the glare source (which thresholds what the tonemap takes out, so the two must
+read the same light) and the local exposure's grid all read through it. A NaN now comes out black
+where the bare `min` gave white; GLSL leaves either undefined.
+
 ## Purkinje / scotopic shift
 
 `include/purkinje.glsl` + `tools/gen_scotopic_weights.py`
@@ -875,6 +884,17 @@ visible:
   and subtracting that fraction of the split ambient specular -- where the lerp dimmed the diffuse
   by a Fresnel already applied. Its tent averages each marker class only with its own and gives an
   unmarked pixel nothing, or a puddle's coverage darkens the wall above it.
+- **What it subtracts is what the split composite put back, under its occlusion** (spec 13.20),
+  read through the composite's own statement of it, `include/split_occlusion.glsl`. It subtracted
+  the unoccluded share, its comment assuming wet ground lies under open sky; under silent's pent
+  roof that was more than the frame held, and the kitchen sill's puddles went below zero -- black,
+  with red rims where only green and blue did. Negative pixels on that framing: 825 to 58.
+- **It still runs after TAA, and that is an open defect.** What it takes out is this frame's
+  render-res specular; what it takes it from has been resolved by TAA and, at a render scale,
+  upscaled. On open ground they agree; on a thin ripple or an object's edge they do not, and
+  silent's porch keeps about 3,100 negative pixels -- none with the subtraction off, none with TAA
+  off. The tonemap's `sceneLight` keeps them from turning white; the fix is to composite wet
+  ground's reflection before TAA from last frame's trace, reprojected, as Unreal does.
 - A replacing hit is seen through the global height fog along its own reflected segment
   (`reflectedThroughFog`), because the environment it replaces is baked through the same fog
   (`include/env_medium.glsl`, `IBLResources.reflect_fog`). Unfogged, a puddle on a foggy street
