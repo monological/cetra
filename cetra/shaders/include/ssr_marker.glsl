@@ -27,9 +27,3 @@ float ssrMarkerFade(float a)
 {
     return ssrMarkerIsWet(a) ? clamp(-a - 1.0, 0.0, 1.0) : clamp(-a, 0.0, 1.0);
 }
-
-// 2 wet ground, 1 the catcher, 0 unmarked.
-int ssrMarkerClass(float a)
-{
-    return a < -1.0 ? 2 : (a < 0.0 ? 1 : 0);
-}

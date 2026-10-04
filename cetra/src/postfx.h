@@ -235,8 +235,8 @@ typedef struct PostFX {
                           // across frames so the single-frame step banding washes out (TAA only)
     PingPong ssr_atrous; // SSR a-trous denoise ping-pong (RGBA16F): resolves the stochastic
                          // march's per-pixel noise into a clean reflection in a single frame
-    // The SSR result a frame left for the next, whose split composite folds it into wet ground
-    // before TAA (spec 13.21). Only a frame that traced wet ground in replace mode leaves one.
+    // The SSR result a frame left for the next to fold into its wet ground (spec 13.21). Only a
+    // frame that traced wet ground in replace mode leaves one.
     struct {
         GLuint tex;         // 0 = none
         int frame;          // the frame_index it was traced at

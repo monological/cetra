@@ -889,12 +889,14 @@ visible:
   a puddle's coverage taken as a catcher's Fresnel would lerp the floor beside it.
 - **The pair is the frame before's** (`PostFX.ssr_prev`), the only trace there is when the
   composite runs, read at the pixel less the surface's velocity and scaled to this frame's
-  pre-exposure. Only the frame immediately before will do, and the handle is kept rather than a
-  parity, since `frame_index` advances on frames that draw nothing; so the first wet frame, or the
-  first after SSR was off, shows the environment's reflection alone. A reflection moves with
-  parallax rather than with its surface, which the SSR accumulator's reprojection already accepts.
-  The trace reads the canvas after TAA, which now holds the frame before's wet reflections, so a
-  puddle can see another's, bounded by its Fresnel.
+  pre-exposure. Only the frame immediately before is one velocity away, so the first wet frame, or
+  the first after SSR was off, shows the environment's reflection alone. It is kept by handle,
+  since which buffer holds it -- the raw trace, the accumulator's side or the denoised one --
+  depends on that frame's switches. A reflection moves with parallax rather than with its surface,
+  which the SSR accumulator's reprojection already accepts. The trace reads the canvas after TAA,
+  which now holds the frame before's wet reflections, so a puddle can see another's, bounded by its
+  Fresnel. And the read is bilinear and blind to class, so where wet ground meets the catcher it
+  can take a catcher's pair as wet; neither fixture has that border.
 - **Why before TAA.** Until 13.21 the late fold added the trace and SUBTRACTED the replaced share
   after TAA. What it took out was this frame's render-res specular; what it took it from TAA had
   resolved and, at a render scale, upscaled. On open ground they agreed; on a thin ripple or an

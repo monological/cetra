@@ -19889,8 +19889,9 @@ def _probe_render(scene, flag, prefix, extra=None, frames=30):
     which is also what an app other than render goes through -- this one only
     owns the invocation.
     """
-    # No -S, and no workdir: every caller reads probe ROWS off stdout, so the
-    # frames these used to write were a readback and a file write nobody opened.
+    # No -S of its own, and no workdir: callers read probe ROWS off stdout, and the
+    # frames these used to write were a readback and a file write nobody opened. One
+    # that also wants the frame passes -S in `extra`.
     cmd = [RENDER, "-m", scene, "-x", "-f", str(frames), "-W", "400", "-H", "300", flag]
     r = _run(cmd + (extra or []), capture_output=True, text=True)
     text = r.stdout + r.stderr
