@@ -179,7 +179,7 @@ typedef struct PostFX {
     //
     // ENGINE-OWNED, read only: the sizes and mip counts, every GLuint and
     // ShaderProgram*, every PingPong history, every *_ready / *_failed
-    // lazy-alloc latch, frame_index, the borrowed exposure and profiler, and
+    // lazy-alloc latch, frame_index, pre_exposure, the borrowed exposure and profiler, and
     // the blocks other subsystems PUBLISH here each frame (the probe set, the
     // fog volumes, the cloud shadow, the water medium, the fog casters and
     // spot, the aerial volume, the rain, the late draw), each marked at its
@@ -440,6 +440,7 @@ typedef struct PostFX {
     // the time postfx runs (the scene pass stashes it at its end).
     mat4 froxel_prev_view;
     mat4 froxel_prev_proj;
+    float froxel_prev_pre; // The pre-exposure the previous froxel frame was shaded at
     // frame_index of the last froxel build, -1 = never. Reprojection is legal
     // only against the IMMEDIATELY preceding frame, so this is compared rather
     // than a validity flag: any frame that skipped the volume -- the legacy fog
@@ -653,6 +654,10 @@ typedef struct PostFX {
     PostFXLutInterp lut_interp;
     char lut_name[64]; // Basename of the loaded file, for the GUI readout
     int frame_index;   // Copied from engine->total_frames; seeds deterministic grain
+    // The pre-exposure this frame was shaded at, taken at the top of postfx_run. Every
+    // history of RADIANCE remembers the one it was written at, and is read at this one.
+    float pre_exposure;
+    bool rescale_histories; // false = histories keep the exposure they were written at
 
     // Temporal anti-aliasing. Consumes the per-pixel velocity buffer and a
     // reprojected history to resolve sub-pixel-jittered frames. History buffers

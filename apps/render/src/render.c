@@ -150,6 +150,9 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --no-alpha-jitter  Disable the jittered alpha lookup (11.101), the\n");
     fprintf(stderr, "                         diagnostic that restores the dither's Moire\n");
     fprintf(stderr, "      --no-ssao          Disable screen-space ambient occlusion\n");
+    fprintf(stderr,
+            "      --no-history-rescale  Diagnostic: temporal histories keep the exposure\n"
+            "                         they were written at, so a change of exposure lags\n");
     fprintf(stderr, "      --ssao-debug       Show the raw SSAO buffer\n");
     fprintf(stderr,
             "      --no-spec-occlusion Let GTAO darken specular (alias for --spec-occ off)\n");
@@ -1113,6 +1116,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->csm_debug = 1;
         } else if (strcmp(argv[i], "--no-ssao") == 0) {
             args->no_ssao = 1;
+        } else if (strcmp(argv[i], "--no-history-rescale") == 0) {
+            args->no_history_rescale = 1;
         } else if (strcmp(argv[i], "--ssao-debug") == 0) {
             args->ssao_debug = 1;
         } else if (strcmp(argv[i], "--no-spec-occlusion") == 0) {
@@ -3496,6 +3501,8 @@ int main(int argc, char** argv) {
         if (args.adapt_down >= 0.0f)
             ex->adapt_rate_down = args.adapt_down;
     }
+    if (args.no_history_rescale && engine->postfx)
+        engine->postfx->rescale_histories = false;
     if (args.no_ssao && engine->postfx) {
         engine->postfx->ssao_enabled = false;
     }

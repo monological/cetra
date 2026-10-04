@@ -117,6 +117,7 @@ uniform int frameIndex;
 uniform sampler3D historyVolume;
 uniform mat4 prevView;       // World -> the previous frame's view space
 uniform mat4 prevProjection; // Its focal terms map that to the previous volume
+uniform float historyScale;  // This frame's pre-exposure over the history's (spec 13.20)
 
 const float PI = 3.14159265359;
 
@@ -451,7 +452,12 @@ void main() {
             // keep the current frame -- the standard disocclusion fallback.
             if (all(greaterThanEqual(prevUvw, vec3(0.0))) &&
                 all(lessThanEqual(prevUvw, vec3(1.0)))) {
+                // The history was stored at its own frame's pre-exposure; brought to this
+                // frame's, a change of exposure lands whole rather than at the blend's pace.
+                // Only the in-scatter: extinction knows nothing of the exposure. Under the
+                // same ceiling as this frame's value, which a step up could otherwise pass.
                 vec4 history = texture(historyVolume, prevUvw);
+                history.rgb = min(history.rgb * historyScale, vec3(WS_MEDIA_MAX));
                 result = mix(result, history, temporalBlend);
             }
         }

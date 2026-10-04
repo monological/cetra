@@ -142,6 +142,11 @@ float exposure_multiplier(const Exposure* ex) {
     return exposure_camera_multiplier(ex) * exposure_auto_gain(ex);
 }
 
+float exposure_pre(const Exposure* ex) {
+    const float pre = exposure_multiplier(ex);
+    return pre > 0.0f ? pre : 1.0f;
+}
+
 void exposure_submit_measurement(Exposure* ex, float log2_luminance) {
     if (!ex)
         return;
