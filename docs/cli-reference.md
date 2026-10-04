@@ -923,6 +923,9 @@ wind, each heard from where it is.
   for comparison.
 - `--negative-probe` prints, each frame, how much of the frame reaches the tonemap below zero, as
   the render app's does (spec 13.21).
+- **Probe Coverage**, in the Render Mode list under G (spec 13.23), shows which surfaces fall
+  outside the five reflection probes and reflect the sky: they turn magenta. Indoors only the gap
+  round the front door should, since it looks outdoors.
 
 **It rains, by default, at 6 mm/h** (spec 13.9), a moderate rain, and the world opens already
 soaked. `--rain <mm/h>` sets another rate and `--no-rain` gives the dry street back. What silent

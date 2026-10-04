@@ -716,6 +716,22 @@ NOT recomputed here: the CPU publishes a table, because every probe's column has
 rows and a shader-side copy of the halving rule would force the row size to be a power of two
 (C shifts, GLSL would divide by exp2, and those agree nowhere else).
 
+**A box's fade is a fraction of each axis's OWN half-size** (`probeBoxWeight`), so one fade is a
+different distance on every axis: the longest reaches furthest, and a distance stated for every
+axis holds only on that one. The engine floors it at a thousandth of each half-size. silent's
+13.13 comment said its fades stopped "halfway into the thinnest wall"; on the hall's short axis
+that was 1.9 cm, and a door hung 2.5 cm into the wall was outside every box (spec 13.23).
+
+**What falls outside every box reflects the global environment**, dimmed by `envVisible` to the
+room's brightness but keeping the sky's colour and its evenness, so in the shaded frame a miss is
+only a faint grey sheen. **`RENDER_MODE_PROBE_COVERAGE` (14) is how to see one**: the albedo,
+turned magenta by `envShare`, the share of the reflection no probe answers. Outdoors everything
+is magenta, and right; indoors any magenta is a miss. It shows the fallback and NOT a wrong
+probe: a surface inside another room's box reads as covered, and that is found from OUTSIDE,
+where anything not magenta has taken a room's probe. Two misses no box can avoid: a wall at 45
+degrees and the top of a pitched roof under a box that must reach the ridge. `probe-set-coverage`
+holds the view to the albedo view inside a box and to pure magenta outside every box.
+
 ## Clustered decals
 
 `include/decals_ubo.glsl` (spec 11.73) — marks projected through an
