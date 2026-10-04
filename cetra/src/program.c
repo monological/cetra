@@ -1235,6 +1235,10 @@ ShaderProgram* create_le_half_program() {
     return create_post_program("le_half", le_half_frag_shader_str);
 }
 
+ShaderProgram* create_le_bins_program() {
+    return create_post_program("le_bins", le_bins_frag_shader_str);
+}
+
 ShaderProgram* create_le_grid_program() {
     return create_post_program("le_grid", le_grid_frag_shader_str);
 }
