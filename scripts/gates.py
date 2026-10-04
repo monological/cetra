@@ -20586,6 +20586,12 @@ EXPOSURE_STABLE_FRAMES = 60
 # 0. This is only float slack on two %.6f fields the engine prints in log2 --
 # not a tolerance on the convergence itself.
 EXPOSURE_CONVERGE_EPS = 1e-5
+# The change the meter converges FROM: the camera turned off the model at this frame, which the
+# meter reads 1.45 stops darker. A static scene meters the same every frame, so the first
+# measurement, taken whole, leaves nothing to converge from; the gap this arm used to find on
+# frames 1-7 was the fog volume still carrying frame 0's exposure (spec 13.20), a defect.
+EXPOSURE_CONVERGE_MOVE_FRAME = 10
+EXPOSURE_CONVERGE_MOVE = f"{EXPOSURE_CONVERGE_MOVE_FRAME}:0,0.35,1.6,0,0.35,3.6"
 
 # A gain of exactly 1.0 is auto-exposure declining to act. Compared with ==
 # rather than a tolerance because the cap is an fminf, so the value is the
@@ -20658,7 +20664,10 @@ def run_exposure_gate(workdir):
       exposure-converge the snap engages -- adapted reaches raw EXACTLY, not
                         nearly. Asserted against an early frame where the gap is
                         still open, so a build that never adapted at all cannot
-                        pass by having no gap to close.
+                        pass by having no gap to close. The gap comes from the
+                        camera turning off the model at frame 10: a static scene
+                        meters the same every frame since spec 13.20, and the gap
+                        this found on frames 1-7 before it was a defect.
       exposure-stable   two runs of one build agree on every field of every line.
                         The blocking readback and the per-FRAME blend are both
                         traded for this and nothing checked it.
@@ -20725,8 +20734,8 @@ def run_exposure_gate(workdir):
             failures.append("exposure-darkens")
 
     # --- exposure-converge --------------------------------------------------
-    rows, _ = _exposure_probe(live, frames=EXPOSURE_FRAMES)
-    if len(rows) < 20:
+    rows, _ = _exposure_probe(live, ["--cam-at", EXPOSURE_CONVERGE_MOVE], frames=EXPOSURE_FRAMES)
+    if len(rows) < EXPOSURE_CONVERGE_MOVE_FRAME + 20:
         print("  exposure-converge ERROR too few probe lines")
         failures.append("exposure-converge")
     else:
@@ -20738,9 +20747,9 @@ def run_exposure_gate(workdir):
         # group's own dark configuration, 25x the threshold.
         def gap(rec):
             return abs(rec["adapted_log2"] - rec["target_log2"])
-        # Frame 0 is skipped because its gap is structurally zero -- the first
-        # measurement is taken whole, with no blend to converge from.
-        early = max(gap(r) for r in rows[1:8])
+        # The seven frames after the camera moves, where the meter is still on its way there.
+        after = [r for r in rows if int(r["frame"]) >= EXPOSURE_CONVERGE_MOVE_FRAME]
+        early = max(gap(r) for r in after[:7])
         late = gap(rows[-1])
         ok = late <= EXPOSURE_CONVERGE_EPS and early > EXPOSURE_CONVERGE_EPS
         print(f"  exposure-converge {'PASS' if ok else 'FAIL'} adapted-vs-target gap "
@@ -20811,17 +20820,20 @@ def run_exposure_gate(workdir):
     # `rows` is the default configuration at the same frame count -- the byte
     # identical command this used to issue a second time. Reused rather than
     # re-rendered, the way exposure-linear already reads exposure-darkens' bright
-    # run: 150 frames is ~3 s and this group is 7% of the suite.
+    # run: 150 frames is ~3 s and this group is 7% of the suite. It carries
+    # exposure-converge's camera move, so the two spots below carry it too and
+    # the three runs differ by the mask alone.
     uni = rows
+    moved_cam = ["--cam-at", EXPOSURE_CONVERGE_MOVE]
     # 1.0 exactly, not an arbitrarily large number: the radius is a fraction of
     # the UV half-diagonal, so 1.0 reaches the corners and covers the frame by
     # definition. This arm used 8.0 while the shader divided by the radius alone
     # and coverage saturated at 0.7071 -- so it passed without ever pinning what
     # the unit meant, and any value above 0.71 would have done.
     wide, wide_text = _exposure_probe(live,
-                                      ["--meter-mode", "spot", "--meter-radius", "1.0"],
+                                      moved_cam + ["--meter-mode", "spot", "--meter-radius", "1.0"],
                                       frames=EXPOSURE_FRAMES)
-    spot, _ = _exposure_probe(live, ["--meter-mode", "spot", "--meter-radius", "0.4"],
+    spot, _ = _exposure_probe(live, moved_cam + ["--meter-mode", "spot", "--meter-radius", "0.4"],
                               frames=EXPOSURE_FRAMES)
     if not (uni and wide and spot):
         # The probe helper already collected the renderer's output; printing its
