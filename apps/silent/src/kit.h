@@ -277,7 +277,10 @@ KitWallFrame kit_wall_frame(const KitWall* wall);
 // A body filling an opening of a wall `thick` through, its middle at d, so nobody walks or
 // climbs through what fills it; an arch's head is solid to its crown.
 void kit_frame_plug(Kit* kit, const KitFrame* f, const KitOpening* o, float d, float thick);
-// A pane of `mat` 6 mm thick at d, filling an opening of a wall `thick` through, and its plug.
+// Half a pane's glass, either side of the plane it hangs in.
+#define KIT_PANE_HALF 0.003f
+// A pane of `mat` 2 * KIT_PANE_HALF thick at d, filling an opening of a wall `thick` through, and
+// its plug.
 void kit_frame_pane(Kit* kit, const KitFrame* f, int mat, const KitOpening* o, float d,
                     float thick);
 // A flat polygon of (a, y) corners at distance d, facing out (+d).

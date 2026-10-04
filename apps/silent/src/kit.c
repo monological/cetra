@@ -1348,7 +1348,7 @@ void kit_frame_pane(Kit* kit, const KitFrame* f, int mat, const KitOpening* o, f
                     float thick) {
     vec2 outline[KIT_OPENING_POINTS];
     const int n = kit_opening_outline(o, outline);
-    kit_frame_extrude(kit, f, mat, outline, n, d - 0.003f, d + 0.003f);
+    kit_frame_extrude(kit, f, mat, outline, n, d - KIT_PANE_HALF, d + KIT_PANE_HALF);
     kit_frame_plug(kit, f, o, d, thick);
 }
 
