@@ -52,6 +52,14 @@ OFF by default since spec 13.5; `--no-glare` overrides a scene file's `post.glar
 `--glare-strength` is the share of the light past the threshold moved into the star, 0 to 1,
 `--glare-threshold` the working-space radiance a point must pass, and `--glare-probe` prints the
 light the star carries against its source's and the frame's light taken out against put back),
+`--local-exposure` (spec 13.19: an exposure per pixel on top of the camera's, OFF by default and
+the identity until a contrast is lowered; `--no-local-exposure` overrides a scene file's
+`post.local_exposure`. `--le-highlights` and `--le-shadows` are the base's contrast above and
+below middle grey, 1 unchanged and 0.6-1 Unreal's suggestion; `--le-detail` the detail's contrast;
+`--le-blend` the base's share from the blurred luminance, 0.6 by default and 0 the pure bilateral
+grid, which held a lit room's window best; `--le-kernel` that blur's width as a share of the
+frame; `--le-grey-bias` stops added to the middle grey it all scales about. `--le-probe` prints
+the frame's luminance percentiles in stops from middle grey, which is the range to tune against),
 `--tonemap <neutral|aces|agx|linear>`
 (`linear` is the identity curve WITH the display encode, which passthrough is not: an authored
 colour at unit exposure reaches the screen as authored, and it is what `engine_set_2d_preset`
@@ -888,6 +896,14 @@ wind, each heard from where it is.
   exposure. So the kitchen by day is exposed as at night, plus its window's daylight, and the street
   closes down to a light-grey fog world.
 - **The night is pinned exactly as before,** and moves by at most 1 LSB.
+- **By day there is a local exposure** (spec 13.19): highlights 0.2, shadows 0.6, blend 0, so the
+  kitchen window onto the street reads and the room is lifted. It is off at night.
+  - `--no-local-exposure` drops it and `--local-exposure` forces it on.
+  - `--le-highlights`, `--le-shadows` and `--le-blend` override the day's values.
+  - `--le-probe` prints the luminance range it is asked to fit; `--exposure-probe` prints what the
+    meter decided.
+  - The same knobs are sliders under G, in the Cetra window's Post section, and G frees the mouse
+    while the GUI is open.
 
 **It rains, by default, at 6 mm/h** (spec 13.9), a moderate rain, and the world opens already
 soaked. `--rain <mm/h>` sets another rate and `--no-rain` gives the dry street back. What silent
