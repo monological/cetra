@@ -833,7 +833,8 @@ static void print_usage(const char* prog) {
     printf("      --no-eyeshine       Its eyes do not throw the flashlight back\n");
     printf("  In the window: click to capture the mouse, Tab to release it. WASD\n");
     printf("  walks, Shift hurries, the arrows or the mouse look, E opens and shuts\n");
-    printf("  a door you are facing, F the flashlight, G shows the GUI.\n");
+    printf("  a door you are facing, F the flashlight, G shows the GUI and frees the\n");
+    printf("  mouse for it while it is open.\n");
     printf("  -h, --help              This message\n");
 }
 

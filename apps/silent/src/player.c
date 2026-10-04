@@ -104,8 +104,12 @@ void player_pre_render(Player* p, Game* game, const vec3* pin_eye, const vec3* p
         camera_rig_aim(p->rig, p->rig->yaw - (float)dx * MOUSE_LOOK_RATE,
                        p->rig->pitch - (float)dy * MOUSE_LOOK_RATE);
     }
-    if (!p->cursor_captured && input_mouse_pressed(&game->input, GLFW_MOUSE_BUTTON_LEFT) &&
-        !engine_gui_wants_mouse())
+    // The debug GUI wants the pointer: while it is open the cursor is free and a click does not
+    // take it back, or its sliders could not be reached. The arrow keys still look.
+    if (engine->show_gui)
+        set_cursor_captured(p, engine, false);
+    else if (!p->cursor_captured && input_mouse_pressed(&game->input, GLFW_MOUSE_BUTTON_LEFT) &&
+             !engine_gui_wants_mouse())
         set_cursor_captured(p, engine, true);
     if (input_action_pressed(&game->input, "release_cursor"))
         set_cursor_captured(p, engine, false);
