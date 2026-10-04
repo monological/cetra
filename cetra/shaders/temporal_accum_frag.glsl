@@ -26,6 +26,10 @@ uniform int reset;             // 1 on the first frame -> no history yet
 // stays there; the residual scales with (1 - feedback) as the geometric series
 // says it must.
 uniform float feedback;
+// This frame's pre-exposure over the history's (spec 13.20), for a history of light; exactly 1
+// for the unitless consumers. Applied to .rgb before the clamp, so the box and the history are
+// compared at one exposure; .a is a transmittance or a mask and never scales.
+uniform float historyScale;
 
 void main()
 {
@@ -58,7 +62,9 @@ void main()
             nmax = max(nmax, n);
         }
     }
-    vec4 history = clamp(texture(historyTex, histUv), nmin, nmax);
+    vec4 history = texture(historyTex, histUv);
+    history.rgb *= historyScale;
+    history = clamp(history, nmin, nmax);
 
     FragColor = mix(current, history, feedback);
 }

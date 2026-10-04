@@ -19,6 +19,7 @@ uniform vec2 postSize;
 // successive frames fill in different display pixels.
 uniform vec2 jitterPx;
 uniform int reset; // 1 on the very first frame: no valid history yet
+uniform float historyScale; // This frame's pre-exposure over the history's (spec 13.20)
 
 // Same rest/motion window split as taa_resolve_frag (the rationale lives
 // there); the moving window matters more here because a wrongly reprojected
@@ -134,7 +135,8 @@ void main() {
     float velPx = length(velocity * postSize);
     float feedback = mix(TAA_FEEDBACK_REST, TAA_FEEDBACK_MOVING, smoothstep(0.1, 1.0, velPx));
 
-    vec3 history = sampleHistoryCatmullRom(historyTex, histUv, postSize);
+    // At this frame's exposure before the clamp and the luma weights read it.
+    vec3 history = sampleHistoryCatmullRom(historyTex, histUv, postSize) * historyScale;
     vec3 historyYCoCg = clamp(rgbToYCoCg(history), nmin, nmax);
     history = yCoCgToRgb(historyYCoCg);
 

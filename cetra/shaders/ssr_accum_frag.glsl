@@ -22,6 +22,7 @@ uniform sampler2D historyTex;  // Last frame's accumulation
 uniform vec2 texelSize;        // 1 / effect resolution
 uniform int reset;             // 1 on the first frame -> no history yet
 uniform float feedback;        // History weight
+uniform float historyScale;    // This frame's pre-exposure over the history's (spec 13.20)
 
 float lumaOf(vec3 c) {
     return dot(c, vec3(0.2126, 0.7152, 0.0722));
@@ -77,7 +78,10 @@ void main()
     float velPx = length(velocity / texelSize);
     float motion = smoothstep(0.1, 1.0, velPx);
     vec4 slack = (nmax - nmin) * (1.0 - motion);
-    vec4 history = clamp(texture(historyTex, histUv), nmin - slack, nmax + slack);
+    // The reflected light at this frame's exposure before the clamp reads it; .a is coverage.
+    vec4 history = texture(historyTex, histUv);
+    history.rgb *= historyScale;
+    history = clamp(history, nmin - slack, nmax + slack);
 
     // Motion splits the estimator's two failure modes. At rest the
     // re-jittered rays need a LONG window (the residual flicker scales with

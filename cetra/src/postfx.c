@@ -1719,7 +1719,7 @@ int postfx_add_sss_profile(PostFX* fx, const float* color, float radius) {
 }
 
 static GLuint run_temporal_accum(PostFX* fx, ShaderProgram* prog, PingPong* pp, int w, int h,
-                                 GLuint current_tex, float feedback);
+                                 GLuint current_tex, float feedback, bool radiance);
 
 // Whatever a consumer feeds the accumulator settles only if the input settles.
 // Most of them converge on their own -- their per-frame change is the camera
@@ -1810,8 +1810,9 @@ static void postfx_run_sss(PostFX* fx, GLuint canvas_fbo, mat4 projection, bool 
     // fold needs no shader of its own.
     GLuint delta = fx->sss_delta_texture;
     if (taa_resolving) {
-        delta = run_temporal_accum(fx, fx->temporal_accum_program, &fx->sss_history, fx->width,
-                                   fx->height, fx->sss_delta_texture, TEMPORAL_FEEDBACK_DEFAULT);
+        delta =
+            run_temporal_accum(fx, fx->temporal_accum_program, &fx->sss_history, fx->width,
+                               fx->height, fx->sss_delta_texture, TEMPORAL_FEEDBACK_DEFAULT, true);
     } else {
         fx->sss_history.valid = false;
     }
@@ -2422,8 +2423,21 @@ static void resolve_color_attachment(GLuint msaa_fbo, GLenum attachment, GLuint 
 // RESTORES NOTHING. On return the ping-pong FBO is still bound, the viewport is
 // at (w,h), prog is current, and texture unit 2 is active. Every caller that
 // draws afterwards has to re-bind its own target, viewport, program and unit.
+// What a history of RADIANCE written at pre-exposure `written` is multiplied by to be read at
+// this frame's (spec 13.20). The buffer is pre-exposed, so a history carries the exposure of the
+// frame that wrote it; unscaled, an exposure change reaches the history only as fast as its blend
+// decays, and the froxel volume's 0.9 took tens of frames to forget a step, longest where the fog
+// is deepest. 1 for a history never written, and under the diagnostic switch.
+static float _history_scale(const PostFX* fx, float written) {
+    if (!fx->rescale_histories || !(written > 0.0f))
+        return 1.0f;
+    return fx->pre_exposure / written;
+}
+
+// `radiance`: the history is pre-exposed light and is read at this frame's exposure. False for
+// the unitless ones -- AO, specular occlusion, contact shadows -- which an exposure never touches.
 static GLuint run_temporal_accum(PostFX* fx, ShaderProgram* prog, PingPong* pp, int w, int h,
-                                 GLuint current_tex, float feedback) {
+                                 GLuint current_tex, float feedback, bool radiance) {
     int write = fx->frame_index & 1;
     int read = write ^ 1;
     glBindFramebuffer(GL_FRAMEBUFFER, pp->fbo[write]);
@@ -2435,6 +2449,8 @@ static GLuint run_temporal_accum(PostFX* fx, ShaderProgram* prog, PingPong* pp, 
     // weight); a no-op against the programs that hard-code their feedback
     // (taa_resolve, ssgi_accum).
     uniform_set_float(prog->uniforms, "feedback", feedback);
+    uniform_set_float(prog->uniforms, "historyScale",
+                      radiance && pp->valid ? _history_scale(fx, pp->pre_exposure) : 1.0f);
     uniform_set_int(prog->uniforms, "currentTex", 0);
     uniform_set_int(prog->uniforms, "velocityTex", 1);
     uniform_set_int(prog->uniforms, "historyTex", 2);
@@ -2447,6 +2463,7 @@ static GLuint run_temporal_accum(PostFX* fx, ShaderProgram* prog, PingPong* pp, 
     uniform_set_int(prog->uniforms, "reset", pp->valid ? 0 : 1);
     draw_fullscreen_quad(fx->quad_vao);
     pp->valid = true;
+    pp->pre_exposure = fx->pre_exposure;
     return pp->tex[write];
 }
 
@@ -2481,8 +2498,10 @@ static void run_taau_resolve(PostFX* fx) {
     glActiveTexture(GL_TEXTURE2);
     glBindTexture(GL_TEXTURE_2D, pp->tex[read]);
     uniform_set_int(u, "reset", pp->valid ? 0 : 1);
+    uniform_set_float(u, "historyScale", pp->valid ? _history_scale(fx, pp->pre_exposure) : 1.0f);
     draw_fullscreen_quad(fx->quad_vao);
     pp->valid = true;
+    pp->pre_exposure = fx->pre_exposure;
 }
 
 // Edge-aware a-trous denoise, shared by the SSGI and SSR denoisers (their
@@ -2725,17 +2744,6 @@ static bool postfx_build_fog_esm(PostFX* fx) {
 // integrate front-to-back along each froxel column. Everything about froxel
 // parity, reprojection and the adjacency stamp lives here, so the composite
 // stage above it does not have to carry any of it.
-// What a history of RADIANCE written at pre-exposure `written` is multiplied by to be read at
-// this frame's (spec 13.20). The buffer is pre-exposed, so a history carries the exposure of the
-// frame that wrote it; unscaled, an exposure change reaches the history only as fast as its blend
-// decays, and the froxel volume's 0.9 took tens of frames to forget a step, longest where the fog
-// is deepest. 1 for a history never written, and under the diagnostic switch.
-static float _history_scale(const PostFX* fx, float written) {
-    if (!fx->rescale_histories || !(written > 0.0f))
-        return 1.0f;
-    return fx->pre_exposure / written;
-}
-
 static void postfx_build_fog_volume(PostFX* fx, mat4 projection, mat4 view, bool esm_on) {
     // Frame parity picks this frame's write target; the other volume still
     // holds the previous frame's scattering for reprojection.
@@ -2917,7 +2925,7 @@ static bool postfx_run_atmosphere(PostFX* fx, GLuint canvas_fbo, bool aux_writte
         fx->fog_layer_history.valid = (fx->fog_layer_frame == fx->frame_index - 1);
         GLuint stable =
             run_temporal_accum(fx, fx->temporal_accum_program, &fx->fog_layer_history, fx->width,
-                               fx->height, fx->fog_layer_texture, TEMPORAL_FEEDBACK_DEFAULT);
+                               fx->height, fx->fog_layer_texture, TEMPORAL_FEEDBACK_DEFAULT, true);
         fx->fog_layer_frame = fx->frame_index;
 
         glUseProgram(fx->froxel_composite_program->id);
@@ -3109,7 +3117,7 @@ static void postfx_run_ssr(PostFX* fx, GLuint canvas_fbo, GLuint canvas_tex, boo
     GLuint ssr_result = fx->ssr_texture;
     if (ssr_temporal_on) {
         ssr_result = run_temporal_accum(fx, fx->ssr_accum_program, &fx->ssr_history, ssr_w, ssr_h,
-                                        fx->ssr_texture, TEMPORAL_FEEDBACK_SSR);
+                                        fx->ssr_texture, TEMPORAL_FEEDBACK_SSR, true);
     } else {
         fx->ssr_history.valid = false;
     }
@@ -3431,9 +3439,9 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             cs_result_tex = fx->cs_texture[1];
 
             if (taa_resolving) {
-                cs_result_tex =
-                    run_temporal_accum(fx, fx->temporal_accum_program, &fx->cs_history, fx->width,
-                                       fx->height, fx->cs_texture[1], TEMPORAL_FEEDBACK_DEFAULT);
+                cs_result_tex = run_temporal_accum(fx, fx->temporal_accum_program, &fx->cs_history,
+                                                   fx->width, fx->height, fx->cs_texture[1],
+                                                   TEMPORAL_FEEDBACK_DEFAULT, false);
                 cs_accum_ran = true;
             }
             check_gl_error("postfx contact shadows");
@@ -3553,7 +3561,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
                 if (taa_resolving) {
                     ao_denoise_src = run_temporal_accum(
                         fx, fx->temporal_accum_program, &fx->ao_history, fx->half_width,
-                        fx->half_height, fx->ssao_texture[0], TEMPORAL_FEEDBACK_AO);
+                        fx->half_height, fx->ssao_texture[0], TEMPORAL_FEEDBACK_AO, false);
                     ao_accum_ran = true;
                 }
 
@@ -3588,7 +3596,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
                     if (taa_resolving) {
                         spec_src = run_temporal_accum(
                             fx, fx->temporal_accum_program, &fx->spec_occ_history, fx->half_width,
-                            fx->half_height, fx->spec_occ_raw_texture, TEMPORAL_FEEDBACK_AO);
+                            fx->half_height, fx->spec_occ_raw_texture, TEMPORAL_FEEDBACK_AO, false);
                         spec_occ_accum_ran = true;
                     }
                     glBindFramebuffer(GL_FRAMEBUFFER, fx->spec_occ_fbo);
@@ -3644,7 +3652,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
                 run_taau_resolve(fx);
             else
                 run_temporal_accum(fx, fx->taa_resolve_program, &fx->taa_history, fx->width,
-                                   fx->height, fx->hdr_texture, TEMPORAL_FEEDBACK_DEFAULT);
+                                   fx->height, fx->hdr_texture, TEMPORAL_FEEDBACK_DEFAULT, true);
 
             // Push the resolved frame onto the canvas (the history side is
             // kept as next frame's accumulation buffer). The copy is what
@@ -3682,9 +3690,9 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         if (ssgi_active) {
             profiler_scope_begin(fx->profiler, "ssgi denoise");
             if (taa_resolving) {
-                gi_result_tex = run_temporal_accum(fx, fx->ssgi_accum_program, &fx->ssgi_history,
-                                                   fx->half_width, fx->half_height,
-                                                   fx->ssgi_gi_texture, TEMPORAL_FEEDBACK_DEFAULT);
+                gi_result_tex = run_temporal_accum(
+                    fx, fx->ssgi_accum_program, &fx->ssgi_history, fx->half_width, fx->half_height,
+                    fx->ssgi_gi_texture, TEMPORAL_FEEDBACK_DEFAULT, true);
                 gi_accum_ran = true;
             }
 
