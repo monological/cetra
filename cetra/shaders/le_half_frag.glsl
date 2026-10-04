@@ -19,9 +19,11 @@ void main() {
     ivec2 size = textureSize(hdrTex, 0);
     ivec2 p = ivec2(gl_FragCoord.xy) * 2;
     vec3 c = vec3(0.0);
+    // The light the tonemap reads: clamped to the same [0, WS_SCENE_MAX] its sceneComposite is.
     for (int y = 0; y < 2; y++)
         for (int x = 0; x < 2; x++)
-            c += min(texelFetch(hdrTex, min(p + ivec2(x, y), size - 1), 0).rgb, vec3(WS_SCENE_MAX));
+            c += clamp(texelFetch(hdrTex, min(p + ivec2(x, y), size - 1), 0).rgb, vec3(0.0),
+                       vec3(WS_SCENE_MAX));
     c *= 0.25;
     float lum = dot(c, vec3(0.2126, 0.7152, 0.0722));
     Half = vec4(c, log2(max(lum, 1.0e-8)));

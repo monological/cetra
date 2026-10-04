@@ -488,7 +488,12 @@ vec3 ditherPattern(vec2 p)
  */
 vec3 sceneComposite(vec2 uv, float aoFactor, vec3 bloomAdd)
 {
-    vec3 c = min(sceneTap(uv), vec3(WS_SCENE_MAX));
+    // Light is not negative, and both readers of this assume it: the neutral curve's toe offsets
+    // by the smallest channel, x - 6.25x^2, which for a negative x ADDS to every channel, and the
+    // local exposure takes a log. TAA's colour clamp leaves a few thousandths below zero on a
+    // hard edge, invisible until the local exposure lifted those near-black pixels tenfold and
+    // the toe turned each one grey-white (spec 13.20).
+    vec3 c = clamp(sceneTap(uv), vec3(0.0), vec3(WS_SCENE_MAX));
     if (glareEnabled == 1)
         c -= glareStrength * glareHaloShare * glareAboveThreshold(c, glareThreshold);
     return c * aoFactor + bloomAdd;

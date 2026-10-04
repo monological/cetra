@@ -766,6 +766,12 @@ typedef struct PostFX {
     bool spec_ready;
     GLuint spec_fbo, spec_texture;
     ShaderProgram* spec_occ_composite_program;
+    // Published per frame by the composite: what it occluded the ambient specular by, which the
+    // wet SSR fold reads again to take out what was put back (include/split_occlusion.glsl).
+    struct {
+        GLuint ao, spec_occ, normals, aux; // 0 where the frame had none
+        bool active;                       // the AO chain, normals and aux all ran
+    } split_occlusion;
 
     // Borrowed, owned by the Engine. NULL means no pass here is timed.
     struct Profiler* profiler;

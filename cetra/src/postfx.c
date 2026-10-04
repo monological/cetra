@@ -1073,11 +1073,16 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
 
     glUseProgram(fx->upsample_tent_program->id);
     uniform_set_int(fx->upsample_tent_program->uniforms, "srcTex", 0);
+    // The split occlusion's inputs on the composite's own units, 0-4, which _bind_split_occlusion
+    // binds for either program.
     if (fx->ssr_fold_wet_program) {
         glUseProgram(fx->ssr_fold_wet_program->id);
-        uniform_set_int(fx->ssr_fold_wet_program->uniforms, "srcTex", 0);
-        uniform_set_int(fx->ssr_fold_wet_program->uniforms, "normalsTex", 1);
-        uniform_set_int(fx->ssr_fold_wet_program->uniforms, "specTex", 2);
+        uniform_set_int(fx->ssr_fold_wet_program->uniforms, "specTex", 0);
+        uniform_set_int(fx->ssr_fold_wet_program->uniforms, "aoTex", 1);
+        uniform_set_int(fx->ssr_fold_wet_program->uniforms, "normalsTex", 2);
+        uniform_set_int(fx->ssr_fold_wet_program->uniforms, "auxTex", 3);
+        uniform_set_int(fx->ssr_fold_wet_program->uniforms, "specOccTex", 4);
+        uniform_set_int(fx->ssr_fold_wet_program->uniforms, "srcTex", 5);
     }
 
     // temporal_accum, ssr_accum, and ssgi_accum are seeded entirely by
@@ -1416,33 +1421,44 @@ static void postfx_run_motion_blur(PostFX* fx, GLuint canvas_fbo, GLuint canvas_
 // Runs before TAA so the reunited frame is stabilized as one image, and
 // before the SSR march / fog / bloom so every later pass sees the corrected
 // color.
+// The ambient specular and what the split composite occluded it by this frame, on units 0-4 of
+// a program that includes split_occlusion.glsl. The composite and the wet SSR fold both bind
+// through here, so the fold takes out exactly what the composite put back.
+static void _bind_split_occlusion(PostFX* fx, UniformManager* u) {
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, fx->spec_texture);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, fx->split_occlusion.ao);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, fx->split_occlusion.normals);
+    glActiveTexture(GL_TEXTURE3);
+    glBindTexture(GL_TEXTURE_2D, fx->split_occlusion.aux);
+    glActiveTexture(GL_TEXTURE4);
+    glBindTexture(GL_TEXTURE_2D, fx->split_occlusion.spec_occ);
+    // Per draw rather than seeded, the rule the texelSize uniforms follow: the
+    // composite and the tonemap read the same buffer at different resolutions,
+    // so a seeded value would be right for one of them and a silent fallback
+    // for the other.
+    const float ao_res[2] = {(float)fx->half_width, (float)fx->half_height};
+    uniform_set_vec2(u, "aoRes", ao_res);
+    uniform_set_int(u, "aoActive", fx->split_occlusion.active ? 1 : 0);
+    uniform_set_float(u, "aoStrength", fx->ssao_strength);
+}
+
 static void postfx_run_spec_occ_composite(PostFX* fx, GLuint ao_result_tex, GLuint spec_occ_tex,
                                           bool have_normals, bool aux_written) {
     glBindFramebuffer(GL_FRAMEBUFFER, fx->hdr_fbo);
     glViewport(0, 0, fx->width, fx->height);
     glUseProgram(fx->spec_occ_composite_program->id);
-    UniformManager* sc = fx->spec_occ_composite_program->uniforms;
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, fx->spec_texture);
-    glActiveTexture(GL_TEXTURE1);
-    glBindTexture(GL_TEXTURE_2D, fx->ssao_enabled ? ao_result_tex : 0);
-    glActiveTexture(GL_TEXTURE2);
-    glBindTexture(GL_TEXTURE_2D, have_normals ? fx->normal_texture : 0);
-    glActiveTexture(GL_TEXTURE3);
-    glBindTexture(GL_TEXTURE_2D, aux_written ? fx->aux_texture : 0);
-    glActiveTexture(GL_TEXTURE4);
-    glBindTexture(GL_TEXTURE_2D, spec_occ_tex);
-    // Per draw rather than seeded, the rule the texelSize uniforms follow: this
-    // pass and the tonemap read the same buffer at different resolutions, so a
-    // seeded value would be right for one of them and a silent fallback for the
-    // other.
-    const float ao_res[2] = {(float)fx->half_width, (float)fx->half_height};
-    uniform_set_vec2(sc, "aoRes", ao_res);
+    fx->split_occlusion.ao = fx->ssao_enabled ? ao_result_tex : 0;
+    fx->split_occlusion.spec_occ = spec_occ_tex;
+    fx->split_occlusion.normals = have_normals ? fx->normal_texture : 0;
+    fx->split_occlusion.aux = aux_written ? fx->aux_texture : 0;
     // The term needs the AO chain to have run, the normals for its guard, and
     // the aux depth for both magnifications. Missing any of them, fold the
     // specular back unoccluded rather than read an unbound unit.
-    uniform_set_int(sc, "aoActive", fx->ssao_enabled && have_normals && aux_written ? 1 : 0);
-    uniform_set_float(sc, "aoStrength", fx->ssao_strength);
+    fx->split_occlusion.active = fx->ssao_enabled && have_normals && aux_written;
+    _bind_split_occlusion(fx, fx->spec_occ_composite_program->uniforms);
     glEnable(GL_BLEND);
     glBlendFunc(GL_ONE, GL_SRC_ALPHA);
     draw_fullscreen_quad(fx->quad_vao);
@@ -3150,13 +3166,9 @@ static void postfx_run_ssr(PostFX* fx, GLuint canvas_fbo, GLuint canvas_tex, boo
     // upsample.
     const float ssr_texel[2] = {1.0f / (float)ssr_w, 1.0f / (float)ssr_h};
     uniform_set_vec2(fold->uniforms, "texelSize", ssr_texel);
-    if (wet_replace) {
-        glActiveTexture(GL_TEXTURE1);
-        glBindTexture(GL_TEXTURE_2D, fx->normal_texture);
-        glActiveTexture(GL_TEXTURE2);
-        glBindTexture(GL_TEXTURE_2D, fx->spec_texture);
-    }
-    glActiveTexture(GL_TEXTURE0);
+    if (wet_replace)
+        _bind_split_occlusion(fx, fold->uniforms);
+    glActiveTexture(wet_replace ? GL_TEXTURE5 : GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, ssr_result);
     glEnable(GL_BLEND);
     glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
