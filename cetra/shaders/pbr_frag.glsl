@@ -2338,6 +2338,7 @@ void main() {
     // byte-identity gate for every non-split mode.
     vec3 ambient;
     vec3 ambSpec = vec3(0.0);
+    float envShare = 0.0; // the share of the ambient reflection no probe answers: the sky's
     if (iblEnabled > 0 || giEnabled > 0) {
         // kS is the share the ambient SPECULAR lobe takes. No environment means
         // no such lobe, so nothing is taken and all the non-metal energy stays
@@ -2445,9 +2446,11 @@ void main() {
                 probes.rgb +
                 (1.0 - probes.a) * envVisible *
                     envRadiance(prefilteredMap, R, roughnessMap * maxReflectionLOD);
+            envShare = 1.0 - probes.a;
         } else {
             prefilteredColor =
                 envVisible * envRadiance(prefilteredMap, R, roughnessMap * maxReflectionLOD);
+            envShare = 1.0;
         }
         // Reuses the brdf fetched before the light loop (same coordinates).
         // brdf.y is the split-sum's f90 = 1 lobe; KHR_materials_specular
@@ -2712,6 +2715,19 @@ void main() {
                     : lum > 0.0039  ? vec3(0.1, 0.1, 0.5)    // very dim
                                     : vec3(0.02, 0.02, 0.08); // effectively black
         FragColor = vec4(band, finalOpacity);
+        NormalOut = vec4(0.0);
+        VelocityOut = packVelocityAux(ViewPos.z, roughnessMap);
+        AlbedoOut = vec4(0.0);
+        DiffuseOut = vec4(0.0);
+        SpecOut = vec4(0.0, 0.0, 0.0, finalOpacity);
+        return;
+    }
+
+    // RENDER_MODE_PROBE_COVERAGE: the albedo, display-encoded as the albedo view is, turned
+    // magenta by the share of its reflection that falls through every probe to the sky.
+    if (renderMode == 14) {
+        FragColor = vec4(mix(linearToSRGB(albedoMap), vec3(1.0, 0.0, 1.0), envShare),
+                         finalOpacity);
         NormalOut = vec4(0.0);
         VelocityOut = packVelocityAux(ViewPos.z, roughnessMap);
         AlbedoOut = vec4(0.0);

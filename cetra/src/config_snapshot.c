@@ -174,9 +174,9 @@ typedef struct ConfigField {
 // Enum vocabularies. Index IS the enum value, so a gap would misname every value
 // after it -- the two that do not start at zero say so beside themselves.
 static const char* const CFG_RENDER_MODES[] = {
-    "pbr",          "normals",      "world_pos",       "tex_coords",     "tangent_space",
-    "flat",         "albedo",       "simple_lighting", "metallic_rough", "velocity",
-    "hdr_hotspots", "sss_hotspots", "extrapolation"};
+    "pbr",          "normals",      "world_pos",       "tex_coords",       "tangent_space",
+    "flat",         "albedo",       "simple_lighting", "metallic_rough",   "velocity",
+    "hdr_hotspots", "sss_hotspots", "extrapolation",   "clearcoat_normal", "probe_coverage"};
 static const char* const CFG_TONEMAPS[] = {"passthrough", "aces", "neutral", "agx", "linear"};
 // 6 is a hole: the half-res fog buffer retired with the screen-space march,
 // and the values are the shader's own debugView dispatch, so it cannot be closed.
@@ -201,7 +201,7 @@ static const char* const CFG_LIGHT_UNITS[] = {"default", "candela", "lumens", "l
  * is why the label array is the thing to edit first.
  */
 _Static_assert(sizeof(CFG_RENDER_MODES) / sizeof(*CFG_RENDER_MODES) ==
-                   RENDER_MODE_EXTRAPOLATION + 1,
+                   RENDER_MODE_PROBE_COVERAGE + 1,
                "CFG_RENDER_MODES must name every RenderMode");
 _Static_assert(sizeof(CFG_TONEMAPS) / sizeof(*CFG_TONEMAPS) == POSTFX_TONEMAP_LINEAR + 1,
                "CFG_TONEMAPS must name every PostFXTonemapMode");

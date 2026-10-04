@@ -225,8 +225,6 @@ static void pane_in(Kit* kit, const KitWall* w, int i, int glass) {
     kit_frame_pane(kit, &wf.f, glass, &w->openings[i], wf.at, w->thick);
 }
 
-#define DOOR_THICK 0.05f
-
 /*
  * A shut door filling opening `i` of the axis-aligned wall `w`: door.c's Gothic leaf, built
  * in the house's kit since it never moves, and a body through the wall. Its strapped face is
@@ -595,8 +593,7 @@ bool house_front_door(Door* door, Engine* engine, Scene* scene, EntityManager* e
                       PhysicsWorld* physics) {
     // The opening as the wall has it, along the frame from its hinge jamb.
     KitOpening opening = WALLS[HOUSE_WALL_FRONT].openings[OPENING_FRONT_DOOR];
-    const KitFrame hinge = {
-        {opening.from, 0.0f, HOUSE_FRONT_Z + CORNER - 0.5f * DOOR_THICK - 0.005f}, 0.0f};
+    const KitFrame hinge = {{opening.from, 0.0f, FRONT_DOOR_Z}, 0.0f};
     opening.to -= opening.from;
     opening.from = 0.0f;
     KitOpening leaf = kit_opening_grow(&opening, -DOOR_CLEARANCE);

@@ -69,6 +69,10 @@
 // The front door's pointed head: where it springs, and how far it rises above that.
 #define FRONT_DOOR_SPRING (FLOOR_Y + 1.95f)
 #define FRONT_DOOR_RISE   0.45f
+// A door leaf's thickness. Every leaf hangs on its wall's centre line but the front door, which
+// hangs against the front wall's inner face, set 5 mm into its frame: this is its middle.
+#define DOOR_THICK   0.05f
+#define FRONT_DOOR_Z (HOUSE_FRONT_Z + 0.5f * EXT_WALL - 0.5f * DOOR_THICK - 0.005f)
 
 // The doorway from the hall into the kitchen, in the x = HALL_X1 wall.
 #define KITCHEN_DOOR_Z0 12.75f

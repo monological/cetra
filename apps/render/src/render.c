@@ -1758,7 +1758,7 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             // A named spelling of --render-mode 13, set HERE rather than at the
             // apply site so the two are genuine last-wins against each other
             // instead of one silently outranking the other.
-            args->render_mode = 13;
+            args->render_mode = RENDER_MODE_CLEARCOAT_NORMAL;
         } else if (strcmp(argv[i], "--no-specular") == 0) {
             args->no_specular = 1;
         } else if (strcmp(argv[i], "--no-sheen") == 0) {
