@@ -114,7 +114,9 @@ static void print_usage(const char* prog) {
             "                         (re-uploads the segment block and re-bakes the cache)\n"
             "      --shadows-off-at <frame>  Diagnostic: clear the shadow system's master\n"
             "                         switch mid-run, exercising the runtime transition that\n"
-            "                         --no-shadows (which clears it before frame 0) cannot\n");
+            "                         --no-shadows (which clears it before frame 0) cannot\n"
+            "      --exposure-at <frame:multiplier>  Diagnostic: set the exposure multiplier\n"
+            "                         mid-run; with the meter off, an exact one-frame step\n");
     fprintf(stderr, "      --no-pcss          Fixed-width PCF instead of contact-hardening\n");
     fprintf(stderr,
             "      --translucent-shadows  Partial shadows from hair/glass/foliage casters\n");
@@ -586,6 +588,7 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->plg_radius = 10.0f;
     args->plg_intensity = 5.0f;
     args->shadows_off_at = -1;         // -1 = never; the transition is the diagnostic
+    args->exposure_at_frame = -1;      // -1 = never; same idiom
     args->layer_blend_at_frame = -1;   // -1 = never; same idiom
     args->road_width_at_frame = -1;    // -1 = never; same idiom
     args->cam_at_frame = -1;           // -1 = never; same idiom
@@ -981,6 +984,17 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->shadows_off_at = atoi(argv[i]);
             if (args->shadows_off_at < 0) {
                 fprintf(stderr, "Error: --shadows-off-at wants a frame number\n");
+                return -1;
+            }
+        } else if (strcmp(argv[i], "--exposure-at") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            if (sscanf(argv[i], "%d:%f", &args->exposure_at_frame, &args->exposure_at_value) != 2 ||
+                args->exposure_at_frame < 0 || !(args->exposure_at_value > 0.0f)) {
+                fprintf(stderr, "Error: --exposure-at wants frame:multiplier, the multiplier "
+                                "positive\n");
                 return -1;
             }
         } else if (strcmp(argv[i], "--layer-blend-at") == 0) {
@@ -2639,6 +2653,8 @@ void key_callback(Engine* engine, int key, int scancode, int action, int mods) {
 // every mid-run diagnostic, in the order they run:
 //
 //   --shadows-off-at    clears the shadow system's master switch
+//   --exposure-at       writes the exposure multiplier, so frame N is shaded at it
+//   --cycle-rebake-at   requests one sliced sky re-bake at the held sun
 //   --cam-at            teleports the camera to an explicit pose
 //   --layer-blend-at    sets every layered material's blend sharpness
 //   --road-width-at     sets every road's width
@@ -2677,6 +2693,15 @@ static void render_frame_update(Engine* engine, float dt) {
             scene->shadow_system->enabled = false;
             fprintf(stderr, "frame %d: shadow system disabled\n", frame_schedule->shadows_off_at);
         }
+    }
+    // An exposure STEP (spec 13.20). The meter moves 4% a frame, so a history that lags the
+    // exposure lags it by a little at a time and the error hides in the adaptation; one step
+    // puts all of it in one frame, where a run that had the new value from frame 0 says what
+    // that frame should be.
+    if (frame_schedule->exposure_at_frame == (int)engine->total_frames) {
+        engine->exposure.multiplier = frame_schedule->exposure_at_value;
+        fprintf(stderr, "frame %d: exposure multiplier %g\n", frame_schedule->exposure_at_frame,
+                (double)frame_schedule->exposure_at_value);
     }
     // One SLICED re-bake at an unmoved sun (spec 11.81). The comparison it
     // exists for cannot be made any other way: with the sun held, the slicer's
