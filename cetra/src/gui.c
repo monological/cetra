@@ -920,6 +920,17 @@ static void _engine_gui_panel(Engine* engine) {
                       ImGuiSliderFlags_Logarithmic);
         _end_effect_group();
 
+        // At 1 a contrast changes nothing; Unreal suggests 0.6-1, a scene with a bright window and
+        // a high exposure key may want less.
+        _begin_effect_group("Local Exposure", &fx->local_exposure_enabled);
+        igSliderFloat("Highlight Contrast", &fx->local_exposure_highlights, 0.0f, 1.0f, "%.2f", 0);
+        igSliderFloat("Shadow Contrast", &fx->local_exposure_shadows, 0.0f, 1.0f, "%.2f", 0);
+        igSliderFloat("Detail Strength", &fx->local_exposure_detail, 0.0f, 2.0f, "%.2f", 0);
+        igSliderFloat("Blurred Luminance Blend", &fx->local_exposure_blend, 0.0f, 1.0f, "%.2f", 0);
+        igSliderFloat("Blur Kernel", &fx->local_exposure_kernel, 0.05f, 1.0f, "%.2f", 0);
+        igSliderFloat("Middle Grey Bias", &fx->local_exposure_grey_bias, -2.0f, 2.0f, "%.2f EV", 0);
+        _end_effect_group();
+
         _begin_effect_group("Ambient Occlusion (GTAO)", &fx->ssao_enabled);
         // Log scale + wide range: the AO/GI reach is a world-space distance, so
         // apps scale it to the scene (meter-scale models sit near the bottom,

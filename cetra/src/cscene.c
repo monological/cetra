@@ -601,6 +601,20 @@ static void parse_post(CetraSceneDesc* d, const cJSON* root) {
         warn_unknown_keys(glare, glare_known, sizeof(glare_known) / sizeof(glare_known[0]),
                           "post.glare");
     }
+    const cJSON* le = cJSON_GetObjectItemCaseSensitive(post, "local_exposure");
+    if (cJSON_IsObject(le)) {
+        d->has_le_enabled = get_bool(le, "enabled", &d->le_enabled);
+        d->has_le_highlights = get_float(le, "highlights", &d->le_highlights);
+        d->has_le_shadows = get_float(le, "shadows", &d->le_shadows);
+        d->has_le_detail = get_float(le, "detail", &d->le_detail);
+        d->has_le_blend = get_float(le, "blend", &d->le_blend);
+        d->has_le_kernel = get_float(le, "kernel", &d->le_kernel);
+        d->has_le_grey_bias = get_float(le, "grey_bias", &d->le_grey_bias);
+        static const char* const le_known[] = {"enabled", "highlights", "shadows",  "detail",
+                                               "blend",   "kernel",     "grey_bias"};
+        warn_unknown_keys(le, le_known, sizeof(le_known) / sizeof(le_known[0]),
+                          "post.local_exposure");
+    }
     const cJSON* fog = cJSON_GetObjectItemCaseSensitive(post, "fog");
     if (cJSON_IsObject(fog)) {
         get_bool(fog, "enabled", &d->fog_enabled);
@@ -620,10 +634,10 @@ static void parse_post(CetraSceneDesc* d, const cJSON* root) {
     }
 
     static const char* const known[] = {
-        "tonemap",      "exposure", "auto_exposure", "camera",
-        "render_scale", "flare",    "bloom",         "chromatic_aberration",
-        "fog",          "metering", "lut",           "purkinje",
-        "glare",
+        "tonemap",      "exposure",       "auto_exposure", "camera",
+        "render_scale", "flare",          "bloom",         "chromatic_aberration",
+        "fog",          "metering",       "lut",           "purkinje",
+        "glare",        "local_exposure",
     };
     warn_unknown_keys(post, known, sizeof(known) / sizeof(known[0]), "post");
 }

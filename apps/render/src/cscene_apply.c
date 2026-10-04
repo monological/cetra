@@ -254,6 +254,28 @@ int cscene_setup(RenderArgs* args, CetraSceneDesc** out_cscn) {
     if (args->glare_threshold < 0.0f && cscn->has_glare_threshold) {
         args->glare_threshold = cscn->glare_threshold;
     }
+    if (args->le_enable < 0 && cscn->has_le_enabled) {
+        args->le_enable = cscn->le_enabled ? 1 : 0;
+    }
+    if (args->le_highlights < 0.0f && cscn->has_le_highlights) {
+        args->le_highlights = cscn->le_highlights;
+    }
+    if (args->le_shadows < 0.0f && cscn->has_le_shadows) {
+        args->le_shadows = cscn->le_shadows;
+    }
+    if (args->le_detail < 0.0f && cscn->has_le_detail) {
+        args->le_detail = cscn->le_detail;
+    }
+    if (args->le_blend < 0.0f && cscn->has_le_blend) {
+        args->le_blend = cscn->le_blend;
+    }
+    if (args->le_kernel < 0.0f && cscn->has_le_kernel) {
+        args->le_kernel = cscn->le_kernel;
+    }
+    if (!args->le_grey_bias_set && cscn->has_le_grey_bias) {
+        args->le_grey_bias = cscn->le_grey_bias;
+        args->le_grey_bias_set = 1;
+    }
     if (cscn->fog_enabled) {
         args->fog = 1;
     }
