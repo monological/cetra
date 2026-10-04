@@ -22,22 +22,25 @@
 #define LE_BELOW_GREY 12.0f
 // Tiles across the atlas; LE_BINS / LE_TILES_X rows of them.
 #define LE_TILES_X 8
-// Half-res texels a blurred-luminance texel averages each way: 32 frame pixels, Unreal's.
-// le_block_frag.glsl's LE_BLOCK.
-#define LE_BLOCK 16
+// Half-res texels a blurred-luminance texel averages each way: 32 frame pixels, Unreal's. Summed
+// in two stages of LE_BLOCK_STEP each way, le_block_sum_frag.glsl's and le_block_frag.glsl's.
+#define LE_BLOCK_STEP 4
+#define LE_BLOCK      (LE_BLOCK_STEP * LE_BLOCK_STEP)
 // The most texels either side the blurred luminance's Gaussian reaches: a 50% kernel on a 4K
 // frame's 120 blocks is 30.
 #define LE_RADIUS_MAX 64
 
 struct LocalExposure {
-    ShaderProgram *half, *bins, *grid, *grid_blur, *block, *blur;
+    ShaderProgram *half, *bins, *grid, *grid_blur, *block_sum, *block, *blur;
     int frame_w, frame_h; // what the targets were built for; 0 = not yet
     int half_w, half_h;
     int cells_w, cells_h;          // the grid's cells
+    int sum_w, sum_h;              // the block sums' first stage's texels
     int blur_w, blur_h;            // the blurred luminance's texels
     float range_lo;                // log2 luminance where bin 0 starts, this frame
     GLuint half_tex, half_fbo;     // RGBA16F: the mean colour of each 2x2, its log2 luminance
     GLuint part_tex, part_fbo;     // RG32F: each sub-block's bins, as a block of the tiles' shape
+    GLuint sum_tex, sum_fbo;       // RGBA32F: summed colour of each 4x4 half-res, and its count
     GLuint block_tex, block_fbo;   // R32F: log2 luminance of each block
     GLuint across_tex, across_fbo; // R32F: the blocks blurred across
     // RG32F: the grid's tiles from the bottom, the blurred luminance above them. Ping-pong for
@@ -53,9 +56,11 @@ LocalExposure* create_local_exposure(void) {
     le->bins = create_le_bins_program();
     le->grid = create_le_grid_program();
     le->grid_blur = create_le_grid_blur_program();
+    le->block_sum = create_le_block_sum_program();
     le->block = create_le_block_program();
     le->blur = create_le_blur_program();
-    if (!le->half || !le->bins || !le->grid || !le->grid_blur || !le->block || !le->blur) {
+    if (!le->half || !le->bins || !le->grid || !le->grid_blur || !le->block_sum || !le->block ||
+        !le->blur) {
         log_error("Local exposure: programs unavailable");
         free_local_exposure(le);
         return NULL;
@@ -68,6 +73,8 @@ static void _le_free_targets(LocalExposure* le) {
     gl_delete_fbo(&le->half_fbo);
     gl_delete_texture(&le->part_tex);
     gl_delete_fbo(&le->part_fbo);
+    gl_delete_texture(&le->sum_tex);
+    gl_delete_fbo(&le->sum_fbo);
     gl_delete_texture(&le->block_tex);
     gl_delete_fbo(&le->block_fbo);
     gl_delete_texture(&le->across_tex);
@@ -87,6 +94,7 @@ void free_local_exposure(LocalExposure* le) {
     free_program(le->bins);
     free_program(le->grid);
     free_program(le->grid_blur);
+    free_program(le->block_sum);
     free_program(le->block);
     free_program(le->blur);
     free(le);
@@ -116,6 +124,8 @@ static bool _le_build_targets(LocalExposure* le, int frame_w, int frame_h) {
     le->half_h = _le_ceil_div(frame_h, 2);
     le->cells_w = _le_ceil_div(le->half_w, LE_CELL);
     le->cells_h = _le_ceil_div(le->half_h, LE_CELL);
+    le->sum_w = _le_ceil_div(le->half_w, LE_BLOCK_STEP);
+    le->sum_h = _le_ceil_div(le->half_h, LE_BLOCK_STEP);
     le->blur_w = _le_ceil_div(le->half_w, LE_BLOCK);
     le->blur_h = _le_ceil_div(le->half_h, LE_BLOCK);
     const int grid_w = le->cells_w * LE_TILES_X;
@@ -127,6 +137,8 @@ static bool _le_build_targets(LocalExposure* le, int frame_w, int frame_h) {
                          &le->half_fbo) &&
               _le_target(grid_w * parts, grid_h * parts, GL_RG32F, GL_RG, GL_NEAREST, &le->part_tex,
                          &le->part_fbo) &&
+              _le_target(le->sum_w, le->sum_h, GL_RGBA32F, GL_RGBA, GL_NEAREST, &le->sum_tex,
+                         &le->sum_fbo) &&
               _le_target(le->blur_w, le->blur_h, GL_R32F, GL_RED, GL_NEAREST, &le->block_tex,
                          &le->block_fbo) &&
               _le_target(le->blur_w, le->blur_h, GL_R32F, GL_RED, GL_NEAREST, &le->across_tex,
@@ -209,7 +221,8 @@ GLuint local_exposure_run(LocalExposure* le, GLuint hdr_tex, int frame_w, int fr
 
     // The blurred luminance: blocks, blurred across, then down into the atlas's region for it.
     // Unreal's kernel is a share of the frame's width, r half of it.
-    _le_pass(le->block, le->block_fbo, 0, 0, le->blur_w, le->blur_h, "halfTex", le->half_tex, quad);
+    _le_pass(le->block_sum, le->sum_fbo, 0, 0, le->sum_w, le->sum_h, "halfTex", le->half_tex, quad);
+    _le_pass(le->block, le->block_fbo, 0, 0, le->blur_w, le->blur_h, "sumTex", le->sum_tex, quad);
     int radius = (int)lroundf(0.5f * kernel * (float)le->blur_w);
     radius = radius < 1 ? 1 : (radius > LE_RADIUS_MAX ? LE_RADIUS_MAX : radius);
     const int blur_y = le->cells_h * (LE_BINS / LE_TILES_X);

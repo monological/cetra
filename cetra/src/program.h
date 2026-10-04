@@ -314,6 +314,7 @@ ShaderProgram* create_le_half_program();
 ShaderProgram* create_le_bins_program();
 ShaderProgram* create_le_grid_program();
 ShaderProgram* create_le_grid_blur_program();
+ShaderProgram* create_le_block_sum_program();
 ShaderProgram* create_le_block_program();
 ShaderProgram* create_le_blur_program();
 ShaderProgram* create_bloom_down_program();

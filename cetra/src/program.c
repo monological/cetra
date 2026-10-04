@@ -1247,6 +1247,10 @@ ShaderProgram* create_le_grid_blur_program() {
     return create_post_program("le_grid_blur", le_grid_blur_frag_shader_str);
 }
 
+ShaderProgram* create_le_block_sum_program() {
+    return create_post_program("le_block_sum", le_block_sum_frag_shader_str);
+}
+
 ShaderProgram* create_le_block_program() {
     return create_post_program("le_block", le_block_frag_shader_str);
 }
