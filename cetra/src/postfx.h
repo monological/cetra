@@ -77,7 +77,9 @@ typedef struct PingPong {
     GLuint fbo[2];
     GLuint tex[2];
     bool valid;
-    float pre_exposure; // What tex[] was last written at; a radiance history is read at its ratio
+    // What each of tex[] was last written at, so a radiance history is read at the ratio of the
+    // side it reads, whatever frames came between.
+    float pre_exposure[2];
 } PingPong;
 
 // Present an intermediate buffer instead of the composited scene (one view
@@ -180,11 +182,11 @@ typedef struct PostFX {
     //
     // ENGINE-OWNED, read only: the sizes and mip counts, every GLuint and
     // ShaderProgram*, every PingPong history, every *_ready / *_failed
-    // lazy-alloc latch, frame_index, pre_exposure, the borrowed exposure and profiler, and
+    // lazy-alloc latch, frame_index, the borrowed exposure and profiler, and
     // the blocks other subsystems PUBLISH here each frame (the probe set, the
     // fog volumes, the cloud shadow, the water medium, the fog casters and
-    // spot, the aerial volume, the rain, the late draw), each marked at its
-    // declaration.
+    // spot, the aerial volume, the rain, the late draw, the pre-exposure), each
+    // marked at its declaration.
     //
     // BY FUNCTION: ssr_full_res (postfx_set_ssr_full_res, which reallocates
     // the reflection buffers), fog_ambient (postfx_set_fog_ambient, which also
@@ -655,8 +657,8 @@ typedef struct PostFX {
     PostFXLutInterp lut_interp;
     char lut_name[64]; // Basename of the loaded file, for the GUI readout
     int frame_index;   // Copied from engine->total_frames; seeds deterministic grain
-    // The pre-exposure this frame was shaded at, taken at the top of postfx_run. Every
-    // history of RADIANCE remembers the one it was written at, and is read at this one.
+    // Published per frame by the scene pass: the pre-exposure the frame was shaded at, which a
+    // history of radiance is read at.
     float pre_exposure;
     bool rescale_histories; // false = histories keep the exposure they were written at
 
@@ -766,12 +768,6 @@ typedef struct PostFX {
     bool spec_ready;
     GLuint spec_fbo, spec_texture;
     ShaderProgram* spec_occ_composite_program;
-    // Published per frame by the composite: what it occluded the ambient specular by, which the
-    // wet SSR fold reads again to take out what was put back (include/split_occlusion.glsl).
-    struct {
-        GLuint ao, spec_occ, normals, aux; // 0 where the frame had none
-        bool active;                       // the AO chain, normals and aux all ran
-    } split_occlusion;
 
     // Borrowed, owned by the Engine. NULL means no pass here is timed.
     struct Profiler* profiler;

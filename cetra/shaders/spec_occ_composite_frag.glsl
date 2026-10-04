@@ -12,12 +12,10 @@ out vec4 FragColor;
 // contact-shadow fold stays (direct light, independent of ambient
 // occlusion). Runs before the TAA resolve so the reunited frame is
 // stabilized as one image.
-uniform sampler2D specTex; // Resolved ambient specular (working space)
 
 #include "split_occlusion.glsl"
 
 void main()
 {
-    vec2 occlusion = splitOcclusionAt(TexCoords);
-    FragColor = vec4(texture(specTex, TexCoords).rgb * occlusion.x, occlusion.y);
+    FragColor = splitOcclusionAt(TexCoords);
 }

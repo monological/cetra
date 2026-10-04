@@ -139,12 +139,8 @@ float exposure_auto_gain(const Exposure* ex) {
 }
 
 float exposure_multiplier(const Exposure* ex) {
-    return exposure_camera_multiplier(ex) * exposure_auto_gain(ex);
-}
-
-float exposure_pre(const Exposure* ex) {
-    const float pre = exposure_multiplier(ex);
-    return pre > 0.0f ? pre : 1.0f;
+    const float m = exposure_camera_multiplier(ex) * exposure_auto_gain(ex);
+    return m > 0.0f ? m : 1.0f;
 }
 
 void exposure_submit_measurement(Exposure* ex, float log2_luminance) {
@@ -205,8 +201,8 @@ void exposure_probe_report(const Exposure* ex, float raw_log2, int frame) {
            "adapted_log2=%.6f adapted_nits=%.6f gain=%.6f camera=%.6f pre_exposure=%.6f "
            "ev100=%.6f key=%.6f valid=%d\n",
            frame, raw_log2, exp2f(raw_log2), ex->last_target_log2, adapted_log2,
-           ex->adapted_luminance, gain, camera, camera * gain, exposure_ev100(ex), ex->key,
-           ex->adapted_valid ? 1 : 0);
+           ex->adapted_luminance, gain, camera, exposure_multiplier(ex), exposure_ev100(ex),
+           ex->key, ex->adapted_valid ? 1 : 0);
 }
 
 void exposure_reset_adaptation(Exposure* ex) {

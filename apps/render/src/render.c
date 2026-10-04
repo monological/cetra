@@ -116,7 +116,8 @@ static void print_usage(const char* prog) {
             "                         switch mid-run, exercising the runtime transition that\n"
             "                         --no-shadows (which clears it before frame 0) cannot\n"
             "      --exposure-at <frame:multiplier>  Diagnostic: set the exposure multiplier\n"
-            "                         mid-run; with the meter off, an exact one-frame step\n");
+            "                         mid-run; with the meter off, an exact one-frame step\n"
+            "                         (a physical camera ignores the multiplier)\n");
     fprintf(stderr, "      --no-pcss          Fixed-width PCF instead of contact-hardening\n");
     fprintf(stderr,
             "      --translucent-shadows  Partial shadows from hair/glass/foliage casters\n");
