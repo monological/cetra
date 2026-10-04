@@ -202,6 +202,7 @@ static void destroy_ssr_buffers(PostFX* fx) {
     gl_delete_texture(&fx->hiz_texture);
     free_pingpong(&fx->ssr_history);
     free_pingpong(&fx->ssr_atrous);
+    fx->ssr_prev.tex = 0; // whatever it named is gone
 }
 
 // Runtime resolution switch: delete the SSR buffers and rebuild them at the new
@@ -1066,10 +1067,18 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
 
     glUseProgram(fx->upsample_tent_program->id);
     uniform_set_int(fx->upsample_tent_program->uniforms, "srcTex", 0);
-    // Its other inputs are _bind_split_occlusion's, which seeds them per draw.
+
+    if (fx->spec_occ_composite_program) {
+        static const char* const names[6] = {"specTex", "aoTex",      "normalsTex",
+                                             "auxTex",  "specOccTex", "ssrPrevTex"};
+        glUseProgram(fx->spec_occ_composite_program->id);
+        for (int i = 0; i < 6; i++)
+            uniform_set_int(fx->spec_occ_composite_program->uniforms, names[i], i);
+    }
     if (fx->ssr_fold_wet_program) {
         glUseProgram(fx->ssr_fold_wet_program->id);
         uniform_set_int(fx->ssr_fold_wet_program->uniforms, "srcTex", 0);
+        uniform_set_int(fx->ssr_fold_wet_program->uniforms, "normalsTex", 1);
     }
 
     // temporal_accum, ssr_accum, and ssgi_accum are seeded entirely by
@@ -1400,34 +1409,14 @@ static void postfx_run_motion_blur(PostFX* fx, GLuint canvas_fbo, GLuint canvas_
     check_gl_error("postfx motion blur");
 }
 
-// What the split composite occludes the ambient specular by this frame (split_occlusion.glsl).
-// Settled in postfx_run beside split_live and handed to the composite, and again to the wet SSR
-// fold, which takes back out the share of it a reflection replaces.
-typedef struct SplitOcclusion {
+// What the split composite reads beside the ambient specular this frame, settled in postfx_run
+// beside split_live.
+typedef struct SplitComposite {
     GLuint ao, spec_occ, normals, aux; // 0 where the frame had none
-    bool active;                       // the AO chain, normals and aux all ran
-} SplitOcclusion;
-
-// split_occlusion.glsl's inputs, on units 1-5 of `prog`, sampler uniforms and all, so its two
-// programs cannot disagree about the layout and unit 0 stays each caller's own.
-static void _bind_split_occlusion(PostFX* fx, ShaderProgram* prog, const SplitOcclusion* split) {
-    static const char* const names[5] = {"specTex", "aoTex", "normalsTex", "auxTex", "specOccTex"};
-    const GLuint textures[5] = {fx->spec_texture, split->ao, split->normals, split->aux,
-                                split->spec_occ};
-    for (int i = 0; i < 5; i++) {
-        uniform_set_int(prog->uniforms, names[i], 1 + i);
-        glActiveTexture(GL_TEXTURE1 + i);
-        glBindTexture(GL_TEXTURE_2D, textures[i]);
-    }
-    // Per draw rather than seeded, the rule the texelSize uniforms follow: the
-    // composite and the tonemap read the same buffer at different resolutions,
-    // so a seeded value would be right for one of them and a silent fallback
-    // for the other.
-    const float ao_res[2] = {(float)fx->half_width, (float)fx->half_height};
-    uniform_set_vec2(prog->uniforms, "aoRes", ao_res);
-    uniform_set_int(prog->uniforms, "aoActive", split->active ? 1 : 0);
-    uniform_set_float(prog->uniforms, "aoStrength", fx->ssao_strength);
-}
+    bool ao_active;                    // the AO chain, normals and aux all ran
+    GLuint ssr_prev;                   // last frame's SSR result for wet ground, 0 = none
+    float ssr_prev_scale;              // its radiance to this frame's pre-exposure
+} SplitComposite;
 
 // Split spec-occ composite: fold the ambient specular the scene pass routed
 // to its own buffer back over the scene, in one blended pass -- the shader
@@ -1436,12 +1425,28 @@ static void _bind_split_occlusion(PostFX* fx, ShaderProgram* prog, const SplitOc
 // frame in split mode; the tonemap's ambient factor stands down via aoEnabled.
 // Runs before TAA so the reunited frame is stabilized as one image, and
 // before the SSR march / fog / bloom so every later pass sees the corrected
-// color.
-static void postfx_run_spec_occ_composite(PostFX* fx, const SplitOcclusion* split) {
+// color. Wet ground's reflection lands here too, for the same reason.
+static void postfx_run_spec_occ_composite(PostFX* fx, const SplitComposite* split) {
     glBindFramebuffer(GL_FRAMEBUFFER, fx->hdr_fbo);
     glViewport(0, 0, fx->width, fx->height);
-    glUseProgram(fx->spec_occ_composite_program->id);
-    _bind_split_occlusion(fx, fx->spec_occ_composite_program, split);
+    ShaderProgram* prog = fx->spec_occ_composite_program;
+    glUseProgram(prog->id);
+    const GLuint textures[6] = {fx->spec_texture, split->ao,       split->normals,
+                                split->aux,       split->spec_occ, split->ssr_prev};
+    for (int i = 0; i < 6; i++) {
+        glActiveTexture(GL_TEXTURE0 + i);
+        glBindTexture(GL_TEXTURE_2D, textures[i]);
+    }
+    // Per draw rather than seeded, the rule the texelSize uniforms follow: the
+    // composite and the tonemap read the same buffer at different resolutions,
+    // so a seeded value would be right for one of them and a silent fallback
+    // for the other.
+    const float ao_res[2] = {(float)fx->half_width, (float)fx->half_height};
+    uniform_set_vec2(prog->uniforms, "aoRes", ao_res);
+    uniform_set_int(prog->uniforms, "aoActive", split->ao_active ? 1 : 0);
+    uniform_set_float(prog->uniforms, "aoStrength", fx->ssao_strength);
+    uniform_set_int(prog->uniforms, "ssrPrevActive", split->ssr_prev ? 1 : 0);
+    uniform_set_float(prog->uniforms, "ssrPrevScale", split->ssr_prev_scale);
     glEnable(GL_BLEND);
     glBlendFunc(GL_ONE, GL_SRC_ALPHA);
     draw_fullscreen_quad(fx->quad_vao);
@@ -2981,15 +2986,14 @@ static bool postfx_run_atmosphere(PostFX* fx, GLuint canvas_fbo, bool aux_writte
 // the render-res depth/normals and reading the canvas as its radiance source
 // (post-TAA consumers read stabilized color); only the fold magnifies. Same
 // extracted-stage shape as postfx_run_atmosphere; inv_projection is passed in
-// (shared with DoF). `split` is what the split composite occluded the ambient specular by this
-// frame, NULL when it did not run.
+// (shared with DoF).
 static void postfx_run_ssr(PostFX* fx, GLuint canvas_fbo, GLuint canvas_tex, bool have_normals,
-                           bool aux_written, const SplitOcclusion* split, bool taa_resolving,
-                           mat4 projection, mat4 inv_projection, mat4 view) {
+                           bool aux_written, bool split_live, bool taa_resolving, mat4 projection,
+                           mat4 inv_projection, mat4 view) {
     // Wet ground has its share of the environment's reflection REPLACED rather than being
     // lerped toward the trace, which needs that share on its own -- the split composite's
-    // buffer -- and the program that folds it. Without either it lerps, as the catcher does.
-    const bool wet_replace = fx->rain_wet && split != NULL && fx->ssr_fold_wet_program != NULL;
+    // buffer -- and the program that folds the rest. Without either it lerps, as the catcher does.
+    const bool wet_replace = fx->rain_wet && split_live && fx->ssr_fold_wet_program != NULL;
     // SSR traces at full res (sharp) or half res, per ssr_full_res; the
     // buffer + Hi-Z pyramid were sized to match in create_ssr_buffers.
     int ssr_w = fx->ssr_full_res ? fx->width : fx->half_width;
@@ -3162,6 +3166,15 @@ static void postfx_run_ssr(PostFX* fx, GLuint canvas_fbo, GLuint canvas_tex, boo
         check_gl_error("postfx ssr denoise");
     }
 
+    // Wet ground's share is not folded here but in the NEXT frame's split composite, before its
+    // TAA (spec 13.21): the reflection replaces part of the ambient specular, and subtracted
+    // here, after TAA, it came out of a frame TAA had resolved and upscaled while what it took
+    // was this frame's render-res value, so a ripple or a wet edge went below zero. The handle
+    // rather than a parity, since frame_index advances on frames that draw nothing.
+    fx->ssr_prev.tex = wet_replace ? ssr_result : 0;
+    fx->ssr_prev.frame = fx->frame_index;
+    fx->ssr_prev.pre_exposure = fx->pre_exposure;
+
     // Lerp the reflections onto the canvas before bloom so
     // reflected highlights bloom like direct ones. The buffer is
     // premultiplied, hence (ONE, ONE_MINUS_SRC_ALPHA). Restore the
@@ -3176,8 +3189,10 @@ static void postfx_run_ssr(PostFX* fx, GLuint canvas_fbo, GLuint canvas_tex, boo
     // upsample.
     const float ssr_texel[2] = {1.0f / (float)ssr_w, 1.0f / (float)ssr_h};
     uniform_set_vec2(fold->uniforms, "texelSize", ssr_texel);
-    if (wet_replace)
-        _bind_split_occlusion(fx, fold, split);
+    if (wet_replace) {
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, fx->normal_texture);
+    }
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, ssr_result);
     glEnable(GL_BLEND);
@@ -3638,7 +3653,14 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         if (!spec_occ_accum_ran)
             fx->spec_occ_history.valid = false;
 
-        const SplitOcclusion split = {
+        // Wet ground's reflection is the one the frame before traced, at the previous pixel by
+        // the surface's velocity -- which needs the normals for the marker and the aux for the
+        // velocity. Only the frame immediately before will do: an older one is not where its
+        // reflections were, and its texture may have been traced over since.
+        const bool ssr_prev_live = fx->rain_wet && fx->ssr_prev.tex != 0 &&
+                                   fx->ssr_prev.frame == fx->frame_index - 1 && have_normals &&
+                                   aux_written;
+        const SplitComposite split = {
             .ao = fx->ssao_enabled ? ao_result_tex : 0,
             .spec_occ = spec_occ_swept ? fx->spec_occ_texture : 0,
             .normals = have_normals ? fx->normal_texture : 0,
@@ -3646,7 +3668,9 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             // The term needs the AO chain to have run, the normals for its guard, and the aux
             // depth for both magnifications. Missing any of them, the specular goes back
             // unoccluded rather than read an unbound unit.
-            .active = fx->ssao_enabled && have_normals && aux_written,
+            .ao_active = fx->ssao_enabled && have_normals && aux_written,
+            .ssr_prev = ssr_prev_live ? fx->ssr_prev.tex : 0,
+            .ssr_prev_scale = _history_scale(fx, fx->ssr_prev.pre_exposure),
         };
         if (split_live) {
             profiler_scope_begin(fx->profiler, "spec occ composite");
@@ -3735,9 +3759,8 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
 
         if (ssr_active) {
             profiler_scope_begin(fx->profiler, "ssr");
-            postfx_run_ssr(fx, canvas_fbo, canvas_tex, have_normals, aux_written,
-                           split_live ? &split : NULL, taa_resolving, projection, inv_projection,
-                           view);
+            postfx_run_ssr(fx, canvas_fbo, canvas_tex, have_normals, aux_written, split_live,
+                           taa_resolving, projection, inv_projection, view);
             profiler_scope_end(fx->profiler);
         }
 

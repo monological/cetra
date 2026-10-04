@@ -235,10 +235,17 @@ typedef struct PostFX {
                           // across frames so the single-frame step banding washes out (TAA only)
     PingPong ssr_atrous; // SSR a-trous denoise ping-pong (RGBA16F): resolves the stochastic
                          // march's per-pixel noise into a clean reflection in a single frame
-    GLuint hiz_fbo;      // Min-depth pyramid build target (re-attached per mip)
-    GLuint hiz_texture;  // R32F, SSR-res base + full mip chain; the SSR
-                         // traversal walks it so rays cannot step over thin
-                         // geometry regardless of march length
+    // The SSR result a frame left for the next, whose split composite folds it into wet ground
+    // before TAA (spec 13.21). Only a frame that traced wet ground in replace mode leaves one.
+    struct {
+        GLuint tex;         // 0 = none
+        int frame;          // the frame_index it was traced at
+        float pre_exposure; // and the pre-exposure
+    } ssr_prev;
+    GLuint hiz_fbo;     // Min-depth pyramid build target (re-attached per mip)
+    GLuint hiz_texture; // R32F, SSR-res base + full mip chain; the SSR
+                        // traversal walks it so rays cannot step over thin
+                        // geometry regardless of march length
     int hiz_mips;
     GLuint aux_fbo; // Full-res resolved aux G-buffer: motion vectors .xy (TAA) + linear view-Z .z
                     // (GTAO)
