@@ -13,6 +13,9 @@
 // le_grid_frag.glsl's LE_CELL is the first.
 #define LE_CELL 64
 #define LE_BINS 32
+// Half-res texels a sub-block of a cell spans each way: the grid is gathered a sub-block at a
+// time, then summed. le_bins_frag.glsl's and le_grid_frag.glsl's LE_PART.
+#define LE_PART 8
 // The bins' span in stops (Unreal: log2 -10..20), and how much of it lies below middle grey.
 // The centring is ours: Unreal's range is in absolute luminance, and this buffer is exposed.
 #define LE_STOPS      30.0f
@@ -27,13 +30,14 @@
 #define LE_RADIUS_MAX 64
 
 struct LocalExposure {
-    ShaderProgram *half, *grid, *grid_blur, *block, *blur;
+    ShaderProgram *half, *bins, *grid, *grid_blur, *block, *blur;
     int frame_w, frame_h; // what the targets were built for; 0 = not yet
     int half_w, half_h;
     int cells_w, cells_h;          // the grid's cells
     int blur_w, blur_h;            // the blurred luminance's texels
     float range_lo;                // log2 luminance where bin 0 starts, this frame
     GLuint half_tex, half_fbo;     // RGBA16F: the mean colour of each 2x2, its log2 luminance
+    GLuint part_tex, part_fbo;     // RG32F: each sub-block's bins, as a block of the tiles' shape
     GLuint block_tex, block_fbo;   // R32F: log2 luminance of each block
     GLuint across_tex, across_fbo; // R32F: the blocks blurred across
     // RG32F: the grid's tiles from the bottom, the blurred luminance above them. Ping-pong for
@@ -46,11 +50,12 @@ LocalExposure* create_local_exposure(void) {
     if (!le)
         return NULL;
     le->half = create_le_half_program();
+    le->bins = create_le_bins_program();
     le->grid = create_le_grid_program();
     le->grid_blur = create_le_grid_blur_program();
     le->block = create_le_block_program();
     le->blur = create_le_blur_program();
-    if (!le->half || !le->grid || !le->grid_blur || !le->block || !le->blur) {
+    if (!le->half || !le->bins || !le->grid || !le->grid_blur || !le->block || !le->blur) {
         log_error("Local exposure: programs unavailable");
         free_local_exposure(le);
         return NULL;
@@ -61,6 +66,8 @@ LocalExposure* create_local_exposure(void) {
 static void _le_free_targets(LocalExposure* le) {
     gl_delete_texture(&le->half_tex);
     gl_delete_fbo(&le->half_fbo);
+    gl_delete_texture(&le->part_tex);
+    gl_delete_fbo(&le->part_fbo);
     gl_delete_texture(&le->block_tex);
     gl_delete_fbo(&le->block_fbo);
     gl_delete_texture(&le->across_tex);
@@ -77,6 +84,7 @@ void free_local_exposure(LocalExposure* le) {
         return;
     _le_free_targets(le);
     free_program(le->half);
+    free_program(le->bins);
     free_program(le->grid);
     free_program(le->grid_blur);
     free_program(le->block);
@@ -114,8 +122,11 @@ static bool _le_build_targets(LocalExposure* le, int frame_w, int frame_h) {
     const int grid_h = le->cells_h * (LE_BINS / LE_TILES_X);
     const int atlas_w = grid_w > le->blur_w ? grid_w : le->blur_w;
     const int atlas_h = grid_h + le->blur_h;
+    const int parts = LE_CELL / LE_PART;
     bool ok = _le_target(le->half_w, le->half_h, GL_RGBA16F, GL_RGBA, GL_NEAREST, &le->half_tex,
                          &le->half_fbo) &&
+              _le_target(grid_w * parts, grid_h * parts, GL_RG32F, GL_RG, GL_NEAREST, &le->part_tex,
+                         &le->part_fbo) &&
               _le_target(le->blur_w, le->blur_h, GL_R32F, GL_RED, GL_NEAREST, &le->block_tex,
                          &le->block_fbo) &&
               _le_target(le->blur_w, le->blur_h, GL_R32F, GL_RED, GL_NEAREST, &le->across_tex,
@@ -213,12 +224,17 @@ GLuint local_exposure_run(LocalExposure* le, GLuint hdr_tex, int frame_w, int fr
     _le_pass(le->blur, le->atlas_fbo[0], 0, blur_y, le->blur_w, le->blur_h, "blockTex",
              le->across_tex, quad);
 
-    // The grid, into atlas[1], then Chen's Gaussian one axis a pass: across into 0, down into 1,
-    // along the bins into 0.
+    // The grid: each sub-block's bins, summed into atlas[1], then Chen's Gaussian one axis a
+    // pass: across into 0, down into 1, along the bins into 0.
     const int grid_w = le->cells_w * LE_TILES_X;
+    const int parts = LE_CELL / LE_PART;
+    glUseProgram(le->bins->id);
+    local_exposure_upload_layout(le, le->bins->uniforms);
+    _le_pass(le->bins, le->part_fbo, 0, 0, grid_w * parts, blur_y * parts, "halfTex", le->half_tex,
+             quad);
     glUseProgram(le->grid->id);
     local_exposure_upload_layout(le, le->grid->uniforms);
-    _le_pass(le->grid, le->atlas_fbo[1], 0, 0, grid_w, blur_y, "halfTex", le->half_tex, quad);
+    _le_pass(le->grid, le->atlas_fbo[1], 0, 0, grid_w, blur_y, "partTex", le->part_tex, quad);
     glUseProgram(le->grid_blur->id);
     local_exposure_upload_layout(le, le->grid_blur->uniforms);
     for (int axis = 0; axis < 3; axis++) {

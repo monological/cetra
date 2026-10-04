@@ -16,6 +16,12 @@ ivec2 leTileOrigin(int bin) {
     return ivec2((bin % leGrid.w) * leGrid.x, (bin / leGrid.w) * leGrid.y);
 }
 
+// The bins laid out as the tiles are, as one block: how le_bins_frag.glsl places one
+// sub-block's bins side by side.
+ivec2 leBinShape() {
+    return ivec2(leGrid.w, leGrid.z / leGrid.w);
+}
+
 // Where log2 luminance `y` falls among the bins, continuously: bin k's centre is at k.
 float leBinCoord(float y) {
     return (y - leRange.x) / leRange.y - 0.5;

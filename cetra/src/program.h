@@ -311,6 +311,7 @@ ShaderProgram* create_glare_output_program();
 // Local exposure (spec 13.19): the half-res frame, the bilateral grid's build and blur, and the
 // blurred luminance's blocks and Gaussian.
 ShaderProgram* create_le_half_program();
+ShaderProgram* create_le_bins_program();
 ShaderProgram* create_le_grid_program();
 ShaderProgram* create_le_grid_blur_program();
 ShaderProgram* create_le_block_program();
