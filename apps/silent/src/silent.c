@@ -137,12 +137,13 @@ typedef struct SilentArgs {
     bool day;
     bool no_taa;
     bool no_grade;
-    int local_exposure;  // 1 on, 0 off; -1 = this mode's own choice
-    float le_highlights; // the local exposure's highlight contrast; below 0 = this mode's own
-    float le_shadows;    // and below it
-    float le_blend;      // and its blurred-luminance blend
-    bool le_probe;       // print the frame's luminance percentiles it is asked to fit
-    bool exposure_probe; // print what the meter decided, every frame it decides
+    int local_exposure;      // 1 on, 0 off; -1 = this mode's own choice
+    float le_highlights;     // the local exposure's highlight contrast; below 0 = this mode's own
+    float le_shadows;        // and below it
+    float le_blend;          // and its blurred-luminance blend
+    bool le_probe;           // print the frame's luminance percentiles it is asked to fit
+    bool exposure_probe;     // print what the meter decided, every frame it decides
+    bool no_history_rescale; // histories keep the exposure they were written at (A/B)
     float render_scale;
     int msaa;
     bool cam_eye_set, cam_target_set;
@@ -465,6 +466,7 @@ static void build_post(const Engine* engine, bool night, bool grade) {
     if (g_args.le_blend >= 0.0f)
         fx->local_exposure_blend = g_args.le_blend;
     fx->local_exposure_probe = g_args.le_probe;
+    fx->rescale_histories = !g_args.no_history_rescale;
 }
 
 static void on_init(Game* game) {
@@ -789,6 +791,8 @@ static void print_usage(const char* prog) {
     printf("      --le-probe          Print the frame's luminance percentiles, in stops from\n"
            "                          middle grey, while it is on\n");
     printf("      --exposure-probe    Print what the meter decided, every frame it decides\n");
+    printf("      --no-history-rescale  The fog and temporal histories keep the exposure they\n"
+           "                          were written at, so stepping outdoors settles slowly\n");
     printf("      --render-scale F    Render at F of the window and upscale (0.5-1, default\n");
     printf("                          %.1f): the softer frame of the consoles it imitates\n",
            (double)DEFAULT_RENDER_SCALE);
@@ -902,6 +906,8 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
             a->le_probe = true;
         } else if (!strcmp(s, "--exposure-probe")) {
             a->exposure_probe = true;
+        } else if (!strcmp(s, "--no-history-rescale")) {
+            a->no_history_rescale = true;
         } else if (!strcmp(s, "--render-scale") && has_next) {
             a->render_scale = (float)atof(argv[++i]);
         } else if (!strcmp(s, "--msaa") && has_next) {
