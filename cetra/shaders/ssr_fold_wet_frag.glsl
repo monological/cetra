@@ -10,24 +10,21 @@ out vec4 FragColor;
 // Fresnel the lit shader already applied, and keeps the environment's reflection under the one
 // that replaced it. So a wet pixel's pair carries the reflection with its Fresnel on the colour
 // and its coverage bare -- the fraction of the environment's reflection the trace or the probe
-// stands in for -- and here the frame gains the one and loses that fraction of the other,
-// read from the ambient specular the scene pass routed to its own buffer. With alpha 0 the
-// blend adds, so the diffuse is untouched.
+// stands in for -- and here the frame gains the one and loses that fraction of the other: of
+// the ambient specular as the split composite put it back, under its occlusion, which is read
+// through the composite's own statement of it. With alpha 0 the blend adds, so the diffuse is
+// untouched.
 //
 // The catcher keeps the lerp, and the tent averages each class only with its own: a wet pair's
 // bare coverage folded into the wall beside a puddle would darken the wall by it. A surface
 // marked as neither takes nothing -- SSR never traced it, and what the denoise bled into it
 // from the wet ground below is not its reflection. Frames with nothing wet never reach this
 // program, so the catcher's fold there is the plain tent's to the bit.
-//
-// The canvas carries the ambient specular after the split composite's occlusion; what comes
-// out here is the unoccluded share, which is the same under open sky, where wet ground is.
-uniform sampler2D srcTex;     // the SSR buffer, premultiplied pairs (see above)
-uniform sampler2D normalsTex; // view normal .xyz + the SSR marker .a (ssr_marker.glsl)
-uniform sampler2D specTex;    // the ambient specular, working space
-uniform vec2 texelSize;       // one SSR-buffer texel
+uniform sampler2D srcTex;  // the SSR buffer, premultiplied pairs (see above)
+uniform sampler2D specTex; // the ambient specular, working space
+uniform vec2 texelSize;    // one SSR-buffer texel
 
-#include "ssr_marker.glsl"
+#include "split_occlusion.glsl"
 
 int classAt(vec2 uv) {
     return ssrMarkerClass(texture(normalsTex, uv).a);
@@ -56,5 +53,10 @@ void main()
     }
     // The centre tap is always its own class, so the total is at least its weight.
     sum /= total;
-    FragColor = wet ? vec4(sum.rgb - sum.a * texture(specTex, TexCoords).rgb, 0.0) : sum;
+    if (!wet) {
+        FragColor = sum;
+        return;
+    }
+    vec3 putBack = texture(specTex, TexCoords).rgb * splitOcclusionAt(TexCoords).x;
+    FragColor = vec4(sum.rgb - sum.a * putBack, 0.0);
 }
