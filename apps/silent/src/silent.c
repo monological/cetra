@@ -367,14 +367,15 @@ static void build_gi(void) {
  * The engine captures them once the irradiance volume has converged, so they
  * see the rooms lit by it rather than by the open sky's ambient.
  *
- * A box runs to the plane its doors hang in: the CENTRE line of a wall it shares
- * with another room, and the front door's middle, which hangs against the front
- * wall's inner face. Elsewhere on an outside wall it stops at the inner face.
- * Stopping at every inner face left a hung leaf's room-side face outside every
- * box, reflecting the day sky: the parlour door, seen at a grazing angle down the
- * hall, went a washed-out grey. Run to the front wall's centre, the hall's box
- * would take in the front door's street face too, and the street would see the
- * hall reflected in it.
+ * A box runs out to the plane its doors and panes hang in: the CENTRE line of a
+ * wall it shares with another room, where a leaf hangs; the room-side face of an
+ * outside wall's pane, half a pane short of its centre line, which takes in the
+ * reveals and the wedge between the wall tops and the roof; and, for the hall,
+ * the front door's middle, since that door hangs against the inner face.
+ * Stopping at the inner faces left all of those outside every box, reflecting the
+ * day sky: the parlour door, seen at a grazing angle down the hall, went a
+ * washed-out grey. Run to the front wall's centre, the hall's box would take in
+ * the front door's street face too, and the street would see the hall in it.
  */
 static void build_probes(void) {
     if (!g_scene->ibl || !g_scene->ibl->precomputed)
@@ -384,16 +385,17 @@ static void build_probes(void) {
         vec3 pos, lo, hi;
     } rooms[ROOMS] = {
         {{2.48f, FLOOR_Y + 1.5f, 11.9f},
-         {HALL_X1, FLOOR_Y, KITCHEN_Z0},
-         {KITCHEN_X1, CEIL_Y, KITCHEN_BACK_Z}},
+         {HALL_X1, FLOOR_Y, HOUSE_FRONT_Z + KIT_PANE_HALF},
+         {HOUSE_X1 - KIT_PANE_HALF, CEIL_Y, KITCHEN_BACK_Z}},
         {{-0.75f, FLOOR_Y + 1.5f, 12.0f},
          {HALL_X0, FLOOR_Y, FRONT_DOOR_Z},
          {HALL_X1, CEIL_Y, KITCHEN_BACK_Z}},
         {{HEARTH_X, FLOOR_Y + 1.8f, 16.6f},
-         {GREAT_X0, FLOOR_Y, KITCHEN_BACK_Z},
-         {GREAT_X1, house_roof_y(0.0f), GREAT_Z1}},
+         {HOUSE_X0 + KIT_PANE_HALF, FLOOR_Y, KITCHEN_BACK_Z},
+         {HOUSE_X1 - KIT_PANE_HALF, house_roof_y(0.0f), HOUSE_BACK_Z - KIT_PANE_HALF}},
         {{-4.2f, FLOOR2_Y + 1.6f, 11.4f},
-         {TOWER_X - TOWER_APOTHEM, FLOOR2_Y, TOWER_Z - TOWER_APOTHEM},
+         {TOWER_X - TOWER_APOTHEM + KIT_PANE_HALF, FLOOR2_Y,
+          TOWER_Z - TOWER_APOTHEM + KIT_PANE_HALF},
          {HALL_X0, TOWER_CEIL_Y, KITCHEN_BACK_Z}},
     };
     ReflectionProbeSet* set = create_reflection_probe_set();
@@ -413,15 +415,15 @@ static void build_probes(void) {
         // A probe's weight fades OUTWARD past its box, by this fraction of the
         // box's half-size on each axis. The default fifth carried the kitchen's
         // reflection 0.37 m out, through its 0.1 m wall and onto the great hall's
-        // panelling, which reflected a lit kitchen as a grey sheen. Along the box's
-        // LONGEST axis each fade now reaches a quarter of the thinnest wall past its
-        // face, a hung leaf's far face from a centre line, so a door's face on the
-        // next room's side is never this room's. Along the other axes it reaches
-        // proportionally less, the fraction being of each axis's own half-size: a
-        // distance stated for every axis held only on the longest, and the parlour
-        // door hung past the hall's shorter one. The hall's longest axis runs front
-        // to back, which is what takes in the front door's inner face, 5 mm out.
-        p->box_fade = 0.25f * INT_WALL / (0.5f * glm_vec3_max(span));
+        // panelling. The boxes now meet at the planes their walls share, so there
+        // is no doorway left for a fade to blend, and it is what stands between a
+        // pane's two faces: half a pane along the longest axis, less along the
+        // others (the fraction is of each axis's own half-size, and a distance once
+        // stated here for every axis held only on the longest), and at least the
+        // engine's floor of a thousandth of each, about 5 mm across the great hall.
+        // That is still under the 6 mm of glass, so a window's street face is never
+        // the room's.
+        p->box_fade = KIT_PANE_HALF / (0.5f * glm_vec3_max(span));
         if (!probe_set_add(set, p)) {
             free_reflection_probe(p);
             break;
