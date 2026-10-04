@@ -1923,6 +1923,31 @@ static float postfx_read_luminance(PostFX* fx) {
     return measured;
 }
 
+// How much of the frame reaches the tonemap below zero (spec 13.21): pixels with a channel under
+// -0.0005 and under -0.005, and the most negative value. The tonemap's sceneLight clamps it away,
+// so an 8-bit capture cannot see it; this reads the float frame back, a blocking read, which is
+// why it is a diagnostic.
+static void postfx_negative_probe(GLuint scene_tex, int w, int h, int frame) {
+    float* px = malloc(sizeof(float) * 4 * (size_t)w * (size_t)h);
+    if (!px)
+        return;
+    glBindTexture(GL_TEXTURE_2D, scene_tex);
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_FLOAT, px);
+    long faint = 0, strong = 0;
+    float most = 0.0f;
+    for (size_t i = 0; i < (size_t)w * (size_t)h; i++) {
+        const float* p = px + 4 * i;
+        const float lo = fminf(p[0], fminf(p[1], p[2]));
+        faint += lo < -0.0005f;
+        strong += lo < -0.005f;
+        most = fminf(most, lo);
+    }
+    printf("negative-probe frame=%d below_0005=%ld below_005=%ld min=%.5f\n", frame, faint, strong,
+           (double)most);
+    free(px);
+    check_gl_error("postfx negative probe");
+}
+
 static void postfx_run_bloom(PostFX* fx, GLuint scene_tex) {
     // Bright pass into pyramid level 0 (linear sampling downsamples)
     glBindFramebuffer(GL_FRAMEBUFFER, fx->bloom_fbo);
@@ -3908,6 +3933,8 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             if (!le_tex)
                 fx->local_exposure_failed = true;
         }
+        if (fx->negative_probe)
+            postfx_negative_probe(scene_tex, fx->post_width, fx->post_height, fx->frame_index);
 
         // Composite + tone map into the target framebuffer. The quad runs at
         // the display size while sampling the supersampled HDR texture, so each

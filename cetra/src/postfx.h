@@ -345,6 +345,8 @@ typedef struct PostFX {
     struct LocalExposure* local_exposure; // engine-owned; made on first use
     bool local_exposure_failed;           // could not be made; never retried
 
+    bool negative_probe; // print how much of the frame reaches the tonemap below zero, each frame
+
     bool ssao_enabled;
     float ssao_radius; // Occlusion reach in view-space units
     float ssao_strength;
