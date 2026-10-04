@@ -18059,10 +18059,11 @@ def run_probe_set_gate(workdir):
 
     Two absences, both deliberate and both recorded above the constants: no seam
     arm (the two probes agree where they hand over on this fixture, so it could
-    not fail), and no SSR arm -- SSR shades only what the shadow catcher marked,
-    the catcher is installed only on scenes authoring no lights of their own, and
-    this fixture authors two. The multi-probe SSR path is implemented and ungated;
-    the suite has no SSR gate of any kind to add it to.
+    not fail), and no SSR arm -- SSR shades only what the shadow catcher or wet
+    ground marked, the catcher is installed only on scenes authoring no lights of
+    their own, this fixture authors two, and it has no rain. The multi-probe SSR
+    path is implemented and ungated: the suite's SSR arms are the rainfall group's,
+    on a fixture with no probe.
     """
     if not os.path.exists(asset(PROBE_FIXTURE)):
         print(f"  probe-set-single SKIP  {PROBE_FIXTURE} not found")
@@ -27154,6 +27155,11 @@ RAIN_SSR_COVERED = ((-2.0, 2.0), (-5.5, -3.0))
 RAIN_SSR_WALL = [(x, y, -11.25) for x in (-3.0, 3.0) for y in (0.05, 1.5)]
 # The fixture's own camera sees these regions smaller than the under-roof camera sees its patch.
 RAIN_SSR_MIN_PX = 1000
+# The SSR arms under TAA put the fixture under a procedural sky: its own ambient-only environment
+# leaves wet ground too little of the environment's reflection to replace for a mismatch to show.
+RAIN_SKY_TAA = ["--sky", "--taa", "--headless-jitter"]
+RAIN_TAAU = ["--render-scale", "0.5"]
+RAIN_NEG_FRAMES = 30
 # A medium lobe well off the streaks' 0.8, so a frame that read the wrong one would show it.
 RAIN_MIST_G = 0.3
 # A scene wind that gusts fast enough for two probe runs a few frames apart to sit at different
@@ -27442,6 +27448,15 @@ def run_rain_gate(workdir):
                     and not a pixel of the dry ground under the roof or of the wall the wet
                     ground runs up to -- the replacing fold averages each class only with its
                     own, so a wet pair's coverage cannot darken the wall above a puddle.
+      rain-ssr-taa  the fixture under a procedural sky with TAA: on all thirty frames not one
+                    pixel the tonemap reads is below zero, and SSR still moves the open wet
+                    ground. Wet ground's reflection replaces a share of the environment's, and
+                    taken out after TAA -- this frame's share from a frame TAA had already
+                    resolved -- it went below zero on a ripple or a wet edge, up to 283 px a
+                    frame here, until spec 13.21 folded it in ahead of TAA. Every other arm in
+                    this group runs without TAA, where the two agree.
+      rain-ssr-taau the same at render scale 0.5, where TAA also upscales: up to 578 px a frame
+                    before the fix.
       rain-ripples  the flooded twin seen from under the roof, rings against none: the open
                     water rings, and the covered water nearest the camera does not move by a
                     pixel. From the fixture's own camera that water is too far off for a
@@ -27946,6 +27961,35 @@ def run_rain_gate(workdir):
           f"region at least {RAIN_SSR_MIN_PX} px)")
     if not ok:
         failures.append("rain-ssr")
+
+    # Under TAA, where the late fold used to take this frame's specular out of a frame TAA had
+    # already resolved (spec 13.21): every frame read before the tonemap. The open wet ground must
+    # still move against --no-ssr, or a fold that dropped the reflection would pass.
+    def below_zero(name, flags):
+        traced = os.path.join(workdir, f"rain_{name}.ppm")
+        bare = os.path.join(workdir, f"rain_{name}_nossr.ppm")
+        rows, _ = _probe_render(scene, "--negative-probe", "negative-probe", frames=RAIN_NEG_FRAMES,
+                                extra=RAIN_SKY_TAA + flags + ["-S", traced])
+        failed = render(scene, bare, RAIN_SKY_TAA + flags + ["--no-ssr"], frames=RAIN_NEG_FRAMES)
+        below = [int(r["below_0005"]) for r in rows]
+        lowest = min((float(r["min"]) for r in rows), default=float("nan"))
+        frac, _, _ = quad_moved(traced if os.path.exists(traced) else None,
+                                None if failed else bare, _cscn_camera(RAIN_FIXTURE),
+                                ground_quad(RAIN_SSR_OPEN, 0.0))
+        ok = len(rows) == RAIN_NEG_FRAMES and sum(below) == 0 and frac > RAIN_FEATURE_MIN
+        return ok, (f"{sum(below)} pixels below zero on {sum(1 for b in below if b)} of "
+                    f"{len(rows)} frames, the lowest {lowest:.4f} (want 0 on all "
+                    f"{RAIN_NEG_FRAMES}); SSR moves {frac:.1%} of the open wet ground (want > "
+                    f"{RAIN_FEATURE_MIN:.0%})")
+
+    ok, detail = below_zero("ssr_taa", [])
+    print(f"  rain-ssr-taa {'PASS' if ok else 'FAIL'}  {detail}")
+    if not ok:
+        failures.append("rain-ssr-taa")
+    ok, detail = below_zero("ssr_taau", RAIN_TAAU)
+    print(f"  rain-ssr-taau {'PASS' if ok else 'FAIL'}  {detail}")
+    if not ok:
+        failures.append("rain-ssr-taau")
 
     # Rings against none on the flooded twin, looking out from under the roof.
     water = asset(RAIN_WATER_FIXTURE)
