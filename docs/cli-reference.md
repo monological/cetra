@@ -34,6 +34,10 @@ A physical camera ignores the multiplier. Read against a run at the new value fr
 what shows whether the temporal histories follow the exposure),
 `--no-history-rescale` (spec 13.20 — diagnostic: histories of light keep the exposure they were
 written at, so a change of exposure lags by the blend; the A/B for the rescale),
+`--negative-probe` (spec 13.21 — diagnostic: every frame, the float frame the tonemap is about to
+read, read back, and a `negative-probe` row with the pixels below -0.0005 and below -0.005 and the
+most negative value. Light below zero is a bug wherever it comes from, and the tonemap clamps it
+out of sight; this is what finds it. A whole-frame readback, so not for timing),
 `--shadows-off-at <frame>` (spec 11.56 — diagnostic: clear `shadow_system->enabled` mid-run, which
 is the ONE state `--no-shadows` cannot produce. That flag clears the switch before frame 0, so no
 punctual layer is ever assigned and every index the depth pass maintains is still at its initial
@@ -913,6 +917,8 @@ wind, each heard from where it is.
 - **Stepping outdoors settles at once** (spec 13.20): the fog and the temporal histories follow
   the exposure as it adapts. `--no-history-rescale` gives back the old lag, the expanding sphere,
   for comparison.
+- `--negative-probe` prints, each frame, how much of the frame reaches the tonemap below zero, as
+  the render app's does (spec 13.21).
 
 **It rains, by default, at 6 mm/h** (spec 13.9), a moderate rain, and the world opens already
 soaked. `--rain <mm/h>` sets another rate and `--no-rain` gives the dry street back. What silent
