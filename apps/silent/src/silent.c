@@ -366,6 +366,14 @@ static void build_gi(void) {
  *
  * The engine captures them once the irradiance volume has converged, so they
  * see the rooms lit by it rather than by the open sky's ambient.
+ *
+ * A box runs to the CENTRE line of a wall it shares with another room, where a
+ * door hangs, and to the inner face of an outside wall. Stopping at every inner
+ * face left a hung leaf's room-side face outside every box, reflecting the day
+ * sky: the parlour door, seen at a grazing angle down the hall, went a washed-out
+ * grey. Run to an outside wall's centre, a box would take in the front door's
+ * street face too, which hangs inside the centre line, and the street would see
+ * the hall reflected in it.
  */
 static void build_probes(void) {
     if (!g_scene->ibl || !g_scene->ibl->precomputed)
@@ -375,17 +383,17 @@ static void build_probes(void) {
         vec3 pos, lo, hi;
     } rooms[ROOMS] = {
         {{2.48f, FLOOR_Y + 1.5f, 11.9f},
-         {KITCHEN_X0, FLOOR_Y, KITCHEN_Z0},
-         {KITCHEN_X1, CEIL_Y, KITCHEN_Z1}},
+         {HALL_X1, FLOOR_Y, KITCHEN_Z0},
+         {KITCHEN_X1, CEIL_Y, KITCHEN_BACK_Z}},
         {{-0.75f, FLOOR_Y + 1.5f, 12.0f},
-         {HALL_IN_X0, FLOOR_Y, BAND_Z0},
-         {HALL_IN_X1, CEIL_Y, BAND_Z1}},
+         {HALL_X0, FLOOR_Y, BAND_Z0},
+         {HALL_X1, CEIL_Y, KITCHEN_BACK_Z}},
         {{HEARTH_X, FLOOR_Y + 1.8f, 16.6f},
-         {GREAT_X0, FLOOR_Y, GREAT_Z0},
+         {GREAT_X0, FLOOR_Y, KITCHEN_BACK_Z},
          {GREAT_X1, house_roof_y(0.0f), GREAT_Z1}},
         {{-4.2f, FLOOR2_Y + 1.6f, 11.4f},
          {TOWER_X - TOWER_APOTHEM, FLOOR2_Y, TOWER_Z - TOWER_APOTHEM},
-         {HALL_X0 - 0.5f * INT_WALL, TOWER_CEIL_Y, BAND_Z1}},
+         {HALL_X0, TOWER_CEIL_Y, KITCHEN_BACK_Z}},
     };
     ReflectionProbeSet* set = create_reflection_probe_set();
     if (!set)
@@ -405,8 +413,10 @@ static void build_probes(void) {
         // box's half-size on each axis. The default fifth carried the kitchen's
         // reflection 0.37 m out, through its 0.1 m wall and onto the great hall's
         // panelling, which reflected a lit kitchen as a grey sheen. Each fade
-        // stops halfway into the thinnest wall instead.
-        p->box_fade = 0.5f * INT_WALL / (0.5f * glm_vec3_max(span));
+        // stops a quarter into the thinnest wall past the centre line, at a hung
+        // leaf's far face, so a door's face on the next room's side is never this
+        // room's; at an outside wall it still takes in the front door's inner face.
+        p->box_fade = 0.25f * INT_WALL / (0.5f * glm_vec3_max(span));
         if (!probe_set_add(set, p)) {
             free_reflection_probe(p);
             break;
