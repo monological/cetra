@@ -175,6 +175,10 @@ float exposure_auto_gain(const Exposure* ex);
 // camera x adaptation -- the whole exposure, and what pre-exposes the frame.
 float exposure_multiplier(const Exposure* ex);
 
+// What the frame is actually shaded at: exposure_multiplier, or 1 where that is not a
+// positive number, since a zero or a NaN there would blank the frame.
+float exposure_pre(const Exposure* ex);
+
 // Hand in a frame's raw metered mean as log2 luminance, and blend the adapted
 // value toward it -- eye adaptation. Rate is per FRAME, not per second, so a
 // headless run of N frames adapts identically every time; that determinism is

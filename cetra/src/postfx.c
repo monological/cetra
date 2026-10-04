@@ -732,6 +732,8 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     fx->lut_interp = POSTFX_LUT_TETRAHEDRAL;
     fx->lut_name[0] = '\0';
     fx->frame_index = 0;
+    fx->pre_exposure = 1.0f;
+    fx->rescale_histories = true;
 
     fx->taa_enabled = false; // Enabled per-app (the render app turns it on when windowed)
 
@@ -777,6 +779,7 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     fx->fog_ambient_from_sky = true;
     fx->froxel_ready = false;
     fx->froxel_prev_frame = -1;   // no froxel frame yet; 0 would match frame 0
+    fx->froxel_prev_pre = 0.0f;   // never written, which _history_scale reads as 1
     fx->fog_layer_frame = -1;     // likewise for the composited layer's history
     fx->fog_spot_enabled = false; // published per frame by shadow_publish_to_postfx
     fx->rain_cover_layer = -1;    // likewise; 0 is a layer, so the off state has to be said
@@ -2722,6 +2725,17 @@ static bool postfx_build_fog_esm(PostFX* fx) {
 // integrate front-to-back along each froxel column. Everything about froxel
 // parity, reprojection and the adjacency stamp lives here, so the composite
 // stage above it does not have to carry any of it.
+// What a history of RADIANCE written at pre-exposure `written` is multiplied by to be read at
+// this frame's (spec 13.20). The buffer is pre-exposed, so a history carries the exposure of the
+// frame that wrote it; unscaled, an exposure change reaches the history only as fast as its blend
+// decays, and the froxel volume's 0.9 took tens of frames to forget a step, longest where the fog
+// is deepest. 1 for a history never written, and under the diagnostic switch.
+static float _history_scale(const PostFX* fx, float written) {
+    if (!fx->rescale_histories || !(written > 0.0f))
+        return 1.0f;
+    return fx->pre_exposure / written;
+}
+
 static void postfx_build_fog_volume(PostFX* fx, mat4 projection, mat4 view, bool esm_on) {
     // Frame parity picks this frame's write target; the other volume still
     // holds the previous frame's scattering for reprojection.
@@ -2775,6 +2789,7 @@ static void postfx_build_fog_volume(PostFX* fx, mat4 projection, mat4 view, bool
     uniform_set_int(iu, "froxelDepth", fx->froxel_built_z);
     uniform_set_int(iu, "temporal", temporal);
     uniform_set_float(iu, "temporalBlend", fx->fog_temporal_blend);
+    uniform_set_float(iu, "historyScale", _history_scale(fx, fx->froxel_prev_pre));
     uniform_set_int(iu, "esmEnabled", esm_on ? 1 : 0);
     uniform_set_float(iu, "esmK", fx->fog_esm_k);
     // Where the spot's ESM landed: the layer after the cascades.
@@ -2802,6 +2817,7 @@ static void postfx_build_fog_volume(PostFX* fx, mat4 projection, mat4 view, bool
     // function precisely because it is only true when a volume was built.
     glm_mat4_copy(view, fx->froxel_prev_view);
     glm_mat4_copy(projection, fx->froxel_prev_proj);
+    fx->froxel_prev_pre = fx->pre_exposure;
     fx->froxel_prev_frame = fx->frame_index;
 }
 
@@ -3203,6 +3219,9 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
     const bool spec_written = writes->spec;
     if (!fx)
         return;
+    // The value engine_render_scene shaded this frame at: the meter hands its measurement back
+    // further down this function, so exposure_pre still answers for this frame here.
+    fx->pre_exposure = fx->exposure ? exposure_pre(fx->exposure) : 1.0f;
 
     PostFXTonemapMode mode = frame_is_hdr ? fx->tonemap_mode : POSTFX_TONEMAP_PASSTHROUGH;
 

@@ -110,6 +110,7 @@ typedef struct {
     int no_springs;              // Disable spring-bone secondary motion
     int no_alpha_jitter;         // Disable the jittered alpha lookup (spec 11.101 diagnostic)
     int no_ssao;                 // Disable screen-space ambient occlusion
+    int no_history_rescale;      // Histories keep the exposure they were written at (A/B)
     int ssao_debug;              // Show the raw SSAO buffer
     int spec_occ_mode;           // PostFXSpecOccMode override (-1 = keep engine default)
     int spec_occ_debug;          // Show the AO visibility the scene is multiplied by

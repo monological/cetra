@@ -1437,9 +1437,7 @@ void engine_render_scene(Engine* engine, Scene* scene) {
     // That only holds because nothing upstream of it is a fixed multiple of
     // white any more -- see spec 10.1 phase 5.
     if (engine->view_ubo) {
-        float pre = exposure_multiplier(&engine->exposure);
-        if (!(pre > 0.0f))
-            pre = 1.0f; // a zero or NaN here would blank the frame
+        float pre = exposure_pre(&engine->exposure);
         // A capture bakes ABSOLUTE radiance, so it renders at unity. The cubemap
         // it produces substitutes for the IBL environment prefilter -- same
         // sampler unit, same shader path -- and that prefilter comes from an HDR
