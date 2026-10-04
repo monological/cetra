@@ -319,6 +319,14 @@ RECIPES = [
     {"name": "purkinje_night", "scene": "assets/scenes/purkinje_fixture.cscn", "size": (1040, 800),
      "flags": ["-f", "30", "-W", "520", "-H", "400", "--no-auto-exposure", "--no-dither",
                "--no-vignette", "--no-bloom", "--no-ssao", "--purkinje"]},
+    # Local exposure (spec 13.19) on a real interior: a room against a sunlit window, the case
+    # it exists for. The gate group measures its properties on a wall and a panel -- that it
+    # compresses, keeps the wall, draws no halo -- and none of those is "does the window read".
+    # Exposure comes from the fixture, which pins it.
+    {"name": "local_exposure", "scene": "assets/abandoned_window/abandoned_window.cscn",
+     "size": (1040, 600),
+     "flags": ["-f", "30", "-W", "520", "-H", "300", "--local-exposure", "--le-highlights", "0.5",
+               "--le-blend", "0"]},
     # The one orthographic reference (spec 11.104). Every other golden is a
     # perspective frame, so all of them together prove the perspective path
     # untouched and none can see the orthographic one; the ortho gate group

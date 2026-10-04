@@ -187,7 +187,8 @@ SCALE_GATES = [
     # Local exposure (spec 13.19) builds its grid from the EXPOSED frame and centres it on the
     # exposure key, so a scene a thousand times brighter under an exposure a thousand times
     # smaller is the same picture. Every contrast and the blurred base live, so a read of
-    # absolute luminance anywhere in it moves this row.
+    # absolute luminance anywhere in it moves this row: the grid built from absolute luminance
+    # moved it 329,781 px, peak 135 codes, at 13.19.
     ("local-exposure", "assets/scenes/cornell_point.cscn",
      ["--local-exposure", "--le-highlights", "0.5", "--le-shadows", "0.7", "--le-blend", "0.6"]),
 ]
@@ -1299,8 +1300,9 @@ def run_local_exposure_gate(workdir):
                     every contrast at 1.
 
     Falsified by hand at 13.19: le-scene with the cscene parse of "enabled" dropped; le-identity
-    with the detail term scaled by its strength squared; le-compress with the factor forced to 1;
-    le-halo by its own blur half; le-config with the "blend" row deleted.
+    with the factor taken against the base instead of the pixel (75 codes); le-compress with the
+    factor forced to 1; le-halo with the grid replaced by the blurred luminance, which alone
+    failed (0.369 at 2 px); le-config with the "blend" row deleted.
     """
     fixture = asset(LE_FIXTURE)
     if not os.path.exists(RENDER) or not os.path.exists(fixture):
