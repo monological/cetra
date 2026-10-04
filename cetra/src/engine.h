@@ -707,7 +707,7 @@ void engine_set_window_mode(Engine* engine, EngineWindowMode mode, const char* m
 void engine_set_vsync(Engine* engine, bool vsync);
 // The flat-colour preset for a 2D scene. Everything that describes a lens or
 // an atmosphere goes off -- bloom, GTAO, SSR, vignette, dither, TAA, shadows --
-// exposure pins at unity with adaptation off, the tone curve is the identity,
+// exposure pins at unity with adaptation and local exposure off, the tone curve is the identity,
 // and the scene's ambient radiance becomes white, under which a material's
 // albedo reaches the display as authored with no light in the scene at all.
 // Left alone on purpose: the sample count, since multisampling is the

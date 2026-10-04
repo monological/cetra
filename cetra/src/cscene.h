@@ -575,6 +575,21 @@ typedef struct CetraSceneDesc {
     float glare_strength;
     bool has_glare_threshold;
     float glare_threshold;
+    // post.local_exposure (spec 13.19)
+    bool has_le_enabled;
+    bool le_enabled;
+    bool has_le_highlights;
+    float le_highlights;
+    bool has_le_shadows;
+    float le_shadows;
+    bool has_le_detail;
+    float le_detail;
+    bool has_le_blend;
+    float le_blend;
+    bool has_le_kernel;
+    float le_kernel;
+    bool has_le_grey_bias;
+    float le_grey_bias;
     bool fog_enabled;
     bool has_fog_density;
     float fog_density;

@@ -82,6 +82,14 @@
 // middle grey, where a camera in fog is opened a stop and a third so the fog
 // reads white.
 #define DAY_METER_KEY 0.45f
+// The local exposure by day (spec 13.19). The window onto the street sits about four stops over
+// that key, and the key leaves about one above it before white, so the base above grey keeps a
+// fifth of its height. The window also pulls the meter down, so the room sits under grey and the
+// base below it is lifted. Blend 0: a blurred base averages the dark walls into the window's and
+// compresses it less.
+#define DAY_LE_HIGHLIGHTS 0.2f
+#define DAY_LE_SHADOWS    0.6f
+#define DAY_LE_BLEND      0.0f
 // Moderate rain, by the meteorologists' bands (rain.h): steady enough to soak the
 // street and fill its gutters, short of a downpour that would hide it.
 #define DEFAULT_RAIN_MMH 6.0f
@@ -442,8 +450,14 @@ static void build_post(const Engine* engine, bool night, bool grade) {
         postfx_set_fog_ambient(fx, (vec3){5.0f, 5.6f, 5.2f});
 
     // An exposure per pixel on top of the camera's (spec 13.19), which is what lets a window onto
-    // the day come down without the kitchen around it going dark.
-    fx->local_exposure_enabled = g_args.local_exposure == 1;
+    // the day come down without the kitchen around it going dark. By day only: the night's
+    // exposure is pinned, and its look with it.
+    fx->local_exposure_enabled = g_args.local_exposure < 0 ? !night : g_args.local_exposure == 1;
+    if (!night) {
+        fx->local_exposure_highlights = DAY_LE_HIGHLIGHTS;
+        fx->local_exposure_shadows = DAY_LE_SHADOWS;
+        fx->local_exposure_blend = DAY_LE_BLEND;
+    }
     if (g_args.le_highlights >= 0.0f)
         fx->local_exposure_highlights = g_args.le_highlights;
     if (g_args.le_shadows >= 0.0f)

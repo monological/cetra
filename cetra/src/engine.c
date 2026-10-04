@@ -2107,6 +2107,7 @@ void engine_set_2d_preset(Engine* engine, Scene* scene) {
     PostFX* fx = engine->postfx;
     fx->bloom_enabled = false;
     fx->glare_enabled = false;
+    fx->local_exposure_enabled = false;
     fx->ssao_enabled = false;
     fx->ssr_enabled = false;
     fx->vignette_enabled = false;
