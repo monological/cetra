@@ -1132,13 +1132,20 @@ RENDER_MODE_VELOCITY         // Motion-vector visualization
 RENDER_MODE_HDR_HOTSPOTS     // Shaded HDR magnitude as a heat ramp (mode 10)
 RENDER_MODE_SSS_HOTSPOTS     // The same ramp over attachment 4's SSS diffuse (11)
 RENDER_MODE_EXTRAPOLATION    // Per-varying MSAA extrapolation: R normal, G tangent, B UV (12)
+RENDER_MODE_CLEARCOAT_NORMAL // The clearcoat layer's own normal (13; --clearcoat-debug)
+RENDER_MODE_PROBE_COVERAGE   // Albedo, magenta where the reflection falls to the sky (14)
 ```
 
-**The shader numbering runs one further than the enum.** `pbr_frag.glsl:1038` handles
-`renderMode == 13` as the clearcoat-normal view, and `--clearcoat-debug` reaches it by assigning
-the literal 13 (`apps/render/src/render.c:1356`) — there is no `RENDER_MODE_CLEARCOAT` in
-`common.h` to name it with. Anything switching on this enum has to cope with a value past its
-last member.
+**Probe coverage is the view to reach for when a shiny surface indoors looks washed out.** Indoors
+a reflection should come from a reflection probe; a surface outside every probe box falls back to
+the global environment, the sky, and in the shaded frame that is only a faint grey sheen. Here it is
+magenta, scaled by the share that fell through. Outdoors everything is magenta, and right. It found
+silent's parlour and upstairs doors: hung in the middle of their walls, outside the room boxes that
+stopped at the walls' inner faces. It is in the GUI's Render Mode list, so any app with the debug
+panel has it.
+
+The clearcoat-normal view was reached by the literal 13 for a while, with nothing in this enum to
+name it; it has a member now, and the enum covers every value the shader handles.
 
 ## Camera Modes
 

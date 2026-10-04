@@ -383,6 +383,10 @@ takes the passthrough blit, so these bytes arrive with no tonemap, no display en
 dither. **Read them LINEARLY** — the `--cs-debug` trap. Black is unambiguous because a
 normalized vector cannot encode there, the darkest reachable being (-1,-1,-1)/sqrt(3) at 0.211,
 which is what makes an uncoated surface an in-frame control),
+`--render-mode 14` (the probe-coverage view: the albedo, magenta by the share of each pixel's
+reflection that no reflection probe covers and the sky answers instead. Indoors any magenta is a
+surface outside every probe box; outdoors it is everything, and right. Also "Probe Coverage" in
+the GUI's Render Mode list, which is how an app without this flag reaches it),
 `--no-oit` / `--no-oit-moments`, `--no-instancing`, `--no-frustum-cull` (spec 11.53 — submit every
 item, culled or not. A bisect lever in the `--no-instancing` idiom and 0 px by construction, since
 culling only ever removes geometry that contributed nothing; it is what the `cull` gate group compares

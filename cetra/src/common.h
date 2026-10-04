@@ -108,7 +108,17 @@ typedef enum {
      * R and G are exact on any asset; B is only meaningful where the mesh authored its UVs in
      * [0,1]. The arithmetic and the reason each channel is what it is live in pbr_frag.
      */
-    RENDER_MODE_EXTRAPOLATION
+    RENDER_MODE_EXTRAPOLATION,
+    RENDER_MODE_CLEARCOAT_NORMAL, // The clearcoat layer's own normal
+    /*
+     * The albedo, turned magenta by the share of each pixel's environment reflection that no
+     * reflection probe covers, so it reflects the global environment instead.
+     *
+     * Outdoors that is every pixel, and right. Indoors it is the sky reflected in a room that
+     * cannot see it: a surface outside every probe box looks only slightly off in the shaded
+     * frame, a grey sheen on a door, and is obvious here.
+     */
+    RENDER_MODE_PROBE_COVERAGE
 } RenderMode;
 
 // Which pass is rasterizing this mesh, and therefore where the uber-shader
