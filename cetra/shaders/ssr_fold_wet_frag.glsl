@@ -11,19 +11,23 @@ out vec4 FragColor;
 // that replaced it. So a wet pixel's pair carries the reflection with its Fresnel on the colour
 // and its coverage bare -- the fraction of the environment's reflection the trace or the probe
 // stands in for -- and here the frame gains the one and loses that fraction of the other: of
-// the ambient specular as the split composite put it back, under its occlusion, which is read
-// through the composite's own statement of it. With alpha 0 the blend adds, so the diffuse is
-// untouched.
+// the ambient specular as the split composite put it back, read through its own statement of it.
+// With alpha 0 the blend adds, so the diffuse is untouched.
+//
+// The subtraction can still take the frame below zero, and does on a thin ripple or an object's
+// edge: this runs after TAA, which has resolved and (at a render scale) upscaled what the
+// composite put back, while what it takes out is this frame's render-res value. On open ground
+// the two agree. Composited before TAA, from last frame's trace, they would agree everywhere.
 //
 // The catcher keeps the lerp, and the tent averages each class only with its own: a wet pair's
 // bare coverage folded into the wall beside a puddle would darken the wall by it. A surface
 // marked as neither takes nothing -- SSR never traced it, and what the denoise bled into it
 // from the wet ground below is not its reflection. Frames with nothing wet never reach this
 // program, so the catcher's fold there is the plain tent's to the bit.
-uniform sampler2D srcTex;  // the SSR buffer, premultiplied pairs (see above)
-uniform sampler2D specTex; // the ambient specular, working space
-uniform vec2 texelSize;    // one SSR-buffer texel
+uniform sampler2D srcTex; // the SSR buffer, premultiplied pairs (see above)
+uniform vec2 texelSize;   // one SSR-buffer texel
 
+#include "ssr_marker.glsl"
 #include "split_occlusion.glsl"
 
 int classAt(vec2 uv) {
@@ -57,6 +61,5 @@ void main()
         FragColor = sum;
         return;
     }
-    vec3 putBack = texture(specTex, TexCoords).rgb * splitOcclusionAt(TexCoords).x;
-    FragColor = vec4(sum.rgb - sum.a * putBack, 0.0);
+    FragColor = vec4(sum.rgb - sum.a * splitOcclusionAt(TexCoords).rgb, 0.0);
 }

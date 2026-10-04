@@ -83,3 +83,14 @@ const float WS_SCENE_MAX = 60000.0; // +15.9 stops: fp16 guard on the finished p
 const float WS_REFLECT_MAX = 64.0;  // +6 stops: SSR firefly guard
 const float WS_BOUNCE_MAX = 64.0;   // +6 stops: SSGI gather firefly guard
 const float WS_MEDIA_MAX = 500.0;   // +9 stops: fog in-scatter, per froxel and integrated
+
+// The finished frame's light as it is read for display: under the fp16 guard, and never below
+// zero, which a curve's toe and a log both assume -- the neutral toe offsets by the smallest
+// channel, x - 6.25x^2, which for a negative x ADDS to all three. The readers that must agree
+// (the tonemap, the glare source thresholding what the tonemap takes out, the local exposure's
+// grid) all read it through here. A NaN comes out 0 on this driver, where a bare min() gave
+// the ceiling; GLSL leaves either undefined.
+vec3 sceneLight(vec3 c)
+{
+    return clamp(c, vec3(0.0), vec3(WS_SCENE_MAX));
+}

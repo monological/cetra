@@ -362,9 +362,8 @@ typedef struct {
     // every index the pass maintains is still at its initial value and the
     // TRANSITION, which is what leaves those indices stale, is unreachable.
     int shadows_off_at;
-    // Diagnostic (--exposure-at): write the exposure multiplier on this frame, -1 for never.
-    // With the meter off that is an exact one-frame step, which is what a temporal history
-    // that has to follow the exposure is measured against; the meter moves 4% a frame.
+    // Diagnostic (--exposure-at): the exposure multiplier written on this frame, -1 for never.
+    // A physical camera ignores the multiplier, so under one this does nothing.
     int exposure_at_frame;
     float exposure_at_value;
     // Diagnostic (--layer-blend-at): set every layered material's

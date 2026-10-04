@@ -28,6 +28,7 @@ uniform float glareSourceScale;
 uniform vec2 glareFill; // the grid texels the frame is shrunk into
 
 #include "glare_threshold.glsl"
+#include "view.glsl"
 
 // The most frame texels a grid texel may cover along an axis; a 4K frame shrunk into the grid
 // covers about ten.
@@ -46,7 +47,8 @@ void main() {
         for (int x = 0; x < GLARE_BLOCK_MAX; x++) {
             if (lo.x + x >= hi.x)
                 break;
-            c += glareAboveThreshold(texelFetch(hdrTex, lo + ivec2(x, y), 0).rgb, glareThreshold);
+            c += glareAboveThreshold(sceneLight(texelFetch(hdrTex, lo + ivec2(x, y), 0).rgb),
+                                     glareThreshold);
             count++;
         }
     }

@@ -132,6 +132,7 @@ static void draw_volume_slices(PostFX* fx, GLuint volume, UniformManager* um) {
 static bool create_pingpong(int width, int height, GLenum internal_format, PingPong* pp) {
     pp->valid = false;
     for (int i = 0; i < 2; i++) {
+        pp->pre_exposure[i] = 0.0f; // never written, which _history_scale reads as 1
         if (!create_color_fbo(width, height, internal_format, &pp->fbo[i], &pp->tex[i]))
             return false;
     }
@@ -779,7 +780,6 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     fx->fog_ambient_from_sky = true;
     fx->froxel_ready = false;
     fx->froxel_prev_frame = -1;   // no froxel frame yet; 0 would match frame 0
-    fx->froxel_prev_pre = 0.0f;   // never written, which _history_scale reads as 1
     fx->fog_layer_frame = -1;     // likewise for the composited layer's history
     fx->fog_spot_enabled = false; // published per frame by shadow_publish_to_postfx
     fx->rain_cover_layer = -1;    // likewise; 0 is a layer, so the off state has to be said
@@ -1043,13 +1043,6 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     uniform_set_int(fx->oit_resolve_program->uniforms, "accumTex", 0);
     uniform_set_int(fx->oit_resolve_program->uniforms, "revealageTex", 1);
 
-    glUseProgram(fx->spec_occ_composite_program->id);
-    uniform_set_int(fx->spec_occ_composite_program->uniforms, "specTex", 0);
-    uniform_set_int(fx->spec_occ_composite_program->uniforms, "aoTex", 1);
-    uniform_set_int(fx->spec_occ_composite_program->uniforms, "normalsTex", 2);
-    uniform_set_int(fx->spec_occ_composite_program->uniforms, "auxTex", 3);
-    uniform_set_int(fx->spec_occ_composite_program->uniforms, "specOccTex", 4);
-
     glUseProgram(fx->gtao_program->id);
     uniform_set_int(fx->gtao_program->uniforms, "linDepthTex", 0);
     uniform_set_int(fx->gtao_program->uniforms, "noiseTex", 1);
@@ -1073,16 +1066,10 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
 
     glUseProgram(fx->upsample_tent_program->id);
     uniform_set_int(fx->upsample_tent_program->uniforms, "srcTex", 0);
-    // The split occlusion's inputs on the composite's own units, 0-4, which _bind_split_occlusion
-    // binds for either program.
+    // Its other inputs are _bind_split_occlusion's, which seeds them per draw.
     if (fx->ssr_fold_wet_program) {
         glUseProgram(fx->ssr_fold_wet_program->id);
-        uniform_set_int(fx->ssr_fold_wet_program->uniforms, "specTex", 0);
-        uniform_set_int(fx->ssr_fold_wet_program->uniforms, "aoTex", 1);
-        uniform_set_int(fx->ssr_fold_wet_program->uniforms, "normalsTex", 2);
-        uniform_set_int(fx->ssr_fold_wet_program->uniforms, "auxTex", 3);
-        uniform_set_int(fx->ssr_fold_wet_program->uniforms, "specOccTex", 4);
-        uniform_set_int(fx->ssr_fold_wet_program->uniforms, "srcTex", 5);
+        uniform_set_int(fx->ssr_fold_wet_program->uniforms, "srcTex", 0);
     }
 
     // temporal_accum, ssr_accum, and ssgi_accum are seeded entirely by
@@ -1413,6 +1400,35 @@ static void postfx_run_motion_blur(PostFX* fx, GLuint canvas_fbo, GLuint canvas_
     check_gl_error("postfx motion blur");
 }
 
+// What the split composite occludes the ambient specular by this frame (split_occlusion.glsl).
+// Settled in postfx_run beside split_live and handed to the composite, and again to the wet SSR
+// fold, which takes back out the share of it a reflection replaces.
+typedef struct SplitOcclusion {
+    GLuint ao, spec_occ, normals, aux; // 0 where the frame had none
+    bool active;                       // the AO chain, normals and aux all ran
+} SplitOcclusion;
+
+// split_occlusion.glsl's inputs, on units 1-5 of `prog`, sampler uniforms and all, so its two
+// programs cannot disagree about the layout and unit 0 stays each caller's own.
+static void _bind_split_occlusion(PostFX* fx, ShaderProgram* prog, const SplitOcclusion* split) {
+    static const char* const names[5] = {"specTex", "aoTex", "normalsTex", "auxTex", "specOccTex"};
+    const GLuint textures[5] = {fx->spec_texture, split->ao, split->normals, split->aux,
+                                split->spec_occ};
+    for (int i = 0; i < 5; i++) {
+        uniform_set_int(prog->uniforms, names[i], 1 + i);
+        glActiveTexture(GL_TEXTURE1 + i);
+        glBindTexture(GL_TEXTURE_2D, textures[i]);
+    }
+    // Per draw rather than seeded, the rule the texelSize uniforms follow: the
+    // composite and the tonemap read the same buffer at different resolutions,
+    // so a seeded value would be right for one of them and a silent fallback
+    // for the other.
+    const float ao_res[2] = {(float)fx->half_width, (float)fx->half_height};
+    uniform_set_vec2(prog->uniforms, "aoRes", ao_res);
+    uniform_set_int(prog->uniforms, "aoActive", split->active ? 1 : 0);
+    uniform_set_float(prog->uniforms, "aoStrength", fx->ssao_strength);
+}
+
 // Split spec-occ composite: fold the ambient specular the scene pass routed
 // to its own buffer back over the scene, in one blended pass -- the shader
 // outputs (spec * SO, aoFactor) and the (GL_ONE, GL_SRC_ALPHA) blend forms
@@ -1421,44 +1437,11 @@ static void postfx_run_motion_blur(PostFX* fx, GLuint canvas_fbo, GLuint canvas_
 // Runs before TAA so the reunited frame is stabilized as one image, and
 // before the SSR march / fog / bloom so every later pass sees the corrected
 // color.
-// The ambient specular and what the split composite occluded it by this frame, on units 0-4 of
-// a program that includes split_occlusion.glsl. The composite and the wet SSR fold both bind
-// through here, so the fold takes out exactly what the composite put back.
-static void _bind_split_occlusion(PostFX* fx, UniformManager* u) {
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, fx->spec_texture);
-    glActiveTexture(GL_TEXTURE1);
-    glBindTexture(GL_TEXTURE_2D, fx->split_occlusion.ao);
-    glActiveTexture(GL_TEXTURE2);
-    glBindTexture(GL_TEXTURE_2D, fx->split_occlusion.normals);
-    glActiveTexture(GL_TEXTURE3);
-    glBindTexture(GL_TEXTURE_2D, fx->split_occlusion.aux);
-    glActiveTexture(GL_TEXTURE4);
-    glBindTexture(GL_TEXTURE_2D, fx->split_occlusion.spec_occ);
-    // Per draw rather than seeded, the rule the texelSize uniforms follow: the
-    // composite and the tonemap read the same buffer at different resolutions,
-    // so a seeded value would be right for one of them and a silent fallback
-    // for the other.
-    const float ao_res[2] = {(float)fx->half_width, (float)fx->half_height};
-    uniform_set_vec2(u, "aoRes", ao_res);
-    uniform_set_int(u, "aoActive", fx->split_occlusion.active ? 1 : 0);
-    uniform_set_float(u, "aoStrength", fx->ssao_strength);
-}
-
-static void postfx_run_spec_occ_composite(PostFX* fx, GLuint ao_result_tex, GLuint spec_occ_tex,
-                                          bool have_normals, bool aux_written) {
+static void postfx_run_spec_occ_composite(PostFX* fx, const SplitOcclusion* split) {
     glBindFramebuffer(GL_FRAMEBUFFER, fx->hdr_fbo);
     glViewport(0, 0, fx->width, fx->height);
     glUseProgram(fx->spec_occ_composite_program->id);
-    fx->split_occlusion.ao = fx->ssao_enabled ? ao_result_tex : 0;
-    fx->split_occlusion.spec_occ = spec_occ_tex;
-    fx->split_occlusion.normals = have_normals ? fx->normal_texture : 0;
-    fx->split_occlusion.aux = aux_written ? fx->aux_texture : 0;
-    // The term needs the AO chain to have run, the normals for its guard, and
-    // the aux depth for both magnifications. Missing any of them, fold the
-    // specular back unoccluded rather than read an unbound unit.
-    fx->split_occlusion.active = fx->ssao_enabled && have_normals && aux_written;
-    _bind_split_occlusion(fx, fx->spec_occ_composite_program->uniforms);
+    _bind_split_occlusion(fx, fx->spec_occ_composite_program, split);
     glEnable(GL_BLEND);
     glBlendFunc(GL_ONE, GL_SRC_ALPHA);
     draw_fullscreen_quad(fx->quad_vao);
@@ -2421,11 +2404,22 @@ static void resolve_color_attachment(GLuint msaa_fbo, GLenum attachment, GLuint 
     glReadBuffer(GL_COLOR_ATTACHMENT0);
 }
 
-// Reproject-and-blend temporal accumulation, shared by seven consumers across
-// three programs: AO, SSGI, SSR, SSS, TAA, contact shadows, and the composited
-// fog layer. Indexes the pair by frame parity, resets when the history is not
-// valid (first use, or the accumulator was skipped last frame), and returns the
-// freshly written texture.
+// What a history of RADIANCE written at pre-exposure `written` is multiplied by to be read at
+// this frame's (spec 13.20). The buffer is pre-exposed, so a history carries the exposure of the
+// frame that wrote it; unscaled, an exposure change reaches the history only as fast as its blend
+// decays, and the froxel volume's 0.9 took tens of frames to forget a step, longest where the fog
+// is deepest. 1 for a history never written, and under the diagnostic switch.
+static float _history_scale(const PostFX* fx, float written) {
+    if (!fx->rescale_histories || !(written > 0.0f))
+        return 1.0f;
+    return fx->pre_exposure / written;
+}
+
+// Reproject-and-blend temporal accumulation, shared by eight consumers across
+// four programs: AO, specular occlusion, SSGI, SSR, SSS, TAA, contact shadows,
+// and the composited fog layer. Indexes the pair by frame parity, resets when
+// the history is not valid (first use, or the accumulator was skipped last
+// frame), and returns the freshly written texture.
 //
 // Owns everything that depends on the resolution or the unit layout, so a new
 // consumer cannot get it wrong: the sampler units, and texelSize. Both were
@@ -2439,17 +2433,7 @@ static void resolve_color_attachment(GLuint msaa_fbo, GLenum attachment, GLuint 
 // RESTORES NOTHING. On return the ping-pong FBO is still bound, the viewport is
 // at (w,h), prog is current, and texture unit 2 is active. Every caller that
 // draws afterwards has to re-bind its own target, viewport, program and unit.
-// What a history of RADIANCE written at pre-exposure `written` is multiplied by to be read at
-// this frame's (spec 13.20). The buffer is pre-exposed, so a history carries the exposure of the
-// frame that wrote it; unscaled, an exposure change reaches the history only as fast as its blend
-// decays, and the froxel volume's 0.9 took tens of frames to forget a step, longest where the fog
-// is deepest. 1 for a history never written, and under the diagnostic switch.
-static float _history_scale(const PostFX* fx, float written) {
-    if (!fx->rescale_histories || !(written > 0.0f))
-        return 1.0f;
-    return fx->pre_exposure / written;
-}
-
+//
 // `radiance`: the history is pre-exposed light and is read at this frame's exposure. False for
 // the unitless ones -- AO, specular occlusion, contact shadows -- which an exposure never touches.
 static GLuint run_temporal_accum(PostFX* fx, ShaderProgram* prog, PingPong* pp, int w, int h,
@@ -2466,7 +2450,7 @@ static GLuint run_temporal_accum(PostFX* fx, ShaderProgram* prog, PingPong* pp, 
     // (taa_resolve, ssgi_accum).
     uniform_set_float(prog->uniforms, "feedback", feedback);
     uniform_set_float(prog->uniforms, "historyScale",
-                      radiance && pp->valid ? _history_scale(fx, pp->pre_exposure) : 1.0f);
+                      radiance ? _history_scale(fx, pp->pre_exposure[read]) : 1.0f);
     uniform_set_int(prog->uniforms, "currentTex", 0);
     uniform_set_int(prog->uniforms, "velocityTex", 1);
     uniform_set_int(prog->uniforms, "historyTex", 2);
@@ -2479,7 +2463,7 @@ static GLuint run_temporal_accum(PostFX* fx, ShaderProgram* prog, PingPong* pp, 
     uniform_set_int(prog->uniforms, "reset", pp->valid ? 0 : 1);
     draw_fullscreen_quad(fx->quad_vao);
     pp->valid = true;
-    pp->pre_exposure = fx->pre_exposure;
+    pp->pre_exposure[write] = fx->pre_exposure;
     return pp->tex[write];
 }
 
@@ -2514,10 +2498,10 @@ static void run_taau_resolve(PostFX* fx) {
     glActiveTexture(GL_TEXTURE2);
     glBindTexture(GL_TEXTURE_2D, pp->tex[read]);
     uniform_set_int(u, "reset", pp->valid ? 0 : 1);
-    uniform_set_float(u, "historyScale", pp->valid ? _history_scale(fx, pp->pre_exposure) : 1.0f);
+    uniform_set_float(u, "historyScale", _history_scale(fx, pp->pre_exposure[read]));
     draw_fullscreen_quad(fx->quad_vao);
     pp->valid = true;
-    pp->pre_exposure = fx->pre_exposure;
+    pp->pre_exposure[write] = fx->pre_exposure;
 }
 
 // Edge-aware a-trous denoise, shared by the SSGI and SSR denoisers (their
@@ -2972,14 +2956,15 @@ static bool postfx_run_atmosphere(PostFX* fx, GLuint canvas_fbo, bool aux_writte
 // the render-res depth/normals and reading the canvas as its radiance source
 // (post-TAA consumers read stabilized color); only the fold magnifies. Same
 // extracted-stage shape as postfx_run_atmosphere; inv_projection is passed in
-// (shared with DoF).
+// (shared with DoF). `split` is what the split composite occluded the ambient specular by this
+// frame, NULL when it did not run.
 static void postfx_run_ssr(PostFX* fx, GLuint canvas_fbo, GLuint canvas_tex, bool have_normals,
-                           bool aux_written, bool split_live, bool taa_resolving, mat4 projection,
-                           mat4 inv_projection, mat4 view) {
+                           bool aux_written, const SplitOcclusion* split, bool taa_resolving,
+                           mat4 projection, mat4 inv_projection, mat4 view) {
     // Wet ground has its share of the environment's reflection REPLACED rather than being
     // lerped toward the trace, which needs that share on its own -- the split composite's
     // buffer -- and the program that folds it. Without either it lerps, as the catcher does.
-    const bool wet_replace = fx->rain_wet && split_live && fx->ssr_fold_wet_program != NULL;
+    const bool wet_replace = fx->rain_wet && split != NULL && fx->ssr_fold_wet_program != NULL;
     // SSR traces at full res (sharp) or half res, per ssr_full_res; the
     // buffer + Hi-Z pyramid were sized to match in create_ssr_buffers.
     int ssr_w = fx->ssr_full_res ? fx->width : fx->half_width;
@@ -3167,8 +3152,8 @@ static void postfx_run_ssr(PostFX* fx, GLuint canvas_fbo, GLuint canvas_tex, boo
     const float ssr_texel[2] = {1.0f / (float)ssr_w, 1.0f / (float)ssr_h};
     uniform_set_vec2(fold->uniforms, "texelSize", ssr_texel);
     if (wet_replace)
-        _bind_split_occlusion(fx, fold->uniforms);
-    glActiveTexture(wet_replace ? GL_TEXTURE5 : GL_TEXTURE0);
+        _bind_split_occlusion(fx, fold, split);
+    glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, ssr_result);
     glEnable(GL_BLEND);
     glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
@@ -3239,9 +3224,6 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
     const bool spec_written = writes->spec;
     if (!fx)
         return;
-    // The value engine_render_scene shaded this frame at: the meter hands its measurement back
-    // further down this function, so exposure_pre still answers for this frame here.
-    fx->pre_exposure = fx->exposure ? exposure_pre(fx->exposure) : 1.0f;
 
     PostFXTonemapMode mode = frame_is_hdr ? fx->tonemap_mode : POSTFX_TONEMAP_PASSTHROUGH;
 
@@ -3631,11 +3613,19 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         if (!spec_occ_accum_ran)
             fx->spec_occ_history.valid = false;
 
+        const SplitOcclusion split = {
+            .ao = fx->ssao_enabled ? ao_result_tex : 0,
+            .spec_occ = spec_occ_swept ? fx->spec_occ_texture : 0,
+            .normals = have_normals ? fx->normal_texture : 0,
+            .aux = aux_written ? fx->aux_texture : 0,
+            // The term needs the AO chain to have run, the normals for its guard, and the aux
+            // depth for both magnifications. Missing any of them, the specular goes back
+            // unoccluded rather than read an unbound unit.
+            .active = fx->ssao_enabled && have_normals && aux_written,
+        };
         if (split_live) {
             profiler_scope_begin(fx->profiler, "spec occ composite");
-            postfx_run_spec_occ_composite(fx, ao_result_tex,
-                                          spec_occ_swept ? fx->spec_occ_texture : 0, have_normals,
-                                          aux_written);
+            postfx_run_spec_occ_composite(fx, &split);
             profiler_scope_end(fx->profiler);
         }
 
@@ -3720,8 +3710,9 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
 
         if (ssr_active) {
             profiler_scope_begin(fx->profiler, "ssr");
-            postfx_run_ssr(fx, canvas_fbo, canvas_tex, have_normals, aux_written, split_live,
-                           taa_resolving, projection, inv_projection, view);
+            postfx_run_ssr(fx, canvas_fbo, canvas_tex, have_normals, aux_written,
+                           split_live ? &split : NULL, taa_resolving, projection, inv_projection,
+                           view);
             profiler_scope_end(fx->profiler);
         }
 

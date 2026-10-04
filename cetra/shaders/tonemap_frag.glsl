@@ -475,9 +475,13 @@ vec3 ditherPattern(vec2 p)
  * The scene as this pass sees it, before any response curve: sanitize, take out
  * what the glare moved, occlude, add lens scatter. ONE statement of that order,
  * because three places need the same one -- the composite below, the Purkinje
- * pooling beside it, and debug view 10. The sanitize is against a +INF texel from
- * a half-float overflow upstream, which both tonemap curves turn into NaN and a
- * black pixel.
+ * pooling beside it, and debug view 10. The sanitize is sceneLight: against a +INF
+ * texel from a half-float overflow upstream, which both tonemap curves turn into
+ * NaN and a black pixel, and against light below zero, which the neutral toe
+ * turns white and the local exposure, which takes a log and lifts what is dark,
+ * makes a visible dot of (spec 13.20). Anything upstream that averages -- DoF,
+ * motion blur -- has already spread a negative into its neighbours by here, so
+ * this catches only what is still negative.
  *
  * The glare MOVES light (spec 13.5): the share of this pixel's light above the
  * threshold that bloomAdd's star carries away -- its halo; the core stays here,
@@ -488,12 +492,7 @@ vec3 ditherPattern(vec2 p)
  */
 vec3 sceneComposite(vec2 uv, float aoFactor, vec3 bloomAdd)
 {
-    // Light is not negative, and both readers of this assume it: the neutral curve's toe offsets
-    // by the smallest channel, x - 6.25x^2, which for a negative x ADDS to every channel, and the
-    // local exposure takes a log. TAA's colour clamp leaves a few thousandths below zero on a
-    // hard edge, invisible until the local exposure lifted those near-black pixels tenfold and
-    // the toe turned each one grey-white (spec 13.20).
-    vec3 c = clamp(sceneTap(uv), vec3(0.0), vec3(WS_SCENE_MAX));
+    vec3 c = sceneLight(sceneTap(uv));
     if (glareEnabled == 1)
         c -= glareStrength * glareHaloShare * glareAboveThreshold(c, glareThreshold);
     return c * aoFactor + bloomAdd;
