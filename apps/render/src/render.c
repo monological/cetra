@@ -386,6 +386,8 @@ static void print_usage(const char* prog) {
                     "frame's width (0.5)\n");
     fprintf(stderr,
             "      --le-grey-bias <f> Stops added to the middle grey it scales about (0)\n");
+    fprintf(stderr, "      --le-probe         Print the frame's luminance percentiles, in stops "
+                    "from middle grey, while it is on\n");
     fprintf(stderr, "      --bloom-strength <f> Bloom strength (default: engine)\n");
     fprintf(stderr, "      --bloom-threshold <f> Bloom threshold (default: engine)\n");
     fprintf(stderr, "      --fog-anisotropy <f> Fog scatter anisotropy -1..1 (implies --fog)\n");
@@ -1883,6 +1885,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->glare_probe = 1;
         } else if (strcmp(argv[i], "--local-exposure") == 0) {
             args->le_enable = 1;
+        } else if (strcmp(argv[i], "--le-probe") == 0) {
+            args->le_probe = 1;
         } else if (strcmp(argv[i], "--no-local-exposure") == 0) {
             args->le_enable = 0;
         } else if (strcmp(argv[i], "--le-highlights") == 0 ||
@@ -3625,6 +3629,7 @@ int main(int argc, char** argv) {
             fx->local_exposure_kernel = args.le_kernel;
         if (args.le_grey_bias_set)
             fx->local_exposure_grey_bias = args.le_grey_bias;
+        fx->local_exposure_probe = args.le_probe != 0;
         if (args.no_bloom) {
             fx->bloom_enabled = false;
         } else if (args.bloom_enable >= 0) {

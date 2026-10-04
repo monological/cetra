@@ -339,6 +339,7 @@ typedef struct {
     float le_kernel;              // -1 = keep engine default
     float le_grey_bias;           // used when le_grey_bias_set; any sign is a value
     int le_grey_bias_set;
+    int le_probe;          // Print the frame's luminance percentiles, per frame
     int bloom_enable;      // -1 = keep default; 0/1 force (scene file)
     float bloom_strength;  // -1 = keep engine default
     float bloom_threshold; // -1 = keep engine default
