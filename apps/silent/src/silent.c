@@ -357,12 +357,17 @@ static void build_gi(void) {
 }
 
 /*
- * Reflection probes in the kitchen, the hall, the great hall and the study.
- * Without them every metal and every wet surface indoors reflects the only
- * environment there is, the night sky, and the hood, the sink and the floor go
- * black. The study's box takes in its tower bay, up to the bay's high ceiling,
- * and the great hall's goes up to the ridge, since the hall is open to its
- * roof: a roof outside every box reflects the sky.
+ * Reflection probes in the kitchen, the hall, the great hall, the study and the
+ * study's tower bay. Without them every metal and every wet surface indoors
+ * reflects the only environment there is, the night sky, and the hood, the sink
+ * and the floor go black. The great hall's box goes up to the ridge, since the
+ * hall is open to its roof: a roof outside every box reflects the sky.
+ *
+ * The study is TWO boxes, the room to its ceiling and the octagonal bay to the
+ * bay's high one, because one box round both reached past the house's west wall
+ * beside the tower, past its front wall east of it and up through the roof over
+ * the room, and the facade and the roof there reflected the study. A box still
+ * cannot follow the bay's diagonal faces, so their outside takes the bay's probe.
  *
  * The engine captures them once the irradiance volume has converged, so they
  * see the rooms lit by it rather than by the open sky's ambient.
@@ -380,7 +385,7 @@ static void build_gi(void) {
 static void build_probes(void) {
     if (!g_scene->ibl || !g_scene->ibl->precomputed)
         return;
-    enum { ROOMS = 4 };
+    enum { ROOMS = 5 };
     const struct {
         vec3 pos, lo, hi;
     } rooms[ROOMS] = {
@@ -393,10 +398,14 @@ static void build_probes(void) {
         {{HEARTH_X, FLOOR_Y + 1.8f, 16.6f},
          {HOUSE_X0 + KIT_PANE_HALF, FLOOR_Y, KITCHEN_BACK_Z},
          {HOUSE_X1 - KIT_PANE_HALF, house_roof_y(0.0f), HOUSE_BACK_Z - KIT_PANE_HALF}},
-        {{-4.2f, FLOOR2_Y + 1.6f, 11.4f},
+        {{-3.25f, FLOOR2_Y + 1.6f, 11.9f},
+         {HOUSE_X0 + KIT_PANE_HALF, FLOOR2_Y, HOUSE_FRONT_Z + KIT_PANE_HALF},
+         {HALL_X0, CEIL2_Y, KITCHEN_BACK_Z}},
+        // Over the desk, which stands in the middle of the bay.
+        {{TOWER_X, FLOOR2_Y + 1.8f, TOWER_Z},
          {TOWER_X - TOWER_APOTHEM + KIT_PANE_HALF, FLOOR2_Y,
           TOWER_Z - TOWER_APOTHEM + KIT_PANE_HALF},
-         {HALL_X0, TOWER_CEIL_Y, KITCHEN_BACK_Z}},
+         {TOWER_X + TOWER_APOTHEM, TOWER_CEIL_Y, TOWER_Z + TOWER_APOTHEM}},
     };
     ReflectionProbeSet* set = create_reflection_probe_set();
     if (!set)
