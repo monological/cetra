@@ -22,7 +22,8 @@ Sky and night: [Day/night cycle](#daynight-cycle) · [The moon](#the-moon) ·
 [Cloud shadow](#cloud-shadow) · [Atmosphere](#atmosphere)
 
 Image finishing: [Tonemap / exposure](#tonemap--exposure) ·
-[Purkinje / scotopic shift](#purkinje--scotopic-shift) · [Diffraction glare](#diffraction-glare)
+[Purkinje / scotopic shift](#purkinje--scotopic-shift) · [Diffraction glare](#diffraction-glare) ·
+[Local exposure](#local-exposure)
 
 Lighting and occlusion: [Specular occlusion](#specular-occlusion) · [IES profiles](#ies-profiles) ·
 [Contact shadows](#contact-shadows) ·
@@ -608,6 +609,50 @@ is conserved to 1.007 (`glare-conserves`). A frame with nothing past the thresho
   average misses a lone glint, and put back 58% of what the tonemap removed.
 - **Clearwater's eightfold far-field lift is not carried.** It imitates a phone lens rather than
   an aperture, and over a glittering sea it summed into a veil and long streaks.
+
+## Local exposure
+
+`local_exposure.c` plus seven `le_*_frag` passes, sliced in the tonemap by
+`include/local_exposure.glsl` (spec 13.19). The sources are Durand & Dorsey 2002, Chen, Paris &
+Durand 2007 and Unreal 5's Local Exposure; `docs/papers/README.md` says what each gave.
+**Off by default**; a `.cscn` turns it on with `post.local_exposure`, an app with
+`postfx->local_exposure_enabled`.
+
+**How it works.** The frame's luminance, in EXPOSED log2, is split into a base and a detail.
+- **The base:** a bilateral grid sliced at each pixel's own luminance, mixed with a heavily
+  blurred luminance by `blend`.
+- **Contrast:** the base's distance from middle grey (`exposure.key`) is scaled by `highlights`
+  above grey and `shadows` below it; the detail by `detail`.
+- **The factor** is what turns the pixel's luminance into that, applied to its RGB before the
+  curve. Every scale at 1 is the identity.
+
+**The grid**, Unreal's geometry:
+- **Cells** of 64x64 half-res texels; **32 bins** over 30 stops, centred on the key.
+- **Built by gather, in two passes.** GL 4.1 has no atomics to splat with, so a fragment owns one
+  (8x8 sub-block, bin) pair and keeps the tent share of each texel near its bin; a sub-block's 32
+  bins are neighbouring fragments, which fetch the same texels together. A second pass sums a
+  cell's 64 sub-blocks.
+- **Blurred** by Chen's separable 5-tap Gaussian in x, y and the bins.
+- **Stored** as homogeneous (sum, weight) tiles of one RG32F atlas, with the blurred luminance in
+  its own region of the same atlas, so the tonemap reads it through one sampler.
+
+**What a plausible frame hid while it was built:**
+- **The window looked like it would need 10 stops of compression.** `--le-probe` measured 5.8:
+  silent's kitchen is an ordinary overcast interior. The strength it needs comes from the day key
+  of 0.45, which leaves about one stop above grey before white.
+- **Unreal's default blend of 0.6 is the weaker choice in a lit room.** The blurred luminance
+  averages the dark walls into the window's base. On `abandoned_window`, blend 0 recovered most.
+- **A plain blur is what the grid is FOR.** On the gate's window-in-a-wall, blend 1 darkens the
+  wall beside the window to 0.37 of itself, and the grid leaves it at 1.000. `le-halo` carries
+  both halves.
+- **The off path is a uniform gate, and the goldens did not move.** Every one stayed 0 px, with no
+  codegen drift from the new branch.
+- **The first gather cost 18.8 ms, and the fetch count was not why.** One fragment per (cell, bin)
+  walked all 4096 of a cell's texels: a few thousand long serial loops at silent's 3200x1800,
+  against a 1.4 ms tonemap. The blurred luminance's 256-tap blocks cost 0.7 ms at 4K the same way.
+  Both are now two passes of short loops over many fragments, as the meter's histogram is: 0.8-0.9
+  ms in silent's kitchen, 1.2 ms on `abandoned_window` at 4K. The grid's first pass is most of
+  what is left.
 
 ## Atmosphere
 
