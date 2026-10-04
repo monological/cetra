@@ -18040,6 +18040,9 @@ def run_probe_set_gate(workdir):
                          moves probe B's capture into room A and nothing else, so the
                          ratio isolates selection; the lit room is the in-frame control
       probe-set-fallback every fragment outside every box IS the no-probe frame
+      probe-set-coverage the probe-coverage view (render mode 14) inside a box IS the albedo
+                         view, pixel for pixel, and with the boxes moved out of frame the same
+                         floor is pure magenta: it shows exactly where reflection falls to the sky
       probe-set-converge captures stop at the probe count and the mask digest repeats
       probe-set-tenancy  the probe atlas and the GI volume share one texture: both
                          effects survive being switched on together
@@ -18151,6 +18154,39 @@ def run_probe_set_gate(workdir):
               f">={PROBE_FALLBACK_REMOVED_MIN}")
         if not ok:
             failures.append("probe-set-fallback")
+
+    # -- coverage: the probe-coverage view, against the albedo view ------------
+    # The same floor patches in both rooms, each inside its own room's box: through the coverage
+    # view they are the albedo view to the pixel, and with the boxes moved out of frame they are
+    # pure magenta. The albedo patch must not be magenta itself, or the first half is vacuous.
+    covered, w, h, out_cov = _probe_run(workdir, "coverage", None, ["--render-mode", "14"])
+    albedo, _, _, out_alb = _probe_run(workdir, "coverage_albedo", None, ["--render-mode", "6"])
+    bare_cov, _, _, out_bare_cov = _probe_run(workdir, "coverage_off", _probe_boxes_offstage,
+                                              ["--render-mode", "14"])
+    if covered is None or albedo is None or bare_cov is None:
+        err = out_cov if covered is None else (out_alb if albedo is None else out_bare_cov)
+        print(f"  probe-set-coverage ERROR  {err[-300:]}")
+        failures.append("probe-set-coverage")
+    else:
+        project_cov = _projector(cam, w, h)
+        idx = []
+        for x in (PROBE_LIT_X, PROBE_DARK_X):
+            px, py = project_cov((x, 0.0, PROBE_FLOOR_Z))
+            px, py = int(round(px)), int(round(py))
+            idx += [3 * ((py + dy) * w + px + dx)
+                    for dy in range(-PROBE_PATCH, PROBE_PATCH + 1)
+                    for dx in range(-PROBE_PATCH, PROBE_PATCH + 1)]
+        magenta = bytes((255, 0, 255))
+        unlike = sum(1 for i in idx if covered[i:i + 3] != albedo[i:i + 3])
+        not_magenta = sum(1 for i in idx if bare_cov[i:i + 3] != magenta)
+        albedo_magenta = sum(1 for i in idx if albedo[i:i + 3] == magenta)
+        ok = unlike == 0 and not_magenta == 0 and albedo_magenta == 0
+        print(f"  probe-set-coverage {'PASS' if ok else 'FAIL'}  inside the boxes {unlike} of "
+              f"{len(idx)} floor pixels differ from the albedo view, want 0 ({albedo_magenta} of "
+              f"those are magenta themselves, want 0); with the boxes moved out of frame "
+              f"{not_magenta} are not pure magenta, want 0")
+        if not ok:
+            failures.append("probe-set-coverage")
 
     # -- converge: the sweep runs once and then costs nothing ------------------
     pix_c, _, _, out_c = _probe_run(workdir, "converge", None,
