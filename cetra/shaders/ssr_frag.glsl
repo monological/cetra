@@ -28,9 +28,9 @@ uniform float floorRoughness; // Roughness of the reflective floor
 // the floor's roughness rather than reading a stale one.
 uniform sampler2D auxTex;
 uniform int auxAvailable;
-// 1 = the fold REPLACES wet ground's share of the environment's reflection (ssr_fold_wet_frag),
-// so a wet pair carries its Fresnel on the colour and its coverage bare. 0 = every pair is
-// the lerp's, Fresnel in the weight.
+// 1 = wet ground's pairs REPLACE its share of the environment's reflection, so a wet pair
+// carries its Fresnel on the colour and its coverage bare. 0 = every pair is the lerp's,
+// Fresnel in the weight.
 uniform int wetReplace;
 // The global height fog, which a replacing wet pair's hit is seen through (spec 13.9).
 // ssrFogDensity 0 = none.

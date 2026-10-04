@@ -53,7 +53,9 @@ vec4 splitOcclusionAt(vec2 uv)
 
 // `spec`, the ambient specular going back at `uv`, with the share a wet surface's reflection
 // stands in for replaced by it. Off the edge of the frame before, or on anything not wet, the
-// specular goes back as it is: what --no-ssr would show for that pixel.
+// specular goes back as it is: what --no-ssr would show for that pixel. The read is bilinear and
+// blind to class, so where wet ground meets the catcher it can take a catcher's pair, whose alpha
+// is a Fresnel rather than a coverage; the late fold separates the classes and this does not.
 vec3 wetReflection(vec2 uv, vec3 spec)
 {
     ivec2 px = ivec2(gl_FragCoord.xy);

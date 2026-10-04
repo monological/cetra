@@ -1069,11 +1069,13 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     uniform_set_int(fx->upsample_tent_program->uniforms, "srcTex", 0);
 
     if (fx->spec_occ_composite_program) {
-        static const char* const names[6] = {"specTex", "aoTex",      "normalsTex",
-                                             "auxTex",  "specOccTex", "ssrPrevTex"};
         glUseProgram(fx->spec_occ_composite_program->id);
-        for (int i = 0; i < 6; i++)
-            uniform_set_int(fx->spec_occ_composite_program->uniforms, names[i], i);
+        uniform_set_int(fx->spec_occ_composite_program->uniforms, "specTex", 0);
+        uniform_set_int(fx->spec_occ_composite_program->uniforms, "aoTex", 1);
+        uniform_set_int(fx->spec_occ_composite_program->uniforms, "normalsTex", 2);
+        uniform_set_int(fx->spec_occ_composite_program->uniforms, "auxTex", 3);
+        uniform_set_int(fx->spec_occ_composite_program->uniforms, "specOccTex", 4);
+        uniform_set_int(fx->spec_occ_composite_program->uniforms, "ssrPrevTex", 5);
     }
     if (fx->ssr_fold_wet_program) {
         glUseProgram(fx->ssr_fold_wet_program->id);
@@ -1409,14 +1411,22 @@ static void postfx_run_motion_blur(PostFX* fx, GLuint canvas_fbo, GLuint canvas_
     check_gl_error("postfx motion blur");
 }
 
-// What the split composite reads beside the ambient specular this frame, settled in postfx_run
-// beside split_live.
-typedef struct SplitComposite {
+// What a history of RADIANCE written at pre-exposure `written` is multiplied by to be read at
+// this frame's (spec 13.20). The buffer is pre-exposed, so a history carries the exposure of the
+// frame that wrote it; unscaled, an exposure change reaches the history only as fast as its blend
+// decays, and the froxel volume's 0.9 took tens of frames to forget a step, longest where the fog
+// is deepest. 1 for a history never written, and under the diagnostic switch.
+static float _history_scale(const PostFX* fx, float written) {
+    if (!fx->rescale_histories || !(written > 0.0f))
+        return 1.0f;
+    return fx->pre_exposure / written;
+}
+
+// What the split composite occludes the ambient specular by this frame.
+typedef struct SplitOcclusion {
     GLuint ao, spec_occ, normals, aux; // 0 where the frame had none
-    bool ao_active;                    // the AO chain, normals and aux all ran
-    GLuint ssr_prev;                   // last frame's SSR result for wet ground, 0 = none
-    float ssr_prev_scale;              // its radiance to this frame's pre-exposure
-} SplitComposite;
+    bool active;                       // the AO chain, normals and aux all ran
+} SplitOcclusion;
 
 // Split spec-occ composite: fold the ambient specular the scene pass routed
 // to its own buffer back over the scene, in one blended pass -- the shader
@@ -1426,27 +1436,42 @@ typedef struct SplitComposite {
 // Runs before TAA so the reunited frame is stabilized as one image, and
 // before the SSR march / fog / bloom so every later pass sees the corrected
 // color. Wet ground's reflection lands here too, for the same reason.
-static void postfx_run_spec_occ_composite(PostFX* fx, const SplitComposite* split) {
+static void postfx_run_spec_occ_composite(PostFX* fx, const SplitOcclusion* split,
+                                          bool wet_replace) {
+    // Wet ground takes the frame before's trace, read at the surface's previous pixel: the
+    // marker needs the normals and the velocity the aux, and only the frame immediately before is
+    // one velocity away.
+    const GLuint ssr_prev =
+        wet_replace && split->normals && split->aux && fx->ssr_prev.frame == fx->frame_index - 1
+            ? fx->ssr_prev.tex
+            : 0;
     glBindFramebuffer(GL_FRAMEBUFFER, fx->hdr_fbo);
     glViewport(0, 0, fx->width, fx->height);
     ShaderProgram* prog = fx->spec_occ_composite_program;
     glUseProgram(prog->id);
-    const GLuint textures[6] = {fx->spec_texture, split->ao,       split->normals,
-                                split->aux,       split->spec_occ, split->ssr_prev};
-    for (int i = 0; i < 6; i++) {
-        glActiveTexture(GL_TEXTURE0 + i);
-        glBindTexture(GL_TEXTURE_2D, textures[i]);
-    }
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, fx->spec_texture);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, split->ao);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, split->normals);
+    glActiveTexture(GL_TEXTURE3);
+    glBindTexture(GL_TEXTURE_2D, split->aux);
+    glActiveTexture(GL_TEXTURE4);
+    glBindTexture(GL_TEXTURE_2D, split->spec_occ);
+    glActiveTexture(GL_TEXTURE5);
+    glBindTexture(GL_TEXTURE_2D, ssr_prev);
     // Per draw rather than seeded, the rule the texelSize uniforms follow: the
     // composite and the tonemap read the same buffer at different resolutions,
     // so a seeded value would be right for one of them and a silent fallback
     // for the other.
     const float ao_res[2] = {(float)fx->half_width, (float)fx->half_height};
     uniform_set_vec2(prog->uniforms, "aoRes", ao_res);
-    uniform_set_int(prog->uniforms, "aoActive", split->ao_active ? 1 : 0);
+    uniform_set_int(prog->uniforms, "aoActive", split->active ? 1 : 0);
     uniform_set_float(prog->uniforms, "aoStrength", fx->ssao_strength);
-    uniform_set_int(prog->uniforms, "ssrPrevActive", split->ssr_prev ? 1 : 0);
-    uniform_set_float(prog->uniforms, "ssrPrevScale", split->ssr_prev_scale);
+    uniform_set_int(prog->uniforms, "ssrPrevActive", ssr_prev ? 1 : 0);
+    uniform_set_float(prog->uniforms, "ssrPrevScale",
+                      _history_scale(fx, fx->ssr_prev.pre_exposure));
     glEnable(GL_BLEND);
     glBlendFunc(GL_ONE, GL_SRC_ALPHA);
     draw_fullscreen_quad(fx->quad_vao);
@@ -1932,11 +1957,15 @@ static float postfx_read_luminance(PostFX* fx) {
 // -0.0005 and under -0.005, and the most negative value. The tonemap's sceneLight clamps it away,
 // so an 8-bit capture cannot see it; this reads the float frame back, a blocking read, which is
 // why it is a diagnostic.
-static void postfx_negative_probe(GLuint scene_tex, int w, int h, int frame) {
+static void postfx_negative_probe(GLuint scene_tex, int frame) {
+    // The size is asked of the texture, since the read writes the whole level whatever is passed.
+    GLint w = 0, h = 0;
+    glBindTexture(GL_TEXTURE_2D, scene_tex);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &w);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &h);
     float* px = malloc(sizeof(float) * 4 * (size_t)w * (size_t)h);
     if (!px)
         return;
-    glBindTexture(GL_TEXTURE_2D, scene_tex);
     glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_FLOAT, px);
     long faint = 0, strong = 0;
     float most = 0.0f;
@@ -2432,17 +2461,6 @@ static void resolve_color_attachment(GLuint msaa_fbo, GLenum attachment, GLuint 
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, dst_fbo);
     glBlitFramebuffer(0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
     glReadBuffer(GL_COLOR_ATTACHMENT0);
-}
-
-// What a history of RADIANCE written at pre-exposure `written` is multiplied by to be read at
-// this frame's (spec 13.20). The buffer is pre-exposed, so a history carries the exposure of the
-// frame that wrote it; unscaled, an exposure change reaches the history only as fast as its blend
-// decays, and the froxel volume's 0.9 took tens of frames to forget a step, longest where the fog
-// is deepest. 1 for a history never written, and under the diagnostic switch.
-static float _history_scale(const PostFX* fx, float written) {
-    if (!fx->rescale_histories || !(written > 0.0f))
-        return 1.0f;
-    return fx->pre_exposure / written;
 }
 
 // Reproject-and-blend temporal accumulation, shared by eight consumers across
@@ -2988,12 +3006,8 @@ static bool postfx_run_atmosphere(PostFX* fx, GLuint canvas_fbo, bool aux_writte
 // extracted-stage shape as postfx_run_atmosphere; inv_projection is passed in
 // (shared with DoF).
 static void postfx_run_ssr(PostFX* fx, GLuint canvas_fbo, GLuint canvas_tex, bool have_normals,
-                           bool aux_written, bool split_live, bool taa_resolving, mat4 projection,
+                           bool aux_written, bool wet_replace, bool taa_resolving, mat4 projection,
                            mat4 inv_projection, mat4 view) {
-    // Wet ground has its share of the environment's reflection REPLACED rather than being
-    // lerped toward the trace, which needs that share on its own -- the split composite's
-    // buffer -- and the program that folds the rest. Without either it lerps, as the catcher does.
-    const bool wet_replace = fx->rain_wet && split_live && fx->ssr_fold_wet_program != NULL;
     // SSR traces at full res (sharp) or half res, per ssr_full_res; the
     // buffer + Hi-Z pyramid were sized to match in create_ssr_buffers.
     int ssr_w = fx->ssr_full_res ? fx->width : fx->half_width;
@@ -3166,11 +3180,9 @@ static void postfx_run_ssr(PostFX* fx, GLuint canvas_fbo, GLuint canvas_tex, boo
         check_gl_error("postfx ssr denoise");
     }
 
-    // Wet ground's share is not folded here but in the NEXT frame's split composite, before its
-    // TAA (spec 13.21): the reflection replaces part of the ambient specular, and subtracted
-    // here, after TAA, it came out of a frame TAA had resolved and upscaled while what it took
-    // was this frame's render-res value, so a ripple or a wet edge went below zero. The handle
-    // rather than a parity, since frame_index advances on frames that draw nothing.
+    // What the next frame's split composite folds into wet ground. A handle, because which of the
+    // raw trace, the accumulator's side and the denoised buffer holds it depends on this frame's
+    // switches.
     fx->ssr_prev.tex = wet_replace ? ssr_result : 0;
     fx->ssr_prev.frame = fx->frame_index;
     fx->ssr_prev.pre_exposure = fx->pre_exposure;
@@ -3385,6 +3397,12 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
                 fx->spec_occlusion_mode = POSTFX_SPEC_OCC_LEGACY;
             }
         }
+        // Wet ground has its share of the environment's reflection REPLACED rather than being
+        // lerped toward the trace, which needs that share on its own -- the split composite's
+        // buffer -- and the program that folds the rest. Without either it lerps, as the catcher
+        // does. One decision for the trace's encoding, the late fold and the composite, which
+        // would otherwise fold a reflection twice or not at all.
+        const bool wet_replace = fx->rain_wet && split_live && fx->ssr_fold_wet_program != NULL;
 
         // Resolve the scene pass's second attachment (normal .xyz + SSR marker .a)
         // ahead of its consumers (SSAO now, SSR later). The caller reports
@@ -3653,28 +3671,19 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         if (!spec_occ_accum_ran)
             fx->spec_occ_history.valid = false;
 
-        // Wet ground's reflection is the one the frame before traced, at the previous pixel by
-        // the surface's velocity -- which needs the normals for the marker and the aux for the
-        // velocity. Only the frame immediately before will do: an older one is not where its
-        // reflections were, and its texture may have been traced over since.
-        const bool ssr_prev_live = fx->rain_wet && fx->ssr_prev.tex != 0 &&
-                                   fx->ssr_prev.frame == fx->frame_index - 1 && have_normals &&
-                                   aux_written;
-        const SplitComposite split = {
-            .ao = fx->ssao_enabled ? ao_result_tex : 0,
-            .spec_occ = spec_occ_swept ? fx->spec_occ_texture : 0,
-            .normals = have_normals ? fx->normal_texture : 0,
-            .aux = aux_written ? fx->aux_texture : 0,
-            // The term needs the AO chain to have run, the normals for its guard, and the aux
-            // depth for both magnifications. Missing any of them, the specular goes back
-            // unoccluded rather than read an unbound unit.
-            .ao_active = fx->ssao_enabled && have_normals && aux_written,
-            .ssr_prev = ssr_prev_live ? fx->ssr_prev.tex : 0,
-            .ssr_prev_scale = _history_scale(fx, fx->ssr_prev.pre_exposure),
-        };
         if (split_live) {
+            const SplitOcclusion split = {
+                .ao = fx->ssao_enabled ? ao_result_tex : 0,
+                .spec_occ = spec_occ_swept ? fx->spec_occ_texture : 0,
+                .normals = have_normals ? fx->normal_texture : 0,
+                .aux = aux_written ? fx->aux_texture : 0,
+                // The term needs the AO chain to have run, the normals for its guard, and the aux
+                // depth for both magnifications. Missing any of them, the specular goes back
+                // unoccluded rather than read an unbound unit.
+                .active = fx->ssao_enabled && have_normals && aux_written,
+            };
             profiler_scope_begin(fx->profiler, "spec occ composite");
-            postfx_run_spec_occ_composite(fx, &split);
+            postfx_run_spec_occ_composite(fx, &split, wet_replace);
             profiler_scope_end(fx->profiler);
         }
 
@@ -3759,7 +3768,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
 
         if (ssr_active) {
             profiler_scope_begin(fx->profiler, "ssr");
-            postfx_run_ssr(fx, canvas_fbo, canvas_tex, have_normals, aux_written, split_live,
+            postfx_run_ssr(fx, canvas_fbo, canvas_tex, have_normals, aux_written, wet_replace,
                            taa_resolving, projection, inv_projection, view);
             profiler_scope_end(fx->profiler);
         }
@@ -3956,8 +3965,12 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
             if (!le_tex)
                 fx->local_exposure_failed = true;
         }
-        if (fx->negative_probe)
-            postfx_negative_probe(scene_tex, fx->post_width, fx->post_height, fx->frame_index);
+        if (fx->negative_probe) {
+            // Its own scope, as the exposure read has: the readback drains the pipeline.
+            profiler_scope_begin(fx->profiler, "negative probe (drains)");
+            postfx_negative_probe(scene_tex, fx->frame_index);
+            profiler_scope_end(fx->profiler);
+        }
 
         // Composite + tone map into the target framebuffer. The quad runs at
         // the display size while sampling the supersampled HDR texture, so each
