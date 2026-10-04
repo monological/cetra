@@ -28,6 +28,12 @@ reason is recorded beside the flag rather than in whichever spec introduced it.
 (TAAU; headless needs `--taa --headless-jitter`),
 `--render-scale-at <frame:scale[,...]>` (diagnostic: switch scale mid-run,
 exercising the runtime rebuild; same headless preconditions),
+`--exposure-at <frame:multiplier>` (spec 13.20 — diagnostic: write the exposure multiplier on a
+named frame; with `--no-auto-exposure` an exact one-frame step, where the meter moves 4% a frame.
+A physical camera ignores the multiplier. Read against a run at the new value from frame 0, it is
+what shows whether the temporal histories follow the exposure),
+`--no-history-rescale` (spec 13.20 — diagnostic: histories of light keep the exposure they were
+written at, so a change of exposure lags by the blend; the A/B for the rescale),
 `--shadows-off-at <frame>` (spec 11.56 — diagnostic: clear `shadow_system->enabled` mid-run, which
 is the ONE state `--no-shadows` cannot produce. That flag clears the switch before frame 0, so no
 punctual layer is ever assigned and every index the depth pass maintains is still at its initial
@@ -904,6 +910,9 @@ wind, each heard from where it is.
     meter decided.
   - The same knobs are sliders under G, in the Cetra window's Post section, and G frees the mouse
     while the GUI is open.
+- **Stepping outdoors settles at once** (spec 13.20): the fog and the temporal histories follow
+  the exposure as it adapts. `--no-history-rescale` gives back the old lag, the expanding sphere,
+  for comparison.
 
 **It rains, by default, at 6 mm/h** (spec 13.9), a moderate rain, and the world opens already
 soaked. `--rain <mm/h>` sets another rate and `--no-rain` gives the dry street back. What silent
