@@ -4,6 +4,7 @@
 #include <GL/glew.h>
 #include <cglm/cglm.h>
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "ibl.h"
 
@@ -56,6 +57,14 @@ typedef struct ReflectionProbe {
     bool enabled; // runtime consumption toggle
     bool debug_background;
 
+    // Streaming, in a set of two or more (spec 13.24). `kept` is the probe's atlas column as
+    // captured, RGBA half floats, so one that leaves residency and comes back is uploaded
+    // rather than captured; NULL until its first capture. `resident_slot` is the column that
+    // holds it, or is about to; `loaded` says its texels are there now.
+    uint16_t* kept;
+    int resident_slot;
+    bool upload_pending;
+    bool loaded;
 } ReflectionProbe;
 
 // A probe is consumable once its prefiltered chain exists and it is switched on.
@@ -71,11 +80,11 @@ void free_reflection_probe(ReflectionProbe* probe);
 // texture loader drained first. Requires precomputed IBL.
 int reflection_probe_capture(ReflectionProbe* probe, struct Engine* engine, struct Scene* scene);
 
-// Drop the raw scene capture, keeping the prefiltered chain. For a probe whose
-// radiance has been resampled into the atlas the capture is spent: it is ~50 MB
-// at PROBE_CUBEMAP_SIZE against the ~4 MB column that replaced it, and holding
-// one per probe would cost more than every probe's storage put together. The
-// single-probe path keeps it -- --probe-debug renders it.
+// Drop the raw scene capture AND the prefiltered chain. For a probe whose radiance has been
+// resampled into the atlas both are spent: the capture is ~50 MB at PROBE_CUBEMAP_SIZE and the
+// chain ~12.6 MB, against the ~4 MB column that replaced them, and nothing reads either again.
+// The single-probe path keeps both -- it samples the chain, and --probe-debug renders the
+// capture.
 void probe_release_capture_scratch(ReflectionProbe* probe);
 
 // Bind the prefiltered probe + uniforms for a PBR draw. The fragment stage

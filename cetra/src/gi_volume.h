@@ -3,6 +3,7 @@
 
 #include <GL/glew.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <cglm/cglm.h>
 
 #include "program.h"
@@ -59,6 +60,15 @@ struct Scene;
 struct LightingAtlas;
 
 typedef struct GIVolume {
+    // SETTINGS: plain stores.
+    //
+    // Each probe tests whether it sits inside geometry and switches itself off if so, at the
+    // price of a second, back-face capture per probe. What lets a grid be laid over a
+    // building's bounds with no corner tuned by hand to keep its probes out of the walls.
+    bool classify;
+
+    // ENGINE-OWNED: read, never write.
+    //
     // Grid. Probe (x,y,z) sits at grid_min + (i + 0.5) * spacing, so probes are
     // cell CENTRES -- a probe exactly on the scene AABB face would be inside the
     // wall it is meant to sample away from.
@@ -78,18 +88,30 @@ typedef struct GIVolume {
     bool targets_ready;
 
     // Per-probe capture scratch, reused for every probe.
-    GLuint capture_color; // cubemap, GI_CAPTURE_FACE^2, RGB16F
-    GLuint capture_depth; // cubemap, GI_CAPTURE_FACE^2, DEPTH_COMPONENT24
+    GLuint capture_color;  // cubemap, GI_CAPTURE_FACE^2, RGB16F
+    GLuint capture_depth;  // cubemap, GI_CAPTURE_FACE^2, DEPTH_COMPONENT24
+    GLuint classify_depth; // the same, drawn with back faces only; 0 unless classify
     GLuint quad_vao, quad_vbo;
 
     ShaderProgram* project_program;
 
     // Convergence. `dirty_count` probes remain to capture, taken from
-    // `next_probe` round-robin. The opening sweep runs in one frame (see
-    // gi_volume_update); after it the world's `rate` paces re-convergence.
+    // `next_probe` round-robin. An opening sweep at load runs in one frame, one
+    // started later at the world's `stream_rate` (`streamed`); after it the
+    // world's `rate` paces re-convergence.
     int next_probe;
     int dirty_count;
     bool first_pass;
+    bool streamed;
+
+    // Streaming (spec 13.24). `kept` is the slot's texels as of the last convergence, RGBA half
+    // floats, so a volume that leaves residency and comes back is uploaded rather than
+    // captured; NULL until it first converges, and dropped when its light changes.
+    // `resident_slot` is the slot holding its texels, or about to; `upload_pending` says those
+    // texels are still on the CPU.
+    uint16_t* kept;
+    int resident_slot;
+    bool upload_pending;
 
     // Every probe capture this volume has ever run. The converge-then-idle
     // claim is only worth making if it is checkable, and this is the check: it
@@ -106,6 +128,7 @@ typedef struct GIWorld {
     // SETTINGS: plain stores.
     bool enabled;     // false = no volume is captured or sampled
     int rate;         // probes per frame while a swept volume re-converges; 0 = all at once
+    int stream_rate;  // probes per frame in an opening sweep begun after load; 0 = all at once
     bool debug_atlas; // draw the lighting atlas over the composited frame
 
     // ENGINE-OWNED: read, never write.
@@ -113,11 +136,17 @@ typedef struct GIWorld {
     int count;
     int capacity;
     int* slot_of;                // each volume's atlas slot, or -1 while not resident
+    int* home;                   // the slot each volume last held, or -1
     int holder[GI_RESIDENT_MAX]; // each slot's volume, or -1
     float* distance;             // each volume's distance from the camera, this frame's ranking
+    // Some volume has swept. Before it, every opening sweep is the load's and runs in one frame.
+    bool opened;
 } GIWorld;
 
 GIVolume* create_gi_volume(int nx, int ny, int nz);
+// A grid laid over a box at a cell size: as many probes per axis as the box holds cells, the
+// grid centred on the box, and `classify` on, since nothing kept its probes out of the walls.
+GIVolume* create_gi_volume_spaced(const vec3 box_min, const vec3 box_max, float spacing);
 void free_gi_volume(GIVolume* gi);
 
 // The atlas region this volume needs, in texels. The scene's lighting atlas sizes its GI slots
@@ -176,5 +205,9 @@ void gi_world_mark_dirty(GIWorld* world);
 // every probe -- six scene renders each -- to reproduce what is already stored,
 // and would do it at the un-shifted positions unless this ran first anyway.
 void gi_world_shift_origin(GIWorld* world, const vec3 delta);
+
+// One line naming each slot's volume, then one per volume: its slot, its distance, its
+// captures, what it is doing and whether its tiles are kept (--stream-probe).
+void gi_world_probe_print(const GIWorld* world, int frame);
 
 #endif // _GI_VOLUME_H_

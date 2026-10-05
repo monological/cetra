@@ -60,9 +60,33 @@ GIVolume* create_gi_volume(int nx, int ny, int nz) {
     gi->counts[2] = nz;
     gi->irradiance_rows = ny * nz * IRR_PITCH;
     gi->first_pass = true;
+    gi->resident_slot = -1;
     gi->far_clip = 1.0f;
     glm_vec3_one(gi->spacing);
 
+    return gi;
+}
+
+GIVolume* create_gi_volume_spaced(const vec3 box_min, const vec3 box_max, float spacing) {
+    if (spacing <= 0.0f)
+        return NULL;
+    int counts[3];
+    vec3 lo, hi;
+    for (int c = 0; c < 3; ++c) {
+        const float extent = box_max[c] - box_min[c];
+        counts[c] = (int)ceilf(extent / spacing - 1e-4f);
+        if (counts[c] < 1)
+            counts[c] = 1;
+        // Centred, so the overhang a whole number of cells leaves is shared by both faces.
+        const float centre = 0.5f * (box_min[c] + box_max[c]);
+        lo[c] = centre - 0.5f * spacing * (float)counts[c];
+        hi[c] = centre + 0.5f * spacing * (float)counts[c];
+    }
+    GIVolume* gi = create_gi_volume(counts[0], counts[1], counts[2]);
+    if (!gi)
+        return NULL;
+    gi->classify = true;
+    gi_volume_fit(gi, lo, hi);
     return gi;
 }
 
@@ -73,10 +97,13 @@ void free_gi_volume(GIVolume* gi) {
         glDeleteTextures(1, &gi->capture_color);
     if (gi->capture_depth)
         glDeleteTextures(1, &gi->capture_depth);
+    if (gi->classify_depth)
+        glDeleteTextures(1, &gi->classify_depth);
     if (gi->quad_vao)
         glDeleteVertexArrays(1, &gi->quad_vao);
     if (gi->quad_vbo)
         glDeleteBuffers(1, &gi->quad_vbo);
+    free(gi->kept);
     free(gi);
 }
 
@@ -109,7 +136,7 @@ bool gi_volume_active(const GIVolume* gi) {
     // Not merely allocated: a volume mid-first-sweep holds tiles that were never
     // written, and sampling those would show as black blotches that resolve over
     // the next few frames. Withhold it until the opening sweep completes.
-    return gi && !gi->failed && gi->targets_ready && !gi->first_pass;
+    return gi && !gi->failed && gi->targets_ready && !gi->first_pass && !gi->upload_pending;
 }
 
 bool gi_volume_pending(const GIVolume* gi) {
@@ -163,7 +190,10 @@ static bool gi_ensure_targets(GIVolume* gi, struct Engine* engine) {
     gi->capture_color = gi_make_cubemap(GI_CAPTURE_FACE, GL_RGB16F, GL_RGB, GL_FLOAT);
     gi->capture_depth =
         gi_make_cubemap(GI_CAPTURE_FACE, GL_DEPTH_COMPONENT24, GL_DEPTH_COMPONENT, GL_FLOAT);
-    if (!gi->capture_color || !gi->capture_depth) {
+    if (gi->classify)
+        gi->classify_depth =
+            gi_make_cubemap(GI_CAPTURE_FACE, GL_DEPTH_COMPONENT24, GL_DEPTH_COMPONENT, GL_FLOAT);
+    if (!gi->capture_color || !gi->capture_depth || (gi->classify && !gi->classify_depth)) {
         log_error("GI volume capture targets incomplete; disabling this volume");
         gi->failed = true;
         return false;
@@ -200,9 +230,14 @@ static void gi_probe_position(const GIVolume* gi, int index, vec3 out) {
 // as a distance, so the near plane's only job is to not clip the room it is in.
 #define GI_NEAR_CLIP 0.05f
 
-// Project the capture into one tile of the volume's slot, gutter included.
+// What a projection writes: gi_project_frag's three modes.
+enum { GI_PROJECT_IRRADIANCE = 0, GI_PROJECT_VISIBILITY = 1, GI_PROJECT_CLASSIFY = 2 };
+
+// Project the capture into one tile of the volume's slot, gutter included. Classification
+// writes the irradiance tile's alpha and nothing else.
 static void gi_project_tile(GIVolume* gi, const LightingAtlas* atlas, const int region[2],
-                            int probe, bool visibility, float hysteresis) {
+                            int probe, int mode, float hysteresis) {
+    const bool visibility = mode == GI_PROJECT_VISIBILITY;
     const int res = visibility ? GI_VISIBILITY_RES : GI_IRRADIANCE_RES;
     int ox, oy;
     gi_tile_origin(gi, probe, visibility, &ox, &oy);
@@ -231,31 +266,40 @@ static void gi_project_tile(GIVolume* gi, const LightingAtlas* atlas, const int 
     glBindTexture(GL_TEXTURE_CUBE_MAP, gi->capture_color);
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_CUBE_MAP, gi->capture_depth);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_CUBE_MAP, gi->classify_depth);
     glActiveTexture(GL_TEXTURE0);
     uniform_set_int(u, "captureColor", 0);
     uniform_set_int(u, "captureDepth", 1);
+    uniform_set_int(u, "backDepth", 2);
     uniform_set_vec2(u, "tileOrigin", (const float[]){(float)ox, (float)oy});
     uniform_set_float(u, "tileRes", (float)res);
     uniform_set_float(u, "nearZ", GI_NEAR_CLIP);
     uniform_set_float(u, "farZ", gi->far_clip);
-    uniform_set_int(u, "mode", visibility ? 1 : 0);
+    uniform_set_int(u, "mode", mode);
+    if (mode == GI_PROJECT_CLASSIFY)
+        glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_TRUE);
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4); // VAO bound once by the caller
+    if (mode == GI_PROJECT_CLASSIFY)
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 }
 
-// Capture up to `rate` probes of a resident volume into its slot.
-static void gi_volume_capture(GIVolume* gi, struct Engine* engine, struct Scene* scene,
-                              const LightingAtlas* atlas, const int region[2], int rate) {
+// Capture up to `rate` probes of a resident volume into its slot (`stream_rate` in an opening
+// sweep begun after load). True when this call finished converging it.
+static bool gi_volume_capture(GIVolume* gi, struct Engine* engine, struct Scene* scene,
+                              const LightingAtlas* atlas, const int region[2], int rate,
+                              int stream_rate) {
     if (gi->failed || gi->dirty_count <= 0)
-        return; // converged: the steady state, and it costs nothing
+        return false; // converged: the steady state, and it costs nothing
 
     // Capturing before the textures land would bake placeholder materials into
     // the atlas. probe.c blocks on the loader because it captures once at load;
     // here the dirty count is untouched, so skipping simply retries next frame.
     if (engine->async_loader && async_loader_is_busy(engine->async_loader))
-        return;
+        return false;
 
     if (!gi_ensure_targets(gi, engine))
-        return;
+        return false;
 
     // The opening sweep runs in one frame, ignoring `rate`, and takes each
     // capture outright rather than blending. Amortising it would buy nothing:
@@ -265,8 +309,16 @@ static void gi_volume_capture(GIVolume* gi, struct Engine* engine, struct Scene*
     // `rate` governs RE-convergence, where the previous tiles are still valid to
     // sample and the cost genuinely wants spreading. This mirrors the sky's LUTs
     // and the reflection probe: both bake once, at load, in full.
+    //
+    // A volume first swept LATER, as the camera comes within reach of it, is the exception
+    // (spec 13.24): it is someone else's building, its slot is withheld until it is done, and
+    // a frame spent sweeping all of it at once is a hitch in the middle of a walk.
     const int probes = gi_probe_count(gi);
-    int budget = (gi->first_pass || rate <= 0) ? probes : rate;
+    int budget = probes;
+    if (gi->first_pass && gi->streamed && stream_rate > 0)
+        budget = stream_rate;
+    else if (!gi->first_pass && rate > 0)
+        budget = rate;
     if (budget > gi->dirty_count)
         budget = gi->dirty_count;
 
@@ -302,17 +354,36 @@ static void gi_volume_capture(GIVolume* gi, struct Engine* engine, struct Scene*
         glDisable(GL_DEPTH_TEST);
         glDisable(GL_CULL_FACE);
         glBindVertexArray(gi->quad_vao);
-        gi_project_tile(gi, atlas, region, probe, false, hysteresis);
-        gi_project_tile(gi, atlas, region, probe, true, hysteresis);
+        gi_project_tile(gi, atlas, region, probe, GI_PROJECT_IRRADIANCE, hysteresis);
+        gi_project_tile(gi, atlas, region, probe, GI_PROJECT_VISIBILITY, hysteresis);
         glBindVertexArray(0);
         glEnable(GL_DEPTH_TEST);
         if (cull_was)
             glEnable(GL_CULL_FACE);
+
+        // The same probe again with only back faces drawn, against the front faces' depth
+        // still held in capture_depth.
+        if (gi->classify) {
+            engine->capturing_back_faces = true;
+            scene_capture_faces(engine, scene, scene->ibl, pos, gi->capture_color,
+                                gi->classify_depth, GI_CAPTURE_FACE, GI_NEAR_CLIP, gi->far_clip);
+            engine->capturing_back_faces = false;
+            glDisable(GL_DEPTH_TEST);
+            glDisable(GL_CULL_FACE);
+            glBindVertexArray(gi->quad_vao);
+            gi_project_tile(gi, atlas, region, probe, GI_PROJECT_CLASSIFY, hysteresis);
+            glBindVertexArray(0);
+            glEnable(GL_DEPTH_TEST);
+            if (cull_was)
+                glEnable(GL_CULL_FACE);
+        }
     }
 
     gi->captures_total += budget;
-    if (gi->dirty_count <= 0) {
+    const bool converged = gi->dirty_count <= 0;
+    if (converged) {
         gi->first_pass = false;
+        gi->streamed = false;
         log_info("GI volume converged: %d captures total", gi->captures_total);
     }
 
@@ -328,6 +399,31 @@ static void gi_volume_capture(GIVolume* gi, struct Engine* engine, struct Scene*
     glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)saved_fbo);
     glViewport(saved_viewport[0], saved_viewport[1], saved_viewport[2], saved_viewport[3]);
     check_gl_error("gi volume update");
+    return converged;
+}
+
+// Copy the slot's texels to the CPU, so leaving residency costs nothing to come back from.
+// Once per convergence: a converged volume is never captured again until its light changes.
+static void gi_volume_keep(GIVolume* gi, const LightingAtlas* atlas, const int region[2]) {
+    int w = 0, h = 0;
+    gi_volume_atlas_extent(gi, &w, &h);
+    if (!gi->kept)
+        gi->kept = malloc(sizeof(uint16_t) * 4 * (size_t)w * (size_t)h);
+    if (!gi->kept) {
+        log_warn("GI volume: no memory to keep its tiles; it will sweep again if it leaves");
+        return;
+    }
+    lighting_atlas_read_rect(atlas, region[0], region[1], w, h, gi->kept);
+}
+
+// Put kept texels back into the slot the volume has been admitted to.
+static void gi_volume_restore(GIVolume* gi, const LightingAtlas* atlas, const int region[2]) {
+    int w = 0, h = 0;
+    gi_volume_atlas_extent(gi, &w, &h);
+    lighting_atlas_write_rect(atlas, region[0], region[1], w, h, gi->kept);
+    gi->upload_pending = false;
+    gi->first_pass = false;
+    gi->dirty_count = 0;
 }
 
 GIWorld* create_gi_world(void) {
@@ -338,6 +434,7 @@ GIWorld* create_gi_world(void) {
     }
     world->enabled = true;
     world->rate = 2;
+    world->stream_rate = 32;
     for (int s = 0; s < GI_RESIDENT_MAX; ++s)
         world->holder[s] = -1;
     return world;
@@ -350,6 +447,7 @@ void free_gi_world(GIWorld* world) {
         free_gi_volume(world->volumes[i]);
     free(world->volumes);
     free(world->slot_of);
+    free(world->home);
     free(world->distance);
     free(world);
 }
@@ -370,7 +468,10 @@ bool gi_world_add(GIWorld* world, GIVolume* gi) {
         float* distance = realloc(world->distance, sizeof(float) * (size_t)capacity);
         if (distance)
             world->distance = distance;
-        if (!volumes || !slot_of || !distance) {
+        int* home = realloc(world->home, sizeof(int) * (size_t)capacity);
+        if (home)
+            world->home = home;
+        if (!volumes || !slot_of || !distance || !home) {
             log_error("Failed to grow the GI world");
             free_gi_volume(gi);
             return false;
@@ -379,6 +480,8 @@ bool gi_world_add(GIWorld* world, GIVolume* gi) {
     }
     world->volumes[world->count] = gi;
     world->slot_of[world->count] = -1;
+    world->home[world->count] = -1;
+    world->distance[world->count] = 0.0f;
     world->count++;
     return true;
 }
@@ -402,21 +505,43 @@ void gi_world_rank(GIWorld* world, const struct Engine* engine) {
         world->distance[i] = stream_box_distance(eye, gi->grid_min, box_max);
     }
     stream_assign(world->distance, world->count, GI_RESIDENT_MAX, GI_STREAM_MARGIN, world->slot_of,
-                  world->holder);
+                  world->holder, world->home);
 
-    // A volume out of residency has no tiles anywhere: the slot it held is another's now. It
-    // sweeps again from the start when it is next admitted.
     for (int i = 0; i < world->count; ++i) {
         GIVolume* gi = world->volumes[i];
-        if (world->slot_of[i] < 0 && !gi->first_pass) {
-            gi->first_pass = true;
-            gi_volume_mark_dirty(gi);
+        const int s = world->slot_of[i];
+        if (s == gi->resident_slot)
+            continue;
+        gi->resident_slot = s;
+        gi->upload_pending = false;
+        if (gi->kept) {
+            // Evicted, its texels wait on the CPU; admitted, the update puts them back.
+            gi->upload_pending = s >= 0;
+            continue;
         }
+        // Evicted with nothing kept, or admitted with nothing to put back: the slot it held is
+        // another's, so it sweeps from the start when it next holds one. At load in one frame;
+        // after it at the stream rate, unless the camera is already inside, where it is the
+        // light on screen.
+        if (gi->failed)
+            continue;
+        gi->first_pass = true;
+        gi->streamed = world->opened && world->distance[i] > 0.0f;
+        gi_volume_mark_dirty(gi);
     }
 }
 
 void gi_world_update(GIWorld* world, struct Engine* engine, struct Scene* scene) {
-    if (!engine || !scene || !gi_world_dirty(world))
+    if (!world || !world->enabled || !engine || !scene)
+        return;
+    bool work = false;
+    for (int s = 0; s < GI_RESIDENT_MAX; ++s) {
+        const int v = world->holder[s];
+        if (v >= 0 && (world->volumes[v]->upload_pending ||
+                       (!world->volumes[v]->failed && world->volumes[v]->dirty_count > 0)))
+            work = true;
+    }
+    if (!work)
         return;
     const LightingAtlas* atlas = lighting_atlas_sync(scene, engine);
     if (!atlas)
@@ -425,9 +550,17 @@ void gi_world_update(GIWorld* world, struct Engine* engine, struct Scene* scene)
         const int v = world->holder[s];
         if (v < 0)
             continue;
+        GIVolume* gi = world->volumes[v];
         int region[2];
         lighting_atlas_gi_region(atlas, s, &region[0], &region[1]);
-        gi_volume_capture(world->volumes[v], engine, scene, atlas, region, world->rate);
+        if (gi->upload_pending) {
+            gi_volume_restore(gi, atlas, region);
+            continue;
+        }
+        if (gi_volume_capture(gi, engine, scene, atlas, region, world->rate, world->stream_rate)) {
+            gi_volume_keep(gi, atlas, region);
+            world->opened = true;
+        }
     }
 }
 
@@ -454,8 +587,19 @@ bool gi_world_dirty(const GIWorld* world) {
 void gi_world_mark_dirty(GIWorld* world) {
     if (!world)
         return;
-    for (int i = 0; i < world->count; ++i)
-        gi_volume_mark_dirty(world->volumes[i]);
+    // What every volume kept was lit by the light that just changed. A resident one
+    // re-converges over its old tiles at `rate`; one out of residency has none, and sweeps from
+    // the start when it is next admitted.
+    for (int i = 0; i < world->count; ++i) {
+        GIVolume* gi = world->volumes[i];
+        free(gi->kept);
+        gi->kept = NULL;
+        if (gi->resident_slot < 0 || gi->upload_pending) {
+            gi->upload_pending = false;
+            gi->first_pass = true;
+        }
+        gi_volume_mark_dirty(gi);
+    }
 }
 
 void gi_world_shift_origin(GIWorld* world, const vec3 delta) {
@@ -526,4 +670,25 @@ void gi_world_bind(const GIWorld* world, const LightingAtlas* atlas, ShaderProgr
     uniform_set_float(u, "giTileBorder", (float)GI_TILE_BORDER);
     uniform_set_vec2(u, "giTileRes",
                      (const float[]){(float)GI_IRRADIANCE_RES, (float)GI_VISIBILITY_RES});
+}
+
+void gi_world_probe_print(const GIWorld* world, int frame) {
+    if (!world)
+        return;
+    printf("stream gi frame=%d volumes=%d slots=", frame, world->count);
+    for (int s = 0; s < GI_RESIDENT_MAX; ++s)
+        printf(s ? ",%d" : "%d", world->holder[s]);
+    printf("\n");
+    for (int i = 0; i < world->count; ++i) {
+        const GIVolume* gi = world->volumes[i];
+        const char* state = gi->failed            ? "failed"
+                            : gi->upload_pending  ? "uploading"
+                            : gi->first_pass      ? (gi->dirty_count > 0 ? "sweeping" : "unswept")
+                            : gi->dirty_count > 0 ? "converging"
+                                                  : "swept";
+        printf("stream gi idx=%d slot=%d dist=%.2f captures=%d state=%s kept=%d\n", i,
+               world->slot_of[i], (double)world->distance[i], gi->captures_total, state,
+               gi->kept ? 1 : 0);
+    }
+    fflush(stdout);
 }

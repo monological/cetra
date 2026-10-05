@@ -786,6 +786,41 @@ static void parse_probes(CetraSceneDesc* d, const cJSON* root) {
 }
 
 /*
+ * giVolumes[] -- GI probe grids (spec 13.24). Closed key list, for parse_probes' reason.
+ */
+static void parse_gi_volumes(CetraSceneDesc* d, const cJSON* root) {
+    static const char* known[] = {"boxMin", "boxMax", "spacing", "classify"};
+
+    const cJSON* volumes = cJSON_GetObjectItemCaseSensitive(root, "giVolumes");
+    if (!cJSON_IsArray(volumes))
+        return;
+    const cJSON* v = NULL;
+    cJSON_ArrayForEach(v, volumes) {
+        if (d->gi_volume_count >= CSCENE_MAX_GI_VOLUMES) {
+            log_warn("cscene: more than %d GI volumes; extras ignored", CSCENE_MAX_GI_VOLUMES);
+            break;
+        }
+        if (!cJSON_IsObject(v)) {
+            log_warn("cscene: GI volume that is not an object; skipped");
+            continue;
+        }
+        warn_unknown_keys(v, known, sizeof(known) / sizeof(known[0]), "giVolume");
+
+        CSceneGIVolume* out = &d->gi_volumes[d->gi_volume_count];
+        memset(out, 0, sizeof(*out));
+        if (!get_floats(v, "boxMin", out->box_min, 3) ||
+            !get_floats(v, "boxMax", out->box_max, 3) || !get_float(v, "spacing", &out->spacing) ||
+            out->spacing <= 0.0f) {
+            log_warn("cscene: GI volume needs boxMin, boxMax and a positive spacing; skipped");
+            continue;
+        }
+        out->classify = true;
+        get_bool(v, "classify", &out->classify);
+        d->gi_volume_count++;
+    }
+}
+
+/*
  * occluders[] -- boxes the occlusion cull treats as solid (spec 11.98).
  *
  * Both keys REQUIRED, and the required-key rule bites harder here than on the
@@ -1806,6 +1841,7 @@ CetraSceneDesc* cscene_load(const char* path) {
     parse_fire(d, root);
     parse_fog_volumes(d, root);
     parse_probes(d, root);
+    parse_gi_volumes(d, root);
     parse_occluders(d, root);
     parse_decals(d, root);
     parse_materials(d, root);

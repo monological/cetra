@@ -561,17 +561,19 @@ static void _mark_probe_clusters(LightClusterContext* ctx, const struct Scene* s
     // masks below and nothing else about them.
     probe_set_fill_descriptors(set, &ctx->probes);
 
+    // Over the probes the descriptors PUBLISH -- the resident ones whose columns are in the
+    // atlas -- and indexed as they are, so bit i is descriptor i.
     int bits = 0;
-    for (int i = 0; i < set->count; ++i) {
-        const ReflectionProbe* probe = set->probes[i];
+    for (int i = 0; i < ctx->probes.info[0]; ++i) {
+        const GpuProbeDesc* desc = &ctx->probes.descs[i];
 
         // World box -> view-space bounding sphere, the shape the grid tests.
         vec3 center, half;
-        glm_vec3_add((float*)probe->box_min, (float*)probe->box_max, center);
+        glm_vec3_add((float*)desc->box_min_fade, (float*)desc->box_max_pad, center);
         glm_vec3_scale(center, 0.5f, center);
-        glm_vec3_sub((float*)probe->box_max, center, half);
+        glm_vec3_sub((float*)desc->box_max_pad, center, half);
         // The fade floored as probeFade floors it, so a fade of 0 is covered too.
-        const float radius = (1.0f + fmaxf(probe->box_fade, 1e-3f)) * glm_vec3_norm(half);
+        const float radius = (1.0f + fmaxf(desc->box_min_fade[3], 1e-3f)) * glm_vec3_norm(half);
 
         vec3 view_center;
         glm_mat4_mulv3(view, center, 1.0f, view_center);
@@ -588,7 +590,7 @@ static void _mark_probe_clusters(LightClusterContext* ctx, const struct Scene* s
                     if (!_sphere_touches_cluster(sphere, radius_sq, x, y, z, cf))
                         continue;
                     const int ci = x + LC_CLUSTER_X * (y + LC_CLUSTER_Y * z);
-                    ctx->probes.cluster_masks[ci >> 2] |= 1u << (((ci & 3) * 8) + i);
+                    ctx->probes.cluster_masks[ci >> 1] |= 1u << (((ci & 1) * 16) + i);
                     bits++;
                 }
             }

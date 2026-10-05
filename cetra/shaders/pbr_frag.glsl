@@ -2435,7 +2435,7 @@ void main() {
             vec3 dir = normalize(mix(R, corrected, inside));
             prefilteredColor = textureLod(prefilteredMap, dir, roughnessMap * probeMaxLOD).rgb
                                * probeIntensity;
-        } else if (probeInfo.x >= 2) {
+        } else if (probeInfo.x >= 1) {
             // A SET of probes, blended by how far inside each proxy box this
             // fragment sits. probeSetSpecular returns the probes' share and the
             // weight it covers; whatever weight is left over falls to the

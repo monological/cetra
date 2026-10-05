@@ -67,6 +67,9 @@ void apply_cscene_decals(Scene* scene, const CetraSceneDesc* cscn);
 // run after the model recenter, since the probes are placed in world space.
 bool apply_cscene_probes(Scene* scene, const CetraSceneDesc* cscn, int row0);
 
+// GI volumes (spec 13.24), one grid per authored box. False when the file authored none.
+bool apply_cscene_gi_volumes(Scene* scene, const CetraSceneDesc* cscn);
+
 // Build the scene's ambient dust particle system (if the .cscn declares a dust
 // block), sized to the scene bounds. Replaces the old hardcoded filename gate.
 void apply_cscene_dust(struct Engine* engine, Scene* scene, const CetraSceneDesc* cscn, vec3 center,

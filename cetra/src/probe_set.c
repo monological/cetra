@@ -7,13 +7,23 @@
 #include "engine.h"
 #include "gi_volume.h"
 #include "postfx.h"
+#include "stream.h"
 #include "util.h"
 #include "ext/log.h"
 
+// How much nearer a non-resident probe must be than a resident one to take its column, in
+// metres: a camera in a doorway between two rooms' probes would otherwise trade the last
+// column back and forth on every step, and each trade is an upload.
+#define PROBE_STREAM_MARGIN 1.0f
+
 ReflectionProbeSet* create_reflection_probe_set(void) {
     ReflectionProbeSet* set = calloc(1, sizeof(ReflectionProbeSet));
-    if (!set)
+    if (!set) {
         log_error("Failed to allocate reflection probe set");
+        return NULL;
+    }
+    for (int s = 0; s < PROBE_SET_MAX; ++s)
+        set->holder[s] = -1;
     return set;
 }
 
@@ -23,75 +33,226 @@ void free_reflection_probe_set(ReflectionProbeSet* set) {
 
     for (int i = 0; i < set->count; ++i)
         free_reflection_probe(set->probes[i]);
+    free(set->probes);
+    free(set->slot_of);
+    free(set->home);
+    free(set->distance);
     free(set);
 }
 
 bool probe_set_add(ReflectionProbeSet* set, ReflectionProbe* probe) {
-    if (!set || !probe)
-        return false;
-
-    if (set->count >= PROBE_SET_MAX) {
-        log_warn("Reflection probe set is full at %d; ignoring the rest", PROBE_SET_MAX);
+    if (!set || !probe) {
+        free_reflection_probe(probe);
         return false;
     }
-
-    set->probes[set->count++] = probe;
+    if (set->count == set->capacity) {
+        int capacity = set->capacity ? set->capacity * 2 : 8;
+        ReflectionProbe** probes =
+            realloc(set->probes, sizeof(ReflectionProbe*) * (size_t)capacity);
+        if (probes)
+            set->probes = probes;
+        int* slot_of = realloc(set->slot_of, sizeof(int) * (size_t)capacity);
+        if (slot_of)
+            set->slot_of = slot_of;
+        float* distance = realloc(set->distance, sizeof(float) * (size_t)capacity);
+        if (distance)
+            set->distance = distance;
+        int* home = realloc(set->home, sizeof(int) * (size_t)capacity);
+        if (home)
+            set->home = home;
+        if (!probes || !slot_of || !distance || !home) {
+            log_error("Failed to grow the reflection probe set");
+            free_reflection_probe(probe);
+            return false;
+        }
+        set->capacity = capacity;
+    }
+    set->probes[set->count] = probe;
+    set->slot_of[set->count] = -1;
+    set->home[set->count] = -1;
+    set->distance[set->count] = 0.0f;
+    set->count++;
     return true;
 }
 
 void probe_set_mark_dirty(ReflectionProbeSet* set) {
-    if (set) {
-        set->ready = false;
-        set->failed = false;
+    if (!set)
+        return;
+    set->ready = false;
+    set->failed = false;
+    for (int i = 0; i < set->count; ++i) {
+        ReflectionProbe* probe = set->probes[i];
+        free(probe->kept);
+        probe->kept = NULL;
+        probe->loaded = false;
+        probe->upload_pending = false;
     }
 }
 
-// Sequential and synchronous: the set is published only once all of them
-// succeed, so no probe is ever photographed into another's capture.
-static bool capture_all(ReflectionProbeSet* set, struct Engine* engine, struct Scene* scene) {
+// A world of one probe: captured once into its own cube, bound on the prefilter unit, no
+// atlas -- the path that predates sets, kept verbatim.
+static void update_single(ReflectionProbeSet* set, struct Engine* engine, struct Scene* scene) {
+    if (set->ready)
+        return;
+    set->captures_total++;
+    if (reflection_probe_capture(set->probes[0], engine, scene) != 0) {
+        log_error("Reflection probe 0 failed to capture");
+        set->failed = true;
+        return;
+    }
+    set->ready = true;
+    set->opened = true;
+}
+
+void probe_set_rank(ReflectionProbeSet* set, const struct Engine* engine) {
+    if (!set || set->failed || set->count < 2 || !engine)
+        return;
+    vec3 eye = {0.0f, 0.0f, 0.0f};
+    if (engine->camera)
+        glm_vec3_copy(engine->camera->position, eye);
     for (int i = 0; i < set->count; ++i) {
-        set->captures_total++;
-        if (reflection_probe_capture(set->probes[i], engine, scene) != 0) {
-            log_error("Reflection probe %d failed to capture; the set stays unpublished", i);
-            return false;
-        }
+        const ReflectionProbe* p = set->probes[i];
+        set->distance[i] = stream_box_distance(eye, p->box_min, p->box_max);
     }
+    stream_assign(set->distance, set->count, PROBE_SET_MAX, PROBE_STREAM_MARGIN, set->slot_of,
+                  set->holder, set->home);
 
-    // One probe consumes its own cubemap directly on the prefilter unit, so it
-    // needs no atlas and pays none of its memory.
-    if (set->count >= 2) {
-        set->atlas = lighting_atlas_sync(scene, engine);
-        if (!set->atlas)
-            return false;
-
-        for (int i = 0; i < set->count; ++i) {
-            if (!lighting_atlas_project_probe(set->atlas, set->probes[i], i))
-                return false;
-            // The scratch cubes are what make a set affordable: past this point
-            // the column holds everything a consumer reads, and a retained
-            // 1024 chain per probe would cost more than the whole atlas.
-            probe_release_capture_scratch(set->probes[i]);
-        }
+    for (int i = 0; i < set->count; ++i) {
+        ReflectionProbe* p = set->probes[i];
+        const int s = set->slot_of[i];
+        if (s == p->resident_slot)
+            continue;
+        p->resident_slot = s;
+        p->loaded = false;
+        p->upload_pending = s >= 0 && p->kept;
     }
+}
+
+// The resident probe still waiting for its first capture, nearest first, or -1.
+static int next_capture(const ReflectionProbeSet* set) {
+    int best = -1;
+    for (int s = 0; s < PROBE_SET_MAX; ++s) {
+        const int i = set->holder[s];
+        if (i < 0 || set->probes[i]->loaded || set->probes[i]->upload_pending)
+            continue;
+        if (best < 0 || set->distance[i] < set->distance[best])
+            best = i;
+    }
+    return best;
+}
+
+// Capture one probe into its column, keep the column, and drop the cubes it was made from.
+static bool capture_into_column(ReflectionProbeSet* set, int i, struct Engine* engine,
+                                struct Scene* scene) {
+    ReflectionProbe* probe = set->probes[i];
+    const int slot = set->slot_of[i];
+    set->captures_total++;
+    if (reflection_probe_capture(probe, engine, scene) != 0) {
+        log_error("Reflection probe %d failed to capture; the set stops capturing", i);
+        return false;
+    }
+    if (!lighting_atlas_project_probe(set->atlas, probe, slot))
+        return false;
+    // The cubes are what make a set affordable to keep: past this point the column holds
+    // everything a consumer reads.
+    probe_release_capture_scratch(probe);
+
+    int w = 0, h = 0;
+    float corner[2];
+    lighting_atlas_probe_extent(set->atlas, &w, &h);
+    lighting_atlas_probe_column(set->atlas, slot, corner);
+    if (!probe->kept)
+        probe->kept = malloc(sizeof(uint16_t) * 4 * (size_t)w * (size_t)h);
+    if (probe->kept)
+        lighting_atlas_read_rect(set->atlas, (int)corner[0], (int)corner[1], w, h, probe->kept);
+    else
+        log_warn("Reflection probe %d: no memory to keep its column; it captures again if it "
+                 "leaves",
+                 i);
+    probe->loaded = true;
     return true;
 }
 
+static void restore_column(ReflectionProbeSet* set, int i) {
+    ReflectionProbe* probe = set->probes[i];
+    int w = 0, h = 0;
+    float corner[2];
+    lighting_atlas_probe_extent(set->atlas, &w, &h);
+    lighting_atlas_probe_column(set->atlas, set->slot_of[i], corner);
+    lighting_atlas_write_rect(set->atlas, (int)corner[0], (int)corner[1], w, h, probe->kept);
+    probe->upload_pending = false;
+    probe->loaded = true;
+}
+
+static bool resident_waiting(const ReflectionProbeSet* set) {
+    for (int s = 0; s < PROBE_SET_MAX; ++s) {
+        const int i = set->holder[s];
+        if (i >= 0 && !set->probes[i]->loaded)
+            return true;
+    }
+    return false;
+}
+
+bool probe_set_capture_due(const ReflectionProbeSet* set, const struct Scene* scene) {
+    if (!set || set->failed || set->count <= 0 || !scene || gi_world_pending(scene->gi))
+        return false;
+    if (set->count == 1)
+        return !set->ready;
+    return next_capture(set) >= 0;
+}
+
 void probe_set_update(ReflectionProbeSet* set, struct Engine* engine, struct Scene* scene) {
-    if (!set || set->ready || set->failed || set->count <= 0 || !engine || !scene)
+    if (!set || set->failed || set->count <= 0 || !engine || !scene)
         return;
-    if (gi_world_pending(scene->gi))
+
+    // A capture lights what it sees with the volume only once the volume has an
+    // answer, and with the environment's ambient before it, so a probe captured
+    // alongside the volume photographs every closed room lit by the open sky --
+    // by day many times the volume's light, which every dark glossy surface then
+    // reflects as a grey wash.
+    const bool gi_waiting = gi_world_pending(scene->gi);
+
+    if (set->count == 1) {
+        if (!gi_waiting)
+            update_single(set, engine, scene);
         return;
-    if (capture_all(set, engine, scene))
+    }
+
+    if (!resident_waiting(set)) {
         set->ready = true;
-    else
+        return;
+    }
+
+    set->atlas = lighting_atlas_sync(scene, engine);
+    if (!set->atlas) {
         set->failed = true;
+        return;
+    }
+    for (int s = 0; s < PROBE_SET_MAX; ++s) {
+        const int i = set->holder[s];
+        if (i >= 0 && set->probes[i]->upload_pending)
+            restore_column(set, i);
+    }
+
+    // At load every resident probe captures in the one frame, so a set is whole from its
+    // first frame; a probe that comes into range later captures alone, a frame's worth of
+    // six scene renders and a prefilter.
+    if (!gi_waiting) {
+        const bool all = !set->opened;
+        for (int i = next_capture(set); i >= 0; i = all ? next_capture(set) : -1) {
+            if (!capture_into_column(set, i, engine, scene)) {
+                set->failed = true;
+                return;
+            }
+        }
+        set->opened = true;
+    }
+    set->ready = !resident_waiting(set);
 }
 
 void probe_set_fill_descriptors(const ReflectionProbeSet* set, GpuProbeBlock* out) {
     if (!set || !out)
         return;
-
-    out->info[0] = set->count;
 
     int aw = 0, ah = 0;
     lighting_atlas_size(set->atlas, &aw, &ah);
@@ -102,17 +263,34 @@ void probe_set_fill_descriptors(const ReflectionProbeSet* set, GpuProbeBlock* ou
 
     lighting_atlas_fill_column(set->atlas, out->atlas_column, out->rows);
 
-    for (int i = 0; i < set->count; ++i) {
-        const ReflectionProbe* probe = set->probes[i];
-        GpuProbeDesc* desc = &out->descs[i];
+    // In the order of the probes themselves rather than of their slots: the blend sums in
+    // descriptor order, and a probe readmitted to a different column must sum where it did.
+    int order[PROBE_SET_MAX];
+    int n = 0;
+    for (int s = 0; s < PROBE_SET_MAX; ++s) {
+        const int i = set->holder[s];
+        if (i < 0 || !set->probes[i]->loaded)
+            continue;
+        int at = n++;
+        while (at > 0 && set->holder[order[at - 1]] > i) {
+            order[at] = order[at - 1];
+            at--;
+        }
+        order[at] = s;
+    }
+    for (int d = 0; d < n; ++d) {
+        const int s = order[d];
+        const ReflectionProbe* probe = set->probes[set->holder[s]];
+        GpuProbeDesc* desc = &out->descs[d];
 
         glm_vec3_copy((float*)probe->position, desc->pos_intensity);
         desc->pos_intensity[3] = probe->intensity;
         glm_vec3_copy((float*)probe->box_min, desc->box_min_fade);
         desc->box_min_fade[3] = probe->box_fade;
         glm_vec3_copy((float*)probe->box_max, desc->box_max_pad);
-        desc->column[0] = lighting_atlas_probe_column_x(set->atlas, i);
+        lighting_atlas_probe_column(set->atlas, s, desc->column);
     }
+    out->info[0] = n;
 }
 
 void probe_set_report_masks(ReflectionProbeSet* set, const void* masks, size_t bytes, int bits) {
@@ -199,11 +377,31 @@ void probe_set_probe_print(const ReflectionProbeSet* set, int frame, bool final)
     for (int i = 0; i < set->count; ++i) {
         const ReflectionProbe* p = set->probes[i];
         int rx = 0, ry = 0, rows = 0;
-        lighting_atlas_probe_rect(set->atlas, i, &rx, &ry, &rows);
+        lighting_atlas_probe_rect(set->atlas, set->slot_of[i], &rx, &ry, &rows);
         printf("probe-set probe idx=%d pos=%.3f,%.3f,%.3f box=%.3f,%.3f,%.3f..%.3f,%.3f,%.3f "
                "rect=%d,%d rows=%d\n",
                i, p->position[0], p->position[1], p->position[2], p->box_min[0], p->box_min[1],
                p->box_min[2], p->box_max[0], p->box_max[1], p->box_max[2], rx, ry, rows);
+    }
+    fflush(stdout);
+}
+
+void probe_set_stream_print(const ReflectionProbeSet* set, int frame) {
+    if (!set)
+        return;
+    printf("stream probes frame=%d probes=%d captures=%d slots=", frame, set->count,
+           set->captures_total);
+    for (int s = 0; s < PROBE_SET_MAX; ++s)
+        printf(s ? ",%d" : "%d", set->holder[s]);
+    printf("\n");
+    for (int i = 0; i < set->count; ++i) {
+        const ReflectionProbe* p = set->probes[i];
+        const char* state = p->loaded              ? "loaded"
+                            : p->upload_pending    ? "uploading"
+                            : set->slot_of[i] >= 0 ? "capturing"
+                                                   : "out";
+        printf("stream probe idx=%d slot=%d dist=%.2f state=%s kept=%d\n", i, set->slot_of[i],
+               (double)set->distance[i], state, p->kept ? 1 : 0);
     }
     fflush(stdout);
 }

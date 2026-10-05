@@ -13,6 +13,11 @@ out vec4 FragColor;
 //             both in units of farZ rather than world units: the atlas is fp16,
 //             and a squared distance in metres overflows its 65504 ceiling from
 //             a scene barely 256 units across.
+//   mode 2 -- CLASSIFICATION (spec 13.24). Whether the probe sits inside geometry,
+//             into the irradiance tile's alpha alone: 0 when a back face is the
+//             nearest thing in more than a quarter of its directions, DDGI's
+//             test. The same answer for every texel of the tile, so a bilinear
+//             tap anywhere in it reads exactly that.
 //
 // The pass covers the whole BORDERED tile. The 1px gutter exists so a bilinear
 // tap at a tile edge reads the octahedral map's wrapped neighbour rather than
@@ -27,6 +32,7 @@ out vec4 FragColor;
 
 uniform samplerCube captureColor;
 uniform samplerCube captureDepth;
+uniform samplerCube backDepth; // mode 2: the same probe drawn with only back faces
 uniform vec2 tileOrigin; // atlas texel of this tile's BORDER, lower-left
 uniform float tileRes;   // interior edge length in texels (border adds 1 each side)
 uniform float nearZ;
@@ -58,7 +64,32 @@ float rayDistance(vec3 dir, float depth01) {
     return min(viewZ / (max(axis, 1e-4) * farZ), 1.0);
 }
 
+// Over the whole sphere, evenly in solid angle: a back face below the probe counts as
+// much as one beside it.
+float backfaceFraction() {
+    float back = 0.0;
+    const float total = float(THETA_STEPS * 2 * PHI_STEPS);
+    for (int t = 0; t < THETA_STEPS * 2; ++t) {
+        float cosTheta = 1.0 - 2.0 * (float(t) + 0.5) / float(THETA_STEPS * 2);
+        float sinTheta = sqrt(max(1.0 - cosTheta * cosTheta, 0.0));
+        for (int p = 0; p < PHI_STEPS; ++p) {
+            float phi = (float(p) + 0.5) / float(PHI_STEPS) * 6.28318530718;
+            vec3 dir = vec3(sinTheta * cos(phi), cosTheta, sinTheta * sin(phi));
+            float front = rayDistance(dir, texture(captureDepth, dir).r);
+            float behind = rayDistance(dir, texture(backDepth, dir).r);
+            if (behind < front)
+                back += 1.0;
+        }
+    }
+    return back / total;
+}
+
 void main() {
+    if (mode == 2) {
+        FragColor = vec4(0.0, 0.0, 0.0, backfaceFraction() > 0.25 ? 0.0 : 1.0);
+        return;
+    }
+
     // Position within the bordered tile: 0 and tileRes+1 are the gutter ring.
     // The wrap itself is octahedral.glsl's, shared with the specular probe
     // projection: it is a property of the mapping, not of what a tile holds.

@@ -23,11 +23,11 @@ layout(std140) uniform ProbeBlock {
     // [4i + 0] xyz capture position, w intensity
     // [4i + 1] xyz box min,          w box fade
     // [4i + 2] xyz box max,          w unused
-    // [4i + 3] x column left edge (texels), yzw unused
-    vec4 probeDesc[8 * 4];
-    // One 8-bit mask per froxel, four to a word. std140 gives a scalar array a
-    // vec4 stride, so a uint[3072] would be four times this block.
-    uvec4 probeClusterMasks[192];
+    // [4i + 3] xy column corner (texels), zw unused
+    vec4 probeDesc[16 * 4];
+    // One 16-bit mask per froxel, two to a word. std140 gives a scalar array a
+    // vec4 stride, so a uint[3072] would be eight times this block.
+    uvec4 probeClusterMasks[384];
 };
 
 #include "octahedral.glsl"
@@ -36,7 +36,7 @@ layout(std140) uniform ProbeBlock {
 // lights_ubo.glsl and for the same reason: the packing is what keeps the block
 // small enough to sit beside the light blocks.
 uint probeMaskAt(uint ci) {
-    return (probeClusterMasks[ci >> 4u][(ci >> 2u) & 3u] >> ((ci & 3u) * 8u)) & 0xFFu;
+    return (probeClusterMasks[ci >> 3u][(ci >> 1u) & 3u] >> ((ci & 1u) * 16u)) & 0xFFFFu;
 }
 
 // "Every probe", for a consumer with no froxel to look one up by.
@@ -47,12 +47,12 @@ uint probeMaskAt(uint ci) {
 // grid already rejected; SSR is a post pass that would have to pull four light
 // blocks in to save at most seven box tests, so it passes this and lets the
 // weights do it.
-#define PROBE_MASK_ALL 0xFFu
+#define PROBE_MASK_ALL 0xFFFFu
 
 // Must match PROBE_SET_MAX (probe_set.h). Held by the driver's own std140 size
 // check against UBO_PROBES_BLOCK_SIZE, which probeDesc's declaration rides --
 // the same way lights_ubo.glsl's MAX_CLUSTER_LIGHTS is held.
-const int PROBE_SET_MAX = 8;
+const int PROBE_SET_MAX = 16;
 
 // How much of this fragment belongs to probe i: 1 anywhere inside its proxy
 // box, falling to 0 over the probe's own fade measured OUTWARD from the faces.
@@ -136,7 +136,7 @@ vec3 probeRadiance(sampler2D atlas, int i, vec3 P, vec3 R, float rough, float ou
     vec2 oct = octEncode(dir) * 0.5 + 0.5;
     // The column's left edge; the rows' y origins and sizes are ATLAS-wide, so
     // they are one table rather than per-probe state.
-    float u0 = probeDesc[4 * i + 3].x;
+    vec2 corner = probeDesc[4 * i + 3].xy;
     float gutter = probeAtlasColumn.z;
 
     // Two indexed reads, where this walked all eight rows re-deriving their
@@ -147,8 +147,8 @@ vec3 probeRadiance(sampler2D atlas, int i, vec3 P, vec3 R, float rough, float ou
     // divide by exp2 only agrees with a shift on those).
     vec2 rowA = probeRow[r0].xy;
     vec2 rowB = probeRow[r1].xy;
-    vec2 uvA = (vec2(u0, rowA.x) + gutter + oct * rowA.y) * probeAtlasParams.xy;
-    vec2 uvB = (vec2(u0, rowB.x) + gutter + oct * rowB.y) * probeAtlasParams.xy;
+    vec2 uvA = (corner + vec2(0.0, rowA.x) + gutter + oct * rowA.y) * probeAtlasParams.xy;
+    vec2 uvB = (corner + vec2(0.0, rowB.x) + gutter + oct * rowB.y) * probeAtlasParams.xy;
 
     vec3 a = textureLod(atlas, uvA, 0.0).rgb;
     vec3 b = textureLod(atlas, uvB, 0.0).rgb;
