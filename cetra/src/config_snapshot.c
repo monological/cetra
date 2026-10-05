@@ -147,7 +147,7 @@ typedef struct ConfigField {
 #define CFG_STRUCT_CFG_SKY           SkyAtmosphere
 #define CFG_STRUCT_CFG_CLOUDS        CloudLayer
 #define CFG_STRUCT_CFG_IBL           IBLResources
-#define CFG_STRUCT_CFG_GI            GIVolume
+#define CFG_STRUCT_CFG_GI            GIWorld
 #define CFG_STRUCT_CFG_CLUSTER       LightClusterContext
 #define CFG_STRUCT_CFG_WATER         Water
 #define CFG_STRUCT_CFG_WATER_WINDSEA WaterWaveTrain
@@ -697,8 +697,8 @@ static const ConfigField CFG_FIELDS[] = {
     // --- environment
     CFG_ROW(CFG_IBL, CFG_FLOAT, "ibl", "intensity", intensity),
 
-    // --- GI volume. The grid dimensions are an allocation, so they are absent
-    // for the reason the shadow map size is.
+    // --- GI volumes: the settings the world's volumes share. The grids are allocations,
+    // so they are absent for the reason the shadow map size is.
     CFG_ROW(CFG_GI, CFG_BOOL, "gi", "enabled", enabled),
     CFG_ROW(CFG_GI, CFG_INT, "gi", "rate", rate),
     CFG_ROW(CFG_GI, CFG_BOOL, "gi", "debug_atlas", debug_atlas),
@@ -991,7 +991,7 @@ static void* _owner_base(ConfigOwner owner, Engine* engine, Scene* scene) {
         case CFG_IBL:
             return scene ? scene->ibl : NULL;
         case CFG_GI:
-            return scene ? scene->gi_volume : NULL;
+            return scene ? scene->gi : NULL;
         case CFG_CLUSTER:
             return engine ? engine->light_cluster : NULL;
         case CFG_WATER:

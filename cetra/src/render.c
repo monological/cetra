@@ -13,6 +13,7 @@
 #include "sky.h"
 #include "wind.h"
 #include "gi_volume.h"
+#include "lighting_atlas.h"
 #include "water.h"
 #include "rain.h"
 #include "rain_render.h"
@@ -668,9 +669,9 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
             // captured, so the capture pass itself never consumes one.
             probe_set_bind(scene ? scene->probe_set : NULL, program);
 
-            // Indirect diffuse from the probe grid, replacing the flat
-            // irradiance map. Self-gates to giEnabled = 0 while the volume is
-            // absent or has never converged, so the call site stays one line.
+            // Indirect diffuse from the resident probe grids, replacing the flat
+            // irradiance map. Self-gates to giEnabled = 0 while no volume is
+            // resident and swept, so the call site stays one line.
             //
             // It does NOT gate on capture, so every sweep after the first reads
             // the atlas it is rewriting -- feedback, i.e. a bounce per sweep.
@@ -679,7 +680,7 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
             // decision, and it means a volume converged at load (one bounce) and
             // one converged by moving the sun (many) do not match. Spec 9.7
             // records it as open.
-            gi_volume_bind(scene ? scene->gi_volume : NULL, program);
+            gi_world_bind(scene ? scene->gi : NULL, scene ? scene->lighting_atlas : NULL, program);
         }
 
         // The three per-object transforms, for a draw that carries one object.

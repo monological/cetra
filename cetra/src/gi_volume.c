@@ -5,9 +5,11 @@
 #include "engine.h"
 #include "async_loader.h"
 #include "ibl.h"
+#include "lighting_atlas.h"
 #include "render.h"
 #include "scene.h"
 #include "shadow.h"
+#include "stream.h"
 #include "uniform.h"
 #include "util.h"
 #include "ext/log.h"
@@ -16,15 +18,20 @@
 #define IRR_PITCH (GI_IRRADIANCE_RES + 2 * GI_TILE_BORDER)
 #define VIS_PITCH (GI_VISIBILITY_RES + 2 * GI_TILE_BORDER)
 
+// How much nearer a non-resident volume must be than a resident one to take its slot, in
+// metres. A volume is a building's worth of grid, so a camera between two buildings is
+// the case this guards: without it the last slot changes hands on every step.
+#define GI_STREAM_MARGIN 2.0f
+
 static int gi_probe_count(const GIVolume* gi) {
     return gi->counts[0] * gi->counts[1] * gi->counts[2];
 }
 
-// Atlas layout: the volume's X axis runs along the atlas X, and (y,z) is folded
-// into the atlas Y. Probe index is ix + nx*(iy + ny*iz), so a row of the atlas is
-// a row of the grid -- which is the axis the 8-probe gather steps along fastest.
-// The irradiance block sits above the visibility block; the two have different
-// tile pitches, so they cannot share rows.
+// Atlas layout within the volume's slot: the volume's X axis runs along the atlas X, and
+// (y,z) is folded into the atlas Y. Probe index is ix + nx*(iy + ny*iz), so a row of the
+// atlas is a row of the grid -- which is the axis the 8-probe gather steps along fastest.
+// The irradiance block sits above the visibility block; the two have different tile
+// pitches, so they cannot share rows.
 static void gi_tile_origin(const GIVolume* gi, int probe, bool visibility, int* out_x, int* out_y) {
     const int col = probe % gi->counts[0];
     const int row = probe / gi->counts[0];
@@ -48,11 +55,10 @@ GIVolume* create_gi_volume(int nx, int ny, int nz) {
     }
     memset(gi, 0, sizeof(GIVolume));
 
-    gi->enabled = true;
     gi->counts[0] = nx;
     gi->counts[1] = ny;
     gi->counts[2] = nz;
-    gi->rate = 2;
+    gi->irradiance_rows = ny * nz * IRR_PITCH;
     gi->first_pass = true;
     gi->far_clip = 1.0f;
     glm_vec3_one(gi->spacing);
@@ -63,14 +69,10 @@ GIVolume* create_gi_volume(int nx, int ny, int nz) {
 void free_gi_volume(GIVolume* gi) {
     if (!gi)
         return;
-    if (gi->atlas && gi->owns_atlas)
-        glDeleteTextures(1, &gi->atlas);
     if (gi->capture_color)
         glDeleteTextures(1, &gi->capture_color);
     if (gi->capture_depth)
         glDeleteTextures(1, &gi->capture_depth);
-    if (gi->tile_fbo)
-        glDeleteFramebuffers(1, &gi->tile_fbo);
     if (gi->quad_vao)
         glDeleteVertexArrays(1, &gi->quad_vao);
     if (gi->quad_vbo)
@@ -103,21 +105,15 @@ void gi_volume_mark_dirty(GIVolume* gi) {
     gi->next_probe = 0;
 }
 
-void gi_volume_shift_origin(GIVolume* gi, const vec3 delta) {
-    if (!gi)
-        return;
-    glm_vec3_sub(gi->grid_min, (float*)delta, gi->grid_min);
-}
-
 bool gi_volume_active(const GIVolume* gi) {
     // Not merely allocated: a volume mid-first-sweep holds tiles that were never
     // written, and sampling those would show as black blotches that resolve over
     // the next few frames. Withhold it until the opening sweep completes.
-    return gi && gi->enabled && gi->atlas && !gi->failed && !gi->first_pass;
+    return gi && !gi->failed && gi->targets_ready && !gi->first_pass;
 }
 
 bool gi_volume_pending(const GIVolume* gi) {
-    return gi && gi->enabled && !gi->failed && gi->first_pass && gi->dirty_count > 0;
+    return gi && !gi->failed && gi->first_pass && gi->dirty_count > 0;
 }
 
 // Cubemap with no mips, LINEAR, clamped -- the capture scratch, reused per probe.
@@ -153,95 +149,22 @@ void gi_volume_atlas_extent(const GIVolume* gi, int* out_w, int* out_h) {
         *out_h = rows * IRR_PITCH + rows * VIS_PITCH;
 }
 
-void gi_volume_adopt_atlas(GIVolume* gi, GLuint texture, int atlas_w, int atlas_h) {
-    if (!gi || !texture)
-        return;
-    if (gi->atlas && !gi->owns_atlas) {
-        log_warn("GI volume already shares an atlas; the specular probes cannot take it too");
-        return;
-    }
-    if (gi->atlas && gi->targets_ready) {
-        // Swept already, into a texture of its own: its region is the same texels of both,
-        // so it goes across exactly, and the tiles are written into the new one from here on.
-        // (One allocated but never made ready is the failed state, and is simply freed.)
-        GLint read_fbo = 0, draw_fbo = 0;
-        glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &read_fbo);
-        glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &draw_fbo);
-        const GLboolean scissor = glIsEnabled(GL_SCISSOR_TEST);
-        glDisable(GL_SCISSOR_TEST);
-        GLuint copy = 0;
-        glGenFramebuffers(1, &copy);
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, copy);
-        glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture,
-                               0);
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, gi->tile_fbo);
-        glBlitFramebuffer(0, 0, gi->atlas_w, gi->atlas_h, 0, 0, gi->atlas_w, gi->atlas_h,
-                          GL_COLOR_BUFFER_BIT, GL_NEAREST);
-        glBindFramebuffer(GL_FRAMEBUFFER, gi->tile_fbo);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
-        glDeleteFramebuffers(1, &copy);
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)read_fbo);
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)draw_fbo);
-        if (scissor)
-            glEnable(GL_SCISSOR_TEST);
-    }
-    if (gi->atlas)
-        glDeleteTextures(1, &gi->atlas);
-    gi->atlas = texture;
-    gi->atlas_w = atlas_w;
-    gi->atlas_h = atlas_h;
-    gi->owns_atlas = false;
-}
-
+// The capture scratch. The tiles themselves live in the scene's lighting atlas, which a
+// slot's first sweep overwrites whole, so nothing here clears them.
 static bool gi_ensure_targets(GIVolume* gi, struct Engine* engine) {
-    // Allocate-once, and this must NOT be `gi->atlas != 0`. That field used to
-    // serve as the memo, and since 11.70 it is also set from outside by
-    // gi_volume_adopt_atlas -- so one sentinel would be answering two questions
-    // ("is my atlas here" and "are my targets built") and this function became
-    // re-runnable. It is called on every frame with a dirty probe, so a
-    // re-convergence sweep re-created two cubemaps, an FBO and a VAO per frame
-    // and orphaned the previous ones.
+    // Allocate-once on its own flag: this is called on every frame with a dirty
+    // probe, so a re-convergence sweep would otherwise re-create two cubemaps and
+    // a VAO per frame and orphan the previous ones.
     if (gi->targets_ready)
         return true;
     if (gi->failed)
         return false;
-    // A shared atlas arrives already allocated and already cleared; only the
-    // rest of the scratch is still missing.
-    const bool adopted = gi->atlas != 0;
-
-    const int rows = gi->counts[1] * gi->counts[2];
-    gi->irradiance_rows = rows * IRR_PITCH;
-
-    if (!adopted) {
-        gi->owns_atlas = true;
-        // The size this volume WOULD take, from the one function that states
-        // it -- the specular atlas reserves its columns from the same answer,
-        // and a second copy here would mis-place them the moment either moved.
-        gi_volume_atlas_extent(gi, &gi->atlas_w, &gi->atlas_h);
-
-        glGenTextures(1, &gi->atlas);
-        glBindTexture(GL_TEXTURE_2D, gi->atlas);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, gi->atlas_w, gi->atlas_h, 0, GL_RGBA, GL_FLOAT,
-                     NULL);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glBindTexture(GL_TEXTURE_2D, 0);
-    }
 
     gi->capture_color = gi_make_cubemap(GI_CAPTURE_FACE, GL_RGB16F, GL_RGB, GL_FLOAT);
     gi->capture_depth =
         gi_make_cubemap(GI_CAPTURE_FACE, GL_DEPTH_COMPONENT24, GL_DEPTH_COMPONENT, GL_FLOAT);
-
-    glGenFramebuffers(1, &gi->tile_fbo);
-    glBindFramebuffer(GL_FRAMEBUFFER, gi->tile_fbo);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, gi->atlas, 0);
-    bool complete = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-
-    if (!gi->atlas || !gi->capture_color || !gi->capture_depth || !complete) {
-        log_error("GI volume targets incomplete; disabling irradiance probes");
+    if (!gi->capture_color || !gi->capture_depth) {
+        log_error("GI volume capture targets incomplete; disabling this volume");
         gi->failed = true;
         return false;
     }
@@ -250,27 +173,13 @@ static bool gi_ensure_targets(GIVolume* gi, struct Engine* engine) {
 
     gi->project_program = engine_get_program(engine, "gi_project");
     if (!gi->project_program) {
-        log_error("GI volume projection program missing; disabling irradiance probes");
+        log_error("GI volume projection program missing; disabling this volume");
         gi->failed = true;
         return false;
     }
 
-    // The atlas starts undefined; a probe that is never reached would otherwise
-    // blend against garbage forever. A shared atlas was cleared whole by the
-    // owner before anything was drawn into it, so clearing here would erase the
-    // specular columns instead.
-    if (!adopted) {
-        glBindFramebuffer(GL_FRAMEBUFFER, gi->tile_fbo);
-        glViewport(0, 0, gi->atlas_w, gi->atlas_h);
-        glDisable(GL_BLEND);
-        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    }
-
     gi->targets_ready = true;
-    log_info("GI volume: %dx%dx%d probes, %dx%d atlas", gi->counts[0], gi->counts[1], gi->counts[2],
-             gi->atlas_w, gi->atlas_h);
+    log_info("GI volume: %dx%dx%d probes", gi->counts[0], gi->counts[1], gi->counts[2]);
     return true;
 }
 
@@ -291,11 +200,14 @@ static void gi_probe_position(const GIVolume* gi, int index, vec3 out) {
 // as a distance, so the near plane's only job is to not clip the room it is in.
 #define GI_NEAR_CLIP 0.05f
 
-// Project the capture into one tile, gutter included.
-static void gi_project_tile(GIVolume* gi, int probe, bool visibility, float hysteresis) {
+// Project the capture into one tile of the volume's slot, gutter included.
+static void gi_project_tile(GIVolume* gi, const LightingAtlas* atlas, const int region[2],
+                            int probe, bool visibility, float hysteresis) {
     const int res = visibility ? GI_VISIBILITY_RES : GI_IRRADIANCE_RES;
     int ox, oy;
     gi_tile_origin(gi, probe, visibility, &ox, &oy);
+    ox += region[0];
+    oy += region[1];
 
     // Blended in place against the previous value with a constant alpha: legal
     // because the atlas is never bound for reading while it is the render target
@@ -303,7 +215,7 @@ static void gi_project_tile(GIVolume* gi, int probe, bool visibility, float hyst
     // atlas runs separately. That is the shadow-map sequencing the codebase
     // already relies on, and it avoids a ping-pong that would have to copy every
     // untouched tile to update one.
-    glBindFramebuffer(GL_FRAMEBUFFER, gi->tile_fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, atlas->fbo);
     glViewport(ox, oy, res + 2 * GI_TILE_BORDER, res + 2 * GI_TILE_BORDER);
     if (hysteresis > 0.0f) {
         glEnable(GL_BLEND);
@@ -330,10 +242,10 @@ static void gi_project_tile(GIVolume* gi, int probe, bool visibility, float hyst
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4); // VAO bound once by the caller
 }
 
-void gi_volume_update(GIVolume* gi, struct Engine* engine, struct Scene* scene) {
-    if (!gi || !gi->enabled || gi->failed || !engine || !scene)
-        return;
-    if (gi->dirty_count <= 0)
+// Capture up to `rate` probes of a resident volume into its slot.
+static void gi_volume_capture(GIVolume* gi, struct Engine* engine, struct Scene* scene,
+                              const LightingAtlas* atlas, const int region[2], int rate) {
+    if (gi->failed || gi->dirty_count <= 0)
         return; // converged: the steady state, and it costs nothing
 
     // Capturing before the textures land would bake placeholder materials into
@@ -347,14 +259,14 @@ void gi_volume_update(GIVolume* gi, struct Engine* engine, struct Scene* scene) 
 
     // The opening sweep runs in one frame, ignoring `rate`, and takes each
     // capture outright rather than blending. Amortising it would buy nothing:
-    // gi_volume_active withholds a half-swept atlas, so spreading the first
+    // gi_volume_active withholds a half-swept slot, so spreading the first
     // sweep over `probes/rate` frames only delays GI appearing at all -- and a
     // headless run short enough to be a golden would finish before it ever did.
-    // `rate` governs RE-convergence, where the previous atlas is still valid to
+    // `rate` governs RE-convergence, where the previous tiles are still valid to
     // sample and the cost genuinely wants spreading. This mirrors the sky's LUTs
     // and the reflection probe: both bake once, at load, in full.
     const int probes = gi_probe_count(gi);
-    int budget = (gi->first_pass || gi->rate <= 0) ? probes : gi->rate;
+    int budget = (gi->first_pass || rate <= 0) ? probes : rate;
     if (budget > gi->dirty_count)
         budget = gi->dirty_count;
 
@@ -390,8 +302,8 @@ void gi_volume_update(GIVolume* gi, struct Engine* engine, struct Scene* scene) 
         glDisable(GL_DEPTH_TEST);
         glDisable(GL_CULL_FACE);
         glBindVertexArray(gi->quad_vao);
-        gi_project_tile(gi, probe, false, hysteresis);
-        gi_project_tile(gi, probe, true, hysteresis);
+        gi_project_tile(gi, atlas, region, probe, false, hysteresis);
+        gi_project_tile(gi, atlas, region, probe, true, hysteresis);
         glBindVertexArray(0);
         glEnable(GL_DEPTH_TEST);
         if (cull_was)
@@ -418,7 +330,142 @@ void gi_volume_update(GIVolume* gi, struct Engine* engine, struct Scene* scene) 
     check_gl_error("gi volume update");
 }
 
-void gi_volume_bind(const GIVolume* gi, ShaderProgram* program) {
+GIWorld* create_gi_world(void) {
+    GIWorld* world = calloc(1, sizeof(GIWorld));
+    if (!world) {
+        log_error("Failed to allocate the GI world");
+        return NULL;
+    }
+    world->enabled = true;
+    world->rate = 2;
+    for (int s = 0; s < GI_RESIDENT_MAX; ++s)
+        world->holder[s] = -1;
+    return world;
+}
+
+void free_gi_world(GIWorld* world) {
+    if (!world)
+        return;
+    for (int i = 0; i < world->count; ++i)
+        free_gi_volume(world->volumes[i]);
+    free(world->volumes);
+    free(world->slot_of);
+    free(world->distance);
+    free(world);
+}
+
+bool gi_world_add(GIWorld* world, GIVolume* gi) {
+    if (!world || !gi) {
+        free_gi_volume(gi);
+        return false;
+    }
+    if (world->count == world->capacity) {
+        int capacity = world->capacity ? world->capacity * 2 : 4;
+        GIVolume** volumes = realloc(world->volumes, sizeof(GIVolume*) * (size_t)capacity);
+        if (volumes)
+            world->volumes = volumes;
+        int* slot_of = realloc(world->slot_of, sizeof(int) * (size_t)capacity);
+        if (slot_of)
+            world->slot_of = slot_of;
+        float* distance = realloc(world->distance, sizeof(float) * (size_t)capacity);
+        if (distance)
+            world->distance = distance;
+        if (!volumes || !slot_of || !distance) {
+            log_error("Failed to grow the GI world");
+            free_gi_volume(gi);
+            return false;
+        }
+        world->capacity = capacity;
+    }
+    world->volumes[world->count] = gi;
+    world->slot_of[world->count] = -1;
+    world->count++;
+    return true;
+}
+
+void gi_world_rank(GIWorld* world, const struct Engine* engine) {
+    if (!world || !world->enabled || world->count == 0 || !engine)
+        return;
+
+    vec3 eye = {0.0f, 0.0f, 0.0f};
+    if (engine->camera)
+        glm_vec3_copy(engine->camera->position, eye);
+    for (int i = 0; i < world->count; ++i) {
+        const GIVolume* gi = world->volumes[i];
+        if (gi->failed) {
+            world->distance[i] = -1.0f;
+            continue;
+        }
+        vec3 box_max;
+        for (int c = 0; c < 3; ++c)
+            box_max[c] = gi->grid_min[c] + gi->spacing[c] * (float)gi->counts[c];
+        world->distance[i] = stream_box_distance(eye, gi->grid_min, box_max);
+    }
+    stream_assign(world->distance, world->count, GI_RESIDENT_MAX, GI_STREAM_MARGIN, world->slot_of,
+                  world->holder);
+
+    // A volume out of residency has no tiles anywhere: the slot it held is another's now. It
+    // sweeps again from the start when it is next admitted.
+    for (int i = 0; i < world->count; ++i) {
+        GIVolume* gi = world->volumes[i];
+        if (world->slot_of[i] < 0 && !gi->first_pass) {
+            gi->first_pass = true;
+            gi_volume_mark_dirty(gi);
+        }
+    }
+}
+
+void gi_world_update(GIWorld* world, struct Engine* engine, struct Scene* scene) {
+    if (!engine || !scene || !gi_world_dirty(world))
+        return;
+    const LightingAtlas* atlas = lighting_atlas_sync(scene, engine);
+    if (!atlas)
+        return;
+    for (int s = 0; s < GI_RESIDENT_MAX; ++s) {
+        const int v = world->holder[s];
+        if (v < 0)
+            continue;
+        int region[2];
+        lighting_atlas_gi_region(atlas, s, &region[0], &region[1]);
+        gi_volume_capture(world->volumes[v], engine, scene, atlas, region, world->rate);
+    }
+}
+
+bool gi_world_pending(const GIWorld* world) {
+    if (!world || !world->enabled)
+        return false;
+    for (int s = 0; s < GI_RESIDENT_MAX; ++s)
+        if (world->holder[s] >= 0 && gi_volume_pending(world->volumes[world->holder[s]]))
+            return true;
+    return false;
+}
+
+bool gi_world_dirty(const GIWorld* world) {
+    if (!world || !world->enabled)
+        return false;
+    for (int s = 0; s < GI_RESIDENT_MAX; ++s) {
+        const int v = world->holder[s];
+        if (v >= 0 && !world->volumes[v]->failed && world->volumes[v]->dirty_count > 0)
+            return true;
+    }
+    return false;
+}
+
+void gi_world_mark_dirty(GIWorld* world) {
+    if (!world)
+        return;
+    for (int i = 0; i < world->count; ++i)
+        gi_volume_mark_dirty(world->volumes[i]);
+}
+
+void gi_world_shift_origin(GIWorld* world, const vec3 delta) {
+    if (!world)
+        return;
+    for (int i = 0; i < world->count; ++i)
+        glm_vec3_sub(world->volumes[i]->grid_min, (float*)delta, world->volumes[i]->grid_min);
+}
+
+void gi_world_bind(const GIWorld* world, const LightingAtlas* atlas, ShaderProgram* program) {
     if (!program || !program->uniforms)
         return;
     UniformManager* u = program->uniforms;
@@ -428,74 +475,55 @@ void gi_volume_bind(const GIVolume* gi, ShaderProgram* program) {
     // textures, and that is only ever safe by accident.
     uniform_set_int(u, "giAtlasTex", GI_ATLAS_TEXTURE_UNIT);
 
-    if (!gi_volume_active(gi)) {
+    // Every resident volume is published, ready or not: a fragment inside one still sweeping
+    // takes the environment's answer rather than a neighbour's edge (gi_volume.glsl).
+    float slots[GI_RESIDENT_MAX * 4][4];
+    int published = 0;
+    bool any_ready = false;
+    if (world && world->enabled && atlas && atlas->texture) {
+        for (int s = 0; s < GI_RESIDENT_MAX; ++s) {
+            const int v = world->holder[s];
+            if (v < 0)
+                continue;
+            const GIVolume* gi = world->volumes[v];
+            const bool ready = gi_volume_active(gi);
+            any_ready = any_ready || ready;
+            int rx = 0, ry = 0;
+            lighting_atlas_gi_region(atlas, s, &rx, &ry);
+            float* row = slots[published * 4];
+            glm_vec3_copy((float*)gi->grid_min, row);
+            row[3] = ready ? 1.0f : 0.0f;
+            row = slots[published * 4 + 1];
+            glm_vec3_copy((float*)gi->spacing, row);
+            row[3] = gi->far_clip;
+            row = slots[published * 4 + 2];
+            row[0] = (float)gi->counts[0];
+            row[1] = (float)gi->counts[1];
+            row[2] = (float)gi->counts[2];
+            row[3] = (float)gi->irradiance_rows;
+            row = slots[published * 4 + 3];
+            row[0] = (float)rx;
+            row[1] = (float)ry;
+            row[2] = 0.0f;
+            row[3] = 0.0f;
+            published++;
+        }
+    }
+
+    if (!any_ready) {
         uniform_set_int(u, "giEnabled", 0);
         return;
     }
 
     glActiveTexture(GL_TEXTURE0 + GI_ATLAS_TEXTURE_UNIT);
-    glBindTexture(GL_TEXTURE_2D, gi->atlas);
+    glBindTexture(GL_TEXTURE_2D, atlas->texture);
     glActiveTexture(GL_TEXTURE0);
 
     uniform_set_int(u, "giEnabled", 1);
-    uniform_set_vec3(u, "giGridMin", (const float*)gi->grid_min);
-    uniform_set_vec3(u, "giSpacing", (const float*)gi->spacing);
-    uniform_set_vec3(
-        u, "giCounts",
-        (const float[]){(float)gi->counts[0], (float)gi->counts[1], (float)gi->counts[2]});
-    uniform_set_vec2(u, "giAtlasSize", (const float[]){(float)gi->atlas_w, (float)gi->atlas_h});
-    uniform_set_float(u, "giIrradianceRows", (float)gi->irradiance_rows);
-    uniform_set_float(u, "giFarClip", gi->far_clip);
+    uniform_set_int(u, "giSlotCount", published);
+    uniform_set_vec4_array(u, "giSlot", &slots[0][0], published * 4);
+    uniform_set_vec2(u, "giAtlasSize", (const float[]){(float)atlas->width, (float)atlas->height});
     uniform_set_float(u, "giTileBorder", (float)GI_TILE_BORDER);
     uniform_set_vec2(u, "giTileRes",
                      (const float[]){(float)GI_IRRADIANCE_RES, (float)GI_VISIBILITY_RES});
-}
-
-void gi_volume_debug_blit(const GIVolume* gi, struct Engine* engine, int screen_w, int screen_h) {
-    if (!gi || !gi->atlas || !engine)
-        return;
-    // Reuses the shared 2D-texture debug overlay (sky_debug_frag), which is a
-    // scaled textured-quad DRAW rather than a blit -- the default framebuffer is
-    // multisample and a single-sample blit into it is illegal on core profile.
-    ShaderProgram* prog = engine_get_program(engine, "sky_debug");
-    if (!prog)
-        return;
-
-    GLint prev_viewport[4];
-    glGetIntegerv(GL_VIEWPORT, prev_viewport);
-    GLboolean depth_was = glIsEnabled(GL_DEPTH_TEST);
-    GLboolean blend_was = glIsEnabled(GL_BLEND);
-    glDisable(GL_DEPTH_TEST);
-    glDisable(GL_BLEND);
-
-    // Scaled to fill most of the screen height at the atlas's own aspect: the
-    // tiles are 8 and 16 texels across and nothing is legible at 1:1.
-    int h = screen_h - 20;
-    int w = (int)((float)h * (float)gi->atlas_w / (float)gi->atlas_h);
-    if (w > screen_w - 20) {
-        w = screen_w - 20;
-        h = (int)((float)w * (float)gi->atlas_h / (float)gi->atlas_w);
-    }
-    glViewport(10, screen_h - 10 - h, w, h);
-    glUseProgram(prog->id);
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, gi->atlas);
-    // Point-sample for the overlay only: the atlas is magnified ~20x here and
-    // bilinear smears the tile grid and its gutter into an unreadable wash --
-    // which is exactly the structure the overlay exists to check.
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    uniform_set_int(prog->uniforms, "lut", 0);
-    // One exposure for two blocks that hold different quantities: bounced
-    // radiance (small, a fraction of the direct light) above, normalised
-    // distances (0..1) below. 4x puts both in range at once.
-    uniform_set_float(prog->uniforms, "scale", 4.0f);
-    draw_fullscreen_quad(gi->quad_vao);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-
-    glViewport(prev_viewport[0], prev_viewport[1], prev_viewport[2], prev_viewport[3]);
-    if (depth_was)
-        glEnable(GL_DEPTH_TEST);
-    if (blend_was)
-        glEnable(GL_BLEND);
-    glUseProgram(0);
 }

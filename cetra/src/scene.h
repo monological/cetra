@@ -224,6 +224,9 @@ typedef struct Scene {
     // the render loop when the async loader is idle.
     struct MaterialTextureArray* material_textures;
     bool material_textures_dirty;
+    // The one texture every resident GI volume and reflection probe lives in, grown as the
+    // world's lists need it (lighting_atlas.h). NULL until a capture needs it.
+    struct LightingAtlas* lighting_atlas;
     // POM (§4.11): height maps are resolved by filename convention once the async
     // texture loader drains (so the albedo/normal paths are populated); set after
     // the one-time resolve so the render loop does not re-scan every frame.
@@ -273,6 +276,9 @@ typedef struct Scene {
     size_t skeleton_count;
     Animation** animations; // scene_add_animation
     size_t animation_count;
+    // Every GI volume in the world, and the settings they share (gi_volume.h). NULL until
+    // the first volume is added.
+    struct GIWorld* gi; // scene_add_gi_volume
     // Boxes of denser air, folded into the froxel volume (spec 11.39). Count 0 = none.
     FogVolume fog_volumes[SCENE_MAX_FOG_VOLUMES]; // scene_add_fog_volume
     int fog_volume_count;
@@ -306,7 +312,6 @@ typedef struct Scene {
     IBLResources* ibl;             // image-based lighting (optional)
     ReflectionProbeSet* probe_set; // local reflection probes (optional)
     struct SkyAtmosphere* sky;     // procedural sky feeding ibl (optional)
-    struct GIVolume* gi_volume;    // indirect-diffuse probe grid (optional)
     struct Water* water;           // ocean/lake surface (optional)
     struct Rain* rain;             // falling rain and the wetness it leaves (optional)
     struct FireSystem* fire;       // fires and candle flames, and the lights they drive (optional)
@@ -484,6 +489,12 @@ void scene_set_origin_callback(Scene* scene, void (*on_shift)(const vec3 delta, 
  * which is what happened while this was a file static in gui.c.
  */
 void scene_environment_changed(Scene* scene, struct Engine* engine);
+
+// GI volumes (spec 13.24): any number, one per place, the nearest few resident. Takes
+// ownership, creating the scene's GI world on the first; false (and the volume freed) on NULL
+// or out of memory.
+struct GIVolume;
+bool scene_add_gi_volume(Scene* scene, struct GIVolume* volume);
 
 // fog volumes. False when the array is full.
 bool scene_add_fog_volume(Scene* scene, const FogVolume* volume);

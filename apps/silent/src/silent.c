@@ -334,7 +334,8 @@ static void build_gi(void) {
         return;
     const vec3 lo = {-7.45f, 0.0f, 7.58f};
     gi_volume_fit(gi, lo, (vec3){lo[0] + GI_COLS * GI_CELL, GI_TOP, lo[2] + GI_COLS * GI_CELL});
-    g_scene->gi_volume = gi;
+    if (!scene_add_gi_volume(g_scene, gi))
+        return;
 
     // Every centre against the walls and slabs, so a layout change that walks one into a wall
     // says so here rather than as a dark patch.
@@ -768,11 +769,11 @@ static void on_pre_render(Game* game, double alpha) {
     // blends into what is already there -- so it has to see the lit room. The
     // reflection probes go in with it, since they are captured once it has
     // converged and a set installed with no volume would be captured unlit.
-    if (engine->total_frames == 2 && !g_scene->gi_volume && !g_args.no_gi) {
+    if (engine->total_frames == 2 && !g_scene->gi && !g_args.no_gi) {
         build_gi();
         build_probes();
     }
-    const bool lit = engine->total_frames > 2 && !gi_volume_pending(g_scene->gi_volume);
+    const bool lit = engine->total_frames > 2 && !gi_world_pending(g_scene->gi);
 
     // Black until the volume's opening sweep has landed, then up. That sweep
     // is one long frame, so without this the window holds the room unlit by

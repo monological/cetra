@@ -16,6 +16,7 @@
 #include "sky.h"
 #include "wind.h"
 #include "gi_volume.h"
+#include "lighting_atlas.h"
 #include "probe.h"
 #include "probe_set.h"
 #include "water.h"
@@ -91,7 +92,8 @@ Scene* create_scene() {
     scene->probe_set = NULL;
     scene->sky = NULL;
     scene->wind = NULL;
-    scene->gi_volume = NULL;
+    scene->gi = NULL;
+    scene->lighting_atlas = NULL;
     scene->water = NULL;
     scene->rain = NULL;
     scene->fire = NULL;
@@ -224,10 +226,14 @@ void free_scene(Scene* scene) {
         scene->wind = NULL;
     }
 
-    // Free the GI probe volume
-    if (scene->gi_volume) {
-        free_gi_volume(scene->gi_volume);
-        scene->gi_volume = NULL;
+    // Free the GI volumes, then the atlas they and the probes lived in
+    if (scene->gi) {
+        free_gi_world(scene->gi);
+        scene->gi = NULL;
+    }
+    if (scene->lighting_atlas) {
+        free_lighting_atlas(scene->lighting_atlas);
+        scene->lighting_atlas = NULL;
     }
 
     // Free the water surface
@@ -568,12 +574,22 @@ void scene_apply_origin_delta(Scene* scene, const vec3 delta) {
 
     shadow_system_shift_origin(scene->shadow_system, delta);
     probe_set_shift_origin(scene->probe_set, delta);
-    gi_volume_shift_origin(scene->gi_volume, delta);
+    gi_world_shift_origin(scene->gi, delta);
     for (size_t i = 0; i < scene->particle_system_count; ++i)
         particle_system_shift_origin(scene->particle_systems[i], delta);
     fire_system_shift_origin(scene->fire, delta);
 
     glm_vec3_add(scene->world_origin, (float*)delta, scene->world_origin);
+}
+
+bool scene_add_gi_volume(Scene* scene, GIVolume* volume) {
+    if (!scene || !volume) {
+        free_gi_volume(volume);
+        return false;
+    }
+    if (!scene->gi)
+        scene->gi = create_gi_world();
+    return gi_world_add(scene->gi, volume);
 }
 
 bool scene_add_fog_volume(Scene* scene, const FogVolume* volume) {
@@ -668,7 +684,7 @@ void scene_environment_changed(Scene* scene, struct Engine* engine) {
     // Re-armed rather than swept here: a sweep is one scene render per probe
     // face, and unlike the probe it does not stall -- it spreads over the
     // following frames at `rate` with the old atlas sampleable throughout.
-    gi_volume_mark_dirty(scene->gi_volume);
+    gi_world_mark_dirty(scene->gi);
 }
 
 void scene_publish_fog_volumes_to_postfx(const Scene* scene, struct PostFX* fx) {

@@ -759,19 +759,26 @@ static void _engine_gui_panel(Engine* engine) {
             igUnindent(0.0f);
         }
 
-        if (scene->gi_volume) {
-            GIVolume* gi = scene->gi_volume;
-            _begin_effect_group("GI Probe Volume", &gi->enabled);
-            igText("%dx%dx%d probes, %dx%d atlas", gi->counts[0], gi->counts[1], gi->counts[2],
-                   gi->atlas_w, gi->atlas_h);
-            // The one number worth watching: a converged volume reads 0 and does
-            // no work at all. Anything else means captures are running.
-            igText(gi->dirty_count > 0 ? "converging: %d probes left" : "converged (%d)",
-                   gi->dirty_count);
-            igSliderInt("Probes / Frame", &gi->rate, 0, 32, "%d", 0);
-            igCheckbox("Show Atlas", &gi->debug_atlas);
+        if (scene->gi) {
+            GIWorld* world = scene->gi;
+            _begin_effect_group("GI Probe Volumes", &world->enabled);
+            for (int i = 0; i < world->count; ++i) {
+                const GIVolume* gi = world->volumes[i];
+                // The one number worth watching: a converged volume reads 0 and does
+                // no work at all. Anything else means captures are running.
+                if (world->slot_of[i] < 0)
+                    igText("%d: %dx%dx%d, not resident (%.0f m)", i, gi->counts[0], gi->counts[1],
+                           gi->counts[2], (double)world->distance[i]);
+                else
+                    igText(gi->dirty_count > 0 ? "%d: %dx%dx%d in slot %d, %d probes left"
+                                               : "%d: %dx%dx%d in slot %d, converged (%d)",
+                           i, gi->counts[0], gi->counts[1], gi->counts[2], world->slot_of[i],
+                           gi->dirty_count);
+            }
+            igSliderInt("Probes / Frame", &world->rate, 0, 32, "%d", 0);
+            igCheckbox("Show Atlas", &world->debug_atlas);
             if (igButton("Recapture", (ImVec2){0, 0}))
-                gi_volume_mark_dirty(gi);
+                gi_world_mark_dirty(world);
             _end_effect_group();
         }
     }

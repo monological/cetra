@@ -16,9 +16,9 @@
 // byte per froxel.
 #define PROBE_SET_MAX 8
 
-// Roughness rows per probe column. Here rather than in probe_atlas.h because
+// Roughness rows per probe column. Here rather than in lighting_atlas.h because
 // light_cluster.h sizes the GPU block's row table by it and cannot include that
-// header; probe_atlas.h asserts the two agree.
+// header; lighting_atlas.h asserts the two agree.
 #define PROBE_ATLAS_ROWS_MAX 8
 
 // The GPU mirror of a set, GpuProbeBlock, lives in light_cluster.h beside the
@@ -28,7 +28,7 @@
 struct Engine;
 struct Scene;
 struct PostFX;
-struct ProbeAtlas;
+struct LightingAtlas;
 
 typedef struct ReflectionProbeSet {
     ReflectionProbe* probes[PROBE_SET_MAX];
@@ -42,7 +42,8 @@ typedef struct ReflectionProbeSet {
 
     int row0; // the atlas's row-0 tile size; 0 = the default
 
-    struct ProbeAtlas* atlas; // owned; NULL until the first multi-probe sweep
+    // The scene's lighting atlas, borrowed; NULL until the first multi-probe sweep.
+    struct LightingAtlas* atlas;
 
     // Captures attempted across the set's life. The converge-then-idle claim
     // is only worth making if it is checkable from outside the process.
@@ -85,7 +86,7 @@ bool probe_set_add(ReflectionProbeSet* set, ReflectionProbe* probe);
  * answer, and with the environment's ambient before it, so a set captured
  * alongside the volume photographs every closed room lit by the open sky --
  * by day many times the volume's light, which every dark glossy surface then
- * reflects as a grey wash. The volume adopts the atlas when this allocates it.
+ * reflects as a grey wash. The columns are the scene's lighting atlas's.
  *
  * Runs in the frame before the shadow pass, after the GI sweep. A set is
  * installed uncaptured and is inert until this has run; a headless run sees it
