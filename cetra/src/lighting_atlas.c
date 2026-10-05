@@ -33,14 +33,29 @@ static int atlas_column_h(int row0) {
     return h;
 }
 
+// Probe columns stacked in each vertical stack: as many as the GI slots' height holds, so a
+// tall GI region does not pad every column out to its height. At least one.
+static int atlas_columns_per_stack(const LightingAtlas* atlas) {
+    const int col_h = atlas_column_h(atlas->row0);
+    const int stack = col_h > 0 ? atlas->gi_slot_h / col_h : 1;
+    return stack > 1 ? stack : 1;
+}
+
+// Lower-left texel of a probe column, gutter included.
+static void atlas_column_origin(const LightingAtlas* atlas, int index, int* out_x, int* out_y) {
+    const int stack = atlas_columns_per_stack(atlas);
+    *out_x = atlas->spec_x + (index / stack) * atlas_column_w(atlas->row0);
+    *out_y = (index % stack) * atlas_column_h(atlas->row0);
+}
+
 // Lower-left texel of one (probe, row) tile INCLUDING its gutter.
 static void atlas_tile_origin(const LightingAtlas* atlas, int index, int row, int* out_x,
                               int* out_y) {
     int y = 0;
     for (int r = 0; r < row; ++r)
         y += atlas_row_pitch(atlas->row0, r);
-    *out_x = atlas->spec_x + index * atlas_column_w(atlas->row0);
-    *out_y = y;
+    atlas_column_origin(atlas, index, out_x, out_y);
+    *out_y += y;
 }
 
 static int clamp_row0(int row0) {
@@ -125,10 +140,16 @@ static bool atlas_reserve(LightingAtlas* atlas, int gi_slots, int gi_w, int gi_h
         return true;
 
     const int gi_cols_w = next.gi_slots * next.gi_slot_w;
-    const int col_h = next.capacity > 0 ? atlas_column_h(next.row0) : 0;
+    int stacks = 0, stack_h = 0;
+    if (next.capacity > 0) {
+        const int per_stack = atlas_columns_per_stack(&next);
+        stacks = (next.capacity + per_stack - 1) / per_stack;
+        stack_h =
+            atlas_column_h(next.row0) * (next.capacity < per_stack ? next.capacity : per_stack);
+    }
     next.spec_x = gi_cols_w;
-    next.width = gi_cols_w + next.capacity * atlas_column_w(next.row0);
-    next.height = next.gi_slot_h > col_h ? next.gi_slot_h : col_h;
+    next.width = gi_cols_w + stacks * atlas_column_w(next.row0);
+    next.height = next.gi_slot_h > stack_h ? next.gi_slot_h : stack_h;
     if (next.width <= 0 || next.height <= 0)
         return false;
 
@@ -162,11 +183,14 @@ static bool atlas_reserve(LightingAtlas* atlas, int gi_slots, int gi_w, int gi_h
         for (int s = 0; s < atlas->gi_slots; ++s)
             copy_rect(atlas->fbo, next.fbo, s * atlas->gi_slot_w, 0, s * next.gi_slot_w, 0,
                       atlas->gi_slot_w, atlas->gi_slot_h);
-        const int old_col_w = atlas->capacity > 0 ? atlas_column_w(atlas->row0) : 0;
-        const int old_col_h = atlas->capacity > 0 ? atlas_column_h(atlas->row0) : 0;
-        for (int c = 0; c < atlas->capacity; ++c)
-            copy_rect(atlas->fbo, next.fbo, atlas->spec_x + c * old_col_w, 0,
-                      next.spec_x + c * old_col_w, 0, old_col_w, old_col_h);
+        const int col_w = atlas->capacity > 0 ? atlas_column_w(atlas->row0) : 0;
+        const int col_h = atlas->capacity > 0 ? atlas_column_h(atlas->row0) : 0;
+        for (int c = 0; c < atlas->capacity; ++c) {
+            int sx, sy, dx, dy;
+            atlas_column_origin(atlas, c, &sx, &sy);
+            atlas_column_origin(&next, c, &dx, &dy);
+            copy_rect(atlas->fbo, next.fbo, sx, sy, dx, dy, col_w, col_h);
+        }
         glDeleteFramebuffers(1, &atlas->fbo);
         glDeleteTextures(1, &atlas->texture);
     }
@@ -325,10 +349,44 @@ GLuint lighting_atlas_texture(const LightingAtlas* atlas) {
     return atlas ? atlas->texture : 0;
 }
 
-float lighting_atlas_probe_column_x(const LightingAtlas* atlas, int index) {
-    if (!atlas || index < 0 || index >= atlas->capacity)
-        return 0.0f;
-    return (float)(atlas->spec_x + index * atlas_column_w(atlas->row0));
+void lighting_atlas_probe_column(const LightingAtlas* atlas, int index, float out[2]) {
+    int x = 0, y = 0;
+    if (atlas && index >= 0 && index < atlas->capacity)
+        atlas_column_origin(atlas, index, &x, &y);
+    out[0] = (float)x;
+    out[1] = (float)y;
+}
+
+void lighting_atlas_probe_extent(const LightingAtlas* atlas, int* out_w, int* out_h) {
+    const bool any = atlas && atlas->capacity > 0;
+    if (out_w)
+        *out_w = any ? atlas_column_w(atlas->row0) : 0;
+    if (out_h)
+        *out_h = any ? atlas_column_h(atlas->row0) : 0;
+}
+
+bool lighting_atlas_read_rect(const LightingAtlas* atlas, int x, int y, int w, int h,
+                              uint16_t* out) {
+    if (!atlas || !atlas->fbo || !out || w <= 0 || h <= 0)
+        return false;
+    GLint saved_read = 0;
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &saved_read);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, atlas->fbo);
+    glReadPixels(x, y, w, h, GL_RGBA, GL_HALF_FLOAT, out);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)saved_read);
+    check_gl_error("lighting atlas read");
+    return true;
+}
+
+bool lighting_atlas_write_rect(const LightingAtlas* atlas, int x, int y, int w, int h,
+                               const uint16_t* texels) {
+    if (!atlas || !atlas->texture || !texels || w <= 0 || h <= 0)
+        return false;
+    glBindTexture(GL_TEXTURE_2D, atlas->texture);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, w, h, GL_RGBA, GL_HALF_FLOAT, texels);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    check_gl_error("lighting atlas write");
+    return true;
 }
 
 void lighting_atlas_fill_column(const LightingAtlas* atlas, float out_column[4],

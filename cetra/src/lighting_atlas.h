@@ -3,6 +3,7 @@
 
 #include <GL/glew.h>
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "probe.h"
 #include "probe_set.h" // PROBE_ATLAS_ROWS_MAX, which the GPU row table is sized by
@@ -99,10 +100,22 @@ void lighting_atlas_bind(const LightingAtlas* atlas, ShaderProgram* program);
 // per-frame publish). The only thing about the atlas postfx needs.
 GLuint lighting_atlas_texture(const LightingAtlas* atlas);
 
-// A probe column's left edge, in texels. The only per-probe fact about the
+// A probe column's lower-left corner, in texels. The only per-probe fact about the
 // layout -- everything else about a column is shared, which is what
-// lighting_atlas_fill_column publishes.
-float lighting_atlas_probe_column_x(const LightingAtlas* atlas, int index);
+// lighting_atlas_fill_column publishes. Columns stack where the GI slots are tall enough
+// to hold more than one.
+void lighting_atlas_probe_column(const LightingAtlas* atlas, int index, float out[2]);
+
+// A probe column's size in texels, gutters included; 0 with no columns.
+void lighting_atlas_probe_extent(const LightingAtlas* atlas, int* out_w, int* out_h);
+
+// A rectangle of the atlas to the CPU as RGBA half floats, and back. Half floats both ways,
+// so what comes back is bit for bit what went: how a streamed item that leaves residency
+// returns without being captured again.
+bool lighting_atlas_read_rect(const LightingAtlas* atlas, int x, int y, int w, int h,
+                              uint16_t* out);
+bool lighting_atlas_write_rect(const LightingAtlas* atlas, int x, int y, int w, int h,
+                               const uint16_t* texels);
 
 // The atlas-wide half of the probe layout: the gutter and last row index, plus
 // each row's y origin and interior edge. Published to the GPU so the shader

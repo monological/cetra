@@ -9,6 +9,7 @@
 #include "cetra/engine.h"
 #include "cetra/ext/cwalk.h"
 #include "cetra/ext/log.h"
+#include "cetra/gi_volume.h"
 #include "cetra/ibl.h"
 #include "cetra/ies.h"
 #include "cetra/light.h"
@@ -770,9 +771,6 @@ void apply_cscene_decals(Scene* scene, const CetraSceneDesc* cscn) {
  * volume's opening sweep if the scene has one. Returns false when the scene authored none,
  * which is what leaves the auto-placement path below untouched.
  */
-_Static_assert(CSCENE_MAX_PROBES <= PROBE_SET_MAX,
-               "the parser cannot author more probes than a set can hold");
-
 bool apply_cscene_probes(Scene* scene, const CetraSceneDesc* cscn, int row0) {
     if (!scene || !cscn || cscn->probe_count <= 0)
         return false;
@@ -834,6 +832,32 @@ bool apply_cscene_probes(Scene* scene, const CetraSceneDesc* cscn, int row0) {
 
     scene->probe_set = set;
     return true;
+}
+
+/*
+ * GI volumes (spec 13.24): a grid per authored box, at its spacing. Returns false when the file
+ * authored none, which leaves --gi-volume's one fitted grid to the flag.
+ */
+bool apply_cscene_gi_volumes(Scene* scene, const CetraSceneDesc* cscn) {
+    if (!scene || !cscn || cscn->gi_volume_count <= 0)
+        return false;
+    int added = 0;
+    for (int i = 0; i < cscn->gi_volume_count; i++) {
+        const CSceneGIVolume* v = &cscn->gi_volumes[i];
+        GIVolume* gi = create_gi_volume_spaced(v->box_min, v->box_max, v->spacing);
+        if (!gi)
+            continue;
+        gi->classify = v->classify;
+        printf("Scene file: GI volume %d box (%.2f %.2f %.2f)..(%.2f %.2f %.2f), %dx%dx%d probes "
+               "of %.2f%s\n",
+               i, (double)v->box_min[0], (double)v->box_min[1], (double)v->box_min[2],
+               (double)v->box_max[0], (double)v->box_max[1], (double)v->box_max[2], gi->counts[0],
+               gi->counts[1], gi->counts[2], (double)v->spacing,
+               gi->classify ? ", classified" : "");
+        if (scene_add_gi_volume(scene, gi))
+            added++;
+    }
+    return added > 0;
 }
 
 /*

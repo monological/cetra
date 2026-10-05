@@ -2119,7 +2119,7 @@ void scene_capture_faces(Engine* engine, Scene* scene, struct IBLResources* ibl,
     glDepthFunc(GL_LESS);
     glDepthMask(GL_TRUE);
     glEnable(GL_CULL_FACE);
-    glCullFace(GL_BACK);
+    glCullFace(engine->capturing_back_faces ? GL_FRONT : GL_BACK);
     glFrontFace(GL_CCW);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -2218,6 +2218,7 @@ void scene_capture_faces(Engine* engine, Scene* scene, struct IBLResources* ibl,
 
     glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)saved_fbo);
     glViewport(saved_viewport[0], saved_viewport[1], saved_viewport[2], saved_viewport[3]);
+    glCullFace(GL_BACK);
     if (!saved_cull)
         glDisable(GL_CULL_FACE);
 }

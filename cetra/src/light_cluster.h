@@ -113,7 +113,7 @@ typedef struct GpuProbeDesc {
     float pos_intensity[4]; // xyz capture position (world), w intensity
     float box_min_fade[4];  // xyz parallax box min,         w box_fade
     float box_max_pad[4];   // xyz parallax box max,         w unused
-    float column[4];        // x column left edge (texels),  yzw unused
+    float column[4];        // xy column corner (texels),    zw unused
 } GpuProbeDesc;
 
 typedef struct GpuProbeBlock {
@@ -128,10 +128,10 @@ typedef struct GpuProbeBlock {
     // a power of two.
     float rows[PROBE_ATLAS_ROWS_MAX][4];
     GpuProbeDesc descs[PROBE_SET_MAX];
-    // One 8-bit mask per froxel, four to a word. A uint per froxel would be
-    // four times the bytes for the same bits, and std140 would then give each
-    // one a vec4 stride and make it sixteen.
-    uint32_t cluster_masks[LC_CLUSTER_COUNT / 4];
+    // One 16-bit mask per froxel, two to a word: a bit per resident probe, in the decals'
+    // packing (spec 13.24). A uint per froxel would be twice the bytes for the same bits,
+    // and std140 would then give each one a vec4 stride and make it eight times.
+    uint32_t cluster_masks[LC_CLUSTER_COUNT / 2];
 } GpuProbeBlock;
 
 /*

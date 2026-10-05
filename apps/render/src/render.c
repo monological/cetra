@@ -195,6 +195,10 @@ static void print_usage(const char* prog) {
             "      --gi-probes x,y,z  Probe grid counts (implies --gi-volume; default 8,4,8)\n");
     fprintf(stderr, "      --gi-rate <n>      Probes captured per frame while dirty (default 2)\n");
     fprintf(stderr, "      --gi-debug         Blit the probe atlas into the frame corner\n");
+    fprintf(stderr, "      --gi-stream-rate <n>  Probes per frame in a GI sweep begun after "
+                    "load (default 32)\n");
+    fprintf(stderr, "      --stream-probe N   Print the streamed lighting's residency every N "
+                    "frames\n");
     fprintf(stderr, "      --water            Water surface (spec 11.32)\n");
     fprintf(stderr, "      --no-water         Drop a surface the scene file asked for\n");
     fprintf(stderr, "      --rain <mm/h>      Rain at this rate, already soaked (spec 13.9)\n");
@@ -365,7 +369,9 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --no-layers-vt-feedback  Page residency on prediction alone\n");
     fprintf(stderr, "      --layers-vt-page-slots N Physical page slots in use (diagnostic)\n");
     fprintf(stderr, "      --layers-vt-probe N      Print page residency every N frames\n");
-    fprintf(stderr, "      --cam-at <frame:ex,ey,ez,tx,ty,tz>  Diagnostic: teleport the camera\n");
+    fprintf(
+        stderr,
+        "      --cam-at <frame:ex,ey,ez,tx,ty,tz>  Diagnostic: teleport the camera (repeatable)\n");
     fprintf(stderr, "      --no-oit-moments   Weighted-blended OIT: the depth curve, not the "
                     "measured moments\n");
     fprintf(stderr, "      --oit / --oit-moments  Restate the defaults (both are already on)\n");
@@ -554,6 +560,7 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     // -1, not 0: the library gives 0 its own meaning (capture every dirty probe
     // in one frame), so a 0 sentinel here would make --gi-rate 0 unreachable.
     args->gi_rate = -1;
+    args->gi_stream_rate = -1;
     // -1 = unset, so `--water-waves gerstner` can override a scene file that authored
     // fft. A 0 sentinel would make the Gerstner half of the flag unreachable.
     args->water_waves = -1;
@@ -593,11 +600,11 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->point_light_grid = 0; // off
     args->plg_radius = 10.0f;
     args->plg_intensity = 5.0f;
-    args->shadows_off_at = -1;         // -1 = never; the transition is the diagnostic
-    args->exposure_at_frame = -1;      // -1 = never; same idiom
-    args->layer_blend_at_frame = -1;   // -1 = never; same idiom
-    args->road_width_at_frame = -1;    // -1 = never; same idiom
-    args->cam_at_frame = -1;           // -1 = never; same idiom
+    args->shadows_off_at = -1;       // -1 = never; the transition is the diagnostic
+    args->exposure_at_frame = -1;    // -1 = never; same idiom
+    args->layer_blend_at_frame = -1; // -1 = never; same idiom
+    args->road_width_at_frame = -1;  // -1 = never; same idiom
+    args->cam_at_count = 0;
     args->shadow_softness = -1.0f;     // -1 = keep the engine default
     args->msm_blur = -1.0f;            // -1 = keep the engine default
     args->msm_bleed = -1.0f;           // -1 = keep the engine default
@@ -1211,6 +1218,18 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             }
             args->gi_rate = atoi(argv[i]);
             args->gi_volume = 1;
+        } else if (strcmp(argv[i], "--gi-stream-rate") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->gi_stream_rate = atoi(argv[i]);
+        } else if (strcmp(argv[i], "--stream-probe") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->stream_probe = atoi(argv[i]);
         } else if (strcmp(argv[i], "--water") == 0) {
             args->water = 1;
         } else if (strcmp(argv[i], "--water-level") == 0) {
@@ -1830,13 +1849,19 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
                 return -1;
             }
-            if (sscanf(argv[i], "%d:%f,%f,%f,%f,%f,%f", &args->cam_at_frame, &args->cam_at[0],
-                       &args->cam_at[1], &args->cam_at[2], &args->cam_at[3], &args->cam_at[4],
-                       &args->cam_at[5]) != 7 ||
-                args->cam_at_frame < 0) {
+            if (args->cam_at_count >= RENDER_CAM_AT_MAX) {
+                fprintf(stderr, "Error: at most %d --cam-at entries\n", RENDER_CAM_AT_MAX);
+                return -1;
+            }
+            const int n = args->cam_at_count;
+            float* pose = args->cam_at[n];
+            if (sscanf(argv[i], "%d:%f,%f,%f,%f,%f,%f", &args->cam_at_frame[n], &pose[0], &pose[1],
+                       &pose[2], &pose[3], &pose[4], &pose[5]) != 7 ||
+                args->cam_at_frame[n] < 0) {
                 fprintf(stderr, "Error: --cam-at wants frame:ex,ey,ez,tx,ty,tz\n");
                 return -1;
             }
+            args->cam_at_count++;
         } else if (strcmp(argv[i], "--area-light") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -2749,13 +2774,14 @@ static void render_frame_update(Engine* engine, float dt) {
     // read the fallback while the budget refills. Fires before the frame's
     // camera-matrix update and before the residency ensure, and refreshes the
     // view matrices itself so the moved pose is what residency sees.
-    if (frame_schedule->cam_at_frame == (int)engine->total_frames && engine->camera) {
-        vec3 eye = {frame_schedule->cam_at[0], frame_schedule->cam_at[1],
-                    frame_schedule->cam_at[2]};
-        vec3 target = {frame_schedule->cam_at[3], frame_schedule->cam_at[4],
-                       frame_schedule->cam_at[5]};
+    for (int c = 0; c < frame_schedule->cam_at_count; c++) {
+        if (frame_schedule->cam_at_frame[c] != (int)engine->total_frames || !engine->camera)
+            continue;
+        const float* pose = frame_schedule->cam_at[c];
+        vec3 eye = {pose[0], pose[1], pose[2]};
+        vec3 target = {pose[3], pose[4], pose[5]};
         apply_explicit_pose(eye, target);
-        fprintf(stderr, "frame %d: camera teleported\n", frame_schedule->cam_at_frame);
+        fprintf(stderr, "frame %d: camera teleported\n", frame_schedule->cam_at_frame[c]);
     }
     // The composite cache's by-value invalidation is unreachable from a fresh
     // process -- the first bake always reads the final authored values -- so
@@ -2807,6 +2833,15 @@ static void render_frame_update(Engine* engine, float dt) {
         Scene* scene = engine_get_scene(engine);
         if (scene)
             probe_set_probe_print(scene->probe_set, (int)engine->total_frames, false);
+    }
+    // The residency as the previous frame left it: this hook runs before the frame ranks.
+    if (frame_schedule->stream_probe > 0 &&
+        (int)engine->total_frames % frame_schedule->stream_probe == 0) {
+        Scene* scene = engine_get_scene(engine);
+        if (scene) {
+            gi_world_probe_print(scene->gi, (int)engine->total_frames);
+            probe_set_stream_print(scene->probe_set, (int)engine->total_frames);
+        }
     }
     if (frame_schedule->decal_probe > 0 &&
         (int)engine->total_frames % frame_schedule->decal_probe == 0) {
@@ -4601,10 +4636,14 @@ int main(int argc, char** argv) {
     // generated.
     apply_model_recenter(scene);
 
-    // The GI probe volume. Only allocated here -- the capture sweep runs inside
+    // The GI probe volumes. Only allocated here -- the capture sweep runs inside
     // the render loop, where the scene has its final transforms and the async
-    // texture loader has drained.
-    if (args.gi_volume) {
+    // texture loader has drained. A file that authored its own grids wins over
+    // the flag's one fitted to the whole scene, which cannot say where the rooms are.
+    const bool authored_gi = apply_cscene_gi_volumes(scene, cscn);
+    if (authored_gi && args.gi_volume && args.gi_probes[0] > 0)
+        fprintf(stderr, "Warning: the scene file authors giVolumes; --gi-probes is ignored\n");
+    if (args.gi_volume && !authored_gi) {
         int nx = args.gi_probes[0] > 0 ? args.gi_probes[0] : 8;
         int ny = args.gi_probes[1] > 0 ? args.gi_probes[1] : 4;
         int nz = args.gi_probes[2] > 0 ? args.gi_probes[2] : 8;
@@ -4615,12 +4654,15 @@ int main(int argc, char** argv) {
             vec3 gi_min, gi_max;
             scene_bounds(scene, gi_min, gi_max);
             gi_volume_fit(gi, gi_min, gi_max);
-            if (scene_add_gi_volume(scene, gi)) {
-                if (args.gi_rate >= 0)
-                    scene->gi->rate = args.gi_rate;
-                scene->gi->debug_atlas = args.gi_debug != 0;
-            }
+            scene_add_gi_volume(scene, gi);
         }
+    }
+    if (scene->gi) {
+        if (args.gi_rate >= 0)
+            scene->gi->rate = args.gi_rate;
+        if (args.gi_stream_rate >= 0)
+            scene->gi->stream_rate = args.gi_stream_rate;
+        scene->gi->debug_atlas = args.gi_debug != 0;
     }
 
     // A scene file that authored its own probes wins over the flag, and says so:
@@ -4973,6 +5015,10 @@ int main(int argc, char** argv) {
     // anything once some have run.
     if (args.probe_set_probe > 0)
         probe_set_probe_print(scene->probe_set, (int)engine->total_frames, true);
+    if (args.stream_probe > 0) {
+        gi_world_probe_print(scene->gi, (int)engine->total_frames);
+        probe_set_stream_print(scene->probe_set, (int)engine->total_frames);
+    }
     if (args.decal_probe > 0)
         decal_probe_print(scene, (int)engine->total_frames, true,
                           light_cluster_decal_mask_digest(engine->light_cluster),

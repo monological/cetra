@@ -336,6 +336,12 @@ typedef struct Engine {
     // records what happened the last time a caller wrote its own.
     bool capturing_irradiance;
 
+    // A capture draws BACK faces only (spec 13.24). Set by a GI volume's classification of its
+    // probes: a back face nearer than every front face in a direction means the probe sits
+    // inside something, and a probe that sees that in more than a quarter of its directions
+    // is inside a wall.
+    bool capturing_back_faces;
+
     Camera* camera; // The camera the frame renders (engine_set_camera); borrowed
 
     Scene** scenes;             // Array of scenes managed by the engine

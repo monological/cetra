@@ -148,7 +148,12 @@ bool giIrradiance(vec3 worldPos, vec3 N, vec3 V, out vec3 irradiance) {
         if (weight < crush)
             weight *= weight * weight / (crush * crush);
 
-        sum += texture(giAtlasTex, giTileUV(s, pi, N, false)).rgb * weight;
+        // A probe that found itself inside geometry wrote 0 into its irradiance
+        // tile's alpha (spec 13.24); every other tile holds 1. What it saw is the
+        // inside of a wall, and both rooms through it.
+        vec4 irr = texture(giAtlasTex, giTileUV(s, pi, N, false));
+        weight *= irr.a;
+        sum += irr.rgb * weight;
         weightSum += weight;
     }
 

@@ -21,6 +21,9 @@
 // --rain-probe-at points one run may name
 #define RAIN_PROBE_AT_MAX 16
 
+// Entries in the --cam-at teleport schedule
+#define RENDER_CAM_AT_MAX 16
+
 typedef struct {
     const char* model_path;
     const char* texture_dir;
@@ -201,6 +204,8 @@ typedef struct {
     float adapt_up;               // Per-frame adaptation rate, scene brightening (<0 = default)
     float adapt_down;             // Per-frame adaptation rate, scene darkening (<0 = default)
     int gi_rate;                  // Probes captured per frame while dirty (0 = default)
+    int gi_stream_rate;           // Probes per frame in a sweep begun after load (-1 = default)
+    int stream_probe;             // Print the streamed lighting's residency every N frames
     int gi_debug;                 // Blit the probe atlas into the frame corner
     int sky;                      // Procedural physically-based sky instead of -e
     int sky_debug;                // Blit the sky LUTs into the frame corner
@@ -381,11 +386,13 @@ typedef struct {
     // cache's key goes stale.
     int road_width_at_frame;
     float road_width_at_value;
-    // Diagnostic (--cam-at): teleport the camera on this frame, -1 for never.
+    // Diagnostic (--cam-at, repeatable): teleport the camera on these frames.
     // The worst case for page residency -- every page misses at once -- which
-    // no walk can produce, since walking crosses one boundary at a time.
-    int cam_at_frame;
-    float cam_at[6]; // eye xyz, target xyz
+    // no walk can produce, since walking crosses one boundary at a time; and a
+    // schedule of them walks one run through several places (spec 13.24).
+    int cam_at_count;
+    int cam_at_frame[RENDER_CAM_AT_MAX];
+    float cam_at[RENDER_CAM_AT_MAX][6]; // eye xyz, target xyz
     // Finishing grade (-1 = keep engine default; >=0 enables + sets)
     int film_preset; // --film: enable the whole finishing stack at sane defaults
     float vignette;

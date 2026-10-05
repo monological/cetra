@@ -22,6 +22,7 @@ ReflectionProbe* create_reflection_probe(void) {
     probe->intensity = 1.0f;
     probe->box_fade = 0.2f;
     probe->enabled = true;
+    probe->resident_slot = -1;
 
     return probe;
 }
@@ -35,6 +36,7 @@ void free_reflection_probe(ReflectionProbe* probe) {
     if (probe->prefiltered)
         glDeleteTextures(1, &probe->prefiltered);
 
+    free(probe->kept);
     free(probe);
 }
 
@@ -169,6 +171,7 @@ void probe_release_capture_scratch(ReflectionProbe* probe) {
     if (!probe)
         return;
     gl_delete_texture(&probe->cubemap);
+    gl_delete_texture(&probe->prefiltered);
 }
 
 // Flatten the probe (or its absence) into postfx's per-frame uniform block.

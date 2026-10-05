@@ -17,9 +17,10 @@
  * struct; applying it to a Scene/PostFX is application policy.
  */
 
-#define CSCENE_MAX_LIGHTS          16
+#define CSCENE_MAX_LIGHTS          64
 #define CSCENE_MAX_FOG_VOLUMES     8
-#define CSCENE_MAX_PROBES          8
+#define CSCENE_MAX_PROBES          64
+#define CSCENE_MAX_GI_VOLUMES      32
 #define CSCENE_MAX_DECALS          16
 #define CSCENE_MAX_OCCLUDERS       64
 #define CSCENE_MAX_LIGHT_OVERRIDES 16
@@ -364,8 +365,8 @@ typedef struct CSceneFogVolume {
  * `environment.probe_scene` when both are present: that flag asks for ONE auto-placed
  * probe, and a file that authored its own has already answered the question the flag asks.
  *
- * Mirrors ReflectionProbe in probe.h. The cap is this parser's own; a static assert where
- * the two meet keeps it from exceeding PROBE_SET_MAX.
+ * Mirrors ReflectionProbe in probe.h. The cap is this parser's own: a set holds any number
+ * and keeps the nearest PROBE_SET_MAX resident (spec 13.24).
  */
 typedef struct CSceneProbe {
     float position[3];
@@ -375,6 +376,19 @@ typedef struct CSceneProbe {
     float box_fade;
     bool env_only; // prefilter the global environment instead of capturing the scene
 } CSceneProbe;
+
+/*
+ * giVolumes[] -- GI probe grids (spec 13.24), one per place, a top-level block because a grid
+ * is a thing placed in the world. boxMin, boxMax and spacing are REQUIRED: the grid holds as
+ * many cells of `spacing` as the box does, centred on it. classify defaults to true, since
+ * nothing kept a grid laid over a box out of its walls.
+ */
+typedef struct CSceneGIVolume {
+    float box_min[3];
+    float box_max[3];
+    float spacing;
+    bool classify;
+} CSceneGIVolume;
 
 /*
  * occluders[] -- world-space boxes the occlusion cull treats as solid (spec 11.98). A
@@ -636,6 +650,9 @@ typedef struct CetraSceneDesc {
 
     CSceneProbe probes[CSCENE_MAX_PROBES];
     int probe_count;
+
+    CSceneGIVolume gi_volumes[CSCENE_MAX_GI_VOLUMES];
+    int gi_volume_count;
 
     CSceneOccluder occluders[CSCENE_MAX_OCCLUDERS];
     int occluder_count;

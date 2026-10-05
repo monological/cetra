@@ -21,6 +21,10 @@
  * at nearly equal distance, the camera between them, would otherwise trade the last slot every
  * frame and each trade is an upload.
  *
+ * AN ITEM COMES BACK TO ITS HOME, the slot it last held, when that slot is free. Its texels then
+ * land where they were, and so does every coordinate computed from where they are: a kept probe
+ * readmitted one column over samples its texels at UVs rounded differently.
+ *
  * Ties go to the lower index, so one run repeats itself.
  */
 
@@ -32,8 +36,9 @@ float stream_box_distance(const vec3 p, const vec3 box_min, const vec3 box_max);
 // dist[i] is item i's distance; a negative one marks an item that may not be resident (it is
 // switched off) and frees any slot it holds. slot_of[i] is the slot item i holds or -1, and
 // holder[s] the item slot s holds or -1; both are read and rewritten, and must agree on entry.
+// home[i] is the slot item i last held or -1, read and rewritten; NULL for no preference.
 // Returns how many slots changed holder.
 int stream_assign(const float* dist, int count, int capacity, float margin, int* slot_of,
-                  int* holder);
+                  int* holder, int* home);
 
 #endif // _STREAM_H_

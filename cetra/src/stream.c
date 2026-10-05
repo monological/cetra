@@ -1,4 +1,5 @@
 #include <math.h>
+#include <stdlib.h>
 
 #include "stream.h"
 
@@ -12,10 +13,10 @@ float stream_box_distance(const vec3 p, const vec3 box_min, const vec3 box_max) 
 }
 
 // The nearest item that may be resident and is not, or -1.
-static int nearest_candidate(const float* dist, int count, const int* slot_of) {
+static int nearest_candidate(const float* dist, int count, const bool* resident) {
     int best = -1;
     for (int i = 0; i < count; ++i) {
-        if (slot_of[i] >= 0 || dist[i] < 0.0f)
+        if (resident[i] || dist[i] < 0.0f)
             continue;
         if (best < 0 || dist[i] < dist[best])
             best = i;
@@ -23,61 +24,82 @@ static int nearest_candidate(const float* dist, int count, const int* slot_of) {
     return best;
 }
 
-// The slot whose holder is farthest, or -1 when every slot is free. Of two at one distance the
-// higher index counts as farther, the mirror of the candidates' tie rule.
-static int farthest_slot(const float* dist, int capacity, const int* holder) {
+// The resident item that is farthest, or -1. Of two at one distance the higher index counts as
+// farther, the mirror of the candidates' tie rule.
+static int farthest_resident(const float* dist, int count, const bool* resident) {
     int best = -1;
-    for (int s = 0; s < capacity; ++s) {
-        if (holder[s] < 0)
+    for (int i = 0; i < count; ++i) {
+        if (!resident[i])
             continue;
-        if (best < 0 || dist[holder[s]] > dist[holder[best]] ||
-            (dist[holder[s]] == dist[holder[best]] && holder[s] > holder[best]))
-            best = s;
+        // >= since i only grows: a tie goes to the later index.
+        if (best < 0 || dist[i] >= dist[best])
+            best = i;
     }
     return best;
 }
 
 int stream_assign(const float* dist, int count, int capacity, float margin, int* slot_of,
-                  int* holder) {
-    if (!dist || !slot_of || !holder || capacity <= 0)
+                  int* holder, int* home) {
+    if (!dist || !slot_of || !holder || capacity <= 0 || count <= 0)
         return 0;
+    bool* resident = calloc((size_t)count, sizeof(bool));
+    if (!resident)
+        return 0;
+
+    // WHO is resident, first, and only then WHERE: deciding both at once hands an item
+    // readmitted beside another whichever slot its eviction happened to free, and its texels
+    // land somewhere new for no reason.
+    int held = 0;
+    for (int s = 0; s < capacity; ++s) {
+        const int h = holder[s];
+        if (h >= 0 && h < count && dist[h] >= 0.0f) {
+            resident[h] = true;
+            held++;
+        }
+    }
+    // Nearest first, so the loop can stop at the first candidate that cannot get in: every
+    // one after it is farther and could not either.
+    for (;;) {
+        const int c = nearest_candidate(dist, count, resident);
+        if (c < 0)
+            break;
+        if (held < capacity) {
+            resident[c] = true;
+            held++;
+            continue;
+        }
+        const int f = farthest_resident(dist, count, resident);
+        if (f < 0 || dist[f] <= dist[c] + margin)
+            break;
+        resident[f] = false;
+        resident[c] = true;
+    }
 
     int changed = 0;
     for (int s = 0; s < capacity; ++s) {
-        int h = holder[s];
+        const int h = holder[s];
         if (h < 0)
             continue;
-        if (h >= count || dist[h] < 0.0f) {
-            if (h < count)
-                slot_of[h] = -1;
-            holder[s] = -1;
-            changed++;
-        }
-    }
-
-    // Nearest first, so the loop can stop at the first candidate that cannot take a slot:
-    // every one after it is farther and could not either. An item just evicted is a
-    // candidate again, but never displaces anything, since every holder left is nearer.
-    for (;;) {
-        int c = nearest_candidate(dist, count, slot_of);
-        if (c < 0)
-            break;
-        int s = -1;
-        for (int f = 0; f < capacity; ++f) {
-            if (holder[f] < 0) {
-                s = f;
-                break;
-            }
-        }
-        if (s < 0) {
-            s = farthest_slot(dist, capacity, holder);
-            if (s < 0 || dist[holder[s]] <= dist[c] + margin)
-                break;
-            slot_of[holder[s]] = -1;
-        }
-        holder[s] = c;
-        slot_of[c] = s;
+        if (h < count && resident[h])
+            continue;
+        if (h < count)
+            slot_of[h] = -1;
+        holder[s] = -1;
         changed++;
     }
+    for (int i = 0; i < count; ++i) {
+        if (!resident[i] || slot_of[i] >= 0)
+            continue;
+        int s = home && home[i] >= 0 && home[i] < capacity && holder[home[i]] < 0 ? home[i] : -1;
+        for (int f = 0; s < 0 && f < capacity; ++f)
+            if (holder[f] < 0)
+                s = f;
+        holder[s] = i;
+        slot_of[i] = s;
+        if (home)
+            home[i] = s;
+        changed++;
+    }
+    free(resident);
     return changed;
 }
