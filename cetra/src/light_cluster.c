@@ -7,7 +7,7 @@
 
 #include "ext/log.h"
 #include "intersect.h"
-#include "probe_atlas.h"
+#include "lighting_atlas.h"
 #include "light.h"
 #include "scene.h"
 #include "shadow.h"

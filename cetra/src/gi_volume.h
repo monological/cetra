@@ -48,12 +48,17 @@
 // by the roadmap's global texture-unit ledger before either feature was built.
 #define GI_ATLAS_TEXTURE_UNIT 14
 
+// Volumes resident at once: the nearest to the camera, each holding a slot of the scene's
+// lighting atlas (spec 13.24). Must match GI_SLOTS in include/gi_volume.glsl. The world holds
+// any number; this caps what one frame samples, and is set by the shader's uniform table
+// rather than by memory.
+#define GI_RESIDENT_MAX 8
+
 struct Engine;
 struct Scene;
+struct LightingAtlas;
 
 typedef struct GIVolume {
-    bool enabled;
-
     // Grid. Probe (x,y,z) sits at grid_min + (i + 0.5) * spacing, so probes are
     // cell CENTRES -- a probe exactly on the scene AABB face would be inside the
     // wall it is meant to sample away from.
@@ -66,30 +71,22 @@ typedef struct GIVolume {
     // than being recomputed per sweep.
     float far_clip;
 
-    // One RGBA16F atlas holding both tile types. Irradiance tiles occupy the top
-    // rows and visibility the rest; both are addressed by probe index.
-    GLuint atlas;
-    int atlas_w, atlas_h;
-    int irradiance_rows; // atlas rows consumed by the irradiance block
-    bool owns_atlas;     // false when the specular probe atlas allocated it
-    // The scratch below is built; gi_ensure_targets returns early on it. Its
-    // own flag rather than a test on `atlas`, which since 11.70 may have been
-    // set from outside before any of this existed.
+    // Atlas rows the irradiance block takes in the volume's slot. Irradiance tiles occupy the
+    // top rows and visibility the rest; both are addressed by probe index.
+    int irradiance_rows;
+    // The scratch below is built; gi_ensure_targets returns early on it.
     bool targets_ready;
 
     // Per-probe capture scratch, reused for every probe.
     GLuint capture_color; // cubemap, GI_CAPTURE_FACE^2, RGB16F
     GLuint capture_depth; // cubemap, GI_CAPTURE_FACE^2, DEPTH_COMPONENT24
-    GLuint tile_fbo;      // renders one tile at a time into the atlas
     GLuint quad_vao, quad_vbo;
 
     ShaderProgram* project_program;
 
     // Convergence. `dirty_count` probes remain to capture, taken from
-    // `next_probe` round-robin. `rate` is probes per frame while dirty, 0 for
-    // all of them; it does not apply to the opening sweep, which always runs in
-    // one frame (see gi_volume_update).
-    int rate;
+    // `next_probe` round-robin. The opening sweep runs in one frame (see
+    // gi_volume_update); after it the world's `rate` paces re-convergence.
     int next_probe;
     int dirty_count;
     bool first_pass;
@@ -99,29 +96,33 @@ typedef struct GIVolume {
     // must stop advancing the moment the volume converges.
     int captures_total;
 
-    bool debug_atlas; // draw the raw atlas over the composited frame
-    bool failed;      // One-shot: allocation is not retried every frame
+    bool failed; // One-shot: allocation is not retried every frame
 } GIVolume;
+
+// Every GI volume in the world (spec 13.24), owned by the scene. Each is a grid over one place
+// -- a building, a cave -- and the nearest GI_RESIDENT_MAX of them hold a slot of the scene's
+// lighting atlas and are what a frame samples.
+typedef struct GIWorld {
+    // SETTINGS: plain stores.
+    bool enabled;     // false = no volume is captured or sampled
+    int rate;         // probes per frame while a swept volume re-converges; 0 = all at once
+    bool debug_atlas; // draw the lighting atlas over the composited frame
+
+    // ENGINE-OWNED: read, never write.
+    GIVolume** volumes; // owned; scene_add_gi_volume
+    int count;
+    int capacity;
+    int* slot_of;                // each volume's atlas slot, or -1 while not resident
+    int holder[GI_RESIDENT_MAX]; // each slot's volume, or -1
+    float* distance;             // each volume's distance from the camera, this frame's ranking
+} GIWorld;
 
 GIVolume* create_gi_volume(int nx, int ny, int nz);
 void free_gi_volume(GIVolume* gi);
 
-// The atlas this volume WOULD allocate, without allocating it. Asked by the
-// specular probe atlas (spec 11.70), which has to reserve these columns before
-// the volume's own lazy allocation runs -- there is one sampler unit for both
-// and only one texture can be bound to it.
+// The atlas region this volume needs, in texels. The scene's lighting atlas sizes its GI slots
+// from the largest of these.
 void gi_volume_atlas_extent(const GIVolume* gi, int* out_w, int* out_h);
-
-// Take a texture the specular probe atlas allocated, with this volume's region
-// at columns [0, w) of it. The volume keeps every tile coordinate it already
-// computes: those are texel offsets, and giAtlasSize is a uniform, so a wider
-// texture moves nothing it addresses.
-//
-// At any time: a volume that has already swept into an atlas of its own copies
-// that region across and frees its own, so a probe set may be captured after
-// the volume has converged -- which is what lets its captures see the volume's
-// light rather than the environment's. A volume already sharing one refuses.
-void gi_volume_adopt_atlas(GIVolume* gi, GLuint texture, int atlas_w, int atlas_h);
 
 // Fit the grid to a scene AABB and arm a full convergence sweep.
 void gi_volume_fit(GIVolume* gi, const vec3 aabb_min, const vec3 aabb_max);
@@ -130,34 +131,50 @@ void gi_volume_fit(GIVolume* gi, const vec3 aabb_min, const vec3 aabb_max);
 // move, a light edit, a material change.
 void gi_volume_mark_dirty(GIVolume* gi);
 
-// Re-express the grid's origin after a world-origin shift (spec 11.62).
-//
-// The ATLAS is deliberately kept: a rigid translation moves every probe by the
-// same delta as everything it sees, so the irradiance each one recorded is still
-// correct. Only where the grid SITS changed. Re-arming instead would re-capture
-// every probe -- six scene renders each -- to reproduce what is already stored,
-// and would do it at the un-shifted positions unless this ran first anyway.
-void gi_volume_shift_origin(GIVolume* gi, const vec3 delta);
-
-// Capture up to `rate` probes if any remain dirty. No-op on a converged volume,
-// which is the steady state. Must run BEFORE the frame's scene pass: it renders
-// the scene internally and leaves the default framebuffer bound.
-void gi_volume_update(GIVolume* gi, struct Engine* engine, struct Scene* scene);
-
-// Bind the atlas and upload the grid uniforms for a program that samples it.
-// No-op on a program without the uniforms, so it is safe for every material.
-void gi_volume_bind(const GIVolume* gi, ShaderProgram* program);
-
-// Ready to be sampled: allocated, enabled, and holding at least one converged
-// sweep's worth of data.
+// Ready to be sampled from the slot it holds: at least one converged sweep's worth of data.
 bool gi_volume_active(const GIVolume* gi);
 
 // Its opening sweep is still to run: a capture now would see the scene without
-// the light this volume will give it. False for NULL and for a volume disabled,
-// failed or never fitted, none of which will ever have an answer to wait for.
+// the light this volume will give it. False for NULL and for a volume failed or
+// never fitted, neither of which will ever have an answer to wait for.
 bool gi_volume_pending(const GIVolume* gi);
 
-// Draw the raw atlas over the composited frame, for acceptance.
-void gi_volume_debug_blit(const GIVolume* gi, struct Engine* engine, int screen_w, int screen_h);
+GIWorld* create_gi_world(void);
+void free_gi_world(GIWorld* world);
+
+// Takes ownership. False (and the volume freed) on NULL or out of memory.
+bool gi_world_add(GIWorld* world, GIVolume* gi);
+
+// Decide which volumes are resident, from the camera: once a frame, before anything captures,
+// so every pass of the frame agrees on it. A volume that loses its slot sweeps again when it
+// is next admitted.
+void gi_world_rank(GIWorld* world, const struct Engine* engine);
+
+// Grow the scene's lighting atlas to hold the resident volumes and capture up to the world's
+// rate of probes in each one still dirty. No-op on a converged world. Must run BEFORE the
+// frame's scene pass: it renders the scene internally and leaves the default framebuffer bound.
+void gi_world_update(GIWorld* world, struct Engine* engine, struct Scene* scene);
+
+// Bind the atlas and upload the resident volumes' grids for a program that samples them.
+// No-op on a program without the uniforms, so it is safe for every material.
+void gi_world_bind(const GIWorld* world, const struct LightingAtlas* atlas, ShaderProgram* program);
+
+// A resident volume has its opening sweep still to run.
+bool gi_world_pending(const GIWorld* world);
+
+// Some resident volume has probes still to capture.
+bool gi_world_dirty(const GIWorld* world);
+
+// Re-arm every volume, for a change in the light every one of them saw.
+void gi_world_mark_dirty(GIWorld* world);
+
+// Re-express every grid after a world-origin shift (spec 11.62).
+//
+// The ATLAS is deliberately kept: a rigid translation moves every probe by the
+// same delta as everything it sees, so the irradiance each one recorded is still
+// correct. Only where the grids SIT changed. Re-arming instead would re-capture
+// every probe -- six scene renders each -- to reproduce what is already stored,
+// and would do it at the un-shifted positions unless this ran first anyway.
+void gi_world_shift_origin(GIWorld* world, const vec3 delta);
 
 #endif // _GI_VOLUME_H_

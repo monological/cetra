@@ -2,7 +2,7 @@
 #include <string.h>
 
 #include "probe_set.h"
-#include "probe_atlas.h"
+#include "lighting_atlas.h"
 #include "light_cluster.h" // GpuProbeBlock, the block this fills half of
 #include "engine.h"
 #include "gi_volume.h"
@@ -23,7 +23,6 @@ void free_reflection_probe_set(ReflectionProbeSet* set) {
 
     for (int i = 0; i < set->count; ++i)
         free_reflection_probe(set->probes[i]);
-    free_probe_atlas(set->atlas);
     free(set);
 }
 
@@ -61,13 +60,12 @@ static bool capture_all(ReflectionProbeSet* set, struct Engine* engine, struct S
     // One probe consumes its own cubemap directly on the prefilter unit, so it
     // needs no atlas and pays none of its memory.
     if (set->count >= 2) {
-        if (!set->atlas)
-            set->atlas = create_probe_atlas(engine, scene, set->count, set->row0);
+        set->atlas = lighting_atlas_sync(scene, engine);
         if (!set->atlas)
             return false;
 
         for (int i = 0; i < set->count; ++i) {
-            if (!probe_atlas_project(set->atlas, set->probes[i], i))
+            if (!lighting_atlas_project_probe(set->atlas, set->probes[i], i))
                 return false;
             // The scratch cubes are what make a set affordable: past this point
             // the column holds everything a consumer reads, and a retained
@@ -81,7 +79,7 @@ static bool capture_all(ReflectionProbeSet* set, struct Engine* engine, struct S
 void probe_set_update(ReflectionProbeSet* set, struct Engine* engine, struct Scene* scene) {
     if (!set || set->ready || set->failed || set->count <= 0 || !engine || !scene)
         return;
-    if (gi_volume_pending(scene->gi_volume))
+    if (gi_world_pending(scene->gi))
         return;
     if (capture_all(set, engine, scene))
         set->ready = true;
@@ -96,13 +94,13 @@ void probe_set_fill_descriptors(const ReflectionProbeSet* set, GpuProbeBlock* ou
     out->info[0] = set->count;
 
     int aw = 0, ah = 0;
-    probe_atlas_size(set->atlas, &aw, &ah);
+    lighting_atlas_size(set->atlas, &aw, &ah);
     out->atlas_params[0] = aw > 0 ? 1.0f / (float)aw : 0.0f;
     out->atlas_params[1] = ah > 0 ? 1.0f / (float)ah : 0.0f;
     out->atlas_params[2] = (float)aw;
     out->atlas_params[3] = (float)ah;
 
-    probe_atlas_fill_column(set->atlas, out->atlas_column, out->rows);
+    lighting_atlas_fill_column(set->atlas, out->atlas_column, out->rows);
 
     for (int i = 0; i < set->count; ++i) {
         const ReflectionProbe* probe = set->probes[i];
@@ -113,7 +111,7 @@ void probe_set_fill_descriptors(const ReflectionProbeSet* set, GpuProbeBlock* ou
         glm_vec3_copy((float*)probe->box_min, desc->box_min_fade);
         desc->box_min_fade[3] = probe->box_fade;
         glm_vec3_copy((float*)probe->box_max, desc->box_max_pad);
-        desc->column[0] = probe_atlas_column_x(set->atlas, i);
+        desc->column[0] = lighting_atlas_probe_column_x(set->atlas, i);
     }
 }
 
@@ -141,7 +139,7 @@ void probe_set_bind(const ReflectionProbeSet* set, ShaderProgram* program) {
         // holding that environment: probeEnabled stays 0 and the single-probe
         // branch is never taken.
         uniform_set_int(program->uniforms, "probeEnabled", 0);
-        probe_atlas_bind(set->atlas, program);
+        lighting_atlas_bind(set->atlas, program);
         return;
     }
 
@@ -161,7 +159,7 @@ void probe_set_publish_to_postfx(const ReflectionProbeSet* set, PostFX* fx) {
         // does, so all it needs published is the texture and the flag arming
         // the branch.
         fx->probe_multi = true;
-        fx->probe_atlas = probe_atlas_texture(set->atlas);
+        fx->probe_atlas = lighting_atlas_texture(set->atlas);
         fx->probe_enabled = false;
         fx->probe_cubemap = 0;
         return;
@@ -189,7 +187,7 @@ void probe_set_probe_print(const ReflectionProbeSet* set, int frame, bool final)
         mode = "single";
 
     int aw = 0, ah = 0;
-    probe_atlas_size(set->atlas, &aw, &ah);
+    lighting_atlas_size(set->atlas, &aw, &ah);
 
     printf("probe-set frame=%d count=%d mode=%s atlas=%dx%d captures=%d mask_bits=%d "
            "digest=%08x\n",
@@ -201,7 +199,7 @@ void probe_set_probe_print(const ReflectionProbeSet* set, int frame, bool final)
     for (int i = 0; i < set->count; ++i) {
         const ReflectionProbe* p = set->probes[i];
         int rx = 0, ry = 0, rows = 0;
-        probe_atlas_rect(set->atlas, i, &rx, &ry, &rows);
+        lighting_atlas_probe_rect(set->atlas, i, &rx, &ry, &rows);
         printf("probe-set probe idx=%d pos=%.3f,%.3f,%.3f box=%.3f,%.3f,%.3f..%.3f,%.3f,%.3f "
                "rect=%d,%d rows=%d\n",
                i, p->position[0], p->position[1], p->position[2], p->box_min[0], p->box_min[1],

@@ -2373,9 +2373,13 @@ void main() {
 
         // Both sources store the same quantity -- the cosine-weighted mean
         // incident radiance, E/pi -- so this is a straight substitution and the
-        // albedo multiply below is unchanged.
-        vec3 irradiance = giEnabled > 0 ? giSampleIrradiance(WorldPos, N, V)
-                                        : envIrradiance(N);
+        // albedo multiply below is unchanged. A fragment inside a volume still
+        // sweeping has no volume answer, and takes the one it would have had
+        // with no volume at all.
+        vec3 irradiance;
+        bool giAnswered = giEnabled > 0 && giIrradiance(WorldPos, N, V, irradiance);
+        if (!giAnswered)
+            irradiance = iblEnabled > 0 ? envIrradiance(N) : envAmbient();
         vec3 diffuse = irradiance * albedoMap;
 
         // How much of the environment reaches this point. The environment's reflection cannot
@@ -2386,7 +2390,7 @@ void main() {
         // It scales the environment's share and never a probe's, which saw the room itself.
         // 1 with no volume, and outdoors, where the two agree.
         float envVisible = 1.0;
-        if (giEnabled > 0 && envLobe) {
+        if (giAnswered && envLobe) {
             const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
             envVisible = clamp(dot(irradiance, LUMA) / max(dot(envIrradiance(N), LUMA), 1e-6),
                                0.0, 1.0);

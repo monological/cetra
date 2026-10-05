@@ -4604,27 +4604,22 @@ int main(int argc, char** argv) {
     // The GI probe volume. Only allocated here -- the capture sweep runs inside
     // the render loop, where the scene has its final transforms and the async
     // texture loader has drained.
-    //
-    // BEFORE the reflection probes, and the order is load-bearing: the two
-    // atlases share sampler unit 14, so the specular atlas has to reserve this
-    // volume's columns at allocation and can only do that if the volume exists
-    // to be measured. Reversed, each allocates its own texture and the second
-    // one bound wins the unit.
     if (args.gi_volume) {
         int nx = args.gi_probes[0] > 0 ? args.gi_probes[0] : 8;
         int ny = args.gi_probes[1] > 0 ? args.gi_probes[1] : 4;
         int nz = args.gi_probes[2] > 0 ? args.gi_probes[2] : 8;
         GIVolume* gi = create_gi_volume(nx, ny, nz);
         if (gi) {
-            if (args.gi_rate >= 0)
-                gi->rate = args.gi_rate;
-            gi->debug_atlas = args.gi_debug != 0;
             // Bounds AFTER the recenter above: the pre-recenter ones no longer
             // say where the scene is.
             vec3 gi_min, gi_max;
             scene_bounds(scene, gi_min, gi_max);
             gi_volume_fit(gi, gi_min, gi_max);
-            scene->gi_volume = gi;
+            if (scene_add_gi_volume(scene, gi)) {
+                if (args.gi_rate >= 0)
+                    scene->gi->rate = args.gi_rate;
+                scene->gi->debug_atlas = args.gi_debug != 0;
+            }
         }
     }
 

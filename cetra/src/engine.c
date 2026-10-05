@@ -32,7 +32,7 @@
 #include "rain.h"
 #include "rain_render.h"
 #include "gi_volume.h"
-#include "probe_atlas.h"
+#include "lighting_atlas.h"
 #include "layers_vt.h"
 #include "material_texture_array.h"
 #include "texture.h"
@@ -2338,12 +2338,14 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode) {
     if (fx_scene && fx_scene->sky && fx_scene->sky->debug_luts) {
         sky_debug_blit_luts(fx_scene->sky, engine->fb_width, engine->fb_height);
     }
-    if (fx_scene && fx_scene->gi_volume && fx_scene->gi_volume->debug_atlas) {
-        gi_volume_debug_blit(fx_scene->gi_volume, engine, engine->fb_width, engine->fb_height);
-    }
-    if (fx_scene && fx_scene->probe_set && fx_scene->probe_set->debug_atlas) {
-        probe_atlas_debug_blit(fx_scene->probe_set->atlas, engine, engine->fb_width,
-                               engine->fb_height);
+    // One atlas holds both, so one overlay shows both. The GI tiles hold bounced light, a
+    // fraction of the direct, and are lifted 4x when they are what was asked for.
+    if (fx_scene && fx_scene->gi && fx_scene->gi->debug_atlas) {
+        lighting_atlas_debug_blit(fx_scene->lighting_atlas, engine, engine->fb_width,
+                                  engine->fb_height, 4.0f);
+    } else if (fx_scene && fx_scene->probe_set && fx_scene->probe_set->debug_atlas) {
+        lighting_atlas_debug_blit(fx_scene->lighting_atlas, engine, engine->fb_width,
+                                  engine->fb_height, 1.0f);
     }
     if (fx_scene && fx_scene->fire && fx_scene->fire->debug_field >= 0)
         fire_render_slice(engine->fire_renderer, fx_scene->fire, engine->fb_height);
@@ -3102,8 +3104,8 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
             profiler_scope_end(engine->profiler);
             // The scene owns what re-derives from its environment; the sky
             // only reports that its chain moved.
-            if (env_swapped && shadow_scene->gi_volume)
-                gi_volume_mark_dirty(shadow_scene->gi_volume);
+            if (env_swapped)
+                gi_world_mark_dirty(shadow_scene->gi);
         }
 
         // The app settles its camera and its graph, then the engine propagates
@@ -3167,17 +3169,18 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
                               (float)engine->render_delta);
         }
 
-        // GI probe captures, while the volume is dirty. Deliberately BEFORE the
+        // GI probe captures, while a resident volume is dirty. Deliberately BEFORE the
         // shadow pass: a capture needs the camera-independent single-cascade map
         // and bakes its own, and the pass below then restores the camera-fit
-        // cascades by simply overwriting them. No-op on a converged volume.
-        if (shadow_scene && shadow_scene->gi_volume) {
+        // cascades by simply overwriting them. A converged world costs a ranking.
+        if (shadow_scene && shadow_scene->gi) {
+            gi_world_rank(shadow_scene->gi, engine);
             // Timed only while probes remain to bake. A converged volume is the
             // steady state, so an unconditional scope would file a 0.000 ms row
             // on nearly every frame of a run.
-            profiler_scope_begin_if(engine->profiler, shadow_scene->gi_volume->dirty_count > 0,
+            profiler_scope_begin_if(engine->profiler, gi_world_dirty(shadow_scene->gi),
                                     "gi capture");
-            gi_volume_update(shadow_scene->gi_volume, engine, shadow_scene);
+            gi_world_update(shadow_scene->gi, engine, shadow_scene);
             profiler_scope_end(engine->profiler);
         }
 
@@ -3190,7 +3193,7 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
             // the volume would file a 0.000 ms row a frame.
             profiler_scope_begin_if(engine->profiler,
                                     !probes->ready && !probes->failed &&
-                                        !gi_volume_pending(shadow_scene->gi_volume),
+                                        !gi_world_pending(shadow_scene->gi),
                                     "probe capture");
             probe_set_update(probes, engine, shadow_scene);
             profiler_scope_end(engine->profiler);

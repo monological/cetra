@@ -8,7 +8,7 @@
 // driver counts declarations), and ssr_frag passes its own. Two programs, one
 // weight formula, nothing to drift.
 //
-// Everything about WHERE a probe's radiance lives is here and in probe_atlas.c.
+// Everything about WHERE a probe's radiance lives is here and in lighting_atlas.c.
 // The rest of the engine knows only that probes exist.
 
 layout(std140) uniform ProbeBlock {
