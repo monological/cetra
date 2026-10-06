@@ -11,6 +11,7 @@
 
 #include "cetra/compat.h" // strcasecmp
 #include "cetra/common.h"
+#include "cetra/material.h"
 #include "cetra/mesh.h"
 #include "cetra/program.h"
 #include "cetra/scene.h"
@@ -233,6 +234,9 @@ static void print_usage(const char* prog) {
             "      --node-swing <node> <m>  Swing a node along x by up to m metres, once a\n"
             "                         second, from frame 0: a caster that moves\n");
     fprintf(stderr, "      --tiles-refresh    Redraw every cached face every frame\n");
+    fprintf(stderr, "      --material-at <frame> <material> <key> <value>  Set one material\n"
+                    "                         parameter on a frame, a number or an enum label\n"
+                    "                         (repeatable)\n");
     fprintf(stderr,
             "      --no-fire          Drop the fires a scene file asked for (spec 13.14)\n");
     fprintf(stderr, "      --fire-probe       Print the blackbody, each fire's state, its grid\n"
@@ -611,6 +615,7 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->layer_blend_at_frame = -1; // -1 = never; same idiom
     args->road_width_at_frame = -1;  // -1 = never; same idiom
     args->cam_at_count = 0;
+    args->material_at_count = 0;
     args->shadow_softness = -1.0f;     // -1 = keep the engine default
     args->msm_blur = -1.0f;            // -1 = keep the engine default
     args->msm_bleed = -1.0f;           // -1 = keep the engine default
@@ -1883,6 +1888,43 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 return -1;
             }
             args->cam_at_count++;
+        } else if (strcmp(argv[i], "--material-at") == 0) {
+            if (i + 4 >= argc) {
+                fprintf(stderr, "Error: --material-at wants <frame> <material> <key> <value>\n");
+                return -1;
+            }
+            if (args->material_at_count >= RENDER_MATERIAL_AT_MAX) {
+                fprintf(stderr, "Error: at most %d --material-at entries\n",
+                        RENDER_MATERIAL_AT_MAX);
+                return -1;
+            }
+            RenderMaterialAt* at = &args->material_at[args->material_at_count];
+            at->frame = atoi(argv[++i]);
+            at->material = argv[++i];
+            const char* key = argv[++i];
+            const char* value = argv[++i];
+            at->param = material_param_find(key);
+            if (!at->param || material_param_components(at->param) != 1) {
+                fprintf(stderr, "Error: --material-at: '%s' is not a one-value material key\n",
+                        key);
+                return -1;
+            }
+            // An enum row takes its label, the way a scene file states it.
+            char* end = NULL;
+            at->value = strtof(value, &end);
+            if (end == value || *end) {
+                int found = -1;
+                for (int e = 0; at->param->enum_labels && e < at->param->enum_count; e++) {
+                    if (strcmp(at->param->enum_labels[e], value) == 0)
+                        found = e;
+                }
+                if (found < 0) {
+                    fprintf(stderr, "Error: --material-at: '%s' has no value '%s'\n", key, value);
+                    return -1;
+                }
+                at->value = (float)found;
+            }
+            args->material_at_count++;
         } else if (strcmp(argv[i], "--area-light") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -2975,6 +3017,18 @@ void pre_render_callback(Engine* engine, Scene* current_scene) {
     // --rain-ask: the CPU cover query asked every frame, as a listener would ask it.
     if (frame_schedule && frame_schedule->rain_ask_set)
         shadow_rain_cover_ask(current_scene->shadow_system, frame_schedule->rain_ask);
+
+    // --material-at: a material set by name on a frame, as the editor's control sets it.
+    for (int a = 0; frame_schedule && a < frame_schedule->material_at_count; a++) {
+        const RenderMaterialAt* at = &frame_schedule->material_at[a];
+        if (at->frame != (int)engine->total_frames)
+            continue;
+        Material* material = scene_find_material(current_scene, at->material);
+        if (material)
+            material_param_set(material, at->param, &at->value);
+        else
+            fprintf(stderr, "Warning: --material-at: no material '%s'\n", at->material);
+    }
 
     // --node-swing: a node moved by the frame index, so a headless run repeats.
     if (frame_schedule && frame_schedule->node_swing) {

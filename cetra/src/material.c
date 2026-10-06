@@ -35,6 +35,9 @@ static const char* const OCCLUDER_NAMES[] = {"off", "on"};
 // MaterialRainBeads, in its order.
 static const char* const RAIN_BEADS_NAMES[] = {"auto", "off", "on"};
 
+// MaterialCachedShadowWind, in its order.
+static const char* const CACHED_SHADOW_WIND_NAMES[] = {"sway", "rest"};
+
 // Group order here is the order an editor shows them in, and it is deliberate:
 // the handful of properties that describe every surface come first, and the
 // ones that only matter to a material that opted into a feature follow. A flat
@@ -138,6 +141,10 @@ const MaterialParam MATERIAL_PARAMS[] = {
     {"foliageShadows", "Shadows", .offset = offsetof(Material, foliage_shadows),
      .type = MATERIAL_PARAM_INT, .enum_labels = FOLIAGE_SHADOW_NAMES,
      .enum_count = (int)(sizeof(FOLIAGE_SHADOW_NAMES) / sizeof(FOLIAGE_SHADOW_NAMES[0]))},
+    // Whether a cached point-light shadow keeps a swaying material at rest. Inert without wind.
+    {"cachedShadowWind", "Shadows", .offset = offsetof(Material, cached_shadow_wind),
+     .type = MATERIAL_PARAM_INT, .enum_labels = CACHED_SHADOW_WIND_NAMES,
+     .enum_count = (int)(sizeof(CACHED_SHADOW_WIND_NAMES) / sizeof(CACHED_SHADOW_WIND_NAMES[0]))},
 
     // Says the mesh's AABB may be rasterised as an occlusion proxy (spec
     // 11.98). Its own group for foliageShadows' reason: nothing about how the

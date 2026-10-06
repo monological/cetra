@@ -75,6 +75,13 @@ typedef enum MaterialRainBeads {
     RAIN_BEADS_ON,
 } MaterialRainBeads;
 
+// How a swaying material stands in a cached shadow (spec 13.26). Zero sways, so a calloc'd
+// material keeps the behaviour every scene had before the choice existed.
+typedef enum MaterialCachedShadowWind {
+    CACHED_SHADOW_WIND_SWAY = 0, // redrawn into a kept face every frame its sway reaches
+    CACHED_SHADOW_WIND_REST,     // kept at rest, as an unmoving caster is (Unreal's "Rigid")
+} MaterialCachedShadowWind;
+
 // How many material layers a layered surface can blend between.
 //
 // Four because the splat map carries three weights and the first layer is the
@@ -222,6 +229,10 @@ typedef struct Material {
     // 11.98). The claim is the author's: the box must sit inside the opaque
     // volume the mesh draws. An int for foliage_shadows' reason above.
     int occluder;
+
+    // A MaterialCachedShadowWind: whether a cached point-light shadow keeps this material at rest
+    // rather than following its sway. An int for foliage_shadows' reason above.
+    int cached_shadow_wind;
 
     // Wind response (World-Position Offset cloth; see wind.h). The per-material
     // half of the wind split: the Scene owns the wind field, a material opts in
@@ -482,6 +493,13 @@ typedef struct MaterialParam {
  * sits inside the mesh's opaque volume, is exactly what the occlusion probe's
  * box-against-triangles raster verifies. It cannot move a lane; classify()
  * never reads it for that.
+ *
+ * cached_shadow_wind (13.26) is admitted on foliage_shadows' precedent too, and
+ * is weaker than either. It moves no lane and no camera pass reads it: it only
+ * says whether a cached point-light face holds the caster at rest. So the worst a
+ * wrong value does is a caster's own shadow held still while the caster sways,
+ * off by at most its sway, or a face redrawn every frame for motion it could not
+ * see.
  *
  * Subsurface is absent for a different reason: its consumer is PostFX's
  * scatter-profile table rather than any field here, so no offset describes it.

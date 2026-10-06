@@ -62,6 +62,11 @@ void wind_set_name(Wind* wind, const char* name) {
     wind->name = safe_strdup(name);
 }
 
+void wind_upload_strength(const Wind* wind, bool rest, UniformManager* u) {
+    if (u)
+        uniform_set_float(u, "uWindStrength", wind && !rest ? wind->strength : 0.0f);
+}
+
 void wind_upload_to_program(const Wind* wind, const vec3 world_origin, UniformManager* u) {
     if (!u)
         return;
@@ -77,12 +82,10 @@ void wind_upload_to_program(const Wind* wind, const vec3 world_origin, UniformMa
     uniform_set_vec3(u, "uWorldOrigin", world_origin ? (const float*)world_origin : GLM_VEC3_ZERO);
     // No wind (or none on this scene): strength 0 makes every wind-aware shader
     // early-out, so the scene renders exactly as it did before the feature.
-    if (!wind) {
-        uniform_set_float(u, "uWindStrength", 0.0f);
+    wind_upload_strength(wind, false, u);
+    if (!wind)
         return;
-    }
     uniform_set_vec3(u, "uWindDir", (const float*)wind->direction);
-    uniform_set_float(u, "uWindStrength", wind->strength);
     uniform_set_float(u, "uWindSpeed", wind->speed);
     uniform_set_float(u, "uWindGustFreq", wind->gust_frequency);
     uniform_set_float(u, "uWindGustAmount", wind->gust_amount);
