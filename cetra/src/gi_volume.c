@@ -305,7 +305,7 @@ static bool gi_volume_capture(GIVolume* gi, struct Engine* engine, struct Scene*
         vec3 pos = {0};
         gi_probe_position(gi, probe, pos);
         scene_capture_faces(engine, scene, scene->ibl, pos, gi->capture_color, gi->capture_depth,
-                            GI_CAPTURE_FACE, GI_NEAR_CLIP, gi->far_clip);
+                            GI_CAPTURE_FACE, GI_NEAR_CLIP, gi->far_clip, false);
 
         // Projection is a fullscreen-quad pass; depth and culling would only get
         // in its way. Both go back as found: this runs inside the frame, after
@@ -322,13 +322,14 @@ static bool gi_volume_capture(GIVolume* gi, struct Engine* engine, struct Scene*
             glEnable(GL_CULL_FACE);
 
         // The same probe again with only back faces drawn, against the front faces' depth
-        // still held in capture_depth. Whether a probe is in a wall is geometry, which a
+        // still held in capture_depth: a back face nearer than every front face in a direction
+        // means the probe sits inside something, and one that sees that in more than a quarter
+        // of its directions is inside a wall. Whether a probe is in a wall is geometry, which a
         // change of light does not move, so only the opening sweep asks.
         if (gi->classify && opening) {
-            engine->capturing_back_faces = true;
             scene_capture_faces(engine, scene, scene->ibl, pos, gi->capture_color,
-                                gi->classify_depth, GI_CAPTURE_FACE, GI_NEAR_CLIP, gi->far_clip);
-            engine->capturing_back_faces = false;
+                                gi->classify_depth, GI_CAPTURE_FACE, GI_NEAR_CLIP, gi->far_clip,
+                                true);
             glDisable(GL_DEPTH_TEST);
             glDisable(GL_CULL_FACE);
             glBindVertexArray(gi->quad_vao);
@@ -469,7 +470,7 @@ void gi_world_update(GIWorld* world, struct Engine* engine, struct Scene* scene)
     }
     if (!work)
         return;
-    const LightingAtlas* atlas = lighting_atlas_sync(scene, engine);
+    const LightingAtlas* atlas = scene_lighting_atlas(scene, engine);
     if (!atlas)
         return;
     // Read once: every volume resident in the frame the world opens sweeps in it, not only the
@@ -563,15 +564,25 @@ void gi_world_shift_origin(GIWorld* world, const vec3 delta) {
         glm_vec3_sub(world->volumes[i]->grid_min, (float*)delta, world->volumes[i]->grid_min);
 }
 
+void gi_world_atlas_needs(const GIWorld* world, LightingAtlasLayout* layout) {
+    if (!world)
+        return;
+    const int count = (int)world->residency.count;
+    layout->gi_slots = count < GI_RESIDENT_MAX ? count : GI_RESIDENT_MAX;
+    for (int i = 0; i < count; ++i) {
+        int w = 0, h = 0;
+        gi_volume_atlas_extent(world->volumes[i], &w, &h);
+        if (w > layout->gi_w)
+            layout->gi_w = w;
+        if (h > layout->gi_h)
+            layout->gi_h = h;
+    }
+}
+
 void gi_world_bind(const GIWorld* world, const LightingAtlas* atlas, ShaderProgram* program) {
     if (!program || !program->uniforms)
         return;
     UniformManager* u = program->uniforms;
-
-    // Pointed at its own unit even when off, the way the IBL samplers are: a
-    // sampler left on its default unit 0 shares a slot with the material
-    // textures, and that is only ever safe by accident.
-    uniform_set_int(u, "giAtlasTex", GI_ATLAS_TEXTURE_UNIT);
 
     // Every resident volume is published, ready or not: a fragment inside one still sweeping
     // takes the environment's answer rather than a neighbour's edge (gi_volume.glsl).
@@ -612,10 +623,6 @@ void gi_world_bind(const GIWorld* world, const LightingAtlas* atlas, ShaderProgr
         uniform_set_int(u, "giEnabled", 0);
         return;
     }
-
-    glActiveTexture(GL_TEXTURE0 + GI_ATLAS_TEXTURE_UNIT);
-    glBindTexture(GL_TEXTURE_2D, atlas->texture);
-    glActiveTexture(GL_TEXTURE0);
 
     uniform_set_int(u, "giEnabled", 1);
     uniform_set_int(u, "giSlotCount", published);

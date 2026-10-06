@@ -503,6 +503,10 @@ void scene_environment_changed(Scene* scene, struct Engine* engine);
  */
 void scene_update_lighting(Scene* scene, struct Engine* engine);
 
+// The scene's lighting atlas, grown to what its GI world and probe set need now. NULL while
+// neither needs one, or while the layout is past the driver's texture limit.
+struct LightingAtlas* scene_lighting_atlas(Scene* scene, struct Engine* engine);
+
 // GI volumes (spec 13.24): any number, one per place, the nearest few resident. Takes
 // ownership, creating the scene's GI world on the first; false (and the volume freed) on NULL
 // or out of memory.

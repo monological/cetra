@@ -3,9 +3,8 @@
 
 #include "lighting_atlas.h"
 #include "engine.h"
-#include "gi_volume.h"
-#include "postfx.h"
-#include "scene.h"
+#include "texture.h"
+#include "uniform.h"
 #include "util.h"
 #include "ext/log.h"
 
@@ -74,16 +73,7 @@ static int clamp_row0(int row0) {
 
 // A cleared RGBA16F texture and the FBO that renders into it. False leaves nothing behind.
 static bool make_target(int w, int h, GLuint* out_texture, GLuint* out_fbo) {
-    GLuint texture = 0, fbo = 0;
-    glGenTextures(1, &texture);
-    glBindTexture(GL_TEXTURE_2D, texture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, w, h, 0, GL_RGBA, GL_FLOAT, NULL);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glBindTexture(GL_TEXTURE_2D, 0);
-
+    GLuint texture = create_texture_2d_float(w, h, GL_RGBA16F, GL_RGBA, NULL), fbo = 0;
     glGenFramebuffers(1, &fbo);
     glBindFramebuffer(GL_FRAMEBUFFER, fbo);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
@@ -121,19 +111,18 @@ static void copy_rect(GLuint from_fbo, GLuint to_fbo, int sx, int sy, int dx, in
 
 // Grow to at least this layout. Every existing slot and column goes across to where the new
 // layout puts it, so nothing resident has to be captured again.
-static bool atlas_reserve(LightingAtlas* atlas, int gi_slots, int gi_w, int gi_h, int probes,
-                          int row0) {
+static bool atlas_reserve(LightingAtlas* atlas, const LightingAtlasLayout* layout, int max_tex) {
     LightingAtlas next = *atlas;
-    if (gi_slots > next.gi_slots)
-        next.gi_slots = gi_slots;
-    if (gi_w > next.gi_slot_w)
-        next.gi_slot_w = gi_w;
-    if (gi_h > next.gi_slot_h)
-        next.gi_slot_h = gi_h;
-    if (probes > next.capacity)
-        next.capacity = probes;
+    if (layout->gi_slots > next.gi_slots)
+        next.gi_slots = layout->gi_slots;
+    if (layout->gi_w > next.gi_slot_w)
+        next.gi_slot_w = layout->gi_w;
+    if (layout->gi_h > next.gi_slot_h)
+        next.gi_slot_h = layout->gi_h;
+    if (layout->probe_slots > next.capacity)
+        next.capacity = layout->probe_slots;
     if (next.capacity > 0 && atlas->capacity == 0)
-        next.row0 = clamp_row0(row0);
+        next.row0 = clamp_row0(layout->probe_row0);
 
     if (next.gi_slots == atlas->gi_slots && next.gi_slot_w == atlas->gi_slot_w &&
         next.gi_slot_h == atlas->gi_slot_h && next.capacity == atlas->capacity && atlas->texture)
@@ -153,15 +142,16 @@ static bool atlas_reserve(LightingAtlas* atlas, int gi_slots, int gi_w, int gi_h
     if (next.width <= 0 || next.height <= 0)
         return false;
 
-    GLint max_tex = 0;
-    glGetIntegerv(GL_MAX_TEXTURE_SIZE, &max_tex);
     if (max_tex > 0 && (next.width > max_tex || next.height > max_tex)) {
-        log_error("Lighting atlas %dx%d (%d GI slots of %dx%d, %d probe columns) exceeds the "
-                  "driver's %d texture limit",
-                  next.width, next.height, next.gi_slots, next.gi_slot_w, next.gi_slot_h,
-                  next.capacity, max_tex);
+        if (!atlas->refused)
+            log_error("Lighting atlas %dx%d (%d GI slots of %dx%d, %d probe columns) exceeds the "
+                      "driver's %d texture limit",
+                      next.width, next.height, next.gi_slots, next.gi_slot_w, next.gi_slot_h,
+                      next.capacity, max_tex);
+        atlas->refused = true;
         return false;
     }
+    next.refused = false;
 
     GLint saved_fbo = 0, saved_read = 0, saved_draw = 0, saved_viewport[4];
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &saved_fbo);
@@ -209,52 +199,23 @@ static bool atlas_reserve(LightingAtlas* atlas, int gi_slots, int gi_w, int gi_h
     return true;
 }
 
-LightingAtlas* lighting_atlas_sync(struct Scene* scene, struct Engine* engine) {
-    if (!scene || !engine)
+LightingAtlas* lighting_atlas_reserve(LightingAtlas** atlas, const LightingAtlasLayout* layout,
+                                      struct Engine* engine) {
+    if (!atlas || !layout || !engine)
         return NULL;
-
-    int gi_slots = 0, gi_w = 0, gi_h = 0;
-    const GIWorld* world = scene->gi;
-    if (world) {
-        const int count = (int)world->residency.count;
-        gi_slots = count < GI_RESIDENT_MAX ? count : GI_RESIDENT_MAX;
-        for (int i = 0; i < count; ++i) {
-            int w = 0, h = 0;
-            gi_volume_atlas_extent(world->volumes[i], &w, &h);
-            if (w > gi_w)
-                gi_w = w;
-            if (h > gi_h)
-                gi_h = h;
-        }
-    }
-
-    // One probe consumes its own cubemap directly on the prefilter unit, so it
-    // needs no column and pays none of its memory.
-    int probes = 0, row0 = 0;
-    const ReflectionProbeSet* set = scene->probe_set;
-    const int set_count = set ? (int)set->residency.count : 0;
-    if (set_count >= 2) {
-        probes = set_count < PROBE_SET_MAX ? set_count : PROBE_SET_MAX;
-        row0 = set->row0;
-    }
-
-    if (gi_slots == 0 && probes == 0)
-        return scene->lighting_atlas;
-
-    LightingAtlas* atlas = scene->lighting_atlas;
-    if (!atlas) {
-        atlas = calloc(1, sizeof(LightingAtlas));
-        if (!atlas) {
+    if (layout->gi_slots == 0 && layout->probe_slots == 0)
+        return *atlas;
+    if (!*atlas) {
+        LightingAtlas* made = calloc(1, sizeof(LightingAtlas));
+        if (!made) {
             log_error("Failed to allocate the lighting atlas");
             return NULL;
         }
-        atlas->project_program = engine_get_program(engine, "probe_project");
-        create_fullscreen_quad_vao(&atlas->quad_vao, &atlas->quad_vbo);
-        scene->lighting_atlas = atlas;
+        made->project_program = engine_get_program(engine, "probe_project");
+        create_fullscreen_quad_vao(&made->quad_vao, &made->quad_vbo);
+        *atlas = made;
     }
-    if (!atlas_reserve(atlas, gi_slots, gi_w, gi_h, probes, row0))
-        return NULL;
-    return atlas;
+    return atlas_reserve(*atlas, layout, engine->max_texture_size) ? *atlas : NULL;
 }
 
 void free_lighting_atlas(LightingAtlas* atlas) {
@@ -330,13 +291,12 @@ bool lighting_atlas_project_probe(LightingAtlas* atlas, const ReflectionProbe* p
 }
 
 void lighting_atlas_bind(const LightingAtlas* atlas, ShaderProgram* program) {
-    if (!atlas || !atlas->texture || !program || !program->uniforms)
+    if (!program || !program->uniforms)
         return;
-
-    UniformManager* u = program->uniforms;
-    uniform_set_int(u, "giAtlasTex", GI_ATLAS_TEXTURE_UNIT);
-
-    glActiveTexture(GL_TEXTURE0 + GI_ATLAS_TEXTURE_UNIT);
+    uniform_set_int(program->uniforms, "giAtlasTex", LIGHTING_ATLAS_TEXTURE_UNIT);
+    if (!atlas || !atlas->texture)
+        return;
+    glActiveTexture(GL_TEXTURE0 + LIGHTING_ATLAS_TEXTURE_UNIT);
     glBindTexture(GL_TEXTURE_2D, atlas->texture);
     glActiveTexture(GL_TEXTURE0);
 }

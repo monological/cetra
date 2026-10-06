@@ -2730,7 +2730,7 @@ void key_callback(Engine* engine, int key, int scancode, int action, int mods) {
 // --stream-probe: which GI volumes, reflection probes and cached lights hold the resident slots.
 static void stream_probe_print(const Scene* scene, int frame) {
     gi_world_probe_print(scene->gi, scene->lighting_atlas, frame);
-    probe_set_stream_print(scene->probe_set, frame);
+    probe_set_stream_print(scene->probe_set, scene->lighting_atlas, frame);
     shadow_tiles_stream_print(scene->shadow_system, frame);
 }
 
@@ -2860,7 +2860,8 @@ static void render_frame_update(Engine* engine, float dt) {
         (int)engine->total_frames % frame_schedule->probe_set_probe == 0) {
         Scene* scene = engine_get_scene(engine);
         if (scene)
-            probe_set_probe_print(scene->probe_set, (int)engine->total_frames, false);
+            probe_set_probe_print(scene->probe_set, scene->lighting_atlas,
+                                  (int)engine->total_frames, false);
     }
     // The residency as the previous frame left it: this hook runs before the frame ranks.
     if (frame_schedule->stream_probe > 0 &&
@@ -5057,7 +5058,8 @@ int main(int argc, char** argv) {
     // are built by the frames, so the digest and the bit count only mean
     // anything once some have run.
     if (args.probe_set_probe > 0)
-        probe_set_probe_print(scene->probe_set, (int)engine->total_frames, true);
+        probe_set_probe_print(scene->probe_set, scene->lighting_atlas, (int)engine->total_frames,
+                              true);
     if (args.stream_probe > 0)
         stream_probe_print(scene, (int)engine->total_frames);
     if (args.decal_probe > 0)

@@ -48,7 +48,8 @@ enum {
     DRAW_DOUBLE_SIDED = 1u << 2,
     DRAW_OCCLUDER = 1u << 3, // material claims the AABB as an occlusion proxy, guards passed
     DRAW_NO_CAST = 1u << 4,  // MESH_SHADOW_NONE: drawn, and no light's shadow takes it
-    DRAW_STILL = 1u << 5, // unskinned, unswayed, unmorphed: the surface is where its node puts it
+    DRAW_STILL = 1u << 5,    // unskinned, unswayed, unmorphed, under no capture_hidden node: the
+                             // surface is where its node puts it, and the node is not said to move
     DRAW_CAPTURE_HIDDEN = 1u << 6, // skinned, or under a capture_hidden node: no capture sees it
 };
 

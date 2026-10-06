@@ -109,7 +109,7 @@ int reflection_probe_capture(ReflectionProbe* probe, struct Engine* engine, Scen
     // aliasing at its horizon bakes in as stripe moire that mirror reflections
     // then magnify into banded streaks.
     scene_capture_faces(engine, scene, ibl, probe->position, probe->cubemap, 0, PROBE_CUBEMAP_SIZE,
-                        probe->near_clip, probe->far_clip);
+                        probe->near_clip, probe->far_clip, false);
 
     glBindTexture(GL_TEXTURE_CUBE_MAP, probe->cubemap);
     glGenerateMipmap(GL_TEXTURE_CUBE_MAP);

@@ -85,16 +85,23 @@ typedef struct EngineFrameClock {
 // frame-for-frame. Also the game framework's default sim timestep.
 #define ENGINE_FIXED_FRAME_DT (1.0 / 60.0)
 
+// What a capture's output is for; render.h's scene_capture_begin says why the two differ.
+typedef enum SceneCaptureKind {
+    SCENE_CAPTURE_NONE = 0,   // no capture
+    SCENE_CAPTURE_RADIANCE,   // what an eye or a mirror sees
+    SCENE_CAPTURE_IRRADIANCE, // what is added to the analytic direct term
+} SceneCaptureKind;
+
 typedef struct Engine {
     // SETTINGS throughout, in feature order, except:
     //
     // ENGINE-OWNED, read only: the window and its sizes, every GL name, every
     // *_actual / *_ready / target_* record of what was built, the matrices,
     // the frame clock and counters, the program cache, the async loader, the
-    // input state, and the owned subsystems (postfx, the text renderer, the
-    // profiler). What an app may change among them has a function:
-    // engine_set_camera, engine_add_scene and the scene selectors,
-    // engine_add_program.
+    // input state, the capture state (`capturing`, `capture_kind`), and the
+    // owned subsystems (postfx, the text renderer, the profiler). What an app
+    // may change among them has a function: engine_set_camera,
+    // engine_add_scene and the scene selectors, engine_add_program.
     //
     // BY FUNCTION: msaa_samples, ss_scale and render_scale (each clamps and
     // rebuilds the targets at the next frame top), window_mode (moves the
@@ -324,28 +331,10 @@ typedef struct Engine {
     // framebuffer's shape rather than the bound one, must consult this.
     bool capturing;
 
-    // Narrower than `capturing`: true only while a capture whose output is
-    // IRRADIANCE runs -- one whose result is ADDED to the analytic direct term
-    // rather than shown to an eye. A derived emissive panel (spec 11.49) sits
-    // those out, because it already delivers that light analytically; measured at
-    // 1.31x on the cornell floor before it did.
-    //
-    // Set by scene_capture_begin from the caller's stated SceneCaptureKind, which
-    // is where the two-callers-want-opposite-things argument lives (render.h).
-    // Not set here by hand: it is capture policy, and render.h's own history
-    // records what happened the last time a caller wrote its own.
-    bool capturing_irradiance;
-
-    // A capture draws BACK faces only (spec 13.24). Set by a GI volume's classification of its
-    // probes: a back face nearer than every front face in a direction means the probe sits
-    // inside something, and a probe that sees that in more than a quarter of its directions
-    // is inside a wall.
-    bool capturing_back_faces;
-
-    // Between scene_capture_begin and scene_capture_end: the burst's own shadow passes and every
-    // capture face. What captures leave out (DRAW_CAPTURE_HIDDEN) is left out of all of them --
-    // its surface and its shadow -- since a capture is kept for good (spec 13.24).
-    bool capture_burst;
+    // The capture burst in progress and what its output is for, between scene_capture_begin and
+    // scene_capture_end; SCENE_CAPTURE_NONE outside one. Wider than `capturing`, which is only
+    // the faces: it covers the burst's own shadow passes too.
+    SceneCaptureKind capture_kind;
 
     Camera* camera; // The camera the frame renders (engine_set_camera); borrowed
 
