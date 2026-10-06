@@ -224,6 +224,8 @@ static void print_usage(const char* prog) {
                     "                         view\n");
     fprintf(stderr, "      --tile-views <n>   Draw every cached light with a body from n views\n"
                     "                         rather than 8; 1 is its centre alone\n");
+    fprintf(stderr, "      --tile-blocks-per-frame <n>  Cached lights given a block a frame once\n"
+                    "                         the tiles have opened (default 2; 0 = no limit)\n");
     fprintf(stderr, "      --tile-reference <n>  Shade every cached light from n views over its\n"
                     "                         body, redrawn each frame: the soft shadow's\n"
                     "                         reference (at most 64)\n");
@@ -564,6 +566,7 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     // in one frame), so a 0 sentinel here would make --gi-rate 0 unreachable.
     args->gi_rate = -1;
     args->gi_stream_rate = -1;
+    args->tile_blocks_per_frame = -1;
     // -1 = unset, so `--water-waves gerstner` can override a scene file that authored
     // fft. A 0 sentinel would make the Gerstner half of the flag unreachable.
     args->water_waves = -1;
@@ -1342,6 +1345,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->tiles_refresh = 1;
         } else if (strcmp(argv[i], "--tile-views") == 0 && i + 1 < argc) {
             args->tile_views = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--tile-blocks-per-frame") == 0 && i + 1 < argc) {
+            args->tile_blocks_per_frame = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--tile-reference") == 0 && i + 1 < argc) {
             args->tile_reference = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--node-swing") == 0 && i + 2 < argc) {
@@ -4419,6 +4424,8 @@ int main(int argc, char** argv) {
         }
         scene->shadow_system->tile_refresh = args.tiles_refresh != 0;
         scene->shadow_system->tile_views = args.tile_views;
+        if (args.tile_blocks_per_frame >= 0)
+            scene->shadow_system->tile_new_blocks_per_frame = args.tile_blocks_per_frame;
         scene->shadow_system->tile_reference = args.tile_reference;
         float light_size = args.light_size >= 0.0f ? args.light_size : scene_radius * 0.08f;
         for (size_t i = 0; i < scene->light_count; i++) {

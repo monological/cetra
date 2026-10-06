@@ -28912,14 +28912,19 @@ def run_stream_gate(workdir):
     probe_boxes = [(p["boxMin"], p["boxMax"]) for p in desc["probes"]]
     first, last = rooms[0], rooms[-1]
 
+    # One block a frame: room 9's two lights then take two frames to be shadowed, so a capture
+    # that did not wait for them would photograph one unshadowed. At the default two the
+    # capture's own depth pass places both in the frame it needs them, and the wait is untested.
     walk, walk_text = _stream_run(
         workdir, "walk",
         _stream_cam_at(STREAM_AWAY_FRAME, last) + _stream_cam_at(STREAM_BACK_FRAME, first)
-        + ["--stream-probe", "10"], STREAM_WALK_FRAMES, every=10)
+        + ["--stream-probe", "10", "--tile-blocks-per-frame", "1"], STREAM_WALK_FRAMES, every=10)
     rows = _stream_rows(walk_text) if walk else {}
 
     # -- equal: the walk's room 9 against room 9 from the start ---------------
-    away, away_text = _stream_run(workdir, "away", _stream_cam_eye(last), STREAM_STOPS[1] + 1)
+    away, away_text = _stream_run(workdir, "away",
+                                  _stream_cam_eye(last) + ["--tile-blocks-per-frame", "1"],
+                                  STREAM_STOPS[1] + 1)
     if walk is None or away is None:
         print(f"  stream-equal ERROR  {(walk_text if walk is None else away_text)[-300:]}")
         failures.append("stream-equal")
@@ -29021,7 +29026,9 @@ def run_stream_gate(workdir):
     # -- tiles ----------------------------------------------------------------------
     tile_ok, tile_detail = bool(rows), []
     for stop in STREAM_STOPS[:2]:
-        ranked = rows.get(stop, {}).get("tile", [])
+        # Ordered here by the distances printed, not in the order printed: the order is the
+        # engine's own ranking, which is the thing in question.
+        ranked = sorted(rows.get(stop, {}).get("tile", []), key=lambda t: t[1])
         near = all(whole for _, _, whole in ranked[:STREAM_TILE_LIGHTS])
         far = not any(whole for _, _, whole in ranked[STREAM_TILE_LIGHTS:])
         good = len(ranked) > STREAM_TILE_LIGHTS and near and far

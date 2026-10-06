@@ -413,6 +413,26 @@
    "cast_shadows": true,
    "shadow_cache": true,
    "source_radius": 0.05
+  },
+  {
+   "name": "Room9Behind",
+   "type": "point",
+   "position": [
+    360.0,
+    1.5,
+    -2.6
+   ],
+   "color": [
+    1.0,
+    0.92,
+    0.82
+   ],
+   "intensity": 60.0,
+   "intensity_unit": "lumens",
+   "range": 7.0,
+   "cast_shadows": true,
+   "shadow_cache": true,
+   "source_radius": 0.05
   }
  ],
  "probes": [

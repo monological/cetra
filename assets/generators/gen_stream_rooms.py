@@ -18,6 +18,13 @@ from captures by name, and `skinned_prop`, a box skinned to one joint, which cap
 without being asked. A thing that moves, frozen into a picture taken while the game runs, is
 what both guard against.
 
+The last room also has a light OUTSIDE it, just behind its back wall, whose reach crosses the
+wall into the room. Shadowed, the wall stops it; unshadowed, it lights the room through the
+wall. A GI capture taken before that light holds its shadow tiles keeps the leak for good, which
+is what the capture's wait for its lights exists to prevent -- and a room lit only by its own
+lights cannot show it, since inside a closed room an unshadowed light lights what a shadowed one
+does.
+
 The last two rooms are TWINS: the same colour and the same lights. The first has a grid aligned
 with its interior; the second's grid is laid so its outermost probes sit inside the wall slabs,
 which is what probe classification exists to switch off. The walls are slabs with thickness for
@@ -248,6 +255,8 @@ def emit_cscn():
         x = room_x(k)
         lights.append(light(f"Room{k}A", [x - 0.8, 2.6, -0.6]))
         lights.append(light(f"Room{k}B", [x + 1.0, 1.2, 0.9]))
+        if k == ROOMS - 1:
+            lights.append(light(f"Room{k}Behind", [x, 1.5, -HALF - WALL - 0.4]))
         # Two probes a room, its halves, overlapping at the middle.
         for side, (lo, hi) in enumerate(((x - HALF, x + 0.25), (x - 0.25, x + HALF))):
             probes.append({"position": [0.5 * (lo + hi), 1.5, 0.0],
