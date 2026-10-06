@@ -41,4 +41,4 @@
 // What a cached light packs as its per-frame punctual layer: past every per-frame layer, so
 // the per-frame lookup reads it as lit before it indexes anything, while every "does this light
 // have a map" test (layer >= 0) still holds.
-#define SHADOW_TILE_MARK 8
+#define SHADOW_TILE_MARK 16

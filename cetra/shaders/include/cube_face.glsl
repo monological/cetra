@@ -12,3 +12,11 @@ int punctualCubeFace(vec3 toFrag) {
         return toFrag.y > 0.0 ? 2 : 3;
     return toFrag.z > 0.0 ? 4 : 5;
 }
+
+// Which of a panel's faces (spec 13.27) covers a direction from its centre: the same rule in
+// the panel's own frame, its width axis cross(up, axis), its up and its normal standing for x, y
+// and z, the frame shadow.c draws its faces in. 5 is the face behind the panel, never drawn.
+int panelCubeFace(vec3 toFrag, vec3 axis, vec3 up) {
+    vec3 right = cross(up, axis);
+    return punctualCubeFace(vec3(dot(toFrag, right), dot(toFrag, up), dot(toFrag, axis)));
+}

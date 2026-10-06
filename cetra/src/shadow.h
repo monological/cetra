@@ -17,13 +17,13 @@
 #define SHADOW_CASCADES         3 // Compile-time cascade ceiling (runtime: cascade_count)
 #define DEFAULT_SHADOW_MAP_SIZE 2048
 // Worst-case punctual layers per frame, NOT a VRAM budget: every layer is
-// re-rendered each frame, so this caps scene traversals. Quantized by the 6 a
-// point light needs, hence a value that buys one point light plus two of
-// anything else. Erring small is deliberate -- exhausting the pool is a
+// re-rendered each frame, so this caps scene traversals. A point light takes 6
+// and a panel 5 (spec 13.27), so this buys a point light, a panel and five spots,
+// or three panels. Erring small is deliberate -- exhausting the pool is a
 // failure a log line can name, where an over-large pool costs frame time with
 // no signal at all. Allocation is demand-driven, so a spot-only scene builds
-// one layer.
-#define MAX_PUNCTUAL_SHADOW_LAYERS 8
+// one layer. Each layer is a mat4 of pbr_frag's default uniforms.
+#define MAX_PUNCTUAL_SHADOW_LAYERS 16
 _Static_assert(SHADOW_TILE_MARK >= MAX_PUNCTUAL_SHADOW_LAYERS,
                "a cached light's marker must be past every per-frame punctual layer");
 // Punctual map size bounds and the VRAM the array is allowed to spend.
@@ -36,12 +36,12 @@ _Static_assert(SHADOW_TILE_MARK >= MAX_PUNCTUAL_SHADOW_LAYERS,
 //
 // That is the only lever left on texel density. A panel's frustum cannot be
 // fitted to its scene: the caster bounds contain the light, so the cone the
-// casters demand runs to 180 degrees (spec 10.4, Phase 1). Resolution works
-// wherever the light sits.
+// casters demand runs to 180 degrees (spec 10.4, Phase 1), which is why a panel
+// is a cube (spec 13.27). Resolution works wherever the light sits.
 //
-// The asymmetry the budget produces is the useful part. A lone area panel needs
-// one layer and gets the maximum; a point light needs six faces and drops to a
-// size that keeps six of them affordable. Erring toward the smaller size is
+// The asymmetry the budget produces is the useful part. A lone spot needs one
+// layer and gets the maximum; a point light's six faces and a panel's five drop
+// to a size that keeps them affordable. Erring toward the smaller size is
 // deliberate: a shadow that is coarser than it could be is a look problem, and
 // half a gigabyte of depth array is a crash.
 #define PUNCTUAL_SHADOW_MIN_SIZE 1024

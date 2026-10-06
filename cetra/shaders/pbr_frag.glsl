@@ -2030,17 +2030,21 @@ void main() {
                 vec3 areaDiff =
                     (1.0 - metallicMap) * (1.0 - transmissionEff) * albedoMap * ff.x;
 
-                // One map down the panel normal, multiplied into the whole
-                // panel term. The integral it scales is over the rectangle, so
-                // this is a hard binary occlusion of a soft source: the panel is
-                // either visible from the fragment or it is not, with no partial
-                // occlusion of one edge. Aimed at the panel centre, which is the
-                // direction the single map was rendered along.
+                // The face of the panel's cube (spec 13.27) that sees the
+                // fragment, multiplied into the whole panel term. The integral
+                // it scales is over the rectangle, so this is a hard binary
+                // occlusion of a soft source: the panel's centre is either
+                // visible from the fragment or it is not, with no partial
+                // occlusion of one edge. Behind the panel there is no face, and
+                // ltcPanel has already answered zero.
                 int aLayer = int(clusterLights[li].shadowMisc.y);
                 float aShadow = 1.0;
                 if (aLayer >= 0 && alphaMasked == 0) {
-                    aShadow = punctualShadow(aLayer, WorldPos, N, normalize(lightPos - WorldPos),
-                                             ddxWorld, ddyWorld);
+                    int aFace = panelCubeFace(WorldPos - lightPos, clusterLights[li].dirType.xyz,
+                                              clusterLights[li].upArea.xyz);
+                    if (aFace < 5)
+                        aShadow = punctualShadow(aLayer + aFace, WorldPos, N,
+                                                 normalize(lightPos - WorldPos), ddxWorld, ddyWorld);
                 }
 
                 // Same split as the punctual clamp below: the LTC response is

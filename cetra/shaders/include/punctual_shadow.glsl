@@ -15,15 +15,15 @@
 // MAX_PUNCTUAL_SHADOW_LAYERS is mirrored in C at shadow.h; uniform.c runs the
 // same drift check on this array as on the cascade ones.
 
-#define MAX_PUNCTUAL_SHADOW_LAYERS 8
+#define MAX_PUNCTUAL_SHADOW_LAYERS 16
 
 uniform sampler2DArray punctualShadowMaps;
 // Edge length the array was built at. This used to be a GLSL literal mirroring a
 // C one, on the reasoning that the size was fixed where the cascades' was not.
 // It is not fixed any more: shadow.c picks it from a VRAM budget against the
-// layer count, so one area light gets a finer map than six point-light faces
-// would (shadow.h). A literal here would have silently mis-sized the PCF step by
-// the same factor.
+// layer count, so one spot gets a finer map than six point-light faces would
+// (shadow.h). A literal here would have silently mis-sized the PCF step by the
+// same factor.
 uniform float punctualShadowMapSize;
 uniform mat4 punctualShadowMatrix[MAX_PUNCTUAL_SHADOW_LAYERS];
 // Layers rendered this frame. 0 disables every punctual shadow at once, which
