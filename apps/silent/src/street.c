@@ -1,3 +1,5 @@
+#include <math.h>
+
 #include "cetra/ies.h"
 #include "cetra/light.h"
 
@@ -41,17 +43,18 @@ static void ground(Kit* kit, int mat, float z0, float z1, float top) {
  * road gets the pool the air implies. No shadows: a point light's map is six
  * layers of a pool of eight.
  */
-static void lamp(Kit* kit, Scene* scene, float x, float z, bool night, bool dead, int profile) {
-    const KitFrame f = {{x, 0.0f, z}, z > 0.0f ? GLM_PIf : 0.0f};
+Light* street_lamp(Kit* kit, Scene* scene, float x, float y, float z, float yaw, bool night,
+                   bool dead, int profile) {
+    const KitFrame f = {{x, y, z}, yaw};
     kit_frame_prism(kit, &f, MAT_LAMP_POST, 0.0f, 0.0f, 0.0f, 0.5f, 0.12f, 8);
     kit_frame_prism(kit, &f, MAT_LAMP_POST, 0.0f, 0.0f, 0.5f, 5.2f, 0.07f, 8);
     kit_frame_box(kit, &f, MAT_LAMP_POST, -0.04f, 0.04f, 5.0f, 5.08f, 0.0f, 1.3f, false);
     kit_frame_box(kit, &f, MAT_LAMP_POST, -0.18f, 0.18f, 4.92f, 5.06f, 1.1f, 1.6f, false);
     kit_frame_box(kit, &f, dead ? MAT_BLACK : MAT_LAMP_GLOW, -0.14f, 0.14f, 4.9f, 4.92f, 1.15f,
                   1.55f, false);
-    kit_collider(kit, (vec3){x, 1.5f, z}, (vec3){0.12f, 1.5f, 0.12f}, 0.0f);
+    kit_collider(kit, (vec3){x, y + 1.5f, z}, (vec3){0.12f, 1.5f, 0.12f}, 0.0f);
     if (!night || dead)
-        return;
+        return NULL;
     vec3 pos = {0.0f, 0.0f, 0.0f};
     kit_frame_point(&f, 0.0f, 4.8f, 1.35f, pos);
     LightDesc desc = {.name = "street_lamp",
@@ -63,6 +66,17 @@ static void lamp(Kit* kit, Scene* scene, float x, float z, bool night, bool dead
     Light* light = create_light(&desc);
     light->ies_profile = profile;
     scene_add_light(scene, light);
+    return light;
+}
+
+int street_lamp_profile(Scene* scene, bool night) {
+    // A missing profile logs by name and gives -1, which leaves the lamps bare bulbs rather
+    // than dark.
+    if (!night)
+        return -1;
+    if (!scene->ies_library)
+        scene->ies_library = create_ies_library();
+    return ies_library_load(scene->ies_library, STREET_LAMP_IES);
 }
 
 // Wooden utility poles down the far side, strung with two wires.
@@ -114,40 +128,59 @@ static void fence(Kit* kit, float x0, float x1, float z) {
 }
 
 /*
- * The fog as four overlapping boxes that together fill the street and every
- * yard but stop at the player's house. Each box's density ramps in over the
- * feather from every face, so where two meet they overlap by exactly one
- * feather: one ramps down as the other ramps up and the sum stays level,
- * where boxes merely touching would leave a trough of clear air along the seam.
+ * The fog as boxes that together fill the world but stop at the two houses (spec 13.25): the
+ * world's rectangle, cut into columns at each house's sides, a column holding a house split
+ * round it. Two houses side by side along X make seven boxes, under the scene's eight.
+ *
+ * Each box's density ramps in over the feather from every face, so where two meet they overlap
+ * by exactly one feather: one ramps down as the other ramps up and the sum stays level, where
+ * boxes merely touching would leave a trough of clear air along the seam. A face against a house
+ * is not grown: the hole is where the house is, and the ramp runs inside the box toward it.
  */
+typedef struct FogHole {
+    float x0, x1, z0, z1;
+} FogHole;
+
+static void fog_box(Scene* scene, float density, float x0, float x1, float z0, float z1) {
+    const float top = 40.0f; // high enough that the sky is fogged out too
+    FogVolume v = {.center = {0.5f * (x0 + x1), 0.5f * top, 0.5f * (z0 + z1)},
+                   .half_extent = {0.5f * (x1 - x0), 0.5f * top + 1.0f, 0.5f * (z1 - z0)},
+                   .density = density,
+                   .feather = FOG_FEATHER,
+                   .tint = {1.0f, 1.0f, 1.0f}};
+    scene_add_fog_volume(scene, &v);
+}
+
+// The plan's footprint with the fog kept off it, the tower included -- it stands out past the
+// front and the west side, and a fog volume does not stop at a wall: inside one the study
+// would be full of it.
+static FogHole house_hole(float dx, float dz) {
+    const float gap = -(TOWER_X - TOWER_APOTHEM) + 0.7f;
+    return (FogHole){-gap + dx, gap + dx, TOWER_Z - TOWER_APOTHEM - 0.7f + dz,
+                     HOUSE_BACK_Z + 1.0f + dz};
+}
+
 static void fog(Scene* scene, bool night) {
     const float density = night ? FOG_NIGHT : FOG_DAY;
-    const float F = FOG_FEATHER, top = 40.0f; // high enough that the sky is fogged out too
-    // Clear of the tower too, which stands out past the front and the west side: a fog
-    // volume does not stop at a wall, and inside one the study would be full of it.
-    const float house_gap = -(TOWER_X - TOWER_APOTHEM) + 0.7f;
-    const float front = TOWER_Z - TOWER_APOTHEM - 0.7f, back = HOUSE_BACK_Z + 1.0f;
-    const float far = 45.0f, wide = 60.0f;
-    const float boxes[4][4] = {
-        // x0, x1, z0, z1
-        {-wide, wide, -far, front},                 // the street and the far side
-        {-wide, -house_gap, front - F, far},        // the yards to the left
-        {house_gap, wide, front - F, far},          // and to the right
-        {-house_gap - F, house_gap + F, back, far}, // behind the house
-    };
-    for (int i = 0; i < 4; i++) {
-        const float* b = boxes[i];
-        FogVolume v = {
-            .center = {0.5f * (b[0] + b[1]), 0.5f * top, 0.5f * (b[2] + b[3])},
-            .half_extent = {0.5f * (b[1] - b[0]), 0.5f * top + 1.0f, 0.5f * (b[3] - b[2])},
-            .density = density,
-            .feather = F,
-            .tint = {1.0f, 1.0f, 1.0f}};
-        scene_add_fog_volume(scene, &v);
+    const float F = 0.5f * FOG_FEATHER;
+    const float wx0 = -60.0f, wx1 = WORLD_X1 + 20.0f, wz0 = -60.0f, wz1 = WORLD_Z1 + 20.0f;
+    // West to east, which is the order the columns are cut in.
+    const FogHole holes[2] = {house_hole(0.0f, 0.0f), house_hole(MANSION_X, MANSION_Z)};
+    float x = wx0;
+    for (int h = 0; h <= 2; h++) {
+        const float next = h < 2 ? holes[h].x0 : wx1;
+        // The open column up to the next house, and then the house's own, split round it.
+        fog_box(scene, density, x - (h > 0 ? F : 0.0f), next + (h < 2 ? F : 0.0f), wz0, wz1);
+        if (h == 2)
+            break;
+        const FogHole* o = &holes[h];
+        fog_box(scene, density, o->x0 - F, o->x1 + F, wz0, o->z0);
+        fog_box(scene, density, o->x0 - F, o->x1 + F, o->z1, wz1);
+        x = o->x1;
     }
 }
 
-void street_build(Kit* kit, Scene* scene, unsigned int seed, bool night) {
+void street_build(Kit* kit, Scene* scene, unsigned int seed, bool night, bool fogged) {
     const float kerb = ROAD_HALF_WIDTH;
     const float walk = ROAD_HALF_WIDTH + SIDEWALK_WIDTH;
     ground(kit, MAT_ASPHALT, -kerb, kerb, ROAD_Y);
@@ -178,14 +211,7 @@ void street_build(Kit* kit, Scene* scene, unsigned int seed, bool night) {
     fence(kit, -34.5f, -8.0f, walk + 1.6f);
     fence(kit, 8.0f, 34.5f, walk + 1.6f);
 
-    // A missing profile logs by name and gives -1, which leaves the lamps bare
-    // bulbs rather than dark.
-    int profile = -1;
-    if (night) {
-        if (!scene->ies_library)
-            scene->ies_library = create_ies_library();
-        profile = ies_library_load(scene->ies_library, STREET_LAMP_IES);
-    }
+    const int profile = street_lamp_profile(scene, night);
     // Four down our side and three down the far side, one of them dead.
     static const struct {
         float x;
@@ -196,7 +222,8 @@ void street_build(Kit* kit, Scene* scene, unsigned int seed, bool night) {
                  {16.0f, -1.0f, true}};
     const float lamp_z = kerb + 1.4f;
     for (size_t i = 0; i < sizeof(LAMPS) / sizeof(LAMPS[0]); i++)
-        lamp(kit, scene, LAMPS[i].x, LAMPS[i].side * lamp_z, night, LAMPS[i].dead, profile);
+        street_lamp(kit, scene, LAMPS[i].x, 0.0f, LAMPS[i].side * lamp_z,
+                    LAMPS[i].side > 0.0f ? GLM_PIf : 0.0f, night, LAMPS[i].dead, profile);
 
     poles(kit);
     car(kit, 5.0f, -(kerb - 1.1f));
@@ -206,16 +233,33 @@ void street_build(Kit* kit, Scene* scene, unsigned int seed, bool night) {
     kit_box(kit, MAT_LAMP_POST, (vec3){-1.8f, 1.18f, walk + 0.4f}, (vec3){0.1f, 0.1f, 0.24f}, 0.0f,
             false);
 
-    // The world's edge: walls the fog hides, so a walk down the street ends in
-    // grey rather than off the end of the ground.
-    const float h = 3.0f;
+    // The world's edge: walls the fog hides, so a walk ends in grey rather than off the end of
+    // the ground. Round the street and, past its east end, round the hill the drive climbs
+    // (spec 13.25), so they stand tall enough for the grounds up there.
+    const float h = 11.0f, y = 9.0f;
     const float zmax = walk + YARD_DEPTH;
-    kit_collider(kit, (vec3){-STREET_HALF_LEN + 1.0f, h, 0.0f}, (vec3){0.5f, h, zmax}, 0.0f);
-    kit_collider(kit, (vec3){STREET_HALF_LEN - 1.0f, h, 0.0f}, (vec3){0.5f, h, zmax}, 0.0f);
-    kit_collider(kit, (vec3){0.0f, h, zmax - 1.0f}, (vec3){STREET_HALF_LEN, h, 0.5f}, 0.0f);
-    kit_collider(kit, (vec3){0.0f, h, -zmax + 1.0f}, (vec3){STREET_HALF_LEN, h, 0.5f}, 0.0f);
+    const float x0 = -STREET_HALF_LEN + 1.0f, x1 = WORLD_X1 - 1.0f;
+    const float zs = zmax - 1.0f, z0 = -zmax + 1.0f, z1 = WORLD_Z1 - 1.0f;
+    struct {
+        float ax, az, bx, bz;
+    } const edges[] = {
+        {x0, z0, x0, zs},                           // the street's west end
+        {x0, zs, STREET_HALF_LEN, zs},              // behind our side's yards
+        {STREET_HALF_LEN, zs, STREET_HALF_LEN, z1}, // the hill's west side, past them
+        {STREET_HALF_LEN, z1, x1, z1},              // behind the mansion
+        {x1, z1, x1, z0},                           // the hill's east side
+        {x1, z0, x0, z0},                           // behind the far side's yards, and on
+    };
+    for (size_t i = 0; i < sizeof(edges) / sizeof(edges[0]); i++) {
+        const float cx = 0.5f * (edges[i].ax + edges[i].bx),
+                    cz = 0.5f * (edges[i].az + edges[i].bz);
+        const float hx = 0.5f * fabsf(edges[i].bx - edges[i].ax) + 0.5f;
+        const float hz = 0.5f * fabsf(edges[i].bz - edges[i].az) + 0.5f;
+        kit_collider(kit, (vec3){cx, y, cz}, (vec3){hx, h, hz}, 0.0f);
+    }
 
-    fog(scene, night);
+    if (fogged)
+        fog(scene, night);
     if (!night)
         mats_daytime(kit);
 }

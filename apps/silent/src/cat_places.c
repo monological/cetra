@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "layout.h"
+#include "mansion.h"
 
 // A flight's link runs from half a tread before its first riser to half a tread past its
 // last, which is how make_cat_blender.py lays the stair clips' treads under their paws.
@@ -11,10 +12,14 @@
 #define STAIR_BOTTOM_Z (STAIR_FOOT_Z + 0.5f * STAIR_GOING)
 #define STAIR_MID_X    4.4f
 
-// The chair's leather cushion, the counter's top and the kitchen chair's seat.
-#define STUDY_SEAT   (FLOOR2_Y + 0.505f)
-#define COUNTER_TOP  (FLOOR_Y + 0.9f)
-#define KITCHEN_SEAT (FLOOR_Y + 0.516f)
+// The study chair's leather cushion, the window seat's and the dining chair's seat; and the
+// dining room's rug, which the floor places there stand on.
+#define STUDY_SEAT  (FLOOR2_Y + 0.505f)
+#define WINDOW_SEAT (FLOOR_Y + SEAT_TOP)
+#define DINING_SEAT (FLOOR_Y + DINING_SEAT_TOP)
+#define ON_RUG      (FLOOR_Y + 0.008f)
+// The window seat's line, along its middle.
+#define SEAT_Z (0.5f * (KITCHEN_Z0 + SEAT_Z1))
 // The gallery's hand rail: the top of its wood, and the line along its middle; the stair's
 // head newel's cap.
 #define RAIL_TOP  4.07f
@@ -65,23 +70,31 @@ const CatPlace CAT_PLACES[CAT_PLACE_COUNT] = {
     [CAT_AT_GREAT_S] = {"great_s", {-0.75f, FLOOR_Y, 14.4f}, 0.35f, CAT_REST_NONE, 0.0f},
     [CAT_AT_RUG] = {"rug", {-0.75f, FLOOR_Y + 0.008f, 16.4f}, 0.4f, CAT_REST_LIE, 0.4f},
     [CAT_AT_HEARTH] = {"hearth", {-0.75f, FLOOR_Y + 0.06f, 18.62f}, 0.25f, CAT_REST_LIE, GLM_PIf},
-    // The hall and the kitchen.
+    // The hall, and the dining room in the kitchen's footprint (spec 13.25).
     [CAT_AT_ARCH] = {"arch", {-0.75f, FLOOR_Y, 13.8f}, 0.25f, CAT_REST_NONE, 0.0f},
-    [CAT_AT_HALL_CLOCK] =
-        {"hall_clock", {-0.8f, FLOOR_Y, 13.15f}, 0.2f, CAT_REST_SIT, -0.5f * GLM_PIf},
+    [CAT_AT_HALL_ARMOUR] = {"hall_armour", {-0.8f, FLOOR_Y, 13.15f}, 0.2f, CAT_REST_SIT, GLM_PIf},
     [CAT_AT_HALL_FRONT] = {"hall_front", {-0.75f, FLOOR_Y, 11.3f}, 0.3f, CAT_REST_NONE, 0.0f},
-    [CAT_AT_KITCHEN_DOOR] = {"kitchen_door", {0.0f, FLOOR_Y, 13.15f}, 0.2f, CAT_REST_NONE, 0.0f},
-    [CAT_AT_KITCHEN_MID] = {"kitchen_mid", {1.8f, FLOOR_Y, 12.1f}, 0.4f, CAT_REST_NONE, 0.0f},
-    [CAT_AT_STOVE_MAT] =
-        {"stove_mat", {1.12f, FLOOR_Y + 0.004f, 11.72f}, 0.2f, CAT_REST_CURL, -0.3f},
-    [CAT_AT_COUNTER_JUMP] = {"counter_jump", {1.95f, FLOOR_Y, 11.1f}, 0.15f, CAT_REST_NONE, 0.0f},
-    // On the counter between the bowls and the sink, looking out at the rain.
-    [CAT_AT_KITCHEN_WINDOW] =
-        {"kitchen_window", {1.95f, COUNTER_TOP, 10.42f}, 0.1f, CAT_REST_SIT, GLM_PIf},
-    [CAT_AT_KCHAIR_JUMP] = {"kchair_jump", {2.75f, FLOOR_Y, 11.95f}, 0.15f, CAT_REST_NONE, 0.0f},
-    [CAT_AT_KITCHEN_CHAIR] =
-        {"kitchen_chair", {3.35f, KITCHEN_SEAT, 12.12f}, 0.1f, CAT_REST_CURL, -1.2f},
+    [CAT_AT_DINING_DOOR] = {"dining_door", {0.0f, FLOOR_Y, 13.15f}, 0.2f, CAT_REST_NONE, 0.0f},
+    // West of the table's end chair, between it and the hall's wall.
+    [CAT_AT_DINING_W] = {"dining_w", {0.4f, FLOOR_Y, 12.3f}, 0.25f, CAT_REST_NONE, 0.0f},
+    [CAT_AT_HCHAIR_JUMP] =
+        {"hchair_jump", {HEAD_CHAIR_X, ON_RUG, 11.45f}, 0.15f, CAT_REST_NONE, 0.0f},
+    // On the chair at the table's end, watching the candelabra.
+    [CAT_AT_HEAD_CHAIR] =
+        {"head_chair", {HEAD_CHAIR_X, DINING_SEAT, TABLE_Z}, 0.1f, CAT_REST_SIT, 0.5f * GLM_PIf},
+    // On the rug between the chairs and the window seat.
+    [CAT_AT_DINING_S] = {"dining_s", {2.0f, ON_RUG, 10.8f}, 0.25f, CAT_REST_LIE, 0.5f * GLM_PIf},
+    [CAT_AT_SEAT_JUMP] = {"seat_jump", {2.7f, ON_RUG, 10.8f}, 0.15f, CAT_REST_NONE, 0.0f},
+    // On the window seat, looking out at the rain, and curled up along its cushion.
+    [CAT_AT_WINDOW_SEAT] =
+        {"window_seat", {2.7f, WINDOW_SEAT, SEAT_Z}, 0.1f, CAT_REST_SIT, GLM_PIf},
+    [CAT_AT_SEAT_CUSHION] =
+        {"seat_cushion", {1.75f, WINDOW_SEAT, SEAT_Z}, 0.1f, CAT_REST_CURL, 0.5f * GLM_PIf},
 };
+
+void cat_place_feet(int place, vec3 out) {
+    mansion_at(CAT_PLACES[place].feet, out);
+}
 
 int cat_place_find(const char* name) {
     for (int i = 0; name && i < CAT_PLACE_COUNT; i++)
@@ -137,16 +150,17 @@ static const CatLinkDef LINKS[] = {
     {CAT_AT_RUG, CAT_AT_HEARTH, CAT_LINK_WALK, 0.0f},
     {CAT_AT_GREAT_W, CAT_AT_GREAT_S, CAT_LINK_WALK, 0.0f},
     {CAT_AT_GREAT_S, CAT_AT_ARCH, CAT_LINK_WALK, 0.0f},
-    {CAT_AT_ARCH, CAT_AT_HALL_CLOCK, CAT_LINK_WALK, 0.0f},
-    {CAT_AT_ARCH, CAT_AT_KITCHEN_DOOR, CAT_LINK_WALK, 0.0f},
-    {CAT_AT_HALL_CLOCK, CAT_AT_KITCHEN_DOOR, CAT_LINK_WALK, 0.0f},
-    {CAT_AT_HALL_CLOCK, CAT_AT_HALL_FRONT, CAT_LINK_WALK, 0.0f},
-    {CAT_AT_KITCHEN_DOOR, CAT_AT_KITCHEN_MID, CAT_LINK_WALK, 0.0f},
-    {CAT_AT_KITCHEN_MID, CAT_AT_STOVE_MAT, CAT_LINK_WALK, 0.0f},
-    {CAT_AT_KITCHEN_MID, CAT_AT_COUNTER_JUMP, CAT_LINK_WALK, 0.0f},
-    {CAT_AT_COUNTER_JUMP, CAT_AT_KITCHEN_WINDOW, CAT_LINK_JUMP, 0.12f},
-    {CAT_AT_KITCHEN_MID, CAT_AT_KCHAIR_JUMP, CAT_LINK_WALK, 0.0f},
-    {CAT_AT_KCHAIR_JUMP, CAT_AT_KITCHEN_CHAIR, CAT_LINK_JUMP, 0.1f},
+    {CAT_AT_ARCH, CAT_AT_HALL_ARMOUR, CAT_LINK_WALK, 0.0f},
+    {CAT_AT_ARCH, CAT_AT_DINING_DOOR, CAT_LINK_WALK, 0.0f},
+    {CAT_AT_HALL_ARMOUR, CAT_AT_DINING_DOOR, CAT_LINK_WALK, 0.0f},
+    {CAT_AT_HALL_ARMOUR, CAT_AT_HALL_FRONT, CAT_LINK_WALK, 0.0f},
+    {CAT_AT_DINING_DOOR, CAT_AT_DINING_W, CAT_LINK_WALK, 0.0f},
+    {CAT_AT_DINING_W, CAT_AT_HCHAIR_JUMP, CAT_LINK_WALK, 0.0f},
+    {CAT_AT_HCHAIR_JUMP, CAT_AT_HEAD_CHAIR, CAT_LINK_JUMP, 0.1f},
+    {CAT_AT_HCHAIR_JUMP, CAT_AT_DINING_S, CAT_LINK_WALK, 0.0f},
+    {CAT_AT_DINING_S, CAT_AT_SEAT_JUMP, CAT_LINK_WALK, 0.0f},
+    {CAT_AT_SEAT_JUMP, CAT_AT_WINDOW_SEAT, CAT_LINK_JUMP, 0.1f},
+    {CAT_AT_WINDOW_SEAT, CAT_AT_SEAT_CUSHION, CAT_LINK_WALK, 0.0f},
 };
 
 NavGraph* cat_places_build(void) {
@@ -161,9 +175,11 @@ NavGraph* cat_places_build(void) {
     nav_graph_set_kind(g, CAT_LINK_JUMP,
                        &(NavKind){.name = "jump", .cost_scale = 3.0f, .drive = NAV_DRIVE_PROGRESS});
     nav_graph_set_kind(g, CAT_LINK_RAIL, &(NavKind){.name = "rail", .cost_scale = 1.2f});
-    for (int i = 0; i < CAT_PLACE_COUNT; i++)
-        nav_graph_add_node(g, CAT_PLACES[i].name, CAT_PLACES[i].feet, CAT_PLACES[i].radius,
-                           CAT_PLACES[i].tags);
+    for (int i = 0; i < CAT_PLACE_COUNT; i++) {
+        vec3 feet = {0.0f, 0.0f, 0.0f};
+        cat_place_feet(i, feet);
+        nav_graph_add_node(g, CAT_PLACES[i].name, feet, CAT_PLACES[i].radius, CAT_PLACES[i].tags);
+    }
     for (size_t i = 0; i < sizeof(LINKS) / sizeof(LINKS[0]); i++) {
         const CatLinkDef* d = &LINKS[i];
         NavShapeDesc shape = {.shape = NAV_SHAPE_LINE};

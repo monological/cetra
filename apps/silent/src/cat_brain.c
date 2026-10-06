@@ -8,9 +8,9 @@
 
 #include "cat_clips.h"
 #include "cat_places.h"
-#include "clock.h"
 #include "kit.h"
 #include "layout.h"
+#include "mansion.h"
 
 // The activities, in the order they are registered, which is the brain's index for each.
 typedef enum {
@@ -18,7 +18,7 @@ typedef enum {
     ACT_STRETCH,
     ACT_LOAF,
     ACT_EXPLORE,
-    ACT_WATCH_CLOCK,
+    ACT_WATCH_FLAME,
     ACT_WINDOW,
     ACT_AVOID,
     ACT_STARTLE,
@@ -28,7 +28,7 @@ typedef enum {
 } CatActivity;
 
 static const char* const ACTIVITY_NAMES[ACT_COUNT] = {"sleep",       "stretch", "loaf",  "explore",
-                                                      "watch_clock", "window",  "avoid", "startle",
+                                                      "watch_flame", "window",  "avoid", "startle",
                                                       "follow",      "rail"};
 
 // The aloof cat's temperament: one set of numbers, not presets.
@@ -92,8 +92,8 @@ static BrainStatus stay(CatMind* m, float dt, float groom) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Outings: off to somewhere, and a stay there. Loafing, exploring, the clock, the window and
-// the rail are each one row, run by one begin and one step.
+// Outings: off to somewhere, and a stay there. Loafing, exploring, the candelabra, the window
+// and the rail are each one row, run by one begin and one step.
 
 typedef struct Outing {
     const CatPlaceId* places; // where it may go, the best picked; NULL for anywhere it rests
@@ -108,11 +108,11 @@ typedef struct Outing {
     bool cures_boredom; // getting there is new enough to leave it unbored
 } Outing;
 
-static const CatPlaceId LOAF_PLACES[] = {CAT_AT_RUG,       CAT_AT_GALLERY,      CAT_AT_STUDY_BAY_W,
-                                         CAT_AT_STOVE_MAT, CAT_AT_HEARTH,       CAT_AT_STUDY_WINDOW,
-                                         CAT_AT_STUDY_MID, CAT_AT_KITCHEN_CHAIR};
-static const CatPlaceId CLOCK[] = {CAT_AT_HALL_CLOCK};
-static const CatPlaceId WINDOW[] = {CAT_AT_KITCHEN_WINDOW};
+static const CatPlaceId LOAF_PLACES[] = {
+    CAT_AT_RUG,    CAT_AT_GALLERY,   CAT_AT_STUDY_BAY_W,  CAT_AT_DINING_S,
+    CAT_AT_HEARTH, CAT_AT_STUDY_MID, CAT_AT_STUDY_WINDOW, CAT_AT_SEAT_CUSHION};
+static const CatPlaceId FLAME[] = {CAT_AT_HEAD_CHAIR};
+static const CatPlaceId WINDOW[] = {CAT_AT_WINDOW_SEAT};
 static const CatPlaceId NEWEL[] = {CAT_AT_NEWEL_CAP};
 
 static const Outing OUTINGS[ACT_COUNT] = {
@@ -131,7 +131,7 @@ static const Outing OUTINGS[ACT_COUNT] = {
                      .give_up = 90.0f,
                      .settle = -1,
                      .cures_boredom = true},
-    [ACT_WATCH_CLOCK] = {.places = CLOCK,
+    [ACT_WATCH_FLAME] = {.places = FLAME,
                          .place_count = 1,
                          .stay_min = 15.0f,
                          .stay_max = 30.0f,
@@ -207,16 +207,16 @@ static float explore_score(Brain* b, void* user) {
     return 0.18f + 0.5f * m->boredom;
 }
 
-static float watch_clock_score(Brain* b, void* user) {
+static float watch_flame_score(Brain* b, void* user) {
     (void)b;
     const CatMind* m = user;
-    return 0.4f * novelty(m, CAT_AT_HALL_CLOCK);
+    return 0.4f * novelty(m, CAT_AT_HEAD_CHAIR);
 }
 
 static float window_score(Brain* b, void* user) {
     (void)b;
     const CatMind* m = user;
-    return (0.3f + 0.12f * m->rain) * novelty(m, CAT_AT_KITCHEN_WINDOW);
+    return (0.3f + 0.12f * m->rain) * novelty(m, CAT_AT_WINDOW_SEAT);
 }
 
 // The rail, onto the newel at its end over the great hall: only when it has the energy for it.
@@ -229,8 +229,8 @@ static float rail_score(Brain* b, void* user) {
 // ---------------------------------------------------------------------------------------------
 // Sleep: curled, somewhere it likes, until rested.
 
-static const CatPlaceId SLEEP_PLACES[] = {CAT_AT_STUDY_CHAIR, CAT_AT_KITCHEN_CHAIR,
-                                          CAT_AT_STOVE_MAT, CAT_AT_RUG, CAT_AT_STUDY_BAY_W};
+static const CatPlaceId SLEEP_PLACES[] = {CAT_AT_STUDY_CHAIR, CAT_AT_SEAT_CUSHION, CAT_AT_DINING_S,
+                                          CAT_AT_RUG, CAT_AT_STUDY_BAY_W};
 static const float SLEEP_WEIGHTS[] = {3.0f, 1.0f, 1.2f, 0.8f, 0.8f};
 
 static float sleep_score(Brain* b, void* user) {
@@ -359,7 +359,9 @@ static bool avoid_begin(Brain* b, void* user) {
     int best = -1;
     float best_score = -1e9f;
     for (int p = 0; p < CAT_PLACE_COUNT; p++) {
-        const float away = glm_vec3_distance((float*)CAT_PLACES[p].feet, player);
+        vec3 feet = {0.0f, 0.0f, 0.0f};
+        cat_place_feet(p, feet);
+        const float away = glm_vec3_distance(feet, player);
         NavRoute r;
         if (away < 3.0f || !cat_route(m->cat, (CatPlaceId)p, false, &r) ||
             !clear_of_player(m, &r, player))
@@ -449,7 +451,9 @@ static int near_player(const CatMind* m) {
     int best = -1;
     float best_d = 1e9f;
     for (int p = 0; p < CAT_PLACE_COUNT; p++) {
-        const float d = glm_vec3_distance((float*)CAT_PLACES[p].feet, player);
+        vec3 feet = {0.0f, 0.0f, 0.0f};
+        cat_place_feet(p, feet);
+        const float d = glm_vec3_distance(feet, player);
         NavRoute r;
         if (d >= 1.5f && d < best_d && cat_route(m->cat, (CatPlaceId)p, false, &r)) {
             best_d = d;
@@ -519,7 +523,7 @@ static const BrainActivity ACTIVITIES[ACT_COUNT] = {
                      .cooldown = 15.0f,
                      .fail_cooldown = 10.0f,
                      .min_seconds = 6.0f},
-    [ACT_WATCH_CLOCK] = {.score = watch_clock_score,
+    [ACT_WATCH_FLAME] = {.score = watch_flame_score,
                          .begin = outing_begin,
                          .step = outing_step,
                          .cooldown = 150.0f,
@@ -779,19 +783,23 @@ void cat_mind_frame(CatMind* m, double time) {
     const int act = m->brain->current;
     const bool there = cat_here(cat);
     CatGaze gaze = CAT_GAZE_NONE;
-    if (act == ACT_WATCH_CLOCK && there) {
-        gaze = CAT_GAZE_CLOCK;
-        clock_bob(time, m->gaze_at);
+    if (act == ACT_WATCH_FLAME && there) {
+        // The middle candle's flame, with the small wander of an eye that follows one.
+        gaze = CAT_GAZE_FLAME;
+        mansion_candelabra_flame(m->gaze_at);
+        m->gaze_at[0] += 0.01f * sinf((float)time * 2.3f);
+        m->gaze_at[1] += 0.01f * sinf((float)time * 3.1f);
     } else if (act == ACT_WINDOW && there) {
         gaze = CAT_GAZE_WINDOW;
-        // The drips off the gutter past the glass, and between them the street.
+        // The drips off the gutter past the glass, and between them the grounds.
         const float t = (float)time;
         const float drips = 0.5f + 0.5f * sinf(t * 0.21f);
-        const float street_x = 1.95f + 1.5f * sinf(t * 0.13f);
-        vec3 drip = {0.5f * (KITCHEN_WIN_X0 + KITCHEN_WIN_X1),
-                     KITCHEN_WIN_SILL + 0.3f + 0.4f * fmodf(t * 0.7f, 1.0f), HOUSE_FRONT_Z - 0.45f};
-        vec3 street = {street_x, 1.2f, HOUSE_FRONT_Z - 7.0f};
-        glm_vec3_copy(drips > 0.6f ? drip : street, m->gaze_at);
+        const float out_x = 2.6f + 1.5f * sinf(t * 0.13f);
+        const float drip[3] = {0.5f * (KITCHEN_WIN_X0 + KITCHEN_WIN_X1),
+                               DINING_WIN_SILL + 0.6f + 0.4f * fmodf(t * 0.7f, 1.0f),
+                               HOUSE_FRONT_Z - 0.45f};
+        const float grounds[3] = {out_x, 1.2f, HOUSE_FRONT_Z - 7.0f};
+        mansion_at(drips > 0.6f ? drip : grounds, m->gaze_at);
     }
 
     // The player takes the gaze when near, fast, or the reason for what it is doing; otherwise

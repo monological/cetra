@@ -12,12 +12,15 @@
 #include "kit.h"
 
 /*
- * A door that opens and shuts when the player asks (spec 13.13): a Gothic plank leaf shaped
- * to its opening, iron-strapped, with a ring to pull, hung on a hinge and swung between shut
- * and open. Nothing pushes it: it is a KINEMATIC body, solid at every angle, and it moves only
- * when it is told to and only by its own easing, so a headless run swings it the same way
- * every time.
+ * A door that opens and shuts when the player asks (spec 13.13): a leaf shaped to its opening
+ * -- the Gothic house's iron-strapped planks, or the player's house's four panels (spec 13.25)
+ * -- hung on a hinge and swung between shut and open. Nothing pushes it: it is a KINEMATIC
+ * body, solid at every angle, and it moves only when it is told to and only by its own easing,
+ * so a headless run swings it the same way every time.
  */
+
+// A leaf of `o`'s outline, `t` thick about d = 0 in frame `f`, its hinge at o->from.
+typedef void (*DoorLeafFn)(Kit* kit, const KitFrame* f, const KitOpening* o, float t);
 typedef struct Door {
     // Where it hangs: the hinge's foot in the world, and the yaw of the frame the shut leaf
     // lies in -- a along it from the hinge, d into the room it opens into. Its straps are on
@@ -32,16 +35,17 @@ typedef struct Door {
     Entity* entity;
 } Door;
 
-// Builds the leaf as a node and a body of its own, shut, hung at `hinge`'s origin in its
-// frame. `shape`'s from/to are along the frame from the hinge, its bottom and top in world y.
-// False if it has no body, and is then no door.
+// Builds `leaf` as a node and a body of its own, shut, hung at `hinge`'s origin in its frame.
+// `shape`'s from/to are along the frame from the hinge, its bottom and top in world y. False if
+// it has no body, and is then no door.
 bool door_build(Door* door, Engine* engine, Scene* scene, EntityManager* em, PhysicsWorld* physics,
-                const char* name, const KitFrame* hinge, const KitOpening* shape, float thick,
-                float swing);
+                const char* name, DoorLeafFn leaf, const KitFrame* hinge, const KitOpening* shape,
+                float thick, float swing);
 
-// A leaf of `o`'s outline, `t` thick about d = 0 in frame `f`, as a door that never moves is
-// built: the same leaf, in the kit it is given.
+// The two leaves, which a door that never moves builds into the kit it is given. The Gothic
+// one's straps are on its -d face; the panelled one is the same both sides.
 void door_leaf(Kit* kit, const KitFrame* f, const KitOpening* o, float t);
+void door_leaf_panelled(Kit* kit, const KitFrame* f, const KitOpening* o, float t);
 
 // Toward open if it is shut or shutting, toward shut otherwise.
 void door_toggle(Door* door);

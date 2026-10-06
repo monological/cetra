@@ -63,6 +63,12 @@
 #define KITCHEN_WIN_SILL (FLOOR_Y + 1.02f)
 #define KITCHEN_WIN_HEAD (FLOOR_Y + 2.18f)
 
+// The Gothic house's room in the kitchen's footprint is a dining room (spec 13.25), and its
+// window, between the kitchen's edges, is pointed and comes down to a seat under it.
+#define DINING_WIN_SILL   (FLOOR_Y + 0.6f)
+#define DINING_WIN_SPRING (FLOOR_Y + 1.8f)
+#define DINING_WIN_RISE   0.6f
+
 #define FRONT_DOOR_X0 (-1.15f)
 #define FRONT_DOOR_X1 (-0.30f)
 #define DOOR_HEAD     (FLOOR_Y + 2.05f)
@@ -149,5 +155,32 @@
 #define ROAD_Y          (-0.15f) // below the kerb
 #define SIDEWALK_WIDTH  2.0f
 #define STREET_HALF_LEN 45.0f // along X; the fog ends it well before this
+
+// Where the Gothic house stands (spec 13.25): past the street's east end and up the hill, its
+// front toward the drive that climbs to it. Everything above the street is in the house's OWN
+// coordinates, which the mansion's kit and mansion_at move here; the player's house stands at
+// the plan's own origin, on the lot the Gothic house used to.
+#define MANSION_X 115.0f
+#define MANSION_Y 8.0f
+#define MANSION_Z 40.0f
+
+// The mansion's grounds: level at MANSION_Y round the house, inside its fence.
+#define GROUNDS_X0 (MANSION_X - 17.0f)
+#define GROUNDS_X1 (MANSION_X + 17.0f)
+#define GROUNDS_Z0 (MANSION_Z - 4.0f)
+#define GROUNDS_Z1 (MANSION_Z + 28.0f)
+
+// The walkable world past the street's east end, where the drive climbs the hill to the mansion:
+// x from the street's end to WORLD_X1, z from the far side's yards to WORLD_Z1.
+#define WORLD_X1 150.0f
+#define WORLD_Z0 (-46.0f)
+#define WORLD_Z1 85.0f
+
+// A point of the house's plan, where the mansion puts it.
+static inline void mansion_at(const float local[3], float out[3]) {
+    out[0] = local[0] + MANSION_X;
+    out[1] = local[1] + MANSION_Y;
+    out[2] = local[2] + MANSION_Z;
+}
 
 #endif // _SILENT_LAYOUT_H_

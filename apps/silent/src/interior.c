@@ -40,6 +40,8 @@
 #define HALL_AT_X  (0.5f * (HALL_X0 + HALL_X1))
 #define HALL_AT_Z  (0.5f * (BAND_Z0 + BAND_Z1))
 #define GREAT_AT_Z (0.5f * (GREAT_Z0 + GREAT_Z1))
+// And one in the dining room, which shares the hall's z.
+#define DINING_AT_X (0.5f * (KITCHEN_X0 + KITCHEN_X1))
 
 /*
  * One band of the panelling, y up `h`, standing `proud` off the face along a0..a1 where no hole
@@ -132,7 +134,7 @@ static void hall(Kit* kit) {
     n = cased(front, holes);
     wainscot(kit, &f, HALL_IN_X0, HALL_IN_X1, FLOOR_Y, true, holes, n);
     ornament_casing(kit, &w, MAT_MAHOGANY, &west->openings[OPENING_PARLOUR_DOOR]);
-    ornament_casing(kit, &e, MAT_MAHOGANY, &east->openings[OPENING_KITCHEN_DOOR]);
+    ornament_casing(kit, &e, MAT_MAHOGANY, &east->openings[OPENING_DINING_DOOR]);
     ornament_casing(kit, &f, MAT_MAHOGANY, &front->openings[OPENING_FRONT_DOOR]);
     const Facade arch_hall = facade_toward(back, HALL_AT_X, HALL_AT_Z);
     const Facade arch_great = facade_toward(back, HALL_AT_X, GREAT_AT_Z);
@@ -144,6 +146,43 @@ static void hall(Kit* kit) {
         const float z = BAND_Z0 + ((float)i + 0.5f) * (BAND_Z1 - BAND_Z0) / (float)BEAMS;
         kit_frame_box(kit, &KIT_WORLD, MAT_MAHOGANY, HALL_IN_X0, HALL_IN_X1, CEIL_Y - 0.14f, CEIL_Y,
                       z - 0.06f, z + 0.06f, false);
+    }
+}
+
+/*
+ * The dining room in the kitchen's footprint (spec 13.25): one row of linenfold round all four
+ * walls, low enough for the portraits over it, stopping at the door and the window, both cased,
+ * and beams across its ceiling as the hall has.
+ */
+static void dining(Kit* kit) {
+    const struct {
+        HouseWall wall;
+        float a0, a1;
+    } SIDES[] = {
+        {HOUSE_WALL_FRONT, KITCHEN_X0, KITCHEN_X1},
+        {HOUSE_WALL_EAST, KITCHEN_Z0, KITCHEN_Z1},
+        {HOUSE_WALL_GREAT_FRONT, KITCHEN_X0, KITCHEN_X1},
+        {HOUSE_WALL_HALL_EAST, KITCHEN_Z0, KITCHEN_Z1},
+    };
+    KitOpening holes[KIT_MAX_OPENINGS];
+    for (size_t i = 0; i < sizeof(SIDES) / sizeof(SIDES[0]); i++) {
+        const KitWall* w = house_wall(SIDES[i].wall);
+        const Facade s = facade_toward(w, DINING_AT_X, HALL_AT_Z);
+        const int n = cased(w, holes);
+        wainscot(kit, &s, SIDES[i].a0, SIDES[i].a1, FLOOR_Y, false, holes, n);
+    }
+    const KitWall* front = house_wall(HOUSE_WALL_FRONT);
+    const KitWall* hall_east = house_wall(HOUSE_WALL_HALL_EAST);
+    const Facade window = facade_toward(front, DINING_AT_X, HALL_AT_Z);
+    const Facade door = facade_toward(hall_east, DINING_AT_X, HALL_AT_Z);
+    ornament_casing(kit, &window, MAT_MAHOGANY, &front->openings[OPENING_DINING_WINDOW]);
+    ornament_casing(kit, &door, MAT_MAHOGANY, &hall_east->openings[OPENING_DINING_DOOR]);
+
+    enum { BEAMS = 3 };
+    for (int i = 0; i < BEAMS; i++) {
+        const float x = KITCHEN_X0 + ((float)i + 0.5f) * (KITCHEN_X1 - KITCHEN_X0) / (float)BEAMS;
+        kit_frame_box(kit, &KIT_WORLD, MAT_MAHOGANY, x - 0.07f, x + 0.07f, CEIL_Y - 0.16f, CEIL_Y,
+                      KITCHEN_Z0, KITCHEN_Z1, false);
     }
 }
 
@@ -432,6 +471,7 @@ static void gallery(Kit* kit) {
 
 void interior_build(Kit* kit) {
     hall(kit);
+    dining(kit);
     great_hall(kit);
     gallery(kit);
     stair_dressing(kit);

@@ -236,6 +236,7 @@ static void lamp(Kit* kit, Scene* scene, const KitFrame* f, float a, float d) {
 
     vec3 pos = {0.0f, 0.0f, 0.0f};
     kit_frame_point(f, at, rim + 0.02f, d, pos);
+    glm_vec3_add(pos, kit->origin, pos); // a light is no part of the kit, so it moves itself
     LightDesc desc = {.name = "study_lamp",
                       .type = LIGHT_SPOT,
                       .position = {pos[0], pos[1], pos[2]},

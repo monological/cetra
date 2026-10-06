@@ -73,6 +73,16 @@ typedef enum {
     MAT_WAX,          // candles
     MAT_SHADE,        // the study lamp's green cased glass, faintly lit from inside
     MAT_BRASS_BRIGHT, // candlesticks and sconces: brass kept polished
+    // The player's house (spec 13.25).
+    MAT_CREAM,      // the hall's plaster, gone the colour of old cream
+    MAT_HARDWOOD,   // its dark boards under a lacquer that still shines
+    MAT_WALLPAPER,  // the living room's faded paper
+    MAT_MOULDING,   // crown moulding, skirting and casings, painted white long ago
+    MAT_UPHOLSTERY, // the sofa and the armchair
+    MAT_MIRROR,     // the bathroom's mirror, its silvering spotted
+    MAT_LAMPSHADE,  // the floor lamp's fabric shade, lit from inside
+    MAT_FROSTED,    // a lantern's frosted glass, lit from inside
+    MAT_SCREEN,     // the television's screen, left on with nothing on it
     MAT_COUNT
 } MatId;
 

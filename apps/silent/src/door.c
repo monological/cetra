@@ -90,6 +90,44 @@ void door_leaf(Kit* kit, const KitFrame* f, const KitOpening* o, float t) {
     }
 }
 
+/*
+ * A four-panel door, painted, as every house on the street has: a slab with two short panels
+ * over two tall ones, each a raised field in a sunk frame on both faces, and a brass knob on a
+ * rose either side by the latch. Flat-headed, which is the only head it is hung in.
+ */
+void door_leaf_panelled(Kit* kit, const KitFrame* f, const KitOpening* o, float t) {
+    const float w = o->to - o->from, h = o->top - o->bottom;
+    kit_frame_box(kit, f, MAT_MOULDING, o->from, o->to, o->bottom, o->top, -0.5f * t, 0.5f * t,
+                  false);
+    const float stile = 0.12f * w + 0.03f, rail = 0.11f, mid = 0.42f * h;
+    const float cols[3] = {o->from + stile, o->from + 0.5f * w, o->to - stile};
+    const float rows[2][2] = {{o->bottom + rail + 0.08f, o->bottom + mid - 0.5f * rail},
+                              {o->bottom + mid + 0.5f * rail, o->top - rail}};
+    for (int side = -1; side <= 1; side += 2) {
+        const float d = (float)side * 0.5f * t;
+        for (int c = 0; c < 2; c++) {
+            const float a0 = c ? cols[1] + 0.5f * rail : cols[0];
+            const float a1 = c ? cols[2] : cols[1] - 0.5f * rail;
+            for (int r = 0; r < 2; r++) {
+                const float y0 = rows[r][0], y1 = rows[r][1];
+                // The panel's sunk frame, then its raised field standing back out of it.
+                kit_frame_box(kit, f, MAT_MOULDING, a0, a1, y0, y1, d, d - (float)side * 0.006f,
+                              false);
+                kit_frame_box(kit, f, MAT_MOULDING, a0 + 0.035f, a1 - 0.035f, y0 + 0.035f,
+                              y1 - 0.035f, d - (float)side * 0.006f, d + (float)side * 0.004f,
+                              false);
+            }
+        }
+    }
+    const vec2 knob[] = {{0.0f, 0.0f},     {0.026f, 0.0f},   {0.024f, 0.008f},
+                         {0.009f, 0.012f}, {0.008f, 0.045f}, {0.024f, 0.05f},
+                         {0.029f, 0.065f}, {0.022f, 0.078f}, {0.0f, 0.08f}};
+    const float ka = o->to - 0.07f, ky = o->bottom + 0.95f;
+    for (int side = -1; side <= 1; side += 2)
+        kit_frame_lathe_on(kit, f, MAT_BRASS, (vec3){ka, ky, (float)side * 0.5f * t},
+                           (vec3){0.0f, 0.0f, (float)side}, knob, KIT_COUNT(knob), 12);
+}
+
 // The body and the node where the swing puts them.
 static void place(Door* door) {
     float yaw = 0.0f;
@@ -98,8 +136,8 @@ static void place(Door* door) {
 }
 
 bool door_build(Door* door, Engine* engine, Scene* scene, EntityManager* em, PhysicsWorld* physics,
-                const char* name, const KitFrame* hinge, const KitOpening* shape, float thick,
-                float swing) {
+                const char* name, DoorLeafFn leaf, const KitFrame* hinge, const KitOpening* shape,
+                float thick, float swing) {
     *door = (Door){.yaw = hinge->yaw, .shape = *shape, .swing = swing};
     glm_vec3_copy((float*)hinge->origin, door->hinge);
 
@@ -110,7 +148,7 @@ bool door_build(Door* door, Engine* engine, Scene* scene, EntityManager* em, Phy
     Kit kit;
     kit_init(&kit, scene, NULL, NULL);
     mats_register(&kit, engine, scene);
-    door_leaf(&kit, &local, shape, thick);
+    leaf(&kit, &local, shape, thick);
     SceneNode* node = kit_finish(&kit, name);
 
     door->entity = create_entity(em, name);

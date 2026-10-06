@@ -13,6 +13,8 @@
  * wick. A candle is burnt down to `wax` metres.
  */
 
+// A bare taper standing on y at (a, d) in frame `f`, for a holder built elsewhere.
+void candle_taper(Kit* kit, const KitFrame* f, float a, float y, float d, float wax);
 // A table candlestick standing on y at (a, d) in frame `f`, holding a taper.
 void candle_stick(Kit* kit, const KitFrame* f, float a, float y, float d, float wax);
 // A chamberstick the same way: a wide drip pan, a short socket, and a ring for a finger at +a.

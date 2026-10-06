@@ -64,6 +64,10 @@ static void candle(Kit* kit, const KitFrame* f, float a, float y, float d, float
     kit_wick(kit, f, a, y + wax + FLAME_FOOT, d, size);
 }
 
+void candle_taper(Kit* kit, const KitFrame* f, float a, float y, float d, float wax) {
+    candle(kit, f, a, y, d, wax, false);
+}
+
 // A turned stem on a round foot, a knop under the socket's drip ring.
 void candle_stick(Kit* kit, const KitFrame* f, float a, float y, float d, float wax) {
     const float h = STICK_H;
@@ -151,8 +155,9 @@ void candles_light(FireSystem* fs, Scene* scene, const Kit* kit, bool shadows) {
         return;
     for (int i = 0; i < kit->wick_count; i++) {
         const KitWick* w = &kit->wicks[i];
+        // Numbered across the whole fire system, so a second house's candles are named apart.
         char name[32];
-        snprintf(name, sizeof(name), "candle_%d", i);
+        snprintf(name, sizeof(name), "candle_%d", fs->count);
         Fire* fire = fire_system_add(fs, FIRE_FLAME, name);
         if (!fire)
             return;

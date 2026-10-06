@@ -264,29 +264,29 @@ static void door_in(Kit* kit, const KitWall* w, int i, bool inner_face) {
  * what is laid on it later -- panelling, a stone lining -- read the same openings.
  */
 static const KitWall WALLS[HOUSE_WALL_COUNT] = {
-    // The front: the door under a pointed head, the kitchen's window as it was, and upstairs
-    // a pair of lancets into the bedroom and one into the box room.
-    [HOUSE_WALL_FRONT] = {.along_x = true,
-                          .at = HOUSE_FRONT_Z,
-                          .from = FRONT_FROM,
-                          .to = HOUSE_X1 + CORNER,
-                          .y0 = 0.0f,
-                          .y1 = EAVE_Y,
-                          .thick = EXT_WALL,
-                          .inner = 1,
-                          .mat_inner = MAT_PLASTER,
-                          .mat_outer = MAT_SIDING_DARK,
-                          .openings = {[OPENING_FRONT_DOOR] = {FRONT_DOOR_X0, FRONT_DOOR_X1,
-                                                               FLOOR_Y, FRONT_DOOR_SPRING,
-                                                               KIT_ARCH_POINTED, FRONT_DOOR_RISE,
-                                                               true},
-                                       [OPENING_KITCHEN_WINDOW] = {KITCHEN_WIN_X0, KITCHEN_WIN_X1,
-                                                                   KITCHEN_WIN_SILL,
-                                                                   KITCHEN_WIN_HEAD},
-                                       LANCET(1.75f, 2.35f, UP_SILL, UP_SPRING, 0.6f),
-                                       LANCET(2.65f, 3.25f, UP_SILL, UP_SPRING, 0.6f),
-                                       LANCET(-1.0f, -0.5f, UP_SILL + 0.1f, UP_SPRING, 0.5f)},
-                          .opening_count = 5},
+    // The front: the door under a pointed head, the dining room's pointed window down to its
+    // seat, and upstairs a pair of lancets into the bedroom and one into the box room.
+    [HOUSE_WALL_FRONT] =
+        {.along_x = true,
+         .at = HOUSE_FRONT_Z,
+         .from = FRONT_FROM,
+         .to = HOUSE_X1 + CORNER,
+         .y0 = 0.0f,
+         .y1 = EAVE_Y,
+         .thick = EXT_WALL,
+         .inner = 1,
+         .mat_inner = MAT_PLASTER,
+         .mat_outer = MAT_SIDING_DARK,
+         .openings = {[OPENING_FRONT_DOOR] = {FRONT_DOOR_X0, FRONT_DOOR_X1, FLOOR_Y,
+                                              FRONT_DOOR_SPRING, KIT_ARCH_POINTED, FRONT_DOOR_RISE,
+                                              true},
+                      [OPENING_DINING_WINDOW] = {KITCHEN_WIN_X0, KITCHEN_WIN_X1, DINING_WIN_SILL,
+                                                 DINING_WIN_SPRING, KIT_ARCH_POINTED,
+                                                 DINING_WIN_RISE},
+                      LANCET(1.75f, 2.35f, UP_SILL, UP_SPRING, 0.6f),
+                      LANCET(2.65f, 3.25f, UP_SILL, UP_SPRING, 0.6f),
+                      LANCET(-1.0f, -0.5f, UP_SILL + 0.1f, UP_SPRING, 0.5f)},
+         .opening_count = 5},
     // The back, either side of the hearth: two tall lancets into the great hall.
     [HOUSE_WALL_BACK] = {.along_x = true,
                          .at = HOUSE_BACK_Z,
@@ -340,10 +340,10 @@ static const KitWall WALLS[HOUSE_WALL_COUNT] = {
                               .inner = 1,
                               .mat_inner = MAT_PLASTER,
                               .mat_outer = MAT_PLASTER,
-                              .openings = {[OPENING_KITCHEN_DOOR] = {KITCHEN_DOOR_Z0,
-                                                                     KITCHEN_DOOR_Z1, FLOOR_Y,
-                                                                     DOOR_HEAD, KIT_ARCH_FLAT, 0.0f,
-                                                                     true}},
+                              .openings = {[OPENING_DINING_DOOR] = {KITCHEN_DOOR_Z0,
+                                                                    KITCHEN_DOOR_Z1, FLOOR_Y,
+                                                                    DOOR_HEAD, KIT_ARCH_FLAT,
+                                                                    0.0f, true}},
                               .opening_count = 1},
     [HOUSE_WALL_HALL_WEST] = {.along_x = false,
                               .at = HALL_X0,
@@ -430,8 +430,8 @@ static void dress(Kit* kit, const KitWall* w, float a0, float a1) {
 
 /*
  * The outside walls: what glazes each opening, and where each wall's dressing runs -- from the
- * tower's face, or past the corner it shares. The kitchen keeps its window, the rooms upstairs
- * are dark, and the great hall's lancets take leaded quarries, the one over the stair too.
+ * tower's face, or past the corner it shares. The dining room's window and the great hall's
+ * lancets take leaded quarries, the one over the stair too, and the rooms upstairs are dark.
  */
 static const struct {
     HouseWall wall;
@@ -440,7 +440,7 @@ static const struct {
 } OUTSIDE[] = {
     {HOUSE_WALL_FRONT,
      {[OPENING_FRONT_DOOR] = NO_PANE,
-      [OPENING_KITCHEN_WINDOW] = MAT_WINDOW_GLASS,
+      [OPENING_DINING_WINDOW] = MAT_LEADED,
       MAT_DARK_GLASS,
       MAT_DARK_GLASS,
       MAT_DARK_GLASS},
@@ -486,9 +486,7 @@ static void interior_walls(Kit* kit) {
  */
 static void floors(Kit* kit) {
     const KitFrame* w = &KIT_WORLD;
-    kit_frame_box(kit, w, MAT_KITCHEN_FLOOR, HALL_X1, HOUSE_X1, 0.0f, FLOOR_Y, HOUSE_FRONT_Z,
-                  KITCHEN_BACK_Z, true);
-    kit_frame_box(kit, w, MAT_WOOD_FLOOR, HALL_X0, HALL_X1, 0.0f, FLOOR_Y, HOUSE_FRONT_Z,
+    kit_frame_box(kit, w, MAT_WOOD_FLOOR, HALL_X0, HOUSE_X1, 0.0f, FLOOR_Y, HOUSE_FRONT_Z,
                   KITCHEN_BACK_Z, true);
     kit_frame_box(kit, w, MAT_WOOD_FLOOR, HOUSE_X0, HOUSE_X1, 0.0f, FLOOR_Y, KITCHEN_BACK_Z,
                   HOUSE_BACK_Z, true);
@@ -590,16 +588,16 @@ void house_build(Kit* kit) {
 #define DOOR_SWING     1.7f // about 97 degrees
 
 bool house_front_door(Door* door, Engine* engine, Scene* scene, EntityManager* em,
-                      PhysicsWorld* physics) {
+                      PhysicsWorld* physics, const vec3 origin) {
     // The opening as the wall has it, along the frame from its hinge jamb.
     KitOpening opening = WALLS[HOUSE_WALL_FRONT].openings[OPENING_FRONT_DOOR];
-    const KitFrame hinge = {{opening.from, 0.0f, FRONT_DOOR_Z}, 0.0f};
+    const KitFrame hinge = {{opening.from + origin[0], origin[1], FRONT_DOOR_Z + origin[2]}, 0.0f};
     opening.to -= opening.from;
     opening.from = 0.0f;
     KitOpening leaf = kit_opening_grow(&opening, -DOOR_CLEARANCE);
     leaf.bottom = FLOOR_Y + 0.02f;
-    return door_build(door, engine, scene, em, physics, "front_door", &hinge, &leaf, DOOR_THICK,
-                      DOOR_SWING);
+    return door_build(door, engine, scene, em, physics, "mansion_door", door_leaf, &hinge, &leaf,
+                      DOOR_THICK, DOOR_SWING);
 }
 
 float house_clearance(const vec3 p) {
@@ -618,6 +616,11 @@ float house_clearance(const vec3 p) {
     for (int i = 0; i < KIT_COUNT(SLABS); i++)
         d = fminf(d, fmaxf(SLABS[i][0] - p[1], p[1] - SLABS[i][1]));
     return d;
+}
+
+float house_outside_distance_world(const vec3 p) {
+    const vec3 local = {p[0] - MANSION_X, p[1] - MANSION_Y, p[2] - MANSION_Z};
+    return fminf(house_outside_distance(p), house_outside_distance(local));
 }
 
 float house_outside_distance(const vec3 p) {
