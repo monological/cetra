@@ -647,6 +647,15 @@ void scene_clear_decals(Scene* scene) {
     scene->decal_count = 0;
 }
 
+LightingAtlas* scene_lighting_atlas(Scene* scene, struct Engine* engine) {
+    if (!scene)
+        return NULL;
+    LightingAtlasLayout layout = {0};
+    gi_world_atlas_needs(scene->gi, &layout);
+    probe_set_atlas_needs(scene->probe_set, &layout);
+    return lighting_atlas_reserve(&scene->lighting_atlas, &layout, engine);
+}
+
 void scene_update_lighting(Scene* scene, struct Engine* engine) {
     if (!scene || !engine)
         return;
@@ -678,7 +687,7 @@ void scene_environment_changed(Scene* scene, struct Engine* engine) {
      * nothing to refresh: its capture is still to come, and will see this sky.
      */
     const ReflectionProbeSet* probes = scene->probe_set;
-    if (probe_set_multi(probes)) {
+    if (probe_set_multi(probes, scene->lighting_atlas)) {
         log_info("Sky: %zu-probe set not refreshed (relight is deferred)", probes->residency.count);
     } else if (probes && probes->ready) {
         for (size_t i = 0; i < probes->residency.count; ++i) {

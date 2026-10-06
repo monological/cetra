@@ -2294,7 +2294,8 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode) {
     // Hand the current scene's reflection probes and shadow casters to postfx
     // (SSR miss fallback / fog march) without postfx learning about Scene
     const Scene* fx_scene = engine_get_scene(engine);
-    probe_set_publish_to_postfx(fx_scene ? fx_scene->probe_set : NULL, engine->postfx);
+    probe_set_publish_to_postfx(fx_scene ? fx_scene->probe_set : NULL,
+                                fx_scene ? fx_scene->lighting_atlas : NULL, engine->postfx);
     shadow_publish_to_postfx(fx_scene, engine->postfx);
     rain_publish_to_postfx(fx_scene ? fx_scene->rain : NULL, engine->postfx);
     engine->postfx->late_draw =

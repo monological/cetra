@@ -45,11 +45,11 @@ typedef struct SceneCaptureState {
     bool msm_enabled;
     double render_time;
     double render_delta;
-    bool irradiance;
-    bool burst;
+    SceneCaptureKind kind;
 } SceneCaptureState;
 
-// What a capture's output MEANS, which two callers need opposite answers to.
+// What a capture's output MEANS (SceneCaptureKind, engine.h), which two callers need opposite
+// answers to.
 //
 // A GI probe bakes IRRADIANCE, added to the analytic direct term -- so an
 // emissive surface that is also a derived area panel (spec 11.49) must sit it
@@ -61,11 +61,7 @@ typedef struct SceneCaptureState {
 // A third clause of capture policy, and it belongs here for the reason the two
 // above it do: it was briefly hand-written by one caller with its own
 // save/restore, which is the shape this struct's own history warns about.
-typedef enum SceneCaptureKind {
-    SCENE_CAPTURE_RADIANCE = 0, // what an eye or a mirror sees
-    SCENE_CAPTURE_IRRADIANCE,   // what is added to the analytic direct term
-} SceneCaptureKind;
-
+//
 // Whether a capture kept for good may be taken now of what lies in `box` (spec 13.24): the
 // texture loader idle, every cached light reaching the box shadowed, and for RADIANCE every GI
 // volume touching it swept. Taken any sooner it photographs placeholder materials, light through
@@ -93,11 +89,12 @@ void scene_capture_end(Engine* engine, struct Scene* scene, const SceneCaptureSt
 // Saves and restores every piece of engine and camera state it substitutes, so a
 // capture leaves the next real frame bit-identical, and raises engine->capturing
 // for the duration so passes that reach outside the bound target sit out.
+// `back_faces` draws only the faces turned away from the capture point.
 //
 // Pair with scene_capture_begin/end, which own the policy this does not.
 void scene_capture_faces(Engine* engine, Scene* scene, struct IBLResources* ibl,
                          const vec3 position, GLuint dst_cubemap, GLuint dst_depth_cubemap,
-                         int face_size, float near_clip, float far_clip);
+                         int face_size, float near_clip, float far_clip, bool back_faces);
 
 // Flatten the scene for this frame, if it has not been flattened already.
 //

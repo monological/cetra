@@ -73,8 +73,8 @@ static AABB probe_box(const ReflectionProbe* probe) {
 
 // The column an item's texels take: its slot's, or for one holding none, a rectangle of the
 // size every column has.
-static AtlasRect probe_column(const ReflectionProbeSet* set, const ResidencyItem* item) {
-    return lighting_atlas_probe_rect(set->atlas, item->slot >= 0 ? item->slot : 0);
+static AtlasRect probe_column(const LightingAtlas* atlas, const ResidencyItem* item) {
+    return lighting_atlas_probe_rect(atlas, item->slot >= 0 ? item->slot : 0);
 }
 
 // Whether a probe may be captured now: a probe is not captured again, so what it photographs
@@ -144,8 +144,8 @@ static int next_capture(const ReflectionProbeSet* set, const struct Engine* engi
 }
 
 // Capture one probe into its column and drop the cubes it was made from.
-static bool capture_into_column(ReflectionProbeSet* set, int i, struct Engine* engine,
-                                struct Scene* scene) {
+static bool capture_into_column(ReflectionProbeSet* set, LightingAtlas* atlas, int i,
+                                struct Engine* engine, struct Scene* scene) {
     ReflectionProbe* probe = set->probes[i];
     ResidencyItem* item = &set->residency.items[i];
     set->captures_total++;
@@ -153,7 +153,7 @@ static bool capture_into_column(ReflectionProbeSet* set, int i, struct Engine* e
         log_error("Reflection probe %d failed to capture; the set stops capturing", i);
         return false;
     }
-    if (!lighting_atlas_project_probe(set->atlas, probe, item->slot))
+    if (!lighting_atlas_project_probe(atlas, probe, item->slot))
         return false;
     // The cubes are what make a set affordable to keep: past this point the column holds
     // everything a consumer reads.
@@ -186,16 +186,15 @@ void probe_set_update(ReflectionProbeSet* set, struct Engine* engine, struct Sce
         return;
     }
 
-    set->atlas = lighting_atlas_sync(scene, engine);
-    if (!set->atlas) {
-        set->failed = true;
+    // Asked again next frame when refused: the atlas says why, once.
+    LightingAtlas* atlas = scene_lighting_atlas(scene, engine);
+    if (!atlas)
         return;
-    }
     for (size_t i = 0; i < set->residency.count; ++i) {
         ResidencyItem* item = &set->residency.items[i];
         if (item->state != RESIDENCY_UPLOAD)
             continue;
-        lighting_atlas_restore(set->atlas, probe_column(set, item), item->kept);
+        lighting_atlas_restore(atlas, probe_column(atlas, item), item->kept);
         residency_loaded(item);
     }
 
@@ -211,7 +210,7 @@ void probe_set_update(ReflectionProbeSet* set, struct Engine* engine, struct Sce
             profiler_scope_begin(engine->profiler, "probe capture");
             timing = true;
         }
-        if (!capture_into_column(set, i, engine, scene)) {
+        if (!capture_into_column(set, atlas, i, engine, scene)) {
             set->failed = true;
             break;
         }
@@ -222,18 +221,27 @@ void probe_set_update(ReflectionProbeSet* set, struct Engine* engine, struct Sce
         set->ready = !resident_waiting(set);
 }
 
-void probe_set_fill_descriptors(const ReflectionProbeSet* set, GpuProbeBlock* out) {
+void probe_set_atlas_needs(const ReflectionProbeSet* set, LightingAtlasLayout* layout) {
+    const int count = set ? (int)set->residency.count : 0;
+    if (count < 2)
+        return;
+    layout->probe_slots = count < PROBE_SET_MAX ? count : PROBE_SET_MAX;
+    layout->probe_row0 = set->row0;
+}
+
+void probe_set_fill_descriptors(const ReflectionProbeSet* set, const LightingAtlas* atlas,
+                                GpuProbeBlock* out) {
     if (!set || !out)
         return;
 
     int aw = 0, ah = 0;
-    lighting_atlas_size(set->atlas, &aw, &ah);
+    lighting_atlas_size(atlas, &aw, &ah);
     out->atlas_params[0] = aw > 0 ? 1.0f / (float)aw : 0.0f;
     out->atlas_params[1] = ah > 0 ? 1.0f / (float)ah : 0.0f;
     out->atlas_params[2] = (float)aw;
     out->atlas_params[3] = (float)ah;
 
-    lighting_atlas_fill_column(set->atlas, out->atlas_column, out->rows);
+    lighting_atlas_fill_column(atlas, out->atlas_column, out->rows);
 
     // In the order of the probes themselves rather than of their slots: the blend sums in
     // descriptor order, and a probe readmitted to a different column must sum where it did.
@@ -251,7 +259,7 @@ void probe_set_fill_descriptors(const ReflectionProbeSet* set, GpuProbeBlock* ou
         glm_vec3_copy((float*)probe->box_min, desc->box_min_fade);
         desc->box_min_fade[3] = probe->box_fade;
         glm_vec3_copy((float*)probe->box_max, desc->box_max_pad);
-        const AtlasRect column = lighting_atlas_probe_rect(set->atlas, item->slot);
+        const AtlasRect column = lighting_atlas_probe_rect(atlas, item->slot);
         desc->column[0] = (float)column.x;
         desc->column[1] = (float)column.y;
     }
@@ -272,17 +280,17 @@ void probe_set_shift_origin(ReflectionProbeSet* set, const vec3 delta) {
         reflection_probe_shift_origin(set->probes[i], delta);
 }
 
-void probe_set_bind(const ReflectionProbeSet* set, ShaderProgram* program) {
+void probe_set_bind(const ReflectionProbeSet* set, const LightingAtlas* atlas,
+                    ShaderProgram* program) {
     if (!program || !program->uniforms)
         return;
 
-    if (probe_set_multi(set)) {
+    if (probe_set_multi(set, atlas)) {
         // The blend reads the atlas and falls back to the global environment
         // for whatever weight is left over, so the prefilter unit must keep
         // holding that environment: probeEnabled stays 0 and the single-probe
         // branch is never taken.
         uniform_set_int(program->uniforms, "probeEnabled", 0);
-        lighting_atlas_bind(set->atlas, program);
         return;
     }
 
@@ -293,16 +301,17 @@ void probe_set_bind(const ReflectionProbeSet* set, ShaderProgram* program) {
         uniform_set_int(program->uniforms, "probeEnabled", 0);
 }
 
-void probe_set_publish_to_postfx(const ReflectionProbeSet* set, PostFX* fx) {
+void probe_set_publish_to_postfx(const ReflectionProbeSet* set, const LightingAtlas* atlas,
+                                 PostFX* fx) {
     if (!fx)
         return;
 
-    if (probe_set_multi(set)) {
+    if (probe_set_multi(set, atlas)) {
         // SSR reads the descriptors out of the same block the surface program
         // does, so all it needs published is the texture and the flag arming
         // the branch.
         fx->probe_multi = true;
-        fx->probe_atlas = lighting_atlas_texture(set->atlas);
+        fx->probe_atlas = lighting_atlas_texture(atlas);
         fx->probe_enabled = false;
         fx->probe_cubemap = 0;
         return;
@@ -313,7 +322,8 @@ void probe_set_publish_to_postfx(const ReflectionProbeSet* set, PostFX* fx) {
     reflection_probe_publish_to_postfx(probe_set_primary(set), fx);
 }
 
-void probe_set_probe_print(const ReflectionProbeSet* set, int frame, bool final) {
+void probe_set_probe_print(const ReflectionProbeSet* set, const LightingAtlas* atlas, int frame,
+                           bool final) {
     if (!set)
         return;
 
@@ -325,13 +335,13 @@ void probe_set_probe_print(const ReflectionProbeSet* set, int frame, bool final)
         mode = "failed";
     else if (count > 0 && !set->ready)
         mode = "pending";
-    else if (probe_set_multi(set))
+    else if (probe_set_multi(set, atlas))
         mode = "multi";
     else if (count > 0)
         mode = "single";
 
     int aw = 0, ah = 0;
-    lighting_atlas_size(set->atlas, &aw, &ah);
+    lighting_atlas_size(atlas, &aw, &ah);
 
     printf("probe-set frame=%d count=%d mode=%s atlas=%dx%d captures=%d mask_bits=%d "
            "digest=%08x\n",
@@ -342,12 +352,12 @@ void probe_set_probe_print(const ReflectionProbeSet* set, int frame, bool final)
 
     for (int i = 0; i < count; ++i) {
         const ReflectionProbe* p = set->probes[i];
-        const AtlasRect rect = lighting_atlas_probe_rect(set->atlas, set->residency.items[i].slot);
+        const AtlasRect rect = lighting_atlas_probe_rect(atlas, set->residency.items[i].slot);
         printf("probe-set probe idx=%d pos=%.3f,%.3f,%.3f box=%.3f,%.3f,%.3f..%.3f,%.3f,%.3f "
                "rect=%d,%d rows=%d\n",
                i, p->position[0], p->position[1], p->position[2], p->box_min[0], p->box_min[1],
                p->box_min[2], p->box_max[0], p->box_max[1], p->box_max[2], rect.x, rect.y,
-               set->atlas ? PROBE_ATLAS_ROWS : 0);
+               atlas ? PROBE_ATLAS_ROWS : 0);
     }
     fflush(stdout);
 }
@@ -367,7 +377,7 @@ static const char* probe_state_name(ResidencyState state) {
     return "out";
 }
 
-void probe_set_stream_print(const ReflectionProbeSet* set, int frame) {
+void probe_set_stream_print(const ReflectionProbeSet* set, const LightingAtlas* atlas, int frame) {
     if (!set)
         return;
     const Residency* res = &set->residency;
@@ -383,7 +393,7 @@ void probe_set_stream_print(const ReflectionProbeSet* set, int frame) {
         // photographed.
         const uint32_t digest =
             item->kept || item->state == RESIDENCY_LOADED
-                ? lighting_atlas_digest(set->atlas, probe_column(set, item), item->kept)
+                ? lighting_atlas_digest(atlas, probe_column(atlas, item), item->kept)
                 : 0u;
         printf("stream probe idx=%zu slot=%d dist=%.2f state=%s kept=%d digest=%08x\n", i,
                item->slot, (double)item->distance, probe_state_name(item->state),

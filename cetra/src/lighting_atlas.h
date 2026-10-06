@@ -55,13 +55,28 @@ _Static_assert(PROBE_ATLAS_ROWS == PROBE_ATLAS_ROWS_MAX,
 // ring unwritten.
 #define PROBE_ATLAS_GUTTER 1
 
+// The atlas's sampler unit in pbr_frag. Deliberately the same number as
+// IBL_SKYBOX_TEXTURE_UNIT: sampler units are per PROGRAM, and pbr_frag has never
+// sampled the skybox cube, so 14 is the only slot free to it. Reserved for this
+// by the roadmap's global texture-unit ledger before either feature was built.
+#define LIGHTING_ATLAS_TEXTURE_UNIT 14
+
 struct Engine;
-struct Scene;
 
 // A rectangle of the atlas in texels, from its lower-left corner.
 typedef struct AtlasRect {
     int x, y, w, h;
 } AtlasRect;
+
+// What the atlas must hold. Each client states its own half -- gi_world_atlas_needs,
+// probe_set_atlas_needs -- since only it knows how many of its items can be resident at once and
+// how large each is.
+typedef struct LightingAtlasLayout {
+    int gi_slots;    // GI slots
+    int gi_w, gi_h;  // each as large as this, the largest volume's extent
+    int probe_slots; // probe columns
+    int probe_row0;  // the columns' row-0 tile size; 0 = the default
+} LightingAtlasLayout;
 
 typedef struct LightingAtlas {
     GLuint texture;
@@ -81,14 +96,16 @@ typedef struct LightingAtlas {
 
     GLuint quad_vao, quad_vbo;
     ShaderProgram* project_program; // the probe projection
+
+    bool refused; // the last layout asked for was past the driver's texture limit, said once
 } LightingAtlas;
 
-// The scene's atlas, grown to hold what its GI world and probe set need now: a slot for each
-// resident volume as large as the largest volume in the world, and a column for each resident
-// probe of a set of two or more. Allocates on first need and regrows when the world outgrows
-// it, copying every slot and column across. NULL while nothing needs one, or when the layout
-// is past the driver's texture limit (refused by name).
-LightingAtlas* lighting_atlas_sync(struct Scene* scene, struct Engine* engine);
+// `*atlas` grown to hold `layout`, allocated on first need, every slot and column carried
+// across a regrow. NULL while the layout needs nothing, or while it is past the driver's texture
+// limit -- refused by name, once, and asked again each time it is needed, so a layout that
+// shrinks back under the limit gets its atlas.
+LightingAtlas* lighting_atlas_reserve(LightingAtlas** atlas, const LightingAtlasLayout* layout,
+                                      struct Engine* engine);
 void free_lighting_atlas(LightingAtlas* atlas);
 
 // A GI slot's left edge, in texels: the slots stand side by side from x = 0, each from y = 0.
@@ -98,7 +115,9 @@ int lighting_atlas_gi_x(const LightingAtlas* atlas, int slot);
 // roughness level, gutters included.
 bool lighting_atlas_project_probe(LightingAtlas* atlas, const ReflectionProbe* probe, int index);
 
-// Bind the atlas on its unit for a program that samples it.
+// Point a program's atlas sampler at its unit, and bind the atlas there when there is one. The
+// sampler is pointed even with no atlas, the way the IBL samplers are: one left on its default
+// unit 0 shares a slot with the material textures, which is only ever safe by accident.
 void lighting_atlas_bind(const LightingAtlas* atlas, ShaderProgram* program);
 
 // The GL name, for the one consumer that binds it outside a draw (SSR's

@@ -307,9 +307,10 @@ static bool append_node(DrawList* list, Scene* scene, SceneNode* node, const Lod
                          .lod = select_lod(mesh, node, lod)};
         classify(mesh, &item.lane, &item.flags);
         // A pose, or a node said to move: either way a capture would freeze it into a
-        // picture taken while the game runs.
+        // picture taken while the game runs. A node said to move is not still either, so a
+        // kept shadow never holds it where it stood.
         if (hidden || mesh->is_skinned)
-            item.flags |= DRAW_CAPTURE_HIDDEN;
+            item.flags = (item.flags | DRAW_CAPTURE_HIDDEN) & ~DRAW_STILL;
         if (!push(list, item))
             return false;
     }

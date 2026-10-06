@@ -865,20 +865,15 @@ static bool tile_node_moves(const ShadowSystem* ss, const SceneNode* node) {
     return false;
 }
 
-// Whether a kept face may hold this caster for good: it stands where its node puts it, and the
-// captures do not leave it out. A caster they leave out (spec 13.24) is drawn over the copy every
-// frame like a mover, so a capture's own depth pass can draw the face without it.
-static bool tile_keeps(const DrawItem* item) {
-    return (item->flags & DRAW_STILL) && !(item->flags & DRAW_CAPTURE_HIDDEN);
-}
-
 // Which kept set takes a caster, by how it moves; every other set takes it whatever it does. A
-// face drawn whole and kept takes what stands where its node puts it. Split for a face drawn
-// every frame, the store takes what has not moved lately and the overlay the rest -- with every
-// pose, so a pose is only ever drawn into a face that is drawn again the next frame.
+// face drawn whole and kept takes what stands where its node puts it (DRAW_STILL, which a
+// capture_hidden node is not: a capture's own depth pass draws the face without it, so it is
+// drawn over the copy every frame like a mover). Split for a face drawn every frame, the store
+// takes what has not moved lately and the overlay the rest -- with every pose, so a pose is only
+// ever drawn into a face that is drawn again the next frame.
 static bool caster_set_wants_motion(const ShadowSystem* ss, ShadowCasterSet set,
                                     const DrawItem* item) {
-    const bool still = tile_keeps(item);
+    const bool still = (item->flags & DRAW_STILL) != 0;
     switch (set) {
         case SHADOW_CASTERS_KEPT:
             return still;
@@ -1846,7 +1841,7 @@ static void tiles_note_changes(ShadowSystem* ss, const Engine* engine, const Sce
         if (!caster_set_wants(SHADOW_CASTERS_KEPT, item->lane, item->flags))
             continue;
         vec3 lo = GLM_VEC3_ZERO_INIT, hi = GLM_VEC3_ZERO_INIT;
-        if (!tile_keeps(item)) {
+        if (!(item->flags & DRAW_STILL)) {
             // The surface as drawn, posed and displaced: the import box is the bind pose, which a
             // curled body or a swung tail leaves.
             AABB box;
@@ -2064,8 +2059,8 @@ static void render_shadow_movers(ShadowSystem* ss, const Engine* engine, const S
             tile_block_face_matrix(block, f, matrix);
             // Inside a capture every face is drawn, in view or not: the copy a face out of view
             // keeps carries the movers the last frame drew, and a capture keeps what it sees.
-            if (tile_face_in(block->valid, f) && engine->camera && !engine->capture_burst &&
-                !tile_face_in_view(&view, matrix))
+            if (tile_face_in(block->valid, f) && engine->camera &&
+                engine->capture_kind == SCENE_CAPTURE_NONE && !tile_face_in_view(&view, matrix))
                 continue;
             const int cell = tile_block_first_cell(ss, edge, b) + f;
             bool over_copy = false;

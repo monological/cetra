@@ -45,18 +45,13 @@
 // scene traversal rather than by fragments.
 #define GI_CAPTURE_FACE 16
 
-// The atlas sampler unit in pbr_frag. Deliberately the same number as
-// IBL_SKYBOX_TEXTURE_UNIT: sampler units are per PROGRAM, and pbr_frag has never
-// sampled the skybox cube, so 14 is the only slot free to it. Reserved for this
-// by the roadmap's global texture-unit ledger before either feature was built.
-#define GI_ATLAS_TEXTURE_UNIT 14
-
 // GI_RESIDENT_MAX, the volumes resident at once.
 #include "../shaders/include/gi_constants.glsl"
 
 struct Engine;
 struct Scene;
 struct LightingAtlas;
+struct LightingAtlasLayout;
 
 typedef struct GIVolume {
     // SETTINGS: plain stores.
@@ -152,8 +147,13 @@ bool gi_world_add(GIWorld* world, GIVolume* gi);
 // Must run BEFORE the frame's scene pass: it renders the scene internally.
 void gi_world_update(GIWorld* world, struct Engine* engine, struct Scene* scene);
 
-// Bind the atlas and upload the resident volumes' grids for a program that samples them.
-// No-op on a program without the uniforms, so it is safe for every material.
+// The atlas slots the world needs: one per volume that can be resident at once, each as large as
+// the largest volume in the world.
+void gi_world_atlas_needs(const GIWorld* world, struct LightingAtlasLayout* layout);
+
+// Upload the resident volumes' grids for a program that samples them; the atlas they sit in is
+// bound by lighting_atlas_bind. No-op on a program without the uniforms, so it is safe for every
+// material.
 void gi_world_bind(const GIWorld* world, const struct LightingAtlas* atlas, ShaderProgram* program);
 
 // A resident volume has its opening sweep still to run.

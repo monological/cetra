@@ -66,8 +66,8 @@ _Static_assert(IBL_SKYBOX_TEXTURE_UNIT < 16,
 // and pbr_frag -- the only program that samples the atlas -- has never sampled
 // the skybox cube. Asserted as equality so a future move of either one has to
 // come here and decide whether the sharing still holds.
-_Static_assert(GI_ATLAS_TEXTURE_UNIT == IBL_SKYBOX_TEXTURE_UNIT,
-               "GI atlas unit is the skybox unit reused; pbr_frag samples neither cube");
+_Static_assert(LIGHTING_ATLAS_TEXTURE_UNIT == IBL_SKYBOX_TEXTURE_UNIT,
+               "the lighting atlas unit is the skybox unit reused; pbr_frag samples neither cube");
 
 CullView render_cull_view(const Engine* engine, const Scene* scene, const Frustum* frustum) {
     // .occlusion stays false here: render_occlusion_pass is the ONE writer of
@@ -76,7 +76,7 @@ CullView render_cull_view(const Engine* engine, const Scene* scene, const Frustu
     // keeps a camera answer out of a light's cull without any of them opting
     // out.
     CullView view = {engine->frustum_cull_enabled ? frustum : NULL, scene ? scene->wind : NULL};
-    view.capture = engine->capturing || engine->capture_burst;
+    view.capture = engine->capture_kind != SCENE_CAPTURE_NONE;
     return view;
 }
 
@@ -663,13 +663,17 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
             uniform_set_vec3(u, "ambientRadiance",
                              scene ? scene->ambient_radiance : (vec3){0.0f, 0.0f, 0.0f});
 
+            // The lighting atlas the probes and the GI volumes both sample, bound once.
+            const LightingAtlas* atlas = scene ? scene->lighting_atlas : NULL;
+            lighting_atlas_bind(atlas, program);
+
             // Local reflection probes (parallax-corrected specular). At one
             // probe this rebinds the IBL prefilter unit to its capture, exactly
             // as it always did; above one the atlas and the froxel masks answer
             // instead and the prefilter unit keeps the global environment the
             // blend falls back to. A set is inert until every probe has
             // captured, so the capture pass itself never consumes one.
-            probe_set_bind(scene ? scene->probe_set : NULL, program);
+            probe_set_bind(scene ? scene->probe_set : NULL, atlas, program);
 
             // Indirect diffuse from the resident probe grids, replacing the flat
             // irradiance map. Self-gates to giEnabled = 0 while no volume is
@@ -682,7 +686,7 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
             // decision, and it means a volume converged at load (one bounce) and
             // one converged by moving the sun (many) do not match. Spec 9.7
             // records it as open.
-            gi_world_bind(scene ? scene->gi : NULL, scene ? scene->lighting_atlas : NULL, program);
+            gi_world_bind(scene ? scene->gi : NULL, atlas, program);
         }
 
         // The three per-object transforms, for a draw that carries one object.
@@ -726,7 +730,9 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
         // value-cached and this is 1.0 on effectively every draw, so the steady
         // state is a comparison and no GL call.
         uniform_set_float(u, "uEmissiveGate",
-                          engine->capturing_irradiance && mesh->emissive_derived ? 0.0f : 1.0f);
+                          engine->capture_kind == SCENE_CAPTURE_IRRADIANCE && mesh->emissive_derived
+                              ? 0.0f
+                              : 1.0f);
 
         // Only update material uniforms if material changed
         if (submit_take_material(state, mat)) {
@@ -1978,10 +1984,8 @@ void scene_capture_begin(Engine* engine, Scene* scene, SceneCaptureKind kind,
     if (!engine || !scene || !saved)
         return;
 
-    saved->irradiance = engine->capturing_irradiance;
-    engine->capturing_irradiance = kind == SCENE_CAPTURE_IRRADIANCE;
-    saved->burst = engine->capture_burst;
-    engine->capture_burst = true;
+    saved->kind = engine->capture_kind;
+    engine->capture_kind = kind;
 
     // Nothing inside a capture burst is timed, and this is the seam that owns
     // that -- not scene_capture_faces, which starts too late: the shadow
@@ -2029,8 +2033,7 @@ void scene_capture_end(Engine* engine, Scene* scene, const SceneCaptureState* sa
     if (!engine || !scene || !saved)
         return;
     profiler_resume(engine->profiler);
-    engine->capturing_irradiance = saved->irradiance;
-    engine->capture_burst = saved->burst;
+    engine->capture_kind = saved->kind;
     engine_set_render_time(engine, saved->render_time, saved->render_delta);
     if (scene->shadow_system) {
         scene->shadow_system->cascade_count = saved->cascade_count;
@@ -2040,7 +2043,7 @@ void scene_capture_end(Engine* engine, Scene* scene, const SceneCaptureState* sa
 
 void scene_capture_faces(Engine* engine, Scene* scene, struct IBLResources* ibl,
                          const vec3 position, GLuint dst_cubemap, GLuint dst_depth_cubemap,
-                         int face_size, float near_clip, float far_clip) {
+                         int face_size, float near_clip, float far_clip, bool back_faces) {
     if (!engine || !scene || !engine->camera || !dst_cubemap || face_size <= 0)
         return;
     // Keeping the depth means rendering straight into the destination faces:
@@ -2135,7 +2138,7 @@ void scene_capture_faces(Engine* engine, Scene* scene, struct IBLResources* ibl,
     glDepthFunc(GL_LESS);
     glDepthMask(GL_TRUE);
     glEnable(GL_CULL_FACE);
-    glCullFace(engine->capturing_back_faces ? GL_FRONT : GL_BACK);
+    glCullFace(back_faces ? GL_FRONT : GL_BACK);
     glFrontFace(GL_CCW);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);

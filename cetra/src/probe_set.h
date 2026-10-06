@@ -54,9 +54,6 @@ typedef struct ReflectionProbeSet {
 
     int row0; // the atlas's row-0 tile size; 0 = the default
 
-    // The scene's lighting atlas, borrowed; NULL until the first multi-probe sweep.
-    struct LightingAtlas* atlas;
-
     // Captures attempted across the set's life. The converge-then-idle claim
     // is only worth making if it is checkable from outside the process.
     int captures_total;
@@ -74,13 +71,19 @@ static inline ReflectionProbe* probe_set_primary(const ReflectionProbeSet* set) 
     return (set && set->ready && set->residency.count > 0) ? set->probes[0] : NULL;
 }
 
-// True for a world of two or more probes once the atlas exists -- the state that arms the
-// atlas lookup, the froxel masks and the blend. Only loaded probes are published, so an
+// True for a world of two or more probes once the scene's atlas exists -- the state that arms
+// the atlas lookup, the froxel masks and the blend. Only loaded probes are published, so an
 // armed set with none loaded blends nothing. Below it every consumer runs the path it ran
 // before spec 11.70.
-static inline bool probe_set_multi(const ReflectionProbeSet* set) {
-    return set && set->residency.count >= 2 && set->atlas;
+static inline bool probe_set_multi(const ReflectionProbeSet* set,
+                                   const struct LightingAtlas* atlas) {
+    return set && set->residency.count >= 2 && atlas;
 }
+
+// The atlas columns the set needs: one per probe that can be resident at once, and none at all
+// for a world of one probe, which binds its own cube.
+struct LightingAtlasLayout;
+void probe_set_atlas_needs(const ReflectionProbeSet* set, struct LightingAtlasLayout* layout);
 
 ReflectionProbeSet* create_reflection_probe_set(void);
 void free_reflection_probe_set(ReflectionProbeSet* set);
@@ -115,7 +118,8 @@ void probe_set_mark_dirty(ReflectionProbeSet* set);
 // the same block are the light grid's to fill, one bit per descriptor; this is the
 // half that belongs to the set.
 struct GpuProbeBlock;
-void probe_set_fill_descriptors(const ReflectionProbeSet* set, struct GpuProbeBlock* out);
+void probe_set_fill_descriptors(const ReflectionProbeSet* set, const struct LightingAtlas* atlas,
+                                struct GpuProbeBlock* out);
 
 // Take back the digest and bit count of the masks the grid just built, so the
 // diagnostic can print them. Here rather than written from light_cluster.c,
@@ -128,17 +132,21 @@ void probe_set_report_masks(ReflectionProbeSet* set, const void* masks, size_t b
 void probe_set_shift_origin(ReflectionProbeSet* set, const vec3 delta);
 
 // Bind for a PBR draw. At one probe this is bind_reflection_probe unchanged;
-// above it the atlas goes on the GI atlas unit and probeEnabled stays 0, so the
+// above it the atlas answers (lighting_atlas_bind) and probeEnabled stays 0, so the
 // prefilter unit keeps holding the global environment the blend falls back to.
-void probe_set_bind(const ReflectionProbeSet* set, ShaderProgram* program);
+void probe_set_bind(const ReflectionProbeSet* set, const struct LightingAtlas* atlas,
+                    ShaderProgram* program);
 
 // Flatten into postfx's per-frame block for the SSR miss fallback.
-void probe_set_publish_to_postfx(const ReflectionProbeSet* set, struct PostFX* fx);
+void probe_set_publish_to_postfx(const ReflectionProbeSet* set, const struct LightingAtlas* atlas,
+                                 struct PostFX* fx);
 
 // One line per frame plus a per-probe block at the end (--probe-set-probe).
-void probe_set_probe_print(const ReflectionProbeSet* set, int frame, bool final);
+void probe_set_probe_print(const ReflectionProbeSet* set, const struct LightingAtlas* atlas,
+                           int frame, bool final);
 
 // The residency: one line naming each slot's probe, then one per probe (--stream-probe).
-void probe_set_stream_print(const ReflectionProbeSet* set, int frame);
+void probe_set_stream_print(const ReflectionProbeSet* set, const struct LightingAtlas* atlas,
+                            int frame);
 
 #endif // _PROBE_SET_H_

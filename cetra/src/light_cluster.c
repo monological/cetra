@@ -545,7 +545,7 @@ static void _mark_probe_clusters(LightClusterContext* ctx, const struct Scene* s
     const ReflectionProbeSet* set = scene->probe_set;
     memset(&ctx->probes, 0, sizeof(ctx->probes));
 
-    if (!probe_set_multi(set)) {
+    if (!probe_set_multi(set, scene->lighting_atlas)) {
         // A zero block is the disarmed state and the shader reads count 0 from
         // it. Written once on the way down rather than every frame: the upload
         // is what costs, not the memset.
@@ -559,7 +559,7 @@ static void _mark_probe_clusters(LightClusterContext* ctx, const struct Scene* s
     // What a probe IS -- its position, its box, where its column sits -- is the
     // probe set's to state, not this module's. This function owns the froxel
     // masks below and nothing else about them.
-    probe_set_fill_descriptors(set, &ctx->probes);
+    probe_set_fill_descriptors(set, scene->lighting_atlas, &ctx->probes);
 
     // Over the probes the descriptors PUBLISH -- the resident ones whose columns are in the
     // atlas -- and indexed as they are, so bit i is descriptor i.
