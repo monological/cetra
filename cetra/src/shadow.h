@@ -69,10 +69,18 @@ _Static_assert(SHADOW_TILE_MARK >= MAX_PUNCTUAL_SHADOW_LAYERS,
 #define SHADOW_TILE_MAX_BLOCKS (SHADOW_TILE_MAX_CELLS / 6u)
 // A block's faces are bits of one word: six a view.
 _Static_assert(6 * SHADOW_TILE_VIEWS <= 64, "a kept block's faces must fit one 64-bit mask");
-// The most layers the tiles can take, which is the budget at the smallest edge; a larger
-// edge holds the same tiles in fewer.
-#define PUNCTUAL_TILE_MAX_LAYERS \
-    (PUNCTUAL_TILE_VRAM_BUDGET / (PUNCTUAL_SHADOW_MIN_SIZE * PUNCTUAL_SHADOW_MIN_SIZE * 4u))
+// The store pool (spec 13.26): a cell for each face drawn over a copy of its still casters, ON
+// TOP of the lights' budget. Inside it, the nearest lights took every cell first and a store had
+// none left, so a full house of candles drew every such face whole. Its own block in the table.
+#define SHADOW_TILE_STORE_CELLS 64
+_Static_assert(SHADOW_TILE_STORE_CELLS <= 64, "the pool's free cells must fit one 64-bit mask");
+#define SHADOW_TILE_TABLE (SHADOW_TILE_MAX_BLOCKS + 1u)
+// The most layers the tiles can take, which is the budget and the pool at the smallest edge; a
+// larger edge holds the same tiles in fewer.
+#define PUNCTUAL_TILE_MAX_LAYERS                                            \
+    ((PUNCTUAL_TILE_VRAM_BUDGET +                                           \
+      SHADOW_TILE_STORE_CELLS * SHADOW_TILE_SIZE * SHADOW_TILE_SIZE * 4u) / \
+     (PUNCTUAL_SHADOW_MIN_SIZE * PUNCTUAL_SHADOW_MIN_SIZE * 4u))
 // Moment shadow maps (spec 11.22). Half the cascade edge, deliberately: the
 // whole claim of a filterable representation is that it survives being
 // averaged, so it does not need the depth array's texel density. The fog's ESM
@@ -187,14 +195,14 @@ struct Light;
 // records is what the tiles hold, so the pass can tell a face it may keep from one it must
 // draw again. Faces are bits of the masks, view by view.
 //
-// A block with no light is free, or a STORE: the cells another block keeps its still casters
-// in, for its faces that see a caster which moves -- a node moved lately, or a pose. Each such
-// face is drawn every frame as a copy of the store's with the movers drawn over it, until it is
-// drawn with none in it, so a swinging pendulum costs its own draws a frame rather than the
+// A block with no light is free, or the STORE POOL: cells that faces seeing a caster which moves
+// -- a node moved lately, or a pose -- keep their still casters in, one cell a face. Each such
+// face is drawn every frame as a copy of its store cell with the movers drawn over it, until it
+// is drawn with none in it, so a swinging pendulum costs its own draws a frame rather than the
 // room's.
 typedef struct ShadowTileBlock {
-    struct Light* light; // NULL = free or a store; published to when whole
-    bool is_store;       // another block's store, so not free though it has no light
+    struct Light* light; // NULL = free or the store pool; published to when whole
+    bool is_store;       // the store pool, so not free though it has no light
     int first;           // its first cell, counted from the region's base
     int cells;           // cells it owns, which a later light needing no more may reuse
     int views;           // views drawn, 0 until first drawn
@@ -209,8 +217,9 @@ typedef struct ShadowTileBlock {
     uint64_t valid;      // faces drawn
     uint64_t dynamic;    // faces drawn over a copy of the store's until drawn with no mover in them
     uint64_t touched;    // faces a moving caster's box reached this frame
-    uint64_t stored;     // faces of the store that hold the still casters
-    int store;           // the block that is its store, -1 for none
+    uint64_t stored;     // faces whose store cell holds their still casters
+    // Each face's cell of the store pool, -1 for none
+    int8_t store_cell[6 * SHADOW_TILE_VIEWS];
 } ShadowTileBlock;
 
 // A cached light in the frame's ranking.
@@ -380,6 +389,9 @@ typedef struct ShadowSystem {
     // light regaining one draws every face at once. 0 = no limit. The first frame that places
     // any places every block it can, since that is the load.
     int tile_new_blocks_per_frame;
+    // Store cells faces drawn over a copy may hold, at most SHADOW_TILE_STORE_CELLS (spec
+    // 13.26): 0 = no store, so every such face is drawn whole each frame.
+    int tile_store_cells;
     // ENGINE-OWNED. The region starts at tile_base_layer and runs tile_layers; both only
     // grow, since moving either moves every tile. tile_generation counts the times its
     // contents were lost -- an array rebuilt, the base moved -- and a block drawn under
@@ -390,10 +402,14 @@ typedef struct ShadowSystem {
     int tile_held_base;        // the base the array's tiles are laid out at; a rebuild moves them
     uint64_t tile_epoch;       // the scene graph's when the kept faces were last checked against it
     uint64_t tile_kept_digest; // which casters the kept faces held then, and which still
-    ShadowTileBlock tile_blocks[SHADOW_TILE_MAX_BLOCKS];
-    int tile_block_count;  // blocks in use or freed, so the high-water mark of the region
-    int tile_faces_drawn;  // this frame, kept faces filled
-    int mover_faces_drawn; // this frame, kept faces copied from their store with movers over
+    ShadowTileBlock tile_blocks[SHADOW_TILE_TABLE];
+    int tile_block_count;     // blocks in use or freed, so the high-water mark of the region
+    int tile_store_pool;      // the store pool's block, -1 until a face first needs a store
+    uint64_t tile_store_free; // the pool's cells no face holds, a bit each
+    int tile_faces_drawn;     // this frame, kept faces filled
+    int mover_faces_drawn;    // this frame, kept faces drawn again for the movers in them
+    int mover_faces_copied;   // ...of which over a copy of their store cell
+    int mover_faces_whole;    // ...and whole, still casters and all, for want of one
     const struct SceneNode* tile_movers[SHADOW_TILE_MAX_MOVERS];
     uint64_t tile_mover_moved[SHADOW_TILE_MAX_MOVERS]; // the tile frame each last moved
     int tile_mover_count;
@@ -408,6 +424,7 @@ typedef struct ShadowSystem {
     GLuint tile_copy_fbo;  // reads one face while the punctual FBO writes its copy
     bool tile_full_warned; // latches, as the pool's does
     bool tile_range_warned;
+    bool tile_store_warned;
 
     // Moment shadow maps (spec 11.22): a filterable RGBA16F copy of the depth
     // cascades, resolved after the depth pass and read in ONE tap where the

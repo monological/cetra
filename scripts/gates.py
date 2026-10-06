@@ -28499,6 +28499,10 @@ def run_shadow_tiles_gate(workdir):
       tiles-rest-toggle the material set to sway and back with the graph unchanged: the kept
                      faces end as the faces that never swayed
       tiles-budget   cached lights past the tile budget are refused by name
+      tiles-store    with sixteen bodied lights holding the whole budget, a moving caster's faces
+                     are drawn over copies kept in the store pool on top of it; with no pool
+                     they are drawn whole, the refusal names the nearest light, and the two
+                     pictures are the same
       tiles-shape    a flame's light carries its spine: radius, length between the caps, axis
       tiles-dance    the candle's kept views, drawn at its first frame, read near the reference
                      of its body at frame 120
@@ -28790,6 +28794,36 @@ def run_shadow_tiles_gate(workdir):
               f"and logged)")
         if not ok:
             failures.append("tiles-budget")
+
+    # --- the store pool (spec 13.26) ---------------------------------------------------------
+    # stream_rooms' room 3: sixteen bodied lights hold the whole budget and a skinned prop moves
+    # every frame. The faces it reaches keep their still casters in the pool, on top of the
+    # budget, and drawn whole with no pool they are the same picture.
+    rooms, _ = _lstream_rooms()
+    look = _lstream_cam_eye(rooms[LSTREAM_PROP_ROOM])
+    pooled, err = _tiles_render(workdir, "store_pool", asset(LSTREAM_FIXTURE), look)
+    unpooled, err2 = _tiles_render(workdir, "store_none", asset(LSTREAM_FIXTURE),
+                                   look + ["--tile-stores", "0"])
+    if err or err2:
+        failed("tiles-store", err or err2)
+    else:
+        region, bare = _tiles_region(pooled[1]), _tiles_region(unpooled[1])
+        cells = [b.get("cells") for b in _tiles_blocks(pooled[1])]
+        copied, whole = int(region.get("mover_faces_copied", 0)), region.get("mover_faces_whole")
+        refused = re.search(r"Cached shadow stores full \(0 faces\): '(\w+)'", unpooled[2])
+        differ = compare(pooled[3], unpooled[3])[0]
+        ok = (cells == ["48"] * 16 and region.get("store_cells") == "64" and copied > 0
+              and whole == "0" and bare.get("mover_faces_copied") == "0"
+              and int(bare.get("mover_faces_whole", 0)) > 0
+              and refused is not None and refused.group(1).startswith("Room3") and differ == 0)
+        print(f"  tiles-store  {'PASS' if ok else 'FAIL'}  {len(cells)} lights at {set(cells)} "
+              f"cells (want 16 at 48, the whole budget); pool {region.get('store_cells')} cells "
+              f"(want 64), {copied} faces drawn over a copy and {whole} whole (want some and 0); "
+              f"with no pool {bare.get('mover_faces_whole')} whole, refusal naming "
+              f"{refused.group(1) if refused else 'nobody'} (want room 3's light); the two "
+              f"pictures {differ} px apart (want 0)")
+        if not ok:
+            failures.append("tiles-store")
 
     # --- the flame ---------------------------------------------------------------------------
     fire_cached = scene("fire", fire, lambda d: next(

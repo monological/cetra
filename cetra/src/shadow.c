@@ -195,6 +195,8 @@ ShadowSystem* create_shadow_system(int default_map_size) {
     // light carried across a room does.
     system->tile_tolerance = 0.05f;
     system->tile_new_blocks_per_frame = 2;
+    system->tile_store_cells = SHADOW_TILE_STORE_CELLS;
+    system->tile_store_pool = -1;
 
     system->shadow_bias = 0.005f;
 
@@ -1492,7 +1494,9 @@ static int tile_block_of(const ShadowSystem* ss, const Light* light) {
 
 // A block holding nothing, at `first` for `cells`.
 static ShadowTileBlock tile_block_blank(int first, int cells) {
-    return (ShadowTileBlock){.first = first, .cells = cells, .store = -1};
+    ShadowTileBlock block = {.first = first, .cells = cells};
+    memset(block.store_cell, -1, sizeof(block.store_cell));
+    return block;
 }
 
 // Cells the region's blocks reach, which is what sizes it: blocks are only ever appended, so
@@ -1502,6 +1506,17 @@ static int tile_cells_used(const ShadowSystem* ss) {
         return 0;
     const ShadowTileBlock* last = &ss->tile_blocks[ss->tile_block_count - 1];
     return last->first + last->cells;
+}
+
+// Whether a block of `cells` may be appended at `first`: within the lights' budget, and the store
+// pool on top of it once the pool exists -- or for the pool itself, which goes past whatever the
+// lights hold. The lights' cells come to the budget at most either way, since the pool is never
+// reused by one.
+static bool tile_region_room(const ShadowSystem* ss, int first, int cells, bool pool) {
+    const bool pooled = pool || ss->tile_store_pool >= 0;
+    const int max_cells = (int)SHADOW_TILE_MAX_CELLS + (pooled ? SHADOW_TILE_STORE_CELLS : 0);
+    const int max_blocks = (int)SHADOW_TILE_MAX_BLOCKS + (pooled ? 1 : 0);
+    return ss->tile_block_count < max_blocks && first + cells <= max_cells;
 }
 
 // A block no light holds with room for `cells`, the first that fits, else a new one past the
@@ -1514,21 +1529,41 @@ static int tile_block_take(ShadowSystem* ss, int cells) {
             return b;
     }
     const int first = tile_cells_used(ss);
-    if (ss->tile_block_count >= (int)SHADOW_TILE_MAX_BLOCKS ||
-        first + cells > (int)SHADOW_TILE_MAX_CELLS)
+    if (!tile_region_room(ss, first, cells, false))
         return -1;
     const int b = ss->tile_block_count++;
     ss->tile_blocks[b] = tile_block_blank(first, cells);
     return b;
 }
 
-// Give a block's store back, which then holds nothing worth keeping.
+// The store pool's block, made the first time a face needs a store, or -1 with no room for it.
+static int tile_store_pool_take(ShadowSystem* ss) {
+    if (ss->tile_store_pool >= 0)
+        return ss->tile_store_pool;
+    const int first = tile_cells_used(ss);
+    if (!tile_region_room(ss, first, SHADOW_TILE_STORE_CELLS, true))
+        return -1;
+    const int b = ss->tile_block_count++;
+    ss->tile_blocks[b] = tile_block_blank(first, SHADOW_TILE_STORE_CELLS);
+    ss->tile_blocks[b].is_store = true;
+    ss->tile_store_pool = b;
+    ss->tile_store_free = ~0ull >> (64 - SHADOW_TILE_STORE_CELLS);
+    return b;
+}
+
+// Give back face `f`'s store cell, which then holds nothing.
+static void tile_store_release(ShadowSystem* ss, ShadowTileBlock* block, int f) {
+    if (block->store_cell[f] < 0)
+        return;
+    ss->tile_store_free |= 1ull << block->store_cell[f];
+    block->store_cell[f] = -1;
+    block->stored &= ~(1ull << f);
+}
+
+// Give a block's store cells back, which then hold nothing worth keeping.
 static void tile_block_drop_store(ShadowSystem* ss, ShadowTileBlock* block) {
-    if (block->store >= 0) {
-        ShadowTileBlock* store = &ss->tile_blocks[block->store];
-        *store = tile_block_blank(store->first, store->cells);
-    }
-    block->store = -1;
+    for (int f = 0; f < 6 * SHADOW_TILE_VIEWS; ++f)
+        tile_store_release(ss, block, f);
     block->stored = 0;
 }
 
@@ -1612,7 +1647,7 @@ void shadow_tiles_update(ShadowSystem* ss, const Engine* engine, const Scene* sc
     // The fewest cells eviction has found no room for: a farther light's limit is only larger,
     // so one needing as many finds none either.
     int unplaceable = INT_MAX;
-    bool held[SHADOW_TILE_MAX_BLOCKS] = {false};
+    bool held[SHADOW_TILE_TABLE] = {false};
     const Light* full = NULL;
     for (size_t r = 0; r < ss->tile_rank_count; ++r) {
         ShadowTileRank* rank = &ss->tile_rank[r];
@@ -1922,27 +1957,80 @@ static void tiles_note_changes(ShadowSystem* ss, const Engine* engine, const Sce
     }
 }
 
-// Give every block whose faces see a mover a store for its still casters. Before the region is
-// laid out, so the store's cells are in the array the frame they are first drawn into; a
-// block the budget has no room for draws such faces whole. A block whose faces no longer see
-// one gives its store back first: the budget holds a few, and a light a cat passed long ago
-// would otherwise keep one from the light it is passing now.
-static void tiles_take_stores(ShadowSystem* ss) {
-    for (int b = 0; b < ss->tile_block_count; ++b) {
-        if (ss->tile_blocks[b].light && !ss->tile_blocks[b].dynamic)
-            tile_block_drop_store(ss, &ss->tile_blocks[b]);
+// A store cell for a face of the light ranked `r`: a free one, else one held by the farthest
+// light more than the margin farther, whose face goes without; -1 when there is neither. Only
+// the first `usable` cells of the pool are given out.
+static int tile_store_take(ShadowSystem* ss, size_t r, int usable) {
+    if (usable <= 0 || tile_store_pool_take(ss) < 0)
+        return -1;
+    for (int cell = 0; cell < usable; ++cell) {
+        if (ss->tile_store_free & (1ull << cell)) {
+            ss->tile_store_free &= ~(1ull << cell);
+            return cell;
+        }
     }
+    const float limit = ss->tile_rank[r].distance + TILE_STREAM_MARGIN;
+    for (size_t far = ss->tile_rank_count; far-- > r + 1;) {
+        if (ss->tile_rank[far].distance <= limit)
+            break;
+        if (ss->tile_rank[far].block < 0)
+            continue;
+        ShadowTileBlock* block = &ss->tile_blocks[ss->tile_rank[far].block];
+        for (int f = 6 * SHADOW_TILE_VIEWS; f-- > 0;) {
+            const int cell = block->store_cell[f];
+            if (cell >= 0) {
+                tile_store_release(ss, block, f);
+                ss->tile_store_free &= ~(1ull << cell);
+                return cell;
+            }
+        }
+    }
+    return -1;
+}
+
+// Give each face drawn over a copy of its still casters a cell of the store pool to keep them in
+// (spec 13.26). A face no longer drawn that way gives its cell back first, so a light a cat
+// passed long ago does not keep one from the light it is passing now. Then the nearest light's
+// faces are served first, and a face keeps the cell it holds: taking one back costs the copy, so
+// it moves only to a light more than the margin nearer. A face left without one is drawn whole
+// each frame, which is said once by name. Before the region is laid out, so the pool is in the
+// array the frame it is first drawn into.
+static void tiles_take_stores(ShadowSystem* ss) {
+    int usable = ss->tile_store_cells < SHADOW_TILE_STORE_CELLS ? ss->tile_store_cells
+                                                                : SHADOW_TILE_STORE_CELLS;
+    if (usable < 0)
+        usable = 0;
     for (int b = 0; b < ss->tile_block_count; ++b) {
         ShadowTileBlock* block = &ss->tile_blocks[b];
-        if (!block->light || !block->dynamic || block->store >= 0)
-            continue;
-        const int s = tile_block_take(ss, block->cells);
-        if (s < 0)
-            continue;
-        ss->tile_blocks[s].is_store = true;
-        block->store = s;
-        block->stored = 0;
+        for (int f = 0; f < 6 * SHADOW_TILE_VIEWS; ++f) {
+            if (!block->light || !tile_face_in(block->dynamic, f) || block->store_cell[f] >= usable)
+                tile_store_release(ss, block, f);
+        }
     }
+    const Light* refused = NULL;
+    for (size_t r = 0; r < ss->tile_rank_count; ++r) {
+        if (ss->tile_rank[r].block < 0)
+            continue;
+        ShadowTileBlock* block = &ss->tile_blocks[ss->tile_rank[r].block];
+        for (int f = 0; f < 6 * block->views; ++f) {
+            if (!tile_face_in(block->dynamic, f) || block->store_cell[f] >= 0)
+                continue;
+            const int cell = tile_store_take(ss, r, usable);
+            if (cell < 0) {
+                if (!refused)
+                    refused = ss->tile_rank[r].light;
+                continue;
+            }
+            block->store_cell[f] = (int8_t)cell;
+            block->stored &= ~(1ull << f);
+        }
+    }
+    if (refused && !ss->tile_store_warned) {
+        log_warn("Cached shadow stores full (%d faces): '%s' and any farther cached light draw the "
+                 "faces their moving casters reach whole, every frame",
+                 usable, refused->name ? refused->name : "unnamed light");
+    }
+    ss->tile_store_warned = refused != NULL;
 }
 
 // Draw one face, through `matrix`, into cell `cell` of the array -- counted from layer 0 --
@@ -2106,8 +2194,9 @@ static void render_shadow_movers(ShadowSystem* ss, const Engine* engine, const S
                 continue;
             const int cell = tile_block_first_cell(ss, edge, b) + f;
             bool over_copy = false;
-            if (block->store >= 0) {
-                const int stored = tile_block_first_cell(ss, edge, block->store) + f;
+            if (block->store_cell[f] >= 0 && ss->tile_store_pool >= 0) {
+                const int stored =
+                    tile_block_first_cell(ss, edge, ss->tile_store_pool) + block->store_cell[f];
                 if (!tile_face_in(block->stored, f) &&
                     draw_tile_cell(ss, engine, scene, state, stored, matrix,
                                    SHADOW_CASTERS_KEPT_STILL, true))
@@ -2124,6 +2213,10 @@ static void render_shadow_movers(ShadowSystem* ss, const Engine* engine, const S
                 if (!tile_face_in(block->touched, f))
                     block->dynamic &= ~(1ull << f);
                 ss->mover_faces_drawn++;
+                if (over_copy)
+                    ss->mover_faces_copied++;
+                else
+                    ss->mover_faces_whole++;
             }
         }
     }
@@ -2575,6 +2668,8 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     ss->tsm_live = false;
     ss->tile_faces_drawn = 0;
     ss->mover_faces_drawn = 0;
+    ss->mover_faces_copied = 0;
+    ss->mover_faces_whole = 0;
     int punctual_needed = 0;
     const Light* pool_overflow = NULL;
     const Light* dir_overflow = NULL;
@@ -3210,37 +3305,45 @@ void shadow_tiles_probe(const ShadowSystem* ss, const Scene* scene) {
         return;
     }
     const int edge = ss->punctual_map_size;
+    const int store_cells = ss->tile_store_pool >= 0 ? SHADOW_TILE_STORE_CELLS : 0;
+    int store_used = 0;
+    for (int cell = 0; cell < store_cells; ++cell)
+        store_used += (ss->tile_store_free & (1ull << cell)) ? 0 : 1;
     printf("tiles-probe region base=%d layers=%d edge=%d per_layer=%d allocated=%d "
            "generation=%u blocks=%d cells=%d faces_drawn=%d movers=%d mover_faces_drawn=%d "
+           "mover_faces_copied=%d mover_faces_whole=%d store_cells=%d store_used=%d "
            "reference=%d\n",
            ss->tile_base_layer, ss->tile_layers, edge, edge > 0 ? tiles_per_layer(edge) : 0,
            ss->punctual_allocated_layers, ss->tile_generation, ss->tile_block_count,
            tile_cells_used(ss), ss->tile_faces_drawn, ss->tile_mover_count, ss->mover_faces_drawn,
+           ss->mover_faces_copied, ss->mover_faces_whole, store_cells, store_used,
            tile_reference_count(ss));
     for (int b = 0; b < ss->tile_block_count; ++b) {
         const ShadowTileBlock* block = &ss->tile_blocks[b];
         if (!block->light)
             continue;
         const Light* light = block->light;
-        int kept = 0, dynamic = 0;
+        int kept = 0, dynamic = 0, stored = 0;
         for (int f = 0; f < 6 * block->views; ++f) {
             kept += tile_face_in(block->valid, f) ? 1 : 0;
             dynamic += tile_face_in(block->dynamic, f) ? 1 : 0;
+            stored += block->store_cell[f] >= 0 ? 1 : 0;
         }
-        printf("tiles-probe block=%d light=%s store=%d dynamic=%d first=%d cells=%d views=%d "
-               "faces=%d whole=%d published=%d radius=%.9g length=%.9g axis=%.9g,%.9g,%.9g "
-               "centre=%.9g,%.9g,%.9g segment=%.9g,%.9g,%.9g drawn_radius=%.9g drift=%.9g "
-               "near=%.9g far=%.9g current=%d\n",
-               b, light->name ? light->name : "unnamed", block->store, dynamic,
-               tile_block_first_cell(ss, edge, b), block->cells, block->views, kept,
-               tile_block_whole(block) ? 1 : 0, light->shadow_tile, (double)light->source_radius,
-               (double)light->source_length, (double)light->direction[0],
-               (double)light->direction[1], (double)light->direction[2], (double)block->centre[0],
-               (double)block->centre[1], (double)block->centre[2], (double)block->segment[0],
-               (double)block->segment[1], (double)block->segment[2], (double)block->radius,
-               (double)glm_vec3_distance((float*)block->centre, (float*)light->global_position),
-               (double)block->near_plane, (double)block->far_plane,
-               block->generation == ss->tile_generation ? 1 : 0);
+        printf(
+            "tiles-probe block=%d light=%s stored_faces=%d dynamic=%d first=%d cells=%d views=%d "
+            "faces=%d whole=%d published=%d radius=%.9g length=%.9g axis=%.9g,%.9g,%.9g "
+            "centre=%.9g,%.9g,%.9g segment=%.9g,%.9g,%.9g drawn_radius=%.9g drift=%.9g "
+            "near=%.9g far=%.9g current=%d\n",
+            b, light->name ? light->name : "unnamed", stored, dynamic,
+            tile_block_first_cell(ss, edge, b), block->cells, block->views, kept,
+            tile_block_whole(block) ? 1 : 0, light->shadow_tile, (double)light->source_radius,
+            (double)light->source_length, (double)light->direction[0], (double)light->direction[1],
+            (double)light->direction[2], (double)block->centre[0], (double)block->centre[1],
+            (double)block->centre[2], (double)block->segment[0], (double)block->segment[1],
+            (double)block->segment[2], (double)block->radius,
+            (double)glm_vec3_distance((float*)block->centre, (float*)light->global_position),
+            (double)block->near_plane, (double)block->far_plane,
+            block->generation == ss->tile_generation ? 1 : 0);
         for (int v = 0; v < block->views && edge > 0; ++v) {
             vec3 origin = GLM_VEC3_ZERO_INIT;
             tile_view_origin(block, v, origin);
