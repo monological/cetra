@@ -732,6 +732,35 @@ where anything not magenta has taken a room's probe. Two misses no box can avoid
 degrees and the top of a pitched roof under a box that must reach the ridge. `probe-set-coverage`
 holds the view to the albedo view inside a box and to pure magenta outside every box.
 
+**The probes and the GI volumes STREAM (spec 13.24).** The world holds any number of each; the
+nearest sixteen probes and eight volumes are resident in slots of one scene-owned lighting
+atlas, ranked once a frame by distance from the camera to their boxes. Four things about it are
+easy to get backwards.
+- **A slot is a place, not an item.** Each is captured ONCE, its texels read back to the CPU as
+  half floats and put back by upload when it comes into range again -- bit for bit, which is why
+  an item returns to its HOME slot when it is free: readmitted one column over, its texels sample
+  at UVs rounded differently (24 px on the round trip that is 0 px with homes). Two runs with
+  different histories still place items differently, so they agree to a code, not a bit.
+- **The mask is per DESCRIPTOR, in probe order.** Only loaded resident probes are published, in
+  the order of their indices rather than their slots, since the blend sums in descriptor order.
+  `pbr_frag` arms the set on `probeInfo.x >= 1`; a world of one probe keeps the cube path.
+- **A capture waits for what it will keep.** A probe captures only when every GI volume its box
+  touches is resident and swept, and every cached light reaching it holds a whole block of shadow
+  tiles -- a light without one is unshadowed and lights the room through its walls, which a probe
+  would keep for good. In the frame the tiles open, the test asks the budget instead, since the
+  capture's own depth pass is what places them.
+- **Captures leave out what moves**: skinned meshes and `capture_hidden` nodes, surface AND
+  shadow. Hiding the surface alone left the props' shadows in the probes through the cached
+  tiles, so such a caster is never held by a kept face and the movers pass redraws every
+  dynamic face inside a capture burst.
+
+**A GI grid can switch its own probes off** (`classify`, set by `create_gi_volume_spaced`). Each
+probe also captures back faces only; `gi_project_frag`'s mode 2 compares their depth with the
+front faces' over the sphere, and past a quarter of directions writes 0 into the irradiance
+tile's alpha, which the sampler multiplies the weight by. A probe inside a wall sees out both
+sides of it, so unswitched it lit the room with the sky beyond: on `stream_rooms`'s twin rooms
+it moves the misaligned grid from 2.3 grey codes off its aligned twin to 0.9.
+
 ## Clustered decals
 
 `include/decals_ubo.glsl` (spec 11.73) — marks projected through an

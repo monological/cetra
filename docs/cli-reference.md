@@ -333,7 +333,21 @@ its by-value bake key go stale; all three exist in `render`, the first two in `f
 `--no-layers-vt-pages` / `--no-layers-vt-feedback` / `--layers-vt-page-slots <n>` /
 `--layers-vt-page-budget <n>` / `--layers-vt-probe <n>` / `--cam-at <frame:ex,ey,ez,tx,ty,tz>`
 (spec 11.67 — the paged near field's bisect levers, the churn and bake-rate knobs, the residency
-probe, and the camera teleport; all but `--cam-at` in `forest` too),
+probe, and the camera teleport; all but `--cam-at` in `forest` too. `--cam-at` is REPEATABLE since
+13.24, up to 16, a schedule that walks one run through several places),
+`--stream-probe <n>` / `--gi-stream-rate <n>` / `--tile-blocks-per-frame <n>` / `--capture-hide <node>`
+/ `--remove-node <node>` (spec 13.24, render only — lighting data that streams. The probe prints,
+every n frames and at exit, the resident GI volumes and reflection probes by slot, each one's
+distance, capture count, state and an FNV digest of its kept texels, and the cached lights in
+distance order with whether each holds a whole block of shadow tiles: what the `lighting-stream`
+gates read. The rate is the probes a frame of a GI volume's opening sweep begun after load
+(default 32). The blocks-per-frame is how many cached lights may be given shadow tiles a frame once
+the tiles have opened (default 2, 0 = no limit), and at 1 a room with two lights takes two frames to
+be shadowed, which is what makes a capture's wait for its lights visible. `--capture-hide` leaves a
+named node out of every GI and probe capture, surface and shadow, as a skinned mesh always is;
+`--remove-node` takes one out of the scene, the reference a hidden one is compared against. A
+`.cscn` authors any number of GI volumes as `giVolumes: [{boxMin, boxMax, spacing, classify}]`, and
+up to 64 probes and 64 lights),
 `--road-width-at <frame:value>` (spec 11.68 — set every road's width mid-run. The `--layer-blend-at`
 idiom, and it exercises BOTH halves of the road path in one stroke: the segment block re-uploads
 and the composite cache's by-value key goes stale. A road is authored only in a `.cscn`, so this
