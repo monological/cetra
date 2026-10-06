@@ -15,6 +15,29 @@ void kit_init(Kit* kit, Scene* scene, EntityManager* em, PhysicsWorld* physics) 
     kit->physics = physics;
 }
 
+void kit_init_beside(Kit* kit, Kit* first, const vec3 origin) {
+    kit_init(kit, first->scene, first->em, first->physics);
+    glm_vec3_copy((float*)origin, kit->origin);
+    for (int i = 0; i < first->material_count; i++)
+        kit_material(kit, first->materials[i], first->repeat_m[i], first->grime[i]);
+    kit->shares_materials = first->shares_materials = true;
+}
+
+void kit_free_unused(Kit* const* kits, int count) {
+    if (count <= 0)
+        return;
+    for (int i = 0; i < kits[0]->material_count; i++) {
+        bool used = false;
+        for (int k = 0; k < count; k++)
+            used = used || kits[k]->used[i];
+        if (used)
+            continue;
+        free_material(kits[0]->materials[i]);
+        for (int k = 0; k < count; k++)
+            kits[k]->materials[i] = NULL;
+    }
+}
+
 int kit_material(Kit* kit, Material* material, float repeat_m, float grime) {
     if (kit->material_count >= KIT_MAX_MATERIALS) {
         fprintf(stderr, "silent: kit is out of material slots (%d)\n", KIT_MAX_MATERIALS);
@@ -118,7 +141,9 @@ static unsigned int kit_vertex(Kit* kit, int mat, const vec3 p, const vec3 n, co
     const float rgba[4] = {1.0f + (GRIME_TINT[0] - 1.0f) * grime,
                            1.0f + (GRIME_TINT[1] - 1.0f) * grime,
                            1.0f + (GRIME_TINT[2] - 1.0f) * grime, 1.0f};
-    return mb_vertex(&kit->builders[mat], p, n, t, u, v, u, v, rgba);
+    vec3 at;
+    glm_vec3_add((float*)p, kit->origin, at);
+    return mb_vertex(&kit->builders[mat], at, n, t, u, v, u, v, rgba);
 }
 
 // A vertex of a flat face, UV'd by projecting onto the face's planar frame.
@@ -483,6 +508,24 @@ static void rotate_y(const vec3 in, float yaw, vec3 out) {
     out[2] = z;
 }
 
+void kit_mesh_collider(Kit* kit, const float* vertices, int vertex_count,
+                       const unsigned int* indices, int index_count) {
+    if (!kit->em || !kit->physics || vertex_count <= 0 || index_count <= 0)
+        return;
+    char name[48];
+    snprintf(name, sizeof(name), "kit_mesh_%d", kit->collider_count++);
+    Entity* e = create_entity(kit->em, name);
+    if (!e)
+        return;
+    glm_vec3_copy(kit->origin, e->position);
+    PhysicsShapeDesc shape = {.type = SHAPE_MESH, .density = 0.0f};
+    shape.mesh.vertices = vertices;
+    shape.mesh.vertex_count = (size_t)vertex_count;
+    shape.mesh.indices = indices;
+    shape.mesh.index_count = (size_t)index_count;
+    entity_add_rigid_body(e, kit->physics, &shape, MOTION_STATIC, OBJ_LAYER_STATIC);
+}
+
 void kit_collider(Kit* kit, const vec3 centre, const vec3 half, float yaw) {
     if (!kit->em || !kit->physics)
         return;
@@ -491,7 +534,7 @@ void kit_collider(Kit* kit, const vec3 centre, const vec3 half, float yaw) {
     Entity* e = create_entity(kit->em, name);
     if (!e)
         return;
-    glm_vec3_copy((float*)centre, e->position);
+    glm_vec3_add((float*)centre, kit->origin, e->position);
     // Before the body, which reads the entity's rotation when it is created.
     if (yaw != 0.0f)
         entity_set_rotation_euler(e, (vec3){0.0f, yaw, 0.0f});
@@ -1201,8 +1244,10 @@ void kit_drip(Kit* kit, const KitFrame* f, const vec3 from, const vec3 to, float
     RainDripLine* l = &kit->drips[kit->drip_count++];
     kit_frame_point(f, from[0], from[1], from[2], l->from);
     kit_frame_point(f, to[0], to[1], to[2], l->to);
+    glm_vec3_add(l->from, kit->origin, l->from);
+    glm_vec3_add(l->to, kit->origin, l->to);
     l->rate = rate;
-    l->ground = ground;
+    l->ground = ground + kit->origin[1];
 }
 
 void kit_drip_run(Kit* kit, const KitFrame* f, const vec3 from, const vec3 to, float per_m,
@@ -1217,6 +1262,7 @@ void kit_wick(Kit* kit, const KitFrame* f, float a, float y, float d, float size
     }
     KitWick* w = &kit->wicks[kit->wick_count++];
     kit_frame_point(f, a, y, d, w->tip);
+    glm_vec3_add(w->tip, kit->origin, w->tip);
     w->size = size;
 }
 
@@ -1613,10 +1659,14 @@ SceneNode* kit_finish(Kit* kit, const char* name) {
         kit->vertex_count += (int)mb->vcount;
         if (mb->vcount == 0) {
             mb_free(mb);
-            free_material(kit->materials[i]);
-            kit->materials[i] = NULL;
+            // A material another kit shares may be used there: kit_free_unused decides.
+            if (!kit->shares_materials) {
+                free_material(kit->materials[i]);
+                kit->materials[i] = NULL;
+            }
             continue;
         }
+        kit->used[i] = true;
         Mesh* mesh = create_mesh();
         if (!mb_transfer(mb, mesh)) {
             free_mesh(mesh);

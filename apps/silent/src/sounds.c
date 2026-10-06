@@ -40,7 +40,7 @@ Sound* sounds_loop(AudioSystem* audio, const char* path) {
  * listener standing in it is half outside, which is right.
  */
 static float inside_target(const vec3 eye) {
-    return glm_smoothstep(0.5f * WALL_BLEND, -0.5f * WALL_BLEND, house_outside_distance(eye));
+    return glm_smoothstep(0.5f * WALL_BLEND, -0.5f * WALL_BLEND, house_outside_distance_world(eye));
 }
 
 void sounds_start(Sounds* sounds, AudioSystem* audio, const vec3 eye) {
@@ -59,9 +59,14 @@ float sounds_indoor_gain(const Sounds* sounds) {
     return STREET_GAIN + (1.0f - STREET_GAIN) * sounds->inside;
 }
 
+// Inside a great hall, open through both storeys: in the plan's own coordinates.
+static bool in_great_hall(float x, float z) {
+    return x > GREAT_X0 && x < GREAT_X1 && z > GREAT_Z0 && z < GREAT_Z1;
+}
+
 float sounds_gain_at(const Sounds* sounds, const vec3 listener, const vec3 source) {
-    const bool hall = listener[0] > GREAT_X0 && listener[0] < GREAT_X1 && listener[2] > GREAT_Z0 &&
-                      listener[2] < GREAT_Z1;
+    const bool hall = in_great_hall(listener[0], listener[2]) ||
+                      in_great_hall(listener[0] - MANSION_X, listener[2] - MANSION_Z);
     const bool apart = fabsf(listener[1] - source[1]) > STOREY_APART && !hall;
     return sounds_indoor_gain(sounds) * (apart ? OTHER_STOREY : 1.0f);
 }

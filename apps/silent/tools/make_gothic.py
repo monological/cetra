@@ -613,6 +613,72 @@ def flame(name, rng):
     return card(name, colour, None, 220, 0.0, 1.0, alpha=alpha)
 
 
+# ---------------------------------------------------------------------------------------------
+# Portraits for the dining room (spec 13.25)
+# ---------------------------------------------------------------------------------------------
+
+PORTRAIT_PX = 360
+
+
+def portrait(name, rng, coat, lit_from):
+    """An oil portrait gone dark under its varnish, in a carved gilt frame: a figure head and
+    shoulders against brown murk, its face the only light in it, lit from one side and looking
+    out of the picture. Painted shapes only, no likeness of anyone. The varnish is crazed, and
+    the frame's height carries its mouldings and the canvas sunk behind them."""
+    w, h = int(0.62 * PORTRAIT_PX), int(0.8 * PORTRAIT_PX)
+    u, v = grid(h, w)
+    frame = 0.085 * PORTRAIT_PX
+    edge = np.minimum(np.minimum(u * w, (1 - u) * w), np.minimum(v * h, (1 - v) * h))
+    inside = np.clip((edge - frame) / 2.0, 0.0, 1.0)
+
+    # The ground: brown murk, lighter round the head as if a lamp had stood behind the sitter.
+    glow = np.exp(-(((u - 0.5) / 0.35) ** 2 + ((v - 0.33) / 0.3) ** 2))
+    ground = np.array([0.06, 0.045, 0.03]) * (0.7 + 0.6 * noise(h, w, 18, rng)[..., None])
+    a = ground * (0.8 + 0.9 * glow[..., None])
+
+    # The shoulders and the coat: an arc of dark cloth rising to a collar at the neck.
+    shoulders = np.clip(1.0 - ((u - 0.5) / 0.46) ** 2 - ((v - 1.02) / 0.45) ** 2, 0, 1) > 0
+    a = np.where(shoulders[..., None], np.array(coat) * (0.7 + 0.5 * noise(h, w, 9, rng)[..., None]),
+                 a)
+    collar = (np.abs(u - 0.5) < 0.07) & (v > 0.52) & (v < 0.66)
+    a = np.where(collar[..., None], np.array([0.55, 0.52, 0.45]), a)
+
+    # The head: a pale oval, shaded across by the light's side, the eyes two dark sockets.
+    hx, hy = (u - 0.5) / 0.15, (v - 0.37) / 0.2
+    head = np.clip(1.0 - hx ** 2 - hy ** 2, 0, 1)
+    shade = np.clip(0.55 + 0.6 * lit_from * hx, 0.15, 1.1)
+    skin = np.array([0.62, 0.5, 0.4]) * shade[..., None]
+    a = a * (1 - np.clip(head * 4, 0, 1)[..., None]) + skin * np.clip(head * 4, 0, 1)[..., None]
+    for ex in (-0.055, 0.055):
+        eye = np.exp(-(((u - 0.5 - ex) / 0.025) ** 2 + ((v - 0.35) / 0.016) ** 2))
+        a = a * (1 - 0.85 * eye[..., None])
+    mouth = np.exp(-(((u - 0.5) / 0.04) ** 2 + ((v - 0.46) / 0.008) ** 2))
+    a = a * (1 - 0.5 * mouth[..., None])
+
+    # Crazed varnish: a net of fine dark cracks over a yellowed film.
+    cracks = Image.new("L", (w, h), 0)
+    draw = ImageDraw.Draw(cracks)
+    for _ in range(140):
+        x, y = rng.random() * w, rng.random() * h
+        for _ in range(4):
+            nx, ny = x + rng.normal(0, 9), y + rng.normal(0, 9)
+            draw.line([(x, y), (nx, ny)], fill=255, width=1)
+            x, y = nx, ny
+    crack = mask_of(cracks.filter(ImageFilter.GaussianBlur(0.5)))
+    a = a * np.array([1.0, 0.92, 0.7]) * (1 - 0.35 * crack[..., None])
+
+    # The frame: gilt gone brown, a raised bead at its outer and inner edges and leaves between.
+    t = np.clip(edge / frame, 0, 1)
+    bead = np.exp(-((t - 0.12) / 0.07) ** 2) + np.exp(-((t - 0.85) / 0.08) ** 2)
+    leaves = 0.5 + 0.5 * np.sin((u + v) * 70.0) * np.sin((u - v) * 70.0)
+    frame_h = np.clip(0.55 + 0.4 * bead + 0.15 * leaves * (1 - bead), 0, 1)
+    gilt = GILT * 0.55 * (0.5 + 0.6 * frame_h)[..., None] * (0.8 + 0.4 * noise(h, w, 5, rng)[..., None])
+    a = a * inside[..., None] + gilt * (1 - inside[..., None])
+    height = np.where(inside > 0.5, 0.05, frame_h)
+    rough = np.where(inside > 0.5, 0.35, 0.55)
+    return card(name, a, soften(height, 1.0), PORTRAIT_PX, 0.03, rough)
+
+
 def main():
     os.makedirs(CACHE_DIR, exist_ok=True)
     rng = np.random.default_rng(1888)
@@ -640,6 +706,10 @@ def main():
               for k in range(SPINE_STRIPS)]
     extra += ["};", ""]
     cards += [coat_of_arms(rng), fireback(rng), flame("flame_a", rng), flame("flame_b", rng)]
+    # From a generator of their own, so every picture the shared one draws keeps its pixels.
+    faces = np.random.default_rng(1925)
+    cards += [portrait("portrait_a", faces, (0.05, 0.05, 0.06), 1.0),
+              portrait("portrait_b", faces, (0.12, 0.04, 0.05), -1.0)]
 
     spots = place(cards, ATLAS)
     W, H = ATLAS

@@ -22,7 +22,7 @@
 typedef enum {
     CAT_GAZE_NONE,
     CAT_GAZE_PLAYER,
-    CAT_GAZE_CLOCK,
+    CAT_GAZE_FLAME,
     CAT_GAZE_WINDOW,
 } CatGaze;
 

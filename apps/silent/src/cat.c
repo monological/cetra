@@ -572,7 +572,9 @@ bool cat_create(Cat* cat, const CatDesc* desc, Game* game, PhysicsWorld* physics
     }
     cat->go_gait = desc->gait;
 
-    if (!cat_body_load(cat, desc, game, physics, place->feet, place->yaw))
+    vec3 feet = {0.0f, 0.0f, 0.0f};
+    cat_place_feet(at, feet);
+    if (!cat_body_load(cat, desc, game, physics, feet, place->yaw))
         return false;
     cat->clip = -1;
     play(cat, clip, 0.0f);
@@ -604,11 +606,11 @@ void cat_update(Cat* cat, Game* game, Scene* scene, const Lights* lights, const 
                 float dt) {
     if (!cat->entity)
         return;
-    // Into the scene once the reflection probes have their pictures. They capture once, and a
-    // cat in a room then would be in that room's reflections for good, asleep on a chair it
-    // has long since left.
-    if (!cat->attached && game->engine->total_frames > 2 &&
-        (!scene->probe_set || scene->probe_set->ready)) {
+    // Into the scene at once, and out of every capture: a reflection probe captured while the
+    // cat is in its room would otherwise keep it there for good, asleep on a chair it has long
+    // since left. Skinned meshes are left out already; this takes whatever rides on the body.
+    if (!cat->attached) {
+        cat->entity->node->capture_hidden = true;
         node_add_child(scene->root_node, cat->entity->node);
         cat->attached = true;
         // Sent somewhere from the command line: it sets off once it can be seen to, by the rail

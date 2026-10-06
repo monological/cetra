@@ -48,20 +48,24 @@
 #include "cat_voice.h"
 #include "clock.h"
 #include "door.h"
+#include "grounds.h"
 #include "hearth.h"
-#include "prompt.h"
-#include "rain_bed.h"
+#include "hill.h"
 #include "house.h"
 #include "interior.h"
-#include "kitchen.h"
 #include "kit.h"
+#include "kitchen.h"
 #include "layout.h"
 #include "lights.h"
+#include "mansion.h"
 #include "mats.h"
 #include "player.h"
+#include "prompt.h"
+#include "rain_bed.h"
 #include "sounds.h"
 #include "street.h"
 #include "study.h"
+#include "trees.h"
 
 #define DEFAULT_WIDTH  1600
 #define DEFAULT_HEIGHT 900
@@ -157,6 +161,7 @@ typedef struct SilentArgs {
     bool mute;
     float rain_mmh;         // 0 = dry
     bool no_wind;           // still air: the rain falls straight
+    bool no_fog;            // clear air: no fog volumes and no haze, to see the layout
     bool no_relief;         // puddles from the noise alone, not the ground's own lows
     bool no_candles;        // the candles stand unlit
     bool no_candle_shadows; // the candles light through walls, as before spec 13.16
@@ -196,8 +201,12 @@ static CatVoice g_voice;
 // the eye is within DOOR_REACH of its leaf's middle and looking within DOOR_CONE of it.
 #define DOOR_REACH 1.9f
 #define DOOR_CONE  0.6f // radians
-static Door g_door;
-static bool g_door_hung;
+static Grounds g_grounds;
+
+// The doors that open: each house's front door (spec 13.25).
+enum { DOORS = 2 };
+static Door g_doors[DOORS];
+static bool g_door_hung[DOORS];
 static Prompt g_prompt;
 
 // --audio-dump: the offline mix, pulled a frame's worth at a time so it keeps
@@ -328,11 +337,12 @@ static void build_sky(Engine* engine) {
 #define GI_TOP   9.4f
 #define GI_CLEAR 0.15f // how near a probe centre may come to a wall's or a slab's face
 
-static void build_gi(void) {
-    const vec3 lo = {-7.45f, 0.0f, 7.58f};
-    GIVolume* gi =
-        create_gi_volume(GI_COLS, GI_ROWS, GI_COLS, lo,
-                         (vec3){lo[0] + GI_COLS * GI_CELL, GI_TOP, lo[2] + GI_COLS * GI_CELL});
+// The house's grid, for the house whose plan stands at `origin`.
+static void build_gi(const vec3 origin) {
+    const vec3 lo = {-7.45f + origin[0], origin[1], 7.58f + origin[2]};
+    GIVolume* gi = create_gi_volume(
+        GI_COLS, GI_ROWS, GI_COLS, lo,
+        (vec3){lo[0] + GI_COLS * GI_CELL, lo[1] + GI_TOP, lo[2] + GI_COLS * GI_CELL});
     if (!gi)
         return;
     if (!scene_add_gi_volume(g_scene, gi))
@@ -344,9 +354,9 @@ static void build_gi(void) {
     for (int i = 0; i < gi->counts[0]; i++)
         for (int j = 0; j < gi->counts[1]; j++)
             for (int k = 0; k < gi->counts[2]; k++) {
-                const vec3 c = {gi->grid_min[0] + ((float)i + 0.5f) * gi->spacing[0],
-                                gi->grid_min[1] + ((float)j + 0.5f) * gi->spacing[1],
-                                gi->grid_min[2] + ((float)k + 0.5f) * gi->spacing[2]};
+                const vec3 c = {gi->grid_min[0] + ((float)i + 0.5f) * gi->spacing[0] - origin[0],
+                                gi->grid_min[1] + ((float)j + 0.5f) * gi->spacing[1] - origin[1],
+                                gi->grid_min[2] + ((float)k + 0.5f) * gi->spacing[2] - origin[2]};
                 const float d = house_clearance(c);
                 if (d >= GI_CLEAR)
                     continue;
@@ -387,7 +397,9 @@ static void build_gi(void) {
 static void build_probes(void) {
     if (!g_scene->ibl || !g_scene->ibl->precomputed)
         return;
-    enum { ROOMS = 5 };
+    enum { ROOMS = 5, HOUSES = 2 };
+    // The house on the plan's origin and the mansion: the same rooms, a world apart.
+    const vec3 origins[HOUSES] = {{0.0f, 0.0f, 0.0f}, {MANSION_X, MANSION_Y, MANSION_Z}};
     const struct {
         vec3 pos, lo, hi;
     } rooms[ROOMS] = {
@@ -412,13 +424,15 @@ static void build_probes(void) {
     ReflectionProbeSet* set = create_reflection_probe_set();
     if (!set)
         return;
-    for (int i = 0; i < ROOMS; i++) {
+    for (int n = 0; n < HOUSES * ROOMS; n++) {
+        const int i = n % ROOMS;
+        const float* o = origins[n / ROOMS];
         ReflectionProbe* p = create_reflection_probe();
         if (!p)
             break;
-        glm_vec3_copy((float*)rooms[i].pos, p->position);
-        glm_vec3_copy((float*)rooms[i].lo, p->box_min);
-        glm_vec3_copy((float*)rooms[i].hi, p->box_max);
+        glm_vec3_add((float*)rooms[i].pos, (float*)o, p->position);
+        glm_vec3_add((float*)rooms[i].lo, (float*)o, p->box_min);
+        glm_vec3_add((float*)rooms[i].hi, (float*)o, p->box_max);
         vec3 span;
         glm_vec3_sub(p->box_max, p->box_min, span);
         p->near_clip = 0.02f;
@@ -438,7 +452,7 @@ static void build_probes(void) {
         if (!probe_set_add(set, p))
             break;
     }
-    if (set->residency.count == ROOMS)
+    if (set->residency.count == HOUSES * ROOMS)
         g_scene->probe_set = set;
     else
         free_reflection_probe_set(set);
@@ -464,7 +478,7 @@ static void build_post(const Engine* engine, bool night, bool grade) {
     // -- and the street's fog volumes on top of it. None by day: the ambient
     // that lights the haze is not blocked by walls, so at daylight's level it
     // fills the rooms like smoke, and the volumes carry the street on their own.
-    fx->fog_enabled = true;
+    fx->fog_enabled = !g_args.no_fog;
     fx->fog_density = night ? 0.02f : 0.0f;
     fx->fog_height_falloff = 60.0f;
     fx->fog_floor_y = 0.0f;
@@ -519,19 +533,49 @@ static void on_init(Game* game) {
     kitchen_build(&kit, (unsigned int)g_args.seed);
     lights_build(&g_lights, &kit, engine, g_scene, (unsigned int)g_args.seed, !g_args.no_flicker,
                  g_args.flashlight);
-    street_build(&kit, g_scene, (unsigned int)g_args.seed, !g_args.day);
+    street_build(&kit, g_scene, (unsigned int)g_args.seed, !g_args.day, !g_args.no_fog);
     clock_build(&kit);
     study_build(&kit, g_scene, (unsigned int)g_args.seed);
+    hill_build(&kit);
+    trees_build(&kit, engine, g_scene, (unsigned int)g_args.seed);
+    grounds_build(&g_grounds, &kit, g_scene, (unsigned int)g_args.seed, !g_args.day);
+
+    // The Gothic house as the mansion at the end of the street (spec 13.25): the same plan, built
+    // in a kit of its own that stands it where layout.h says.
+    Kit mansion;
+    const vec3 mansion_origin = {MANSION_X, MANSION_Y, MANSION_Z};
+    kit_init_beside(&mansion, &kit, mansion_origin);
+    house_build(&mansion);
+    interior_build(&mansion);
+    hearth_build(&mansion);
+    study_build(&mansion, g_scene, (unsigned int)g_args.seed);
+    mansion_front_build(&mansion);
+
     kit_finish(&kit, "world");
-    printf("silent: %d colliders, %d vertices in %d meshes and %d shadow cells, %d of %d drip "
-           "lines, %d candles\n",
-           kit.collider_count, kit.vertex_count, kit.mesh_count, kit.shadow_cell_count,
-           kit.drip_count, RAIN_DRIP_MAX, kit.wick_count);
+    kit_finish(&mansion, "mansion");
+    Kit* const kits[] = {&kit, &mansion};
+    kit_free_unused(kits, 2);
+    for (int i = 0; i < 2; i++)
+        printf("silent: %s: %d colliders, %d vertices in %d meshes and %d shadow cells, %d drip "
+               "lines, %d candles\n",
+               i ? "mansion" : "world", kits[i]->collider_count, kits[i]->vertex_count,
+               kits[i]->mesh_count, kits[i]->shadow_cell_count, kits[i]->drip_count,
+               kits[i]->wick_count);
+    // The rain takes every drip line in one list.
+    RainDripLine drips[RAIN_DRIP_MAX];
+    int drip_count = 0;
+    for (int i = 0; i < 2; i++)
+        for (int d = 0; d < kits[i]->drip_count && drip_count < RAIN_DRIP_MAX; d++)
+            drips[drip_count++] = kits[i]->drips[d];
+    printf("silent: %d of %d drip lines\n", drip_count, RAIN_DRIP_MAX);
     if (!g_args.no_candles) {
         g_scene->fire = create_fire_system();
         candles_light(g_scene->fire, g_scene, &kit, !g_args.no_candle_shadows);
+        candles_light(g_scene->fire, g_scene, &mansion, !g_args.no_candle_shadows);
     }
-    g_door_hung = house_front_door(&g_door, engine, g_scene, em, physics);
+    g_door_hung[0] =
+        house_front_door(&g_doors[0], engine, g_scene, em, physics, (vec3){0.0f, 0.0f, 0.0f});
+    g_door_hung[1] = house_front_door(&g_doors[1], engine, g_scene, em, physics, mansion_origin);
     prompt_start(&g_prompt, engine);
     if (!g_args.no_cat) {
         CatDesc cat = {.at = g_args.cat_at,
@@ -590,7 +634,7 @@ static void on_init(Game* game) {
             g_scene->rain->glass_drop_size = RAIN_GLASS_DROP_SIZE;
             g_scene->rain->drip_brightness = RAIN_DRIP_BRIGHTNESS;
             g_scene->rain->puddle_relief = g_args.no_relief ? 0.0f : RAIN_PUDDLE_RELIEF;
-            rain_set_drip_lines(g_scene->rain, kit.drips, kit.drip_count);
+            rain_set_drip_lines(g_scene->rain, drips, drip_count);
             rain_settle(g_scene->rain);
         }
     }
@@ -646,8 +690,10 @@ static void on_update(Game* game, double dt) {
     // What it senses is decided here, and what it does about it by its brain after this hook.
     cat_mind_sense(&g_mind, g_args.rain_mmh / CAT_HEAVY_RAIN, (float)dt);
     player_update(&g_player, game, dt);
-    if (g_door_hung)
-        door_update(&g_door, (float)dt);
+    for (int i = 0; i < DOORS; i++)
+        if (g_door_hung[i])
+            door_update(&g_doors[i], (float)dt);
+    grounds_update(&g_grounds, game->time);
     if (g_args.trace_cat) {
         static int step;
         if (step++ % 30 == 0) {
@@ -737,12 +783,19 @@ static void on_pre_render(Game* game, double alpha) {
     vec3 eye = {0.0f, 0.0f, 0.0f}, forward = {0.0f, 0.0f, -1.0f};
     player_eye(&g_player, eye, forward);
 
-    // The door, if the player is looking at it, says what the action key would do to it, and
+    // The nearest door the player is looking at says what the action key would do to it, and
     // the key does it.
-    Door* door =
-        g_door_hung && door_reach_distance(&g_door, eye, forward, DOOR_REACH, DOOR_CONE) < FLT_MAX
-            ? &g_door
-            : NULL;
+    Door* door = NULL;
+    float nearest = FLT_MAX;
+    for (int i = 0; i < DOORS; i++) {
+        const float d = g_door_hung[i]
+                            ? door_reach_distance(&g_doors[i], eye, forward, DOOR_REACH, DOOR_CONE)
+                            : FLT_MAX;
+        if (d < nearest) {
+            nearest = d;
+            door = &g_doors[i];
+        }
+    }
     if (door && input_action_pressed(&game->input, "interact"))
         door_toggle(door);
     prompt_show(&g_prompt, !door                  ? NULL
@@ -769,12 +822,17 @@ static void on_pre_render(Game* game, double alpha) {
     // reflection probes go in with it, since they are captured once it has
     // converged and a set installed with no volume would be captured unlit.
     if (engine->total_frames == 2 && !g_scene->gi && !g_args.no_gi) {
-        build_gi();
+        build_gi((vec3){0.0f, 0.0f, 0.0f});
+        build_gi((vec3){MANSION_X, MANSION_Y, MANSION_Z});
         build_probes();
     }
-    const bool lit = engine->total_frames > 2 && !gi_world_pending(g_scene->gi);
+    AABB at;
+    aabb_empty(&at);
+    aabb_add_point(&at, eye);
+    const bool lit = engine->total_frames > 2 && gi_world_ready_in(g_scene->gi, &at);
 
-    // Black until the volume's opening sweep has landed, then up. That sweep
+    // Black until the opening sweep of the volume the eye is in has landed, then up -- not every
+    // volume's: the mansion's sweeps only once the drive brings its candles near. That sweep
     // is one long frame, so without this the window holds the room unlit by
     // its own bounce light for its whole length and then jumps. A volume that
     // could not be built lets the view up rather than holding it dark forever.
@@ -840,6 +898,7 @@ static void print_usage(const char* prog) {
            (double)DEFAULT_RAIN_MMH);
     printf("      --no-rain           A dry night\n");
     printf("      --no-wind           Still air: the rain falls straight\n");
+    printf("      --no-fog            Clear air, to see where everything is\n");
     printf("      --no-relief         Puddles stand where the noise puts them, not in the\n"
            "                          ground's own lows\n");
     printf("      --no-candles        The candles stand unlit\n");
@@ -970,6 +1029,8 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
             a->rain_mmh = 0.0f;
         } else if (!strcmp(s, "--no-wind")) {
             a->no_wind = true;
+        } else if (!strcmp(s, "--no-fog")) {
+            a->no_fog = true;
         } else if (!strcmp(s, "--no-relief")) {
             a->no_relief = true;
         } else if (!strcmp(s, "--no-candles")) {

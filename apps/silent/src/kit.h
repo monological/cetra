@@ -56,10 +56,17 @@ typedef struct Kit {
     float grime[KIT_MAX_MATERIALS];    // 0..1 edge dirt baked into its boxes; 0 = none
     MeshBuilder builders[KIT_MAX_MATERIALS];
     int material_count;
+    bool shares_materials;        // with a kit made beside it, or one it was made beside
+    bool used[KIT_MAX_MATERIALS]; // kit_finish handed a mesh of it over
 
     Scene* scene;
     EntityManager* em;
     PhysicsWorld* physics;
+    // Where the kit's own coordinates put their origin in the world (spec 13.25): every
+    // vertex, collider, drip line and wick it emits is moved by it, after the UVs and the grime
+    // are taken, so a building built in its own plan's coordinates stands anywhere and looks
+    // the same.
+    vec3 origin;
     int collider_count;
     int vertex_count;      // everything kit_finish handed over to be drawn
     int mesh_count;        // the meshes it handed it over as
@@ -166,6 +173,15 @@ static inline float kit_plan_distance(const vec3 p, const vec2 a, const vec2 b) 
 
 void kit_init(Kit* kit, Scene* scene, EntityManager* em, PhysicsWorld* physics);
 
+// A second kit over the same world and the same materials, in the same slots, standing at
+// `origin`: what a building somewhere else on the map is built into, so its meshes are its own
+// and cull with it rather than stretching every material's mesh across the map. Neither kit
+// frees an unused material at its finish; kit_free_unused does, once both are finished.
+void kit_init_beside(Kit* kit, Kit* first, const vec3 origin);
+
+// Frees each shared material no kit of `kits` used, the kit made first at kits[0].
+void kit_free_unused(Kit* const* kits, int count);
+
 // Registers a material and returns its slot. The kit borrows the material
 // until kit_finish attaches it to a mesh.
 int kit_material(Kit* kit, Material* material, float repeat_m, float grime);
@@ -195,6 +211,13 @@ void kit_slab(Kit* kit, int mat, const vec2* xz, int count, float y0, float y1, 
 void kit_box(Kit* kit, int mat, const vec3 centre, const vec3 half, float yaw, bool collide);
 // A box that only collides: an invisible wall, a pane of glass.
 void kit_collider(Kit* kit, const vec3 centre, const vec3 half, float yaw);
+
+// A static triangle soup to stand on (spec 13.25): `vertices` 3 floats each and `indices` 3 a
+// triangle, in the kit's coordinates. Borrowed for the call: the physics copies them. Long runs
+// of exactly coplanar triangles hit Jolt's debug-build trace (AGENTS.md, physics), so a soup with
+// large flats wants them as boxes.
+void kit_mesh_collider(Kit* kit, const float* vertices, int vertex_count,
+                       const unsigned int* indices, int index_count);
 
 // An upright prism of `sides` faces (a bottle, a pipe, a post): radius r, from
 // y0 to y1 at (x, z). Faceted on purpose. Capped both ends.

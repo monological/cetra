@@ -13,7 +13,8 @@
 /*
  * The house as the places its cat goes between (spec 13.17), measured off layout.h and the
  * rooms' furniture: where it rests, where it passes, and the walks, the flight and the jumps
- * that join them.
+ * that join them. A place is in the house's own coordinates, and the graph stands it at the
+ * mansion (spec 13.25), which is where the cat lives.
  */
 
 // The kinds of link, as the graph numbers them. A RAIL link is walked along the gallery's hand
@@ -55,15 +56,16 @@ typedef enum CatPlaceId {
     CAT_AT_RUG,
     CAT_AT_HEARTH,
     CAT_AT_ARCH,
-    CAT_AT_HALL_CLOCK,
+    CAT_AT_HALL_ARMOUR,
     CAT_AT_HALL_FRONT,
-    CAT_AT_KITCHEN_DOOR,
-    CAT_AT_KITCHEN_MID,
-    CAT_AT_STOVE_MAT,
-    CAT_AT_COUNTER_JUMP,
-    CAT_AT_KITCHEN_WINDOW,
-    CAT_AT_KCHAIR_JUMP,
-    CAT_AT_KITCHEN_CHAIR,
+    CAT_AT_DINING_DOOR,
+    CAT_AT_DINING_W,
+    CAT_AT_HCHAIR_JUMP,
+    CAT_AT_HEAD_CHAIR,
+    CAT_AT_DINING_S,
+    CAT_AT_SEAT_JUMP,
+    CAT_AT_WINDOW_SEAT,
+    CAT_AT_SEAT_CUSHION,
     CAT_PLACE_COUNT
 } CatPlaceId;
 
@@ -86,6 +88,9 @@ extern const CatPlace CAT_PLACES[CAT_PLACE_COUNT];
 
 // A place's id by name, or -1.
 int cat_place_find(const char* name);
+
+// Where a place's feet are in the world.
+void cat_place_feet(int place, vec3 out);
 
 // The graph of the house's places and links.
 NavGraph* cat_places_build(void);

@@ -383,6 +383,44 @@ static const MatSpec SPECS[MAT_COUNT] = {
     // smear scan's relief at about half the tarnished brass's roughness, and lightly grimed.
     [MAT_BRASS_BRIGHT] =
         {"brass_bright", "Smear008", {0.84f, 0.69f, 0.34f}, 0.45f, 1.0f, 0.3f, true, .grime = 0.3f},
+    /*
+     * The player's house (spec 13.25), after the hall in P.T.: cream walls, white mouldings, and
+     * dark boards lacquered glossy enough to carry the lamps' reflections down the corridor.
+     * Every one is a scan already fetched for something else, tinted.
+     */
+    [MAT_CREAM] =
+        {"cream_plaster", "white_plaster_rough_02", {1.0f, 0.86f, 0.64f}, 1.0f, 0.0f, 1.5f},
+    [MAT_HARDWOOD] = {"hardwood", "old_wooden_floor_02", {0.5f, 0.36f, 0.28f}, 0.3f, 0.0f, 2.0f},
+    [MAT_WALLPAPER] = {"wallpaper", "fabric_pattern_05", {0.58f, 0.62f, 0.48f}, 1.0f, 0.0f, 0.7f},
+    [MAT_MOULDING] =
+        {"moulding", "concrete_wall_003", {0.96f, 0.92f, 0.82f}, 0.55f, 0.0f, 1.5f, .grime = 0.4f},
+    [MAT_UPHOLSTERY] =
+        {"upholstery", "dirty_carpet", {0.62f, 0.44f, 0.36f}, 1.0f, 0.0f, 0.8f, .grime = 0.4f},
+    [MAT_MIRROR] =
+        {"mirror", "Smear008", {0.85f, 0.86f, 0.84f}, 0.06f, 1.0f, 0.4f, true, .grime = 0.6f},
+    [MAT_LAMPSHADE] = {"lampshade",
+                       "fabric_pattern_05",
+                       {0.9f, 0.82f, 0.62f},
+                       1.0f,
+                       0.0f,
+                       0.4f,
+                       .glow = {{1.0f, 0.72f, 0.42f}, 25.0f}},
+    [MAT_FROSTED] = {"frosted_glass",
+                     NULL,
+                     {0.95f, 0.92f, 0.85f},
+                     0.3f,
+                     0.0f,
+                     1.0f,
+                     .glow = {{1.0f, 0.74f, 0.46f}, 90.0f}},
+    // Glossy dark glass over a faint blue-grey: a set left on between programmes.
+    [MAT_SCREEN] = {"tv_screen",
+                    "Smear008",
+                    {0.05f, 0.06f, 0.07f},
+                    0.15f,
+                    0.0f,
+                    0.3f,
+                    true,
+                    .glow = {{0.55f, 0.66f, 0.82f}, 4.0f}},
 };
 
 static Texture* load(TexturePool* pool, const char* set, const char* map, TextureDesc desc) {
