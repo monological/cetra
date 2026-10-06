@@ -28772,7 +28772,7 @@ def _stream_cam_eye(x):
             "--cam-target", ",".join(f"{c:g}" for c in target)]
 
 
-def _stream_run(workdir, tag, extra, frames, mutate=None, every=None):
+def _lighting_stream_run(workdir, tag, extra, frames, mutate=None, every=None):
     """Render the fixture. Returns (frames by number, output) -- frames read from
     --screenshot-every when `every` is set, else the last one alone -- or (None, error)."""
     src = asset(STREAM_FIXTURE)
@@ -28915,16 +28915,16 @@ def run_stream_gate(workdir):
     # One block a frame: room 9's two lights then take two frames to be shadowed, so a capture
     # that did not wait for them would photograph one unshadowed. At the default two the
     # capture's own depth pass places both in the frame it needs them, and the wait is untested.
-    walk, walk_text = _stream_run(
+    walk, walk_text = _lighting_stream_run(
         workdir, "walk",
         _stream_cam_at(STREAM_AWAY_FRAME, last) + _stream_cam_at(STREAM_BACK_FRAME, first)
         + ["--stream-probe", "10", "--tile-blocks-per-frame", "1"], STREAM_WALK_FRAMES, every=10)
     rows = _stream_rows(walk_text) if walk else {}
 
     # -- equal: the walk's room 9 against room 9 from the start ---------------
-    away, away_text = _stream_run(workdir, "away",
-                                  _stream_cam_eye(last) + ["--tile-blocks-per-frame", "1"],
-                                  STREAM_STOPS[1] + 1)
+    away, away_text = _lighting_stream_run(
+        workdir, "away", _stream_cam_eye(last) + ["--tile-blocks-per-frame", "1"],
+        STREAM_STOPS[1] + 1)
     if walk is None or away is None:
         print(f"  stream-equal ERROR  {(walk_text if walk is None else away_text)[-300:]}")
         failures.append("stream-equal")
@@ -28988,13 +28988,13 @@ def run_stream_gate(workdir):
     eye, target = _stream_pose(rooms[probe_room])
     resident = sorted(_stream_nearest(probe_boxes, eye, STREAM_PROBE_SLOTS))
     own = [resident.index(2 * probe_room), resident.index(2 * probe_room + 1)]
-    cover, cover_text = _stream_run(workdir, "cover", _stream_cam_eye(rooms[probe_room])
-                                    + ["--render-mode", "14"], 31)
-    albedo, _ = _stream_run(workdir, "albedo", _stream_cam_eye(rooms[probe_room])
-                            + ["--render-mode", "6"], 31)
+    cover, cover_text = _lighting_stream_run(
+        workdir, "cover", _stream_cam_eye(rooms[probe_room]) + ["--render-mode", "14"], 31)
+    albedo, _ = _lighting_stream_run(
+        workdir, "albedo", _stream_cam_eye(rooms[probe_room]) + ["--render-mode", "6"], 31)
     tints = {}
     for k in (0, 2):
-        shots, _ = _stream_run(workdir, f"tint{k}", _stream_cam_eye(rooms[k]), 31)
+        shots, _ = _lighting_stream_run(workdir, f"tint{k}", _stream_cam_eye(rooms[k]), 31)
         if shots:
             project = _projector({"eye": _stream_pose(rooms[k])[0],
                                   "target": _stream_pose(rooms[k])[1], "fovy_deg": 70.0},
@@ -29043,10 +29043,10 @@ def run_stream_gate(workdir):
     def unclassified(d):
         d["giVolumes"][-1]["classify"] = False
 
-    aligned, _ = _stream_run(workdir, "aligned", _stream_cam_eye(rooms[-2]), 31)
-    classified, _ = _stream_run(workdir, "classified", _stream_cam_eye(rooms[-1]), 31)
-    leaky, leaky_text = _stream_run(workdir, "leaky", _stream_cam_eye(rooms[-1]), 31,
-                                    mutate=unclassified)
+    aligned, _ = _lighting_stream_run(workdir, "aligned", _stream_cam_eye(rooms[-2]), 31)
+    classified, _ = _lighting_stream_run(workdir, "classified", _stream_cam_eye(rooms[-1]), 31)
+    leaky, leaky_text = _lighting_stream_run(workdir, "leaky", _stream_cam_eye(rooms[-1]), 31,
+                                             mutate=unclassified)
     if aligned is None or classified is None or leaky is None:
         print(f"  stream-classify ERROR  {leaky_text[-300:]}")
         failures.append("stream-classify")
@@ -29066,11 +29066,11 @@ def run_stream_gate(workdir):
     room = rooms[STREAM_PROP_ROOM]
     probes = (2 * STREAM_PROP_ROOM, 2 * STREAM_PROP_ROOM + 1)
     look = _stream_cam_eye(room) + ["--stream-probe", "30"]
-    gone, gone_text = _stream_run(workdir, "props_gone", look + [
+    gone, gone_text = _lighting_stream_run(workdir, "props_gone", look + [
         "--remove-node", "hidden_prop", "--remove-node", "skinned_prop"], 31)
-    hidden, hidden_text = _stream_run(workdir, "props_hidden",
-                                      look + ["--capture-hide", "hidden_prop"], 31)
-    seen, seen_text = _stream_run(workdir, "props_seen", look, 31)
+    hidden, hidden_text = _lighting_stream_run(workdir, "props_hidden",
+                                               look + ["--capture-hide", "hidden_prop"], 31)
+    seen, seen_text = _lighting_stream_run(workdir, "props_seen", look, 31)
     if gone is None or hidden is None or seen is None:
         print(f"  stream-hidden ERROR  {gone_text[-300:]}")
         failures.append("stream-hidden")
