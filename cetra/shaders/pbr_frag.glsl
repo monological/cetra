@@ -2339,10 +2339,12 @@ void main() {
     vec3 ambient;
     vec3 ambSpec = vec3(0.0);
     float envShare = 0.0; // the share of the ambient reflection no probe answers: the sky's
-    // A fragment inside a volume still sweeping has no volume answer, and takes the path it would
-    // have had with no volume at all -- the environment's, or with none the authored ambient.
+    // A fragment inside a volume still sweeping, or past its reach, has no volume answer, and
+    // takes the path it would have had with no volume at all -- the environment's, or with none
+    // the authored ambient.
     vec3 giIrr = vec3(0.0);
-    bool giAnswered = giEnabled > 0 && giIrradiance(WorldPos, N, V, giIrr);
+    float giReach = 0.0;
+    bool giAnswered = giEnabled > 0 && giIrradiance(WorldPos, N, V, giIrr, giReach);
     if (iblEnabled > 0 || giAnswered) {
         // kS is the share the ambient SPECULAR lobe takes. No environment means
         // no such lobe, so nothing is taken and all the non-metal energy stays
@@ -2377,8 +2379,11 @@ void main() {
 
         // Both sources store the same quantity -- the cosine-weighted mean
         // incident radiance, E/pi -- so this is a straight substitution and the
-        // albedo multiply below is unchanged.
+        // albedo multiply below is unchanged. Just past a volume's box its answer fades into
+        // the one this fragment would have had with no volume.
         vec3 irradiance = giAnswered ? giIrr : envIrradiance(N);
+        if (giAnswered && giReach < 1.0)
+            irradiance = mix(iblEnabled > 0 ? envIrradiance(N) : envAmbient(), giIrr, giReach);
         vec3 diffuse = irradiance * albedoMap;
 
         // How much of the environment reaches this point. The environment's reflection cannot

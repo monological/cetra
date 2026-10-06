@@ -1292,12 +1292,16 @@ speeds.
   kept views are checked.
 - **GI volumes** (DDGI, spec 9.7; a world list since 13.24, `gi_volume.h`): any number of
   grids, one per place, the nearest eight RESIDENT in slots of the scene's lighting atlas.
-  A fragment reads the volume it stands in, or the nearest swept one's clamped edge between
-  places -- which is what a lone volume always did outside its grid -- and the environment
-  inside one still sweeping. Each volume's opening sweep is one frame at load; after it the
-  world takes `stream_rate` probes a frame across every opening sweep and `rate` across every
+  A fragment reads the volume it stands in, or the nearest swept one's clamped edge just past
+  it, FADING TO THE ENVIRONMENT over three of that volume's cells (spec 13.25) -- and the
+  environment inside one still sweeping. A grid's edge probes say nothing about ground far
+  off, where every probe fails the visibility test: with the edge carried out across silent's
+  hillside the weights underflowed to an exact zero and laid black lines along the box's
+  planes. Each volume's opening sweep is one frame at load; after it the world takes
+  `stream_rate` probes a frame across every opening sweep and `rate` across every
   re-convergence, nearest volume first, under one capture burst. A slot is read back and KEPT
-  when it is evicted, so leaving residency costs an upload to come back from. `create_gi_volume_spaced` lays a
+  when it is evicted, so leaving residency costs an upload to come back from.
+  `create_gi_volume_spaced` lays a
   grid over a box with `classify` on: each probe also captures back faces only, and one that
   finds a back face nearest in more than a quarter of its directions is inside a wall and
   weighs nothing -- which is what lets a grid be placed from a building's bounds with no
