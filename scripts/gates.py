@@ -439,9 +439,8 @@ def run_scale_gates(workdir):
 # penumbra is a band of width 2*r*h/(H - h) centred between them.
 #
 # This is the only image gate in the repo with an analytic answer rather than a
-# stored reference, which is the whole reason it exists: every area-lit golden is
-# currently a reference for a bug (spec 10.3), so none of them can arbitrate a
-# change to the shadow projection.
+# stored reference, which is the whole reason it exists: a golden can only say a
+# change to the shadow projection moved the picture, not that it moved it right.
 #
 # The four geometry numbers mirror gen_area_shadow_fixture.py and have to match
 # it or the gate predicts a penumbra the scene does not cast; the camera comes
@@ -455,6 +454,37 @@ PENUMBRA = _cscn_camera(
 # (it is ~0.01 with a hard 3x3 filter and should approach the analytic band once
 # a source-sized penumbra lands).
 PENUMBRA_CENTRE_TOL = 0.01
+
+# A panel's reach (spec 13.27). A panel lights its whole front hemisphere and its shadow has to
+# cover all of it: cornell_leak's far room, behind the partition and above about 1 m more than 60
+# degrees off the normal of a panel by the ceiling, is what one 120-degree map left lit.
+AREA_PANEL = {"name": "Panel", "type": "area", "size": [0.4, 0.4], "color": [1.0, 0.95, 0.88],
+              "intensity": 30.0, "cast_shadows": True}
+AREA_REACH_AT = [-0.5, 1.9, 0.0]
+AREA_REACH_MAX = 0.01            # the far room's mean over the near one's, shadowed
+AREA_REACH_FALSIFIER_MIN = 0.2   # ...and unshadowed, or the partition is all that darkens it
+# A panel turned off every world axis, its roll off them too, against the point light at its
+# centre: both test visibility from one point, so where both light they must agree.
+AREA_TILT_AT = [0.0, 0.9, 0.3]
+AREA_TILT_DIR = [-0.55, -0.6, -0.58]
+AREA_TILT_UP = [0.3, 0.2, -0.9]
+AREA_TILT_LIT = 0.02             # linear luma both unshadowed frames must pass for a pixel to count
+AREA_TILT_MAX = 0.005            # of those, the share whose shadow terms differ by more than half
+AREA_TILT_CONTENT_MIN = 0.05     # ...and the share in shadow in either, or nothing was compared
+
+
+def _shadow_terms(shadowed, bare, lit):
+    """Per pixel, a frame over its unshadowed twin -- the shadow term alone -- or None where the
+    twin is darker than `lit` and the ratio says nothing."""
+    w, h, pix = shadowed
+    _, _, ref = bare
+    d = _SRGB_TO_LINEAR
+    terms = []
+    for o in range(0, w * h * 3, 3):
+        b = (d[ref[o]] + d[ref[o + 1]] + d[ref[o + 2]]) / 3.0
+        s = (d[pix[o]] + d[pix[o + 1]] + d[pix[o + 2]]) / 3.0
+        terms.append(s / b if b >= lit else None)
+    return terms
 
 
 def _penumbra_edges():
@@ -1761,55 +1791,123 @@ def run_skin_curvature_gate(workdir):
 
 
 def run_penumbra_gate(workdir):
+    """Area-light shadows.
+
+      penumbra     a panel over an occluder: its shadow, over the unshadowed frame, crosses half
+                   where the analytic penumbra's centre is
+      area-reach   cornell_leak lit by a panel by the ceiling: the far room, behind the partition
+                   and largely more than 60 degrees off the panel's normal, dark against the near
+                   one; unshadowed, the same panel lights it (spec 13.27)
+      area-tilt    a panel turned off every world axis, and its roll with it, shadows as a point
+                   light at its centre does wherever both light (spec 13.27)
+
+    Falsified by hand at 13.27: area-reach fails with the single 120-degree map down the normal
+    back in place of the cube; area-tilt fails with the panel's faces rolled to world up, and with
+    its width axis's sign flipped, each a mistake in the frame the C side draws in that the
+    shader's face choice would no longer match.
+    """
+    failures = []
     fixture = asset("area_shadow_fixture.gltf")
+    frames = {}
     if not os.path.exists(fixture):
         print("  penumbra     SKIP  (missing area_shadow_fixture.gltf)")
-        return []
+    else:
+        # Rendered twice, and the shadowed frame is DIVIDED by the unshadowed one.
+        # Measuring the shadowed frame alone takes its "lit" reference from the
+        # brightest sample on the scan, but the panel's own falloff varies across
+        # that scan, so the reference is wrong everywhere except at one point. On a
+        # narrow transition that hardly matters; on a 0.3-wide band it moved the
+        # apparent centre by 0.06 -- an artifact of the measurement, read as a bias
+        # in the shadow. The ratio is the shadow term on its own, flat 0..1.
+        for tag, extra in (("shadow", []), ("nolight", ["--no-shadows"])):
+            out = os.path.join(workdir, f"penumbra_{tag}.ppm")
+            cmd = [RENDER, "-m", fixture, "-x", "-f", "30", "--no-auto-exposure", "-E", "1.0",
+                   "-W", "800", "-H", "600", "-S", out] + extra
+            r = _run(cmd, capture_output=True, text=True)
+            if r.returncode != 0 or not os.path.exists(out):
+                print(f"  penumbra     ERROR while rendering the fixture ({tag})")
+                failures.append("penumbra")
+                break
+            frames[tag] = _read_ppm(out)
 
-    # Rendered twice, and the shadowed frame is DIVIDED by the unshadowed one.
-    # Measuring the shadowed frame alone takes its "lit" reference from the
-    # brightest sample on the scan, but the panel's own falloff varies across
-    # that scan, so the reference is wrong everywhere except at one point. On a
-    # narrow transition that hardly matters; on a 0.3-wide band it moved the
-    # apparent centre by 0.06 -- an artifact of the measurement, read as a bias
-    # in the shadow. The ratio is the shadow term on its own, flat 0..1.
-    frames = {}
-    for tag, extra in (("shadow", []), ("nolight", ["--no-shadows"])):
-        out = os.path.join(workdir, f"penumbra_{tag}.ppm")
-        cmd = [RENDER, "-m", fixture, "-x", "-f", "30", "--no-auto-exposure", "-E", "1.0",
-               "-W", "800", "-H", "600", "-S", out] + extra
-        r = _run(cmd, capture_output=True, text=True)
-        if r.returncode != 0 or not os.path.exists(out):
-            print(f"  penumbra     ERROR while rendering the fixture ({tag})")
-            return ["penumbra"]
-        frames[tag] = _read_ppm(out)
+    if len(frames) == 2:
+        w, h, pix = frames["shadow"]
+        _, _, ref = frames["nolight"]
+        project = _projector(PENUMBRA, w, h)
+        inner, outer = _penumbra_edges()
 
-    w, h, pix = frames["shadow"]
-    _, _, ref = frames["nolight"]
-    project = _projector(PENUMBRA, w, h)
-    inner, outer = _penumbra_edges()
+        # Scan world x along +X at z=0 on the ground, well outside the band both ways.
+        xs = [inner - 0.3 + i * 0.002 for i in range(int((outer - inner + 0.6) / 0.002))]
+        vals = []
+        for x in xs:
+            px, py = project((x, 0.0, 0.0))
+            lit_here = _linear_luma(ref, w, h, px, py)
+            vals.append(_linear_luma(pix, w, h, px, py) / lit_here if lit_here > 1e-4 else 1.0)
+        umbra, lit = min(vals), max(vals)
+        if lit - umbra < 0.5:
+            print(f"  penumbra     ERROR no shadow edge found (umbra {umbra:.3f}, lit {lit:.3f})")
+            failures.append("penumbra")
+        else:
+            lo = _crossing(xs, vals, umbra, lit, 0.10)
+            mid = _crossing(xs, vals, umbra, lit, 0.50)
+            hi = _crossing(xs, vals, umbra, lit, 0.90)
+            want_centre = 0.5 * (inner + outer)
+            ok = abs(mid - want_centre) <= PENUMBRA_CENTRE_TOL
+            print(f"  penumbra     {'PASS' if ok else 'FAIL'}  centre {mid:.4f} "
+                  f"(want {want_centre:.4f} +/-{PENUMBRA_CENTRE_TOL}), "
+                  f"10-90 width {hi - lo:.4f} (analytic {outer - inner:.4f})")
+            if not ok:
+                failures.append("penumbra")
 
-    # Scan world x along +X at z=0 on the ground, well outside the band both ways.
-    xs = [inner - 0.3 + i * 0.002 for i in range(int((outer - inner + 0.6) / 0.002))]
-    vals = []
-    for x in xs:
-        px, py = project((x, 0.0, 0.0))
-        lit_here = _linear_luma(ref, w, h, px, py)
-        vals.append(_linear_luma(pix, w, h, px, py) / lit_here if lit_here > 1e-4 else 1.0)
-    umbra, lit = min(vals), max(vals)
-    if lit - umbra < 0.5:
-        print(f"  penumbra     ERROR no shadow edge found (umbra {umbra:.3f}, lit {lit:.3f})")
-        return ["penumbra"]
+    def scene(tag, src, mutate):
+        dst = os.path.join(workdir, f"area_{tag}.cscn")
+        cscn_copy(asset(src), dst, mutate)
+        return dst
 
-    lo = _crossing(xs, vals, umbra, lit, 0.10)
-    mid = _crossing(xs, vals, umbra, lit, 0.50)
-    hi = _crossing(xs, vals, umbra, lit, 0.90)
-    want_centre = 0.5 * (inner + outer)
-    ok = abs(mid - want_centre) <= PENUMBRA_CENTRE_TOL
-    print(f"  penumbra     {'PASS' if ok else 'FAIL'}  centre {mid:.4f} "
-          f"(want {want_centre:.4f} +/-{PENUMBRA_CENTRE_TOL}), "
-          f"10-90 width {hi - lo:.4f} (analytic {outer - inner:.4f})")
-    return [] if ok else ["penumbra"]
+    # --- a panel's reach -----------------------------------------------------------------------
+    reach = scene("reach", "cornell_leak.cscn", lambda d: d.update(lights=[dict(
+        AREA_PANEL, position=AREA_REACH_AT, direction=[0.0, -1.0, 0.0])]))
+    rs, err = _tiles_render(workdir, "area_reach", reach, [])
+    rn, err2 = _tiles_render(workdir, "area_reach_none", reach, ["--no-shadows"])
+    if err or err2:
+        print(f"  area-reach   ERROR render failed: {err or err2}")
+        failures.append("area-reach")
+    else:
+        ratio = _tiles_box_mean(rs[0], TILES_FAR_ROOM) / _tiles_box_mean(rs[0], TILES_NEAR_ROOM)
+        bare = _tiles_box_mean(rn[0], TILES_FAR_ROOM) / _tiles_box_mean(rn[0], TILES_NEAR_ROOM)
+        ok = ratio <= AREA_REACH_MAX and bare >= AREA_REACH_FALSIFIER_MIN
+        print(f"  area-reach   {'PASS' if ok else 'FAIL'}  far room {ratio:.4f} of the near one "
+              f"(want <= {AREA_REACH_MAX}), {bare:.4f} unshadowed (want >= "
+              f"{AREA_REACH_FALSIFIER_MIN})")
+        if not ok:
+            failures.append("area-reach")
+
+    # --- a panel off the world's axes ----------------------------------------------------------
+    tilted = scene("tilt", "cornell_point.cscn", lambda d: d.update(lights=[dict(
+        AREA_PANEL, position=AREA_TILT_AT, direction=AREA_TILT_DIR, up=AREA_TILT_UP)]))
+    point = scene("tilt_point", "cornell_point.cscn",
+                  lambda d: d["lights"][0].update(position=AREA_TILT_AT))
+    runs = [_tiles_render(workdir, f"area_{tag}", src, extra)
+            for tag, src, extra in (("tilt", tilted, []), ("tilt_none", tilted, ["--no-shadows"]),
+                                    ("tilt_point", point, []),
+                                    ("tilt_point_none", point, ["--no-shadows"]))]
+    err = next((e for _, e in runs if e), None)
+    if err:
+        print(f"  area-tilt    ERROR render failed: {err}")
+        failures.append("area-tilt")
+    else:
+        panel = _shadow_terms(runs[0][0][0], runs[1][0][0], AREA_TILT_LIT)
+        lamp = _shadow_terms(runs[2][0][0], runs[3][0][0], AREA_TILT_LIT)
+        both = [(a, b) for a, b in zip(panel, lamp) if a is not None and b is not None]
+        apart = sum(1 for a, b in both if abs(a - b) > 0.5) / max(len(both), 1)
+        content = sum(1 for a, b in both if min(a, b) < 0.5) / max(len(both), 1)
+        ok = apart <= AREA_TILT_MAX and content >= AREA_TILT_CONTENT_MIN
+        print(f"  area-tilt    {'PASS' if ok else 'FAIL'}  where both light, {apart:.4f} of the "
+              f"pixels disagree on the shadow by more than half (want <= {AREA_TILT_MAX}); "
+              f"{content:.4f} in shadow in either (want >= {AREA_TILT_CONTENT_MIN})")
+        if not ok:
+            failures.append("area-tilt")
+    return failures
 
 
 # Cascade-shadow gates (spec 10.5). Same design as the penumbra gate: geometry
@@ -20083,11 +20181,11 @@ def run_emissive_gate(workdir):
       emissive-override light_overrides can NAME a derived panel -- a light the
                         scene file could not have known about -- which is the
                         whole ordering claim. Asserted on the renderer's own
-                        report rather than on a shadow: toggling cast_shadows
-                        changes no band on this fixture, for the AUTHORED light
-                        too, so an area panel's shadow is not measurable here and
-                        claiming it would be asserting A7 through a blind
-                        instrument.
+                        report rather than on a shadow: under the single map a
+                        panel cast until spec 13.27, toggling cast_shadows changed
+                        no band on this fixture, for the AUTHORED light too, so
+                        claiming a shadow would have asserted A7 through a blind
+                        instrument. The penumbra group owns a panel's shadow.
       emissive-occluded the occlusion the arm above cannot see, on the fixture
                         built to ask it. cornell_leak is one room cut in half by
                         a partition and lit over one side only. A derived panel
@@ -20372,11 +20470,11 @@ def run_emissive_gate(workdir):
     # ratio the same way. Compared against the frame that differs ONLY in the
     # override, every band is identical to four decimals.
     #
-    # And the reason is not this feature. Toggling cast_shadows on the fixture's
-    # own HAND-AUTHORED area light changes nothing in any band either, so an area
-    # panel's shadow is simply not measurable on cornell_box. That is an A7
-    # property; asserting it here would be asserting someone else's feature
-    # through an instrument that cannot see it.
+    # And the reason is not this feature. Under the single map a panel cast until
+    # spec 13.27, toggling cast_shadows on the fixture's own HAND-AUTHORED area
+    # light changed nothing in any band either. A panel's shadow is an A7 property,
+    # which the penumbra group owns; asserting it here would be asserting someone
+    # else's feature through an instrument built for another.
     #
     # What this arm owns is that a light_overrides entry can NAME a light that did
     # not exist when the scene file was written -- which is the whole ordering
