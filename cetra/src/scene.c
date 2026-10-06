@@ -647,6 +647,14 @@ void scene_clear_decals(Scene* scene) {
     scene->decal_count = 0;
 }
 
+void scene_update_lighting(Scene* scene, struct Engine* engine) {
+    if (!scene || !engine)
+        return;
+    shadow_tiles_update(scene->shadow_system, engine, scene);
+    gi_world_update(scene->gi, engine, scene);
+    probe_set_update(scene->probe_set, engine, scene);
+}
+
 void scene_environment_changed(Scene* scene, struct Engine* engine) {
     if (!scene || !engine || !scene->sky)
         return;

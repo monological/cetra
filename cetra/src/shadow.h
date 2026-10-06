@@ -7,6 +7,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "mesh.h" // AABB
 #include "program.h"
 
 // The cached point-light tiles' numbers, shared with the shaders (spec 13.16).
@@ -212,6 +213,14 @@ typedef struct ShadowTileBlock {
     int store;           // the block that is its store, -1 for none
 } ShadowTileBlock;
 
+// A cached light in the frame's ranking.
+typedef struct ShadowTileRank {
+    struct Light* light;
+    float distance; // from the camera to its reach, 0 inside it
+    int order;      // its index in the scene's lights, which breaks a tie in distance
+    int block;      // the block it holds this frame, -1 for none
+} ShadowTileRank;
+
 // The casters a kept face draws over a copy of its still ones rather than with them: nodes
 // that have moved within SHADOW_TILE_MOVER_HOLD frames.
 #define SHADOW_TILE_MAX_MOVERS 32
@@ -368,8 +377,8 @@ typedef struct ShadowSystem {
     // by its definition. 0 = off; at most SHADOW_TILE_REFERENCE_MAX.
     int tile_reference;
     // Blocks placed a frame once the tiles have opened (spec 13.24), nearest light first: a
-    // light regaining one draws every face at once. 0 = no limit. The frame they open in places
-    // every block it can, since that is the load.
+    // light regaining one draws every face at once. 0 = no limit. The first frame that places
+    // any places every block it can, since that is the load.
     int tile_new_blocks_per_frame;
     // ENGINE-OWNED. The region starts at tile_base_layer and runs tile_layers; both only
     // grow, since moving either moves every tile. tile_generation counts the times its
@@ -388,20 +397,15 @@ typedef struct ShadowSystem {
     uint64_t tile_mover_moved[SHADOW_TILE_MAX_MOVERS]; // the tile frame each last moved
     int tile_mover_count;
     uint64_t tile_frame; // the engine's frame the tiles were last drawn in
-    // The cached lights nearest the camera first (spec 13.24), ranked once a frame and shared
-    // by every depth pass of it and by shadow_tiles_cover; with each one's distance.
-    const struct Light** tile_rank;
-    float* tile_rank_distance;
-    int tile_rank_count;
-    int tile_rank_capacity;
-    uint64_t tile_rank_frame;
-    bool tile_rank_valid;
-    int64_t tile_open_frame; // the frame a block was first placed in; -1 before
-    uint64_t tile_placed_frame;
-    int tile_placed_count;               // blocks placed in tile_placed_frame
-    GLuint tile_copy_fbo;                // reads one face while the punctual FBO writes its copy
-    bool tile_full_warned;               // latches, as the pool's does
-    const struct Light* tile_full_light; // the nearest light the last reconcile had no room for
+    // The cached lights nearest the camera first, each with the block it holds (spec 13.24):
+    // assigned once a frame by shadow_tiles_update, before anything captures, and read by
+    // every depth pass of the frame and by shadow_tiles_cover.
+    ShadowTileRank* tile_rank;
+    size_t tile_rank_count;
+    size_t tile_rank_capacity;
+    int tile_held;         // ranked lights holding a block
+    GLuint tile_copy_fbo;  // reads one face while the punctual FBO writes its copy
+    bool tile_full_warned; // latches, as the pool's does
     bool tile_range_warned;
 
     // Moment shadow maps (spec 11.22): a filterable RGBA16F copy of the depth
@@ -485,12 +489,16 @@ int shadow_live_punctual_layer(const ShadowSystem* system, const struct Light* l
 // a shadow-casting point light asking for it, with the range its faces end at.
 bool shadow_light_takes_tiles(const struct Light* light);
 
-// Whether every cached light whose range reaches the box will be shadowed in a capture taken now
-// (spec 13.24): holding a whole block, or, in the frame the tiles open, within the budget that
-// frame places. A capture taken before then photographs light through walls for good, so the
-// GI volumes and reflection probes wait on it.
-bool shadow_tiles_cover(ShadowSystem* ss, const struct Engine* engine, const struct Scene* scene,
-                        const vec3 box_min, const vec3 box_max);
+// Give the cached lights their blocks for this frame, nearest the camera first (spec 13.24).
+// Once a frame, before anything captures: every depth pass of the frame draws what this
+// assigned, so a capture and the frame agree on which lights are shadowed.
+void shadow_tiles_update(ShadowSystem* ss, const struct Engine* engine, const struct Scene* scene);
+
+// Whether every cached light whose range reaches the box will be shadowed in a capture taken now:
+// holding a block that is whole, or that the capture's own depth pass will draw whole, which it
+// does for every held block of a light that emits. A capture taken before then photographs light
+// through walls for good, so the GI volumes and reflection probes wait on it.
+bool shadow_tiles_cover(const ShadowSystem* ss, const AABB* box);
 
 // The cached lights in this frame's ranking, nearest first, each with its distance and whether it
 // holds a whole block (--stream-probe).

@@ -4,12 +4,11 @@
 
 #include "gi_volume.h"
 #include "engine.h"
-#include "async_loader.h"
 #include "ibl.h"
 #include "lighting_atlas.h"
+#include "profiler.h"
 #include "render.h"
 #include "scene.h"
-#include "shadow.h"
 #include "uniform.h"
 #include "util.h"
 #include "ext/log.h"
@@ -276,12 +275,6 @@ static bool gi_volume_capture(GIVolume* gi, struct Engine* engine, struct Scene*
     if (gi->failed || gi->dirty_count <= 0)
         return false; // converged: the steady state, and it costs nothing
 
-    // Capturing before the textures land would bake placeholder materials into
-    // the atlas. probe.c blocks on the loader because it captures once at load;
-    // here the dirty count is untouched, so skipping simply retries next frame.
-    if (engine->async_loader && async_loader_is_busy(engine->async_loader))
-        return false;
-
     if (!gi_ensure_targets(gi, engine))
         return false;
 
@@ -441,10 +434,10 @@ static AABB gi_volume_box(const GIVolume* gi) {
     return box;
 }
 
-void gi_world_rank(GIWorld* world, const struct Engine* engine, const LightingAtlas* atlas) {
-    if (!world || !world->enabled || world->residency.count == 0 || !engine)
-        return;
-
+// Which volumes are resident, from the camera. A swept volume that leaves keeps its tiles, read
+// out of `atlas` before its slot changes hands; one that leaves mid-sweep sweeps again when next
+// admitted.
+static void gi_world_rank(GIWorld* world, const struct Engine* engine, const LightingAtlas* atlas) {
     vec3 eye = {0.0f, 0.0f, 0.0f};
     if (engine->camera)
         glm_vec3_copy(engine->camera->position, eye);
@@ -464,8 +457,9 @@ void gi_world_rank(GIWorld* world, const struct Engine* engine, const LightingAt
 }
 
 void gi_world_update(GIWorld* world, struct Engine* engine, struct Scene* scene) {
-    if (!world || !world->enabled || !engine || !scene)
+    if (!world || !world->enabled || world->residency.count == 0 || !engine || !scene)
         return;
+    gi_world_rank(world, engine, scene->lighting_atlas);
     Residency* res = &world->residency;
     bool work = false;
     for (size_t i = 0; i < res->count && !work; ++i) {
@@ -481,6 +475,9 @@ void gi_world_update(GIWorld* world, struct Engine* engine, struct Scene* scene)
     // Read once: every volume resident in the frame the world opens sweeps in it, not only the
     // first to converge.
     const bool opened = world->opened;
+    // Timed only on a frame that captures: a converged world is the steady state, and a scope
+    // opened every frame would file a 0.000 ms row on nearly all of them.
+    bool timing = false;
     // In the volumes' own order, so which one captures first does not depend on where each sits.
     for (size_t i = 0; i < res->count; ++i) {
         ResidencyItem* item = &res->items[i];
@@ -495,10 +492,8 @@ void gi_world_update(GIWorld* world, struct Engine* engine, struct Scene* scene)
         }
         if (gi->failed || gi->dirty_count <= 0)
             continue;
-        // Its cached lights first: a capture taken before they are shadowed photographs their
-        // light through the walls, and a swept volume is not swept again.
         const AABB box = gi_volume_box(gi);
-        if (!shadow_tiles_cover(scene->shadow_system, engine, scene, box.min, box.max))
+        if (!scene_capture_ready(engine, scene, SCENE_CAPTURE_IRRADIANCE, &box))
             continue;
         // The opening sweep runs in one frame at load, taking every probe: spreading it would
         // only delay GI appearing at all, since a half-swept slot is withheld -- and a headless
@@ -511,12 +506,18 @@ void gi_world_update(GIWorld* world, struct Engine* engine, struct Scene* scene)
         if (opening && gi->dirty_count == gi_probe_count(gi))
             gi->streamed = opened && item->distance > 0.0f;
         const int budget = !opening ? world->rate : gi->streamed ? world->stream_rate : 0;
+        if (!timing) {
+            profiler_scope_begin(engine->profiler, "gi capture");
+            timing = true;
+        }
         if (gi_volume_capture(gi, engine, scene, atlas, slot, budget, opening)) {
             if (opening)
                 residency_loaded(item);
             world->opened = true;
         }
     }
+    if (timing)
+        profiler_scope_end(engine->profiler);
 }
 
 bool gi_world_ready_in(const GIWorld* world, const AABB* box) {
@@ -539,22 +540,6 @@ bool gi_world_pending(const GIWorld* world) {
         const GIVolume* gi = world->volumes[i];
         if (world->residency.items[i].state == RESIDENCY_CAPTURE && !gi->failed &&
             gi->dirty_count > 0)
-            return true;
-    }
-    return false;
-}
-
-bool gi_world_capture_due(const GIWorld* world, const struct Engine* engine,
-                          const struct Scene* scene) {
-    if (!world || !world->enabled || !engine || !scene)
-        return false;
-    for (size_t i = 0; i < world->residency.count; ++i) {
-        const ResidencyItem* item = &world->residency.items[i];
-        const GIVolume* gi = world->volumes[i];
-        if (item->slot < 0 || item->state == RESIDENCY_UPLOAD || gi->failed || gi->dirty_count <= 0)
-            continue;
-        const AABB box = gi_volume_box(gi);
-        if (shadow_tiles_cover(scene->shadow_system, engine, scene, box.min, box.max))
             return true;
     }
     return false;

@@ -7,6 +7,7 @@
 #include <cglm/cglm.h>
 
 #include "animation.h"
+#include "async_loader.h"
 #include "ext/log.h"
 #include "layers_vt.h"
 #include "scene.h"
@@ -1960,6 +1961,17 @@ void engine_render_scene(Engine* engine, Scene* scene) {
 // MSAA and single-sample grazing-angle aliasing at its horizon bakes in as
 // stripe moire that mirror reflections magnify into banded streaks.
 #define CAPTURE_SS_FACTOR 2
+
+bool scene_capture_ready(const Engine* engine, const Scene* scene, SceneCaptureKind kind,
+                         const AABB* box) {
+    if (engine->async_loader && async_loader_is_busy(engine->async_loader))
+        return false;
+    if (!shadow_tiles_cover(scene->shadow_system, box))
+        return false;
+    // A reflection sees the room lit, and the volume's answer is that light: before it sweeps a
+    // capture lights the room with the environment's ambient, which by day is many times it.
+    return kind != SCENE_CAPTURE_RADIANCE || gi_world_ready_in(scene->gi, box);
+}
 
 void scene_capture_begin(Engine* engine, Scene* scene, SceneCaptureKind kind,
                          SceneCaptureState* saved) {

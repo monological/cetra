@@ -3,13 +3,13 @@
 #include <string.h>
 
 #include "probe_set.h"
-#include "async_loader.h"
 #include "lighting_atlas.h"
 #include "light_cluster.h" // GpuProbeBlock, the block this fills half of
 #include "engine.h"
-#include "gi_volume.h"
 #include "postfx.h"
-#include "shadow.h"
+#include "profiler.h"
+#include "render.h"
+#include "scene.h"
 #include "util.h"
 #include "ext/log.h"
 
@@ -77,19 +77,12 @@ static AtlasRect probe_column(const ReflectionProbeSet* set, const ResidencyItem
     return lighting_atlas_probe_rect(set->atlas, item->slot >= 0 ? item->slot : 0);
 }
 
-// Whether a probe may be captured now (spec 13.24). A capture lights what it sees with the GI
-// volume only once the volume has an answer, and with the environment's ambient before it, so
-// a probe captured alongside its volume photographs a closed room lit by the open sky -- by day
-// many times the volume's light, which every dark glossy surface then reflects as a grey wash.
-// And a cached light not yet shadowed lights it through the walls. Both are photographed for
-// good, since a probe is not captured again. While textures are still landing the capture would
-// wait on them inside the frame, so it waits a frame instead.
+// Whether a probe may be captured now: a probe is not captured again, so what it photographs
+// it keeps (scene_capture_ready says what waits on what).
 static bool capture_ready(const ReflectionProbe* probe, const struct Engine* engine,
                           const struct Scene* scene) {
     const AABB box = probe_box(probe);
-    return !(engine->async_loader && async_loader_is_busy(engine->async_loader)) &&
-           gi_world_ready_in(scene->gi, &box) &&
-           shadow_tiles_cover(scene->shadow_system, engine, scene, box.min, box.max);
+    return scene_capture_ready(engine, scene, SCENE_CAPTURE_RADIANCE, &box);
 }
 
 // A world of one probe: captured once into its own cube, bound on the prefilter unit, no
@@ -98,7 +91,10 @@ static void update_single(ReflectionProbeSet* set, struct Engine* engine, struct
     if (set->ready || !capture_ready(set->probes[0], engine, scene))
         return;
     set->captures_total++;
-    if (reflection_probe_capture(set->probes[0], engine, scene) != 0) {
+    profiler_scope_begin(engine->profiler, "probe capture");
+    const int failed = reflection_probe_capture(set->probes[0], engine, scene);
+    profiler_scope_end(engine->profiler);
+    if (failed) {
         log_error("Reflection probe 0 failed to capture");
         set->failed = true;
         return;
@@ -117,9 +113,10 @@ static uint16_t* probe_keep_column(void* user, size_t i, int slot) {
     return kept;
 }
 
-void probe_set_rank(ReflectionProbeSet* set, const struct Engine* engine) {
-    if (!set || set->failed || set->residency.count < 2 || !engine)
-        return;
+// Which probes hold columns, from the camera. A loaded probe that leaves keeps its column, read
+// out of `atlas` before the column changes hands.
+static void probe_set_rank(ReflectionProbeSet* set, const struct Engine* engine,
+                           LightingAtlas* atlas) {
     vec3 eye = {0.0f, 0.0f, 0.0f};
     if (engine->camera)
         glm_vec3_copy(engine->camera->position, eye);
@@ -127,7 +124,7 @@ void probe_set_rank(ReflectionProbeSet* set, const struct Engine* engine) {
         const AABB box = probe_box(set->probes[i]);
         set->residency.items[i].distance = sqrtf(aabb_dist_sq(&box, eye));
     }
-    residency_assign(&set->residency, set->atlas ? probe_keep_column : NULL, set->atlas);
+    residency_assign(&set->residency, atlas ? probe_keep_column : NULL, atlas);
 }
 
 // The resident probe still waiting for its first capture and ready for it, nearest first, ties
@@ -174,15 +171,6 @@ static bool resident_waiting(const ReflectionProbeSet* set) {
     return false;
 }
 
-bool probe_set_capture_due(const ReflectionProbeSet* set, const struct Engine* engine,
-                           const struct Scene* scene) {
-    if (!set || set->failed || set->residency.count == 0 || !engine || !scene)
-        return false;
-    if (set->residency.count == 1)
-        return !set->ready && capture_ready(set->probes[0], engine, scene);
-    return next_capture(set, engine, scene) >= 0;
-}
-
 void probe_set_update(ReflectionProbeSet* set, struct Engine* engine, struct Scene* scene) {
     if (!set || set->failed || set->residency.count == 0 || !engine || !scene)
         return;
@@ -192,6 +180,7 @@ void probe_set_update(ReflectionProbeSet* set, struct Engine* engine, struct Sce
         return;
     }
 
+    probe_set_rank(set, engine, scene->lighting_atlas);
     if (!resident_waiting(set)) {
         set->ready = true;
         return;
@@ -213,15 +202,24 @@ void probe_set_update(ReflectionProbeSet* set, struct Engine* engine, struct Sce
     // At load every resident probe that is ready captures in the one frame, so a set is whole
     // from its first frame; a probe that comes into range later captures alone, a frame's
     // worth of six scene renders and a prefilter.
+    // Timed only on a frame that captures, for the GI scope's reason.
     const bool all = set->captures_total == 0;
+    bool timing = false;
     for (int i = next_capture(set, engine, scene); i >= 0;
          i = all ? next_capture(set, engine, scene) : -1) {
+        if (!timing) {
+            profiler_scope_begin(engine->profiler, "probe capture");
+            timing = true;
+        }
         if (!capture_into_column(set, i, engine, scene)) {
             set->failed = true;
-            return;
+            break;
         }
     }
-    set->ready = !resident_waiting(set);
+    if (timing)
+        profiler_scope_end(engine->profiler);
+    if (!set->failed)
+        set->ready = !resident_waiting(set);
 }
 
 void probe_set_fill_descriptors(const ReflectionProbeSet* set, GpuProbeBlock* out) {

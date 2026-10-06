@@ -66,6 +66,13 @@ typedef enum SceneCaptureKind {
     SCENE_CAPTURE_IRRADIANCE,   // what is added to the analytic direct term
 } SceneCaptureKind;
 
+// Whether a capture kept for good may be taken now of what lies in `box` (spec 13.24): the
+// texture loader idle, every cached light reaching the box shadowed, and for RADIANCE every GI
+// volume touching it swept. Taken any sooner it photographs placeholder materials, light through
+// walls, or a closed room lit by the open sky, and nothing takes it again.
+bool scene_capture_ready(const Engine* engine, const struct Scene* scene, SceneCaptureKind kind,
+                         const AABB* box);
+
 void scene_capture_begin(Engine* engine, struct Scene* scene, SceneCaptureKind kind,
                          SceneCaptureState* saved);
 void scene_capture_end(Engine* engine, struct Scene* scene, const SceneCaptureState* saved);

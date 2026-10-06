@@ -88,28 +88,16 @@ void free_reflection_probe_set(ReflectionProbeSet* set);
 // Takes ownership. False (and the probe freed) on NULL or out of memory.
 bool probe_set_add(ReflectionProbeSet* set, ReflectionProbe* probe);
 
-// Decide which probes hold columns, from the camera: once a frame, before anything captures, so
-// every pass of the frame agrees on it. A loaded probe that leaves keeps its column on the CPU,
-// read out of the atlas before the column changes hands; one that comes back with a kept column
-// has it put back by the update, and one without waits for a capture. A no-op on a world of
-// one probe, which needs no column.
-void probe_set_rank(ReflectionProbeSet* set, const struct Engine* engine);
-
 /*
- * Put back the columns of the resident probes that came back into range, and capture those
- * never captured: every resident one in the frame of the
- * first capture, one a frame after it. Each capture is projected into its column, the column
- * kept on the CPU and the cubes freed. A no-op on a failed set, and on a world of one probe
- * once that probe has captured.
+ * Decide which probes hold columns, from the camera -- a loaded probe that leaves keeps its column
+ * on the CPU, read out of the atlas before the column changes hands -- then put back the columns
+ * of those that came back, and capture those never captured: every resident one in the frame of
+ * the first capture, one a frame after it. Each capture is projected into its column and the
+ * cubes freed. A no-op on a failed set; a world of one probe needs no column, and only captures.
  *
- * A probe captures only once every GI volume its box touches is resident and swept, and every
- * cached light reaching it holds a whole block of shadow tiles.
- * That wait is the point of capturing here rather than where the set is built.
- * A capture lights what it sees with the volume only once the volume has an
- * answer, and with the environment's ambient before it, so a set captured
- * alongside the volume photographs every closed room lit by the open sky --
- * by day many times the volume's light, which every dark glossy surface then
- * reflects as a grey wash. The columns are the scene's lighting atlas's.
+ * A probe captures only once scene_capture_ready says a RADIANCE capture of its box may be kept.
+ * That wait is the point of capturing here rather than where the set is built. The columns are
+ * the scene's lighting atlas's.
  *
  * Runs in the frame before the shadow pass, after the GI sweep. A set is
  * installed uncaptured and is inert until this has run; a headless run sees it
@@ -121,11 +109,6 @@ void probe_set_update(ReflectionProbeSet* set, struct Engine* engine, struct Sce
 // again one a frame. The seam relight will need; nothing calls it yet, and a scene-captured
 // probe is deliberately left stale by the sun slider exactly as the single probe always was.
 void probe_set_mark_dirty(ReflectionProbeSet* set);
-
-// Some resident probe has a capture due and may take it now: what the frame's "probe capture"
-// scope times.
-bool probe_set_capture_due(const ReflectionProbeSet* set, const struct Engine* engine,
-                           const struct Scene* scene);
 
 // Pack what each loaded resident probe IS -- position, box, intensity, where its
 // column sits -- into the GPU block, in the probes' own order. The froxel masks in

@@ -3169,36 +3169,11 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
                               (float)engine->render_delta);
         }
 
-        // GI probe captures, while a resident volume is dirty. Deliberately BEFORE the
-        // shadow pass: a capture needs the camera-independent single-cascade map
-        // and bakes its own, and the pass below then restores the camera-fit
-        // cascades by simply overwriting them. A converged world costs a ranking.
-        if (shadow_scene && shadow_scene->gi) {
-            gi_world_rank(shadow_scene->gi, engine, shadow_scene->lighting_atlas);
-            // Timed only while probes remain to bake. A converged volume is the
-            // steady state, so an unconditional scope would file a 0.000 ms row
-            // on nearly every frame of a run.
-            profiler_scope_begin_if(engine->profiler,
-                                    gi_world_capture_due(shadow_scene->gi, engine, shadow_scene),
-                                    "gi capture");
-            gi_world_update(shadow_scene->gi, engine, shadow_scene);
-            profiler_scope_end(engine->profiler);
-        }
-
-        // The reflection probes: after the GI sweep, so a capture in the frame the
-        // volume converges already sees its light, and before the shadow pass for the GI
-        // capture's reason. No-op on a ready set.
-        if (shadow_scene && shadow_scene->probe_set) {
-            ReflectionProbeSet* probes = shadow_scene->probe_set;
-            probe_set_rank(probes, engine);
-            // Timed only on the frame it captures, for the GI scope's reason: a set waiting on
-            // the volume would file a 0.000 ms row a frame.
-            profiler_scope_begin_if(engine->profiler,
-                                    probe_set_capture_due(probes, engine, shadow_scene),
-                                    "probe capture");
-            probe_set_update(probes, engine, shadow_scene);
-            profiler_scope_end(engine->profiler);
-        }
+        // The streamed lighting: shadow tiles, GI volumes, reflection probes. Deliberately
+        // BEFORE the shadow pass: a capture needs the camera-independent single-cascade map
+        // and bakes its own, and the pass below then restores the camera-fit cascades by
+        // simply overwriting them. A converged world costs a ranking.
+        scene_update_lighting(shadow_scene, engine);
 
         // Shadow depth pass (before main render)
         if (shadow_scene && shadow_scene->shadow_system && shadow_scene->shadow_system->enabled) {
