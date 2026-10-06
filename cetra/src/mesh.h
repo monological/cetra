@@ -113,6 +113,14 @@ static inline float aabb_dist_sq(const AABB* box, const vec3 p) {
     return d;
 }
 
+// Whether two boxes share a point; boxes that only touch at a face do.
+static inline bool aabb_overlaps(const AABB* a, const AABB* b) {
+    for (int i = 0; i < 3; ++i)
+        if (a->min[i] > b->max[i] || a->max[i] < b->min[i])
+            return false;
+    return true;
+}
+
 typedef enum {
     MESH_POINTS = GL_POINTS,
     MESH_LINES = GL_LINES,

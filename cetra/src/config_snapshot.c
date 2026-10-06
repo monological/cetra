@@ -873,7 +873,7 @@ typedef struct ConfigArray {
 static void* _probe_at(Scene* scene, int i, const char** name) {
     *name = NULL;
     ReflectionProbeSet* set = scene ? scene->probe_set : NULL;
-    return (set && i >= 0 && i < set->count) ? set->probes[i] : NULL;
+    return (set && i >= 0 && i < (int)set->residency.count) ? set->probes[i] : NULL;
 }
 
 static void* _decal_at(Scene* scene, int i, const char** name) {

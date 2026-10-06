@@ -58,6 +58,11 @@ _Static_assert(PROBE_ATLAS_ROWS == PROBE_ATLAS_ROWS_MAX,
 struct Engine;
 struct Scene;
 
+// A rectangle of the atlas in texels, from its lower-left corner.
+typedef struct AtlasRect {
+    int x, y, w, h;
+} AtlasRect;
+
 typedef struct LightingAtlas {
     GLuint texture;
     int width, height;
@@ -86,8 +91,8 @@ typedef struct LightingAtlas {
 LightingAtlas* lighting_atlas_sync(struct Scene* scene, struct Engine* engine);
 void free_lighting_atlas(LightingAtlas* atlas);
 
-// A GI slot's lower-left texel.
-void lighting_atlas_gi_region(const LightingAtlas* atlas, int slot, int* out_x, int* out_y);
+// A GI slot's left edge, in texels: the slots stand side by side from x = 0, each from y = 0.
+int lighting_atlas_gi_x(const LightingAtlas* atlas, int slot);
 
 // Resample a captured probe's prefiltered cube into its column, one row per
 // roughness level, gutters included.
@@ -100,22 +105,21 @@ void lighting_atlas_bind(const LightingAtlas* atlas, ShaderProgram* program);
 // per-frame publish). The only thing about the atlas postfx needs.
 GLuint lighting_atlas_texture(const LightingAtlas* atlas);
 
-// A probe column's lower-left corner, in texels. The only per-probe fact about the
-// layout -- everything else about a column is shared, which is what
-// lighting_atlas_fill_column publishes. Columns stack where the GI slots are tall enough
-// to hold more than one.
-void lighting_atlas_probe_column(const LightingAtlas* atlas, int index, float out[2]);
+// A probe column, gutters included: its corner is the only per-probe fact about the layout --
+// everything else about a column is shared, which is what lighting_atlas_fill_column publishes.
+// Columns stack where the GI slots are tall enough to hold more than one. Empty with no columns
+// or past the last.
+AtlasRect lighting_atlas_probe_rect(const LightingAtlas* atlas, int slot);
 
-// A probe column's size in texels, gutters included; 0 with no columns.
-void lighting_atlas_probe_extent(const LightingAtlas* atlas, int* out_w, int* out_h);
+// A rectangle to the CPU, in memory the caller frees, and back. RGBA half floats both ways, so
+// what comes back is bit for bit what went: how a streamed item that leaves residency returns
+// without being captured again. NULL / false on failure.
+uint16_t* lighting_atlas_keep(const LightingAtlas* atlas, AtlasRect rect);
+bool lighting_atlas_restore(const LightingAtlas* atlas, AtlasRect rect, const uint16_t* texels);
 
-// A rectangle of the atlas to the CPU as RGBA half floats, and back. Half floats both ways,
-// so what comes back is bit for bit what went: how a streamed item that leaves residency
-// returns without being captured again.
-bool lighting_atlas_read_rect(const LightingAtlas* atlas, int x, int y, int w, int h,
-                              uint16_t* out);
-bool lighting_atlas_write_rect(const LightingAtlas* atlas, int x, int y, int w, int h,
-                               const uint16_t* texels);
+// FNV-1a over a rectangle's texels: `kept` when given, else read from the atlas. Two captures of
+// one place agree on it exactly, which is what says whether something was photographed.
+uint32_t lighting_atlas_digest(const LightingAtlas* atlas, AtlasRect rect, const uint16_t* kept);
 
 // The atlas-wide half of the probe layout: the gutter and last row index, plus
 // each row's y origin and interior edge. Published to the GPU so the shader
@@ -125,8 +129,6 @@ void lighting_atlas_fill_column(const LightingAtlas* atlas, float out_column[4],
                                 float out_rows[][4]);
 
 void lighting_atlas_size(const LightingAtlas* atlas, int* out_w, int* out_h);
-void lighting_atlas_probe_rect(const LightingAtlas* atlas, int index, int* out_x, int* out_y,
-                               int* out_rows);
 
 // Draw the atlas over the composited frame (--gi-debug, --probe-set-debug), at `scale` times
 // its values: the GI tiles hold bounced light, a fraction of the direct, and want lifting. A bad

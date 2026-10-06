@@ -671,13 +671,13 @@ void scene_environment_changed(Scene* scene, struct Engine* engine) {
      */
     const ReflectionProbeSet* probes = scene->probe_set;
     if (probe_set_multi(probes)) {
-        log_info("Sky: %d-probe set not refreshed (relight is deferred)", probes->count);
+        log_info("Sky: %zu-probe set not refreshed (relight is deferred)", probes->residency.count);
     } else if (probes && probes->ready) {
-        for (int i = 0; i < probes->count; ++i) {
+        for (size_t i = 0; i < probes->residency.count; ++i) {
             if (probes->probes[i]->environment_only)
                 reflection_probe_capture(probes->probes[i], engine, scene);
             else
-                log_info("Sky: scene-captured probe %d not refreshed", i);
+                log_info("Sky: scene-captured probe %zu not refreshed", i);
         }
     }
 

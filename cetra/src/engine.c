@@ -3174,7 +3174,7 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
         // and bakes its own, and the pass below then restores the camera-fit
         // cascades by simply overwriting them. A converged world costs a ranking.
         if (shadow_scene && shadow_scene->gi) {
-            gi_world_rank(shadow_scene->gi, engine);
+            gi_world_rank(shadow_scene->gi, engine, shadow_scene->lighting_atlas);
             // Timed only while probes remain to bake. A converged volume is the
             // steady state, so an unconditional scope would file a 0.000 ms row
             // on nearly every frame of a run.

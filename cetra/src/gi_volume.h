@@ -6,7 +6,9 @@
 #include <stdint.h>
 #include <cglm/cglm.h>
 
+#include "mesh.h" // AABB
 #include "program.h"
+#include "residency.h"
 
 /*
  * DDGI-style irradiance probe volume (spec 9.7).
@@ -27,7 +29,7 @@
  * each engine_render_scene rebuilds the whole clustered light grid regardless of
  * the 16^2 viewport. Every scene this engine renders is static, so it converges
  * once and then idles, exactly as the sky's LUTs do (sky.h: luts_baked plus
- * rebake-on-sun-move). gi_volume_mark_dirty re-arms it.
+ * rebake-on-sun-move). gi_world_mark_dirty re-arms it.
  */
 
 // Interior edge of an octahedral tile, in texels. Irradiance is a smooth cosine
@@ -49,11 +51,8 @@
 // by the roadmap's global texture-unit ledger before either feature was built.
 #define GI_ATLAS_TEXTURE_UNIT 14
 
-// Volumes resident at once: the nearest to the camera, each holding a slot of the scene's
-// lighting atlas (spec 13.24). Must match GI_SLOTS in include/gi_volume.glsl. The world holds
-// any number; this caps what one frame samples, and is set by the shader's uniform table
-// rather than by memory.
-#define GI_RESIDENT_MAX 8
+// GI_RESIDENT_MAX, the volumes resident at once.
+#include "../shaders/include/gi_constants.glsl"
 
 struct Engine;
 struct Scene;
@@ -95,23 +94,13 @@ typedef struct GIVolume {
 
     ShaderProgram* project_program;
 
-    // Convergence. `dirty_count` probes remain to capture, taken from
-    // `next_probe` round-robin. An opening sweep at load runs in one frame, one
-    // started later at the world's `stream_rate` (`streamed`); after it the
-    // world's `rate` paces re-convergence.
+    // Convergence. `dirty_count` probes remain to capture, taken from `next_probe` round-robin.
+    // The OPENING sweep, into a slot nothing was captured in, runs in one frame at load and at
+    // the world's `stream_rate` when begun later (`streamed`); a re-convergence over texels
+    // already there is paced by the world's `rate`.
     int next_probe;
     int dirty_count;
-    bool first_pass;
     bool streamed;
-
-    // Streaming (spec 13.24). `kept` is the slot's texels as of the last convergence, RGBA half
-    // floats, so a volume that leaves residency and comes back is uploaded rather than
-    // captured; NULL until it first converges, and dropped when its light changes.
-    // `resident_slot` is the slot holding its texels, or about to; `upload_pending` says those
-    // texels are still on the CPU.
-    uint16_t* kept;
-    int resident_slot;
-    bool upload_pending;
 
     // Every probe capture this volume has ever run. The converge-then-idle
     // claim is only worth making if it is checkable, and this is the check: it
@@ -132,18 +121,15 @@ typedef struct GIWorld {
     bool debug_atlas; // draw the lighting atlas over the composited frame
 
     // ENGINE-OWNED: read, never write.
-    GIVolume** volumes; // owned; scene_add_gi_volume
-    int count;
-    int capacity;
-    int* slot_of;                // each volume's atlas slot, or -1 while not resident
-    int* home;                   // the slot each volume last held, or -1
-    int holder[GI_RESIDENT_MAX]; // each slot's volume, or -1
-    float* distance;             // each volume's distance from the camera, this frame's ranking
+    GIVolume** volumes; // owned; scene_add_gi_volume. One per residency item, in its order
+    size_t volume_capacity;
+    Residency residency; // which volumes hold the atlas's GI slots, and their texels' state
     // Some volume has swept. Before it, every opening sweep is the load's and runs in one frame.
     bool opened;
 } GIWorld;
 
-GIVolume* create_gi_volume(int nx, int ny, int nz);
+// `nx * ny * nz` probes over the box. A grid fixed at creation, so no volume exists unfitted.
+GIVolume* create_gi_volume(int nx, int ny, int nz, const vec3 box_min, const vec3 box_max);
 // A grid laid over a box at a cell size: as many probes per axis as the box holds cells, the
 // grid centred on the box, and `classify` on, since nothing kept its probes out of the walls.
 GIVolume* create_gi_volume_spaced(const vec3 box_min, const vec3 box_max, float spacing);
@@ -153,21 +139,6 @@ void free_gi_volume(GIVolume* gi);
 // from the largest of these.
 void gi_volume_atlas_extent(const GIVolume* gi, int* out_w, int* out_h);
 
-// Fit the grid to a scene AABB and arm a full convergence sweep.
-void gi_volume_fit(GIVolume* gi, const vec3 aabb_min, const vec3 aabb_max);
-
-// Re-arm every probe. Call when the lighting changed under the volume -- a sun
-// move, a light edit, a material change.
-void gi_volume_mark_dirty(GIVolume* gi);
-
-// Ready to be sampled from the slot it holds: at least one converged sweep's worth of data.
-bool gi_volume_active(const GIVolume* gi);
-
-// Its opening sweep is still to run: a capture now would see the scene without
-// the light this volume will give it. False for NULL and for a volume failed or
-// never fitted, neither of which will ever have an answer to wait for.
-bool gi_volume_pending(const GIVolume* gi);
-
 GIWorld* create_gi_world(void);
 void free_gi_world(GIWorld* world);
 
@@ -175,9 +146,10 @@ void free_gi_world(GIWorld* world);
 bool gi_world_add(GIWorld* world, GIVolume* gi);
 
 // Decide which volumes are resident, from the camera: once a frame, before anything captures,
-// so every pass of the frame agrees on it. A volume that loses its slot sweeps again when it
-// is next admitted.
-void gi_world_rank(GIWorld* world, const struct Engine* engine);
+// so every pass of the frame agrees on it. A swept volume that leaves keeps its texels, read out
+// of `atlas` before its slot changes hands; one that leaves mid-sweep sweeps again when next
+// admitted.
+void gi_world_rank(GIWorld* world, const struct Engine* engine, const struct LightingAtlas* atlas);
 
 // Grow the scene's lighting atlas to hold the resident volumes and capture up to the world's
 // rate of probes in each one still dirty. No-op on a converged world. Must run BEFORE the
@@ -193,7 +165,7 @@ bool gi_world_pending(const GIWorld* world);
 
 // Every volume the box touches is resident and swept, so a capture inside it is lit by its own
 // bounce light rather than the environment's or a neighbour's edge. True when none touches it.
-bool gi_world_ready_in(const GIWorld* world, const vec3 box_min, const vec3 box_max);
+bool gi_world_ready_in(const GIWorld* world, const AABB* box);
 
 // Some resident volume has probes to capture this frame: dirty, and its cached lights shadowed.
 bool gi_world_capture_due(const GIWorld* world, const struct Engine* engine,
@@ -212,7 +184,8 @@ void gi_world_mark_dirty(GIWorld* world);
 void gi_world_shift_origin(GIWorld* world, const vec3 delta);
 
 // One line naming each slot's volume, then one per volume: its slot, its distance, its
-// captures, what it is doing and whether its tiles are kept (--stream-probe).
-void gi_world_probe_print(const GIWorld* world, int frame);
+// captures, what it is doing, whether its tiles wait on the CPU, and a digest of its tiles
+// wherever they are (--stream-probe).
+void gi_world_probe_print(const GIWorld* world, const struct LightingAtlas* atlas, int frame);
 
 #endif // _GI_VOLUME_H_

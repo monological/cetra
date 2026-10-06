@@ -4,7 +4,6 @@
 #include <GL/glew.h>
 #include <cglm/cglm.h>
 #include <stdbool.h>
-#include <stdint.h>
 
 #include "ibl.h"
 
@@ -56,15 +55,6 @@ typedef struct ReflectionProbe {
 
     bool enabled; // runtime consumption toggle
     bool debug_background;
-
-    // Streaming, in a set of two or more (spec 13.24). `kept` is the probe's atlas column as
-    // captured, RGBA half floats, so one that leaves residency and comes back is uploaded
-    // rather than captured; NULL until its first capture. `resident_slot` is the column that
-    // holds it, or is about to; `loaded` says its texels are there now.
-    uint16_t* kept;
-    int resident_slot;
-    bool upload_pending;
-    bool loaded;
 } ReflectionProbe;
 
 // A probe is consumable once its prefiltered chain exists and it is switched on.

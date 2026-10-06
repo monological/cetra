@@ -810,12 +810,10 @@ bool apply_cscene_probes(Scene* scene, const CetraSceneDesc* cscn, int row0) {
         probe->near_clip = fmaxf(0.005f * radius, 0.01f);
         probe->far_clip = 10.0f * fmaxf(radius, 1.0f);
         probe->environment_only = p->env_only;
-        const int n = set->count;
+        const int n = (int)set->residency.count;
 
-        if (!probe_set_add(set, probe)) {
-            free_reflection_probe(probe);
+        if (!probe_set_add(set, probe))
             break;
-        }
         printf("Scene file: probe %d at (%.2f %.2f %.2f) box (%.2f %.2f %.2f)..(%.2f %.2f "
                "%.2f) intensity %.2f fade %.2f%s\n",
                n, (double)probe->position[0], (double)probe->position[1],
@@ -825,7 +823,7 @@ bool apply_cscene_probes(Scene* scene, const CetraSceneDesc* cscn, int row0) {
                p->env_only ? " (environment only)" : "");
     }
 
-    if (set->count <= 0) {
+    if (set->residency.count == 0) {
         free_reflection_probe_set(set);
         return false;
     }

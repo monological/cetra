@@ -19,7 +19,8 @@
 //
 // Geometry constants (tile resolutions, border, grid counts) arrive as uniforms
 // rather than being mirrored here: the C side owns one definition and there is
-// no pair to drift apart.
+// no pair to drift apart. The one number a declaration needs, the resident cap,
+// is in gi_constants.glsl, which both languages read.
 //
 // Since spec 13.24 the world holds any number of volumes, one per place, and the
 // nearest few are RESIDENT: each holds a slot of the lighting atlas and a row of
@@ -28,9 +29,7 @@
 // lone volume always did outside its grid.
 
 #include "octahedral.glsl"
-
-// Must match GI_RESIDENT_MAX (gi_volume.h).
-#define GI_SLOTS 8
+#include "gi_constants.glsl"
 
 uniform sampler2D giAtlasTex;
 uniform int giEnabled;   // some resident volume has swept and may be sampled
@@ -41,7 +40,7 @@ uniform int giSlotCount; // resident volumes published, swept or not
 //            moments are stored in
 //   [4s + 2] xyz probes per axis; w the atlas rows its irradiance block occupies
 //   [4s + 3] xy its slot's corner in the atlas, in texels
-uniform vec4 giSlot[GI_SLOTS * 4];
+uniform vec4 giSlot[GI_RESIDENT_MAX * 4];
 uniform vec2 giAtlasSize;   // atlas dimensions in texels
 uniform float giTileBorder; // gutter width, per side
 uniform vec2 giTileRes;     // interior edge: (irradiance, visibility)
@@ -53,7 +52,7 @@ uniform vec2 giTileRes;     // interior edge: (irradiance, visibility)
 int giSlotAt(vec3 p) {
     int nearest = -1;
     float best = 0.0;
-    for (int s = 0; s < GI_SLOTS; ++s) {
+    for (int s = 0; s < GI_RESIDENT_MAX; ++s) {
         if (s >= giSlotCount)
             break;
         vec3 lo = giSlot[4 * s].xyz;
