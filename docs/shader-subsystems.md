@@ -478,18 +478,41 @@ centre cannot express, and is what remains of the gap to the current flame's ref
 (`tiles-dance`: 0.145 with it, 0.376 without).
 
 **Movers are drawn over a copy.** A face that sees a kept caster which has moved in the last
-120 frames keeps its still casters in the same face of a STORE -- cells its block holds beside
-its own -- and each frame it is that copy plus the movers. A 0 px match against the scene never moved, at the swing's rest frame, is
-what `tiles-movers` holds; it fails if the overlay is skipped, since the store leaves the mover
-out.
+120 frames keeps its still casters in a STORE CELL, and each frame it is that copy plus the
+movers. A 0 px match against the scene never moved, at the swing's rest frame, is what
+`tiles-movers` holds; it fails if the overlay is skipped, since the store leaves the mover out.
+
+**The store is a pool of 64 cells on top of the budget, one a face** (spec 13.26). Until then a
+store was a whole block of its light's own size, taken from the same budget after the lights
+had theirs, so sixteen bodied lights -- silent's -- filled the budget and left no store at all,
+and every face that saw a mover was drawn whole, every caster in it, every frame. A cell goes to
+the nearest light's faces first and a face keeps the one it holds; a cell moves only to a light
+more than 2 m nearer. A face left without one is drawn whole, which is said once by name, and
+`--tile-stores 0` is that path for comparison. `tiles-store` holds the copy and the whole draw
+to the same picture.
 
 **A pose is a mover on every frame** (spec 13.18). A skinned, swaying or morphing surface moves
 without its node moving, so a face drawn once would freeze it. It is in no store and no face
 drawn whole and kept: it is drawn only over a copy, into the faces its posed bounds reach this
 frame, which keeps it out of every face that is not drawn again the next. A face is drawn over
 its copy until a frame in which no moving caster reaches it, and is kept from then on, so a cat
-walking past a candle costs that candle's faces only while it is in them -- and a store whose
-faces no longer see anything moving is given back, since the budget holds only a few.
+walking past a candle costs that candle's faces only while it is in them -- and a cell whose
+face no longer sees anything moving is given back.
+
+**A sway is a mover only when the scene's wind can move it** (spec 13.26), which classification
+asks of `wind_max_offset`: a wind response under no wind moved nothing and still redrew every
+face it reached. **And a material may keep its sway out of the kept faces**: with
+`cachedShadowWind: "rest"` the caster is still to them, and the kept sets are drawn with the
+wind's strength at 0, so each holds it at its rest pose, while the camera, the cascades and the
+per-frame layers keep the sway -- Unreal's "Rigid" cache behaviour. Rest is one end of the lean,
+not its middle, so a swaying caster sees its own shadow off by at most its sway; at silent's
+trees that is under a millimetre and moves 0 px. Two things about it are easy to get backwards.
+The strength goes back to the scene's straight after the kept walk, because the transmittance
+map's nearest-depth step draws through the same program without uploading it again, and would
+draw every translucent caster unswayed. And what the kept faces hold is digested every frame
+(`tiles_kept_digest`): a material moved into or out of them -- this row, its wind, its opacity,
+its shadow role -- with the graph unchanged redraws every face, where a face drawn before would
+keep the caster where it stood or leave it out of a store copy for good (`tiles-rest-toggle`).
 
 **What else rendered a plausible frame on the way:**
 - **The body a diameter too long**: the fire wrote the whole spine as `source_length`, and the caps
