@@ -28362,6 +28362,10 @@ TILES_CORE_ORTHO = 0.8
 TILES_DANCE_MAX = 0.25
 TILES_DANCE_CAM = ["--cam-eye", "0.95,1.45,-0.55", "--cam-target", "0.7,1.3,-1.1"]
 TILES_DANCE_BOX = (0.234, 0.370, 0.599, 0.694)
+# A wind strong enough to swing the tall box's hem visibly, so a face that follows the sway and a
+# face held at rest are different pictures (spec 13.26).
+TILES_WIND = {"direction": [1.0, 0.0, 0.0], "strength": 0.15, "speed": 3.14159,
+              "gustFrequency": 0.15, "gustAmount": 0.0, "turbulence": 0.35}
 
 
 def _tiles_render(workdir, tag, scene, extra, frames=30, size=("400", "300")):
@@ -28487,6 +28491,13 @@ def run_shadow_tiles_gate(workdir):
       tiles-movers   a box swinging under a cached lamp is drawn over a copy of the still
                      casters each frame: at its rest frame the result is 0 px from the scene
                      never moved, mid-swing it is not, and no kept face is drawn
+      tiles-rest     a box swaying as cloth, kept at rest by its material, is held in the kept
+                     faces at rest: no face drawn over a copy, and the faces equal the box with
+                     no wind response; left to sway, faces are drawn over a copy
+      tiles-windless a material with a wind response under no wind moves nothing, so draws no
+                     face over a copy
+      tiles-rest-toggle the material set to sway and back with the graph unchanged: the kept
+                     faces end as the faces that never swayed
       tiles-budget   cached lights past the tile budget are refused by name
       tiles-shape    a flame's light carries its spine: radius, length between the caps, axis
       tiles-dance    the candle's kept views, drawn at its first frame, read near the reference
@@ -28686,6 +28697,77 @@ def run_shadow_tiles_gate(workdir):
               f"drawn over a copy {region.get('mover_faces_drawn')}")
         if not ok:
             failures.append("tiles-movers")
+
+    # --- swaying casters (spec 13.26) --------------------------------------------------------
+    # The tall box swaying as cloth under the cached lamp -- cloth because the box carries no
+    # UV1, which the vegetation modes read. Kept at rest by its material it is held in the kept
+    # faces as an unmoving caster is; left to sway, every face it reaches is redrawn every frame.
+    def swaying(wind=True, response=1.0, how=None):
+        def mutate(d):
+            d["lights"][0]["shadow_cache"] = True
+            if wind:
+                d["wind"] = dict(TILES_WIND)
+            material = {"windResponse": response, "windMode": "cloth"}
+            if how:
+                material["cachedShadowWind"] = how
+            d["materials"] = {"cornell_tall_box": material}
+        return mutate
+
+    def kept_map(tag, src, extra=()):
+        path = os.path.join(workdir, f"tiles_{tag}_map.ppm")
+        run, err = _tiles_render(workdir, tag, src, ["--tile-map", "PointLamp", path] + list(extra))
+        if not err and not os.path.exists(path):
+            err = "no tile map written"
+        return run, path, err
+
+    def lamp_block(run):
+        return next((b for b in _tiles_blocks(run[1]) if b.get("light") == "PointLamp"), {})
+
+    at_rest = scene("wind_rest", point, swaying(how="rest"))
+    rest, rest_map, err = kept_map("wind_rest", at_rest)
+    rigid, rigid_map, err2 = kept_map("wind_rigid", scene("wind_rigid", point, swaying(response=0)))
+    sway, _, err3 = kept_map("wind_sway", scene("wind_sway", point, swaying()))
+    if err or err2 or err3:
+        failed("tiles-rest", err or err2 or err3)
+    else:
+        drawn = _tiles_region(rest[1]).get("mover_faces_drawn")
+        dynamic = lamp_block(rest).get("dynamic")
+        held = compare(rest_map, rigid_map)[0]
+        swayed = _tiles_region(sway[1]).get("mover_faces_drawn")
+        ok = drawn == "0" and dynamic == "0" and held == 0 and swayed not in (None, "0")
+        print(f"  tiles-rest   {'PASS' if ok else 'FAIL'}  a swaying box kept at rest: {drawn} "
+              f"faces drawn over a copy and {dynamic} dynamic (want 0 and 0), its kept faces "
+              f"{held} px from the box with no wind response (want 0); left to sway, {swayed} "
+              f"faces drawn over a copy (want some)")
+        if not ok:
+            failures.append("tiles-rest")
+
+    windless, err = _tiles_render(workdir, "windless", scene("windless", point,
+                                                              swaying(wind=False)), [])
+    if err:
+        failed("tiles-windless", err)
+    else:
+        drawn = _tiles_region(windless[1]).get("mover_faces_drawn")
+        ok = drawn == "0"
+        print(f"  tiles-windless {'PASS' if ok else 'FAIL'}  a material with a wind response in a "
+              f"scene with no wind: {drawn} faces drawn over a copy (want 0, since nothing sways)")
+        if not ok:
+            failures.append("tiles-windless")
+
+    # Set to sway and back with nothing in the graph changing: the faces must hold the box at rest
+    # again, rather than a store copy that left it out.
+    toggle = ["--material-at", "10", "cornell_tall_box", "cachedShadowWind", "sway",
+              "--material-at", "20", "cornell_tall_box", "cachedShadowWind", "rest"]
+    toggled, toggled_map, err = kept_map("wind_toggle", at_rest, toggle)
+    if err or rest is None:
+        failed("tiles-rest-toggle", err or "the rest render")
+    else:
+        differ = compare(toggled_map, rest_map)[0]
+        ok = differ == 0
+        print(f"  tiles-rest-toggle {'PASS' if ok else 'FAIL'}  swayed from frame 10 and kept at "
+              f"rest again from 20: the kept faces {differ} px from never having swayed (want 0)")
+        if not ok:
+            failures.append("tiles-rest-toggle")
 
     # --- budget ------------------------------------------------------------------------------
     # Three lights at the reference's 64 views ask 384 cells each, which the budget holds two of;

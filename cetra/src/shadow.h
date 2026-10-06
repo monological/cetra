@@ -387,8 +387,9 @@ typedef struct ShadowSystem {
     int tile_base_layer;
     int tile_layers;
     unsigned tile_generation;
-    int tile_held_base;  // the base the array's tiles are laid out at; a rebuild moves them
-    uint64_t tile_epoch; // the scene graph's when the kept faces were last checked against it
+    int tile_held_base;        // the base the array's tiles are laid out at; a rebuild moves them
+    uint64_t tile_epoch;       // the scene graph's when the kept faces were last checked against it
+    uint64_t tile_kept_digest; // which casters the kept faces held then, and which still
     ShadowTileBlock tile_blocks[SHADOW_TILE_MAX_BLOCKS];
     int tile_block_count;  // blocks in use or freed, so the high-water mark of the region
     int tile_faces_drawn;  // this frame, kept faces filled

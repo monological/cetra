@@ -78,8 +78,9 @@ static bool push_gizmo(DrawList* list, SceneNode* node) {
 }
 
 // Which pass draws this mesh, and what a pass may assume about it. All of it was
-// recomputed per mesh per pass before; none of it depends on the pass.
-static void classify(const Mesh* mesh, uint8_t* lane, uint8_t* flags) {
+// recomputed per mesh per pass before; none of it depends on the pass. `wind` is
+// the scene's, NULL when it has none.
+static void classify(const Mesh* mesh, const Wind* wind, uint8_t* lane, uint8_t* flags) {
     const Material* mat = mesh->material;
     bool transmissive = mat->transmission > 0.0f;
     // Translucency is IMPLIED by a fractional opacity or a dedicated opacity map
@@ -117,12 +118,22 @@ static void classify(const Mesh* mesh, uint8_t* lane, uint8_t* flags) {
     // shape is just "off"). doubleSided is deliberately allowed: a closed
     // double-sided crate occludes fine, and openness is the author's contract,
     // checked by the probe rather than guessed at here.
-    bool still = !mesh->is_skinned && mesh->morph_max_offset == 0.0f && mat->wind_response == 0.0f;
+    bool rigid = !mesh->is_skinned && mesh->morph_max_offset == 0.0f;
+    bool still = rigid && mat->wind_response == 0.0f;
     bool occluder = mat->occluder && !transmissive && !blend && !masked && still;
 
+    // Still as far as a kept shadow face is concerned (spec 13.26). A material's wind moves it
+    // only when this scene's wind can displace it at all -- a response under no wind, or under a
+    // wind of no strength, sways nothing, where asking the material alone redrew every face it
+    // reached on every frame. And a material that sways may still be KEPT at rest, which the
+    // kept faces then draw with the wind off.
+    bool sways = wind_max_offset(wind, mat->wind_response, mat->wind_mode, mesh->wind_flex_max,
+                                 mesh->wind_leaf_max) > 0.0f;
+    bool kept_still = rigid && (!sways || mat->cached_shadow_wind == CACHED_SHADOW_WIND_REST);
+
     *flags = 0;
-    if (still)
-        *flags |= DRAW_STILL;
+    if (kept_still)
+        *flags |= DRAW_KEPT_STILL;
     if (masked)
         *flags |= DRAW_ALPHA_MASKED;
     if (foliage)
@@ -305,12 +316,12 @@ static bool append_node(DrawList* list, Scene* scene, SceneNode* node, const Lod
                          .node = node,
                          .pose = mesh->is_skinned ? pose : NULL,
                          .lod = select_lod(mesh, node, lod)};
-        classify(mesh, &item.lane, &item.flags);
+        classify(mesh, scene->wind, &item.lane, &item.flags);
         // A pose, or a node said to move: either way a capture would freeze it into a
         // picture taken while the game runs. A node said to move is not still either, so a
         // kept shadow never holds it where it stood.
         if (hidden || mesh->is_skinned)
-            item.flags = (item.flags | DRAW_CAPTURE_HIDDEN) & ~DRAW_STILL;
+            item.flags = (item.flags | DRAW_CAPTURE_HIDDEN) & ~DRAW_KEPT_STILL;
         if (!push(list, item))
             return false;
     }

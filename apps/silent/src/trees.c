@@ -46,6 +46,9 @@ static Material* bark_material(Scene* scene, ShaderProgram* program) {
     m->roughness = 0.85f;
     m->wind_mode = 1;         // the trunk leans and the branches sway; there are no leaves
     m->wind_response = 0.35f; // stiff: dead wood does not give much
+    // A candle's or a lamp's cached shadow holds a tree at rest. Its sway is under a millimetre
+    // at this scale, and following it redrew every face a tree reached on every frame.
+    m->cached_shadow_wind = CACHED_SHADOW_WIND_REST;
     material_set_program(m, program);
 
     float* field = malloc(sizeof(float) * BARK_SIZE * BARK_SIZE);

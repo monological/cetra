@@ -62,6 +62,10 @@ float wind_gust_mean(const Wind* wind);
 // what keeps them from disagreeing about where the world is.
 void wind_upload_to_program(const Wind* wind, const vec3 world_origin, UniformManager* u);
 
+// The strength a program's wind displaces by: the field's, or 0 with no field or `rest`, which
+// makes every wind-aware shader early-out so a caster is drawn where it stands.
+void wind_upload_strength(const Wind* wind, bool rest, UniformManager* u);
+
 // An upper bound, in OBJECT space, on how far windOffset() can move any vertex
 // of a mesh with this response and mode -- so a wind-driven mesh can be bounded
 // and therefore culled, instead of being exempted from every frustum test.
