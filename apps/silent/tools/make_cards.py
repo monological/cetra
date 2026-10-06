@@ -157,6 +157,59 @@ def photo(name, hdri, cx, cy, span, fmt, rng):
     return age_paper(card, rng, edge=0.12), ROUGH_PRINT
 
 
+# The player's house's hall paintings (spec 13.25): oils gone dark under their varnish, cut from
+# the same panoramas as the snapshots, in heavy frames. Name, HDRI, centre, span, size in metres.
+PAINTINGS = [
+    ("painting_road", "misty_farm_road", 0.29, 0.53, 0.2, (0.62, 0.46)),
+    ("painting_lake", "lakeside", 0.36, 0.5, 0.3, (0.7, 0.42)),
+    ("painting_house", "belfast_farmhouse", 0.12, 0.47, 0.18, (0.44, 0.56)),
+]
+PAINTING_PX_PER_M = 520
+
+
+def painting(hdri, cx, cy, span, size_m, rng):
+    """An oil painting: a slice of the panorama, flattened into strokes and taken dark and
+    brown as old varnish takes a picture, the varnish crazed, in a carved frame gone black."""
+    pw, ph = int(size_m[0] * PAINTING_PX_PER_M), int(size_m[1] * PAINTING_PX_PER_M)
+    frame = int(0.07 * PAINTING_PX_PER_M)
+    iw, ih = pw - 2 * frame, ph - 2 * frame
+    pano = Image.open(io.BytesIO(fetch(HDRI % hdri, hdri + "_primary.png"))).convert("RGB")
+    w = span * pano.width
+    h = w * ih / iw
+    box = (cx * pano.width - w / 2, cy * pano.height - h / 2,
+           cx * pano.width + w / 2, cy * pano.height + h / 2)
+    # Strokes: down to a coarse picture, back up, and smeared along a slant.
+    small = pano.resize((max(2, iw // 6), max(2, ih // 6)), Image.Resampling.LANCZOS, box=box)
+    img = to_array(small.resize((iw, ih), Image.Resampling.BICUBIC))
+    img = img + 0.06 * (noise(ih, iw, 3, rng)[..., None] - 0.5)
+    grey = img @ np.array([0.2126, 0.7152, 0.0722])
+    img = grey[..., None] + (img - grey[..., None]) * 0.45
+    img = (img ** 1.5) * np.array([0.62, 0.5, 0.32])
+    yy, xx = np.mgrid[0:ih, 0:iw].astype(np.float32)
+    r2 = ((xx / iw - 0.5) ** 2 + (yy / ih - 0.5) ** 2) / 0.5
+    img = img * (1.0 - 0.55 * r2)[..., None]
+    cracks = Image.new("L", (iw, ih), 0)
+    draw = ImageDraw.Draw(cracks)
+    for _ in range(int(iw * ih / 900)):
+        x, y = rng.random() * iw, rng.random() * ih
+        for _ in range(3):
+            nx, ny = x + rng.normal(0, 7), y + rng.normal(0, 7)
+            draw.line([(x, y), (nx, ny)], fill=255, width=1)
+            x, y = nx, ny
+    img = img * (1.0 - 0.4 * (np.asarray(cracks, dtype=np.float32) / 255.0))[..., None]
+    # The frame: near-black wood, a lighter bead at its inner and outer edges where it is worn.
+    card = np.zeros((ph, pw, 3), dtype=np.float32)
+    fy, fx = np.mgrid[0:ph, 0:pw].astype(np.float32)
+    edge = np.minimum(np.minimum(fx, pw - 1 - fx), np.minimum(fy, ph - 1 - fy)) / frame
+    bead = np.exp(-((edge - 0.15) / 0.08) ** 2) + np.exp(-((edge - 0.88) / 0.07) ** 2)
+    wood = np.array([0.06, 0.045, 0.035]) * (0.8 + 0.4 * noise(ph, pw, 5, rng)[..., None])
+    card[:] = wood * (1.0 + 1.6 * bead[..., None])
+    card[frame:frame + ih, frame:frame + iw] = img
+    rough = np.full((ph, pw), 0.5, dtype=np.float32)
+    rough[frame:frame + ih, frame:frame + iw] = 0.3
+    return np.clip(card, 0.0, 1.0), rough
+
+
 def ruled_note(rng):
     """A page off a notepad, ruled, with a list on it in pencil-soft ballpoint."""
     w, h, first, rule = 300, 420, 70, 30
@@ -530,6 +583,10 @@ def main():
                       "m": (w / CLOCK_PX_PER_M, h / CLOCK_PX_PER_M),
                       "anchors": {k: (x / CLOCK_PX_PER_M, (h - y) / CLOCK_PX_PER_M)
                                   for k, (x, y) in anchors.items()}})
+    # Drawn after every other card, so each before them keeps its pixels.
+    for name, hdri, cx, cy, span, size in PAINTINGS:
+        pixels, rough = painting(hdri, cx, cy, span, size, rng)
+        cards.append({"name": name, "pixels": pixels, "rough": rough, "m": size})
 
     spots = place(cards)
     albedo = np.ones((ATLAS_H, ATLAS_W, 3), dtype=np.float32) * PAPER * 0.8

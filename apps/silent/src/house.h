@@ -6,9 +6,10 @@
 #include "door.h"
 #include "kit.h"
 
-// The player's house: two storeys of floors, ceilings and walls with their openings, the
-// great hall's stair and gallery, the roofs, the porch, the gutter along the front with its
-// downpipe, which leaks, and the tower.
+// The Gothic house, which stands at the end of the street as the mansion (spec 13.25): two
+// storeys of floors, ceilings and walls with their openings, the great hall's stair and
+// gallery, the roofs, the porch, the gutter along the front with its downpipe, which leaks, and
+// the tower. Built in the house's own plan; the kit stands it where it goes.
 void house_build(Kit* kit);
 
 // The house's walls that rooms are dressed against, each as it is built, so what is laid on
@@ -46,6 +47,10 @@ const KitWall* house_wall(HouseWall which);
 bool house_front_door(Door* door, Engine* engine, Scene* scene, EntityManager* em,
                       PhysicsWorld* physics, const vec3 origin);
 
+// The gutter both houses hang under the pent strip's edge, which is `edge_y` high at z =
+// `fascia`, from x0 to x1, with its downpipe at the east end and its leaks as drip lines.
+void house_front_gutter(Kit* kit, float x0, float x1, float edge_y, float fascia);
+
 // The main roof's top over x, and its underside: its ridge runs front to back on x = 0, and
 // the slopes fall to the side walls.
 float house_roof_y(float x);
@@ -54,10 +59,6 @@ float house_roof_under_y(float x);
 // How far `p` is outside the house's walls in plan, tower included; negative inside. In the
 // plan's own coordinates.
 float house_outside_distance(const vec3 p);
-
-// The same for the world: the nearer of the house at the plan's origin and the mansion, the
-// same plan moved to MANSION_X/Y/Z (spec 13.25).
-float house_outside_distance_world(const vec3 p);
 
 // How far `p` is from the nearest face of any wall of the house or the tower, in plan, or of
 // any floor or ceiling, in height, each taken whole -- openings, ends and storeys ignored, so it

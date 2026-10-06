@@ -27,12 +27,12 @@ static const float TUBE_COLOUR[3] = {0.80f, 1.0f, 0.84f};
 #define FLASHLIGHT_CANDELA 900.0f
 
 /*
- * The hall's one light: a bare 25 W bulb on its flex, near the kitchen door,
+ * The hall's lantern: a 25 W bulb behind frosted glass, near the kitchen door,
  * so the clock opposite the door reads from the doorway and the hall stays
  * dim. Warm, the way a filament is beside a fluorescent tube.
  */
-// Opposite the clock, short of the arch into the great hall.
-static const vec3 BULB_AT = {-0.75f, CEIL_Y - 0.5f, 13.15f};
+// Opposite the clock, short of the cased opening halfway down the hall.
+static const vec3 BULB_AT = {-0.75f, CEIL_Y - 0.4f, 13.15f};
 #define BULB_CANDELA 30.0f
 
 typedef struct Tube {
@@ -159,24 +159,35 @@ static void tube_fixture(Kit* kit, const Tube* t) {
     kit_box(kit, MAT_STEEL, centre, half, 0.0f, false);
 }
 
-// The bulb: its flex, a black socket, and the frosted glass hanging from it, lit by a point
-// light inside. Its shadow is cached (spec 13.16), with a near plane past the glass it hangs
-// in -- which would otherwise shadow everything -- and softened by the glass, which is what
-// glows: a sphere its size. The clock's pendulum and hands swing their shadows with them.
-#define BULB_SHADOW_NEAR  0.045f
+// The pendant lantern (spec 13.25, after the hall in P.T.): a chain from a ceiling rose to an
+// iron cage of four frosted panes under a pyramid cap, a bulb's point light inside. Its shadow
+// is cached (spec 13.16), with a near plane past the glass round the bulb -- which would
+// otherwise shadow everything -- and softened by the bulb's size. The clock's pendulum and
+// hands swing their shadows with them.
+#define LANTERN_R         0.09f // half the cage's width
+#define LANTERN_H         0.3f
+#define BULB_SHADOW_NEAR  (LANTERN_R + 0.03f) // past the panes; the cage's corner posts still cast
 #define BULB_GLASS_RADIUS 0.03f
 static void hall_bulb(Kit* kit, Scene* scene) {
     const float x = BULB_AT[0], y = BULB_AT[1], z = BULB_AT[2];
-    kit_frame_pipe(kit, &KIT_WORLD, MAT_BLACK, (vec3[]){{x, CEIL_Y, z}, {x, y + 0.08f, z}}, 2,
-                   0.003f, 6);
-    const vec2 socket[] = {
-        {0.0f, 0.0f}, {0.014f, 0.0f}, {0.014f, 0.04f}, {0.008f, 0.05f}, {0.0f, 0.05f}};
-    kit_frame_lathe(kit, &KIT_WORLD, MAT_BLACK, x, z, y + 0.03f, socket,
-                    (int)(sizeof(socket) / sizeof(socket[0])), 12);
-    const vec2 glass[] = {{0.0f, 0.0f},    {0.012f, 0.004f}, {0.025f, 0.018f}, {0.03f, 0.035f},
-                          {0.026f, 0.05f}, {0.014f, 0.062f}, {0.012f, 0.075f}, {0.0f, 0.075f}};
-    kit_frame_lathe(kit, &KIT_WORLD, MAT_BULB, x, z, y - 0.045f, glass,
-                    (int)(sizeof(glass) / sizeof(glass[0])), 16);
+    const float top = y + 0.5f * LANTERN_H, bottom = y - 0.5f * LANTERN_H;
+    const vec2 rose[] = {{0.0f, 0.0f}, {0.06f, 0.0f}, {0.05f, -0.02f}, {0.0f, -0.025f}};
+    kit_frame_lathe(kit, &KIT_WORLD, MAT_IRON, x, z, CEIL_Y, rose,
+                    (int)(sizeof(rose) / sizeof(rose[0])), 12);
+    kit_frame_pipe(kit, &KIT_WORLD, MAT_IRON, (vec3[]){{x, CEIL_Y, z}, {x, top + 0.09f, z}}, 2,
+                   0.006f, 6);
+    const vec2 cap[] = {{0.0f, 0.0f}, {LANTERN_R + 0.03f, 0.0f}, {0.02f, 0.08f}, {0.0f, 0.09f}};
+    kit_frame_lathe(kit, &KIT_WORLD, MAT_IRON, x, z, top, cap, (int)(sizeof(cap) / sizeof(cap[0])),
+                    4);
+    for (int i = 0; i < 4; i++) {
+        const float dx = (i & 1) ? LANTERN_R : -LANTERN_R, dz = (i & 2) ? LANTERN_R : -LANTERN_R;
+        kit_box(kit, MAT_IRON, (vec3){x + dx, y, z + dz}, (vec3){0.008f, 0.5f * LANTERN_H, 0.008f},
+                0.0f, false);
+    }
+    kit_box(kit, MAT_IRON, (vec3){x, bottom - 0.01f, z},
+            (vec3){LANTERN_R + 0.015f, 0.012f, LANTERN_R + 0.015f}, 0.0f, false);
+    kit_box(kit, MAT_FROSTED, (vec3){x, y, z},
+            (vec3){LANTERN_R - 0.005f, 0.5f * LANTERN_H - 0.01f, LANTERN_R - 0.005f}, 0.0f, false);
     LightDesc desc = {.name = "hall_bulb",
                       .type = LIGHT_POINT,
                       .position = {x, y, z},

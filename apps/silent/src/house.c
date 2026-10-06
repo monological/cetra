@@ -19,17 +19,6 @@
 #define EAVE_OVERHANG 0.45f
 #define RAKE_OVERHANG 0.4f
 
-/*
- * The skirt roof across the front at the upper floor, PENT_PITCH a metre: a deep one over the
- * porch, and a strip past it over the kitchen window, shallow enough that the wind still drives
- * the rain onto the window's lower half.
- */
-#define PENT_Y        3.3f // where it meets the wall
-#define PENT_PITCH    0.47f
-#define PENT_DEPTH    0.45f
-#define PORCH_ROOF_X1 0.9f
-#define PENT_THICK    0.08f
-
 // The front and west walls stop where they meet the tower's faces.
 #define FRONT_FROM (TOWER_X + TOWER_APOTHEM)
 #define WEST_FROM  (TOWER_Z + TOWER_APOTHEM)
@@ -133,12 +122,11 @@ static void main_roof(Kit* kit) {
 }
 
 /*
- * A gutter hung under the pent strip's edge, which is `edge_y` high at z = `fascia`, from x0
- * to x1: a channel open at the top, and a downpipe at the east end that drops to the wall and
- * down it to a shoe kicked out over the yard. It leaks at a joint by the porch, over the
- * kitchen window where it sags, and from the shoe.
+ * A channel open at the top, and a downpipe at the east end that drops to the wall and down it
+ * to a shoe kicked out over the yard. It leaks at a joint by the porch, over the kitchen window
+ * where it sags, and from the shoe.
  */
-static void gutter(Kit* kit, float x0, float x1, float edge_y, float fascia) {
+void house_front_gutter(Kit* kit, float x0, float x1, float edge_y, float fascia) {
     const KitFrame* w = &KIT_WORLD;
     const float bottom = edge_y - 0.11f, lip = edge_y, lip_z = fascia - 0.13f;
     kit_frame_box(kit, w, MAT_TRIM, x0, x1, bottom, bottom + GUTTER_SHEET, lip_z, fascia, false);
@@ -215,8 +203,8 @@ static void pent_roof(Kit* kit) {
                             -posts[i]);
     kit_drip_run(kit, &KIT_WORLD, (vec3){tower_face + 0.1f, porch_under, porch_edge},
                  (vec3){PORCH_ROOF_X1 - 0.05f, porch_under, porch_edge}, PORCH_DRIPS_PER_M, 0.0f);
-    gutter(kit, PORCH_ROOF_X1 + 0.05f, x_end - 0.05f, y0 + PENT_PITCH * strip_edge - PENT_THICK,
-           strip_edge);
+    house_front_gutter(kit, PORCH_ROOF_X1 + 0.05f, x_end - 0.05f,
+                       y0 + PENT_PITCH * strip_edge - PENT_THICK, strip_edge);
 }
 
 // A pane of `glass` in opening `i` of the axis-aligned wall `w`.
@@ -616,11 +604,6 @@ float house_clearance(const vec3 p) {
     for (int i = 0; i < KIT_COUNT(SLABS); i++)
         d = fminf(d, fmaxf(SLABS[i][0] - p[1], p[1] - SLABS[i][1]));
     return d;
-}
-
-float house_outside_distance_world(const vec3 p) {
-    const vec3 local = {p[0] - MANSION_X, p[1] - MANSION_Y, p[2] - MANSION_Z};
-    return fminf(house_outside_distance(p), house_outside_distance(local));
 }
 
 float house_outside_distance(const vec3 p) {
