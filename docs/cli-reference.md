@@ -353,6 +353,12 @@ up to 64 probes and 64 lights),
 idiom, and it exercises BOTH halves of the road path in one stroke: the segment block re-uploads
 and the composite cache's by-value key goes stale. A road is authored only in a `.cscn`, so this
 is the one headless way to change one after the first bake),
+`--material-at <frame> <material> <key> <value>` (spec 13.26 — set one parameter of every material
+of that name on a frame, a number or an enum label, as a `.cscn` sets it; repeatable, up to 8. Four
+words rather than `frame:value`, since a label may hold a space ("vegetation branch"). A material
+field is a plain write that changes nothing in the graph, so this is the headless way to change one
+after something has kept what it decided. A frame that is not a number, a value past an enum's
+labels, and a material the scene does not have are each refused by name rather than run as a no-op),
 `--pointer-script <path>` / `--trace-camera` (spec 12.19 — replay a MOUSE from a text file, and
 print the pose the frame draws from. The pointer script is `--pad-script`'s grammar through the
 same parser: one line per frame or `from-to` range, `#` comments, the last matching line winning,
@@ -517,16 +523,14 @@ writes its own body into its light each frame. Instruments:
 - **`--node-swing <node> <m>`:** swings a named node along x by up to m metres once a second, a
   caster that moves under a cached light.
 - **`--tile-stores <n>`:** how many store cells faces that see a mover may keep their still casters
-  in (spec 13.26; default 64, on top of the budget). 0 draws every such face whole each frame, the
-  path the pool replaced, and says so by name.
-- **`--material-at <frame> <material> <key> <value>`:** sets one material parameter on a frame, a
-  number or an enum label (repeatable, up to 8): a material changed with nothing in the graph
-  changing.
+  in (spec 13.26; default and at most 64, on top of the budget). 0 draws every such face whole
+  each frame, the path the pool replaced, and says so by name.
 
 **A swaying material in a cached shadow** (spec 13.26). A material with a `windResponse` moves its
 kept faces only under a scene `wind` that can move it. `"cachedShadowWind": "rest"` keeps it at its
 rest pose in them -- Unreal's "Rigid" -- while the camera and the other shadow maps keep the sway;
-the default `"sway"` redraws every face its sway reaches every frame.
+the default `"sway"` redraws every face its sway reaches every frame. `--material-at` (below) is how
+a run changes it mid-way.
 
 `tile_core_fixture.cscn` (from `gen_tile_core_fixture.py`) is a flame-sized light just past a
 candle-sized rim over a wall; render it with `--ortho 0.8 --tonemap linear` and the full shadow's
@@ -1010,9 +1014,9 @@ at home the mansion's candles do not cast, and up the drive the home's lamps do 
 - **`--tile-views <n>`:** every cached light from n views over its body rather than eight. At 1,
   harder, darker pools under the candlesticks.
 - **`--tiles-probe`:** the tiles and each light's block, at exit.
-- **`--tile-stores <n>`:** store cells for faces that see a mover (default 64); 0 draws each such
-  face whole, every frame. The dead trees on the drive are held at rest in these shadows (spec
-  13.26), so only casters that move under their nodes or pose are drawn over a copy.
+- **`--tile-stores <n>`:** store cells for faces that see a mover (default and at most 64); 0 draws
+  each such face whole, every frame. The dead trees on the drive are held at rest in these shadows
+  (spec 13.26), so only casters that move under their nodes or pose are drawn over a copy.
 - **`--profiler`:** per-pass timing and submission counts, at exit.
 
 Pinned views of them, with `-W 960 -H 540`:

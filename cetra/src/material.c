@@ -213,6 +213,14 @@ int material_param_components(const MaterialParam* param) {
     return 0;
 }
 
+int material_param_enum_value(const MaterialParam* param, const char* label) {
+    for (int e = 0; param && label && param->enum_labels && e < param->enum_count; e++) {
+        if (strcmp(param->enum_labels[e], label) == 0)
+            return e;
+    }
+    return -1;
+}
+
 void material_param_get(const Material* material, const MaterialParam* param, float* values) {
     if (!material || !param || !values || param->type == MATERIAL_PARAM_TEXTURE)
         return;

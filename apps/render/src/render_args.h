@@ -25,7 +25,7 @@
 #define RENDER_CAM_AT_MAX      16
 #define RENDER_MATERIAL_AT_MAX 8
 
-// --material-at: one material parameter set by name on a frame, as the editor's control sets it.
+// --material-at: one parameter of every material of a name, set on a frame.
 typedef struct RenderMaterialAt {
     int frame;
     const char* material;
@@ -412,8 +412,7 @@ typedef struct {
     int cam_at_count;
     int cam_at_frame[RENDER_CAM_AT_MAX];
     float cam_at[RENDER_CAM_AT_MAX][6]; // eye xyz, target xyz
-    // Diagnostic (--material-at, repeatable): a material changed mid-run with nothing in the
-    // graph changing, which is what a kept shadow face must notice (spec 13.26).
+    // Diagnostic (--material-at, repeatable): material parameters set by name mid-run.
     int material_at_count;
     RenderMaterialAt material_at[RENDER_MATERIAL_AT_MAX];
     // Finishing grade (-1 = keep engine default; >=0 enables + sets)

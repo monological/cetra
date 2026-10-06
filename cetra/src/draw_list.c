@@ -122,13 +122,9 @@ static void classify(const Mesh* mesh, const Wind* wind, uint8_t* lane, uint8_t*
     bool still = rigid && mat->wind_response == 0.0f;
     bool occluder = mat->occluder && !transmissive && !blend && !masked && still;
 
-    // Still as far as a kept shadow face is concerned (spec 13.26). A material's wind moves it
-    // only when this scene's wind can displace it at all -- a response under no wind, or under a
-    // wind of no strength, sways nothing, where asking the material alone redrew every face it
-    // reached on every frame. And a material that sways may still be KEPT at rest, which the
-    // kept faces then draw with the wind off.
-    bool sways = wind_max_offset(wind, mat->wind_response, mat->wind_mode, mesh->wind_flex_max,
-                                 mesh->wind_leaf_max) > 0.0f;
+    // Still as far as a kept shadow face is concerned (spec 13.26): rigid, and either displaced
+    // by nothing this scene's wind can do, or held at rest by its material.
+    bool sways = rigid && mat->wind_response > 0.0f && wind_mesh_max_offset(wind, mesh) > 0.0f;
     bool kept_still = rigid && (!sways || mat->cached_shadow_wind == CACHED_SHADOW_WIND_REST);
 
     *flags = 0;
@@ -417,9 +413,7 @@ bool draw_item_bounds(const DrawItem* item, const CullView* view, AABB* out) {
     //
     // That the margin really is one is checked by --wind-bound-probe, which
     // drives windOffset itself and compares what it measures against this.
-    float margin =
-        wind_max_offset(view->wind, mesh->material->wind_response, mesh->material->wind_mode,
-                        mesh->wind_flex_max, mesh->wind_leaf_max);
+    float margin = wind_mesh_max_offset(view->wind, mesh);
     // The CDLOD morph is the second displacer in object_position.glsl and needs
     // the same treatment. Its bound is a measurement rather than an envelope --
     // the morph is a lerp between two stored positions, so the largest

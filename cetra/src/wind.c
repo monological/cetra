@@ -62,11 +62,6 @@ void wind_set_name(Wind* wind, const char* name) {
     wind->name = safe_strdup(name);
 }
 
-void wind_upload_strength(const Wind* wind, bool rest, UniformManager* u) {
-    if (u)
-        uniform_set_float(u, "uWindStrength", wind && !rest ? wind->strength : 0.0f);
-}
-
 void wind_upload_to_program(const Wind* wind, const vec3 world_origin, UniformManager* u) {
     if (!u)
         return;
@@ -82,10 +77,12 @@ void wind_upload_to_program(const Wind* wind, const vec3 world_origin, UniformMa
     uniform_set_vec3(u, "uWorldOrigin", world_origin ? (const float*)world_origin : GLM_VEC3_ZERO);
     // No wind (or none on this scene): strength 0 makes every wind-aware shader
     // early-out, so the scene renders exactly as it did before the feature.
-    wind_upload_strength(wind, false, u);
-    if (!wind)
+    if (!wind) {
+        uniform_set_float(u, "uWindStrength", 0.0f);
         return;
+    }
     uniform_set_vec3(u, "uWindDir", (const float*)wind->direction);
+    uniform_set_float(u, "uWindStrength", wind->strength);
     uniform_set_float(u, "uWindSpeed", wind->speed);
     uniform_set_float(u, "uWindGustFreq", wind->gust_frequency);
     uniform_set_float(u, "uWindGustAmount", wind->gust_amount);
@@ -140,6 +137,11 @@ float wind_max_offset(const Wind* wind, float response, int mode, float flex_max
         bound += amp * leaf_max * WIND_LEAF_DIR_MAX * turb;
     }
     return bound;
+}
+
+float wind_mesh_max_offset(const Wind* wind, const Mesh* mesh) {
+    return wind_max_offset(wind, mesh->material->wind_response, mesh->material->wind_mode,
+                           mesh->wind_flex_max, mesh->wind_leaf_max);
 }
 
 // --- the bound's instrument (spec 11.54) ------------------------------------
@@ -378,8 +380,7 @@ static void _wind_probe_row(WindProbeRig* rig, const char* kind, const Wind* win
         _wind_probe_mesh(rig, mesh, origins);
     _wind_rig_flush(rig);
 
-    float bound = wind_max_offset(wind, mat->wind_response, mat->wind_mode, mesh->wind_flex_max,
-                                  mesh->wind_leaf_max);
+    float bound = wind_mesh_max_offset(wind, mesh);
     float max_abs = fmaxf(rig->best_abs[0], fmaxf(rig->best_abs[1], rig->best_abs[2]));
     printf("wind-bound-probe %s mesh=%s mode=%d response=%.4f flex_max=%.4f leaf_max=%.4f "
            "max_abs=%.6f max_l2=%.6f bound=%.6f abs_ratio=%.4f l2_ratio=%.4f\n",

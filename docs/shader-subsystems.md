@@ -486,33 +486,38 @@ movers. A 0 px match against the scene never moved, at the swing's rest frame, i
 store was a whole block of its light's own size, taken from the same budget after the lights
 had theirs, so sixteen bodied lights -- silent's -- filled the budget and left no store at all,
 and every face that saw a mover was drawn whole, every caster in it, every frame. A cell goes to
-the nearest light's faces first and a face keeps the one it holds; a cell moves only to a light
-more than 2 m nearer. A face left without one is drawn whole, which is said once by name, and
-`--tile-stores 0` is that path for comparison. `tiles-store` holds the copy and the whole draw
-to the same picture.
+a face DRAWN this frame, nearest light first: a face out of the camera's view is not drawn, so a
+cell held there by distance alone starved one on screen. A face keeps its cell while nothing
+moves in it, so a mover coming back finds the copy still good, and gives it up only to a drawn
+face that needs one -- an idle cell first, the farthest light's, then a cell of a light more than
+2 m farther. A face left without one is drawn whole, which is said by name each time the pool
+runs out, and `--tile-stores 0` is that path for comparison. `tiles-store` holds the copy and the
+whole draw to the same picture.
 
 **A pose is a mover on every frame** (spec 13.18). A skinned, swaying or morphing surface moves
 without its node moving, so a face drawn once would freeze it. It is in no store and no face
 drawn whole and kept: it is drawn only over a copy, into the faces its posed bounds reach this
 frame, which keeps it out of every face that is not drawn again the next. A face is drawn over
 its copy until a frame in which no moving caster reaches it, and is kept from then on, so a cat
-walking past a candle costs that candle's faces only while it is in them -- and a cell whose
-face no longer sees anything moving is given back.
+walking past a candle costs that candle's faces only while it is in them.
 
 **A sway is a mover only when the scene's wind can move it** (spec 13.26), which classification
 asks of `wind_max_offset`: a wind response under no wind moved nothing and still redrew every
 face it reached. **And a material may keep its sway out of the kept faces**: with
-`cachedShadowWind: "rest"` the caster is still to them, and the kept sets are drawn with the
-wind's strength at 0, so each holds it at its rest pose, while the camera, the cascades and the
+`cachedShadowWind: "rest"` the caster is still to them, and every kept set draws it with a wind
+response of 0, so each face holds it at its rest pose, while the camera, the cascades and the
 per-frame layers keep the sway -- Unreal's "Rigid" cache behaviour. Rest is one end of the lean,
-not its middle, so a swaying caster sees its own shadow off by at most its sway; at silent's
-trees that is under a millimetre and moves 0 px. Two things about it are easy to get backwards.
-The strength goes back to the scene's straight after the kept walk, because the transmittance
-map's nearest-depth step draws through the same program without uploading it again, and would
-draw every translucent caster unswayed. And what the kept faces hold is digested every frame
-(`tiles_kept_digest`): a material moved into or out of them -- this row, its wind, its opacity,
-its shadow role -- with the graph unchanged redraws every face, where a face drawn before would
-keep the caster where it stood or leave it out of a store copy for good (`tiles-rest-toggle`).
+not its middle, so a swaying caster sees its own shadow off by at most its sway; silent's trees,
+held at rest or not, move 0 px at the street end and from the drive, and 4 and 8 px at one code
+in the study and dining room. Two things about it are easy to get backwards. The response is set
+per DRAW, not with the material's block, which is uploaded once across every set of the depth
+pass: a rest material uploaded for a cascade and then drawn into a kept face would keep its sway
+there. And the kept faces compare the draw list with the one they last saw, item by item
+(`tiles_mark_changed_looks`): a material that moves a caster into or out of them -- this row,
+its wind, its opacity, its shadow role, its cut-out -- changes nothing in the graph, and a face
+drawn before would keep the caster where it stood or leave it out of a store copy for good. Such
+a caster is drawn again where it stands and where it stood; only a change to which items the
+list holds draws every face again (`tiles-rest-toggle`).
 
 **What else rendered a plausible frame on the way:**
 - **The body a diameter too long**: the fire wrote the whole spine as `source_length`, and the caps

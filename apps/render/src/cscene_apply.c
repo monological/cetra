@@ -926,13 +926,7 @@ void apply_cscene_material_overrides(Scene* scene, const CetraSceneDesc* cscn) {
             // windMode as 2 and emissiveLight as 1, and nobody reading the
             // fixture a year later knows what either number meant.
             if (slot && slot->type == MATERIAL_PARAM_INT && slot->enum_labels) {
-                int value = -1;
-                for (int e = 0; e < slot->enum_count; e++) {
-                    if (strcmp(slot->enum_labels[e], mo->textures[t].path) == 0) {
-                        value = e;
-                        break;
-                    }
-                }
+                const int value = material_param_enum_value(slot, mo->textures[t].path);
                 if (value < 0) {
                     fprintf(stderr, "Warning: material '%s': key '%s' has no value '%s'\n",
                             mo->material, mo->textures[t].key, mo->textures[t].path);

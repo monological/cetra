@@ -78,7 +78,7 @@ typedef enum MaterialRainBeads {
 // How a swaying material stands in a cached shadow (spec 13.26). Zero sways, so a calloc'd
 // material keeps the behaviour every scene had before the choice existed.
 typedef enum MaterialCachedShadowWind {
-    CACHED_SHADOW_WIND_SWAY = 0, // redrawn into a kept face every frame its sway reaches
+    CACHED_SHADOW_WIND_SWAY = 0, // a kept face follows its sway
     CACHED_SHADOW_WIND_REST,     // kept at rest, as an unmoving caster is (Unreal's "Rigid")
 } MaterialCachedShadowWind;
 
@@ -530,6 +530,9 @@ const MaterialParam* material_param_find(const char* key);
 // How many floats a parameter reads and writes: 3 for COLOR and VEC3, one for the other value
 // types, and 0 for TEXTURE, which is not addressable this way.
 int material_param_components(const MaterialParam* param);
+
+// The value an enum row gives one of its labels; -1 when the row has no such label, or no labels.
+int material_param_enum_value(const MaterialParam* param, const char* label);
 
 // Read/write a parameter generically, as material_param_components floats.
 void material_param_get(const Material* material, const MaterialParam* param, float* values);

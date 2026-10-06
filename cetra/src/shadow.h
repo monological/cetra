@@ -71,10 +71,9 @@ _Static_assert(SHADOW_TILE_MARK >= MAX_PUNCTUAL_SHADOW_LAYERS,
 _Static_assert(6 * SHADOW_TILE_VIEWS <= 64, "a kept block's faces must fit one 64-bit mask");
 // The store pool (spec 13.26): a cell for each face drawn over a copy of its still casters, ON
 // TOP of the lights' budget. Inside it, the nearest lights took every cell first and a store had
-// none left, so a full house of candles drew every such face whole. Its own block in the table.
+// none left, so a full house of candles drew every such face whole.
 #define SHADOW_TILE_STORE_CELLS 64
 _Static_assert(SHADOW_TILE_STORE_CELLS <= 64, "the pool's free cells must fit one 64-bit mask");
-#define SHADOW_TILE_TABLE (SHADOW_TILE_MAX_BLOCKS + 1u)
 // The most layers the tiles can take, which is the budget and the pool at the smallest edge; a
 // larger edge holds the same tiles in fewer.
 #define PUNCTUAL_TILE_MAX_LAYERS                                            \
@@ -195,14 +194,12 @@ struct Light;
 // records is what the tiles hold, so the pass can tell a face it may keep from one it must
 // draw again. Faces are bits of the masks, view by view.
 //
-// A block with no light is free, or the STORE POOL: cells that faces seeing a caster which moves
-// -- a node moved lately, or a pose -- keep their still casters in, one cell a face. Each such
-// face is drawn every frame as a copy of its store cell with the movers drawn over it, until it
-// is drawn with none in it, so a swinging pendulum costs its own draws a frame rather than the
-// room's.
+// A face that sees a caster which moves -- a node moved lately, or a pose -- keeps its still
+// casters in a cell of the STORE POOL, and is drawn every frame as a copy of that cell with the
+// movers drawn over it, until it is drawn with none in it: a swinging pendulum costs its own
+// draws a frame rather than the room's.
 typedef struct ShadowTileBlock {
-    struct Light* light; // NULL = free or the store pool; published to when whole
-    bool is_store;       // the store pool, so not free though it has no light
+    struct Light* light; // NULL = free; published to when whole
     int first;           // its first cell, counted from the region's base
     int cells;           // cells it owns, which a later light needing no more may reuse
     int views;           // views drawn, 0 until first drawn
@@ -215,12 +212,24 @@ typedef struct ShadowTileBlock {
     float far_plane;
     unsigned generation; // the region's when drawn; any other means the tiles were lost
     uint64_t valid;      // faces drawn
-    uint64_t dynamic;    // faces drawn over a copy of the store's until drawn with no mover in them
+    uint64_t dynamic;    // faces drawn every frame, movers and all, until drawn with none in them
     uint64_t touched;    // faces a moving caster's box reached this frame
     uint64_t stored;     // faces whose store cell holds their still casters
-    // Each face's cell of the store pool, -1 for none
+    // Each face's cell of the store pool, -1 for none. A face keeps its cell while it is not
+    // dynamic, so a mover coming back finds the copy still there.
     int8_t store_cell[6 * SHADOW_TILE_VIEWS];
 } ShadowTileBlock;
+
+// What the kept faces drew a draw-list item by, at its position in the list (spec 13.26): which
+// item it was, its lane and flags, and for an alpha-tested caster the cut-out it was drawn
+// through. A material is plain writes, so nothing else says when one of these changes.
+typedef struct ShadowTileSeen {
+    const struct Mesh* mesh;
+    const struct SceneNode* node;
+    uint64_t cutout; // an alpha-tested caster's cutoff, UV transform and albedo, hashed; else 0
+    uint8_t lane;
+    uint8_t flags;
+} ShadowTileSeen;
 
 // A cached light in the frame's ranking.
 typedef struct ShadowTileRank {
@@ -399,17 +408,19 @@ typedef struct ShadowSystem {
     int tile_base_layer;
     int tile_layers;
     unsigned tile_generation;
-    int tile_held_base;        // the base the array's tiles are laid out at; a rebuild moves them
-    uint64_t tile_epoch;       // the scene graph's when the kept faces were last checked against it
-    uint64_t tile_kept_digest; // which casters the kept faces held then, and which still
-    ShadowTileBlock tile_blocks[SHADOW_TILE_TABLE];
-    int tile_block_count;     // blocks in use or freed, so the high-water mark of the region
-    int tile_store_pool;      // the store pool's block, -1 until a face first needs a store
-    uint64_t tile_store_free; // the pool's cells no face holds, a bit each
-    int tile_faces_drawn;     // this frame, kept faces filled
-    int mover_faces_drawn;    // this frame, kept faces drawn again for the movers in them
-    int mover_faces_copied;   // ...of which over a copy of their store cell
-    int mover_faces_whole;    // ...and whole, still casters and all, for want of one
+    int tile_held_base;  // the base the array's tiles are laid out at; a rebuild moves them
+    uint64_t tile_epoch; // the scene graph's when the kept faces were last checked against it
+    // The draw list as the kept faces last saw it, item by item.
+    ShadowTileSeen* tile_seen;
+    size_t tile_seen_count;
+    size_t tile_seen_capacity;
+    int tile_seen_changes; // items whose kept look changed since load, each redrawn where it is
+    ShadowTileBlock tile_blocks[SHADOW_TILE_MAX_BLOCKS];
+    int tile_block_count;   // blocks in use or freed, so the high-water mark of the region
+    int tile_store_first;   // the store pool's first cell, -1 until a face first needs one
+    int tile_faces_drawn;   // this frame, kept faces filled
+    int mover_faces_copied; // this frame, faces seeing a mover drawn over a copy of their cell
+    int mover_faces_whole;  // ...and whole, still casters and all, for want of one
     const struct SceneNode* tile_movers[SHADOW_TILE_MAX_MOVERS];
     uint64_t tile_mover_moved[SHADOW_TILE_MAX_MOVERS]; // the tile frame each last moved
     int tile_mover_count;

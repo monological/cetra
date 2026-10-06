@@ -964,7 +964,9 @@ static void print_usage(const char* prog) {
     printf("      --tile-views N      Shade every cached light from N views over its body\n"
            "                          rather than 8; 1 is its centre alone\n");
     printf("      --tile-stores N     Store cells for faces drawn over a copy of their still\n"
-           "                          casters (default 64); 0 draws every such face whole\n");
+           "                          casters (default and at most %d); 0 draws every such\n"
+           "                          face whole\n",
+           SHADOW_TILE_STORE_CELLS);
     printf("      --tiles-probe       The cached shadow tiles and each light's block, at exit\n");
     printf("      --no-cat            Without the cat\n");
     printf("      --cat-fur RRGGBB    The cat's coat, as sRGB hex (default 262424)\n");
