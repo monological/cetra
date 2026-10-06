@@ -28725,6 +28725,368 @@ def run_shadow_tiles_gate(workdir):
     return failures
 
 
+# Lighting data that streams (spec 13.24): ten rooms in a row, each with its own GI volume, two
+# reflection probes and two bodied cached lights -- more of each than the resident caps hold.
+STREAM_FIXTURE = "stream_rooms.cscn"
+STREAM_W, STREAM_H = 400, 300
+# The walk: room 0 to room 9 on this frame, and back on the next.
+STREAM_AWAY_FRAME = 20
+STREAM_BACK_FRAME = 70
+STREAM_WALK_FRAMES = 121
+# Rows of --stream-probe: in room 0, in room 9 settled, in room 0 again.
+STREAM_STOPS = (10, 60, 120)
+# A streamed item placed in a different slot from the one it would have had samples its texels
+# at UVs rounded differently, so two runs with different histories agree to a code, not a bit.
+# The round trip is exact (home slots); the walk against a run resident from frame 0 is this.
+STREAM_EQUAL_PEAK = 1
+STREAM_EQUAL_FRACTION = 0.005
+# Classification has to bring the misaligned twin at least this much nearer its aligned twin,
+# in mean frame grey, than the same grid with classification off.
+STREAM_CLASSIFY_RATIO = 0.5
+STREAM_CLASSIFY_MIN = 0.5  # grey codes the unclassified grid must be off by, or nothing leaks
+STREAM_PROP_ROOM = 3
+STREAM_GI_SLOTS = 8
+STREAM_PROBE_SLOTS = 16
+STREAM_TILE_LIGHTS = 16  # bodied lights the cached tiles hold: 768 cells of 48
+
+
+def _stream_rooms():
+    """Each room's centre x, read from the fixture's own GI volumes."""
+    with open(asset(STREAM_FIXTURE)) as f:
+        d = json.load(f)
+    return [0.5 * (v["boxMin"][0] + v["boxMax"][0]) for v in d["giVolumes"]], d
+
+
+def _stream_pose(x):
+    return (x, 1.6, 1.8), (x, 1.0, -2.0)
+
+
+def _stream_cam_at(frame, x):
+    eye, target = _stream_pose(x)
+    return ["--cam-at", f"{frame}:" + ",".join(f"{c:g}" for c in eye + target)]
+
+
+def _stream_cam_eye(x):
+    eye, target = _stream_pose(x)
+    return ["--cam-eye", ",".join(f"{c:g}" for c in eye),
+            "--cam-target", ",".join(f"{c:g}" for c in target)]
+
+
+def _stream_run(workdir, tag, extra, frames, mutate=None, every=None):
+    """Render the fixture. Returns (frames by number, output) -- frames read from
+    --screenshot-every when `every` is set, else the last one alone -- or (None, error)."""
+    src = asset(STREAM_FIXTURE)
+    scene = src
+    if mutate is not None:
+        scene = os.path.join(workdir, f"stream_{tag}.cscn")
+        cscn_copy(src, scene, mutate)
+    out = os.path.join(workdir, f"stream_{tag}.ppm")
+    cmd = [RENDER, "-m", scene, "-x", "-f", str(frames), "-W", str(STREAM_W), "-H",
+           str(STREAM_H), "-S", out] + extra
+    if every:
+        cmd += ["--screenshot-every", str(every)]
+    r = _run(cmd, capture_output=True, text=True)
+    text = r.stdout + r.stderr
+    if r.returncode != 0 or not os.path.exists(out):
+        return None, text
+    shots = {frames: _read_ppm(out)}
+    if every:
+        stem = out[:-4]
+        for n in range(every, frames, every):
+            path = f"{stem}_{n:06d}.ppm"
+            if os.path.exists(path):
+                shots[n] = _read_ppm(path)
+    return shots, text
+
+
+def _stream_rows(text):
+    """--stream-probe's rows by frame: the resident slots and every item's line."""
+    rows = {}
+    cur = None
+    for line in text.splitlines():
+        m = re.match(r"stream (gi|probes|tiles) frame=(\d+)", line)
+        if m:
+            cur = rows.setdefault(int(m.group(2)), {"gi": {}, "probe": {}, "tile": []})
+            if m.group(1) != "tiles":
+                slots = re.search(r"slots=([-\d,]+)", line).group(1)
+                cur[m.group(1) + "_slots"] = [int(s) for s in slots.split(",")]
+            if m.group(1) == "probes":
+                cur["probe_captures"] = int(re.search(r"captures=(\d+)", line).group(1))
+            continue
+        if cur is None:
+            continue
+        m = re.match(r"stream (gi|probe) idx=(\d+) (.*)", line)
+        if m:
+            fields = dict(kv.split("=") for kv in m.group(3).split())
+            cur[m.group(1)][int(m.group(2))] = fields
+            continue
+        m = re.match(r"stream tile rank=(\d+) light=(\S+) dist=([\d.]+) block=(-?\d+) whole=(\d)",
+                     line)
+        if m:
+            cur["tile"].append((m.group(2), float(m.group(3)), m.group(5) == "1"))
+    return rows
+
+
+def _stream_diff(a, b):
+    """(pixels differing in any channel, peak difference in codes)."""
+    if a is None or b is None:
+        return None, None
+    pa, pb = a[2], b[2]
+    n, peak = 0, 0
+    for i in range(0, len(pa), 3):
+        d = max(abs(pa[i] - pb[i]), abs(pa[i + 1] - pb[i + 1]), abs(pa[i + 2] - pb[i + 2]))
+        if d:
+            n += 1
+            peak = max(peak, d)
+    return n, peak
+
+
+def _stream_nearest(boxes, eye, k):
+    """The k items nearest the eye by distance to their boxes, ties to the lower index -- the
+    residency the engine should arrive at, worked out here from the fixture rather than read
+    back from the run it is checking."""
+    def dist(box):
+        lo, hi = box
+        return math.sqrt(sum(max(lo[c] - eye[c], eye[c] - hi[c], 0.0) ** 2 for c in range(3)))
+    order = sorted(range(len(boxes)), key=lambda i: (dist(boxes[i]), i))
+    return set(order[:k])
+
+
+def _stream_patch_mean(shot, x, y, half=4):
+    """Mean 8-bit RGB of a square patch centred on a pixel."""
+    w, h, pix = shot
+    acc = [0.0, 0.0, 0.0]
+    n = 0
+    for dy in range(-half, half + 1):
+        for dx in range(-half, half + 1):
+            px, py = int(x) + dx, int(y) + dy
+            if 0 <= px < w and 0 <= py < h:
+                i = (py * w + px) * 3
+                for c in range(3):
+                    acc[c] += pix[i + c]
+                n += 1
+    return [a / max(n, 1) for a in acc]
+
+
+def _stream_mean_grey(shot):
+    pix = shot[2]
+    return sum(pix) / len(pix)
+
+
+def run_stream_gate(workdir):
+    """Lighting data that streams: GI volumes, reflection probes and cached shadow tiles
+    resident by distance, captured once and kept (spec 13.24).
+
+      stream-equal       a room walked into renders as it does resident from frame 0: within a
+                         code on under half a percent of the frame, the walk having streamed
+      stream-once        room 0 -> room 9 -> room 0: room 0 renders the same to the bit after the
+                         round trip, its volumes and probes are uploaded and not captured again
+      stream-nearest     at three stops the resident volumes and probes are exactly the nearest
+                         eight and sixteen, worked out here from the fixture's boxes
+      stream-probes-16   probes past the eighth blend: the coverage view in a room whose probes
+                         sit past descriptor 8 IS the albedo view, and each room's floor
+                         reflects its own wall colour
+      stream-tiles       the cached shadow tiles follow the camera: the nearest sixteen bodied
+                         lights hold whole blocks at both ends of the walk and no farther one does
+      stream-classify    a grid laid with its probes in the walls lands nearer its aligned twin
+                         with classification on than off
+      stream-hidden      a capture_hidden node and a skinned mesh are absent from what the probes
+                         and the GI volume photographed: their digests match the room without them
+
+    The walk teleports, which no player does: it is the worst case for every cap at once -- all
+    of room 0's items leave and all of room 9's arrive in one frame -- and a walk can only ever
+    cross one boundary at a time.
+
+    Falsified by hand at 13.24 (see the spec): re-capturing on readmit reddens stream-once;
+    first-come ranking reddens stream-nearest and stream-tiles; the 8-bit mask reddens
+    stream-probes-16; forcing the classification flag to 1 reddens stream-classify; dropping the
+    capture skip reddens stream-hidden; letting a capture run before its lights are shadowed
+    reddens stream-equal.
+    """
+    if not os.path.exists(asset(STREAM_FIXTURE)):
+        print(f"  stream-equal SKIP  {STREAM_FIXTURE} not found")
+        return []
+    failures = []
+    rooms, desc = _stream_rooms()
+    gi_boxes = [(v["boxMin"], v["boxMax"]) for v in desc["giVolumes"]]
+    probe_boxes = [(p["boxMin"], p["boxMax"]) for p in desc["probes"]]
+    first, last = rooms[0], rooms[-1]
+
+    walk, walk_text = _stream_run(
+        workdir, "walk",
+        _stream_cam_at(STREAM_AWAY_FRAME, last) + _stream_cam_at(STREAM_BACK_FRAME, first)
+        + ["--stream-probe", "10"], STREAM_WALK_FRAMES, every=10)
+    rows = _stream_rows(walk_text) if walk else {}
+
+    # -- equal: the walk's room 9 against room 9 from the start ---------------
+    away, away_text = _stream_run(workdir, "away", _stream_cam_eye(last), STREAM_STOPS[1] + 1)
+    if walk is None or away is None:
+        print(f"  stream-equal ERROR  {(walk_text if walk is None else away_text)[-300:]}")
+        failures.append("stream-equal")
+    else:
+        n, peak = _stream_diff(walk.get(STREAM_STOPS[1]), away[STREAM_STOPS[1] + 1])
+        stop = rows.get(STREAM_STOPS[1], {})
+        streamed = (stop.get("gi", {}).get(len(rooms) - 1, {}).get("kept") == "1"
+                    and rows.get(STREAM_STOPS[0], {}).get("gi", {}).get(len(rooms) - 1, {})
+                    .get("slot") == "-1")
+        frac = n / (STREAM_W * STREAM_H) if n is not None else 1.0
+        ok = (n is not None and peak <= STREAM_EQUAL_PEAK and frac <= STREAM_EQUAL_FRACTION
+              and streamed)
+        print(f"  stream-equal {'PASS' if ok else 'FAIL'}  room 9 walked into vs resident from "
+              f"frame 0: {n} px, peak {peak} code(s) (want <= {STREAM_EQUAL_PEAK} on <= "
+              f"{STREAM_EQUAL_FRACTION:.1%}); its volume was out at frame {STREAM_STOPS[0]} and "
+              f"swept and kept by frame {STREAM_STOPS[1]}: {streamed}")
+        if not ok:
+            failures.append("stream-equal")
+
+    # -- once: the round trip ---------------------------------------------------
+    if walk is None:
+        print("  stream-once ERROR  the walk did not render")
+        failures.append("stream-once")
+    else:
+        n, peak = _stream_diff(walk.get(STREAM_STOPS[0]), walk.get(STREAM_STOPS[2]))
+        before, gone, back = (rows.get(s, {}) for s in STREAM_STOPS)
+        gi_same = all(before.get("gi", {}).get(i, {}).get("captures")
+                      == back.get("gi", {}).get(i, {}).get("captures") for i in (0, 1))
+        evicted = all(gone.get("gi", {}).get(i, {}).get("slot") == "-1" for i in (0, 1))
+        probes_same = gone.get("probe_captures") == back.get("probe_captures")
+        ok = n == 0 and gi_same and evicted and probes_same
+        print(f"  stream-once {'PASS' if ok else 'FAIL'}  room 0 before and after: {n} px "
+              f"(want 0); its volumes left residency: {evicted}, came back with no capture: "
+              f"{gi_same}; probe captures {gone.get('probe_captures')} -> "
+              f"{back.get('probe_captures')} on the way back (want equal)")
+        if not ok:
+            failures.append("stream-once")
+
+    # -- nearest: the residency the boxes say -------------------------------------
+    stops_ok, detail = bool(rows), []
+    for stop, x in zip(STREAM_STOPS, (first, last, first)):
+        row = rows.get(stop, {})
+        eye, _ = _stream_pose(x)
+        want_gi = _stream_nearest(gi_boxes, eye, STREAM_GI_SLOTS)
+        want_probe = _stream_nearest(probe_boxes, eye, STREAM_PROBE_SLOTS)
+        got_gi = {s for s in row.get("gi_slots", []) if s >= 0}
+        got_probe = {s for s in row.get("probes_slots", []) if s >= 0}
+        good = got_gi == want_gi and got_probe == want_probe
+        stops_ok = stops_ok and good
+        detail.append(f"frame {stop}: {'ok' if good else f'gi {sorted(got_gi)} probes {sorted(got_probe)}'}")
+    print(f"  stream-nearest {'PASS' if stops_ok else 'FAIL'}  the nearest "
+          f"{STREAM_GI_SLOTS} volumes and {STREAM_PROBE_SLOTS} probes resident: "
+          + "; ".join(detail))
+    if not stops_ok:
+        failures.append("stream-nearest")
+
+    # -- probes past the eighth ---------------------------------------------------
+    # The room whose probes sit at descriptor 8 and above when the camera is in it: an 8-bit
+    # mask drops exactly them.
+    probe_room = len(rooms) - 2
+    eye, target = _stream_pose(rooms[probe_room])
+    resident = sorted(_stream_nearest(probe_boxes, eye, STREAM_PROBE_SLOTS))
+    own = [resident.index(2 * probe_room), resident.index(2 * probe_room + 1)]
+    cover, cover_text = _stream_run(workdir, "cover", _stream_cam_eye(rooms[probe_room])
+                                    + ["--render-mode", "14"], 31)
+    albedo, _ = _stream_run(workdir, "albedo", _stream_cam_eye(rooms[probe_room])
+                            + ["--render-mode", "6"], 31)
+    tints = {}
+    for k in (0, 2):
+        shots, _ = _stream_run(workdir, f"tint{k}", _stream_cam_eye(rooms[k]), 31)
+        if shots:
+            project = _projector({"eye": _stream_pose(rooms[k])[0],
+                                  "target": _stream_pose(rooms[k])[1], "fovy_deg": 70.0},
+                                 STREAM_W, STREAM_H)
+            px, py = project((rooms[k], 0.0, -1.0))
+            tints[k] = _stream_patch_mean(shots[31], px, py)
+    if cover is None or albedo is None or len(tints) != 2:
+        print(f"  stream-probes-16 ERROR  {cover_text[-300:]}")
+        failures.append("stream-probes-16")
+    else:
+        project = _projector({"eye": eye, "target": target, "fovy_deg": 70.0}, STREAM_W,
+                             STREAM_H)
+        same = []
+        for fx in (rooms[probe_room] - 1.0, rooms[probe_room] + 1.0):
+            px, py = project((fx, 0.0, -1.0))
+            same.append(_stream_patch_mean(cover[31], px, py)
+                        == _stream_patch_mean(albedo[31], px, py))
+        # Room 0's walls are red and room 2's blue: each floor's reflection leans its own way.
+        red, blue = tints[0], tints[2]
+        own_colour = red[0] > red[2] and blue[2] > blue[0]
+        ok = all(same) and min(own) >= 8 and own_colour
+        print(f"  stream-probes-16 {'PASS' if ok else 'FAIL'}  room {probe_room}'s probes at "
+              f"descriptors {own} (want >= 8): coverage == albedo on both halves of its floor "
+              f"{same}; room 0's floor r/b {red[0]:.0f}/{red[2]:.0f}, room 2's "
+              f"{blue[0]:.0f}/{blue[2]:.0f} (each its own wall's colour: {own_colour})")
+        if not ok:
+            failures.append("stream-probes-16")
+
+    # -- tiles ----------------------------------------------------------------------
+    tile_ok, tile_detail = bool(rows), []
+    for stop in STREAM_STOPS[:2]:
+        ranked = rows.get(stop, {}).get("tile", [])
+        near = all(whole for _, _, whole in ranked[:STREAM_TILE_LIGHTS])
+        far = not any(whole for _, _, whole in ranked[STREAM_TILE_LIGHTS:])
+        good = len(ranked) > STREAM_TILE_LIGHTS and near and far
+        tile_ok = tile_ok and good
+        tile_detail.append(f"frame {stop}: nearest {STREAM_TILE_LIGHTS} whole {near}, "
+                           f"rest without {far}")
+    print(f"  stream-tiles {'PASS' if tile_ok else 'FAIL'}  " + "; ".join(tile_detail))
+    if not tile_ok:
+        failures.append("stream-tiles")
+
+    # -- classify ---------------------------------------------------------------------
+    def unclassified(d):
+        d["giVolumes"][-1]["classify"] = False
+
+    aligned, _ = _stream_run(workdir, "aligned", _stream_cam_eye(rooms[-2]), 31)
+    classified, _ = _stream_run(workdir, "classified", _stream_cam_eye(rooms[-1]), 31)
+    leaky, leaky_text = _stream_run(workdir, "leaky", _stream_cam_eye(rooms[-1]), 31,
+                                    mutate=unclassified)
+    if aligned is None or classified is None or leaky is None:
+        print(f"  stream-classify ERROR  {leaky_text[-300:]}")
+        failures.append("stream-classify")
+    else:
+        a = _stream_mean_grey(aligned[31])
+        c = _stream_mean_grey(classified[31])
+        u = _stream_mean_grey(leaky[31])
+        ok = abs(u - a) >= STREAM_CLASSIFY_MIN and abs(c - a) <= STREAM_CLASSIFY_RATIO * abs(u - a)
+        print(f"  stream-classify {'PASS' if ok else 'FAIL'}  mean grey: aligned {a:.2f}, "
+              f"misaligned classified {c:.2f}, unclassified {u:.2f} (want the classified within "
+              f"{STREAM_CLASSIFY_RATIO:g}x the unclassified's error, which is >= "
+              f"{STREAM_CLASSIFY_MIN})")
+        if not ok:
+            failures.append("stream-classify")
+
+    # -- hidden -------------------------------------------------------------------------
+    room = rooms[STREAM_PROP_ROOM]
+    probes = (2 * STREAM_PROP_ROOM, 2 * STREAM_PROP_ROOM + 1)
+    look = _stream_cam_eye(room) + ["--stream-probe", "30"]
+    gone, gone_text = _stream_run(workdir, "props_gone", look + [
+        "--remove-node", "hidden_prop", "--remove-node", "skinned_prop"], 31)
+    hidden, hidden_text = _stream_run(workdir, "props_hidden",
+                                      look + ["--capture-hide", "hidden_prop"], 31)
+    seen, seen_text = _stream_run(workdir, "props_seen", look, 31)
+    if gone is None or hidden is None or seen is None:
+        print(f"  stream-hidden ERROR  {gone_text[-300:]}")
+        failures.append("stream-hidden")
+    else:
+        def digests(text):
+            row = _stream_rows(text).get(31, {})
+            return ([row.get("probe", {}).get(i, {}).get("digest") for i in probes]
+                    + [row.get("gi", {}).get(STREAM_PROP_ROOM, {}).get("digest")])
+
+        d_gone, d_hidden, d_seen = digests(gone_text), digests(hidden_text), digests(seen_text)
+        drawn, _ = _stream_diff(gone[31], hidden[31])
+        ok = (None not in d_gone and d_hidden == d_gone and d_seen[:2] != d_gone[:2]
+              and drawn and drawn > 0)
+        print(f"  stream-hidden {'PASS' if ok else 'FAIL'}  probe and volume digests with the "
+              f"props hidden == with them removed: {d_hidden == d_gone}; with hidden_prop "
+              f"photographed they differ: {d_seen[:2] != d_gone[:2]}; the camera still draws "
+              f"both: {drawn} px")
+        if not ok:
+            failures.append("stream-hidden")
+
+    return failures
+
+
 GATE_GROUPS = [
     ("scale", "scale invariance (lights x1000, exposure /1000):", run_scale_gates),
     ("penumbra", "area shadow (analytic penumbra):", run_penumbra_gate),
@@ -28779,6 +29141,10 @@ GATE_GROUPS = [
      run_emissive_gate),
     ("probe-set", "clustered specular probes (selection, blend, tenancy; spec 11.70):",
      run_probe_set_gate),
+    # "lighting-stream" rather than "stream": --only matches by substring, and "stream" is inside
+    # "terrain-stream", which would take the terrain groups along every time.
+    ("lighting-stream", "lighting data that streams (residency, kept texels, tiles; spec 13.24):",
+     run_stream_gate),
     ("decals", "clustered decals (projection, fade, surface, masks; spec 11.73):",
      run_decal_gate),
     ("config", "the session dumped to JSON and restored from it (spec 11.71):",

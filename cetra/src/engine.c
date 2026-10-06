@@ -3178,7 +3178,8 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
             // Timed only while probes remain to bake. A converged volume is the
             // steady state, so an unconditional scope would file a 0.000 ms row
             // on nearly every frame of a run.
-            profiler_scope_begin_if(engine->profiler, gi_world_dirty(shadow_scene->gi),
+            profiler_scope_begin_if(engine->profiler,
+                                    gi_world_capture_due(shadow_scene->gi, engine, shadow_scene),
                                     "gi capture");
             gi_world_update(shadow_scene->gi, engine, shadow_scene);
             profiler_scope_end(engine->profiler);
@@ -3192,7 +3193,8 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
             probe_set_rank(probes, engine);
             // Timed only on the frame it captures, for the GI scope's reason: a set waiting on
             // the volume would file a 0.000 ms row a frame.
-            profiler_scope_begin_if(engine->profiler, probe_set_capture_due(probes, shadow_scene),
+            profiler_scope_begin_if(engine->profiler,
+                                    probe_set_capture_due(probes, engine, shadow_scene),
                                     "probe capture");
             probe_set_update(probes, engine, shadow_scene);
             profiler_scope_end(engine->profiler);

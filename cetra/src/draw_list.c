@@ -266,13 +266,15 @@ static const char* _refusal(const Mesh* mesh, const Scene* scene, const Animatio
 
 // Depth-first, children left to right, a node's meshes before its gizmo --
 // the order the two recursive walks produced between them. `inherited` is the
-// nearest ancestor's pose, which a node without one takes.
+// nearest ancestor's pose, which a node without one takes, and `hidden` whether
+// an ancestor is left out of captures.
 static bool append_node(DrawList* list, Scene* scene, SceneNode* node, const LodSelect* lod,
-                        bool gizmos, const AnimationState* inherited) {
+                        bool gizmos, const AnimationState* inherited, bool hidden) {
     if (!node)
         return true;
 
     const AnimationState* pose = node->pose ? node->pose : inherited;
+    hidden = hidden || node->capture_hidden;
 
     for (size_t i = 0; i < node->mesh_count; ++i) {
         Mesh* mesh = node->meshes ? node->meshes[i] : NULL;
@@ -304,6 +306,10 @@ static bool append_node(DrawList* list, Scene* scene, SceneNode* node, const Lod
                          .pose = mesh->is_skinned ? pose : NULL,
                          .lod = select_lod(mesh, node, lod)};
         classify(mesh, &item.lane, &item.flags);
+        // A pose, or a node said to move: either way a capture would freeze it into a
+        // picture taken while the game runs.
+        if (hidden || mesh->is_skinned)
+            item.flags |= DRAW_CAPTURE_HIDDEN;
         if (!push(list, item))
             return false;
     }
@@ -317,7 +323,7 @@ static bool append_node(DrawList* list, Scene* scene, SceneNode* node, const Lod
     }
 
     for (size_t i = 0; i < node->children_count; ++i) {
-        if (!append_node(list, scene, node->children[i], lod, gizmos, pose))
+        if (!append_node(list, scene, node->children[i], lod, gizmos, pose, hidden))
             return false;
     }
     return true;
@@ -335,7 +341,7 @@ bool draw_list_build(DrawList* list, Scene* scene, uint64_t stamp, const LodSele
     memset(list->lane_count, 0, sizeof(list->lane_count));
     list->occluder_flag_count = 0;
     list->valid = false;
-    if (!append_node(list, scene, scene->root_node, lod, gizmos, NULL))
+    if (!append_node(list, scene, scene->root_node, lod, gizmos, NULL, false))
         return false;
 
     list->stamp = stamp;
@@ -426,6 +432,8 @@ bool draw_item_visible(const DrawItem* item, const CullView* view) {
     // passes): one load against the frustum test's arithmetic, and valid
     // independently of it.
     if (view->occlusion && item->occluded)
+        return false;
+    if (view->capture && (item->flags & DRAW_CAPTURE_HIDDEN))
         return false;
     if (!view->frustum)
         return true;

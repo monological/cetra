@@ -191,8 +191,13 @@ void gi_world_bind(const GIWorld* world, const struct LightingAtlas* atlas, Shad
 // A resident volume has its opening sweep still to run.
 bool gi_world_pending(const GIWorld* world);
 
-// Some resident volume has probes still to capture.
-bool gi_world_dirty(const GIWorld* world);
+// Every volume the box touches is resident and swept, so a capture inside it is lit by its own
+// bounce light rather than the environment's or a neighbour's edge. True when none touches it.
+bool gi_world_ready_in(const GIWorld* world, const vec3 box_min, const vec3 box_max);
+
+// Some resident volume has probes to capture this frame: dirty, and its cached lights shadowed.
+bool gi_world_capture_due(const GIWorld* world, const struct Engine* engine,
+                          const struct Scene* scene);
 
 // Re-arm every volume, for a change in the light every one of them saw.
 void gi_world_mark_dirty(GIWorld* world);

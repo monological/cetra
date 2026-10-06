@@ -75,6 +75,7 @@ CullView render_cull_view(const Engine* engine, const Scene* scene, const Frustu
     // keeps a camera answer out of a light's cull without any of them opting
     // out.
     CullView view = {engine->frustum_cull_enabled ? frustum : NULL, scene ? scene->wind : NULL};
+    view.capture = engine->capturing || engine->capture_burst;
     return view;
 }
 
@@ -1967,6 +1968,8 @@ void scene_capture_begin(Engine* engine, Scene* scene, SceneCaptureKind kind,
 
     saved->irradiance = engine->capturing_irradiance;
     engine->capturing_irradiance = kind == SCENE_CAPTURE_IRRADIANCE;
+    saved->burst = engine->capture_burst;
+    engine->capture_burst = true;
 
     // Nothing inside a capture burst is timed, and this is the seam that owns
     // that -- not scene_capture_faces, which starts too late: the shadow
@@ -2015,6 +2018,7 @@ void scene_capture_end(Engine* engine, Scene* scene, const SceneCaptureState* sa
         return;
     profiler_resume(engine->profiler);
     engine->capturing_irradiance = saved->irradiance;
+    engine->capture_burst = saved->burst;
     engine_set_render_time(engine, saved->render_time, saved->render_delta);
     if (scene->shadow_system) {
         scene->shadow_system->cascade_count = saved->cascade_count;

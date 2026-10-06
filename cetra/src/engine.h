@@ -342,6 +342,11 @@ typedef struct Engine {
     // is inside a wall.
     bool capturing_back_faces;
 
+    // Between scene_capture_begin and scene_capture_end: the burst's own shadow passes and every
+    // capture face. What captures leave out (DRAW_CAPTURE_HIDDEN) is left out of all of them --
+    // its surface and its shadow -- since a capture is kept for good (spec 13.24).
+    bool capture_burst;
+
     Camera* camera; // The camera the frame renders (engine_set_camera); borrowed
 
     Scene** scenes;             // Array of scenes managed by the engine

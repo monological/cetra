@@ -24,6 +24,9 @@
 // Entries in the --cam-at teleport schedule
 #define RENDER_CAM_AT_MAX 16
 
+// Nodes one run may name to --capture-hide or --remove-node
+#define RENDER_NODE_NAMES_MAX 4
+
 typedef struct {
     const char* model_path;
     const char* texture_dir;
@@ -188,24 +191,29 @@ typedef struct {
     int fire_slice_field;
     int fire_slice_z;
     int fire_slice_fire;
-    int water_probe;              // Print the CPU wave query over a grid, then continue
-    int water_fft_probe;          // Print the transformed spectrum's measured statistics
-    int water_caustic_debug;      // Water.caustic_debug: 2 = the raw caustics target
-    int water_caustic_probe;      // Print the caustics target's statistics after the loop
-    int wind_bound_probe;         // Print the measured wind displacement beside its cull bound
-    int ies_probe;                // Print every loaded IES profile and a sweep of its angles
-    int emissive_lights;          // Derive an LTC area panel from every emissive mesh
-    int emissive_light_probe;     // Print the area panel every emissive mesh would derive
-    int exposure_probe;           // Print what the meter decided, per metered frame
-    float meter_low;              // Metering low percentile (<0 = leave the default)
-    float meter_high;             // Metering high percentile (<0 = leave the default)
-    int meter_mode;               // MeteringMode override (-1 = leave the default)
-    float meter_radius;           // Spot / centre-weight radius (<0 = leave the default)
-    float adapt_up;               // Per-frame adaptation rate, scene brightening (<0 = default)
-    float adapt_down;             // Per-frame adaptation rate, scene darkening (<0 = default)
-    int gi_rate;                  // Probes captured per frame while dirty (0 = default)
-    int gi_stream_rate;           // Probes per frame in a sweep begun after load (-1 = default)
-    int stream_probe;             // Print the streamed lighting's residency every N frames
+    int water_probe;          // Print the CPU wave query over a grid, then continue
+    int water_fft_probe;      // Print the transformed spectrum's measured statistics
+    int water_caustic_debug;  // Water.caustic_debug: 2 = the raw caustics target
+    int water_caustic_probe;  // Print the caustics target's statistics after the loop
+    int wind_bound_probe;     // Print the measured wind displacement beside its cull bound
+    int ies_probe;            // Print every loaded IES profile and a sweep of its angles
+    int emissive_lights;      // Derive an LTC area panel from every emissive mesh
+    int emissive_light_probe; // Print the area panel every emissive mesh would derive
+    int exposure_probe;       // Print what the meter decided, per metered frame
+    float meter_low;          // Metering low percentile (<0 = leave the default)
+    float meter_high;         // Metering high percentile (<0 = leave the default)
+    int meter_mode;           // MeteringMode override (-1 = leave the default)
+    float meter_radius;       // Spot / centre-weight radius (<0 = leave the default)
+    float adapt_up;           // Per-frame adaptation rate, scene brightening (<0 = default)
+    float adapt_down;         // Per-frame adaptation rate, scene darkening (<0 = default)
+    int gi_rate;              // Probes captured per frame while dirty (0 = default)
+    int gi_stream_rate;       // Probes per frame in a sweep begun after load (-1 = default)
+    int stream_probe;         // Print the streamed lighting's residency every N frames
+    // Nodes by name: left out of every capture (spec 13.24), or taken out of the scene.
+    const char* capture_hide[RENDER_NODE_NAMES_MAX];
+    int capture_hide_count;
+    const char* remove_node[RENDER_NODE_NAMES_MAX];
+    int remove_node_count;
     int gi_debug;                 // Blit the probe atlas into the frame corner
     int sky;                      // Procedural physically-based sky instead of -e
     int sky_debug;                // Blit the sky LUTs into the frame corner

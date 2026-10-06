@@ -93,6 +93,10 @@ typedef struct SceneNode {
 
     // SETTINGS: plain stores. Write them directly, at any time.
     mat4 original_transform; // The local pose; node_set_position writes its column
+    // true = this node and its subtree are left out of every GI and reflection probe capture
+    // (spec 13.24): a thing that moves, frozen into a picture taken while the game runs.
+    // Skinned meshes are left out without asking.
+    bool capture_hidden;
 } SceneNode;
 
 // malloc

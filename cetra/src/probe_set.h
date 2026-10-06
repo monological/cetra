@@ -107,7 +107,8 @@ void probe_set_rank(ReflectionProbeSet* set, const struct Engine* engine);
  * kept on the CPU and the cubes freed. A no-op on a failed set, and on a world of one probe
  * once that probe has captured.
  *
- * Nothing captures while a resident GI volume has its opening sweep still to run.
+ * A probe captures only once every GI volume its box touches is resident and swept, and every
+ * cached light reaching it holds a whole block of shadow tiles.
  * That wait is the point of capturing here rather than where the set is built.
  * A capture lights what it sees with the volume only once the volume has an
  * answer, and with the environment's ambient before it, so a set captured
@@ -126,8 +127,10 @@ void probe_set_update(ReflectionProbeSet* set, struct Engine* engine, struct Sce
 // probe is deliberately left stale by the sun slider exactly as the single probe always was.
 void probe_set_mark_dirty(ReflectionProbeSet* set);
 
-// Some resident probe has a capture due: what the frame's "probe capture" scope times.
-bool probe_set_capture_due(const ReflectionProbeSet* set, const struct Scene* scene);
+// Some resident probe has a capture due and may take it now: what the frame's "probe capture"
+// scope times.
+bool probe_set_capture_due(const ReflectionProbeSet* set, const struct Engine* engine,
+                           const struct Scene* scene);
 
 // Pack what each loaded resident probe IS -- position, box, intensity, where its
 // column sits -- into the GPU block, in slot order. The froxel masks in the same
