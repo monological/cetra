@@ -3,10 +3,10 @@
 //
 // The sampler is a PARAMETER rather than a declaration in here, which GLSL 330
 // allows and which is what lets the lit surface and SSR share one
-// implementation: pbr_frag passes giAtlasTex (the probe atlas is a tenant of
-// the GI volume's texture, because pbr_frag declares sixteen samplers and the
-// driver counts declarations), and ssr_frag passes its own. Two programs, one
-// weight formula, nothing to drift.
+// implementation: pbr_frag passes giAtlasTex (the probe columns share the
+// scene's lighting atlas with the GI slots, because pbr_frag declares sixteen
+// samplers and the driver counts declarations), and ssr_frag passes its own.
+// Two programs, one weight formula, nothing to drift.
 //
 // Everything about WHERE a probe's radiance lives is here and in lighting_atlas.c.
 // The rest of the engine knows only that probes exist.
@@ -30,13 +30,14 @@ layout(std140) uniform ProbeBlock {
     uvec4 probeClusterMasks[384];
 };
 
+#include "froxel_mask.glsl"
 #include "octahedral.glsl"
 
-// Which probes reach this froxel. The decode mirrors clusterWord's in
-// lights_ubo.glsl and for the same reason: the packing is what keeps the block
-// small enough to sit beside the light blocks.
+// Which probes reach this froxel. Packed rather than a word a froxel for clusterWord's reason in
+// lights_ubo.glsl: the packing is what keeps the block small enough to sit beside the light
+// blocks.
 uint probeMaskAt(uint ci) {
-    return (probeClusterMasks[ci >> 3u][(ci >> 1u) & 3u] >> ((ci & 1u) * 16u)) & 0xFFFFu;
+    return FROXEL_MASK_AT(probeClusterMasks, ci);
 }
 
 // "Every probe", for a consumer with no froxel to look one up by.
@@ -45,7 +46,7 @@ uint probeMaskAt(uint ci) {
 // contribution is its box weight, which is zero outside the box either way. The
 // lit surface has lights_ubo.glsl and passes the real mask to skip probes the
 // grid already rejected; SSR is a post pass that would have to pull four light
-// blocks in to save at most seven box tests, so it passes this and lets the
+// blocks in to save at most fifteen box tests, so it passes this and lets the
 // weights do it.
 #define PROBE_MASK_ALL 0xFFFFu
 
