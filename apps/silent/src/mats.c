@@ -388,10 +388,10 @@ static const MatSpec SPECS[MAT_COUNT] = {
      * dark boards lacquered glossy enough to carry the lamps' reflections down the corridor.
      * Every one is a scan already fetched for something else, tinted.
      */
-    [MAT_CREAM] =
-        {"cream_plaster", "white_plaster_rough_02", {1.0f, 0.86f, 0.64f}, 1.0f, 0.0f, 1.5f},
+    [MAT_CREAM] = {"cream_plaster", "concrete_wall_003", {1.0f, 0.9f, 0.7f}, 1.0f, 0.0f, 2.0f},
     [MAT_HARDWOOD] = {"hardwood", "old_wooden_floor_02", {0.5f, 0.36f, 0.28f}, 0.3f, 0.0f, 2.0f},
-    [MAT_WALLPAPER] = {"wallpaper", "fabric_pattern_05", {0.58f, 0.62f, 0.48f}, 1.0f, 0.0f, 0.7f},
+    // A plain paper gone the colour of weak tea; a patterned scan read as a bathroom's tile.
+    [MAT_WALLPAPER] = {"wallpaper", "Paper003", {0.7f, 0.58f, 0.46f}, 1.0f, 0.0f, 0.9f},
     [MAT_MOULDING] =
         {"moulding", "concrete_wall_003", {0.96f, 0.92f, 0.82f}, 0.55f, 0.0f, 1.5f, .grime = 0.4f},
     [MAT_UPHOLSTERY] =

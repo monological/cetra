@@ -143,6 +143,17 @@
 #define TOWER_CEIL_Y  9.0f                              // the study's tower bay rises to this
 #define TOWER_SPIRE_Y 15.5f
 
+/*
+ * The skirt roof across the front at the upper floor, PENT_PITCH a metre, which both houses
+ * carry: a deep one over the porch, and a strip past it over the kitchen window, shallow enough
+ * that the wind still drives the rain onto the window's lower half.
+ */
+#define PENT_Y        3.3f // where it meets the wall
+#define PENT_PITCH    0.47f
+#define PENT_DEPTH    0.45f
+#define PORCH_ROOF_X1 0.9f
+#define PENT_THICK    0.08f
+
 #define PORCH_X0 (-2.4f)
 #define PORCH_X1 0.8f
 #define PORCH_Z0 8.5f

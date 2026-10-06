@@ -151,13 +151,18 @@ static void fog_box(Scene* scene, float density, float x0, float x1, float z0, f
     scene_add_fog_volume(scene, &v);
 }
 
-// The plan's footprint with the fog kept off it, the tower included -- it stands out past the
-// front and the west side, and a fog volume does not stop at a wall: inside one the study
+// The Gothic plan's footprint with the fog kept off it, the tower included -- it stands out past
+// the front and the west side, and a fog volume does not stop at a wall: inside one the study
 // would be full of it.
-static FogHole house_hole(float dx, float dz) {
+static FogHole mansion_hole(void) {
     const float gap = -(TOWER_X - TOWER_APOTHEM) + 0.7f;
-    return (FogHole){-gap + dx, gap + dx, TOWER_Z - TOWER_APOTHEM - 0.7f + dz,
-                     HOUSE_BACK_Z + 1.0f + dz};
+    return (FogHole){-gap + MANSION_X, gap + MANSION_X, TOWER_Z - TOWER_APOTHEM - 0.7f + MANSION_Z,
+                     HOUSE_BACK_Z + 1.0f + MANSION_Z};
+}
+
+// The home's, which has no tower: the walls with a margin, and the porch left in the fog.
+static FogHole home_hole(void) {
+    return (FogHole){HOUSE_X0 - 0.7f, HOUSE_X1 + 0.7f, HOUSE_FRONT_Z - 0.4f, HOUSE_BACK_Z + 0.7f};
 }
 
 static void fog(Scene* scene, bool night) {
@@ -165,7 +170,7 @@ static void fog(Scene* scene, bool night) {
     const float F = 0.5f * FOG_FEATHER;
     const float wx0 = -60.0f, wx1 = WORLD_X1 + 20.0f, wz0 = -60.0f, wz1 = WORLD_Z1 + 20.0f;
     // West to east, which is the order the columns are cut in.
-    const FogHole holes[2] = {house_hole(0.0f, 0.0f), house_hole(MANSION_X, MANSION_Z)};
+    const FogHole holes[2] = {home_hole(), mansion_hole()};
     float x = wx0;
     for (int h = 0; h <= 2; h++) {
         const float next = h < 2 ? holes[h].x0 : wx1;

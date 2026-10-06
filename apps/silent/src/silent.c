@@ -51,6 +51,7 @@
 #include "grounds.h"
 #include "hearth.h"
 #include "hill.h"
+#include "home.h"
 #include "house.h"
 #include "interior.h"
 #include "kit.h"
@@ -203,8 +204,8 @@ static CatVoice g_voice;
 #define DOOR_CONE  0.6f // radians
 static Grounds g_grounds;
 
-// The doors that open: each house's front door (spec 13.25).
-enum { DOORS = 2 };
+// The doors that open: each house's front door, and the home's bathroom door (spec 13.25).
+enum { DOOR_HOME, DOOR_BATH, DOOR_MANSION, DOORS };
 static Door g_doors[DOORS];
 static bool g_door_hung[DOORS];
 static Prompt g_prompt;
@@ -327,9 +328,11 @@ static void build_sky(Engine* engine) {
  * face, while the hearth's solids are closed shells, culled from inside, so a
  * probe there sees the room past them.
  *
- * Outside the grid a query clamps to the nearest edge probes, which stand in
- * the front yard -- the right kind of answer for the street, which is lit
- * mostly by its own lamps and the moon rather than by what bounces.
+ * Just outside the grid a query takes the nearest edge probes, fading to the
+ * environment's answer a few cells out -- the right kind of answer for the
+ * grounds, lit mostly by the moon rather than by what bounces.
+ *
+ * This is the MANSION's grid (spec 13.25), its plan standing at MANSION_X/Y/Z.
  */
 #define GI_CELL  1.21f
 #define GI_COLS  11
@@ -337,7 +340,23 @@ static void build_sky(Engine* engine) {
 #define GI_TOP   9.4f
 #define GI_CLEAR 0.15f // how near a probe centre may come to a wall's or a slab's face
 
-// The house's grid, for the house whose plan stands at `origin`.
+/*
+ * The player's house is plainer and new, so its grid is laid from its bounds and the engine
+ * switches off whatever probe lands in a wall (create_gi_volume_spaced): the ground floor and
+ * the porch, a metre a cell. Nothing upstairs is lit or seen.
+ */
+#define HOME_GI_CELL 1.0f
+
+static void build_home_gi(void) {
+    const vec3 lo = {HOUSE_X0 - 0.2f, 0.0f, PORCH_Z0 - 0.2f};
+    const vec3 hi = {HOUSE_X1 + 0.2f, CEIL_Y + 0.1f, HOUSE_BACK_Z + 0.2f};
+    GIVolume* gi = create_gi_volume_spaced(lo, hi, HOME_GI_CELL);
+    if (gi && scene_add_gi_volume(g_scene, gi))
+        printf("silent: home GI %d probes, classified\n",
+               gi->counts[0] * gi->counts[1] * gi->counts[2]);
+}
+
+// The mansion's grid, its plan standing at `origin`.
 static void build_gi(const vec3 origin) {
     const vec3 lo = {-7.45f + origin[0], origin[1], 7.58f + origin[2]};
     GIVolume* gi = create_gi_volume(
@@ -369,11 +388,14 @@ static void build_gi(const vec3 origin) {
 }
 
 /*
- * Reflection probes in the kitchen, the hall, the great hall, the study and the
- * study's tower bay. Without them every metal and every wet surface indoors
- * reflects the only environment there is, the night sky, and the hood, the sink
- * and the floor go black. The great hall's box goes up to the ridge, since the
- * hall is open to its roof: a roof outside every box reflects the sky.
+ * Reflection probes in the home's kitchen, hall, living room and bathroom, and in
+ * the mansion's dining room, hall, great hall, study and the study's tower bay
+ * (spec 13.25), nine in the world: the engine keeps the nearest sixteen resident
+ * and captures the mansion's as the drive brings them near. Without them every
+ * metal and every wet surface indoors reflects the only environment there is,
+ * the night sky, and the hood, the sink and the floor go black. The great hall's
+ * box goes up to the ridge, since the hall is open to its roof: a roof outside
+ * every box reflects the sky.
  *
  * The study is TWO boxes, the room to its ceiling and the octagonal bay to the
  * bay's high one, because one box round both reached past the house's west wall
@@ -394,29 +416,55 @@ static void build_gi(const vec3 origin) {
  * washed-out grey. Run to the front wall's centre, the hall's box would take in
  * the front door's street face too, and the street would see the hall in it.
  */
+typedef struct ProbeRoom {
+    bool mansion; // in the mansion's plan, moved by its origin; else the home's, at the plan's own
+    vec3 pos, lo, hi;
+} ProbeRoom;
+
+#define PROBE_ROOM_COUNT 9
+
 static void build_probes(void) {
     if (!g_scene->ibl || !g_scene->ibl->precomputed)
         return;
-    enum { ROOMS = 5, HOUSES = 2 };
-    // The house on the plan's origin and the mansion: the same rooms, a world apart.
-    const vec3 origins[HOUSES] = {{0.0f, 0.0f, 0.0f}, {MANSION_X, MANSION_Y, MANSION_Z}};
-    const struct {
-        vec3 pos, lo, hi;
-    } rooms[ROOMS] = {
-        {{2.48f, FLOOR_Y + 1.5f, 11.9f},
+    const ProbeRoom PROBE_ROOMS[PROBE_ROOM_COUNT] = {
+        // The home (spec 13.25): its kitchen, the hall the whole depth of the house, the living
+        // room and the bathroom.
+        {false,
+         {2.48f, FLOOR_Y + 1.5f, 11.9f},
          {HALL_X1, FLOOR_Y, HOUSE_FRONT_Z + KIT_PANE_HALF},
          {HOUSE_X1 - KIT_PANE_HALF, CEIL_Y, KITCHEN_BACK_Z}},
-        {{-0.75f, FLOOR_Y + 1.5f, 12.0f},
+        {false,
+         {-0.75f, FLOOR_Y + 1.5f, 14.7f},
+         {HALL_X0, FLOOR_Y, FRONT_DOOR_Z},
+         {HALL_X1, CEIL_Y, HOUSE_BACK_Z - KIT_PANE_HALF}},
+        {false,
+         {-3.2f, FLOOR_Y + 1.5f, 13.3f},
+         {HOUSE_X0 + KIT_PANE_HALF, FLOOR_Y, HOUSE_FRONT_Z + KIT_PANE_HALF},
+         {HALL_X0, CEIL_Y, HOME_SPLIT_Z}},
+        {false,
+         {1.3f, FLOOR_Y + 1.4f, 15.2f},
+         {HALL_X1, FLOOR_Y, KITCHEN_BACK_Z},
+         {BATH_X1, CEIL_Y, HOME_SPLIT_Z}},
+        // The mansion: its dining room, its hall, the great hall, the study and the study's bay.
+        {true,
+         {2.48f, FLOOR_Y + 1.5f, 11.9f},
+         {HALL_X1, FLOOR_Y, HOUSE_FRONT_Z + KIT_PANE_HALF},
+         {HOUSE_X1 - KIT_PANE_HALF, CEIL_Y, KITCHEN_BACK_Z}},
+        {true,
+         {-0.75f, FLOOR_Y + 1.5f, 12.0f},
          {HALL_X0, FLOOR_Y, FRONT_DOOR_Z},
          {HALL_X1, CEIL_Y, KITCHEN_BACK_Z}},
-        {{HEARTH_X, FLOOR_Y + 1.8f, 16.6f},
+        {true,
+         {HEARTH_X, FLOOR_Y + 1.8f, 16.6f},
          {HOUSE_X0 + KIT_PANE_HALF, FLOOR_Y, KITCHEN_BACK_Z},
          {HOUSE_X1 - KIT_PANE_HALF, house_roof_y(0.0f), HOUSE_BACK_Z - KIT_PANE_HALF}},
-        {{-3.25f, FLOOR2_Y + 1.6f, 11.9f},
+        {true,
+         {-3.25f, FLOOR2_Y + 1.6f, 11.9f},
          {HOUSE_X0 + KIT_PANE_HALF, FLOOR2_Y, HOUSE_FRONT_Z + KIT_PANE_HALF},
          {HALL_X0, CEIL2_Y, KITCHEN_BACK_Z}},
         // Over the desk, which stands in the middle of the bay.
-        {{TOWER_X, FLOOR2_Y + 1.8f, TOWER_Z},
+        {true,
+         {TOWER_X, FLOOR2_Y + 1.8f, TOWER_Z},
          {TOWER_X - TOWER_APOTHEM + KIT_PANE_HALF, FLOOR2_Y,
           TOWER_Z - TOWER_APOTHEM + KIT_PANE_HALF},
          {TOWER_X + TOWER_APOTHEM, TOWER_CEIL_Y, TOWER_Z + TOWER_APOTHEM}},
@@ -424,15 +472,20 @@ static void build_probes(void) {
     ReflectionProbeSet* set = create_reflection_probe_set();
     if (!set)
         return;
-    for (int n = 0; n < HOUSES * ROOMS; n++) {
-        const int i = n % ROOMS;
-        const float* o = origins[n / ROOMS];
+    for (int n = 0; n < PROBE_ROOM_COUNT; n++) {
+        const ProbeRoom* r = &PROBE_ROOMS[n];
         ReflectionProbe* p = create_reflection_probe();
         if (!p)
             break;
-        glm_vec3_add((float*)rooms[i].pos, (float*)o, p->position);
-        glm_vec3_add((float*)rooms[i].lo, (float*)o, p->box_min);
-        glm_vec3_add((float*)rooms[i].hi, (float*)o, p->box_max);
+        if (r->mansion) {
+            mansion_at(r->pos, p->position);
+            mansion_at(r->lo, p->box_min);
+            mansion_at(r->hi, p->box_max);
+        } else {
+            glm_vec3_copy((float*)r->pos, p->position);
+            glm_vec3_copy((float*)r->lo, p->box_min);
+            glm_vec3_copy((float*)r->hi, p->box_max);
+        }
         vec3 span;
         glm_vec3_sub(p->box_max, p->box_min, span);
         p->near_clip = 0.02f;
@@ -452,7 +505,7 @@ static void build_probes(void) {
         if (!probe_set_add(set, p))
             break;
     }
-    if (set->residency.count == HOUSES * ROOMS)
+    if (set->residency.count == PROBE_ROOM_COUNT)
         g_scene->probe_set = set;
     else
         free_reflection_probe_set(set);
@@ -527,15 +580,13 @@ static void on_init(Game* game) {
     Kit kit;
     kit_init(&kit, g_scene, em, physics);
     mats_register(&kit, engine, g_scene);
-    house_build(&kit);
-    interior_build(&kit);
-    hearth_build(&kit);
+    // The player's house on the plan's origin (spec 13.25), its kitchen and its clock.
+    home_build(&kit, engine, g_scene);
     kitchen_build(&kit, (unsigned int)g_args.seed);
     lights_build(&g_lights, &kit, engine, g_scene, (unsigned int)g_args.seed, !g_args.no_flicker,
                  g_args.flashlight);
     street_build(&kit, g_scene, (unsigned int)g_args.seed, !g_args.day, !g_args.no_fog);
     clock_build(&kit);
-    study_build(&kit, g_scene, (unsigned int)g_args.seed);
     hill_build(&kit);
     trees_build(&kit, engine, g_scene, (unsigned int)g_args.seed);
     grounds_build(&g_grounds, &kit, g_scene, (unsigned int)g_args.seed, !g_args.day);
@@ -573,9 +624,10 @@ static void on_init(Game* game) {
         candles_light(g_scene->fire, g_scene, &kit, !g_args.no_candle_shadows);
         candles_light(g_scene->fire, g_scene, &mansion, !g_args.no_candle_shadows);
     }
-    g_door_hung[0] =
-        house_front_door(&g_doors[0], engine, g_scene, em, physics, (vec3){0.0f, 0.0f, 0.0f});
-    g_door_hung[1] = house_front_door(&g_doors[1], engine, g_scene, em, physics, mansion_origin);
+    g_door_hung[DOOR_HOME] = home_front_door(&g_doors[DOOR_HOME], engine, g_scene, em, physics);
+    g_door_hung[DOOR_BATH] = home_bath_door(&g_doors[DOOR_BATH], engine, g_scene, em, physics);
+    g_door_hung[DOOR_MANSION] =
+        house_front_door(&g_doors[DOOR_MANSION], engine, g_scene, em, physics, mansion_origin);
     prompt_start(&g_prompt, engine);
     if (!g_args.no_cat) {
         CatDesc cat = {.at = g_args.cat_at,
@@ -822,7 +874,7 @@ static void on_pre_render(Game* game, double alpha) {
     // reflection probes go in with it, since they are captured once it has
     // converged and a set installed with no volume would be captured unlit.
     if (engine->total_frames == 2 && !g_scene->gi && !g_args.no_gi) {
-        build_gi((vec3){0.0f, 0.0f, 0.0f});
+        build_home_gi();
         build_gi((vec3){MANSION_X, MANSION_Y, MANSION_Z});
         build_probes();
     }
