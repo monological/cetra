@@ -28779,6 +28779,10 @@ LSTREAM_PROP_ROOM = 3
 LSTREAM_GI_SLOTS = 8
 LSTREAM_PROBE_SLOTS = 16
 LSTREAM_TILE_LIGHTS = 16  # bodied lights the cached tiles hold: 768 cells of 48
+# A volume past its reach leaves the frame as no volume does, but for the probe columns sitting at
+# other UVs in an atlas with a GI slot in it: measured 3 px of the 800x600 frame at a code, against
+# 486 px with the edge carried out without limit and a zero weight read as black (spec 13.25).
+LSTREAM_REACH_FRACTION = 60 / (800 * 600)
 
 
 def _lstream_rooms():
@@ -28902,6 +28906,8 @@ def run_lighting_stream_gate(workdir):
                          with classification on than off
       stream-hidden      a capture_hidden node and a skinned mesh are absent from what the probes
                          and the GI volume photographed: their digests match the room without them
+      stream-reach       a volume a kilometre off lights room 0 not at all: the frame is the one
+                         with no volume, but for the atlas's other size (spec 13.25)
 
     The walk teleports, which no player does: it is the worst case for every cap at once -- all
     of room 0's items leave and all of room 9's arrive in one frame -- and a walk can only ever
@@ -28911,7 +28917,7 @@ def run_lighting_stream_gate(workdir):
     first-come ranking reddens stream-nearest and stream-tiles; the 8-bit mask reddens
     stream-probes-16; forcing the classification flag to 1 reddens stream-classify; dropping the
     capture skip reddens stream-hidden; letting a capture run before its lights are shadowed
-    reddens stream-equal.
+    reddens stream-equal. At 13.25: the edge carried out without limit reddens stream-reach.
     """
     if not os.path.exists(asset(LSTREAM_FIXTURE)):
         print(f"  stream-equal SKIP  {LSTREAM_FIXTURE} not found")
@@ -29109,6 +29115,33 @@ def run_lighting_stream_gate(workdir):
               f"both: {drawn:.2%} of the frame")
         if not ok:
             failures.append("stream-hidden")
+
+    # -- reach --------------------------------------------------------------------------
+    # One small volume a kilometre off and no other: every fragment of room 0 is far past its
+    # box, so what lights it is the environment's answer, to the bit the same as no volume.
+    def far_volume(d):
+        d["giVolumes"] = [{"boxMin": [1000.0, 0.0, 0.0], "boxMax": [1004.0, 3.0, 4.0],
+                           "spacing": 1.0}]
+
+    def no_volume(d):
+        d["giVolumes"] = []
+
+    far, far_text = _lstream_run(workdir, "far_volume", _lstream_cam_eye(first), 31,
+                                 mutate=far_volume)
+    none, none_text = _lstream_run(workdir, "no_volume", _lstream_cam_eye(first), 31,
+                                   mutate=no_volume)
+    if far is None or none is None:
+        print(f"  stream-reach ERROR  {(far_text if far is None else none_text)[-300:]}")
+        failures.append("stream-reach")
+    else:
+        frac, peak = _origin_diff(far[31], none[31])
+        ok = frac <= LSTREAM_REACH_FRACTION and peak <= 1
+        print(f"  stream-reach {'PASS' if ok else 'FAIL'}  room 0 under a volume a kilometre off "
+              f"vs no volume: {frac:.4%} of the frame, peak {peak} (want <= "
+              f"{LSTREAM_REACH_FRACTION:.4%} at a code: past its reach a volume answers nothing, "
+              f"and what is left is the atlas's other size)")
+        if not ok:
+            failures.append("stream-reach")
 
     return failures
 

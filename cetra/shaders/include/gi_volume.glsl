@@ -25,8 +25,12 @@
 // Since spec 13.24 the world holds any number of volumes, one per place, and the
 // nearest few are RESIDENT: each holds a slot of the lighting atlas and a row of
 // the table below. A fragment reads ONE of them, the one it stands in; between
-// places it reads the nearest, at that volume's clamped edge, which is what a
-// lone volume always did outside its grid.
+// places it reads the nearest, at that volume's clamped edge, fading to the
+// environment's answer over GI_REACH of that volume's cells past its box (spec
+// 13.25). A grid's edge probes say nothing about ground a hundred metres off, and
+// out there every probe fails the visibility test: the weights underflowed to an
+// exact zero along lines across a hillside, and a zero irradiance read as black.
+#define GI_REACH 3.0
 
 #include "octahedral.glsl"
 #include "gi_constants.glsl"
@@ -46,12 +50,14 @@ uniform float giTileBorder; // gutter width, per side
 uniform vec2 giTileRes;     // interior edge: (irradiance, visibility)
 
 // The resident volume that answers for p: the one containing it, or the nearest
-// swept one when none does. -1 when the one containing it has not swept yet,
-// whose answer is the environment's -- its neighbour's edge probes saw a
-// different place. Of two that contain p the first slot wins.
-int giSlotAt(vec3 p) {
+// swept one when none does, and in `dist` how far p is outside it. -1 when the one
+// containing it has not swept yet, whose answer is the environment's -- its
+// neighbour's edge probes saw a different place. Of two that contain p the first
+// slot wins.
+int giSlotAt(vec3 p, out float dist) {
     int nearest = -1;
     float best = 0.0;
+    dist = 0.0;
     for (int s = 0; s < GI_RESIDENT_MAX; ++s) {
         if (s >= giSlotCount)
             break;
@@ -67,6 +73,7 @@ int giSlotAt(vec3 p) {
             best = d;
         }
     }
+    dist = sqrt(best);
     return nearest;
 }
 
@@ -85,17 +92,25 @@ vec2 giTileUV(int s, ivec3 p, vec3 dir, bool visibility) {
     return (giSlot[4 * s + 3].xy + origin + giTileBorder + oct * res) / giAtlasSize;
 }
 
-// The bounced light reaching worldPos, in `irradiance`. False when no resident
-// volume answers for it, and the caller takes the environment's.
-bool giIrradiance(vec3 worldPos, vec3 N, vec3 V, out vec3 irradiance) {
+// The bounced light reaching worldPos, in `irradiance`, and in `reach` how much of
+// the answer is the volume's -- 1 in its box, falling to 0 past it -- the rest
+// being the environment's, which the caller mixes in. False when no resident
+// volume answers for it, and the caller takes the environment's whole.
+bool giIrradiance(vec3 worldPos, vec3 N, vec3 V, out vec3 irradiance, out float reach) {
     irradiance = vec3(0.0);
-    int s = giSlotAt(worldPos);
+    reach = 0.0;
+    float outside;
+    int s = giSlotAt(worldPos, outside);
     if (s < 0)
         return false;
     vec3 gridMin = giSlot[4 * s].xyz;
     vec3 spacing = giSlot[4 * s + 1].xyz;
     float farClip = giSlot[4 * s + 1].w;
     vec3 counts = giSlot[4 * s + 2].xyz;
+    float maxSpacing = max(spacing.x, max(spacing.y, spacing.z));
+    reach = 1.0 - smoothstep(0.0, GI_REACH * maxSpacing, outside);
+    if (reach <= 0.0)
+        return false;
 
     float minSpacing = min(spacing.x, min(spacing.y, spacing.z));
     // Push the query off the surface before locating it in the grid: sampled
@@ -156,7 +171,9 @@ bool giIrradiance(vec3 worldPos, vec3 N, vec3 V, out vec3 irradiance) {
         weightSum += weight;
     }
 
-    irradiance = weightSum > 0.0 ? sum / weightSum : vec3(0.0);
+    if (weightSum <= 0.0)
+        return false;
+    irradiance = sum / weightSum;
     return true;
 }
 
