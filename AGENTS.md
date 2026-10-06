@@ -153,8 +153,9 @@ Each G-buffer target is only written when a post pass that consumes it is active
    view and projection matrices**, derived by the engine from the pose it now
    holds (spec 11.107). See below -- this is a one-statement-wide window and all
    three of its edges are load-bearing.
-5. **GI probe captures**, while the volume is dirty, then the **reflection probes**, once,
-   after the volume's opening sweep (spec 13.13).
+5. **GI probe captures**, while a resident volume is dirty, then the **reflection probes**,
+   each once, after the volumes its box touches have swept (specs 13.13 and 13.24). Both
+   rank their world lists from the camera first, once a frame, and stream from it.
 6. **Shadow depth pass** (`render_shadow_depth_pass`) -- gated on
    `scene->shadow_system->enabled`; runs before the scene FBO is bound. Then the **rain's
    occlusion layer** (`shadow_render_rain_layer`, spec 13.9) whenever the scene rains, shadows
@@ -451,7 +452,9 @@ sharpen (`--sharpen`) is the user-facing crispness lever when scaled.
 | `ibl.c/h` | Split-sum IBL: irradiance + GGX prefilter + BRDF LUT |
 | `sky.c/h` | Hillaire physically-based atmosphere (transmittance/multiscatter/sky-view LUTs + the per-frame aerial-perspective volume) |
 | `probe.c/h` | ONE parallax-corrected reflection probe: capture, GGX prefilter, the box-projected lookup. Still the whole feature at count 1, where it binds into the IBL prefilter unit exactly as it always did |
-| `probe_set.c/h`, `probe_atlas.c/h` | N of them (spec 11.70), blended PER FRAGMENT: a per-froxel 8-bit mask on the light grid says which probes reach a cell, each proxy box gives a weight, and the leftover weight falls to the global environment through the same expression the no-probe path uses. Storage is octahedral roughness ROWS (mips would filter across the tile gutters) TENANTING `giAtlasTex` on unit 14 — an atlas is a pool, so the second consumer cost a region and not a declaration. **The box fade runs OUTWARD from the proxy faces, and that is correctness rather than taste**: a floor lies ON the bottom face of the box that box-projects it, so an inward fade weighs every floor in every scene at exactly zero and hands the one surface the feature exists for back to the environment — which renders as a plausible frame, because a floor reflecting nothing and a floor reflecting a dim room are the same picture. **Per-DRAW selection is the refused alternative** and the fixture is built to refuse it: two rooms over ONE floor mesh, which is a single draw, so a per-draw design lights half of it with the wrong room's reflections while every per-room measurement still passes. **And an outward fade crosses any wall thinner than it** (spec 13.13): it is a FRACTION of the box's half-size, 0.2 by default, so silent's kitchen reached 0.37 m past its box, through a 0.1 m wall, and the great hall's panelling reflected a third kitchen. An app with rooms side by side sets each fade from its walls; the froxel mask is marked out to the box grown by its fade, not the bare box, or the reflection stops on a tile line. **The ENGINE captures a set, in the frame after the GI sweep, and waits for the volume's opening sweep** (spec 13.13, `probe_set_update`): a capture lights what it sees with the volume only once it has an answer, and with the environment's ambient before that, so a set captured at load photographed every closed room lit by the open sky, which by day every dark glossy surface reflected as a grey wash. So an app installs a set UNCAPTURED, each probe carrying its own planes and `environment_only`, and the set is inert until `ready` -- `probe_set_primary` answers NULL before then, which is what keeps one probe out of the others' captures; it did not, and an installed set's first probe was bound into every later capture through the single-probe path. The volume adopts the set's atlas whenever the set allocates it, copying across what it has already swept. Cap 8, set by VRAM (~4.3 MB per probe column) and not by the mask, which is one byte per froxel |
+| `probe_set.c/h` | N of them (spec 11.70), blended PER FRAGMENT: a per-froxel 16-bit mask on the light grid says which probes reach a cell, each proxy box gives a weight, and the leftover weight falls to the global environment through the same expression the no-probe path uses. Storage is octahedral roughness ROWS (mips would filter across the tile gutters) in the scene's lighting atlas on unit 14 — an atlas is a pool, so the second consumer cost a region and not a declaration. **Since 13.24 the set is the WORLD's** -- any number of probes, the nearest 16 RESIDENT (a column, a descriptor, a mask bit), each captured ONCE, its column read back and kept on the CPU and both of its cubes freed, so one that leaves residency comes back by upload. At load every resident probe captures in one frame; one that comes into range later captures alone, one a frame, and only once every GI volume its box touches is swept and every cached light reaching it holds a whole block (`gi_world_ready_in`, `shadow_tiles_cover`), since a capture is kept for good. **The box fade runs OUTWARD from the proxy faces, and that is correctness rather than taste**: a floor lies ON the bottom face of the box that box-projects it, so an inward fade weighs every floor in every scene at exactly zero and hands the one surface the feature exists for back to the environment — which renders as a plausible frame, because a floor reflecting nothing and a floor reflecting a dim room are the same picture. **Per-DRAW selection is the refused alternative** and the fixture is built to refuse it: two rooms over ONE floor mesh, which is a single draw, so a per-draw design lights half of it with the wrong room's reflections while every per-room measurement still passes. **And an outward fade crosses any wall thinner than it** (spec 13.13): it is a FRACTION of the box's half-size, 0.2 by default, so silent's kitchen reached 0.37 m past its box, through a 0.1 m wall, and the great hall's panelling reflected a third kitchen. An app with rooms side by side sets each fade from its walls; the froxel mask is marked out to the box grown by its fade, not the bare box, or the reflection stops on a tile line. **The ENGINE captures a set, in the frame after the GI sweep, and waits for the volume's opening sweep** (spec 13.13, `probe_set_update`): a capture lights what it sees with the volume only once it has an answer, and with the environment's ambient before that, so a set captured at load photographed every closed room lit by the open sky, which by day every dark glossy surface reflected as a grey wash. So an app installs a set UNCAPTURED, each probe carrying its own planes and `environment_only`, and the set is inert until `ready` -- `probe_set_primary` answers NULL before then, which is what keeps one probe out of the others' captures; it did not, and an installed set's first probe was bound into every later capture through the single-probe path. The resident cap is 16, set by the mask (16 bits a froxel) and by VRAM (~4.3 MB per probe column); the world's count is not capped |
+| `lighting_atlas.c/h` | The ONE unit-14 texture every resident GI volume and reflection probe lives in (spec 13.24), owned by the SCENE: GI slots side by side, each as large as the largest volume in the world, then the probe columns, stacked where the GI slots are tall enough. It only GROWS, copying every slot across, so nothing resident is captured again for it; its capacity is min(K, world count), which is what kept the one-volume and two-probe goldens at their exact texture size. It replaced `probe_atlas.c/h`, the set's own atlas that the GI volume used to ADOPT -- once, refusing a second time, which is what ruled out two volumes |
+| `stream.c/h` | Which of a world's items hold the few resident slots (spec 13.24): the nearest to the camera by distance to their boxes. No GL, no clock. Three rules: slots are STABLE (a holder keeps its slot while it stays resident), a holder is evicted only by an item more than a margin nearer, and an item coming back takes its HOME slot when free -- readmitted one column over, a kept probe's texels sample at UVs rounded differently, measured at 24 px on the round trip that is 0 px with homes |
 | `light_cluster.c/h` | Clustered forward light culling: 16x8x24 frustum grid, std140 light UBOs. **Every bound in here may over-cover and must never under-cover**: a light, probe or decal left off a tile it reaches loses every pixel of that tile along a straight line on the grid. The screen-tile bound projects all EIGHT corners of a sphere's box (spec 13.13) -- the near four alone are the widest only on the side facing away from the screen centre, so a sphere wholly to one side of the view was cut short toward the middle |
 | `ltc.c/h` | Linearly Transformed Cosines tables for rectangular area lights (on Engine) |
 | `emissive_light.c/h` | Derives LTC area panels from emissive meshes (spec 11.49, `--emissive-lights`) |
@@ -1012,7 +1015,7 @@ binding 8, which widens the rule past tables: a road is GEOMETRY the shader
 evaluates rather than an image it samples, so a whole content feature arrived
 for 1104 bytes and no unit, and 11.70's PROBE descriptors plus one 8-bit
 froxel mask per cluster on binding 9, 3760 bytes for a whole spatial selection
-structure, and 11.73's DECAL transforms plus a 16-bit froxel mask on binding
+structure (16 bits and 7344 bytes since 13.24's sixteen resident), and 11.73's DECAL transforms plus a 16-bit froxel mask on binding
 10, 7440 bytes -- which takes `pbr_frag` to TEN uniform blocks of GL 4.1's
 guaranteed twelve, so two remain and the next taker should know that is the
 budget), or **become
@@ -1258,7 +1261,13 @@ speeds.
   `shadow_cache` and a range keeps its faces as 256^2 TILES of the punctual array, past the
   per-frame layers and the rain's, drawn once and kept, under a 192 MiB budget of their own --
   which is what lets silent's thirteen candles and its hall bulb cast where the per-frame pool
-  stops at eight layers. Four things about it are easy to get backwards.
+  stops at eight layers. **Since 13.24 the budget goes to the NEAREST lights**: the cached
+  lights are ranked by distance from the camera to their reach once a frame, a nearer light
+  takes the block of the farthest holder more than 2 m farther, and once the tiles have opened
+  at most `tile_new_blocks_per_frame` (2) blocks are placed a frame, since a light placed draws
+  every face at once. A light without a block is unshadowed, so a GI or probe capture waits
+  until every cached light reaching its box holds a whole one (`shadow_tiles_cover`). Four
+  things about it are easy to get backwards.
   - **A light with a body is drawn from 8 VIEWS spread over it** (`source_radius`,
     `source_length`: a capsule whose length is BETWEEN its caps), and its soft shadow is their
     AVERAGE, each view's edge blurred under TAA to meet its neighbours'. One cube map knows the
@@ -1277,6 +1286,20 @@ speeds.
   `--tile-reference M` draws every cached light from M views of its body as it is THIS frame,
   redrawn each frame and averaged with no blur: the shadow by its definition, which is how the
   kept views are checked.
+- **GI volumes** (DDGI, spec 9.7; a world list since 13.24, `gi_volume.h`): any number of
+  grids, one per place, the nearest eight RESIDENT in slots of the scene's lighting atlas.
+  A fragment reads the volume it stands in, or the nearest swept one's clamped edge between
+  places -- which is what a lone volume always did outside its grid -- and the environment
+  inside one still sweeping. Each volume's opening sweep is one frame at load and
+  `stream_rate` probes a frame after it; its slot is read back and KEPT at each convergence,
+  so leaving residency costs an upload to come back from. `create_gi_volume_spaced` lays a
+  grid over a box with `classify` on: each probe also captures back faces only, and one that
+  finds a back face nearest in more than a quarter of its directions is inside a wall and
+  weighs nothing -- which is what lets a grid be placed from a building's bounds with no
+  hand-tuned corner. `.cscn` authors them as `giVolumes: [{boxMin, boxMax, spacing,
+  classify}]`. **Captures leave out what moves**: a skinned mesh, and any node with
+  `capture_hidden`, its surface and its shadow both, since a capture taken while the game
+  runs is kept for good.
 - **IBL:** split-sum -- 32^3 irradiance map, GGX prefilter (1024 base, 9 mips), 512^2
   BRDF LUT. Environment comes from an HDR file (`-e/--env`) or is baked procedurally
   from the sky. Extracts bright light lobes from the HDR to aim analytic shadow lights.
@@ -1307,8 +1330,9 @@ speeds.
   no `--sky` logs "requires an HDR environment" and skips — and a `.cscn` authoring
   `probes[]` without an `environment` block is refused the same way, which is a trap
   worth knowing because the file still parses and the scene still renders.
-  **Up to eight since spec 11.70**, authored as a top-level `probes: [{position, boxMin,
-  boxMax, intensity, boxFade, envOnly}]` and blended per fragment; `--probe` beside an
+  **Any number since spec 13.24, the nearest sixteen resident** (eight from 11.70 until
+  then), authored as a top-level `probes: [{position, boxMin, boxMax, intensity, boxFade,
+  envOnly}]` and blended per fragment; `--probe` beside an
   authored array is warned-ignored, and so is `environment.probe_scene`, because both
   ask for ONE auto-placed probe and a file with its own array has answered that already.
   Captured by the engine in the first frame, after the GI volume's opening sweep where
