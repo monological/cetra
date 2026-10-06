@@ -1,3 +1,4 @@
+#include <limits.h>
 #include <math.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -113,6 +114,10 @@ static void print_usage(const char* prog) {
             "                         blend sharpness mid-run (composite-cache invalidation)\n"
             "      --road-width-at <frame:value>  Diagnostic: set every road's width mid-run\n"
             "                         (re-uploads the segment block and re-bakes the cache)\n"
+            "      --material-at <frame> <material> <key> <value>  Diagnostic: set one\n"
+            "                         parameter of every material of that name mid-run, a\n"
+            "                         number or an enum label (four words, since a label may\n"
+            "                         hold a space; repeatable)\n"
             "      --shadows-off-at <frame>  Diagnostic: clear the shadow system's master\n"
             "                         switch mid-run, exercising the runtime transition that\n"
             "                         --no-shadows (which clears it before frame 0) cannot\n"
@@ -229,7 +234,9 @@ static void print_usage(const char* prog) {
                     "                         the tiles have opened (default 2; 0 = no limit)\n");
     fprintf(stderr,
             "      --tile-stores <n>  Store cells for faces drawn over a copy of their still\n"
-            "                         casters (default 64; 0 = every such face whole)\n");
+            "                         casters (default and at most %d; 0 = every such face\n"
+            "                         whole)\n",
+            SHADOW_TILE_STORE_CELLS);
     fprintf(stderr, "      --tile-reference <n>  Shade every cached light from n views over its\n"
                     "                         body, redrawn each frame: the soft shadow's\n"
                     "                         reference (at most 64)\n");
@@ -237,9 +244,6 @@ static void print_usage(const char* prog) {
             "      --node-swing <node> <m>  Swing a node along x by up to m metres, once a\n"
             "                         second, from frame 0: a caster that moves\n");
     fprintf(stderr, "      --tiles-refresh    Redraw every cached face every frame\n");
-    fprintf(stderr, "      --material-at <frame> <material> <key> <value>  Set one material\n"
-                    "                         parameter on a frame, a number or an enum label\n"
-                    "                         (repeatable)\n");
     fprintf(stderr,
             "      --no-fire          Drop the fires a scene file asked for (spec 13.14)\n");
     fprintf(stderr, "      --fire-probe       Print the blackbody, each fire's state, its grid\n"
@@ -1905,30 +1909,38 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 return -1;
             }
             RenderMaterialAt* at = &args->material_at[args->material_at_count];
-            at->frame = atoi(argv[++i]);
+            const char* frame = argv[++i];
             at->material = argv[++i];
             const char* key = argv[++i];
             const char* value = argv[++i];
+            char* end = NULL;
+            const long when = strtol(frame, &end, 10);
+            if (end == frame || *end || when < 0 || when > INT_MAX) {
+                fprintf(stderr, "Error: --material-at: '%s' is not a frame\n", frame);
+                return -1;
+            }
+            at->frame = (int)when;
             at->param = material_param_find(key);
             if (!at->param || material_param_components(at->param) != 1) {
                 fprintf(stderr, "Error: --material-at: '%s' is not a one-value material key\n",
                         key);
                 return -1;
             }
-            // An enum row takes its label, the way a scene file states it.
-            char* end = NULL;
             at->value = strtof(value, &end);
-            if (end == value || *end) {
-                int found = -1;
-                for (int e = 0; at->param->enum_labels && e < at->param->enum_count; e++) {
-                    if (strcmp(at->param->enum_labels[e], value) == 0)
-                        found = e;
-                }
-                if (found < 0) {
+            const bool number = end != value && !*end;
+            // An enum row takes its label, the way a scene file states it, or its index; a
+            // number past its labels would be stored and mean none of them.
+            if (at->param->enum_labels) {
+                const int e = number ? (int)at->value : material_param_enum_value(at->param, value);
+                if (e < 0 || e >= at->param->enum_count || (number && (float)e != at->value)) {
                     fprintf(stderr, "Error: --material-at: '%s' has no value '%s'\n", key, value);
                     return -1;
                 }
-                at->value = (float)found;
+                at->value = (float)e;
+            } else if (!number) {
+                fprintf(stderr, "Error: --material-at: '%s' wants a number, not '%s'\n", key,
+                        value);
+                return -1;
             }
             args->material_at_count++;
         } else if (strcmp(argv[i], "--area-light") == 0) {
@@ -2762,6 +2774,7 @@ void key_callback(Engine* engine, int key, int scancode, int action, int mods) {
 //   --cam-at            teleports the camera to an explicit pose
 //   --layer-blend-at    sets every layered material's blend sharpness
 //   --road-width-at     sets every road's width
+//   --material-at       sets one parameter of every material of a name
 //   --render-scale-at   requests any scale due this frame (the engine defers
 //                       the rebuild to the next frame top, so a switch named
 //                       for frame N takes effect on N+1)
@@ -2890,6 +2903,21 @@ static void render_frame_update(Engine* engine, float dt) {
             fprintf(stderr, "frame %d: road width -> %.3f\n", frame_schedule->road_width_at_frame,
                     frame_schedule->road_width_at_value);
         }
+    }
+    // A material parameter set by name, on every material of that name as a scene file sets
+    // it: what the editor's control does, at a frame a headless run can name.
+    for (int a = 0; a < frame_schedule->material_at_count; a++) {
+        const RenderMaterialAt* at = &frame_schedule->material_at[a];
+        Scene* scene = engine_get_scene(engine);
+        if (at->frame != (int)engine->total_frames || !scene)
+            continue;
+        for (size_t m = 0; m < scene->material_count; m++) {
+            Material* material = scene->materials[m];
+            if (material && material->name && strcmp(material->name, at->material) == 0)
+                material_param_set(material, at->param, &at->value);
+        }
+        fprintf(stderr, "frame %d: material '%s' %s -> %g\n", at->frame, at->material,
+                at->param->key, (double)at->value);
     }
     for (int i = 0; i < frame_schedule->scale_at_count; i++) {
         if (frame_schedule->scale_at_frame[i] != (int)engine->total_frames)
@@ -3023,18 +3051,6 @@ void pre_render_callback(Engine* engine, Scene* current_scene) {
     // --rain-ask: the CPU cover query asked every frame, as a listener would ask it.
     if (frame_schedule && frame_schedule->rain_ask_set)
         shadow_rain_cover_ask(current_scene->shadow_system, frame_schedule->rain_ask);
-
-    // --material-at: a material set by name on a frame, as the editor's control sets it.
-    for (int a = 0; frame_schedule && a < frame_schedule->material_at_count; a++) {
-        const RenderMaterialAt* at = &frame_schedule->material_at[a];
-        if (at->frame != (int)engine->total_frames)
-            continue;
-        Material* material = scene_find_material(current_scene, at->material);
-        if (material)
-            material_param_set(material, at->param, &at->value);
-        else
-            fprintf(stderr, "Warning: --material-at: no material '%s'\n", at->material);
-    }
 
     // --node-swing: a node moved by the frame index, so a headless run repeats.
     if (frame_schedule && frame_schedule->node_swing) {
@@ -5053,6 +5069,16 @@ int main(int argc, char** argv) {
             return -1;
         if (view_drag)
             view_drag->auto_orbit_enabled = false;
+    }
+
+    // A --material-at naming no material would set nothing, and the run would read as though it
+    // had.
+    for (int a = 0; a < args.material_at_count; a++) {
+        if (!scene_find_material(scene, args.material_at[a].material)) {
+            fprintf(stderr, "Error: --material-at: the scene has no material '%s'\n",
+                    args.material_at[a].material);
+            return -1;
+        }
     }
 
     frame_schedule = &args;

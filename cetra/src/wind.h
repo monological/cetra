@@ -6,6 +6,7 @@
 #include "uniform.h"
 
 struct Scene;
+struct Mesh;
 
 // A first-class, scene-owned wind field. Mirrors how UE's WindDirectionalSource
 // and Unity's WindZone are scene objects: the wind carries a direction, strength,
@@ -62,10 +63,6 @@ float wind_gust_mean(const Wind* wind);
 // what keeps them from disagreeing about where the world is.
 void wind_upload_to_program(const Wind* wind, const vec3 world_origin, UniformManager* u);
 
-// The strength a program's wind displaces by: the field's, or 0 with no field or `rest`, which
-// makes every wind-aware shader early-out so a caster is drawn where it stands.
-void wind_upload_strength(const Wind* wind, bool rest, UniformManager* u);
-
 // An upper bound, in OBJECT space, on how far windOffset() can move any vertex
 // of a mesh with this response and mode -- so a wind-driven mesh can be bounded
 // and therefore culled, instead of being exempted from every frustum test.
@@ -79,6 +76,9 @@ void wind_upload_strength(const Wind* wind, bool rest, UniformManager* u);
 // no vertex data. Returns exactly 0 wherever the shader early-outs, so a
 // rigid mesh and a windless scene both keep their import bounds untouched.
 float wind_max_offset(const Wind* wind, float response, int mode, float flex_max, float leaf_max);
+
+// wind_max_offset for a mesh, with its material's response and mode and its own vertex maxima.
+float wind_mesh_max_offset(const Wind* wind, const struct Mesh* mesh);
 
 // Prints the largest displacement windOffset can be driven to, beside the bound
 // wind_max_offset claims for the same inputs, per wind-responsive mesh, in the

@@ -48,8 +48,8 @@ enum {
     DRAW_DOUBLE_SIDED = 1u << 2,
     DRAW_OCCLUDER = 1u << 3, // material claims the AABB as an occlusion proxy, guards passed
     DRAW_NO_CAST = 1u << 4,  // MESH_SHADOW_NONE: drawn, and no light's shadow takes it
-    // Unskinned, unmorphed, under no capture_hidden node, and swaying under no wind or kept at
-    // rest by its material: a kept shadow face holds it where its node puts it, with the wind off
+    // Unskinned, unmorphed, under no capture_hidden node, and displaced by none of this scene's
+    // wind or held at rest by its material: a kept shadow face may hold it where its node puts it
     DRAW_KEPT_STILL = 1u << 5,
     DRAW_CAPTURE_HIDDEN = 1u << 6, // skinned, or under a capture_hidden node: no capture sees it
 };
@@ -125,8 +125,10 @@ DrawList* create_draw_list(void);
 void free_draw_list(DrawList* list);
 
 // Bumped by every mutation the list would have to see: a node or mesh added or
-// freed, a mesh uploaded (the list refuses gpu_vertex_count == 0), a material's
-// alpha mode or caster-relevant textures changed.
+// freed, a mesh uploaded (the list refuses gpu_vertex_count == 0). A material's
+// fields are plain writes and bump nothing, so a lane or flag the list derives
+// from one can change with no new epoch; a consumer that keeps something drawn
+// from them compares the list itself, frame to frame.
 //
 // Global rather than a Scene field because the mutators that matter have no way
 // back to a Scene -- free_mesh and node_add_mesh take a Mesh and a SceneNode.

@@ -1284,17 +1284,20 @@ speeds.
   - **A caster that moves is drawn over a copy, not with the room**: a face that sees a MOVER
     keeps its still casters in a STORE CELL and is that copy plus the movers each frame, which
     is Unreal's static/dynamic shadow caching. A mover still for 120 frames becomes still again.
-    **The cells are a pool of 64 ON TOP of the budget** (spec 13.26), a cell a face, nearest
-    light first: inside the budget the lights took every cell first, so silent's sixteen
-    bodied lights left no store and every such face was drawn whole, every caster in it, every
-    frame. `--tile-stores 0` is that path, and a face left without a cell is said once by name.
+    **The cells are a pool of 64 ON TOP of the budget** (spec 13.26), a cell a face, to faces
+    drawn this frame, nearest light first: inside the budget the lights took every cell first,
+    so silent's sixteen bodied lights left no store and every such face was drawn whole, every
+    caster in it, every frame. A face keeps its cell while nothing moves in it, until a face on
+    screen needs it. `--tile-stores 0` is that path, and a face left without a cell is said by
+    name each time the pool runs out.
   - **A swaying mesh moves only under a wind that moves it, and its material may keep it at
     rest** (spec 13.26). A wind response under no wind, or a wind of no strength, is still. And
     `cachedShadowWind: "rest"` (Unreal's "Rigid") holds a swaying mesh in the kept faces at its
-    rest pose, drawn with the wind off, while the camera, the cascades and the per-frame lights
-    keep the sway. silent's 110 dead trees made every face they reached a mover on every frame:
-    408 faces and 49 million triangles a frame, 176 ms of a 227 ms frame, following a sway of
-    under a millimetre.
+    rest pose, drawn there with no wind response, while the camera, the cascades and the
+    per-frame lights keep the sway. A material change the graph cannot see redraws the faces of
+    the caster it changed, not every face. silent's 110 dead trees made every face they reached
+    a mover on every frame: 408 faces and 49 million triangles a frame, 176 ms of a 227 ms
+    frame, following a sway of under a millimetre.
   - **Glass casts nothing for a cached light** (the kept caster sets leave the blend and
     transmissive lanes out): drawn solid, it put the hall clock's dial in shadow behind its own
     door.
