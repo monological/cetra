@@ -862,10 +862,13 @@ SUBMISSION table is the only counter a level change moves -- `draws` and
 
 ## apps/silent
 
-A grimy kitchen in a house on a foggy night street, walked in first person (spec 13.6). In the
-window: click to capture the mouse and Tab to release it; WASD walks, Shift hurries, and the mouse
-or the arrow keys look. **F** (or pad Y) toggles the flashlight, and **G** or backtick shows the
-debug GUI.
+A grimy kitchen in a house on a foggy night street, walked in first person (spec 13.6). Since spec
+13.25 the house is a plain two-storey clapboard one with a long P.T. hall, and the Gothic house
+stands at the end of the street, up a drive through dead trees. Its kitchen is a dining room, and
+the cat lives there. Everything of the Gothic house below is at the mansion's origin, (115, 8,
+40) added to its old coordinates. In the window: click to capture the mouse and Tab to release
+it; WASD walks, Shift hurries, and the mouse or the arrow keys look. **F** (or pad Y) toggles the
+flashlight, **E** opens a door, and **G** or backtick shows the debug GUI.
 
 **Capture:** `-x`, `-f <n>`, `-S <path>`, `--screenshot-every <n>`, and `-W`/`-H` for the window
 (default 1600x900).
@@ -894,6 +897,19 @@ warning. `--fov <deg>` is the vertical field of view (default 68).
 **Some pinned views that have been useful** (with `-W 960 -H 540`):
 - **The kitchen towards its window:** `--fov 72 --cam-eye 2.2,1.95,13.55 --cam-target 2.2,1.25,10.1`.
 - **The street past the nearest lamp:** `--fov 70 --cam-eye -0.8,1.7,5.0 --cam-target -16,1.6,-1.5`.
+- **The house from the street:** `--cam-eye 4,1.7,-2 --cam-target 0,4,14`.
+- **The hall, from the front door and back:** `--cam-eye -0.75,1.9,10.5 --cam-target
+  -0.75,1.5,19` and `--cam-eye -0.75,1.9,18.9 --cam-target -0.75,1.5,10`.
+- **The living room and the bathroom:** `--cam-eye -1.9,1.9,11.0 --cam-target -3.6,1.0,15.5` and
+  `--cam-eye 0.3,1.9,14.1 --cam-target 2.1,1.0,15.9`.
+- **The street's end, where the drive leaves it:** `--cam-eye 30,1.7,1.5 --cam-target 60,2,0`.
+- **The mansion from the drive:** `--cam-eye 115,11,24 --cam-target 115,12,45`.
+- **The dining room:** `--cam-eye 115.6,9.9,53.3 --cam-target 118.5,9.0,51.2`.
+- **The armour in the mansion's hall:** `--flashlight --cam-eye 114.75,9.6,52.3 --cam-target
+  113.7,9.2,53.15`.
+
+**`--no-fog`** drops the fog volumes and the haze: the layout from above, with `--day --no-rain`,
+is `--cam-eye 70,160,25 --cam-target 70.01,0,25.2`.
 
 **Look switches**, each an A/B for one part of the picture:
 - **`--no-grade`:** the frame without the green-grey LUT (`assets/lut/silent_grade.cube`, written
@@ -939,8 +955,9 @@ wind, each heard from where it is.
 - `--negative-probe` prints, each frame, how much of the frame reaches the tonemap below zero, as
   the render app's does (spec 13.21).
 - **Probe Coverage**, in the Render Mode list under G (spec 13.23), shows which surfaces fall
-  outside the five reflection probes and reflect the sky: they turn magenta. Indoors only the gap
-  round the front door should, since it looks outdoors.
+  outside the reflection probes and reflect the sky: they turn magenta. There are nine since
+  13.25: four in the home, five in the mansion, which are captured as the drive brings them near.
+  Indoors only the gap round a front door should, since it looks outdoors.
 
 **It rains, by default, at 6 mm/h** (spec 13.9), a moderate rain, and the world opens already
 soaked. `--rain <mm/h>` sets another rate and `--no-rain` gives the dry street back. What silent
@@ -973,9 +990,10 @@ Since spec 13.12, two switches and the drips:
 log of the rate. Under a roof -- read from the rain's own occlusion map at the player's head -- the
 patter falls away over a doorway's walk and the rumble stays. `--mute` silences everything.
 
-**The candles and the hall bulb cast shadows** (spec 13.16), kept in tiles rather than drawn every
-frame, so a candle lights only what it can see. Switches:
-- **`--no-candle-shadows`:** the candles light through walls again; the bulb keeps its shadow.
+**The candles and the lamps cast shadows** (spec 13.16), kept in tiles rather than drawn every
+frame, so a candle lights only what it can see. The tiles go to the nearest lights (spec 13.24), so
+at home the mansion's candles do not cast, and up the drive the home's lamps do not. Switches:
+- **`--no-candle-shadows`:** the candles light through walls again; the home's hall lantern keeps its shadow.
 - **`--no-gi`:** no bounce light: no GI volume, and no reflection probes, which are captured
   from its light. What separates a change in the direct light from one in what the captures saw.
 - **`--tile-views <n>`:** every cached light from n views over its body rather than eight. At 1,
@@ -984,13 +1002,15 @@ frame, so a candle lights only what it can see. Switches:
 - **`--profiler`:** per-pass timing and submission counts, at exit.
 
 Pinned views of them, with `-W 960 -H 540`:
-- **The study desk's candlesticks:** `--cam-eye -4.0,4.7,11.0 --cam-target -4.45,3.92,10.1`.
-- **A great hall floor stand against the panelling:** `--cam-eye -2.3,1.75,17.5 --cam-target
-  -2.9,1.5,19.3`.
-- **The hall clock under the bulb:** `--cam-eye -0.2,1.5,14.6 --cam-target -1.45,1.0,12.9`.
+- **The study desk's candlesticks:** `--cam-eye 111.0,12.7,51.0 --cam-target 110.55,11.92,50.1`.
+- **A great hall floor stand against the panelling:** `--cam-eye 112.7,9.75,57.5 --cam-target
+  112.1,9.5,59.3`.
+- **The candelabra on the dining table:** `--cam-eye 119.6,10.2,50.6 --cam-target 117.0,8.9,52.3`.
+- **The home's clock under the lantern, through the cased opening:** `--cam-eye -0.2,1.5,14.6
+  --cam-target -1.45,1.0,12.9`.
 
 **The cat** (spec 13.17): black with yellow eyes, asleep on the study chair, minding its own
-business round the house from there. **G** shows its panel -- what it is doing and every
+business round the mansion from there. **G** shows its panel -- what it is doing and every
 activity's score, its needs, what it senses, an activity or a place to send it to, and its
 colours -- and draws the place graph over the frame: links by kind, its route ahead, its sight
 line green or red, and what it is watching.
@@ -1003,7 +1023,7 @@ line green or red, and what it is watching.
 - **`--cat-goto <place>[:trot|:run]`:** send it there once it is in the house, by the rail if that
   is the way. Scripted, so it has no mind.
 - **`--cat-activity <name>`:** start its mind on one activity -- sleep, stretch, loaf, explore,
-  watch_clock, window, avoid, startle, follow or rail.
+  watch_flame, window, avoid, startle, follow or rail.
 - **`--cat-seed <n>`:** its mind's seed (default 1). Two runs on one seed trace identically.
 - **`--cat-blind`:** it neither sees nor hears the player.
 - **`--cat-cam`:** the camera rides behind it. A fixed offset, so it goes into walls.
@@ -1018,13 +1038,15 @@ The cat senses the player's BODY and not the camera, so a pinned camera, or `--c
 view: the cat never turns its head to one, and what it watches for is the player wherever the body
 stands -- at the spawn point in a headless run. Pinned views that have been useful, with `-W 960
 -H 540`:
-- **Asleep on the chair:** `--cam-eye -3.70,4.05,8.70 --cam-target -5.02,3.72,9.02`.
-- **At the clock, watching the pendulum:** `--cat-at hall_clock --cat-activity watch_clock
-  --cam-eye -0.25,0.75,12.45 --cam-target -1.00,0.80,13.15`.
+- **Asleep on the chair:** `--cam-eye 111.30,12.05,48.70 --cam-target 109.98,11.72,49.02`.
+- **On the dining chair, watching the candelabra:** `--cat-at head_chair --cat-activity
+  watch_flame --cam-eye 116.6,9.4,50.9 --cam-target 116.0,8.9,52.05 -f 80`.
+- **On the window seat, watching the rain:** `--cat-at window_seat --cam-eye 117.7,9.4,52.6
+  --cam-target 117.7,8.9,50.2`.
 - **Its eyes in the flashlight, lying on the great hall's rug:** `--flashlight --cat-at rug
-  --cat-clip lie --cam-eye -0.17,1.2,17.78 --cam-target -0.75,0.42,16.4`.
+  --cat-clip lie --cam-eye 114.83,9.2,57.78 --cam-target 114.25,8.42,56.4`.
 - **On the rail, from the great hall:** `--cat-at gal_w --cat-goto newel_cap --fov 60 --cam-eye
-  0.40,1.70,18.00 --cam-target 0.40,4.10,15.00 -f 900`.
+  115.40,9.70,58.00 --cam-target 115.40,12.10,55.00 -f 900`.
 
 ## The other apps, and the AA mode each one chose
 
