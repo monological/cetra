@@ -494,6 +494,15 @@ void scene_set_origin_callback(Scene* scene, void (*on_shift)(const vec3 delta, 
  */
 void scene_environment_changed(Scene* scene, struct Engine* engine);
 
+/*
+ * The frame's streamed lighting (spec 13.24), once, after the camera is posed and before the
+ * shadow pass: the cached lights' shadow tiles assigned, the GI volumes resident and swept, then
+ * the reflection probes resident and captured. In that order because each waits on the one
+ * before -- a capture on its lights' tiles, a probe on its volumes' sweep -- and every capture
+ * inside it, and every pass after it, sees the same assignment.
+ */
+void scene_update_lighting(Scene* scene, struct Engine* engine);
+
 // GI volumes (spec 13.24): any number, one per place, the nearest few resident. Takes
 // ownership, creating the scene's GI world on the first; false (and the volume freed) on NULL
 // or out of memory.

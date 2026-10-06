@@ -145,15 +145,11 @@ void free_gi_world(GIWorld* world);
 // Takes ownership. False (and the volume freed) on NULL or out of memory.
 bool gi_world_add(GIWorld* world, GIVolume* gi);
 
-// Decide which volumes are resident, from the camera: once a frame, before anything captures,
-// so every pass of the frame agrees on it. A swept volume that leaves keeps its texels, read out
-// of `atlas` before its slot changes hands; one that leaves mid-sweep sweeps again when next
-// admitted.
-void gi_world_rank(GIWorld* world, const struct Engine* engine, const struct LightingAtlas* atlas);
-
-// Grow the scene's lighting atlas to hold the resident volumes and capture up to the world's
-// rate of probes in each one still dirty. No-op on a converged world. Must run BEFORE the
-// frame's scene pass: it renders the scene internally and leaves the default framebuffer bound.
+// Decide which volumes are resident, from the camera, then grow the scene's lighting atlas to
+// hold them, put back the kept tiles of those that returned, and capture up to the world's rate
+// of probes in each one still dirty whose capture may be taken now (scene_capture_ready). Once
+// a frame, before anything else captures, so every pass of the frame agrees on the residency.
+// Must run BEFORE the frame's scene pass: it renders the scene internally.
 void gi_world_update(GIWorld* world, struct Engine* engine, struct Scene* scene);
 
 // Bind the atlas and upload the resident volumes' grids for a program that samples them.
@@ -166,10 +162,6 @@ bool gi_world_pending(const GIWorld* world);
 // Every volume the box touches is resident and swept, so a capture inside it is lit by its own
 // bounce light rather than the environment's or a neighbour's edge. True when none touches it.
 bool gi_world_ready_in(const GIWorld* world, const AABB* box);
-
-// Some resident volume has probes to capture this frame: dirty, and its cached lights shadowed.
-bool gi_world_capture_due(const GIWorld* world, const struct Engine* engine,
-                          const struct Scene* scene);
 
 // Re-arm every volume, for a change in the light every one of them saw.
 void gi_world_mark_dirty(GIWorld* world);
