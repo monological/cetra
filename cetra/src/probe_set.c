@@ -7,6 +7,7 @@
 #include "engine.h"
 #include "gi_volume.h"
 #include "postfx.h"
+#include "shadow.h"
 #include "stream.h"
 #include "util.h"
 #include "ext/log.h"
@@ -89,10 +90,22 @@ void probe_set_mark_dirty(ReflectionProbeSet* set) {
     }
 }
 
+// Whether a probe may be captured now (spec 13.24). A capture lights what it sees with the GI
+// volume only once the volume has an answer, and with the environment's ambient before it, so
+// a probe captured alongside its volume photographs a closed room lit by the open sky -- by day
+// many times the volume's light, which every dark glossy surface then reflects as a grey wash.
+// And a cached light not yet shadowed lights it through the walls. Both are photographed for
+// good, since a probe is not captured again.
+static bool capture_ready(const ReflectionProbe* probe, const struct Engine* engine,
+                          const struct Scene* scene) {
+    return gi_world_ready_in(scene->gi, probe->box_min, probe->box_max) &&
+           shadow_tiles_cover(scene->shadow_system, engine, scene, probe->box_min, probe->box_max);
+}
+
 // A world of one probe: captured once into its own cube, bound on the prefilter unit, no
 // atlas -- the path that predates sets, kept verbatim.
 static void update_single(ReflectionProbeSet* set, struct Engine* engine, struct Scene* scene) {
-    if (set->ready)
+    if (set->ready || !capture_ready(set->probes[0], engine, scene))
         return;
     set->captures_total++;
     if (reflection_probe_capture(set->probes[0], engine, scene) != 0) {
@@ -128,12 +141,14 @@ void probe_set_rank(ReflectionProbeSet* set, const struct Engine* engine) {
     }
 }
 
-// The resident probe still waiting for its first capture, nearest first, or -1.
-static int next_capture(const ReflectionProbeSet* set) {
+// The resident probe still waiting for its first capture and ready for it, nearest first, or -1.
+static int next_capture(const ReflectionProbeSet* set, const struct Engine* engine,
+                        const struct Scene* scene) {
     int best = -1;
     for (int s = 0; s < PROBE_SET_MAX; ++s) {
         const int i = set->holder[s];
-        if (i < 0 || set->probes[i]->loaded || set->probes[i]->upload_pending)
+        if (i < 0 || set->probes[i]->loaded || set->probes[i]->upload_pending ||
+            !capture_ready(set->probes[i], engine, scene))
             continue;
         if (best < 0 || set->distance[i] < set->distance[best])
             best = i;
@@ -193,28 +208,21 @@ static bool resident_waiting(const ReflectionProbeSet* set) {
     return false;
 }
 
-bool probe_set_capture_due(const ReflectionProbeSet* set, const struct Scene* scene) {
-    if (!set || set->failed || set->count <= 0 || !scene || gi_world_pending(scene->gi))
+bool probe_set_capture_due(const ReflectionProbeSet* set, const struct Engine* engine,
+                           const struct Scene* scene) {
+    if (!set || set->failed || set->count <= 0 || !engine || !scene)
         return false;
     if (set->count == 1)
-        return !set->ready;
-    return next_capture(set) >= 0;
+        return !set->ready && capture_ready(set->probes[0], engine, scene);
+    return next_capture(set, engine, scene) >= 0;
 }
 
 void probe_set_update(ReflectionProbeSet* set, struct Engine* engine, struct Scene* scene) {
     if (!set || set->failed || set->count <= 0 || !engine || !scene)
         return;
 
-    // A capture lights what it sees with the volume only once the volume has an
-    // answer, and with the environment's ambient before it, so a probe captured
-    // alongside the volume photographs every closed room lit by the open sky --
-    // by day many times the volume's light, which every dark glossy surface then
-    // reflects as a grey wash.
-    const bool gi_waiting = gi_world_pending(scene->gi);
-
     if (set->count == 1) {
-        if (!gi_waiting)
-            update_single(set, engine, scene);
+        update_single(set, engine, scene);
         return;
     }
 
@@ -234,16 +242,15 @@ void probe_set_update(ReflectionProbeSet* set, struct Engine* engine, struct Sce
             restore_column(set, i);
     }
 
-    // At load every resident probe captures in the one frame, so a set is whole from its
-    // first frame; a probe that comes into range later captures alone, a frame's worth of
-    // six scene renders and a prefilter.
-    if (!gi_waiting) {
-        const bool all = !set->opened;
-        for (int i = next_capture(set); i >= 0; i = all ? next_capture(set) : -1) {
-            if (!capture_into_column(set, i, engine, scene)) {
-                set->failed = true;
-                return;
-            }
+    // At load every resident probe that is ready captures in the one frame, so a set is whole
+    // from its first frame; a probe that comes into range later captures alone, a frame's
+    // worth of six scene renders and a prefilter.
+    const bool all = !set->opened;
+    for (int i = next_capture(set, engine, scene); i >= 0;
+         i = all ? next_capture(set, engine, scene) : -1) {
+        if (!capture_into_column(set, i, engine, scene)) {
+            set->failed = true;
+            return;
         }
         set->opened = true;
     }
@@ -400,8 +407,14 @@ void probe_set_stream_print(const ReflectionProbeSet* set, int frame) {
                             : p->upload_pending    ? "uploading"
                             : set->slot_of[i] >= 0 ? "capturing"
                                                    : "out";
-        printf("stream probe idx=%d slot=%d dist=%.2f state=%s kept=%d\n", i, set->slot_of[i],
-               (double)set->distance[i], state, p->kept ? 1 : 0);
+        // A digest of the kept column, which is what a capture saw: two captures of one room
+        // agree on it exactly, so it says whether something was or was not photographed.
+        int w = 0, h = 0;
+        lighting_atlas_probe_extent(set->atlas, &w, &h);
+        const uint32_t digest =
+            p->kept ? fnv1a_bytes(p->kept, sizeof(uint16_t) * 4 * (size_t)w * (size_t)h) : 0u;
+        printf("stream probe idx=%d slot=%d dist=%.2f state=%s kept=%d digest=%08x\n", i,
+               set->slot_of[i], (double)set->distance[i], state, p->kept ? 1 : 0, digest);
     }
     fflush(stdout);
 }

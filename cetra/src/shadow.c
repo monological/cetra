@@ -193,6 +193,8 @@ ShadowSystem* create_shadow_system(int default_map_size) {
     // mean (about a centimetre, mostly up and down), so a flicker never redraws a face and a
     // light carried across a room does.
     system->tile_tolerance = 0.05f;
+    system->tile_new_blocks_per_frame = 2;
+    system->tile_open_frame = -1;
 
     system->shadow_bias = 0.005f;
 
@@ -211,6 +213,8 @@ void free_shadow_system(ShadowSystem* system) {
         glDeleteBuffers(SHADOW_RAIN_ASK_LATENCY, system->rain_ask_pbo);
     gl_delete_fbo(&system->tile_copy_fbo);
     free(system->caster_order);
+    free(system->tile_rank);
+    free(system->tile_rank_distance);
 
     free(system);
 }
@@ -862,13 +866,20 @@ static bool tile_node_moves(const ShadowSystem* ss, const SceneNode* node) {
     return false;
 }
 
+// Whether a kept face may hold this caster for good: it stands where its node puts it, and the
+// captures do not leave it out. A caster they leave out (spec 13.24) is drawn over the copy every
+// frame like a mover, so a capture's own depth pass can draw the face without it.
+static bool tile_keeps(const DrawItem* item) {
+    return (item->flags & DRAW_STILL) && !(item->flags & DRAW_CAPTURE_HIDDEN);
+}
+
 // Which kept set takes a caster, by how it moves; every other set takes it whatever it does. A
 // face drawn whole and kept takes what stands where its node puts it. Split for a face drawn
 // every frame, the store takes what has not moved lately and the overlay the rest -- with every
 // pose, so a pose is only ever drawn into a face that is drawn again the next frame.
 static bool caster_set_wants_motion(const ShadowSystem* ss, ShadowCasterSet set,
                                     const DrawItem* item) {
-    const bool still = (item->flags & DRAW_STILL) != 0;
+    const bool still = tile_keeps(item);
     switch (set) {
         case SHADOW_CASTERS_KEPT:
             return still;
@@ -1513,17 +1524,93 @@ static void tile_block_free(ShadowSystem* ss, ShadowTileBlock* block) {
     *block = tile_block_blank(block->first, block->cells);
 }
 
-// Give every cached light a block and free the blocks of lights no longer cached. A light keeps
-// its block by identity from frame to frame, which is what lets its faces be kept. Returns how
-// many lights hold one.
-static int tiles_reconcile(ShadowSystem* ss, const Scene* scene) {
+// How much nearer a light without a block must be than one holding one to take it, in metres:
+// a camera between two candles would otherwise trade one block between them on every step, and
+// each trade redraws every face.
+#define TILE_STREAM_MARGIN 2.0f
+
+// How far a light's reach is from the camera: 0 inside its range.
+static float tile_light_distance(const Light* light, const vec3 eye) {
+    return fmaxf(glm_vec3_distance((float*)light->global_position, (float*)eye) - light->range,
+                 0.0f);
+}
+
+// The cached lights, nearest the camera first, ties to scene order: once a frame, shared by
+// every depth pass of it -- a capture's, which runs before the camera is swapped for the
+// probe's, and the frame's own -- and by shadow_tiles_cover. Ranked per pass, each capture
+// face would hand the blocks to the lights round its probe and back.
+static void tiles_rank(ShadowSystem* ss, const Engine* engine, const Scene* scene) {
+    if (ss->tile_rank_valid && ss->tile_rank_frame == engine->total_frames)
+        return;
+    if ((int)scene->light_count > ss->tile_rank_capacity) {
+        const int capacity = (int)scene->light_count;
+        const Light** rank = realloc(ss->tile_rank, sizeof(Light*) * (size_t)capacity);
+        if (rank)
+            ss->tile_rank = rank;
+        float* distance = realloc(ss->tile_rank_distance, sizeof(float) * (size_t)capacity);
+        if (distance)
+            ss->tile_rank_distance = distance;
+        if (!rank || !distance) {
+            ss->tile_rank_count = 0;
+            return;
+        }
+        ss->tile_rank_capacity = capacity;
+    }
+    vec3 eye = {0.0f, 0.0f, 0.0f};
+    if (engine->camera)
+        glm_vec3_copy(engine->camera->position, eye);
+    int n = 0;
+    for (size_t i = 0; i < scene->light_count; ++i) {
+        const Light* light = scene->lights[i];
+        if (!light || !shadow_light_takes_tiles(light))
+            continue;
+        const float d = tile_light_distance(light, eye);
+        int at = n++;
+        while (at > 0 && ss->tile_rank_distance[at - 1] > d) {
+            ss->tile_rank[at] = ss->tile_rank[at - 1];
+            ss->tile_rank_distance[at] = ss->tile_rank_distance[at - 1];
+            at--;
+        }
+        ss->tile_rank[at] = light;
+        ss->tile_rank_distance[at] = d;
+    }
+    ss->tile_rank_count = n;
+    ss->tile_rank_frame = engine->total_frames;
+    ss->tile_rank_valid = true;
+}
+
+// The block whose light ranks after `rank` and is more than the margin farther, the farthest
+// of them, with room for `cells`; -1 when none is. Its light gives it up to a nearer one.
+static int tile_block_to_evict(ShadowSystem* ss, int rank, int cells) {
+    const float limit = ss->tile_rank_distance[rank] + TILE_STREAM_MARGIN;
+    for (int r = ss->tile_rank_count - 1; r > rank; --r) {
+        if (ss->tile_rank_distance[r] <= limit)
+            break;
+        const int b = tile_block_of(ss, ss->tile_rank[r]);
+        if (b >= 0 && ss->tile_blocks[b].cells >= cells)
+            return b;
+    }
+    return -1;
+}
+
+// Give the cached lights blocks, nearest the camera first, and free the blocks of lights no
+// longer cached (spec 13.24). A light keeps its block by identity from frame to frame, which is
+// what lets its faces be kept, until a light clearly nearer needs it and the budget has no other
+// room. Once the tiles have opened, at most tile_new_blocks_per_frame blocks are placed a frame:
+// a light placed draws all its faces at once. Returns how many lights hold one.
+static int tiles_reconcile(ShadowSystem* ss, const Engine* engine, const Scene* scene) {
     bool held[SHADOW_TILE_MAX_BLOCKS] = {false};
     const Light* full = NULL;
     int count = 0;
-    for (size_t i = 0; i < scene->light_count; ++i) {
-        Light* light = scene->lights[i];
-        if (!light || !shadow_light_takes_tiles(light))
-            continue;
+    tiles_rank(ss, engine, scene);
+    if (ss->tile_placed_frame != engine->total_frames) {
+        ss->tile_placed_frame = engine->total_frames;
+        ss->tile_placed_count = 0;
+    }
+    const bool opening =
+        ss->tile_open_frame < 0 || ss->tile_open_frame == (int64_t)engine->total_frames;
+    for (int r = 0; r < ss->tile_rank_count; ++r) {
+        Light* light = (Light*)ss->tile_rank[r];
         // A light whose shape now wants more views than its block holds takes a bigger one.
         const int cells = 6 * tile_views_for(ss, light);
         int b = tile_block_of(ss, light);
@@ -1532,13 +1619,24 @@ static int tiles_reconcile(ShadowSystem* ss, const Scene* scene) {
             b = -1;
         }
         if (b < 0) {
+            if (!opening && ss->tile_new_blocks_per_frame > 0 &&
+                ss->tile_placed_count >= ss->tile_new_blocks_per_frame)
+                continue;
             b = tile_block_take(ss, cells);
+            if (b < 0) {
+                b = tile_block_to_evict(ss, r, cells);
+                if (b >= 0)
+                    tile_block_free(ss, &ss->tile_blocks[b]);
+            }
             if (b < 0) {
                 if (!full)
                     full = light;
                 continue;
             }
             ss->tile_blocks[b].light = light;
+            ss->tile_placed_count++;
+            if (ss->tile_open_frame < 0)
+                ss->tile_open_frame = (int64_t)engine->total_frames;
         }
         held[b] = true;
         count++;
@@ -1548,13 +1646,64 @@ static int tiles_reconcile(ShadowSystem* ss, const Scene* scene) {
             tile_block_free(ss, &ss->tile_blocks[b]);
     }
     if (full && !ss->tile_full_warned) {
-        log_warn("Cached shadow tiles full (%u faces in %u MB): '%s' and any further cached "
-                 "light will not cast",
+        log_warn("Cached shadow tiles full (%u faces in %u MB): '%s' and any cached light "
+                 "farther from the camera will not cast",
                  (unsigned)SHADOW_TILE_MAX_CELLS, PUNCTUAL_TILE_VRAM_BUDGET / (1024u * 1024u),
                  full->name ? full->name : "unnamed light");
     }
     ss->tile_full_warned = full != NULL;
+    ss->tile_full_light = full;
     return count;
+}
+
+void shadow_tiles_stream_print(const ShadowSystem* ss, int frame) {
+    if (!ss)
+        return;
+    printf("stream tiles frame=%d lights=%d open=%lld\n", frame, ss->tile_rank_count,
+           (long long)ss->tile_open_frame);
+    for (int r = 0; r < ss->tile_rank_count; ++r) {
+        const Light* light = ss->tile_rank[r];
+        const int b = tile_block_of(ss, light);
+        printf("stream tile rank=%d light=%s dist=%.2f block=%d whole=%d\n", r,
+               light->name ? light->name : "unnamed", (double)ss->tile_rank_distance[r], b,
+               b >= 0 && tile_block_whole(&ss->tile_blocks[b]) ? 1 : 0);
+    }
+    fflush(stdout);
+}
+
+bool shadow_tiles_cover(ShadowSystem* ss, const Engine* engine, const Scene* scene,
+                        const vec3 box_min, const vec3 box_max) {
+    if (!ss || !ss->enabled || !engine || !scene)
+        return true;
+    tiles_rank(ss, engine, scene);
+    const bool opening =
+        ss->tile_open_frame < 0 || ss->tile_open_frame == (int64_t)engine->total_frames;
+    int cells = 0;
+    for (int r = 0; r < ss->tile_rank_count; ++r) {
+        const Light* light = ss->tile_rank[r];
+        const int need = 6 * tile_views_for(ss, light);
+        cells += need;
+        // Whether this light's reach touches the box.
+        float d2 = 0.0f;
+        for (int c = 0; c < 3; ++c) {
+            const float p = light->global_position[c];
+            const float out = fmaxf(fmaxf(box_min[c] - p, p - box_max[c]), 0.0f);
+            d2 += out * out;
+        }
+        if (d2 > light->range * light->range)
+            continue;
+        if (opening) {
+            // The frame the tiles open places every block it has room for, nearest first,
+            // inside the capture's own depth pass: a light within that budget will be whole.
+            if (cells > (int)SHADOW_TILE_MAX_CELLS || r >= (int)SHADOW_TILE_MAX_BLOCKS)
+                return false;
+            continue;
+        }
+        const int b = tile_block_of(ss, light);
+        if (b < 0 || !tile_block_whole(&ss->tile_blocks[b]))
+            return false;
+    }
+    return true;
 }
 
 // Lay the region out for the edge the array is about to be built at: its base past every
@@ -1724,7 +1873,7 @@ static void tiles_note_changes(ShadowSystem* ss, const Engine* engine, const Sce
         if (!caster_set_wants(SHADOW_CASTERS_KEPT, item->lane, item->flags))
             continue;
         vec3 lo = GLM_VEC3_ZERO_INIT, hi = GLM_VEC3_ZERO_INIT;
-        if (!(item->flags & DRAW_STILL)) {
+        if (!tile_keeps(item)) {
             // The surface as drawn, posed and displaced: the import box is the bind pose, which a
             // curled body or a swung tail leaves.
             AABB box;
@@ -1940,7 +2089,9 @@ static void render_shadow_movers(ShadowSystem* ss, const Engine* engine, const S
                 continue;
             mat4 matrix = GLM_MAT4_IDENTITY_INIT;
             tile_block_face_matrix(block, f, matrix);
-            if (tile_face_in(block->valid, f) && engine->camera &&
+            // Inside a capture every face is drawn, in view or not: the copy a face out of view
+            // keeps carries the movers the last frame drew, and a capture keeps what it sees.
+            if (tile_face_in(block->valid, f) && engine->camera && !engine->capture_burst &&
                 !tile_face_in_view(&view, matrix))
                 continue;
             const int cell = tile_block_first_cell(ss, edge, b) + f;
@@ -2487,7 +2638,7 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
 
     // Everything that takes a block is settled before the region is laid out, so every cell
     // drawn this frame is in the array it is drawn into.
-    const int tiled = tiles_reconcile(ss, scene);
+    const int tiled = tiles_reconcile(ss, engine, scene);
     if (tiled > 0 && tile_reference_count(ss) == 0) {
         tiles_note_changes(ss, engine, scene, engine->total_frames);
         tiles_take_stores(ss);

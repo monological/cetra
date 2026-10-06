@@ -367,6 +367,10 @@ typedef struct ShadowSystem {
     // as it is now, each read with one hard tap and averaged with no blur -- the soft shadow
     // by its definition. 0 = off; at most SHADOW_TILE_REFERENCE_MAX.
     int tile_reference;
+    // Blocks placed a frame once the tiles have opened (spec 13.24), nearest light first: a
+    // light regaining one draws every face at once. 0 = no limit. The frame they open in places
+    // every block it can, since that is the load.
+    int tile_new_blocks_per_frame;
     // ENGINE-OWNED. The region starts at tile_base_layer and runs tile_layers; both only
     // grow, since moving either moves every tile. tile_generation counts the times its
     // contents were lost -- an array rebuilt, the base moved -- and a block drawn under
@@ -383,9 +387,21 @@ typedef struct ShadowSystem {
     const struct SceneNode* tile_movers[SHADOW_TILE_MAX_MOVERS];
     uint64_t tile_mover_moved[SHADOW_TILE_MAX_MOVERS]; // the tile frame each last moved
     int tile_mover_count;
-    uint64_t tile_frame;   // the engine's frame the tiles were last drawn in
-    GLuint tile_copy_fbo;  // reads one face while the punctual FBO writes its copy
-    bool tile_full_warned; // latches, as the pool's does
+    uint64_t tile_frame; // the engine's frame the tiles were last drawn in
+    // The cached lights nearest the camera first (spec 13.24), ranked once a frame and shared
+    // by every depth pass of it and by shadow_tiles_cover; with each one's distance.
+    const struct Light** tile_rank;
+    float* tile_rank_distance;
+    int tile_rank_count;
+    int tile_rank_capacity;
+    uint64_t tile_rank_frame;
+    bool tile_rank_valid;
+    int64_t tile_open_frame; // the frame a block was first placed in; -1 before
+    uint64_t tile_placed_frame;
+    int tile_placed_count;               // blocks placed in tile_placed_frame
+    GLuint tile_copy_fbo;                // reads one face while the punctual FBO writes its copy
+    bool tile_full_warned;               // latches, as the pool's does
+    const struct Light* tile_full_light; // the nearest light the last reconcile had no room for
     bool tile_range_warned;
 
     // Moment shadow maps (spec 11.22): a filterable RGBA16F copy of the depth
@@ -468,6 +484,17 @@ int shadow_live_punctual_layer(const ShadowSystem* system, const struct Light* l
 // Whether a light's shadow is cached in tiles rather than drawn into the pool every frame:
 // a shadow-casting point light asking for it, with the range its faces end at.
 bool shadow_light_takes_tiles(const struct Light* light);
+
+// Whether every cached light whose range reaches the box will be shadowed in a capture taken now
+// (spec 13.24): holding a whole block, or, in the frame the tiles open, within the budget that
+// frame places. A capture taken before then photographs light through walls for good, so the
+// GI volumes and reflection probes wait on it.
+bool shadow_tiles_cover(ShadowSystem* ss, const struct Engine* engine, const struct Scene* scene,
+                        const vec3 box_min, const vec3 box_max);
+
+// The cached lights in this frame's ranking, nearest first, each with its distance and whether it
+// holds a whole block (--stream-probe).
+void shadow_tiles_stream_print(const ShadowSystem* ss, int frame);
 
 // A cached light's first tile a consumer may actually sample, or -1 for none: shadow_tile
 // gated the same way, since it too is maintained only while the depth pass runs.

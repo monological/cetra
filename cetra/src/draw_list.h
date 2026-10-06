@@ -49,6 +49,7 @@ enum {
     DRAW_OCCLUDER = 1u << 3, // material claims the AABB as an occlusion proxy, guards passed
     DRAW_NO_CAST = 1u << 4,  // MESH_SHADOW_NONE: drawn, and no light's shadow takes it
     DRAW_STILL = 1u << 5, // unskinned, unswayed, unmorphed: the surface is where its node puts it
+    DRAW_CAPTURE_HIDDEN = 1u << 6, // skinned, or under a capture_hidden node: no capture sees it
 };
 
 // How a view picks a level out of a mesh's LOD chain.
@@ -170,6 +171,8 @@ typedef struct CullView {
     // see it; who initialises this and who may set it is render_cull_view's
     // contract, stated there.
     bool occlusion;
+    // A capture's camera: what DRAW_CAPTURE_HIDDEN marks is not drawn.
+    bool capture;
 } CullView;
 
 // Whether this item survives the frustum.

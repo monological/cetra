@@ -486,6 +486,12 @@ bool gi_world_add(GIWorld* world, GIVolume* gi) {
     return true;
 }
 
+// The far corner of a volume's grid.
+static void gi_volume_box_max(const GIVolume* gi, vec3 out) {
+    for (int c = 0; c < 3; ++c)
+        out[c] = gi->grid_min[c] + gi->spacing[c] * (float)gi->counts[c];
+}
+
 void gi_world_rank(GIWorld* world, const struct Engine* engine) {
     if (!world || !world->enabled || world->count == 0 || !engine)
         return;
@@ -499,9 +505,8 @@ void gi_world_rank(GIWorld* world, const struct Engine* engine) {
             world->distance[i] = -1.0f;
             continue;
         }
-        vec3 box_max;
-        for (int c = 0; c < 3; ++c)
-            box_max[c] = gi->grid_min[c] + gi->spacing[c] * (float)gi->counts[c];
+        vec3 box_max = {0};
+        gi_volume_box_max(gi, box_max);
         world->distance[i] = stream_box_distance(eye, gi->grid_min, box_max);
     }
     stream_assign(world->distance, world->count, GI_RESIDENT_MAX, GI_STREAM_MARGIN, world->slot_of,
@@ -520,13 +525,10 @@ void gi_world_rank(GIWorld* world, const struct Engine* engine) {
             continue;
         }
         // Evicted with nothing kept, or admitted with nothing to put back: the slot it held is
-        // another's, so it sweeps from the start when it next holds one. At load in one frame;
-        // after it at the stream rate, unless the camera is already inside, where it is the
-        // light on screen.
+        // another's, so it sweeps from the start when it next holds one.
         if (gi->failed)
             continue;
         gi->first_pass = true;
-        gi->streamed = world->opened && world->distance[i] > 0.0f;
         gi_volume_mark_dirty(gi);
     }
 }
@@ -557,11 +559,41 @@ void gi_world_update(GIWorld* world, struct Engine* engine, struct Scene* scene)
             gi_volume_restore(gi, atlas, region);
             continue;
         }
+        if (gi->failed || gi->dirty_count <= 0)
+            continue;
+        // Its cached lights first: a capture taken before they are shadowed photographs their
+        // light through the walls, and a swept volume is not swept again.
+        vec3 hi = {0};
+        gi_volume_box_max(gi, hi);
+        if (!shadow_tiles_cover(scene->shadow_system, engine, scene, gi->grid_min, hi))
+            continue;
+        // An opening sweep at load runs in one frame; one begun after it at the stream rate,
+        // unless the camera is already inside, where it is the light on screen.
+        if (gi->first_pass && gi->dirty_count == gi_probe_count(gi))
+            gi->streamed = world->opened && world->distance[v] > 0.0f;
         if (gi_volume_capture(gi, engine, scene, atlas, region, world->rate, world->stream_rate)) {
             gi_volume_keep(gi, atlas, region);
             world->opened = true;
         }
     }
+}
+
+bool gi_world_ready_in(const GIWorld* world, const vec3 box_min, const vec3 box_max) {
+    if (!world || !world->enabled)
+        return true;
+    for (int i = 0; i < world->count; ++i) {
+        const GIVolume* gi = world->volumes[i];
+        if (gi->failed)
+            continue;
+        vec3 hi = {0};
+        gi_volume_box_max(gi, hi);
+        bool touches = true;
+        for (int c = 0; c < 3; ++c)
+            touches = touches && box_min[c] <= hi[c] && box_max[c] >= gi->grid_min[c];
+        if (touches && (world->slot_of[i] < 0 || !gi_volume_active(gi)))
+            return false;
+    }
+    return true;
 }
 
 bool gi_world_pending(const GIWorld* world) {
@@ -573,12 +605,20 @@ bool gi_world_pending(const GIWorld* world) {
     return false;
 }
 
-bool gi_world_dirty(const GIWorld* world) {
-    if (!world || !world->enabled)
+bool gi_world_capture_due(const GIWorld* world, const struct Engine* engine,
+                          const struct Scene* scene) {
+    if (!world || !world->enabled || !engine || !scene)
         return false;
     for (int s = 0; s < GI_RESIDENT_MAX; ++s) {
         const int v = world->holder[s];
-        if (v >= 0 && !world->volumes[v]->failed && world->volumes[v]->dirty_count > 0)
+        if (v < 0)
+            continue;
+        const GIVolume* gi = world->volumes[v];
+        if (gi->failed || gi->upload_pending || gi->dirty_count <= 0)
+            continue;
+        vec3 hi = {0};
+        gi_volume_box_max(gi, hi);
+        if (shadow_tiles_cover(scene->shadow_system, engine, scene, gi->grid_min, hi))
             return true;
     }
     return false;
@@ -686,9 +726,13 @@ void gi_world_probe_print(const GIWorld* world, int frame) {
                             : gi->first_pass      ? (gi->dirty_count > 0 ? "sweeping" : "unswept")
                             : gi->dirty_count > 0 ? "converging"
                                                   : "swept";
-        printf("stream gi idx=%d slot=%d dist=%.2f captures=%d state=%s kept=%d\n", i,
+        int w = 0, h = 0;
+        gi_volume_atlas_extent(gi, &w, &h);
+        const uint32_t digest =
+            gi->kept ? fnv1a_bytes(gi->kept, sizeof(uint16_t) * 4 * (size_t)w * (size_t)h) : 0u;
+        printf("stream gi idx=%d slot=%d dist=%.2f captures=%d state=%s kept=%d digest=%08x\n", i,
                world->slot_of[i], (double)world->distance[i], gi->captures_total, state,
-               gi->kept ? 1 : 0);
+               gi->kept ? 1 : 0, digest);
     }
     fflush(stdout);
 }

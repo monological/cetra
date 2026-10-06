@@ -199,6 +199,9 @@ static void print_usage(const char* prog) {
                     "load (default 32)\n");
     fprintf(stderr, "      --stream-probe N   Print the streamed lighting's residency every N "
                     "frames\n");
+    fprintf(stderr, "      --capture-hide <node>  Leave a node out of every GI and probe capture "
+                    "(repeatable)\n");
+    fprintf(stderr, "      --remove-node <node>   Take a node out of the scene (repeatable)\n");
     fprintf(stderr, "      --water            Water surface (spec 11.32)\n");
     fprintf(stderr, "      --no-water         Drop a surface the scene file asked for\n");
     fprintf(stderr, "      --rain <mm/h>      Rain at this rate, already soaked (spec 13.9)\n");
@@ -1224,6 +1227,19 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 return -1;
             }
             args->gi_stream_rate = atoi(argv[i]);
+        } else if (strcmp(argv[i], "--capture-hide") == 0 ||
+                   strcmp(argv[i], "--remove-node") == 0) {
+            const bool hide = strcmp(argv[i], "--capture-hide") == 0;
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            int* count = hide ? &args->capture_hide_count : &args->remove_node_count;
+            if (*count >= RENDER_NODE_NAMES_MAX) {
+                fprintf(stderr, "Error: at most %d %s names\n", RENDER_NODE_NAMES_MAX, argv[i - 1]);
+                return -1;
+            }
+            (hide ? args->capture_hide : args->remove_node)[(*count)++] = argv[i];
         } else if (strcmp(argv[i], "--stream-probe") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -2841,6 +2857,7 @@ static void render_frame_update(Engine* engine, float dt) {
         if (scene) {
             gi_world_probe_print(scene->gi, (int)engine->total_frames);
             probe_set_stream_print(scene->probe_set, (int)engine->total_frames);
+            shadow_tiles_stream_print(scene->shadow_system, (int)engine->total_frames);
         }
     }
     if (frame_schedule->decal_probe > 0 &&
@@ -4636,6 +4653,22 @@ int main(int argc, char** argv) {
     // generated.
     apply_model_recenter(scene);
 
+    // Nodes named on the command line, before anything is captured.
+    for (int i = 0; i < args.capture_hide_count; i++) {
+        SceneNode* node = node_find(scene->root_node, args.capture_hide[i]);
+        if (node)
+            node->capture_hidden = true;
+        else
+            fprintf(stderr, "Warning: --capture-hide: no node named '%s'\n", args.capture_hide[i]);
+    }
+    for (int i = 0; i < args.remove_node_count; i++) {
+        SceneNode* node = node_find(scene->root_node, args.remove_node[i]);
+        if (node)
+            free_node(node);
+        else
+            fprintf(stderr, "Warning: --remove-node: no node named '%s'\n", args.remove_node[i]);
+    }
+
     // The GI probe volumes. Only allocated here -- the capture sweep runs inside
     // the render loop, where the scene has its final transforms and the async
     // texture loader has drained. A file that authored its own grids wins over
@@ -5018,6 +5051,7 @@ int main(int argc, char** argv) {
     if (args.stream_probe > 0) {
         gi_world_probe_print(scene->gi, (int)engine->total_frames);
         probe_set_stream_print(scene->probe_set, (int)engine->total_frames);
+        shadow_tiles_stream_print(scene->shadow_system, (int)engine->total_frames);
     }
     if (args.decal_probe > 0)
         decal_probe_print(scene, (int)engine->total_frames, true,

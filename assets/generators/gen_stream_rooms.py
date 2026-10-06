@@ -13,6 +13,11 @@ The counts are chosen to overflow every resident cap at once:
 - 20 probes against 16 resident probe columns;
 - 20 bodied lights, 960 cells, against the 768 the cached shadow pool holds.
 
+Room PROP_ROOM holds two props its probes photograph: `hidden_prop`, an ordinary box a run hides
+from captures by name, and `skinned_prop`, a box skinned to one joint, which captures leave out
+without being asked. A thing that moves, frozen into a picture taken while the game runs, is
+what both guard against.
+
 The last two rooms are TWINS: the same colour and the same lights. The first has a grid aligned
 with its interior; the second's grid is laid so its outermost probes sit inside the wall slabs,
 which is what probe classification exists to switch off. The walls are slabs with thickness for
@@ -60,6 +65,10 @@ COLOURS = [
     [0.10, 0.44, 0.36, 1.0],  # teal, the misaligned twin
 ]
 assert len(COLOURS) == ROOMS
+
+PROP_ROOM = 3
+PROP_HALF = 0.25
+PROP_HEIGHT = 0.8
 
 LIGHT_LUMENS = 60.0
 LIGHT_RANGE = 7.0
@@ -135,6 +144,14 @@ def build():
         m.box((x - HALF, -WALL, -HALF), (x + HALF, 0.0, HALF))
         m.end()
         materials[f"room{k}_floor"] = (FLOOR, FLOOR_ROUGHNESS)
+
+        if k == PROP_ROOM:
+            for name, px in (("hidden_prop", x + 1.2), ("skinned_prop", x - 1.2)):
+                m.begin(name)
+                m.box((px - PROP_HALF, 0.0, -1.2 - PROP_HALF),
+                      (px + PROP_HALF, PROP_HEIGHT, -1.2 + PROP_HALF))
+                m.end()
+                materials[name] = (WHITE, 1.0)
     return m, materials
 
 
@@ -142,7 +159,13 @@ def emit_gltf(mesh, materials):
     pos_bytes = b"".join(struct.pack("<3f", *p) for p in mesh.positions)
     nrm_bytes = b"".join(struct.pack("<3f", *n) for n in mesh.normals)
     idx_bytes = b"".join(struct.pack("<I", i) for i in mesh.indices)
-    buffer_bytes = pos_bytes + nrm_bytes + idx_bytes
+    # The skin: every vertex on joint 0 at full weight, under an identity inverse bind, so the
+    # skinned prop stands where it was modelled.
+    joint_bytes = b"".join(struct.pack("<4H", 0, 0, 0, 0) for _ in mesh.positions)
+    weight_bytes = b"".join(struct.pack("<4f", 1.0, 0.0, 0.0, 0.0) for _ in mesh.positions)
+    ibm_bytes = struct.pack("<16f", *[1.0 if r == c else 0.0 for c in range(4) for r in range(4)])
+    views_bytes = [pos_bytes, nrm_bytes, idx_bytes, joint_bytes, weight_bytes, ibm_bytes]
+    buffer_bytes = b"".join(views_bytes)
     mn = [min(p[i] for p in mesh.positions) for i in range(3)]
     mx = [max(p[i] for p in mesh.positions) for i in range(3)]
 
@@ -154,25 +177,55 @@ def emit_gltf(mesh, materials):
     for _, start, count in mesh.groups:
         accessors.append({"bufferView": 2, "byteOffset": start * 4, "componentType": 5125,
                           "count": count, "type": "SCALAR"})
+    joints_acc = len(accessors)
+    accessors.append({"bufferView": 3, "componentType": 5123, "count": len(mesh.positions),
+                      "type": "VEC4"})
+    weights_acc = len(accessors)
+    accessors.append({"bufferView": 4, "componentType": 5126, "count": len(mesh.positions),
+                      "type": "VEC4"})
+    ibm_acc = len(accessors)
+    accessors.append({"bufferView": 5, "componentType": 5126, "count": 1, "type": "MAT4"})
+
     names = [g[0] for g in mesh.groups]
+    joint_node = len(names)
+
+    def primitive(i, n):
+        attributes = {"POSITION": 0, "NORMAL": 1}
+        if n == "skinned_prop":
+            attributes.update({"JOINTS_0": joints_acc, "WEIGHTS_0": weights_acc})
+        return {"attributes": attributes, "indices": 2 + i, "material": i}
+
+    nodes = []
+    for i, n in enumerate(names):
+        node = {"name": n, "mesh": i}
+        if n == "skinned_prop":
+            node["skin"] = 0
+        nodes.append(node)
+    nodes.append({"name": "skinned_prop_joint"})
+    offsets, at = [], 0
+    for v in views_bytes:
+        offsets.append(at)
+        at += len(v)
     gltf = {
         "asset": {"version": "2.0", "generator": "gen_stream_rooms.py"},
         "scene": 0,
-        "scenes": [{"nodes": list(range(len(names)))}],
-        "nodes": [{"name": n, "mesh": i} for i, n in enumerate(names)],
-        "meshes": [{"name": n, "primitives": [{"attributes": {"POSITION": 0, "NORMAL": 1},
-                                               "indices": 2 + i, "material": i}]}
-                   for i, n in enumerate(names)],
+        "scenes": [{"nodes": list(range(len(names) + 1))}],
+        "nodes": nodes,
+        "skins": [{"joints": [joint_node], "inverseBindMatrices": ibm_acc}],
+        "meshes": [{"name": n, "primitives": [primitive(i, n)]} for i, n in enumerate(names)],
         "materials": [{"name": n, "pbrMetallicRoughness": {
             "baseColorFactor": materials[n][0], "metallicFactor": 0.0,
             "roughnessFactor": materials[n][1]}} for n in names],
         "accessors": accessors,
         "bufferViews": [
-            {"buffer": 0, "byteOffset": 0, "byteLength": len(pos_bytes), "target": 34962},
-            {"buffer": 0, "byteOffset": len(pos_bytes), "byteLength": len(nrm_bytes),
+            {"buffer": 0, "byteOffset": offsets[0], "byteLength": len(pos_bytes), "target": 34962},
+            {"buffer": 0, "byteOffset": offsets[1], "byteLength": len(nrm_bytes), "target": 34962},
+            {"buffer": 0, "byteOffset": offsets[2], "byteLength": len(idx_bytes), "target": 34963},
+            {"buffer": 0, "byteOffset": offsets[3], "byteLength": len(joint_bytes),
              "target": 34962},
-            {"buffer": 0, "byteOffset": len(pos_bytes) + len(nrm_bytes),
-             "byteLength": len(idx_bytes), "target": 34963},
+            {"buffer": 0, "byteOffset": offsets[4], "byteLength": len(weight_bytes),
+             "target": 34962},
+            {"buffer": 0, "byteOffset": offsets[5], "byteLength": len(ibm_bytes)},
         ],
         "buffers": [{"uri": "data:application/octet-stream;base64,"
                      + base64.b64encode(buffer_bytes).decode("ascii"),

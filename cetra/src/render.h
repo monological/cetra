@@ -46,6 +46,7 @@ typedef struct SceneCaptureState {
     double render_time;
     double render_delta;
     bool irradiance;
+    bool burst;
 } SceneCaptureState;
 
 // What a capture's output MEANS, which two callers need opposite answers to.
