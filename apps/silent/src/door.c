@@ -96,26 +96,36 @@ void door_leaf(Kit* kit, const KitFrame* f, const KitOpening* o, float t) {
  * rose either side by the latch. Flat-headed, which is the only head it is hung in.
  */
 void door_leaf_panelled(Kit* kit, const KitFrame* f, const KitOpening* o, float t) {
-    const float w = o->to - o->from, h = o->top - o->bottom;
-    kit_frame_box(kit, f, MAT_MOULDING, o->from, o->to, o->bottom, o->top, -0.5f * t, 0.5f * t,
-                  false);
+    const float w = o->to - o->from, h = o->top - o->bottom, half = 0.5f * t, sink = 0.006f;
     const float stile = 0.12f * w + 0.03f, rail = 0.11f, mid = 0.42f * h;
     const float cols[3] = {o->from + stile, o->from + 0.5f * w, o->to - stile};
     const float rows[2][2] = {{o->bottom + rail + 0.08f, o->bottom + mid - 0.5f * rail},
                               {o->bottom + mid + 0.5f * rail, o->top - rail}};
-    for (int side = -1; side <= 1; side += 2) {
-        const float d = (float)side * 0.5f * t;
-        for (int c = 0; c < 2; c++) {
-            const float a0 = c ? cols[1] + 0.5f * rail : cols[0];
-            const float a1 = c ? cols[2] : cols[1] - 0.5f * rail;
-            for (int r = 0; r < 2; r++) {
-                const float y0 = rows[r][0], y1 = rows[r][1];
-                // The panel's sunk frame, then its raised field standing back out of it.
-                kit_frame_box(kit, f, MAT_MOULDING, a0, a1, y0, y1, d, d - (float)side * 0.006f,
-                              false);
+    // The stiles, rails and muntins at the leaf's full thickness, tiling all of it but the four
+    // panels with no two overlapping: a face lying in another's plane fights it for depth, and
+    // each box's grime is its own, so the fight shows as patches.
+    kit_frame_box(kit, f, MAT_MOULDING, o->from, cols[0], o->bottom, o->top, -half, half, false);
+    kit_frame_box(kit, f, MAT_MOULDING, cols[2], o->to, o->bottom, o->top, -half, half, false);
+    const float rail_y[3][2] = {
+        {o->bottom, rows[0][0]}, {rows[0][1], rows[1][0]}, {rows[1][1], o->top}};
+    for (int r = 0; r < 3; r++)
+        kit_frame_box(kit, f, MAT_MOULDING, cols[0], cols[2], rail_y[r][0], rail_y[r][1], -half,
+                      half, false);
+    for (int r = 0; r < 2; r++)
+        kit_frame_box(kit, f, MAT_MOULDING, cols[1] - 0.5f * rail, cols[1] + 0.5f * rail,
+                      rows[r][0], rows[r][1], -half, half, false);
+    for (int c = 0; c < 2; c++) {
+        const float a0 = c ? cols[1] + 0.5f * rail : cols[0];
+        const float a1 = c ? cols[2] : cols[1] - 0.5f * rail;
+        for (int r = 0; r < 2; r++) {
+            const float y0 = rows[r][0], y1 = rows[r][1];
+            // The panel sunk into the frame on both faces, and its raised field standing back
+            // out of it on each.
+            kit_frame_box(kit, f, MAT_MOULDING, a0, a1, y0, y1, -half + sink, half - sink, false);
+            for (int side = -1; side <= 1; side += 2) {
+                const float d = (float)side * half;
                 kit_frame_box(kit, f, MAT_MOULDING, a0 + 0.035f, a1 - 0.035f, y0 + 0.035f,
-                              y1 - 0.035f, d - (float)side * 0.006f, d + (float)side * 0.004f,
-                              false);
+                              y1 - 0.035f, d - (float)side * sink, d + (float)side * 0.004f, false);
             }
         }
     }
