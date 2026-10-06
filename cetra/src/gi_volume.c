@@ -266,36 +266,19 @@ static void gi_project_tile(GIVolume* gi, const LightingAtlas* atlas, AtlasRect 
         glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 }
 
-// Capture up to `budget` probes of a resident volume into its slot: an `opening` sweep, into a
-// slot nothing was captured in, or a re-convergence over the texels there. True when this call
-// finished it.
-static bool gi_volume_capture(GIVolume* gi, struct Engine* engine, struct Scene* scene,
-                              const LightingAtlas* atlas, AtlasRect slot, int budget,
-                              bool opening) {
-    if (gi->failed || gi->dirty_count <= 0)
-        return false; // converged: the steady state, and it costs nothing
-
-    if (!gi_ensure_targets(gi, engine))
-        return false;
+// Capture up to `budget` probes of a resident volume into its slot, 0 = every one left: an
+// `opening` sweep, into a slot nothing was captured in, or a re-convergence over the texels there.
+// Inside a capture burst the caller holds open. Returns the probes captured.
+static int gi_volume_sweep(GIVolume* gi, struct Engine* engine, struct Scene* scene,
+                           const LightingAtlas* atlas, AtlasRect slot, int budget, bool opening) {
+    if (gi->failed || gi->dirty_count <= 0 || !gi_ensure_targets(gi, engine))
+        return 0;
 
     const int probes = gi_probe_count(gi);
     if (budget <= 0 || budget > gi->dirty_count)
         budget = gi->dirty_count;
     // An opening capture is taken outright; a re-convergence blends over what is there.
     const float hysteresis = opening ? 0.0f : 0.97f;
-
-    GLint saved_fbo;
-    GLint saved_viewport[4];
-    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &saved_fbo);
-    glGetIntegerv(GL_VIEWPORT, saved_viewport);
-
-    // Shared burst policy (see render.h). Nothing it bakes needs undoing beyond
-    // the restore below: the frame's own shadow pass runs after this and
-    // overwrites the maps with the camera-fit cascades it needs.
-    SceneCaptureState saved_capture;
-    // IRRADIANCE: what this bakes is added to the analytic direct term, so a
-    // derived emissive panel's own surface must not appear in it (render.h).
-    scene_capture_begin(engine, scene, SCENE_CAPTURE_IRRADIANCE, &saved_capture);
 
     for (int n = 0; n < budget; ++n) {
         int probe = gi->next_probe;
@@ -342,25 +325,11 @@ static bool gi_volume_capture(GIVolume* gi, struct Engine* engine, struct Scene*
     }
 
     gi->captures_total += budget;
-    const bool converged = gi->dirty_count <= 0;
-    if (converged) {
+    if (gi->dirty_count <= 0) {
         gi->streamed = false;
         log_info("GI volume converged: %d captures total", gi->captures_total);
     }
-
-    scene_capture_end(engine, scene, &saved_capture);
-
-    // Blend ENABLED is the engine's baseline (set once at init; the G-buffer
-    // relies on it and disables per attachment). The tile blend above turned it
-    // off, so restoring means putting it back on -- an earlier version of this
-    // line disabled it and called that the baseline, which handed every frame
-    // after a sweep a context the rest of the renderer does not expect.
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)saved_fbo);
-    glViewport(saved_viewport[0], saved_viewport[1], saved_viewport[2], saved_viewport[3]);
-    check_gl_error("gi volume update");
-    return converged;
+    return budget;
 }
 
 // The rectangle of slot `slot` a volume's tiles take.
@@ -473,52 +442,97 @@ void gi_world_update(GIWorld* world, struct Engine* engine, struct Scene* scene)
     const LightingAtlas* atlas = scene_lighting_atlas(scene, engine);
     if (!atlas)
         return;
-    // Read once: every volume resident in the frame the world opens sweeps in it, not only the
-    // first to converge.
-    const bool opened = world->opened;
-    // Timed only on a frame that captures: a converged world is the steady state, and a scope
-    // opened every frame would file a 0.000 ms row on nearly all of them.
-    bool timing = false;
-    // In the volumes' own order, so which one captures first does not depend on where each sits.
+    // Kept tiles back first: they cost an upload and no capture.
     for (size_t i = 0; i < res->count; ++i) {
         ResidencyItem* item = &res->items[i];
-        GIVolume* gi = world->volumes[i];
-        if (item->slot < 0)
+        if (item->state != RESIDENCY_UPLOAD)
             continue;
-        const AtlasRect slot = gi_volume_rect(gi, atlas, item->slot);
-        if (item->state == RESIDENCY_UPLOAD) {
-            lighting_atlas_restore(atlas, slot, item->kept);
-            residency_loaded(item);
-            continue;
-        }
-        if (gi->failed || gi->dirty_count <= 0)
+        lighting_atlas_restore(atlas, gi_volume_rect(world->volumes[i], atlas, item->slot),
+                               item->kept);
+        residency_loaded(item);
+    }
+
+    // The volumes with probes to capture that may capture now, nearest first, ties to the lower
+    // index: the camera's own building first, and an order that does not depend on which slot
+    // each holds.
+    int due[GI_RESIDENT_MAX];
+    int n = 0;
+    for (size_t i = 0; i < res->count; ++i) {
+        const GIVolume* gi = world->volumes[i];
+        if (res->items[i].slot < 0 || gi->failed || gi->dirty_count <= 0)
             continue;
         const AABB box = gi_volume_box(gi);
         if (!scene_capture_ready(engine, scene, SCENE_CAPTURE_IRRADIANCE, &box))
             continue;
-        // The opening sweep runs in one frame at load, taking every probe: spreading it would
-        // only delay GI appearing at all, since a half-swept slot is withheld -- and a headless
-        // run short enough to be a golden would finish before it ever did. One begun later, as
-        // the camera comes within reach, is someone else's building, and a frame spent sweeping
-        // all of it is a hitch in the middle of a walk, so it takes the stream rate -- unless
-        // the camera is already inside, where it is the light on screen. A re-convergence, over
-        // tiles still valid to sample, takes the world's rate.
+        int at = n++;
+        while (at > 0 && res->items[due[at - 1]].distance > res->items[i].distance) {
+            due[at] = due[at - 1];
+            at--;
+        }
+        due[at] = (int)i;
+    }
+    // Timed only on a frame that captures: a converged world is the steady state, and a scope
+    // opened every frame would file a 0.000 ms row on nearly all of them.
+    if (n == 0)
+        return;
+    profiler_scope_begin(engine->profiler, "gi capture");
+    GLint saved_fbo;
+    GLint saved_viewport[4];
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &saved_fbo);
+    glGetIntegerv(GL_VIEWPORT, saved_viewport);
+    // One burst for every volume the frame captures in: a burst bakes the shadow maps its
+    // captures read, the same maps for each, and nothing it bakes needs undoing beyond the
+    // restore below -- the frame's own shadow pass runs after this and overwrites them with the
+    // camera-fit cascades it needs. IRRADIANCE: what this bakes is added to the analytic direct
+    // term, so a derived emissive panel's own surface must not appear in it (render.h).
+    SceneCaptureState saved_capture;
+    scene_capture_begin(engine, scene, SCENE_CAPTURE_IRRADIANCE, &saved_capture);
+
+    // Read once: every volume resident in the frame the world opens sweeps in it, not only the
+    // first to converge.
+    const bool opened = world->opened;
+    // The opening sweep runs in one frame at load, taking every probe: spreading it would only
+    // delay GI appearing at all, since a half-swept slot is withheld -- and a headless run short
+    // enough to be a golden would finish before it ever did. One begun later, as the camera
+    // comes within reach, is someone else's building, and a frame spent sweeping all of it is a
+    // hitch in the middle of a walk, so those share the stream rate -- unless the camera is
+    // already inside, where it is the light on screen. Re-convergences, over tiles still valid
+    // to sample, share the world's rate. A rate of 0 is no limit.
+    int rate_left = world->rate, stream_left = world->stream_rate;
+    for (int k = 0; k < n; ++k) {
+        ResidencyItem* item = &res->items[due[k]];
+        GIVolume* gi = world->volumes[due[k]];
         const bool opening = item->state == RESIDENCY_CAPTURE;
         if (opening && gi->dirty_count == gi_probe_count(gi))
             gi->streamed = opened && item->distance > 0.0f;
-        const int budget = !opening ? world->rate : gi->streamed ? world->stream_rate : 0;
-        if (!timing) {
-            profiler_scope_begin(engine->profiler, "gi capture");
-            timing = true;
-        }
-        if (gi_volume_capture(gi, engine, scene, atlas, slot, budget, opening)) {
+        int* left = !opening ? &rate_left : gi->streamed ? &stream_left : NULL;
+        const bool limited = left && (opening ? world->stream_rate : world->rate) > 0;
+        if (limited && *left <= 0)
+            continue;
+        const int took =
+            gi_volume_sweep(gi, engine, scene, atlas, gi_volume_rect(gi, atlas, item->slot),
+                            limited ? *left : 0, opening);
+        if (limited)
+            *left -= took;
+        if (gi->dirty_count <= 0) {
             if (opening)
                 residency_loaded(item);
             world->opened = true;
         }
     }
-    if (timing)
-        profiler_scope_end(engine->profiler);
+
+    scene_capture_end(engine, scene, &saved_capture);
+    // Blend ENABLED is the engine's baseline (set once at init; the G-buffer
+    // relies on it and disables per attachment). The tile blend turned it
+    // off, so restoring means putting it back on -- an earlier version of this
+    // line disabled it and called that the baseline, which handed every frame
+    // after a sweep a context the rest of the renderer does not expect.
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)saved_fbo);
+    glViewport(saved_viewport[0], saved_viewport[1], saved_viewport[2], saved_viewport[3]);
+    check_gl_error("gi world update");
+    profiler_scope_end(engine->profiler);
 }
 
 bool gi_world_ready_in(const GIWorld* world, const AABB* box) {

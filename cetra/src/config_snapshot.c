@@ -701,6 +701,7 @@ static const ConfigField CFG_FIELDS[] = {
     // so they are absent for the reason the shadow map size is.
     CFG_ROW(CFG_GI, CFG_BOOL, "gi", "enabled", enabled),
     CFG_ROW(CFG_GI, CFG_INT, "gi", "rate", rate),
+    CFG_ROW(CFG_GI, CFG_INT, "gi", "stream_rate", stream_rate),
     CFG_ROW(CFG_GI, CFG_BOOL, "gi", "debug_atlas", debug_atlas),
 
     CFG_ROW(CFG_CLUSTER, CFG_BOOL, "lighting", "area_lights", area_lights_enabled),

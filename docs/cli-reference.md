@@ -338,10 +338,11 @@ probe, and the camera teleport; all but `--cam-at` in `forest` too. `--cam-at` i
 `--stream-probe <n>` / `--gi-stream-rate <n>` / `--tile-blocks-per-frame <n>` / `--capture-hide <node>`
 / `--remove-node <node>` (spec 13.24, render only — lighting data that streams. The probe prints,
 every n frames and at exit, the resident GI volumes and reflection probes by slot, each one's
-distance, capture count, state and an FNV digest of its kept texels, and the cached lights in
-distance order with whether each holds a whole block of shadow tiles: what the `lighting-stream`
-gates read. The rate is the probes a frame of a GI volume's opening sweep begun after load
-(default 32). The blocks-per-frame is how many cached lights may be given shadow tiles a frame once
+distance, capture count, state and an FNV digest of its texels -- read from the atlas while it is
+resident, from the kept copy while it is not -- and the cached lights in distance order with
+whether each holds a whole block of shadow tiles: what the `lighting-stream` gates read. The rate
+is the probes a frame, across the whole world, of the GI opening sweeps begun after load (default
+32). The blocks-per-frame is how many cached lights may be given shadow tiles a frame once
 the tiles have opened (default 2, 0 = no limit), and at 1 a room with two lights takes two frames to
 be shadowed, which is what makes a capture's wait for its lights visible. `--capture-hide` leaves a
 named node out of every GI and probe capture, surface and shadow, as a skinned mesh always is;

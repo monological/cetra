@@ -98,16 +98,14 @@ typedef struct GpuClusterIndexBlock {
  * grid sizes and this file's build pass fills.
  *
  * ONE block for the descriptors AND the masks, where the lights spend three.
- * Not thrift: pbr_frag's fragment stage declares eight uniform blocks against
- * GL 4.1's guaranteed twelve, so a second block would spend a tenth declaration
- * to save re-sending 3.6 KB -- under a third of what ONE light block sends
- * every frame.
+ * Not thrift: pbr_frag's fragment stage declares ten uniform blocks against
+ * GL 4.1's guaranteed twelve, so a second block would spend an eleventh
+ * declaration to save re-sending 7.3 KB.
  *
- * Uploaded whole, per build, on the grid's cadence rather than the IES table's:
- * the masks are VIEW-space and a probe capture face re-enters the build with
- * its own view, so a once-a-frame upload would leave every capture face reading
- * another view's masks. Writing it whole also leaves no undefined tail, which
- * is the trap the IES table was placed after the lights to avoid.
+ * Uploaded whole, per build of the camera's grid. A capture face's build leaves
+ * it alone: a capture is lit diffuse only and never reads the probes. Writing it
+ * whole leaves no undefined tail, which is the trap the IES table was placed
+ * after the lights to avoid.
  */
 typedef struct GpuProbeDesc {
     float pos_intensity[4]; // xyz capture position (world), w intensity

@@ -19,7 +19,7 @@ layout(std140) uniform DecalBlock {
     // [5i + 4]    x edge feather (local units), y normal strength, zw unused
     vec4 decalDesc[16 * 5];
     // One 16-bit mask per froxel, two to a word. std140 gives a scalar array a
-    // vec4 stride, so a uint[3072] would be four times this block.
+    // vec4 stride, so a uint[3072] would be eight times this block.
     uvec4 decalClusterMasks[384];
 };
 
@@ -27,10 +27,11 @@ layout(std140) uniform DecalBlock {
 // against UBO_DECALS_BLOCK_SIZE, which decalDesc's declaration rides.
 const int DECAL_MAX = 16;
 
-// Which decals reach this froxel. A halfword unpack rather than probeMaskAt's
-// byte one, because the mask is twice as wide.
+#include "froxel_mask.glsl"
+
+// Which decals reach this froxel.
 uint decalMaskAt(uint ci) {
-    return (decalClusterMasks[ci >> 3u][(ci >> 1u) & 3u] >> ((ci & 1u) * 16u)) & 0xFFFFu;
+    return FROXEL_MASK_AT(decalClusterMasks, ci);
 }
 
 // What a fragment accumulated from every decal that reached it, RESOLVED --

@@ -7,7 +7,6 @@
 
 #include "ext/log.h"
 #include "intersect.h"
-#include "lighting_atlas.h"
 #include "light.h"
 #include "scene.h"
 #include "shadow.h"
@@ -520,11 +519,37 @@ static void _fill_index_pool(LightClusterContext* ctx) {
             (ctx->offsets[ci] << LC_GRID_COUNT_BITS) | (uint32_t)ctx->counts[ci];
 }
 
+// Set bit `bit` of every froxel a view-space sphere touches, in a mask packed sixteen bits a
+// froxel, two froxels a uint32 -- the packing include/froxel_mask.glsl unpacks for the probes and
+// the decals alike. Returns the froxels marked.
+static int _mark_sphere_bit(uint32_t* masks, int bit, const vec3 view_center, float radius,
+                            mat4 projection, float near_clip, const ClusterFrame* cf) {
+    LightClusterRange range;
+    _tile_range_for_sphere(projection, view_center, radius, near_clip, &range);
+    _slice_range_for_sphere(-view_center[2], radius, cf, &range);
+
+    const float sphere[4] = {view_center[0], view_center[1], view_center[2], radius};
+    const float radius_sq = radius * radius;
+    int marked = 0;
+    for (int z = range.z0; z <= range.z1; ++z) {
+        for (int y = range.y0; y <= range.y1; ++y) {
+            for (int x = range.x0; x <= range.x1; ++x) {
+                if (!_sphere_touches_cluster(sphere, radius_sq, x, y, z, cf))
+                    continue;
+                const int ci = x + LC_CLUSTER_X * (y + LC_CLUSTER_Y * z);
+                masks[ci >> 1] |= 1u << (((ci & 1) * 16) + bit);
+                marked++;
+            }
+        }
+    }
+    return marked;
+}
+
 /*
  * Which probes reach which froxel (spec 11.70).
  *
  * A MASK rather than the lights' offset|count word plus an index pool: at a cap
- * of eight, one byte per froxel holds the whole answer, so there is no prefix
+ * of sixteen, two bytes per froxel hold the whole answer, so there is no prefix
  * sum, no shared pool and no truncation state to represent. It also needs no
  * touched bitset -- that exists because the light path walks its cells twice,
  * and this one writes its answer on the first pass.
@@ -577,24 +602,8 @@ static void _mark_probe_clusters(LightClusterContext* ctx, const struct Scene* s
 
         vec3 view_center;
         glm_mat4_mulv3(view, center, 1.0f, view_center);
-
-        LightClusterRange range;
-        _tile_range_for_sphere(projection, view_center, radius, near_clip, &range);
-        _slice_range_for_sphere(-view_center[2], radius, cf, &range);
-
-        const float sphere[4] = {view_center[0], view_center[1], view_center[2], radius};
-        const float radius_sq = radius * radius;
-        for (int z = range.z0; z <= range.z1; ++z) {
-            for (int y = range.y0; y <= range.y1; ++y) {
-                for (int x = range.x0; x <= range.x1; ++x) {
-                    if (!_sphere_touches_cluster(sphere, radius_sq, x, y, z, cf))
-                        continue;
-                    const int ci = x + LC_CLUSTER_X * (y + LC_CLUSTER_Y * z);
-                    ctx->probes.cluster_masks[ci >> 1] |= 1u << (((ci & 1) * 16) + i);
-                    bits++;
-                }
-            }
-        }
+        bits += _mark_sphere_bit(ctx->probes.cluster_masks, i, view_center, radius, projection,
+                                 near_clip, cf);
     }
 
     ubo_upload(ctx->probes_ubo, &ctx->probes, sizeof(ctx->probes));
@@ -669,23 +678,8 @@ static void _mark_decal_clusters(LightClusterContext* ctx, const struct Scene* s
         if (zc + radius < cf->near_clip || zc - radius > cf->far_clip)
             continue;
 
-        LightClusterRange range;
-        _tile_range_for_sphere(projection, view_center, radius, near_clip, &range);
-        _slice_range_for_sphere(zc, radius, cf, &range);
-
-        const float sphere[4] = {view_center[0], view_center[1], view_center[2], radius};
-        const float radius_sq = radius * radius;
-        for (int z = range.z0; z <= range.z1; ++z) {
-            for (int y = range.y0; y <= range.y1; ++y) {
-                for (int x = range.x0; x <= range.x1; ++x) {
-                    if (!_sphere_touches_cluster(sphere, radius_sq, x, y, z, cf))
-                        continue;
-                    const int ci = x + LC_CLUSTER_X * (y + LC_CLUSTER_Y * z);
-                    ctx->decals.cluster_masks[ci >> 1] |= 1u << (((ci & 1) * 16) + index);
-                    bits++;
-                }
-            }
-        }
+        bits += _mark_sphere_bit(ctx->decals.cluster_masks, index, view_center, radius, projection,
+                                 near_clip, cf);
     }
 
     ubo_upload(ctx->decals_ubo, &ctx->decals, sizeof(ctx->decals));
@@ -746,8 +740,10 @@ void light_cluster_build_and_upload(LightClusterContext* ctx, struct Scene* scen
     // Strictly after the light pass and touching none of its three arrays: the
     // light grid has no gate of its own anywhere in the suite, so the only
     // safe place for a second consumer of this frame's ClusterFrame is past
-    // the point where the first one is finished with it.
-    _mark_probe_clusters(ctx, scene, view, projection, near_clip, &cf);
+    // the point where the first one is finished with it. A capture is lit diffuse only and never
+    // reads the probes, so it leaves their block as the frame last built it.
+    if (!capture)
+        _mark_probe_clusters(ctx, scene, view, projection, near_clip, &cf);
     _mark_decal_clusters(ctx, scene, &frustum, view, projection, near_clip, &cf);
 
     // Upload only the live prefix of the variable-length blocks (the light
