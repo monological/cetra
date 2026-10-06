@@ -187,6 +187,7 @@ typedef struct {
     int tiles_refresh;         // ShadowSystem.tile_refresh
     int tile_views;            // ShadowSystem.tile_views
     int tile_blocks_per_frame; // ShadowSystem.tile_new_blocks_per_frame, -1 = its default
+    int tile_stores;           // ShadowSystem.tile_store_cells, -1 = its default
     int tile_reference;        // ShadowSystem.tile_reference
     const char* node_swing;    // a node moved sideways every frame; NULL = none
     float node_swing_m;        // how far either way, metres

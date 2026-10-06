@@ -168,6 +168,7 @@ typedef struct SilentArgs {
     bool no_candle_shadows; // the candles light through walls, as before spec 13.16
     bool no_gi;             // no bounce light: no GI volume, and no reflection probes from it
     int tile_views;         // views over each cached light's body; 0 = the engine's, 1 = one
+    int tile_stores;        // store cells for faces drawn over a copy; -1 = the engine's
     bool tiles_probe;       // print the cached shadow tiles at exit
     bool profiler;          // per-pass timing and submission counts, reported at exit
     const char* audio_dump; // headless: write what the listener hears here
@@ -702,6 +703,8 @@ static void on_init(Game* game) {
         ss->cascade_count = 2;
         ss->pcss_enabled = true;
         ss->tile_views = g_args.tile_views;
+        if (g_args.tile_stores >= 0)
+            ss->tile_store_cells = g_args.tile_stores;
     }
 
     CameraDesc cam = {.position = {SPAWN_FEET[0], SPAWN_FEET[1] + PLAYER_EYE_HEIGHT, SPAWN_FEET[2]},
@@ -960,6 +963,8 @@ static void print_usage(const char* prog) {
     printf("      --profiler          Per-pass timing and submission counts, at exit\n");
     printf("      --tile-views N      Shade every cached light from N views over its body\n"
            "                          rather than 8; 1 is its centre alone\n");
+    printf("      --tile-stores N     Store cells for faces drawn over a copy of their still\n"
+           "                          casters (default 64); 0 draws every such face whole\n");
     printf("      --tiles-probe       The cached shadow tiles and each light's block, at exit\n");
     printf("      --no-cat            Without the cat\n");
     printf("      --cat-fur RRGGBB    The cat's coat, as sRGB hex (default 262424)\n");
@@ -997,6 +1002,7 @@ static bool parse_hex(const char* s, vec3 out) {
 
 static bool parse_args(int argc, char** argv, SilentArgs* a) {
     memset(a, 0, sizeof(*a));
+    a->tile_stores = -1;
     a->width = DEFAULT_WIDTH;
     a->height = DEFAULT_HEIGHT;
     a->seed = 7;
@@ -1093,6 +1099,8 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
             a->no_gi = true;
         } else if (!strcmp(s, "--tile-views") && has_next) {
             a->tile_views = atoi(argv[++i]);
+        } else if (!strcmp(s, "--tile-stores") && has_next) {
+            a->tile_stores = atoi(argv[++i]);
         } else if (!strcmp(s, "--tiles-probe")) {
             a->tiles_probe = true;
         } else if (!strcmp(s, "--profiler")) {
