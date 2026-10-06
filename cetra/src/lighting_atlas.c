@@ -216,8 +216,9 @@ LightingAtlas* lighting_atlas_sync(struct Scene* scene, struct Engine* engine) {
     int gi_slots = 0, gi_w = 0, gi_h = 0;
     const GIWorld* world = scene->gi;
     if (world) {
-        gi_slots = world->count < GI_RESIDENT_MAX ? world->count : GI_RESIDENT_MAX;
-        for (int i = 0; i < world->count; ++i) {
+        const int count = (int)world->residency.count;
+        gi_slots = count < GI_RESIDENT_MAX ? count : GI_RESIDENT_MAX;
+        for (int i = 0; i < count; ++i) {
             int w = 0, h = 0;
             gi_volume_atlas_extent(world->volumes[i], &w, &h);
             if (w > gi_w)
@@ -231,8 +232,9 @@ LightingAtlas* lighting_atlas_sync(struct Scene* scene, struct Engine* engine) {
     // needs no column and pays none of its memory.
     int probes = 0, row0 = 0;
     const ReflectionProbeSet* set = scene->probe_set;
-    if (set && set->count >= 2) {
-        probes = set->count < PROBE_SET_MAX ? set->count : PROBE_SET_MAX;
+    const int set_count = set ? (int)set->residency.count : 0;
+    if (set_count >= 2) {
+        probes = set_count < PROBE_SET_MAX ? set_count : PROBE_SET_MAX;
         row0 = set->row0;
     }
 
@@ -269,14 +271,8 @@ void free_lighting_atlas(LightingAtlas* atlas) {
     free(atlas);
 }
 
-void lighting_atlas_gi_region(const LightingAtlas* atlas, int slot, int* out_x, int* out_y) {
-    int x = 0;
-    if (atlas && slot >= 0 && slot < atlas->gi_slots)
-        x = slot * atlas->gi_slot_w;
-    if (out_x)
-        *out_x = x;
-    if (out_y)
-        *out_y = 0;
+int lighting_atlas_gi_x(const LightingAtlas* atlas, int slot) {
+    return atlas && slot >= 0 && slot < atlas->gi_slots ? slot * atlas->gi_slot_w : 0;
 }
 
 bool lighting_atlas_project_probe(LightingAtlas* atlas, const ReflectionProbe* probe, int index) {
@@ -349,44 +345,54 @@ GLuint lighting_atlas_texture(const LightingAtlas* atlas) {
     return atlas ? atlas->texture : 0;
 }
 
-void lighting_atlas_probe_column(const LightingAtlas* atlas, int index, float out[2]) {
-    int x = 0, y = 0;
-    if (atlas && index >= 0 && index < atlas->capacity)
-        atlas_column_origin(atlas, index, &x, &y);
-    out[0] = (float)x;
-    out[1] = (float)y;
+AtlasRect lighting_atlas_probe_rect(const LightingAtlas* atlas, int slot) {
+    AtlasRect r = {0, 0, 0, 0};
+    if (!atlas || slot < 0 || slot >= atlas->capacity)
+        return r;
+    atlas_column_origin(atlas, slot, &r.x, &r.y);
+    r.w = atlas_column_w(atlas->row0);
+    r.h = atlas_column_h(atlas->row0);
+    return r;
 }
 
-void lighting_atlas_probe_extent(const LightingAtlas* atlas, int* out_w, int* out_h) {
-    const bool any = atlas && atlas->capacity > 0;
-    if (out_w)
-        *out_w = any ? atlas_column_w(atlas->row0) : 0;
-    if (out_h)
-        *out_h = any ? atlas_column_h(atlas->row0) : 0;
+// The bytes a rectangle's texels take on the CPU: RGBA half floats.
+static size_t rect_bytes(AtlasRect rect) {
+    return sizeof(uint16_t) * 4 * (size_t)rect.w * (size_t)rect.h;
 }
 
-bool lighting_atlas_read_rect(const LightingAtlas* atlas, int x, int y, int w, int h,
-                              uint16_t* out) {
-    if (!atlas || !atlas->fbo || !out || w <= 0 || h <= 0)
-        return false;
+uint16_t* lighting_atlas_keep(const LightingAtlas* atlas, AtlasRect rect) {
+    if (!atlas || !atlas->fbo || rect.w <= 0 || rect.h <= 0)
+        return NULL;
+    uint16_t* texels = malloc(rect_bytes(rect));
+    if (!texels)
+        return NULL;
     GLint saved_read = 0;
     glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &saved_read);
     glBindFramebuffer(GL_READ_FRAMEBUFFER, atlas->fbo);
-    glReadPixels(x, y, w, h, GL_RGBA, GL_HALF_FLOAT, out);
+    glReadPixels(rect.x, rect.y, rect.w, rect.h, GL_RGBA, GL_HALF_FLOAT, texels);
     glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)saved_read);
-    check_gl_error("lighting atlas read");
+    check_gl_error("lighting atlas keep");
+    return texels;
+}
+
+bool lighting_atlas_restore(const LightingAtlas* atlas, AtlasRect rect, const uint16_t* texels) {
+    if (!atlas || !atlas->texture || !texels || rect.w <= 0 || rect.h <= 0)
+        return false;
+    glBindTexture(GL_TEXTURE_2D, atlas->texture);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, rect.x, rect.y, rect.w, rect.h, GL_RGBA, GL_HALF_FLOAT,
+                    texels);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    check_gl_error("lighting atlas restore");
     return true;
 }
 
-bool lighting_atlas_write_rect(const LightingAtlas* atlas, int x, int y, int w, int h,
-                               const uint16_t* texels) {
-    if (!atlas || !atlas->texture || !texels || w <= 0 || h <= 0)
-        return false;
-    glBindTexture(GL_TEXTURE_2D, atlas->texture);
-    glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, w, h, GL_RGBA, GL_HALF_FLOAT, texels);
-    glBindTexture(GL_TEXTURE_2D, 0);
-    check_gl_error("lighting atlas write");
-    return true;
+uint32_t lighting_atlas_digest(const LightingAtlas* atlas, AtlasRect rect, const uint16_t* kept) {
+    if (kept)
+        return fnv1a_bytes(kept, rect_bytes(rect));
+    uint16_t* read = lighting_atlas_keep(atlas, rect);
+    const uint32_t digest = read ? fnv1a_bytes(read, rect_bytes(rect)) : 0u;
+    free(read);
+    return digest;
 }
 
 void lighting_atlas_fill_column(const LightingAtlas* atlas, float out_column[4],
@@ -416,19 +422,6 @@ void lighting_atlas_size(const LightingAtlas* atlas, int* out_w, int* out_h) {
         *out_w = atlas ? atlas->width : 0;
     if (out_h)
         *out_h = atlas ? atlas->height : 0;
-}
-
-void lighting_atlas_probe_rect(const LightingAtlas* atlas, int index, int* out_x, int* out_y,
-                               int* out_rows) {
-    int x = 0, y = 0;
-    if (atlas && index >= 0 && index < atlas->capacity)
-        atlas_tile_origin(atlas, index, 0, &x, &y);
-    if (out_x)
-        *out_x = x;
-    if (out_y)
-        *out_y = y;
-    if (out_rows)
-        *out_rows = atlas ? PROBE_ATLAS_ROWS : 0;
 }
 
 void lighting_atlas_debug_blit(const LightingAtlas* atlas, struct Engine* engine, int screen_w,

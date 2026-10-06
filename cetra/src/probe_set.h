@@ -4,7 +4,9 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "mesh.h" // AABB
 #include "probe.h"
+#include "residency.h"
 
 // The scene's reflection probes (spec 11.70). One probe is the degenerate case
 // of this, not a separate path: a scene with a single probe binds it into the
@@ -37,16 +39,11 @@ struct PostFX;
 struct LightingAtlas;
 
 typedef struct ReflectionProbeSet {
-    ReflectionProbe** probes; // owned; probe_set_add
-    int count;
-    int capacity;
-
-    // Residency (spec 13.24): each probe's column slot or -1, each slot's probe or -1, and
-    // each probe's distance from the camera in this frame's ranking.
-    int* slot_of;
-    int* home; // the slot each probe last held, or -1
-    int holder[PROBE_SET_MAX];
-    float* distance;
+    ReflectionProbe** probes; // owned; probe_set_add. One per residency item, in its order
+    size_t probe_capacity;
+    // Which probes hold the atlas's columns, and their texels' state (spec 13.24). A world of
+    // one probe needs no column and never uses it.
+    Residency residency;
 
     // Set once every RESIDENT probe is in the atlas. Consumers must gate on this and not
     // on count: a half-swept set holds probes whose atlas columns were never
@@ -54,9 +51,6 @@ typedef struct ReflectionProbeSet {
     // published, so it gates timing -- the frame the probes appear -- not correctness.
     bool ready;
     bool failed; // one-shot: a capture that failed is not retried every frame
-    // Some probe has captured. Before it every capture is the load's and all of them run in
-    // the one frame; after it a probe newly in range captures alone, one a frame.
-    bool opened;
 
     int row0; // the atlas's row-0 tile size; 0 = the default
 
@@ -77,7 +71,7 @@ typedef struct ReflectionProbeSet {
 // not yet captured, so the callers that used to test scene->probe keep their
 // shape and an installed set is inert until it is ready.
 static inline ReflectionProbe* probe_set_primary(const ReflectionProbeSet* set) {
-    return (set && set->ready && set->count > 0) ? set->probes[0] : NULL;
+    return (set && set->ready && set->residency.count > 0) ? set->probes[0] : NULL;
 }
 
 // True for a world of two or more probes once the atlas exists -- the state that arms the
@@ -85,7 +79,7 @@ static inline ReflectionProbe* probe_set_primary(const ReflectionProbeSet* set) 
 // armed set with none loaded blends nothing. Below it every consumer runs the path it ran
 // before spec 11.70.
 static inline bool probe_set_multi(const ReflectionProbeSet* set) {
-    return set && set->count >= 2 && set->atlas;
+    return set && set->residency.count >= 2 && set->atlas;
 }
 
 ReflectionProbeSet* create_reflection_probe_set(void);
@@ -95,9 +89,10 @@ void free_reflection_probe_set(ReflectionProbeSet* set);
 bool probe_set_add(ReflectionProbeSet* set, ReflectionProbe* probe);
 
 // Decide which probes hold columns, from the camera: once a frame, before anything captures, so
-// every pass of the frame agrees on it. A probe that leaves keeps its column on the CPU; one
-// that comes back with a kept column has it put back by the update, and one without waits for
-// a capture. A no-op on a world of one probe, which needs no column.
+// every pass of the frame agrees on it. A loaded probe that leaves keeps its column on the CPU,
+// read out of the atlas before the column changes hands; one that comes back with a kept column
+// has it put back by the update, and one without waits for a capture. A no-op on a world of
+// one probe, which needs no column.
 void probe_set_rank(ReflectionProbeSet* set, const struct Engine* engine);
 
 /*
@@ -133,9 +128,9 @@ bool probe_set_capture_due(const ReflectionProbeSet* set, const struct Engine* e
                            const struct Scene* scene);
 
 // Pack what each loaded resident probe IS -- position, box, intensity, where its
-// column sits -- into the GPU block, in slot order. The froxel masks in the same
-// block are the light grid's to fill, one bit per descriptor; this is the half
-// that belongs to the set.
+// column sits -- into the GPU block, in the probes' own order. The froxel masks in
+// the same block are the light grid's to fill, one bit per descriptor; this is the
+// half that belongs to the set.
 struct GpuProbeBlock;
 void probe_set_fill_descriptors(const ReflectionProbeSet* set, struct GpuProbeBlock* out);
 

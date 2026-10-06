@@ -611,18 +611,19 @@ static void _engine_gui_panel(Engine* engine) {
         // Attached probes always carry a capture: the toggle switches
         // consumption, it does not recapture
         ReflectionProbeSet* probe_set = scene->probe_set;
-        if (probe_set && probe_set->count == 1) {
+        const int probe_count = probe_set ? (int)probe_set->residency.count : 0;
+        if (probe_count == 1) {
             ReflectionProbe* probe = probe_set->probes[0];
             _begin_effect_group("Reflection Probe", &probe->enabled);
             igSliderFloat("Probe Intensity", &probe->intensity, 0.0f, 4.0f, "%.2f", 0);
             igSliderFloat("Box Fade", &probe->box_fade, 0.0f, 0.5f, "%.2f", 0);
             igCheckbox("Show Capture", &probe->debug_background);
             _end_effect_group();
-        } else if (probe_set && probe_set->count > 1) {
+        } else if (probe_count > 1) {
             // The descriptors upload with the froxel masks every frame, so an
             // edit here is live on the next one with no invalidation path.
             if (igCollapsingHeader_BoolPtr("Reflection Probes", NULL, 0)) {
-                for (int i = 0; i < probe_set->count; ++i) {
+                for (int i = 0; i < probe_count; ++i) {
                     ReflectionProbe* probe = probe_set->probes[i];
                     igPushID_Int(i);
                     igText("Probe %d  (%.1f, %.1f, %.1f)", i, probe->position[0],
@@ -762,17 +763,18 @@ static void _engine_gui_panel(Engine* engine) {
         if (scene->gi) {
             GIWorld* world = scene->gi;
             _begin_effect_group("GI Probe Volumes", &world->enabled);
-            for (int i = 0; i < world->count; ++i) {
+            for (int i = 0; i < (int)world->residency.count; ++i) {
                 const GIVolume* gi = world->volumes[i];
+                const ResidencyItem* item = &world->residency.items[i];
                 // The one number worth watching: a converged volume reads 0 and does
                 // no work at all. Anything else means captures are running.
-                if (world->slot_of[i] < 0)
+                if (item->slot < 0)
                     igText("%d: %dx%dx%d, not resident (%.0f m)", i, gi->counts[0], gi->counts[1],
-                           gi->counts[2], (double)world->distance[i]);
+                           gi->counts[2], (double)item->distance);
                 else
                     igText(gi->dirty_count > 0 ? "%d: %dx%dx%d in slot %d, %d probes left"
                                                : "%d: %dx%dx%d in slot %d, converged (%d)",
-                           i, gi->counts[0], gi->counts[1], gi->counts[2], world->slot_of[i],
+                           i, gi->counts[0], gi->counts[1], gi->counts[2], item->slot,
                            gi->dirty_count);
             }
             igSliderInt("Probes / Frame", &world->rate, 0, 32, "%d", 0);

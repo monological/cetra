@@ -329,11 +329,12 @@ static void build_sky(Engine* engine) {
 #define GI_CLEAR 0.15f // how near a probe centre may come to a wall's or a slab's face
 
 static void build_gi(void) {
-    GIVolume* gi = create_gi_volume(GI_COLS, GI_ROWS, GI_COLS);
+    const vec3 lo = {-7.45f, 0.0f, 7.58f};
+    GIVolume* gi =
+        create_gi_volume(GI_COLS, GI_ROWS, GI_COLS, lo,
+                         (vec3){lo[0] + GI_COLS * GI_CELL, GI_TOP, lo[2] + GI_COLS * GI_CELL});
     if (!gi)
         return;
-    const vec3 lo = {-7.45f, 0.0f, 7.58f};
-    gi_volume_fit(gi, lo, (vec3){lo[0] + GI_COLS * GI_CELL, GI_TOP, lo[2] + GI_COLS * GI_CELL});
     if (!scene_add_gi_volume(g_scene, gi))
         return;
 
@@ -434,12 +435,10 @@ static void build_probes(void) {
         // That is still under the 6 mm of glass, so a window's street face is never
         // the room's.
         p->box_fade = KIT_PANE_HALF / (0.5f * glm_vec3_max(span));
-        if (!probe_set_add(set, p)) {
-            free_reflection_probe(p);
+        if (!probe_set_add(set, p))
             break;
-        }
     }
-    if (set->count == ROOMS)
+    if (set->residency.count == ROOMS)
         g_scene->probe_set = set;
     else
         free_reflection_probe_set(set);

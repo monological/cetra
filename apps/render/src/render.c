@@ -2727,6 +2727,13 @@ void key_callback(Engine* engine, int key, int scancode, int action, int mods) {
 // All match by equality, not ">=", so an entry fires on exactly the frame named
 // and once -- which is what lets a switched run be compared against a straight
 // one at a fixed frame (the equivalence gate, specs/11.8).
+// --stream-probe: which GI volumes, reflection probes and cached lights hold the resident slots.
+static void stream_probe_print(const Scene* scene, int frame) {
+    gi_world_probe_print(scene->gi, scene->lighting_atlas, frame);
+    probe_set_stream_print(scene->probe_set, frame);
+    shadow_tiles_stream_print(scene->shadow_system, frame);
+}
+
 static void render_frame_update(Engine* engine, float dt) {
     (void)dt;
     // --cook exits when the async loader has DRAINED rather than at a frame
@@ -2858,12 +2865,9 @@ static void render_frame_update(Engine* engine, float dt) {
     // The residency as the previous frame left it: this hook runs before the frame ranks.
     if (frame_schedule->stream_probe > 0 &&
         (int)engine->total_frames % frame_schedule->stream_probe == 0) {
-        Scene* scene = engine_get_scene(engine);
-        if (scene) {
-            gi_world_probe_print(scene->gi, (int)engine->total_frames);
-            probe_set_stream_print(scene->probe_set, (int)engine->total_frames);
-            shadow_tiles_stream_print(scene->shadow_system, (int)engine->total_frames);
-        }
+        const Scene* scene = engine_get_scene(engine);
+        if (scene)
+            stream_probe_print(scene, (int)engine->total_frames);
     }
     if (frame_schedule->decal_probe > 0 &&
         (int)engine->total_frames % frame_schedule->decal_probe == 0) {
@@ -4687,15 +4691,13 @@ int main(int argc, char** argv) {
         int nx = args.gi_probes[0] > 0 ? args.gi_probes[0] : 8;
         int ny = args.gi_probes[1] > 0 ? args.gi_probes[1] : 4;
         int nz = args.gi_probes[2] > 0 ? args.gi_probes[2] : 8;
-        GIVolume* gi = create_gi_volume(nx, ny, nz);
-        if (gi) {
-            // Bounds AFTER the recenter above: the pre-recenter ones no longer
-            // say where the scene is.
-            vec3 gi_min, gi_max;
-            scene_bounds(scene, gi_min, gi_max);
-            gi_volume_fit(gi, gi_min, gi_max);
+        // Bounds AFTER the recenter above: the pre-recenter ones no longer say where the scene
+        // is.
+        vec3 gi_min, gi_max;
+        scene_bounds(scene, gi_min, gi_max);
+        GIVolume* gi = create_gi_volume(nx, ny, nz, gi_min, gi_max);
+        if (gi)
             scene_add_gi_volume(scene, gi);
-        }
     }
     if (scene->gi) {
         if (args.gi_rate >= 0)
@@ -4785,13 +4787,14 @@ int main(int argc, char** argv) {
                                   : 10.0f * fmaxf(scene_radius, 1.0f);
             probe->environment_only = probe_env_only;
             // Installed uncaptured: the engine captures it in the first frame.
+            // probe_set_add takes the probe whatever it answers, freeing it on failure.
             ReflectionProbeSet* set = create_reflection_probe_set();
-            if (set && probe_set_add(set, probe)) {
-                scene->probe_set = set;
-            } else {
-                free_reflection_probe_set(set);
+            if (!set)
                 free_reflection_probe(probe);
-            }
+            else if (probe_set_add(set, probe))
+                scene->probe_set = set;
+            else
+                free_reflection_probe_set(set);
         }
     } else if (args.probe) {
         fprintf(stderr, "Warning: --probe requires an HDR environment (-e); skipping capture\n");
@@ -5055,11 +5058,8 @@ int main(int argc, char** argv) {
     // anything once some have run.
     if (args.probe_set_probe > 0)
         probe_set_probe_print(scene->probe_set, (int)engine->total_frames, true);
-    if (args.stream_probe > 0) {
-        gi_world_probe_print(scene->gi, (int)engine->total_frames);
-        probe_set_stream_print(scene->probe_set, (int)engine->total_frames);
-        shadow_tiles_stream_print(scene->shadow_system, (int)engine->total_frames);
-    }
+    if (args.stream_probe > 0)
+        stream_probe_print(scene, (int)engine->total_frames);
     if (args.decal_probe > 0)
         decal_probe_print(scene, (int)engine->total_frames, true,
                           light_cluster_decal_mask_digest(engine->light_cluster),

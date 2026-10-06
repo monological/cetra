@@ -28929,18 +28929,20 @@ def run_stream_gate(workdir):
         print(f"  stream-equal ERROR  {(walk_text if walk is None else away_text)[-300:]}")
         failures.append("stream-equal")
     else:
-        n, peak = _stream_diff(walk.get(STREAM_STOPS[1]), away[STREAM_STOPS[1] + 1])
+        resident = away[STREAM_STOPS[1] + 1]
+        n, peak = _stream_diff(walk.get(STREAM_STOPS[1]), resident)
         stop = rows.get(STREAM_STOPS[1], {})
-        streamed = (stop.get("gi", {}).get(len(rooms) - 1, {}).get("kept") == "1"
+        streamed = (stop.get("gi", {}).get(len(rooms) - 1, {}).get("state") == "swept"
                     and rows.get(STREAM_STOPS[0], {}).get("gi", {}).get(len(rooms) - 1, {})
                     .get("slot") == "-1")
-        frac = n / (STREAM_W * STREAM_H) if n is not None else 1.0
+        # Of the frame as rendered, which _scale_argv makes twice the size asked for.
+        frac = n / float(resident[0] * resident[1]) if n is not None else 1.0
         ok = (n is not None and peak <= STREAM_EQUAL_PEAK and frac <= STREAM_EQUAL_FRACTION
               and streamed)
         print(f"  stream-equal {'PASS' if ok else 'FAIL'}  room 9 walked into vs resident from "
               f"frame 0: {n} px, peak {peak} code(s) (want <= {STREAM_EQUAL_PEAK} on <= "
               f"{STREAM_EQUAL_FRACTION:.1%}); its volume was out at frame {STREAM_STOPS[0]} and "
-              f"swept and kept by frame {STREAM_STOPS[1]}: {streamed}")
+              f"swept by frame {STREAM_STOPS[1]}: {streamed}")
         if not ok:
             failures.append("stream-equal")
 
@@ -28992,21 +28994,23 @@ def run_stream_gate(workdir):
         workdir, "cover", _stream_cam_eye(rooms[probe_room]) + ["--render-mode", "14"], 31)
     albedo, _ = _lighting_stream_run(
         workdir, "albedo", _stream_cam_eye(rooms[probe_room]) + ["--render-mode", "6"], 31)
+    # Projected at the size of the frame read, not the size asked for: _scale_argv renders at
+    # twice it, and a patch placed in the smaller frame lands on the wall above the floor.
     tints = {}
     for k in (0, 2):
         shots, _ = _lighting_stream_run(workdir, f"tint{k}", _stream_cam_eye(rooms[k]), 31)
         if shots:
-            project = _projector({"eye": _stream_pose(rooms[k])[0],
-                                  "target": _stream_pose(rooms[k])[1], "fovy_deg": 70.0},
-                                 STREAM_W, STREAM_H)
+            k_eye, k_target = _stream_pose(rooms[k])
+            project = _projector(_cscn_camera(STREAM_FIXTURE, eye=k_eye, target=k_target),
+                                 *shots[31][:2])
             px, py = project((rooms[k], 0.0, -1.0))
             tints[k] = _stream_patch_mean(shots[31], px, py)
     if cover is None or albedo is None or len(tints) != 2:
         print(f"  stream-probes-16 ERROR  {cover_text[-300:]}")
         failures.append("stream-probes-16")
     else:
-        project = _projector({"eye": eye, "target": target, "fovy_deg": 70.0}, STREAM_W,
-                             STREAM_H)
+        project = _projector(_cscn_camera(STREAM_FIXTURE, eye=eye, target=target),
+                             *cover[31][:2])
         same = []
         for fx in (rooms[probe_room] - 1.0, rooms[probe_room] + 1.0):
             px, py = project((fx, 0.0, -1.0))
