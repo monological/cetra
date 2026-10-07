@@ -787,10 +787,18 @@ static void hall(Kit* kit, Engine* engine, Scene* scene) {
 
 #define TV_X 3.3f // the television's middle, west of the hall (negated)
 
+// The set on its stand against the back wall, facing the sofa.
+static const KitFrame TV_SET = {{-TV_X, FLOOR_Y, LIVING_IN_Z1}, GLM_PIf};
+
+void home_tv_speaker(vec3 out) {
+    // In the cabinet's face below the knobs, beside the picture.
+    kit_frame_point(&TV_SET, 0.25f, 0.66f, 0.5f, out);
+}
+
 /*
  * The living room: a sofa with its back to the front window facing a television on a stand
  * against the back wall, an armchair turned toward it, a coffee table, a rug, and a floor lamp
- * at the sofa's end, the room's one lamp. The television is on, with nothing on it.
+ * at the sofa's end, the room's one lamp. The television is on, tuned to nothing: snow.
  */
 static void sofa(Kit* kit, const KitFrame* f, float ha, bool arms) {
     const float d0 = -0.42f, d1 = 0.42f;
@@ -815,7 +823,7 @@ static void sofa(Kit* kit, const KitFrame* f, float ha, bool arms) {
     kit_frame_box(kit, f, KIT_COLLIDER_ONLY, -ha, ha, 0.0f, 0.88f, d0, d1, true);
 }
 
-static void living_room(Kit* kit, Scene* scene) {
+static void living_room(Kit* kit, Scene* scene, bool tv_static) {
     // Facing +z, toward the television.
     const KitFrame couch = {{-TV_X, FLOOR_Y, 12.75f}, 0.0f};
     sofa(kit, &couch, 1.0f, true);
@@ -838,22 +846,29 @@ static void living_room(Kit* kit, Scene* scene) {
                         {0.0405f, 0.1f}, {0.037f, 0.1f}, {0.037f, 0.012f}, {0.0f, 0.012f}};
     kit_frame_lathe(kit, &table, MAT_CERAMIC, 0.25f, 0.05f, 0.44f, mug, KIT_COUNT(mug), 18);
 
-    // The television on its stand against the back wall, rabbit ears on top.
-    const KitFrame tv = {{-TV_X, FLOOR_Y, LIVING_IN_Z1}, GLM_PIf};
-    kit_frame_box(kit, &tv, MAT_WOOD, -0.5f, 0.5f, 0.0f, 0.5f, 0.0f, 0.45f, true);
-    kit_frame_box(kit, &tv, MAT_WOOD, -0.36f, 0.36f, 0.5f, 1.05f, 0.02f, 0.5f, true);
-    kit_frame_box(kit, &tv, MAT_SCREEN, -0.27f, 0.17f, 0.6f, 0.96f, 0.5f, 0.512f, false);
+    // The television on its stand, rabbit ears on top.
+    const KitFrame* tv = &TV_SET;
+    kit_frame_box(kit, tv, MAT_WOOD, -0.5f, 0.5f, 0.0f, 0.5f, 0.0f, 0.45f, true);
+    kit_frame_box(kit, tv, MAT_WOOD, -0.36f, 0.36f, 0.5f, 1.05f, 0.02f, 0.5f, true);
+    kit_frame_box(kit, tv, MAT_SCREEN, TV_PICTURE_A0, TV_PICTURE_A1, TV_PICTURE_Y0, TV_PICTURE_Y1,
+                  0.5f, 0.512f, false);
+    // The picture on it (spec 13.30): a card a millimetre in front of the glass, the whole of the
+    // picture across it, drawn by tv.c's static in the late draw.
+    if (tv_static)
+        kit_frame_card_rect(kit, tv, MAT_TV_STATIC, (float[4]){0.0f, 0.0f, 1.0f, 1.0f},
+                            TV_PICTURE_A0, TV_PICTURE_A1, TV_PICTURE_Y0, TV_PICTURE_Y1, 0.513f,
+                            1.0f);
     for (int k = 0; k < 2; k++)
-        kit_frame_lathe_on(kit, &tv, MAT_BLACK, (vec3){0.25f, 0.88f - 0.12f * (float)k, 0.5f},
+        kit_frame_lathe_on(kit, tv, MAT_BLACK, (vec3){0.25f, 0.88f - 0.12f * (float)k, 0.5f},
                            (vec3){0.0f, 0.0f, 1.0f},
                            (vec2[]){{0.0f, 0.0f}, {0.018f, 0.0f}, {0.016f, 0.015f}, {0.0f, 0.017f}},
                            4, 8);
     for (int s = -1; s <= 1; s += 2) {
         const vec3 ear[] = {{0.0f, 1.05f, 0.25f}, {(float)s * 0.22f, 1.5f, 0.2f}};
-        kit_frame_pipe(kit, &tv, MAT_STEEL, ear, 2, 0.003f, 5);
+        kit_frame_pipe(kit, tv, MAT_STEEL, ear, 2, 0.003f, 5);
     }
     vec3 glow = {0.0f, 0.0f, 0.0f};
-    kit_frame_point(&tv, -0.05f, 0.78f, 0.75f, glow);
+    kit_frame_point(tv, -0.05f, 0.78f, 0.75f, glow);
     glm_vec3_add(glow, kit->origin, glow);
     LightDesc screen = {.name = "tv_glow",
                         .type = LIGHT_POINT,
@@ -966,7 +981,7 @@ static void bathroom(Kit* kit, Scene* scene) {
     scene_add_light(scene, create_light(&bulb));
 }
 
-void home_build(Kit* kit, Engine* engine, Scene* scene) {
+void home_build(Kit* kit, Engine* engine, Scene* scene, bool tv_static) {
     walls(kit);
     outside_trim(kit);
     floors(kit);
@@ -975,7 +990,7 @@ void home_build(Kit* kit, Engine* engine, Scene* scene) {
     porch(kit);
     finishes(kit);
     hall(kit, engine, scene);
-    living_room(kit, scene);
+    living_room(kit, scene, tv_static);
     bathroom(kit, scene);
 }
 

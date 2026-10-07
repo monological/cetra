@@ -67,6 +67,7 @@
 #include "street.h"
 #include "study.h"
 #include "trees.h"
+#include "tv.h"
 
 #define DEFAULT_WIDTH  1600
 #define DEFAULT_HEIGHT 900
@@ -159,6 +160,7 @@ typedef struct SilentArgs {
     const char* pad_script;
     bool trace_player;
     bool no_flicker;
+    bool no_static; // the living room's set as it was, glowing with nothing on it
     bool flashlight;
     bool mute;
     float rain_mmh;         // 0 = dry
@@ -193,6 +195,7 @@ static SilentArgs g_args;
 static Scene* g_scene;
 static Player g_player;
 static Lights g_lights;
+static Tv g_tv;
 static Clock g_clock;
 static RainBed g_rain_bed;
 static Sounds g_sounds;
@@ -586,7 +589,9 @@ static void on_init(Game* game) {
     kit_init(&kit, g_scene, em, physics);
     mats_register(&kit, engine, g_scene);
     // The player's house on the plan's origin (spec 13.25), its kitchen and its clock.
-    home_build(&kit, engine, g_scene);
+    home_build(&kit, engine, g_scene, !g_args.no_static);
+    // Its living room's television showing snow (spec 13.30), on the light home_build hung by it.
+    tv_init(&g_tv, &kit, g_scene, !g_args.no_static);
     kitchen_build(&kit, (unsigned int)g_args.seed);
     lights_build(&g_lights, &kit, engine, g_scene, (unsigned int)g_args.seed, !g_args.no_flicker,
                  g_args.flashlight);
@@ -657,6 +662,7 @@ static void on_init(Game* game) {
     }
     clock_start(&g_clock, engine, g_scene, audio);
     lights_start_audio(&g_lights, audio);
+    tv_start_audio(&g_tv, audio);
     const vec3 spawn_eye = {SPAWN_FEET[0], SPAWN_FEET[1] + PLAYER_EYE_HEIGHT, SPAWN_FEET[2]};
     sounds_start(&g_sounds, audio, spawn_eye);
     cat_voice_start(&g_voice, &g_cat, audio, g_args.cat_say);
@@ -864,6 +870,7 @@ static void on_pre_render(Game* game, double alpha) {
     const float hearing = sounds_indoor_gain(&g_sounds);
     lights_update(&g_lights, g_scene, game->time, (float)game->sim_clock.delta, eye, forward,
                   hearing);
+    tv_update(&g_tv, game->time, hearing);
     cat_mind_frame(&g_mind, game->time);
     cat_debug_draw(&g_cat, &g_mind, engine);
     cat_update(&g_cat, game, g_scene, &g_lights, eye, (float)game->sim_clock.delta);
@@ -951,6 +958,7 @@ static void print_usage(const char* prog) {
     printf("      --pad-script PATH   Replay a scripted pad on slot 0 (see input.h)\n");
     printf("      --trace-player      Print the player's position every 30 steps\n");
     printf("      --no-flicker        Keep the failing ceiling tube steady\n");
+    printf("      --no-static         The living room's television with nothing on it, no snow\n");
     printf("      --flashlight        Start with the flashlight on (F toggles it)\n");
     printf("      --mute              Without sound\n");
     printf("      --audio-dump PATH   Headless: write what the listener hears as a WAV\n");
@@ -1084,6 +1092,8 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
             a->trace_player = true;
         } else if (!strcmp(s, "--no-flicker")) {
             a->no_flicker = true;
+        } else if (!strcmp(s, "--no-static")) {
+            a->no_static = true;
         } else if (!strcmp(s, "--flashlight")) {
             a->flashlight = true;
         } else if (!strcmp(s, "--mute")) {
