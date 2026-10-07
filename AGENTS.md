@@ -1388,8 +1388,12 @@ written directly or by name; there is no per-field setter.
 
 **Light:** type (directional/point/spot/area); position, direction and up (`light_set_position`
 / `light_set_direction` / `light_set_up`: an authored copy the walk carries into a world copy, and
-the setter writes both for a light on no node); color; specular;
-ambient; intensity + `units` (`light_set_intensity_units` converts); **`range`** — where the
+the setter writes both for a light on no node); color; **`specular`**, the share of the light the
+reflective lobes take (spec 13.30), 1 physical and 0 diffuse only -- for a light standing in for a
+lit surface whose reflection SSR and the probes already draw. It was a `vec3` nothing read until
+then. Clustered lights carry it in their own array ahead of the packed lights, four to a row,
+because every slot of a packed light is a cached light's and the block's upload ends at the last
+packed light; ambient; intensity + `units` (`light_set_intensity_units` converts); **`range`** — where the
 inverse-square falloff is windowed to zero and the cull radius, 0 = unbounded. **There is no
 constant/linear/quadratic attenuation triple** and never has been in the photometric era; spot
 cutoffs (stored as COSINES of the half-angles, not radians); area size; `cast_shadows`; the
