@@ -550,6 +550,13 @@ static const ConfigField CFG_FIELDS[] = {
     CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.dither", "enabled", dither_enabled),
     CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.dither", "strength", dither_strength),
 
+    CFG_ROW(CFG_POSTFX, CFG_BOOL, "postfx.crt", "enabled", crt_enabled),
+    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.crt", "lines", crt_lines),
+    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.crt", "scanlines", crt_scanlines),
+    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.crt", "mask", crt_mask),
+    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.crt", "curvature", crt_curvature),
+    CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.crt", "bleed", crt_bleed),
+
     // The .cube path rides `source`, not here: the table only carries values the
     // owner struct holds, and PostFX keeps the basename alone.
     CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.lut", "strength", lut_strength),
