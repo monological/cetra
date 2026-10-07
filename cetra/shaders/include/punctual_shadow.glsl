@@ -13,10 +13,10 @@
 // no second texture unit -- and there is no second unit to be had, since
 // pbr_frag samples all 16.
 //
-// MAX_PUNCTUAL_SHADOW_LAYERS is mirrored in C at shadow.h; uniform.c runs the
-// same drift check on this array as on the cascade ones.
+// MAX_PUNCTUAL_SHADOW_LAYERS comes from the constants C reads too; program.c still
+// checks this array's size against it, as it does the cascade ones.
 
-#define MAX_PUNCTUAL_SHADOW_LAYERS 16
+#include "shadow_tile_constants.glsl"
 
 uniform sampler2DArray punctualShadowMaps;
 // Edge length the array was built at. This used to be a GLSL literal mirroring a

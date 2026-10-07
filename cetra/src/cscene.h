@@ -52,14 +52,15 @@ typedef enum CSceneLightType {
 // (point/spot/area; ignored for directional), color, intensity, cast_shadows. Per type:
 //   directional -- `direction` (travel direction).
 //   spot        -- `direction`, `cone` [inner, outer] half-angles in DEGREES,
-//                  optional attenuation/range.
+//                  optional range.
 //   area        -- `direction` (the normal; lights only the side it points at),
-//                  `size`, optional `up` (orthonormalized against direction);
-//                  `shadow_cache` with a range, as a point light's.
-//   point       -- optional attenuation/range; `shadow_cache` with a range, and
+//                  `size`, optional `up` (orthonormalized against direction),
+//                  range, `shadow_cache` and `shadow_near`.
+//   point       -- optional range, `shadow_cache` and `shadow_near`, and
 //                  `source_radius` / `source_length` for a body.
-// Attenuation and range are optional everywhere they apply: absent = keep the
-// engine default (so a 0-filled struct means "engine default", not "zero").
+// `attenuation` is read only to be warned about and ignored. Range is optional everywhere it
+// applies: absent = keep the engine default (so a 0-filled struct means "engine
+// default", not "zero").
 typedef struct CSceneLight {
     char name[CSCENE_MAX_NAME];
     CSceneLightType type;
@@ -86,9 +87,9 @@ typedef struct CSceneLight {
     bool has_up;
     float up[3];
     bool has_attenuation;
-    float attenuation[3]; // point/spot: constant, linear, quadratic
+    float attenuation[3]; // ignored: falloff is inverse-square windowed by range
     bool has_range;
-    float range;   // point/spot cull radius (else derived from attenuation)
+    float range;   // metres, where the falloff and a shadow end; 0 = derived
     float cone[2]; // spot: inner, outer half-angle in DEGREES
     bool cast_shadows;
     bool shadow_cache; // a point or area light's shadow drawn once and kept (spec 13.16)

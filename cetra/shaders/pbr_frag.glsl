@@ -914,10 +914,21 @@ float calculateShadow(int shadowIndex, int cascade, vec3 worldPos, float lightSi
     return visibility;
 }
 
-// A cached point light's faces, tiles of the same punctual array (spec 13.16).
+// A cached light's faces, tiles of the same punctual array (spec 13.16).
 #if CETRA_HAS(PBR_FEAT_SHADOW_TILES)
 #include "punctual_tiles.glsl"
 #endif
+
+// Cluster light `li`'s shadow through layer `layer`: its cached faces at the tile mark, else the
+// per-frame map, which reads the mark as lit in a variant without the tiles.
+float clusterShadow(int layer, uint li, vec3 worldPos, vec3 N, vec3 L, vec3 ddxWorld,
+                    vec3 ddyWorld) {
+#if CETRA_HAS(PBR_FEAT_SHADOW_TILES)
+    if (layer >= SHADOW_TILE_MARK)
+        return tileShadow(li, worldPos, N, L, ddxWorld, ddyWorld);
+#endif
+    return punctualShadow(layer, worldPos, N, L, ddxWorld, ddyWorld);
+}
 
 // Clearcoat normal: the geometric normal, perturbed by the coat normal map if
 // present (glTF: the coat normal is independent of the base normal map). Only
@@ -1964,12 +1975,10 @@ void main() {
         vec3 L;
         float attenuation;
         vec3 lightCI;   // color * intensity (premultiplied on CPU)
-        vec2 lightSize; // PCSS emitter size (directional/spot) or panel extent (area)
+        vec2 lightSize; // a directional's PCSS emitter size
         int dirShadowSlot = -1;
         int punctualLayer = -1; // Base layer in the punctual array, -1 = no map
-#if CETRA_HAS(PBR_FEAT_SHADOW_TILES)
-        uint tileLight = 0u; // the cluster light whose tiles to read, at SHADOW_TILE_MARK
-#endif
+        uint shadowLight = 0u;  // the cluster light whose map punctualLayer indexes
 
         if (k < numDir) {
             L = normalize(-dirLights[k].dirShadow.xyz);
@@ -1987,8 +1996,9 @@ void main() {
             // analytically rather than treating it as a point, so they take
             // none of the point/spot path -- neither the attenuation below
             // nor the Cook-Torrance body. That also implements the v1 limits
-            // by construction: no shadows, clearcoat, sheen, SSS or POM from
-            // a panel. A panel can only ever arrive through the cluster list,
+            // by construction: no clearcoat, sheen or POM from a panel; its
+            // shadow and its SSS tap are added below. A panel can only ever
+            // arrive through the cluster list,
             // which is why this test lives here and not after the branch.
             //
             // Classified unconditionally, SHADED only when the feature is
@@ -2030,33 +2040,21 @@ void main() {
                 vec3 areaDiff =
                     (1.0 - metallicMap) * (1.0 - transmissionEff) * albedoMap * ff.x;
 
-                // The face of the panel's cube (spec 13.27) that sees the
-                // fragment, multiplied into the whole panel term. The integral
-                // it scales is over the rectangle, so this is a hard binary
-                // occlusion of a soft source: the panel's centre is either
-                // visible from the fragment or it is not, with no partial
-                // occlusion of one edge. Behind the panel there is no face, and
-                // ltcPanel has already answered zero. A cached panel's faces are
-                // tiles, as a point light's are, and its marker reads lit
-                // through the per-frame lookup in a variant without them.
+                // The panel's shadow (spec 13.27), multiplied into the whole
+                // panel term. The integral it scales is over the rectangle, so
+                // this is a hard binary occlusion of a soft source: the panel's
+                // centre is either visible from the fragment or it is not, with
+                // no partial occlusion of one edge. Its face is chosen in its own
+                // frame, as a point light's is in the world's. Where ltcPanel
+                // answered zero -- past the range, or behind the panel, where its
+                // cube has no face -- there is nothing to shadow.
                 int aLayer = int(clusterLights[li].shadowMisc.y);
                 float aShadow = 1.0;
-                if (aLayer >= 0 && alphaMasked == 0) {
-#if CETRA_HAS(PBR_FEAT_SHADOW_TILES)
-                    if (aLayer >= SHADOW_TILE_MARK)
-                        aShadow = tileShadow(li, WorldPos, N, normalize(lightPos - WorldPos),
-                                             ddxWorld, ddyWorld);
-                    else
-#endif
-                    {
-                        int aFace = panelCubeFace(WorldPos - lightPos,
-                                                  clusterLights[li].dirType.xyz,
-                                                  clusterLights[li].upArea.xyz);
-                        if (aFace < 5)
-                            aShadow = punctualShadow(aLayer + aFace, WorldPos, N,
-                                                     normalize(lightPos - WorldPos), ddxWorld,
-                                                     ddyWorld);
-                    }
+                if (aLayer >= 0 && alphaMasked == 0 && max(ff.x, ff.y) > 0.0) {
+                    int aFace = panelCubeFace(-toPanel, clusterLights[li].dirType.xyz,
+                                              clusterLights[li].upArea.xyz);
+                    aShadow = clusterShadow(aLayer + aFace, li, WorldPos, N, normalize(toPanel),
+                                            ddxWorld, ddyWorld);
                 }
 
                 // Same split as the punctual clamp below: the LTC response is
@@ -2107,11 +2105,8 @@ void main() {
             if (attenuation <= 0.0)
                 continue;
             lightCI = clusterLights[li].colorIntensity.xyz;
-            lightSize = clusterLights[li].shadowMisc.zw;
             punctualLayer = int(clusterLights[li].shadowMisc.y);
-#if CETRA_HAS(PBR_FEAT_SHADOW_TILES)
-            tileLight = li;
-#endif
+            shadowLight = li;
             // A point light owns six layers rather than one; resolve the face
             // here, where its direction is still in scope. -L is the
             // fragment-to-light direction reversed, i.e. light-to-fragment;
@@ -2215,16 +2210,8 @@ void main() {
         // Punctual shadow: this light's own perspective map. Overwrites rather
         // than multiplies because the two are exclusive -- dirShadowSlot is set
         // only on the directional path, punctualLayer only on the cluster one.
-        // A cached light's marker is past every per-frame layer, so a variant
-        // without the tiles reads it as lit there rather than indexing anything.
-        if (punctualLayer >= 0 && alphaMasked == 0) {
-#if CETRA_HAS(PBR_FEAT_SHADOW_TILES)
-            if (punctualLayer >= SHADOW_TILE_MARK)
-                shadow = tileShadow(tileLight, WorldPos, N, L, ddxWorld, ddyWorld);
-            else
-#endif
-            shadow = punctualShadow(punctualLayer, WorldPos, N, L, ddxWorld, ddyWorld);
-        }
+        if (punctualLayer >= 0 && alphaMasked == 0)
+            shadow = clusterShadow(punctualLayer, shadowLight, WorldPos, N, L, ddxWorld, ddyWorld);
 
         // Cloud deck (spec 11.41). Multiplies rather than overwrites: the deck and the
         // cascades occlude the same light independently, and a fragment can be under both.

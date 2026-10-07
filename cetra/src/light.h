@@ -126,7 +126,8 @@ typedef struct Light {
     // The emitting body, in metres: a capsule centred on the light, a segment `source_length`
     // long along `direction` with every point of it `source_radius` round, so the whole body
     // is the length plus a radius at each end -- a bulb is a sphere, a tube a line, a flame
-    // both. What a soft shadow's edge comes from; both 0 is a point, whose shadow is hard.
+    // both. What a soft shadow's edge comes from; both 0 is a point, whose shadow is hard. A
+    // panel takes none: its body is its rectangle.
     float source_radius;
     float source_length;
     float shadow_near; // metres from the light that nothing nearer casts; 0 = from the range

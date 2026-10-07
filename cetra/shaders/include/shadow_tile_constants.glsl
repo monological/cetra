@@ -1,5 +1,6 @@
 /*
- * Cached shadows' numbers that the CPU and the GPU must agree on (spec 13.16).
+ * The punctual shadow array's numbers that the CPU and the GPU must agree on: its per-frame
+ * pool, and the cached tiles past it (spec 13.16).
  *
  * INCLUDED BY BOTH LANGUAGES, shore_constants.glsl's technique and for its reason: shadow.c
  * draws each cached face into a tile of the punctual array, and the lookup projects onto that
@@ -7,6 +8,14 @@
  * on would read another face's depth, or another light's. Numbers only, `f`-suffixed; no
  * types, functions or qualifiers.
  */
+
+// Worst-case punctual layers per frame, NOT a VRAM budget: every layer is re-rendered each
+// frame, so this caps scene traversals. A point light takes 6 and a panel 5 (spec 13.27), so
+// this buys a point light, a panel and five spots, or three panels. Erring small is deliberate
+// -- exhausting the pool is a failure a log line can name, where an over-large pool costs frame
+// time with no signal at all. Allocation is demand-driven, so a spot-only scene builds one
+// layer. Each layer is a mat4 of pbr_frag's default uniforms.
+#define MAX_PUNCTUAL_SHADOW_LAYERS 16
 
 // A cached face's tile, in texels, and the guard band inside it: the face is drawn across 90
 // degrees plus the band, so a filter reaching past the face's edge still reads this face's
@@ -41,4 +50,4 @@
 // What a cached light packs as its per-frame punctual layer: past every per-frame layer, so
 // the per-frame lookup reads it as lit before it indexes anything, while every "does this light
 // have a map" test (layer >= 0) still holds.
-#define SHADOW_TILE_MARK 16
+#define SHADOW_TILE_MARK MAX_PUNCTUAL_SHADOW_LAYERS
