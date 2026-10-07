@@ -216,6 +216,7 @@ enum { DOOR_HOME, DOOR_BATH, DOOR_BASEMENT, DOOR_MANSION, DOORS };
 static Door g_doors[DOORS];
 static bool g_door_hung[DOORS];
 static Prompt g_prompt;
+static Basement g_basement;
 
 // --audio-dump: the offline mix, pulled a frame's worth at a time so it keeps
 // step with the sim clock, as interleaved stereo at the engine's rate.
@@ -399,9 +400,10 @@ static void build_gi(const vec3 origin) {
 }
 
 /*
- * Reflection probes in the home's kitchen, hall, living room and bathroom, and in
- * the mansion's dining room, hall, great hall, study and the study's tower bay
- * (spec 13.25), nine in the world: the engine keeps the nearest sixteen resident
+ * Reflection probes in the home's kitchen, hall, living room and bathroom, its
+ * stairwell down and its basement (spec 13.31), and in the mansion's dining room,
+ * hall, great hall, study and the study's tower bay (spec 13.25), eleven in the
+ * world: the engine keeps the nearest sixteen resident
  * and captures the mansion's as the drive brings them near. Without them every
  * metal and every wet surface indoors reflects the only environment there is,
  * the night sky, and the hood, the sink and the floor go black. The great hall's
@@ -432,7 +434,7 @@ typedef struct ProbeRoom {
     vec3 pos, lo, hi;
 } ProbeRoom;
 
-#define PROBE_ROOM_COUNT 9
+#define PROBE_ROOM_COUNT 11
 
 static void build_probes(void) {
     if (!g_scene->ibl || !g_scene->ibl->precomputed)
@@ -456,6 +458,17 @@ static void build_probes(void) {
          {1.3f, FLOOR_Y + 1.4f, 15.2f},
          {HALL_X1, FLOOR_Y, KITCHEN_BACK_Z},
          {BATH_X1, CEIL_Y, HOME_SPLIT_Z}},
+        // Its stairwell, from the basement's slab to the ceiling, and the basement under the
+        // whole house (spec 13.31), which overlap only where the stairwell is under the floor.
+        // The stairwell's probe is clear of the bulb hanging in it.
+        {false,
+         {-3.6f, 0.6f, 18.9f},
+         {HOUSE_X0 + KIT_PANE_HALF, BASEMENT_Y, STAIRWELL_WALL_Z},
+         {HALL_X0, CEIL_Y, HOUSE_BACK_Z - KIT_PANE_HALF}},
+        {false,
+         {-1.2f, BASEMENT_Y + 1.25f, 15.3f},
+         {CELLAR_X0, BASEMENT_Y, CELLAR_Z0},
+         {CELLAR_X1, SUBFLOOR_Y0, CELLAR_Z1}},
         // The mansion: its dining room, its hall, the great hall, the study and the study's bay.
         {true,
          {2.48f, FLOOR_Y + 1.5f, 11.9f},
@@ -545,10 +558,13 @@ static void build_post(const Engine* engine, bool night, bool grade) {
     // -- and the street's fog volumes on top of it. None by day: the ambient
     // that lights the haze is not blocked by walls, so at daylight's level it
     // fills the rooms like smoke, and the volumes carry the street on their own.
+    // The haze starts at the basement's floor (spec 13.31), or a flashlight beam down the
+    // stairwell stops dead at the yard's level; its density at the floor is raised by what the
+    // falloff takes off over that depth, so every height above the yard is as it was.
     fx->fog_enabled = !g_args.no_fog;
-    fx->fog_density = night ? 0.02f : 0.0f;
     fx->fog_height_falloff = 60.0f;
-    fx->fog_floor_y = 0.0f;
+    fx->fog_floor_y = BASEMENT_Y;
+    fx->fog_density = night ? 0.02f * expf(-BASEMENT_Y / fx->fog_height_falloff) : 0.0f;
     fx->fog_far = 60.0f;
     fx->fog_anisotropy = 0.7f;
     // At night the fog's own glow, and not the sky's: the night sky's radiance
@@ -670,6 +686,7 @@ static void on_init(Game* game) {
             audio_set_bus_volume(audio, AUDIO_BUS_MASTER, 0.0f);
     }
     clock_start(&g_clock, engine, g_scene, audio);
+    basement_start(&g_basement, engine, g_scene, (unsigned int)g_args.seed);
     lights_start_audio(&g_lights, audio);
     tv_start_audio(&g_tv, audio);
     const vec3 spawn_eye = {SPAWN_FEET[0], SPAWN_FEET[1] + PLAYER_EYE_HEIGHT, SPAWN_FEET[2]};
@@ -886,6 +903,8 @@ static void on_pre_render(Game* game, double alpha) {
     cat_voice_update(&g_voice, &g_sounds, eye, cat_mind_at_ease(&g_mind),
                      (float)game->sim_clock.delta);
     clock_update(&g_clock, game->time, hearing);
+    basement_update(&g_basement, g_door_hung[DOOR_BASEMENT] ? &g_doors[DOOR_BASEMENT] : NULL,
+                    game->time);
     rain_bed_update(&g_rain_bed, g_scene->rain, g_scene->shadow_system, eye,
                     (float)game->sim_clock.delta);
     dump_audio(game);

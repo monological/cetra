@@ -2318,9 +2318,10 @@ static void render_shadow_tiles(ShadowSystem* ss, const Engine* engine, const Sc
             continue;
         float near_p, far_p;
         tile_planes(block->light, &near_p, &far_p);
-        if (ss->tile_refresh || block->generation != ss->tile_generation ||
-            block->near_plane != near_p || block->far_plane != far_p ||
-            block->views != tile_views_for(ss, block->light) || tile_views_drifted(ss, block)) {
+        if (ss->tile_refresh || block->light->shadow_refresh ||
+            block->generation != ss->tile_generation || block->near_plane != near_p ||
+            block->far_plane != far_p || block->views != tile_views_for(ss, block->light) ||
+            tile_views_drifted(ss, block)) {
             block->valid = 0;
             block->stored = 0;
         }

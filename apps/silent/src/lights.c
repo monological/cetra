@@ -265,6 +265,24 @@ static float flicker_level(double t, unsigned int seed) {
     return h < 0.45f ? 0.04f : (h < 0.6f ? 0.5f : 1.0f);
 }
 
+float lights_brownout(double t, unsigned int seed) {
+    const double period = 11.0;
+    const uint32_t cycle = (uint32_t)floor(t / period);
+    if (hash01(cycle, 2u, seed) < 0.35f)
+        return 1.0f;
+    const float in = (float)(t - (double)cycle * period);
+    const float start = 1.0f + 7.0f * hash01(cycle, 3u, seed);
+    const float len = 0.35f + 1.1f * hash01(cycle, 4u, seed);
+    const float depth = 0.35f + 0.35f * hash01(cycle, 5u, seed);
+    if (in < start || in > start + len)
+        return 1.0f;
+    // Down quickly, back slowly, as a filament cools and heats.
+    const float u = (in - start) / len, fall = 0.15f;
+    const float dip =
+        u < fall ? glm_smoothstep(0.0f, fall, u) : 1.0f - glm_smoothstep(fall, 1.0f, u);
+    return 1.0f - depth * dip;
+}
+
 void lights_start_audio(Lights* lights, AudioSystem* audio) {
     if (!audio)
         return;
