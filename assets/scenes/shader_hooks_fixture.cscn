@@ -145,6 +145,31 @@
      0.0
     ]
    }
+  },
+  "hooks_card": {
+   "surfaceShader": "../shaders/hooks_surface_holes.glsl",
+   "foliageShadows": 1,
+   "shaderParams": {
+    "holes": [
+     3.0,
+     2.0,
+     0.3,
+     0.0
+    ]
+   }
+  },
+  "hooks_dome": {
+   "surfaceShader": "../shaders/hooks_surface_dome.glsl",
+   "offsetShader": "../shaders/hooks_offset_dome.glsl",
+   "offsetBound": 0.6,
+   "shaderParams": {
+    "dome": [
+     0.6,
+     1.6,
+     0.0,
+     0.0
+    ]
+   }
   }
  },
  "camera": {

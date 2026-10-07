@@ -123,6 +123,10 @@ STRIPES = [0.3, 0.03, 0.8, 0.0]
 # The two tints one hook paints two boxes with.
 PARAM_A = [0.8, 0.02, 0.02, 0.0]
 PARAM_B = [0.02, 0.6, 0.02, 0.0]
+# The card's holes: cells across and down its UV, and each hole's radius as a fraction of a cell.
+HOLES = [3.0, 2.0, 0.3, 0.0]
+# The dome: its height at the middle in metres, and the grid's width it rises across.
+DOME = [0.6, 1.6, 0.0, 0.0]
 
 PIECES = [
     box("floor", "hooks_floor", (-7.0, -0.1, -5.0), (7.0, 0.0, 4.0)),
@@ -222,6 +226,45 @@ uniform vec4 tint;
 void cetraSurface(inout CetraSurface s)
 {
     s.albedo = tint.rgb;
+}
+""",
+    "hooks_surface_holes.glsl": """// A surface hook cutting round holes (spec 13.29's fixture): `holes.x` by `.y` cells across
+// the card's UV, each holed at its middle out to `.z` of the cell. Masked, so the card is cut,
+// and cast through the alpha test, so its shadow is cut too. A radius of 0 is the solid card.
+
+uniform vec4 holes;
+
+void cetraSurface(inout CetraSurface s)
+{
+    vec2 cell = fract(s.uv * holes.xy) - 0.5;
+    if (length(cell) < holes.z)
+        s.alpha = 0.0;
+}
+""",
+    "hooks_offset_dome.glsl": """// An offset hook raising a flat grid into a dome (spec 13.29's fixture): `dome.x` metres at
+// the middle of the UV square, falling to nothing at its inscribed circle.
+
+uniform vec4 dome;
+
+vec3 cetraOffset(CetraVertex v)
+{
+    vec2 d = v.uv * 2.0 - 1.0;
+    return vec3(0.0, dome.x * max(1.0 - dot(d, d), 0.0), 0.0);
+}
+""",
+    "hooks_surface_dome.glsl": """// The dome's surface (spec 13.29's fixture): the normal of the height its offset raises, so
+// the dome is lit as one -- the grid's own normal is the flat one it was built with. `dome.y` is
+// the grid's width in metres, which the slope is measured against.
+
+uniform vec4 dome;
+
+void cetraSurface(inout CetraSurface s)
+{
+    vec2 d = s.uv * 2.0 - 1.0;
+    if (dot(d, d) < 1.0) {
+        float k = 4.0 * dome.x / dome.y;
+        s.normal = normalize(vec3(k * d.x, 1.0, k * d.y));
+    }
 }
 """,
     "hooks_late_static.glsl": """#version 330 core
@@ -369,6 +412,13 @@ def scene():
                               "shaderParams": {"tint": PARAM_A}},
             "hooks_param_b": {"surfaceShader": asset_ref("hooks_surface_tint.glsl"),
                               "shaderParams": {"tint": PARAM_B}},
+            "hooks_card": {"surfaceShader": asset_ref("hooks_surface_holes.glsl"),
+                           "foliageShadows": 1,
+                           "shaderParams": {"holes": HOLES}},
+            "hooks_dome": {"surfaceShader": asset_ref("hooks_surface_dome.glsl"),
+                           "offsetShader": asset_ref("hooks_offset_dome.glsl"),
+                           "offsetBound": DOME[0],
+                           "shaderParams": {"dome": DOME}},
         },
         "camera": CAMERA,
     }

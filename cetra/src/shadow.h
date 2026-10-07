@@ -269,6 +269,11 @@ typedef struct ShadowSystem {
     bool dir_slot_warned;
     int default_map_size;
     ShaderProgram* depth_program;
+    // The shadow programs of every surface hook a caster has carried (spec 13.29), made on the
+    // first draw and owned here. A hook whose program would not build keeps a NULL entry, so it
+    // is said once and its casters draw with the plain program after.
+    struct ShadowHookProgram* hook_programs;
+    size_t hook_program_count;
     // World point the scene-fit map is built around: the outermost cascade
     // looks at it, and the texel snap quantises relative to it. Zero (the
     // default) is the origin, which is where every scene sat when this was a

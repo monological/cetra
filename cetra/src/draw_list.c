@@ -9,6 +9,7 @@
 #include "material.h"
 #include "program.h"
 #include "scene.h"
+#include "shader_hook.h"
 #include "wind.h"
 
 // Never reset, so a stamp taken before a mutation can never compare equal to one
@@ -104,8 +105,13 @@ static void classify(const Mesh* mesh, const Wind* wind, uint8_t* lane, uint8_t*
     bool masked = mat->alpha_mode == ALPHA_MASK;
     // Foliage opts alpha-masked geometry back into casting: leaf cards are
     // centimetres across, so an alpha test resolves them, where hair strands at
-    // map-texel scale resolve as streaks or acne either way.
-    bool foliage = masked && mat->foliage_shadows && mat->alphaCutoff > 0.0f && mat->albedo_tex;
+    // map-texel scale resolve as streaks or acne either way. The test needs an
+    // alpha to read: the albedo map's, or a surface hook's (spec 13.29), which the
+    // hooked shadow program runs.
+    const ShaderHook* hook = mat->shader_hook;
+    bool hook_alpha = hook && hook->surface;
+    bool foliage = masked && mat->foliage_shadows && mat->alphaCutoff > 0.0f &&
+                   (mat->albedo_tex || hook_alpha);
 
     *lane = transmissive ? DRAW_LANE_TRANSMISSIVE : (blend ? DRAW_LANE_BLEND : DRAW_LANE_OPAQUE);
 
@@ -120,12 +126,17 @@ static void classify(const Mesh* mesh, const Wind* wind, uint8_t* lane, uint8_t*
     // checked by the probe rather than guessed at here.
     bool rigid = !mesh->is_skinned && mesh->morph_max_offset == 0.0f;
     bool still = rigid && mat->wind_response == 0.0f;
-    bool occluder = mat->occluder && !transmissive && !blend && !masked && still;
+    // A hook's offset (spec 13.29) moves the surface off the box whether or not it moves with
+    // time, so it rules the mesh out as an occluder; only one that moves makes it a mover.
+    bool hook_offset = hook && hook->offset;
+    bool occluder = mat->occluder && !transmissive && !blend && !masked && still && !hook_offset;
 
     // Still as far as a kept shadow face is concerned (spec 13.26): rigid, and either displaced
-    // by nothing this scene's wind can do, or held at rest by its material.
+    // by nothing this scene's wind can do, or held at rest by its material -- and not displaced
+    // by a hook whose offset moves with time.
     bool sways = rigid && mat->wind_response > 0.0f && wind_mesh_max_offset(wind, mesh) > 0.0f;
-    bool kept_still = rigid && (!sways || mat->cached_shadow_wind == CACHED_SHADOW_WIND_REST);
+    bool kept_still = rigid && !(hook_offset && hook->animated) &&
+                      (!sways || mat->cached_shadow_wind == CACHED_SHADOW_WIND_REST);
 
     *flags = 0;
     if (kept_still)
@@ -440,6 +451,11 @@ bool draw_item_bounds(const DrawItem* item, const CullView* view, AABB* out) {
     // whichever way they lean: a vertex's share of it is its colour's alpha, at most 1.
     if (mesh->material->fur_layers > 0)
         margin += mesh->material->fur_length;
+    // The fourth, an app's offset hook (spec 13.29), whose bound is the one its author declared:
+    // nothing here can measure a function it only holds as source.
+    const ShaderHook* hook = mesh->material->shader_hook;
+    if (hook && hook->offset)
+        margin += hook->offset_bound;
     if (margin > 0.0f)
         aabb_expand(out, margin);
     return true;

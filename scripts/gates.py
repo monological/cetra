@@ -29809,6 +29809,26 @@ HOOKS_STRIPE_SPLIT = 100           # codes between a dark and a light stripe in 
 # Front-face centres of the boxes the hooks paint flat: the two hooks and the two params.
 HOOKS_FLAT = {"key_a": ((-2.5, 0.4, 0.3), 0), "key_b": ((-1.5, 0.4, 0.3), 2),
               "param_a": ((-0.4, 0.4, 0.3), 0), "param_b": ((0.6, 0.4, 0.3), 1)}
+# The card: x 1.6..2.8, y 0..1.4, its faces at z -0.62 and -0.58. Its hook holes a 3x2 grid of
+# UV cells, u running with x and v down from the top, so a cell (u, v) is at x = 1.6 + 1.2u,
+# y = 1.4(1 - v). Hole centres, and points between the holes.
+HOOKS_CARD_HOLES = [(u, v) for u in (1 / 6, 1 / 2, 5 / 6) for v in (0.25, 0.75)]
+HOOKS_CARD_SOLID = [(1 / 3, 0.25), (2 / 3, 0.25), (1 / 3, 0.75), (2 / 3, 0.75)]
+HOOKS_SUN = (-0.3, -1.0, -0.7)     # the fixture's sun, which way it travels
+# Looking down on the floor behind the card from behind it, where its shadow falls: from the
+# front the card stands between the eye and its lower row of holes' shadows.
+HOOKS_CARD_CAMERA = {"eye": [2.0, 6.0, -3.2], "target": [2.0, 0.0, -0.9], "fov": 45.0}
+HOOKS_HOLE_LIGHT_MIN = 15.0  # codes a hole's shadow is brighter than the solid card's
+# The dome: a 1.6 m grid centred (4.2, 0.005, -0.4), raised 0.6 m at its middle.
+HOOKS_DOME_CENTRE = (4.2, 0.005, -0.4)
+HOOKS_DOME_HEIGHT = 0.6
+# A low sun for the dome's arm, so its shadow clears the dome's own footprint.
+HOOKS_LOW_SUN = (-0.3, -0.45, -0.7)
+# Looking up past the dome from close in front: the frame's bottom edge clears the flat grid's
+# own box, so only the offset's declared bound keeps the raised dome from being culled.
+HOOKS_CULL_CAMERA = {"eye": [4.2, 0.4, 1.8], "target": [4.2, 1.4, -0.4], "fov": 45.0}
+HOOKS_DOME_SEEN_MIN = 30.0   # codes, in its largest channel, the raised dome differs from the
+                             # flat one where it rises: blue against the grey behind it
 
 
 def _hooks_box(w, h, rect):
@@ -29871,6 +29891,13 @@ def run_shader_hooks_gate(workdir):
                       its sunlit top brighter than its front.
       hooks-cache-key two hooks at one feature mask are two programs: one box red, one blue.
       hooks-params    one hook on two materials is told apart by a param: red and green.
+      hooks-opacity-shadow the card's hook cuts its holes in the card and in its shadow: from
+                      above, the floor under each hole's shadow is lit where the solid card's
+                      is not, and between the holes the two agree.
+      hooks-offset    the dome's offset raises it, its shadow follows it, and the lean depth
+                      prepass on and off render the same frame.
+      hooks-offset-cull looking up past the dome, its declared bound keeps it drawn; with no
+                      bound it is culled as the flat grid it was built as.
 
     The marks sit over the wall, which the depth of field blurs and the pieces in front of it do
     not reach, so each one is measured against the same frame rendered with no passes at all.
@@ -30077,7 +30104,137 @@ def run_shader_hooks_gate(workdir):
           + (f"; not their own colour: {bad}" if bad else ""))
     if not ok:
         failures.append("hooks-params")
+
+    verdicts = _hooks_offset_arms(scene, shot)
+    ok, detail = verdicts["hooks-opacity-shadow"]
+    print(f"  hooks-opacity-shadow {'PASS' if ok else 'FAIL'}  {detail}")
+    if not ok:
+        failures.append("hooks-opacity-shadow")
+    ok, detail = verdicts["hooks-offset"]
+    print(f"  hooks-offset  {'PASS' if ok else 'FAIL'}  {detail}")
+    if not ok:
+        failures.append("hooks-offset")
+    ok, detail = verdicts["hooks-offset-cull"]
+    print(f"  hooks-offset-cull {'PASS' if ok else 'FAIL'}  {detail}")
+    if not ok:
+        failures.append("hooks-offset-cull")
     return failures
+
+
+def _hooks_floor_under(p, sun):
+    """Where the sun travelling along `sun` carries world point `p` onto the floor, y = 0."""
+    t = p[1] / -sun[1]
+    return (p[0] + sun[0] * t, 0.0, p[2] + sun[2] * t)
+
+
+def _hooks_offset_arms(scene, shot):
+    """The card's alpha and the dome's offset, each against a twin without them: a verdict and
+    its detail per arm, which run_shader_hooks_gate prints, since its own source is where the
+    arm list is checked."""
+    verdicts = {}
+
+    def code(pix, w, project, p):
+        x, y = project(p)
+        o = (int(y) * w + int(x)) * 3
+        return (pix[o] + pix[o + 1] + pix[o + 2]) / 3.0
+
+    def channel_gap(a, b, w, project, p):
+        """The largest per-channel difference between two frames at `p`."""
+        x, y = project(p)
+        o = (int(y) * w + int(x)) * 3
+        return max(abs(a[o + c] - b[o + c]) for c in range(3))
+
+    # The card, from above, holed and solid.
+    def card_view(radius):
+        def mutate(d):
+            d["camera"] = dict(HOOKS_CARD_CAMERA)
+            d["materials"]["hooks_card"]["shaderParams"]["holes"][2] = radius
+        return mutate
+
+    holed = shot(scene("hooks_card_holed.cscn", card_view(0.3)), "card_holed", NO_HALOS)
+    solid = shot(scene("hooks_card_solid.cscn", card_view(0.0)), "card_solid", NO_HALOS)
+    if holed and solid:
+        w, h, holed_pix = _read_ppm(holed)
+        _, _, solid_pix = _read_ppm(solid)
+        cam = {"eye": tuple(HOOKS_CARD_CAMERA["eye"]), "target": tuple(HOOKS_CARD_CAMERA["target"]),
+               "fovy_deg": HOOKS_CARD_CAMERA["fov"]}
+        project = _projector(cam, w, h)
+
+        def floor(u, v):
+            return _hooks_floor_under((1.6 + 1.2 * u, 1.4 * (1.0 - v), -0.6), HOOKS_SUN)
+
+        lit = [code(holed_pix, w, project, floor(u, v)) - code(solid_pix, w, project, floor(u, v))
+               for u, v in HOOKS_CARD_HOLES]
+        same = [abs(code(holed_pix, w, project, floor(u, v))
+                    - code(solid_pix, w, project, floor(u, v))) for u, v in HOOKS_CARD_SOLID]
+        verdicts["hooks-opacity-shadow"] = (
+            min(lit) >= HOOKS_HOLE_LIGHT_MIN and max(same) <= 3.0,
+            f"under the holes' shadows the floor is {[round(v) for v in lit]} codes brighter "
+            f"than under the solid card's (needs >= {HOOKS_HOLE_LIGHT_MIN:.0f}); between them "
+            f"{[round(v, 1) for v in same]} (bound 3)")
+    else:
+        verdicts["hooks-opacity-shadow"] = (False, "a frame did not render")
+
+    # The dome under a low sun, raised and flat; and the lean prepass on and off.
+    def dome_view(height):
+        def mutate(d):
+            d["lights"][0]["direction"] = list(HOOKS_LOW_SUN)
+            d["materials"]["hooks_dome"]["shaderParams"]["dome"][0] = height
+        return mutate
+
+    raised_scene = scene("hooks_dome_raised.cscn", dome_view(HOOKS_DOME_HEIGHT))
+    raised = shot(raised_scene, "dome_raised", NO_HALOS)
+    flat = shot(scene("hooks_dome_flat.cscn", dome_view(0.0)), "dome_flat", NO_HALOS)
+    prepassed = shot(raised_scene, "dome_prepass", NO_HALOS + ["--depth-prepass"])
+    if raised and flat and prepassed:
+        w, h, raised_pix = _read_ppm(raised)
+        _, _, flat_pix = _read_ppm(flat)
+        project = _projector(_cscn_camera(HOOKS_FIXTURE), w, h)
+        cx, cy, cz = HOOKS_DOME_CENTRE
+        body = (cx, cy + 0.75 * HOOKS_DOME_HEIGHT, cz)
+        apex_shadow = _hooks_floor_under((cx, cy + HOOKS_DOME_HEIGHT, cz), HOOKS_LOW_SUN)
+        seen = channel_gap(raised_pix, flat_pix, w, project, body)
+        darker = code(flat_pix, w, project, apex_shadow) - code(raised_pix, w, project, apex_shadow)
+        ae, peak = compare(raised, prepassed)
+        verdicts["hooks-offset"] = (
+            seen >= HOOKS_DOME_SEEN_MIN and darker >= HOOKS_HOLE_LIGHT_MIN and peak <= LSB,
+            f"the raised dome differs from the flat one by {seen:.0f} codes where it rises "
+            f"(needs >= {HOOKS_DOME_SEEN_MIN:.0f}); its apex's shadow darkens the floor "
+            f"{darker:.0f} (needs >= {HOOKS_HOLE_LIGHT_MIN:.0f}); with the prepass {ae} px "
+            f"differ, peak {peak * 255:.2f} codes")
+    else:
+        verdicts["hooks-offset"] = (False, "a frame did not render")
+
+    # Looking up past the dome: drawn with its bound, culled without one.
+    def cull_view(bound):
+        def mutate(d):
+            d["camera"] = dict(HOOKS_CULL_CAMERA)
+            d["materials"]["hooks_dome"]["offsetBound"] = bound
+        return mutate
+
+    bounded = shot(scene("hooks_cull_bounded.cscn", cull_view(HOOKS_DOME_HEIGHT)), "cull_bounded",
+                   NO_HALOS)
+    unbounded = shot(scene("hooks_cull_unbounded.cscn", cull_view(0.0)), "cull_unbounded",
+                     NO_HALOS)
+    if bounded and unbounded:
+        w, h, bounded_pix = _read_ppm(bounded)
+        _, _, unbounded_pix = _read_ppm(unbounded)
+        cam = {"eye": tuple(HOOKS_CULL_CAMERA["eye"]), "target": tuple(HOOKS_CULL_CAMERA["target"]),
+               "fovy_deg": HOOKS_CULL_CAMERA["fov"]}
+        project = _projector(cam, w, h)
+        cx, cy, cz = HOOKS_DOME_CENTRE
+        top = (cx, cy + 0.9 * HOOKS_DOME_HEIGHT, cz)
+        x, y = project(top)
+        on_screen = 0 <= x < w and 0 <= y < h
+        moved = channel_gap(bounded_pix, unbounded_pix, w, project, top) if on_screen else 0.0
+        verdicts["hooks-offset-cull"] = (
+            on_screen and moved >= HOOKS_DOME_SEEN_MIN,
+            f"the dome's top is {'on' if on_screen else 'OFF'} screen; with its bound against "
+            f"without, {moved:.0f} codes there (needs >= {HOOKS_DOME_SEEN_MIN:.0f}: drawn, and "
+            f"culled without)")
+    else:
+        verdicts["hooks-offset-cull"] = (False, "a frame did not render")
+    return verdicts
 
 
 def _hooks_post_order(frames):
