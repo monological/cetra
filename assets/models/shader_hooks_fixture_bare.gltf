@@ -16,7 +16,8 @@
     6,
     7,
     8,
-    9
+    9,
+    10
    ]
   }
  ],
@@ -148,8 +149,22 @@
    ]
   },
   {
-   "name": "post",
+   "name": "pushed",
    "mesh": 9,
+   "translation": [
+    -0.2,
+    2.3,
+    0.6
+   ],
+   "scale": [
+    0.6,
+    0.6,
+    1.0
+   ]
+  },
+  {
+   "name": "post",
+   "mesh": 10,
    "translation": [
     -3.95,
     1.8,
@@ -290,6 +305,20 @@
    ]
   },
   {
+   "name": "pushed",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 8,
+      "NORMAL": 9,
+      "TEXCOORD_0": 10
+     },
+     "indices": 11,
+     "material": 10
+    }
+   ]
+  },
+  {
    "name": "post",
    "primitives": [
     {
@@ -299,7 +328,7 @@
       "TEXCOORD_0": 2
      },
      "indices": 3,
-     "material": 10
+     "material": 11
     }
    ]
   }
@@ -436,6 +465,19 @@
     ],
     "metallicFactor": 0.0,
     "roughnessFactor": 0.3
+   }
+  },
+  {
+   "name": "hooks_pushed",
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     0.8,
+     0.55,
+     0.1,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 0.6
    }
   },
   {

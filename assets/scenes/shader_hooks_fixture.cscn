@@ -170,6 +170,18 @@
      0.0
     ]
    }
+  },
+  "hooks_pushed": {
+   "offsetShader": "../shaders/hooks_offset_push.glsl",
+   "offsetBound": 0.5,
+   "shaderParams": {
+    "push": [
+     0.5,
+     0.0,
+     0.0,
+     0.0
+    ]
+   }
   }
  },
  "camera": {
