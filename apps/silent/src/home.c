@@ -118,7 +118,7 @@ static const KitWall WALLS[HW_COUNT] = {
     // The back: the window at the hall's end, the stair's and the bedroom's, and two upstairs.
     [HW_BACK] = {OUTSIDE(true, HOUSE_BACK_Z, HOUSE_X0 - CORNER, HOUSE_X1 + CORNER, -1),
                  .openings = {WIN(HALL_WIN_X0, HALL_WIN_X1, FLOOR_Y + 0.9f, FLOOR_Y + 2.1f),
-                              WIN(-3.7f, -3.1f, FLOOR_Y + 1.3f, FLOOR_Y + 2.0f),
+                              WIN(STAIR_WIN_X0, STAIR_WIN_X1, STAIR_WIN_SILL, STAIR_WIN_HEAD),
                               WIN(2.0f, 3.0f, GROUND_SILL, GROUND_HEAD),
                               WIN(-3.8f, -2.9f, UP_SILL, UP_HEAD),
                               WIN(2.0f, 2.9f, UP_SILL, UP_HEAD)},
@@ -156,7 +156,7 @@ static const KitWall WALLS[HW_COUNT] = {
     [HW_HALL_W_STAIR] = {INSIDE(false, HALL_X0, HOME_SPLIT_Z, HOUSE_BACK_Z, 1, MAT_CREAM,
                                 MAT_PLASTER),
                          .openings = {DOORWAY(16.85f, 17.65f, DOOR_HEAD),
-                                      DOORWAY(18.35f, 19.15f, DOOR_HEAD)},
+                                      DOORWAY(BASEMENT_DOOR_Z0, BASEMENT_DOOR_Z1, DOOR_HEAD)},
                          .opening_count = 2},
     [HW_CASED] = {INSIDE(true, KITCHEN_BACK_Z, HALL_X0, HALL_X1, -1, MAT_CREAM, MAT_CREAM),
                   .openings = {DOORWAY(CASED_X0, CASED_X1, CASED_HEAD)}, .opening_count = 1},

@@ -51,15 +51,23 @@
  * -- finished boards on a subfloor on joists, the joists inside the 0.3 m the floor stands above
  * the yard, so the basement's ceiling is that floor's own framing seen from below.
  */
-#define BASEMENT_Y   (-2.0f)
+#define BASEMENT_Y   (-2.4f)
 #define FLOOR_BOARDS 0.025f // the finished boards' thickness, under FLOOR_Y
 #define SUBFLOOR_Y0  0.255f // the subfloor, up to the boards
 #define JOIST_Y0     0.02f  // the joists' feet, up to the subfloor
 // The stairwell down to it: behind the basement door, between the partition that closes it off
-// from the stair up and the back wall, and west from the landing inside the door.
+// from the stair up and the back wall, and west from the door's own threshold, where the flight
+// starts.
 #define STAIRWELL_WALL_Z 18.25f
 #define STAIRWELL_Z0     (STAIRWELL_WALL_Z + 0.5f * INT_WALL)
-#define CELLAR_HEAD_X    (-2.0f)
+#define CELLAR_HEAD_X    (-1.6f)
+// Its door off the hall, and its window high in the back wall over the flight.
+#define BASEMENT_DOOR_Z0 18.35f
+#define BASEMENT_DOOR_Z1 19.15f
+#define STAIR_WIN_X0     (-3.7f)
+#define STAIR_WIN_X1     (-3.1f)
+#define STAIR_WIN_SILL   (FLOOR_Y + 1.3f)
+#define STAIR_WIN_HEAD   (FLOOR_Y + 2.0f)
 
 // The walls, floors, rooms, furniture and lamps, and the roofs, porch and gutter; not the
 // television, which is tv.c's.
