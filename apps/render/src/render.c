@@ -449,6 +449,17 @@ static void print_usage(const char* prog) {
     fprintf(stderr,
             "      --dither <lsb>     Output dither amplitude in 8-bit LSB (default on, 1.0)\n");
     fprintf(stderr, "      --no-dither        Disable the default output dither\n");
+    fprintf(stderr,
+            "      --crt              Show the frame on a consumer CRT television (spec 13.28)\n");
+    fprintf(
+        stderr,
+        "      --crt-lines <n>    The signal's lines top to bottom (default 480); implies --crt\n");
+    fprintf(
+        stderr,
+        "      --crt-scanlines <f> 0 = lines fused .. 1 = thin with dark gaps; implies --crt\n");
+    fprintf(stderr, "      --crt-mask <f>     The slot mask's depth, 0..1; implies --crt\n");
+    fprintf(stderr, "      --crt-curvature <f> The tube's bow, 0 = flat .. 1; implies --crt\n");
+    fprintf(stderr, "      --crt-bleed <f>    Composite colour bleed, 0..1; implies --crt\n");
     fprintf(stderr, "      --no-texture-compression  Store every texture uncompressed\n");
     fprintf(stderr, "      --texture-probe    Print the texture memory ledger\n");
     fprintf(stderr, "      --texture-compress-colour  Compress albedo too (DXT, lossy)\n");
@@ -592,6 +603,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->sss_color[0] = -1.0f;    // -1 = keep the fixture default SSS scatter color
     args->vignette = -1.0f;
     args->dither = -1.0f;
+    args->crt_lines = args->crt_scanlines = args->crt_mask = -1.0f;
+    args->crt_curvature = args->crt_bleed = -1.0f;
     args->grain = -1.0f;
     args->sharpen = -1.0f;
     args->flare = -1.0f;
@@ -2161,6 +2174,28 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->dither = (float)v;
         } else if (strcmp(argv[i], "--no-dither") == 0) {
             args->no_dither = 1;
+        } else if (strcmp(argv[i], "--crt") == 0) {
+            args->crt = 1;
+        } else if (strcmp(argv[i], "--crt-lines") == 0) {
+            if (_ranged_arg(argc, argv, &i, 16.0f, 4096.0f, &args->crt_lines) < 0)
+                return -1;
+            args->crt = 1;
+        } else if (strcmp(argv[i], "--crt-scanlines") == 0) {
+            if (_ranged_arg(argc, argv, &i, 0.0f, 1.0f, &args->crt_scanlines) < 0)
+                return -1;
+            args->crt = 1;
+        } else if (strcmp(argv[i], "--crt-mask") == 0) {
+            if (_ranged_arg(argc, argv, &i, 0.0f, 1.0f, &args->crt_mask) < 0)
+                return -1;
+            args->crt = 1;
+        } else if (strcmp(argv[i], "--crt-curvature") == 0) {
+            if (_ranged_arg(argc, argv, &i, 0.0f, 1.0f, &args->crt_curvature) < 0)
+                return -1;
+            args->crt = 1;
+        } else if (strcmp(argv[i], "--crt-bleed") == 0) {
+            if (_ranged_arg(argc, argv, &i, 0.0f, 1.0f, &args->crt_bleed) < 0)
+                return -1;
+            args->crt = 1;
         } else if (strcmp(argv[i], "--no-texture-compression") == 0) {
             args->no_texture_compression = 1;
         } else if (strcmp(argv[i], "--texture-probe") == 0) {
@@ -3851,6 +3886,18 @@ int main(int argc, char** argv) {
             fx->dither_enabled = true;
             fx->dither_strength = args.dither;
         }
+        if (args.crt)
+            fx->crt_enabled = true;
+        if (args.crt_lines >= 0.0f)
+            fx->crt_lines = args.crt_lines;
+        if (args.crt_scanlines >= 0.0f)
+            fx->crt_scanlines = args.crt_scanlines;
+        if (args.crt_mask >= 0.0f)
+            fx->crt_mask = args.crt_mask;
+        if (args.crt_curvature >= 0.0f)
+            fx->crt_curvature = args.crt_curvature;
+        if (args.crt_bleed >= 0.0f)
+            fx->crt_bleed = args.crt_bleed;
         if (args.grain >= 0.0f) {
             fx->grain_enabled = true;
             fx->grain_strength = args.grain;

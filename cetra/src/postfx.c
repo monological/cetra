@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "postfx.h"
+#include "crt.h"
 #include "glare.h"
 #include "local_exposure.h"
 #include "lut.h"
@@ -726,6 +727,14 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     // On by default: banding is a defect of the 8-bit write, not a look.
     fx->dither_enabled = true;
     fx->dither_strength = 1.0f;
+    // A look, so off. Its settings are a console's 480 lines on a living-room set, there to be
+    // seen and not to fight the picture.
+    fx->crt_enabled = false;
+    fx->crt_lines = 480.0f;
+    fx->crt_scanlines = 0.4f;
+    fx->crt_mask = 0.3f;
+    fx->crt_curvature = 0.35f;
+    fx->crt_bleed = 0.5f;
     // No LUT until an app loads one. `lut_texture` 0 is what gates the branch,
     // so there is no separate enable to keep in step with it.
     fx->lut_texture = 0;
@@ -2243,6 +2252,8 @@ void free_postfx(PostFX* fx) {
     fx->glare = NULL;
     free_local_exposure(fx->local_exposure);
     fx->local_exposure = NULL;
+    free_crt(fx->crt);
+    fx->crt = NULL;
     free_program(fx->tonemap_program);
     free_program(fx->spec_occ_composite_program);
     free_program(fx->gtao_program);
@@ -2367,6 +2378,31 @@ float postfx_sss_max_sigma_per_depth(const PostFX* fx, const mat4 projection) {
     // only on the render height and the projection, both known before any
     // allocation, so it does not need the guard.
     return sss_level_sigma_px(sss_lod_cap(fx)) / proj_scale;
+}
+
+GLuint postfx_picture_fbo(PostFX* fx) {
+    if (!fx)
+        return 0;
+    fx->crt_this_frame = false;
+    if (!fx->crt_enabled || fx->crt_failed)
+        return 0;
+    if (!fx->crt)
+        fx->crt = create_crt();
+    const GLuint fbo = fx->crt ? crt_picture_fbo(fx->crt, fx->out_width, fx->out_height) : 0;
+    if (!fbo) {
+        fx->crt_failed = true;
+        return 0;
+    }
+    fx->crt_this_frame = true;
+    return fbo;
+}
+
+void postfx_present_picture(PostFX* fx) {
+    if (!fx || !fx->crt_this_frame)
+        return;
+    profiler_scope_begin(fx->profiler, "crt");
+    crt_present(fx->crt, fx, 0, fx->out_width, fx->out_height);
+    profiler_scope_end(fx->profiler);
 }
 
 bool postfx_wants_normals(const PostFX* fx) {
@@ -4112,7 +4148,8 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         uniform_set_int(tm, "purkinjeHasMeter", meter_wanted ? 1 : 0);
         uniform_set_int(tm, "grainEnabled", fx->grain_enabled ? 1 : 0);
         uniform_set_float(tm, "grainStrength", fx->grain_strength);
-        uniform_set_int(tm, "noiseFrame", fx->frame_index);
+        // Wrapped at 2^24: uniform_set_int compares through a float, exact below that.
+        uniform_set_int(tm, "noiseFrame", fx->frame_index & 0xFFFFFF);
         // The loaded texture IS the enable: there is no second flag that could
         // disagree with it, so a failed load cannot leave the branch sampling
         // unit 11 with nothing bound to it.
@@ -4120,8 +4157,9 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         uniform_set_float(tm, "lutSize", (float)fx->lut_size);
         uniform_set_float(tm, "lutStrength", fx->lut_strength);
         uniform_set_int(tm, "lutInterp", (int)fx->lut_interp);
-        // No frame term here, deliberately -- see the shader's dither block.
-        uniform_set_int(tm, "ditherEnabled", fx->dither_enabled ? 1 : 0);
+        // No frame term here, deliberately -- see the shader's dither block. A CRT dithers the
+        // window's write itself; dithering here as well would be resampled into it.
+        uniform_set_int(tm, "ditherEnabled", fx->dither_enabled && !fx->crt_this_frame ? 1 : 0);
         uniform_set_float(tm, "ditherStrength", fx->dither_strength);
         draw_fullscreen_quad(fx->quad_vao);
         profiler_scope_end(fx->profiler);
