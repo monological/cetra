@@ -18,12 +18,12 @@
  * sees the glass before the late draw -- SSR, the probes, TAA's history -- sees the screen lit.
  */
 typedef struct Tv {
-    Material* glass;     // emits the picture's mean
-    Material* picture;   // the snow; NULL when the set shows none
-    Light* glow;         // the set's light on the room
-    float glow_per_mean; // its candela for each unit of the signal's mean light
-    vec3 speaker;        // world
-    Sound* hiss;         // the speaker on a dead channel; NULL without audio
+    Material* glass;   // emits the picture's mean
+    Material* picture; // the snow; NULL when the set shows none
+    Light* glow;       // the set's light on the room, a panel over the picture
+    float average;     // the picture's light over its area, as a share of the signal's mean
+    vec3 speaker;      // world
+    Sound* hiss;       // the speaker on a dead channel; NULL without audio
 } Tv;
 
 // Lays the set on its stand in the living room and hangs its light; with `on`, the picture over
