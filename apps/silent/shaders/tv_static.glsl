@@ -39,7 +39,7 @@ uniform vec4 tvTint;   // the phosphor white, linear; w = the picture's width ov
 // of line `line` in field `field`.
 float snowSample(int s, int line, uint field)
 {
-    uvec3 h = pcg3d(uvec3(uint(s), uint(line), field));
+    uvec3 h = pcg4d(uvec4(uint(s), uint(line), field, 0u)).xyz;
     vec3 u = vec3(h >> 8u) * (1.0 / 16777216.0);
     return (u.x + u.y + u.z - 1.5) * 2.0;
 }
