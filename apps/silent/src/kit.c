@@ -1553,11 +1553,14 @@ static int64_t cell_key(const MeshBuilder* mb, unsigned int tri) {
     return (ix << 42) | (iy << 21) | iz;
 }
 
-// Whether a material's shadow can be the cells': opaque, single-sided and still. Anything else
-// -- glass, a cutout, a swaying leaf -- keeps casting from its own mesh exactly as before.
+// Whether a material's shadow can be the cells': opaque, single-sided, still and drawn as the lit
+// surface draws it. Anything else -- glass, a cutout, a swaying leaf, a surface its shader hook
+// may move, or one drawn in the late draw, which casts nothing -- keeps casting from its own mesh,
+// or not at all, exactly as before.
 static bool casts_plainly(const Material* m) {
-    return m->alpha_mode == ALPHA_OPAQUE && m->opacity >= 1.0f && !m->opacity_tex &&
-           m->transmission <= 0.0f && !m->doubleSided && m->wind_response == 0.0f;
+    return m->pass == MATERIAL_PASS_MAIN && !m->shader_hook && m->alpha_mode == ALPHA_OPAQUE &&
+           m->opacity >= 1.0f && !m->opacity_tex && m->transmission <= 0.0f && !m->doubleSided &&
+           m->wind_response == 0.0f;
 }
 
 // One cell's triangles, `count` of them from any of the builders, as one shape-only mesh on

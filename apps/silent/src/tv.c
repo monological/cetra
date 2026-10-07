@@ -1,112 +1,208 @@
 #include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <cglm/cglm.h>
 
 #include "cetra/program.h"
+#include "cetra/shader.h"
+#include "cetra/shader_hook.h"
 
 #include "home.h"
 #include "mats.h"
+#include "silent_shaders.h"
 #include "sounds.h"
 #include "tv.h"
 
-// The signal (spec 13.30): NTSC's 480 visible lines and 59.94 fields a second, and the ~440 values
-// a line's 4.2 MHz of luma bandwidth carries across its active 52.6 us.
-#define TV_LINES    480.0f
-#define TV_SAMPLES  440.0f
-#define TV_FIELD_HZ 59.94f
-// The tube: its peak white in nits, and the corners' radius as a fraction of the picture's height.
+// The set on its stand against the living room's back wall, facing the sofa, and its picture in
+// its own frame: across it, up from the floor, and the glass's face, which the picture lies on.
+static const KitFrame TV_SET = {{-TV_X, FLOOR_Y, LIVING_IN_Z1}, GLM_PIf};
+#define PICTURE_A0 -0.27f
+#define PICTURE_A1 0.17f
+#define PICTURE_Y0 0.6f
+#define PICTURE_Y1 0.96f
+#define PICTURE_D  0.512f
+
+// The signal: NTSC's 480 visible lines and 59.94 fields a second, and the ~440 values a line's
+// 4.2 MHz of luma bandwidth carries across its active 52.6 us. The hum bar rolls once a beat of
+// the mains against the field rate.
+#define TV_LINES      480.0f
+#define TV_SAMPLES    440.0f
+#define TV_FIELD_HZ   59.94
+#define TV_HUM_PERIOD (1.0 / (60.0 - TV_FIELD_HZ))
+// The snow: the black level and the noise's spread at a gain of 1, which the clip and the tube's
+// gamma turn into mostly dark with bright specks.
+#define TV_BLACK 0.28f
+#define TV_SIGMA 0.20f
+#define TV_GAMMA 2.4f
+// The tube's peak white, nits, at a colour set's cool white, about 9300 K, linear; and the set's
+// light on the room at a gain of 1, candela.
 #define TV_PEAK_NITS 90.0f
-#define TV_CORNER    0.08f
-// The snow: the black level and the noise's spread at a gain of 1, which the clip and the gamma
-// turn into mostly dark with bright specks; and the hum bar, mains against the field rate, which
-// rolls once every 1 / (60 - 59.94) seconds.
-#define TV_BLACK      0.28f
-#define TV_SIGMA      0.20f
-#define TV_HUM_DEPTH  0.08f
-#define TV_HUM_PERIOD 16.7f
-// A colour set's cool white, about 9300 K, linear.
-static const float TV_TINT[3] = {0.86f, 0.93f, 1.0f};
+static const vec3 TV_WHITE = {0.86f, 0.93f, 1.0f};
+#define TV_GLOW_CD 3.0f
+// Showing nothing: a faint blue-grey on the glass and on the room, a set left on between
+// programmes.
+static const vec3 TV_IDLE = {0.55f, 0.66f, 0.82f};
+#define TV_IDLE_NITS 4.0f
 // The hiss, against the other loops tools/fetch_sounds.py levels alike: a set left on low.
 #define TV_HISS_VOLUME 0.15f
 
-// The AGC's gain, held for each field: a slow breath about the gain that fills the picture, which
-// is what moves the light a screen of snow throws. The specks cannot: a field averages ~200,000.
-static float tv_gain(double time) {
-    const double t = floor(time * TV_FIELD_HZ) / TV_FIELD_HZ;
+// The AGC's gain for field `field`: a slow breath about the gain that fills the picture, which is
+// what moves the light a screen of snow throws -- a field's specks cannot, ~200,000 of them.
+static float tv_gain(double field) {
+    const double t = field / TV_FIELD_HZ;
     return 1.0f + 0.05f * (float)sin(2.0 * GLM_PI * 0.53 * t) +
            0.03f * (float)sin(2.0 * GLM_PI * 1.7 * t + 1.0);
 }
 
-// The picture's mean light over its peak at gain `gain`: the expectation of the clipped level
-// through the gamma, a Gaussian summed at its midpoints across six sigma, under the hum bar's
-// average.
-static float tv_mean(float gain) {
+// The signal's mean light as a fraction of peak at a noise spread of `spread`: the expectation of
+// the level clipped at black and white and through the gamma, a unit Gaussian summed at its
+// midpoints across six sigma.
+static float tv_mean(float spread) {
     const int steps = 480;
     double sum = 0.0, weights = 0.0;
     for (int i = 0; i < steps; i++) {
         const double g = -6.0 + (i + 0.5) * 12.0 / steps;
         const double w = exp(-0.5 * g * g);
-        const double v = glm_clamp(TV_BLACK + TV_SIGMA * gain * (float)g, 0.0f, 1.0f);
-        sum += w * pow(v, 2.4);
+        sum += w * pow(glm_clamp(TV_BLACK + spread * (float)g, 0.0f, 1.0f), TV_GAMMA);
         weights += w;
     }
-    return (float)(sum / weights) * (1.0f - 0.5f * TV_HUM_DEPTH);
+    return (float)(sum / weights);
 }
 
-static Light* tv_find_light(Scene* scene, const char* name) {
-    for (size_t i = 0; i < scene->light_count; i++) {
-        Light* light = scene->lights[i];
-        if (light && light->name && strcmp(light->name, name) == 0)
-            return light;
+// `a` then `b` as one string; NULL with no memory.
+static char* tv_join(const char* a, const char* b) {
+    const size_t na = strlen(a), nb = strlen(b);
+    char* out = malloc(na + nb + 1);
+    if (out) {
+        memcpy(out, a, na);
+        memcpy(out + na, b, nb + 1);
     }
-    return NULL;
+    return out;
 }
 
-void tv_init(Tv* tv, const Kit* kit, Scene* scene, bool on) {
-    *tv = (Tv){0};
-    if (!on)
-        return;
-    tv->glass = kit->materials[MAT_SCREEN];
+// The picture: a card on the glass, the static's program over it in the late draw, and the
+// glass's hook, which gives its light the picture's shape. Each from tv_picture.glsl and its own
+// file, so the glass and the picture are one statement of the tube and the hum bar.
+static void tv_picture(Tv* tv, Kit* kit, Engine* engine) {
     tv->picture = kit->materials[MAT_TV_STATIC];
-    tv->glow = tv_find_light(scene, "tv_glow");
-    tv->glow_base = tv->glow ? tv->glow->intensity : 0.0f;
-    tv->mean_base = tv_mean(1.0f);
-    if (tv->glow)
-        glm_vec3_copy((float*)TV_TINT, tv->glow->color);
-    glm_vec3_copy((float*)TV_TINT, tv->glass->emissive);
+    kit_frame_card_rect(kit, &TV_SET, MAT_TV_STATIC, (float[4]){0.0f, 0.0f, 1.0f, 1.0f}, PICTURE_A0,
+                        PICTURE_A1, PICTURE_Y0, PICTURE_Y1, PICTURE_D, 1.0f);
+    // In the late pass whether its program builds or not, so one that does not is refused by name
+    // at the draw rather than drawn as a lit card over the glass.
+    tv->picture->pass = MATERIAL_PASS_LATE_DRAW;
+    char* snow_source =
+        shader_source_splice(tv_static_shader_str, "// TV_PICTURE_CHUNK", tv_picture_shader_str);
+    ShaderProgram* snow =
+        snow_source ? create_late_surface_program("tv_static", snow_source) : NULL;
+    free(snow_source);
+    if (snow) {
+        engine_add_program(engine, snow);
+        material_set_program(tv->picture, snow);
+    }
 
-    const float aspect = (TV_PICTURE_A1 - TV_PICTURE_A0) / (TV_PICTURE_Y1 - TV_PICTURE_Y0);
+    const float width = PICTURE_A1 - PICTURE_A0, height = PICTURE_Y1 - PICTURE_Y0;
     ShaderParams* p = &tv->picture->shader_params;
-    shader_params_set(p, "tvSignal", (vec4){TV_LINES, TV_SAMPLES, TV_FIELD_HZ, 0.0f});
-    shader_params_set(p, "tvSnow", (vec4){TV_BLACK, TV_SIGMA, TV_HUM_DEPTH, TV_HUM_PERIOD});
-    shader_params_set(p, "tvTint", (vec4){TV_TINT[0], TV_TINT[1], TV_TINT[2], aspect});
-    tv_update(tv, 0.0, 1.0f);
+    shader_params_set(p, "tvSignal", (vec4){TV_LINES, TV_SAMPLES, TV_BLACK, TV_GAMMA});
+    shader_params_set(p, "tvWhite",
+                      (vec4){TV_PEAK_NITS * TV_WHITE[0], TV_PEAK_NITS * TV_WHITE[1],
+                             TV_PEAK_NITS * TV_WHITE[2], width / height});
+
+    // The glass's light, placed in the picture by where it is: its UVs are the smear's.
+    char* glass_source = tv_join(tv_picture_shader_str, tv_glass_shader_str);
+    ShaderHook* hook = glass_source ? create_shader_hook(engine,
+                                                         &(ShaderHookDesc){
+                                                             .name = "tv_glass",
+                                                             .surface = glass_source,
+                                                         })
+                                    : NULL;
+    free(glass_source);
+    if (!hook)
+        fprintf(stderr, "silent: the television's glass glows flat, its hook unbuilt\n");
+    tv->glass->shader_hook = hook;
+    vec3 corner = {0.0f, 0.0f, 0.0f}, across = {0.0f, 0.0f, 0.0f};
+    kit_frame_point(&TV_SET, PICTURE_A0, PICTURE_Y0, PICTURE_D, corner);
+    glm_vec3_add(corner, kit->origin, corner);
+    kit_frame_dir(&TV_SET, 1.0f, 0.0f, 0.0f, across);
+    ShaderParams* g = &tv->glass->shader_params;
+    shader_params_set(g, "tvPlace", (vec4){corner[0], corner[1], corner[2], width});
+    shader_params_set(g, "tvAcross", (vec4){across[0], across[1], across[2], height});
+}
+
+void tv_build(Tv* tv, Kit* kit, Engine* engine, Scene* scene, bool on) {
+    *tv = (Tv){0};
+    // The cabinet on its stand, the glass, two knobs and rabbit ears.
+    const KitFrame* f = &TV_SET;
+    kit_frame_box(kit, f, MAT_WOOD, -0.5f, 0.5f, 0.0f, 0.5f, 0.0f, 0.45f, true);
+    kit_frame_box(kit, f, MAT_WOOD, -0.36f, 0.36f, 0.5f, 1.05f, 0.02f, 0.5f, true);
+    kit_frame_box(kit, f, MAT_SCREEN, PICTURE_A0, PICTURE_A1, PICTURE_Y0, PICTURE_Y1, 0.5f,
+                  PICTURE_D, false);
+    for (int k = 0; k < 2; k++)
+        kit_frame_lathe_on(kit, f, MAT_BLACK, (vec3){0.25f, 0.88f - 0.12f * (float)k, 0.5f},
+                           (vec3){0.0f, 0.0f, 1.0f},
+                           (vec2[]){{0.0f, 0.0f}, {0.018f, 0.0f}, {0.016f, 0.015f}, {0.0f, 0.017f}},
+                           4, 8);
+    for (int s = -1; s <= 1; s += 2) {
+        const vec3 ear[] = {{0.0f, 1.05f, 0.25f}, {(float)s * 0.22f, 1.5f, 0.2f}};
+        kit_frame_pipe(kit, f, MAT_STEEL, ear, 2, 0.003f, 5);
+    }
+    // The speaker, in the cabinet's face below the knobs.
+    kit_frame_point(f, 0.25f, 0.66f, 0.5f, tv->speaker);
+    glm_vec3_add(tv->speaker, kit->origin, tv->speaker);
+
+    // The glass glows with what the set shows, as decoration: the set's light below is its light.
+    tv->glass = kit->materials[MAT_SCREEN];
+    tv->glass->emissive_light = 1;
+    glm_vec3_copy((float*)(on ? TV_WHITE : TV_IDLE), tv->glass->emissive);
+    tv->glass->emissive_strength = TV_IDLE_NITS;
+
+    vec3 at = {0.0f, 0.0f, 0.0f};
+    kit_frame_point(f, -0.05f, 0.78f, 0.75f, at);
+    glm_vec3_add(at, kit->origin, at);
+    LightDesc glow = {.name = "tv_glow",
+                      .type = LIGHT_POINT,
+                      .position = {at[0], at[1], at[2]},
+                      .intensity = TV_GLOW_CD,
+                      .range = 4.0f};
+    glm_vec3_copy((float*)(on ? TV_WHITE : TV_IDLE), glow.color);
+    tv->glow = create_light(&glow);
+    // It stands in for the glass, whose own light is what reflects in SSR and the probes: a
+    // highlight of it as well would be the picture reflected twice, the second time at a point.
+    tv->glow->specular = 0.0f;
+    scene_add_light(scene, tv->glow);
+
+    if (on) {
+        tv->glow_per_mean = TV_GLOW_CD / tv_mean(TV_SIGMA);
+        tv_picture(tv, kit, engine);
+        tv_update(tv, 0.0, 1.0f);
+    }
 }
 
 void tv_start_audio(Tv* tv, AudioSystem* audio) {
     if (!tv->picture)
         return;
     tv->hiss = sounds_loop(audio, "assets/audio/silent/tv_static.flac");
-    if (tv->hiss) {
-        vec3 speaker = {0.0f, 0.0f, 0.0f};
-        home_tv_speaker(speaker);
-        audio_sound_set_position(tv->hiss, speaker);
-    }
+    if (tv->hiss)
+        audio_sound_set_position(tv->hiss, tv->speaker);
 }
 
 void tv_update(Tv* tv, double time, float hearing) {
     if (!tv->picture)
         return;
-    const float gain = tv_gain(time);
-    const float mean = tv_mean(gain);
-    // The glass emits the mean, and the picture adds what the static is beyond it: their sum is
-    // the static, whatever this mean misses of it, and what reflects the screen sees the mean.
+    const double field = floor(time * TV_FIELD_HZ);
+    const float spread = TV_SIGMA * tv_gain(field);
+    const float mean = tv_mean(spread);
+    // The field's number wraps where a float stops counting exactly, an even count so its parity
+    // holds; the glass and the picture show the same field.
+    vec4 now = {(float)fmod(field, 16777216.0), (float)fmod(time / TV_HUM_PERIOD, 1.0), spread,
+                mean};
+    shader_params_set(&tv->picture->shader_params, "tvField", now);
+    shader_params_set(&tv->glass->shader_params, "tvField", now);
+    // The glass's light is the signal's mean, which its hook shapes; a glass whose hook did not
+    // build glows with it flat.
     tv->glass->emissive_strength = TV_PEAK_NITS * mean;
-    shader_params_set(&tv->picture->shader_params, "tvTube",
-                      (vec4){TV_PEAK_NITS, gain, TV_PEAK_NITS * mean, TV_CORNER});
-    if (tv->glow)
-        tv->glow->intensity = tv->glow_base * mean / tv->mean_base;
+    tv->glow->intensity = tv->glow_per_mean * mean;
     if (tv->hiss)
         audio_sound_set_volume(tv->hiss, TV_HISS_VOLUME * hearing);
 }

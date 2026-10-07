@@ -42,19 +42,13 @@
 #define HALL_IN_Z0 BAND_Z0
 #define HALL_IN_Z1 (HOUSE_BACK_Z - 0.5f * EXT_WALL)
 
-// The television's picture, in the set's own frame: across it, and up from the floor. tv.c
-// shapes the static's corners from it.
-#define TV_PICTURE_A0 -0.27f
-#define TV_PICTURE_A1 0.17f
-#define TV_PICTURE_Y0 0.6f
-#define TV_PICTURE_Y1 0.96f
+// The living room's television's middle, west of the hall (negated): the sofa, the chair and the
+// table face it.
+#define TV_X 3.3f
 
-// The walls, floors, rooms, furniture and lamps, and the roofs, porch and gutter. `tv_static`
-// lays the television's picture over its glass (spec 13.30).
-void home_build(Kit* kit, Engine* engine, Scene* scene, bool tv_static);
-
-// Where the television's sound comes from, in the world.
-void home_tv_speaker(vec3 out);
+// The walls, floors, rooms, furniture and lamps, and the roofs, porch and gutter; not the
+// television, which is tv.c's.
+void home_build(Kit* kit, Engine* engine, Scene* scene);
 
 // The front door and the bathroom's, hung to swing; false for one that could not be.
 bool home_front_door(Door* door, Engine* engine, Scene* scene, EntityManager* em,

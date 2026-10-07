@@ -82,7 +82,7 @@ typedef enum {
     MAT_MIRROR,     // the bathroom's mirror, its silvering spotted
     MAT_LAMPSHADE,  // the floor lamp's fabric shade, lit from inside
     MAT_FROSTED,    // a lantern's frosted glass, lit from inside
-    MAT_SCREEN,     // the television's glass, glowing with its picture's mean
+    MAT_SCREEN,     // the television's glass, glowing with its picture
     MAT_TV_STATIC,  // the picture on it, snow, drawn in the late draw (spec 13.30)
     MAT_COUNT
 } MatId;

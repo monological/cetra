@@ -160,7 +160,7 @@ typedef struct SilentArgs {
     const char* pad_script;
     bool trace_player;
     bool no_flicker;
-    bool no_static; // the living room's set as it was, glowing with nothing on it
+    bool no_static; // the living room's set showing nothing, a faint glow and no hiss
     bool flashlight;
     bool mute;
     float rain_mmh;         // 0 = dry
@@ -588,10 +588,10 @@ static void on_init(Game* game) {
     Kit kit;
     kit_init(&kit, g_scene, em, physics);
     mats_register(&kit, engine, g_scene);
-    // The player's house on the plan's origin (spec 13.25), its kitchen and its clock.
-    home_build(&kit, engine, g_scene, !g_args.no_static);
-    // Its living room's television showing snow (spec 13.30), on the light home_build hung by it.
-    tv_init(&g_tv, &kit, g_scene, !g_args.no_static);
+    // The player's house on the plan's origin (spec 13.25), its living room's television, its
+    // kitchen and its clock.
+    home_build(&kit, engine, g_scene);
+    tv_build(&g_tv, &kit, engine, g_scene, !g_args.no_static);
     kitchen_build(&kit, (unsigned int)g_args.seed);
     lights_build(&g_lights, &kit, engine, g_scene, (unsigned int)g_args.seed, !g_args.no_flicker,
                  g_args.flashlight);
