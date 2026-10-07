@@ -5,7 +5,6 @@
 #include "crt.h"
 #include "ext/log.h"
 #include "program.h"
-#include "texture.h"
 #include "uniform.h"
 #include "util.h"
 
@@ -14,43 +13,11 @@
 #define CRT_SCAN_FADE_LO 1.5f
 #define CRT_SCAN_FADE_HI 2.5f
 
-// An RGBA16F colour target, at the size it was last made.
-typedef struct CrtTarget {
-    GLuint tex, fbo;
-    int w, h;
-} CrtTarget;
-
 struct Crt {
     ShaderProgram* resample;
     ShaderProgram* show;
-    CrtTarget signal;
+    GLColorTarget signal;
 };
-
-static void _crt_target_free(CrtTarget* t) {
-    gl_delete_texture(&t->tex);
-    gl_delete_fbo(&t->fbo);
-    t->w = t->h = 0;
-}
-
-// `t` at `w` by `h`, remade only when its size changes. False, reported by `what`, when the
-// target is incomplete.
-static bool _crt_ensure(CrtTarget* t, int w, int h, const char* what) {
-    if (t->fbo && t->w == w && t->h == h)
-        return true;
-    _crt_target_free(t);
-    t->tex = create_texture_2d_float(w, h, GL_RGBA16F, GL_RGBA, NULL);
-    glGenFramebuffers(1, &t->fbo);
-    glBindFramebuffer(GL_FRAMEBUFFER, t->fbo);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, t->tex, 0);
-    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-        log_error("CRT: the %dx%d %s target is incomplete", w, h, what);
-        _crt_target_free(t);
-        return false;
-    }
-    t->w = w;
-    t->h = h;
-    return true;
-}
 
 Crt* create_crt(void) {
     Crt* crt = calloc(1, sizeof(Crt));
@@ -69,7 +36,7 @@ Crt* create_crt(void) {
 void free_crt(Crt* crt) {
     if (!crt)
         return;
-    _crt_target_free(&crt->signal);
+    gl_color_target_free(&crt->signal);
     free_program(crt->resample);
     free_program(crt->show);
     free(crt);
@@ -95,7 +62,7 @@ void crt_present(Crt* crt, GLuint picture, int width, int height, GLuint quad_va
         return;
     const int lines = (int)fmaxf(16.0f, fminf(roundf(look->lines), (float)height));
     const int across = (int)fmaxf(16.0f, roundf((float)lines * (float)width / (float)height));
-    if (!_crt_ensure(&crt->signal, across, lines, "signal"))
+    if (!gl_color_target_ensure(&crt->signal, across, lines, "CRT signal"))
         return;
     const GLPassState pass = gl_pass_begin();
 

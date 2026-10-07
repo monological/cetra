@@ -1,7 +1,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "engine.h"
+#include "engine_internal.h"
 #include "ext/log.h"
 #include "program.h"
 #include "shader_hook.h"
@@ -23,31 +23,34 @@ ShaderHook* create_shader_hook(Engine* engine, const ShaderHookDesc* desc) {
     }
     hook->id = ++next_id;
     hook->name = safe_strdup(desc->name);
-    hook->surface = desc->surface ? safe_strdup(desc->surface) : NULL;
-    hook->offset = desc->offset ? safe_strdup(desc->offset) : NULL;
+    hook->surface = safe_strdup(desc->surface);
+    hook->offset = safe_strdup(desc->offset);
     hook->offset_bound = desc->offset_bound;
     hook->animated = desc->animated;
 
-    // Compiled now, into the full variant, so a hook that does not compile is refused where the
-    // app made it rather than found by the resolver on some later frame. The program is kept:
-    // the full variant is the one a hooked material starts on.
-    ShaderProgram* full = create_pbr_program_variant(PBR_FAMILY_RIGID, PBR_FEAT_ALL, hook);
-    if (!full) {
+    // Compiled now, so a hook that does not compile is refused where the app made it rather than
+    // found by the resolver on some later frame.
+    if (!pbr_hook_compiles(hook)) {
         log_error("shader hook '%s' does not compile; refused", desc->name);
         free_shader_hook(hook);
         return NULL;
     }
-    engine_add_program(engine, full);
-
-    ShaderHook** grown =
-        realloc(engine->shader_hooks, (engine->shader_hook_count + 1) * sizeof(ShaderHook*));
-    if (!grown) {
-        log_error("create_shader_hook: no memory to register '%s'", desc->name);
+    // Its shadow programs depend on the hook alone, so they are made with it: the depth program
+    // takes an offset or a surface's alpha, the absorb program only an offset.
+    ShaderProgram* depth = create_shadow_hook_program(hook, false);
+    ShaderProgram* absorb = hook->offset ? create_shadow_hook_program(hook, true) : NULL;
+    if (!engine_add_shader_hook(engine, hook)) {
+        free_program(depth);
+        free_program(absorb);
         free_shader_hook(hook);
         return NULL;
     }
-    engine->shader_hooks = grown;
-    engine->shader_hooks[engine->shader_hook_count++] = hook;
+    hook->shadow_depth = depth;
+    hook->shadow_absorb = absorb;
+    if (depth)
+        engine_add_program(engine, depth);
+    if (absorb)
+        engine_add_program(engine, absorb);
     return hook;
 }
 

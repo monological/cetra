@@ -112,18 +112,8 @@ typedef struct IncludeBuffer {
 } IncludeBuffer;
 
 static bool _include_append(IncludeBuffer* b, const char* s, size_t n) {
-    if (b->len + n + 1 > b->cap) {
-        size_t cap = b->cap ? b->cap : 4096;
-        while (b->len + n + 1 > cap)
-            cap *= 2;
-        char* grown = realloc(b->data, cap);
-        if (!grown) {
-            log_error("Failed to grow an expanded shader source");
-            return false;
-        }
-        b->data = grown;
-        b->cap = cap;
-    }
+    if (!grow_array((void**)&b->data, &b->cap, b->len + n + 1, 1, 4096))
+        return false;
     memcpy(b->data + b->len, s, n);
     b->len += n;
     b->data[b->len] = '\0';
@@ -139,95 +129,141 @@ static bool _include_appendf(IncludeBuffer* b, const char* fmt, ...) {
     return n > 0 && (size_t)n < sizeof(line) && _include_append(b, line, (size_t)n);
 }
 
-// `seen` is per top-level shader and is what makes a chunk included twice -- directly, or once
-// directly and once through another chunk -- a single copy, since GLSL has no include guards.
-// It is also the cycle guard: a chunk is marked before its own lines are read.
-static bool _include_expand(IncludeBuffer* out, const char* source, bool* seen, bool top) {
+// The text of a line past its leading whitespace.
+static const char* _line_text(const char* line) {
+    while (*line == ' ' || *line == '\t')
+        line++;
+    return line;
+}
+
+// The number the driver gives the line after the one whose text is `t` and whose number is
+// `number`: a #line directive sets it, any other line counts one.
+static int _next_line_number(const char* t, int number) {
+    int reset = 0;
+    return strncmp(t, "#line", 5) == 0 && sscanf(t, "#line %d", &reset) == 1 ? reset : number + 1;
+}
+
+// The chunk `len` bytes of `name` call for, or -1.
+static int _include_chunk(const char* name, size_t len) {
+    for (int i = 0; i < shader_include_chunk_count; i++) {
+        const char* candidate = shader_include_chunks[i].name;
+        if (strlen(candidate) == len && strncmp(candidate, name, len) == 0)
+            return i;
+    }
+    return -1;
+}
+
+typedef enum { INCLUDE_NONE, INCLUDE_CHUNK, INCLUDE_BAD } IncludeLine;
+
+// Whether the line `line` (`len` bytes, its newline included) is an #include, and of which chunk.
+// The grammar is gen_shader_header.py's INCLUDE_RE: `#include "name"`, then at most a // comment.
+// A line that starts #include and is anything else is INCLUDE_BAD, logged as line `number` of
+// `where`.
+static IncludeLine _include_line(const char* line, size_t len, int number, const char* where,
+                                 int* chunk) {
+    const char* t = _line_text(line);
+    if (strncmp(t, "#include", 8) != 0)
+        return INCLUDE_NONE;
+    const char* end = line + len;
+    const char* open = _line_text(t + 8);
+    const char* close = open < end && *open == '"' && open > t + 8
+                            ? memchr(open + 1, '"', (size_t)(end - open - 1))
+                            : NULL;
+    const char* tail = close ? _line_text(close + 1) : NULL;
+    if (!tail || !(tail >= end || *tail == '\n' || *tail == '\r' || strncmp(tail, "//", 2) == 0)) {
+        log_error("Malformed #include on line %d of %s: %.*s", number, where, (int)len, line);
+        return INCLUDE_BAD;
+    }
+    *chunk = _include_chunk(open + 1, (size_t)(close - open - 1));
+    if (*chunk < 0) {
+        log_error("#include \"%.*s\" on line %d of %s names no engine chunk",
+                  (int)(close - open - 1), open + 1, number, where);
+        return INCLUDE_BAD;
+    }
+    return INCLUDE_CHUNK;
+}
+
+// Chunk `chunk` into `out` between its begin and end lines, its own includes with it -- or one line
+// saying so, when `seen` says this shader already holds it. `seen` is what makes a chunk included
+// twice a single copy, since GLSL has no include guards, and a chunk is marked before its own lines
+// are read, which is the cycle guard. No #line inside a chunk: a number there could not say WHICH
+// chunk, which is why the build-time expansion carries none either (gen_shader_header.py).
+static bool _include_chunk_into(IncludeBuffer* out, int chunk, bool* seen) {
+    const char* name = shader_include_chunks[chunk].name;
+    if (seen[chunk])
+        return _include_appendf(out, "// #include \"%s\" (already expanded)\n", name);
+    seen[chunk] = true;
+    if (!_include_appendf(out, "// ---- begin %s ----\n", name))
+        return false;
     int number = 0;
-    for (const char* line = source; *line;) {
+    for (const char* line = shader_include_chunks[chunk].source; *line;) {
         const char* eol = strchr(line, '\n');
         const size_t len = eol ? (size_t)(eol - line) + 1 : strlen(line);
-        number++;
-        const char* t = line;
-        while (*t == ' ' || *t == '\t')
-            t++;
-        if (strncmp(t, "#include", 8) != 0) {
-            if (!_include_append(out, line, len))
-                return false;
-            line += len;
-            continue;
-        }
-        const char* open = strchr(t, '"');
-        const char* close = open && open < line + len ? strchr(open + 1, '"') : NULL;
-        if (!close || close >= line + len) {
-            log_error("Malformed #include on line %d: %.*s", number, (int)len, line);
+        int inner = -1;
+        const IncludeLine kind = _include_line(line, len, ++number, name, &inner);
+        if (kind == INCLUDE_BAD || !(kind == INCLUDE_CHUNK ? _include_chunk_into(out, inner, seen)
+                                                           : _include_append(out, line, len)))
             return false;
-        }
-        const size_t name_len = (size_t)(close - open - 1);
-        int chunk = -1;
-        for (int i = 0; i < shader_include_chunk_count; i++) {
-            const char* candidate = shader_include_chunks[i].name;
-            if (strlen(candidate) == name_len && strncmp(candidate, open + 1, name_len) == 0) {
-                chunk = i;
-                break;
-            }
-        }
-        if (chunk < 0) {
-            log_error("#include \"%.*s\" on line %d names no engine chunk", (int)name_len, open + 1,
-                      number);
-            return false;
-        }
-        const char* name = shader_include_chunks[chunk].name;
-        if (seen[chunk]) {
-            if (!_include_appendf(out, "// #include \"%s\" (already expanded)\n", name))
-                return false;
-        } else {
-            seen[chunk] = true;
-            if (!_include_appendf(out, "// ---- begin %s ----\n", name) ||
-                !_include_expand(out, shader_include_chunks[chunk].source, seen, false) ||
-                !_include_appendf(out, "// ---- end %s ----\n", name))
-                return false;
-            // Back to the including file's own numbering, so an error in an app's shader names
-            // its line rather than that line plus every chunk above it. Only at the top: a
-            // number inside a chunk could not say WHICH chunk anyway, which is why the build-
-            // time expansion carries none (gen_shader_header.py).
-            if (top && !_include_appendf(out, "#line %d\n", number + 1))
-                return false;
-        }
         line += len;
     }
-    return true;
+    return _include_appendf(out, "// ---- end %s ----\n", name);
 }
 
-// Every chunk the build already expanded into `source`, by the marker gen_shader_header.py leaves
-// at its head, counted as included. An app's chunk spliced into an engine shader (spec 13.29)
-// can then include noise.glsl when the shader around it already has, and get one copy.
-static void _include_mark_expanded(const char* source, bool* seen) {
+// The chunk a build-time expansion marker names, `// ---- begin X ----`, or -1 for any other line.
+static int _build_expanded_chunk(const char* t) {
     static const char head[] = "// ---- begin ";
-    for (const char* at = strstr(source, head); at; at = strstr(at + 1, head)) {
-        const char* name = at + sizeof(head) - 1;
-        const char* end = strstr(name, " ----");
-        const char* eol = strchr(name, '\n');
-        if (!end || (eol && eol < end))
-            continue;
-        for (int i = 0; i < shader_include_chunk_count; i++) {
-            const char* candidate = shader_include_chunks[i].name;
-            if (strlen(candidate) == (size_t)(end - name) &&
-                strncmp(candidate, name, (size_t)(end - name)) == 0)
-                seen[i] = true;
-        }
-    }
+    if (strncmp(t, head, sizeof(head) - 1) != 0)
+        return -1;
+    const char* name = t + sizeof(head) - 1;
+    const char* end = strstr(name, " ----");
+    const char* eol = strchr(name, '\n');
+    return end && (!eol || end < eol) ? _include_chunk(name, (size_t)(end - name)) : -1;
 }
 
-char* shader_source_with_includes(const char* source) {
-    if (!source)
-        return NULL;
+// `source` with every `#include "x.glsl"` line expanded from the engine's shared chunks. A chunk
+// the build already expanded is counted as held from its marker line on, in order: an app's GLSL
+// spliced into an engine shader (spec 13.29) shares the copies above the splice point, and a chunk
+// the shader defines only BELOW it is refused by name, since including it there would define it
+// twice. After each expansion the numbering goes back to the shader's own, so an error names its
+// line rather than that line plus every chunk above it; within a spliced chunk that is still the
+// chunk's numbering, because a #line without a source-string number keeps the current one.
+static char* _source_with_includes(const char* source) {
     bool* seen = calloc((size_t)shader_include_chunk_count, sizeof(bool));
-    if (seen)
-        _include_mark_expanded(source, seen);
     IncludeBuffer out = {0};
-    const bool ok =
-        seen && _include_append(&out, "", 0) && _include_expand(&out, source, seen, true);
+    bool ok = seen && _include_append(&out, "", 0);
+    int number = 1;
+    for (const char* line = source; ok && *line;) {
+        const char* eol = strchr(line, '\n');
+        const size_t len = eol ? (size_t)(eol - line) + 1 : strlen(line);
+        const char* t = _line_text(line);
+        int chunk = -1;
+        const IncludeLine kind = _include_line(line, len, number, "the shader", &chunk);
+        if (kind == INCLUDE_BAD) {
+            ok = false;
+        } else if (kind == INCLUDE_NONE) {
+            const int built = _build_expanded_chunk(t);
+            if (built >= 0)
+                seen[built] = true;
+            ok = _include_append(&out, line, len);
+        } else if (seen[chunk]) {
+            ok = _include_chunk_into(&out, chunk, seen);
+        } else {
+            char marker[96];
+            snprintf(marker, sizeof(marker), "// ---- begin %s ----",
+                     shader_include_chunks[chunk].name);
+            if (strstr(line + len, marker)) {
+                log_error("#include \"%s\" on line %d: the shader around it defines that chunk "
+                          "further down, so it cannot be included here",
+                          shader_include_chunks[chunk].name, number);
+                ok = false;
+            } else {
+                ok = _include_chunk_into(&out, chunk, seen) &&
+                     _include_appendf(&out, "#line %d\n", number + 1);
+            }
+        }
+        number = _next_line_number(t, number);
+        line += len;
+    }
     free(seen);
     if (!ok) {
         free(out.data);
@@ -247,15 +283,12 @@ char* shader_source_splice(const char* host, const char* marker, const char* chu
     for (const char* line = host; *line;) {
         const char* eol = strchr(line, '\n');
         const size_t len = eol ? (size_t)(eol - line) : strlen(line);
-        const char* t = line;
-        while (*t == ' ' || *t == '\t')
-            t++;
+        const char* t = _line_text(line);
         if ((size_t)(t - line) + marker_len <= len && strncmp(t, marker, marker_len) == 0) {
             at = line;
             break;
         }
-        int reset = 0;
-        number = sscanf(t, "#line %d", &reset) == 1 ? reset : number + 1;
+        number = _next_line_number(t, number);
         if (!eol)
             break;
         line = eol + 1;
@@ -265,31 +298,16 @@ char* shader_source_splice(const char* host, const char* marker, const char* chu
         return NULL;
     }
 
-    // The chunk's own #includes, expanded against what the host already holds, so a chunk the
-    // host expanded at build time is not defined twice.
-    bool* seen = calloc((size_t)shader_include_chunk_count, sizeof(bool));
-    IncludeBuffer expanded = {0};
-    bool ok = seen && _include_append(&expanded, "", 0);
-    if (ok) {
-        _include_mark_expanded(host, seen);
-        ok = _include_expand(&expanded, chunk, seen, false);
-    }
-    free(seen);
-    if (!ok) {
-        free(expanded.data);
-        return NULL;
-    }
-
     // Source string 1 for the chunk, so a compile error in it reads "1:<its own line>", then back
-    // to string 0 at the host's next line.
+    // to string 0 at the host's next line. Its #includes stay for create_shader, which expands
+    // them against what the host holds above this point.
     const char* after = strchr(at, '\n');
     IncludeBuffer out = {0};
-    ok = _include_append(&out, host, (size_t)(at - host)) &&
-         _include_appendf(&out, "#line 1 1\n") &&
-         _include_append(&out, expanded.data, expanded.len) &&
-         _include_appendf(&out, "\n#line %d 0\n", number + 1) &&
-         (!after || _include_append(&out, after + 1, strlen(after + 1)));
-    free(expanded.data);
+    const bool ok = _include_append(&out, host, (size_t)(at - host)) &&
+                    _include_appendf(&out, "#line 1 1\n") &&
+                    _include_append(&out, chunk, strlen(chunk)) &&
+                    _include_appendf(&out, "\n#line %d 0\n", number + 1) &&
+                    (!after || _include_append(&out, after + 1, strlen(after + 1)));
     if (!ok) {
         free(out.data);
         return NULL;
@@ -323,7 +341,7 @@ Shader* create_shader(ShaderType type, const char* source) {
     shader->type = type;
     // Every source, whoever built it: an engine shader was expanded at build time and has no
     // #include line left, so for it this is a copy, and an app's or a scene file's resolves here.
-    shader->source = shader_source_with_includes(source);
+    shader->source = _source_with_includes(source);
     if (!shader->source) {
         free(shader);
         return NULL;

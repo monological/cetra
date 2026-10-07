@@ -999,6 +999,22 @@ float fresnelOpacity(float coverage, float materialOpacity, float iorF0, float N
 #ifdef CETRA_SURFACE_HOOK
 #include "surface_hook.glsl"
 // CETRA_SURFACE_HOOK_CHUNK
+
+// The geometric normal a hook is handed, on the side being drawn.
+vec3 cetraGeomNormal() {
+    return normalize(gl_FrontFacing ? Normal : -Normal);
+}
+
+// The hook, handed what main() holds at one of its two calls. Its geometric normal and vertex
+// colour are taken from the varyings each time rather than held live between the calls.
+CetraSurface cetraSurfaceRun(vec2 uv, vec3 V, vec3 albedo, float alpha, vec3 normal,
+                             float roughness, float metallic, float ao, vec3 emissive) {
+    CetraSurface s = CetraSurface(uv, WorldPos, V, cetraGeomNormal(),
+                                  vertexColorExists > 0 ? VertexColor : vec4(1.0), albedo, alpha,
+                                  normal, roughness, metallic, ao, emissive);
+    cetraSurface(s);
+    return s;
+}
 #endif
 
 void main() {
@@ -1319,12 +1335,8 @@ void main() {
     // second call, below, is where those are kept.
     vec3 hookAlbedo = albedoMap;
     float hookAlpha = texAlpha;
-    vec3 hookGeomNormal = normalize(gl_FrontFacing ? Normal : -Normal);
-    vec4 hookVertexColor = vertexColorExists > 0 ? VertexColor : vec4(1.0);
-    CetraSurface hooked =
-        cetraSurfaceStart(uv, WorldPos, V, hookGeomNormal, hookVertexColor, hookAlbedo, hookAlpha,
-                          hookGeomNormal, roughness, metallic, ao, emissiveFactor);
-    cetraSurface(hooked);
+    CetraSurface hooked = cetraSurfaceRun(uv, V, hookAlbedo, hookAlpha, cetraGeomNormal(),
+                                          roughness, metallic, ao, emissiveFactor);
     albedoMap = hooked.albedo;
     texAlpha = hooked.alpha;
 #endif
@@ -1530,8 +1542,10 @@ void main() {
     // derived area panel (spec 11.49): the panel delivers that light through the
     // analytic term, so an emitter the probes can see delivers it twice. 1.0
     // everywhere else, including every reflection-probe face -- a mirror has to
-    // keep seeing the lamp.
+    // keep seeing the lamp. A hooked variant gates what its hook returns instead.
+#ifndef CETRA_SURFACE_HOOK
     emissiveMap *= uEmissiveGate;
+#endif
 
     // Geometric coverage, kept apart from the scalar translucency it used to be
     // multiplied into (see fresnelOpacity). A dedicated opacity map and an
@@ -1573,11 +1587,9 @@ void main() {
     // The hook's second call: the same function from the same gathered albedo and coverage, now
     // with the material's normal, roughness, metallic, AO and emission to start from, which are
     // what is kept. Before specular AA, the wet surface and the rain, so each reads the hook's.
-    // The emission takes the capture gate again, which is 0 or 1 and so leaves a value the hook
-    // passed through as it was.
-    hooked = cetraSurfaceStart(uv, WorldPos, V, hookGeomNormal, hookVertexColor, hookAlbedo,
-                               hookAlpha, N, roughnessMap, metallicMap, aoMap, emissiveMap);
-    cetraSurface(hooked);
+    // The emission takes the capture gate here, on what the hook returns.
+    hooked = cetraSurfaceRun(uv, V, hookAlbedo, hookAlpha, N, roughnessMap, metallicMap, aoMap,
+                             emissiveMap);
     N = normalize(hooked.normal);
     roughnessMap = clamp(hooked.roughness, 0.04, 1.0);
     metallicMap = hooked.metallic;

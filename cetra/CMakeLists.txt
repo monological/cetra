@@ -37,7 +37,8 @@ set(CETRA_PUBLIC_HEADERS
     ik.h import.h input.h light.h look_at.h material.h mesh.h mesh_builder.h nav_graph.h noise.h
     particle_emitter.h particle_module.h particle_renderer.h particle_sim.h
     particle_system.h postfx.h probe.h probe_set.h program.h rain.h scene.h shader.h
-    shader_hook.h shadow.h sky.h springbone.h text.h texture.h transform.h ui.h uniform.h util.h
+    shader_hook.h shader_params.h shadow.h sky.h springbone.h text.h texture.h transform.h ui.h
+    uniform.h util.h
     water.h wind.h
     ext/log.h ext/cwalk.h)
 
@@ -119,11 +120,11 @@ add_custom_command(
 # <dir>/*.glsl into <target>_shaders.h, one `<stem>_shader_str` each, for the target alone to
 # include. The #include lines are left where they stand and resolved at runtime against the
 # engine's chunks, which is what lets an app shader name noise.glsl without the app holding a
-# copy. The generator's path and the interpreter are captured HERE, because a function runs in
-# its caller's scope and a parent project adding this directory sees neither variable.
-set(CETRA_SHADER_GENERATOR ${CMAKE_CURRENT_SOURCE_DIR}/gen_shader_header.py CACHE INTERNAL "")
+# copy. The interpreter is captured HERE, because a function runs in its caller's scope and a
+# parent project adding this directory need not have looked one up.
 set(CETRA_SHADER_PYTHON ${Python3_EXECUTABLE} CACHE INTERNAL "")
 function(cetra_embed_shaders target dir)
+    set(_generator ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/gen_shader_header.py)
     get_filename_component(_dir ${dir} ABSOLUTE)
     file(GLOB _files CONFIGURE_DEPENDS ${_dir}/*.glsl)
     set(_out_dir ${CMAKE_CURRENT_BINARY_DIR}/${target}_generated)
@@ -131,8 +132,8 @@ function(cetra_embed_shaders target dir)
     file(MAKE_DIRECTORY ${_out_dir})
     add_custom_command(
         OUTPUT ${_out}
-        COMMAND ${CETRA_SHADER_PYTHON} ${CETRA_SHADER_GENERATOR} --raw ${_dir} ${_out}
-        DEPENDS ${_files} ${CETRA_SHADER_GENERATOR}
+        COMMAND ${CETRA_SHADER_PYTHON} ${_generator} --raw ${_dir} ${_out}
+        DEPENDS ${_files} ${_generator}
         COMMENT "Embedding ${target}'s shaders"
         VERBATIM
     )

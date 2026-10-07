@@ -37,16 +37,18 @@ void apply_cscene_light_overrides(Scene* scene, const CetraSceneDesc* cscn, floa
 // after the scene graph and materials exist.
 void apply_cscene_wind(Scene* scene, const CetraSceneDesc* cscn);
 
-// Apply the scene file's plain PBR material overrides (albedo, roughness,
-// metallic) onto matching materials by authored name. Subsurface is NOT applied
-// here: it also has to register a scatter profile with PostFX, so it stays in
-// configure_sss_materials where that engine handle is in scope.
-void apply_cscene_material_overrides(Scene* scene, const CetraSceneDesc* cscn);
+// Apply the scene file's material overrides onto matching materials by authored name: their
+// parameters, textures, layers and roads, and their shaders (spec 13.29) -- a late-draw program,
+// a surface hook from shaderHooks, and the params either reads. The engine owns the programs and
+// the hooks. Subsurface is NOT applied here: it also has to register a scatter profile with
+// PostFX, so it stays in configure_sss_materials where that engine handle is in scope.
+void apply_cscene_material_overrides(struct Engine* engine, Scene* scene,
+                                     const CetraSceneDesc* cscn);
 
-// Compile every shader the scene file names (spec 13.29) and put each where it runs: a post
-// pass at its location. The engine owns the programs. A file that does not read or compile is
-// reported by name and skipped, and the frame renders without it.
-void apply_cscene_shaders(struct Engine* engine, const Scene* scene, const CetraSceneDesc* cscn);
+// Compile each of post.passes (spec 13.29) and add it at its location. The engine owns the
+// programs. A file that does not read or compile is reported by name and skipped, and the frame
+// renders without it.
+void apply_cscene_post_passes(struct Engine* engine, const CetraSceneDesc* cscn);
 
 // Attach the scene file's water surface (if the .cscn declares a water block).
 // Runs BEFORE the CLI water block, which overrides whatever it finds.

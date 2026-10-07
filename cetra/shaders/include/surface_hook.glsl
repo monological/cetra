@@ -1,5 +1,5 @@
-// The surface an app's hook decides (spec 13.29): what it is handed, and what it hands back.
-// pbr_frag includes this only in a hooked variant, and splices the app's
+// The surface an app's hook decides (spec 13.29): what it is handed, and what it hands back. A
+// hooked variant includes this and splices the app's
 //
 //     void cetraSurface(inout CetraSurface s)
 //
@@ -7,11 +7,11 @@
 // hook that leaves a field alone keeps the material's value, and one that scales a field scales
 // the material's.
 //
-// The hook runs twice and must say the same thing both times: once before the alpha test, where
-// only its albedo and alpha are kept, and once after the material's normal, roughness and the
-// rest are gathered, where those are kept. Both calls start from the same gathered values, so a
-// hook that multiplies its albedo multiplies it once. What one call writes that is not kept is
-// dead code the compiler removes.
+// On the lit surface the hook runs twice and must say the same thing both times: once before the
+// alpha test, where only its albedo and alpha are kept, and once after the material's normal,
+// roughness and the rest are gathered, where those are kept. Both calls start from the same
+// gathered values, so a hook that multiplies its albedo multiplies it once. What one call writes
+// that is not kept is dead code the compiler removes. A shadow keeps only the alpha.
 
 struct CetraSurface {
     // Read: where and how the surface is seen.
@@ -31,25 +31,5 @@ struct CetraSurface {
     vec3 emissive;   // linear, in the units emissiveFactor carries
 };
 
-// The frame index, uploaded for a hook; `time` is pbr_frag's own uniform, the render clock.
+// The frame index, uploaded for a hook. `time` is the host's own uniform, the render clock.
 uniform int frame;
-
-CetraSurface cetraSurfaceStart(vec2 uv, vec3 worldPos, vec3 viewDir, vec3 geomNormal,
-                               vec4 vertexColor, vec3 albedo, float alpha, vec3 normal,
-                               float roughness, float metallic, float ao, vec3 emissive)
-{
-    CetraSurface s;
-    s.uv = uv;
-    s.worldPos = worldPos;
-    s.viewDir = viewDir;
-    s.geomNormal = geomNormal;
-    s.vertexColor = vertexColor;
-    s.albedo = albedo;
-    s.alpha = alpha;
-    s.normal = normal;
-    s.roughness = roughness;
-    s.metallic = metallic;
-    s.ao = ao;
-    s.emissive = emissive;
-    return s;
-}

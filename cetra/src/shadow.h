@@ -213,12 +213,15 @@ typedef struct ShadowTileBlock {
 } ShadowTileBlock;
 
 // What the kept faces drew a draw-list item by, at its position in the list (spec 13.26): which
-// item it was, its lane and flags, and for an alpha-tested caster the cut-out it was drawn
-// through. A material is plain writes, so nothing else says when one of these changes.
+// item it was, its lane and flags, and what of its material shapes the caster -- an alpha-tested
+// one's cut-out, a hooked one's hook and params. A material is plain writes, so nothing else says
+// when one of these changes.
 typedef struct ShadowTileSeen {
     const struct Mesh* mesh;
     const struct SceneNode* node;
-    uint64_t cutout; // an alpha-tested caster's cutoff, UV transform and albedo, hashed; else 0
+    // The cutoff, UV transform and albedo of an alpha-tested caster, and the hook and its params
+    // of one drawn through its hook (spec 13.29), hashed; else 0
+    uint64_t shape;
     uint8_t lane;
     uint8_t flags;
 } ShadowTileSeen;
@@ -269,11 +272,6 @@ typedef struct ShadowSystem {
     bool dir_slot_warned;
     int default_map_size;
     ShaderProgram* depth_program;
-    // The shadow programs of every surface hook a caster has carried (spec 13.29), made on the
-    // first draw and owned here. A hook whose program would not build keeps a NULL entry, so it
-    // is said once and its casters draw with the plain program after.
-    struct ShadowHookProgram* hook_programs;
-    size_t hook_program_count;
     // World point the scene-fit map is built around: the outermost cascade
     // looks at it, and the texel snap quantises relative to it. Zero (the
     // default) is the origin, which is where every scene sat when this was a

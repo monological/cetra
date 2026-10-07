@@ -2,35 +2,12 @@
 #define _PROGRAM_H_
 
 #include <stdbool.h>
-#include <cglm/cglm.h>
 
 #include "shader.h"
+#include "shader_params.h"
 #include "uniform.h"
 
 #include "ext/uthash.h"
-
-// An app shader's own uniforms (spec 13.29): each a name and a vec4, uploaded under that name
-// wherever their owner's program is bound -- a material's, a post pass's. Eight because a
-// shader with more than eight knobs wants a texture; the name is bounded so an entry costs no
-// allocation.
-#define SHADER_PARAM_MAX  8
-#define SHADER_PARAM_NAME 32
-typedef struct ShaderParam {
-    char name[SHADER_PARAM_NAME];
-    vec4 value;
-} ShaderParam;
-typedef struct ShaderParams {
-    ShaderParam list[SHADER_PARAM_MAX];
-    int count;
-} ShaderParams;
-
-// Set a param by name, adding it the first time. False, logged, when SHADER_PARAM_MAX others are
-// already held or the name is empty or does not fit.
-bool shader_params_set(ShaderParams* params, const char* name, const vec4 value);
-// Upload every param to `uniforms`, the bound program's. A name the program does not declare
-// costs a location lookup and nothing else. Nothing resets a name an owner leaves out, so two
-// owners sharing one program each set every param it reads, or the second inherits the first's.
-void shader_params_upload(const ShaderParams* params, UniformManager* uniforms);
 
 // Which VERTEX stage a lit-surface variant is built on (spec 11.95). Up here
 // only because ShaderProgram carries one; the family's rationale and the rest of
@@ -118,8 +95,8 @@ typedef struct ShaderProgram {
     // every read is already behind `pbr_features >= 0` and a program that is not
     // a variant never reaches one.
     PbrFamily pbr_family;
-    // The surface hook spliced into this variant (spec 13.29), NULL for none. The resolver keeps
-    // a material on its hook by comparing this with the material's, as it compares the mask.
+    // The surface hook spliced into this variant (spec 13.29), NULL for none: the variant's third
+    // coordinate, beside the family and the mask.
     const struct ShaderHook* pbr_hook;
     UT_hash_handle hh;
 } ShaderProgram;
@@ -230,6 +207,9 @@ void pbr_variant_name(PbrFamily family, unsigned features, const struct ShaderHo
 // engine_pbr_variant, which owns the cache and is where callers should go.
 ShaderProgram* create_pbr_program_variant(PbrFamily family, unsigned features,
                                           const struct ShaderHook* hook);
+// Whether `hook`'s GLSL compiles into both stages of the full rigid variant, linking nothing.
+// False, the compiler's message logged, when it does not.
+bool pbr_hook_compiles(const struct ShaderHook* hook);
 
 // The full variant of each family, which is the uber-shader and what an app
 // hands to node_set_programs before the resolver narrows it.
@@ -265,7 +245,7 @@ ShaderProgram* create_xyz_program();
 ShaderProgram* create_shadow_depth_program();
 // The shadow depth program (or, with `absorb`, the translucent absorb program) carrying a surface
 // hook (spec 13.29): its offset where the caster is placed, and in the depth program its alpha
-// where the caster is cut. Built by the shadow system on a hooked caster's first draw.
+// where the caster is cut. NULL, logged, when it does not build.
 ShaderProgram* create_shadow_hook_program(const struct ShaderHook* hook, bool absorb);
 // Position only, for the depth prepass (spec 11.30). Shares the object-position
 // chunk with pbr_vert so the two agree to the bit, which GL_LEQUAL against its
@@ -341,7 +321,7 @@ ShaderProgram* create_bone_program();
 ShaderProgram* create_shadow_catcher_program();
 
 // An app's fullscreen fragment stage over the engine's own vertex stage (spec 13.29), which
-// hands it `in vec2 TexCoords`, 0..1 across the target. What postfx_add_pass runs.
+// hands it `in vec2 TexCoords`, 0..1 across the target: a post pass's program.
 ShaderProgram* create_post_pass_program(const char* name, const char* frag_source);
 // The finished picture into the window, dithered, when something drew after the tone map.
 ShaderProgram* create_present_program();
@@ -349,10 +329,12 @@ ShaderProgram* create_present_program();
 /*
  * An app's fragment stage for a material drawn in the late draw (spec 13.29), over the engine's
  * late_surface_vert, which hands it `vWorldPos`, `vNormal` (world), `vUv`, `vColor` (the vertex
- * colour, (0,0,0,1) where the mesh has none) and `vViewDepth` (metres in front of the eye). It
- * writes `FragColor` PREMULTIPLIED onto the canvas -- blend ONE, ONE_MINUS_SRC_ALPHA, so alpha 0
- * adds light and alpha 1 replaces -- and include/late_surface.glsl carries what it needs from the
- * frame: the depth test, the fog and the pre-exposure.
+ * colour, white where the mesh has none) and `vViewDepth` (metres in front of the eye). The
+ * material reaches it under the lit surface's names: `albedo`, `emissiveFactor`, `albedoTex` and
+ * `emissiveTex` with their `*TexExists`, and its params. It writes `FragColor` PREMULTIPLIED onto
+ * the canvas -- blend ONE, ONE_MINUS_SRC_ALPHA, so alpha 0 adds light and alpha 1 replaces -- and
+ * include/late_surface.glsl carries what it needs from the frame: the depth test, the fog and the
+ * pre-exposure.
  */
 ShaderProgram* create_late_surface_program(const char* name, const char* frag_source);
 

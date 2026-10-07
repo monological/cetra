@@ -26,9 +26,9 @@ uniform float uvRotation;
 
 // A surface hook's caster (spec 13.29): its alpha cuts the shadow as it cuts the surface. Only
 // the alpha is kept here, so the hook is handed what this stage has -- its coordinate, its
-// world position and its vertex colour -- and placeholders for what it does not: no view, so
-// a straight-down view direction and normal, and white for the albedo. A material carrying no
-// albedo map is cut by the hook alone.
+// world position and its vertex colour -- and placeholders for what it does not: no eye, so one
+// straight above (a view direction and normal of +Y), and white for the albedo. A material
+// carrying no albedo map is cut by the hook alone.
 #ifdef CETRA_SURFACE_HOOK
 in vec3 HookWorldPos;
 uniform float time;
@@ -65,11 +65,11 @@ void main()
         if (vertexColorExists > 0)
             alpha *= VertexColor.a;
 #ifdef CETRA_SURFACE_HOOK
-        vec4 hookVertexColor = vertexColorExists > 0 ? VertexColor : vec4(1.0);
-        CetraSurface hooked =
-            cetraSurfaceStart(uv, HookWorldPos, vec3(0.0, 1.0, 0.0), vec3(0.0, 1.0, 0.0),
-                              hookVertexColor, vec3(1.0), alpha, vec3(0.0, 1.0, 0.0), 1.0, 0.0,
-                              1.0, vec3(0.0));
+        CetraSurface hooked = CetraSurface(uv, HookWorldPos, vec3(0.0, 1.0, 0.0),
+                                           vec3(0.0, 1.0, 0.0),
+                                           vertexColorExists > 0 ? VertexColor : vec4(1.0),
+                                           vec3(1.0), alpha, vec3(0.0, 1.0, 0.0), 1.0, 0.0, 1.0,
+                                           vec3(0.0));
         cetraSurface(hooked);
         alpha = hooked.alpha;
 #endif

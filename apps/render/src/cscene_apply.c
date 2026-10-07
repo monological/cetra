@@ -868,20 +868,90 @@ bool apply_cscene_gi_volumes(Scene* scene, const CetraSceneDesc* cscn) {
     return added > 0;
 }
 
+// A shader file a scene names, whole, and the name its program takes: the file's own, so a
+// compile error says which. NULL, reported, when it cannot be read.
+static char* _read_scene_shader(const char* path, char* name, size_t name_size) {
+    const char* base = NULL;
+    size_t base_len = 0;
+    cwk_path_get_basename(path, &base, &base_len);
+    snprintf(name, name_size, "%.*s", base ? (int)base_len : 0, base ? base : "");
+    long length = 0;
+    char* source = read_entire_file(path, &length);
+    if (!source)
+        fprintf(stderr, "Warning: scene shader '%s' cannot be read; skipped\n", path);
+    return source;
+}
+
+// Every hook the scene file describes (spec 13.29), made once whatever names it, into `hooks`:
+// NULL where one does not read or compile, said by name.
+static void _make_scene_hooks(Engine* engine, const CetraSceneDesc* cscn,
+                              const ShaderHook** hooks) {
+    for (int h = 0; h < cscn->shader_hook_count; h++) {
+        const CSceneShaderHook* src = &cscn->shader_hooks[h];
+        hooks[h] = NULL;
+        char surface_name[256], offset_name[256];
+        char* surface = src->surface[0]
+                            ? _read_scene_shader(src->surface, surface_name, sizeof(surface_name))
+                            : NULL;
+        char* offset = src->offset[0]
+                           ? _read_scene_shader(src->offset, offset_name, sizeof(offset_name))
+                           : NULL;
+        if ((!src->surface[0] || surface) && (!src->offset[0] || offset)) {
+            const ShaderHookDesc desc = {.name = src->name,
+                                         .surface = surface,
+                                         .offset = offset,
+                                         .offset_bound = src->offset_bound,
+                                         .animated = src->animated};
+            hooks[h] = create_shader_hook(engine, &desc);
+            if (!hooks[h])
+                fprintf(stderr,
+                        "Warning: shader hook '%s' does not compile; the materials naming it "
+                        "keep their own surface\n",
+                        src->name);
+        }
+        free(surface);
+        free(offset);
+    }
+}
+
+// The late draw's program for `mo` (spec 13.29), registered with the engine; NULL, said, when
+// its file does not read or compile, and the material keeps its own.
+static ShaderProgram* _scene_late_program(Engine* engine, const CSceneMaterialOverride* mo) {
+    char name[256];
+    char* source = _read_scene_shader(mo->late_shader, name, sizeof(name));
+    if (!source)
+        return NULL;
+    ShaderProgram* program = create_late_surface_program(name, source);
+    free(source);
+    if (!program) {
+        fprintf(stderr,
+                "Warning: material '%s': late shader '%s' does not compile; the material keeps "
+                "its own\n",
+                mo->material, mo->late_shader);
+        return NULL;
+    }
+    engine_add_program(engine, program);
+    return program;
+}
+
 /*
  * The material vocabulary lives in material.c (MATERIAL_PARAMS), shared with
  * the GUI editor so the two cannot disagree about what a name means or which
  * properties are safe to set. The parser records keys generically and never
- * learns their meaning; this file only resolves them and applies the one thing
- * the engine cannot do for itself -- turning an authored path into a texture.
+ * learns their meaning; this file only resolves them and applies what the
+ * engine cannot do for itself -- turning an authored path into a texture, or
+ * into a program or a surface hook (spec 13.29).
  */
-void apply_cscene_material_overrides(Scene* scene, const CetraSceneDesc* cscn) {
-    if (!scene || !cscn)
+void apply_cscene_material_overrides(Engine* engine, Scene* scene, const CetraSceneDesc* cscn) {
+    if (!engine || !scene || !cscn)
         return;
+    const ShaderHook* hooks[CSCENE_MAX_SHADER_HOOKS] = {0};
+    _make_scene_hooks(engine, cscn, hooks);
     for (int k = 0; k < cscn->material_count; k++) {
         const CSceneMaterialOverride* mo = &cscn->materials[k];
         if (mo->param_count == 0 && mo->texture_count == 0 && mo->layer_count == 0 &&
-            mo->road_count == 0 && mo->shader_params.count == 0)
+            mo->road_count == 0 && mo->shader_params.count == 0 && !mo->late_shader[0] &&
+            mo->shader_hook < 0)
             continue; // sss-only entries belong to configure_sss_materials
 
         // Resolve and report the vocabulary once per override, not once per
@@ -1020,6 +1090,11 @@ void apply_cscene_material_overrides(Scene* scene, const CetraSceneDesc* cscn) {
         usable += mo->road_count;
         usable += mo->shader_params.count;
 
+        // The scene's shaders, made once here for the textures' reason.
+        ShaderProgram* late = mo->late_shader[0] ? _scene_late_program(engine, mo) : NULL;
+        const ShaderHook* hook = mo->shader_hook >= 0 ? hooks[mo->shader_hook] : NULL;
+        usable += (late ? 1 : 0) + (hook ? 1 : 0);
+
         if (usable == 0)
             continue;
 
@@ -1048,6 +1123,14 @@ void apply_cscene_material_overrides(Scene* scene, const CetraSceneDesc* cscn) {
             for (int s = 0; s < mo->shader_params.count; s++)
                 shader_params_set(&m->shader_params, mo->shader_params.list[s].name,
                                   mo->shader_params.list[s].value);
+            // The late draw's program and the pass it draws in, together, or the draw list
+            // refuses the material for carrying one without the other.
+            if (late) {
+                material_set_program(m, late);
+                m->pass = MATERIAL_PASS_LATE_DRAW;
+            }
+            if (hook)
+                m->shader_hook = hook;
             for (int l = 0; l < layer_count; l++) {
                 material_set_layer_albedo_tex(m, l, layers[l].albedo);
                 material_set_layer_surface_tex(m, l, layers[l].surface);
@@ -1126,22 +1209,8 @@ void apply_cscene_material_overrides(Scene* scene, const CetraSceneDesc* cscn) {
     }
 }
 
-// A shader file a scene names, whole, and the name its program takes: the file's own, so a
-// compile error and the profiler both say which. NULL, reported, when it cannot be read.
-static char* _read_scene_shader(const char* path, char* name, size_t name_size) {
-    const char* base = NULL;
-    size_t base_len = 0;
-    cwk_path_get_basename(path, &base, &base_len);
-    snprintf(name, name_size, "%.*s", base ? (int)base_len : 0, base ? base : "");
-    long length = 0;
-    char* source = read_entire_file(path, &length);
-    if (!source)
-        fprintf(stderr, "Warning: scene shader '%s' cannot be read; skipped\n", path);
-    return source;
-}
-
-void apply_cscene_shaders(Engine* engine, const Scene* scene, const CetraSceneDesc* cscn) {
-    if (!engine || !scene || !cscn)
+void apply_cscene_post_passes(Engine* engine, const CetraSceneDesc* cscn) {
+    if (!engine || !cscn)
         return;
     for (int i = 0; i < cscn->post_pass_count; i++) {
         const CScenePostPass* p = &cscn->post_passes[i];
@@ -1162,109 +1231,6 @@ void apply_cscene_shaders(Engine* engine, const Scene* scene, const CetraSceneDe
         pass->enabled = p->enabled;
         pass->params = p->params;
         printf("Scene file: post pass '%s' at %d\n", name, p->at);
-    }
-
-    for (int k = 0; k < cscn->material_count; k++) {
-        const CSceneMaterialOverride* mo = &cscn->materials[k];
-        if (!mo->late_shader[0])
-            continue;
-        char name[256];
-        char* source = _read_scene_shader(mo->late_shader, name, sizeof(name));
-        if (!source)
-            continue;
-        ShaderProgram* program = create_late_surface_program(name, source);
-        free(source);
-        if (!program) {
-            fprintf(stderr,
-                    "Warning: material '%s': late shader '%s' does not compile; the "
-                    "material keeps its own\n",
-                    mo->material, mo->late_shader);
-            continue;
-        }
-        engine_add_program(engine, program);
-        int tagged = 0;
-        for (size_t i = 0; i < scene->material_count; i++) {
-            Material* m = scene->materials[i];
-            if (!m || !m->name || strcmp(m->name, mo->material) != 0)
-                continue;
-            material_set_program(m, program);
-            m->pass = MATERIAL_PASS_LATE_DRAW;
-            tagged++;
-        }
-        printf("Scene file: late shader '%s' on material '%s' (%d material(s))\n", name,
-               mo->material, tagged);
-        if (tagged == 0)
-            fprintf(stderr, "Warning: material '%s' not found in scene\n", mo->material);
-    }
-
-    // A surface hook: the two files make one hook, named for the surface's file, or the
-    // offset's when there is only that. Materials naming the same two files share the hook, and
-    // so its programs, rather than each compiling a copy.
-    struct {
-        const CSceneMaterialOverride* by;
-        const ShaderHook* hook;
-    } made[CSCENE_MAX_MATERIALS];
-    int made_count = 0;
-    for (int k = 0; k < cscn->material_count; k++) {
-        const CSceneMaterialOverride* mo = &cscn->materials[k];
-        if (!mo->surface_shader[0] && !mo->offset_shader[0])
-            continue;
-        const ShaderHook* shared = NULL;
-        for (int j = 0; j < made_count && !shared; j++)
-            if (strcmp(made[j].by->surface_shader, mo->surface_shader) == 0 &&
-                strcmp(made[j].by->offset_shader, mo->offset_shader) == 0)
-                shared = made[j].hook;
-        if (shared) {
-            for (size_t i = 0; i < scene->material_count; i++) {
-                Material* m = scene->materials[i];
-                if (m && m->name && strcmp(m->name, mo->material) == 0)
-                    m->shader_hook = shared;
-            }
-            printf("Scene file: surface hook '%s' shared with material '%s'\n", shared->name,
-                   mo->material);
-            continue;
-        }
-        char name[256] = "", offset_name[256] = "";
-        char* surface = mo->surface_shader[0]
-                            ? _read_scene_shader(mo->surface_shader, name, sizeof(name))
-                            : NULL;
-        char* offset = mo->offset_shader[0]
-                           ? _read_scene_shader(mo->offset_shader, offset_name, sizeof(offset_name))
-                           : NULL;
-        if ((mo->surface_shader[0] && !surface) || (mo->offset_shader[0] && !offset)) {
-            free(surface);
-            free(offset);
-            continue;
-        }
-        const ShaderHookDesc desc = {.name = name[0] ? name : offset_name,
-                                     .surface = surface,
-                                     .offset = offset,
-                                     .offset_bound = mo->offset_bound,
-                                     .animated = mo->offset_animated};
-        const ShaderHook* hook = create_shader_hook(engine, &desc);
-        free(surface);
-        free(offset);
-        if (!hook) {
-            fprintf(stderr,
-                    "Warning: material '%s': its surface hook does not compile; the "
-                    "material keeps its own surface\n",
-                    mo->material);
-            continue;
-        }
-        made[made_count].by = mo;
-        made[made_count++].hook = hook;
-        int tagged = 0;
-        for (size_t i = 0; i < scene->material_count; i++) {
-            Material* m = scene->materials[i];
-            if (!m || !m->name || strcmp(m->name, mo->material) != 0)
-                continue;
-            m->shader_hook = hook;
-            tagged++;
-        }
-        printf("Scene file: surface hook '%s' on material '%s' (%d material(s))\n", desc.name,
-               mo->material, tagged);
-        if (tagged == 0)
-            fprintf(stderr, "Warning: material '%s' not found in scene\n", mo->material);
     }
 }
 

@@ -4,11 +4,11 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-#include "light.h"   // LightUnits: authored intensity units carry through to Light
-#include "rain.h"    // Rain: an authored rain block IS the runtime rain, over its defaults
-#include "fire.h"    // FireSystem: likewise the authored fire block
-#include "roads.h"   // MaterialRoad: an authored road IS the runtime road, verbatim
-#include "program.h" // ShaderParams: likewise authored shader params
+#include "light.h"         // LightUnits: authored intensity units carry through to Light
+#include "rain.h"          // Rain: an authored rain block IS the runtime rain, over its defaults
+#include "fire.h"          // FireSystem: likewise the authored fire block
+#include "roads.h"         // MaterialRoad: an authored road IS the runtime road, verbatim
+#include "shader_params.h" // ShaderParams: likewise authored shader params
 
 /*
  * Cetra scene format (.cscn): a JSON scene description that owns the look
@@ -26,9 +26,11 @@
 #define CSCENE_MAX_OCCLUDERS       64
 #define CSCENE_MAX_LIGHT_OVERRIDES 16
 #define CSCENE_MAX_MATERIALS       16
-#define CSCENE_MAX_POST_PASSES     8
-#define CSCENE_MAX_NAME            128
-#define CSCENE_MAX_PATH            1024
+// Half the engine's POSTFX_PASS_MAX, so a scene's passes leave the app room for its own.
+#define CSCENE_MAX_POST_PASSES  8
+#define CSCENE_MAX_SHADER_HOOKS 8
+#define CSCENE_MAX_NAME         128
+#define CSCENE_MAX_PATH         1024
 
 // One of post.passes (spec 13.29): a fragment shader, resolved against the scene file, run at a
 // PostFXLocation over the frame.
@@ -38,6 +40,16 @@ typedef struct CScenePostPass {
     bool enabled;
     ShaderParams params;
 } CScenePostPass;
+
+// One of shaderHooks (spec 13.29): a surface hook, under the name a material gives as its
+// `shaderHook`. One hook however many materials name it, as the engine's materials borrow one.
+typedef struct CSceneShaderHook {
+    char name[CSCENE_MAX_NAME];
+    char surface[CSCENE_MAX_PATH]; // `surface`: defines cetraSurface, resolved; "" for none
+    char offset[CSCENE_MAX_PATH];  // `offset`: defines cetraOffset, resolved; "" for none
+    float offset_bound;            // `offsetBound`, metres
+    bool animated;                 // `animated`: what it decides changes with time
+} CSceneShaderHook;
 
 typedef enum {
     CSCENE_ENV_NONE = 0, // no environment block in the file
@@ -231,13 +243,8 @@ typedef struct CSceneMaterialOverride {
     // `lateShader` (spec 13.29): a fragment shader, resolved against the scene file, that draws
     // this material in the late draw; its presence IS the pass. "" = the main pass.
     char late_shader[CSCENE_MAX_PATH];
-    // A surface hook (spec 13.29): `surfaceShader` defines cetraSurface, `offsetShader`
-    // cetraOffset, each a file resolved against the scene file, "" for none; the two make one
-    // hook. `offsetBound` is metres, `offsetAnimated` whether the offset moves with time.
-    char surface_shader[CSCENE_MAX_PATH];
-    char offset_shader[CSCENE_MAX_PATH];
-    float offset_bound;
-    bool offset_animated;
+    // `shaderHook` (spec 13.29): which of the file's shaderHooks, -1 for none.
+    int shader_hook;
 } CSceneMaterialOverride;
 
 // Ambient dust: a scene-level particle effect (like fog). Each field carries a
@@ -587,6 +594,9 @@ typedef struct CetraSceneDesc {
     // post.passes: an app's fullscreen passes (spec 13.29), in the order they run at a location.
     CScenePostPass post_passes[CSCENE_MAX_POST_PASSES];
     int post_pass_count;
+    // shaderHooks: the surface hooks materials name (spec 13.29).
+    CSceneShaderHook shader_hooks[CSCENE_MAX_SHADER_HOOKS];
+    int shader_hook_count;
     // post.purkinje: the scotopic shift (spec 11.83). Every key independent with
     // its own presence flag, this file's stated convention -- so a block naming
     // only `strength` stores it and arms nothing.

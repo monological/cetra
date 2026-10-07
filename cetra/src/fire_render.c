@@ -173,24 +173,12 @@ static float _view_depth(const Engine* engine, const vec3 p) {
 typedef struct FireView {
     mat4 view_proj;
     mat4 inv_view_proj;
-    vec2 viewport;
 } FireView;
 
 // A card's bottom centre in the world, and its size.
 static void _card_world(const Fire* fire, const FireCard* card, vec3 base, vec2 size) {
     glm_vec3_add((float*)fire->origin, (float*)card->base, base);
     fire_card_size(fire, card, size);
-}
-
-// The fog the late draw was handed, onto whichever program is drawing.
-static void _fog_uniforms(UniformManager* u, const PostFXLateDraw* late) {
-    glActiveTexture(GL_TEXTURE0 + FIRE_FOG_UNIT);
-    glBindTexture(GL_TEXTURE_3D, late->fog_volume);
-    uniform_set_int(u, "fogVolume", FIRE_FOG_UNIT);
-    uniform_set_int(u, "fogSlices", late->fog_slices);
-    uniform_set_float(u, "fogNear", late->fog_near);
-    uniform_set_float(u, "fogFar", late->fog_far);
-    uniform_set_float(u, "fogDepthDist", late->fog_depth_dist);
 }
 
 static void _draw_card(FireRenderer* r, const Engine* engine, const Fire* fire, int c,
@@ -209,7 +197,6 @@ static void _draw_card(FireRenderer* r, const Engine* engine, const Fire* fire, 
     uniform_set_vec3(u, "cameraPos", engine->camera->position);
     uniform_set_vec3(u, "cardBase", base);
     uniform_set_vec2(u, "cardSize", size);
-    uniform_set_vec2(u, "viewport", (float*)fv->viewport);
     const int layout[4] = {b->frames, b->cols, b->rows, 0};
     uniform_set_ivec4(u, "sheetLayout", layout);
     uniform_set_vec2(u, "frameTexels", (vec2){(float)b->width, (float)b->height});
@@ -217,9 +204,8 @@ static void _draw_card(FireRenderer* r, const Engine* engine, const Fire* fire, 
     uniform_set_float(u, "framePos", (float)fire_card_frame(b, card, engine->render_time));
     uniform_set_float(u, "peakNits", b->peak_nits);
     uniform_set_float(u, "brightness", fire->params.brightness);
-    fire_bind(u, FIRE_DEPTH_UNIT, late->scene_depth, "sceneDepth");
+    postfx_late_draw_bind(late, u, FIRE_DEPTH_UNIT, FIRE_FOG_UNIT);
     fire_bind(u, FIRE_SCALAR_UNIT, b->sheet->id, "sheet");
-    _fog_uniforms(u, late);
     glDisable(GL_CULL_FACE);
     glBindVertexArray(r->vao);
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
@@ -238,11 +224,9 @@ static void _draw_marched(FireRenderer* r, const Engine* engine, const Scene* sc
     uniform_set_mat4(u, "projection", (const float*)engine->projection_matrix);
     uniform_set_mat4(u, "viewProj", (const float*)fv->view_proj);
     uniform_set_mat4(u, "invViewProj", (const float*)fv->inv_view_proj);
-    uniform_set_vec2(u, "viewport", (float*)fv->viewport);
     uniform_set_vec3(u, "ambientRadiance", (float*)scene->ambient_radiance);
-    _fog_uniforms(u, late);
+    postfx_late_draw_bind(late, u, FIRE_DEPTH_UNIT, FIRE_FOG_UNIT);
     fire_emission_uniforms(r, u, fire, FIRE_BLACKBODY_UNIT);
-    fire_bind(u, FIRE_DEPTH_UNIT, late->scene_depth, "sceneDepth");
     uniform_set_vec3(u, "boxMin", lo);
     uniform_set_vec3(u, "boxMax", hi);
     uniform_set_float(u, "smokeAlbedo", glm_clamp(p->smoke_albedo, 0.0f, 0.99f));
@@ -344,7 +328,6 @@ void fire_render_draw(FireRenderer* r, Engine* engine, const Scene* scene,
     FireView fv;
     glm_mat4_copy(engine->view_proj, fv.view_proj);
     glm_mat4_inv(fv.view_proj, fv.inv_view_proj);
-    glm_vec2_copy((vec2){(float)late->width, (float)late->height}, fv.viewport);
     const GLPassState pass = gl_pass_begin();
     glEnable(GL_BLEND);
     glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);

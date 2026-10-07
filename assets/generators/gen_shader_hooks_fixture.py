@@ -11,12 +11,15 @@ where it says.
     card          a card standing on the floor, holed by its hook's alpha; the sun throws the
                   holes onto the floor behind it                           (surface alpha)
     dome          a flat grid raised into a dome by its hook's offset      (vertex offset)
+    pushed        a quad its offset moves away from the eye, which only a prepass that missed
+                  the offset would show                                    (vertex offset)
     static        a quad on the wall drawn in the late lane, a field of new noise every frame,
                   with a post standing in front of part of it             (late lane)
     marks         a flat rectangle painted by a post pass at each of the three locations, side
                   by side over the wall                                    (post passes)
 
-Every shader includes an engine chunk, so the runtime include resolver is what compiles them.
+The post mark, the stripes and the static include engine chunks, so the runtime include resolver
+compiles them, and the stripes' include sits inside a hook spliced into an engine shader.
 
 Regenerate with: python3 assets/generators/gen_shader_hooks_fixture.py
 """
@@ -418,27 +421,29 @@ def scene():
             "cast_shadows": True,
         }],
         "post": {"exposure": 1.0, "passes": passes},
+        "shaderHooks": {
+            "stripes": {"surface": asset_ref("hooks_surface_stripes.glsl")},
+            "red": {"surface": asset_ref("hooks_surface_red.glsl")},
+            "blue": {"surface": asset_ref("hooks_surface_blue.glsl")},
+            "tint": {"surface": asset_ref("hooks_surface_tint.glsl")},
+            "holes": {"surface": asset_ref("hooks_surface_holes.glsl")},
+            "dome": {"surface": asset_ref("hooks_surface_dome.glsl"),
+                     "offset": asset_ref("hooks_offset_dome.glsl"),
+                     "offsetBound": DOME[0]},
+            "pushed": {"offset": asset_ref("hooks_offset_push.glsl"), "offsetBound": PUSH[0]},
+        },
         "materials": {
             "hooks_static": {"lateShader": asset_ref("hooks_late_static.glsl"),
                              "shaderParams": {"noiseCells": STATIC_CELLS}},
-            "hooks_stripes": {"surfaceShader": asset_ref("hooks_surface_stripes.glsl"),
-                              "shaderParams": {"stripes": STRIPES}},
-            "hooks_key_a": {"surfaceShader": asset_ref("hooks_surface_red.glsl")},
-            "hooks_key_b": {"surfaceShader": asset_ref("hooks_surface_blue.glsl")},
-            "hooks_param_a": {"surfaceShader": asset_ref("hooks_surface_tint.glsl"),
-                              "shaderParams": {"tint": PARAM_A}},
-            "hooks_param_b": {"surfaceShader": asset_ref("hooks_surface_tint.glsl"),
-                              "shaderParams": {"tint": PARAM_B}},
-            "hooks_card": {"surfaceShader": asset_ref("hooks_surface_holes.glsl"),
-                           "foliageShadows": 1,
+            "hooks_stripes": {"shaderHook": "stripes", "shaderParams": {"stripes": STRIPES}},
+            "hooks_key_a": {"shaderHook": "red"},
+            "hooks_key_b": {"shaderHook": "blue"},
+            "hooks_param_a": {"shaderHook": "tint", "shaderParams": {"tint": PARAM_A}},
+            "hooks_param_b": {"shaderHook": "tint", "shaderParams": {"tint": PARAM_B}},
+            "hooks_card": {"shaderHook": "holes", "foliageShadows": 1,
                            "shaderParams": {"holes": HOLES}},
-            "hooks_dome": {"surfaceShader": asset_ref("hooks_surface_dome.glsl"),
-                           "offsetShader": asset_ref("hooks_offset_dome.glsl"),
-                           "offsetBound": DOME[0],
-                           "shaderParams": {"dome": DOME}},
-            "hooks_pushed": {"offsetShader": asset_ref("hooks_offset_push.glsl"),
-                             "offsetBound": PUSH[0],
-                             "shaderParams": {"push": PUSH}},
+            "hooks_dome": {"shaderHook": "dome", "shaderParams": {"dome": DOME}},
+            "hooks_pushed": {"shaderHook": "pushed", "shaderParams": {"push": PUSH}},
         },
         "camera": CAMERA,
     }

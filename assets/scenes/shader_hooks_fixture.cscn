@@ -95,6 +95,32 @@
    }
   ]
  },
+ "shaderHooks": {
+  "stripes": {
+   "surface": "../shaders/hooks_surface_stripes.glsl"
+  },
+  "red": {
+   "surface": "../shaders/hooks_surface_red.glsl"
+  },
+  "blue": {
+   "surface": "../shaders/hooks_surface_blue.glsl"
+  },
+  "tint": {
+   "surface": "../shaders/hooks_surface_tint.glsl"
+  },
+  "holes": {
+   "surface": "../shaders/hooks_surface_holes.glsl"
+  },
+  "dome": {
+   "surface": "../shaders/hooks_surface_dome.glsl",
+   "offset": "../shaders/hooks_offset_dome.glsl",
+   "offsetBound": 0.6
+  },
+  "pushed": {
+   "offset": "../shaders/hooks_offset_push.glsl",
+   "offsetBound": 0.5
+  }
+ },
  "materials": {
   "hooks_static": {
    "lateShader": "../shaders/hooks_late_static.glsl",
@@ -108,7 +134,7 @@
    }
   },
   "hooks_stripes": {
-   "surfaceShader": "../shaders/hooks_surface_stripes.glsl",
+   "shaderHook": "stripes",
    "shaderParams": {
     "stripes": [
      0.3,
@@ -119,13 +145,13 @@
    }
   },
   "hooks_key_a": {
-   "surfaceShader": "../shaders/hooks_surface_red.glsl"
+   "shaderHook": "red"
   },
   "hooks_key_b": {
-   "surfaceShader": "../shaders/hooks_surface_blue.glsl"
+   "shaderHook": "blue"
   },
   "hooks_param_a": {
-   "surfaceShader": "../shaders/hooks_surface_tint.glsl",
+   "shaderHook": "tint",
    "shaderParams": {
     "tint": [
      0.8,
@@ -136,7 +162,7 @@
    }
   },
   "hooks_param_b": {
-   "surfaceShader": "../shaders/hooks_surface_tint.glsl",
+   "shaderHook": "tint",
    "shaderParams": {
     "tint": [
      0.02,
@@ -147,7 +173,7 @@
    }
   },
   "hooks_card": {
-   "surfaceShader": "../shaders/hooks_surface_holes.glsl",
+   "shaderHook": "holes",
    "foliageShadows": 1,
    "shaderParams": {
     "holes": [
@@ -159,9 +185,7 @@
    }
   },
   "hooks_dome": {
-   "surfaceShader": "../shaders/hooks_surface_dome.glsl",
-   "offsetShader": "../shaders/hooks_offset_dome.glsl",
-   "offsetBound": 0.6,
+   "shaderHook": "dome",
    "shaderParams": {
     "dome": [
      0.6,
@@ -172,8 +196,7 @@
    }
   },
   "hooks_pushed": {
-   "offsetShader": "../shaders/hooks_offset_push.glsl",
-   "offsetBound": 0.5,
+   "shaderHook": "pushed",
    "shaderParams": {
     "push": [
      0.5,

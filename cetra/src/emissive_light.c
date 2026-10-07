@@ -331,7 +331,10 @@ static EmissiveFitReject _mesh_candidacy(Mesh* mesh, vec3 out_nits, bool* out_fi
     // the same as no reject list.
     if (lum < EMISSIVE_FIT_MIN_NITS)
         return EMISSIVE_FIT_TOO_DIM;
-    return mesh->material->emissive_light != 0 ? EMISSIVE_FIT_OPTED_OUT : EMISSIVE_FIT_OK;
+    // A late-draw surface (spec 13.29) is drawn over the lit frame, so it lights nothing.
+    const Material* mat = mesh->material;
+    return mat->emissive_light != 0 || mat->pass == MATERIAL_PASS_LATE_DRAW ? EMISSIVE_FIT_OPTED_OUT
+                                                                            : EMISSIVE_FIT_OK;
 }
 
 static void _probe_node(const Scene* scene, const SceneNode* node, int* count) {

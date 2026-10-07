@@ -29,14 +29,6 @@
 #include "util.h"
 #include "ext/log.h"
 
-// A surface hook's shadow program (spec 13.29): whose, which of the two shadow programs it
-// varies, and the program, NULL where it would not build.
-typedef struct ShadowHookProgram {
-    unsigned hook_id;
-    bool absorb;
-    ShaderProgram* program;
-} ShadowHookProgram;
-
 // An FBO for depth alone: no colour buffer to read or draw, or it is incomplete.
 static void init_depth_fbo(GLuint* fbo) {
     glGenFramebuffers(1, fbo);
@@ -223,9 +215,6 @@ void free_shadow_system(ShadowSystem* system) {
     if (system->rain_ask_pbo[0])
         glDeleteBuffers(SHADOW_RAIN_ASK_LATENCY, system->rain_ask_pbo);
     gl_delete_fbo(&system->tile_copy_fbo);
-    for (size_t i = 0; i < system->hook_program_count; ++i)
-        free_program(system->hook_programs[i].program);
-    free(system->hook_programs);
     free(system->caster_order);
     free(system->tile_rank);
     free(system->tile_seen);
@@ -808,8 +797,8 @@ static bool caster_set_kept(ShadowCasterSet set) {
            set == SHADOW_CASTERS_KEPT_MOVERS;
 }
 
-// The kept sets nothing in is displaced: every caster in them is DRAW_KEPT_STILL, so none sways
-// under this scene's wind but one its material holds at rest, which a kept set draws at rest.
+// The kept sets nothing in sways: every caster in them is DRAW_KEPT_STILL, so none moves under
+// this scene's wind but one its material holds at rest, which a kept set draws at rest.
 static bool caster_set_at_rest(ShadowCasterSet set) {
     return set == SHADOW_CASTERS_KEPT || set == SHADOW_CASTERS_KEPT_STILL;
 }
@@ -823,10 +812,11 @@ static float caster_wind_response(ShadowCasterSet set, const Material* mat) {
                : mat->wind_response;
 }
 
-// Everything about a caster that its MATERIAL decides, for whichever of the two
-// depth programs is bound. Every uniform here is location-guarded, so the ones
-// belonging to the absorb program no-op on the depth program and the two
-// traversals stay one function.
+// Everything about a caster that its MATERIAL decides, for whichever shadow
+// program is bound -- the depth or the absorb program, or a hook's variant of
+// either. Every uniform here is location-guarded, so the ones belonging to the
+// absorb program no-op on the depth program and the two traversals stay one
+// function.
 static void _upload_shadow_material(UniformManager* u, const Material* mat, bool foliage) {
     uniform_set_int(u, "alphaTested", foliage ? 1 : 0);
     if (foliage) {
@@ -871,10 +861,16 @@ static void _upload_shadow_material(UniformManager* u, const Material* mat, bool
 // and their occlusion comes from AO instead. Foliage opts back in, because leaf
 // cards are centimetres across and an alpha test resolves them.
 static bool caster_set_wants(ShadowCasterSet set, uint8_t lane, uint8_t flags) {
-    // A late-draw surface (spec 13.29) stops no light and no rain: it is drawn over the frame.
-    if (lane == DRAW_LANE_LATE_DRAW)
+    // The lanes a set takes, named, as the camera passes name theirs, so a lane added later casts
+    // nothing until somebody says it should -- the late draw's casts nothing (spec 13.29). A
+    // shadow-only mesh stops a light and not the rain.
+    const unsigned rain_lanes =
+        (1u << DRAW_LANE_OPAQUE) | (1u << DRAW_LANE_BLEND) | (1u << DRAW_LANE_TRANSMISSIVE);
+    const unsigned lanes =
+        set == SHADOW_CASTERS_RAIN ? rain_lanes : rain_lanes | (1u << DRAW_LANE_SHADOW_ONLY);
+    if (!(lanes & (1u << lane)))
         return false;
-    if (set == SHADOW_CASTERS_RAIN ? lane == DRAW_LANE_SHADOW_ONLY : (flags & DRAW_NO_CAST) != 0)
+    if (set != SHADOW_CASTERS_RAIN && (flags & DRAW_NO_CAST))
         return false;
     bool masked_only = (flags & DRAW_ALPHA_MASKED) && !(flags & DRAW_FOLIAGE);
     // What a transmittance map represents instead of a depth map: geometry that
@@ -1101,6 +1097,33 @@ static size_t _ordered_caster_run(const DrawList* list, const size_t* order, siz
     return n;
 }
 
+// The program a caster is drawn with: the pass's, or its hook's variant of it where the hook
+// changes where the caster is or where it is cut (spec 13.29) -- which classify settles as
+// DRAW_HOOKED_CASTER. A hook with no such variant, or one that would not build, casts as the
+// pass's.
+static ShaderProgram* _caster_program(const ShadowSystem* ss, const DrawItem* item, bool absorb) {
+    ShaderProgram* base = absorb ? ss->tsm_absorb_program : ss->depth_program;
+    if (!(item->flags & DRAW_HOOKED_CASTER))
+        return base;
+    const ShaderHook* hook = item->mesh->material->shader_hook;
+    ShaderProgram* hooked = absorb ? hook->shadow_absorb : hook->shadow_depth;
+    return hooked ? hooked : base;
+}
+
+// What every caster in one layer shares, onto `program` as the layer first draws through it. The
+// displacement inputs carry the frame's one render clock, which the shading pass reads too --
+// that is what keeps a swaying caster and its shadow in lockstep rather than merely close.
+static void _prime_caster_program(ShaderProgram* program, const Engine* engine, const Scene* scene,
+                                  const float* matrix) {
+    UniformManager* u = program->uniforms;
+    uniform_set_mat4(u, "lightSpaceMatrix", matrix);
+    uniform_set_int(u, "albedoTex", 0);
+    engine_upload_displacement_uniforms(engine, scene, u);
+}
+
+// One layer's casters, through `matrix`, with the depth program or with `absorb` the translucent
+// absorb program.
+//
 // The layer's own volume decides visibility, so a rejected caster contributed
 // nothing to it -- the matrix IS the clip volume, and nothing here enables
 // GL_DEPTH_CLAMP, so anything the test rejects the rasterizer would have
@@ -1111,36 +1134,7 @@ static size_t _ordered_caster_run(const DrawList* list, const size_t* order, siz
 // Enabling depth clamp on this pass -- the usual remedy for a caster between the
 // light and the near plane -- would break that, and would do it silently:
 // casters the test drops would then have contributed.
-// The program a caster is drawn with: `base`, or its hook's variant of it where the hook changes
-// where the caster is (an offset, either program) or where it is cut (a surface's alpha, the
-// depth program, for a caster the alpha test reaches). Made on first ask and kept.
-static ShaderProgram* _caster_program(ShadowSystem* ss, ShaderProgram* base, const Material* mat,
-                                      bool foliage) {
-    const ShaderHook* hook = mat->shader_hook;
-    const bool absorb = base == ss->tsm_absorb_program;
-    if (!hook || (base != ss->depth_program && !absorb))
-        return base;
-    if (!hook->offset && (absorb || !(hook->surface && foliage)))
-        return base;
-    for (size_t i = 0; i < ss->hook_program_count; ++i) {
-        const ShadowHookProgram* h = &ss->hook_programs[i];
-        if (h->hook_id == hook->id && h->absorb == absorb)
-            return h->program ? h->program : base;
-    }
-    ShadowHookProgram* grown =
-        realloc(ss->hook_programs, (ss->hook_program_count + 1) * sizeof(ShadowHookProgram));
-    if (!grown)
-        return base;
-    ss->hook_programs = grown;
-    // NULL is kept too: a hook that cannot cast is said once, by create_shadow_hook_program,
-    // and drawn with the plain program from then on.
-    ShaderProgram* program = create_shadow_hook_program(hook, absorb);
-    ss->hook_programs[ss->hook_program_count++] =
-        (ShadowHookProgram){.hook_id = hook->id, .absorb = absorb, .program = program};
-    return program ? program : base;
-}
-
-static void _draw_shadow_items(ShadowSystem* ss, const DrawList* list, ShaderProgram* program,
+static void _draw_shadow_items(ShadowSystem* ss, const DrawList* list, bool absorb,
                                SubmitState* state, ShadowCasterSet set, const CullView* cull,
                                const Engine* engine, const Scene* scene, const float* matrix) {
     if (!ss || !list || !engine)
@@ -1151,11 +1145,16 @@ static void _draw_shadow_items(ShadowSystem* ss, const DrawList* list, ShaderPro
 
     // Loop-invariant, so it is settled once rather than re-asked per draw -- and
     // it is what decides whether the order is worth grouping at all.
-    const bool batching = engine->instancing_enabled && engine->instance_ubo && program->instanced;
+    const ShaderProgram* base = absorb ? ss->tsm_absorb_program : ss->depth_program;
+    const bool batching = engine->instancing_enabled && engine->instance_ubo && base->instanced;
 
     size_t count = _build_caster_order(ss, list, set, batching, cull, stats);
     const size_t* order = ss->caster_order;
 
+    // A layer primes each program as it first draws through it, so the tracker must forget the
+    // one the last layer left bound: a matrix written to it unbound would land on whatever was,
+    // while its cache recorded it as held.
+    submit_state_reset(state);
     for (size_t pos = 0; pos < count; ++pos) {
         size_t idx = order[pos];
         const DrawItem* item = &list->items[idx];
@@ -1165,20 +1164,10 @@ static void _draw_shadow_items(ShadowSystem* ss, const DrawList* list, ShaderPro
             Mesh* mesh = item->mesh;
             Material* mat = mesh->material;
             bool foliage = (item->flags & DRAW_FOLIAGE) != 0;
-            // A hooked caster's own program (spec 13.29), handed what the pass set on the one it
-            // was given. On every such draw rather than on the switch: a layer that opens on the
-            // program the last one left bound switches nothing, and would keep that layer's
-            // matrix. Every write is value-cached, so a repeat costs a compare.
-            ShaderProgram* drawn = _caster_program(ss, program, mat, foliage);
+            ShaderProgram* drawn = _caster_program(ss, item, absorb);
             UniformManager* u = drawn->uniforms;
-            if (drawn != program) {
-                submit_use_program(state, drawn->id);
-                uniform_set_mat4(u, "lightSpaceMatrix", matrix);
-                uniform_set_int(u, "albedoTex", 0);
-                engine_upload_displacement_uniforms(engine, scene, u);
-            } else {
-                submit_use_program(state, program->id);
-            }
+            if (submit_use_program(state, drawn->id))
+                _prime_caster_program(drawn, engine, scene, matrix);
 
             // The depth stage reads InstanceBlock, so casters batch here even
             // when the same mesh cannot batch on the camera path. A run shares
@@ -1385,23 +1374,21 @@ static int compute_punctual_matrices(const Light* light, const ShadowSystem* ss,
     return punctual_layers_for(light);
 }
 
-// The body both depth-pass loops share, once a layer is bound: aim the depth
-// program at one light-space matrix and walk the scene into it.
+// The body both depth-pass loops share, once a layer is bound: walk the scene into it through
+// one light-space matrix.
 static void draw_shadow_layer(ShadowSystem* ss, const Scene* scene, const DrawList* list,
                               mat4 matrix, SubmitState* state, ShadowCasterSet set,
                               const Engine* engine) {
-    uniform_set_mat4(ss->depth_program->uniforms, "lightSpaceMatrix", (const float*)matrix);
     // The matrix IS the layer's coverage volume, and Gribb-Hartmann does not
     // care whether it is ortho or perspective -- so cascades and punctual faces
     // cull through the same six planes.
     Frustum layer_frustum;
     frustum_extract_from_vp(matrix, &layer_frustum);
     CullView cull = render_cull_view(engine, scene, &layer_frustum);
-    // Culled by the box of the pose drawn, which in these sets is never displaced.
+    // Culled by the box of the pose drawn, which in these sets no wind moves.
     if (caster_set_at_rest(set))
         cull.wind = NULL;
-    _draw_shadow_items(ss, list, ss->depth_program, state, set, &cull, engine, scene,
-                       (const float*)matrix);
+    _draw_shadow_items(ss, list, false, state, set, &cull, engine, scene, (const float*)matrix);
     end_shadow_pass(ss);
 }
 
@@ -1953,15 +1940,21 @@ static void tiles_expire_movers(ShadowSystem* ss) {
 static ShadowTileSeen tile_seen_of(const DrawItem* item) {
     ShadowTileSeen seen = {
         .mesh = item->mesh, .node = item->node, .lane = item->lane, .flags = item->flags};
+    const Material* mat = item->mesh->material;
+    uint64_t hash = FNV1A64_BASIS;
     if (item->flags & DRAW_FOLIAGE) {
-        const Material* mat = item->mesh->material;
         const uintptr_t albedo = (uintptr_t)mat->albedo_tex;
-        uint64_t hash = fnv1a64(FNV1A64_BASIS, &mat->alphaCutoff, sizeof(mat->alphaCutoff));
+        hash = fnv1a64(hash, &mat->alphaCutoff, sizeof(mat->alphaCutoff));
         hash = fnv1a64(hash, mat->uvOffset, sizeof(mat->uvOffset));
         hash = fnv1a64(hash, mat->uvScale, sizeof(mat->uvScale));
         hash = fnv1a64(hash, &mat->uvRotation, sizeof(mat->uvRotation));
-        seen.cutout = fnv1a64(hash, &albedo, sizeof(albedo));
+        hash = fnv1a64(hash, &albedo, sizeof(albedo));
     }
+    if (item->flags & DRAW_HOOKED_CASTER) {
+        hash = fnv1a64(hash, &mat->shader_hook->id, sizeof(mat->shader_hook->id));
+        hash = fnv1a64(hash, &mat->shader_params, sizeof(mat->shader_params));
+    }
+    seen.shape = hash == FNV1A64_BASIS ? 0 : hash;
     return seen;
 }
 
@@ -2001,7 +1994,7 @@ static bool tiles_mark_changed_looks(ShadowSystem* ss, const DrawList* list, con
         const DrawItem* item = &list->items[i];
         const ShadowTileSeen now = tile_seen_of(item);
         ShadowTileSeen* then = &ss->tile_seen[i];
-        if (now.lane == then->lane && now.flags == then->flags && now.cutout == then->cutout)
+        if (now.lane == then->lane && now.flags == then->flags && now.shape == then->shape)
             continue;
         AABB box;
         if (!draw_item_bounds(item, view, &box))
@@ -2750,13 +2743,8 @@ static bool shadow_build_tsm(ShadowSystem* ss, const Engine* engine, const Scene
         glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
         glClear(GL_COLOR_BUFFER_BIT);
 
-        submit_use_program(&state, ss->tsm_absorb_program->id);
-        UniformManager* au = ss->tsm_absorb_program->uniforms;
-        uniform_set_mat4(au, "lightSpaceMatrix", matrix);
-        uniform_set_int(au, "albedoTex", 0);
-        engine_upload_displacement_uniforms(engine, scene, au);
-        _draw_shadow_items(ss, scene->draw_list, ss->tsm_absorb_program, &state,
-                           SHADOW_CASTERS_TRANSLUCENT, &tsm_cull, engine, scene, matrix);
+        _draw_shadow_items(ss, scene->draw_list, true, &state, SHADOW_CASTERS_TRANSLUCENT,
+                           &tsm_cull, engine, scene, matrix);
         glDisable(GL_BLEND);
 
         // --- resolve to transmittance --------------------------------------
@@ -2789,13 +2777,10 @@ static bool shadow_build_tsm(ShadowSystem* ss, const Engine* engine, const Scene
             break;
         }
         glDepthFunc(GL_LESS);
-        // The fullscreen resolve above bound its own program and its own VAO,
-        // so nothing the walk below tracked is still true.
-        submit_state_reset(&state);
-        submit_use_program(&state, ss->depth_program->id);
-        uniform_set_mat4(ss->depth_program->uniforms, "lightSpaceMatrix", matrix);
-        _draw_shadow_items(ss, scene->draw_list, ss->depth_program, &state,
-                           SHADOW_CASTERS_TRANSLUCENT, &tsm_cull, engine, scene, matrix);
+        // The fullscreen resolve above bound its own program and its own VAO; the walk forgets
+        // what it tracked, so it binds its own again.
+        _draw_shadow_items(ss, scene->draw_list, false, &state, SHADOW_CASTERS_TRANSLUCENT,
+                           &tsm_cull, engine, scene, matrix);
     }
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -3124,15 +3109,6 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     glEnable(GL_POLYGON_OFFSET_FILL);
     glPolygonOffset(SHADOW_DEPTH_SLOPE_BIAS, SHADOW_DEPTH_CONSTANT_BIAS);
 
-    glUseProgram(ss->depth_program->id);
-
-    // The displacement globals for the whole pass (per-mesh wind response and
-    // mask ride along in the node walk, the morph targets in the vertex arrays).
-    // render_time is the frame's single render clock, which the shading pass
-    // reads too -- that is what keeps a swaying caster and its shadow in lockstep
-    // rather than merely close.
-    engine_upload_displacement_uniforms(engine, scene, ss->depth_program->uniforms);
-
     // Resolved HERE, after the caster classification that tells it whether any
     // directional light casts, and before the first draw that depends on it.
     // Withholding a translucent caster from the depth pass is legal only when
@@ -3146,7 +3122,6 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     // tracker goes wrong, and ordering costs nothing where a remembered reset
     // would have to be remembered.
     SubmitState state = {0};
-    submit_use_program(&state, ss->depth_program->id);
 
     profiler_scope_begin_if(engine->profiler, ss->directional_count > 0, "shadow cascades");
     for (size_t i = 0; i < ss->directional_count; ++i) {
@@ -3384,10 +3359,7 @@ void shadow_render_rain_layer(Engine* engine, Scene* scene) {
     glCullFace(GL_BACK);
     glEnable(GL_POLYGON_OFFSET_FILL);
     glPolygonOffset(RAIN_MAP_SLOPE_BIAS, RAIN_MAP_CONSTANT_BIAS);
-    glUseProgram(ss->depth_program->id);
-    engine_upload_displacement_uniforms(engine, scene, ss->depth_program->uniforms);
     SubmitState state = {0};
-    submit_use_program(&state, ss->depth_program->id);
     if (begin_depth_layer(ss->punctual_fbo, ss->punctual_map_array, layer, ss->punctual_map_size)) {
         glViewport(0, 0, RAIN_OCCLUSION_SIZE, RAIN_OCCLUSION_SIZE);
         // Glass is in the opaque set, and should be: a glass roof keeps the rain off.

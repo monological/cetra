@@ -55,6 +55,9 @@ enum {
     // wind or held at rest by its material: a kept shadow face may hold it where its node puts it
     DRAW_KEPT_STILL = 1u << 5,
     DRAW_CAPTURE_HIDDEN = 1u << 6, // skinned, or under a capture_hidden node: no capture sees it
+    // Its material's surface hook changes where its shadow is or how it is cut (spec 13.29): an
+    // offset, or the alpha of a foliage caster, so a light draws it through the hook's program
+    DRAW_HOOKED_CASTER = 1u << 7,
 };
 
 // How a view picks a level out of a mesh's LOD chain.
@@ -200,6 +203,10 @@ bool draw_item_visible(const DrawItem* item, const CullView* view);
 // Exported for the occlusion pass, which needs the same box the frustum test
 // uses -- a second bound would be a second thing to keep in agreement.
 bool draw_item_bounds(const DrawItem* item, const CullView* view, AABB* out);
+
+// How far in front of the eye `view` puts the centre of the item's mesh, from its import bound:
+// what a back-to-front order sorts by.
+float draw_item_view_depth(const DrawItem* item, const mat4 view);
 
 // Whether two items are the same DRAW: same geometry at the same level under
 // the same pose. The level joins the key because one draw submits one index

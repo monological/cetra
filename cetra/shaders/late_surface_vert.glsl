@@ -14,6 +14,7 @@ uniform mat4 model;
 uniform mat3 uNormalMatrix;
 uniform mat4 view;
 uniform mat4 projection;
+uniform bool vertexColorExists; // false hands the fragment white, as a surface hook sees it
 
 out vec3 vWorldPos;
 out vec3 vNormal;
@@ -28,7 +29,7 @@ void main()
     vWorldPos = world.xyz;
     vNormal = normalize(uNormalMatrix * aNormal);
     vUv = aTexCoords;
-    vColor = aColor;
+    vColor = vertexColorExists ? aColor : vec4(1.0);
     vViewDepth = -eye.z;
     gl_Position = projection * eye;
 }

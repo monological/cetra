@@ -163,7 +163,6 @@ void rain_render_drops(RainRenderer* rr, Engine* engine, const Scene* scene,
     uniform_set_mat4(u, "projection", (const float*)engine->projection_matrix);
     uniform_set_vec3(u, "cameraPos", engine->camera->position);
     uniform_set_vec3(u, "cameraVelocity", cam_vel);
-    uniform_set_vec2(u, "viewport", (vec2){(float)late->width, (float)late->height});
     uniform_set_float(u, "time", (float)engine->render_time);
     uniform_set_vec3(u, "rainWind", rain->wind_now);
     uniform_set_float(u, "shutter", rain->shutter_s);
@@ -216,16 +215,7 @@ void rain_render_drops(RainRenderer* rr, Engine* engine, const Scene* scene,
     glBindTexture(GL_TEXTURE_2D, rr->behind_tex);
     uniform_set_int(u, "behindTex", RAIN_BEHIND_UNIT);
 
-    glActiveTexture(GL_TEXTURE0 + RAIN_FOG_UNIT);
-    glBindTexture(GL_TEXTURE_3D, late->fog_volume);
-    uniform_set_int(u, "fogVolume", RAIN_FOG_UNIT);
-    uniform_set_int(u, "fogSlices", late->fog_slices);
-    uniform_set_float(u, "fogNear", late->fog_near);
-    uniform_set_float(u, "fogFar", late->fog_far);
-    uniform_set_float(u, "fogDepthDist", late->fog_depth_dist);
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, late->scene_depth);
-    uniform_set_int(u, "sceneDepth", 0);
+    postfx_late_draw_bind(late, u, 0, RAIN_FOG_UNIT);
 
     const GLboolean depth_test = glIsEnabled(GL_DEPTH_TEST);
     const GLboolean cull = glIsEnabled(GL_CULL_FACE);
