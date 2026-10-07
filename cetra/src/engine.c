@@ -2098,14 +2098,30 @@ ShaderProgram* engine_pbr_variant(Engine* engine, PbrFamily family, unsigned fea
     }
     // Said once, here, where the name is: a resolver asks every frame, and a variant that did
     // not build will not build next frame either.
-    log_error("lit-surface variant %s%s%s%s does not build; materials that want it stay on the "
-              "programs they have",
-              name, hook ? " (surface hook '" : "", hook ? hook->name : "", hook ? "')" : "");
+    if (hook) {
+        log_error("lit-surface variant %s does not build; surface hook '%s' is dropped, and its "
+                  "materials draw without it",
+                  name, hook->name);
+    } else {
+        log_error("lit-surface variant %s does not build; materials that want it stay on the "
+                  "programs they have",
+                  name);
+    }
+    // A hook kept for its bounds and its shadow over a surface drawn without it would put the
+    // three at odds, so a hook that fails one variant is let go by every reader.
+    for (size_t i = 0; hook && i < engine->shader_hook_count; ++i) {
+        if (engine->shader_hooks[i] == hook)
+            engine->shader_hooks[i]->broken = true;
+    }
+    char* kept = safe_strdup(name);
     char** grown =
-        realloc(engine->failed_variants, (engine->failed_variant_count + 1) * sizeof(char*));
+        kept ? realloc(engine->failed_variants, (engine->failed_variant_count + 1) * sizeof(char*))
+             : NULL;
     if (grown) {
         engine->failed_variants = grown;
-        engine->failed_variants[engine->failed_variant_count++] = safe_strdup(name);
+        engine->failed_variants[engine->failed_variant_count++] = kept;
+    } else {
+        free(kept);
     }
     return NULL;
 }

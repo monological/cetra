@@ -1,3 +1,4 @@
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -25,7 +26,8 @@ ShaderHook* create_shader_hook(Engine* engine, const ShaderHookDesc* desc) {
     hook->name = safe_strdup(desc->name);
     hook->surface = safe_strdup(desc->surface);
     hook->offset = safe_strdup(desc->offset);
-    hook->offset_bound = desc->offset_bound;
+    // A negative bound would shrink the margin wind and morph widen the culling box by.
+    hook->offset_bound = fmaxf(desc->offset_bound, 0.0f);
     hook->animated = desc->animated;
 
     // Compiled now, so a hook that does not compile is refused where the app made it rather than
@@ -35,10 +37,29 @@ ShaderHook* create_shader_hook(Engine* engine, const ShaderHookDesc* desc) {
         free_shader_hook(hook);
         return NULL;
     }
-    // Its shadow programs depend on the hook alone, so they are made with it: the depth program
-    // takes an offset or a surface's alpha, the absorb program only an offset.
-    ShaderProgram* depth = create_shadow_hook_program(hook, false);
-    ShaderProgram* absorb = hook->offset ? create_shadow_hook_program(hook, true) : NULL;
+    // Its shadow programs depend on the hook alone, so they are made with it. The offset goes into
+    // both, or the shadow stays where the surface was, so a hook whose offset does not build into
+    // them is refused. The surface goes into the depth program only for the alpha that cuts a
+    // foliage caster; a surface that does not build there -- one reading what only the lit surface
+    // declares, its normal map, say -- is left out, and the caster is cut by its material's alpha.
+    ShaderProgram* depth = create_shadow_hook_program(hook, false, true);
+    hook->shadow_cuts = depth && hook->surface;
+    if (!depth && hook->surface) {
+        log_warn("shader hook '%s': its surface does not build into the shadow pass, so its alpha "
+                 "cuts no shadow",
+                 desc->name);
+        if (hook->offset)
+            depth = create_shadow_hook_program(hook, false, false);
+    }
+    ShaderProgram* absorb = hook->offset ? create_shadow_hook_program(hook, true, false) : NULL;
+    if (hook->offset && (!depth || !absorb)) {
+        log_error("shader hook '%s': its offset does not build into the shadow passes; refused",
+                  desc->name);
+        free_program(depth);
+        free_program(absorb);
+        free_shader_hook(hook);
+        return NULL;
+    }
     if (!engine_add_shader_hook(engine, hook)) {
         free_program(depth);
         free_program(absorb);

@@ -120,13 +120,14 @@ static void classify(const Mesh* mesh, const Wind* wind, uint8_t* lane, uint8_t*
     // centimetres across, so an alpha test resolves them, where hair strands at
     // map-texel scale resolve as streaks or acne either way. The test needs an
     // alpha to read: the albedo map's, or a surface hook's (spec 13.29), which the
-    // hooked shadow program runs.
-    const ShaderHook* hook = mat->shader_hook;
-    bool foliage = masked && mat->foliage_shadows && mat->alphaCutoff > 0.0f &&
-                   (mat->albedo_tex || (hook && hook->surface));
+    // hooked shadow program runs -- so only a hook whose alpha reached that program.
+    const ShaderHook* hook = shader_hook_live(mat->shader_hook);
+    const bool hook_cuts = hook && hook->shadow_cuts;
+    bool foliage =
+        masked && mat->foliage_shadows && mat->alphaCutoff > 0.0f && (mat->albedo_tex || hook_cuts);
     // A hook's offset moves where the caster is, and its surface's alpha where a foliage caster
     // is cut: either way a light draws it through the hook's program.
-    bool hooked_caster = hook && (hook->offset || (hook->surface && foliage));
+    bool hooked_caster = hook && (hook->offset || (hook_cuts && foliage));
 
     // An occlusion proxy must be geometry light provably cannot pass through
     // and that stays where its import box says: opaque lane (holes in masked or
@@ -295,7 +296,7 @@ static const char* _refusal(const Mesh* mesh, const Scene* scene, const Animatio
         return "late surface on a mesh that skins, sways in the wind or is shadow-only";
     // A hook is spliced into lit-surface variants only (spec 13.29). On any other program the
     // surface would ignore it while its bounds, its shadow and its cached faces did not.
-    if (mat->shader_hook && program->pbr_features < 0)
+    if (shader_hook_live(mat->shader_hook) && program->pbr_features < 0)
         return "surface hook on a material whose program is not a lit-surface variant";
     // Another rig's matrices would be uploaded for this mesh, which skins it
     // into garbage that still looks like a frame.
@@ -469,7 +470,7 @@ bool draw_item_bounds(const DrawItem* item, const CullView* view, AABB* out) {
         margin += mesh->material->fur_length;
     // The fourth, an app's offset hook (spec 13.29), whose bound is the one its author declared:
     // nothing here can measure a function it only holds as source.
-    const ShaderHook* hook = mesh->material->shader_hook;
+    const ShaderHook* hook = shader_hook_live(mesh->material->shader_hook);
     if (hook && hook->offset)
         margin += hook->offset_bound;
     if (margin > 0.0f)

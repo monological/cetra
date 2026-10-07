@@ -21,6 +21,7 @@
 #include "program.h"
 #include "uniform.h"
 #include "shader.h"
+#include "shader_hook.h"
 #include "mesh.h"
 #include "material.h"
 #include "material_texture_array.h"
@@ -900,15 +901,20 @@ void engine_resolve_material_variants(Engine* engine, Scene* scene) {
 
         const unsigned want = scene_mask | _material_pbr_features(engine, scene, mat);
         // The hook is the variant's third coordinate (spec 13.29): a material on the right mask
-        // with the wrong hook, or with one it no longer carries, moves as well.
+        // with the wrong hook, or with one it no longer carries or that has broken, moves as well.
+        const ShaderHook* hook = shader_hook_live(mat->shader_hook);
         if ((unsigned)mat->shader_program->pbr_features == want &&
-            mat->shader_program->pbr_hook == mat->shader_hook)
+            mat->shader_program->pbr_hook == hook)
             continue;
 
         // Within the material's OWN family: a skinned mesh must stay on a
         // skinned vertex stage, and the mask means the same thing in both.
         ShaderProgram* variant =
-            engine_pbr_variant(engine, mat->shader_program->pbr_family, want, mat->shader_hook);
+            engine_pbr_variant(engine, mat->shader_program->pbr_family, want, hook);
+        // A hooked variant that failed has let its hook go, so the same frame asks again
+        // without it rather than leaving the surface on another hook's program.
+        if (!variant && hook && hook->broken)
+            variant = engine_pbr_variant(engine, mat->shader_program->pbr_family, want, NULL);
         // Keep the material where it is on failure, which engine_pbr_variant has
         // said once. The full variant always exists, so the surface stays lit
         // rather than turning black -- the subtractive polarity paying off at the
@@ -2607,11 +2613,15 @@ void render_late_items(Engine* engine, const Scene* scene, const PostFXLateDraw*
     }
     // Farthest first, so one laid over another composites in order: the blend is premultiplied,
     // which is order-dependent wherever alpha is not zero.
+    // A depth that is not a number -- a degenerate transform's -- is taken as the nearest, since
+    // one that compares false both ways leaves the comparator no order and the sort none either.
     size_t count = 0;
     for (size_t i = 0; i < list->count && count < n; ++i) {
         const DrawItem* item = &list->items[i];
-        if (item->lane == DRAW_LANE_LATE_DRAW)
-            order[count++] = (LateItem){item, draw_item_view_depth(item, engine->view_matrix), i};
+        if (item->lane != DRAW_LANE_LATE_DRAW)
+            continue;
+        const float depth = draw_item_view_depth(item, engine->view_matrix);
+        order[count++] = (LateItem){item, isnan(depth) ? -FLT_MAX : depth, i};
     }
     qsort(order, count, sizeof(LateItem), _late_farther_first);
 

@@ -2,6 +2,7 @@
 #define _SHADER_HOOK_H_
 
 #include <stdbool.h>
+#include <stddef.h>
 
 struct Engine;
 struct ShaderProgram;
@@ -52,14 +53,25 @@ typedef struct ShaderHook {
     float offset_bound;
     bool animated;
     // The shadow programs carrying it, the engine's: the depth program with its offset and its
-    // alpha, and the absorb program with its offset when it has one. NULL casts as the plain one.
+    // alpha, and the absorb program with its offset when it has one. A hook with an offset always
+    // has both; a surface-only hook has a depth program exactly when its alpha cuts.
     struct ShaderProgram* shadow_depth;
     struct ShaderProgram* shadow_absorb;
+    bool shadow_cuts; // the depth program carries the surface's alpha
+    // A lit-surface variant carrying it did not build, so its materials draw as though they had
+    // no hook -- surface, bounds and shadow alike -- rather than half of them following it.
+    bool broken;
 } ShaderHook;
 
-// Copies the desc's sources, test-compiles the hook into the full lit-surface variant, builds its
+// Copies the desc's sources, test-compiles the hook into the lit-surface stages, builds its
 // shadow programs, and registers it with the engine, which frees it. NULL, the compiler's message
-// logged, when it does not compile or the desc carries neither function.
+// logged, when it does not compile, when it has an offset whose shadow programs do not build, or
+// when the desc carries neither function.
 ShaderHook* create_shader_hook(struct Engine* engine, const ShaderHookDesc* desc);
+
+// The hook a material's draws follow: `hook`, or NULL for none or a broken one.
+static inline const ShaderHook* shader_hook_live(const ShaderHook* hook) {
+    return hook && !hook->broken ? hook : NULL;
+}
 
 #endif // _SHADER_HOOK_H_

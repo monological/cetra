@@ -1955,6 +1955,8 @@ static ShadowTileSeen tile_seen_of(const DrawItem* item) {
         hash = fnv1a64(hash, &mat->shader_params, sizeof(mat->shader_params));
     }
     seen.shape = hash == FNV1A64_BASIS ? 0 : hash;
+    const ShaderHook* hook = shader_hook_live(mat->shader_hook);
+    seen.offset_bound = hook && hook->offset ? hook->offset_bound : 0.0f;
     return seen;
 }
 
@@ -1986,9 +1988,9 @@ static bool tiles_seen_same_items(const ShadowSystem* ss, const DrawList* list) 
 
 // Draw again, where it stands and where it stood, every item a kept face would draw otherwise
 // than it did: a material moves a caster in or out of what the faces keep, or between still and
-// moving, or changes its cut-out, with nothing in the graph changing -- its opacity, its shadow
-// role, its wind, its cachedShadowWind -- and a face drawn before would keep it as it was, or
-// leave it out for good. False when one has no bound, for which every face is drawn again.
+// moving, or changes its cut-out or its hook, with nothing in the graph changing -- its opacity,
+// its shadow role, its wind, its cachedShadowWind -- and a face drawn before would keep it as it
+// was, or leave it out for good. False when one has no bound, for which every face is drawn again.
 static bool tiles_mark_changed_looks(ShadowSystem* ss, const DrawList* list, const CullView* view) {
     for (size_t i = 0; list && i < list->count; ++i) {
         const DrawItem* item = &list->items[i];
@@ -1999,6 +2001,10 @@ static bool tiles_mark_changed_looks(ShadowSystem* ss, const DrawList* list, con
         AABB box;
         if (!draw_item_bounds(item, view, &box))
             return false;
+        // The bound as the faces last drew it, when that was wider: a hook whose offset reached
+        // further left its shadow out there, and the new bound alone would not reach it.
+        if (then->offset_bound > now.offset_bound)
+            aabb_expand(&box, then->offset_bound - now.offset_bound);
         for (int when = 0; when < 2; ++when) {
             vec3 lo = GLM_VEC3_ZERO_INIT, hi = GLM_VEC3_ZERO_INIT;
             aabb_transform(box.min, box.max,

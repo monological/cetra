@@ -128,6 +128,25 @@ ShaderProgram* create_program_from_paths(const char* name, const char* vert_path
     return program;
 }
 
+// `source` compiled as a `type` stage and attached to `program`, which then owns it; false, logged
+// as `what`, when there is no source or it does not compile, and a stage that did not compile is
+// freed here, since nothing else holds it.
+static bool _attach_stage(ShaderProgram* program, ShaderType type, const char* source,
+                          const char* what) {
+    if (!source) {
+        log_error("%s shader source is NULL", what);
+        return false;
+    }
+    Shader* shader = create_shader(type, source);
+    if (shader && compile_shader(shader)) {
+        attach_shader_to_program(program, shader);
+        return true;
+    }
+    free_shader(shader);
+    log_error("%s shader compilation failed", what);
+    return false;
+}
+
 ShaderProgram* create_program_from_source(const char* name, const char* vert_source,
                                           const char* frag_source, const char* geo_source) {
 
@@ -136,57 +155,22 @@ ShaderProgram* create_program_from_source(const char* name, const char* vert_sou
         return NULL;
     }
 
-    GLboolean success = GL_TRUE;
-
     ShaderProgram* program = create_program(name);
     if (program == NULL) {
         log_error("Failed to create program by name %s", name);
         return NULL;
     }
 
-    // Create and compile the vertex shader
-    if (vert_source != NULL) {
-        Shader* vertex_shader = create_shader(VERTEX_SHADER, vert_source);
-        if (vertex_shader && compile_shader(vertex_shader)) {
-            attach_shader_to_program(program, vertex_shader);
-        } else {
-            log_error("Vertex shader compilation failed");
-            success = GL_FALSE;
-        }
-    } else {
-        log_error("Vertex shader source is NULL");
-        success = GL_FALSE;
-    }
-
-    // Create and compile the fragment shader
-    if (frag_source != NULL) {
-        Shader* fragment_shader = create_shader(FRAGMENT_SHADER, frag_source);
-        if (fragment_shader && compile_shader(fragment_shader)) {
-            attach_shader_to_program(program, fragment_shader);
-        } else {
-            log_error("Fragment shader compilation failed");
-            success = GL_FALSE;
-        }
-    } else {
-        log_error("Fragment shader source is NULL");
-        success = GL_FALSE;
-    }
-
-    // Create and compile the geometry shader, if source is provided
-    if (geo_source != NULL) {
-        Shader* geometry_shader = create_shader(GEOMETRY_SHADER, geo_source);
-        if (geometry_shader && compile_shader(geometry_shader)) {
-            attach_shader_to_program(program, geometry_shader);
-        } else {
-            log_error("Geometry shader compilation failed");
-            success = GL_FALSE;
-        }
-    }
+    // Every stage is compiled even after one fails, so one build reports every stage's errors.
+    bool success = _attach_stage(program, VERTEX_SHADER, vert_source, "Vertex");
+    success = _attach_stage(program, FRAGMENT_SHADER, frag_source, "Fragment") && success;
+    if (geo_source != NULL)
+        success = _attach_stage(program, GEOMETRY_SHADER, geo_source, "Geometry") && success;
 
     // Link the shader program
     if (success && !link_program(program)) {
         log_error("Shader program linking failed");
-        success = GL_FALSE;
+        success = false;
     }
 
     // Setup uniforms and other initializations as needed
@@ -639,18 +623,34 @@ static bool _pbr_variant_sources(PbrFamily family, unsigned features, const Shad
     return false;
 }
 
+static bool _stage_compiles(ShaderType type, const char* source) {
+    Shader* shader = create_shader(type, source);
+    const bool ok = shader && compile_shader(shader);
+    free_shader(shader);
+    return ok;
+}
+
 bool pbr_hook_compiles(const ShaderHook* hook) {
-    char *vert, *frag;
-    if (!_pbr_variant_sources(PBR_FAMILY_RIGID, PBR_FEAT_ALL, hook, &vert, &frag))
-        return false;
-    Shader* stages[] = {create_shader(VERTEX_SHADER, vert), create_shader(FRAGMENT_SHADER, frag)};
+    // Both ends of the mask, since a hook naming something a feature declares -- a sampler, or a
+    // chunk the host includes only under the feature's bit -- compiles at every feature and not at
+    // none, and a material's variant may be either. The skinned vertex stage too when it moves
+    // vertices; the families share the fragment stage.
+    const unsigned ends[] = {PBR_FEAT_ALL, 0u};
     bool ok = true;
-    for (size_t i = 0; i < 2; i++) {
-        ok = ok && stages[i] && compile_shader(stages[i]);
-        free_shader(stages[i]);
+    for (size_t e = 0; ok && e < sizeof(ends) / sizeof(ends[0]); e++) {
+        for (int family = PBR_FAMILY_RIGID; ok && family <= PBR_FAMILY_SKINNED; family++) {
+            const bool skinned = family == PBR_FAMILY_SKINNED;
+            if (skinned && !hook->offset)
+                continue;
+            char *vert, *frag;
+            if (!_pbr_variant_sources((PbrFamily)family, ends[e], hook, &vert, &frag))
+                return false;
+            ok = _stage_compiles(VERTEX_SHADER, vert) &&
+                 (skinned || _stage_compiles(FRAGMENT_SHADER, frag));
+            free(vert);
+            free(frag);
+        }
     }
-    free(vert);
-    free(frag);
     return ok;
 }
 
@@ -924,7 +924,7 @@ ShaderProgram* create_shadow_depth_program() {
     return program;
 }
 
-ShaderProgram* create_shadow_hook_program(const struct ShaderHook* hook, bool absorb) {
+ShaderProgram* create_shadow_hook_program(const struct ShaderHook* hook, bool absorb, bool cut) {
     if (!hook)
         return NULL;
     // The offset into the vertex stage the two shadow programs share; the surface's alpha into
@@ -932,12 +932,12 @@ ShaderProgram* create_shadow_hook_program(const struct ShaderHook* hook, bool ab
     // a cut. The surface define reaches the vertex stage as well, which hands the hook its world
     // position: a varying one stage declares and the other does not fails the link.
     const unsigned parts = _hook_parts(hook);
-    const unsigned cut = absorb ? 0u : parts & HOOK_PART_SURFACE;
+    const unsigned surface = !absorb && cut ? parts & HOOK_PART_SURFACE : 0u;
     char* vert = _hooked_stage(shadow_depth_vert_shader_str, NULL, hook,
-                               (parts & HOOK_PART_OFFSET) | cut, parts & HOOK_PART_OFFSET);
+                               (parts & HOOK_PART_OFFSET) | surface, parts & HOOK_PART_OFFSET);
     char* frag =
         _hooked_stage(absorb ? shadow_absorb_frag_shader_str : shadow_depth_frag_shader_str, NULL,
-                      hook, cut, cut);
+                      hook, surface, surface);
     char name[PBR_VARIANT_NAME_MAX];
     snprintf(name, sizeof(name), "%s-h%u", absorb ? "shadow_absorb" : "shadow_depth", hook->id);
     ShaderProgram* program =
@@ -945,8 +945,8 @@ ShaderProgram* create_shadow_hook_program(const struct ShaderHook* hook, bool ab
     free(vert);
     free(frag);
     if (!program)
-        log_error("shader hook '%s': its %s program does not build, so it casts as the plain one",
-                  hook->name, name);
+        log_error("shader hook '%s': its %s program%s does not build", hook->name, name,
+                  surface ? " with the surface's alpha" : "");
     return program;
 }
 
@@ -1500,7 +1500,7 @@ ShaderProgram* create_ssgi_composite_program() {
 static ShaderProgram* create_post_program(const char* name, const char* frag_src) {
     ShaderProgram* program = create_program_from_source(name, post_vert_shader_str, frag_src, NULL);
     if (!program)
-        log_error("Failed to initialize %s shader program", name);
+        log_error("Failed to initialize %s shader program", name ? name : "?");
     return program;
 }
 

@@ -222,6 +222,7 @@ typedef struct ShadowTileSeen {
     // The cutoff, UV transform and albedo of an alpha-tested caster, and the hook and its params
     // of one drawn through its hook (spec 13.29), hashed; else 0
     uint64_t shape;
+    float offset_bound; // its hook's, metres, which its bound grew by; 0 without an offset hook
     uint8_t lane;
     uint8_t flags;
 } ShadowTileSeen;
