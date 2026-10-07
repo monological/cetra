@@ -591,6 +591,8 @@ bool program_accepts_draw_mode(const ShaderProgram* program, GLenum draw_mode) {
 // The line in pbr_frag where a surface hook's GLSL goes (spec 13.29): after every declaration the
 // hook may name, before main().
 #define PBR_SURFACE_HOOK_MARKER "// CETRA_SURFACE_HOOK_CHUNK"
+// And in object_position.glsl, where an offset hook's goes, in every stage that includes it.
+#define PBR_OFFSET_HOOK_MARKER "// CETRA_OFFSET_HOOK_CHUNK"
 
 // `*source` with `chunk` spliced at `marker`, the old source freed. False, logged, on a failure.
 static bool _splice_hook(char** source, const char* marker, const char* chunk) {
@@ -617,9 +619,13 @@ static ShaderProgram* _create_pbr_variant(const char* name, PbrFamily family, un
     // Defaulted on in the uber-shader it would call a function nobody supplied.
     // So it is a define of its own that arrives in the same string as its source,
     // from this one function -- which cannot hand the shader one without the other.
-    char defines[128];
-    snprintf(defines, sizeof(defines), "#define CETRA_PBR_FEATURES %u\n%s", features,
+    // The mask into both stages, a hook's halves each into the stage it belongs to: the offset
+    // runs where the position is made, the surface where it is shaded.
+    char frag_defines[128], vert_defines[128];
+    snprintf(frag_defines, sizeof(frag_defines), "#define CETRA_PBR_FEATURES %u\n%s", features,
              hook && hook->surface ? "#define CETRA_SURFACE_HOOK 1\n" : "");
+    snprintf(vert_defines, sizeof(vert_defines), "#define CETRA_PBR_FEATURES %u\n%s", features,
+             hook && hook->offset ? "#define CETRA_OFFSET_HOOK 1\n" : "");
 
     // The families differ in the VERTEX stage and nowhere else: same pbr_frag,
     // same mask, same gates. That is what makes a second family an argument here
@@ -627,15 +633,17 @@ static ShaderProgram* _create_pbr_variant(const char* name, PbrFamily family, un
     // Into BOTH stages: the fur bit gates vertex code too, and a vertex stage that never saw the
     // mask would default it to the full set and carry that code into every variant.
     char* vert = shader_source_with_defines(
-        family == PBR_FAMILY_SKINNED ? pbr_skinned_vert_shader_str : pbr_vert_shader_str, defines);
-    char* frag = shader_source_with_defines(pbr_frag_shader_str, defines);
-    if (vert && frag && hook && hook->surface &&
-        !_splice_hook(&frag, PBR_SURFACE_HOOK_MARKER, hook->surface)) {
+        family == PBR_FAMILY_SKINNED ? pbr_skinned_vert_shader_str : pbr_vert_shader_str,
+        vert_defines);
+    char* frag = shader_source_with_defines(pbr_frag_shader_str, frag_defines);
+    bool spliced = true;
+    if (vert && frag && hook && hook->surface)
+        spliced = _splice_hook(&frag, PBR_SURFACE_HOOK_MARKER, hook->surface);
+    if (spliced && vert && frag && hook && hook->offset)
+        spliced = _splice_hook(&vert, PBR_OFFSET_HOOK_MARKER, hook->offset);
+    if (!spliced)
         log_error("PBR variant %s: hook '%s' could not be spliced", name, hook->name);
-        free(vert);
-        return NULL;
-    }
-    if (!vert || !frag) {
+    if (!spliced || !vert || !frag) {
         free(vert);
         free(frag);
         return NULL;
@@ -669,7 +677,10 @@ static ShaderProgram* _create_pbr_variant(const char* name, PbrFamily family, un
     // `instanced` is not set here and never was: setup_program_uniforms resolves
     // it from the linked program, for every program in the engine.
     program->fur_shells = family == PBR_FAMILY_SKINNED && (features & PBR_FEAT_FUR);
-    program->depth_prepass_safe = !program->fur_shells;
+    // An offset hook moves the position too (spec 13.29), and the lean prepass has no hook in it,
+    // so the surface would lose to its own prepass depth. The masked prepass runs this program
+    // and needs no exemption.
+    program->depth_prepass_safe = !program->fur_shells && !(hook && hook->offset);
 
     // Parsed by scripts/gates.py::_PBR_VARIANT. It is the only way from outside
     // to see which variant a scene resolved to, because a correct variant and
@@ -896,6 +907,40 @@ ShaderProgram* create_shadow_depth_program() {
         return NULL;
     }
 
+    return program;
+}
+
+ShaderProgram* create_shadow_hook_program(const struct ShaderHook* hook, bool absorb) {
+    if (!hook)
+        return NULL;
+    // The offset into the vertex stage the two shadow programs share; the surface's alpha into
+    // the depth program only, since the absorb program's coverage is a translucency rather than
+    // a cut.
+    const bool surface = !absorb && hook->surface;
+    // The surface define reaches the vertex stage as well, which hands the hook its world
+    // position: a varying one stage declares and the other does not fails the link.
+    char vert_defines[96], frag_defines[64];
+    snprintf(vert_defines, sizeof(vert_defines), "%s%s",
+             hook->offset ? "#define CETRA_OFFSET_HOOK 1\n" : "",
+             surface ? "#define CETRA_SURFACE_HOOK 1\n" : "");
+    snprintf(frag_defines, sizeof(frag_defines), "%s",
+             surface ? "#define CETRA_SURFACE_HOOK 1\n" : "");
+    char* vert = shader_source_with_defines(shadow_depth_vert_shader_str, vert_defines);
+    char* frag = shader_source_with_defines(
+        absorb ? shadow_absorb_frag_shader_str : shadow_depth_frag_shader_str, frag_defines);
+    bool spliced = true;
+    if (vert && frag && hook->offset)
+        spliced = _splice_hook(&vert, PBR_OFFSET_HOOK_MARKER, hook->offset);
+    if (spliced && vert && frag && surface)
+        spliced = _splice_hook(&frag, PBR_SURFACE_HOOK_MARKER, hook->surface);
+    char name[PBR_VARIANT_NAME_MAX];
+    snprintf(name, sizeof(name), "%s-h%u", absorb ? "shadow_absorb" : "shadow_depth", hook->id);
+    ShaderProgram* program =
+        spliced && vert && frag ? create_program_from_source(name, vert, frag, NULL) : NULL;
+    free(vert);
+    free(frag);
+    if (!program)
+        log_error("shader hook '%s': its %s program does not build", hook->name, name);
     return program;
 }
 

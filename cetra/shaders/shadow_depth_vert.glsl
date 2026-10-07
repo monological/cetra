@@ -12,6 +12,9 @@ out vec2 TexCoords; // for the alpha test on foliage (material.h foliage_shadows
 // surface is shaded. A caster whose alpha comes from COLOR_0 rather than from
 // its albedo map used to cast as if it were solid.
 centroid out vec4 VertexColor;
+#ifdef CETRA_SURFACE_HOOK
+out vec3 HookWorldPos; // where a surface hook's caster is, for its alpha (spec 13.29)
+#endif
 
 uniform mat4 model;
 uniform mat4 lightSpaceMatrix;
@@ -38,5 +41,8 @@ void main()
 
     TexCoords = aTexCoords;
     VertexColor = aColor;
+#ifdef CETRA_SURFACE_HOOK
+    HookWorldPos = (mModel * localPos).xyz;
+#endif
     gl_Position = lightSpaceMatrix * mModel * localPos;
 }

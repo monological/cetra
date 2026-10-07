@@ -263,6 +263,10 @@ ShaderProgram* create_wind_probe_program();
 ShaderProgram* create_shape_program();
 ShaderProgram* create_xyz_program();
 ShaderProgram* create_shadow_depth_program();
+// The shadow depth program (or, with `absorb`, the translucent absorb program) carrying a surface
+// hook (spec 13.29): its offset where the caster is placed, and in the depth program its alpha
+// where the caster is cut. Built by the shadow system on a hooked caster's first draw.
+ShaderProgram* create_shadow_hook_program(const struct ShaderHook* hook, bool absorb);
 // Position only, for the depth prepass (spec 11.30). Shares the object-position
 // chunk with pbr_vert so the two agree to the bit, which GL_LEQUAL against its
 // output depends on.

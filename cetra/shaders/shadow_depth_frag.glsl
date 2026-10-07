@@ -24,6 +24,19 @@ uniform float uvRotation;
 
 #include "alpha_coverage.glsl"
 
+// A surface hook's caster (spec 13.29): its alpha cuts the shadow as it cuts the surface. Only
+// the alpha is kept here, so the hook is handed what this stage has -- its coordinate, its
+// world position and its vertex colour -- and placeholders for what it does not: no view, so
+// a straight-down view direction and normal, and white for the albedo. A material carrying no
+// albedo map is cut by the hook alone.
+#ifdef CETRA_SURFACE_HOOK
+in vec3 HookWorldPos;
+uniform float time;
+uniform int tsmHasAlbedo;
+#include "surface_hook.glsl"
+// CETRA_SURFACE_HOOK_CHUNK
+#endif
+
 // Deliberately NOT the whole of pbr_frag's chain, and the two omissions are
 // different in kind.
 //
@@ -44,9 +57,22 @@ void main()
                             TexCoords.x * s + TexCoords.y * c);
         vec2 uv = rotated * uvScale + uvOffset;
 
+#ifdef CETRA_SURFACE_HOOK
+        float alpha = tsmHasAlbedo > 0 ? texture(albedoTex, uv).a : 1.0;
+#else
         float alpha = texture(albedoTex, uv).a;
+#endif
         if (vertexColorExists > 0)
             alpha *= VertexColor.a;
+#ifdef CETRA_SURFACE_HOOK
+        vec4 hookVertexColor = vertexColorExists > 0 ? VertexColor : vec4(1.0);
+        CetraSurface hooked =
+            cetraSurfaceStart(uv, HookWorldPos, vec3(0.0, 1.0, 0.0), vec3(0.0, 1.0, 0.0),
+                              hookVertexColor, vec3(1.0), alpha, vec3(0.0, 1.0, 0.0), 1.0, 0.0,
+                              1.0, vec3(0.0));
+        cetraSurface(hooked);
+        alpha = hooked.alpha;
+#endif
         // Through the shared rule, with a2c 0: a shadow map is single-sampled,
         // so the binary branch is the only one that applies and this is exactly
         // the `alpha < alphaCutoff` it replaces. Stated once anyway -- the

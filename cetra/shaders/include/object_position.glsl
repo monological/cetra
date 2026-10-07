@@ -78,8 +78,27 @@
 // inside the `if (skinned)` branch, so the split reads as forced by skinning
 // when it is really forced by one local's scope. Hoisting that declaration makes
 // the two entry points interchangeable.
+// An app's offset hook (spec 13.29), the fourth displacer, in a hooked variant only. Its GLSL
+// is spliced in at the marker by the variant builder, into every program that includes this
+// chunk for that hook, and it is handed the vertex at REST and the clock this call was given --
+// so the previous-frame position below runs it one frame back, as it runs wind. The unhooked
+// text is the line it always was: the define is the whole difference, and preprocesses out.
+#ifdef CETRA_OFFSET_HOOK
+struct CetraVertex {
+    vec3 rest;  // object space, before any pose or displacement
+    vec2 uv;    // UV0
+    float time; // seconds; one frame back for the previous position
+};
+// CETRA_OFFSET_HOOK_CHUNK
+#endif
+
 vec3 cetra_local_displacement(vec3 rest, vec2 uv0, vec2 uv1, float t, mat4 model, vec3 eye) {
+#ifdef CETRA_OFFSET_HOOK
+    return windOffset(rest, uv0, uv1, t, model[3].xyz) + cetraMorphOffset(rest, model, eye) +
+           cetraOffset(CetraVertex(rest, uv0, t));
+#else
     return windOffset(rest, uv0, uv1, t, model[3].xyz) + cetraMorphOffset(rest, model, eye);
+#endif
 }
 
 vec4 cetra_local_position(vec3 rest, mat4 bone, bool isSkinned, vec2 uv0, vec2 uv1, float t,
