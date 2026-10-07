@@ -95,6 +95,7 @@ MATERIALS = {
     "hooks_card": ([0.75, 0.6, 0.35, 1.0], 0.7, 0.5),
     "hooks_dome": ([0.3, 0.5, 0.7, 1.0], 0.5),
     "hooks_static": ([0.02, 0.02, 0.02, 1.0], 0.3),
+    "hooks_pushed": ([0.8, 0.55, 0.1, 1.0], 0.6),
     "hooks_post": ([0.25, 0.22, 0.2, 1.0], 0.8),
 }
 
@@ -127,6 +128,9 @@ PARAM_B = [0.02, 0.6, 0.02, 0.0]
 HOLES = [3.0, 2.0, 0.3, 0.0]
 # The dome: its height at the middle in metres, and the grid's width it rises across.
 DOME = [0.6, 1.6, 0.0, 0.0]
+# The pushed quad: built at PUSHED_Z, facing the eye, and moved PUSH metres back by its hook.
+PUSHED_Z = 0.6
+PUSH = [0.5, 0.0, 0.0, 0.0]
 
 PIECES = [
     box("floor", "hooks_floor", (-7.0, -0.1, -5.0), (7.0, 0.0, 4.0)),
@@ -138,6 +142,9 @@ PIECES = [
     box("param_b", "hooks_param_b", (0.2, 0.0, -0.5), (1.0, 0.8, 0.3)),
     box("card", "hooks_card", (1.6, 0.0, -0.62), (2.8, 1.4, -0.58)),
     piece("dome", "grid", "hooks_dome", (4.2, 0.005, -0.4), (1.6, 1.0, 1.6)),
+    # Pushed half a metre back from where it was built, away from the eye: the one direction
+    # in which a lean depth prepass that never ran the offset would hide the whole surface.
+    piece("pushed", "quad", "hooks_pushed", (-0.2, 2.3, PUSHED_Z), (0.6, 0.6, 1.0)),
     piece("static", "quad", "hooks_static",
           ((STATIC_LO[0] + STATIC_HI[0]) / 2, (STATIC_LO[1] + STATIC_HI[1]) / 2, STATIC_Z),
           (STATIC_HI[0] - STATIC_LO[0], STATIC_HI[1] - STATIC_LO[1], 1.0)),
@@ -250,6 +257,16 @@ vec3 cetraOffset(CetraVertex v)
 {
     vec2 d = v.uv * 2.0 - 1.0;
     return vec3(0.0, dome.x * max(1.0 - dot(d, d), 0.0), 0.0);
+}
+""",
+    "hooks_offset_push.glsl": """// An offset hook moving its surface `push.x` metres down -z (spec 13.29's fixture): the
+// quad it is on faces +z, toward the eye, so this is straight away from it.
+
+uniform vec4 push;
+
+vec3 cetraOffset(CetraVertex v)
+{
+    return vec3(0.0, 0.0, -push.x);
 }
 """,
     "hooks_surface_dome.glsl": """// The dome's surface (spec 13.29's fixture): the normal of the height its offset raises, so
@@ -419,6 +436,9 @@ def scene():
                            "offsetShader": asset_ref("hooks_offset_dome.glsl"),
                            "offsetBound": DOME[0],
                            "shaderParams": {"dome": DOME}},
+            "hooks_pushed": {"offsetShader": asset_ref("hooks_offset_push.glsl"),
+                             "offsetBound": PUSH[0],
+                             "shaderParams": {"push": PUSH}},
         },
         "camera": CAMERA,
     }

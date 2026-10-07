@@ -17,7 +17,8 @@
     7,
     8,
     9,
-    10
+    10,
+    11
    ]
   }
  ],
@@ -149,8 +150,22 @@
    ]
   },
   {
-   "name": "static",
+   "name": "pushed",
    "mesh": 9,
+   "translation": [
+    -0.2,
+    2.3,
+    0.6
+   ],
+   "scale": [
+    0.6,
+    0.6,
+    1.0
+   ]
+  },
+  {
+   "name": "static",
+   "mesh": 10,
    "translation": [
     -3.9000000000000004,
     2.6,
@@ -164,7 +179,7 @@
   },
   {
    "name": "post",
-   "mesh": 10,
+   "mesh": 11,
    "translation": [
     -3.95,
     1.8,
@@ -305,6 +320,20 @@
    ]
   },
   {
+   "name": "pushed",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 8,
+      "NORMAL": 9,
+      "TEXCOORD_0": 10
+     },
+     "indices": 11,
+     "material": 10
+    }
+   ]
+  },
+  {
    "name": "static",
    "primitives": [
     {
@@ -328,7 +357,7 @@
       "TEXCOORD_0": 2
      },
      "indices": 3,
-     "material": 10
+     "material": 11
     }
    ]
   }
@@ -465,6 +494,19 @@
     ],
     "metallicFactor": 0.0,
     "roughnessFactor": 0.3
+   }
+  },
+  {
+   "name": "hooks_pushed",
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     0.8,
+     0.55,
+     0.1,
+     1.0
+    ],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 0.6
    }
   },
   {
