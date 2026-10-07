@@ -97,7 +97,10 @@ typedef struct Light {
     // SETTINGS: plain stores. Write them directly, at any time.
     LightType type;
     vec3 color;
-    vec3 specular;
+    // The share of the light its reflective lobes take, 1 = all of it, as physics has it. 0 lights
+    // diffusely only, which is right for a light standing in for a lit surface whose reflection
+    // is drawn already -- a screen's or a lampshade's glow, seen in SSR and the probes.
+    float specular;
     vec3 ambient;
 
     // Where the inverse-square falloff is windowed to zero, and the cull radius
@@ -211,6 +214,9 @@ float light_cull_radius(const struct Light* light);
 // Peak rather than luminance because it answers "does this light still do anything",
 // where a saturated blue must not be discounted for having no green in it.
 float light_effective_intensity(const struct Light* light);
+
+// `specular` as a shader takes it: a share, so 0..1 whatever was written.
+float light_specular_share(const struct Light* light);
 
 // An orthonormal frame from an authored direction and an authored roll
 // reference. Always buildable -- a degenerate `dir` falls back to -Y and a

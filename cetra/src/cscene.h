@@ -119,6 +119,8 @@ typedef struct CSceneLight {
     float source_radius;
     float source_length;
     float shadow_near;
+    bool has_specular;
+    float specular; // the share its reflective lobes take, 0..1 (Light.specular)
     // IESNA LM-63 photometric profile, resolved against the scene file's own
     // directory like `models` and `environment.hdr`. Inline rather than a
     // pointer because cscene_free is a bare free(desc) and the struct must stay

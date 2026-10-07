@@ -75,6 +75,7 @@ uniform int sunAvailable;
 // Scene radiance, NOT pre-exposed, with the atmosphere's transmittance already folded into
 // it by the sky. Multiplied by preExposure where it is used; view.glsl is the authority.
 uniform vec3 sunRadiance;
+uniform float sunSpecular; // the share of it the sun's glitter takes (Light.specular)
 // Cascade slot of the sun, or -1 where it casts nothing. Gates both the shadow lookup and
 // the deck, which names its occluded light the same way.
 uniform int sunShadowSlot;
@@ -1550,7 +1551,7 @@ void main() {
         // glitter brighten toward grazing along with the rest of the interface.
         vec3 Hv = normalize(V + Lv);
         float Fs = fresnelDielectric(dot(V, Hv), waterIor);
-        color += Fs * glitter * sunVis * sunRadiance * preExposure;
+        color += Fs * glitter * sunVis * sunSpecular * sunRadiance * preExposure;
     }
 
     // Foam sits ON the interface, so it replaces both halves rather than being

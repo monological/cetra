@@ -1541,9 +1541,9 @@ static void process_ai_lights(const struct aiScene* scene, Light*** lights, size
         glm_vec3_copy(
             (vec3){ai_light->mColorDiffuse.r, ai_light->mColorDiffuse.g, ai_light->mColorDiffuse.b},
             light->color);
-        glm_vec3_copy((vec3){ai_light->mColorSpecular.r, ai_light->mColorSpecular.g,
-                             ai_light->mColorSpecular.b},
-                      light->specular);
+        // mColorSpecular is not carried: it is a fixed-function colour, which no format's
+        // physical light has, and assimp sets it to the diffuse one anyway. A light's specular
+        // share stays at its physical default.
 
         // aiLight's attenuation triple is read by nothing here. It described the
         // fixed-function 1/(c + l*d + q*d^2) falloff, which spec 9.9 replaced
@@ -1637,7 +1637,6 @@ static void process_ai_lights(const struct aiScene* scene, Light*** lights, size
         float peak = fmaxf(light->color[0], fmaxf(light->color[1], light->color[2]));
         if (peak > 1.0f) {
             glm_vec3_divs(light->color, peak, light->color);
-            glm_vec3_divs(light->specular, peak, light->specular);
             light->intensity *= peak;
         }
 

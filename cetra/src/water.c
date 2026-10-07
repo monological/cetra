@@ -3038,6 +3038,7 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
     uniform_set_vec3(u, "sunDir", (const float*)&sun_dir);
     uniform_set_int(u, "sunAvailable", sun ? 1 : 0);
     uniform_set_vec3(u, "sunRadiance", (const float*)&sun_radiance);
+    uniform_set_float(u, "sunSpecular", sun ? light_specular_share(sun) : 1.0f);
 
     /*
      * The cascades, for the glitter's shadow. csm.glsl's CSM_OUTERMOST_PCF path reads only
