@@ -261,11 +261,14 @@ static void walls(Kit* kit) {
     }
     door_shut(kit, &WALLS[HW_HALL_E_BEDROOM], O_BEDROOM_DOOR);
     door_shut(kit, &WALLS[HW_HALL_W_STAIR], O_STAIR_DOOR);
-    door_shut(kit, &WALLS[HW_HALL_W_STAIR], O_BASEMENT_DOOR);
-    // The front door's threshold, under the leaf.
+    // The front door's threshold, under the leaf, and the basement door's (spec 13.31).
     const KitOpening* door = &WALLS[HW_FRONT].openings[O_FRONT_DOOR];
     kit_frame_box(kit, &KIT_WORLD, MAT_MOULDING, door->from, door->to, FLOOR_Y - 0.02f,
                   FLOOR_Y + 0.012f, HOUSE_FRONT_Z - CORNER - 0.04f, HOUSE_FRONT_Z + CORNER, false);
+    const KitOpening* cellar = &WALLS[HW_HALL_W_STAIR].openings[O_BASEMENT_DOOR];
+    kit_frame_box(kit, &KIT_WORLD, MAT_MOULDING, HALL_X0 - 0.5f * INT_WALL - 0.01f,
+                  HALL_X0 + 0.5f * INT_WALL + 0.01f, FLOOR_Y - 0.02f, FLOOR_Y + 0.012f,
+                  cellar->from, cellar->to, false);
 }
 
 /*
@@ -991,6 +994,23 @@ bool home_bath_door(Door* door, Engine* engine, Scene* scene, EntityManager* em,
     leaf.bottom = FLOOR_Y + 0.02f;
     return door_build(door, engine, scene, em, physics, "bath_door", door_leaf_panelled, &hinge,
                       &leaf, DOOR_THICK, 1.6f);
+}
+
+// The basement's (spec 13.31), hung on its front jamb against the stairwell's face of the wall,
+// so it swings in over the landing and stands open along the partition, clear of the flight. Out
+// into the hall it would sweep where whoever opens it is standing.
+bool home_basement_door(Door* door, Engine* engine, Scene* scene, EntityManager* em,
+                        PhysicsWorld* physics) {
+    KitOpening opening = WALLS[HW_HALL_W_STAIR].openings[O_BASEMENT_DOOR];
+    // Turned a quarter the other way, so a runs toward +z from the hinge and d into the stairwell.
+    const float x = HALL_X0 - 0.5f * INT_WALL + 0.5f * DOOR_THICK + 0.005f;
+    const KitFrame hinge = {{x, 0.0f, opening.from}, -0.5f * GLM_PIf};
+    opening.to -= opening.from;
+    opening.from = 0.0f;
+    KitOpening leaf = kit_opening_grow(&opening, -DOOR_CLEARANCE);
+    leaf.bottom = FLOOR_Y + 0.02f;
+    return door_build(door, engine, scene, em, physics, "basement_door", door_leaf_panelled, &hinge,
+                      &leaf, DOOR_THICK, 1.55f);
 }
 
 float home_outside_distance(const vec3 p) {

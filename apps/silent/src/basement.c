@@ -12,8 +12,24 @@
 #define FLANGE      0.015f
 #define POST_R      0.045f
 
+// The flight down: steep, as a cellar's is, and every riser under the player's step.
+#define CELLAR_RISERS 11
+#define CELLAR_RISE   ((FLOOR_Y - BASEMENT_Y) / (float)CELLAR_RISERS)
+#define CELLAR_GOING  0.23f
+#define TREAD_T       0.035f
+#define NOSING        0.02f
+#define STRINGER_W    0.05f
+#define STRINGER_UP 0.015f  // its top edge over the line of the nosings: under the open door's leaf
+#define STRINGER_DOWN 0.26f // and its foot under it
+#define RAIL_H        0.86f // a handrail's top over the nosings
+#define RAIL_T        0.035f
+#define RAIL_D        0.07f
+
 // The posts under the beam, between the irradiance probes' rows at every half metre of z.
 static const float POSTS_Z[] = {12.0f, 15.0f, 18.0f};
+// And the two under the stair's open side, which the rail runs between. The lower stands a
+// tread short of the foot, so the way round into the basement there is a body's width.
+static const float STAIR_POSTS_X[] = {-3.30f, -4.03f};
 
 /*
  * The foundation from the slab's foot to the sill: damp to the tide line and dirty rubble over
@@ -116,10 +132,75 @@ static void beam(Kit* kit) {
     }
 }
 
+// The height of the flight's pitch at x: the line through every tread's front edge.
+static float nosing_y(float x) {
+    return FLOOR_Y + (x - CELLAR_HEAD_X) * (CELLAR_RISE / CELLAR_GOING);
+}
+
+// A rail of the pitch from x0 to x1, its top RAIL_H over the nosings, from z0 to z1.
+static void raked_rail(Kit* kit, float x0, float x1, float z0, float z1) {
+    const vec2 rail[4] = {{x0, nosing_y(x0) + RAIL_H},
+                          {x1, nosing_y(x1) + RAIL_H},
+                          {x1, nosing_y(x1) + RAIL_H - RAIL_D},
+                          {x0, nosing_y(x0) + RAIL_H - RAIL_D}};
+    kit_frame_extrude(kit, &KIT_WORLD, MAT_JOIST, rail, 4, z0, z1);
+}
+
+/*
+ * The stair down: a steep cellar flight going west from the landing inside the door, open
+ * treads housed between two stringers, the last riser landing short of the west wall, where the
+ * basement opens to the south under the floor. Each tread's body is one rise deep, so what is
+ * under the flight is not filled in. Nothing stops a step off the open side but the rail's
+ * posts: above the last tread a body standing on the flight still reaches the floor overhead,
+ * whose own bodies keep it there.
+ */
+static void stair(Kit* kit) {
+    const KitFrame* w = &KIT_WORLD;
+    const float z0 = STAIRWELL_Z0 + STRINGER_W, z1 = CELLAR_Z1 - STRINGER_W;
+    for (int k = 1; k < CELLAR_RISERS; k++) {
+        const float y = FLOOR_Y - (float)k * CELLAR_RISE;
+        const float x1 = CELLAR_HEAD_X - (float)(k - 1) * CELLAR_GOING, x0 = x1 - CELLAR_GOING;
+        kit_frame_box(kit, w, MAT_WOOD, x0 - NOSING, x1, y - TREAD_T, y, z0, z1, false);
+        kit_frame_box(kit, w, KIT_COLLIDER_ONLY, x0, x1, y - CELLAR_RISE, y, z0, z1, true);
+    }
+
+    // The stringers, cut plumb at the last riser and level on the floor.
+    const float foot = CELLAR_HEAD_X - (float)(CELLAR_RISERS - 1) * CELLAR_GOING;
+    const float heel =
+        CELLAR_HEAD_X + (BASEMENT_Y + STRINGER_DOWN - FLOOR_Y) * (CELLAR_GOING / CELLAR_RISE);
+    const vec2 stringer[5] = {{CELLAR_HEAD_X, nosing_y(CELLAR_HEAD_X) + STRINGER_UP},
+                              {foot, nosing_y(foot) + STRINGER_UP},
+                              {foot, BASEMENT_Y},
+                              {heel, BASEMENT_Y},
+                              {CELLAR_HEAD_X, nosing_y(CELLAR_HEAD_X) - STRINGER_DOWN}};
+    kit_frame_extrude(kit, w, MAT_JOIST, stringer, 5, STAIRWELL_Z0, z0);
+    kit_frame_extrude(kit, w, MAT_JOIST, stringer, 5, z1, CELLAR_Z1);
+
+    // A handrail on the back wall, on iron brackets.
+    const float rz = CELLAR_Z1 - 0.06f;
+    raked_rail(kit, CELLAR_HEAD_X - 0.15f, foot - 0.05f, rz - RAIL_T, rz);
+    const float brackets[3] = {-2.5f, -3.4f, -4.2f};
+    for (int i = 0; i < 3; i++) {
+        const float x = brackets[i], under = nosing_y(x) + RAIL_H - RAIL_D;
+        kit_frame_box(kit, w, MAT_IRON, x - 0.012f, x + 0.012f, under - 0.03f, under,
+                      rz - 0.5f * RAIL_T, CELLAR_Z1, false);
+    }
+
+    // The open side, under the floor: two posts from the slab to the trimmer, and a rail between.
+    const float pz0 = STAIRWELL_Z0 - 0.08f, p = 0.04f;
+    for (int i = 0; i < KIT_COUNT(STAIR_POSTS_X); i++) {
+        const float x = STAIR_POSTS_X[i];
+        kit_frame_box(kit, w, MAT_JOIST, x - p, x + p, BASEMENT_Y, JOIST_Y0, pz0, STAIRWELL_Z0,
+                      true);
+    }
+    raked_rail(kit, STAIR_POSTS_X[0], STAIR_POSTS_X[1], STAIRWELL_Z0, STAIRWELL_Z0 + RAIL_T);
+}
+
 void basement_build(Kit* kit) {
     foundation(kit);
     framing(kit);
     beam(kit);
+    stair(kit);
 
     // Earth under the porch, where the home's irradiance probes the basement brought below the
     // yard would otherwise hang in nothing outside the front wall. Closed, so the volume finds
