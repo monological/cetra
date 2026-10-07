@@ -137,6 +137,8 @@ SceneNode* node_find_light(SceneNode* root, const struct Light* light);
 
 // shaders
 void node_set_program(SceneNode* node, ShaderProgram* program);
+// Every material under `node` gets `skinned` or `standard` by its mesh, except a late-draw
+// material (spec 13.29), whose program is its own.
 void node_set_programs(SceneNode* node, ShaderProgram* standard, ShaderProgram* skinned);
 
 // Convenience over original_transform, which is a plain field: writes the

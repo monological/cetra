@@ -139,6 +139,13 @@ static void classify(const Mesh* mesh, const Wind* wind, uint8_t* lane, uint8_t*
     if (occluder)
         *flags |= DRAW_OCCLUDER;
 
+    // A late-draw surface is drawn past the temporal seam and lit by nothing (spec 13.29): a lane
+    // every scene pass skips by naming the lanes it draws, and nothing a light's shadow takes.
+    if (mat->pass == MATERIAL_PASS_LATE_DRAW) {
+        *lane = DRAW_LANE_LATE_DRAW;
+        *flags = (uint8_t)((*flags & ~DRAW_OCCLUDER) | DRAW_NO_CAST);
+    }
+
     // A shadow-only mesh is drawn by no camera pass whatever its material, so it gets a lane of
     // its own, which every camera pass already skips by naming the lanes it draws. It is not an
     // occluder either: the camera never sees it to be hidden behind.
@@ -256,6 +263,13 @@ static const char* _refusal(const Mesh* mesh, const Scene* scene, const Animatio
         return "program has no uniforms (its setup failed)";
     if (!program_accepts_draw_mode(program, mesh->draw_mode))
         return "draw mode the program's geometry stage cannot take";
+    // Each half of a late surface without the other draws garbage that still looks like a frame:
+    // a scene pass's uniforms into a vertex stage that ignores them, or a G-buffer program onto
+    // a canvas with no G-buffer.
+    if (mesh->material->pass == MATERIAL_PASS_LATE_DRAW && !program->late_surface)
+        return "late-draw material without a create_late_surface_program";
+    if (mesh->material->pass != MATERIAL_PASS_LATE_DRAW && program->late_surface)
+        return "late surface program on a material not drawn in the late draw";
     // Another rig's matrices would be uploaded for this mesh, which skins it
     // into garbage that still looks like a frame.
     //

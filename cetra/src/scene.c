@@ -1066,7 +1066,9 @@ void node_set_programs(SceneNode* node, ShaderProgram* standard, ShaderProgram* 
     for (size_t i = 0; i < node->mesh_count; ++i) {
         Mesh* mesh = node->meshes[i];
 
-        if (mesh && mesh->material) {
+        // A late-draw material's program is its own (spec 13.29): a lit-surface one in its place
+        // is a mesh the draw list refuses.
+        if (mesh && mesh->material && mesh->material->pass != MATERIAL_PASS_LATE_DRAW) {
             // Use skinned shader for meshes with bone data, standard otherwise
             if (mesh->is_skinned && skinned) {
                 mesh->material->shader_program = skinned;

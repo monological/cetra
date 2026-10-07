@@ -228,6 +228,9 @@ typedef struct CSceneMaterialOverride {
     // An app shader's own uniforms (spec 13.29), `shaderParams`: the runtime type, for roads'
     // reason above.
     ShaderParams shader_params;
+    // `lateShader` (spec 13.29): a fragment shader, resolved against the scene file, that draws
+    // this material in the late draw; its presence IS the pass. "" = the main pass.
+    char late_shader[CSCENE_MAX_PATH];
 } CSceneMaterialOverride;
 
 // Ambient dust: a scene-level particle effect (like fog). Each field carries a

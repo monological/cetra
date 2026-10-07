@@ -81,6 +81,10 @@ typedef struct ShaderProgram {
     // carrying the fur bit -- which is also what makes such a variant unsafe to prepass: the
     // shell code changes the position the prepass would have to match.
     bool fur_shells;
+    // Built by create_late_surface_program (spec 13.29): its vertex stage is the late draw's and
+    // it writes the canvas rather than the G-buffer, so only a MATERIAL_PASS_LATE_DRAW material
+    // may carry it, and such a material carries nothing else.
+    bool late_surface;
     // Which lit-surface features this program was compiled with, or -1 for a
     // program that is not a variant at all (spec 11.93). A third derived fact
     // beside the two above, and for their reason: it is settled at build time,
@@ -329,6 +333,16 @@ ShaderProgram* create_shadow_catcher_program();
 ShaderProgram* create_post_pass_program(const char* name, const char* frag_source);
 // The finished picture into the window, dithered, when something drew after the tone map.
 ShaderProgram* create_present_program();
+
+/*
+ * An app's fragment stage for a material drawn in the late draw (spec 13.29), over the engine's
+ * late_surface_vert, which hands it `vWorldPos`, `vNormal` (world), `vUv`, `vColor` (the vertex
+ * colour, (0,0,0,1) where the mesh has none) and `vViewDepth` (metres in front of the eye). It
+ * writes `FragColor` PREMULTIPLIED onto the canvas -- blend ONE, ONE_MINUS_SRC_ALPHA, so alpha 0
+ * adds light and alpha 1 replaces -- and include/late_surface.glsl carries what it needs from the
+ * frame: the depth test, the fog and the pre-exposure.
+ */
+ShaderProgram* create_late_surface_program(const char* name, const char* frag_source);
 
 // Post-Processing Programs
 ShaderProgram* create_bloom_bright_program();

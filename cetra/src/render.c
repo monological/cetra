@@ -2566,3 +2566,108 @@ void render_skeleton_bones(Engine* engine, Skeleton* skeleton, AnimationState* a
 
     free(vertices);
 }
+
+bool render_has_late_items(const Scene* scene) {
+    return scene && scene->draw_list && scene->draw_list->valid &&
+           scene->draw_list->lane_count[DRAW_LANE_LATE_DRAW] > 0;
+}
+
+// A late item and how far it is from the eye, for the back-to-front order.
+typedef struct LateItem {
+    const DrawItem* item;
+    float depth;
+} LateItem;
+
+static int _late_farther_first(const void* a, const void* b) {
+    const float da = ((const LateItem*)a)->depth, db = ((const LateItem*)b)->depth;
+    return (da < db) - (da > db);
+}
+
+void render_late_items(Engine* engine, const Scene* scene, const PostFXLateDraw* late) {
+    if (!engine || !late || !render_has_late_items(scene))
+        return;
+    const DrawList* list = scene->draw_list;
+    const size_t n = list->lane_count[DRAW_LANE_LATE_DRAW];
+    LateItem* order = malloc(n * sizeof(LateItem));
+    if (!order) {
+        log_error("render_late_items: no memory to order %zu late surfaces", n);
+        return;
+    }
+    // Farthest first, by the centre of each item's box, so one laid over another composites in
+    // order: the blend is premultiplied, which is order-dependent wherever alpha is not zero.
+    size_t count = 0;
+    for (size_t i = 0; i < list->count && count < n; ++i) {
+        const DrawItem* item = &list->items[i];
+        if (item->lane != DRAW_LANE_LATE_DRAW)
+            continue;
+        vec3 centre = {0.0f, 0.0f, 0.0f};
+        glm_vec3_center(item->mesh->aabb.min, item->mesh->aabb.max, centre);
+        vec4 world = {centre[0], centre[1], centre[2], 1.0f}, eye;
+        glm_mat4_mulv(item->node->global_transform, world, world);
+        glm_mat4_mulv(engine->view_matrix, world, eye);
+        order[count++] = (LateItem){item, -eye[2]};
+    }
+    qsort(order, count, sizeof(LateItem), _late_farther_first);
+
+    profiler_scope_begin(engine->profiler, "late surfaces");
+    const GLPassState pass = gl_pass_begin();
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+    const float viewport[2] = {(float)late->width, (float)late->height};
+    for (size_t k = 0; k < count; ++k) {
+        const DrawItem* item = order[k].item;
+        const Mesh* mesh = item->mesh;
+        const Material* mat = mesh->material;
+        const ShaderProgram* program = mat->shader_program;
+        UniformManager* u = program->uniforms;
+        glUseProgram(program->id);
+        uniform_set_mat4(u, "model", (const float*)item->node->global_transform);
+        uniform_set_mat3(u, "uNormalMatrix", (const float*)item->node->normal_matrix);
+        uniform_set_mat4(u, "view", (const float*)engine->view_matrix);
+        uniform_set_mat4(u, "projection", (const float*)engine->projection_matrix);
+        uniform_set_vec2(u, "viewport", viewport);
+        uniform_set_float(u, "time", (float)engine->render_time);
+        // Wrapped at 2^24: uniform_set_int compares through a float, exact below that.
+        uniform_set_int(u, "frame", (int)(engine->total_frames & 0xFFFFFF));
+        uniform_set_vec3(u, "materialAlbedo", (float*)mat->albedo);
+        vec3 emissive = {0.0f, 0.0f, 0.0f};
+        material_emissive_factor(mat, emissive);
+        uniform_set_vec3(u, "materialEmissive", emissive);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, mat->albedo_tex ? mat->albedo_tex->id : 0);
+        uniform_set_int(u, "albedoTex", 0);
+        uniform_set_int(u, "albedoTexExists", mat->albedo_tex ? 1 : 0);
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, mat->emissive_tex ? mat->emissive_tex->id : 0);
+        uniform_set_int(u, "emissiveTex", 1);
+        uniform_set_int(u, "emissiveTexExists", mat->emissive_tex ? 1 : 0);
+        glActiveTexture(GL_TEXTURE2);
+        glBindTexture(GL_TEXTURE_2D, late->scene_depth);
+        uniform_set_int(u, "sceneDepth", 2);
+        glActiveTexture(GL_TEXTURE3);
+        glBindTexture(GL_TEXTURE_3D, late->fog_volume);
+        uniform_set_int(u, "fogVolume", 3);
+        uniform_set_int(u, "fogSlices", late->fog_slices);
+        uniform_set_float(u, "fogNear", late->fog_near);
+        uniform_set_float(u, "fogFar", late->fog_far);
+        uniform_set_float(u, "fogDepthDist", late->fog_depth_dist);
+        shader_params_upload(&mat->shader_params, u);
+
+        if (item->flags & DRAW_DOUBLE_SIDED)
+            glDisable(GL_CULL_FACE);
+        else
+            glEnable(GL_CULL_FACE);
+        GLsizei index_count;
+        const void* index_offset;
+        mesh_lod_range(mesh, item->lod, &index_count, &index_offset);
+        glBindVertexArray(mesh->vao);
+        glDrawElements(mesh->draw_mode, index_count, GL_UNSIGNED_INT, index_offset);
+    }
+    glBindVertexArray(0);
+    glBindTexture(GL_TEXTURE_3D, 0);
+    glUseProgram(0);
+    gl_pass_end(&pass);
+    free(order);
+    check_gl_error("late surfaces");
+    profiler_scope_end(engine->profiler);
+}

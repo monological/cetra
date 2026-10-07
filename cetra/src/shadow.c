@@ -856,6 +856,9 @@ static void _upload_shadow_material(UniformManager* u, const Material* mat, bool
 // and their occlusion comes from AO instead. Foliage opts back in, because leaf
 // cards are centimetres across and an alpha test resolves them.
 static bool caster_set_wants(ShadowCasterSet set, uint8_t lane, uint8_t flags) {
+    // A late-draw surface (spec 13.29) stops no light and no rain: it is drawn over the frame.
+    if (lane == DRAW_LANE_LATE_DRAW)
+        return false;
     if (set == SHADOW_CASTERS_RAIN ? lane == DRAW_LANE_SHADOW_ONLY : (flags & DRAW_NO_CAST) != 0)
         return false;
     bool masked_only = (flags & DRAW_ALPHA_MASKED) && !(flags & DRAW_FOLIAGE);
