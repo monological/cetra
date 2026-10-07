@@ -95,6 +95,9 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter)
 set(SHADER_DIR ${CMAKE_CURRENT_SOURCE_DIR}/shaders)
 set(SHADER_GEN_DIR ${PROJECT_BINARY_DIR}/generated)
 set(SHADER_HEADER ${SHADER_GEN_DIR}/shader_strings.h)
+# The include/ chunks again, unexpanded, for shaders built at runtime (spec 13.29). A header of
+# its own so shader.c can hold the resolver without also compiling every engine shader string.
+set(SHADER_INCLUDES_HEADER ${SHADER_GEN_DIR}/shader_includes.h)
 file(MAKE_DIRECTORY ${SHADER_GEN_DIR})
 
 # Recursive so an edit to a shared chunk under shaders/include/ retriggers
@@ -104,13 +107,38 @@ file(MAKE_DIRECTORY ${SHADER_GEN_DIR})
 file(GLOB_RECURSE SHADER_FILES CONFIGURE_DEPENDS ${SHADER_DIR}/*.glsl)
 
 add_custom_command(
-    OUTPUT ${SHADER_HEADER}
+    OUTPUT ${SHADER_HEADER} ${SHADER_INCLUDES_HEADER}
     COMMAND ${CMAKE_COMMAND} -E echo "Generating shader header..."
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/gen_shader_header.py ${SHADER_DIR} ${SHADER_HEADER}
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/gen_shader_header.py ${SHADER_DIR} ${SHADER_HEADER} --includes-out ${SHADER_INCLUDES_HEADER}
     DEPENDS ${SHADER_FILES} ${CMAKE_CURRENT_SOURCE_DIR}/gen_shader_header.py
-    COMMENT "Generating shader_strings.h from GLSL files"
+    COMMENT "Generating shader_strings.h and shader_includes.h from GLSL files"
     VERBATIM
 )
+
+# An app's own shaders as C strings (spec 13.29): cetra_embed_shaders(<target> <dir>) turns
+# <dir>/*.glsl into <target>_shaders.h, one `<stem>_shader_str` each, for the target alone to
+# include. The #include lines are left where they stand and resolved at runtime against the
+# engine's chunks, which is what lets an app shader name noise.glsl without the app holding a
+# copy. The generator's path and the interpreter are captured HERE, because a function runs in
+# its caller's scope and a parent project adding this directory sees neither variable.
+set(CETRA_SHADER_GENERATOR ${CMAKE_CURRENT_SOURCE_DIR}/gen_shader_header.py CACHE INTERNAL "")
+set(CETRA_SHADER_PYTHON ${Python3_EXECUTABLE} CACHE INTERNAL "")
+function(cetra_embed_shaders target dir)
+    get_filename_component(_dir ${dir} ABSOLUTE)
+    file(GLOB _files CONFIGURE_DEPENDS ${_dir}/*.glsl)
+    set(_out_dir ${CMAKE_CURRENT_BINARY_DIR}/${target}_generated)
+    set(_out ${_out_dir}/${target}_shaders.h)
+    file(MAKE_DIRECTORY ${_out_dir})
+    add_custom_command(
+        OUTPUT ${_out}
+        COMMAND ${CETRA_SHADER_PYTHON} ${CETRA_SHADER_GENERATOR} --raw ${_dir} ${_out}
+        DEPENDS ${_files} ${CETRA_SHADER_GENERATOR}
+        COMMENT "Embedding ${target}'s shaders"
+        VERBATIM
+    )
+    target_sources(${target} PRIVATE ${_out})
+    target_include_directories(${target} PRIVATE ${_out_dir})
+endfunction()
 
 # Collect source files
 file(GLOB CETRA_SOURCES
@@ -126,7 +154,7 @@ file(GLOB CETRA_SOURCES
 
 # The static library. Listing the generated header as a source is what orders
 # its generation before the objects that include it.
-add_library(cetra STATIC ${CETRA_SOURCES} ${SHADER_HEADER})
+add_library(cetra STATIC ${CETRA_SOURCES} ${SHADER_HEADER} ${SHADER_INCLUDES_HEADER})
 
 # The internal tree as a target, for an in-tree app to link: what makes
 # #include "cetra/internal/foo.h" resolve. Nothing links it but add_cetra_app,
@@ -144,7 +172,7 @@ target_include_directories(cetra
         ${CMAKE_CURRENT_SOURCE_DIR}/src
         ${CMAKE_CURRENT_SOURCE_DIR}/src/ext
         ${CMAKE_CURRENT_SOURCE_DIR}/src/game
-        # program.c's #include "shader_strings.h".
+        # program.c's #include "shader_strings.h", and shader.c's "shader_includes.h".
         ${SHADER_GEN_DIR}
 )
 

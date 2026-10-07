@@ -1387,6 +1387,10 @@ static ShaderProgram* create_post_program(const char* name, const char* frag_src
     return program;
 }
 
+ShaderProgram* create_post_pass_program(const char* name, const char* frag_source) {
+    return create_post_program(name, frag_source);
+}
+
 ShaderProgram* create_ssgi_accum_program() {
     return create_post_program("ssgi_accum", ssgi_accum_frag_shader_str);
 }

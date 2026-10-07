@@ -880,7 +880,7 @@ void apply_cscene_material_overrides(Scene* scene, const CetraSceneDesc* cscn) {
     for (int k = 0; k < cscn->material_count; k++) {
         const CSceneMaterialOverride* mo = &cscn->materials[k];
         if (mo->param_count == 0 && mo->texture_count == 0 && mo->layer_count == 0 &&
-            mo->road_count == 0)
+            mo->road_count == 0 && mo->shader_param_count == 0)
             continue; // sss-only entries belong to configure_sss_materials
 
         // Resolve and report the vocabulary once per override, not once per
@@ -1017,6 +1017,7 @@ void apply_cscene_material_overrides(Scene* scene, const CetraSceneDesc* cscn) {
         // with no diagnostic at all -- the parser having already declared it
         // usable, nothing warned.
         usable += mo->road_count;
+        usable += mo->shader_param_count;
 
         if (usable == 0)
             continue;
@@ -1043,6 +1044,8 @@ void apply_cscene_material_overrides(Scene* scene, const CetraSceneDesc* cscn) {
             }
             for (int e = 0; e < enum_count; e++)
                 material_param_set(m, enums[e].slot, &enums[e].value);
+            for (int s = 0; s < mo->shader_param_count; s++)
+                material_set_shader_param(m, mo->shader_params[s].name, mo->shader_params[s].value);
             for (int l = 0; l < layer_count; l++) {
                 material_set_layer_albedo_tex(m, l, layers[l].albedo);
                 material_set_layer_surface_tex(m, l, layers[l].surface);

@@ -405,6 +405,7 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
     uniform_set_int(u, "sheenTexExists", material->sheen_tex ? 1 : 0);
     uniform_set_int(u, "clearcoatNormalExists",
                     refuse_maps_34 ? 0 : texture_normal_gate(material->clearcoat_normal_tex));
+    material_upload_shader_params(material, u);
 
     // Reset active texture unit
     glActiveTexture(GL_TEXTURE0);
