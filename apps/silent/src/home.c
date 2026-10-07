@@ -88,6 +88,7 @@ typedef enum {
     HW_BATH_EAST,
     HW_SPLIT_EAST, // behind the bathroom and the laundry
     HW_SPLIT_WEST, // behind the living room
+    HW_STAIRWELL,  // closing the stairwell down off the stair up
     HW_COUNT
 } HomeWall;
 
@@ -167,6 +168,8 @@ static const KitWall WALLS[HW_COUNT] = {
                               MAT_PLASTER)},
     [HW_SPLIT_WEST] = {INSIDE(true, HOME_SPLIT_Z, HOUSE_X0, HALL_X0, -1, MAT_WALLPAPER,
                               MAT_PLASTER)},
+    [HW_STAIRWELL] = {INSIDE(true, STAIRWELL_WALL_Z, HOUSE_X0, HALL_X0, 1, MAT_PLASTER,
+                             MAT_PLASTER)},
 };
 
 #define NO_PANE (-1)
@@ -308,6 +311,10 @@ static void outside_trim(Kit* kit) {
  * Floors and ceilings: each room's boards on the ground, the ceiling over the whole ground floor
  * and the boards over that, and the upper ceiling. Nothing upstairs is furnished; its windows
  * are dark.
+ *
+ * A room's boards are only the finished layer: the joists and the subfloor under them are the
+ * basement's ceiling (basement.c). Each room's body still fills the floor's whole depth, and the
+ * stair room's stops at the stairwell, whose landing inside the door is all that is left of it.
  */
 static void floors(Kit* kit) {
     const KitFrame* w = &KIT_WORLD;
@@ -316,15 +323,19 @@ static void floors(Kit* kit) {
         float x0, x1, z0, z1;
     } FLOORS[] = {
         {MAT_HARDWOOD, HALL_X0, HALL_X1, HOUSE_FRONT_Z, HOUSE_BACK_Z},
-        {MAT_WOOD_FLOOR, HOUSE_X0, HALL_X0, HOUSE_FRONT_Z, HOUSE_BACK_Z},
+        {MAT_WOOD_FLOOR, HOUSE_X0, HALL_X0, HOUSE_FRONT_Z, STAIRWELL_Z0},
+        {MAT_WOOD_FLOOR, CELLAR_HEAD_X, HALL_X0, STAIRWELL_Z0, HOUSE_BACK_Z},
         {MAT_KITCHEN_FLOOR, HALL_X1, HOUSE_X1, HOUSE_FRONT_Z, KITCHEN_BACK_Z},
         {MAT_BACKSPLASH, HALL_X1, BATH_X1, KITCHEN_BACK_Z, HOME_SPLIT_Z},
         {MAT_WOOD_FLOOR, BATH_X1, HOUSE_X1, KITCHEN_BACK_Z, HOME_SPLIT_Z},
         {MAT_WOOD_FLOOR, HALL_X1, HOUSE_X1, HOME_SPLIT_Z, HOUSE_BACK_Z},
     };
-    for (size_t i = 0; i < sizeof(FLOORS) / sizeof(FLOORS[0]); i++)
-        kit_frame_box(kit, w, FLOORS[i].mat, FLOORS[i].x0, FLOORS[i].x1, 0.0f, FLOOR_Y,
+    for (size_t i = 0; i < sizeof(FLOORS) / sizeof(FLOORS[0]); i++) {
+        kit_frame_box(kit, w, FLOORS[i].mat, FLOORS[i].x0, FLOORS[i].x1, FLOOR_Y - FLOOR_BOARDS,
+                      FLOOR_Y, FLOORS[i].z0, FLOORS[i].z1, false);
+        kit_frame_box(kit, w, KIT_COLLIDER_ONLY, FLOORS[i].x0, FLOORS[i].x1, 0.0f, FLOOR_Y,
                       FLOORS[i].z0, FLOORS[i].z1, true);
+    }
     kit_frame_box(kit, w, MAT_CEILING, HOUSE_X0, HOUSE_X1, CEIL_Y, CEIL_Y + SLAB, HOUSE_FRONT_Z,
                   HOUSE_BACK_Z, false);
     kit_frame_box(kit, w, MAT_WOOD_FLOOR, HOUSE_X0, HOUSE_X1, CEIL_Y + SLAB, FLOOR2_Y,
