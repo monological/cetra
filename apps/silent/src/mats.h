@@ -85,11 +85,13 @@ typedef enum {
     MAT_SCREEN,     // the television's glass, glowing with its picture
     MAT_TV_STATIC,  // the picture on it, snow, drawn in the late draw (spec 13.30)
     // The home's basement (spec 13.31).
-    MAT_CELLAR_WALL,  // its walls, painted a pale colour long ago, and the stairwell's
-    MAT_CELLAR_DADO,  // the dark gloss band painted round their foot and up the stair
-    MAT_CELLAR_FLOOR, // the slab, poured and never sealed
-    MAT_CELLAR_WET,   // standing water on it round the drain
-    MAT_JOIST,        // the ground floor's framing seen from below
+    MAT_CELLAR_WALL,     // the stairwell down, painted a pale colour long ago
+    MAT_CELLAR_DADO,     // the dark gloss band painted along the flight
+    MAT_CELLAR_CONCRETE, // the basement's own walls: bare poured concrete
+    MAT_CELLAR_DAMP,     // and their foot, dark and wet with the damp it draws up
+    MAT_CELLAR_FLOOR,    // the slab, stained and never sealed
+    MAT_CELLAR_WET,      // standing water on it round the drain
+    MAT_JOIST,           // the ground floor's framing seen from below
     MAT_COUNT
 } MatId;
 

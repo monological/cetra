@@ -77,6 +77,10 @@ SOURCES = {
     "medieval_blocks_03": {},
     "castle_wall_varriation": {},
     "brown_leather": {},
+    # The home's basement (spec 13.31): a poured foundation with the lifts of its formwork
+    # showing, and a slab stained by everything ever spilled on it.
+    "concrete_layers_02": {},
+    "garage_floor": {},
     # From ambientCG (https://ambientcg.com), also CC0: what Poly Haven has no
     # scan of -- brushed stainless, paper, a kitchen smear for the glass, and
     # the table's scratched enamel: a yellow paint with almost no rust, taken to

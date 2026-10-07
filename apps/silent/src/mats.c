@@ -418,10 +418,12 @@ static const MatSpec SPECS[MAT_COUNT] = {
     // late program that draws it takes nothing from the material but its params.
     [MAT_TV_STATIC] = {"tv_static", NULL, {0.0f, 0.0f, 0.0f}, 1.0f, 0.0f, 1.0f},
     /*
-     * The basement (spec 13.31), from scans already fetched. Its walls are painted two tones, an
-     * institution's: a pale paint gone the colour of old teeth, and a dark green enamel round
-     * their foot, glossier, carried up the stairwell along the flight. Both on the dirty-white
-     * wall scan, so the stains show through. The joists are the porch's old boards gone brown.
+     * The basement (spec 13.31). The stairwell down is painted two tones, an institution's: a
+     * pale paint gone the colour of old teeth, and a dark green enamel band, glossier, along the
+     * flight -- both on the dirty-white wall scan, so the stains show through. At the foot that
+     * stops: the basement itself is bare poured concrete, the lifts of its formwork showing,
+     * darker and wet where the damp has climbed it, round a stained slab. The joists are the
+     * porch's old boards gone brown.
      */
     [MAT_CELLAR_WALL] = {"cellar_wall",
                          "concrete_wall_003",
@@ -437,13 +439,22 @@ static const MatSpec SPECS[MAT_COUNT] = {
                          0.0f,
                          1.5f,
                          .grime = 0.6f},
-    [MAT_CELLAR_FLOOR] = {"cellar_floor",
-                          "concrete_pavement",
-                          {0.55f, 0.57f, 0.52f},
-                          0.8f,
-                          0.0f,
-                          1.8f,
-                          .grime = 0.6f},
+    [MAT_CELLAR_CONCRETE] = {"cellar_concrete",
+                             "concrete_layers_02",
+                             {0.58f, 0.60f, 0.54f},
+                             1.0f,
+                             0.0f,
+                             2.0f,
+                             .grime = 0.9f},
+    [MAT_CELLAR_DAMP] = {"cellar_damp",
+                         "concrete_layers_02",
+                         {0.24f, 0.26f, 0.22f},
+                         0.5f,
+                         0.0f,
+                         2.0f,
+                         .grime = 0.9f},
+    [MAT_CELLAR_FLOOR] =
+        {"cellar_floor", "garage_floor", {0.6f, 0.6f, 0.56f}, 0.9f, 0.0f, 1.9f, .grime = 0.6f},
     [MAT_CELLAR_WET] =
         {"cellar_wet", "concrete_pavement", {0.28f, 0.29f, 0.27f}, 0.12f, 0.0f, 1.8f},
     [MAT_JOIST] =
