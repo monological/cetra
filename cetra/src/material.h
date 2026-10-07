@@ -427,6 +427,10 @@ typedef struct Material {
     ShaderProgram* shader_program;
     // An app shader's own uniforms (spec 13.29), uploaded wherever this material's program is.
     ShaderParams shader_params;
+    // An app's surface hook (spec 13.29), borrowed from the engine that made it; NULL for none.
+    // A plain write: the variant resolver puts the material on the hooked variant of its own
+    // family and mask the next frame.
+    const struct ShaderHook* shader_hook;
 } Material;
 
 typedef enum MaterialParamType {

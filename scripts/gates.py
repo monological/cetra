@@ -29798,6 +29798,17 @@ HOOKS_STATIC_OPEN = ((-3.4, 2.0, -3.8), (-2.8, 3.2, -3.8))
 HOOKS_POST_FACE = ((-4.1, 2.2, -2.9), (-3.8, 3.0, -2.9))
 HOOKS_NOISE_STD_MIN = 20.0   # codes of spread a frame of fresh noise keeps under TAA
 HOOKS_NOISE_CORR_MAX = 0.2   # correlation two consecutive frames' noise may share
+# The stripes box (x -4.6..-3.4, y 0..1.2, z -1.0..0.2): the generator's pair of 0.3 m by world
+# X, dark where fract(x / 0.3) < 0.5. Sampled at quarter and three-quarter phase, on the front
+# face and on the top, each (x, dark).
+HOOKS_STRIPE_X = [(-4.425, True), (-4.275, False), (-4.125, True), (-3.975, False),
+                  (-3.825, True), (-3.675, False)]
+HOOKS_STRIPE_FRONT = (0.6, 0.2)    # y, z on the front face
+HOOKS_STRIPE_TOP = (1.2, -0.4)     # y, z on the top
+HOOKS_STRIPE_SPLIT = 100           # codes between a dark and a light stripe in the albedo view
+# Front-face centres of the boxes the hooks paint flat: the two hooks and the two params.
+HOOKS_FLAT = {"key_a": ((-2.5, 0.4, 0.3), 0), "key_b": ((-1.5, 0.4, 0.3), 2),
+              "param_a": ((-0.4, 0.4, 0.3), 0), "param_b": ((0.6, 0.4, 0.3), 1)}
 
 
 def _hooks_box(w, h, rect):
@@ -29855,6 +29866,11 @@ def run_shader_hooks_gate(workdir):
                       without the quad; where nothing does, it is not.
       late-inert      the quad emitting nothing renders the frame with no quad at all: it casts
                       no shadow, writes no G-buffer and reaches no other pass.
+      hooks-surface   the stripes box's hook decides its albedo: the albedo view shows its
+                      stripes where the generator put them, and the shaded frame lights them,
+                      its sunlit top brighter than its front.
+      hooks-cache-key two hooks at one feature mask are two programs: one box red, one blue.
+      hooks-params    one hook on two materials is told apart by a param: red and green.
 
     The marks sit over the wall, which the depth of field blurs and the pieces in front of it do
     not reach, so each one is measured against the same frame rendered with no passes at all.
@@ -29998,6 +30014,69 @@ def run_shader_hooks_gate(workdir):
           f"differ, peak {peak * 255:.2f} codes")
     if not ok:
         failures.append("late-inert")
+
+    # The surface hooks. The albedo view (render mode 6) reads what the first call decided;
+    # the shaded frame reads it lit.
+    albedo = shot(src, "surface_albedo", NO_HALOS + ["--render-mode", "6"])
+    shaded = shot(src, "surface_shaded", NO_HALOS)
+    if not (albedo and shaded):
+        return failures + ["hooks-surface", "hooks-cache-key", "hooks-params"]
+    w, h, albedo_pix = _read_ppm(albedo)
+    _, _, shaded_pix = _read_ppm(shaded)
+    project = _projector(_cscn_camera(HOOKS_FIXTURE), w, h)
+
+    def rgb_at(pix, p):
+        x, y = project(p)
+        o = (int(y) * w + int(x)) * 3
+        return pix[o], pix[o + 1], pix[o + 2]
+
+    def code_at(pix, p):
+        return sum(rgb_at(pix, p)) / 3.0
+
+    problems, notes = [], []
+    front = [(code_at(albedo_pix, (x, *HOOKS_STRIPE_FRONT)), dark) for x, dark in HOOKS_STRIPE_X]
+    darks = [c for c, dark in front if dark]
+    lights = [c for c, dark in front if not dark]
+    split = min(lights) - max(darks)
+    notes.append(f"albedo view dark {[round(c) for c in darks]}, light {[round(c) for c in lights]}")
+    if split < HOOKS_STRIPE_SPLIT:
+        problems.append(f"the stripes split by {split:.0f} codes, not {HOOKS_STRIPE_SPLIT}")
+    lit_front = [code_at(shaded_pix, (x, *HOOKS_STRIPE_FRONT)) for x, dark in HOOKS_STRIPE_X
+                 if not dark]
+    lit_top = [code_at(shaded_pix, (x, *HOOKS_STRIPE_TOP)) for x, dark in HOOKS_STRIPE_X
+               if not dark]
+    notes.append(f"shaded light stripes front {[round(c) for c in lit_front]}, top "
+                 f"{[round(c) for c in lit_top]}")
+    if min(lit_top) <= max(lit_front):
+        problems.append("the sunlit top is not brighter than the front: the stripes are not lit")
+    ok = not problems
+    print(f"  hooks-surface {'PASS' if ok else 'FAIL'}  " + "; ".join(problems + notes))
+    if not ok:
+        failures.append("hooks-surface")
+
+    def flat(names):
+        out, bad = [], []
+        for name in names:
+            p, channel = HOOKS_FLAT[name]
+            rgb = rgb_at(albedo_pix, p)
+            out.append(f"{name} {rgb}")
+            others = [c for i, c in enumerate(rgb) if i != channel]
+            if rgb[channel] < 3 * max(max(others), 1):
+                bad.append(name)
+        return bad, out
+
+    bad, out = flat(["key_a", "key_b"])
+    ok = not bad
+    print(f"  hooks-cache-key {'PASS' if ok else 'FAIL'}  " + ", ".join(out)
+          + (f"; not their own colour: {bad}" if bad else ""))
+    if not ok:
+        failures.append("hooks-cache-key")
+    bad, out = flat(["param_a", "param_b"])
+    ok = not bad
+    print(f"  hooks-params  {'PASS' if ok else 'FAIL'}  " + ", ".join(out)
+          + (f"; not their own colour: {bad}" if bad else ""))
+    if not ok:
+        failures.append("hooks-params")
     return failures
 
 

@@ -118,6 +118,9 @@ typedef struct ShaderProgram {
     // every read is already behind `pbr_features >= 0` and a program that is not
     // a variant never reaches one.
     PbrFamily pbr_family;
+    // The surface hook spliced into this variant (spec 13.29), NULL for none. The resolver keeps
+    // a material on its hook by comparing this with the material's, as it compares the mask.
+    const struct ShaderHook* pbr_hook;
     UT_hash_handle hh;
 } ShaderProgram;
 
@@ -209,19 +212,24 @@ bool program_accepts_draw_mode(const ShaderProgram* program, GLenum draw_mode);
 // Registered at creation like the rest, though not one an app has reason to ask for.
 #define CETRA_PROGRAM_RAIN "rain"
 
-// Longest "pbr_skinned-<mask>" plus its terminator, with room to spare.
-#define PBR_VARIANT_NAME_MAX 32
+// Longest "pbr_skinned-<mask>-h<hook id>" plus its terminator, with room to spare.
+#define PBR_VARIANT_NAME_MAX 48
+
+struct ShaderHook;
 
 // The cache key for a variant, and the ONE place the family-and-mask-to-name
 // rule lives. Two sites spelling it differently would miss the lookup forever,
 // compiling and leaking a fresh program every frame while rendering correctly
-// throughout.
-void pbr_variant_name(PbrFamily family, unsigned features, char* out, size_t n);
+// throughout. A hooked variant (spec 13.29) carries its hook's id as well, so two
+// hooks at one mask are two programs.
+void pbr_variant_name(PbrFamily family, unsigned features, const struct ShaderHook* hook, char* out,
+                      size_t n);
 
-// Compile the variant carrying exactly `features` on `family`'s vertex stage.
-// Does not register it -- see engine_pbr_variant, which owns the cache and is
-// where callers should go.
-ShaderProgram* create_pbr_program_variant(PbrFamily family, unsigned features);
+// Compile the variant carrying exactly `features` on `family`'s vertex stage,
+// with `hook`'s GLSL spliced in when it is not NULL. Does not register it -- see
+// engine_pbr_variant, which owns the cache and is where callers should go.
+ShaderProgram* create_pbr_program_variant(PbrFamily family, unsigned features,
+                                          const struct ShaderHook* hook);
 
 // The full variant of each family, which is the uber-shader and what an app
 // hands to node_set_programs before the resolver narrows it.

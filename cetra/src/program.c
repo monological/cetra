@@ -5,6 +5,7 @@
 #include "common.h"
 #include "ext/log.h"
 #include "program.h"
+#include "shader_hook.h"
 #include "shadow.h"
 #include "ubo.h"
 #include "util.h"
@@ -587,7 +588,20 @@ bool program_accepts_draw_mode(const ShaderProgram* program, GLenum draw_mode) {
 // Build the variant carrying exactly `features`. Static: every caller goes
 // through engine_pbr_variant below, so the name is formatted in one place and is
 // only ever a cache key.
-static ShaderProgram* _create_pbr_variant(const char* name, PbrFamily family, unsigned features) {
+// The line in pbr_frag where a surface hook's GLSL goes (spec 13.29): after every declaration the
+// hook may name, before main().
+#define PBR_SURFACE_HOOK_MARKER "// CETRA_SURFACE_HOOK_CHUNK"
+
+// `*source` with `chunk` spliced at `marker`, the old source freed. False, logged, on a failure.
+static bool _splice_hook(char** source, const char* marker, const char* chunk) {
+    char* spliced = shader_source_splice(*source, marker, chunk);
+    free(*source);
+    *source = spliced;
+    return spliced != NULL;
+}
+
+static ShaderProgram* _create_pbr_variant(const char* name, PbrFamily family, unsigned features,
+                                          const struct ShaderHook* hook) {
     // ONE line, carrying the mask itself. The bits are shared with the shader
     // through pbr_features.glsl, so this cannot drift from what the gates test
     // -- where emitting a set of macro NAMES could, silently and invisibly.
@@ -597,8 +611,15 @@ static ShaderProgram* _create_pbr_variant(const char* name, PbrFamily family, un
     // compiled with no defines at all is the uber-shader rather than a variant
     // with every feature stripped. Both families go through here now, so nothing
     // relies on that default -- but it is what makes the failure direction safe.
-    char defines[64];
-    snprintf(defines, sizeof(defines), "#define CETRA_PBR_FEATURES %u\n", features);
+    //
+    // A surface hook is NOT a bit of the mask, and cannot be (spec 13.29): a bit
+    // switches off code the shader already holds, where a hook brings code in.
+    // Defaulted on in the uber-shader it would call a function nobody supplied.
+    // So it is a define of its own that arrives in the same string as its source,
+    // from this one function -- which cannot hand the shader one without the other.
+    char defines[128];
+    snprintf(defines, sizeof(defines), "#define CETRA_PBR_FEATURES %u\n%s", features,
+             hook && hook->surface ? "#define CETRA_SURFACE_HOOK 1\n" : "");
 
     // The families differ in the VERTEX stage and nowhere else: same pbr_frag,
     // same mask, same gates. That is what makes a second family an argument here
@@ -608,6 +629,12 @@ static ShaderProgram* _create_pbr_variant(const char* name, PbrFamily family, un
     char* vert = shader_source_with_defines(
         family == PBR_FAMILY_SKINNED ? pbr_skinned_vert_shader_str : pbr_vert_shader_str, defines);
     char* frag = shader_source_with_defines(pbr_frag_shader_str, defines);
+    if (vert && frag && hook && hook->surface &&
+        !_splice_hook(&frag, PBR_SURFACE_HOOK_MARKER, hook->surface)) {
+        log_error("PBR variant %s: hook '%s' could not be spliced", name, hook->name);
+        free(vert);
+        return NULL;
+    }
     if (!vert || !frag) {
         free(vert);
         free(frag);
@@ -623,6 +650,7 @@ static ShaderProgram* _create_pbr_variant(const char* name, PbrFamily family, un
     }
     program->pbr_features = (int)features;
     program->pbr_family = family;
+    program->pbr_hook = hook;
 
     // Both families take their clip position from object_position.glsl, the same
     // chunk depth_prepass_vert uses, and declare `invariant gl_Position`; the
@@ -661,23 +689,27 @@ static ShaderProgram* _create_pbr_variant(const char* name, PbrFamily family, un
 // site spelling it differently would miss the lookup forever and compile and
 // leak a fresh 2,500-line program every frame, rendering correctly the whole
 // time.
-void pbr_variant_name(PbrFamily family, unsigned features, char* out, size_t n) {
+void pbr_variant_name(PbrFamily family, unsigned features, const struct ShaderHook* hook, char* out,
+                      size_t n) {
     const char* prefix =
         family == PBR_FAMILY_SKINNED ? CETRA_PROGRAM_PBR_SKINNED : CETRA_PROGRAM_PBR;
-    if (features == PBR_FEAT_ALL)
+    if (hook)
+        snprintf(out, n, "%s-%u-h%u", prefix, features, hook->id);
+    else if (features == PBR_FEAT_ALL)
         snprintf(out, n, "%s", prefix);
     else
         snprintf(out, n, "%s-%u", prefix, features);
 }
 
-ShaderProgram* create_pbr_program_variant(PbrFamily family, unsigned features) {
+ShaderProgram* create_pbr_program_variant(PbrFamily family, unsigned features,
+                                          const struct ShaderHook* hook) {
     char name[PBR_VARIANT_NAME_MAX];
-    pbr_variant_name(family, features, name, sizeof(name));
-    return _create_pbr_variant(name, family, features);
+    pbr_variant_name(family, features, hook, name, sizeof(name));
+    return _create_pbr_variant(name, family, features, hook);
 }
 
 ShaderProgram* create_pbr_program() {
-    return create_pbr_program_variant(PBR_FAMILY_RIGID, PBR_FEAT_ALL);
+    return create_pbr_program_variant(PBR_FAMILY_RIGID, PBR_FEAT_ALL, NULL);
 }
 
 ShaderProgram* create_particle_program() {
@@ -763,7 +795,7 @@ ShaderProgram* create_wind_probe_program() {
 }
 
 ShaderProgram* create_pbr_skinned_program() {
-    return create_pbr_program_variant(PBR_FAMILY_SKINNED, PBR_FEAT_ALL);
+    return create_pbr_program_variant(PBR_FAMILY_SKINNED, PBR_FEAT_ALL, NULL);
 }
 
 ShaderProgram* create_shape_program() {

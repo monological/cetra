@@ -231,6 +231,13 @@ typedef struct CSceneMaterialOverride {
     // `lateShader` (spec 13.29): a fragment shader, resolved against the scene file, that draws
     // this material in the late draw; its presence IS the pass. "" = the main pass.
     char late_shader[CSCENE_MAX_PATH];
+    // A surface hook (spec 13.29): `surfaceShader` defines cetraSurface, `offsetShader`
+    // cetraOffset, each a file resolved against the scene file, "" for none; the two make one
+    // hook. `offsetBound` is metres, `offsetAnimated` whether the offset moves with time.
+    char surface_shader[CSCENE_MAX_PATH];
+    char offset_shader[CSCENE_MAX_PATH];
+    float offset_bound;
+    bool offset_animated;
 } CSceneMaterialOverride;
 
 // Ambient dust: a scene-level particle effect (like fog). Each field carries a

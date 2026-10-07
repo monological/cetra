@@ -508,6 +508,9 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
             uniform_set_mat4(u, "uPrevViewProj", (const float*)engine->prev_view_proj);
             engine_upload_displacement_uniforms(engine, scene, u);
             uniform_set_int(u, "renderMode", render_mode);
+            // A surface hook's frame index (spec 13.29). Wrapped at 2^24: uniform_set_int
+            // compares through a float, exact below that.
+            uniform_set_int(u, "frame", (int)(engine->total_frames & 0xFFFFFF));
             uniform_set_float(u, "specularAAStrength", engine->specular_aa_strength);
             uniform_set_int(u, "energyCompEnabled", engine->energy_comp_enabled ? 1 : 0);
             uniform_set_int(u, "clearcoatEnabled", engine->clearcoat_enabled ? 1 : 0);
@@ -899,18 +902,31 @@ void engine_resolve_material_variants(Engine* engine, Scene* scene) {
             continue;
 
         const unsigned want = scene_mask | _material_pbr_features(engine, scene, mat);
-        if ((unsigned)mat->shader_program->pbr_features == want)
+        // The hook is the variant's third coordinate (spec 13.29): a material on the right mask
+        // with the wrong hook, or with one it no longer carries, moves as well.
+        if ((unsigned)mat->shader_program->pbr_features == want &&
+            mat->shader_program->pbr_hook == mat->shader_hook)
             continue;
 
         // Within the material's OWN family: a skinned mesh must stay on a
         // skinned vertex stage, and the mask means the same thing in both.
-        ShaderProgram* variant = engine_pbr_variant(engine, mat->shader_program->pbr_family, want);
+        ShaderProgram* variant =
+            engine_pbr_variant(engine, mat->shader_program->pbr_family, want, mat->shader_hook);
         // Keep the material where it is on failure. The full variant always
         // exists, so the surface stays lit rather than turning black -- the
-        // subtractive polarity paying off at the one place it matters.
+        // subtractive polarity paying off at the one place it matters. A hook
+        // that does not compile at this mask is dropped from the material, by
+        // name, so the failure is said once rather than every frame.
         if (!variant) {
-            log_error("PBR variant %u failed to build; material stays on %s", want,
-                      mat->shader_program->name);
+            if (mat->shader_hook) {
+                log_error("material '%s': its surface hook does not compile at features %u; "
+                          "drawn without it",
+                          mat->name ? mat->name : "?", want);
+                mat->shader_hook = NULL;
+            } else {
+                log_error("PBR variant %u failed to build; material stays on %s", want,
+                          mat->shader_program->name);
+            }
             continue;
         }
         mat->shader_program = variant;

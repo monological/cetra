@@ -118,6 +118,11 @@ STATIC_Z = -3.8
 STATIC_LO, STATIC_HI = (-5.2, 1.7), (-2.6, 3.5)
 # Cells of noise across and down the quad, and its brightness at full, in nits.
 STATIC_CELLS = [96.0, 64.0, 2.0, 0.0]
+# The stripes box's pattern: metres a dark and light pair by world X, and the two albedos.
+STRIPES = [0.3, 0.03, 0.8, 0.0]
+# The two tints one hook paints two boxes with.
+PARAM_A = [0.8, 0.02, 0.02, 0.0]
+PARAM_B = [0.02, 0.6, 0.02, 0.0]
 
 PIECES = [
     box("floor", "hooks_floor", (-7.0, -0.1, -5.0), (7.0, 0.0, 4.0)),
@@ -176,6 +181,47 @@ void main()
     vec3 color = texelFetch(sceneColor, ivec2(gl_FragCoord.xy), 0).rgb;
     bool inside = all(greaterThanEqual(TexCoords, markRect.xy)) && all(lessThan(TexCoords, markRect.zw));
     FragColor = vec4(inside ? markColor.rgb : color, 1.0);
+}
+""",
+    "hooks_surface_stripes.glsl": """// A surface hook (spec 13.29's fixture): stripes running up the box, `stripes.x` metres a
+// pair, by world X, between the albedos `.y` and `.z`. Everything else the material keeps.
+
+// pbr_frag expanded this chunk at build time; including it again is how the fixture holds the
+// splice to one copy.
+#include "noise.glsl"
+
+uniform vec4 stripes;
+
+void cetraSurface(inout CetraSurface s)
+{
+    float light = step(0.5, fract(s.worldPos.x / stripes.x));
+    s.albedo = vec3(mix(stripes.y, stripes.z, light));
+}
+""",
+    "hooks_surface_red.glsl": """// A surface hook painting its material flat red (spec 13.29's fixture), the twin of
+// hooks_surface_blue at the same feature mask: two hooks, two programs.
+
+void cetraSurface(inout CetraSurface s)
+{
+    s.albedo = vec3(0.8, 0.02, 0.02);
+}
+""",
+    "hooks_surface_blue.glsl": """// A surface hook painting its material flat blue (spec 13.29's fixture), the twin of
+// hooks_surface_red at the same feature mask: two hooks, two programs.
+
+void cetraSurface(inout CetraSurface s)
+{
+    s.albedo = vec3(0.02, 0.02, 0.8);
+}
+""",
+    "hooks_surface_tint.glsl": """// A surface hook taking its albedo from a param (spec 13.29's fixture): one hook on two
+// materials, which tell it apart by `tint` alone.
+
+uniform vec4 tint;
+
+void cetraSurface(inout CetraSurface s)
+{
+    s.albedo = tint.rgb;
 }
 """,
     "hooks_late_static.glsl": """#version 330 core
@@ -315,6 +361,14 @@ def scene():
         "materials": {
             "hooks_static": {"lateShader": asset_ref("hooks_late_static.glsl"),
                              "shaderParams": {"noiseCells": STATIC_CELLS}},
+            "hooks_stripes": {"surfaceShader": asset_ref("hooks_surface_stripes.glsl"),
+                              "shaderParams": {"stripes": STRIPES}},
+            "hooks_key_a": {"surfaceShader": asset_ref("hooks_surface_red.glsl")},
+            "hooks_key_b": {"surfaceShader": asset_ref("hooks_surface_blue.glsl")},
+            "hooks_param_a": {"surfaceShader": asset_ref("hooks_surface_tint.glsl"),
+                              "shaderParams": {"tint": PARAM_A}},
+            "hooks_param_b": {"surfaceShader": asset_ref("hooks_surface_tint.glsl"),
+                              "shaderParams": {"tint": PARAM_B}},
         },
         "camera": CAMERA,
     }

@@ -106,6 +106,45 @@
      0.0
     ]
    }
+  },
+  "hooks_stripes": {
+   "surfaceShader": "../shaders/hooks_surface_stripes.glsl",
+   "shaderParams": {
+    "stripes": [
+     0.3,
+     0.03,
+     0.8,
+     0.0
+    ]
+   }
+  },
+  "hooks_key_a": {
+   "surfaceShader": "../shaders/hooks_surface_red.glsl"
+  },
+  "hooks_key_b": {
+   "surfaceShader": "../shaders/hooks_surface_blue.glsl"
+  },
+  "hooks_param_a": {
+   "surfaceShader": "../shaders/hooks_surface_tint.glsl",
+   "shaderParams": {
+    "tint": [
+     0.8,
+     0.02,
+     0.02,
+     0.0
+    ]
+   }
+  },
+  "hooks_param_b": {
+   "surfaceShader": "../shaders/hooks_surface_tint.glsl",
+   "shaderParams": {
+    "tint": [
+     0.02,
+     0.6,
+     0.02,
+     0.0
+    ]
+   }
   }
  },
  "camera": {

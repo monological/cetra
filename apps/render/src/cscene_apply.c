@@ -26,6 +26,7 @@
 #include "cetra/program.h"
 #include "cetra/rain.h"
 #include "cetra/scene.h"
+#include "cetra/shader_hook.h"
 #include "cetra/texture.h"
 #include "cetra/util.h"
 #include "cetra/water.h"
@@ -1191,6 +1192,76 @@ void apply_cscene_shaders(Engine* engine, const Scene* scene, const CetraSceneDe
             tagged++;
         }
         printf("Scene file: late shader '%s' on material '%s' (%d material(s))\n", name,
+               mo->material, tagged);
+        if (tagged == 0)
+            fprintf(stderr, "Warning: material '%s' not found in scene\n", mo->material);
+    }
+
+    // A surface hook: the two files make one hook, named for the surface's file, or the
+    // offset's when there is only that. Materials naming the same two files share the hook, and
+    // so its programs, rather than each compiling a copy.
+    struct {
+        const CSceneMaterialOverride* by;
+        const ShaderHook* hook;
+    } made[CSCENE_MAX_MATERIALS];
+    int made_count = 0;
+    for (int k = 0; k < cscn->material_count; k++) {
+        const CSceneMaterialOverride* mo = &cscn->materials[k];
+        if (!mo->surface_shader[0] && !mo->offset_shader[0])
+            continue;
+        const ShaderHook* shared = NULL;
+        for (int j = 0; j < made_count && !shared; j++)
+            if (strcmp(made[j].by->surface_shader, mo->surface_shader) == 0 &&
+                strcmp(made[j].by->offset_shader, mo->offset_shader) == 0)
+                shared = made[j].hook;
+        if (shared) {
+            for (size_t i = 0; i < scene->material_count; i++) {
+                Material* m = scene->materials[i];
+                if (m && m->name && strcmp(m->name, mo->material) == 0)
+                    m->shader_hook = shared;
+            }
+            printf("Scene file: surface hook '%s' shared with material '%s'\n", shared->name,
+                   mo->material);
+            continue;
+        }
+        char name[256] = "", offset_name[256] = "";
+        char* surface = mo->surface_shader[0]
+                            ? _read_scene_shader(mo->surface_shader, name, sizeof(name))
+                            : NULL;
+        char* offset = mo->offset_shader[0]
+                           ? _read_scene_shader(mo->offset_shader, offset_name, sizeof(offset_name))
+                           : NULL;
+        if ((mo->surface_shader[0] && !surface) || (mo->offset_shader[0] && !offset)) {
+            free(surface);
+            free(offset);
+            continue;
+        }
+        const ShaderHookDesc desc = {.name = name[0] ? name : offset_name,
+                                     .surface = surface,
+                                     .offset = offset,
+                                     .offset_bound = mo->offset_bound,
+                                     .animated = mo->offset_animated};
+        const ShaderHook* hook = create_shader_hook(engine, &desc);
+        free(surface);
+        free(offset);
+        if (!hook) {
+            fprintf(stderr,
+                    "Warning: material '%s': its surface hook does not compile; the "
+                    "material keeps its own surface\n",
+                    mo->material);
+            continue;
+        }
+        made[made_count].by = mo;
+        made[made_count++].hook = hook;
+        int tagged = 0;
+        for (size_t i = 0; i < scene->material_count; i++) {
+            Material* m = scene->materials[i];
+            if (!m || !m->name || strcmp(m->name, mo->material) != 0)
+                continue;
+            m->shader_hook = hook;
+            tagged++;
+        }
+        printf("Scene file: surface hook '%s' on material '%s' (%d material(s))\n", desc.name,
                mo->material, tagged);
         if (tagged == 0)
             fprintf(stderr, "Warning: material '%s' not found in scene\n", mo->material);

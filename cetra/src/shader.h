@@ -37,6 +37,12 @@ char* shader_source_with_defines(const char* source, const char* defines);
 // app's shader or one a scene file names may include what the engine's own shaders do.
 char* shader_source_with_includes(const char* source);
 
+// `host` with the line beginning `marker` replaced by `chunk`, an app's GLSL (spec 13.29). The
+// chunk's includes are expanded against what the host already holds, and it is numbered as
+// source string 1, so a compile error inside it names its own line as "1:<line>". Caller owns
+// the result; NULL, logged, when the host has no such line or an include fails.
+char* shader_source_splice(const char* host, const char* marker, const char* chunk);
+
 Shader* create_shader(ShaderType type, const char* source);
 Shader* create_shader_from_path(ShaderType type, const char* file_path);
 void free_shader(Shader* shader);

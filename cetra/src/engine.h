@@ -345,6 +345,9 @@ typedef struct Engine {
     ShaderProgram** programs;   // Global shader programs used across scenes
     size_t program_count;       // Count of global programs
     ShaderProgram* program_map; // name to program cache
+    // Every surface hook an app made (spec 13.29), freed with the engine after its programs.
+    struct ShaderHook** shader_hooks;
+    size_t shader_hook_count;
 
     Material** materials;  // Global materials used across meshes
     size_t material_count; // Count of global materials
