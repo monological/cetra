@@ -906,7 +906,8 @@ group an arm for each.
   build time and pass through as copies, which is why adding it moved no golden. Include-once, and
   each build-time `// ---- begin X ----` line counts X as included FROM THAT LINE ON, so a hook
   spliced into an engine shader shares the copies above its marker -- and one including a chunk
-  the host defines only below it is refused by name rather than defining it twice. The splice is
+  the host defines only below it, directly or through another chunk, is refused by name rather
+  than defining it twice. The splice is
   text only; the one walk is what expands, and what restores a hook's line numbers after an
   include. `cetra_embed_shaders(<target> <dir>)` (CMake) turns an app's `shaders/*.glsl` into a
   header of strings, includes left for the resolver.
@@ -917,8 +918,10 @@ group an arm for each.
   moved into PostFX because it stopped being the CRT's alone -- and the CRT or the new present
   pass writes the window, so the dither stays last. Which of the three writes the window is
   decided once a frame, by `postfx_run` (`PostFXShow`): the CRT whenever it is on, the present
-  pass when a tone-mapped frame has passes after it, the tone map otherwise -- so a debug frame
-  stays undithered. A pass that never declares `sceneDepth` costs the frame no depth resolve.
+  pass when a tone-mapped frame has passes after it, the tone map otherwise -- so a passthrough
+  frame, a debug view's or a display-ready one's, stays undithered and runs no pass. A picture that
+  could not be made is tried again at the next size, as the fog layer is. A pass that never
+  declares `sceneDepth` costs the frame no depth resolve.
   **Replacing the tone map is not offered**: its
   curve is a function inside the shader that also composites AO, contact shadows, bloom, flare and
   glare and runs the curve at five sharpen taps, which is not a stage boundary.
@@ -941,12 +944,20 @@ group an arm for each.
   albedo and coverage: before the alpha test, keeping albedo and alpha (the cut, decals, the
   albedo view and the prepass exit all read them), and after the gather, keeping normal,
   roughness, metallic, AO and emission. The variant key gains the hook's id (`pbr-<mask>-h<id>`),
-  and the resolver moves a material whose program's hook is not its own; a variant that does not
-  build is said once and remembered, and the material stays where it is. A hook on a material
-  whose program is not a lit-surface variant is refused by name: its surface would ignore it
-  while its bounds and its shadow did not. **No sampler is spent**: the hook reads what its
-  variant already declares. `create_shader_hook` compiles the hook's two lit stages without
-  linking, to refuse it where the app made it, and builds its two shadow programs then.
+  and the resolver moves a material whose program's hook is not its own. **A hook whose variant
+  does not build is dropped everywhere** (`ShaderHook.broken`, read through `shader_hook_live`):
+  said once, and every reader -- the resolver, `classify`, the bounds, the refusal -- treats its
+  materials as unhooked, so the surface, its bound and its shadow never disagree. A hook on a
+  material whose program is not a lit-surface variant is refused by name: its surface would
+  ignore it while its bounds and its shadow did not. **No sampler is spent**: the hook reads what
+  its variant already declares. `create_shader_hook` compiles the hook's lit stages at EVERY
+  feature and at NONE, the skinned vertex stage too when it has an offset -- a hook naming
+  something a feature declares (`sheenTex`, a chunk the host includes only under the rain bit)
+  compiles at the one and not the other -- to refuse it where the app made it. It links nothing,
+  so a hook whose halves disagree reaches the broken path instead. It builds the two shadow
+  programs then: a hook whose offset does not build into them is refused, and a surface that
+  does not -- one reading the normal map, which only the lit surface declares -- only loses its
+  shadow cut (`shadow_cuts`).
 - **The offset**, `vec3 cetraOffset(CetraVertex v)`, is spliced into `object_position.glsl`'s
   `cetra_local_displacement` -- the third displacer, so ANYTHING ADDED THERE's rules hold:
   `offset_bound` widens `draw_item_bounds`, every stage gets it from one splice (the previous

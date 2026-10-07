@@ -854,13 +854,27 @@ fire and rain share.
 **The surface hook** (`create_shader_hook`, `Material.shader_hook`). Two calls of one function,
 from the same gathered albedo and coverage, so a hook multiplying its albedo does it once: the first
 before the alpha test, keeping albedo and alpha, the second after the gather, keeping the rest.
-`create_shader_hook` compiles the hook's two lit stages without linking, so a hook that does not
-compile is refused where the app made it, and builds its two shadow programs. A variant that
-fails at another mask is said once, by name, and its materials stay on the programs they have.
-A scene file describes each hook once, under `shaderHooks`, and its materials name it.
+`create_shader_hook` compiles the hook's lit stages at every feature and at none, the skinned
+vertex stage too when it has an offset, so a hook that does not compile is refused where the app
+made it, and builds its two shadow programs. A variant that fails anyway -- a link, which the check
+does not do -- drops the hook everywhere (`ShaderHook.broken`), said once by name: its materials
+draw as unhooked by every reader, surface, bound and shadow. A scene file describes each hook
+once, under `shaderHooks`, and its materials name it.
 - **The cache key is the hook too.** Without the id in the name, every hooked material at one
   mask draws with whichever hook compiled first -- `hooks-cache-key`'s red and blue boxes both
   came out striped.
+- **The full mask alone could not refuse a hook.** A hook reading `sheenTex`, or including a
+  chunk `pbr_frag` expands only under the rain or the cached-tile bit, compiles at every feature
+  and nowhere a scene without that feature asks; it passed creation and failed at `pbr-0`. Mask 0
+  is the other end, and a hook built at both is built at any.
+- **A hook kept after its variant failed split the material in two**: the surface drew the old
+  program while `classify`, the bound and the shadow followed the hook, so the shadow moved where
+  the surface did not. Dropping it from every reader at once is what keeps them together; the
+  shadow pass runs before the resolver, so the frame it fails on is the one frame they differ.
+- **A surface that does not build into the shadow costs only its cut.** The shadow stage declares
+  the albedo and nothing else of the material, so a hook reading its normal map builds as a lit
+  surface and not as a shadow; it keeps its offset there and casts by its material's alpha.
+  Refused whole, it would have lost an offset over a surface detail.
 
 **The offset** (`cetraOffset`, `object_position.glsl`). One splice reaches every stage that
 includes the chunk; a light draws a caster `classify` marked `DRAW_HOOKED_CASTER` through the
@@ -876,7 +890,13 @@ hook's own shadow program.
   program when the last layer ended on a hooked caster, and the plain casters of the next layer
   drew through the previous layer's matrix while the uniform cache recorded the new one as held.
 - **A masked hook casts through its alpha**: `DRAW_FOLIAGE` accepts a hook in place of an albedo
-  map. Without its program the card's holes left its shadow and the dome cast none.
+  map. Without its program the card's holes left its shadow and the dome cast none. Only a hook
+  whose alpha reached its shadow program counts: fell back to the plain one, a card with no albedo
+  map was cut by whatever texture the last caster left on unit 0.
+- **A kept face remembers how far a hook reached.** A caster's bound grows by its hook's
+  `offset_bound`, and when its hook changes the faces are drawn again over the old bound and the
+  new; marked from the new alone, a dome switched to a flat hook left its raised shadow in every
+  face that saw only the raised part.
 
 ## Atmosphere
 
