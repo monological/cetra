@@ -24,8 +24,9 @@ static const float TUBE_COLOUR[3] = {0.80f, 1.0f, 0.84f};
 #define TUBE_RANGE      9.0f
 #define TUBE_RANGE_HOOD 4.5f
 // Metres from a strip's centre that nothing nearer casts its shadow: past the steel channel
-// (tube_fixture), whose box the strip sits inside, so that would otherwise shadow the ceiling
-// round every tube from within.
+// (tube_fixture), about 7 cm at its farthest corner. The channel is a box square to the world,
+// so a tilted strip's emitting plane cuts through it, and inside the near plane a cached face
+// draws the steel in front of the strip and shadows the ceiling round it.
 #define TUBE_SHADOW_NEAR 0.1f
 
 #define FLASHLIGHT_CANDELA 900.0f
@@ -301,8 +302,8 @@ void lights_update(Lights* lights, Scene* scene, double time, float dt, const ve
     // are ours to state. Left derived, a 6000-nit panel claims every cluster in
     // the frustum. Looked up each frame rather than held from the first, so a
     // panel the engine re-derives is never one this holds dangling. Every tube
-    // casts, and keeps its shadow, since none of them moves: the hood's lights
-    // the hall's floor through the wall without one.
+    // casts, and keeps its shadow, since none of them moves: without one, the
+    // hood's tube lights the hall's floor through the wall.
     for (int t = 0; t < TUBE_COUNT; t++) {
         Light* l = scene_find_light(scene, TUBES[t].name);
         if (!l || l->type != LIGHT_AREA)

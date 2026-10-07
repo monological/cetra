@@ -12,7 +12,7 @@ out vec4 FragColor; // .r visibility toward the scene's lights (1 = lit, 0 = occ
 //
 // It marches the KEY DIRECTIONAL and every CLUSTERED LOCAL LIGHT THAT HAS NO
 // SHADOW MAP (spec 11.56), and the second half is the larger one: the punctual
-// atlas holds 8 layers and a point light spends 6, so past the first point light
+// pool holds 16 layers and a point light spends 6, so past the second point light
 // in a scene there is no map to be had at all, and a derived area panel or any
 // light authored cast_shadows false never had one. For that population this is
 // not a sharpening of an existing shadow, it is the only occlusion there is.

@@ -10,22 +10,13 @@
 #include "mesh.h" // AABB
 #include "program.h"
 
-// The cached tiles' numbers, shared with the shaders (spec 13.16).
+// The punctual array's numbers -- its per-frame pool, MAX_PUNCTUAL_SHADOW_LAYERS, and the
+// cached tiles past it -- shared with the shaders.
 #include "../shaders/include/shadow_tile_constants.glsl"
 
 #define MAX_SHADOW_LIGHTS       3
 #define SHADOW_CASCADES         3 // Compile-time cascade ceiling (runtime: cascade_count)
 #define DEFAULT_SHADOW_MAP_SIZE 2048
-// Worst-case punctual layers per frame, NOT a VRAM budget: every layer is
-// re-rendered each frame, so this caps scene traversals. A point light takes 6
-// and a panel 5 (spec 13.27), so this buys a point light, a panel and five spots,
-// or three panels. Erring small is deliberate -- exhausting the pool is a
-// failure a log line can name, where an over-large pool costs frame time with
-// no signal at all. Allocation is demand-driven, so a spot-only scene builds
-// one layer. Each layer is a mat4 of pbr_frag's default uniforms.
-#define MAX_PUNCTUAL_SHADOW_LAYERS 16
-_Static_assert(SHADOW_TILE_MARK >= MAX_PUNCTUAL_SHADOW_LAYERS,
-               "a cached light's marker must be past every per-frame punctual layer");
 // Punctual map size bounds and the VRAM the array is allowed to spend.
 //
 // One GL_TEXTURE_2D_ARRAY carries one size for every layer, and a second array

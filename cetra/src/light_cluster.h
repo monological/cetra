@@ -52,15 +52,15 @@ typedef struct GpuPackedLight {
     // shadow's lookup reads it as its faces' far plane, which is the range.
     float pos_range[4];
     float dir_type[4];        // xyz = direction (world, UNIT), w = 1 point / 2 spot / 3 area
-    float color_intensity[4]; // xyz = color * intensity (premultiplied)
+    float color_intensity[4]; // xyz = color * intensity (premultiplied), w = a cached
+                              // light's drawn body's radius
     // The attenuation triple this used to carry is gone -- punctual falloff is
     // inverse-square windowed by `range`, and slot [1] now holds a live index.
     float atten_cutoff[4]; // 1/range^2 (0 = unbounded), IES profile index
                            // (-1 = none), reserved, cos inner cone -- for a cached
                            // light, the last two are its drawn body's segment's x and y
     float shadow_misc[4];  // cos outer cone, punctual shadow layer, size.xy -- for a cached
-                           // light, the segment's z, and for a cached point light the drawn
-                           // body's radius in place of size.x
+                           // light, the segment's z in place of the outer cone
     // Roll reference, unit and orthonormal to dir: a panel's height axis
     // (spec 9.2), an asymmetric IES profile's azimuth zero (spec 11.57); then a cached
     // light's near plane.

@@ -1228,21 +1228,32 @@ static void compute_perspective_light_space(const vec3 pos, const vec3 dir_in, f
     compute_perspective_light_space_up(pos, dir, up, fov, near_plane, far_plane, dest);
 }
 
-// A point light's six faces, in the +X -X +Y -Y +Z -Z order that include/cube_face.glsl
-// selects by dominant axis. For a per-frame map that order is the whole contract, since
+// A cube's six faces, in the +X -X +Y -Y +Z -Z order that include/cube_face.glsl selects by
+// dominant axis, and the up each is rolled to: world up, or +X for the two looking along it,
+// light_space_up's choice. For a per-frame map that order is the whole contract, since
 // everything else about a face is in its matrix; a cached face's basis is restated in
 // include/tile_lookup.glsl, which projects without one.
 static const vec3 PUNCTUAL_CUBE_DIR[6] = {{1.0f, 0.0f, 0.0f}, {-1.0f, 0.0f, 0.0f},
                                           {0.0f, 1.0f, 0.0f}, {0.0f, -1.0f, 0.0f},
                                           {0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, -1.0f}};
+static const vec3 PUNCTUAL_CUBE_UP[6] = {{0.0f, 1.0f, 0.0f}, {0.0f, 1.0f, 0.0f},
+                                         {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f, 0.0f},
+                                         {0.0f, 1.0f, 0.0f}, {0.0f, 1.0f, 0.0f}};
 
-// A panel's faces (spec 13.27): a cube in its own frame with the face behind it left out.
-#define PANEL_SHADOW_FACES 5
-
-// Layers one light needs: a point light's cube is six 2D faces, a panel's five, and a spot is
-// a single perspective map.
+// Layers one light needs, 0 for a light the pool does not draw: a point light's cube is six 2D
+// faces, a panel's the first five of the same cube in its own frame (spec 13.27) -- the sixth
+// would look behind it, where it lights nothing -- and a spot's a single perspective map.
 static int punctual_layers_for(const Light* light) {
-    return light->type == LIGHT_POINT ? 6 : light->type == LIGHT_AREA ? PANEL_SHADOW_FACES : 1;
+    switch (light->type) {
+        case LIGHT_POINT:
+            return 6;
+        case LIGHT_AREA:
+            return 5;
+        case LIGHT_SPOT:
+            return 1;
+        default:
+            return 0;
+    }
 }
 
 // Fill a light's layers with its light-space matrices, in the layer order its
@@ -1261,37 +1272,32 @@ static int compute_punctual_matrices(const Light* light, const ShadowSystem* ss,
 
     switch (light->type) {
         case LIGHT_POINT:
-            for (int f = 0; f < 6; f++) {
-                compute_perspective_light_space(light->global_position, PUNCTUAL_CUBE_DIR[f],
-                                                glm_rad(90.0f), near_p, far_p, dest[f]);
-            }
-            break;
         case LIGHT_AREA: {
-            // A cube in the panel's own frame, the one light_cluster.c ships and ltcPanel
-            // shades by: its normal n, its up u and the width axis r = u x n. A single map down
-            // the normal reached 60 degrees off it and read everything past that as lit, walls
-            // included; no single map reaches the 90 a panel emits to (spec 10.4). The faces
-            // are +r -r +u -u +n, the cube-face order with (r, u, n) as (x, y, z), in which
-            // panelCubeFace (include/cube_face.glsl) selects. There is no -n face: every
-            // direction it would be chosen for is behind the panel, which lights nothing there.
-            // Each face is rolled to another axis of the frame, so its square frustum covers
-            // exactly the directions it is chosen for; rolled to world up it would not, on a
-            // panel turned off the world's axes. The faces end at the panel's range where it has
-            // one, as a cached light's do: it lights nothing past it, and nothing past it can
-            // stand between it and what it lights. At the scene's far plane a tube's side faces
-            // took in the whole street, ten of them a frame.
-            const float panel_far = light->range > 0.0f ? fminf(far_p, light->range) : far_p;
-            vec3 n = GLM_VEC3_ZERO_INIT, u = GLM_VEC3_ZERO_INIT, r = GLM_VEC3_ZERO_INIT;
-            light_emission_frame(light, n, u);
-            glm_vec3_cross(u, n, r);
-            vec3 neg_r = GLM_VEC3_ZERO_INIT, neg_u = GLM_VEC3_ZERO_INIT;
-            glm_vec3_negate_to(r, neg_r);
-            glm_vec3_negate_to(u, neg_u);
-            const float* dirs[PANEL_SHADOW_FACES] = {r, neg_r, u, neg_u, n};
-            const float* ups[PANEL_SHADOW_FACES] = {u, u, n, n, u};
-            for (int f = 0; f < PANEL_SHADOW_FACES; f++) {
-                compute_perspective_light_space_up(light->global_position, dirs[f], ups[f],
-                                                   glm_rad(90.0f), near_p, panel_far, dest[f]);
+            // A cube in the light's frame: the world's for a point light, and for a panel the
+            // one light_cluster.c ships and ltcPanel shades by, the width axis r = u x n, its up
+            // u and its normal n as x, y and z -- the frame panelCubeFace
+            // (include/cube_face.glsl) selects in. Every face is rolled within the frame, so its
+            // square frustum covers exactly the directions it is chosen for, which world up
+            // would not on a panel turned off the world's axes. A single map down a panel's
+            // normal reached 60 degrees off it and read everything past that as lit, walls
+            // included (spec 10.4). A panel's faces end at its range where it has one, as a
+            // cached light's do: it lights nothing past it, and nothing past it can stand
+            // between it and what it lights.
+            mat3 frame = GLM_MAT3_IDENTITY_INIT;
+            float face_far = far_p;
+            if (light->type == LIGHT_AREA) {
+                light_emission_frame(light, frame[2], frame[1]);
+                glm_vec3_cross(frame[1], frame[2], frame[0]);
+                if (light->range > 0.0f)
+                    face_far = fminf(far_p, light->range);
+            }
+            const int faces = punctual_layers_for(light);
+            for (int f = 0; f < faces; f++) {
+                vec3 dir = GLM_VEC3_ZERO_INIT, up = GLM_VEC3_ZERO_INIT;
+                glm_mat3_mulv(frame, (float*)PUNCTUAL_CUBE_DIR[f], dir);
+                glm_mat3_mulv(frame, (float*)PUNCTUAL_CUBE_UP[f], up);
+                compute_perspective_light_space_up(light->global_position, dir, up, glm_rad(90.0f),
+                                                   near_p, face_far, dest[f]);
             }
             break;
         }
@@ -1357,17 +1363,18 @@ static void draw_shadow_layer(ShadowSystem* ss, const Scene* scene, const DrawLi
  * is exact for its own point, and the lookup averages them.
  */
 
-// Whether a light of this type can keep its shadow in tiles: a point light, or a panel, cached
-// from its centre over the six world-axis faces a point light's are (spec 13.27).
-static bool light_type_caches(LightType type) {
-    return type == LIGHT_POINT || type == LIGHT_AREA;
+// Whether a light asks to keep its shadow in tiles and is of a type that can: a point light, or
+// a panel, cached from its centre over the six world-axis faces a point light's are (spec
+// 13.27). Not a spot: its cone cosines carry a cached light's segment.
+static bool light_wants_tiles(const Light* light) {
+    return light->cast_shadows && light->shadow_cache &&
+           (light->type == LIGHT_POINT || light->type == LIGHT_AREA);
 }
 
 // Whether a light's shadow goes in tiles rather than the per-frame pool. Its range is where
 // its faces end, so a cached light with none stays in the pool.
 bool shadow_light_takes_tiles(const Light* light) {
-    return light->cast_shadows && light->shadow_cache && light_type_caches(light->type) &&
-           light->range > 0.0f;
+    return light_wants_tiles(light) && light->range > 0.0f;
 }
 
 static int tiles_per_layer(int edge) {
@@ -1399,7 +1406,8 @@ static int tile_reference_count(const ShadowSystem* ss) {
                                                             : ss->tile_reference;
 }
 
-// A panel has none: its body is its rectangle, and create_light refuses it a capsule.
+// A panel has none, whatever it carries: its body is its rectangle, which a capsule along its
+// normal is not.
 static bool light_has_body(const Light* light) {
     return light->type != LIGHT_AREA &&
            (light->source_radius > 0.0f || light->source_length > 0.0f);
@@ -1513,8 +1521,8 @@ static bool tile_views_drifted(const ShadowSystem* ss, const ShadowTileBlock* bl
 static void shadow_tile_face_matrix(const vec3 origin, int face, float near_plane, float far_plane,
                                     mat4 dest) {
     const float fov = 2.0f * atanf(1.0f / SHADOW_TILE_INNER);
-    compute_perspective_light_space(origin, PUNCTUAL_CUBE_DIR[face], fov, near_plane, far_plane,
-                                    dest);
+    compute_perspective_light_space_up(origin, PUNCTUAL_CUBE_DIR[face], PUNCTUAL_CUBE_UP[face], fov,
+                                       near_plane, far_plane, dest);
 }
 
 // Face `face` of a block -- counted across its views, six a view -- from its view's origin
@@ -2798,7 +2806,7 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
         light->shadow_tile = -1;
         if (!light->cast_shadows || shadow_light_takes_tiles(light))
             continue;
-        if (light->shadow_cache && light_type_caches(light->type) && !rangeless)
+        if (light_wants_tiles(light) && !rangeless)
             rangeless = light;
 
         if (light->type == LIGHT_DIRECTIONAL) {
@@ -2808,13 +2816,13 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
                 dir_overflow = light;
             continue;
         }
-        if (light->type != LIGHT_SPOT && light->type != LIGHT_POINT && light->type != LIGHT_AREA)
+        const int want = punctual_layers_for(light);
+        if (want == 0)
             continue;
 
         // A light takes all its faces or none: a cube short of one is a light with
         // holes in it, which is worse than one that does not cast. A later light
         // needing fewer may still fit.
-        int want = punctual_layers_for(light);
         if (punctual_needed + want > MAX_PUNCTUAL_SHADOW_LAYERS) {
             if (!pool_overflow)
                 pool_overflow = light;
@@ -2850,7 +2858,7 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     ss->dir_slot_warned = dir_overflow != NULL;
 
     // A cached light with no range has no far plane for its faces, so it is drawn into the
-    // pool every frame instead -- which still casts, and costs six traversals a frame.
+    // pool every frame instead -- which still casts, and costs a traversal a face a frame.
     if (rangeless && !ss->tile_range_warned) {
         log_warn("'%s' asks for a cached shadow and has no range; drawn every frame instead",
                  rangeless->name ? rangeless->name : "unnamed light");
