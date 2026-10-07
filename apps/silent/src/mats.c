@@ -418,25 +418,25 @@ static const MatSpec SPECS[MAT_COUNT] = {
     // late program that draws it takes nothing from the material but its params.
     [MAT_TV_STATIC] = {"tv_static", NULL, {0.0f, 0.0f, 0.0f}, 1.0f, 0.0f, 1.0f},
     /*
-     * The basement (spec 13.31), from scans already fetched. The foundation is the mansion's
-     * rubble darkened, and its foot darker and glossier again, as masonry is where it draws water
-     * up out of the ground; the two meet in a tide line along the walls, which is where the grime
-     * of each band's edge lands. The joists are the porch's old boards gone brown.
+     * The basement (spec 13.31), from scans already fetched. Its walls are painted two tones, an
+     * institution's: a pale paint gone the colour of old teeth, and a dark green enamel round
+     * their foot, glossier, carried up the stairwell along the flight. Both on the dirty-white
+     * wall scan, so the stains show through. The joists are the porch's old boards gone brown.
      */
-    [MAT_CELLAR_STONE] = {"cellar_stone",
-                          "castle_wall_varriation",
-                          {0.62f, 0.64f, 0.58f},
-                          1.0f,
-                          0.0f,
-                          2.0f,
-                          .grime = 0.85f},
-    [MAT_CELLAR_DAMP] = {"cellar_damp",
-                         "castle_wall_varriation",
-                         {0.32f, 0.34f, 0.30f},
-                         0.55f,
+    [MAT_CELLAR_WALL] = {"cellar_wall",
+                         "concrete_wall_003",
+                         {0.80f, 0.82f, 0.70f},
+                         1.0f,
                          0.0f,
-                         2.0f,
-                         .grime = 0.9f},
+                         1.5f,
+                         .grime = 0.85f},
+    [MAT_CELLAR_DADO] = {"cellar_dado",
+                         "concrete_wall_003",
+                         {0.13f, 0.20f, 0.16f},
+                         0.45f,
+                         0.0f,
+                         1.5f,
+                         .grime = 0.6f},
     [MAT_CELLAR_FLOOR] = {"cellar_floor",
                           "concrete_pavement",
                           {0.55f, 0.57f, 0.52f},

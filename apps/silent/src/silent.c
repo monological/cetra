@@ -350,14 +350,16 @@ static void build_sky(Engine* engine) {
 /*
  * The player's house is plainer and new, so its grid is laid from its bounds and the engine
  * switches off whatever probe lands in a wall (create_gi_volume_spaced): the basement, the
- * ground floor and the porch, a metre a cell. Nothing upstairs is lit or seen. The basement's
- * floor is a whole number of cells under the yard, so the ground floor's probes stand where they
- * did before it was dug (spec 13.31).
+ * ground floor and the porch, a metre a cell. Nothing upstairs is lit or seen. The grid reaches a
+ * whole number of cells under the yard, so the ground floor's probes stand where they did before
+ * the basement was dug (spec 13.31); its lowest layer lands in the basement's slab and is
+ * switched off with the walls.
  */
 #define HOME_GI_CELL 1.0f
 
 static void build_home_gi(void) {
-    const vec3 lo = {HOUSE_X0 - 0.2f, BASEMENT_Y, PORCH_Z0 - 0.2f};
+    const float under = HOME_GI_CELL * ceilf(-BASEMENT_Y / HOME_GI_CELL);
+    const vec3 lo = {HOUSE_X0 - 0.2f, -under, PORCH_Z0 - 0.2f};
     const vec3 hi = {HOUSE_X1 + 0.2f, CEIL_Y + 0.1f, HOUSE_BACK_Z + 0.2f};
     GIVolume* gi = create_gi_volume_spaced(lo, hi, HOME_GI_CELL);
     if (gi && scene_add_gi_volume(g_scene, gi))
