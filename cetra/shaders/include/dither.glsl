@@ -1,7 +1,6 @@
 // The output dither (spec 11.24): triangular-PDF noise of one LSB laid over a display-encoded
-// colour just before it is quantized to the 8-bit target. Whichever pass writes the window last
-// ends with it -- the tonemap, or the CRT when one is on -- since anything after it reaches the
-// target undithered.
+// colour just before it is quantized to the 8-bit target, by the pass that writes the window, as
+// its last step: anything after it reaches the target undithered.
 
 #include "noise.glsl"
 

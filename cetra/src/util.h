@@ -26,12 +26,12 @@ void draw_fullscreen_quad(GLuint vao);
 
 /*
  * The state a pass changes and must hand back: the framebuffer, the viewport, the blend
- * function, the face culled, the polygon mode, and the depth test, blend and face culling every
- * such pass wants off. Begin saves and disables, and fills polygons -- a pass drawn in the
- * wireframe debug view's lines writes only a quad's outline; end restores, on every exit
- * including the failure ones, so a pass never leaves the pipeline in a state its caller did not
- * put it in -- including one it turned ON, which is why each switch is restored in both
- * directions.
+ * function, the face culled, the polygon mode, and the depth test, blend, face culling and
+ * scissor every such pass wants off -- a scissor left on by an overlay clips a full-screen pass.
+ * Begin saves and disables, and fills polygons -- a pass drawn in the wireframe debug view's
+ * lines writes only a quad's outline; end restores, on every exit including the failure ones, so
+ * a pass never leaves the pipeline in a state its caller did not put it in -- including one it
+ * turned ON, which is why each switch is restored in both directions.
  */
 typedef struct GLPassState {
     GLint viewport[4];
@@ -42,6 +42,7 @@ typedef struct GLPassState {
     GLboolean depth;
     GLboolean blend;
     GLboolean cull;
+    GLboolean scissor;
 } GLPassState;
 GLPassState gl_pass_begin(void);
 void gl_pass_end(const GLPassState* state);

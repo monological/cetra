@@ -513,14 +513,14 @@ static void build_probes(void) {
         free_reflection_probe_set(set);
 }
 
-static void build_post(const Engine* engine, bool night, bool grade, bool crt) {
+static void build_post(const Engine* engine, bool night, bool grade) {
     PostFX* fx = engine->postfx;
     if (!fx)
         return;
     postfx_apply_film_look(fx);
     // No film grain; on request, a console's picture on a living-room television (spec 13.28).
     fx->grain_enabled = false;
-    fx->crt_enabled = crt;
+    fx->crt_enabled = g_args.crt;
     fx->contact_shadows_enabled = true;
     // A puddle in the road mirrors a lamp head or a window across the street,
     // ten to twenty metres up its reflected ray. The default reach of eight fades
@@ -662,7 +662,7 @@ static void on_init(Game* game) {
     cat_voice_start(&g_voice, &g_cat, audio, g_args.cat_say);
 
     // Before the sky: its reflections are baked through the fog set here.
-    build_post(engine, !g_args.day, !g_args.no_grade, g_args.crt);
+    build_post(engine, !g_args.day, !g_args.no_grade);
     build_sky(engine);
 
     if (!g_args.no_wind) {

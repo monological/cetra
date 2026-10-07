@@ -2333,9 +2333,10 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode) {
                          engine->camera ? engine->camera->far_clip : 2.0f}};
     // The picture -- the frame, the debug tiles and the app's overlay -- goes into the CRT's
     // framebuffer when one is on (spec 13.28), and into the window when not.
-    postfx_run(engine->postfx, engine->framebuffer, postfx_picture_fbo(engine->postfx),
-               frame_mode == RENDER_MODE_PBR, &writes, engine->draw_projection,
-               engine->view_matrix);
+    const GLuint picture = postfx_picture_fbo(engine->postfx);
+    postfx_run(engine->postfx, engine->framebuffer, picture, frame_mode == RENDER_MODE_PBR, &writes,
+               engine->draw_projection, engine->view_matrix);
+    glBindFramebuffer(GL_FRAMEBUFFER, picture);
 
     // Sky LUT debug overlay onto the composited frame (an acceptance tool,
     // the csm_debug shape: a library-side flag the app/GUI toggles)
@@ -2364,7 +2365,8 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode) {
 
     // Through the CRT into the window, if the picture went into it; the GUI is the developer's
     // and goes over the television, sharp.
-    postfx_present_picture(engine->postfx);
+    postfx_present_picture(engine->postfx, picture);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
     // GUI last, after tone mapping. gui_render_frame self-gates on
     // gui_frame_active, so it no-ops when no panel/overlay is enabled.
