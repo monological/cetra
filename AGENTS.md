@@ -264,11 +264,14 @@ see that, since every other rain arm runs without TAA, where the two agree -- se
 contact shadows -> GTAO + SSGI sweep -> split spec-occ composite -> the TAA seam
 (TAA at full scale; the TAAU upscaling resolve under `--render-scale`, which
 brings the render-res frame to post res) -> SSGI denoise -> SSR (hi-z) ->
-SSGI composite -> atmosphere (fog + aerial) -> SSS -> motion blur -> the late draw (rain:
-streaks and splashes, spec 13.9) -> DoF ->
+SSGI composite -> atmosphere (fog + aerial) -> SSS -> motion blur -> the late draw (an app's
+late-draw materials, then fire, then rain: streaks and splashes, spec 13.9) -> **an app's passes
+before DoF** -> DoF -> **an app's passes before bloom** ->
 auto-exposure metering -> bloom (+ lens flare) -> diffraction glare -> local exposure (its grid,
 spec 13.19) -> tonemap + finishing (sharpen / color-grade /
-vignette / gamma / grain) -> the app's overlay -> the CRT (spec 13.28) -> GUI. Everything before
+vignette / gamma / grain) -> **an app's passes after the tone map** -> the app's overlay -> the
+CRT (spec 13.28) or the present pass -> GUI. The three app points are spec 13.29's; see App
+Shaders below. Everything before
 the seam runs at RENDER res
 (post size x `render_scale`, 1 by default), everything after composites onto a
 post-res canvas; at scale 1 the two are the same buffer. Debug render modes
@@ -454,7 +457,8 @@ sharpen (`--sharpen`) is the user-facing crispness lever when scaled.
 | `scene.c/h` | Scene graph, hierarchical transforms, owns lights/materials/particles/shadow/IBL/sky |
 | `render.c/h` | Scene traversal + the ordered scene passes (opaque/skybox/transparent/OIT/particles) |
 | `occlusion.c/h` | CPU masked occlusion culling (spec 11.98): authored proxies rasterised into a 256x144 fixed-point buffer from THIS frame's camera, one conservative test per item per frame. No GL in the module; conservative by four stated roundings, so a violated authoring contract (a box poking out of its mesh) is the only path to a wrong pixel — and the probe checks that too |
-| `program.c/h`, `shader.c/h`, `uniform.c/h` | Shader program compile, uniform setup |
+| `program.c/h`, `shader.c/h`, `uniform.c/h` | Shader program compile, uniform setup. `shader.c` also holds the runtime `#include` resolver every source passes through, and the splice that puts an app's GLSL at a marker line (spec 13.29) |
+| `shader_hook.c/h` | An app's SURFACE HOOK (spec 13.29): GLSL deciding a lit surface's albedo, coverage, normal, roughness, metallic, AO and emission, and optionally an OFFSET moving its vertices. Engine-owned, test-compiled when made; a material borrows one by a plain pointer and the variant resolver builds the hooked variant. See App Shaders |
 | `common.h` | Vertex-attribute + sampler-unit + render-mode enums |
 
 **Materials & geometry**
@@ -693,7 +697,9 @@ error, delete `cetra/src/shader_strings.h`. The build regenerates on any `.glsl`
 it too) -- there is no manual step, and `./build.sh` is the whole answer.
 **Only `program.c` includes it** (spec 11.105). It used to be included from `shader.h`, which
 `engine.h` pulls in, so every file that used the engine compiled 2 MB of string literals and a
-`.glsl` edit rebuilt 66 objects. Now it rebuilds one.
+`.glsl` edit rebuilt 66 objects. Now it rebuilds one. **Its sibling, `shader_includes.h`, is the
+`include/` chunks UNEXPANDED, and only `shader.c` includes that** (spec 13.29): the table the
+runtime resolver expands an app's `#include "x.glsl"` against. See App Shaders below.
 
 Inventory by subsystem. **`docs/shader-subsystems.md` carries the per-subsystem detail** — how
 each one works, what was rejected, and the failure modes that render a plausible frame. Read the
@@ -831,6 +837,12 @@ entry there before changing anything marked with a dagger.
   glyph branch takes `fwidth` with no constant smoothing term, which is what keeps text the same
   weight at any size
 - **Debug / util:** `shape_vert/geo/frag`, `bone_vert/frag`, `xyz_vert/frag`, `mask_copy_frag`
+- **App shaders (spec 13.29):** `late_surface_vert` under an app's late-draw fragment, with
+  `include/late_surface.glsl` (its depth test, fog and pre-exposure); `include/surface_hook.glsl`,
+  the struct a surface hook decides; `present_frag`, the picture into the window when something
+  drew after the tone map and no CRT is on. The splice markers are
+  `// CETRA_SURFACE_HOOK_CHUNK` (`pbr_frag`, `shadow_depth_frag`) and
+  `// CETRA_OFFSET_HOOK_CHUNK` (`include/object_position.glsl`)
 
 Three rules from that inventory stay HERE, because each one is violated from a different file:
 
@@ -879,6 +891,63 @@ Three rules from that inventory stay HERE, because each one is violated from a d
   `punctual_layer_count` bound -- the same bound `punctual_shadow.glsl` puts on the lookup.
   Anything asking "does this light have a map" must go through that helper and not the raw
   field, or a light silently keeps a map it lost.
+
+## App Shaders (spec 13.29)
+
+**An app, or a `.cscn`, puts its own GLSL at four places, and a new effect is a shader file and a
+setting rather than an engine module.** The shape is Unreal's: a surface material feeding the
+engine's lighting, a translucency pass of "After Motion Blur", and post materials at named
+Blendable Locations. `shader_hooks_fixture` has a piece at every one and the `shader-hooks` gate
+group an arm for each.
+
+- **The include resolver.** `create_shader` runs every source through
+  `shader_source_with_includes`, so an app's shader may `#include "noise.glsl"` like the engine's
+  own. The engine's shaders were expanded at build time and pass through as copies, which is why
+  adding it moved no golden. Include-once, and the build-time expansion's
+  `// ---- begin X ----` lines count as included, so a chunk the host already holds is never
+  defined twice. `cetra_embed_shaders(<target> <dir>)` (CMake) turns an app's `shaders/*.glsl`
+  into a header of strings, includes left for the resolver.
+- **Post passes**, `postfx_add_pass(fx, at, program)` over `create_post_pass_program`, at
+  `POSTFX_AT_BEFORE_DOF`, `_BEFORE_BLOOM` or `_AFTER_TONEMAP`. GL 4.1 has no texture barrier, so a
+  pass draws into an engine scratch and is BLITTED back, the motion-blur idiom, and the frame keeps
+  its handle. After the tone map the pass runs on PostFX's PICTURE -- the CRT's intermediate,
+  moved into PostFX because it stopped being the CRT's alone -- and the CRT or the new present
+  pass writes the window, so the dither stays last. **Replacing the tone map is not offered**: its
+  curve is a function inside the shader that also composites AO, contact shadows, bloom, flare and
+  glare and runs the curve at five sharpen taps, which is not a stage boundary.
+- **The late lane**, `Material.pass = MATERIAL_PASS_LATE_DRAW` over `create_late_surface_program`,
+  is drawn by `render_late_items` from the late draw, ahead of fire and rain: past TAA and motion
+  blur, so a surface that changes every frame -- noise, a screen -- is not averaged into grey.
+  **Measured: noise drawn before the seam kept 5 codes of its 31 and correlated +0.72 frame to
+  frame.** The canvas has no depth attachment, so hiding is a compare against the resolved depth
+  (`include/late_surface.glsl`'s `lateVisible`), Unreal's own choice in that pass for the same
+  jitter reason. It casts no shadow, no capture sees it, and `node_set_programs` leaves its program
+  alone; both halves of a late surface are refused by name without the other.
+- **The surface hook**, `create_shader_hook` and `Material.shader_hook`: `void cetraSurface(inout
+  CetraSurface s)` over `include/surface_hook.glsl`, spliced into `pbr_frag` at a marker before
+  `main()`. **Not a mask bit**: a bit switches off code the shader holds, a hook brings code in,
+  so its define arrives in the same string as its source. Called TWICE, from the same gathered
+  albedo and coverage: before the alpha test, keeping albedo and alpha (the cut, decals, the
+  albedo view and the prepass exit all read them), and after the gather, keeping normal,
+  roughness, metallic, AO and emission. The variant key gains the hook's id (`pbr-<mask>-h<id>`),
+  and the resolver moves a material whose program's hook is not its own. **No sampler is spent**:
+  the hook reads what its variant already declares.
+- **The offset**, `vec3 cetraOffset(CetraVertex v)`, is spliced into `object_position.glsl`'s
+  `cetra_local_displacement` -- the fourth displacer, so ANYTHING ADDED THERE's rules hold:
+  `offset_bound` widens `draw_item_bounds`, every stage gets it from one splice (the previous
+  frame's at the previous time, for the motion vector), the lean prepass is sat out, and the
+  shadow passes take a per-hook program (`create_shadow_hook_program`, chosen per caster by
+  `_caster_program`). A masked material casts through its hook's alpha, since `DRAW_FOLIAGE`
+  accepts a hook in place of an albedo map. **Only an offset moving a surface AWAY from the eye
+  shows a broken prepass**: the one-sided `LEQUAL` passes everything that came nearer, which is
+  why the fixture carries a pushed quad beside its dome.
+- **Shader params**, `ShaderParams` (eight named vec4s), ride a material or a pass and are
+  uploaded by name wherever its program is bound -- the scene pass, the late draw, the shadow
+  passes. Nothing resets a name another owner of the same program set.
+- **In a `.cscn`**: `post.passes: [{at, shader, params, enabled}]`, and on a material
+  `lateShader`, `surfaceShader`, `offsetShader`, `offsetBound`, `offsetAnimated` and
+  `shaderParams`. Shader paths resolve against the scene file, as an IES profile does; materials
+  naming the same files share one hook.
 
 ## OpenGL Vertex Attributes (common.h)
 
@@ -1655,7 +1724,9 @@ on the `Scene`.
 
 ## Memory Ownership
 
-- Engine owns scenes, shader programs, PostFX.
+- Engine owns scenes, shader programs, PostFX, and the surface hooks an app makes (spec 13.29;
+  a material borrows one). A post pass borrows its program, which its owner registers with
+  `engine_add_program`; the shadow system owns the per-hook shadow programs it builds.
 - Scene owns root node, materials (shared), texture pool, particle systems, shadow /
   IBL / sky / probe. **`create_scene` makes the root** (named "root"; spec 11.107), so an
   app attaches under `scene->root_node` and never builds one; `scene_set_root` frees the root
