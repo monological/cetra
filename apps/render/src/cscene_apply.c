@@ -1162,6 +1162,39 @@ void apply_cscene_shaders(Engine* engine, const Scene* scene, const CetraSceneDe
         pass->params = p->params;
         printf("Scene file: post pass '%s' at %d\n", name, p->at);
     }
+
+    for (int k = 0; k < cscn->material_count; k++) {
+        const CSceneMaterialOverride* mo = &cscn->materials[k];
+        if (!mo->late_shader[0])
+            continue;
+        char name[256];
+        char* source = _read_scene_shader(mo->late_shader, name, sizeof(name));
+        if (!source)
+            continue;
+        ShaderProgram* program = create_late_surface_program(name, source);
+        free(source);
+        if (!program) {
+            fprintf(stderr,
+                    "Warning: material '%s': late shader '%s' does not compile; the "
+                    "material keeps its own\n",
+                    mo->material, mo->late_shader);
+            continue;
+        }
+        engine_add_program(engine, program);
+        int tagged = 0;
+        for (size_t i = 0; i < scene->material_count; i++) {
+            Material* m = scene->materials[i];
+            if (!m || !m->name || strcmp(m->name, mo->material) != 0)
+                continue;
+            material_set_program(m, program);
+            m->pass = MATERIAL_PASS_LATE_DRAW;
+            tagged++;
+        }
+        printf("Scene file: late shader '%s' on material '%s' (%d material(s))\n", name,
+               mo->material, tagged);
+        if (tagged == 0)
+            fprintf(stderr, "Warning: material '%s' not found in scene\n", mo->material);
+    }
 }
 
 void apply_cscene_dust(Engine* engine, Scene* scene, const CetraSceneDesc* cscn, vec3 center,

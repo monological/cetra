@@ -266,4 +266,12 @@ void render_skeleton_bones(Engine* engine, Skeleton* skeleton, AnimationState* a
 // render_current_scene when engine->show_lights is set.
 void render_light_overlay(Engine* engine, Scene* scene);
 
+// Whether this frame's list holds anything drawn in the late draw (spec 13.29).
+bool render_has_late_items(const Scene* scene);
+
+// The scene's MATERIAL_PASS_LATE_DRAW meshes onto the late draw's canvas (spec 13.29), farthest
+// first, each through its own late surface program with the frame's depth, fog and clock bound
+// by name. Called from the late draw, so after this frame's list was built by the scene pass.
+void render_late_items(Engine* engine, const Scene* scene, const PostFXLateDraw* late);
+
 #endif // _RENDER_H_

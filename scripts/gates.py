@@ -29792,6 +29792,12 @@ HOOKS_DOF = ["--dof", "--dof-focus", "8.6", "--dof-range", "1.0"]
 HOOKS_HALO_MIN = 6.0      # codes a bloomed mark lifts the wall 3-10 px out, at the least
 HOOKS_SPREAD_MIN = 20.0   # codes a defocused mark spreads 1-3 px past its edge, at the least
 HOOKS_STILL_MAX = 1.0     # codes a mark drawn after a stage may move what that stage left
+# The static quad's open stretch, right of the post in front of it, and the post's front face
+# where it crosses the quad, both in world metres (the generator's STATIC_* and post box).
+HOOKS_STATIC_OPEN = ((-3.4, 2.0, -3.8), (-2.8, 3.2, -3.8))
+HOOKS_POST_FACE = ((-4.1, 2.2, -2.9), (-3.8, 3.0, -2.9))
+HOOKS_NOISE_STD_MIN = 20.0   # codes of spread a frame of fresh noise keeps under TAA
+HOOKS_NOISE_CORR_MAX = 0.2   # correlation two consecutive frames' noise may share
 
 
 def _hooks_box(w, h, rect):
@@ -29815,6 +29821,25 @@ def _hooks_ring_mean(pix, w, h, box, inner, outer):
     return total / max(n, 1)
 
 
+def _hooks_world_box(project, lo, hi, inset):
+    """The pixel box a world-space rectangle (two opposite corners) covers, `inset` px in."""
+    pts = [project((x, y, z)) for x in (lo[0], hi[0]) for y in (lo[1], hi[1])
+           for z in (lo[2], hi[2])]
+    return (int(min(p[0] for p in pts)) + inset, int(min(p[1] for p in pts)) + inset,
+            int(max(p[0] for p in pts)) - inset, int(max(p[1] for p in pts)) - inset)
+
+
+def _hooks_box_lumas(pix, w, box):
+    """Every pixel's mean code across its three channels, inside a pixel box."""
+    x0, y0, x1, y1 = box
+    out = []
+    for y in range(y0, y1):
+        for x in range(x0, x1):
+            o = (y * w + x) * 3
+            out.append((pix[o] + pix[o + 1] + pix[o + 2]) / 3.0)
+    return out
+
+
 def run_shader_hooks_gate(workdir):
     """An app's own shader runs where it says it does (spec 13.29).
 
@@ -29824,6 +29849,12 @@ def run_shader_hooks_gate(workdir):
       post-order      a mark painted at each location shows what ran after it and nothing that
                       ran before. Before DOF: defocused, and it blooms. Before bloom: sharp, and
                       it blooms. After the tone map: sharp, no bloom, and the codes it wrote.
+      late-fresh      the late-draw quad's noise, under TAA, keeps its spread in one frame and
+                      shares nothing with the frame before: no history reaches it.
+      late-occluded   where the post stands in front of the quad, the frame is the frame
+                      without the quad; where nothing does, it is not.
+      late-inert      the quad emitting nothing renders the frame with no quad at all: it casts
+                      no shadow, writes no G-buffer and reaches no other pass.
 
     The marks sit over the wall, which the depth of field blurs and the pieces in front of it do
     not reach, so each one is measured against the same frame rendered with no passes at all.
@@ -29877,16 +29908,101 @@ def run_shader_hooks_gate(workdir):
                     p["params"]["markRect"] = [0.0, 0.0, 0.0, 0.0]
         return mutate
 
-    scenes = {"marks": src}
-    for at in HOOKS_MARKS:
-        scenes[at] = scene(f"hooks_without_{at}.cscn", without(at))
-    frames = {}
-    for tag, scene_path in scenes.items():
-        for bloom, flags in (("bloom", []), ("nobloom", ["--no-bloom"])):
-            out = shot(scene_path, f"order_{tag}_{bloom}", HOOKS_DOF + ["--no-dither"] + flags)
-            frames[(tag, bloom)] = _read_ppm(out) if out else None
-    if any(f is None for f in frames.values()):
-        return failures + ["post-order"]
+    def post_order():
+        scenes = {"marks": src}
+        for at in HOOKS_MARKS:
+            scenes[at] = scene(f"hooks_without_{at}.cscn", without(at))
+        frames = {}
+        for tag, scene_path in scenes.items():
+            for bloom, flags in (("bloom", []), ("nobloom", ["--no-bloom"])):
+                out = shot(scene_path, f"order_{tag}_{bloom}",
+                           HOOKS_DOF + ["--no-dither"] + flags)
+                frames[(tag, bloom)] = _read_ppm(out) if out else None
+        if any(f is None for f in frames.values()):
+            return False, "a frame did not render"
+        return _hooks_post_order(frames)
+
+    ok, detail = post_order()
+    print(f"  post-order    {'PASS' if ok else 'FAIL'}  {detail}")
+    if not ok:
+        failures.append("post-order")
+
+    # The late draw. The bare twin is the same scene with no static quad in it at all.
+    def bare(d):
+        d["models"][0]["path"] = os.path.join(os.path.dirname(src),
+                                              asset_ref("shader_hooks_fixture_bare.gltf"))
+
+    def dark(d):
+        d["materials"]["hooks_static"]["shaderParams"]["noiseCells"][2] = 0.0
+
+    bare_scene = scene("hooks_bare.cscn", bare)
+    dark_scene = scene("hooks_dark.cscn", dark)
+
+    # late-fresh: frames 30 and 31 under TAA, with the jitter it resolves.
+    fresh = os.path.join(workdir, "hooks_fresh.ppm")
+    r = _run([RENDER, "-m", src, "-x", "-f", "31", "-W", "400", "-H", "300", "-S", fresh,
+              "--screenshot-every", "30", "--taa", "--headless-jitter"],
+             capture_output=True, text=True)
+    prev = os.path.join(workdir, "hooks_fresh_000030.ppm")
+    if r.returncode != 0 or not os.path.exists(fresh) or not os.path.exists(prev):
+        print(f"  shader-hooks  ERROR rendering the TAA pair: {(r.stdout + r.stderr)[-300:]}")
+        failures.append("late-fresh")
+    else:
+        w, h, now = _read_ppm(fresh)
+        _, _, before = _read_ppm(prev)
+        project = _projector(_cscn_camera(HOOKS_FIXTURE), w, h)
+        box = _hooks_world_box(project, *HOOKS_STATIC_OPEN, 3 * w // 400)
+        a = _hooks_box_lumas(now, w, box)
+        b = _hooks_box_lumas(before, w, box)
+        mean_a, mean_b = sum(a) / len(a), sum(b) / len(b)
+        std = math.sqrt(sum((v - mean_a) ** 2 for v in a) / len(a))
+        std_b = math.sqrt(sum((v - mean_b) ** 2 for v in b) / len(b))
+        corr = (sum((x - mean_a) * (y - mean_b) for x, y in zip(a, b))
+                / (len(a) * max(std * std_b, 1e-9)))
+        ok = std >= HOOKS_NOISE_STD_MIN and abs(corr) <= HOOKS_NOISE_CORR_MAX
+        print(f"  late-fresh    {'PASS' if ok else 'FAIL'}  spread {std:.1f} codes (needs >= "
+              f"{HOOKS_NOISE_STD_MIN:.0f}), frame-to-frame correlation {corr:+.3f} (bound "
+              f"{HOOKS_NOISE_CORR_MAX}) over {len(a)} px")
+        if not ok:
+            failures.append("late-fresh")
+
+    # No halos: the open noise beside the post would bloom onto it, which is light reaching it
+    # rather than the quad showing through.
+    lit = shot(src, "late_lit", NO_HALOS)
+    gone = shot(bare_scene, "late_bare", NO_HALOS)
+    quiet = shot(dark_scene, "late_dark", NO_HALOS)
+    if not (lit and gone and quiet):
+        return failures + ["late-occluded", "late-inert"]
+
+    w, h, lit_pix = _read_ppm(lit)
+    _, _, gone_pix = _read_ppm(gone)
+    project = _projector(_cscn_camera(HOOKS_FIXTURE), w, h)
+    open_box = _hooks_world_box(project, *HOOKS_STATIC_OPEN, 3 * w // 400)
+    post_box = _hooks_world_box(project, *HOOKS_POST_FACE, 3 * w // 400)
+
+    def mean_abs(box):
+        a, b = _hooks_box_lumas(lit_pix, w, box), _hooks_box_lumas(gone_pix, w, box)
+        return sum(abs(x - y) for x, y in zip(a, b)) / len(a)
+
+    behind, exposed = mean_abs(post_box), mean_abs(open_box)
+    ok = behind <= HOOKS_STILL_MAX and exposed >= HOOKS_NOISE_STD_MIN
+    print(f"  late-occluded {'PASS' if ok else 'FAIL'}  behind the post the frame moves "
+          f"{behind:.2f} codes from the bare one (bound {HOOKS_STILL_MAX:.0f}); in the open "
+          f"{exposed:.1f} (needs >= {HOOKS_NOISE_STD_MIN:.0f})")
+    if not ok:
+        failures.append("late-occluded")
+
+    ae, peak = compare(quiet, gone)
+    ok = peak <= LSB
+    print(f"  late-inert    {'PASS' if ok else 'FAIL'}  the quad at zero against no quad: {ae} px "
+          f"differ, peak {peak * 255:.2f} codes")
+    if not ok:
+        failures.append("late-inert")
+    return failures
+
+
+def _hooks_post_order(frames):
+    """post-order's measurement, over each mark's frame with it and without it."""
     w, h, _ = frames[("marks", "bloom")]
     problems, notes = [], []
     for at, rect in HOOKS_MARKS.items():
@@ -29918,11 +30034,7 @@ def run_shader_hooks_gate(workdir):
             problems.append("beforeDof was not defocused")
         if at == "beforeBloom" and abs(spread) > HOOKS_STILL_MAX:
             problems.append("beforeBloom was defocused")
-    ok = not problems
-    print(f"  post-order    {'PASS' if ok else 'FAIL'}  " + "; ".join(problems + notes))
-    if not ok:
-        failures.append("post-order")
-    return failures
+    return not problems, "; ".join(problems + notes)
 
 
 GATE_GROUPS = [

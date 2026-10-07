@@ -110,9 +110,14 @@ def box(name, material, lo, hi):
     return piece(name, "box", material, centre, size)
 
 
-# The wall's face, and the static quad's place on it.
+# The wall's face, and the static quad, standing a metre in front of it: far enough that the sun
+# would throw a quad drawn in the main pass onto the wall below, which is how the gate sees that
+# a late-draw surface casts nothing.
 WALL_Z = -4.8
-STATIC_LO, STATIC_HI = (-5.2, 2.4), (-2.6, 4.2)
+STATIC_Z = -3.8
+STATIC_LO, STATIC_HI = (-5.2, 1.7), (-2.6, 3.5)
+# Cells of noise across and down the quad, and its brightness at full, in nits.
+STATIC_CELLS = [96.0, 64.0, 2.0, 0.0]
 
 PIECES = [
     box("floor", "hooks_floor", (-7.0, -0.1, -5.0), (7.0, 0.0, 4.0)),
@@ -125,10 +130,13 @@ PIECES = [
     box("card", "hooks_card", (1.6, 0.0, -0.62), (2.8, 1.4, -0.58)),
     piece("dome", "grid", "hooks_dome", (4.2, 0.005, -0.4), (1.6, 1.0, 1.6)),
     piece("static", "quad", "hooks_static",
-          ((STATIC_LO[0] + STATIC_HI[0]) / 2, (STATIC_LO[1] + STATIC_HI[1]) / 2, WALL_Z + 0.01),
+          ((STATIC_LO[0] + STATIC_HI[0]) / 2, (STATIC_LO[1] + STATIC_HI[1]) / 2, STATIC_Z),
           (STATIC_HI[0] - STATIC_LO[0], STATIC_HI[1] - STATIC_LO[1], 1.0)),
     box("post", "hooks_post", (-4.2, 0.0, -3.4), (-3.7, 3.6, -2.9)),
 ]
+# The scene without the static quad, which the late surface must be indistinguishable from when
+# it emits nothing.
+BARE = [p for p in PIECES if p["name"] != "static"]
 
 # Where each post pass paints its mark, in the frame's 0..1 (GL's, so y runs up), over the
 # wall's top right: far enough that the depth of field blurs anything drawn before it.
@@ -170,6 +178,33 @@ void main()
     FragColor = vec4(inside ? markColor.rgb : color, 1.0);
 }
 """,
+    "hooks_late_static.glsl": """#version 330 core
+
+// A late-draw surface (spec 13.29's fixture): a field of noise new every frame, `noiseCells.x`
+// cells across and `.y` down, each grey at up to `.z` nits, added over whatever is behind it.
+// Drawn past TAA, so no history averages the frames together.
+
+in vec3 vWorldPos;
+in vec3 vNormal;
+in vec2 vUv;
+in vec4 vColor;
+in float vViewDepth;
+out vec4 FragColor;
+
+#include "late_surface.glsl"
+#include "noise.glsl"
+
+uniform vec4 noiseCells;
+
+void main()
+{
+    uvec2 cell = uvec2(vUv * noiseCells.xy);
+    float n = frameNoise(cell, uint(frame));
+    // A centimetre of slack: the quad is a metre clear of the wall behind it.
+    float shown = lateVisible(vViewDepth, 0.01);
+    FragColor = vec4(lateEmit(vec3(n * noiseCells.z), vViewDepth) * shown, 0.0);
+}
+""",
 }
 
 # ------------------------------------------------------------------------------------------------
@@ -184,7 +219,7 @@ def bounds(points):
             [max(p[i] for p in points) for i in range(3)])
 
 
-def gltf():
+def gltf(pieces):
     data, views, accessors, meshes = b"", [], [], []
 
     def add(blob, kind, count, component, target, b=None):
@@ -215,7 +250,7 @@ def gltf():
 
     materials = list(MATERIALS)
     nodes = []
-    for p in PIECES:
+    for p in pieces:
         attrs, index = shape_attrs[p["shape"]]
         meshes.append({"name": p["name"], "primitives": [{
             "attributes": attrs, "indices": index, "material": materials.index(p["material"])}]})
@@ -277,13 +312,20 @@ def scene():
             "cast_shadows": True,
         }],
         "post": {"exposure": 1.0, "passes": passes},
+        "materials": {
+            "hooks_static": {"lateShader": asset_ref("hooks_late_static.glsl"),
+                             "shaderParams": {"noiseCells": STATIC_CELLS}},
+        },
         "camera": CAMERA,
     }
 
 
 def main():
     with open(asset_path("shader_hooks_fixture.gltf"), "w") as f:
-        json.dump(gltf(), f, indent=1)
+        json.dump(gltf(PIECES), f, indent=1)
+        f.write("\n")
+    with open(asset_path("shader_hooks_fixture_bare.gltf"), "w") as f:
+        json.dump(gltf(BARE), f, indent=1)
         f.write("\n")
     with open(asset_path("shader_hooks_fixture.cscn"), "w") as f:
         json.dump(scene(), f, indent=1)

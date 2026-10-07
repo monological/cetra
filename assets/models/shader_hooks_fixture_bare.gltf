@@ -16,8 +16,7 @@
     6,
     7,
     8,
-    9,
-    10
+    9
    ]
   }
  ],
@@ -149,22 +148,8 @@
    ]
   },
   {
-   "name": "static",
-   "mesh": 9,
-   "translation": [
-    -3.9000000000000004,
-    2.6,
-    -3.8
-   ],
-   "scale": [
-    2.6,
-    1.8,
-    1.0
-   ]
-  },
-  {
    "name": "post",
-   "mesh": 10,
+   "mesh": 9,
    "translation": [
     -3.95,
     1.8,
@@ -301,20 +286,6 @@
      },
      "indices": 7,
      "material": 8
-    }
-   ]
-  },
-  {
-   "name": "static",
-   "primitives": [
-    {
-     "attributes": {
-      "POSITION": 8,
-      "NORMAL": 9,
-      "TEXCOORD_0": 10
-     },
-     "indices": 11,
-     "material": 9
     }
    ]
   },

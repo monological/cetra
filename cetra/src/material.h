@@ -59,6 +59,17 @@ typedef enum AlphaMode {
     ALPHA_BLEND,      // Translucent pass after the skybox, no depth writes
 } AlphaMode;
 
+// Where a material's meshes are drawn (spec 13.29), Unreal's Translucency Pass by another name.
+// Zero is the main pass, so a calloc'd material keeps the only behaviour there was before.
+typedef enum MaterialPass {
+    MATERIAL_PASS_MAIN = 0, // the scene passes, by alpha mode and transmission as ever
+    // The late draw, past TAA and motion blur and before depth of field ("After Motion Blur"):
+    // for what changes every frame and would be smeared by a history, and is lit by nothing --
+    // a screen, a hologram, sparks. Needs a create_late_surface_program; casts no shadow; no
+    // capture sees it.
+    MATERIAL_PASS_LATE_DRAW,
+} MaterialPass;
+
 // Which coordinate addresses a layered material's splat map. See Material.
 // Zero is UV1 so a calloc'd or partially-authored material keeps the mesh-local
 // reading, which is the one that cannot silently sample a single texel.
@@ -151,6 +162,7 @@ typedef struct Material {
     float roughness;
     float ao;
     float opacity;
+    MaterialPass pass; // where its meshes are drawn; derived into a lane every frame
     AlphaMode alpha_mode;
     float alphaCutoff;      // Alpha cutoff threshold for hair/foliage (0 = disabled, 0.5 typical)
     float normalScale;      // Normal map intensity scale (1.0 = full strength)

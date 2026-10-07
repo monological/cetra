@@ -35,6 +35,9 @@ typedef enum DrawLane {
     DRAW_LANE_BLEND,        // ALPHA_BLEND without transmission: the OIT sub-passes
     DRAW_LANE_TRANSMISSIVE, // transmission > 0: keeps the refraction path
     DRAW_LANE_SHADOW_ONLY,  // MESH_SHADOW_ONLY: casts for a light, and no camera pass draws it
+    // MATERIAL_PASS_LATE_DRAW (spec 13.29): drawn by render_late_items from the late draw, and
+    // by no scene pass, capture or light
+    DRAW_LANE_LATE_DRAW,
     DRAW_LANE_COUNT
 } DrawLane;
 

@@ -1429,6 +1429,17 @@ ShaderProgram* create_present_program() {
     return create_post_program("present", present_frag_shader_str);
 }
 
+ShaderProgram* create_late_surface_program(const char* name, const char* frag_source) {
+    ShaderProgram* program =
+        create_program_from_source(name, late_surface_vert_shader_str, frag_source, NULL);
+    if (!program) {
+        log_error("Failed to initialize late surface program %s", name ? name : "?");
+        return NULL;
+    }
+    program->late_surface = true;
+    return program;
+}
+
 ShaderProgram* create_ssgi_accum_program() {
     return create_post_program("ssgi_accum", ssgi_accum_frag_shader_str);
 }

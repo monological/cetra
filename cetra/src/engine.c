@@ -2251,6 +2251,9 @@ void engine_set_render_clock(Engine* engine, const EngineFrameClock* clock) {
 static void _engine_late_draw(void* user, const PostFXLateDraw* late) {
     Engine* engine = user;
     const Scene* scene = engine_get_scene(engine);
+    // An app's late-draw surfaces first (spec 13.29): fire and rain are translucent and composite
+    // over whatever is behind them, a screen included.
+    render_late_items(engine, scene, late);
     if (scene && fire_system_active(scene->fire))
         fire_render_draw(engine->fire_renderer, engine, scene, late);
     if (scene && rain_draws(scene->rain)) {
@@ -2300,7 +2303,8 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode) {
     shadow_publish_to_postfx(fx_scene, engine->postfx);
     rain_publish_to_postfx(fx_scene ? fx_scene->rain : NULL, engine->postfx);
     engine->postfx->late_draw =
-        fx_scene && (rain_draws(fx_scene->rain) || fire_system_active(fx_scene->fire))
+        fx_scene && (rain_draws(fx_scene->rain) || fire_system_active(fx_scene->fire) ||
+                     render_has_late_items(fx_scene))
             ? _engine_late_draw
             : NULL;
     engine->postfx->late_draw_user = engine;
