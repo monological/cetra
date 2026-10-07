@@ -4,10 +4,11 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-#include "light.h" // LightUnits: authored intensity units carry through to Light
-#include "rain.h"  // Rain: an authored rain block IS the runtime rain, over its defaults
-#include "fire.h"  // FireSystem: likewise the authored fire block
-#include "roads.h" // MaterialRoad: an authored road IS the runtime road, verbatim
+#include "light.h"    // LightUnits: authored intensity units carry through to Light
+#include "rain.h"     // Rain: an authored rain block IS the runtime rain, over its defaults
+#include "fire.h"     // FireSystem: likewise the authored fire block
+#include "roads.h"    // MaterialRoad: an authored road IS the runtime road, verbatim
+#include "material.h" // MaterialShaderParam: likewise an authored shader param
 
 /*
  * Cetra scene format (.cscn): a JSON scene description that owns the look
@@ -214,6 +215,10 @@ typedef struct CSceneMaterialOverride {
     // copy, with nothing but a comment holding the two ceilings together.
     MaterialRoad roads[MATERIAL_MAX_ROADS];
     int road_count; // 0 = no roads
+    // An app shader's own uniforms (spec 13.29), `shaderParams`: the runtime type, for roads'
+    // reason above.
+    MaterialShaderParam shader_params[MATERIAL_SHADER_PARAM_MAX];
+    int shader_param_count;
 } CSceneMaterialOverride;
 
 // Ambient dust: a scene-level particle effect (like fog). Each field carries a

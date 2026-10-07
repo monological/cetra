@@ -300,6 +300,10 @@ ShaderProgram* create_bone_program();
 // Shadow Catcher Program
 ShaderProgram* create_shadow_catcher_program();
 
+// An app's fullscreen fragment stage over the engine's own vertex stage (spec 13.29), which
+// hands it `in vec2 TexCoords`, 0..1 across the target. What postfx_add_pass runs.
+ShaderProgram* create_post_pass_program(const char* name, const char* frag_source);
+
 // Post-Processing Programs
 ShaderProgram* create_bloom_bright_program();
 // Diffraction glare (spec 13.4): the bright source, one FFT stage, the spectrum multiply and

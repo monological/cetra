@@ -31,11 +31,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ASSETS = os.path.dirname(HERE)
 
 
-# A .json is a flipbook's sidecar, which names its sheet beside itself and so sits with it.
+# A .json is a flipbook's sidecar, which names its sheet beside itself and so sits with it. A
+# .glsl is a shader a scene file names (spec 13.29), resolved against the scene like a model.
 KIND = {".gltf": "models", ".glb": "models", ".fbx": "models",
         ".cscn": "scenes", ".ies": "ies", ".cube": "lut", ".r16": "data",
         ".png": "textures", ".jpg": "textures", ".jpeg": "textures", ".hdr": "textures",
-        ".json": "textures"}
+        ".json": "textures", ".glsl": "shaders"}
 
 
 def asset_subpath(filename):

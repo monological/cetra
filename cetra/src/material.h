@@ -82,6 +82,16 @@ typedef enum MaterialCachedShadowWind {
     CACHED_SHADOW_WIND_REST,     // kept at rest, as an unmoving caster is (Unreal's "Rigid")
 } MaterialCachedShadowWind;
 
+// An app shader's own parameters (spec 13.29): a name and a vec4, uploaded as a uniform of that
+// name wherever the material's program is bound. Eight because a shader with more than eight
+// knobs wants a texture; the name is bounded so a table entry costs no allocation.
+#define MATERIAL_SHADER_PARAM_MAX  8
+#define MATERIAL_SHADER_PARAM_NAME 32
+typedef struct MaterialShaderParam {
+    char name[MATERIAL_SHADER_PARAM_NAME];
+    vec4 value;
+} MaterialShaderParam;
+
 // How many material layers a layered surface can blend between.
 //
 // Four because the splat map carries three weights and the first layer is the
@@ -126,8 +136,9 @@ typedef struct Material {
     // the scene's material texture array, roads_armed, and the layers_vt cache.
     //
     // BY FUNCTION: every Texture* (material_set_<x>_tex, and the two indexed
-    // layer setters: each retains the new texture and releases the old), and
-    // shader_program (material_set_program, which refuses NULL). The scalar
+    // layer setters: each retains the new texture and releases the old),
+    // shader_program (material_set_program, which refuses NULL), and the shader
+    // params (material_set_shader_param, which adds a name or overwrites it). The scalar
     // parameters are the MATERIAL_PARAMS table's rows, written directly or by
     // name through material_param_set; there is no per-field setter, because
     // the table forbids a second name-to-field binding.
@@ -412,6 +423,9 @@ typedef struct Material {
     struct MaterialLayersVt* layers_vt;
 
     ShaderProgram* shader_program;
+
+    MaterialShaderParam shader_params[MATERIAL_SHADER_PARAM_MAX];
+    int shader_param_count;
 } Material;
 
 typedef enum MaterialParamType {
@@ -546,6 +560,15 @@ Material* create_material();
 void free_material(Material* material);
 
 void material_set_program(Material* material, ShaderProgram* shader_program);
+
+// Set a shader parameter by name, adding it the first time. False, logged, when the material
+// already holds MATERIAL_SHADER_PARAM_MAX others or the name does not fit.
+bool material_set_shader_param(Material* material, const char* name, const vec4 value);
+// Upload every shader parameter to `uniforms`, the bound program's. A name the program does not
+// declare costs a location lookup and nothing else. Nothing resets a name a material leaves
+// out, so two materials sharing one program each set every param that program reads, or the
+// second inherits the first's.
+void material_upload_shader_params(const Material* material, UniformManager* uniforms);
 
 void material_set_albedo_tex(Material* material, Texture* texture);
 void material_set_normal_tex(Material* material, Texture* texture);

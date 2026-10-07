@@ -31,6 +31,12 @@ typedef struct {
 // other path is untouched.
 char* shader_source_with_defines(const char* source, const char* defines);
 
+// `source` with every `#include "x.glsl"` line expanded from the engine's shared chunks
+// (shaders/include/), each chunk once, nested ones too. Caller owns the result; NULL, logged,
+// when a line names no chunk or is malformed. create_shader runs every source through it, so an
+// app's shader or one a scene file names may include what the engine's own shaders do.
+char* shader_source_with_includes(const char* source);
+
 Shader* create_shader(ShaderType type, const char* source);
 Shader* create_shader_from_path(ShaderType type, const char* file_path);
 void free_shader(Shader* shader);

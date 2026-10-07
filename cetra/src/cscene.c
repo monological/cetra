@@ -1682,6 +1682,58 @@ static void parse_material_roads(CSceneMaterialOverride* out, const cJSON* m) {
     }
 }
 
+// `shaderParams`: name -> a number or 1..4 numbers, the rest of the vec4 zero.
+static void parse_material_shader_params(CSceneMaterialOverride* out, const cJSON* m) {
+    out->shader_param_count = 0;
+    const cJSON* params = cJSON_GetObjectItemCaseSensitive(m, "shaderParams");
+    if (!params)
+        return;
+    if (!cJSON_IsObject(params)) {
+        log_warn("cscene: material '%s' key 'shaderParams' is not an object; ignored",
+                 out->material);
+        return;
+    }
+    const cJSON* p = NULL;
+    cJSON_ArrayForEach(p, params) {
+        if (out->shader_param_count >= MATERIAL_SHADER_PARAM_MAX) {
+            log_warn("cscene: material '%s' has more than %d shader params; extras ignored",
+                     out->material, MATERIAL_SHADER_PARAM_MAX);
+            break;
+        }
+        if (!p->string || strlen(p->string) >= MATERIAL_SHADER_PARAM_NAME) {
+            log_warn("cscene: material '%s' shader param name is empty or longer than %d; "
+                     "ignored",
+                     out->material, MATERIAL_SHADER_PARAM_NAME - 1);
+            continue;
+        }
+        vec4 v = {0.0f, 0.0f, 0.0f, 0.0f};
+        int n = 0;
+        if (cJSON_IsNumber(p)) {
+            v[0] = (float)p->valuedouble;
+            n = 1;
+        } else if (cJSON_IsArray(p) && cJSON_GetArraySize(p) >= 1 && cJSON_GetArraySize(p) <= 4) {
+            n = cJSON_GetArraySize(p);
+            for (int c = 0; c < n; c++) {
+                const cJSON* e = cJSON_GetArrayItem(p, c);
+                if (!cJSON_IsNumber(e)) {
+                    n = 0;
+                    break;
+                }
+                v[c] = (float)e->valuedouble;
+            }
+        }
+        if (n == 0) {
+            log_warn("cscene: material '%s' shader param '%s' is neither a number nor 1 to 4 "
+                     "numbers; ignored",
+                     out->material, p->string);
+            continue;
+        }
+        MaterialShaderParam* dst = &out->shader_params[out->shader_param_count++];
+        snprintf(dst->name, sizeof(dst->name), "%s", p->string);
+        glm_vec4_copy(v, dst->value);
+    }
+}
+
 static void parse_materials(CetraSceneDesc* d, const cJSON* root) {
     const cJSON* mats = cJSON_GetObjectItemCaseSensitive(root, "materials");
     if (!cJSON_IsObject(mats))
@@ -1708,6 +1760,7 @@ static void parse_materials(CetraSceneDesc* d, const cJSON* root) {
         parse_material_layers(out, m);
         out->road_count = 0;
         parse_material_roads(out, m);
+        parse_material_shader_params(out, m);
 
         // Compound like sss: four numbers describing one rectangle. Skipped by
         // the generic walk below, which would otherwise warn on the 4-array as
@@ -1730,7 +1783,8 @@ static void parse_materials(CetraSceneDesc* d, const cJSON* root) {
             if (!p->string || p->string[0] == '_') // _comment and friends
                 continue;
             if (strcmp(p->string, "sss") == 0 || strcmp(p->string, "layers") == 0 ||
-                strcmp(p->string, "splatDomain") == 0 || strcmp(p->string, "roads") == 0)
+                strcmp(p->string, "splatDomain") == 0 || strcmp(p->string, "roads") == 0 ||
+                strcmp(p->string, "shaderParams") == 0)
                 continue;
             // A string value is a texture path. Recorded apart from the numeric
             // params only because a float array cannot hold one; the key still
@@ -1785,7 +1839,7 @@ static void parse_materials(CetraSceneDesc* d, const cJSON* root) {
         }
 
         if (!out->has_sss && out->layer_count == 0 && out->road_count == 0 &&
-            out->param_count == 0 && out->texture_count == 0) {
+            out->param_count == 0 && out->texture_count == 0 && out->shader_param_count == 0) {
             log_warn("cscene: material '%s' has no usable keys; skipped", out->material);
             continue;
         }
