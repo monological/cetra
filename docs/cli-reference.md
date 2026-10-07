@@ -548,6 +548,25 @@ a run changes it mid-way.
 candle-sized rim over a wall; render it with `--ortho 0.8 --tonemap linear` and the full shadow's
 radius reads off the wall in pixels. The `shadow-tiles` gate group traces its truth.
 
+**An app's own shaders, from a scene file** (spec 13.29; `AGENTS.md`, App Shaders). No flag sets
+any of them: they are scene content, each a `.glsl` resolved against the scene file as an IES
+profile is, and a file that does not read or compile is said by name and left out.
+- `post.passes: [{"at": "beforeDof" | "beforeBloom" | "afterTonemap", "shader": "...",
+  "params": {...}, "enabled": true}]` -- fullscreen passes at three points of the post chain, in
+  order at each.
+- On a material: `"lateShader"` draws it in the late draw, past TAA, lit by nothing;
+  `"surfaceShader"` and `"offsetShader"` make one surface hook (materials naming the same two
+  files share it), with `"offsetBound"` (metres, the culling margin; an offset without one is
+  warned at load and culls as though it never moved) and `"offsetAnimated"` (true makes it a mover
+  for cached shadows).
+- `"shaderParams": {"name": number or [up to 4 numbers]}` on a material, `"params"` on a pass:
+  vec4 uniforms by name, the rest of the vec4 zero.
+
+`shader_hooks_fixture.cscn` (from `gen_shader_hooks_fixture.py`) carries every one of these; the
+`shader-hooks` gate group reads it. Render it with `--taa --headless-jitter` to see the late
+quad's noise survive the history, and with `--dof --dof-focus 8.6 --dof-range 1.0` to see which
+post marks were defocused.
+
 ## apps/tree
 
 **apps/tree's own flags**, which went unlisted anywhere for a long time. Capture: `-x/--headless`,
