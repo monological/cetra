@@ -210,8 +210,9 @@ static CatVoice g_voice;
 #define DOOR_CONE  0.6f // radians
 static Grounds g_grounds;
 
-// The doors that open: each house's front door, and the home's bathroom door (spec 13.25).
-enum { DOOR_HOME, DOOR_BATH, DOOR_MANSION, DOORS };
+// The doors that open: each house's front door, and the home's bathroom door (spec 13.25) and
+// basement door (spec 13.31).
+enum { DOOR_HOME, DOOR_BATH, DOOR_BASEMENT, DOOR_MANSION, DOORS };
 static Door g_doors[DOORS];
 static bool g_door_hung[DOORS];
 static Prompt g_prompt;
@@ -640,6 +641,8 @@ static void on_init(Game* game) {
     }
     g_door_hung[DOOR_HOME] = home_front_door(&g_doors[DOOR_HOME], engine, g_scene, em, physics);
     g_door_hung[DOOR_BATH] = home_bath_door(&g_doors[DOOR_BATH], engine, g_scene, em, physics);
+    g_door_hung[DOOR_BASEMENT] =
+        home_basement_door(&g_doors[DOOR_BASEMENT], engine, g_scene, em, physics);
     g_door_hung[DOOR_MANSION] =
         house_front_door(&g_doors[DOOR_MANSION], engine, g_scene, em, physics, mansion_origin);
     prompt_start(&g_prompt, engine);

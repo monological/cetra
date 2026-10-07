@@ -65,11 +65,14 @@
 // television, which is tv.c's.
 void home_build(Kit* kit, Engine* engine, Scene* scene);
 
-// The front door and the bathroom's, hung to swing; false for one that could not be.
+// The front door, the bathroom's and the basement's, hung to swing; false for one that could
+// not be.
 bool home_front_door(Door* door, Engine* engine, Scene* scene, EntityManager* em,
                      PhysicsWorld* physics);
 bool home_bath_door(Door* door, Engine* engine, Scene* scene, EntityManager* em,
                     PhysicsWorld* physics);
+bool home_basement_door(Door* door, Engine* engine, Scene* scene, EntityManager* em,
+                        PhysicsWorld* physics);
 
 // How far `p` is outside the house's walls in plan; negative inside.
 float home_outside_distance(const vec3 p);
