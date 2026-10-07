@@ -63,8 +63,10 @@ def lines_to_c(lines):
         # Strip the line to check if it's empty
         stripped_line = clean_line.strip()
         if stripped_line:
-            # If the line is not empty, process and add the escaped version with newline
-            processed_lines.append('    "' + clean_line.replace('\\', '\\\\').replace('"', '\\"').rstrip() + '\\n"')
+            # Only the line ending comes off: stripping the trailing blanks too would turn a
+            # backslash that ended in whitespace into a line continuation the file never had.
+            body = clean_line.rstrip('\r\n')
+            processed_lines.append('    "' + body.replace('\\', '\\\\').replace('"', '\\"') + '\\n"')
         else:
             # A blank line still has to emit its newline. Emitting a bare
             # "" instead drops the line from the source the driver sees,
@@ -143,12 +145,24 @@ def main(input_dir, output_file, includes_out=None, raw=False):
     # appear expanded into a shader, or as rows of the include table below.
     shaders = sorted(f for f in os.listdir(input_dir) if f.endswith('.glsl'))
 
+    # A variable is named from its file, which an app may call anything: every character a C
+    # identifier cannot hold becomes an underscore, and two files that come out the same are
+    # refused rather than defining one variable twice.
+    names = {}
+    for shader in shaders:
+        name = re.sub(r'[^A-Za-z0-9_]', '_', os.path.splitext(shader)[0])
+        if name[0].isdigit():
+            name = '_' + name
+        if name in names.values():
+            raise SystemExit(f"Error: {shader} and another shader in {input_dir} are both named {name}")
+        names[shader] = name
+
     guard = guard_for(output_file)
     header_file = io.StringIO()
     write_open(header_file, guard)
     for shader in shaders:
         shader_path = os.path.join(input_dir, shader)
-        shader_var_name = os.path.splitext(shader)[0].replace('.', '_') + "_shader"
+        shader_var_name = names[shader] + "_shader"
         # RAW leaves every #include where it stands, for the runtime resolver to
         # expand against the engine's table: an app's shaders are built into the
         # app, and the chunks they name are the engine's, which only the engine
@@ -180,7 +194,9 @@ def write_include_table(include_dir, output_file):
         text = shader_to_string(os.path.join(include_dir, chunk), expand=False)
         if text is None:
             raise SystemExit(f"Error: could not read {chunk}")
-        header_file.write(f"    {{\"{chunk}\",\n{text}}},\n")
+        # An empty chunk is an empty string, never a missing one: the resolver reads every row.
+        source = text or '    ""'
+        header_file.write(f"    {{\"{chunk}\",\n{source}}},\n")
     header_file.write("};\n\n")
     header_file.write("static const int shader_include_chunk_count =\n"
                       "    (int)(sizeof(shader_include_chunks) / sizeof(shader_include_chunks[0]));\n\n")

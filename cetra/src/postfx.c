@@ -572,6 +572,8 @@ static void postfx_invalidate_targets(PostFX* fx) {
     // One-shot latch: without clearing it, a transient failure at the old size
     // would permanently disable temporal fog at every later one.
     fx->fog_layer_failed = false;
+    // The same for the picture, which the CRT and every pass after the tone map draw into.
+    fx->picture_failed = false;
     fx->fog_layer_frame = -1;
     fx->cs_ready = false;
     fx->motion_blur_ready = false;
@@ -2421,11 +2423,12 @@ static unsigned _postfx_live_locations(const PostFX* fx, bool depth) {
 }
 
 // Who writes the window this frame: the CRT whenever it is on, the present pass when a frame the
-// tone map draws has passes after it, and otherwise the tone map, or a debug frame's copy, which
-// is never dithered. Whatever is not the window draws into the picture, made here at output size.
-static PostFXShow _postfx_show(PostFX* fx, bool frame_is_hdr) {
+// tone map draws has passes after it, and otherwise the tone map, or the copy a passthrough frame
+// takes instead -- a debug view's, or a display-ready frame's -- which is never dithered and runs
+// no pass. Whatever is not the window draws into the picture, made here at output size.
+static PostFXShow _postfx_show(PostFX* fx, bool tone_mapped) {
     const bool passes =
-        frame_is_hdr && (_postfx_live_locations(fx, false) & (1u << POSTFX_AT_AFTER_TONEMAP));
+        tone_mapped && (_postfx_live_locations(fx, false) & (1u << POSTFX_AT_AFTER_TONEMAP));
     const PostFXShow show = _postfx_crt_on(fx) ? POSTFX_SHOW_CRT
                             : passes           ? POSTFX_SHOW_PRESENT
                                                : POSTFX_SHOW_WINDOW;
@@ -3463,7 +3466,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, bool frame_is_hdr, const PostFXGBuf
     PostFXTonemapMode mode = frame_is_hdr ? fx->tonemap_mode : POSTFX_TONEMAP_PASSTHROUGH;
     // What writes the window, settled once for the frame: everything below and the present that
     // follows the overlay read this rather than asking again.
-    fx->show = _postfx_show(fx, frame_is_hdr);
+    fx->show = _postfx_show(fx, mode != POSTFX_TONEMAP_PASSTHROUGH);
     const GLuint target_fbo = postfx_picture_fbo(fx);
 
     // Fullscreen composite passes need blending and depth testing off

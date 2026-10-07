@@ -235,8 +235,11 @@ def cscn_copy(src, dst, mutate):
     mutate(d)
     base = os.path.dirname(os.path.abspath(src))
 
+    # Anything that is not an object holding a path is left as the loader would leave it: a
+    # "_comment" string among the materials is legal, and the C side skips it.
     def absolute(obj, key):
-        if obj and obj.get(key) and not os.path.isabs(obj[key]):
+        if isinstance(obj, dict) and isinstance(obj.get(key), str) and obj[key] \
+                and not os.path.isabs(obj[key]):
             obj[key] = os.path.join(base, obj[key])
 
     for m in d.get("models", []):

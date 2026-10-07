@@ -207,8 +207,9 @@ void pbr_variant_name(PbrFamily family, unsigned features, const struct ShaderHo
 // engine_pbr_variant, which owns the cache and is where callers should go.
 ShaderProgram* create_pbr_program_variant(PbrFamily family, unsigned features,
                                           const struct ShaderHook* hook);
-// Whether `hook`'s GLSL compiles into both stages of the full rigid variant, linking nothing.
-// False, the compiler's message logged, when it does not.
+// Whether `hook`'s GLSL compiles into the lit surface's stages at every feature and at none, the
+// skinned vertex stage too when it has an offset, linking nothing. False, the compiler's message
+// logged, when it does not.
 bool pbr_hook_compiles(const struct ShaderHook* hook);
 
 // The full variant of each family, which is the uber-shader and what an app
@@ -244,9 +245,9 @@ ShaderProgram* create_shape_program();
 ShaderProgram* create_xyz_program();
 ShaderProgram* create_shadow_depth_program();
 // The shadow depth program (or, with `absorb`, the translucent absorb program) carrying a surface
-// hook (spec 13.29): its offset where the caster is placed, and in the depth program its alpha
-// where the caster is cut. NULL, logged, when it does not build.
-ShaderProgram* create_shadow_hook_program(const struct ShaderHook* hook, bool absorb);
+// hook (spec 13.29): its offset where the caster is placed, and with `cut` in the depth program
+// its surface's alpha where the caster is cut. NULL, logged, when it does not build.
+ShaderProgram* create_shadow_hook_program(const struct ShaderHook* hook, bool absorb, bool cut);
 // Position only, for the depth prepass (spec 11.30). Shares the object-position
 // chunk with pbr_vert so the two agree to the bit, which GL_LEQUAL against its
 // output depends on.

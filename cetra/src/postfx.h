@@ -713,7 +713,7 @@ typedef struct PostFX {
     // quantized before the last pass, and an overlay's window-pixel scissor lands where it would
     // in the window. Engine-owned, made on first use.
     GLColorTarget picture;
-    bool picture_failed;            // could not be made; never retried
+    bool picture_failed;            // could not be made at this size; retried at the next
     PostFXShow show;                // engine-owned: what writes the window this frame
     ShaderProgram* present_program; // the picture into the window, dithered, when no CRT is on
 
@@ -779,10 +779,9 @@ typedef struct PostFX {
     // (motion_blur_ready) so the feature is free while off; off by default, so
     // the pass is skipped and the frame is byte-identical to master.
     bool motion_blur_enabled;
-    float motion_blur_scale;                     // Shutter: velocity multiplier (1 = full frame)
-    bool motion_blur_ready;                      // Lazy-alloc guard for the targets below
-    int motion_blur_tile_w, motion_blur_tile_h;  // Tile-max resolution (width/TILE, ceil)
-    GLuint motion_blur_fbo, motion_blur_texture; // Full-res RGBA16F reconstruction scratch
+    float motion_blur_scale;                    // Shutter: velocity multiplier (1 = full frame)
+    bool motion_blur_ready;                     // Lazy-alloc guard for the targets below
+    int motion_blur_tile_w, motion_blur_tile_h; // Tile-max resolution (width/TILE, ceil)
     GLuint motion_blur_tile_fbo, motion_blur_tile_texture;         // RG16F per-tile max velocity
     GLuint motion_blur_neighbor_fbo, motion_blur_neighbor_texture; // RG16F 3x3-tile max velocity
     ShaderProgram* motion_blur_program;
