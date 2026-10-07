@@ -28445,6 +28445,14 @@ TILES_FOG_MAX = 0.6
 TILES_MATCH_CODES = 8
 TILES_MATCH_MAX = 0.02
 TILES_MATCH_FALSIFIER_MIN = 0.1
+# area-reach's panel cached (spec 13.27), with the lamp's range for its far plane, against the
+# same panel drawn every frame: tiles-match's tolerance over the frame, and the near room's mean,
+# where nothing stands between the panel and what it lights, within this fraction of the
+# per-frame panel's. Measured 0.00016, all of it the room's creases, which a 256^2 tile and a
+# 2048^2 face resolve differently; the panel's height lost to its near plane, 0.4 m to 0.02,
+# dims it about twentyfold.
+TILES_AREA_RANGE = 10.0
+TILES_AREA_SIZE_MAX = 0.005
 # The core fixture: the reference and the kept views against the traced profile, by distance
 # from the axis, and where the full shadow ends.
 TILES_TRUTH_MARKS = [0.01 * c for c in range(10, 37, 2)]
@@ -28589,6 +28597,10 @@ def run_shadow_tiles_gate(workdir):
                      unshadowed the two are far apart
       tiles-fresh    the kept faces at frame 30 equal faces redrawn every frame
       tiles-draws    every face is drawn once, and none again on a still scene
+      tiles-area     a panel cached, from its centre over six faces, against the same panel's
+                     per-frame cube; unshadowed the two are far apart (spec 13.27)
+      tiles-area-size ...and where nothing stands between it and the room, the cached panel
+                     lights the room as the per-frame one does, its size where the LTC reads it
       tiles-views    a light with a body is drawn from eight views and one without from one
       tiles-truth    on the core fixture, the reference against a trace of the same body
                      against the rim with no shadow map, and the kept views against the trace
@@ -28743,6 +28755,44 @@ def run_shadow_tiles_gate(workdir):
               f"{later} on frame 30 (want some, then 0)")
         if not ok:
             failures.append("tiles-draws")
+
+    # --- a panel -----------------------------------------------------------------------------
+    def leak_panel(cache):
+        return lambda d: d.update(lights=[dict(
+            AREA_PANEL, position=AREA_REACH_AT, direction=[0.0, -1.0, 0.0],
+            range=TILES_AREA_RANGE, shadow_cache=cache)])
+
+    area_frame = scene("area_frame", leak, leak_panel(False))
+    ac, err = _tiles_render(workdir, "area_cached", scene("area_cached", leak, leak_panel(True)),
+                            [])
+    af, err2 = _tiles_render(workdir, "area_frame", area_frame, [])
+    an, err3 = _tiles_render(workdir, "area_none", area_frame, ["--no-shadows"])
+    if err or err2 or err3:
+        failed("tiles-area", err or err2 or err3)
+        failed("tiles-area-size", err or err2 or err3)
+    else:
+        w, h, frame_pix = af[0]
+        whole = (0.0, 0.0, 1.0, 1.0)
+        near = _pixels_past(ac[0][2], frame_pix, w, h, whole, TILES_MATCH_CODES) / (w * h)
+        far = _pixels_past(an[0][2], frame_pix, w, h, whole, TILES_MATCH_CODES) / (w * h)
+        block = _tiles_block(ac[1], AREA_PANEL["name"])
+        shape = (block.get("views"), block.get("cells"))
+        ok = near <= TILES_MATCH_MAX and far >= TILES_MATCH_FALSIFIER_MIN and shape == ("1", "6")
+        print(f"  tiles-area   {'PASS' if ok else 'FAIL'}  {near:.4f} of the frame past "
+              f"{TILES_MATCH_CODES} codes from the panel drawn every frame (want <= "
+              f"{TILES_MATCH_MAX}); unshadowed {far:.4f} (want >= {TILES_MATCH_FALSIFIER_MIN}); "
+              f"(views, cells) {shape} (want ('1', '6'))")
+        if not ok:
+            failures.append("tiles-area")
+        kept = _tiles_box_mean(ac[0], TILES_NEAR_ROOM)
+        per_frame = _tiles_box_mean(af[0], TILES_NEAR_ROOM)
+        apart = abs(kept - per_frame) / per_frame
+        ok = apart <= TILES_AREA_SIZE_MAX
+        print(f"  tiles-area-size {'PASS' if ok else 'FAIL'}  the near room's mean {kept:.5f} "
+              f"cached against {per_frame:.5f} drawn every frame, {apart:.5f} apart (want <= "
+              f"{TILES_AREA_SIZE_MAX}: nothing stands between the panel and that room)")
+        if not ok:
+            failures.append("tiles-area-size")
 
     # --- the core fixture: views, truth, core ------------------------------------------------
     ortho = ["--ortho", str(TILES_CORE_ORTHO), "--tonemap", "linear", "--no-bloom", "--no-ssao",
