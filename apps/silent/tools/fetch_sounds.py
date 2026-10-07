@@ -88,6 +88,7 @@ RECORDINGS = {
     463790: ("Cat Purr.wav", "shyguy014", "463/463790_7805928"),
     656500: ("Cat purr", "druulian", "656/656500_6497685"),
     575933: ("Cat Purr", "RazzleDizzle", "575/575933_1824398"),
+    765159: ("TV static", "MieckevanHoek", "765/765159_15764256"),
 }
 PREVIEW = "https://cdn.freesound.org/previews/%s-hq.mp3"
 CLOCK = 125968
@@ -100,6 +101,8 @@ JOBS = {
     "tube": {"seconds": 6.0, "stereo": False},
     "wind": {"seconds": 30.0, "stereo": True},
     "purr": {"seconds": 4.0, "stereo": False},
+    # A television tuned to nothing (spec 13.30): its own hiss, placed at the set.
+    "static": {"seconds": 8.0, "stereo": False},
 }
 
 # What --audition renders for each job, to be chosen by ear.
@@ -117,6 +120,8 @@ LOOPS = {
     "tube_buzz": ("tube", 273625),
     "wind_outside": ("wind", 386823),
     "cat_purr": ("purr", 656500),
+    # An old set on a channel with no signal, chosen by ear.
+    "tv_static": ("static", 765159),
 }
 
 # A ONESHOT, for a sound that happens once -- a meow, a footfall, a landing. The recording's

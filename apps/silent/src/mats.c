@@ -8,6 +8,8 @@
 #include "cetra/util.h"
 
 #include "mats.h"
+// silent's own shaders, from cetra_embed_shaders (spec 13.30).
+#include "silent_shaders.h"
 
 /*
  * The photo sets under assets/textures/silent/, as tools/fetch_textures.py
@@ -412,7 +414,9 @@ static const MatSpec SPECS[MAT_COUNT] = {
                      0.0f,
                      1.0f,
                      .glow = {{1.0f, 0.74f, 0.46f}, 90.0f}},
-    // Glossy dark glass over a faint blue-grey: a set left on between programmes.
+    // Glossy dark glass over a faint blue-grey: a set left on between programmes. Its glow is
+    // what the glass shows with no picture on it (--no-static); with one, tv.c sets it to the
+    // picture's mean every frame.
     [MAT_SCREEN] = {"tv_screen",
                     "Smear008",
                     {0.05f, 0.06f, 0.07f},
@@ -421,6 +425,9 @@ static const MatSpec SPECS[MAT_COUNT] = {
                     0.3f,
                     true,
                     .glow = {{0.55f, 0.66f, 0.82f}, 4.0f}},
+    // The picture on the glass (spec 13.30): no photo set and no colour of its own, since the
+    // late program that draws it takes nothing from the material but its params.
+    [MAT_TV_STATIC] = {"tv_static", NULL, {0.0f, 0.0f, 0.0f}, 1.0f, 0.0f, 1.0f},
 };
 
 static Texture* load(TexturePool* pool, const char* set, const char* map, TextureDesc desc) {
@@ -483,6 +490,17 @@ void mats_register(Kit* kit, Engine* engine, Scene* scene) {
                 postfx_add_sss_profile(engine->postfx, s->scatter.colour, s->scatter.radius);
         }
         kit_material(kit, m, s->repeat_m, s->grime);
+    }
+
+    // The television's picture (spec 13.30): silent's own GLSL in the late draw, past TAA. In the
+    // late pass whether its program builds or not, so a picture that will not compile is refused
+    // by name at the draw rather than drawn as a black lit card over the glass.
+    Material* picture = kit->materials[MAT_TV_STATIC];
+    picture->pass = MATERIAL_PASS_LATE_DRAW;
+    ShaderProgram* snow = create_late_surface_program("tv_static", tv_static_shader_str);
+    if (snow) {
+        engine_add_program(engine, snow);
+        material_set_program(picture, snow);
     }
 }
 
