@@ -112,6 +112,8 @@ typedef struct CSceneLightOverride {
     bool cast_shadows; // whether the named light casts; imported lights arrive false
     bool has_shadow_cache;
     bool shadow_cache; // whether its shadow is drawn once and kept, as a light's own does
+    bool has_range;
+    float range; // metres, as a light's own: a derived panel has none, and caching needs one
 } CSceneLightOverride;
 
 // Sized to hold the whole material vocabulary with room to grow. It is not an

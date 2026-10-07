@@ -454,6 +454,10 @@ void apply_cscene_light_overrides(Scene* scene, const CetraSceneDesc* cscn, floa
             printf("Scene file: light '%s' shadow_cache %s\n", ov->name,
                    ov->shadow_cache ? "on" : "off");
         }
+        if (ov->has_range) {
+            light->range = ov->range;
+            printf("Scene file: light '%s' range %.3f\n", ov->name, ov->range);
+        }
     }
 }
 

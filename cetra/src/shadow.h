@@ -10,7 +10,7 @@
 #include "mesh.h" // AABB
 #include "program.h"
 
-// The cached point-light tiles' numbers, shared with the shaders (spec 13.16).
+// The cached tiles' numbers, shared with the shaders (spec 13.16).
 #include "../shaders/include/shadow_tile_constants.glsl"
 
 #define MAX_SHADOW_LIGHTS       3
@@ -58,8 +58,9 @@ _Static_assert(SHADOW_TILE_MARK >= MAX_PUNCTUAL_SHADOW_LAYERS,
 // array's edge is. The minimum edge, so it always fits and never changes with the
 // light count -- cover known at 9.4 cm over the default 96 m.
 #define RAIN_OCCLUSION_SIZE PUNCTUAL_SHADOW_MIN_SIZE
-// Cached point-light shadows (spec 13.16): six faces a view, SHADOW_TILE_VIEWS views for a light
-// with a body and one for a light without, each face a SHADOW_TILE_SIZE tile in layers of the
+// Cached point- and area-light shadows (specs 13.16 and 13.27): six faces a view, SHADOW_TILE_VIEWS
+// views for a light with a body and one for a light without, a panel among them, each face a
+// SHADOW_TILE_SIZE tile in layers of the
 // punctual array past the per-frame ones and the rain's. A budget of its own, because a tile is
 // drawn once and kept: what it costs is memory, never a traversal, which is the pool's whole
 // limit. The tiles it affords, and the lights at one view each.
@@ -515,7 +516,7 @@ struct Light;
 int shadow_live_punctual_layer(const ShadowSystem* system, const struct Light* light);
 
 // Whether a light's shadow is cached in tiles rather than drawn into the pool every frame:
-// a shadow-casting point light asking for it, with the range its faces end at.
+// a shadow-casting point or area light asking for it, with the range its faces end at.
 bool shadow_light_takes_tiles(const struct Light* light);
 
 // Give the cached lights their blocks for this frame, nearest the camera first (spec 13.24).

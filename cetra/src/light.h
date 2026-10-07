@@ -61,7 +61,7 @@ typedef struct Light {
     // the depth pass.
     int shadow_map_index;
     int shadow_layer;
-    // A cached point light's faces (spec 13.16): its first tile in the punctual
+    // A cached light's faces (spec 13.16): its first tile in the punctual
     // array's tile region, -1 for none, reassigned by the depth pass like the
     // two above.
     int shadow_tile;
@@ -119,9 +119,9 @@ typedef struct Light {
     vec2 size;
 
     bool cast_shadows;
-    // With cast_shadows, a point light whose shadow is drawn once and kept rather
-    // than every frame (spec 13.16): it and what it lights stand still. Needs a
-    // range, which is where its shadow ends.
+    // With cast_shadows, a point or area light whose shadow is drawn once and kept
+    // rather than every frame (specs 13.16 and 13.27): it and what it lights stand
+    // still. Needs a range, which is where its shadow ends.
     bool shadow_cache;
     // The emitting body, in metres: a capsule centred on the light, a segment `source_length`
     // long along `direction` with every point of it `source_radius` round, so the whole body
@@ -170,7 +170,7 @@ typedef struct LightDesc {
     // penumbra; 0 = 50 by 50
     vec2 size;
     bool cast_shadows;
-    bool shadow_cache;   // with cast_shadows, a point light's shadow drawn once and kept
+    bool shadow_cache;   // with cast_shadows, a point or area light's shadow drawn once and kept
     float source_radius; // the emitting capsule's radius, metres; 0 and 0 = a point
     float source_length; // its length along `direction` between the end caps, metres
     float shadow_near;   // metres; 0 = derived from the range
