@@ -428,16 +428,25 @@ static void laundry_tub(Kit* kit) {
     kit_frame_box(kit, &f, KIT_COLLIDER_ONLY, -ha, ha, 0.0f, y1, 0.0f, d1, true);
 }
 
-// A floor drain out from the tub, in the pool of water that never quite drains into it.
-static void drain(Kit* kit, KitRng* rng) {
-    const float x = 3.75f, z = TUB_Z, y = BASEMENT_Y;
+// Standing water on the slab round (x, z), an irregular pool about rx by rz.
+static void puddle(Kit* kit, KitRng* rng, float x, float z, float rx, float rz) {
     enum { POOL = 14 };
     vec3 pool[POOL];
     for (int i = 0; i < POOL; i++) {
-        const float t = 2.0f * GLM_PIf * (float)i / (float)POOL, r = kit_rrange(rng, 0.35f, 0.62f);
-        glm_vec3_copy((vec3){x + r * cosf(t), y + 0.002f, z + 0.8f * r * sinf(t)}, pool[i]);
+        const float t = 2.0f * GLM_PIf * (float)i / (float)POOL, r = kit_rrange(rng, 0.6f, 1.0f);
+        glm_vec3_copy((vec3){x + r * rx * cosf(t), BASEMENT_Y + 0.002f, z + r * rz * sinf(t)},
+                      pool[i]);
     }
     kit_polygon_facing(kit, MAT_CELLAR_WET, pool, POOL, (vec3){0.0f, 1.0f, 0.0f});
+}
+
+// A floor drain out from the tub, in the pool of water that never quite drains into it; and
+// where else the damp stands: under the water heater, and along the west wall's foot.
+static void drain(Kit* kit, KitRng* rng) {
+    const float x = 3.75f, z = TUB_Z, y = BASEMENT_Y;
+    puddle(kit, rng, x, z, 0.62f, 0.5f);
+    puddle(kit, rng, -4.2f, 11.0f, 0.5f, 0.35f);
+    puddle(kit, rng, -4.55f, 15.6f, 0.3f, 0.9f);
     const vec2 grate[] = {{0.0f, 0.0f}, {0.09f, 0.0f}, {0.09f, 0.006f}, {0.0f, 0.006f}};
     kit_frame_lathe(kit, &KIT_WORLD, MAT_IRON, x, z, y, grate, KIT_COUNT(grate), 16);
     for (int k = -2; k <= 2; k++)
