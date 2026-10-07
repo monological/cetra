@@ -23,9 +23,6 @@ typedef struct CrtTarget {
 struct Crt {
     ShaderProgram* resample;
     ShaderProgram* show;
-    // The picture is window-sized and RGBA16F, so nothing is quantized before the resample and
-    // an overlay whose scissor is in window pixels lands where it would in the window.
-    CrtTarget picture;
     CrtTarget signal;
 };
 
@@ -72,17 +69,10 @@ Crt* create_crt(void) {
 void free_crt(Crt* crt) {
     if (!crt)
         return;
-    _crt_target_free(&crt->picture);
     _crt_target_free(&crt->signal);
     free_program(crt->resample);
     free_program(crt->show);
     free(crt);
-}
-
-GLuint crt_picture_fbo(Crt* crt, int width, int height) {
-    if (!crt || width <= 0 || height <= 0 || !_crt_ensure(&crt->picture, width, height, "picture"))
-        return 0;
-    return crt->picture.fbo;
 }
 
 /*
@@ -99,10 +89,10 @@ static void _crt_tone(float thin, float dark, float out[2]) {
     out[1] = (mid_in - mid_in * mid_out) / ((1.0f - mid_in) * mid_out);
 }
 
-void crt_present(Crt* crt, GLuint quad_vao, const CrtLook* look) {
-    if (!crt || !look || !crt->picture.fbo)
+void crt_present(Crt* crt, GLuint picture, int width, int height, GLuint quad_vao,
+                 const CrtLook* look) {
+    if (!crt || !look || !picture || width <= 0 || height <= 0)
         return;
-    const int width = crt->picture.w, height = crt->picture.h;
     const int lines = (int)fmaxf(16.0f, fminf(roundf(look->lines), (float)height));
     const int across = (int)fmaxf(16.0f, roundf((float)lines * (float)width / (float)height));
     if (!_crt_ensure(&crt->signal, across, lines, "signal"))
@@ -115,7 +105,7 @@ void crt_present(Crt* crt, GLuint quad_vao, const CrtLook* look) {
     glUseProgram(crt->resample->id);
     UniformManager* r = crt->resample->uniforms;
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, crt->picture.tex);
+    glBindTexture(GL_TEXTURE_2D, picture);
     uniform_set_int(r, "pictureTex", 0);
     const float footprint[2] = {1.0f / (float)across, 1.0f / (float)lines};
     uniform_set_vec2(r, "footprint", footprint);

@@ -4,11 +4,11 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-#include "light.h"    // LightUnits: authored intensity units carry through to Light
-#include "rain.h"     // Rain: an authored rain block IS the runtime rain, over its defaults
-#include "fire.h"     // FireSystem: likewise the authored fire block
-#include "roads.h"    // MaterialRoad: an authored road IS the runtime road, verbatim
-#include "material.h" // MaterialShaderParam: likewise an authored shader param
+#include "light.h"   // LightUnits: authored intensity units carry through to Light
+#include "rain.h"    // Rain: an authored rain block IS the runtime rain, over its defaults
+#include "fire.h"    // FireSystem: likewise the authored fire block
+#include "roads.h"   // MaterialRoad: an authored road IS the runtime road, verbatim
+#include "program.h" // ShaderParams: likewise authored shader params
 
 /*
  * Cetra scene format (.cscn): a JSON scene description that owns the look
@@ -25,9 +25,19 @@
 #define CSCENE_MAX_DECALS          16
 #define CSCENE_MAX_OCCLUDERS       64
 #define CSCENE_MAX_LIGHT_OVERRIDES 16
-#define CSCENE_MAX_MATERIALS       8
+#define CSCENE_MAX_MATERIALS       16
+#define CSCENE_MAX_POST_PASSES     8
 #define CSCENE_MAX_NAME            128
 #define CSCENE_MAX_PATH            1024
+
+// One of post.passes (spec 13.29): a fragment shader, resolved against the scene file, run at a
+// PostFXLocation over the frame.
+typedef struct CScenePostPass {
+    int at; // a PostFXLocation; int so this header needs no postfx.h
+    char shader[CSCENE_MAX_PATH];
+    bool enabled;
+    ShaderParams params;
+} CScenePostPass;
 
 typedef enum {
     CSCENE_ENV_NONE = 0, // no environment block in the file
@@ -217,8 +227,7 @@ typedef struct CSceneMaterialOverride {
     int road_count; // 0 = no roads
     // An app shader's own uniforms (spec 13.29), `shaderParams`: the runtime type, for roads'
     // reason above.
-    MaterialShaderParam shader_params[MATERIAL_SHADER_PARAM_MAX];
-    int shader_param_count;
+    ShaderParams shader_params;
 } CSceneMaterialOverride;
 
 // Ambient dust: a scene-level particle effect (like fog). Each field carries a
@@ -565,6 +574,9 @@ typedef struct CetraSceneDesc {
     bool has_lut_interp;
     // CSCENE_LUT_* below; int for the reason meter_mode is one.
     int lut_interp;
+    // post.passes: an app's fullscreen passes (spec 13.29), in the order they run at a location.
+    CScenePostPass post_passes[CSCENE_MAX_POST_PASSES];
+    int post_pass_count;
     // post.purkinje: the scotopic shift (spec 11.83). Every key independent with
     // its own presence flag, this file's stated convention -- so a block naming
     // only `strength` stores it and arms nothing.

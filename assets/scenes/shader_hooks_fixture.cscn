@@ -1,0 +1,111 @@
+{
+ "version": 1,
+ "_comment": [
+  "The shader-hook instrument (spec 13.29): a piece at every place an app's own GLSL",
+  "can run, each built so a gate can read from the frame that it ran where it says.",
+  "",
+  "Regenerate with: python3 assets/generators/gen_shader_hooks_fixture.py"
+ ],
+ "models": [
+  {
+   "path": "../models/shader_hooks_fixture.gltf"
+  }
+ ],
+ "environment": {
+  "ambient": [
+   0.12,
+   0.12,
+   0.14
+  ]
+ },
+ "lights": [
+  {
+   "name": "sun",
+   "type": "directional",
+   "direction": [
+    -0.238667,
+    -0.795557,
+    -0.55689
+   ],
+   "color": [
+    1.0,
+    0.97,
+    0.92
+   ],
+   "intensity": 3.0,
+   "cast_shadows": true
+  }
+ ],
+ "post": {
+  "exposure": 1.0,
+  "passes": [
+   {
+    "at": "beforeDof",
+    "shader": "../shaders/hooks_post_mark.glsl",
+    "params": {
+     "markRect": [
+      0.55,
+      0.8,
+      0.62,
+      0.88
+     ],
+     "markColor": [
+      6.0,
+      6.0,
+      6.0,
+      0.0
+     ]
+    }
+   },
+   {
+    "at": "beforeBloom",
+    "shader": "../shaders/hooks_post_mark.glsl",
+    "params": {
+     "markRect": [
+      0.68,
+      0.8,
+      0.75,
+      0.88
+     ],
+     "markColor": [
+      6.0,
+      6.0,
+      6.0,
+      0.0
+     ]
+    }
+   },
+   {
+    "at": "afterTonemap",
+    "shader": "../shaders/hooks_post_mark.glsl",
+    "params": {
+     "markRect": [
+      0.81,
+      0.8,
+      0.88,
+      0.88
+     ],
+     "markColor": [
+      0.25098,
+      0.501961,
+      0.752941,
+      0.0
+     ]
+    }
+   }
+  ]
+ },
+ "camera": {
+  "eye": [
+   0.0,
+   2.6,
+   8.5
+  ],
+  "target": [
+   0.0,
+   1.0,
+   0.0
+  ],
+  "fov": 45.0
+ }
+}

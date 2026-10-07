@@ -1,5 +1,6 @@
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "common.h"
 #include "ext/log.h"
@@ -15,6 +16,39 @@
 
 // Fullscreen post-pass program helper (defined with the postfx constructors)
 static ShaderProgram* create_post_program(const char* name, const char* frag_src);
+
+bool shader_params_set(ShaderParams* params, const char* name, const vec4 value) {
+    if (!params || !name || !*name) {
+        log_error("shader_params_set: NULL params or an empty name");
+        return false;
+    }
+    if (strlen(name) >= SHADER_PARAM_NAME) {
+        log_error("shader param name '%s' is longer than %d characters", name,
+                  SHADER_PARAM_NAME - 1);
+        return false;
+    }
+    for (int i = 0; i < params->count; i++) {
+        if (strcmp(params->list[i].name, name) == 0) {
+            glm_vec4_copy((float*)value, params->list[i].value);
+            return true;
+        }
+    }
+    if (params->count >= SHADER_PARAM_MAX) {
+        log_error("no room for shader param '%s': %d are already held", name, SHADER_PARAM_MAX);
+        return false;
+    }
+    ShaderParam* p = &params->list[params->count++];
+    snprintf(p->name, sizeof(p->name), "%s", name);
+    glm_vec4_copy((float*)value, p->value);
+    return true;
+}
+
+void shader_params_upload(const ShaderParams* params, UniformManager* uniforms) {
+    if (!params || !uniforms)
+        return;
+    for (int i = 0; i < params->count; i++)
+        uniform_set_vec4(uniforms, params->list[i].name, params->list[i].value);
+}
 
 ShaderProgram* create_program(const char* name) {
     ShaderProgram* program = calloc(1, sizeof(ShaderProgram));
@@ -1389,6 +1423,10 @@ static ShaderProgram* create_post_program(const char* name, const char* frag_src
 
 ShaderProgram* create_post_pass_program(const char* name, const char* frag_source) {
     return create_post_program(name, frag_source);
+}
+
+ShaderProgram* create_present_program() {
+    return create_post_program("present", present_frag_shader_str);
 }
 
 ShaderProgram* create_ssgi_accum_program() {

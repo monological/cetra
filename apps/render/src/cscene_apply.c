@@ -880,7 +880,7 @@ void apply_cscene_material_overrides(Scene* scene, const CetraSceneDesc* cscn) {
     for (int k = 0; k < cscn->material_count; k++) {
         const CSceneMaterialOverride* mo = &cscn->materials[k];
         if (mo->param_count == 0 && mo->texture_count == 0 && mo->layer_count == 0 &&
-            mo->road_count == 0 && mo->shader_param_count == 0)
+            mo->road_count == 0 && mo->shader_params.count == 0)
             continue; // sss-only entries belong to configure_sss_materials
 
         // Resolve and report the vocabulary once per override, not once per
@@ -1017,7 +1017,7 @@ void apply_cscene_material_overrides(Scene* scene, const CetraSceneDesc* cscn) {
         // with no diagnostic at all -- the parser having already declared it
         // usable, nothing warned.
         usable += mo->road_count;
-        usable += mo->shader_param_count;
+        usable += mo->shader_params.count;
 
         if (usable == 0)
             continue;
@@ -1044,8 +1044,9 @@ void apply_cscene_material_overrides(Scene* scene, const CetraSceneDesc* cscn) {
             }
             for (int e = 0; e < enum_count; e++)
                 material_param_set(m, enums[e].slot, &enums[e].value);
-            for (int s = 0; s < mo->shader_param_count; s++)
-                material_set_shader_param(m, mo->shader_params[s].name, mo->shader_params[s].value);
+            for (int s = 0; s < mo->shader_params.count; s++)
+                shader_params_set(&m->shader_params, mo->shader_params.list[s].name,
+                                  mo->shader_params.list[s].value);
             for (int l = 0; l < layer_count; l++) {
                 material_set_layer_albedo_tex(m, l, layers[l].albedo);
                 material_set_layer_surface_tex(m, l, layers[l].surface);
@@ -1121,6 +1122,45 @@ void apply_cscene_material_overrides(Scene* scene, const CetraSceneDesc* cscn) {
                mo->material, tagged);
         if (tagged == 0)
             fprintf(stderr, "Warning: material '%s' not found in scene\n", mo->material);
+    }
+}
+
+// A shader file a scene names, whole, and the name its program takes: the file's own, so a
+// compile error and the profiler both say which. NULL, reported, when it cannot be read.
+static char* _read_scene_shader(const char* path, char* name, size_t name_size) {
+    const char* base = NULL;
+    size_t base_len = 0;
+    cwk_path_get_basename(path, &base, &base_len);
+    snprintf(name, name_size, "%.*s", base ? (int)base_len : 0, base ? base : "");
+    long length = 0;
+    char* source = read_entire_file(path, &length);
+    if (!source)
+        fprintf(stderr, "Warning: scene shader '%s' cannot be read; skipped\n", path);
+    return source;
+}
+
+void apply_cscene_shaders(Engine* engine, const Scene* scene, const CetraSceneDesc* cscn) {
+    if (!engine || !scene || !cscn)
+        return;
+    for (int i = 0; i < cscn->post_pass_count; i++) {
+        const CScenePostPass* p = &cscn->post_passes[i];
+        char name[256];
+        char* source = _read_scene_shader(p->shader, name, sizeof(name));
+        if (!source)
+            continue;
+        ShaderProgram* program = create_post_pass_program(name, source);
+        free(source);
+        if (!program) {
+            fprintf(stderr, "Warning: post pass '%s' does not compile; skipped\n", p->shader);
+            continue;
+        }
+        engine_add_program(engine, program);
+        PostFXPass* pass = postfx_add_pass(engine->postfx, (PostFXLocation)p->at, program);
+        if (!pass)
+            continue;
+        pass->enabled = p->enabled;
+        pass->params = p->params;
+        printf("Scene file: post pass '%s' at %d\n", name, p->at);
     }
 }
 

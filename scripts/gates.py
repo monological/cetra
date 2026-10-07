@@ -244,6 +244,15 @@ def cscn_copy(src, dst, mutate):
     lut = d.get("post", {}).get("lut")
     if lut and lut.get("path") and not os.path.isabs(lut["path"]):
         lut["path"] = os.path.join(base, lut["path"])
+    # And a shader file (spec 13.29), which fails the model way: a pass or a material whose
+    # shader cannot be read is skipped by name, and the frame renders without it.
+    for p in d.get("post", {}).get("passes", []):
+        if p.get("shader") and not os.path.isabs(p["shader"]):
+            p["shader"] = os.path.join(base, p["shader"])
+    for m in d.get("materials", {}).values():
+        for key in ("surfaceShader", "offsetShader", "lateShader"):
+            if m.get(key) and not os.path.isabs(m[key]):
+                m[key] = os.path.join(base, m[key])
     with open(dst, "w") as f:
         json.dump(d, f, indent=1)
     return dst
@@ -29771,6 +29780,151 @@ def run_lighting_stream_gate(workdir):
     return failures
 
 
+# App shaders at named points (spec 13.29), on assets/scenes/shader_hooks_fixture.cscn. The
+# positions here mirror the generator rather than being read from the asset, the TSL rule above:
+# they are what the prediction uses, and a prediction read from a broken asset agrees with it.
+HOOKS_FIXTURE = "shader_hooks_fixture.cscn"
+HOOKS_MARKS = {"beforeDof": (0.55, 0.80, 0.62, 0.88),
+               "beforeBloom": (0.68, 0.80, 0.75, 0.88),
+               "afterTonemap": (0.81, 0.80, 0.88, 0.88)}
+HOOKS_MARK_CODES = (64, 128, 192)       # what the after-tonemap mark writes, in codes
+HOOKS_DOF = ["--dof", "--dof-focus", "8.6", "--dof-range", "1.0"]
+HOOKS_HALO_MIN = 6.0      # codes a bloomed mark lifts the wall 3-10 px out, at the least
+HOOKS_SPREAD_MIN = 20.0   # codes a defocused mark spreads 1-3 px past its edge, at the least
+HOOKS_STILL_MAX = 1.0     # codes a mark drawn after a stage may move what that stage left
+
+
+def _hooks_box(w, h, rect):
+    """A rect in the frame's 0..1, GL's (y up), as a pixel box (x0, y0, x1, y1), rows top down."""
+    x0, v0, x1, v1 = rect
+    return (int(round(x0 * w)), int(round((1.0 - v1) * h)),
+            int(round(x1 * w)), int(round((1.0 - v0) * h)))
+
+
+def _hooks_ring_mean(pix, w, h, box, inner, outer):
+    """Mean code over the pixels `inner` to `outer` px outside `box`, all three channels."""
+    x0, y0, x1, y1 = box
+    total, n = 0, 0
+    for y in range(max(0, y0 - outer), min(h, y1 + outer)):
+        for x in range(max(0, x0 - outer), min(w, x1 + outer)):
+            d = max(x0 - x, x - (x1 - 1), y0 - y, y - (y1 - 1))
+            if inner <= d < outer:
+                o = (y * w + x) * 3
+                total += pix[o] + pix[o + 1] + pix[o + 2]
+                n += 3
+    return total / max(n, 1)
+
+
+def run_shader_hooks_gate(workdir):
+    """An app's own shader runs where it says it does (spec 13.29).
+
+      post-identity   every pass present but painting nothing renders the frame with no
+                      passes: the HDR locations copy the frame back texel for texel, and the
+                      picture after the tone map holds what the window would.
+      post-order      a mark painted at each location shows what ran after it and nothing that
+                      ran before. Before DOF: defocused, and it blooms. Before bloom: sharp, and
+                      it blooms. After the tone map: sharp, no bloom, and the codes it wrote.
+
+    The marks sit over the wall, which the depth of field blurs and the pieces in front of it do
+    not reach, so each one is measured against the same frame rendered with no passes at all.
+    """
+    src = asset(HOOKS_FIXTURE)
+    if not os.path.exists(src):
+        print(f"  shader-hooks  SKIP  (missing {HOOKS_FIXTURE})")
+        return []
+    failures = []
+
+    def scene(name, mutate):
+        return cscn_copy(src, os.path.join(workdir, name), mutate)
+
+    def shot(scene_path, tag, extra):
+        out = os.path.join(workdir, f"hooks_{tag}.ppm")
+        err = render(scene_path, out, extra)
+        if err:
+            print(f"  shader-hooks  ERROR rendering {tag}: {err.strip()[-300:]}")
+            return None
+        return out
+
+    def no_passes(d):
+        d["post"].pop("passes", None)
+
+    def empty_marks(d):
+        for p in d["post"]["passes"]:
+            p["params"]["markRect"] = [0.0, 0.0, 0.0, 0.0]
+
+    plain = scene("hooks_plain.cscn", no_passes)
+    blank = scene("hooks_blank.cscn", empty_marks)
+
+    a = shot(plain, "plain", [])
+    b = shot(blank, "blank", [])
+    if a and b:
+        ae, peak = compare(a, b)
+        ok = peak <= LSB
+        print(f"  post-identity {'PASS' if ok else 'FAIL'}  {ae} px differ, peak "
+              f"{peak * 255:.2f} codes (bound 1: the picture after the tone map is fp16)")
+        if not ok:
+            failures.append("post-identity")
+    else:
+        failures.append("post-identity")
+
+    # Each mark against the same frame without it, the other two still painted, since a bright
+    # mark's bloom reaches its neighbours. With bloom, which reads the halo; without, which reads
+    # the defocus alone.
+    def without(at):
+        def mutate(d):
+            for p in d["post"]["passes"]:
+                if p["at"] == at:
+                    p["params"]["markRect"] = [0.0, 0.0, 0.0, 0.0]
+        return mutate
+
+    scenes = {"marks": src}
+    for at in HOOKS_MARKS:
+        scenes[at] = scene(f"hooks_without_{at}.cscn", without(at))
+    frames = {}
+    for tag, scene_path in scenes.items():
+        for bloom, flags in (("bloom", []), ("nobloom", ["--no-bloom"])):
+            out = shot(scene_path, f"order_{tag}_{bloom}", HOOKS_DOF + ["--no-dither"] + flags)
+            frames[(tag, bloom)] = _read_ppm(out) if out else None
+    if any(f is None for f in frames.values()):
+        return failures + ["post-order"]
+    w, h, _ = frames[("marks", "bloom")]
+    problems, notes = [], []
+    for at, rect in HOOKS_MARKS.items():
+        box = _hooks_box(w, h, rect)
+        cx, cy = (box[0] + box[2]) // 2, (box[1] + box[3]) // 2
+        pix = frames[("marks", "nobloom")][2]
+        o = (cy * w + cx) * 3
+        centre = tuple(pix[o:o + 3])
+        halo = (_hooks_ring_mean(frames[("marks", "bloom")][2], w, h, box, 3 * w // 400,
+                                 10 * w // 400)
+                - _hooks_ring_mean(frames[(at, "bloom")][2], w, h, box, 3 * w // 400,
+                                   10 * w // 400))
+        spread = (_hooks_ring_mean(frames[("marks", "nobloom")][2], w, h, box, w // 400,
+                                   3 * w // 400)
+                  - _hooks_ring_mean(frames[(at, "nobloom")][2], w, h, box, w // 400,
+                                     3 * w // 400))
+        notes.append(f"{at}: centre {centre}, halo {halo:+.1f}, spread {spread:+.1f}")
+        if at == "afterTonemap":
+            if centre != HOOKS_MARK_CODES:
+                problems.append(f"{at} wrote {centre}, not {HOOKS_MARK_CODES}")
+            if abs(halo) > HOOKS_STILL_MAX or abs(spread) > HOOKS_STILL_MAX:
+                problems.append(f"{at} moved its surroundings")
+        else:
+            if min(centre) < 250:
+                problems.append(f"{at} centre {centre} is not the bright mark")
+            if halo < HOOKS_HALO_MIN:
+                problems.append(f"{at} did not bloom")
+        if at == "beforeDof" and spread < HOOKS_SPREAD_MIN:
+            problems.append("beforeDof was not defocused")
+        if at == "beforeBloom" and abs(spread) > HOOKS_STILL_MAX:
+            problems.append("beforeBloom was defocused")
+    ok = not problems
+    print(f"  post-order    {'PASS' if ok else 'FAIL'}  " + "; ".join(problems + notes))
+    if not ok:
+        failures.append("post-order")
+    return failures
+
+
 GATE_GROUPS = [
     ("scale", "scale invariance (lights x1000, exposure /1000):", run_scale_gates),
     ("penumbra", "area shadow (analytic penumbra):", run_penumbra_gate),
@@ -29850,6 +30004,7 @@ GATE_GROUPS = [
     ("grain", "film grain (new every frame, and its strength; spec 13.28):", run_grain_gate),
     ("crt", "the CRT (lines, mask and tone, tube, dither last; spec 13.28):", run_crt_gate),
     ("lut", "3D LUT colour grading (spec 11.58 / E2):", run_lut_gate),
+    ("shader-hooks", "an app's own shaders at named points (spec 13.29):", run_shader_hooks_gate),
     ("purkinje", "Purkinje / scotopic shift (spec 11.83 / B14):", run_purkinje_gate),
     ("origin", "a world away from the origin, and one that moves under it (spec 11.62 / D11):",
      run_origin_gate),

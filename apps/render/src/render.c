@@ -4031,6 +4031,7 @@ int main(int argc, char** argv) {
     // final look only through the profile it registers, but a reader of this
     // block should see the base material settled before anything layers on it.
     apply_cscene_material_overrides(scene, cscn);
+    apply_cscene_shaders(engine, scene, cscn);
     configure_sss_materials(engine, scene, args.sss_radius, args.sss_color, cscn);
     // Applied to every skin material rather than only those that authored a
     // value, so the flag doubles as "turn this on for this scene at strength X"

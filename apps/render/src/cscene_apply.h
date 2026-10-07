@@ -43,6 +43,11 @@ void apply_cscene_wind(Scene* scene, const CetraSceneDesc* cscn);
 // configure_sss_materials where that engine handle is in scope.
 void apply_cscene_material_overrides(Scene* scene, const CetraSceneDesc* cscn);
 
+// Compile every shader the scene file names (spec 13.29) and put each where it runs: a post
+// pass at its location. The engine owns the programs. A file that does not read or compile is
+// reported by name and skipped, and the frame renders without it.
+void apply_cscene_shaders(struct Engine* engine, const Scene* scene, const CetraSceneDesc* cscn);
+
 // Attach the scene file's water surface (if the .cscn declares a water block).
 // Runs BEFORE the CLI water block, which overrides whatever it finds.
 void apply_cscene_water(Scene* scene, const CetraSceneDesc* cscn);

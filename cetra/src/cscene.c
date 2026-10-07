@@ -7,6 +7,7 @@
 #include "cscene.h"
 #include "ext/cJSON.h"
 #include "ext/log.h"
+#include "postfx.h" // postfx_location_from_name
 #include "sky.h"
 #include "util.h"
 
@@ -455,6 +456,9 @@ static void parse_light_overrides(CetraSceneDesc* d, const cJSON* root) {
     }
 }
 
+static void parse_shader_params(ShaderParams* out, const cJSON* obj, const char* key,
+                                const char* owner);
+
 static void parse_post(CetraSceneDesc* d, const cJSON* root) {
     const cJSON* post = cJSON_GetObjectItemCaseSensitive(root, "post");
     if (!cJSON_IsObject(post))
@@ -639,11 +643,44 @@ static void parse_post(CetraSceneDesc* d, const cJSON* root) {
         warn_unknown_keys(fog, fog_known, sizeof(fog_known) / sizeof(fog_known[0]), "post.fog");
     }
 
+    // post.passes: an app's fullscreen passes at named points (spec 13.29), each a shader file
+    // resolved against this scene, a location, and its own params.
+    const cJSON* passes = cJSON_GetObjectItemCaseSensitive(post, "passes");
+    if (passes && !cJSON_IsArray(passes)) {
+        log_warn("cscene: post.passes is not an array; ignored");
+        passes = NULL;
+    }
+    const cJSON* pass = NULL;
+    cJSON_ArrayForEach(pass, passes) {
+        if (d->post_pass_count >= CSCENE_MAX_POST_PASSES) {
+            log_warn("cscene: more than %d post.passes; extras ignored", CSCENE_MAX_POST_PASSES);
+            break;
+        }
+        CScenePostPass* out = &d->post_passes[d->post_pass_count];
+        const cJSON* at = cJSON_GetObjectItemCaseSensitive(pass, "at");
+        out->at = cJSON_IsString(at) ? postfx_location_from_name(at->valuestring) : -1;
+        copy_string(out->shader, sizeof(out->shader),
+                    cJSON_GetObjectItemCaseSensitive(pass, "shader"));
+        if (out->at < 0 || !out->shader[0]) {
+            log_warn("cscene: post.passes[%d] wants a shader and an \"at\" of beforeDof, "
+                     "beforeBloom or afterTonemap; ignored",
+                     d->post_pass_count);
+            continue;
+        }
+        out->enabled = true;
+        get_bool(pass, "enabled", &out->enabled);
+        parse_shader_params(&out->params, pass, "params", "post.passes");
+        static const char* const pass_known[] = {"at", "shader", "params", "enabled"};
+        warn_unknown_keys(pass, pass_known, sizeof(pass_known) / sizeof(pass_known[0]),
+                          "post.passes");
+        d->post_pass_count++;
+    }
+
     static const char* const known[] = {
         "tonemap",      "exposure",       "auto_exposure", "camera",
         "render_scale", "flare",          "bloom",         "chromatic_aberration",
         "fog",          "metering",       "lut",           "purkinje",
-        "glare",        "local_exposure",
+        "glare",        "local_exposure", "passes",
     };
     warn_unknown_keys(post, known, sizeof(known) / sizeof(known[0]), "post");
 }
@@ -1682,30 +1719,20 @@ static void parse_material_roads(CSceneMaterialOverride* out, const cJSON* m) {
     }
 }
 
-// `shaderParams`: name -> a number or 1..4 numbers, the rest of the vec4 zero.
-static void parse_material_shader_params(CSceneMaterialOverride* out, const cJSON* m) {
-    out->shader_param_count = 0;
-    const cJSON* params = cJSON_GetObjectItemCaseSensitive(m, "shaderParams");
+// An app shader's own uniforms under `key` (spec 13.29): name -> a number or 1..4 numbers, the
+// rest of the vec4 zero. `owner` names what carries them, for the warnings.
+static void parse_shader_params(ShaderParams* out, const cJSON* obj, const char* key,
+                                const char* owner) {
+    out->count = 0;
+    const cJSON* params = cJSON_GetObjectItemCaseSensitive(obj, key);
     if (!params)
         return;
     if (!cJSON_IsObject(params)) {
-        log_warn("cscene: material '%s' key 'shaderParams' is not an object; ignored",
-                 out->material);
+        log_warn("cscene: %s key '%s' is not an object; ignored", owner, key);
         return;
     }
     const cJSON* p = NULL;
     cJSON_ArrayForEach(p, params) {
-        if (out->shader_param_count >= MATERIAL_SHADER_PARAM_MAX) {
-            log_warn("cscene: material '%s' has more than %d shader params; extras ignored",
-                     out->material, MATERIAL_SHADER_PARAM_MAX);
-            break;
-        }
-        if (!p->string || strlen(p->string) >= MATERIAL_SHADER_PARAM_NAME) {
-            log_warn("cscene: material '%s' shader param name is empty or longer than %d; "
-                     "ignored",
-                     out->material, MATERIAL_SHADER_PARAM_NAME - 1);
-            continue;
-        }
         vec4 v = {0.0f, 0.0f, 0.0f, 0.0f};
         int n = 0;
         if (cJSON_IsNumber(p)) {
@@ -1723,14 +1750,13 @@ static void parse_material_shader_params(CSceneMaterialOverride* out, const cJSO
             }
         }
         if (n == 0) {
-            log_warn("cscene: material '%s' shader param '%s' is neither a number nor 1 to 4 "
-                     "numbers; ignored",
-                     out->material, p->string);
+            log_warn("cscene: %s shader param '%s' is neither a number nor 1 to 4 numbers; "
+                     "ignored",
+                     owner, p->string ? p->string : "");
             continue;
         }
-        MaterialShaderParam* dst = &out->shader_params[out->shader_param_count++];
-        snprintf(dst->name, sizeof(dst->name), "%s", p->string);
-        glm_vec4_copy(v, dst->value);
+        // Refuses, by name, a name that does not fit and one past the cap.
+        shader_params_set(out, p->string, v);
     }
 }
 
@@ -1760,7 +1786,9 @@ static void parse_materials(CetraSceneDesc* d, const cJSON* root) {
         parse_material_layers(out, m);
         out->road_count = 0;
         parse_material_roads(out, m);
-        parse_material_shader_params(out, m);
+        char owner[CSCENE_MAX_NAME + 16];
+        snprintf(owner, sizeof(owner), "material '%s'", out->material);
+        parse_shader_params(&out->shader_params, m, "shaderParams", owner);
 
         // Compound like sss: four numbers describing one rectangle. Skipped by
         // the generic walk below, which would otherwise warn on the 4-array as
@@ -1839,7 +1867,7 @@ static void parse_materials(CetraSceneDesc* d, const cJSON* root) {
         }
 
         if (!out->has_sss && out->layer_count == 0 && out->road_count == 0 &&
-            out->param_count == 0 && out->texture_count == 0 && out->shader_param_count == 0) {
+            out->param_count == 0 && out->texture_count == 0 && out->shader_params.count == 0) {
             log_warn("cscene: material '%s' has no usable keys; skipped", out->material);
             continue;
         }
@@ -1931,6 +1959,9 @@ CetraSceneDesc* cscene_load(const char* path) {
     // A .cube is the same kind of thing as the two above and for the same
     // reason: not a texture, never through the pool, no second resolver.
     resolve_in_place(d->lut_path, CSCENE_MAX_PATH, dir);
+    // And a shader file (spec 13.29), for the same reason again.
+    for (int i = 0; i < d->post_pass_count; i++)
+        resolve_in_place(d->post_passes[i].shader, CSCENE_MAX_PATH, dir);
     // A flipbook's sidecar is the same again; the sheet it names resolves beside the sidecar.
     for (int i = 0; i < d->fire.system.count; i++)
         resolve_in_place(d->fire.flipbook[i], CSCENE_MAX_PATH, dir);

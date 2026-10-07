@@ -442,41 +442,6 @@ void material_set_program(Material* material, ShaderProgram* shader_program) {
     material->shader_program = shader_program;
 }
 
-bool material_set_shader_param(Material* material, const char* name, const vec4 value) {
-    if (!material || !name || !*name) {
-        log_error("material_set_shader_param: NULL material or empty name");
-        return false;
-    }
-    if (strlen(name) >= MATERIAL_SHADER_PARAM_NAME) {
-        log_error("material '%s': shader param name '%s' is longer than %d characters",
-                  material->name ? material->name : "?", name, MATERIAL_SHADER_PARAM_NAME - 1);
-        return false;
-    }
-    for (int i = 0; i < material->shader_param_count; i++) {
-        if (strcmp(material->shader_params[i].name, name) == 0) {
-            glm_vec4_copy((float*)value, material->shader_params[i].value);
-            return true;
-        }
-    }
-    if (material->shader_param_count >= MATERIAL_SHADER_PARAM_MAX) {
-        log_error("material '%s': no room for shader param '%s', it already holds %d",
-                  material->name ? material->name : "?", name, MATERIAL_SHADER_PARAM_MAX);
-        return false;
-    }
-    MaterialShaderParam* p = &material->shader_params[material->shader_param_count++];
-    snprintf(p->name, sizeof(p->name), "%s", name);
-    glm_vec4_copy((float*)value, p->value);
-    return true;
-}
-
-void material_upload_shader_params(const Material* material, UniformManager* uniforms) {
-    if (!material || !uniforms)
-        return;
-    for (int i = 0; i < material->shader_param_count; i++)
-        uniform_set_vec4(uniforms, material->shader_params[i].name,
-                         material->shader_params[i].value);
-}
-
 void material_set_albedo_tex(Material* material, Texture* texture) {
     if (!material)
         return;
