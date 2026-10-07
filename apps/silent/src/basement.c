@@ -1,6 +1,9 @@
 #include <math.h>
 
+#include "cetra/light.h"
+
 #include "basement.h"
+#include "lights.h"
 #include "mats.h"
 
 #define SLAB_DEPTH  0.2f // the slab, under BASEMENT_Y
@@ -36,9 +39,30 @@
 #define COAT   0.006f
 // How high the damp has climbed the basement's own walls.
 #define DAMP_Y (BASEMENT_Y + 0.6f)
-// The way from the stairwell's foot into the basement, on the left at the bottom: the whole
+// The way from the stairwell's foot into the basement, on the right at the bottom: the whole
 // width of the floor there, and a doorway's height under a header.
 #define FOOT_HEAD (BASEMENT_Y + 2.1f)
+
+// The bulb: on a cord from a rose on the stairwell's ceiling over the upper flight, low enough
+// that the door opens on it at a standing eye's height. Lengths from the pivot under the rose.
+#define BULB_X       (-2.75f)
+#define BULB_Z       (0.5f * (STAIRWELL_Z0 + CELLAR_Z1))
+#define ROSE_DROP    0.026f
+#define CORD_L       0.82f
+#define GLASS_FOOT   1.01f
+#define BULB_DROP    (GLASS_FOOT - 0.034f) // to the glass's widest, where the light is
+#define BULB_CANDELA 30.0f
+#define BULB_RANGE   6.0f
+#define BULB_NITS    1500.0f
+// The draft's swing the first time the door opens: across the flight, pushed away from the
+// door, a little to the side, dying away; and the faint sway it leaves.
+#define DRAFT_SWING 0.16f // radians
+#define DRAFT_SIDE  0.05f
+#define DRAFT_DECAY 3.5f // seconds
+#define SWAY        0.012f
+// While the swing still carries the glass further than this, the bulb's shadow is drawn again
+// each frame: a kept face shadows from where it was drawn.
+#define REFRESH_REACH 0.015f
 
 // The posts under the beam, between the irradiance probes' rows at every half metre of z.
 static const float POSTS_Z[] = {12.0f, 15.0f, 18.0f};
@@ -217,7 +241,7 @@ static void dado(Kit* kit, const KitFrame* f, const vec2* outline, int count, fl
  * The stairwell, walled in from the door to the foot and painted, so what the door opens on is a
  * narrow way down between two walls and a third ahead. Under the floor its south wall stands on
  * the slab under the partition and stops at the last riser: the floor beyond it, a metre to the
- * wall ahead, is the way into the basement, to the left at the bottom, under a header. Its east
+ * wall ahead, is the way into the basement, to the right at the bottom, under a header. Its east
  * end closes it under the head of the flight. Both are the basement's concrete on its side. Every
  * face inside is one coat of the pale paint from the slab to the ceiling, over the plaster above
  * the floor and the concrete below alike, and the dark band runs down the two long walls along
@@ -303,4 +327,106 @@ void basement_build(Kit* kit) {
     // them inside it and switches them off. Never seen.
     kit_frame_box(kit, &KIT_WORLD, MAT_DIRT, DIG_X0 - 0.5f, DIG_X1 + 0.5f, BASEMENT_Y - 0.5f, -0.4f,
                   DIG_Z0 - 2.0f, DIG_Z0, false);
+
+    // The bulb's rose, which stays put while the bulb swings under it.
+    const vec2 rose[] = {
+        {0.0f, 0.0f}, {0.045f, 0.0f}, {0.04f, -0.018f}, {0.008f, -ROSE_DROP}, {0.0f, -ROSE_DROP}};
+    kit_frame_lathe(kit, &KIT_WORLD, MAT_CERAMIC, BULB_X, BULB_Z, CEIL_Y, rose, KIT_COUNT(rose),
+                    12);
+}
+
+// What swings, about the pivot at the origin: the cord, a black socket, the bulb's brass cap
+// and its glass, and a pull chain hanging beside it with a bead on the end.
+static void bulb_parts(Kit* kit) {
+    const KitFrame* f = &KIT_WORLD;
+    const vec3 cord[2] = {{0.0f, 0.0f, 0.0f}, {0.0f, -CORD_L, 0.0f}};
+    kit_frame_pipe(kit, f, MAT_BLACK, cord, 2, 0.0035f, 6);
+    const vec2 socket[] = {{0.0f, 0.0f},    {0.017f, 0.0f},   {0.019f, 0.01f}, {0.019f, 0.055f},
+                           {0.012f, 0.07f}, {0.005f, 0.075f}, {0.0f, 0.075f}};
+    kit_frame_lathe(kit, f, MAT_BLACK, 0.0f, 0.0f, -CORD_L - 0.075f, socket, KIT_COUNT(socket), 12);
+    const vec2 cap[] = {{0.0f, 0.0f}, {0.0125f, 0.0f}, {0.0125f, 0.025f}, {0.0f, 0.025f}};
+    kit_frame_lathe(kit, f, MAT_BRASS, 0.0f, 0.0f, -CORD_L - 0.1f, cap, KIT_COUNT(cap), 12);
+    const vec2 glass[] = {{0.0f, 0.0f},     {0.014f, 0.004f}, {0.026f, 0.016f},
+                          {0.03f, 0.034f},  {0.028f, 0.05f},  {0.02f, 0.07f},
+                          {0.014f, 0.082f}, {0.0125f, 0.09f}, {0.0f, 0.09f}};
+    kit_frame_lathe(kit, f, MAT_BULB, 0.0f, 0.0f, -GLASS_FOOT, glass, KIT_COUNT(glass), 16);
+    const vec3 chain[2] = {{0.021f, -CORD_L - 0.04f, 0.0f}, {0.021f, -CORD_L - 0.3f, 0.0f}};
+    kit_frame_pipe(kit, f, MAT_STEEL, chain, 2, 0.0012f, 4);
+    const vec2 bead[] = {{0.0f, 0.0f}, {0.005f, 0.004f}, {0.005f, 0.008f}, {0.0f, 0.012f}};
+    kit_frame_lathe(kit, f, MAT_STEEL, 0.021f, 0.0f, -CORD_L - 0.312f, bead, KIT_COUNT(bead), 8);
+}
+
+static void pivot(vec3 out) {
+    glm_vec3_copy((vec3){BULB_X, CEIL_Y - ROSE_DROP, BULB_Z}, out);
+}
+
+void basement_start(Basement* b, Engine* engine, Scene* scene, unsigned int seed) {
+    *b = (Basement){.drafted = -1.0, .seed = seed};
+    // A kit of its own, so its node turns alone and its glass is its own to dim. It casts
+    // nothing: swinging in its own light's kept views, it would be a mover in them every frame,
+    // and it is its light's body besides.
+    Kit kit;
+    kit_init(&kit, scene, NULL, NULL);
+    mats_register(&kit, engine, scene);
+    kit.casts_nothing = true;
+    bulb_parts(&kit);
+    b->glass = kit.materials[MAT_BULB];
+    b->bulb = kit_finish(&kit, "basement_bulb");
+    // A capture is kept for good, and the glass is somewhere else a moment later.
+    b->bulb->capture_hidden = true;
+
+    vec3 at = GLM_VEC3_ZERO_INIT;
+    pivot(at);
+    at[1] -= BULB_DROP;
+    const LightDesc desc = {.name = "basement_bulb",
+                            .type = LIGHT_POINT,
+                            .position = {at[0], at[1], at[2]},
+                            .color = {1.0f, 0.78f, 0.52f},
+                            .intensity = BULB_CANDELA,
+                            .range = BULB_RANGE,
+                            .cast_shadows = true,
+                            .shadow_cache = true,
+                            .shadow_near = 0.05f};
+    b->light = create_light(&desc);
+    scene_add_light(scene, b->light);
+}
+
+void basement_update(Basement* b, const Door* door, double time) {
+    if (!b->bulb || !b->light)
+        return;
+    if (b->drafted < 0.0 && door && door->travel >= 0.25f)
+        b->drafted = time;
+
+    // A pendulum the cord's length long, pushed west by the draft and dying away, with a faint
+    // sway of its own coming in under it.
+    float across = 0.0f, side = 0.0f, reach = 0.0f;
+    if (b->drafted >= 0.0) {
+        const float u = (float)(time - b->drafted), t = (float)time;
+        const float w = sqrtf(9.81f / BULB_DROP), fade = expf(-u / DRAFT_DECAY);
+        const float sway = SWAY * glm_smoothstep(0.0f, 3.0f, u) * (0.65f + 0.35f * sinf(0.23f * t));
+        across = -DRAFT_SWING * fade * sinf(w * u) + sway * sinf(w * t + 1.3f);
+        side = -DRAFT_SIDE * fade * sinf(w * u + 0.4f) + 0.5f * sway * sinf(w * t + 2.9f);
+        reach = DRAFT_SWING * fade * BULB_DROP;
+    }
+    vec3 p = GLM_VEC3_ZERO_INIT;
+    pivot(p);
+    mat4 m = GLM_MAT4_IDENTITY_INIT;
+    glm_translate_make(m, p);
+    glm_rotate_z(m, across, m);
+    glm_rotate_x(m, side, m);
+    glm_mat4_copy(m, b->bulb->original_transform);
+    vec3 at = GLM_VEC3_ZERO_INIT;
+    glm_mat4_mulv3(m, (vec3){0.0f, -BULB_DROP, 0.0f}, 1.0f, at);
+    light_set_position(b->light, at);
+    b->light->shadow_refresh = reach > REFRESH_REACH;
+
+    // The supply sags now and then, and the filament goes dim and orange with it; never out, or
+    // the light would leave its cached shadow undrawn.
+    const float level = lights_brownout(time, b->seed);
+    vec3 colour = GLM_VEC3_ZERO_INIT;
+    glm_vec3_lerp((vec3){1.0f, 0.55f, 0.25f}, (vec3){1.0f, 0.78f, 0.52f}, level, colour);
+    b->light->intensity = BULB_CANDELA * level;
+    glm_vec3_copy(colour, b->light->color);
+    b->glass->emissive_strength = BULB_NITS * level;
+    glm_vec3_copy(colour, b->glass->emissive);
 }

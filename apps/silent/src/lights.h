@@ -54,4 +54,8 @@ void lights_update(Lights* lights, Scene* scene, double time, float dt, const ve
 
 void lights_toggle_flashlight(Lights* lights);
 
+// A bare bulb on a failing supply (spec 13.31): 1 most of the time, and now and then dimming
+// for a second or so to between 0.3 and 0.65 and coming back. A pure function of the sim clock.
+float lights_brownout(double t, unsigned int seed);
+
 #endif // _SILENT_LIGHTS_H_

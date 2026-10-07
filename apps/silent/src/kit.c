@@ -1656,7 +1656,7 @@ SceneNode* kit_finish(Kit* kit, const char* name) {
     SceneNode* node = create_node();
     node_set_name(node, name);
     // The cells first: they read the builders, which handing a mesh over empties.
-    kit->shadow_cell_count = shadow_cells(kit, node);
+    kit->shadow_cell_count = kit->casts_nothing ? 0 : shadow_cells(kit, node);
     for (int i = 0; i < kit->material_count; i++) {
         MeshBuilder* mb = &kit->builders[i];
         kit->vertex_count += (int)mb->vcount;
@@ -1677,7 +1677,7 @@ SceneNode* kit_finish(Kit* kit, const char* name) {
         }
         mesh->material = kit->materials[i];
         // What the camera draws; where the cells were built, they are its shadow.
-        if (kit->shadow_cell_count > 0 && casts_plainly(mesh->material))
+        if (kit->casts_nothing || (kit->shadow_cell_count > 0 && casts_plainly(mesh->material)))
             mesh->shadow_role = MESH_SHADOW_NONE;
         node_add_mesh(node, mesh);
         kit->mesh_count++;
