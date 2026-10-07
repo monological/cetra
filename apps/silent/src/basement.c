@@ -13,10 +13,12 @@
 #define FLANGE      0.015f
 #define POST_R      0.045f
 
-// The flight down: steep, as a cellar's is, and every riser under the player's step.
-#define CELLAR_RISERS 13
+// The flight down: steep, as a cellar's is, every riser under the player's step, so its foot
+// leaves a metre of floor before the wall ahead to turn in.
+#define CELLAR_RISERS 12
 #define CELLAR_RISE   ((FLOOR_Y - BASEMENT_Y) / (float)CELLAR_RISERS)
-#define CELLAR_GOING  0.225f
+#define CELLAR_GOING  0.21f
+#define CELLAR_FOOT_X (CELLAR_HEAD_X - (float)(CELLAR_RISERS - 1) * CELLAR_GOING)
 #define TREAD_T       0.035f
 #define NOSING        0.02f
 #define STRINGER_W    0.05f
@@ -26,38 +28,40 @@
 #define RAIL_T        0.035f
 #define RAIL_D        0.07f
 
-// The walls' paint: the dark band round their foot, which in the stairwell follows the flight
-// down over its nosings, and the stairwell's coat over whatever its walls are built of.
+// The stairwell's paint: one coat over whatever its walls are built of, and the dark band along
+// the flight over its nosings, level across the wall at its foot.
 #define DADO_H (1.0f)
 #define DADO_Y (BASEMENT_Y + DADO_H)
 #define DADO_T 0.002f
 #define COAT   0.006f
-// Where the stairwell's south wall stops, a tread short of the foot, and the opening there into
-// the basement, a doorway's height.
-#define FOOT_X    (-3.9f)
-#define FOOT_HEAD (BASEMENT_Y + 2.0f)
+// How high the damp has climbed the basement's own walls.
+#define DAMP_Y (BASEMENT_Y + 0.6f)
+// The way from the stairwell's foot into the basement, on the left at the bottom: the whole
+// width of the floor there, and a doorway's height under a header.
+#define FOOT_HEAD (BASEMENT_Y + 2.1f)
 
 // The posts under the beam, between the irradiance probes' rows at every half metre of z.
 static const float POSTS_Z[] = {12.0f, 15.0f, 18.0f};
 
-// A wall from y0 to y1, painted dark up to the dado and pale over it. It collides.
-static void painted_wall(Kit* kit, float x0, float x1, float y0, float y1, float z0, float z1) {
-    if (y0 < DADO_Y)
-        kit_frame_box(kit, &KIT_WORLD, MAT_CELLAR_DADO, x0, x1, y0, fminf(DADO_Y, y1), z0, z1,
+// A wall of the basement from y0 to y1: bare concrete, dark with damp to the tide line. It
+// collides.
+static void cellar_wall(Kit* kit, float x0, float x1, float y0, float y1, float z0, float z1) {
+    if (y0 < DAMP_Y)
+        kit_frame_box(kit, &KIT_WORLD, MAT_CELLAR_DAMP, x0, x1, y0, fminf(DAMP_Y, y1), z0, z1,
                       true);
-    if (y1 > DADO_Y)
-        kit_frame_box(kit, &KIT_WORLD, MAT_CELLAR_WALL, x0, x1, fmaxf(DADO_Y, y0), y1, z0, z1,
+    if (y1 > DAMP_Y)
+        kit_frame_box(kit, &KIT_WORLD, MAT_CELLAR_CONCRETE, x0, x1, fmaxf(DAMP_Y, y0), y1, z0, z1,
                       true);
 }
 
-// The foundation from the slab's foot to the sill, painted, the house's outside walls standing on
-// its top. And the slab.
+// The foundation from the slab's foot to the sill, the house's outside walls standing on its
+// top. And the slab.
 static void foundation(Kit* kit) {
     const float foot = BASEMENT_Y - SLAB_DEPTH;
-    painted_wall(kit, DIG_X0, DIG_X1, foot, 0.0f, DIG_Z0, CELLAR_Z0);
-    painted_wall(kit, DIG_X0, DIG_X1, foot, 0.0f, CELLAR_Z1, DIG_Z1);
-    painted_wall(kit, DIG_X0, CELLAR_X0, foot, 0.0f, CELLAR_Z0, CELLAR_Z1);
-    painted_wall(kit, CELLAR_X1, DIG_X1, foot, 0.0f, CELLAR_Z0, CELLAR_Z1);
+    cellar_wall(kit, DIG_X0, DIG_X1, foot, 0.0f, DIG_Z0, CELLAR_Z0);
+    cellar_wall(kit, DIG_X0, DIG_X1, foot, 0.0f, CELLAR_Z1, DIG_Z1);
+    cellar_wall(kit, DIG_X0, CELLAR_X0, foot, 0.0f, CELLAR_Z0, CELLAR_Z1);
+    cellar_wall(kit, CELLAR_X1, DIG_X1, foot, 0.0f, CELLAR_Z0, CELLAR_Z1);
     kit_frame_box(kit, &KIT_WORLD, MAT_CELLAR_FLOOR, CELLAR_X0, CELLAR_X1, foot, BASEMENT_Y,
                   CELLAR_Z0, CELLAR_Z1, true);
 }
@@ -172,7 +176,7 @@ static void stair(Kit* kit) {
     }
 
     // The stringers, cut plumb at the last riser and level on the floor.
-    const float foot = CELLAR_HEAD_X - (float)(CELLAR_RISERS - 1) * CELLAR_GOING;
+    const float foot = CELLAR_FOOT_X;
     const float heel =
         CELLAR_HEAD_X + (BASEMENT_Y + STRINGER_DOWN - FLOOR_Y) * (CELLAR_GOING / CELLAR_RISE);
     const vec2 stringer[5] = {{CELLAR_HEAD_X, nosing_y(CELLAR_HEAD_X) + STRINGER_UP},
@@ -186,7 +190,7 @@ static void stair(Kit* kit) {
     // A handrail on the back wall, on iron brackets.
     const float rz = CELLAR_Z1 - 0.06f;
     raked_rail(kit, CELLAR_HEAD_X - 0.15f, foot - 0.05f, rz - RAIL_T, rz);
-    const float brackets[3] = {-2.5f, -3.4f, -4.2f};
+    const float brackets[3] = {-2.2f, -3.0f, -3.8f};
     for (int i = 0; i < 3; i++) {
         const float x = brackets[i], under = nosing_y(x) + RAIL_H - RAIL_D;
         kit_frame_box(kit, w, MAT_IRON, x - 0.012f, x + 0.012f, under - 0.03f, under,
@@ -212,17 +216,19 @@ static void dado(Kit* kit, const KitFrame* f, const vec2* outline, int count, fl
 /*
  * The stairwell, walled in from the door to the foot and painted, so what the door opens on is a
  * narrow way down between two walls and a third ahead. Under the floor its south wall stands on
- * the slab under the partition, and stops a tread short of the foot: there, under a header, is the
- * way into the basement, to the left at the bottom. Its east end closes it under the head of the
- * flight. Every face of it is one coat of the pale paint from the slab to the ceiling, over the
- * plaster above the floor and the walls below alike, and the dark band runs down the two long
- * walls along the flight, DADO_H over its nosings, to meet the basement's at the foot.
+ * the slab under the partition and stops at the last riser: the floor beyond it, a metre to the
+ * wall ahead, is the way into the basement, to the left at the bottom, under a header. Its east
+ * end closes it under the head of the flight. Both are the basement's concrete on its side. Every
+ * face inside is one coat of the pale paint from the slab to the ceiling, over the plaster above
+ * the floor and the concrete below alike, and the dark band runs down the two long walls along
+ * the flight, DADO_H over its nosings, and level across the wall at its foot.
  */
 static void stairwell(Kit* kit) {
     const float s0 = STAIRWELL_WALL_Z - 0.5f * INT_WALL, hall = HALL_X0 - 0.5f * INT_WALL;
-    painted_wall(kit, FOOT_X, HALL_X0, BASEMENT_Y, JOIST_Y0, s0, STAIRWELL_Z0);
-    painted_wall(kit, CELLAR_HEAD_X, HALL_X0, BASEMENT_Y, JOIST_Y0, STAIRWELL_Z0, CELLAR_Z1);
-    kit_frame_box(kit, &KIT_WORLD, MAT_CELLAR_WALL, CELLAR_X0, FOOT_X, FOOT_HEAD, JOIST_Y0, s0,
+    const float foot = CELLAR_FOOT_X;
+    cellar_wall(kit, foot, HALL_X0, BASEMENT_Y, JOIST_Y0, s0, STAIRWELL_Z0);
+    cellar_wall(kit, CELLAR_HEAD_X, HALL_X0, BASEMENT_Y, JOIST_Y0, STAIRWELL_Z0, CELLAR_Z1);
+    kit_frame_box(kit, &KIT_WORLD, MAT_CELLAR_CONCRETE, CELLAR_X0, foot, FOOT_HEAD, JOIST_Y0, s0,
                   STAIRWELL_Z0, true);
 
     coat(kit, MAT_CELLAR_WALL,
@@ -241,7 +247,7 @@ static void stairwell(Kit* kit) {
                    .to = hall,
                    .y0 = BASEMENT_Y,
                    .y1 = CEIL_Y,
-                   .openings = {{CELLAR_X0, FOOT_X, BASEMENT_Y, FOOT_HEAD, .door = true}},
+                   .openings = {{CELLAR_X0, foot, BASEMENT_Y, FOOT_HEAD, .door = true}},
                    .opening_count = 1});
     coat(kit, MAT_CELLAR_WALL,
          (KitWall){.at = CELLAR_X0 + 0.5f * COAT,
@@ -274,8 +280,8 @@ static void stairwell(Kit* kit) {
                            {hall, BASEMENT_Y}};
     dado(kit, &KIT_WORLD, north, 5, CELLAR_Z1 - COAT, -1.0f);
     const vec2 south[4] = {{hall, nosing_y(hall) + DADO_H},
-                           {FOOT_X, nosing_y(FOOT_X) + DADO_H},
-                           {FOOT_X, BASEMENT_Y},
+                           {foot, nosing_y(foot) + DADO_H},
+                           {foot, BASEMENT_Y},
                            {hall, BASEMENT_Y}};
     dado(kit, &KIT_WORLD, south, 4, STAIRWELL_Z0 + COAT, 1.0f);
     const vec2 west[4] = {{STAIRWELL_Z0, BASEMENT_Y},
