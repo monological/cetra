@@ -804,20 +804,28 @@ Spec 13.29: an app's own GLSL at four places, after Unreal's material model. `AG
 Shaders, has the shape; this is how each works and what a plausible frame hid while it was built.
 `shader_hooks_fixture` and the `shader-hooks` gate group cover every place.
 
-**The resolver and the splice** (`shader.c`). Every source passes `shader_source_with_includes`,
-which expands `#include "x.glsl"` against `shader_includes.h`, the `include/` chunks unexpanded --
-nested, include-once, and after each top-level include a `#line` back to the including file's own
+**The resolver and the splice** (`shader.c`). `create_shader` expands every source's
+`#include "x.glsl"` against `shader_includes.h`, the `include/` chunks unexpanded -- nested,
+include-once, and after each top-level include a `#line` back to the including file's own
 numbering, so an app's compile error names its own line. `shader_source_splice` puts an app's
-chunk at a marker line in an engine shader: its includes expand against what the host already
-holds, the build-time expansion's `// ---- begin X ----` lines counting as included, and it is
-numbered as source string 1, so its errors read `1:<line>`.
+chunk at a marker line in an engine shader, numbered as source string 1 so its errors read
+`1:<line>`, and leaves its includes to that one walk, which counts each build-time
+`// ---- begin X ----` line as X included from that line on.
+- **The splice used to expand the chunk itself, and got two things wrong that one walk cannot.**
+  It numbered nothing after an include, so a hook's error past one read its line plus the
+  chunk's length; and it marked every chunk anywhere in the host as held, so a hook spliced
+  above a chunk's build-time copy had its include dropped and then met an undefined name. Now a
+  hook including a chunk the host defines only further down is refused by name.
 
 **Post passes** (`postfx_add_pass`). Each draws its program over the frame into a scratch target
 and is blitted back; inputs bound by name are `sceneColor`, `sceneDepth` (render res), `texelSize`,
 `time`, `frame`, `projection`, `view` and the pass's params. Before DOF is the fogged frame with
 the late draw in it; before bloom is whatever DoF left, before the meter, so it is metered. After
 the tone map the tone map writes PostFX's picture -- whenever the CRT is on or such a pass is
-enabled -- skipping the dither, and the CRT or `present_frag` writes the window with it.
+enabled on a tone-mapped frame -- skipping the dither, and the CRT or `present_frag` writes the
+window with it. `postfx_run` decides which once a frame (`PostFXShow`), and the engine draws its
+overlays into whatever that says. The HDR passes share their scratch with motion blur, whose use
+of it a frame never overlaps.
 - **The identity is not exact after the tone map.** The picture is fp16, and the dither then
   lands one code differently on about 55,000 of 480,000 pixels against a frame written straight
   to the window. The HDR copy-back is exact. The CRT path has had this property since 13.28.
@@ -825,39 +833,48 @@ enabled -- skipping the dither, and the CRT or `present_frag` writes the window 
   with no passes, and the after-tonemap mark's ring read +1.2 codes: the neighbouring marks'
   bloom. Each is measured against the frame without that one mark.
 
-**The late lane** (`MATERIAL_PASS_LATE_DRAW`, `render_late_items`). Items farthest first,
-premultiplied (alpha 0 adds, 1 replaces), with `late_surface_vert`'s varyings and
-`late_surface.glsl`'s `lateVisible` and `lateEmit`. Bound by name: `model`, `view`, the
-unjittered `projection`, `viewport`, `time`, `frame`, `materialAlbedo`, `materialEmissive`, the
-albedo and emissive maps, `sceneDepth`, the fog volume and the params.
+**The late lane** (`MATERIAL_PASS_LATE_DRAW`, `render_late_items`). Items farthest first, ties in
+graph order, premultiplied (alpha 0 adds, 1 replaces), with `late_surface_vert`'s varyings and
+`late_surface.glsl`'s `lateVisible` and `lateEmit`, drawn through the shared submission
+(`SubmitState`, `submit_draw_run`). Bound by name: `model`, `view`, the unjittered `projection`,
+`time` and `frame`, the material under the lit surface's names (`albedo`, `emissiveFactor`,
+`albedoTex`, `emissiveTex` with their `*TexExists`), its params, and what every late draw hands a
+shader -- `sceneDepth`, the fog volume and `viewport` -- through `postfx_late_draw_bind`, which
+fire and rain share.
 - **TAA is the whole reason.** The fixture's noise, drawn before the seam, keeps a 5-code spread
   of its 31 and correlates +0.72 with the frame before: the history averages it into a grey
   shimmer. After the seam it correlates -0.03.
-- **The rain needed its own exclusion.** `caster_set_wants` tests the rain's cover by lane, not
-  by `DRAW_NO_CAST`, and would have let a late surface keep rain off the ground.
+- **The rain needed its own exclusion.** The rain's cover ignores `DRAW_NO_CAST`, and would have
+  let a late surface keep rain off the ground; every caster set now names the lanes it takes, so a
+  lane casts nothing until it is listed.
 - **`node_set_programs` overwrote it.** The render app hands every material `pbr` after the scene
   file applies, and the late material was refused on its first frame for carrying a lit-surface
-  program; a late material's program is its own now.
+  program; neither subtree setter replaces a late material's program now.
 
 **The surface hook** (`create_shader_hook`, `Material.shader_hook`). Two calls of one function,
 from the same gathered albedo and coverage, so a hook multiplying its albedo does it once: the first
 before the alpha test, keeping albedo and alpha, the second after the gather, keeping the rest.
-`create_shader_hook` compiles the full variant at once, so a hook that does not compile is refused
-where the app made it. A hook that fails at another mask is dropped from its material by name,
-once. Materials naming the same files in a `.cscn` share one hook, and so its programs.
+`create_shader_hook` compiles the hook's two lit stages without linking, so a hook that does not
+compile is refused where the app made it, and builds its two shadow programs. A variant that
+fails at another mask is said once, by name, and its materials stay on the programs they have.
+A scene file describes each hook once, under `shaderHooks`, and its materials name it.
 - **The cache key is the hook too.** Without the id in the name, every hooked material at one
   mask draws with whichever hook compiled first -- `hooks-cache-key`'s red and blue boxes both
   came out striped.
 
 **The offset** (`cetraOffset`, `object_position.glsl`). One splice reaches every stage that
-includes the chunk; the shadow passes take `create_shadow_hook_program`, chosen per caster.
+includes the chunk; a light draws a caster `classify` marked `DRAW_HOOKED_CASTER` through the
+hook's own shadow program.
 - **Only a surface moved away from the eye shows a broken prepass.** A lean prepass that never ran
   the offset writes the unmoved surface's depth, and the shading pass's one-sided `LEQUAL` passes
   every fragment that came nearer. The dome, which only rises toward the eye, rendered the same
   with the prepass wrongly allowed; the pushed quad, half a metre back, lost 3,255 px of itself.
-- **A hooked caster is handed the pass's state on every draw**, not just when the program
-  switches: a layer opening on the program the last layer left bound switches nothing, and would
-  keep that layer's light matrix.
+- **One owner primes a shadow layer's programs.** `_draw_shadow_items` forgets the program the
+  last layer left bound and sets the light matrix and the displacement inputs on each program as
+  the layer first draws through it. The first version had the callers prime the depth program and
+  the walk prime hooked ones: the caller's matrix then went to whatever was bound, a hooked
+  program when the last layer ended on a hooked caster, and the plain casters of the next layer
+  drew through the previous layer's matrix while the uniform cache recorded the new one as held.
 - **A masked hook casts through its alpha**: `DRAW_FOLIAGE` accepts a hook in place of an albedo
   map. Without its program the card's holes left its shadow and the dome cast none.
 

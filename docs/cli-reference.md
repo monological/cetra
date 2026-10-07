@@ -553,12 +553,15 @@ any of them: they are scene content, each a `.glsl` resolved against the scene f
 profile is, and a file that does not read or compile is said by name and left out.
 - `post.passes: [{"at": "beforeDof" | "beforeBloom" | "afterTonemap", "shader": "...",
   "params": {...}, "enabled": true}]` -- fullscreen passes at three points of the post chain, in
-  order at each.
-- On a material: `"lateShader"` draws it in the late draw, past TAA, lit by nothing;
-  `"surfaceShader"` and `"offsetShader"` make one surface hook (materials naming the same two
-  files share it), with `"offsetBound"` (metres, the culling margin; an offset without one is
-  warned at load and culls as though it never moved) and `"offsetAnimated"` (true makes it a mover
-  for cached shadows).
+  order at each; up to 8, and `at` in any case.
+- `shaderHooks: {"name": {"surface": "...", "offset": "...", "offsetBound": 0.6, "animated":
+  false}}` -- surface hooks, each one hook however many materials name it. `surface` defines
+  `cetraSurface`, `offset` defines `cetraOffset`; `offsetBound` is metres, the culling margin (an
+  offset without one is warned at load and culls as though it never moved), and `animated` makes
+  whatever the hook decides of a caster redraw cached shadows each frame.
+- On a material: `"shaderHook": "name"` draws it through that hook; `"lateShader"` draws it in
+  the late draw, past TAA, lit by nothing, and takes no hook (a material naming both is warned and
+  keeps the late shader).
 - `"shaderParams": {"name": number or [up to 4 numbers]}` on a material, `"params"` on a pass:
   vec4 uniforms by name, the rest of the vec4 zero.
 
