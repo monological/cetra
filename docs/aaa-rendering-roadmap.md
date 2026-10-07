@@ -393,7 +393,8 @@ expression stream (directional baselines stay byte-identical). New `Light.up`/`o
 (rotated by node transform like `direction`; +3 uniform components/light, folds into PackedLight
 when clustered lands — one-line layout append). v1 limits: single-sided, ~~no area shadows~~
 (**A7 delivered them**, spec 9.8: one map down the panel normal, so the occlusion is hard where the
-source is soft), clearcoat/sheen skip the area branch. Karis sphere-widening untouched (area lights bypass it).
+source is soft; spec 13.27 made it a five-face cube in the panel's frame, since the one map left
+everything past 60 degrees off the normal lit), clearcoat/sheen skip the area branch. Karis sphere-widening untouched (area lights bypass it).
 New: `ltc_lut.h` (generated), `include/ltc.glsl`. CLI: `--area-light px,py,pz,dx,dy,dz,w,h,I[,rgb]`
 (the flag IS the test asset). **Owns foundations:** float-texture-from-C-array helper; `Light.up`
 orientation frame; embedded-table codegen pattern. **Depends on:** A1 preferred (edit final loop once).
@@ -498,7 +499,11 @@ Directional lights had cascades; spot lights had exactly one map ("the flashligh
 scene order); point and area had none, while `.cscn` accepted `cast_shadows` on them and silently
 dropped it. Unit 15's single `sampler2D` became one `sampler2DArray` carrying every perspective
 map — spot 1 layer, point 6 (cube faces as ordinary layers picked by dominant axis), area 1 down
-the panel normal, multiplied into the LTC term. The design was forced rather than chosen:
+the panel normal, multiplied into the LTC term. **The area map was wrong and 13.27 replaced it**:
+a 120-degree map reads everything more than 60 degrees off the normal as lit, so a panel lit the
+rooms round it through their walls. An area light is now FIVE layers, a cube in the panel's own
+frame with the face behind it skipped, ending at its range, and may keep its faces in the cached
+tiles from its centre as a point light does; the pool is 16. The design was forced rather than chosen:
 `pbr_frag` samples all 16 texture units, and `samplerCubeArray` is GLSL 400 against a uniformly-330
 shader set, so a second sampler had nowhere to bind. The directional path is untouched, which is
 what kept `froxel_fog`, `contact_debug` and `aerial_fixture` at 0 px throughout.

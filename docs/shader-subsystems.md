@@ -26,8 +26,8 @@ Image finishing: [Tonemap / exposure](#tonemap--exposure) ·
 [Local exposure](#local-exposure)
 
 Lighting and occlusion: [Specular occlusion](#specular-occlusion) · [IES profiles](#ies-profiles) ·
-[Contact shadows](#contact-shadows) ·
-[Cached point-light shadows](#cached-point-light-shadows) ·
+[Contact shadows](#contact-shadows) · [Area-light shadows](#area-light-shadows) ·
+[Cached shadows](#cached-shadows) ·
 [Clustered specular probes](#clustered-specular-probes)
 
 Surfaces: [Water](#water) · [Clustered decals](#clustered-decals) ·
@@ -423,11 +423,45 @@ context's lifetime, which `froxel_inject` has relied on since 9.5.
 A CACHED point light (spec 13.16) holds tiles rather than a layer and counts as mapped:
 the mapless count asks `shadow_light_mapped`, never the layer field.
 
-## Cached point-light shadows
+## Area-light shadows
+
+`panelCubeFace` in `include/cube_face.glsl`, read in `pbr_frag`'s area branch (spec 13.27). A
+panel's per-frame shadow is FIVE layers of the punctual pool: a cube in the panel's own frame --
+`r = cross(up, normal)`, the width axis `ltc.glsl` uses, then the up and the normal, as x, y and
+z -- drawn +r -r +u -u +n from the panel's centre, each face rolled to another frame axis rather
+than to world up, so its square frustum covers the region `punctualCubeFace` assigns it in that
+frame. The face behind the panel is never drawn: every direction whose dominant frame axis is
+-n is behind the panel's plane, where `ltcPanel` is already zero. In a WORLD-axis cube that skip
+is wrong for a tilted panel -- the face opposite the normal's dominant axis still covers
+directions in front of it -- and `area-tilt` is the arm that sees it. The occlusion is a hard
+binary test of the panel's centre, multiplied into the whole LTC integral; nothing occludes one
+edge of the rectangle and not the other.
+
+**The faces end at the panel's range.** At the scene's far plane a kitchen tube's side faces
+took in the whole street, 5.65 million triangles and 14.4 ms of GPU, where the range costs 0.96
+ms; a panel lights nothing past its range, so nothing past it can stand between the panel and
+what it lights. Points and spots keep the scene's far plane.
+
+**What it replaced read most of a room as lit.** Until 13.27 a panel cast ONE perspective map
+down its normal with a fixed 120-degree cone, and `punctualShadow` reads anything off a map as
+lit by design -- so every receiver more than 60 degrees off the normal was unshadowed, walls
+included, and a ceiling tube lit the hall beside its kitchen through the wall, with the
+frustum's side plane drawn as a diagonal across the hall. Spec 10.4 had already refused fitting
+the cone, since a room's walls reach the panel's own plane and the conservative cone is 180
+degrees. Unreal shadows a rect light the same way as this, from its centre, as a point light.
+
+## Cached shadows
 
 `include/punctual_tiles.glsl` over `include/tile_lookup.glsl` (spec 13.16). A point light with
 `cast_shadows`, `shadow_cache` and a range keeps its cube faces as 256² tiles of the punctual
-array, drawn once by `shadow.c` and kept. The lookup projects onto a face ANALYTICALLY from
+array, drawn once by `shadow.c` and kept. **So may a panel since 13.27**, cached from its centre
+over the same six WORLD-axis faces with one view and no body -- `light_has_body` is false for a
+panel whatever it carries, and `create_light` refuses it one by name, since the capsule would run
+along its normal. Its near plane is worth stating: a cached light's default is 0.2% of its range,
+and silent's strips sit inside the steel channel that holds them, which at that near plane
+shadowed the ceiling round every tube from within, a hard dark patch the per-frame cube's 0.1 m
+had clipped away. The app states one past the channel, as the hall lantern states one past its
+panes. The lookup projects onto a face ANALYTICALLY from
 the view's origin, the near plane and the far, with per-face axis/right/up tables written from
 `glm_lookat` over `light_space_up` -- six matrices a light would not fit in any uniform array,
 where a projection is three dot products and a divide -- and finds the tile from the array's
@@ -439,10 +473,13 @@ and a bodiless light's one view on the same origin with no new packing) and the 
 stratified along the segment with a point of the ball each. `tile_body_point` in C and
 `tileBodyPoint` here are two copies of one formula, and a drift between them reads as views
 projected from the wrong point -- loud, which is why two copies are allowed. The drawn body is
-packed whole, in what a point light leaves free: centre in `shadowTile.xyz`, segment in
+packed whole, in what its type leaves free: centre in `shadowTile.xyz`, segment in
 `attenCutoff.zw` and `shadowMisc.x` (the reserved slot and the cone cosines, which only a spot
-reads), radius and near plane in `shadowMisc.zw` (a panel's extent). `tileLightAt` in
-`tile_lookup.glsl` is the one place that decodes it, for the surface and the fog alike.
+reads), a point light's radius in `shadowMisc.z` (a panel's extent, which a panel keeps, its
+radius being 0 by type) and every cached light's near plane in `upArea.w`. The near plane rode
+`shadowMisc.w` until 13.27, which would have shrunk a cached panel's LTC rectangle to it --
+`tiles-area-size` is what sees that. `tileLightAt` in `tile_lookup.glsl` is the one place that
+decodes it, for the surface and the fog alike.
 
 **Three designs were measured and refused before this one**, on `tile_core_fixture` against a
 trace of the same body against the rim with no shadow map (the trace is `tiles-truth`'s):

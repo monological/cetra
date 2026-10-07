@@ -7,7 +7,8 @@
 // the upload in whichever shader you forgot, with no error anywhere.
 //
 // One 2D array serves every perspective type. A point light's six 90-degree
-// frusta are six ordinary layers the caller picks between, so no
+// frusta are six ordinary layers the caller picks between, and a panel's five
+// in its own frame (spec 13.27), so no
 // samplerCubeArray (GLSL 400 against a shader set that is uniformly 330) and
 // no second texture unit -- and there is no second unit to be had, since
 // pbr_frag samples all 16.

@@ -1,5 +1,6 @@
-// Cached point-light shadows (spec 13.16): the SURFACE lookup for a light whose faces are
-// tiles of the punctual array -- a receiver-plane PCF for a light with no body, and the average
+// Cached shadows (specs 13.16 and 13.27): the SURFACE lookup for a point light or a panel whose
+// faces are tiles of the punctual array -- a receiver-plane PCF for a light with no body, a
+// panel always among them, and the average
 // of views spread over the body for one with a body. Where a point falls on the faces is
 // tile_lookup.glsl's, which the fog reads too.
 //

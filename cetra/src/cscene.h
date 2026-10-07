@@ -44,18 +44,20 @@ typedef enum {
 typedef enum CSceneLightType {
     CSCENE_LIGHT_POINT = 0,
     CSCENE_LIGHT_AREA,        // rectangular LTC panel (spec 9.2)
-    CSCENE_LIGHT_DIRECTIONAL, // infinite sun; the only type + first spot that cast shadows
+    CSCENE_LIGHT_DIRECTIONAL, // infinite sun
     CSCENE_LIGHT_SPOT,        // cone light
 } CSceneLightType;
 
 // All four engine light types (spec 6.2). Shared keys: name, type, position
-// (point/spot/area; ignored for directional), color, intensity. Per type:
-//   directional -- `direction` (travel direction); shadow-capable via cast_shadows.
+// (point/spot/area; ignored for directional), color, intensity, cast_shadows. Per type:
+//   directional -- `direction` (travel direction).
 //   spot        -- `direction`, `cone` [inner, outer] half-angles in DEGREES,
-//                  optional attenuation/range; shadow-capable (the first spot only).
+//                  optional attenuation/range.
 //   area        -- `direction` (the normal; lights only the side it points at),
-//                  `size`, optional `up` (orthonormalized against direction).
-//   point       -- optional attenuation/range.
+//                  `size`, optional `up` (orthonormalized against direction);
+//                  `shadow_cache` with a range, as a point light's.
+//   point       -- optional attenuation/range; `shadow_cache` with a range, and
+//                  `source_radius` / `source_length` for a body.
 // Attenuation and range are optional everywhere they apply: absent = keep the
 // engine default (so a 0-filled struct means "engine default", not "zero").
 typedef struct CSceneLight {

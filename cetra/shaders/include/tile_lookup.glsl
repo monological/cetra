@@ -1,4 +1,4 @@
-// Cached point-light shadows (spec 13.16): where a point falls on a cached light's faces,
+// Cached shadows (spec 13.16): where a point falls on a cached light's faces,
 // which are tiles of the punctual array drawn once by shadow.c and kept. The surface lookup
 // (punctual_tiles.glsl) and the fog volume's tap both read through this.
 //
