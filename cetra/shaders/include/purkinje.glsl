@@ -176,7 +176,7 @@ float purkinjePoolRadius(float w) {
  * the retina's spectral response plus its noise. No sampler, no texel size, no
  * composite terms: everything spatial belongs to whoever owns the scene.
  */
-vec3 purkinjeShift(vec3 c, float w, vec2 uv, float seed) {
+vec3 purkinjeShift(vec3 c, float w, vec2 uv, uint frame) {
     c = mix(c, dot(c, PURKINJE_SCOTOPIC_W) * PURKINJE_ROD_TINT, w);
 
     /*
@@ -186,18 +186,17 @@ vec3 purkinjeShift(vec3 c, float w, vec2 uv, float seed) {
      * a dim scene is genuinely noisy to the eye before any transfer curve, and
      * it scales with how far into rod vision the pixel is.
      *
-     * Rides the grain stage's own frame seed rather than carrying a second one:
-     * that value is already deterministic across equal --frames runs, and a
-     * third source of per-frame randomness is a third thing to keep that way.
-     * The offset keeps the two fields from correlating where their arguments
-     * would otherwise be close.
+     * New every frame, on a 1024-cell grid across the frame whatever its size,
+     * keyed on the grain stage's frame rather than a second count. The frame is
+     * salted, so where a cell of this grid lands on the grain's pixel the two
+     * noises still differ.
      *
      * Multiplicative, so it vanishes in true black rather than lifting it -- a
      * night frame is half at the radiance floor, and additive noise there would
      * print static onto pixels that carry no light at all.
      */
     if (purkinjeNoise > 0.0) {
-        float n = hash21(uv * 1024.0 + seed + 37.0, vec2(12.9898, 78.233)) - 0.5;
+        float n = frameNoise(uvec2(uv * 1024.0), frame ^ 0x9E3779B9u) - 0.5;
         c *= 1.0 + n * PK_NOISE_AMOUNT * purkinjeNoise * w;
     }
     return c;
