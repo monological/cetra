@@ -70,6 +70,14 @@ below middle grey, 1 unchanged and 0.6-1 Unreal's suggestion; `--le-detail` the 
 grid, which held a lit room's window best; `--le-kernel` that blur's width as a share of the
 frame; `--le-grey-bias` stops added to the middle grey it all scales about. `--le-probe` prints
 the frame's luminance percentiles in stops from middle grey, which is the range to tune against),
+`--crt` (spec 13.28: the finished picture, the app's overlay included and the debug GUI not, on a
+consumer CRT television. OFF by default, and each setting below implies it. `--crt-lines <n>` is
+the signal's lines, 480 by default; `--crt-scanlines <f>` 0 fused to 1 thin with dark gaps, which
+fade to fused anyway below 2.5 window pixels a line, so a 400x300 capture at 480 lines shows none
+-- pass `--crt-lines` a quarter of the window's height to see them; `--crt-mask <f>` the slot
+mask's depth; `--crt-curvature <f>` the tube's bow, 0 flat; `--crt-bleed <f>` the composite colour
+bleed. The tone curve holds mid-grey and compresses what is brighter, so the frame comes out a
+little darker; that is CRTS's design and not exposure going wrong),
 `--tonemap <neutral|aces|agx|linear>`
 (`linear` is the identity curve WITH the display encode, which passthrough is not: an authored
 colour at unit exposure reaches the screen as authored, and it is what `engine_set_2d_preset`
@@ -933,6 +941,11 @@ is `--cam-eye 70,160,25 --cam-target 70.01,0,25.2`.
 **Look switches**, each an A/B for one part of the picture:
 - **`--no-grade`:** the frame without the green-grey LUT (`assets/lut/silent_grade.cube`, written
   by `apps/silent/tools/make_grade.py`).
+- **`--crt`:** the game on a consumer CRT television (spec 13.28), the door prompt and menus on it
+  too and the debug GUI over it. Off by default, the user's call after seeing it on. Silent has no
+  film grain either way. At the default window the 480 lines are 3.75 framebuffer pixels apart and
+  show fully; at `-W 960 -H 540` they are 2.25 apart and a little fainter, and below 1.5 apart they
+  fuse.
 - **`--no-flicker`:** keeps the failing ceiling tube steady. The flicker is a pure function of the
   sim clock, so a headless frame catches the same instant of it every run. A frame that lands in a
   stutter burst shows that tube dark, which reads as the room being underlit when it is not; use

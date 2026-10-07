@@ -52,6 +52,10 @@ up as a difference. The corpus must not be re-baked off macOS.
 
 ## Running the gates
 
+`gates.py` needs Python 3 with **numpy** (since spec 13.28, whose grain and CRT arms read whole
+fields), and ImageMagick's `magick` on the path for `compare`. A machine without numpy fails at the
+import, before any group runs: `python3 -m pip install numpy`.
+
 ### Which binaries a number describes
 
 `scripts/gates.py` and `scripts/goldens.py` both take `--bin-dir` (or `CETRA_BIN_DIR`), default

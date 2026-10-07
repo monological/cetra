@@ -23,7 +23,7 @@ Sky and night: [Day/night cycle](#daynight-cycle) · [The moon](#the-moon) ·
 
 Image finishing: [Tonemap / exposure](#tonemap--exposure) ·
 [Purkinje / scotopic shift](#purkinje--scotopic-shift) · [Diffraction glare](#diffraction-glare) ·
-[Local exposure](#local-exposure)
+[Local exposure](#local-exposure) · [Film grain](#film-grain) · [The CRT](#the-crt)
 
 Lighting and occlusion: [Specular occlusion](#specular-occlusion) · [IES profiles](#ies-profiles) ·
 [Contact shadows](#contact-shadows) · [Area-light shadows](#area-light-shadows) ·
@@ -727,6 +727,74 @@ Durand 2007 and Unreal 5's Local Exposure; `docs/papers/README.md` says what eac
   Both are now two passes of short loops over many fragments, as the meter's histogram is: 0.8-0.9
   ms in silent's kitchen, 1.2 ms on `abandoned_window` at 4K. The grid's first pass is most of
   what is left.
+
+## Film grain
+
+The finishing stack's sensor noise in `tonemap_frag`, after the LUT and before the dither: one
+monochrome draw a pixel, scaled by `grain_strength` and by a midtone weight that falls to nothing
+at black and white. **Off by default**; `--grain <f>`, `post.grain`.
+
+**Every frame is new noise, from `frameNoise`** (`include/noise.glsl`, spec 13.28): Jarzynski &
+Olano's `pcg4d` (`include/pcg4d.glsl`, the rain's and the fire's) over (pixel x, pixel y, frame),
+the top 24 bits. Unreal does the same job by jumping a grain texture to a random offset each frame.
+
+**What it replaced is the thing to know.** The grain was `hash21(gl_FragCoord.xy + seed)` with the
+frame number as the seed, which adds the frame to BOTH coordinates: each frame was the frame before,
+moved one pixel along the diagonal. Measured on the grain alone, consecutive frames correlated 0.994
+at that shift, and the eye followed it as lines crawling across the picture. Any "advance the
+pattern by an offset" seeding does this; it is fine under a temporal filter that averages it away,
+and wrong for noise that is SEEN. The Purkinje rod noise was seeded the same way and moved with it,
+on `uv * 1024` so its grain stays the same size at any resolution; `purkinje_night` was re-baked.
+
+`grain-still` reads the crawl (0.005 now), and `grain-amount` the spread against the uniform draw's
+1/sqrt(12). The dither is not grain and was left alone: it is static on purpose (spec 11.24).
+
+## The CRT
+
+`crt.c` with `crt_resample_frag` and `crt_frag` (spec 13.28), after Lottes' CRTS (2018) and the
+slot mask of his earlier crt-lottes (2014), both public domain; `docs/papers/README.md` has both.
+**Off by default**; an app turns it on with `postfx->crt_enabled`, the render app with `--crt`.
+
+**Where it runs.** With it on, the post chain writes the finished picture into a window-sized
+RGBA16F target instead of the window, and the debug tiles and the app's overlay draw into it after
+it. The CRT then draws that into the window, and the debug GUI goes on top. So a game's door prompt
+and menus are on the television and the developer's panel is not. The target is window-sized
+exactly, because the UI scissors in window pixels. Everything is in linear light: the resample
+decodes the picture through `include/display.glsl`'s inverse of the tonemap's 2.2, and the CRT
+encodes through the same file.
+
+**How it draws.**
+- **The signal.** The picture is area-filtered down to `crt_lines` lines (480 by default), as wide
+  as the window's shape makes it. CRTS expects an input that small and says so.
+- **The beams.** Each window pixel is lit by the two nearest lines, each a windowed-cosine beam
+  whose thinness `crt_scanlines` sets, filtered across by CRTS's `exp2(blur * d^2)` over six texels.
+- **The bleed.** Colour takes a wider filter than brightness: the wide filter's colour with its luma
+  replaced by the narrow filter's, which is what a YIQ round trip with chroma blurred wider does,
+  without the matrices. Composite video carried colour in a narrower band than brightness. The
+  widest setting is taste bounded by the six taps; NTSC's I bandwidth would reach past them.
+- **The mask.** crt-lottes's slot mask: RGB stripes a pixel each, a dark row every second line,
+  offset in alternate groups of three columns. Only darkened, never pushed past white. It is in
+  WINDOW pixels, not warped, and its pixel is the window's height over 1080 rounded, at least one
+  -- two on silent's 1800 -- so a phosphor stays something the eye can resolve.
+- **The tube.** CRTS's warp, each axis bowed by the other's square, black past the picture with
+  rounded corners.
+- **The tone.** CRTS's curve on each pixel's peak channel lifts mid-grey back over what the beams
+  and mask take.
+- **Last, the encode and the dither**, this being the pass that writes the window (spec 11.24).
+
+**What a plausible frame hid while it was built:**
+- **The frame comes out darker than it went in, and that is the design.** The curve holds 0.18 and
+  compresses everything above it: under the default mask, 0.4 comes out at 0.91 of itself. A gate
+  on the frame's mean would have asserted something CRTS does not claim. `crt-mean` predicts each
+  flat block from the plain frame through the mask and the curve, and holds it to 2% (0.83%
+  measured).
+- **Scanlines a pixel or so apart are moire, not scanlines.** They fade to fused between 2.5 and
+  1.5 window pixels a line, so a 480-line signal shows them faintly on a window over 720 pixels
+  high and fully over 1200.
+- **The dither had to move.** Left in the tonemap, it would have been resampled away with the rest
+  of the picture's fine detail, and the window's 8-bit write would have banded.
+- **It costs about 0.65 ms** at silent's 3200x1800 and is not why a heavy frame is slow; measure
+  `--profiler`'s `crt` row before blaming it.
 
 ## Atmosphere
 
