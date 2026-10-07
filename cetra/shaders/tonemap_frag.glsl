@@ -113,7 +113,7 @@ uniform int caEnabled;    // Chromatic aberration; separates channels radially
 uniform float caStrength; // Channel separation at the CORNER, in pixels
 uniform int grainEnabled;
 uniform float grainStrength;
-uniform float grainSeed; // Per-frame, deterministic across equal --frames runs
+uniform int noiseFrame; // the frame number the grain and the rod noise are new on
 uniform int ditherEnabled;
 uniform float ditherStrength; // Peak dither amplitude in 8-bit LSB (1 = textbook TPDF)
 // 3D colour-grading LUT (spec 11.58), display-referred; see the note above.
@@ -554,7 +554,7 @@ vec3 sceneToToned(vec2 uv, float aoFactor, vec3 bloomAdd, float localExposure)
                 vec3 pooled = purkinjeAcuity > 0.0
                                   ? purkinjePooled(uv, aoFactor, bloomAdd, w)
                                   : c;
-                c = purkinjeShift(pooled, w, uv, grainSeed);
+                c = purkinjeShift(pooled, w, uv, uint(noiseFrame));
             }
         }
     }
@@ -725,9 +725,9 @@ void main()
         color = lutApply(color);
 
     // Film grain: display-space, weighted toward midtones (invisible in flat
-    // black/white), animated by a deterministic per-frame seed
+    // black/white), new every frame and deterministic across equal --frames runs
     if (grainEnabled == 1) {
-        float n = hash21(gl_FragCoord.xy + grainSeed, vec2(12.9898, 78.233)) - 0.5;
+        float n = frameNoise(uvec2(gl_FragCoord.xy), uint(noiseFrame)) - 0.5;
         float luma = dot(color, vec3(0.299, 0.587, 0.114));
         float w = 1.0 - abs(2.0 * luma - 1.0);
         color = clamp(color + n * grainStrength * w, 0.0, 1.0);
