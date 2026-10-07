@@ -208,7 +208,7 @@ LSB = 1.0 / 255.0 + 1e-6
 
 
 def cscn_copy(src, dst, mutate):
-    """Copy a .cscn through `mutate(dict)`, with model paths made absolute.
+    """Copy a .cscn through `mutate(dict)`, with model paths made absolute; returns `dst`.
 
     Generating a twin mechanically rather than committing a hand-edited one is the point:
     the two halves then cannot differ in anything except what `mutate` touched, which is
@@ -244,6 +244,7 @@ def cscn_copy(src, dst, mutate):
         lut["path"] = os.path.join(base, lut["path"])
     with open(dst, "w") as f:
         json.dump(d, f, indent=1)
+    return dst
 
 
 def _scale_emitters(d, factor):
@@ -455,14 +456,53 @@ PENUMBRA = _cscn_camera(
 # a source-sized penumbra lands).
 PENUMBRA_CENTRE_TOL = 0.01
 
-# A panel's reach (spec 13.27). A panel lights its whole front hemisphere and its shadow has to
-# cover all of it: cornell_leak's far room, behind the partition and above about 1 m more than 60
-# degrees off the normal of a panel by the ceiling, is what one 120-degree map left lit.
+# cornell_leak: a lamp by the ceiling of one room and a partition between it and another. The lit
+# room left of the partition and the dark one right of it, as fractions of the frame; what a light
+# that respects the partition leaves in the far room against the near one, and what the same
+# light leaves there unshadowed, or the partition is all that darkens it. A cached lamp leaves
+# 0.0004; unshadowed it is 0.73.
+LEAK_NEAR_ROOM = (0.15, 0.30, 0.45, 0.80)
+LEAK_FAR_ROOM = (0.58, 0.30, 0.88, 0.80)
+LEAK_DARK_MAX = 0.01
+LEAK_LIT_MIN = 0.2
+
+
+def _leak_far_share(img):
+    """The far room's mean over the near one's, in a cornell_leak frame."""
+    w, h, pix = img
+    return _box_luma_dense(pix, w, h, LEAK_FAR_ROOM) / _box_luma_dense(pix, w, h, LEAK_NEAR_ROOM)
+
+
+# A panel (spec 13.27). It lights its whole front hemisphere and its shadow has to cover all of
+# it: cornell_leak's far room, behind the partition and above about 1 m more than 60 degrees off
+# the normal of a panel by the ceiling, is what one 120-degree map left lit.
 AREA_PANEL = {"name": "Panel", "type": "area", "size": [0.4, 0.4], "color": [1.0, 0.95, 0.88],
               "intensity": 30.0, "cast_shadows": True}
-AREA_REACH_AT = [-0.5, 1.9, 0.0]
-AREA_REACH_MAX = 0.01            # the far room's mean over the near one's, shadowed
-AREA_REACH_FALSIFIER_MIN = 0.2   # ...and unshadowed, or the partition is all that darkens it
+
+
+def _leak_panel(cache=False):
+    """cornell_leak's lamp made AREA_PANEL where it hangs, facing down and with its range,
+    cached or drawn every frame."""
+    def mutate(d):
+        lamp = d["lights"][0]
+        for key in ("cone", "intensity_unit"):
+            lamp.pop(key, None)
+        lamp.update(AREA_PANEL, shadow_cache=cache)
+    return mutate
+
+
+def _shadow_twin(workdir, tag, scene, extra=()):
+    """A render and its unshadowed twin: ((shadowed, bare), None) or (None, error), each one
+    _tiles_render's (image, probe rows, log, path)."""
+    a, err = _tiles_render(workdir, tag, scene, list(extra))
+    if err:
+        return None, err
+    b, err = _tiles_render(workdir, f"{tag}_none", scene, list(extra) + ["--no-shadows"])
+    if err:
+        return None, err
+    return (a, b), None
+
+
 # A panel turned off every world axis, its roll off them too, against the point light at its
 # centre: both test visibility from one point, so where both light they must agree.
 AREA_TILT_AT = [0.0, 0.9, 0.3]
@@ -1801,38 +1841,31 @@ def run_penumbra_gate(workdir):
       area-tilt    a panel turned off every world axis, and its roll with it, shadows as a point
                    light at its centre does wherever both light (spec 13.27)
 
-    Falsified by hand at 13.27: area-reach fails with the single 120-degree map down the normal
-    back in place of the cube; area-tilt fails with the panel's faces rolled to world up, and with
-    its width axis's sign flipped, each a mistake in the frame the C side draws in that the
-    shader's face choice would no longer match.
+    Falsified by hand at 13.27: with the single 120-degree map back in place of the cube,
+    area-reach fails at 0.0948 and area-tilt at 0.0099; with the world-axis face opposite the
+    normal's dominant axis left out rather than the frame's -n, area-tilt alone fails, at 0.0250;
+    with the width axis's sign flipped, both fail, at 0.2287 and 0.0196.
     """
     failures = []
-    fixture = asset("area_shadow_fixture.gltf")
-    frames = {}
-    if not os.path.exists(fixture):
+    # Rendered twice, and the shadowed frame is DIVIDED by the unshadowed one. Measuring the
+    # shadowed frame alone takes its "lit" reference from the brightest sample on the scan, but
+    # the panel's own falloff varies across that scan, so the reference is wrong everywhere except
+    # at one point. On a narrow transition that hardly matters; on a 0.3-wide band it moved the
+    # apparent centre by 0.06 -- an artifact of the measurement, read as a bias in the shadow. The
+    # ratio is the shadow term on its own, flat 0..1.
+    shadowed = ref_frame = None
+    if not os.path.exists(asset("area_shadow_fixture.gltf")):
         print("  penumbra     SKIP  (missing area_shadow_fixture.gltf)")
     else:
-        # Rendered twice, and the shadowed frame is DIVIDED by the unshadowed one.
-        # Measuring the shadowed frame alone takes its "lit" reference from the
-        # brightest sample on the scan, but the panel's own falloff varies across
-        # that scan, so the reference is wrong everywhere except at one point. On a
-        # narrow transition that hardly matters; on a 0.3-wide band it moved the
-        # apparent centre by 0.06 -- an artifact of the measurement, read as a bias
-        # in the shadow. The ratio is the shadow term on its own, flat 0..1.
-        for tag, extra in (("shadow", []), ("nolight", ["--no-shadows"])):
-            out = os.path.join(workdir, f"penumbra_{tag}.ppm")
-            cmd = [RENDER, "-m", fixture, "-x", "-f", "30", "--no-auto-exposure", "-E", "1.0",
-                   "-W", "800", "-H", "600", "-S", out] + extra
-            r = _run(cmd, capture_output=True, text=True)
-            if r.returncode != 0 or not os.path.exists(out):
-                print(f"  penumbra     ERROR while rendering the fixture ({tag})")
-                failures.append("penumbra")
-                break
-            frames[tag] = _read_ppm(out)
-
-    if len(frames) == 2:
-        w, h, pix = frames["shadow"]
-        _, _, ref = frames["nolight"]
+        shadowed = _dir_render(workdir, "area_shadow_fixture.gltf", "penumbra_shadow", [])
+        ref_frame = _dir_render(workdir, "area_shadow_fixture.gltf", "penumbra_nolight",
+                                ["--no-shadows"])
+        if shadowed is None or ref_frame is None:
+            print("  penumbra     ERROR while rendering the fixture")
+            failures.append("penumbra")
+    if shadowed is not None and ref_frame is not None:
+        w, h, pix = shadowed
+        _, _, ref = ref_frame
         project = _projector(PENUMBRA, w, h)
         inner, outer = _penumbra_edges()
 
@@ -1859,48 +1892,44 @@ def run_penumbra_gate(workdir):
             if not ok:
                 failures.append("penumbra")
 
+    leak, point = asset("cornell_leak.cscn"), asset("cornell_point.cscn")
+    if not (os.path.exists(leak) and os.path.exists(point)):
+        print("  area-reach   SKIP  (cornell_leak.cscn or cornell_point.cscn missing)")
+        print("  area-tilt    SKIP  (cornell_leak.cscn or cornell_point.cscn missing)")
+        return failures
+
     def scene(tag, src, mutate):
-        dst = os.path.join(workdir, f"area_{tag}.cscn")
-        cscn_copy(asset(src), dst, mutate)
-        return dst
+        return cscn_copy(src, os.path.join(workdir, f"area_{tag}.cscn"), mutate)
 
     # --- a panel's reach -----------------------------------------------------------------------
-    reach = scene("reach", "cornell_leak.cscn", lambda d: d.update(lights=[dict(
-        AREA_PANEL, position=AREA_REACH_AT, direction=[0.0, -1.0, 0.0])]))
-    rs, err = _tiles_render(workdir, "area_reach", reach, [])
-    rn, err2 = _tiles_render(workdir, "area_reach_none", reach, ["--no-shadows"])
-    if err or err2:
-        print(f"  area-reach   ERROR render failed: {err or err2}")
+    reach, err = _shadow_twin(workdir, "area_reach", scene("reach", leak, _leak_panel()))
+    if err:
+        print(f"  area-reach   ERROR render failed: {err}")
         failures.append("area-reach")
     else:
-        ratio = _tiles_box_mean(rs[0], TILES_FAR_ROOM) / _tiles_box_mean(rs[0], TILES_NEAR_ROOM)
-        bare = _tiles_box_mean(rn[0], TILES_FAR_ROOM) / _tiles_box_mean(rn[0], TILES_NEAR_ROOM)
-        ok = ratio <= AREA_REACH_MAX and bare >= AREA_REACH_FALSIFIER_MIN
+        ratio, bare = _leak_far_share(reach[0][0]), _leak_far_share(reach[1][0])
+        ok = ratio <= LEAK_DARK_MAX and bare >= LEAK_LIT_MIN
         print(f"  area-reach   {'PASS' if ok else 'FAIL'}  far room {ratio:.4f} of the near one "
-              f"(want <= {AREA_REACH_MAX}), {bare:.4f} unshadowed (want >= "
-              f"{AREA_REACH_FALSIFIER_MIN})")
+              f"(want <= {LEAK_DARK_MAX}), {bare:.4f} unshadowed (want >= {LEAK_LIT_MIN})")
         if not ok:
             failures.append("area-reach")
 
     # --- a panel off the world's axes ----------------------------------------------------------
-    tilted = scene("tilt", "cornell_point.cscn", lambda d: d.update(lights=[dict(
-        AREA_PANEL, position=AREA_TILT_AT, direction=AREA_TILT_DIR, up=AREA_TILT_UP)]))
-    point = scene("tilt_point", "cornell_point.cscn",
-                  lambda d: d["lights"][0].update(position=AREA_TILT_AT))
-    runs = [_tiles_render(workdir, f"area_{tag}", src, extra)
-            for tag, src, extra in (("tilt", tilted, []), ("tilt_none", tilted, ["--no-shadows"]),
-                                    ("tilt_point", point, []),
-                                    ("tilt_point_none", point, ["--no-shadows"]))]
-    err = next((e for _, e in runs if e), None)
-    if err:
-        print(f"  area-tilt    ERROR render failed: {err}")
+    tilted, err = _shadow_twin(workdir, "area_tilt", scene(
+        "tilt", point, lambda d: d.update(lights=[dict(
+            AREA_PANEL, position=AREA_TILT_AT, direction=AREA_TILT_DIR, up=AREA_TILT_UP)])))
+    lamp, err2 = (None, None) if err else _shadow_twin(workdir, "area_tilt_point", scene(
+        "tilt_point", point, lambda d: d["lights"][0].update(position=AREA_TILT_AT)))
+    if err or err2:
+        print(f"  area-tilt    ERROR render failed: {err or err2}")
         failures.append("area-tilt")
     else:
-        panel = _shadow_terms(runs[0][0][0], runs[1][0][0], AREA_TILT_LIT)
-        lamp = _shadow_terms(runs[2][0][0], runs[3][0][0], AREA_TILT_LIT)
-        both = [(a, b) for a, b in zip(panel, lamp) if a is not None and b is not None]
-        apart = sum(1 for a, b in both if abs(a - b) > 0.5) / max(len(both), 1)
-        content = sum(1 for a, b in both if min(a, b) < 0.5) / max(len(both), 1)
+        panel_terms = _shadow_terms(tilted[0][0], tilted[1][0], AREA_TILT_LIT)
+        lamp_terms = _shadow_terms(lamp[0][0], lamp[1][0], AREA_TILT_LIT)
+        both = [(a, b) for a, b in zip(panel_terms, lamp_terms) if a is not None and b is not None]
+        counted = max(len(both), 1)
+        apart = sum(1 for a, b in both if abs(a - b) > 0.5) / counted
+        content = sum(1 for a, b in both if min(a, b) < 0.5) / counted
         ok = apart <= AREA_TILT_MAX and content >= AREA_TILT_CONTENT_MIN
         print(f"  area-tilt    {'PASS' if ok else 'FAIL'}  where both light, {apart:.4f} of the "
               f"pixels disagree on the shadow by more than half (want <= {AREA_TILT_MAX}); "
@@ -2492,8 +2521,8 @@ IES_ASYM_MIN = 0.5
 # The only contact-shadow test before this was a 0 px golden of the debug view on a
 # sun-only scene, which pins the march's arithmetic and says nothing about which lights
 # it marches. These arms are about the lights: a point or spot holding no punctual layer
-# -- which past the first point light in a scene is every one of them, since the atlas
-# holds 8 layers and a point spends 6.
+# -- which past the second point light in a scene is every one of them, since the pool
+# holds 16 layers and a point spends 6.
 #
 # Read through --cs-debug rather than off the lit frame. The term is what is under test
 # and the lit frame carries it multiplied by csStrength into a sum that also holds
@@ -20181,11 +20210,8 @@ def run_emissive_gate(workdir):
       emissive-override light_overrides can NAME a derived panel -- a light the
                         scene file could not have known about -- which is the
                         whole ordering claim. Asserted on the renderer's own
-                        report rather than on a shadow: under the single map a
-                        panel cast until spec 13.27, toggling cast_shadows changed
-                        no band on this fixture, for the AUTHORED light too, so
-                        claiming a shadow would have asserted A7 through a blind
-                        instrument. The penumbra group owns a panel's shadow.
+                        report rather than on a shadow, which the penumbra group
+                        owns.
       emissive-occluded the occlusion the arm above cannot see, on the fixture
                         built to ask it. cornell_leak is one room cut in half by
                         a partition and lit over one side only. A derived panel
@@ -20470,11 +20496,8 @@ def run_emissive_gate(workdir):
     # ratio the same way. Compared against the frame that differs ONLY in the
     # override, every band is identical to four decimals.
     #
-    # And the reason is not this feature. Under the single map a panel cast until
-    # spec 13.27, toggling cast_shadows on the fixture's own HAND-AUTHORED area
-    # light changed nothing in any band either. A panel's shadow is an A7 property,
-    # which the penumbra group owns; asserting it here would be asserting someone
-    # else's feature through an instrument built for another.
+    # A panel's shadow is the penumbra group's; asserting it here would be asserting
+    # someone else's feature through an instrument built for another.
     #
     # What this arm owns is that a light_overrides entry can NAME a light that did
     # not exist when the scene file was written -- which is the whole ordering
@@ -28429,14 +28452,8 @@ def run_rain_gate(workdir):
     return failures
 
 
-# Cached point-light shadows (spec 13.16). Every fixture is mutated in memory from a committed
-# one, so the cached half and its uncached twin differ in the light's flags and nothing else.
-# The lit room left of the partition and the dark one right of it, as fractions of the frame.
-TILES_NEAR_ROOM = (0.15, 0.30, 0.45, 0.80)
-TILES_FAR_ROOM = (0.58, 0.30, 0.88, 0.80)
-# A cached lamp leaves its far room at 0.0004 of the near one; unshadowed it is 0.73.
-TILES_LEAK_MAX = 0.01
-TILES_LEAK_FALSIFIER_MIN = 0.2
+# Cached shadows (spec 13.16). Every fixture is mutated in memory from a committed one, so the
+# cached half and its uncached twin differ in the light's flags and nothing else.
 # In fog the far room keeps 0.39 of the in-scatter a per-frame map leaves there, the per-frame
 # map shadowing surfaces and no haze.
 TILES_FOG_MAX = 0.6
@@ -28445,13 +28462,10 @@ TILES_FOG_MAX = 0.6
 TILES_MATCH_CODES = 8
 TILES_MATCH_MAX = 0.02
 TILES_MATCH_FALSIFIER_MIN = 0.1
-# area-reach's panel cached (spec 13.27), with the lamp's range for its far plane, against the
-# same panel drawn every frame: tiles-match's tolerance over the frame, and the near room's mean,
+# A cached panel against the same panel drawn every frame (spec 13.27): the near room's mean,
 # where nothing stands between the panel and what it lights, within this fraction of the
 # per-frame panel's. Measured 0.00016, all of it the room's creases, which a 256^2 tile and a
-# 2048^2 face resolve differently; the panel's height lost to its near plane, 0.4 m to 0.02,
-# dims that room 41-fold.
-TILES_AREA_RANGE = 10.0
+# 2048^2 face resolve differently.
 TILES_AREA_SIZE_MAX = 0.005
 # The core fixture: the reference and the kept views against the traced profile, by distance
 # from the axis, and where the full shadow ends.
@@ -28491,6 +28505,16 @@ def _tiles_render(workdir, tag, scene, extra, frames=30, size=("400", "300")):
 def _tiles_box_mean(img, box):
     w, h, pix = img
     return _box_luma_dense(pix, w, h, box)
+
+
+def _match_shares(kept, per_frame, bare):
+    """The shares of the frame past TILES_MATCH_CODES between a cached light's frame and its
+    per-frame twin, and between that twin and the unshadowed one: how near the two shadows are,
+    and how far a shadow is from none."""
+    w, h, ref = per_frame
+    whole = (0.0, 0.0, 1.0, 1.0)
+    return (_pixels_past(kept[2], ref, w, h, whole, TILES_MATCH_CODES) / (w * h),
+            _pixels_past(bare[2], ref, w, h, whole, TILES_MATCH_CODES) / (w * h))
 
 
 def _tiles_region(rows):
@@ -28655,9 +28679,7 @@ def run_shadow_tiles_gate(workdir):
         return mutate
 
     def scene(tag, src, mutate):
-        dst = os.path.join(workdir, f"tiles_{tag}.cscn")
-        cscn_copy(src, dst, mutate)
-        return dst
+        return cscn_copy(src, os.path.join(workdir, f"tiles_{tag}.cscn"), mutate)
 
     # --- off ---------------------------------------------------------------------------------
     off_flag = scene("off_flag", point, lamp(lambda l: l.update(cast_shadows=False,
@@ -28687,17 +28709,15 @@ def run_shadow_tiles_gate(workdir):
 
     cached = scene("leak_cached", leak, leak_point(True))
     frame = scene("leak_frame", leak, leak_point(False))
-    lc, err = _tiles_render(workdir, "leak_cached", cached, [])
-    ln, err2 = _tiles_render(workdir, "leak_none", cached, ["--no-shadows"])
-    if err or err2:
-        failed("tiles-leak", err or err2)
+    lt, err = _shadow_twin(workdir, "leak_cached", cached)
+    if err:
+        failed("tiles-leak", err)
     else:
-        ratio = _tiles_box_mean(lc[0], TILES_FAR_ROOM) / _tiles_box_mean(lc[0], TILES_NEAR_ROOM)
-        bare = _tiles_box_mean(ln[0], TILES_FAR_ROOM) / _tiles_box_mean(ln[0], TILES_NEAR_ROOM)
-        ok = ratio <= TILES_LEAK_MAX and bare >= TILES_LEAK_FALSIFIER_MIN
+        ratio, bare = _leak_far_share(lt[0][0]), _leak_far_share(lt[1][0])
+        ok = ratio <= LEAK_DARK_MAX and bare >= LEAK_LIT_MIN
         print(f"  tiles-leak   {'PASS' if ok else 'FAIL'}  far room {ratio:.4f} of the near one "
-              f"cached (want <= {TILES_LEAK_MAX}), {bare:.4f} unshadowed (want >= "
-              f"{TILES_LEAK_FALSIFIER_MIN})")
+              f"cached (want <= {LEAK_DARK_MAX}), {bare:.4f} unshadowed (want >= "
+              f"{LEAK_LIT_MIN})")
         if not ok:
             failures.append("tiles-leak")
     fog = ["--fog", "--fog-density", "0.3"]
@@ -28706,8 +28726,8 @@ def run_shadow_tiles_gate(workdir):
     if err or err2:
         failed("tiles-fog", err or err2)
     else:
-        kept = _tiles_box_mean(fc[0], TILES_FAR_ROOM)
-        per_frame = _tiles_box_mean(ff[0], TILES_FAR_ROOM)
+        kept = _tiles_box_mean(fc[0], LEAK_FAR_ROOM)
+        per_frame = _tiles_box_mean(ff[0], LEAK_FAR_ROOM)
         ok = kept <= TILES_FOG_MAX * per_frame
         print(f"  tiles-fog    {'PASS' if ok else 'FAIL'}  the far room's haze {kept:.4f} cached "
               f"against {per_frame:.4f} with a per-frame map (want at most {TILES_FOG_MAX} of it)")
@@ -28727,10 +28747,7 @@ def run_shadow_tiles_gate(workdir):
     if err or err2 or err3:
         failed("tiles-match", err or err2 or err3)
     else:
-        w, h, frame_pix = pf[0]
-        whole = (0.0, 0.0, 1.0, 1.0)
-        near = _pixels_past(pk[0][2], frame_pix, w, h, whole, TILES_MATCH_CODES) / (w * h)
-        far = _pixels_past(pn[0][2], frame_pix, w, h, whole, TILES_MATCH_CODES) / (w * h)
+        near, far = _match_shares(pk[0], pf[0], pn[0])
         ok = near <= TILES_MATCH_MAX and far >= TILES_MATCH_FALSIFIER_MIN
         print(f"  tiles-match  {'PASS' if ok else 'FAIL'}  {near:.4f} of the frame past "
               f"{TILES_MATCH_CODES} codes "
@@ -28759,24 +28776,16 @@ def run_shadow_tiles_gate(workdir):
             failures.append("tiles-draws")
 
     # --- a panel -----------------------------------------------------------------------------
-    def leak_panel(cache):
-        return lambda d: d.update(lights=[dict(
-            AREA_PANEL, position=AREA_REACH_AT, direction=[0.0, -1.0, 0.0],
-            range=TILES_AREA_RANGE, shadow_cache=cache)])
-
-    area_frame = scene("area_frame", leak, leak_panel(False))
-    ac, err = _tiles_render(workdir, "area_cached", scene("area_cached", leak, leak_panel(True)),
-                            [])
-    af, err2 = _tiles_render(workdir, "area_frame", area_frame, [])
-    an, err3 = _tiles_render(workdir, "area_none", area_frame, ["--no-shadows"])
-    if err or err2 or err3:
-        failed("tiles-area", err or err2 or err3)
-        failed("tiles-area-size", err or err2 or err3)
+    ac, err = _tiles_render(workdir, "area_cached",
+                            scene("area_cached", leak, _leak_panel(cache=True)), [])
+    at, err2 = (None, None) if err else _shadow_twin(
+        workdir, "area_frame", scene("area_frame", leak, _leak_panel()))
+    if err or err2:
+        failed("tiles-area", err or err2)
+        failed("tiles-area-size", err or err2)
     else:
-        w, h, frame_pix = af[0]
-        whole = (0.0, 0.0, 1.0, 1.0)
-        near = _pixels_past(ac[0][2], frame_pix, w, h, whole, TILES_MATCH_CODES) / (w * h)
-        far = _pixels_past(an[0][2], frame_pix, w, h, whole, TILES_MATCH_CODES) / (w * h)
+        af, an = at
+        near, far = _match_shares(ac[0], af[0], an[0])
         block = _tiles_block(ac[1], AREA_PANEL["name"])
         shape = (block.get("views"), block.get("cells"))
         ok = near <= TILES_MATCH_MAX and far >= TILES_MATCH_FALSIFIER_MIN and shape == ("1", "6")
@@ -28786,8 +28795,8 @@ def run_shadow_tiles_gate(workdir):
               f"(views, cells) {shape} (want ('1', '6'))")
         if not ok:
             failures.append("tiles-area")
-        kept = _tiles_box_mean(ac[0], TILES_NEAR_ROOM)
-        per_frame = _tiles_box_mean(af[0], TILES_NEAR_ROOM)
+        kept = _tiles_box_mean(ac[0], LEAK_NEAR_ROOM)
+        per_frame = _tiles_box_mean(af[0], LEAK_NEAR_ROOM)
         apart = abs(kept - per_frame) / per_frame
         ok = apart <= TILES_AREA_SIZE_MAX
         print(f"  tiles-area-size {'PASS' if ok else 'FAIL'}  the near room's mean {kept:.5f} "
