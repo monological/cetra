@@ -2,11 +2,35 @@
 #define _PROGRAM_H_
 
 #include <stdbool.h>
+#include <cglm/cglm.h>
 
 #include "shader.h"
 #include "uniform.h"
 
 #include "ext/uthash.h"
+
+// An app shader's own uniforms (spec 13.29): each a name and a vec4, uploaded under that name
+// wherever their owner's program is bound -- a material's, a post pass's. Eight because a
+// shader with more than eight knobs wants a texture; the name is bounded so an entry costs no
+// allocation.
+#define SHADER_PARAM_MAX  8
+#define SHADER_PARAM_NAME 32
+typedef struct ShaderParam {
+    char name[SHADER_PARAM_NAME];
+    vec4 value;
+} ShaderParam;
+typedef struct ShaderParams {
+    ShaderParam list[SHADER_PARAM_MAX];
+    int count;
+} ShaderParams;
+
+// Set a param by name, adding it the first time. False, logged, when SHADER_PARAM_MAX others are
+// already held or the name is empty or does not fit.
+bool shader_params_set(ShaderParams* params, const char* name, const vec4 value);
+// Upload every param to `uniforms`, the bound program's. A name the program does not declare
+// costs a location lookup and nothing else. Nothing resets a name an owner leaves out, so two
+// owners sharing one program each set every param it reads, or the second inherits the first's.
+void shader_params_upload(const ShaderParams* params, UniformManager* uniforms);
 
 // Which VERTEX stage a lit-surface variant is built on (spec 11.95). Up here
 // only because ShaderProgram carries one; the family's rationale and the rest of
@@ -303,6 +327,8 @@ ShaderProgram* create_shadow_catcher_program();
 // An app's fullscreen fragment stage over the engine's own vertex stage (spec 13.29), which
 // hands it `in vec2 TexCoords`, 0..1 across the target. What postfx_add_pass runs.
 ShaderProgram* create_post_pass_program(const char* name, const char* frag_source);
+// The finished picture into the window, dithered, when something drew after the tone map.
+ShaderProgram* create_present_program();
 
 // Post-Processing Programs
 ShaderProgram* create_bloom_bright_program();

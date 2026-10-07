@@ -177,6 +177,41 @@ typedef struct PostFXLateDraw {
 } PostFXLateDraw;
 typedef void (*PostFXLateDrawFunc)(void* user, const PostFXLateDraw* late);
 
+// Where an app's post pass runs (spec 13.29). Each is a stage boundary of the chain, named for
+// Unreal's Blendable Location at the same place. Replacing the tone map is not one: its curve is
+// a function inside the shader that also composites AO, contact shadows, bloom, flare and glare.
+typedef enum PostFXLocation {
+    POSTFX_AT_BEFORE_DOF = 0, // linear HDR at post size: fogged, the late draw in it
+    POSTFX_AT_BEFORE_BLOOM,   // linear HDR after depth of field and before the meter
+    POSTFX_AT_AFTER_TONEMAP,  // display-referred at output size, before the app's overlay
+    POSTFX_LOCATION_COUNT,
+} PostFXLocation;
+
+#define POSTFX_PASS_MAX 16
+
+/*
+ * An app's fullscreen pass (spec 13.29), its program from create_post_pass_program. The
+ * fragment stage reads, by name and only where it declares them: `sceneColor`, the frame so
+ * far; `sceneDepth`, the frame's depth resolved at RENDER resolution; `texelSize` of what it
+ * writes; `time` in seconds and `frame`; `projection` and `view`, what the depth was drawn
+ * with; and its params. It writes the frame's new value at every pixel: the engine copies the
+ * result back over the frame, since a pass may not draw into the texture it samples.
+ */
+typedef struct PostFXPass {
+    // ENGINE-OWNED, read only: where it runs, and its program, borrowed (the engine owns it).
+    PostFXLocation at;
+    ShaderProgram* program;
+    // SETTINGS
+    bool enabled;
+    ShaderParams params;
+} PostFXPass;
+
+// A colour target remade only when its size changes.
+typedef struct PostFXTarget {
+    GLuint fbo, tex;
+    int w, h;
+} PostFXTarget;
+
 typedef struct PostFX {
     // SETTINGS throughout, in feature order, except:
     //
@@ -191,8 +226,8 @@ typedef struct PostFX {
     // BY FUNCTION: ssr_full_res (postfx_set_ssr_full_res, which reallocates
     // the reflection buffers), fog_ambient (postfx_set_fog_ambient, which also
     // takes it away from the sky), the SSS profile table (postfx_add /
-    // postfx_reset_sss_profile), and the LUT's texture, size and name
-    // (postfx_load_lut / postfx_clear_lut).
+    // postfx_reset_sss_profile), the LUT's texture, size and name
+    // (postfx_load_lut / postfx_clear_lut), and the app passes (postfx_add_pass).
     int width, height;             // Render size: what the scene and the pre-TAA
                                    // chain rasterize at (post size x render_scale)
     int post_width, post_height;   // Post size (display x ss_scale): the TAAU
@@ -662,6 +697,20 @@ typedef struct PostFX {
     float crt_bleed;     // composite colour bleed, 0..1
     struct Crt* crt;     // engine-owned; made on first use
     bool crt_failed;     // could not be made; never retried
+    // The finished picture, at output size and RGBA16F, when anything draws after the tone map
+    // -- the CRT, an app's pass there -- rather than the tone map writing the window. Nothing is
+    // quantized before the last pass, and an overlay's window-pixel scissor lands where it would
+    // in the window. Engine-owned, made on first use.
+    PostFXTarget picture;
+    ShaderProgram* present_program; // the picture into the window, dithered, when no CRT is on
+
+    // App passes at named points (spec 13.29). Each pass's `enabled` and params are settings.
+    PostFXPass passes[POSTFX_PASS_MAX];
+    int pass_count;
+    // Engine-owned: what a pass draws into before it is copied back over the frame, at post size
+    // for the HDR locations and at output size after the tone map.
+    PostFXTarget pass_scratch, picture_scratch;
+    float time; // published per frame: the render clock in seconds, a pass's `time`
     // 3D colour-grading LUT (spec 11.58). Sits between the gamma encode and the
     // grain, because it is the creative look: grain is sensor noise applied over
     // a finished look, and dither is quantization after both.
@@ -897,12 +946,21 @@ typedef struct PostFXGBufferWrites {
 void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hdr,
                 const PostFXGBufferWrites* writes, mat4 projection, mat4 view);
 
-// The framebuffer this frame's picture is drawn into: the CRT's when it is on (spec 13.28),
-// else the window, 0.
+// The framebuffer this frame's picture is drawn into: `picture`'s when the CRT is on (spec
+// 13.28) or a pass runs after the tone map (spec 13.29), else the window, 0.
 GLuint postfx_picture_fbo(PostFX* fx);
-// Show the picture drawn into `picture` in the window: through the CRT when it is the CRT's,
-// nothing to do when it is the window.
+// Show the picture drawn into `picture` in the window: through the CRT when it is on, through a
+// dithered copy when not, nothing to do when it is the window.
 void postfx_present_picture(PostFX* fx, GLuint picture);
+
+// Run `program` at `at` from the next frame on, enabled, with no params (spec 13.29). The
+// program is borrowed, and its owner registers it with engine_add_program. NULL, logged, past
+// POSTFX_PASS_MAX passes. Passes at one location run in the order they were added.
+PostFXPass* postfx_add_pass(PostFX* fx, PostFXLocation at, ShaderProgram* program);
+// Whether any enabled pass runs at `at`.
+bool postfx_passes_at(const PostFX* fx, PostFXLocation at);
+// The location a scene file names: "beforeDof", "beforeBloom" or "afterTonemap"; -1 for none.
+int postfx_location_from_name(const char* name);
 
 // Producer-side predicate: true when some active effect will consume the
 // normals G-buffer, so the scene pass should write color attachment 1. The

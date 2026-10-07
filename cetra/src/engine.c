@@ -2284,6 +2284,7 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode) {
     // Seed the film grain off the frame counter so it animates live yet stays
     // deterministic across equal --frames runs.
     engine->postfx->frame_index = (int)engine->total_frames;
+    engine->postfx->time = (float)engine->render_time;
     // Depth-of-field autofocus: keep the subject sharp as the camera orbits or
     // zooms by refocusing on the point the camera looks at (the orbit target),
     // unless a manual focus distance was pinned.

@@ -28,11 +28,8 @@ typedef struct CrtLook {
 Crt* create_crt(void);
 void free_crt(Crt* crt);
 
-// The framebuffer a picture `width` by `height` is drawn into before it is shown: 0 when it could
-// not be made, which is reported and which a later frame of the same size would not change.
-GLuint crt_picture_fbo(Crt* crt, int width, int height);
-
-// Show the picture drawn into crt_picture_fbo's framebuffer in the window, at its size.
-void crt_present(Crt* crt, GLuint quad_vao, const CrtLook* look);
+// Show `picture`, `width` by `height`, in the window at that size.
+void crt_present(Crt* crt, GLuint picture, int width, int height, GLuint quad_vao,
+                 const CrtLook* look);
 
 #endif
