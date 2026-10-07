@@ -2381,27 +2381,28 @@ float postfx_sss_max_sigma_per_depth(const PostFX* fx, const mat4 projection) {
 }
 
 GLuint postfx_picture_fbo(PostFX* fx) {
-    if (!fx)
-        return 0;
-    fx->crt_this_frame = false;
-    if (!fx->crt_enabled || fx->crt_failed)
+    if (!fx || !fx->crt_enabled || fx->crt_failed)
         return 0;
     if (!fx->crt)
         fx->crt = create_crt();
     const GLuint fbo = fx->crt ? crt_picture_fbo(fx->crt, fx->out_width, fx->out_height) : 0;
-    if (!fbo) {
+    if (!fbo)
         fx->crt_failed = true;
-        return 0;
-    }
-    fx->crt_this_frame = true;
     return fbo;
 }
 
-void postfx_present_picture(PostFX* fx) {
-    if (!fx || !fx->crt_this_frame)
+void postfx_present_picture(PostFX* fx, GLuint picture) {
+    if (!fx || !picture)
         return;
+    const CrtLook look = {.lines = fx->crt_lines,
+                          .scanlines = fx->crt_scanlines,
+                          .mask = fx->crt_mask,
+                          .curvature = fx->crt_curvature,
+                          .bleed = fx->crt_bleed,
+                          .dither = fx->dither_enabled,
+                          .dither_strength = fx->dither_strength};
     profiler_scope_begin(fx->profiler, "crt");
-    crt_present(fx->crt, fx, 0, fx->out_width, fx->out_height);
+    crt_present(fx->crt, fx->quad_vao, &look);
     profiler_scope_end(fx->profiler);
 }
 
@@ -4157,9 +4158,10 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         uniform_set_float(tm, "lutSize", (float)fx->lut_size);
         uniform_set_float(tm, "lutStrength", fx->lut_strength);
         uniform_set_int(tm, "lutInterp", (int)fx->lut_interp);
-        // No frame term here, deliberately -- see the shader's dither block. A CRT dithers the
-        // window's write itself; dithering here as well would be resampled into it.
-        uniform_set_int(tm, "ditherEnabled", fx->dither_enabled && !fx->crt_this_frame ? 1 : 0);
+        // No frame term here, deliberately -- see the shader's dither block. Only when this pass
+        // writes the window: whatever writes it after this one dithers instead, or the dither is
+        // resampled into its picture.
+        uniform_set_int(tm, "ditherEnabled", fx->dither_enabled && target_fbo == 0 ? 1 : 0);
         uniform_set_float(tm, "ditherStrength", fx->dither_strength);
         draw_fullscreen_quad(fx->quad_vao);
         profiler_scope_end(fx->profiler);

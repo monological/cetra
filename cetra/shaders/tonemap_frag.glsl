@@ -9,6 +9,7 @@ out vec4 FragColor;
 // ceiling the shading passes wrote under.
 #include "view.glsl"
 #include "noise.glsl"
+#include "display.glsl"
 #include "dither.glsl"
 #include "glare_threshold.glsl"
 // Declares purkinjeAdaptTex on unit 7 -- the metering 1x1.
@@ -200,11 +201,6 @@ vec3 agxTonemap(vec3 c)
     return pow(max(c, vec3(0.0)), vec3(2.2));
 }
 
-// Gamma-encode a linear [0,1] color for display.
-vec3 displayEncode(vec3 c)
-{
-    return pow(clamp(c, 0.0, 1.0), vec3(1.0 / 2.2));
-}
 
 // A 3D LUT's lattice points are at TEXEL CENTRES, so [0,1] has to be remapped
 // into [0.5/N, (N-0.5)/N] before sampling. Without this the table is addressed
@@ -710,10 +706,7 @@ void main()
 
     // Dither the 8-bit write: a shallow gradient otherwise quantizes to contour
     // bands (sky, fog, bloom falloff). Last stage of this pass — anything added
-    // after it would itself be quantized undithered. (The GUI and the SKY LUT
-    // debug tiles draw to the same target afterwards; they are flat UI fills,
-    // not image-forming, so they are deliberately left alone.) Off here when a
-    // CRT draws the window, which dithers its own write instead.
+    // after it would itself be quantized undithered.
     if (ditherEnabled == 1)
         color = applyDither(color, gl_FragCoord.xy, ditherStrength);
 

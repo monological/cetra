@@ -103,9 +103,11 @@ GLPassState gl_pass_begin(void) {
     s.depth = glIsEnabled(GL_DEPTH_TEST);
     s.blend = glIsEnabled(GL_BLEND);
     s.cull = glIsEnabled(GL_CULL_FACE);
+    s.scissor = glIsEnabled(GL_SCISSOR_TEST);
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_BLEND);
     glDisable(GL_CULL_FACE);
+    glDisable(GL_SCISSOR_TEST);
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
     return s;
 }
@@ -127,6 +129,7 @@ void gl_pass_end(const GLPassState* s) {
     _gl_set(GL_DEPTH_TEST, s->depth);
     _gl_set(GL_BLEND, s->blend);
     _gl_set(GL_CULL_FACE, s->cull);
+    _gl_set(GL_SCISSOR_TEST, s->scissor);
     glActiveTexture(GL_TEXTURE0);
 }
 

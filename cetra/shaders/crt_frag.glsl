@@ -12,26 +12,36 @@
 in vec2 TexCoords;
 out vec4 FragColor;
 
+#include "display.glsl"
 #include "dither.glsl"
 
 uniform sampler2D signalTex; // the signal, linear, signalSize texels
 uniform vec2 signalSize;     // the signal's texels across and down
 uniform vec2 outputSize;     // the window's pixels across and down
-uniform vec2 warp;           // CRTS's warp: how far each axis bows, by the other's square
-uniform float corner;        // CRTS's rounding of the tube's corners
+uniform float curvature;     // 0 = a flat tube, 1 = WARP_MAX
+uniform float bleed;         // 0 = colour as sharp as brightness, 1 = CHROMA_BLUR_MAX
 uniform float thin;          // CRTS's scanline thinness: 0.5 = fused lines, 1.0 = thin
-uniform float blur;          // CRTS's horizontal filter, exp2(blur * d^2) per texel
-uniform float chromaBlur;    // the same for the composite colour, wider than blur
 uniform float maskDark;      // a masked phosphor's exposure: 1 = no mask
-uniform float maskScale;     // window pixels per mask pixel
 uniform vec2 tone;           // CRTS's tone.y and tone.z: the exposure match
 uniform int ditherEnabled;
 uniform float ditherStrength;
 
-// Composite video carries colour as two narrow chroma signals beside a wide luma one (NTSC's I
-// and Q beside Y), so a console's colour smeared sideways where its brightness did not. Not CRTS.
-const mat3 RGB_TO_YIQ = mat3(0.299, 0.596, 0.211, 0.587, -0.274, -0.523, 0.114, -0.322, 0.312);
-const mat3 YIQ_TO_RGB = mat3(1.0, 1.0, 1.0, 0.956, -0.272, -1.106, 0.621, -0.647, 1.703);
+// CRTS's default horizontal filter, exp2(LUMA_BLUR * d^2) per texel.
+const float LUMA_BLUR = -2.5;
+// The composite colour's filter at bleed 1. Composite video carries colour in a narrower band
+// than brightness (NTSC's I and Q beside Y), so a console's colour smeared sideways where its
+// brightness did not -- not CRTS. The value is taste bounded by the six taps: it leaves 15% weight
+// at three texels, where NTSC's I bandwidth would ask about -0.24 and reach past the window.
+const float CHROMA_BLUR_MAX = -0.3;
+// The warp at curvature 1, CRTS's "more warping" doubled.
+const float WARP_MAX = 0.0625;
+// The rounding of the tube's corners, the libretro port's CORNER parameter.
+const float CORNER = 3.0;
+// The mask's pixel is a window pixel up to this many lines, and a whole multiple of one past it,
+// so a phosphor stays a size the eye can resolve on a high-density display.
+const float MASK_LINES = 1080.0;
+
+const vec3 LUMA = vec3(0.299, 0.587, 0.114);
 
 vec3 signalAt(int x, int y)
 {
@@ -40,25 +50,27 @@ vec3 signalAt(int x, int y)
 }
 
 // One line of the signal at `px` (signal texels across): six texels, the middle four of which
-// are CRTS's, filtered as luma at `blur` and as chroma at the wider `chromaBlur`.
-vec3 beamLine(float px, int y)
+// are CRTS's. Brightness takes the narrow filter and colour the wide one: the wide filter's
+// colour with its luma replaced by the narrow filter's.
+vec3 beamLine(float px, int y, float chromaBlur)
 {
     float x0 = floor(px - 2.5) + 0.5; // the first of the six texel centres
     int xi = int(floor(x0));
-    vec3 lumaSum = vec3(0.0), chromaSum = vec3(0.0);
-    float lumaW = 0.0, chromaW = 0.0;
+    vec3 narrow = vec3(0.0), wide = vec3(0.0);
+    float narrowW = 0.0, wideW = 0.0;
     for (int k = 0; k < 6; k++) {
         float d = px - (x0 + float(k));
-        vec3 yiq = RGB_TO_YIQ * signalAt(xi + k, y);
-        float wl = exp2(blur * d * d);
-        float wc = exp2(chromaBlur * d * d);
-        lumaSum += yiq * wl;
-        lumaW += wl;
-        chromaSum += yiq * wc;
-        chromaW += wc;
+        vec3 rgb = signalAt(xi + k, y);
+        float a = exp2(LUMA_BLUR * d * d);
+        float b = exp2(chromaBlur * d * d);
+        narrow += rgb * a;
+        narrowW += a;
+        wide += rgb * b;
+        wideW += b;
     }
-    vec3 yiq = vec3(lumaSum.x / lumaW, chromaSum.yz / chromaW);
-    return max(YIQ_TO_RGB * yiq, 0.0);
+    narrow /= narrowW;
+    wide /= wideW;
+    return max(wide + dot(narrow - wide, LUMA), 0.0);
 }
 
 // Crt-lottes's "very compressed TV style" mask (Lottes 2014, public domain), a slot mask: RGB
@@ -84,11 +96,13 @@ vec3 slotMask(vec2 pos, float dark)
 void main()
 {
     // CRTS's warp, from the window's pixel to the signal's, and its fade at the tube's rim: past
-    // the edge of the picture the screen is black, rounded at the corners.
+    // the edge of the picture the screen is black, rounded at the corners. The vertical bow is
+    // scaled by the window's shape so the tube curves alike along both edges.
+    vec2 warp = curvature * WARP_MAX * vec2(1.0, outputSize.y / outputSize.x);
     vec2 pos = gl_FragCoord.xy * (2.0 / outputSize) - 1.0;
     pos *= vec2(1.0 + pos.y * pos.y * warp.x, 1.0 + pos.x * pos.x * warp.y);
     float vin = (1.0 - (1.0 - clamp(pos.x * pos.x, 0.0, 1.0)) * (1.0 - clamp(pos.y * pos.y, 0.0, 1.0))) *
-                (0.998 + 0.001 * corner);
+                (0.998 + 0.001 * CORNER);
     vin = clamp(-vin * signalSize.y + signalSize.y, 0.0, 1.0);
     pos = pos * (0.5 * signalSize) + 0.5 * signalSize;
 
@@ -100,9 +114,11 @@ void main()
     float scanA = cos(min(0.5, off * thin) * TAU) * 0.5 + 0.5;
     float scanB = cos(min(0.5, (1.0 - off) * thin) * TAU) * 0.5 + 0.5;
     int yi = int(floor(y0));
-    vec3 color = (beamLine(pos.x, yi) * scanA + beamLine(pos.x, yi + 1) * scanB) * vin;
+    float chromaBlur = mix(LUMA_BLUR, CHROMA_BLUR_MAX, bleed);
+    vec3 color = (beamLine(pos.x, yi, chromaBlur) * scanA + beamLine(pos.x, yi + 1, chromaBlur) * scanB) * vin;
 
     // The mask in window pixels, unwarped, as CRTS has it: its fineness is the display's.
+    float maskScale = max(1.0, floor(outputSize.y / MASK_LINES + 0.5));
     color *= slotMask(floor(gl_FragCoord.xy / maskScale) + 0.5, maskDark);
 
     // CRTS's exposure match: the beams and the mask both darken, and this lifts mid-grey back
@@ -112,7 +128,7 @@ void main()
     peak = peak / (peak * tone.x + tone.y);
     color = ratio * peak;
 
-    color = pow(clamp(color, 0.0, 1.0), vec3(1.0 / 2.2));
+    color = displayEncode(color);
     if (ditherEnabled == 1)
         color = applyDither(color, gl_FragCoord.xy, ditherStrength);
     FragColor = vec4(color, 1.0);
