@@ -979,6 +979,9 @@ is `--cam-eye 70,160,25 --cam-target 70.01,0,25.2`.
   stutter burst shows that tube dark, which reads as the room being underlit when it is not; use
   this when comparing lighting.
 - **`--flashlight`:** starts with the torch on.
+- **`--no-static`:** the living room's television showing nothing (spec 13.30): its glass a faint
+  blue-grey, no snow and no hiss. By default it shows snow, drawn past TAA, the room lit by a panel
+  on its glass as bright as the picture averages.
 - **`--seed <n>`:** reseeds the clutter on the counters and shelves, and the street: which windows
   are lit, blinded or boarded.
 
@@ -986,8 +989,8 @@ is `--cam-eye 70,160,25 --cam-target 70.01,0,25.2`.
 `cetra/src/game/input.h` gives, and `--trace-player` prints the player's position every 30 steps.
 That is gametest's pair, so a walk can be driven and read back with no controller.
 
-**Sound** (specs 13.10 and 13.11): the hall clock's tick, the tubes' buzz, the fridge's hum and the
-wind, each heard from where it is.
+**Sound** (specs 13.10, 13.11 and 13.30): the hall clock's tick, the tubes' buzz, the fridge's hum,
+the wind and the television's hiss, each heard from where it is.
 - **`--mute`:** silences all of it.
 - **`--audio-dump <path>`:** with `-x`, writes what the listener hears as a 48 kHz stereo WAV,
   pulled a frame at a time so it keeps step with the picture. Pinned with `--cam-eye` and
