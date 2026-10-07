@@ -28450,7 +28450,7 @@ TILES_MATCH_FALSIFIER_MIN = 0.1
 # where nothing stands between the panel and what it lights, within this fraction of the
 # per-frame panel's. Measured 0.00016, all of it the room's creases, which a 256^2 tile and a
 # 2048^2 face resolve differently; the panel's height lost to its near plane, 0.4 m to 0.02,
-# dims it about twentyfold.
+# dims that room 41-fold.
 TILES_AREA_RANGE = 10.0
 TILES_AREA_SIZE_MAX = 0.005
 # The core fixture: the reference and the kept views against the traced profile, by distance
@@ -28585,7 +28585,7 @@ def _tiles_truth():
 
 
 def run_shadow_tiles_gate(workdir):
-    """Cached point-light shadows: tiles kept across frames, views over a light's body, movers.
+    """Cached shadows: tiles kept across frames, views over a light's body, movers, panels.
 
       tiles-off      a light flagged shadow_cache that casts no shadow takes no tiles and
                      renders 0 px against the same light without the flag
@@ -28632,7 +28632,9 @@ def run_shadow_tiles_gate(workdir):
     leaves the box out of the copy. At 13.26: tiles-rest fails with the rest material drawn
     swaying in the kept faces, tiles-windless with a material's response alone deciding that it
     sways, tiles-rest-toggle with the kept faces not told of a material change, and tiles-store
-    with the pool carved out of the lights' budget.
+    with the pool carved out of the lights' budget. At 13.27: tiles-area fails with the area
+    branch never reading the tiles (0.3545, the unshadowed share), and tiles-area-size with the
+    near plane packed over the panel's size again (the near room 41-fold darker).
     """
     point = asset("cornell_point.cscn")
     core = asset("tile_core_fixture.cscn")

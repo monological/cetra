@@ -1339,7 +1339,8 @@ static void draw_shadow_layer(ShadowSystem* ss, const Scene* scene, const DrawLi
 }
 
 /*
- * Cached point-light shadows (spec 13.16).
+ * Cached point- and area-light shadows (specs 13.16 and 13.27). A panel is cached as a point
+ * light at its centre: six world-axis faces, one view, no body.
  *
  * A cached light's faces are tiles of the punctual array past the per-frame layers and the
  * rain's, each drawn once from where the light was and kept until something says it is

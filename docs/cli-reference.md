@@ -254,7 +254,8 @@ planarity is FLATNESS only, so an L, a ring, a quad with a hole and two strips f
 read exactly 1.0 and got one rectangle spanning the lot — `fill` is what rejects those. A derived
 panel inherits `cast_shadows` FALSE like any other light, so it lights through walls until a
 `light_overrides` entry says otherwise, which is the one thing to know before using it in an
-interior. Costs 0.017–0.021 ms CPU to reconcile and +2–3 ms of shading per panel — the price is the
+interior; the same entry's `shadow_cache` keeps that shadow, with a `range` beside it, which a
+derived panel otherwise lacks and a cached light needs for its far plane. Costs 0.017–0.021 ms CPU to reconcile and +2–3 ms of shading per panel — the price is the
 LIGHT, not the machinery),
 `--emissive-light-probe` (prints the panel every emissive mesh would derive, plus every skip and its
 reason, in the `--water-fft-probe` idiom. The instrument exists because a wrong fit hides inside a
@@ -507,11 +508,14 @@ point every frame and the probe prints its answer. `assets/scenes/rain_fixture.c
 
 `rain_glass_fixture.cscn` and `rain_relief_fixture.cscn` are the glazed and relief twins.
 
-**Cached point-light shadows** (spec 13.16). A `.cscn` point light with `"cast_shadows": true`,
-`"shadow_cache": true` and a `range` keeps its shadow in tiles drawn once; `shadow_near` (metres)
-is where its faces start, for a lamp inside its own glass, and `source_radius` / `source_length`
-give it a body -- a capsule, the length between its caps -- whose shadow is soft. A fire's flame
-writes its own body into its light each frame. Instruments:
+**Cached shadows** (specs 13.16 and 13.27). A `.cscn` point or area light with
+`"cast_shadows": true`, `"shadow_cache": true` and a `range` keeps its shadow in tiles drawn once;
+`shadow_near` (metres) is where its faces start, for a lamp inside its own glass or a strip inside
+its fixture, and `source_radius` / `source_length` give a point light a body -- a capsule, the
+length between its caps -- whose shadow is soft. A panel is cached from its centre and refuses a
+body by name. A `light_overrides` entry takes `shadow_cache` and `range` too, which is how a
+DERIVED panel (`--emissive-lights`) is cached, and an override key the parser does not know is now
+named rather than dropped. A fire's flame writes its own body into its light each frame. Instruments:
 - **`--tiles-probe`:** prints the tile region and every cached light's block at exit: its views,
   cells, faces kept, the body they were drawn over, and each view's origin and tiles.
 - **`--tile-map <light> <ppm>`:** the light's faces as a picture, two rows a view, grey by metres.

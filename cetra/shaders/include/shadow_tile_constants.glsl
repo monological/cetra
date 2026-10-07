@@ -1,5 +1,5 @@
 /*
- * Cached point-light shadows' numbers that the CPU and the GPU must agree on (spec 13.16).
+ * Cached shadows' numbers that the CPU and the GPU must agree on (spec 13.16).
  *
  * INCLUDED BY BOTH LANGUAGES, shore_constants.glsl's technique and for its reason: shadow.c
  * draws each cached face into a tile of the punctual array, and the lookup projects onto that
