@@ -516,6 +516,12 @@ point every frame and the probe prints its answer. `assets/scenes/rain_fixture.c
 
 `rain_glass_fixture.cscn` and `rain_relief_fixture.cscn` are the glazed and relief twins.
 
+**A light's specular share** (spec 13.30). A `.cscn` light's `specular`, 0 to 1 and 1 by default, is
+the share of it the reflective lobes take: the base and clearcoat highlights, sheen, a panel's LTC
+specular and, on a sun, water's glint. 0 lights diffusely only, what the diffuse gives up for the
+lobes it keeps, which suits a light standing in for a lit surface whose own reflection SSR and the
+probes already draw -- a screen, a lampshade. A value outside 0..1 is clamped with a warning.
+
 **Cached shadows** (specs 13.16 and 13.27). A `.cscn` point or area light with
 `"cast_shadows": true`, `"shadow_cache": true` and a `range` keeps its shadow in tiles drawn once;
 `shadow_near` (metres) is where its faces start, for a lamp inside its own glass or a strip inside
