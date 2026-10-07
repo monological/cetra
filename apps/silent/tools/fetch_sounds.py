@@ -101,7 +101,7 @@ JOBS = {
     "tube": {"seconds": 6.0, "stereo": False},
     "wind": {"seconds": 30.0, "stereo": True},
     "purr": {"seconds": 4.0, "stereo": False},
-    # A television tuned to nothing (spec 13.30): its own hiss, placed at the set.
+    # A television tuned to nothing (spec 13.30): its own hiss.
     "static": {"seconds": 8.0, "stereo": False},
 }
 
@@ -111,6 +111,7 @@ CANDIDATES = {
     "tube": [676841, 125064, 273625, 830440],
     "wind": [502879, 386823, 843000],
     "purr": [553962, 463790, 656500, 575933],
+    "static": [765159],
 }
 
 # What the game plays, chosen by ear from the candidates: file name -> (job,
