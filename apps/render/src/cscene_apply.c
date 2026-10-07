@@ -380,6 +380,10 @@ void add_cscene_lights(Scene* scene, const CetraSceneDesc* cscn) {
         Light* light = create_light(&desc);
         if (!light)
             continue;
+        if (sl->has_specular) {
+            light->specular = sl->specular;
+            printf("Scene file: light '%s' specular %.2f\n", light->name, light->specular);
+        }
 
         // A profile is a POINT-LIKE emitter's angular distribution. A panel is
         // shaded by an LTC integral over its rectangle and a directional has no

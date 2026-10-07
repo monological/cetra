@@ -36,7 +36,7 @@ Light* create_light(const LightDesc* desc) {
     light_set_up(light, up);
 
     vec3_or_default(desc->color, (vec3){1.0f, 1.0f, 1.0f}, light->color);
-    glm_vec3_one(light->specular);
+    light->specular = 1.0f;
     glm_vec3_one(light->ambient);
 
     light_set_intensity_units(light, desc->intensity, desc->units);
@@ -168,6 +168,10 @@ float light_effective_intensity(const struct Light* light) {
     return light->intensity * peak;
 }
 
+float light_specular_share(const struct Light* light) {
+    return glm_clamp(light->specular, 0.0f, 1.0f);
+}
+
 float light_cull_radius(const struct Light* light) {
     // Before the range: a light switched off by its intensity keeps its range,
     // and answering with it booked a light that adds nothing into every froxel
@@ -255,14 +259,14 @@ void light_print(const Light* light) {
 
     printf("<Light name='%s', type='%s', original_position=(%f, %f, %f) global_position=(%f, %f, "
            "%f), direction=(%f, %f, %f), "
-           "color=(%f, %f, %f), specular=(%f, %f, %f), ambient=(%f, %f, %f), "
+           "color=(%f, %f, %f), specular=%f, ambient=(%f, %f, %f), "
            "intensity=%f %s, range=%f, cutOff=%f, outerCutOff=%f>\n",
            light->name, light_type_name(light->type), light->original_position[0],
            light->original_position[1], light->original_position[2], light->global_position[0],
            light->global_position[1], light->global_position[2], light->direction[0],
            light->direction[1], light->direction[2], light->color[0], light->color[1],
-           light->color[2], light->specular[0], light->specular[1], light->specular[2],
-           light->ambient[0], light->ambient[1], light->ambient[2], light_intensity_in_units(light),
+           light->color[2], light->specular, light->ambient[0], light->ambient[1],
+           light->ambient[2], light_intensity_in_units(light),
            light_units_name(light_display_units(light)), light->range, light->cutOff,
            light->outerCutOff);
 }

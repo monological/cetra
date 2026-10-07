@@ -2029,6 +2029,7 @@ void main() {
         float attenuation;
         vec3 lightCI;   // color * intensity (premultiplied on CPU)
         vec2 lightSize; // a directional's PCSS emitter size
+        float lightSpec; // the light's specular share (Light.specular)
         int dirShadowSlot = -1;
         int punctualLayer = -1; // Base layer in the punctual array, -1 = no map
         uint shadowLight = 0u;  // the cluster light whose map punctualLayer indexes
@@ -2040,6 +2041,7 @@ void main() {
             if (submerged > 0.0)
                 lightCI *= waterDownwellKey(L, submerged);
             lightSize = dirLights[k].sizeMisc.xy;
+            lightSpec = dirLights[k].sizeMisc.z;
             dirShadowSlot = int(dirLights[k].dirShadow.w);
         } else {
             uint li = lightIndexAt(clusterOffset + uint(k - numDir));
@@ -2090,6 +2092,7 @@ void main() {
                 }
                 if (captureDiffuseOnly > 0)
                     areaSpec = vec3(0.0);
+                areaSpec *= lightSpecular(li);
                 vec3 areaDiff =
                     (1.0 - metallicMap) * (1.0 - transmissionEff) * albedoMap * ff.x;
 
@@ -2158,6 +2161,7 @@ void main() {
             if (attenuation <= 0.0)
                 continue;
             lightCI = clusterLights[li].colorIntensity.xyz;
+            lightSpec = lightSpecular(li);
             punctualLayer = int(clusterLights[li].shadowMisc.y);
             shadowLight = li;
             // A point light owns six layers rather than one; resolve the face
@@ -2224,6 +2228,10 @@ void main() {
             F = vec3(0.0);
             specFdLight = vec3(0.0);
         }
+        // And only the light's own share of one out of it: what its lobes do not take, its
+        // diffuse keeps.
+        F *= lightSpec;
+        specFdLight *= lightSpec;
 
         float NdotL = max(dot(N, L), 0.0);
 
@@ -2296,8 +2304,8 @@ void main() {
             float Dc = distributionGGX(Nc, H, ccR);
             float Gc = geometrySmith(Nc, V, L, ccR);
             float Fc = fresnelSchlick(max(dot(H, V), 0.0), vec3(0.04)).r;
-            coatSpec = vec3(clearcoat * Dc * Gc * Fc / denominator);
-            coatAtten = clearcoat * Fc;
+            coatSpec = vec3(clearcoat * Dc * Gc * Fc * lightSpec / denominator);
+            coatAtten = clearcoat * Fc * lightSpec;
         }
 
         // Sheen (KHR_materials_sheen): a retroreflective Charlie lobe for cloth
@@ -2307,7 +2315,7 @@ void main() {
         if (sheenActive) {
             float Dsh = distributionCharlie(N, H, sheenRough);
             float Vsh = visibilitySheen(NdotL, NdotV, sheenRough);
-            sheenSpec = sheenColorPx * Dsh * Vsh;
+            sheenSpec = sheenColorPx * Dsh * Vsh * lightSpec;
         }
 
         // Add this light's contribution with shadow. Firefly clamp: a sub-pixel

@@ -197,6 +197,8 @@ static void _pack_dir_light(GpuDirLight* dst, const struct Light* light) {
     dst->dir_shadow[3] = (float)light->shadow_map_index;
     glm_vec3_scale((float*)light->color, light->intensity, dst->color_intensity);
     glm_vec2_copy((float*)light->size, dst->size_misc);
+    dst->size_misc[2] = light_specular_share(light);
+    dst->size_misc[3] = 0.0f;
 }
 
 static void _pack_cluster_light(GpuPackedLight* dst, const struct Light* light, float radius,
@@ -353,6 +355,7 @@ static void _gather_lights(LightClusterContext* ctx, struct Scene* scene, const 
 
         _pack_cluster_light(&ctx->lights.cluster_lights[num_packed], light, radius,
                             scene->shadow_system);
+        ctx->lights.cluster_specular[num_packed] = light_specular_share(light);
         // Borrowed, not owned: the light outlives this build, and the only reader
         // is the overflow warning, which runs before this function is called again.
         ctx->packed_names[num_packed] = light->name;

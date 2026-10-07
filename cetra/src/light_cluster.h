@@ -43,7 +43,7 @@ struct Light;
 typedef struct GpuDirLight {
     float dir_shadow[4];      // xyz = direction (world), w = float(CSM slot), -1 = none
     float color_intensity[4]; // xyz = color * intensity (premultiplied)
-    float size_misc[4];       // xy = emitter size (PCSS penumbra width)
+    float size_misc[4];       // xy = emitter size (PCSS penumbra width), z = Light.specular
 } GpuDirLight;
 
 typedef struct GpuPackedLight {
@@ -75,6 +75,11 @@ typedef struct GpuLightsBlock {
                              // z = area count (gates the LTC LUT fetches), w unused
     float cluster_params[4]; // sliceScale, sliceBias, LC_CLUSTER_X/fbW, LC_CLUSTER_Y/fbH
     GpuDirLight dir_lights[LC_MAX_DIR_LIGHTS];
+    // Each clustered light's Light.specular, by its index below. Its own array, four to a row
+    // (the GPU reads vec4 clusterSpecular[LC_MAX_CLUSTER_LIGHTS / 4]), because every slot of a
+    // packed light is already a cached light's; and ahead of them, because only the block's live
+    // prefix is uploaded, which ends at the last packed light.
+    float cluster_specular[LC_MAX_CLUSTER_LIGHTS];
     GpuPackedLight cluster_lights[LC_MAX_CLUSTER_LIGHTS];
 } GpuLightsBlock;
 
@@ -177,6 +182,7 @@ _Static_assert(sizeof(GpuClusterBlock) == UBO_CLUSTERS_BLOCK_SIZE,
 _Static_assert(sizeof(GpuClusterIndexBlock) == UBO_CLUSTER_INDICES_BLOCK_SIZE,
                "GpuClusterIndexBlock must match the std140 ClusterIndexBlock layout");
 _Static_assert(LC_MAX_CLUSTER_LIGHTS <= 256, "a cluster light index is one byte");
+_Static_assert(LC_MAX_CLUSTER_LIGHTS % 4 == 0, "the specular array packs four lights to a row");
 _Static_assert(LC_MAX_CLUSTER_INDICES <= (1u << (32 - LC_GRID_COUNT_BITS)),
                "every pool offset fits the grid word's offset field");
 _Static_assert(LC_MAX_CLUSTER_LIGHTS < (1u << LC_GRID_COUNT_BITS),

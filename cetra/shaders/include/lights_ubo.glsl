@@ -20,7 +20,7 @@ const int MAX_CLUSTER_LIGHTS = 128;
 struct DirLight {
     vec4 dirShadow;      // xyz = direction (world), w = float(CSM slot), -1 = no shadow
     vec4 colorIntensity; // xyz = color * intensity (premultiplied on CPU)
-    vec4 sizeMisc;       // xy = emitter size (PCSS penumbra width), zw unused
+    vec4 sizeMisc;       // xy = emitter size (PCSS penumbra width), z = its specular share
 };
 
 struct PackedLight {
@@ -49,8 +49,15 @@ layout(std140) uniform LightsBlock {
     vec4 clusterParams; // x = sliceScale, y = sliceBias,
                         // z = CLUSTER_X / fbWidth, w = CLUSTER_Y / fbHeight
     DirLight dirLights[MAX_DIR_LIGHTS];
+    vec4 clusterSpecular[MAX_CLUSTER_LIGHTS / 4]; // each light's specular share, four to a row
     PackedLight clusterLights[MAX_CLUSTER_LIGHTS];
 };
+
+// The share of clustered light `li` its reflective lobes take: 1 as physics has it, 0 for a
+// light standing in for a surface whose reflection is drawn already.
+float lightSpecular(uint li) {
+    return clusterSpecular[li >> 2u][li & 3u];
+}
 
 // std140 gives SCALAR arrays a vec4 stride, so the grid and index pool pack
 // four words per uvec4 -- a raw uint[3072] would silently 4x the block to 48KB.
