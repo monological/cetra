@@ -36,13 +36,16 @@ static const KitFrame TV_SET = {{-TV_X, FLOOR_Y, LIVING_IN_Z1}, GLM_PIf};
 #define TV_BLACK 0.28f
 #define TV_SIGMA 0.20f
 #define TV_GAMMA 2.4f
-// The tube's peak white, nits, at a colour set's cool white, about 9300 K, linear; and the set's
-// light on the room at a gain of 1, candela.
+// The tube's peak white, nits, at a colour set's cool white, about 9300 K, linear.
 #define TV_PEAK_NITS 90.0f
 static const vec3 TV_WHITE = {0.86f, 0.93f, 1.0f};
-#define TV_GLOW_CD 3.0f
-// Showing nothing: a faint blue-grey on the glass and on the room, a set left on between
-// programmes.
+// The tube: its corners' radius and how soft its edge is, in picture heights; how far its light
+// falls toward the sides; and how far the hum bar takes it down.
+#define TV_CORNER    0.08f
+#define TV_EDGE      0.01f
+#define TV_FALLOFF   0.15f
+#define TV_HUM_DEPTH 0.18f
+// Showing nothing: a faint blue-grey on the glass, a set left on between programmes.
 static const vec3 TV_IDLE = {0.55f, 0.66f, 0.82f};
 #define TV_IDLE_NITS 4.0f
 // The hiss, against the other loops tools/fetch_sounds.py levels alike: a set left on low.
@@ -69,6 +72,15 @@ static float tv_mean(float spread) {
         weights += w;
     }
     return (float)(sum / weights);
+}
+
+// The picture's light over its whole area as a share of the signal's mean: the hum bar's dip
+// averaged over one cycle, which the picture's height is; the falloff averaged over the rectangle;
+// and what the rounded corners and half of the soft edge round the outline leave of it.
+static float tv_picture_average(float aspect) {
+    const float outline = 2.0f * (aspect + 1.0f) - (8.0f - 2.0f * GLM_PIf) * TV_CORNER;
+    const float cut = (4.0f - GLM_PIf) * TV_CORNER * TV_CORNER + 0.5f * TV_EDGE * outline;
+    return (1.0f - 0.5f * TV_HUM_DEPTH) * (1.0f - 2.0f * TV_FALLOFF / 3.0f) * (1.0f - cut / aspect);
 }
 
 // `a` then `b` as one string; NULL with no memory.
@@ -103,7 +115,10 @@ static void tv_picture(Tv* tv, Kit* kit, Engine* engine) {
     }
 
     const float width = PICTURE_A1 - PICTURE_A0, height = PICTURE_Y1 - PICTURE_Y0;
+    tv->average = tv_picture_average(width / height);
+    vec4 tube = {TV_CORNER, TV_EDGE, TV_FALLOFF, TV_HUM_DEPTH};
     ShaderParams* p = &tv->picture->shader_params;
+    shader_params_set(p, "tvTube", tube);
     shader_params_set(p, "tvSignal", (vec4){TV_LINES, TV_SAMPLES, TV_BLACK, TV_GAMMA});
     shader_params_set(p, "tvWhite",
                       (vec4){TV_PEAK_NITS * TV_WHITE[0], TV_PEAK_NITS * TV_WHITE[1],
@@ -126,6 +141,7 @@ static void tv_picture(Tv* tv, Kit* kit, Engine* engine) {
     glm_vec3_add(corner, kit->origin, corner);
     kit_frame_dir(&TV_SET, 1.0f, 0.0f, 0.0f, across);
     ShaderParams* g = &tv->glass->shader_params;
+    shader_params_set(g, "tvTube", tube);
     shader_params_set(g, "tvPlace", (vec4){corner[0], corner[1], corner[2], width});
     shader_params_set(g, "tvAcross", (vec4){across[0], across[1], across[2], height});
 }
@@ -157,23 +173,31 @@ void tv_build(Tv* tv, Kit* kit, Engine* engine, Scene* scene, bool on) {
     glm_vec3_copy((float*)(on ? TV_WHITE : TV_IDLE), tv->glass->emissive);
     tv->glass->emissive_strength = TV_IDLE_NITS;
 
-    vec3 at = {0.0f, 0.0f, 0.0f};
-    kit_frame_point(f, -0.05f, 0.78f, 0.75f, at);
-    glm_vec3_add(at, kit->origin, at);
+    // The set's light on the room: a panel the picture's size lying on the glass and shining into
+    // the room, as bright as the glass is on average. Shining only forward, from the glass, it
+    // lights neither the glass nor the wall behind the set, and the fog scatters no panel, so it
+    // hangs no glowing ball in the air as a point in front of the screen did.
+    vec3 centre = {0.0f, 0.0f, 0.0f}, forward = {0.0f, 0.0f, 0.0f};
+    kit_frame_point(f, 0.5f * (PICTURE_A0 + PICTURE_A1), 0.5f * (PICTURE_Y0 + PICTURE_Y1),
+                    PICTURE_D + 0.002f, centre);
+    glm_vec3_add(centre, kit->origin, centre);
+    kit_frame_dir(f, 0.0f, 0.0f, 1.0f, forward);
     LightDesc glow = {.name = "tv_glow",
-                      .type = LIGHT_POINT,
-                      .position = {at[0], at[1], at[2]},
-                      .intensity = TV_GLOW_CD,
+                      .type = LIGHT_AREA,
+                      .position = {centre[0], centre[1], centre[2]},
+                      .direction = {forward[0], forward[1], forward[2]},
+                      .up = {0.0f, 1.0f, 0.0f},
+                      .size = {PICTURE_A1 - PICTURE_A0, PICTURE_Y1 - PICTURE_Y0},
+                      .intensity = TV_IDLE_NITS,
                       .range = 4.0f};
     glm_vec3_copy((float*)(on ? TV_WHITE : TV_IDLE), glow.color);
     tv->glow = create_light(&glow);
-    // It stands in for the glass, whose own light is what reflects in SSR and the probes: a
-    // highlight of it as well would be the picture reflected twice, the second time at a point.
+    // The glass's own light is what reflects in SSR and the probes; a highlight of the panel as
+    // well would be the screen reflected twice.
     tv->glow->specular = 0.0f;
     scene_add_light(scene, tv->glow);
 
     if (on) {
-        tv->glow_per_mean = TV_GLOW_CD / tv_mean(TV_SIGMA);
         tv_picture(tv, kit, engine);
         tv_update(tv, 0.0, 1.0f);
     }
@@ -202,7 +226,7 @@ void tv_update(Tv* tv, double time, float hearing) {
     // The glass's light is the signal's mean, which its hook shapes; a glass whose hook did not
     // build glows with it flat.
     tv->glass->emissive_strength = TV_PEAK_NITS * mean;
-    tv->glow->intensity = tv->glow_per_mean * mean;
+    tv->glow->intensity = TV_PEAK_NITS * mean * tv->average;
     if (tv->hiss)
         audio_sound_set_volume(tv->hiss, TV_HISS_VOLUME * hearing);
 }
