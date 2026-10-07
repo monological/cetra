@@ -391,3 +391,55 @@ luminance, and z levels tiled across one 2D texture so a slice is two bilinear t
 30 stops, each texel split between its two nearest bins; a base blended with a heavily blurred
 luminance (default 0.6) against ringing; highlight and shadow contrast scaled separately about
 middle grey, plus a detail strength; and defaults that change nothing.
+
+---
+
+## Film grain: noise that is new every frame
+
+Read for spec 13.28, after the grain was found crawling: the frame number was added to both pixel
+coordinates of a sin-fract hash, so each frame was the last one moved one pixel diagonally.
+
+### Jarzynski & Olano, *Hash Functions for GPU Rendering*, JCGT 9(3), 2020
+
+- <https://jcgt.org/published/0009/03/02/paper.pdf>, fetched 2026-10-07. CC BY-ND 3.0; the
+  conversion is kept local like the rest, the licence forbidding derivatives.
+- Local: `jarzynski-olano-2020-hash-functions-gpu-rendering.md`
+
+**What cetra takes from it:** `pcg3d`, §6.1, as written: a (3 -> 3) hash of the pixel and the
+frame, whose every output word changes when any input does, so a frame's noise owes nothing to the
+last frame's and nothing slides. The paper's Figure 1 shows the sin-fract form (`trig`) with
+"visible banding, linear artifacts", which is the second half of what the grain looked like.
+
+---
+
+## CRT
+
+Read for spec 13.28: a consumer television drawn over the finished frame, game UI included.
+Fetched 2026-10-07. Both are shader source, not papers, and both are public domain; kept local
+with the rest all the same, the libretro repositories being where to get them again.
+
+### Lottes, *CRTS: public domain CRT-styled scalar*, 2018
+
+- <https://www.shadertoy.com/view/MtSfRK>; read as hunterk's libretro port,
+  <https://raw.githubusercontent.com/libretro/slang-shaders/master/crt/shaders/crt-lottes-fast.slang>.
+  The Unlicense.
+- Local: `lottes-2018-crts-crt-lottes-fast.slang`
+
+**What cetra takes from it:** the filter. Two scanlines each a windowed cosine
+(`cos(min(0.5, off * thin) * 2pi) * 0.5 + 0.5`), four taps across each under `exp2(blur * d^2)`,
+the warp `pos *= (1 + pos.y^2 * warp.x, 1 + pos.x^2 * warp.y)` with its rounded vignette at the
+tube's edge, and the exposure match, `midOut = 0.18 / (scan factor * mask factor)` through
+`peak / (peak * tone.y + tone.z)`, which lifts mid-grey back to where it was. Its own warning
+holds here: the input must already be low resolution, which is why the finished frame is
+resampled to a few hundred lines first.
+
+### Lottes, *PUBLIC DOMAIN CRT STYLED SCAN-LINE SHADER*, 2014
+
+- <https://raw.githubusercontent.com/libretro/glsl-shaders/master/crt/shaders/crt-lottes.glsl>.
+  Public domain.
+- Local: `lottes-2014-crt-lottes.glsl`
+
+**What cetra takes from it:** only the "very compressed TV style" mask (`shadowMask == 1`), a
+slot mask, which is what a living-room set had and CRTS does not carry: RGB stripes three pixels
+wide, and a dark row every second line, offset by one row in alternate groups of three columns.
+Made darken-only here, CRTS' way, so it cannot clip a bright pixel.
