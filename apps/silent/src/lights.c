@@ -23,6 +23,10 @@ static const float TUBE_COLOUR[3] = {0.80f, 1.0f, 0.84f};
 // probes' opening sweep, whose views look out from inside the kitchen.
 #define TUBE_RANGE      9.0f
 #define TUBE_RANGE_HOOD 4.5f
+// Metres from a strip's centre that nothing nearer casts its shadow: past the steel channel
+// (tube_fixture), whose box the strip sits inside, so that would otherwise shadow the ceiling
+// round every tube from within.
+#define TUBE_SHADOW_NEAR 0.1f
 
 #define FLASHLIGHT_CANDELA 900.0f
 
@@ -43,7 +47,6 @@ typedef struct Tube {
     float length, width;
     float nits;
     float range;
-    bool shadows;
     bool flicker;
 } Tube;
 
@@ -57,7 +60,6 @@ static const Tube TUBES[] = {
      0.035f,
      6000.0f,
      TUBE_RANGE,
-     true,
      true},
     {"tube_window",
      {2.6f, KITCHEN_WIN_HEAD + 0.16f, KITCHEN_Z0 + 0.075f},
@@ -67,7 +69,6 @@ static const Tube TUBES[] = {
      0.035f,
      6000.0f,
      TUBE_RANGE,
-     true,
      false},
     {"tube_hood",
      // On the canopy's front lip, tipped toward the room: the underside is at
@@ -79,7 +80,6 @@ static const Tube TUBES[] = {
      0.03f,
      3500.0f,
      TUBE_RANGE_HOOD,
-     false,
      false},
 };
 #define TUBE_COUNT ((int)(sizeof(TUBES) / sizeof(TUBES[0])))
@@ -300,13 +300,17 @@ void lights_update(Lights* lights, Scene* scene, double time, float dt, const ve
     // after, and named for their strips' nodes; their reach and their casting
     // are ours to state. Left derived, a 6000-nit panel claims every cluster in
     // the frustum. Looked up each frame rather than held from the first, so a
-    // panel the engine re-derives is never one this holds dangling.
+    // panel the engine re-derives is never one this holds dangling. Every tube
+    // casts, and keeps its shadow, since none of them moves: the hood's lights
+    // the hall's floor through the wall without one.
     for (int t = 0; t < TUBE_COUNT; t++) {
         Light* l = scene_find_light(scene, TUBES[t].name);
         if (!l || l->type != LIGHT_AREA)
             continue;
         l->range = TUBES[t].range;
-        l->cast_shadows = TUBES[t].shadows;
+        l->cast_shadows = true;
+        l->shadow_cache = true;
+        l->shadow_near = TUBE_SHADOW_NEAR;
     }
 
     Light* f = lights->flashlight;

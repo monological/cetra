@@ -445,6 +445,11 @@ static void parse_light_overrides(CetraSceneDesc* d, const cJSON* root) {
         out->has_size_from_angle = get_float(o, "size_from_angle", &out->size_from_angle);
         out->has_intensity = get_float(o, "intensity", &out->intensity);
         out->has_cast_shadows = get_bool(o, "cast_shadows", &out->cast_shadows);
+        out->has_shadow_cache = get_bool(o, "shadow_cache", &out->shadow_cache);
+        // The lights block's reason: a misspelled key would leave the light as it was.
+        static const char* const known[] = {"name", "size_from_angle", "intensity", "cast_shadows",
+                                            "shadow_cache"};
+        warn_unknown_keys(o, known, sizeof(known) / sizeof(known[0]), "light override");
         d->light_override_count++;
     }
 }

@@ -1356,10 +1356,16 @@ static void draw_shadow_layer(ShadowSystem* ss, const Scene* scene, const DrawLi
  * is exact for its own point, and the lookup averages them.
  */
 
+// Whether a light of this type can keep its shadow in tiles: a point light, or a panel, cached
+// from its centre over the six world-axis faces a point light's are (spec 13.27).
+static bool light_type_caches(LightType type) {
+    return type == LIGHT_POINT || type == LIGHT_AREA;
+}
+
 // Whether a light's shadow goes in tiles rather than the per-frame pool. Its range is where
 // its faces end, so a cached light with none stays in the pool.
 bool shadow_light_takes_tiles(const Light* light) {
-    return light->cast_shadows && light->shadow_cache && light->type == LIGHT_POINT &&
+    return light->cast_shadows && light->shadow_cache && light_type_caches(light->type) &&
            light->range > 0.0f;
 }
 
@@ -1392,8 +1398,10 @@ static int tile_reference_count(const ShadowSystem* ss) {
                                                             : ss->tile_reference;
 }
 
+// A panel has none: its body is its rectangle, and create_light refuses it a capsule.
 static bool light_has_body(const Light* light) {
-    return light->source_radius > 0.0f || light->source_length > 0.0f;
+    return light->type != LIGHT_AREA &&
+           (light->source_radius > 0.0f || light->source_length > 0.0f);
 }
 
 // The views every light with a body is drawn and shaded from this frame, kept or the
@@ -1415,9 +1423,10 @@ static int tile_views_for(const ShadowSystem* ss, const Light* light) {
 
 // A light's body as it is now: its centre, its segment end to end, its radius.
 static void tile_body_now(const Light* light, vec3 centre, vec3 segment, float* radius) {
+    const bool body = light_has_body(light);
     glm_vec3_copy((float*)light->global_position, centre);
-    glm_vec3_scale((float*)light->direction, light->source_length, segment);
-    *radius = light->source_radius;
+    glm_vec3_scale((float*)light->direction, body ? light->source_length : 0.0f, segment);
+    *radius = body ? light->source_radius : 0.0f;
 }
 
 // View m of `count` over a body: the centre for m = 0, else u stratified along the segment and
@@ -2788,7 +2797,7 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
         light->shadow_tile = -1;
         if (!light->cast_shadows || shadow_light_takes_tiles(light))
             continue;
-        if (light->shadow_cache && light->type == LIGHT_POINT && !rangeless)
+        if (light->shadow_cache && light_type_caches(light->type) && !rangeless)
             rangeless = light;
 
         if (light->type == LIGHT_DIRECTIONAL) {

@@ -49,8 +49,16 @@ Light* create_light(const LightDesc* desc) {
 
     light->cast_shadows = desc->cast_shadows;
     light->shadow_cache = desc->shadow_cache;
-    light->source_radius = desc->source_radius;
-    light->source_length = desc->source_length;
+    // A panel's body is its rectangle, which a capsule along its normal is not, so a panel's
+    // shadow is drawn from its centre and a body given it is refused by name.
+    if (desc->type == LIGHT_AREA && (desc->source_radius > 0.0f || desc->source_length > 0.0f)) {
+        log_warn("Light '%s': an area light takes no source_radius or source_length; its shadow "
+                 "is drawn from its centre",
+                 desc->name ? desc->name : "unnamed light");
+    } else {
+        light->source_radius = desc->source_radius;
+        light->source_length = desc->source_length;
+    }
     light->shadow_near = desc->shadow_near;
     light->shadow_map_index = -1;
     light->shadow_layer = -1;

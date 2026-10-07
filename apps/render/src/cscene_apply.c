@@ -449,6 +449,11 @@ void apply_cscene_light_overrides(Scene* scene, const CetraSceneDesc* cscn, floa
             printf("Scene file: light '%s' cast_shadows %s\n", ov->name,
                    ov->cast_shadows ? "on" : "off");
         }
+        if (ov->has_shadow_cache) {
+            light->shadow_cache = ov->shadow_cache;
+            printf("Scene file: light '%s' shadow_cache %s\n", ov->name,
+                   ov->shadow_cache ? "on" : "off");
+        }
     }
 }
 

@@ -2036,15 +2036,27 @@ void main() {
                 // occlusion of a soft source: the panel's centre is either
                 // visible from the fragment or it is not, with no partial
                 // occlusion of one edge. Behind the panel there is no face, and
-                // ltcPanel has already answered zero.
+                // ltcPanel has already answered zero. A cached panel's faces are
+                // tiles, as a point light's are, and its marker reads lit
+                // through the per-frame lookup in a variant without them.
                 int aLayer = int(clusterLights[li].shadowMisc.y);
                 float aShadow = 1.0;
                 if (aLayer >= 0 && alphaMasked == 0) {
-                    int aFace = panelCubeFace(WorldPos - lightPos, clusterLights[li].dirType.xyz,
-                                              clusterLights[li].upArea.xyz);
-                    if (aFace < 5)
-                        aShadow = punctualShadow(aLayer + aFace, WorldPos, N,
-                                                 normalize(lightPos - WorldPos), ddxWorld, ddyWorld);
+#if CETRA_HAS(PBR_FEAT_SHADOW_TILES)
+                    if (aLayer >= SHADOW_TILE_MARK)
+                        aShadow = tileShadow(li, WorldPos, N, normalize(lightPos - WorldPos),
+                                             ddxWorld, ddyWorld);
+                    else
+#endif
+                    {
+                        int aFace = panelCubeFace(WorldPos - lightPos,
+                                                  clusterLights[li].dirType.xyz,
+                                                  clusterLights[li].upArea.xyz);
+                        if (aFace < 5)
+                            aShadow = punctualShadow(aLayer + aFace, WorldPos, N,
+                                                     normalize(lightPos - WorldPos), ddxWorld,
+                                                     ddyWorld);
+                    }
                 }
 
                 // Same split as the punctual clamp below: the LTC response is
