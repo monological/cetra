@@ -41,6 +41,7 @@
 #include "cetra/game/input.h"
 #include "cetra/game/physics.h"
 
+#include "basement.h"
 #include "candles.h"
 #include "cat.h"
 #include "cat_brain.h"
@@ -347,13 +348,15 @@ static void build_sky(Engine* engine) {
 
 /*
  * The player's house is plainer and new, so its grid is laid from its bounds and the engine
- * switches off whatever probe lands in a wall (create_gi_volume_spaced): the ground floor and
- * the porch, a metre a cell. Nothing upstairs is lit or seen.
+ * switches off whatever probe lands in a wall (create_gi_volume_spaced): the basement, the
+ * ground floor and the porch, a metre a cell. Nothing upstairs is lit or seen. The basement's
+ * floor is a whole number of cells under the yard, so the ground floor's probes stand where they
+ * did before it was dug (spec 13.31).
  */
 #define HOME_GI_CELL 1.0f
 
 static void build_home_gi(void) {
-    const vec3 lo = {HOUSE_X0 - 0.2f, 0.0f, PORCH_Z0 - 0.2f};
+    const vec3 lo = {HOUSE_X0 - 0.2f, BASEMENT_Y, PORCH_Z0 - 0.2f};
     const vec3 hi = {HOUSE_X1 + 0.2f, CEIL_Y + 0.1f, HOUSE_BACK_Z + 0.2f};
     GIVolume* gi = create_gi_volume_spaced(lo, hi, HOME_GI_CELL);
     if (gi && scene_add_gi_volume(g_scene, gi))
@@ -589,9 +592,10 @@ static void on_init(Game* game) {
     kit_init(&kit, g_scene, em, physics);
     mats_register(&kit, engine, g_scene);
     // The player's house on the plan's origin (spec 13.25), its living room's television, its
-    // kitchen and its clock.
+    // basement, its kitchen and its clock.
     home_build(&kit, engine, g_scene);
     tv_build(&g_tv, &kit, engine, g_scene, !g_args.no_static);
+    basement_build(&kit);
     kitchen_build(&kit, (unsigned int)g_args.seed);
     lights_build(&g_lights, &kit, engine, g_scene, (unsigned int)g_args.seed, !g_args.no_flicker,
                  g_args.flashlight);

@@ -46,6 +46,21 @@
 // table face it.
 #define TV_X 3.3f
 
+/*
+ * The basement under the whole house (spec 13.31): its slab's top, and the ground floor over it
+ * -- finished boards on a subfloor on joists, the joists inside the 0.3 m the floor stands above
+ * the yard, so the basement's ceiling is that floor's own framing seen from below.
+ */
+#define BASEMENT_Y   (-2.0f)
+#define FLOOR_BOARDS 0.025f // the finished boards' thickness, under FLOOR_Y
+#define SUBFLOOR_Y0  0.255f // the subfloor, up to the boards
+#define JOIST_Y0     0.02f  // the joists' feet, up to the subfloor
+// The stairwell down to it: behind the basement door, between the partition that closes it off
+// from the stair up and the back wall, and west from the landing inside the door.
+#define STAIRWELL_WALL_Z 18.25f
+#define STAIRWELL_Z0     (STAIRWELL_WALL_Z + 0.5f * INT_WALL)
+#define CELLAR_HEAD_X    (-2.0f)
+
 // The walls, floors, rooms, furniture and lamps, and the roofs, porch and gutter; not the
 // television, which is tv.c's.
 void home_build(Kit* kit, Engine* engine, Scene* scene);

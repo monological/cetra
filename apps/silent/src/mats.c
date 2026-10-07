@@ -417,6 +417,37 @@ static const MatSpec SPECS[MAT_COUNT] = {
     // The picture on the glass (spec 13.30): no photo set and no colour of its own, since the
     // late program that draws it takes nothing from the material but its params.
     [MAT_TV_STATIC] = {"tv_static", NULL, {0.0f, 0.0f, 0.0f}, 1.0f, 0.0f, 1.0f},
+    /*
+     * The basement (spec 13.31), from scans already fetched. The foundation is the mansion's
+     * rubble darkened, and its foot darker and glossier again, as masonry is where it draws water
+     * up out of the ground; the two meet in a tide line along the walls, which is where the grime
+     * of each band's edge lands. The joists are the porch's old boards gone brown.
+     */
+    [MAT_CELLAR_STONE] = {"cellar_stone",
+                          "castle_wall_varriation",
+                          {0.62f, 0.64f, 0.58f},
+                          1.0f,
+                          0.0f,
+                          2.0f,
+                          .grime = 0.85f},
+    [MAT_CELLAR_DAMP] = {"cellar_damp",
+                         "castle_wall_varriation",
+                         {0.32f, 0.34f, 0.30f},
+                         0.55f,
+                         0.0f,
+                         2.0f,
+                         .grime = 0.9f},
+    [MAT_CELLAR_FLOOR] = {"cellar_floor",
+                          "concrete_pavement",
+                          {0.55f, 0.57f, 0.52f},
+                          0.8f,
+                          0.0f,
+                          1.8f,
+                          .grime = 0.6f},
+    [MAT_CELLAR_WET] =
+        {"cellar_wet", "concrete_pavement", {0.28f, 0.29f, 0.27f}, 0.12f, 0.0f, 1.8f},
+    [MAT_JOIST] =
+        {"joist", "old_wood_floor", {0.62f, 0.56f, 0.48f}, 1.0f, 0.0f, 1.5f, .grime = 0.6f},
 };
 
 static Texture* load(TexturePool* pool, const char* set, const char* map, TextureDesc desc) {

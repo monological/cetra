@@ -84,6 +84,12 @@ typedef enum {
     MAT_FROSTED,    // a lantern's frosted glass, lit from inside
     MAT_SCREEN,     // the television's glass, glowing with its picture
     MAT_TV_STATIC,  // the picture on it, snow, drawn in the late draw (spec 13.30)
+    // The home's basement (spec 13.31).
+    MAT_CELLAR_STONE, // the rubble foundation from inside, dirty
+    MAT_CELLAR_DAMP,  // and its foot, dark with the damp it draws up
+    MAT_CELLAR_FLOOR, // the slab, poured and never sealed
+    MAT_CELLAR_WET,   // standing water on it round the drain
+    MAT_JOIST,        // the ground floor's framing seen from below
     MAT_COUNT
 } MatId;
 

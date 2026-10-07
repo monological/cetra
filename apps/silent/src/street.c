@@ -3,6 +3,7 @@
 #include "cetra/ies.h"
 #include "cetra/light.h"
 
+#include "basement.h"
 #include "houses.h"
 #include "layout.h"
 #include "mats.h"
@@ -24,10 +25,14 @@
 #define FOG_DAY     0.14f
 #define FOG_FEATHER 3.0f
 
-// A strip of ground the length of the street, from z0 to z1, its top at `top`.
-static void ground(Kit* kit, int mat, float z0, float z1, float top) {
-    kit_frame_box(kit, &KIT_WORLD, mat, -STREET_HALF_LEN, STREET_HALF_LEN, top - GROUND_DEPTH, top,
-                  z0, z1, true);
+// Ground from x0 to x1 and z0 to z1, its top at `top`.
+static void ground(Kit* kit, int mat, float x0, float x1, float z0, float z1, float top) {
+    kit_frame_box(kit, &KIT_WORLD, mat, x0, x1, top - GROUND_DEPTH, top, z0, z1, true);
+}
+
+// A strip of it the length of the street.
+static void ground_strip(Kit* kit, int mat, float z0, float z1, float top) {
+    ground(kit, mat, -STREET_HALF_LEN, STREET_HALF_LEN, z0, z1, top);
 }
 
 /*
@@ -188,11 +193,15 @@ static void fog(Scene* scene, bool night) {
 void street_build(Kit* kit, Scene* scene, unsigned int seed, bool night, bool fogged) {
     const float kerb = ROAD_HALF_WIDTH;
     const float walk = ROAD_HALF_WIDTH + SIDEWALK_WIDTH;
-    ground(kit, MAT_ASPHALT, -kerb, kerb, ROAD_Y);
-    ground(kit, MAT_CONCRETE, kerb, walk, 0.0f);
-    ground(kit, MAT_CONCRETE, -walk, -kerb, 0.0f);
-    ground(kit, MAT_DIRT, walk, walk + YARD_DEPTH, 0.0f);
-    ground(kit, MAT_DIRT, -walk - YARD_DEPTH, -walk, 0.0f);
+    ground_strip(kit, MAT_ASPHALT, -kerb, kerb, ROAD_Y);
+    ground_strip(kit, MAT_CONCRETE, kerb, walk, 0.0f);
+    ground_strip(kit, MAT_CONCRETE, -walk, -kerb, 0.0f);
+    // Our side's yards, cut away round the basement under our house (spec 13.31).
+    ground_strip(kit, MAT_DIRT, walk, DIG_Z0, 0.0f);
+    ground_strip(kit, MAT_DIRT, DIG_Z1, walk + YARD_DEPTH, 0.0f);
+    ground(kit, MAT_DIRT, -STREET_HALF_LEN, DIG_X0, DIG_Z0, DIG_Z1, 0.0f);
+    ground(kit, MAT_DIRT, DIG_X1, STREET_HALF_LEN, DIG_Z0, DIG_Z1, 0.0f);
+    ground_strip(kit, MAT_DIRT, -walk - YARD_DEPTH, -walk, 0.0f);
 
     // Our path from the sidewalk to the porch steps.
     kit_box(kit, MAT_CONCRETE,
