@@ -473,13 +473,13 @@ and a bodiless light's one view on the same origin with no new packing) and the 
 stratified along the segment with a point of the ball each. `tile_body_point` in C and
 `tileBodyPoint` here are two copies of one formula, and a drift between them reads as views
 projected from the wrong point -- loud, which is why two copies are allowed. The drawn body is
-packed whole, in what its type leaves free: centre in `shadowTile.xyz`, segment in
+packed whole, in slots no type reads for anything else: centre in `shadowTile.xyz`, segment in
 `attenCutoff.zw` and `shadowMisc.x` (the reserved slot and the cone cosines, which only a spot
-reads), a point light's radius in `shadowMisc.z` (a panel's extent, which a panel keeps, its
-radius being 0 by type) and every cached light's near plane in `upArea.w`. The near plane rode
-`shadowMisc.w` until 13.27, which would have shrunk a cached panel's LTC rectangle to it --
-`tiles-area-size` is what sees that. `tileLightAt` in `tile_lookup.glsl` is the one place that
-decodes it, for the surface and the fog alike.
+reads, and a spot is never cached), radius in `colorIntensity.w` and near plane in `upArea.w`.
+The radius and the near plane rode `shadowMisc.zw` until 13.27, a panel's extent, which would
+have shrunk a cached panel's LTC rectangle to them -- `tiles-area-size` is what sees that.
+`tileLightAt` in `tile_lookup.glsl` is the one place that decodes it, for the surface and the
+fog alike, and it asks no light's type.
 
 **Three designs were measured and refused before this one**, on `tile_core_fixture` against a
 trace of the same body against the rim with no shadow map (the trace is `tiles-truth`'s):

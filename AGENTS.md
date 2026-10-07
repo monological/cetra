@@ -1279,9 +1279,9 @@ speeds.
   of their own -- which is what lets the candles of silent's two houses, its hall lantern and
   its kitchen tubes cast where the per-frame pool stops at sixteen layers. **A panel is cached
   from its CENTRE over the six world-axis faces a point light's are**, one view and no body,
-  so it is the per-frame cube's hard shadow at a tile's 256^2. A cached light's near plane
-  rides `upArea.w`, because a point light's used to take a panel's size from the slots the LTC
-  reads it in. **Since 13.24 the budget goes to the NEAREST lights**: the cached
+  so it is the per-frame cube's hard shadow at a tile's 256^2. A cached light's radius rides
+  `colorIntensity.w` and its near plane `upArea.w`, slots no type reads for anything else; both
+  used to take a panel's size from the slots the LTC reads it in. **Since 13.24 the budget goes to the NEAREST lights**: the cached
   lights are ranked by distance from the camera to their reach once a frame, a nearer light
   takes the block of the farthest holder more than 2 m farther, and once the tiles have opened
   at most `tile_new_blocks_per_frame` (2) blocks are placed a frame, since a light placed draws
