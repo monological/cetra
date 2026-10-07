@@ -7,6 +7,7 @@
 
 #include "exposure.h"
 #include "program.h"
+#include "util.h"
 
 struct Profiler;
 
@@ -177,6 +178,13 @@ typedef struct PostFXLateDraw {
 } PostFXLateDraw;
 typedef void (*PostFXLateDrawFunc)(void* user, const PostFXLateDraw* late);
 
+// What a late draw hands the bound program `u`: the depth on `depth_unit` as `sceneDepth`, the
+// fog on `fog_unit` as `fogVolume` with `fogSlices`, `fogNear`, `fogFar` and `fogDepthDist`, and
+// the canvas's size as `viewport`. include/late_surface.glsl declares the same names. Leaves
+// texture unit 0 active.
+void postfx_late_draw_bind(const PostFXLateDraw* late, UniformManager* u, int depth_unit,
+                           int fog_unit);
+
 // Where an app's post pass runs (spec 13.29). Each is a stage boundary of the chain, named for
 // Unreal's Blendable Location at the same place. Replacing the tone map is not one: its curve is
 // a function inside the shader that also composites AO, contact shadows, bloom, flare and glare.
@@ -198,19 +206,22 @@ typedef enum PostFXLocation {
  * result back over the frame, since a pass may not draw into the texture it samples.
  */
 typedef struct PostFXPass {
-    // ENGINE-OWNED, read only: where it runs, and its program, borrowed (the engine owns it).
+    // ENGINE-OWNED, read only: where it runs, its program, borrowed (the engine owns it), and
+    // whether that program declares sceneDepth, which costs the frame a depth resolve.
     PostFXLocation at;
     ShaderProgram* program;
+    bool reads_depth;
     // SETTINGS
     bool enabled;
     ShaderParams params;
 } PostFXPass;
 
-// A colour target remade only when its size changes.
-typedef struct PostFXTarget {
-    GLuint fbo, tex;
-    int w, h;
-} PostFXTarget;
+// What writes the window this frame, decided once by postfx_run.
+typedef enum PostFXShow {
+    POSTFX_SHOW_WINDOW = 0, // the tone map, or a debug frame's copy, writes it directly
+    POSTFX_SHOW_PRESENT,    // the picture, through the present pass, after the app's passes
+    POSTFX_SHOW_CRT,        // the picture, through the CRT
+} PostFXShow;
 
 typedef struct PostFX {
     // SETTINGS throughout, in feature order, except:
@@ -701,15 +712,17 @@ typedef struct PostFX {
     // -- the CRT, an app's pass there -- rather than the tone map writing the window. Nothing is
     // quantized before the last pass, and an overlay's window-pixel scissor lands where it would
     // in the window. Engine-owned, made on first use.
-    PostFXTarget picture;
+    GLColorTarget picture;
+    bool picture_failed;            // could not be made; never retried
+    PostFXShow show;                // engine-owned: what writes the window this frame
     ShaderProgram* present_program; // the picture into the window, dithered, when no CRT is on
 
     // App passes at named points (spec 13.29). Each pass's `enabled` and params are settings.
     PostFXPass passes[POSTFX_PASS_MAX];
     int pass_count;
-    // Engine-owned: what a pass draws into before it is copied back over the frame, at post size
-    // for the HDR locations and at output size after the tone map.
-    PostFXTarget pass_scratch, picture_scratch;
+    // Engine-owned: what a pass draws into before it is copied back over the frame -- at post size
+    // for the HDR locations, shared with motion blur, and at output size after the tone map.
+    GLColorTarget hdr_scratch, picture_scratch;
     float time; // published per frame: the render clock in seconds, a pass's `time`
     // 3D colour-grading LUT (spec 11.58). Sits between the gamma encode and the
     // grain, because it is the creative look: grain is sensor noise applied over
@@ -940,26 +953,25 @@ typedef struct PostFXGBufferWrites {
     float oit_near_far[2];
 } PostFXGBufferWrites;
 
-// Pass frame_is_hdr = false for frames whose shaders already emitted
-// display-ready colors (debug render modes): they are copied unchanged,
-// skipping SSAO, bloom, and tone mapping.
-void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hdr,
-                const PostFXGBufferWrites* writes, mat4 projection, mat4 view);
+// The frame from `msaa_fbo` to the window, or to the picture when something draws after the tone
+// map. Pass frame_is_hdr = false for frames whose shaders already emitted display-ready colors
+// (debug render modes): they are copied unchanged, skipping SSAO, bloom, and tone mapping.
+void postfx_run(PostFX* fx, GLuint msaa_fbo, bool frame_is_hdr, const PostFXGBufferWrites* writes,
+                mat4 projection, mat4 view);
 
-// The framebuffer this frame's picture is drawn into: `picture`'s when the CRT is on (spec
-// 13.28) or a pass runs after the tone map (spec 13.29), else the window, 0.
-GLuint postfx_picture_fbo(PostFX* fx);
-// Show the picture drawn into `picture` in the window: through the CRT when it is on, through a
-// dithered copy when not, nothing to do when it is the window.
-void postfx_present_picture(PostFX* fx, GLuint picture);
+// The framebuffer postfx_run drew this frame's picture into: the picture's when the CRT is on
+// (spec 13.28) or a pass runs after the tone map (spec 13.29), else the window, 0. What draws
+// over the picture before it is shown -- debug tiles, the app's overlay -- draws into it.
+GLuint postfx_picture_fbo(const PostFX* fx);
+// Show this frame's picture in the window: through the CRT when it is on, through a dithered
+// copy when not, nothing to do when the window was drawn directly.
+void postfx_present_picture(PostFX* fx);
 
 // Run `program` at `at` from the next frame on, enabled, with no params (spec 13.29). The
 // program is borrowed, and its owner registers it with engine_add_program. NULL, logged, past
 // POSTFX_PASS_MAX passes. Passes at one location run in the order they were added.
 PostFXPass* postfx_add_pass(PostFX* fx, PostFXLocation at, ShaderProgram* program);
-// Whether any enabled pass runs at `at`.
-bool postfx_passes_at(const PostFX* fx, PostFXLocation at);
-// The location a scene file names: "beforeDof", "beforeBloom" or "afterTonemap"; -1 for none.
+// The location named "beforeDof", "beforeBloom" or "afterTonemap", any case; -1 for none.
 int postfx_location_from_name(const char* name);
 
 // Producer-side predicate: true when some active effect will consume the

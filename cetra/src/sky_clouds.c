@@ -201,11 +201,9 @@ static bool ensure_march_targets(CloudLayer* c, int w, int h) {
         gl_delete_texture(&c->march_tex[i]);
         gl_delete_fbo(&c->march_fbo[i]);
     }
-    // The FBO wrapping duplicates postfx.c's create_color_fbo, which is
-    // static there and postfx-owned; hoisting it to a shared home was
-    // deliberately not done here to keep this branch's gates narrow (the
-    // bake_aerial_volume precedent, sky.c). The texture half reuses the
-    // shared LUT helper so the sampler state cannot drift.
+    // The FBO wrapping is gl_color_fbo_create's, written out because that
+    // makes its own texture: this one reuses the shared LUT helper, so the
+    // sampler state cannot drift from the LUTs'.
     for (int i = 0; i < 2; i++) {
         glGenFramebuffers(1, &c->march_fbo[i]);
         c->march_tex[i] = create_texture_2d_float(w, h, GL_RGBA16F, GL_RGBA, NULL);

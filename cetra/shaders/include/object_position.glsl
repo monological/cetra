@@ -28,8 +28,22 @@
                      // would buy nothing but a startup compile error.
 #include "terrain_morph.glsl" // cetraMorphOffset, the second displacer.
 
+// An app's offset hook (spec 13.29), the third displacer, in a hooked variant only. Its GLSL
+// is spliced in at the marker by the variant builder, into every program that includes this
+// chunk for that hook, and it is handed the vertex at REST and the clock this call was given --
+// so the previous-frame position below runs it one frame back, as it runs wind. The unhooked
+// text is the line it always was: the define is the whole difference, and preprocesses out.
+#ifdef CETRA_OFFSET_HOOK
+struct CetraVertex {
+    vec3 rest;  // object space, before any pose or displacement
+    vec2 uv;    // UV0
+    float time; // seconds; one frame back for the previous position
+};
+// CETRA_OFFSET_HOOK_CHUNK
+#endif
+
 // The object-space position a vertex actually occupies: posed by `bone`, then
-// displaced by wind and by the terrain morph.
+// displaced by wind, by the terrain morph and by an offset hook.
 //
 // The bone matrix is a PARAMETER rather than computed here, because
 // pbr_skinned_vert needs that same matrix for the normal and tangent and would
@@ -37,7 +51,7 @@
 // `skinned` uniform: disabled vertex attributes read as (0,0,0,1), so an
 // unskinned mesh drawn by a skinned program must not take the posed branch.
 //
-// `model` reaches the two displacers for different halves of itself. Wind takes
+// `model` reaches the first two displacers for different halves of itself. Wind takes
 // its TRANSLATION alone, as the per-object phase -- the OBJECT's position and
 // not the vertex's on purpose, since a phase that varied within a mesh would
 // tear it. The morph takes the whole matrix, because its factor is a distance
@@ -55,12 +69,12 @@
 //
 // ANYTHING ADDED HERE NEEDS A BOUND, AND HAS TO REACH ALL FIVE PROGRAMS.
 //
-// draw_list.c's _item_bounds is the CPU mirror of this function -- it bounds the
-// box these displacers can move a vertex into, which is what lets a swaying,
-// posed or morphing mesh be frustum-culled instead of exempted. A fourth
-// displacer compiles fine, bounds nothing, and culls geometry that is on screen;
-// the symptom is a mesh popping at the frame edge, and no golden or gate in the
-// corpus watches for it.
+// draw_list.c's draw_item_bounds is the CPU mirror of this function -- it bounds
+// the box these displacers can move a vertex into, which is what lets a swaying,
+// posed or morphing mesh be frustum-culled instead of exempted; an offset hook
+// declares its own. A displacer added without one compiles fine, bounds nothing,
+// and culls geometry that is on screen; the symptom is a mesh popping at the
+// frame edge, and no golden watches for it.
 //
 // The uniform side is the same requirement seen from the other end, and it is
 // the sharper of the two: this chunk lands in FIVE programs (pbr, pbr_skinned,
@@ -78,20 +92,6 @@
 // inside the `if (skinned)` branch, so the split reads as forced by skinning
 // when it is really forced by one local's scope. Hoisting that declaration makes
 // the two entry points interchangeable.
-// An app's offset hook (spec 13.29), the fourth displacer, in a hooked variant only. Its GLSL
-// is spliced in at the marker by the variant builder, into every program that includes this
-// chunk for that hook, and it is handed the vertex at REST and the clock this call was given --
-// so the previous-frame position below runs it one frame back, as it runs wind. The unhooked
-// text is the line it always was: the define is the whole difference, and preprocesses out.
-#ifdef CETRA_OFFSET_HOOK
-struct CetraVertex {
-    vec3 rest;  // object space, before any pose or displacement
-    vec2 uv;    // UV0
-    float time; // seconds; one frame back for the previous position
-};
-// CETRA_OFFSET_HOOK_CHUNK
-#endif
-
 vec3 cetra_local_displacement(vec3 rest, vec2 uv0, vec2 uv1, float t, mat4 model, vec3 eye) {
 #ifdef CETRA_OFFSET_HOOK
     return windOffset(rest, uv0, uv1, t, model[3].xyz) + cetraMorphOffset(rest, model, eye) +

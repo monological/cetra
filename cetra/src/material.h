@@ -231,7 +231,8 @@ typedef struct Material {
     // with an alpha test (casts) and the shading pass samples the map for it
     // (receives). Default 0 keeps the blanket exclusion documented above,
     // which is what hair cards need. Effective only when the material is
-    // ALPHA_MASK with a positive alphaCutoff and an albedo texture to test.
+    // ALPHA_MASK with a positive alphaCutoff and an alpha to test: an albedo
+    // texture's, or a surface hook's (spec 13.29).
     //
     // An int rather than a bool because it rides MATERIAL_PARAMS, which stores
     // through an offset and knows FLOAT/COLOR/INT/TEXTURE -- an INT row against

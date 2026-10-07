@@ -4,6 +4,7 @@
 #include <stdbool.h>
 
 struct Engine;
+struct ShaderProgram;
 
 /*
  * An app's own GLSL inside the lit surface (spec 13.29): a SURFACE function that decides what
@@ -36,7 +37,9 @@ typedef struct ShaderHookDesc {
     const char* surface; // GLSL defining cetraSurface; NULL leaves the surface the material's
     const char* offset;  // GLSL defining cetraOffset; NULL moves nothing
     float offset_bound;  // metres, the longest offset cetraOffset returns
-    bool animated;       // the offset changes with `time`, so a kept shadow face redraws it
+    // What it decides of a caster changes with `time` -- its offset, or the alpha it cuts a
+    // shadow-casting cutout by -- so a kept shadow face draws it again each frame.
+    bool animated;
 } ShaderHookDesc;
 
 typedef struct ShaderHook {
@@ -48,13 +51,15 @@ typedef struct ShaderHook {
     char* offset;
     float offset_bound;
     bool animated;
+    // The shadow programs carrying it, the engine's: the depth program with its offset and its
+    // alpha, and the absorb program with its offset when it has one. NULL casts as the plain one.
+    struct ShaderProgram* shadow_depth;
+    struct ShaderProgram* shadow_absorb;
 } ShaderHook;
 
-// Copies the desc's sources, test-compiles the hook into the full lit-surface variant, and
-// registers it with the engine, which frees it. NULL, the compiler's message logged, when it
-// does not compile or the desc carries neither function.
+// Copies the desc's sources, test-compiles the hook into the full lit-surface variant, builds its
+// shadow programs, and registers it with the engine, which frees it. NULL, the compiler's message
+// logged, when it does not compile or the desc carries neither function.
 ShaderHook* create_shader_hook(struct Engine* engine, const ShaderHookDesc* desc);
-// For the engine's teardown; an app never frees a hook it made.
-void free_shader_hook(ShaderHook* hook);
 
 #endif // _SHADER_HOOK_H_

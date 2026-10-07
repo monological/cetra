@@ -159,6 +159,52 @@ GLenum gl_transfer_format(GLenum internal_format) {
     }
 }
 
+bool gl_color_fbo_create(int width, int height, GLenum internal_format, GLuint* out_fbo,
+                         GLuint* out_texture) {
+    glGenTextures(1, out_texture);
+    glBindTexture(GL_TEXTURE_2D, *out_texture);
+    glTexImage2D(GL_TEXTURE_2D, 0, (GLint)internal_format, width, height, 0,
+                 gl_transfer_format(internal_format), GL_FLOAT, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    // Clamp so a blur or bloom sampling past the edge does not wrap round the screen
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+    glGenFramebuffers(1, out_fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, *out_fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, *out_texture, 0);
+
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        log_error("colour framebuffer is not complete (%dx%d)", width, height);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        return false;
+    }
+
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    return true;
+}
+
+void gl_color_target_free(GLColorTarget* t) {
+    gl_delete_texture(&t->tex);
+    gl_delete_fbo(&t->fbo);
+    t->w = t->h = 0;
+}
+
+bool gl_color_target_ensure(GLColorTarget* t, int w, int h, const char* what) {
+    if (t->fbo && t->w == w && t->h == h)
+        return true;
+    gl_color_target_free(t);
+    if (w <= 0 || h <= 0 || !gl_color_fbo_create(w, h, GL_RGBA16F, &t->fbo, &t->tex)) {
+        log_error("the %dx%d %s target could not be made", w, h, what);
+        gl_color_target_free(t);
+        return false;
+    }
+    t->w = w;
+    t->h = h;
+    return true;
+}
+
 void print_indentation(int depth) {
     for (int i = 0; i < depth; i++) {
         printf("    ");

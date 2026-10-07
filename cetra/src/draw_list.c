@@ -103,39 +103,50 @@ static void classify(const Mesh* mesh, const Wind* wind, uint8_t* lane, uint8_t*
         mat->alpha_mode == ALPHA_BLEND ||
         (mat->alpha_mode == ALPHA_OPAQUE && (mat->opacity < 1.0f || mat->opacity_tex != NULL));
     bool masked = mat->alpha_mode == ALPHA_MASK;
+
+    // The lane first, since every flag below that depends on the pass asks it. A late-draw
+    // surface is drawn past the temporal seam and lit by nothing (spec 13.29), and a shadow-only
+    // mesh by no camera pass whatever its material: each a lane of its own, which every pass that
+    // should not draw it skips by naming the lanes it does.
+    if (mat->pass == MATERIAL_PASS_LATE_DRAW)
+        *lane = DRAW_LANE_LATE_DRAW;
+    else if (mesh->shadow_role == MESH_SHADOW_ONLY)
+        *lane = DRAW_LANE_SHADOW_ONLY;
+    else
+        *lane =
+            transmissive ? DRAW_LANE_TRANSMISSIVE : (blend ? DRAW_LANE_BLEND : DRAW_LANE_OPAQUE);
+
     // Foliage opts alpha-masked geometry back into casting: leaf cards are
     // centimetres across, so an alpha test resolves them, where hair strands at
     // map-texel scale resolve as streaks or acne either way. The test needs an
     // alpha to read: the albedo map's, or a surface hook's (spec 13.29), which the
     // hooked shadow program runs.
     const ShaderHook* hook = mat->shader_hook;
-    bool hook_alpha = hook && hook->surface;
     bool foliage = masked && mat->foliage_shadows && mat->alphaCutoff > 0.0f &&
-                   (mat->albedo_tex || hook_alpha);
-
-    *lane = transmissive ? DRAW_LANE_TRANSMISSIVE : (blend ? DRAW_LANE_BLEND : DRAW_LANE_OPAQUE);
+                   (mat->albedo_tex || (hook && hook->surface));
+    // A hook's offset moves where the caster is, and its surface's alpha where a foliage caster
+    // is cut: either way a light draws it through the hook's program.
+    bool hooked_caster = hook && (hook->offset || (hook->surface && foliage));
 
     // An occlusion proxy must be geometry light provably cannot pass through
     // and that stays where its import box says: opaque lane (holes in masked or
-    // blended geometry let the background through), unskinned (a pose leaves
-    // the bind box), and undisplaced (morph and wind move the surface AWAY from
-    // a static box -- note draw_item_bounds ADDS those margins for occludees; an
+    // blended geometry let the background through, and a shadow-only or late mesh
+    // is never seen to hide anything), unskinned (a pose leaves the bind box), and
+    // undisplaced (morph, wind and a hook's offset move the surface AWAY from a
+    // static box -- note draw_item_bounds ADDS those margins for occludees; an
     // occluder would have to shrink by them, and a shrunken box of unknowable
     // shape is just "off"). doubleSided is deliberately allowed: a closed
     // double-sided crate occludes fine, and openness is the author's contract,
     // checked by the probe rather than guessed at here.
     bool rigid = !mesh->is_skinned && mesh->morph_max_offset == 0.0f;
-    bool still = rigid && mat->wind_response == 0.0f;
-    // A hook's offset (spec 13.29) moves the surface off the box whether or not it moves with
-    // time, so it rules the mesh out as an occluder; only one that moves makes it a mover.
-    bool hook_offset = hook && hook->offset;
-    bool occluder = mat->occluder && !transmissive && !blend && !masked && still && !hook_offset;
+    bool still = rigid && mat->wind_response == 0.0f && !(hook && hook->offset);
+    bool occluder = mat->occluder && *lane == DRAW_LANE_OPAQUE && !masked && still;
 
     // Still as far as a kept shadow face is concerned (spec 13.26): rigid, and either displaced
-    // by nothing this scene's wind can do, or held at rest by its material -- and not displaced
-    // by a hook whose offset moves with time.
+    // by nothing this scene's wind can do, or held at rest by its material -- and not drawn
+    // through a hook that changes with time.
     bool sways = rigid && mat->wind_response > 0.0f && wind_mesh_max_offset(wind, mesh) > 0.0f;
-    bool kept_still = rigid && !(hook_offset && hook->animated) &&
+    bool kept_still = rigid && !(hooked_caster && hook->animated) &&
                       (!sways || mat->cached_shadow_wind == CACHED_SHADOW_WIND_REST);
 
     *flags = 0;
@@ -149,23 +160,10 @@ static void classify(const Mesh* mesh, const Wind* wind, uint8_t* lane, uint8_t*
         *flags |= DRAW_DOUBLE_SIDED;
     if (occluder)
         *flags |= DRAW_OCCLUDER;
-
-    // A late-draw surface is drawn past the temporal seam and lit by nothing (spec 13.29): a lane
-    // every scene pass skips by naming the lanes it draws, and nothing a light's shadow takes.
-    if (mat->pass == MATERIAL_PASS_LATE_DRAW) {
-        *lane = DRAW_LANE_LATE_DRAW;
-        *flags = (uint8_t)((*flags & ~DRAW_OCCLUDER) | DRAW_NO_CAST);
-    }
-
-    // A shadow-only mesh is drawn by no camera pass whatever its material, so it gets a lane of
-    // its own, which every camera pass already skips by naming the lanes it draws. It is not an
-    // occluder either: the camera never sees it to be hidden behind.
-    if (mesh->shadow_role == MESH_SHADOW_ONLY) {
-        *lane = DRAW_LANE_SHADOW_ONLY;
-        *flags &= (uint8_t)~DRAW_OCCLUDER;
-    } else if (mesh->shadow_role == MESH_SHADOW_NONE) {
+    if (mesh->shadow_role == MESH_SHADOW_NONE)
         *flags |= DRAW_NO_CAST;
-    }
+    if (hooked_caster)
+        *flags |= DRAW_HOOKED_CASTER;
 }
 
 // Projected size at which a level gives way to the next, as the ratio of a
@@ -217,6 +215,13 @@ static void item_world_bounds(const Mesh* mesh, const SceneNode* node, vec3 out_
         glm_vec3_sub(world_max, world_min, extent);
         *out_radius = glm_vec3_norm(extent) * 0.5f;
     }
+}
+
+float draw_item_view_depth(const DrawItem* item, const mat4 view) {
+    vec3 centre = {0.0f, 0.0f, 0.0f}, eye = {0.0f, 0.0f, 0.0f};
+    item_world_bounds(item->mesh, item->node, centre, NULL);
+    glm_mat4_mulv3((vec4*)view, centre, 1.0f, eye);
+    return -eye[2];
 }
 
 // Level for this item, from its own bounds. Zero whenever the chain is absent
@@ -277,10 +282,21 @@ static const char* _refusal(const Mesh* mesh, const Scene* scene, const Animatio
     // Each half of a late surface without the other draws garbage that still looks like a frame:
     // a scene pass's uniforms into a vertex stage that ignores them, or a G-buffer program onto
     // a canvas with no G-buffer.
-    if (mesh->material->pass == MATERIAL_PASS_LATE_DRAW && !program->late_surface)
+    const Material* mat = mesh->material;
+    if (mat->pass == MATERIAL_PASS_LATE_DRAW && !program->late_surface)
         return "late-draw material without a create_late_surface_program";
-    if (mesh->material->pass != MATERIAL_PASS_LATE_DRAW && program->late_surface)
+    if (mat->pass != MATERIAL_PASS_LATE_DRAW && program->late_surface)
         return "late surface program on a material not drawn in the late draw";
+    // The late draw's vertex stage places a vertex by its model matrix alone, so a late surface
+    // on a mesh that skins or sways would be drawn at rest while the bounds and the scene around
+    // it moved; and one on a shadow-only mesh would be the only thing a camera saw of it.
+    if (mat->pass == MATERIAL_PASS_LATE_DRAW &&
+        (mesh->is_skinned || mat->wind_response > 0.0f || mesh->shadow_role == MESH_SHADOW_ONLY))
+        return "late surface on a mesh that skins, sways in the wind or is shadow-only";
+    // A hook is spliced into lit-surface variants only (spec 13.29). On any other program the
+    // surface would ignore it while its bounds, its shadow and its cached faces did not.
+    if (mat->shader_hook && program->pbr_features < 0)
+        return "surface hook on a material whose program is not a lit-surface variant";
     // Another rig's matrices would be uploaded for this mesh, which skins it
     // into garbage that still looks like a frame.
     //

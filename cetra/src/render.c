@@ -508,9 +508,6 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
             uniform_set_mat4(u, "uPrevViewProj", (const float*)engine->prev_view_proj);
             engine_upload_displacement_uniforms(engine, scene, u);
             uniform_set_int(u, "renderMode", render_mode);
-            // A surface hook's frame index (spec 13.29). Wrapped at 2^24: uniform_set_int
-            // compares through a float, exact below that.
-            uniform_set_int(u, "frame", (int)(engine->total_frames & 0xFFFFFF));
             uniform_set_float(u, "specularAAStrength", engine->specular_aa_strength);
             uniform_set_int(u, "energyCompEnabled", engine->energy_comp_enabled ? 1 : 0);
             uniform_set_int(u, "clearcoatEnabled", engine->clearcoat_enabled ? 1 : 0);
@@ -912,24 +909,12 @@ void engine_resolve_material_variants(Engine* engine, Scene* scene) {
         // skinned vertex stage, and the mask means the same thing in both.
         ShaderProgram* variant =
             engine_pbr_variant(engine, mat->shader_program->pbr_family, want, mat->shader_hook);
-        // Keep the material where it is on failure. The full variant always
-        // exists, so the surface stays lit rather than turning black -- the
-        // subtractive polarity paying off at the one place it matters. A hook
-        // that does not compile at this mask is dropped from the material, by
-        // name, so the failure is said once rather than every frame.
-        if (!variant) {
-            if (mat->shader_hook) {
-                log_error("material '%s': its surface hook does not compile at features %u; "
-                          "drawn without it",
-                          mat->name ? mat->name : "?", want);
-                mat->shader_hook = NULL;
-            } else {
-                log_error("PBR variant %u failed to build; material stays on %s", want,
-                          mat->shader_program->name);
-            }
-            continue;
-        }
-        mat->shader_program = variant;
+        // Keep the material where it is on failure, which engine_pbr_variant has
+        // said once. The full variant always exists, so the surface stays lit
+        // rather than turning black -- the subtractive polarity paying off at the
+        // one place it matters.
+        if (variant)
+            mat->shader_program = variant;
     }
 }
 
@@ -2588,16 +2573,27 @@ bool render_has_late_items(const Scene* scene) {
            scene->draw_list->lane_count[DRAW_LANE_LATE_DRAW] > 0;
 }
 
-// A late item and how far it is from the eye, for the back-to-front order.
+// A late item, how far it is from the eye, and where it stands in the list, for the back-to-front
+// order: two at one depth keep the scene graph's order rather than whatever the sort leaves them
+// in.
 typedef struct LateItem {
     const DrawItem* item;
     float depth;
+    size_t index;
 } LateItem;
 
 static int _late_farther_first(const void* a, const void* b) {
-    const float da = ((const LateItem*)a)->depth, db = ((const LateItem*)b)->depth;
-    return (da < db) - (da > db);
+    const LateItem* x = a;
+    const LateItem* y = b;
+    if (x->depth != y->depth)
+        return x->depth < y->depth ? 1 : -1;
+    return (x->index > y->index) - (x->index < y->index);
 }
+
+// The late draw's own samplers, past the material's units: a late surface reads its albedo and its
+// emission on the units the lit surface does.
+#define LATE_DEPTH_UNIT TEXUNIT_MATERIAL_MAX
+#define LATE_FOG_UNIT   (TEXUNIT_MATERIAL_MAX + 1)
 
 void render_late_items(Engine* engine, const Scene* scene, const PostFXLateDraw* late) {
     if (!engine || !late || !render_has_late_items(scene))
@@ -2609,78 +2605,61 @@ void render_late_items(Engine* engine, const Scene* scene, const PostFXLateDraw*
         log_error("render_late_items: no memory to order %zu late surfaces", n);
         return;
     }
-    // Farthest first, by the centre of each item's box, so one laid over another composites in
-    // order: the blend is premultiplied, which is order-dependent wherever alpha is not zero.
+    // Farthest first, so one laid over another composites in order: the blend is premultiplied,
+    // which is order-dependent wherever alpha is not zero.
     size_t count = 0;
     for (size_t i = 0; i < list->count && count < n; ++i) {
         const DrawItem* item = &list->items[i];
-        if (item->lane != DRAW_LANE_LATE_DRAW)
-            continue;
-        vec3 centre = {0.0f, 0.0f, 0.0f};
-        glm_vec3_center(item->mesh->aabb.min, item->mesh->aabb.max, centre);
-        vec4 world = {centre[0], centre[1], centre[2], 1.0f}, eye;
-        glm_mat4_mulv(item->node->global_transform, world, world);
-        glm_mat4_mulv(engine->view_matrix, world, eye);
-        order[count++] = (LateItem){item, -eye[2]};
+        if (item->lane == DRAW_LANE_LATE_DRAW)
+            order[count++] = (LateItem){item, draw_item_view_depth(item, engine->view_matrix), i};
     }
     qsort(order, count, sizeof(LateItem), _late_farther_first);
 
     profiler_scope_begin(engine->profiler, "late surfaces");
+    SubmitStats* stats = profiler_submit(engine->profiler);
     const GLPassState pass = gl_pass_begin();
     glEnable(GL_BLEND);
     glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
-    const float viewport[2] = {(float)late->width, (float)late->height};
+    // submit_draw_run turns culling off for a two-sided item and expects it on otherwise.
+    glEnable(GL_CULL_FACE);
+    glCullFace(GL_BACK);
+    SubmitState state = {0};
     for (size_t k = 0; k < count; ++k) {
         const DrawItem* item = order[k].item;
-        const Mesh* mesh = item->mesh;
-        const Material* mat = mesh->material;
-        const ShaderProgram* program = mat->shader_program;
-        UniformManager* u = program->uniforms;
-        glUseProgram(program->id);
+        Material* mat = item->mesh->material;
+        UniformManager* u = mat->shader_program->uniforms;
+        // What every late surface shares this frame, as each program first draws.
+        if (submit_use_program(&state, mat->shader_program->id)) {
+            uniform_set_mat4(u, "view", (const float*)engine->view_matrix);
+            uniform_set_mat4(u, "projection", (const float*)engine->projection_matrix);
+            shader_clock_upload(u, (float)engine->render_time, engine->total_frames);
+            postfx_late_draw_bind(late, u, LATE_DEPTH_UNIT, LATE_FOG_UNIT);
+        }
+        // The material, under the lit surface's names.
+        if (submit_take_material(&state, mat)) {
+            uniform_set_vec3(u, "albedo", (const float*)mat->albedo);
+            vec3 emissive = {0.0f, 0.0f, 0.0f};
+            material_emissive_factor(mat, emissive);
+            uniform_set_vec3(u, "emissiveFactor", emissive);
+            glActiveTexture(GL_TEXTURE0 + TEXUNIT_ALBEDO);
+            glBindTexture(GL_TEXTURE_2D, mat->albedo_tex ? mat->albedo_tex->id : 0);
+            uniform_set_int(u, "albedoTex", TEXUNIT_ALBEDO);
+            uniform_set_int(u, "albedoTexExists", mat->albedo_tex ? 1 : 0);
+            glActiveTexture(GL_TEXTURE0 + TEXUNIT_EMISSIVE);
+            glBindTexture(GL_TEXTURE_2D, mat->emissive_tex ? mat->emissive_tex->id : 0);
+            uniform_set_int(u, "emissiveTex", TEXUNIT_EMISSIVE);
+            uniform_set_int(u, "emissiveTexExists", mat->emissive_tex ? 1 : 0);
+            shader_params_upload(&mat->shader_params, u);
+        }
         uniform_set_mat4(u, "model", (const float*)item->node->global_transform);
         uniform_set_mat3(u, "uNormalMatrix", (const float*)item->node->normal_matrix);
-        uniform_set_mat4(u, "view", (const float*)engine->view_matrix);
-        uniform_set_mat4(u, "projection", (const float*)engine->projection_matrix);
-        uniform_set_vec2(u, "viewport", viewport);
-        uniform_set_float(u, "time", (float)engine->render_time);
-        // Wrapped at 2^24: uniform_set_int compares through a float, exact below that.
-        uniform_set_int(u, "frame", (int)(engine->total_frames & 0xFFFFFF));
-        uniform_set_vec3(u, "materialAlbedo", (float*)mat->albedo);
-        vec3 emissive = {0.0f, 0.0f, 0.0f};
-        material_emissive_factor(mat, emissive);
-        uniform_set_vec3(u, "materialEmissive", emissive);
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, mat->albedo_tex ? mat->albedo_tex->id : 0);
-        uniform_set_int(u, "albedoTex", 0);
-        uniform_set_int(u, "albedoTexExists", mat->albedo_tex ? 1 : 0);
-        glActiveTexture(GL_TEXTURE1);
-        glBindTexture(GL_TEXTURE_2D, mat->emissive_tex ? mat->emissive_tex->id : 0);
-        uniform_set_int(u, "emissiveTex", 1);
-        uniform_set_int(u, "emissiveTexExists", mat->emissive_tex ? 1 : 0);
-        glActiveTexture(GL_TEXTURE2);
-        glBindTexture(GL_TEXTURE_2D, late->scene_depth);
-        uniform_set_int(u, "sceneDepth", 2);
-        glActiveTexture(GL_TEXTURE3);
-        glBindTexture(GL_TEXTURE_3D, late->fog_volume);
-        uniform_set_int(u, "fogVolume", 3);
-        uniform_set_int(u, "fogSlices", late->fog_slices);
-        uniform_set_float(u, "fogNear", late->fog_near);
-        uniform_set_float(u, "fogFar", late->fog_far);
-        uniform_set_float(u, "fogDepthDist", late->fog_depth_dist);
-        shader_params_upload(&mat->shader_params, u);
-
-        if (item->flags & DRAW_DOUBLE_SIDED)
-            glDisable(GL_CULL_FACE);
-        else
-            glEnable(GL_CULL_FACE);
-        GLsizei index_count;
-        const void* index_offset;
-        mesh_lod_range(mesh, item->lod, &index_count, &index_offset);
-        glBindVertexArray(mesh->vao);
-        glDrawElements(mesh->draw_mode, index_count, GL_UNSIGNED_INT, index_offset);
+        uniform_set_int(u, "vertexColorExists", item->mesh->colors ? 1 : 0);
+        submit_draw_run(&state, u, item, 1, (item->flags & DRAW_DOUBLE_SIDED) != 0, stats);
     }
     glBindVertexArray(0);
+    glActiveTexture(GL_TEXTURE0 + LATE_FOG_UNIT);
     glBindTexture(GL_TEXTURE_3D, 0);
+    glActiveTexture(GL_TEXTURE0);
     glUseProgram(0);
     gl_pass_end(&pass);
     free(order);

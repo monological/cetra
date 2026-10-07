@@ -348,6 +348,9 @@ typedef struct Engine {
     // Every surface hook an app made (spec 13.29), freed with the engine after its programs.
     struct ShaderHook** shader_hooks;
     size_t shader_hook_count;
+    // The names of lit-surface variants that did not build, so each is tried and said once.
+    char** failed_variants;
+    size_t failed_variant_count;
 
     Material** materials;  // Global materials used across meshes
     size_t material_count; // Count of global materials

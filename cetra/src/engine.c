@@ -394,6 +394,9 @@ void free_engine(Engine* engine) {
     for (size_t i = 0; i < engine->shader_hook_count; ++i)
         free_shader_hook(engine->shader_hooks[i]);
     free(engine->shader_hooks);
+    for (size_t i = 0; i < engine->failed_variant_count; ++i)
+        free(engine->failed_variants[i]);
+    free(engine->failed_variants);
 
     if (engine->camera) {
         free_camera(engine->camera);
@@ -2041,6 +2044,18 @@ void engine_add_program(Engine* engine, ShaderProgram* program) {
     }
 }
 
+bool engine_add_shader_hook(Engine* engine, ShaderHook* hook) {
+    ShaderHook** grown =
+        realloc(engine->shader_hooks, (engine->shader_hook_count + 1) * sizeof(ShaderHook*));
+    if (!grown) {
+        log_error("engine_add_shader_hook: no memory to hold '%s'", hook->name);
+        return false;
+    }
+    engine->shader_hooks = grown;
+    engine->shader_hooks[engine->shader_hook_count++] = hook;
+    return true;
+}
+
 ShaderProgram* engine_find_program(Engine* engine, const char* program_name) {
     if (!engine || !program_name)
         return NULL;
@@ -2071,12 +2086,28 @@ ShaderProgram* engine_pbr_variant(Engine* engine, PbrFamily family, unsigned fea
     ShaderProgram* program = engine_find_program(engine, name);
     if (program)
         return program;
+    for (size_t i = 0; i < engine->failed_variant_count; ++i) {
+        if (strcmp(engine->failed_variants[i], name) == 0)
+            return NULL;
+    }
 
     program = create_pbr_program_variant(family, features, hook);
-    if (!program)
-        return NULL;
-    engine_add_program(engine, program);
-    return program;
+    if (program) {
+        engine_add_program(engine, program);
+        return program;
+    }
+    // Said once, here, where the name is: a resolver asks every frame, and a variant that did
+    // not build will not build next frame either.
+    log_error("lit-surface variant %s%s%s%s does not build; materials that want it stay on the "
+              "programs they have",
+              name, hook ? " (surface hook '" : "", hook ? hook->name : "", hook ? "')" : "");
+    char** grown =
+        realloc(engine->failed_variants, (engine->failed_variant_count + 1) * sizeof(char*));
+    if (grown) {
+        engine->failed_variants = grown;
+        engine->failed_variants[engine->failed_variant_count++] = safe_strdup(name);
+    }
+    return NULL;
 }
 
 Engine* create_engine(const EngineConfig* cfg) {
@@ -2341,12 +2372,11 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode) {
         .oit_moment_atlas = engine->moments_this_frame ? engine->moment_atlas_texture : 0,
         .oit_near_far = {engine->camera ? engine->camera->near_clip : 1.0f,
                          engine->camera ? engine->camera->far_clip : 2.0f}};
-    // The picture -- the frame, the debug tiles and the app's overlay -- goes into the CRT's
-    // framebuffer when one is on (spec 13.28), and into the window when not.
-    const GLuint picture = postfx_picture_fbo(engine->postfx);
-    postfx_run(engine->postfx, engine->framebuffer, picture, frame_mode == RENDER_MODE_PBR, &writes,
+    postfx_run(engine->postfx, engine->framebuffer, frame_mode == RENDER_MODE_PBR, &writes,
                engine->draw_projection, engine->view_matrix);
-    glBindFramebuffer(GL_FRAMEBUFFER, picture);
+    // Everything up to the overlay draws over the frame where postfx_run drew it: the window, or
+    // the picture that postfx_present_picture shows after them.
+    glBindFramebuffer(GL_FRAMEBUFFER, postfx_picture_fbo(engine->postfx));
 
     // Sky LUT debug overlay onto the composited frame (an acceptance tool,
     // the csm_debug shape: a library-side flag the app/GUI toggles)
@@ -2373,9 +2403,9 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode) {
         profiler_scope_end(engine->profiler);
     }
 
-    // Through the CRT into the window, if the picture went into it; the GUI is the developer's
-    // and goes over the television, sharp.
-    postfx_present_picture(engine->postfx, picture);
+    // The picture into the window, if it went into one; the GUI is the developer's and goes over
+    // the television, sharp.
+    postfx_present_picture(engine->postfx);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
     // GUI last, after tone mapping. gui_render_frame self-gates on
@@ -2832,7 +2862,11 @@ void engine_upload_displacement_uniforms(const Engine* engine, const Scene* scen
     // a wall-clock delta reports wind motion on geometry that never moved. The
     // depth-only programs declare neither; uniform_set_* caches the negative
     // lookup, so naming them there costs one hash miss each.
-    uniform_set_float(u, "time", engine ? (float)engine->render_time : 0.0f);
+    //
+    // The frame index rides with the clock for a surface hook (spec 13.29), which runs in the
+    // shading pass and the shadow passes alike.
+    shader_clock_upload(u, engine ? (float)engine->render_time : 0.0f,
+                        engine ? engine->total_frames : 0);
     uniform_set_float(u, "uDeltaTime", engine ? (float)engine->render_delta : 0.0f);
 
     wind_upload_to_program(scene ? scene->wind : NULL,

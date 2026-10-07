@@ -21,6 +21,11 @@
 ShaderProgram* engine_pbr_variant(Engine* engine, PbrFamily family, unsigned features,
                                   const struct ShaderHook* hook);
 
+// Take ownership of a surface hook (spec 13.29), freed with the engine by free_shader_hook. False,
+// logged, when there is no memory to hold it, and the hook is still the caller's.
+bool engine_add_shader_hook(Engine* engine, struct ShaderHook* hook);
+void free_shader_hook(struct ShaderHook* hook);
+
 /*
  * Every uniform object_position.glsl's displacers read, in one call.
  *

@@ -68,6 +68,21 @@ void gl_delete_texture(GLuint* tex);
 // once rather than remembered twice.
 GLenum gl_transfer_format(GLenum internal_format);
 
+// A single-sample colour-only framebuffer over a new linear, edge-clamped texture. False, logged,
+// when it is incomplete; the handles are set either way, so the caller's free path takes them.
+bool gl_color_fbo_create(int width, int height, GLenum internal_format, GLuint* out_fbo,
+                         GLuint* out_texture);
+
+// An RGBA16F colour target kept between frames and remade only when its size changes: the post
+// chain's picture and the scratch a pass draws into before copying it back, or the CRT's signal.
+typedef struct GLColorTarget {
+    GLuint fbo, tex;
+    int w, h;
+} GLColorTarget;
+// `t` at `w` by `h`. False, reported by `what`, when it cannot be made, and `t` is then empty.
+bool gl_color_target_ensure(GLColorTarget* t, int w, int h, const char* what);
+void gl_color_target_free(GLColorTarget* t);
+
 /*
  * String
  */

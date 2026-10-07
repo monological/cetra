@@ -18,39 +18,6 @@
 // Fullscreen post-pass program helper (defined with the postfx constructors)
 static ShaderProgram* create_post_program(const char* name, const char* frag_src);
 
-bool shader_params_set(ShaderParams* params, const char* name, const vec4 value) {
-    if (!params || !name || !*name) {
-        log_error("shader_params_set: NULL params or an empty name");
-        return false;
-    }
-    if (strlen(name) >= SHADER_PARAM_NAME) {
-        log_error("shader param name '%s' is longer than %d characters", name,
-                  SHADER_PARAM_NAME - 1);
-        return false;
-    }
-    for (int i = 0; i < params->count; i++) {
-        if (strcmp(params->list[i].name, name) == 0) {
-            glm_vec4_copy((float*)value, params->list[i].value);
-            return true;
-        }
-    }
-    if (params->count >= SHADER_PARAM_MAX) {
-        log_error("no room for shader param '%s': %d are already held", name, SHADER_PARAM_MAX);
-        return false;
-    }
-    ShaderParam* p = &params->list[params->count++];
-    snprintf(p->name, sizeof(p->name), "%s", name);
-    glm_vec4_copy((float*)value, p->value);
-    return true;
-}
-
-void shader_params_upload(const ShaderParams* params, UniformManager* uniforms) {
-    if (!params || !uniforms)
-        return;
-    for (int i = 0; i < params->count; i++)
-        uniform_set_vec4(uniforms, params->list[i].name, params->list[i].value);
-}
-
 ShaderProgram* create_program(const char* name) {
     ShaderProgram* program = calloc(1, sizeof(ShaderProgram));
     if (!program) {
@@ -585,25 +552,58 @@ bool program_accepts_draw_mode(const ShaderProgram* program, GLenum draw_mode) {
     }
 }
 
-// Build the variant carrying exactly `features`. Static: every caller goes
-// through engine_pbr_variant below, so the name is formatted in one place and is
-// only ever a cache key.
-// The line in pbr_frag where a surface hook's GLSL goes (spec 13.29): after every declaration the
-// hook may name, before main().
+// The line in pbr_frag and shadow_depth_frag where a surface hook's GLSL goes (spec 13.29): after
+// every declaration the hook may name, before main().
 #define PBR_SURFACE_HOOK_MARKER "// CETRA_SURFACE_HOOK_CHUNK"
 // And in object_position.glsl, where an offset hook's goes, in every stage that includes it.
 #define PBR_OFFSET_HOOK_MARKER "// CETRA_OFFSET_HOOK_CHUNK"
 
-// `*source` with `chunk` spliced at `marker`, the old source freed. False, logged, on a failure.
-static bool _splice_hook(char** source, const char* marker, const char* chunk) {
-    char* spliced = shader_source_splice(*source, marker, chunk);
-    free(*source);
-    *source = spliced;
-    return spliced != NULL;
+// The parts of a hook a stage may take.
+enum { HOOK_PART_SURFACE = 1u, HOOK_PART_OFFSET = 2u };
+
+static unsigned _hook_parts(const ShaderHook* hook) {
+    return !hook
+               ? 0u
+               : (hook->surface ? HOOK_PART_SURFACE : 0u) | (hook->offset ? HOOK_PART_OFFSET : 0u);
 }
 
-static ShaderProgram* _create_pbr_variant(const char* name, PbrFamily family, unsigned features,
-                                          const struct ShaderHook* hook) {
+// `base` with `defines`, then the define of each hook part in `defined`, then the source of each
+// part in `spliced` at its marker. A stage holding a part's marker tests that part's define there,
+// so it takes the source exactly when it takes the define; the one stage that takes a define
+// alone is the shadow vertex stage, where the surface's define declares the world position its
+// alpha reads, and that stage has no surface marker. NULL, logged, on a failure.
+static char* _hooked_stage(const char* base, const char* defines, const ShaderHook* hook,
+                           unsigned defined, unsigned spliced) {
+    char all[160];
+    snprintf(all, sizeof(all), "%s%s%s", defines ? defines : "",
+             (defined & HOOK_PART_SURFACE) ? "#define CETRA_SURFACE_HOOK 1\n" : "",
+             (defined & HOOK_PART_OFFSET) ? "#define CETRA_OFFSET_HOOK 1\n" : "");
+    char* source = shader_source_with_defines(base, all);
+    const struct {
+        unsigned part;
+        const char* marker;
+        const char* chunk;
+    } splices[] = {
+        {HOOK_PART_SURFACE, PBR_SURFACE_HOOK_MARKER, hook ? hook->surface : NULL},
+        {HOOK_PART_OFFSET, PBR_OFFSET_HOOK_MARKER, hook ? hook->offset : NULL},
+    };
+    for (size_t i = 0; source && i < sizeof(splices) / sizeof(splices[0]); i++) {
+        if (!(spliced & splices[i].part))
+            continue;
+        char* with = shader_source_splice(source, splices[i].marker, splices[i].chunk);
+        free(source);
+        source = with;
+    }
+    if (!source && hook)
+        log_error("shader hook '%s' could not be put into a stage", hook->name);
+    return source;
+}
+
+// Both stages of the variant carrying exactly `features`, `hook`'s parts each in the stage it
+// belongs to: the offset where the position is made, the surface where it is shaded. False, both
+// NULL, on a failure.
+static bool _pbr_variant_sources(PbrFamily family, unsigned features, const ShaderHook* hook,
+                                 char** vert, char** frag) {
     // ONE line, carrying the mask itself. The bits are shared with the shader
     // through pbr_features.glsl, so this cannot drift from what the gates test
     // -- where emitting a set of macro NAMES could, silently and invisibly.
@@ -617,37 +617,51 @@ static ShaderProgram* _create_pbr_variant(const char* name, PbrFamily family, un
     // A surface hook is NOT a bit of the mask, and cannot be (spec 13.29): a bit
     // switches off code the shader already holds, where a hook brings code in.
     // Defaulted on in the uber-shader it would call a function nobody supplied.
-    // So it is a define of its own that arrives in the same string as its source,
-    // from this one function -- which cannot hand the shader one without the other.
-    // The mask into both stages, a hook's halves each into the stage it belongs to: the offset
-    // runs where the position is made, the surface where it is shaded.
-    char frag_defines[128], vert_defines[128];
-    snprintf(frag_defines, sizeof(frag_defines), "#define CETRA_PBR_FEATURES %u\n%s", features,
-             hook && hook->surface ? "#define CETRA_SURFACE_HOOK 1\n" : "");
-    snprintf(vert_defines, sizeof(vert_defines), "#define CETRA_PBR_FEATURES %u\n%s", features,
-             hook && hook->offset ? "#define CETRA_OFFSET_HOOK 1\n" : "");
-
+    // So its define arrives with its source, from _hooked_stage.
+    char mask[48];
+    snprintf(mask, sizeof(mask), "#define CETRA_PBR_FEATURES %u\n", features);
+    const unsigned parts = _hook_parts(hook);
     // The families differ in the VERTEX stage and nowhere else: same pbr_frag,
     // same mask, same gates. That is what makes a second family an argument here
     // rather than a second copy of the feature system.
-    // Into BOTH stages: the fur bit gates vertex code too, and a vertex stage that never saw the
-    // mask would default it to the full set and carry that code into every variant.
-    char* vert = shader_source_with_defines(
-        family == PBR_FAMILY_SKINNED ? pbr_skinned_vert_shader_str : pbr_vert_shader_str,
-        vert_defines);
-    char* frag = shader_source_with_defines(pbr_frag_shader_str, frag_defines);
-    bool spliced = true;
-    if (vert && frag && hook && hook->surface)
-        spliced = _splice_hook(&frag, PBR_SURFACE_HOOK_MARKER, hook->surface);
-    if (spliced && vert && frag && hook && hook->offset)
-        spliced = _splice_hook(&vert, PBR_OFFSET_HOOK_MARKER, hook->offset);
-    if (!spliced)
-        log_error("PBR variant %s: hook '%s' could not be spliced", name, hook->name);
-    if (!spliced || !vert || !frag) {
-        free(vert);
-        free(frag);
-        return NULL;
+    // The mask into BOTH stages: the fur bit gates vertex code too, and a vertex stage that never
+    // saw the mask would default it to the full set and carry that code into every variant.
+    *vert = _hooked_stage(family == PBR_FAMILY_SKINNED ? pbr_skinned_vert_shader_str
+                                                       : pbr_vert_shader_str,
+                          mask, hook, parts & HOOK_PART_OFFSET, parts & HOOK_PART_OFFSET);
+    *frag = _hooked_stage(pbr_frag_shader_str, mask, hook, parts & HOOK_PART_SURFACE,
+                          parts & HOOK_PART_SURFACE);
+    if (*vert && *frag)
+        return true;
+    free(*vert);
+    free(*frag);
+    *vert = *frag = NULL;
+    return false;
+}
+
+bool pbr_hook_compiles(const ShaderHook* hook) {
+    char *vert, *frag;
+    if (!_pbr_variant_sources(PBR_FAMILY_RIGID, PBR_FEAT_ALL, hook, &vert, &frag))
+        return false;
+    Shader* stages[] = {create_shader(VERTEX_SHADER, vert), create_shader(FRAGMENT_SHADER, frag)};
+    bool ok = true;
+    for (size_t i = 0; i < 2; i++) {
+        ok = ok && stages[i] && compile_shader(stages[i]);
+        free_shader(stages[i]);
     }
+    free(vert);
+    free(frag);
+    return ok;
+}
+
+// Build the variant carrying exactly `features`. Static: every caller goes
+// through engine_pbr_variant below, so the name is formatted in one place and is
+// only ever a cache key.
+static ShaderProgram* _create_pbr_variant(const char* name, PbrFamily family, unsigned features,
+                                          const struct ShaderHook* hook) {
+    char *vert, *frag;
+    if (!_pbr_variant_sources(family, features, hook, &vert, &frag))
+        return NULL;
     ShaderProgram* program = create_program_from_source(name, vert, frag, NULL);
     free(vert);
     free(frag);
@@ -915,32 +929,24 @@ ShaderProgram* create_shadow_hook_program(const struct ShaderHook* hook, bool ab
         return NULL;
     // The offset into the vertex stage the two shadow programs share; the surface's alpha into
     // the depth program only, since the absorb program's coverage is a translucency rather than
-    // a cut.
-    const bool surface = !absorb && hook->surface;
-    // The surface define reaches the vertex stage as well, which hands the hook its world
+    // a cut. The surface define reaches the vertex stage as well, which hands the hook its world
     // position: a varying one stage declares and the other does not fails the link.
-    char vert_defines[96], frag_defines[64];
-    snprintf(vert_defines, sizeof(vert_defines), "%s%s",
-             hook->offset ? "#define CETRA_OFFSET_HOOK 1\n" : "",
-             surface ? "#define CETRA_SURFACE_HOOK 1\n" : "");
-    snprintf(frag_defines, sizeof(frag_defines), "%s",
-             surface ? "#define CETRA_SURFACE_HOOK 1\n" : "");
-    char* vert = shader_source_with_defines(shadow_depth_vert_shader_str, vert_defines);
-    char* frag = shader_source_with_defines(
-        absorb ? shadow_absorb_frag_shader_str : shadow_depth_frag_shader_str, frag_defines);
-    bool spliced = true;
-    if (vert && frag && hook->offset)
-        spliced = _splice_hook(&vert, PBR_OFFSET_HOOK_MARKER, hook->offset);
-    if (spliced && vert && frag && surface)
-        spliced = _splice_hook(&frag, PBR_SURFACE_HOOK_MARKER, hook->surface);
+    const unsigned parts = _hook_parts(hook);
+    const unsigned cut = absorb ? 0u : parts & HOOK_PART_SURFACE;
+    char* vert = _hooked_stage(shadow_depth_vert_shader_str, NULL, hook,
+                               (parts & HOOK_PART_OFFSET) | cut, parts & HOOK_PART_OFFSET);
+    char* frag =
+        _hooked_stage(absorb ? shadow_absorb_frag_shader_str : shadow_depth_frag_shader_str, NULL,
+                      hook, cut, cut);
     char name[PBR_VARIANT_NAME_MAX];
     snprintf(name, sizeof(name), "%s-h%u", absorb ? "shadow_absorb" : "shadow_depth", hook->id);
     ShaderProgram* program =
-        spliced && vert && frag ? create_program_from_source(name, vert, frag, NULL) : NULL;
+        vert && frag ? create_program_from_source(name, vert, frag, NULL) : NULL;
     free(vert);
     free(frag);
     if (!program)
-        log_error("shader hook '%s': its %s program does not build", hook->name, name);
+        log_error("shader hook '%s': its %s program does not build, so it casts as the plain one",
+                  hook->name, name);
     return program;
 }
 

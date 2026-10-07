@@ -31,18 +31,16 @@ typedef struct {
 // other path is untouched.
 char* shader_source_with_defines(const char* source, const char* defines);
 
-// `source` with every `#include "x.glsl"` line expanded from the engine's shared chunks
-// (shaders/include/), each chunk once, nested ones too. Caller owns the result; NULL, logged,
-// when a line names no chunk or is malformed. create_shader runs every source through it, so an
-// app's shader or one a scene file names may include what the engine's own shaders do.
-char* shader_source_with_includes(const char* source);
-
-// `host` with the line beginning `marker` replaced by `chunk`, an app's GLSL (spec 13.29). The
-// chunk's includes are expanded against what the host already holds, and it is numbered as
-// source string 1, so a compile error inside it names its own line as "1:<line>". Caller owns
-// the result; NULL, logged, when the host has no such line or an include fails.
+// `host` with the line beginning `marker` replaced by `chunk`, an app's GLSL (spec 13.29), numbered
+// as source string 1, so a compile error inside it names its own line as "1:<line>". Its
+// #includes are left for create_shader. Caller owns the result; NULL, logged, when the host has no
+// such line.
 char* shader_source_splice(const char* host, const char* marker, const char* chunk);
 
+// A shader object for `source`, every `#include "x.glsl"` line in it expanded from the engine's
+// shared chunks (shaders/include/), each chunk once, nested ones too -- so an app's shader, or one
+// a scene file names, may include what the engine's own shaders do. NULL, logged, when an include
+// names no chunk or is malformed.
 Shader* create_shader(ShaderType type, const char* source);
 Shader* create_shader_from_path(ShaderType type, const char* file_path);
 void free_shader(Shader* shader);

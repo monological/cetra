@@ -1,10 +1,13 @@
+import io
 import os
 import argparse
 import re
 
 # Shared shader chunks live here and are pulled in with #include "name.glsl".
 # They are expanded at build time, into the same string literals the engine has
-# always compiled from -- nothing reads .glsl at runtime.
+# always compiled from. The chunks are also emitted unexpanded, as a table, for
+# the runtime resolver an app's shader goes through (--includes-out); no file is
+# read at runtime either way.
 INCLUDE_DIR = 'include'
 
 INCLUDE_RE = re.compile(r'^\s*#include\s+"([^"]+)"\s*(?://.*)?$')
@@ -19,7 +22,7 @@ def expand_includes(lines, include_dir, seen):
     The begin/end markers are real lines in the compiled source, so a driver
     error inside a chunk lands between two self-describing comments. That is
     deliberately all the traceability there is: #line directives were tried and
-    removed -- see the note above the blank-line handling in shader_to_string.
+    removed -- see the note above the blank-line handling in lines_to_c.
     """
     out = []
     for line in lines:
@@ -115,6 +118,23 @@ def guard_for(output_file):
     stem = os.path.splitext(os.path.basename(output_file))[0]
     return re.sub(r'[^A-Za-z0-9]', '_', stem).upper() + "_H"
 
+def write_if_changed(output_file, text):
+    """Write `text` unless the file already holds it.
+
+    One command makes both headers, so a shader edit would otherwise rewrite the
+    include table too and recompile shader.c, whose chunks only change when
+    include/ does. Ninja restats a custom command's outputs, so one left untouched
+    rebuilds nothing that depends on it.
+    """
+    try:
+        with open(output_file, 'r', encoding='utf-8') as existing:
+            if existing.read() == text:
+                return
+    except OSError:
+        pass
+    with open(output_file, 'w', encoding='utf-8') as header_file:
+        header_file.write(text)
+
 def main(input_dir, output_file, includes_out=None, raw=False):
     # Sorted so the generated header is reproducible across machines: two builds
     # of the same sources must diff clean, which is how a refactor proves it
@@ -124,19 +144,20 @@ def main(input_dir, output_file, includes_out=None, raw=False):
     shaders = sorted(f for f in os.listdir(input_dir) if f.endswith('.glsl'))
 
     guard = guard_for(output_file)
-    with open(output_file, 'w', encoding='utf-8') as header_file:
-        write_open(header_file, guard)
-        for shader in shaders:
-            shader_path = os.path.join(input_dir, shader)
-            shader_var_name = os.path.splitext(shader)[0].replace('.', '_') + "_shader"
-            # RAW leaves every #include where it stands, for the runtime resolver to
-            # expand against the engine's table: an app's shaders are built into the
-            # app, and the chunks they name are the engine's, which only the engine
-            # holds.
-            shader_string = shader_to_string(shader_path, expand=not raw)
-            if shader_string:
-                header_file.write(f"static const char* {shader_var_name}_str = \n{shader_string};\n\n")
-        write_close(header_file, guard)
+    header_file = io.StringIO()
+    write_open(header_file, guard)
+    for shader in shaders:
+        shader_path = os.path.join(input_dir, shader)
+        shader_var_name = os.path.splitext(shader)[0].replace('.', '_') + "_shader"
+        # RAW leaves every #include where it stands, for the runtime resolver to
+        # expand against the engine's table: an app's shaders are built into the
+        # app, and the chunks they name are the engine's, which only the engine
+        # holds.
+        shader_string = shader_to_string(shader_path, expand=not raw)
+        if shader_string:
+            header_file.write(f"static const char* {shader_var_name}_str = \n{shader_string};\n\n")
+    write_close(header_file, guard)
+    write_if_changed(output_file, header_file.getvalue())
 
     if includes_out:
         write_include_table(os.path.join(input_dir, INCLUDE_DIR), includes_out)
@@ -151,19 +172,20 @@ def write_include_table(include_dir, output_file):
     """
     chunks = sorted(f for f in os.listdir(include_dir) if f.endswith('.glsl'))
     guard = guard_for(output_file)
-    with open(output_file, 'w', encoding='utf-8') as header_file:
-        write_open(header_file, guard)
-        header_file.write("static const struct {\n    const char* name;\n    const char* source;\n"
-                          "} shader_include_chunks[] = {\n")
-        for chunk in chunks:
-            text = shader_to_string(os.path.join(include_dir, chunk), expand=False)
-            if text is None:
-                raise SystemExit(f"Error: could not read {chunk}")
-            header_file.write(f"    {{\"{chunk}\",\n{text}}},\n")
-        header_file.write("};\n\n")
-        header_file.write("static const int shader_include_chunk_count =\n"
-                          "    (int)(sizeof(shader_include_chunks) / sizeof(shader_include_chunks[0]));\n\n")
-        write_close(header_file, guard)
+    header_file = io.StringIO()
+    write_open(header_file, guard)
+    header_file.write("static const struct {\n    const char* name;\n    const char* source;\n"
+                      "} shader_include_chunks[] = {\n")
+    for chunk in chunks:
+        text = shader_to_string(os.path.join(include_dir, chunk), expand=False)
+        if text is None:
+            raise SystemExit(f"Error: could not read {chunk}")
+        header_file.write(f"    {{\"{chunk}\",\n{text}}},\n")
+    header_file.write("};\n\n")
+    header_file.write("static const int shader_include_chunk_count =\n"
+                      "    (int)(sizeof(shader_include_chunks) / sizeof(shader_include_chunks[0]));\n\n")
+    write_close(header_file, guard)
+    write_if_changed(output_file, header_file.getvalue())
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Generate shader string header.")

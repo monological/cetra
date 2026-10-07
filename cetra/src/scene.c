@@ -1040,6 +1040,12 @@ SceneNode* node_find_light(SceneNode* root, const Light* light) {
     return NULL;
 }
 
+// Whether a subtree's program is not the setters' to replace: a late-draw material's program is
+// its own (spec 13.29), and a lit-surface one in its place is a mesh the draw list refuses.
+static bool _takes_subtree_program(const Mesh* mesh) {
+    return mesh && mesh->material && mesh->material->pass != MATERIAL_PASS_LATE_DRAW;
+}
+
 void node_set_program(SceneNode* node, ShaderProgram* program) {
     if (!node) {
         return;
@@ -1048,7 +1054,7 @@ void node_set_program(SceneNode* node, ShaderProgram* program) {
     for (size_t i = 0; i < node->mesh_count; ++i) {
         Mesh* mesh = node->meshes[i];
 
-        if (mesh && mesh->material) {
+        if (_takes_subtree_program(mesh)) {
             mesh->material->shader_program = program;
         }
     }
@@ -1066,9 +1072,7 @@ void node_set_programs(SceneNode* node, ShaderProgram* standard, ShaderProgram* 
     for (size_t i = 0; i < node->mesh_count; ++i) {
         Mesh* mesh = node->meshes[i];
 
-        // A late-draw material's program is its own (spec 13.29): a lit-surface one in its place
-        // is a mesh the draw list refuses.
-        if (mesh && mesh->material && mesh->material->pass != MATERIAL_PASS_LATE_DRAW) {
+        if (_takes_subtree_program(mesh)) {
             // Use skinned shader for meshes with bone data, standard otherwise
             if (mesh->is_skinned && skinned) {
                 mesh->material->shader_program = skinned;

@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "postfx.h"
+#include "compat.h" // strcasecmp
 #include "crt.h"
 #include "glare.h"
 #include "local_exposure.h"
@@ -72,55 +73,6 @@
 // Aperture kernel taps; mirror of dof_gather_frag's TAPS.
 #define DOF_TAPS 64
 
-// Creates a single-sample color-only FBO; returns false on failure
-static bool create_color_fbo(int width, int height, GLenum internal_format, GLuint* out_fbo,
-                             GLuint* out_texture) {
-    glGenTextures(1, out_texture);
-    glBindTexture(GL_TEXTURE_2D, *out_texture);
-    glTexImage2D(GL_TEXTURE_2D, 0, (GLint)internal_format, width, height, 0,
-                 gl_transfer_format(internal_format), GL_FLOAT, NULL);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    // Clamp so bloom sampling doesn't wrap around screen edges
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-
-    glGenFramebuffers(1, out_fbo);
-    glBindFramebuffer(GL_FRAMEBUFFER, *out_fbo);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, *out_texture, 0);
-
-    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-        log_error("PostFX framebuffer is not complete (%dx%d)", width, height);
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        return false;
-    }
-
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    return true;
-}
-
-static void _postfx_target_free(PostFXTarget* t) {
-    gl_delete_texture(&t->tex);
-    gl_delete_fbo(&t->fbo);
-    t->w = t->h = 0;
-}
-
-// `t` as an RGBA16F target `w` by `h`, remade only when its size changes. False, reported by
-// `what`, when it cannot be made.
-static bool _postfx_target_ensure(PostFXTarget* t, int w, int h, const char* what) {
-    if (t->fbo && t->w == w && t->h == h)
-        return true;
-    _postfx_target_free(t);
-    if (w <= 0 || h <= 0 || !create_color_fbo(w, h, GL_RGBA16F, &t->fbo, &t->tex)) {
-        log_error("PostFX: the %dx%d %s target could not be made", w, h, what);
-        _postfx_target_free(t);
-        return false;
-    }
-    t->w = w;
-    t->h = h;
-    return true;
-}
-
 // Render every slice of the froxel volume: attach the layer, tell the shader
 // which slice it is, draw the fullscreen quad. One draw per layer -- the
 // codebase's established idiom (shadow.c cascades, material_texture_array.c layers,
@@ -156,7 +108,7 @@ static bool create_pingpong(int width, int height, GLenum internal_format, PingP
     pp->valid = false;
     for (int i = 0; i < 2; i++) {
         pp->pre_exposure[i] = 0.0f; // never written, which _history_scale reads as 1
-        if (!create_color_fbo(width, height, internal_format, &pp->fbo[i], &pp->tex[i]))
+        if (!gl_color_fbo_create(width, height, internal_format, &pp->fbo[i], &pp->tex[i]))
             return false;
     }
     return true;
@@ -180,7 +132,7 @@ static bool create_ssr_buffers(PostFX* fx) {
     int w = fx->ssr_full_res ? fx->width : fx->half_width;
     int h = fx->ssr_full_res ? fx->height : fx->half_height;
     // HDR reflection buffer; carries premultiplied scene color * weight.
-    if (!create_color_fbo(w, h, GL_RGBA16F, &fx->ssr_fbo, &fx->ssr_texture))
+    if (!gl_color_fbo_create(w, h, GL_RGBA16F, &fx->ssr_fbo, &fx->ssr_texture))
         return false;
     // Min-depth pyramid for the SSR traversal: base at the SSR resolution with a
     // full mip chain, each level the min (nearest) of the 2x2 below. R32F: fp16
@@ -425,7 +377,7 @@ static bool postfx_alloc_targets(PostFX* fx) {
     // The HDR resolve target must be RGBA16F to match the MSAA source
     // (multisample blits require identical formats); the bloom chain never
     // reads alpha, so the cheaper packed-float format halves its bandwidth
-    if (!create_color_fbo(fx->width, fx->height, GL_RGBA16F, &fx->hdr_fbo, &fx->hdr_texture))
+    if (!gl_color_fbo_create(fx->width, fx->height, GL_RGBA16F, &fx->hdr_fbo, &fx->hdr_texture))
         return false;
     if (!create_bloom_pyramid(fx))
         return false;
@@ -433,7 +385,8 @@ static bool postfx_alloc_targets(PostFX* fx) {
         return false;
     // Resolve target for the scene pass's second color attachment
     // (view-space normal .xyz + SSR marker .a); RGBA16F to match the MSAA source
-    if (!create_color_fbo(fx->width, fx->height, GL_RGBA16F, &fx->normal_fbo, &fx->normal_texture))
+    if (!gl_color_fbo_create(fx->width, fx->height, GL_RGBA16F, &fx->normal_fbo,
+                             &fx->normal_texture))
         return false;
     // RGBA rather than R: .r is the AO the whole chain has always read, .gba
     // carry the bent normal encoded to [0,1].
@@ -456,8 +409,8 @@ static bool postfx_alloc_targets(PostFX* fx) {
     // What it costs on a lit frame: ~2% of pixels move, 99.5% of those by one
     // or two codes, which is dequantisation and nothing more.
     for (int i = 0; i < 2; i++) {
-        if (!create_color_fbo(fx->half_width, fx->half_height, GL_RGBA16F, &fx->ssao_fbo[i],
-                              &fx->ssao_texture[i]))
+        if (!gl_color_fbo_create(fx->half_width, fx->half_height, GL_RGBA16F, &fx->ssao_fbo[i],
+                                 &fx->ssao_texture[i]))
             return false;
     }
     // Clear the blurred slot: tonemap binds it as aoTex unconditionally, so on
@@ -486,7 +439,7 @@ static bool postfx_alloc_targets(PostFX* fx) {
     // Full float, matching the scene pass's aux attachment: the MSAA resolve
     // blit requires identical formats, and fp16 view-Z staircases at scene
     // scale (banded GTAO on large grounds).
-    if (!create_color_fbo(fx->width, fx->height, GL_RGBA32F, &fx->aux_fbo, &fx->aux_texture))
+    if (!gl_color_fbo_create(fx->width, fx->height, GL_RGBA32F, &fx->aux_fbo, &fx->aux_texture))
         return false;
     // Point-sample the aux buffer: view-space Z is NOT screen-linear under
     // perspective, so LINEAR filtering would bend flat surfaces (banding) and
@@ -497,15 +450,15 @@ static bool postfx_alloc_targets(PostFX* fx) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     // Full-res resolve target for the scene pass's albedo G-buffer (attachment 3),
     // consumed by the SSGI indirect-diffuse composite. RGBA8 (albedo is LDR).
-    if (!create_color_fbo(fx->width, fx->height, GL_RGBA8, &fx->albedo_fbo, &fx->albedo_texture))
+    if (!gl_color_fbo_create(fx->width, fx->height, GL_RGBA8, &fx->albedo_fbo, &fx->albedo_texture))
         return false;
     if (!create_pingpong(fx->post_width, fx->post_height, GL_RGBA16F, &fx->taa_history))
         return false;
     // TAAU canvas, only when the render scale actually splits the sizes; at
     // full scale the hdr buffer is post-sized and serves as the canvas.
     if (fx->render_scale < 1.0f) {
-        if (!create_color_fbo(fx->post_width, fx->post_height, GL_RGBA16F, &fx->post_fbo,
-                              &fx->post_texture))
+        if (!gl_color_fbo_create(fx->post_width, fx->post_height, GL_RGBA16F, &fx->post_fbo,
+                                 &fx->post_texture))
             return false;
     }
     return true;
@@ -570,8 +523,10 @@ static void postfx_free_targets(PostFX* fx) {
         gl_delete_texture(&fx->cs_texture[i]);
     }
     free_pingpong(&fx->cs_history);
-    gl_delete_fbo(&fx->motion_blur_fbo);
-    gl_delete_texture(&fx->motion_blur_texture);
+    // Kept out of the latched allocations, so they are made again at the new size on first use.
+    gl_color_target_free(&fx->hdr_scratch);
+    gl_color_target_free(&fx->picture);
+    gl_color_target_free(&fx->picture_scratch);
     gl_delete_fbo(&fx->motion_blur_tile_fbo);
     gl_delete_texture(&fx->motion_blur_tile_texture);
     gl_delete_fbo(&fx->motion_blur_neighbor_fbo);
@@ -866,17 +821,17 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     //
     // The 1x1 is read by the CPU for auto-exposure AND sampled on unit 7 by the
     // tonemap's Purkinje stage (spec 11.83), so it outlives a pinned exposure.
-    if (!create_color_fbo(LUM_MEASURE_SIZE, LUM_MEASURE_SIZE, GL_R16F, &fx->lum_fbo,
-                          &fx->lum_texture) ||
-        !create_color_fbo(LUM_HISTOGRAM_BINS, LUM_HISTOGRAM_ROWS, GL_RG32F, &fx->lum_hist_fbo,
-                          &fx->lum_hist_texture) ||
-        !create_color_fbo(1, 1, GL_R32F, &fx->lum_reduce_fbo, &fx->lum_reduce_texture)) {
+    if (!gl_color_fbo_create(LUM_MEASURE_SIZE, LUM_MEASURE_SIZE, GL_R16F, &fx->lum_fbo,
+                             &fx->lum_texture) ||
+        !gl_color_fbo_create(LUM_HISTOGRAM_BINS, LUM_HISTOGRAM_ROWS, GL_RG32F, &fx->lum_hist_fbo,
+                             &fx->lum_hist_texture) ||
+        !gl_color_fbo_create(1, 1, GL_R32F, &fx->lum_reduce_fbo, &fx->lum_reduce_texture)) {
         free_postfx(fx);
         return NULL;
     }
     // Both consumers texelFetch, which ignores filtering -- but a mipmapped
     // min filter on a texture with no mips is incomplete, and the default IS
-    // mipmapped. create_color_fbo already sets LINEAR; NEAREST states that
+    // mipmapped. gl_color_fbo_create already sets LINEAR; NEAREST states that
     // nothing here samples between texels.
     glBindTexture(GL_TEXTURE_2D, fx->lum_texture);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
@@ -934,16 +889,18 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     fx->sss_pyr_down_program = create_sss_pyr_down_program();
     fx->contact_shadow_program = create_contact_shadow_program();
     fx->oit_resolve_program = create_oit_resolve_program();
+    fx->present_program = create_present_program();
     if (!fx->sss_pyr_seed_program || !fx->sss_pyr_down_program || !fx->contact_shadow_program ||
-        !fx->oit_resolve_program || !fx->sss_gather_program || !fx->motion_blur_program ||
-        !fx->motion_blur_tilemax_program || !fx->motion_blur_neighbormax_program ||
-        !fx->bloom_bright_program || !fx->bloom_down_program || !fx->bloom_up_program ||
-        !fx->tonemap_program || !fx->gtao_program || !fx->ssao_blur_program ||
-        !fx->temporal_accum_program || !fx->ssgi_composite_program || !fx->ssgi_accum_program ||
-        !fx->ssgi_atrous_program || !fx->ssr_atrous_program || !fx->ssr_accum_program ||
-        !fx->lum_measure_program || !fx->lum_histogram_program || !fx->lum_reduce_program ||
-        !fx->ssr_program || !fx->upsample_tent_program || !fx->taa_resolve_program ||
-        !fx->dof_coc_program || !fx->froxel_inject_program || !fx->froxel_integrate_program ||
+        !fx->oit_resolve_program || !fx->present_program || !fx->sss_gather_program ||
+        !fx->motion_blur_program || !fx->motion_blur_tilemax_program ||
+        !fx->motion_blur_neighbormax_program || !fx->bloom_bright_program ||
+        !fx->bloom_down_program || !fx->bloom_up_program || !fx->tonemap_program ||
+        !fx->gtao_program || !fx->ssao_blur_program || !fx->temporal_accum_program ||
+        !fx->ssgi_composite_program || !fx->ssgi_accum_program || !fx->ssgi_atrous_program ||
+        !fx->ssr_atrous_program || !fx->ssr_accum_program || !fx->lum_measure_program ||
+        !fx->lum_histogram_program || !fx->lum_reduce_program || !fx->ssr_program ||
+        !fx->upsample_tent_program || !fx->taa_resolve_program || !fx->dof_coc_program ||
+        !fx->froxel_inject_program || !fx->froxel_integrate_program ||
         !fx->froxel_composite_program || !fx->dof_tile_program || !fx->dof_dilate_program ||
         !fx->dof_gather_program || !fx->dof_composite_program) {
         free_postfx(fx);
@@ -1099,6 +1056,9 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     glUseProgram(fx->upsample_tent_program->id);
     uniform_set_int(fx->upsample_tent_program->uniforms, "srcTex", 0);
 
+    glUseProgram(fx->present_program->id);
+    uniform_set_int(fx->present_program->uniforms, "pictureTex", 0);
+
     if (fx->spec_occ_composite_program) {
         glUseProgram(fx->spec_occ_composite_program->id);
         uniform_set_int(fx->spec_occ_composite_program->uniforms, "specTex", 0);
@@ -1154,16 +1114,16 @@ static bool postfx_ensure_dof_targets(PostFX* fx) {
         return true;
     fx->dof_tile_w = (fx->half_width + DOF_TILE - 1) / DOF_TILE;
     fx->dof_tile_h = (fx->half_height + DOF_TILE - 1) / DOF_TILE;
-    if (!create_color_fbo(fx->half_width, fx->half_height, GL_RGBA16F, &fx->dof_coc_fbo,
-                          &fx->dof_coc_texture) ||
-        !create_color_fbo(fx->half_width, fx->half_height, GL_RGBA16F, &fx->dof_gather_fbo,
-                          &fx->dof_far_texture) ||
-        !create_color_fbo(fx->dof_tile_w, fx->dof_tile_h, GL_RG16F, &fx->dof_tile_fbo,
-                          &fx->dof_tile_texture) ||
-        !create_color_fbo(fx->dof_tile_w, fx->dof_tile_h, GL_RG16F, &fx->dof_dilate_fbo,
-                          &fx->dof_dilate_texture) ||
-        !create_color_fbo(fx->post_width, fx->post_height, GL_RGBA16F, &fx->dof_fbo,
-                          &fx->dof_texture)) {
+    if (!gl_color_fbo_create(fx->half_width, fx->half_height, GL_RGBA16F, &fx->dof_coc_fbo,
+                             &fx->dof_coc_texture) ||
+        !gl_color_fbo_create(fx->half_width, fx->half_height, GL_RGBA16F, &fx->dof_gather_fbo,
+                             &fx->dof_far_texture) ||
+        !gl_color_fbo_create(fx->dof_tile_w, fx->dof_tile_h, GL_RG16F, &fx->dof_tile_fbo,
+                             &fx->dof_tile_texture) ||
+        !gl_color_fbo_create(fx->dof_tile_w, fx->dof_tile_h, GL_RG16F, &fx->dof_dilate_fbo,
+                             &fx->dof_dilate_texture) ||
+        !gl_color_fbo_create(fx->post_width, fx->post_height, GL_RGBA16F, &fx->dof_fbo,
+                             &fx->dof_texture)) {
         log_error("Failed to allocate depth-of-field targets");
         fx->dof_enabled = false;
         return false;
@@ -1253,8 +1213,8 @@ static bool postfx_ensure_spec_occ_targets(PostFX* fx) {
         log_error("spec-occ attachment left the GTAO framebuffer incomplete (0x%x)", status);
         return false;
     }
-    if (!create_color_fbo(fx->half_width, fx->half_height, GL_RG16F, &fx->spec_occ_fbo,
-                          &fx->spec_occ_texture) ||
+    if (!gl_color_fbo_create(fx->half_width, fx->half_height, GL_RG16F, &fx->spec_occ_fbo,
+                             &fx->spec_occ_texture) ||
         !create_pingpong(fx->half_width, fx->half_height, GL_RG16F, &fx->spec_occ_history)) {
         log_error("Failed to allocate spec-occ targets");
         return false;
@@ -1332,8 +1292,8 @@ static bool postfx_ensure_fog_layer_targets(PostFX* fx) {
         return true;
     if (fx->fog_layer_failed)
         return false;
-    if (!create_color_fbo(fx->width, fx->height, GL_RGBA16F, &fx->fog_layer_fbo,
-                          &fx->fog_layer_texture) ||
+    if (!gl_color_fbo_create(fx->width, fx->height, GL_RGBA16F, &fx->fog_layer_fbo,
+                             &fx->fog_layer_texture) ||
         !create_pingpong(fx->width, fx->height, GL_RGBA16F, &fx->fog_layer_history)) {
         // One-shot, unlike the other ensure_ helpers, which are retried every
         // frame. Fog is the only one whose caller has a complete path for "no
@@ -1357,8 +1317,8 @@ static bool postfx_ensure_fog_layer_targets(PostFX* fx) {
 static bool postfx_ensure_contact_targets(PostFX* fx) {
     if (fx->cs_ready)
         return true;
-    if (!create_color_fbo(fx->width, fx->height, GL_R8, &fx->cs_fbo[0], &fx->cs_texture[0]) ||
-        !create_color_fbo(fx->width, fx->height, GL_R8, &fx->cs_fbo[1], &fx->cs_texture[1]) ||
+    if (!gl_color_fbo_create(fx->width, fx->height, GL_R8, &fx->cs_fbo[0], &fx->cs_texture[0]) ||
+        !gl_color_fbo_create(fx->width, fx->height, GL_R8, &fx->cs_fbo[1], &fx->cs_texture[1]) ||
         !create_pingpong(fx->width, fx->height, GL_R16F, &fx->cs_history)) {
         log_error("Failed to allocate contact-shadow targets");
         return false;
@@ -1367,20 +1327,32 @@ static bool postfx_ensure_contact_targets(PostFX* fx) {
     return true;
 }
 
+// What a pass drew into `scratch` copied back over the frame in `dst_fbo`, which is the same size
+// and format, so the copy is exact. GL 4.1 has no texture barrier, so a pass may not draw into the
+// texture it samples, and the frame keeps its handle, so whatever reads it next needs no
+// repointing.
+static void _postfx_copy_back(const GLColorTarget* scratch, GLuint dst_fbo) {
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, scratch->fbo);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, dst_fbo);
+    glBlitFramebuffer(0, 0, scratch->w, scratch->h, 0, 0, scratch->w, scratch->h,
+                      GL_COLOR_BUFFER_BIT, GL_NEAREST);
+}
+
 // Allocate the motion-blur targets on first enable so the feature is free while
-// off (DoF pattern): a post-res RGBA16F reconstruction scratch plus the two
-// RG16F tile buffers (tile-max + neighbor-max velocity) at tile resolution.
+// off (DoF pattern): the two RG16F tile buffers (tile-max + neighbor-max
+// velocity) at tile resolution. Its reconstruction draws into the post-res
+// scratch, which is size-keyed rather than latched, since post passes share it.
 static bool postfx_ensure_motion_blur_targets(PostFX* fx) {
+    if (!gl_color_target_ensure(&fx->hdr_scratch, fx->post_width, fx->post_height, "HDR scratch"))
+        return false;
     if (fx->motion_blur_ready)
         return true;
     fx->motion_blur_tile_w = (fx->post_width + MOTION_BLUR_TILE - 1) / MOTION_BLUR_TILE;
     fx->motion_blur_tile_h = (fx->post_height + MOTION_BLUR_TILE - 1) / MOTION_BLUR_TILE;
-    if (!create_color_fbo(fx->post_width, fx->post_height, GL_RGBA16F, &fx->motion_blur_fbo,
-                          &fx->motion_blur_texture) ||
-        !create_color_fbo(fx->motion_blur_tile_w, fx->motion_blur_tile_h, GL_RG16F,
-                          &fx->motion_blur_tile_fbo, &fx->motion_blur_tile_texture) ||
-        !create_color_fbo(fx->motion_blur_tile_w, fx->motion_blur_tile_h, GL_RG16F,
-                          &fx->motion_blur_neighbor_fbo, &fx->motion_blur_neighbor_texture)) {
+    if (!gl_color_fbo_create(fx->motion_blur_tile_w, fx->motion_blur_tile_h, GL_RG16F,
+                             &fx->motion_blur_tile_fbo, &fx->motion_blur_tile_texture) ||
+        !gl_color_fbo_create(fx->motion_blur_tile_w, fx->motion_blur_tile_h, GL_RG16F,
+                             &fx->motion_blur_neighbor_fbo, &fx->motion_blur_neighbor_texture)) {
         log_error("Failed to allocate motion blur targets");
         return false;
     }
@@ -1418,7 +1390,7 @@ static void postfx_run_motion_blur(PostFX* fx, GLuint canvas_fbo, GLuint canvas_
     draw_fullscreen_quad(fx->quad_vao);
 
     // Pass 3: reconstruction -- gather the scene along the dominant velocity.
-    glBindFramebuffer(GL_FRAMEBUFFER, fx->motion_blur_fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, fx->hdr_scratch.fbo);
     glViewport(0, 0, fx->post_width, fx->post_height);
     glUseProgram(fx->motion_blur_program->id);
     glActiveTexture(GL_TEXTURE0);
@@ -1432,12 +1404,8 @@ static void postfx_run_motion_blur(PostFX* fx, GLuint canvas_fbo, GLuint canvas_
     uniform_set_float(fx->motion_blur_program->uniforms, "maxBlurPx", (float)MOTION_BLUR_TILE);
     draw_fullscreen_quad(fx->quad_vao);
 
-    // Copy the reconstructed scene back over the canvas (same size/format,
-    // NEAREST -> exact copy) so the rest of the chain reads the blurred result.
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, fx->motion_blur_fbo);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, canvas_fbo);
-    glBlitFramebuffer(0, 0, fx->post_width, fx->post_height, 0, 0, fx->post_width, fx->post_height,
-                      GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    // So the rest of the chain reads the blurred result.
+    _postfx_copy_back(&fx->hdr_scratch, canvas_fbo);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     check_gl_error("postfx motion blur");
 }
@@ -1517,8 +1485,8 @@ static void postfx_run_spec_occ_composite(PostFX* fx, const SplitOcclusion* spli
 static bool postfx_ensure_spec_target(PostFX* fx) {
     if (fx->spec_ready)
         return true;
-    if (!create_color_fbo(fx->width, fx->height, GL_R11F_G11F_B10F, &fx->spec_fbo,
-                          &fx->spec_texture)) {
+    if (!gl_color_fbo_create(fx->width, fx->height, GL_R11F_G11F_B10F, &fx->spec_fbo,
+                             &fx->spec_texture)) {
         log_error("Failed to allocate the ambient-specular resolve target");
         return false;
     }
@@ -1704,10 +1672,10 @@ static void postfx_build_sss_pyramid(PostFX* fx, int profile_tag, float proj_sca
 static bool postfx_ensure_sss_targets(PostFX* fx) {
     if (fx->sss_ready)
         return true;
-    if (!create_color_fbo(fx->width, fx->height, GL_RGBA16F, &fx->sss_diffuse_fbo,
-                          &fx->sss_diffuse_texture) ||
-        !create_color_fbo(fx->width, fx->height, GL_RGBA16F, &fx->sss_delta_fbo,
-                          &fx->sss_delta_texture) ||
+    if (!gl_color_fbo_create(fx->width, fx->height, GL_RGBA16F, &fx->sss_diffuse_fbo,
+                             &fx->sss_diffuse_texture) ||
+        !gl_color_fbo_create(fx->width, fx->height, GL_RGBA16F, &fx->sss_delta_fbo,
+                             &fx->sss_delta_texture) ||
         !create_pingpong(fx->width, fx->height, GL_RGBA16F, &fx->sss_history)) {
         log_error("Failed to allocate SSS targets");
         return false;
@@ -2083,8 +2051,8 @@ static bool postfx_ensure_flare(PostFX* fx) {
         return true;
     fx->flare_width = fx->out_width > 4 ? fx->out_width / 4 : 1;
     fx->flare_height = fx->out_height > 4 ? fx->out_height / 4 : 1;
-    if (!create_color_fbo(fx->flare_width, fx->flare_height, GL_R11F_G11F_B10F, &fx->flare_fbo,
-                          &fx->flare_texture)) {
+    if (!gl_color_fbo_create(fx->flare_width, fx->flare_height, GL_R11F_G11F_B10F, &fx->flare_fbo,
+                             &fx->flare_texture)) {
         log_error("PostFX: lens flare target incomplete");
         // Latch off rather than retry: this runs every frame, and a driver
         // refusing the target would otherwise leak an FBO and a texture per
@@ -2276,9 +2244,6 @@ void free_postfx(PostFX* fx) {
     fx->local_exposure = NULL;
     free_crt(fx->crt);
     fx->crt = NULL;
-    _postfx_target_free(&fx->picture);
-    _postfx_target_free(&fx->pass_scratch);
-    _postfx_target_free(&fx->picture_scratch);
     free_program(fx->present_program);
     free_program(fx->tonemap_program);
     free_program(fx->spec_occ_composite_program);
@@ -2417,49 +2382,107 @@ static bool _postfx_crt_on(PostFX* fx) {
     return fx->crt != NULL;
 }
 
-GLuint postfx_picture_fbo(PostFX* fx) {
-    if (!fx || (!_postfx_crt_on(fx) && !postfx_passes_at(fx, POSTFX_AT_AFTER_TONEMAP)))
-        return 0;
-    return _postfx_target_ensure(&fx->picture, fx->out_width, fx->out_height, "picture")
-               ? fx->picture.fbo
-               : 0;
+void postfx_late_draw_bind(const PostFXLateDraw* late, UniformManager* u, int depth_unit,
+                           int fog_unit) {
+    glActiveTexture(GL_TEXTURE0 + (GLenum)depth_unit);
+    glBindTexture(GL_TEXTURE_2D, late->scene_depth);
+    uniform_set_int(u, "sceneDepth", depth_unit);
+    glActiveTexture(GL_TEXTURE0 + (GLenum)fog_unit);
+    glBindTexture(GL_TEXTURE_3D, late->fog_volume);
+    uniform_set_int(u, "fogVolume", fog_unit);
+    uniform_set_int(u, "fogSlices", late->fog_slices);
+    uniform_set_float(u, "fogNear", late->fog_near);
+    uniform_set_float(u, "fogFar", late->fog_far);
+    uniform_set_float(u, "fogDepthDist", late->fog_depth_dist);
+    uniform_set_vec2(u, "viewport", (vec2){(float)late->width, (float)late->height});
+    glActiveTexture(GL_TEXTURE0);
 }
 
-void postfx_present_picture(PostFX* fx, GLuint picture) {
-    if (!fx || !picture || picture != fx->picture.fbo)
-        return;
-    if (_postfx_crt_on(fx)) {
-        const CrtLook look = {.lines = fx->crt_lines,
-                              .scanlines = fx->crt_scanlines,
-                              .mask = fx->crt_mask,
-                              .curvature = fx->crt_curvature,
-                              .bleed = fx->crt_bleed,
-                              .dither = fx->dither_enabled,
-                              .dither_strength = fx->dither_strength};
-        profiler_scope_begin(fx->profiler, "crt");
-        crt_present(fx->crt, fx->picture.tex, fx->picture.w, fx->picture.h, fx->quad_vao, &look);
-        profiler_scope_end(fx->profiler);
-        return;
+// Each location's name in a scene file and its profiler row (spec 13.29).
+static const struct {
+    const char* name;
+    const char* scope;
+} POSTFX_LOCATIONS[POSTFX_LOCATION_COUNT] = {
+    [POSTFX_AT_BEFORE_DOF] = {"beforeDof", "passes before dof"},
+    [POSTFX_AT_BEFORE_BLOOM] = {"beforeBloom", "passes before bloom"},
+    [POSTFX_AT_AFTER_TONEMAP] = {"afterTonemap", "passes after tonemap"},
+};
+
+// The locations an enabled pass runs at, one bit each; with `depth`, only the passes that read
+// the frame's depth.
+static unsigned _postfx_live_locations(const PostFX* fx, bool depth) {
+    unsigned live = 0;
+    for (int i = 0; i < fx->pass_count; i++) {
+        const PostFXPass* pass = &fx->passes[i];
+        if (pass->enabled && (!depth || pass->reads_depth))
+            live |= 1u << pass->at;
     }
-    // No CRT: the picture into the window as it is, with the dither the tone map left out, since
-    // it is the 8-bit write that dithers and this is now the one that makes it (spec 11.24).
-    if (!fx->present_program)
-        fx->present_program = create_present_program();
-    if (!fx->present_program)
+    return live;
+}
+
+// Who writes the window this frame: the CRT whenever it is on, the present pass when a frame the
+// tone map draws has passes after it, and otherwise the tone map, or a debug frame's copy, which
+// is never dithered. Whatever is not the window draws into the picture, made here at output size.
+static PostFXShow _postfx_show(PostFX* fx, bool frame_is_hdr) {
+    const bool passes =
+        frame_is_hdr && (_postfx_live_locations(fx, false) & (1u << POSTFX_AT_AFTER_TONEMAP));
+    const PostFXShow show = _postfx_crt_on(fx) ? POSTFX_SHOW_CRT
+                            : passes           ? POSTFX_SHOW_PRESENT
+                                               : POSTFX_SHOW_WINDOW;
+    if (show == POSTFX_SHOW_WINDOW || fx->picture_failed)
+        return POSTFX_SHOW_WINDOW;
+    if (!gl_color_target_ensure(&fx->picture, fx->out_width, fx->out_height, "picture")) {
+        fx->picture_failed = true;
+        return POSTFX_SHOW_WINDOW;
+    }
+    return show;
+}
+
+GLuint postfx_picture_fbo(const PostFX* fx) {
+    return fx && fx->show != POSTFX_SHOW_WINDOW ? fx->picture.fbo : 0;
+}
+
+void postfx_present_picture(PostFX* fx) {
+    if (!fx)
         return;
-    const GLPassState pass = gl_pass_begin();
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    glViewport(0, 0, fx->picture.w, fx->picture.h);
-    glUseProgram(fx->present_program->id);
-    UniformManager* u = fx->present_program->uniforms;
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, fx->picture.tex);
-    uniform_set_int(u, "pictureTex", 0);
-    uniform_set_int(u, "ditherEnabled", fx->dither_enabled ? 1 : 0);
-    uniform_set_float(u, "ditherStrength", fx->dither_strength);
-    draw_fullscreen_quad(fx->quad_vao);
-    glUseProgram(0);
-    gl_pass_end(&pass);
+    switch (fx->show) {
+        case POSTFX_SHOW_WINDOW:
+            return;
+        case POSTFX_SHOW_CRT: {
+            const CrtLook look = {.lines = fx->crt_lines,
+                                  .scanlines = fx->crt_scanlines,
+                                  .mask = fx->crt_mask,
+                                  .curvature = fx->crt_curvature,
+                                  .bleed = fx->crt_bleed,
+                                  .dither = fx->dither_enabled,
+                                  .dither_strength = fx->dither_strength};
+            profiler_scope_begin(fx->profiler, "crt");
+            crt_present(fx->crt, fx->picture.tex, fx->picture.w, fx->picture.h, fx->quad_vao,
+                        &look);
+            profiler_scope_end(fx->profiler);
+            return;
+        }
+        case POSTFX_SHOW_PRESENT: {
+            // The picture into the window as it is, with the dither the tone map left out, since
+            // it is the 8-bit write that dithers and this is now the one that makes it (spec
+            // 11.24).
+            profiler_scope_begin(fx->profiler, "present");
+            const GLPassState pass = gl_pass_begin();
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glViewport(0, 0, fx->picture.w, fx->picture.h);
+            glUseProgram(fx->present_program->id);
+            UniformManager* u = fx->present_program->uniforms;
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, fx->picture.tex);
+            uniform_set_int(u, "ditherEnabled", fx->dither_enabled ? 1 : 0);
+            uniform_set_float(u, "ditherStrength", fx->dither_strength);
+            draw_fullscreen_quad(fx->quad_vao);
+            glUseProgram(0);
+            gl_pass_end(&pass);
+            profiler_scope_end(fx->profiler);
+            return;
+        }
+    }
 }
 
 PostFXPass* postfx_add_pass(PostFX* fx, PostFXLocation at, ShaderProgram* program) {
@@ -2473,51 +2496,33 @@ PostFXPass* postfx_add_pass(PostFX* fx, PostFXLocation at, ShaderProgram* progra
         return NULL;
     }
     PostFXPass* pass = &fx->passes[fx->pass_count++];
-    *pass = (PostFXPass){.at = at, .program = program, .enabled = true};
+    *pass = (PostFXPass){.at = at,
+                         .program = program,
+                         .reads_depth = uniform_location(program->uniforms, "sceneDepth") >= 0,
+                         .enabled = true};
     return pass;
 }
 
-bool postfx_passes_at(const PostFX* fx, PostFXLocation at) {
-    if (!fx)
-        return false;
-    for (int i = 0; i < fx->pass_count; i++)
-        if (fx->passes[i].at == at && fx->passes[i].enabled)
-            return true;
-    return false;
-}
-
 int postfx_location_from_name(const char* name) {
-    static const char* const names[POSTFX_LOCATION_COUNT] = {
-        [POSTFX_AT_BEFORE_DOF] = "beforeDof",
-        [POSTFX_AT_BEFORE_BLOOM] = "beforeBloom",
-        [POSTFX_AT_AFTER_TONEMAP] = "afterTonemap",
-    };
     for (int i = 0; name && i < POSTFX_LOCATION_COUNT; i++)
-        if (strcmp(name, names[i]) == 0)
+        if (strcasecmp(name, POSTFX_LOCATIONS[i].name) == 0)
             return i;
     return -1;
 }
 
 /*
  * Every enabled pass at `at`, in the order added, over the frame in `fbo`/`tex` (`w` by `h`).
- * Each draws the frame's new value into the scratch and is copied back: GL 4.1 has no texture
- * barrier, so a pass may not sample what it draws into, and the copy is motion blur's answer to
- * the same constraint. The frame keeps its handle, so whatever reads it next needs no repointing.
+ * Each draws the frame's new value into the scratch and is copied back over the frame.
  */
 static void postfx_run_passes(PostFX* fx, PostFXLocation at, GLuint fbo, GLuint tex, int w, int h,
                               const mat4 projection, const mat4 view) {
-    if (!postfx_passes_at(fx, at))
+    if (!(_postfx_live_locations(fx, false) & (1u << at)))
         return;
-    PostFXTarget* scratch =
-        at == POSTFX_AT_AFTER_TONEMAP ? &fx->picture_scratch : &fx->pass_scratch;
-    if (!_postfx_target_ensure(scratch, w, h, "pass scratch"))
+    GLColorTarget* scratch =
+        at == POSTFX_AT_AFTER_TONEMAP ? &fx->picture_scratch : &fx->hdr_scratch;
+    if (!gl_color_target_ensure(scratch, w, h, "pass scratch"))
         return;
-    static const char* const scopes[POSTFX_LOCATION_COUNT] = {
-        [POSTFX_AT_BEFORE_DOF] = "passes before dof",
-        [POSTFX_AT_BEFORE_BLOOM] = "passes before bloom",
-        [POSTFX_AT_AFTER_TONEMAP] = "passes after tonemap",
-    };
-    profiler_scope_begin(fx->profiler, scopes[at]);
+    profiler_scope_begin(fx->profiler, POSTFX_LOCATIONS[at].scope);
     const float texel[2] = {1.0f / (float)w, 1.0f / (float)h};
     for (int i = 0; i < fx->pass_count; i++) {
         const PostFXPass* pass = &fx->passes[i];
@@ -2534,15 +2539,12 @@ static void postfx_run_passes(PostFX* fx, PostFXLocation at, GLuint fbo, GLuint 
         glBindTexture(GL_TEXTURE_2D, fx->depth_texture);
         uniform_set_int(u, "sceneDepth", 1);
         uniform_set_vec2(u, "texelSize", texel);
-        uniform_set_float(u, "time", fx->time);
-        uniform_set_int(u, "frame", fx->frame_index);
+        shader_clock_upload(u, fx->time, (uint64_t)fx->frame_index);
         uniform_set_mat4(u, "projection", (const float*)projection);
         uniform_set_mat4(u, "view", (const float*)view);
         shader_params_upload(&pass->params, u);
         draw_fullscreen_quad(fx->quad_vao);
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, scratch->fbo);
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo);
-        glBlitFramebuffer(0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+        _postfx_copy_back(scratch, fbo);
     }
     glBindFramebuffer(GL_FRAMEBUFFER, fbo);
     glUseProgram(0);
@@ -3400,10 +3402,10 @@ static void postfx_run_ssr(PostFX* fx, GLuint canvas_fbo, GLuint canvas_tex, boo
 static bool postfx_ensure_oit_targets(PostFX* fx) {
     if (fx->oit_ready)
         return true;
-    if (!create_color_fbo(fx->width, fx->height, GL_RGBA16F, &fx->oit_accum_fbo,
-                          &fx->oit_accum_texture) ||
-        !create_color_fbo(fx->width, fx->height, GL_R16F, &fx->oit_revealage_fbo,
-                          &fx->oit_revealage_texture)) {
+    if (!gl_color_fbo_create(fx->width, fx->height, GL_RGBA16F, &fx->oit_accum_fbo,
+                             &fx->oit_accum_texture) ||
+        !gl_color_fbo_create(fx->width, fx->height, GL_R16F, &fx->oit_revealage_fbo,
+                             &fx->oit_revealage_texture)) {
         log_error("Failed to allocate OIT resolve targets");
         return false;
     }
@@ -3448,8 +3450,8 @@ static void postfx_run_oit(PostFX* fx, GLuint oit_fbo, bool moments) {
     profiler_scope_end(fx->profiler);
 }
 
-void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hdr,
-                const PostFXGBufferWrites* writes, mat4 projection, mat4 view) {
+void postfx_run(PostFX* fx, GLuint msaa_fbo, bool frame_is_hdr, const PostFXGBufferWrites* writes,
+                mat4 projection, mat4 view) {
     const bool normals_written = writes->normals;
     const bool aux_written = writes->aux;
     const bool albedo_written = writes->albedo;
@@ -3459,6 +3461,10 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         return;
 
     PostFXTonemapMode mode = frame_is_hdr ? fx->tonemap_mode : POSTFX_TONEMAP_PASSTHROUGH;
+    // What writes the window, settled once for the frame: everything below and the present that
+    // follows the overlay read this rather than asking again.
+    fx->show = _postfx_show(fx, frame_is_hdr);
+    const GLuint target_fbo = postfx_picture_fbo(fx);
 
     // Fullscreen composite passes need blending and depth testing off
     GLboolean depth_was_on = glIsEnabled(GL_DEPTH_TEST);
@@ -3694,10 +3700,8 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         // that is nowhere -- which the gather then divides its blur radius by.
         bool sss_active = sss_written && fx->sss_ready;
         mat4 inv_projection;
-        const bool passes_active = postfx_passes_at(fx, POSTFX_AT_BEFORE_DOF) ||
-                                   postfx_passes_at(fx, POSTFX_AT_BEFORE_BLOOM) ||
-                                   postfx_passes_at(fx, POSTFX_AT_AFTER_TONEMAP);
-        if (ssr_active || dof_active || sss_active || fx->late_draw || passes_active) {
+        const bool passes_read_depth = _postfx_live_locations(fx, true) != 0;
+        if (ssr_active || dof_active || sss_active || fx->late_draw || passes_read_depth) {
             // Resolve depth alongside color so screen-space passes can
             // reconstruct view-space positions (formats match: both are
             // DEPTH24_STENCIL8)
@@ -4320,7 +4324,8 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
         // No frame term here, deliberately -- see the shader's dither block. Only when this pass
         // writes the window: whatever writes it after this one dithers instead, or the dither is
         // resampled into its picture.
-        uniform_set_int(tm, "ditherEnabled", fx->dither_enabled && target_fbo == 0 ? 1 : 0);
+        uniform_set_int(tm, "ditherEnabled",
+                        fx->dither_enabled && fx->show == POSTFX_SHOW_WINDOW ? 1 : 0);
         uniform_set_float(tm, "ditherStrength", fx->dither_strength);
         draw_fullscreen_quad(fx->quad_vao);
         profiler_scope_end(fx->profiler);
@@ -4330,7 +4335,7 @@ void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hd
 
         // An app's passes after the tone map (spec 13.29), on the picture, which is where the
         // tone map wrote whenever one is enabled.
-        if (target_fbo && target_fbo == fx->picture.fbo)
+        if (fx->show != POSTFX_SHOW_WINDOW)
             postfx_run_passes(fx, POSTFX_AT_AFTER_TONEMAP, fx->picture.fbo, fx->picture.tex,
                               fx->picture.w, fx->picture.h, projection, view);
     }

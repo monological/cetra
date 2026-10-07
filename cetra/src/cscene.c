@@ -98,20 +98,58 @@ static bool _ranged_float(const cJSON* obj, const char* block, const char* key, 
  * function rather than a loop per block: the leading-underscore escape is easy to forget in
  * a copy, and there are four blocks now.
  */
+// Whether `name` is one of the `count` keys in `list`.
+static bool key_listed(const char* name, const char* const* list, size_t count) {
+    for (size_t i = 0; i < count; i++)
+        if (strcmp(name, list[i]) == 0)
+            return true;
+    return false;
+}
+
 static void warn_unknown_keys(const cJSON* obj, const char* const* known, size_t count,
                               const char* what) {
     const cJSON* key = NULL;
     cJSON_ArrayForEach(key, obj) {
         if (!key->string || key->string[0] == '_') // _comment and friends
             continue;
-        bool known_key = false;
-        for (size_t i = 0; i < count && !known_key; i++)
-            known_key = strcmp(key->string, known[i]) == 0;
         // "a recognised %s" rather than "a %s": the noun varies, and the extraction turned
         // parse_environment's "is not an environment parameter" into "is not a environment".
-        if (!known_key)
+        if (!key_listed(key->string, known, count))
             log_warn("cscene: %s key '%s' is not a recognised %s parameter; ignored", what,
                      key->string, what);
+    }
+}
+
+/*
+ * Each object of `obj`'s list `key` handed to `take`, which appends what it accepts to `into`
+ * and counts it in `*count`, until `cap` are taken: each checked against `known`, one that is
+ * not an object warned and skipped, and any past the cap warned once and dropped. Only what
+ * `take` accepted counts against the cap, so an item it refuses costs a later one nothing. A
+ * `key` that is there and is not a list is warned too.
+ */
+typedef void (*ListTake)(const cJSON* item, void* into);
+
+static void take_list(const cJSON* obj, const char* key, const char* what, const char* const* known,
+                      size_t known_count, const int* count, int cap, ListTake take, void* into) {
+    const cJSON* list = cJSON_GetObjectItemCaseSensitive(obj, key);
+    if (!list)
+        return;
+    if (!cJSON_IsArray(list)) {
+        log_warn("cscene: %s's %s is not a list; ignored", what, key);
+        return;
+    }
+    const cJSON* item = NULL;
+    cJSON_ArrayForEach(item, list) {
+        if (!cJSON_IsObject(item)) {
+            log_warn("cscene: a %s that is not an object; skipped", what);
+            continue;
+        }
+        if (*count >= cap) {
+            log_warn("cscene: more than %d of %s; the rest are ignored", cap, what);
+            break;
+        }
+        warn_unknown_keys(item, known, known_count, what);
+        take(item, into);
     }
 }
 
@@ -459,6 +497,38 @@ static void parse_light_overrides(CetraSceneDesc* d, const cJSON* root) {
 static void parse_shader_params(ShaderParams* out, const cJSON* obj, const char* key,
                                 const char* owner);
 
+_Static_assert(CSCENE_MAX_POST_PASSES <= POSTFX_PASS_MAX, "a scene's passes must fit the engine's");
+
+// Where post.passes go, and how many items of the list have been handed over, which is what a
+// refusal names: the slot a pass would have taken is not the item the author wrote.
+typedef struct PostPassTake {
+    CetraSceneDesc* d;
+    int seen;
+} PostPassTake;
+
+// One of post.passes (spec 13.29): a shader file resolved against this scene, a location, and
+// its own params. A refused one leaves its slot clear for the next.
+static void take_post_pass(const cJSON* item, void* into) {
+    PostPassTake* t = into;
+    const int index = t->seen++;
+    CScenePostPass* out = &t->d->post_passes[t->d->post_pass_count];
+    *out = (CScenePostPass){.enabled = true};
+    const cJSON* at = cJSON_GetObjectItemCaseSensitive(item, "at");
+    out->at = cJSON_IsString(at) ? postfx_location_from_name(at->valuestring) : -1;
+    copy_string(out->shader, sizeof(out->shader), cJSON_GetObjectItemCaseSensitive(item, "shader"));
+    if (out->at < 0 || !out->shader[0]) {
+        log_warn("cscene: post.passes[%d] wants a shader and an \"at\" of beforeDof, "
+                 "beforeBloom or afterTonemap; ignored",
+                 index);
+        return;
+    }
+    get_bool(item, "enabled", &out->enabled);
+    char owner[32];
+    snprintf(owner, sizeof(owner), "post.passes[%d]", index);
+    parse_shader_params(&out->params, item, "params", owner);
+    t->d->post_pass_count++;
+}
+
 static void parse_post(CetraSceneDesc* d, const cJSON* root) {
     const cJSON* post = cJSON_GetObjectItemCaseSensitive(root, "post");
     if (!cJSON_IsObject(post))
@@ -643,38 +713,11 @@ static void parse_post(CetraSceneDesc* d, const cJSON* root) {
         warn_unknown_keys(fog, fog_known, sizeof(fog_known) / sizeof(fog_known[0]), "post.fog");
     }
 
-    // post.passes: an app's fullscreen passes at named points (spec 13.29), each a shader file
-    // resolved against this scene, a location, and its own params.
-    const cJSON* passes = cJSON_GetObjectItemCaseSensitive(post, "passes");
-    if (passes && !cJSON_IsArray(passes)) {
-        log_warn("cscene: post.passes is not an array; ignored");
-        passes = NULL;
-    }
-    const cJSON* pass = NULL;
-    cJSON_ArrayForEach(pass, passes) {
-        if (d->post_pass_count >= CSCENE_MAX_POST_PASSES) {
-            log_warn("cscene: more than %d post.passes; extras ignored", CSCENE_MAX_POST_PASSES);
-            break;
-        }
-        CScenePostPass* out = &d->post_passes[d->post_pass_count];
-        const cJSON* at = cJSON_GetObjectItemCaseSensitive(pass, "at");
-        out->at = cJSON_IsString(at) ? postfx_location_from_name(at->valuestring) : -1;
-        copy_string(out->shader, sizeof(out->shader),
-                    cJSON_GetObjectItemCaseSensitive(pass, "shader"));
-        if (out->at < 0 || !out->shader[0]) {
-            log_warn("cscene: post.passes[%d] wants a shader and an \"at\" of beforeDof, "
-                     "beforeBloom or afterTonemap; ignored",
-                     d->post_pass_count);
-            continue;
-        }
-        out->enabled = true;
-        get_bool(pass, "enabled", &out->enabled);
-        parse_shader_params(&out->params, pass, "params", "post.passes");
-        static const char* const pass_known[] = {"at", "shader", "params", "enabled"};
-        warn_unknown_keys(pass, pass_known, sizeof(pass_known) / sizeof(pass_known[0]),
-                          "post.passes");
-        d->post_pass_count++;
-    }
+    // post.passes: an app's fullscreen passes at named points (spec 13.29).
+    static const char* const pass_known[] = {"at", "shader", "params", "enabled"};
+    PostPassTake passes = {.d = d};
+    take_list(post, "passes", "post pass", pass_known, sizeof(pass_known) / sizeof(pass_known[0]),
+              &d->post_pass_count, CSCENE_MAX_POST_PASSES, take_post_pass, &passes);
 
     static const char* const known[] = {
         "tonemap",      "exposure",       "auto_exposure", "camera",
@@ -1159,39 +1202,6 @@ static int word_index(const char* word, const char* const* names, int count) {
         if (names[i] && strcasecmp(word, names[i]) == 0)
             return i;
     return -1;
-}
-
-/*
- * Each object of `obj`'s list `key` handed to `take`, which appends what it accepts to `into`
- * and counts it in `*count`, until `cap` are taken: each checked against `known`, one that is
- * not an object warned and skipped, and any past the cap warned once and dropped. Only what
- * `take` accepted counts against the cap, so an item it refuses costs a later one nothing. A
- * `key` that is there and is not a list is warned too.
- */
-typedef void (*ListTake)(const cJSON* item, void* into);
-
-static void take_list(const cJSON* obj, const char* key, const char* what, const char* const* known,
-                      size_t known_count, const int* count, int cap, ListTake take, void* into) {
-    const cJSON* list = cJSON_GetObjectItemCaseSensitive(obj, key);
-    if (!list)
-        return;
-    if (!cJSON_IsArray(list)) {
-        log_warn("cscene: %s's %s is not a list; ignored", what, key);
-        return;
-    }
-    const cJSON* item = NULL;
-    cJSON_ArrayForEach(item, list) {
-        if (!cJSON_IsObject(item)) {
-            log_warn("cscene: a %s that is not an object; skipped", what);
-            continue;
-        }
-        if (*count >= cap) {
-            log_warn("cscene: more than %d of %s; the rest are ignored", cap, what);
-            break;
-        }
-        warn_unknown_keys(item, known, known_count, what);
-        take(item, into);
-    }
 }
 
 /*
@@ -1760,6 +1770,57 @@ static void parse_shader_params(ShaderParams* out, const cJSON* obj, const char*
     }
 }
 
+// shaderHooks (spec 13.29): each a surface hook under its name, which a material gives as its
+// `shaderHook`, so one hook is described once however many materials draw through it.
+static void parse_shader_hooks(CetraSceneDesc* d, const cJSON* root) {
+    const cJSON* hooks = cJSON_GetObjectItemCaseSensitive(root, "shaderHooks");
+    if (!hooks)
+        return;
+    if (!cJSON_IsObject(hooks)) {
+        log_warn("cscene: shaderHooks is not an object; ignored");
+        return;
+    }
+    static const char* const known[] = {"surface", "offset", "offsetBound", "animated"};
+    const cJSON* h = NULL;
+    cJSON_ArrayForEach(h, hooks) {
+        if (!h->string || h->string[0] == '_')
+            continue;
+        if (!cJSON_IsObject(h)) {
+            log_warn("cscene: shader hook '%s' is not an object; ignored", h->string);
+            continue;
+        }
+        if (d->shader_hook_count >= CSCENE_MAX_SHADER_HOOKS) {
+            log_warn("cscene: more than %d shaderHooks; the rest are ignored",
+                     CSCENE_MAX_SHADER_HOOKS);
+            break;
+        }
+        CSceneShaderHook* out = &d->shader_hooks[d->shader_hook_count];
+        *out = (CSceneShaderHook){0};
+        snprintf(out->name, sizeof(out->name), "%s", h->string);
+        warn_unknown_keys(h, known, sizeof(known) / sizeof(known[0]), "shader hook");
+        copy_string(out->surface, sizeof(out->surface),
+                    cJSON_GetObjectItemCaseSensitive(h, "surface"));
+        copy_string(out->offset, sizeof(out->offset),
+                    cJSON_GetObjectItemCaseSensitive(h, "offset"));
+        get_float(h, "offsetBound", &out->offset_bound);
+        get_bool(h, "animated", &out->animated);
+        if (!out->surface[0] && !out->offset[0]) {
+            log_warn("cscene: shader hook '%s' names neither a surface nor an offset; ignored",
+                     out->name);
+            continue;
+        }
+        if (out->offset[0] && out->offset_bound <= 0.0f)
+            log_warn("cscene: shader hook '%s' has an offset and no positive offsetBound; what "
+                     "it moves will be culled as though it never moved",
+                     out->name);
+        d->shader_hook_count++;
+    }
+}
+
+// The material keys this parser reads itself, which the generic walk below leaves alone.
+static const char* const MATERIAL_OWN_KEYS[] = {
+    "sss", "layers", "splatDomain", "roads", "shaderParams", "lateShader", "shaderHook"};
+
 static void parse_materials(CetraSceneDesc* d, const cJSON* root) {
     const cJSON* mats = cJSON_GetObjectItemCaseSensitive(root, "materials");
     if (!cJSON_IsObject(mats))
@@ -1791,18 +1852,24 @@ static void parse_materials(CetraSceneDesc* d, const cJSON* root) {
         parse_shader_params(&out->shader_params, m, "shaderParams", owner);
         copy_string(out->late_shader, sizeof(out->late_shader),
                     cJSON_GetObjectItemCaseSensitive(m, "lateShader"));
-        copy_string(out->surface_shader, sizeof(out->surface_shader),
-                    cJSON_GetObjectItemCaseSensitive(m, "surfaceShader"));
-        copy_string(out->offset_shader, sizeof(out->offset_shader),
-                    cJSON_GetObjectItemCaseSensitive(m, "offsetShader"));
-        out->offset_bound = 0.0f;
-        get_float(m, "offsetBound", &out->offset_bound);
-        out->offset_animated = false;
-        get_bool(m, "offsetAnimated", &out->offset_animated);
-        if (out->offset_shader[0] && out->offset_bound <= 0.0f)
-            log_warn("cscene: material '%s' has an offsetShader and no positive offsetBound; "
-                     "it will be culled as though it never moved",
+        out->shader_hook = -1;
+        const cJSON* hook = cJSON_GetObjectItemCaseSensitive(m, "shaderHook");
+        if (cJSON_IsString(hook)) {
+            for (int h = 0; h < d->shader_hook_count && out->shader_hook < 0; h++)
+                if (strcmp(d->shader_hooks[h].name, hook->valuestring) == 0)
+                    out->shader_hook = h;
+            if (out->shader_hook < 0)
+                log_warn("cscene: material '%s' names shader hook '%s', which shaderHooks does "
+                         "not define; ignored",
+                         out->material, hook->valuestring);
+        }
+        // A late surface's vertex stage is the late draw's own, which takes no hook.
+        if (out->late_shader[0] && out->shader_hook >= 0) {
+            log_warn("cscene: material '%s' has a lateShader and a shaderHook; a late surface "
+                     "takes no hook, so the hook is ignored",
                      out->material);
+            out->shader_hook = -1;
+        }
 
         // Compound like sss: four numbers describing one rectangle. Skipped by
         // the generic walk below, which would otherwise warn on the 4-array as
@@ -1824,11 +1891,8 @@ static void parse_materials(CetraSceneDesc* d, const cJSON* root) {
         cJSON_ArrayForEach(p, m) {
             if (!p->string || p->string[0] == '_') // _comment and friends
                 continue;
-            if (strcmp(p->string, "sss") == 0 || strcmp(p->string, "layers") == 0 ||
-                strcmp(p->string, "splatDomain") == 0 || strcmp(p->string, "roads") == 0 ||
-                strcmp(p->string, "shaderParams") == 0 || strcmp(p->string, "lateShader") == 0 ||
-                strcmp(p->string, "surfaceShader") == 0 || strcmp(p->string, "offsetShader") == 0 ||
-                strcmp(p->string, "offsetBound") == 0 || strcmp(p->string, "offsetAnimated") == 0)
+            if (key_listed(p->string, MATERIAL_OWN_KEYS,
+                           sizeof(MATERIAL_OWN_KEYS) / sizeof(MATERIAL_OWN_KEYS[0])))
                 continue;
             // A string value is a texture path. Recorded apart from the numeric
             // params only because a float array cannot hold one; the key still
@@ -1884,7 +1948,7 @@ static void parse_materials(CetraSceneDesc* d, const cJSON* root) {
 
         if (!out->has_sss && out->layer_count == 0 && out->road_count == 0 &&
             out->param_count == 0 && out->texture_count == 0 && out->shader_params.count == 0 &&
-            !out->late_shader[0] && !out->surface_shader[0] && !out->offset_shader[0]) {
+            !out->late_shader[0] && out->shader_hook < 0) {
             log_warn("cscene: material '%s' has no usable keys; skipped", out->material);
             continue;
         }
@@ -1949,6 +2013,8 @@ CetraSceneDesc* cscene_load(const char* path) {
     parse_gi_volumes(d, root);
     parse_occluders(d, root);
     parse_decals(d, root);
+    // Before the materials, which name them.
+    parse_shader_hooks(d, root);
     parse_materials(d, root);
     parse_camera(d, root);
     cJSON_Delete(root);
@@ -1979,10 +2045,12 @@ CetraSceneDesc* cscene_load(const char* path) {
     // And a shader file (spec 13.29), for the same reason again.
     for (int i = 0; i < d->post_pass_count; i++)
         resolve_in_place(d->post_passes[i].shader, CSCENE_MAX_PATH, dir);
+    for (int i = 0; i < d->shader_hook_count; i++) {
+        resolve_in_place(d->shader_hooks[i].surface, CSCENE_MAX_PATH, dir);
+        resolve_in_place(d->shader_hooks[i].offset, CSCENE_MAX_PATH, dir);
+    }
     for (int i = 0; i < d->material_count; i++) {
         resolve_in_place(d->materials[i].late_shader, CSCENE_MAX_PATH, dir);
-        resolve_in_place(d->materials[i].surface_shader, CSCENE_MAX_PATH, dir);
-        resolve_in_place(d->materials[i].offset_shader, CSCENE_MAX_PATH, dir);
     }
     // A flipbook's sidecar is the same again; the sheet it names resolves beside the sidecar.
     for (int i = 0; i < d->fire.system.count; i++)
