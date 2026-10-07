@@ -993,6 +993,14 @@ float fresnelOpacity(float coverage, float materialOpacity, float iorF0, float N
     return coverage * mix(materialOpacity, 1.0, f);
 }
 
+// An app's surface hook (spec 13.29), in a hooked variant only: the struct it decides, then its
+// own GLSL, which program.c splices in at the marker -- after every declaration above, so the
+// hook may name any of them, and before main(), which calls it.
+#ifdef CETRA_SURFACE_HOOK
+#include "surface_hook.glsl"
+// CETRA_SURFACE_HOOK_CHUNK
+#endif
+
 void main() {
 #if CETRA_HAS(PBR_FEAT_FUR)
     // A fur shell keeps only its strands' cross-sections. First of all, so every debug view sees
@@ -1304,6 +1312,23 @@ void main() {
         albedoMap *= FurLayer > 0.0 ? mix(furRootShade, 1.0, FurLayer) * furTone : furRootShade;
 #endif
 
+#ifdef CETRA_SURFACE_HOOK
+    // The hook's first call (spec 13.29), for its albedo and coverage: everything from the alpha
+    // test on reads what it decides -- the cut, the decals, the albedo view, the prepass's exit.
+    // The rest of the surface is not gathered yet, so it starts from the material's scalars; the
+    // second call, below, is where those are kept.
+    vec3 hookAlbedo = albedoMap;
+    float hookAlpha = texAlpha;
+    vec3 hookGeomNormal = normalize(gl_FrontFacing ? Normal : -Normal);
+    vec4 hookVertexColor = vertexColorExists > 0 ? VertexColor : vec4(1.0);
+    CetraSurface hooked =
+        cetraSurfaceStart(uv, WorldPos, V, hookGeomNormal, hookVertexColor, hookAlbedo, hookAlpha,
+                          hookGeomNormal, roughness, metallic, ao, emissiveFactor);
+    cetraSurface(hooked);
+    albedoMap = hooked.albedo;
+    texAlpha = hooked.alpha;
+#endif
+
     /*
      * The masked silhouette, resolved to COVERAGE and written back into
      * texAlpha (spec 11.87).
@@ -1543,6 +1568,22 @@ void main() {
         float grain = 0.5 * atan(doubled.y, doubled.x);
         anisoDir = vec2(cos(grain), sin(grain));
     }
+
+#ifdef CETRA_SURFACE_HOOK
+    // The hook's second call: the same function from the same gathered albedo and coverage, now
+    // with the material's normal, roughness, metallic, AO and emission to start from, which are
+    // what is kept. Before specular AA, the wet surface and the rain, so each reads the hook's.
+    // The emission takes the capture gate again, which is 0 or 1 and so leaves a value the hook
+    // passed through as it was.
+    hooked = cetraSurfaceStart(uv, WorldPos, V, hookGeomNormal, hookVertexColor, hookAlbedo,
+                               hookAlpha, N, roughnessMap, metallicMap, aoMap, emissiveMap);
+    cetraSurface(hooked);
+    N = normalize(hooked.normal);
+    roughnessMap = clamp(hooked.roughness, 0.04, 1.0);
+    metallicMap = hooked.metallic;
+    aoMap = hooked.ao;
+    emissiveMap = hooked.emissive * uEmissiveGate;
+#endif
 
 
     // Geometric specular anti-aliasing (Kaplanyan 2016): where the normal

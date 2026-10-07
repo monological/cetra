@@ -1791,6 +1791,18 @@ static void parse_materials(CetraSceneDesc* d, const cJSON* root) {
         parse_shader_params(&out->shader_params, m, "shaderParams", owner);
         copy_string(out->late_shader, sizeof(out->late_shader),
                     cJSON_GetObjectItemCaseSensitive(m, "lateShader"));
+        copy_string(out->surface_shader, sizeof(out->surface_shader),
+                    cJSON_GetObjectItemCaseSensitive(m, "surfaceShader"));
+        copy_string(out->offset_shader, sizeof(out->offset_shader),
+                    cJSON_GetObjectItemCaseSensitive(m, "offsetShader"));
+        out->offset_bound = 0.0f;
+        get_float(m, "offsetBound", &out->offset_bound);
+        out->offset_animated = false;
+        get_bool(m, "offsetAnimated", &out->offset_animated);
+        if (out->offset_shader[0] && out->offset_bound <= 0.0f)
+            log_warn("cscene: material '%s' has an offsetShader and no positive offsetBound; "
+                     "it will be culled as though it never moved",
+                     out->material);
 
         // Compound like sss: four numbers describing one rectangle. Skipped by
         // the generic walk below, which would otherwise warn on the 4-array as
@@ -1814,7 +1826,9 @@ static void parse_materials(CetraSceneDesc* d, const cJSON* root) {
                 continue;
             if (strcmp(p->string, "sss") == 0 || strcmp(p->string, "layers") == 0 ||
                 strcmp(p->string, "splatDomain") == 0 || strcmp(p->string, "roads") == 0 ||
-                strcmp(p->string, "shaderParams") == 0 || strcmp(p->string, "lateShader") == 0)
+                strcmp(p->string, "shaderParams") == 0 || strcmp(p->string, "lateShader") == 0 ||
+                strcmp(p->string, "surfaceShader") == 0 || strcmp(p->string, "offsetShader") == 0 ||
+                strcmp(p->string, "offsetBound") == 0 || strcmp(p->string, "offsetAnimated") == 0)
                 continue;
             // A string value is a texture path. Recorded apart from the numeric
             // params only because a float array cannot hold one; the key still
@@ -1870,7 +1884,7 @@ static void parse_materials(CetraSceneDesc* d, const cJSON* root) {
 
         if (!out->has_sss && out->layer_count == 0 && out->road_count == 0 &&
             out->param_count == 0 && out->texture_count == 0 && out->shader_params.count == 0 &&
-            !out->late_shader[0]) {
+            !out->late_shader[0] && !out->surface_shader[0] && !out->offset_shader[0]) {
             log_warn("cscene: material '%s' has no usable keys; skipped", out->material);
             continue;
         }
@@ -1965,8 +1979,11 @@ CetraSceneDesc* cscene_load(const char* path) {
     // And a shader file (spec 13.29), for the same reason again.
     for (int i = 0; i < d->post_pass_count; i++)
         resolve_in_place(d->post_passes[i].shader, CSCENE_MAX_PATH, dir);
-    for (int i = 0; i < d->material_count; i++)
+    for (int i = 0; i < d->material_count; i++) {
         resolve_in_place(d->materials[i].late_shader, CSCENE_MAX_PATH, dir);
+        resolve_in_place(d->materials[i].surface_shader, CSCENE_MAX_PATH, dir);
+        resolve_in_place(d->materials[i].offset_shader, CSCENE_MAX_PATH, dir);
+    }
     // A flipbook's sidecar is the same again; the sheet it names resolves beside the sidecar.
     for (int i = 0; i < d->fire.system.count; i++)
         resolve_in_place(d->fire.flipbook[i], CSCENE_MAX_PATH, dir);

@@ -199,14 +199,97 @@ static bool _include_expand(IncludeBuffer* out, const char* source, bool* seen, 
     return true;
 }
 
+// Every chunk the build already expanded into `source`, by the marker gen_shader_header.py leaves
+// at its head, counted as included. An app's chunk spliced into an engine shader (spec 13.29)
+// can then include noise.glsl when the shader around it already has, and get one copy.
+static void _include_mark_expanded(const char* source, bool* seen) {
+    static const char head[] = "// ---- begin ";
+    for (const char* at = strstr(source, head); at; at = strstr(at + 1, head)) {
+        const char* name = at + sizeof(head) - 1;
+        const char* end = strstr(name, " ----");
+        const char* eol = strchr(name, '\n');
+        if (!end || (eol && eol < end))
+            continue;
+        for (int i = 0; i < shader_include_chunk_count; i++) {
+            const char* candidate = shader_include_chunks[i].name;
+            if (strlen(candidate) == (size_t)(end - name) &&
+                strncmp(candidate, name, (size_t)(end - name)) == 0)
+                seen[i] = true;
+        }
+    }
+}
+
 char* shader_source_with_includes(const char* source) {
     if (!source)
         return NULL;
     bool* seen = calloc((size_t)shader_include_chunk_count, sizeof(bool));
+    if (seen)
+        _include_mark_expanded(source, seen);
     IncludeBuffer out = {0};
     const bool ok =
         seen && _include_append(&out, "", 0) && _include_expand(&out, source, seen, true);
     free(seen);
+    if (!ok) {
+        free(out.data);
+        return NULL;
+    }
+    return out.data;
+}
+
+char* shader_source_splice(const char* host, const char* marker, const char* chunk) {
+    if (!host || !marker || !chunk)
+        return NULL;
+    // The marker's line, and the number the driver gives it: counted from the last #line, since
+    // a variant's defines block resets the count with one.
+    const size_t marker_len = strlen(marker);
+    const char* at = NULL;
+    int number = 1;
+    for (const char* line = host; *line;) {
+        const char* eol = strchr(line, '\n');
+        const size_t len = eol ? (size_t)(eol - line) : strlen(line);
+        const char* t = line;
+        while (*t == ' ' || *t == '\t')
+            t++;
+        if ((size_t)(t - line) + marker_len <= len && strncmp(t, marker, marker_len) == 0) {
+            at = line;
+            break;
+        }
+        int reset = 0;
+        number = sscanf(t, "#line %d", &reset) == 1 ? reset : number + 1;
+        if (!eol)
+            break;
+        line = eol + 1;
+    }
+    if (!at) {
+        log_error("shader_source_splice: no line '%s' to splice at", marker);
+        return NULL;
+    }
+
+    // The chunk's own #includes, expanded against what the host already holds, so a chunk the
+    // host expanded at build time is not defined twice.
+    bool* seen = calloc((size_t)shader_include_chunk_count, sizeof(bool));
+    IncludeBuffer expanded = {0};
+    bool ok = seen && _include_append(&expanded, "", 0);
+    if (ok) {
+        _include_mark_expanded(host, seen);
+        ok = _include_expand(&expanded, chunk, seen, false);
+    }
+    free(seen);
+    if (!ok) {
+        free(expanded.data);
+        return NULL;
+    }
+
+    // Source string 1 for the chunk, so a compile error in it reads "1:<its own line>", then back
+    // to string 0 at the host's next line.
+    const char* after = strchr(at, '\n');
+    IncludeBuffer out = {0};
+    ok = _include_append(&out, host, (size_t)(at - host)) &&
+         _include_appendf(&out, "#line 1 1\n") &&
+         _include_append(&out, expanded.data, expanded.len) &&
+         _include_appendf(&out, "\n#line %d 0\n", number + 1) &&
+         (!after || _include_append(&out, after + 1, strlen(after + 1)));
+    free(expanded.data);
     if (!ok) {
         free(out.data);
         return NULL;

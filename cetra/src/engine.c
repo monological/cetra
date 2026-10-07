@@ -41,6 +41,7 @@
 #include "text.h"
 #include "ltc.h"
 #include "render.h"
+#include "shader_hook.h"
 #include "springbone.h"
 #include "wind.h"
 #include "profiler.h"
@@ -390,6 +391,9 @@ void free_engine(Engine* engine) {
         }
         free(engine->programs);
     }
+    for (size_t i = 0; i < engine->shader_hook_count; ++i)
+        free_shader_hook(engine->shader_hooks[i]);
+    free(engine->shader_hooks);
 
     if (engine->camera) {
         free_camera(engine->camera);
@@ -2056,18 +2060,19 @@ ShaderProgram* engine_get_program(Engine* engine, const char* program_name) {
     return program;
 }
 
-ShaderProgram* engine_pbr_variant(Engine* engine, PbrFamily family, unsigned features) {
+ShaderProgram* engine_pbr_variant(Engine* engine, PbrFamily family, unsigned features,
+                                  const ShaderHook* hook) {
     if (!engine)
         return NULL;
 
     char name[PBR_VARIANT_NAME_MAX];
-    pbr_variant_name(family, features, name, sizeof(name));
+    pbr_variant_name(family, features, hook, name, sizeof(name));
 
     ShaderProgram* program = engine_find_program(engine, name);
     if (program)
         return program;
 
-    program = create_pbr_program_variant(family, features);
+    program = create_pbr_program_variant(family, features, hook);
     if (!program)
         return NULL;
     engine_add_program(engine, program);

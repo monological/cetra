@@ -11,13 +11,15 @@
 
 // The lit-surface variant of `family` carrying exactly `features`, compiled and
 // registered on first ask and answered from the program cache afterwards
-// (spec 11.93; the family since 11.95).
+// (spec 11.93; the family since 11.95), with `hook`'s GLSL spliced in when it is
+// not NULL (spec 13.29).
 //
 // Here rather than in program.c because it is cache management over
 // engine->programs, and program.h cannot see an Engine -- engine.h includes it,
 // not the other way round. The naming rule stays in program.c, where the builder
 // that has to agree with it lives.
-ShaderProgram* engine_pbr_variant(Engine* engine, PbrFamily family, unsigned features);
+ShaderProgram* engine_pbr_variant(Engine* engine, PbrFamily family, unsigned features,
+                                  const struct ShaderHook* hook);
 
 /*
  * Every uniform object_position.glsl's displacers read, in one call.
