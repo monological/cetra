@@ -614,7 +614,7 @@ static void on_init(Game* game) {
     // basement, its kitchen and its clock.
     home_build(&kit, engine, g_scene);
     tv_build(&g_tv, &kit, engine, g_scene, !g_args.no_static);
-    basement_build(&kit);
+    basement_build(&kit, (unsigned int)g_args.seed);
     kitchen_build(&kit, (unsigned int)g_args.seed);
     lights_build(&g_lights, &kit, engine, g_scene, (unsigned int)g_args.seed, !g_args.no_flicker,
                  g_args.flashlight);

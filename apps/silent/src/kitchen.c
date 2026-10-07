@@ -623,9 +623,7 @@ static void preserve_jar(Kit* kit, const KitFrame* f, KitRng* rng, float a, floa
     }
 }
 
-// A board of preserves from a0 to a1 at height y: two staggered rows, the
-// taller jars at the back, with the odd gap where one has been taken.
-static void preserves(Kit* kit, const KitFrame* f, KitRng* rng, float a0, float a1, float y) {
+void kitchen_preserves(Kit* kit, const KitFrame* f, KitRng* rng, float a0, float a1, float y) {
     for (int row = 0; row < 2; row++) {
         const float d = row == 0 ? 0.075f : 0.185f;
         float a = a0 + (row == 0 ? 0.0f : 0.045f);
@@ -656,28 +654,30 @@ static void shelf_wall(Kit* kit, KitRng* rng) {
         kit_frame_box(kit, &f, MAT_WOOD, 0.05f, s1, y, y + 0.03f, 0.0f, 0.26f, false);
         kit_frame_box(kit, &f, MAT_STEEL, 0.15f, 0.18f, y - 0.12f, y, 0.0f, 0.2f, false);
         kit_frame_box(kit, &f, MAT_STEEL, s1 - 0.18f, s1 - 0.15f, y - 0.12f, y, 0.0f, 0.2f, false);
-        preserves(kit, &f, rng, 0.08f, s1 - 0.02f, y + 0.03f);
+        kitchen_preserves(kit, &f, rng, 0.08f, s1 - 0.02f, y + 0.03f);
     }
     clutter(kit, &f, rng, 0.15f, s1 - 0.15f, 0.0f, 0.0f, COUNTER_TOP, 3);
 }
 
-// A ladder-back chair at (x, z), facing along `yaw` (its sitter faces +Z of
-// that turn).
-static void chair(Kit* kit, float x, float z, float yaw) {
-    const KitFrame f = {{x, FLOOR_Y, z}, yaw};
+void kitchen_chair(Kit* kit, const KitFrame* f) {
     const float s = 0.21f, leg = 0.018f;
-    kit_frame_box(kit, &f, MAT_WOOD, -s, s, 0.44f, 0.47f, -s, s, false);
+    kit_frame_box(kit, f, MAT_WOOD, -s, s, 0.44f, 0.47f, -s, s, false);
     for (int i = 0; i < 4; i++) {
         const float a = (i & 1) ? s - leg : -s + leg, d = (i & 2) ? s - leg : -s + leg;
         const float top = (i & 2) ? 0.44f : 0.98f; // the back legs run on up as posts
-        kit_frame_box(kit, &f, MAT_WOOD, a - leg, a + leg, 0.0f, top, d - leg, d + leg, false);
+        kit_frame_box(kit, f, MAT_WOOD, a - leg, a + leg, 0.0f, top, d - leg, d + leg, false);
     }
     for (int r = 0; r < 3; r++) {
         const float y = 0.62f + 0.14f * (float)r;
-        kit_frame_box(kit, &f, MAT_WOOD, -s + leg, s - leg, y, y + 0.045f, -s + 0.005f,
+        kit_frame_box(kit, f, MAT_WOOD, -s + leg, s - leg, y, y + 0.045f, -s + 0.005f,
                       -s + 2.0f * leg - 0.005f, false);
     }
-    kit_frame_box(kit, &f, KIT_COLLIDER_ONLY, -s, s, 0.0f, 0.47f, -s, s, true);
+    kit_frame_box(kit, f, KIT_COLLIDER_ONLY, -s, s, 0.0f, 0.47f, -s, s, true);
+}
+
+// One at (x, z) on the kitchen floor, facing along `yaw`.
+static void chair(Kit* kit, float x, float z, float yaw) {
+    kitchen_chair(kit, &(KitFrame){{x, FLOOR_Y, z}, yaw});
 }
 
 /*

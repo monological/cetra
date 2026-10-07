@@ -39,8 +39,8 @@ typedef struct Basement {
 } Basement;
 
 // The foundation, the slab, the framing overhead, the beam and its posts, the stair and its
-// walls, and the bulb's rose on the ceiling.
-void basement_build(Kit* kit);
+// walls, what is kept down there, placed from `seed`, and the bulb's rose on the ceiling.
+void basement_build(Kit* kit, unsigned int seed);
 
 // The bulb: a node of its own with its light.
 void basement_start(Basement* b, Engine* engine, Scene* scene, unsigned int seed);
