@@ -3,6 +3,7 @@
 #include "cetra/light.h"
 
 #include "basement.h"
+#include "kitchen.h"
 #include "lights.h"
 #include "mats.h"
 
@@ -315,12 +316,293 @@ static void stairwell(Kit* kit) {
     dado(kit, &KIT_WORLD_Z, west, 4, -(CELLAR_X0 + COAT), -1.0f);
 }
 
-void basement_build(Kit* kit) {
+// ---------------------------------------------------------------------------------------------
+// What is down there
+
+#define FURNACE_X (-3.0f)
+#define FURNACE_Z 13.0f
+#define DUCT_R    0.1f
+#define DUCT_Y    (-0.15f) // where the ducts run, under the joists
+#define FLUE_Y    (-0.4f)
+
+/*
+ * An old coal furnace, the octopus kind: a squat round body, its feed and ash doors sooted round,
+ * and its ducts reaching up and out from the crown to run under the joists to the rooms above,
+ * never due north or south, where two of the irradiance probes stand over it. The body is wide
+ * enough to hold two more inside it, which switches them off rather than leaving them a hand's
+ * breadth from it. Its flue goes back to the chimney through the west wall.
+ */
+static void furnace(Kit* kit) {
+    const KitFrame* w = &KIT_WORLD;
+    const vec2 body[] = {{0.0f, 0.0f},  {0.6f, 0.0f},  {0.63f, 0.05f}, {0.63f, 0.12f},
+                         {0.6f, 0.15f}, {0.6f, 0.95f}, {0.63f, 0.98f}, {0.63f, 1.05f},
+                         {0.52f, 1.2f}, {0.3f, 1.32f}, {0.14f, 1.37f}, {0.0f, 1.38f}};
+    kit_frame_lathe(kit, w, MAT_LAMP_POST, FURNACE_X, FURNACE_Z, BASEMENT_Y, body, KIT_COUNT(body),
+                    20);
+
+    // The doors, facing into the room: the feed door and under it the ash door, each in a
+    // blackened patch.
+    const KitFrame front = {{FURNACE_X, BASEMENT_Y, FURNACE_Z}, 0.5f * GLM_PIf};
+    kit_frame_box(kit, &front, MAT_SOOT, -0.24f, 0.24f, 0.4f, 0.8f, 0.55f, 0.615f, false);
+    kit_frame_box(kit, &front, MAT_IRON, -0.17f, 0.17f, 0.47f, 0.73f, 0.6f, 0.64f, false);
+    kit_frame_box(kit, &front, MAT_IRON, 0.1f, 0.15f, 0.58f, 0.62f, 0.64f, 0.68f, false);
+    kit_frame_box(kit, &front, MAT_SOOT, -0.2f, 0.2f, 0.1f, 0.34f, 0.57f, 0.635f, false);
+    kit_frame_box(kit, &front, MAT_IRON, -0.15f, 0.15f, 0.14f, 0.3f, 0.62f, 0.65f, false);
+
+    const float crown = BASEMENT_Y + 1.33f;
+    const struct {
+        float deg, reach;
+    } ARMS[] = {{0.0f, 2.3f}, {50.0f, 2.0f}, {130.0f, 1.8f}, {230.0f, 1.8f}, {310.0f, 2.0f}};
+    for (int i = 0; i < KIT_COUNT(ARMS); i++) {
+        const float c = cosf(glm_rad(ARMS[i].deg)), s = sinf(glm_rad(ARMS[i].deg));
+        const float r[7] = {
+            0.22f, 0.45f, 0.7f, 0.9f, ARMS[i].reach, ARMS[i].reach + 0.12f, ARMS[i].reach + 0.14f};
+        const float y[7] = {crown, crown + 0.3f, DUCT_Y - 0.12f, DUCT_Y, DUCT_Y, 0.0f, 0.2f};
+        vec3 path[7];
+        for (int k = 0; k < 7; k++)
+            glm_vec3_copy((vec3){FURNACE_X + r[k] * c, y[k], FURNACE_Z + r[k] * s}, path[k]);
+        kit_frame_pipe(kit, w, MAT_STEEL, path, 7, DUCT_R, 12);
+    }
+    const vec3 flue[4] = {{FURNACE_X - 0.2f, crown - 0.05f, FURNACE_Z},
+                          {FURNACE_X - 0.35f, FLUE_Y - 0.2f, FURNACE_Z},
+                          {FURNACE_X - 0.6f, FLUE_Y, FURNACE_Z},
+                          {CELLAR_X0, FLUE_Y, FURNACE_Z}};
+    kit_frame_pipe(kit, w, MAT_IRON, flue, 4, 0.085f, 10);
+    const vec2 thimble[] = {{0.0f, 0.0f}, {0.13f, 0.0f}, {0.13f, 0.025f}, {0.0f, 0.025f}};
+    kit_frame_lathe_on(kit, w, MAT_IRON, (vec3){CELLAR_X0, FLUE_Y, FURNACE_Z},
+                       (vec3){1.0f, 0.0f, 0.0f}, thimble, KIT_COUNT(thimble), 12);
+
+    kit_frame_box(kit, w, KIT_COLLIDER_ONLY, FURNACE_X - 0.66f, FURNACE_X + 0.66f, BASEMENT_Y,
+                  crown + 0.1f, FURNACE_Z - 0.66f, FURNACE_Z + 0.66f, true);
+}
+
+// A tall water heater in the south-west corner, its flue and its two pipes going up into the
+// floor.
+static void water_heater(Kit* kit) {
+    const KitFrame* w = &KIT_WORLD;
+    const float x = -4.45f, z = 10.65f, foot = BASEMENT_Y + 0.08f, top = foot + 1.55f;
+    const vec2 stand[] = {{0.0f, 0.0f}, {0.2f, 0.0f}, {0.2f, 0.08f}, {0.0f, 0.08f}};
+    kit_frame_lathe(kit, w, MAT_IRON, x, z, BASEMENT_Y, stand, KIT_COUNT(stand), 12);
+    const vec2 tank[] = {{0.0f, 0.0f},  {0.24f, 0.0f},  {0.25f, 0.02f}, {0.25f, 1.45f},
+                         {0.2f, 1.52f}, {0.06f, 1.55f}, {0.0f, 1.55f}};
+    kit_frame_lathe(kit, w, MAT_APPLIANCE, x, z, foot, tank, KIT_COUNT(tank), 18);
+    const vec3 flue[2] = {{x, top - 0.02f, z}, {x, 0.2f, z}};
+    kit_frame_pipe(kit, w, MAT_STEEL, flue, 2, 0.05f, 10);
+    for (int i = -1; i <= 1; i += 2) {
+        const vec3 pipe[2] = {{x + 0.12f * (float)i, top - 0.06f, z},
+                              {x + 0.12f * (float)i, 0.2f, z}};
+        kit_frame_pipe(kit, w, MAT_BRASS, pipe, 2, 0.012f, 8);
+    }
+    kit_frame_box(kit, w, KIT_COLLIDER_ONLY, x - 0.25f, x + 0.25f, BASEMENT_Y, top, z - 0.25f,
+                  z + 0.25f, true);
+}
+
+// A double laundry tub on iron legs against the east wall, one side holding grey water that has
+// stood there a long time, under a tap from the wall.
+#define TUB_Z 14.0f
+static void laundry_tub(Kit* kit) {
+    const KitFrame f = {{CELLAR_X1, BASEMENT_Y, TUB_Z},
+                        -0.5f * GLM_PIf}; // a along +z, d into the room
+    const float ha = 0.55f, d0 = 0.02f, d1 = 0.6f, y0 = 0.55f, y1 = 0.9f, t = 0.04f;
+    kit_frame_box(kit, &f, MAT_APPLIANCE, -ha, ha, y0, y0 + t, d0, d1, false);
+    kit_frame_box(kit, &f, MAT_APPLIANCE, -ha, ha, y0, y1, d1 - t, d1, false);
+    kit_frame_box(kit, &f, MAT_APPLIANCE, -ha, ha, y0, y1, d0, d0 + t, false);
+    kit_frame_box(kit, &f, MAT_APPLIANCE, -ha, -ha + t, y0, y1, d0 + t, d1 - t, false);
+    kit_frame_box(kit, &f, MAT_APPLIANCE, ha - t, ha, y0, y1, d0 + t, d1 - t, false);
+    kit_frame_box(kit, &f, MAT_APPLIANCE, -0.02f, 0.02f, y0, y1, d0 + t, d1 - t, false);
+    kit_frame_box(kit, &f, MAT_DARK_GLASS, -ha + t, -0.02f, y0 + t, y0 + 0.22f, d0 + t, d1 - t,
+                  false);
+    for (int i = 0; i < 4; i++) {
+        const float a = (i & 1) ? ha - 0.05f : -ha + 0.05f, d = (i & 2) ? d1 - 0.05f : d0 + 0.05f;
+        kit_frame_box(kit, &f, MAT_IRON, a - 0.02f, a + 0.02f, 0.0f, y0, d - 0.02f, d + 0.02f,
+                      false);
+    }
+    const vec3 tap[4] = {{-0.27f, 1.2f, 0.0f},
+                         {-0.27f, 1.2f, 0.25f},
+                         {-0.27f, 1.12f, 0.31f},
+                         {-0.27f, 1.02f, 0.31f}};
+    kit_frame_pipe(kit, &f, MAT_STEEL, tap, 4, 0.012f, 8);
+    for (int i = -1; i <= 1; i += 2)
+        kit_frame_box(kit, &f, MAT_IRON, -0.27f + 0.08f * (float)i - 0.02f,
+                      -0.27f + 0.08f * (float)i + 0.02f, 1.22f, 1.25f, 0.02f, 0.06f, false);
+    kit_frame_box(kit, &f, KIT_COLLIDER_ONLY, -ha, ha, 0.0f, y1, 0.0f, d1, true);
+}
+
+// A floor drain out from the tub, in the pool of water that never quite drains into it.
+static void drain(Kit* kit, KitRng* rng) {
+    const float x = 3.75f, z = TUB_Z, y = BASEMENT_Y;
+    enum { POOL = 14 };
+    vec3 pool[POOL];
+    for (int i = 0; i < POOL; i++) {
+        const float t = 2.0f * GLM_PIf * (float)i / (float)POOL, r = kit_rrange(rng, 0.35f, 0.62f);
+        glm_vec3_copy((vec3){x + r * cosf(t), y + 0.002f, z + 0.8f * r * sinf(t)}, pool[i]);
+    }
+    kit_polygon_facing(kit, MAT_CELLAR_WET, pool, POOL, (vec3){0.0f, 1.0f, 0.0f});
+    const vec2 grate[] = {{0.0f, 0.0f}, {0.09f, 0.0f}, {0.09f, 0.006f}, {0.0f, 0.006f}};
+    kit_frame_lathe(kit, &KIT_WORLD, MAT_IRON, x, z, y, grate, KIT_COUNT(grate), 16);
+    for (int k = -2; k <= 2; k++)
+        kit_frame_box(kit, &KIT_WORLD, MAT_BLACK, x - 0.06f, x + 0.06f, y + 0.006f, y + 0.007f,
+                      z + 0.025f * (float)k - 0.006f, z + 0.025f * (float)k + 0.006f, false);
+}
+
+/*
+ * A unit of open shelving on the east wall from a0 along it, its boards bowed under what has been
+ * put on them and left: paint cans on the bottom, jars of preserves nobody will eat on the two
+ * middle boards, laid in thirds at the sag, and boxes on the top.
+ */
+static void shelf_unit(Kit* kit, KitRng* rng, float a0) {
+    const KitFrame f = {{CELLAR_X1, BASEMENT_Y, 10.3f}, -0.5f * GLM_PIf};
+    const float w = 1.2f, d = 0.4f, top = 1.95f, post = 0.04f;
+    for (int i = 0; i < 4; i++) {
+        const float a = (i & 1) ? a0 + w - post : a0, dd = (i & 2) ? d - post : 0.02f;
+        kit_frame_box(kit, &f, MAT_WOOD, a, a + post, 0.0f, top, dd, dd + post, false);
+    }
+    const float boards[4] = {0.35f, 0.8f, 1.25f, 1.7f};
+    for (int b = 0; b < 4; b++) {
+        const float y = boards[b], sag = kit_rrange(rng, 0.008f, 0.022f);
+        vec2 board[18];
+        for (int i = 0; i <= 8; i++) {
+            const float u = (float)i / 8.0f, at = y - sag * sinf(GLM_PIf * u);
+            glm_vec2_copy((vec2){a0 + u * w, at}, board[i]);
+            glm_vec2_copy((vec2){a0 + u * w, at - 0.022f}, board[17 - i]);
+        }
+        kit_frame_extrude(kit, &f, MAT_WOOD, board, 18, 0.0f, d);
+        for (int third = 0; third < 3; third++) {
+            const float s0 = a0 + 0.05f + (float)third * (w - 0.1f) / 3.0f;
+            const float s1 = s0 + (w - 0.1f) / 3.0f;
+            const float on = y - sag * sinf(GLM_PIf * (0.5f * (s0 + s1) - a0) / w);
+            if (b == 1 || b == 2) {
+                kitchen_preserves(kit, &f, rng, s0, s1, on);
+            } else if (b == 0) {
+                const vec2 can[] = {{0.0f, 0.0f},     {0.085f, 0.0f},  {0.085f, 0.17f},
+                                    {0.078f, 0.185f}, {0.06f, 0.185f}, {0.0f, 0.18f}};
+                if (kit_rnd(rng) < 0.8f)
+                    kit_frame_lathe(kit, &f, MAT_ENAMEL, 0.5f * (s0 + s1),
+                                    0.15f + 0.1f * kit_rnd(rng), on, can, KIT_COUNT(can), 14);
+            } else if (b == 3 && kit_rnd(rng) < 0.7f) {
+                const float h = kit_rrange(rng, 0.12f, 0.22f), dd = kit_rrange(rng, 0.25f, 0.36f);
+                kit_frame_box(kit, &f, MAT_CARDBOARD, s0 + 0.01f, s1 - 0.01f, on, on + h, 0.02f, dd,
+                              false);
+            }
+        }
+    }
+    kit_frame_box(kit, &f, KIT_COLLIDER_ONLY, a0, a0 + w, 0.0f, top, 0.0f, d, true);
+}
+
+// Old cardboard boxes stacked against the front wall, taped shut once and never opened again;
+// between the irradiance probes' columns, so none stands at the edge of one.
+static void boxes(Kit* kit, KitRng* rng) {
+    const float stacks[2] = {1.5f, 2.5f};
+    for (int s = 0; s < 2; s++) {
+        float y = BASEMENT_Y;
+        const int n = kit_rnd(rng) < 0.5f ? 2 : 3;
+        for (int k = 0; k < n; k++) {
+            const float hw = kit_rrange(rng, 0.2f, 0.28f), hd = kit_rrange(rng, 0.18f, 0.25f);
+            const float hh = kit_rrange(rng, 0.13f, 0.21f), yaw = kit_rrange(rng, -0.15f, 0.15f);
+            const vec3 centre = {stacks[s] + kit_rrange(rng, -0.03f, 0.03f), y + hh,
+                                 CELLAR_Z0 + 0.03f + hd};
+            kit_box(kit, MAT_CARDBOARD, centre, (vec3){hw, hh, hd}, yaw, true);
+            y += 2.0f * hh;
+        }
+    }
+}
+
+// A workbench on the east wall: a heavy top on four legs and a shelf under, a vise at its end, a
+// pegboard over it with the tools that were put back, and on it a jar of screws and an oil can.
+static void workbench(Kit* kit) {
+    const KitFrame f = {{CELLAR_X1, BASEMENT_Y, 15.6f}, -0.5f * GLM_PIf};
+    const float w = 1.8f, d = 0.6f, top = 0.9f, leg = 0.035f;
+    kit_frame_box(kit, &f, MAT_WOOD, 0.0f, w, top - 0.05f, top, 0.0f, d, false);
+    for (int i = 0; i < 4; i++) {
+        const float a = (i & 1) ? w - 0.06f : 0.06f, dd = (i & 2) ? d - 0.06f : 0.06f;
+        kit_frame_box(kit, &f, MAT_WOOD, a - leg, a + leg, 0.0f, top - 0.05f, dd - leg, dd + leg,
+                      false);
+    }
+    kit_frame_box(kit, &f, MAT_WOOD, 0.05f, w - 0.05f, 0.18f, 0.2f, 0.05f, d - 0.05f, false);
+    kit_frame_box(kit, &f, MAT_IRON, 0.12f, 0.32f, top, top + 0.09f, d - 0.07f, d + 0.02f, false);
+    kit_frame_box(kit, &f, MAT_IRON, 0.12f, 0.32f, top + 0.02f, top + 0.09f, d + 0.02f, d + 0.05f,
+                  false);
+    const vec3 handle[2] = {{0.12f, top + 0.04f, d + 0.08f}, {0.32f, top + 0.04f, d + 0.08f}};
+    kit_frame_pipe(kit, &f, MAT_STEEL, handle, 2, 0.008f, 6);
+
+    kit_frame_box(kit, &f, MAT_CARDBOARD, 0.1f, w - 0.1f, top + 0.15f, top + 0.95f, 0.0f, 0.012f,
+                  false);
+    kit_frame_box(kit, &f, MAT_STEEL, 0.3f, 0.78f, top + 0.56f, top + 0.68f, 0.014f, 0.017f, false);
+    kit_frame_box(kit, &f, MAT_WOOD, 0.78f, 0.9f, top + 0.53f, top + 0.7f, 0.012f, 0.04f, false);
+    kit_frame_box(kit, &f, MAT_WOOD, 1.0f, 1.035f, top + 0.4f, top + 0.72f, 0.015f, 0.035f, false);
+    kit_frame_box(kit, &f, MAT_IRON, 0.96f, 1.075f, top + 0.72f, top + 0.76f, 0.012f, 0.05f, false);
+    for (int i = 0; i < 3; i++) {
+        const float a = 1.25f + 0.1f * (float)i, len = 0.14f + 0.04f * (float)i;
+        kit_frame_box(kit, &f, MAT_STEEL, a - 0.011f, a + 0.011f, top + 0.62f - len, top + 0.62f,
+                      0.013f, 0.019f, false);
+    }
+
+    const vec2 jar[] = {
+        {0.0f, 0.0f}, {0.04f, 0.0f}, {0.04f, 0.11f}, {0.032f, 0.12f}, {0.0f, 0.12f}};
+    kit_frame_lathe(kit, &f, MAT_GLASS_CLEAR, 1.45f, 0.35f, top, jar, KIT_COUNT(jar), 14);
+    const vec2 screws[] = {{0.0f, 0.004f}, {0.035f, 0.004f}, {0.035f, 0.06f}, {0.0f, 0.07f}};
+    kit_frame_lathe(kit, &f, MAT_STEEL, 1.45f, 0.35f, top, screws, KIT_COUNT(screws), 10);
+    const vec2 oil[] = {{0.0f, 0.0f}, {0.06f, 0.0f}, {0.06f, 0.06f}, {0.02f, 0.1f}, {0.0f, 0.1f}};
+    kit_frame_lathe(kit, &f, MAT_ENAMEL, 1.65f, 0.3f, top, oil, KIT_COUNT(oil), 14);
+    const vec3 spout[2] = {{1.65f, top + 0.09f, 0.3f}, {1.65f, top + 0.2f, 0.42f}};
+    kit_frame_pipe(kit, &f, MAT_ENAMEL, spout, 2, 0.006f, 6);
+
+    kit_frame_box(kit, &f, KIT_COLLIDER_ONLY, 0.0f, w, 0.0f, top, 0.0f, d, true);
+}
+
+/*
+ * A small plank door in the front wall at head height, into the crawlspace under the porch:
+ * hinged on the left, shut with a hasp and a padlock gone to rust, and nothing to say what is
+ * kept in there.
+ */
+static void crawlspace_door(Kit* kit) {
+    const KitFrame* w = &KIT_WORLD;
+    const float x0 = -1.15f, x1 = -0.55f, y0 = BASEMENT_Y + 1.55f, y1 = BASEMENT_Y + 2.2f;
+    const float z = CELLAR_Z0, mid = 0.5f * (y0 + y1);
+    kit_frame_box(kit, w, MAT_JOIST, x0 - 0.05f, x1 + 0.05f, y0 - 0.05f, y1 + 0.05f, z, z + 0.02f,
+                  false);
+    for (int i = 0; i < 4; i++) {
+        const float a = x0 + 0.15f * (float)i;
+        kit_frame_box(kit, w, MAT_WOOD, a + 0.003f, a + 0.147f, y0, y1, z + 0.02f, z + 0.045f,
+                      false);
+    }
+    for (int i = 0; i < 2; i++) {
+        const float y = i ? y1 - 0.16f : y0 + 0.08f;
+        kit_frame_box(kit, w, MAT_WOOD, x0 + 0.03f, x1 - 0.03f, y, y + 0.08f, z + 0.045f,
+                      z + 0.065f, false);
+        kit_frame_box(kit, w, MAT_IRON, x0 - 0.04f, x0 + 0.2f, y + 0.02f, y + 0.06f, z + 0.065f,
+                      z + 0.07f, false);
+    }
+    kit_frame_box(kit, w, MAT_IRON, x1 - 0.1f, x1 + 0.04f, mid - 0.022f, mid + 0.022f, z + 0.045f,
+                  z + 0.052f, false);
+    kit_frame_box(kit, w, MAT_IRON, x1 - 0.004f, x1 + 0.03f, mid - 0.1f, mid - 0.035f, z + 0.055f,
+                  z + 0.075f, false);
+    const vec3 shackle[4] = {{x1 + 0.0f, mid - 0.035f, z + 0.065f},
+                             {x1 + 0.0f, mid - 0.005f, z + 0.065f},
+                             {x1 + 0.026f, mid - 0.005f, z + 0.065f},
+                             {x1 + 0.026f, mid - 0.035f, z + 0.065f}};
+    kit_frame_pipe(kit, w, MAT_IRON, shackle, 4, 0.004f, 6);
+}
+
+void basement_build(Kit* kit, unsigned int seed) {
     foundation(kit);
     framing(kit);
     beam(kit);
     stair(kit);
     stairwell(kit);
+
+    KitRng rng = {seed * 2654435761u + 4099u};
+    furnace(kit);
+    water_heater(kit);
+    laundry_tub(kit);
+    drain(kit, &rng);
+    shelf_unit(kit, &rng, 0.0f);
+    shelf_unit(kit, &rng, 1.3f);
+    boxes(kit, &rng);
+    workbench(kit);
+    // A kitchen chair carried down and set facing the far corner, a little way from it.
+    kitchen_chair(kit, &(KitFrame){{4.35f, BASEMENT_Y, 18.85f}, 0.25f * GLM_PIf});
+    crawlspace_door(kit);
 
     // Earth under the porch, where the home's irradiance probes the basement brought below the
     // yard would otherwise hang in nothing outside the front wall. Closed, so the volume finds
