@@ -86,10 +86,10 @@ typedef struct CSceneLight {
     bool has_attenuation;
     float attenuation[3]; // point/spot: constant, linear, quadratic
     bool has_range;
-    float range;       // point/spot cull radius (else derived from attenuation)
-    float cone[2];     // spot: inner, outer half-angle in DEGREES
-    bool cast_shadows; // directional/spot (point/area cannot cast)
-    bool shadow_cache; // a point light's shadow drawn once and kept (spec 13.16)
+    float range;   // point/spot cull radius (else derived from attenuation)
+    float cone[2]; // spot: inner, outer half-angle in DEGREES
+    bool cast_shadows;
+    bool shadow_cache; // a point or area light's shadow drawn once and kept (spec 13.16)
     float source_radius;
     float source_length;
     float shadow_near;
@@ -110,6 +110,8 @@ typedef struct CSceneLightOverride {
     float intensity;
     bool has_cast_shadows;
     bool cast_shadows; // whether the named light casts; imported lights arrive false
+    bool has_shadow_cache;
+    bool shadow_cache; // whether its shadow is drawn once and kept, as a light's own does
 } CSceneLightOverride;
 
 // Sized to hold the whole material vocabulary with room to grow. It is not an

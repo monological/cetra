@@ -257,19 +257,22 @@ static void _pack_cluster_light(GpuPackedLight* dst, const struct Light* light, 
     glm_vec3_copy(up, dst->up_area);
     dst->up_area[3] = 0.0f;
 
-    // A cached light's tiles, in what a point light leaves free: the body its views were drawn
-    // over -- never the light's own now, which a flame moves -- its segment in the reserved
-    // slot and the two cone cosines, which only a spot reads, its radius and near plane in a
-    // panel's extent, and its centre, where view 0 stands, beside its first tile. The far
-    // plane is the range, in pos_range[3].
+    // A cached light's tiles, in what its type leaves free: the body its views were drawn over
+    // -- never the light's own now, which a flame moves -- its segment in the reserved slot and
+    // the two cone cosines, which only a spot reads, and its centre, where view 0 stands, beside
+    // its first tile; its near plane beside its up, which every type ships and none reads the
+    // fourth of. A point light's radius takes the first of a panel's extent, which a panel
+    // keeps: it has no body, so its radius is 0 by its type. The far plane is the range, in
+    // pos_range[3].
     glm_vec3_zero(dst->shadow_tile);
     dst->shadow_tile[3] = -1.0f;
     if (cached) {
         dst->atten_cutoff[2] = tile.segment[0];
         dst->atten_cutoff[3] = tile.segment[1];
         dst->shadow_misc[0] = tile.segment[2];
-        dst->shadow_misc[2] = tile.radius;
-        dst->shadow_misc[3] = tile.near_plane;
+        if (light->type != LIGHT_AREA)
+            dst->shadow_misc[2] = tile.radius;
+        dst->up_area[3] = tile.near_plane;
         glm_vec3_copy(tile.centre, dst->shadow_tile);
         dst->shadow_tile[3] = (float)tile.first;
     }

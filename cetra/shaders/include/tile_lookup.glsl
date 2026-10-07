@@ -51,8 +51,9 @@ TileLight tileLightAt(uint li) {
     TileLight t;
     t.centre = clusterLights[li].shadowTile.xyz;
     t.segment = vec3(clusterLights[li].attenCutoff.zw, clusterLights[li].shadowMisc.x);
-    t.radius = clusterLights[li].shadowMisc.z;
-    t.nearP = clusterLights[li].shadowMisc.w;
+    // A panel keeps its size where a point light's radius rides, and has no body (spec 13.27).
+    t.radius = clusterLights[li].dirType.w == 3.0 ? 0.0 : clusterLights[li].shadowMisc.z;
+    t.nearP = clusterLights[li].upArea.w;
     t.farP = clusterLights[li].posRange.w;
     t.first = int(clusterLights[li].shadowTile.w);
     t.current = clusterLights[li].posRange.xyz;

@@ -59,10 +59,11 @@ typedef struct GpuPackedLight {
                            // (-1 = none), reserved, cos inner cone -- for a cached
                            // light, the last two are its drawn body's segment's x and y
     float shadow_misc[4];  // cos outer cone, punctual shadow layer, size.xy -- for a cached
-                           // light, the segment's z, and the drawn body's radius and the
-                           // near plane in place of the size
+                           // light, the segment's z, and for a cached point light the drawn
+                           // body's radius in place of size.x
     // Roll reference, unit and orthonormal to dir: a panel's height axis
-    // (spec 9.2), an asymmetric IES profile's azimuth zero (spec 11.57).
+    // (spec 9.2), an asymmetric IES profile's azimuth zero (spec 11.57); then a cached
+    // light's near plane.
     float up_area[4];
     // A cached light's drawn body's centre, where its first view stands, and its first tile
     // (-1 = none).
