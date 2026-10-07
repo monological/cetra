@@ -421,6 +421,13 @@ typedef struct {
     int no_vignette; // Force the default vignette off
     float dither;
     int no_dither; // Force the default output dither off
+    // The CRT (spec 13.28): --crt turns it on, and each setting turns it on and sets it
+    int crt;
+    float crt_lines;     // -1 = the engine's
+    float crt_scanlines; // -1 = the engine's
+    float crt_mask;      // -1 = the engine's
+    float crt_curvature; // -1 = the engine's
+    float crt_bleed;     // -1 = the engine's
     // Store every texture uncompressed, which is the pre-11.85 engine exactly.
     int no_texture_compression;
     int texture_probe;           // Print the texture memory ledger and exit-time totals

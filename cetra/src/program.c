@@ -1231,6 +1231,14 @@ ShaderProgram* create_glare_output_program() {
     return create_post_program("glare_output", glare_output_frag_shader_str);
 }
 
+ShaderProgram* create_crt_resample_program() {
+    return create_post_program("crt_resample", crt_resample_frag_shader_str);
+}
+
+ShaderProgram* create_crt_program() {
+    return create_post_program("crt", crt_frag_shader_str);
+}
+
 ShaderProgram* create_le_half_program() {
     return create_post_program("le_half", le_half_frag_shader_str);
 }

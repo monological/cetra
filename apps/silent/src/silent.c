@@ -142,6 +142,7 @@ typedef struct SilentArgs {
     bool day;
     bool no_taa;
     bool no_grade;
+    bool no_crt;
     int local_exposure;      // 1 on, 0 off; -1 = this mode's own choice
     float le_highlights;     // the local exposure's highlight contrast; below 0 = this mode's own
     float le_shadows;        // and below it
@@ -512,11 +513,15 @@ static void build_probes(void) {
         free_reflection_probe_set(set);
 }
 
-static void build_post(const Engine* engine, bool night, bool grade) {
+static void build_post(const Engine* engine, bool night, bool grade, bool crt) {
     PostFX* fx = engine->postfx;
     if (!fx)
         return;
     postfx_apply_film_look(fx);
+    // A console on a living-room television (spec 13.28), whose screen is the noise this place
+    // has instead of a film's grain.
+    fx->grain_enabled = false;
+    fx->crt_enabled = crt;
     fx->contact_shadows_enabled = true;
     // A puddle in the road mirrors a lamp head or a window across the street,
     // ten to twenty metres up its reflected ray. The default reach of eight fades
@@ -658,7 +663,7 @@ static void on_init(Game* game) {
     cat_voice_start(&g_voice, &g_cat, audio, g_args.cat_say);
 
     // Before the sky: its reflections are baked through the fog set here.
-    build_post(engine, !g_args.day, !g_args.no_grade);
+    build_post(engine, !g_args.day, !g_args.no_grade, !g_args.no_crt);
     build_sky(engine);
 
     if (!g_args.no_wind) {
@@ -924,6 +929,7 @@ static void print_usage(const char* prog) {
     printf("      --no-taa            No temporal AA, and so no upscale: full resolution, raw "
            "edges\n");
     printf("      --no-grade          Without the green-grey colour grade\n");
+    printf("      --no-crt            Straight to the window, without the television\n");
     printf("      --local-exposure    An exposure per pixel on top of the camera's\n");
     printf("      --no-local-exposure Without it\n");
     printf("      --le-highlights F   Its contrast above middle grey (1 = none)\n");
@@ -1041,6 +1047,8 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
             a->no_taa = true;
         } else if (!strcmp(s, "--no-grade")) {
             a->no_grade = true;
+        } else if (!strcmp(s, "--no-crt")) {
+            a->no_crt = true;
         } else if (!strcmp(s, "--local-exposure")) {
             a->local_exposure = 1;
         } else if (!strcmp(s, "--no-local-exposure")) {

@@ -652,6 +652,17 @@ typedef struct PostFX {
     // to contour bands. Screen-space static: it carries no frame term.
     bool dither_enabled;
     float dither_strength; // Peak amplitude in 8-bit LSB (1 = textbook TPDF)
+    // A consumer television (spec 13.28): the finished picture, the app's overlay included and
+    // the debug GUI not, shown as a living-room CRT would show a console's. Off by default.
+    bool crt_enabled;
+    float crt_lines;     // the signal's lines, top to bottom
+    float crt_scanlines; // 0 = lines fused, 1 = thin beams with dark gaps between
+    float crt_mask;      // the slot mask's depth, 0..1
+    float crt_curvature; // the tube's bow, 0 = flat
+    float crt_bleed;     // composite colour bleed, 0..1
+    struct Crt* crt;     // engine-owned; made on first use
+    bool crt_failed;     // could not be made; never retried
+    bool crt_this_frame; // engine-owned: this frame's picture went into the CRT's
     // 3D colour-grading LUT (spec 11.58). Sits between the gamma encode and the
     // grain, because it is the creative look: grain is sensor noise applied over
     // a finished look, and dither is quantization after both.
@@ -886,6 +897,13 @@ typedef struct PostFXGBufferWrites {
 // skipping SSAO, bloom, and tone mapping.
 void postfx_run(PostFX* fx, GLuint msaa_fbo, GLuint target_fbo, bool frame_is_hdr,
                 const PostFXGBufferWrites* writes, mat4 projection, mat4 view);
+
+// The framebuffer this frame's picture is drawn into, by postfx_run and anything drawn over it
+// before postfx_present_picture: the CRT's when it is on (spec 13.28), else the window, 0.
+GLuint postfx_picture_fbo(PostFX* fx);
+// Show this frame's picture in the window, through the CRT when it went into the CRT's;
+// otherwise there is nothing to do, the picture being the window already.
+void postfx_present_picture(PostFX* fx);
 
 // Producer-side predicate: true when some active effect will consume the
 // normals G-buffer, so the scene pass should write color attachment 1. The

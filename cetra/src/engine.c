@@ -2331,8 +2331,11 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode) {
         .oit_moment_atlas = engine->moments_this_frame ? engine->moment_atlas_texture : 0,
         .oit_near_far = {engine->camera ? engine->camera->near_clip : 1.0f,
                          engine->camera ? engine->camera->far_clip : 2.0f}};
-    postfx_run(engine->postfx, engine->framebuffer, 0, frame_mode == RENDER_MODE_PBR, &writes,
-               engine->draw_projection, engine->view_matrix);
+    // The picture -- the frame, the debug tiles and the app's overlay -- goes into the CRT's
+    // framebuffer when one is on (spec 13.28), and into the window when not.
+    postfx_run(engine->postfx, engine->framebuffer, postfx_picture_fbo(engine->postfx),
+               frame_mode == RENDER_MODE_PBR, &writes, engine->draw_projection,
+               engine->view_matrix);
 
     // Sky LUT debug overlay onto the composited frame (an acceptance tool,
     // the csm_debug shape: a library-side flag the app/GUI toggles)
@@ -2358,6 +2361,10 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode) {
         engine->overlay(engine, engine->overlay_user);
         profiler_scope_end(engine->profiler);
     }
+
+    // Through the CRT into the window, if the picture went into it; the GUI is the developer's
+    // and goes over the television, sharp.
+    postfx_present_picture(engine->postfx);
 
     // GUI last, after tone mapping. gui_render_frame self-gates on
     // gui_frame_active, so it no-ops when no panel/overlay is enabled.
