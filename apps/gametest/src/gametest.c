@@ -4354,34 +4354,35 @@ static AudioZone probe_zone(AudioSystem* audio, const char* name, const vec3 lo,
     return audio_zone_add(audio, &(AudioZoneDesc){name, &box, 1});
 }
 
-// The zone cases (spec 13.33): what a link lets through, the best of several paths, and how the
-// gain eases when the listener crosses into another zone, for a voice started there, and for a
-// link that changes.
+// The zone cases (spec 13.33): what a link lets through, the best of several paths, the first
+// update, and how the gain eases when the listener crosses into another zone, for a voice started
+// there, and for a link that changes. Each places the listener itself, since one of them is
+// about the update that places it first.
 static int run_audio_zone_probe(AudioSystem* audio, const char* which, const char* file) {
     const vec3 origin = {0.0f, 0.0f, 0.0f}, ahead = {0.0f, 0.0f, -10.0f};
-    if (!strcmp(which, "zone")) {
-        // A tone in another zone through a link of 0.25, against itself with no zones; and a 2D
-        // tone, never placed, heard whole either way.
-        Sound* flat = audio_sound_from_tone(audio, 440.0f, AUDIO_BUS_SFX);
-        audio_sound_set_looping(flat, true);
-        audio_sound_play(flat);
-        probe_print(audio, which, "flat_bare");
-        audio_sound_stop(flat);
-        Sound* t = probe_tone_at(audio, ahead);
+    if (!strcmp(which, "zone_start")) {
+        // A tone placed and measured before there are any zones, so it is seeded whole; then the
+        // listener's zone and the tone's, with a link of 0.25 between them. The first update
+        // lands it at 0.25 whatever its delta, since until it the listener was nowhere, and a
+        // tone placed after that is at 0.25 from its first window. Neither fades.
+        Sound* t = probe_tone_at(audio, ahead); // the listener's default pose is the origin's
         probe_print(audio, which, "bare");
+        audio_sound_stop(t);
         const AudioZone here = probe_zone(audio, "here", (vec3){-2, -2, -2}, (vec3){2, 2, 2});
         const AudioZone there = probe_zone(audio, "there", (vec3){-2, -2, -12}, (vec3){2, 2, -8});
         audio_zone_link(audio, here, there, 0.25f);
-        probe_listen(audio, origin, 10.0f);
-        probe_print(audio, which, "zoned");
+        audio_sound_play(t);
+        probe_listen(audio, origin, (float)AUDIO_PROBE_WINDOW / 48000.0f);
+        probe_print(audio, which, "first");
         audio_sound_stop(t);
-        audio_sound_play(flat);
-        probe_print(audio, which, "flat_zoned");
+        probe_tone_at(audio, ahead);
+        probe_print(audio, which, "placed");
         return 0;
     }
     if (!strcmp(which, "zone_path")) {
         // Three zones, the listener's and the tone's joined directly at 0.1 and through a third
         // at 0.5 and 0.5: the best path is the long way round, 0.25.
+        probe_listen(audio, origin, 0.0f);
         Sound* t = probe_tone_at(audio, ahead);
         probe_print(audio, which, "bare");
         const AudioZone a = probe_zone(audio, "a", (vec3){-2, -2, -2}, (vec3){2, 2, 2});
@@ -4395,25 +4396,51 @@ static int run_audio_zone_probe(AudioSystem* audio, const char* which, const cha
         audio_sound_stop(t);
         return 0;
     }
-    if (!strcmp(which, "zone_fade")) {
-        if (!file) {
-            fprintf(stderr, "audio-probe zone_fade: needs --audio-file <wav>\n");
+    if (!file) {
+        fprintf(stderr, "audio-probe %s: needs --audio-file <wav>\n", which);
+        return 1;
+    }
+    if (!strcmp(which, "zone")) {
+        // A tone in another zone through a link of 0.25, against itself with no zones; and a
+        // sound decoded from a file and never placed -- spatialized at the origin from the
+        // moment it is made, in the tone's zone and not the listener's -- heard whole either way.
+        const vec3 listener = {0.0f, 0.0f, 10.0f};
+        probe_listen(audio, listener, 0.0f);
+        Sound* flat = audio_sound_from_file(audio, file, AUDIO_BUS_SFX);
+        if (!flat)
             return 1;
-        }
+        audio_sound_set_looping(flat, true);
+        audio_sound_play(flat);
+        probe_print(audio, which, "flat_bare");
+        audio_sound_stop(flat);
+        Sound* t = probe_tone_at(audio, ahead);
+        probe_print(audio, which, "bare");
+        const AudioZone here = probe_zone(audio, "here", (vec3){-2, -2, 8}, (vec3){2, 2, 12});
+        const AudioZone there = probe_zone(audio, "there", (vec3){-2, -2, -12}, (vec3){2, 2, 2});
+        audio_zone_link(audio, here, there, 0.25f);
+        probe_listen(audio, listener, 10.0f);
+        probe_print(audio, which, "zoned");
+        audio_sound_stop(t);
+        audio_sound_play(flat);
+        probe_print(audio, which, "flat_zoned");
+        return 0;
+    }
+    if (!strcmp(which, "zone_fade")) {
         Sound* proto = audio_sound_from_file(audio, file, AUDIO_BUS_SFX);
         if (!proto)
             return 1;
-        // Space split at x = 0: A to the west, B to the east. The listener stands either side of
-        // the line, so stepping over it changes its distance from anything by a millimetre's
-        // worth; the tone is in B and a voice in A.
-        const vec3 in_a = {-0.1f, 0.0f, 0.0f}, in_b = {0.1f, 0.0f, 0.0f};
+        // Space split at x = 0: A to the west, B to the east. The listener stands a millimetre
+        // apart either side of the line, so stepping over it changes nothing but the zone; the
+        // tone is in B and a voice in A.
+        const vec3 in_a = {-0.0005f, 0.0f, 0.0f}, in_b = {0.0005f, 0.0f, 0.0f};
         const vec3 tone_at = {1.0f, 0.0f, -5.0f}, voice_at = {-1.0f, 0.0f, -5.0f};
         const AudioVoiceDesc voice = {.position = {voice_at[0], voice_at[1], voice_at[2]}};
         probe_listen(audio, in_a, 0.0f);
         audio_play_voice(audio, proto, &voice);
         probe_print(audio, which, "voice_bare");
+        float l = 0.0f, r = 0.0f;
         for (int i = 0; i < 3; i++) // the rest of the voice, so nothing else is heard over it
-            probe_print(audio, which, "voice_tail");
+            probe_measure(audio, &l, &r, NULL);
         Sound* t = probe_tone_at(audio, tone_at);
         probe_print(audio, which, "bare");
         const AudioZone a = probe_zone(audio, "a", (vec3){-50, -50, -50}, (vec3){0, 50, 50});
@@ -4442,7 +4469,8 @@ static int run_audio_zone_probe(AudioSystem* audio, const char* which, const cha
         probe_print(audio, which, "voice");
         return 0;
     }
-    return -1;
+    fprintf(stderr, "audio-probe: unknown case '%s'\n", which);
+    return 1;
 }
 
 static int run_audio_probe(Game* game, const char* which, const char* file) {
@@ -4452,12 +4480,11 @@ static int run_audio_probe(Game* game, const char* which, const char* file) {
         return 1;
     }
     game_set_audio_system(game, audio); // owned; freed by free_game
+    if (!strncmp(which, "zone", 4))
+        return run_audio_zone_probe(audio, which, file);
 
     vec3 origin = {0, 0, 0};
     probe_listen(audio, origin, 0.0f); // fix the listener at the origin
-    const int zoned = run_audio_zone_probe(audio, which, file);
-    if (zoned >= 0)
-        return zoned;
 
     float l = 0.0f, r = 0.0f;
     int rc = 0;
