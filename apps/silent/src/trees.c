@@ -137,12 +137,22 @@ void trees_init(Trees* trees, Engine* engine, Scene* scene) {
     ShaderProgram* pbr = engine_get_program(engine, CETRA_PROGRAM_PBR);
     trees->bark = bark_material(scene, pbr, NULL);
     trees->still_bark = bark_material(scene, pbr, trees->bark);
-    for (int i = 0; i < TREE_MODELS; i++)
+    for (int i = 0; i < TREE_MODELS; i++) {
         trees->dead[i] = grow(i, trees->bark);
-    TreeParams tp;
-    dead_params(&tp, 0);
-    trees->trunk_length = tp.trunk_length;
-    trees->trunk_radius = tp.trunk_radius;
+        TreeParams tp;
+        dead_params(&tp, i);
+        trees->trunk_length = tp.trunk_length;
+        trees->trunk_radius[i] = tp.trunk_radius;
+    }
+}
+
+void trees_trunk_collider(Kit* kit, float x, float z, float ground, float radius, float height,
+                          float yaw, float lean) {
+    // Tipped about X after the yaw, the trunk's axis runs (sin lean sin yaw, cos lean,
+    // sin lean cos yaw), so at half the height it stands this far off its foot.
+    const float off = 0.5f * height * tanf(lean);
+    kit_collider(kit, (vec3){x + off * sinf(yaw), ground + 0.5f * height, z + off * cosf(yaw)},
+                 (vec3){radius, 0.5f * height, radius}, 0.0f);
 }
 
 Mesh* trees_grow_still(Trees* trees, int model) {
@@ -209,8 +219,9 @@ void trees_build(Trees* trees, Kit* kit, Scene* scene, unsigned int seed) {
         node_add_mesh(node, mesh_ref(model));
         node_add_child(groups[which], node);
 
-        const float r = trees->trunk_radius * scale * 0.8f;
-        kit_collider(kit, (vec3){x, y + 1.5f, z}, (vec3){r, 1.5f, r}, 0.0f);
+        trees_trunk_collider(kit, x, z, land_height(x, z),
+                             trees->trunk_radius[which] * scale * TREES_TRUNK_BODY,
+                             TREES_TRUNK_HEIGHT, yaw, lean);
         placed++;
     }
     printf("silent: %d dead trees from %d models\n", placed, TREE_MODELS);

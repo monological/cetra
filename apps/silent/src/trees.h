@@ -24,8 +24,9 @@ struct Engine;
 typedef struct Trees {
     Material* bark;
     Material* still_bark;
-    Mesh* dead[TREE_MODELS];          // NULL where one would not grow
-    float trunk_length, trunk_radius; // a model's, at its native size
+    Mesh* dead[TREE_MODELS];         // NULL where one would not grow
+    float trunk_length;              // the models', at their native size
+    float trunk_radius[TREE_MODELS]; // each model's, at its native size
     // Where each model's copies hang, so they are adjacent and draw together; from trees_build.
     SceneNode* groups[TREE_MODELS];
     // The draw distance every tree is hung under, TREES_REACH_* in fog; 0 = drawn however far.
@@ -45,6 +46,18 @@ void trees_grow(const TreeParams* p, Material* bark, Material* foliage, Mesh** w
 
 // A dead model grown again in the still bark, to lie on the ground; NULL when it will not grow.
 Mesh* trees_grow_still(Trees* trees, int model);
+
+// The share of a trunk's base radius it keeps at a body's height, a little up its taper, and how
+// tall a trunk's body stands: past anyone's head.
+#define TREES_TRUNK_BODY   0.85f
+#define TREES_TRUNK_HEIGHT 3.0f
+
+// A standing trunk's body: a box `radius` each way, from the ground at `ground` up `height`,
+// centred where a trunk leaning `lean` radians off upright, toward `yaw`, is at half that height
+// -- so a leaning tree's body leans with it rather than standing beside it. `yaw` and `lean` are
+// the tree's own: its node turned by yaw about Y, then tipped by lean about X.
+void trees_trunk_collider(Kit* kit, float x, float z, float ground, float radius, float height,
+                          float yaw, float lean);
 
 // Drops the models, once everything standing them about holds its own reference.
 void trees_release(Trees* trees);
