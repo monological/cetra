@@ -69,13 +69,11 @@ void apply_cscene_occluders(Scene* scene, const CetraSceneDesc* cscn);
 void apply_cscene_decals(Scene* scene, const CetraSceneDesc* cscn);
 
 // Grow the scene file's trees (spec 13.35) and stand them under the root: bark and foliage
-// sharing one material each per form, and a conifer drawn through its levels of detail.
-void apply_cscene_trees(struct Engine* engine, Scene* scene, const CetraSceneDesc* cscn);
-
-// --tree-probe: grow each of the scene file's trees again from the same parameters and print a
-// digest of every stream of its meshes, and for a conifer its shape and its levels of detail.
-// What the conifer gate reads.
-void cscene_tree_probe(const CetraSceneDesc* cscn);
+// sharing one material each per form, and a conifer drawn through its levels of detail. `probe`
+// prints, for each tree as it is grown, a digest of every stream of its meshes, and for a
+// conifer its shape and its levels of detail.
+void apply_cscene_trees(struct Engine* engine, Scene* scene, const CetraSceneDesc* cscn,
+                        bool probe);
 
 // Build the scene file's reflection probes (spec 11.70) and install them for the
 // engine to capture. True when it took the scene's probes, which is what tells the

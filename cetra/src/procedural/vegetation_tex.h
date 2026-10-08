@@ -75,28 +75,13 @@ unsigned char* veg_leaf_sprite(int size);
 void veg_leaf_cluster_maps(int width, int height, unsigned char** out_albedo,
                            unsigned char** out_normal, unsigned char** out_rough);
 
-// A conifer's needle sprays (spec 13.35): `cells` cells along U only, as the leaf atlas, each
-// a shoot with side shoots and needles. The first `live_cells` are live, the next `dead_cells`
-// browning, and any after those a twig with its needles gone. Colours are sRGB albedo.
-typedef struct VegSprayDesc {
-    unsigned int seed;
-    int cells, live_cells, dead_cells;
-    // 0 needles all round each shoot, as a spruce's; toward 1 parted into two rows, as a fir's.
-    float flat;
-    float live_rgb[3];
-    float dead_rgb[3];
-    float twig_rgb[3];
-} VegSprayDesc;
-
-// Olive needles, rust-brown dead ones and brown twigs, between a spruce's brush and a fir's
-// rows; the caller sets the cell counts.
-VegSprayDesc veg_spray_desc_default(void);
-
-// Each shoot's base sits at v = 0 -- row 0, the row uploaded first -- since a card pivots about
-// v = 0 in the wind. Unlike everything above, this one is deterministic in `desc->seed` and safe
-// on any thread: it draws from its own generator and touches no global.
-void veg_needle_spray_maps(int width, int height, const VegSprayDesc* desc,
-                           unsigned char** out_albedo, unsigned char** out_normal,
-                           unsigned char** out_rough);
+// The needle-spray atlas a conifer's cards address (spec 13.35): the cells the mesh generator
+// names, along U only as the leaf atlas, each a shoot with side shoots and needles -- olive and
+// live, rust-brown and browning, or a grey twig with its needles gone. Each shoot's base sits at
+// v = 0, the row uploaded first, since a card pivots about v = 0 in the wind. Unlike everything
+// above, deterministic and safe on any thread: it draws from its own generator and touches no
+// global. All three buffers are allocated here and owned by the caller.
+void veg_needle_spray_maps(int width, int height, unsigned char** out_albedo,
+                           unsigned char** out_normal, unsigned char** out_rough);
 
 #endif // _VEGETATION_TEX_H_

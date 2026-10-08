@@ -3,7 +3,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "cetra/lod.h"
 #include "cetra/material.h"
 #include "cetra/mesh.h"
 #include "cetra/procedural/rock.h"
@@ -58,7 +57,6 @@ static const struct {
 #define DEAD_MAX    0.075f
 #define DEAD_SHARE  0.10f
 #define SNAG_SHARE  0.06f
-#define CARD_KEEP   0.45f // a conifer's sprays at each level of detail, of the level nearer
 // An atlas cell: 1024 wide, as wide as the plant's, so the material array grows no wider for it.
 #define NEEDLE_CELL 128
 
@@ -122,12 +120,8 @@ static Material* needles_material(Scene* scene, ShaderProgram* program) {
     m->wind_response = 0.6f;
     m->cached_shadow_wind = CACHED_SHADOW_WIND_REST;
     material_set_program(m, program);
-    VegSprayDesc spray = veg_spray_desc_default();
-    spray.cells = TG_LEAF_VARIANTS;
-    spray.live_cells = TG_SPRAY_LIVE_CELLS;
-    spray.dead_cells = TG_SPRAY_DEAD_CELLS;
     unsigned char *albedo = NULL, *normal = NULL, *rough = NULL;
-    veg_needle_spray_maps(w, h, &spray, &albedo, &normal, &rough);
+    veg_needle_spray_maps(w, h, &albedo, &normal, &rough);
     TextureDesc albedo_desc = texture_desc(true);
     albedo_desc.coverage_cutoff = cutoff;
     if (albedo)
@@ -157,7 +151,6 @@ static void grow_conifer(int model, Material* bark, Material* needles, Mesh** wo
     tree_skeleton_build(&skel, &p);
     *wood = create_mesh();
     if (tree_mesh_bark(&skel, &p, *wood)) {
-        mesh_build_lod_chain(*wood);
         (*wood)->material = bark;
     } else {
         free_mesh(*wood);
@@ -165,7 +158,6 @@ static void grow_conifer(int model, Material* bark, Material* needles, Mesh** wo
     }
     *sprays = create_mesh();
     if (tree_mesh_leaves(&skel, &p, *sprays)) {
-        mesh_build_card_lod_chain(*sprays, TG_SPRAY_INDICES, CARD_KEEP);
         (*sprays)->material = needles;
     } else {
         free_mesh(*sprays);

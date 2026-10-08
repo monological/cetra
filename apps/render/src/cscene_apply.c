@@ -14,7 +14,6 @@
 #include "cetra/ibl.h"
 #include "cetra/ies.h"
 #include "cetra/light.h"
-#include "cetra/lod.h"
 #include "cetra/material.h"
 #include "cetra/mesh.h"
 #include "cetra/noise.h"
@@ -786,22 +785,8 @@ void apply_cscene_decals(Scene* scene, const CetraSceneDesc* cscn) {
  * a tree needs a kind and a place, which is more than a flag can carry.
  */
 
-// A conifer's sprays at a distance: each level of detail keeps this share of the one nearer.
-#define TREE_CARD_KEEP 0.45f
 // The edge of a bark tile and of one cell of a foliage atlas.
 #define TREE_TEXTURE_SIZE 256
-
-// A scene file's tree as the generator's parameters: the one statement of it, read by the build
-// and the probe alike, so what the probe reports is the tree the frame drew.
-static bool cscene_tree_params(const CSceneTree* t, TreeParams* p) {
-    TreePreset preset;
-    if (!tree_preset_from_name(t->preset, &preset))
-        return false;
-    tree_params_preset(p, preset, t->seed);
-    if (t->irregularity >= 0.0f)
-        p->irregularity = t->irregularity;
-    return true;
-}
 
 static Material* tree_bark_material(Scene* scene, ShaderProgram* program) {
     const int n = TREE_TEXTURE_SIZE;
@@ -832,13 +817,13 @@ static Material* tree_bark_material(Scene* scene, ShaderProgram* program) {
 }
 
 // A tree's foliage: alpha-tested cards drawn from both sides, casting their cut-out shadow and
-// fluttering in the wind. `needles` takes a conifer's spray atlas, otherwise the broadleaf
-// sprigs; the cards of either form address the same cells.
-static Material* tree_foliage_material(Scene* scene, ShaderProgram* program, bool needles) {
+// fluttering in the wind, over the atlas a tree of `form`'s cards address.
+static Material* tree_foliage_material(Scene* scene, ShaderProgram* program, TreeForm form) {
     const int w = TREE_TEXTURE_SIZE * TG_LEAF_VARIANTS, h = TREE_TEXTURE_SIZE;
     const float cutoff = 0.4f;
+    const char* prefix = form == TREE_FORM_EXCURRENT ? "tree_needles" : "tree_leaves";
     Material* m = create_material();
-    m->name = safe_strdup(needles ? "tree_needles" : "tree_leaves");
+    m->name = safe_strdup(prefix);
     m->roughness = 1.0f;
     m->alpha_mode = ALPHA_MASK;
     m->alphaCutoff = cutoff;
@@ -848,18 +833,9 @@ static Material* tree_foliage_material(Scene* scene, ShaderProgram* program, boo
     m->wind_response = 1.0f;
     material_set_program(m, program);
     unsigned char *albedo = NULL, *normal = NULL, *rough = NULL;
-    if (needles) {
-        VegSprayDesc spray = veg_spray_desc_default();
-        spray.cells = TG_LEAF_VARIANTS;
-        spray.live_cells = TG_SPRAY_LIVE_CELLS;
-        spray.dead_cells = TG_SPRAY_DEAD_CELLS;
-        veg_needle_spray_maps(w, h, &spray, &albedo, &normal, &rough);
-    } else {
-        veg_leaf_cluster_maps(w, h, &albedo, &normal, &rough);
-    }
+    tree_foliage_maps(form, w, h, &albedo, &normal, &rough);
     TextureDesc albedo_desc = texture_desc(true);
     albedo_desc.coverage_cutoff = cutoff;
-    const char* prefix = needles ? "tree_needles" : "tree_leaves";
     char name[64];
     if (albedo) {
         snprintf(name, sizeof(name), "%s_albedo", prefix);
@@ -883,92 +859,20 @@ static Material* tree_foliage_material(Scene* scene, ShaderProgram* program, boo
     return m;
 }
 
-void apply_cscene_trees(Engine* engine, Scene* scene, const CetraSceneDesc* cscn) {
-    if (!cscn || cscn->tree_count == 0)
-        return;
-    ShaderProgram* program = engine_get_program(engine, CETRA_PROGRAM_PBR);
-    Material *bark = NULL, *sprigs = NULL, *needles = NULL;
-    for (int i = 0; i < cscn->tree_count; i++) {
-        const CSceneTree* t = &cscn->trees[i];
-        TreeParams p;
-        if (!cscene_tree_params(t, &p)) {
-            fprintf(stderr, "Warning: tree %d: no preset named '%s'; skipped\n", i, t->preset);
-            continue;
-        }
-        const bool conifer = p.form == TREE_FORM_EXCURRENT;
-        if (!bark)
-            bark = tree_bark_material(scene, program);
-        Material** foliage = conifer ? &needles : &sprigs;
-        if (!*foliage)
-            *foliage = tree_foliage_material(scene, program, conifer);
-
-        TreeSkeleton skel;
-        memset(&skel, 0, sizeof(skel));
-        tree_skeleton_build(&skel, &p);
-        SceneNode* node = create_node();
-        char name[64];
-        snprintf(name, sizeof(name), "tree_%d_%s", i, t->preset);
-        node_set_name(node, name);
-        Mesh* wood = create_mesh();
-        if (tree_mesh_bark(&skel, &p, wood)) {
-            if (conifer)
-                mesh_build_lod_chain(wood);
-            wood->material = bark;
-            node_add_mesh(node, wood);
-        } else {
-            free_mesh(wood);
-        }
-        Mesh* leaves = create_mesh();
-        if (tree_mesh_leaves(&skel, &p, leaves)) {
-            if (conifer)
-                mesh_build_card_lod_chain(leaves, TG_SPRAY_INDICES, TREE_CARD_KEEP);
-            leaves->material = *foliage;
-            node_add_mesh(node, leaves);
-        } else {
-            free_mesh(leaves);
-        }
-        tree_skeleton_free(&skel);
-
-        mat4 m;
-        glm_translate_make(m, (float*)t->position);
-        glm_rotate_y(m, glm_rad(t->yaw), m);
-        glm_scale_uni(m, t->scale);
-        glm_mat4_copy(m, node->original_transform);
-        node_add_child(scene->root_node, node);
-        printf("Scene file: tree %d, %s seed %d, at (%.2f %.2f %.2f) scale %.3f\n", i, t->preset,
-               t->seed, (double)t->position[0], (double)t->position[1], (double)t->position[2],
-               (double)t->scale);
-    }
-}
-
-// FNV-1a over `n` bytes, folded into `h`.
-static unsigned long long fnv1a(unsigned long long h, const void* data, size_t n) {
-    const unsigned char* b = data;
-    for (size_t i = 0; i < n; i++) {
-        h ^= b[i];
-        h *= 1099511628211ull;
-    }
-    return h;
-}
-
 // Every stream of a mesh, so moving any of them -- a position, a wind weight, a vertex colour,
-// the winding -- moves the digest.
-static unsigned long long mesh_digest(const Mesh* m) {
+// the winding -- moves the digest. Over level 0 alone, which a chain leaves where it was.
+static uint64_t mesh_digest(const Mesh* m) {
     const size_t vc = m->vertex_count;
-    unsigned long long h = 1469598103934665603ull;
-    h = fnv1a(h, &m->vertex_count, sizeof(m->vertex_count));
-    h = fnv1a(h, &m->index_count, sizeof(m->index_count));
+    uint64_t h = fnv1a64(FNV1A64_BASIS, &m->vertex_count, sizeof(m->vertex_count));
+    h = fnv1a64(h, &m->index_count, sizeof(m->index_count));
     const struct {
         const float* data;
         size_t per_vertex;
     } streams[] = {{m->vertices, 3},   {m->normals, 3},     {m->tangents, 4},
                    {m->tex_coords, 2}, {m->tex_coords2, 2}, {m->colors, 4}};
     for (size_t i = 0; i < sizeof(streams) / sizeof(streams[0]); i++)
-        if (streams[i].data)
-            h = fnv1a(h, streams[i].data, vc * streams[i].per_vertex * sizeof(float));
-    if (m->indices)
-        h = fnv1a(h, m->indices, m->index_count * sizeof(unsigned int));
-    return h;
+        h = fnv1a64(h, streams[i].data, vc * streams[i].per_vertex * sizeof(float));
+    return fnv1a64(h, m->indices, m->index_count * sizeof(unsigned int));
 }
 
 // A conifer's shape: where its trunk ends, the highest point any spray reaches, the longest
@@ -986,54 +890,98 @@ static void print_conifer_shape(int i, const TreeParams* p, const TreeSkeleton* 
     for (int k = 1; k < skel->branch_count; k++) {
         const Branch* b = &skel->branches[k];
         const float y = skel->points[b->first_point].pos[1];
-        // The whorls' branches alone: not the dead stubs under the crown, nor a snag's splinters.
-        if (b->depth != 3 || y < crown0 || trunk_top <= crown0)
+        // The whorls' branches alone: not the dead stubs under the crown, nor a snag's splinters,
+        // which carry nothing.
+        if (!b->bears_leaves || y < crown0 || trunk_top <= crown0)
             continue;
         int q = (int)(4.0f * (y - crown0) / (trunk_top - crown0));
         q = q < 0 ? 0 : (q > 3 ? 3 : q);
         quarter[q] = fmaxf(quarter[q], b->length);
     }
-    printf("tree-shape i=%d trunk_top=%.4f card_top=%.4f q0=%.4f q1=%.4f q2=%.4f q3=%.4f "
-           "bark_y0=%.4f bark_y1=%.4f leaf_y0=%.4f leaf_y1=%.4f\n",
-           i, (double)trunk_top, (double)card_top, (double)quarter[0], (double)quarter[1],
-           (double)quarter[2], (double)quarter[3], (double)bark->aabb.min[1],
-           (double)bark->aabb.max[1], (double)leaves->aabb.min[1], (double)leaves->aabb.max[1]);
+    printf("tree-shape i=%d trunk_length=%.4f leaf_size=%.4f trunk_top=%.4f card_top=%.4f "
+           "q0=%.4f q1=%.4f q2=%.4f q3=%.4f bark_y0=%.4f bark_y1=%.4f leaf_y0=%.4f leaf_y1=%.4f\n",
+           i, (double)p->trunk_length, (double)p->leaf_size, (double)trunk_top, (double)card_top,
+           (double)quarter[0], (double)quarter[1], (double)quarter[2], (double)quarter[3],
+           (double)bark->aabb.min[1], (double)bark->aabb.max[1], (double)leaves->aabb.min[1],
+           (double)leaves->aabb.max[1]);
 }
 
-void cscene_tree_probe(const CetraSceneDesc* cscn) {
-    if (!cscn)
+// --tree-probe's rows for the scene file's tree `i`, from the meshes the scene draws: a digest
+// of every stream, and for a conifer its shape and its levels of detail. The irregularity is the
+// one the file authored, or `preset` where it left the preset's own.
+static void print_tree_probe(int i, const CSceneTree* t, const TreeParams* p,
+                             const TreeSkeleton* skel, const Mesh* bark, const Mesh* leaves) {
+    char irregularity[32] = "preset";
+    if (t->has_irregularity)
+        snprintf(irregularity, sizeof(irregularity), "%.3f", (double)t->irregularity);
+    printf("tree-probe i=%d preset=%s seed=%d irregularity=%s branches=%d bark_tris=%zu "
+           "leaf_tris=%zu bark=%016llx leaves=%016llx\n",
+           i, tree_preset_name(t->preset), t->seed, irregularity, skel->branch_count,
+           bark->index_count / 3, leaves->index_count / 3, (unsigned long long)mesh_digest(bark),
+           (unsigned long long)mesh_digest(leaves));
+    if (p->form != TREE_FORM_EXCURRENT)
         return;
+    print_conifer_shape(i, p, skel, bark, leaves);
+    printf("tree-lod i=%d keep=%.3f bark_levels=%d leaf_levels=%d", i, (double)TG_SPRAY_KEEP,
+           bark->lod_levels, leaves->lod_levels);
+    for (int k = 0; k < leaves->lod_levels; k++)
+        printf(" sprays%d=%zu", k, leaves->lod_count[k] / TG_SPRAY_INDICES);
+    printf("\n");
+}
+
+// `mesh` under `node` in `material` when its builder made it, otherwise freed.
+static void attach_tree_mesh(SceneNode* node, Mesh* mesh, bool made, Material* material) {
+    if (!made) {
+        free_mesh(mesh);
+        return;
+    }
+    mesh->material = material;
+    node_add_mesh(node, mesh);
+}
+
+void apply_cscene_trees(Engine* engine, Scene* scene, const CetraSceneDesc* cscn, bool probe) {
+    if (!cscn || cscn->tree_count == 0)
+        return;
+    ShaderProgram* program = engine_get_program(engine, CETRA_PROGRAM_PBR);
+    Material *bark = NULL, *sprigs = NULL, *needles = NULL;
     for (int i = 0; i < cscn->tree_count; i++) {
         const CSceneTree* t = &cscn->trees[i];
         TreeParams p;
-        if (!cscene_tree_params(t, &p))
-            continue;
+        tree_params_preset(&p, (TreePreset)t->preset, t->seed);
+        if (t->has_irregularity)
+            p.irregularity = t->irregularity;
+        if (!bark)
+            bark = tree_bark_material(scene, program);
+        Material** foliage = p.form == TREE_FORM_EXCURRENT ? &needles : &sprigs;
+        if (!*foliage)
+            *foliage = tree_foliage_material(scene, program, p.form);
+
         TreeSkeleton skel;
         memset(&skel, 0, sizeof(skel));
         tree_skeleton_build(&skel, &p);
-        Mesh* bark = create_mesh();
+        Mesh* wood = create_mesh();
         Mesh* leaves = create_mesh();
-        tree_mesh_bark(&skel, &p, bark);
-        tree_mesh_leaves(&skel, &p, leaves);
-        printf("tree-probe i=%d preset=%s seed=%d irregularity=%.3f branches=%d bark_tris=%zu "
-               "leaf_tris=%zu bark=%016llx leaves=%016llx\n",
-               i, t->preset, t->seed, (double)p.irregularity, skel.branch_count,
-               bark->index_count / 3, leaves->index_count / 3, mesh_digest(bark),
-               mesh_digest(leaves));
-        // After the digest, so the chains never move it.
-        if (p.form == TREE_FORM_EXCURRENT) {
-            print_conifer_shape(i, &p, &skel, bark, leaves);
-            mesh_build_lod_chain(bark);
-            mesh_build_card_lod_chain(leaves, TG_SPRAY_INDICES, TREE_CARD_KEEP);
-            printf("tree-lod i=%d bark_levels=%d leaf_levels=%d", i, bark->lod_levels,
-                   leaves->lod_levels);
-            for (int k = 0; k < leaves->lod_levels; k++)
-                printf(" sprays%d=%zu", k, leaves->lod_count[k] / TG_SPRAY_INDICES);
-            printf("\n");
-        }
-        free_mesh(bark);
-        free_mesh(leaves);
+        const bool made_wood = tree_mesh_bark(&skel, &p, wood);
+        const bool made_leaves = tree_mesh_leaves(&skel, &p, leaves);
+        if (probe)
+            print_tree_probe(i, t, &p, &skel, wood, leaves);
         tree_skeleton_free(&skel);
+
+        SceneNode* node = create_node();
+        char name[64];
+        snprintf(name, sizeof(name), "tree_%d_%s", i, tree_preset_name(t->preset));
+        node_set_name(node, name);
+        attach_tree_mesh(node, wood, made_wood, bark);
+        attach_tree_mesh(node, leaves, made_leaves, *foliage);
+        mat4 m;
+        glm_translate_make(m, (float*)t->position);
+        glm_rotate_y(m, glm_rad(t->yaw), m);
+        glm_scale_uni(m, t->scale);
+        glm_mat4_copy(m, node->original_transform);
+        node_add_child(scene->root_node, node);
+        printf("Scene file: tree %d, %s seed %d, at (%.2f %.2f %.2f) scale %.3f\n", i,
+               tree_preset_name(t->preset), t->seed, (double)t->position[0], (double)t->position[1],
+               (double)t->position[2], (double)t->scale);
     }
 }
 

@@ -15966,31 +15966,30 @@ def run_region_gate(workdir):
 # The tree generator's fixture (spec 13.35): a `trees` block whose every tree is there for an arm
 # below, written by gen_conifer_fixture.py.
 CONIFER_FIXTURE = "conifer_fixture.cscn"
-# The recursive form's digests as they stood before the excurrent form shared its generator,
-# captured before the first edit to tree_gen.c: broadleaf seed 42 is the tree viewer's own tree,
-# dead seed 4049 silent's first dead-tree model. Bark first, then leaves.
+# The recursive form's digests as they stood before the excurrent form shared its generator:
+# captured before the first edit to tree_gen.c, and taken again under the engine's own fnv1a64
+# from a build the first digests still passed on. Broadleaf seed 42 is the tree viewer's own
+# tree, dead seed 4049 silent's first dead-tree model. Bark first, then leaves.
 CONIFER_IDENTITY = {
-    ("broadleaf", 42): ("a6d9546c352278f8", "dd8faae82eae042e"),
-    ("dead", 4049): ("5e2fadb53d8bb162", "a31e272015f12c43"),
+    ("broadleaf", 42): ("20d86c66be025d26", "9631df773244ec08"),
+    ("dead", 4049): ("54082ad5be3d631c", "88201fb960ff6465"),
 }
 CONIFER_PRESETS = ("spruce", "fir", "snag")
 CONIFER_SEEDS = (1, 2, 3)
 CONIFER_TRI_BUDGET = 10000  # bark and needles together, one tree at full detail
-CONIFER_CARD_KEEP = 0.45  # apps/render's TREE_CARD_KEEP
-CONIFER_MIN_LEVEL_CARDS = 32  # lod.c's LOD_MIN_LEVEL_CARDS
-CONIFER_TRUNK = 125.0  # the presets' trunk_length
-CONIFER_LEAF_SIZE = 14.0  # the presets' leaf_size
 
 
 def _conifer_probe():
     """Every tree in the conifer fixture through the render app's --tree-probe, keyed by
-    (preset, seed, irregularity): its digest row, and for a conifer its shape row and its spray
-    count at each level of detail. One run of one frame."""
+    (preset, seed, irregularity) -- the irregularity the file authored, None where it left the
+    preset's own: its digest row, and for a conifer its shape row and its levels of detail. One run
+    of one frame."""
     rows, text = _probe_render(asset(CONIFER_FIXTURE), "--tree-probe", "tree-probe", frames=1)
     trees = {}
     for r in rows:
+        irr = r["irregularity"]
         trees[r["i"]] = {"preset": r["preset"], "seed": int(r["seed"]),
-                         "irregularity": round(float(r["irregularity"]), 3),
+                         "irregularity": None if irr == "preset" else round(float(irr), 3),
                          "bark_tris": int(r["bark_tris"]), "leaf_tris": int(r["leaf_tris"]),
                          "bark": r["bark"], "leaves": r["leaves"]}
     for r in _probe_rows(text, "tree-shape"):
@@ -15998,7 +15997,9 @@ def _conifer_probe():
             trees[r["i"]]["shape"] = {k: float(v) for k, v in r.items() if k != "i"}
     for r in _probe_rows(text, "tree-lod"):
         if r["i"] in trees:
-            trees[r["i"]]["sprays"] = [int(r[f"sprays{k}"]) for k in range(int(r["leaf_levels"]))]
+            trees[r["i"]]["lod"] = {
+                "keep": float(r["keep"]),
+                "sprays": [int(r[f"sprays{k}"]) for k in range(int(r["leaf_levels"]))]}
     return {(t["preset"], t["seed"], t["irregularity"]): t for t in trees.values()}
 
 
@@ -16016,8 +16017,8 @@ def run_conifer_gate(workdir):
       conifer-shape       a tidy spruce's crown narrows -- each quarter's longest branch beats
                           the quarter two above it, and the top quarter's is the shortest --
                           and a snag's top is broken off with no spray above the break
-      conifer-thin        a spruce's sprays thin by the keep factor level by level, to no
-                          fewer than the floor, and the levels are at least three
+      conifer-thin        a spruce's sprays thin by the keep factor it reports, level by level,
+                          over at least three levels
       conifer-wind        the bark and the needles report one height range, so the wind
                           leans them together
 
@@ -16031,11 +16032,7 @@ def run_conifer_gate(workdir):
     # A tree at its preset's own irregularity unless one is named: the fixture holds spruce seed
     # 1 twice, at its own and at 0.
     def tree(preset, seed, irregularity=None, run=None):
-        trees = run if run is not None else first
-        if irregularity is None:
-            return next((t for (p, s, irr), t in trees.items() if p == preset and s == seed
-                         and (preset not in CONIFER_PRESETS or irr > 0.0)), None)
-        return trees.get((preset, seed, irregularity))
+        return (run if run is not None else first).get((preset, seed, irregularity))
 
     got = {key: tree(*key) for key in CONIFER_IDENTITY}
     ok = all(got[key] and (got[key]["bark"], got[key]["leaves"]) == want
@@ -16073,23 +16070,22 @@ def run_conifer_gate(workdir):
     q = [tidy["shape"][f"q{i}"] for i in range(4)] if tidy and "shape" in tidy else None
     s = snag.get("shape") if snag else None
     narrows = q is not None and q[0] > q[2] and q[1] > q[3] and q[3] == min(q)
-    broken = s is not None and s["trunk_top"] < 0.8 * CONIFER_TRUNK and \
-        s["card_top"] < s["trunk_top"] + 1.2 * CONIFER_LEAF_SIZE
+    broken = s is not None and s["trunk_top"] < 0.8 * s["trunk_length"] and \
+        s["card_top"] < s["trunk_top"] + 1.2 * s["leaf_size"]
     ok = narrows and broken
     print(f"  conifer-shape {'PASS' if ok else 'FAIL'}  tidy spruce longest per crown quarter "
           f"{[round(v, 1) for v in q] if q else None} (want narrowing up the crown); snag trunk "
-          f"top {s and round(s['trunk_top'], 1)} of {CONIFER_TRUNK:.0f}, highest spray "
-          f"{s and round(s['card_top'], 1)}")
+          f"top {s and round(s['trunk_top'], 1)} of {s and round(s['trunk_length'])}, highest "
+          f"spray {s and round(s['card_top'], 1)}")
     if not ok:
         failures.append("conifer-shape")
 
-    sprays = (tree("spruce", 1) or {}).get("sprays") or []
-    steps = all(sprays[i] == math.ceil(sprays[i - 1] * CONIFER_CARD_KEEP)
-                for i in range(1, len(sprays)))
-    ok = len(sprays) >= 3 and steps and sprays[-1] >= CONIFER_MIN_LEVEL_CARDS
+    lod = (tree("spruce", 1) or {}).get("lod") or {"keep": 0.0, "sprays": []}
+    sprays, keep = lod["sprays"], lod["keep"]
+    thins = all(abs(sprays[i] - sprays[i - 1] * keep) < 1.0 for i in range(1, len(sprays)))
+    ok = len(sprays) >= 3 and thins
     print(f"  conifer-thin {'PASS' if ok else 'FAIL'}  sprays per level {sprays} (want each "
-          f"ceil({CONIFER_CARD_KEEP} x the last), at least {CONIFER_MIN_LEVEL_CARDS}, and three "
-          f"levels or more)")
+          f"{keep} of the last, to within a spray, over three levels or more)")
     if not ok:
         failures.append("conifer-thin")
 

@@ -36,9 +36,13 @@
 #define TG_SPRAY_LIVE_CELLS 5
 #define TG_SPRAY_DEAD_CELLS 2
 #define TG_SPRAY_BARE_CELL  (TG_SPRAY_LIVE_CELLS + TG_SPRAY_DEAD_CELLS)
-// A spray's indices: two crossed cards of four triangles. What a conifer's needle mesh hands
-// mesh_build_card_lod_chain as one card, so a spray thins away whole.
-#define TG_SPRAY_INDICES 24
+// A leaf card's indices: a quad creased down its mid-rib, two triangles each side.
+#define TG_CARD_INDICES 12
+// A spray's indices, its two crossed cards: what a conifer's needles thin by as one card, so a
+// spray goes whole.
+#define TG_SPRAY_INDICES (2 * TG_CARD_INDICES)
+// The share of a conifer's sprays each level of detail keeps of the one nearer.
+#define TG_SPRAY_KEEP 0.45f
 
 // How a tree grows. The zero is the recursive form, so a zeroed TreeParams keeps it.
 typedef enum TreeForm {
@@ -99,9 +103,16 @@ typedef struct BranchPoint {
     float root_dist; // distance from the trunk base, through the hierarchy
 } BranchPoint;
 
+// What an excurrent branch's sprays are: green, browned, or gone to bare twigs.
+typedef enum BranchHealth {
+    BRANCH_LIVE = 0,
+    BRANCH_BROWNING,
+    BRANCH_BARE,
+} BranchHealth;
+
 typedef struct Branch {
-    int parent; // index into branches[], -1 for the trunk
-    int depth;
+    int parent;                  // index into branches[], -1 for the trunk
+    int depth;                   // generations from the trunk
     int first_point, num_points; // slice of the shared point pool
     float base_radius, tip_radius, length;
     float phase;        // per-branch wind phase in [0,1)
@@ -111,7 +122,7 @@ typedef struct Branch {
     bool is_terminal;   // no children: gets a pointed tip
     bool bears_leaves;
     int bark_segs; // ring segments; 0 = as many as the radius asks for
-    float vigor;   // an excurrent branch's sprays: 1 green, 0 bare, between browned
+    BranchHealth health;
 } Branch;
 
 typedef struct TreeSkeleton {
@@ -122,9 +133,9 @@ typedef struct TreeSkeleton {
     float max_root_dist; // normalizes the flex weight
 } TreeSkeleton;
 
-// Named trees: one statement of each, so an app and the tree viewer grow the same tree.
+// Named trees: one statement of each, so every app that names one grows the same tree.
 typedef enum TreePreset {
-    TREE_PRESET_BROADLEAF = 0, // the tree viewer's own: tall, upright, a narrow crown in leaf
+    TREE_PRESET_BROADLEAF = 0, // tall, upright, a narrow crown in leaf
     TREE_PRESET_DEAD,          // leafless, sagging and wandering: wood dead a long time
     TREE_PRESET_SPRUCE,        // a narrow cone of drooping branches, dense to the ground
     TREE_PRESET_FIR,           // flatter tiers held nearer level, a little wider
@@ -144,10 +155,17 @@ void tree_skeleton_build(TreeSkeleton* skel, const TreeParams* p);
 void tree_skeleton_free(TreeSkeleton* skel);
 
 // Sweep the skeleton into meshes. Each fills a fresh Mesh's arrays (handing
-// over ownership), sets the counts and draw mode, and computes the AABB. The
-// leaf builder may produce nothing, in which case it returns false and the
-// caller should discard the mesh.
+// over ownership), sets the counts and draw mode, and computes the AABB. A
+// conifer's meshes also carry their levels of detail: its bark decimated, its
+// sprays thinned whole, TG_SPRAY_KEEP of a level to the next. The leaf builder
+// may produce nothing, in which case it returns false and the caller should
+// discard the mesh.
 bool tree_mesh_bark(const TreeSkeleton* skel, const TreeParams* p, Mesh* mesh);
 bool tree_mesh_leaves(const TreeSkeleton* skel, const TreeParams* p, Mesh* mesh);
+
+// The foliage atlas the leaf cards of a tree of `form` address: leaf clusters, or a conifer's
+// needle sprays. Three buffers the caller owns, all NULL on failure.
+void tree_foliage_maps(TreeForm form, int width, int height, unsigned char** out_albedo,
+                       unsigned char** out_normal, unsigned char** out_rough);
 
 #endif // _TREE_GEN_H_
