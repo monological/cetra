@@ -78,6 +78,14 @@ fade to fused anyway below 2.5 window pixels a line, so a 400x300 capture at 480
 mask's depth; `--crt-curvature <f>` the tube's bow, 0 flat; `--crt-bleed <f>` the composite colour
 bleed. The tone curve holds mid-grey and compresses what is brighter, so the frame comes out a
 little darker; that is CRTS's design and not exposure going wrong),
+`--loading-screen` (spec 13.34: the engine's loading screen over the frame from the start, never
+lifted -- a preview of it, headless too, where its clock is a frame's fixed step and so a capture
+is frame-exact. Windowed, **P** cycles its palette, **R** plays it again and **H** lifts it; a frame
+it covers draws nothing of its own, so the preview runs at the screen's own cost),
+`--loading-palette <n>` (its palette: 0 sunset, 1 harvest, 2 phosphor, 3 broadcast; implies
+`--loading-screen`),
+`--loading-lift-at <n>` (let it go at frame n, so a headless run reaches its switch-off. It lifts
+only once its ident has played, glitch included; implies `--loading-screen`),
 `--tonemap <neutral|aces|agx|linear>`
 (`linear` is the identity curve WITH the display encode, which passthrough is not: an authored
 colour at unit exposure reaches the screen as authored, and it is what `engine_set_2d_preset`
@@ -949,6 +957,17 @@ flashlight, **E** opens a door, and **G** or backtick shows the debug GUI.
 
 **Capture:** `-x`, `-f <n>`, `-S <path>`, `--screenshot-every <n>`, and `-W`/`-H` for the window
 (default 1600x900).
+
+**Loading** (spec 13.34). In a window it loads under the engine's loading screen, which lifts once
+the lighting round the eye is in and its ident has played; the frame fades in after it, and the
+player's input waits for it. A headless run has no screen, so its frames are the game's from the
+first.
+- **`--no-loading-screen`:** loads under a black window instead, as before.
+- **`--loading-screen`:** the screen headless too. Its clock is then a frame's fixed step, so it
+  lifts later in frames than it would windowed, where it runs on the wall clock.
+- **`--startup-ms`:** prints a `startup-ms` row for each loading step and held frame -- how long
+  it took -- and for when the lighting is in (`lit`) and the view comes up (`up`). A step that
+  freezes the screen is the row printed as it ends.
 
 **The frame is one sample with jittered TAA, headless as well as windowed.** Two reasons it is not
 the engine's usual headless setup:
