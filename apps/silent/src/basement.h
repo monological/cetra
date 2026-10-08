@@ -8,7 +8,6 @@
 
 #include "door.h"
 #include "kit.h"
-#include "sounds.h"
 
 /*
  * The basement under the player's house (spec 13.31): the whole footprint dug out below the
@@ -45,8 +44,7 @@ void basement_start(Basement* b, Engine* engine, Scene* scene, AudioSystem* audi
                     unsigned int seed);
 
 // Per frame, before the frame draws: the swing, set going the first time `door` opens (NULL when
-// it was not hung), the dimming, and the drip, heard from `eye` as `sounds` says.
-void basement_update(Basement* b, const Door* door, const Sounds* sounds, const vec3 eye,
-                     double time);
+// it was not hung), the dimming, and the drip.
+void basement_update(Basement* b, const Door* door, double time);
 
 #endif // _SILENT_BASEMENT_H_

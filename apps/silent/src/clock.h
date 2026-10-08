@@ -32,8 +32,7 @@ void clock_build(Kit* kit);
 void clock_start(Clock* clock, Engine* engine, Scene* scene, AudioSystem* audio);
 
 // Per frame, before the transform walk: the swing, the hands and the beat.
-// `hearing` scales the beat for where the listener is.
-void clock_update(Clock* clock, double time, float hearing);
+void clock_update(Clock* clock, double time);
 
 // Where the pendulum's bob is in the world at sim time `time`: what a cat watches.
 void clock_bob(double time, vec3 out);

@@ -199,7 +199,7 @@ void tv_build(Tv* tv, Kit* kit, Engine* engine, Scene* scene, bool on) {
 
     if (on) {
         tv_picture(tv, kit, engine);
-        tv_update(tv, 0.0, 1.0f);
+        tv_update(tv, 0.0);
     }
 }
 
@@ -207,11 +207,13 @@ void tv_start_audio(Tv* tv, AudioSystem* audio) {
     if (!tv->picture)
         return;
     tv->hiss = sounds_loop(audio, "assets/audio/silent/tv_static.flac");
-    if (tv->hiss)
+    if (tv->hiss) {
         audio_sound_set_position(tv->hiss, tv->speaker);
+        audio_sound_set_volume(tv->hiss, TV_HISS_VOLUME);
+    }
 }
 
-void tv_update(Tv* tv, double time, float hearing) {
+void tv_update(Tv* tv, double time) {
     if (!tv->picture)
         return;
     const double field = floor(time * TV_FIELD_HZ);
@@ -227,6 +229,4 @@ void tv_update(Tv* tv, double time, float hearing) {
     // build glows with it flat.
     tv->glass->emissive_strength = TV_PEAK_NITS * mean;
     tv->glow->intensity = TV_PEAK_NITS * mean * tv->average;
-    if (tv->hiss)
-        audio_sound_set_volume(tv->hiss, TV_HISS_VOLUME * hearing);
 }

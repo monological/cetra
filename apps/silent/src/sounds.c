@@ -2,7 +2,6 @@
 #include <stdio.h>
 
 #include "home.h"
-#include "house.h"
 #include "kitchen.h"
 #include "layout.h"
 #include "sounds.h"
@@ -12,22 +11,17 @@
 #define FRIDGE_VOLUME 0.15f
 #define WIND_VOLUME   0.6f
 
-#define WALL_BLEND     1.0f // metres across which INSIDE goes from 0 to 1, centred on the walls
-#define INSIDE_SECONDS 0.4f // how far behind the listener INSIDE lags, stepping through a door
-#define STREET_GAIN    0.3f // what is left of the house's own sounds out on the street
+// What sound keeps crossing each kind of boundary: a house's outside walls, both houses alike,
+// and a front door in them standing open; the floor and the door between the home's hall and its
+// basement, shut and open; and the floor between the mansion's storeys.
+#define WALL_THROUGH          0.3f
+#define FRONT_DOOR_THROUGH    0.6f
+#define BASEMENT_THROUGH      0.4f
+#define BASEMENT_DOOR_THROUGH 0.8f
+#define STOREY_THROUGH        0.5f
 
-// Above and below each other the floor between is most of the sound, except through the great
-// hall, which is open from its floor to the gallery.
-#define OTHER_STOREY 0.5f
-#define STOREY_APART 2.0f // metres between a listener and a source that put them a floor apart
-
-// Down in the basement (spec 13.31): the eye heights between which the listener goes from above
-// the ground to under it, and what the earth and the floor overhead leave of the wind and of the
-// house's own sounds.
-#define BELOW_FROM     0.6f
-#define BELOW_TO       (-0.6f)
-#define BELOW_WIND     0.25f
-#define BELOW_OVERHEAD 0.4f
+// Over every roof and the tower's spire: where a house's rooms stop going up.
+#define ROOFS_Y 20.0f
 
 Sound* sounds_loop(AudioSystem* audio, const char* path) {
     if (!audio)
@@ -43,18 +37,52 @@ Sound* sounds_loop(AudioSystem* audio, const char* path) {
     return s;
 }
 
-/*
- * 1 well inside either house's footprint, 0 well outside both, blended over
- * WALL_BLEND across its walls. The front doorway is an open hole, so a
- * listener standing in it is half outside, which is right.
- */
-static float inside_target(const vec3 eye) {
-    const vec3 plan = {eye[0] - MANSION_X, eye[1] - MANSION_Y, eye[2] - MANSION_Z};
-    const float outside = fminf(home_outside_distance(eye), house_outside_distance(plan));
-    return glm_smoothstep(0.5f * WALL_BLEND, -0.5f * WALL_BLEND, outside);
+// A box of the mansion's plan, where the mansion stands.
+static AABB mansion_box(float x0, float y0, float z0, float x1, float y1, float z1) {
+    AABB box = {{0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}};
+    mansion_at((float[3]){x0, y0, z0}, box.min);
+    mansion_at((float[3]){x1, y1, z1}, box.max);
+    return box;
 }
 
-void sounds_start(Sounds* sounds, AudioSystem* audio, const vec3 eye) {
+/*
+ * The rooms. The home over its footprint, and its basement -- the cellar under it and the flight
+ * down behind its door, so the door is the basement's boundary -- carved out of it. The mansion
+ * over its footprint and its tower, and its upper storey -- the rooms over the front and the
+ * study's bay in the tower -- carved out of it; the gallery stays the great hall's, open to it.
+ * Each house reaches the outdoors through its walls, the upper storey included, rather than
+ * through the storey under it.
+ */
+static void rooms(Sounds* sounds, AudioSystem* audio) {
+    const AABB home = {{DIG_X0, BASEMENT_Y, DIG_Z0}, {DIG_X1, ROOFS_Y, DIG_Z1}};
+    const AABB cellar[2] = {
+        {{CELLAR_X0, BASEMENT_Y, CELLAR_Z0}, {CELLAR_X1, SUBFLOOR_Y0, CELLAR_Z1}},
+        {{CELLAR_X0, SUBFLOOR_Y0, STAIRWELL_Z0}, {HALL_X0 - 0.5f * INT_WALL, CEIL_Y, CELLAR_Z1}}};
+    const float wall = 0.5f * EXT_WALL, t = TOWER_OUTER;
+    const AABB mansion[2] = {
+        mansion_box(HOUSE_X0 - wall, 0.0f, HOUSE_FRONT_Z - wall, HOUSE_X1 + wall, ROOFS_Y,
+                    HOUSE_BACK_Z + wall),
+        mansion_box(TOWER_X - t, 0.0f, TOWER_Z - t, TOWER_X + t, ROOFS_Y, TOWER_Z + t)};
+    const AABB upstairs[2] = {
+        mansion_box(HOUSE_X0 - wall, CEIL_Y, HOUSE_FRONT_Z - wall, HOUSE_X1 + wall, ROOFS_Y,
+                    KITCHEN_BACK_Z),
+        mansion_box(TOWER_X - t, CEIL_Y, TOWER_Z - t, TOWER_X + t, ROOFS_Y, TOWER_Z + t)};
+    const AudioZone h = audio_zone_add(audio, &(AudioZoneDesc){"home", &home, 1});
+    const AudioZone b = audio_zone_add(audio, &(AudioZoneDesc){"basement", cellar, 2});
+    const AudioZone m = audio_zone_add(audio, &(AudioZoneDesc){"mansion", mansion, 2});
+    const AudioZone u = audio_zone_add(audio, &(AudioZoneDesc){"mansion_up", upstairs, 2});
+    sounds->home_door = audio_zone_link(audio, h, AUDIO_ZONE_WORLD, WALL_THROUGH);
+    sounds->basement_door = audio_zone_link(audio, b, h, BASEMENT_THROUGH);
+    sounds->mansion_door = audio_zone_link(audio, m, AUDIO_ZONE_WORLD, WALL_THROUGH);
+    audio_zone_link(audio, u, AUDIO_ZONE_WORLD, WALL_THROUGH);
+    audio_zone_link(audio, u, m, STOREY_THROUGH);
+}
+
+void sounds_start(Sounds* sounds, AudioSystem* audio) {
+    *sounds = (Sounds){.audio = audio};
+    if (!audio)
+        return;
+    rooms(sounds, audio);
     sounds->fridge = sounds_loop(audio, "assets/audio/silent/fridge_hum.flac");
     sounds->wind_outside = sounds_loop(audio, "assets/audio/silent/wind_outside.flac");
     sounds->wind_inside = sounds_loop(audio, "assets/audio/silent/wind_inside.flac");
@@ -62,51 +90,42 @@ void sounds_start(Sounds* sounds, AudioSystem* audio, const vec3 eye) {
         vec3 motor = {0.0f, 0.0f, 0.0f};
         kitchen_fridge_motor(motor);
         audio_sound_set_position(sounds->fridge, motor);
+        audio_sound_set_volume(sounds->fridge, FRIDGE_VOLUME);
     }
-    sounds->inside = inside_target(eye);
-    sounds->below = glm_smoothstep(BELOW_FROM, BELOW_TO, eye[1]);
 }
 
-float sounds_indoor_gain(const Sounds* sounds) {
-    return STREET_GAIN + (1.0f - STREET_GAIN) * sounds->inside;
+float sounds_past_walls(const Sounds* sounds) {
+    if (!sounds->audio)
+        return 1.0f;
+    return glm_clamp(audio_zone_heard(sounds->audio, AUDIO_ZONE_WORLD) / WALL_THROUGH, 0.0f, 1.0f);
 }
 
-// Inside the mansion's great hall, open through both storeys.
-static bool in_great_hall(float x, float z) {
-    x -= MANSION_X;
-    z -= MANSION_Z;
-    return x > GREAT_X0 && x < GREAT_X1 && z > GREAT_Z0 && z < GREAT_Z1;
-}
+void sounds_update(Sounds* sounds, const vec3 eye, float home_door, float mansion_door,
+                   float basement_door) {
+    AudioSystem* audio = sounds->audio;
+    if (!audio)
+        return;
+    audio_zone_link_set(audio, sounds->home_door,
+                        glm_lerp(WALL_THROUGH, FRONT_DOOR_THROUGH, home_door));
+    audio_zone_link_set(audio, sounds->mansion_door,
+                        glm_lerp(WALL_THROUGH, FRONT_DOOR_THROUGH, mansion_door));
+    audio_zone_link_set(audio, sounds->basement_door,
+                        glm_lerp(BASEMENT_THROUGH, BASEMENT_DOOR_THROUGH, basement_door));
 
-float sounds_gain_at(const Sounds* sounds, const vec3 listener, const vec3 source) {
-    const bool hall = in_great_hall(listener[0], listener[2]);
-    const bool apart = fabsf(listener[1] - source[1]) > STOREY_APART && !hall;
-    return sounds_indoor_gain(sounds) * (apart ? OTHER_STOREY : 1.0f);
-}
-
-float sounds_overhead_gain(const Sounds* sounds) {
-    return 1.0f - (1.0f - BELOW_OVERHEAD) * sounds->below;
-}
-
-void sounds_update(Sounds* sounds, const vec3 eye, float dt) {
-    const float k = 1.0f - expf(-dt / INSIDE_SECONDS);
-    sounds->inside += (inside_target(eye) - sounds->inside) * k;
-    sounds->below += (glm_smoothstep(BELOW_FROM, BELOW_TO, eye[1]) - sounds->below) * k;
-    const float wind = WIND_VOLUME * (1.0f - (1.0f - BELOW_WIND) * sounds->below);
-
-    // The wind is all round, so its layers ride with the listener -- just
-    // over its head, where they are inside the falloff's first metre and
-    // pan to neither ear.
+    // The wind is all round, so its layers ride with the listener -- just over its head, where
+    // they are inside the falloff's first metre, pan to neither ear and are always in the
+    // listener's own zone. Indoors is how far the outdoors has fallen to what a house's walls
+    // let through, and the muffled layer is quieter again below those walls.
+    const float outdoors = audio_zone_heard(audio, AUDIO_ZONE_WORLD);
+    const float indoors = glm_clamp((1.0f - outdoors) / (1.0f - WALL_THROUGH), 0.0f, 1.0f);
     vec3 over = {eye[0], eye[1] + 0.5f, eye[2]};
     if (sounds->wind_outside) {
         audio_sound_set_position(sounds->wind_outside, over);
-        audio_sound_set_volume(sounds->wind_outside, wind * (1.0f - sounds->inside));
+        audio_sound_set_volume(sounds->wind_outside, WIND_VOLUME * (1.0f - indoors));
     }
     if (sounds->wind_inside) {
         audio_sound_set_position(sounds->wind_inside, over);
-        audio_sound_set_volume(sounds->wind_inside, wind * sounds->inside);
+        audio_sound_set_volume(sounds->wind_inside,
+                               WIND_VOLUME * indoors * sounds_past_walls(sounds));
     }
-    if (sounds->fridge)
-        audio_sound_set_volume(sounds->fridge, FRIDGE_VOLUME * sounds_indoor_gain(sounds) *
-                                                   sounds_overhead_gain(sounds));
 }
