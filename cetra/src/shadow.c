@@ -896,7 +896,7 @@ static bool caster_set_wants(ShadowCasterSet set, uint8_t lane, uint8_t flags) {
 // Whether a node has moved lately, so a kept face draws it over a copy of its still casters.
 static bool tile_node_moves(const ShadowSystem* ss, const SceneNode* node) {
     for (int k = 0; k < ss->tile_mover_count; ++k) {
-        if (ss->tile_movers[k] == node)
+        if (ss->tile_movers[k] == node->serial)
             return true;
     }
     return false;
@@ -1949,10 +1949,14 @@ static void tiles_expire_movers(ShadowSystem* ss) {
     }
 }
 
-// What a kept face draws an item by (ShadowTileSeen).
+// What a kept face draws an item by (ShadowTileSeen), all but where: tile_seen_place says that.
 static ShadowTileSeen tile_seen_of(const DrawItem* item) {
-    ShadowTileSeen seen = {
-        .mesh = item->mesh, .node = item->node, .lane = item->lane, .flags = item->flags};
+    ShadowTileSeen seen = {.node = item->node->serial,
+                           .mesh = item->mesh->id,
+                           .upload = item->mesh->upload_count,
+                           .lane = item->lane,
+                           .flags = item->flags,
+                           .kept = caster_set_wants(SHADOW_CASTERS_KEPT, item->lane, item->flags)};
     const Material* mat = item->mesh->material;
     uint64_t hash = FNV1A64_BASIS;
     if (item->flags & DRAW_FOLIAGE) {
@@ -1973,16 +1977,45 @@ static ShadowTileSeen tile_seen_of(const DrawItem* item) {
     return seen;
 }
 
-// Keep the list as the kept faces saw it this frame. On out of memory nothing is kept, and the
-// next frame draws every face again.
-static void tiles_seen_record(ShadowSystem* ss, const DrawList* list) {
+// Where a kept face draws an item: its bound, posed and displaced, at its node now. False when a
+// caster the kept faces take has no bound, which may be anywhere.
+static bool tile_seen_place(ShadowTileSeen* seen, const DrawItem* item, const CullView* view) {
+    if (!seen->kept)
+        return true;
+    AABB box;
+    if (!draw_item_bounds(item, view, &box))
+        return false;
+    aabb_transform(box.min, box.max, (vec4*)item->node->global_transform, seen->box.min,
+                   seen->box.max);
+    return true;
+}
+
+// The faces a seen caster was drawn in, drawn again, its store's copy with them.
+static void tiles_mark_seen(ShadowSystem* ss, const ShadowTileSeen* seen) {
+    if (seen->kept)
+        tiles_mark_box(ss, seen->box.min, seen->box.max, TILE_BOX_INVALIDATE | TILE_BOX_UNSTORE);
+}
+
+// The list as the kept faces see it this frame, into `out` (count items). False when a caster
+// has no bound.
+static bool tiles_seen_build(ShadowTileSeen* out, const DrawList* list, const CullView* view) {
+    for (size_t i = 0; list && i < list->count; ++i) {
+        out[i] = tile_seen_of(&list->items[i]);
+        if (!tile_seen_place(&out[i], &list->items[i], view))
+            return false;
+    }
+    return true;
+}
+
+// Keep the list as the kept faces saw it this frame. On out of memory, or a caster with no
+// bound, nothing is kept, and the next frame draws every face again.
+static void tiles_seen_record(ShadowSystem* ss, const DrawList* list, const CullView* view) {
     const size_t count = list ? list->count : 0;
     ss->tile_seen_count = 0;
     if (!grow_array((void**)&ss->tile_seen, &ss->tile_seen_capacity, count, sizeof(ShadowTileSeen),
-                    64))
+                    64) ||
+        !tiles_seen_build(ss->tile_seen, list, view))
         return;
-    for (size_t i = 0; i < count; ++i)
-        ss->tile_seen[i] = tile_seen_of(&list->items[i]);
     ss->tile_seen_count = count;
 }
 
@@ -2008,10 +2041,33 @@ static bool tiles_seen_same_items(const ShadowSystem* ss, const DrawList* list) 
     if (count != ss->tile_seen_count)
         return false;
     for (size_t i = 0; i < count; ++i) {
-        if (list->items[i].mesh != ss->tile_seen[i].mesh ||
-            list->items[i].node != ss->tile_seen[i].node)
+        if (list->items[i].node->serial != ss->tile_seen[i].node ||
+            list->items[i].mesh->id != ss->tile_seen[i].mesh)
             return false;
     }
+    return true;
+}
+
+// Whether a kept face would draw `now` otherwise than it drew `then`: in or out of what the faces
+// keep, between still and moving, or a cut-out or a hook changed.
+static bool tile_seen_looks_differ(const ShadowTileSeen* then, const ShadowTileSeen* now) {
+    return now->lane != then->lane || now->flags != then->flags || now->shape != then->shape;
+}
+
+// One item a kept face would draw otherwise, or from geometry uploaded again: the faces it was
+// drawn in and the faces it is in now, drawn again. `then` was drawn where it was; `now` is
+// placed here. False when it has no bound.
+static bool tiles_mark_redrawn(ShadowSystem* ss, const ShadowTileSeen* then, ShadowTileSeen* now,
+                               const DrawItem* item, const CullView* view) {
+    if (!tile_seen_place(now, item, view))
+        return false;
+    ShadowTileSeen was = *then;
+    // The bound as the faces last drew it, when that was wider: a hook whose offset reached
+    // further left its shadow out there.
+    if (was.offset_bound > now->offset_bound)
+        aabb_expand(&was.box, was.offset_bound - now->offset_bound);
+    tiles_mark_seen(ss, &was);
+    tiles_mark_seen(ss, now);
     return true;
 }
 
@@ -2023,37 +2079,135 @@ static bool tiles_seen_same_items(const ShadowSystem* ss, const DrawList* list) 
 static bool tiles_mark_changed_looks(ShadowSystem* ss, const DrawList* list, const CullView* view) {
     for (size_t i = 0; list && i < list->count; ++i) {
         const DrawItem* item = &list->items[i];
-        const ShadowTileSeen now = tile_seen_of(item);
+        ShadowTileSeen now = tile_seen_of(item);
         ShadowTileSeen* then = &ss->tile_seen[i];
-        if (now.lane == then->lane && now.flags == then->flags && now.shape == then->shape)
+        if (!tile_seen_looks_differ(then, &now))
             continue;
-        AABB box;
-        if (!draw_item_bounds(item, view, &box))
+        if (!tiles_mark_redrawn(ss, then, &now, item, view))
             return false;
-        // The bound as the faces last drew it, when that was wider: a hook whose offset reached
-        // further left its shadow out there, and the new bound alone would not reach it.
-        if (then->offset_bound > now.offset_bound)
-            aabb_expand(&box, then->offset_bound - now.offset_bound);
-        for (int when = 0; when < 2; ++when) {
-            vec3 lo = GLM_VEC3_ZERO_INIT, hi = GLM_VEC3_ZERO_INIT;
-            aabb_transform(box.min, box.max,
-                           when ? (vec4*)item->node->global_transform
-                                : (vec4*)item->node->prev_global_transform,
-                           lo, hi);
-            tiles_mark_box(ss, lo, hi, TILE_BOX_INVALIDATE | TILE_BOX_UNSTORE);
-        }
         *then = now;
         ss->tile_seen_changes++;
     }
     return true;
 }
 
-// What the kept faces hold that is no longer true, every frame. A node added or freed changes
-// the graph and every face is drawn again: it has no previous frame for the draw list to show.
-// So does any other change to which items the list holds. One item a kept face would now draw
-// otherwise is drawn again where it is (tiles_mark_changed_looks). A KEPT caster
-// whose node moves becomes a MOVER, and every face that sees it, where it was and where it is,
-// is drawn from then on as a copy of its still casters with the movers over them
+// The key a graph change matches items by: node serial, then mesh id, then where in the list.
+typedef struct TileSeenKey {
+    uint64_t node;
+    unsigned mesh;
+    size_t index;
+} TileSeenKey;
+
+// Which item comes first, by node serial and then mesh id; 0 = the same item.
+static int tile_seen_item_order(const TileSeenKey* x, const TileSeenKey* y) {
+    if (x->node != y->node)
+        return x->node < y->node ? -1 : 1;
+    if (x->mesh != y->mesh)
+        return x->mesh < y->mesh ? -1 : 1;
+    return 0;
+}
+
+// For qsort: by item, and a node drawing one mesh twice by where each stands in its list.
+static int tile_seen_key_order(const void* a, const void* b) {
+    const TileSeenKey* x = a;
+    const TileSeenKey* y = b;
+    const int order = tile_seen_item_order(x, y);
+    if (order)
+        return order;
+    return x->index < y->index ? -1 : (x->index > y->index ? 1 : 0);
+}
+
+static TileSeenKey* tile_seen_keys(const ShadowTileSeen* seen, size_t count) {
+    TileSeenKey* keys = malloc((count ? count : 1) * sizeof(TileSeenKey));
+    if (!keys)
+        return NULL;
+    for (size_t i = 0; i < count; ++i)
+        keys[i] = (TileSeenKey){seen[i].node, seen[i].mesh, i};
+    qsort(keys, count, sizeof(TileSeenKey), tile_seen_key_order);
+    return keys;
+}
+
+// Whether `serial` names a node among `keys`, sorted.
+static bool tile_seen_keys_hold(const TileSeenKey* keys, size_t count, uint64_t serial) {
+    size_t lo = 0, hi = count;
+    while (lo < hi) {
+        const size_t mid = lo + (hi - lo) / 2;
+        if (keys[mid].node < serial)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    return lo < count && keys[lo].node == serial;
+}
+
+/*
+ * A change to which items the list holds (spec 13.38), answered item by item rather than by
+ * drawing every face again: the items are matched by node serial and mesh id, so one that only
+ * moved along the list is the same item, and a node freed and another created at its address
+ * are two. Each item the list no longer holds draws again the faces it was drawn in; each it
+ * holds anew, the faces it is in now; each held still but drawn otherwise, or its mesh uploaded
+ * again, both. A mover whose node is gone is let go, its last box among those drawn again. An
+ * item no kept face takes, before or after, marks nothing. False when it cannot answer -- out of
+ * memory, or a caster with no bound -- for which every face is drawn again.
+ */
+static bool tiles_mark_graph_change(ShadowSystem* ss, const DrawList* list, const CullView* view) {
+    const size_t count = list ? list->count : 0;
+    ShadowTileSeen* now = malloc((count ? count : 1) * sizeof(ShadowTileSeen));
+    TileSeenKey* then_keys = tile_seen_keys(ss->tile_seen, ss->tile_seen_count);
+    if (!now || !then_keys || !tiles_seen_build(now, list, view)) {
+        free(now);
+        free(then_keys);
+        return false;
+    }
+    TileSeenKey* now_keys = tile_seen_keys(now, count);
+    if (!now_keys) {
+        free(now);
+        free(then_keys);
+        return false;
+    }
+    size_t a = 0, b = 0;
+    while (a < ss->tile_seen_count || b < count) {
+        const int order = a == ss->tile_seen_count ? 1
+                          : b == count ? -1
+                                       : tile_seen_item_order(&then_keys[a], &now_keys[b]);
+        if (order < 0) {
+            tiles_mark_seen(ss, &ss->tile_seen[then_keys[a++].index]);
+        } else if (order > 0) {
+            tiles_mark_seen(ss, &now[now_keys[b++].index]);
+        } else {
+            const ShadowTileSeen* then = &ss->tile_seen[then_keys[a++].index];
+            const ShadowTileSeen* held = &now[now_keys[b++].index];
+            if (tile_seen_looks_differ(then, held) || then->upload != held->upload) {
+                tiles_mark_seen(ss, then);
+                tiles_mark_seen(ss, held);
+                if (tile_seen_looks_differ(then, held))
+                    ss->tile_seen_changes++;
+            }
+        }
+    }
+    int kept = 0;
+    for (int k = 0; k < ss->tile_mover_count; ++k) {
+        if (!tile_seen_keys_hold(now_keys, count, ss->tile_movers[k]))
+            continue;
+        ss->tile_movers[kept] = ss->tile_movers[k];
+        ss->tile_mover_moved[kept++] = ss->tile_mover_moved[k];
+    }
+    ss->tile_mover_count = kept;
+    free(then_keys);
+    free(now_keys);
+    free(ss->tile_seen);
+    ss->tile_seen = now;
+    ss->tile_seen_count = count;
+    ss->tile_seen_capacity = count ? count : 1;
+    return true;
+}
+
+// What the kept faces hold that is no longer true, every frame. An item the list no longer
+// holds, or holds anew, draws again the faces it was in or is in (tiles_mark_graph_change); one
+// a kept face would now draw otherwise is drawn again where it was and where it is
+// (tiles_mark_changed_looks). Every face is drawn again only when neither can answer. A KEPT
+// caster whose node moves becomes a MOVER, and every face that sees it, where it was and where
+// it is, is drawn from then on as a copy of its still casters with the movers over them
 // (render_shadow_movers). A surface that moves under its node -- skinned, swaying, morphing --
 // needs no place among the movers: it moves every frame and is in no store, so it marks where
 // it is now, and a face it has left is still marked from the frame it was there, which draws it
@@ -2068,19 +2222,23 @@ static void tiles_note_changes(ShadowSystem* ss, const Engine* engine, const Sce
     const CullView view = render_cull_view(engine, scene, NULL);
     const DrawList* list = scene->draw_list;
     const uint64_t epoch = scene_graph_epoch();
-    if (epoch != ss->tile_epoch || !tiles_seen_same_items(ss, list) ||
-        !tiles_mark_changed_looks(ss, list, &view)) {
-        ss->tile_epoch = epoch;
-        tiles_seen_record(ss, list);
+    const bool same = epoch == ss->tile_epoch && tiles_seen_same_items(ss, list);
+    ss->tile_epoch = epoch;
+    if (same ? tiles_mark_changed_looks(ss, list, &view)
+             : tiles_mark_graph_change(ss, list, &view)) {
+        tiles_expire_movers(ss);
+    } else {
+        tiles_seen_record(ss, list, &view);
         ss->tile_generation++;
         ss->tile_mover_count = 0;
         for (int b = 0; b < ss->tile_block_count; ++b) {
             ss->tile_blocks[b].dynamic = 0;
             ss->tile_blocks[b].stored = 0;
         }
-    } else {
-        tiles_expire_movers(ss);
     }
+    // Where each caster that moves is now, so the faces it is in are the ones drawn again if it
+    // goes: kept up only while the seen list stands for this frame's list.
+    ShadowTileSeen* seen = ss->tile_seen_count == (list ? list->count : 0) ? ss->tile_seen : NULL;
     for (size_t i = 0; list && i < list->count; ++i) {
         const DrawItem* item = &list->items[i];
         const SceneNode* node = item->node;
@@ -2097,6 +2255,10 @@ static void tiles_note_changes(ShadowSystem* ss, const Engine* engine, const Sce
             }
             aabb_transform(box.min, box.max, (vec4*)node->global_transform, lo, hi);
             tiles_mark_box(ss, lo, hi, TILE_BOX_DYNAMIC);
+            if (seen) {
+                glm_vec3_copy(lo, seen[i].box.min);
+                glm_vec3_copy(hi, seen[i].box.max);
+            }
             continue;
         }
         if (memcmp(node->global_transform, node->prev_global_transform, sizeof(mat4)) == 0)
@@ -2106,14 +2268,14 @@ static void tiles_note_changes(ShadowSystem* ss, const Engine* engine, const Sce
             continue;
         }
         int k = 0;
-        while (k < ss->tile_mover_count && ss->tile_movers[k] != node)
+        while (k < ss->tile_mover_count && ss->tile_movers[k] != node->serial)
             ++k;
         unsigned marks = TILE_BOX_DYNAMIC;
         if (k == ss->tile_mover_count) {
             // A new mover was drawn into the stores as still; with no room for another, the
             // faces that see it are simply drawn again, every frame it moves.
             if (k < SHADOW_TILE_MAX_MOVERS) {
-                ss->tile_movers[ss->tile_mover_count++] = node;
+                ss->tile_movers[ss->tile_mover_count++] = node->serial;
                 marks = TILE_BOX_DYNAMIC | TILE_BOX_UNSTORE;
             } else {
                 marks = TILE_BOX_INVALIDATE;
@@ -2126,6 +2288,11 @@ static void tiles_note_changes(ShadowSystem* ss, const Engine* engine, const Sce
                 box.min, box.max,
                 when ? (vec4*)node->global_transform : (vec4*)node->prev_global_transform, lo, hi);
             tiles_mark_box(ss, lo, hi, marks);
+        }
+        // The loop's last pass leaves lo and hi where it stands now.
+        if (seen) {
+            glm_vec3_copy(lo, seen[i].box.min);
+            glm_vec3_copy(hi, seen[i].box.max);
         }
     }
     tiles_list_mover_items(ss, list);

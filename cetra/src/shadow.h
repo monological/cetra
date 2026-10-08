@@ -213,18 +213,22 @@ typedef struct ShadowTileBlock {
 } ShadowTileBlock;
 
 // What the kept faces drew a draw-list item by, at its position in the list (spec 13.26): which
-// item it was, its lane and flags, and what of its material shapes the caster -- an alpha-tested
-// one's cut-out, a hooked one's hook and params. A material is plain writes, so nothing else says
-// when one of these changes.
+// item it was, by its node's serial and its mesh's id, which outlive a free (spec 13.38); its
+// lane and flags; what of its material shapes the caster -- an alpha-tested one's cut-out, a
+// hooked one's hook and params; and, for a caster the kept faces take, where they drew it. A
+// material is plain writes, so nothing else says when one of these changes.
 typedef struct ShadowTileSeen {
-    const struct Mesh* mesh;
-    const struct SceneNode* node;
+    uint64_t node;   // SceneNode.serial
+    unsigned mesh;   // Mesh.id
+    unsigned upload; // Mesh.upload_count
     // The cutoff, UV transform and albedo of an alpha-tested caster, and the hook and its params
     // of one drawn through its hook (spec 13.29), hashed; else 0
     uint64_t shape;
     float offset_bound; // its hook's, metres, which its bound grew by; 0 without an offset hook
     uint8_t lane;
     uint8_t flags;
+    bool kept; // a kept face would draw it, so `box` holds where
+    AABB box;  // the world box it was drawn in, kept up as its node moves
 } ShadowTileSeen;
 
 // A cached light in the frame's ranking.
@@ -417,7 +421,7 @@ typedef struct ShadowSystem {
     int tile_faces_drawn;   // this frame, kept faces filled
     int mover_faces_copied; // this frame, faces seeing a mover drawn over a copy of their cell
     int mover_faces_whole;  // ...and whole, still casters and all, for want of one
-    const struct SceneNode* tile_movers[SHADOW_TILE_MAX_MOVERS];
+    uint64_t tile_movers[SHADOW_TILE_MAX_MOVERS];      // their nodes' serials
     uint64_t tile_mover_moved[SHADOW_TILE_MAX_MOVERS]; // the tile frame each last moved
     int tile_mover_count;
     // The indices into tile_mover_list a kept face draws over its copy, ascending, settled once a

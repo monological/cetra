@@ -29283,6 +29283,14 @@ def run_shadow_tiles_gate(workdir):
       tiles-rest-toggle the material set to sway and back with the graph unchanged: the kept
                      faces end as the faces that never swayed, the box drawn again where it
                      stands at each change and no face of the region lost
+      tiles-graph-near a node taken out of the graph under the cached lamp draws again some of
+                     its faces and not all, loses no face of the region, and is the frame of
+                     the node removed at load (spec 13.38)
+      tiles-graph-far ...and out of every cached light's reach, draws none
+      tiles-graph-back ...and put back, is the frame of the node never taken out
+      tiles-graph-replace a node freed and a new one hung in its place, moved, with its mesh --
+                     the new node may take the old one's address -- is the frame of every face
+                     drawn every frame
       tiles-budget   cached lights past the tile budget are refused by name
       tiles-store    with sixteen bodied lights holding the whole budget, a moving caster's faces
                      are drawn over copies kept in the store pool on top of it; with no pool
@@ -29637,6 +29645,77 @@ def run_shadow_tiles_gate(workdir):
               f"face kept {'through it' if same else 'NOT through it'}")
         if not ok:
             failures.append("tiles-rest-toggle")
+
+    # --- graph changes (spec 13.38) ----------------------------------------------------------
+    # A node taken out of the graph and put back, and one freed with a new one hung in its place,
+    # under the cached lamp: the faces it was in or is in are drawn again and no others, never the
+    # whole region, and every frame is the frame its own reference gives.
+    plain_gen = None if pk is None else _tiles_region(pk[1]).get("generation")
+    near, err = _tiles_render(workdir, "graph_out", point_cached,
+                              ["--graph-churn", "cornell_short_box", "10", "0"], frames=10)
+    gone, err2 = _tiles_render(workdir, "graph_gone", point_cached,
+                               ["--remove-node", "cornell_short_box"], frames=10)
+    if err or err2 or pk is None:
+        failed("tiles-graph-near", err or err2 or "cornell_point's cached render")
+    else:
+        region = _tiles_region(near[1])
+        drawn, cells = region.get("faces_drawn", "?"), region.get("cells", "?")
+        differ = compare(near[3], gone[3])[0]
+        some = drawn.isdigit() and cells.isdigit() and 0 < int(drawn) < int(cells)
+        ok = some and region.get("generation") == plain_gen and differ == 0
+        print(f"  tiles-graph-near {'PASS' if ok else 'FAIL'}  the short box taken out on frame "
+              f"10: {drawn} of the lamp's {cells} faces drawn again (want some, not all), the "
+              f"region's generation {region.get('generation')} (want {plain_gen}: no face lost), "
+              f"{differ} px from the box removed at load (want 0)")
+        if not ok:
+            failures.append("tiles-graph-near")
+
+    far_lamp = scene("graph_far", point, lamp(lambda l: l.update(
+        shadow_cache=True, position=[-0.8, 1.8, 0.8], range=0.3)))
+    far, err = _tiles_render(workdir, "graph_far", far_lamp,
+                             ["--graph-churn", "cornell_short_box", "10", "0"], frames=10)
+    if err:
+        failed("tiles-graph-far", err)
+    else:
+        region = _tiles_region(far[1])
+        ok = region.get("faces_drawn") == "0" and region.get("generation") == "0"
+        print(f"  tiles-graph-far {'PASS' if ok else 'FAIL'}  the short box taken out of a "
+              f"graph whose only cached lamp cannot reach it: {region.get('faces_drawn')} faces "
+              f"drawn again (want 0), generation {region.get('generation')} (want 0)")
+        if not ok:
+            failures.append("tiles-graph-far")
+
+    back, err = _tiles_render(workdir, "graph_back", point_cached,
+                              ["--graph-churn", "cornell_short_box", "10", "20"], frames=30)
+    if err or pk is None:
+        failed("tiles-graph-back", err or "cornell_point's cached render")
+    else:
+        region = _tiles_region(back[1])
+        differ = compare(back[3], pk[3])[0]
+        ok = differ == 0 and region.get("generation") == plain_gen
+        print(f"  tiles-graph-back {'PASS' if ok else 'FAIL'}  the box out on frame 10 and back on "
+              f"20: {differ} px from never taken out (want 0), generation "
+              f"{region.get('generation')} (want {plain_gen})")
+        if not ok:
+            failures.append("tiles-graph-back")
+
+    replace = ["--graph-replace", "cornell_short_box", "10", "0.25,0,0.1"]
+    swapped, err = _tiles_render(workdir, "graph_replace", point_cached, replace, frames=20)
+    swapped_ref, err2 = _tiles_render(workdir, "graph_replace_ref", point_cached,
+                                      replace + ["--tiles-refresh"], frames=20)
+    if err or err2 or pk is None:
+        failed("tiles-graph-replace", err or err2 or "cornell_point's cached render")
+    else:
+        region = _tiles_region(swapped[1])
+        differ = compare(swapped[3], swapped_ref[3])[0]
+        moved = compare(swapped[3], pk[3])[0]
+        ok = differ == 0 and moved > 100 and region.get("generation") == plain_gen
+        print(f"  tiles-graph-replace {'PASS' if ok else 'FAIL'}  the box freed on frame 10 and a "
+              f"new node hung 0.27 m over with its mesh: {differ} px from every face drawn every "
+              f"frame (want 0), {moved} from the box never moved (want > 100), generation "
+              f"{region.get('generation')} (want {plain_gen})")
+        if not ok:
+            failures.append("tiles-graph-replace")
 
     # --- budget ------------------------------------------------------------------------------
     # Three lights at the reference's 64 views ask 384 cells each, which the budget holds two of;

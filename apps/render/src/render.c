@@ -246,6 +246,12 @@ static void print_usage(const char* prog) {
             "                         second, from frame 0: a caster that moves\n");
     fprintf(stderr, "      --tiles-refresh    Redraw every cached face every frame\n");
     fprintf(stderr,
+            "      --graph-churn <node> <out> <back>  Take a node out of the graph on frame\n"
+            "                         out and put it back on frame back (0 = never)\n");
+    fprintf(stderr,
+            "      --graph-replace <node> <frame> <dx,dy,dz>  Free a node on a frame and hang\n"
+            "                         a new one holding its meshes, moved by the offset\n");
+    fprintf(stderr,
             "      --no-fire          Drop the fires a scene file asked for (spec 13.14)\n");
     fprintf(stderr, "      --fire-probe       Print the blackbody, each fire's state, its grid\n"
                     "                         read back whole, and the lights it drives\n");
@@ -1411,6 +1417,18 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
         } else if (strcmp(argv[i], "--node-swing") == 0 && i + 2 < argc) {
             args->node_swing = argv[++i];
             args->node_swing_m = (float)atof(argv[++i]);
+        } else if (strcmp(argv[i], "--graph-churn") == 0 && i + 3 < argc) {
+            args->graph_churn = argv[++i];
+            args->graph_churn_out = atoi(argv[++i]);
+            args->graph_churn_back = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--graph-replace") == 0 && i + 3 < argc) {
+            args->graph_replace = argv[++i];
+            args->graph_replace_at = atoi(argv[++i]);
+            if (sscanf(argv[++i], "%f,%f,%f", &args->graph_replace_by[0],
+                       &args->graph_replace_by[1], &args->graph_replace_by[2]) != 3) {
+                fprintf(stderr, "Error: --graph-replace wants <node> <frame> <dx,dy,dz>\n");
+                return -1;
+            }
         } else if (strcmp(argv[i], "--tile-map") == 0 && i + 2 < argc) {
             args->tile_map_light = argv[++i];
             args->tile_map_path = argv[++i];
@@ -2614,6 +2632,42 @@ static int check_stretch = 0;
  */
 static const RenderArgs* frame_schedule = NULL;
 
+// --graph-churn's node while it is out of the graph, and where it goes back; freed at exit if
+// it is still out.
+static SceneNode* churned = NULL;
+static SceneNode* churned_parent = NULL;
+
+/*
+ * --graph-replace: the node named freed, and a new one hung under its parent in its place,
+ * moved by `by`, holding its meshes. Freed FIRST, so the new node may well take its address --
+ * which is the case a cache remembering nodes by pointer gets wrong.
+ */
+static void replace_node(SceneNode* root, const char* name, const float by[3]) {
+    SceneNode* old = node_find(root, name);
+    if (!old || !old->parent || old->mesh_count == 0) {
+        fprintf(stderr, "Warning: --graph-replace: no node named '%s' with a mesh\n", name);
+        return;
+    }
+    SceneNode* parent = old->parent;
+    mat4 local;
+    glm_mat4_copy(old->original_transform, local);
+    Mesh* meshes[8];
+    size_t count = old->mesh_count < 8 ? old->mesh_count : 8;
+    for (size_t m = 0; m < count; m++)
+        meshes[m] = mesh_ref(old->meshes[m]);
+    char* kept_name = safe_strdup(name);
+    free_node(old);
+
+    SceneNode* fresh = create_node();
+    node_set_name(fresh, kept_name);
+    free(kept_name);
+    glm_mat4_copy(local, fresh->original_transform);
+    glm_vec3_add(fresh->original_transform[3], (float*)by, fresh->original_transform[3]);
+    for (size_t m = 0; m < count; m++)
+        node_add_mesh(fresh, meshes[m]);
+    node_add_child(parent, fresh);
+}
+
 /*
  * Recenter offset (computed at load): translates the model so its bounding-box
  * base sits on the origin (y=0, centered in x/z). Off-origin assets otherwise
@@ -3164,6 +3218,22 @@ void pre_render_callback(Engine* engine, Scene* current_scene) {
             node_set_position(swung, at);
         }
     }
+
+    // --graph-churn and --graph-replace: the graph changed on named frames, so a cached light's
+    // kept faces meet a node gone, back, and freed for another (spec 13.38).
+    if (frame_schedule && frame_schedule->graph_churn) {
+        if (!churned && (churned = node_find(root_node, frame_schedule->graph_churn)) != NULL)
+            churned_parent = churned->parent;
+        if (churned && churned_parent) {
+            if (frames_rendered == frame_schedule->graph_churn_out)
+                node_remove_child(churned_parent, churned);
+            else if (frames_rendered == frame_schedule->graph_churn_back)
+                node_add_child(churned_parent, churned);
+        }
+    }
+    if (frame_schedule && frame_schedule->graph_replace &&
+        frames_rendered == frame_schedule->graph_replace_at)
+        replace_node(root_node, frame_schedule->graph_replace, frame_schedule->graph_replace_by);
 
     // The engine's frame clock: the wall clock live, a fixed 1/60 headless so
     // frame N is always pose N
@@ -5330,6 +5400,9 @@ int main(int argc, char** argv) {
     if (args.tile_map_light)
         shadow_tiles_map(scene->shadow_system, scene_find_light(scene, args.tile_map_light),
                          args.tile_map_path);
+    // A node --graph-churn left out of the graph belongs to nothing that would free it.
+    if (churned && !churned->parent)
+        free_node(churned);
 
     // Beside the others, and for the same reason: the pool is fully populated by
     // now (the async drain that gates the mask-array build has run), so what it
