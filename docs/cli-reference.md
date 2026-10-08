@@ -286,6 +286,12 @@ of it**: every tap lies inside `[0, span]`, where a mirror and a modulo agree ex
 tap-sampling alone left the C fold unreachable from outside the process. Those rows ask for
 `span + d` and pair it against `span - d`. Note the probe still says nothing about the SHADER's
 fold -- for that see `ies-mirror`, which has to look at a frame),
+`--tree-probe` (spec 13.35 -- each tree in the scene file's `trees` block grown again from the
+parameters it was built with: a `tree-probe` row with an FNV-1a digest of every stream of its bark
+and foliage meshes, and for a conifer a `tree-shape` row (trunk top, highest spray, longest branch
+per crown quarter, each mesh's height range) and a `tree-lod` row (sprays per level of detail).
+The digests are taken before any chain is built, so a level of detail never moves them. Read by
+the `conifer` group over `conifer_fixture.cscn`, whose `trees` entries each serve an arm),
 `--occlusion-probe` (spec 11.98 — the masked occlusion buffer against its brute-force twin, as
 `occlusion-probe` k=v rows after the loop with no GL and no frame. Two-sided: hierarchical-hidden
 must imply reference-hidden with zero exceptions over the scene's items AND a seeded frustum sweep,
@@ -629,7 +635,11 @@ codes. `--moon-size` scales the disc and its halo alone; `--moon-brightness` dri
 the light, so it is the one that lifts the sea -- and it keeps the sea PHYSICAL where a scatter
 glow would not. `-c/--config <path>`
 restores a config snapshot — the shared GUI panel's Dump Config button has written
-`cetra_config.json` since 11.71, and this app can finally take one back.
+`cetra_config.json` since 11.71, and this app can finally take one back. Tree (spec 13.35):
+`--preset broadleaf|dead|spruce|fir|snag` grows one of tree_gen's named trees, broadleaf being this
+app's own; a conifer preset bakes the needle-spray atlas in place of the broadleaf sprigs.
+`--irregularity F` overrides a conifer's raggedness, 0 a tidy cone, which is the A/B for the
+branch pattern.
 
 **Two things about tree's defaults that read as bugs if you meet them cold.** At a 0.8 degree sun
 the frame is lit mostly by sky and is DARK, and the shadow map cannot hold the span it needs --
