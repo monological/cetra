@@ -925,6 +925,7 @@ typedef struct {
     int arrows_upright; // up arrow looks UP; the walker's default is inverted
     TreePreset preset;  // the tree grown; TREE_PRESET_BROADLEAF is this app's own
     int tree_digest;    // print the grown meshes' digest and exit, rendering nothing
+    float irregularity; // the preset's own when below 0
 } TreeArgs;
 
 static void print_usage(const char* prog) {
@@ -995,7 +996,10 @@ static void print_usage(const char* prog) {
            (double)(PLAYER_LOOK_RATE * 180.0f / (float)M_PI));
     printf("      --no-invert-arrows  Up arrow looks UP; the default is inverted (pitch only,\n");
     printf("                          never yaw)\n");
-    printf("      --preset NAME       The tree grown: broadleaf (default) or dead\n");
+    printf("      --preset NAME       The tree grown: broadleaf (default), dead, spruce, fir or\n");
+    printf("                          snag\n");
+    printf("      --irregularity F    A conifer's raggedness, 0 a tidy cone to 1; default the\n");
+    printf("                          preset's own\n");
     printf("      --tree-digest       Print a hash of every stream of the grown meshes, and\n");
     printf("                          their counts, then exit without rendering\n");
     printf("  -h, --help              This message\n");
@@ -1024,6 +1028,7 @@ static bool parse_args(int argc, char** argv, TreeArgs* a) {
     // 0 is a legal water level -- it is the dome's summit -- so the unset value has
     // to sit outside every plausible one.
     a->water_level = -9999.0f;
+    a->irregularity = -1.0f;
 
     for (int i = 1; i < argc; i++) {
         const char* s = argv[i];
@@ -1138,6 +1143,8 @@ static bool parse_args(int argc, char** argv, TreeArgs* a) {
             }
         } else if (!strcmp(s, "--tree-digest")) {
             a->tree_digest = 1;
+        } else if (!strcmp(s, "--irregularity") && has_next) {
+            a->irregularity = (float)atof(argv[++i]);
         } else if (!strcmp(s, "-h") || !strcmp(s, "--help")) {
             print_usage(argv[0]);
             return false;
@@ -1148,6 +1155,13 @@ static bool parse_args(int argc, char** argv, TreeArgs* a) {
         }
     }
     return true;
+}
+
+// The tree the command line asks for: its preset, and what the line overrides of it.
+static void tree_params_from_args(const TreeArgs* a, TreeParams* p) {
+    tree_params_preset(p, a->preset, a->seed);
+    if (a->irregularity >= 0.0f)
+        p->irregularity = a->irregularity;
 }
 
 /*
@@ -1263,7 +1277,7 @@ int main(int argc, char** argv) {
     // After the engine only because a Mesh is made with a GL context to hold its buffers.
     if (args.tree_digest) {
         TreeParams digest_params;
-        tree_params_preset(&digest_params, args.preset, args.seed);
+        tree_params_from_args(&args, &digest_params);
         print_tree_digest(&digest_params, args.preset);
         free_engine(engine);
         return 0;
@@ -1852,7 +1866,7 @@ int main(int argc, char** argv) {
     }
     engine->oit_enabled = true;
 
-    tree_params_preset(&params, args.preset, args.seed);
+    tree_params_from_args(&args, &params);
 
     // Grass field
     grass_params.seed = args.seed;
