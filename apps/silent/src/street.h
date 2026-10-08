@@ -33,4 +33,12 @@ Light* street_lamp(Kit* kit, Scene* scene, float x, float y, float z, float yaw,
 // The street lamps' IES profile in the scene's library, or -1 by day or when it will not load.
 int street_lamp_profile(Scene* scene, bool night);
 
+// What a lamp on a failing ballast gives of its light at `time` seconds: all of it, or a glimmer
+// for a beat now and then. Lamps given different `salt`s fail out of step.
+float street_lamp_failing(double time, unsigned int salt);
+
+// A boxy sedan at (x, z) on the road, its length along X, its windows dark: in `body`'s paint, or
+// a police car's black and white with its light bar dead on the roof.
+void street_car(Kit* kit, float x, float z, int body, bool police);
+
 #endif // _SILENT_STREET_H_

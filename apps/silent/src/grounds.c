@@ -30,41 +30,6 @@ static float rnd(unsigned int* state) {
     return (float)(*state & 0xffffffu) / 16777215.0f;
 }
 
-/*
- * A box turned by `yaw` about the vertical and then leaning `lean` about its own X, so a
- * headstone or a cross stands askew the way the ground has let it fall. Six faces wound outward;
- * no collider, since what leans here is knee high or less.
- */
-static void leaning_box(Kit* kit, int mat, const vec3 base, const vec3 half, float yaw,
-                        float lean) {
-    vec3 corner[8];
-    for (int i = 0; i < 8; i++) {
-        vec3 p = {(i & 1) ? half[0] : -half[0], (i & 2) ? 2.0f * half[1] : 0.0f,
-                  (i & 4) ? half[2] : -half[2]};
-        // Lean about X, then turn about Y, then stand on the base.
-        const float y = p[1] * cosf(lean) - p[2] * sinf(lean);
-        const float z = p[1] * sinf(lean) + p[2] * cosf(lean);
-        corner[i][0] = base[0] + p[0] * cosf(yaw) + z * sinf(yaw);
-        corner[i][1] = base[1] + y;
-        corner[i][2] = base[2] - p[0] * sinf(yaw) + z * cosf(yaw);
-    }
-    vec3 centre = {0.0f, 0.0f, 0.0f};
-    for (int i = 0; i < 8; i++)
-        glm_vec3_add(centre, corner[i], centre);
-    glm_vec3_scale(centre, 1.0f / 8.0f, centre);
-    static const int FACES[6][4] = {{0, 1, 3, 2}, {4, 5, 7, 6}, {0, 1, 5, 4},
-                                    {2, 3, 7, 6}, {0, 2, 6, 4}, {1, 3, 7, 5}};
-    for (int f = 0; f < 6; f++) {
-        vec3 mid = {0.0f, 0.0f, 0.0f}, out;
-        for (int k = 0; k < 4; k++)
-            glm_vec3_add(mid, corner[FACES[f][k]], mid);
-        glm_vec3_scale(mid, 0.25f, mid);
-        glm_vec3_sub(mid, centre, out);
-        kit_quad_facing(kit, mat, corner[FACES[f][0]], corner[FACES[f][1]], corner[FACES[f][2]],
-                        corner[FACES[f][3]], out);
-    }
-}
-
 // A run of railing from (x0, z0) to (x1, z1) on ground level `y`: bars with a spike each, two
 // rails, and a collider the length of it. `gaps` holds `gap_count` spans, in metres along the
 // run, where bars have fallen or been taken.
@@ -194,15 +159,15 @@ static void graveyard(Kit* kit, unsigned int* rng) {
         const float yaw = 0.15f * (rnd(rng) - 0.5f);
         const float lean = 0.35f * (rnd(rng) - 0.5f);
         if (i % 4 == 3) {
-            leaning_box(kit, MAT_STONE, base, (vec3){0.06f, 0.6f, 0.06f}, yaw, lean);
+            kit_leaning_box(kit, MAT_STONE, base, (vec3){0.06f, 0.6f, 0.06f}, yaw, lean);
             // Up the leaning shaft to where the arm crosses it.
             const vec3 arm = {base[0] + 0.8f * sinf(lean) * sinf(yaw), base[1] + 0.8f * cosf(lean),
                               base[2] + 0.8f * sinf(lean) * cosf(yaw)};
-            leaning_box(kit, MAT_STONE, arm, (vec3){0.3f, 0.05f, 0.05f}, yaw, lean);
+            kit_leaning_box(kit, MAT_STONE, arm, (vec3){0.3f, 0.05f, 0.05f}, yaw, lean);
         } else {
-            leaning_box(kit, MAT_STONE, base,
-                        (vec3){0.25f + 0.08f * rnd(rng), 0.35f + 0.2f * rnd(rng), 0.06f}, yaw,
-                        lean);
+            kit_leaning_box(kit, MAT_STONE, base,
+                            (vec3){0.25f + 0.08f * rnd(rng), 0.35f + 0.2f * rnd(rng), 0.06f}, yaw,
+                            lean);
         }
     }
 }
@@ -235,14 +200,5 @@ void grounds_build(Grounds* grounds, Kit* kit, Scene* scene, unsigned int seed, 
 void grounds_update(Grounds* grounds, double time) {
     if (!grounds->failing)
         return;
-    // A failing ballast: out for a beat now and then, and buzzing between, in a pattern hashed
-    // from the time so it never settles into a rhythm.
-    const unsigned int beat = (unsigned int)(time * 9.0);
-    unsigned int h = beat * 2654435761u;
-    h ^= h >> 15;
-    const unsigned int stretch = (unsigned int)(time * 0.6);
-    unsigned int s = stretch * 2246822519u;
-    s ^= s >> 13;
-    const bool out = (h & 0xffu) < 70u || (s & 0xffu) < 50u;
-    grounds->failing->intensity = out ? 0.04f * grounds->base_intensity : grounds->base_intensity;
+    grounds->failing->intensity = street_lamp_failing(time, 0u) * grounds->base_intensity;
 }

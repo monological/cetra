@@ -73,6 +73,19 @@ Light* street_lamp(Kit* kit, Scene* scene, float x, float y, float z, float yaw,
     return light;
 }
 
+float street_lamp_failing(double time, unsigned int salt) {
+    // Out for a beat now and then, and buzzing between, in a pattern hashed from the time so it
+    // never settles into a rhythm.
+    const unsigned int beat = (unsigned int)(time * 9.0) + salt * 7919u;
+    unsigned int h = beat * 2654435761u;
+    h ^= h >> 15;
+    const unsigned int stretch = (unsigned int)(time * 0.6) + salt * 104729u;
+    unsigned int s = stretch * 2246822519u;
+    s ^= s >> 13;
+    const bool out = (h & 0xffu) < 70u || (s & 0xffu) < 50u;
+    return out ? 0.04f : 1.0f;
+}
+
 int street_lamp_profile(Scene* scene, bool night) {
     // A missing profile logs by name and gives -1, which leaves the lamps bare bulbs rather
     // than dark.
@@ -84,32 +97,44 @@ int street_lamp_profile(Scene* scene, bool night) {
 }
 
 // Wooden utility poles down the far side, strung with two wires: on the sidewalk, in front of
-// the terrace's wall.
+// the terrace's wall, the first on the corner of the cross street, from where the crossroads
+// carries the wires on.
 static void poles(Kit* kit) {
-    const float z = -(ROAD_HALF_WIDTH + SIDEWALK_WIDTH - 0.6f);
-    const float xs[] = {-30.0f, -10.0f, 10.0f, 30.0f};
+    const float xs[] = {POLE_WEST_X, -30.0f, -10.0f, 10.0f, 30.0f};
     const int n = (int)(sizeof(xs) / sizeof(xs[0]));
     for (int i = 0; i < n; i++) {
-        kit_prism(kit, MAT_POLE, xs[i], z, 0.0f, 8.5f, 0.12f, 8, true);
-        kit_box(kit, MAT_POLE, (vec3){xs[i], 8.0f, z}, (vec3){0.06f, 0.05f, 0.8f}, 0.0f, false);
+        kit_prism(kit, MAT_POLE, xs[i], POLE_Z, 0.0f, 8.5f, 0.12f, 8, true);
+        kit_box(kit, MAT_POLE, (vec3){xs[i], 8.0f, POLE_Z}, (vec3){0.06f, 0.05f, 0.8f}, 0.0f,
+                false);
     }
-    // From the world's edge, pole to pole, to the other edge.
-    for (int i = -1; i < n; i++) {
-        const float x0 = i < 0 ? -STREET_HALF_LEN : xs[i];
+    // Pole to pole, and on to the street's east end.
+    for (int i = 0; i < n; i++) {
+        const float x0 = xs[i];
         const float x1 = i + 1 < n ? xs[i + 1] : STREET_HALF_LEN;
         for (int w = -1; w <= 1; w += 2)
-            kit_prism_lying(kit, MAT_BLACK, (vec3){0.5f * (x0 + x1), 7.95f, z + 0.65f * (float)w},
-                            0.5f * (x1 - x0), 0.012f, 4, true);
+            kit_prism_lying(
+                kit, MAT_BLACK,
+                (vec3){0.5f * (x0 + x1), POLE_WIRE_Y, POLE_Z + POLE_WIRE_OFF * (float)w},
+                0.5f * (x1 - x0), 0.012f, 4, true);
     }
 }
 
-// A boxy sedan parked at the far kerb, its windows dark.
-static void car(Kit* kit, float x, float z) {
+void street_car(Kit* kit, float x, float z, int body, bool police) {
     const float y = ROAD_Y;
-    kit_box(kit, MAT_CAR, (vec3){x, y + 0.62f, z}, (vec3){2.15f, 0.3f, 0.86f}, 0.0f, true);
+    if (police)
+        body = MAT_BLACK;
+    kit_box(kit, body, (vec3){x, y + 0.62f, z}, (vec3){2.15f, 0.3f, 0.86f}, 0.0f, true);
     kit_box(kit, MAT_DARK_GLASS, (vec3){x - 0.25f, y + 1.13f, z}, (vec3){1.05f, 0.22f, 0.8f}, 0.0f,
             false);
-    kit_box(kit, MAT_CAR, (vec3){x - 0.25f, y + 1.37f, z}, (vec3){1.0f, 0.03f, 0.78f}, 0.0f, false);
+    kit_box(kit, body, (vec3){x - 0.25f, y + 1.37f, z}, (vec3){1.0f, 0.03f, 0.78f}, 0.0f, false);
+    if (police) {
+        // White doors either side, and the bar of lamps across the roof, out.
+        for (int s = -1; s <= 1; s += 2)
+            kit_box(kit, MAT_TRIM, (vec3){x - 0.1f, y + 0.66f, z + 0.865f * (float)s},
+                    (vec3){1.0f, 0.22f, 0.006f}, 0.0f, false);
+        kit_box(kit, MAT_DARK_GLASS, (vec3){x - 0.25f, y + 1.47f, z}, (vec3){0.12f, 0.07f, 0.62f},
+                0.0f, false);
+    }
     for (int i = 0; i < 4; i++) {
         const float wx = x + ((i & 1) ? 1.35f : -1.35f);
         const float wz = z + ((i & 2) ? 0.8f : -0.8f);
@@ -137,12 +162,14 @@ typedef struct FogHole {
 } FogHole;
 
 static void fog_box(Scene* scene, float density, float x0, float x1, float z0, float z1) {
-    const float top = 40.0f; // high enough that the sky is fogged out too
-    FogVolume v = {.center = {0.5f * (x0 + x1), 0.5f * top, 0.5f * (z0 + z1)},
-                   .half_extent = {0.5f * (x1 - x0), 0.5f * top + 1.0f, 0.5f * (z1 - z0)},
-                   .density = density,
-                   .feather = FOG_FEATHER,
-                   .tint = {1.0f, 1.0f, 1.0f}};
+    const float top = 40.0f;     // high enough that the sky is fogged out too
+    const float bottom = -60.0f; // and low enough to fill the chasm (spec 13.35)
+    FogVolume v = {
+        .center = {0.5f * (x0 + x1), 0.5f * (top + bottom), 0.5f * (z0 + z1)},
+        .half_extent = {0.5f * (x1 - x0), 0.5f * (top - bottom) + 1.0f, 0.5f * (z1 - z0)},
+        .density = density,
+        .feather = FOG_FEATHER,
+        .tint = {1.0f, 1.0f, 1.0f}};
     scene_add_fog_volume(scene, &v);
 }
 
@@ -163,7 +190,8 @@ static FogHole home_hole(void) {
 static void fog(Scene* scene, bool night) {
     const float density = night ? FOG_NIGHT : FOG_DAY;
     const float F = 0.5f * FOG_FEATHER;
-    const float wx0 = -60.0f, wx1 = WORLD_X1 + 20.0f, wz0 = WORLD_Z0 - 20.0f,
+    // West across the chasm, so its far side is never clear air.
+    const float wx0 = CHASM_X - 50.0f, wx1 = WORLD_X1 + 20.0f, wz0 = WORLD_Z0 - 20.0f,
                 wz1 = WORLD_Z1 + 20.0f;
     // West to east, which is the order the columns are cut in.
     const FogHole holes[2] = {home_hole(), mansion_hole()};
@@ -236,7 +264,7 @@ void street_build(Kit* kit, Scene* scene, unsigned int seed, bool night, bool fo
                     LAMPS[i].side > 0.0f ? GLM_PIf : 0.0f, night, LAMPS[i].dead, profile);
 
     poles(kit);
-    car(kit, 5.0f, -(kerb - 1.1f));
+    street_car(kit, 5.0f, -(kerb - 1.1f), MAT_CAR, false);
     // The mailbox at the end of our path.
     kit_box(kit, MAT_POLE, (vec3){-1.8f, 0.55f, walk + 0.4f}, (vec3){0.04f, 0.55f, 0.04f}, 0.0f,
             false);
@@ -253,7 +281,10 @@ void street_build(Kit* kit, Scene* scene, unsigned int seed, bool night, bool fo
     struct {
         float ax, az, bx, bz;
     } const edges[] = {
-        {x0, WOODS_EDGE_Z0, x0, WOODS_EDGE_Z1},           // the street's west end
+        // Behind the far lots and behind ours, where the woods run on west past the crossroads;
+        // the crossroads itself is closed by its barricades and the chasm's lip.
+        {x0, WOODS_EDGE_Z0, x0, TERRACE_BACK_Z},
+        {x0, BACK_FENCE_Z, x0, WOODS_EDGE_Z1},
         {x0, WOODS_EDGE_Z1, WOODS_EAST_X, WOODS_EDGE_Z1}, // in the woods behind our side
         {WOODS_EAST_X, WOODS_EDGE_Z1, WOODS_EAST_X, z1},  // and their east side
         {WOODS_EAST_X, z1, x1, z1},                       // behind the mansion

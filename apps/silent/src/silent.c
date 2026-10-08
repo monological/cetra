@@ -48,6 +48,7 @@
 #include "cat_debug.h"
 #include "cat_voice.h"
 #include "clock.h"
+#include "crossroads.h"
 #include "door.h"
 #include "fences.h"
 #include "grounds.h"
@@ -219,6 +220,7 @@ static CatVoice g_voice;
 #define DOOR_REACH 1.9f
 #define DOOR_CONE  0.6f // radians
 static Grounds g_grounds;
+static Crossroads g_crossroads;
 static Woods g_woods;
 
 // The woods' conifers are the only levels of detail in the app (spec 13.35), and the engine's
@@ -643,14 +645,15 @@ static void on_init(Game* game) {
     StreetPlots plots;
     street_build(&kit, g_scene, (unsigned int)g_args.seed, !g_args.day, !g_args.no_fog, &plots);
     clock_build(&kit);
-    // The drive first, since the land's hill term carves it; then the ground over the world, and
-    // the far side's terrace, whose east wall runs up into that ground, and the yards' fences
-    // (spec 13.35).
+    // The drive first, since the land's hill term carves it; then the ground over the world, the
+    // far side's terrace, whose east wall runs up into that ground, the yards' fences, and the
+    // crossroads at the chasm's lip (spec 13.35).
     hill_build(&kit);
     land_build(&kit);
     terrace_build(&kit, plots.far);
     FenceBreaches breaches;
     fences_build(&kit, (unsigned int)g_args.seed, &plots, &breaches);
+    crossroads_build(&g_crossroads, &kit, g_scene, !g_args.day);
     Trees trees;
     trees_init(&trees, engine, g_scene);
     trees_build(&trees, &kit, g_scene, (unsigned int)g_args.seed);
@@ -835,6 +838,7 @@ static void on_update(Game* game, double dt) {
         if (g_door_hung[i])
             door_update(&g_doors[i], (float)dt);
     grounds_update(&g_grounds, game->time);
+    crossroads_update(&g_crossroads, game->time);
     if (g_args.trace_cat) {
         static int step;
         if (step++ % 30 == 0) {
