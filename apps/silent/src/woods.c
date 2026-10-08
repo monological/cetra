@@ -59,8 +59,7 @@ static const struct {
 #define SNAG_SHARE  0.06f
 #define CARD_KEEP   0.45f // a conifer's sprays at each level of detail, of the level nearer
 // An atlas cell: 1024 wide, as wide as the plant's, so the material array grows no wider for it.
-#define NEEDLE_CELL      128
-#define NEEDLE_ROUGHNESS 1.6f // over the atlas's 0.6 to 0.75: 1 nearly everywhere
+#define NEEDLE_CELL 128
 // The fog's extinction (street.c) leaves a tree about 2% of its contrast at these: 0.09 a metre
 // by night, 0.14 by day.
 #define REACH_NIGHT  45.0f
@@ -112,18 +111,13 @@ static float rnd(unsigned int* state) {
  * A conifer's sprays: the needle atlas on alpha-tested cards drawn from both sides, casting their
  * cut-out shadow and moving in the wind -- held at rest in the cached shadows, as the dead trees
  * are.
- *
- * Rough: a card stands for a spray of needles turned every way, which reflects nothing like a
- * surface does. At the atlas's own roughness a card's normal, rounded out of the crown, met the
- * eye at grazing over most of a canopy, the environment's Fresnel went to over half a mirror, and
- * by day the woods shaded near white against the overcast.
  */
 static Material* needles_material(Scene* scene, ShaderProgram* program) {
     const int w = NEEDLE_CELL * TG_LEAF_VARIANTS, h = NEEDLE_CELL;
     const float cutoff = 0.4f;
     Material* m = create_material();
     m->name = safe_strdup("woods_needles");
-    m->roughness = NEEDLE_ROUGHNESS;
+    m->roughness = 1.0f;
     m->alpha_mode = ALPHA_MASK;
     m->alphaCutoff = cutoff;
     m->doubleSided = true;

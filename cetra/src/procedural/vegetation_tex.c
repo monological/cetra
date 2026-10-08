@@ -877,7 +877,12 @@ void veg_needle_spray_maps(int width, int height, const VegSprayDesc* desc,
         const bool bare = !live && cell >= desc->live_cells + desc->dead_cells;
         const float keep = live ? 1.0f : (bare ? 0.0f : 0.55f);
         const float* needle_rgb = live ? desc->live_rgb : desc->dead_rgb;
-        const float needle_rough = live ? 0.6f : 0.75f;
+        // Near 1: a card stands for a spray of needles turned every way, which reflects nothing
+        // the way a surface does. The cards' normals are rounded out of the crown, so across much
+        // of a canopy they meet the eye at grazing, where the lit surface's environment Fresnel
+        // is max(1 - roughness, F0); at 0.6 that was nearly half a mirror of the sky, and under a
+        // bright overcast a whole canopy shaded near white (spec 13.35).
+        const float needle_rough = live ? 0.92f : 0.96f;
         // A twig bare of its needles has weathered grey.
         float twig_rgb[3];
         for (int k = 0; k < 3; k++)
