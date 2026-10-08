@@ -553,8 +553,28 @@ there. And the kept faces compare the draw list with the one they last saw, item
 (`tiles_mark_changed_looks`): a material that moves a caster into or out of them -- this row,
 its wind, its opacity, its shadow role, its cut-out -- changes nothing in the graph, and a face
 drawn before would keep the caster where it stood or leave it out of a store copy for good. Such
-a caster is drawn again where it stands and where it stood; only a change to which items the
-list holds draws every face again (`tiles-rest-toggle`).
+a caster is drawn again where it stands and where it stood (`tiles-rest-toggle`).
+
+**A change to which items the list holds is matched by IDENTITY, not by place** (spec 13.38,
+`tiles_mark_graph_change`). Until then it drew every face again, and silent's woods, hung and
+taken down as the player walked, made frames of 650 ms of it. Each item is known by its node's
+SERIAL and its mesh's id. Both lists are sorted on that and merged:
+- an item gone marks the box it was last drawn in;
+- an item new marks the box it stands in;
+- an item held whose looks changed, or whose mesh was uploaded again, marks both.
+
+Three things about it are easy to get backwards:
+- **Not by place in the list**, which one insertion shifts for every item after it.
+- **Not by pointer.** `free_node` and `create_node` hand the same address straight back, and
+  `tiles-graph-replace` builds exactly that: a node freed and another hung, moved, in its place.
+  Matched by pointer it is the same caster that never moved, and its old shadow stays in the
+  kept faces.
+- **The recorded box is kept current while its node moves**, in the loop that already marks a
+  moving caster's faces each frame. A box left where an item was first recorded would mark the
+  wrong faces when the item goes.
+
+Every face is drawn again only where the rule cannot answer: memory, or a caster with no bound.
+`tile_generation` is not bumped either, since it means the array was lost.
 
 **What else rendered a plausible frame on the way:**
 - **The body a diameter too long**: the fire wrote the whole spine as `source_length`, and the caps
