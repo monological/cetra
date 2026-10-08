@@ -18,7 +18,6 @@
 #include "ext/cwalk.h" // cwk_path_set_style: pin UNIX separators (see _engine_init)
 #include "engine.h"
 #include "engine_internal.h"
-#include "loading_screen.h"
 #include "draw_list.h"
 #include "gui.h"
 #include "light_cluster.h"
@@ -514,7 +513,7 @@ static GLFWmonitor* _monitor_by_name(const char* name) {
 // skipped, because skipping leaves the context's own default to decide, and a
 // default of 1 would put every golden and every timing arm behind a display's
 // refresh.
-static void _engine_apply_swap_interval(const Engine* engine) {
+void engine_apply_swap_interval(const Engine* engine) {
     if (!engine || !engine->window) {
         return;
     }
@@ -560,7 +559,7 @@ static int _setup_engine_glfw(Engine* engine, EngineWindowMode window_mode, cons
 
     glfwMakeContextCurrent(engine->window);
 
-    _engine_apply_swap_interval(engine);
+    engine_apply_swap_interval(engine);
 
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -939,7 +938,7 @@ void engine_set_vsync(Engine* engine, bool vsync) {
         return;
     }
     engine->vsync = vsync;
-    _engine_apply_swap_interval(engine);
+    engine_apply_swap_interval(engine);
 }
 
 EngineWindowPlacement engine_window_placement(EngineWindowMode mode, EngineWindowRect monitor,
@@ -1028,7 +1027,7 @@ void engine_set_window_mode(Engine* engine, EngineWindowMode mode, const char* m
     engine->window_monitor = target;
     // The swap interval is set on the context rather than the window, so taking
     // a monitor can drop it and it has to be put back by hand.
-    _engine_apply_swap_interval(engine);
+    engine_apply_swap_interval(engine);
 }
 
 // Change the MSAA sample count. While the scene target does not exist yet
@@ -2096,7 +2095,7 @@ ShaderProgram* engine_pbr_variant(Engine* engine, PbrFamily family, unsigned fea
 
     program = create_pbr_program_variant(family, features, hook);
     // A compile is the long part of a first frame, so a loading screen moves between them.
-    engine_draw_loading_screen(engine);
+    loading_screen_tick(engine);
     if (program) {
         engine_add_program(engine, program);
         return program;
@@ -2338,6 +2337,16 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode) {
     if (!engine)
         return;
 
+    // Under a loading screen that hides the whole frame (spec 13.34) the window is the screen's
+    // alone: no picture under it, and no GUI over it, which a frame drawn between two of this
+    // frame's pieces would show and hide by turns.
+    if (loading_screen_covers(engine)) {
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        loading_screen_frame(engine);
+        gui_discard_frame(engine);
+        return;
+    }
+
     // Only PBR frames are linear HDR and get SSAO + bloom + exposure + tone
     // mapping; debug render modes emit display-ready colors and are copied
     // unchanged. The GUI draws after so it is never tone mapped.
@@ -2432,16 +2441,6 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode) {
 
     // GUI last, after tone mapping. gui_render_frame self-gates on
     // gui_frame_active, so it no-ops when no panel/overlay is enabled.
-    profiler_scope_begin_if(engine->profiler, engine->gui_frame_active, "gui");
-    gui_render_frame(engine);
-    profiler_scope_end(engine->profiler);
-}
-
-// A frame under a loading screen that hides it all (spec 13.34): the screen where the picture
-// would be, and the GUI over it, which is the developer's.
-static void _engine_present_covered(Engine* engine) {
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    loading_screen_frame(engine);
     profiler_scope_begin_if(engine->profiler, engine->gui_frame_active, "gui");
     gui_render_frame(engine);
     profiler_scope_end(engine->profiler);
@@ -3369,27 +3368,19 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
         // POM (§4.11): resolve height maps once the async texture loader drains.
         heights_ensure_resolved(current_scene, engine);
 
-        // Under a loading screen that hides it all (spec 13.34), the frame draws no picture of
-        // its own -- the camera's pass and the whole post chain -- while everything that loads
-        // still runs: the lighting's captures and shadows above, the uploads and the builds
-        // here. The screen is drawn in the picture's place.
-        const bool covered = loading_screen_covers(engine);
-        if (current_scene != NULL && !covered)
+        if (current_scene != NULL)
             draw(engine, current_scene);
 
         // The feedback vote pass (spec 11.67), after the scene so the draw
         // list is this frame's; its readback retires at fixed latency into the
         // NEXT frames' residency, which is what keeps the loop deterministic.
-        if (current_scene && !covered)
+        if (current_scene)
             layers_vt_feedback_pass(engine, current_scene);
 
         glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
         engine->current_render_mode = saved_render_mode;
 
-        if (covered)
-            _engine_present_covered(engine);
-        else
-            engine_present_frame(engine, frame_mode);
+        engine_present_frame(engine, frame_mode);
         profiler_end_frame(engine->profiler);
 
         // Engine-owned frame limit (CI/headless): requests close so the

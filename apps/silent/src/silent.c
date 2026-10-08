@@ -244,8 +244,9 @@ static Basement g_basement;
 #define DUMP_RATE 48000
 static float* g_dump;
 static size_t g_dump_frames, g_dump_cap;
-static float g_fade_seconds;    // since the bounce light came in
-static float g_play_capture_ms; // the capture budget once the view is up
+static bool g_loaded;           // the lighting round the eye first came in
+static float g_fade_seconds;    // since the view came up
+static float g_play_capture_ms; // the capture budget once loaded
 
 // The spawn: in the kitchen, facing the window.
 static const vec3 SPAWN_FEET = {1.5f, FLOOR_Y, 13.2f};
@@ -628,7 +629,7 @@ static const Door* hung_door(int i) {
 
 // A seam of on_init (spec 13.34): the loading screen moves, and under --startup-ms where loading's
 // time goes is said as a startup-ms row, the time since the seam before.
-static double g_load_mark;
+static double g_load_mark, g_settle_start;
 static void load_seam(Engine* engine, const char* site) {
     engine_draw_loading_screen(engine);
     const double now = glfwGetTime();
@@ -637,17 +638,41 @@ static void load_seam(Engine* engine, const char* site) {
     g_load_mark = now;
 }
 
+// Under --startup-ms, the frames while the view is held, each the time since the last: the first
+// few by name, then the slowest; the whole wait once the lighting is in, and once the view comes
+// up, both from the end of on_init.
+static void trace_settling(const Engine* engine, bool lit, bool up) {
+    static double worst;
+    static bool lit_said, up_said;
+    const double now = glfwGetTime();
+    if (up) {
+        if (!up_said)
+            printf("startup-ms site=up ms=%.1f frames=%zu\n", (now - g_settle_start) * 1000.0,
+                   engine->total_frames);
+        up_said = true;
+        return;
+    }
+    const double ms = (now - g_load_mark) * 1000.0;
+    if (engine->total_frames <= 3)
+        printf("startup-ms site=frame%zu ms=%.1f\n", engine->total_frames, ms);
+    else if (ms > worst)
+        worst = ms;
+    g_load_mark = now;
+    if (lit && !lit_said)
+        printf("startup-ms site=lit ms=%.1f frames=%zu worst-frame-ms=%.1f\n",
+               (now - g_settle_start) * 1000.0, engine->total_frames, worst);
+    lit_said |= lit;
+}
+
 static void on_init(Game* game) {
     Engine* engine = game->engine;
     engine->show_fps = !engine->headless;
     g_load_mark = glfwGetTime();
     // The engine's loading screen while the game loads and its lighting settles (spec 13.34):
     // in a window, and headless only when asked, so a headless run's frames are otherwise the
-    // game's from the first. Nobody moves under it.
-    if ((!engine->headless || g_args.loading_screen) && !g_args.no_loading_screen) {
+    // game's from the first.
+    if ((!engine->headless || g_args.loading_screen) && !g_args.no_loading_screen)
         engine_show_loading_screen(engine);
-        input_set_suppressed(&game->input, true);
-    }
 
     g_scene = create_scene();
     game_set_scene(game, g_scene);
@@ -884,6 +909,7 @@ static void on_init(Game* game) {
     }
     ex->probe = g_args.exposure_probe;
     load_seam(engine, "mind-exposure");
+    g_settle_start = g_load_mark;
 }
 
 static void on_update(Game* game, double dt) {
@@ -1043,55 +1069,33 @@ static void on_pre_render(Game* game, double alpha) {
     // after it. A volume that could not be built lets the view up rather than holding it dark
     // forever. The fade rides the grade's gain, after the tonemap, so the exposure and the day's
     // meter never see it. Each frame's step is capped because a frame of captures can be long.
-    // Lit, the loading screen offers PLAY, and the player's press lets it go -- or it is let go at
-    // once, headless, where nobody presses, and under --no-play-prompt. It switches off once its
-    // ident has played (spec 13.34), and the fade, the end of the captures' loading budget and the
-    // player's input wait for that; the captures go on while it waits.
-    if (lit && (engine->headless || g_args.no_play_prompt))
-        engine_hide_loading_screen(engine);
-    else if (lit) {
-        engine_loading_screen_ready(engine);
-        if (input_action_pressed(&game->input, "start"))
+    // Lit, the game is loaded: the captures go back to the play budget, so the frames are short
+    // again, and the loading screen offers PLAY, which the player's press lets go -- or it is let
+    // go at once, headless, where nobody presses, and under --no-play-prompt. It switches off once
+    // its ident has played (spec 13.34), and the fade waits for that.
+    if (lit && !g_loaded) {
+        g_loaded = true;
+        engine->capture_budget_ms = g_play_capture_ms;
+        if (engine->headless || g_args.no_play_prompt)
             engine_hide_loading_screen(engine);
+        else
+            engine_loading_screen_ready(engine);
     }
-    const bool screened = engine_loading_screen_shown(engine);
-    const bool up = lit && !screened;
-    if (up) {
-        if (g_fade_seconds == 0.0f)
-            engine->capture_budget_ms = g_play_capture_ms;
+    if (engine_loading_screen_prompting(engine) && input_action_pressed(&game->input, "start"))
+        engine_hide_loading_screen(engine);
+    const bool up = lit && !engine_loading_screen_shown(engine);
+    if (up)
         g_fade_seconds += fminf((float)game->sim_clock.delta, 1.0f / 30.0f);
-    }
     if (engine->postfx)
         glm_vec3_fill(engine->postfx->grade_gain,
                       glm_smoothstep(0.0f, FADE_IN_SECONDS, g_fade_seconds));
-    input_set_suppressed(&game->input, screened);
+    if (g_args.startup_ms)
+        trace_settling(engine, lit, up);
+}
 
-    // Under --startup-ms, the frames while the view is held, each the time since the last hook:
-    // the first few by name, then the slowest; the whole wait once the lighting is in, and once
-    // the view comes up.
-    if (!g_args.startup_ms)
-        return;
-    static double settle_start, settle_worst;
-    static bool lit_said, up_said;
-    if (!up) {
-        const double now = glfwGetTime();
-        const double ms = (now - g_load_mark) * 1000.0;
-        if (engine->total_frames == 0)
-            settle_start = g_load_mark;
-        if (engine->total_frames <= 3)
-            printf("startup-ms site=frame%zu ms=%.1f\n", engine->total_frames, ms);
-        else if (ms > settle_worst)
-            settle_worst = ms;
-        g_load_mark = now;
-        if (lit && !lit_said)
-            printf("startup-ms site=lit ms=%.1f frames=%zu worst-frame-ms=%.1f\n",
-                   (now - settle_start) * 1000.0, engine->total_frames, settle_worst);
-        lit_said |= lit;
-    } else if (!up_said) {
-        printf("startup-ms site=up ms=%.1f frames=%zu\n", (glfwGetTime() - settle_start) * 1000.0,
-               engine->total_frames);
-        up_said = true;
-    }
+// Before the fixed steps: nobody moves under the loading screen.
+static void on_frame_input(Game* game) {
+    input_set_suppressed(&game->input, engine_loading_screen_shown(game->engine));
 }
 
 // Before the engine goes: the prompt draws through its overlay hook.
@@ -1429,6 +1433,7 @@ int main(int argc, char** argv) {
     }
 
     game_set_init(game, on_init);
+    game_set_frame_input(game, on_frame_input);
     game_set_update(game, on_update);
     game_set_pre_render(game, on_pre_render);
     game_set_shutdown(game, on_shutdown);

@@ -13,10 +13,15 @@
 in vec2 TexCoords;
 out vec4 FragColor;
 
-uniform float time;      // seconds since the screen was shown
-uniform vec2 resolution; // the picture's pixels
-uniform vec3 palette[7]; // linear: the ground, five stripes from the core out, the block shadow
-uniform float ready;     // when the game was said to be ready, in `time`'s seconds; < 0 before
+#include "display.glsl"
+
+uniform float time;           // seconds since the screen was shown
+uniform vec2 resolution;      // the picture's pixels
+uniform vec3 paletteCodes[7]; // display: the ground, five stripes from the core out, the shadow
+uniform float playAt;         // when PLAY shows, in `time`'s seconds; < 0 until the game is ready
+
+// The palette in light, decoded once at the top of main().
+vec3 palette[7];
 
 const float PI = 3.14159265;
 
@@ -84,7 +89,7 @@ const int SIGN_PLAY[6] = int[6](8, 0, 2, 9, 11, 10);                // "PLAY >"
 
 const int L_C = 0, L_E = 1, L_T = 2, L_R = 3, L_A = 4, L_N = 5, L_G = 6, L_I = 7;
 const float WIDTH[8] = float[8](0.854, 0.7, 0.8, 0.78, 1.0, 0.85, 1.0, 0.0);
-const int TITLE[5] = int[5](L_C, L_E, L_T, L_R, L_A);
+const int TITLE[LOADING_TITLE_LETTERS] = int[LOADING_TITLE_LETTERS](L_C, L_E, L_T, L_R, L_A);
 const int ENGINE[6] = int[6](L_E, L_N, L_G, L_I, L_N, L_E);
 
 float segDist(vec2 p, vec2 a, vec2 b)
@@ -177,8 +182,8 @@ float signCover(vec2 s, vec2 corner, bool play, int drawn)
 
 float titleWidth()
 {
-    float w = 4.0 * TITLE_GAP + 2.0 * TITLE_R;
-    for (int i = 0; i < 5; i++)
+    float w = float(LOADING_TITLE_LETTERS - 1) * TITLE_GAP + 2.0 * TITLE_R;
+    for (int i = 0; i < LOADING_TITLE_LETTERS; i++)
         w += WIDTH[TITLE[i]];
     return w;
 }
@@ -191,6 +196,8 @@ vec3 over(vec3 dst, vec4 src)
 
 void main()
 {
+    for (int i = 0; i < 7; i++)
+        palette[i] = displayDecode(paletteCodes[i]);
     float wide = titleWidth();
     float aspect = resolution.x / resolution.y;
     float viewH = max(VIEW_H, wide / (aspect * TITLE_FILL));
@@ -208,12 +215,15 @@ void main()
     for (int j = 0; j < 6; j++)
         engineInk += WIDTH[ENGINE[j]];
     float engineGap = ((right - left) / ENGINE_SCALE - engineInk) / 5.0;
+    // The row's height, a stroke and a pixel past the skeletons' [0, 1]: no letter reaches out.
+    float engineReach = ENGINE_SCALE * ENGINE_R + px;
+    bool inEngine = s.y > ENGINE_Y - engineReach && s.y < ENGINE_Y + ENGINE_SCALE + engineReach;
     float x = left;
     for (int j = 0; j < 6; j++) {
         int id = ENGINE[j];
         float w = WIDTH[id];
         float since = time - (LOADING_ENGINE_START + float(j) * LOADING_ENGINE_STAGGER);
-        if (since > 0.0) {
+        if (inEngine && since > 0.0) {
             vec2 p = (s - vec2(x, ENGINE_Y)) / ENGINE_SCALE;
             float d = glyph(id, p);
             float flare = 1.0 + ENGINE_FLASH * exp(-since * ENGINE_DECAY);
@@ -262,11 +272,10 @@ void main()
     }
 
     // The sign: on as the ident's glitch passes, with a flare. LOADING's ellipsis lights a dot at
-    // a time and goes dark together; once the game is ready, and not before the ident has played,
-    // PLAY takes its place with a flare of its own, its arrow blinking.
+    // a time and goes dark together; at playAt, never before the ident has played, PLAY takes its
+    // place with a flare of its own, its arrow blinking.
     float waited = time - LOADING_IDENT_END;
     if (waited > 0.0) {
-        float playAt = ready < 0.0 ? -1.0 : max(ready, LOADING_IDENT_END);
         bool play = playAt >= 0.0 && time >= playAt;
         float since = play ? time - playAt : waited;
         int drawn = play ? (fract(since / SIGN_BLINK) < SIGN_LIT ? 6 : 5)
@@ -282,10 +291,10 @@ void main()
     // the plane is where it was whatever the eye's height, so the settled title does not move.
     vec3 eye = vec3(0.0, TITLE_Y + 0.5, EYE_D);
     vec3 ray = normalize(vec3(s, 0.0) - eye);
-    float far[5];
-    vec4 ink[5];
+    float far[LOADING_TITLE_LETTERS];
+    vec4 ink[LOADING_TITLE_LETTERS];
     x = -0.5 * wide + TITLE_R;
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < LOADING_TITLE_LETTERS; i++) {
         int id = TITLE[i];
         float w = WIDTH[id];
         float cx = x + 0.5 * w;
@@ -325,19 +334,22 @@ void main()
         // Darker while it is turned from the eye, full as it comes round to face it.
         vec4 face = stripes(d, TITLE_R, aa);
         face.rgb *= 0.55 + 0.45 * toward;
+        // The shadow's taps, only where one could land: under a face not wholly covering, and
+        // within its depth of the stroke -- the skeleton's distance moves no faster than the tap.
         float shadow = 0.0;
-        for (int k = 1; k <= 6; k++) {
-            float ds = glyph(id, p - SHADOW_OFF * (float(k) / 6.0));
-            shadow = max(shadow, 1.0 - smoothstep(TITLE_R - aa, TITLE_R + aa, ds));
-        }
+        if (face.a < 1.0 && d < TITLE_R + aa + length(SHADOW_OFF))
+            for (int k = 1; k <= 6; k++) {
+                float ds = glyph(id, p - SHADOW_OFF * (float(k) / 6.0));
+                shadow = max(shadow, 1.0 - smoothstep(TITLE_R - aa, TITLE_R + aa, ds));
+            }
         float under = shadow * (1.0 - face.a);
         ink[i] = vec4(face.rgb * face.a + palette[6] * under, face.a + under);
     }
     // Back to front: the largest distance first.
-    for (int pass = 0; pass < 5; pass++) {
+    for (int pass = 0; pass < LOADING_TITLE_LETTERS; pass++) {
         int pick = -1;
         float best = -1.0;
-        for (int i = 0; i < 5; i++)
+        for (int i = 0; i < LOADING_TITLE_LETTERS; i++)
             if (far[i] > best) {
                 best = far[i];
                 pick = i;
