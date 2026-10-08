@@ -420,6 +420,11 @@ typedef struct ShadowSystem {
     const struct SceneNode* tile_movers[SHADOW_TILE_MAX_MOVERS];
     uint64_t tile_mover_moved[SHADOW_TILE_MAX_MOVERS]; // the tile frame each last moved
     int tile_mover_count;
+    // The draw list's indices a kept face draws over its copy, ascending, settled once a depth
+    // pass after the movers are.
+    size_t* tile_mover_items;
+    size_t tile_mover_item_count;
+    size_t tile_mover_item_capacity;
     uint64_t tile_frame; // the engine's frame the tiles were last drawn in
     // The cached lights nearest the camera first, each with the block it holds (spec 13.24):
     // assigned once a frame by shadow_tiles_update, before anything captures, and read by
