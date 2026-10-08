@@ -650,7 +650,7 @@ void veg_leaf_cluster_maps(int width, int height, unsigned char** out_albedo,
             float len = (float)height * (0.30f - along * 0.09f) * veg_rand_range(0.8f, 1.15f);
             draw_leaf(albedo, normal, rough, width, height, cx, cy, rot, len,
                       veg_rand_range(0.0f, 1.0f), veg_rand_range(0.82f, 1.18f),
-                      veg_rand_range(0.55f, 0.78f), veg_rand_range(-0.12f, 0.12f));
+                      veg_rand_range(0.85f, 0.93f), veg_rand_range(-0.12f, 0.12f));
         }
     }
 
