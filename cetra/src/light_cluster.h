@@ -257,10 +257,10 @@ typedef struct LightClusterContext {
     // warning without a name sends the reader hunting. NULL where unnamed.
     const char* packed_names[LC_MAX_CLUSTER_LIGHTS];
     bool warned_dir_overflow;
-    bool warned_packed_overflow;
-    // Once for the camera's view and once for a scene capture's faces: an overflow
+    // Each once for the camera's view and once for a scene capture's faces: an overflow
     // is the VIEW's, and a sweep of capture faces at load would otherwise spend the
     // only warning before the camera ever overflowed.
+    bool warned_packed_overflow[2];
     bool warned_index_overflow[2];
     bool logged_first_build;
     bool area_lights_enabled; // false = LIGHT_AREA lights are skipped at gather
@@ -276,6 +276,15 @@ void free_light_cluster_context(LightClusterContext* ctx);
 void light_cluster_build_and_upload(LightClusterContext* ctx, struct Scene* scene, mat4 view,
                                     mat4 projection, int fb_width, int fb_height, float near_clip,
                                     float far_clip, bool capture);
+
+// Build the blocks once for all six faces of a cube capture taken from `centre` (spec 13.32):
+// every light whose reach meets the sphere of radius `sees` round it, and every cell of the
+// grid pointing at that one list; the decals reaching the sphere marked in every cell.
+// `projection`, `face_px` and the clip planes are the faces', which they share. Past the light
+// cap the lights nearest the centre are kept.
+void light_cluster_build_capture(LightClusterContext* ctx, const struct Scene* scene,
+                                 const vec3 centre, float sees, mat4 projection, int face_px,
+                                 float near_clip, float far_clip);
 
 // What the last build's decal masks came to, for --decal-probe. Accessors rather
 // than a reach into the struct, because the digest is the one thing about this
