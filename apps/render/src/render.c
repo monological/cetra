@@ -592,6 +592,24 @@ static int _ranged_arg(int argc, char** argv, int* i, float lo, float hi, float*
     return 0;
 }
 
+// _ranged_arg for a whole number: a frame, an index. "12.5" is refused rather than truncated.
+static int _int_arg(int argc, char** argv, int* i, long lo, long hi, int* out) {
+    const char* flag = argv[*i];
+    if (++(*i) >= argc) {
+        fprintf(stderr, "Error: %s requires an argument\n", flag);
+        return -1;
+    }
+    char* end = NULL;
+    const long v = strtol(argv[*i], &end, 10);
+    if (end == argv[*i] || *end != '\0' || v < lo || v > hi) {
+        fprintf(stderr, "Error: %s wants a whole number in [%ld, %ld], got '%s'\n", flag, lo, hi,
+                argv[*i]);
+        return -1;
+    }
+    *out = (int)v;
+    return 0;
+}
+
 static int parse_args(int argc, char** argv, RenderArgs* args) {
     memset(args, 0, sizeof(RenderArgs));
     args->width = DEFAULT_WIDTH;
@@ -643,12 +661,12 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->point_light_grid = 0; // off
     args->plg_radius = 10.0f;
     args->plg_intensity = 5.0f;
-    args->shadows_off_at = -1;    // -1 = never; the transition is the diagnostic
-    args->exposure_at_frame = -1; // -1 = never; same idiom
-    args->loading_lift_at = -1;
-    args->loading_ready_at = -1;
+    args->shadows_off_at = -1;       // -1 = never; the transition is the diagnostic
+    args->exposure_at_frame = -1;    // -1 = never; same idiom
     args->layer_blend_at_frame = -1; // -1 = never; same idiom
     args->road_width_at_frame = -1;  // -1 = never; same idiom
+    args->loading_lift_at = -1;      // -1 = never; same idiom
+    args->loading_ready_at = -1;     // -1 = never; same idiom
     args->cam_at_count = 0;
     args->material_at_count = 0;
     args->shadow_softness = -1.0f;     // -1 = keep the engine default
@@ -2212,22 +2230,16 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
         } else if (strcmp(argv[i], "--loading-screen") == 0) {
             args->loading_screen = 1;
         } else if (strcmp(argv[i], "--loading-palette") == 0) {
-            float palette = 0.0f;
-            if (_ranged_arg(argc, argv, &i, 0.0f, (float)(LOADING_PALETTE_COUNT - 1), &palette) < 0)
+            if (_int_arg(argc, argv, &i, 0, LOADING_PALETTE_COUNT - 1, &args->loading_palette) < 0)
                 return -1;
-            args->loading_palette = (int)palette;
             args->loading_screen = 1;
         } else if (strcmp(argv[i], "--loading-lift-at") == 0) {
-            float frame = 0.0f;
-            if (_ranged_arg(argc, argv, &i, 0.0f, 1e7f, &frame) < 0)
+            if (_int_arg(argc, argv, &i, 0, INT_MAX, &args->loading_lift_at) < 0)
                 return -1;
-            args->loading_lift_at = (int)frame;
             args->loading_screen = 1;
         } else if (strcmp(argv[i], "--loading-ready-at") == 0) {
-            float frame = 0.0f;
-            if (_ranged_arg(argc, argv, &i, 0.0f, 1e7f, &frame) < 0)
+            if (_int_arg(argc, argv, &i, 0, INT_MAX, &args->loading_ready_at) < 0)
                 return -1;
-            args->loading_ready_at = (int)frame;
             args->loading_screen = 1;
         } else if (strcmp(argv[i], "--no-texture-compression") == 0) {
             args->no_texture_compression = 1;

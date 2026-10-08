@@ -10,18 +10,19 @@
 #include "loading_screen.h"
 #include "profiler.h"
 #include "program.h"
+#include "shader_params.h"
 #include "uniform.h"
 #include "util.h"
 
-// The ident's timeline, shared with the shaders that play it. Hiding waits for LOADING_IDENT_END,
-// past its last glitch, and a beat of the picture held still after it.
+// The ident's timeline, shared with the shaders that play it. The switch-off waits for
+// LOADING_IDENT_END, past its last glitch, and a beat of the picture held still after it.
 #include "../shaders/include/loading_constants.glsl"
 #define LOADING_HOLD_SECONDS 0.4
 // The switch-off, in seconds (loading_tape_frag.glsl's `off` over it).
 #define LOADING_OFF_SECONDS 0.45
 // The most the clock moves in one draw: a long stall pauses the ident rather than skipping it.
 #define LOADING_MAX_STEP 0.1
-// The fewest seconds between two draws outside a frame.
+// The fewest seconds between two draws between a frame's pieces or outside one.
 #define LOADING_MIN_INTERVAL (1.0 / 60.0)
 
 // The set: fewer, thicker lines than the game's, a deeper mask and a rounder tube. 360 lines keep
@@ -53,17 +54,19 @@ struct LoadingScreen {
     ShaderProgram* blur;
     ShaderProgram* tape;
     Crt* crt;
-    GLColorTarget mark;     // the mark, linear
+    GLColorTarget mark;     // the mark, linear, with mips to the bloom's size
     GLColorTarget bloom[2]; // the mark blurred across, then down, at a quarter its size
     GLColorTarget picture;  // the tape's, display-encoded
     GLuint quad_vao, quad_vbo;
-    bool shown;
-    double clock;     // seconds of the ident shown
+    bool shown; // from show until the switch-off has finished or a draw could not be made
+    // What the frame's own draw last found: the switch-off not begun. Read for the frame after, so
+    // the frame's two questions of it agree whatever moves the clock between them.
+    bool covering;
+    double clock;     // seconds of the screen shown
     double last_draw; // the wall clock at the last draw; < 0 before the first
-    double ready;     // the clock when the app said the game was ready; < 0 before
-    bool lift_asked;
-    double lift; // seconds into the switch-off; < 0 before it starts
-    int frame;   // draws so far, for the tape's noise
+    double play_at;   // the clock at which PLAY shows; INFINITY until the game is ready
+    double lift_at;   // the clock at which the switch-off starts; INFINITY until it is hidden
+    uint64_t frame;   // draws so far, for the tape's noise
 };
 
 static LoadingScreen* _loading_screen_make(void) {
@@ -112,11 +115,11 @@ void engine_show_loading_screen(Engine* engine) {
     if (!ls)
         return;
     ls->shown = true;
+    ls->covering = true;
     ls->clock = 0.0;
     ls->last_draw = -1.0;
-    ls->ready = -1.0;
-    ls->lift_asked = false;
-    ls->lift = -1.0;
+    ls->play_at = INFINITY;
+    ls->lift_at = INFINITY;
 }
 
 void engine_loading_screen_ready(Engine* engine) {
@@ -125,8 +128,8 @@ void engine_loading_screen_ready(Engine* engine) {
         return;
     }
     LoadingScreen* ls = engine->loading_screen;
-    if (ls && ls->shown && ls->ready < 0.0)
-        ls->ready = ls->clock;
+    if (ls && ls->shown && isinf(ls->play_at))
+        ls->play_at = fmax(ls->clock, LOADING_IDENT_END);
 }
 
 void engine_hide_loading_screen(Engine* engine) {
@@ -134,43 +137,39 @@ void engine_hide_loading_screen(Engine* engine) {
         log_error("engine_hide_loading_screen: NULL engine");
         return;
     }
-    if (engine->loading_screen && engine->loading_screen->shown)
-        engine->loading_screen->lift_asked = true;
+    LoadingScreen* ls = engine->loading_screen;
+    if (ls && ls->shown && isinf(ls->lift_at))
+        ls->lift_at = fmax(ls->clock, LOADING_IDENT_END + LOADING_HOLD_SECONDS);
 }
 
 bool engine_loading_screen_shown(const Engine* engine) {
     return engine && engine->loading_screen && engine->loading_screen->shown;
 }
 
+bool engine_loading_screen_prompting(const Engine* engine) {
+    if (!engine_loading_screen_shown(engine))
+        return false;
+    const LoadingScreen* ls = engine->loading_screen;
+    return ls->clock >= ls->play_at && isinf(ls->lift_at);
+}
+
 bool loading_screen_covers(const Engine* engine) {
-    return engine_loading_screen_shown(engine) && engine->loading_screen->lift < 0.0;
+    return engine_loading_screen_shown(engine) && engine->loading_screen->covering;
 }
 
-// Each colour from its display code to light, through the display's own 2.2 (display.glsl).
-static void _palette_linear(int which, float out[7][3]) {
-    const int p = which >= 0 && which < LOADING_PALETTE_COUNT ? which : LOADING_PALETTE_SUNSET;
-    for (int i = 0; i < 7; i++)
-        for (int c = 0; c < 3; c++) {
-            const uint32_t code = (PALETTES[p][i] >> (16 - 8 * c)) & 0xFFu;
-            out[i][c] = powf((float)code / 255.0f, 2.2f);
-        }
-}
-
-// The clock moves by the time since the last draw, or a frame's fixed step headless, and the
-// switch-off starts once it is asked for and the ident has played.
-static void _loading_advance(const Engine* engine, LoadingScreen* ls) {
+// The clock moves by the time since the last draw, or a frame's fixed step headless. False once
+// the switch-off has finished, when there is nothing left to draw.
+static bool _loading_advance(const Engine* engine, LoadingScreen* ls) {
     const double now = glfwGetTime();
-    double step = engine->headless ? ENGINE_FIXED_FRAME_DT
-                                   : (ls->last_draw < 0.0 ? 0.0 : now - ls->last_draw);
-    if (step > LOADING_MAX_STEP)
-        step = LOADING_MAX_STEP;
+    double step = ENGINE_FIXED_FRAME_DT;
+    if (!engine->headless)
+        step = ls->last_draw < 0.0 ? 0.0 : now - ls->last_draw;
     ls->last_draw = now;
-    ls->clock += step;
-    if (ls->lift >= 0.0)
-        ls->lift += step;
-    else if (ls->lift_asked && ls->clock >= LOADING_IDENT_END + LOADING_HOLD_SECONDS)
-        ls->lift = 0.0;
-    ls->frame = (ls->frame + 1) & 0xFFFFFF;
+    ls->clock += fmin(step, LOADING_MAX_STEP);
+    ls->frame++;
+    if (ls->clock >= ls->lift_at + LOADING_OFF_SECONDS)
+        ls->shown = false;
+    return ls->shown;
 }
 
 // One direction of the bloom's blur: `src` at mip `lod` into `dst`, a texel of `dst` a step.
@@ -188,46 +187,70 @@ static void _loading_blur(const LoadingScreen* ls, GLuint src, float lod, const 
     draw_fullscreen_quad(ls->quad_vao);
 }
 
+// The targets at half the window, the bloom's at a quarter of that, which is the mark's mip level
+// 2 exactly, texel for texel. A screen whose targets cannot be made is put away rather than left
+// up over a window it cannot draw.
+static bool _loading_targets(LoadingScreen* ls, int w, int h) {
+    const int pw = w > 1 ? w / 2 : 1, ph = h > 1 ? h / 2 : 1;
+    const int qw = pw >> 2 > 0 ? pw >> 2 : 1, qh = ph >> 2 > 0 ? ph >> 2 : 1;
+    const bool remade = ls->mark.w != pw || ls->mark.h != ph;
+    if (!gl_color_target_ensure(&ls->mark, pw, ph, "loading mark") ||
+        !gl_color_target_ensure(&ls->bloom[0], qw, qh, "loading bloom") ||
+        !gl_color_target_ensure(&ls->bloom[1], qw, qh, "loading bloom") ||
+        !gl_color_target_ensure(&ls->picture, pw, ph, "loading picture")) {
+        log_error("Loading screen: put away, since it cannot be drawn");
+        ls->shown = false;
+        return false;
+    }
+    if (remade) {
+        glBindTexture(GL_TEXTURE_2D, ls->mark.tex);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 2);
+    }
+    return true;
+}
+
 // The mark, its bloom, then the tape over both, then the set: into the window, at its size. Each
-// stage a row of the profiler when `timed`, which only a frame's own draw is.
+// stage a row of the profiler when `timed`, which only a frame's own draw is. The caller's
+// framebuffer, viewport and fixed-function state are put back.
 static void _loading_draw(const Engine* engine, LoadingScreen* ls, bool timed) {
     Profiler* prof = engine->profiler;
     const int w = engine->fb_width, h = engine->fb_height;
     if (w <= 0 || h <= 0)
         return;
-    const int pw = w > 1 ? w / 2 : 1, ph = h > 1 ? h / 2 : 1;
-    // A quarter of the picture is its mip level 2 exactly, texel for texel.
-    const int qw = pw >> 2 > 0 ? pw >> 2 : 1, qh = ph >> 2 > 0 ? ph >> 2 : 1;
-    if (!gl_color_target_ensure(&ls->mark, pw, ph, "loading mark") ||
-        !gl_color_target_ensure(&ls->bloom[0], qw, qh, "loading bloom") ||
-        !gl_color_target_ensure(&ls->bloom[1], qw, qh, "loading bloom") ||
-        !gl_color_target_ensure(&ls->picture, pw, ph, "loading picture"))
-        return;
-    const float resolution[2] = {(float)pw, (float)ph};
-    const float off = ls->lift < 0.0 ? 0.0f : (float)(ls->lift / LOADING_OFF_SECONDS);
-    float palette[7][3];
-    _palette_linear(engine->loading_palette, palette);
-
     const GLPassState pass = gl_pass_begin();
-    glViewport(0, 0, pw, ph);
+    glActiveTexture(GL_TEXTURE0);
+    if (!_loading_targets(ls, w, h)) {
+        gl_pass_end(&pass);
+        return;
+    }
+    const float resolution[2] = {(float)ls->mark.w, (float)ls->mark.h};
+    const double since_lift = isinf(ls->lift_at) ? 0.0 : fmax(0.0, ls->clock - ls->lift_at);
+    const float off = (float)(since_lift / LOADING_OFF_SECONDS);
+    float palette[7][3];
+    const int p = engine->loading_palette >= 0 && engine->loading_palette < LOADING_PALETTE_COUNT
+                      ? engine->loading_palette
+                      : LOADING_PALETTE_SUNSET;
+    for (int i = 0; i < 7; i++)
+        for (int c = 0; c < 3; c++)
+            palette[i][c] = (float)((PALETTES[p][i] >> (16 - 8 * c)) & 0xFFu) / 255.0f;
+    glViewport(0, 0, ls->mark.w, ls->mark.h);
 
     profiler_scope_begin_if(prof, timed, "loading mark");
     glBindFramebuffer(GL_FRAMEBUFFER, ls->mark.fbo);
     glUseProgram(ls->logo->id);
     UniformManager* m = ls->logo->uniforms;
-    uniform_set_float(m, "time", (float)ls->clock);
+    shader_clock_upload(m, (float)ls->clock, ls->frame);
     uniform_set_vec2(m, "resolution", resolution);
-    uniform_set_vec3_array(m, "palette", &palette[0][0], 7);
-    uniform_set_float(m, "ready", (float)ls->ready);
+    uniform_set_vec3_array(m, "paletteCodes", &palette[0][0], 7);
+    uniform_set_float(m, "playAt", isinf(ls->play_at) ? -1.0f : (float)ls->play_at);
     draw_fullscreen_quad(ls->quad_vao);
     profiler_scope_end(prof);
 
     // The tube's bloom, of the picture as it stands, a letter in mid-turn included: the mark
     // brought to a quarter its size by its own mips, then blurred across and down.
     profiler_scope_begin_if(prof, timed, "loading bloom");
-    glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, ls->mark.tex);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
     glGenerateMipmap(GL_TEXTURE_2D);
     glUseProgram(ls->blur->id);
     _loading_blur(ls, ls->mark.tex, 2.0f, &ls->bloom[0], true);
@@ -236,53 +259,57 @@ static void _loading_draw(const Engine* engine, LoadingScreen* ls, bool timed) {
 
     profiler_scope_begin_if(prof, timed, "loading tape");
     glBindFramebuffer(GL_FRAMEBUFFER, ls->picture.fbo);
-    glViewport(0, 0, pw, ph);
+    glViewport(0, 0, ls->picture.w, ls->picture.h);
     glUseProgram(ls->tape->id);
     UniformManager* t = ls->tape->uniforms;
-    glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, ls->mark.tex);
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, ls->bloom[1].tex);
     glActiveTexture(GL_TEXTURE0);
     uniform_set_int(t, "markTex", 0);
     uniform_set_int(t, "bloomTex", 1);
-    uniform_set_float(t, "time", (float)ls->clock);
+    shader_clock_upload(t, (float)ls->clock, ls->frame);
     uniform_set_float(t, "off", off);
-    uniform_set_int(t, "frame", ls->frame);
     uniform_set_vec2(t, "resolution", resolution);
     draw_fullscreen_quad(ls->quad_vao);
     profiler_scope_end(prof);
 
-    glUseProgram(0);
-    gl_pass_end(&pass);
     profiler_scope_begin_if(prof, timed, "loading crt");
     crt_present(ls->crt, ls->picture.tex, w, h, ls->quad_vao, &LOADING_TUBE);
     profiler_scope_end(prof);
-
-    if (off >= 1.0f)
-        ls->shown = false;
+    gl_pass_end(&pass);
 }
 
 void loading_screen_frame(Engine* engine) {
     LoadingScreen* ls = engine ? engine->loading_screen : NULL;
-    if (!ls || !ls->shown)
+    if (!ls)
         return;
-    _loading_advance(engine, ls);
-    _loading_draw(engine, ls, true);
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    if (ls->shown && _loading_advance(engine, ls)) {
+        _loading_draw(engine, ls, true);
+        ls->covering = ls->clock < ls->lift_at;
+    }
+    // Put away whole once it is done, its targets and programs with it: they are a few
+    // window-sized pictures nothing else will draw.
+    if (!ls->shown) {
+        free_loading_screen(ls);
+        engine->loading_screen = NULL;
+    }
 }
 
-void engine_draw_loading_screen(Engine* engine) {
+// A draw between frames or between a frame's pieces: the screen into the window and swapped,
+// without waiting for the display, and whatever the caller had bound put back. `poll` answers the
+// window's events too, which only a draw outside a frame may do: inside one, an event could resize
+// the targets the frame is drawing into.
+static void _loading_present(Engine* engine, bool poll) {
     LoadingScreen* ls = engine ? engine->loading_screen : NULL;
     if (!ls || !ls->shown || engine->headless || !engine->window)
         return;
     if (ls->last_draw >= 0.0 && glfwGetTime() - ls->last_draw < LOADING_MIN_INTERVAL)
         return;
-    glfwPollEvents();
+    if (poll)
+        glfwPollEvents();
 
-    // Whatever was bound goes back as it was: this may be called from anywhere on the main thread,
-    // the middle of a frame included -- between capture units, which may have colour masked off.
-    // The draw binds units 0 and 1.
+    // Between capture units colour may be masked off, and the draw binds units 0 and 1.
     GLint program = 0, vao = 0, unit = 0, texture[2] = {0, 0};
     GLboolean colour_mask[4];
     glGetIntegerv(GL_CURRENT_PROGRAM, &program);
@@ -295,13 +322,12 @@ void engine_draw_loading_screen(Engine* engine) {
     }
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 
-    _loading_advance(engine, ls);
-    _loading_draw(engine, ls, false);
-
-    // A draw here never waits for the display: the time is the loading's.
-    glfwSwapInterval(0);
-    glfwSwapBuffers(engine->window);
-    glfwSwapInterval(engine->vsync ? 1 : 0);
+    if (_loading_advance(engine, ls)) {
+        _loading_draw(engine, ls, false);
+        glfwSwapInterval(0);
+        glfwSwapBuffers(engine->window);
+        engine_apply_swap_interval(engine);
+    }
 
     for (int u = 0; u < 2; u++) {
         glActiveTexture(GL_TEXTURE0 + (GLenum)u);
@@ -311,4 +337,12 @@ void engine_draw_loading_screen(Engine* engine) {
     glBindVertexArray((GLuint)vao);
     glUseProgram((GLuint)program);
     glColorMask(colour_mask[0], colour_mask[1], colour_mask[2], colour_mask[3]);
+}
+
+void engine_draw_loading_screen(Engine* engine) {
+    _loading_present(engine, true);
+}
+
+void loading_screen_tick(Engine* engine) {
+    _loading_present(engine, false);
 }

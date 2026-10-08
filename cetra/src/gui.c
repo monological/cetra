@@ -1370,3 +1370,8 @@ void gui_render_frame(Engine* engine) {
     igRender();
     ImGui_ImplOpenGL3_RenderDrawData(igGetDrawData());
 }
+
+void gui_discard_frame(const Engine* engine) {
+    if (engine && engine->gui_frame_active)
+        igEndFrame();
+}

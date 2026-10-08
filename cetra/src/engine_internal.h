@@ -51,12 +51,20 @@ void engine_upload_displacement_uniforms(const Engine* engine, const Scene* scen
 // gui_frame_active). Called by engine_run.
 void engine_present_frame(Engine* engine, RenderMode frame_mode);
 
+// The swap interval the engine's vsync and headless state ask for, onto the current context.
+void engine_apply_swap_interval(const Engine* engine);
+
 // The loading screen over the window, when it is shown (spec 13.34): the frame's draw of it, at
-// the end of engine_present_frame, before the GUI. And its free, with the engine.
+// the end of engine_present_frame, before the GUI; it is freed there once it has switched off.
+// And its free, with the engine.
 void loading_screen_frame(Engine* engine);
 void free_loading_screen(LoadingScreen* ls);
-// Whether the screen hides the whole frame: shown, and not yet switching off. Such a frame draws
-// no picture of its own, since nobody would see it.
+// A draw between two of a frame's long pieces -- capture units, shader compiles -- which answers
+// no window events, since one could resize the targets the frame is drawing into.
+void loading_screen_tick(Engine* engine);
+// Whether the screen hides the whole frame: shown, and not yet switching off as of the frame's
+// own last draw, so every question of it in one frame has one answer. Such a frame draws no
+// picture of its own, since nobody would see it.
 bool loading_screen_covers(const Engine* engine);
 
 // Select which color attachments the scene pass writes: attachment 0 only,

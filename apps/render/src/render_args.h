@@ -429,10 +429,10 @@ typedef struct {
     float crt_mask;      // -1 = the engine's
     float crt_curvature; // -1 = the engine's
     float crt_bleed;     // -1 = the engine's
-    // The loading screen (spec 13.34), shown and never lifted unless a frame is named for it, and
-    // its palette.
+    // The loading screen (spec 13.34), shown and lifted only at a named frame or a key, and its
+    // palette.
     int loading_screen;
-    int loading_palette;
+    int loading_palette;  // a LoadingPalette
     int loading_lift_at;  // -1 = never
     int loading_ready_at; // the frame its game is said to be ready, PLAY up; -1 = never
     // Store every texture uncompressed, which is the pre-11.85 engine exactly.

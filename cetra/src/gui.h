@@ -23,4 +23,7 @@ void gui_apply_style(void);
 // unless the engine latched a GUI frame this tick.
 void gui_render_frame(struct Engine* engine);
 
+// Close the open ImGui frame with nothing drawn: a frame whose window something else owns.
+void gui_discard_frame(const struct Engine* engine);
+
 #endif // _GUI_H_

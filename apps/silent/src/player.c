@@ -5,7 +5,6 @@
 
 #include "cetra/engine.h"
 #include "cetra/game/character.h"
-#include "cetra/loading_screen.h"
 
 #include "player.h"
 
@@ -106,12 +105,12 @@ void player_pre_render(Player* p, Game* game, const vec3* pin_eye, const vec3* p
                        p->rig->pitch - (float)dy * MOUSE_LOOK_RATE);
     }
     // The debug GUI wants the pointer: while it is open the cursor is free and a click does not
-    // take it back, or its sliders could not be reached. The arrow keys still look. Under the
-    // loading screen a click takes nothing either: nobody looks round a room they cannot see.
+    // take it back, or its sliders could not be reached. The arrow keys still look. While the
+    // game's input is held a click takes nothing either: nobody looks round a room they cannot see.
     if (engine->show_gui)
         set_cursor_captured(p, engine, false);
     else if (!p->cursor_captured && input_mouse_pressed(&game->input, GLFW_MOUSE_BUTTON_LEFT) &&
-             !engine_gui_wants_mouse() && !engine_loading_screen_shown(engine))
+             !engine_gui_wants_mouse() && !input_is_suppressed(&game->input))
         set_cursor_captured(p, engine, true);
     if (input_action_pressed(&game->input, "release_cursor"))
         set_cursor_captured(p, engine, false);

@@ -30,7 +30,6 @@
 #include "common.h"
 #include "engine.h"
 #include "engine_internal.h"
-#include "loading_screen.h"
 #include "ltc.h"
 #include "render.h"
 #include "profiler.h"
@@ -1575,6 +1574,12 @@ void engine_render_scene(Engine* engine, Scene* scene) {
     if (!engine->capturing)
         engine_resolve_material_variants(engine, scene);
 
+    // Under a loading screen that hides the whole frame (spec 13.34) the camera's passes are not
+    // drawn. What runs above is the scene's per-frame settling -- its derived panels, its
+    // variants -- which the captures read and so must not skip.
+    if (!engine->capturing && loading_screen_covers(engine))
+        return;
+
     // Clustered forward (spec 9.1): rebuild the light grid + UBOs for THIS
     // invocation's camera and viewport. A capture builds its own in
     // scene_capture_faces, gathering its lights once for every face.
@@ -2046,7 +2051,7 @@ bool scene_capture_ready(const Engine* engine, const Scene* scene, SceneCaptureK
 // start must not count the GPU work of the frame before. It syncs only a frame that has a
 // capture to take.
 bool capture_budget_take(CaptureBudget* budget, bool first) {
-    engine_draw_loading_screen(budget->engine);
+    loading_screen_tick(budget->engine);
     if (budget->ms <= 0.0f)
         return true;
     if (!budget->started) {
