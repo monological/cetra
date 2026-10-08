@@ -58,8 +58,6 @@ typedef struct ReflectionProbeSet {
     // Captures attempted across the set's life. The converge-then-idle claim
     // is only worth making if it is checkable from outside the process.
     int captures_total;
-    // The probe whose capture is under way, taken a face at a time, or -1 (spec 13.32).
-    int capturing;
 
     uint32_t mask_digest; // FNV-1a over the froxel masks, for determinism arms
     int mask_bits;        // froxel/probe pairs the last build marked
@@ -102,10 +100,10 @@ bool probe_set_ready_in(const ReflectionProbeSet* set, const AABB* box);
 /*
  * Decide which probes hold columns, from the camera -- a loaded probe that leaves keeps its column
  * on the CPU, read out of the atlas before the column changes hands -- then put back the columns
- * of those that came back, and capture those never captured, a face at a time while the frame's
- * capture budget allows, nearest first, finishing one before starting another. Each capture is
- * projected into its column and the cubes freed. A no-op on a failed set; a world of one probe
- * needs no column, and only captures.
+ * of those that came back, and capture those never captured, a face a unit of the frame's capture
+ * budget, nearest first, finishing one before starting another. Each capture is projected into
+ * its column and the cubes freed. A no-op on a failed set; a world of one probe needs no column,
+ * and only captures.
  *
  * A probe captures only once scene_capture_ready says a RADIANCE capture of its box may be kept.
  * That wait is the point of capturing here rather than where the set is built. The columns are
@@ -118,9 +116,10 @@ bool probe_set_ready_in(const ReflectionProbeSet* set, const AABB* box);
 void probe_set_update(ReflectionProbeSet* set, struct Engine* engine, struct Scene* scene,
                       struct CaptureBudget* budget);
 
-// Re-arm the whole set for re-capture: every kept column dropped, resident probes captured
-// again one a frame. The seam relight will need; nothing calls it yet, and a scene-captured
-// probe is deliberately left stale by the sun slider exactly as the single probe always was.
+// Re-arm the whole set for re-capture: every kept column dropped and any capture under way
+// abandoned, resident probes captured again under the capture budget. The seam relight will need;
+// nothing calls it yet, and a scene-captured probe is deliberately left stale by the sun slider
+// exactly as the single probe always was.
 void probe_set_mark_dirty(ReflectionProbeSet* set);
 
 // Pack what each loaded resident probe IS -- position, box, intensity, where its

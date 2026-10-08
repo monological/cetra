@@ -83,6 +83,13 @@ void residency_assign(Residency* res, ResidencyKeepFn keep, void* user);
 // The item's texels are in its slot: captured there, or put back. What was kept is given back.
 void residency_loaded(ResidencyItem* item);
 
+// Whether an item bears on a question about some place: the kind's own test of its box, and
+// false for an item that failed and so will never load.
+typedef bool (*ResidencyBearsFn)(const void* user, size_t item);
+
+// Every item `bears` names is LOADED: what lights the place is all in.
+bool residency_loaded_where(const Residency* res, ResidencyBearsFn bears, const void* user);
+
 // The light every item saw has changed: what was kept is dropped, and an item owed an upload
 // is owed a capture instead. So is a loaded one when `recapture`; otherwise it stays loaded,
 // for a kind that converges over its stale texels in place.

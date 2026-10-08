@@ -197,12 +197,10 @@ void light_set_up(Light* light, vec3 up);
 // Cull radius for a light: 0 if it emits nothing, whatever its range; else the
 // authored range if set, else the distance where the light falls under ~1/256
 // (LDR LSB at the project-standard -E 1.0).
-// Punctual lights solve that against their attenuation coefficients; area
-// panels ignore those entirely (the LTC form factor carries the falloff) and
-// instead invert the head-on far-field irradiance, plus half the panel
-// diagonal to cover its own extent. Returns 0 for a light that never reaches
-// the epsilon (drop it) and a negative value for an uncullable light
-// (constant-only attenuation: assign everywhere).
+// Punctual lights solve that against bare inverse-square; area panels invert
+// the head-on far-field irradiance instead (the LTC form factor carries their
+// falloff), plus half the panel diagonal to cover its own extent. Never
+// negative: every light has a radius past which it is dropped.
 //
 // Lives here rather than with the cluster grid because it is a pure function of
 // one light and part of what `range` above MEANS -- the culler is its largest

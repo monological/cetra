@@ -29519,11 +29519,17 @@ LSTREAM_TILE_LIGHTS = 16  # bodied lights the cached tiles hold: 768 cells of 48
 # other UVs in an atlas with a GI slot in it: measured 3 px of the 800x600 frame at a code, against
 # 486 px with the edge carried out without limit and a zero weight read as black (spec 13.25).
 LSTREAM_REACH_FRACTION = 60 / (800 * 600)
-# A capture budget small enough to let about one capture through a frame, and frames enough for
-# room 0's eight volumes of 48 probes and its sixteen probes' 96 faces at that pace.
-LSTREAM_PACED_BUDGET_MS = "1"
+# The least budget a frame can have: each kind's first capture goes through and no other, since
+# asking again costs more than a microsecond -- one GI probe and one reflection-probe face a
+# frame, on every run alike. Frames enough for room 0's eight volumes of 48 probes and its
+# sixteen probes' 96 faces at that pace, and for the walk's return to room 0 from the frame it
+# came back.
+LSTREAM_PACED_BUDGET_MS = "0.001"
 LSTREAM_PACED_FRAMES = 600
 LSTREAM_PACED_EVERY = 10
+LSTREAM_PACED_AWAY = 50  # frames the paced walk spends in room 9
+LSTREAM_SINGLE_ARGS = ["--sky", "--sun-elevation", "-10", "--probe-scene"]
+LSTREAM_SINGLE_FRAMES = 20
 
 
 def _lstream_rooms():
@@ -29548,10 +29554,10 @@ def _lstream_cam_eye(x):
             "--cam-target", ",".join(f"{c:g}" for c in target)]
 
 
-def _lstream_run(workdir, tag, extra, frames, mutate=None, every=None):
+def _lstream_run(workdir, tag, extra, frames, mutate=None, every=None, fixture=LSTREAM_FIXTURE):
     """Render the fixture. Returns (PPM paths by frame number, output) -- the frames
     --screenshot-every wrote when `every` is set, else the last one alone -- or (None, error)."""
-    src = asset(LSTREAM_FIXTURE)
+    src = asset(fixture)
     scene = src
     if mutate is not None:
         scene = os.path.join(workdir, f"stream_{tag}.cscn")
@@ -29652,6 +29658,11 @@ def run_lighting_stream_gate(workdir):
       stream-paced       captures under a capture budget spread over hundreds of frames, and
                          land on the lighting taken all at once: equal digests, the same frame
                          (spec 13.32)
+      stream-paced-walk  the walk, paced, leaves room 0 with a probe half captured: it is
+                         dropped without a column, and what is resident at the end is the
+                         unbudgeted walk's, digests and all
+      stream-paced-single a world of one probe, paced a face a frame, is pending where the
+                         unbudgeted run is captured, and lands on the same frame
 
     The walk teleports, which no player does: it is the worst case for every cap at once -- all
     of room 0's items leave and all of room 9's arrive in one frame -- and a walk can only ever
@@ -29887,32 +29898,37 @@ def run_lighting_stream_gate(workdir):
         if not ok:
             failures.append("stream-reach")
 
-    # -- paced: a budgeted run lands on the same lighting (spec 13.32) --------------------
-    # A millisecond lets about one capture through a frame, so the eight volumes and sixteen
-    # probes take hundreds of frames where the unbudgeted run takes one. Captures run at render
-    # time 0 and an opening writes outright, so the frame a probe or a face was taken in cannot
-    # matter: what the two hold at the end is the same to the bit.
-    look = ["--stream-probe", str(LSTREAM_PACED_EVERY)]
-    paced, paced_text = _lstream_run(
-        workdir, "paced", look + ["--capture-budget-ms", LSTREAM_PACED_BUDGET_MS],
-        LSTREAM_PACED_FRAMES)
+    # -- paced: budgeted runs land on the same lighting (spec 13.32) ----------------------
+    # At one GI probe and one probe face a frame, the eight volumes and sixteen probes take
+    # hundreds of frames where the unbudgeted run takes one. Captures run at render time 0 and
+    # an opening writes outright, so the frame a probe or a face was taken in cannot matter:
+    # what the two hold at the end is the same to the bit. Printed every frame, for the walk.
+    look = ["--stream-probe", "1"]
+    budget = ["--capture-budget-ms", LSTREAM_PACED_BUDGET_MS]
+    paced, paced_text = _lstream_run(workdir, "paced", look + budget, LSTREAM_PACED_FRAMES)
     whole, whole_text = _lstream_run(workdir, "whole", look, LSTREAM_PACED_FRAMES)
+
+    def held(row):
+        return ({i: (r.get("state"), r.get("digest")) for i, r in row.get("gi", {}).items()},
+                {i: (r.get("state"), r.get("digest")) for i, r in row.get("probe", {}).items()})
+
+    def settled(row):
+        gi, probes = held(row)
+        return (bool(gi) and all(s not in ("sweeping", "unswept") for s, _ in gi.values())
+                and all(s != "capturing" for s, _ in probes.values()))
+
+    def resident(row):
+        return {kind: {i: (r.get("slot"), r.get("state"), r.get("digest"))
+                       for i, r in row.get(kind, {}).items() if r.get("slot") != "-1"}
+                for kind in ("gi", "probe")}
+
+    half = None
     if paced is None or whole is None:
         print(f"  stream-paced ERROR  {(paced_text if paced is None else whole_text)[-300:]}")
         failures.append("stream-paced")
     else:
         prows, wrows = _lstream_rows(paced_text), _lstream_rows(whole_text)
         end = LSTREAM_PACED_FRAMES
-
-        def held(row):
-            return ({i: (r.get("state"), r.get("digest")) for i, r in row.get("gi", {}).items()},
-                    {i: (r.get("state"), r.get("digest")) for i, r in row.get("probe", {}).items()})
-
-        def settled(row):
-            gi, probes = held(row)
-            return (bool(gi) and all(s not in ("sweeping", "unswept") for s, _ in gi.values())
-                    and all(s != "capturing" for s, _ in probes.values()))
-
         same = bool(prows.get(end)) and held(prows[end]) == held(wrows.get(end, {}))
         early = LSTREAM_PACED_EVERY
         spread = settled(wrows.get(early, {})) and not settled(prows.get(early, {}))
@@ -29924,6 +29940,71 @@ def run_lighting_stream_gate(workdir):
               f"frame {frac:.3%} apart, peak {peak} (want 0)")
         if not ok:
             failures.append("stream-paced")
+        # The first frame a probe stands half captured, which the walk leaves room 0 just after.
+        half = next(((f, i) for f in sorted(prows) for i, r in sorted(prows[f]["probe"].items())
+                     if r.get("faces") == "3"), None)
+
+    # The walk, paced, leaving room 0 with a probe half captured and a volume part swept: both
+    # are abandoned, their cubes and faces dropped, and both are taken again on the way back.
+    # What is resident at the end is what the unbudgeted walk holds at its end.
+    if half is None or walk is None:
+        print("  stream-paced-walk ERROR  "
+              + ("no probe stood half captured in the paced run" if walk else "the walk failed"))
+        failures.append("stream-paced-walk")
+    else:
+        frame, probe = half
+        away, back = frame + 1, frame + 1 + LSTREAM_PACED_AWAY
+        pwalk, pwalk_text = _lstream_run(
+            workdir, "paced_walk",
+            _lstream_cam_at(away, last) + _lstream_cam_at(back, first) + look + budget,
+            back + LSTREAM_PACED_FRAMES)
+        # A row is the residency as the frame before left it: `away`'s is what the teleport
+        # meets, the next one's what it did.
+        walk_rows = _lstream_rows(pwalk_text) if pwalk else {}
+        before = walk_rows.get(away, {}).get("probe", {}).get(probe, {})
+        after = walk_rows.get(away + 1, {}).get("probe", {}).get(probe, {})
+        part = before.get("faces") in ("1", "2", "3", "4", "5")
+        dropped = (part and after.get("slot") == "-1" and after.get("faces") == "0"
+                   and after.get("kept") == "0")
+        end_row = walk_rows.get(back + LSTREAM_PACED_FRAMES, {})
+        want = resident(rows.get(LSTREAM_STOPS[2], {}))
+        got = resident(end_row)
+        same = bool(want["gi"]) and bool(want["probe"]) and got == want
+        ok = pwalk is not None and dropped and settled(end_row) and same
+        print(f"  stream-paced-walk {'PASS' if ok else 'FAIL'}  the walk left room 0 at frame "
+              f"{away} with probe {probe} {before.get('faces')} faces of 6 in: dropped without a "
+              f"column {dropped}; at frame {back + LSTREAM_PACED_FRAMES} the resident volumes "
+              f"and probes are the unbudgeted walk's, digests and all: {same}")
+        if not ok:
+            failures.append("stream-paced-walk")
+
+    # One probe, which a world of one captures with no column: paced, it is still pending a few
+    # frames in, and the frame it lands on is the unbudgeted one's.
+    single = LSTREAM_SINGLE_ARGS + ["--probe-set-probe", "1"]
+    one_paced, one_paced_text = _lstream_run(workdir, "single_paced", single + budget,
+                                             LSTREAM_SINGLE_FRAMES, fixture=CORNELL_FIXTURE)
+    one_whole, one_whole_text = _lstream_run(workdir, "single_whole", single,
+                                             LSTREAM_SINGLE_FRAMES, fixture=CORNELL_FIXTURE)
+    if one_paced is None or one_whole is None:
+        text = one_paced_text if one_paced is None else one_whole_text
+        print(f"  stream-paced-single ERROR  {text[-300:]}")
+        failures.append("stream-paced-single")
+    else:
+        def modes(text):
+            return {int(r["frame"]): r.get("mode") for r in _probe_rows(text, "probe-set")
+                    if "frame" in r}
+
+        pm, wm = modes(one_paced_text), modes(one_whole_text)
+        early = 3
+        spread = pm.get(early) == "pending" and wm.get(early) == "single"
+        end = LSTREAM_SINGLE_FRAMES
+        frac, peak = _origin_diff(one_paced[end], one_whole[end])
+        ok = spread and pm.get(end) == "single" and frac == 0
+        print(f"  stream-paced-single {'PASS' if ok else 'FAIL'}  one scene probe a face a frame: "
+              f"pending at frame {early}: {pm.get(early)} (unbudgeted: {wm.get(early)}); at frame "
+              f"{end} {pm.get(end)}, the frame {frac:.3%} apart, peak {peak} (want 0)")
+        if not ok:
+            failures.append("stream-paced-single")
 
     return failures
 

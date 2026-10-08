@@ -1,6 +1,5 @@
 #include "light_cluster.h"
 
-#include <float.h>
 #include <math.h>
 #include <stddef.h>
 #include <stdlib.h>
@@ -303,9 +302,9 @@ static void _gather_dir_light(LightClusterContext* ctx, const struct Light* ligh
     _pack_dir_light(&ctx->lights.dir_lights[(*num_dir)++], light);
 }
 
-// Whether a light goes into the cluster list at all, its cull radius in *radius (< 0 for one
-// that reaches everywhere): not a directional, an unknown type, a panel while panels are off, or
-// a light that never reaches epsilon.
+// Whether a light goes into the cluster list at all, its cull radius in *radius: not a
+// directional, an unknown type, a panel while panels are off, or a light that never reaches
+// epsilon.
 static bool _clustered_radius(const LightClusterContext* ctx, const struct Light* light,
                               float* radius) {
     if (!light || light->type == LIGHT_UNKNOWN || light->type == LIGHT_DIRECTIONAL)
@@ -316,14 +315,32 @@ static bool _clustered_radius(const LightClusterContext* ctx, const struct Light
     return *radius != 0.0f;
 }
 
-// A light into packed slot `slot`, with what the overflow warning names it by.
+// A light into packed slot `slot`.
 static void _pack_slot(LightClusterContext* ctx, const struct Scene* scene,
                        const struct Light* light, float radius, int slot) {
     _pack_cluster_light(&ctx->lights.cluster_lights[slot], light, radius, scene->shadow_system);
     ctx->lights.cluster_specular[slot] = light_specular_share(light);
-    // Borrowed, not owned: the light outlives this build, and the only reader
-    // is the overflow warning, which runs before this function is called again.
-    ctx->packed_names[slot] = light->name;
+    ctx->packed[slot] = light;
+    ctx->packed_radius[slot] = radius;
+}
+
+// Where a light's sphere falls in a view's grid: its range of cells, and its view-space sphere
+// for the exact test, into slot `slot`. False when the sphere lies wholly outside the view's
+// depth range, so it touches no cell.
+static bool _view_range(LightClusterContext* ctx, int slot, const vec3 position, float radius,
+                        mat4 view, mat4 projection, const ClusterFrame* cf) {
+    vec3 view_center;
+    glm_mat4_mulv3(view, (float*)position, 1.0f, view_center);
+    const float zc = -view_center[2];
+    if (zc + radius < cf->near_clip || zc - radius > cf->far_clip)
+        return false;
+    LightClusterRange* range = &ctx->ranges[slot];
+    _slice_range_for_sphere(zc, radius, cf, range);
+    _tile_range_for_sphere(projection, view_center, radius, cf->near_clip, range);
+    float* sphere = ctx->view_spheres[slot];
+    glm_vec3_copy(view_center, sphere);
+    sphere[3] = radius;
+    return true;
 }
 
 static void _warn_packed_overflow(LightClusterContext* ctx, bool capture) {
@@ -340,7 +357,7 @@ static void _warn_packed_overflow(LightClusterContext* ctx, bool capture) {
 // and a cluster range. Walked in scene->lights order so the packing -- and so
 // the shading loop order -- is deterministic.
 static void _gather_lights(LightClusterContext* ctx, struct Scene* scene, const Frustum* frustum,
-                           mat4 view, mat4 projection, const ClusterFrame* cf, bool capture) {
+                           mat4 view, mat4 projection, const ClusterFrame* cf) {
     int num_dir = 0, num_packed = 0, num_area = 0;
 
     for (size_t i = 0; i < scene->light_count; i++) {
@@ -350,36 +367,17 @@ static void _gather_lights(LightClusterContext* ctx, struct Scene* scene, const 
             continue;
         }
         float radius;
-        if (!_clustered_radius(ctx, light, &radius))
-            continue;
-        bool uncullable = radius < 0.0f;
-        if (!uncullable && !frustum_test_sphere(frustum, light->global_position, radius))
+        if (!_clustered_radius(ctx, light, &radius) ||
+            !frustum_test_sphere(frustum, light->global_position, radius))
             continue;
 
         if (num_packed >= LC_MAX_CLUSTER_LIGHTS) {
-            _warn_packed_overflow(ctx, capture);
+            _warn_packed_overflow(ctx, false);
             break;
         }
-
-        LightClusterRange* range = &ctx->ranges[num_packed];
-        float* sphere = ctx->view_spheres[num_packed];
-        if (uncullable) {
-            range->x0 = range->y0 = range->z0 = 0;
-            range->x1 = LC_CLUSTER_X - 1;
-            range->y1 = LC_CLUSTER_Y - 1;
-            range->z1 = LC_CLUSTER_Z - 1;
-            sphere[3] = -1.0f; // marker: touches every cluster, skip the exact test
-        } else {
-            vec3 view_center;
-            glm_mat4_mulv3(view, light->global_position, 1.0f, view_center);
-            float zc = -view_center[2];
-            if (zc + radius < cf->near_clip || zc - radius > cf->far_clip)
-                continue; // outside the depth range (this packed slot is reused)
-            _slice_range_for_sphere(zc, radius, cf, range);
-            _tile_range_for_sphere(projection, view_center, radius, cf->near_clip, range);
-            glm_vec3_copy(view_center, sphere);
-            sphere[3] = radius;
-        }
+        // Outside the depth range the slot is reused.
+        if (!_view_range(ctx, num_packed, light->global_position, radius, view, projection, cf))
+            continue;
 
         _pack_slot(ctx, scene, light, radius, num_packed);
         num_packed++;
@@ -394,26 +392,34 @@ static void _gather_lights(LightClusterContext* ctx, struct Scene* scene, const 
     ctx->lights.light_counts[2] = num_area;
 }
 
-// How far a light's reach falls short of the sphere `sees` (xyz centre, w radius): above 0 it
-// cannot light anything the capture sees. A light that reaches everywhere is -FLT_MAX.
-static float _reach_gap(const struct Light* light, float radius, const float* sees) {
-    if (radius < 0.0f)
-        return -FLT_MAX;
-    return glm_vec3_distance((float*)light->global_position, (float*)sees) - sees[3] - radius;
+// How far a sphere at `centre` of `radius` falls short of the sphere `sees` (xyz centre, w
+// radius): above 0 the two do not meet.
+static float _sphere_gap(const vec3 centre, float radius, const float* sees) {
+    return glm_vec3_distance((float*)centre, (float*)sees) - sees[3] - radius;
 }
 
-static int _compare_floats(const void* a, const void* b) {
-    const float x = *(const float*)a, y = *(const float*)b;
-    return (x > y) - (x < y);
+// A light that may go into a capture's list, and how near its reach comes to the capture.
+typedef struct CaptureCandidate {
+    float gap;
+    float radius;
+    int index; // in scene->lights
+} CaptureCandidate;
+
+static bool _candidate_before(const CaptureCandidate* a, const CaptureCandidate* b) {
+    return a->gap < b->gap || (a->gap == b->gap && a->index < b->index);
 }
 
 // A capture's lights (spec 13.32): every clustered light whose reach meets the sphere it sees,
-// in scene order as a view's are. Past the cap the lights reaching nearest the centre are kept,
-// rather than the first in scene order: a capture's sphere takes in much of a scene, and which
-// of its lights come first in the list says nothing about which of them light the probe.
+// packed in scene order as a view's are. Past the cap the lights reaching nearest the centre are
+// kept, ties to scene order, rather than the first in scene order: a capture's sphere takes in
+// much of a scene, and which of its lights come first in the list says nothing about which of
+// them light the probe.
 static void _gather_capture_lights(LightClusterContext* ctx, const struct Scene* scene,
                                    const float* sees) {
-    int num_dir = 0, wanted = 0;
+    // The best so far, nearest first.
+    CaptureCandidate kept[LC_MAX_CLUSTER_LIGHTS];
+    int num_dir = 0, n = 0;
+    bool over = false;
     for (size_t i = 0; i < scene->light_count; i++) {
         const struct Light* light = scene->lights[i];
         if (light && light->type == LIGHT_DIRECTIONAL) {
@@ -421,56 +427,44 @@ static void _gather_capture_lights(LightClusterContext* ctx, const struct Scene*
             continue;
         }
         float radius;
-        if (_clustered_radius(ctx, light, &radius) && _reach_gap(light, radius, sees) <= 0.0f)
-            wanted++;
-    }
-
-    // The gap of the last light kept, and how many lights at exactly that gap make the cut. With
-    // no room to rank them, the first in scene order are kept, as a view's are.
-    float keep_gap = 0.0f;
-    int ties_left = LC_MAX_CLUSTER_LIGHTS;
-    float* gaps = NULL;
-    if (wanted > LC_MAX_CLUSTER_LIGHTS) {
-        _warn_packed_overflow(ctx, true);
-        gaps = malloc((size_t)wanted * sizeof(float));
-    }
-    if (gaps) {
-        int n = 0;
-        for (size_t i = 0; i < scene->light_count; i++) {
-            float radius;
-            if (!_clustered_radius(ctx, scene->lights[i], &radius))
-                continue;
-            const float gap = _reach_gap(scene->lights[i], radius, sees);
-            if (gap <= 0.0f)
-                gaps[n++] = gap;
-        }
-        qsort(gaps, (size_t)n, sizeof(float), _compare_floats);
-        keep_gap = gaps[LC_MAX_CLUSTER_LIGHTS - 1];
-        ties_left = 0;
-        for (int k = LC_MAX_CLUSTER_LIGHTS - 1; k >= 0 && gaps[k] == keep_gap; --k)
-            ties_left++;
-        free(gaps);
-    }
-
-    int num_packed = 0, num_area = 0;
-    for (size_t i = 0; i < scene->light_count; i++) {
-        const struct Light* light = scene->lights[i];
-        float radius;
         if (!_clustered_radius(ctx, light, &radius))
             continue;
-        const float gap = _reach_gap(light, radius, sees);
-        if (gap > keep_gap || (gap == keep_gap && ties_left-- <= 0))
+        const CaptureCandidate c = {_sphere_gap(light->global_position, radius, sees), radius,
+                                    (int)i};
+        if (c.gap > 0.0f)
             continue;
-        if (num_packed >= LC_MAX_CLUSTER_LIGHTS)
-            break;
-        _pack_slot(ctx, scene, light, radius, num_packed);
-        num_packed++;
+        if (n == LC_MAX_CLUSTER_LIGHTS) {
+            over = true;
+            if (!_candidate_before(&c, &kept[n - 1]))
+                continue;
+            n--;
+        }
+        int at = n++;
+        for (; at > 0 && _candidate_before(&c, &kept[at - 1]); at--)
+            kept[at] = kept[at - 1];
+        kept[at] = c;
+    }
+    if (over)
+        _warn_packed_overflow(ctx, true);
+
+    // Back into scene order.
+    for (int k = 1; k < n; k++) {
+        const CaptureCandidate c = kept[k];
+        int at = k;
+        for (; at > 0 && kept[at - 1].index > c.index; at--)
+            kept[at] = kept[at - 1];
+        kept[at] = c;
+    }
+
+    int num_area = 0;
+    for (int k = 0; k < n; k++) {
+        const struct Light* light = scene->lights[kept[k].index];
+        _pack_slot(ctx, scene, light, kept[k].radius, k);
         if (light->type == LIGHT_AREA)
             num_area++;
     }
-
     ctx->lights.light_counts[0] = num_dir;
-    ctx->lights.light_counts[1] = num_packed;
+    ctx->lights.light_counts[1] = n;
     ctx->lights.light_counts[2] = num_area;
 }
 
@@ -494,14 +488,13 @@ static void _mark_touched_clusters(LightClusterContext* ctx, const ClusterFrame*
     for (int li = 0; li < num_packed; li++) {
         const LightClusterRange* r = &ctx->ranges[li];
         const float* sphere = ctx->view_spheres[li];
-        bool uncullable = sphere[3] < 0.0f;
         float radius_sq = sphere[3] * sphere[3];
         uint8_t* touched = ctx->touched[li];
 
         for (int z = r->z0; z <= r->z1; z++)
             for (int y = r->y0; y <= r->y1; y++)
                 for (int x = r->x0; x <= r->x1; x++) {
-                    if (!uncullable && !_sphere_touches_cluster(sphere, radius_sq, x, y, z, cf))
+                    if (!_sphere_touches_cluster(sphere, radius_sq, x, y, z, cf))
                         continue;
                     int ci = x + LC_CLUSTER_X * (y + LC_CLUSTER_Y * z);
                     touched[ci >> 3] |= (uint8_t)(1u << (ci & 7));
@@ -555,13 +548,12 @@ static void _warn_index_overflow(const LightClusterContext* ctx, int starved, ui
         return;
     }
 
-    const char* name = ctx->packed_names[worst] ? ctx->packed_names[worst] : "unnamed";
-    const float radius = ctx->view_spheres[worst][3];
+    const char* name = ctx->packed[worst]->name ? ctx->packed[worst]->name : "unnamed";
     log_warn("Cluster index pool (%d) overflowed%s: %d of %d clusters starved, %u slots dropped. "
              "Widest reach is light %d '%s', covering %d of %d clusters at radius %.0f -- bound "
              "its range",
              LC_MAX_CLUSTER_INDICES, view, starved, LC_CLUSTER_COUNT, dropped, worst, name,
-             worst_cover, LC_CLUSTER_COUNT, (double)(radius < 0.0f ? 0.0f : radius));
+             worst_cover, LC_CLUSTER_COUNT, (double)ctx->packed_radius[worst]);
 }
 
 /*
@@ -659,6 +651,12 @@ static int _mark_sphere_bit(uint32_t* masks, int bit, const vec3 view_center, fl
         }
     }
     return marked;
+}
+
+// Set `bits` in every froxel of a mask packed as _mark_sphere_bit's is.
+static void _mark_all_bits(uint32_t* masks, uint32_t bits) {
+    for (int w = 0; w < LC_CLUSTER_COUNT / 2; ++w)
+        masks[w] |= bits | (bits << 16);
 }
 
 /*
@@ -825,23 +823,22 @@ static void _mark_decal_capture(LightClusterContext* ctx, const struct Scene* sc
         return;
 
     uint32_t reach = 0;
+    int reached = 0;
     for (int index = 0; index < live; ++index) {
         const float radius = bounds[index][3];
-        if (radius > 0.0f && glm_vec3_distance(bounds[index], (float*)sees) <= sees[3] + radius)
+        if (radius > 0.0f && _sphere_gap(bounds[index], radius, sees) <= 0.0f) {
             reach |= 1u << index;
+            reached++;
+        }
     }
-    // Two froxels a word, sixteen bits each (include/froxel_mask.glsl).
-    const uint32_t word = reach | (reach << 16);
-    for (int w = 0; w < LC_CLUSTER_COUNT / 2; ++w)
-        ctx->decals.cluster_masks[w] = word;
-    _decals_upload(ctx, __builtin_popcount(reach) * LC_CLUSTER_COUNT);
+    _mark_all_bits(ctx->decals.cluster_masks, reach);
+    _decals_upload(ctx, reached * LC_CLUSTER_COUNT);
 }
 
-// The cluster params and an empty light block, ahead of a gather: the slicing from the
-// projection's clip planes, the tiles from the target gl_FragCoord is measured in.
-static void _begin_lights(LightClusterContext* ctx, const ClusterFrame* cf, int fb_width,
-                          int fb_height) {
-    memset(&ctx->lights, 0, sizeof(ctx->lights));
+// The slicing from the projection's clip planes, the tiles from the target gl_FragCoord is
+// measured in.
+static void _set_cluster_params(LightClusterContext* ctx, const ClusterFrame* cf, int fb_width,
+                                int fb_height) {
     ctx->lights.cluster_params[0] = cf->slice_scale;
     ctx->lights.cluster_params[1] = cf->slice_bias;
     ctx->lights.cluster_params[2] = (float)LC_CLUSTER_X / (float)fb_width;
@@ -883,26 +880,63 @@ static void _upload_lights(LightClusterContext* ctx, uint32_t total_indices) {
                (GLsizeiptr)((size_t)total_indices * sizeof(ctx->index_pool.indices[0])));
 }
 
-void light_cluster_build_capture(LightClusterContext* ctx, const struct Scene* scene,
-                                 const vec3 centre, float sees, mat4 projection, int face_px,
-                                 float near_clip, float far_clip) {
+void light_cluster_capture_begin(LightClusterContext* ctx, const struct Scene* scene,
+                                 const vec3 centre, float sees) {
+    if (!ctx || !scene)
+        return;
+    memset(&ctx->lights, 0, sizeof(ctx->lights));
+    _upload_ies(ctx, scene);
+    ctx->capture_sees[0] = centre[0];
+    ctx->capture_sees[1] = centre[1];
+    ctx->capture_sees[2] = centre[2];
+    ctx->capture_sees[3] = sees;
+    ctx->capture_shared = false;
+    _gather_capture_lights(ctx, scene, ctx->capture_sees);
+}
+
+void light_cluster_capture_face(LightClusterContext* ctx, const struct Scene* scene, mat4 view,
+                                mat4 projection, int face_px, float near_clip, float far_clip) {
     if (!ctx || !scene || face_px <= 0)
+        return;
+    const bool shared = face_px <= 2 * LC_CLUSTER_X;
+    if (shared && ctx->capture_shared)
         return;
     ClusterFrame cf;
     _cluster_frame_init(&cf, projection, near_clip, far_clip);
-    _begin_lights(ctx, &cf, face_px, face_px);
-    _upload_ies(ctx, scene);
+    _set_cluster_params(ctx, &cf, face_px, face_px);
+    if (shared) {
+        _fill_shared_list(ctx);
+        _mark_decal_capture(ctx, scene, ctx->capture_sees);
+        _upload_lights(ctx, (uint32_t)ctx->lights.light_counts[1]);
+        ctx->capture_shared = true;
+        return;
+    }
 
-    const float sphere[4] = {centre[0], centre[1], centre[2], sees};
-    _gather_capture_lights(ctx, scene, sphere);
-    _fill_shared_list(ctx);
-    _mark_decal_capture(ctx, scene, sphere);
-    _upload_lights(ctx, (uint32_t)ctx->lights.light_counts[1]);
+    // The face's own cells, from the lights the capture gathered: a light the face's frustum
+    // misses touches none of them, as the camera's view leaves it out.
+    mat4 view_proj;
+    glm_mat4_mul(projection, view, view_proj);
+    Frustum frustum;
+    frustum_extract_from_vp(view_proj, &frustum);
+    for (int li = 0; li < ctx->lights.light_counts[1]; li++) {
+        const struct Light* light = ctx->packed[li];
+        if (!frustum_test_sphere(&frustum, (float*)light->global_position,
+                                 ctx->packed_radius[li]) ||
+            !_view_range(ctx, li, light->global_position, ctx->packed_radius[li], view, projection,
+                         &cf))
+            ctx->ranges[li] =
+                (LightClusterRange){.x0 = 1, .x1 = 0, .y0 = 1, .y1 = 0, .z0 = 1, .z1 = 0};
+    }
+    _mark_touched_clusters(ctx, &cf);
+    const uint32_t total_indices = _assign_index_offsets(ctx, true);
+    _fill_index_pool(ctx);
+    _mark_decal_clusters(ctx, scene, &frustum, view, projection, near_clip, &cf);
+    _upload_lights(ctx, total_indices);
 }
 
 void light_cluster_build_and_upload(LightClusterContext* ctx, struct Scene* scene, mat4 view,
                                     mat4 projection, int fb_width, int fb_height, float near_clip,
-                                    float far_clip, bool capture) {
+                                    float far_clip) {
     if (!ctx || !scene)
         return;
     // The viewport is read live, so a minimized window hands us 0 here and the
@@ -913,7 +947,8 @@ void light_cluster_build_and_upload(LightClusterContext* ctx, struct Scene* scen
 
     ClusterFrame cf;
     _cluster_frame_init(&cf, projection, near_clip, far_clip);
-    _begin_lights(ctx, &cf, fb_width, fb_height);
+    memset(&ctx->lights, 0, sizeof(ctx->lights));
+    _set_cluster_params(ctx, &cf, fb_width, fb_height);
 
     // World-space frustum for the sphere pre-cull (same planes node culling uses)
     mat4 view_proj;
@@ -922,18 +957,16 @@ void light_cluster_build_and_upload(LightClusterContext* ctx, struct Scene* scen
     frustum_extract_from_vp(view_proj, &frustum);
 
     _upload_ies(ctx, scene);
-    _gather_lights(ctx, scene, &frustum, view, projection, &cf, capture);
+    _gather_lights(ctx, scene, &frustum, view, projection, &cf);
     _mark_touched_clusters(ctx, &cf);
-    uint32_t total_indices = _assign_index_offsets(ctx, capture);
+    uint32_t total_indices = _assign_index_offsets(ctx, false);
     _fill_index_pool(ctx);
 
     // Strictly after the light pass and touching none of its three arrays: the
     // light grid has no gate of its own anywhere in the suite, so the only
     // safe place for a second consumer of this frame's ClusterFrame is past
-    // the point where the first one is finished with it. A capture is lit diffuse only and never
-    // reads the probes, so it leaves their block as the frame last built it.
-    if (!capture)
-        _mark_probe_clusters(ctx, scene, view, projection, near_clip, &cf);
+    // the point where the first one is finished with it.
+    _mark_probe_clusters(ctx, scene, view, projection, near_clip, &cf);
     _mark_decal_clusters(ctx, scene, &frustum, view, projection, near_clip, &cf);
     _upload_lights(ctx, total_indices);
 

@@ -153,8 +153,8 @@ void gi_volume_atlas_extent(const GIVolume* gi, int* out_w, int* out_h) {
         *out_h = rows * IRR_PITCH + rows * VIS_PITCH;
 }
 
-// The capture scratch. The tiles themselves live in the scene's lighting atlas, which a
-// slot's first sweep overwrites whole, so nothing here clears them.
+// The capture scratch. The tiles themselves live in the scene's lighting atlas, whose slot an
+// opening sweep clears, so nothing here clears them.
 static bool gi_ensure_targets(GIVolume* gi, struct Engine* engine) {
     // Allocate-once on its own flag: this is called on every frame with a dirty
     // probe, so a re-convergence sweep would otherwise re-create two cubemaps and
@@ -268,11 +268,12 @@ static void gi_project_tile(GIVolume* gi, const LightingAtlas* atlas, AtlasRect 
 
 // Capture up to `most` probes of a resident volume into its slot, 0 = every one left, while the
 // frame's capture budget allows: an `opening` sweep, into a slot nothing was captured in, or a
-// re-convergence over the texels there. Inside a capture burst the caller holds open. Returns the
-// probes captured.
+// re-convergence over the texels there. Inside a capture burst the caller holds open, with
+// `took` the world's units this frame -- its first already asked for. Returns the probes
+// captured.
 static int gi_volume_sweep(GIVolume* gi, struct Engine* engine, struct Scene* scene,
                            const LightingAtlas* atlas, AtlasRect slot, int most, bool opening,
-                           CaptureBudget* budget) {
+                           CaptureBudget* budget, int* took) {
     if (gi->failed || gi->dirty_count <= 0 || !gi_ensure_targets(gi, engine))
         return 0;
 
@@ -283,11 +284,20 @@ static int gi_volume_sweep(GIVolume* gi, struct Engine* engine, struct Scene* sc
     const float hysteresis = opening ? 0.0f : 0.97f;
 
     int taken = 0;
-    for (; taken < most && capture_budget_allows(budget); ++taken) {
-        capture_budget_spend(budget);
+    for (; taken < most; ++taken) {
+        if (*took > 0 && !capture_budget_take(budget, false))
+            break;
+        (*took)++;
         int probe = gi->next_probe;
         gi->next_probe = (gi->next_probe + 1) % probes;
         gi->dirty_count--;
+
+        // An opening sweep starts from a cleared slot: its tiles do not cover the whole of it --
+        // an irradiance tile is narrower than the column it shares with a visibility tile -- and
+        // between them the slot would keep whatever its last holder left, laid out by that
+        // holder's grid.
+        if (opening && probe == 0)
+            lighting_atlas_clear(atlas, slot);
 
         vec3 pos = {0};
         gi_probe_position(gi, probe, pos);
@@ -475,8 +485,9 @@ void gi_world_update(GIWorld* world, struct Engine* engine, struct Scene* scene,
         due[at] = (int)i;
     }
     // Timed only on a frame that captures: a converged world is the steady state, and a scope
-    // opened every frame would file a 0.000 ms row on nearly all of them.
-    if (n == 0 || !capture_budget_allows(budget))
+    // opened every frame would file a 0.000 ms row on nearly all of them. The world's first unit
+    // is asked for here, before the burst opens, so the burst's own shadow pass is counted too.
+    if (n == 0 || !capture_budget_take(budget, true))
         return;
     profiler_scope_begin(engine->profiler, "gi capture");
     GLint saved_fbo;
@@ -496,19 +507,19 @@ void gi_world_update(GIWorld* world, struct Engine* engine, struct Scene* scene,
     // a building alike. A half-swept slot is withheld, so a volume's light appears whole, the
     // frames after its last probe. Re-convergences, over tiles still valid to sample, also share
     // the world's rate; 0 is no limit.
-    int rate_left = world->rate;
-    for (int k = 0; k < n && capture_budget_allows(budget); ++k) {
+    int rate_left = world->rate, took = 0;
+    for (int k = 0; k < n; ++k) {
         ResidencyItem* item = &res->items[due[k]];
         GIVolume* gi = world->volumes[due[k]];
         const bool opening = item->state == RESIDENCY_CAPTURE;
         const bool limited = !opening && world->rate > 0;
         if (limited && rate_left <= 0)
             continue;
-        const int took =
+        const int swept =
             gi_volume_sweep(gi, engine, scene, atlas, gi_volume_rect(gi, atlas, item->slot),
-                            limited ? rate_left : 0, opening, budget);
+                            limited ? rate_left : 0, opening, budget, &took);
         if (limited)
-            rate_left -= took;
+            rate_left -= swept;
         if (gi->dirty_count <= 0 && opening)
             residency_loaded(item);
     }
@@ -527,17 +538,23 @@ void gi_world_update(GIWorld* world, struct Engine* engine, struct Scene* scene,
     profiler_scope_end(engine->profiler);
 }
 
+typedef struct GIBoxQuery {
+    const GIWorld* world;
+    const AABB* box;
+} GIBoxQuery;
+
+static bool gi_bears_on(const void* user, size_t i) {
+    const GIBoxQuery* q = user;
+    const GIVolume* gi = q->world->volumes[i];
+    const AABB grid = gi_volume_box(gi);
+    return !gi->failed && aabb_overlaps(&grid, q->box);
+}
+
 bool gi_world_ready_in(const GIWorld* world, const AABB* box) {
     if (!world || !world->enabled)
         return true;
-    for (size_t i = 0; i < world->residency.count; ++i) {
-        const GIVolume* gi = world->volumes[i];
-        const AABB grid = gi_volume_box(gi);
-        if (!gi->failed && aabb_overlaps(&grid, box) &&
-            world->residency.items[i].state != RESIDENCY_LOADED)
-            return false;
-    }
-    return true;
+    const GIBoxQuery q = {world, box};
+    return residency_loaded_where(&world->residency, gi_bears_on, &q);
 }
 
 bool gi_world_pending(const GIWorld* world) {

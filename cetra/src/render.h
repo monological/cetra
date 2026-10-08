@@ -73,14 +73,16 @@ void scene_capture_begin(Engine* engine, struct Scene* scene, SceneCaptureKind k
                          SceneCaptureState* saved);
 void scene_capture_end(Engine* engine, struct Scene* scene, const SceneCaptureState* saved);
 
-// Render the scene into the six faces of `dst_cubemap` from `position`, at
-// `face_size` per face. `dst_depth_cubemap` picks the strategy:
+// Render the scene into faces `first` to `first + count - 1` of `dst_cubemap`, in GL's cube face
+// order, from `position`, at `face_size` per face, so a capture may be spread over frames; every
+// face it does not draw is left as it was, and a range outside the six is refused.
+// `dst_depth_cubemap` picks the strategy:
 //
 //   0        supersample into scratch and box-downsample on the blit. The
 //            capture has no MSAA, and grazing-angle aliasing at its horizon
 //            bakes in as stripe moire that mirror reflections magnify into
-//            banded streaks. Borrows ibl->capture_fbo / capture_rbo as that
-//            scratch, so `ibl` is REQUIRED here.
+//            banded streaks. The scratch is ibl's capture_ss target, so `ibl`
+//            is REQUIRED here.
 //   non-zero render straight into both cubemaps' faces at native size, the only
 //            way to keep depth (a blit cannot carry it between differently-sized
 //            targets). `ibl` is unused, which is what lets a GI capture run in a
@@ -90,10 +92,8 @@ void scene_capture_end(Engine* engine, struct Scene* scene, const SceneCaptureSt
 // capture leaves the next real frame bit-identical, and raises engine->capturing
 // for the duration so passes that reach outside the bound target sit out.
 //
-// Draws faces `first` to `first + count - 1` of the six, in GL's cube face order, so a capture
-// may be spread over frames; every face it does not draw is left as it was.
-//
-// Pair with scene_capture_begin/end, which own the policy this does not.
+// Called inside scene_capture_begin/end, which own the policy this does not and
+// prepare the panels and the material variants every face draws with.
 typedef enum SceneCaptureFaces {
     SCENE_FACES_SHADED,     // the lit scene, faces turned toward the capture point
     SCENE_FACES_BACK_DEPTH, // depth alone, of the faces turned away; the colour faces are cleared
@@ -104,26 +104,19 @@ void scene_capture_faces(Engine* engine, Scene* scene, struct IBLResources* ibl,
                          int face_size, float near_clip, float far_clip, SceneCaptureFaces faces,
                          int first, int count);
 
-// A frame's allowance for the light captures (spec 13.32), opened once by the lighting update and
-// asked before each unit of capture work -- a GI probe, a reflection probe's face. The first unit
-// of a frame always runs, so every capture finishes however small the allowance; after it, a unit
-// runs while the frame has spent less than engine->capture_budget_ms on them since the first
-// was asked for. The clock is read past a glFinish: a capture's cost is mostly GPU work, which
-// the CPU would otherwise run ahead of and the frame's swap would then wait on.
+// A frame's allowance for its light captures (spec 13.32), shared by every kind of capture the
+// frame takes, each asking it before a unit -- a GI probe, a reflection probe's face -- with the
+// unit in hand. A kind's first unit of the frame always runs, so no capture waits on another kind
+// and every one finishes however small the allowance; after it, a unit runs while the frame has
+// spent less than `ms` on its captures since the first was asked for.
 typedef struct CaptureBudget {
-    float ms;     // the allowance; 0 = no limit, and no clock is read
-    double start; // when the first unit was asked for, seconds
-    int units;    // units run this frame
+    float ms;     // engine->capture_budget_ms; 0 = no limit
+    bool started; // the clock is running
+    double start; // seconds, when the frame's first unit was asked for
 } CaptureBudget;
 
-CaptureBudget capture_budget_open(const Engine* engine);
-// Whether one more unit may run now. Starts the clock on the frame's first ask.
-bool capture_budget_allows(CaptureBudget* budget);
-// How many of a reflection probe's faces to take at a time: all six with no limit, where one
-// burst is cheaper than six, and one with one.
-int capture_budget_faces(const CaptureBudget* budget);
-// Count a unit that ran.
-void capture_budget_spend(CaptureBudget* budget);
+// Whether a unit may run now; `first` = the asking kind has run none this frame.
+bool capture_budget_take(CaptureBudget* budget, bool first);
 
 // Flatten the scene for this frame, if it has not been flattened already.
 //
