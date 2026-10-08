@@ -29310,7 +29310,9 @@ def run_shadow_tiles_gate(workdir):
     branch never reading the tiles (0.3545, the unshadowed share), and tiles-area-size with the
     near plane packed over the panel's size again (the near room 41-fold darker). At 13.31:
     tiles-follow fails with following an unconditional redraw (6 faces drawn on frame 30), and
-    tiles-rounding with no rounding allowance (the wall's middle 0.000 of its twin).
+    tiles-rounding with no rounding allowance (the wall's middle 0.000 of its twin). At 13.38:
+    with a graph change drawing every face again, as it did, tiles-graph-near and tiles-graph-far
+    each draw 6 of 6 faces, and every graph arm reads generation 2.
     """
     point = asset("cornell_point.cscn")
     core = asset("tile_core_fixture.cscn")
