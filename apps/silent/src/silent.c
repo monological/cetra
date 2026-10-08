@@ -176,6 +176,7 @@ typedef struct SilentArgs {
     bool no_static;         // the living room's set showing nothing, a faint glow and no hiss
     bool no_loading_screen; // load under a black window, with no engine screen over it
     bool loading_screen;    // the screen headless too, where it is otherwise left out
+    bool startup_ms;        // print where loading's time goes, a startup-ms row a step
     bool flashlight;
     bool mute;
     float rain_mmh;          // 0 = dry
@@ -619,13 +620,14 @@ static const Door* hung_door(int i) {
     return g_door_hung[i] ? &g_doors[i] : NULL;
 }
 
-// A seam of on_init (spec 13.34): the loading screen moves, and where loading's time goes is said
-// as a startup-ms row, the time since the seam before.
+// A seam of on_init (spec 13.34): the loading screen moves, and under --startup-ms where loading's
+// time goes is said as a startup-ms row, the time since the seam before.
 static double g_load_mark;
 static void load_seam(Engine* engine, const char* site) {
     engine_draw_loading_screen(engine);
     const double now = glfwGetTime();
-    printf("startup-ms site=%s ms=%.1f\n", site, (now - g_load_mark) * 1000.0);
+    if (g_args.startup_ms)
+        printf("startup-ms site=%s ms=%.1f\n", site, (now - g_load_mark) * 1000.0);
     g_load_mark = now;
 }
 
@@ -1051,8 +1053,11 @@ static void on_pre_render(Game* game, double alpha) {
                       glm_smoothstep(0.0f, FADE_IN_SECONDS, g_fade_seconds));
     input_set_suppressed(&game->input, screened);
 
-    // The frames while the view is held, each the time since the last hook: the first few by
-    // name, then the slowest; the whole wait once the lighting is in, and once the view comes up.
+    // Under --startup-ms, the frames while the view is held, each the time since the last hook:
+    // the first few by name, then the slowest; the whole wait once the lighting is in, and once
+    // the view comes up.
+    if (!g_args.startup_ms)
+        return;
     static double settle_start, settle_worst;
     static bool lit_said, up_said;
     if (!up) {
@@ -1125,6 +1130,7 @@ static void print_usage(const char* prog) {
     printf("      --no-static         The living room's television with nothing on it, no snow\n");
     printf("      --no-loading-screen Load under a black window, without the engine's screen\n");
     printf("      --loading-screen    The engine's loading screen headless too\n");
+    printf("      --startup-ms        Print how long each loading step and held frame took\n");
     printf("      --flashlight        Start with the flashlight on (F toggles it)\n");
     printf("      --mute              Without sound\n");
     printf("      --audio-dump PATH   Headless: write what the listener hears as a WAV\n");
@@ -1270,6 +1276,8 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
             a->no_loading_screen = true;
         } else if (!strcmp(s, "--loading-screen")) {
             a->loading_screen = true;
+        } else if (!strcmp(s, "--startup-ms")) {
+            a->startup_ms = true;
         } else if (!strcmp(s, "--flashlight")) {
             a->flashlight = true;
         } else if (!strcmp(s, "--mute")) {
