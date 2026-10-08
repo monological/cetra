@@ -1146,6 +1146,25 @@ static bool mesh_sprays(const TreeSkeleton* skel, const TreeParams* p, Mesh* mes
                            !mirror, centre);
         }
     }
+
+    // In no spatial order, so a leading run of the sprays is an even thinning of the whole
+    // crown: mesh_build_card_lod_chain draws exactly that at a distance. A spray's two cards
+    // stay together. Its own stream, so the order never moves a spray.
+    if (mb.ok) {
+        TgRng order = {(uint32_t)p->seed * 2246822519u + 3266489917u};
+        if (order.s == 0)
+            order.s = 1;
+        const size_t sprays = mb.icount / TG_SPRAY_INDICES;
+        unsigned int tmp[TG_SPRAY_INDICES];
+        for (size_t i = sprays; i > 1; i--) {
+            const size_t j = (size_t)(tg_next(&order) % (uint32_t)i);
+            unsigned int* a = mb.idx + (i - 1) * TG_SPRAY_INDICES;
+            unsigned int* b = mb.idx + j * TG_SPRAY_INDICES;
+            memcpy(tmp, a, sizeof(tmp));
+            memcpy(a, b, sizeof(tmp));
+            memcpy(b, tmp, sizeof(tmp));
+        }
+    }
     excurrent_wind_anchors(&mb, skel, p);
     return mb_transfer(&mb, mesh);
 }

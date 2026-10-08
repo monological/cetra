@@ -37,7 +37,7 @@
 #include "cetra/internal/physics_cook.h"
 #include "cetra/ibl.h"
 #include "cetra/light.h"
-#include "cetra/internal/lod.h"
+#include "cetra/lod.h"
 #include "cetra/internal/cluster.h"
 #include "cetra/material.h"
 #include "cetra/mesh.h"

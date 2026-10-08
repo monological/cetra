@@ -36,6 +36,9 @@
 #define TG_SPRAY_LIVE_CELLS 5
 #define TG_SPRAY_DEAD_CELLS 2
 #define TG_SPRAY_BARE_CELL  (TG_SPRAY_LIVE_CELLS + TG_SPRAY_DEAD_CELLS)
+// A spray's indices: two crossed cards of four triangles. What a conifer's needle mesh hands
+// mesh_build_card_lod_chain as one card, so a spray thins away whole.
+#define TG_SPRAY_INDICES 24
 
 // How a tree grows. The zero is the recursive form, so a zeroed TreeParams keeps it.
 typedef enum TreeForm {
