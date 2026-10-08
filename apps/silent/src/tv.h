@@ -31,8 +31,7 @@ typedef struct Tv {
 void tv_build(Tv* tv, Kit* kit, Engine* engine, Scene* scene, bool on);
 // The hiss, started at the set; nothing when it shows no picture or `audio` is NULL.
 void tv_start_audio(Tv* tv, AudioSystem* audio);
-// The field at `time` onto the picture, the glass and the light, and the hiss at `hearing`, how
-// much of the house's own sound reaches the listener.
-void tv_update(Tv* tv, double time, float hearing);
+// The field at `time` onto the picture, the glass and the light.
+void tv_update(Tv* tv, double time);
 
 #endif // _SILENT_TV_H_

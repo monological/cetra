@@ -47,10 +47,9 @@ void lights_build(Lights* lights, Kit* kit, Engine* engine, Scene* scene, unsign
 void lights_start_audio(Lights* lights, AudioSystem* audio);
 
 // Per frame, before the frame draws: the flicker, the tubes' shadows and
-// buzz, and the flashlight riding the eye. `hearing` scales the buzz for
-// where the listener is.
+// buzz, and the flashlight riding the eye.
 void lights_update(Lights* lights, Scene* scene, double time, float dt, const vec3 eye,
-                   const vec3 forward, float hearing);
+                   const vec3 forward);
 
 void lights_toggle_flashlight(Lights* lights);
 

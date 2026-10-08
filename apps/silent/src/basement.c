@@ -661,13 +661,13 @@ void basement_start(Basement* b, Engine* engine, Scene* scene, AudioSystem* audi
 }
 
 // Every few seconds a drop from the tap into the water under it, never quite on a beat.
-static void drip(Basement* b, const Sounds* sounds, const vec3 eye, double time) {
+static void drip(Basement* b, double time) {
     if (!b->drip || time < b->next_drip)
         return;
     b->next_drip = time + DRIP_EVERY + DRIP_SPREAD * kit_rnd(&b->drips);
     vec3 at = GLM_VEC3_ZERO_INIT;
     kit_frame_point(&TUB, TAP_A, TUB_WATER, TAP_D, at);
-    AudioVoiceDesc d = {.volume = DRIP_VOLUME * sounds_gain_at(sounds, eye, at)};
+    AudioVoiceDesc d = {.volume = DRIP_VOLUME};
     glm_vec3_copy(at, d.position);
     audio_play_voice(b->audio, b->drip, &d);
 }
@@ -710,8 +710,7 @@ static void bulb_update(Basement* b, const Door* door, double time) {
     glm_vec3_copy(colour, b->glass->emissive);
 }
 
-void basement_update(Basement* b, const Door* door, const Sounds* sounds, const vec3 eye,
-                     double time) {
+void basement_update(Basement* b, const Door* door, double time) {
     bulb_update(b, door, time);
-    drip(b, sounds, eye, time);
+    drip(b, time);
 }

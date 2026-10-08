@@ -8,7 +8,6 @@
 #include "cetra/game/audio.h"
 
 #include "cat.h"
-#include "sounds.h"
 
 /*
  * What the cat sounds like (spec 13.17): its meows, trill and hiss, its paws and its landings,
@@ -30,7 +29,6 @@ typedef struct CatVoice {
     Sound* purr; // the cat entity's AUDIO_SOURCE
     int meows;   // how many meows so far, which picks the next
     int paws;
-    float hearing; // the gain for where the listener is now
     float purr_level;
     bool say; // cycle through every sound it makes, to hear them
     float say_in;
@@ -41,9 +39,8 @@ typedef struct CatVoice {
 // without `audio` or a cat. The voice must outlive the cat's animator.
 void cat_voice_start(CatVoice* voice, Cat* cat, AudioSystem* audio, bool say);
 
-// Once a frame: how loud everything is for where the listener stands in the house, and the
-// purr, which wants a listener near, slow, and trusted (`at_ease`).
-void cat_voice_update(CatVoice* voice, const Sounds* sounds, const vec3 listener, bool at_ease,
-                      float dt);
+// Once a frame: the purr, which wants a listener near, slow, and trusted (`at_ease`). Where the
+// listener stands in the house is the audio zones' business.
+void cat_voice_update(CatVoice* voice, const vec3 listener, bool at_ease, float dt);
 
 #endif // _SILENT_CAT_VOICE_H_

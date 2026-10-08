@@ -10,6 +10,7 @@
 #include "kit.h"
 #include "layout.h"
 #include "mansion.h"
+#include "sounds.h"
 
 // How loud each is, against silent's own: the fridge 0.15, the clock 0.5, the tubes 0.25.
 #define MEOW_VOLUME      0.45f
@@ -44,9 +45,9 @@ static const vec3 HEAD = {0.0f, CAT_HEAD_Y - CAT_HALF_HEIGHT, CAT_HEAD_Z};
 static const vec3 CHEST = {0.0f, 0.2f - CAT_HALF_HEIGHT, 0.08f};
 
 static void play(CatVoice* v, const Sound* s, const vec3 at, float volume) {
-    if (!v->audio || !s || volume * v->hearing <= 0.0f)
+    if (!v->audio || !s || volume <= 0.0f)
         return;
-    AudioVoiceDesc d = {.follow = v->cat->entity, .volume = volume * v->hearing};
+    AudioVoiceDesc d = {.follow = v->cat->entity, .volume = volume};
     glm_vec3_copy((float*)at, d.position);
     audio_play_voice(v->audio, s, &d);
 }
@@ -96,7 +97,6 @@ void cat_voice_start(CatVoice* v, Cat* cat, AudioSystem* audio, bool say) {
     memset(v, 0, sizeof(*v));
     v->cat = cat;
     v->say = say;
-    v->hearing = 1.0f;
     if (!audio || !cat->entity)
         return;
     v->audio = audio;
@@ -131,14 +131,10 @@ static void say(CatVoice* v, float dt) {
     heard(v->cat->animator, EVENTS[v->say_next++ % KIT_COUNT(EVENTS)], v);
 }
 
-void cat_voice_update(CatVoice* v, const Sounds* sounds, const vec3 listener, bool at_ease,
-                      float dt) {
+void cat_voice_update(CatVoice* v, const vec3 listener, bool at_ease, float dt) {
     const Cat* cat = v->cat;
     if (!v->audio || !cat->entity || !cat->attached)
         return;
-    vec3 feet = {0.0f, 0.0f, 0.0f};
-    cat_feet(cat, feet);
-    v->hearing = sounds_gain_at(sounds, listener, feet);
 
     // A purr only settled -- sitting, lying or asleep -- and only for someone close and calm.
     mat4 body = GLM_MAT4_IDENTITY_INIT;
@@ -151,7 +147,7 @@ void cat_voice_update(CatVoice* v, const Sounds* sounds, const vec3 listener, bo
     const float want = (settled && (at_ease || v->say)) ? near : 0.0f;
     v->purr_level += (want - v->purr_level) * (1.0f - expf(-dt / PURR_EASE));
     if (v->purr)
-        audio_sound_set_volume(v->purr, PURR_VOLUME * v->purr_level * v->hearing);
+        audio_sound_set_volume(v->purr, PURR_VOLUME * v->purr_level);
     if (v->say)
         say(v, dt);
 }

@@ -298,7 +298,7 @@ void lights_start_audio(Lights* lights, AudioSystem* audio) {
 }
 
 void lights_update(Lights* lights, Scene* scene, double time, float dt, const vec3 eye,
-                   const vec3 forward, float hearing) {
+                   const vec3 forward) {
     const float level = lights->flicker ? flicker_level(time, lights->seed) : 1.0f;
     if (lights->flicker)
         lights->flicker->emissive_strength = lights->flicker_nits * level;
@@ -312,7 +312,7 @@ void lights_update(Lights* lights, Scene* scene, double time, float dt, const ve
             lights->buzzing[t] = true;
         }
         const float lit = t == lights->flicker_tube ? level : 1.0f;
-        audio_sound_set_volume(s, BUZZ_VOLUME * (TUBES[t].nits / BUZZ_NITS) * lit * hearing);
+        audio_sound_set_volume(s, BUZZ_VOLUME * (TUBES[t].nits / BUZZ_NITS) * lit);
     }
 
     // The derived panels are the engine's, created on the first frame and kept
