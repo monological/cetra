@@ -10,6 +10,7 @@ in vec2 TexCoords;
 out vec4 FragColor;
 
 #include "display.glsl"
+#include "loading_constants.glsl"
 #include "noise.glsl"
 
 uniform sampler2D markTex;  // the mark, linear
@@ -62,11 +63,12 @@ void main()
     float fadeDot = 1.0 - smoothstep(0.8, 1.0, off);
     uv = c + 0.5;
 
-    // A glitch now and then: a short burst where tracking is lost, its time drawn from the hash
-    // of its slot so a run repeats.
-    float slot = floor(time / GLITCH_EVERY);
+    // A glitch now and then once the ident has played, never over it: a short burst where
+    // tracking is lost, its time drawn from the hash of its slot so a run repeats.
+    float since = time - LOADING_IDENT_END;
+    float slot = floor(since / GLITCH_EVERY);
     float at = slot * GLITCH_EVERY + hash21(vec2(slot, 7.0), vec2(12.9898, 78.233)) * (GLITCH_EVERY - GLITCH_LONG);
-    float glitch = time > LOCK ? smoothstep(0.0, 0.03, time - at) * (1.0 - smoothstep(GLITCH_LONG - 0.05, GLITCH_LONG, time - at)) : 0.0;
+    float glitch = since > 0.0 ? smoothstep(0.0, 0.03, since - at) * (1.0 - smoothstep(GLITCH_LONG - 0.05, GLITCH_LONG, since - at)) : 0.0;
 
     // The tracking band rolling down, and the lines inside it torn sideways.
     float bandY = 1.0 - fract(time * BAND_SPEED);
