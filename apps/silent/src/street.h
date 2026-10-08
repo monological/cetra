@@ -5,16 +5,25 @@
 
 #include "cetra/scene.h"
 
+#include "houses.h"
 #include "kit.h"
 #include "layout.h"
 
+#define NEAR_HOUSES 4 // our side's neighbours, two either side of us
+
+// Where the neighbours stand, each side from the west: what the terrace's stairs and the
+// fences round the yards are fitted to.
+typedef struct StreetPlots {
+    HousePlot near[NEAR_HOUSES];
+    HousePlot far[TERRACE_LOTS];
+} StreetPlots;
+
 // Everything outside: the road, its kerbs and sidewalks, our yards, the
 // neighbours' houses, the lamps (and their light, at night), the poles and
-// their wires, a car, fences -- and the fog that fills the street and stops at
-// the house, unless not `fogged`. The far houses' front doors go to `far_doors`, a lot each from
-// the west, for the terrace's stairs.
+// their wires, a car -- and the fog that fills the street and stops at
+// the house, unless not `fogged`.
 void street_build(Kit* kit, Scene* scene, unsigned int seed, bool night, bool fogged,
-                  float far_doors[TERRACE_LOTS]);
+                  StreetPlots* plots);
 
 // A street lamp standing at (x, y, z), its arm out along `yaw`'s +z, lit at night unless dead.
 // Returns its light, or NULL when it has none.

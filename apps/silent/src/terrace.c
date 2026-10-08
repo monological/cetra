@@ -27,6 +27,9 @@
 #define RAIL_RADIUS  0.022f
 #define PATH_HALF    0.55f
 #define GROUND_DEEP  0.4f // a lot's ground box, below its top
+#define GUARD_HEIGHT 1.0f // the guard rail along the wall's top, above the coping
+#define GUARD_RADIUS 0.024f
+#define GUARD_POSTS  2.0f // metres between its posts at most
 // The east return follows the ground in pieces this long, up into the woods while the lots stand
 // higher than the slope beside them.
 #define RETURN_STEP 2.0f
@@ -39,6 +42,22 @@ static void front_wall(Kit* kit, float x0, float x1, float top) {
     kit_frame_box(kit, &KIT_WORLD, MAT_RETAINING, x0, x1, -WALL_FOOT, top, z0, z1, true);
     kit_frame_box(kit, &KIT_WORLD, MAT_RETAINING, x0, x1, top, top + CAP_HEIGHT, z0 - CAP_OVER,
                   z1 + CAP_OVER, true);
+}
+
+// The guard rail on the coping of a length of the front wall holding up ground at `top`: posts set
+// into the coping, a top rail and a mid rail, and a body the height of the top one.
+static void guard_rail(Kit* kit, float x0, float x1, float top) {
+    if (x1 - x0 < 0.3f)
+        return;
+    const KitFrame f = {{0.0f, top + CAP_HEIGHT, TERRACE_WALL_Z - 0.5f * TERRACE_WALL_THICK}, 0.0f};
+    const float a0 = x0 + 0.06f, a1 = x1 - 0.06f;
+    const int spans = (int)ceilf((a1 - a0) / GUARD_POSTS);
+    for (int i = 0; i <= spans; i++)
+        kit_frame_prism(kit, &f, MAT_GALVANISED, a0 + (a1 - a0) * (float)i / (float)spans, 0.0f,
+                        0.0f, GUARD_HEIGHT, GUARD_RADIUS, 6);
+    kit_frame_bar(kit, &f, MAT_GALVANISED, a0, a1, GUARD_HEIGHT, 0.0f, GUARD_RADIUS);
+    kit_frame_bar(kit, &f, MAT_GALVANISED, a0, a1, 0.5f * GUARD_HEIGHT, 0.0f, GUARD_RADIUS);
+    kit_frame_box(kit, &f, KIT_COLLIDER_ONLY, x0, x1, 0.0f, GUARD_HEIGHT, -0.05f, 0.05f, true);
 }
 
 // A lot's ground: a level box from x0 to x1 and z0 to z1, its top at `top`.
@@ -97,7 +116,7 @@ static void east_return(Kit* kit) {
     }
 }
 
-void terrace_build(Kit* kit, const float door_x[TERRACE_LOTS]) {
+void terrace_build(Kit* kit, const HousePlot far[TERRACE_LOTS]) {
     const float wall_back = TERRACE_WALL_Z - TERRACE_WALL_THICK;
     const float notch = FLIGHT_HALF + CHEEK_THICK;
     for (int lot = 0; lot < TERRACE_LOTS; lot++) {
@@ -105,16 +124,18 @@ void terrace_build(Kit* kit, const float door_x[TERRACE_LOTS]) {
         land_terrace_lot_span(lot, &x0, &x1);
         const float top = land_terrace_height(0.5f * (x0 + x1));
         // The flight stands square to its door, inside the lot.
-        const float sx = fminf(fmaxf(door_x[lot], x0 + notch + 0.3f), x1 - notch - 0.3f);
+        const float sx = fminf(fmaxf(far[lot].door[0], x0 + notch + 0.3f), x1 - notch - 0.3f);
         const float landing = stair(kit, sx, top);
 
         // The lot's ground round the notch: either side of it, and behind the flight.
         lot_ground(kit, x0, sx - notch, TERRACE_BACK_Z, wall_back, top);
         lot_ground(kit, sx + notch, x1, TERRACE_BACK_Z, wall_back, top);
         lot_ground(kit, sx - notch, sx + notch, TERRACE_BACK_Z, landing, top);
-        // The wall either side of the notch.
+        // The wall either side of the notch, and its rail.
         front_wall(kit, x0, sx - notch, top);
         front_wall(kit, sx + notch, x1, top);
+        guard_rail(kit, x0, sx - notch, top);
+        guard_rail(kit, sx + notch, x1, top);
         // The path from the flight's head to the door.
         kit_frame_box(kit, &KIT_WORLD, MAT_CONCRETE, sx - PATH_HALF, sx + PATH_HALF, top,
                       top + 0.02f, FAR_HOUSE_FRONT_Z, landing, false);

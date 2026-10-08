@@ -93,7 +93,14 @@ typedef enum {
     MAT_CELLAR_WET,      // standing water on it round the drain
     MAT_JOIST,           // the ground floor's framing seen from below
     // The town's edges (spec 13.35).
-    MAT_RETAINING, // poured concrete holding the far side's lots up, stained by the rain
+    MAT_RETAINING,   // poured concrete holding the far side's lots up, stained by the rain
+    MAT_FENCE_BOARD, // a privacy fence's boards, gone grey
+    MAT_PICKET,      // a picket fence's paint, white once
+    MAT_CINDER,      // cinder block
+    MAT_CHAINLINK,   // the mesh, a cutout drawn from both sides
+    MAT_GALVANISED,  // a chain-link fence's posts and rails
+    MAT_WOODS_FLOOR, // bare earth and twigs under the trees
+    MAT_CLIFF,       // broken rock
     MAT_COUNT
 } MatId;
 

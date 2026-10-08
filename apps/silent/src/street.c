@@ -122,16 +122,6 @@ static void car(Kit* kit, float x, float z) {
             0.0f, false);
 }
 
-// A picket-less fence along a yard's front: posts and two rails.
-static void fence(Kit* kit, float x0, float x1, float z) {
-    for (float x = x0; x <= x1 + 0.01f; x += 2.0f)
-        kit_box(kit, MAT_PORCH, (vec3){x, 0.5f, z}, (vec3){0.05f, 0.5f, 0.05f}, 0.0f, false);
-    const float mid = 0.5f * (x0 + x1), half = 0.5f * (x1 - x0);
-    kit_box(kit, MAT_PORCH, (vec3){mid, 0.75f, z}, (vec3){half, 0.04f, 0.02f}, 0.0f, false);
-    kit_box(kit, MAT_PORCH, (vec3){mid, 0.4f, z}, (vec3){half, 0.04f, 0.02f}, 0.0f, false);
-    kit_collider(kit, (vec3){mid, 0.5f, z}, (vec3){half, 0.5f, 0.06f}, 0.0f);
-}
-
 /*
  * The fog as boxes that together fill the world but stop at the two houses (spec 13.25): the
  * world's rectangle, cut into columns at each house's sides, a column holding a house split
@@ -192,7 +182,7 @@ static void fog(Scene* scene, bool night) {
 }
 
 void street_build(Kit* kit, Scene* scene, unsigned int seed, bool night, bool fogged,
-                  float far_doors[TERRACE_LOTS]) {
+                  StreetPlots* plots) {
     const float kerb = ROAD_HALF_WIDTH;
     const float walk = ROAD_HALF_WIDTH + SIDEWALK_WIDTH;
     ground_strip(kit, MAT_ASPHALT, -kerb, kerb, ROAD_Y);
@@ -214,22 +204,22 @@ void street_build(Kit* kit, Scene* scene, unsigned int seed, bool night, bool fo
     // The neighbours: this side of the street either side of us, fronts in
     // line with ours, and the far side facing back from its terrace's lots, one a lot.
     KitRng rng = {seed * 2246822519u + 3266489917u};
-    const float near_side[] = {-28.0f, -14.0f, 14.0f, 28.0f};
-    for (int i = 0; i < 4; i++) {
+    const float near_side[NEAR_HOUSES] = {-28.0f, -14.0f, 14.0f, 28.0f};
+    for (int i = 0; i < NEAR_HOUSES; i++) {
         const KitFrame f = {{near_side[i], 0.0f, HOUSE_FRONT_Z}, GLM_PIf};
-        house_neighbour(kit, &f, &rng, night, NULL);
+        house_neighbour(kit, &f, &rng, night, &plots->near[i]);
+        // A path from the sidewalk to the door, running on under its porch or up to its step.
+        const float* door = plots->near[i].door;
+        kit_box(kit, MAT_CONCRETE, (vec3){door[0], 0.01f, 0.5f * (walk + door[2])},
+                (vec3){0.55f, 0.01f, 0.5f * (door[2] - walk)}, 0.0f, false);
     }
     for (int i = 0; i < TERRACE_LOTS; i++) {
         // The house stands where it stood before the terrace, midway along a lot of the
         // spacing's width; the end lots run on to the street's ends past it.
         const float x = -STREET_HALF_LEN + 3.0f + TERRACE_LOT_WIDTH * ((float)i + 0.5f);
         const KitFrame f = {{x, land_terrace_height(x), FAR_HOUSE_FRONT_Z}, 0.0f};
-        vec3 door = {0.0f, 0.0f, 0.0f};
-        house_neighbour(kit, &f, &rng, night, door);
-        far_doors[i] = door[0];
+        house_neighbour(kit, &f, &rng, night, &plots->far[i]);
     }
-    fence(kit, -34.5f, -8.0f, walk + 1.6f);
-    fence(kit, 8.0f, 34.5f, walk + 1.6f);
 
     const int profile = street_lamp_profile(scene, night);
     // Four down our side and three down the far side, one of them dead.
