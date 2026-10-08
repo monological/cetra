@@ -34,8 +34,8 @@ set(CETRA_PUBLIC_HEADERS
     aabb.h anim_graph.h animation.h animator.h app.h camera.h common.h compat.h config_snapshot.h cook.h
     cscene.h decal.h engine.h exposure.h fire.h geometry.h gi_volume.h ibl.h ies.h
     camera_rig.h
-    ik.h import.h input.h light.h lod.h look_at.h material.h mesh.h mesh_builder.h nav_graph.h
-    noise.h
+    ik.h import.h input.h light.h loading_screen.h lod.h look_at.h material.h mesh.h
+    mesh_builder.h nav_graph.h noise.h
     particle_emitter.h particle_module.h particle_renderer.h particle_sim.h
     particle_system.h postfx.h probe.h probe_set.h program.h rain.h scene.h shader.h
     shader_hook.h shader_params.h shadow.h sky.h springbone.h text.h texture.h transform.h ui.h

@@ -66,6 +66,7 @@ struct Ubo;
 typedef struct AsyncLoader AsyncLoader;
 typedef struct TextRenderer TextRenderer;
 typedef struct LTCTables LTCTables;
+typedef struct LoadingScreen LoadingScreen;
 
 typedef void (*CursorPositionCallback)(struct Engine* engine, double xpos, double ypos);
 typedef void (*MouseButtonCallback)(struct Engine* engine, int button, int action, int mods);
@@ -479,6 +480,10 @@ typedef struct Engine {
     // frame with no overlay is the frame that existed before this hook did.
     void (*overlay)(struct Engine* engine, void* user);
     void* overlay_user;
+
+    // The loading screen (loading_screen.h): made when first shown, NULL until then.
+    LoadingScreen* loading_screen;
+    int loading_palette; // a LoadingPalette; its look
 
     // The run's settings. The path is owned (engine_set_screenshot_path); the
     // two counts are plain writes, and anything not above zero is off.
