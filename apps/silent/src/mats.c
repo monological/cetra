@@ -459,6 +459,15 @@ static const MatSpec SPECS[MAT_COUNT] = {
         {"cellar_wet", "concrete_pavement", {0.28f, 0.29f, 0.27f}, 0.12f, 0.0f, 1.8f},
     [MAT_JOIST] =
         {"joist", "old_wood_floor", {0.62f, 0.56f, 0.48f}, 1.0f, 0.0f, 1.5f, .grime = 0.6f},
+    // The cellar's own pour, out in the weather: paler, its layers the lifts it was cast in.
+    [MAT_RETAINING] = {"retaining_wall",
+                       "concrete_layers_02",
+                       {0.66f, 0.66f, 0.62f},
+                       1.0f,
+                       0.0f,
+                       2.4f,
+                       .grime = 0.5f,
+                       .rain = {true, 0.6f}},
 };
 
 static Texture* load(TexturePool* pool, const char* set, const char* map, TextureDesc desc) {

@@ -1,24 +1,22 @@
 #include <math.h>
-#include <stdlib.h>
 
 #include "hill.h"
 #include "layout.h"
 #include "mats.h"
 
 /*
- * The ground past the street's east end (spec 13.25): a hill that rises from the street's level
- * to the mansion's grounds at MANSION_Y, with the drive carved into it as it winds up.
+ * The hill past the street's east end (spec 13.25): it rises from the street's level to the
+ * mansion's grounds at MANSION_Y, with the drive carved into it as it winds up.
  *
- * Faceted, a flat normal a triangle, like everything else in silent, over a 2 m grid, from one
- * height function. The drive's surface is that function's own along the road, so the asphalt
- * ribbon laid on it and the ground under it agree, and so does the collider, built from the same
- * grid. Puddles stand on ground within 8 degrees of level, and the drive climbs at under that.
+ * This is the hill's HEIGHT and the drive; the ground drawn and collided over it is land.c's grid
+ * (spec 13.35), which reads hill_height as one of its terms. The drive's surface is that
+ * function's own along the road, so the asphalt ribbon laid on it and the ground under it agree.
+ * Puddles stand on ground within 8 degrees of level, and the drive climbs at under that.
  */
 
 // Where the hill starts: the street's own end, and where it is still at the street's level.
 #define HILL_X0    STREET_HALF_LEN
 #define HILL_FLAT  (STREET_HALF_LEN + 13.0f)
-#define HILL_STEP  2.0f
 #define HILL_REACH 60.0f // metres from the grounds over which the hill falls to the street
 #define HILL_NOISE 0.7f  // metres of lumps, none on the drive or the grounds
 
@@ -150,14 +148,21 @@ static float grounds_distance(float x, float z) {
     return sqrtf(dx * dx + dz * dz);
 }
 
+bool hill_on_grounds(float x, float z) {
+    return grounds_distance(x, z) <= 0.0f;
+}
+
+float hill_lumps(float x, float z) {
+    return value_noise(x * 0.08f, z * 0.08f) + 0.5f * value_noise(x * 0.2f, z * 0.2f);
+}
+
 float hill_height(float x, float z) {
     const float g = grounds_distance(x, z);
     if (g <= 0.0f)
         return MANSION_Y;
     const float rise = glm_smoothstep(HILL_X0, HILL_FLAT, x);
     float h = MANSION_Y * (1.0f - glm_smoothstep(0.0f, HILL_REACH, g)) * rise;
-    const float lumps = value_noise(x * 0.08f, z * 0.08f) + 0.5f * value_noise(x * 0.2f, z * 0.2f);
-    h += HILL_NOISE * lumps * rise * glm_smoothstep(0.0f, 6.0f, g);
+    h += HILL_NOISE * hill_lumps(x, z) * rise * glm_smoothstep(0.0f, 6.0f, g);
 
     float along = 0.0f;
     const float d = drive_distance(x, z, &along);
@@ -211,45 +216,8 @@ static void drive_ribbon(Kit* kit) {
 void hill_build(Kit* kit) {
     drive_sample(&g_drive);
 
-    const int cols = (int)ceilf((WORLD_X1 - HILL_X0) / HILL_STEP);
-    const int rows = (int)ceilf((WORLD_Z1 - WORLD_Z0) / HILL_STEP);
-    const int verts = (cols + 1) * (rows + 1);
-    float* pos = malloc(sizeof(float) * 3 * (size_t)verts);
-    unsigned int* idx = malloc(sizeof(unsigned int) * 6 * (size_t)cols * (size_t)rows);
-    if (!pos || !idx) {
-        free(pos);
-        free(idx);
-        return;
-    }
-    for (int j = 0; j <= rows; j++)
-        for (int i = 0; i <= cols; i++) {
-            float* p = &pos[3 * (j * (cols + 1) + i)];
-            p[0] = HILL_X0 + HILL_STEP * (float)i;
-            p[2] = WORLD_Z0 + HILL_STEP * (float)j;
-            p[1] = hill_height(p[0], p[2]);
-        }
-
-    // The ground drawn faceted, and the collider from the same grid -- less the grounds, whose
-    // flat would be one long run of coplanar triangles, so they stand on a box instead.
-    const vec3 up = {0.0f, 1.0f, 0.0f};
-    int n = 0;
-    for (int j = 0; j < rows; j++)
-        for (int i = 0; i < cols; i++) {
-            const unsigned int a = (unsigned int)(j * (cols + 1) + i), b = a + 1;
-            const unsigned int c = a + (unsigned int)(cols + 1), e = c + 1;
-            kit_tri_facing(kit, MAT_DIRT, &pos[3 * a], &pos[3 * c], &pos[3 * b], up);
-            kit_tri_facing(kit, MAT_DIRT, &pos[3 * b], &pos[3 * c], &pos[3 * e], up);
-            const float mx = pos[3 * a] + 0.5f * HILL_STEP, mz = pos[3 * a + 2] + 0.5f * HILL_STEP;
-            if (grounds_distance(mx, mz) <= 0.0f)
-                continue;
-            const unsigned int tri[6] = {a, c, b, b, c, e};
-            for (int k = 0; k < 6; k++)
-                idx[n++] = tri[k];
-        }
-    kit_mesh_collider(kit, pos, verts, idx, n);
-    free(pos);
-    free(idx);
-
+    // The grounds stand on a box: their flat would be one long run of coplanar triangles in the
+    // land's collider, which leaves them out.
     const vec3 centre = {0.5f * (GROUNDS_X0 + GROUNDS_X1), MANSION_Y - 0.5f,
                          0.5f * (GROUNDS_Z0 + GROUNDS_Z1)};
     const vec3 half = {0.5f * (GROUNDS_X1 - GROUNDS_X0), 0.5f, 0.5f * (GROUNDS_Z1 - GROUNDS_Z0)};

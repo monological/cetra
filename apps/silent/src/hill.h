@@ -1,15 +1,23 @@
 #ifndef _SILENT_HILL_H_
 #define _SILENT_HILL_H_
 
+#include <stdbool.h>
+
 #include "kit.h"
 
-// The ground past the street's east end, up to the mansion's grounds at MANSION_Y, and the drive
-// that climbs it (spec 13.25).
+// The drive that climbs past the street's east end to the mansion's grounds at MANSION_Y, and the
+// grounds' box (spec 13.25). Before land_build, which draws the ground under it from hill_height.
 void hill_build(Kit* kit);
 
-// The ground's height at (x, z) past the street's east end: what anything standing on the hill
-// stands on.
+// The hill's height at (x, z): 0 short of the street's east end, the mansion's grounds at its top,
+// the drive carved in. One term of land_height, which is what to stand anything on.
 float hill_height(float x, float z);
+
+// Whether (x, z) is on the mansion's grounds, which are flat and stand on a box.
+bool hill_on_grounds(float x, float z);
+
+// The hill's lumps at (x, z), about -1.5..1.5: two octaves of value noise, the same at any call.
+float hill_lumps(float x, float z);
 
 // How far (x, z) is from the drive's centre line, in plan.
 float hill_drive_distance(float x, float z);

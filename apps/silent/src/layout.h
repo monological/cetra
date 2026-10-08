@@ -173,6 +173,25 @@
 #define SIDEWALK_WIDTH  2.0f
 #define STREET_HALF_LEN 45.0f // along X; the fog ends it well before this
 
+// Our side's back fences (spec 13.35): the yards stop here, and past them the ground falls away
+// through the woods.
+#define BACK_FENCE_Z 34.0f
+
+/*
+ * The far side stands on a TERRACE (spec 13.35): six level lots, one a house, behind a concrete
+ * retaining wall along the back of the far sidewalk, each lot a step higher than the one east of
+ * it. Stairs go up through the wall to each front door. The houses stand further back than ours,
+ * since a flight up to the highest lot needs more than four metres.
+ */
+#define TERRACE_WALL_Z     (-(ROAD_HALF_WIDTH + SIDEWALK_WIDTH)) // the wall's street face
+#define TERRACE_WALL_THICK 0.4f
+#define TERRACE_LOTS       6
+#define TERRACE_LOT_WIDTH  14.0f // a lot's frontage, the far houses' spacing
+#define TERRACE_LOW        1.6f  // the east lot's height above the sidewalk
+#define TERRACE_HIGH       2.6f  // the west lot's
+#define TERRACE_BACK_Z     (-32.0f)
+#define FAR_HOUSE_FRONT_Z  (-13.0f) // the far houses' facades
+
 // Where the Gothic house stands (spec 13.25): past the street's east end and up the hill, its
 // front toward the drive that climbs to it. Everything above the street is in the house's OWN
 // coordinates, which the mansion's kit and mansion_at move here; the player's house stands at
@@ -187,10 +206,10 @@
 #define GROUNDS_Z0 (MANSION_Z - 4.0f)
 #define GROUNDS_Z1 (MANSION_Z + 28.0f)
 
-// The walkable world past the street's east end, where the drive climbs the hill to the mansion:
-// x from the street's end to WORLD_X1, z from the far side's yards to WORLD_Z1.
+// The walkable world: x from the street's west end to WORLD_X1, past the hill the drive climbs to
+// the mansion, and z from the woods behind the far side's lots (spec 13.35) to WORLD_Z1.
 #define WORLD_X1 150.0f
-#define WORLD_Z0 (-46.0f)
+#define WORLD_Z0 (-80.0f)
 #define WORLD_Z1 85.0f
 
 // A point of the house's plan, where the mansion puts it.

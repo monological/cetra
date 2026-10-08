@@ -92,6 +92,8 @@ typedef enum {
     MAT_CELLAR_FLOOR,    // the slab, stained and never sealed
     MAT_CELLAR_WET,      // standing water on it round the drain
     MAT_JOIST,           // the ground floor's framing seen from below
+    // The town's edges (spec 13.35).
+    MAT_RETAINING, // poured concrete holding the far side's lots up, stained by the rain
     MAT_COUNT
 } MatId;
 
