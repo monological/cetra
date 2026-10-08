@@ -25,11 +25,17 @@
 float house_gable_roof(Kit* kit, const KitFrame* f, float width, float depth, float eave_y,
                        float overhang, int mat_gable);
 
+// Where a neighbour stands in plan: the middle of its front door where it meets the ground, and
+// its walls' extent, the foundation included.
+typedef struct HousePlot {
+    vec3 door;
+    float x0, x1, z0, z1;
+} HousePlot;
+
 // A neighbour: foundation, clad body, roof, chimney, porch and door, and a
 // grid of windows, some lit. Solid and collidable; nobody goes in. The frame's
 // origin is the middle of the lot's front edge, on its ground. Its bare front eave and its porch
-// roof's edge drip. Where the middle of its front door meets the ground goes to `door_out`
-// unless that is NULL.
-void house_neighbour(Kit* kit, const KitFrame* f, KitRng* rng, bool night, vec3 door_out);
+// roof's edge drip. Where it stands goes to `plot` unless that is NULL.
+void house_neighbour(Kit* kit, const KitFrame* f, KitRng* rng, bool night, HousePlot* plot);
 
 #endif // _SILENT_HOUSES_H_

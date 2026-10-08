@@ -98,6 +98,7 @@ typedef struct MatSpec {
     float repeat_m;    // metres one repeat covers
     bool surface_only; // take the set's normal and roughness, keep the tint as the colour
     float grime;       // 0..1
+    float cutout; // the alpha below which the albedo map is a hole, drawn both sides; 0 = solid
     GlassSpec glass;
     GlowSpec glow;
     RainSpec rain;
@@ -459,15 +460,68 @@ static const MatSpec SPECS[MAT_COUNT] = {
         {"cellar_wet", "concrete_pavement", {0.28f, 0.29f, 0.27f}, 0.12f, 0.0f, 1.8f},
     [MAT_JOIST] =
         {"joist", "old_wood_floor", {0.62f, 0.56f, 0.48f}, 1.0f, 0.0f, 1.5f, .grime = 0.6f},
-    // The cellar's own pour, out in the weather: paler, its layers the lifts it was cast in.
+    /*
+     * The town's edges (spec 13.35). The retaining wall is poured against boards, which left
+     * their grain in it. Fences are never grimed: a fence is hundreds of boards, and the grid the
+     * dirt is cut into would multiply every one of them, where the scans carry their own dirt.
+     *
+     * The boards' and the blocks' scans are shot dark, about 0.06 linear, where weathered grey
+     * wood and cinder block are nearer 0.2: their tints lift them there, and cool the boards'
+     * brown toward silver. The concrete's 0.15 comes up to a wet pour's 0.22.
+     */
     [MAT_RETAINING] = {"retaining_wall",
-                       "concrete_layers_02",
-                       {0.66f, 0.66f, 0.62f},
+                       "wood_textured_concrete",
+                       {1.45f, 1.45f, 1.4f},
                        1.0f,
                        0.0f,
-                       2.4f,
+                       1.8f,
                        .grime = 0.5f,
                        .rain = {true, 0.6f}},
+    [MAT_FENCE_BOARD] = {"fence_boards",
+                         "weathered_planks",
+                         {2.7f, 3.0f, 3.4f},
+                         1.0f,
+                         0.0f,
+                         2.0f,
+                         .rain = {true, 0.6f}},
+    [MAT_PICKET] = {"picket",
+                    "concrete_wall_003",
+                    {0.74f, 0.75f, 0.70f},
+                    1.0f,
+                    0.0f,
+                    1.5f,
+                    .rain = {true, 0.3f}},
+    [MAT_CINDER] = {"cinder_block",
+                    "concrete_block_wall",
+                    {4.0f, 4.0f, 4.4f},
+                    1.0f,
+                    0.0f,
+                    2.0f,
+                    .rain = {true, 0.7f}},
+    // tools/make_chainlink.py's mesh: the repeat is the half metre it was drawn to.
+    [MAT_CHAINLINK] = {"chain_link",
+                       "chainlink",
+                       {1, 1, 1},
+                       1.0f,
+                       0.6f,
+                       0.5f,
+                       .cutout = 0.5f,
+                       .rain = {true, 0.0f}},
+    [MAT_GALVANISED] = {"galvanised",
+                        "rusty_metal_02",
+                        {0.62f, 0.64f, 0.62f},
+                        0.8f,
+                        0.6f,
+                        0.8f,
+                        .rain = {true, 0.0f}},
+    [MAT_WOODS_FLOOR] = {"woods_floor",
+                         "forest_ground_04",
+                         {0.8f, 0.8f, 0.8f},
+                         1.0f,
+                         0.0f,
+                         3.15f,
+                         .rain = {true, 0.9f}},
+    [MAT_CLIFF] = {"cliff", "cliff_side", {1, 1, 1}, 1.0f, 0.0f, 4.0f, .rain = {true, 0.5f}},
 };
 
 static Texture* load(TexturePool* pool, const char* set, const char* map, TextureDesc desc) {
@@ -493,11 +547,17 @@ void mats_register(Kit* kit, Engine* engine, Scene* scene) {
         m->roughness = s->roughness;
         m->metallic = s->metallic;
         material_set_program(m, pbr);
+        TextureDesc albedo_desc = texture_desc(true);
+        if (s->cutout > 0.0f) {
+            m->alpha_mode = ALPHA_MASK;
+            m->alphaCutoff = s->cutout;
+            m->doubleSided = true;
+            albedo_desc.coverage_cutoff = s->cutout;
+        }
         // The pool caches by path, so a set two materials share loads once.
         if (s->set) {
             if (!s->surface_only)
-                material_set_albedo_tex(
-                    m, load(scene->tex_pool, s->set, "albedo", texture_desc(true)));
+                material_set_albedo_tex(m, load(scene->tex_pool, s->set, "albedo", albedo_desc));
             material_set_normal_tex(m, load(scene->tex_pool, s->set, "normal", normal_desc));
             material_set_roughness_tex(m,
                                        load(scene->tex_pool, s->set, "rough", texture_desc(false)));

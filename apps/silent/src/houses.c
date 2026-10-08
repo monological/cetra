@@ -92,7 +92,7 @@ static void window(Kit* kit, const KitFrame* f, KitRng* rng, float a0, float a1,
     kit_frame_box(kit, f, MAT_TRIM, a0 - 0.12f, a1 + 0.12f, y0 - 0.1f, y0, 0.0f, 0.12f, false);
 }
 
-void house_neighbour(Kit* kit, const KitFrame* f, KitRng* rng, bool night, vec3 door_out) {
+void house_neighbour(Kit* kit, const KitFrame* f, KitRng* rng, bool night, HousePlot* plot) {
     // The frame arrives with its origin at the lot's front centre; the house
     // is measured from its own corner, so shift along the facade by half.
     const float w = kit_rrange(rng, 7.5f, 10.0f);
@@ -121,8 +121,16 @@ void house_neighbour(Kit* kit, const KitFrame* f, KitRng* rng, bool night, vec3 
 
     // The door, and a porch over it or a step up to it.
     const float door = kit_rrange(rng, 1.2f, w - 2.2f);
-    if (door_out)
-        kit_frame_point(&h, door + 0.475f, 0.0f, 0.0f, door_out);
+    if (plot) {
+        kit_frame_point(&h, door + 0.475f, 0.0f, 0.0f, plot->door);
+        vec3 c0 = {0.0f, 0.0f, 0.0f}, c1 = {0.0f, 0.0f, 0.0f};
+        kit_frame_point(&h, -0.06f, 0.0f, 0.06f, c0);
+        kit_frame_point(&h, w + 0.06f, 0.0f, -depth - 0.06f, c1);
+        plot->x0 = fminf(c0[0], c1[0]);
+        plot->x1 = fmaxf(c0[0], c1[0]);
+        plot->z0 = fminf(c0[2], c1[2]);
+        plot->z1 = fmaxf(c0[2], c1[2]);
+    }
     kit_frame_box(kit, &h, MAT_WOOD, door, door + 0.95f, FLOOR_RISE, FLOOR_RISE + 2.1f, 0.0f, 0.05f,
                   false);
     kit_frame_box(kit, &h, MAT_TRIM, door - 0.1f, door, FLOOR_RISE, FLOOR_RISE + 2.2f, 0.0f, 0.08f,

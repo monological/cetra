@@ -81,6 +81,14 @@ SOURCES = {
     # showing, and a slab stained by everything ever spilled on it.
     "concrete_layers_02": {},
     "garage_floor": {},
+    # The town's edges (spec 13.35): grey weathered boards for the yards' privacy fences, a
+    # cinder-block wall, board-formed concrete for the far side's retaining wall, bare earth
+    # and twigs for the woods' floor, and the chasm's broken rock.
+    "weathered_planks": {"saturation": 0.6},
+    "concrete_block_wall": {"saturation": 0.6},
+    "wood_textured_concrete": {"saturation": 0.4},
+    "forest_ground_04": {"saturation": 0.8},
+    "cliff_side": {"saturation": 0.6},
     # From ambientCG (https://ambientcg.com), also CC0: what Poly Haven has no
     # scan of -- brushed stainless, paper, a kitchen smear for the glass, and
     # the table's scratched enamel: a yellow paint with almost no rust, taken to
