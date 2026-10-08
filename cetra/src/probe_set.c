@@ -25,6 +25,7 @@ ReflectionProbeSet* create_reflection_probe_set(void) {
         return NULL;
     }
     residency_init(&set->residency, PROBE_SET_MAX, PROBE_STREAM_MARGIN);
+    set->capturing = -1;
     return set;
 }
 
@@ -61,6 +62,9 @@ void probe_set_mark_dirty(ReflectionProbeSet* set) {
     set->ready = false;
     set->failed = false;
     residency_forget(&set->residency, true);
+    if (set->capturing >= 0)
+        set->probes[set->capturing]->faces_captured = 0;
+    set->capturing = -1;
 }
 
 // A probe's proxy box.
@@ -69,6 +73,23 @@ static AABB probe_box(const ReflectionProbe* probe) {
     glm_vec3_copy((float*)probe->box_min, box.min);
     glm_vec3_copy((float*)probe->box_max, box.max);
     return box;
+}
+
+bool probe_set_ready_in(const ReflectionProbeSet* set, const AABB* box) {
+    if (!set || set->failed)
+        return true;
+    for (size_t i = 0; i < set->residency.count; ++i) {
+        const AABB probe = probe_box(set->probes[i]);
+        if (!aabb_overlaps(&probe, box))
+            continue;
+        // A world of one probe publishes through `ready`, holding no column.
+        const bool loaded = set->residency.count == 1
+                                ? set->ready
+                                : set->residency.items[i].state == RESIDENCY_LOADED;
+        if (!loaded)
+            return false;
+    }
+    return true;
 }
 
 // The column an item's texels take: its slot's, or for one holding none, a rectangle of the
@@ -86,20 +107,28 @@ static bool capture_ready(const ReflectionProbe* probe, const struct Engine* eng
 }
 
 // A world of one probe: captured once into its own cube, bound on the prefilter unit, no
-// atlas -- the path that predates sets, kept verbatim.
-static void update_single(ReflectionProbeSet* set, struct Engine* engine, struct Scene* scene) {
-    if (set->ready || !capture_ready(set->probes[0], engine, scene))
+// atlas -- the path that predates sets, a face a unit of the frame's capture budget like theirs.
+static void update_single(ReflectionProbeSet* set, struct Engine* engine, struct Scene* scene,
+                          CaptureBudget* budget) {
+    ReflectionProbe* probe = set->probes[0];
+    if (set->ready || (probe->faces_captured == 0 && !capture_ready(probe, engine, scene)) ||
+        !capture_budget_allows(budget))
         return;
-    set->captures_total++;
+    if (probe->faces_captured == 0)
+        set->captures_total++;
     profiler_scope_begin(engine->profiler, "probe capture");
-    const int failed = reflection_probe_capture(set->probes[0], engine, scene);
+    int whole = 0;
+    do {
+        whole = reflection_probe_capture_faces(probe, engine, scene, capture_budget_faces(budget));
+        capture_budget_spend(budget);
+    } while (whole == 0 && capture_budget_allows(budget));
     profiler_scope_end(engine->profiler);
-    if (failed) {
+    if (whole < 0) {
         log_error("Reflection probe 0 failed to capture");
         set->failed = true;
         return;
     }
-    set->ready = true;
+    set->ready = whole == 1;
 }
 
 // What a loaded probe leaving residency keeps: its column, read out before it changes hands.
@@ -143,16 +172,10 @@ static int next_capture(const ReflectionProbeSet* set, const struct Engine* engi
     return best;
 }
 
-// Capture one probe into its column and drop the cubes it was made from.
-static bool capture_into_column(ReflectionProbeSet* set, LightingAtlas* atlas, int i,
-                                struct Engine* engine, struct Scene* scene) {
+// A whole capture into its probe's column, and the cubes it was made from dropped.
+static bool finish_column(ReflectionProbeSet* set, LightingAtlas* atlas, int i) {
     ReflectionProbe* probe = set->probes[i];
     ResidencyItem* item = &set->residency.items[i];
-    set->captures_total++;
-    if (reflection_probe_capture(probe, engine, scene) != 0) {
-        log_error("Reflection probe %d failed to capture; the set stops capturing", i);
-        return false;
-    }
     if (!lighting_atlas_project_probe(atlas, probe, item->slot))
         return false;
     // The cubes are what make a set affordable to keep: past this point the column holds
@@ -160,6 +183,20 @@ static bool capture_into_column(ReflectionProbeSet* set, LightingAtlas* atlas, i
     probe_release_capture_scratch(probe);
     residency_loaded(item);
     return true;
+}
+
+// The probe whose capture is under way, or -1. One that has lost its column since starts again
+// from its first face when it next holds one.
+static int capture_under_way(ReflectionProbeSet* set) {
+    const int i = set->capturing;
+    if (i < 0)
+        return -1;
+    const ResidencyItem* item = &set->residency.items[i];
+    if (item->slot >= 0 && item->state == RESIDENCY_CAPTURE)
+        return i;
+    set->probes[i]->faces_captured = 0;
+    set->capturing = -1;
+    return -1;
 }
 
 static bool resident_waiting(const ReflectionProbeSet* set) {
@@ -171,12 +208,13 @@ static bool resident_waiting(const ReflectionProbeSet* set) {
     return false;
 }
 
-void probe_set_update(ReflectionProbeSet* set, struct Engine* engine, struct Scene* scene) {
+void probe_set_update(ReflectionProbeSet* set, struct Engine* engine, struct Scene* scene,
+                      CaptureBudget* budget) {
     if (!set || set->failed || set->residency.count == 0 || !engine || !scene)
         return;
 
     if (set->residency.count == 1) {
-        update_single(set, engine, scene);
+        update_single(set, engine, scene, budget);
         return;
     }
 
@@ -198,22 +236,35 @@ void probe_set_update(ReflectionProbeSet* set, struct Engine* engine, struct Sce
         residency_loaded(item);
     }
 
-    // At load every resident probe that is ready captures in the one frame, so a set is whole
-    // from its first frame; a probe that comes into range later captures alone, a frame's
-    // worth of six scene renders and a prefilter.
+    // A face at a time while the frame's capture budget allows (spec 13.32): one probe is six
+    // large shaded faces and a prefilter, several hundred milliseconds, so a probe's capture may
+    // span frames. The one begun is finished before another starts, nearest first.
     // Timed only on a frame that captures, for the GI scope's reason.
-    const bool all = set->captures_total == 0;
     bool timing = false;
-    for (int i = next_capture(set, engine, scene); i >= 0;
-         i = all ? next_capture(set, engine, scene) : -1) {
+    while (capture_budget_allows(budget)) {
+        int i = capture_under_way(set);
+        if (i < 0)
+            i = next_capture(set, engine, scene);
+        if (i < 0)
+            break;
         if (!timing) {
             profiler_scope_begin(engine->profiler, "probe capture");
             timing = true;
         }
-        if (!capture_into_column(set, atlas, i, engine, scene)) {
+        if (set->capturing != i) {
+            set->capturing = i;
+            set->captures_total++;
+        }
+        const int whole = reflection_probe_capture_faces(set->probes[i], engine, scene,
+                                                         capture_budget_faces(budget));
+        capture_budget_spend(budget);
+        if (whole < 0 || (whole == 1 && !finish_column(set, atlas, i))) {
+            log_error("Reflection probe %d failed to capture; the set stops capturing", i);
             set->failed = true;
             break;
         }
+        if (whole == 1)
+            set->capturing = -1;
     }
     if (timing)
         profiler_scope_end(engine->profiler);

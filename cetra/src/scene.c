@@ -19,6 +19,7 @@
 #include "lighting_atlas.h"
 #include "probe.h"
 #include "probe_set.h"
+#include "render.h"
 #include "water.h"
 #include "fire.h"
 #include "rain.h"
@@ -660,8 +661,10 @@ void scene_update_lighting(Scene* scene, struct Engine* engine) {
     if (!scene || !engine)
         return;
     shadow_tiles_update(scene->shadow_system, engine, scene);
-    gi_world_update(scene->gi, engine, scene);
-    probe_set_update(scene->probe_set, engine, scene);
+    // One allowance for every capture the frame takes, the GI's and the probes' (spec 13.32).
+    CaptureBudget budget = capture_budget_open(engine);
+    gi_world_update(scene->gi, engine, scene, &budget);
+    probe_set_update(scene->probe_set, engine, scene, &budget);
 }
 
 void scene_environment_changed(Scene* scene, struct Engine* engine) {

@@ -48,6 +48,25 @@ void free_reflection_probe(ReflectionProbe* probe) {
 // and restored so the frame the capture runs in draws as it would have
 // without it.
 int reflection_probe_capture(ReflectionProbe* probe, struct Engine* engine, Scene* scene) {
+    // Textures may still be streaming in from the async loader; a capture
+    // taken now would bake placeholder materials into the cubemap forever.
+    // Sleep between drains — process_pending returns immediately while the
+    // workers are still decoding.
+    if (probe && !probe->environment_only && engine && engine->async_loader && scene) {
+        while (async_loader_is_busy(engine->async_loader)) {
+            if (async_loader_process_pending(engine->async_loader, scene->tex_pool, 64) == 0) {
+                cetra_sleep_ms(1);
+            }
+        }
+    }
+    // Whole, from the first face, whatever a capture taken by faces had drawn.
+    if (probe)
+        probe->faces_captured = 0;
+    return reflection_probe_capture_faces(probe, engine, scene, 6) == 1 ? 0 : -1;
+}
+
+int reflection_probe_capture_faces(ReflectionProbe* probe, struct Engine* engine, Scene* scene,
+                                   int faces) {
     if (!probe || !engine || !scene || !engine->camera) {
         log_error("Invalid state for probe capture");
         return -1;
@@ -81,43 +100,41 @@ int reflection_probe_capture(ReflectionProbe* probe, struct Engine* engine, Scen
 
         log_info("Reflection probe grounded the environment at (%.2f, %.2f, %.2f)",
                  probe->position[0], probe->position[1], probe->position[2]);
-        return 0;
-    }
-
-    // Textures may still be streaming in from the async loader; a capture
-    // taken now would bake placeholder materials into the cubemap forever.
-    // Sleep between drains — process_pending returns immediately while the
-    // workers are still decoding.
-    if (engine->async_loader) {
-        while (async_loader_is_busy(engine->async_loader)) {
-            if (async_loader_process_pending(engine->async_loader, scene->tex_pool, 64) == 0) {
-                cetra_sleep_ms(1);
-            }
-        }
+        return 1;
     }
 
     SceneCaptureState saved_capture;
     // RADIANCE: this cubemap is what a mirror sees, so an emissive surface that
-    // is also a derived panel must still appear in it (render.h).
+    // is also a derived panel must still appear in it (render.h). A burst for these faces
+    // alone: the frame's own shadow pass, between two calls, overwrites the maps it bakes.
     scene_capture_begin(engine, scene, SCENE_CAPTURE_RADIANCE, &saved_capture);
 
-    if (probe->cubemap)
-        glDeleteTextures(1, &probe->cubemap);
-    ibl_create_cubemap_texture(&probe->cubemap, PROBE_CUBEMAP_SIZE, true);
+    if (probe->faces_captured == 0) {
+        if (probe->cubemap)
+            glDeleteTextures(1, &probe->cubemap);
+        ibl_create_cubemap_texture(&probe->cubemap, PROBE_CUBEMAP_SIZE, true);
+    }
 
     // Supersampled 2x: the capture has no MSAA, and single-sample grazing-angle
     // aliasing at its horizon bakes in as stripe moire that mirror reflections
     // then magnify into banded streaks.
+    const int first = probe->faces_captured;
+    const int count = faces < 6 - first ? faces : 6 - first;
     scene_capture_faces(engine, scene, ibl, probe->position, probe->cubemap, 0, PROBE_CUBEMAP_SIZE,
-                        probe->near_clip, probe->far_clip, SCENE_FACES_SHADED);
+                        probe->near_clip, probe->far_clip, SCENE_FACES_SHADED, first, count);
+    probe->faces_captured += count;
 
-    glBindTexture(GL_TEXTURE_CUBE_MAP, probe->cubemap);
-    glGenerateMipmap(GL_TEXTURE_CUBE_MAP);
+    const bool whole = probe->faces_captured >= 6;
+    if (whole) {
+        glBindTexture(GL_TEXTURE_CUBE_MAP, probe->cubemap);
+        glGenerateMipmap(GL_TEXTURE_CUBE_MAP);
 
-    // No medium: the capture is the scene round the probe, metres away, not the distant sky
-    // the fog stands in front of.
-    ibl_prefilter_cubemap(ibl, ibl->prefilter_program, probe->cubemap, &probe->prefiltered,
-                          PROBE_PREFILTER_SIZE, PROBE_PREFILTER_MIP_LEVELS, false);
+        // No medium: the capture is the scene round the probe, metres away, not the distant
+        // sky the fog stands in front of.
+        ibl_prefilter_cubemap(ibl, ibl->prefilter_program, probe->cubemap, &probe->prefiltered,
+                              PROBE_PREFILTER_SIZE, PROBE_PREFILTER_MIP_LEVELS, false);
+        probe->faces_captured = 0;
+    }
 
     scene_capture_end(engine, scene, &saved_capture);
 
@@ -126,10 +143,10 @@ int reflection_probe_capture(ReflectionProbe* probe, struct Engine* engine, Scen
     glBindTexture(GL_TEXTURE_2D, 0);
     glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
 
-    log_info("Reflection probe captured at (%.2f, %.2f, %.2f)", probe->position[0],
-             probe->position[1], probe->position[2]);
-
-    return 0;
+    if (whole)
+        log_info("Reflection probe captured at (%.2f, %.2f, %.2f)", probe->position[0],
+                 probe->position[1], probe->position[2]);
+    return whole ? 1 : 0;
 }
 
 // Bind the probe for PBR consumption. The fragment stage is already at the

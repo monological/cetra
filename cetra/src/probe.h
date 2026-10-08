@@ -55,6 +55,10 @@ typedef struct ReflectionProbe {
 
     bool enabled; // runtime consumption toggle
     bool debug_background;
+
+    // ENGINE-OWNED: how many of the scene capture's six faces are drawn, while a capture taken a
+    // few faces at a time (reflection_probe_capture_faces) is under way; 0 otherwise.
+    int faces_captured;
 } ReflectionProbe;
 
 // A probe is consumable once its prefiltered chain exists and it is switched on.
@@ -69,6 +73,14 @@ void free_reflection_probe(ReflectionProbe* probe);
 // A scene capture renders into probe->cubemap, supersampled 2x, with the async
 // texture loader drained first. Requires precomputed IBL.
 int reflection_probe_capture(ReflectionProbe* probe, struct Engine* engine, struct Scene* scene);
+
+// The same capture a few faces at a time (spec 13.32): up to `faces` more of the six, in a burst
+// of their own, and on the last the mips and the prefilter. 1 when the probe is whole, 0 while
+// faces remain, -1 on failure; an environment-only probe is whole at once. The loader is not
+// drained: the caller asks scene_capture_ready first. The faces of one capture may be drawn on
+// different frames, so a light that changes between them can differ from face to face.
+int reflection_probe_capture_faces(ReflectionProbe* probe, struct Engine* engine,
+                                   struct Scene* scene, int faces);
 
 // Drop the raw scene capture AND the prefiltered chain. For a probe whose radiance has been
 // resampled into the atlas both are spent: the capture is ~50 MB at PROBE_CUBEMAP_SIZE and the

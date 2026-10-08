@@ -37,6 +37,7 @@ struct Engine;
 struct Scene;
 struct PostFX;
 struct LightingAtlas;
+struct CaptureBudget;
 
 typedef struct ReflectionProbeSet {
     ReflectionProbe** probes; // owned; probe_set_add. One per residency item, in its order
@@ -57,6 +58,8 @@ typedef struct ReflectionProbeSet {
     // Captures attempted across the set's life. The converge-then-idle claim
     // is only worth making if it is checkable from outside the process.
     int captures_total;
+    // The probe whose capture is under way, taken a face at a time, or -1 (spec 13.32).
+    int capturing;
 
     uint32_t mask_digest; // FNV-1a over the froxel masks, for determinism arms
     int mask_bits;        // froxel/probe pairs the last build marked
@@ -91,12 +94,18 @@ void free_reflection_probe_set(ReflectionProbeSet* set);
 // Takes ownership. False (and the probe freed) on NULL or out of memory.
 bool probe_set_add(ReflectionProbeSet* set, ReflectionProbe* probe);
 
+// Every probe whose box touches `box` is captured and published, so what is seen inside it
+// reflects its rooms rather than the environment (spec 13.32). True with none touching it, and on
+// a set that failed, which publishes nothing it could wait for.
+bool probe_set_ready_in(const ReflectionProbeSet* set, const AABB* box);
+
 /*
  * Decide which probes hold columns, from the camera -- a loaded probe that leaves keeps its column
  * on the CPU, read out of the atlas before the column changes hands -- then put back the columns
- * of those that came back, and capture those never captured: every resident one in the frame of
- * the first capture, one a frame after it. Each capture is projected into its column and the
- * cubes freed. A no-op on a failed set; a world of one probe needs no column, and only captures.
+ * of those that came back, and capture those never captured, a face at a time while the frame's
+ * capture budget allows, nearest first, finishing one before starting another. Each capture is
+ * projected into its column and the cubes freed. A no-op on a failed set; a world of one probe
+ * needs no column, and only captures.
  *
  * A probe captures only once scene_capture_ready says a RADIANCE capture of its box may be kept.
  * That wait is the point of capturing here rather than where the set is built. The columns are
@@ -106,7 +115,8 @@ bool probe_set_add(ReflectionProbeSet* set, ReflectionProbe* probe);
  * installed uncaptured and is inert until this has run; a headless run sees it
  * from the frame the volume converges in, its first frame without one.
  */
-void probe_set_update(ReflectionProbeSet* set, struct Engine* engine, struct Scene* scene);
+void probe_set_update(ReflectionProbeSet* set, struct Engine* engine, struct Scene* scene,
+                      struct CaptureBudget* budget);
 
 // Re-arm the whole set for re-capture: every kept column dropped, resident probes captured
 // again one a frame. The seam relight will need; nothing calls it yet, and a scene-captured

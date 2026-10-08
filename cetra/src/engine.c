@@ -177,6 +177,7 @@ static Engine* _engine_alloc(const EngineConfig* cfg) {
     engine->win_height = cfg->height > 0 ? cfg->height : 720;
     engine->headless = cfg->headless;
     engine->headless_jitter = cfg->headless_jitter;
+    engine->capture_budget_ms = cfg->headless ? 0.0f : ENGINE_CAPTURE_BUDGET_MS;
     engine->fb_width = 0;
     engine->fb_height = 0;
     engine->vsync = !cfg->no_vsync;

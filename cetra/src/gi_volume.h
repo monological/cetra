@@ -52,6 +52,7 @@ struct Engine;
 struct Scene;
 struct LightingAtlas;
 struct LightingAtlasLayout;
+struct CaptureBudget;
 
 typedef struct GIVolume {
     // SETTINGS: plain stores.
@@ -90,12 +91,10 @@ typedef struct GIVolume {
     ShaderProgram* project_program;
 
     // Convergence. `dirty_count` probes remain to capture, taken from `next_probe` round-robin.
-    // The OPENING sweep, into a slot nothing was captured in, runs in one frame at load and at
-    // the world's `stream_rate` when begun later (`streamed`); a re-convergence over texels
-    // already there is paced by the world's `rate`.
+    // The OPENING sweep, into a slot nothing was captured in, is paced by the frame's capture
+    // budget alone; a re-convergence over texels already there by the world's `rate` as well.
     int next_probe;
     int dirty_count;
-    bool streamed;
 
     // Every probe capture this volume has ever run. The converge-then-idle
     // claim is only worth making if it is checkable, and this is the check: it
@@ -112,16 +111,12 @@ typedef struct GIWorld {
     // SETTINGS: plain stores.
     bool enabled;     // false = no volume is captured or sampled
     int rate;         // probes a frame, across the world, while swept volumes re-converge; 0 = all
-    int stream_rate;  // probes a frame, across the world, in opening sweeps begun after load; 0 =
-                      // all
     bool debug_atlas; // draw the lighting atlas over the composited frame
 
     // ENGINE-OWNED: read, never write.
     GIVolume** volumes; // owned; scene_add_gi_volume. One per residency item, in its order
     size_t volume_capacity;
     Residency residency; // which volumes hold the atlas's GI slots, and their texels' state
-    // Some volume has swept. Before it, every opening sweep is the load's and runs in one frame.
-    bool opened;
 } GIWorld;
 
 // `nx * ny * nz` probes over the box. A grid fixed at creation, so no volume exists unfitted.
@@ -142,11 +137,13 @@ void free_gi_world(GIWorld* world);
 bool gi_world_add(GIWorld* world, GIVolume* gi);
 
 // Decide which volumes are resident, from the camera, then grow the scene's lighting atlas to
-// hold them, put back the kept tiles of those that returned, and capture up to the world's rate
-// of probes in each one still dirty whose capture may be taken now (scene_capture_ready). Once
-// a frame, before anything else captures, so every pass of the frame agrees on the residency.
-// Must run BEFORE the frame's scene pass: it renders the scene internally.
-void gi_world_update(GIWorld* world, struct Engine* engine, struct Scene* scene);
+// hold them, put back the kept tiles of those that returned, and capture probes in each one
+// still dirty whose capture may be taken now (scene_capture_ready), nearest volume first, while
+// the frame's capture budget allows. Once a frame, before anything else captures, so every pass
+// of the frame agrees on the residency. Must run BEFORE the frame's scene pass: it renders the
+// scene internally.
+void gi_world_update(GIWorld* world, struct Engine* engine, struct Scene* scene,
+                     struct CaptureBudget* budget);
 
 // The atlas slots the world needs: one per volume that can be resident at once, each as large as
 // the largest volume in the world.
