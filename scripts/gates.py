@@ -29655,9 +29655,9 @@ def run_lighting_stream_gate(workdir):
                          and the GI volume photographed: their digests match the room without them
       stream-reach       a volume a kilometre off lights room 0 not at all: the frame is the one
                          with no volume, but for the atlas's other size (spec 13.25)
-      stream-paced       captures under a capture budget spread over hundreds of frames, and
-                         land on the lighting taken all at once: equal digests, the same frame
-                         (spec 13.32)
+      stream-paced       captures under a capture budget spread over hundreds of frames, the
+                         probes taking theirs while the volumes still sweep, and land on the
+                         lighting taken all at once: equal digests, the same frame (spec 13.32)
       stream-paced-walk  the walk, paced, leaves room 0 with a probe half captured: it is
                          dropped without a column, and what is resident at the end is the
                          unbudgeted walk's, digests and all
@@ -29932,12 +29932,20 @@ def run_lighting_stream_gate(workdir):
         same = bool(prows.get(end)) and held(prows[end]) == held(wrows.get(end, {}))
         early = LSTREAM_PACED_EVERY
         spread = settled(wrows.get(early, {})) and not settled(prows.get(early, {}))
+        # Each kind takes a unit a frame, so the probes are not held behind the GI: the first
+        # probe lands while volumes are still sweeping.
+        landed = next((f for f in sorted(prows)
+                       if any(r.get("state") == "loaded" for r in prows[f]["probe"].values())),
+                      None)
+        beside = landed is not None and any(
+            r.get("state") in ("sweeping", "unswept") for r in prows[landed]["gi"].values())
         frac, peak = _origin_diff(paced[end], whole[end])
-        ok = same and spread and settled(prows.get(end, {})) and frac == 0
+        ok = same and spread and beside and settled(prows.get(end, {})) and frac == 0
         print(f"  stream-paced {'PASS' if ok else 'FAIL'}  a {LSTREAM_PACED_BUDGET_MS} ms capture "
               f"budget against none: still capturing at frame {early}: {spread} (the unbudgeted "
-              f"run is done); at frame {end} every volume and probe digest equal: {same}, the "
-              f"frame {frac:.3%} apart, peak {peak} (want 0)")
+              f"run is done); the first probe landed at frame {landed} with volumes still "
+              f"sweeping: {beside}; at frame {end} every volume and probe digest equal: {same}, "
+              f"the frame {frac:.3%} apart, peak {peak} (want 0)")
         if not ok:
             failures.append("stream-paced")
         # The first frame a probe stands half captured, which the walk leaves room 0 just after.
