@@ -1,0 +1,59 @@
+{
+ "version": 1,
+ "_comment": [
+  "The cached-shadow rounding instrument (spec 13.31): a wall squarely facing a cached",
+  "light with no body, half a metre off it, 50 m out along x and z. Render with",
+  "--no-recenter; nothing stands between the light and the wall.",
+  "",
+  "Regenerate with: python3 assets/generators/gen_tile_rounding_fixture.py"
+ ],
+ "models": [
+  {
+   "path": "../models/tile_rounding_fixture.gltf"
+  }
+ ],
+ "environment": {
+  "ambient": [
+   0.0,
+   0.0,
+   0.0
+  ]
+ },
+ "lights": [
+  {
+   "name": "lamp",
+   "type": "point",
+   "position": [
+    50.0,
+    1.0,
+    50.49
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.5,
+   "range": 6.0,
+   "cast_shadows": true,
+   "shadow_cache": true,
+   "shadow_near": 0.05
+  }
+ ],
+ "camera": {
+  "eye": [
+   50.0,
+   1.0,
+   52.0
+  ],
+  "target": [
+   50.0,
+   1.0,
+   50.0
+  ],
+  "fov": 30
+ },
+ "post": {
+  "exposure": 1.0
+ }
+}

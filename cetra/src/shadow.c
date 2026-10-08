@@ -1549,8 +1549,11 @@ static bool tile_block_whole(const ShadowTileBlock* block) {
 }
 
 // Whether a block's views have drifted past the tolerance from where the light's body would
-// place them now -- the light moved, or its body turned or stretched.
+// place them now -- the light moved, or its body turned or stretched. A light that follows has
+// none: the two points come from the same arithmetic on the same inputs, so a light that has not
+// moved is exactly where it was drawn.
 static bool tile_views_drifted(const ShadowSystem* ss, const ShadowTileBlock* block) {
+    const float tolerance = block->light->shadow_follow ? 0.0f : ss->tile_tolerance;
     vec3 centre = GLM_VEC3_ZERO_INIT, segment = GLM_VEC3_ZERO_INIT;
     float radius = 0.0f;
     tile_body_now(block->light, centre, segment, &radius);
@@ -1558,7 +1561,7 @@ static bool tile_views_drifted(const ShadowSystem* ss, const ShadowTileBlock* bl
         vec3 drawn = GLM_VEC3_ZERO_INIT, now = GLM_VEC3_ZERO_INIT;
         tile_view_origin(block, v, drawn);
         tile_body_point(centre, segment, radius, v, block->views, now);
-        if (glm_vec3_distance(drawn, now) > ss->tile_tolerance)
+        if (glm_vec3_distance(drawn, now) > tolerance)
             return true;
     }
     return false;
@@ -2128,6 +2131,17 @@ static void tile_camera_view(const Engine* engine, Frustum* view) {
     frustum_extract_from_vp(view_proj, view);
 }
 
+// Whether none of a block's faces show the light as it is now, so all are drawn again from where
+// it stands: the region lost its contents, the light's planes or its view count changed, or its
+// views drifted.
+static bool tile_block_stale(const ShadowSystem* ss, const ShadowTileBlock* block) {
+    float near_p, far_p;
+    tile_planes(block->light, &near_p, &far_p);
+    return ss->tile_refresh || block->generation != ss->tile_generation ||
+           block->near_plane != near_p || block->far_plane != far_p ||
+           block->views != tile_views_for(ss, block->light) || tile_views_drifted(ss, block);
+}
+
 // The faces of a block render_shadow_movers draws this frame: those that see a mover, but a face
 // out of the camera's view keeps the copy it has, which nothing on screen reads -- unless it
 // holds nothing yet, or inside a capture, which keeps what it sees.
@@ -2194,7 +2208,9 @@ static int tile_store_take(ShadowSystem* ss, const uint64_t* drawn, uint64_t* fr
 // keep them in (spec 13.26), nearest light first. A face keeps the cell it holds while it is not
 // drawn that way, so a mover coming back finds the copy still there, until a face that is drawn
 // needs the cell. A face left without one is drawn whole, which is said once each time the pool
-// runs out. Before the region is laid out, so the pool is in the array the frame it opens.
+// runs out. A block drawn again from where its light stands this frame takes none and keeps none:
+// its copy would be drawn and thrown away in the same pass. Before the region is laid out, so the
+// pool is in the array the frame it opens.
 static void tiles_take_stores(ShadowSystem* ss, const Engine* engine) {
     int usable = ss->tile_store_cells < SHADOW_TILE_STORE_CELLS ? ss->tile_store_cells
                                                                 : SHADOW_TILE_STORE_CELLS;
@@ -2206,14 +2222,15 @@ static void tiles_take_stores(ShadowSystem* ss, const Engine* engine) {
     uint64_t drawn[SHADOW_TILE_MAX_BLOCKS];
     for (int b = 0; b < ss->tile_block_count; ++b) {
         ShadowTileBlock* block = &ss->tile_blocks[b];
-        drawn[b] = tile_mover_faces_drawn(ss, engine, &view, block);
+        const bool stale = block->light && tile_block_stale(ss, block);
+        drawn[b] = stale ? 0 : tile_mover_faces_drawn(ss, engine, &view, block);
         // What each face holds: kept if it is a cell of the pool as large as it now is, under a
         // view the block still has, and no other face's.
         for (int f = 0; f < 6 * SHADOW_TILE_VIEWS; ++f) {
             const int cell = block->store_cell[f];
             if (cell < 0)
                 continue;
-            if (!block->light || f >= 6 * block->views || !tile_face_in(free_cells, cell))
+            if (!block->light || stale || f >= 6 * block->views || !tile_face_in(free_cells, cell))
                 tile_store_release(block, f);
             else
                 free_cells &= ~(1ull << cell);
@@ -2316,12 +2333,7 @@ static void render_shadow_tiles(ShadowSystem* ss, const Engine* engine, const Sc
         ShadowTileBlock* block = &ss->tile_blocks[b];
         if (!block->light)
             continue;
-        float near_p, far_p;
-        tile_planes(block->light, &near_p, &far_p);
-        if (ss->tile_refresh || block->light->shadow_refresh ||
-            block->generation != ss->tile_generation || block->near_plane != near_p ||
-            block->far_plane != far_p || block->views != tile_views_for(ss, block->light) ||
-            tile_views_drifted(ss, block)) {
+        if (tile_block_stale(ss, block)) {
             block->valid = 0;
             block->stored = 0;
         }

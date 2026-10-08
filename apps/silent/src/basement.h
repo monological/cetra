@@ -36,7 +36,7 @@
 typedef struct Basement {
     SceneNode* bulb; // the cord, the socket and the glass, turned about the rose
     Material* glass; // its own, driven with the light
-    Light* light;    // cached, and redrawn each frame while the swing is wide
+    Light* light;    // cached, its shadow following it while the swing is wide
     double drafted;  // when the door first opened, or -1 before
     unsigned int seed;
 

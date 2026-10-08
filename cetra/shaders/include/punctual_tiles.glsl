@@ -18,14 +18,20 @@
 // How edge-on to the light a receiver may lie before the jitter's carry onto its plane stops
 // growing: the cosine the carry divides by, so the carry stretches at most four times.
 #define TILE_CARRY_FLOOR 0.25
-// How far apart, in roundings of a float this far from the origin (|p| * 2^-23 each), a
-// receiver's position and the stored depth of that same surface may land: once in the surface
-// pass that hands the receiver its position, once in the face that drew it. Near the light that
-// is more depth than the plane bias's floor allows: 19 m from the origin and half a metre from a
-// light whose near plane is 5 cm, one rounding is seven ULPs of the map, so a receiver squarely
-// facing the light -- one depth across the whole face -- kept or lost its own shadow all at once
-// as the light moved.
+// How far a surface's stored depth and its own lookup may disagree, in roundings of a float as
+// far from the origin as the two are (|p| * 2^-23 each). A face is DRAWN through a matrix that
+// carries the light's world position, so its depths are rounded at that size; it is READ by
+// projecting worldPos - centre, which is exact for nearby points. The per-frame lookup reads
+// through the matrix it drew with and its two roundings largely cancel, which is why this
+// allowance is the tiles' alone and not the plane bias's floor. It matters near the light: 19 m
+// from the origin and half a metre from a light whose near plane is 5 cm, one rounding is seven
+// ULPs of the map against a floor of four, and a surface squarely facing the light -- one depth
+// across the whole face -- kept or lost its own shadow all at once as the light moved. Eight is
+// from that measurement, not derived: the flicker stopped at a floor of 64 ULPs, about nine
+// roundings there. Drawing the faces with the light's origin taken off before the rotation, as
+// the lookup does, would remove the disagreement and this allowance with it.
 #define TILE_ROUNDINGS 8.0
+#define FLOAT_ROUNDING 1.1920929e-7 // 2^-23, a float's rounding relative to its size
 
 uniform int tileViewCount; // the views each cached light with a body was drawn from
 // 1 = the kept views, read where the body has moved them and blurred to meet; 0 = the
@@ -190,14 +196,12 @@ float tileShadow(uint li, vec3 worldPos, vec3 N, vec3 L, vec3 ddxWorld, vec3 ddy
         duv_dz = receiverPlaneGradient(px, py);
     }
 
-    // The rounding in metres, carried into the face's depth where the receiver is.
-    float d = dot(rel, axis);
-    float rounding = TILE_ROUNDINGS * 1.1920929e-7 * max(length(worldPos), length(t.centre));
-    float rounding_depth = rounding * t.nearP * t.farP / (d * d * (t.farP - t.nearP));
+    float rounding = TILE_ROUNDINGS * FLOAT_ROUNDING * max(length(worldPos), length(t.centre));
 
     vec3 cell = tileCell(t.first + face, t.edge);
     float texel = 1.0 / float(SHADOW_TILE_SIZE);
-    float ref = pc.z - SHADOW_PLANE_BIAS_FLOOR - rounding_depth;
+    float ref = pc.z - SHADOW_PLANE_BIAS_FLOOR -
+                rounding * tileDepthPerMetre(dot(rel, axis), t.nearP, t.farP);
     float sum = 0.0;
     for (int y = -1; y <= 1; ++y) {
         for (int x = -1; x <= 1; ++x) {

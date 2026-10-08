@@ -418,6 +418,7 @@ static void parse_lights(CetraSceneDesc* d, const cJSON* root) {
         get_float(l, "source_radius", &out->source_radius);
         get_float(l, "source_length", &out->source_length);
         get_float(l, "shadow_near", &out->shadow_near);
+        get_bool(l, "shadow_follow", &out->shadow_follow);
         out->has_specular = get_float(l, "specular", &out->specular);
         if (out->has_specular && (out->specular < 0.0f || out->specular > 1.0f)) {
             log_warn("cscene: light '%s' specular %.3f is a share, 0 to 1; clamped", out->name,
@@ -472,7 +473,7 @@ static void parse_lights(CetraSceneDesc* d, const cJSON* root) {
             "intensity",     "intensity_unit", "direction",    "cast_shadows",
             "attenuation",   "range",          "size",         "up",
             "cone",          "profile",        "shadow_cache", "source_radius",
-            "source_length", "shadow_near",    "specular"};
+            "source_length", "shadow_near",    "specular",     "shadow_follow"};
         warn_unknown_keys(l, known, sizeof(known) / sizeof(known[0]), "light");
         d->light_count++;
     }
