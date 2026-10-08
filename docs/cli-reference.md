@@ -344,20 +344,30 @@ its by-value bake key go stale; all three exist in `render`, the first two in `f
 (spec 11.67 — the paged near field's bisect levers, the churn and bake-rate knobs, the residency
 probe, and the camera teleport; all but `--cam-at` in `forest` too. `--cam-at` is REPEATABLE since
 13.24, up to 16, a schedule that walks one run through several places),
-`--stream-probe <n>` / `--gi-stream-rate <n>` / `--tile-blocks-per-frame <n>` / `--capture-hide <node>`
+`--stream-probe <n>` / `--tile-blocks-per-frame <n>` / `--capture-hide <node>`
 / `--remove-node <node>` (spec 13.24, render only — lighting data that streams. The probe prints,
 every n frames and at exit, the resident GI volumes and reflection probes by slot, each one's
-distance, capture count, state and an FNV digest of its texels -- read from the atlas while it is
-resident, from the kept copy while it is not -- and the cached lights in distance order with
-whether each holds a whole block of shadow tiles: what the `lighting-stream` gates read. The rate
-is the probes a frame, across the whole world, of the GI opening sweeps begun after load (default
-32). The blocks-per-frame is how many cached lights may be given shadow tiles a frame once
+distance, capture count, state, a probe's faces drawn of a capture under way, and an FNV digest
+of its texels -- read from the atlas while it is resident, from the kept copy while it is not --
+the residency the frame before left, and the cached lights in distance order with
+whether each holds a whole block of shadow tiles: what the `lighting-stream` gates read.
+`--gi-stream-rate`, the probes a frame of an opening sweep begun after load, went in spec 13.32,
+when every sweep came under the capture budget below. The blocks-per-frame is how many cached
+lights may be given shadow tiles a frame once
 the tiles have opened (default 2, 0 = no limit), and at 1 a room with two lights takes two frames to
 be shadowed, which is what makes a capture's wait for its lights visible. `--capture-hide` leaves a
 named node out of every GI and probe capture, surface and shadow, as a skinned mesh always is;
 `--remove-node` takes one out of the scene, the reference a hidden one is compared against. A
 `.cscn` authors any number of GI volumes as `giVolumes: [{boxMin, boxMax, spacing, classify}]`, and
 up to 64 probes and 64 lights),
+`--capture-budget-ms <f>` (spec 13.32, render and silent — the most of a frame, in milliseconds,
+the GI probes and the reflection probes' faces may take before the rest wait for the next frame:
+`Engine.capture_budget_ms`. By default 8 windowed and no limit headless, where a run must repeat
+to the bit; the flag pins it either way, which is how a headless run reaches the paced path, and
+0 means no limit. render takes 0 to 1000. Each kind of capture takes at least one a frame, so
+every one finishes, and 0.001 lets through exactly that and no more, the same on every run.
+silent's own default is 100 while its view is black and the engine's once it comes up; the flag
+pins it there too),
 `--road-width-at <frame:value>` (spec 11.68 — set every road's width mid-run. The `--layer-blend-at`
 idiom, and it exercises BOTH halves of the road path in one stroke: the segment block re-uploads
 and the composite cache's by-value key goes stale. A road is authored only in a `.cscn`, so this

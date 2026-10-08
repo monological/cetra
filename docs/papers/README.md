@@ -443,3 +443,28 @@ resampled to a few hundred lines first.
 slot mask, which is what a living-room set had and CRTS does not carry: RGB stripes three pixels
 wide, and a dark row every second line, offset by one row in alternate groups of three columns.
 Made darken-only here, CRTS' way, so it cannot clip a bright pixel.
+
+---
+
+## Probe-based GI in production
+
+Read for spec 13.32, when silent's 792-probe GI sweep held the window for 14 s in one frame and
+the question was what DDGI does in a shipping engine. Fetched 2026-10-07.
+
+### Majercik, Marrs, Spjut & McGuire, *Scaling Probe-Based Real-Time Dynamic Global Illumination for Production*, JCGT 10(2), 2021
+
+- <https://arxiv.org/abs/2009.10796v3>; published at <https://jcgt.org/published/0010/02/01/>.
+  arXiv's default non-exclusive licence; kept local.
+- Local: `majercik-2021-scaling-probe-based-ddgi-for-production.md`
+
+**What cetra takes from it:** two things, both already the shape cetra had, and one it now
+follows.
+- **A probe in a wall goes Off**, by the share of its rays that hit back faces, past a quarter
+  (§5's optimizer and §6.1). cetra's classification is that rule. The paper counts the back faces
+  from the same rays that gather the light, where cetra draws them in a second capture -- depth
+  only since 13.32, which leaves the lighting exactly as it was. The single-pass form would also
+  take the paper's backface hits as zero radiance at 80% of their depth (§4.1), a change to what
+  a probe sees through one-sided geometry, and is not taken.
+- **Initialization is spread over frames** (§6.3, "trace rays for five frames"), with converging
+  in a single frame optional. cetra's opening sweep ran in one frame until 13.32; it is now paced
+  by a time budget like every other capture.

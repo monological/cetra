@@ -999,7 +999,43 @@ the irradiance tile's alpha, which the sampler multiplies the weight by. A re-co
 projects through an RGB-only mask, so the alpha is the classification's alone: blended at the
 re-convergence's 0.97 it crept an in-wall probe back to half weight over a few sun changes. A probe inside a wall sees out both
 sides of it, so unswitched it lit the room with the sky beyond: on `stream_rooms`'s twin rooms
-it moves the misaligned grid from 2.3 grey codes off its aligned twin to 0.9.
+it moves the misaligned grid from 2.3 grey codes off its aligned twin to 0.9. **The back faces
+are drawn DEPTH ONLY** (spec 13.32, `_render_capture_depth`): the opaque lane through each
+item's own program at `SUBMIT_PASS_DEPTH_ONLY` with colour masked, and the shadow catcher, which
+writes depth too, through the one function the scene pass calls. That is the same depth to the
+bit -- every discard in `pbr_frag` sits above the depth-only exit, and nothing writes
+`gl_FragDepth` -- and it was half of a sweep while it was shaded, lights and all, for a colour
+nothing read. DDGI's own production form (Majercik et al. 2021, §6) counts back faces from the
+same rays that gather the light; one capture drawing both sides would do that here, but it changes
+what a probe sees through one-sided geometry, so it is a look to choose and not this.
+
+**What a capture costs, and when it may be taken** (spec 13.32). Two costs were a frame's worth
+each and are not now:
+- **The light grid.** Every cube face used to rebuild the 3,072-cell grid on the CPU, for a GI
+  face of 16x16 pixels: more than half a GI capture. A capture now gathers its lights ONCE
+  (`light_cluster_capture_begin`, from `scene_capture_faces`) -- every light whose reach meets
+  the sphere the capture sees out to, the nearest past the cap -- and each face assigns its
+  cells from that list (`light_cluster_capture_face`). A face no wider than twice the grid
+  points every cell at the whole list, built for its first face and kept for the rest. A light
+  reaching nothing in the face is windowed to an exact 0, so only a light with no range shades
+  differently -- its tail past the cull radius, which the cells cut off -- and the capture's
+  index pool, which overflowed in silent, no longer drops lights. Reflection probes' 2048 px
+  faces keep their cells.
+- **The single frame.** Every capture is paced by `Engine.capture_budget_ms`, the GI's opening
+  sweep included, each kind taking its first unit a frame. A reflection probe is taken a face a
+  unit, every face of a frame in one burst, holding its cube between frames, so a light that
+  flickers between them can differ across its faces. Headless the budget is 0, no limit, so
+  every golden is as it was; what moves is a streamed opening, which ran at `stream_rate`'s 32
+  probes a frame and now lands in the frame it begins. `stream-paced` holds a budgeted run, one
+  capture of each kind a frame, to the same digests as the unbudgeted one: captures run at
+  render time 0 and an opening writes outright, so the frame a capture is taken in cannot
+  matter. `stream-paced-walk` leaves a probe and a volume half captured, and
+  `stream-paced-single` paces a world of one probe; both land on the unbudgeted lighting.
+- **A volume evicted mid-sweep** keeps nothing, and its next opening clears the slot first
+  (`lighting_atlas_clear`): an irradiance tile is narrower than the column it shares with a
+  visibility tile, so the tiles do not cover the slot, and between them it held its last
+  holder's texels, laid out by that holder's grid. Nothing sampled them; the slot's digest did,
+  and `stream-paced-walk` found it.
 
 ## Clustered decals
 
