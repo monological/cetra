@@ -13,10 +13,10 @@
 #include "uniform.h"
 #include "util.h"
 
-// The ident's timeline, shared with the shader that plays it. Hiding waits for LOADING_IDENT_END
-// and a little of the rule's light after it.
+// The ident's timeline, shared with the shaders that play it. Hiding waits for LOADING_IDENT_END,
+// past its last glitch, and a beat of the picture held still after it.
 #include "../shaders/include/loading_constants.glsl"
-#define LOADING_HOLD_SECONDS 0.6
+#define LOADING_HOLD_SECONDS 0.4
 // The switch-off, in seconds (loading_tape_frag.glsl's `off` over it).
 #define LOADING_OFF_SECONDS 0.45
 // The most the clock moves in one draw: a long stall pauses the ident rather than skipping it.
@@ -128,6 +128,10 @@ void engine_hide_loading_screen(Engine* engine) {
 
 bool engine_loading_screen_shown(const Engine* engine) {
     return engine && engine->loading_screen && engine->loading_screen->shown;
+}
+
+bool loading_screen_covers(const Engine* engine) {
+    return engine_loading_screen_shown(engine) && engine->loading_screen->lift < 0.0;
 }
 
 // Each colour from its display code to light, through the display's own 2.2 (display.glsl).
@@ -263,16 +267,20 @@ void engine_draw_loading_screen(Engine* engine) {
         return;
     glfwPollEvents();
 
-    // Whatever was bound goes back as it was: this may be called from anywhere on the main thread.
+    // Whatever was bound goes back as it was: this may be called from anywhere on the main thread,
+    // the middle of a frame included -- between capture units, which may have colour masked off.
     // The draw binds units 0 and 1.
     GLint program = 0, vao = 0, unit = 0, texture[2] = {0, 0};
+    GLboolean colour_mask[4];
     glGetIntegerv(GL_CURRENT_PROGRAM, &program);
     glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &vao);
     glGetIntegerv(GL_ACTIVE_TEXTURE, &unit);
+    glGetBooleanv(GL_COLOR_WRITEMASK, colour_mask);
     for (int u = 0; u < 2; u++) {
         glActiveTexture(GL_TEXTURE0 + (GLenum)u);
         glGetIntegerv(GL_TEXTURE_BINDING_2D, &texture[u]);
     }
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 
     _loading_advance(engine, ls);
     _loading_draw(engine, ls, false);
@@ -289,4 +297,5 @@ void engine_draw_loading_screen(Engine* engine) {
     glActiveTexture((GLenum)unit);
     glBindVertexArray((GLuint)vao);
     glUseProgram((GLuint)program);
+    glColorMask(colour_mask[0], colour_mask[1], colour_mask[2], colour_mask[3]);
 }

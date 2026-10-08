@@ -55,6 +55,9 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode);
 // the end of engine_present_frame, before the GUI. And its free, with the engine.
 void loading_screen_frame(Engine* engine);
 void free_loading_screen(LoadingScreen* ls);
+// Whether the screen hides the whole frame: shown, and not yet switching off. Such a frame draws
+// no picture of its own, since nobody would see it.
+bool loading_screen_covers(const Engine* engine);
 
 // Select which color attachments the scene pass writes: attachment 0 only,
 // or 0 + the view-space normals target (used by SSAO/SSR). Render passes

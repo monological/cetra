@@ -18,6 +18,7 @@
 #include "ext/cwalk.h" // cwk_path_set_style: pin UNIX separators (see _engine_init)
 #include "engine.h"
 #include "engine_internal.h"
+#include "loading_screen.h"
 #include "draw_list.h"
 #include "gui.h"
 #include "light_cluster.h"
@@ -2094,6 +2095,8 @@ ShaderProgram* engine_pbr_variant(Engine* engine, PbrFamily family, unsigned fea
     }
 
     program = create_pbr_program_variant(family, features, hook);
+    // A compile is the long part of a first frame, so a loading screen moves between them.
+    engine_draw_loading_screen(engine);
     if (program) {
         engine_add_program(engine, program);
         return program;
@@ -2429,6 +2432,16 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode) {
 
     // GUI last, after tone mapping. gui_render_frame self-gates on
     // gui_frame_active, so it no-ops when no panel/overlay is enabled.
+    profiler_scope_begin_if(engine->profiler, engine->gui_frame_active, "gui");
+    gui_render_frame(engine);
+    profiler_scope_end(engine->profiler);
+}
+
+// A frame under a loading screen that hides it all (spec 13.34): the screen where the picture
+// would be, and the GUI over it, which is the developer's.
+static void _engine_present_covered(Engine* engine) {
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    loading_screen_frame(engine);
     profiler_scope_begin_if(engine->profiler, engine->gui_frame_active, "gui");
     gui_render_frame(engine);
     profiler_scope_end(engine->profiler);
@@ -3356,19 +3369,27 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
         // POM (§4.11): resolve height maps once the async texture loader drains.
         heights_ensure_resolved(current_scene, engine);
 
-        if (current_scene != NULL)
+        // Under a loading screen that hides it all (spec 13.34), the frame draws no picture of
+        // its own -- the camera's pass and the whole post chain -- while everything that loads
+        // still runs: the lighting's captures and shadows above, the uploads and the builds
+        // here. The screen is drawn in the picture's place.
+        const bool covered = loading_screen_covers(engine);
+        if (current_scene != NULL && !covered)
             draw(engine, current_scene);
 
         // The feedback vote pass (spec 11.67), after the scene so the draw
         // list is this frame's; its readback retires at fixed latency into the
         // NEXT frames' residency, which is what keeps the loop deterministic.
-        if (current_scene)
+        if (current_scene && !covered)
             layers_vt_feedback_pass(engine, current_scene);
 
         glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
         engine->current_render_mode = saved_render_mode;
 
-        engine_present_frame(engine, frame_mode);
+        if (covered)
+            _engine_present_covered(engine);
+        else
+            engine_present_frame(engine, frame_mode);
         profiler_end_frame(engine->profiler);
 
         // Engine-owned frame limit (CI/headless): requests close so the
