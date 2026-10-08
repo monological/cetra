@@ -2710,10 +2710,11 @@ void render_late_items(Engine* engine, const Scene* scene, const PostFXLateDraw*
     // which is order-dependent wherever alpha is not zero.
     // A depth that is not a number -- a degenerate transform's -- is taken as the nearest, since
     // one that compares false both ways leaves the comparator no order and the sort none either.
+    // An item past its node's draw distance is drawn by no camera pass, this one included.
     size_t count = 0;
     for (size_t i = 0; i < list->count && count < n; ++i) {
         const DrawItem* item = &list->items[i];
-        if (item->lane != DRAW_LANE_LATE_DRAW)
+        if (item->lane != DRAW_LANE_LATE_DRAW || item->beyond)
             continue;
         const float depth = draw_item_view_depth(item, engine->view_matrix);
         order[count++] = (LateItem){item, isnan(depth) ? -FLT_MAX : depth, i};

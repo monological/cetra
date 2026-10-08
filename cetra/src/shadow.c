@@ -462,6 +462,13 @@ void shadow_system_shift_origin(ShadowSystem* system, const vec3 delta) {
         ShadowTileBlock* block = &system->tile_blocks[b];
         glm_vec3_sub(block->centre, (float*)delta, block->centre);
     }
+    // And so has every caster in them: an item that goes marks where it was drawn, which is now
+    // here. The shift moves no node by its own motion, so nothing else would move these.
+    for (size_t i = 0; i < system->tile_seen_count; ++i) {
+        AABB* box = &system->tile_seen[i].box;
+        glm_vec3_sub(box->min, (float*)delta, box->min);
+        glm_vec3_sub(box->max, (float*)delta, box->max);
+    }
 }
 
 void compute_directional_light_space_matrix(vec3 direction, vec3 scene_center, float ortho_size,
@@ -1977,45 +1984,47 @@ static ShadowTileSeen tile_seen_of(const DrawItem* item) {
     return seen;
 }
 
-// Where a kept face draws an item: its bound, posed and displaced, at its node now. False when a
-// caster the kept faces take has no bound, which may be anywhere.
-static bool tile_seen_place(ShadowTileSeen* seen, const DrawItem* item, const CullView* view) {
+// Where a kept face draws an item: its bound, posed and displaced, at its node now. A caster the
+// kept faces take with no bound may be anywhere, and is marked so.
+static void tile_seen_place(ShadowTileSeen* seen, const DrawItem* item, const CullView* view) {
+    if (!seen->kept)
+        return;
+    AABB box;
+    seen->unbounded = !draw_item_bounds(item, view, &box);
+    if (!seen->unbounded)
+        aabb_transform(box.min, box.max, (vec4*)item->node->global_transform, seen->box.min,
+                       seen->box.max);
+}
+
+// The faces a seen caster was drawn in, drawn again, its store's copy with them. False for one
+// with no bound, whose faces could be any of them.
+static bool tiles_mark_seen(ShadowSystem* ss, const ShadowTileSeen* seen) {
     if (!seen->kept)
         return true;
-    AABB box;
-    if (!draw_item_bounds(item, view, &box))
+    if (seen->unbounded)
         return false;
-    aabb_transform(box.min, box.max, (vec4*)item->node->global_transform, seen->box.min,
-                   seen->box.max);
+    tiles_mark_box(ss, seen->box.min, seen->box.max, TILE_BOX_INVALIDATE | TILE_BOX_UNSTORE);
     return true;
 }
 
-// The faces a seen caster was drawn in, drawn again, its store's copy with them.
-static void tiles_mark_seen(ShadowSystem* ss, const ShadowTileSeen* seen) {
-    if (seen->kept)
-        tiles_mark_box(ss, seen->box.min, seen->box.max, TILE_BOX_INVALIDATE | TILE_BOX_UNSTORE);
-}
-
-// The list as the kept faces see it this frame, into `out` (count items). False when a caster
-// has no bound.
-static bool tiles_seen_build(ShadowTileSeen* out, const DrawList* list, const CullView* view) {
+// The list as the kept faces see it this frame, into `out` (count items).
+static void tiles_seen_build(ShadowTileSeen* out, const DrawList* list, const CullView* view) {
     for (size_t i = 0; list && i < list->count; ++i) {
         out[i] = tile_seen_of(&list->items[i]);
-        if (!tile_seen_place(&out[i], &list->items[i], view))
-            return false;
+        tile_seen_place(&out[i], &list->items[i], view);
     }
-    return true;
 }
 
-// Keep the list as the kept faces saw it this frame. On out of memory, or a caster with no
-// bound, nothing is kept, and the next frame draws every face again.
+// Keep the list as the kept faces saw it this frame. On out of memory nothing is kept, and the
+// next frame draws every face again. A caster with no bound is kept as one, so only a change to
+// it draws every face again, and not every frame it stands there.
 static void tiles_seen_record(ShadowSystem* ss, const DrawList* list, const CullView* view) {
     const size_t count = list ? list->count : 0;
     ss->tile_seen_count = 0;
     if (!grow_array((void**)&ss->tile_seen, &ss->tile_seen_capacity, count, sizeof(ShadowTileSeen),
-                    64) ||
-        !tiles_seen_build(ss->tile_seen, list, view))
+                    64))
         return;
+    tiles_seen_build(ss->tile_seen, list, view);
     ss->tile_seen_count = count;
 }
 
@@ -2056,19 +2065,17 @@ static bool tile_seen_looks_differ(const ShadowTileSeen* then, const ShadowTileS
 
 // One item a kept face would draw otherwise, or from geometry uploaded again: the faces it was
 // drawn in and the faces it is in now, drawn again. `then` was drawn where it was; `now` is
-// placed here. False when it has no bound.
+// placed here. False when it had or has no bound.
 static bool tiles_mark_redrawn(ShadowSystem* ss, const ShadowTileSeen* then, ShadowTileSeen* now,
                                const DrawItem* item, const CullView* view) {
-    if (!tile_seen_place(now, item, view))
-        return false;
+    tile_seen_place(now, item, view);
     ShadowTileSeen was = *then;
     // The bound as the faces last drew it, when that was wider: a hook whose offset reached
     // further left its shadow out there.
     if (was.offset_bound > now->offset_bound)
         aabb_expand(&was.box, was.offset_bound - now->offset_bound);
-    tiles_mark_seen(ss, &was);
-    tiles_mark_seen(ss, now);
-    return true;
+    const bool was_placed = tiles_mark_seen(ss, &was);
+    return tiles_mark_seen(ss, now) && was_placed;
 }
 
 // Draw again, where it stands and where it stood, every item a kept face would draw otherwise
@@ -2148,42 +2155,49 @@ static bool tile_seen_keys_hold(const TileSeenKey* keys, size_t count, uint64_t 
  * holds anew, the faces it is in now; each held still but drawn otherwise, or its mesh uploaded
  * again, both. A mover whose node is gone is let go, its last box among those drawn again. An
  * item no kept face takes, before or after, marks nothing. False when it cannot answer -- out of
- * memory, or a caster with no bound -- for which every face is drawn again.
+ * memory, or a caster with no bound among those it would mark -- for which every face is drawn
+ * again.
  */
 static bool tiles_mark_graph_change(ShadowSystem* ss, const DrawList* list, const CullView* view) {
     const size_t count = list ? list->count : 0;
     ShadowTileSeen* now = malloc((count ? count : 1) * sizeof(ShadowTileSeen));
     TileSeenKey* then_keys = tile_seen_keys(ss->tile_seen, ss->tile_seen_count);
-    if (!now || !then_keys || !tiles_seen_build(now, list, view)) {
-        free(now);
-        free(then_keys);
-        return false;
+    TileSeenKey* now_keys = NULL;
+    if (now && then_keys) {
+        tiles_seen_build(now, list, view);
+        now_keys = tile_seen_keys(now, count);
     }
-    TileSeenKey* now_keys = tile_seen_keys(now, count);
     if (!now_keys) {
         free(now);
         free(then_keys);
         return false;
     }
+    bool placed = true;
     size_t a = 0, b = 0;
     while (a < ss->tile_seen_count || b < count) {
         const int order = a == ss->tile_seen_count ? 1
                           : b == count ? -1
                                        : tile_seen_item_order(&then_keys[a], &now_keys[b]);
         if (order < 0) {
-            tiles_mark_seen(ss, &ss->tile_seen[then_keys[a++].index]);
+            placed = tiles_mark_seen(ss, &ss->tile_seen[then_keys[a++].index]) && placed;
         } else if (order > 0) {
-            tiles_mark_seen(ss, &now[now_keys[b++].index]);
+            placed = tiles_mark_seen(ss, &now[now_keys[b++].index]) && placed;
         } else {
             const ShadowTileSeen* then = &ss->tile_seen[then_keys[a++].index];
             const ShadowTileSeen* held = &now[now_keys[b++].index];
             if (tile_seen_looks_differ(then, held) || then->upload != held->upload) {
-                tiles_mark_seen(ss, then);
-                tiles_mark_seen(ss, held);
+                placed = tiles_mark_seen(ss, then) && placed;
+                placed = tiles_mark_seen(ss, held) && placed;
                 if (tile_seen_looks_differ(then, held))
                     ss->tile_seen_changes++;
             }
         }
+    }
+    if (!placed) {
+        free(now);
+        free(then_keys);
+        free(now_keys);
+        return false;
     }
     int kept = 0;
     for (int k = 0; k < ss->tile_mover_count; ++k) {
@@ -2213,9 +2227,13 @@ static bool tiles_mark_graph_change(ShadowSystem* ss, const DrawList* list, cons
 // it is now, and a face it has left is still marked from the frame it was there, which draws it
 // once more without it. It marks on the frame the faces are drawn again too, or each would be
 // drawn whole without it and keep its shadow out for a frame. `frame` is the engine's, so the
-// hold counts frames and not depth passes, which a burst of captures multiplies.
+// hold counts frames and not depth passes, which a burst of captures multiplies. A whole frame
+// with no note -- no block held, a reference drawn, shadows off -- leaves the record behind
+// whatever moved in it, so the first frame after one draws every face again.
 static void tiles_note_changes(ShadowSystem* ss, const Engine* engine, const Scene* scene,
                                uint64_t frame) {
+    const bool resumed = ss->tile_noted && frame > ss->tile_frame + 1;
+    ss->tile_noted = true;
     ss->tile_frame = frame;
     for (int b = 0; b < ss->tile_block_count; ++b)
         ss->tile_blocks[b].touched = 0;
@@ -2224,8 +2242,8 @@ static void tiles_note_changes(ShadowSystem* ss, const Engine* engine, const Sce
     const uint64_t epoch = scene_graph_epoch();
     const bool same = epoch == ss->tile_epoch && tiles_seen_same_items(ss, list);
     ss->tile_epoch = epoch;
-    if (same ? tiles_mark_changed_looks(ss, list, &view)
-             : tiles_mark_graph_change(ss, list, &view)) {
+    if (!resumed && (same ? tiles_mark_changed_looks(ss, list, &view)
+                          : tiles_mark_graph_change(ss, list, &view))) {
         tiles_expire_movers(ss);
     } else {
         tiles_seen_record(ss, list, &view);
@@ -2258,6 +2276,7 @@ static void tiles_note_changes(ShadowSystem* ss, const Engine* engine, const Sce
             if (seen) {
                 glm_vec3_copy(lo, seen[i].box.min);
                 glm_vec3_copy(hi, seen[i].box.max);
+                seen[i].unbounded = false;
             }
             continue;
         }
@@ -2293,6 +2312,7 @@ static void tiles_note_changes(ShadowSystem* ss, const Engine* engine, const Sce
         if (seen) {
             glm_vec3_copy(lo, seen[i].box.min);
             glm_vec3_copy(hi, seen[i].box.max);
+            seen[i].unbounded = false;
         }
     }
     tiles_list_mover_items(ss, list);

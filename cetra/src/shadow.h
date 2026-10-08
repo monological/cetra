@@ -227,8 +227,9 @@ typedef struct ShadowTileSeen {
     float offset_bound; // its hook's, metres, which its bound grew by; 0 without an offset hook
     uint8_t lane;
     uint8_t flags;
-    bool kept; // a kept face would draw it, so `box` holds where
-    AABB box;  // the world box it was drawn in, kept up as its node moves
+    bool kept;      // a kept face would draw it, so `box` holds where
+    bool unbounded; // ...unless it has no bound, when it may be anywhere and `box` holds nothing
+    AABB box;       // the world box it was drawn in, kept up as its node moves
 } ShadowTileSeen;
 
 // A cached light in the frame's ranking.
@@ -431,6 +432,7 @@ typedef struct ShadowSystem {
     size_t tile_mover_item_count;
     size_t tile_mover_item_capacity;
     uint64_t tile_frame; // the engine's frame the tiles were last drawn in
+    bool tile_noted;     // their changes have been noted at least once, so tile_frame is one
     // The cached lights nearest the camera first, each with the block it holds (spec 13.24):
     // assigned once a frame by shadow_tiles_update, before anything captures, and read by
     // every depth pass of the frame and by shadow_tiles_cover.
