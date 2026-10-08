@@ -462,8 +462,10 @@ static const MatSpec SPECS[MAT_COUNT] = {
         {"joist", "old_wood_floor", {0.62f, 0.56f, 0.48f}, 1.0f, 0.0f, 1.5f, .grime = 0.6f},
     /*
      * The town's edges (spec 13.35). The retaining wall is poured against boards, which left
-     * their grain in it. Fences are never grimed: a fence is hundreds of boards, and the grid the
-     * dirt is cut into would multiply every one of them, where the scans carry their own dirt.
+     * their grain in it. None of these is grimed, and the scans carry their own dirt: grime cuts
+     * every face into 0.12 m cells, which multiplies a fence's hundreds of boards, and on the
+     * terrace's walls, a wall the kit takes as boxes, came to 139k vertices -- half of everything
+     * the town's edges added, drawn whole by every face of every capture.
      *
      * The boards' and the blocks' scans are shot dark, about 0.06 linear, where weathered grey
      * wood and cinder block are nearer 0.2: their tints lift them there, and cool the boards'
@@ -475,7 +477,6 @@ static const MatSpec SPECS[MAT_COUNT] = {
                        1.0f,
                        0.0f,
                        1.8f,
-                       .grime = 0.5f,
                        .rain = {true, 0.6f}},
     [MAT_FENCE_BOARD] = {"fence_boards",
                          "weathered_planks",
