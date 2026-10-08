@@ -29053,7 +29053,9 @@ def run_shadow_tiles_gate(workdir):
     sways, tiles-rest-toggle with the kept faces not told of a material change, and tiles-store
     with the pool carved out of the lights' budget. At 13.27: tiles-area fails with the area
     branch never reading the tiles (0.3545, the unshadowed share), and tiles-area-size with the
-    near plane packed over the panel's size again (the near room 41-fold darker).
+    near plane packed over the panel's size again (the near room 41-fold darker). At 13.31:
+    tiles-follow fails with following an unconditional redraw (6 faces drawn on frame 30), and
+    tiles-rounding with no rounding allowance (the wall's middle 0.000 of its twin).
     """
     point = asset("cornell_point.cscn")
     core = asset("tile_core_fixture.cscn")
