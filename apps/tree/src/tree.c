@@ -73,7 +73,9 @@ static Texture* island_roughness_tex = NULL;
 static float sand_stochastic_lut[STOCHASTIC_LUT_SIZE * 3];
 static bool sand_stochastic_ready = false;
 
-static void generate_procedural_textures(Scene* scene) {
+// `needles` bakes a conifer's needle sprays into the leaf textures in place of the broadleaf
+// sprigs: the cards of either form address the same atlas cells.
+static void generate_procedural_textures(Scene* scene, bool needles) {
     const int B = BARK_TEXTURE_SIZE;
     const int T = TEXTURE_SIZE;
     // The leaf atlas is one row of square cluster cells.
@@ -102,9 +104,18 @@ static void generate_procedural_textures(Scene* scene) {
         free(bark_field);
     }
 
-    printf("Generating procedural leaf cluster atlas...\n");
     unsigned char *leaf_a = NULL, *leaf_n = NULL, *leaf_r = NULL;
-    veg_leaf_cluster_maps(LW, LH, &leaf_a, &leaf_n, &leaf_r);
+    if (needles) {
+        printf("Generating procedural needle spray atlas...\n");
+        VegSprayDesc spray = veg_spray_desc_default();
+        spray.cells = TG_LEAF_VARIANTS;
+        spray.live_cells = TG_SPRAY_LIVE_CELLS;
+        spray.dead_cells = TG_SPRAY_DEAD_CELLS;
+        veg_needle_spray_maps(LW, LH, &spray, &leaf_a, &leaf_n, &leaf_r);
+    } else {
+        printf("Generating procedural leaf cluster atlas...\n");
+        veg_leaf_cluster_maps(LW, LH, &leaf_a, &leaf_n, &leaf_r);
+    }
     // The one texture here that is alpha-TESTED, so the one whose mip chain has
     // to hold its coverage. proc_leaf_sprite below looks like a candidate and is
     // not: it goes to the billboard renderer, which blends premultiplied alpha
@@ -1347,7 +1358,9 @@ int main(int argc, char** argv) {
     }
 
     // Textures go through the scene's pool, so the scene must exist first.
-    generate_procedural_textures(scene);
+    TreeParams grown;
+    tree_params_preset(&grown, args.preset, args.seed);
+    generate_procedural_textures(scene, grown.form == TREE_FORM_EXCURRENT);
     // Directly after the bake, which is the whole ledger: this app loads no
     // texture from a file.
     if (args.texture_probe)

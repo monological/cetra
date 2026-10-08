@@ -60,8 +60,9 @@ static float tg_smoothstep(float e0, float e1, float x) {
 // ---------------------------------------------------------------------------
 
 static const char* const k_preset_names[TREE_PRESET_COUNT] = {
-    [TREE_PRESET_BROADLEAF] = "broadleaf",
-    [TREE_PRESET_DEAD] = "dead",
+    [TREE_PRESET_BROADLEAF] = "broadleaf", [TREE_PRESET_DEAD] = "dead",
+    [TREE_PRESET_SPRUCE] = "spruce",       [TREE_PRESET_FIR] = "fir",
+    [TREE_PRESET_SNAG] = "snag",
 };
 
 const char* tree_preset_name(TreePreset preset) {
@@ -84,6 +85,48 @@ void tree_params_preset(TreeParams* p, TreePreset preset, int seed) {
     p->trunk_length = 125.0f;
     p->twist = 137.5f;
     switch (preset) {
+        case TREE_PRESET_SPRUCE:
+        case TREE_PRESET_FIR:
+        case TREE_PRESET_SNAG:
+            p->form = TREE_FORM_EXCURRENT;
+            p->trunk_radius = 3.2f;
+            p->curve_noise = 0.15f;
+            p->angle_variance = 8.0f;
+            // Each whorl turned well off the last, so no two tiers line up down the trunk.
+            p->twist = 47.0f;
+            p->show_leaves = 1;
+            p->leaf_size = 14.0f;
+            p->leaf_density = 3.5f;
+            p->crown_base = 0.12f;
+            p->crown_width = 0.32f;
+            p->crown_shape = 0.9f;
+            p->whorl_spacing = 5.5f;
+            p->whorl_size = 5;
+            p->branch_pitch = 25.0f;
+            p->spray_angle = 55.0f;
+            p->droop = 0.5f;
+            p->phototropism = 0.35f;
+            p->dead_lower = 0.12f;
+            p->dead_fraction = 0.08f;
+            if (preset == TREE_PRESET_FIR) {
+                p->crown_width = 0.28f;
+                p->crown_shape = 1.1f;
+                p->whorl_spacing = 7.0f;
+                p->whorl_size = 4;
+                p->branch_pitch = 5.0f;
+                p->spray_angle = 70.0f;
+                p->droop = 0.25f;
+                p->phototropism = 0.5f;
+                p->leaf_density = 4.0f;
+            } else if (preset == TREE_PRESET_SNAG) {
+                p->crown_base = 0.18f;
+                p->dead_lower = 0.3f;
+                p->dead_fraction = 0.45f;
+                p->droop = 0.7f;
+                p->leaf_density = 2.2f;
+                p->snag = 1.0f;
+            }
+            break;
         case TREE_PRESET_DEAD:
             // What a dead tree is: branches that sag (droop), wander (curve noise) and no longer
             // straighten back toward the light, spread wide and sparse, and no leaves.
@@ -183,22 +226,26 @@ static void perp_to(const vec3 v, vec3 out) {
     glm_vec3_normalize(out);
 }
 
-static void grow_branch(TreeSkeleton* s, const TreeParams* p, int parent_idx, const vec3 origin,
-                        const vec3 dir, float length, float base_r, int depth, float root_dist0,
-                        float parent_phase, float uv_v0, TgRng* rng) {
-    if (depth > p->max_depth || base_r < 0.05f || length < 0.4f)
-        return;
+// A branch before it grows: where and which way it starts, its size, the three pulls that bend
+// it, and what it carries on from its parent.
+typedef struct BranchSeed {
+    int parent; // index into branches[], -1 for the trunk
+    int depth;  // its generation, which also sets how many spine points it gets
+    vec3 origin, dir;
+    float length, base_r, tip_r;
+    float droop, phototropism, curve_noise;
+    float root_dist0, parent_phase, uv_v0;
+    bool terminal, bears_leaves;
+} BranchSeed;
+
+// Add one branch and integrate its spine. Its index, or -1 when the skeleton is full.
+static int add_branch(TreeSkeleton* s, const BranchSeed* bs, TgRng* rng) {
     if (s->branch_count >= TG_MAX_BRANCHES || s->point_count >= TG_MAX_POINTS)
-        return;
+        return -1;
 
-    int num_points = k_points_by_depth[depth < 8 ? depth : 7];
+    int num_points = k_points_by_depth[bs->depth < 8 ? bs->depth : 7];
     if (!skel_reserve(s, num_points))
-        return;
-
-    bool terminal = (depth == p->max_depth);
-    // A terminal branch narrows to almost nothing and gets a pointed cap;
-    // an internal one stops at the taper so its children can pick up the radius.
-    float tip_r = terminal ? base_r * 0.12f : base_r * p->taper;
+        return -1;
 
     int bi = s->branch_count++;
     int first_point = s->point_count;
@@ -208,19 +255,21 @@ static void grow_branch(TreeSkeleton* s, const TreeParams* p, int parent_idx, co
 
     {
         Branch* b = &s->branches[bi];
-        b->parent = parent_idx;
-        b->depth = depth;
+        b->parent = bs->parent;
+        b->depth = bs->depth;
         b->first_point = first_point;
         b->num_points = num_points;
-        b->base_radius = base_r;
-        b->tip_radius = tip_r;
-        b->length = length;
+        b->base_radius = bs->base_r;
+        b->tip_radius = bs->tip_r;
+        b->length = bs->length;
         b->phase = phase;
-        b->parent_phase = parent_phase;
-        b->uv_v0 = uv_v0;
-        b->is_terminal = terminal;
-        b->bears_leaves = depth >= p->max_depth - 1;
-        float circ = 2.0f * (float)M_PI * base_r;
+        b->parent_phase = bs->parent_phase;
+        b->uv_v0 = bs->uv_v0;
+        b->is_terminal = bs->terminal;
+        b->bears_leaves = bs->bears_leaves;
+        b->bark_segs = 0;
+        b->vigor = 1.0f;
+        float circ = 2.0f * (float)M_PI * bs->base_r;
         int tiles = (int)(circ / TG_BARK_TILE + 0.5f);
         b->uv_tiles_u = tiles < 1 ? 1 : tiles;
     }
@@ -230,11 +279,11 @@ static void grow_branch(TreeSkeleton* s, const TreeParams* p, int parent_idx, co
     // sag), phototropism turns the outer part back up, and noise keeps any two
     // branches from tracing the same arc.
     vec3 d, pos;
-    glm_vec3_copy((float*)dir, d);
+    glm_vec3_copy((float*)bs->dir, d);
     glm_vec3_normalize(d);
-    glm_vec3_copy((float*)origin, pos);
+    glm_vec3_copy((float*)bs->origin, pos);
 
-    float step = length / (float)(num_points - 1);
+    float step = bs->length / (float)(num_points - 1);
     float arc = 0.0f;
 
     for (int i = 0; i < num_points; i++) {
@@ -242,9 +291,9 @@ static void grow_branch(TreeSkeleton* s, const TreeParams* p, int parent_idx, co
         BranchPoint* bp = &s->points[first_point + i];
         glm_vec3_copy(pos, bp->pos);
         glm_vec3_copy(d, bp->tangent);
-        bp->radius = base_r + (tip_r - base_r) * powf(t, 0.85f);
+        bp->radius = bs->base_r + (bs->tip_r - bs->base_r) * powf(t, 0.85f);
         bp->arc = arc;
-        bp->root_dist = root_dist0 + arc;
+        bp->root_dist = bs->root_dist0 + arc;
 
         if (i == num_points - 1)
             break;
@@ -253,20 +302,52 @@ static void grow_branch(TreeSkeleton* s, const TreeParams* p, int parent_idx, co
         arc += step;
 
         vec3 grav = {0.0f, -1.0f, 0.0f};
-        glm_vec3_muladds(grav, p->droop * step * 0.08f / (1.0f + bp->radius), d);
+        glm_vec3_muladds(grav, bs->droop * step * 0.08f / (1.0f + bp->radius), d);
 
         vec3 up = {0.0f, 1.0f, 0.0f};
-        glm_vec3_muladds(up, p->phototropism * step * 0.06f * t * t, d);
+        glm_vec3_muladds(up, bs->phototropism * step * 0.06f * t * t, d);
 
         vec3 jitter = {tg_randf(rng, -1.0f, 1.0f), tg_randf(rng, -1.0f, 1.0f) * 0.3f,
                        tg_randf(rng, -1.0f, 1.0f)};
-        glm_vec3_muladds(jitter, p->curve_noise * step * 0.03f, d);
+        glm_vec3_muladds(jitter, bs->curve_noise * step * 0.03f, d);
 
         glm_vec3_normalize(d);
     }
+    return bi;
+}
 
-    if (terminal)
+static void grow_branch(TreeSkeleton* s, const TreeParams* p, int parent_idx, const vec3 origin,
+                        const vec3 dir, float length, float base_r, int depth, float root_dist0,
+                        float parent_phase, float uv_v0, TgRng* rng) {
+    if (depth > p->max_depth || base_r < 0.05f || length < 0.4f)
         return;
+
+    bool terminal = (depth == p->max_depth);
+    // A terminal branch narrows to almost nothing and gets a pointed cap;
+    // an internal one stops at the taper so its children can pick up the radius.
+    float tip_r = terminal ? base_r * 0.12f : base_r * p->taper;
+
+    BranchSeed bs = {.parent = parent_idx,
+                     .depth = depth,
+                     .length = length,
+                     .base_r = base_r,
+                     .tip_r = tip_r,
+                     .droop = p->droop,
+                     .phototropism = p->phototropism,
+                     .curve_noise = p->curve_noise,
+                     .root_dist0 = root_dist0,
+                     .parent_phase = parent_phase,
+                     .uv_v0 = uv_v0,
+                     .terminal = terminal,
+                     .bears_leaves = depth >= p->max_depth - 1};
+    glm_vec3_copy((float*)origin, bs.origin);
+    glm_vec3_copy((float*)dir, bs.dir);
+    int bi = add_branch(s, &bs, rng);
+    if (bi < 0 || terminal)
+        return;
+    const int first_point = s->branches[bi].first_point;
+    const int num_points = s->branches[bi].num_points;
+    const float phase = s->branches[bi].phase;
 
     float twist_rad = glm_rad(p->twist);
     float angle_rad = glm_rad(p->branch_angle);
@@ -392,6 +473,164 @@ static void grow_branch(TreeSkeleton* s, const TreeParams* p, int parent_idx, co
     }
 }
 
+// One branch of a conifer, off the trunk `height` up it, out toward azimuth `az` and `pitch`
+// below level. A conifer's branches are terminal, so they are the whole of its wood but the
+// trunk; their needles are painted on the cards.
+static void excurrent_branch(TreeSkeleton* s, const TreeParams* p, int trunk, float trunk_len,
+                             float height, float az, float pitch, float length, float vigor,
+                             TgRng* rng) {
+    if (length < 0.4f)
+        return;
+    vec3 pos = GLM_VEC3_ZERO_INIT, tan = GLM_VEC3_ZERO_INIT;
+    float r, arc, root;
+    const Branch* tb = &s->branches[trunk];
+    branch_sample(s, tb, height / trunk_len, pos, tan, &r, &arc, &root);
+
+    const bool dead = vigor <= 0.0f;
+    // Thicker as it is longer, and slight beside the trunk: a conifer's branches are a fraction
+    // of its stem, and most of what shows of them is needles.
+    const float br = fminf(r * 0.35f, fmaxf(0.06f, 0.022f * length));
+    BranchSeed bs = {.parent = trunk,
+                     // Five spine points: enough for the sag and the turn up at the tip.
+                     .depth = 3,
+                     .length = length,
+                     .base_r = br,
+                     .tip_r = br * 0.12f,
+                     // Dead wood is stiff: it holds its line and wanders, where a live branch
+                     // sags under its needles and turns its tip back up.
+                     .droop = p->droop * (dead ? 0.4f : 1.0f),
+                     .phototropism = dead ? 0.0f : p->phototropism,
+                     .curve_noise = p->curve_noise * (dead ? 2.5f : 1.0f),
+                     .root_dist0 = root,
+                     .parent_phase = tb->phase,
+                     .uv_v0 = tb->uv_v0 + arc / TG_BARK_TILE,
+                     .terminal = true,
+                     .bears_leaves = true};
+    const float cp = cosf(pitch);
+    vec3 dir = {cosf(az) * cp, -sinf(pitch), sinf(az) * cp};
+    glm_vec3_copy(dir, bs.dir);
+    // Started inside the trunk, so its collar comes out of solid wood.
+    glm_vec3_copy(pos, bs.origin);
+    glm_vec3_muladds(dir, -0.6f * r, bs.origin);
+
+    int bi = add_branch(s, &bs, rng);
+    if (bi < 0)
+        return;
+    // Mostly hidden by its own needles, so a few sides are all its bark needs.
+    s->branches[bi].bark_segs = 5;
+    s->branches[bi].vigor = vigor;
+}
+
+/*
+ * The excurrent form, a conifer, after ez-tree's evergreen (Greenheck, MIT): one trunk to the
+ * top, and branches up it whose length falls with height, so the crown is a cone. Unlike
+ * ez-tree's, the branches come in WHORLS, a tier of several at one height as a spruce or a fir
+ * grows them, each tier turned off the last. The crown's lowest branches are dead and some
+ * others die or brown, and a snag's top is broken off. Every random draw is made here, as in
+ * the recursive form, so any meshing reads the one skeleton.
+ */
+static void grow_excurrent(TreeSkeleton* s, const TreeParams* p, TgRng* rng) {
+    const float L = p->trunk_length, R = p->trunk_radius;
+    // A snag's top is gone: the trunk ends at the break, where the wood is still thick, and
+    // gets the blunt cap of a branch that goes on rather than a point.
+    const float broken = p->snag > 0.0f ? 0.45f * p->snag * tg_randf(rng, 0.6f, 1.0f) : 0.0f;
+    const float trunk_len = L * (1.0f - broken);
+    const float top_r = R * 0.04f;
+    const float tip_r = broken > 0.0f ? R + (top_r - R) * powf(1.0f - broken, 0.85f) : top_r;
+
+    BranchSeed trunk = {.parent = -1,
+                        .depth = 0,
+                        .dir = {0.0f, 1.0f, 0.0f},
+                        .length = trunk_len,
+                        .base_r = R,
+                        .tip_r = tip_r,
+                        .curve_noise = p->curve_noise,
+                        .terminal = broken <= 0.0f};
+    const int ti = add_branch(s, &trunk, rng);
+    if (ti < 0)
+        return;
+
+    // A break is not a cut: splinters stand up round its rim.
+    if (broken > 0.0f) {
+        const Branch tb = s->branches[ti];
+        const BranchPoint top = s->points[tb.first_point + tb.num_points - 1];
+        const int splinters = 4 + (int)tg_randf(rng, 0.0f, 2.99f);
+        for (int i = 0; i < splinters; i++) {
+            const float az = tg_randf(rng, 0.0f, 2.0f * (float)M_PI);
+            const float tilt = glm_rad(tg_randf(rng, 5.0f, 25.0f));
+            const float base_r = tip_r * tg_randf(rng, 0.25f, 0.45f);
+            BranchSeed sp = {.parent = ti,
+                             .depth = 4,
+                             .length = tip_r * tg_randf(rng, 1.5f, 5.0f),
+                             .base_r = base_r,
+                             .tip_r = base_r * 0.1f,
+                             .curve_noise = p->curve_noise,
+                             .root_dist0 = trunk_len,
+                             .parent_phase = tb.phase,
+                             .uv_v0 = tb.uv_v0 + trunk_len / TG_BARK_TILE,
+                             .terminal = true};
+            const vec3 out = {cosf(az), 0.0f, sinf(az)};
+            glm_vec3_copy((float*)top.pos, sp.origin);
+            glm_vec3_muladds((float*)out, tip_r * tg_randf(rng, 0.3f, 0.8f), sp.origin);
+            vec3 dir = {out[0] * sinf(tilt), cosf(tilt), out[2] * sinf(tilt)};
+            glm_vec3_copy(dir, sp.dir);
+            const int si = add_branch(s, &sp, rng);
+            if (si >= 0) {
+                s->branches[si].bark_segs = 4;
+                s->branches[si].vigor = 0.0f;
+            }
+        }
+    }
+
+    // Measured on the unbroken tree, so a snag keeps the long low branches it grew.
+    const float crown0 = p->crown_base * L;
+    const float crown_span = fmaxf(L - crown0, 1e-3f);
+    const float longest = p->crown_width * L;
+    const float twist = glm_rad(p->twist), var = glm_rad(p->angle_variance);
+    const float low_pitch = glm_rad(p->branch_pitch), top_pitch = glm_rad(-40.0f);
+    const float spacing = fmaxf(p->whorl_spacing, 0.5f);
+
+    // The lowest branches, shaded out long ago: dead stubs up the bare trunk.
+    const int stubs = (int)(crown0 / spacing * 0.5f);
+    for (int i = 0; i < stubs; i++) {
+        const float h = tg_randf(rng, 0.1f, 1.0f) * crown0;
+        const float az = tg_randf(rng, 0.0f, 2.0f * (float)M_PI);
+        const float len = longest * tg_randf(rng, 0.06f, 0.16f);
+        excurrent_branch(s, p, ti, trunk_len, h, az, low_pitch + tg_randf(rng, -var, var), len,
+                         0.0f, rng);
+    }
+
+    int whorl = 0;
+    for (float h = crown0 + tg_randf(rng, 0.0f, 0.5f) * spacing; h < trunk_len - 0.4f * spacing;
+         h += spacing * tg_randf(rng, 0.8f, 1.2f), whorl++) {
+        const float u = (h - crown0) / crown_span;
+        const float len = longest * powf(fmaxf(1.0f - u, 0.0f), p->crown_shape);
+        int n = p->whorl_size + (int)floorf(tg_randf(rng, -1.0f, 2.0f));
+        if (n < 1)
+            n = 1;
+        const float az0 = (float)whorl * twist + tg_randf(rng, -0.3f, 0.3f);
+        // Low branches leave below level and the top ones rise toward the leader.
+        const float pitch = low_pitch + (top_pitch - low_pitch) * powf(u, 1.3f);
+        // What dies: the crown's lowest tiers, and on a snag the last stretch under the break.
+        const bool zone_dead = u < p->dead_lower || (broken > 0.0f && h > trunk_len - 0.06f * L);
+        for (int k = 0; k < n; k++) {
+            const float az = az0 + 2.0f * (float)M_PI * (float)k / (float)n +
+                             tg_randf(rng, -0.35f, 0.35f) * (float)M_PI / (float)n;
+            const float roll = tg_randf(rng, 0.0f, 1.0f);
+            float vigor = 1.0f;
+            if (zone_dead)
+                vigor = 0.0f;
+            else if (roll < p->dead_fraction)
+                vigor = roll < 0.5f * p->dead_fraction ? 0.0f : 0.5f;
+            // A dead branch has mostly snapped off short.
+            const float blen = len * tg_randf(rng, 0.8f, 1.15f) *
+                               (vigor > 0.0f ? 1.0f : tg_randf(rng, 0.3f, 0.75f));
+            excurrent_branch(s, p, ti, trunk_len, h, az, pitch + tg_randf(rng, -var, var), blen,
+                             vigor, rng);
+        }
+    }
+}
+
 void tree_skeleton_build(TreeSkeleton* skel, const TreeParams* p) {
     tree_skeleton_free(skel);
 
@@ -401,8 +640,11 @@ void tree_skeleton_build(TreeSkeleton* skel, const TreeParams* p) {
 
     vec3 origin = {0.0f, 0.0f, 0.0f};
     vec3 up = {0.0f, 1.0f, 0.0f};
-    grow_branch(skel, p, -1, origin, up, p->trunk_length, p->trunk_radius, 0, 0.0f, 0.0f, 0.0f,
-                &rng);
+    if (p->form == TREE_FORM_EXCURRENT)
+        grow_excurrent(skel, p, &rng);
+    else
+        grow_branch(skel, p, -1, origin, up, p->trunk_length, p->trunk_radius, 0, 0.0f, 0.0f, 0.0f,
+                    &rng);
 
     skel->max_root_dist = 1.0f;
     for (int i = 0; i < skel->point_count; i++) {
@@ -434,6 +676,8 @@ static float branch_phase_at(const Branch* b, float t_arc) {
 // flutes; twigs are a few pixels wide and would only cost vertices. Shared by
 // the sweep and the vertex census, which must agree exactly.
 static int branch_segs(const Branch* b) {
+    if (b->bark_segs > 0)
+        return b->bark_segs;
     int segs = 6 + (int)ceilf(b->base_radius * 2.0f);
     return segs > 26 ? 26 : segs;
 }
@@ -595,13 +839,38 @@ static void sweep_branch(MeshBuilder* mb, const TreeSkeleton* s, const Branch* b
     }
 }
 
+/*
+ * The wind leans a vegetation mesh by its vertices' height through the mesh's OWN height range
+ * (the shader's uWindMaskMinY/MaxY, from the mesh's bounds). A conifer's needles start at the
+ * crown's base where its wood starts at the ground, so measured apart the two would lean by
+ * different amounts at the same height and a gust would slide the sprays along their branches.
+ * Both meshes carry the same two unreferenced vertices, at the bottom and the top of the whole
+ * tree, so they measure one range.
+ */
+#define TG_WIND_ANCHORS 2
+
+static void excurrent_wind_anchors(MeshBuilder* mb, const TreeSkeleton* s, const TreeParams* p) {
+    float y0 = 0.0f, y1 = 0.0f;
+    for (int i = 0; i < s->point_count; i++) {
+        y0 = fminf(y0, s->points[i].pos[1]);
+        y1 = fmaxf(y1, s->points[i].pos[1]);
+    }
+    // The sprays reach past the wood by up to a card's length.
+    y0 -= p->leaf_size;
+    y1 += p->leaf_size;
+    const vec3 n = {0.0f, 1.0f, 0.0f}, t = {1.0f, 0.0f, 0.0f};
+    const float white[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+    mb_vertex(mb, (vec3){0.0f, y0, 0.0f}, n, t, 0.0f, 0.0f, 0.0f, 0.0f, white);
+    mb_vertex(mb, (vec3){0.0f, y1, 0.0f}, n, t, 0.0f, 0.0f, 0.0f, 0.0f, white);
+}
+
 bool tree_mesh_bark(const TreeSkeleton* skel, const TreeParams* p, Mesh* mesh) {
-    (void)p;
     if (!skel || skel->branch_count == 0 || !mesh)
         return false;
+    const bool excurrent = p->form == TREE_FORM_EXCURRENT;
 
     // Census first: one exact reservation beats reallocating through 40k verts.
-    size_t vres = 0, ires = 0;
+    size_t vres = excurrent ? TG_WIND_ANCHORS : 0, ires = 0;
     for (int i = 0; i < skel->branch_count; i++) {
         const Branch* b = &skel->branches[i];
         int segs = branch_segs(b);
@@ -615,6 +884,8 @@ bool tree_mesh_bark(const TreeSkeleton* skel, const TreeParams* p, Mesh* mesh) {
 
     for (int i = 0; i < skel->branch_count; i++)
         sweep_branch(&mb, skel, &skel->branches[i]);
+    if (excurrent)
+        excurrent_wind_anchors(&mb, skel, p);
 
     return mb_transfer(&mb, mesh);
 }
@@ -625,9 +896,12 @@ bool tree_mesh_bark(const TreeSkeleton* skel, const TreeParams* p, Mesh* mesh) {
 
 // One leaf card: a quad split down the middle so the mid-rib can crease and the
 // tip row can droop. Flat cards read as stickers from every angle but head-on.
+// `fold` is how far the crease stands proud, and `tip_droop` how far the tip
+// hangs, each a fraction of the card's width and length.
 static void emit_leaf_card(MeshBuilder* mb, const vec3 attach, const vec3 L, const vec3 Nl,
-                           const vec3 S, float len, float width, float phase, float flex,
-                           const float* rgba, int variant, bool mirror, const vec3 canopy_center) {
+                           const vec3 S, float len, float width, float fold, float tip_droop,
+                           float phase, float flex, const float* rgba, int variant, bool mirror,
+                           const vec3 canopy_center) {
     unsigned int base = mb->vcount;
     vec3 down = {0.0f, -1.0f, 0.0f};
     const float inv_variants = 1.0f / (float)TG_LEAF_VARIANTS;
@@ -642,9 +916,9 @@ static void emit_leaf_card(MeshBuilder* mb, const vec3 attach, const vec3 L, con
             glm_vec3_muladds((float*)L, vv * len, pv);
             glm_vec3_muladds((float*)S, uu * width, pv);
             // Mid-rib fold: the spine of the leaf stands proud of its edges.
-            glm_vec3_muladds((float*)Nl, (0.5f - fabsf(uu)) * width * 0.25f, pv);
+            glm_vec3_muladds((float*)Nl, (0.5f - fabsf(uu)) * width * fold, pv);
             // Tip droop.
-            glm_vec3_muladds(down, vv * len * 0.15f, pv);
+            glm_vec3_muladds(down, vv * len * tip_droop, pv);
 
             vec3 nrm = GLM_VEC3_ZERO_INIT, tng = GLM_VEC3_ZERO_INIT;
             glm_vec3_copy((float*)Nl, nrm);
@@ -692,9 +966,121 @@ static void emit_leaf_card(MeshBuilder* mb, const vec3 attach, const vec3 L, con
     }
 }
 
+/*
+ * A conifer's needles: sprays along each branch, one each side in turn, angled out in the
+ * branch's own plane as a spruce's side shoots are, and one more off its tip. Each spray is a
+ * crossed pair of cards, the flat one and one stood on edge across it, so a tree seen from
+ * the side shows needles and not a stack of slivers. A dead branch keeps a few bare twigs, and
+ * a browning one sprays mostly browned.
+ */
+static bool mesh_sprays(const TreeSkeleton* skel, const TreeParams* p, Mesh* mesh) {
+    TgRng rng = {(uint32_t)p->seed * 747796405u + 2891336453u};
+    if (rng.s == 0)
+        rng.s = 1;
+
+    MeshBuilder mb;
+    if (!mb_init(&mb, 4096, 4096, true))
+        return false;
+
+    const vec3 up = {0.0f, 1.0f, 0.0f};
+    const float L = p->trunk_length, crown0 = p->crown_base * L;
+    const float crown_span = fmaxf(L - crown0, 1e-3f);
+    const float longest = fmaxf(p->crown_width * L, 1e-3f);
+    const float spray = glm_rad(p->spray_angle), var = glm_rad(p->angle_variance);
+
+    for (int i = 0; i < skel->branch_count && mb.ok; i++) {
+        const Branch* b = &skel->branches[i];
+        if (b->depth == 0 || !b->bears_leaves)
+            continue;
+        const bool dead = b->vigor <= 0.0f;
+        const int n = (int)(b->length * p->leaf_density / 10.0f * (dead ? 0.35f : 1.0f));
+
+        for (int j = 0; j <= n && mb.ok; j++) {
+            const bool tip = j == n;
+            const float t =
+                tip ? 1.0f : 0.15f + 0.8f * ((float)j + tg_randf(&rng, 0.2f, 0.8f)) / (float)n;
+
+            vec3 spos = GLM_VEC3_ZERO_INIT, stan = GLM_VEC3_ZERO_INIT;
+            float sr, sarc, sroot;
+            branch_sample(skel, b, t, spos, stan, &sr, &sarc, &sroot);
+
+            // The branch's own plane: along it, and level across it.
+            vec3 side;
+            glm_vec3_cross(stan, (float*)up, side);
+            if (glm_vec3_norm(side) < 1e-3f)
+                perp_to(stan, side);
+            glm_vec3_normalize(side);
+
+            const float a = tip ? 0.0f : spray + tg_randf(&rng, -var, var);
+            const float sgn = (j & 1) ? 1.0f : -1.0f;
+            vec3 L_dir;
+            glm_vec3_scale(stan, cosf(a), L_dir);
+            glm_vec3_muladds(side, sgn * sinf(a), L_dir);
+            // A spray hangs a little below the shoot it grows from.
+            L_dir[1] -= 0.12f;
+            glm_vec3_normalize(L_dir);
+
+            // The flat card, its normal up off the spray, and its pair stood on edge.
+            vec3 n1, s1, n2, s2;
+            glm_vec3_copy((float*)up, n1);
+            glm_vec3_muladds(L_dir, -glm_vec3_dot((float*)up, L_dir), n1);
+            if (glm_vec3_norm(n1) < 1e-3f)
+                perp_to(L_dir, n1);
+            glm_vec3_normalize(n1);
+            glm_vec3_cross(n1, L_dir, s1);
+            glm_vec3_normalize(s1);
+            glm_vec3_copy(s1, n2);
+            glm_vec3_cross(n2, L_dir, s2);
+            glm_vec3_normalize(s2);
+
+            const float len = p->leaf_size * tg_randf(&rng, 0.75f, 1.2f) * (1.0f - 0.35f * t);
+            const float width = len * 0.9f;
+
+            const float roll = tg_randf(&rng, 0.0f, 1.0f);
+            int cell;
+            if (dead)
+                cell = TG_SPRAY_BARE_CELL;
+            else if (roll < (b->vigor < 1.0f ? 0.7f : 0.3f * p->dead_fraction))
+                cell = TG_SPRAY_LIVE_CELLS + (int)tg_randf(&rng, 0.0f, (float)TG_SPRAY_DEAD_CELLS);
+            else
+                cell = (int)tg_randf(&rng, 0.0f, (float)TG_SPRAY_LIVE_CELLS);
+            if (cell > TG_SPRAY_BARE_CELL)
+                cell = TG_SPRAY_BARE_CELL;
+            const bool mirror = tg_randf(&rng, 0.0f, 1.0f) < 0.5f;
+
+            // Baked occlusion, as the broadleaf's: a spray deep against the trunk sees little
+            // sky against one out at the crown's edge, and the crown is darker low down.
+            const float hu = glm_clamp((spos[1] - crown0) / crown_span, 0.0f, 1.0f);
+            const float reach = longest * powf(1.0f - hu, p->crown_shape) + 1e-3f;
+            const float out = sqrtf(spos[0] * spos[0] + spos[2] * spos[2]) / reach;
+            float ao = 0.45f + 0.55f * tg_smoothstep(0.1f, 1.0f, out);
+            ao *= 0.7f + 0.3f * hu;
+            const float bright = tg_randf(&rng, 0.85f, 1.15f);
+            const float warm = tg_randf(&rng, -0.06f, 0.06f);
+            const float tint[4] = {ao * bright * (1.0f + warm), ao * bright,
+                                   ao * bright * (1.0f - warm), 1.0f};
+
+            float ph = branch_phase_at(b, t) + tg_randf(&rng, 0.0f, 0.3f);
+            ph -= floorf(ph);
+            const float flex = powf(sroot / skel->max_root_dist, 1.2f);
+
+            // The crown shades as one body round the trunk's axis at this height.
+            const vec3 centre = {0.0f, spos[1], 0.0f};
+            emit_leaf_card(&mb, spos, L_dir, n1, s1, len, width, 0.06f, 0.1f, ph, flex, tint, cell,
+                           mirror, centre);
+            emit_leaf_card(&mb, spos, L_dir, n2, s2, len, width, 0.06f, 0.1f, ph, flex, tint, cell,
+                           !mirror, centre);
+        }
+    }
+    excurrent_wind_anchors(&mb, skel, p);
+    return mb_transfer(&mb, mesh);
+}
+
 bool tree_mesh_leaves(const TreeSkeleton* skel, const TreeParams* p, Mesh* mesh) {
     if (!skel || !mesh || !p->show_leaves || p->leaf_density <= 0.0f || p->leaf_size <= 0.0f)
         return false;
+    if (p->form == TREE_FORM_EXCURRENT)
+        return mesh_sprays(skel, p, mesh);
 
     TgRng rng = {(uint32_t)p->seed * 747796405u + 2891336453u};
     if (rng.s == 0)
@@ -830,8 +1216,8 @@ bool tree_mesh_leaves(const TreeSkeleton* skel, const TreeParams* p, Mesh* mesh)
                 variant = TG_LEAF_VARIANTS - 1;
             bool mirror = tg_randf(&rng, 0.0f, 1.0f) < 0.5f;
 
-            emit_leaf_card(&mb, attach, L, Nl, S, len, width, ph, flex, tint, variant, mirror,
-                           canopy_center);
+            emit_leaf_card(&mb, attach, L, Nl, S, len, width, 0.25f, 0.15f, ph, flex, tint, variant,
+                           mirror, canopy_center);
 
             if (!mb.ok)
                 break;

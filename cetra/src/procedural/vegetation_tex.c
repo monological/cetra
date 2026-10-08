@@ -658,3 +658,311 @@ void veg_leaf_cluster_maps(int width, int height, unsigned char** out_albedo,
     *out_normal = normal;
     *out_rough = rough;
 }
+
+// ---------------------------------------------------------------------------
+// Needle sprays (spec 13.35)
+// ---------------------------------------------------------------------------
+
+typedef struct SprayRng {
+    unsigned int s;
+} SprayRng;
+
+static float spray_rand(SprayRng* r, float lo, float hi) {
+    r->s ^= r->s << 13;
+    r->s ^= r->s >> 17;
+    r->s ^= r->s << 5;
+    return lo + (float)(r->s & 0xFFFFFFu) / (float)0x1000000 * (hi - lo);
+}
+
+VegSprayDesc veg_spray_desc_default(void) {
+    return (VegSprayDesc){.seed = 1,
+                          .flat = 0.35f,
+                          .live_rgb = {0.22f, 0.32f, 0.14f},
+                          .dead_rgb = {0.42f, 0.27f, 0.12f},
+                          .twig_rgb = {0.36f, 0.26f, 0.18f}};
+}
+
+// The buffers being painted, and the one cell a stroke may touch: nothing spills into the
+// neighbouring cells, which other cards sample.
+typedef struct SprayCanvas {
+    unsigned char *albedo, *normal, *rough;
+    int w, h;
+    int x0, x1;
+} SprayCanvas;
+
+// One stroke: a capsule from a to b in pixels, its radius r0 at a narrowing to r1 at b, painted
+// over what is already there. A needle and a twig are each one, round in section: the normal
+// tilts across the stroke, so it shades as a cylinder rather than a flat ribbon.
+static void spray_stroke(SprayCanvas* c, float ax, float ay, float bx, float by, float r0, float r1,
+                         const float rgb[3], float roughness) {
+    const float pad = fmaxf(r0, r1) + 1.5f;
+    int x0 = (int)floorf(fminf(ax, bx) - pad), x1 = (int)ceilf(fmaxf(ax, bx) + pad);
+    int y0 = (int)floorf(fminf(ay, by) - pad), y1 = (int)ceilf(fmaxf(ay, by) + pad);
+    if (x0 < c->x0)
+        x0 = c->x0;
+    if (x1 > c->x1 - 1)
+        x1 = c->x1 - 1;
+    if (y0 < 0)
+        y0 = 0;
+    if (y1 > c->h - 1)
+        y1 = c->h - 1;
+
+    const float dx = bx - ax, dy = by - ay;
+    const float len2 = dx * dx + dy * dy;
+    const float len = sqrtf(len2);
+    // Across the stroke, in the atlas's own axes.
+    const float px_ = len > 1e-4f ? -dy / len : 1.0f, py_ = len > 1e-4f ? dx / len : 0.0f;
+
+    for (int y = y0; y <= y1; y++) {
+        for (int x = x0; x <= x1; x++) {
+            const float fx = (float)x + 0.5f - ax, fy = (float)y + 0.5f - ay;
+            float t = len2 > 1e-6f ? (fx * dx + fy * dy) / len2 : 0.0f;
+            t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
+            const float ex = fx - dx * t, ey = fy - dy * t;
+            const float d = sqrtf(ex * ex + ey * ey);
+            const float r = r0 + (r1 - r0) * t;
+            // A soft edge about a pixel wide, so the mips have something to filter.
+            const float alpha = 1.0f - smoothstep(r - 0.6f, r + 0.6f, d);
+            if (alpha <= 0.003f)
+                continue;
+            const float side = ex * px_ + ey * py_;
+            const float across = fmaxf(-1.0f, fminf(1.0f, side / fmaxf(r, 0.5f)));
+            const float shade = 0.78f + 0.22f * (1.0f - fabsf(across));
+
+            const int ia = (y * c->w + x) * 4;
+            const float dst_a = c->albedo[ia + 3] / 255.0f;
+            const float out_a = alpha + dst_a * (1.0f - alpha);
+            const float wsrc = out_a > 1e-4f ? alpha / out_a : 0.0f;
+            for (int k = 0; k < 3; k++)
+                c->albedo[ia + k] = (unsigned char)(fminf(1.0f, rgb[k] * shade) * 255.0f * wsrc +
+                                                    c->albedo[ia + k] * (1.0f - wsrc));
+            c->albedo[ia + 3] = (unsigned char)(out_a * 255.0f);
+
+            if (wsrc > 0.5f) {
+                vec3 n = {px_ * across * 0.75f, py_ * across * 0.75f, 1.0f};
+                glm_vec3_normalize(n);
+                const int i3 = (y * c->w + x) * 3;
+                for (int k = 0; k < 3; k++)
+                    c->normal[i3 + k] = (unsigned char)((n[k] * 0.5f + 0.5f) * 255.0f);
+                const unsigned char q = (unsigned char)(fminf(1.0f, roughness) * 255.0f);
+                c->rough[i3 + 0] = q;
+                c->rough[i3 + 1] = q;
+                c->rough[i3 + 2] = q;
+            }
+        }
+    }
+}
+
+// One needle of a brush, placed and waiting to be drawn in depth order.
+typedef struct SprayNeedle {
+    float ax, ay, bx, by; // base and tip on the card, pixels
+    float bend;           // how far its middle bows off the straight line, pixels
+    float depth;          // -1 the far side of the shoot, 1 the near
+} SprayNeedle;
+
+#define SPRAY_BRUSH_MAX 768
+
+/*
+ * Needles round a stretch of shoot from a to b, as a bottle brush seen side on. Each grows from
+ * the shoot leaning forward of it and turned some way round it, and is drawn as it projects onto
+ * the card, so a needle pointing toward or away from the eye comes out short. The far ones go
+ * down first and darker, the near ones over them: that is what makes a shoot read as a fuzzy
+ * cylinder and not a feather. `flat` gathers the needles toward the card's plane, as a fir's part
+ * into two rows; 0 is a spruce's brush, all round its shoot. Past the end of a shoot's last
+ * stretch they close into a tuft. `keep` is the share of needles still on it.
+ */
+static void spray_brush(SprayCanvas* c, SprayRng* rng, float ax, float ay, float bx, float by,
+                        bool tip, float needle_len, float needle_r, float keep, float flat,
+                        const float base_rgb[3], float roughness) {
+    const float dx = bx - ax, dy = by - ay;
+    const float len = sqrtf(dx * dx + dy * dy);
+    if (len < 1.0f || keep <= 0.0f)
+        return;
+    const float ux = dx / len, uy = dy / len, px = -uy, py = ux;
+    const float step = fmaxf(1.0f, needle_r * 1.8f);
+    const float end = tip ? len + needle_len * 0.35f : len;
+
+    SprayNeedle needles[SPRAY_BRUSH_MAX];
+    int count = 0;
+    for (float s = len * 0.03f; s <= end && count <= SPRAY_BRUSH_MAX - 3; s += step) {
+        const bool past = s > len;
+        const float along = fminf(s, len);
+        const float ox = ax + ux * along, oy = ay + uy * along;
+        for (int k = 0; k < 3; k++) {
+            if (spray_rand(rng, 0.0f, 1.0f) > keep)
+                continue;
+            const float around = spray_rand(rng, 0.0f, 2.0f * (float)M_PI);
+            float ca = cosf(around), sa = sinf(around) * (1.0f - flat);
+            const float r = sqrtf(ca * ca + sa * sa);
+            ca /= r;
+            sa /= r;
+            const float lean = past ? spray_rand(rng, 0.05f, 0.4f) : spray_rand(rng, 0.6f, 1.25f);
+            const float l = needle_len * spray_rand(rng, 0.7f, 1.2f) * (past ? 0.8f : 1.0f);
+            const float across = sinf(lean) * ca, fwd = cosf(lean);
+            SprayNeedle* n = &needles[count++];
+            n->ax = ox;
+            n->ay = oy;
+            n->bx = ox + (ux * fwd + px * across) * l;
+            n->by = oy + (uy * fwd + py * across) * l;
+            n->bend = spray_rand(rng, -0.08f, 0.08f) * l;
+            n->depth = sinf(lean) * sa;
+        }
+    }
+
+    // Far side first.
+    for (int i = 1; i < count; i++) {
+        const SprayNeedle n = needles[i];
+        int j = i - 1;
+        while (j >= 0 && needles[j].depth > n.depth) {
+            needles[j + 1] = needles[j];
+            j--;
+        }
+        needles[j + 1] = n;
+    }
+
+    for (int i = 0; i < count; i++) {
+        const SprayNeedle* n = &needles[i];
+        // Darker behind the shoot, and every needle lighter toward its tip, as new growth is.
+        const float shade =
+            (0.62f + 0.38f * (n->depth * 0.5f + 0.5f)) * spray_rand(rng, 0.88f, 1.1f);
+        float base[3], tipc[3];
+        for (int k = 0; k < 3; k++) {
+            base[k] = base_rgb[k] * shade;
+            tipc[k] = fminf(1.0f, base[k] * 1.4f);
+        }
+        const float mx = 0.5f * (n->ax + n->bx), my = 0.5f * (n->ay + n->by);
+        const float nl =
+            sqrtf((n->bx - n->ax) * (n->bx - n->ax) + (n->by - n->ay) * (n->by - n->ay));
+        const float bx_ = nl > 1e-3f ? -(n->by - n->ay) / nl : 0.0f;
+        const float by_ = nl > 1e-3f ? (n->bx - n->ax) / nl : 0.0f;
+        const float cx = mx + bx_ * n->bend, cy = my + by_ * n->bend;
+        const float rough = roughness + spray_rand(rng, -0.05f, 0.05f);
+        spray_stroke(c, n->ax, n->ay, cx, cy, needle_r, needle_r * 0.8f, base, rough);
+        spray_stroke(c, cx, cy, n->bx, n->by, needle_r * 0.8f, needle_r * 0.4f, tipc, rough);
+    }
+}
+
+void veg_needle_spray_maps(int width, int height, const VegSprayDesc* desc,
+                           unsigned char** out_albedo, unsigned char** out_normal,
+                           unsigned char** out_rough) {
+    *out_albedo = *out_normal = *out_rough = NULL;
+    const int cells = desc->cells > 0 ? desc->cells : 1;
+    unsigned char* albedo = calloc((size_t)width * height * 4, 1);
+    unsigned char* normal = malloc((size_t)width * height * 3);
+    unsigned char* rough = malloc((size_t)width * height * 3);
+    if (!albedo || !normal || !rough) {
+        free(albedo);
+        free(normal);
+        free(rough);
+        return;
+    }
+    for (int i = 0; i < width * height; i++) {
+        normal[i * 3 + 0] = 128;
+        normal[i * 3 + 1] = 128;
+        normal[i * 3 + 2] = 255;
+        rough[i * 3 + 0] = 180;
+        rough[i * 3 + 1] = 180;
+        rough[i * 3 + 2] = 180;
+    }
+
+    const int cell_w = width / cells;
+    // Every length below is drawn for a 256 px cell and scaled to the one asked for.
+    const float sc = (float)height / 256.0f;
+    for (int cell = 0; cell < cells; cell++) {
+        SprayCanvas c = {albedo, normal, rough, width, height, cell * cell_w, (cell + 1) * cell_w};
+        SprayRng rng = {desc->seed * 2654435761u + (unsigned int)cell * 40503u + 1u};
+        if (rng.s == 0)
+            rng.s = 1;
+        const bool live = cell < desc->live_cells;
+        const bool bare = !live && cell >= desc->live_cells + desc->dead_cells;
+        const float keep = live ? 1.0f : (bare ? 0.0f : 0.55f);
+        const float* needle_rgb = live ? desc->live_rgb : desc->dead_rgb;
+        const float needle_rough = live ? 0.6f : 0.75f;
+
+        /*
+         * The sprig as a fir's grows: a leading shoot from the base at the bottom row up the
+         * cell, and side shoots off it in opposite pairs at two or three nodes, so it reads as
+         * crosses; the longer side shoots carry a short shoot of their own. Every shoot is a
+         * stretch of twig, drawn first, and then a brush of needles over it.
+         */
+        typedef struct Shoot {
+            float ax, ay, bx, by, r0, r1, needle_len, needle_r;
+            bool tip;
+        } Shoot;
+        Shoot shoots[48];
+        int ns = 0;
+        const float cx = (float)c.x0 + 0.5f * (float)cell_w;
+        const float base_x = cx + spray_rand(&rng, -0.04f, 0.04f) * (float)cell_w;
+        const float bow = spray_rand(&rng, -0.06f, 0.06f) * (float)cell_w;
+        const float tip_x = cx + spray_rand(&rng, -0.05f, 0.05f) * (float)cell_w;
+        enum { SEGS = 6 };
+        float px[SEGS + 1], py[SEGS + 1];
+        for (int i = 0; i <= SEGS; i++) {
+            const float t = (float)i / SEGS;
+            px[i] = base_x + (tip_x - base_x) * t + bow * sinf(t * (float)M_PI);
+            py[i] = (float)height * (0.02f + 0.9f * t);
+        }
+        for (int i = 0; i < SEGS; i++)
+            shoots[ns++] = (Shoot){px[i],
+                                   py[i],
+                                   px[i + 1],
+                                   py[i + 1],
+                                   (1.8f - 0.9f * (float)i / SEGS) * sc,
+                                   (1.8f - 0.9f * (float)(i + 1) / SEGS) * sc,
+                                   15.0f * sc,
+                                   1.0f * sc,
+                                   i == SEGS - 1};
+
+        const int nodes = 2 + (int)spray_rand(&rng, 0.0f, 1.99f);
+        for (int k = 0; k < nodes; k++) {
+            const float t = 0.22f + 0.5f * ((float)k + spray_rand(&rng, 0.3f, 0.7f)) / (float)nodes;
+            const int i = (int)(t * SEGS);
+            const float f = t * SEGS - (float)i;
+            const float ox = px[i] + (px[i + 1] - px[i]) * f;
+            const float oy = py[i] + (py[i + 1] - py[i]) * f;
+            for (int sgn = -1; sgn <= 1; sgn += 2) {
+                if (spray_rand(&rng, 0.0f, 1.0f) < 0.12f)
+                    continue;
+                const float ang = glm_rad(spray_rand(&rng, 42.0f, 62.0f));
+                float l = (0.48f - 0.32f * t) * (float)height * spray_rand(&rng, 0.8f, 1.1f);
+                const float room = 0.44f * (float)cell_w - fabsf(ox - cx);
+                if (l * sinf(ang) > room)
+                    l = room / sinf(ang);
+                const float ex = ox + (float)sgn * sinf(ang) * l, ey = oy + cosf(ang) * l;
+                shoots[ns++] =
+                    (Shoot){ox, oy, ex, ey, 1.2f * sc, 0.6f * sc, 12.0f * sc, 0.9f * sc, true};
+                // A short shoot of its own off the outer side of a long one.
+                if (l > 0.22f * (float)height && ns < 47) {
+                    const float m = spray_rand(&rng, 0.45f, 0.65f);
+                    const float mx = ox + (ex - ox) * m, my = oy + (ey - oy) * m;
+                    const float a2 = ang + glm_rad(spray_rand(&rng, 30.0f, 45.0f));
+                    float l2 = l * spray_rand(&rng, 0.25f, 0.35f);
+                    const float room2 = 0.46f * (float)cell_w - fabsf(mx - cx);
+                    if (l2 * sinf(a2) > room2)
+                        l2 = room2 / sinf(a2);
+                    shoots[ns++] = (Shoot){mx,
+                                           my,
+                                           mx + (float)sgn * sinf(a2) * l2,
+                                           my + cosf(a2) * l2,
+                                           0.8f * sc,
+                                           0.45f * sc,
+                                           10.0f * sc,
+                                           0.85f * sc,
+                                           true};
+                }
+            }
+        }
+
+        for (int i = 0; i < ns; i++)
+            spray_stroke(&c, shoots[i].ax, shoots[i].ay, shoots[i].bx, shoots[i].by, shoots[i].r0,
+                         shoots[i].r1, desc->twig_rgb, 0.8f);
+        for (int i = 0; i < ns; i++)
+            spray_brush(&c, &rng, shoots[i].ax, shoots[i].ay, shoots[i].bx, shoots[i].by,
+                        shoots[i].tip, shoots[i].needle_len, shoots[i].needle_r, keep, desc->flat,
+                        needle_rgb, needle_rough);
+    }
+
+    *out_albedo = albedo;
+    *out_normal = normal;
+    *out_rough = rough;
+}
