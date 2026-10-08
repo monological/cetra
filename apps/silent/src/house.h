@@ -56,10 +56,6 @@ void house_front_gutter(Kit* kit, float x0, float x1, float edge_y, float fascia
 float house_roof_y(float x);
 float house_roof_under_y(float x);
 
-// How far `p` is outside the house's walls in plan, tower included; negative inside. In the
-// plan's own coordinates.
-float house_outside_distance(const vec3 p);
-
 // How far `p` is from the nearest face of any wall of the house or the tower, in plan, or of
 // any floor or ceiling, in height, each taken whole -- openings, ends and storeys ignored, so it
 // errs toward too near. Negative inside one. What an irradiance probe must keep clear of.

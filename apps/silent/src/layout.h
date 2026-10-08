@@ -44,12 +44,18 @@
 #define HOUSE_X1      5.0f
 #define HOUSE_FRONT_Z 10.0f
 #define HOUSE_BACK_Z  19.5f
+// The outside walls' outer faces: the footprint a house stands on.
+#define HOUSE_OUT_X0 (HOUSE_X0 - 0.5f * EXT_WALL)
+#define HOUSE_OUT_X1 (HOUSE_X1 + 0.5f * EXT_WALL)
+#define HOUSE_OUT_Z0 (HOUSE_FRONT_Z - 0.5f * EXT_WALL)
+#define HOUSE_OUT_Z1 (HOUSE_BACK_Z + 0.5f * EXT_WALL)
 
 #define HALL_X0 (-1.5f) // the hall runs from the front door to the great hall between these
 #define HALL_X1 0.0f    // and this is also the kitchen's west wall
-// The hall's inner faces.
-#define HALL_IN_X0 (HALL_X0 + 0.5f * INT_WALL)
-#define HALL_IN_X1 (HALL_X1 - 0.5f * INT_WALL)
+// The hall's inner faces, and its west wall's other face, which is the next room's.
+#define HALL_IN_X0  (HALL_X0 + 0.5f * INT_WALL)
+#define HALL_IN_X1  (HALL_X1 - 0.5f * INT_WALL)
+#define HALL_OUT_X0 (HALL_X0 - 0.5f * INT_WALL)
 
 // The front band's back wall, which is the great hall's front.
 #define KITCHEN_BACK_Z 13.8f

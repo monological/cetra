@@ -598,12 +598,3 @@ float house_clearance(const vec3 p) {
         d = fminf(d, fmaxf(SLABS[i][0] - p[1], p[1] - SLABS[i][1]));
     return d;
 }
-
-float house_outside_distance(const vec3 p) {
-    const float cx = 0.5f * (HOUSE_X0 + HOUSE_X1), cz = 0.5f * (HOUSE_FRONT_Z + HOUSE_BACK_Z);
-    // To the outer faces, as the tower's is: HOUSE_* are the walls' middles.
-    const float hx = 0.5f * (HOUSE_X1 - HOUSE_X0) + CORNER;
-    const float hz = 0.5f * (HOUSE_BACK_Z - HOUSE_FRONT_Z) + CORNER;
-    const float body = fmaxf(fabsf(p[0] - cx) - hx, fabsf(p[2] - cz) - hz);
-    return fminf(body, tower_outside_distance(p));
-}

@@ -36,7 +36,7 @@
 #define BATH_IN_Z0   (KITCHEN_BACK_Z + 0.5f * INT_WALL)
 #define BATH_IN_Z1   (HOME_SPLIT_Z - 0.5f * INT_WALL)
 #define LIVING_IN_X0 (HOUSE_X0 + 0.5f * EXT_WALL)
-#define LIVING_IN_X1 (HALL_X0 - 0.5f * INT_WALL)
+#define LIVING_IN_X1 HALL_OUT_X0
 #define LIVING_IN_Z0 BAND_Z0
 #define LIVING_IN_Z1 (HOME_SPLIT_Z - 0.5f * INT_WALL)
 // And the hall's, front to back.
@@ -66,10 +66,10 @@
 #define CELLAR_Z0 (HOUSE_FRONT_Z + 0.5f * EXT_WALL)
 #define CELLAR_Z1 (HOUSE_BACK_Z - 0.5f * EXT_WALL)
 // and their outer ones, which is where the yard is cut away round it.
-#define DIG_X0 (HOUSE_X0 - 0.5f * EXT_WALL)
-#define DIG_X1 (HOUSE_X1 + 0.5f * EXT_WALL)
-#define DIG_Z0 (HOUSE_FRONT_Z - 0.5f * EXT_WALL)
-#define DIG_Z1 (HOUSE_BACK_Z + 0.5f * EXT_WALL)
+#define DIG_X0 HOUSE_OUT_X0
+#define DIG_X1 HOUSE_OUT_X1
+#define DIG_Z0 HOUSE_OUT_Z0
+#define DIG_Z1 HOUSE_OUT_Z1
 // The stairwell down to it: behind the basement door, between the partition that closes it off
 // from the stair up and the back wall, and west from the door's own threshold, where the flight
 // starts.
@@ -94,8 +94,5 @@ bool home_bath_door(Door* door, Engine* engine, Scene* scene, EntityManager* em,
                     PhysicsWorld* physics);
 bool home_basement_door(Door* door, Engine* engine, Scene* scene, EntityManager* em,
                         PhysicsWorld* physics);
-
-// How far `p` is outside the house's walls in plan; negative inside.
-float home_outside_distance(const vec3 p);
 
 #endif // _SILENT_HOME_H_

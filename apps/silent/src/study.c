@@ -12,7 +12,7 @@
 #include "study.h"
 
 // The study's three plain walls, their faces as the room sees them.
-#define EAST_X (HALL_X0 - 0.5f * INT_WALL)
+#define EAST_X HALL_OUT_X0
 #define WEST_X (HOUSE_X0 + 0.5f * EXT_WALL)
 
 /*
