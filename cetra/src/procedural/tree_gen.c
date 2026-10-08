@@ -107,7 +107,8 @@ void tree_params_preset(TreeParams* p, TreePreset preset, int seed) {
             p->droop = 0.5f;
             p->phototropism = 0.35f;
             p->dead_lower = 0.12f;
-            p->dead_fraction = 0.08f;
+            p->dead_fraction = 0.12f;
+            p->irregularity = 0.7f;
             if (preset == TREE_PRESET_FIR) {
                 p->crown_width = 0.28f;
                 p->crown_shape = 1.1f;
@@ -125,6 +126,7 @@ void tree_params_preset(TreeParams* p, TreePreset preset, int seed) {
                 p->droop = 0.7f;
                 p->leaf_density = 2.2f;
                 p->snag = 1.0f;
+                p->irregularity = 0.9f;
             }
             break;
         case TREE_PRESET_DEAD:
@@ -478,7 +480,7 @@ static void grow_branch(TreeSkeleton* s, const TreeParams* p, int parent_idx, co
 // trunk; their needles are painted on the cards.
 static void excurrent_branch(TreeSkeleton* s, const TreeParams* p, int trunk, float trunk_len,
                              float height, float az, float pitch, float length, float vigor,
-                             TgRng* rng) {
+                             float sag, TgRng* rng) {
     if (length < 0.4f)
         return;
     vec3 pos = GLM_VEC3_ZERO_INIT, tan = GLM_VEC3_ZERO_INIT;
@@ -498,7 +500,7 @@ static void excurrent_branch(TreeSkeleton* s, const TreeParams* p, int trunk, fl
                      .tip_r = br * 0.12f,
                      // Dead wood is stiff: it holds its line and wanders, where a live branch
                      // sags under its needles and turns its tip back up.
-                     .droop = p->droop * (dead ? 0.4f : 1.0f),
+                     .droop = p->droop * sag * (dead ? 0.4f : 1.0f),
                      .phototropism = dead ? 0.0f : p->phototropism,
                      .curve_noise = p->curve_noise * (dead ? 2.5f : 1.0f),
                      .root_dist0 = root,
@@ -529,12 +531,43 @@ static void excurrent_branch(TreeSkeleton* s, const TreeParams* p, int trunk, fl
  * others die or brown, and a snag's top is broken off. Every random draw is made here, as in
  * the recursive form, so any meshing reads the one skeleton.
  */
+// Kink the trunk where its leader was once knocked aside: above each kink the trunk is shifted
+// sideways over a short stretch and grows on parallel, an S-bend rather than an even wander.
+static void kink_trunk(TreeSkeleton* s, int trunk, float length, float irregularity, TgRng* rng) {
+    const Branch* tb = &s->branches[trunk];
+    BranchPoint* pt = &s->points[tb->first_point];
+    const int n = tb->num_points;
+    const int kinks = 1 + (int)tg_randf(rng, 0.0f, 1.99f);
+    for (int k = 0; k < kinks; k++) {
+        const float at = tg_randf(rng, 0.25f, 0.85f);
+        const float az = tg_randf(rng, 0.0f, 2.0f * (float)M_PI);
+        const float shift = irregularity * length * tg_randf(rng, 0.01f, 0.035f);
+        for (int i = 0; i < n; i++) {
+            const float w = tg_smoothstep(at - 0.06f, at + 0.06f, (float)i / (float)(n - 1));
+            pt[i].pos[0] += cosf(az) * shift * w;
+            pt[i].pos[2] += sinf(az) * shift * w;
+        }
+    }
+    for (int i = 0; i < n; i++) {
+        const int a = i > 0 ? i - 1 : 0, b = i < n - 1 ? i + 1 : n - 1;
+        glm_vec3_sub(pt[b].pos, pt[a].pos, pt[i].tangent);
+        glm_vec3_normalize(pt[i].tangent);
+    }
+}
+
 static void grow_excurrent(TreeSkeleton* s, const TreeParams* p, TgRng* rng) {
     const float L = p->trunk_length, R = p->trunk_radius;
+    const float irr = p->irregularity;
     // A snag's top is gone: the trunk ends at the break, where the wood is still thick, and
     // gets the blunt cap of a branch that goes on rather than a point.
     const float broken = p->snag > 0.0f ? 0.45f * p->snag * tg_randf(rng, 0.6f, 1.0f) : 0.0f;
-    const float trunk_len = L * (1.0f - broken);
+    // A dead leader: the trunk stops a little short in a dead spike, and the branches under it
+    // turn up to take its place.
+    const bool forked = broken <= 0.0f && tg_randf(rng, 0.0f, 1.0f) < 0.3f * irr;
+    const float trunk_len = L * (1.0f - broken) * (forked ? tg_randf(rng, 0.82f, 0.9f) : 1.0f);
+    // The side it grew toward the light from, fuller than the rest.
+    const float light_az = tg_randf(rng, 0.0f, 2.0f * (float)M_PI);
+    const float lopsided = 0.35f * irr * tg_randf(rng, 0.3f, 1.0f);
     const float top_r = R * 0.04f;
     const float tip_r = broken > 0.0f ? R + (top_r - R) * powf(1.0f - broken, 0.85f) : top_r;
 
@@ -549,6 +582,8 @@ static void grow_excurrent(TreeSkeleton* s, const TreeParams* p, TgRng* rng) {
     const int ti = add_branch(s, &trunk, rng);
     if (ti < 0)
         return;
+    if (irr > 0.0f)
+        kink_trunk(s, ti, trunk_len, irr, rng);
 
     // A break is not a cut: splinters stand up round its rim.
     if (broken > 0.0f) {
@@ -597,17 +632,25 @@ static void grow_excurrent(TreeSkeleton* s, const TreeParams* p, TgRng* rng) {
         const float az = tg_randf(rng, 0.0f, 2.0f * (float)M_PI);
         const float len = longest * tg_randf(rng, 0.06f, 0.16f);
         excurrent_branch(s, p, ti, trunk_len, h, az, low_pitch + tg_randf(rng, -var, var), len,
-                         0.0f, rng);
+                         0.0f, 1.0f, rng);
     }
 
     int whorl = 0;
     for (float h = crown0 + tg_randf(rng, 0.0f, 0.5f) * spacing; h < trunk_len - 0.4f * spacing;
-         h += spacing * tg_randf(rng, 0.8f, 1.2f), whorl++) {
+         h += spacing *
+              fmaxf(0.3f, 1.0f + tg_randf(rng, -0.2f, 0.2f) + irr * tg_randf(rng, -0.25f, 0.4f)),
+               whorl++) {
         const float u = (h - crown0) / crown_span;
-        const float len = longest * powf(fmaxf(1.0f - u, 0.0f), p->crown_shape);
+        float len = longest * powf(fmaxf(1.0f - u, 0.0f), p->crown_shape);
         int n = p->whorl_size + (int)floorf(tg_randf(rng, -1.0f, 2.0f));
         if (n < 1)
             n = 1;
+        // Now and then a tier is stunted, or gone, which leaves a band you can see through.
+        const float fate = tg_randf(rng, 0.0f, 1.0f);
+        if (fate < 0.07f * irr)
+            continue;
+        if (fate < 0.2f * irr)
+            len *= tg_randf(rng, 0.35f, 0.6f);
         const float az0 = (float)whorl * twist + tg_randf(rng, -0.3f, 0.3f);
         // Low branches leave below level and the top ones rise toward the leader.
         const float pitch = low_pitch + (top_pitch - low_pitch) * powf(u, 1.3f);
@@ -617,16 +660,37 @@ static void grow_excurrent(TreeSkeleton* s, const TreeParams* p, TgRng* rng) {
             const float az = az0 + 2.0f * (float)M_PI * (float)k / (float)n +
                              tg_randf(rng, -0.35f, 0.35f) * (float)M_PI / (float)n;
             const float roll = tg_randf(rng, 0.0f, 1.0f);
+            const float gone = tg_randf(rng, 0.0f, 1.0f);
             float vigor = 1.0f;
             if (zone_dead)
                 vigor = 0.0f;
             else if (roll < p->dead_fraction)
                 vigor = roll < 0.5f * p->dead_fraction ? 0.0f : 0.5f;
+            // Lost to a storm, a deer or the dark: a branch that is simply not there.
+            if (gone < 0.15f * irr)
+                continue;
+            float vary = 1.0f + irr * tg_randf(rng, -0.35f, 0.35f);
+            if (tg_randf(rng, 0.0f, 1.0f) < 0.05f * irr)
+                vary *= 1.4f;
+            const float toward_light = 1.0f + lopsided * cosf(az - light_az);
             // A dead branch has mostly snapped off short.
-            const float blen = len * tg_randf(rng, 0.8f, 1.15f) *
+            const float blen = len * tg_randf(rng, 0.8f, 1.15f) * vary * toward_light *
                                (vigor > 0.0f ? 1.0f : tg_randf(rng, 0.3f, 0.75f));
+            const float sag = 1.0f + irr * tg_randf(rng, -0.4f, 0.5f);
             excurrent_branch(s, p, ti, trunk_len, h, az, pitch + tg_randf(rng, -var, var), blen,
-                             vigor, rng);
+                             vigor, sag, rng);
+        }
+    }
+
+    // The dead leader's replacements: one or two branches just under it, turned up steeply.
+    if (forked) {
+        const int leaders = 1 + (int)tg_randf(rng, 0.0f, 1.99f);
+        for (int i = 0; i < leaders; i++) {
+            const float h = trunk_len - L * tg_randf(rng, 0.03f, 0.08f);
+            const float az = tg_randf(rng, 0.0f, 2.0f * (float)M_PI);
+            const float pitch = -glm_rad(tg_randf(rng, 55.0f, 72.0f));
+            excurrent_branch(s, p, ti, trunk_len, h, az, pitch, L * tg_randf(rng, 0.12f, 0.2f),
+                             1.0f, 0.25f, rng);
         }
     }
 }
@@ -987,15 +1051,20 @@ static bool mesh_sprays(const TreeSkeleton* skel, const TreeParams* p, Mesh* mes
     const float crown_span = fmaxf(L - crown0, 1e-3f);
     const float longest = fmaxf(p->crown_width * L, 1e-3f);
     const float spray = glm_rad(p->spray_angle), var = glm_rad(p->angle_variance);
+    // Some trees in a wood are full and some thin, and any branch has bare stretches.
+    const float fullness = 1.0f - 0.35f * p->irregularity * tg_randf(&rng, 0.0f, 1.0f);
+    const float gaps = 0.15f * p->irregularity;
 
     for (int i = 0; i < skel->branch_count && mb.ok; i++) {
         const Branch* b = &skel->branches[i];
         if (b->depth == 0 || !b->bears_leaves)
             continue;
         const bool dead = b->vigor <= 0.0f;
-        const int n = (int)(b->length * p->leaf_density / 10.0f * (dead ? 0.35f : 1.0f));
+        const int n = (int)(b->length * p->leaf_density / 10.0f * (dead ? 0.35f : fullness));
 
         for (int j = 0; j <= n && mb.ok; j++) {
+            if (j < n && tg_randf(&rng, 0.0f, 1.0f) < gaps)
+                continue;
             const bool tip = j == n;
             const float t =
                 tip ? 1.0f : 0.15f + 0.8f * ((float)j + tg_randf(&rng, 0.2f, 0.8f)) / (float)n;

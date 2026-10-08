@@ -81,6 +81,10 @@ typedef struct TreeParams {
     float dead_lower;    // the fraction of the crown, from the bottom, whose branches are dead
     float dead_fraction; // the chance any other branch is dead or browning
     float snag;          // 0 a live leader; toward 1, the top broken off further down
+    // 0 a tidy cone; toward 1 the knocks a tree takes in a wood: a kinked trunk, a crown fuller
+    // on one side, uneven and missing tiers and branches, gaps, and now and then a dead leader
+    // that the branches under it have turned up to replace
+    float irregularity;
 } TreeParams;
 
 // One sample along a branch spine.
