@@ -2207,10 +2207,10 @@ static int tile_store_take(ShadowSystem* ss, const uint64_t* drawn, uint64_t* fr
 // Give each face drawn this frame over a copy of its still casters a cell of the store pool to
 // keep them in (spec 13.26), nearest light first. A face keeps the cell it holds while it is not
 // drawn that way, so a mover coming back finds the copy still there, until a face that is drawn
-// needs the cell. A face left without one is drawn whole, which is said once each time the pool
-// runs out. A block drawn again from where its light stands this frame takes none and keeps none:
-// its copy would be drawn and thrown away in the same pass. Before the region is laid out, so the
-// pool is in the array the frame it opens.
+// needs the cell. A face left without one is drawn whole, which is said once each time the
+// camera's pass runs out. A block drawn again from where its light stands this frame takes none
+// and keeps none: its copy would be drawn and thrown away in the same pass. Before the region is
+// laid out, so the pool is in the array the frame it opens.
 static void tiles_take_stores(ShadowSystem* ss, const Engine* engine) {
     int usable = ss->tile_store_cells < SHADOW_TILE_STORE_CELLS ? ss->tile_store_cells
                                                                 : SHADOW_TILE_STORE_CELLS;
@@ -2256,6 +2256,11 @@ static void tiles_take_stores(ShadowSystem* ss, const Engine* engine) {
             block->store_cell[f] = (int8_t)cell;
         }
     }
+    // The camera's pass alone says so (spec 13.32). A capture's draws every face a mover reaches,
+    // in view or not, so it runs out where the camera's does not, and a latch the two shared was
+    // spent by one and re-armed by the other every frame a capture ran.
+    if (engine->capture_kind != SCENE_CAPTURE_NONE)
+        return;
     if (refused && !ss->tile_store_warned) {
         log_warn("Cached shadow stores full (%d faces): '%s' and any farther cached light draw the "
                  "faces their moving casters reach whole, every frame",
