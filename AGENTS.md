@@ -1490,7 +1490,8 @@ speeds.
     - An item gone marks the box it was drawn in, which the record keeps current as its node
       moves; an item new marks where it is now; an item held but uploaded again, or drawn
       otherwise, marks both.
-    - Every face is drawn again only when it cannot answer: memory, or a caster with no bound.
+    - Every face is drawn again only when it cannot answer: memory, a caster with no bound that
+      is gone, new or changed, or the first frame after one with no note at all.
     - It used to be every face on any add or remove, which is what turned silent's woods,
       hanging trees as the player walked, into 650 ms frames (13.35). `tiles-graph-*` hold it,
       the render app's `--graph-churn` and `--graph-replace` reaching it.

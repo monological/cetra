@@ -573,8 +573,14 @@ Three things about it are easy to get backwards:
   moving caster's faces each frame. A box left where an item was first recorded would mark the
   wrong faces when the item goes.
 
-Every face is drawn again only where the rule cannot answer: memory, or a caster with no bound.
-`tile_generation` is not bumped either, since it means the array was lost.
+Every face is drawn again only where the rule cannot answer:
+- out of memory;
+- a caster with no bound that is gone, new or changed;
+- the first frame after a whole frame with no note (shadows off, no block held), whose movers the
+  record never saw.
+
+Otherwise `tile_generation` is not bumped, since it means the array was lost. An origin shift
+moves the recorded boxes with the blocks.
 
 **What else rendered a plausible frame on the way:**
 - **The body a diameter too long**: the fire wrote the whole spine as `source_length`, and the caps

@@ -952,11 +952,14 @@ static void sweep_branch(MeshBuilder* mb, const TreeSkeleton* s, const Branch* b
  * past its leader, and a broadleaf's canopy starts well above the trunk's foot -- and a gust would
  * slide them along. A card past either end clamps to it, so a spray past the leader moves with
  * the leader's tip, and one hanging below the trunk's foot with the foot.
+ *
+ * It starts at the lowest point's CENTRE, not a radius under it: the trunk's foot is a flat ring
+ * at its first point's height, so measured from below it the foot would lean too.
  */
 static void tree_wind_range(const TreeSkeleton* s, Mesh* mesh) {
     float y0 = FLT_MAX, y1 = -FLT_MAX;
     for (int i = 0; i < s->point_count; i++) {
-        y0 = fminf(y0, s->points[i].pos[1] - s->points[i].radius);
+        y0 = fminf(y0, s->points[i].pos[1]);
         y1 = fmaxf(y1, s->points[i].pos[1] + s->points[i].radius);
     }
     mesh->wind_y0 = y0;
