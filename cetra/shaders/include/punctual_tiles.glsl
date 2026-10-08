@@ -18,6 +18,14 @@
 // How edge-on to the light a receiver may lie before the jitter's carry onto its plane stops
 // growing: the cosine the carry divides by, so the carry stretches at most four times.
 #define TILE_CARRY_FLOOR 0.25
+// How far apart, in roundings of a float this far from the origin (|p| * 2^-23 each), a
+// receiver's position and the stored depth of that same surface may land: once in the surface
+// pass that hands the receiver its position, once in the face that drew it. Near the light that
+// is more depth than the plane bias's floor allows: 19 m from the origin and half a metre from a
+// light whose near plane is 5 cm, one rounding is seven ULPs of the map, so a receiver squarely
+// facing the light -- one depth across the whole face -- kept or lost its own shadow all at once
+// as the light moved.
+#define TILE_ROUNDINGS 8.0
 
 uniform int tileViewCount; // the views each cached light with a body was drawn from
 // 1 = the kept views, read where the body has moved them and blurred to meet; 0 = the
@@ -182,9 +190,14 @@ float tileShadow(uint li, vec3 worldPos, vec3 N, vec3 L, vec3 ddxWorld, vec3 ddy
         duv_dz = receiverPlaneGradient(px, py);
     }
 
+    // The rounding in metres, carried into the face's depth where the receiver is.
+    float d = dot(rel, axis);
+    float rounding = TILE_ROUNDINGS * 1.1920929e-7 * max(length(worldPos), length(t.centre));
+    float rounding_depth = rounding * t.nearP * t.farP / (d * d * (t.farP - t.nearP));
+
     vec3 cell = tileCell(t.first + face, t.edge);
     float texel = 1.0 / float(SHADOW_TILE_SIZE);
-    float ref = pc.z - SHADOW_PLANE_BIAS_FLOOR;
+    float ref = pc.z - SHADOW_PLANE_BIAS_FLOOR - rounding_depth;
     float sum = 0.0;
     for (int y = -1; y <= 1; ++y) {
         for (int x = -1; x <= 1; ++x) {
