@@ -62,11 +62,13 @@ struct LoadingScreen {
     // What the frame's own draw last found: the switch-off not begun. Read for the frame after, so
     // the frame's two questions of it agree whatever moves the clock between them.
     bool covering;
-    double clock;     // seconds of the screen shown
-    double last_draw; // the wall clock at the last draw; < 0 before the first
-    double play_at;   // the clock at which PLAY shows; INFINITY until the game is ready
-    double lift_at;   // the clock at which the switch-off starts; INFINITY until it is hidden
-    uint64_t frame;   // draws so far, for the tape's noise
+    double clock;        // seconds of the screen shown
+    double last_draw;    // the wall clock at the last draw; < 0 before the first
+    double play_at;      // the clock at which PLAY shows; INFINITY until the game is ready
+    double lift_at;      // the clock at which the switch-off starts; INFINITY until it is hidden
+    uint64_t frame;      // draws so far, for the tape's noise
+    double last_chance;  // the wall clock at its last chance to draw, or at show
+    double longest_wait; // the longest between two chances since last asked, seconds
 };
 
 static LoadingScreen* _loading_screen_make(void) {
@@ -120,6 +122,8 @@ void engine_show_loading_screen(Engine* engine) {
     ls->last_draw = -1.0;
     ls->play_at = INFINITY;
     ls->lift_at = INFINITY;
+    ls->last_chance = glfwGetTime();
+    ls->longest_wait = 0.0;
 }
 
 void engine_loading_screen_ready(Engine* engine) {
@@ -155,6 +159,22 @@ bool engine_loading_screen_prompting(const Engine* engine) {
 
 bool loading_screen_covers(const Engine* engine) {
     return engine_loading_screen_shown(engine) && engine->loading_screen->covering;
+}
+
+double engine_loading_screen_longest_wait(Engine* engine) {
+    if (!engine_loading_screen_shown(engine))
+        return 0.0;
+    LoadingScreen* ls = engine->loading_screen;
+    const double longest = ls->longest_wait;
+    ls->longest_wait = 0.0;
+    return longest;
+}
+
+// A chance to draw, drawn or not: the time since the last one is how long the screen stood still.
+static void _loading_chance(LoadingScreen* ls) {
+    const double now = glfwGetTime();
+    ls->longest_wait = fmax(ls->longest_wait, now - ls->last_chance);
+    ls->last_chance = now;
 }
 
 // The clock moves by the time since the last draw, or a frame's fixed step headless. False once
@@ -284,6 +304,8 @@ void loading_screen_frame(Engine* engine) {
     LoadingScreen* ls = engine ? engine->loading_screen : NULL;
     if (!ls)
         return;
+    if (ls->shown)
+        _loading_chance(ls);
     if (ls->shown && _loading_advance(engine, ls)) {
         _loading_draw(engine, ls, true);
         ls->covering = ls->clock < ls->lift_at;
@@ -302,7 +324,10 @@ void loading_screen_frame(Engine* engine) {
 // the targets the frame is drawing into.
 static void _loading_present(Engine* engine, bool poll) {
     LoadingScreen* ls = engine ? engine->loading_screen : NULL;
-    if (!ls || !ls->shown || engine->headless || !engine->window)
+    if (!ls || !ls->shown)
+        return;
+    _loading_chance(ls);
+    if (engine->headless || !engine->window)
         return;
     if (ls->last_draw >= 0.0 && glfwGetTime() - ls->last_draw < LOADING_MIN_INTERVAL)
         return;
