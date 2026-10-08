@@ -234,6 +234,7 @@ static void deadfall(Kit* kit, Trees* trees, SceneNode* parent, const FenceBreac
     const float bx = mid[0] - dir[0] * base_out, bz = mid[1] - dir[1] * base_out;
     const float y = land_height(bx, bz) + 0.4f;
     const float yaw = atan2f(dir[0], dir[1]);
+    const float sag = glm_rad(3.0f); // how far past level the trunk lies, crown down
     mat4 m;
     glm_translate_make(m, (vec3){bx, y, bz});
     // The crown crushed under it: what stood out all round the trunk now spreads along the
@@ -241,13 +242,18 @@ static void deadfall(Kit* kit, Trees* trees, SceneNode* parent, const FenceBreac
     glm_scale(m, (vec3){1.0f, 0.5f, 1.0f});
     glm_rotate_y(m, yaw, m);
     // Laid down, its crown sloping to the ground and its foot held up by the root plate.
-    glm_rotate_x(m, 0.5f * GLM_PIf + glm_rad(3.0f), m);
+    glm_rotate_x(m, 0.5f * GLM_PIf + sag, m);
     glm_rotate_y(m, 2.0f * GLM_PIf * kit_xrnd(state), m);
     glm_scale_uni(m, scale);
     place(parent, mesh, m);
     free_mesh(mesh);
-    kit_collider(kit, (vec3){bx + dir[0] * 0.5f * base_out, y, bz + dir[1] * 0.5f * base_out},
-                 (vec3){0.45f, 0.6f, 0.5f * base_out}, yaw);
+    // Its body as wide as its own trunk -- squashed by half in Y, the trunk keeps its radius
+    // across -- and centred where the trunk is halfway to the fence, the squashed sag having
+    // brought it down a little from its foot.
+    const float half = 0.5f * base_out;
+    const float r = trees->trunk_radius[which] * scale * TREES_TRUNK_BODY;
+    kit_collider(kit, (vec3){bx + dir[0] * half, y - 0.5f * half * tanf(sag), bz + dir[1] * half},
+                 (vec3){r, 0.6f, half}, yaw);
 }
 
 void woods_build(Kit* kit, Engine* engine, Scene* scene, Trees* trees,
@@ -255,9 +261,11 @@ void woods_build(Kit* kit, Engine* engine, Scene* scene, Trees* trees,
     ShaderProgram* pbr = engine_get_program(engine, CETRA_PROGRAM_PBR);
     Material* needles = needles_material(scene, pbr);
     Mesh *wood[CONIFER_MODELS], *sprays[CONIFER_MODELS];
+    float trunk_radius[CONIFER_MODELS];
     for (int i = 0; i < CONIFER_MODELS; i++) {
         TreeParams p;
         tree_params_preset(&p, CONIFERS[i].preset, CONIFERS[i].seed);
+        trunk_radius[i] = p.trunk_radius;
         trees_grow(&p, trees->bark, needles, &wood[i], &sprays[i]);
         if (wood[i])
             wood[i]->lod_scale = WOODS_WOOD_LOD_SCALE;
@@ -305,28 +313,32 @@ void woods_build(Kit* kit, Engine* engine, Scene* scene, Trees* trees,
                 if (!trees->dead[d])
                     continue;
                 const float scale = DEAD_MIN + (DEAD_MAX - DEAD_MIN) * size;
+                const float tilt = glm_rad(2.0f + 6.0f * lean);
                 glm_translate_make(m, (vec3){x, land_height(x, z) - 0.25f, z});
                 glm_rotate_y(m, yaw, m);
-                glm_rotate_x(m, glm_rad(2.0f + 6.0f * lean), m);
+                glm_rotate_x(m, tilt, m);
                 glm_scale_uni(m, scale);
                 place(trees->groups[d], trees->dead[d], m);
-                const float r = trees->trunk_radius * scale * 0.8f;
-                kit_collider(kit, (vec3){x, land_height(x, z) + 1.5f, z}, (vec3){r, 1.5f, r}, 0.0f);
+                trees_trunk_collider(kit, x, z, land_height(x, z),
+                                     trees->trunk_radius[d] * scale * TREES_TRUNK_BODY,
+                                     TREES_TRUNK_HEIGHT, yaw, tilt);
                 dead++;
             } else {
                 const int c = model;
                 if (!wood[c])
                     continue;
                 const float scale = CONIFER_MIN + (CONIFER_MAX - CONIFER_MIN) * size;
+                const float tilt = glm_rad(2.0f * lean);
                 glm_translate_make(m, (vec3){x, land_height(x, z) - 0.2f, z});
                 glm_rotate_y(m, yaw, m);
-                glm_rotate_x(m, glm_rad(2.0f * lean), m);
+                glm_rotate_x(m, tilt, m);
                 glm_scale_uni(m, scale);
                 place(wood_groups[c], wood[c], m);
                 if (sprays[c])
                     place(spray_groups[c], sprays[c], m);
-                kit_collider(kit, (vec3){x, land_height(x, z) + 1.5f, z},
-                             (vec3){0.35f, 1.5f, 0.35f}, 0.0f);
+                trees_trunk_collider(kit, x, z, land_height(x, z),
+                                     trunk_radius[c] * scale * TREES_TRUNK_BODY, TREES_TRUNK_HEIGHT,
+                                     yaw, tilt);
                 conifers++;
             }
         }
