@@ -49,10 +49,12 @@ static const uint32_t PALETTES[LOADING_PALETTE_COUNT][7] = {
 
 struct LoadingScreen {
     ShaderProgram* logo;
+    ShaderProgram* blur;
     ShaderProgram* tape;
     Crt* crt;
-    GLColorTarget mark;    // the mark, linear
-    GLColorTarget picture; // the tape's, display-encoded
+    GLColorTarget mark;     // the mark, linear
+    GLColorTarget bloom[2]; // the mark blurred across, then down, at a quarter its size
+    GLColorTarget picture;  // the tape's, display-encoded
     GLuint quad_vao, quad_vbo;
     bool shown;
     double clock;     // seconds of the ident shown
@@ -69,9 +71,10 @@ static LoadingScreen* _loading_screen_make(void) {
         return NULL;
     }
     ls->logo = create_loading_logo_program();
+    ls->blur = create_loading_blur_program();
     ls->tape = create_loading_tape_program();
     ls->crt = create_crt();
-    if (!ls->logo || !ls->tape || !ls->crt) {
+    if (!ls->logo || !ls->blur || !ls->tape || !ls->crt) {
         log_error("Loading screen: its programs are unavailable, so it will not show");
         free_loading_screen(ls);
         return NULL;
@@ -84,9 +87,12 @@ void free_loading_screen(LoadingScreen* ls) {
     if (!ls)
         return;
     free_program(ls->logo);
+    free_program(ls->blur);
     free_program(ls->tape);
     free_crt(ls->crt);
     gl_color_target_free(&ls->mark);
+    gl_color_target_free(&ls->bloom[0]);
+    gl_color_target_free(&ls->bloom[1]);
     gl_color_target_free(&ls->picture);
     glDeleteVertexArrays(1, &ls->quad_vao);
     glDeleteBuffers(1, &ls->quad_vbo);
@@ -150,13 +156,32 @@ static void _loading_advance(const Engine* engine, LoadingScreen* ls) {
     ls->frame = (ls->frame + 1) & 0xFFFFFF;
 }
 
-// The mark, then the tape over it, then the set: into the window, at its size.
+// One direction of the bloom's blur: `src` at mip `lod` into `dst`, a texel of `dst` a step.
+static void _loading_blur(const LoadingScreen* ls, GLuint src, float lod, const GLColorTarget* dst,
+                          bool across) {
+    glBindFramebuffer(GL_FRAMEBUFFER, dst->fbo);
+    glViewport(0, 0, dst->w, dst->h);
+    glBindTexture(GL_TEXTURE_2D, src);
+    UniformManager* b = ls->blur->uniforms;
+    const float step[2] = {across ? 1.0f / (float)dst->w : 0.0f,
+                           across ? 0.0f : 1.0f / (float)dst->h};
+    uniform_set_int(b, "srcTex", 0);
+    uniform_set_float(b, "srcLod", lod);
+    uniform_set_vec2(b, "stepUv", step);
+    draw_fullscreen_quad(ls->quad_vao);
+}
+
+// The mark, its bloom, then the tape over both, then the set: into the window, at its size.
 static void _loading_draw(const Engine* engine, LoadingScreen* ls) {
     const int w = engine->fb_width, h = engine->fb_height;
     if (w <= 0 || h <= 0)
         return;
     const int pw = w > 1 ? w / 2 : 1, ph = h > 1 ? h / 2 : 1;
+    // A quarter of the picture is its mip level 2 exactly, texel for texel.
+    const int qw = pw >> 2 > 0 ? pw >> 2 : 1, qh = ph >> 2 > 0 ? ph >> 2 : 1;
     if (!gl_color_target_ensure(&ls->mark, pw, ph, "loading mark") ||
+        !gl_color_target_ensure(&ls->bloom[0], qw, qh, "loading bloom") ||
+        !gl_color_target_ensure(&ls->bloom[1], qw, qh, "loading bloom") ||
         !gl_color_target_ensure(&ls->picture, pw, ph, "loading picture"))
         return;
     const float resolution[2] = {(float)pw, (float)ph};
@@ -175,12 +200,27 @@ static void _loading_draw(const Engine* engine, LoadingScreen* ls) {
     uniform_set_vec3_array(m, "palette", &palette[0][0], 7);
     draw_fullscreen_quad(ls->quad_vao);
 
+    // The tube's bloom, of the picture as it stands, a letter in mid-turn included: the mark
+    // brought to a quarter its size by its own mips, then blurred across and down.
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, ls->mark.tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glGenerateMipmap(GL_TEXTURE_2D);
+    glUseProgram(ls->blur->id);
+    _loading_blur(ls, ls->mark.tex, 2.0f, &ls->bloom[0], true);
+    _loading_blur(ls, ls->bloom[0].tex, 0.0f, &ls->bloom[1], false);
+
     glBindFramebuffer(GL_FRAMEBUFFER, ls->picture.fbo);
+    glViewport(0, 0, pw, ph);
     glUseProgram(ls->tape->id);
     UniformManager* t = ls->tape->uniforms;
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, ls->mark.tex);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, ls->bloom[1].tex);
+    glActiveTexture(GL_TEXTURE0);
     uniform_set_int(t, "markTex", 0);
+    uniform_set_int(t, "bloomTex", 1);
     uniform_set_float(t, "time", (float)ls->clock);
     uniform_set_float(t, "off", off);
     uniform_set_int(t, "frame", ls->frame);
@@ -213,12 +253,15 @@ void engine_draw_loading_screen(Engine* engine) {
     glfwPollEvents();
 
     // Whatever was bound goes back as it was: this may be called from anywhere on the main thread.
-    GLint program = 0, vao = 0, unit = 0, texture = 0;
+    // The draw binds units 0 and 1.
+    GLint program = 0, vao = 0, unit = 0, texture[2] = {0, 0};
     glGetIntegerv(GL_CURRENT_PROGRAM, &program);
     glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &vao);
     glGetIntegerv(GL_ACTIVE_TEXTURE, &unit);
-    glActiveTexture(GL_TEXTURE0);
-    glGetIntegerv(GL_TEXTURE_BINDING_2D, &texture);
+    for (int u = 0; u < 2; u++) {
+        glActiveTexture(GL_TEXTURE0 + (GLenum)u);
+        glGetIntegerv(GL_TEXTURE_BINDING_2D, &texture[u]);
+    }
 
     _loading_advance(engine, ls);
     _loading_draw(engine, ls);
@@ -228,8 +271,10 @@ void engine_draw_loading_screen(Engine* engine) {
     glfwSwapBuffers(engine->window);
     glfwSwapInterval(engine->vsync ? 1 : 0);
 
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, (GLuint)texture);
+    for (int u = 0; u < 2; u++) {
+        glActiveTexture(GL_TEXTURE0 + (GLenum)u);
+        glBindTexture(GL_TEXTURE_2D, (GLuint)texture[u]);
+    }
     glActiveTexture((GLenum)unit);
     glBindVertexArray((GLuint)vao);
     glUseProgram((GLuint)program);

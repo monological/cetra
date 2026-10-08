@@ -350,8 +350,10 @@ ShaderProgram* create_glare_output_program();
 // The CRT (spec 13.28): the picture resampled to its signal, and the television drawn from it.
 ShaderProgram* create_crt_resample_program();
 ShaderProgram* create_crt_program();
-// The loading screen (spec 13.34): its mark, and the tape that wears it.
+// The loading screen (spec 13.34): its mark, the blur its bloom is made by, and the tape that
+// wears it.
 ShaderProgram* create_loading_logo_program();
+ShaderProgram* create_loading_blur_program();
 ShaderProgram* create_loading_tape_program();
 // Local exposure (spec 13.19): the half-res frame, the bilateral grid's build and blur, and the
 // blurred luminance's blocks and Gaussian.

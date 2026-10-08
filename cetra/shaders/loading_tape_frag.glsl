@@ -3,7 +3,8 @@
 // The loading screen's tape (spec 13.34): the mark as a worn videotape plays it on an old set --
 // the colour carried a little apart from the brightness, a tracking band rolling down the
 // picture, lines that will not quite hold still, the head-switching tear along the bottom, static,
-// and the set switching on and off. Display-encoded out, as the CRT takes its picture.
+// and the set switching on and off -- and the tube's bloom, which is the mark's only glow, so it
+// is the glow of the picture as it stands. Display-encoded out, as the CRT takes its picture.
 
 in vec2 TexCoords;
 out vec4 FragColor;
@@ -11,7 +12,8 @@ out vec4 FragColor;
 #include "display.glsl"
 #include "noise.glsl"
 
-uniform sampler2D markTex; // the mark, linear
+uniform sampler2D markTex;  // the mark, linear
+uniform sampler2D bloomTex; // the mark blurred, at a quarter its size (loading_blur_frag)
 uniform float time;        // seconds since the screen was shown
 uniform float off;         // the switch-off, 0 = on .. 1 = dark
 uniform int frame;         // a count of the screen's draws, for noise new with each
@@ -28,12 +30,14 @@ const float TEAR_H = 0.035;    // the head-switching tear at the bottom
 const float STATIC = 0.05;  // the trace left once the picture locks, in display codes
 const float GLITCH_EVERY = 5.0; // seconds between tracking glitches, on average
 const float GLITCH_LONG = 0.22;
+// The tube's bloom: how much of the blurred picture is added over it.
+const float BLOOM = 0.6;
 
 vec3 tapeAt(vec2 uv, float shift)
 {
-    float r = texture(markTex, uv + vec2(CHROMA + shift, 0.0)).r;
-    float g = texture(markTex, uv).g;
-    float b = texture(markTex, uv - vec2(CHROMA + shift, 0.0)).b;
+    float r = textureLod(markTex, uv + vec2(CHROMA + shift, 0.0), 0.0).r;
+    float g = textureLod(markTex, uv, 0.0).g;
+    float b = textureLod(markTex, uv - vec2(CHROMA + shift, 0.0), 0.0).b;
     return vec3(r, g, b);
 }
 
@@ -72,7 +76,8 @@ void main()
     // The head-switching tear: the bottom lines run off to the right, more toward the edge.
     float tear = 1.0 - smoothstep(0.0, TEAR_H, uv.y);
     shift += tear * tear * (0.03 + 0.02 * lineNoise);
-    vec3 col = tapeAt(vec2(uv.x + shift, uv.y), glitch * 0.004);
+    vec2 src = vec2(uv.x + shift, uv.y); // where this line of the picture is read from
+    vec3 col = tapeAt(src, glitch * 0.004) + BLOOM * textureLod(bloomTex, src, 0.0).rgb;
 
     // Static: all of it while the set warms up, a trace after, more in the band and the tear.
     float grain = frameNoise(uvec2(gl_FragCoord.xy), uint(frame));

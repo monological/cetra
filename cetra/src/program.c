@@ -1360,6 +1360,10 @@ ShaderProgram* create_loading_logo_program() {
     return create_post_program("loading_logo", loading_logo_frag_shader_str);
 }
 
+ShaderProgram* create_loading_blur_program() {
+    return create_post_program("loading_blur", loading_blur_frag_shader_str);
+}
+
 ShaderProgram* create_loading_tape_program() {
     return create_post_program("loading_tape", loading_tape_frag_shader_str);
 }
