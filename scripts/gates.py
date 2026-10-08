@@ -16533,6 +16533,14 @@ def _gametest_probe(flag, rx, case, env=None, extra=None):
 # than doing it, since nothing else in that group was being changed.
 _AUDIO_PROBE = re.compile(r"^audio (\w+) (\w+) rms (-?[\d.]+) (-?[\d.]+)$", re.M)
 _AUDIO_NOISE = re.compile(r"^audio noise (\w+) rms (-?[\d.]+) bright (-?[\d.]+)$", re.M)
+# The zone arms (spec 13.33): the link the probe sets, how near a level must come to what a
+# link or a path predicts, the most the first window after the listener steps zones may already
+# have risen to (an unfaded step would be whole), and how near whole the fade must end -- looser,
+# since stepping over the line moves the listener 0.2 m.
+AUDIO_ZONE_THROUGH = 0.25
+AUDIO_ZONE_TOL = 0.01
+AUDIO_ZONE_FADE_FIRST = 0.9
+AUDIO_ZONE_FADE_TOL = 0.02
 
 
 def _audio_probe_run(case, extra=None):
@@ -16581,6 +16589,19 @@ def run_audio_gate(workdir):
                      energy of its sample-to-sample difference against its own falls
                      white > pink > brown, with white's near sqrt 2, which is what a
                      flat spectrum gives -- colours swapped or collapsed to one fail.
+      audio-zone     a tone in another zone through a link of 0.25 is a quarter of
+                     itself with no zones, and a 2D tone never placed is whole either
+                     way (spec 13.33)
+      audio-zone-path with a direct link of 0.1 and a way round through a third zone
+                     at 0.5 and 0.5, the tone is heard along the best path, 0.25
+      audio-zone-fade the listener stepping into the tone's zone eases it up, rising
+                     every window and whole by 2 s; a link opened lets it through
+                     whole; a voice started in another zone is a quarter of itself
+                     from its first window rather than fading down from whole
+
+    Falsified by hand at 13.33: audio-zone fails with the zone's gain never applied,
+    audio-zone-path with the direct link taken for the path (0.1), and audio-zone-fade
+    with the easing removed (the first window whole) and with a voice left unseeded.
     """
     if not os.path.exists(GAMETEST):
         print("  audio        SKIP  (gametest not built)")
@@ -16669,6 +16690,61 @@ def run_audio_gate(workdir):
           f"loud, darker white > pink > brown, and white's near sqrt 2)")
     if not ok:
         failures.append("audio-noise")
+
+    # --- audio-zone (spec 13.33) ----------------------------------------------
+    d = _audio_probe_run("zone")
+    if not d or any(k not in d for k in ("flat_bare", "bare", "zoned", "flat_zoned")):
+        print("  audio-zone   FAIL  run failed or measured nothing")
+        failures.append("audio-zone")
+    else:
+        through = avg(d["zoned"]) / avg(d["bare"])
+        flat = avg(d["flat_zoned"]) / avg(d["flat_bare"])
+        ok = (abs(through - AUDIO_ZONE_THROUGH) <= AUDIO_ZONE_TOL
+              and abs(flat - 1.0) <= AUDIO_ZONE_TOL)
+        print(f"  audio-zone   {'PASS' if ok else 'FAIL'}  through a link of "
+              f"{AUDIO_ZONE_THROUGH}: {through:.4f} of the tone with no zones (want "
+              f"{AUDIO_ZONE_THROUGH} +- {AUDIO_ZONE_TOL}); a 2D tone never placed {flat:.4f} "
+              f"(want 1)")
+        if not ok:
+            failures.append("audio-zone")
+
+    # --- audio-zone-path --------------------------------------------------------
+    d = _audio_probe_run("zone_path")
+    if not d or "bare" not in d or "zoned" not in d:
+        print("  audio-zone-path FAIL  run failed or measured nothing")
+        failures.append("audio-zone-path")
+    else:
+        through = avg(d["zoned"]) / avg(d["bare"])
+        ok = abs(through - AUDIO_ZONE_THROUGH) <= AUDIO_ZONE_TOL
+        print(f"  audio-zone-path {'PASS' if ok else 'FAIL'}  {through:.4f} of the tone (want the "
+              f"way round, {AUDIO_ZONE_THROUGH}, not the direct link's 0.1)")
+        if not ok:
+            failures.append("audio-zone-path")
+
+    # --- audio-zone-fade --------------------------------------------------------
+    steps = [f"t{i}" for i in range(10)]
+    d = _audio_probe_run("zone_fade", ["--audio-file", wav])
+    if not d or any(k not in d for k in ["voice_bare", "bare", "from_a", "opened", "voice"] + steps):
+        print("  audio-zone-fade FAIL  run failed or measured nothing")
+        failures.append("audio-zone-fade")
+    else:
+        bare = avg(d["bare"])
+        rise = [avg(d[s]) / bare for s in steps]
+        start = avg(d["from_a"]) / bare
+        opened = avg(d["opened"]) / bare
+        voice = avg(d["voice"]) / avg(d["voice_bare"])
+        ok = (abs(start - AUDIO_ZONE_THROUGH) <= AUDIO_ZONE_TOL
+              and all(b >= a for a, b in zip(rise, rise[1:])) and rise[0] < AUDIO_ZONE_FADE_FIRST
+              and abs(rise[-1] - 1.0) <= AUDIO_ZONE_FADE_TOL
+              and abs(opened - 1.0) <= AUDIO_ZONE_FADE_TOL
+              and abs(voice - AUDIO_ZONE_THROUGH) <= AUDIO_ZONE_FADE_TOL)
+        print(f"  audio-zone-fade {'PASS' if ok else 'FAIL'}  from the other zone {start:.4f}; "
+              f"stepping in, a window at a time: {', '.join(f'{r:.3f}' for r in rise)} (want "
+              f"rising, the first under {AUDIO_ZONE_FADE_FIRST}, the last within "
+              f"{AUDIO_ZONE_FADE_TOL} of 1); the link opened {opened:.4f} (want 1); a voice started "
+              f"in the other zone {voice:.4f} in its first window (want {AUDIO_ZONE_THROUGH})")
+        if not ok:
+            failures.append("audio-zone-fade")
 
     return failures
 

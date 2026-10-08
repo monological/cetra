@@ -302,8 +302,8 @@ static void game_pre_render(Engine* engine, Scene* scene) {
     // fixed steps, 0 on a frame that took none and 0 while paused.
     if (game->entity_manager)
         update_all_animators(game->entity_manager, (float)game->sim_clock.delta);
-    // Point the listener along the posed camera and push the frame's positions into the
-    // sources.
+    // Point the listener along the posed camera, push the frame's positions into the sources,
+    // and ease the zones over the sim clock's delta, as the animators are.
     if (game->audio) {
         Camera* cam = engine->camera;
         vec3 pos = {0.0f, 0.0f, 0.0f};
@@ -314,7 +314,8 @@ static void game_pre_render(Engine* engine, Scene* scene) {
             camera_forward(cam, fwd);
             glm_vec3_copy(cam->up_vector, up);
         }
-        audio_system_update(game->audio, game->entity_manager, pos, fwd, up);
+        audio_system_update(game->audio, game->entity_manager, pos, fwd, up,
+                            (float)game->sim_clock.delta);
     }
 }
 

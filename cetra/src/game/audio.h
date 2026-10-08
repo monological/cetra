@@ -21,6 +21,8 @@
 #include <stddef.h>
 #include <cglm/types.h>
 
+#include "audio_zones.h"
+
 struct EntityManager;
 struct Entity;
 
@@ -99,10 +101,25 @@ void audio_sound_set_position(Sound* sound, vec3 world_pos);
 void free_sound(Sound* sound);
 
 // Once per rendered frame: point the listener along the camera pose, push each AUDIO_SOURCE
-// sound's position from its entity, carry the voices that follow one, and reap the voices that
-// have played out (em may be NULL when there are no entities).
+// sound's position from its entity, carry the voices that follow one, reap the voices that have
+// played out (em may be NULL when there are no entities), and ease every placed sound toward what
+// its zone lets through to the listener's over `dt` seconds.
 void audio_system_update(AudioSystem* audio, struct EntityManager* em, vec3 listener_pos,
-                         vec3 forward, vec3 up);
+                         vec3 forward, vec3 up, float dt);
+
+// Zones (spec 13.33, audio_zones.h): a placed sound -- one positioned by the app, an AUDIO_SOURCE,
+// a voice -- is heard through every link between its zone and the listener's, along the best
+// path, eased over AUDIO_ZONE_FADE seconds as either side crosses a boundary. That gain is the
+// sound's own, under the volume the app sets, so neither overwrites the other. A sound never
+// placed is heard whole, and with no zone added every sound is.
+#define AUDIO_ZONE_FADE 0.4f
+AudioZone audio_zone_add(AudioSystem* audio, const AudioZoneDesc* desc);
+AudioZoneLink audio_zone_link(AudioSystem* audio, AudioZone a, AudioZone b, float through);
+// A link's `through` changed: a door swinging.
+void audio_zone_link_set(AudioSystem* audio, AudioZoneLink link, float through);
+// What a sound in zone `z` reaches the listener with, eased as a placed sound's gain is: for an
+// app shaping a sound it does not place -- a bed laid over the listener, the outdoors' wind.
+float audio_zone_heard(const AudioSystem* audio, AudioZone z);
 
 // Headless (noDevice) only: render `frames` interleaved stereo frames (2 floats
 // each) into `out`. Returns frames produced; 0 in device mode. The gate's readout.
