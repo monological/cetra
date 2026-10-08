@@ -73,13 +73,39 @@ static Texture* island_roughness_tex = NULL;
 static float sand_stochastic_lut[STOCHASTIC_LUT_SIZE * 3];
 static bool sand_stochastic_ready = false;
 
-// The leaf textures are the atlas the cards of a tree of `form` address.
+/*
+ * The leaf textures: the atlas the cards of a tree of `form` address, one row of square cells.
+ * Pooled under a name per form, so switching back to a form takes its maps from the pool rather
+ * than baking them again.
+ */
+static void bake_foliage(Scene* scene, TreeForm form) {
+    const int LW = TEXTURE_SIZE * TG_LEAF_VARIANTS;
+    const int LH = TEXTURE_SIZE;
+    const bool needles = form == TREE_FORM_EXCURRENT;
+    printf("Generating procedural foliage atlas...\n");
+    unsigned char *leaf_a = NULL, *leaf_n = NULL, *leaf_r = NULL;
+    tree_foliage_maps(form, LW, LH, &leaf_a, &leaf_n, &leaf_r);
+    // The one texture here that is alpha-TESTED, so the one whose mip chain has
+    // to hold its coverage. proc_leaf_sprite below looks like a candidate and is
+    // not: it goes to the billboard renderer, which blends premultiplied alpha
+    // rather than testing it, and rescaling it would change density instead of
+    // preserving a silhouette.
+    TextureDesc leaf_desc = texture_desc(true);
+    leaf_desc.coverage_cutoff = LEAF_ALPHA_CUTOFF;
+    leaf_albedo_tex = texture_load_memory_owned(scene->tex_pool,
+                                                needles ? "proc_needle_albedo" : "proc_leaf_albedo",
+                                                leaf_a, LW, LH, 4, leaf_desc);
+    leaf_normal_tex = texture_load_memory_owned(
+        scene->tex_pool, needles ? "proc_needle_normal" : "proc_leaf_normal", leaf_n, LW, LH, 3,
+        (TextureDesc){.is_srgb = false, .alpha = TEXTURE_ALPHA_DATA, .use = TEXTURE_USE_NORMAL});
+    leaf_roughness_tex = texture_load_memory_owned(
+        scene->tex_pool, needles ? "proc_needle_roughness" : "proc_leaf_roughness", leaf_r, LW, LH,
+        3, texture_desc(false));
+}
+
 static void generate_procedural_textures(Scene* scene, TreeForm form) {
     const int B = BARK_TEXTURE_SIZE;
     const int T = TEXTURE_SIZE;
-    // The leaf atlas is one row of square cluster cells.
-    const int LW = TEXTURE_SIZE * TG_LEAF_VARIANTS;
-    const int LH = TEXTURE_SIZE;
 
     printf("Generating procedural bark textures...\n");
     // One relief, four maps derived from it -- they describe the same surface,
@@ -103,23 +129,7 @@ static void generate_procedural_textures(Scene* scene, TreeForm form) {
         free(bark_field);
     }
 
-    printf("Generating procedural foliage atlas...\n");
-    unsigned char *leaf_a = NULL, *leaf_n = NULL, *leaf_r = NULL;
-    tree_foliage_maps(form, LW, LH, &leaf_a, &leaf_n, &leaf_r);
-    // The one texture here that is alpha-TESTED, so the one whose mip chain has
-    // to hold its coverage. proc_leaf_sprite below looks like a candidate and is
-    // not: it goes to the billboard renderer, which blends premultiplied alpha
-    // rather than testing it, and rescaling it would change density instead of
-    // preserving a silhouette.
-    TextureDesc leaf_desc = texture_desc(true);
-    leaf_desc.coverage_cutoff = LEAF_ALPHA_CUTOFF;
-    leaf_albedo_tex = texture_load_memory_owned(scene->tex_pool, "proc_leaf_albedo", leaf_a, LW, LH,
-                                                4, leaf_desc);
-    leaf_normal_tex = texture_load_memory_owned(
-        scene->tex_pool, "proc_leaf_normal", leaf_n, LW, LH, 3,
-        (TextureDesc){.is_srgb = false, .alpha = TEXTURE_ALPHA_DATA, .use = TEXTURE_USE_NORMAL});
-    leaf_roughness_tex = texture_load_memory_owned(scene->tex_pool, "proc_leaf_roughness", leaf_r,
-                                                   LW, LH, 3, texture_desc(false));
+    bake_foliage(scene, form);
     leaf_sprite_tex = texture_load_memory_owned(scene->tex_pool, "proc_leaf_sprite",
                                                 veg_leaf_sprite(T), T, T, 4, texture_desc(true));
 
@@ -188,6 +198,7 @@ const unsigned int WIDTH = 1400;
  */
 static TreeParams params;
 static TreeParams prev_params;
+static TreePreset tree_preset; // the preset the panel last applied
 static Material* bark_material = NULL;
 static Material* leaf_material = NULL;
 static SceneNode* tree_root = NULL;
@@ -507,6 +518,9 @@ static void regenerate_grass(const GrassParams* p) {
 static void apply_season(float t) {
     if (!leaf_material)
         return;
+    // Needles are evergreen: the season turns a broadleaf canopy alone.
+    if (params.form == TREE_FORM_EXCURRENT)
+        t = 0.0f;
     vec3 summer = {1.0f, 1.0f, 1.0f};
     vec3 autumn = {1.35f, 0.62f, 0.18f};
     glm_vec3_lerp(summer, autumn, t, leaf_material->albedo);
@@ -516,37 +530,108 @@ static void apply_season(float t) {
     glm_vec3_lerp(green_sss, amber_sss, t, leaf_material->subsurface_color);
 }
 
+// The falling leaves' spawn rate, as the panel and the tree have it: a conifer sheds none.
+static void update_falling_leaves(void) {
+    if (leaf_spawn_module)
+        particle_module_spawn_rate_set(
+            leaf_spawn_module,
+            falling_leaves_on && params.form != TREE_FORM_EXCURRENT ? leaf_spawn_rate : 0.0f);
+}
+
+// The panel's preset: its shape at the current seed, and, when the form changes, the foliage
+// atlas the new form's cards address.
+static void switch_preset(Scene* scene, TreePreset preset) {
+    const int form = params.form;
+    tree_preset = preset;
+    tree_params_preset(&params, preset, params.seed);
+    if (params.form != form && leaf_material) {
+        bake_foliage(scene, (TreeForm)params.form);
+        material_set_albedo_tex(leaf_material, leaf_albedo_tex);
+        material_set_normal_tex(leaf_material, leaf_normal_tex);
+        material_set_roughness_tex(leaf_material, leaf_roughness_tex);
+        scene->material_textures_dirty = true;
+    }
+    apply_season(season);
+    update_falling_leaves();
+}
+
 /*
  * Render tree parameters GUI
  */
-static void render_tree_gui(const Engine* engine, Scene* scene) {
-    (void)scene;
+// The recursive form's sliders: generations of tip splits, and how each generation shrinks and
+// turns off its parent.
+static void recursive_gui(void) {
+    TreeRecursive* r = &params.recursive;
+    igSeparatorText("Structure");
+    igSliderInt("Max Depth", &r->max_depth, 1, 6, "%d", 0);
+    igSliderInt("Branches", &r->branches_per_node, 1, 5, "%d", 0);
+    igSliderFloat("Laterals", &r->lateral_density, 0.0f, 3.0f, "%.2f", 0);
 
+    igSeparatorText("Dimensions");
+    igSliderFloat("Trunk Len", &params.trunk_length, 10.0f, 200.0f, "%.1f", 0);
+    igSliderFloat("Trunk Rad", &params.trunk_radius, 1.0f, 30.0f, "%.1f", 0);
+    igSliderFloat("Len Decay", &r->length_decay, 0.3f, 0.95f, "%.3f", 0);
+    igSliderFloat("Taper", &r->taper, 0.45f, 0.85f, "%.3f", 0);
+    igSliderFloat("Twig Scale", &r->twig_scale, 0.5f, 2.0f, "%.2f", 0);
+
+    igSeparatorText("Angles");
+    igSliderFloat("Angle", &r->branch_angle, 5.0f, 90.0f, "%.1f", 0);
+    igSliderFloat("Variance", &params.angle_variance, 0.0f, 45.0f, "%.1f", 0);
+    igSliderFloat("Twist", &params.twist, 0.0f, 180.0f, "%.1f", 0);
+}
+
+// The excurrent form's sliders: a conifer's crown, its whorls, how its branches and sprays leave
+// what carries them, and what has died.
+static void excurrent_gui(void) {
+    TreeExcurrent* x = &params.excurrent;
+    igSeparatorText("Dimensions");
+    igSliderFloat("Trunk Len", &params.trunk_length, 10.0f, 200.0f, "%.1f", 0);
+    igSliderFloat("Trunk Rad", &params.trunk_radius, 1.0f, 10.0f, "%.2f", 0);
+
+    igSeparatorText("Crown");
+    igSliderFloat("Crown Base", &x->crown_base, 0.0f, 0.6f, "%.2f", 0);
+    igSliderFloat("Crown Width", &x->crown_width, 0.1f, 0.6f, "%.2f", 0);
+    igSliderFloat("Crown Shape", &x->crown_shape, 0.3f, 2.5f, "%.2f", 0);
+
+    igSeparatorText("Whorls");
+    igSliderFloat("Spacing", &x->whorl_spacing, 2.0f, 15.0f, "%.1f", 0);
+    igSliderInt("Size", &x->whorl_size, 2, 9, "%d", 0);
+    igSliderFloat("Turn", &params.twist, 0.0f, 180.0f, "%.1f", 0);
+
+    igSeparatorText("Angles");
+    igSliderFloat("Branch Pitch", &x->branch_pitch, -30.0f, 60.0f, "%.1f", 0);
+    igSliderFloat("Spray Angle", &x->spray_angle, 20.0f, 90.0f, "%.1f", 0);
+    igSliderFloat("Variance", &params.angle_variance, 0.0f, 45.0f, "%.1f", 0);
+
+    igSeparatorText("Decay");
+    igSliderFloat("Dead Lower", &x->dead_lower, 0.0f, 0.8f, "%.2f", 0);
+    igSliderFloat("Dead Fraction", &x->dead_fraction, 0.0f, 1.0f, "%.2f", 0);
+    igSliderFloat("Snag", &x->snag, 0.0f, 1.0f, "%.2f", 0);
+    igSliderFloat("Irregularity", &x->irregularity, 0.0f, 1.0f, "%.2f", 0);
+}
+
+static void render_tree_gui(const Engine* engine, Scene* scene) {
     if (!engine || !engine->show_gui)
         return;
 
     igSetNextWindowPos((ImVec2){15, 15}, ImGuiCond_FirstUseEver, (ImVec2){0, 0});
     igSetNextWindowSize((ImVec2){300, 720}, ImGuiCond_FirstUseEver);
     if (igBegin("Tree", NULL, 0)) {
+        const bool conifer = params.form == TREE_FORM_EXCURRENT;
         igSeparatorText("Seed");
+        if (igBeginCombo("Preset", tree_preset_name(tree_preset), 0)) {
+            for (int i = 0; i < TREE_PRESET_COUNT; i++)
+                if (igSelectable_Bool(tree_preset_name((TreePreset)i), i == (int)tree_preset, 0,
+                                      (ImVec2){0, 0}))
+                    switch_preset(scene, (TreePreset)i);
+            igEndCombo();
+        }
         igSliderInt("Seed", &params.seed, 0, 9999, "%d", 0);
 
-        igSeparatorText("Structure");
-        igSliderInt("Max Depth", &params.recursive.max_depth, 1, 6, "%d", 0);
-        igSliderInt("Branches", &params.recursive.branches_per_node, 1, 5, "%d", 0);
-        igSliderFloat("Laterals", &params.recursive.lateral_density, 0.0f, 3.0f, "%.2f", 0);
-
-        igSeparatorText("Dimensions");
-        igSliderFloat("Trunk Len", &params.trunk_length, 10.0f, 200.0f, "%.1f", 0);
-        igSliderFloat("Trunk Rad", &params.trunk_radius, 1.0f, 30.0f, "%.1f", 0);
-        igSliderFloat("Len Decay", &params.recursive.length_decay, 0.3f, 0.95f, "%.3f", 0);
-        igSliderFloat("Taper", &params.recursive.taper, 0.45f, 0.85f, "%.3f", 0);
-        igSliderFloat("Twig Scale", &params.recursive.twig_scale, 0.5f, 2.0f, "%.2f", 0);
-
-        igSeparatorText("Angles");
-        igSliderFloat("Angle", &params.recursive.branch_angle, 5.0f, 90.0f, "%.1f", 0);
-        igSliderFloat("Variance", &params.angle_variance, 0.0f, 45.0f, "%.1f", 0);
-        igSliderFloat("Twist", &params.twist, 0.0f, 180.0f, "%.1f", 0);
+        if (conifer)
+            excurrent_gui();
+        else
+            recursive_gui();
 
         igSeparatorText("Curvature");
         igSliderFloat("Droop", &params.droop, 0.0f, 1.0f, "%.2f", 0);
@@ -559,7 +644,8 @@ static void render_tree_gui(const Engine* engine, Scene* scene) {
             params.show_leaves = show_leaves;
         igSliderFloat("Leaf Size", &params.leaf_size, 1.0f, 30.0f, "%.1f", 0);
         igSliderFloat("Leaf Density", &params.leaf_density, 0.5f, 8.0f, "%.2f", 0);
-        igSliderFloat("Season", &season, 0.0f, 1.0f, "%.2f", 0);
+        if (!conifer)
+            igSliderFloat("Season", &season, 0.0f, 1.0f, "%.2f", 0);
 
         igSeparatorText("Grass");
         igSliderFloat("Density", &grass_params.density, 0.0f, 12.0f, "%.2f", 0);
@@ -579,14 +665,12 @@ static void render_tree_gui(const Engine* engine, Scene* scene) {
             igSliderFloat("Turbulence", &scene_wind->turbulence, 0.0f, 1.0f, "%.2f", 0);
         }
 
-        igSeparatorText("Falling Leaves");
-        if (igCheckbox("Enabled", &falling_leaves_on) && leaf_spawn_module) {
-            particle_module_spawn_rate_set(leaf_spawn_module,
-                                           falling_leaves_on ? leaf_spawn_rate : 0.0f);
-        }
-        if (igSliderFloat("Rate", &leaf_spawn_rate, 0.0f, 15.0f, "%.1f", 0) && leaf_spawn_module &&
-            falling_leaves_on) {
-            particle_module_spawn_rate_set(leaf_spawn_module, leaf_spawn_rate);
+        if (!conifer) {
+            igSeparatorText("Falling Leaves");
+            bool changed = igCheckbox("Enabled", &falling_leaves_on);
+            changed |= igSliderFloat("Rate", &leaf_spawn_rate, 0.0f, 15.0f, "%.1f", 0);
+            if (changed)
+                update_falling_leaves();
         }
 
         igSeparatorText("Atmosphere");
@@ -1299,6 +1383,7 @@ int main(int argc, char** argv) {
 
     // Textures go through the scene's pool, so the scene must exist first.
     tree_params_from_args(&args, &params);
+    tree_preset = args.preset;
     generate_procedural_textures(scene, params.form);
     // Directly after the bake, which is the whole ledger: this app loads no
     // texture from a file.
@@ -1832,6 +1917,7 @@ int main(int argc, char** argv) {
             canopy_radius = fmaxf(rx, rz);
         }
         create_falling_leaves(engine, scene, canopy_radius, canopy_top);
+        update_falling_leaves();
     }
 
     engine->show_gui = !args.headless;
