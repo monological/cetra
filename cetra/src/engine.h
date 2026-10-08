@@ -85,6 +85,9 @@ typedef struct EngineFrameClock {
 // frame-for-frame. Also the game framework's default sim timestep.
 #define ENGINE_FIXED_FRAME_DT (1.0 / 60.0)
 
+// A windowed engine's capture_budget_ms when it starts: half a 60 Hz frame.
+#define ENGINE_CAPTURE_BUDGET_MS 8.0f
+
 // What a capture's output is for; render.h's scene_capture_begin says why the two differ.
 typedef enum SceneCaptureKind {
     SCENE_CAPTURE_NONE = 0,   // no capture
@@ -335,6 +338,13 @@ typedef struct Engine {
     // scene_capture_end; SCENE_CAPTURE_NONE outside one. Wider than `capturing`, which is only
     // the faces: it covers the burst's own shadow passes too.
     SceneCaptureKind capture_kind;
+
+    // A setting, not capture state: the most of a frame, in milliseconds, the light captures --
+    // a GI probe, a reflection probe's face -- may take before the rest wait for the next frame
+    // (spec 13.32); 0 = no limit. At least one capture runs a frame, so every one finishes.
+    // Starts at 0 headless, where a run must repeat to the bit and so cannot let a clock decide
+    // the frame a capture lands in.
+    float capture_budget_ms;
 
     Camera* camera; // The camera the frame renders (engine_set_camera); borrowed
 

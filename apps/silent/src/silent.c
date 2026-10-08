@@ -85,6 +85,10 @@
 // How long the view takes to come up from black once the room's bounce light
 // is in.
 #define FADE_IN_SECONDS 1.0f
+// The engine's capture budget while the view is still black (spec 13.32): nothing on screen
+// is waiting, so the captures take most of each frame and the wait is short, while the window
+// still answers a few times a second. Once the view is up the engine's own budget stands.
+#define LOADING_CAPTURE_MS 100.0f
 // What a day's meter maps the frame's mean to. Middle grey puts a fog world at
 // middle grey, where a camera in fog is opened a stop and a third so the fog
 // reads white.
@@ -164,18 +168,19 @@ typedef struct SilentArgs {
     bool no_static; // the living room's set showing nothing, a faint glow and no hiss
     bool flashlight;
     bool mute;
-    float rain_mmh;         // 0 = dry
-    bool no_wind;           // still air: the rain falls straight
-    bool no_fog;            // clear air: no fog volumes and no haze, to see the layout
-    bool no_relief;         // puddles from the noise alone, not the ground's own lows
-    bool no_candles;        // the candles stand unlit
-    bool no_candle_shadows; // the candles light through walls, as before spec 13.16
-    bool no_gi;             // no bounce light: no GI volume, and no reflection probes from it
-    int tile_views;         // views over each cached light's body; 0 = the engine's, 1 = one
-    int tile_stores;        // store cells for faces drawn over a copy; -1 = the engine's
-    bool tiles_probe;       // print the cached shadow tiles at exit
-    bool profiler;          // per-pass timing and submission counts, reported at exit
-    const char* audio_dump; // headless: write what the listener hears here
+    float rain_mmh;          // 0 = dry
+    bool no_wind;            // still air: the rain falls straight
+    bool no_fog;             // clear air: no fog volumes and no haze, to see the layout
+    bool no_relief;          // puddles from the noise alone, not the ground's own lows
+    bool no_candles;         // the candles stand unlit
+    bool no_candle_shadows;  // the candles light through walls, as before spec 13.16
+    bool no_gi;              // no bounce light: no GI volume, and no reflection probes from it
+    int tile_views;          // views over each cached light's body; 0 = the engine's, 1 = one
+    int tile_stores;         // store cells for faces drawn over a copy; -1 = the engine's
+    bool tiles_probe;        // print the cached shadow tiles at exit
+    float capture_budget_ms; // the engine's capture budget, pinned; below 0 = silent's own
+    bool profiler;           // per-pass timing and submission counts, reported at exit
+    const char* audio_dump;  // headless: write what the listener hears here
     bool no_cat;
     vec3 cat_fur, cat_eyes; // sRGB
     const char* cat_at;     // a place by name, or NULL for home
@@ -742,6 +747,8 @@ static void on_init(Game* game) {
         if (g_args.tile_stores >= 0)
             ss->tile_store_cells = g_args.tile_stores;
     }
+    if (g_args.capture_budget_ms >= 0.0f)
+        engine->capture_budget_ms = g_args.capture_budget_ms;
 
     CameraDesc cam = {.position = {SPAWN_FEET[0], SPAWN_FEET[1] + PLAYER_EYE_HEIGHT, SPAWN_FEET[2]},
                       .look_at = {SPAWN_FEET[0], SPAWN_FEET[1] + PLAYER_EYE_HEIGHT, 0.0f},
@@ -925,18 +932,24 @@ static void on_pre_render(Game* game, double alpha) {
     AABB at;
     aabb_empty(&at);
     aabb_add_point(&at, eye);
-    const bool lit = engine->total_frames > 2 && gi_world_ready_in(g_scene->gi, &at);
+    const bool lit = engine->total_frames > 2 && gi_world_ready_in(g_scene->gi, &at) &&
+                     probe_set_ready_in(g_scene->probe_set, &at);
 
-    // Black until the opening sweep of the volume the eye is in has landed, then up -- not every
-    // volume's: the mansion's sweeps only once the drive brings its candles near. That sweep
-    // is one long frame, so without this the window holds the room unlit by
-    // its own bounce light for its whole length and then jumps. A volume that
-    // could not be built lets the view up rather than holding it dark forever.
-    // The fade rides the grade's gain, after the tonemap, so the exposure and
-    // the day's meter never see it. Each frame's step is capped because the
-    // frame after the sweep carries the sweep's whole length.
+    // Black until the opening sweep of the volume the eye is in has landed, and the reflection
+    // probes round the eye with it, then up -- not every volume's: the mansion's sweeps only once
+    // the drive brings its candles near. The sweep is spread over frames (spec 13.32), so without
+    // this the room shows unlit by its own bounce light while it comes in, and its reflections
+    // after it. A volume that could not be built lets the view up rather than holding it dark
+    // forever. The fade rides the grade's gain, after the tonemap, so the exposure and the day's
+    // meter never see it. Each frame's step is capped because a frame of captures can be long.
     if (lit)
         g_fade_seconds += fminf((float)game->sim_clock.delta, 1.0f / 30.0f);
+    // The captures take most of each frame while the view is black, and the engine's share once
+    // it is coming up, unless the run pinned a budget. Headless keeps the engine's 0, so the
+    // frame a capture lands in is never the clock's to decide.
+    if (g_args.capture_budget_ms < 0.0f && !engine->headless)
+        engine->capture_budget_ms =
+            g_fade_seconds > 0.0f ? ENGINE_CAPTURE_BUDGET_MS : LOADING_CAPTURE_MS;
     if (engine->postfx)
         glm_vec3_fill(engine->postfx->grade_gain,
                       glm_smoothstep(0.0f, FADE_IN_SECONDS, g_fade_seconds));
@@ -1003,6 +1016,10 @@ static void print_usage(const char* prog) {
     printf("      --no-candle-shadows The candles light through walls\n");
     printf("      --no-gi             No bounce light: no GI volume, and no reflection probes,\n"
            "                          which are captured from its light\n");
+    printf("      --capture-budget-ms F  The most of a frame the light captures may take,\n"
+           "                          headless too; by default %.0f ms behind the black and\n"
+           "                          the engine's after it, and no limit headless\n",
+           (double)LOADING_CAPTURE_MS);
     printf("      --profiler          Per-pass timing and submission counts, at exit\n");
     printf("      --tile-views N      Shade every cached light from N views over its body\n"
            "                          rather than 8; 1 is its centre alone\n");
@@ -1048,6 +1065,7 @@ static bool parse_hex(const char* s, vec3 out) {
 static bool parse_args(int argc, char** argv, SilentArgs* a) {
     memset(a, 0, sizeof(*a));
     a->tile_stores = -1;
+    a->capture_budget_ms = -1.0f;
     a->width = DEFAULT_WIDTH;
     a->height = DEFAULT_HEIGHT;
     a->seed = 7;
@@ -1146,6 +1164,8 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
             a->no_candle_shadows = true;
         } else if (!strcmp(s, "--no-gi")) {
             a->no_gi = true;
+        } else if (!strcmp(s, "--capture-budget-ms") && has_next) {
+            a->capture_budget_ms = (float)atof(argv[++i]);
         } else if (!strcmp(s, "--tile-views") && has_next) {
             a->tile_views = atoi(argv[++i]);
         } else if (!strcmp(s, "--tile-stores") && has_next) {

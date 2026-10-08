@@ -266,21 +266,25 @@ static void gi_project_tile(GIVolume* gi, const LightingAtlas* atlas, AtlasRect 
         glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 }
 
-// Capture up to `budget` probes of a resident volume into its slot, 0 = every one left: an
-// `opening` sweep, into a slot nothing was captured in, or a re-convergence over the texels there.
-// Inside a capture burst the caller holds open. Returns the probes captured.
+// Capture up to `most` probes of a resident volume into its slot, 0 = every one left, while the
+// frame's capture budget allows: an `opening` sweep, into a slot nothing was captured in, or a
+// re-convergence over the texels there. Inside a capture burst the caller holds open. Returns the
+// probes captured.
 static int gi_volume_sweep(GIVolume* gi, struct Engine* engine, struct Scene* scene,
-                           const LightingAtlas* atlas, AtlasRect slot, int budget, bool opening) {
+                           const LightingAtlas* atlas, AtlasRect slot, int most, bool opening,
+                           CaptureBudget* budget) {
     if (gi->failed || gi->dirty_count <= 0 || !gi_ensure_targets(gi, engine))
         return 0;
 
     const int probes = gi_probe_count(gi);
-    if (budget <= 0 || budget > gi->dirty_count)
-        budget = gi->dirty_count;
+    if (most <= 0 || most > gi->dirty_count)
+        most = gi->dirty_count;
     // An opening capture is taken outright; a re-convergence blends over what is there.
     const float hysteresis = opening ? 0.0f : 0.97f;
 
-    for (int n = 0; n < budget; ++n) {
+    int taken = 0;
+    for (; taken < most && capture_budget_allows(budget); ++taken) {
+        capture_budget_spend(budget);
         int probe = gi->next_probe;
         gi->next_probe = (gi->next_probe + 1) % probes;
         gi->dirty_count--;
@@ -288,7 +292,7 @@ static int gi_volume_sweep(GIVolume* gi, struct Engine* engine, struct Scene* sc
         vec3 pos = {0};
         gi_probe_position(gi, probe, pos);
         scene_capture_faces(engine, scene, scene->ibl, pos, gi->capture_color, gi->capture_depth,
-                            GI_CAPTURE_FACE, GI_NEAR_CLIP, gi->far_clip, SCENE_FACES_SHADED);
+                            GI_CAPTURE_FACE, GI_NEAR_CLIP, gi->far_clip, SCENE_FACES_SHADED, 0, 6);
 
         // Projection is a fullscreen-quad pass; depth and culling would only get
         // in its way. Both go back as found: this runs inside the frame, after
@@ -313,7 +317,7 @@ static int gi_volume_sweep(GIVolume* gi, struct Engine* engine, struct Scene* sc
         if (gi->classify && opening) {
             scene_capture_faces(engine, scene, scene->ibl, pos, gi->capture_color,
                                 gi->classify_depth, GI_CAPTURE_FACE, GI_NEAR_CLIP, gi->far_clip,
-                                SCENE_FACES_BACK_DEPTH);
+                                SCENE_FACES_BACK_DEPTH, 0, 6);
             glDisable(GL_DEPTH_TEST);
             glDisable(GL_CULL_FACE);
             glBindVertexArray(gi->quad_vao);
@@ -325,12 +329,10 @@ static int gi_volume_sweep(GIVolume* gi, struct Engine* engine, struct Scene* sc
         }
     }
 
-    gi->captures_total += budget;
-    if (gi->dirty_count <= 0) {
-        gi->streamed = false;
+    gi->captures_total += taken;
+    if (gi->dirty_count <= 0)
         log_info("GI volume converged: %d captures total", gi->captures_total);
-    }
-    return budget;
+    return taken;
 }
 
 // The rectangle of slot `slot` a volume's tiles take.
@@ -364,7 +366,6 @@ GIWorld* create_gi_world(void) {
     }
     world->enabled = true;
     world->rate = 2;
-    world->stream_rate = 32;
     residency_init(&world->residency, GI_RESIDENT_MAX, GI_STREAM_MARGIN);
     return world;
 }
@@ -427,7 +428,8 @@ static void gi_world_rank(GIWorld* world, const struct Engine* engine, const Lig
     }
 }
 
-void gi_world_update(GIWorld* world, struct Engine* engine, struct Scene* scene) {
+void gi_world_update(GIWorld* world, struct Engine* engine, struct Scene* scene,
+                     CaptureBudget* budget) {
     if (!world || !world->enabled || world->residency.count == 0 || !engine || !scene)
         return;
     gi_world_rank(world, engine, scene->lighting_atlas);
@@ -474,7 +476,7 @@ void gi_world_update(GIWorld* world, struct Engine* engine, struct Scene* scene)
     }
     // Timed only on a frame that captures: a converged world is the steady state, and a scope
     // opened every frame would file a 0.000 ms row on nearly all of them.
-    if (n == 0)
+    if (n == 0 || !capture_budget_allows(budget))
         return;
     profiler_scope_begin(engine->profiler, "gi capture");
     GLint saved_fbo;
@@ -489,37 +491,26 @@ void gi_world_update(GIWorld* world, struct Engine* engine, struct Scene* scene)
     SceneCaptureState saved_capture;
     scene_capture_begin(engine, scene, SCENE_CAPTURE_IRRADIANCE, &saved_capture);
 
-    // Read once: every volume resident in the frame the world opens sweeps in it, not only the
-    // first to converge.
-    const bool opened = world->opened;
-    // The opening sweep runs in one frame at load, taking every probe: spreading it would only
-    // delay GI appearing at all, since a half-swept slot is withheld -- and a headless run short
-    // enough to be a golden would finish before it ever did. One begun later, as the camera
-    // comes within reach, is someone else's building, and a frame spent sweeping all of it is a
-    // hitch in the middle of a walk, so those share the stream rate -- unless the camera is
-    // already inside, where it is the light on screen. Re-convergences, over tiles still valid
-    // to sample, share the world's rate. A rate of 0 is no limit.
-    int rate_left = world->rate, stream_left = world->stream_rate;
-    for (int k = 0; k < n; ++k) {
+    // Every sweep is paced by the frame's capture budget (spec 13.32), the opening one too: a
+    // frame spent sweeping a whole volume froze the window for seconds, at load and walking into
+    // a building alike. A half-swept slot is withheld, so a volume's light appears whole, the
+    // frames after its last probe. Re-convergences, over tiles still valid to sample, also share
+    // the world's rate; 0 is no limit.
+    int rate_left = world->rate;
+    for (int k = 0; k < n && capture_budget_allows(budget); ++k) {
         ResidencyItem* item = &res->items[due[k]];
         GIVolume* gi = world->volumes[due[k]];
         const bool opening = item->state == RESIDENCY_CAPTURE;
-        if (opening && gi->dirty_count == gi_probe_count(gi))
-            gi->streamed = opened && item->distance > 0.0f;
-        int* left = !opening ? &rate_left : gi->streamed ? &stream_left : NULL;
-        const bool limited = left && (opening ? world->stream_rate : world->rate) > 0;
-        if (limited && *left <= 0)
+        const bool limited = !opening && world->rate > 0;
+        if (limited && rate_left <= 0)
             continue;
         const int took =
             gi_volume_sweep(gi, engine, scene, atlas, gi_volume_rect(gi, atlas, item->slot),
-                            limited ? *left : 0, opening);
+                            limited ? rate_left : 0, opening, budget);
         if (limited)
-            *left -= took;
-        if (gi->dirty_count <= 0) {
-            if (opening)
-                residency_loaded(item);
-            world->opened = true;
-        }
+            rate_left -= took;
+        if (gi->dirty_count <= 0 && opening)
+            residency_loaded(item);
     }
 
     scene_capture_end(engine, scene, &saved_capture);

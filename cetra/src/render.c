@@ -2029,6 +2029,28 @@ bool scene_capture_ready(const Engine* engine, const Scene* scene, SceneCaptureK
     return kind != SCENE_CAPTURE_RADIANCE || gi_world_ready_in(scene->gi, box);
 }
 
+CaptureBudget capture_budget_open(const Engine* engine) {
+    return (CaptureBudget){.ms = engine ? engine->capture_budget_ms : 0.0f};
+}
+
+bool capture_budget_allows(CaptureBudget* budget) {
+    if (budget->ms <= 0.0f)
+        return true;
+    glFinish();
+    const double now = glfwGetTime();
+    if (budget->start == 0.0)
+        budget->start = now;
+    return budget->units == 0 || (now - budget->start) * 1000.0 < (double)budget->ms;
+}
+
+void capture_budget_spend(CaptureBudget* budget) {
+    budget->units++;
+}
+
+int capture_budget_faces(const CaptureBudget* budget) {
+    return budget->ms > 0.0f ? 1 : 6;
+}
+
 void scene_capture_begin(Engine* engine, Scene* scene, SceneCaptureKind kind,
                          SceneCaptureState* saved) {
     if (!engine || !scene || !saved)
@@ -2098,8 +2120,13 @@ void scene_capture_end(Engine* engine, Scene* scene, const SceneCaptureState* sa
 
 void scene_capture_faces(Engine* engine, Scene* scene, struct IBLResources* ibl,
                          const vec3 position, GLuint dst_cubemap, GLuint dst_depth_cubemap,
-                         int face_size, float near_clip, float far_clip, SceneCaptureFaces faces) {
-    if (!engine || !scene || !engine->camera || !dst_cubemap || face_size <= 0)
+                         int face_size, float near_clip, float far_clip, SceneCaptureFaces faces,
+                         int first, int count) {
+    if (first < 0)
+        first = 0;
+    if (count > 6 - first)
+        count = 6 - first;
+    if (!engine || !scene || !engine->camera || !dst_cubemap || face_size <= 0 || count <= 0)
         return;
     // Keeping the depth means rendering straight into the destination faces:
     // a blit would have to carry depth between two differently-sized targets.
@@ -2239,18 +2266,18 @@ void scene_capture_faces(Engine* engine, Scene* scene, struct IBLResources* ibl,
         light_cluster_build_capture(engine->light_cluster, scene, position, far_clip * sqrtf(3.0f),
                                     engine->projection_matrix, ss_size, near_clip, far_clip);
 
-    for (int i = 0; i < 6; ++i) {
+    for (int i = first; i < first + count; ++i) {
         if (keep_depth) {
             glBindFramebuffer(GL_FRAMEBUFFER, face_fbo);
             glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
                                    GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, dst_cubemap, 0);
             glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
                                    GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, dst_depth_cubemap, 0);
-            // Checked on the first face only, and here rather than at creation:
+            // Checked on the first face drawn only, and here rather than at creation:
             // the FBO carries no attachment until one is bound, so a driver that
             // rejects a depth-textured cube face would otherwise fail silently
             // and leave every probe's visibility moments reading the clear value.
-            if (i == 0 && glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+            if (i == first && glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
                 log_error("Capture FBO incomplete with a depth cubemap; skipping capture");
                 break;
             }

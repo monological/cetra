@@ -29519,6 +29519,11 @@ LSTREAM_TILE_LIGHTS = 16  # bodied lights the cached tiles hold: 768 cells of 48
 # other UVs in an atlas with a GI slot in it: measured 3 px of the 800x600 frame at a code, against
 # 486 px with the edge carried out without limit and a zero weight read as black (spec 13.25).
 LSTREAM_REACH_FRACTION = 60 / (800 * 600)
+# A capture budget small enough to let about one capture through a frame, and frames enough for
+# room 0's eight volumes of 48 probes and its sixteen probes' 96 faces at that pace.
+LSTREAM_PACED_BUDGET_MS = "1"
+LSTREAM_PACED_FRAMES = 600
+LSTREAM_PACED_EVERY = 10
 
 
 def _lstream_rooms():
@@ -29644,6 +29649,9 @@ def run_lighting_stream_gate(workdir):
                          and the GI volume photographed: their digests match the room without them
       stream-reach       a volume a kilometre off lights room 0 not at all: the frame is the one
                          with no volume, but for the atlas's other size (spec 13.25)
+      stream-paced       captures under a capture budget spread over hundreds of frames, and
+                         land on the lighting taken all at once: equal digests, the same frame
+                         (spec 13.32)
 
     The walk teleports, which no player does: it is the worst case for every cap at once -- all
     of room 0's items leave and all of room 9's arrive in one frame -- and a walk can only ever
@@ -29878,6 +29886,44 @@ def run_lighting_stream_gate(workdir):
               f"and what is left is the atlas's other size)")
         if not ok:
             failures.append("stream-reach")
+
+    # -- paced: a budgeted run lands on the same lighting (spec 13.32) --------------------
+    # A millisecond lets about one capture through a frame, so the eight volumes and sixteen
+    # probes take hundreds of frames where the unbudgeted run takes one. Captures run at render
+    # time 0 and an opening writes outright, so the frame a probe or a face was taken in cannot
+    # matter: what the two hold at the end is the same to the bit.
+    look = ["--stream-probe", str(LSTREAM_PACED_EVERY)]
+    paced, paced_text = _lstream_run(
+        workdir, "paced", look + ["--capture-budget-ms", LSTREAM_PACED_BUDGET_MS],
+        LSTREAM_PACED_FRAMES)
+    whole, whole_text = _lstream_run(workdir, "whole", look, LSTREAM_PACED_FRAMES)
+    if paced is None or whole is None:
+        print(f"  stream-paced ERROR  {(paced_text if paced is None else whole_text)[-300:]}")
+        failures.append("stream-paced")
+    else:
+        prows, wrows = _lstream_rows(paced_text), _lstream_rows(whole_text)
+        end = LSTREAM_PACED_FRAMES
+
+        def held(row):
+            return ({i: (r.get("state"), r.get("digest")) for i, r in row.get("gi", {}).items()},
+                    {i: (r.get("state"), r.get("digest")) for i, r in row.get("probe", {}).items()})
+
+        def settled(row):
+            gi, probes = held(row)
+            return (bool(gi) and all(s not in ("sweeping", "unswept") for s, _ in gi.values())
+                    and all(s != "capturing" for s, _ in probes.values()))
+
+        same = bool(prows.get(end)) and held(prows[end]) == held(wrows.get(end, {}))
+        early = LSTREAM_PACED_EVERY
+        spread = settled(wrows.get(early, {})) and not settled(prows.get(early, {}))
+        frac, peak = _origin_diff(paced[end], whole[end])
+        ok = same and spread and settled(prows.get(end, {})) and frac == 0
+        print(f"  stream-paced {'PASS' if ok else 'FAIL'}  a {LSTREAM_PACED_BUDGET_MS} ms capture "
+              f"budget against none: still capturing at frame {early}: {spread} (the unbudgeted "
+              f"run is done); at frame {end} every volume and probe digest equal: {same}, the "
+              f"frame {frac:.3%} apart, peak {peak} (want 0)")
+        if not ok:
+            failures.append("stream-paced")
 
     return failures
 

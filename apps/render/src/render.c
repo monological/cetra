@@ -201,8 +201,8 @@ static void print_usage(const char* prog) {
             "      --gi-probes x,y,z  Probe grid counts (implies --gi-volume; default 8,4,8)\n");
     fprintf(stderr, "      --gi-rate <n>      Probes captured per frame while dirty (default 2)\n");
     fprintf(stderr, "      --gi-debug         Blit the probe atlas into the frame corner\n");
-    fprintf(stderr, "      --gi-stream-rate <n>  Probes per frame in a GI sweep begun after "
-                    "load (default 32)\n");
+    fprintf(stderr, "      --capture-budget-ms <f>  Most of a frame the GI and probe captures "
+                    "may take (default 8 windowed, no limit headless; 0 = no limit)\n");
     fprintf(stderr, "      --stream-probe N   Print the streamed lighting's residency every N "
                     "frames\n");
     fprintf(stderr, "      --capture-hide <node>  Leave a node out of every GI and probe capture "
@@ -587,7 +587,7 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     // -1, not 0: the library gives 0 its own meaning (capture every dirty probe
     // in one frame), so a 0 sentinel here would make --gi-rate 0 unreachable.
     args->gi_rate = -1;
-    args->gi_stream_rate = -1;
+    args->capture_budget_ms = -1.0f;
     args->tile_blocks_per_frame = -1;
     args->tile_stores = -1;
     // -1 = unset, so `--water-waves gerstner` can override a scene file that authored
@@ -1250,12 +1250,12 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             }
             args->gi_rate = atoi(argv[i]);
             args->gi_volume = 1;
-        } else if (strcmp(argv[i], "--gi-stream-rate") == 0) {
+        } else if (strcmp(argv[i], "--capture-budget-ms") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
                 return -1;
             }
-            args->gi_stream_rate = atoi(argv[i]);
+            args->capture_budget_ms = (float)atof(argv[i]);
         } else if (strcmp(argv[i], "--capture-hide") == 0 ||
                    strcmp(argv[i], "--remove-node") == 0) {
             const bool hide = strcmp(argv[i], "--capture-hide") == 0;
@@ -3608,6 +3608,8 @@ int main(int argc, char** argv) {
 
     if (args.no_instancing)
         engine->instancing_enabled = false;
+    if (args.capture_budget_ms >= 0.0f)
+        engine->capture_budget_ms = args.capture_budget_ms;
     if (args.no_frustum_cull)
         engine->frustum_cull_enabled = false;
     if (args.no_occlusion_cull)
@@ -4829,8 +4831,6 @@ int main(int argc, char** argv) {
     if (scene->gi) {
         if (args.gi_rate >= 0)
             scene->gi->rate = args.gi_rate;
-        if (args.gi_stream_rate >= 0)
-            scene->gi->stream_rate = args.gi_stream_rate;
         scene->gi->debug_atlas = args.gi_debug != 0;
     }
 

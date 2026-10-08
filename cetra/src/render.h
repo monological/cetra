@@ -90,6 +90,9 @@ void scene_capture_end(Engine* engine, struct Scene* scene, const SceneCaptureSt
 // capture leaves the next real frame bit-identical, and raises engine->capturing
 // for the duration so passes that reach outside the bound target sit out.
 //
+// Draws faces `first` to `first + count - 1` of the six, in GL's cube face order, so a capture
+// may be spread over frames; every face it does not draw is left as it was.
+//
 // Pair with scene_capture_begin/end, which own the policy this does not.
 typedef enum SceneCaptureFaces {
     SCENE_FACES_SHADED,     // the lit scene, faces turned toward the capture point
@@ -98,7 +101,29 @@ typedef enum SceneCaptureFaces {
 
 void scene_capture_faces(Engine* engine, Scene* scene, struct IBLResources* ibl,
                          const vec3 position, GLuint dst_cubemap, GLuint dst_depth_cubemap,
-                         int face_size, float near_clip, float far_clip, SceneCaptureFaces faces);
+                         int face_size, float near_clip, float far_clip, SceneCaptureFaces faces,
+                         int first, int count);
+
+// A frame's allowance for the light captures (spec 13.32), opened once by the lighting update and
+// asked before each unit of capture work -- a GI probe, a reflection probe's face. The first unit
+// of a frame always runs, so every capture finishes however small the allowance; after it, a unit
+// runs while the frame has spent less than engine->capture_budget_ms on them since the first
+// was asked for. The clock is read past a glFinish: a capture's cost is mostly GPU work, which
+// the CPU would otherwise run ahead of and the frame's swap would then wait on.
+typedef struct CaptureBudget {
+    float ms;     // the allowance; 0 = no limit, and no clock is read
+    double start; // when the first unit was asked for, seconds
+    int units;    // units run this frame
+} CaptureBudget;
+
+CaptureBudget capture_budget_open(const Engine* engine);
+// Whether one more unit may run now. Starts the clock on the frame's first ask.
+bool capture_budget_allows(CaptureBudget* budget);
+// How many of a reflection probe's faces to take at a time: all six with no limit, where one
+// burst is cheaper than six, and one with one.
+int capture_budget_faces(const CaptureBudget* budget);
+// Count a unit that ran.
+void capture_budget_spend(CaptureBudget* budget);
 
 // Flatten the scene for this frame, if it has not been flattened already.
 //
