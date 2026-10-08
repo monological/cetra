@@ -84,6 +84,19 @@ typedef struct TreeSkeleton {
     float max_root_dist; // normalizes the flex weight
 } TreeSkeleton;
 
+// Named trees: one statement of each, so an app and the tree viewer grow the same tree.
+typedef enum TreePreset {
+    TREE_PRESET_BROADLEAF = 0, // the tree viewer's own: tall, upright, a narrow crown in leaf
+    TREE_PRESET_DEAD,          // leafless, sagging and wandering: wood dead a long time
+    TREE_PRESET_COUNT
+} TreePreset;
+
+// Overwrites all of `p`, so it starts from zero and nothing a caller set before survives.
+void tree_params_preset(TreeParams* p, TreePreset preset, int seed);
+// The preset's name as the command line spells it, and back; false for a name it does not know.
+const char* tree_preset_name(TreePreset preset);
+bool tree_preset_from_name(const char* name, TreePreset* out);
+
 // Grow the skeleton for `p`. Deterministic in p->seed. Safe to call on a
 // zeroed struct; call tree_skeleton_free when done.
 void tree_skeleton_build(TreeSkeleton* skel, const TreeParams* p);

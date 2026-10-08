@@ -476,6 +476,57 @@ static void regenerate_tree(const TreeParams* p) {
     tree_skeleton_free(&skel);
 }
 
+// FNV-1a over `n` bytes, folded into `h`.
+static unsigned long long fnv1a(unsigned long long h, const void* data, size_t n) {
+    const unsigned char* b = data;
+    for (size_t i = 0; i < n; i++) {
+        h ^= b[i];
+        h *= 1099511628211ull;
+    }
+    return h;
+}
+
+// Every stream of a mesh, so moving any of them -- a position, a wind weight, a vertex colour,
+// the winding -- moves the digest.
+static unsigned long long mesh_digest(const Mesh* m) {
+    const size_t vc = m->vertex_count;
+    unsigned long long h = 1469598103934665603ull;
+    h = fnv1a(h, &m->vertex_count, sizeof(m->vertex_count));
+    h = fnv1a(h, &m->index_count, sizeof(m->index_count));
+    const struct {
+        const float* data;
+        size_t per_vertex;
+    } streams[] = {{m->vertices, 3},   {m->normals, 3},     {m->tangents, 4},
+                   {m->tex_coords, 2}, {m->tex_coords2, 2}, {m->colors, 4}};
+    for (size_t i = 0; i < sizeof(streams) / sizeof(streams[0]); i++)
+        if (streams[i].data)
+            h = fnv1a(h, streams[i].data, vc * streams[i].per_vertex * sizeof(float));
+    if (m->indices)
+        h = fnv1a(h, m->indices, m->index_count * sizeof(unsigned int));
+    return h;
+}
+
+// --tree-digest: the tree grown and meshed exactly as the scene grows it, then digested and
+// printed, with nothing rendered. A generator change that should leave a tree alone is held to
+// this line.
+static void print_tree_digest(const TreeParams* p, TreePreset preset) {
+    TreeSkeleton skel;
+    memset(&skel, 0, sizeof(skel));
+    tree_skeleton_build(&skel, p);
+    Mesh* bark = create_mesh();
+    Mesh* leaves = create_mesh();
+    tree_mesh_bark(&skel, p, bark);
+    tree_mesh_leaves(&skel, p, leaves);
+    printf("tree-digest preset=%s seed=%d branches=%d bark_verts=%zu bark_tris=%zu "
+           "leaf_verts=%zu leaf_tris=%zu bark=%016llx leaves=%016llx\n",
+           tree_preset_name(preset), p->seed, skel.branch_count, bark->vertex_count,
+           bark->index_count / 3, leaves->vertex_count, leaves->index_count / 3, mesh_digest(bark),
+           mesh_digest(leaves));
+    free_mesh(bark);
+    free_mesh(leaves);
+    tree_skeleton_free(&skel);
+}
+
 /*
  * Regenerate the grass field
  *
@@ -861,6 +912,8 @@ typedef struct {
     float walk_speed;   // units/s on the flat; 0 = the walker's own default
     float look_rate;    // radians/s of head turn; 0 = the walker's own default
     int arrows_upright; // up arrow looks UP; the walker's default is inverted
+    TreePreset preset;  // the tree grown; TREE_PRESET_BROADLEAF is this app's own
+    int tree_digest;    // print the grown meshes' digest and exit, rendering nothing
 } TreeArgs;
 
 static void print_usage(const char* prog) {
@@ -931,6 +984,9 @@ static void print_usage(const char* prog) {
            (double)(PLAYER_LOOK_RATE * 180.0f / (float)M_PI));
     printf("      --no-invert-arrows  Up arrow looks UP; the default is inverted (pitch only,\n");
     printf("                          never yaw)\n");
+    printf("      --preset NAME       The tree grown: broadleaf (default) or dead\n");
+    printf("      --tree-digest       Print a hash of every stream of the grown meshes, and\n");
+    printf("                          their counts, then exit without rendering\n");
     printf("  -h, --help              This message\n");
 }
 
@@ -1062,6 +1118,15 @@ static bool parse_args(int argc, char** argv, TreeArgs* a) {
             a->star_hour = (float)atof(argv[++i]);
         } else if ((!strcmp(s, "-c") || !strcmp(s, "--config")) && has_next) {
             a->config_path = argv[++i];
+        } else if (!strcmp(s, "--preset") && has_next) {
+            const char* name = argv[++i];
+            if (!tree_preset_from_name(name, &a->preset)) {
+                fprintf(stderr, "Unknown tree preset: %s\n", name);
+                print_usage(argv[0]);
+                return false;
+            }
+        } else if (!strcmp(s, "--tree-digest")) {
+            a->tree_digest = 1;
         } else if (!strcmp(s, "-h") || !strcmp(s, "--help")) {
             print_usage(argv[0]);
             return false;
@@ -1183,6 +1248,14 @@ int main(int argc, char** argv) {
     if (!engine) {
         fprintf(stderr, "Failed to initialize engine\n");
         return -1;
+    }
+    // After the engine only because a Mesh is made with a GL context to hold its buffers.
+    if (args.tree_digest) {
+        TreeParams digest_params;
+        tree_params_preset(&digest_params, args.preset, args.seed);
+        print_tree_digest(&digest_params, args.preset);
+        free_engine(engine);
+        return 0;
     }
     engine_set_screenshot_path(engine, args.screenshot);
     engine->screenshot_every = args.screenshot_every;
@@ -1766,30 +1839,7 @@ int main(int argc, char** argv) {
     }
     engine->oit_enabled = true;
 
-    // Tree shape
-    params.seed = args.seed;
-    params.max_depth = 4;
-    // A tall, upright habit: a long trunk, branches held closer to vertical,
-    // and a stronger pull toward the light, which narrows the crown rather
-    // than letting it spread into a ball.
-    params.trunk_length = 125.0f;
-    params.trunk_radius = 9.0f;
-    params.branches_per_node = 3;
-    params.length_decay = 0.70f;
-    params.taper = 0.62f;
-    params.branch_angle = 27.0f;
-    params.angle_variance = 12.0f;
-    params.twist = 137.5f;
-    params.droop = 0.32f;
-    params.curve_noise = 0.4f;
-    params.phototropism = 0.45f;
-    params.lateral_density = 1.0f;
-    params.twig_scale = 1.0f;
-    params.show_leaves = 1;
-    // A card carries a whole sprig, so it is sized as one and spaced sparsely:
-    // the canopy should show its branch structure through the foliage.
-    params.leaf_size = 15.0f;
-    params.leaf_density = 1.3f;
+    tree_params_preset(&params, args.preset, args.seed);
 
     // Grass field
     grass_params.seed = args.seed;

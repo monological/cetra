@@ -56,6 +56,77 @@ static float tg_smoothstep(float e0, float e1, float x) {
 }
 
 // ---------------------------------------------------------------------------
+// Presets
+// ---------------------------------------------------------------------------
+
+static const char* const k_preset_names[TREE_PRESET_COUNT] = {
+    [TREE_PRESET_BROADLEAF] = "broadleaf",
+    [TREE_PRESET_DEAD] = "dead",
+};
+
+const char* tree_preset_name(TreePreset preset) {
+    return preset >= 0 && preset < TREE_PRESET_COUNT ? k_preset_names[preset] : "unknown";
+}
+
+bool tree_preset_from_name(const char* name, TreePreset* out) {
+    for (int i = 0; name && i < TREE_PRESET_COUNT; i++) {
+        if (!strcmp(name, k_preset_names[i])) {
+            *out = (TreePreset)i;
+            return true;
+        }
+    }
+    return false;
+}
+
+void tree_params_preset(TreeParams* p, TreePreset preset, int seed) {
+    memset(p, 0, sizeof(*p));
+    p->seed = seed;
+    p->trunk_length = 125.0f;
+    p->twist = 137.5f;
+    switch (preset) {
+        case TREE_PRESET_DEAD:
+            // What a dead tree is: branches that sag (droop), wander (curve noise) and no longer
+            // straighten back toward the light, spread wide and sparse, and no leaves.
+            p->max_depth = 3;
+            p->trunk_radius = 8.0f;
+            p->branches_per_node = 2;
+            p->length_decay = 0.7f;
+            p->taper = 0.5f;
+            p->branch_angle = 42.0f;
+            p->angle_variance = 22.0f;
+            p->droop = 0.55f;
+            p->curve_noise = 0.7f;
+            p->phototropism = 0.1f;
+            p->lateral_density = 0.45f;
+            p->twig_scale = 0.8f;
+            break;
+        case TREE_PRESET_BROADLEAF:
+        default:
+            // A tall, upright habit: a long trunk, branches held closer to vertical, and a stronger
+            // pull toward the light, which narrows the crown rather than letting it spread into a
+            // ball.
+            p->max_depth = 4;
+            p->trunk_radius = 9.0f;
+            p->branches_per_node = 3;
+            p->length_decay = 0.70f;
+            p->taper = 0.62f;
+            p->branch_angle = 27.0f;
+            p->angle_variance = 12.0f;
+            p->droop = 0.32f;
+            p->curve_noise = 0.4f;
+            p->phototropism = 0.45f;
+            p->lateral_density = 1.0f;
+            p->twig_scale = 1.0f;
+            p->show_leaves = 1;
+            // A card carries a whole sprig, so it is sized as one and spaced sparsely: the canopy
+            // should show its branch structure through the foliage.
+            p->leaf_size = 15.0f;
+            p->leaf_density = 1.3f;
+            break;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Skeleton growth
 // ---------------------------------------------------------------------------
 
