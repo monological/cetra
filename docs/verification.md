@@ -201,6 +201,7 @@ first.
 | **The place graph** (`nav_graph.c`, spec 13.17) | YES -- routes break ties by node index, a follower advances by the root motion a clip states and a jump by its clip's clock, so a headless trip is the same trip every run | (automatic); silent's `--trace-cat` prints the link and how far along it every 30 steps |
 | **A brain** (`game/brain.c`, spec 13.17) | YES in headless, ticked once per fixed step: its only randomness is its own xorshift32 from the seed it was made with, and a sense is a ray against the physics world, which is exact. **Windowed it is not**: what it senses depends on where the player happens to be | (automatic); silent's `--cat-seed` picks the seed, and two `--trace-cat` runs on one seed diff byte-identical (measured over a minute, 240 lines) |
 | **Voices** (`audio_play_voice`, spec 13.17) | YES in an offline render: a voice is decoded on the calling thread, never by an async load, and reaped from the mix pulled, so a dump is a function of the frames. **A headless run that pulls no PCM never ends a voice** -- the pool steals the oldest instead, which changes nothing a picture can see | `--audio-dump`, pulled a frame at a time |
+| **Audio zones** (`audio_zones.c`, spec 13.33) | YES -- the best paths are a closure over the links, recomputed when one changes, and the fade eases by the sim clock's delta, so a headless frame N is fade state N. The gain changes once a frame, between the frames an offline render pulls | (automatic); the `audio-zone*` arms |
 | **The head look-at** (`look_at.c`, spec 13.17) | YES -- it eases by the animator's dt, and does nothing at all at weight zero, which kept every golden 0 px with it installed | (automatic) |
 | **TAA jitter** | YES -- disabled in headless unless `--headless-jitter` | (automatic) |
 | **Orbit camera** | YES -- auto-rotation disabled in headless | `--cam-eye`/`--cam-target` for exact repro |
@@ -505,19 +506,24 @@ caller pulls with `audio_system_read_pcm`. Everything ABOVE the device -- the bu
 voices, the spatialization -- is what the `audio` gate group verifies, off that offline
 PCM, so it needs no sound card and is a pure function of the frames pulled.
 
-The `audio` group runs six arms through `gametest --audio-probe`, each a headless offline
+The `audio` group runs nine arms through `gametest --audio-probe`, each a headless offline
 render measured as per-channel RMS: **onset** (a tone is silent before it is played and
 energetic after), **pan** (a source to the right is louder in the right channel, and to the
 left in the left -- a ratio each way, so a swapped channel fails), **distance** (the same
 tone is louder near than far and still audible far -- attenuation, not a cutoff), **master**
 (the master bus at 1 passes energy and at 0 passes silence), **decode** (a WAV
 synthesized by the gate, with no committed binary, loads from a file and decodes to energy),
-and **noise** (spec 13.9: white, pink and brown each loud, each darker than the last). The
+**noise** (spec 13.9: white, pink and brown each loud, each darker than the last), and three
+for the zones (spec 13.33): **zone** (a tone through a link of 0.25 is a quarter of itself,
+and a 2D tone never placed is whole), **zone-path** (a direct link of 0.1 against a way round
+at 0.5 and 0.5: the best path, 0.25) and **zone-fade** (the listener stepping into the tone's
+zone eases it up, rising every window and whole by 2 s; an opened link lets it through
+whole; a voice started in another zone is a quarter of itself from its first window). The
 tone arms drive procedural `ma_waveform` tones and the noise arm `ma_noise` beds through the
 real spatializer, so the layer is exercised end to end with nothing on disk but the decode
-arm's temporary WAV. **The voice pool and a source's several sounds (spec 13.17) have no arm**:
-the spec took none, by decision, and silent's offline dumps with `--cat-say` less the same
-dump with `--no-cat` are how they were checked.
+arm's temporary WAV, which the fade arm's voices reuse. **The voice pool has no arm of its
+own**: spec 13.17 took none, by decision, and silent's offline dumps with `--cat-say` less the
+same dump with `--no-cat` are how it was checked.
 
 **What no suite covers is the OS device path** -- that a real speaker produces the sound, on
 each platform's backend (CoreAudio, ALSA/PulseAudio, WASAPI). The offline render proves the

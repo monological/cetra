@@ -1148,9 +1148,10 @@ player's pose, velocity, ground state and the move and jump the step acted on, e
 `--glare` turns on the aperture's diffraction star, which the engine leaves off (spec 13.5).
 `--audio-probe <case>` is a headless, self-contained offline render (miniaudio's `noDevice` engine)
 that plays a fixed geometry, measures the mixed PCM and prints it, then exits — the cases are
-`onset`, `pan`, `distance`, `master` and `decode`, which the `audio` gate group reads; `decode`
-takes the WAV to load from `--audio-file <path>`. Because it opens no device, it runs anywhere the
-gate suite does.
+`onset`, `pan`, `distance`, `master`, `decode`, `noise` (spec 13.9), and `zone`, `zone_path` and
+`zone_fade` (spec 13.33), which the `audio` gate group reads; `decode` and `zone_fade` take the WAV
+to load from `--audio-file <path>`. Because it opens no device, it runs anywhere the gate suite
+does.
 
 **Spec 12.1 made the player a rig.** `apps/gametest` loads `assets/models/puppet.gltf` and drives it from
 an `ANIMATOR` component: idle, walk and run blended from the character controller's POST-SOLVE
