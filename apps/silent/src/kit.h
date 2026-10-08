@@ -210,6 +210,10 @@ void kit_slab(Kit* kit, int mat, const vec2* xz, int count, float y0, float y1, 
 
 // A box turned `yaw` radians about +Y. `collide` adds a static body for it.
 void kit_box(Kit* kit, int mat, const vec3 centre, const vec3 half, float yaw, bool collide);
+// A box standing on `base`, 2 * half[1] tall, turned by `yaw` about the vertical and then leaning
+// `lean` about its own X, the way the ground has let it fall: a headstone, a slab gone over an
+// edge. No body.
+void kit_leaning_box(Kit* kit, int mat, const vec3 base, const vec3 half, float yaw, float lean);
 // A box that only collides: an invisible wall, a pane of glass.
 void kit_collider(Kit* kit, const vec3 centre, const vec3 half, float yaw);
 

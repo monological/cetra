@@ -177,6 +177,26 @@
 // through the woods.
 #define BACK_FENCE_Z 34.0f
 
+// The utility poles down the far sidewalk: the line they stand on, the westmost one's place on
+// the cross street's corner, and their two wires' height and offset either side.
+#define POLE_Z        (-(ROAD_HALF_WIDTH + SIDEWALK_WIDTH - 0.6f))
+#define POLE_WEST_X   (-47.0f)
+#define POLE_WIRE_Y   7.95f
+#define POLE_WIRE_OFF 0.65f
+
+/*
+ * The crossroads at the street's west end (spec 13.35): a cross street, each of its arms closed by
+ * a barricade, and straight on, the road breaking off at the lip of a chasm the fog fills. The
+ * lip wanders a metre or two either side of CHASM_X, and is straight across the road's end.
+ */
+#define CROSS_X       (-52.0f) // the cross street's centre line
+#define CROSS_NORTH_Z (-18.0f) // the north arm's barricade
+#define CROSS_SOUTH_Z 22.0f    // the south arm's, the way the lake road will take
+#define CROSS_Z0      (-32.0f) // where the cross street's arms run out into the woods
+#define CROSS_Z1      36.0f
+#define CROSS_X0      (-67.0f) // the crossroads' flat ground runs from here to the street
+#define CHASM_X       (-69.0f)
+
 /*
  * The far side stands on a TERRACE (spec 13.35): six level lots, one a house, behind a concrete
  * retaining wall along the back of the far sidewalk, each lot a step higher than the one east of

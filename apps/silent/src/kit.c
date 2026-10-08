@@ -592,6 +592,35 @@ void kit_box(Kit* kit, int mat, const vec3 centre, const vec3 half, float yaw, b
     box(kit, mat, centre, half, yaw, collide, false, KIT_FACES_ALL);
 }
 
+void kit_leaning_box(Kit* kit, int mat, const vec3 base, const vec3 half, float yaw, float lean) {
+    vec3 corner[8];
+    for (int i = 0; i < 8; i++) {
+        vec3 p = {(i & 1) ? half[0] : -half[0], (i & 2) ? 2.0f * half[1] : 0.0f,
+                  (i & 4) ? half[2] : -half[2]};
+        // Lean about X, then turn about Y, then stand on the base.
+        const float y = p[1] * cosf(lean) - p[2] * sinf(lean);
+        const float z = p[1] * sinf(lean) + p[2] * cosf(lean);
+        corner[i][0] = base[0] + p[0] * cosf(yaw) + z * sinf(yaw);
+        corner[i][1] = base[1] + y;
+        corner[i][2] = base[2] - p[0] * sinf(yaw) + z * cosf(yaw);
+    }
+    vec3 centre = {0.0f, 0.0f, 0.0f};
+    for (int i = 0; i < 8; i++)
+        glm_vec3_add(centre, corner[i], centre);
+    glm_vec3_scale(centre, 1.0f / 8.0f, centre);
+    static const int FACES[6][4] = {{0, 1, 3, 2}, {4, 5, 7, 6}, {0, 1, 5, 4},
+                                    {2, 3, 7, 6}, {0, 2, 6, 4}, {1, 3, 7, 5}};
+    for (int f = 0; f < 6; f++) {
+        vec3 mid = {0.0f, 0.0f, 0.0f}, out = {0.0f, 0.0f, 0.0f};
+        for (int k = 0; k < 4; k++)
+            glm_vec3_add(mid, corner[FACES[f][k]], mid);
+        glm_vec3_scale(mid, 0.25f, mid);
+        glm_vec3_sub(mid, centre, out);
+        kit_quad_facing(kit, mat, corner[FACES[f][0]], corner[FACES[f][1]], corner[FACES[f][2]],
+                        corner[FACES[f][3]], out);
+    }
+}
+
 /*
  * A capped prism from end0 to end1, which differ only along axis `ax`. Its
  * section is round in the other two axes, `u` taking the cosine and `w` the

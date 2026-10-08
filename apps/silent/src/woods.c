@@ -45,21 +45,21 @@ static const struct {
 #define CONIFER_MODELS KIT_COUNT(CONIFERS)
 #define SNAG_MODEL     (CONIFER_MODELS - 1)
 
-#define SITE_STEP   5.0f  // the jittered grid's cell
-#define SITE_JITTER 0.42f // of a cell, either way
-#define EDGE_THIN   5.0f  // metres in from the woods' edge over which they thin
-#define EDGE_CLEAR  1.6f  // and the least a trunk stands from a fence
-#define DRIVE_CLEAR 7.0f  // from the drive's centre line
-#define CONIFER_MIN 0.10f // the generator's ~125 units to 12.5 m
+#define WOODS_X0    (CHASM_X - 2.0f) // the grid's west edge, at the chasm
+#define SITE_STEP   5.0f             // the jittered grid's cell
+#define SITE_JITTER 0.42f            // of a cell, either way
+#define EDGE_THIN   5.0f             // metres in from the woods' edge over which they thin
+#define EDGE_CLEAR  1.6f             // and the least a trunk stands from a fence
+#define DRIVE_CLEAR 7.0f             // from the drive's centre line
+#define CONIFER_MIN 0.10f            // the generator's ~125 units to 12.5 m
 #define CONIFER_MAX 0.15f
 #define DEAD_MIN    0.05f
 #define DEAD_MAX    0.075f
 #define DEAD_SHARE  0.10f
 #define SNAG_SHARE  0.06f
 #define CARD_KEEP   0.45f // a conifer's sprays at each level of detail, of the level nearer
-#define NEEDLE_CELL \
-    128                       // an atlas cell: 1024 wide, as wide as the plant's, so the material
-                              // array grows no wider for it
+// An atlas cell: 1024 wide, as wide as the plant's, so the material array grows no wider for it.
+#define NEEDLE_CELL      128
 #define NEEDLE_ROUGHNESS 1.6f // over the atlas's 0.6 to 0.75: 1 nearly everywhere
 // The fog's extinction (street.c) leaves a tree about 2% of its contrast at these: 0.09 a metre
 // by night, 0.14 by day.
@@ -72,10 +72,22 @@ static const struct {
 #define BOULDERS    30
 #define ROCK_MODELS 3
 
+// How far (x, z) is into the woods west of the street, round the crossroads (spec 13.35): clear of
+// the lip, the cross street and the street, and of the barricades' lines.
+static float west_depth(float x, float z) {
+    const float lip = x - (land_lip_x(z) + 2.5f);
+    const float cross = fabsf(x - CROSS_X) - 9.0f;
+    const float street = fabsf(z) - (ROAD_HALF_WIDTH + SIDEWALK_WIDTH + 3.0f);
+    const float barricade = fminf(fabsf(z - CROSS_NORTH_Z), fabsf(z - CROSS_SOUTH_Z)) - 2.0f;
+    return fminf(fminf(lip, cross), fminf(street, barricade));
+}
+
 // How far (x, z) is into the woods: positive inside, the distance to the nearest edge facing the
 // houses, and negative outside them.
 static float woods_depth(float x, float z) {
-    if (x < -STREET_HALF_LEN + 0.5f || x > WOODS_EAST_X)
+    if (x < -STREET_HALF_LEN)
+        return west_depth(x, z);
+    if (x > WOODS_EAST_X)
         return -1.0f;
     if (hill_drive_distance(x, z) < DRIVE_CLEAR)
         return -1.0f;
@@ -310,7 +322,7 @@ void woods_build(Woods* woods, Kit* kit, Engine* engine, Scene* scene, Trees* tr
         dead_groups[i] = group_node(root);
 
     unsigned int state = seed * 2246822519u + 0x13355u;
-    const int cols = (int)ceilf((WOODS_EAST_X + STREET_HALF_LEN) / SITE_STEP);
+    const int cols = (int)ceilf((WOODS_EAST_X - WOODS_X0) / SITE_STEP);
     const int rows = (int)ceilf((WORLD_Z1 - WORLD_Z0) / SITE_STEP);
     woods->trees = calloc((size_t)cols * (size_t)rows, sizeof(WoodsTree));
     if (!woods->trees)
@@ -318,7 +330,7 @@ void woods_build(Woods* woods, Kit* kit, Engine* engine, Scene* scene, Trees* tr
     int conifers = 0, dead = 0;
     for (int j = 0; j < rows; j++)
         for (int i = 0; i < cols; i++) {
-            const float x = -STREET_HALF_LEN + SITE_STEP * ((float)i + 0.5f) +
+            const float x = WOODS_X0 + SITE_STEP * ((float)i + 0.5f) +
                             SITE_STEP * SITE_JITTER * (2.0f * rnd(&state) - 1.0f);
             const float z = WORLD_Z0 + SITE_STEP * ((float)j + 0.5f) +
                             SITE_STEP * SITE_JITTER * (2.0f * rnd(&state) - 1.0f);
@@ -393,7 +405,7 @@ void woods_build(Woods* woods, Kit* kit, Engine* engine, Scene* scene, Trees* tr
     int stumps = 0, logs = 0, boulders = 0;
     for (int tries = 0; tries < 4000 && (stumps < STUMPS || logs < LOGS || boulders < BOULDERS);
          tries++) {
-        const float x = -STREET_HALF_LEN + (WOODS_EAST_X + STREET_HALF_LEN) * rnd(&state);
+        const float x = WOODS_X0 + (WOODS_EAST_X - WOODS_X0) * rnd(&state);
         const float z = WORLD_Z0 + (WORLD_Z1 - WORLD_Z0) * rnd(&state);
         const float a = rnd(&state), b = rnd(&state), c = rnd(&state);
         if (woods_depth(x, z) < 1.0f)

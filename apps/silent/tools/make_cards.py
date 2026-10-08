@@ -475,6 +475,54 @@ def clock_frieze(rng):
     return age_paper(a, rng, edge=0.1), ROUGH_LACQUER, {}
 
 
+def weather(a, rng, rust=0.25):
+    """Road furniture left out for years: grime over it, rain run down its face in streaks, and
+    rust bleeding from its edges and its bolt holes."""
+    h, w = a.shape[:2]
+    y, x = np.mgrid[0:h, 0:w].astype(np.float32)
+    grime = noise(h, w, 24, rng) * 0.25 + noise(h, w, 6, rng) * 0.1
+    a = a * (1.0 - grime[..., None])
+    # Streaks: noise stretched down the face, darkest under the top edge where the water starts.
+    streak = np.asarray(Image.fromarray((noise(4, w, 2, rng) * 255).astype(np.uint8)).resize(
+        (w, h), Image.Resampling.BICUBIC), dtype=np.float32) / 255.0
+    streak = np.clip((streak - 0.55) * 3.0, 0.0, 1.0) * np.exp(-y / (0.7 * h))
+    a = a * (1.0 - 0.3 * streak[..., None])
+    edge = np.minimum(np.minimum(x, w - 1 - x), np.minimum(y, h - 1 - y))
+    bleed = np.exp(-edge / 6.0) * noise(h, w, 10, rng) * rust
+    return a * (1.0 - bleed[..., None]) + np.array([0.35, 0.18, 0.08]) * bleed[..., None]
+
+
+SIGN_FONT = os.path.join(ROOT, "apps", "splash", "assets", "Roboto-Bold.ttf")
+# Read from a few metres off, which this is fine enough for, and what the atlas had room left for.
+SIGN_PX_PER_M = 200
+
+
+def road_closed(rng):
+    """The ROAD CLOSED sign on a barricade (spec 13.35): black on a white gone grey, in a border."""
+    w, h = int(1.2 * SIGN_PX_PER_M), int(0.6 * SIGN_PX_PER_M)
+    img = Image.new("RGB", (w, h), (226, 224, 214))
+    draw = ImageDraw.Draw(img)
+    draw.rectangle([5, 5, w - 6, h - 6], outline=(22, 22, 22), width=5)
+    font = ImageFont.truetype(SIGN_FONT, 44)
+    paint_text(img, (w / 2, h * 0.31), "ROAD", font, (20, 20, 20))
+    paint_text(img, (w / 2, h * 0.69), "CLOSED", font, (20, 20, 20))
+    return weather(to_array(img), rng), 0.6
+
+
+def barricade_stripes(rng):
+    """A barricade's rail: orange and white stripes slanting down toward the road's middle,
+    faded, scuffed and dirty."""
+    w, h = int(1.2 * SIGN_PX_PER_M), int(0.2 * SIGN_PX_PER_M)
+    y, x = np.mgrid[0:h, 0:w].astype(np.float32)
+    band = np.floor((x + y) / (0.15 * SIGN_PX_PER_M)).astype(np.int32) % 2
+    orange = np.array([0.80, 0.36, 0.10])
+    white = np.array([0.86, 0.85, 0.80])
+    a = np.where(band[..., None] == 0, orange, white).astype(np.float32)
+    scuff = np.clip((noise(h, w, 3, rng) - 0.7) * 4.0, 0.0, 1.0)
+    a = a * (1.0 - 0.4 * scuff[..., None])
+    return weather(a, rng, rust=0.1), 0.55
+
+
 def pack(sizes, atlas=(ATLAS_W, ATLAS_H)):
     """Skyline packing: each card at the lowest place it fits, leftmost first."""
     atlas_w, atlas_h = atlas
@@ -587,6 +635,12 @@ def main():
     for name, hdri, cx, cy, span, size in PAINTINGS:
         pixels, rough = painting(hdri, cx, cy, span, size, rng)
         cards.append({"name": name, "pixels": pixels, "rough": rough, "m": size})
+    # The crossroads' barricades (spec 13.35), after the rest for the same reason.
+    for name, paint in (("road_closed", road_closed), ("barricade_stripes", barricade_stripes)):
+        pixels, rough = paint(rng)
+        h, w = pixels.shape[:2]
+        cards.append({"name": name, "pixels": pixels, "rough": rough,
+                      "m": (w / SIGN_PX_PER_M, h / SIGN_PX_PER_M)})
 
     spots = place(cards)
     albedo = np.ones((ATLAS_H, ATLAS_W, 3), dtype=np.float32) * PAPER * 0.8

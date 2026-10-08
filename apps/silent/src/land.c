@@ -22,13 +22,19 @@
  *
  * The woods' terms die out past the street's east end, so the hill, the drive and everything
  * standing on them are where they were.
+ *
+ * West of the street the crossroads' plate is flat on its own boxes too (crossroads.c), and past
+ * its barricaded arms the woods rise and fall as they do behind the lots, but leave the cross
+ * street's line low, so it runs on into them as a cutting. The grid starts at the chasm: its first
+ * column of vertices stands on the lip, wherever that has broken off, and across the road's end
+ * that column's cells are left out, the road's broken end being crossroads.c's.
  */
 
 #define LAND_STEP  2.0f
-#define LAND_X0    (-STREET_HALF_LEN)
-#define NORTH_RISE 12.0f // metres the woods climb from the far lots' backs to the north edge
-#define SOUTH_FALL 4.0f  // and fall from our back fences to the south edge
-#define LAND_NOISE 0.6f  // metres of lumps in the woods
+#define LAND_X0    CHASM_X // a whole number of steps west of the street's end, so lines still meet
+#define NORTH_RISE 12.0f   // metres the woods climb from the far lots' backs to the north edge
+#define SOUTH_FALL 4.0f    // and fall from our back fences to the south edge
+#define LAND_NOISE 0.6f    // metres of lumps in the woods
 // Where the lots' height leaves the woods behind the east lot: it holds to here and is gone by
 // the second, over this stretch north of the lots' backs.
 #define BASE_FADE_X0 35.0f
@@ -52,21 +58,40 @@ float land_terrace_height(float x) {
     return TERRACE_HIGH + (TERRACE_LOW - TERRACE_HIGH) * t;
 }
 
-// How far (x, z) is outside the flat ground: the street's plate and the terrace together.
-static float flat_distance(float x, float z) {
-    const float dx = fmaxf(fmaxf(-STREET_HALF_LEN - x, x - STREET_HALF_LEN), 0.0f);
-    const float dz = fmaxf(fmaxf(TERRACE_BACK_Z - z, z - BACK_FENCE_Z), 0.0f);
+float land_lip_x(float z) {
+    const float ragged =
+        CHASM_X - 0.25f + 1.75f * (0.6f * sinf(0.21f * z + 1.3f) + 0.4f * sinf(0.53f * z + 0.4f));
+    // Straight across the road's end and its sidewalks, where the road broke off, a little past
+    // the crossroads' ground so no cell of the grid's first column closes to nothing.
+    const float road = ROAD_HALF_WIDTH + SIDEWALK_WIDTH, straight = CROSS_X0 - 0.3f;
+    return straight + (ragged - straight) * glm_smoothstep(road, road + 3.0f, fabsf(z));
+}
+
+// How far (x, z) is outside a box from (x0, z0) to (x1, z1).
+static float box_distance(float x, float z, float x0, float x1, float z0, float z1) {
+    const float dx = fmaxf(fmaxf(x0 - x, x - x1), 0.0f);
+    const float dz = fmaxf(fmaxf(z0 - z, z - z1), 0.0f);
     return sqrtf(dx * dx + dz * dz);
 }
 
-static bool on_flat(float x, float z) {
-    return x > -STREET_HALF_LEN && x < STREET_HALF_LEN && z > TERRACE_BACK_Z && z < BACK_FENCE_Z;
+// How far (x, z) is outside the flat ground: the street's plate and the terrace together, and the
+// crossroads'.
+static float flat_distance(float x, float z) {
+    return fminf(
+        box_distance(x, z, -STREET_HALF_LEN, STREET_HALF_LEN, TERRACE_BACK_Z, BACK_FENCE_Z),
+        box_distance(x, z, CROSS_X0, -STREET_HALF_LEN, CROSS_Z0, CROSS_Z1));
 }
 
-float land_height(float x, float z) {
-    if (on_flat(x, z))
-        return z < TERRACE_WALL_Z ? land_terrace_height(x) : 0.0f;
+static bool on_flat(float x, float z) {
+    const float road = ROAD_HALF_WIDTH + SIDEWALK_WIDTH;
+    return (x > -STREET_HALF_LEN && x < STREET_HALF_LEN && z > TERRACE_BACK_Z &&
+            z < BACK_FENCE_Z) ||
+           (x > CROSS_X0 && x < -STREET_HALF_LEN && z > CROSS_Z0 && z < CROSS_Z1) ||
+           (x < CROSS_X0 && fabsf(z) < road);
+}
 
+// East of the street's west end: the hill, the woods behind the lots, and their lumps.
+static float east_height(float x, float z) {
     float h = hill_height(x, z);
     if (z < TERRACE_BACK_Z) {
         // The lots' own height carries on under the woods behind them, and fades behind the east
@@ -88,6 +113,29 @@ float land_height(float x, float z) {
     return h;
 }
 
+/*
+ * West of it: level round the crossroads, and past the barricades the same climb and fall as
+ * behind the lots, but away from the cross street's line, which runs on into the woods low. Over
+ * the last stretch before the street's west end it comes round to the east's own, so the two meet.
+ */
+static float west_height(float x, float z) {
+    const float off_road = glm_smoothstep(8.0f, 18.0f, fabsf(x - CROSS_X));
+    float h = NORTH_RISE * glm_smoothstep(CROSS_Z0, WORLD_Z0, z) * off_road -
+              SOUTH_FALL * glm_smoothstep(CROSS_Z1, WORLD_Z1, z) * off_road;
+    h += LAND_NOISE * hill_lumps(x, z) * glm_smoothstep(0.0f, 6.0f, flat_distance(x, z));
+    // Past the crossroads' arms only: beside them, the crossroads' own ground is level.
+    const float beyond = fmaxf(glm_smoothstep(CROSS_Z0 + 4.0f, CROSS_Z0, z),
+                               glm_smoothstep(CROSS_Z1 - 4.0f, CROSS_Z1, z));
+    const float east = east_height(-STREET_HALF_LEN, z);
+    return h + (east - h) * glm_smoothstep(-STREET_HALF_LEN - 10.0f, -STREET_HALF_LEN, x) * beyond;
+}
+
+float land_height(float x, float z) {
+    if (on_flat(x, z))
+        return z < TERRACE_WALL_Z && x > -STREET_HALF_LEN ? land_terrace_height(x) : 0.0f;
+    return x < -STREET_HALF_LEN ? west_height(x, z) : east_height(x, z);
+}
+
 void land_build(Kit* kit) {
     const int cols = (int)ceilf((WORLD_X1 - LAND_X0) / LAND_STEP);
     const int rows = (int)ceilf((WORLD_Z1 - WORLD_Z0) / LAND_STEP);
@@ -102,8 +150,8 @@ void land_build(Kit* kit) {
     for (int j = 0; j <= rows; j++)
         for (int i = 0; i <= cols; i++) {
             float* p = &pos[3 * (j * (cols + 1) + i)];
-            p[0] = LAND_X0 + LAND_STEP * (float)i;
             p[2] = WORLD_Z0 + LAND_STEP * (float)j;
+            p[0] = i == 0 ? land_lip_x(p[2]) : LAND_X0 + LAND_STEP * (float)i;
             p[1] = land_height(p[0], p[2]);
         }
 
@@ -123,7 +171,8 @@ void land_build(Kit* kit) {
             const unsigned int h = ((unsigned int)i * 73856093u) ^ ((unsigned int)j * 19349663u);
             const float ragged = (float)(h % 1000u) / 1000.0f * 8.0f;
             const bool woods =
-                (mz < TERRACE_BACK_Z || mz > BACK_FENCE_Z) && mx < WOODS_EAST_X - 4.0f + ragged;
+                (mz < TERRACE_BACK_Z || mz > BACK_FENCE_Z || mx < -STREET_HALF_LEN) &&
+                mx < WOODS_EAST_X - 4.0f + ragged;
             const int mat = woods ? MAT_WOODS_FLOOR : MAT_DIRT;
             kit_tri_facing(kit, mat, &pos[3 * a], &pos[3 * c], &pos[3 * b], up);
             kit_tri_facing(kit, mat, &pos[3 * b], &pos[3 * c], &pos[3 * e], up);
