@@ -22,5 +22,12 @@
 #define LOADING_RULE_START (LOADING_ENGINE_START + 0.5f)
 #define LOADING_RULE_GROW 0.4f
 
-// The ident has played once the rule is drawn.
-#define LOADING_IDENT_END (LOADING_RULE_START + LOADING_RULE_GROW)
+// A light runs once along the rule from its left end to its right, and a sparkle bursts at the
+// right end as it arrives.
+#define LOADING_SWEEP_START (LOADING_RULE_START + LOADING_RULE_GROW)
+#define LOADING_SWEEP_SECONDS 0.9f
+#define LOADING_SPARKLE_START (LOADING_SWEEP_START + LOADING_SWEEP_SECONDS - 0.1f)
+#define LOADING_SPARKLE_SECONDS 0.7f
+
+// The ident has played once the sparkle has gone.
+#define LOADING_IDENT_END (LOADING_SPARKLE_START + LOADING_SPARKLE_SECONDS)
