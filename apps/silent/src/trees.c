@@ -26,12 +26,10 @@
  * one the kit's shadow cells leave out.
  */
 
-#define TREE_MODELS 6
 // The generator's native trunk is ~125 units; a dead tree here is 7 to 11 m tall.
 #define TREE_SCALE_MIN 0.045f
 #define TREE_SCALE_MAX 0.07f
-#define TREE_TRUNK     8.0f // native trunk radius
-#define BARK_SIZE      256  // the procedural bark's edge, at silent's texel density
+#define BARK_SIZE      256 // the procedural bark's edge, at silent's texel density
 
 // Where trees stand: down both sides of the drive, out of the way of it, and round the grounds.
 #define TREE_DRIVE_NEAR 4.5f // metres from the drive's centre line, at the least
@@ -75,6 +73,21 @@ static Material* bark_material(Scene* scene, ShaderProgram* program) {
                 m, texture_load_memory_owned(scene->tex_pool, "silent_bark_rough", rough, BARK_SIZE,
                                              BARK_SIZE, 3, texture_desc(false)));
     }
+    scene_add_material(scene, m);
+    return m;
+}
+
+// The same bark on wood that lies still: no wind, which would bend a fallen trunk about its
+// own length as though it still stood.
+static Material* still_material(Scene* scene, const Material* bark) {
+    Material* m = create_material();
+    m->name = strdup("dead_bark_still");
+    glm_vec3_copy((float*)bark->albedo, m->albedo);
+    m->roughness = bark->roughness;
+    material_set_program(m, bark->shader_program);
+    material_set_albedo_tex(m, bark->albedo_tex);
+    material_set_normal_tex(m, bark->normal_tex);
+    material_set_roughness_tex(m, bark->roughness_tex);
     scene_add_material(scene, m);
     return m;
 }
@@ -138,15 +151,36 @@ static bool free_ground(float x, float z) {
     return hill_drive_distance(x, z) > TREE_DRIVE_NEAR;
 }
 
-void trees_build(Kit* kit, Engine* engine, Scene* scene, unsigned int seed) {
-    Material* bark = bark_material(scene, engine_get_program(engine, CETRA_PROGRAM_PBR));
-    Mesh* models[TREE_MODELS];
+void trees_init(Trees* trees, Engine* engine, Scene* scene) {
+    trees->bark = bark_material(scene, engine_get_program(engine, CETRA_PROGRAM_PBR));
+    trees->still_bark = still_material(scene, trees->bark);
     for (int i = 0; i < TREE_MODELS; i++)
-        models[i] = grow(i, bark);
+        trees->dead[i] = grow(i, trees->bark);
+}
 
-    SceneNode* group = create_node();
-    node_set_name(group, "dead_trees");
-    node_add_child(scene->root_node, group);
+Mesh* trees_grow_still(Trees* trees, int model) {
+    return grow(model % TREE_MODELS, trees->still_bark);
+}
+
+void trees_release(Trees* trees) {
+    for (int i = 0; i < TREE_MODELS; i++) {
+        if (trees->dead[i])
+            free_mesh(trees->dead[i]);
+        trees->dead[i] = NULL;
+    }
+}
+
+void trees_build(Trees* trees, Kit* kit, Scene* scene, unsigned int seed) {
+    Mesh* const* models = trees->dead;
+    // A group a model, so each model's copies are adjacent in the graph and draw together.
+    SceneNode* root = create_node();
+    node_set_name(root, "dead_trees");
+    node_add_child(scene->root_node, root);
+    SceneNode* groups[TREE_MODELS];
+    for (int i = 0; i < TREE_MODELS; i++) {
+        groups[i] = create_node();
+        node_add_child(root, groups[i]);
+    }
 
     unsigned int state = seed * 2654435761u + 0x7f4a7c15u;
     int placed = 0;
@@ -166,7 +200,8 @@ void trees_build(Kit* kit, Engine* engine, Scene* scene, unsigned int seed) {
         }
         if (!free_ground(x, z))
             continue;
-        Mesh* model = models[placed % TREE_MODELS];
+        const int which = placed % TREE_MODELS;
+        Mesh* model = models[which];
         if (!model)
             continue;
 
@@ -184,14 +219,11 @@ void trees_build(Kit* kit, Engine* engine, Scene* scene, unsigned int seed) {
         glm_scale_uni(m, scale);
         glm_mat4_copy(m, node->original_transform);
         node_add_mesh(node, mesh_ref(model));
-        node_add_child(group, node);
+        node_add_child(groups[which], node);
 
         const float r = TREE_TRUNK * scale * 0.8f;
         kit_collider(kit, (vec3){x, y + 1.5f, z}, (vec3){r, 1.5f, r}, 0.0f);
         placed++;
     }
-    for (int i = 0; i < TREE_MODELS; i++)
-        if (models[i])
-            free_mesh(models[i]);
     printf("silent: %d dead trees from %d models\n", placed, TREE_MODELS);
 }
