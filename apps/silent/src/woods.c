@@ -25,12 +25,13 @@
  * engine's generator, or now and then one of the dead trees. Thin along the fences, so the first
  * trunks stand clear of them, and closing up behind.
  *
- * The engine draws everything it is given out to the far plane, so a woods of hundreds of trees
- * would be drawn whole behind fog that hides all but the nearest. Every tree is its own node and
- * woods_update hangs only those within reach of the eye under their model's group.
- *
- * The models carry levels of detail: the wood by the engine's simplifier, the sprays by thinning
- * them, and silent's LOD bias (silent.c) is set for these, the only chains in the app.
+ * Every tree is hung once, under its model's group so a model's copies are adjacent and draw
+ * together, and never taken down. Hanging only those within the fog's reach of the eye, and
+ * taking the rest down as the eye moved, changed the scene graph on nearly every frame of a walk,
+ * and a changed graph draws every kept face of every cached light again: frames of 650 ms, a few
+ * a second, whenever the player moved. What keeps the far trees cheap instead is their levels of
+ * detail -- the wood by the engine's simplifier, the sprays by thinning them -- with silent's LOD
+ * bias (silent.c) set for these, the only chains in the app.
  */
 
 // The conifers' models: five spruces, two firs and a snag.
@@ -60,11 +61,6 @@ static const struct {
 #define CARD_KEEP   0.45f // a conifer's sprays at each level of detail, of the level nearer
 // An atlas cell: 1024 wide, as wide as the plant's, so the material array grows no wider for it.
 #define NEEDLE_CELL 128
-// The fog's extinction (street.c) leaves a tree about 2% of its contrast at these: 0.09 a metre
-// by night, 0.14 by day.
-#define REACH_NIGHT  45.0f
-#define REACH_DAY    30.0f
-#define REACH_MARGIN 4.0f // a tree drawn stays drawn this much past reach, so none flickers
 
 #define STUMPS      30
 #define LOGS        40
@@ -184,12 +180,12 @@ static SceneNode* group_node(SceneNode* parent) {
     return g;
 }
 
-// A node drawing `mesh` at `m`, hung nowhere yet.
-static SceneNode* placed(Mesh* mesh, const mat4 m) {
+// A node drawing `mesh` at `m`, hung under `parent`.
+static void place(SceneNode* parent, Mesh* mesh, const mat4 m) {
     SceneNode* node = create_node();
     glm_mat4_copy((vec4*)m, node->original_transform);
     node_add_mesh(node, mesh_ref(mesh));
-    return node;
+    node_add_child(parent, node);
 }
 
 // A boulder: one of the rock models, squashed, turned and half sunk at (x, z), as faceted kit
@@ -285,18 +281,14 @@ static void deadfall(Kit* kit, Trees* trees, SceneNode* parent, const FenceBreac
     glm_rotate_x(m, 0.5f * GLM_PIf + glm_rad(3.0f), m);
     glm_rotate_y(m, 2.0f * GLM_PIf * rnd(state), m);
     glm_scale_uni(m, scale);
-    SceneNode* node = placed(mesh, m);
-    node_set_name(node, "deadfall");
-    node_add_child(parent, node);
+    place(parent, mesh, m);
     free_mesh(mesh);
     kit_collider(kit, (vec3){bx + dir[0] * 0.5f * base_out, y, bz + dir[1] * 0.5f * base_out},
                  (vec3){0.45f, 0.6f, 0.5f * base_out}, yaw);
 }
 
-void woods_build(Woods* woods, Kit* kit, Engine* engine, Scene* scene, Trees* trees,
-                 const FenceBreaches* breaches, unsigned int seed, bool night) {
-    memset(woods, 0, sizeof(*woods));
-    woods->reach = night ? REACH_NIGHT : REACH_DAY;
+void woods_build(Kit* kit, Engine* engine, Scene* scene, Trees* trees,
+                 const FenceBreaches* breaches, unsigned int seed) {
     ShaderProgram* pbr = engine_get_program(engine, CETRA_PROGRAM_PBR);
     Material* needles = needles_material(scene, pbr);
     Mesh *wood[CONIFER_MODELS], *sprays[CONIFER_MODELS];
@@ -318,9 +310,6 @@ void woods_build(Woods* woods, Kit* kit, Engine* engine, Scene* scene, Trees* tr
     unsigned int state = seed * 2246822519u + 0x13355u;
     const int cols = (int)ceilf((WOODS_EAST_X - WOODS_X0) / SITE_STEP);
     const int rows = (int)ceilf((WORLD_Z1 - WORLD_Z0) / SITE_STEP);
-    woods->trees = calloc((size_t)cols * (size_t)rows, sizeof(WoodsTree));
-    if (!woods->trees)
-        return;
     int conifers = 0, dead = 0;
     for (int j = 0; j < rows; j++)
         for (int i = 0; i < cols; i++) {
@@ -334,9 +323,6 @@ void woods_build(Woods* woods, Kit* kit, Engine* engine, Scene* scene, Trees* tr
             const float size = rnd(&state), lean = rnd(&state);
             if (depth <= 0.0f || rnd(&state) > keep)
                 continue;
-            WoodsTree* t = &woods->trees[woods->count];
-            t->x = x;
-            t->z = z;
             mat4 m;
             if (kind < DEAD_SHARE) {
                 const int d = (int)(kind / DEAD_SHARE * (float)TREE_MODELS) % TREE_MODELS;
@@ -347,8 +333,7 @@ void woods_build(Woods* woods, Kit* kit, Engine* engine, Scene* scene, Trees* tr
                 glm_rotate_y(m, yaw, m);
                 glm_rotate_x(m, glm_rad(2.0f + 6.0f * lean), m);
                 glm_scale_uni(m, scale);
-                t->nodes[0] = placed(trees->dead[d], m);
-                t->groups[0] = dead_groups[d];
+                place(dead_groups[d], trees->dead[d], m);
                 const float r = TREE_TRUNK * scale * 0.8f;
                 kit_collider(kit, (vec3){x, land_height(x, z) + 1.5f, z}, (vec3){r, 1.5f, r}, 0.0f);
                 dead++;
@@ -365,17 +350,13 @@ void woods_build(Woods* woods, Kit* kit, Engine* engine, Scene* scene, Trees* tr
                 glm_rotate_y(m, yaw, m);
                 glm_rotate_x(m, glm_rad(2.0f * lean), m);
                 glm_scale_uni(m, scale);
-                t->nodes[0] = placed(wood[c], m);
-                t->groups[0] = wood_groups[c];
-                if (sprays[c]) {
-                    t->nodes[1] = placed(sprays[c], m);
-                    t->groups[1] = spray_groups[c];
-                }
+                place(wood_groups[c], wood[c], m);
+                if (sprays[c])
+                    place(spray_groups[c], sprays[c], m);
                 kit_collider(kit, (vec3){x, land_height(x, z) + 1.5f, z},
                              (vec3){0.35f, 1.5f, 0.35f}, 0.0f);
                 conifers++;
             }
-            woods->count++;
         }
     for (int i = 0; i < CONIFER_MODELS; i++) {
         if (wood[i])
@@ -431,36 +412,4 @@ void woods_build(Woods* woods, Kit* kit, Engine* engine, Scene* scene, Trees* tr
     printf("silent: woods of %d conifers and %d dead trees from %d models, %d stumps, %d logs, "
            "%d boulders, %d deadfalls\n",
            conifers, dead, CONIFER_MODELS, stumps, logs, boulders, breaches->count);
-}
-
-void woods_update(Woods* woods, const vec3 eye) {
-    const float show = woods->reach * woods->reach;
-    const float hide = (woods->reach + REACH_MARGIN) * (woods->reach + REACH_MARGIN);
-    for (int i = 0; i < woods->count; i++) {
-        WoodsTree* t = &woods->trees[i];
-        const float dx = t->x - eye[0], dz = t->z - eye[2], d2 = dx * dx + dz * dz;
-        const bool want = t->shown ? d2 < hide : d2 < show;
-        if (want == t->shown)
-            continue;
-        for (int k = 0; k < 2; k++) {
-            if (!t->nodes[k])
-                continue;
-            if (want)
-                node_add_child(t->groups[k], t->nodes[k]);
-            else
-                node_remove_child(t->groups[k], t->nodes[k]);
-        }
-        t->shown = want;
-    }
-}
-
-void woods_free(Woods* woods) {
-    for (int i = 0; i < woods->count; i++) {
-        const WoodsTree* t = &woods->trees[i];
-        for (int k = 0; k < 2 && !t->shown; k++)
-            if (t->nodes[k])
-                free_node(t->nodes[k]);
-    }
-    free(woods->trees);
-    memset(woods, 0, sizeof(*woods));
 }

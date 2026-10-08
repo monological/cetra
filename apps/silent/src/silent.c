@@ -221,7 +221,6 @@ static CatVoice g_voice;
 #define DOOR_CONE  0.6f // radians
 static Grounds g_grounds;
 static Crossroads g_crossroads;
-static Woods g_woods;
 
 // The woods' conifers are the only levels of detail in the app (spec 13.35), and the engine's
 // ladder is set for a mesh the size of a room: at 1 a tree fifteen metres tall would hold its
@@ -658,8 +657,7 @@ static void on_init(Game* game) {
     trees_init(&trees, engine, g_scene);
     trees_build(&trees, &kit, g_scene, (unsigned int)g_args.seed);
     if (!g_args.no_woods)
-        woods_build(&g_woods, &kit, engine, g_scene, &trees, &breaches, (unsigned int)g_args.seed,
-                    !g_args.day);
+        woods_build(&kit, engine, g_scene, &trees, &breaches, (unsigned int)g_args.seed);
     trees_release(&trees);
     engine->lod_bias = WOODS_LOD_BIAS;
     grounds_build(&g_grounds, &kit, g_scene, (unsigned int)g_args.seed, !g_args.day);
@@ -947,7 +945,6 @@ static void on_pre_render(Game* game, double alpha) {
                            : door_will_open(door) ? "E   Open door"
                                                   : "E   Close door");
     sounds_update(&g_sounds);
-    woods_update(&g_woods, eye);
     lights_update(&g_lights, g_scene, game->time, (float)game->sim_clock.delta, eye, forward);
     tv_update(&g_tv, game->time);
     cat_mind_frame(&g_mind, game->time);
@@ -1003,7 +1000,6 @@ static void on_shutdown(Game* game) {
         shadow_tiles_probe(g_scene->shadow_system, g_scene);
     prompt_free(&g_prompt);
     cat_free(&g_cat);
-    woods_free(&g_woods);
 }
 
 static void print_usage(const char* prog) {
