@@ -168,6 +168,7 @@ typedef struct Mesh {
     MeshDrawMode draw_mode;
     float line_width;           // When draw_mode is lines
     MeshShadowRole shadow_role; // drawn, casting, or both
+    float lod_scale;            // multiplies the view's LOD bias for this mesh; 1 = as is
 
     float* vertices; // Array of vertex positions
     float* normals;  // Array of normals

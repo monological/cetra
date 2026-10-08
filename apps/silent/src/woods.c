@@ -27,8 +27,8 @@
  * taking the rest down as the eye moved, changed the scene graph on nearly every frame of a walk,
  * and a changed graph draws every kept face of every cached light again: frames of 650 ms, a few
  * a second, whenever the player moved. What keeps the far trees cheap instead is their levels of
- * detail -- the wood by the engine's simplifier, the sprays by thinning them -- with the engine's
- * LOD bias set here for these, the only chains in the app.
+ * detail -- the wood by the engine's simplifier, the sprays by thinning them -- each model's meshes
+ * carrying their own LOD scale, so the engine's bias stays the GUI's to move.
  */
 
 // The conifers' models: five spruces, two firs and a snag.
@@ -62,7 +62,7 @@ static const Species SPECIES[] = {
 
 // The engine's ladder is set for a mesh the size of a room: at 1 a tree fifteen metres tall would
 // hold its finest level out past two hundred metres. This puts its switches at about 11, 22 and 45.
-#define WOODS_LOD_BIAS 0.045f
+#define WOODS_LOD_SCALE 0.045f
 
 #define WOODS_X0    (CHASM_X - 2.0f) // the grid's west edge, at the chasm
 #define SITE_STEP   5.0f             // the jittered grid's cell
@@ -253,8 +253,11 @@ void woods_build(Kit* kit, Engine* engine, Scene* scene, Trees* trees,
         TreeParams p;
         tree_params_preset(&p, CONIFERS[i].preset, CONIFERS[i].seed);
         trees_grow(&p, trees->bark, needles, &wood[i], &sprays[i]);
+        if (wood[i])
+            wood[i]->lod_scale = WOODS_LOD_SCALE;
+        if (sprays[i])
+            sprays[i]->lod_scale = WOODS_LOD_SCALE;
     }
-    engine->lod_bias = WOODS_LOD_BIAS;
 
     SceneNode* root = create_node();
     node_set_name(root, "woods");
