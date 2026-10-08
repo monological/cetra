@@ -16,6 +16,7 @@
 #include "cetra/engine.h"
 #include "cetra/geometry.h"
 #include "cetra/light.h"
+#include "cetra/lod.h"
 #include "cetra/texture.h"
 #include "cetra/app.h"
 #include "cetra/camera_rig.h"
@@ -52,6 +53,8 @@
 // cannot read it from each other -- and a drift between them is silent: the
 // chain would be preserved against a threshold nothing uses.
 #define LEAF_ALPHA_CUTOFF 0.4f
+// The share of a conifer's sprays each level of detail keeps of the one nearer.
+#define CONIFER_CARD_KEEP 0.45f
 
 /*
  * Generate all procedural textures
@@ -533,6 +536,19 @@ static void print_tree_digest(const TreeParams* p, TreePreset preset) {
            tree_preset_name(preset), p->seed, skel.branch_count, bark->vertex_count,
            bark->index_count / 3, leaves->vertex_count, leaves->index_count / 3, mesh_digest(bark),
            mesh_digest(leaves));
+    // The levels of detail a conifer is drawn with at a distance, after the digest so the
+    // chains never move it: the bark simplified, the sprays thinned.
+    if (p->form == TREE_FORM_EXCURRENT) {
+        mesh_build_lod_chain(bark);
+        mesh_build_card_lod_chain(leaves, TG_SPRAY_INDICES, CONIFER_CARD_KEEP);
+        printf("tree-lod preset=%s bark_levels=%d", tree_preset_name(preset), bark->lod_levels);
+        for (int i = 0; i < bark->lod_levels; i++)
+            printf(" bark%d=%zu", i, bark->lod_count[i] / 3);
+        printf(" leaf_levels=%d", leaves->lod_levels);
+        for (int i = 0; i < leaves->lod_levels; i++)
+            printf(" sprays%d=%zu", i, leaves->lod_count[i] / TG_SPRAY_INDICES);
+        printf("\n");
+    }
     free_mesh(bark);
     free_mesh(leaves);
     tree_skeleton_free(&skel);

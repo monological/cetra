@@ -1,3 +1,4 @@
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -118,5 +119,38 @@ int mesh_build_lod_chain(Mesh* mesh) {
     unsigned int* shrunk = realloc(chain, total * sizeof(unsigned int));
     free(mesh->indices);
     mesh->indices = shrunk ? shrunk : chain;
+    return mesh->lod_levels;
+}
+
+// Below this many cards a level is not worth a rung of its own.
+#define LOD_MIN_LEVEL_CARDS 32
+
+int mesh_build_card_lod_chain(Mesh* mesh, int indices_per_card, float keep) {
+    if (!mesh)
+        return 1;
+
+    mesh->lod_levels = 1;
+    mesh->lod_offset[0] = 0;
+    mesh->lod_count[0] = mesh->index_count;
+    mesh->lod_error[0] = 0.0f;
+
+    if (indices_per_card <= 0 || indices_per_card % 3 != 0 || keep <= 0.0f || keep >= 1.0f)
+        return 1;
+    if (!mesh_lod_eligible(mesh, LOD_MIN_TRIANGLES) ||
+        mesh->index_count % (size_t)indices_per_card != 0)
+        return 1;
+
+    size_t previous = mesh->index_count / (size_t)indices_per_card;
+    for (int level = 1; level < CETRA_LOD_MAX; ++level) {
+        const size_t cards = (size_t)ceilf((float)previous * keep);
+        if (cards < LOD_MIN_LEVEL_CARDS || cards >= previous)
+            break;
+        // A leading run of level 0's own indices: the offset stays 0 and only the count falls.
+        mesh->lod_offset[level] = 0;
+        mesh->lod_count[level] = cards * (size_t)indices_per_card;
+        mesh->lod_error[level] = 0.0f;
+        mesh->lod_levels = level + 1;
+        previous = cards;
+    }
     return mesh->lod_levels;
 }
