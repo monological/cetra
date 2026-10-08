@@ -8,6 +8,7 @@
 #include "engine_internal.h"
 #include "ext/log.h"
 #include "loading_screen.h"
+#include "profiler.h"
 #include "program.h"
 #include "uniform.h"
 #include "util.h"
@@ -171,8 +172,10 @@ static void _loading_blur(const LoadingScreen* ls, GLuint src, float lod, const 
     draw_fullscreen_quad(ls->quad_vao);
 }
 
-// The mark, its bloom, then the tape over both, then the set: into the window, at its size.
-static void _loading_draw(const Engine* engine, LoadingScreen* ls) {
+// The mark, its bloom, then the tape over both, then the set: into the window, at its size. Each
+// stage a row of the profiler when `timed`, which only a frame's own draw is.
+static void _loading_draw(const Engine* engine, LoadingScreen* ls, bool timed) {
+    Profiler* prof = engine->profiler;
     const int w = engine->fb_width, h = engine->fb_height;
     if (w <= 0 || h <= 0)
         return;
@@ -192,6 +195,7 @@ static void _loading_draw(const Engine* engine, LoadingScreen* ls) {
     const GLPassState pass = gl_pass_begin();
     glViewport(0, 0, pw, ph);
 
+    profiler_scope_begin_if(prof, timed, "loading mark");
     glBindFramebuffer(GL_FRAMEBUFFER, ls->mark.fbo);
     glUseProgram(ls->logo->id);
     UniformManager* m = ls->logo->uniforms;
@@ -199,9 +203,11 @@ static void _loading_draw(const Engine* engine, LoadingScreen* ls) {
     uniform_set_vec2(m, "resolution", resolution);
     uniform_set_vec3_array(m, "palette", &palette[0][0], 7);
     draw_fullscreen_quad(ls->quad_vao);
+    profiler_scope_end(prof);
 
     // The tube's bloom, of the picture as it stands, a letter in mid-turn included: the mark
     // brought to a quarter its size by its own mips, then blurred across and down.
+    profiler_scope_begin_if(prof, timed, "loading bloom");
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, ls->mark.tex);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
@@ -209,7 +215,9 @@ static void _loading_draw(const Engine* engine, LoadingScreen* ls) {
     glUseProgram(ls->blur->id);
     _loading_blur(ls, ls->mark.tex, 2.0f, &ls->bloom[0], true);
     _loading_blur(ls, ls->bloom[0].tex, 0.0f, &ls->bloom[1], false);
+    profiler_scope_end(prof);
 
+    profiler_scope_begin_if(prof, timed, "loading tape");
     glBindFramebuffer(GL_FRAMEBUFFER, ls->picture.fbo);
     glViewport(0, 0, pw, ph);
     glUseProgram(ls->tape->id);
@@ -226,10 +234,13 @@ static void _loading_draw(const Engine* engine, LoadingScreen* ls) {
     uniform_set_int(t, "frame", ls->frame);
     uniform_set_vec2(t, "resolution", resolution);
     draw_fullscreen_quad(ls->quad_vao);
+    profiler_scope_end(prof);
 
     glUseProgram(0);
     gl_pass_end(&pass);
+    profiler_scope_begin_if(prof, timed, "loading crt");
     crt_present(ls->crt, ls->picture.tex, w, h, ls->quad_vao, &LOADING_TUBE);
+    profiler_scope_end(prof);
 
     if (off >= 1.0f)
         ls->shown = false;
@@ -240,7 +251,7 @@ void loading_screen_frame(Engine* engine) {
     if (!ls || !ls->shown)
         return;
     _loading_advance(engine, ls);
-    _loading_draw(engine, ls);
+    _loading_draw(engine, ls, true);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
@@ -264,7 +275,7 @@ void engine_draw_loading_screen(Engine* engine) {
     }
 
     _loading_advance(engine, ls);
-    _loading_draw(engine, ls);
+    _loading_draw(engine, ls, false);
 
     // A draw here never waits for the display: the time is the loading's.
     glfwSwapInterval(0);
