@@ -30,8 +30,18 @@ const float JITTER = 0.0012;   // a line's wander
 const float TEAR_H = 0.035;    // the head-switching tear at the bottom
 const float STATIC = 0.05;  // the trace left once the picture locks, in display codes
 const float GLITCH_EVERY = 5.0;  // seconds between tracking glitches, on average
-const float GLITCH_LONG = 0.22;
-const float GLITCH_FIRST = 0.25; // the first, this long after the sparkle has gone
+const float GLITCH_LONG = 0.9;
+const float GLITCH_FIRST = 0.8;  // the first, this long after the sparkle has gone
+// What a glitch does to the picture, in picture widths: it LEANS, its top thrown one way while its
+// bottom goes the other, slabs of its lines TEAR sideways, and the whole of it JERKS -- each a new
+// random amount GLITCH_STEPS times a second, held between, since a tape losing its tracking
+// lurches rather than sways.
+const float GLITCH_LEAN = 0.05;
+const float GLITCH_TEAR = 0.025;
+const float GLITCH_JERK = 0.015;
+const float GLITCH_STEPS = 18.0;
+const float GLITCH_SLABS = 9.0;  // slabs down the picture
+const float GLITCH_TORN = 0.45;  // the share of slabs torn at a step
 // The tube's bloom: how much of the blurred picture is added over it.
 const float BLOOM = 0.6;
 
@@ -64,20 +74,33 @@ void main()
     float fadeDot = 1.0 - smoothstep(0.8, 1.0, off);
     uv = c + 0.5;
 
-    // A glitch just after the sparkle, the ident's last beat, then now and then, never over the
-    // ident: a short burst where tracking is lost, each later one's time drawn from the hash of
-    // its slot so a run repeats.
+    // A glitch after the sparkle, the ident's last beat, then now and then, never over the ident:
+    // a burst where tracking is lost, each later one's time drawn from the hash of its slot so a
+    // run repeats. It comes on hard and lets go more slowly.
     float since = time - LOADING_IDENT_END;
     float slot = floor(since / GLITCH_EVERY);
     float at = slot == 0.0 ? GLITCH_FIRST
                            : slot * GLITCH_EVERY + hash21(vec2(slot, 7.0), vec2(12.9898, 78.233)) * (GLITCH_EVERY - GLITCH_LONG);
-    float glitch = since > 0.0 ? smoothstep(0.0, 0.03, since - at) * (1.0 - smoothstep(GLITCH_LONG - 0.05, GLITCH_LONG, since - at)) : 0.0;
+    float into = since - at;
+    float glitch = since > 0.0 && into > 0.0
+                       ? smoothstep(0.0, 0.06, into) * (1.0 - smoothstep(0.45 * GLITCH_LONG, GLITCH_LONG, into))
+                       : 0.0;
 
     // The tracking band rolling down, and the lines inside it torn sideways.
     float bandY = 1.0 - fract(time * BAND_SPEED);
     float inBand = 1.0 - smoothstep(0.0, BAND_H * (1.0 + 2.0 * glitch), abs(uv.y - bandY));
     float lineNoise = frameNoise(uvec2(0u, uint(line)), uint(frame));
-    float shift = (lineNoise - 0.5) * (JITTER + inBand * 0.02 + glitch * 0.03);
+    float shift = (lineNoise - 0.5) * (JITTER + inBand * 0.02 + glitch * 0.01);
+    // The glitch's skew, held a step at a time: how far it leans and jerks, which slabs tear and
+    // by how much, and where the slabs' edges fall, all new at each step.
+    const vec2 K = vec2(12.9898, 78.233);
+    float beat = floor(into * GLITCH_STEPS) + 37.0 * slot;
+    float lean = (hash21(vec2(beat, 1.0), K) * 2.0 - 1.0) * (uv.y - 0.5) * 2.0 * GLITCH_LEAN;
+    float jerk = (hash21(vec2(beat, 2.0), K) * 2.0 - 1.0) * GLITCH_JERK;
+    float slab = floor(uv.y * GLITCH_SLABS + hash21(vec2(beat, 3.0), K) * GLITCH_SLABS);
+    float torn = step(1.0 - GLITCH_TORN, hash21(vec2(slab, beat + 0.5), K));
+    float ripped = torn * (hash21(vec2(slab + 0.25, beat), K) * 2.0 - 1.0) * GLITCH_TEAR;
+    shift += glitch * (lean + jerk + ripped);
     // The head-switching tear: the bottom lines run off to the right, more toward the edge.
     float tear = 1.0 - smoothstep(0.0, TEAR_H, uv.y);
     shift += tear * tear * (0.03 + 0.02 * lineNoise);
