@@ -15963,6 +15963,150 @@ def run_region_gate(workdir):
     return failures
 
 
+# The tree generator's fixture (spec 13.35): a `trees` block whose every tree is there for an arm
+# below, written by gen_conifer_fixture.py.
+CONIFER_FIXTURE = "conifer_fixture.cscn"
+# The recursive form's digests as they stood before the excurrent form shared its generator,
+# captured before the first edit to tree_gen.c: broadleaf seed 42 is the tree viewer's own tree,
+# dead seed 4049 silent's first dead-tree model. Bark first, then leaves.
+CONIFER_IDENTITY = {
+    ("broadleaf", 42): ("a6d9546c352278f8", "dd8faae82eae042e"),
+    ("dead", 4049): ("5e2fadb53d8bb162", "a31e272015f12c43"),
+}
+CONIFER_PRESETS = ("spruce", "fir", "snag")
+CONIFER_SEEDS = (1, 2, 3)
+CONIFER_TRI_BUDGET = 10000  # bark and needles together, one tree at full detail
+CONIFER_CARD_KEEP = 0.45  # apps/render's TREE_CARD_KEEP
+CONIFER_MIN_LEVEL_CARDS = 32  # lod.c's LOD_MIN_LEVEL_CARDS
+CONIFER_TRUNK = 125.0  # the presets' trunk_length
+CONIFER_LEAF_SIZE = 14.0  # the presets' leaf_size
+
+
+def _conifer_probe():
+    """Every tree in the conifer fixture through the render app's --tree-probe, keyed by
+    (preset, seed, irregularity): its digest row, and for a conifer its shape row and its spray
+    count at each level of detail. One run of one frame."""
+    rows, text = _probe_render(asset(CONIFER_FIXTURE), "--tree-probe", "tree-probe", frames=1)
+    trees = {}
+    for r in rows:
+        trees[r["i"]] = {"preset": r["preset"], "seed": int(r["seed"]),
+                         "irregularity": round(float(r["irregularity"]), 3),
+                         "bark_tris": int(r["bark_tris"]), "leaf_tris": int(r["leaf_tris"]),
+                         "bark": r["bark"], "leaves": r["leaves"]}
+    for r in _probe_rows(text, "tree-shape"):
+        if r["i"] in trees:
+            trees[r["i"]]["shape"] = {k: float(v) for k, v in r.items() if k != "i"}
+    for r in _probe_rows(text, "tree-lod"):
+        if r["i"] in trees:
+            trees[r["i"]]["sprays"] = [int(r[f"sprays{k}"]) for k in range(int(r["leaf_levels"]))]
+    return {(t["preset"], t["seed"], t["irregularity"]): t for t in trees.values()}
+
+
+def run_conifer_gate(workdir):
+    """The conifer form of the tree generator (spec 13.35), read from the render app's
+    --tree-probe over the conifer fixture: each tree grown and meshed as the scene grows it, and
+    digested.
+
+      conifer-identity    the recursive form's broadleaf and dead trees hash to the digests
+                          they had before the conifer form shared the generator
+      conifer-determinism a conifer grown twice is the same to the bit, and another seed is
+                          another tree
+      conifer-budget      every conifer preset over three seeds stays inside the triangle
+                          budget, bark and needles together
+      conifer-shape       a tidy spruce's crown narrows -- each quarter's longest branch beats
+                          the quarter two above it, and the top quarter's is the shortest --
+                          and a snag's top is broken off with no spray above the break
+      conifer-thin        a spruce's sprays thin by the keep factor level by level, to no
+                          fewer than the floor, and the levels are at least three
+      conifer-wind        the bark and the needles report one height range, so the wind
+                          leans them together
+
+    What none of these can see is whether the trees look right; that is the user's eye on the
+    tree viewer or this fixture rendered, and the spec's as-built says which renders it was.
+    """
+    del workdir  # the probe's rows are read off stdout; nothing is written
+    first, second = _conifer_probe(), _conifer_probe()
+    failures = []
+
+    # A tree at its preset's own irregularity unless one is named: the fixture holds spruce seed
+    # 1 twice, at its own and at 0.
+    def tree(preset, seed, irregularity=None, run=None):
+        trees = run if run is not None else first
+        if irregularity is None:
+            return next((t for (p, s, irr), t in trees.items() if p == preset and s == seed
+                         and (preset not in CONIFER_PRESETS or irr > 0.0)), None)
+        return trees.get((preset, seed, irregularity))
+
+    got = {key: tree(*key) for key in CONIFER_IDENTITY}
+    ok = all(got[key] and (got[key]["bark"], got[key]["leaves"]) == want
+             for key, want in CONIFER_IDENTITY.items())
+    detail = ", ".join(f"{p} {s}: {(got[(p, s)] or {}).get('bark')}/"
+                       f"{(got[(p, s)] or {}).get('leaves')}" for p, s in CONIFER_IDENTITY)
+    print(f"  conifer-identity {'PASS' if ok else 'FAIL'}  {detail} (want the digests from "
+          f"before the conifer form)")
+    if not ok:
+        failures.append("conifer-identity")
+
+    a, b, other = tree("spruce", 7), tree("spruce", 7, run=second), tree("spruce", 8)
+    ok = bool(a and b and other) and (a["bark"], a["leaves"]) == (b["bark"], b["leaves"]) and \
+        (a["bark"], a["leaves"]) != (other["bark"], other["leaves"])
+    print(f"  conifer-determinism {'PASS' if ok else 'FAIL'}  spruce seed 7 in two runs: "
+          f"{a and a['bark']}/{b and b['bark']}; seed 8: {other and other['bark']} (want the two "
+          f"7s equal and the 8 different)")
+    if not ok:
+        failures.append("conifer-determinism")
+
+    totals = {}
+    for preset in CONIFER_PRESETS:
+        for seed in CONIFER_SEEDS:
+            d = tree(preset, seed)
+            totals[(preset, seed)] = d["bark_tris"] + d["leaf_tris"] if d else None
+    ok = all(t is not None and t <= CONIFER_TRI_BUDGET for t in totals.values())
+    worst = max((t for t in totals.values() if t is not None), default=None)
+    print(f"  conifer-budget {'PASS' if ok else 'FAIL'}  the largest of {len(totals)} trees is "
+          f"{worst} triangles (budget {CONIFER_TRI_BUDGET})")
+    if not ok:
+        failures.append("conifer-budget")
+
+    tidy = tree("spruce", 1, 0.0)
+    snag = tree("snag", 1)
+    q = [tidy["shape"][f"q{i}"] for i in range(4)] if tidy and "shape" in tidy else None
+    s = snag.get("shape") if snag else None
+    narrows = q is not None and q[0] > q[2] and q[1] > q[3] and q[3] == min(q)
+    broken = s is not None and s["trunk_top"] < 0.8 * CONIFER_TRUNK and \
+        s["card_top"] < s["trunk_top"] + 1.2 * CONIFER_LEAF_SIZE
+    ok = narrows and broken
+    print(f"  conifer-shape {'PASS' if ok else 'FAIL'}  tidy spruce longest per crown quarter "
+          f"{[round(v, 1) for v in q] if q else None} (want narrowing up the crown); snag trunk "
+          f"top {s and round(s['trunk_top'], 1)} of {CONIFER_TRUNK:.0f}, highest spray "
+          f"{s and round(s['card_top'], 1)}")
+    if not ok:
+        failures.append("conifer-shape")
+
+    sprays = (tree("spruce", 1) or {}).get("sprays") or []
+    steps = all(sprays[i] == math.ceil(sprays[i - 1] * CONIFER_CARD_KEEP)
+                for i in range(1, len(sprays)))
+    ok = len(sprays) >= 3 and steps and sprays[-1] >= CONIFER_MIN_LEVEL_CARDS
+    print(f"  conifer-thin {'PASS' if ok else 'FAIL'}  sprays per level {sprays} (want each "
+          f"ceil({CONIFER_CARD_KEEP} x the last), at least {CONIFER_MIN_LEVEL_CARDS}, and three "
+          f"levels or more)")
+    if not ok:
+        failures.append("conifer-thin")
+
+    ys = [(d["shape"]["bark_y0"], d["shape"]["leaf_y0"], d["shape"]["bark_y1"],
+           d["shape"]["leaf_y1"]) for d in (tidy, snag, tree("fir", 2))
+          if d and "shape" in d]
+    ok = len(ys) == 3 and all(abs(b0 - l0) < 1e-3 and abs(b1 - l1) < 1e-3
+                              for b0, l0, b1, l1 in ys)
+    print(f"  conifer-wind {'PASS' if ok else 'FAIL'}  bark and needle height ranges "
+          f"{[(round(b0, 2), round(b1, 2), round(l0, 2), round(l1, 2)) for b0, l0, b1, l1 in ys]}"
+          f" (want each tree's two equal)")
+    if not ok:
+        failures.append("conifer-wind")
+
+    return failures
+
+
 def run_forest_gate(workdir):
     """The forest app: does scattered content actually batch, and does LOD fire.
 
@@ -30761,6 +30905,7 @@ GATE_GROUPS = [
     ("island", "the island (spec 11.63):", run_island_gate),
     ("forest", "forest (scattered content: batching, ordering, LOD, spec 11.29):",
      run_forest_gate),
+    ("conifer", "the conifer form of the tree generator (spec 13.35):", run_conifer_gate),
     ("gamepad", "gamepad input (a scripted pad through the action layer, spec 11.109):",
      run_gamepad_gate),
     ("audio", "audio (offline PCM through the spatializer, spec 12.0):", run_audio_gate),

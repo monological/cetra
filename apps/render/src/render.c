@@ -287,6 +287,8 @@ static void print_usage(const char* prog) {
             "      --ies-profile <f>  Apply an IES photometric file to every point/spot light\n");
     fprintf(stderr,
             "      --ies-probe        Print every loaded IES profile and its angle sweep\n");
+    fprintf(stderr, "      --tree-probe       Print each scene-file tree's mesh digest, and a\n"
+                    "                         conifer's shape and levels of detail\n");
     fprintf(stderr, "      --emissive-lights  Emissive meshes become LTC area lights\n");
     fprintf(stderr, "      --emissive-light-probe  Print the panel every emissive mesh derives\n");
     fprintf(stderr, "      --exposure-probe   Print what the meter decided, per frame "
@@ -1291,6 +1293,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->ies_profile_path = argv[++i];
         } else if (strcmp(argv[i], "--ies-probe") == 0) {
             args->ies_probe = 1;
+        } else if (strcmp(argv[i], "--tree-probe") == 0) {
+            args->tree_probe = 1;
         } else if (strcmp(argv[i], "--emissive-lights") == 0) {
             args->emissive_lights = 1;
         } else if (strcmp(argv[i], "--emissive-light-probe") == 0) {
@@ -4938,6 +4942,7 @@ int main(int argc, char** argv) {
     apply_cscene_water(scene, cscn);
     apply_cscene_fog_volumes(scene, cscn);
     apply_cscene_occluders(scene, cscn);
+    apply_cscene_trees(engine, scene, cscn);
     // Guarded rather than applied-then-cleared: the apply decodes, dilates and uploads every
     // image, and dirties the material array for them. The probes are captured in the first
     // frame, so every decal applied at load is in their captures.
@@ -5222,6 +5227,11 @@ int main(int argc, char** argv) {
     // the sequence is a probe whose output a reader has to place before trusting.
     if (args.ies_probe)
         ies_library_probe(scene->ies_library);
+
+    // Grows the trees afresh from the scene file rather than reading the drawn meshes back, since
+    // the skeleton a shape row needs is not kept; the parameters are the build's own.
+    if (args.tree_probe)
+        cscene_tree_probe(cscn);
 
     // After the loop, so the state and the grids are what the frames simulated to.
     if (args.fire_probe) {
