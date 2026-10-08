@@ -224,11 +224,6 @@ static CatVoice g_voice;
 enum { FAILING_DRIVE, FAILING_LIP, FAILING_LAMPS };
 static FailingLamp g_failing[FAILING_LAMPS];
 
-// The woods' conifers are the only levels of detail in the app (spec 13.35), and the engine's
-// ladder is set for a mesh the size of a room: at 1 a tree fifteen metres tall would hold its
-// finest level out past two hundred metres. This puts its switches at about 11, 22 and 45.
-#define WOODS_LOD_BIAS 0.045f
-
 // The doors that open: each house's front door, and the home's bathroom door (spec 13.25) and
 // basement door (spec 13.31).
 enum { DOOR_HOME, DOOR_BATH, DOOR_BASEMENT, DOOR_MANSION, DOORS };
@@ -660,7 +655,6 @@ static void on_init(Game* game) {
     if (!g_args.no_woods)
         woods_build(&kit, engine, g_scene, &trees, &breaches, (unsigned int)g_args.seed);
     trees_release(&trees);
-    engine->lod_bias = WOODS_LOD_BIAS;
     grounds_build(&kit, g_scene, (unsigned int)g_args.seed, !g_args.day, &g_failing[FAILING_DRIVE]);
 
     // The Gothic house as the mansion at the end of the street (spec 13.25): the same plan, built

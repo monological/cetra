@@ -1,7 +1,5 @@
 #include <math.h>
 #include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 
 #include "cetra/material.h"
 #include "cetra/mesh.h"
@@ -29,8 +27,8 @@
  * taking the rest down as the eye moved, changed the scene graph on nearly every frame of a walk,
  * and a changed graph draws every kept face of every cached light again: frames of 650 ms, a few
  * a second, whenever the player moved. What keeps the far trees cheap instead is their levels of
- * detail -- the wood by the engine's simplifier, the sprays by thinning them -- with silent's LOD
- * bias (silent.c) set for these, the only chains in the app.
+ * detail -- the wood by the engine's simplifier, the sprays by thinning them -- with the engine's
+ * LOD bias set here for these, the only chains in the app.
  */
 
 // The conifers' models: five spruces, two firs and a snag.
@@ -45,18 +43,37 @@ static const struct {
 #define CONIFER_MODELS KIT_COUNT(CONIFERS)
 #define SNAG_MODEL     (CONIFER_MODELS - 1)
 
+/*
+ * What stands at a site: a dead tree, the snag, or one of the live conifers, each its share of the
+ * sites and spread evenly over its models, from `first`.
+ */
+#define DEAD_SHARE 0.10f
+#define SNAG_SHARE 0.06f
+typedef struct Species {
+    float share;
+    bool dead;
+    int first, models;
+} Species;
+static const Species SPECIES[] = {
+    {DEAD_SHARE, true, 0, TREE_MODELS},
+    {SNAG_SHARE, false, SNAG_MODEL, 1},
+    {1.0f - DEAD_SHARE - SNAG_SHARE, false, 0, SNAG_MODEL},
+};
+
+// The engine's ladder is set for a mesh the size of a room: at 1 a tree fifteen metres tall would
+// hold its finest level out past two hundred metres. This puts its switches at about 11, 22 and 45.
+#define WOODS_LOD_BIAS 0.045f
+
 #define WOODS_X0    (CHASM_X - 2.0f) // the grid's west edge, at the chasm
 #define SITE_STEP   5.0f             // the jittered grid's cell
 #define SITE_JITTER 0.42f            // of a cell, either way
 #define EDGE_THIN   5.0f             // metres in from the woods' edge over which they thin
-#define EDGE_CLEAR  1.6f             // and the least a trunk stands from a fence
-#define DRIVE_CLEAR 7.0f             // from the drive's centre line
-#define CONIFER_MIN 0.10f            // the generator's ~125 units to 12.5 m
+#define EDGE_CLEAR  1.6f  // and the least a trunk stands from our back fences or the terrace's back
+#define DRIVE_CLEAR 7.0f  // from the drive's centre line
+#define CONIFER_MIN 0.10f // the generator's ~125 units to 12.5 m
 #define CONIFER_MAX 0.15f
 #define DEAD_MIN    0.05f
 #define DEAD_MAX    0.075f
-#define DEAD_SHARE  0.10f
-#define SNAG_SHARE  0.06f
 // An atlas cell: 1024 wide, as wide as the plant's, so the material array grows no wider for it.
 #define NEEDLE_CELL 128
 
@@ -133,30 +150,6 @@ static Material* needles_material(Scene* scene, ShaderProgram* program) {
     return m;
 }
 
-// One conifer model's wood and sprays, each with its levels of detail.
-static void grow_conifer(int model, Material* bark, Material* needles, Mesh** wood, Mesh** sprays) {
-    TreeParams p;
-    tree_params_preset(&p, CONIFERS[model].preset, CONIFERS[model].seed);
-    TreeSkeleton skel;
-    memset(&skel, 0, sizeof(skel));
-    tree_skeleton_build(&skel, &p);
-    *wood = create_mesh();
-    if (tree_mesh_bark(&skel, &p, *wood)) {
-        (*wood)->material = bark;
-    } else {
-        free_mesh(*wood);
-        *wood = NULL;
-    }
-    *sprays = create_mesh();
-    if (tree_mesh_leaves(&skel, &p, *sprays)) {
-        (*sprays)->material = needles;
-    } else {
-        free_mesh(*sprays);
-        *sprays = NULL;
-    }
-    tree_skeleton_free(&skel);
-}
-
 static SceneNode* group_node(SceneNode* parent) {
     SceneNode* g = create_node();
     node_add_child(parent, g);
@@ -176,16 +169,13 @@ static void place(SceneNode* parent, Mesh* mesh, const mat4 m) {
 static void boulder(Kit* kit, const Mesh* rock, float x, float z, float size, float yaw) {
     const float squash = 0.65f;
     const float y = land_height(x, z) - 0.3f * size * squash;
-    const float c = cosf(yaw), s = sinf(yaw);
+    const KitFrame f = {{x, y, z}, yaw};
     vec3 centre = {x, y, z};
     for (size_t t = 0; t + 2 < rock->index_count; t += 3) {
         vec3 p[3] = {{0.0f}};
         for (int k = 0; k < 3; k++) {
             const float* v = &rock->vertices[3 * rock->indices[t + (size_t)k]];
-            const float lx = v[0] * size, ly = v[1] * size * squash, lz = v[2] * size;
-            p[k][0] = x + lx * c + lz * s;
-            p[k][1] = y + ly;
-            p[k][2] = z - lx * s + lz * c;
+            kit_frame_point(&f, v[0] * size, v[1] * size * squash, v[2] * size, p[k]);
         }
         vec3 mid = {0.0f, 0.0f, 0.0f}, out = {0.0f, 0.0f, 0.0f};
         for (int k = 0; k < 3; k++)
@@ -245,7 +235,7 @@ static void deadfall(Kit* kit, Trees* trees, SceneNode* parent, const FenceBreac
     const vec2 mid = {0.5f * (br->a[0] + br->b[0]), 0.5f * (br->a[1] + br->b[1])};
     vec2 along = {br->b[0] - br->a[0], br->b[1] - br->a[1]};
     glm_vec2_normalize(along);
-    const float scale = 0.062f, length = 125.0f * scale;
+    const float scale = 0.062f, length = trees->trunk_length * scale;
     const float base_out = length - 1.2f;
     const float skew =
         glm_rad(15.0f + 20.0f * kit_xrnd(state)) * (kit_xrnd(state) < 0.5f ? -1.0f : 1.0f);
@@ -276,20 +266,21 @@ void woods_build(Kit* kit, Engine* engine, Scene* scene, Trees* trees,
     ShaderProgram* pbr = engine_get_program(engine, CETRA_PROGRAM_PBR);
     Material* needles = needles_material(scene, pbr);
     Mesh *wood[CONIFER_MODELS], *sprays[CONIFER_MODELS];
-    for (int i = 0; i < CONIFER_MODELS; i++)
-        grow_conifer(i, trees->bark, needles, &wood[i], &sprays[i]);
+    for (int i = 0; i < CONIFER_MODELS; i++) {
+        TreeParams p;
+        tree_params_preset(&p, CONIFERS[i].preset, CONIFERS[i].seed);
+        trees_grow(&p, trees->bark, needles, &wood[i], &sprays[i]);
+    }
+    engine->lod_bias = WOODS_LOD_BIAS;
 
     SceneNode* root = create_node();
     node_set_name(root, "woods");
     node_add_child(scene->root_node, root);
-    SceneNode *wood_groups[CONIFER_MODELS], *spray_groups[CONIFER_MODELS],
-        *dead_groups[TREE_MODELS];
+    SceneNode *wood_groups[CONIFER_MODELS], *spray_groups[CONIFER_MODELS];
     for (int i = 0; i < CONIFER_MODELS; i++)
         wood_groups[i] = group_node(root);
     for (int i = 0; i < CONIFER_MODELS; i++)
         spray_groups[i] = group_node(root);
-    for (int i = 0; i < TREE_MODELS; i++)
-        dead_groups[i] = group_node(root);
 
     unsigned int state = seed * 2246822519u + 0x13355u;
     const int cols = (int)ceilf((WOODS_EAST_X - WOODS_X0) / SITE_STEP);
@@ -307,9 +298,17 @@ void woods_build(Kit* kit, Engine* engine, Scene* scene, Trees* trees,
             const float size = kit_xrnd(&state), lean = kit_xrnd(&state);
             if (depth <= 0.0f || kit_xrnd(&state) > keep)
                 continue;
+            // The species `kind` falls in, and the model within it.
+            const Species* sp = &SPECIES[0];
+            float k = kind;
+            while (k >= sp->share && sp < &SPECIES[KIT_COUNT(SPECIES) - 1]) {
+                k -= sp->share;
+                sp++;
+            }
+            const int model = sp->first + (int)(k / sp->share * (float)sp->models) % sp->models;
             mat4 m;
-            if (kind < DEAD_SHARE) {
-                const int d = (int)(kind / DEAD_SHARE * (float)TREE_MODELS) % TREE_MODELS;
+            if (sp->dead) {
+                const int d = model;
                 if (!trees->dead[d])
                     continue;
                 const float scale = DEAD_MIN + (DEAD_MAX - DEAD_MIN) * size;
@@ -317,16 +316,12 @@ void woods_build(Kit* kit, Engine* engine, Scene* scene, Trees* trees,
                 glm_rotate_y(m, yaw, m);
                 glm_rotate_x(m, glm_rad(2.0f + 6.0f * lean), m);
                 glm_scale_uni(m, scale);
-                place(dead_groups[d], trees->dead[d], m);
-                const float r = TREE_TRUNK * scale * 0.8f;
+                place(trees->groups[d], trees->dead[d], m);
+                const float r = trees->trunk_radius * scale * 0.8f;
                 kit_collider(kit, (vec3){x, land_height(x, z) + 1.5f, z}, (vec3){r, 1.5f, r}, 0.0f);
                 dead++;
             } else {
-                const int c = kind < DEAD_SHARE + SNAG_SHARE
-                                  ? SNAG_MODEL
-                                  : (int)((kind - DEAD_SHARE - SNAG_SHARE) /
-                                          (1.0f - DEAD_SHARE - SNAG_SHARE) * (float)SNAG_MODEL) %
-                                        SNAG_MODEL;
+                const int c = model;
                 if (!wood[c])
                     continue;
                 const float scale = CONIFER_MIN + (CONIFER_MAX - CONIFER_MIN) * size;
@@ -378,11 +373,10 @@ void woods_build(Kit* kit, Engine* engine, Scene* scene, Trees* trees,
                 continue;
             log_down(kit, x, z, yaw, len, 0.12f + 0.16f * b);
             logs++;
-        } else if (rocks[boulders % ROCK_MODELS]) {
-            boulder(kit, rocks[boulders % ROCK_MODELS], x, z, 0.4f + 1.1f * a * a,
-                    2.0f * GLM_PIf * b);
-            boulders++;
         } else {
+            const Mesh* rock = rocks[boulders % ROCK_MODELS];
+            if (rock)
+                boulder(kit, rock, x, z, 0.4f + 1.1f * a * a, 2.0f * GLM_PIf * b);
             boulders++;
         }
     }

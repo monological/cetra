@@ -16,11 +16,9 @@
 #include "trees.h"
 
 /*
- * Dead trees (spec 13.25). The engine's generator grows them with no leaves, and its shape knobs
- * are pushed toward what a dead tree is: branches that sag (droop), wander (curve noise) and do
- * not straighten back toward the light (low phototropism), spread wide and sparse. A handful of
- * models, each grown once at the generator's native size and stood about the hill many times
- * over at a scale, turned and leaning a little.
+ * Dead trees (spec 13.25): a handful of models of the engine's dead tree, each grown once at the
+ * generator's native size and stood about the hill many times over at a scale, turned and leaning
+ * a little.
  *
  * Their own nodes rather than kit geometry: a tree sways in the wind, and a material with wind is
  * one the kit's shadow cells leave out.
@@ -37,18 +35,30 @@
 #define TREE_ATTEMPTS   900
 #define TREE_COUNT      110
 
-static Material* bark_material(Scene* scene, ShaderProgram* program) {
+/*
+ * The dead trees' bark, grey-brown and weathered: wood that has been dead and wet a long time.
+ * With no `still_of` it bakes its maps and sways in the wind. Otherwise it is the same bark on wood
+ * lying still -- `still_of`'s maps and no wind, which would bend a fallen trunk about its own
+ * length as though it still stood.
+ */
+static Material* bark_material(Scene* scene, ShaderProgram* program, const Material* still_of) {
     Material* m = create_material();
-    m->name = strdup("dead_bark");
-    // Grey-brown and weathered: wood that has been dead and wet a long time.
+    m->name = strdup(still_of ? "dead_bark_still" : "dead_bark");
     glm_vec3_copy((vec3){0.42f, 0.38f, 0.34f}, m->albedo);
     m->roughness = 0.85f;
+    material_set_program(m, program);
+    if (still_of) {
+        material_set_albedo_tex(m, still_of->albedo_tex);
+        material_set_normal_tex(m, still_of->normal_tex);
+        material_set_roughness_tex(m, still_of->roughness_tex);
+        scene_add_material(scene, m);
+        return m;
+    }
     m->wind_mode = 1;         // the trunk leans and the branches sway; there are no leaves
     m->wind_response = 0.35f; // stiff: dead wood does not give much
     // A candle's or a lamp's cached shadow holds a tree at rest, off by at most its sway, rather
     // than drawing every face a tree reaches again on every frame.
     m->cached_shadow_wind = CACHED_SHADOW_WIND_REST;
-    material_set_program(m, program);
 
     float* field = malloc(sizeof(float) * BARK_SIZE * BARK_SIZE);
     if (field) {
@@ -77,52 +87,42 @@ static Material* bark_material(Scene* scene, ShaderProgram* program) {
     return m;
 }
 
-// The same bark on wood that lies still: no wind, which would bend a fallen trunk about its
-// own length as though it still stood.
-static Material* still_material(Scene* scene, const Material* bark) {
-    Material* m = create_material();
-    m->name = strdup("dead_bark_still");
-    glm_vec3_copy((float*)bark->albedo, m->albedo);
-    m->roughness = bark->roughness;
-    material_set_program(m, bark->shader_program);
-    material_set_albedo_tex(m, bark->albedo_tex);
-    material_set_normal_tex(m, bark->normal_tex);
-    material_set_roughness_tex(m, bark->roughness_tex);
-    scene_add_material(scene, m);
-    return m;
+// A mesh `make` built from the skeleton, in `mat`; NULL when it built nothing.
+static Mesh* grown(bool (*make)(const TreeSkeleton*, const TreeParams*, Mesh*),
+                   const TreeSkeleton* skel, const TreeParams* p, Material* mat) {
+    Mesh* mesh = create_mesh();
+    if (!make(skel, p, mesh)) {
+        free_mesh(mesh);
+        return NULL;
+    }
+    mesh->material = mat;
+    return mesh;
+}
+
+void trees_grow(const TreeParams* p, Material* bark, Material* foliage, Mesh** wood,
+                Mesh** leaves) {
+    TreeSkeleton skel;
+    memset(&skel, 0, sizeof(skel));
+    tree_skeleton_build(&skel, p);
+    *wood = grown(tree_mesh_bark, &skel, p, bark);
+    if (leaves)
+        *leaves = grown(tree_mesh_leaves, &skel, p, foliage);
+    tree_skeleton_free(&skel);
+}
+
+// Dead model `model`: the engine's dead tree, each model a little stouter, bushier or wider.
+static void dead_params(TreeParams* tp, int model) {
+    tree_params_preset(tp, TREE_PRESET_DEAD, 4049 + model * 61);
+    tp->trunk_radius += (float)(model % 3);
+    tp->branches_per_node += model % 2;
+    tp->branch_angle += (float)(model % 3) * 8.0f;
 }
 
 static Mesh* grow(int model, Material* bark) {
     TreeParams tp;
-    memset(&tp, 0, sizeof(tp));
-    tp.seed = 4049 + model * 61;
-    tp.max_depth = 3;
-    tp.trunk_length = 125.0f;
-    tp.trunk_radius = TREE_TRUNK + (float)(model % 3);
-    tp.branches_per_node = 2 + model % 2;
-    tp.length_decay = 0.7f;
-    tp.taper = 0.5f;
-    tp.branch_angle = 42.0f + (float)(model % 3) * 8.0f;
-    tp.angle_variance = 22.0f;
-    tp.twist = 137.5f;
-    tp.droop = 0.55f;
-    tp.curve_noise = 0.7f;
-    tp.phototropism = 0.1f;
-    tp.lateral_density = 0.45f;
-    tp.twig_scale = 0.8f;
-    tp.show_leaves = 0;
-
-    TreeSkeleton skel;
-    memset(&skel, 0, sizeof(skel));
-    tree_skeleton_build(&skel, &tp);
-    Mesh* mesh = create_mesh();
-    if (!tree_mesh_bark(&skel, &tp, mesh)) {
-        free_mesh(mesh);
-        mesh = NULL;
-    } else {
-        mesh->material = bark;
-    }
-    tree_skeleton_free(&skel);
+    dead_params(&tp, model);
+    Mesh* mesh = NULL;
+    trees_grow(&tp, bark, NULL, &mesh, NULL);
     return mesh;
 }
 
@@ -143,10 +143,16 @@ static bool free_ground(float x, float z) {
 }
 
 void trees_init(Trees* trees, Engine* engine, Scene* scene) {
-    trees->bark = bark_material(scene, engine_get_program(engine, CETRA_PROGRAM_PBR));
-    trees->still_bark = still_material(scene, trees->bark);
+    *trees = (Trees){0};
+    ShaderProgram* pbr = engine_get_program(engine, CETRA_PROGRAM_PBR);
+    trees->bark = bark_material(scene, pbr, NULL);
+    trees->still_bark = bark_material(scene, pbr, trees->bark);
     for (int i = 0; i < TREE_MODELS; i++)
         trees->dead[i] = grow(i, trees->bark);
+    TreeParams tp;
+    dead_params(&tp, 0);
+    trees->trunk_length = tp.trunk_length;
+    trees->trunk_radius = tp.trunk_radius;
 }
 
 Mesh* trees_grow_still(Trees* trees, int model) {
@@ -163,11 +169,10 @@ void trees_release(Trees* trees) {
 
 void trees_build(Trees* trees, Kit* kit, Scene* scene, unsigned int seed) {
     Mesh* const* models = trees->dead;
-    // A group a model, so each model's copies are adjacent in the graph and draw together.
     SceneNode* root = create_node();
     node_set_name(root, "dead_trees");
     node_add_child(scene->root_node, root);
-    SceneNode* groups[TREE_MODELS];
+    SceneNode** groups = trees->groups;
     for (int i = 0; i < TREE_MODELS; i++) {
         groups[i] = create_node();
         node_add_child(root, groups[i]);
@@ -213,7 +218,7 @@ void trees_build(Trees* trees, Kit* kit, Scene* scene, unsigned int seed) {
         node_add_mesh(node, mesh_ref(model));
         node_add_child(groups[which], node);
 
-        const float r = TREE_TRUNK * scale * 0.8f;
+        const float r = trees->trunk_radius * scale * 0.8f;
         kit_collider(kit, (vec3){x, y + 1.5f, z}, (vec3){r, 1.5f, r}, 0.0f);
         placed++;
     }
