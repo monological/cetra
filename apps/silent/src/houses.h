@@ -35,7 +35,7 @@ typedef struct HousePlot {
 // A neighbour: foundation, clad body, roof, chimney, porch and door, and a
 // grid of windows, some lit. Solid and collidable; nobody goes in. The frame's
 // origin is the middle of the lot's front edge, on its ground. Its bare front eave and its porch
-// roof's edge drip. Where it stands goes to `plot` unless that is NULL.
+// roof's edge drip. Where it stands goes to `plot`.
 void house_neighbour(Kit* kit, const KitFrame* f, KitRng* rng, bool night, HousePlot* plot);
 
 #endif // _SILENT_HOUSES_H_

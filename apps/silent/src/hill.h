@@ -6,11 +6,11 @@
 #include "kit.h"
 
 // The drive that climbs past the street's east end to the mansion's grounds at MANSION_Y, and the
-// grounds' box (spec 13.25). Before land_build, which draws the ground under it from hill_height.
+// grounds' box (spec 13.25).
 void hill_build(Kit* kit);
 
 // The hill's height at (x, z): 0 short of the street's east end, the mansion's grounds at its top,
-// the drive carved in. One term of land_height, which is what to stand anything on.
+// the drive carved in.
 float hill_height(float x, float z);
 
 // Whether (x, z) is on the mansion's grounds, which are flat and stand on a box.

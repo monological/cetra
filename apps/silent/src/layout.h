@@ -1,6 +1,8 @@
 #ifndef _SILENT_LAYOUT_H_
 #define _SILENT_LAYOUT_H_
 
+#include <math.h>
+
 /*
  * Where everything is, in metres. The street runs along X with its centre line
  * at z = 0; the player's house stands on the +z side, its front wall facing the
@@ -168,18 +170,34 @@
 #define PATH_X1 (-0.25f)
 
 // The street.
-#define ROAD_HALF_WIDTH 4.0f     // asphalt, centre line at z = 0
-#define ROAD_Y          (-0.15f) // below the kerb
-#define SIDEWALK_WIDTH  2.0f
-#define STREET_HALF_LEN 45.0f // along X; the fog ends it well before this
+#define ROAD_HALF_WIDTH   4.0f     // asphalt, centre line at z = 0
+#define ROAD_Y            (-0.15f) // below the kerb
+#define SIDEWALK_WIDTH    2.0f
+#define STREET_HALF_WIDTH (ROAD_HALF_WIDTH + SIDEWALK_WIDTH) // the road and a sidewalk
+#define STREET_HALF_LEN   45.0f // along X; the fog ends it well before this
+#define GROUND_DEPTH      0.4f  // the boxes the flat ground stands on, below their tops
 
 // Our side's back fences (spec 13.35): the yards stop here, and past them the ground falls away
-// through the woods.
-#define BACK_FENCE_Z 34.0f
+// through the woods. The far side's stand at FAR_BACK_FENCE_Z, short of the terrace's back.
+#define BACK_FENCE_Z     34.0f
+#define FAR_BACK_FENCE_Z (-30.0f)
+
+/*
+ * The lots either side of the street (spec 13.35), on one grid TERRACE_LOT_WIDTH apart: the far
+ * side's lots lie between lines at LOT_GRID_X0 + TERRACE_LOT_WIDTH * k, a house midway along
+ * each, and our side's between lines midway between those, its houses on the far side's lines --
+ * ours at x = 0. Each side's end lots run on to the street's ends, and each side's end fences
+ * stand in from them.
+ */
+#define LOT_GRID_X0          (-STREET_HALF_LEN + 3.0f)
+#define NEAR_LOTS            7 // a vacant lot at each end, and two neighbours either side of ours
+#define HOME_LOT             3
+#define NEAR_END_FENCE_INSET 0.4f
+#define FAR_END_FENCE_INSET  0.2f
 
 // The utility poles down the far sidewalk: the line they stand on, the westmost one's place on
 // the cross street's corner, and their two wires' height and offset either side.
-#define POLE_Z        (-(ROAD_HALF_WIDTH + SIDEWALK_WIDTH - 0.6f))
+#define POLE_Z        (-(STREET_HALF_WIDTH - 0.6f))
 #define POLE_WEST_X   (-47.0f)
 #define POLE_WIRE_Y   7.95f
 #define POLE_WIRE_OFF 0.65f
@@ -203,7 +221,7 @@
  * it. Stairs go up through the wall to each front door. The houses stand further back than ours,
  * since a flight up to the highest lot needs more than four metres.
  */
-#define TERRACE_WALL_Z     (-(ROAD_HALF_WIDTH + SIDEWALK_WIDTH)) // the wall's street face
+#define TERRACE_WALL_Z     (-STREET_HALF_WIDTH) // the wall's street face
 #define TERRACE_WALL_THICK 0.4f
 #define TERRACE_LOTS       6
 #define TERRACE_LOT_WIDTH  14.0f // a lot's frontage, the far houses' spacing
@@ -226,8 +244,8 @@
 #define GROUNDS_Z0 (MANSION_Z - 4.0f)
 #define GROUNDS_Z1 (MANSION_Z + 28.0f)
 
-// The walkable world: x from the street's west end to WORLD_X1, past the hill the drive climbs to
-// the mansion, and z from the woods behind the far side's lots (spec 13.35) to WORLD_Z1.
+// The walkable world: x from the chasm to WORLD_X1, past the hill the drive climbs to the
+// mansion, and z from the woods behind the far side's lots (spec 13.35) to WORLD_Z1.
 #define WORLD_X1 150.0f
 #define WORLD_Z0 (-80.0f)
 #define WORLD_Z1 85.0f
@@ -237,6 +255,34 @@
 #define WOODS_EAST_X  50.0f
 #define WOODS_EDGE_Z0 (-58.0f)
 #define WOODS_EDGE_Z1 64.0f
+
+// How far (x, z) is outside a box from (x0, z0) to (x1, z1) in plan, 0 inside it.
+static inline float plan_box_distance(float x, float z, float x0, float x1, float z0, float z1) {
+    const float dx = fmaxf(fmaxf(x0 - x, x - x1), 0.0f);
+    const float dz = fmaxf(fmaxf(z0 - z, z - z1), 0.0f);
+    return sqrtf(dx * dx + dz * dz);
+}
+
+// Where line `k` between the far side's TERRACE_LOTS lots stands, 0 and TERRACE_LOTS the
+// street's ends, and the far house of `lot`.
+static inline float far_lot_line_x(int k) {
+    return k <= 0
+               ? -STREET_HALF_LEN
+               : (k >= TERRACE_LOTS ? STREET_HALF_LEN : LOT_GRID_X0 + TERRACE_LOT_WIDTH * (float)k);
+}
+static inline float far_lot_house_x(int lot) {
+    return LOT_GRID_X0 + TERRACE_LOT_WIDTH * ((float)lot + 0.5f);
+}
+
+// The same for our side's NEAR_LOTS lots.
+static inline float near_lot_line_x(int k) {
+    return k <= 0 ? -STREET_HALF_LEN
+                  : (k >= NEAR_LOTS ? STREET_HALF_LEN
+                                    : LOT_GRID_X0 + TERRACE_LOT_WIDTH * ((float)k - 0.5f));
+}
+static inline float near_lot_house_x(int lot) {
+    return LOT_GRID_X0 + TERRACE_LOT_WIDTH * (float)lot;
+}
 
 // A point of the house's plan, where the mansion puts it.
 static inline void mansion_at(const float local[3], float out[3]) {

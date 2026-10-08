@@ -23,13 +23,6 @@
 #define GATE_X (MANSION_X + 0.5f * (PATH_X0 + PATH_X1))
 #define GATE_Z (GROUNDS_Z0 + FENCE_INSET)
 
-static float rnd(unsigned int* state) {
-    *state ^= *state << 13;
-    *state ^= *state >> 17;
-    *state ^= *state << 5;
-    return (float)(*state & 0xffffffu) / 16777215.0f;
-}
-
 // A run of railing from (x0, z0) to (x1, z1) on ground level `y`: bars with a spike each, two
 // rails, and a collider the length of it. `gaps` holds `gap_count` spans, in metres along the
 // run, where bars have fallen or been taken.
@@ -100,14 +93,14 @@ static void gate_and_fence(Kit* kit, unsigned int* rng) {
     // A gap or two a side, where the bars have gone.
     float gaps[2];
     const float run_x = x1 - x0, run_z = z1 - z0;
-    gaps[0] = 4.0f + rnd(rng) * (run_z - 10.0f);
-    gaps[1] = gaps[0] + 1.5f + rnd(rng) * 1.5f;
+    gaps[0] = 4.0f + kit_xrnd(rng) * (run_z - 10.0f);
+    gaps[1] = gaps[0] + 1.5f + kit_xrnd(rng) * 1.5f;
     railing(kit, x0, z0, x0, z1, y, gaps, 1);
-    gaps[0] = 4.0f + rnd(rng) * (run_z - 10.0f);
-    gaps[1] = gaps[0] + 1.5f + rnd(rng) * 1.5f;
+    gaps[0] = 4.0f + kit_xrnd(rng) * (run_z - 10.0f);
+    gaps[1] = gaps[0] + 1.5f + kit_xrnd(rng) * 1.5f;
     railing(kit, x1, z0, x1, z1, y, gaps, 1);
-    gaps[0] = 4.0f + rnd(rng) * (run_x - 10.0f);
-    gaps[1] = gaps[0] + 2.0f + rnd(rng) * 2.0f;
+    gaps[0] = 4.0f + kit_xrnd(rng) * (run_x - 10.0f);
+    gaps[1] = gaps[0] + 2.0f + kit_xrnd(rng) * 2.0f;
     railing(kit, x0, z1, x1, z1, y, gaps, 1);
     railing(kit, x0, z0, GATE_X - GATE_HALF - 0.7f, z0, y, NULL, 0);
     railing(kit, GATE_X + GATE_HALF + 0.7f, z0, x1, z0, y, NULL, 0);
@@ -147,17 +140,17 @@ static void graveyard(Kit* kit, unsigned int* rng) {
             const float z = YARD_Z + sides[s].az + (sides[s].bz - sides[s].az) * m;
             const float y = land_height(x, z);
             kit_box(kit, MAT_FOUNDATION, (vec3){x, y + 0.25f, z},
-                    (vec3){0.2f, 0.45f + 0.1f * rnd(rng), 0.5f * step + 0.02f}, yaw, true);
+                    (vec3){0.2f, 0.45f + 0.1f * kit_xrnd(rng), 0.5f * step + 0.02f}, yaw, true);
         }
     }
     // Two rows of stones, one of them a cross.
     for (int i = 0; i < 9; i++) {
         const int column = i % 5, row = i / 5;
-        const float x = YARD_X - YARD_HX + 1.2f + (float)column * 1.6f + 0.3f * rnd(rng);
-        const float z = YARD_Z - 1.4f + (float)row * 2.4f + 0.3f * rnd(rng);
+        const float x = YARD_X - YARD_HX + 1.2f + (float)column * 1.6f + 0.3f * kit_xrnd(rng);
+        const float z = YARD_Z - 1.4f + (float)row * 2.4f + 0.3f * kit_xrnd(rng);
         const vec3 base = {x, land_height(x, z) - 0.15f, z};
-        const float yaw = 0.15f * (rnd(rng) - 0.5f);
-        const float lean = 0.35f * (rnd(rng) - 0.5f);
+        const float yaw = 0.15f * (kit_xrnd(rng) - 0.5f);
+        const float lean = 0.35f * (kit_xrnd(rng) - 0.5f);
         if (i % 4 == 3) {
             kit_leaning_box(kit, MAT_STONE, base, (vec3){0.06f, 0.6f, 0.06f}, yaw, lean);
             // Up the leaning shaft to where the arm crosses it.
@@ -165,15 +158,16 @@ static void graveyard(Kit* kit, unsigned int* rng) {
                               base[2] + 0.8f * sinf(lean) * cosf(yaw)};
             kit_leaning_box(kit, MAT_STONE, arm, (vec3){0.3f, 0.05f, 0.05f}, yaw, lean);
         } else {
-            kit_leaning_box(kit, MAT_STONE, base,
-                            (vec3){0.25f + 0.08f * rnd(rng), 0.35f + 0.2f * rnd(rng), 0.06f}, yaw,
-                            lean);
+            kit_leaning_box(
+                kit, MAT_STONE, base,
+                (vec3){0.25f + 0.08f * kit_xrnd(rng), 0.35f + 0.2f * kit_xrnd(rng), 0.06f}, yaw,
+                lean);
         }
     }
 }
 
-void grounds_build(Grounds* grounds, Kit* kit, Scene* scene, unsigned int seed, bool night) {
-    *grounds = (Grounds){0};
+void grounds_build(Kit* kit, Scene* scene, unsigned int seed, bool night, FailingLamp* failing) {
+    *failing = failing_lamp(NULL, 0u);
     unsigned int rng = seed * 747796405u + 2891336453u;
     gate_and_fence(kit, &rng);
     graveyard(kit, &rng);
@@ -190,15 +184,7 @@ void grounds_build(Grounds* grounds, Kit* kit, Scene* scene, unsigned int seed, 
         const float yaw = atan2f(dz, -dx);
         Light* light =
             street_lamp(kit, scene, lx, land_height(lx, lz), lz, yaw, night, i == 0, profile);
-        if (light) {
-            grounds->failing = light;
-            grounds->base_intensity = light->intensity;
-        }
+        if (light)
+            *failing = failing_lamp(light, 0u);
     }
-}
-
-void grounds_update(Grounds* grounds, double time) {
-    if (!grounds->failing)
-        return;
-    grounds->failing->intensity = street_lamp_failing(time, 0u) * grounds->base_intensity;
 }

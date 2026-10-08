@@ -529,15 +529,12 @@ typedef struct Lot {
     float torn_x;   // in the front's chain-link panel that is torn; NAN none
 } Lot;
 
-// The lines between them, west to east, and whether a line's fence runs from the front of the
-// lots rather than from the houses' returns.
+// The fence on each line between the lots, west to east, and whether it runs from the front of
+// the lots rather than from the houses' returns.
 typedef struct Line {
-    float x;
     FenceKind kind;
     bool full;
 } Line;
-
-#define NEAR_LOTS 7
 
 // Our side: a vacant lot at each end, the four neighbours, and ours in the middle, its front open.
 static const Lot NEAR[NEAR_LOTS] = {
@@ -550,14 +547,8 @@ static const Lot NEAR[NEAR_LOTS] = {
     {FENCE_CHAIN, GATE_NONE, FENCE_CHAIN, GATE_NONE, GATE_NONE, 0.0f, NAN, 40.0f},
 };
 static const Line NEAR_LINES[NEAR_LOTS + 1] = {
-    {-STREET_HALF_LEN + 0.4f, FENCE_CHAIN, true},
-    {-35.0f, FENCE_CHAIN, true},
-    {-21.0f, FENCE_BOARD, false},
-    {-7.0f, FENCE_BOARD, false},
-    {7.0f, FENCE_BOARD, false},
-    {21.0f, FENCE_BLOCK, false},
-    {35.0f, FENCE_CHAIN, true},
-    {STREET_HALF_LEN - 0.4f, FENCE_CHAIN, true},
+    {FENCE_CHAIN, true},  {FENCE_CHAIN, true},  {FENCE_BOARD, false}, {FENCE_BOARD, false},
+    {FENCE_BOARD, false}, {FENCE_BLOCK, false}, {FENCE_CHAIN, true},  {FENCE_CHAIN, true},
 };
 
 // The far side, a lot of the terrace's each, every one with a house; one yard is open, and its
@@ -571,67 +562,86 @@ static const Lot FAR[TERRACE_LOTS] = {
     {FENCE_NONE, GATE_NONE, FENCE_BOARD, GATE_LATCHED, GATE_NONE, 0.0f, NAN, NAN},
 };
 static const Line FAR_LINES[TERRACE_LOTS + 1] = {
-    {-STREET_HALF_LEN + 0.2f, FENCE_CHAIN, true},
-    {-28.0f, FENCE_BOARD, false},
-    {-14.0f, FENCE_BOARD, false},
-    {0.0f, FENCE_CHAIN, false},
-    {14.0f, FENCE_BOARD, false},
-    {28.0f, FENCE_BLOCK, false},
-    {STREET_HALF_LEN - 0.2f, FENCE_CHAIN, true},
+    {FENCE_CHAIN, true},  {FENCE_BOARD, false}, {FENCE_BOARD, false}, {FENCE_CHAIN, false},
+    {FENCE_BOARD, false}, {FENCE_BLOCK, false}, {FENCE_CHAIN, true},
 };
 
-#define NEAR_FRONT_Z  (ROAD_HALF_WIDTH + SIDEWALK_WIDTH + 1.6f)
+#define NEAR_FRONT_Z  (STREET_HALF_WIDTH + 1.6f)
 #define NEAR_RETURN_Z 15.0f // behind our chimney, and every neighbour's front
 // Just behind the guard rail on the terrace wall's coping, so nobody gets between the two.
 #define FAR_FRONT_Z  (TERRACE_WALL_Z - 0.5f * TERRACE_WALL_THICK - 0.15f)
 #define FAR_RETURN_Z (FAR_HOUSE_FRONT_Z - 5.0f)
-#define FAR_BACK_Z   (-30.0f)
 
 /*
- * One side's fences. `toward` is the sign of z from the street to the backs of its lots; `ys` and
- * `step` give a line's ground and how much higher the ground west of it stands, which is nothing
- * on our side. `houses` holds each lot's house, or a zero-width one where there is none.
+ * One side of the street: what each of its `n` lots has, the fences on the lines between them,
+ * where those lines stand -- the ends `end_inset` in from the street's ends -- and the ground each
+ * lot stands on, each lot's house, and the lines across the lots the fronts, the returns and the
+ * backs run along.
  */
-static void side(Build* b, const Lot* lots, const Line* lines, int n, const HousePlot* houses,
-                 float front_z, float return_z, float back_z, const float* ys, const float* steps) {
-    const float toward = back_z > front_z ? 1.0f : -1.0f;
+typedef struct Side {
+    const Lot* lots;
+    const Line* lines;
+    int n;
+    float (*line_x)(int k);
+    float end_inset;
+    float (*lot_y)(int lot);
+    const HousePlot* houses;
+    float front_z, return_z, back_z;
+} Side;
+
+// Our side's lots, every one on the street's level.
+static float street_level(int lot) {
+    (void)lot;
+    return 0.0f;
+}
+
+static float side_line_x(const Side* s, int k) {
+    return s->line_x(k) + (k == 0 ? s->end_inset : (k == s->n ? -s->end_inset : 0.0f));
+}
+
+// One side's fences. A line stands on the lot east of it, and as much taller as the step up to
+// the lot west of it.
+static void side(Build* b, const Side* s) {
+    const float toward = s->back_z > s->front_z ? 1.0f : -1.0f;
     // A run along +x has +d toward +z: the good face of a front or a return looks back to the
     // street, of a back fence out to the woods.
     const int to_street = toward > 0.0f ? -1 : 1;
-    for (int i = 0; i <= n; i++) {
-        const Line* l = &lines[i];
-        const float z0 = l->full ? front_z : return_z;
-        Fence fe = fence(l->kind, l->x, z0, l->x, back_z, ys[i], i % 2 ? 1 : -1);
-        fe.height += steps[i];
+    for (int i = 0; i <= s->n; i++) {
+        const Line* l = &s->lines[i];
+        const float x = side_line_x(s, i), z0 = l->full ? s->front_z : s->return_z;
+        const float y = s->lot_y(i < s->n ? i : s->n - 1);
+        Fence fe = fence(l->kind, x, z0, x, s->back_z, y, i % 2 ? 1 : -1);
+        fe.height += i > 0 && i < s->n ? s->lot_y(i - 1) - y : 0.0f;
         build(b, &fe);
     }
-    for (int i = 0; i < n; i++) {
-        const Lot* lot = &lots[i];
-        const float x0 = lines[i].x, x1 = lines[i + 1].x;
-        const float y = ys[i]; // a line stands on the lot east of it, which is this one
-        const HousePlot* h = &houses[i];
+    for (int i = 0; i < s->n; i++) {
+        const Lot* lot = &s->lots[i];
+        const float x0 = side_line_x(s, i), x1 = side_line_x(s, i + 1);
+        const float y = s->lot_y(i);
+        const HousePlot* h = &s->houses[i];
+        const bool house = !street_lot_vacant(h);
         if (lot->front != FENCE_NONE) {
-            Fence fe = fence(lot->front, x0, front_z, x1, front_z, y, to_street);
+            Fence fe = fence(lot->front, x0, s->front_z, x1, s->front_z, y, to_street);
             if (lot->front == FENCE_BLOCK)
                 fe.height = 0.9f;
-            else if (lot->front == FENCE_CHAIN && h->x1 > h->x0)
+            else if (lot->front == FENCE_CHAIN && house)
                 fe.height = 1.2f;
             fe.gate = lot->front_gate;
-            fe.gate_at = (h->x1 > h->x0 ? h->door[0] : 0.5f * (x0 + x1)) - x0;
+            fe.gate_at = (house ? h->door[0] : 0.5f * (x0 + x1)) - x0;
             fe.torn_at = isnan(lot->torn_x) ? -1.0f : lot->torn_x - x0;
             build(b, &fe);
         }
-        if (h->x1 > h->x0) {
+        if (house) {
             const bool east = x1 - h->x1 >= h->x0 - x0;
-            Fence w = fence(lot->yard, x0, return_z, h->x0, return_z, y, to_street);
-            Fence e = fence(lot->yard, h->x1, return_z, x1, return_z, y, to_street);
+            Fence w = fence(lot->yard, x0, s->return_z, h->x0, s->return_z, y, to_street);
+            Fence e = fence(lot->yard, h->x1, s->return_z, x1, s->return_z, y, to_street);
             Fence* g = east ? &e : &w;
             g->gate = lot->side_gate;
             g->gate_at = 0.5f * (g->b[0] - g->a[0]);
             build(b, &w);
             build(b, &e);
         }
-        Fence back = fence(lot->yard, x0, back_z, x1, back_z, y, -to_street);
+        Fence back = fence(lot->yard, x0, s->back_z, x1, s->back_z, y, -to_street);
         back.gate = lot->back_gate;
         back.gate_at = lot->back_gate_x - x0;
         back.fallen_at = isnan(lot->fallen_x) ? -1.0f : lot->fallen_x - x0;
@@ -642,25 +652,19 @@ static void side(Build* b, const Lot* lots, const Line* lines, int n, const Hous
 void fences_build(Kit* kit, unsigned int seed, const StreetPlots* plots, FenceBreaches* breaches) {
     Build b = {.kit = kit, .rng = {seed * 2654435761u + 1335u}, .breaches = breaches};
     breaches->count = 0;
-
-    // Our side: everything on the street's level ground.
-    HousePlot near[NEAR_LOTS] = {{{0.0f}}};
-    for (int i = 0; i < NEAR_HOUSES; i++)
-        near[i < 2 ? i + 1 : i + 2] = plots->near[i];
-    near[3] = (HousePlot){
-        {0.0f, 0.0f, HOUSE_FRONT_Z}, HOUSE_OUT_X0, HOUSE_OUT_X1, HOUSE_OUT_Z0, HOUSE_OUT_Z1};
-    const float near_y[NEAR_LOTS + 1] = {0.0f}, near_step[NEAR_LOTS + 1] = {0.0f};
-    side(&b, NEAR, NEAR_LINES, NEAR_LOTS, near, NEAR_FRONT_Z, NEAR_RETURN_Z, BACK_FENCE_Z, near_y,
-         near_step);
-
-    // The far side, on the terrace: a line between two lots stands on the lower, east one, and
-    // stands as much taller as the step up to the west one.
-    float far_y[TERRACE_LOTS + 1], far_step[TERRACE_LOTS + 1];
-    for (int i = 0; i <= TERRACE_LOTS; i++) {
-        const float x = FAR_LINES[i].x;
-        far_y[i] = land_terrace_height(i == TERRACE_LOTS ? x : x + 0.1f);
-        far_step[i] = i == 0 || i == TERRACE_LOTS ? 0.0f : land_terrace_height(x - 0.1f) - far_y[i];
-    }
-    side(&b, FAR, FAR_LINES, TERRACE_LOTS, plots->far, FAR_FRONT_Z, FAR_RETURN_Z, FAR_BACK_Z, far_y,
-         far_step);
+    const Side near = {
+        NEAR,         NEAR_LINES,  NEAR_LOTS,    near_lot_line_x, NEAR_END_FENCE_INSET,
+        street_level, plots->near, NEAR_FRONT_Z, NEAR_RETURN_Z,   BACK_FENCE_Z};
+    const Side far = {FAR,
+                      FAR_LINES,
+                      TERRACE_LOTS,
+                      far_lot_line_x,
+                      FAR_END_FENCE_INSET,
+                      land_terrace_lot_height,
+                      plots->far,
+                      FAR_FRONT_Z,
+                      FAR_RETURN_Z,
+                      FAR_BACK_FENCE_Z};
+    side(&b, &near);
+    side(&b, &far);
 }

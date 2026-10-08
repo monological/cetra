@@ -8,10 +8,10 @@
  * The hill past the street's east end (spec 13.25): it rises from the street's level to the
  * mansion's grounds at MANSION_Y, with the drive carved into it as it winds up.
  *
- * This is the hill's HEIGHT and the drive; the ground drawn and collided over it is land.c's grid
- * (spec 13.35), which reads hill_height as one of its terms. The drive's surface is that
- * function's own along the road, so the asphalt ribbon laid on it and the ground under it agree.
- * Puddles stand on ground within 8 degrees of level, and the drive climbs at under that.
+ * This is the hill's HEIGHT and the drive, not the ground drawn over them (spec 13.35). The
+ * drive's surface is the height's own along the road, so the asphalt ribbon laid on it and the
+ * ground under it agree. Puddles stand on ground within 8 degrees of level, and the drive climbs
+ * at under that.
  */
 
 // Where the hill starts: the street's own end, and where it is still at the street's level.
@@ -96,20 +96,29 @@ static void drive_sample(Drive* d) {
     }
 }
 
+// The drive's samples, taken the first time anything asks, so the hill answers whenever it is
+// asked.
+static const Drive* drive(void) {
+    if (g_drive.count == 0)
+        drive_sample(&g_drive);
+    return &g_drive;
+}
+
 // The drive's height along it: the street's road at its start, the grounds at its end, and a
 // climb between that eases in and out.
 static float drive_height(float s) {
-    const float t = glm_smoothstep(DRIVE_FLAT_RUN, g_drive.length - DRIVE_FLAT_END, s);
+    const float t = glm_smoothstep(DRIVE_FLAT_RUN, drive()->length - DRIVE_FLAT_END, s);
     return ROAD_Y + (MANSION_Y - ROAD_Y) * t;
 }
 
 // How far (x, z) is from the drive's line, and how far along it the nearest point is.
 static float drive_distance(float x, float z, float* along) {
+    const Drive* d = drive();
     float best = 1e30f;
     *along = 0.0f;
-    for (int i = 0; i + 1 < g_drive.count; i++) {
-        const float ax = g_drive.x[i], az = g_drive.z[i];
-        const float bx = g_drive.x[i + 1] - ax, bz = g_drive.z[i + 1] - az;
+    for (int i = 0; i + 1 < d->count; i++) {
+        const float ax = d->x[i], az = d->z[i];
+        const float bx = d->x[i + 1] - ax, bz = d->z[i + 1] - az;
         const float len2 = bx * bx + bz * bz;
         float t = len2 > 0.0f ? ((x - ax) * bx + (z - az) * bz) / len2 : 0.0f;
         t = glm_clamp(t, 0.0f, 1.0f);
@@ -117,7 +126,7 @@ static float drive_distance(float x, float z, float* along) {
         const float d2 = dx * dx + dz * dz;
         if (d2 < best) {
             best = d2;
-            *along = g_drive.s[i] + (g_drive.s[i + 1] - g_drive.s[i]) * t;
+            *along = d->s[i] + (d->s[i + 1] - d->s[i]) * t;
         }
     }
     return sqrtf(best);
@@ -143,9 +152,7 @@ static float value_noise(float x, float z) {
 }
 
 static float grounds_distance(float x, float z) {
-    const float dx = fmaxf(fmaxf(GROUNDS_X0 - x, x - GROUNDS_X1), 0.0f);
-    const float dz = fmaxf(fmaxf(GROUNDS_Z0 - z, z - GROUNDS_Z1), 0.0f);
-    return sqrtf(dx * dx + dz * dz);
+    return plan_box_distance(x, z, GROUNDS_X0, GROUNDS_X1, GROUNDS_Z0, GROUNDS_Z1);
 }
 
 bool hill_on_grounds(float x, float z) {
@@ -177,17 +184,19 @@ float hill_drive_distance(float x, float z) {
 }
 
 void hill_drive_point(float t, float* x, float* z) {
-    const int i = (int)(glm_clamp(t, 0.0f, 1.0f) * (float)(g_drive.count - 1));
-    *x = g_drive.x[i];
-    *z = g_drive.z[i];
+    const Drive* d = drive();
+    const int i = (int)(glm_clamp(t, 0.0f, 1.0f) * (float)(d->count - 1));
+    *x = d->x[i];
+    *z = d->z[i];
 }
 
 void hill_drive_frame(float t, float* x, float* z, float* dir_x, float* dir_z) {
-    const int i = (int)(glm_clamp(t, 0.0f, 1.0f) * (float)(g_drive.count - 1));
-    const int a = i > 0 ? i - 1 : 0, b = i + 1 < g_drive.count ? i + 1 : i;
-    *x = g_drive.x[i];
-    *z = g_drive.z[i];
-    const float dx = g_drive.x[b] - g_drive.x[a], dz = g_drive.z[b] - g_drive.z[a];
+    const Drive* d = drive();
+    const int i = (int)(glm_clamp(t, 0.0f, 1.0f) * (float)(d->count - 1));
+    const int a = i > 0 ? i - 1 : 0, b = i + 1 < d->count ? i + 1 : i;
+    *x = d->x[i];
+    *z = d->z[i];
+    const float dx = d->x[b] - d->x[a], dz = d->z[b] - d->z[a];
     const float len = hypotf(dx, dz);
     *dir_x = len > 0.0f ? dx / len : 1.0f;
     *dir_z = len > 0.0f ? dz / len : 0.0f;
@@ -195,17 +204,18 @@ void hill_drive_frame(float t, float* x, float* z, float* dir_x, float* dir_z) {
 
 // The asphalt: a ribbon along the drive's samples, level across.
 static void drive_ribbon(Kit* kit) {
+    const Drive* d = drive();
     const vec3 up = {0.0f, 1.0f, 0.0f};
     vec3 prev_l = {0}, prev_r = {0};
-    for (int i = 0; i < g_drive.count; i++) {
-        const int a = i > 0 ? i - 1 : 0, b = i + 1 < g_drive.count ? i + 1 : i;
-        float tx = g_drive.x[b] - g_drive.x[a], tz = g_drive.z[b] - g_drive.z[a];
+    for (int i = 0; i < d->count; i++) {
+        const int a = i > 0 ? i - 1 : 0, b = i + 1 < d->count ? i + 1 : i;
+        float tx = d->x[b] - d->x[a], tz = d->z[b] - d->z[a];
         const float len = hypotf(tx, tz);
         tx /= len;
         tz /= len;
-        const float y = drive_height(g_drive.s[i]);
-        const vec3 l = {g_drive.x[i] - tz * DRIVE_HALF, y, g_drive.z[i] + tx * DRIVE_HALF};
-        const vec3 r = {g_drive.x[i] + tz * DRIVE_HALF, y, g_drive.z[i] - tx * DRIVE_HALF};
+        const float y = drive_height(d->s[i]);
+        const vec3 l = {d->x[i] - tz * DRIVE_HALF, y, d->z[i] + tx * DRIVE_HALF};
+        const vec3 r = {d->x[i] + tz * DRIVE_HALF, y, d->z[i] - tx * DRIVE_HALF};
         if (i > 0)
             kit_quad_facing(kit, MAT_ASPHALT, prev_l, prev_r, r, l, up);
         glm_vec3_copy((float*)l, prev_l);
@@ -214,8 +224,6 @@ static void drive_ribbon(Kit* kit) {
 }
 
 void hill_build(Kit* kit) {
-    drive_sample(&g_drive);
-
     // The grounds stand on a box: their flat would be one long run of coplanar triangles in the
     // land's collider, which leaves them out.
     const vec3 centre = {0.5f * (GROUNDS_X0 + GROUNDS_X1), MANSION_Y - 0.5f,

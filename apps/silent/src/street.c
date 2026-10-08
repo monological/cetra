@@ -10,8 +10,6 @@
 #include "mats.h"
 #include "street.h"
 
-#define GROUND_DEPTH 0.4f // how thick the ground boxes are, below their tops
-
 // Relative to the repository root, where every app in this tree is run from.
 #define STREET_LAMP_IES "assets/ies/silent_street_lamp.ies"
 
@@ -24,14 +22,13 @@
 #define FOG_DAY     0.14f
 #define FOG_FEATHER 3.0f
 
-// Ground from x0 to x1 and z0 to z1, its top at `top`.
-static void ground(Kit* kit, int mat, float x0, float x1, float z0, float z1, float top) {
+void street_ground(Kit* kit, int mat, float x0, float x1, float z0, float z1, float top) {
     kit_frame_box(kit, &KIT_WORLD, mat, x0, x1, top - GROUND_DEPTH, top, z0, z1, true);
 }
 
 // A strip of it the length of the street.
 static void ground_strip(Kit* kit, int mat, float z0, float z1, float top) {
-    ground(kit, mat, -STREET_HALF_LEN, STREET_HALF_LEN, z0, z1, top);
+    street_ground(kit, mat, -STREET_HALF_LEN, STREET_HALF_LEN, z0, z1, top);
 }
 
 /*
@@ -73,9 +70,13 @@ Light* street_lamp(Kit* kit, Scene* scene, float x, float y, float z, float yaw,
     return light;
 }
 
-float street_lamp_failing(double time, unsigned int salt) {
-    // Out for a beat now and then, and buzzing between, in a pattern hashed from the time so it
-    // never settles into a rhythm.
+FailingLamp failing_lamp(Light* light, unsigned int salt) {
+    return (FailingLamp){light, light ? light->intensity : 0.0f, salt};
+}
+
+// Out for a beat now and then, and buzzing between, in a pattern hashed from the time so it never
+// settles into a rhythm.
+static float failing_level(double time, unsigned int salt) {
     const unsigned int beat = (unsigned int)(time * 9.0) + salt * 7919u;
     unsigned int h = beat * 2654435761u;
     h ^= h >> 15;
@@ -84,6 +85,11 @@ float street_lamp_failing(double time, unsigned int salt) {
     s ^= s >> 13;
     const bool out = (h & 0xffu) < 70u || (s & 0xffu) < 50u;
     return out ? 0.04f : 1.0f;
+}
+
+void failing_lamp_update(const FailingLamp* lamp, double time) {
+    if (lamp->light)
+        lamp->light->intensity = failing_level(time, lamp->salt) * lamp->intensity;
 }
 
 int street_lamp_profile(Scene* scene, bool night) {
@@ -119,10 +125,9 @@ static void poles(Kit* kit) {
     }
 }
 
-void street_car(Kit* kit, float x, float z, int body, bool police) {
+void street_car(Kit* kit, float x, float z, bool police) {
     const float y = ROAD_Y;
-    if (police)
-        body = MAT_BLACK;
+    const int body = police ? MAT_BLACK : MAT_CAR;
     kit_box(kit, body, (vec3){x, y + 0.62f, z}, (vec3){2.15f, 0.3f, 0.86f}, 0.0f, true);
     kit_box(kit, MAT_DARK_GLASS, (vec3){x - 0.25f, y + 1.13f, z}, (vec3){1.05f, 0.22f, 0.8f}, 0.0f,
             false);
@@ -212,7 +217,7 @@ static void fog(Scene* scene, bool night) {
 void street_build(Kit* kit, Scene* scene, unsigned int seed, bool night, bool fogged,
                   StreetPlots* plots) {
     const float kerb = ROAD_HALF_WIDTH;
-    const float walk = ROAD_HALF_WIDTH + SIDEWALK_WIDTH;
+    const float walk = STREET_HALF_WIDTH;
     ground_strip(kit, MAT_ASPHALT, -kerb, kerb, ROAD_Y);
     ground_strip(kit, MAT_CONCRETE, kerb, walk, 0.0f);
     ground_strip(kit, MAT_CONCRETE, -walk, -kerb, 0.0f);
@@ -220,8 +225,8 @@ void street_build(Kit* kit, Scene* scene, unsigned int seed, bool night, bool fo
     // fences. The far side's lots are the terrace's.
     ground_strip(kit, MAT_DIRT, walk, DIG_Z0, 0.0f);
     ground_strip(kit, MAT_DIRT, DIG_Z1, BACK_FENCE_Z, 0.0f);
-    ground(kit, MAT_DIRT, -STREET_HALF_LEN, DIG_X0, DIG_Z0, DIG_Z1, 0.0f);
-    ground(kit, MAT_DIRT, DIG_X1, STREET_HALF_LEN, DIG_Z0, DIG_Z1, 0.0f);
+    street_ground(kit, MAT_DIRT, -STREET_HALF_LEN, DIG_X0, DIG_Z0, DIG_Z1, 0.0f);
+    street_ground(kit, MAT_DIRT, DIG_X1, STREET_HALF_LEN, DIG_Z0, DIG_Z1, 0.0f);
 
     // Our path from the sidewalk to the porch steps.
     kit_box(kit, MAT_CONCRETE,
@@ -229,24 +234,26 @@ void street_build(Kit* kit, Scene* scene, unsigned int seed, bool night, bool fo
             (vec3){0.5f * (PATH_X1 - PATH_X0), 0.01f, 0.5f * (PORCH_Z0 - 0.32f - walk)}, 0.0f,
             false);
 
-    // The neighbours: this side of the street either side of us, fronts in
-    // line with ours, and the far side facing back from its terrace's lots, one a lot.
+    // The neighbours: this side of the street either side of us, fronts in line with ours, with
+    // a vacant lot at each end, and the far side facing back from its terrace's lots, one a lot.
     KitRng rng = {seed * 2246822519u + 3266489917u};
-    const float near_side[NEAR_HOUSES] = {-28.0f, -14.0f, 14.0f, 28.0f};
-    for (int i = 0; i < NEAR_HOUSES; i++) {
-        const KitFrame f = {{near_side[i], 0.0f, HOUSE_FRONT_Z}, GLM_PIf};
-        house_neighbour(kit, &f, &rng, night, &plots->near[i]);
+    *plots = (StreetPlots){0};
+    for (int lot = 1; lot < NEAR_LOTS - 1; lot++) {
+        if (lot == HOME_LOT)
+            continue;
+        const KitFrame f = {{near_lot_house_x(lot), 0.0f, HOUSE_FRONT_Z}, GLM_PIf};
+        house_neighbour(kit, &f, &rng, night, &plots->near[lot]);
         // A path from the sidewalk to the door, running on under its porch or up to its step.
-        const float* door = plots->near[i].door;
+        const float* door = plots->near[lot].door;
         kit_box(kit, MAT_CONCRETE, (vec3){door[0], 0.01f, 0.5f * (walk + door[2])},
                 (vec3){0.55f, 0.01f, 0.5f * (door[2] - walk)}, 0.0f, false);
     }
-    for (int i = 0; i < TERRACE_LOTS; i++) {
-        // The house stands where it stood before the terrace, midway along a lot of the
-        // spacing's width; the end lots run on to the street's ends past it.
-        const float x = -STREET_HALF_LEN + 3.0f + TERRACE_LOT_WIDTH * ((float)i + 0.5f);
-        const KitFrame f = {{x, land_terrace_height(x), FAR_HOUSE_FRONT_Z}, 0.0f};
-        house_neighbour(kit, &f, &rng, night, &plots->far[i]);
+    plots->near[HOME_LOT] = (HousePlot){
+        {0.0f, 0.0f, HOUSE_FRONT_Z}, HOUSE_OUT_X0, HOUSE_OUT_X1, HOUSE_OUT_Z0, HOUSE_OUT_Z1};
+    for (int lot = 0; lot < TERRACE_LOTS; lot++) {
+        const KitFrame f = {{far_lot_house_x(lot), land_terrace_lot_height(lot), FAR_HOUSE_FRONT_Z},
+                            0.0f};
+        house_neighbour(kit, &f, &rng, night, &plots->far[lot]);
     }
 
     const int profile = street_lamp_profile(scene, night);
@@ -264,7 +271,7 @@ void street_build(Kit* kit, Scene* scene, unsigned int seed, bool night, bool fo
                     LAMPS[i].side > 0.0f ? GLM_PIf : 0.0f, night, LAMPS[i].dead, profile);
 
     poles(kit);
-    street_car(kit, 5.0f, -(kerb - 1.1f), MAT_CAR, false);
+    street_car(kit, 5.0f, -(kerb - 1.1f), false);
     // The mailbox at the end of our path.
     kit_box(kit, MAT_POLE, (vec3){-1.8f, 0.55f, walk + 0.4f}, (vec3){0.04f, 0.55f, 0.04f}, 0.0f,
             false);

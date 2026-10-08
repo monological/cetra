@@ -219,8 +219,10 @@ static CatVoice g_voice;
 // the eye is within DOOR_REACH of its leaf's middle and looking within DOOR_CONE of it.
 #define DOOR_REACH 1.9f
 #define DOOR_CONE  0.6f // radians
-static Grounds g_grounds;
-static Crossroads g_crossroads;
+
+// The street lamps on failing ballasts: the one up the drive and the one at the chasm's lip.
+enum { FAILING_DRIVE, FAILING_LIP, FAILING_LAMPS };
+static FailingLamp g_failing[FAILING_LAMPS];
 
 // The woods' conifers are the only levels of detail in the app (spec 13.35), and the engine's
 // ladder is set for a mesh the size of a room: at 1 a tree fifteen metres tall would hold its
@@ -644,15 +646,14 @@ static void on_init(Game* game) {
     StreetPlots plots;
     street_build(&kit, g_scene, (unsigned int)g_args.seed, !g_args.day, !g_args.no_fog, &plots);
     clock_build(&kit);
-    // The drive first, since the land's hill term carves it; then the ground over the world, the
-    // far side's terrace, whose east wall runs up into that ground, the yards' fences, and the
-    // crossroads at the chasm's lip (spec 13.35).
+    // The drive up the hill, the ground over the world, the far side's terrace, the yards' fences,
+    // and the crossroads at the chasm's lip (spec 13.35).
     hill_build(&kit);
     land_build(&kit);
     terrace_build(&kit, plots.far);
     FenceBreaches breaches;
     fences_build(&kit, (unsigned int)g_args.seed, &plots, &breaches);
-    crossroads_build(&g_crossroads, &kit, g_scene, !g_args.day);
+    crossroads_build(&kit, g_scene, !g_args.day, &g_failing[FAILING_LIP]);
     Trees trees;
     trees_init(&trees, engine, g_scene);
     trees_build(&trees, &kit, g_scene, (unsigned int)g_args.seed);
@@ -660,7 +661,7 @@ static void on_init(Game* game) {
         woods_build(&kit, engine, g_scene, &trees, &breaches, (unsigned int)g_args.seed);
     trees_release(&trees);
     engine->lod_bias = WOODS_LOD_BIAS;
-    grounds_build(&g_grounds, &kit, g_scene, (unsigned int)g_args.seed, !g_args.day);
+    grounds_build(&kit, g_scene, (unsigned int)g_args.seed, !g_args.day, &g_failing[FAILING_DRIVE]);
 
     // The Gothic house as the mansion at the end of the street (spec 13.25): the same plan, built
     // in a kit of its own that stands it where layout.h says.
@@ -835,8 +836,8 @@ static void on_update(Game* game, double dt) {
     for (int i = 0; i < DOORS; i++)
         if (g_door_hung[i])
             door_update(&g_doors[i], (float)dt);
-    grounds_update(&g_grounds, game->time);
-    crossroads_update(&g_crossroads, game->time);
+    for (int i = 0; i < FAILING_LAMPS; i++)
+        failing_lamp_update(&g_failing[i], game->time);
     if (g_args.trace_cat) {
         static int step;
         if (step++ % 30 == 0) {
