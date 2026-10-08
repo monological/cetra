@@ -61,8 +61,11 @@ static const Species SPECIES[] = {
 };
 
 // The engine's ladder is set for a mesh the size of a room: at 1 a tree fifteen metres tall would
-// hold its finest level out past two hundred metres. This puts its switches at about 11, 22 and 45.
-#define WOODS_LOD_SCALE 0.045f
+// hold its finest level out past two hundred metres. These put the switches at about 11, 22 and
+// 45 m. The wood's box is about 15% smaller than the sprays' it carries -- the sprays reach past
+// the branches -- so it takes the larger scale to switch at the same distances.
+#define WOODS_WOOD_LOD_SCALE  0.053f
+#define WOODS_SPRAY_LOD_SCALE 0.049f
 
 #define WOODS_X0    (CHASM_X - 2.0f) // the grid's west edge, at the chasm
 #define SITE_STEP   5.0f             // the jittered grid's cell
@@ -120,7 +123,10 @@ static Material* needles_material(Scene* scene, ShaderProgram* program) {
     m->roughness = 1.0f;
     m->foliage_shadows = 1;
     m->wind_mode = 2;
-    m->wind_response = 0.6f;
+    // The wood's response, so a spray rides its branch; what made the sprays livelier than the
+    // wood is their flutter about their stems.
+    m->wind_response = TREES_WIND_RESPONSE;
+    m->wind_flutter = 0.6f / TREES_WIND_RESPONSE;
     m->cached_shadow_wind = CACHED_SHADOW_WIND_REST;
     material_set_program(m, program);
     TextureDesc albedo = texture_desc(true);
@@ -254,9 +260,9 @@ void woods_build(Kit* kit, Engine* engine, Scene* scene, Trees* trees,
         tree_params_preset(&p, CONIFERS[i].preset, CONIFERS[i].seed);
         trees_grow(&p, trees->bark, needles, &wood[i], &sprays[i]);
         if (wood[i])
-            wood[i]->lod_scale = WOODS_LOD_SCALE;
+            wood[i]->lod_scale = WOODS_WOOD_LOD_SCALE;
         if (sprays[i])
-            sprays[i]->lod_scale = WOODS_LOD_SCALE;
+            sprays[i]->lod_scale = WOODS_SPRAY_LOD_SCALE;
     }
 
     SceneNode* root = create_node();

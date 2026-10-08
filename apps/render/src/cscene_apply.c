@@ -787,6 +787,10 @@ void apply_cscene_decals(Scene* scene, const CetraSceneDesc* cscn) {
 
 // The edge of a bark tile and of one cell of a foliage atlas.
 #define TREE_TEXTURE_SIZE 256
+// How far the wind moves a tree, its wood and its foliage alike, so the foliage rides its
+// branches; the foliage's own life is its flutter.
+#define TREE_WIND_RESPONSE   0.35f
+#define TREE_FOLIAGE_FLUTTER (1.0f / TREE_WIND_RESPONSE)
 
 static Material* tree_bark_material(Scene* scene, ShaderProgram* program) {
     const int n = TREE_TEXTURE_SIZE;
@@ -794,7 +798,7 @@ static Material* tree_bark_material(Scene* scene, ShaderProgram* program) {
     m->name = safe_strdup("tree_bark");
     m->roughness = 1.0f;
     m->wind_mode = 1;
-    m->wind_response = 0.35f;
+    m->wind_response = TREE_WIND_RESPONSE;
     material_set_program(m, program);
     float* field = malloc(sizeof(float) * (size_t)n * (size_t)n);
     if (field) {
@@ -830,7 +834,8 @@ static Material* tree_foliage_material(Scene* scene, ShaderProgram* program, Tre
     m->doubleSided = true;
     m->foliage_shadows = 1;
     m->wind_mode = 2;
-    m->wind_response = 1.0f;
+    m->wind_response = TREE_WIND_RESPONSE;
+    m->wind_flutter = TREE_FOLIAGE_FLUTTER;
     material_set_program(m, program);
     unsigned char *albedo = NULL, *normal = NULL, *rough = NULL;
     tree_foliage_maps(form, w, h, &albedo, &normal, &rough);
@@ -876,8 +881,8 @@ static uint64_t mesh_digest(const Mesh* m) {
 }
 
 // A conifer's shape: where its trunk ends, the highest point any spray reaches, the longest
-// branch in each quarter of its crown, and the height range each mesh measures, which the wind
-// leans by and the two must share.
+// branch in each quarter of its crown, and the wind range each mesh leans over, which the two
+// must share.
 static void print_conifer_shape(int i, const TreeParams* p, const TreeSkeleton* skel,
                                 const Mesh* bark, const Mesh* leaves) {
     const Branch* trunk = &skel->branches[0];
@@ -898,12 +903,16 @@ static void print_conifer_shape(int i, const TreeParams* p, const TreeSkeleton* 
         q = q < 0 ? 0 : (q > 3 ? 3 : q);
         quarter[q] = fmaxf(quarter[q], b->length);
     }
+    float bark_y0 = 0.0f, bark_y1 = 0.0f, leaf_y0 = 0.0f, leaf_y1 = 0.0f;
+    mesh_wind_range(bark, &bark_y0, &bark_y1);
+    mesh_wind_range(leaves, &leaf_y0, &leaf_y1);
     printf("tree-shape i=%d trunk_length=%.4f leaf_size=%.4f trunk_top=%.4f card_top=%.4f "
-           "q0=%.4f q1=%.4f q2=%.4f q3=%.4f bark_y0=%.4f bark_y1=%.4f leaf_y0=%.4f leaf_y1=%.4f\n",
+           "q0=%.4f q1=%.4f q2=%.4f q3=%.4f bark_y0=%.4f bark_y1=%.4f leaf_y0=%.4f leaf_y1=%.4f "
+           "leaf_box_y0=%.4f\n",
            i, (double)p->trunk_length, (double)p->leaf_size, (double)trunk_top, (double)card_top,
            (double)quarter[0], (double)quarter[1], (double)quarter[2], (double)quarter[3],
-           (double)bark->aabb.min[1], (double)bark->aabb.max[1], (double)leaves->aabb.min[1],
-           (double)leaves->aabb.max[1]);
+           (double)bark_y0, (double)bark_y1, (double)leaf_y0, (double)leaf_y1,
+           (double)leaves->aabb.min[1]);
 }
 
 // --tree-probe's rows for the scene file's tree `i`, from the meshes the scene draws: a digest

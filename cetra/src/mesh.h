@@ -169,6 +169,10 @@ typedef struct Mesh {
     float line_width;           // When draw_mode is lines
     MeshShadowRole shadow_role; // drawn, casting, or both
     float lod_scale;            // multiplies the view's LOD bias for this mesh; 1 = as is
+    // The object-space heights a vegetation lean is measured over: 0 at wind_y0, full at
+    // wind_y1. Equal = the mesh's own box. Meshes that move as one body -- a tree's wood and
+    // its leaves -- state one range, or each leans by its own and the leaves slide.
+    float wind_y0, wind_y1;
 
     float* vertices; // Array of vertex positions
     float* normals;  // Array of normals
@@ -209,6 +213,13 @@ typedef struct Mesh {
 
     Material* material; // Borrowed; see scene_add_material
 } Mesh;
+
+// The heights windOffset() leans this mesh over: the range it states, or its own box's.
+static inline void mesh_wind_range(const Mesh* mesh, float* y0, float* y1) {
+    const bool stated = mesh->wind_y1 > mesh->wind_y0;
+    *y0 = stated ? mesh->wind_y0 : mesh->aabb.min[1];
+    *y1 = stated ? mesh->wind_y1 : mesh->aabb.max[1];
+}
 
 // The index range to draw for `level`, clamped to what this mesh actually has.
 // A mesh with no chain answers with the whole mesh whatever the level, so a

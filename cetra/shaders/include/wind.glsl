@@ -13,7 +13,8 @@ uniform float uWindGustFreq;
 uniform float uWindGustAmount;
 uniform float uWindTurbulence;
 uniform float uWindResponse;   // 0 = this material is rigid
-uniform float uWindMaskMinY;   // local-space AABB Y bounds of the mesh
+uniform float uWindFlutter;    // the leaf flutter, a multiple of the response
+uniform float uWindMaskMinY;   // local-space heights the lean is measured over
 uniform float uWindMaskMaxY;
 uniform int uWindMode;         // 0 = cloth, 1 = vegetation branch, 2 = vegetation leaf
 uniform float uWindPhaseVariation; // 0 = every object sways in lockstep
@@ -122,7 +123,7 @@ vec3 windOffset(vec3 p, vec2 uv0, vec2 uv1, float t, vec3 origin) {
         // decorrelated by position so no two cards in a cluster beat in unison.
         float f = sin(t * uWindSpeed * 6.0 + phase * 7.0 + p.x * 3.0 + p.z * 2.7);
         off += vec3(f, f * WIND_LEAF_FLUTTER_Y, -f * WIND_LEAF_FLUTTER_Z) *
-               (amp * flex * uv0.y * uWindTurbulence);
+               (amp * uWindFlutter * flex * uv0.y * uWindTurbulence);
     }
     return off;
 }

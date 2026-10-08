@@ -252,8 +252,15 @@ typedef struct Material {
     // half of the wind split: the Scene owns the wind field, a material opts in
     // here. 0 = rigid (the shader early-outs -> no motion). The height-mask
     // bounds that pin the top and free the hem are per-mesh geometry, uploaded
-    // per draw from the mesh's AABB -- not stored here (a material is shared).
+    // per draw from the mesh's wind range -- not stored here (a material is shared).
+    //
+    // It scales the whole body's lean and every branch's sway, so the materials of
+    // one tree -- its wood and its leaves -- take the SAME response, or the leaves
+    // ride off the branches they hang from. A leaf's extra life is wind_flutter's.
     float wind_response;
+    // The leaf flutter of wind_mode 2 as a multiple of the response: a card turning
+    // about its own stem, which nothing it hangs from has to follow. 1 = as before.
+    float wind_flutter;
 
     // Shore wetness (see shore.glsl). The per-material half of the swash split, in the same
     // shape as wind_response above: the Water owns the run-up, a material opts in here.

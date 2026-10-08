@@ -63,6 +63,11 @@ float wind_gust_mean(const Wind* wind);
 // what keeps them from disagreeing about where the world is.
 void wind_upload_to_program(const Wind* wind, const vec3 world_origin, UniformManager* u);
 
+// Location-guarded upload of what windOffset() reads from the MESH being drawn: the heights its
+// lean is measured over (mesh_wind_range). Every pass that draws a mesh through the wind
+// chunk calls it per mesh.
+void wind_upload_mesh(const struct Mesh* mesh, UniformManager* u);
+
 // An upper bound, in OBJECT space, on how far windOffset() can move any vertex
 // of a mesh with this response and mode -- so a wind-driven mesh can be bounded
 // and therefore culled, instead of being exempted from every frustum test.
@@ -73,11 +78,14 @@ void wind_upload_to_program(const Wind* wind, const vec3 world_origin, UniformMa
 //
 // `flex_max` and `leaf_max` are the mesh's own measured vertex maxima
 // (Mesh.wind_flex_max / wind_leaf_max) and are ignored for mode 0, which reads
-// no vertex data. Returns exactly 0 wherever the shader early-outs, so a
+// no vertex data; `flutter` is the material's wind_flutter, read by mode 2
+// alone. Returns exactly 0 wherever the shader early-outs, so a
 // rigid mesh and a windless scene both keep their import bounds untouched.
-float wind_max_offset(const Wind* wind, float response, int mode, float flex_max, float leaf_max);
+float wind_max_offset(const Wind* wind, float response, float flutter, int mode, float flex_max,
+                      float leaf_max);
 
-// wind_max_offset for a mesh, with its material's response and mode and its own vertex maxima.
+// wind_max_offset for a mesh, with its material's response, flutter and mode and its own vertex
+// maxima.
 float wind_mesh_max_offset(const Wind* wind, const struct Mesh* mesh);
 
 // Prints the largest displacement windOffset can be driven to, beside the bound

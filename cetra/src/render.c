@@ -253,8 +253,9 @@ void _update_program_material_uniforms(ShaderProgram* program, Material* materia
     uniform_set_float(u, "uvRotation", material->uvRotation);
     // Wind response (0 = rigid). Uploaded per material switch, so non-cloth
     // materials reset it to 0 and the shader early-outs for them. The mask
-    // bounds are per-mesh (uploaded in the draw loop from the mesh's AABB).
+    // bounds are per-mesh (uploaded in the draw loop from the mesh's wind range).
     uniform_set_float(u, "uWindResponse", material->wind_response);
+    uniform_set_float(u, "uWindFlutter", material->wind_flutter);
     uniform_set_int(u, "uWindMode", material->wind_mode);
     // Shore wetness (0 = never wetted). Per material switch for the same reason wind is:
     // a material that did not ask for it resets the uniform and the shader early-outs.
@@ -714,10 +715,9 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
             uniform_set_mat3(u, "uNormalMatrix", (const float*)node->normal_matrix);
         }
         uniform_set_float(u, "lineWidth", mesh->line_width);
-        // Wind cloth-mask bounds: per-mesh geometry (local AABB Y). The shader
+        // Wind mask bounds: per-mesh geometry (its wind range). The shader
         // uses them only when this mesh's material opted in (uWindResponse > 0).
-        uniform_set_float(u, "uWindMaskMinY", mesh->aabb.min[1]);
-        uniform_set_float(u, "uWindMaskMaxY", mesh->aabb.max[1]);
+        wind_upload_mesh(mesh, u);
 
         // Emissive gate (spec 11.49): 0 silences this mesh's emissive inside an
         // IRRADIANCE capture, where its derived area panel already delivers that
@@ -1140,10 +1140,10 @@ static bool _submit_depth_prepass(Engine* engine, Scene* scene, const DrawList* 
         // This pass exists to be cheap; it should not re-buy that.
         if (run == 1)
             uniform_set_mat4(u, "model", (const float*)item->node->global_transform);
-        uniform_set_float(u, "uWindMaskMinY", mesh->aabb.min[1]);
-        uniform_set_float(u, "uWindMaskMaxY", mesh->aabb.max[1]);
+        wind_upload_mesh(mesh, u);
         if (submit_take_material(&state, mesh->material)) {
             uniform_set_float(u, "uWindResponse", mesh->material->wind_response);
+            uniform_set_float(u, "uWindFlutter", mesh->material->wind_flutter);
             uniform_set_int(u, "uWindMode", mesh->material->wind_mode);
             if (stats)
                 stats->material_switches++;
