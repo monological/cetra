@@ -1177,6 +1177,10 @@ static void wall_layer(Kit* kit, const KitWall* w, const KitWallFrame* wf, int m
         float y = w->y0;
         for (int i = 0; i < ns; i++) {
             const KitOpening* o = stack[i];
+            // An opening above the layer's top, a window upstairs over a lining downstairs, cuts
+            // nothing from it.
+            if (o->bottom >= w->y1)
+                break;
             wall_slab(kit, wf, mat, offset, thick, a0, a1, y, o->bottom);
             y = mat != KIT_COLLIDER_ONLY ? kit_opening_crown(o) : o->top;
         }

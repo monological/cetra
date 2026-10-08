@@ -569,23 +569,16 @@ void house_build(Kit* kit) {
 
 /*
  * The front door, hung on its west jamb in the inner half of the wall so it swings into the
- * hall and stands open against it, short of the hall's wall. It fills its opening shy of a
- * leaf's clearance all round.
+ * hall and stands open against it, short of the hall's wall.
  */
-#define DOOR_CLEARANCE 0.008f
-#define DOOR_SWING     1.7f // about 97 degrees
+#define DOOR_SWING 1.7f // about 97 degrees
 
 bool house_front_door(Door* door, Engine* engine, Scene* scene, EntityManager* em,
                       PhysicsWorld* physics, const vec3 origin) {
-    // The opening as the wall has it, along the frame from its hinge jamb.
-    KitOpening opening = WALLS[HOUSE_WALL_FRONT].openings[OPENING_FRONT_DOOR];
-    const KitFrame hinge = {{opening.from + origin[0], origin[1], FRONT_DOOR_Z + origin[2]}, 0.0f};
-    opening.to -= opening.from;
-    opening.from = 0.0f;
-    KitOpening leaf = kit_opening_grow(&opening, -DOOR_CLEARANCE);
-    leaf.bottom = FLOOR_Y + 0.02f;
-    return door_build(door, engine, scene, em, physics, "mansion_door", door_leaf, &hinge, &leaf,
-                      DOOR_THICK, DOOR_SWING);
+    const KitOpening* opening = &WALLS[HOUSE_WALL_FRONT].openings[OPENING_FRONT_DOOR];
+    const KitFrame hinge = {{opening->from + origin[0], origin[1], FRONT_DOOR_Z + origin[2]}, 0.0f};
+    return door_hang(door, engine, scene, em, physics, "mansion_door", door_leaf, &hinge, *opening,
+                     DOOR_SWING);
 }
 
 float house_clearance(const vec3 p) {

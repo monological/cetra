@@ -37,7 +37,7 @@ void rain_bed_start(RainBed* bed, AudioSystem* audio, const Rain* rain) {
 }
 
 void rain_bed_update(RainBed* bed, const Rain* rain, ShadowSystem* shadows, const vec3 head,
-                     float gain, float dt) {
+                     float hearing, float dt) {
     if (!bed->patter && !bed->rumble)
         return;
     shadow_rain_cover_ask(shadows, head);
@@ -45,7 +45,7 @@ void rain_bed_update(RainBed* bed, const Rain* rain, ShadowSystem* shadows, cons
     if (!shadow_rain_cover_answer(shadows, &open))
         open = bed->open; // no answer yet: hold what was heard
     bed->open += (open - bed->open) * (1.0f - expf(-fmaxf(dt, 0.0f) / RAIN_BED_EASE_S));
-    const float level = gain * rain_bed_level(rain);
+    const float level = hearing * rain_bed_level(rain);
     audio_sound_set_volume(bed->patter, level * (RAIN_BED_COVERED_PATTER +
                                                  (1.0f - RAIN_BED_COVERED_PATTER) * bed->open));
     audio_sound_set_volume(bed->rumble, level * RAIN_BED_RUMBLE);

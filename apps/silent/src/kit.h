@@ -72,9 +72,7 @@ typedef struct Kit {
     int mesh_count;        // the meshes it handed it over as
     int shadow_cell_count; // and the shape-only meshes the shadows draw in their place
     bool warned_nonfinite;
-    // Nothing kit_finish hands over casts a shadow: what swings inside a cached light's views,
-    // which as a caster would be a mover every frame it swings.
-    bool casts_nothing;
+    bool casts_nothing; // kit_finish builds no shadow cells, and no mesh it hands over casts
 
     // The edges water drips from in the rain (spec 13.12), in world space, for the rain to take.
     RainDripLine drips[RAIN_DRIP_MAX];

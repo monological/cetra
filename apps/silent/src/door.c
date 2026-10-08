@@ -2,12 +2,14 @@
 #include <math.h>
 
 #include "door.h"
+#include "layout.h"
 #include "mats.h"
 
-#define DOOR_SECONDS 1.2f  // shut to open, eased at both ends: a heavy door
-#define PLANK        0.17f // the boards' width, seams between them
-#define STRAP_H      0.06f
-#define STRAP_T      0.006f
+#define DOOR_SECONDS  1.2f  // shut to open, eased at both ends: a heavy door
+#define DOOR_SILL_GAP 0.02f // a hung leaf's foot over the floor
+#define PLANK         0.17f // the boards' width, seams between them
+#define STRAP_H       0.06f
+#define STRAP_T       0.006f
 
 // The leaf's middle, in the world, and the yaw it is turned to, at a swing of `travel`.
 static void pose(const Door* door, vec3 centre, float* yaw) {
@@ -170,6 +172,18 @@ bool door_build(Door* door, Engine* engine, Scene* scene, EntityManager* em, Phy
         .type = SHAPE_BOX, .box.half_extents = {half_w, half_h, 0.5f * thick}, .density = 0.0f};
     entity_add_rigid_body(door->entity, physics, &box, MOTION_KINEMATIC, OBJ_LAYER_KINEMATIC);
     return true;
+}
+
+bool door_hang(Door* door, Engine* engine, Scene* scene, EntityManager* em, PhysicsWorld* physics,
+               const char* name, DoorLeafFn leaf, const KitFrame* hinge, KitOpening opening,
+               float swing) {
+    // Along the frame from the hinge, whichever jamb it is on: the frame's yaw says which way.
+    opening.to -= opening.from;
+    opening.from = 0.0f;
+    KitOpening shape = kit_opening_grow(&opening, -DOOR_CLEARANCE);
+    shape.bottom = FLOOR_Y + DOOR_SILL_GAP;
+    return door_build(door, engine, scene, em, physics, name, leaf, hinge, &shape, DOOR_THICK,
+                      swing);
 }
 
 bool door_will_open(const Door* door) {
