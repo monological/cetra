@@ -988,6 +988,21 @@ warning. `--fov <deg>` is the vertical field of view (default 68).
 **`--no-fog`** drops the fog volumes and the haze: the layout from above, with `--day --no-rain`,
 is `--cam-eye 70,160,25 --cam-target 70.01,0,25.2`.
 
+**The town's edges** (spec 13.35): the far side's terrace, the yards' fences, the woods, and the
+crossroads at the street's west end.
+- **`--no-woods`:** without the woods behind the yards and round the crossroads, or anything lying
+  under them. This is the A/B for their cost: about 3.5 ms of GPU from a yard and 0.4 ms from the
+  street, at 1280x720 by night. The trees are drawn only within the fog's reach, 45 m by night and
+  30 m by day, so with `--no-fog` the far ones are simply missing.
+- **Pinned views:**
+  - the terrace's stairs: `--cam-eye -9,1.7,-1.5 --cam-target -7,2.6,-9`;
+  - our back yard and the dead tree through its fallen fence: `--cam-eye 0,1.7,23 --cam-target
+    2,3.0,40`;
+  - the crossroads, toward the chasm: `--cam-eye -50,1.7,0 --cam-target -66,1.0,0`;
+  - the north barricade: `--cam-eye -51,1.7,-6 --cam-target -52,1.2,-20`;
+  - the lip's face and the leaning pole from inside the chasm, with `--no-fog`: `--cam-eye
+    -75,-6,14 --cam-target -67,-2,0`.
+
 **Look switches**, each an A/B for one part of the picture:
 - **`--no-grade`:** the frame without the green-grey LUT (`assets/lut/silent_grade.cube`, written
   by `apps/silent/tools/make_grade.py`).
