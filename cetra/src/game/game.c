@@ -279,6 +279,23 @@ static void game_frame_update(Engine* engine, float dt) {
     game->sim_clock.time = game->time;
 }
 
+// Point the listener along the camera, push the frame's positions into the sources, and ease
+// the zones over `dt`.
+static void game_listen(Game* game, float dt) {
+    if (!game->audio)
+        return;
+    Camera* cam = game->engine->camera;
+    vec3 pos = {0.0f, 0.0f, 0.0f};
+    vec3 fwd = {0.0f, 0.0f, -1.0f};
+    vec3 up = {0.0f, 1.0f, 0.0f};
+    if (cam) {
+        glm_vec3_copy(cam->position, pos);
+        camera_forward(cam, fwd);
+        glm_vec3_copy(cam->up_vector, up);
+    }
+    audio_system_update(game->audio, game->entity_manager, pos, fwd, up, dt);
+}
+
 // engine_run's pre-render hook: hand the app its on_pre_render before the engine
 // propagates the graph, so a node it moves is drawn where it moved it.
 static void game_pre_render(Engine* engine, Scene* scene) {
@@ -302,21 +319,9 @@ static void game_pre_render(Engine* engine, Scene* scene) {
     // fixed steps, 0 on a frame that took none and 0 while paused.
     if (game->entity_manager)
         update_all_animators(game->entity_manager, (float)game->sim_clock.delta);
-    // Point the listener along the posed camera, push the frame's positions into the sources,
-    // and ease the zones over the sim clock's delta, as the animators are.
-    if (game->audio) {
-        Camera* cam = engine->camera;
-        vec3 pos = {0.0f, 0.0f, 0.0f};
-        vec3 fwd = {0.0f, 0.0f, -1.0f};
-        vec3 up = {0.0f, 1.0f, 0.0f};
-        if (cam) {
-            glm_vec3_copy(cam->position, pos);
-            camera_forward(cam, fwd);
-            glm_vec3_copy(cam->up_vector, up);
-        }
-        audio_system_update(game->audio, game->entity_manager, pos, fwd, up,
-                            (float)game->sim_clock.delta);
-    }
+    // The listener follows the posed camera, its zones eased by the sim clock as the animators
+    // are.
+    game_listen(game, (float)game->sim_clock.delta);
 }
 
 // engine_run's render hook: hand the app its on_render with the interpolation
@@ -337,6 +342,10 @@ void game_run(Game* game) {
     if (game->on_init) {
         game->on_init(game);
     }
+    // The listener is placed where init left the camera before the first frame, and that first
+    // update lands every zone's gain: a hook reading what a zone lets through on frame 1 hears
+    // the room the game starts in, not the world the listener stood in until now.
+    game_listen(game, 0.0f);
     // The engine owns the frame loop; the game plugs in its per-frame sim + render,
     // and stashes itself as the engine's user data so the callbacks can find it.
     engine_set_user_data(game->engine, game);

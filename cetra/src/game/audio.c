@@ -12,6 +12,7 @@
 
 #include <math.h>
 #include <stdlib.h>
+#include <string.h>
 
 #define AUDIO_OFFLINE_SAMPLE_RATE 48000
 #define AUDIO_OFFLINE_CHANNELS    2
@@ -37,7 +38,6 @@ struct Sound {
     bool streamed;      // read from the file as it plays, so nothing decoded to copy
     AudioSystem* audio; // borrowed; the tone stop-time and free_sound reach the engine here
     bool placed;        // positioned by the app or an AUDIO_SOURCE, so heard through zones
-    float zone_gain;    // what its zone lets through to the listener's, eased once placed
 };
 
 // One pooled voice: a copy of a decoded sound, playing once and reaped at its end.
@@ -47,8 +47,25 @@ typedef struct AudioVoice {
     uint32_t follow;  // the entity it rides, by id, or 0
     vec3 offset;      // in that entity's frame
     uint64_t started; // the order voices were started in, for stealing the oldest
-    float zone_gain;  // as a Sound's; a voice is seeded where it starts
 } AudioVoice;
+
+#define AUDIO_ZONE_NAME 32
+// A zone gain this close to its target is taken as there, so a settled sound is exactly it.
+#define AUDIO_ZONE_LANDED 1e-4f
+
+// The rooms and what passes between them (audio.h, "Zones").
+typedef struct AudioZones {
+    int count; // zones, the world included, so 1 when none was added
+    char names[AUDIO_ZONE_MAX][AUDIO_ZONE_NAME];
+    AABB boxes[AUDIO_ZONE_MAX][AUDIO_ZONE_BOXES];
+    int box_counts[AUDIO_ZONE_MAX];
+    int link_count;
+    AudioZone link_ends[AUDIO_ZONE_LINKS][2];
+    float link_through[AUDIO_ZONE_LINKS];
+    // The best path's gain between every pair of zones: 1 from a zone to itself, 0 where no
+    // chain of links joins two.
+    float path[AUDIO_ZONE_MAX][AUDIO_ZONE_MAX];
+} AudioZones;
 
 struct AudioSystem {
     ma_engine engine;
@@ -84,23 +101,53 @@ static void entity_point(const Entity* e, const vec3 local, vec3 out) {
     glm_mat4_mulv3(m, (float*)local, 1.0f, out);
 }
 
-// What a placed sound at `p` reaches the listener with: its zone's best path to the listener's.
-static float zone_target(const AudioSystem* audio, const vec3 p) {
-    return audio->zones.heard[audio->listener_zone][audio_zones_find(&audio->zones, p)];
+// The best path between every pair of zones, by Floyd-Warshall over the max-product semiring.
+// No `through` is above 1, so going round a cycle never improves a path and the closure is
+// exact. Two links between one pair -- a wall and a door through it -- count as the better.
+static void zones_solve(AudioZones* z) {
+    const int n = z->count;
+    for (int i = 0; i < n; i++)
+        for (int j = 0; j < n; j++)
+            z->path[i][j] = i == j ? 1.0f : 0.0f;
+    for (int l = 0; l < z->link_count; l++) {
+        const AudioZone a = z->link_ends[l][0], b = z->link_ends[l][1];
+        const float t = z->link_through[l];
+        if (t > z->path[a][b]) {
+            z->path[a][b] = t;
+            z->path[b][a] = t;
+        }
+    }
+    for (int k = 0; k < n; k++)
+        for (int i = 0; i < n; i++)
+            for (int j = 0; j < n; j++) {
+                const float via = z->path[i][k] * z->path[k][j];
+                if (via > z->path[i][j])
+                    z->path[i][j] = via;
+            }
 }
 
-// The zone's gain on a sound's own output, which the volume the app sets never touches: the two
-// multiply.
-static void zone_apply(ma_sound* sound, float gain) {
-    ma_node_set_output_bus_volume(sound, 0, gain);
+// The zone `p` is in: the last added whose boxes hold it, else the world.
+static AudioZone zone_find(const AudioZones* zones, const vec3 p) {
+    for (int z = zones->count - 1; z > (int)AUDIO_ZONE_WORLD; z--)
+        for (int i = 0; i < zones->box_counts[z]; i++)
+            if (aabb_dist_sq(&zones->boxes[z][i], p) == 0.0f)
+                return (AudioZone)z;
+    return AUDIO_ZONE_WORLD;
 }
 
-// A sound's zone gain eased toward its target by `k`, written to the sound.
-static void zone_ease(ma_sound* sound, float* gain, float k, const AudioSystem* audio) {
+// A placed sound's zone gain eased by `k` toward what its zone lets through to the listener's, 1
+// to land it there. The gain is the sound's output-bus volume, a stage the volume the app sets
+// never touches -- the two multiply -- so the sound itself holds it and it is read back here.
+static void zone_ease(const AudioSystem* audio, ma_sound* sound, float k) {
     const ma_vec3f at = ma_sound_get_position(sound);
-    const vec3 p = {at.x, at.y, at.z};
-    *gain += (zone_target(audio, p) - *gain) * k;
-    zone_apply(sound, *gain);
+    const AudioZone z = zone_find(&audio->zones, (vec3){at.x, at.y, at.z});
+    const float target = audio->zones.path[audio->listener_zone][z];
+    const float gain = ma_node_get_output_bus_volume(sound, 0);
+    float eased = gain + (target - gain) * k;
+    if (fabsf(target - eased) < AUDIO_ZONE_LANDED)
+        eased = target;
+    if (eased != gain)
+        ma_node_set_output_bus_volume(sound, 0, eased);
 }
 
 // MASTER routes to the engine endpoint (NULL group); the rest to their group.
@@ -161,7 +208,9 @@ AudioSystem* create_audio_system(bool headless) {
     audio->no_device = headless;
     for (int bus = AUDIO_BUS_MASTER; bus < AUDIO_BUS_COUNT; bus++)
         audio->volumes[bus] = 1.0f;
-    audio_zones_init(&audio->zones);
+    audio->zones.count = 1; // the world alone
+    strcpy(audio->zones.names[AUDIO_ZONE_WORLD], "world");
+    zones_solve(&audio->zones);
     audio->heard[AUDIO_ZONE_WORLD] = 1.0f; // the listener starts in the world, which hears itself
 
     ma_engine_config cfg = ma_engine_config_init();
@@ -254,7 +303,8 @@ static AudioVoice* take_voice(AudioSystem* audio) {
     return v;
 }
 
-static void place_voice(AudioVoice* v, const Entity* e, vec3 p) {
+static void place_voice(AudioVoice* v, const Entity* e) {
+    vec3 p = {0.0f, 0.0f, 0.0f};
     entity_point(e, v->offset, p);
     ma_sound_set_position(&v->sound, p[0], p[1], p[2]);
 }
@@ -278,11 +328,9 @@ bool audio_play_voice(AudioSystem* audio, const Sound* prototype, const AudioVoi
     v->follow = desc->follow ? desc->follow->id : 0;
     glm_vec3_copy((float*)desc->position, v->offset);
     ma_sound_set_volume(&v->sound, desc->volume > 0.0f ? desc->volume : 1.0f);
-    vec3 p = {0.0f, 0.0f, 0.0f};
-    place_voice(v, desc->follow, p);
+    place_voice(v, desc->follow);
     // Heard through its zone from the first sample, not faded in from whole.
-    v->zone_gain = zone_target(audio, p);
-    zone_apply(&v->sound, v->zone_gain);
+    zone_ease(audio, &v->sound, 1.0f);
     ma_sound_start(&v->sound);
     return true;
 }
@@ -422,8 +470,7 @@ void audio_sound_set_position(Sound* sound, vec3 world_pos) {
     // Heard through its zone from the moment it is placed, not faded in from whole.
     if (!sound->placed) {
         sound->placed = true;
-        sound->zone_gain = zone_target(sound->audio, world_pos);
-        zone_apply(&sound->sound, sound->zone_gain);
+        zone_ease(sound->audio, &sound->sound, 1.0f);
     }
 }
 
@@ -466,15 +513,15 @@ void audio_system_update(AudioSystem* audio, struct EntityManager* em, vec3 list
     // heard with, for an app asking about one it does not place. The first update takes every
     // gain outright, since until it the listener was nowhere -- the world, by default -- and a
     // game starting indoors would hear its rooms fade up.
-    audio->listener_zone = audio_zones_find(&audio->zones, listener_pos);
+    audio->listener_zone = zone_find(&audio->zones, listener_pos);
     const float k = audio->updated ? 1.0f - expf(-fmaxf(dt, 0.0f) / AUDIO_ZONE_FADE) : 1.0f;
     for (int z = 0; z < audio->zones.count; z++)
-        audio->heard[z] += (audio->zones.heard[audio->listener_zone][z] - audio->heard[z]) * k;
+        audio->heard[z] += (audio->zones.path[audio->listener_zone][z] - audio->heard[z]) * k;
     audio->updated = true;
     for (size_t i = 0; i < audio->sound_count; i++) {
         Sound* s = audio->sounds[i];
         if (s->placed)
-            zone_ease(&s->sound, &s->zone_gain, k, audio);
+            zone_ease(audio, &s->sound, k);
     }
 
     // Voices are reaped here, on the main thread, rather than from miniaudio's end callback,
@@ -489,29 +536,74 @@ void audio_system_update(AudioSystem* audio, struct EntityManager* em, vec3 list
             continue;
         }
         const Entity* e = v->follow && em ? find_entity_by_id(em, v->follow) : NULL;
-        vec3 p = {0.0f, 0.0f, 0.0f};
         if (e)
-            place_voice(v, e, p);
-        zone_ease(&v->sound, &v->zone_gain, k, audio);
+            place_voice(v, e);
+        zone_ease(audio, &v->sound, k);
     }
 }
 
 AudioZone audio_zone_add(AudioSystem* audio, const AudioZoneDesc* desc) {
     if (!audio)
-        return AUDIO_ZONE_WORLD;
-    const AudioZone z = audio_zones_add(&audio->zones, desc);
-    // A new zone is heard as it is from the start, as a placed sound is.
-    audio->heard[z] = audio->zones.heard[audio->listener_zone][z];
+        return AUDIO_ZONE_NONE;
+    AudioZones* zones = &audio->zones;
+    const char* name = desc && desc->name ? desc->name : "unnamed";
+    if (!desc || !desc->boxes || desc->box_count <= 0 || desc->box_count > AUDIO_ZONE_BOXES) {
+        log_error("audio: zone '%s' wants 1 to %d boxes; not added", name, AUDIO_ZONE_BOXES);
+        return AUDIO_ZONE_NONE;
+    }
+    if (zones->count >= AUDIO_ZONE_MAX) {
+        log_error("audio: zone '%s' past the %d there is room for; not added", name,
+                  AUDIO_ZONE_MAX - 1);
+        return AUDIO_ZONE_NONE;
+    }
+    const AudioZone z = (AudioZone)zones->count++;
+    strncpy(zones->names[z], name, AUDIO_ZONE_NAME - 1);
+    memcpy(zones->boxes[z], desc->boxes, (size_t)desc->box_count * sizeof(AABB));
+    zones->box_counts[z] = desc->box_count;
+    zones_solve(zones);
     return z;
 }
 
 AudioZoneLink audio_zone_link(AudioSystem* audio, AudioZone a, AudioZone b, float through) {
-    return audio ? audio_zones_link(&audio->zones, a, b, through) : AUDIO_ZONE_NO_LINK;
+    if (!audio)
+        return AUDIO_ZONE_NO_LINK;
+    AudioZones* zones = &audio->zones;
+    if (a >= (AudioZone)zones->count || b >= (AudioZone)zones->count) {
+        log_error("audio: a link with an end that is not a zone (%s); not linked",
+                  a == AUDIO_ZONE_NONE || b == AUDIO_ZONE_NONE ? "one refused" : "out of range");
+        return AUDIO_ZONE_NO_LINK;
+    }
+    if (a == b) {
+        log_error("audio: a link from '%s' to itself; not linked", zones->names[a]);
+        return AUDIO_ZONE_NO_LINK;
+    }
+    if (zones->link_count >= AUDIO_ZONE_LINKS) {
+        log_error("audio: a link from '%s' to '%s' past the %d there is room for", zones->names[a],
+                  zones->names[b], AUDIO_ZONE_LINKS);
+        return AUDIO_ZONE_NO_LINK;
+    }
+    const AudioZoneLink l = (AudioZoneLink)zones->link_count++;
+    zones->link_ends[l][0] = a;
+    zones->link_ends[l][1] = b;
+    zones->link_through[l] = glm_clamp(through, 0.0f, 1.0f);
+    zones_solve(zones);
+    return l;
 }
 
 void audio_zone_link_set(AudioSystem* audio, AudioZoneLink link, float through) {
-    if (audio && !audio_zones_link_set(&audio->zones, link, through))
+    if (!audio || link == AUDIO_ZONE_NO_LINK)
+        return;
+    AudioZones* zones = &audio->zones;
+    if (link >= (AudioZoneLink)zones->link_count) {
         log_error("audio: no link %u to set", link);
+        return;
+    }
+    // Only a change is solved again: a door is set every frame and swings in few of them.
+    const float t = glm_clamp(through, 0.0f, 1.0f);
+    if (zones->link_through[link] != t) {
+        zones->link_through[link] = t;
+        zones_solve(zones);
+    }
 }
 
 float audio_zone_heard(const AudioSystem* audio, AudioZone z) {

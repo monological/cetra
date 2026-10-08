@@ -19,9 +19,10 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <cglm/types.h>
 
-#include "audio_zones.h"
+#include "../aabb.h"
 
 struct EntityManager;
 struct Entity;
@@ -103,22 +104,55 @@ void free_sound(Sound* sound);
 // Once per rendered frame: point the listener along the camera pose, push each AUDIO_SOURCE
 // sound's position from its entity, carry the voices that follow one, reap the voices that have
 // played out (em may be NULL when there are no entities), and ease every placed sound toward what
-// its zone lets through to the listener's over `dt` seconds.
+// its zone lets through to the listener's over `dt` seconds. The first call takes every gain
+// outright, whatever `dt`: until it the listener was nowhere.
 void audio_system_update(AudioSystem* audio, struct EntityManager* em, vec3 listener_pos,
                          vec3 forward, vec3 up, float dt);
 
-// Zones (spec 13.33, audio_zones.h): a placed sound -- one positioned by the app, an AUDIO_SOURCE,
-// a voice -- is heard through every link between its zone and the listener's, along the best
-// path, eased over AUDIO_ZONE_FADE seconds as either side crosses a boundary. That gain is the
-// sound's own, under the volume the app sets, so neither overwrites the other. A sound never
-// placed is heard whole, and with no zone added every sound is.
-#define AUDIO_ZONE_FADE 0.4f
+/*
+ * Zones (spec 13.33): what lets a sound through on its way from where it is to where it is
+ * heard. A ZONE is a named set of boxes; a LINK joins two zones, or a zone and the world outside
+ * every zone, with a `through` -- the share of a sound that crosses it, a wall's, a floor's, a
+ * door's as it opens. A placed sound -- one positioned by the app, an AUDIO_SOURCE, a voice -- is
+ * heard along the BEST PATH from its zone to the listener's, the largest product of `through`
+ * along any chain of links, eased over AUDIO_ZONE_FADE seconds as either side crosses a
+ * boundary. That gain is the sound's own, under the volume the app sets, so neither overwrites
+ * the other. A sound never placed is heard whole, and with no zone added every sound is.
+ *
+ * A graph and not a nesting of boxes, because a storey is the outdoors' neighbour and the
+ * neighbour of the storey under it at once: nested, upstairs would reach the outdoors through
+ * the floor as well as its own walls. A point belongs to the zone added LAST among those whose
+ * boxes hold it, so an inner room is added after the one round it and carves itself out.
+ */
+#define AUDIO_ZONE_FADE    0.4f
+#define AUDIO_ZONE_WORLD   0u         // outside every zone
+#define AUDIO_ZONE_NONE    UINT32_MAX // a zone that was refused
+#define AUDIO_ZONE_NO_LINK UINT32_MAX // a link that was refused
+#define AUDIO_ZONE_MAX     16         // the world included
+#define AUDIO_ZONE_BOXES   8
+#define AUDIO_ZONE_LINKS   32
+
+typedef uint32_t AudioZone;
+typedef uint32_t AudioZoneLink;
+
+typedef struct AudioZoneDesc {
+    const char* name;
+    const AABB* boxes; // world space; copied
+    int box_count;
+} AudioZoneDesc;
+
+// A zone; AUDIO_ZONE_NONE, logged by name, when it has no box or there is no room for it. A
+// link with a refused end is refused in turn, so a refused room never stands in for another.
 AudioZone audio_zone_add(AudioSystem* audio, const AudioZoneDesc* desc);
+// A link between two different zones, `through` clamped to 0..1; AUDIO_ZONE_NO_LINK, logged,
+// when an end is not a zone or there is no room for it.
 AudioZoneLink audio_zone_link(AudioSystem* audio, AudioZone a, AudioZone b, float through);
-// A link's `through` changed: a door swinging.
+// A link's `through` changed, clamped to 0..1: a door swinging. A refused link is ignored, its
+// refusal having been logged where it was made.
 void audio_zone_link_set(AudioSystem* audio, AudioZoneLink link, float through);
 // What a sound in zone `z` reaches the listener with, eased as a placed sound's gain is: for an
-// app shaping a sound it does not place -- a bed laid over the listener, the outdoors' wind.
+// app shaping a sound it does not place -- a bed laid over the listener, the outdoors' wind. 1
+// for a zone that is not one, which nothing stands between.
 float audio_zone_heard(const AudioSystem* audio, AudioZone z);
 
 // Headless (noDevice) only: render `frames` interleaved stereo frames (2 floats
