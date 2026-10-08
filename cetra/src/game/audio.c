@@ -10,6 +10,7 @@
 #include "../util.h"
 #include "../ext/log.h"
 
+#include <math.h>
 #include <stdlib.h>
 
 #define AUDIO_OFFLINE_SAMPLE_RATE 48000
@@ -35,6 +36,8 @@ struct Sound {
     AudioBus bus;       // what a voice copied from it is routed through
     bool streamed;      // read from the file as it plays, so nothing decoded to copy
     AudioSystem* audio; // borrowed; the tone stop-time and free_sound reach the engine here
+    bool placed;        // positioned by the app or an AUDIO_SOURCE, so heard through zones
+    float zone_gain;    // what its zone lets through to the listener's, eased once placed
 };
 
 // One pooled voice: a copy of a decoded sound, playing once and reaped at its end.
@@ -44,6 +47,7 @@ typedef struct AudioVoice {
     uint32_t follow;  // the entity it rides, by id, or 0
     vec3 offset;      // in that entity's frame
     uint64_t started; // the order voices were started in, for stealing the oldest
+    float zone_gain;  // as a Sound's; a voice is seeded where it starts
 } AudioVoice;
 
 struct AudioSystem {
@@ -60,6 +64,10 @@ struct AudioSystem {
     size_t sound_cap;
     AudioVoice voices[AUDIO_VOICE_MAX];
     uint64_t voices_started;
+    AudioZones zones;
+    AudioZone listener_zone;     // where the listener was at the last update
+    float heard[AUDIO_ZONE_MAX]; // each zone's best path to the listener's, eased
+    bool heard_seeded;           // heard[] has been taken outright once
 };
 
 // The AUDIO_SOURCE component payload: a Sound placed every frame at an offset in its entity's
@@ -74,6 +82,25 @@ static void entity_point(const Entity* e, const vec3 local, vec3 out) {
     mat4 m = GLM_MAT4_IDENTITY_INIT;
     entity_get_transform_matrix(e, m);
     glm_mat4_mulv3(m, (float*)local, 1.0f, out);
+}
+
+// What a placed sound at `p` reaches the listener with: its zone's best path to the listener's.
+static float zone_target(const AudioSystem* audio, const vec3 p) {
+    return audio->zones.heard[audio->listener_zone][audio_zones_find(&audio->zones, p)];
+}
+
+// The zone's gain on a sound's own output, which the volume the app sets never touches: the two
+// multiply.
+static void zone_apply(ma_sound* sound, float gain) {
+    ma_node_set_output_bus_volume(sound, 0, gain);
+}
+
+// A sound's zone gain eased toward its target by `k`, written to the sound.
+static void zone_ease(ma_sound* sound, float* gain, float k, const AudioSystem* audio) {
+    const ma_vec3f at = ma_sound_get_position(sound);
+    const vec3 p = {at.x, at.y, at.z};
+    *gain += (zone_target(audio, p) - *gain) * k;
+    zone_apply(sound, *gain);
 }
 
 // MASTER routes to the engine endpoint (NULL group); the rest to their group.
@@ -134,6 +161,8 @@ AudioSystem* create_audio_system(bool headless) {
     audio->no_device = headless;
     for (int bus = AUDIO_BUS_MASTER; bus < AUDIO_BUS_COUNT; bus++)
         audio->volumes[bus] = 1.0f;
+    audio_zones_init(&audio->zones);
+    audio->heard[AUDIO_ZONE_WORLD] = 1.0f; // the listener starts in the world, which hears itself
 
     ma_engine_config cfg = ma_engine_config_init();
     if (audio->no_device) {
@@ -225,8 +254,7 @@ static AudioVoice* take_voice(AudioSystem* audio) {
     return v;
 }
 
-static void place_voice(AudioVoice* v, const Entity* e) {
-    vec3 p = {0.0f, 0.0f, 0.0f};
+static void place_voice(AudioVoice* v, const Entity* e, vec3 p) {
     entity_point(e, v->offset, p);
     ma_sound_set_position(&v->sound, p[0], p[1], p[2]);
 }
@@ -250,7 +278,11 @@ bool audio_play_voice(AudioSystem* audio, const Sound* prototype, const AudioVoi
     v->follow = desc->follow ? desc->follow->id : 0;
     glm_vec3_copy((float*)desc->position, v->offset);
     ma_sound_set_volume(&v->sound, desc->volume > 0.0f ? desc->volume : 1.0f);
-    place_voice(v, desc->follow);
+    vec3 p = {0.0f, 0.0f, 0.0f};
+    place_voice(v, desc->follow, p);
+    // Heard through its zone from the first sample, not faded in from whole.
+    v->zone_gain = zone_target(audio, p);
+    zone_apply(&v->sound, v->zone_gain);
     ma_sound_start(&v->sound);
     return true;
 }
@@ -387,6 +419,12 @@ void audio_sound_set_position(Sound* sound, vec3 world_pos) {
         return;
     ma_sound_set_spatialization_enabled(&sound->sound, MA_TRUE);
     ma_sound_set_position(&sound->sound, world_pos[0], world_pos[1], world_pos[2]);
+    // Heard through its zone from the moment it is placed, not faded in from whole.
+    if (!sound->placed) {
+        sound->placed = true;
+        sound->zone_gain = zone_target(sound->audio, world_pos);
+        zone_apply(&sound->sound, sound->zone_gain);
+    }
 }
 
 void free_sound(Sound* sound) {
@@ -413,7 +451,7 @@ static void audio_sync_source_cb(Entity* entity, void* user_data) {
 }
 
 void audio_system_update(AudioSystem* audio, struct EntityManager* em, vec3 listener_pos,
-                         vec3 forward, vec3 up) {
+                         vec3 forward, vec3 up, float dt) {
     if (!audio)
         return;
     ma_engine_listener_set_position(&audio->engine, 0, listener_pos[0], listener_pos[1],
@@ -423,6 +461,23 @@ void audio_system_update(AudioSystem* audio, struct EntityManager* em, vec3 list
     if (em)
         entity_manager_foreach_with(em, COMPONENT_BIT(COMPONENT_AUDIO_SOURCE), audio_sync_source_cb,
                                     NULL);
+
+    // Where the listener is now, and every zone's path to it, eased: what a sound in each is
+    // heard with, for an app asking about one it does not place.
+    audio->listener_zone = audio_zones_find(&audio->zones, listener_pos);
+    const float k = 1.0f - expf(-fmaxf(dt, 0.0f) / AUDIO_ZONE_FADE);
+    for (int z = 0; z < audio->zones.count; z++) {
+        const float target = audio->zones.heard[audio->listener_zone][z];
+        audio->heard[z] =
+            audio->heard_seeded ? audio->heard[z] + (target - audio->heard[z]) * k : target;
+    }
+    audio->heard_seeded = true;
+    for (size_t i = 0; i < audio->sound_count; i++) {
+        Sound* s = audio->sounds[i];
+        if (s->placed)
+            zone_ease(&s->sound, &s->zone_gain, k, audio);
+    }
+
     // Voices are reaped here, on the main thread, rather than from miniaudio's end callback,
     // which runs on the mixing thread and may not uninit the sound it is called for. A voice
     // whose entity has gone stays where it last was.
@@ -435,9 +490,33 @@ void audio_system_update(AudioSystem* audio, struct EntityManager* em, vec3 list
             continue;
         }
         const Entity* e = v->follow && em ? find_entity_by_id(em, v->follow) : NULL;
+        vec3 p = {0.0f, 0.0f, 0.0f};
         if (e)
-            place_voice(v, e);
+            place_voice(v, e, p);
+        zone_ease(&v->sound, &v->zone_gain, k, audio);
     }
+}
+
+AudioZone audio_zone_add(AudioSystem* audio, const AudioZoneDesc* desc) {
+    if (!audio)
+        return AUDIO_ZONE_WORLD;
+    const AudioZone z = audio_zones_add(&audio->zones, desc);
+    // A new zone is heard as it is from the start, as a placed sound is.
+    audio->heard[z] = audio->zones.heard[audio->listener_zone][z];
+    return z;
+}
+
+AudioZoneLink audio_zone_link(AudioSystem* audio, AudioZone a, AudioZone b, float through) {
+    return audio ? audio_zones_link(&audio->zones, a, b, through) : AUDIO_ZONE_NO_LINK;
+}
+
+void audio_zone_link_set(AudioSystem* audio, AudioZoneLink link, float through) {
+    if (audio && !audio_zones_link_set(&audio->zones, link, through))
+        log_error("audio: no link %u to set", link);
+}
+
+float audio_zone_heard(const AudioSystem* audio, AudioZone z) {
+    return audio && z < (AudioZone)audio->zones.count ? audio->heard[z] : 1.0f;
 }
 
 size_t audio_system_read_pcm(AudioSystem* audio, float* out, size_t frames) {
