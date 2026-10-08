@@ -246,7 +246,9 @@ static uint8_t select_lod(const Mesh* mesh, const SceneNode* node, const LodSele
             return 0;
         projected = radius / distance;
     }
-    projected *= lod->bias > 0.0f ? lod->bias : 1.0f;
+    // One factor, so a scale of 1 multiplies by exactly the bias it always did.
+    projected *=
+        (lod->bias > 0.0f ? lod->bias : 1.0f) * (mesh->lod_scale > 0.0f ? mesh->lod_scale : 1.0f);
     int level = 0;
     while (level < CETRA_LOD_MAX - 1 && projected < LOD_SWITCH[level])
         level++;
