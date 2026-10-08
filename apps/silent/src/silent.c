@@ -628,33 +628,50 @@ static const Door* hung_door(int i) {
 }
 
 // A seam of on_init (spec 13.34): the loading screen moves, and under --startup-ms where loading's
-// time goes is said as a startup-ms row, the time since the seam before.
+// time goes is said as a startup-ms row, the time since the seam before and the longest the screen
+// stood still in it (spec 13.39).
 static double g_load_mark, g_settle_start;
+static double g_still_worst;   // ms, the longest the loading screen stood still, under --startup-ms
+static char g_still_after[32]; // the row that ended it
+static double still_since_asked(Engine* engine, const char* site) {
+    const double ms = engine_loading_screen_longest_wait(engine) * 1000.0;
+    if (ms > g_still_worst) {
+        g_still_worst = ms;
+        snprintf(g_still_after, sizeof(g_still_after), "%s", site);
+    }
+    return ms;
+}
+
 static void load_seam(Engine* engine, const char* site) {
     engine_draw_loading_screen(engine);
     const double now = glfwGetTime();
     if (g_args.startup_ms)
-        printf("startup-ms site=%s ms=%.1f\n", site, (now - g_load_mark) * 1000.0);
+        printf("startup-ms site=%s ms=%.1f still=%.1f\n", site, (now - g_load_mark) * 1000.0,
+               still_since_asked(engine, site));
     g_load_mark = now;
 }
 
 // Under --startup-ms, the frames while the view is held, each the time since the last: the first
 // few by name, then the slowest; the whole wait once the lighting is in, and once the view comes
-// up, both from the end of on_init.
-static void trace_settling(const Engine* engine, bool lit, bool up) {
+// up, both from the end of on_init, with the longest the loading screen stood still in all of it.
+static void trace_settling(Engine* engine, bool lit, bool up) {
     static double worst;
     static bool lit_said, up_said;
     const double now = glfwGetTime();
     if (up) {
         if (!up_said)
-            printf("startup-ms site=up ms=%.1f frames=%zu\n", (now - g_settle_start) * 1000.0,
-                   engine->total_frames);
+            printf("startup-ms site=up ms=%.1f frames=%zu still-worst=%.1f after=%s\n",
+                   (now - g_settle_start) * 1000.0, engine->total_frames, g_still_worst,
+                   g_still_after);
         up_said = true;
         return;
     }
+    char site[32];
+    snprintf(site, sizeof(site), "frame%zu", engine->total_frames);
+    const double still = still_since_asked(engine, site);
     const double ms = (now - g_load_mark) * 1000.0;
     if (engine->total_frames <= 3)
-        printf("startup-ms site=frame%zu ms=%.1f\n", engine->total_frames, ms);
+        printf("startup-ms site=%s ms=%.1f still=%.1f\n", site, ms, still);
     else if (ms > worst)
         worst = ms;
     g_load_mark = now;

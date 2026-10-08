@@ -48,4 +48,10 @@ bool engine_loading_screen_shown(const Engine* engine);
 // True while PLAY is on the screen and it has not been hidden: when a press means "play".
 bool engine_loading_screen_prompting(const Engine* engine);
 
+// The longest wall-clock time, in seconds, between two chances the screen had to draw -- a call to
+// engine_draw_loading_screen, a draw between the pieces of a long frame, or a frame -- since it was
+// shown or this was last asked, which starts the count again; 0 when it is not shown. Counted
+// headless too, where only frames draw it, so a headless run says how long a window would freeze.
+double engine_loading_screen_longest_wait(Engine* engine);
+
 #endif
