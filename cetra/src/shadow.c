@@ -922,6 +922,11 @@ static bool caster_set_wants_motion(const ShadowSystem* ss, ShadowCasterSet set,
     }
 }
 
+// Whether `set` draws `item`, by its lane and flags and by how it moves.
+static bool caster_set_takes(const ShadowSystem* ss, ShadowCasterSet set, const DrawItem* item) {
+    return caster_set_wants(set, item->lane, item->flags) && caster_set_wants_motion(ss, set, item);
+}
+
 // Whether two items belong in one span: everything draw_run_key_equal wants
 // EXCEPT the level, which the bucket pass sorts within a span rather than
 // splitting on. Derived from that function by construction -- temporarily equal
@@ -1009,16 +1014,15 @@ static size_t _build_caster_order(ShadowSystem* ss, const DrawList* list, Shadow
         ss->caster_order_alloc = want;
     }
 
-    // The movers a face draws over its copy were listed this pass by tiles_note_changes, in list
-    // order; every other set looks at the whole list.
-    const bool listed = set == SHADOW_CASTERS_KEPT_MOVERS;
+    // The movers a face draws over its copy, in list order, where this pass has listed them;
+    // every other set, and a pass that has not, looks at the whole list.
+    const bool listed = set == SHADOW_CASTERS_KEPT_MOVERS && ss->tile_mover_list == list;
     const size_t scan = listed ? ss->tile_mover_item_count : list->count;
     size_t n = 0;
     for (size_t s = 0; s < scan; ++s) {
         const size_t i = listed ? ss->tile_mover_items[s] : s;
         const DrawItem* item = &list->items[i];
-        if (!caster_set_wants(set, item->lane, item->flags) ||
-            !caster_set_wants_motion(ss, set, item))
+        if (!listed && !caster_set_takes(ss, set, item))
             continue;
         if (stats)
             stats->meshes_seen++;
@@ -1982,25 +1986,20 @@ static void tiles_seen_record(ShadowSystem* ss, const DrawList* list) {
     ss->tile_seen_count = count;
 }
 
-// List the items every face drawn over its copy takes, through the same two tests, once the movers
-// are settled. Each such face used to walk the whole list for them -- a few among thousands, once
-// a face and again in every depth pass of the frame, the captures' included. On out of memory
-// nothing is listed, and the movers cast nothing over the copies.
+// List the items every face drawn over its copy takes, once the movers are settled, so a face
+// reads the few it draws rather than asking the whole list. Unlisted on out of memory, which
+// leaves each face asking the whole list.
 static void tiles_list_mover_items(ShadowSystem* ss, const DrawList* list) {
     const size_t count = list ? list->count : 0;
     ss->tile_mover_item_count = 0;
-    if (!grow_array((void**)&ss->tile_mover_items, &ss->tile_mover_item_capacity, count,
-                    sizeof(size_t), 64)) {
-        log_error("Shadow: could not list %zu casters; moving casters cast nothing this pass",
-                  count);
+    if (!list || !grow_array((void**)&ss->tile_mover_items, &ss->tile_mover_item_capacity, count,
+                             sizeof(size_t), 64))
         return;
-    }
     for (size_t i = 0; i < count; ++i) {
-        const DrawItem* item = &list->items[i];
-        if (caster_set_wants(SHADOW_CASTERS_KEPT_MOVERS, item->lane, item->flags) &&
-            caster_set_wants_motion(ss, SHADOW_CASTERS_KEPT_MOVERS, item))
+        if (caster_set_takes(ss, SHADOW_CASTERS_KEPT_MOVERS, &list->items[i]))
             ss->tile_mover_items[ss->tile_mover_item_count++] = i;
     }
+    ss->tile_mover_list = list;
 }
 
 // Whether the list holds the items the kept faces last saw, each where it was.
@@ -2890,6 +2889,7 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     ss->tile_faces_drawn = 0;
     ss->mover_faces_copied = 0;
     ss->mover_faces_whole = 0;
+    ss->tile_mover_list = NULL;
     int punctual_needed = 0;
     const Light* pool_overflow = NULL;
     const Light* dir_overflow = NULL;
