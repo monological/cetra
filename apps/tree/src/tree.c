@@ -532,19 +532,19 @@ static void render_tree_gui(const Engine* engine, Scene* scene) {
         igSliderInt("Seed", &params.seed, 0, 9999, "%d", 0);
 
         igSeparatorText("Structure");
-        igSliderInt("Max Depth", &params.max_depth, 1, 6, "%d", 0);
-        igSliderInt("Branches", &params.branches_per_node, 1, 5, "%d", 0);
-        igSliderFloat("Laterals", &params.lateral_density, 0.0f, 3.0f, "%.2f", 0);
+        igSliderInt("Max Depth", &params.recursive.max_depth, 1, 6, "%d", 0);
+        igSliderInt("Branches", &params.recursive.branches_per_node, 1, 5, "%d", 0);
+        igSliderFloat("Laterals", &params.recursive.lateral_density, 0.0f, 3.0f, "%.2f", 0);
 
         igSeparatorText("Dimensions");
         igSliderFloat("Trunk Len", &params.trunk_length, 10.0f, 200.0f, "%.1f", 0);
         igSliderFloat("Trunk Rad", &params.trunk_radius, 1.0f, 30.0f, "%.1f", 0);
-        igSliderFloat("Len Decay", &params.length_decay, 0.3f, 0.95f, "%.3f", 0);
-        igSliderFloat("Taper", &params.taper, 0.45f, 0.85f, "%.3f", 0);
-        igSliderFloat("Twig Scale", &params.twig_scale, 0.5f, 2.0f, "%.2f", 0);
+        igSliderFloat("Len Decay", &params.recursive.length_decay, 0.3f, 0.95f, "%.3f", 0);
+        igSliderFloat("Taper", &params.recursive.taper, 0.45f, 0.85f, "%.3f", 0);
+        igSliderFloat("Twig Scale", &params.recursive.twig_scale, 0.5f, 2.0f, "%.2f", 0);
 
         igSeparatorText("Angles");
-        igSliderFloat("Angle", &params.branch_angle, 5.0f, 90.0f, "%.1f", 0);
+        igSliderFloat("Angle", &params.recursive.branch_angle, 5.0f, 90.0f, "%.1f", 0);
         igSliderFloat("Variance", &params.angle_variance, 0.0f, 45.0f, "%.1f", 0);
         igSliderFloat("Twist", &params.twist, 0.0f, 180.0f, "%.1f", 0);
 
@@ -1095,7 +1095,7 @@ static bool parse_args(int argc, char** argv, TreeArgs* a) {
 static void tree_params_from_args(const TreeArgs* a, TreeParams* p) {
     tree_params_preset(p, a->preset, a->seed);
     if (a->irregularity >= 0.0f)
-        p->irregularity = a->irregularity;
+        p->excurrent.irregularity = a->irregularity;
 }
 
 /*

@@ -1598,20 +1598,20 @@ static void build_tree_prototypes(void) {
         tp.seed = 101 + i * 37;
         // Depth 3 rather than the tree app's 4: a hero tree is 107k triangles,
         // and two thousand of those would be 200M submitted before any culling.
-        tp.max_depth = 3;
+        tp.recursive.max_depth = 3;
         tp.trunk_length = 125.0f;
         tp.trunk_radius = 8.0f + (float)(i % 3);
-        tp.branches_per_node = 3;
-        tp.length_decay = 0.72f;
-        tp.taper = 0.62f;
-        tp.branch_angle = 34.0f + (float)(i % 3) * 6.0f;
+        tp.recursive.branches_per_node = 3;
+        tp.recursive.length_decay = 0.72f;
+        tp.recursive.taper = 0.62f;
+        tp.recursive.branch_angle = 34.0f + (float)(i % 3) * 6.0f;
         tp.angle_variance = 12.0f;
         tp.twist = 137.5f;
         tp.droop = 0.28f;
         tp.curve_noise = 0.35f;
         tp.phototropism = 0.45f;
-        tp.lateral_density = 0.8f;
-        tp.twig_scale = 0.75f;
+        tp.recursive.lateral_density = 0.8f;
+        tp.recursive.twig_scale = 0.75f;
         tp.show_leaves = 1;
         // The tree app's 15 is a hero-tree size -- a card is a sprig, and at
         // that scale a sprig is two metres across on a twelve-metre tree.

@@ -50,34 +50,19 @@ typedef enum TreeForm {
     TREE_FORM_EXCURRENT = 1, // a conifer: one trunk to the top, whorls of branches up it
 } TreeForm;
 
-// Live-tunable shape. Compared with memcmp to decide when to rebuild, so it
-// holds no pointers and must be zeroed before its first assignment.
-typedef struct TreeParams {
-    int seed;
-    int max_depth; // generations of tip splitting
-    float trunk_length;
-    float trunk_radius;
+// The recursive form's own shape: a trunk that splits at its tip, and every child again.
+typedef struct TreeRecursive {
+    int max_depth;         // generations of tip splitting
     int branches_per_node; // children at each tip split
     float length_decay;    // child length as a fraction of its parent's
     float taper;           // tip radius as a fraction of the branch's base
     float branch_angle;    // degrees a child tilts off its parent
-    float angle_variance;  // degrees of random tilt jitter
-    float twist;           // degrees of azimuth advance between children
-    float droop;           // 0..1 gravity bend, stronger on thin branches
-    float curve_noise;     // 0..1 directional wander along a spine
-    float phototropism;    // 0..1 upward re-straightening toward the tip
     float lateral_density; // side branches per 10 units of parent arc
     float twig_scale;      // length multiplier for the final generation
-    int show_leaves;
-    float leaf_size;
-    float leaf_density; // leaves per 10 units of leaf-bearing arc
+} TreeRecursive;
 
-    // The growth form, a TreeForm. The excurrent form reads the fields below, and these above
-    // under its own meaning: trunk_length and trunk_radius, twist (degrees each whorl turns
-    // from the last), angle_variance, droop and phototropism (a branch's sag and the turn up
-    // of its tip), curve_noise (the wander of trunk and branches), and the leaf fields (its
-    // needle sprays). The rest above are the recursive form's alone.
-    int form;
+// The excurrent form's own shape: a conifer, one trunk to the top and whorls of branches up it.
+typedef struct TreeExcurrent {
     float crown_base;    // the bare trunk under the lowest whorl, a fraction of its length
     float crown_width;   // the longest branch, a fraction of the trunk's length
     float crown_shape;   // exponent on the fall of branch length up the crown: 1 a cone
@@ -92,6 +77,29 @@ typedef struct TreeParams {
     // on one side, uneven and missing tiers and branches, gaps, and now and then a dead leader
     // that the branches under it have turned up to replace
     float irregularity;
+} TreeExcurrent;
+
+// Live-tunable shape. Compared with memcmp to decide when to rebuild, so it
+// holds no pointers and must be zeroed before its first assignment.
+//
+// The fields here are both forms', under each form's own meaning; `recursive` and `excurrent`
+// are read by their form alone.
+typedef struct TreeParams {
+    int seed;
+    int form; // a TreeForm
+    float trunk_length;
+    float trunk_radius;
+    float angle_variance; // degrees of random tilt jitter
+    // Degrees of azimuth advance between a tip's children, or between one whorl and the next.
+    float twist;
+    float droop;        // 0..1 gravity bend, stronger on thin branches
+    float curve_noise;  // 0..1 directional wander along a spine
+    float phototropism; // 0..1 upward re-straightening toward the tip
+    int show_leaves;
+    float leaf_size;
+    float leaf_density; // leaves, or needle sprays, per 10 units of leaf-bearing arc
+    TreeRecursive recursive;
+    TreeExcurrent excurrent;
 } TreeParams;
 
 // One sample along a branch spine.
