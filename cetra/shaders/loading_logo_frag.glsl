@@ -208,8 +208,10 @@ void main()
     }
 
     // CETRA: each letter's plane turned about its upright axis, met by this pixel's ray from the
-    // eye. Gathered, then drawn back to front.
-    vec3 eye = vec3(0.0, 0.0, EYE_D);
+    // eye. Gathered, then drawn back to front. The eye is level with the middle of the letters, so
+    // a turning letter is seen straight on, its top and bottom running together alike; a point on
+    // the plane is where it was whatever the eye's height, so the settled title does not move.
+    vec3 eye = vec3(0.0, TITLE_Y + 0.5, EYE_D);
     vec3 ray = normalize(vec3(s, 0.0) - eye);
     float far[5];
     vec4 ink[5];
@@ -244,9 +246,10 @@ void main()
         if (p.x < -margin || p.x > w + margin + SHADOW_OFF.x || p.y < -margin + SHADOW_OFF.y || p.y > 1.0 + margin)
             continue;
 
-        // A pixel, on this plane: the eye's footprint grows with distance and stretches as the
-        // plane turns from it.
-        float aa = px * t / length(vec3(s, -EYE_D)) / max(-facing, 0.15);
+        // A pixel, on this plane: the picture's pixel as the eye sees it across, carried out to
+        // this plane and stretched as the plane turns from the ray. At rest the two planes are
+        // one and it is a picture pixel exactly.
+        float aa = px * t * -ray.z / length(vec3(s, 0.0) - eye) / max(-facing, 0.15);
         float d = glyph(id, p);
         far[i] = t;
         // Darker while it is turned from the eye, full as it comes round to face it.
