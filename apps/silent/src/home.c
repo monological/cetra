@@ -665,31 +665,16 @@ static void lantern(Kit* kit, Scene* scene, const Facade* s, float a, float y) {
 static void plant(Engine* engine, Scene* scene, const vec3 at) {
     ShaderProgram* pbr = engine_get_program(engine, CETRA_PROGRAM_PBR);
     enum { CELL = 128 };
-    unsigned char *albedo = NULL, *normal = NULL, *rough = NULL;
-    veg_leaf_cluster_maps(CELL * TG_LEAF_VARIANTS, CELL, &albedo, &normal, &rough);
+    BakedMaps maps = {.width = CELL * TG_LEAF_VARIANTS, .height = CELL, .albedo_channels = 4};
+    veg_leaf_cluster_maps(maps.width, maps.height, &maps.albedo, &maps.normal, &maps.rough);
     Material* leaf = create_material();
     leaf->name = safe_strdup("plant_leaf");
     glm_vec3_copy((vec3){0.42f, 0.55f, 0.3f}, leaf->albedo);
     leaf->roughness = 0.6f;
-    leaf->alpha_mode = ALPHA_MASK;
-    leaf->alphaCutoff = 0.4f;
-    leaf->doubleSided = true;
     material_set_program(leaf, pbr);
-    TextureDesc desc = texture_desc(true);
-    desc.coverage_cutoff = 0.4f;
-    if (albedo)
-        material_set_albedo_tex(
-            leaf, texture_load_memory_owned(scene->tex_pool, "plant_leaf_albedo", albedo,
-                                            CELL * TG_LEAF_VARIANTS, CELL, 4, desc));
-    if (normal)
-        material_set_normal_tex(
-            leaf, texture_load_memory_owned(
-                      scene->tex_pool, "plant_leaf_normal", normal, CELL * TG_LEAF_VARIANTS, CELL,
-                      3, (TextureDesc){.alpha = TEXTURE_ALPHA_DATA, .use = TEXTURE_USE_NORMAL}));
-    if (rough)
-        material_set_roughness_tex(
-            leaf, texture_load_memory_owned(scene->tex_pool, "plant_leaf_rough", rough,
-                                            CELL * TG_LEAF_VARIANTS, CELL, 3, texture_desc(false)));
+    TextureDesc albedo = texture_desc(true);
+    mats_cutout(leaf, 0.4f, &albedo);
+    mats_set_baked(leaf, scene, "plant_leaf", &maps, albedo);
     scene_add_material(scene, leaf);
     Material* stem = create_material();
     stem->name = safe_strdup("plant_stem");

@@ -10,7 +10,7 @@ struct Engine;
 
 #define TREE_MODELS 6
 
-// The dead trees' shared parts (spec 13.25), grown once: the bark they sway in, the same bark on
+// The dead trees' shared parts (spec 13.35), grown once: the bark they sway in, the same bark on
 // wood lying still, and the models, each at the generator's native size.
 typedef struct Trees {
     Material* bark;

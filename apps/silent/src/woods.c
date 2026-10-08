@@ -115,37 +115,20 @@ static float woods_depth(float x, float z) {
  * are.
  */
 static Material* needles_material(Scene* scene, ShaderProgram* program) {
-    const int w = NEEDLE_CELL * TG_LEAF_VARIANTS, h = NEEDLE_CELL;
-    const float cutoff = 0.4f;
     Material* m = create_material();
     m->name = safe_strdup("woods_needles");
     m->roughness = 1.0f;
-    m->alpha_mode = ALPHA_MASK;
-    m->alphaCutoff = cutoff;
-    m->doubleSided = true;
     m->foliage_shadows = 1;
     m->wind_mode = 2;
     m->wind_response = 0.6f;
     m->cached_shadow_wind = CACHED_SHADOW_WIND_REST;
     material_set_program(m, program);
-    unsigned char *albedo = NULL, *normal = NULL, *rough = NULL;
-    veg_needle_spray_maps(w, h, &albedo, &normal, &rough);
-    TextureDesc albedo_desc = texture_desc(true);
-    albedo_desc.coverage_cutoff = cutoff;
-    if (albedo)
-        material_set_albedo_tex(m,
-                                texture_load_memory_owned(scene->tex_pool, "woods_needles_albedo",
-                                                          albedo, w, h, 4, albedo_desc));
-    if (normal)
-        material_set_normal_tex(
-            m, texture_load_memory_owned(scene->tex_pool, "woods_needles_normal", normal, w, h, 3,
-                                         (TextureDesc){.is_srgb = false,
-                                                       .alpha = TEXTURE_ALPHA_DATA,
-                                                       .use = TEXTURE_USE_NORMAL}));
-    if (rough)
-        material_set_roughness_tex(m,
-                                   texture_load_memory_owned(scene->tex_pool, "woods_needles_rough",
-                                                             rough, w, h, 3, texture_desc(false)));
+    TextureDesc albedo = texture_desc(true);
+    mats_cutout(m, 0.4f, &albedo);
+    BakedMaps maps = {
+        .width = NEEDLE_CELL * TG_LEAF_VARIANTS, .height = NEEDLE_CELL, .albedo_channels = 4};
+    veg_needle_spray_maps(maps.width, maps.height, &maps.albedo, &maps.normal, &maps.rough);
+    mats_set_baked(m, scene, "woods_needles", &maps, albedo);
     scene_add_material(scene, m);
     return m;
 }

@@ -462,10 +462,9 @@ static const MatSpec SPECS[MAT_COUNT] = {
         {"joist", "old_wood_floor", {0.62f, 0.56f, 0.48f}, 1.0f, 0.0f, 1.5f, .grime = 0.6f},
     /*
      * The town's edges (spec 13.35). The retaining wall is poured against boards, which left
-     * their grain in it. None of these is grimed, and the scans carry their own dirt: grime cuts
-     * every face into 0.12 m cells, which multiplies a fence's hundreds of boards, and on the
-     * terrace's walls, a wall the kit takes as boxes, came to 139k vertices -- half of everything
-     * the town's edges added, drawn whole by every face of every capture.
+     * their grain in it. None of these is grimed, and the scans carry their own dirt: grime cuts a
+     * face into small cells, which over a fence's hundreds of boards and the terrace's long walls
+     * came to more vertices than everything else the town's edges added.
      *
      * The boards' and the blocks' scans are shot dark, about 0.06 linear, where weathered grey
      * wood and cinder block are nearer 0.2: their tints lift them there, and cool the boards'
@@ -532,6 +531,37 @@ static Texture* load(TexturePool* pool, const char* set, const char* map, Textur
     return texture_load_file(pool, file, desc);
 }
 
+void mats_cutout(Material* m, float cutoff, TextureDesc* albedo) {
+    m->alpha_mode = ALPHA_MASK;
+    m->alphaCutoff = cutoff;
+    m->doubleSided = true;
+    albedo->coverage_cutoff = cutoff;
+}
+
+void mats_set_baked(Material* m, Scene* scene, const char* name, const BakedMaps* maps,
+                    TextureDesc albedo) {
+    const TextureDesc normal = {
+        .is_srgb = false, .alpha = TEXTURE_ALPHA_DATA, .use = TEXTURE_USE_NORMAL};
+    char key[96];
+    if (maps->albedo) {
+        snprintf(key, sizeof(key), "%s_albedo", name);
+        material_set_albedo_tex(m, texture_load_memory_owned(scene->tex_pool, key, maps->albedo,
+                                                             maps->width, maps->height,
+                                                             maps->albedo_channels, albedo));
+    }
+    if (maps->normal) {
+        snprintf(key, sizeof(key), "%s_normal", name);
+        material_set_normal_tex(m, texture_load_memory_owned(scene->tex_pool, key, maps->normal,
+                                                             maps->width, maps->height, 3, normal));
+    }
+    if (maps->rough) {
+        snprintf(key, sizeof(key), "%s_rough", name);
+        material_set_roughness_tex(m, texture_load_memory_owned(scene->tex_pool, key, maps->rough,
+                                                                maps->width, maps->height, 3,
+                                                                texture_desc(false)));
+    }
+}
+
 _Static_assert(MAT_COUNT <= KIT_MAX_MATERIALS, "every MatId needs a kit slot");
 
 void mats_register(Kit* kit, Engine* engine, Scene* scene) {
@@ -550,12 +580,8 @@ void mats_register(Kit* kit, Engine* engine, Scene* scene) {
         m->metallic = s->metallic;
         material_set_program(m, pbr);
         TextureDesc albedo_desc = texture_desc(true);
-        if (s->cutout > 0.0f) {
-            m->alpha_mode = ALPHA_MASK;
-            m->alphaCutoff = s->cutout;
-            m->doubleSided = true;
-            albedo_desc.coverage_cutoff = s->cutout;
-        }
+        if (s->cutout > 0.0f)
+            mats_cutout(m, s->cutout, &albedo_desc);
         // The pool caches by path, so a set two materials share loads once.
         if (s->set) {
             if (!s->surface_only)
