@@ -13,6 +13,7 @@ void kit_init(Kit* kit, Scene* scene, EntityManager* em, PhysicsWorld* physics) 
     kit->scene = scene;
     kit->em = em;
     kit->physics = physics;
+    kit->shadow_cell_scale = 1.0f;
 }
 
 void kit_init_beside(Kit* kit, Kit* first, const vec3 origin) {
@@ -1543,7 +1544,8 @@ void kit_frame_card_row(Kit* kit, const KitFrame* f, int mat, const float uv[4],
  * the camera draws each span the street and are in every face. Cutting those meshes instead
  * multiplied the camera's draws by the materials in a cell and slowed the frame (spec 13.16).
  * A triangle longer than KIT_CELL_LARGE on any axis goes to one large cell, where it cannot
- * stretch a cell's bounds across the street. Within a cell, triangles keep the order built.
+ * stretch a cell's bounds across the street. Within a cell, triangles keep the order built. The
+ * three sizes are each scaled by the kit's shadow_cell_scale.
  */
 #define KIT_CELL_XZ    3.0f
 #define KIT_CELL_Y     3.5f
@@ -1566,7 +1568,8 @@ static int cell_tri_order(const void* a, const void* b) {
     return x->tri < y->tri ? -1 : (x->tri > y->tri ? 1 : 0);
 }
 
-static int64_t cell_key(const MeshBuilder* mb, unsigned int tri) {
+static int64_t cell_key(const Kit* kit, const MeshBuilder* mb, unsigned int tri) {
+    const float s = kit->shadow_cell_scale;
     AABB bounds;
     aabb_empty(&bounds);
     vec3 c = {0.0f, 0.0f, 0.0f};
@@ -1577,12 +1580,12 @@ static int64_t cell_key(const MeshBuilder* mb, unsigned int tri) {
     }
     vec3 extent = {0.0f, 0.0f, 0.0f};
     glm_vec3_sub(bounds.max, bounds.min, extent);
-    if (glm_vec3_max(extent) > KIT_CELL_LARGE)
+    if (glm_vec3_max(extent) > KIT_CELL_LARGE * s)
         return INT64_MAX;
     glm_vec3_scale(c, 1.0f / 3.0f, c);
-    const int64_t ix = (int64_t)floorf(c[0] / KIT_CELL_XZ) + KIT_CELL_BIAS;
-    const int64_t iy = (int64_t)floorf(c[1] / KIT_CELL_Y) + KIT_CELL_BIAS;
-    const int64_t iz = (int64_t)floorf(c[2] / KIT_CELL_XZ) + KIT_CELL_BIAS;
+    const int64_t ix = (int64_t)floorf(c[0] / (KIT_CELL_XZ * s)) + KIT_CELL_BIAS;
+    const int64_t iy = (int64_t)floorf(c[1] / (KIT_CELL_Y * s)) + KIT_CELL_BIAS;
+    const int64_t iz = (int64_t)floorf(c[2] / (KIT_CELL_XZ * s)) + KIT_CELL_BIAS;
     return (ix << 42) | (iy << 21) | iz;
 }
 
@@ -1661,7 +1664,8 @@ static int shadow_cells(Kit* kit, SceneNode* node) {
         for (size_t v = 0; ok && v < mb->vcount; v++)
             remap[i][v] = -1;
         for (size_t t = 0; ok && t < mb->icount / 3; t++)
-            order[n++] = (CellTri){cell_key(mb, (unsigned int)t), (unsigned int)i, (unsigned int)t};
+            order[n++] =
+                (CellTri){cell_key(kit, mb, (unsigned int)t), (unsigned int)i, (unsigned int)t};
     }
     int cells = 0;
     Material* shape = ok ? create_material() : NULL;

@@ -73,6 +73,10 @@ typedef struct Kit {
     int shadow_cell_count; // and the shape-only meshes the shadows draw in their place
     bool warned_nonfinite;
     bool casts_nothing; // kit_finish builds no shadow cells, and no mesh it hands over casts
+    // The shadow cells' size, a multiple of kit.c's; kit_init sets 1. A kit of open ground takes
+    // larger ones: a small cell of it holds a few triangles, and every shadow view pays a draw for
+    // each cell in reach.
+    float shadow_cell_scale;
 
     // The edges water drips from in the rain (spec 13.12), in world space, for the rain to take.
     RainDripLine drips[RAIN_DRIP_MAX];
