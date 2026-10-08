@@ -79,7 +79,7 @@ typedef struct TreeParams {
     float branch_pitch;  // degrees below level the lowest branches leave the trunk at
     float spray_angle;   // degrees a needle spray leaves its branch at, in the branch's plane
     float dead_lower;    // the fraction of the crown, from the bottom, whose branches are dead
-    float dead_fraction; // the chance any other branch is dead or browning
+    float dead_fraction; // the chance a branch lower in the crown has died, bare or browned
     float snag;          // 0 a live leader; toward 1, the top broken off further down
     // 0 a tidy cone; toward 1 the knocks a tree takes in a wood: a kinked trunk, a crown fuller
     // on one side, uneven and missing tiers and branches, gaps, and now and then a dead leader
@@ -108,7 +108,7 @@ typedef struct Branch {
     bool is_terminal;   // no children: gets a pointed tip
     bool bears_leaves;
     int bark_segs; // ring segments; 0 = as many as the radius asks for
-    float vigor;   // 1 alive, 0 dead: what an excurrent branch's sprays are
+    float vigor;   // an excurrent branch's sprays: 1 green, 0 bare, between browned
 } Branch;
 
 typedef struct TreeSkeleton {

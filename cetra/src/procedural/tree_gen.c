@@ -661,11 +661,15 @@ static void grow_excurrent(TreeSkeleton* s, const TreeParams* p, TgRng* rng) {
                              tg_randf(rng, -0.35f, 0.35f) * (float)M_PI / (float)n;
             const float roll = tg_randf(rng, 0.0f, 1.0f);
             const float gone = tg_randf(rng, 0.0f, 1.0f);
+            // A branch in the shaded lower and middle crown may have died: most often it has lost
+            // its needles and stands bare and grey, and now and then it died lately and the
+            // whole branch has gone rust-brown at once. The upper crown is in the light and
+            // stays green.
             float vigor = 1.0f;
             if (zone_dead)
                 vigor = 0.0f;
-            else if (roll < p->dead_fraction)
-                vigor = roll < 0.5f * p->dead_fraction ? 0.0f : 0.5f;
+            else if (u < 0.65f && roll < p->dead_fraction)
+                vigor = roll < 0.6f * p->dead_fraction ? 0.0f : 0.5f;
             // Lost to a storm, a deer or the dark: a branch that is simply not there.
             if (gone < 0.15f * irr)
                 continue;
@@ -1105,11 +1109,12 @@ static bool mesh_sprays(const TreeSkeleton* skel, const TreeParams* p, Mesh* mes
             const float len = p->leaf_size * tg_randf(&rng, 0.75f, 1.2f) * (1.0f - 0.35f * t);
             const float width = len * 0.9f;
 
-            const float roll = tg_randf(&rng, 0.0f, 1.0f);
+            // A dead branch carries bare twigs, a lately dead one browns all along, and a live one
+            // is green.
             int cell;
             if (dead)
                 cell = TG_SPRAY_BARE_CELL;
-            else if (roll < (b->vigor < 1.0f ? 0.7f : 0.3f * p->dead_fraction))
+            else if (b->vigor < 1.0f)
                 cell = TG_SPRAY_LIVE_CELLS + (int)tg_randf(&rng, 0.0f, (float)TG_SPRAY_DEAD_CELLS);
             else
                 cell = (int)tg_randf(&rng, 0.0f, (float)TG_SPRAY_LIVE_CELLS);
