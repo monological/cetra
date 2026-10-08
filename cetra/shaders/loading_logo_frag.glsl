@@ -57,7 +57,7 @@ const float GLOW_A = 0.2;
 const float GLOW_REACH = 0.4;
 
 const int L_C = 0, L_E = 1, L_T = 2, L_R = 3, L_A = 4, L_N = 5, L_G = 6, L_I = 7;
-const float WIDTH[8] = float[8](0.854, 0.82, 0.8, 0.78, 1.0, 0.85, 1.0, 0.0);
+const float WIDTH[8] = float[8](0.854, 0.7, 0.8, 0.78, 1.0, 0.85, 1.0, 0.0);
 const int TITLE[5] = int[5](L_C, L_E, L_T, L_R, L_A);
 const int ENGINE[6] = int[6](L_E, L_N, L_G, L_I, L_N, L_E);
 
@@ -89,9 +89,14 @@ float glyph(int id, vec2 p)
     if (id == L_C)
         return arcDist(p, O, 0.5, Q, 2.0 * PI - Q);
     if (id == L_E) {
-        // The round E: its arms open wider than the C's, and its bar stops short of them.
-        const float W = 0.28 * PI;
-        return min(arcDist(p, O, 0.5, W, 2.0 * PI - W), segDist(p, vec2(0.0, 0.5), vec2(0.62, 0.5)));
+        // Square on the right, its left corners turned on arcs as the C beside it is.
+        const float K = 0.3;
+        float d = segDist(p, vec2(0.0, 0.5), vec2(0.58, 0.5));
+        d = min(d, segDist(p, vec2(0.0, K), vec2(0.0, 1.0 - K)));
+        d = min(d, arcDist(p, vec2(K, 1.0 - K), K, 0.5 * PI, PI));
+        d = min(d, arcDist(p, vec2(K, K), K, PI, 1.5 * PI));
+        d = min(d, segDist(p, vec2(K, 1.0), vec2(0.7, 1.0)));
+        return min(d, segDist(p, vec2(K, 0.0), vec2(0.7, 0.0)));
     }
     if (id == L_T)
         return min(segDist(p, vec2(0.0, 1.0), vec2(0.8, 1.0)), segDist(p, vec2(0.4, 1.0), vec2(0.4, 0.0)));
