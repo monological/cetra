@@ -12,10 +12,12 @@
 #define WIND_VOLUME   0.6f
 
 // What sound keeps crossing each kind of boundary: a house's outside walls, both houses alike,
-// and a front door in them standing open; the floor and the door between the home's hall and its
-// basement, shut and open; and the floor between the mansion's storeys.
+// and a front door in them standing open; an inside wall with an open doorway through it; the
+// floor and the door between the home's hall and its basement, shut and open; and the floor
+// between the mansion's storeys.
 #define WALL_THROUGH          0.3f
 #define FRONT_DOOR_THROUGH    0.6f
+#define DOORWAY_THROUGH       0.35f
 #define BASEMENT_THROUGH      0.4f
 #define BASEMENT_DOOR_THROUGH 0.8f
 #define STOREY_THROUGH        0.5f
@@ -46,15 +48,21 @@ static AABB mansion_box(float x0, float y0, float z0, float x1, float y1, float 
 }
 
 /*
- * The rooms. The home over its footprint, and its basement -- the cellar under it and the flight
- * down behind its door, so the door is the basement's boundary -- carved out of it. The mansion
- * over its footprint and its tower, and its upper storey -- the rooms over the front and the
- * study's bay in the tower -- carved out of it; the gallery stays the great hall's, open to it.
- * Each house reaches the outdoors through its walls, the upper storey included, rather than
- * through the storey under it.
+ * The rooms. The home over its footprint, which is its hall and everything shut; the living room
+ * and the kitchen, each off the hall through an open doorway; and its basement -- the cellar
+ * under it all and the flight down behind its door, so the door is the basement's boundary --
+ * each carved out of it. The mansion over its footprint and its tower, and its upper storey --
+ * the rooms over the front and the study's bay in the tower -- carved out of it; the gallery stays
+ * the great hall's, open to it. Every room with an outside wall reaches the outdoors through it,
+ * and a room over the basement reaches it through its own floor, rather than by way of a
+ * neighbour: a room is the outdoors' neighbour and the next room's at once.
  */
 static void rooms(Sounds* sounds, AudioSystem* audio) {
     const AABB home = {{DIG_X0, BASEMENT_Y, DIG_Z0}, {DIG_X1, ROOFS_Y, DIG_Z1}};
+    const AABB living = {{LIVING_IN_X0, SUBFLOOR_Y0, LIVING_IN_Z0},
+                         {LIVING_IN_X1, CEIL_Y, LIVING_IN_Z1}};
+    const AABB kitchen = {{HALL_X1 + 0.5f * INT_WALL, SUBFLOOR_Y0, BAND_Z0},
+                          {HOUSE_X1 - 0.5f * EXT_WALL, CEIL_Y, BAND_Z1}};
     const AABB cellar[2] = {
         {{CELLAR_X0, BASEMENT_Y, CELLAR_Z0}, {CELLAR_X1, SUBFLOOR_Y0, CELLAR_Z1}},
         {{CELLAR_X0, SUBFLOOR_Y0, STAIRWELL_Z0}, {HALL_X0 - 0.5f * INT_WALL, CEIL_Y, CELLAR_Z1}}};
@@ -68,11 +76,19 @@ static void rooms(Sounds* sounds, AudioSystem* audio) {
                     KITCHEN_BACK_Z),
         mansion_box(TOWER_X - t, CEIL_Y, TOWER_Z - t, TOWER_X + t, ROOFS_Y, TOWER_Z + t)};
     const AudioZone h = audio_zone_add(audio, &(AudioZoneDesc){"home", &home, 1});
+    const AudioZone l = audio_zone_add(audio, &(AudioZoneDesc){"living_room", &living, 1});
+    const AudioZone k = audio_zone_add(audio, &(AudioZoneDesc){"kitchen", &kitchen, 1});
     const AudioZone b = audio_zone_add(audio, &(AudioZoneDesc){"basement", cellar, 2});
     const AudioZone m = audio_zone_add(audio, &(AudioZoneDesc){"mansion", mansion, 2});
     const AudioZone u = audio_zone_add(audio, &(AudioZoneDesc){"mansion_up", upstairs, 2});
     sounds->home_door = audio_zone_link(audio, h, AUDIO_ZONE_WORLD, WALL_THROUGH);
     sounds->basement_door = audio_zone_link(audio, b, h, BASEMENT_THROUGH);
+    const AudioZone off_hall[2] = {l, k};
+    for (int i = 0; i < 2; i++) {
+        audio_zone_link(audio, off_hall[i], h, DOORWAY_THROUGH);
+        audio_zone_link(audio, off_hall[i], AUDIO_ZONE_WORLD, WALL_THROUGH);
+        audio_zone_link(audio, off_hall[i], b, BASEMENT_THROUGH);
+    }
     sounds->mansion_door = audio_zone_link(audio, m, AUDIO_ZONE_WORLD, WALL_THROUGH);
     audio_zone_link(audio, u, AUDIO_ZONE_WORLD, WALL_THROUGH);
     audio_zone_link(audio, u, m, STOREY_THROUGH);
