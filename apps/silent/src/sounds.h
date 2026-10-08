@@ -20,6 +20,7 @@ typedef struct Sounds {
     Sound* wind_outside;
     Sound* wind_inside;
     float inside; // 0..1, following the listener with a short lag
+    float below;  // 0..1, how far the listener is under the ground, in the basement (spec 13.31)
 } Sounds;
 
 // The loops, started, for a listener at `eye`. `audio` may be NULL.
@@ -36,6 +37,10 @@ float sounds_indoor_gain(const Sounds* sounds);
 // The same for a sound made at `source`, which is quieter again a storey away from the
 // listener, unless the listener stands in the great hall, which is open to the gallery.
 float sounds_gain_at(const Sounds* sounds, const vec3 listener, const vec3 source);
+
+// What reaches the listener of a sound made above the ground -- the house's rooms, the rain on
+// its roof -- through the floor overhead: 1 above it, less down in the basement.
+float sounds_overhead_gain(const Sounds* sounds);
 
 // A loop from a file, playing silent until its volume is set; NULL, with a line on stderr, when
 // it cannot be loaded, and NULL without audio.
