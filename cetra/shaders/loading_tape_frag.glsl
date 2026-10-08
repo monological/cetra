@@ -29,8 +29,9 @@ const float BAND_H = 0.07;
 const float JITTER = 0.0012;   // a line's wander
 const float TEAR_H = 0.035;    // the head-switching tear at the bottom
 const float STATIC = 0.05;  // the trace left once the picture locks, in display codes
-const float GLITCH_EVERY = 5.0; // seconds between tracking glitches, on average
+const float GLITCH_EVERY = 5.0;  // seconds between tracking glitches, on average
 const float GLITCH_LONG = 0.22;
+const float GLITCH_FIRST = 0.25; // the first, this long after the sparkle has gone
 // The tube's bloom: how much of the blurred picture is added over it.
 const float BLOOM = 0.6;
 
@@ -63,11 +64,13 @@ void main()
     float fadeDot = 1.0 - smoothstep(0.8, 1.0, off);
     uv = c + 0.5;
 
-    // A glitch now and then once the ident has played, never over it: a short burst where
-    // tracking is lost, its time drawn from the hash of its slot so a run repeats.
+    // A glitch just after the sparkle, the ident's last beat, then now and then, never over the
+    // ident: a short burst where tracking is lost, each later one's time drawn from the hash of
+    // its slot so a run repeats.
     float since = time - LOADING_IDENT_END;
     float slot = floor(since / GLITCH_EVERY);
-    float at = slot * GLITCH_EVERY + hash21(vec2(slot, 7.0), vec2(12.9898, 78.233)) * (GLITCH_EVERY - GLITCH_LONG);
+    float at = slot == 0.0 ? GLITCH_FIRST
+                           : slot * GLITCH_EVERY + hash21(vec2(slot, 7.0), vec2(12.9898, 78.233)) * (GLITCH_EVERY - GLITCH_LONG);
     float glitch = since > 0.0 ? smoothstep(0.0, 0.03, since - at) * (1.0 - smoothstep(GLITCH_LONG - 0.05, GLITCH_LONG, since - at)) : 0.0;
 
     // The tracking band rolling down, and the lines inside it torn sideways.
