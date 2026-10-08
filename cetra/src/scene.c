@@ -662,7 +662,7 @@ void scene_update_lighting(Scene* scene, struct Engine* engine) {
         return;
     shadow_tiles_update(scene->shadow_system, engine, scene);
     // One allowance for every capture the frame takes, the GI's and the probes' (spec 13.32).
-    CaptureBudget budget = {.ms = engine->capture_budget_ms};
+    CaptureBudget budget = {.ms = engine->capture_budget_ms, .engine = engine};
     gi_world_update(scene->gi, engine, scene, &budget);
     probe_set_update(scene->probe_set, engine, scene, &budget);
 }

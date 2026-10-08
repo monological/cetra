@@ -30,6 +30,7 @@
 #include "common.h"
 #include "engine.h"
 #include "engine_internal.h"
+#include "loading_screen.h"
 #include "ltc.h"
 #include "render.h"
 #include "profiler.h"
@@ -2045,6 +2046,7 @@ bool scene_capture_ready(const Engine* engine, const Scene* scene, SceneCaptureK
 // start must not count the GPU work of the frame before. It syncs only a frame that has a
 // capture to take.
 bool capture_budget_take(CaptureBudget* budget, bool first) {
+    engine_draw_loading_screen(budget->engine);
     if (budget->ms <= 0.0f)
         return true;
     if (!budget->started) {

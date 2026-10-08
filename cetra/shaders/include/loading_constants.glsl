@@ -29,5 +29,10 @@
 #define LOADING_SPARKLE_START (LOADING_SWEEP_START + LOADING_SWEEP_SECONDS - 0.1f)
 #define LOADING_SPARKLE_SECONDS 0.7f
 
-// The ident has played once the sparkle has gone.
-#define LOADING_IDENT_END (LOADING_SPARKLE_START + LOADING_SPARKLE_SECONDS)
+// The tape's glitch, the ident's last beat, a while after the sparkle has gone; the tape's later
+// glitches, at random, are as long.
+#define LOADING_GLITCH_START (LOADING_SPARKLE_START + LOADING_SPARKLE_SECONDS + 0.8f)
+#define LOADING_GLITCH_SECONDS 0.9f
+
+// The ident has played once the glitch has passed.
+#define LOADING_IDENT_END (LOADING_GLITCH_START + LOADING_GLITCH_SECONDS)

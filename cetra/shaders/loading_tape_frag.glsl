@@ -29,9 +29,7 @@ const float BAND_H = 0.07;
 const float JITTER = 0.0012;   // a line's wander
 const float TEAR_H = 0.035;    // the head-switching tear at the bottom
 const float STATIC = 0.05;  // the trace left once the picture locks, in display codes
-const float GLITCH_EVERY = 5.0;  // seconds between tracking glitches, on average
-const float GLITCH_LONG = 0.9;
-const float GLITCH_FIRST = 0.8;  // the first, this long after the sparkle has gone
+const float GLITCH_EVERY = 5.0; // seconds between the later tracking glitches, on average
 // What a glitch does to the picture, in picture widths: it LEANS, its top thrown one way while its
 // bottom goes the other, slabs of its lines TEAR sideways, and the whole of it JERKS -- each a new
 // random amount GLITCH_STEPS times a second, held between, since a tape losing its tracking
@@ -74,17 +72,20 @@ void main()
     float fadeDot = 1.0 - smoothstep(0.8, 1.0, off);
     uv = c + 0.5;
 
-    // A glitch after the sparkle, the ident's last beat, then now and then, never over the ident:
-    // a burst where tracking is lost, each later one's time drawn from the hash of its slot so a
-    // run repeats. It comes on hard and lets go more slowly.
-    float since = time - LOADING_IDENT_END;
-    float slot = floor(since / GLITCH_EVERY);
-    float at = slot == 0.0 ? GLITCH_FIRST
-                           : slot * GLITCH_EVERY + hash21(vec2(slot, 7.0), vec2(12.9898, 78.233)) * (GLITCH_EVERY - GLITCH_LONG);
-    float into = since - at;
-    float glitch = since > 0.0 && into > 0.0
-                       ? smoothstep(0.0, 0.06, into) * (1.0 - smoothstep(0.45 * GLITCH_LONG, GLITCH_LONG, into))
-                       : 0.0;
+    // The ident's glitch, its last beat, then one now and then once the ident has played, never
+    // over it: a burst where tracking is lost, each later one's time drawn from the hash of its
+    // slot so a run repeats. It comes on hard and lets go more slowly.
+    float into = time - LOADING_GLITCH_START;
+    float slot = -1.0;
+    if (time >= LOADING_IDENT_END) {
+        float since = time - LOADING_IDENT_END;
+        slot = floor(since / GLITCH_EVERY);
+        into = since - (slot * GLITCH_EVERY + hash21(vec2(slot, 7.0), vec2(12.9898, 78.233)) *
+                                                  (GLITCH_EVERY - LOADING_GLITCH_SECONDS));
+    }
+    float glitch = into > 0.0 ? smoothstep(0.0, 0.06, into) *
+                                    (1.0 - smoothstep(0.45 * LOADING_GLITCH_SECONDS, LOADING_GLITCH_SECONDS, into))
+                              : 0.0;
 
     // The tracking band rolling down, and the lines inside it torn sideways.
     float bandY = 1.0 - fract(time * BAND_SPEED);

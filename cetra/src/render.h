@@ -110,12 +110,14 @@ void scene_capture_faces(Engine* engine, Scene* scene, struct IBLResources* ibl,
 // and every one finishes however small the allowance; after it, a unit runs while the frame has
 // spent less than `ms` on its captures since the first was asked for.
 typedef struct CaptureBudget {
-    float ms;     // engine->capture_budget_ms; 0 = no limit
-    bool started; // the clock is running
-    double start; // seconds, when the frame's first unit was asked for
+    float ms;              // engine->capture_budget_ms; 0 = no limit
+    bool started;          // the clock is running
+    double start;          // seconds, when the frame's first unit was asked for
+    struct Engine* engine; // whose loading screen is drawn between units (spec 13.34)
 } CaptureBudget;
 
-// Whether a unit may run now; `first` = the asking kind has run none this frame.
+// Whether a unit may run now; `first` = the asking kind has run none this frame. Between two units
+// is where a frame of captures lets a loading screen move.
 bool capture_budget_take(CaptureBudget* budget, bool first);
 
 // Flatten the scene for this frame, if it has not been flattened already.

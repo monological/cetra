@@ -28,8 +28,9 @@ typedef enum LoadingPalette {
 void engine_show_loading_screen(Engine* engine);
 
 // Draw it now and answer the window: for an app's init, before engine_run, which draws it with
-// every frame. It draws at most once a refresh, so call it as often as is convenient. Headless it
-// does nothing: there, only frames draw it, so the frame it is in decides what it shows.
+// every frame and between the long pieces of one (each capture, each new shader). It draws at most
+// once a refresh, so call it as often as is convenient. Headless it does nothing: there, only
+// frames draw it, so the frame it is in decides what it shows.
 void engine_draw_loading_screen(Engine* engine);
 
 // Lift it: once its ident has played, the set switches off and the window shows the frame again.
