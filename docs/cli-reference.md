@@ -527,7 +527,9 @@ probes already draw -- a screen, a lampshade. A value outside 0..1 is clamped wi
 `shadow_near` (metres) is where its faces start, for a lamp inside its own glass or a strip inside
 its fixture, and `source_radius` / `source_length` give a point light a body -- a capsule, the
 length between its caps -- whose shadow is soft. A panel is cached from its centre and refuses a
-body by name. A `light_overrides` entry takes `shadow_cache` and `range` too, which is how a
+body by name. `shadow_follow` draws the kept faces again whenever the light moves at all, rather
+than once it is the system's tolerance (5 cm) from where they were drawn: for a light with no body
+that moves, whose shadow otherwise steps. A `light_overrides` entry takes `shadow_cache` and `range` too, which is how a
 DERIVED panel (`--emissive-lights`) is cached, and an override key the parser does not know is now
 named rather than dropped. A fire's flame writes its own body into its light each frame. Instruments:
 - **`--tiles-probe`:** prints the tile region and every cached light's block at exit: its views,

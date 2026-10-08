@@ -62,9 +62,9 @@
 #define DRAFT_SIDE  0.05f
 #define DRAFT_DECAY 3.5f // seconds
 #define SWAY        0.012f
-// While the swing still carries the glass further than this, the bulb's shadow is drawn again
-// each frame: a kept face shadows from where it was drawn.
-#define REFRESH_REACH 0.015f
+// While the swing still carries the glass further than this, the bulb's kept shadow follows it at
+// any move. The sway left after it stays under the shadows' tolerance and costs no redraw.
+#define FOLLOW_REACH 0.015f
 
 // The tap's drip (tools/fetch_sounds.py): seconds to the first, the least between two and how
 // much more at random, and its level against the house's other sounds.
@@ -747,7 +747,7 @@ static void bulb_update(Basement* b, const Door* door, double time) {
     vec3 at = GLM_VEC3_ZERO_INIT;
     glm_mat4_mulv3(m, (vec3){0.0f, -BULB_DROP, 0.0f}, 1.0f, at);
     light_set_position(b->light, at);
-    b->light->shadow_refresh = reach > REFRESH_REACH;
+    b->light->shadow_follow = reach > FOLLOW_REACH;
 
     // The supply sags now and then, and the filament goes dim and orange with it; never out, or
     // the light would leave its cached shadow undrawn.

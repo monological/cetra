@@ -56,6 +56,7 @@ Light* create_light(const LightDesc* desc) {
                  desc->name ? desc->name : "unnamed light");
     }
     light->shadow_near = desc->shadow_near;
+    light->shadow_follow = desc->shadow_follow;
     light->shadow_map_index = -1;
     light->shadow_layer = -1;
     light->shadow_tile = -1;

@@ -76,6 +76,12 @@ float tileLinearDepth(float z01, float nearP, float farP) {
     return 2.0 * farP * nearP / ((farP + nearP) - (2.0 * z01 - 1.0) * (farP - nearP));
 }
 
+// How much stored depth a metre along the face's axis is worth `d` metres from where the faces
+// were drawn: tileFaceProject's z, differentiated.
+float tileDepthPerMetre(float d, float nearP, float farP) {
+    return farP * nearP / (d * d * (farP - nearP));
+}
+
 // Where cell `cell` sits in an array `edge` texels across: xy its corner in layer uv, z its
 // layer.
 vec3 tileCell(int cell, int edge) {

@@ -134,10 +134,10 @@ typedef struct Light {
     float source_radius;
     float source_length;
     float shadow_near; // metres from the light that nothing nearer casts; 0 = from the range
-    // With shadow_cache, its kept faces drawn again every frame from where it is (spec 13.31):
-    // for while it moves faster than the cache follows -- a bulb swinging on its cord -- since a
-    // kept face shadows from where it was drawn until the light has moved a tolerance away.
-    bool shadow_refresh;
+    // With shadow_cache, its kept faces drawn again whenever it moves at all, rather than once it
+    // is ShadowSystem.tile_tolerance from where they were drawn (spec 13.31). For a light with no
+    // body, whose faces are read from where they were drawn.
+    bool shadow_follow;
 
     // Index into the scene's IesLibrary, or -1 for none (spec 11.57). An IES
     // profile is the measured angular distribution of a real luminaire and
@@ -182,6 +182,7 @@ typedef struct LightDesc {
     float source_radius; // the emitting capsule's radius, metres; 0 and 0 = a point
     float source_length; // its length along `direction` between the end caps, metres
     float shadow_near;   // metres; 0 = derived from the range
+    bool shadow_follow;  // with shadow_cache, its kept faces drawn again at any move
 } LightDesc;
 
 // NULL means every default: a white directional pointing down, emitting nothing.

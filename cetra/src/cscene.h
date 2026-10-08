@@ -78,8 +78,8 @@ typedef enum CSceneLightType {
 //                  optional range.
 //   area        -- `direction` (the normal; lights only the side it points at),
 //                  `size`, optional `up` (orthonormalized against direction),
-//                  range, `shadow_cache` and `shadow_near`.
-//   point       -- optional range, `shadow_cache` and `shadow_near`, and
+//                  range, `shadow_cache`, `shadow_near` and `shadow_follow`.
+//   point       -- optional range, `shadow_cache`, `shadow_near` and `shadow_follow`, and
 //                  `source_radius` / `source_length` for a body.
 // `attenuation` is read only to be warned about and ignored. Range is optional everywhere it
 // applies: absent = keep the engine default (so a 0-filled struct means "engine
@@ -119,6 +119,7 @@ typedef struct CSceneLight {
     float source_radius;
     float source_length;
     float shadow_near;
+    bool shadow_follow; // its kept shadow drawn again at any move (spec 13.31)
     bool has_specular;
     float specular; // the share its reflective lobes take, 0..1 (Light.specular)
     // IESNA LM-63 photometric profile, resolved against the scene file's own

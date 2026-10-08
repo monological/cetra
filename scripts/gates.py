@@ -28873,6 +28873,13 @@ TILES_WIND = {"direction": [1.0, 0.0, 0.0], "strength": 0.15, "speed": 3.14159,
 # The tall box's material set to sway and back: its one mesh changes how a kept face draws it
 # twice.
 TILES_TOGGLE_CHANGES = "2"
+# tile_rounding_fixture's lamp moved in this many steps of these metres along x and z, a fraction
+# of a millimetre each, and the middle of the wall it squarely faces, which its -Z face holds:
+# lit at every step, against its unshadowed twin, by at least this much.
+TILES_ROUNDING_STEPS = 8
+TILES_ROUNDING_STEP = (0.00053, 0.00037)
+TILES_ROUNDING_BOX = (0.3, 0.3, 0.7, 0.7)
+TILES_ROUNDING_MIN = 0.95
 
 
 def _tiles_render(workdir, tag, scene, extra, frames=30, size=("400", "300")):
@@ -29005,7 +29012,11 @@ def run_shadow_tiles_gate(workdir):
                      unshadowed the two are far apart
       tiles-fresh    the kept faces at frame 30 equal faces redrawn every frame
       tiles-draws    every face is drawn once, and none again on a still scene
-      tiles-area     a panel cached, from its centre over six faces, against the same panel's
+      tiles-follow   ...and a light set to follow, standing still, draws none again either, and is
+                     the same picture as the light kept
+      tiles-rounding a wall squarely facing a light with no body half a metre off, 50 m from the
+                     origin, stays lit wherever the light is moved by a fraction of a millimetre
+      tiles-area    a panel cached, from its centre over six faces, against the same panel's
                      per-frame cube; unshadowed the two are far apart (spec 13.27)
       tiles-area-size ...and where nothing stands between it and the room, the cached panel
                      lights the room as the per-frame one does, its size where the LTC reads it
@@ -29048,7 +29059,8 @@ def run_shadow_tiles_gate(workdir):
     core = asset("tile_core_fixture.cscn")
     fire = asset("fire_fixture.cscn")
     leak = asset("cornell_leak.cscn")
-    if not all(os.path.exists(p) for p in (RENDER, point, core, fire, leak)):
+    rounding = asset("tile_rounding_fixture.cscn")
+    if not all(os.path.exists(p) for p in (RENDER, point, core, fire, leak, rounding)):
         print("  tiles-off    SKIP  (render or a tiles fixture not present)")
         return []
     failures = []
@@ -29158,6 +29170,49 @@ def run_shadow_tiles_gate(workdir):
               f"{later} on frame 30 (want some, then 0)")
         if not ok:
             failures.append("tiles-draws")
+
+    # --- follow and rounding (spec 13.31) ----------------------------------------------------
+    follow = scene("point_follow", point,
+                   lamp(lambda l: l.update(shadow_cache=True, shadow_follow=True)))
+    pw, err6 = _tiles_render(workdir, "point_follow", follow, [])
+    if err or err6:
+        failed("tiles-follow", err or err6)
+    else:
+        later = _tiles_region(pw[1]).get("faces_drawn", "?")
+        differ = compare(pk[3], pw[3])[0]
+        ok = later == "0" and differ == 0
+        print(f"  tiles-follow {'PASS' if ok else 'FAIL'}  a still light that follows: {later} "
+              f"faces drawn on frame 30 (want 0), {differ} px from the same light kept (want 0)")
+        if not ok:
+            failures.append("tiles-follow")
+
+    def nudged(k):
+        def mutate(d):
+            at = d["lights"][0]["position"]
+            at[0] += k * TILES_ROUNDING_STEP[0]
+            at[2] += k * TILES_ROUNDING_STEP[1]
+        return mutate
+
+    far = ["--no-recenter"]
+    rb, err = _tiles_render(workdir, "rounding_bare", rounding, far + ["--no-shadows"], frames=3)
+    shares = []
+    for k in range(TILES_ROUNDING_STEPS if not err else 0):
+        rk, err = _tiles_render(workdir, f"rounding_{k}",
+                                scene(f"rounding_{k}", rounding, nudged(k)), far, frames=3)
+        if err:
+            break
+        shares.append(_tiles_box_mean(rk[0], TILES_ROUNDING_BOX) /
+                      _tiles_box_mean(rb[0], TILES_ROUNDING_BOX))
+    if err:
+        failed("tiles-rounding", err)
+    else:
+        worst = min(shares)
+        ok = worst >= TILES_ROUNDING_MIN
+        print(f"  tiles-rounding {'PASS' if ok else 'FAIL'}  the wall's middle over its unshadowed "
+              f"twin at {len(shares)} light positions: least {worst:.3f} (want >= "
+              f"{TILES_ROUNDING_MIN})")
+        if not ok:
+            failures.append("tiles-rounding")
 
     # --- a panel -----------------------------------------------------------------------------
     ac, err = _tiles_render(workdir, "area_cached",

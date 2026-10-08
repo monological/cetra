@@ -342,7 +342,8 @@ void add_cscene_lights(Scene* scene, const CetraSceneDesc* cscn) {
                           .shadow_cache = sl->shadow_cache,
                           .source_radius = sl->source_radius,
                           .source_length = sl->source_length,
-                          .shadow_near = sl->shadow_near};
+                          .shadow_near = sl->shadow_near,
+                          .shadow_follow = sl->shadow_follow};
         glm_vec3_copy((float*)sl->position, desc.position);
         glm_vec3_copy((float*)sl->color, desc.color);
         // The emission frame, type-independent since 11.57: a point light aims
