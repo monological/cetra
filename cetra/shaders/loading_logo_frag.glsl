@@ -4,10 +4,10 @@
 // are drawn, not set: each is a skeleton of strokes and arcs, and a stroke is a tube round it,
 // coloured in bands of the distance to the skeleton -- concentric stripes, cream at the core out
 // to brown at the edge, which join cleanly wherever strokes meet because the distance does. CETRA's
-// letters turn together a quarter turn about their own upright axes, in perspective, from edge on
-// to facing the eye; ENGINE's letters then light one by one, and a striped rule draws out beneath
-// them with a light sweeping along it while the game loads. Linear light out; the tape pass wears
-// it and encodes it.
+// letters turn in from the left, each starting while the one before is still turning, each a
+// quarter turn about its own upright axis in perspective, from edge on to facing the eye; ENGINE's
+// letters then light one by one, and a striped rule draws out beneath them with a light sweeping
+// along it while the game loads. Linear light out; the tape pass wears it and encodes it.
 
 in vec2 TexCoords;
 out vec4 FragColor;
@@ -28,14 +28,10 @@ const float TITLE_Y = 0.05;   // the baseline
 const vec2 SHADOW_OFF = vec2(0.10, -0.12); // the block shadow's depth, down and to the right
 const float EYE_D = 7.0;      // the eye's distance from the plane the mark stands in
 
-// The turn: every letter at once, a quarter turn about its own upright axis from edge on, where
-// nothing of it shows, to facing the eye, easing in and out.
-const float TITLE_START = 0.55;
-const float TURN_SECONDS = 1.5;
+// When each part of the ident plays: CETRA's turn, ENGINE and the rule.
+#include "loading_constants.glsl"
 
 // ENGINE, lit a letter at a time beneath the title and spaced to its width.
-const float ENGINE_START = 2.1;
-const float ENGINE_STAGGER = 0.08;
 const float ENGINE_SCALE = 0.34;
 const float ENGINE_R = 0.08;   // in its own letter units
 const float ENGINE_Y = -0.75;
@@ -43,8 +39,6 @@ const float ENGINE_FLASH = 2.5; // how far past its level a letter flares as it 
 const float ENGINE_DECAY = 9.0;
 
 // The rule: four stripes, drawn out from the middle, then a light sweeping along them.
-const float RULE_START = 2.6;
-const float RULE_GROW = 0.4;
 const float RULE_TOP = -0.98;
 const float RULE_LINE = 0.04;
 const float RULE_SPACE = 0.014;
@@ -176,7 +170,7 @@ void main()
     for (int j = 0; j < 6; j++) {
         int id = ENGINE[j];
         float w = WIDTH[id];
-        float since = time - (ENGINE_START + float(j) * ENGINE_STAGGER);
+        float since = time - (LOADING_ENGINE_START + float(j) * LOADING_ENGINE_STAGGER);
         if (since > 0.0) {
             vec2 p = (s - vec2(x, ENGINE_Y)) / ENGINE_SCALE;
             float d = glyph(id, p);
@@ -187,13 +181,13 @@ void main()
         }
         x += (w + engineGap) * ENGINE_SCALE;
     }
-    float grow = smoothstep(0.0, 1.0, (time - RULE_START) / RULE_GROW);
+    float grow = smoothstep(0.0, 1.0, (time - LOADING_RULE_START) / LOADING_RULE_GROW);
     if (grow > 0.0) {
         float reach = 0.5 * (right - left) * grow;
-        float sweep = time > RULE_START + RULE_GROW
-                          ? sin((time - RULE_START - RULE_GROW) * 2.0 * PI / SWEEP_PERIOD) * 0.5 * (right - left)
+        float sweep = time > LOADING_RULE_START + LOADING_RULE_GROW
+                          ? sin((time - LOADING_RULE_START - LOADING_RULE_GROW) * 2.0 * PI / SWEEP_PERIOD) * 0.5 * (right - left)
                           : 0.0;
-        float shine = time > RULE_START + RULE_GROW ? exp(-pow((s.x - sweep) / 0.35, 2.0)) : 0.0;
+        float shine = time > LOADING_RULE_START + LOADING_RULE_GROW ? exp(-pow((s.x - sweep) / 0.35, 2.0)) : 0.0;
         for (int k = 0; k < 4; k++) {
             float top = RULE_TOP - float(k) * (RULE_LINE + RULE_SPACE);
             float inside = (1.0 - smoothstep(reach - px, reach + px, abs(s.x))) *
@@ -228,7 +222,8 @@ void main()
         // of a quarter turn: so every letter shows nothing at the start and comes into view with
         // the others, rather than the ones the eye looks at side on showing first.
         float edgeOn = -0.5 * PI - atan(cx / EYE_D);
-        float turn = edgeOn * (1.0 - smoothstep(0.0, 1.0, (time - TITLE_START) / TURN_SECONDS));
+        float start = LOADING_TITLE_START + float(i) * LOADING_TITLE_STAGGER;
+        float turn = edgeOn * (1.0 - smoothstep(0.0, 1.0, (time - start) / LOADING_TURN_SECONDS));
         float toward = cos(0.5 * PI * turn / edgeOn); // 0 edge on .. 1 facing, alike for all
         vec3 n = vec3(sin(turn), 0.0, cos(turn));
         // Only the face is drawn: near edge on, the eye can see the back of a letter off to one

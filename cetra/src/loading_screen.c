@@ -12,10 +12,10 @@
 #include "uniform.h"
 #include "util.h"
 
-// The ident's length in seconds: the rule beneath ENGINE is drawn by then
-// (loading_logo_frag.glsl). Hiding waits for it and for one sweep of the rule's light after it.
-#define LOADING_IDENT_SECONDS 3.0
-#define LOADING_HOLD_SECONDS  0.6
+// The ident's timeline, shared with the shader that plays it. Hiding waits for LOADING_IDENT_END
+// and a little of the rule's light after it.
+#include "../shaders/include/loading_constants.glsl"
+#define LOADING_HOLD_SECONDS 0.6
 // The switch-off, in seconds (loading_tape_frag.glsl's `off` over it).
 #define LOADING_OFF_SECONDS 0.45
 // The most the clock moves in one draw: a long stall pauses the ident rather than skipping it.
@@ -145,7 +145,7 @@ static void _loading_advance(const Engine* engine, LoadingScreen* ls) {
     ls->clock += step;
     if (ls->lift >= 0.0)
         ls->lift += step;
-    else if (ls->lift_asked && ls->clock >= LOADING_IDENT_SECONDS + LOADING_HOLD_SECONDS)
+    else if (ls->lift_asked && ls->clock >= LOADING_IDENT_END + LOADING_HOLD_SECONDS)
         ls->lift = 0.0;
     ls->frame = (ls->frame + 1) & 0xFFFFFF;
 }
