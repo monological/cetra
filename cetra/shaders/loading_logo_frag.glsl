@@ -53,6 +53,27 @@ const float SPARKLE_CORE = 0.05; // the point's radius
 const float SPARKLE_RAY = 0.7;   // the long rays' reach at the peak
 const float SPARKLE_THIN = 0.012; // a ray's half-width
 
+// The loading sign, once the ident has played: LOADING and an ellipsis lighting a dot at a time,
+// in the blocky 5x7 dot-matrix letters of a teletext page, at the picture's bottom right. A
+// different hand from the mark's on purpose: it is the set talking, not the ident.
+const float SIGN_DOT = 0.042;            // one dot of the matrix, in letter units
+const vec2 SIGN_CORNER = vec2(0.40, -0.36); // its right end and its foot, as shares of the view
+const float SIGN_STEP = 0.4;             // seconds each dot of the ellipsis takes to light
+const float SIGN_FLASH = 2.0;            // how far past its level it flares as it comes on
+const float SIGN_DECAY = 8.0;
+// Each glyph's seven rows, top first, five bits a row with the leftmost highest:
+// L O A D I N G and the full stop.
+const int SIGN_ROWS[56] = int[56](16, 16, 16, 16, 16, 16, 31,
+                                  14, 17, 17, 17, 17, 17, 14,
+                                  14, 17, 17, 31, 17, 17, 17,
+                                  30, 17, 17, 17, 17, 17, 30,
+                                  14, 4, 4, 4, 4, 4, 14,
+                                  17, 25, 21, 19, 17, 17, 17,
+                                  14, 17, 16, 23, 17, 17, 15,
+                                  0, 0, 0, 0, 0, 12, 12);
+const int SIGN_TEXT[10] = int[10](0, 1, 2, 3, 4, 5, 6, 7, 7, 7); // "LOADING..."
+const int SIGN_COLUMNS = 10 * 6 - 1; // five dots a glyph and one between
+
 const int L_C = 0, L_E = 1, L_T = 2, L_R = 3, L_A = 4, L_N = 5, L_G = 6, L_I = 7;
 const float WIDTH[8] = float[8](0.854, 0.7, 0.8, 0.78, 1.0, 0.85, 1.0, 0.0);
 const int TITLE[5] = int[5](L_C, L_E, L_T, L_R, L_A);
@@ -126,6 +147,22 @@ vec4 stripes(float d, float r, float aa)
     for (int k = 0; k < 4; k++)
         c = mix(c, palette[k + 2], smoothstep(EDGE[k] * r - aa, EDGE[k] * r + aa, d));
     return vec4(c, 1.0 - smoothstep(r - aa, r + aa, d));
+}
+
+// Whether the sign covers `s`, its bottom-left corner at `foot`; `shown` of the ellipsis's three
+// dots are lit.
+float signCover(vec2 s, vec2 foot, int shown)
+{
+    vec2 g = (s - foot) / SIGN_DOT;
+    if (g.x < 0.0 || g.y < 0.0 || g.y >= 7.0 || g.x >= float(SIGN_COLUMNS))
+        return 0.0;
+    int column = int(g.x);
+    int glyph = column / 6;
+    int x = column - glyph * 6;
+    if (x == 5 || glyph >= 7 + shown)
+        return 0.0;
+    int bits = SIGN_ROWS[SIGN_TEXT[glyph] * 7 + (6 - int(g.y))];
+    return float((bits >> (4 - x)) & 1);
 }
 
 float titleWidth()
@@ -212,6 +249,17 @@ void main()
                           exp(-pow(r.x / thin, 2.0)) * exp(-abs(r.y) / (0.12 * len + 1e-4));
         float core = exp(-dot(q, q) / (SPARKLE_CORE * SPARKLE_CORE));
         colour += palette[1] * SPARKLE_PEAK * swell * (core + rays + 0.6 * diagonals);
+    }
+
+    // The loading sign: on as the ident's glitch passes, with a flare, its ellipsis lighting a
+    // dot at a time and going dark together.
+    float waited = time - LOADING_IDENT_END;
+    if (waited > 0.0) {
+        int shown = int(mod(floor(waited / SIGN_STEP), 4.0));
+        vec2 view = vec2(aspect * viewH, viewH);
+        vec2 foot = SIGN_CORNER * view - vec2(float(SIGN_COLUMNS) * SIGN_DOT, 0.0);
+        float flare = 1.0 + SIGN_FLASH * exp(-waited * SIGN_DECAY);
+        colour = mix(colour, palette[1] * flare, signCover(s, foot, shown));
     }
 
     // CETRA: each letter's plane turned about its upright axis, met by this pixel's ray from the
