@@ -24,8 +24,8 @@ typedef struct RainBed {
 void rain_bed_start(RainBed* bed, AudioSystem* audio, const Rain* rain);
 
 // Per frame: ask the map about the listener's head, ease toward its answer, set the levels,
-// `gain` of them reaching the listener.
+// `hearing` of them reaching the listener.
 void rain_bed_update(RainBed* bed, const Rain* rain, ShadowSystem* shadows, const vec3 head,
-                     float gain, float dt);
+                     float hearing, float dt);
 
 #endif // _SILENT_RAIN_BED_H_

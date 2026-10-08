@@ -47,6 +47,9 @@
 // table face it.
 #define TV_X 3.3f
 
+// A room's finish laid over a wall's face: paper, paint, tiles.
+#define LINING 0.006f
+
 /*
  * The basement under the whole house (spec 13.31): its slab's top, and the ground floor over it
  * -- finished boards on a subfloor on joists, the joists inside the 0.3 m the floor stands above
@@ -54,25 +57,34 @@
  */
 #define BASEMENT_Y   (-2.4f)
 #define FLOOR_BOARDS 0.025f // the finished boards' thickness, under FLOOR_Y
-#define SUBFLOOR_Y0  0.255f // the subfloor, up to the boards
-#define JOIST_Y0     0.02f  // the joists' feet, up to the subfloor
+#define SUBFLOOR_T   0.02f  // the subfloor's, under the boards
+#define SUBFLOOR_Y0  (FLOOR_Y - FLOOR_BOARDS - SUBFLOOR_T)
+#define JOIST_Y0     0.02f // the joists' feet, up to the subfloor
+// Its walls' inner faces, which are the house's outside walls' carried down,
+#define CELLAR_X0 (HOUSE_X0 + 0.5f * EXT_WALL)
+#define CELLAR_X1 (HOUSE_X1 - 0.5f * EXT_WALL)
+#define CELLAR_Z0 (HOUSE_FRONT_Z + 0.5f * EXT_WALL)
+#define CELLAR_Z1 (HOUSE_BACK_Z - 0.5f * EXT_WALL)
+// and their outer ones, which is where the yard is cut away round it.
+#define DIG_X0 (HOUSE_X0 - 0.5f * EXT_WALL)
+#define DIG_X1 (HOUSE_X1 + 0.5f * EXT_WALL)
+#define DIG_Z0 (HOUSE_FRONT_Z - 0.5f * EXT_WALL)
+#define DIG_Z1 (HOUSE_BACK_Z + 0.5f * EXT_WALL)
 // The stairwell down to it: behind the basement door, between the partition that closes it off
 // from the stair up and the back wall, and west from the door's own threshold, where the flight
 // starts.
 #define STAIRWELL_WALL_Z 18.25f
 #define STAIRWELL_Z0     (STAIRWELL_WALL_Z + 0.5f * INT_WALL)
 #define CELLAR_HEAD_X    (-1.6f)
-// Its door off the hall, and its window high in the back wall over the flight.
-#define BASEMENT_DOOR_Z0 18.35f
-#define BASEMENT_DOOR_Z1 19.15f
-#define STAIR_WIN_X0     (-3.7f)
-#define STAIR_WIN_X1     (-3.1f)
-#define STAIR_WIN_SILL   (FLOOR_Y + 1.3f)
-#define STAIR_WIN_HEAD   (FLOOR_Y + 2.0f)
 
 // The walls, floors, rooms, furniture and lamps, and the roofs, porch and gutter; not the
 // television, which is tv.c's.
 void home_build(Kit* kit, Engine* engine, Scene* scene);
+
+// The stairwell's four walls inside, from the basement's floor to the ceiling, under one coat
+// of `mat` cut round their openings -- the back wall's window, the basement door -- and round
+// `foot` in the partition's: the way into the basement at the bottom of the flight.
+void home_line_stairwell(Kit* kit, int mat, const KitOpening* foot);
 
 // The front door, the bathroom's and the basement's, hung to swing; false for one that could
 // not be.

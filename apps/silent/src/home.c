@@ -57,14 +57,19 @@
 #define CASED_HEAD  (FLOOR_Y + 2.15f)
 #define HALL_WIN_X0 (-1.1f)
 #define HALL_WIN_X1 (-0.4f)
+// The basement's door at the hall's end, and the window high in the back wall over its flight.
+#define BASEMENT_DOOR_Z0 18.35f
+#define BASEMENT_DOOR_Z1 19.15f
+#define STAIR_WIN_X0     (-3.7f)
+#define STAIR_WIN_X1     (-3.1f)
+#define STAIR_WIN_SILL   (FLOOR_Y + 1.3f)
+#define STAIR_WIN_HEAD   (FLOOR_Y + 2.0f)
 
-// A room's finish over a wall's plaster; the skirting and the crown.
-#define LINING      0.006f
+// The skirting and the crown.
 #define SKIRT_H     0.14f
 #define SKIRT_PROUD 0.016f
 
-#define DOOR_CLEARANCE 0.008f
-#define DOOR_SWING     1.7f
+#define DOOR_SWING 1.7f
 
 #define WIN(a0, a1, sill, head) {a0, a1, sill, head, KIT_ARCH_FLAT, 0.0f, false}
 #define DOORWAY(a0, a1, head)   {a0, a1, FLOOR_Y, head, KIT_ARCH_FLAT, 0.0f, true}
@@ -319,7 +324,8 @@ static void outside_trim(Kit* kit) {
  *
  * A room's boards are only the finished layer: the joists and the subfloor under them are the
  * basement's ceiling (basement.c). Each room's body still fills the floor's whole depth, and the
- * stair room's stops at the stairwell, whose landing inside the door is all that is left of it.
+ * stair room's stops at the stairwell, but for the strip of floor inside the basement door
+ * before its flight starts.
  */
 static void floors(Kit* kit) {
     const KitFrame* w = &KIT_WORLD;
@@ -479,6 +485,26 @@ typedef struct RoomSide {
     int lining;
 } RoomSide;
 
+// A finish of `mat` laid over a wall's face toward (x, z), from a0 to a1 along it and y0 to y1,
+// cut round the wall's openings and `extra` when there is one. The facade it returns stands at
+// the finish's face.
+static Facade line_wall(Kit* kit, const KitWall* w, int mat, float a0, float a1, float y0, float y1,
+                        float x, float z, const KitOpening* extra) {
+    Facade s = facade_toward(w, x, z);
+    KitWall l = *w;
+    l.at = s.face + s.out * 0.5f * LINING;
+    l.from = a0;
+    l.to = a1;
+    l.y0 = y0;
+    l.y1 = y1;
+    l.thick = LINING;
+    if (extra && l.opening_count < KIT_MAX_OPENINGS)
+        l.openings[l.opening_count++] = *extra;
+    kit_frame_panel(kit, &s.f, mat, &l);
+    s.face += s.out * LINING;
+    return s;
+}
+
 /*
  * A room's walls dressed, seen from (x, z): each side's lining, a skirting stopping at every
  * doorway, a crown moulding at the ceiling when `crown`, and a white casing round every opening
@@ -488,18 +514,9 @@ static void dress(Kit* kit, const RoomSide* sides, int count, float x, float z, 
     for (int k = 0; k < count; k++) {
         const RoomSide* side = &sides[k];
         const KitWall* w = &WALLS[side->wall];
-        Facade s = facade_toward(w, x, z);
-        if (side->lining >= 0) {
-            KitWall l = *w;
-            l.at = s.face + s.out * 0.5f * LINING;
-            l.from = side->a0;
-            l.to = side->a1;
-            l.y0 = FLOOR_Y;
-            l.y1 = CEIL_Y;
-            l.thick = LINING;
-            kit_frame_panel(kit, &s.f, side->lining, &l);
-            s.face += s.out * LINING;
-        }
+        Facade s = side->lining >= 0 ? line_wall(kit, w, side->lining, side->a0, side->a1, FLOOR_Y,
+                                                 CEIL_Y, x, z, NULL)
+                                     : facade_toward(w, x, z);
         vec2 blocked[KIT_MAX_OPENINGS] = {{0.0f}}, spans[KIT_MAX_OPENINGS + 1];
         int nb = 0;
         for (int i = 0; i < w->opening_count; i++) {
@@ -575,6 +592,17 @@ static void finishes(Kit* kit) {
     const Facade kitchen = facade_toward(&WALLS[HW_HALL_E_KITCHEN], 2.0f, 12.0f);
     ornament_casing(kit, &kitchen, MAT_MOULDING,
                     &WALLS[HW_HALL_E_KITCHEN].openings[O_KITCHEN_DOOR]);
+}
+
+void home_line_stairwell(Kit* kit, int mat, const KitOpening* foot) {
+    const float x = 0.5f * (CELLAR_X0 + CELLAR_HEAD_X), z = 0.5f * (STAIRWELL_Z0 + CELLAR_Z1);
+    const float hall = HALL_X0 - 0.5f * INT_WALL;
+    line_wall(kit, &WALLS[HW_BACK], mat, CELLAR_X0, hall, BASEMENT_Y, CEIL_Y, x, z, NULL);
+    line_wall(kit, &WALLS[HW_STAIRWELL], mat, CELLAR_X0, hall, BASEMENT_Y, CEIL_Y, x, z, foot);
+    line_wall(kit, &WALLS[HW_WEST], mat, STAIRWELL_Z0, CELLAR_Z1, BASEMENT_Y, CEIL_Y, x, z, NULL);
+    // The hall's wall only from the floor up: under it the stairwell's end is the basement's.
+    line_wall(kit, &WALLS[HW_HALL_W_STAIR], mat, STAIRWELL_Z0, CELLAR_Z1, FLOOR_Y, CEIL_Y, x, z,
+              NULL);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -972,47 +1000,35 @@ void home_build(Kit* kit, Engine* engine, Scene* scene) {
 // the hall, as the Gothic house's does.
 bool home_front_door(Door* door, Engine* engine, Scene* scene, EntityManager* em,
                      PhysicsWorld* physics) {
-    KitOpening opening = WALLS[HW_FRONT].openings[O_FRONT_DOOR];
-    const KitFrame hinge = {{opening.from, 0.0f, FRONT_DOOR_Z}, 0.0f};
-    opening.to -= opening.from;
-    opening.from = 0.0f;
-    KitOpening leaf = kit_opening_grow(&opening, -DOOR_CLEARANCE);
-    leaf.bottom = FLOOR_Y + 0.02f;
-    return door_build(door, engine, scene, em, physics, "front_door", door_leaf_panelled, &hinge,
-                      &leaf, DOOR_THICK, DOOR_SWING);
+    const KitOpening* opening = &WALLS[HW_FRONT].openings[O_FRONT_DOOR];
+    const KitFrame hinge = {{opening->from, 0.0f, FRONT_DOOR_Z}, 0.0f};
+    return door_hang(door, engine, scene, em, physics, "front_door", door_leaf_panelled, &hinge,
+                     *opening, DOOR_SWING);
 }
 
 // The bathroom's, hung on its back jamb against the bathroom's face of the wall, so it swings
 // into the bathroom and stands open along the floor kept clear for it.
 bool home_bath_door(Door* door, Engine* engine, Scene* scene, EntityManager* em,
                     PhysicsWorld* physics) {
-    KitOpening opening = WALLS[HW_HALL_E_BATH].openings[O_BATH_DOOR];
+    const KitOpening* opening = &WALLS[HW_HALL_E_BATH].openings[O_BATH_DOOR];
     // Turned a quarter, so a runs toward -z from the hinge and d into the bathroom.
     const float x = HALL_X1 + 0.5f * INT_WALL - 0.5f * DOOR_THICK - 0.005f;
-    const KitFrame hinge = {{x, 0.0f, opening.to}, 0.5f * GLM_PIf};
-    opening.to -= opening.from;
-    opening.from = 0.0f;
-    KitOpening leaf = kit_opening_grow(&opening, -DOOR_CLEARANCE);
-    leaf.bottom = FLOOR_Y + 0.02f;
-    return door_build(door, engine, scene, em, physics, "bath_door", door_leaf_panelled, &hinge,
-                      &leaf, DOOR_THICK, 1.6f);
+    const KitFrame hinge = {{x, 0.0f, opening->to}, 0.5f * GLM_PIf};
+    return door_hang(door, engine, scene, em, physics, "bath_door", door_leaf_panelled, &hinge,
+                     *opening, 1.6f);
 }
 
 // The basement's (spec 13.31), hung on its front jamb against the stairwell's face of the wall,
-// so it swings in over the landing and stands open along the partition, clear of the flight. Out
-// into the hall it would sweep where whoever opens it is standing.
+// so it swings in over the head of the flight and stands open along the partition, just over the
+// stringer. Out into the hall it would sweep where whoever opens it is standing.
 bool home_basement_door(Door* door, Engine* engine, Scene* scene, EntityManager* em,
                         PhysicsWorld* physics) {
-    KitOpening opening = WALLS[HW_HALL_W_STAIR].openings[O_BASEMENT_DOOR];
+    const KitOpening* opening = &WALLS[HW_HALL_W_STAIR].openings[O_BASEMENT_DOOR];
     // Turned a quarter the other way, so a runs toward +z from the hinge and d into the stairwell.
     const float x = HALL_X0 - 0.5f * INT_WALL + 0.5f * DOOR_THICK + 0.005f;
-    const KitFrame hinge = {{x, 0.0f, opening.from}, -0.5f * GLM_PIf};
-    opening.to -= opening.from;
-    opening.from = 0.0f;
-    KitOpening leaf = kit_opening_grow(&opening, -DOOR_CLEARANCE);
-    leaf.bottom = FLOOR_Y + 0.02f;
-    return door_build(door, engine, scene, em, physics, "basement_door", door_leaf_panelled, &hinge,
-                      &leaf, DOOR_THICK, 1.55f);
+    const KitFrame hinge = {{x, 0.0f, opening->from}, -0.5f * GLM_PIf};
+    return door_hang(door, engine, scene, em, physics, "basement_door", door_leaf_panelled, &hinge,
+                     *opening, 1.55f);
 }
 
 float home_outside_distance(const vec3 p) {

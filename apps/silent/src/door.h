@@ -19,6 +19,8 @@
  * so a headless run swings it the same way every time.
  */
 
+#define DOOR_CLEARANCE 0.008f // a leaf's gap to its opening, all round
+
 // A leaf of `o`'s outline, `t` thick about d = 0 in frame `f`, its hinge at o->from.
 typedef void (*DoorLeafFn)(Kit* kit, const KitFrame* f, const KitOpening* o, float t);
 typedef struct Door {
@@ -41,6 +43,12 @@ typedef struct Door {
 bool door_build(Door* door, Engine* engine, Scene* scene, EntityManager* em, PhysicsWorld* physics,
                 const char* name, DoorLeafFn leaf, const KitFrame* hinge, const KitOpening* shape,
                 float thick, float swing);
+// The same for a door hung in `opening` as its wall has it, from a hinge at one of its jambs: a
+// leaf DOOR_THICK thick filling the opening shy of a clearance all round, its foot just off the
+// floor.
+bool door_hang(Door* door, Engine* engine, Scene* scene, EntityManager* em, PhysicsWorld* physics,
+               const char* name, DoorLeafFn leaf, const KitFrame* hinge, KitOpening opening,
+               float swing);
 
 // The two leaves, which a door that never moves builds into the kit it is given. The Gothic
 // one's straps are on its -d face; the panelled one is the same both sides.
