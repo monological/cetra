@@ -6,8 +6,9 @@
 // to brown at the edge, which join cleanly wherever strokes meet because the distance does. CETRA's
 // letters turn in from the left, each starting while the one before is still turning, each a
 // quarter turn about its own upright axis in perspective, from edge on to facing the eye; ENGINE's
-// letters then light one by one, and a striped rule draws out beneath them with a light sweeping
-// along it while the game loads. Linear light out; the tape pass wears it and encodes it.
+// letters then light one by one, a striped rule draws out beneath them, a light runs once along it
+// from left to right, and a sparkle bursts at its right end to finish. Linear light out; the tape
+// pass wears it and encodes it.
 
 in vec2 TexCoords;
 out vec4 FragColor;
@@ -38,11 +39,19 @@ const float ENGINE_Y = -0.75;
 const float ENGINE_FLASH = 2.5; // how far past its level a letter flares as it lights
 const float ENGINE_DECAY = 9.0;
 
-// The rule: four stripes, drawn out from the middle, then a light sweeping along them.
+// The rule: four stripes, drawn out from the middle, then a light run once along them.
 const float RULE_TOP = -0.98;
 const float RULE_LINE = 0.04;
 const float RULE_SPACE = 0.014;
-const float SWEEP_PERIOD = 2.4;
+const float SWEEP_WIDTH = 0.35; // the light's reach either side of its centre, in letter units
+const float SWEEP_GAIN = 1.6;   // how far past the stripes' own colour it brightens them
+
+// The sparkle at the rule's right end: a point with four long rays and four short diagonal ones,
+// swelling and fading as one, its peak SPARKLE_PEAK over the cream.
+const float SPARKLE_PEAK = 6.0;
+const float SPARKLE_CORE = 0.05; // the point's radius
+const float SPARKLE_RAY = 0.7;   // the long rays' reach at the peak
+const float SPARKLE_THIN = 0.012; // a ray's half-width
 
 const int L_C = 0, L_E = 1, L_T = 2, L_R = 3, L_A = 4, L_N = 5, L_G = 6, L_I = 7;
 const float WIDTH[8] = float[8](0.854, 0.7, 0.8, 0.78, 1.0, 0.85, 1.0, 0.0);
@@ -169,17 +178,40 @@ void main()
     float grow = smoothstep(0.0, 1.0, (time - LOADING_RULE_START) / LOADING_RULE_GROW);
     if (grow > 0.0) {
         float reach = 0.5 * (right - left) * grow;
-        float sweep = time > LOADING_RULE_START + LOADING_RULE_GROW
-                          ? sin((time - LOADING_RULE_START - LOADING_RULE_GROW) * 2.0 * PI / SWEEP_PERIOD) * 0.5 * (right - left)
-                          : 0.0;
-        float shine = time > LOADING_RULE_START + LOADING_RULE_GROW ? exp(-pow((s.x - sweep) / 0.35, 2.0)) : 0.0;
+        // The light, once along the rule from its left end to its right, easing in and out and
+        // faded at both ends so it neither pops on nor lingers where the sparkle takes over.
+        float run = (time - LOADING_SWEEP_START) / LOADING_SWEEP_SECONDS;
+        float shine = 0.0;
+        if (run > 0.0 && run < 1.0) {
+            float at = mix(left, right, smoothstep(0.0, 1.0, run));
+            shine = exp(-pow((s.x - at) / SWEEP_WIDTH, 2.0)) * smoothstep(0.0, 0.15, run) *
+                    (1.0 - smoothstep(0.85, 1.0, run));
+        }
         for (int k = 0; k < 4; k++) {
             float top = RULE_TOP - float(k) * (RULE_LINE + RULE_SPACE);
             float inside = (1.0 - smoothstep(reach - px, reach + px, abs(s.x))) *
                            smoothstep(top - RULE_LINE - px, top - RULE_LINE + px, s.y) *
                            (1.0 - smoothstep(top - px, top + px, s.y));
-            colour = mix(colour, palette[k + 2] * (1.0 + 1.6 * shine), inside);
+            colour = mix(colour, palette[k + 2] * (1.0 + SWEEP_GAIN * shine), inside);
         }
+    }
+
+    // The sparkle: swelling fast, fading slower, turning a little as it goes.
+    float spark = (time - LOADING_SPARKLE_START) / LOADING_SPARKLE_SECONDS;
+    if (spark > 0.0 && spark < 1.0) {
+        float swell = smoothstep(0.0, 0.15, spark) * (1.0 - smoothstep(0.3, 1.0, spark));
+        float spin = 0.4 * spark;
+        vec2 q = s - vec2(right, RULE_TOP - 1.5 * (RULE_LINE + RULE_SPACE) - 0.5 * RULE_LINE);
+        q = mat2(cos(spin), -sin(spin), sin(spin), cos(spin)) * q;
+        vec2 r = mat2(0.70710678, -0.70710678, 0.70710678, 0.70710678) * q;
+        float len = SPARKLE_RAY * swell;
+        float thin = SPARKLE_THIN + px;
+        float rays = exp(-pow(q.y / thin, 2.0)) * exp(-abs(q.x) / (0.3 * len + 1e-4)) +
+                     exp(-pow(q.x / thin, 2.0)) * exp(-abs(q.y) / (0.3 * len + 1e-4));
+        float diagonals = exp(-pow(r.y / thin, 2.0)) * exp(-abs(r.x) / (0.12 * len + 1e-4)) +
+                          exp(-pow(r.x / thin, 2.0)) * exp(-abs(r.y) / (0.12 * len + 1e-4));
+        float core = exp(-dot(q, q) / (SPARKLE_CORE * SPARKLE_CORE));
+        colour += palette[1] * SPARKLE_PEAK * swell * (core + rays + 0.6 * diagonals);
     }
 
     // CETRA: each letter's plane turned about its upright axis, met by this pixel's ray from the
