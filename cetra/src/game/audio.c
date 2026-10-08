@@ -67,7 +67,7 @@ struct AudioSystem {
     AudioZones zones;
     AudioZone listener_zone;     // where the listener was at the last update
     float heard[AUDIO_ZONE_MAX]; // each zone's best path to the listener's, eased
-    bool heard_seeded;           // heard[] has been taken outright once
+    bool updated;                // an update has run, so zone gains ease rather than land
 };
 
 // The AUDIO_SOURCE component payload: a Sound placed every frame at an offset in its entity's
@@ -463,15 +463,14 @@ void audio_system_update(AudioSystem* audio, struct EntityManager* em, vec3 list
                                     NULL);
 
     // Where the listener is now, and every zone's path to it, eased: what a sound in each is
-    // heard with, for an app asking about one it does not place.
+    // heard with, for an app asking about one it does not place. The first update takes every
+    // gain outright, since until it the listener was nowhere -- the world, by default -- and a
+    // game starting indoors would hear its rooms fade up.
     audio->listener_zone = audio_zones_find(&audio->zones, listener_pos);
-    const float k = 1.0f - expf(-fmaxf(dt, 0.0f) / AUDIO_ZONE_FADE);
-    for (int z = 0; z < audio->zones.count; z++) {
-        const float target = audio->zones.heard[audio->listener_zone][z];
-        audio->heard[z] =
-            audio->heard_seeded ? audio->heard[z] + (target - audio->heard[z]) * k : target;
-    }
-    audio->heard_seeded = true;
+    const float k = audio->updated ? 1.0f - expf(-fmaxf(dt, 0.0f) / AUDIO_ZONE_FADE) : 1.0f;
+    for (int z = 0; z < audio->zones.count; z++)
+        audio->heard[z] += (audio->zones.heard[audio->listener_zone][z] - audio->heard[z]) * k;
+    audio->updated = true;
     for (size_t i = 0; i < audio->sound_count; i++) {
         Sound* s = audio->sounds[i];
         if (s->placed)
