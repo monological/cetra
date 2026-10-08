@@ -73,6 +73,10 @@ typedef struct SceneNode {
     // origin this frame. One node doing that is a smear; a region's worth of
     // them arriving at once is the whole frame.
     bool prev_valid;
+    // Creation order, never reused: what this node is across frames. Its address is not --
+    // a node freed and another created may share one, and anything that remembers a node
+    // from frame to frame would take the second for the first.
+    uint64_t serial;
 
     // BY FUNCTION: node_set_name (owned string), node_add_mesh (uploads what
     // it attaches), node_set_light, node_set_camera, node_set_particle_system,
@@ -99,7 +103,7 @@ typedef struct SceneNode {
     bool capture_hidden;
 } SceneNode;
 
-// malloc
+// A node at the origin, with no parent, no meshes and a serial of its own.
 SceneNode* create_node();
 // Releases the node and its whole subtree, unlinking it from its parent first --
 // so any node may be freed, not only a root.
@@ -205,15 +209,12 @@ typedef struct Scene {
     // branch and no allocation.
     struct IesLibrary* ies_library;
 
-    // The graph flattened for drawing, rebuilt once a frame. Every pass reads
+    // The graph flattened for drawing, rebuilt every frame. Every pass reads
     // it; nothing walks the graph to draw any more.
     //
-    // Keyed on the frame index alone, and that is sufficient because the list
-    // is STRUCTURAL: it holds which meshes exist and which pass draws each, not
-    // where they are. Moving a node does not invalidate it -- the transform is
-    // read through the node at submit. Only adding or removing geometry, or
-    // changing a material's alpha mode, does, and both are seen at the next
-    // frame's rebuild. Owned; the list's type is internal.
+    // The list is STRUCTURAL: it holds which meshes exist and which pass draws
+    // each, not where they are -- the transform is read through the node at
+    // submit. Owned; the list's type is internal.
     DrawList* draw_list;
     size_t transparent_mesh_count;  // Late-pass meshes seen in this frame's opaque pass
     size_t transmissive_mesh_count; // Subset with transmission > 0; gates the mid-frame

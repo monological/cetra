@@ -191,6 +191,15 @@ typedef struct {
     int tile_reference;        // ShadowSystem.tile_reference
     const char* node_swing;    // a node moved sideways every frame; NULL = none
     float node_swing_m;        // how far either way, metres
+    // --graph-churn: a node taken out of the graph on one frame and put back on another, 0 =
+    // never (spec 13.38); NULL = none
+    const char* graph_churn;
+    int graph_churn_out, graph_churn_back;
+    // --graph-replace: a node freed on a frame and a new one hung in its place holding its
+    // meshes, moved by an offset; NULL = none
+    const char* graph_replace;
+    int graph_replace_at;
+    float graph_replace_by[3];
     // --tile-map: one cached light's faces as a greyscale PPM
     const char* tile_map_light;
     const char* tile_map_path;

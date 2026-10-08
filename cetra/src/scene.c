@@ -823,29 +823,20 @@ void scene_set_xyz_program(Scene* scene, ShaderProgram* xyz_shader_program) {
  */
 
 SceneNode* create_node() {
-    SceneNode* node = malloc(sizeof(SceneNode));
+    // Zeroed, not malloc'd, for create_mesh's reason: capture_hidden was a SETTINGS field this
+    // function never set, so a fresh node's was whatever the allocator left there.
+    SceneNode* node = calloc(1, sizeof(SceneNode));
     if (!node) {
         log_error("Failed to allocate memory for scene node");
         return NULL;
     }
+    static uint64_t next_serial = 1;
+    node->serial = next_serial++;
 
-    node->name = NULL;
-    node->parent = NULL;
-    node->children = NULL;
-    node->children_count = 0;
-    node->children_cap = 0;
     glm_mat4_identity(node->original_transform);
     glm_mat4_identity(node->global_transform);
     glm_mat4_identity(node->prev_global_transform);
-    node->prev_valid = false;
     glm_mat3_identity(node->normal_matrix);
-
-    node->meshes = NULL;
-    node->mesh_count = 0;
-    node->light = NULL;
-    node->camera = NULL;
-    node->particle_system = NULL;
-    node->pose = NULL;
 
     return node;
 }

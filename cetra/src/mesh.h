@@ -142,6 +142,9 @@ typedef struct Mesh {
     // to 24 bits to pack the key, so two meshes 16M apart collide there. What
     // makes that sort a total order is its source index, not this.
     unsigned id;
+    // Times mesh_upload has run: an edit made in place and uploaded again leaves the mesh, its
+    // id and its node the same, and this is what says the geometry is not.
+    unsigned upload_count;
 
     // Why this mesh is not being drawn, or NULL while it is: the reason the
     // last draw-list build settled on, logged when it changes rather than per

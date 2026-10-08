@@ -370,6 +370,7 @@ void mesh_upload(Mesh* mesh) {
     // A mesh nothing was uploaded for is not drawable and the list refuses it,
     // so the upload that makes it drawable has to invalidate.
     scene_graph_touched();
+    mesh->upload_count++;
 
     // Every measurement of the final arrays, in one place, before they go.
     mesh_compute_aabb(mesh);
