@@ -433,7 +433,8 @@ typedef struct {
     // its palette.
     int loading_screen;
     int loading_palette;
-    int loading_lift_at; // -1 = never
+    int loading_lift_at;  // -1 = never
+    int loading_ready_at; // the frame its game is said to be ready, PLAY up; -1 = never
     // Store every texture uncompressed, which is the pre-11.85 engine exactly.
     int no_texture_compression;
     int texture_probe;           // Print the texture memory ledger and exit-time totals

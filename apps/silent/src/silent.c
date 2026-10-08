@@ -177,6 +177,7 @@ typedef struct SilentArgs {
     bool no_loading_screen; // load under a black window, with no engine screen over it
     bool loading_screen;    // the screen headless too, where it is otherwise left out
     bool startup_ms;        // print where loading's time goes, a startup-ms row a step
+    bool no_play_prompt;    // the loading screen lifts by itself once the game is ready
     bool flashlight;
     bool mute;
     float rain_mmh;          // 0 = dry
@@ -267,6 +268,11 @@ static const InputAction ACTIONS[] = {
     {"interact", {INPUT_KEY(E, 1), INPUT_PAD(X, 1)}},
     {"release_cursor", {INPUT_KEY(TAB, 1)}},
     {"toggle_gui", {INPUT_KEY(GRAVE_ACCENT, 1), INPUT_KEY(G, 1)}},
+    // PLAY on the loading screen: a UI action, so it reads while the game's input is held.
+    {"start",
+     {INPUT_KEY(ENTER, 1), INPUT_KEY(SPACE, 1), INPUT_KEY(E, 1), INPUT_MOUSE(LEFT, 1),
+      INPUT_PAD(A, 1), INPUT_PAD(START, 1)},
+     true},
 };
 
 /*
@@ -1037,10 +1043,17 @@ static void on_pre_render(Game* game, double alpha) {
     // after it. A volume that could not be built lets the view up rather than holding it dark
     // forever. The fade rides the grade's gain, after the tonemap, so the exposure and the day's
     // meter never see it. Each frame's step is capped because a frame of captures can be long.
-    // Lit, the loading screen is let go; it switches off once its ident has played (spec 13.34),
-    // and the fade, the end of the captures' loading budget and the player's input wait for that.
-    if (lit)
+    // Lit, the loading screen offers PLAY, and the player's press lets it go -- or it is let go at
+    // once, headless, where nobody presses, and under --no-play-prompt. It switches off once its
+    // ident has played (spec 13.34), and the fade, the end of the captures' loading budget and the
+    // player's input wait for that; the captures go on while it waits.
+    if (lit && (engine->headless || g_args.no_play_prompt))
         engine_hide_loading_screen(engine);
+    else if (lit) {
+        engine_loading_screen_ready(engine);
+        if (input_action_pressed(&game->input, "start"))
+            engine_hide_loading_screen(engine);
+    }
     const bool screened = engine_loading_screen_shown(engine);
     const bool up = lit && !screened;
     if (up) {
@@ -1131,6 +1144,7 @@ static void print_usage(const char* prog) {
     printf("      --no-loading-screen Load under a black window, without the engine's screen\n");
     printf("      --loading-screen    The engine's loading screen headless too\n");
     printf("      --startup-ms        Print how long each loading step and held frame took\n");
+    printf("      --no-play-prompt    Go straight in once loaded, without the screen's PLAY\n");
     printf("      --flashlight        Start with the flashlight on (F toggles it)\n");
     printf("      --mute              Without sound\n");
     printf("      --audio-dump PATH   Headless: write what the listener hears as a WAV\n");
@@ -1278,6 +1292,8 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
             a->loading_screen = true;
         } else if (!strcmp(s, "--startup-ms")) {
             a->startup_ms = true;
+        } else if (!strcmp(s, "--no-play-prompt")) {
+            a->no_play_prompt = true;
         } else if (!strcmp(s, "--flashlight")) {
             a->flashlight = true;
         } else if (!strcmp(s, "--mute")) {

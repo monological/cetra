@@ -16,6 +16,7 @@ out vec4 FragColor;
 uniform float time;      // seconds since the screen was shown
 uniform vec2 resolution; // the picture's pixels
 uniform vec3 palette[7]; // linear: the ground, five stripes from the core out, the block shadow
+uniform float ready;     // when the game was said to be ready, in `time`'s seconds; < 0 before
 
 const float PI = 3.14159265;
 
@@ -53,26 +54,33 @@ const float SPARKLE_CORE = 0.05; // the point's radius
 const float SPARKLE_RAY = 0.7;   // the long rays' reach at the peak
 const float SPARKLE_THIN = 0.012; // a ray's half-width
 
-// The loading sign, once the ident has played: LOADING and an ellipsis lighting a dot at a time,
-// in the blocky 5x7 dot-matrix letters of a teletext page, at the picture's bottom right. A
-// different hand from the mark's on purpose: it is the set talking, not the ident.
+// The sign, once the ident has played: LOADING and an ellipsis lighting a dot at a time, then,
+// once the game is ready, PLAY and a blinking arrow, as a VCR shows it -- in the blocky 5x7
+// dot-matrix letters of a teletext page, at the picture's bottom right. A different hand from the
+// mark's on purpose: it is the set talking, not the ident.
 const float SIGN_DOT = 0.042;            // one dot of the matrix, in letter units
 const vec2 SIGN_CORNER = vec2(0.40, -0.36); // its right end and its foot, as shares of the view
 const float SIGN_STEP = 0.4;             // seconds each dot of the ellipsis takes to light
 const float SIGN_FLASH = 2.0;            // how far past its level it flares as it comes on
 const float SIGN_DECAY = 8.0;
+const float SIGN_BLINK = 1.0;            // the arrow's blink, on for its first SIGN_LIT of each
+const float SIGN_LIT = 0.6;
 // Each glyph's seven rows, top first, five bits a row with the leftmost highest:
-// L O A D I N G and the full stop.
-const int SIGN_ROWS[56] = int[56](16, 16, 16, 16, 16, 16, 31,
+// L O A D I N G, the full stop, P Y, the play arrow and a space.
+const int SIGN_ROWS[84] = int[84](16, 16, 16, 16, 16, 16, 31,
                                   14, 17, 17, 17, 17, 17, 14,
                                   14, 17, 17, 31, 17, 17, 17,
                                   30, 17, 17, 17, 17, 17, 30,
                                   14, 4, 4, 4, 4, 4, 14,
                                   17, 25, 21, 19, 17, 17, 17,
                                   14, 17, 16, 23, 17, 17, 15,
-                                  0, 0, 0, 0, 0, 12, 12);
-const int SIGN_TEXT[10] = int[10](0, 1, 2, 3, 4, 5, 6, 7, 7, 7); // "LOADING..."
-const int SIGN_COLUMNS = 10 * 6 - 1; // five dots a glyph and one between
+                                  0, 0, 0, 0, 0, 12, 12,
+                                  30, 17, 17, 30, 16, 16, 16,
+                                  17, 17, 10, 4, 4, 4, 4,
+                                  16, 24, 28, 30, 28, 24, 16,
+                                  0, 0, 0, 0, 0, 0, 0);
+const int SIGN_LOADING[10] = int[10](0, 1, 2, 3, 4, 5, 6, 7, 7, 7); // "LOADING..."
+const int SIGN_PLAY[6] = int[6](8, 0, 2, 9, 11, 10);                // "PLAY >"
 
 const int L_C = 0, L_E = 1, L_T = 2, L_R = 3, L_A = 4, L_N = 5, L_G = 6, L_I = 7;
 const float WIDTH[8] = float[8](0.854, 0.7, 0.8, 0.78, 1.0, 0.85, 1.0, 0.0);
@@ -149,19 +157,21 @@ vec4 stripes(float d, float r, float aa)
     return vec4(c, 1.0 - smoothstep(r - aa, r + aa, d));
 }
 
-// Whether the sign covers `s`, its bottom-left corner at `foot`; `shown` of the ellipsis's three
-// dots are lit.
-float signCover(vec2 s, vec2 foot, int shown)
+// Whether the sign covers `s`: the first `drawn` glyphs of PLAY's line or LOADING's, the line
+// ending at `corner`, its foot's right end. A glyph is five dots wide with one between.
+float signCover(vec2 s, vec2 corner, bool play, int drawn)
 {
-    vec2 g = (s - foot) / SIGN_DOT;
-    if (g.x < 0.0 || g.y < 0.0 || g.y >= 7.0 || g.x >= float(SIGN_COLUMNS))
+    int columns = (play ? 6 : 10) * 6 - 1;
+    vec2 g = (s - corner) / SIGN_DOT + vec2(float(columns), 0.0);
+    if (g.x < 0.0 || g.y < 0.0 || g.y >= 7.0 || g.x >= float(columns))
         return 0.0;
     int column = int(g.x);
     int glyph = column / 6;
     int x = column - glyph * 6;
-    if (x == 5 || glyph >= 7 + shown)
+    if (x == 5 || glyph >= drawn)
         return 0.0;
-    int bits = SIGN_ROWS[SIGN_TEXT[glyph] * 7 + (6 - int(g.y))];
+    int code = play ? SIGN_PLAY[glyph] : SIGN_LOADING[glyph];
+    int bits = SIGN_ROWS[code * 7 + (6 - int(g.y))];
     return float((bits >> (4 - x)) & 1);
 }
 
@@ -251,15 +261,19 @@ void main()
         colour += palette[1] * SPARKLE_PEAK * swell * (core + rays + 0.6 * diagonals);
     }
 
-    // The loading sign: on as the ident's glitch passes, with a flare, its ellipsis lighting a
-    // dot at a time and going dark together.
+    // The sign: on as the ident's glitch passes, with a flare. LOADING's ellipsis lights a dot at
+    // a time and goes dark together; once the game is ready, and not before the ident has played,
+    // PLAY takes its place with a flare of its own, its arrow blinking.
     float waited = time - LOADING_IDENT_END;
     if (waited > 0.0) {
-        int shown = int(mod(floor(waited / SIGN_STEP), 4.0));
-        vec2 view = vec2(aspect * viewH, viewH);
-        vec2 foot = SIGN_CORNER * view - vec2(float(SIGN_COLUMNS) * SIGN_DOT, 0.0);
-        float flare = 1.0 + SIGN_FLASH * exp(-waited * SIGN_DECAY);
-        colour = mix(colour, palette[1] * flare, signCover(s, foot, shown));
+        float playAt = ready < 0.0 ? -1.0 : max(ready, LOADING_IDENT_END);
+        bool play = playAt >= 0.0 && time >= playAt;
+        float since = play ? time - playAt : waited;
+        int drawn = play ? (fract(since / SIGN_BLINK) < SIGN_LIT ? 6 : 5)
+                         : 7 + int(mod(floor(waited / SIGN_STEP), 4.0));
+        vec2 corner = SIGN_CORNER * vec2(aspect * viewH, viewH);
+        float flare = 1.0 + SIGN_FLASH * exp(-since * SIGN_DECAY);
+        colour = mix(colour, palette[1] * flare, signCover(s, corner, play, drawn));
     }
 
     // CETRA: each letter's plane turned about its upright axis, met by this pixel's ray from the
