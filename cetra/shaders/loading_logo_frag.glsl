@@ -51,9 +51,10 @@ const float RULE_LINE = 0.04;
 const float RULE_SPACE = 0.014;
 const float SWEEP_PERIOD = 2.4;
 
-// The phosphor's glow round a lit stroke.
+// The phosphor's glow round a lit stroke, falling to exactly nothing GLOW_REACH past its edge.
 const float GLOW_W = 0.1;
 const float GLOW_A = 0.2;
+const float GLOW_REACH = 0.4;
 
 const int L_C = 0, L_E = 1, L_T = 2, L_R = 3, L_A = 4, L_N = 5, L_G = 6, L_I = 7;
 const float WIDTH[8] = float[8](0.854, 0.82, 0.8, 0.78, 1.0, 0.85, 1.0, 0.0);
@@ -133,6 +134,14 @@ float titleWidth()
     return w;
 }
 
+// The glow at `x` past a stroke's edge, in units of its width: an exponential lowered by its own
+// value at the reach, so it ends at zero there rather than at a step.
+float glowAt(float x, float width, float reach)
+{
+    float floorAt = exp(-reach / width);
+    return max(exp(-max(x, 0.0) / width) - floorAt, 0.0) / (1.0 - floorAt);
+}
+
 // Back to front over `dst`: premultiplied `src`.
 vec3 over(vec3 dst, vec4 src)
 {
@@ -170,7 +179,7 @@ void main()
             float flare = 1.0 + ENGINE_FLASH * exp(-since * ENGINE_DECAY);
             float cover = 1.0 - smoothstep(ENGINE_R - px / ENGINE_SCALE, ENGINE_R + px / ENGINE_SCALE, d);
             colour = mix(colour, palette[1] * flare, cover);
-            glow += palette[2] * GLOW_A * flare * exp(-max(d - ENGINE_R, 0.0) * ENGINE_SCALE / (0.5 * GLOW_W));
+            glow += palette[2] * GLOW_A * flare * glowAt((d - ENGINE_R) * ENGINE_SCALE, 0.5 * GLOW_W, 0.5 * GLOW_REACH);
         }
         x += (w + engineGap) * ENGINE_SCALE;
     }
@@ -221,7 +230,7 @@ void main()
             continue;
         vec3 hit = eye + t * ray;
         vec2 p = vec2(dot(hit - centre, vec3(cos(turn), 0.0, -sin(turn))) + 0.5 * w, hit.y - TITLE_Y);
-        float margin = TITLE_R + 4.0 * GLOW_W;
+        float margin = TITLE_R + GLOW_REACH;
         if (p.x < -margin || p.x > w + margin + SHADOW_OFF.x || p.y < -margin + SHADOW_OFF.y || p.y > 1.0 + margin)
             continue;
 
@@ -242,7 +251,7 @@ void main()
             }
             float under = shadow * (1.0 - face.a);
             ink[i] = vec4(face.rgb * face.a + palette[6] * under, face.a + under);
-            glow += palette[3] * GLOW_A * abs(cos(turn)) * exp(-max(d - TITLE_R, 0.0) / GLOW_W);
+            glow += palette[3] * GLOW_A * abs(cos(turn)) * glowAt(d - TITLE_R, GLOW_W, GLOW_REACH);
         } else {
             // The card's back: dark, with the outer stripe round its edge.
             vec4 face = stripes(d, TITLE_R, aa);
