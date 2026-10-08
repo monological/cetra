@@ -678,7 +678,7 @@ VegSprayDesc veg_spray_desc_default(void) {
     return (VegSprayDesc){.seed = 1,
                           .flat = 0.35f,
                           .live_rgb = {0.22f, 0.32f, 0.14f},
-                          .dead_rgb = {0.42f, 0.27f, 0.12f},
+                          .dead_rgb = {0.42f, 0.30f, 0.18f},
                           .twig_rgb = {0.36f, 0.26f, 0.18f}};
 }
 
@@ -878,6 +878,11 @@ void veg_needle_spray_maps(int width, int height, const VegSprayDesc* desc,
         const float keep = live ? 1.0f : (bare ? 0.0f : 0.55f);
         const float* needle_rgb = live ? desc->live_rgb : desc->dead_rgb;
         const float needle_rough = live ? 0.6f : 0.75f;
+        // A twig bare of its needles has weathered grey.
+        float twig_rgb[3];
+        for (int k = 0; k < 3; k++)
+            twig_rgb[k] =
+                bare ? desc->twig_rgb[k] + (0.42f - desc->twig_rgb[k]) * 0.6f : desc->twig_rgb[k];
 
         /*
          * The sprig as a fir's grows: a leading shoot from the base at the bottom row up the
@@ -955,7 +960,7 @@ void veg_needle_spray_maps(int width, int height, const VegSprayDesc* desc,
 
         for (int i = 0; i < ns; i++)
             spray_stroke(&c, shoots[i].ax, shoots[i].ay, shoots[i].bx, shoots[i].by, shoots[i].r0,
-                         shoots[i].r1, desc->twig_rgb, 0.8f);
+                         shoots[i].r1, twig_rgb, 0.8f);
         for (int i = 0; i < ns; i++)
             spray_brush(&c, &rng, shoots[i].ax, shoots[i].ay, shoots[i].bx, shoots[i].by,
                         shoots[i].tip, shoots[i].needle_len, shoots[i].needle_r, keep, desc->flat,
