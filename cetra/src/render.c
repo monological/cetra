@@ -1528,15 +1528,17 @@ void engine_render_scene(Engine* engine, Scene* scene) {
     // Derived emissive panels (spec 11.49), immediately upstream of the only
     // thing that reads them.
     //
-    // A cube-capture face re-enters here, so this runs six more times per
-    // capture; it is idempotent and epoch-gated, so those are placement only.
-    // Unconditional, with the flag passed in: guarding the call is what made the
-    // disabled path unreachable, so turning the feature off mid-run stranded
-    // every derived light instead of removing them. Costs one branch when off --
-    // the registry is NULL and there is nothing to tear down.
-    profiler_scope_begin(engine->profiler, "emissive panels");
-    scene_build_emissive_lights(scene, engine->emissive_lights_enabled);
-    profiler_scope_end(engine->profiler);
+    // Not under a capture, whose burst built them before its shadow pass
+    // (scene_capture_begin): a face re-entering here would only place them again.
+    // Unconditional otherwise, with the flag passed in: guarding the call is what
+    // made the disabled path unreachable, so turning the feature off mid-run
+    // stranded every derived light instead of removing them. Costs one branch when
+    // off -- the registry is NULL and there is nothing to tear down.
+    if (!engine->capturing) {
+        profiler_scope_begin(engine->profiler, "emissive panels");
+        scene_build_emissive_lights(scene, engine->emissive_lights_enabled);
+        profiler_scope_end(engine->profiler);
+    }
 
     // After the emissive build, so a scene lit only by derived panels is not
     // warned. The COUNT and not the emitted intensity: a zero-intensity light is
@@ -1563,15 +1565,15 @@ void engine_render_scene(Engine* engine, Scene* scene) {
     engine_resolve_material_variants(engine, scene);
 
     // Clustered forward (spec 9.1): rebuild the light grid + UBOs for THIS
-    // invocation's camera and viewport -- probe-capture faces re-enter here
-    // with their own view/projection, so each face gets a correct grid.
-    if (engine->light_cluster) {
+    // invocation's camera and viewport. A capture builds its own in
+    // scene_capture_faces, which knows whether its faces share one list.
+    if (engine->light_cluster && !engine->capturing) {
         profiler_scope_begin(engine->profiler, "cluster build");
         GLint cluster_viewport[4];
         glGetIntegerv(GL_VIEWPORT, cluster_viewport);
         light_cluster_build_and_upload(engine->light_cluster, scene, *view, *projection,
                                        cluster_viewport[2], cluster_viewport[3], camera->near_clip,
-                                       camera->far_clip, engine->capturing);
+                                       camera->far_clip, false);
         profiler_scope_end(engine->profiler);
     }
 
@@ -2057,6 +2059,11 @@ void scene_capture_begin(Engine* engine, Scene* scene, SceneCaptureKind kind,
     // builds it otherwise, which is exactly why it cannot live inside that guard.
     engine_build_draw_list(engine, scene);
 
+    // The derived emissive panels, once for the burst, which its faces no longer place
+    // (spec 13.32) -- and before its shadow pass, so a panel first derived here is a light
+    // the pass gives a shadow.
+    scene_build_emissive_lights(scene, engine->emissive_lights_enabled);
+
     saved->cascade_count = scene->shadow_system ? scene->shadow_system->cascade_count : 1;
     saved->msm_enabled = scene->shadow_system ? scene->shadow_system->msm_enabled : false;
     saved->render_time = engine->render_time;
@@ -2221,6 +2228,17 @@ void scene_capture_faces(Engine* engine, Scene* scene, struct IBLResources* ibl,
     camera->far_clip = far_clip;
     glm_perspective(glm_rad(90.0f), 1.0f, near_clip, far_clip, engine->projection_matrix);
 
+    // The lights a shaded face reads. A face no wider than twice the grid leaves its cells a
+    // pixel or two each, where per-cell lists cull nothing the fragments would have paid for,
+    // and building them once a face was most of a GI capture (spec 13.32): one list, built
+    // here, stands for all six. A wider face builds the grid for each face, which its
+    // fragments repay. The capture sees out to its far plane along each axis, so to
+    // far * sqrt(3) at a corner.
+    const bool one_list = ss_size <= 2 * LC_CLUSTER_X;
+    if (faces == SCENE_FACES_SHADED && one_list && engine->light_cluster)
+        light_cluster_build_capture(engine->light_cluster, scene, position, far_clip * sqrtf(3.0f),
+                                    engine->projection_matrix, ss_size, near_clip, far_clip);
+
     for (int i = 0; i < 6; ++i) {
         if (keep_depth) {
             glBindFramebuffer(GL_FRAMEBUFFER, face_fbo);
@@ -2244,10 +2262,15 @@ void scene_capture_faces(Engine* engine, Scene* scene, struct IBLResources* ibl,
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         glm_mat4_copy(views[i], engine->view_matrix);
-        if (faces == SCENE_FACES_BACK_DEPTH)
+        if (faces == SCENE_FACES_BACK_DEPTH) {
             _render_capture_depth(engine, scene);
-        else
+        } else {
+            if (!one_list && engine->light_cluster)
+                light_cluster_build_and_upload(engine->light_cluster, scene, engine->view_matrix,
+                                               engine->projection_matrix, ss_size, ss_size,
+                                               near_clip, far_clip, true);
             engine_render_scene(engine, scene);
+        }
 
         if (keep_depth)
             continue; // already in the destination faces

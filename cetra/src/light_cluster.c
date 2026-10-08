@@ -1,5 +1,6 @@
 #include "light_cluster.h"
 
+#include <float.h>
 #include <math.h>
 #include <stddef.h>
 #include <stdlib.h>
@@ -278,58 +279,85 @@ static void _pack_cluster_light(GpuPackedLight* dst, const struct Light* light, 
     }
 }
 
+// A directional into the next of the unclustered slots: they reach every fragment.
+static void _gather_dir_light(LightClusterContext* ctx, const struct Light* light, int* num_dir) {
+    // A directional delivering nothing costs a full trip of pbr_frag's
+    // per-light body on EVERY fragment -- it has no distance to cull
+    // against and no attenuation early-out, unlike the clustered types
+    // whose `radius == 0` skip is in _clustered_radius. Dropping it here
+    // is exactly that rule applied to the one type that was missing it.
+    //
+    // Not a moon-shaped special case: the SUN's intensity is an exact
+    // zero below the horizon, so every night frame in the corpus has
+    // always shaded a dead directional. An exact 0 px identity either
+    // way -- every term in the loop scales by the radiance.
+    if (light->intensity <= 0.0f)
+        return;
+    if (*num_dir >= LC_MAX_DIR_LIGHTS) {
+        if (!ctx->warned_dir_overflow) {
+            log_warn("More than %d directional lights; extras ignored", LC_MAX_DIR_LIGHTS);
+            ctx->warned_dir_overflow = true;
+        }
+        return;
+    }
+    _pack_dir_light(&ctx->lights.dir_lights[(*num_dir)++], light);
+}
+
+// Whether a light goes into the cluster list at all, its cull radius in *radius (< 0 for one
+// that reaches everywhere): not a directional, an unknown type, a panel while panels are off, or
+// a light that never reaches epsilon.
+static bool _clustered_radius(const LightClusterContext* ctx, const struct Light* light,
+                              float* radius) {
+    if (!light || light->type == LIGHT_UNKNOWN || light->type == LIGHT_DIRECTIONAL)
+        return false;
+    if (light->type == LIGHT_AREA && !ctx->area_lights_enabled)
+        return false;
+    *radius = light_cull_radius(light);
+    return *radius != 0.0f;
+}
+
+// A light into packed slot `slot`, with what the overflow warning names it by.
+static void _pack_slot(LightClusterContext* ctx, const struct Scene* scene,
+                       const struct Light* light, float radius, int slot) {
+    _pack_cluster_light(&ctx->lights.cluster_lights[slot], light, radius, scene->shadow_system);
+    ctx->lights.cluster_specular[slot] = light_specular_share(light);
+    // Borrowed, not owned: the light outlives this build, and the only reader
+    // is the overflow warning, which runs before this function is called again.
+    ctx->packed_names[slot] = light->name;
+}
+
+static void _warn_packed_overflow(LightClusterContext* ctx, bool capture) {
+    if (ctx->warned_packed_overflow[capture])
+        return;
+    log_warn("More than %d clusterable lights in %s; %s", LC_MAX_CLUSTER_LIGHTS,
+             capture ? "a scene capture's reach" : "view",
+             capture ? "the nearest are kept" : "extras ignored");
+    ctx->warned_packed_overflow[capture] = true;
+}
+
 // Classify, cull and pack scene->lights. Directionals shade unclustered (they
 // reach every fragment); everything else gets a cull radius, a frustum test
 // and a cluster range. Walked in scene->lights order so the packing -- and so
 // the shading loop order -- is deterministic.
 static void _gather_lights(LightClusterContext* ctx, struct Scene* scene, const Frustum* frustum,
-                           mat4 view, mat4 projection, const ClusterFrame* cf) {
+                           mat4 view, mat4 projection, const ClusterFrame* cf, bool capture) {
     int num_dir = 0, num_packed = 0, num_area = 0;
 
     for (size_t i = 0; i < scene->light_count; i++) {
         struct Light* light = scene->lights[i];
-        if (!light || light->type == LIGHT_UNKNOWN)
-            continue;
-        if (light->type == LIGHT_AREA && !ctx->area_lights_enabled)
-            continue;
-
-        if (light->type == LIGHT_DIRECTIONAL) {
-            // A directional delivering nothing costs a full trip of pbr_frag's
-            // per-light body on EVERY fragment -- it has no distance to cull
-            // against and no attenuation early-out, unlike the clustered types
-            // whose `radius == 0` skip is a dozen lines down. Dropping it here
-            // is exactly that rule applied to the one type that was missing it.
-            //
-            // Not a moon-shaped special case: the SUN's intensity is an exact
-            // zero below the horizon, so every night frame in the corpus has
-            // always shaded a dead directional. An exact 0 px identity either
-            // way -- every term in the loop scales by the radiance.
-            if (light->intensity <= 0.0f)
-                continue;
-            if (num_dir >= LC_MAX_DIR_LIGHTS) {
-                if (!ctx->warned_dir_overflow) {
-                    log_warn("More than %d directional lights; extras ignored", LC_MAX_DIR_LIGHTS);
-                    ctx->warned_dir_overflow = true;
-                }
-                continue;
-            }
-            _pack_dir_light(&ctx->lights.dir_lights[num_dir++], light);
+        if (light && light->type == LIGHT_DIRECTIONAL) {
+            _gather_dir_light(ctx, light, &num_dir);
             continue;
         }
-
-        float radius = light_cull_radius(light);
-        if (radius == 0.0f)
-            continue; // never reaches epsilon
+        float radius;
+        if (!_clustered_radius(ctx, light, &radius))
+            continue;
         bool uncullable = radius < 0.0f;
         if (!uncullable && !frustum_test_sphere(frustum, light->global_position, radius))
             continue;
 
         if (num_packed >= LC_MAX_CLUSTER_LIGHTS) {
-            if (!ctx->warned_packed_overflow) {
-                log_warn("More than %d clusterable lights in view; extras ignored",
-                         LC_MAX_CLUSTER_LIGHTS);
-                ctx->warned_packed_overflow = true;
-            }
+            _warn_packed_overflow(ctx, capture);
             break;
         }
 
@@ -353,12 +381,7 @@ static void _gather_lights(LightClusterContext* ctx, struct Scene* scene, const 
             sphere[3] = radius;
         }
 
-        _pack_cluster_light(&ctx->lights.cluster_lights[num_packed], light, radius,
-                            scene->shadow_system);
-        ctx->lights.cluster_specular[num_packed] = light_specular_share(light);
-        // Borrowed, not owned: the light outlives this build, and the only reader
-        // is the overflow warning, which runs before this function is called again.
-        ctx->packed_names[num_packed] = light->name;
+        _pack_slot(ctx, scene, light, radius, num_packed);
         num_packed++;
         if (light->type == LIGHT_AREA)
             num_area++;
@@ -369,6 +392,95 @@ static void _gather_lights(LightClusterContext* ctx, struct Scene* scene, const 
     // Lets the shader skip the LTC lookups entirely on scenes with no panels
     // -- a dynamically uniform branch, so area-free frames pay nothing
     ctx->lights.light_counts[2] = num_area;
+}
+
+// How far a light's reach falls short of the sphere `sees` (xyz centre, w radius): above 0 it
+// cannot light anything the capture sees. A light that reaches everywhere is -FLT_MAX.
+static float _reach_gap(const struct Light* light, float radius, const float* sees) {
+    if (radius < 0.0f)
+        return -FLT_MAX;
+    return glm_vec3_distance((float*)light->global_position, (float*)sees) - sees[3] - radius;
+}
+
+static int _compare_floats(const void* a, const void* b) {
+    const float x = *(const float*)a, y = *(const float*)b;
+    return (x > y) - (x < y);
+}
+
+// A capture's lights (spec 13.32): every clustered light whose reach meets the sphere it sees,
+// in scene order as a view's are. Past the cap the lights reaching nearest the centre are kept,
+// rather than the first in scene order: a capture's sphere takes in much of a scene, and which
+// of its lights come first in the list says nothing about which of them light the probe.
+static void _gather_capture_lights(LightClusterContext* ctx, const struct Scene* scene,
+                                   const float* sees) {
+    int num_dir = 0, wanted = 0;
+    for (size_t i = 0; i < scene->light_count; i++) {
+        const struct Light* light = scene->lights[i];
+        if (light && light->type == LIGHT_DIRECTIONAL) {
+            _gather_dir_light(ctx, light, &num_dir);
+            continue;
+        }
+        float radius;
+        if (_clustered_radius(ctx, light, &radius) && _reach_gap(light, radius, sees) <= 0.0f)
+            wanted++;
+    }
+
+    // The gap of the last light kept, and how many lights at exactly that gap make the cut. With
+    // no room to rank them, the first in scene order are kept, as a view's are.
+    float keep_gap = 0.0f;
+    int ties_left = LC_MAX_CLUSTER_LIGHTS;
+    float* gaps = NULL;
+    if (wanted > LC_MAX_CLUSTER_LIGHTS) {
+        _warn_packed_overflow(ctx, true);
+        gaps = malloc((size_t)wanted * sizeof(float));
+    }
+    if (gaps) {
+        int n = 0;
+        for (size_t i = 0; i < scene->light_count; i++) {
+            float radius;
+            if (!_clustered_radius(ctx, scene->lights[i], &radius))
+                continue;
+            const float gap = _reach_gap(scene->lights[i], radius, sees);
+            if (gap <= 0.0f)
+                gaps[n++] = gap;
+        }
+        qsort(gaps, (size_t)n, sizeof(float), _compare_floats);
+        keep_gap = gaps[LC_MAX_CLUSTER_LIGHTS - 1];
+        ties_left = 0;
+        for (int k = LC_MAX_CLUSTER_LIGHTS - 1; k >= 0 && gaps[k] == keep_gap; --k)
+            ties_left++;
+        free(gaps);
+    }
+
+    int num_packed = 0, num_area = 0;
+    for (size_t i = 0; i < scene->light_count; i++) {
+        const struct Light* light = scene->lights[i];
+        float radius;
+        if (!_clustered_radius(ctx, light, &radius))
+            continue;
+        const float gap = _reach_gap(light, radius, sees);
+        if (gap > keep_gap || (gap == keep_gap && ties_left-- <= 0))
+            continue;
+        if (num_packed >= LC_MAX_CLUSTER_LIGHTS)
+            break;
+        _pack_slot(ctx, scene, light, radius, num_packed);
+        num_packed++;
+        if (light->type == LIGHT_AREA)
+            num_area++;
+    }
+
+    ctx->lights.light_counts[0] = num_dir;
+    ctx->lights.light_counts[1] = num_packed;
+    ctx->lights.light_counts[2] = num_area;
+}
+
+// Every cell of the grid pointing at the whole packed list, which the index pool holds once.
+static void _fill_shared_list(LightClusterContext* ctx) {
+    const int num_packed = ctx->lights.light_counts[1];
+    for (int li = 0; li < num_packed; li++)
+        ctx->index_pool.indices[li] = (uint8_t)li;
+    for (int ci = 0; ci < LC_CLUSTER_COUNT; ci++)
+        ctx->grid.clusters[ci] = (uint32_t)num_packed; // offset 0
 }
 
 // Pass 1: record which clusters each light touches (one bit per pair) and
@@ -624,6 +736,32 @@ static void _mark_probe_clusters(LightClusterContext* ctx, const struct Scene* s
                            sizeof(ctx->probes.cluster_masks), bits);
 }
 
+// The decal descriptors into the block, their bounding spheres into `bounds`. Returns the live
+// count; with none the block is disarmed and nothing further is uploaded.
+static int _decals_begin(LightClusterContext* ctx, const struct Scene* scene,
+                         float bounds[DECAL_MAX][4]) {
+    memset(&ctx->decals, 0, sizeof(ctx->decals));
+    const int live = decal_fill_descriptors(scene, &ctx->decals, bounds);
+    if (live <= 0) {
+        // The disarmed state, written once on the way down: a zero block reads
+        // count 0 and the shader's loop is never entered. The upload is what
+        // costs, not the memset. The digest and bit count go with it, or a probe
+        // taken after the last decal went dark reports the previous build's.
+        if (ctx->decals_armed) {
+            ubo_upload(ctx->decals_ubo, &ctx->decals, sizeof(ctx->decals));
+            ctx->decals_armed = false;
+        }
+        ctx->decal_mask_bits = 0;
+    }
+    return live;
+}
+
+static void _decals_upload(LightClusterContext* ctx, int bits) {
+    ubo_upload(ctx->decals_ubo, &ctx->decals, sizeof(ctx->decals));
+    ctx->decals_armed = true;
+    ctx->decal_mask_bits = bits;
+}
+
 /*
  * Which decals reach which froxel (spec 11.73).
  *
@@ -649,22 +787,10 @@ static void _mark_probe_clusters(LightClusterContext* ctx, const struct Scene* s
 static void _mark_decal_clusters(LightClusterContext* ctx, const struct Scene* scene,
                                  const Frustum* frustum, mat4 view, mat4 projection,
                                  float near_clip, const ClusterFrame* cf) {
-    memset(&ctx->decals, 0, sizeof(ctx->decals));
     float bounds[DECAL_MAX][4];
-    const int live = decal_fill_descriptors(scene, &ctx->decals, bounds);
-
-    if (live <= 0) {
-        // The disarmed state, written once on the way down: a zero block reads
-        // count 0 and the shader's loop is never entered. The upload is what
-        // costs, not the memset. The digest and bit count go with it, or a probe
-        // taken after the last decal went dark reports the previous build's.
-        if (ctx->decals_armed) {
-            ubo_upload(ctx->decals_ubo, &ctx->decals, sizeof(ctx->decals));
-            ctx->decals_armed = false;
-        }
-        ctx->decal_mask_bits = 0;
+    const int live = _decals_begin(ctx, scene, bounds);
+    if (live <= 0)
         return;
-    }
 
     int bits = 0;
     for (int index = 0; index < live; ++index) {
@@ -685,10 +811,93 @@ static void _mark_decal_clusters(LightClusterContext* ctx, const struct Scene* s
         bits += _mark_sphere_bit(ctx->decals.cluster_masks, index, view_center, radius, projection,
                                  near_clip, cf);
     }
+    _decals_upload(ctx, bits);
+}
 
-    ubo_upload(ctx->decals_ubo, &ctx->decals, sizeof(ctx->decals));
-    ctx->decals_armed = true;
-    ctx->decal_mask_bits = bits;
+// A capture's decals (spec 13.32): every one whose sphere meets the sphere the capture sees,
+// marked in every cell, as its lights share one list. Over-marking is harmless, the fragment
+// testing the exact box, and a capture looks all round, so the view's rejects have nothing to cut.
+static void _mark_decal_capture(LightClusterContext* ctx, const struct Scene* scene,
+                                const float* sees) {
+    float bounds[DECAL_MAX][4];
+    const int live = _decals_begin(ctx, scene, bounds);
+    if (live <= 0)
+        return;
+
+    uint32_t reach = 0;
+    for (int index = 0; index < live; ++index) {
+        const float radius = bounds[index][3];
+        if (radius > 0.0f && glm_vec3_distance(bounds[index], (float*)sees) <= sees[3] + radius)
+            reach |= 1u << index;
+    }
+    // Two froxels a word, sixteen bits each (include/froxel_mask.glsl).
+    const uint32_t word = reach | (reach << 16);
+    for (int w = 0; w < LC_CLUSTER_COUNT / 2; ++w)
+        ctx->decals.cluster_masks[w] = word;
+    _decals_upload(ctx, __builtin_popcount(reach) * LC_CLUSTER_COUNT);
+}
+
+// The cluster params and an empty light block, ahead of a gather: the slicing from the
+// projection's clip planes, the tiles from the target gl_FragCoord is measured in.
+static void _begin_lights(LightClusterContext* ctx, const ClusterFrame* cf, int fb_width,
+                          int fb_height) {
+    memset(&ctx->lights, 0, sizeof(ctx->lights));
+    ctx->lights.cluster_params[0] = cf->slice_scale;
+    ctx->lights.cluster_params[1] = cf->slice_bias;
+    ctx->lights.cluster_params[2] = (float)LC_CLUSTER_X / (float)fb_width;
+    ctx->lights.cluster_params[3] = (float)LC_CLUSTER_Y / (float)fb_height;
+}
+
+// Uploaded when the SET changes, not per build -- profiles are static once
+// loaded, and a capture builds once per probe on top of the frame's own.
+//
+// Keyed on the library's revision rather than its profile COUNT. This
+// context belongs to the engine and the library to the scene, so a count
+// compares two scenes' libraries as if they were one: switch between scenes
+// holding one profile each and every light samples the other's table, which
+// renders as a plausible luminaire with the wrong skirt.
+static void _upload_ies(LightClusterContext* ctx, const struct Scene* scene) {
+    uint64_t ies_rev = ies_library_revision(scene->ies_library);
+    if (ies_rev == ctx->ies_uploaded_revision)
+        return;
+    GpuIesBlock block;
+    // Only on success: a failed pack leaves iesCounts.x holding the previous
+    // library's count, and committing the revision would keep it.
+    if (ies_library_pack(scene->ies_library, &block)) {
+        ubo_upload(ctx->ies_ubo, &block, sizeof(block));
+        ctx->ies_uploaded_revision = ies_rev;
+    }
+}
+
+// Upload only the live prefix of the variable-length blocks (the light
+// array and index pool are both tail fields, and the shader never reads
+// past the counts). The grid is always full: the shader indexes it
+// directly by cluster id, empty clusters included.
+static void _upload_lights(LightClusterContext* ctx, uint32_t total_indices) {
+    int num_packed = ctx->lights.light_counts[1];
+    ubo_upload(ctx->lights_ubo, &ctx->lights,
+               (GLsizeiptr)(offsetof(GpuLightsBlock, cluster_lights) +
+                            (size_t)num_packed * sizeof(GpuPackedLight)));
+    ubo_upload(ctx->clusters_ubo, &ctx->grid, sizeof(ctx->grid));
+    ubo_upload(ctx->cluster_indices_ubo, &ctx->index_pool,
+               (GLsizeiptr)((size_t)total_indices * sizeof(ctx->index_pool.indices[0])));
+}
+
+void light_cluster_build_capture(LightClusterContext* ctx, const struct Scene* scene,
+                                 const vec3 centre, float sees, mat4 projection, int face_px,
+                                 float near_clip, float far_clip) {
+    if (!ctx || !scene || face_px <= 0)
+        return;
+    ClusterFrame cf;
+    _cluster_frame_init(&cf, projection, near_clip, far_clip);
+    _begin_lights(ctx, &cf, face_px, face_px);
+    _upload_ies(ctx, scene);
+
+    const float sphere[4] = {centre[0], centre[1], centre[2], sees};
+    _gather_capture_lights(ctx, scene, sphere);
+    _fill_shared_list(ctx);
+    _mark_decal_capture(ctx, scene, sphere);
+    _upload_lights(ctx, (uint32_t)ctx->lights.light_counts[1]);
 }
 
 void light_cluster_build_and_upload(LightClusterContext* ctx, struct Scene* scene, mat4 view,
@@ -704,12 +913,7 @@ void light_cluster_build_and_upload(LightClusterContext* ctx, struct Scene* scen
 
     ClusterFrame cf;
     _cluster_frame_init(&cf, projection, near_clip, far_clip);
-
-    memset(&ctx->lights, 0, sizeof(ctx->lights));
-    ctx->lights.cluster_params[0] = cf.slice_scale;
-    ctx->lights.cluster_params[1] = cf.slice_bias;
-    ctx->lights.cluster_params[2] = (float)LC_CLUSTER_X / (float)fb_width;
-    ctx->lights.cluster_params[3] = (float)LC_CLUSTER_Y / (float)fb_height;
+    _begin_lights(ctx, &cf, fb_width, fb_height);
 
     // World-space frustum for the sphere pre-cull (same planes node culling uses)
     mat4 view_proj;
@@ -717,26 +921,8 @@ void light_cluster_build_and_upload(LightClusterContext* ctx, struct Scene* scen
     Frustum frustum;
     frustum_extract_from_vp(view_proj, &frustum);
 
-    // Uploaded when the SET changes, not per frame -- profiles are static once
-    // loaded, and this path re-enters seven times on a probe-capture frame.
-    //
-    // Keyed on the library's revision rather than its profile COUNT. This
-    // context belongs to the engine and the library to the scene, so a count
-    // compares two scenes' libraries as if they were one: switch between scenes
-    // holding one profile each and every light samples the other's table, which
-    // renders as a plausible luminaire with the wrong skirt.
-    uint64_t ies_rev = ies_library_revision(scene->ies_library);
-    if (ies_rev != ctx->ies_uploaded_revision) {
-        GpuIesBlock block;
-        // Only on success: a failed pack leaves iesCounts.x holding the previous
-        // library's count, and committing the revision would keep it.
-        if (ies_library_pack(scene->ies_library, &block)) {
-            ubo_upload(ctx->ies_ubo, &block, sizeof(block));
-            ctx->ies_uploaded_revision = ies_rev;
-        }
-    }
-
-    _gather_lights(ctx, scene, &frustum, view, projection, &cf);
+    _upload_ies(ctx, scene);
+    _gather_lights(ctx, scene, &frustum, view, projection, &cf, capture);
     _mark_touched_clusters(ctx, &cf);
     uint32_t total_indices = _assign_index_offsets(ctx, capture);
     _fill_index_pool(ctx);
@@ -749,22 +935,11 @@ void light_cluster_build_and_upload(LightClusterContext* ctx, struct Scene* scen
     if (!capture)
         _mark_probe_clusters(ctx, scene, view, projection, near_clip, &cf);
     _mark_decal_clusters(ctx, scene, &frustum, view, projection, near_clip, &cf);
-
-    // Upload only the live prefix of the variable-length blocks (the light
-    // array and index pool are both tail fields, and the shader never reads
-    // past the counts). The grid is always full: the shader indexes it
-    // directly by cluster id, empty clusters included.
-    int num_packed = ctx->lights.light_counts[1];
-    ubo_upload(ctx->lights_ubo, &ctx->lights,
-               (GLsizeiptr)(offsetof(GpuLightsBlock, cluster_lights) +
-                            (size_t)num_packed * sizeof(GpuPackedLight)));
-    ubo_upload(ctx->clusters_ubo, &ctx->grid, sizeof(ctx->grid));
-    ubo_upload(ctx->cluster_indices_ubo, &ctx->index_pool,
-               (GLsizeiptr)((size_t)total_indices * sizeof(ctx->index_pool.indices[0])));
+    _upload_lights(ctx, total_indices);
 
     if (!ctx->logged_first_build) {
         log_info("clustered: %d directional + %d clusterable lights, %u cluster indices",
-                 ctx->lights.light_counts[0], num_packed, total_indices);
+                 ctx->lights.light_counts[0], ctx->lights.light_counts[1], total_indices);
         ctx->logged_first_build = true;
     }
 }
