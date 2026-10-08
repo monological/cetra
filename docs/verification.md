@@ -515,8 +515,8 @@ tone is louder near than far and still audible far -- attenuation, not a cutoff)
 synthesized by the gate, with no committed binary, loads from a file and decodes to energy),
 **noise** (spec 13.9: white, pink and brown each loud, each darker than the last), and four
 for the zones (spec 13.33): **zone** (a tone through a link of 0.25 is a quarter of itself,
-and a sound decoded from a file and never placed -- spatialized at the origin, in the tone's
-zone -- is whole), **zone-path** (a direct link of 0.1 against a way round at 0.5 and 0.5: the
+and a sound decoded from a file and never placed is whole, being 2D -- spatialized from the
+start, it would sit at the origin, in the tone's zone), **zone-path** (a direct link of 0.1 against a way round at 0.5 and 0.5: the
 best path, 0.25), **zone-start** (the first update lands a gain outright whatever its delta,
 and a tone placed after it starts at its zone's gain) and **zone-fade** (the listener stepping
 into the tone's zone eases it up, every window where the 0.4 s fade predicts; an opened link

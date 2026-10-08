@@ -16590,8 +16590,8 @@ def run_audio_gate(workdir):
                      flat spectrum gives -- colours swapped or collapsed to one fail.
       audio-zone     a tone in another zone through a link of 0.25 is a quarter of
                      itself with no zones, and a sound decoded from a file and never
-                     placed -- spatialized at the origin, in the tone's zone -- is whole
-                     either way (spec 13.33)
+                     placed is whole either way, being 2D -- spatialized from the start
+                     it would sit at the origin, in the tone's zone (spec 13.33)
       audio-zone-path with a direct link of 0.1 and a way round through a third zone
                      at 0.5 and 0.5, the tone is heard along the best path, 0.25
       audio-zone-start the first update lands a tone at 0.25 whatever its delta, and a
@@ -16602,7 +16602,7 @@ def run_audio_gate(workdir):
                      from its first window rather than fading down from whole
 
     Falsified by hand at 13.33: audio-zone fails with the zone's gain never applied and
-    with zoning keyed on spatialization rather than placement, audio-zone-path with the
+    with a file sound spatialized from the moment it is made, audio-zone-path with the
     direct link taken for the path (0.1), audio-zone-start with the first update easing
     like any other and with a placed sound left unseeded, and audio-zone-fade with the
     easing removed (the first window whole), with the fade twice as fast, and with a

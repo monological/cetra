@@ -4402,8 +4402,9 @@ static int run_audio_zone_probe(AudioSystem* audio, const char* which, const cha
     }
     if (!strcmp(which, "zone")) {
         // A tone in another zone through a link of 0.25, against itself with no zones; and a
-        // sound decoded from a file and never placed -- spatialized at the origin from the
-        // moment it is made, in the tone's zone and not the listener's -- heard whole either way.
+        // sound decoded from a file and never placed, heard whole either way: it is 2D, where
+        // one spatialized from the moment it is made would sit at the origin, in the tone's zone
+        // and not the listener's.
         const vec3 listener = {0.0f, 0.0f, 10.0f};
         probe_listen(audio, listener, 0.0f);
         Sound* flat = audio_sound_from_file(audio, file, AUDIO_BUS_SFX);
