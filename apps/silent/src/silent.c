@@ -18,6 +18,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <GL/glew.h>
+#include <GLFW/glfw3.h>
 #include <cglm/cglm.h>
 
 #include "cetra/camera.h"
@@ -614,9 +616,19 @@ static const Door* hung_door(int i) {
     return g_door_hung[i] ? &g_doors[i] : NULL;
 }
 
+// Where loading's time goes (spec 13.34), as startup-ms rows: each seam of on_init prints the
+// time since the one before it.
+static double g_load_mark;
+static void load_seam(const char* site) {
+    const double now = glfwGetTime();
+    printf("startup-ms site=%s ms=%.1f\n", site, (now - g_load_mark) * 1000.0);
+    g_load_mark = now;
+}
+
 static void on_init(Game* game) {
     Engine* engine = game->engine;
     engine->show_fps = !engine->headless;
+    g_load_mark = glfwGetTime();
 
     g_scene = create_scene();
     game_set_scene(game, g_scene);
@@ -627,23 +639,31 @@ static void on_init(Game* game) {
     EntityManager* em = create_entity_manager(game);
     game_set_entity_manager(game, em);
 
+    load_seam("scene");
+
     Kit kit;
     kit_init(&kit, g_scene, em, physics);
     mats_register(&kit, engine, g_scene);
+    load_seam("materials");
     // The player's house on the plan's origin (spec 13.25), its living room's television, its
     // basement, its kitchen and its clock.
     home_build(&kit, engine, g_scene);
+    load_seam("home");
     tv_build(&g_tv, &kit, engine, g_scene, !g_args.no_static);
+    load_seam("tv");
     basement_build(&kit, (unsigned int)g_args.seed);
     kitchen_build(&kit, (unsigned int)g_args.seed);
     lights_build(&g_lights, &kit, engine, g_scene, (unsigned int)g_args.seed, !g_args.no_flicker,
                  g_args.flashlight);
+    load_seam("basement-kitchen-lights");
     StreetPlots plots;
     street_build(&kit, g_scene, (unsigned int)g_args.seed, !g_args.day, !g_args.no_fog, &plots);
+    load_seam("street");
     clock_build(&kit);
     // The drive up the hill, the ground over the world, the far side's terrace, the yards' fences,
     // and the crossroads at the chasm's lip (spec 13.35).
     hill_build(&kit);
+    load_seam("clock-hill");
     // The open ground and the chasm's face in a kit of their own, whose shadow cells are six times
     // the size: at the kit's own, the land's 2 m grid made thousands of cells of a few triangles.
     Kit ground;
@@ -651,16 +671,22 @@ static void on_init(Game* game) {
     ground.shadow_cell_scale = 6.0f;
     land_build(&ground);
     terrace_build(&kit, plots.far);
+    load_seam("land-terrace");
     FenceBreaches breaches;
     fences_build(&kit, (unsigned int)g_args.seed, &plots, &breaches);
+    load_seam("fences");
     crossroads_build(&kit, g_scene, !g_args.day, &g_failing[FAILING_LIP]);
+    load_seam("crossroads");
     Trees trees;
     trees_init(&trees, engine, g_scene);
     trees_build(&trees, &kit, g_scene, (unsigned int)g_args.seed);
+    load_seam("trees");
     if (!g_args.no_woods)
         woods_build(&kit, engine, g_scene, &trees, &breaches, (unsigned int)g_args.seed);
     trees_release(&trees);
+    load_seam("woods");
     grounds_build(&kit, g_scene, (unsigned int)g_args.seed, !g_args.day, &g_failing[FAILING_DRIVE]);
+    load_seam("grounds");
 
     // The Gothic house as the mansion at the end of the street (spec 13.25): the same plan, built
     // in a kit of its own that stands it where layout.h says.
@@ -669,14 +695,18 @@ static void on_init(Game* game) {
     kit_init_beside(&mansion, &kit, mansion_origin);
     house_build(&mansion);
     interior_build(&mansion);
+    load_seam("house-interior");
     hearth_build(&mansion);
     study_build(&mansion, g_scene, (unsigned int)g_args.seed);
     mansion_front_build(&mansion);
+    load_seam("hearth-study-front");
 
     Kit* const kits[] = {&kit, &mansion, &ground};
     const char* const kit_names[] = {"world", "mansion", "ground"};
-    for (int i = 0; i < KIT_COUNT(kits); i++)
+    for (int i = 0; i < KIT_COUNT(kits); i++) {
         kit_finish(kits[i], kit_names[i]);
+        load_seam(kit_names[i]);
+    }
     kit_free_unused(kits, KIT_COUNT(kits));
     for (int i = 0; i < KIT_COUNT(kits); i++)
         printf("silent: %s: %d colliders, %d vertices in %d meshes and %d shadow cells, %d drip "
@@ -695,6 +725,7 @@ static void on_init(Game* game) {
         candles_light(g_scene->fire, g_scene, &kit, !g_args.no_candle_shadows);
         candles_light(g_scene->fire, g_scene, &mansion, !g_args.no_candle_shadows);
     }
+    load_seam("candles");
     g_door_hung[DOOR_HOME] = home_front_door(&g_doors[DOOR_HOME], engine, g_scene, em, physics);
     g_door_hung[DOOR_BATH] = home_bath_door(&g_doors[DOOR_BATH], engine, g_scene, em, physics);
     g_door_hung[DOOR_BASEMENT] =
@@ -702,6 +733,7 @@ static void on_init(Game* game) {
     g_door_hung[DOOR_MANSION] =
         house_front_door(&g_doors[DOOR_MANSION], engine, g_scene, em, physics, mansion_origin);
     prompt_start(&g_prompt, engine);
+    load_seam("doors-prompt");
     if (!g_args.no_cat) {
         CatDesc cat = {.at = g_args.cat_at,
                        .clip = g_args.cat_clip[0] ? g_args.cat_clip : NULL,
@@ -713,6 +745,7 @@ static void on_init(Game* game) {
         glm_vec3_copy(g_args.cat_eyes, cat.eyes);
         cat_create(&g_cat, &cat, game, physics);
     }
+    load_seam("cat");
 
     // Sound: the clock's beat, the tubes' buzz, the fridge and the wind, each
     // heard from where it is. Headless, the system opens no device, so a
@@ -733,10 +766,13 @@ static void on_init(Game* game) {
     lights_start_audio(&g_lights, audio);
     tv_start_audio(&g_tv, audio);
     cat_voice_start(&g_voice, &g_cat, audio, g_args.cat_say);
+    load_seam("audio");
 
     // Before the sky: its reflections are baked through the fog set here.
     build_post(engine, !g_args.day, !g_args.no_grade);
+    load_seam("post");
     build_sky(engine);
+    load_seam("sky");
 
     if (!g_args.no_wind) {
         Wind* wind = create_wind("street");
@@ -771,6 +807,7 @@ static void on_init(Game* game) {
         }
     }
     rain_bed_start(&g_rain_bed, audio, g_scene->rain);
+    load_seam("wind-rain");
 
     ShadowSystem* ss = g_scene->shadow_system;
     if (ss) {
@@ -802,7 +839,9 @@ static void on_init(Game* game) {
     engine_set_camera(engine, create_camera(&cam));
 
     player_init(&g_player, game, physics, em, SPAWN_FEET, SPAWN_YAW);
+    load_seam("player");
     physics_world_optimize(physics);
+    load_seam("physics-optimize");
     // Sent somewhere or holding a clip from the command line, the cat has no mind of its own.
     if (g_cat.entity && !g_args.cat_go[0] && !g_args.cat_clip[0])
         cat_mind_create(&g_mind, &g_cat, game, &g_player, g_args.cat_seed, g_args.cat_blind,
@@ -821,6 +860,7 @@ static void on_init(Game* game) {
         ex->multiplier = EXPOSURE_NIGHT;
     }
     ex->probe = g_args.exposure_probe;
+    load_seam("mind-exposure");
 }
 
 static void on_update(Game* game, double dt) {
@@ -973,6 +1013,23 @@ static void on_pre_render(Game* game, double alpha) {
     aabb_empty(&at);
     aabb_add_point(&at, eye);
     const bool lit = engine->total_frames > 2 && scene_lighting_ready_in(g_scene, &at);
+    // The frames while the view is held, each the time since the last hook: the first few by
+    // name, then the slowest, and the whole wait once the view can come up.
+    static double settle_start, settle_worst;
+    if (g_fade_seconds == 0.0f) {
+        const double now = glfwGetTime();
+        const double ms = (now - g_load_mark) * 1000.0;
+        if (engine->total_frames == 0)
+            settle_start = g_load_mark;
+        if (engine->total_frames <= 3)
+            printf("startup-ms site=frame%zu ms=%.1f\n", engine->total_frames, ms);
+        else if (ms > settle_worst)
+            settle_worst = ms;
+        g_load_mark = now;
+        if (lit)
+            printf("startup-ms site=lit ms=%.1f frames=%zu worst-frame-ms=%.1f\n",
+                   (now - settle_start) * 1000.0, engine->total_frames, settle_worst);
+    }
 
     // Black until the opening sweep of the volume the eye is in has landed, and the reflection
     // probes round the eye with it, then up -- not every volume's: the mansion's sweeps only once
