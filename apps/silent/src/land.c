@@ -109,7 +109,8 @@ void land_build(Kit* kit) {
 
     // Faceted, a flat normal a triangle, and the collider from the same cells -- less the
     // mansion's grounds, whose flat would be one long run of coplanar triangles and stand on a box
-    // of hill_build's. The flat ground's cells are not the land's at all.
+    // of hill_build's. The flat ground's cells are not the land's at all. Under the woods the
+    // ground is their floor, the cells at its east edge taking it by a hash so the edge is ragged.
     const vec3 up = {0.0f, 1.0f, 0.0f};
     int n = 0;
     for (int j = 0; j < rows; j++)
@@ -119,8 +120,13 @@ void land_build(Kit* kit) {
             const float mx = pos[3 * a] + 0.5f * LAND_STEP, mz = pos[3 * a + 2] + 0.5f * LAND_STEP;
             if (on_flat(mx, mz))
                 continue;
-            kit_tri_facing(kit, MAT_DIRT, &pos[3 * a], &pos[3 * c], &pos[3 * b], up);
-            kit_tri_facing(kit, MAT_DIRT, &pos[3 * b], &pos[3 * c], &pos[3 * e], up);
+            const unsigned int h = ((unsigned int)i * 73856093u) ^ ((unsigned int)j * 19349663u);
+            const float ragged = (float)(h % 1000u) / 1000.0f * 8.0f;
+            const bool woods =
+                (mz < TERRACE_BACK_Z || mz > BACK_FENCE_Z) && mx < WOODS_EAST_X - 4.0f + ragged;
+            const int mat = woods ? MAT_WOODS_FLOOR : MAT_DIRT;
+            kit_tri_facing(kit, mat, &pos[3 * a], &pos[3 * c], &pos[3 * b], up);
+            kit_tri_facing(kit, mat, &pos[3 * b], &pos[3 * c], &pos[3 * e], up);
             if (hill_on_grounds(mx, mz))
                 continue;
             const unsigned int tri[6] = {a, c, b, b, c, e};

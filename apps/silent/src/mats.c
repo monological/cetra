@@ -522,6 +522,7 @@ static const MatSpec SPECS[MAT_COUNT] = {
                          3.15f,
                          .rain = {true, 0.9f}},
     [MAT_CLIFF] = {"cliff", "cliff_side", {1, 1, 1}, 1.0f, 0.0f, 4.0f, .rain = {true, 0.5f}},
+    [MAT_LOG] = {"log_bark", "pine_bark", {1, 1, 1}, 1.0f, 0.0f, 1.0f, .rain = {true, 0.7f}},
 };
 
 static Texture* load(TexturePool* pool, const char* set, const char* map, TextureDesc desc) {

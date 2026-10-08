@@ -89,6 +89,8 @@ SOURCES = {
     "wood_textured_concrete": {"saturation": 0.4},
     "forest_ground_04": {"saturation": 0.8},
     "cliff_side": {"saturation": 0.6},
+    # The woods' fallen logs and stumps.
+    "pine_bark": {"saturation": 0.7},
     # From ambientCG (https://ambientcg.com), also CC0: what Poly Haven has no
     # scan of -- brushed stainless, paper, a kitchen smear for the glass, and
     # the table's scratched enamel: a yellow paint with almost no rust, taken to

@@ -72,6 +72,7 @@
 #include "terrace.h"
 #include "trees.h"
 #include "tv.h"
+#include "woods.h"
 
 #define DEFAULT_WIDTH  1600
 #define DEFAULT_HEIGHT 900
@@ -184,6 +185,7 @@ typedef struct SilentArgs {
     float capture_budget_ms; // the engine's capture budget, pinned; below 0 = silent's own
     bool profiler;           // per-pass timing and submission counts, reported at exit
     const char* audio_dump;  // headless: write what the listener hears here
+    bool no_woods;           // no trees behind the yards, nor what lies under them
     bool no_cat;
     vec3 cat_fur, cat_eyes; // sRGB
     const char* cat_at;     // a place by name, or NULL for home
@@ -217,6 +219,12 @@ static CatVoice g_voice;
 #define DOOR_REACH 1.9f
 #define DOOR_CONE  0.6f // radians
 static Grounds g_grounds;
+static Woods g_woods;
+
+// The woods' conifers are the only levels of detail in the app (spec 13.35), and the engine's
+// ladder is set for a mesh the size of a room: at 1 a tree fifteen metres tall would hold its
+// finest level out past two hundred metres. This puts its switches at about 11, 22 and 45.
+#define WOODS_LOD_BIAS 0.045f
 
 // The doors that open: each house's front door, and the home's bathroom door (spec 13.25) and
 // basement door (spec 13.31).
@@ -643,7 +651,14 @@ static void on_init(Game* game) {
     terrace_build(&kit, plots.far);
     FenceBreaches breaches;
     fences_build(&kit, (unsigned int)g_args.seed, &plots, &breaches);
-    trees_build(&kit, engine, g_scene, (unsigned int)g_args.seed);
+    Trees trees;
+    trees_init(&trees, engine, g_scene);
+    trees_build(&trees, &kit, g_scene, (unsigned int)g_args.seed);
+    if (!g_args.no_woods)
+        woods_build(&g_woods, &kit, engine, g_scene, &trees, &breaches, (unsigned int)g_args.seed,
+                    !g_args.day);
+    trees_release(&trees);
+    engine->lod_bias = WOODS_LOD_BIAS;
     grounds_build(&g_grounds, &kit, g_scene, (unsigned int)g_args.seed, !g_args.day);
 
     // The Gothic house as the mansion at the end of the street (spec 13.25): the same plan, built
@@ -729,6 +744,8 @@ static void on_init(Game* game) {
             wind->air_speed = WIND_AIR_SPEED;
             wind->gust_frequency = WIND_GUST_FREQUENCY;
             wind->gust_amount = WIND_GUST_AMOUNT;
+            // Every tree in the woods is a copy of a handful, and without this they sway as one.
+            wind->phase_variation = 1.0f;
             scene_set_wind(g_scene, wind);
         }
     }
@@ -926,6 +943,7 @@ static void on_pre_render(Game* game, double alpha) {
                            : door_will_open(door) ? "E   Open door"
                                                   : "E   Close door");
     sounds_update(&g_sounds);
+    woods_update(&g_woods, eye);
     lights_update(&g_lights, g_scene, game->time, (float)game->sim_clock.delta, eye, forward);
     tv_update(&g_tv, game->time);
     cat_mind_frame(&g_mind, game->time);
@@ -981,6 +999,7 @@ static void on_shutdown(Game* game) {
         shadow_tiles_probe(g_scene->shadow_system, g_scene);
     prompt_free(&g_prompt);
     cat_free(&g_cat);
+    woods_free(&g_woods);
 }
 
 static void print_usage(const char* prog) {
@@ -1046,6 +1065,7 @@ static void print_usage(const char* prog) {
            "                          face whole\n",
            SHADOW_TILE_STORE_CELLS);
     printf("      --tiles-probe       The cached shadow tiles and each light's block, at exit\n");
+    printf("      --no-woods          Without the woods behind the yards\n");
     printf("      --no-cat            Without the cat\n");
     printf("      --cat-fur RRGGBB    The cat's coat, as sRGB hex (default 262424)\n");
     printf("      --cat-eyes RRGGBB   Its eyes (default E8B923)\n");
@@ -1192,6 +1212,8 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
             a->tiles_probe = true;
         } else if (!strcmp(s, "--profiler")) {
             a->profiler = true;
+        } else if (!strcmp(s, "--no-woods")) {
+            a->no_woods = true;
         } else if (!strcmp(s, "--no-cat")) {
             a->no_cat = true;
         } else if (!strcmp(s, "--cat-fur") && has_next) {

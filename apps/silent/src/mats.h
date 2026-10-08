@@ -101,6 +101,7 @@ typedef enum {
     MAT_GALVANISED,  // a chain-link fence's posts and rails
     MAT_WOODS_FLOOR, // bare earth and twigs under the trees
     MAT_CLIFF,       // broken rock
+    MAT_LOG,         // pine bark on the woods' fallen logs and stumps
     MAT_COUNT
 } MatId;
 

@@ -212,6 +212,12 @@
 #define WORLD_Z0 (-80.0f)
 #define WORLD_Z1 85.0f
 
+// The woods behind both sides (spec 13.35) run east to here, past the street's end onto the hill;
+// a walk into them ends at these, deep enough that the trees carry on past it into the fog.
+#define WOODS_EAST_X  50.0f
+#define WOODS_EDGE_Z0 (-58.0f)
+#define WOODS_EDGE_Z1 64.0f
+
 // A point of the house's plan, where the mansion puts it.
 static inline void mansion_at(const float local[3], float out[3]) {
     out[0] = local[0] + MANSION_X;

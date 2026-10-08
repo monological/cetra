@@ -244,18 +244,23 @@ void street_build(Kit* kit, Scene* scene, unsigned int seed, bool night, bool fo
             false);
 
     // The world's edge: walls the fog hides, so a walk ends in grey rather than off the end of
-    // the ground. One rectangle since spec 13.35, round the street, the woods behind both sides
-    // and the hill the drive climbs, tall enough for the grounds up there and the woods' climb.
+    // the ground. Round the street, the woods behind both sides and the hill the drive climbs,
+    // tall enough for the grounds up there and the woods' climb. Behind the street it stands well
+    // inside the woods (spec 13.35), so the trees go on past it.
     const float h = 14.0f, y = 9.0f;
     const float x0 = -STREET_HALF_LEN + 1.0f, x1 = WORLD_X1 - 1.0f;
     const float z0 = WORLD_Z0 + 1.0f, z1 = WORLD_Z1 - 1.0f;
     struct {
         float ax, az, bx, bz;
     } const edges[] = {
-        {x0, z0, x0, z1}, // the street's west end
-        {x0, z1, x1, z1}, // the woods behind our side, and behind the mansion
-        {x1, z1, x1, z0}, // the hill's east side
-        {x1, z0, x0, z0}, // the woods behind the far side
+        {x0, WOODS_EDGE_Z0, x0, WOODS_EDGE_Z1},           // the street's west end
+        {x0, WOODS_EDGE_Z1, WOODS_EAST_X, WOODS_EDGE_Z1}, // in the woods behind our side
+        {WOODS_EAST_X, WOODS_EDGE_Z1, WOODS_EAST_X, z1},  // and their east side
+        {WOODS_EAST_X, z1, x1, z1},                       // behind the mansion
+        {x1, z1, x1, z0},                                 // the hill's east side
+        {x1, z0, WOODS_EAST_X, z0},                       // the hill's north side
+        {WOODS_EAST_X, z0, WOODS_EAST_X, WOODS_EDGE_Z0},  // the far woods' east side
+        {WOODS_EAST_X, WOODS_EDGE_Z0, x0, WOODS_EDGE_Z0}, // in the woods behind them
     };
     for (size_t i = 0; i < sizeof(edges) / sizeof(edges[0]); i++) {
         const float cx = 0.5f * (edges[i].ax + edges[i].bx),
