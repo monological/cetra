@@ -24480,7 +24480,8 @@ def run_draw_distance_gate(workdir):
 
     Counted claims, off the submission table, on the occlusion group's reasoning: a pixel
     identity alone passes a draw distance that cuts nothing. Falsified at 13.38: with an occluder
-    past its distance still rasterised, dd-occluder culls OCCL_FALSIFIED with occlusion on.
+    past its distance still rasterised, dd-occluder culls 304 with occlusion on -- the walls and
+    the 300 behind them -- against 4 off.
     """
     if not os.path.exists(asset(SUBMIT_FIXTURE)) or not os.path.exists(asset(OCCLUSION_MAT)):
         print("  dd-past      SKIP  (missing a fixture)")
