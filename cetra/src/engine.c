@@ -416,6 +416,7 @@ void free_engine(Engine* engine) {
         if (engine->postfx) {
             free_postfx(engine->postfx);
         }
+        free_loading_screen(engine->loading_screen);
 
         free_light_cluster_context(engine->light_cluster);
         free_occlusion_context(engine->occlusion);
@@ -2424,6 +2425,7 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode) {
     // the television, sharp.
     postfx_present_picture(engine->postfx);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    loading_screen_frame(engine);
 
     // GUI last, after tone mapping. gui_render_frame self-gates on
     // gui_frame_active, so it no-ops when no panel/overlay is enabled.

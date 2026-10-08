@@ -1356,6 +1356,14 @@ ShaderProgram* create_crt_program() {
     return create_post_program("crt", crt_frag_shader_str);
 }
 
+ShaderProgram* create_loading_logo_program() {
+    return create_post_program("loading_logo", loading_logo_frag_shader_str);
+}
+
+ShaderProgram* create_loading_tape_program() {
+    return create_post_program("loading_tape", loading_tape_frag_shader_str);
+}
+
 ShaderProgram* create_le_half_program() {
     return create_post_program("le_half", le_half_frag_shader_str);
 }

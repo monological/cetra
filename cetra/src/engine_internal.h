@@ -51,6 +51,11 @@ void engine_upload_displacement_uniforms(const Engine* engine, const Scene* scen
 // gui_frame_active). Called by engine_run.
 void engine_present_frame(Engine* engine, RenderMode frame_mode);
 
+// The loading screen over the window, when it is shown (spec 13.34): the frame's draw of it, at
+// the end of engine_present_frame, before the GUI. And its free, with the engine.
+void loading_screen_frame(Engine* engine);
+void free_loading_screen(LoadingScreen* ls);
+
 // Select which color attachments the scene pass writes: attachment 0 only,
 // or 0 + the view-space normals target (used by SSAO/SSR). Render passes
 // that emit no normals (skybox, blend, overlays) switch to 0-only.

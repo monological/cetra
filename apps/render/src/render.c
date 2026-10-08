@@ -21,6 +21,7 @@
 #include "cetra/internal/render.h"
 #include "cetra/cook.h"
 #include "cetra/engine.h"
+#include "cetra/loading_screen.h"
 #include "cetra/internal/profiler.h"
 #include "cetra/internal/light_cluster.h"
 #include "cetra/internal/occlusion.h"
@@ -462,6 +463,12 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --crt-mask <f>     The slot mask's depth, 0..1; implies --crt\n");
     fprintf(stderr, "      --crt-curvature <f> The tube's bow, 0 = flat .. 1; implies --crt\n");
     fprintf(stderr, "      --crt-bleed <f>    Composite colour bleed, 0..1; implies --crt\n");
+    fprintf(stderr, "      --loading-screen   Show the engine's loading screen and keep it up; P "
+                    "changes its palette, R plays it again, H lifts it (spec 13.34)\n");
+    fprintf(stderr, "      --loading-palette <n> Its palette: 0 sunset, 1 harvest, 2 phosphor, 3 "
+                    "broadcast; implies --loading-screen\n");
+    fprintf(stderr, "      --loading-lift-at <n> Lift it at frame n, once its ident has played; "
+                    "implies --loading-screen\n");
     fprintf(stderr, "      --no-texture-compression  Store every texture uncompressed\n");
     fprintf(stderr, "      --texture-probe    Print the texture memory ledger\n");
     fprintf(stderr, "      --texture-compress-colour  Compress albedo too (DXT, lossy)\n");
@@ -633,8 +640,9 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->point_light_grid = 0; // off
     args->plg_radius = 10.0f;
     args->plg_intensity = 5.0f;
-    args->shadows_off_at = -1;       // -1 = never; the transition is the diagnostic
-    args->exposure_at_frame = -1;    // -1 = never; same idiom
+    args->shadows_off_at = -1;    // -1 = never; the transition is the diagnostic
+    args->exposure_at_frame = -1; // -1 = never; same idiom
+    args->loading_lift_at = -1;
     args->layer_blend_at_frame = -1; // -1 = never; same idiom
     args->road_width_at_frame = -1;  // -1 = never; same idiom
     args->cam_at_count = 0;
@@ -2197,6 +2205,20 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             if (_ranged_arg(argc, argv, &i, 0.0f, 1.0f, &args->crt_bleed) < 0)
                 return -1;
             args->crt = 1;
+        } else if (strcmp(argv[i], "--loading-screen") == 0) {
+            args->loading_screen = 1;
+        } else if (strcmp(argv[i], "--loading-palette") == 0) {
+            float palette = 0.0f;
+            if (_ranged_arg(argc, argv, &i, 0.0f, (float)(LOADING_PALETTE_COUNT - 1), &palette) < 0)
+                return -1;
+            args->loading_palette = (int)palette;
+            args->loading_screen = 1;
+        } else if (strcmp(argv[i], "--loading-lift-at") == 0) {
+            float frame = 0.0f;
+            if (_ranged_arg(argc, argv, &i, 0.0f, 1e7f, &frame) < 0)
+                return -1;
+            args->loading_lift_at = (int)frame;
+            args->loading_screen = 1;
         } else if (strcmp(argv[i], "--no-texture-compression") == 0) {
             args->no_texture_compression = 1;
         } else if (strcmp(argv[i], "--texture-probe") == 0) {
@@ -2443,6 +2465,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
 // pointer into what the rig is told.
 static CameraRig* view_rig = NULL;
 static CameraDrag* view_drag = NULL;
+// --loading-screen: the keys that change the screen's palette and play it again.
+static bool g_loading_preview = false;
 
 /*
  * Adopt an explicit camera pose (--cam-eye at startup, --cam-at mid-run). The
@@ -2796,6 +2820,18 @@ void key_callback(Engine* engine, int key, int scancode, int action, int mods) {
         case GLFW_KEY_6:
             engine->current_render_mode = RENDER_MODE_FLAT_COLOR;
             break;
+        case GLFW_KEY_P:
+            if (g_loading_preview)
+                engine->loading_palette = (engine->loading_palette + 1) % LOADING_PALETTE_COUNT;
+            break;
+        case GLFW_KEY_R:
+            if (g_loading_preview)
+                engine_show_loading_screen(engine);
+            break;
+        case GLFW_KEY_H:
+            if (g_loading_preview)
+                engine_hide_loading_screen(engine);
+            break;
         default:
             break;
     }
@@ -2858,6 +2894,8 @@ static void render_frame_update(Engine* engine, float dt) {
     // exposure lags it by a little at a time and the error hides in the adaptation; one step
     // puts all of it in one frame, where a run that had the new value from frame 0 says what
     // that frame should be.
+    if (frame_schedule->loading_lift_at == (int)engine->total_frames)
+        engine_hide_loading_screen(engine);
     if (frame_schedule->exposure_at_frame == (int)engine->total_frames) {
         engine->exposure.multiplier = frame_schedule->exposure_at_value;
         fprintf(stderr, "frame %d: exposure multiplier %g\n", frame_schedule->exposure_at_frame,
@@ -3901,6 +3939,11 @@ int main(int argc, char** argv) {
             fx->crt_curvature = args.crt_curvature;
         if (args.crt_bleed >= 0.0f)
             fx->crt_bleed = args.crt_bleed;
+        if (args.loading_screen) {
+            engine->loading_palette = args.loading_palette;
+            engine_show_loading_screen(engine);
+            g_loading_preview = true;
+        }
         if (args.grain >= 0.0f) {
             fx->grain_enabled = true;
             fx->grain_strength = args.grain;
