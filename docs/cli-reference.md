@@ -373,7 +373,10 @@ lights may be given shadow tiles a frame once
 the tiles have opened (default 2, 0 = no limit), and at 1 a room with two lights takes two frames to
 be shadowed, which is what makes a capture's wait for its lights visible. `--capture-hide` leaves a
 named node out of every GI and probe capture, surface and shadow, as a skinned mesh always is;
-`--remove-node` takes one out of the scene, the reference a hidden one is compared against. A
+`--remove-node` takes one out of the scene, the reference a hidden one is compared against.
+`--draw-distance <node> <m>` (spec 13.38, repeatable) sets a node's draw distance -- the camera
+draws nothing of it, or of what hangs under it, past m metres, while shadows and captures still
+take it -- and `root` names the scene's root whatever the file called it. A
 `.cscn` authors any number of GI volumes as `giVolumes: [{boxMin, boxMax, spacing, classify}]`, and
 up to 64 probes and 64 lights),
 `--capture-budget-ms <f>` (spec 13.32, render and silent — the most of a frame, in milliseconds,
@@ -568,6 +571,13 @@ named rather than dropped. A fire's flame writes its own body into its light eac
 - **`--tiles-refresh`:** every cached face redrawn every frame.
 - **`--node-swing <node> <m>`:** swings a named node along x by up to m metres once a second, a
   caster that moves under a cached light.
+- **`--graph-churn <node> <out> <back>`:** takes a named node out of the graph on frame `out` and
+  puts it back on frame `back` (0 = never; spec 13.38): a graph change under a cached light,
+  which draws again only the faces it touches.
+- **`--graph-replace <node> <frame> <dx,dy,dz>`:** frees a named node on a frame and hangs a new
+  one in its place holding its meshes, moved by the offset. It frees first, so the new node may
+  take the old one's address: what a cache remembering nodes by pointer would take for the same
+  node.
 - **`--tile-stores <n>`:** how many store cells faces that see a mover may keep their still casters
   in (spec 13.26; default and at most 64, on top of the budget). 0 draws every such face whole
   each frame, the path the pool replaced, and says so by name.
@@ -1015,9 +1025,11 @@ is `--cam-eye 70,160,25 --cam-target 70.01,0,25.2`.
 **The town's edges** (spec 13.35): the far side's terrace, the yards' fences, the woods, and the
 crossroads at the street's west end.
 - **`--no-woods`:** without the woods behind the yards and round the crossroads, or anything lying
-  under them. This is the A/B for their cost: about 7 ms of a frame from a yard and 3 from the
-  street, at 1600x900 by night. Every tree is drawn wherever it is in view, the far ones through
-  their levels of detail.
+  under them. This is the A/B for their cost: about 6.6 ms of a frame from a yard, 4.7 of it on
+  the GPU, and 1.6 from the street, at 1600x900 by night (spec 13.38; 7 and 3 before it). The
+  camera draws a tree only within the fog's reach -- 45 m by night, 30 by day, however far under
+  `--no-fog` -- the far ones through their levels of detail. The shadows still take every tree,
+  which is most of what is left from a yard, whose woods stand inside that reach.
 - **Pinned views:**
   - the terrace's stairs: `--cam-eye -9,1.7,-1.5 --cam-target -7,2.6,-9`;
   - our back yard and the dead tree through its fallen fence: `--cam-eye 0,1.7,23 --cam-target
