@@ -3,6 +3,8 @@
 
 #include <cglm/cglm.h>
 
+#include "cetra/aabb.h"
+
 #include "kit.h"
 
 // The octagonal tower on the house's front corner (spec 13.13): its walls and windows, the
@@ -20,5 +22,11 @@ int tower_notch(float x0, float z0, float x1, float z1, float apothem, vec2* out
 // How far `p` is in plan from the nearer face of the nearest of the tower's eight walls, taken
 // whole: negative inside one.
 float tower_wall_distance(const vec3 p);
+
+// The tower inside its walls' outer faces, from y0 to y1, as boxes in the plan: a staircase
+// whose corners all lie on the diagonal faces, so nothing outside is taken in, and what is left
+// out along each diagonal face is triangles a quarter of a metre deep, mostly the wall's own.
+#define TOWER_BOXES 5
+int tower_boxes(float y0, float y1, AABB out[TOWER_BOXES]);
 
 #endif // _SILENT_TOWER_H_
