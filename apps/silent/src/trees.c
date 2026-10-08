@@ -161,6 +161,7 @@ void trees_build(Trees* trees, Kit* kit, Scene* scene, unsigned int seed) {
     Mesh* const* models = trees->dead;
     SceneNode* root = create_node();
     node_set_name(root, "dead_trees");
+    root->draw_distance = trees->reach;
     node_add_child(scene->root_node, root);
     SceneNode** groups = trees->groups;
     for (int i = 0; i < TREE_MODELS; i++) {

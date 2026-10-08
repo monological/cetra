@@ -92,6 +92,10 @@ typedef struct DrawItem {
     // a side array because the lane sort COPIES items in permuted order, and a
     // side array indexed by original position would not survive the copy.
     uint8_t occluded;
+    // Past its node's draw distance from the camera (spec 13.38): a CAMERA answer like
+    // `occluded`, settled at build from the camera's eye, and read only through a CullView
+    // that set `distance`. Zero with no camera to measure from.
+    uint8_t beyond;
 } DrawItem;
 
 typedef struct DrawList {
@@ -183,6 +187,10 @@ typedef struct CullView {
     bool occlusion;
     // A capture's camera: what DRAW_CAPTURE_HIDDEN marks is not drawn.
     bool capture;
+    // True only on the camera pass's view: says draw_item_visible may read item->beyond. A
+    // node's draw distance is the camera's to honour; a light's volume or a capture that took
+    // it would leave a shadow or a reflection missing for an eye standing far off.
+    bool distance;
 } CullView;
 
 // Whether this item survives the frustum.

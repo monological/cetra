@@ -209,6 +209,9 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --capture-hide <node>  Leave a node out of every GI and probe capture "
                     "(repeatable)\n");
     fprintf(stderr, "      --remove-node <node>   Take a node out of the scene (repeatable)\n");
+    fprintf(stderr,
+            "      --draw-distance <node> <m>  The camera draws nothing of the node's past\n"
+            "                         m metres; root names the whole scene (repeatable)\n");
     fprintf(stderr, "      --water            Water surface (spec 11.32)\n");
     fprintf(stderr, "      --no-water         Drop a surface the scene file asked for\n");
     fprintf(stderr, "      --rain <mm/h>      Rain at this rate, already soaked (spec 13.9)\n");
@@ -1304,6 +1307,17 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 return -1;
             }
             (hide ? args->capture_hide : args->remove_node)[(*count)++] = argv[i];
+        } else if (strcmp(argv[i], "--draw-distance") == 0) {
+            if (i + 2 >= argc) {
+                fprintf(stderr, "Error: --draw-distance wants <node> <metres>\n");
+                return -1;
+            }
+            if (args->draw_distance_count >= RENDER_NODE_NAMES_MAX) {
+                fprintf(stderr, "Error: at most %d --draw-distance names\n", RENDER_NODE_NAMES_MAX);
+                return -1;
+            }
+            args->draw_distance_node[args->draw_distance_count] = argv[++i];
+            args->draw_distance_m[args->draw_distance_count++] = (float)atof(argv[++i]);
         } else if (strcmp(argv[i], "--stream-probe") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
@@ -4945,6 +4959,17 @@ int main(int argc, char** argv) {
             free_node(node);
         else
             fprintf(stderr, "Warning: --remove-node: no node named '%s'\n", args.remove_node[i]);
+    }
+    for (int i = 0; i < args.draw_distance_count; i++) {
+        // `root` is the scene's root whatever the file named it.
+        SceneNode* node = strcmp(args.draw_distance_node[i], "root") == 0
+                              ? scene->root_node
+                              : node_find(scene->root_node, args.draw_distance_node[i]);
+        if (node)
+            node->draw_distance = args.draw_distance_m[i];
+        else
+            fprintf(stderr, "Warning: --draw-distance: no node named '%s'\n",
+                    args.draw_distance_node[i]);
     }
 
     // The GI probe volumes. Only allocated here -- the capture sweep runs inside

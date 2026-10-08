@@ -267,6 +267,7 @@ void woods_build(Kit* kit, Engine* engine, Scene* scene, Trees* trees,
 
     SceneNode* root = create_node();
     node_set_name(root, "woods");
+    root->draw_distance = trees->reach;
     node_add_child(scene->root_node, root);
     SceneNode *wood_groups[CONIFER_MODELS], *spray_groups[CONIFER_MODELS];
     for (int i = 0; i < CONIFER_MODELS; i++)

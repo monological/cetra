@@ -723,6 +723,8 @@ static void on_init(Game* game) {
     load_seam(engine, "crossroads");
     Trees trees;
     trees_init(&trees, engine, g_scene);
+    // In fog no tree is drawn past where the fog has it all; with none, every tree is.
+    trees.reach = g_args.no_fog ? 0.0f : g_args.day ? TREES_REACH_DAY : TREES_REACH_NIGHT;
     trees_build(&trees, &kit, g_scene, (unsigned int)g_args.seed);
     load_seam(engine, "trees");
     if (!g_args.no_woods)

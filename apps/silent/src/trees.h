@@ -14,6 +14,11 @@ struct Engine;
 // as dead wood and a wind-bent conifer are.
 #define TREES_WIND_RESPONSE 0.35f
 
+// How far through the fog a tree is drawn: the fog's extinction (street.c), 0.09 a metre by night
+// and 0.14 by day, leaves a tree about 2% of its contrast at these.
+#define TREES_REACH_NIGHT 45.0f
+#define TREES_REACH_DAY   30.0f
+
 // The dead trees' shared parts (spec 13.35), grown once: the bark they sway in, the same bark on
 // wood lying still, and the models, each at the generator's native size.
 typedef struct Trees {
@@ -23,6 +28,9 @@ typedef struct Trees {
     float trunk_length, trunk_radius; // a model's, at its native size
     // Where each model's copies hang, so they are adjacent and draw together; from trees_build.
     SceneNode* groups[TREE_MODELS];
+    // The draw distance every tree is hung under, TREES_REACH_* in fog; 0 = drawn however far.
+    // Set before trees_build.
+    float reach;
 } Trees;
 
 void trees_init(Trees* trees, struct Engine* engine, Scene* scene);
