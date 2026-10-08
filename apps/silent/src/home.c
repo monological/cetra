@@ -670,7 +670,9 @@ static void plant(Engine* engine, Scene* scene, const vec3 at) {
     Material* leaf = create_material();
     leaf->name = safe_strdup("plant_leaf");
     glm_vec3_copy((vec3){0.42f, 0.55f, 0.3f}, leaf->albedo);
-    leaf->roughness = 0.6f;
+    // The atlas is rough for a sprig of leaves turned every way, seen from across a field; a
+    // houseplant's are waxy and near, and this takes them back down to about 0.4.
+    leaf->roughness = 0.45f;
     material_set_program(leaf, pbr);
     TextureDesc albedo = texture_desc(true);
     mats_cutout(leaf, 0.4f, &albedo);

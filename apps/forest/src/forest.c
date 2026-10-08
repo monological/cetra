@@ -1252,7 +1252,7 @@ static void bake_vegetation_textures(Scene* scene) {
     const int LW = LEAF_CELL_SIZE * TG_LEAF_VARIANTS;
     const int LH = LEAF_CELL_SIZE;
     unsigned char *la = NULL, *ln = NULL, *lr = NULL;
-    CookKey lk = cook_key("veg-leaf/1");
+    CookKey lk = cook_key("veg-leaf/2");
     cook_key_i32(&lk, LW);
     cook_key_i32(&lk, LH);
     CookBlob leaf[3];
