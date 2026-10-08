@@ -112,6 +112,7 @@ const MaterialParam MATERIAL_PARAMS[] = {
     {"aoStrength", "Maps and wind", MP(aoStrength, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
     {"parallaxScale", "Maps and wind", MP(parallax_scale, MATERIAL_PARAM_FLOAT, 0.0f, 0.1f)},
     {"windResponse", "Maps and wind", MP(wind_response, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
+    {"windFlutter", "Maps and wind", MP(wind_flutter, MATERIAL_PARAM_FLOAT, 0.0f, 4.0f)},
     {"shoreWetness", "Maps and wind", MP(shore_wetness, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
     // From -1 so the control can return a material to "derive it from the roughness".
     {"porosity", "Maps and wind", MP(porosity, MATERIAL_PARAM_FLOAT, -1.0f, 1.0f)},
@@ -319,6 +320,7 @@ static const Material MATERIAL_DEFAULTS = {
     .fur_comb = {0.0f, -0.5f, -1.0f},
     .fur_lie = 0.75f,
     .uvScale = {1.0f, 1.0f},
+    .wind_flutter = 1.0f,
     // No array layer until the material texture array is built from loaded
     // textures; -1 is what makes the shader fall back to the scalar factor.
     .roughness_layer = -1,

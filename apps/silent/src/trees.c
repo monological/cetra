@@ -55,8 +55,8 @@ static Material* bark_material(Scene* scene, ShaderProgram* program, const Mater
         scene_add_material(scene, m);
         return m;
     }
-    m->wind_mode = 1;         // the trunk leans and the branches sway; there are no leaves
-    m->wind_response = 0.35f; // stiff: dead wood does not give much
+    m->wind_mode = 1; // the trunk leans and the branches sway
+    m->wind_response = TREES_WIND_RESPONSE;
     // A candle's or a lamp's cached shadow holds a tree at rest, off by at most its sway, rather
     // than drawing every face a tree reaches again on every frame.
     m->cached_shadow_wind = CACHED_SHADOW_WIND_REST;

@@ -1,3 +1,4 @@
+#include <float.h>
 #include <math.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -943,28 +944,21 @@ static void sweep_branch(MeshBuilder* mb, const TreeSkeleton* s, const Branch* b
 }
 
 /*
- * The wind leans a vegetation mesh by its vertices' height through the mesh's OWN height range
- * (the shader's uWindMaskMinY/MaxY, from the mesh's bounds). A conifer's needles start at the
- * crown's base where its wood starts at the ground, so measured apart the two would lean by
- * different amounts at the same height and a gust would slide the sprays along their branches.
- * Both meshes carry the same two unreferenced vertices, at the bottom and the top of the whole
- * tree, so they measure one range.
+ * The heights a tree's lean is measured over (Mesh.wind_y0/y1): its wood's, stated on its wood
+ * and its leaves alike. Measured from each mesh's own box, the leaves would lean by other amounts
+ * than the branches they hang from -- a conifer's sprays hang below its lowest branches and reach
+ * past its leader, and a broadleaf's canopy starts well above the trunk's foot -- and a gust would
+ * slide them along. A card past either end clamps to it, so a spray past the leader moves with
+ * the leader's tip, and one hanging below the trunk's foot with the foot.
  */
-#define TG_WIND_ANCHORS 2
-
-static void excurrent_wind_anchors(MeshBuilder* mb, const TreeSkeleton* s, const TreeParams* p) {
-    float y0 = 0.0f, y1 = 0.0f;
+static void tree_wind_range(const TreeSkeleton* s, Mesh* mesh) {
+    float y0 = FLT_MAX, y1 = -FLT_MAX;
     for (int i = 0; i < s->point_count; i++) {
-        y0 = fminf(y0, s->points[i].pos[1]);
-        y1 = fmaxf(y1, s->points[i].pos[1]);
+        y0 = fminf(y0, s->points[i].pos[1] - s->points[i].radius);
+        y1 = fmaxf(y1, s->points[i].pos[1] + s->points[i].radius);
     }
-    // The sprays reach past the wood by up to a card's length.
-    y0 -= p->leaf_size;
-    y1 += p->leaf_size;
-    const vec3 n = {0.0f, 1.0f, 0.0f}, t = {1.0f, 0.0f, 0.0f};
-    const float white[4] = {1.0f, 1.0f, 1.0f, 1.0f};
-    mb_vertex(mb, (vec3){0.0f, y0, 0.0f}, n, t, 0.0f, 0.0f, 0.0f, 0.0f, white);
-    mb_vertex(mb, (vec3){0.0f, y1, 0.0f}, n, t, 0.0f, 0.0f, 0.0f, 0.0f, white);
+    mesh->wind_y0 = y0;
+    mesh->wind_y1 = y1;
 }
 
 bool tree_mesh_bark(const TreeSkeleton* skel, const TreeParams* p, Mesh* mesh) {
@@ -973,7 +967,7 @@ bool tree_mesh_bark(const TreeSkeleton* skel, const TreeParams* p, Mesh* mesh) {
     const bool excurrent = p->form == TREE_FORM_EXCURRENT;
 
     // Census first: one exact reservation beats reallocating through 40k verts.
-    size_t vres = excurrent ? TG_WIND_ANCHORS : 0, ires = 0;
+    size_t vres = 0, ires = 0;
     for (int i = 0; i < skel->branch_count; i++) {
         const Branch* b = &skel->branches[i];
         int segs = branch_segs(b);
@@ -987,11 +981,10 @@ bool tree_mesh_bark(const TreeSkeleton* skel, const TreeParams* p, Mesh* mesh) {
 
     for (int i = 0; i < skel->branch_count; i++)
         sweep_branch(&mb, skel, &skel->branches[i]);
-    if (excurrent)
-        excurrent_wind_anchors(&mb, skel, p);
 
     if (!mb_transfer(&mb, mesh))
         return false;
+    tree_wind_range(skel, mesh);
     if (excurrent)
         mesh_build_lod_chain(mesh);
     return true;
@@ -1196,9 +1189,9 @@ static bool mesh_sprays(const TreeSkeleton* skel, const TreeParams* p, Mesh* mes
             memcpy(b, tmp, sizeof(tmp));
         }
     }
-    excurrent_wind_anchors(&mb, skel, p);
     if (!mb_transfer(&mb, mesh))
         return false;
+    tree_wind_range(skel, mesh);
     mesh_build_card_lod_chain(mesh, TG_SPRAY_INDICES, TG_SPRAY_KEEP);
     return true;
 }
@@ -1347,7 +1340,10 @@ bool tree_mesh_leaves(const TreeSkeleton* skel, const TreeParams* p, Mesh* mesh)
         }
     }
 
-    return mb_transfer(&mb, mesh);
+    if (!mb_transfer(&mb, mesh))
+        return false;
+    tree_wind_range(skel, mesh);
+    return true;
 }
 
 void tree_foliage_maps(TreeForm form, int width, int height, unsigned char** out_albedo,

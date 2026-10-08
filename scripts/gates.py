@@ -16019,8 +16019,9 @@ def run_conifer_gate(workdir):
                           and a snag's top is broken off with no spray above the break
       conifer-thin        a spruce's sprays thin by the keep factor it reports, level by level,
                           over at least three levels
-      conifer-wind        the bark and the needles report one height range, so the wind
-                          leans them together
+      conifer-wind        the bark and the needles lean over one height range, and it is
+                          STATED rather than each mesh's own: the needles' box, whose sprays
+                          hang below the lowest branch and reach past the leader, is not it
 
     What none of these can see is whether the trees look right; that is the user's eye on the
     tree viewer or this fixture rendered, and the spec's as-built says which renders it was.
@@ -16089,14 +16090,20 @@ def run_conifer_gate(workdir):
     if not ok:
         failures.append("conifer-thin")
 
+    # The needles' own box (its foot, and card_top for its top), against the range they lean
+    # over: a range each mesh measured for itself would put both ends of the box ON the range's,
+    # and equal ranges alone would be true of two meshes that happened to share a box.
     ys = [(d["shape"]["bark_y0"], d["shape"]["leaf_y0"], d["shape"]["bark_y1"],
-           d["shape"]["leaf_y1"]) for d in (tidy, snag, tree("fir", 2))
-          if d and "shape" in d]
-    ok = len(ys) == 3 and all(abs(b0 - l0) < 1e-3 and abs(b1 - l1) < 1e-3
-                              for b0, l0, b1, l1 in ys)
-    print(f"  conifer-wind {'PASS' if ok else 'FAIL'}  bark and needle height ranges "
-          f"{[(round(b0, 2), round(b1, 2), round(l0, 2), round(l1, 2)) for b0, l0, b1, l1 in ys]}"
-          f" (want each tree's two equal)")
+           d["shape"]["leaf_y1"], d["shape"]["leaf_box_y0"], d["shape"]["card_top"])
+          for d in (tidy, snag, tree("fir", 2)) if d and "shape" in d]
+    ok = len(ys) == 3 and all(
+        abs(b0 - l0) < 1e-3 and abs(b1 - l1) < 1e-3 and
+        max(abs(box0 - l0), abs(box1 - l1)) > 0.01 * (l1 - l0)
+        for b0, l0, b1, l1, box0, box1 in ys)
+    print(f"  conifer-wind {'PASS' if ok else 'FAIL'}  bark and needle wind ranges "
+          f"{[(round(b0, 2), round(b1, 2), round(l0, 2), round(l1, 2)) for b0, l0, b1, l1, *_ in ys]}"
+          f", needles' own boxes {[(round(x0, 2), round(x1, 2)) for *_, x0, x1 in ys]} (want each "
+          f"tree's two ranges equal, and not its needles' own box)")
     if not ok:
         failures.append("conifer-wind")
 

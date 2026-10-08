@@ -2489,10 +2489,13 @@ static void on_init(Game* game) {
     // branch phase and flex weight the vegetation modes read, so this is a
     // material field and not new geometry. Modest against a 125-unit trunk: the
     // response multiplies the scene strength, and a canopy that travels metres
-    // reads as a storm rather than as air moving.
+    // reads as a storm rather than as air moving. The leaves take the bark's
+    // response, so they ride the branches they hang from, and their extra life
+    // as flutter about their stems.
     g_mat_bark->wind_response = 0.45f;
     g_mat_bark->wind_mode = 1; // whole-trunk lean plus per-branch sway
-    g_mat_leaf->wind_response = 0.7f;
+    g_mat_leaf->wind_response = g_mat_bark->wind_response;
+    g_mat_leaf->wind_flutter = 0.7f / g_mat_bark->wind_response;
     g_mat_leaf->wind_mode = 2; // that, plus the card flutter
     // Dark wet stone. Rock is the only light NEUTRAL surface in a scene of dark
     // foliage, so anything near a realistic granite albedo reads as white against

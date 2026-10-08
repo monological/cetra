@@ -10,6 +10,10 @@ struct Engine;
 
 #define TREE_MODELS 6
 
+// How far the wind moves a tree, its wood and its leaves alike (Material.wind_response): stiff,
+// as dead wood and a wind-bent conifer are.
+#define TREES_WIND_RESPONSE 0.35f
+
 // The dead trees' shared parts (spec 13.35), grown once: the bark they sway in, the same bark on
 // wood lying still, and the models, each at the generator's native size.
 typedef struct Trees {

@@ -102,7 +102,8 @@ void wind_upload_to_program(const Wind* wind, const vec3 world_origin, UniformMa
     sqrtf(1.0f + WIND_LEAF_FLUTTER_Y * WIND_LEAF_FLUTTER_Y + \
           WIND_LEAF_FLUTTER_Z * WIND_LEAF_FLUTTER_Z)
 
-float wind_max_offset(const Wind* wind, float response, int mode, float flex_max, float leaf_max) {
+float wind_max_offset(const Wind* wind, float response, float flutter, int mode, float flex_max,
+                      float leaf_max) {
     // The shader's own early-out, mirrored. Not just an optimisation: a
     // negative response would otherwise come back as a negative margin and
     // SHRINK the bound, which is the one direction a bound must never move.
@@ -133,15 +134,23 @@ float wind_max_offset(const Wind* wind, float response, int mode, float flex_max
                          flex_max * (WIND_VEG_SWAY + WIND_LATERAL_MAX * WIND_VEG_TURB * turb));
 
     if (mode == 2) {
-        // Leaf flutter rides on top of that.
-        bound += amp * leaf_max * WIND_LEAF_DIR_MAX * turb;
+        // Leaf flutter rides on top of that. fabsf for the reason gust has one: a flutter
+        // authored below zero is a flutter the other way, never a smaller bound.
+        bound += amp * fabsf(flutter) * leaf_max * WIND_LEAF_DIR_MAX * turb;
     }
     return bound;
 }
 
 float wind_mesh_max_offset(const Wind* wind, const Mesh* mesh) {
-    return wind_max_offset(wind, mesh->material->wind_response, mesh->material->wind_mode,
-                           mesh->wind_flex_max, mesh->wind_leaf_max);
+    return wind_max_offset(wind, mesh->material->wind_response, mesh->material->wind_flutter,
+                           mesh->material->wind_mode, mesh->wind_flex_max, mesh->wind_leaf_max);
+}
+
+void wind_upload_mesh(const Mesh* mesh, UniformManager* u) {
+    float y0 = 0.0f, y1 = 0.0f;
+    mesh_wind_range(mesh, &y0, &y1);
+    uniform_set_float(u, "uWindMaskMinY", y0);
+    uniform_set_float(u, "uWindMaskMaxY", y1);
 }
 
 // --- the bound's instrument (spec 11.54) ------------------------------------
@@ -365,9 +374,9 @@ static void _wind_probe_row(WindProbeRig* rig, const char* kind, const Wind* win
     // does not do and the shader does.
     wind_upload_to_program(wind, NULL, u);
     uniform_set_float(u, "uWindResponse", mat->wind_response);
+    uniform_set_float(u, "uWindFlutter", mat->wind_flutter);
     uniform_set_int(u, "uWindMode", mat->wind_mode);
-    uniform_set_float(u, "uWindMaskMinY", mesh->aabb.min[1]);
-    uniform_set_float(u, "uWindMaskMaxY", mesh->aabb.max[1]);
+    wind_upload_mesh(mesh, u);
     glUseProgram(0);
 
     glm_vec3_zero(rig->best_abs);

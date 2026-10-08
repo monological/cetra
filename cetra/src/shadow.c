@@ -851,6 +851,7 @@ static void _upload_shadow_material(UniformManager* u, const Material* mat, bool
     // surface, or the shadow detaches from what casts it. Its response is set per
     // draw, by caster_wind_response.
     uniform_set_int(u, "uWindMode", mat->wind_mode);
+    uniform_set_float(u, "uWindFlutter", mat->wind_flutter);
     // A surface hook's own uniforms (spec 13.29), which its offset and its alpha read here as
     // they do in the shading pass.
     shader_params_upload(&mat->shader_params, u);
@@ -1213,10 +1214,9 @@ static void _draw_shadow_items(ShadowSystem* ss, const DrawList* list, bool abso
             // across every set while one material may sway in one set and rest in
             // a kept one.
             uniform_set_float(u, "uWindResponse", caster_wind_response(set, mat));
-            // Per mesh, because it is the mesh's own bounds: where along Y the
-            // cloth mask ramps from anchored to free.
-            uniform_set_float(u, "uWindMaskMinY", mesh->aabb.min[1]);
-            uniform_set_float(u, "uWindMaskMaxY", mesh->aabb.max[1]);
+            // Per mesh, because it is the mesh's own wind range: where along Y the
+            // mask ramps from anchored to free.
+            wind_upload_mesh(mesh, u);
             // Per mesh for the same reason the shading pass sets it per mesh:
             // whether COLOR_0 exists is geometry, not material. The cutout
             // multiplies it in, so a caster carrying its alpha there rather than
