@@ -2,6 +2,7 @@
 
 #include "grounds.h"
 #include "hill.h"
+#include "land.h"
 #include "layout.h"
 #include "mats.h"
 #include "street.h"
@@ -179,7 +180,7 @@ static void graveyard(Kit* kit, unsigned int* rng) {
             const float m = (t + 0.5f * step) / len;
             const float x = YARD_X + sides[s].ax + (sides[s].bx - sides[s].ax) * m;
             const float z = YARD_Z + sides[s].az + (sides[s].bz - sides[s].az) * m;
-            const float y = hill_height(x, z);
+            const float y = land_height(x, z);
             kit_box(kit, MAT_FOUNDATION, (vec3){x, y + 0.25f, z},
                     (vec3){0.2f, 0.45f + 0.1f * rnd(rng), 0.5f * step + 0.02f}, yaw, true);
         }
@@ -189,7 +190,7 @@ static void graveyard(Kit* kit, unsigned int* rng) {
         const int column = i % 5, row = i / 5;
         const float x = YARD_X - YARD_HX + 1.2f + (float)column * 1.6f + 0.3f * rnd(rng);
         const float z = YARD_Z - 1.4f + (float)row * 2.4f + 0.3f * rnd(rng);
-        const vec3 base = {x, hill_height(x, z) - 0.15f, z};
+        const vec3 base = {x, land_height(x, z) - 0.15f, z};
         const float yaw = 0.15f * (rnd(rng) - 0.5f);
         const float lean = 0.35f * (rnd(rng) - 0.5f);
         if (i % 4 == 3) {
@@ -223,7 +224,7 @@ void grounds_build(Grounds* grounds, Kit* kit, Scene* scene, unsigned int seed, 
         const float lx = x - dz * 3.6f, lz = z + dx * 3.6f;
         const float yaw = atan2f(dz, -dx);
         Light* light =
-            street_lamp(kit, scene, lx, hill_height(lx, lz), lz, yaw, night, i == 0, profile);
+            street_lamp(kit, scene, lx, land_height(lx, lz), lz, yaw, night, i == 0, profile);
         if (light) {
             grounds->failing = light;
             grounds->base_intensity = light->intensity;

@@ -27,8 +27,9 @@ float house_gable_roof(Kit* kit, const KitFrame* f, float width, float depth, fl
 
 // A neighbour: foundation, clad body, roof, chimney, porch and door, and a
 // grid of windows, some lit. Solid and collidable; nobody goes in. The frame's
-// origin is the middle of the lot's front edge. Its bare front eave and its porch
-// roof's edge drip.
-void house_neighbour(Kit* kit, const KitFrame* f, KitRng* rng, bool night);
+// origin is the middle of the lot's front edge, on its ground. Its bare front eave and its porch
+// roof's edge drip. Where the middle of its front door meets the ground goes to `door_out`
+// unless that is NULL.
+void house_neighbour(Kit* kit, const KitFrame* f, KitRng* rng, bool night, vec3 door_out);
 
 #endif // _SILENT_HOUSES_H_

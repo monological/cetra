@@ -57,6 +57,7 @@
 #include "interior.h"
 #include "kit.h"
 #include "kitchen.h"
+#include "land.h"
 #include "layout.h"
 #include "lights.h"
 #include "mansion.h"
@@ -67,6 +68,7 @@
 #include "sounds.h"
 #include "street.h"
 #include "study.h"
+#include "terrace.h"
 #include "trees.h"
 #include "tv.h"
 
@@ -629,9 +631,14 @@ static void on_init(Game* game) {
     kitchen_build(&kit, (unsigned int)g_args.seed);
     lights_build(&g_lights, &kit, engine, g_scene, (unsigned int)g_args.seed, !g_args.no_flicker,
                  g_args.flashlight);
-    street_build(&kit, g_scene, (unsigned int)g_args.seed, !g_args.day, !g_args.no_fog);
+    float far_doors[TERRACE_LOTS];
+    street_build(&kit, g_scene, (unsigned int)g_args.seed, !g_args.day, !g_args.no_fog, far_doors);
     clock_build(&kit);
+    // The drive first, since the land's hill term carves it; then the ground over the world, and
+    // the far side's terrace, whose east wall runs up into that ground (spec 13.35).
     hill_build(&kit);
+    land_build(&kit);
+    terrace_build(&kit, far_doors);
     trees_build(&kit, engine, g_scene, (unsigned int)g_args.seed);
     grounds_build(&g_grounds, &kit, g_scene, (unsigned int)g_args.seed, !g_args.day);
 

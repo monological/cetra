@@ -5,12 +5,11 @@
 
 #include "home.h"
 #include "houses.h"
+#include "land.h"
 #include "layout.h"
 #include "mats.h"
 #include "street.h"
 
-// How far the yards reach behind the houses on either side. Past this is fog.
-#define YARD_DEPTH   40.0f
 #define GROUND_DEPTH 0.4f // how thick the ground boxes are, below their tops
 
 // Relative to the repository root, where every app in this tree is run from.
@@ -84,9 +83,10 @@ int street_lamp_profile(Scene* scene, bool night) {
     return ies_library_load(scene->ies_library, STREET_LAMP_IES);
 }
 
-// Wooden utility poles down the far side, strung with two wires.
+// Wooden utility poles down the far side, strung with two wires: on the sidewalk, in front of
+// the terrace's wall.
 static void poles(Kit* kit) {
-    const float z = -(ROAD_HALF_WIDTH + SIDEWALK_WIDTH + 0.6f);
+    const float z = -(ROAD_HALF_WIDTH + SIDEWALK_WIDTH - 0.6f);
     const float xs[] = {-30.0f, -10.0f, 10.0f, 30.0f};
     const int n = (int)(sizeof(xs) / sizeof(xs[0]));
     for (int i = 0; i < n; i++) {
@@ -173,7 +173,8 @@ static FogHole home_hole(void) {
 static void fog(Scene* scene, bool night) {
     const float density = night ? FOG_NIGHT : FOG_DAY;
     const float F = 0.5f * FOG_FEATHER;
-    const float wx0 = -60.0f, wx1 = WORLD_X1 + 20.0f, wz0 = -60.0f, wz1 = WORLD_Z1 + 20.0f;
+    const float wx0 = -60.0f, wx1 = WORLD_X1 + 20.0f, wz0 = WORLD_Z0 - 20.0f,
+                wz1 = WORLD_Z1 + 20.0f;
     // West to east, which is the order the columns are cut in.
     const FogHole holes[2] = {home_hole(), mansion_hole()};
     float x = wx0;
@@ -190,18 +191,19 @@ static void fog(Scene* scene, bool night) {
     }
 }
 
-void street_build(Kit* kit, Scene* scene, unsigned int seed, bool night, bool fogged) {
+void street_build(Kit* kit, Scene* scene, unsigned int seed, bool night, bool fogged,
+                  float far_doors[TERRACE_LOTS]) {
     const float kerb = ROAD_HALF_WIDTH;
     const float walk = ROAD_HALF_WIDTH + SIDEWALK_WIDTH;
     ground_strip(kit, MAT_ASPHALT, -kerb, kerb, ROAD_Y);
     ground_strip(kit, MAT_CONCRETE, kerb, walk, 0.0f);
     ground_strip(kit, MAT_CONCRETE, -walk, -kerb, 0.0f);
-    // Our side's yards, cut away round the basement under our house (spec 13.31).
+    // Our side's yards, cut away round the basement under our house (spec 13.31), to the back
+    // fences. The far side's lots are the terrace's.
     ground_strip(kit, MAT_DIRT, walk, DIG_Z0, 0.0f);
-    ground_strip(kit, MAT_DIRT, DIG_Z1, walk + YARD_DEPTH, 0.0f);
+    ground_strip(kit, MAT_DIRT, DIG_Z1, BACK_FENCE_Z, 0.0f);
     ground(kit, MAT_DIRT, -STREET_HALF_LEN, DIG_X0, DIG_Z0, DIG_Z1, 0.0f);
     ground(kit, MAT_DIRT, DIG_X1, STREET_HALF_LEN, DIG_Z0, DIG_Z1, 0.0f);
-    ground_strip(kit, MAT_DIRT, -walk - YARD_DEPTH, -walk, 0.0f);
 
     // Our path from the sidewalk to the porch steps.
     kit_box(kit, MAT_CONCRETE,
@@ -210,17 +212,21 @@ void street_build(Kit* kit, Scene* scene, unsigned int seed, bool night, bool fo
             false);
 
     // The neighbours: this side of the street either side of us, fronts in
-    // line with ours, and the far side facing back.
+    // line with ours, and the far side facing back from its terrace's lots, one a lot.
     KitRng rng = {seed * 2246822519u + 3266489917u};
     const float near_side[] = {-28.0f, -14.0f, 14.0f, 28.0f};
     for (int i = 0; i < 4; i++) {
         const KitFrame f = {{near_side[i], 0.0f, HOUSE_FRONT_Z}, GLM_PIf};
-        house_neighbour(kit, &f, &rng, night);
+        house_neighbour(kit, &f, &rng, night, NULL);
     }
-    const float far_side[] = {-35.0f, -21.0f, -7.0f, 7.0f, 21.0f, 35.0f};
-    for (int i = 0; i < 6; i++) {
-        const KitFrame f = {{far_side[i], 0.0f, -HOUSE_FRONT_Z}, 0.0f};
-        house_neighbour(kit, &f, &rng, night);
+    for (int i = 0; i < TERRACE_LOTS; i++) {
+        // The house stands where it stood before the terrace, midway along a lot of the
+        // spacing's width; the end lots run on to the street's ends past it.
+        const float x = -STREET_HALF_LEN + 3.0f + TERRACE_LOT_WIDTH * ((float)i + 0.5f);
+        const KitFrame f = {{x, land_terrace_height(x), FAR_HOUSE_FRONT_Z}, 0.0f};
+        vec3 door = {0.0f, 0.0f, 0.0f};
+        house_neighbour(kit, &f, &rng, night, door);
+        far_doors[i] = door[0];
     }
     fence(kit, -34.5f, -8.0f, walk + 1.6f);
     fence(kit, 8.0f, 34.5f, walk + 1.6f);
@@ -248,21 +254,18 @@ void street_build(Kit* kit, Scene* scene, unsigned int seed, bool night, bool fo
             false);
 
     // The world's edge: walls the fog hides, so a walk ends in grey rather than off the end of
-    // the ground. Round the street and, past its east end, round the hill the drive climbs
-    // (spec 13.25), so they stand tall enough for the grounds up there.
-    const float h = 11.0f, y = 9.0f;
-    const float zmax = walk + YARD_DEPTH;
+    // the ground. One rectangle since spec 13.35, round the street, the woods behind both sides
+    // and the hill the drive climbs, tall enough for the grounds up there and the woods' climb.
+    const float h = 14.0f, y = 9.0f;
     const float x0 = -STREET_HALF_LEN + 1.0f, x1 = WORLD_X1 - 1.0f;
-    const float zs = zmax - 1.0f, z0 = -zmax + 1.0f, z1 = WORLD_Z1 - 1.0f;
+    const float z0 = WORLD_Z0 + 1.0f, z1 = WORLD_Z1 - 1.0f;
     struct {
         float ax, az, bx, bz;
     } const edges[] = {
-        {x0, z0, x0, zs},                           // the street's west end
-        {x0, zs, STREET_HALF_LEN, zs},              // behind our side's yards
-        {STREET_HALF_LEN, zs, STREET_HALF_LEN, z1}, // the hill's west side, past them
-        {STREET_HALF_LEN, z1, x1, z1},              // behind the mansion
-        {x1, z1, x1, z0},                           // the hill's east side
-        {x1, z0, x0, z0},                           // behind the far side's yards, and on
+        {x0, z0, x0, z1}, // the street's west end
+        {x0, z1, x1, z1}, // the woods behind our side, and behind the mansion
+        {x1, z1, x1, z0}, // the hill's east side
+        {x1, z0, x0, z0}, // the woods behind the far side
     };
     for (size_t i = 0; i < sizeof(edges) / sizeof(edges[0]); i++) {
         const float cx = 0.5f * (edges[i].ax + edges[i].bx),

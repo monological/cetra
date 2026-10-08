@@ -7,11 +7,12 @@
 #define STOREY_H   2.7f
 
 // An edge's drips along a in [a0, a1] at (y, d), `per_m` drops a second a metre of it, if
-// there is enough of it to drip from.
+// there is enough of it to drip from. They land on the ground the house stands on, which on the
+// far side's terrace is not the street's.
 static void edge_drips(Kit* kit, const KitFrame* f, float a0, float a1, float y, float d,
                        float per_m) {
     if (a1 - a0 > 0.3f)
-        kit_drip_run(kit, f, (vec3){a0, y, d}, (vec3){a1, y, d}, per_m, 0.0f);
+        kit_drip_run(kit, f, (vec3){a0, y, d}, (vec3){a1, y, d}, per_m, f->origin[1]);
 }
 
 // One roof slope from the eave (d_eave) up to the ridge (d_ridge): the
@@ -91,7 +92,7 @@ static void window(Kit* kit, const KitFrame* f, KitRng* rng, float a0, float a1,
     kit_frame_box(kit, f, MAT_TRIM, a0 - 0.12f, a1 + 0.12f, y0 - 0.1f, y0, 0.0f, 0.12f, false);
 }
 
-void house_neighbour(Kit* kit, const KitFrame* f, KitRng* rng, bool night) {
+void house_neighbour(Kit* kit, const KitFrame* f, KitRng* rng, bool night, vec3 door_out) {
     // The frame arrives with its origin at the lot's front centre; the house
     // is measured from its own corner, so shift along the facade by half.
     const float w = kit_rrange(rng, 7.5f, 10.0f);
@@ -120,6 +121,8 @@ void house_neighbour(Kit* kit, const KitFrame* f, KitRng* rng, bool night) {
 
     // The door, and a porch over it or a step up to it.
     const float door = kit_rrange(rng, 1.2f, w - 2.2f);
+    if (door_out)
+        kit_frame_point(&h, door + 0.475f, 0.0f, 0.0f, door_out);
     kit_frame_box(kit, &h, MAT_WOOD, door, door + 0.95f, FLOOR_RISE, FLOOR_RISE + 2.1f, 0.0f, 0.05f,
                   false);
     kit_frame_box(kit, &h, MAT_TRIM, door - 0.1f, door, FLOOR_RISE, FLOOR_RISE + 2.2f, 0.0f, 0.08f,

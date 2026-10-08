@@ -11,6 +11,7 @@
 #include "cetra/texture.h"
 
 #include "hill.h"
+#include "land.h"
 #include "layout.h"
 #include "trees.h"
 
@@ -174,7 +175,7 @@ void trees_build(Kit* kit, Engine* engine, Scene* scene, unsigned int seed) {
         // A lean of a few degrees, as a dead tree has, and sunk a little into the ground so the
         // flare of its roots is in it.
         const float lean = glm_rad(2.0f + 6.0f * rnd(&state));
-        const float y = hill_height(x, z) - 0.25f;
+        const float y = land_height(x, z) - 0.25f;
         SceneNode* node = create_node();
         mat4 m;
         glm_translate_make(m, (vec3){x, y, z});
