@@ -235,6 +235,10 @@ typedef struct {
     int capture_hide_count;
     const char* remove_node[RENDER_NODE_NAMES_MAX];
     int remove_node_count;
+    // --draw-distance: SceneNode.draw_distance set on nodes by name (spec 13.38)
+    const char* draw_distance_node[RENDER_NODE_NAMES_MAX];
+    float draw_distance_m[RENDER_NODE_NAMES_MAX];
+    int draw_distance_count;
     int gi_debug;                 // Blit the probe atlas into the frame corner
     int sky;                      // Procedural physically-based sky instead of -e
     int sky_debug;                // Blit the sky LUTs into the frame corner

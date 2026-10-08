@@ -101,6 +101,10 @@ typedef struct SceneNode {
     // (spec 13.24): a thing that moves, frozen into a picture taken while the game runs.
     // Skinned meshes are left out without asking.
     bool capture_hidden;
+    // Metres from the camera past which the camera draws neither this node's meshes nor any
+    // under it, measured to each mesh's bound (spec 13.38); 0 = no limit of its own, so a node
+    // takes its nearest ancestor's. Shadows and captures still take them.
+    float draw_distance;
 } SceneNode;
 
 // A node at the origin, with no parent, no meshes and a serial of its own.

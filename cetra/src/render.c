@@ -109,7 +109,8 @@ static void render_occlusion_pass(Engine* engine, Scene* scene, CullView* cull) 
                           scene->occluders[i].box_max, NULL);
     for (size_t i = 0; i < list->count; ++i) {
         const DrawItem* item = &list->items[i];
-        if (item->flags & DRAW_OCCLUDER)
+        // An occluder past its draw distance is not drawn, so it hides nothing behind it.
+        if ((item->flags & DRAW_OCCLUDER) && !item->beyond)
             occlusion_add_box(engine->occlusion, item->mesh->aabb.min, item->mesh->aabb.max,
                               item->node->global_transform);
     }
@@ -1434,6 +1435,9 @@ static CullView _scene_pass_prepare(Engine* engine, Scene* scene, Frustum* frust
     // difference is now its FRUSTUM alone, which is what it always should have
     // been. It used to be the pose as well, and this comment used to bless that.
     CullView cull = render_cull_view(engine, scene, frustum);
+    // The camera's own pass honours a node's draw distance; a capture, which re-enters here with
+    // its own camera, does not -- the distance was measured from the camera, not from it.
+    cull.distance = !cull.capture;
 
     // Flatten once. Cube captures re-enter here once a face with their own
     // camera; the stamp makes those reuses rather than rebuilds, which is right

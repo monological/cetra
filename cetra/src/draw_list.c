@@ -262,6 +262,16 @@ static uint8_t select_lod(const Mesh* mesh, const SceneNode* node, const LodSele
     return (uint8_t)mesh_lod_canonical(mesh, level);
 }
 
+// Whether a mesh's bound lies wholly past `reach` from the camera's eye. False with no camera.
+static bool past_reach(const Mesh* mesh, const SceneNode* node, const LodSelect* lod, float reach) {
+    if (!lod || reach <= 0.0f)
+        return false;
+    vec3 centre = {0.0f, 0.0f, 0.0f};
+    float radius = 0.0f;
+    item_world_bounds(mesh, node, centre, &radius);
+    return glm_vec3_distance((float*)lod->eye, centre) - radius > reach;
+}
+
 // Why a mesh cannot be drawn in this scene, or NULL when it can. The one place
 // that decides it, so a consumer can assume every item is drawable, and the one
 // place that says so: each of these used to be a silent skip, and the draw-mode
@@ -317,15 +327,17 @@ static const char* _refusal(const Mesh* mesh, const Scene* scene, const Animatio
 
 // Depth-first, children left to right, a node's meshes before its gizmo --
 // the order the two recursive walks produced between them. `inherited` is the
-// nearest ancestor's pose, which a node without one takes, and `hidden` whether
-// an ancestor is left out of captures.
+// nearest ancestor's pose, which a node without one takes, `hidden` whether
+// an ancestor is left out of captures, and `reach` the nearest draw distance.
 static bool append_node(DrawList* list, Scene* scene, SceneNode* node, const LodSelect* lod,
-                        bool gizmos, const AnimationState* inherited, bool hidden) {
+                        bool gizmos, const AnimationState* inherited, bool hidden, float reach) {
     if (!node)
         return true;
 
     const AnimationState* pose = node->pose ? node->pose : inherited;
     hidden = hidden || node->capture_hidden;
+    if (node->draw_distance > 0.0f)
+        reach = node->draw_distance;
 
     for (size_t i = 0; i < node->mesh_count; ++i) {
         Mesh* mesh = node->meshes ? node->meshes[i] : NULL;
@@ -355,7 +367,8 @@ static bool append_node(DrawList* list, Scene* scene, SceneNode* node, const Lod
         DrawItem item = {.mesh = mesh,
                          .node = node,
                          .pose = mesh->is_skinned ? pose : NULL,
-                         .lod = select_lod(mesh, node, lod)};
+                         .lod = select_lod(mesh, node, lod),
+                         .beyond = past_reach(mesh, node, lod, reach)};
         classify(mesh, scene->wind, &item.lane, &item.flags);
         // A pose, or a node said to move: either way a capture would freeze it into a
         // picture taken while the game runs. A node said to move is not still either, so a
@@ -375,7 +388,7 @@ static bool append_node(DrawList* list, Scene* scene, SceneNode* node, const Lod
     }
 
     for (size_t i = 0; i < node->children_count; ++i) {
-        if (!append_node(list, scene, node->children[i], lod, gizmos, pose, hidden))
+        if (!append_node(list, scene, node->children[i], lod, gizmos, pose, hidden, reach))
             return false;
     }
     return true;
@@ -393,7 +406,7 @@ bool draw_list_build(DrawList* list, Scene* scene, uint64_t stamp, const LodSele
     memset(list->lane_count, 0, sizeof(list->lane_count));
     list->occluder_flag_count = 0;
     list->valid = false;
-    if (!append_node(list, scene, scene->root_node, lod, gizmos, NULL, false))
+    if (!append_node(list, scene, scene->root_node, lod, gizmos, NULL, false, 0.0f))
         return false;
 
     list->stamp = stamp;
@@ -489,6 +502,8 @@ bool draw_item_visible(const DrawItem* item, const CullView* view) {
     if (view->occlusion && item->occluded)
         return false;
     if (view->capture && (item->flags & DRAW_CAPTURE_HIDDEN))
+        return false;
+    if (view->distance && item->beyond)
         return false;
     if (!view->frustum)
         return true;
