@@ -2,9 +2,7 @@
 #include <string.h>
 
 #include "probe.h"
-#include "thread.h" // cetra_sleep_ms
 #include "engine.h"
-#include "async_loader.h"
 #include "render.h"
 #include "shadow.h"
 #include "postfx.h"
@@ -38,76 +36,57 @@ void free_reflection_probe(ReflectionProbe* probe) {
     free(probe);
 }
 
-// Render the scene once into the probe cubemap and GGX-prefilter it — or,
-// for environment_only, prefilter the global environment straight into the
-// probe (see probe.h).
-//
-// The scene path reuses the full pipeline (engine_render_scene) with
-// substituted per-face view/projection and the camera moved to the probe
-// position, into the shared ibl capture FBO. Everything touched is saved
-// and restored so the frame the capture runs in draws as it would have
-// without it.
-int reflection_probe_capture(ReflectionProbe* probe, struct Engine* engine, Scene* scene) {
-    // Textures may still be streaming in from the async loader; a capture
-    // taken now would bake placeholder materials into the cubemap forever.
-    // Sleep between drains — process_pending returns immediately while the
-    // workers are still decoding.
-    if (probe && !probe->environment_only && engine && engine->async_loader && scene) {
-        while (async_loader_is_busy(engine->async_loader)) {
-            if (async_loader_process_pending(engine->async_loader, scene->tex_pool, 64) == 0) {
-                cetra_sleep_ms(1);
-            }
-        }
-    }
-    // Whole, from the first face, whatever a capture taken by faces had drawn.
-    if (probe)
-        probe->faces_captured = 0;
-    return reflection_probe_capture_faces(probe, engine, scene, 6) == 1 ? 0 : -1;
-}
-
-int reflection_probe_capture_faces(ReflectionProbe* probe, struct Engine* engine, Scene* scene,
-                                   int faces) {
+static bool probe_capture_valid(const ReflectionProbe* probe, const struct Engine* engine,
+                                const Scene* scene) {
     if (!probe || !engine || !scene || !engine->camera) {
         log_error("Invalid state for probe capture");
-        return -1;
+        return false;
     }
-    IBLResources* ibl = scene->ibl;
-    if (!ibl || !ibl->precomputed) {
+    if (!scene->ibl || !scene->ibl->precomputed) {
         log_error("Probe capture requires precomputed IBL");
-        return -1;
+        return false;
     }
+    return true;
+}
 
+int reflection_probe_prefilter_environment(ReflectionProbe* probe, const struct Engine* engine,
+                                           Scene* scene) {
+    if (!probe_capture_valid(probe, engine, scene))
+        return -1;
+    IBLResources* ibl = scene->ibl;
     probe->max_lod = (float)(PROBE_PREFILTER_MIP_LEVELS - 1);
 
-    if (probe->environment_only) {
-        // No scene render: the probe is the global environment, re-prefiltered
-        // into a probe-owned chain so the parallax box can ground it
-        GLint saved_env_viewport[4];
-        GLint saved_env_fbo;
-        glGetIntegerv(GL_VIEWPORT, saved_env_viewport);
-        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &saved_env_fbo);
+    GLint saved_env_viewport[4];
+    GLint saved_env_fbo;
+    glGetIntegerv(GL_VIEWPORT, saved_env_viewport);
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &saved_env_fbo);
 
-        ibl_prefilter_cubemap(ibl, ibl->prefilter_program, ibl->environment_cubemap,
-                              &probe->prefiltered, PROBE_PREFILTER_SIZE, PROBE_PREFILTER_MIP_LEVELS,
-                              true);
+    ibl_prefilter_cubemap(ibl, ibl->prefilter_program, ibl->environment_cubemap,
+                          &probe->prefiltered, PROBE_PREFILTER_SIZE, PROBE_PREFILTER_MIP_LEVELS,
+                          true);
 
-        glBindFramebuffer(GL_FRAMEBUFFER, saved_env_fbo);
-        glViewport(saved_env_viewport[0], saved_env_viewport[1], saved_env_viewport[2],
-                   saved_env_viewport[3]);
-        glUseProgram(0);
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER, saved_env_fbo);
+    glViewport(saved_env_viewport[0], saved_env_viewport[1], saved_env_viewport[2],
+               saved_env_viewport[3]);
+    glUseProgram(0);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
 
-        log_info("Reflection probe grounded the environment at (%.2f, %.2f, %.2f)",
-                 probe->position[0], probe->position[1], probe->position[2]);
-        return 1;
-    }
+    log_info("Reflection probe grounded the environment at (%.2f, %.2f, %.2f)", probe->position[0],
+             probe->position[1], probe->position[2]);
+    return 0;
+}
 
-    SceneCaptureState saved_capture;
-    // RADIANCE: this cubemap is what a mirror sees, so an emissive surface that
-    // is also a derived panel must still appear in it (render.h). A burst for these faces
-    // alone: the frame's own shadow pass, between two calls, overwrites the maps it bakes.
-    scene_capture_begin(engine, scene, SCENE_CAPTURE_RADIANCE, &saved_capture);
+// The scene path reuses the full pipeline (engine_render_scene) with substituted per-face
+// view/projection and the camera moved to the probe position. Everything touched is saved and
+// restored so the frame the capture runs in draws as it would have without it.
+int reflection_probe_capture_face(ReflectionProbe* probe, struct Engine* engine, Scene* scene) {
+    if (!probe_capture_valid(probe, engine, scene))
+        return -1;
+    if (probe->environment_only)
+        return reflection_probe_prefilter_environment(probe, engine, scene) == 0 ? 1 : -1;
+    IBLResources* ibl = scene->ibl;
+    probe->max_lod = (float)(PROBE_PREFILTER_MIP_LEVELS - 1);
 
     if (probe->faces_captured == 0) {
         if (probe->cubemap)
@@ -118,13 +97,10 @@ int reflection_probe_capture_faces(ReflectionProbe* probe, struct Engine* engine
     // Supersampled 2x: the capture has no MSAA, and single-sample grazing-angle
     // aliasing at its horizon bakes in as stripe moire that mirror reflections
     // then magnify into banded streaks.
-    const int first = probe->faces_captured;
-    const int count = faces < 6 - first ? faces : 6 - first;
     scene_capture_faces(engine, scene, ibl, probe->position, probe->cubemap, 0, PROBE_CUBEMAP_SIZE,
-                        probe->near_clip, probe->far_clip, SCENE_FACES_SHADED, first, count);
-    probe->faces_captured += count;
-
-    const bool whole = probe->faces_captured >= 6;
+                        probe->near_clip, probe->far_clip, SCENE_FACES_SHADED,
+                        probe->faces_captured, 1);
+    const bool whole = ++probe->faces_captured == 6;
     if (whole) {
         glBindTexture(GL_TEXTURE_CUBE_MAP, probe->cubemap);
         glGenerateMipmap(GL_TEXTURE_CUBE_MAP);
@@ -135,8 +111,6 @@ int reflection_probe_capture_faces(ReflectionProbe* probe, struct Engine* engine
                               PROBE_PREFILTER_SIZE, PROBE_PREFILTER_MIP_LEVELS, false);
         probe->faces_captured = 0;
     }
-
-    scene_capture_end(engine, scene, &saved_capture);
 
     glUseProgram(0);
     glActiveTexture(GL_TEXTURE0);

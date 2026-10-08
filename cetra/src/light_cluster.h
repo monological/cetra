@@ -234,8 +234,8 @@ typedef struct LightClusterContext {
     GpuClusterBlock grid;
     GpuClusterIndexBlock index_pool;
     LightClusterRange ranges[LC_MAX_CLUSTER_LIGHTS];
-    // View-space bounding sphere per packed light (xyz center, w radius;
-    // w < 0 = uncullable) for the per-cluster AABB refinement in the fill
+    // View-space bounding sphere per packed light (xyz center, w radius) for the
+    // per-cluster AABB refinement in the fill
     float view_spheres[LC_MAX_CLUSTER_LIGHTS][4];
     // One bit per (light, cluster): set by the counting pass, replayed by the
     // writing pass. Without it both passes would re-run the same ~40-flop
@@ -251,11 +251,16 @@ typedef struct LightClusterContext {
     // so a clamped cluster would otherwise write past its own allocation and
     // into the next cluster's list.
     uint16_t caps[LC_CLUSTER_COUNT];
-    // Borrowed for the duration of a build so an overflow can NAME the light
-    // that caused it. The cost of an overflow lands on whichever clusters the
-    // walk reaches last, which is nowhere near the light responsible, so a
-    // warning without a name sends the reader hunting. NULL where unnamed.
-    const char* packed_names[LC_MAX_CLUSTER_LIGHTS];
+    // The packed lights and their cull radii, borrowed for the duration of a build: a capture's
+    // faces assign their cells from them, and an overflow NAMES the light that caused it. The
+    // cost of an overflow lands on whichever clusters the walk reaches last, which is nowhere near
+    // the light responsible, so a warning without a name sends the reader hunting.
+    const struct Light* packed[LC_MAX_CLUSTER_LIGHTS];
+    float packed_radius[LC_MAX_CLUSTER_LIGHTS];
+    // The capture under way (light_cluster_capture_begin): the sphere it sees, and whether its
+    // faces already share one list.
+    float capture_sees[4];
+    bool capture_shared;
     bool warned_dir_overflow;
     // Each once for the camera's view and once for a scene capture's faces: an overflow
     // is the VIEW's, and a sweep of capture faces at load would otherwise spend the
@@ -269,22 +274,24 @@ typedef struct LightClusterContext {
 LightClusterContext* create_light_cluster_context(void);
 void free_light_cluster_context(LightClusterContext* ctx);
 
-// Build the three blocks from scene->lights for this invocation's camera and
-// upload them. fb_width/fb_height are the render-target dimensions
-// gl_FragCoord is measured in (the current viewport). `capture` = the view is a
-// scene capture's face rather than the camera's.
+// Build the three blocks from scene->lights for the camera's view and upload them.
+// fb_width/fb_height are the render-target dimensions gl_FragCoord is measured in
+// (the current viewport).
 void light_cluster_build_and_upload(LightClusterContext* ctx, struct Scene* scene, mat4 view,
                                     mat4 projection, int fb_width, int fb_height, float near_clip,
-                                    float far_clip, bool capture);
+                                    float far_clip);
 
-// Build the blocks once for all six faces of a cube capture taken from `centre` (spec 13.32):
-// every light whose reach meets the sphere of radius `sees` round it, and every cell of the
-// grid pointing at that one list; the decals reaching the sphere marked in every cell.
-// `projection`, `face_px` and the clip planes are the faces', which they share. Past the light
-// cap the lights nearest the centre are kept.
-void light_cluster_build_capture(LightClusterContext* ctx, const struct Scene* scene,
-                                 const vec3 centre, float sees, mat4 projection, int face_px,
-                                 float near_clip, float far_clip);
+// A cube capture's lights, gathered once for its faces (spec 13.32): every light whose reach
+// meets the sphere of radius `sees` round `centre`, past the cap the nearest. Before the faces.
+void light_cluster_capture_begin(LightClusterContext* ctx, const struct Scene* scene,
+                                 const vec3 centre, float sees);
+
+// A face of that capture: its cells and decal masks, uploaded. A face no wider than twice the
+// grid leaves each cell a pixel or two, where a list per cell culls nothing its fragments would
+// have paid for, so every cell points at the whole list, built for the first face and kept for
+// the rest. A wider face gives each cell the lights that reach it, as the camera's view does.
+void light_cluster_capture_face(LightClusterContext* ctx, const struct Scene* scene, mat4 view,
+                                mat4 projection, int face_px, float near_clip, float far_clip);
 
 // What the last build's decal masks came to, for --decal-probe. Accessors rather
 // than a reach into the struct, because the digest is the one thing about this

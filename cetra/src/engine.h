@@ -341,9 +341,9 @@ typedef struct Engine {
 
     // A setting, not capture state: the most of a frame, in milliseconds, the light captures --
     // a GI probe, a reflection probe's face -- may take before the rest wait for the next frame
-    // (spec 13.32); 0 = no limit. At least one capture runs a frame, so every one finishes.
-    // Starts at 0 headless, where a run must repeat to the bit and so cannot let a clock decide
-    // the frame a capture lands in.
+    // (spec 13.32); 0 = no limit. Each kind of capture takes at least one a frame, so every one
+    // finishes. Starts at 0 headless, where a run must repeat to the bit and so cannot let a
+    // clock decide the frame a capture lands in.
     float capture_budget_ms;
 
     Camera* camera; // The camera the frame renders (engine_set_camera); borrowed

@@ -1251,11 +1251,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->gi_rate = atoi(argv[i]);
             args->gi_volume = 1;
         } else if (strcmp(argv[i], "--capture-budget-ms") == 0) {
-            if (++i >= argc) {
-                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+            if (_ranged_arg(argc, argv, &i, 0.0f, 1000.0f, &args->capture_budget_ms) != 0)
                 return -1;
-            }
-            args->capture_budget_ms = (float)atof(argv[i]);
         } else if (strcmp(argv[i], "--capture-hide") == 0 ||
                    strcmp(argv[i], "--remove-node") == 0) {
             const bool hide = strcmp(argv[i], "--capture-hide") == 0;

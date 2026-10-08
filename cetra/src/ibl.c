@@ -118,6 +118,7 @@ void free_ibl_resources(IBLResources* ibl) {
         glDeleteFramebuffers(1, &ibl->capture_fbo);
     if (ibl->capture_rbo)
         glDeleteRenderbuffers(1, &ibl->capture_rbo);
+    ibl_release_capture_ss_target(ibl);
 
     if (ibl->cube_vao)
         glDeleteVertexArrays(1, &ibl->cube_vao);
@@ -127,6 +128,49 @@ void free_ibl_resources(IBLResources* ibl) {
         free(ibl->hdr_filepath);
 
     free(ibl);
+}
+
+bool ibl_capture_ss_target(IBLResources* ibl, int size) {
+    if (ibl->capture_ss_fbo && ibl->capture_ss_size == size)
+        return true;
+    ibl_release_capture_ss_target(ibl);
+
+    glGenTextures(1, &ibl->capture_ss_color);
+    glBindTexture(GL_TEXTURE_2D, ibl->capture_ss_color);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F, size, size, 0, GL_RGB, GL_FLOAT, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    glGenRenderbuffers(1, &ibl->capture_ss_depth);
+    glBindRenderbuffer(GL_RENDERBUFFER, ibl->capture_ss_depth);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, size, size);
+    glBindRenderbuffer(GL_RENDERBUFFER, 0);
+
+    glGenFramebuffers(1, &ibl->capture_ss_fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, ibl->capture_ss_fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                           ibl->capture_ss_color, 0);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER,
+                              ibl->capture_ss_depth);
+    const bool complete = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    if (!complete) {
+        log_error("Capture supersample target incomplete at %d px", size);
+        ibl_release_capture_ss_target(ibl);
+        return false;
+    }
+    ibl->capture_ss_size = size;
+    return true;
+}
+
+void ibl_release_capture_ss_target(IBLResources* ibl) {
+    gl_delete_fbo(&ibl->capture_ss_fbo);
+    gl_delete_texture(&ibl->capture_ss_color);
+    if (ibl->capture_ss_depth)
+        glDeleteRenderbuffers(1, &ibl->capture_ss_depth);
+    ibl->capture_ss_depth = 0;
+    ibl->capture_ss_size = 0;
 }
 
 /*

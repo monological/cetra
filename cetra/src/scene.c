@@ -662,9 +662,14 @@ void scene_update_lighting(Scene* scene, struct Engine* engine) {
         return;
     shadow_tiles_update(scene->shadow_system, engine, scene);
     // One allowance for every capture the frame takes, the GI's and the probes' (spec 13.32).
-    CaptureBudget budget = capture_budget_open(engine);
+    CaptureBudget budget = {.ms = engine->capture_budget_ms};
     gi_world_update(scene->gi, engine, scene, &budget);
     probe_set_update(scene->probe_set, engine, scene, &budget);
+}
+
+bool scene_lighting_ready_in(const Scene* scene, const AABB* box) {
+    return !scene ||
+           (gi_world_ready_in(scene->gi, box) && probe_set_ready_in(scene->probe_set, box));
 }
 
 void scene_environment_changed(Scene* scene, struct Engine* engine) {
@@ -695,7 +700,7 @@ void scene_environment_changed(Scene* scene, struct Engine* engine) {
     } else if (probes && probes->ready) {
         for (size_t i = 0; i < probes->residency.count; ++i) {
             if (probes->probes[i]->environment_only)
-                reflection_probe_capture(probes->probes[i], engine, scene);
+                reflection_probe_prefilter_environment(probes->probes[i], engine, scene);
             else
                 log_info("Sky: scene-captured probe %zu not refreshed", i);
         }

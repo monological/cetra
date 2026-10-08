@@ -505,6 +505,11 @@ void scene_environment_changed(Scene* scene, struct Engine* engine);
  */
 void scene_update_lighting(Scene* scene, struct Engine* engine);
 
+// Whether the captured lighting bearing on `box` is in (spec 13.32): every GI volume touching
+// it swept and every reflection probe whose box meets it captured -- what an app holds its view
+// for, so a room does not come up unlit and then light, or reflect the sky and then itself.
+bool scene_lighting_ready_in(const Scene* scene, const AABB* box);
+
 // The scene's lighting atlas, grown to what its GI world and probe set need now. NULL while
 // neither needs one, or while the layout is past the driver's texture limit.
 struct LightingAtlas* scene_lighting_atlas(Scene* scene, struct Engine* engine);

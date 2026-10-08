@@ -144,6 +144,13 @@ void residency_loaded(ResidencyItem* item) {
     item->state = RESIDENCY_LOADED;
 }
 
+bool residency_loaded_where(const Residency* res, ResidencyBearsFn bears, const void* user) {
+    for (size_t i = 0; i < res->count; ++i)
+        if (res->items[i].state != RESIDENCY_LOADED && bears(user, i))
+            return false;
+    return true;
+}
+
 void residency_forget(Residency* res, bool recapture) {
     for (size_t i = 0; i < res->count; ++i) {
         ResidencyItem* item = &res->items[i];

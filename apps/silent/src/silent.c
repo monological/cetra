@@ -228,7 +228,8 @@ static Basement g_basement;
 #define DUMP_RATE 48000
 static float* g_dump;
 static size_t g_dump_frames, g_dump_cap;
-static float g_fade_seconds; // since the bounce light came in
+static float g_fade_seconds;    // since the bounce light came in
+static float g_play_capture_ms; // the capture budget once the view is up
 
 // The spawn: in the kitchen, facing the window.
 static const vec3 SPAWN_FEET = {1.5f, FLOOR_Y, 13.2f};
@@ -747,8 +748,14 @@ static void on_init(Game* game) {
         if (g_args.tile_stores >= 0)
             ss->tile_store_cells = g_args.tile_stores;
     }
+    // The captures take most of each frame while the view is black and the engine's share from
+    // the frame it starts to come up, unless the run pinned a budget. Headless keeps the engine's
+    // 0, so the frame a capture lands in is never the clock's to decide.
     if (g_args.capture_budget_ms >= 0.0f)
         engine->capture_budget_ms = g_args.capture_budget_ms;
+    g_play_capture_ms = engine->capture_budget_ms;
+    if (g_args.capture_budget_ms < 0.0f && !engine->headless)
+        engine->capture_budget_ms = LOADING_CAPTURE_MS;
 
     CameraDesc cam = {.position = {SPAWN_FEET[0], SPAWN_FEET[1] + PLAYER_EYE_HEIGHT, SPAWN_FEET[2]},
                       .look_at = {SPAWN_FEET[0], SPAWN_FEET[1] + PLAYER_EYE_HEIGHT, 0.0f},
@@ -932,8 +939,7 @@ static void on_pre_render(Game* game, double alpha) {
     AABB at;
     aabb_empty(&at);
     aabb_add_point(&at, eye);
-    const bool lit = engine->total_frames > 2 && gi_world_ready_in(g_scene->gi, &at) &&
-                     probe_set_ready_in(g_scene->probe_set, &at);
+    const bool lit = engine->total_frames > 2 && scene_lighting_ready_in(g_scene, &at);
 
     // Black until the opening sweep of the volume the eye is in has landed, and the reflection
     // probes round the eye with it, then up -- not every volume's: the mansion's sweeps only once
@@ -942,14 +948,12 @@ static void on_pre_render(Game* game, double alpha) {
     // after it. A volume that could not be built lets the view up rather than holding it dark
     // forever. The fade rides the grade's gain, after the tonemap, so the exposure and the day's
     // meter never see it. Each frame's step is capped because a frame of captures can be long.
-    if (lit)
+    // The captures' loading budget ends as the view starts to come up.
+    if (lit) {
+        if (g_fade_seconds == 0.0f)
+            engine->capture_budget_ms = g_play_capture_ms;
         g_fade_seconds += fminf((float)game->sim_clock.delta, 1.0f / 30.0f);
-    // The captures take most of each frame while the view is black, and the engine's share once
-    // it is coming up, unless the run pinned a budget. Headless keeps the engine's 0, so the
-    // frame a capture lands in is never the clock's to decide.
-    if (g_args.capture_budget_ms < 0.0f && !engine->headless)
-        engine->capture_budget_ms =
-            g_fade_seconds > 0.0f ? ENGINE_CAPTURE_BUDGET_MS : LOADING_CAPTURE_MS;
+    }
     if (engine->postfx)
         glm_vec3_fill(engine->postfx->grade_gain,
                       glm_smoothstep(0.0f, FADE_IN_SECONDS, g_fade_seconds));

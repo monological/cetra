@@ -1320,9 +1320,8 @@ static float _halton(int index, int base) {
 }
 
 // Shadow catcher: darken the environment floor where the model blocks the
-// shadow-casting lights. One function for the scene pass and a capture's depth
-// (spec 13.32), since the plane's depth is its unshadowed discard's: the two
-// must draw it alike.
+// shadow-casting lights. Where the plane writes depth is decided by its
+// unshadowed discard, so any pass that wants its depth draws it through here.
 //
 // Not alongside water. The catcher is an invisible stand-in for ground that
 // was never modelled, and it sits at y = 0 -- which is where a water plane
@@ -1419,23 +1418,58 @@ static void _draw_shadow_catcher(Engine* engine, Scene* scene, mat4 view, mat4 p
     profiler_scope_end(engine->profiler);
 }
 
+// What a pass over the scene from engine->view_matrix and projection_matrix starts from: the
+// view-projection, its frustum, the cull view over it, and the frame's draw list.
+static CullView _scene_pass_prepare(Engine* engine, Scene* scene, Frustum* frustum) {
+    // Un-jittered view-projection, computed once per frame for frustum culling
+    // and motion vectors (and stashed as next frame's prev at the end). Held on
+    // the engine so _render_node uploads it without recomputing per program.
+    glm_mat4_mul(engine->projection_matrix, engine->view_matrix, engine->view_proj);
+    frustum_extract_from_vp(engine->view_proj, frustum);
+
+    // The pose these passes cull against is the pose they are about to upload,
+    // and since 11.96 it is also the pose the shadow pass drew: the app steps
+    // the animation in its pre-render hook, ahead of both. The shadow pass still
+    // builds its own cull view and still gets a different answer -- the
+    // difference is now its FRUSTUM alone, which is what it always should have
+    // been. It used to be the pose as well, and this comment used to bless that.
+    CullView cull = render_cull_view(engine, scene, frustum);
+
+    // Flatten once. Cube captures re-enter here once a face with their own
+    // camera; the stamp makes those reuses rather than rebuilds, which is right
+    // on both counts -- the graph did not change, and each face still culls
+    // against its own frustum at submit.
+    //
+    // The frame index alone would NOT be enough: an app that rebuilds geometry
+    // mid-frame frees meshes an earlier pass already flattened, and a list
+    // reused on frame index would then draw freed memory. The graph epoch is
+    // what makes that a rebuild. apps/tree is the app that does this, on a
+    // slider -- it rebuilds in its pre-render hook now, ahead of the shadow
+    // pass, so the hazard is one an app could reintroduce rather than one
+    // currently live.
+    //
+    // A build failure falls through with an empty list rather than returning:
+    // every consumer loops over count, and returning here would skip the
+    // per-frame flag resets and the prev_view_proj stash, poisoning the
+    // NEXT frame's motion vectors as well as this one's composite.
+    engine_build_draw_list(engine, scene);
+    return cull;
+}
+
 // A capture face's depth with nothing shaded (spec 13.32): what engine_render_scene leaves in
 // the depth buffer, drawn by the same programs over the same lane and stopped at their coverage
 // decision, so a cutout, a sway or a hook's offset lands where the shaded face put it. The
 // opaque lane, the gizmos and the shadow catcher are everything that writes depth in a capture:
-// the sky and the late lanes write none, and water, OIT and particles sit captures out.
+// the sky and the late lanes write none, and water, OIT and particles sit captures out. A pass
+// added to engine_render_scene that writes depth in a capture belongs here too.
 static void _render_capture_depth(Engine* engine, Scene* scene) {
     Camera* camera = engine->camera;
     mat4* view = &engine->view_matrix;
     mat4* projection = &engine->projection_matrix;
     const RenderMode render_mode = engine->current_render_mode;
 
-    glm_mat4_mul(*projection, *view, engine->view_proj);
     Frustum frustum;
-    frustum_extract_from_vp(engine->view_proj, &frustum);
-    CullView cull = render_cull_view(engine, scene, &frustum);
-    engine_build_draw_list(engine, scene);
-    engine_resolve_material_variants(engine, scene);
+    CullView cull = _scene_pass_prepare(engine, scene, &frustum);
     // No pass before this one in a capture binds the refraction source or the moment atlas.
     engine->scene_color_this_frame = false;
     engine->moments_this_frame = false;
@@ -1448,6 +1482,8 @@ static void _render_capture_depth(Engine* engine, Scene* scene) {
                    &submit_state);
     _draw_shadow_catcher(engine, scene, *view, *projection, render_mode);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glBindVertexArray(0);
+    glUseProgram(0);
 }
 
 void engine_render_scene(Engine* engine, Scene* scene) {
@@ -1478,39 +1514,10 @@ void engine_render_scene(Engine* engine, Scene* scene) {
 
     RenderMode render_mode = engine->current_render_mode;
 
-    // Un-jittered view-projection, computed once per frame for frustum culling
-    // and motion vectors (and stashed as next frame's prev at the end). Held on
-    // the engine so _render_node uploads it without recomputing per program.
-    glm_mat4_mul(*projection, *view, engine->view_proj);
+    // Whatever below writes depth in a capture, _render_capture_depth must draw as well: a GI
+    // probe's wall test is that depth, without the rest of this pass.
     Frustum frustum;
-    frustum_extract_from_vp(engine->view_proj, &frustum);
-
-    // The pose these passes cull against is the pose they are about to upload,
-    // and since 11.96 it is also the pose the shadow pass drew: the app steps
-    // the animation in its pre-render hook, ahead of both. The shadow pass still
-    // builds its own cull view and still gets a different answer -- the
-    // difference is now its FRUSTUM alone, which is what it always should have
-    // been. It used to be the pose as well, and this comment used to bless that.
-    CullView cull = render_cull_view(engine, scene, &frustum);
-
-    // Flatten once. Cube captures re-enter here six times with their own
-    // camera; the stamp makes those five reuses rather than five rebuilds,
-    // which is right on both counts -- the graph did not change, and each face
-    // still culls against its own frustum at submit.
-    //
-    // The frame index alone would NOT be enough: an app that rebuilds geometry
-    // mid-frame frees meshes an earlier pass already flattened, and a list
-    // reused on frame index would then draw freed memory. The graph epoch is
-    // what makes that a rebuild. apps/tree is the app that does this, on a
-    // slider -- it rebuilds in its pre-render hook now, ahead of the shadow
-    // pass, so the hazard is one an app could reintroduce rather than one
-    // currently live.
-    //
-    // A build failure falls through with an empty list rather than returning:
-    // every consumer loops over count, and returning here would skip the
-    // per-frame flag resets and the prev_view_proj stash below, poisoning the
-    // NEXT frame's motion vectors as well as this one's composite.
-    engine_build_draw_list((Engine*)engine, scene);
+    CullView cull = _scene_pass_prepare(engine, scene, &frustum);
 
     // Occlusion culling (spec 11.98), HERE for three reasons that are all
     // ordering. It reads the unjittered view_proj published above; it writes
@@ -1556,24 +1563,27 @@ void engine_render_scene(Engine* engine, Scene* scene) {
     // scene->lights one call before the frame's only writer of it, so on the
     // frame a derived panel first appears every material is already on a
     // CETRA_NO_AREA_LIGHTS variant while the cluster list has a panel in it.
+    // A capture's burst resolves once, after its own emissive build, for the
+    // same reason.
     //
     // The draw list above is not a reader in the sense that matters: it tests
     // the program for existence, uniforms and geometry input, which every
     // variant of a family shares, and keys on mesh and level, so a program
     // swapped after it changes nothing it built. The submit-time reads --
     // prepass safety, the instanced test -- are live and see this.
-    engine_resolve_material_variants(engine, scene);
+    if (!engine->capturing)
+        engine_resolve_material_variants(engine, scene);
 
     // Clustered forward (spec 9.1): rebuild the light grid + UBOs for THIS
     // invocation's camera and viewport. A capture builds its own in
-    // scene_capture_faces, which knows whether its faces share one list.
+    // scene_capture_faces, gathering its lights once for every face.
     if (engine->light_cluster && !engine->capturing) {
         profiler_scope_begin(engine->profiler, "cluster build");
         GLint cluster_viewport[4];
         glGetIntegerv(GL_VIEWPORT, cluster_viewport);
         light_cluster_build_and_upload(engine->light_cluster, scene, *view, *projection,
                                        cluster_viewport[2], cluster_viewport[3], camera->near_clip,
-                                       camera->far_clip, false);
+                                       camera->far_clip);
         profiler_scope_end(engine->profiler);
     }
 
@@ -2029,26 +2039,23 @@ bool scene_capture_ready(const Engine* engine, const Scene* scene, SceneCaptureK
     return kind != SCENE_CAPTURE_RADIANCE || gi_world_ready_in(scene->gi, box);
 }
 
-CaptureBudget capture_budget_open(const Engine* engine) {
-    return (CaptureBudget){.ms = engine ? engine->capture_budget_ms : 0.0f};
-}
-
-bool capture_budget_allows(CaptureBudget* budget) {
+// The clock is read past a glFinish, at the start as well as at each later ask: a capture is
+// CPU submission and GPU work, the CPU runs ahead of the GPU, and without the sync the clock
+// would see the submission alone and leave the rest for the frame's swap to wait on; and the
+// start must not count the GPU work of the frame before. It syncs only a frame that has a
+// capture to take.
+bool capture_budget_take(CaptureBudget* budget, bool first) {
     if (budget->ms <= 0.0f)
         return true;
+    if (!budget->started) {
+        glFinish();
+        budget->start = glfwGetTime();
+        budget->started = true;
+    }
+    if (first)
+        return true;
     glFinish();
-    const double now = glfwGetTime();
-    if (budget->start == 0.0)
-        budget->start = now;
-    return budget->units == 0 || (now - budget->start) * 1000.0 < (double)budget->ms;
-}
-
-void capture_budget_spend(CaptureBudget* budget) {
-    budget->units++;
-}
-
-int capture_budget_faces(const CaptureBudget* budget) {
-    return budget->ms > 0.0f ? 1 : 6;
+    return (glfwGetTime() - budget->start) * 1000.0 < (double)budget->ms;
 }
 
 void scene_capture_begin(Engine* engine, Scene* scene, SceneCaptureKind kind,
@@ -2083,8 +2090,10 @@ void scene_capture_begin(Engine* engine, Scene* scene, SceneCaptureKind kind,
 
     // The derived emissive panels, once for the burst, which its faces no longer place
     // (spec 13.32) -- and before its shadow pass, so a panel first derived here is a light
-    // the pass gives a shadow.
+    // the pass gives a shadow. Then the variants, which read the panels (engine_render_scene
+    // says why both halves of that order matter), once for every face.
     scene_build_emissive_lights(scene, engine->emissive_lights_enabled);
+    engine_resolve_material_variants(engine, scene);
 
     saved->cascade_count = scene->shadow_system ? scene->shadow_system->cascade_count : 1;
     saved->msm_enabled = scene->shadow_system ? scene->shadow_system->msm_enabled : false;
@@ -2122,12 +2131,13 @@ void scene_capture_faces(Engine* engine, Scene* scene, struct IBLResources* ibl,
                          const vec3 position, GLuint dst_cubemap, GLuint dst_depth_cubemap,
                          int face_size, float near_clip, float far_clip, SceneCaptureFaces faces,
                          int first, int count) {
-    if (first < 0)
-        first = 0;
-    if (count > 6 - first)
-        count = 6 - first;
-    if (!engine || !scene || !engine->camera || !dst_cubemap || face_size <= 0 || count <= 0)
+    if (!engine || !scene || !engine->camera || !dst_cubemap || face_size <= 0)
         return;
+    if (first < 0 || count <= 0 || first + count > 6) {
+        log_error("Scene capture of faces %d to %d: a cube has faces 0 to 5", first,
+                  first + count - 1);
+        return;
+    }
     // Keeping the depth means rendering straight into the destination faces:
     // a blit would have to carry depth between two differently-sized targets.
     const bool keep_depth = dst_depth_cubemap != 0;
@@ -2136,14 +2146,18 @@ void scene_capture_faces(Engine* engine, Scene* scene, struct IBLResources* ibl,
     // a signature argument whose meaning depended on another argument, plus a
     // clamp no caller could reach.
     const int ss_factor = keep_depth ? 1 : CAPTURE_SS_FACTOR;
-    // `ibl` is only the scratch target the supersampled path renders into before
-    // downsampling. The direct path needs none, which is what lets a GI probe
-    // volume capture in a scene with no HDR environment at all.
-    if (!keep_depth && !ibl)
+    // Supersampled capture: render each face at ss_factor x into a target of its own and
+    // box-downsample into the cube face (an exact 4-tap average at a 2:1 blit). The capture has
+    // no MSAA, and single-sample grazing-angle aliasing at its horizon bakes in as stripe moire
+    // that mirror reflections then magnify into banded streaks. `ibl` holds that target, kept
+    // from a cube's first face to its last; the direct path needs none, which is what lets a GI
+    // probe volume capture in a scene with no HDR environment at all.
+    const int ss_size = ss_factor * face_size;
+    if (!keep_depth && (!ibl || !ibl_capture_ss_target(ibl, ss_size)))
         return;
 
     // Below every early return, because a suspend that leaks is a profiler that
-    // silently times nothing for the rest of the run. Six re-entries into
+    // silently times nothing for the rest of the run. Re-entries into
     // engine_render_scene follow, each opening the same scope names the frame
     // itself uses; timing them would file a 256-pixel cube face under the row
     // that means the main pass. This is the one place the renderer re-renders
@@ -2225,26 +2239,8 @@ void scene_capture_faces(Engine* engine, Scene* scene, struct IBLResources* ibl,
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-    // Supersampled capture: render each face at ss_factor x into a temporary
-    // target and box-downsample into the cube face (an exact 4-tap average at a
-    // 2:1 blit). The capture has no MSAA, and single-sample grazing-angle
-    // aliasing at its horizon bakes in as stripe moire that mirror reflections
-    // then magnify into banded streaks.
-    const int ss_size = ss_factor * face_size;
-    GLuint ss_tex = 0, face_fbo = 0;
+    GLuint face_fbo = 0;
     glGenFramebuffers(1, &face_fbo);
-    if (!keep_depth) {
-        glGenTextures(1, &ss_tex);
-        glBindTexture(GL_TEXTURE_2D, ss_tex);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F, ss_size, ss_size, 0, GL_RGB, GL_FLOAT, NULL);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-
-        glBindFramebuffer(GL_FRAMEBUFFER, ibl->capture_fbo);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, ss_tex, 0);
-        glBindRenderbuffer(GL_RENDERBUFFER, ibl->capture_rbo);
-        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, ss_size, ss_size);
-    }
 
     mat4 views[6];
     ibl_capture_views((float*)position, views);
@@ -2255,16 +2251,12 @@ void scene_capture_faces(Engine* engine, Scene* scene, struct IBLResources* ibl,
     camera->far_clip = far_clip;
     glm_perspective(glm_rad(90.0f), 1.0f, near_clip, far_clip, engine->projection_matrix);
 
-    // The lights a shaded face reads. A face no wider than twice the grid leaves its cells a
-    // pixel or two each, where per-cell lists cull nothing the fragments would have paid for,
-    // and building them once a face was most of a GI capture (spec 13.32): one list, built
-    // here, stands for all six. A wider face builds the grid for each face, which its
-    // fragments repay. The capture sees out to its far plane along each axis, so to
-    // far * sqrt(3) at a corner.
-    const bool one_list = ss_size <= 2 * LC_CLUSTER_X;
-    if (faces == SCENE_FACES_SHADED && one_list && engine->light_cluster)
-        light_cluster_build_capture(engine->light_cluster, scene, position, far_clip * sqrtf(3.0f),
-                                    engine->projection_matrix, ss_size, near_clip, far_clip);
+    // The lights the shaded faces read, gathered once for them: everything reaching what the
+    // capture sees, which is out to its far plane along each axis, so to far * sqrt(3) at a
+    // corner.
+    const bool shaded = faces == SCENE_FACES_SHADED && engine->light_cluster;
+    if (shaded)
+        light_cluster_capture_begin(engine->light_cluster, scene, position, far_clip * sqrtf(3.0f));
 
     for (int i = first; i < first + count; ++i) {
         if (keep_depth) {
@@ -2283,7 +2275,7 @@ void scene_capture_faces(Engine* engine, Scene* scene, struct IBLResources* ibl,
             }
             glViewport(0, 0, face_size, face_size);
         } else {
-            glBindFramebuffer(GL_FRAMEBUFFER, ibl->capture_fbo);
+            glBindFramebuffer(GL_FRAMEBUFFER, ibl->capture_ss_fbo);
             glViewport(0, 0, ss_size, ss_size);
         }
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
@@ -2292,17 +2284,16 @@ void scene_capture_faces(Engine* engine, Scene* scene, struct IBLResources* ibl,
         if (faces == SCENE_FACES_BACK_DEPTH) {
             _render_capture_depth(engine, scene);
         } else {
-            if (!one_list && engine->light_cluster)
-                light_cluster_build_and_upload(engine->light_cluster, scene, engine->view_matrix,
-                                               engine->projection_matrix, ss_size, ss_size,
-                                               near_clip, far_clip, true);
+            if (shaded)
+                light_cluster_capture_face(engine->light_cluster, scene, engine->view_matrix,
+                                           engine->projection_matrix, ss_size, near_clip, far_clip);
             engine_render_scene(engine, scene);
         }
 
         if (keep_depth)
             continue; // already in the destination faces
 
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, ibl->capture_fbo);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, ibl->capture_ss_fbo);
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, face_fbo);
         glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
                                GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, dst_cubemap, 0);
@@ -2313,8 +2304,8 @@ void scene_capture_faces(Engine* engine, Scene* scene, struct IBLResources* ibl,
     profiler_resume(engine->profiler);
 
     glDeleteFramebuffers(1, &face_fbo);
-    if (ss_tex)
-        glDeleteTextures(1, &ss_tex);
+    if (!keep_depth && first + count == 6)
+        ibl_release_capture_ss_target(ibl);
 
     // Restore
     glm_mat4_copy(saved_view, engine->view_matrix);

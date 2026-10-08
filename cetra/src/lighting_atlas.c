@@ -346,6 +346,18 @@ bool lighting_atlas_restore(const LightingAtlas* atlas, AtlasRect rect, const ui
     return true;
 }
 
+void lighting_atlas_clear(const LightingAtlas* atlas, AtlasRect rect) {
+    if (!atlas || !atlas->fbo || rect.w <= 0 || rect.h <= 0)
+        return;
+    glBindFramebuffer(GL_FRAMEBUFFER, atlas->fbo);
+    glEnable(GL_SCISSOR_TEST);
+    glScissor(rect.x, rect.y, rect.w, rect.h);
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f); // make_target's
+    glClear(GL_COLOR_BUFFER_BIT);
+    glDisable(GL_SCISSOR_TEST);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
 uint32_t lighting_atlas_digest(const LightingAtlas* atlas, AtlasRect rect, const uint16_t* kept) {
     if (kept)
         return fnv1a_bytes(kept, rect_bytes(rect));

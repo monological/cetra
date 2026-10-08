@@ -74,6 +74,14 @@ typedef struct IBLResources {
     GLuint capture_fbo;
     GLuint capture_rbo;
 
+    // Engine-owned: the supersampled target a scene capture's faces are drawn into before
+    // their downsample, held from a cube's first face to its last, since a reflection probe
+    // is captured a face a call (spec 13.32). 0 between cubes.
+    GLuint capture_ss_fbo;
+    GLuint capture_ss_color;
+    GLuint capture_ss_depth;
+    int capture_ss_size;
+
     // Cube VAO for rendering
     GLuint cube_vao;
     GLuint cube_vbo;
@@ -171,6 +179,11 @@ void ibl_capture_views(vec3 origin, mat4 views[6]);
 // draws so callers need not carry their own cube.
 int ibl_init_cube_vao(IBLResources* ibl);
 void ibl_render_unit_cube(IBLResources* ibl);
+
+// The supersample target at `size` (capture_ss_*), made or remade as needed; false, logged,
+// when the driver refuses it. Released by the second, and with the resources.
+bool ibl_capture_ss_target(IBLResources* ibl, int size);
+void ibl_release_capture_ss_target(IBLResources* ibl);
 
 // Allocate an RGB16F cubemap (optionally mip-filtered; mips are not generated)
 void ibl_create_cubemap_texture(GLuint* texture, int size, bool mipmap);

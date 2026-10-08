@@ -136,6 +136,10 @@ AtlasRect lighting_atlas_probe_rect(const LightingAtlas* atlas, int slot);
 uint16_t* lighting_atlas_keep(const LightingAtlas* atlas, AtlasRect rect);
 bool lighting_atlas_restore(const LightingAtlas* atlas, AtlasRect rect, const uint16_t* texels);
 
+// A rectangle back to what a new atlas holds, as though nothing had been written there. Leaves
+// framebuffer 0 bound.
+void lighting_atlas_clear(const LightingAtlas* atlas, AtlasRect rect);
+
 // FNV-1a over a rectangle's texels: `kept` when given, else read from the atlas. Two captures of
 // one place agree on it exactly, which is what says whether something was photographed.
 uint32_t lighting_atlas_digest(const LightingAtlas* atlas, AtlasRect rect, const uint16_t* kept);
