@@ -1319,6 +1319,137 @@ static float _halton(int index, int base) {
     return r;
 }
 
+// Shadow catcher: darken the environment floor where the model blocks the
+// shadow-casting lights. One function for the scene pass and a capture's depth
+// (spec 13.32), since the plane's depth is its unshadowed discard's: the two
+// must draw it alike.
+//
+// Not alongside water. The catcher is an invisible stand-in for ground that
+// was never modelled, and it sits at y = 0 -- which is where a water plane
+// usually is, making the two exactly coplanar. GL_LESS then resolves the tie
+// per pixel off whichever interpolated its depth differently, and the seam
+// between them wanders in an organic-looking band that reads as a hole in the
+// water rather than as z-fighting. Two stand-in ground planes in one scene is
+// not a configuration to arbitrate; water is the more specific one, so it
+// wins and the catcher sits the frame out.
+static void _draw_shadow_catcher(Engine* engine, Scene* scene, mat4 view, mat4 projection,
+                                 RenderMode render_mode) {
+    if (!scene->shadow_catcher || water_will_draw(scene->water, engine, render_mode) ||
+        !scene->shadow_system || !scene->shadow_system->enabled ||
+        scene->shadow_system->directional_count == 0 || !engine->shadow_catcher_program ||
+        !engine->catcher_vao)
+        return;
+    profiler_scope_begin(engine->profiler, "shadow catcher");
+    ShaderProgram* catcher = engine->shadow_catcher_program;
+    const ShadowSystem* ss = scene->shadow_system;
+
+    glUseProgram(catcher->id);
+    uniform_set_mat4(catcher->uniforms, "view", (const float*)view);
+    uniform_set_mat4(catcher->uniforms, "projection", (const float*)projection);
+    uniform_set_float(catcher->uniforms, "catcherStrength", scene->shadow_catcher_strength);
+    uniform_set_float(catcher->uniforms, "planeRadius", scene->skybox_gp_radius);
+
+    // With SSR active the floor publishes depth and the reflective
+    // marker across the whole quad (surfaceMode 1 skips the unshadowed
+    // discard) so the reflection march has a surface to start from
+    bool ssr_floor =
+        engine->postfx && postfx_ssr_active(engine->postfx, engine->normals_this_frame);
+    uniform_set_int(catcher->uniforms, "surfaceMode", ssr_floor ? 1 : 0);
+    // The widest cascade and everything csm.glsl's CSM_OUTERMOST_PCF path reads. This
+    // was hand-rolled here and picked up msmEnabled and tsmEnabled by going through the
+    // shared binder: without them the catcher read depths while every other surface read
+    // moments under --msm, and csmTransmittance short-circuited so a translucent caster
+    // laid no shadow on this plane at all.
+    bind_outermost_cascades_to_program(ss, catcher, SHADOW_MAP_TEXTURE_UNIT);
+    // The deck darkens the catcher the way a caster does (spec 11.41). Its own unit
+    // rather than pbr_frag's alias: this program declares one sampler, not sixteen.
+    sky_bind_cloud_shadow(scene->sky, catcher, SKY_CLOUD_SHADOW_UNIT);
+
+    // Weight each caster's shadow by its light's share of analytic light
+    float weights[MAX_SHADOW_LIGHTS] = {0};
+    float weight_total = 0.0f;
+    for (size_t i = 0; i < scene->light_count; i++) {
+        const Light* light = scene->lights[i];
+        if (light && light->shadow_map_index >= 0 && light->shadow_map_index < MAX_SHADOW_LIGHTS) {
+            weights[light->shadow_map_index] = light->intensity;
+            weight_total += light->intensity;
+        }
+    }
+    // Catcher-only: the per-light weights the shared binder has no concept of.
+    for (size_t i = 0; i < ss->directional_count && i < MAX_SHADOW_LIGHTS; i++) {
+        char name[64];
+        snprintf(name, sizeof(name), "shadowLightWeight[%zu]", i);
+        uniform_set_float(catcher->uniforms, name,
+                          weight_total > 0.0f ? weights[i] / weight_total : 0.0f);
+    }
+
+    // Explicit state: blended, visible from both sides. Depth writes stay
+    // ON: this plane is what the transparent and particle passes below sort
+    // against, and what gives the model a contact shadow in the postfx SSAO
+    // resolve. The backdrop it stands in for writes no depth of its own.
+    GLboolean cull_was_enabled = glIsEnabled(GL_CULL_FACE);
+    glDisable(GL_CULL_FACE);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    // The quad sits at y=0, and a scene may ship its own ground plane at
+    // exactly that height. Pushed a few depth ULPs behind everything so
+    // real geometry always wins the depth test at equal depth -- without
+    // this, interpolation rounding lets the quad win in jitter-dependent
+    // patches and it stamps its own shadow term over the already-shaded
+    // floor as flickering rectangles. The backdrop dome floor writes no
+    // depth, so shadows land there exactly as before.
+    glEnable(GL_POLYGON_OFFSET_FILL);
+    glPolygonOffset(1.0f, 8.0f);
+    // The floor writes the reflective marker only when SSR consumes it;
+    // otherwise it draws color-only and leaves the normals buffer (and
+    // SSAO's read of it) untouched. Must come after the blanket blend
+    // enable above, which resets the indexed blend-off state this call
+    // establishes for attachment 1.
+    engine_set_scene_draw_buffers(engine, ssr_floor);
+
+    glBindVertexArray(engine->catcher_vao);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+    glBindVertexArray(0);
+
+    engine_set_scene_draw_buffers(engine, false);
+    glDisable(GL_POLYGON_OFFSET_FILL);
+    glPolygonOffset(0.0f, 0.0f);
+    if (cull_was_enabled)
+        glEnable(GL_CULL_FACE);
+    profiler_scope_end(engine->profiler);
+}
+
+// A capture face's depth with nothing shaded (spec 13.32): what engine_render_scene leaves in
+// the depth buffer, drawn by the same programs over the same lane and stopped at their coverage
+// decision, so a cutout, a sway or a hook's offset lands where the shaded face put it. The
+// opaque lane, the gizmos and the shadow catcher are everything that writes depth in a capture:
+// the sky and the late lanes write none, and water, OIT and particles sit captures out.
+static void _render_capture_depth(Engine* engine, Scene* scene) {
+    Camera* camera = engine->camera;
+    mat4* view = &engine->view_matrix;
+    mat4* projection = &engine->projection_matrix;
+    const RenderMode render_mode = engine->current_render_mode;
+
+    glm_mat4_mul(*projection, *view, engine->view_proj);
+    Frustum frustum;
+    frustum_extract_from_vp(engine->view_proj, &frustum);
+    CullView cull = render_cull_view(engine, scene, &frustum);
+    engine_build_draw_list(engine, scene);
+    engine_resolve_material_variants(engine, scene);
+    // No pass before this one in a capture binds the refraction source or the moment atlas.
+    engine->scene_color_this_frame = false;
+    engine->moments_this_frame = false;
+
+    SubmitState submit_state = {0};
+    glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+    _submit_lanes(engine, scene, scene->draw_list, camera, *view, *projection, render_mode,
+                  &submit_state, &cull, 1u << DRAW_LANE_OPAQUE, SUBMIT_PASS_DEPTH_ONLY);
+    _submit_gizmos(engine->xyz_vao, scene->xyz_shader_program, scene->draw_list, *view, *projection,
+                   &submit_state);
+    _draw_shadow_catcher(engine, scene, *view, *projection, render_mode);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+}
+
 void engine_render_scene(Engine* engine, Scene* scene) {
     if (!engine) {
         log_error("error: render called with NULL engine");
@@ -1722,98 +1853,7 @@ void engine_render_scene(Engine* engine, Scene* scene) {
     // the floor composites over the shadow instead of being hidden by it.
     // Ahead of the refraction resolve too, so transmissive surfaces see the
     // shadowed floor rather than an unshadowed one.
-    // Not alongside water. The catcher is an invisible stand-in for ground that
-    // was never modelled, and it sits at y = 0 -- which is where a water plane
-    // usually is, making the two exactly coplanar. GL_LESS then resolves the tie
-    // per pixel off whichever interpolated its depth differently, and the seam
-    // between them wanders in an organic-looking band that reads as a hole in the
-    // water rather than as z-fighting. Two stand-in ground planes in one scene is
-    // not a configuration to arbitrate; water is the more specific one, so it
-    // wins and the catcher sits the frame out.
-    if (scene->shadow_catcher && !water_will_draw(scene->water, engine, render_mode) &&
-        scene->shadow_system && scene->shadow_system->enabled &&
-        scene->shadow_system->directional_count > 0 && engine->shadow_catcher_program &&
-        engine->catcher_vao) {
-        profiler_scope_begin(engine->profiler, "shadow catcher");
-        ShaderProgram* catcher = engine->shadow_catcher_program;
-        const ShadowSystem* ss = scene->shadow_system;
-
-        glUseProgram(catcher->id);
-        uniform_set_mat4(catcher->uniforms, "view", (const float*)*view);
-        uniform_set_mat4(catcher->uniforms, "projection", (const float*)draw_projection);
-        uniform_set_float(catcher->uniforms, "catcherStrength", scene->shadow_catcher_strength);
-        uniform_set_float(catcher->uniforms, "planeRadius", scene->skybox_gp_radius);
-
-        // With SSR active the floor publishes depth and the reflective
-        // marker across the whole quad (surfaceMode 1 skips the unshadowed
-        // discard) so the reflection march has a surface to start from
-        bool ssr_floor =
-            engine->postfx && postfx_ssr_active(engine->postfx, engine->normals_this_frame);
-        uniform_set_int(catcher->uniforms, "surfaceMode", ssr_floor ? 1 : 0);
-        // The widest cascade and everything csm.glsl's CSM_OUTERMOST_PCF path reads. This
-        // was hand-rolled here and picked up msmEnabled and tsmEnabled by going through the
-        // shared binder: without them the catcher read depths while every other surface read
-        // moments under --msm, and csmTransmittance short-circuited so a translucent caster
-        // laid no shadow on this plane at all.
-        bind_outermost_cascades_to_program(ss, catcher, SHADOW_MAP_TEXTURE_UNIT);
-        // The deck darkens the catcher the way a caster does (spec 11.41). Its own unit
-        // rather than pbr_frag's alias: this program declares one sampler, not sixteen.
-        sky_bind_cloud_shadow(scene->sky, catcher, SKY_CLOUD_SHADOW_UNIT);
-
-        // Weight each caster's shadow by its light's share of analytic light
-        float weights[MAX_SHADOW_LIGHTS] = {0};
-        float weight_total = 0.0f;
-        for (size_t i = 0; i < scene->light_count; i++) {
-            const Light* light = scene->lights[i];
-            if (light && light->shadow_map_index >= 0 &&
-                light->shadow_map_index < MAX_SHADOW_LIGHTS) {
-                weights[light->shadow_map_index] = light->intensity;
-                weight_total += light->intensity;
-            }
-        }
-        // Catcher-only: the per-light weights the shared binder has no concept of.
-        for (size_t i = 0; i < ss->directional_count && i < MAX_SHADOW_LIGHTS; i++) {
-            char name[64];
-            snprintf(name, sizeof(name), "shadowLightWeight[%zu]", i);
-            uniform_set_float(catcher->uniforms, name,
-                              weight_total > 0.0f ? weights[i] / weight_total : 0.0f);
-        }
-
-        // Explicit state: blended, visible from both sides. Depth writes stay
-        // ON: this plane is what the transparent and particle passes below sort
-        // against, and what gives the model a contact shadow in the postfx SSAO
-        // resolve. The backdrop it stands in for writes no depth of its own.
-        GLboolean cull_was_enabled = glIsEnabled(GL_CULL_FACE);
-        glDisable(GL_CULL_FACE);
-        glEnable(GL_BLEND);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        // The quad sits at y=0, and a scene may ship its own ground plane at
-        // exactly that height. Pushed a few depth ULPs behind everything so
-        // real geometry always wins the depth test at equal depth -- without
-        // this, interpolation rounding lets the quad win in jitter-dependent
-        // patches and it stamps its own shadow term over the already-shaded
-        // floor as flickering rectangles. The backdrop dome floor writes no
-        // depth, so shadows land there exactly as before.
-        glEnable(GL_POLYGON_OFFSET_FILL);
-        glPolygonOffset(1.0f, 8.0f);
-        // The floor writes the reflective marker only when SSR consumes it;
-        // otherwise it draws color-only and leaves the normals buffer (and
-        // SSAO's read of it) untouched. Must come after the blanket blend
-        // enable above, which resets the indexed blend-off state this call
-        // establishes for attachment 1.
-        engine_set_scene_draw_buffers(engine, ssr_floor);
-
-        glBindVertexArray(engine->catcher_vao);
-        glDrawArrays(GL_TRIANGLES, 0, 6);
-        glBindVertexArray(0);
-
-        engine_set_scene_draw_buffers(engine, false);
-        glDisable(GL_POLYGON_OFFSET_FILL);
-        glPolygonOffset(0.0f, 0.0f);
-        if (cull_was_enabled)
-            glEnable(GL_CULL_FACE);
-        profiler_scope_end(engine->profiler);
-    }
+    _draw_shadow_catcher(engine, scene, *view, draw_projection, render_mode);
 
     // Refraction source: resolve the opaque scene (including the skybox
     // just drawn) into the mipped color texture transmissive surfaces
@@ -2051,7 +2091,7 @@ void scene_capture_end(Engine* engine, Scene* scene, const SceneCaptureState* sa
 
 void scene_capture_faces(Engine* engine, Scene* scene, struct IBLResources* ibl,
                          const vec3 position, GLuint dst_cubemap, GLuint dst_depth_cubemap,
-                         int face_size, float near_clip, float far_clip, bool back_faces) {
+                         int face_size, float near_clip, float far_clip, SceneCaptureFaces faces) {
     if (!engine || !scene || !engine->camera || !dst_cubemap || face_size <= 0)
         return;
     // Keeping the depth means rendering straight into the destination faces:
@@ -2146,7 +2186,7 @@ void scene_capture_faces(Engine* engine, Scene* scene, struct IBLResources* ibl,
     glDepthFunc(GL_LESS);
     glDepthMask(GL_TRUE);
     glEnable(GL_CULL_FACE);
-    glCullFace(back_faces ? GL_FRONT : GL_BACK);
+    glCullFace(faces == SCENE_FACES_BACK_DEPTH ? GL_FRONT : GL_BACK);
     glFrontFace(GL_CCW);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -2204,7 +2244,10 @@ void scene_capture_faces(Engine* engine, Scene* scene, struct IBLResources* ibl,
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         glm_mat4_copy(views[i], engine->view_matrix);
-        engine_render_scene(engine, scene);
+        if (faces == SCENE_FACES_BACK_DEPTH)
+            _render_capture_depth(engine, scene);
+        else
+            engine_render_scene(engine, scene);
 
         if (keep_depth)
             continue; // already in the destination faces
