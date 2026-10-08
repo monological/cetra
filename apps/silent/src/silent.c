@@ -220,11 +220,6 @@ static Grounds g_grounds;
 enum { DOOR_HOME, DOOR_BATH, DOOR_BASEMENT, DOOR_MANSION, DOORS };
 static Door g_doors[DOORS];
 static bool g_door_hung[DOORS];
-
-// How far door `i` is open, 0 to 1; 0 for one that was not hung.
-static float door_travel(int i) {
-    return g_door_hung[i] ? g_doors[i].travel : 0.0f;
-}
 static Prompt g_prompt;
 static Basement g_basement;
 
@@ -605,6 +600,11 @@ static void build_post(const Engine* engine, bool night, bool grade) {
     fx->rescale_histories = !g_args.no_history_rescale;
 }
 
+// Door `i`, or NULL when it was not hung.
+static const Door* hung_door(int i) {
+    return g_door_hung[i] ? &g_doors[i] : NULL;
+}
+
 static void on_init(Game* game) {
     Engine* engine = game->engine;
     engine->show_fps = !engine->headless;
@@ -696,8 +696,11 @@ static void on_init(Game* game) {
         if (g_args.mute)
             audio_set_bus_volume(audio, AUDIO_BUS_MASTER, 0.0f);
     }
-    // The rooms first: a sound is heard through them from the moment it is placed.
-    sounds_start(&g_sounds, audio);
+    const Door* swung[SOUNDS_DOORS] = {[SOUNDS_DOOR_HOME] = hung_door(DOOR_HOME),
+                                       [SOUNDS_DOOR_MANSION] = hung_door(DOOR_MANSION),
+                                       [SOUNDS_DOOR_BASEMENT] = hung_door(DOOR_BASEMENT)};
+    sounds_start(&g_sounds, audio, swung);
+    kitchen_start_audio(audio);
     clock_start(&g_clock, engine, g_scene, audio);
     basement_start(&g_basement, engine, g_scene, audio, (unsigned int)g_args.seed);
     lights_start_audio(&g_lights, audio);
@@ -911,8 +914,7 @@ static void on_pre_render(Game* game, double alpha) {
     prompt_show(&g_prompt, !door                  ? NULL
                            : door_will_open(door) ? "E   Open door"
                                                   : "E   Close door");
-    sounds_update(&g_sounds, eye, door_travel(DOOR_HOME), door_travel(DOOR_MANSION),
-                  door_travel(DOOR_BASEMENT));
+    sounds_update(&g_sounds, eye);
     lights_update(&g_lights, g_scene, game->time, (float)game->sim_clock.delta, eye, forward);
     tv_update(&g_tv, game->time);
     cat_mind_frame(&g_mind, game->time);
@@ -920,11 +922,10 @@ static void on_pre_render(Game* game, double alpha) {
     cat_update(&g_cat, game, g_scene, &g_lights, eye, (float)game->sim_clock.delta);
     cat_voice_update(&g_voice, eye, cat_mind_at_ease(&g_mind), (float)game->sim_clock.delta);
     clock_update(&g_clock, game->time);
-    basement_update(&g_basement, g_door_hung[DOOR_BASEMENT] ? &g_doors[DOOR_BASEMENT] : NULL,
-                    game->time);
+    basement_update(&g_basement, hung_door(DOOR_BASEMENT), game->time);
     // The rain on the roof, heard through the floor from the basement.
-    rain_bed_update(&g_rain_bed, g_scene->rain, g_scene->shadow_system, eye,
-                    sounds_past_walls(&g_sounds), (float)game->sim_clock.delta);
+    rain_bed_update(&g_rain_bed, g_scene->rain, g_scene->shadow_system, eye, g_sounds.past_walls,
+                    (float)game->sim_clock.delta);
     dump_audio(game);
 
     // The volume goes in on the third frame, not at load. The tubes' panels are

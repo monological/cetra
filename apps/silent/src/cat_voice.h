@@ -39,8 +39,7 @@ typedef struct CatVoice {
 // without `audio` or a cat. The voice must outlive the cat's animator.
 void cat_voice_start(CatVoice* voice, Cat* cat, AudioSystem* audio, bool say);
 
-// Once a frame: the purr, which wants a listener near, slow, and trusted (`at_ease`). Where the
-// listener stands in the house is the audio zones' business.
+// Once a frame: the purr, which wants a listener near, slow, and trusted (`at_ease`).
 void cat_voice_update(CatVoice* voice, const vec3 listener, bool at_ease, float dt);
 
 #endif // _SILENT_CAT_VOICE_H_

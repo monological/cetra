@@ -6,6 +6,7 @@
 #include "kitchen.h"
 #include "layout.h"
 #include "mats.h"
+#include "sounds.h"
 
 /*
  * The kitchen, furnished. Heights are above the floor and every run is laid in
@@ -725,9 +726,18 @@ static void table(Kit* kit) {
     cushion(kit, 3.35f, 12.12f, 0.35f + 0.12f);
 }
 
-void kitchen_fridge_motor(vec3 out) {
+// Against the other loops tools/fetch_sounds.py levels alike.
+#define FRIDGE_VOLUME 0.15f
+
+void kitchen_start_audio(AudioSystem* audio) {
+    Sound* hum = sounds_loop(audio, "assets/audio/silent/fridge_hum.flac");
+    if (!hum)
+        return;
     // Behind the fridge and near the floor, where the compressor sits.
-    kit_frame_point(&STOVE_WALL, 0.5f * FRIDGE_W, 0.2f, 0.08f, out);
+    vec3 motor = {0.0f, 0.0f, 0.0f};
+    kit_frame_point(&STOVE_WALL, 0.5f * FRIDGE_W, 0.2f, 0.08f, motor);
+    audio_sound_set_position(hum, motor);
+    audio_sound_set_volume(hum, FRIDGE_VOLUME);
 }
 
 void kitchen_build(Kit* kit, unsigned int seed) {

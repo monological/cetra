@@ -273,7 +273,7 @@ static void walls(Kit* kit) {
     kit_frame_box(kit, &KIT_WORLD, MAT_MOULDING, door->from, door->to, FLOOR_Y - 0.02f,
                   FLOOR_Y + 0.012f, HOUSE_FRONT_Z - CORNER - 0.04f, HOUSE_FRONT_Z + CORNER, false);
     const KitOpening* cellar = &WALLS[HW_HALL_W_STAIR].openings[O_BASEMENT_DOOR];
-    kit_frame_box(kit, &KIT_WORLD, MAT_MOULDING, HALL_X0 - 0.5f * INT_WALL - 0.01f,
+    kit_frame_box(kit, &KIT_WORLD, MAT_MOULDING, HALL_OUT_X0 - 0.01f,
                   HALL_X0 + 0.5f * INT_WALL + 0.01f, FLOOR_Y - 0.02f, FLOOR_Y + 0.012f,
                   cellar->from, cellar->to, false);
 }
@@ -596,7 +596,7 @@ static void finishes(Kit* kit) {
 
 void home_line_stairwell(Kit* kit, int mat, const KitOpening* foot) {
     const float x = 0.5f * (CELLAR_X0 + CELLAR_HEAD_X), z = 0.5f * (STAIRWELL_Z0 + CELLAR_Z1);
-    const float hall = HALL_X0 - 0.5f * INT_WALL;
+    const float hall = HALL_OUT_X0;
     line_wall(kit, &WALLS[HW_BACK], mat, CELLAR_X0, hall, BASEMENT_Y, CEIL_Y, x, z, NULL);
     line_wall(kit, &WALLS[HW_STAIRWELL], mat, CELLAR_X0, hall, BASEMENT_Y, CEIL_Y, x, z, foot);
     line_wall(kit, &WALLS[HW_WEST], mat, STAIRWELL_Z0, CELLAR_Z1, BASEMENT_Y, CEIL_Y, x, z, NULL);
@@ -1025,15 +1025,8 @@ bool home_basement_door(Door* door, Engine* engine, Scene* scene, EntityManager*
                         PhysicsWorld* physics) {
     const KitOpening* opening = &WALLS[HW_HALL_W_STAIR].openings[O_BASEMENT_DOOR];
     // Turned a quarter the other way, so a runs toward +z from the hinge and d into the stairwell.
-    const float x = HALL_X0 - 0.5f * INT_WALL + 0.5f * DOOR_THICK + 0.005f;
+    const float x = HALL_OUT_X0 + 0.5f * DOOR_THICK + 0.005f;
     const KitFrame hinge = {{x, 0.0f, opening->from}, -0.5f * GLM_PIf};
     return door_hang(door, engine, scene, em, physics, "basement_door", door_leaf_panelled, &hinge,
                      *opening, 1.55f);
-}
-
-float home_outside_distance(const vec3 p) {
-    const float cx = 0.5f * (HOUSE_X0 + HOUSE_X1), cz = 0.5f * (HOUSE_FRONT_Z + HOUSE_BACK_Z);
-    const float hx = 0.5f * (HOUSE_X1 - HOUSE_X0) + CORNER;
-    const float hz = 0.5f * (HOUSE_BACK_Z - HOUSE_FRONT_Z) + CORNER;
-    return fmaxf(fabsf(p[0] - cx) - hx, fabsf(p[2] - cz) - hz);
 }

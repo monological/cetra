@@ -17,9 +17,6 @@ void tower_build(Kit* kit);
  */
 int tower_notch(float x0, float z0, float x1, float z1, float apothem, vec2* out);
 
-// How far `p` is outside the tower's outer faces in plan; negative inside.
-float tower_outside_distance(const vec3 p);
-
 // How far `p` is in plan from the nearer face of the nearest of the tower's eight walls, taken
 // whole: negative inside one.
 float tower_wall_distance(const vec3 p);

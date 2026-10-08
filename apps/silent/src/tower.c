@@ -300,13 +300,3 @@ float tower_wall_distance(const vec3 p) {
         d = fminf(d, kit_plan_distance(p, c[(k + FACES - 1) % FACES], c[k]));
     return d - 0.5f * EXT_WALL;
 }
-
-float tower_outside_distance(const vec3 p) {
-    float d = -1e9f;
-    for (int k = 0; k < FACES; k++) {
-        float nx = 0.0f, nz = 0.0f;
-        face_normal(k, &nx, &nz);
-        d = fmaxf(d, (p[0] - TOWER_X) * nx + (p[2] - TOWER_Z) * nz - TOWER_OUTER);
-    }
-    return d;
-}

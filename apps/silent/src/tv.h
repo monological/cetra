@@ -22,8 +22,7 @@ typedef struct Tv {
     Material* picture; // the snow; NULL when the set shows none
     Light* glow;       // the set's light on the room, a panel over the picture
     float average;     // the picture's light over its area, as a share of the signal's mean
-    vec3 speaker;      // world
-    Sound* hiss;       // the speaker on a dead channel; NULL without audio
+    vec3 speaker;      // world: where its hiss comes from
 } Tv;
 
 // Lays the set on its stand in the living room and hangs its light; with `on`, the picture over

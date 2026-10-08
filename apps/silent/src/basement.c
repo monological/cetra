@@ -249,7 +249,7 @@ static void dado(Kit* kit, const KitFrame* f, const vec2* outline, int count, fl
  * level across the wall at its foot.
  */
 static void stairwell(Kit* kit) {
-    const float s0 = STAIRWELL_WALL_Z - 0.5f * INT_WALL, hall = HALL_X0 - 0.5f * INT_WALL;
+    const float s0 = STAIRWELL_WALL_Z - 0.5f * INT_WALL, hall = HALL_OUT_X0;
     const float foot = CELLAR_FOOT_X;
     cellar_wall(kit, foot, HALL_X0, BASEMENT_Y, JOIST_Y0, s0, STAIRWELL_Z0);
     cellar_wall(kit, CELLAR_HEAD_X, HALL_X0, BASEMENT_Y, JOIST_Y0, STAIRWELL_Z0, CELLAR_Z1);
