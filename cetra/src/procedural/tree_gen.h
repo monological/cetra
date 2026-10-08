@@ -31,6 +31,18 @@
 // weight so a card pivots about its stem, and rows would move that pivot.
 #define TG_LEAF_VARIANTS 8
 
+// A conifer's cards address the same TG_LEAF_VARIANTS cells of a needle-spray atlas: the live
+// sprays first, then the browning ones, then a twig bare of needles.
+#define TG_SPRAY_LIVE_CELLS 5
+#define TG_SPRAY_DEAD_CELLS 2
+#define TG_SPRAY_BARE_CELL  (TG_SPRAY_LIVE_CELLS + TG_SPRAY_DEAD_CELLS)
+
+// How a tree grows. The zero is the recursive form, so a zeroed TreeParams keeps it.
+typedef enum TreeForm {
+    TREE_FORM_RECURSIVE = 0, // a trunk that splits at its tip, and every child again
+    TREE_FORM_EXCURRENT = 1, // a conifer: one trunk to the top, whorls of branches up it
+} TreeForm;
+
 // Live-tunable shape. Compared with memcmp to decide when to rebuild, so it
 // holds no pointers and must be zeroed before its first assignment.
 typedef struct TreeParams {
@@ -52,6 +64,23 @@ typedef struct TreeParams {
     int show_leaves;
     float leaf_size;
     float leaf_density; // leaves per 10 units of leaf-bearing arc
+
+    // The growth form, a TreeForm. The excurrent form reads the fields below, and these above
+    // under its own meaning: trunk_length and trunk_radius, twist (degrees each whorl turns
+    // from the last), angle_variance, droop and phototropism (a branch's sag and the turn up
+    // of its tip), curve_noise (the wander of trunk and branches), and the leaf fields (its
+    // needle sprays). The rest above are the recursive form's alone.
+    int form;
+    float crown_base;    // the bare trunk under the lowest whorl, a fraction of its length
+    float crown_width;   // the longest branch, a fraction of the trunk's length
+    float crown_shape;   // exponent on the fall of branch length up the crown: 1 a cone
+    float whorl_spacing; // trunk length between whorls
+    int whorl_size;      // branches a whorl, give or take one
+    float branch_pitch;  // degrees below level the lowest branches leave the trunk at
+    float spray_angle;   // degrees a needle spray leaves its branch at, in the branch's plane
+    float dead_lower;    // the fraction of the crown, from the bottom, whose branches are dead
+    float dead_fraction; // the chance any other branch is dead or browning
+    float snag;          // 0 a live leader; toward 1, the top broken off further down
 } TreeParams;
 
 // One sample along a branch spine.
@@ -74,6 +103,8 @@ typedef struct Branch {
     int uv_tiles_u;     // whole bark tiles around the circumference
     bool is_terminal;   // no children: gets a pointed tip
     bool bears_leaves;
+    int bark_segs; // ring segments; 0 = as many as the radius asks for
+    float vigor;   // 1 alive, 0 dead: what an excurrent branch's sprays are
 } Branch;
 
 typedef struct TreeSkeleton {
@@ -88,6 +119,9 @@ typedef struct TreeSkeleton {
 typedef enum TreePreset {
     TREE_PRESET_BROADLEAF = 0, // the tree viewer's own: tall, upright, a narrow crown in leaf
     TREE_PRESET_DEAD,          // leafless, sagging and wandering: wood dead a long time
+    TREE_PRESET_SPRUCE,        // a narrow cone of drooping branches, dense to the ground
+    TREE_PRESET_FIR,           // flatter tiers held nearer level, a little wider
+    TREE_PRESET_SNAG,          // a spruce gone half dead, its top broken off
     TREE_PRESET_COUNT
 } TreePreset;
 
