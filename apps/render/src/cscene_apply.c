@@ -890,7 +890,7 @@ static void print_conifer_shape(int i, const TreeParams* p, const TreeSkeleton* 
     float card_top = -1e30f;
     for (size_t k = 0; k < leaves->index_count; k++)
         card_top = fmaxf(card_top, leaves->vertices[3 * leaves->indices[k] + 1]);
-    const float crown0 = p->crown_base * p->trunk_length;
+    const float crown0 = p->excurrent.crown_base * p->trunk_length;
     float quarter[4] = {0.0f, 0.0f, 0.0f, 0.0f};
     for (int k = 1; k < skel->branch_count; k++) {
         const Branch* b = &skel->branches[k];
@@ -958,7 +958,7 @@ void apply_cscene_trees(Engine* engine, Scene* scene, const CetraSceneDesc* cscn
         TreeParams p;
         tree_params_preset(&p, (TreePreset)t->preset, t->seed);
         if (t->has_irregularity)
-            p.irregularity = t->irregularity;
+            p.excurrent.irregularity = t->irregularity;
         if (!bark)
             bark = tree_bark_material(scene, program);
         Material** foliage = p.form == TREE_FORM_EXCURRENT ? &needles : &sprigs;

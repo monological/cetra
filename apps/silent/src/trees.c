@@ -104,8 +104,8 @@ void trees_grow(const TreeParams* p, Material* bark, Material* foliage, Mesh** w
 static void dead_params(TreeParams* tp, int model) {
     tree_params_preset(tp, TREE_PRESET_DEAD, 4049 + model * 61);
     tp->trunk_radius += (float)(model % 3);
-    tp->branches_per_node += model % 2;
-    tp->branch_angle += (float)(model % 3) * 8.0f;
+    tp->recursive.branches_per_node += model % 2;
+    tp->recursive.branch_angle += (float)(model % 3) * 8.0f;
 }
 
 static Mesh* grow(int model, Material* bark) {
