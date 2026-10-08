@@ -86,6 +86,8 @@ it covers draws nothing of its own, so the preview runs at the screen's own cost
 `--loading-screen`),
 `--loading-lift-at <n>` (let it go at frame n, so a headless run reaches its switch-off. It lifts
 only once its ident has played, glitch included; implies `--loading-screen`),
+`--loading-ready-at <n>` (say the game is ready at frame n: once the ident has played, its LOADING
+sign becomes PLAY and it waits for `--loading-lift-at`; implies `--loading-screen`),
 `--tonemap <neutral|aces|agx|linear>`
 (`linear` is the identity curve WITH the display encode, which passthrough is not: an authored
 colour at unit exposure reaches the screen as authored, and it is what `engine_set_2d_preset`
@@ -958,11 +960,14 @@ flashlight, **E** opens a door, and **G** or backtick shows the debug GUI.
 **Capture:** `-x`, `-f <n>`, `-S <path>`, `--screenshot-every <n>`, and `-W`/`-H` for the window
 (default 1600x900).
 
-**Loading** (spec 13.34). In a window it loads under the engine's loading screen, which lifts once
-the lighting round the eye is in and its ident has played; the frame fades in after it, and the
-player's input waits for it. A headless run has no screen, so its frames are the game's from the
-first.
+**Loading** (spec 13.34). In a window it loads under the engine's loading screen. Once the
+lighting round the eye is in and its ident has played, the screen's LOADING sign becomes PLAY, and
+Enter, Space, E, a click, or pad A or Start switches the set off; the frame fades in after it, and
+the player's input waits for it. A headless run has no screen, so its frames are the game's from
+the first.
 - **`--no-loading-screen`:** loads under a black window instead, as before.
+- **`--no-play-prompt`:** the screen switches off by itself once the game is ready, with no PLAY
+  to press.
 - **`--loading-screen`:** the screen headless too. Its clock is then a frame's fixed step, so it
   lifts later in frames than it would windowed, where it runs on the wall clock.
 - **`--startup-ms`:** prints a `startup-ms` row for each loading step and held frame -- how long
