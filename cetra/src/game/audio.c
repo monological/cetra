@@ -37,7 +37,6 @@ struct Sound {
     AudioBus bus;       // what a voice copied from it is routed through
     bool streamed;      // read from the file as it plays, so nothing decoded to copy
     AudioSystem* audio; // borrowed; the tone stop-time and free_sound reach the engine here
-    bool placed;        // positioned by the app or an AUDIO_SOURCE, so heard through zones
 };
 
 // One pooled voice: a copy of a decoded sound, playing once and reaped at its end.
@@ -375,8 +374,11 @@ Sound* audio_sound_from_file(AudioSystem* audio, const char* path, AudioBus bus)
         return NULL;
     s->audio = audio;
     s->bus = bus;
-    if (ma_sound_init_from_file(&audio->engine, path, MA_SOUND_FLAG_DECODE, group_for(audio, bus),
-                                NULL, &s->sound) != MA_SUCCESS) {
+    // 2D until placed, as a tone is: spatialized from the start, it would sit at the world origin
+    // and fall off with the listener's distance from there.
+    const ma_uint32 flags = MA_SOUND_FLAG_DECODE | MA_SOUND_FLAG_NO_SPATIALIZATION;
+    if (ma_sound_init_from_file(&audio->engine, path, flags, group_for(audio, bus), NULL,
+                                &s->sound) != MA_SUCCESS) {
         log_error("audio: could not load %s", path);
         free(s);
         return NULL;
@@ -465,13 +467,12 @@ void audio_sound_set_volume(Sound* sound, float volume) {
 void audio_sound_set_position(Sound* sound, vec3 world_pos) {
     if (!sound)
         return;
+    const bool placed = ma_sound_is_spatialization_enabled(&sound->sound);
     ma_sound_set_spatialization_enabled(&sound->sound, MA_TRUE);
     ma_sound_set_position(&sound->sound, world_pos[0], world_pos[1], world_pos[2]);
     // Heard through its zone from the moment it is placed, not faded in from whole.
-    if (!sound->placed) {
-        sound->placed = true;
+    if (!placed)
         zone_ease(sound->audio, &sound->sound, 1.0f);
-    }
 }
 
 void free_sound(Sound* sound) {
@@ -518,9 +519,11 @@ void audio_system_update(AudioSystem* audio, struct EntityManager* em, vec3 list
     for (int z = 0; z < audio->zones.count; z++)
         audio->heard[z] += (audio->zones.path[audio->listener_zone][z] - audio->heard[z]) * k;
     audio->updated = true;
+    // A held sound is in the world, and so in a zone, once it is placed: every sound is made 2D
+    // and placing one is what spatializes it.
     for (size_t i = 0; i < audio->sound_count; i++) {
         Sound* s = audio->sounds[i];
-        if (s->placed)
+        if (ma_sound_is_spatialization_enabled(&s->sound))
             zone_ease(audio, &s->sound, k);
     }
 

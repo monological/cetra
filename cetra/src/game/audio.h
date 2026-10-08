@@ -82,9 +82,9 @@ bool audio_play_voice(AudioSystem* audio, const Sound* prototype, const AudioVoi
 Sound* audio_play_music(AudioSystem* audio, const char* path, bool loop);
 
 // Held voices. from_file decodes WAV/MP3/FLAC; from_tone is a procedural sine,
-// which needs no asset and is what the demo and the gate play. A tone is 2D
-// (centred, no attenuation) until audio_sound_set_position turns spatialization
-// on. Both return NULL on failure.
+// which needs no asset and is what the demo and the gate play. Either is 2D
+// (centred, no attenuation) until audio_sound_set_position places it in the
+// world. Both return NULL on failure.
 Sound* audio_sound_from_file(AudioSystem* audio, const char* path, AudioBus bus);
 Sound* audio_sound_from_tone(AudioSystem* audio, float hz, AudioBus bus);
 // Endless procedural noise, 2D until positioned like a tone, from a fixed seed so an offline
