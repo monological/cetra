@@ -33,6 +33,11 @@ void engine_show_loading_screen(Engine* engine);
 // frames draw it, so the frame it is in decides what it shows.
 void engine_draw_loading_screen(Engine* engine);
 
+// The game is ready: once its ident has played, the screen trades its LOADING sign for PLAY and
+// waits, still up, for the app to hide it -- at a press it chooses, since the engine does not know
+// the game's controls. An app with no prompt to give hides it instead.
+void engine_loading_screen_ready(Engine* engine);
+
 // Lift it: once its ident has played, the set switches off and the window shows the frame again.
 void engine_hide_loading_screen(Engine* engine);
 

@@ -60,6 +60,7 @@ struct LoadingScreen {
     bool shown;
     double clock;     // seconds of the ident shown
     double last_draw; // the wall clock at the last draw; < 0 before the first
+    double ready;     // the clock when the app said the game was ready; < 0 before
     bool lift_asked;
     double lift; // seconds into the switch-off; < 0 before it starts
     int frame;   // draws so far, for the tape's noise
@@ -113,8 +114,19 @@ void engine_show_loading_screen(Engine* engine) {
     ls->shown = true;
     ls->clock = 0.0;
     ls->last_draw = -1.0;
+    ls->ready = -1.0;
     ls->lift_asked = false;
     ls->lift = -1.0;
+}
+
+void engine_loading_screen_ready(Engine* engine) {
+    if (!engine) {
+        log_error("engine_loading_screen_ready: NULL engine");
+        return;
+    }
+    LoadingScreen* ls = engine->loading_screen;
+    if (ls && ls->shown && ls->ready < 0.0)
+        ls->ready = ls->clock;
 }
 
 void engine_hide_loading_screen(Engine* engine) {
@@ -206,6 +218,7 @@ static void _loading_draw(const Engine* engine, LoadingScreen* ls, bool timed) {
     uniform_set_float(m, "time", (float)ls->clock);
     uniform_set_vec2(m, "resolution", resolution);
     uniform_set_vec3_array(m, "palette", &palette[0][0], 7);
+    uniform_set_float(m, "ready", (float)ls->ready);
     draw_fullscreen_quad(ls->quad_vao);
     profiler_scope_end(prof);
 

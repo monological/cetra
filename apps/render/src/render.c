@@ -469,6 +469,9 @@ static void print_usage(const char* prog) {
                     "broadcast; implies --loading-screen\n");
     fprintf(stderr, "      --loading-lift-at <n> Lift it at frame n, once its ident has played; "
                     "implies --loading-screen\n");
+    fprintf(stderr,
+            "      --loading-ready-at <n> Say the game is ready at frame n, so it shows PLAY; "
+            "implies --loading-screen\n");
     fprintf(stderr, "      --no-texture-compression  Store every texture uncompressed\n");
     fprintf(stderr, "      --texture-probe    Print the texture memory ledger\n");
     fprintf(stderr, "      --texture-compress-colour  Compress albedo too (DXT, lossy)\n");
@@ -643,6 +646,7 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
     args->shadows_off_at = -1;    // -1 = never; the transition is the diagnostic
     args->exposure_at_frame = -1; // -1 = never; same idiom
     args->loading_lift_at = -1;
+    args->loading_ready_at = -1;
     args->layer_blend_at_frame = -1; // -1 = never; same idiom
     args->road_width_at_frame = -1;  // -1 = never; same idiom
     args->cam_at_count = 0;
@@ -2219,6 +2223,12 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 return -1;
             args->loading_lift_at = (int)frame;
             args->loading_screen = 1;
+        } else if (strcmp(argv[i], "--loading-ready-at") == 0) {
+            float frame = 0.0f;
+            if (_ranged_arg(argc, argv, &i, 0.0f, 1e7f, &frame) < 0)
+                return -1;
+            args->loading_ready_at = (int)frame;
+            args->loading_screen = 1;
         } else if (strcmp(argv[i], "--no-texture-compression") == 0) {
             args->no_texture_compression = 1;
         } else if (strcmp(argv[i], "--texture-probe") == 0) {
@@ -2894,6 +2904,8 @@ static void render_frame_update(Engine* engine, float dt) {
     // exposure lags it by a little at a time and the error hides in the adaptation; one step
     // puts all of it in one frame, where a run that had the new value from frame 0 says what
     // that frame should be.
+    if (frame_schedule->loading_ready_at == (int)engine->total_frames)
+        engine_loading_screen_ready(engine);
     if (frame_schedule->loading_lift_at == (int)engine->total_frames)
         engine_hide_loading_screen(engine);
     if (frame_schedule->exposure_at_frame == (int)engine->total_frames) {
