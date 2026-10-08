@@ -15,8 +15,9 @@
  * layout.h's footprint, its front door, hall, kitchen and clock where layout.h has them. The
  * ground floor is the hall, as in P.T., running straight from the front door to a window at the
  * back, with a cased opening half way; the kitchen and the living room off its front half, the
- * bathroom off its back; and the stair, the back bedroom and the basement shut. Nobody goes
- * upstairs.
+ * bathroom off its back; the stair and the back bedroom shut; and at the hall's end a door onto
+ * the cellar stair, down to a basement under the whole house (basement.h, spec 13.31). Nobody
+ * goes upstairs.
  */
 
 // The cross walls behind the living room and the bathroom, and the bathroom's east wall.

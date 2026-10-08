@@ -21,15 +21,17 @@
  * The player's house (spec 13.25). The plan is layout.h's footprint without the tower: the hall
  * runs the whole depth on HALL_X0..HALL_X1, a cased opening across it on the front band's back
  * wall; the kitchen and the living room either side of its front half; the bathroom, a shut
- * laundry and the back bedroom east of its back half, and the stair and the basement west of it
- * behind shut doors. Every finish is a scan silent already has, tinted.
+ * laundry and the back bedroom east of its back half; and west of it the stair behind a shut
+ * door, and at the hall's end the cellar stair, whose door opens, down to the basement under the
+ * whole house (basement.c, spec 13.31). Every finish is a scan silent already has, tinted.
  *
  *     z            ground floor
  *     ^   +-------------+---+-----------------+
- *     |   |  stair  [s] | h |[b]  bedroom     |
- *     |   |  basement[b]| a |                 |
+ *     |   |  cellar [c] | h |[b]  bedroom     |   [c] the cellar door
+ *     |   +-------------+ a |                 |   STAIRWELL_WALL_Z
+ *     |   |  stair  [s] | l |                 |
  *     |   +-------------+ l +------+----------+   HOME_SPLIT_Z
- *     |   |             | l [d] bath | laundry |
+ *     |   |             |   [d] bath | laundry |
  *     |   |   living    +=c=+------+----------+   KITCHEN_BACK_Z, c the cased opening
  *     |   |  room      [o]  =    kitchen      |
  *     |   +-------------+[d]+----[win]--------+
