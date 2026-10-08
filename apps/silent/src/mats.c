@@ -1,6 +1,7 @@
 #include <assert.h>
 #include <stdio.h>
 
+#include "cetra/loading_screen.h"
 #include "cetra/material.h"
 #include "cetra/postfx.h"
 #include "cetra/program.h"
@@ -618,6 +619,9 @@ void mats_register(Kit* kit, Engine* engine, Scene* scene) {
                 postfx_add_sss_profile(engine->postfx, s->scatter.colour, s->scatter.radius);
         }
         kit_material(kit, m, s->repeat_m, s->grime);
+        // Each material's textures load here, a second of them in all: the loading screen moves
+        // between them.
+        engine_draw_loading_screen(engine);
     }
 }
 
