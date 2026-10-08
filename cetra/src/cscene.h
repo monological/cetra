@@ -483,17 +483,17 @@ typedef struct CSceneDecal {
  * its neighbours are: a thing placed in the world.
  *
  * `preset` and `position` are REQUIRED: a tree is a kind of tree and a place for it, and a
- * default for either is a tree nobody asked for standing at the origin. The preset is held as its
- * NAME, tree_gen's own spelling, since this header carries no engine headers; the apply resolves
- * it and refuses one it does not know.
+ * default for either is a tree nobody asked for standing at the origin. A preset tree_gen does not
+ * name is refused at parse, with the tree.
  */
 typedef struct CSceneTree {
-    char preset[CSCENE_MAX_NAME];
-    int seed;           // 1 by default
-    float position[3];  // where its trunk meets the ground
-    float scale;        // world units per tree unit; 1 by default
-    float yaw;          // DEGREES about the vertical
-    float irregularity; // a conifer's raggedness; below 0, the preset's own
+    int preset;            // a TreePreset; int so this header needs no tree_gen.h
+    int seed;              // 1 by default
+    float position[3];     // where its trunk meets the ground
+    float scale;           // world units per tree unit; 1 by default
+    float yaw;             // DEGREES about the vertical
+    bool has_irregularity; // false = the preset's own
+    float irregularity;    // a conifer's raggedness, when authored
 } CSceneTree;
 
 // Mirrors MeteringMode in cetra/src/exposure.h. Kept as its own enum for the

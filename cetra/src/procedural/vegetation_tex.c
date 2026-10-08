@@ -495,6 +495,32 @@ static float secondary_veins(float across, float t) {
     return sum > 1.0f ? 1.0f : sum;
 }
 
+// Paint one texel of colour `rgb` at coverage `alpha` over what the atlas holds there, later
+// strokes over earlier ones. Where the new paint dominates it writes its normal and roughness
+// too, so the three maps agree texel by texel. The roughness is replicated across RGB: the mask
+// array reads it from green (glTF ORM), and a one-channel source samples green as 0.
+static void paint_texel(unsigned char* albedo, unsigned char* normal, unsigned char* rough, int w,
+                        int x, int y, const float rgb[3], float alpha, const vec3 n,
+                        float roughness) {
+    const int ia = (y * w + x) * 4;
+    const float dst_a = albedo[ia + 3] / 255.0f;
+    const float out_a = alpha + dst_a * (1.0f - alpha);
+    const float wsrc = out_a > 1e-4f ? alpha / out_a : 0.0f;
+    for (int k = 0; k < 3; k++)
+        albedo[ia + k] =
+            (unsigned char)(fminf(1.0f, rgb[k]) * 255.0f * wsrc + albedo[ia + k] * (1.0f - wsrc));
+    albedo[ia + 3] = (unsigned char)(out_a * 255.0f);
+    if (wsrc <= 0.5f)
+        return;
+    const int i3 = (y * w + x) * 3;
+    for (int k = 0; k < 3; k++)
+        normal[i3 + k] = (unsigned char)((n[k] * 0.5f + 0.5f) * 255.0f);
+    const unsigned char q = (unsigned char)(fminf(1.0f, roughness) * 255.0f);
+    rough[i3 + 0] = q;
+    rough[i3 + 1] = q;
+    rough[i3 + 2] = q;
+}
+
 // Rasterize one leaf into the RGBA/normal/roughness buffers. The leaf is placed
 // at (cx, cy) in pixels, rotated by `rot`, with half-length `len` in pixels.
 static void draw_leaf(unsigned char* albedo, unsigned char* normal, unsigned char* rough, int w,
@@ -542,41 +568,15 @@ static void draw_leaf(unsigned char* albedo, unsigned char* normal, unsigned cha
             float b = (0.12f + 0.05f * hue) * bright;
             // Blade darkens toward the edge, lightens along the veins.
             float shade = 0.82f + 0.18f * (1.0f - fabsf(across));
-            r = r * shade + vein * 0.07f;
-            g = g * shade + vein * 0.06f;
-            b = b * shade + vein * 0.02f;
-
-            int ia = (y * w + x) * 4;
-            float dst_a = albedo[ia + 3] / 255.0f;
-            // Painted in order, later leaves over earlier ones.
-            float out_a = alpha + dst_a * (1.0f - alpha);
-            float wsrc = out_a > 1e-4f ? alpha / out_a : 0.0f;
-            albedo[ia + 0] =
-                (unsigned char)(fminf(1.0f, r) * 255 * wsrc + albedo[ia + 0] * (1.0f - wsrc));
-            albedo[ia + 1] =
-                (unsigned char)(fminf(1.0f, g) * 255 * wsrc + albedo[ia + 1] * (1.0f - wsrc));
-            albedo[ia + 2] =
-                (unsigned char)(fminf(1.0f, b) * 255 * wsrc + albedo[ia + 2] * (1.0f - wsrc));
-            albedo[ia + 3] = (unsigned char)(out_a * 255);
-
-            if (wsrc > 0.5f) {
-                // Vein ridge: the blade folds up along the midrib and tips down
-                // toward each edge, rotated back into atlas space.
-                float slope_u = -across * 0.55f - midrib * across * 1.6f;
-                vec3 n = {slope_u * ca, slope_u * sa, 1.0f};
-                glm_vec3_normalize(n);
-                int in3 = (y * w + x) * 3;
-                normal[in3 + 0] = (unsigned char)((n[0] * 0.5f + 0.5f) * 255);
-                normal[in3 + 1] = (unsigned char)((n[1] * 0.5f + 0.5f) * 255);
-                normal[in3 + 2] = (unsigned char)((n[2] * 0.5f + 0.5f) * 255);
-                // Cuticle: tighter on the blade, duller along the veins.
-                // Replicated across RGB: the mask array reads roughness from
-                // green (glTF ORM), and a 1-channel source samples green as 0.
-                unsigned char q = (unsigned char)(fminf(1.0f, roughness + vein * 0.12f) * 255);
-                rough[(y * w + x) * 3 + 0] = q;
-                rough[(y * w + x) * 3 + 1] = q;
-                rough[(y * w + x) * 3 + 2] = q;
-            }
+            const float rgb[3] = {r * shade + vein * 0.07f, g * shade + vein * 0.06f,
+                                  b * shade + vein * 0.02f};
+            // Vein ridge: the blade folds up along the midrib and tips down toward each edge,
+            // rotated back into atlas space.
+            float slope_u = -across * 0.55f - midrib * across * 1.6f;
+            vec3 n = {slope_u * ca, slope_u * sa, 1.0f};
+            glm_vec3_normalize(n);
+            // Cuticle: tighter on the blade, duller along the veins.
+            paint_texel(albedo, normal, rough, w, x, y, rgb, alpha, n, roughness + vein * 0.12f);
         }
     }
 }
@@ -674,13 +674,13 @@ static float spray_rand(SprayRng* r, float lo, float hi) {
     return lo + (float)(r->s & 0xFFFFFFu) / (float)0x1000000 * (hi - lo);
 }
 
-VegSprayDesc veg_spray_desc_default(void) {
-    return (VegSprayDesc){.seed = 1,
-                          .flat = 0.35f,
-                          .live_rgb = {0.22f, 0.32f, 0.14f},
-                          .dead_rgb = {0.42f, 0.30f, 0.18f},
-                          .twig_rgb = {0.36f, 0.26f, 0.18f}};
-}
+// sRGB albedo: olive needles, rust-brown dead ones, and the twigs that carry them.
+static const float SPRAY_LIVE_RGB[3] = {0.22f, 0.32f, 0.14f};
+static const float SPRAY_DEAD_RGB[3] = {0.42f, 0.30f, 0.18f};
+static const float SPRAY_TWIG_RGB[3] = {0.36f, 0.26f, 0.18f};
+// 0 needles all round each shoot, as a spruce's; toward 1 parted into two rows, as a fir's.
+#define SPRAY_FLAT 0.35f
+#define SPRAY_SEED 1u
 
 // The buffers being painted, and the one cell a stroke may touch: nothing spills into the
 // neighbouring cells, which other cards sample.
@@ -728,27 +728,10 @@ static void spray_stroke(SprayCanvas* c, float ax, float ay, float bx, float by,
             const float side = ex * px_ + ey * py_;
             const float across = fmaxf(-1.0f, fminf(1.0f, side / fmaxf(r, 0.5f)));
             const float shade = 0.78f + 0.22f * (1.0f - fabsf(across));
-
-            const int ia = (y * c->w + x) * 4;
-            const float dst_a = c->albedo[ia + 3] / 255.0f;
-            const float out_a = alpha + dst_a * (1.0f - alpha);
-            const float wsrc = out_a > 1e-4f ? alpha / out_a : 0.0f;
-            for (int k = 0; k < 3; k++)
-                c->albedo[ia + k] = (unsigned char)(fminf(1.0f, rgb[k] * shade) * 255.0f * wsrc +
-                                                    c->albedo[ia + k] * (1.0f - wsrc));
-            c->albedo[ia + 3] = (unsigned char)(out_a * 255.0f);
-
-            if (wsrc > 0.5f) {
-                vec3 n = {px_ * across * 0.75f, py_ * across * 0.75f, 1.0f};
-                glm_vec3_normalize(n);
-                const int i3 = (y * c->w + x) * 3;
-                for (int k = 0; k < 3; k++)
-                    c->normal[i3 + k] = (unsigned char)((n[k] * 0.5f + 0.5f) * 255.0f);
-                const unsigned char q = (unsigned char)(fminf(1.0f, roughness) * 255.0f);
-                c->rough[i3 + 0] = q;
-                c->rough[i3 + 1] = q;
-                c->rough[i3 + 2] = q;
-            }
+            const float shaded[3] = {rgb[0] * shade, rgb[1] * shade, rgb[2] * shade};
+            vec3 n = {px_ * across * 0.75f, py_ * across * 0.75f, 1.0f};
+            glm_vec3_normalize(n);
+            paint_texel(c->albedo, c->normal, c->rough, c->w, x, y, shaded, alpha, n, roughness);
         }
     }
 }
@@ -842,11 +825,10 @@ static void spray_brush(SprayCanvas* c, SprayRng* rng, float ax, float ay, float
     }
 }
 
-void veg_needle_spray_maps(int width, int height, const VegSprayDesc* desc,
-                           unsigned char** out_albedo, unsigned char** out_normal,
-                           unsigned char** out_rough) {
+void veg_needle_spray_maps(int width, int height, unsigned char** out_albedo,
+                           unsigned char** out_normal, unsigned char** out_rough) {
     *out_albedo = *out_normal = *out_rough = NULL;
-    const int cells = desc->cells > 0 ? desc->cells : 1;
+    const int cells = TG_LEAF_VARIANTS;
     unsigned char* albedo = calloc((size_t)width * height * 4, 1);
     unsigned char* normal = malloc((size_t)width * height * 3);
     unsigned char* rough = malloc((size_t)width * height * 3);
@@ -870,13 +852,13 @@ void veg_needle_spray_maps(int width, int height, const VegSprayDesc* desc,
     const float sc = (float)height / 256.0f;
     for (int cell = 0; cell < cells; cell++) {
         SprayCanvas c = {albedo, normal, rough, width, height, cell * cell_w, (cell + 1) * cell_w};
-        SprayRng rng = {desc->seed * 2654435761u + (unsigned int)cell * 40503u + 1u};
+        SprayRng rng = {SPRAY_SEED * 2654435761u + (unsigned int)cell * 40503u + 1u};
         if (rng.s == 0)
             rng.s = 1;
-        const bool live = cell < desc->live_cells;
-        const bool bare = !live && cell >= desc->live_cells + desc->dead_cells;
+        const bool live = cell < TG_SPRAY_LIVE_CELLS;
+        const bool bare = cell >= TG_SPRAY_BARE_CELL;
         const float keep = live ? 1.0f : (bare ? 0.0f : 0.55f);
-        const float* needle_rgb = live ? desc->live_rgb : desc->dead_rgb;
+        const float* needle_rgb = live ? SPRAY_LIVE_RGB : SPRAY_DEAD_RGB;
         // Near 1: a card stands for a spray of needles turned every way, which reflects nothing
         // the way a surface does. The cards' normals are rounded out of the crown, so across much
         // of a canopy they meet the eye at grazing, where the lit surface's environment Fresnel
@@ -887,7 +869,7 @@ void veg_needle_spray_maps(int width, int height, const VegSprayDesc* desc,
         float twig_rgb[3];
         for (int k = 0; k < 3; k++)
             twig_rgb[k] =
-                bare ? desc->twig_rgb[k] + (0.42f - desc->twig_rgb[k]) * 0.6f : desc->twig_rgb[k];
+                bare ? SPRAY_TWIG_RGB[k] + (0.42f - SPRAY_TWIG_RGB[k]) * 0.6f : SPRAY_TWIG_RGB[k];
 
         /*
          * The sprig as a fir's grows: a leading shoot from the base at the bottom row up the
@@ -968,7 +950,7 @@ void veg_needle_spray_maps(int width, int height, const VegSprayDesc* desc,
                          shoots[i].r1, twig_rgb, 0.8f);
         for (int i = 0; i < ns; i++)
             spray_brush(&c, &rng, shoots[i].ax, shoots[i].ay, shoots[i].bx, shoots[i].by,
-                        shoots[i].tip, shoots[i].needle_len, shoots[i].needle_r, keep, desc->flat,
+                        shoots[i].tip, shoots[i].needle_len, shoots[i].needle_r, keep, SPRAY_FLAT,
                         needle_rgb, needle_rough);
     }
 

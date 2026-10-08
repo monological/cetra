@@ -49,14 +49,19 @@ bool mesh_lod_eligible(const Mesh* mesh, size_t min_triangles) {
     return true;
 }
 
-int mesh_build_lod_chain(Mesh* mesh) {
-    if (!mesh)
-        return 1;
-
+// The chain as level 0 alone: the whole of the mesh's indices.
+static void lod_chain_reset(Mesh* mesh) {
     mesh->lod_levels = 1;
     mesh->lod_offset[0] = 0;
     mesh->lod_count[0] = mesh->index_count;
     mesh->lod_error[0] = 0.0f;
+}
+
+int mesh_build_lod_chain(Mesh* mesh) {
+    if (!mesh)
+        return 1;
+
+    lod_chain_reset(mesh);
 
     if (!mesh_lod_eligible(mesh, LOD_MIN_TRIANGLES))
         return 1;
@@ -129,10 +134,7 @@ int mesh_build_card_lod_chain(Mesh* mesh, int indices_per_card, float keep) {
     if (!mesh)
         return 1;
 
-    mesh->lod_levels = 1;
-    mesh->lod_offset[0] = 0;
-    mesh->lod_count[0] = mesh->index_count;
-    mesh->lod_error[0] = 0.0f;
+    lod_chain_reset(mesh);
 
     if (indices_per_card <= 0 || indices_per_card % 3 != 0 || keep <= 0.0f || keep >= 1.0f)
         return 1;

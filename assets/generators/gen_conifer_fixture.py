@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate assets/conifer_fixture.{gltf,cscn} -- the tree generator's fixture (spec 13.35).
+"""Generate conifer_fixture.gltf and .cscn -- the tree generator's fixture (spec 13.35).
 
 A ground quad and a `trees` block the render app grows with tree_gen. The conifer gate reads the
 render app's --tree-probe over it: a digest of every stream of each tree's meshes, and for a

@@ -32,12 +32,12 @@ int mesh_build_lod_chain(Mesh* mesh);
 
 // A chain for a mesh made of separate CARDS -- foliage, grass -- which mesh_build_lod_chain
 // cannot reduce, since every edge of a card is a boundary. Each level draws a leading run of the
-// cards, `keep` of the level above, so it is a uniform thinning only if the cards come in no
-// spatial order: the generator emits them shuffled, and a mesh in emission order would lose a
-// whole side of itself. Every level shares level 0's indices, so the chain costs no memory.
+// cards, `keep` of the level above, so it is a uniform thinning only if the cards are in no
+// spatial order; cards in the order they were laid down would lose a whole side of the mesh.
+// Every level shares level 0's indices, so the chain costs no memory.
 //
-// `indices_per_card` is a card's indices -- a crossed pair counts as one card, so the pair goes
-// together. The same refusals and the same return as mesh_build_lod_chain, and a mesh whose
+// `indices_per_card` is a card's indices, so cards that must go together -- a crossed pair --
+// count as one. The same refusals and the same return as mesh_build_lod_chain, and a mesh whose
 // index count is not a whole number of cards is refused too.
 int mesh_build_card_lod_chain(Mesh* mesh, int indices_per_card, float keep);
 

@@ -4942,7 +4942,7 @@ int main(int argc, char** argv) {
     apply_cscene_water(scene, cscn);
     apply_cscene_fog_volumes(scene, cscn);
     apply_cscene_occluders(scene, cscn);
-    apply_cscene_trees(engine, scene, cscn);
+    apply_cscene_trees(engine, scene, cscn, args.tree_probe);
     // Guarded rather than applied-then-cleared: the apply decodes, dilates and uploads every
     // image, and dirties the material array for them. The probes are captured in the first
     // frame, so every decal applied at load is in their captures.
@@ -5227,11 +5227,6 @@ int main(int argc, char** argv) {
     // the sequence is a probe whose output a reader has to place before trusting.
     if (args.ies_probe)
         ies_library_probe(scene->ies_library);
-
-    // Grows the trees afresh from the scene file rather than reading the drawn meshes back, since
-    // the skeleton a shape row needs is not kept; the parameters are the build's own.
-    if (args.tree_probe)
-        cscene_tree_probe(cscn);
 
     // After the loop, so the state and the grids are what the frames simulated to.
     if (args.fire_probe) {

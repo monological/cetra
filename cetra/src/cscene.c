@@ -8,6 +8,7 @@
 #include "ext/cJSON.h"
 #include "ext/log.h"
 #include "postfx.h" // postfx_location_from_name
+#include "procedural/tree_gen.h"
 #include "sky.h"
 #include "util.h"
 
@@ -1017,7 +1018,6 @@ static void parse_decals(CetraSceneDesc* d, const cJSON* root) {
 /*
  * trees[] -- procedural trees (spec 13.35). `preset` and `position` are required, the probe
  * rule: a tree nobody chose at the origin renders as a plausible frame with the wrong tree in it.
- * The preset's name is checked at apply, where tree_gen's own list is.
  */
 static void parse_trees(CetraSceneDesc* d, const cJSON* root) {
     static const char* known[] = {"preset", "seed", "position", "scale", "yaw", "irregularity"};
@@ -1039,21 +1039,25 @@ static void parse_trees(CetraSceneDesc* d, const cJSON* root) {
 
         CSceneTree* out = &d->trees[d->tree_count];
         memset(out, 0, sizeof(*out));
-        copy_string(out->preset, sizeof(out->preset),
-                    cJSON_GetObjectItemCaseSensitive(t, "preset"));
-        if (out->preset[0] == '\0' || !get_floats(t, "position", out->position, 3)) {
+        const cJSON* preset = cJSON_GetObjectItemCaseSensitive(t, "preset");
+        if (!cJSON_IsString(preset) || !get_vec3(t, "position", out->position)) {
             log_warn("cscene: tree needs a preset and a position; skipped");
             continue;
         }
+        TreePreset kind;
+        if (!tree_preset_from_name(preset->valuestring, &kind)) {
+            log_warn("cscene: no tree preset named '%s'; tree skipped", preset->valuestring);
+            continue;
+        }
+        out->preset = kind;
         out->seed = 1;
         out->scale = 1.0f;
-        out->irregularity = -1.0f;
         const cJSON* seed = cJSON_GetObjectItemCaseSensitive(t, "seed");
         if (cJSON_IsNumber(seed))
             out->seed = seed->valueint;
         get_float(t, "scale", &out->scale);
         get_float(t, "yaw", &out->yaw);
-        get_float(t, "irregularity", &out->irregularity);
+        out->has_irregularity = get_float(t, "irregularity", &out->irregularity);
         if (out->scale <= 0.0f) {
             log_warn("cscene: tree scale must be positive (got %.3f); skipped", (double)out->scale);
             continue;
