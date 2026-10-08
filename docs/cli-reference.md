@@ -991,9 +991,9 @@ is `--cam-eye 70,160,25 --cam-target 70.01,0,25.2`.
 **The town's edges** (spec 13.35): the far side's terrace, the yards' fences, the woods, and the
 crossroads at the street's west end.
 - **`--no-woods`:** without the woods behind the yards and round the crossroads, or anything lying
-  under them. This is the A/B for their cost: about 3.5 ms of GPU from a yard and 0.4 ms from the
-  street, at 1280x720 by night. The trees are drawn only within the fog's reach, 45 m by night and
-  30 m by day, so with `--no-fog` the far ones are simply missing.
+  under them. This is the A/B for their cost: about 7 ms of a frame from a yard and 3 from the
+  street, at 1600x900 by night. Every tree is drawn wherever it is in view, the far ones through
+  their levels of detail.
 - **Pinned views:**
   - the terrace's stairs: `--cam-eye -9,1.7,-1.5 --cam-target -7,2.6,-9`;
   - our back yard and the dead tree through its fallen fence: `--cam-eye 0,1.7,23 --cam-target

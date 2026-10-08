@@ -13,6 +13,7 @@
 #include "hill.h"
 #include "land.h"
 #include "layout.h"
+#include "mats.h"
 #include "trees.h"
 
 /*
@@ -63,25 +64,14 @@ static Material* bark_material(Scene* scene, ShaderProgram* program, const Mater
     float* field = malloc(sizeof(float) * BARK_SIZE * BARK_SIZE);
     if (field) {
         veg_bark_height_field(field, BARK_SIZE, BARK_SIZE);
-        unsigned char* albedo = veg_bark_albedo(BARK_SIZE, BARK_SIZE, field);
-        unsigned char* normal = veg_bark_normal(BARK_SIZE, BARK_SIZE, field);
-        unsigned char* rough = veg_bark_roughness(BARK_SIZE, BARK_SIZE, field);
+        const BakedMaps maps = {veg_bark_albedo(BARK_SIZE, BARK_SIZE, field),
+                                veg_bark_normal(BARK_SIZE, BARK_SIZE, field),
+                                veg_bark_roughness(BARK_SIZE, BARK_SIZE, field),
+                                BARK_SIZE,
+                                BARK_SIZE,
+                                3};
         free(field);
-        if (albedo)
-            material_set_albedo_tex(
-                m, texture_load_memory_owned(scene->tex_pool, "silent_bark_albedo", albedo,
-                                             BARK_SIZE, BARK_SIZE, 3, texture_desc(true)));
-        if (normal)
-            material_set_normal_tex(
-                m, texture_load_memory_owned(scene->tex_pool, "silent_bark_normal", normal,
-                                             BARK_SIZE, BARK_SIZE, 3,
-                                             (TextureDesc){.is_srgb = false,
-                                                           .alpha = TEXTURE_ALPHA_DATA,
-                                                           .use = TEXTURE_USE_NORMAL}));
-        if (rough)
-            material_set_roughness_tex(
-                m, texture_load_memory_owned(scene->tex_pool, "silent_bark_rough", rough, BARK_SIZE,
-                                             BARK_SIZE, 3, texture_desc(false)));
+        mats_set_baked(m, scene, "silent_bark", &maps, texture_desc(true));
     }
     scene_add_material(scene, m);
     return m;

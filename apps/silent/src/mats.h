@@ -3,6 +3,7 @@
 
 #include "cetra/engine.h"
 #include "cetra/scene.h"
+#include "cetra/texture.h"
 
 #include "kit.h"
 
@@ -111,5 +112,21 @@ void mats_register(Kit* kit, Engine* engine, Scene* scene);
 
 // Daytime: the street lamps' lenses go dark, and the stained glass is lit by the sky.
 void mats_daytime(Kit* kit);
+
+// `m` as a cutout drawn from both sides, a hole where its albedo's alpha is under `cutoff`, and
+// `albedo` the descriptor its albedo map loads by, keeping that cut's coverage down its mips.
+void mats_cutout(Material* m, float cutoff, TextureDesc* albedo);
+
+// Maps baked in memory, `width` by `height`: each a buffer the pool takes over, or NULL for none,
+// the albedo with an alpha when it has 4 channels.
+typedef struct BakedMaps {
+    unsigned char *albedo, *normal, *rough;
+    int width, height, albedo_channels;
+} BakedMaps;
+
+// `maps` onto `m` through the scene's pool, named `name`_albedo, _normal and _rough, the albedo
+// loaded by `albedo`.
+void mats_set_baked(Material* m, Scene* scene, const char* name, const BakedMaps* maps,
+                    TextureDesc albedo);
 
 #endif // _SILENT_MATS_H_

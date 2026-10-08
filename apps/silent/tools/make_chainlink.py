@@ -18,8 +18,8 @@ import sys
 import numpy as np
 from PIL import Image
 
-ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-OUT_DIR = os.path.join(ROOT, "assets", "textures", "silent")
+from fetch_textures import OUT_DIR
+
 SIZE = 256
 REPEAT_M = 0.5
 # Wires cross the picture's edge every PITCH texels along x, which is 8 diamonds a repeat: the
