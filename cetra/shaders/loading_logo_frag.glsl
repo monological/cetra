@@ -3,10 +3,11 @@
 // The loading screen's mark (spec 13.34): CETRA over ENGINE as a 1970s station ident. The letters
 // are drawn, not set: each is a skeleton of strokes and arcs, and a stroke is a tube round it,
 // coloured in bands of the distance to the skeleton -- concentric stripes, cream at the core out
-// to brown at the edge, which join cleanly wherever strokes meet because the distance does. Each
-// CETRA letter flips in about its own upright axis in perspective; ENGINE's letters then light one
-// by one, and a striped rule draws out beneath them with a light sweeping along it while the game
-// loads. Linear light out; the tape pass wears it and encodes it.
+// to brown at the edge, which join cleanly wherever strokes meet because the distance does. CETRA's
+// letters turn together a quarter turn about their own upright axes, in perspective, from edge on
+// to facing the eye; ENGINE's letters then light one by one, and a striped rule draws out beneath
+// them with a light sweeping along it while the game loads. Linear light out; the tape pass wears
+// it and encodes it.
 
 in vec2 TexCoords;
 out vec4 FragColor;
@@ -27,12 +28,10 @@ const float TITLE_Y = 0.05;   // the baseline
 const vec2 SHADOW_OFF = vec2(0.10, -0.12); // the block shadow's depth, down and to the right
 const float EYE_D = 7.0;      // the eye's distance from the plane the mark stands in
 
-// The flip: each letter starts edge on, three quarters of a turn away, and springs to face the
-// eye with one small overshoot.
+// The turn: every letter at once, a quarter turn about its own upright axis from edge on, where
+// nothing of it shows, to facing the eye, easing in and out.
 const float TITLE_START = 0.55;
-const float TITLE_STAGGER = 0.18;
-const float SPRING_K = 6.0;
-const float SPRING_W = 6.0;
+const float TURN_SECONDS = 1.5;
 
 // ENGINE, lit a letter at a time beneath the title and spaced to its width.
 const float ENGINE_START = 2.1;
@@ -223,11 +222,17 @@ void main()
         far[i] = -1.0;
         ink[i] = vec4(0.0);
 
-        float since = time - (TITLE_START + float(i) * TITLE_STAGGER);
-        float turn = since <= 0.0 ? 1.5 * PI : 1.5 * PI * exp(-SPRING_K * since) * cos(SPRING_W * since);
+        // Edge on as the EYE sees it, which for a letter off to one side is a little past or short
+        // of a quarter turn: so every letter shows nothing at the start and comes into view with
+        // the others, rather than the ones the eye looks at side on showing first.
+        float edgeOn = -0.5 * PI - atan(cx / EYE_D);
+        float turn = edgeOn * (1.0 - smoothstep(0.0, 1.0, (time - TITLE_START) / TURN_SECONDS));
+        float toward = cos(0.5 * PI * turn / edgeOn); // 0 edge on .. 1 facing, alike for all
         vec3 n = vec3(sin(turn), 0.0, cos(turn));
+        // Only the face is drawn: near edge on, the eye can see the back of a letter off to one
+        // side, as a sliver.
         float facing = dot(ray, n);
-        if (abs(facing) < 1e-3)
+        if (facing > -1e-3)
             continue;
         vec3 centre = vec3(cx, TITLE_Y, 0.0);
         float t = dot(centre - eye, n) / facing;
@@ -241,28 +246,20 @@ void main()
 
         // A pixel, on this plane: the eye's footprint grows with distance and stretches as the
         // plane turns from it.
-        float aa = px * t / length(vec3(s, -EYE_D)) / max(abs(facing), 0.15);
+        float aa = px * t / length(vec3(s, -EYE_D)) / max(-facing, 0.15);
         float d = glyph(id, p);
         far[i] = t;
-        if (facing < 0.0) {
-            vec4 face = stripes(d, TITLE_R, aa);
-            // Turning, it catches the light once on its way round.
-            float glint = exp(-pow((turn - 0.45) / 0.12, 2.0));
-            face.rgb *= 0.55 + 0.45 * abs(cos(turn)) + 0.9 * glint;
-            float shadow = 0.0;
-            for (int k = 1; k <= 6; k++) {
-                float ds = glyph(id, p - SHADOW_OFF * (float(k) / 6.0));
-                shadow = max(shadow, 1.0 - smoothstep(TITLE_R - aa, TITLE_R + aa, ds));
-            }
-            float under = shadow * (1.0 - face.a);
-            ink[i] = vec4(face.rgb * face.a + palette[6] * under, face.a + under);
-            glow += palette[3] * GLOW_A * abs(cos(turn)) * glowAt(d - TITLE_R, GLOW_W, GLOW_REACH);
-        } else {
-            // The card's back: dark, with the outer stripe round its edge.
-            vec4 face = stripes(d, TITLE_R, aa);
-            vec3 back = mix(palette[6], palette[5], smoothstep(0.7 * TITLE_R, 0.85 * TITLE_R, d));
-            ink[i] = vec4(back * face.a, face.a);
+        // Darker while it is turned from the eye, full as it comes round to face it.
+        vec4 face = stripes(d, TITLE_R, aa);
+        face.rgb *= 0.55 + 0.45 * toward;
+        float shadow = 0.0;
+        for (int k = 1; k <= 6; k++) {
+            float ds = glyph(id, p - SHADOW_OFF * (float(k) / 6.0));
+            shadow = max(shadow, 1.0 - smoothstep(TITLE_R - aa, TITLE_R + aa, ds));
         }
+        float under = shadow * (1.0 - face.a);
+        ink[i] = vec4(face.rgb * face.a + palette[6] * under, face.a + under);
+        glow += palette[3] * GLOW_A * toward * glowAt(d - TITLE_R, GLOW_W, GLOW_REACH);
     }
     // Back to front: the largest distance first.
     for (int pass = 0; pass < 5; pass++) {

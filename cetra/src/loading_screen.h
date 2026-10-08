@@ -7,10 +7,10 @@
 
 /*
  * The engine's loading screen (spec 13.34): CETRA over ENGINE as a 1970s station ident on a worn
- * tape, played on an old television -- each letter of CETRA flips in, ENGINE lights beneath, and a
- * light sweeps along a striped rule while the game loads. Shown, it covers the window from then
- * until it is hidden and has switched off. Engine frames draw it in place of their picture; before
- * engine_run, an app's init draws it between its steps.
+ * tape, played on an old television -- CETRA's letters turn together to face the eye, ENGINE
+ * lights beneath, and a light sweeps along a striped rule while the game loads. Shown, it covers
+ * the window from then until it is hidden and has switched off. Engine frames draw it in place of
+ * their picture; before engine_run, an app's init draws it between its steps.
  *
  * Its look is a palette among LOADING_PALETTE_COUNT, `Engine.loading_palette`.
  */
