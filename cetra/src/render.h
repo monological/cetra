@@ -89,12 +89,16 @@ void scene_capture_end(Engine* engine, struct Scene* scene, const SceneCaptureSt
 // Saves and restores every piece of engine and camera state it substitutes, so a
 // capture leaves the next real frame bit-identical, and raises engine->capturing
 // for the duration so passes that reach outside the bound target sit out.
-// `back_faces` draws only the faces turned away from the capture point.
 //
 // Pair with scene_capture_begin/end, which own the policy this does not.
+typedef enum SceneCaptureFaces {
+    SCENE_FACES_SHADED,     // the lit scene, faces turned toward the capture point
+    SCENE_FACES_BACK_DEPTH, // depth alone, of the faces turned away; the colour faces are cleared
+} SceneCaptureFaces;
+
 void scene_capture_faces(Engine* engine, Scene* scene, struct IBLResources* ibl,
                          const vec3 position, GLuint dst_cubemap, GLuint dst_depth_cubemap,
-                         int face_size, float near_clip, float far_clip, bool back_faces);
+                         int face_size, float near_clip, float far_clip, SceneCaptureFaces faces);
 
 // Flatten the scene for this frame, if it has not been flattened already.
 //

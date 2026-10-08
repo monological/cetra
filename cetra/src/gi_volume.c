@@ -288,7 +288,7 @@ static int gi_volume_sweep(GIVolume* gi, struct Engine* engine, struct Scene* sc
         vec3 pos = {0};
         gi_probe_position(gi, probe, pos);
         scene_capture_faces(engine, scene, scene->ibl, pos, gi->capture_color, gi->capture_depth,
-                            GI_CAPTURE_FACE, GI_NEAR_CLIP, gi->far_clip, false);
+                            GI_CAPTURE_FACE, GI_NEAR_CLIP, gi->far_clip, SCENE_FACES_SHADED);
 
         // Projection is a fullscreen-quad pass; depth and culling would only get
         // in its way. Both go back as found: this runs inside the frame, after
@@ -308,11 +308,12 @@ static int gi_volume_sweep(GIVolume* gi, struct Engine* engine, struct Scene* sc
         // still held in capture_depth: a back face nearer than every front face in a direction
         // means the probe sits inside something, and one that sees that in more than a quarter
         // of its directions is inside a wall. Whether a probe is in a wall is geometry, which a
-        // change of light does not move, so only the opening sweep asks.
+        // change of light does not move, so only the opening sweep asks -- and depth is all it
+        // reads, so depth is all this capture draws.
         if (gi->classify && opening) {
             scene_capture_faces(engine, scene, scene->ibl, pos, gi->capture_color,
                                 gi->classify_depth, GI_CAPTURE_FACE, GI_NEAR_CLIP, gi->far_clip,
-                                true);
+                                SCENE_FACES_BACK_DEPTH);
             glDisable(GL_DEPTH_TEST);
             glDisable(GL_CULL_FACE);
             glBindVertexArray(gi->quad_vao);
