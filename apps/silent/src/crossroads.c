@@ -18,11 +18,8 @@
  * the arm's other side, so a later mechanic can take one away.
  */
 
-#define CROSS_HALF 4.0f // the cross street's asphalt, either side of its centre line
-#define WALK_WIDTH 2.0f // its sidewalks
-// The lip's face down, in rows this deep, to where the fog has it all.
-#define CLIFF_STEP 3.0f
-#define CLIFF_ROWS 15
+#define CROSS_HALF 4.0f              // the cross street's asphalt, either side of its centre line
+#define WALK_WIDTH 2.0f              // its sidewalks
 #define RAIL_X     (CROSS_X0 + 1.0f) // the guard rail across the road's end
 
 typedef struct Barricade {
@@ -143,51 +140,6 @@ static void barricade(Kit* kit, const Barricade* b, unsigned int* state) {
                  (vec3){0.5f * (b->east_x - lip) + 0.5f, 1.5f, 0.2f}, 0.0f);
 }
 
-/*
- * The lip's face, down from the land's own first column of vertices -- or, across the road's end,
- * from under the road -- leaning out a little as it goes down so it shows from the top, and
- * broken up by a lumpy offset. A body along the lip, inside it, between the barricades.
- */
-static void cliff(Kit* kit) {
-    const float road = STREET_HALF_WIDTH;
-    const int cols = (int)ceilf((WORLD_Z1 - WORLD_Z0) / LAND_STEP);
-    const vec3 out = {-1.0f, 0.0f, 0.0f};
-    vec3 prev[CLIFF_ROWS + 1];
-    for (int j = 0; j <= cols; j++) {
-        const float z = WORLD_Z0 + LAND_STEP * (float)j;
-        const bool under_road = fabsf(z) < road - 0.01f;
-        const float x_top = under_road ? CROSS_X0 : land_lip_x(z);
-        const float y_top = under_road ? ROAD_Y - GROUND_DEPTH : land_height(x_top, z);
-        vec3 col[CLIFF_ROWS + 1];
-        for (int k = 0; k <= CLIFF_ROWS; k++) {
-            const float depth = CLIFF_STEP * (float)k;
-            // Buttresses and gullies down the face, and ledges across it, in two sizes.
-            const float lump = k == 0 ? 0.0f
-                                      : 2.2f * sinf(0.29f * z + 0.17f * depth) *
-                                                cosf(0.13f * z - 0.23f * depth + 1.7f) +
-                                            0.9f * sinf(1.1f * z + 0.9f * depth + 0.3f) *
-                                                sinf(0.7f * depth - 0.4f * z);
-            col[k][0] = x_top - 0.2f * depth + lump;
-            col[k][1] = y_top - depth + (k == 0 ? 0.0f : 0.8f * sinf(0.9f * z + depth));
-            col[k][2] = z + (k == 0 ? 0.0f : 0.6f * sinf(0.7f * depth + z));
-        }
-        if (j > 0)
-            for (int k = 0; k < CLIFF_ROWS; k++) {
-                kit_tri_facing(kit, MAT_CLIFF, prev[k], col[k], prev[k + 1], out);
-                kit_tri_facing(kit, MAT_CLIFF, col[k], col[k + 1], prev[k + 1], out);
-            }
-        for (int k = 0; k <= CLIFF_ROWS; k++)
-            glm_vec3_copy(col[k], prev[k]);
-    }
-    for (float z = CROSS_NORTH_Z; z < CROSS_SOUTH_Z; z += 2.0f) {
-        const float zm = z + 1.0f;
-        if (fabsf(zm) < road + 0.5f)
-            continue;
-        kit_collider(kit, (vec3){land_lip_x(zm) + 0.4f, 1.5f, zm}, (vec3){0.45f, 3.0f, 1.05f},
-                     0.0f);
-    }
-}
-
 // What is left of the road where it broke off: slabs gone over the edge, the kerbs snapped,
 // rebar out of the broken edge, and a drain pipe cut through below.
 static void broken_end(Kit* kit, unsigned int* state) {
@@ -297,7 +249,6 @@ void crossroads_build(Kit* kit, Scene* scene, bool night, FailingLamp* failing) 
     plate(kit);
     for (int i = 0; i < KIT_COUNT(BARRICADES); i++)
         barricade(kit, &BARRICADES[i], &state);
-    cliff(kit);
     broken_end(kit, &state);
     guard_rail(kit);
     leaning_pole(kit);

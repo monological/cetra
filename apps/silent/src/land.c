@@ -28,7 +28,8 @@
  * its barricaded arms the woods rise and fall as they do behind the lots, but leave the cross
  * street's line low, so it runs on into them as a cutting. The grid starts at the chasm: its first
  * column of vertices stands on the lip, wherever that has broken off, and across the road's end
- * that column's cells are left out, the road's broken end being crossroads.c's.
+ * that column's cells are left out, the road's broken end being crossroads.c's. From the lip the
+ * ground goes on down as the chasm's face, to where the fog has it all.
  */
 
 #define LAND_X0    CHASM_X // a whole number of steps west of the street's end, so lines still meet
@@ -39,6 +40,9 @@
 // the second, over this stretch north of the lots' backs.
 #define BASE_FADE_X0 35.0f
 #define BASE_FADE_Z  10.0f
+// The lip's face down, in rows this deep, to where the fog has it all.
+#define CLIFF_STEP 3.0f
+#define CLIFF_ROWS 15
 
 float land_terrace_lot_height(int lot) {
     const float t = (float)lot / (float)(TERRACE_LOTS - 1);
@@ -128,6 +132,51 @@ float land_height(float x, float z) {
     return x < -STREET_HALF_LEN ? west_height(x, z) : east_height(x, z);
 }
 
+/*
+ * The lip's face, down from the grid's first column of vertices -- or, across the road's end,
+ * from under the road -- leaning out a little as it goes down so it shows from the top, and
+ * broken up by a lumpy offset. A body along the lip, inside it, between the barricades.
+ */
+static void cliff(Kit* kit) {
+    const float road = STREET_HALF_WIDTH;
+    const int cols = (int)ceilf((WORLD_Z1 - WORLD_Z0) / LAND_STEP);
+    const vec3 out = {-1.0f, 0.0f, 0.0f};
+    vec3 prev[CLIFF_ROWS + 1];
+    for (int j = 0; j <= cols; j++) {
+        const float z = WORLD_Z0 + LAND_STEP * (float)j;
+        const bool under_road = fabsf(z) < road - 0.01f;
+        const float x_top = under_road ? CROSS_X0 : land_lip_x(z);
+        const float y_top = under_road ? ROAD_Y - GROUND_DEPTH : land_height(x_top, z);
+        vec3 col[CLIFF_ROWS + 1];
+        for (int k = 0; k <= CLIFF_ROWS; k++) {
+            const float depth = CLIFF_STEP * (float)k;
+            // Buttresses and gullies down the face, and ledges across it, in two sizes.
+            const float lump = k == 0 ? 0.0f
+                                      : 2.2f * sinf(0.29f * z + 0.17f * depth) *
+                                                cosf(0.13f * z - 0.23f * depth + 1.7f) +
+                                            0.9f * sinf(1.1f * z + 0.9f * depth + 0.3f) *
+                                                sinf(0.7f * depth - 0.4f * z);
+            col[k][0] = x_top - 0.2f * depth + lump;
+            col[k][1] = y_top - depth + (k == 0 ? 0.0f : 0.8f * sinf(0.9f * z + depth));
+            col[k][2] = z + (k == 0 ? 0.0f : 0.6f * sinf(0.7f * depth + z));
+        }
+        if (j > 0)
+            for (int k = 0; k < CLIFF_ROWS; k++) {
+                kit_tri_facing(kit, MAT_CLIFF, prev[k], col[k], prev[k + 1], out);
+                kit_tri_facing(kit, MAT_CLIFF, col[k], col[k + 1], prev[k + 1], out);
+            }
+        for (int k = 0; k <= CLIFF_ROWS; k++)
+            glm_vec3_copy(col[k], prev[k]);
+    }
+    for (float z = CROSS_NORTH_Z; z < CROSS_SOUTH_Z; z += 2.0f) {
+        const float zm = z + 1.0f;
+        if (fabsf(zm) < road + 0.5f)
+            continue;
+        kit_collider(kit, (vec3){land_lip_x(zm) + 0.4f, 1.5f, zm}, (vec3){0.45f, 3.0f, 1.05f},
+                     0.0f);
+    }
+}
+
 void land_build(Kit* kit) {
     const int cols = (int)ceilf((WORLD_X1 - LAND_X0) / LAND_STEP);
     const int rows = (int)ceilf((WORLD_Z1 - WORLD_Z0) / LAND_STEP);
@@ -177,4 +226,5 @@ void land_build(Kit* kit) {
     kit_mesh_collider(kit, pos, verts, idx, n);
     free(pos);
     free(idx);
+    cliff(kit);
 }

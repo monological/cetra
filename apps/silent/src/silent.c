@@ -644,7 +644,12 @@ static void on_init(Game* game) {
     // The drive up the hill, the ground over the world, the far side's terrace, the yards' fences,
     // and the crossroads at the chasm's lip (spec 13.35).
     hill_build(&kit);
-    land_build(&kit);
+    // The open ground and the chasm's face in a kit of their own, whose shadow cells are six times
+    // the size: at the kit's own, the land's 2 m grid made thousands of cells of a few triangles.
+    Kit ground;
+    kit_init_beside(&ground, &kit, GLM_VEC3_ZERO);
+    ground.shadow_cell_scale = 6.0f;
+    land_build(&ground);
     terrace_build(&kit, plots.far);
     FenceBreaches breaches;
     fences_build(&kit, (unsigned int)g_args.seed, &plots, &breaches);
@@ -668,20 +673,20 @@ static void on_init(Game* game) {
     study_build(&mansion, g_scene, (unsigned int)g_args.seed);
     mansion_front_build(&mansion);
 
-    kit_finish(&kit, "world");
-    kit_finish(&mansion, "mansion");
-    Kit* const kits[] = {&kit, &mansion};
-    kit_free_unused(kits, 2);
-    for (int i = 0; i < 2; i++)
+    Kit* const kits[] = {&kit, &mansion, &ground};
+    const char* const kit_names[] = {"world", "mansion", "ground"};
+    for (int i = 0; i < KIT_COUNT(kits); i++)
+        kit_finish(kits[i], kit_names[i]);
+    kit_free_unused(kits, KIT_COUNT(kits));
+    for (int i = 0; i < KIT_COUNT(kits); i++)
         printf("silent: %s: %d colliders, %d vertices in %d meshes and %d shadow cells, %d drip "
                "lines, %d candles\n",
-               i ? "mansion" : "world", kits[i]->collider_count, kits[i]->vertex_count,
-               kits[i]->mesh_count, kits[i]->shadow_cell_count, kits[i]->drip_count,
-               kits[i]->wick_count);
+               kit_names[i], kits[i]->collider_count, kits[i]->vertex_count, kits[i]->mesh_count,
+               kits[i]->shadow_cell_count, kits[i]->drip_count, kits[i]->wick_count);
     // The rain takes every drip line in one list.
     RainDripLine drips[RAIN_DRIP_MAX];
     int drip_count = 0;
-    for (int i = 0; i < 2; i++)
+    for (int i = 0; i < KIT_COUNT(kits); i++)
         for (int d = 0; d < kits[i]->drip_count && drip_count < RAIN_DRIP_MAX; d++)
             drips[drip_count++] = kits[i]->drips[d];
     printf("silent: %d of %d drip lines\n", drip_count, RAIN_DRIP_MAX);

@@ -24,7 +24,8 @@ float land_lip_x(float z);
 #define LAND_STEP 2.0f
 
 // The ground outside the street's plate and the terrace's lots, which are flat and stand on boxes:
-// faceted over a grid from land_height, and collided on the same grid.
+// faceted over a grid from land_height, and collided on the same grid; and the chasm's face down
+// from the lip, with a body along its top.
 void land_build(Kit* kit);
 
 #endif // _SILENT_LAND_H_
