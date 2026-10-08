@@ -75,9 +75,10 @@ typedef struct Fence {
     float height; // its top above y
     int face;     // +1 when its good face looks along +d, -1 along -d; the rails are behind it
     GateState gate;
-    float gate_at;   // along the run, the gate's middle
-    float fallen_at; // along it, in the section that has come down; < 0 none
-    float torn_at;   // along it, in a chain-link panel with a corner torn out; < 0 none
+    float gate_at; // along the run, the gate's middle
+    // Along it, in the section that has come to harm, as its kind does: a board fence's section
+    // fallen, a chain-link panel torn; < 0 none.
+    float broken_at;
 } Fence;
 
 typedef struct Build {
@@ -90,16 +91,6 @@ typedef struct Build {
     } posts[POST_MAX];
     int post_count;
 } Build;
-
-static Fence fence(FenceKind kind, float ax, float az, float bx, float bz, float y, int face) {
-    static const float HEIGHTS[] = {
-        [FENCE_BOARD] = BOARD_HEIGHT,
-        [FENCE_PICKET] = PICKET_HEIGHT,
-        [FENCE_CHAIN] = CHAIN_HEIGHT,
-        [FENCE_BLOCK] = BLOCK_HEIGHT,
-    };
-    return (Fence){kind, {ax, az}, {bx, bz}, y, HEIGHTS[kind], face, GATE_NONE, 0.0f, -1.0f, -1.0f};
-}
 
 // The run's frame, and its length.
 static KitFrame run_frame(const Fence* fe, float* len) {
@@ -135,30 +126,20 @@ static void brace(Kit* kit, const KitFrame* f, int mat, float a0, float y0, floa
     const float na = -ty * half, ny = ta * half;
     const vec2 c[4] = {
         {a0 + na, y0 + ny}, {a0 - na, y0 - ny}, {a1 - na, y1 - ny}, {a1 + na, y1 + ny}};
-    const float ds[2] = {d0, d1};
-    for (int s = 0; s < 2; s++) {
-        const vec3 q[4] = {{c[0][0], c[0][1], ds[s]},
-                           {c[1][0], c[1][1], ds[s]},
-                           {c[2][0], c[2][1], ds[s]},
-                           {c[3][0], c[3][1], ds[s]}};
-        kit_frame_quad(kit, f, mat, q, (vec3){0.0f, 0.0f, s ? 1.0f : -1.0f});
-    }
-    // Its four edges, each between corner i and i + 1.
-    const vec2 out[4] = {{-ta, -ty}, {-na, -ny}, {ta, ty}, {na, ny}};
-    for (int i = 0; i < 4; i++) {
-        const int j = (i + 1) % 4;
-        const vec3 q[4] = {{c[i][0], c[i][1], d0},
-                           {c[j][0], c[j][1], d0},
-                           {c[j][0], c[j][1], d1},
-                           {c[i][0], c[i][1], d1}};
-        kit_frame_quad(kit, f, mat, q, (vec3){out[i][0], out[i][1], 0.0f});
-    }
+    kit_frame_extrude(kit, f, mat, c, 4, d0, d1);
 }
 
-// The face side's d for a fence's boards, mesh or pickets: from `near` to `far` out from the
-// post line on its good side.
+// `d` out from a fence's post line on its good side.
 static float face_d(const Fence* fe, float d) {
     return (float)fe->face * d;
+}
+
+// Slots `pitch` apart from a0 to a1, as many as fit and centred: how many, and where the first
+// starts.
+static int pitch_run(float a0, float a1, float pitch, float* start) {
+    const int n = (int)floorf((a1 - a0) / pitch);
+    *start = a0 + 0.5f * ((a1 - a0) - (float)n * pitch);
+    return n;
 }
 
 /*
@@ -168,8 +149,8 @@ static float face_d(const Fence* fe, float d) {
  */
 static void boards(Build* b, const Fence* fe, const KitFrame* f, float a0, float a1, float top,
                    float sag) {
-    const int n = (int)floorf((a1 - a0) / BOARD_PITCH);
-    const float start = a0 + 0.5f * ((a1 - a0) - (float)n * BOARD_PITCH);
+    float start = a0;
+    const int n = pitch_run(a0, a1, BOARD_PITCH, &start);
     const float d0 = face_d(fe, BOARD_POST), d1 = face_d(fe, BOARD_POST + BOARD_THICK);
     for (int i = 0; i < n; i++) {
         const float a = start + (float)i * BOARD_PITCH;
@@ -195,8 +176,8 @@ static void boards(Build* b, const Fence* fe, const KitFrame* f, float a0, float
 // whatever ground is there; and the gap it leaves, reported.
 static void board_fallen(Build* b, const Fence* fe, const KitFrame* f, float a0, float a1) {
     const float s = (float)fe->face, reach = BOARD_POST + 0.05f;
-    const int n = (int)floorf((a1 - a0) / BOARD_PITCH);
-    const float start = a0 + 0.5f * ((a1 - a0) - (float)n * BOARD_PITCH);
+    float start = a0;
+    const int n = pitch_run(a0, a1, BOARD_PITCH, &start);
     // The ground under the panel, from its middle.
     vec3 mid = {0.0f, 0.0f, 0.0f};
     kit_frame_point(f, 0.5f * (a0 + a1), 0.0f, s * (reach + 0.5f * fe->height), mid);
@@ -240,7 +221,7 @@ static void rails(Build* b, const Fence* fe, const KitFrame* f, int mat, float a
 }
 
 static void board_section(Build* b, const Fence* fe, const KitFrame* f, float a0, float a1) {
-    if (fe->fallen_at >= a0 && fe->fallen_at < a1) {
+    if (fe->broken_at >= a0 && fe->broken_at < a1) {
         board_fallen(b, fe, f, a0, a1);
         return;
     }
@@ -256,8 +237,7 @@ static void picket(Kit* kit, const Fence* fe, const KitFrame* f, float a, float 
     const float w = PICKET_WIDTH, d0 = face_d(fe, BOARD_POST),
                 d1 = face_d(fe, BOARD_POST + BOARD_THICK);
     if (broken) {
-        const vec2 square[4] = {{a, y0}, {a + w, y0}, {a + w, top}, {a, top}};
-        kit_frame_extrude(kit, f, MAT_PICKET, square, 4, d0, d1);
+        kit_frame_box(kit, f, MAT_PICKET, a, a + w, y0, top, fminf(d0, d1), fmaxf(d0, d1), false);
         return;
     }
     const vec2 pointed[5] = {
@@ -268,8 +248,8 @@ static void picket(Kit* kit, const Fence* fe, const KitFrame* f, float a, float 
 static void picket_section(Build* b, const Fence* fe, const KitFrame* f, float a0, float a1) {
     rails(b, fe, f, MAT_PICKET, a0 + BOARD_POST, a1 - BOARD_POST, 0.2f, fe->height - 0.22f,
           PICKET_RAIL);
-    const int n = (int)floorf((a1 - a0) / PICKET_PITCH);
-    const float start = a0 + 0.5f * ((a1 - a0) - (float)n * PICKET_PITCH);
+    float start = a0;
+    const int n = pitch_run(a0, a1, PICKET_PITCH, &start);
     for (int i = 0; i < n; i++) {
         const float a = start + (float)i * PICKET_PITCH + 0.5f * (PICKET_PITCH - PICKET_WIDTH);
         const float r = kit_rnd(&b->rng);
@@ -283,16 +263,6 @@ static void picket_section(Build* b, const Fence* fe, const KitFrame* f, float a
     }
 }
 
-// Rodrigues: `p` turned `angle` about the axis through `o` along unit `u`.
-static void turn_about(const vec3 p, const vec3 o, const vec3 u, float angle, vec3 out) {
-    vec3 v, c;
-    glm_vec3_sub((float*)p, (float*)o, v);
-    glm_vec3_cross((float*)u, v, c);
-    const float k = glm_vec3_dot((float*)u, v), cs = cosf(angle), sn = sinf(angle);
-    for (int i = 0; i < 3; i++)
-        out[i] = o[i] + v[i] * cs + c[i] * sn + u[i] * k * (1.0f - cs);
-}
-
 static void chain_section(Build* b, const Fence* fe, const KitFrame* f, float a0, float a1) {
     Kit* kit = b->kit;
     const float top = fe->height - 0.02f;
@@ -300,7 +270,7 @@ static void chain_section(Build* b, const Fence* fe, const KitFrame* f, float a0
     kit_frame_bar(kit, f, MAT_GALVANISED, a0, a1, 0.08f, 0.0f, 0.004f);
     const float d = face_d(fe, CHAIN_POST + 0.006f), y0 = 0.04f, y1 = top - CHAIN_RAIL;
     const vec3 out = {0.0f, 0.0f, (float)fe->face};
-    if (!(fe->torn_at >= a0 && fe->torn_at < a1)) {
+    if (!(fe->broken_at >= a0 && fe->broken_at < a1)) {
         const vec3 q[4] = {{a0, y0, d}, {a1, y0, d}, {a1, y1, d}, {a0, y1, d}};
         kit_frame_quad(kit, f, MAT_CHAINLINK, q, out);
         return;
@@ -311,10 +281,11 @@ static void chain_section(Build* b, const Fence* fe, const KitFrame* f, float a0
     const float cut_y = y0 + kit_rrange(&b->rng, 0.8f, 1.1f);
     const vec2 rest[5] = {{a0, y0}, {cut_a, y0}, {a1, cut_y}, {a1, y1}, {a0, y1}};
     kit_frame_polygon(kit, f, MAT_CHAINLINK, rest, 5, d);
-    vec3 hinge = {cut_a, y0, d}, axis = {a1 - cut_a, cut_y - y0, 0.0f}, corner = {a1, y0, d};
-    glm_vec3_normalize(axis);
-    vec3 lifted = {0.0f, 0.0f, 0.0f};
-    turn_about(corner, hinge, axis, -(float)fe->face * kit_rrange(&b->rng, 2.4f, 2.8f), lifted);
+    // The corner turned up about the cut, from the corner's own place.
+    vec3 hinge = {cut_a, y0, d}, axis = {a1 - cut_a, cut_y - y0, 0.0f};
+    vec3 lifted = {a1 - cut_a, 0.0f, 0.0f};
+    glm_vec3_rotate(lifted, -(float)fe->face * kit_rrange(&b->rng, 2.4f, 2.8f), axis);
+    glm_vec3_add(lifted, hinge, lifted);
     vec3 w[3] = {{0.0f}}, up = {0.0f, 0.0f, 0.0f};
     kit_frame_point(f, hinge[0], hinge[1], hinge[2], w[0]);
     kit_frame_point(f, a1, cut_y, d, w[1]);
@@ -339,71 +310,126 @@ static void block_section(Build* b, const Fence* fe, const KitFrame* f, float a0
     }
 }
 
+/*
+ * A gate's leaf, `w` wide, in its hinge's frame: its a runs from the hinge to its free edge, and
+ * its top is LEAF_DROP under the fence's. A board or picket gate is two rails `low` and `high`
+ * with a brace across them, its slats laid on them, and strap hinges.
+ */
+#define LEAF_DROP 0.05f
+
+static void leaf_frame(Build* b, const Fence* fe, const KitFrame* h, float w, int mat, float low,
+                       float high) {
+    rails(b, fe, h, mat, 0.02f, w - 0.02f, low, high, RAIL_DEEP);
+    brace(b->kit, h, mat, 0.08f, low + RAIL_DEEP, w - 0.08f, high - RAIL_DEEP, 0.045f,
+          face_d(fe, 0.005f), face_d(fe, BOARD_POST));
+}
+
+static void leaf_hinges(Kit* kit, const Fence* fe, const KitFrame* h, float low, float high) {
+    for (int i = 0; i < 2; i++) {
+        const float y = i ? high - 0.5f * RAIL_DEEP : low + 0.5f * RAIL_DEEP;
+        kit_frame_box(kit, h, MAT_IRON, -0.04f, 0.35f, y - 0.02f, y + 0.02f,
+                      face_d(fe, BOARD_POST + BOARD_THICK),
+                      face_d(fe, BOARD_POST + BOARD_THICK + 0.005f), false);
+    }
+}
+
+static void board_leaf(Build* b, const Fence* fe, const KitFrame* h, float w) {
+    const float top = fe->height - LEAF_DROP, low = 0.2f, high = top - 0.3f;
+    leaf_frame(b, fe, h, w, MAT_FENCE_BOARD, low, high);
+    boards(b, fe, h, 0.0f, w, top, 0.0f);
+    leaf_hinges(b->kit, fe, h, low, high);
+}
+
+static void picket_leaf(Build* b, const Fence* fe, const KitFrame* h, float w) {
+    const float top = fe->height - LEAF_DROP, low = 0.2f, high = top - 0.3f;
+    leaf_frame(b, fe, h, w, MAT_PICKET, low, high);
+    for (float a = 0.03f; a < w - PICKET_WIDTH; a += PICKET_PITCH)
+        picket(b->kit, fe, h, a, 0.06f, top, false);
+    leaf_hinges(b->kit, fe, h, low, high);
+}
+
+// A chain-link leaf: a pipe frame with a bar across its middle, and the mesh on it.
+static void chain_leaf(Build* b, const Fence* fe, const KitFrame* h, float w) {
+    Kit* kit = b->kit;
+    const float top = fe->height - LEAF_DROP;
+    const vec3 frame[5] = {{0.03f, 0.08f, 0.0f},
+                           {w - 0.03f, 0.08f, 0.0f},
+                           {w - 0.03f, top, 0.0f},
+                           {0.03f, top, 0.0f},
+                           {0.03f, 0.08f, 0.0f}};
+    kit_frame_pipe(kit, h, MAT_GALVANISED, frame, 5, CHAIN_RAIL, 6);
+    kit_frame_bar(kit, h, MAT_GALVANISED, 0.03f, w - 0.03f, 0.5f * top, 0.0f, CHAIN_RAIL);
+    const float d = face_d(fe, CHAIN_RAIL + 0.004f);
+    const vec3 q[4] = {
+        {0.03f, 0.08f, d}, {w - 0.03f, 0.08f, d}, {w - 0.03f, top, d}, {0.03f, top, d}};
+    kit_frame_quad(kit, h, MAT_CHAINLINK, q, (vec3){0.0f, 0.0f, (float)fe->face});
+}
+
+typedef void (*FenceSectionFn)(Build* b, const Fence* fe, const KitFrame* f, float a0, float a1);
+typedef void (*FenceLeafFn)(Build* b, const Fence* fe, const KitFrame* h, float w);
+
+/*
+ * What each kind of fence is: its height and the most between its posts; its posts' material,
+ * whether they are round, and their half-width and height over the fence, for a line post and for
+ * one at an end or a gate; whether a padlocked gate is chained to its post too; and how a section
+ * between posts and a gate's leaf are built. A wall hangs no gate.
+ */
+typedef struct FenceStyle {
+    float height, spacing;
+    int post_mat;
+    bool round_posts, chained;
+    float post_half, end_post_half;
+    float post_rise, end_post_rise;
+    FenceSectionFn section;
+    FenceLeafFn leaf;
+} FenceStyle;
+
+static const FenceStyle STYLES[] = {
+    [FENCE_BOARD] = {BOARD_HEIGHT, BOARD_SPACING, MAT_FENCE_BOARD, false, false, BOARD_POST,
+                     BOARD_POST, 0.04f, 0.04f, board_section, board_leaf},
+    [FENCE_PICKET] = {PICKET_HEIGHT, BOARD_SPACING, MAT_PICKET, false, false, BOARD_POST,
+                      BOARD_POST, -0.06f, -0.06f, picket_section, picket_leaf},
+    [FENCE_CHAIN] = {CHAIN_HEIGHT, CHAIN_SPACING, MAT_GALVANISED, true, true, CHAIN_POST, CHAIN_END,
+                     0.02f, 0.06f, chain_section, chain_leaf},
+    [FENCE_BLOCK] = {BLOCK_HEIGHT, BLOCK_PIERS, MAT_CINDER, false, false, BLOCK_PIER, BLOCK_PIER,
+                     0.1f, 0.1f, block_section, NULL},
+};
+
+static Fence fence(FenceKind kind, float ax, float az, float bx, float bz, float y, int face) {
+    return (Fence){kind, {ax, az}, {bx, bz}, y, STYLES[kind].height, face, GATE_NONE, 0.0f, -1.0f};
+}
+
 // A post at `a`: `end` is one at a run's end or its gate, which takes the strain.
 static void post(Build* b, const Fence* fe, const KitFrame* f, float a, bool end) {
     if (!post_claim(b, fe->kind, f, a))
         return;
-    Kit* kit = b->kit;
-    switch (fe->kind) {
-        case FENCE_BOARD:
-            kit_frame_box(kit, f, MAT_FENCE_BOARD, a - BOARD_POST, a + BOARD_POST, 0.0f,
-                          fe->height + 0.04f, -BOARD_POST, BOARD_POST, false);
-            break;
-        case FENCE_PICKET:
-            kit_frame_box(kit, f, MAT_PICKET, a - BOARD_POST, a + BOARD_POST, 0.0f,
-                          fe->height - 0.06f, -BOARD_POST, BOARD_POST, false);
-            break;
-        case FENCE_CHAIN:
-            kit_frame_prism(kit, f, MAT_GALVANISED, a, 0.0f, 0.0f,
-                            fe->height + (end ? 0.06f : 0.02f), end ? CHAIN_END : CHAIN_POST, 8);
-            break;
-        case FENCE_BLOCK:
-            kit_frame_box(kit, f, MAT_CINDER, a - BLOCK_PIER, a + BLOCK_PIER, 0.0f,
-                          fe->height + 0.1f, -BLOCK_PIER, BLOCK_PIER, false);
-            break;
-        case FENCE_NONE:
-            break;
-    }
+    const FenceStyle* st = &STYLES[fe->kind];
+    const float half = end ? st->end_post_half : st->post_half;
+    const float top = fe->height + (end ? st->end_post_rise : st->post_rise);
+    if (st->round_posts)
+        kit_frame_prism(b->kit, f, st->post_mat, a, 0.0f, 0.0f, top, half, 8);
+    else
+        kit_frame_box(b->kit, f, st->post_mat, a - half, a + half, 0.0f, top, -half, half, false);
 }
 
 // The fence from s0 to s1 along its run: posts, and the sections between them.
 static void span(Build* b, const Fence* fe, const KitFrame* f, float s0, float s1) {
-    static const float SPACING[] = {
-        [FENCE_BOARD] = BOARD_SPACING,
-        [FENCE_PICKET] = BOARD_SPACING,
-        [FENCE_CHAIN] = CHAIN_SPACING,
-        [FENCE_BLOCK] = BLOCK_PIERS,
-    };
     if (s1 - s0 < 0.2f)
         return;
-    const int n = (int)ceilf((s1 - s0) / SPACING[fe->kind]);
+    const FenceStyle* st = &STYLES[fe->kind];
+    const int n = (int)ceilf((s1 - s0) / st->spacing);
     const float step = (s1 - s0) / (float)n;
     for (int i = 0; i <= n; i++)
         post(b, fe, f, s0 + step * (float)i, i == 0 || i == n);
     for (int i = 0; i < n; i++) {
-        const float a0 = s0 + step * (float)i, a1 = a0 + step;
-        switch (fe->kind) {
-            case FENCE_BOARD:
-                board_section(b, fe, f, a0, a1);
-                break;
-            case FENCE_PICKET:
-                picket_section(b, fe, f, a0, a1);
-                break;
-            case FENCE_CHAIN:
-                chain_section(b, fe, f, a0, a1);
-                break;
-            case FENCE_BLOCK:
-                block_section(b, fe, f, a0, a1);
-                break;
-            case FENCE_NONE:
-                break;
-        }
+        const float a0 = s0 + step * (float)i;
+        st->section(b, fe, f, a0, a0 + step);
     }
 }
 
 // A shut leaf's padlock at its free edge (a, y), on the yard side, where whoever keeps it locked
-// stands: a latch bar out to the post, a padlock hanging off it; on chain link, a chain round the
-// leaf's end and the post as well.
+// stands: a latch bar out to the post, a padlock hanging off it, and where the fence's kind is
+// chained, a chain round the leaf's end and the post as well.
 static void padlock(Kit* kit, const Fence* fe, const KitFrame* f, float a, float y) {
     const float d = face_d(fe, -0.054f);
     kit_frame_box(kit, f, MAT_IRON, a - 0.1f, a + 0.07f, y - 0.025f, y + 0.025f, 0.0f, d, false);
@@ -411,7 +437,7 @@ static void padlock(Kit* kit, const Fence* fe, const KitFrame* f, float a, float
                   d + face_d(fe, -0.025f), false);
     kit_frame_prism(kit, f, MAT_STEEL, a + 0.035f, d + face_d(fe, -0.012f), y - 0.06f, y - 0.025f,
                     0.005f, 4);
-    if (fe->kind != FENCE_CHAIN)
+    if (!STYLES[fe->kind].chained)
         return;
     vec3 ring[13];
     for (int i = 0; i <= 12; i++) {
@@ -421,55 +447,6 @@ static void padlock(Kit* kit, const Fence* fe, const KitFrame* f, float a, float
         ring[i][2] = 0.065f * sinf(t);
     }
     kit_frame_pipe(kit, f, MAT_STEEL, ring, 13, 0.006f, 4);
-}
-
-// A gate's leaf, `w` wide, in its hinge's frame: its a runs from the hinge to its free edge.
-static void leaf(Build* b, const Fence* fe, const KitFrame* h, float w) {
-    Kit* kit = b->kit;
-    const float top = fe->height - 0.05f;
-    switch (fe->kind) {
-        case FENCE_BOARD:
-        case FENCE_PICKET: {
-            const int mat = fe->kind == FENCE_BOARD ? MAT_FENCE_BOARD : MAT_PICKET;
-            const float low = 0.2f, high = top - 0.3f;
-            rails(b, fe, h, mat, 0.02f, w - 0.02f, low, high, RAIL_DEEP);
-            brace(kit, h, mat, 0.08f, low + RAIL_DEEP, w - 0.08f, high - RAIL_DEEP, 0.045f,
-                  face_d(fe, 0.005f), face_d(fe, BOARD_POST));
-            if (fe->kind == FENCE_BOARD) {
-                boards(b, fe, h, 0.0f, w, top, 0.0f);
-            } else {
-                for (float a = 0.03f; a < w - PICKET_WIDTH; a += PICKET_PITCH)
-                    picket(kit, fe, h, a, 0.06f, top, false);
-            }
-            // Strap hinges.
-            for (int i = 0; i < 2; i++) {
-                const float y = i ? high - 0.5f * RAIL_DEEP : low + 0.5f * RAIL_DEEP;
-                kit_frame_box(kit, h, MAT_IRON, -0.04f, 0.35f, y - 0.02f, y + 0.02f,
-                              face_d(fe, BOARD_POST + BOARD_THICK),
-                              face_d(fe, BOARD_POST + BOARD_THICK + 0.005f), false);
-            }
-            break;
-        }
-        case FENCE_CHAIN: {
-            const vec3 frame[5] = {{0.03f, 0.08f, 0.0f},
-                                   {w - 0.03f, 0.08f, 0.0f},
-                                   {w - 0.03f, top, 0.0f},
-                                   {0.03f, top, 0.0f},
-                                   {0.03f, 0.08f, 0.0f}};
-            kit_frame_pipe(kit, h, MAT_GALVANISED, frame, 5, CHAIN_RAIL, 6);
-            kit_frame_bar(kit, h, MAT_GALVANISED, 0.03f, w - 0.03f, 0.5f * top, 0.0f, CHAIN_RAIL);
-            const float d = face_d(fe, CHAIN_RAIL + 0.004f);
-            const vec3 q[4] = {
-                {0.03f, 0.08f, d}, {w - 0.03f, 0.08f, d}, {w - 0.03f, top, d}, {0.03f, top, d}};
-            kit_frame_quad(kit, h, MAT_CHAINLINK, q, (vec3){0.0f, 0.0f, (float)fe->face});
-            break;
-        }
-        case FENCE_BLOCK:
-        case FENCE_NONE:
-            break;
-    }
-    if (fe->gate == GATE_LATCHED)
-        padlock(kit, fe, h, w - 0.04f, 0.55f * top + 0.2f);
 }
 
 static void build(Build* b, const Fence* fe) {
@@ -501,7 +478,8 @@ static void build(Build* b, const Fence* fe) {
 
     // The leaf hangs off the post at g0, swung back into the yard -- away from the good face --
     // when it stands open.
-    const float jamb = fe->kind == FENCE_CHAIN ? CHAIN_END : BOARD_POST;
+    const FenceStyle* st = &STYLES[fe->kind];
+    const float jamb = st->end_post_half;
     const float w = GATE_WIDTH - 2.0f * jamb - 0.03f;
     const float swing = fe->gate == GATE_OPEN
                             ? (float)fe->face * glm_rad(kit_rrange(&b->rng, 55.0f, 100.0f))
@@ -509,14 +487,17 @@ static void build(Build* b, const Fence* fe) {
     KitFrame h = f;
     kit_frame_point(&f, g0 + jamb + 0.015f, 0.0f, 0.0f, h.origin);
     h.yaw = f.yaw + swing;
-    leaf(b, fe, &h, w);
+    if (st->leaf)
+        st->leaf(b, fe, &h, w);
+    if (fe->gate == GATE_LATCHED)
+        padlock(b->kit, fe, &h, w - 0.04f, 0.55f * (fe->height - LEAF_DROP) + 0.2f);
     if (fe->gate == GATE_OPEN)
         kit_frame_box(b->kit, &h, KIT_COLLIDER_ONLY, 0.0f, w, 0.0f, top, -0.05f, 0.05f, true);
 }
 
 /*
  * What each lot has, west to east. A lot's YARD kind is its returns' and its back fence's; a lot
- * with no house has no returns. Gates and the fallen section are placed by world x.
+ * with no house has no returns. Gates and harm are placed by world x; NAN is none.
  */
 typedef struct Lot {
     FenceKind front;
@@ -525,8 +506,8 @@ typedef struct Lot {
     GateState side_gate; // in the return across the wider side yard, the east one on a tie
     GateState back_gate;
     float back_gate_x;
-    float fallen_x; // in the back fence's section that is down; NAN none
-    float torn_x;   // in the front's chain-link panel that is torn; NAN none
+    float back_broken_x;  // in the back fence's section that has come to harm, as Fence.broken_at
+    float front_broken_x; // in the front's
 } Lot;
 
 // The fence on each line between the lots, west to east, and whether it runs from the front of
@@ -628,7 +609,7 @@ static void side(Build* b, const Side* s) {
                 fe.height = 1.2f;
             fe.gate = lot->front_gate;
             fe.gate_at = (house ? h->door[0] : 0.5f * (x0 + x1)) - x0;
-            fe.torn_at = isnan(lot->torn_x) ? -1.0f : lot->torn_x - x0;
+            fe.broken_at = isnan(lot->front_broken_x) ? -1.0f : lot->front_broken_x - x0;
             build(b, &fe);
         }
         if (house) {
@@ -644,7 +625,7 @@ static void side(Build* b, const Side* s) {
         Fence back = fence(lot->yard, x0, s->back_z, x1, s->back_z, y, -to_street);
         back.gate = lot->back_gate;
         back.gate_at = lot->back_gate_x - x0;
-        back.fallen_at = isnan(lot->fallen_x) ? -1.0f : lot->fallen_x - x0;
+        back.broken_at = isnan(lot->back_broken_x) ? -1.0f : lot->back_broken_x - x0;
         build(b, &back);
     }
 }
