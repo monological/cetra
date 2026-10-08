@@ -23,8 +23,9 @@ typedef struct RainBed {
 // The two beds from `audio`, which may be NULL, playing silent until the first update.
 void rain_bed_start(RainBed* bed, AudioSystem* audio, const Rain* rain);
 
-// Per frame: ask the map about the listener's head, ease toward its answer, set the levels.
+// Per frame: ask the map about the listener's head, ease toward its answer, set the levels,
+// `gain` of them reaching the listener.
 void rain_bed_update(RainBed* bed, const Rain* rain, ShadowSystem* shadows, const vec3 head,
-                     float dt);
+                     float gain, float dt);
 
 #endif // _SILENT_RAIN_BED_H_

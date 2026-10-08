@@ -21,6 +21,14 @@
 #define OTHER_STOREY 0.5f
 #define STOREY_APART 2.0f // metres between a listener and a source that put them a floor apart
 
+// Down in the basement (spec 13.31): the eye heights between which the listener goes from above
+// the ground to under it, and what the earth and the floor overhead leave of the wind and of the
+// house's own sounds.
+#define BELOW_FROM     0.6f
+#define BELOW_TO       (-0.6f)
+#define BELOW_WIND     0.25f
+#define BELOW_OVERHEAD 0.4f
+
 Sound* sounds_loop(AudioSystem* audio, const char* path) {
     if (!audio)
         return NULL;
@@ -56,6 +64,7 @@ void sounds_start(Sounds* sounds, AudioSystem* audio, const vec3 eye) {
         audio_sound_set_position(sounds->fridge, motor);
     }
     sounds->inside = inside_target(eye);
+    sounds->below = glm_smoothstep(BELOW_FROM, BELOW_TO, eye[1]);
 }
 
 float sounds_indoor_gain(const Sounds* sounds) {
@@ -75,9 +84,15 @@ float sounds_gain_at(const Sounds* sounds, const vec3 listener, const vec3 sourc
     return sounds_indoor_gain(sounds) * (apart ? OTHER_STOREY : 1.0f);
 }
 
+float sounds_overhead_gain(const Sounds* sounds) {
+    return 1.0f - (1.0f - BELOW_OVERHEAD) * sounds->below;
+}
+
 void sounds_update(Sounds* sounds, const vec3 eye, float dt) {
     const float k = 1.0f - expf(-dt / INSIDE_SECONDS);
     sounds->inside += (inside_target(eye) - sounds->inside) * k;
+    sounds->below += (glm_smoothstep(BELOW_FROM, BELOW_TO, eye[1]) - sounds->below) * k;
+    const float wind = WIND_VOLUME * (1.0f - (1.0f - BELOW_WIND) * sounds->below);
 
     // The wind is all round, so its layers ride with the listener -- just
     // over its head, where they are inside the falloff's first metre and
@@ -85,12 +100,13 @@ void sounds_update(Sounds* sounds, const vec3 eye, float dt) {
     vec3 over = {eye[0], eye[1] + 0.5f, eye[2]};
     if (sounds->wind_outside) {
         audio_sound_set_position(sounds->wind_outside, over);
-        audio_sound_set_volume(sounds->wind_outside, WIND_VOLUME * (1.0f - sounds->inside));
+        audio_sound_set_volume(sounds->wind_outside, wind * (1.0f - sounds->inside));
     }
     if (sounds->wind_inside) {
         audio_sound_set_position(sounds->wind_inside, over);
-        audio_sound_set_volume(sounds->wind_inside, WIND_VOLUME * sounds->inside);
+        audio_sound_set_volume(sounds->wind_inside, wind * sounds->inside);
     }
     if (sounds->fridge)
-        audio_sound_set_volume(sounds->fridge, FRIDGE_VOLUME * sounds_indoor_gain(sounds));
+        audio_sound_set_volume(sounds->fridge, FRIDGE_VOLUME * sounds_indoor_gain(sounds) *
+                                                   sounds_overhead_gain(sounds));
 }

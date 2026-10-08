@@ -1,4 +1,5 @@
 #include <math.h>
+#include <stdio.h>
 
 #include "cetra/light.h"
 
@@ -64,6 +65,14 @@
 // While the swing still carries the glass further than this, the bulb's shadow is drawn again
 // each frame: a kept face shadows from where it was drawn.
 #define REFRESH_REACH 0.015f
+
+// The tap's drip (tools/fetch_sounds.py): seconds to the first, the least between two and how
+// much more at random, and its level against the house's other sounds.
+#define DRIP_PATH   "assets/audio/silent/basement_drip.wav"
+#define DRIP_FIRST  2.0
+#define DRIP_EVERY  2.6
+#define DRIP_SPREAD 1.6
+#define DRIP_VOLUME 0.5f
 
 // The posts under the beam, between the irradiance probes' rows at every half metre of z.
 static const float POSTS_Z[] = {12.0f, 15.0f, 18.0f};
@@ -400,9 +409,16 @@ static void water_heater(Kit* kit) {
 // A double laundry tub on iron legs against the east wall, one side holding grey water that has
 // stood there a long time, under a tap from the wall.
 #define TUB_Z 14.0f
+static const KitFrame TUB = {{CELLAR_X1, BASEMENT_Y, TUB_Z}, -0.5f * GLM_PIf}; // d into the room
+// The tap's mouth, over the side that holds water, and that water's top, in the tub's frame:
+// where the drip falls from and lands.
+#define TAP_A     (-0.27f)
+#define TAP_D     0.31f
+#define TAP_Y     1.02f
+#define TUB_WATER 0.77f
+
 static void laundry_tub(Kit* kit) {
-    const KitFrame f = {{CELLAR_X1, BASEMENT_Y, TUB_Z},
-                        -0.5f * GLM_PIf}; // a along +z, d into the room
+    const KitFrame f = TUB;
     const float ha = 0.55f, d0 = 0.02f, d1 = 0.6f, y0 = 0.55f, y1 = 0.9f, t = 0.04f;
     kit_frame_box(kit, &f, MAT_APPLIANCE, -ha, ha, y0, y0 + t, d0, d1, false);
     kit_frame_box(kit, &f, MAT_APPLIANCE, -ha, ha, y0, y1, d1 - t, d1, false);
@@ -410,21 +426,21 @@ static void laundry_tub(Kit* kit) {
     kit_frame_box(kit, &f, MAT_APPLIANCE, -ha, -ha + t, y0, y1, d0 + t, d1 - t, false);
     kit_frame_box(kit, &f, MAT_APPLIANCE, ha - t, ha, y0, y1, d0 + t, d1 - t, false);
     kit_frame_box(kit, &f, MAT_APPLIANCE, -0.02f, 0.02f, y0, y1, d0 + t, d1 - t, false);
-    kit_frame_box(kit, &f, MAT_DARK_GLASS, -ha + t, -0.02f, y0 + t, y0 + 0.22f, d0 + t, d1 - t,
+    kit_frame_box(kit, &f, MAT_DARK_GLASS, -ha + t, -0.02f, y0 + t, TUB_WATER, d0 + t, d1 - t,
                   false);
     for (int i = 0; i < 4; i++) {
         const float a = (i & 1) ? ha - 0.05f : -ha + 0.05f, d = (i & 2) ? d1 - 0.05f : d0 + 0.05f;
         kit_frame_box(kit, &f, MAT_IRON, a - 0.02f, a + 0.02f, 0.0f, y0, d - 0.02f, d + 0.02f,
                       false);
     }
-    const vec3 tap[4] = {{-0.27f, 1.2f, 0.0f},
-                         {-0.27f, 1.2f, 0.25f},
-                         {-0.27f, 1.12f, 0.31f},
-                         {-0.27f, 1.02f, 0.31f}};
+    const vec3 tap[4] = {{TAP_A, 1.2f, 0.0f},
+                         {TAP_A, 1.2f, TAP_D - 0.06f},
+                         {TAP_A, 1.12f, TAP_D},
+                         {TAP_A, TAP_Y, TAP_D}};
     kit_frame_pipe(kit, &f, MAT_STEEL, tap, 4, 0.012f, 8);
     for (int i = -1; i <= 1; i += 2)
-        kit_frame_box(kit, &f, MAT_IRON, -0.27f + 0.08f * (float)i - 0.02f,
-                      -0.27f + 0.08f * (float)i + 0.02f, 1.22f, 1.25f, 0.02f, 0.06f, false);
+        kit_frame_box(kit, &f, MAT_IRON, TAP_A + 0.08f * (float)i - 0.02f,
+                      TAP_A + 0.08f * (float)i + 0.02f, 1.22f, 1.25f, 0.02f, 0.06f, false);
     kit_frame_box(kit, &f, KIT_COLLIDER_ONLY, -ha, ha, 0.0f, y1, 0.0f, d1, true);
 }
 
@@ -651,8 +667,18 @@ static void pivot(vec3 out) {
     glm_vec3_copy((vec3){BULB_X, CEIL_Y - ROSE_DROP, BULB_Z}, out);
 }
 
-void basement_start(Basement* b, Engine* engine, Scene* scene, unsigned int seed) {
-    *b = (Basement){.drafted = -1.0, .seed = seed};
+void basement_start(Basement* b, Engine* engine, Scene* scene, AudioSystem* audio,
+                    unsigned int seed) {
+    *b = (Basement){.drafted = -1.0,
+                    .seed = seed,
+                    .audio = audio,
+                    .next_drip = DRIP_FIRST,
+                    .drips = {seed * 2246822519u + 77u}};
+    if (audio) {
+        b->drip = audio_sound_from_file(audio, DRIP_PATH, AUDIO_BUS_SFX);
+        if (!b->drip)
+            fprintf(stderr, "silent: cannot load %s\n", DRIP_PATH);
+    }
     // A kit of its own, so its node turns alone and its glass is its own to dim. It casts
     // nothing: swinging in its own light's kept views, it would be a mover in them every frame,
     // and it is its light's body besides.
@@ -682,7 +708,19 @@ void basement_start(Basement* b, Engine* engine, Scene* scene, unsigned int seed
     scene_add_light(scene, b->light);
 }
 
-void basement_update(Basement* b, const Door* door, double time) {
+// Every few seconds a drop from the tap into the water under it, never quite on a beat.
+static void drip(Basement* b, const Sounds* sounds, const vec3 eye, double time) {
+    if (!b->drip || time < b->next_drip)
+        return;
+    b->next_drip = time + DRIP_EVERY + DRIP_SPREAD * kit_rnd(&b->drips);
+    vec3 at = GLM_VEC3_ZERO_INIT;
+    kit_frame_point(&TUB, TAP_A, TUB_WATER, TAP_D, at);
+    AudioVoiceDesc d = {.volume = DRIP_VOLUME * sounds_gain_at(sounds, eye, at)};
+    glm_vec3_copy(at, d.position);
+    audio_play_voice(b->audio, b->drip, &d);
+}
+
+static void bulb_update(Basement* b, const Door* door, double time) {
     if (!b->bulb || !b->light)
         return;
     if (b->drafted < 0.0 && door && door->travel >= 0.25f)
@@ -720,4 +758,10 @@ void basement_update(Basement* b, const Door* door, double time) {
     glm_vec3_copy(colour, b->light->color);
     b->glass->emissive_strength = BULB_NITS * level;
     glm_vec3_copy(colour, b->glass->emissive);
+}
+
+void basement_update(Basement* b, const Door* door, const Sounds* sounds, const vec3 eye,
+                     double time) {
+    bulb_update(b, door, time);
+    drip(b, sounds, eye, time);
 }

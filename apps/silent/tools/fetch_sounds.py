@@ -89,6 +89,11 @@ RECORDINGS = {
     656500: ("Cat purr", "druulian", "656/656500_6497685"),
     575933: ("Cat Purr", "RazzleDizzle", "575/575933_1824398"),
     765159: ("TV static", "MieckevanHoek", "765/765159_15764256"),
+    # The basement's drip (spec 13.31).
+    815419: ("AAD WATER DRIPPING INTO WATER", "AwenAudio", "815/815419_4940561"),
+    546279: ("Single drip - dripping", "Mega-X-stream", "546/546279_4937681"),
+    792932: ("Slow Single Water Drop Splash", "qubodup", "792/792932_71257"),
+    22438: ("Drip.wav", "Lunardrive", "22/22438_120830"),
 }
 PREVIEW = "https://cdn.freesound.org/previews/%s-hq.mp3"
 CLOCK = 125968
@@ -136,6 +141,7 @@ ONESHOT_JOBS = {
     "hiss": {"longest": 2.0, "tail": 0.1, "highpass": 200.0, "per": 2},
     "paw": {"longest": 0.14, "tail": 0.03, "highpass": 80.0, "per": 8},
     "land": {"longest": 0.5, "tail": 0.08, "highpass": 60.0, "per": 2},
+    "drip": {"longest": 0.5, "tail": 0.25, "highpass": 250.0, "per": 4},
 }
 ONESHOT_CANDIDATES = {
     "meow": [110011, 412017, 479272, 528197, 455493, 66518],
@@ -143,6 +149,7 @@ ONESHOT_CANDIDATES = {
     "hiss": [485952, 146963, 819958, 532225, 455495],
     "paw": [658429, 338352, 569255],
     "land": [803297, 584442, 191957],
+    "drip": [815419, 546279, 792932, 22438],
 }
 # What the game plays: file name -> (job, recording, which event, by the order --audition
 # numbers them). Chosen by length and source, not yet by ear: the meows are one cat's three
@@ -159,6 +166,9 @@ ONESHOTS = {
     "cat_paw_4": ("paw", 658429, 5),
     "cat_land_hard": ("land", 803297, 0),
     "cat_land_soft": ("land", 584442, 0),
+    # The tap over the basement's laundry tub (spec 13.31), dripping into the water standing in
+    # it: chosen by ear.
+    "basement_drip": ("drip", 815419, 3),
 }
 ONESHOT_LEAD = 0.01  # seconds kept before an event's onset
 
