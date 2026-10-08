@@ -1,19 +1,21 @@
+#include <math.h>
 #include <stdio.h>
 
 #include "door.h"
 #include "home.h"
 #include "layout.h"
 #include "sounds.h"
+#include "tower.h"
 
 // Every loop is levelled alike by tools/fetch_sounds.py, so this is the whole statement of how
 // loud the wind is.
-#define WIND_VOLUME 0.6f
+#define WIND_VOLUME 0.3f
 
 // What sound keeps crossing each kind of boundary: a house's outside walls, both houses alike,
 // and a front door in them standing open; an inside wall with an open doorway through it; the
 // floor and the door between the home's hall and its basement, shut and open; and the floor
-// between the mansion's storeys. WALL_THROUGH is also how the wind and the rain tell which side
-// of a house's walls the listener is on, so it is every outside wall's and no other boundary's.
+// between the mansion's storeys. WALL_THROUGH is also where the wind is all muffled: the
+// outdoors coming in at that, against the rooms it comes in through, is a house shut up.
 #define WALL_THROUGH          0.3f
 #define FRONT_DOOR_THROUGH    0.6f
 #define DOORWAY_THROUGH       0.35f
@@ -23,10 +25,6 @@
 
 // Over every roof and the tower's spire: where a house's rooms stop going up.
 #define ROOFS_Y 20.0f
-
-// The wind's two layers ride this far over the eye: inside the falloff's first metre, panned to
-// neither ear, and near enough that no boundary passes between them and the listener.
-#define WIND_OVER 0.05f
 
 enum {
     ROOM_WORLD, // the outdoors, outside every room
@@ -42,6 +40,7 @@ enum {
 typedef struct Room {
     const char* name;
     bool mansion; // its boxes are in the mansion's plan, moved to where it stands
+    bool tower;   // and the tower's octagon with them, as high as the first box
     int box_count;
     AABB boxes[2];
 } Room;
@@ -58,19 +57,23 @@ typedef struct Room {
 static const Room ROOM_TABLE[ROOMS] = {
     [ROOM_HOME] = {"home",
                    false,
+                   false,
                    1,
                    {{{HOUSE_OUT_X0, BASEMENT_Y, HOUSE_OUT_Z0},
                      {HOUSE_OUT_X1, ROOFS_Y, HOUSE_OUT_Z1}}}},
     [ROOM_LIVING] = {"living_room",
+                     false,
                      false,
                      1,
                      {{{LIVING_IN_X0, SUBFLOOR_Y0, LIVING_IN_Z0},
                        {LIVING_IN_X1, CEIL_Y, LIVING_IN_Z1}}}},
     [ROOM_KITCHEN] = {"kitchen",
                       false,
+                      false,
                       1,
                       {{{KITCHEN_X0, SUBFLOOR_Y0, KITCHEN_Z0}, {KITCHEN_X1, CEIL_Y, KITCHEN_Z1}}}},
     [ROOM_BASEMENT] = {"basement",
+                       false,
                        false,
                        2,
                        {{{CELLAR_X0, BASEMENT_Y, CELLAR_Z0}, {CELLAR_X1, SUBFLOOR_Y0, CELLAR_Z1}},
@@ -78,17 +81,16 @@ static const Room ROOM_TABLE[ROOMS] = {
                          {HALL_OUT_X0, CEIL_Y, CELLAR_Z1}}}},
     [ROOM_MANSION] = {"mansion",
                       true,
-                      2,
-                      {{{HOUSE_OUT_X0, 0.0f, HOUSE_OUT_Z0}, {HOUSE_OUT_X1, ROOFS_Y, HOUSE_OUT_Z1}},
-                       {{TOWER_X - TOWER_OUTER, 0.0f, TOWER_Z - TOWER_OUTER},
-                        {TOWER_X + TOWER_OUTER, ROOFS_Y, TOWER_Z + TOWER_OUTER}}}},
+                      true,
+                      1,
+                      {{{HOUSE_OUT_X0, 0.0f, HOUSE_OUT_Z0},
+                        {HOUSE_OUT_X1, ROOFS_Y, HOUSE_OUT_Z1}}}},
     [ROOM_UPSTAIRS] = {"mansion_up",
                        true,
-                       2,
+                       true,
+                       1,
                        {{{HOUSE_OUT_X0, CEIL_Y, HOUSE_OUT_Z0},
-                         {HOUSE_OUT_X1, ROOFS_Y, KITCHEN_BACK_Z}},
-                        {{TOWER_X - TOWER_OUTER, CEIL_Y, TOWER_Z - TOWER_OUTER},
-                         {TOWER_X + TOWER_OUTER, ROOFS_Y, TOWER_Z + TOWER_OUTER}}}},
+                         {HOUSE_OUT_X1, ROOFS_Y, KITCHEN_BACK_Z}}}},
 };
 
 typedef struct RoomLink {
@@ -140,27 +142,35 @@ void sounds_start(Sounds* sounds, AudioSystem* audio, const struct Door* const* 
     AudioZone zone[ROOMS] = {[ROOM_WORLD] = AUDIO_ZONE_WORLD};
     for (int r = ROOM_WORLD + 1; r < ROOMS; r++) {
         const Room* room = &ROOM_TABLE[r];
-        AABB boxes[2];
-        for (int i = 0; i < room->box_count; i++) {
-            boxes[i] = room->boxes[i];
-            if (room->mansion) {
-                mansion_at(room->boxes[i].min, boxes[i].min);
-                mansion_at(room->boxes[i].max, boxes[i].max);
-            }
+        AABB boxes[AUDIO_ZONE_BOXES];
+        int n = 0;
+        for (int i = 0; i < room->box_count; i++)
+            boxes[n++] = room->boxes[i];
+        if (room->tower)
+            n += tower_boxes(room->boxes[0].min[1], room->boxes[0].max[1], &boxes[n]);
+        for (int i = 0; room->mansion && i < n; i++) {
+            mansion_at(boxes[i].min, boxes[i].min);
+            mansion_at(boxes[i].max, boxes[i].max);
         }
-        zone[r] = audio_zone_add(audio, &(AudioZoneDesc){room->name, boxes, room->box_count});
+        zone[r] = audio_zone_add(audio, &(AudioZoneDesc){room->name, boxes, n});
     }
+    bool outer[ROOMS] = {false};
     for (int i = 0; i < LINK_COUNT; i++) {
         const RoomLink* l = &LINKS[i];
         const AudioZoneLink link = audio_zone_link(audio, zone[l->a], zone[l->b], l->shut);
         if (l->door != SOUNDS_DOOR_NONE)
             sounds->door_links[l->door] = link;
+        outer[l->a] |= l->b == ROOM_WORLD;
+        outer[l->b] |= l->a == ROOM_WORLD;
     }
+    for (int r = ROOM_WORLD + 1; r < ROOMS; r++)
+        if (outer[r])
+            sounds->outer[sounds->outer_count++] = zone[r];
     sounds->wind_outside = sounds_loop(audio, "assets/audio/silent/wind_outside.flac");
     sounds->wind_inside = sounds_loop(audio, "assets/audio/silent/wind_inside.flac");
 }
 
-void sounds_update(Sounds* sounds, const vec3 eye) {
+void sounds_update(Sounds* sounds) {
     AudioSystem* audio = sounds->audio;
     if (!audio)
         return;
@@ -173,20 +183,18 @@ void sounds_update(Sounds* sounds, const vec3 eye) {
                             glm_lerp(l->shut, l->open, door ? door->travel : 0.0f));
     }
 
-    // One curve of what the outdoors reaches the listener with, broken at a house's walls: down
-    // to WALL_THROUGH the walls are all that stands between, and how far its doors stand open is
-    // how much of the full wind comes in; below it something more does -- a floor -- and only
-    // the level falls.
+    // The outdoors comes into a house through the rooms with an outside wall. How well the
+    // listener hears the best of them is the wind's LEVEL -- 1 in any of them, a floor's worth
+    // less under them -- and a front door has no part in it. How much of the outdoors comes in
+    // with them is how far the doors stand open, which is its MIX: at WALL_THROUGH, all muffled.
     const float outdoors = audio_zone_heard(audio, AUDIO_ZONE_WORLD);
-    const float indoors = glm_percentc(1.0f, WALL_THROUGH, outdoors);
-    sounds->past_walls = glm_percentc(0.0f, WALL_THROUGH, outdoors);
-    vec3 over = {eye[0], eye[1] + WIND_OVER, eye[2]};
-    if (sounds->wind_outside) {
-        audio_sound_set_position(sounds->wind_outside, over);
-        audio_sound_set_volume(sounds->wind_outside, WIND_VOLUME * (1.0f - indoors));
-    }
-    if (sounds->wind_inside) {
-        audio_sound_set_position(sounds->wind_inside, over);
-        audio_sound_set_volume(sounds->wind_inside, WIND_VOLUME * indoors * sounds->past_walls);
-    }
+    float level = outdoors;
+    for (int i = 0; i < sounds->outer_count; i++)
+        level = fmaxf(level, audio_zone_heard(audio, sounds->outer[i]));
+    const float indoors = glm_percentc(1.0f, WALL_THROUGH, level > 0.0f ? outdoors / level : 0.0f);
+    sounds->past_walls = level;
+    if (sounds->wind_outside)
+        audio_sound_set_volume(sounds->wind_outside, WIND_VOLUME * (1.0f - indoors) * level);
+    if (sounds->wind_inside)
+        audio_sound_set_volume(sounds->wind_inside, WIND_VOLUME * indoors * level);
 }

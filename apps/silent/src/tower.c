@@ -300,3 +300,16 @@ float tower_wall_distance(const vec3 p) {
         d = fminf(d, kit_plan_distance(p, c[(k + FACES - 1) % FACES], c[k]));
     return d - 0.5f * EXT_WALL;
 }
+
+int tower_boxes(float y0, float y1, AABB out[TOWER_BOXES]) {
+    // From the wide box across the east and west faces to the deep one across the north and
+    // south, in equal steps; each corner at (a - i d, h + i d) sums to a + h, which is the
+    // diagonal faces' line, since tan 22.5 is sqrt 2 - 1.
+    const float a = TOWER_OUTER, h = TOWER_OUTER * TOWER_TAN;
+    const float d = (a - h) / (float)(TOWER_BOXES - 1);
+    for (int i = 0; i < TOWER_BOXES; i++) {
+        const float wx = a - (float)i * d, wz = h + (float)i * d;
+        out[i] = (AABB){{TOWER_X - wx, y0, TOWER_Z - wz}, {TOWER_X + wx, y1, TOWER_Z + wz}};
+    }
+    return TOWER_BOXES;
+}

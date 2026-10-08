@@ -914,7 +914,7 @@ static void on_pre_render(Game* game, double alpha) {
     prompt_show(&g_prompt, !door                  ? NULL
                            : door_will_open(door) ? "E   Open door"
                                                   : "E   Close door");
-    sounds_update(&g_sounds, eye);
+    sounds_update(&g_sounds);
     lights_update(&g_lights, g_scene, game->time, (float)game->sim_clock.delta, eye, forward);
     tv_update(&g_tv, game->time);
     cat_mind_frame(&g_mind, game->time);
