@@ -18,12 +18,12 @@
  * the arm's other side, so a later mechanic can take one away.
  */
 
-#define CROSS_HALF  4.0f  // the cross street's asphalt, either side of its centre line
-#define WALK_WIDTH  2.0f  // its sidewalks
-#define GROUND_DEEP 0.4f  // a ground box below its top
-#define CLIFF_DEPTH 45.0f // how far the lip's face goes down before the fog has it all
-#define CLIFF_STEP  3.0f
-#define RAIL_X      (CROSS_X0 + 1.0f) // the guard rail across the road's end
+#define CROSS_HALF 4.0f // the cross street's asphalt, either side of its centre line
+#define WALK_WIDTH 2.0f // its sidewalks
+// The lip's face down, in rows this deep, to where the fog has it all.
+#define CLIFF_STEP 3.0f
+#define CLIFF_ROWS 15
+#define RAIL_X     (CROSS_X0 + 1.0f) // the guard rail across the road's end
 
 typedef struct Barricade {
     float z;      // its line across the arm
@@ -34,40 +34,29 @@ typedef struct Barricade {
 
 static const Barricade BARRICADES[] = {
     {CROSS_NORTH_Z, -STREET_HALF_LEN - TERRACE_WALL_THICK, true, -1.0f},
-    {CROSS_SOUTH_Z, -STREET_HALF_LEN + 0.4f, false, 1.0f},
+    {CROSS_SOUTH_Z, -STREET_HALF_LEN + NEAR_END_FENCE_INSET, false, 1.0f},
 };
-
-static float rnd(unsigned int* state) {
-    *state ^= *state << 13;
-    *state ^= *state >> 17;
-    *state ^= *state << 5;
-    return (float)(*state & 0xffffffu) / 16777215.0f;
-}
-
-static void ground(Kit* kit, int mat, float x0, float x1, float z0, float z1, float top) {
-    kit_frame_box(kit, &KIT_WORLD, mat, x0, x1, top - GROUND_DEEP, top, z0, z1, true);
-}
 
 // The street carried on west, the cross street across it, their sidewalks, and the corners.
 static void plate(Kit* kit) {
-    const float walk = ROAD_HALF_WIDTH + SIDEWALK_WIDTH;
+    const float walk = STREET_HALF_WIDTH;
     const float cx0 = CROSS_X - CROSS_HALF, cx1 = CROSS_X + CROSS_HALF;
     const float wx0 = cx0 - WALK_WIDTH, wx1 = cx1 + WALK_WIDTH;
     const float east = -STREET_HALF_LEN;
-    ground(kit, MAT_ASPHALT, CROSS_X0, cx0, -ROAD_HALF_WIDTH, ROAD_HALF_WIDTH, ROAD_Y);
-    ground(kit, MAT_ASPHALT, cx1, east, -ROAD_HALF_WIDTH, ROAD_HALF_WIDTH, ROAD_Y);
-    ground(kit, MAT_ASPHALT, cx0, cx1, CROSS_Z0, CROSS_Z1, ROAD_Y);
+    street_ground(kit, MAT_ASPHALT, CROSS_X0, cx0, -ROAD_HALF_WIDTH, ROAD_HALF_WIDTH, ROAD_Y);
+    street_ground(kit, MAT_ASPHALT, cx1, east, -ROAD_HALF_WIDTH, ROAD_HALF_WIDTH, ROAD_Y);
+    street_ground(kit, MAT_ASPHALT, cx0, cx1, CROSS_Z0, CROSS_Z1, ROAD_Y);
     for (int s = -1; s <= 1; s += 2) {
         const float z0 = s < 0 ? -walk : ROAD_HALF_WIDTH, z1 = s < 0 ? -ROAD_HALF_WIDTH : walk;
-        ground(kit, MAT_CONCRETE, CROSS_X0, cx0, z0, z1, 0.0f);
-        ground(kit, MAT_CONCRETE, cx1, east, z0, z1, 0.0f);
+        street_ground(kit, MAT_CONCRETE, CROSS_X0, cx0, z0, z1, 0.0f);
+        street_ground(kit, MAT_CONCRETE, cx1, east, z0, z1, 0.0f);
         // The cross street's sidewalks up each arm, and the corners behind them.
         const float a0 = s < 0 ? CROSS_Z0 : walk, a1 = s < 0 ? -walk : CROSS_Z1;
-        ground(kit, MAT_CONCRETE, wx0, cx0, a0, a1, 0.0f);
-        ground(kit, MAT_CONCRETE, cx1, wx1, a0, a1, 0.0f);
-        ground(kit, MAT_DIRT, CROSS_X0, wx0, a0, a1, 0.0f);
+        street_ground(kit, MAT_CONCRETE, wx0, cx0, a0, a1, 0.0f);
+        street_ground(kit, MAT_CONCRETE, cx1, wx1, a0, a1, 0.0f);
+        street_ground(kit, MAT_DIRT, CROSS_X0, wx0, a0, a1, 0.0f);
         // Short of the terrace's west wall on the north, which stands in it.
-        ground(kit, MAT_DIRT, wx1, s < 0 ? east - TERRACE_WALL_THICK : east, a0, a1, 0.0f);
+        street_ground(kit, MAT_DIRT, wx1, s < 0 ? east - TERRACE_WALL_THICK : east, a0, a1, 0.0f);
     }
 }
 
@@ -132,8 +121,8 @@ static void panels(Kit* kit, float x0, float x1, float z, unsigned int* state) {
     const float step = (x1 - x0) / (float)n;
     for (int i = 0; i < n; i++) {
         const float a0 = x0 + step * (float)i, mid = a0 + 0.5f * step;
-        const KitFrame f = {{mid, 0.0f, z + 0.2f * (rnd(state) - 0.5f)},
-                            0.08f * (rnd(state) - 0.5f)};
+        const KitFrame f = {{mid, 0.0f, z + 0.2f * (kit_xrnd(state) - 0.5f)},
+                            0.08f * (kit_xrnd(state) - 0.5f)};
         panel(kit, &f, -0.5f * step, 0.5f * step);
     }
 }
@@ -145,10 +134,10 @@ static void barricade(Kit* kit, const Barricade* b, unsigned int* state) {
     panels(kit, cx1 + 0.1f, b->east_x - 0.05f, b->z, state);
     const float xs[3] = {CROSS_X - 2.2f, CROSS_X, CROSS_X + 2.2f};
     for (int i = 0; i < 3; i++)
-        sawhorse(kit, xs[i], b->z + 0.3f * (rnd(state) - 0.5f), 0.12f * (rnd(state) - 0.5f),
-                 i == 1);
+        sawhorse(kit, xs[i], b->z + 0.3f * (kit_xrnd(state) - 0.5f),
+                 0.12f * (kit_xrnd(state) - 0.5f), i == 1);
     if (b->police)
-        street_car(kit, CROSS_X + 0.4f, b->z + b->behind * 3.6f, MAT_BLACK, true);
+        street_car(kit, CROSS_X + 0.4f, b->z + b->behind * 3.6f, true);
     // The one body that closes the arm.
     kit_collider(kit, (vec3){0.5f * (lip + b->east_x), 1.5f, b->z},
                  (vec3){0.5f * (b->east_x - lip) + 0.5f, 1.5f, 0.2f}, 0.0f);
@@ -160,18 +149,17 @@ static void barricade(Kit* kit, const Barricade* b, unsigned int* state) {
  * broken up by a lumpy offset. A body along the lip, inside it, between the barricades.
  */
 static void cliff(Kit* kit) {
-    const float road = ROAD_HALF_WIDTH + SIDEWALK_WIDTH;
-    const int cols = (int)ceilf((WORLD_Z1 - WORLD_Z0) / 2.0f);
-    const int rows = (int)ceilf(CLIFF_DEPTH / CLIFF_STEP);
+    const float road = STREET_HALF_WIDTH;
+    const int cols = (int)ceilf((WORLD_Z1 - WORLD_Z0) / LAND_STEP);
     const vec3 out = {-1.0f, 0.0f, 0.0f};
-    vec3 prev[16];
+    vec3 prev[CLIFF_ROWS + 1];
     for (int j = 0; j <= cols; j++) {
-        const float z = WORLD_Z0 + 2.0f * (float)j;
+        const float z = WORLD_Z0 + LAND_STEP * (float)j;
         const bool under_road = fabsf(z) < road - 0.01f;
         const float x_top = under_road ? CROSS_X0 : land_lip_x(z);
-        const float y_top = under_road ? ROAD_Y - GROUND_DEEP : land_height(x_top, z);
-        vec3 col[16];
-        for (int k = 0; k <= rows && k < 16; k++) {
+        const float y_top = under_road ? ROAD_Y - GROUND_DEPTH : land_height(x_top, z);
+        vec3 col[CLIFF_ROWS + 1];
+        for (int k = 0; k <= CLIFF_ROWS; k++) {
             const float depth = CLIFF_STEP * (float)k;
             // Buttresses and gullies down the face, and ledges across it, in two sizes.
             const float lump = k == 0 ? 0.0f
@@ -184,11 +172,11 @@ static void cliff(Kit* kit) {
             col[k][2] = z + (k == 0 ? 0.0f : 0.6f * sinf(0.7f * depth + z));
         }
         if (j > 0)
-            for (int k = 0; k < rows && k < 15; k++) {
+            for (int k = 0; k < CLIFF_ROWS; k++) {
                 kit_tri_facing(kit, MAT_CLIFF, prev[k], col[k], prev[k + 1], out);
                 kit_tri_facing(kit, MAT_CLIFF, col[k], col[k + 1], prev[k + 1], out);
             }
-        for (int k = 0; k <= rows && k < 16; k++)
+        for (int k = 0; k <= CLIFF_ROWS; k++)
             glm_vec3_copy(col[k], prev[k]);
     }
     for (float z = CROSS_NORTH_Z; z < CROSS_SOUTH_Z; z += 2.0f) {
@@ -204,15 +192,16 @@ static void cliff(Kit* kit) {
 // rebar out of the broken edge, and a drain pipe cut through below.
 static void broken_end(Kit* kit, unsigned int* state) {
     const float edge = CROSS_X0 + 0.05f;
-    const float road = ROAD_HALF_WIDTH + SIDEWALK_WIDTH;
-    for (float z = -road + 0.6f; z < road - 0.5f; z += 1.3f + 0.5f * rnd(state)) {
+    const float road = STREET_HALF_WIDTH;
+    for (float z = -road + 0.6f; z < road - 0.5f; z += 1.3f + 0.5f * kit_xrnd(state)) {
         const bool walk = fabsf(z) > ROAD_HALF_WIDTH;
         const float thick = walk ? 0.12f : 0.18f, top = walk ? 0.0f : ROAD_Y;
-        const float len = 0.8f + 1.2f * rnd(state), droop = glm_rad(20.0f + 45.0f * rnd(state));
+        const float len = 0.8f + 1.2f * kit_xrnd(state),
+                    droop = glm_rad(20.0f + 45.0f * kit_xrnd(state));
         const vec3 base = {edge, top - thick, z};
         kit_leaning_box(kit, walk ? MAT_CONCRETE : MAT_ASPHALT, base,
-                        (vec3){0.45f + 0.25f * rnd(state), 0.5f * len, 0.5f * thick},
-                        -0.5f * GLM_PIf + 0.3f * (rnd(state) - 0.5f), 0.5f * GLM_PIf + droop);
+                        (vec3){0.45f + 0.25f * kit_xrnd(state), 0.5f * len, 0.5f * thick},
+                        -0.5f * GLM_PIf + 0.3f * (kit_xrnd(state) - 0.5f), 0.5f * GLM_PIf + droop);
     }
     // The kerbs, each snapped off and hanging by its reinforcement.
     for (int s = -1; s <= 1; s += 2)
@@ -220,12 +209,12 @@ static void broken_end(Kit* kit, unsigned int* state) {
                         (vec3){edge, -0.3f, (float)s * (ROAD_HALF_WIDTH + 0.08f)},
                         (vec3){0.08f, 0.45f, 0.15f}, -0.5f * GLM_PIf, 0.5f * GLM_PIf + 0.9f);
     for (int i = 0; i < 12; i++) {
-        const float z = -road + 0.4f + (2.0f * road - 0.8f) * rnd(state);
+        const float z = -road + 0.4f + (2.0f * road - 0.8f) * kit_xrnd(state);
         const float y = (fabsf(z) > ROAD_HALF_WIDTH ? 0.0f : ROAD_Y) - 0.1f;
-        const float reach = 0.4f + 1.0f * rnd(state);
+        const float reach = 0.4f + 1.0f * kit_xrnd(state);
         const vec3 bar[3] = {{edge, y, z},
-                             {edge - 0.5f * reach, y - 0.05f, z + 0.1f * (rnd(state) - 0.5f)},
-                             {edge - reach, y - 0.2f - 0.6f * rnd(state), z}};
+                             {edge - 0.5f * reach, y - 0.05f, z + 0.1f * (kit_xrnd(state) - 0.5f)},
+                             {edge - reach, y - 0.2f - 0.6f * kit_xrnd(state), z}};
         kit_frame_pipe(kit, &KIT_WORLD, MAT_LAMP_POST, bar, 3, 0.008f, 4);
     }
     // A storm drain cut through where the road went, its mouth dark, still running in the rain.
@@ -247,7 +236,7 @@ static void broken_end(Kit* kit, unsigned int* state) {
 // A W-beam guard rail across the road's end on posts, one length of it torn from its post and
 // bent out over the edge, and a body the rail's length so nobody steps past it.
 static void guard_rail(Kit* kit) {
-    const float road = ROAD_HALF_WIDTH + SIDEWALK_WIDTH - 0.3f, tear = 1.4f;
+    const float road = STREET_HALF_WIDTH - 0.3f, tear = 1.4f;
     const vec2 beam[6] = {{0.0f, 0.48f}, {0.07f, 0.53f},  {0.07f, 0.66f},
                           {0.0f, 0.71f}, {-0.01f, 0.71f}, {-0.01f, 0.48f}};
     // Its frame runs along +z with d out over the edge, toward -x.
@@ -303,8 +292,7 @@ static void leaning_pole(Kit* kit) {
     }
 }
 
-void crossroads_build(Crossroads* crossroads, Kit* kit, Scene* scene, bool night) {
-    *crossroads = (Crossroads){0};
+void crossroads_build(Kit* kit, Scene* scene, bool night, FailingLamp* failing) {
     unsigned int state = 0x5eed1335u;
     plate(kit);
     for (int i = 0; i < KIT_COUNT(BARRICADES); i++)
@@ -316,13 +304,5 @@ void crossroads_build(Crossroads* crossroads, Kit* kit, Scene* scene, bool night
     // A lamp on our side near the edge, its arm out over the road, failing.
     Light* light = street_lamp(kit, scene, CROSS_X0 + 4.5f, 0.0f, ROAD_HALF_WIDTH + 1.4f, GLM_PIf,
                                night, false, street_lamp_profile(scene, night));
-    if (light) {
-        crossroads->failing = light;
-        crossroads->base_intensity = light->intensity;
-    }
-}
-
-void crossroads_update(Crossroads* crossroads, double time) {
-    if (crossroads->failing)
-        crossroads->failing->intensity = street_lamp_failing(time, 1u) * crossroads->base_intensity;
+    *failing = failing_lamp(light, 1u);
 }

@@ -159,6 +159,15 @@ static inline float kit_rrange(KitRng* r, float lo, float hi) {
     return lo + (hi - lo) * kit_rnd(r);
 }
 
+// A second sequence, a xorshift, in [0, 1]: what the grounds, the dead trees, the woods and the
+// crossroads draw from, each on a state of its own so they take nothing from a kit's.
+static inline float kit_xrnd(unsigned int* state) {
+    *state ^= *state << 13;
+    *state ^= *state >> 17;
+    *state ^= *state << 5;
+    return (float)(*state & 0xffffffu) / 16777215.0f;
+}
+
 // The parts of lo..hi clear of the `n` intervals `blocked` (each {from, to}, in any order and
 // overlapping or not), in order, into `out`, which holds n + 1. Returns their count.
 int kit_clear_spans(float lo, float hi, const vec2* blocked, int n, vec2* out);

@@ -9,14 +9,16 @@
 #include "kit.h"
 #include "layout.h"
 
-#define NEAR_HOUSES 4 // our side's neighbours, two either side of us
-
-// Where the neighbours stand, each side from the west: what the terrace's stairs and the
-// fences round the yards are fitted to.
+// Where every lot's house stands, each side from the west: ours among our side's, and on a lot
+// with none a plot of no width, which street_lot_vacant says.
 typedef struct StreetPlots {
-    HousePlot near[NEAR_HOUSES];
+    HousePlot near[NEAR_LOTS];
     HousePlot far[TERRACE_LOTS];
 } StreetPlots;
+
+static inline bool street_lot_vacant(const HousePlot* plot) {
+    return plot->x1 <= plot->x0;
+}
 
 // Everything outside: the road, its kerbs and sidewalks, our yards, the
 // neighbours' houses, the lamps (and their light, at night), the poles and
@@ -33,12 +35,24 @@ Light* street_lamp(Kit* kit, Scene* scene, float x, float y, float z, float yaw,
 // The street lamps' IES profile in the scene's library, or -1 by day or when it will not load.
 int street_lamp_profile(Scene* scene, bool night);
 
-// What a lamp on a failing ballast gives of its light at `time` seconds: all of it, or a glimmer
-// for a beat now and then. Lamps given different `salt`s fail out of step.
-float street_lamp_failing(double time, unsigned int salt);
+// A lamp on a failing ballast: all of its light, or a glimmer for a beat now and then. Lamps of
+// different salts fail out of step.
+typedef struct FailingLamp {
+    Light* light;    // NULL by day, or for a lamp with no light
+    float intensity; // what it gives when it is not failing
+    unsigned int salt;
+} FailingLamp;
 
-// A boxy sedan at (x, z) on the road, its length along X, its windows dark: in `body`'s paint, or
-// a police car's black and white with its light bar dead on the roof.
-void street_car(Kit* kit, float x, float z, int body, bool police);
+// `light` failing from now on; NULL leaves a lamp that does nothing.
+FailingLamp failing_lamp(Light* light, unsigned int salt);
+// Its light at `time` seconds.
+void failing_lamp_update(const FailingLamp* lamp, double time);
+
+// Ground from x0 to x1 and z0 to z1, a box GROUND_DEPTH deep with its top at `top`.
+void street_ground(Kit* kit, int mat, float x0, float x1, float z0, float z1, float top);
+
+// A boxy sedan at (x, z) on the road, its length along X, its windows dark: in the street's car
+// paint, or a police car's black and white with its light bar dead on the roof.
+void street_car(Kit* kit, float x, float z, bool police);
 
 #endif // _SILENT_STREET_H_

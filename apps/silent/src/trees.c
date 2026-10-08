@@ -126,15 +126,6 @@ static Mesh* grow(int model, Material* bark) {
     return mesh;
 }
 
-// A small hash of an RNG, so the trees draw nothing from the street's and every seed builds the
-// same street.
-static float rnd(unsigned int* state) {
-    *state ^= *state << 13;
-    *state ^= *state >> 17;
-    *state ^= *state << 5;
-    return (float)(*state & 0xffffffu) / 16777215.0f;
-}
-
 // Whether (x, z) is somewhere a tree may stand: off the drive and its shoulders, out of the
 // mansion's grounds inside the fence, out of the clearing before its gate -- the last stretch of
 // the drive is where the house is first seen whole -- and inside the world.
@@ -187,16 +178,17 @@ void trees_build(Trees* trees, Kit* kit, Scene* scene, unsigned int seed) {
     for (int attempt = 0; attempt < TREE_ATTEMPTS && placed < TREE_COUNT; attempt++) {
         // Mostly hugging the drive, the rest scattered over the hill.
         float x, z;
-        if (rnd(&state) < 0.75f) {
-            hill_drive_point(rnd(&state), &x, &z);
-            const float side = rnd(&state) < 0.5f ? -1.0f : 1.0f;
-            const float off = TREE_DRIVE_NEAR + (TREE_DRIVE_FAR - TREE_DRIVE_NEAR) * rnd(&state);
-            const float angle = rnd(&state) * 6.2831853f;
+        if (kit_xrnd(&state) < 0.75f) {
+            hill_drive_point(kit_xrnd(&state), &x, &z);
+            const float side = kit_xrnd(&state) < 0.5f ? -1.0f : 1.0f;
+            const float off =
+                TREE_DRIVE_NEAR + (TREE_DRIVE_FAR - TREE_DRIVE_NEAR) * kit_xrnd(&state);
+            const float angle = kit_xrnd(&state) * 6.2831853f;
             x += side * off * cosf(angle);
             z += side * off * sinf(angle);
         } else {
-            x = STREET_HALF_LEN + (WORLD_X1 - STREET_HALF_LEN) * rnd(&state);
-            z = WORLD_Z0 + (WORLD_Z1 - WORLD_Z0) * rnd(&state);
+            x = STREET_HALF_LEN + (WORLD_X1 - STREET_HALF_LEN) * kit_xrnd(&state);
+            z = WORLD_Z0 + (WORLD_Z1 - WORLD_Z0) * kit_xrnd(&state);
         }
         if (!free_ground(x, z))
             continue;
@@ -205,11 +197,11 @@ void trees_build(Trees* trees, Kit* kit, Scene* scene, unsigned int seed) {
         if (!model)
             continue;
 
-        const float scale = TREE_SCALE_MIN + (TREE_SCALE_MAX - TREE_SCALE_MIN) * rnd(&state);
-        const float yaw = rnd(&state) * 6.2831853f;
+        const float scale = TREE_SCALE_MIN + (TREE_SCALE_MAX - TREE_SCALE_MIN) * kit_xrnd(&state);
+        const float yaw = kit_xrnd(&state) * 6.2831853f;
         // A lean of a few degrees, as a dead tree has, and sunk a little into the ground so the
         // flare of its roots is in it.
-        const float lean = glm_rad(2.0f + 6.0f * rnd(&state));
+        const float lean = glm_rad(2.0f + 6.0f * kit_xrnd(&state));
         const float y = land_height(x, z) - 0.25f;
         SceneNode* node = create_node();
         mat4 m;

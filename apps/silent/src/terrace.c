@@ -3,6 +3,7 @@
 #include "land.h"
 #include "layout.h"
 #include "mats.h"
+#include "street.h"
 #include "terrace.h"
 
 /*
@@ -26,7 +27,6 @@
 #define RAIL_HEIGHT  0.9f  // the handrail's height above the nosings
 #define RAIL_RADIUS  0.022f
 #define PATH_HALF    0.55f
-#define GROUND_DEEP  0.4f // a lot's ground box, below its top
 #define GUARD_HEIGHT 1.0f // the guard rail along the wall's top, above the coping
 #define GUARD_RADIUS 0.024f
 #define GUARD_POSTS  2.0f // metres between its posts at most
@@ -60,11 +60,10 @@ static void guard_rail(Kit* kit, float x0, float x1, float top) {
     kit_frame_box(kit, &f, KIT_COLLIDER_ONLY, x0, x1, 0.0f, GUARD_HEIGHT, -0.05f, 0.05f, true);
 }
 
-// A lot's ground: a level box from x0 to x1 and z0 to z1, its top at `top`.
+// A lot's ground from x0 to x1 and z0 to z1, its top at `top`; nothing where that is no ground.
 static void lot_ground(Kit* kit, float x0, float x1, float z0, float z1, float top) {
-    if (x1 - x0 < 0.01f || z1 - z0 < 0.01f)
-        return;
-    kit_frame_box(kit, &KIT_WORLD, MAT_DIRT, x0, x1, top - GROUND_DEEP, top, z0, z1, true);
+    if (x1 - x0 >= 0.01f && z1 - z0 >= 0.01f)
+        street_ground(kit, MAT_DIRT, x0, x1, z0, z1, top);
 }
 
 /*
@@ -120,9 +119,8 @@ void terrace_build(Kit* kit, const HousePlot far[TERRACE_LOTS]) {
     const float wall_back = TERRACE_WALL_Z - TERRACE_WALL_THICK;
     const float notch = FLIGHT_HALF + CHEEK_THICK;
     for (int lot = 0; lot < TERRACE_LOTS; lot++) {
-        float x0, x1;
-        land_terrace_lot_span(lot, &x0, &x1);
-        const float top = land_terrace_height(0.5f * (x0 + x1));
+        const float x0 = far_lot_line_x(lot), x1 = far_lot_line_x(lot + 1);
+        const float top = land_terrace_lot_height(lot);
         // The flight stands square to its door, inside the lot.
         const float sx = fminf(fmaxf(far[lot].door[0], x0 + notch + 0.3f), x1 - notch - 0.3f);
         const float landing = stair(kit, sx, top);
@@ -143,7 +141,7 @@ void terrace_build(Kit* kit, const HousePlot far[TERRACE_LOTS]) {
 
     // The west return, facing the cross street the street's west end will meet, the lot's height
     // all the way back.
-    const float west = land_terrace_height(-STREET_HALF_LEN);
+    const float west = land_terrace_lot_height(0);
     const float wx1 = -STREET_HALF_LEN, wx0 = wx1 - TERRACE_WALL_THICK;
     kit_frame_box(kit, &KIT_WORLD, MAT_RETAINING, wx0, wx1, -WALL_FOOT, west, TERRACE_BACK_Z,
                   TERRACE_WALL_Z, true);

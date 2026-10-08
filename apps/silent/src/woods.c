@@ -70,7 +70,7 @@ static const struct {
 static float west_depth(float x, float z) {
     const float lip = x - (land_lip_x(z) + 2.5f);
     const float cross = fabsf(x - CROSS_X) - 9.0f;
-    const float street = fabsf(z) - (ROAD_HALF_WIDTH + SIDEWALK_WIDTH + 3.0f);
+    const float street = fabsf(z) - (STREET_HALF_WIDTH + 3.0f);
     const float barricade = fminf(fabsf(z - CROSS_NORTH_Z), fabsf(z - CROSS_SOUTH_Z)) - 2.0f;
     return fminf(fminf(lip, cross), fminf(street, barricade));
 }
@@ -90,15 +90,6 @@ static float woods_depth(float x, float z) {
     const float north = (TERRACE_BACK_Z - EDGE_CLEAR) - z;
     const float south = z - (BACK_FENCE_Z + EDGE_CLEAR);
     return fmaxf(north, south);
-}
-
-// The same small hash the dead trees draw from, so the woods take nothing from the street's
-// sequence and every seed builds the same street.
-static float rnd(unsigned int* state) {
-    *state ^= *state << 13;
-    *state ^= *state >> 17;
-    *state ^= *state << 5;
-    return (float)(*state & 0xffffffu) / 16777215.0f;
 }
 
 /*
@@ -256,7 +247,8 @@ static void deadfall(Kit* kit, Trees* trees, SceneNode* parent, const FenceBreac
     glm_vec2_normalize(along);
     const float scale = 0.062f, length = 125.0f * scale;
     const float base_out = length - 1.2f;
-    const float skew = glm_rad(15.0f + 20.0f * rnd(state)) * (rnd(state) < 0.5f ? -1.0f : 1.0f);
+    const float skew =
+        glm_rad(15.0f + 20.0f * kit_xrnd(state)) * (kit_xrnd(state) < 0.5f ? -1.0f : 1.0f);
     // Toward the yard, turned off square to the fence by the skew.
     vec2 dir = {-br->out[0] * cosf(skew) + along[0] * sinf(skew),
                 -br->out[1] * cosf(skew) + along[1] * sinf(skew)};
@@ -271,7 +263,7 @@ static void deadfall(Kit* kit, Trees* trees, SceneNode* parent, const FenceBreac
     glm_rotate_y(m, yaw, m);
     // Laid down, its crown sloping to the ground and its foot held up by the root plate.
     glm_rotate_x(m, 0.5f * GLM_PIf + glm_rad(3.0f), m);
-    glm_rotate_y(m, 2.0f * GLM_PIf * rnd(state), m);
+    glm_rotate_y(m, 2.0f * GLM_PIf * kit_xrnd(state), m);
     glm_scale_uni(m, scale);
     place(parent, mesh, m);
     free_mesh(mesh);
@@ -306,14 +298,14 @@ void woods_build(Kit* kit, Engine* engine, Scene* scene, Trees* trees,
     for (int j = 0; j < rows; j++)
         for (int i = 0; i < cols; i++) {
             const float x = WOODS_X0 + SITE_STEP * ((float)i + 0.5f) +
-                            SITE_STEP * SITE_JITTER * (2.0f * rnd(&state) - 1.0f);
+                            SITE_STEP * SITE_JITTER * (2.0f * kit_xrnd(&state) - 1.0f);
             const float z = WORLD_Z0 + SITE_STEP * ((float)j + 0.5f) +
-                            SITE_STEP * SITE_JITTER * (2.0f * rnd(&state) - 1.0f);
+                            SITE_STEP * SITE_JITTER * (2.0f * kit_xrnd(&state) - 1.0f);
             const float depth = woods_depth(x, z);
             const float keep = 0.45f + 0.5f * glm_smoothstep(0.0f, EDGE_THIN, depth);
-            const float kind = rnd(&state), yaw = 2.0f * GLM_PIf * rnd(&state);
-            const float size = rnd(&state), lean = rnd(&state);
-            if (depth <= 0.0f || rnd(&state) > keep)
+            const float kind = kit_xrnd(&state), yaw = 2.0f * GLM_PIf * kit_xrnd(&state);
+            const float size = kit_xrnd(&state), lean = kit_xrnd(&state);
+            if (depth <= 0.0f || kit_xrnd(&state) > keep)
                 continue;
             mat4 m;
             if (kind < DEAD_SHARE) {
@@ -372,9 +364,9 @@ void woods_build(Kit* kit, Engine* engine, Scene* scene, Trees* trees,
     int stumps = 0, logs = 0, boulders = 0;
     for (int tries = 0; tries < 4000 && (stumps < STUMPS || logs < LOGS || boulders < BOULDERS);
          tries++) {
-        const float x = WOODS_X0 + (WOODS_EAST_X - WOODS_X0) * rnd(&state);
-        const float z = WORLD_Z0 + (WORLD_Z1 - WORLD_Z0) * rnd(&state);
-        const float a = rnd(&state), b = rnd(&state), c = rnd(&state);
+        const float x = WOODS_X0 + (WOODS_EAST_X - WOODS_X0) * kit_xrnd(&state);
+        const float z = WORLD_Z0 + (WORLD_Z1 - WORLD_Z0) * kit_xrnd(&state);
+        const float a = kit_xrnd(&state), b = kit_xrnd(&state), c = kit_xrnd(&state);
         if (woods_depth(x, z) < 1.0f)
             continue;
         if (stumps < STUMPS) {
