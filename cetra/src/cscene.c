@@ -1015,6 +1015,54 @@ static void parse_decals(CetraSceneDesc* d, const cJSON* root) {
 }
 
 /*
+ * trees[] -- procedural trees (spec 13.35). `preset` and `position` are required, the probe
+ * rule: a tree nobody chose at the origin renders as a plausible frame with the wrong tree in it.
+ * The preset's name is checked at apply, where tree_gen's own list is.
+ */
+static void parse_trees(CetraSceneDesc* d, const cJSON* root) {
+    static const char* known[] = {"preset", "seed", "position", "scale", "yaw", "irregularity"};
+
+    const cJSON* trees = cJSON_GetObjectItemCaseSensitive(root, "trees");
+    if (!cJSON_IsArray(trees))
+        return;
+    const cJSON* t = NULL;
+    cJSON_ArrayForEach(t, trees) {
+        if (d->tree_count >= CSCENE_MAX_TREES) {
+            log_warn("cscene: more than %d trees; extras ignored", CSCENE_MAX_TREES);
+            break;
+        }
+        if (!cJSON_IsObject(t)) {
+            log_warn("cscene: tree that is not an object; skipped");
+            continue;
+        }
+        warn_unknown_keys(t, known, sizeof(known) / sizeof(known[0]), "tree");
+
+        CSceneTree* out = &d->trees[d->tree_count];
+        memset(out, 0, sizeof(*out));
+        copy_string(out->preset, sizeof(out->preset),
+                    cJSON_GetObjectItemCaseSensitive(t, "preset"));
+        if (out->preset[0] == '\0' || !get_floats(t, "position", out->position, 3)) {
+            log_warn("cscene: tree needs a preset and a position; skipped");
+            continue;
+        }
+        out->seed = 1;
+        out->scale = 1.0f;
+        out->irregularity = -1.0f;
+        const cJSON* seed = cJSON_GetObjectItemCaseSensitive(t, "seed");
+        if (cJSON_IsNumber(seed))
+            out->seed = seed->valueint;
+        get_float(t, "scale", &out->scale);
+        get_float(t, "yaw", &out->yaw);
+        get_float(t, "irregularity", &out->irregularity);
+        if (out->scale <= 0.0f) {
+            log_warn("cscene: tree scale must be positive (got %.3f); skipped", (double)out->scale);
+            continue;
+        }
+        d->tree_count++;
+    }
+}
+
+/*
  * One nested wave train, `water.windSea` or `water.swell` (spec 11.48).
  *
  * Nested rather than flat-prefixed (`swellWindSpeed`, `swellSpreadGain`, ...) because a flat
@@ -2040,6 +2088,7 @@ CetraSceneDesc* cscene_load(const char* path) {
     parse_gi_volumes(d, root);
     parse_occluders(d, root);
     parse_decals(d, root);
+    parse_trees(d, root);
     // Before the materials, which name them.
     parse_shader_hooks(d, root);
     parse_materials(d, root);

@@ -16,7 +16,6 @@
 #include "cetra/engine.h"
 #include "cetra/geometry.h"
 #include "cetra/light.h"
-#include "cetra/lod.h"
 #include "cetra/texture.h"
 #include "cetra/app.h"
 #include "cetra/camera_rig.h"
@@ -53,8 +52,6 @@
 // cannot read it from each other -- and a drift between them is silent: the
 // chain would be preserved against a threshold nothing uses.
 #define LEAF_ALPHA_CUTOFF 0.4f
-// The share of a conifer's sprays each level of detail keeps of the one nearer.
-#define CONIFER_CARD_KEEP 0.45f
 
 /*
  * Generate all procedural textures
@@ -490,70 +487,6 @@ static void regenerate_tree(const TreeParams* p) {
     tree_skeleton_free(&skel);
 }
 
-// FNV-1a over `n` bytes, folded into `h`.
-static unsigned long long fnv1a(unsigned long long h, const void* data, size_t n) {
-    const unsigned char* b = data;
-    for (size_t i = 0; i < n; i++) {
-        h ^= b[i];
-        h *= 1099511628211ull;
-    }
-    return h;
-}
-
-// Every stream of a mesh, so moving any of them -- a position, a wind weight, a vertex colour,
-// the winding -- moves the digest.
-static unsigned long long mesh_digest(const Mesh* m) {
-    const size_t vc = m->vertex_count;
-    unsigned long long h = 1469598103934665603ull;
-    h = fnv1a(h, &m->vertex_count, sizeof(m->vertex_count));
-    h = fnv1a(h, &m->index_count, sizeof(m->index_count));
-    const struct {
-        const float* data;
-        size_t per_vertex;
-    } streams[] = {{m->vertices, 3},   {m->normals, 3},     {m->tangents, 4},
-                   {m->tex_coords, 2}, {m->tex_coords2, 2}, {m->colors, 4}};
-    for (size_t i = 0; i < sizeof(streams) / sizeof(streams[0]); i++)
-        if (streams[i].data)
-            h = fnv1a(h, streams[i].data, vc * streams[i].per_vertex * sizeof(float));
-    if (m->indices)
-        h = fnv1a(h, m->indices, m->index_count * sizeof(unsigned int));
-    return h;
-}
-
-// --tree-digest: the tree grown and meshed exactly as the scene grows it, then digested and
-// printed, with nothing rendered. A generator change that should leave a tree alone is held to
-// this line.
-static void print_tree_digest(const TreeParams* p, TreePreset preset) {
-    TreeSkeleton skel;
-    memset(&skel, 0, sizeof(skel));
-    tree_skeleton_build(&skel, p);
-    Mesh* bark = create_mesh();
-    Mesh* leaves = create_mesh();
-    tree_mesh_bark(&skel, p, bark);
-    tree_mesh_leaves(&skel, p, leaves);
-    printf("tree-digest preset=%s seed=%d branches=%d bark_verts=%zu bark_tris=%zu "
-           "leaf_verts=%zu leaf_tris=%zu bark=%016llx leaves=%016llx\n",
-           tree_preset_name(preset), p->seed, skel.branch_count, bark->vertex_count,
-           bark->index_count / 3, leaves->vertex_count, leaves->index_count / 3, mesh_digest(bark),
-           mesh_digest(leaves));
-    // The levels of detail a conifer is drawn with at a distance, after the digest so the
-    // chains never move it: the bark simplified, the sprays thinned.
-    if (p->form == TREE_FORM_EXCURRENT) {
-        mesh_build_lod_chain(bark);
-        mesh_build_card_lod_chain(leaves, TG_SPRAY_INDICES, CONIFER_CARD_KEEP);
-        printf("tree-lod preset=%s bark_levels=%d", tree_preset_name(preset), bark->lod_levels);
-        for (int i = 0; i < bark->lod_levels; i++)
-            printf(" bark%d=%zu", i, bark->lod_count[i] / 3);
-        printf(" leaf_levels=%d", leaves->lod_levels);
-        for (int i = 0; i < leaves->lod_levels; i++)
-            printf(" sprays%d=%zu", i, leaves->lod_count[i] / TG_SPRAY_INDICES);
-        printf("\n");
-    }
-    free_mesh(bark);
-    free_mesh(leaves);
-    tree_skeleton_free(&skel);
-}
-
 /*
  * Regenerate the grass field
  *
@@ -940,7 +873,6 @@ typedef struct {
     float look_rate;    // radians/s of head turn; 0 = the walker's own default
     int arrows_upright; // up arrow looks UP; the walker's default is inverted
     TreePreset preset;  // the tree grown; TREE_PRESET_BROADLEAF is this app's own
-    int tree_digest;    // print the grown meshes' digest and exit, rendering nothing
     float irregularity; // the preset's own when below 0
 } TreeArgs;
 
@@ -1016,8 +948,6 @@ static void print_usage(const char* prog) {
     printf("                          snag\n");
     printf("      --irregularity F    A conifer's raggedness, 0 a tidy cone to 1; default the\n");
     printf("                          preset's own\n");
-    printf("      --tree-digest       Print a hash of every stream of the grown meshes, and\n");
-    printf("                          their counts, then exit without rendering\n");
     printf("  -h, --help              This message\n");
 }
 
@@ -1157,8 +1087,6 @@ static bool parse_args(int argc, char** argv, TreeArgs* a) {
                 print_usage(argv[0]);
                 return false;
             }
-        } else if (!strcmp(s, "--tree-digest")) {
-            a->tree_digest = 1;
         } else if (!strcmp(s, "--irregularity") && has_next) {
             a->irregularity = (float)atof(argv[++i]);
         } else if (!strcmp(s, "-h") || !strcmp(s, "--help")) {
@@ -1289,14 +1217,6 @@ int main(int argc, char** argv) {
     if (!engine) {
         fprintf(stderr, "Failed to initialize engine\n");
         return -1;
-    }
-    // After the engine only because a Mesh is made with a GL context to hold its buffers.
-    if (args.tree_digest) {
-        TreeParams digest_params;
-        tree_params_from_args(&args, &digest_params);
-        print_tree_digest(&digest_params, args.preset);
-        free_engine(engine);
-        return 0;
     }
     engine_set_screenshot_path(engine, args.screenshot);
     engine->screenshot_every = args.screenshot_every;

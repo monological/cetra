@@ -24,6 +24,7 @@
 #define CSCENE_MAX_GI_VOLUMES      32
 #define CSCENE_MAX_DECALS          16
 #define CSCENE_MAX_OCCLUDERS       64
+#define CSCENE_MAX_TREES           32
 #define CSCENE_MAX_LIGHT_OVERRIDES 16
 #define CSCENE_MAX_MATERIALS       16
 // Half the engine's POSTFX_PASS_MAX, so a scene's passes leave the app room for its own.
@@ -477,6 +478,24 @@ typedef struct CSceneDecal {
     char surface[CSCENE_MAX_PATH]; // optional; empty = none
 } CSceneDecal;
 
+/*
+ * trees[] -- procedural trees grown by tree_gen (spec 13.35). A top-level block for the reason
+ * its neighbours are: a thing placed in the world.
+ *
+ * `preset` and `position` are REQUIRED: a tree is a kind of tree and a place for it, and a
+ * default for either is a tree nobody asked for standing at the origin. The preset is held as its
+ * NAME, tree_gen's own spelling, since this header carries no engine headers; the apply resolves
+ * it and refuses one it does not know.
+ */
+typedef struct CSceneTree {
+    char preset[CSCENE_MAX_NAME];
+    int seed;           // 1 by default
+    float position[3];  // where its trunk meets the ground
+    float scale;        // world units per tree unit; 1 by default
+    float yaw;          // DEGREES about the vertical
+    float irregularity; // a conifer's raggedness; below 0, the preset's own
+} CSceneTree;
+
 // Mirrors MeteringMode in cetra/src/exposure.h. Kept as its own enum for the
 // reason CSceneTonemap is: this header carries no engine headers, and the values
 // must agree numerically -- which is unwritten anywhere if both sides use bare
@@ -706,6 +725,9 @@ typedef struct CetraSceneDesc {
 
     CSceneDecal decals[CSCENE_MAX_DECALS];
     int decal_count;
+
+    CSceneTree trees[CSCENE_MAX_TREES];
+    int tree_count;
 
     CSceneMaterialOverride materials[CSCENE_MAX_MATERIALS];
     int material_count;
