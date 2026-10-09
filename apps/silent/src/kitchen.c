@@ -460,6 +460,10 @@ static void fridge(Kit* kit, const KitFrame* f, KitRng* rng, float a0, float a1)
 // window run's counter begins; the fridge stands first in it.
 static const KitFrame STOVE_WALL = {{KITCHEN_X0, FLOOR_Y, STOVE_RUN_Z}, 0.5f * GLM_PIf};
 #define FRIDGE_W 0.72f
+#define FRIDGE_D 0.68f // its doors' faces, out from the wall
+// Where the town map hangs from its magnet (spec 13.43): the freezer door's middle at eye level.
+#define FRIDGE_MAP_A 0.4f
+#define FRIDGE_MAP_Y 1.645f
 
 // The hall wall on the left, as you come in: the fridge, the stove under its
 // hood, and a short run to the corner.
@@ -514,6 +518,11 @@ static void stove_wall(Kit* kit, KitRng* rng) {
     clutter(kit, &f, rng, s1 + 0.1f, len - 0.1f, 0.0f, 0.0f, COUNTER_TOP, 1);
 }
 
+void kitchen_fridge_map_frame(KitFrame* out) {
+    kit_frame_point(&STOVE_WALL, FRIDGE_MAP_A, FRIDGE_MAP_Y, FRIDGE_D, out->origin);
+    out->yaw = STOVE_WALL.yaw;
+}
+
 void kitchen_pin_card(Kit* kit, const KitFrame* f, CardId card, float a, float y, float d,
                       float tilt) {
     const float w = CARDS[card].size[0], h = CARDS[card].size[1];
@@ -538,12 +547,14 @@ static void magnet(Kit* kit, const KitFrame* f, int mat, float a, float y, float
 
 /*
  * The fridge: a tall rounded box with its handles, and a bottle forgotten on
- * top. Snapshots on the freezer door, and on the door below a shopping list
- * held by a magnet with two more photos -- each a little crooked, and each a
- * hair further out than the last, so none fights the door or another card.
+ * top. Two snapshots on the freezer door either side of where the town map
+ * hangs, and on the door below a shopping list held by a magnet with three more
+ * photos -- each a little crooked, and each a hair further out than the last,
+ * so none fights the door or another card. The map's magnet stays when the map
+ * is taken.
  */
 static void fridge(Kit* kit, const KitFrame* f, KitRng* rng, float a0, float a1) {
-    const float d = 0.68f, h = 1.72f;
+    const float d = FRIDGE_D, h = 1.72f;
     kit_frame_box(kit, f, MAT_APPLIANCE, a0, a1, 0.0f, h, 0.0f, d, true);
     kit_frame_box(kit, f, MAT_APPLIANCE, a0 + 0.03f, a1 - 0.03f, h, h + 0.04f, 0.03f, d - 0.03f,
                   false);
@@ -553,12 +564,16 @@ static void fridge(Kit* kit, const KitFrame* f, KitRng* rng, float a0, float a1)
 
     const float step = 0.0008f;
     kitchen_pin_card(kit, f, CARD_PHOTO_TREE, a0 + 0.26f, 1.47f, d + step, -0.06f);
-    kitchen_pin_card(kit, f, CARD_PHOTO_LAKE, a0 + 0.45f, 1.53f, d + 2.0f * step, 0.04f);
     kitchen_pin_card(kit, f, CARD_PHOTO_ROAD, a0 + 0.59f, 1.40f, d + 3.0f * step, -0.03f);
     magnet(kit, f, MAT_PLASTIC, a0 + 0.262f, 1.505f, d + 2.0f * step);
-    magnet(kit, f, MAT_CERAMIC, a0 + 0.45f, 1.575f, d + 3.0f * step);
     magnet(kit, f, MAT_BLACK, a0 + 0.59f, 1.46f, d + 4.0f * step);
+    // The map's magnet in its cover's top corner, clear of the name, deep enough to stand proud of
+    // the map it holds.
+    const float ma = a0 + FRIDGE_MAP_A - 0.053f, my = FRIDGE_MAP_Y - 0.017f;
+    kit_frame_pipe(kit, f, MAT_CERAMIC, (vec3[]){{ma, my, d}, {ma, my, d + 0.013f}}, 2, 0.013f, 16);
 
+    kitchen_pin_card(kit, f, CARD_PHOTO_LAKE, a0 + 0.20f, 0.80f, d + step, 0.04f);
+    magnet(kit, f, MAT_CERAMIC, a0 + 0.20f, 0.845f, d + 2.0f * step);
     kitchen_pin_card(kit, f, CARD_PHOTO_PARK, a0 + 0.43f, 0.80f, d + step, 0.05f);
     kitchen_pin_card(kit, f, CARD_PHOTO_GARDEN, a0 + 0.50f, 0.99f, d + 2.0f * step, -0.07f);
     kitchen_pin_card(kit, f, CARD_NOTE, a0 + 0.30f, 1.03f, d + 3.0f * step, 0.03f);

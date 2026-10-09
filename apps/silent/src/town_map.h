@@ -11,7 +11,7 @@
  * map_art.h.
  */
 
-typedef enum { MAP_TOWN, MAP_COUNT } MapId;
+typedef enum { MAP_NONE = -1, MAP_TOWN, MAP_COUNT } MapId;
 
 typedef enum { PLACE_BARRICADE, PLACE_ROAD_END, PLACE_CABIN, PLACE_COUNT } PlaceId;
 
@@ -49,8 +49,10 @@ typedef struct MapArt {
     int arrow_frames, arrow_cell, arrow_cols;
     int mark_count;
     MapMark marks[PLACE_COUNT];
-    float folded_front[4], folded_back[4]; // the folded map's faces in its texture set, V up
-    unsigned int seed;                     // the street seed whose houses the print shows
+    // The folded map's faces in its texture set, V up: its printed cover, and the panel that shows
+    // when it hangs half open.
+    float folded_cover[4], folded_inside[4];
+    unsigned int seed; // the street seed whose houses the print shows
 } MapArt;
 
 extern const MapArt MAP_ART[MAP_COUNT];

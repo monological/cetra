@@ -72,12 +72,13 @@ SCALE = (FRAME[2] - FRAME[0]) / 272.0  # output pixels a metre
 M = SCALE * SS  # canvas pixels a metre
 
 # The title's baseline middle, in output pixels: the empty corner past the world's edge, with
-# the compass and the scale beside it, inside one fold's panel, which is the folded map's front.
+# the compass and the scale beside it, inside one fold's panel.
 TITLE = (1275, 1110)
-# The folded map's two faces, as the sheet's (column, row) panels between its folds: the title's
-# panel in front, as a folded street map shows its title, and a panel of the town behind.
-FRONT_PANEL, BACK_PANEL = (2, 2), (1, 0)
+# The folded map's two faces: its printed cover, and the sheet's (column, row) panel between its
+# folds that shows when it hangs half open.
+INSIDE_PANEL = (1, 0)
 FOLDED_FACE = 512  # pixels a side of each face in the folded set
+ROUGH_COVER, ROUGH_INSIDE = 0.40, 0.88  # coated and glossy; newsprint
 FT = 3.28084  # feet a metre, for the scale
 
 NARROW_BOLD = FONTS + "ptsansnarrow/PT_Sans-Narrow-Web-Bold.ttf"
@@ -102,6 +103,7 @@ NAMES = {
     "north_road": "TO ROUTE 9",
     "west_road": "TO ASHGROVE",
     "compliments": "Compliments of the Pale Ridge Chamber of Commerce  -  1987",
+    "chamber": "Pale Ridge Chamber of Commerce",
 }
 
 
@@ -131,8 +133,12 @@ CONTOUR_INDEX = rgb(0.74, 0.60, 0.46)
 WOODS_INK = rgb(0.25, 0.37, 0.22)
 WATER_INK = rgb(0.26, 0.45, 0.56)
 WHITE = (255, 255, 255)
+# The cover's inks.
+COVER_RED = rgb(0.74, 0.15, 0.12)
+COVER_NAVY = rgb(0.18, 0.24, 0.40)
 
 PAPER = np.array([0.95, 0.91, 0.80], dtype=np.float32)  # newsprint gone yellow
+COVER_STOCK = np.array([0.96, 0.94, 0.87], dtype=np.float32)  # the cover's coated card
 BROWN = np.array([0.66, 0.47, 0.27], dtype=np.float32)  # what coffee and age leave
 GRIME = np.array([0.52, 0.48, 0.44], dtype=np.float32)
 EDGE_BROWN = np.array([0.74, 0.55, 0.36], dtype=np.float32)
@@ -1266,27 +1272,93 @@ def save(img, path):
                                               hashlib.sha256(data).hexdigest()[:16]))
 
 
-def folded_set(img, folds):
-    """The map as it hangs folded on the fridge: two of the sheet's panels cut along its own folds,
-    front and back side by side, over the paper's edge brown where the sheet is torn. A world
-    texture set like any other, so stored bottom row first, with a flat normal and a roughness
-    map small enough not to grow the engine's material array. Returns each face's UVs, V up."""
+def draw_cover(rng):
+    """The folded map's cover, as an old gas-station road map's were printed, to be the thing on
+    the fridge door the eye goes to: a red band with the town's name knocked out of it in white, a
+    FREE badge, STREET MAP and the guide's line under it in navy, and the manor's drawing. Then
+    the coated card's wear -- white where the ink has rubbed off its edges and corners, scuffs and
+    scratches -- as RGB at FOLDED_FACE pixels a side."""
+    n = FOLDED_FACE * SS
+    sheet = Sheet((n, n))
+
+    def at(v):
+        return v * SS
+
+    band = at(250)
+    sheet.c.rectangle([0, 0, n, band], fill=COVER_RED)
+    sheet.c.rectangle([at(14), at(14), n - at(14), band - at(14)], outline=WHITE, width=at(3))
+    title = font(SLAB, 92)
+    for i, word in enumerate(NAMES["town"].split()):
+        text_at(sheet.knockout, n / 2.0, at(78) + at(94) * i, word, title, WHITE, tracking=0.02)
+    bx, by, r = n - at(66), at(58), at(34)
+    sheet.c.ellipse([bx - r, by - r, bx + r, by + r], fill=COVER_NAVY)
+    sheet.c.ellipse([bx - r + at(4), by - r + at(4), bx + r - at(4), by + r - at(4)],
+                    outline=WHITE, width=at(2))
+    text_at(sheet.knockout, bx, by, "FREE", font(NARROW_BOLD, 22), WHITE, tracking=0.08)
+
+    text_path(sheet.plain, [(at(60), band + at(46)), (n - at(60), band + at(46))], "STREET MAP",
+              font(NARROW_BOLD, 40), COVER_NAVY, tracking=0.42)
+    text_at(sheet.plain, n / 2.0, band + at(86), "and Visitors' Guide", font(SERIF_ITALIC, 28),
+            SOFT_INK)
+    draw_manor_at(sheet, n / 2.0, band + at(214), at(98) / 24.0)
+    sheet.c.rectangle([0, n - at(22), n, n], fill=COVER_RED)
+    text_at(sheet.knockout, n / 2.0, n - at(11), NAMES["chamber"].upper(), font(NARROW_BOLD, 13),
+            WHITE, tracking=0.25)
+    return age_cover(sheet.inked(), rng)
+
+
+def age_cover(ink, rng):
+    """A coated cover handled for years: its ink rubbed white along its edges and hardest at its
+    corners, scuffed and scratched, and gone a little yellow and grimy toward its edges."""
+    h, w = ink.shape[:2]
+    stock = COVER_STOCK * (0.99 + 0.02 * noise(h, w, 3, rng))[..., None]
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    edge = np.minimum(np.minimum(xx, w - 1 - xx), np.minimum(yy, h - 1 - yy))
+    corner = np.minimum(np.minimum(np.hypot(xx, yy), np.hypot(w - xx, yy)),
+                        np.minimum(np.hypot(xx, h - yy), np.hypot(w - xx, h - yy)))
+    rub = noise(h, w, 5 * SS, rng)
+    wear = np.exp(-edge / (5.0 * SS)) * (0.45 + 0.55 * rub)
+    wear += 0.7 * np.exp(-corner / (26.0 * SS)) * rub
+    wear += np.clip((noise(h, w, 40 * SS, rng) - 0.72) * 3.0, 0, 1) * rub * 0.35
+    scratches = Image.new("L", (w, h), 0)
+    d = ImageDraw.Draw(scratches)
+    for _ in range(9):
+        x, y = rng.uniform(0, w), rng.uniform(0, h)
+        a = rng.uniform(0, math.pi)
+        length = rng.uniform(30, 140) * SS
+        d.line([(x, y), (x + length * math.cos(a), y + length * math.sin(a))], fill=150,
+               width=int(rng.integers(1, 3)))
+    wear = np.clip(wear + as_array(scratches), 0.0, 1.0)
+    out = stock * (1.0 - (1.0 - ink) * (0.97 * (1.0 - wear))[..., None])
+    a = (0.30 * np.exp(-edge / (24.0 * SS)))[..., None]
+    out *= 1.0 - a * (1.0 - EDGE_BROWN)
+    img = Image.fromarray(np.clip(out * 255.0 + 0.5, 0, 255).astype(np.uint8))
+    return img.resize((FOLDED_FACE, FOLDED_FACE), Image.Resampling.LANCZOS)
+
+
+def folded_set(img, folds, cover):
+    """The map as it hangs folded on the fridge: its printed cover, and the sheet's panel that
+    shows when it hangs half open, cut along its own folds over the paper's edge brown where the
+    sheet is torn, side by side. A world texture set like any other, so stored bottom row first,
+    with a flat normal and a roughness map -- the cover glossy, the newsprint not -- small enough
+    not to grow the engine's material array. Returns the cover's and the inside's UVs, V up."""
     vertical, horizontal = folds
     xs = [PAPER_INSET] + [f / SS for f, _, _ in vertical] + [OUT_W - PAPER_INSET]
     ys = [PAPER_INSET] + [f / SS for f, _, _ in horizontal] + [OUT_H - PAPER_INSET]
     edge = tuple(int(c * 255 + 0.5) for c in PAPER * EDGE_BROWN) + (255,)
     flat = Image.alpha_composite(Image.new("RGBA", img.size, edge), img).convert("RGB")
+    i, j = INSIDE_PANEL
+    box = tuple(int(round(v)) for v in (xs[i], ys[j], xs[i + 1], ys[j + 1]))
+    inside = flat.crop(box).resize((FOLDED_FACE, FOLDED_FACE), Image.Resampling.LANCZOS)
     albedo = Image.new("RGB", (2 * FOLDED_FACE, FOLDED_FACE))
-    faces = []
-    for k, (i, j) in enumerate((FRONT_PANEL, BACK_PANEL)):
-        box = tuple(int(round(v)) for v in (xs[i], ys[j], xs[i + 1], ys[j + 1]))
-        face = flat.crop(box).resize((FOLDED_FACE, FOLDED_FACE), Image.Resampling.LANCZOS)
-        albedo.paste(face, (k * FOLDED_FACE, 0))
-        faces.append((k / 2.0, 0.0, (k + 1) / 2.0, 1.0))
+    albedo.paste(cover, (0, 0))
+    albedo.paste(inside, (FOLDED_FACE, 0))
     save(albedo.transpose(Image.Transpose.FLIP_TOP_BOTTOM), FOLDED % "albedo")
     Image.new("RGB", (64, 32), (128, 128, 255)).save(FOLDED % "normal")
-    Image.new("RGB", (64, 32), (230, 230, 230)).save(FOLDED % "rough")
-    return faces
+    rough = Image.new("RGB", (64, 32), (int(ROUGH_INSIDE * 255 + 0.5),) * 3)
+    rough.paste((int(ROUGH_COVER * 255 + 0.5),) * 3, (0, 0, 32, 32))
+    rough.save(FOLDED % "rough")
+    return (0.0, 0.0, 0.5, 1.0), (0.5, 0.0, 1.0, 1.0)
 
 
 def write_art(plan, marks, faces):
@@ -1330,8 +1402,8 @@ def write_art(plan, marks, faces):
                   "                     {%s, %s}}," % (f(pen.anchor[0]), f(pen.anchor[1]))]
     lines += [
         "                },",
-        "            .folded_front = %s," % rect(faces[0]),
-        "            .folded_back = %s," % rect(faces[1]),
+        "            .folded_cover = %s," % rect(faces[0]),
+        "            .folded_inside = %s," % rect(faces[1]),
         "            .seed = %du," % plan.seed,
         "        },",
         "};",
@@ -1354,7 +1426,8 @@ def main():
     save(img, PRINT)
     atlas, marks = draw_marks(plan, ink_rng)
     save(atlas, MARKS)
-    write_art(plan, marks, folded_set(img, folds))
+    cover_rng = np.random.default_rng([SEED, 3])
+    write_art(plan, marks, folded_set(img, folds, draw_cover(cover_rng)))
     if "--debug" in sys.argv[1:]:
         debug_overlay(img, plan).save(DEBUG)
         arrow = atlas.crop((ARROW_CELL * 6, 0, ARROW_CELL * 7, ARROW_CELL))

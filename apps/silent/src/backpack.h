@@ -7,10 +7,13 @@
 #include "cetra/engine.h"
 #include "cetra/scene.h"
 
+#include "town_map.h"
+
 /*
  * The player's backpack (spec 13.40): an old canvas daypack lying on the bed in the home's
  * bedroom, with a flashlight in it. Taking it takes what is in it, and the flashlight works from
- * then on. Each thing in it is a model of its own on no scene graph, which the backpack's screen
+ * then on; what is found later goes into it once it is had (the town map off the fridge, spec
+ * 13.43). Each thing in it is a model of its own on no scene graph, which the backpack's screen
  * shows on its own.
  *
  * What is carried lies in a grid of cells, each thing across its own footprint, and the GAME packs
@@ -19,7 +22,7 @@
  * arranges the bag, and it is never full.
  */
 
-typedef enum { ITEM_NONE = -1, ITEM_FLASHLIGHT, ITEM_COUNT } ItemId;
+typedef enum { ITEM_NONE = -1, ITEM_FLASHLIGHT, ITEM_TOWN_MAP, ITEM_COUNT } ItemId;
 
 #define BAG_COLS     8
 #define BAG_MIN_ROWS 4
@@ -31,6 +34,7 @@ typedef struct ItemSpec {
     const char* name; // as the backpack's screen shows it
     const char* line; // what the player knows about it
     int cells[2];     // its footprint: across, down
+    MapId map;        // the map it is, or MAP_NONE
 } ItemSpec;
 
 extern const ItemSpec ITEMS[ITEM_COUNT];
@@ -55,6 +59,9 @@ typedef struct Backpack {
 void backpack_build(Backpack* bp, Engine* engine, Scene* scene, bool taken);
 // Off the bed: the player has it, and what is in it.
 void backpack_take(Backpack* bp);
+// `item` into the bag, packed with the rest: false, and nothing done, until the bag is taken or
+// when it already holds it.
+bool backpack_add(Backpack* bp, ItemId item);
 // Whether the player has `item`.
 bool backpack_holds(const Backpack* bp, ItemId item);
 void backpack_free(Backpack* bp);

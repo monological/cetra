@@ -56,6 +56,7 @@
 #include "clock.h"
 #include "crossroads.h"
 #include "door.h"
+#include "fridge_map.h"
 #include "fences.h"
 #include "grounds.h"
 #include "hearth.h"
@@ -187,6 +188,7 @@ typedef struct SilentArgs {
     bool no_play_prompt;    // the loading screen lifts by itself once the game is ready
     bool flashlight;
     bool backpack;        // the backpack already taken, and the flashlight in it
+    bool map;             // the town map already in it, and the fridge door bare
     ItemId open_backpack; // the backpack's screen open on it at the start, or ITEM_NONE
     bool mute;
     float rain_mmh;          // 0 = dry
@@ -249,9 +251,10 @@ static Hud g_hud;
 static Basement g_basement;
 static Backpack g_backpack;
 static BackpackMenu g_menu;
+static FridgeMap g_fridge_map;
 
-// How long the prompt names Tab once the backpack is had.
-#define TAB_HINT_SECONDS 5.0f
+// How long the prompt names a key once what it opens is had: Tab for the backpack, M for the map.
+#define HINT_SECONDS 5.0f
 
 // --audio-dump: the offline mix, pulled a frame's worth at a time so it keeps
 // step with the sim clock, as interleaved stereo at the engine's rate.
@@ -880,8 +883,12 @@ static void on_init(Game* game) {
     if (g_door_hung[DOOR_CABIN])
         door_set_open(&g_doors[DOOR_CABIN]);
     load_seam(engine, "doors");
-    // The backpack on the bedroom's bed (spec 13.40), unless the run starts with it.
+    // The backpack on the bedroom's bed (spec 13.40), and the town map on the fridge (spec 13.43),
+    // unless the run starts with them.
     backpack_build(&g_backpack, engine, g_scene, g_args.backpack);
+    fridge_map_build(&g_fridge_map, engine, g_scene, g_args.map);
+    if (g_args.map)
+        backpack_add(&g_backpack, ITEM_TOWN_MAP);
     hud_start(&g_hud, engine);
     backpack_menu_start(&g_menu, g_hud.ui, g_hud.font, &g_backpack);
     if (g_args.open_backpack != ITEM_NONE) {
@@ -1144,7 +1151,21 @@ static bool write_dump(const char* path) {
 static void take_backpack(void) {
     backpack_take(&g_backpack);
     hud_think(&g_hud, "My backpack. There's a flashlight in it.");
-    hud_hint(&g_hud, "Tab   Backpack", TAB_HINT_SECONDS);
+    hud_hint(&g_hud, "Tab   Backpack", HINT_SECONDS);
+}
+
+// The map off the fridge (spec 13.43): into the backpack, once there is a backpack to put it in.
+static void take_map(void) {
+    if (!g_backpack.taken) {
+        hud_think(
+            &g_hud,
+            "I don't have anywhere to put this. Maybe I should find a backpack or something.");
+        return;
+    }
+    fridge_map_take(&g_fridge_map);
+    backpack_add(&g_backpack, ITEM_TOWN_MAP);
+    hud_think(&g_hud, "A map of the town. That'll come in handy.");
+    hud_hint(&g_hud, "M   Map", HINT_SECONDS);
 }
 
 static void on_pre_render(Game* game, double alpha) {
@@ -1178,8 +1199,8 @@ static void on_pre_render(Game* game, double alpha) {
     player_feet(&g_player, feet);
     lake_update(&g_lake, eye, feet);
 
-    // The nearest thing the player is looking at in reach -- a door, or the backpack on the bed
-    // -- says what the action key would do to it, and the key does it.
+    // The nearest thing the player is looking at in reach -- a door, the backpack on the bed or the
+    // map on the fridge -- says what the action key would do to it, and the key does it.
     Door* door = NULL;
     float nearest = FLT_MAX;
     for (int i = 0; i < DOORS; i++) {
@@ -1191,15 +1212,30 @@ static void on_pre_render(Game* game, double alpha) {
             door = &g_doors[i];
         }
     }
-    const bool bag = !g_backpack.taken && player_reach_distance(&g_player, g_backpack.at) < nearest;
+    enum { REACH_DOOR, REACH_BAG, REACH_MAP } reach = REACH_DOOR;
+    const float bag_d =
+        g_backpack.taken ? FLT_MAX : player_reach_distance(&g_player, g_backpack.at);
+    if (bag_d < nearest) {
+        nearest = bag_d;
+        reach = REACH_BAG;
+    }
+    const float map_d =
+        g_fridge_map.taken ? FLT_MAX : player_reach_distance(&g_player, g_fridge_map.at);
+    if (map_d < nearest)
+        reach = REACH_MAP;
+    if (reach != REACH_DOOR)
+        door = NULL;
     if (input_action_pressed(&game->input, "interact")) {
-        if (bag)
+        if (reach == REACH_BAG)
             take_backpack();
+        else if (reach == REACH_MAP)
+            take_map();
         else if (door)
             door_toggle(door);
     }
     const float dt = (float)game->sim_clock.delta;
-    hud_prompt(&g_hud, bag    ? "E   Take the backpack"
+    hud_prompt(&g_hud, reach == REACH_BAG   ? "E   Take the backpack"
+                       : reach == REACH_MAP ? "E   Take the map"
                        : door ? (door_will_open(door) ? "E   Open door" : "E   Close door")
                               : NULL);
     hud_update(&g_hud, dt, (float)engine->win_height);
@@ -1373,8 +1409,9 @@ static void print_usage(const char* prog) {
     printf("      --no-play-prompt    Go straight in once loaded, without the screen's PLAY\n");
     printf("      --flashlight        Start with the flashlight, and on (F toggles it)\n");
     printf("      --backpack          Start with the backpack, the flashlight in it\n");
+    printf("      --map               Start with the town map in the backpack, the fridge bare\n");
     printf("      --open-backpack ITEM  Start with the backpack's screen open on ITEM\n"
-           "                          (flashlight), and the backpack had\n");
+           "                          (flashlight, map), and the backpack had\n");
     printf("      --mute              Without sound\n");
     printf("      --audio-dump PATH   Headless: write what the listener hears as a WAV\n");
     printf("      --map-export PATH   Write the town's plan for tools/make_map.py and stop\n");
@@ -1542,9 +1579,14 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
             a->backpack = true;
         } else if (!strcmp(s, "--backpack")) {
             a->backpack = true;
+        } else if (!strcmp(s, "--map")) {
+            a->map = true;
+            a->backpack = true;
         } else if (!strcmp(s, "--open-backpack") && has_next) {
             a->open_backpack = item_by_id(argv[++i]);
             a->backpack = true;
+            // Only what is held can be chosen, and the map is had only off the fridge.
+            a->map |= a->open_backpack == ITEM_TOWN_MAP;
             if (a->open_backpack == ITEM_NONE)
                 fprintf(stderr, "silent: --open-backpack names no item; leaving it shut\n");
         } else if (!strcmp(s, "--mute")) {
