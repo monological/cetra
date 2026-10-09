@@ -35,7 +35,7 @@
 #define CHEST_DEPTH 0.46f
 #define CHEST_H     1.05f
 
-#define LAMP_CANDELA 40.0f // the living room's floor lamp's
+#define LAMP_CANDELA 25.0f
 
 // What stands against a wall stands off it past the paper and the skirting.
 #define OFF_WALL (LINING + 0.02f)
