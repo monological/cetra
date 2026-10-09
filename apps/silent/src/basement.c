@@ -632,7 +632,7 @@ void basement_start(Basement* b, Engine* engine, Scene* scene, AudioSystem* audi
                     .next_drip = DRIP_FIRST,
                     .drips = {seed * 2246822519u + 77u}};
     if (audio) {
-        b->drip = audio_sound_from_file(audio, DRIP_PATH, AUDIO_BUS_SFX);
+        b->drip = audio_sound_from_file_async(audio, DRIP_PATH, AUDIO_BUS_SFX);
         if (!b->drip)
             fprintf(stderr, "silent: cannot load %s\n", DRIP_PATH);
     }

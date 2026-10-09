@@ -86,6 +86,15 @@ Sound* audio_play_music(AudioSystem* audio, const char* path, bool loop);
 // (centred, no attenuation) until audio_sound_set_position places it in the
 // world. Both return NULL on failure.
 Sound* audio_sound_from_file(AudioSystem* audio, const char* path, AudioBus bus);
+// from_file, decoded on the audio's job thread instead of here (spec 13.39): the Sound comes back
+// at once and may be set up and started like any other, but the device stays stopped from the
+// first such load until audio_system_wait_loaded, which a game owes before its first frame. A
+// file that cannot be opened still fails here.
+Sound* audio_sound_from_file_async(AudioSystem* audio, const char* path, AudioBus bus);
+// Whether an async load is still decoding: for drawing a loading screen while it does.
+bool audio_system_loading(AudioSystem* audio);
+// Waits for every async load, then lets the device play.
+void audio_system_wait_loaded(AudioSystem* audio);
 Sound* audio_sound_from_tone(AudioSystem* audio, float hz, AudioBus bus);
 // Endless procedural noise, 2D until positioned like a tone, from a fixed seed so an offline
 // render is the same every run: a bed -- rain, wind, a room's hum -- rather than an event.

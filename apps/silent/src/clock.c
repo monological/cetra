@@ -320,7 +320,7 @@ void clock_bob(double time, vec3 out) {
 }
 
 static Sound* beat_sound(AudioSystem* audio, const char* path) {
-    Sound* s = audio_sound_from_file(audio, path, AUDIO_BUS_SFX);
+    Sound* s = audio_sound_from_file_async(audio, path, AUDIO_BUS_SFX);
     if (!s) {
         fprintf(stderr, "silent: the clock cannot load %s\n", path);
         return NULL;
