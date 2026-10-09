@@ -26,6 +26,10 @@ void cabin_build(Kit* kit, unsigned int seed);
 // cached since it never moves.
 void cabin_light(FireSystem* fs, Scene* scene, bool shadows);
 
+struct AudioSystem;
+// The hearth's crackle and the room's own quiet, each where it is.
+void cabin_start_audio(struct AudioSystem* audio);
+
 // The door, hung on its south jamb against the room's face of the wall, so it swings in.
 bool cabin_door(Door* door, Engine* engine, Scene* scene, EntityManager* em, PhysicsWorld* physics);
 

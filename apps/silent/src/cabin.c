@@ -1,6 +1,7 @@
 #include <math.h>
 #include <stdio.h>
 
+#include "cetra/game/audio.h"
 #include "cetra/light.h"
 
 #include "cabin.h"
@@ -8,6 +9,7 @@
 #include "kitchen.h"
 #include "layout.h"
 #include "mats.h"
+#include "sounds.h"
 
 /*
  * The log cabin on the lake's east bank (spec 13.41).
@@ -51,6 +53,10 @@
 // The front's window, north of the door, which shows the fire to the dock.
 #define FRONT_WIN_Z0 (CABIN_Z0 + 0.8f)
 #define FRONT_WIN_Z1 (CABIN_Z0 + 1.6f)
+
+// Against the other loops tools/fetch_sounds.py levels alike: the fire, and under it the room.
+#define HEARTH_VOLUME 0.45f
+#define ROOM_VOLUME   0.12f
 
 // The hearth's light over what the flipbook's flames cast, as the candles' is (candles.c): the
 // night is exposed for a house lit by a few of them, and a fire at its physical brightness left
@@ -576,6 +582,20 @@ void cabin_light(FireSystem* fs, Scene* scene, bool shadows) {
         return;
     scene_add_light(scene, light);
     fire->light = light;
+}
+
+void cabin_start_audio(AudioSystem* audio) {
+    Sound* fire = sounds_loop(audio, "assets/audio/silent/hearth_fire.flac");
+    if (fire) {
+        audio_sound_set_position(fire, (vec3){HEARTH_FACE + 0.25f, FIREBOX_Y0 + 0.3f, MID_Z});
+        audio_sound_set_volume(fire, HEARTH_VOLUME);
+    }
+    Sound* room = sounds_loop(audio, "assets/audio/silent/cabin_room.flac");
+    if (room) {
+        audio_sound_set_position(room,
+                                 (vec3){0.5f * (CABIN_X0 + CABIN_X1), CABIN_FLOOR_Y + 1.5f, MID_Z});
+        audio_sound_set_volume(room, ROOM_VOLUME);
+    }
 }
 
 bool cabin_door(Door* door, Engine* engine, Scene* scene, EntityManager* em,
