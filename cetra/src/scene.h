@@ -318,6 +318,9 @@ typedef struct Scene {
     // the graph, and the engine cannot enumerate them.
     void (*on_origin_shift)(const vec3 delta, void* ctx); // scene_set_origin_callback
     void* origin_shift_ctx;
+    // What the app holds at rest while the light is captured (spec 13.42).
+    void (*capture_rest)(bool rest, void* ctx); // scene_set_capture_rest
+    void* capture_rest_ctx;
 
     // SETTINGS: plain stores. Write them directly, at any time.
 
@@ -490,6 +493,14 @@ void scene_apply_origin_delta(Scene* scene, const vec3 delta);
 // Register what to run after a shift, for the absolutes the engine cannot reach.
 void scene_set_origin_callback(Scene* scene, void (*on_shift)(const vec3 delta, void* ctx),
                                void* ctx);
+
+// Register what holds the app's moving lights still for the captures (spec 13.42): called with
+// true as a capture burst begins, before anything is derived from the lights, and false as it
+// ends. At true an app puts what it animates -- a flicker, a dimming supply, a screen, a torch --
+// at rest, and at false back as it was. A capture is kept for good, so one taken at an instant of
+// a flicker keeps that instant; held at rest, every capture sees one scene, whichever frame it
+// lands in. The engine's own fires are held at rest beside it.
+void scene_set_capture_rest(Scene* scene, void (*rest)(bool rest, void* ctx), void* ctx);
 
 /*
  * The one "the environment changed" chain: re-bake the env cube WITH the cloud

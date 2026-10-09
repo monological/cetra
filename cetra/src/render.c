@@ -9,6 +9,7 @@
 #include "animation.h"
 #include "async_loader.h"
 #include "ext/log.h"
+#include "fire.h"
 #include "layers_vt.h"
 #include "scene.h"
 #include "sky.h"
@@ -2119,6 +2120,14 @@ void scene_capture_begin(Engine* engine, Scene* scene, SceneCaptureKind kind,
     // builds it otherwise, which is exactly why it cannot live inside that guard.
     engine_build_draw_list(engine, scene);
 
+    // The light held at rest for the burst (spec 13.42) -- the app's, then the engine's own fires
+    // -- before anything below derives from it: the panels from the emissive strengths, the
+    // shadows from where the lights stand. A capture is kept for good, and one taken at an instant
+    // of a flicker would keep that instant.
+    if (scene->capture_rest)
+        scene->capture_rest(true, scene->capture_rest_ctx);
+    fire_system_hold(scene->fire, scene->root_node, true);
+
     // The derived emissive panels, once for the burst, which its faces no longer place
     // (spec 13.32) -- and before its shadow pass, so a panel first derived here is a light
     // the pass gives a shadow. Then the variants, which read the panels (engine_render_scene
@@ -2150,6 +2159,9 @@ void scene_capture_end(Engine* engine, Scene* scene, const SceneCaptureState* sa
     if (!engine || !scene || !saved)
         return;
     profiler_resume(engine->profiler);
+    fire_system_hold(scene->fire, scene->root_node, false);
+    if (scene->capture_rest)
+        scene->capture_rest(false, scene->capture_rest_ctx);
     engine->capture_kind = saved->kind;
     engine_set_render_time(engine, saved->render_time, saved->render_delta);
     if (scene->shadow_system) {

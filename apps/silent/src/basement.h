@@ -29,6 +29,11 @@ typedef struct Basement {
     Light* light;    // cached, its shadow following it while the swing is wide
     double drafted;  // when the door first opened, or -1 before
     unsigned int seed;
+    // As the last update left the light: where it hung, its supply's level and whether its
+    // shadow followed it.
+    vec3 at;
+    float level;
+    bool follow;
 
     AudioSystem* audio;
     Sound* drip; // decoded once and played as voices; NULL without audio
@@ -61,5 +66,9 @@ void basement_update(Basement* b, const Door* door, double time);
  */
 bool basement_hold(Basement* b, EntityManager* em, PhysicsWorld* physics, const vec3 feet,
                    bool light);
+
+// For the light's captures (spec 13.42): `rest` hangs the bulb straight on a full supply; false
+// puts it back as the last update left it.
+void basement_rest(Basement* b, bool rest);
 
 #endif // _SILENT_BASEMENT_H_

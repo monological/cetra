@@ -103,6 +103,8 @@ Scene* create_scene() {
     glm_vec3_zero(scene->pending_origin);
     scene->on_origin_shift = NULL;
     scene->origin_shift_ctx = NULL;
+    scene->capture_rest = NULL;
+    scene->capture_rest_ctx = NULL;
     scene->origin_shift_distance = 0.0f;
     scene->render_skybox = false;
     scene->skybox_brightness = 1.0f;
@@ -494,6 +496,13 @@ void scene_set_origin_callback(Scene* scene, void (*on_shift)(const vec3 delta, 
         return;
     scene->on_origin_shift = on_shift;
     scene->origin_shift_ctx = ctx;
+}
+
+void scene_set_capture_rest(Scene* scene, void (*rest)(bool rest, void* ctx), void* ctx) {
+    if (!scene)
+        return;
+    scene->capture_rest = rest;
+    scene->capture_rest_ctx = ctx;
 }
 
 void scene_set_world_origin(Scene* scene, const vec3 new_origin) {
