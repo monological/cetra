@@ -1497,6 +1497,137 @@ void kit_frame_lathe_on(Kit* kit, const KitFrame* f, int mat, const vec3 base, c
     lathe(kit, mat, at, dir, u, w, profile, count, clamp_sides(sides));
 }
 
+/*
+ * A soft box is the rounded cube made from a cube's faces: each face is sampled on a grid over
+ * the box's outside, every point is pulled back into the box shrunk by r and pushed out again r
+ * along the direction it was pulled, so the flat middle stays flat, an edge becomes a quarter
+ * round and a corner an eighth of a sphere. Each face takes half of every rounded edge it
+ * borders, so two faces meet 45 degrees round it, where their points and normals agree.
+ *
+ * The puff is (1 - u^2)^2 (1 - v^2)^2 over the flat middle: squared, so its slope as well as its
+ * height is zero where the rounding starts, and a puffed face runs into its edges without a
+ * crease.
+ */
+#define SOFT_STEP     0.08f // metres between cuts across a face's flat middle
+#define SOFT_BAND     4     // cuts across each half of a rounded edge
+#define SOFT_MAX_CUTS 48
+
+// The cuts across one axis of a face from -h to h: SOFT_BAND across the rounded band at each
+// end, and about every SOFT_STEP across the flat between them.
+static int soft_cuts(float h, float r, float* out) {
+    const float flat = h - r;
+    int steps = flat > 1e-5f ? (int)ceilf(2.0f * flat / SOFT_STEP) : 0;
+    steps = steps > SOFT_MAX_CUTS - 2 * SOFT_BAND - 1 ? SOFT_MAX_CUTS - 2 * SOFT_BAND - 1 : steps;
+    int n = 0;
+    for (int i = 0; i < SOFT_BAND; i++)
+        out[n++] = -h + r * (float)i / (float)SOFT_BAND;
+    for (int i = 0; i < steps; i++)
+        out[n++] = -flat + 2.0f * flat * (float)i / (float)steps;
+    for (int i = 0; i <= SOFT_BAND; i++)
+        out[n++] = flat + r * (float)i / (float)SOFT_BAND;
+    return n;
+}
+
+// A triangle of a smooth surface, wound to agree with its corners' normals.
+static void soft_tri(Kit* kit, int mat, const vec3* p, const vec3* n, const unsigned int* idx,
+                     int a, int b, int c) {
+    vec3 cross = {0.0f, 0.0f, 0.0f}, sum = {0.0f, 0.0f, 0.0f};
+    corner_cross(p[a], p[b], p[c], cross);
+    if (glm_vec3_norm2(cross) < 1e-20f)
+        return;
+    glm_vec3_add((float*)n[a], (float*)n[b], sum);
+    glm_vec3_add(sum, (float*)n[c], sum);
+    if (glm_vec3_dot(cross, sum) >= 0.0f)
+        mb_tri(&kit->builders[mat], idx[a], idx[b], idx[c]);
+    else
+        mb_tri(&kit->builders[mat], idx[a], idx[c], idx[b]);
+}
+
+void kit_frame_soft_box(Kit* kit, const KitFrame* f, int mat, float a0, float a1, float y0,
+                        float y1, float d0, float d1, float r, float puff) {
+    if (!slot_ok(kit, mat))
+        return;
+    const vec3 centre = {0.5f * (a0 + a1), 0.5f * (y0 + y1), 0.5f * (d0 + d1)};
+    const vec3 half = {0.5f * fabsf(a1 - a0), 0.5f * fabsf(y1 - y0), 0.5f * fabsf(d1 - d0)};
+    r = glm_clamp(r, 0.0f, glm_vec3_min((float*)half));
+    const vec3 flat = {half[0] - r, half[1] - r, half[2] - r};
+    const float inv = 1.0f / kit->repeat_m[mat], strength = kit->grime[mat];
+    for (int k = 0; k < 3; k++)
+        for (int s = -1; s <= 1; s += 2) {
+            const int i = (k + 1) % 3, j = (k + 2) % 3;
+            float cut_i[SOFT_MAX_CUTS], cut_j[SOFT_MAX_CUTS];
+            const int ni = soft_cuts(half[i], r, cut_i), nj = soft_cuts(half[j], r, cut_j);
+            vec3 out = {0.0f, 0.0f, 0.0f}, face_n = {0.0f, 0.0f, 0.0f};
+            out[k] = (float)s;
+            kit_frame_dir(f, out[0], out[1], out[2], face_n);
+            vec3 t = {0.0f, 0.0f, 0.0f}, bt = {0.0f, 0.0f, 0.0f};
+            face_frame(face_n, t, bt);
+            vec3 pos[2][SOFT_MAX_CUTS], nrm[2][SOFT_MAX_CUTS];
+            unsigned int idx[2][SOFT_MAX_CUTS];
+            for (int jj = 0; jj < nj; jj++) {
+                const int row = jj & 1;
+                for (int ii = 0; ii < ni; ii++) {
+                    vec3 q = {0.0f, 0.0f, 0.0f}, c = {0.0f, 0.0f, 0.0f}, n = {0.0f, 0.0f, 0.0f};
+                    q[k] = (float)s * half[k];
+                    q[i] = cut_i[ii];
+                    q[j] = cut_j[jj];
+                    for (int m = 0; m < 3; m++) {
+                        c[m] = glm_clamp(q[m], -flat[m], flat[m]);
+                        n[m] = q[m] - c[m];
+                    }
+                    if (glm_vec3_norm2(n) < 1e-12f)
+                        glm_vec3_copy(out, n);
+                    glm_vec3_normalize(n);
+                    vec3 local = {0.0f, 0.0f, 0.0f};
+                    glm_vec3_copy(c, local);
+                    glm_vec3_muladds(n, r, local);
+                    if (puff != 0.0f) {
+                        const float u = flat[i] > 1e-5f ? c[i] / flat[i] : 0.0f;
+                        const float v = flat[j] > 1e-5f ? c[j] / flat[j] : 0.0f;
+                        const float fu = 1.0f - u * u, fv = 1.0f - v * v;
+                        local[k] += (float)s * puff * fu * fu * fv * fv;
+                        if (flat[i] > 1e-5f)
+                            n[i] += puff * 4.0f * u * fu * fv * fv / flat[i];
+                        if (flat[j] > 1e-5f)
+                            n[j] += puff * 4.0f * v * fv * fu * fu / flat[j];
+                        glm_vec3_normalize(n);
+                    }
+                    glm_vec3_add(local, (float*)centre, local);
+                    vec3 p = {0.0f, 0.0f, 0.0f}, nw = {0.0f, 0.0f, 0.0f}, tw = {0.0f, 0.0f, 0.0f};
+                    kit_frame_point(f, local[0], local[1], local[2], p);
+                    kit_frame_dir(f, n[0], n[1], n[2], nw);
+                    glm_vec3_copy(t, tw);
+                    glm_vec3_muladds(nw, -glm_vec3_dot(nw, tw), tw);
+                    glm_vec3_normalize(tw);
+                    const float grime = strength > 0.0f ? grime_amount(strength, p, 0.0f) : 0.0f;
+                    glm_vec3_copy(p, pos[row][ii]);
+                    glm_vec3_copy(nw, nrm[row][ii]);
+                    idx[row][ii] = kit_vertex(kit, mat, p, nw, tw, glm_vec3_dot(p, t) * inv,
+                                              glm_vec3_dot(p, bt) * inv, grime);
+                }
+                if (jj == 0)
+                    continue;
+                const int prev = row ^ 1;
+                for (int ii = 1; ii < ni; ii++) {
+                    const vec3 p[4] = {
+                        {pos[prev][ii - 1][0], pos[prev][ii - 1][1], pos[prev][ii - 1][2]},
+                        {pos[prev][ii][0], pos[prev][ii][1], pos[prev][ii][2]},
+                        {pos[row][ii][0], pos[row][ii][1], pos[row][ii][2]},
+                        {pos[row][ii - 1][0], pos[row][ii - 1][1], pos[row][ii - 1][2]}};
+                    const vec3 n[4] = {
+                        {nrm[prev][ii - 1][0], nrm[prev][ii - 1][1], nrm[prev][ii - 1][2]},
+                        {nrm[prev][ii][0], nrm[prev][ii][1], nrm[prev][ii][2]},
+                        {nrm[row][ii][0], nrm[row][ii][1], nrm[row][ii][2]},
+                        {nrm[row][ii - 1][0], nrm[row][ii - 1][1], nrm[row][ii - 1][2]}};
+                    const unsigned int q[4] = {idx[prev][ii - 1], idx[prev][ii], idx[row][ii],
+                                               idx[row][ii - 1]};
+                    soft_tri(kit, mat, p, n, q, 0, 1, 2);
+                    soft_tri(kit, mat, p, n, q, 0, 2, 3);
+                }
+            }
+        }
+}
+
 void kit_frame_card(Kit* kit, const KitFrame* f, int mat, const vec3 corner, const vec3 across,
                     const vec3 up, const float uv[4]) {
     vec3 p[4] = {{0.0f}}, along = {0.0f, 0.0f, 0.0f}, rise = {0.0f, 0.0f, 0.0f};

@@ -378,6 +378,10 @@ void kit_frame_lathe(Kit* kit, const KitFrame* f, int mat, float a, float d, flo
 // facing the room, a finial on its side.
 void kit_frame_lathe_on(Kit* kit, const KitFrame* f, int mat, const vec3 base, const vec3 axis,
                         const vec2* profile, int count, int sides);
+// The box a0..a1, y0..y1, d0..d1 with every edge rounded to radius r and each face's middle
+// pushed out `puff` beyond it: a mattress, a pillow, a bag. No body.
+void kit_frame_soft_box(Kit* kit, const KitFrame* f, int mat, float a0, float a1, float y0,
+                        float y1, float d0, float d1, float r, float puff);
 
 // A flat card from `corner` along `across` and `up`, all (a, y, d), facing
 // cross(across, up). It shows `uv` = {u0, v0, u1, v1} of its material's

@@ -103,6 +103,11 @@ typedef enum {
     MAT_WOODS_FLOOR, // bare earth and twigs under the trees
     MAT_CLIFF,       // broken rock
     MAT_LOG,         // pine bark on the woods' fallen logs and stumps
+    // The bedroom (spec 13.40), and the backpack and the flashlight on its bed.
+    MAT_BEDDING,  // sheets and pillows: cotton gone the colour of old cream
+    MAT_QUILT,    // a jacquard bedspread, faded
+    MAT_CANVAS,   // the backpack's olive canvas
+    MAT_ANODISED, // the flashlight's black anodised aluminium
     MAT_COUNT
 } MatId;
 

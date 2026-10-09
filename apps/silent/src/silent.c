@@ -231,9 +231,9 @@ static CatVoice g_voice;
 enum { FAILING_DRIVE, FAILING_LIP, FAILING_LAMPS };
 static FailingLamp g_failing[FAILING_LAMPS];
 
-// The doors that open: each house's front door, and the home's bathroom door (spec 13.25) and
-// basement door (spec 13.31).
-enum { DOOR_HOME, DOOR_BATH, DOOR_BASEMENT, DOOR_MANSION, DOORS };
+// The doors that open: each house's front door, and the home's bathroom door (spec 13.25),
+// basement door (spec 13.31) and bedroom door (spec 13.40).
+enum { DOOR_HOME, DOOR_BATH, DOOR_BEDROOM, DOOR_BASEMENT, DOOR_MANSION, DOORS };
 static Door g_doors[DOORS];
 static bool g_door_hung[DOORS];
 static Prompt g_prompt;
@@ -428,10 +428,10 @@ static void build_gi(const vec3 origin) {
 }
 
 /*
- * Reflection probes in the home's kitchen, hall, living room and bathroom, its
- * stairwell down and its basement (spec 13.31), and in the mansion's dining room,
- * hall, great hall, study and the study's tower bay (spec 13.25), eleven in the
- * world: the engine keeps the nearest sixteen resident
+ * Reflection probes in the home's kitchen, hall, living room, bathroom and bedroom
+ * (spec 13.40), its stairwell down and its basement (spec 13.31), and in the
+ * mansion's dining room, hall, great hall, study and the study's tower bay (spec
+ * 13.25), twelve in the world: the engine keeps the nearest sixteen resident
  * and captures the mansion's as the drive brings them near. Without them every
  * metal and every wet surface indoors reflects the only environment there is,
  * the night sky, and the hood, the sink and the floor go black. The great hall's
@@ -462,14 +462,15 @@ typedef struct ProbeRoom {
     vec3 pos, lo, hi;
 } ProbeRoom;
 
-#define PROBE_ROOM_COUNT 11
+#define PROBE_ROOM_COUNT 12
 
 static void build_probes(void) {
     if (!g_scene->ibl || !g_scene->ibl->precomputed)
         return;
     const ProbeRoom PROBE_ROOMS[PROBE_ROOM_COUNT] = {
         // The home (spec 13.25): its kitchen, the hall the whole depth of the house, the living
-        // room and the bathroom.
+        // room, the bathroom and the bedroom (spec 13.40), whose probe stands over its floor
+        // between the bed's foot and the chest.
         {false,
          {2.48f, FLOOR_Y + 1.5f, 11.9f},
          {HALL_X1, FLOOR_Y, HOUSE_FRONT_Z + KIT_PANE_HALF},
@@ -486,6 +487,10 @@ static void build_probes(void) {
          {1.3f, FLOOR_Y + 1.4f, 15.2f},
          {HALL_X1, FLOOR_Y, KITCHEN_BACK_Z},
          {BATH_X1, CEIL_Y, HOME_SPLIT_Z}},
+        {false,
+         {1.8f, FLOOR_Y + 1.5f, 18.0f},
+         {HALL_X1, FLOOR_Y, HOME_SPLIT_Z},
+         {HOUSE_X1 - KIT_PANE_HALF, CEIL_Y, HOUSE_BACK_Z - KIT_PANE_HALF}},
         // Its stairwell, from the basement's slab to the ceiling, and the basement under the
         // whole house (spec 13.31), which overlap only where the stairwell is under the floor.
         // The stairwell's probe is clear of the bulb hanging in it.
@@ -781,6 +786,8 @@ static void on_init(Game* game) {
     load_seam(engine, "candles");
     g_door_hung[DOOR_HOME] = home_front_door(&g_doors[DOOR_HOME], engine, g_scene, em, physics);
     g_door_hung[DOOR_BATH] = home_bath_door(&g_doors[DOOR_BATH], engine, g_scene, em, physics);
+    g_door_hung[DOOR_BEDROOM] =
+        home_bedroom_door(&g_doors[DOOR_BEDROOM], engine, g_scene, em, physics);
     g_door_hung[DOOR_BASEMENT] =
         home_basement_door(&g_doors[DOOR_BASEMENT], engine, g_scene, em, physics);
     g_door_hung[DOOR_MANSION] =
