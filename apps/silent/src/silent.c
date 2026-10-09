@@ -917,6 +917,8 @@ static void on_init(Game* game) {
         backpack_menu_choose(&g_menu, g_args.open_backpack);
     }
     memcpy(g_finds.found, g_args.found, sizeof(g_finds.found));
+    if (g_args.map)
+        finds_have_map(&g_finds, MAP_TOWN);
     if (g_args.open_map)
         map_screen_show(&g_map_screen, MAP_TOWN, g_args.open_backpack != ITEM_NONE, g_finds.found);
     load_seam(engine, "backpack-hud");
@@ -1206,6 +1208,7 @@ static void take_map(void) {
     bool found = false;
     for (int i = 0; i < PLACE_COUNT; i++)
         found |= g_finds.found[i];
+    finds_have_map(&g_finds, MAP_TOWN);
     hud_think(&g_hud, found ? "A map of the town. I'll mark what I've found on it."
                             : "A map of the town. That'll come in handy.");
     hud_hint(&g_hud, "M   Map", HINT_SECONDS);
@@ -1505,7 +1508,8 @@ static void print_usage(const char* prog) {
     printf("      --open-map          Start with the map's screen open, over the backpack's\n"
            "                          with --open-backpack; the map had\n");
     printf("      --found LIST        Start with places found, written on the map when it\n"
-           "                          next opens: barricade,road-end,cabin or all\n");
+           "                          next opens: barricade,road-end,cabin or all (home\n"
+           "                          is found with the map)\n");
     printf("      --open-backpack ITEM  Start with the backpack's screen open on ITEM\n"
            "                          (flashlight, map), and the backpack had\n");
     printf("      --mute              Without sound\n");

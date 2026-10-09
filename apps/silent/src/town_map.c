@@ -9,6 +9,16 @@
 #define FIND_LEAVE 3.0f
 
 const PlaceSpec PLACES[PLACE_COUNT] = {
+    // The player's own house, circled the first time the map is opened, before anything they
+    // found: marked in the middle of its footprint, which the print's house is drawn from.
+    [PLACE_HOME] = {"home",
+                    MAP_TOWN,
+                    {0.0f, 0.0f, 0.0f, 0.0f},
+                    {0.5f * (HOUSE_OUT_X0 + HOUSE_OUT_X1), 0.5f * (HOUSE_OUT_Z0 + HOUSE_OUT_Z1)},
+                    NULL,
+                    NULL,
+                    NULL,
+                    true},
     // The cross street's north arm, closed: found a few steps short of its barricade, anywhere
     // across the arm, and marked on the barricade's line.
     [PLACE_BARRICADE] = {"barricade",
@@ -51,6 +61,8 @@ PlaceId place_by_id(const char* id) {
 PlaceId finds_arrive(Finds* f, const vec3 feet, bool* first) {
     PlaceId arrived = PLACE_NONE;
     for (int i = 0; i < PLACE_COUNT; i++) {
+        if (PLACES[i].known)
+            continue;
         const float* b = PLACES[i].box;
         const float d = plan_box_distance(feet[0], feet[2], b[0], b[1], b[2], b[3]);
         if (d <= 0.0f) {
@@ -65,4 +77,9 @@ PlaceId finds_arrive(Finds* f, const vec3 feet, bool* first) {
         }
     }
     return arrived;
+}
+
+void finds_have_map(Finds* f, MapId map) {
+    for (int i = 0; i < PLACE_COUNT; i++)
+        f->found[i] |= PLACES[i].known && PLACES[i].map == map;
 }
