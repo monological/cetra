@@ -389,6 +389,15 @@ to the bit; the flag pins it either way, which is how a headless run reaches the
 every one finishes, and 0.001 lets through exactly that and no more, the same on every run.
 silent's own default is 100 while its view is black and the engine's once it comes up; the flag
 pins it there too),
+`--capture-timing` (spec 13.42 — `Engine.capture_timing`: each GI volume prints what its sweep
+cost as it converges. A `gi-timing` row gives each part's CPU and wall milliseconds as `cpu/wall`
+-- the bursts' setup with their shadow pass, the shaded faces, the classification's back-face
+faces and the projections -- with the faces' draws and triangles; a `gi-sizes` row bins what
+each probe had in reach by the diameter it covers on a 16-pixel face, as `items/triangles`; and a
+`gi-heavy` row names the eight heaviest items in reach of the volume's centre, as
+`name:triangles@level/levels:pixels`. Each
+part is bracketed by a glFinish, so a timed sweep runs slower than an untimed one; compare `cpu`
+with `wall` for how much of a part is submission),
 `--road-width-at <frame:value>` (spec 11.68 — set every road's width mid-run. The `--layer-blend-at`
 idiom, and it exercises BOTH halves of the road path in one stroke: the segment block re-uploads
 and the composite cache's by-value key goes stale. A road is authored only in a `.cscn`, so this
@@ -999,7 +1008,13 @@ the first.
   which `game_run` waits for before the first frame. It is counted headless too, so
   `-x --loading-screen --capture-budget-ms 100` measures what a window would freeze for:
   `--loading-screen` keeps the screen up headless, and the budget paces the captures as a window
-  does while loading.
+  does while loading. The `lit` row is followed by the GI volumes' `stream gi` lines, each with a
+  digest of the volume's tiles, so two runs that captured the rooms alike can be told apart from
+  two that did not (spec 13.42). Headless the view comes up the frame the lighting is in, and that
+  frame prints both rows.
+- **`--capture-timing`:** each GI volume prints its `gi-timing`, `gi-sizes` and `gi-heavy` rows as it
+  converges (spec 13.42; the render app's flag of the same name). It slows the sweep, so time
+  `lit` without it.
 
 **The frame is one sample with jittered TAA, headless as well as windowed.** Two reasons it is not
 the engine's usual headless setup:

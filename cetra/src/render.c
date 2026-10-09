@@ -438,6 +438,12 @@ static const Rain* _rain_for_pass(const Engine* engine, const Scene* scene) {
     return rain;
 }
 
+// Where a draw site counts what it drew: the open profiler scope, or a timed capture's count,
+// which is the only one a capture has -- the profiler sits captures out.
+static SubmitStats* _submit_stats(const Engine* engine) {
+    return engine->capture_submit ? engine->capture_submit : profiler_submit(engine->profiler);
+}
+
 // Draws one item, carrying `instances` objects. Visibility is the caller's:
 // once a run is formed the chunk holds exactly these objects, so nothing here
 // may decline to draw.
@@ -490,7 +496,7 @@ static void _submit_item(const Engine* engine, Scene* scene, const DrawItem* ite
     // to it and 11.87 chose sharpening instead, with the paper on hand at
     // docs/papers/ so the comparison is a decision rather than a preference.
     bool a2c_capable = engine->msaa_samples > 1 && !engine->capturing;
-    SubmitStats* stats = profiler_submit(engine->profiler);
+    SubmitStats* stats = _submit_stats(engine);
 
     {
         Material* mat = mesh->material;
@@ -1078,7 +1084,7 @@ static bool _submit_depth_prepass(Engine* engine, Scene* scene, const DrawList* 
     if (!engine->depth_prepass_program || !scene || !list)
         return false;
 
-    SubmitStats* stats = profiler_submit(engine->profiler);
+    SubmitStats* stats = _submit_stats(engine);
     ShaderProgram* program = engine->depth_prepass_program;
     UniformManager* u = program->uniforms;
     SubmitState state = {0};
@@ -1216,7 +1222,7 @@ static void _submit_lanes(const Engine* engine, Scene* scene, const DrawList* li
     if (!scene || !list)
         return;
 
-    SubmitStats* stats = profiler_submit(engine->profiler);
+    SubmitStats* stats = _submit_stats(engine);
     InstanceChunk chunk;
 
     for (size_t i = 0; i < list->count; ++i) {
@@ -2722,7 +2728,7 @@ void render_late_items(Engine* engine, const Scene* scene, const PostFXLateDraw*
     qsort(order, count, sizeof(LateItem), _late_farther_first);
 
     profiler_scope_begin(engine->profiler, "late surfaces");
-    SubmitStats* stats = profiler_submit(engine->profiler);
+    SubmitStats* stats = _submit_stats(engine);
     const GLPassState pass = gl_pass_begin();
     glEnable(GL_BLEND);
     glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);

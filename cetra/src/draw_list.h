@@ -212,6 +212,10 @@ bool draw_item_visible(const DrawItem* item, const CullView* view);
 // uses -- a second bound would be a second thing to keep in agreement.
 bool draw_item_bounds(const DrawItem* item, const CullView* view, AABB* out);
 
+// How large the item looks from `eye`: its import bound's radius over its distance, the measure LOD
+// picks a level by. FLT_MAX with the eye inside the bound.
+float draw_item_projected(const DrawItem* item, const vec3 eye);
+
 // How far in front of the eye `view` puts the centre of the item's mesh, from its import bound:
 // what a back-to-front order sorts by.
 float draw_item_view_depth(const DrawItem* item, const mat4 view);

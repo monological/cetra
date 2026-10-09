@@ -199,6 +199,7 @@ typedef struct SilentArgs {
     int tile_stores;         // store cells for faces drawn over a copy; -1 = the engine's
     bool tiles_probe;        // print the cached shadow tiles at exit
     float capture_budget_ms; // the engine's capture budget, pinned; below 0 = silent's own
+    bool capture_timing;     // each GI volume prints what its sweep cost as it converges
     bool profiler;           // per-pass timing and submission counts, reported at exit
     const char* audio_dump;  // headless: write what the listener hears here
     bool no_woods;           // no trees behind the yards, nor what lies under them
@@ -685,30 +686,38 @@ static void load_seam(Engine* engine, const char* site) {
 // Under --startup-ms, the frames while the view is held, each the time since the last and the
 // longest the screen stood still in it: the first few by name, then the slowest of each; the
 // whole wait once the lighting is in, and once the view comes up, both from the end of on_init.
+// Headless the view comes up the frame the lighting is in, so that frame says both.
 static void trace_settling(Engine* engine, bool lit, bool up) {
     static double worst, worst_still;
     static bool lit_said, up_said;
-    const double now = glfwGetTime();
-    if (up) {
-        if (!up_said)
-            printf("startup-ms site=up ms=%.1f frames=%zu\n", (now - g_settle_start) * 1000.0,
-                   engine->total_frames);
-        up_said = true;
+    if (up_said)
         return;
+    const double now = glfwGetTime();
+    if (!up) {
+        const double still = engine_loading_screen_take_longest_wait(engine) * 1000.0;
+        const double ms = (now - g_load_mark) * 1000.0;
+        if (engine->total_frames <= 3) {
+            printf("startup-ms site=frame%zu ms=%.1f still=%.1f\n", engine->total_frames, ms,
+                   still);
+        } else {
+            worst = fmax(worst, ms);
+            worst_still = fmax(worst_still, still);
+        }
+        g_load_mark = now;
     }
-    const double still = engine_loading_screen_take_longest_wait(engine) * 1000.0;
-    const double ms = (now - g_load_mark) * 1000.0;
-    if (engine->total_frames <= 3) {
-        printf("startup-ms site=frame%zu ms=%.1f still=%.1f\n", engine->total_frames, ms, still);
-    } else {
-        worst = fmax(worst, ms);
-        worst_still = fmax(worst_still, still);
-    }
-    g_load_mark = now;
-    if (lit && !lit_said)
+    if (lit && !lit_said) {
         printf("startup-ms site=lit ms=%.1f frames=%zu worst-frame-ms=%.1f worst-still=%.1f\n",
                (now - g_settle_start) * 1000.0, engine->total_frames, worst, worst_still);
-    lit_said |= lit;
+        // What the volumes captured, as a digest of their tiles: two runs that photographed the
+        // rooms alike print the same one, whatever frames their captures landed in.
+        gi_world_probe_print(g_scene->gi, g_scene->lighting_atlas, (int)engine->total_frames);
+        lit_said = true;
+    }
+    if (up) {
+        printf("startup-ms site=up ms=%.1f frames=%zu\n", (now - g_settle_start) * 1000.0,
+               engine->total_frames);
+        up_said = true;
+    }
 }
 
 static void on_init(Game* game) {
@@ -972,6 +981,7 @@ static void on_init(Game* game) {
     g_play_capture_ms = engine->capture_budget_ms;
     if (g_args.capture_budget_ms < 0.0f && !engine->headless)
         engine->capture_budget_ms = LOADING_CAPTURE_MS;
+    engine->capture_timing = g_args.capture_timing;
 
     // In the kitchen looking down the room, or wherever --player-at put the player, on whatever
     // stands under them there -- the ground, a floor, the dock -- looking along its yaw.
@@ -1353,6 +1363,8 @@ static void print_usage(const char* prog) {
            "                          headless too; by default %.0f ms behind the black and\n"
            "                          the engine's after it, and no limit headless\n",
            (double)LOADING_CAPTURE_MS);
+    printf("      --capture-timing    Print what each GI volume's sweep cost, part by part, as\n"
+           "                          it converges; slows the sweep\n");
     printf("      --profiler          Per-pass timing and submission counts, at exit\n");
     printf("      --tile-views N      Shade every cached light from N views over its body\n"
            "                          rather than 8; 1 is its centre alone\n");
@@ -1522,6 +1534,8 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
             a->no_gi = true;
         } else if (!strcmp(s, "--capture-budget-ms") && has_next) {
             a->capture_budget_ms = (float)atof(argv[++i]);
+        } else if (!strcmp(s, "--capture-timing")) {
+            a->capture_timing = true;
         } else if (!strcmp(s, "--tile-views") && has_next) {
             a->tile_views = atoi(argv[++i]);
         } else if (!strcmp(s, "--tile-stores") && has_next) {

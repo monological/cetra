@@ -204,6 +204,8 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --gi-debug         Blit the probe atlas into the frame corner\n");
     fprintf(stderr, "      --capture-budget-ms <f>  Most of a frame the GI and probe captures "
                     "may take (default 8 windowed, no limit headless; 0 = no limit)\n");
+    fprintf(stderr, "      --capture-timing   Print what each GI volume's sweep cost, part by "
+                    "part, as it converges (slows the sweep)\n");
     fprintf(stderr, "      --stream-probe N   Print the streamed lighting's residency every N "
                     "frames\n");
     fprintf(stderr, "      --capture-hide <node>  Leave a node out of every GI and probe capture "
@@ -1296,6 +1298,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
         } else if (strcmp(argv[i], "--capture-budget-ms") == 0) {
             if (_ranged_arg(argc, argv, &i, 0.0f, 1000.0f, &args->capture_budget_ms) != 0)
                 return -1;
+        } else if (strcmp(argv[i], "--capture-timing") == 0) {
+            args->capture_timing = true;
         } else if (strcmp(argv[i], "--capture-hide") == 0 ||
                    strcmp(argv[i], "--remove-node") == 0) {
             const bool hide = strcmp(argv[i], "--capture-hide") == 0;
@@ -3774,6 +3778,7 @@ int main(int argc, char** argv) {
         engine->instancing_enabled = false;
     if (args.capture_budget_ms >= 0.0f)
         engine->capture_budget_ms = args.capture_budget_ms;
+    engine->capture_timing = args.capture_timing;
     if (args.no_frustum_cull)
         engine->frustum_cull_enabled = false;
     if (args.no_occlusion_cull)

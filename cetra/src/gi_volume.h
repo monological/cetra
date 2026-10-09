@@ -7,6 +7,7 @@
 #include <cglm/cglm.h>
 
 #include "mesh.h" // AABB
+#include "profiler.h"
 #include "program.h"
 #include "residency.h"
 
@@ -54,6 +55,24 @@ struct LightingAtlas;
 struct LightingAtlasLayout;
 struct CaptureBudget;
 
+// Diameters on a capture face, in pixels, that a timed sweep sorts what its probes see into: under
+// 1/4, 1/2, 1, 2, 4 and 8, and the rest.
+#define GI_SIZE_BINS 7
+
+// What a sweep cost while the engine's capture_timing is on, each part as CPU time to submit it
+// and wall time until the GPU had drawn it. Printed and cleared as the volume converges.
+typedef struct GISweepTiming {
+    double setup_cpu, setup_wall;       // the bursts' setup, their shadow pass included
+    double shaded_cpu, shaded_wall;     // the six shaded faces of each probe
+    double classify_cpu, classify_wall; // the six back-face depth faces of each probe
+    double project_cpu, project_wall;   // the tiles projected from them
+    int frames;                         // frames the sweep captured in
+    SubmitStats submit;                 // what the faces drew
+    // What each probe had in reach, by its diameter on a face: items, and their triangles.
+    size_t size_items[GI_SIZE_BINS];
+    size_t size_triangles[GI_SIZE_BINS];
+} GISweepTiming;
+
 typedef struct GIVolume {
     // SETTINGS: plain stores.
     //
@@ -100,6 +119,8 @@ typedef struct GIVolume {
     // claim is only worth making if it is checkable, and this is the check: it
     // must stop advancing the moment the volume converges.
     int captures_total;
+
+    GISweepTiming timing; // kept only while the engine's capture_timing is on
 
     bool failed; // One-shot: allocation is not retried every frame
 } GIVolume;

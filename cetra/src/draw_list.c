@@ -218,6 +218,14 @@ static void item_world_bounds(const Mesh* mesh, const SceneNode* node, vec3 out_
     }
 }
 
+float draw_item_projected(const DrawItem* item, const vec3 eye) {
+    vec3 centre = {0.0f, 0.0f, 0.0f};
+    float radius = 0.0f;
+    item_world_bounds(item->mesh, item->node, centre, &radius);
+    const float distance = glm_vec3_distance((float*)eye, centre);
+    return distance > radius ? radius / distance : FLT_MAX;
+}
+
 float draw_item_view_depth(const DrawItem* item, const mat4 view) {
     vec3 centre = {0.0f, 0.0f, 0.0f}, eye = {0.0f, 0.0f, 0.0f};
     item_world_bounds(item->mesh, item->node, centre, NULL);

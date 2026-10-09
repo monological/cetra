@@ -3,8 +3,10 @@
 #include <string.h>
 
 #include "gi_volume.h"
+#include "draw_list.h"
 #include "engine.h"
 #include "ibl.h"
+#include "intersect.h"
 #include "lighting_atlas.h"
 #include "profiler.h"
 #include "render.h"
@@ -266,6 +268,129 @@ static void gi_project_tile(GIVolume* gi, const LightingAtlas* atlas, AtlasRect 
         glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 }
 
+// A part of a capture, timed while the engine asks: from a GPU drained of whatever came before,
+// the CPU time to submit the part, and the wall time until the GPU has drawn it.
+static double gi_clock_start(const struct Engine* engine) {
+    if (!engine->capture_timing)
+        return 0.0;
+    glFinish();
+    return glfwGetTime();
+}
+
+static void gi_clock_stop(const struct Engine* engine, double t0, double* cpu, double* wall) {
+    if (!engine->capture_timing)
+        return;
+    const double submitted = glfwGetTime();
+    glFinish();
+    *cpu += submitted - t0;
+    *wall += glfwGetTime() - t0;
+}
+
+// Whether a capture at `pos` with far plane `far` draws the item: a lane a capture draws, not
+// hidden from captures, and a bound meeting the cube the six faces together reach.
+static bool gi_item_in_reach(const DrawItem* item, const struct Wind* wind, const vec3 pos,
+                             float far) {
+    const CullView view = {.wind = wind, .capture = true};
+    if (item->lane > DRAW_LANE_TRANSMISSIVE || !draw_item_visible(item, &view))
+        return false;
+    AABB box;
+    if (!draw_item_bounds(item, &view, &box))
+        return true;
+    const AABB reach = {{pos[0] - far, pos[1] - far, pos[2] - far},
+                        {pos[0] + far, pos[1] + far, pos[2] + far}};
+    AABB world = {{0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}};
+    aabb_transform(box.min, box.max, item->node->global_transform, world.min, world.max);
+    return aabb_overlaps(&world, &reach);
+}
+
+// The triangles an item draws at its level.
+static size_t gi_item_triangles(const DrawItem* item) {
+    GLsizei indices = 0;
+    const void* offset = NULL;
+    mesh_lod_range(item->mesh, item->lod, &indices, &offset);
+    return (size_t)indices / 3;
+}
+
+// The diameter an item covers on a capture face, in pixels: a 90-degree face of N pixels is N/2
+// pixels per unit of tan, so a bound of radius r at distance d covers N * r / d of them across.
+static float gi_item_pixels(const DrawItem* item, const vec3 pos) {
+    return (float)GI_CAPTURE_FACE * draw_item_projected(item, pos);
+}
+
+// What a probe at `pos` has in reach, by the diameter each item covers on a face, which is what
+// cutting small things from a capture would be judged by. An item drawn in two faces is counted
+// once.
+static void gi_count_sizes(GISweepTiming* t, const DrawList* list, const struct Wind* wind,
+                           const vec3 pos, float far) {
+    if (!list)
+        return;
+    static const float bins[GI_SIZE_BINS - 1] = {0.25f, 0.5f, 1.0f, 2.0f, 4.0f, 8.0f};
+    for (size_t i = 0; i < list->count; ++i) {
+        const DrawItem* item = &list->items[i];
+        if (!gi_item_in_reach(item, wind, pos, far))
+            continue;
+        const float px = gi_item_pixels(item, pos);
+        int bin = 0;
+        while (bin < GI_SIZE_BINS - 1 && px >= bins[bin])
+            bin++;
+        t->size_items[bin]++;
+        t->size_triangles[bin] += gi_item_triangles(item);
+    }
+}
+
+// The heaviest things in reach of a probe at the volume's centre, by the triangles it draws them
+// with: what the faces' triangle count is made of. Each as name:triangles@level/levels:pixels.
+static void gi_print_heaviest(const GIVolume* gi, size_t index, const DrawList* list,
+                              const struct Wind* wind) {
+    enum { HEAVY = 8 };
+    const DrawItem* top[HEAVY] = {0};
+    size_t top_tris[HEAVY] = {0};
+    vec3 centre = {0.0f, 0.0f, 0.0f};
+    for (int c = 0; c < 3; ++c)
+        centre[c] = gi->grid_min[c] + 0.5f * gi->spacing[c] * (float)gi->counts[c];
+    for (size_t i = 0; list && i < list->count; ++i) {
+        const DrawItem* item = &list->items[i];
+        if (!gi_item_in_reach(item, wind, centre, gi->far_clip))
+            continue;
+        const size_t tris = gi_item_triangles(item);
+        int at = HEAVY;
+        while (at > 0 && tris > top_tris[at - 1])
+            at--;
+        if (at == HEAVY)
+            continue;
+        memmove(&top[at + 1], &top[at], sizeof(top[0]) * (HEAVY - 1 - at));
+        memmove(&top_tris[at + 1], &top_tris[at], sizeof(top_tris[0]) * (HEAVY - 1 - at));
+        top[at] = item;
+        top_tris[at] = tris;
+    }
+    printf("gi-heavy volume=%zu", index);
+    for (int k = 0; k < HEAVY && top[k]; ++k)
+        printf(" %s:%zu@%d/%d:%.1fpx", top[k]->node->name ? top[k]->node->name : "unnamed",
+               top_tris[k], top[k]->lod, top[k]->mesh->lod_levels, gi_item_pixels(top[k], centre));
+    printf("\n");
+    fflush(stdout);
+}
+
+// The sweep's cost, as it converges, and cleared for the next.
+static void gi_timing_print(GIVolume* gi, size_t index) {
+    const GISweepTiming* t = &gi->timing;
+    const double ms = 1000.0;
+    printf("gi-timing volume=%zu probes=%d frames=%d ms=%.1f setup-ms=%.1f/%.1f "
+           "shaded-ms=%.1f/%.1f classify-ms=%.1f/%.1f project-ms=%.1f/%.1f draws=%zu tris=%zu\n",
+           index, gi_probe_count(gi), t->frames,
+           (t->setup_wall + t->shaded_wall + t->classify_wall + t->project_wall) * ms,
+           t->setup_cpu * ms, t->setup_wall * ms, t->shaded_cpu * ms, t->shaded_wall * ms,
+           t->classify_cpu * ms, t->classify_wall * ms, t->project_cpu * ms, t->project_wall * ms,
+           t->submit.draws, t->submit.triangles);
+    static const char* names[GI_SIZE_BINS] = {"<0.25", "<0.5", "<1", "<2", "<4", "<8", ">=8"};
+    printf("gi-sizes volume=%zu", index);
+    for (int b = 0; b < GI_SIZE_BINS; ++b)
+        printf(" px%s=%zu/%zu", names[b], t->size_items[b], t->size_triangles[b]);
+    printf("\n");
+    fflush(stdout);
+    gi->timing = (GISweepTiming){0};
+}
+
 // Capture up to `most` probes of a resident volume into its slot, 0 = every one left, while the
 // frame's capture budget allows: an `opening` sweep, into a slot nothing was captured in, or a
 // re-convergence over the texels there. Inside a capture burst the caller holds open, with
@@ -282,6 +407,9 @@ static int gi_volume_sweep(GIVolume* gi, struct Engine* engine, struct Scene* sc
         most = gi->dirty_count;
     // An opening capture is taken outright; a re-convergence blends over what is there.
     const float hysteresis = opening ? 0.0f : 0.97f;
+    GISweepTiming* timing = &gi->timing;
+    if (engine->capture_timing)
+        engine->capture_submit = &timing->submit;
 
     int taken = 0;
     for (; taken < most; ++taken) {
@@ -301,12 +429,17 @@ static int gi_volume_sweep(GIVolume* gi, struct Engine* engine, struct Scene* sc
 
         vec3 pos = {0};
         gi_probe_position(gi, probe, pos);
+        if (engine->capture_timing)
+            gi_count_sizes(timing, scene->draw_list, scene->wind, pos, gi->far_clip);
+        double t0 = gi_clock_start(engine);
         scene_capture_faces(engine, scene, scene->ibl, pos, gi->capture_color, gi->capture_depth,
                             GI_CAPTURE_FACE, GI_NEAR_CLIP, gi->far_clip, SCENE_FACES_SHADED, 0, 6);
+        gi_clock_stop(engine, t0, &timing->shaded_cpu, &timing->shaded_wall);
 
         // Projection is a fullscreen-quad pass; depth and culling would only get
         // in its way. Both go back as found: this runs inside the frame, after
         // the frame top has set the culling the rest of the frame draws with.
+        t0 = gi_clock_start(engine);
         GLboolean cull_was = glIsEnabled(GL_CULL_FACE);
         glDisable(GL_DEPTH_TEST);
         glDisable(GL_CULL_FACE);
@@ -317,6 +450,7 @@ static int gi_volume_sweep(GIVolume* gi, struct Engine* engine, struct Scene* sc
         glEnable(GL_DEPTH_TEST);
         if (cull_was)
             glEnable(GL_CULL_FACE);
+        gi_clock_stop(engine, t0, &timing->project_cpu, &timing->project_wall);
 
         // The same probe again with only back faces drawn, against the front faces' depth
         // still held in capture_depth: a back face nearer than every front face in a direction
@@ -325,9 +459,12 @@ static int gi_volume_sweep(GIVolume* gi, struct Engine* engine, struct Scene* sc
         // change of light does not move, so only the opening sweep asks -- and depth is all it
         // reads, so depth is all this capture draws.
         if (gi->classify && opening) {
+            t0 = gi_clock_start(engine);
             scene_capture_faces(engine, scene, scene->ibl, pos, gi->capture_color,
                                 gi->classify_depth, GI_CAPTURE_FACE, GI_NEAR_CLIP, gi->far_clip,
                                 SCENE_FACES_BACK_DEPTH, 0, 6);
+            gi_clock_stop(engine, t0, &timing->classify_cpu, &timing->classify_wall);
+            t0 = gi_clock_start(engine);
             glDisable(GL_DEPTH_TEST);
             glDisable(GL_CULL_FACE);
             glBindVertexArray(gi->quad_vao);
@@ -336,8 +473,12 @@ static int gi_volume_sweep(GIVolume* gi, struct Engine* engine, struct Scene* sc
             glEnable(GL_DEPTH_TEST);
             if (cull_was)
                 glEnable(GL_CULL_FACE);
+            gi_clock_stop(engine, t0, &timing->project_cpu, &timing->project_wall);
         }
     }
+    engine->capture_submit = NULL;
+    if (taken > 0)
+        timing->frames++;
 
     gi->captures_total += taken;
     if (gi->dirty_count <= 0)
@@ -500,7 +641,11 @@ void gi_world_update(GIWorld* world, struct Engine* engine, struct Scene* scene,
     // camera-fit cascades it needs. IRRADIANCE: what this bakes is added to the analytic direct
     // term, so a derived emissive panel's own surface must not appear in it (render.h).
     SceneCaptureState saved_capture;
+    // The burst's setup is the nearest volume's to account for: the one that asked for it.
+    GISweepTiming* first = &world->volumes[due[0]]->timing;
+    const double t0 = gi_clock_start(engine);
     scene_capture_begin(engine, scene, SCENE_CAPTURE_IRRADIANCE, &saved_capture);
+    gi_clock_stop(engine, t0, &first->setup_cpu, &first->setup_wall);
 
     // Every sweep is paced by the frame's capture budget (spec 13.32), the opening one too: a
     // frame spent sweeping a whole volume froze the window for seconds, at load and walking into
@@ -522,6 +667,10 @@ void gi_world_update(GIWorld* world, struct Engine* engine, struct Scene* scene,
             rate_left -= swept;
         if (gi->dirty_count <= 0 && opening)
             residency_loaded(item);
+        if (swept > 0 && gi->dirty_count <= 0 && engine->capture_timing) {
+            gi_timing_print(gi, (size_t)due[k]);
+            gi_print_heaviest(gi, (size_t)due[k], scene->draw_list, scene->wind);
+        }
     }
 
     scene_capture_end(engine, scene, &saved_capture);
