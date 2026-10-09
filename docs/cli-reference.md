@@ -398,6 +398,9 @@ each probe had in reach by the diameter it covers on a 16-pixel face, as `items/
 `name:triangles@level/levels:pixels`. Each
 part is bracketed by a glFinish, so a timed sweep runs slower than an untimed one; compare `cpu`
 with `wall` for how much of a part is submission),
+`--gi-cull-pixels <f>` (spec 13.42, render and silent — the GI world's `cull_pixels`: a GI probe
+leaves out what spans fewer than f pixels across its 16-pixel faces, unless it gives off light or
+hangs under a node set `capture_always`. 0, the default, takes everything),
 `--road-width-at <frame:value>` (spec 11.68 — set every road's width mid-run. The `--layer-blend-at`
 idiom, and it exercises BOTH halves of the road path in one stroke: the segment block re-uploads
 and the composite cache's by-value key goes stale. A road is authored only in a `.cscn`, so this

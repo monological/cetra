@@ -333,17 +333,27 @@ static const char* _refusal(const Mesh* mesh, const Scene* scene, const Animatio
     return NULL;
 }
 
+// Whether a material gives off light of its own, which a GI capture must see however small it is.
+static bool emits(const Material* mat) {
+    vec3 factor = {0.0f, 0.0f, 0.0f};
+    material_emissive_factor(mat, factor);
+    return glm_vec3_max(factor) > 0.0f;
+}
+
 // Depth-first, children left to right, a node's meshes before its gizmo --
 // the order the two recursive walks produced between them. `inherited` is the
 // nearest ancestor's pose, which a node without one takes, `hidden` whether
-// an ancestor is left out of captures, and `reach` the nearest draw distance.
+// an ancestor is left out of captures, `always` whether one is drawn into every
+// GI capture, and `reach` the nearest draw distance.
 static bool append_node(DrawList* list, Scene* scene, SceneNode* node, const LodSelect* lod,
-                        bool gizmos, const AnimationState* inherited, bool hidden, float reach) {
+                        bool gizmos, const AnimationState* inherited, bool hidden, bool always,
+                        float reach) {
     if (!node)
         return true;
 
     const AnimationState* pose = node->pose ? node->pose : inherited;
     hidden = hidden || node->capture_hidden;
+    always = always || node->capture_always;
     if (node->draw_distance > 0.0f)
         reach = node->draw_distance;
 
@@ -376,7 +386,8 @@ static bool append_node(DrawList* list, Scene* scene, SceneNode* node, const Lod
                          .node = node,
                          .pose = mesh->is_skinned ? pose : NULL,
                          .lod = select_lod(mesh, node, lod),
-                         .beyond = past_reach(mesh, node, lod, reach)};
+                         .beyond = past_reach(mesh, node, lod, reach),
+                         .capture_always = always || emits(mesh->material)};
         classify(mesh, scene->wind, &item.lane, &item.flags);
         // A pose, or a node said to move: either way a capture would freeze it into a
         // picture taken while the game runs. A node said to move is not still either, so a
@@ -396,7 +407,7 @@ static bool append_node(DrawList* list, Scene* scene, SceneNode* node, const Lod
     }
 
     for (size_t i = 0; i < node->children_count; ++i) {
-        if (!append_node(list, scene, node->children[i], lod, gizmos, pose, hidden, reach))
+        if (!append_node(list, scene, node->children[i], lod, gizmos, pose, hidden, always, reach))
             return false;
     }
     return true;
@@ -414,12 +425,17 @@ bool draw_list_build(DrawList* list, Scene* scene, uint64_t stamp, const LodSele
     memset(list->lane_count, 0, sizeof(list->lane_count));
     list->occluder_flag_count = 0;
     list->valid = false;
-    if (!append_node(list, scene, scene->root_node, lod, gizmos, NULL, false, 0.0f))
+    if (!append_node(list, scene, scene->root_node, lod, gizmos, NULL, false, false, 0.0f))
         return false;
 
     list->stamp = stamp;
     list->valid = true;
     return true;
+}
+
+void draw_list_select_lod(DrawList* list, const LodSelect* lod) {
+    for (size_t i = 0; list && i < list->count; ++i)
+        list->items[i].lod = select_lod(list->items[i].mesh, list->items[i].node, lod);
 }
 
 // The box a skinned mesh's POSE occupies, in object space: each bone's own
@@ -512,6 +528,9 @@ bool draw_item_visible(const DrawItem* item, const CullView* view) {
     if (view->capture && (item->flags & DRAW_CAPTURE_HIDDEN))
         return false;
     if (view->distance && item->beyond)
+        return false;
+    if (view->min_projected > 0.0f && !item->capture_always &&
+        draw_item_projected(item, view->eye) < view->min_projected)
         return false;
     if (!view->frustum)
         return true;

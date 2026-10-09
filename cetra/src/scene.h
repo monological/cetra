@@ -101,6 +101,10 @@ typedef struct SceneNode {
     // (spec 13.24): a thing that moves, frozen into a picture taken while the game runs.
     // Skinned meshes are left out without asking.
     bool capture_hidden;
+    // true = this node and its subtree are drawn into every GI capture however small they look
+    // from the probe (spec 13.42), where the GI world's cull_pixels would otherwise leave them
+    // out. An emitter is drawn whatever this says.
+    bool capture_always;
     // Metres from the camera past which the camera draws neither this node's meshes nor any
     // under it, measured to each mesh's bound (spec 13.38); 0 = no limit of its own, so a node
     // takes its nearest ancestor's. Shadows and captures still take them.

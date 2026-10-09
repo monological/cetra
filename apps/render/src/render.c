@@ -206,6 +206,8 @@ static void print_usage(const char* prog) {
                     "may take (default 8 windowed, no limit headless; 0 = no limit)\n");
     fprintf(stderr, "      --capture-timing   Print what each GI volume's sweep cost, part by "
                     "part, as it converges (slows the sweep)\n");
+    fprintf(stderr, "      --gi-cull-pixels <f>  A GI probe leaves out what spans fewer pixels "
+                    "across its 16-pixel faces (0..16; default 0, everything)\n");
     fprintf(stderr, "      --stream-probe N   Print the streamed lighting's residency every N "
                     "frames\n");
     fprintf(stderr, "      --capture-hide <node>  Leave a node out of every GI and probe capture "
@@ -1300,6 +1302,9 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 return -1;
         } else if (strcmp(argv[i], "--capture-timing") == 0) {
             args->capture_timing = true;
+        } else if (strcmp(argv[i], "--gi-cull-pixels") == 0) {
+            if (_ranged_arg(argc, argv, &i, 0.0f, 16.0f, &args->gi_cull_pixels) != 0)
+                return -1;
         } else if (strcmp(argv[i], "--capture-hide") == 0 ||
                    strcmp(argv[i], "--remove-node") == 0) {
             const bool hide = strcmp(argv[i], "--capture-hide") == 0;
@@ -5016,6 +5021,7 @@ int main(int argc, char** argv) {
     if (scene->gi) {
         if (args.gi_rate >= 0)
             scene->gi->rate = args.gi_rate;
+        scene->gi->cull_pixels = args.gi_cull_pixels;
         scene->gi->debug_atlas = args.gi_debug != 0;
     }
 

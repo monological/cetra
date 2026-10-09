@@ -935,10 +935,8 @@ void engine_resolve_material_variants(Engine* engine, Scene* scene) {
 // GL. A GPU scope would refuse the second open and time only the first, which
 // on a scene that re-parents nodes between the two calls is the wrong one:
 // both flatten for real, and the row would report half the cost.
-void engine_build_draw_list(Engine* engine, Scene* scene) {
-    if (!engine || !scene)
-        return;
-    profiler_cpu_scope_begin(engine->profiler, "draw list build");
+// How the camera picks its levels.
+static LodSelect _camera_lod(const Engine* engine) {
     LodSelect lod;
     lod.enabled = engine->lod_enabled;
     lod.bias = engine->lod_bias;
@@ -949,6 +947,14 @@ void engine_build_draw_list(Engine* engine, Scene* scene) {
     } else {
         glm_vec3_zero(lod.eye);
     }
+    return lod;
+}
+
+void engine_build_draw_list(Engine* engine, Scene* scene) {
+    if (!engine || !scene)
+        return;
+    profiler_cpu_scope_begin(engine->profiler, "draw list build");
+    const LodSelect lod = _camera_lod(engine);
     draw_list_build(scene->draw_list, scene, engine->total_frames ^ (scene_graph_epoch() << 32),
                     &lod, engine->show_xyz);
     profiler_cpu_scope_end(engine->profiler);
@@ -1444,6 +1450,14 @@ static CullView _scene_pass_prepare(Engine* engine, Scene* scene, Frustum* frust
     // The camera's own pass honours a node's draw distance; a capture, which re-enters here with
     // its own camera, does not -- the distance was measured from the camera, not from it.
     cull.distance = !cull.capture;
+    // A GI probe leaves out what is too small to see from it (spec 13.42); the shaded faces and
+    // the wall test both come through here, so they leave out the same. A reflection probe is a
+    // mirror and takes everything.
+    if (engine->capturing && engine->capture_kind == SCENE_CAPTURE_IRRADIANCE && scene->gi &&
+        scene->gi->cull_pixels > 0.0f) {
+        cull.min_projected = scene->gi->cull_pixels / (float)GI_CAPTURE_FACE;
+        glm_vec3_copy(engine->camera->position, cull.eye);
+    }
 
     // Flatten once. Cube captures re-enter here once a face with their own
     // camera; the stamp makes those reuses rather than rebuilds, which is right
@@ -2262,11 +2276,24 @@ void scene_capture_faces(Engine* engine, Scene* scene, struct IBLResources* ibl,
     mat4 views[6];
     ibl_capture_views((float*)position, views);
 
+    // Flattened from the camera, if this frame has not been yet: what the list settles from the
+    // eye that is not a level -- a node's draw distance -- belongs to the camera's pass.
+    engine_build_draw_list(engine, scene);
+
     // Per-face shading is evaluated from the capture point
     glm_vec3_copy((float*)position, camera->position);
     camera->near_clip = near_clip;
     camera->far_clip = far_clip;
     glm_perspective(glm_rad(90.0f), 1.0f, near_clip, far_clip, engine->projection_matrix);
+
+    // Each item at the level its size from the capture point calls for at the capture's
+    // resolution (spec 13.42), where the camera's are for the window and would make what a probe
+    // captured depend on where the camera stood. LOD_SWITCH holds no resolution, so a face is read
+    // as a 1080-line, 60-degree view, 935 pixels to a unit of tan, against its own face_size / 2.
+    LodSelect capture_lod = {.bias = engine->lod_bias * (float)face_size / (2.0f * 935.0f),
+                             .enabled = engine->lod_enabled};
+    glm_vec3_copy((float*)position, capture_lod.eye);
+    draw_list_select_lod(scene->draw_list, &capture_lod);
 
     // The lights the shaded faces read, gathered once for them: everything reaching what the
     // capture sees, which is out to its far plane along each axis, so to far * sqrt(3) at a
@@ -2334,6 +2361,8 @@ void scene_capture_faces(Engine* engine, Scene* scene, struct IBLResources* ibl,
     glm_vec3_copy(saved_cam_pos, camera->position);
     camera->near_clip = saved_near;
     camera->far_clip = saved_far;
+    const LodSelect camera_lod = _camera_lod(engine);
+    draw_list_select_lod(scene->draw_list, &camera_lod);
     engine->refraction_enabled = saved_refraction;
     engine->capturing = saved_capturing;
     engine->current_render_mode = saved_render_mode;

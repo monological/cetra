@@ -96,6 +96,9 @@ typedef struct DrawItem {
     // `occluded`, settled at build from the camera's eye, and read only through a CullView
     // that set `distance`. Zero with no camera to measure from.
     uint8_t beyond;
+    // Never cut from a GI capture for being small (spec 13.42): an emitter, whose light a
+    // capture must see however small it looks, or under a node set capture_always.
+    uint8_t capture_always;
 } DrawItem;
 
 typedef struct DrawList {
@@ -159,6 +162,10 @@ void scene_graph_touched(void);
 bool draw_list_build(DrawList* list, struct Scene* scene, uint64_t stamp, const LodSelect* lod,
                      bool gizmos);
 
+// Every item's level chosen again, from `lod`, leaving the list otherwise as built: for a capture,
+// which draws from its own eye at its own resolution, and to give the camera's levels back after.
+void draw_list_select_lod(DrawList* list, const LodSelect* lod);
+
 // What a pass culls against: its frustum, plus the wind field that moves
 // geometry off the import bounds a frustum test would otherwise use. (The
 // other displacer, a skinned mesh's pose, rides on the item since spec 12.1 --
@@ -191,6 +198,10 @@ typedef struct CullView {
     // node's draw distance is the camera's to honour; a light's volume or a capture that took
     // it would leave a shadow or a reflection missing for an eye standing far off.
     bool distance;
+    // > 0 only on a GI capture's view (spec 13.42): an item whose bound looks smaller than this
+    // from `eye`, as draw_item_projected measures it, is not drawn unless it is capture_always.
+    float min_projected;
+    vec3 eye;
 } CullView;
 
 // Whether this item survives the frustum.

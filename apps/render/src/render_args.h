@@ -231,6 +231,7 @@ typedef struct {
     int gi_rate;              // Probes captured per frame while dirty (0 = default)
     float capture_budget_ms;  // Engine capture_budget_ms (<0 = leave the engine's)
     bool capture_timing;      // Engine capture_timing
+    float gi_cull_pixels;     // The GI world's cull_pixels
     int stream_probe;         // Print the streamed lighting's residency every N frames
     // Nodes by name: left out of every capture (spec 13.24), or taken out of the scene.
     const char* capture_hide[RENDER_NODE_NAMES_MAX];

@@ -133,6 +133,9 @@ typedef struct GIWorld {
     bool enabled;     // false = no volume is captured or sampled
     int rate;         // probes a frame, across the world, while swept volumes re-converge; 0 = all
     bool debug_atlas; // draw the lighting atlas over the composited frame
+    // A probe leaves out what spans fewer pixels than this across a capture face (spec 13.42),
+    // unless it gives off light or is under a node set capture_always; 0 = everything.
+    float cull_pixels;
 
     // ENGINE-OWNED: read, never write.
     GIVolume** volumes; // owned; scene_add_gi_volume. One per residency item, in its order
