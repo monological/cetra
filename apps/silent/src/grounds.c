@@ -114,20 +114,15 @@ static void gate_and_fence(Kit* kit, unsigned int* rng) {
 
 // The graveyard: a low rubble wall round a plot on the slope beside the drive's switchback, its
 // way in facing the drive, and the stones inside leaning every way the ground has let them.
-#define YARD_X  70.0f
-#define YARD_Z  42.0f
-#define YARD_HX 4.5f
-#define YARD_HZ 3.5f
-
 static void graveyard(Kit* kit, unsigned int* rng) {
     // The wall in short lengths, each on the ground under it.
     const float step = 1.0f;
     const struct {
         float ax, az, bx, bz;
-    } sides[] = {{-YARD_HX, -YARD_HZ, YARD_HX, -YARD_HZ},
-                 {YARD_HX, -YARD_HZ, YARD_HX, YARD_HZ},
-                 {YARD_HX, YARD_HZ, -YARD_HX, YARD_HZ},
-                 {-YARD_HX, YARD_HZ, -YARD_HX, -YARD_HZ}};
+    } sides[] = {{-GRAVEYARD_HX, -GRAVEYARD_HZ, GRAVEYARD_HX, -GRAVEYARD_HZ},
+                 {GRAVEYARD_HX, -GRAVEYARD_HZ, GRAVEYARD_HX, GRAVEYARD_HZ},
+                 {GRAVEYARD_HX, GRAVEYARD_HZ, -GRAVEYARD_HX, GRAVEYARD_HZ},
+                 {-GRAVEYARD_HX, GRAVEYARD_HZ, -GRAVEYARD_HX, -GRAVEYARD_HZ}};
     for (int s = 0; s < 4; s++) {
         const float len = hypotf(sides[s].bx - sides[s].ax, sides[s].bz - sides[s].az);
         const float yaw = atan2f(sides[s].bx - sides[s].ax, sides[s].bz - sides[s].az);
@@ -136,8 +131,8 @@ static void graveyard(Kit* kit, unsigned int* rng) {
             if (s == 1 && t > 2.5f && t < 4.5f)
                 continue;
             const float m = (t + 0.5f * step) / len;
-            const float x = YARD_X + sides[s].ax + (sides[s].bx - sides[s].ax) * m;
-            const float z = YARD_Z + sides[s].az + (sides[s].bz - sides[s].az) * m;
+            const float x = GRAVEYARD_X + sides[s].ax + (sides[s].bx - sides[s].ax) * m;
+            const float z = GRAVEYARD_Z + sides[s].az + (sides[s].bz - sides[s].az) * m;
             const float y = land_height(x, z);
             kit_box(kit, MAT_FOUNDATION, (vec3){x, y + 0.25f, z},
                     (vec3){0.2f, 0.45f + 0.1f * kit_xrnd(rng), 0.5f * step + 0.02f}, yaw, true);
@@ -146,8 +141,9 @@ static void graveyard(Kit* kit, unsigned int* rng) {
     // Two rows of stones, one of them a cross.
     for (int i = 0; i < 9; i++) {
         const int column = i % 5, row = i / 5;
-        const float x = YARD_X - YARD_HX + 1.2f + (float)column * 1.6f + 0.3f * kit_xrnd(rng);
-        const float z = YARD_Z - 1.4f + (float)row * 2.4f + 0.3f * kit_xrnd(rng);
+        const float x =
+            GRAVEYARD_X - GRAVEYARD_HX + 1.2f + (float)column * 1.6f + 0.3f * kit_xrnd(rng);
+        const float z = GRAVEYARD_Z - 1.4f + (float)row * 2.4f + 0.3f * kit_xrnd(rng);
         const vec3 base = {x, land_height(x, z) - 0.15f, z};
         const float yaw = 0.15f * (kit_xrnd(rng) - 0.5f);
         const float lean = 0.35f * (kit_xrnd(rng) - 0.5f);

@@ -32,12 +32,12 @@ static const float DRIVE_POINTS[][2] = {
     {104.0f, 33.5f},         {MANSION_X + 0.5f * (PATH_X0 + PATH_X1), GROUNDS_Z0 - 0.4f},
 };
 
-// The street's road level at its start, the grounds at its end, a climb between that eases in
-// and out, and 2.6 m of asphalt either side.
+// The street's road level at its start, the grounds at its end, and a climb between that eases in
+// and out.
 static const RoadDesc DRIVE = {
     .points = DRIVE_POINTS,
     .point_count = (int)(sizeof(DRIVE_POINTS) / sizeof(DRIVE_POINTS[0])),
-    .half = 2.6f,
+    .half = DRIVE_HALF,
     .shoulder = 4.0f,
     .y0 = ROAD_Y,
     .y1 = MANSION_Y,

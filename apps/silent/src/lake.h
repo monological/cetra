@@ -31,6 +31,11 @@ float lake_shore_distance(float x, float z);
 // How far (x, z) is from the track's centre line.
 float lake_track_distance(float x, float z);
 
+// The shoreline on bearing `theta` from the lake's middle, and the track's centre line at `t` of
+// its length, 0 on the cross street's asphalt and 1 on the cabin's pad: what a map draws.
+void lake_shore_point(float theta, float* x, float* z);
+void lake_track_point(float t, float* x, float* z);
+
 // The track's surface from the cross street's asphalt to the cabin's pad, and the pad.
 void lake_ground_build(Kit* kit);
 
