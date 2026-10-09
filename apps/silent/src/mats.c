@@ -1,14 +1,17 @@
 #include <assert.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "cetra/loading_screen.h"
 #include "cetra/material.h"
 #include "cetra/postfx.h"
 #include "cetra/program.h"
+#include "cetra/shader_hook.h"
 #include "cetra/texture.h"
 #include "cetra/util.h"
 
 #include "mats.h"
+#include "silent_shaders.h"
 
 /*
  * The photo sets under assets/textures/silent/, as tools/fetch_textures.py
@@ -400,6 +403,8 @@ static const MatSpec SPECS[MAT_COUNT] = {
         {"upholstery", "dirty_carpet", {0.62f, 0.44f, 0.36f}, 1.0f, 0.0f, 0.8f, .grime = 0.4f},
     [MAT_MIRROR] =
         {"mirror", "Smear008", {0.85f, 0.86f, 0.84f}, 0.06f, 1.0f, 0.4f, true, .grime = 0.6f},
+    // Its glow is its bulbs' light through it (mats_shade_bulb), and this flat one only where
+    // its hook will not build.
     [MAT_LAMPSHADE] = {"lampshade",
                        "fabric_pattern_05",
                        {0.9f, 0.82f, 0.62f},
@@ -584,6 +589,39 @@ _Static_assert(MAT_COUNT <= KIT_MAX_MATERIALS, "every MatId needs a kit slot");
 void mats_kit(Kit* kit, Engine* engine, Scene* scene) {
     kit_init(kit, scene, NULL, NULL);
     mats_register(kit, engine, scene);
+}
+
+// The bulbs lampshade.glsl reads, and of the light reaching its cloth what passes through: a thin
+// cotton's.
+#define SHADE_BULBS   3
+#define SHADE_THROUGH 0.3f
+
+void mats_shade_bulb(Kit* kit, const vec3 at, float candela, const vec3 colour) {
+    Material* shade = kit->materials[MAT_LAMPSHADE];
+    if (!shade || !kit->engine)
+        return;
+    if (!shade->shader_hook) {
+        shade->shader_hook = create_shader_hook(
+            kit->engine, &(ShaderHookDesc){.name = "lampshade", .surface = lampshade_shader_str});
+        if (!shade->shader_hook)
+            fprintf(stderr, "silent: the lampshades glow flat, their hook unbuilt\n");
+        shader_params_set(&shade->shader_params, "shadeCloth",
+                          (vec4){SHADE_THROUGH, 0.0f, 0.0f, 0.0f});
+    }
+    int n = 0;
+    for (int i = 0; i < shade->shader_params.count; i++)
+        n += strncmp(shade->shader_params.list[i].name, "shadeBulb", 9) == 0;
+    if (n >= SHADE_BULBS) {
+        fprintf(stderr,
+                "silent: a lampshade's bulb past the %d its cloth reads; it glows with none\n",
+                SHADE_BULBS);
+        return;
+    }
+    char name[SHADER_PARAM_NAME];
+    snprintf(name, sizeof(name), "shadeBulb%d", n);
+    shader_params_set(&shade->shader_params, name, (vec4){at[0], at[1], at[2], candela});
+    snprintf(name, sizeof(name), "shadeTint%d", n);
+    shader_params_set(&shade->shader_params, name, (vec4){colour[0], colour[1], colour[2], 0.0f});
 }
 
 void mats_register(Kit* kit, Engine* engine, Scene* scene) {

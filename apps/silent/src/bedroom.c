@@ -181,10 +181,12 @@ static void lamp(Kit* kit, Scene* scene, float a) {
     vec3 at = {0.0f, 0.0f, 0.0f};
     kit_frame_point(f, a, shade_y + bulb, d, at);
     glm_vec3_add(at, kit->origin, at);
+    const vec3 warm = {1.0f, 0.7f, 0.42f};
+    mats_shade_bulb(kit, at, LAMP_CANDELA, warm);
     LightDesc light = {.name = "bedside_lamp",
                        .type = LIGHT_POINT,
                        .position = {at[0], at[1], at[2]},
-                       .color = {1.0f, 0.7f, 0.42f},
+                       .color = {warm[0], warm[1], warm[2]},
                        .intensity = LAMP_CANDELA,
                        .range = 5.0f,
                        .cast_shadows = true,
