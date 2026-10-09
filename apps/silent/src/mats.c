@@ -543,6 +543,17 @@ static const MatSpec SPECS[MAT_COUNT] = {
     [MAT_CANVAS] = {"canvas", "book_pattern", {2.4f, 2.4f, 3.5f}, 1.0f, 0.0f, 0.3f, .grime = 0.5f},
     [MAT_ANODISED] =
         {"anodised", "Smear008", {0.09f, 0.09f, 0.1f}, 0.8f, 1.0f, 0.3f, true, .grime = 0.3f},
+    // The lake (spec 13.41): the track down to it, its puddles in its own ruts, and the mud along
+    // the water, which the lake keeps wet whether it rains or not.
+    [MAT_TRACK] = {"track",
+                   "gravel_road",
+                   {0.85f, 0.85f, 0.85f},
+                   1.0f,
+                   0.0f,
+                   2.0f,
+                   .rain = {true, 0.9f, true}},
+    [MAT_SHORE] =
+        {"shore", "mud_forest", {0.8f, 0.8f, 0.8f}, 0.7f, 0.0f, 2.35f, .rain = {true, 1.0f}},
 };
 
 // A map of a material's set, decoded on the engine's loader threads and set by `put` once in.

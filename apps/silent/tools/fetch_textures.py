@@ -96,6 +96,11 @@ SOURCES = {
     "cotton_jersey": {},
     "quatrefoil_jacquard_fabric": {"saturation": 0.7},
     "book_pattern": {"diffuse": "col1"},
+    # The lake (spec 13.41): the gravel track down to it, puddled in its own lows, the mud at
+    # the water's edge, and rusted corrugated iron for the cabin's roof.
+    "gravel_road": {"saturation": 0.6, "disp": True},
+    "mud_forest": {"saturation": 0.7},
+    "rusty_corrugated_iron": {"saturation": 0.6},
     # From ambientCG (https://ambientcg.com), also CC0: what Poly Haven has no
     # scan of -- brushed stainless, paper, a kitchen smear for the glass, and
     # the table's scratched enamel: a yellow paint with almost no rust, taken to

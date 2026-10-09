@@ -151,27 +151,83 @@ void road_frame(Road* road, float t, float* x, float* z, float* dir_x, float* di
     *dir_z = len > 0.0f ? dz / len : 0.0f;
 }
 
+float road_length(Road* road) {
+    return sampled(road)->length;
+}
+
+// The sample segment `s` falls in, and how far along it.
+static int segment(const Road* r, float s, float* t) {
+    int i = 0;
+    while (i + 2 < r->count && r->s[i + 1] <= s)
+        i++;
+    const float span = r->s[i + 1] - r->s[i];
+    *t = span > 0.0f ? glm_clamp((s - r->s[i]) / span, 0.0f, 1.0f) : 0.0f;
+    return i;
+}
+
+void road_at(Road* road, float s, float* x, float* z) {
+    const Road* r = sampled(road);
+    float t = 0.0f;
+    const int i = segment(r, s, &t);
+    *x = r->x[i] + (r->x[i + 1] - r->x[i]) * t;
+    *z = r->z[i] + (r->z[i + 1] - r->z[i]) * t;
+}
+
+/*
+ * One station of the ribbon `s` metres along: its centre and the unit way the road runs. On a
+ * sample, the sample and the run between its neighbours; between samples, a point on the segment
+ * and that segment's run, so a ribbon can start and stop exactly where it meets something else.
+ */
+static void station(const Road* r, float s, float* x, float* z, float* tx, float* tz) {
+    for (int i = 0; i < r->count; i++)
+        if (r->s[i] == s) {
+            const int a = i > 0 ? i - 1 : 0, b = i + 1 < r->count ? i + 1 : i;
+            *x = r->x[i];
+            *z = r->z[i];
+            *tx = r->x[b] - r->x[a];
+            *tz = r->z[b] - r->z[a];
+            const float len = hypotf(*tx, *tz);
+            *tx /= len;
+            *tz /= len;
+            return;
+        }
+    float t = 0.0f;
+    const int i = segment(r, s, &t);
+    *tx = r->x[i + 1] - r->x[i];
+    *tz = r->z[i + 1] - r->z[i];
+    *x = r->x[i] + *tx * t;
+    *z = r->z[i] + *tz * t;
+    const float len = hypotf(*tx, *tz);
+    *tx /= len;
+    *tz /= len;
+}
+
 void road_ribbon(Kit* kit, Road* road, int mat, float s0, float s1) {
     const Road* r = sampled(road);
     const float half = r->desc->half;
     const vec3 up = {0.0f, 1.0f, 0.0f};
+    s0 = fmaxf(s0, 0.0f);
+    s1 = fminf(s1, r->length);
     vec3 prev_l = {0}, prev_r = {0};
-    bool started = false;
-    for (int i = 0; i < r->count; i++) {
-        if (r->s[i] < s0 || r->s[i] > s1)
+    // The stations: s0, every sample strictly between, s1.
+    for (int i = -1; i <= r->count; i++) {
+        float s;
+        if (i < 0)
+            s = s0;
+        else if (i == r->count)
+            s = s1;
+        else if (r->s[i] > s0 && r->s[i] < s1)
+            s = r->s[i];
+        else
             continue;
-        const int a = i > 0 ? i - 1 : 0, b = i + 1 < r->count ? i + 1 : i;
-        float tx = r->x[b] - r->x[a], tz = r->z[b] - r->z[a];
-        const float len = hypotf(tx, tz);
-        tx /= len;
-        tz /= len;
-        const float y = road_height(road, r->s[i]);
-        const vec3 l = {r->x[i] - tz * half, y, r->z[i] + tx * half};
-        const vec3 rt = {r->x[i] + tz * half, y, r->z[i] - tx * half};
-        if (started)
+        float x, z, tx, tz;
+        station(r, s, &x, &z, &tx, &tz);
+        const float y = road_height(road, s);
+        const vec3 l = {x - tz * half, y, z + tx * half};
+        const vec3 rt = {x + tz * half, y, z - tx * half};
+        if (i >= 0)
             kit_quad_facing(kit, mat, prev_l, prev_r, rt, l, up);
         glm_vec3_copy((float*)l, prev_l);
         glm_vec3_copy((float*)rt, prev_r);
-        started = true;
     }
 }

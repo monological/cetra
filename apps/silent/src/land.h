@@ -17,8 +17,11 @@ float land_terrace_height(float x);
 // stand anything on.
 float land_height(float x, float z);
 
-// Where the ground ends at the chasm along the line z: west of it there is none.
+// Where the ground ends at the chasm along the line z: west of it there is none, as far south as
+// RIDGE_Z, where the lip turns west.
 float land_lip_x(float z);
+// And from there on west, where it ends along the line x: north of it there is none.
+float land_ridge_lip_z(float x);
 
 // The ground grid's cell, along both axes; its lines run from the lip and from WORLD_Z0.
 #define LAND_STEP 2.0f

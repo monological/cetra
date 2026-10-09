@@ -256,6 +256,33 @@
 #define WOODS_EDGE_Z0 (-58.0f)
 #define WOODS_EDGE_Z1 64.0f
 
+/*
+ * The lake valley (spec 13.41), down the crossroads' south arm. The chasm's east lip turns west at
+ * RIDGE_Z, its south lip the north face of a rock ridge, and past the ridge the ground falls to a
+ * lake whose water stands at LAKE_Y, with a log cabin on its east shore. WORLD_Z1 stays where it
+ * was: the woods behind our side and the hill's dead trees are placed against it, and the valley
+ * has its own extent.
+ */
+#define RIDGE_Z      72.0f    // where the chasm's east lip turns west, on a grid line
+#define LAKE_X       (-96.0f) // the shore's centre
+#define LAKE_Z       120.0f
+#define LAKE_RX      23.0f // its half-widths, before the shore's wobble
+#define LAKE_RZ      17.0f
+#define LAKE_Y       (-12.0f) // the still water
+#define CABIN_PAD_X0 (-71.0f) // the cabin's level pad, cut into the east bank on grid lines
+#define CABIN_PAD_X1 (-59.0f)
+#define CABIN_PAD_Z0 112.0f
+#define CABIN_PAD_Z1 124.0f
+#define CABIN_PAD_Y  (-10.8f)
+// The ground's extent past the world's: west of the chasm south of the ridge, and south of the
+// woods behind our side; east of VALLEY_X1 it is not there at all.
+#define VALLEY_X0 (-147.0f) // a whole number of grid steps west of CHASM_X
+#define VALLEY_X1 (-23.0f)
+#define VALLEY_Z1 168.0f
+// The walls round it, well inside the ground so the trees carry on past them into the fog.
+#define VALLEY_WALL_X0 (-128.0f)
+#define VALLEY_WALL_Z1 146.0f
+
 // How far (x, z) is outside a box from (x0, z0) to (x1, z1) in plan, 0 inside it.
 static inline float plan_box_distance(float x, float z, float x0, float x1, float z0, float z1) {
     const float dx = fmaxf(fmaxf(x0 - x, x - x1), 0.0f);

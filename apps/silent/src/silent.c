@@ -65,6 +65,7 @@
 #include "interior.h"
 #include "kit.h"
 #include "kitchen.h"
+#include "lake.h"
 #include "land.h"
 #include "layout.h"
 #include "lights.h"
@@ -171,6 +172,8 @@ typedef struct SilentArgs {
     int msaa;
     bool cam_eye_set, cam_target_set;
     vec3 cam_eye, cam_target;
+    bool player_at_set;
+    vec3 player_at; // where the player starts in plan, x and z, and the yaw, in degrees from +z
     float fov_deg;
     const char* pad_script;
     bool trace_player;
@@ -603,13 +606,14 @@ static void build_post(const Engine* engine, bool night, bool grade) {
     // -- and the street's fog volumes on top of it. None by day: the ambient
     // that lights the haze is not blocked by walls, so at daylight's level it
     // fills the rooms like smoke, and the volumes carry the street on their own.
-    // The haze starts at the basement's floor (spec 13.31), or a flashlight beam down the
-    // stairwell stops dead at the yard's level; its density at the floor is raised by what the
-    // falloff takes off over that depth, so every height above the yard is as it was.
+    // The haze starts at the lake (spec 13.41), the lowest floor there is, or a flashlight beam
+    // down the cellar stair or inside the cabin stops dead at the yard's level; its density at
+    // the floor is raised by what the falloff takes off over that depth, so every height is as it
+    // was.
     fx->fog_enabled = !g_args.no_fog;
     fx->fog_height_falloff = 60.0f;
-    fx->fog_floor_y = BASEMENT_Y;
-    fx->fog_density = night ? 0.02f * expf(-BASEMENT_Y / fx->fog_height_falloff) : 0.0f;
+    fx->fog_floor_y = LAKE_Y;
+    fx->fog_density = night ? 0.02f * expf(-LAKE_Y / fx->fog_height_falloff) : 0.0f;
     fx->fog_far = 60.0f;
     fx->fog_anisotropy = 0.7f;
     // At night the fog's own glow, and not the sky's: the night sky's radiance
@@ -737,6 +741,8 @@ static void on_init(Game* game) {
     kit_init_beside(&ground, &kit, GLM_VEC3_ZERO);
     ground.shadow_cell_scale = 6.0f;
     land_build(&ground);
+    // The track down to the lake and the cabin's pad (spec 13.41).
+    lake_ground_build(&ground);
     load_seam(engine, "land");
     terrace_build(&kit, plots.far);
     load_seam(engine, "terrace");
@@ -923,14 +929,26 @@ static void on_init(Game* game) {
     if (g_args.capture_budget_ms < 0.0f && !engine->headless)
         engine->capture_budget_ms = LOADING_CAPTURE_MS;
 
-    CameraDesc cam = {.position = {SPAWN_FEET[0], SPAWN_FEET[1] + PLAYER_EYE_HEIGHT, SPAWN_FEET[2]},
-                      .look_at = {SPAWN_FEET[0], SPAWN_FEET[1] + PLAYER_EYE_HEIGHT, 0.0f},
+    // In the kitchen, or wherever --player-at put the player, on the ground there.
+    vec3 feet;
+    glm_vec3_copy((float*)SPAWN_FEET, feet);
+    float yaw = SPAWN_YAW;
+    if (g_args.player_at_set) {
+        feet[0] = g_args.player_at[0];
+        feet[2] = g_args.player_at[1];
+        feet[1] = land_height(feet[0], feet[2]) + 0.05f;
+        yaw = glm_rad(g_args.player_at[2]);
+    }
+    const float eye_y = feet[1] + PLAYER_EYE_HEIGHT;
+    const float ahead = g_args.player_at_set ? 1.0f : feet[2];
+    CameraDesc cam = {.position = {feet[0], eye_y, feet[2]},
+                      .look_at = {feet[0] + ahead * sinf(yaw), eye_y, feet[2] + ahead * cosf(yaw)},
                       .fov = glm_rad(g_args.fov_deg > 0.0f ? g_args.fov_deg : 68.0f),
                       .near = 0.05f,
                       .far = 250.0f};
     engine_set_camera(engine, create_camera(&cam));
 
-    player_init(&g_player, game, physics, em, SPAWN_FEET, SPAWN_YAW);
+    player_init(&g_player, game, physics, em, feet, yaw);
     load_seam(engine, "player");
     // Sent somewhere or holding a clip from the command line, the cat has no mind of its own.
     if (g_cat.entity && !g_args.cat_go[0] && !g_args.cat_clip[0])
@@ -1248,6 +1266,8 @@ static void print_usage(const char* prog) {
     printf("      --msaa N            MSAA samples\n");
     printf("      --cam-eye x,y,z     Pin the camera (a framing that can be taken twice)\n");
     printf("      --cam-target x,y,z  What the pinned camera looks at\n");
+    printf("      --player-at x,z[,yaw]  Start standing there rather than in the kitchen,\n"
+           "                          facing yaw degrees from +z (south)\n");
     printf("      --fov D             Vertical field of view, degrees (default 68)\n");
     printf("      --pad-script PATH   Replay a scripted pad on slot 0 (see input.h)\n");
     printf("      --trace-player      Print the player's position every 30 steps\n");
@@ -1393,6 +1413,10 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
         } else if (!strcmp(s, "--cam-target") && has_next) {
             a->cam_target_set = sscanf(argv[++i], "%f,%f,%f", &a->cam_target[0], &a->cam_target[1],
                                        &a->cam_target[2]) == 3;
+        } else if (!strcmp(s, "--player-at") && has_next) {
+            a->player_at[2] = 0.0f;
+            a->player_at_set = sscanf(argv[++i], "%f,%f,%f", &a->player_at[0], &a->player_at[1],
+                                      &a->player_at[2]) >= 2;
         } else if (!strcmp(s, "--fov") && has_next) {
             a->fov_deg = (float)atof(argv[++i]);
         } else if (!strcmp(s, "--pad-script") && has_next) {
