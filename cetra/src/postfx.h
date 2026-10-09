@@ -153,10 +153,11 @@ typedef enum PostFXSpecOccMode {
 #define POSTFX_FOG_ESM_SIZE 512
 
 // Local fog volumes carried as a plain uniform array; MAX_LOCAL_FOG in
-// froxel_inject_frag.glsl mirrors it. Eight AABB tests per cell is cheap beside the nine
+// froxel_inject_frag.glsl mirrors it. Sixteen AABB tests per cell is cheap beside the nine
 // cascade taps and the clustered light walk already in that loop, so binning them into
-// the cluster grid is the upgrade this defers, not a thing it needs.
-#define POSTFX_MAX_FOG_VOLUMES 8
+// the cluster grid is the upgrade this defers, not a thing it needs. Holes are cut by tiling
+// boxes round them, three a hole and one more, which is why the cap is not smaller.
+#define POSTFX_MAX_FOG_VOLUMES 16
 
 /*
  * What a LATE draw is handed (spec 13.9): the chain's HDR canvas, bound, at post

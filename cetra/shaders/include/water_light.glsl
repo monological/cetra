@@ -9,12 +9,14 @@
 // Scalars and one include only: pbr_frag is at its sixteen samplers.
 
 #include "fresnel.glsl"
+#include "water_bounds.glsl"
 
 uniform float waterIor;
 uniform vec3 waterAbsorption; // extinction per world unit, per channel
 // 1 = a surface under the level is lit through the water above it: a sea is drawn and its
 // downwell switch is on. 0 leaves every surface in air.
 uniform int waterDownwell;
+uniform vec4 waterBounds; // Water.bounds: min x, min z, max x, max z; all zero = everywhere
 
 /*
  * How much weaker the sky's diffuse light gets per unit of extinction, against a collimated
@@ -29,15 +31,16 @@ uniform int waterDownwell;
 const float WATER_SKY_DOWNWELL_PER_EXTINCTION = 1.0;
 
 /*
- * How far below the still surface `y` is, in world units; 0 above it, or with no sea.
+ * How far below the still surface `p` is, in world units; 0 above it, outside the sea's bounds,
+ * or with no sea.
  *
- * Measured against the level everywhere, not only inside `waterExtent`: that is the shoaling
- * bed's domain, and the sea runs on past it to the horizon. So a dry pit sunk below the level is
- * lit as though flooded; telling the two apart needs the sea to know where it ends, which Water
- * does not.
+ * Measured against the level everywhere the bounds reach, not only inside `waterExtent`: that is
+ * the shoaling bed's domain, and the sea runs on past it. An unbounded sea runs to the horizon,
+ * so there a dry pit sunk below the level is lit as though flooded.
  */
-float waterDepthBelow(float y) {
-    return waterDownwell == 1 ? max(waterLevel - y, 0.0) : 0.0;
+float waterDepthBelow(vec3 p) {
+    return waterDownwell == 1 && waterBoundsCover(waterBounds, p.xz) ? max(waterLevel - p.y, 0.0)
+                                                                      : 0.0;
 }
 
 /*

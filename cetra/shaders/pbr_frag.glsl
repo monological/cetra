@@ -1958,7 +1958,7 @@ void main() {
     // How far under the sea this surface lies (spec 13.4): 0 in air, where every term below
     // that reads it is an exact 1. Local lights are left alone -- one sitting in the water is
     // as close to the surface it lights as it ever was.
-    float submerged = waterDepthBelow(WorldPos.y);
+    float submerged = waterDepthBelow(WorldPos);
     // And the sky's light, weakened the same way, for the env* reads.
     skyDown = waterDownwellSky(submerged);
 

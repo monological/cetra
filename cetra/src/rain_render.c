@@ -118,12 +118,13 @@ void rain_render_drops(RainRenderer* rr, Engine* engine, const Scene* scene,
     const int droplets = splash_side * splash_side * RAIN_SPLASH_DROPLETS;
     // The map does not hold water, so a surface that draws this frame is handed over as its
     // still plane, which splashes and drips land on before the bed under it.
-    const float water_level = water_will_draw(scene->water, engine, engine->current_render_mode)
-                                  ? scene->water->level
-                                  : -FLT_MAX;
+    const bool water = water_will_draw(scene->water, engine, engine->current_render_mode);
+    const float water_level = water ? scene->water->level : -FLT_MAX;
+    static const vec4 NO_BOUNDS = {0.0f, 0.0f, 0.0f, 0.0f};
+    const float* water_bounds = water ? scene->water->bounds : NO_BOUNDS;
     RainDripSchedule sched = {0};
     if (rain_active(rain))
-        rain_drip_schedule(rain, water_level, &sched);
+        rain_drip_schedule(rain, water_level, water_bounds, &sched);
     // A build failure was logged when the engine registered the program.
     ShaderProgram* program = engine_find_program(engine, CETRA_PROGRAM_RAIN);
     const int instances = falling + droplets + sched.total * RAIN_DRIP_INSTANCES;
@@ -197,6 +198,7 @@ void rain_render_drops(RainRenderer* rr, Engine* engine, const Scene* scene,
     // direction the map was cast along.
     uniform_set_vec3(u, "rainTravel", rain->travel);
     uniform_set_float(u, "rainWaterLevel", water_level);
+    uniform_set_vec4(u, "rainWaterBounds", water_bounds);
     _upload_drips(rain, u, &sched);
     uniform_set_float(u, "streakWidth", rain->streak_width);
     uniform_set_float(u, "streakBrightness", rain->streak_brightness);

@@ -212,8 +212,10 @@ typedef struct RainDripSchedule {
     float terminal; // m/s, a RAIN_DRIP_MM drop's terminal velocity times `fall_scale`
 } RainDripSchedule;
 
-// `water_level` is the world Y of a still water surface, -FLT_MAX for none.
-void rain_drip_schedule(const Rain* rain, float water_level, RainDripSchedule* out);
+// `water_level` is the world Y of a still water surface, -FLT_MAX for none, and `water_bounds`
+// where it is (Water.bounds; NULL or all zero = everywhere).
+void rain_drip_schedule(const Rain* rain, float water_level, const float* water_bounds,
+                        RainDripSchedule* out);
 
 // The fraction of the ripple cells a drop lands in, 0..1: none when nothing falls, all of
 // them from moderate rain up.

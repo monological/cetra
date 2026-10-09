@@ -22,7 +22,7 @@ out vec4 FragColor; // rgb = in-scattered radiance, a = extinction sigma
 #define MAX_FOG_LIGHTS 3
 #define FOG_CASCADES 3
 // Mirrors POSTFX_MAX_FOG_VOLUMES the same way.
-#define MAX_LOCAL_FOG 8
+#define MAX_LOCAL_FOG 16
 
 uniform int sliceIndex;  // Which volume layer this draw is writing
 uniform int froxelDepth; // Slice count; mirrors POSTFX_FROXEL_Z

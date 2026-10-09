@@ -148,6 +148,7 @@ typedef struct {
     int water;                   // Enable the water surface (spec 11.32)
     float water_level;           // Still-water plane, world Y (-9999 = keep default)
     float water_extent;          // Half-size of the shoaling bed's domain (0 = keep default)
+    float water_bounds[4];       // Where the water is: min x, min z, max x, max z (0s = keep)
     int water_waves;             // Wave model: -1 = unset, 0 = Gerstner, 1 = spectral
     int no_water_caustics;       // Bisect lever: drop the surface's light focusing
     int no_water_glitter;        // Bisect lever: drop the analytic sun lobe
