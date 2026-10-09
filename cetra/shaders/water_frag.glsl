@@ -902,7 +902,7 @@ vec3 waterCaustics(vec2 uv, vec3 refrDir, vec2 refrUV) {
     float keyVis = waterCausticKeyVisibility(pos, column) * cloudSunForSlot(pos, sunShadowSlot);
     // Both halves as they arrive at the bed, which is how pbr_frag lit it: the key's longer
     // refracted path weakens it faster than the sky with depth, so its share shrinks too.
-    float bedDepth = waterDepthBelow(pos.y);
+    float bedDepth = waterDepthBelow(pos);
     vec3 keyIrr = sunRadiance * max(sunDir.y, 0.0) * keyVis * waterKeyDownwell(bedDepth);
     vec3 skyIrr = causticSkyIrradiance * waterDownwellSky(bedDepth);
     vec3 keyShare = keyIrr / max(keyIrr + skyIrr, vec3(1.0e-6));
@@ -1371,6 +1371,9 @@ void main() {
             discard;
     }
     path = min(path, maxPath);
+    // Past the sea's bounds there is no water at all (spec 13.41).
+    if (!waterBoundsCover(waterBounds, WorldPos.xz))
+        discard;
 
     // Transmitted share: the scene behind, bent along the refracted ray and then
     // absorbed over the full path. The bend itself is capped at WATER_MAX_BEND,

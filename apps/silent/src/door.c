@@ -179,7 +179,10 @@ bool door_hang(Door* door, Engine* engine, Scene* scene, EntityManager* em, Phys
     opening.to -= opening.from;
     opening.from = 0.0f;
     KitOpening shape = kit_opening_grow(&opening, -DOOR_CLEARANCE);
-    shape.bottom = FLOOR_Y + DOOR_SILL_GAP;
+    // Into the world: the opening's heights are its building's, whose ground the hinge's
+    // height is, and the leaf stands a gap off the opening's sill.
+    shape.top += hinge->origin[1];
+    shape.bottom = hinge->origin[1] + opening.bottom + DOOR_SILL_GAP;
     return door_build(door, engine, scene, em, physics, name, leaf, hinge, &shape, DOOR_THICK,
                       swing);
 }

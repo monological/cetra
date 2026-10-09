@@ -167,7 +167,7 @@ void node_set_position(SceneNode* node, const vec3 position);
  * in the same sun, sky and clustered lights as the air around it. So a volume can be
  * smoke, dust or mist, and cannot be a glow.
  */
-#define SCENE_MAX_FOG_VOLUMES 8
+#define SCENE_MAX_FOG_VOLUMES 16
 
 typedef struct FogVolume {
     vec3 center;

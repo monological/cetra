@@ -10455,6 +10455,56 @@ def _water_box_max_delta(a, b, w, h, box):
     return worst
 
 
+# water-bounds-* (spec 13.41). Bounds round all the world must leave the frame alone; bounds
+# off it must leave no water at all. The cut runs along x = 0, the plane the fixture's eye and
+# target both stand in, so it is the frame's middle column, and a view ray never crosses it:
+# what the surface refracts on one side lies on that side. The margin is the refraction's
+# screen-space bend, which reads scene colour a few pixels across. "The whole world" is far past
+# the horizon the projected grid runs out to: bounds of a kilometre cut the sea off short of it.
+WATER_BOUNDS_WHOLE = "-1e20,-1e20,1e20,1e20"
+WATER_BOUNDS_AWAY = "1000,1000,1001,1001"
+WATER_BOUNDS_CUT = "-1e20,-1e20,0,1e20"
+WATER_BOUNDS_MARGIN = 0.04
+
+
+def _water_bounds_arms(workdir, scene, unbounded):
+    """water-bounds-whole and water-bounds-cut, against the unbounded frame on disk."""
+    frames, err = {"unbounded": unbounded}, None
+    for name, extra in (("none", ["--no-water"]), ("whole", ["--water-bounds", WATER_BOUNDS_WHOLE]),
+                        ("away", ["--water-bounds", WATER_BOUNDS_AWAY]),
+                        ("cut", ["--water-bounds", WATER_BOUNDS_CUT])):
+        frames[name] = os.path.join(workdir, f"water_bounds_{name}.ppm")
+        err = err or render(scene, frames[name], WATER_DOWNWELL_FLAGS + extra)
+    if err:
+        print(f"  water-bounds-whole ERROR render failed: {err.strip()[-200:]}")
+        return ["water-bounds-whole", "water-bounds-cut"]
+    failures = []
+    whole, _ = compare(frames["whole"], unbounded)
+    ok = whole == 0
+    print(f"  water-bounds-whole {'PASS' if ok else 'FAIL'}  {whole} px from the unbounded frame "
+          f"under bounds round the whole world (want 0)")
+    if not ok:
+        failures.append("water-bounds-whole")
+
+    pix = {k: _read_ppm(p) for k, p in frames.items()}
+    w, h = pix["unbounded"][0], pix["unbounded"][1]
+    left = (0.0, 0.0, 0.5 - WATER_BOUNDS_MARGIN, 1.0)
+    right = (0.5 + WATER_BOUNDS_MARGIN, 0.0, 1.0, 1.0)
+    away, _ = compare(frames["away"], frames["none"])
+    water_moves = [_water_box_max_delta(pix["unbounded"][2], pix["none"][2], w, h, box)
+                   for box in (left, right)]
+    inside = _water_box_max_delta(pix["cut"][2], pix["unbounded"][2], w, h, left)
+    outside = _water_box_max_delta(pix["cut"][2], pix["none"][2], w, h, right)
+    ok = away == 0 and min(water_moves) > 0 and inside == 0 and outside == 0
+    print(f"  water-bounds-cut {'PASS' if ok else 'FAIL'}  bounds off the water: {away} px from "
+          f"no water (want 0); cut down the middle: the inside half {inside} from the unbounded "
+          f"frame and the outside half {outside} from no water at most (want 0, 0), where water "
+          f"moves the halves {water_moves[0]} and {water_moves[1]} (want > 0)")
+    if not ok:
+        failures.append("water-bounds-cut")
+    return failures
+
+
 def _water_downwell_depths(on, off, w, h, box, key):
     """The depth each channel implies, by row of a fractional box, for water-downwell.
 
@@ -11288,6 +11338,12 @@ def run_water_gate(workdir):
                       under a key at two elevations, which a vertical rather than refracted
                       path breaks. On water_downwell_fixture, whose floor is lit and whose
                       key is the only light.
+      water-bounds-whole bounds round the whole world leave the frame at 0 px (spec 13.41).
+      water-bounds-cut the bounds cut the water and the light under it together: bounds off
+                      the water are the frame with none, and bounds ending down the frame's
+                      middle are the unbounded frame on their side and the frame with no water
+                      on the other, both at 0 px. On the downwell fixture, where the lit floor
+                      shows the light under the level as well as the surface.
       water-shoal     waves shorten over a rising bed, and ONLY over it. Needs
                       --water-bed dome, since every other arm here runs over a bed the
                       vertex stage cannot see. The second half -- open water beyond the
@@ -12141,6 +12197,11 @@ def run_water_gate(workdir):
               f"angles within {worst_angle:.3f} (want <={WATER_DOWNWELL_ANGLE_TOL})")
         if not ok:
             failures.append("water-downwell")
+
+    # The sea's bounds (spec 13.41), on the downwell fixture's lit floor, so the light under the
+    # level is cut with the surface. The unbounded frame is the downwell arm's.
+    if not err:
+        failures += _water_bounds_arms(workdir, dw_high, dw_frames["high", "on"])
 
     # Shoaling, which needs the diagnostic bed: every other water arm runs over a bed
     # the vertex stage cannot see, so the whole Tier 3 path was untested.

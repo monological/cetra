@@ -263,6 +263,8 @@ static void print_usage(const char* prog) {
                     "                         temperature, soot, reaction, speed or core\n");
     fprintf(stderr, "      --water-level <f>  Still-water plane, world Y (implies --water)\n");
     fprintf(stderr, "      --water-extent <f> Half-size of the shoaling bed (implies --water)\n");
+    fprintf(stderr, "      --water-bounds x0,z0,x1,z1  Where the water is, world XZ; nowhere\n"
+                    "                         else (implies --water)\n");
     fprintf(stderr, "      --water-waves <m>  gerstner (default) or fft spectral cascades\n");
     fprintf(stderr, "      --no-water-caustics  Drop the surface's light focusing\n");
     fprintf(stderr, "      --no-water-glitter Drop the analytic sun lobe on the water\n");
@@ -1332,6 +1334,21 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 return -1;
             }
             args->water_level = (float)atof(argv[i]);
+            args->water = 1;
+        } else if (strcmp(argv[i], "--water-bounds") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            float* b = args->water_bounds;
+            if (sscanf(argv[i], "%f,%f,%f,%f", &b[0], &b[1], &b[2], &b[3]) != 4 || b[2] <= b[0] ||
+                b[3] <= b[1]) {
+                fprintf(stderr,
+                        "Error: --water-bounds wants x0,z0,x1,z1 with x1 > x0 and z1 > z0, "
+                        "got '%s'\n",
+                        argv[i]);
+                return -1;
+            }
             args->water = 1;
         } else if (strcmp(argv[i], "--water-probe") == 0) {
             args->water_probe = 1;
@@ -5158,6 +5175,8 @@ int main(int argc, char** argv) {
             water->level = args.water_level;
         if (args.water_extent > 0.0f)
             water->extent = args.water_extent;
+        if (args.water_bounds[2] > args.water_bounds[0])
+            memcpy(water->bounds, args.water_bounds, sizeof(water->bounds));
         if (args.water_waves >= 0)
             water->wave_model = args.water_waves ? WATER_WAVES_FFT : WATER_WAVES_GERSTNER;
         if (args.no_water_caustics)

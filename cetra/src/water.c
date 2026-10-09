@@ -681,7 +681,9 @@ void water_publish_to_postfx(const Water* water, const struct Scene* scene, stru
      * submerged frame; aerial_volume belongs to the sky, which republishes every frame,
      * so clearing it here would make publish call order load-bearing.
      */
-    const bool submerged = engine->camera && engine->camera->position[1] < water->level;
+    const Camera* cam = engine->camera;
+    const bool submerged = cam && cam->position[1] < water->level &&
+                           water_bounds_cover(water->bounds, cam->position[0], cam->position[2]);
     fx->water_medium = submerged ? 1 : 0;
     fx->water_suppress_aerial = submerged ? 1 : 0;
     fx->water_level_y = water->level;
@@ -1864,6 +1866,7 @@ static void _water_publish_sea(const Water* water, const struct Scene* scene, Un
     // the level is lit through the water, and the water judges its caustics against that.
     // Only while the sea is drawn -- switched off, there is nothing over the surface.
     uniform_set_int(u, "waterDownwell", water_active(water) && water->downwell ? 1 : 0);
+    uniform_set_vec4(u, "waterBounds", water->bounds);
     uniform_set_float(u, "waterIor", water->ior);
     uniform_set_vec3(u, "waterAbsorption", (const float*)&water->absorption);
 }
@@ -3106,7 +3109,9 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
     // it, and every temporal history in the frame would reset each time.
     vec3 cam_world;
     glm_vec3_copy(engine->camera->position, cam_world);
-    uniform_set_int(u, "cameraSubmerged", cam_world[1] < water->level ? 1 : 0);
+    const bool submerged = cam_world[1] < water->level &&
+                           water_bounds_cover(water->bounds, cam_world[0], cam_world[2]);
+    uniform_set_int(u, "cameraSubmerged", submerged ? 1 : 0);
 
     // The shoreline's coverage needs samples to be dithered into, and the same
     // two conditions the opaque lane's masked materials read decide whether

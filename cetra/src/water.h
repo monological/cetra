@@ -5,9 +5,10 @@
 #include <stdbool.h>
 #include <cglm/cglm.h>
 
-#include "common.h"      // RenderMode, for water_will_draw
-#include "shore_runup.h" // ShoreRunupParams, for the CPU twin the film is driven by
-#include "sky.h"         // SKY_CLOUD_SHADOW_UNIT, asserted against this file's own ledger below
+#include "common.h"       // RenderMode, for water_will_draw
+#include "shore_runup.h"  // ShoreRunupParams, for the CPU twin the film is driven by
+#include "sky.h"          // SKY_CLOUD_SHADOW_UNIT, asserted against this file's own ledger below
+#include "water_bounds.h" // water_bounds_cover, what Water.bounds means
 
 /*
  * Water surface (spec 11.32, roadmap D3).
@@ -325,6 +326,11 @@ typedef struct Water {
     // surface, which the projected grid takes from the frustum -- outside this the bed
     // field reads its nearest edge texel, which is open water.
     float extent;
+    // Where the water is at all, world XZ: min x, min z, max x, max z; all zero = everywhere
+    // (spec 13.41). Outside it there is no surface, no light lost under the level, no medium
+    // round a submerged eye and no rain landing on the plane. A lake below a world's other
+    // low ground keeps its edges under its own banks.
+    vec4 bounds;
 
     // Optical properties of the body, authored rather than derived from a
     // transparency slider. absorption is extinction per world unit per channel,
