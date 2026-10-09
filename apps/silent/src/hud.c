@@ -22,42 +22,54 @@
 static const vec4 PROMPT_FG = {0.88f, 0.88f, 0.84f, 1.0f};
 static const vec4 THOUGHT_FG = {0.80f, 0.78f, 0.70f, 1.0f};
 
+// The words' look but their colour; the face and its size are the UI's.
+static const UIStyle WORDS = {.tracking = 1.0f, .line_spacing = 1.0f};
+
+static bool line_shown(const HudLine* line) {
+    return line->label->text && line->label->text[0] && line->alpha > 0.0f;
+}
+
 // A dim plate behind a line's words, so they read over a lamp or the fog alike, drawn only while
 // the line has words to show.
 static void plate_draw(UIElement* el, UIDrawList* dl, void* user) {
     const HudLine* line = user;
-    if (!line->text[0] || line->alpha <= 0.0f)
+    if (!line_shown(line))
         return;
     const vec4 bg = {0.0f, 0.0f, 0.0f, PLATE_BG * line->alpha};
     ui_draw_rounded(dl, el->rect, 6.0f, (float*)bg, NULL, 0.0f);
 }
 
-// The words at `alpha`, in `fg`.
-static void line_style(HudLine* line, const vec4 fg, float alpha) {
-    const UIStyle style = {.fg = {fg[0], fg[1], fg[2], fg[3] * alpha}, .tracking = 1.0f};
-    ui_set_style(line->label, &style);
-    line->alpha = alpha;
+// The words, as the label would draw them, at the line's alpha.
+static void words_draw(UIElement* el, UIDrawList* dl, void* user) {
+    const HudLine* line = user;
+    if (!line_shown(line))
+        return;
+    UIStyle style = WORDS;
+    glm_vec4_copy((float*)line->fg, style.fg);
+    style.fg[3] *= line->alpha;
+    ui_draw_text(dl, el->rect, el->text, &style, el->align_cross);
 }
 
-static void line_build(HudLine* line, UIElement* parent, const vec4 fg) {
+static void line_build(HudLine* line, UIElement* parent, const float* fg) {
+    line->fg = fg;
+    line->alpha = 1.0f;
     line->plate = ui_panel(parent);
     line->plate->padding[0] = line->plate->padding[2] = PLATE_PAD;
     line->plate->padding[1] = line->plate->padding[3] = 2.25f * PLATE_PAD;
     ui_set_draw(line->plate, plate_draw, line);
     line->label = ui_label(line->plate, "");
-    line_style(line, fg, 1.0f);
+    ui_set_style(line->label, &WORDS);
+    ui_set_draw(line->label, words_draw, line);
 }
 
 static void line_set(HudLine* line, const char* text) {
-    if (strcmp(text, line->text) == 0)
+    if (line->label->text && strcmp(text, line->label->text) == 0)
         return;
-    snprintf(line->text, sizeof(line->text), "%s", text);
-    ui_set_text(line->label, line->text);
+    ui_set_text(line->label, text);
 }
 
 bool hud_start(Hud* hud, Engine* engine) {
     memset(hud, 0, sizeof(*hud));
-    hud->engine = engine;
     Font* font = load_font(engine->text_renderer->font_pool, HUD_FONT, 64.0f, true);
     hud->font = font;
     if (!font) {
@@ -82,6 +94,9 @@ bool hud_start(Hud* hud, Engine* engine) {
     root->spacing = 10.0f;
     line_build(&hud->thought, root, THOUGHT_FG);
     line_build(&hud->prompt, root, PROMPT_FG);
+    // A line tall, words or none, with the label's own padding over and under it.
+    ui_set_size(hud->prompt.label, UI_FIT, 0.0f, UI_FIXED,
+                ui_line_height(font, HUD_SIZE, 1.0f) + 8.0f);
     hud->thought_age = THOUGHT_IN + THOUGHT_STAY + THOUGHT_OUT;
     ui_push(hud->ui, hud->screen);
     ui_attach(hud->ui, engine);
@@ -90,21 +105,30 @@ bool hud_start(Hud* hud, Engine* engine) {
 
 void hud_prompt(Hud* hud, const char* text) {
     if (hud->ui)
-        line_set(&hud->prompt, text ? text : "");
+        line_set(&hud->prompt, text ? text : hud->hint_left > 0.0f ? hud->hint : "");
+}
+
+void hud_hint(Hud* hud, const char* text, float seconds) {
+    hud->hint = text;
+    hud->hint_left = seconds;
 }
 
 void hud_think(Hud* hud, const char* text) {
     if (!hud->ui)
         return;
+    // The same thought had again carries on from as far as it had come in, rather than going out
+    // and coming in again.
+    const bool again = line_shown(&hud->thought) && strcmp(text, hud->thought.label->text) == 0;
     line_set(&hud->thought, text);
-    hud->thought_age = 0.0f;
+    hud->thought_age = again ? hud->thought.alpha * THOUGHT_IN : 0.0f;
 }
 
-void hud_update(Hud* hud, float dt) {
+void hud_update(Hud* hud, float dt, float height) {
     if (!hud->ui)
         return;
     // From the window as it is now: a change of window mode resizes it.
-    ui_screen_root(hud->screen)->padding[2] = HUD_LIFT * (float)hud->engine->win_height;
+    ui_screen_root(hud->screen)->padding[2] = HUD_LIFT * height;
+    hud->hint_left = fmaxf(hud->hint_left - dt, 0.0f);
 
     hud->thought_age += dt;
     const float t = hud->thought_age;
@@ -112,12 +136,9 @@ void hud_update(Hud* hud, float dt) {
                         : t < THOUGHT_IN + THOUGHT_STAY
                             ? 1.0f
                             : 1.0f - (t - THOUGHT_IN - THOUGHT_STAY) / THOUGHT_OUT;
-    const float a = glm_clamp(alpha, 0.0f, 1.0f);
-    if (a <= 0.0f && hud->thought.text[0])
+    hud->thought.alpha = glm_clamp(alpha, 0.0f, 1.0f);
+    if (hud->thought.alpha <= 0.0f)
         line_set(&hud->thought, "");
-    if (fabsf(a - hud->thought.alpha) > 1.0f / 512.0f ||
-        (a == 0.0f) != (hud->thought.alpha == 0.0f))
-        line_style(&hud->thought, THOUGHT_FG, a);
 }
 
 void hud_free(Hud* hud) {

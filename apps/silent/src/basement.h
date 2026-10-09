@@ -35,7 +35,8 @@ typedef struct Basement {
     double next_drip;
     KitRng drips; // the gaps between them
 
-    Entity* bar; // across the way in at the flight's foot while the player has no light; or NULL
+    Entity* bar;  // across the way in at the flight's foot while the player has no light; or NULL
+    bool at_foot; // the player has come down to the foot since last up in the hall
 } Basement;
 
 // The foundation, the slab, the framing overhead, the beam and its posts, the stair and its
@@ -53,13 +54,12 @@ void basement_update(Basement* b, const Door* door, double time);
 
 /*
  * The basement is dark past the bulb's reach at the flight's foot, and nobody goes into it
- * without a light (spec 13.40): the way in from the foot is barred by a body nobody sees until
- * the player has the flashlight. Whether `feet` are at the foot -- on its last steps or the floor
- * below them -- is what says so to the player.
+ * without a light (spec 13.40): the way in from the foot is barred by a body nobody sees while
+ * the player has no `light`, and open once they have one. Per fixed step, with where the
+ * player's `feet` are: true on the step they come down to the foot -- its last steps or the floor
+ * below them -- without a light, once each time they come down from the hall.
  */
-bool basement_at_foot(const vec3 feet);
-// The bar across the way in, and gone again; each a no-op when it already is so.
-void basement_bar(Basement* b, EntityManager* em, PhysicsWorld* physics);
-void basement_unbar(Basement* b, EntityManager* em);
+bool basement_hold(Basement* b, EntityManager* em, PhysicsWorld* physics, const vec3 feet,
+                   bool light);
 
 #endif // _SILENT_BASEMENT_H_

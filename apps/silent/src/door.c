@@ -1,4 +1,3 @@
-#include <float.h>
 #include <math.h>
 
 #include "door.h"
@@ -158,8 +157,7 @@ bool door_build(Door* door, Engine* engine, Scene* scene, EntityManager* em, Phy
     const float half_h = 0.5f * (kit_opening_crown(shape) - shape->bottom);
     const KitFrame local = {{-(shape->from + half_w), -(shape->bottom + half_h), 0.0f}, 0.0f};
     Kit kit;
-    kit_init(&kit, scene, NULL, NULL);
-    mats_register(&kit, engine, scene);
+    mats_kit(&kit, engine, scene);
     leaf(&kit, &local, shape, thick);
     SceneNode* node = kit_finish(&kit, name);
 
@@ -201,19 +199,4 @@ void door_update(Door* door, float dt) {
     door->travel = door->want > door->travel ? fminf(door->want, door->travel + step)
                                              : fmaxf(door->want, door->travel - step);
     place(door);
-}
-
-float reach_distance(const vec3 at, const vec3 eye, const vec3 forward, float reach, float cone) {
-    vec3 to = {0.0f, 0.0f, 0.0f};
-    glm_vec3_sub((float*)at, (float*)eye, to);
-    const float dist = glm_vec3_norm(to);
-    if (dist > reach || dist < 1e-4f || glm_vec3_dot(to, (float*)forward) / dist < cosf(cone))
-        return FLT_MAX;
-    return dist;
-}
-
-float door_reach_distance(const Door* door, const vec3 eye, const vec3 forward, float reach,
-                          float cone) {
-    return door->entity ? reach_distance(door->entity->position, eye, forward, reach, cone)
-                        : FLT_MAX;
 }

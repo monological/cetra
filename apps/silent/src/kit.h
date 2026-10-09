@@ -403,5 +403,8 @@ void kit_frame_card_row(Kit* kit, const KitFrame* f, int mat, const float uv[4],
 
 // Builds one mesh per used material under a node on the scene root.
 SceneNode* kit_finish(Kit* kit, const char* name);
+// The same node on no graph, for something drawn only on its own; its materials are registered
+// with the scene, which no draw walking past them would do, so the scene still frees them.
+SceneNode* kit_finish_alone(Kit* kit, const char* name);
 
 #endif // _SILENT_KIT_H_

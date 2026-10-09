@@ -581,6 +581,11 @@ void mats_set_baked(Material* m, Scene* scene, const char* name, const BakedMaps
 
 _Static_assert(MAT_COUNT <= KIT_MAX_MATERIALS, "every MatId needs a kit slot");
 
+void mats_kit(Kit* kit, Engine* engine, Scene* scene) {
+    kit_init(kit, scene, NULL, NULL);
+    mats_register(kit, engine, scene);
+}
+
 void mats_register(Kit* kit, Engine* engine, Scene* scene) {
     // Registered in order into an empty kit, so the slot IS the MatId.
     assert(kit->material_count == 0);

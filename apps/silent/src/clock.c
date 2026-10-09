@@ -280,8 +280,7 @@ static void pendulum(Kit* kit, const KitFrame* f) {
 static SceneNode* part(Engine* engine, Scene* scene, const char* name,
                        void (*build)(Kit*, const KitFrame*)) {
     Kit kit;
-    kit_init(&kit, scene, NULL, NULL);
-    mats_register(&kit, engine, scene);
+    mats_kit(&kit, engine, scene);
     const KitFrame f = {{0.0f, 0.0f, 0.0f}, CLOCK.yaw};
     build(&kit, &f);
     return kit_finish(&kit, name);

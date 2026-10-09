@@ -81,7 +81,7 @@ typedef enum {
     MAT_MOULDING,   // crown moulding, skirting and casings, painted white long ago
     MAT_UPHOLSTERY, // the sofa and the armchair
     MAT_MIRROR,     // the bathroom's mirror, its silvering spotted
-    MAT_LAMPSHADE,  // the floor lamp's fabric shade, lit from inside
+    MAT_LAMPSHADE,  // a lamp's fabric shade, lit from inside
     MAT_FROSTED,    // a lantern's frosted glass, lit from inside
     MAT_SCREEN,     // the television's glass, glowing with its picture
     MAT_TV_STATIC,  // the picture on it, snow, drawn in the late draw (spec 13.30)
@@ -114,6 +114,9 @@ typedef enum {
 // Loads every surface's photo maps into the scene's pool and registers the
 // materials with the kit, slot for slot with MatId. The kit must be empty.
 void mats_register(Kit* kit, Engine* engine, Scene* scene);
+// A kit of its own for a part that is a node of its own -- a door's leaf, a clock's hand, a lamp,
+// a thing in the backpack -- with every surface the world has.
+void mats_kit(Kit* kit, Engine* engine, Scene* scene);
 
 // Daytime: the street lamps' lenses go dark, and the stained glass is lit by the sky.
 void mats_daytime(Kit* kit);

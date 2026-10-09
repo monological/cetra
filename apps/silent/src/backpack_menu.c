@@ -1,16 +1,16 @@
-#include <ctype.h>
 #include <math.h>
-#include <stdio.h>
 #include <string.h>
 
 #include "backpack_menu.h"
 
 // The pane, in window points: its share of the window's width up to a most, the share of its
-// inside the chosen item's side takes, and the picture's height over its width.
+// inside the chosen item's side takes, the picture's height over its width, and the most of the
+// window's height the grid may take.
 #define PANE_SHARE   0.9f
 #define PANE_MAX     980.0f
 #define DETAIL_SHARE 0.4f
 #define VIEW_ASPECT  0.62f
+#define GRID_ROOM    0.62f
 #define PAD          22.0f
 #define GAP          26.0f
 #define BRACKET      14.0f // the frame's corner brackets' arms
@@ -25,6 +25,7 @@
 #define LINE_TRACK 0.5f
 #define LINE_ROWS  4 // the line about an item has room for this many
 #define HINT_SIZE  14.0f
+#define SPACING    1.25f // between a label's lines
 
 // Amber on near black, as Deus Ex draws it; the UI is in display values.
 static const vec4 AMBER = {0.96f, 0.69f, 0.22f, 1.0f};
@@ -35,8 +36,10 @@ static const vec4 GRID_FILL = {0.96f, 0.69f, 0.22f, 0.03f};
 static const vec4 TEXT = {0.93f, 0.87f, 0.74f, 1.0f};
 static const vec4 PANE_BG = {0.015f, 0.014f, 0.012f, 0.9f};
 
-// The grid's pictures side on, the long way across; the chosen one turning, a little from above.
+// The grid's pictures side on, the long way across; the chosen one turning from there, a little
+// from above.
 static const ItemShot ICON = {0.5f * GLM_PIf, 0.35f, true};
+#define TURNING_TILT 0.32f
 
 static void line_quad(UIDrawList* dl, float x, float y, float w, float h, const vec4 colour) {
     ui_draw_quad(dl, (UIRect){x, y, w, h}, (float*)colour);
@@ -99,15 +102,13 @@ static int walk_order(const BackpackMenu* menu, ItemId* out) {
     return n;
 }
 
-// A picture of `item` drawn into `r` by `view`, at the window's pixels, made only when `again`
-// or when the size changed.
+// A picture of `item` drawn into `r` by `view`, at the window's pixels.
 static void picture(BackpackMenu* menu, UIDrawList* dl, ItemView* view, ItemId item,
-                    const ItemShot* shot, UIRect r, bool again) {
+                    const ItemShot* shot, UIRect r) {
     const int w = (int)lroundf(r.w * menu->scale), h = (int)lroundf(r.h * menu->scale);
-    if (again || !item_view_ready(view, w, h))
-        item_view_draw(view, menu->program, menu->pack->models[item], shot, w, h);
-    if (item_view_ready(view, w, h))
-        ui_draw_textured_quad(dl, r, &view->texture, (vec4){1.0f, 1.0f, 1.0f, 1.0f});
+    const Texture* t = item_view_draw(view, &menu->stage, menu->pack->models[item], shot, w, h);
+    if (t)
+        ui_draw_textured_quad(dl, r, t, (vec4){1.0f, 1.0f, 1.0f, 1.0f});
 }
 
 // The grid: faint cells, then each thing carried across its footprint, lit when the pointer or
@@ -128,13 +129,13 @@ static void grid_draw(UIElement* el, UIDrawList* dl, void* user) {
     for (int k = 0; k < n; k++) {
         const ItemId item = order[k];
         const UIRect at = footprint(menu, r, item);
-        const bool chosen = menu->chosen == (int)item;
-        const bool lit = menu->hovered == (int)item || menu->cursor == k;
+        const bool chosen = menu->chosen == item;
+        const bool lit = menu->hovered == item || menu->cursor == item;
         vec4 fill = {AMBER[0], AMBER[1], AMBER[2], chosen ? 0.22f : lit ? 0.15f : 0.07f};
         vec4 edge = {AMBER[0], AMBER[1], AMBER[2], chosen ? 1.0f : lit ? 0.8f : 0.35f};
         ui_draw_rounded(dl, at, 2.0f, fill, edge, chosen ? 1.5f : 1.0f);
         picture(menu, dl, &menu->icons[item], item, &ICON,
-                ui_rect_inset(at, 4.0f, 4.0f, 4.0f, 4.0f), false);
+                ui_rect_inset(at, 4.0f, 4.0f, 4.0f, 4.0f));
     }
 }
 
@@ -144,7 +145,7 @@ static void view_draw(UIElement* el, UIDrawList* dl, void* user) {
     const UIRect r = el->rect;
     ui_draw_quad(dl, r, (float*)GRID_FILL);
     brackets(dl, r, BRACKET, 1.0f, RULE);
-    if (menu->chosen < 0) {
+    if (menu->chosen == ITEM_NONE) {
         const UIStyle hint = {.fg = {AMBER_DIM[0], AMBER_DIM[1], AMBER_DIM[2], AMBER_DIM[3]},
                               .font_size = HINT_SIZE,
                               .tracking = 2.5f};
@@ -153,9 +154,8 @@ static void view_draw(UIElement* el, UIDrawList* dl, void* user) {
                      UI_ALIGN_CENTER);
         return;
     }
-    // From side on, as the grid shows it, turning from there.
-    const ItemShot turning = {ICON.angle + menu->angle, 0.32f, false};
-    picture(menu, dl, &menu->turntable, (ItemId)menu->chosen, &turning, r, true);
+    const ItemShot turning = {ICON.angle + menu->angle, TURNING_TILT, false};
+    picture(menu, dl, &menu->turntable, menu->chosen, &turning, r);
 }
 
 static UIElement* label(UIElement* parent, const char* text, float size, const vec4 fg,
@@ -164,7 +164,7 @@ static UIElement* label(UIElement* parent, const char* text, float size, const v
     const UIStyle s = {.fg = {fg[0], fg[1], fg[2], fg[3]},
                        .font_size = size,
                        .tracking = tracking,
-                       .line_spacing = 1.25f};
+                       .line_spacing = SPACING};
     ui_set_style(el, &s);
     return el;
 }
@@ -189,12 +189,9 @@ static void rule(UIElement* parent) {
 
 bool backpack_menu_start(BackpackMenu* menu, UISystem* ui, Font* font, const Backpack* pack) {
     memset(menu, 0, sizeof(*menu));
-    menu->chosen = menu->hovered = menu->cursor = -1;
+    menu->chosen = menu->hovered = menu->cursor = ITEM_NONE;
     menu->scale = 1.0f;
-    if (!ui || !font)
-        return false;
-    menu->program = create_item_view_program();
-    if (!menu->program)
+    if (!ui || !font || !item_stage_start(&menu->stage))
         return false;
     menu->ui = ui;
     menu->font = font;
@@ -227,11 +224,12 @@ bool backpack_menu_start(BackpackMenu* menu, UISystem* ui, Font* font, const Bac
     // The name and the line hold their room while nothing is chosen, so choosing does not resize
     // the pane under the pointer.
     menu->name = label(menu->detail, "", NAME_SIZE, AMBER, 3.0f);
-    ui_set_size(menu->name, UI_FIT, 0.0f, UI_FIXED, ui_line_height(font, NAME_SIZE, 1.25f) + 8.0f);
+    ui_set_size(menu->name, UI_FIT, 0.0f, UI_FIXED,
+                ui_line_height(font, NAME_SIZE, SPACING) + 8.0f);
     rule(menu->detail);
     menu->line = label(menu->detail, "", LINE_SIZE, TEXT, LINE_TRACK);
     ui_set_size(menu->line, UI_FIT, 0.0f, UI_FIXED,
-                (float)LINE_ROWS * ui_line_height(font, LINE_SIZE, 1.25f) + 8.0f);
+                (float)LINE_ROWS * ui_line_height(font, LINE_SIZE, SPACING) + 8.0f);
     rule(menu->pane);
     label(menu->pane, "TAB  CLOSE        ARROWS  MOVE        ENTER  LOOK", HINT_SIZE, AMBER_DIM,
           2.5f);
@@ -245,83 +243,48 @@ bool backpack_menu_open(const BackpackMenu* menu) {
 void backpack_menu_show(BackpackMenu* menu) {
     if (!menu->screen || backpack_menu_open(menu))
         return;
-    menu->chosen = menu->hovered = -1;
-    menu->cursor = menu->pack->held_count > 0 ? 0 : -1;
-    menu->name_text[0] = menu->line_text[0] = '\0';
+    ItemId order[ITEM_COUNT];
+    menu->chosen = menu->hovered = ITEM_NONE;
+    menu->cursor = walk_order(menu, order) > 0 ? order[0] : ITEM_NONE;
     ui_set_text(menu->name, "");
     ui_set_text(menu->line, "");
     ui_push(menu->ui, menu->screen);
 }
 
-void backpack_menu_hide(BackpackMenu* menu) {
-    if (backpack_menu_open(menu))
-        ui_pop(menu->ui);
-}
-
-// The line about the chosen item, broken at words to the right-hand side's width.
+// The line about the chosen item, broken at words to `width`.
 static void wrap_line(BackpackMenu* menu, float width) {
-    if (menu->chosen < 0)
-        return;
     const char* text = ITEMS[menu->chosen].line;
+    char wrapped[512];
     size_t n = 0;
-    while (*text && n + 2 < sizeof(menu->line_text)) {
+    while (*text && n + 2 < sizeof(wrapped)) {
         size_t cut = ui_text_wrap_point(menu->font, LINE_SIZE, LINE_TRACK, text, width);
         cut = cut > 0 ? cut : strlen(text);
-        for (size_t i = 0; i < cut && n + 2 < sizeof(menu->line_text); i++)
-            menu->line_text[n++] = text[i];
+        for (size_t i = 0; i < cut && n + 2 < sizeof(wrapped); i++)
+            wrapped[n++] = text[i];
         text += cut;
         while (*text == ' ')
             text++;
         if (*text)
-            menu->line_text[n++] = '\n';
+            wrapped[n++] = '\n';
     }
-    menu->line_text[n] = '\0';
-    ui_set_text(menu->line, menu->line_text);
+    wrapped[n] = '\0';
+    ui_set_text(menu->line, wrapped);
     menu->wrapped_at = width;
 }
 
 void backpack_menu_choose(BackpackMenu* menu, ItemId item) {
-    if (item < 0 || item >= ITEM_COUNT || !backpack_holds(menu->pack, item))
+    if (!menu->screen || item < 0 || item >= ITEM_COUNT || !backpack_holds(menu->pack, item))
         return;
-    if (menu->chosen != (int)item)
+    if (menu->chosen != item)
         menu->angle = 0.0f;
-    menu->chosen = (int)item;
-    size_t i = 0;
-    for (const char* s = ITEMS[item].name; *s && i + 1 < sizeof(menu->name_text); s++)
-        menu->name_text[i++] = (char)toupper((unsigned char)*s);
-    menu->name_text[i] = '\0';
-    ui_set_text(menu->name, menu->name_text);
-    wrap_line(menu, menu->detail->size[0]);
+    menu->chosen = item;
+    ui_set_text(menu->name, ITEMS[item].name);
+    menu->wrapped_at = 0.0f;
 }
 
-void backpack_menu_input(BackpackMenu* menu, const UIInput* in) {
-    if (!backpack_menu_open(menu))
-        return;
-    ItemId order[ITEM_COUNT];
-    const int n = walk_order(menu, order);
-    menu->hovered = -1;
-    for (int k = 0; k < n; k++)
-        if (ui_rect_hit(footprint(menu, menu->grid->rect, order[k]), in->pointer_x,
-                        in->pointer_y)) {
-            menu->hovered = (int)order[k];
-            if (in->pointer_pressed) {
-                menu->cursor = k;
-                backpack_menu_choose(menu, order[k]);
-            }
-        }
-    if (n == 0)
-        return;
-    if (in->nav_left || in->nav_up)
-        menu->cursor = (menu->cursor + n - 1) % n;
-    if (in->nav_right || in->nav_down)
-        menu->cursor = (menu->cursor + 1) % n;
-    if (in->accept && menu->cursor >= 0)
-        backpack_menu_choose(menu, order[menu->cursor]);
-}
-
-void backpack_menu_update(BackpackMenu* menu, float dt, float width, float height, float scale) {
+void backpack_menu_layout(BackpackMenu* menu, float width, float height, float scale) {
     menu->scale = scale > 0.0f ? scale : 1.0f;
-    if (!menu->pane)
+    if (!menu->screen)
         return;
     // The pane to the window: the grid's cells square and the bag's rows tall, the chosen item's
     // side beside it, both no taller than the window leaves.
@@ -329,7 +292,7 @@ void backpack_menu_update(BackpackMenu* menu, float dt, float width, float heigh
     const float inside = pane - 2.0f * PAD - GAP;
     float detail = DETAIL_SHARE * inside;
     float cell = (inside - detail) / (float)BAG_COLS;
-    const float room = 0.62f * height;
+    const float room = GRID_ROOM * height;
     const float rows = (float)menu->pack->rows;
     if (cell * rows > room) {
         cell = room / rows;
@@ -339,9 +302,45 @@ void backpack_menu_update(BackpackMenu* menu, float dt, float width, float heigh
     ui_set_size(menu->grid, UI_FIXED, cell * (float)BAG_COLS, UI_FIXED, cell * rows);
     ui_set_size(menu->detail, UI_FIXED, detail, UI_FIT, 0.0f);
     ui_set_size(menu->view, UI_FIXED, detail, UI_FIXED, VIEW_ASPECT * detail);
-    if (menu->chosen >= 0 && menu->wrapped_at != detail)
-        wrap_line(menu, detail);
-    if (backpack_menu_open(menu) && menu->chosen >= 0)
+}
+
+void backpack_menu_input(BackpackMenu* menu, const UIInput* in) {
+    if (!backpack_menu_open(menu))
+        return;
+    ItemId order[ITEM_COUNT];
+    const int n = walk_order(menu, order);
+    menu->hovered = ITEM_NONE;
+    for (int k = 0; k < n; k++)
+        if (ui_rect_hit(footprint(menu, menu->grid->rect, order[k]), in->pointer_x,
+                        in->pointer_y)) {
+            menu->hovered = order[k];
+            if (in->pointer_pressed) {
+                menu->cursor = order[k];
+                backpack_menu_choose(menu, order[k]);
+            }
+        }
+    if (n == 0)
+        return;
+    int at = 0;
+    for (int k = 0; k < n; k++)
+        if (order[k] == menu->cursor)
+            at = k;
+    if (in->nav_left || in->nav_up)
+        at = (at + n - 1) % n;
+    if (in->nav_right || in->nav_down)
+        at = (at + 1) % n;
+    menu->cursor = order[at];
+    if (in->accept)
+        backpack_menu_choose(menu, menu->cursor);
+}
+
+void backpack_menu_update(BackpackMenu* menu, float dt) {
+    if (menu->chosen == ITEM_NONE)
+        return;
+    // Wrapped here, once the pane has its width: a choice made before then has none to wrap to.
+    if (menu->wrapped_at != menu->detail->size[0])
+        wrap_line(menu, menu->detail->size[0]);
+    if (backpack_menu_open(menu))
         menu->angle = fmodf(menu->angle + TURN_RATE * dt, 2.0f * GLM_PIf);
 }
 
@@ -349,7 +348,6 @@ void backpack_menu_free(BackpackMenu* menu) {
     for (int i = 0; i < ITEM_COUNT; i++)
         item_view_free(&menu->icons[i]);
     item_view_free(&menu->turntable);
-    // Never registered with the engine, so it is the menu's to free.
-    free_program(menu->program);
+    item_stage_free(&menu->stage);
     memset(menu, 0, sizeof(*menu));
 }

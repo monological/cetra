@@ -1,3 +1,4 @@
+#include <float.h>
 #include <math.h>
 
 #include <GL/glew.h>
@@ -22,6 +23,10 @@
 
 #define PITCH_LIMIT     1.45f
 #define MOUSE_LOOK_RATE 0.0022f // radians per pixel
+
+// What a hand goes to: within REACH metres of the eye and REACH_CONE radians of where it looks.
+#define REACH      1.9f
+#define REACH_CONE 0.6f
 
 // Raw motion where the platform has it, so the desktop's acceleration curve
 // stays out of the look. Nothing captures headless: there is no pointer.
@@ -96,9 +101,10 @@ void player_pre_render(Player* p, Game* game, const vec3* pin_eye, const vec3* p
         camera_rig_set_pose(p->rig, *pin_eye, *pin_target);
         return;
     }
+    const bool held = input_is_suppressed(&game->input);
     if (p->cursor_captured && p->skip_first_delta) {
         p->skip_first_delta = false;
-    } else if (p->cursor_captured) {
+    } else if (p->cursor_captured && !held) {
         double dx = 0.0, dy = 0.0;
         input_mouse_delta(&game->input, &dx, &dy);
         camera_rig_aim(p->rig, p->rig->yaw - (float)dx * MOUSE_LOOK_RATE,
@@ -107,28 +113,18 @@ void player_pre_render(Player* p, Game* game, const vec3* pin_eye, const vec3* p
     // The debug GUI wants the pointer: while it is open the cursor is free and a click does not
     // take it back, or its sliders could not be reached. The arrow keys still look. While the
     // game's input is held a click takes nothing either: nobody looks round a room they cannot see.
-    if (engine->show_gui)
-        set_cursor_captured(p, engine, false);
-    else if (!p->cursor_captured && input_mouse_pressed(&game->input, GLFW_MOUSE_BUTTON_LEFT) &&
-             !engine_gui_wants_mouse() && !input_is_suppressed(&game->input))
-        set_cursor_captured(p, engine, true);
-    if (input_action_pressed(&game->input, "release_cursor"))
-        set_cursor_captured(p, engine, false);
+    // Captured after the look, so the jump a capture makes lands in the delta it skips.
+    if (engine->show_gui || input_action_pressed(&game->input, "release_cursor"))
+        p->cursor_wanted = false;
+    else if (input_mouse_pressed(&game->input, GLFW_MOUSE_BUTTON_LEFT) &&
+             !engine_gui_wants_mouse() && !held)
+        p->cursor_wanted = true;
+    set_cursor_captured(p, engine, p->cursor_wanted && !held);
 
     glm_vec3_copy(p->entity->position, p->rig->anchor);
     camera_rig_update(p->rig, (float)game->sim_clock.delta,
                       input_action_value(&game->input, "look_x"),
                       input_action_value(&game->input, "look_y"));
-}
-
-bool player_release_cursor(Player* p, Engine* engine) {
-    const bool was = p->cursor_captured;
-    set_cursor_captured(p, engine, false);
-    return was;
-}
-
-void player_capture_cursor(Player* p, Engine* engine) {
-    set_cursor_captured(p, engine, true);
 }
 
 void player_feet(const Player* p, vec3 out) {
@@ -146,4 +142,14 @@ void player_eye(const Player* p, vec3 eye, vec3 forward) {
     // frame rather than one behind it.
     glm_vec3_copy((float*)p->rig->pose.eye, eye);
     camera_rig_direction(p->rig, forward);
+}
+
+float player_reach_distance(const Player* p, const vec3 at) {
+    vec3 eye = {0.0f, 0.0f, 0.0f}, forward = {0.0f, 0.0f, 0.0f}, to = {0.0f, 0.0f, 0.0f};
+    player_eye(p, eye, forward);
+    glm_vec3_sub((float*)at, eye, to);
+    const float dist = glm_vec3_norm(to);
+    if (dist > REACH || dist < 1e-4f || glm_vec3_dot(to, forward) / dist < cosf(REACH_CONE))
+        return FLT_MAX;
+    return dist;
 }

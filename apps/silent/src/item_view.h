@@ -28,22 +28,30 @@ typedef struct ItemShot {
     bool flat;
 } ItemShot;
 
-// One picture, made again only when its size changes.
-typedef struct ItemView {
-    GLuint ms_fbo, ms_colour, ms_depth; // where it draws, multisampled
-    GLuint fbo, colour;                 // what the UI shows, resolved
+// Where every picture is drawn before it is resolved into its own: the program, and four samples
+// as large as the largest picture asked of it, shared so a picture drawn once keeps none.
+typedef struct ItemStage {
+    ShaderProgram* program;
+    GLuint fbo, colour, depth;
     int width, height;
-    Texture texture; // wraps `colour` for the UI, which reads only its id
+} ItemStage;
+
+// One picture, and what it is of: asked for the same again, it is not drawn again.
+typedef struct ItemView {
+    GLuint fbo;
+    Texture texture; // the picture for the UI, which reads only its id; id 0 when it failed
+    const SceneNode* model;
+    ItemShot shot;
 } ItemView;
 
-// The program every picture is drawn with; NULL, with the reason printed, if it will not build.
-ShaderProgram* create_item_view_program(void);
+// False, with the reason printed, if the program will not build; no picture is drawn then.
+bool item_stage_start(ItemStage* stage);
+void item_stage_free(ItemStage* stage);
+
 // `model` as `shot` sees it, `width` x `height` pixels: the picture, or NULL when it cannot be
-// made.
-const Texture* item_view_draw(ItemView* view, ShaderProgram* program, const SceneNode* model,
+// made, which is not tried again until something asked for changes.
+const Texture* item_view_draw(ItemView* view, ItemStage* stage, const SceneNode* model,
                               const ItemShot* shot, int width, int height);
-// Whether it holds a picture this size.
-bool item_view_ready(const ItemView* view, int width, int height);
 void item_view_free(ItemView* view);
 
 #endif // _SILENT_ITEM_VIEW_H_

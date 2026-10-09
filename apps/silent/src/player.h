@@ -16,8 +16,10 @@
  * creeping through a house does: walk, sprint, look. No jump.
  *
  * Movement is read in the camera's frame (the rig steers the controls). The
- * mouse is captured on a click and released on Escape; the arrows and the right
- * stick look too, so a headless or pad run reaches every control.
+ * mouse is captured on a click and released on Escape, and free whenever the
+ * game's input is held -- a screen over the game, the loading screen -- coming
+ * back as it was once that lets go; the arrows and the right stick look too, so
+ * a headless or pad run reaches every control.
  *
  * It reads the actions "move_x", "move_y", "sprint", "look_x", "look_y" and
  * "release_cursor" by name, from whatever table the app binds.
@@ -28,7 +30,8 @@
 typedef struct Player {
     Entity* entity;
     CameraRig* rig;
-    bool cursor_captured;
+    bool cursor_wanted;    // the player's own choice: a click takes the cursor, Escape gives it up
+    bool cursor_captured;  // what the window has
     bool skip_first_delta; // the first delta after a capture is a jump, not a movement
 } Player;
 
@@ -44,13 +47,12 @@ void player_update(Player* p, Game* game, double dt);
 // a pin, the camera is held at eye/target instead.
 void player_pre_render(Player* p, Game* game, const vec3* pin_eye, const vec3* pin_target);
 
-// The cursor freed for a screen over the game -- true if it was captured, to be given back --
-// and captured again.
-bool player_release_cursor(Player* p, Engine* engine);
-void player_capture_cursor(Player* p, Engine* engine);
-
 // Where the eye is this frame, and which way it looks.
 void player_eye(const Player* p, vec3 eye, vec3 forward);
+
+// How far the eye is from `at` when a hand can go to it -- near enough and looked at -- and
+// FLT_MAX when it cannot.
+float player_reach_distance(const Player* p, const vec3 at);
 
 // Where the body's feet are, and how fast it moved over the last step: the capsule's own, which
 // a camera pinned elsewhere does not move.

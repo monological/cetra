@@ -181,8 +181,8 @@ typedef struct SilentArgs {
     bool startup_ms;        // print where loading's time goes, a startup-ms row a step
     bool no_play_prompt;    // the loading screen lifts by itself once the game is ready
     bool flashlight;
-    bool backpack;     // the backpack already taken, and the flashlight in it
-    int open_backpack; // an ItemId: the backpack's screen open on it at the start; -1 = shut
+    bool backpack;        // the backpack already taken, and the flashlight in it
+    ItemId open_backpack; // the backpack's screen open on it at the start, or ITEM_NONE
     bool mute;
     float rain_mmh;          // 0 = dry
     bool no_wind;            // still air: the rain falls straight
@@ -226,11 +226,6 @@ static Cat g_cat;
 static CatMind g_mind;
 static CatVoice g_voice;
 
-// The door that opens, and the line that says what the action key would do. It answers when
-// the eye is within DOOR_REACH of its leaf's middle and looking within DOOR_CONE of it.
-#define DOOR_REACH 1.9f
-#define DOOR_CONE  0.6f // radians
-
 // The street lamps on failing ballasts: the one up the drive and the one at the chasm's lip.
 enum { FAILING_DRIVE, FAILING_LIP, FAILING_LAMPS };
 static FailingLamp g_failing[FAILING_LAMPS];
@@ -244,10 +239,6 @@ static Hud g_hud;
 static Basement g_basement;
 static Backpack g_backpack;
 static BackpackMenu g_menu;
-static bool g_menu_was_open;
-static bool g_cursor_given_back; // the backpack's screen freed a captured cursor
-static float g_tab_hint;         // seconds the prompt still names Tab, after the bag is taken
-static bool g_dark_said;         // the dark at the cellar flight's foot was thought this visit
 
 // How long the prompt names Tab once the backpack is had.
 #define TAB_HINT_SECONDS 5.0f
@@ -815,12 +806,12 @@ static void on_init(Game* game) {
         house_front_door(&g_doors[DOOR_MANSION], engine, g_scene, em, physics, mansion_origin);
     load_seam(engine, "doors");
     // The backpack on the bedroom's bed (spec 13.40), unless the run starts with it.
-    backpack_build(&g_backpack, engine, g_scene, g_args.backpack || g_args.flashlight);
+    backpack_build(&g_backpack, engine, g_scene, g_args.backpack);
     hud_start(&g_hud, engine);
     backpack_menu_start(&g_menu, g_hud.ui, g_hud.font, &g_backpack);
-    if (g_args.open_backpack >= 0) {
+    if (g_args.open_backpack != ITEM_NONE) {
         backpack_menu_show(&g_menu);
-        backpack_menu_choose(&g_menu, (ItemId)g_args.open_backpack);
+        backpack_menu_choose(&g_menu, g_args.open_backpack);
     }
     load_seam(engine, "backpack-hud");
     // Every static collider stands by now, and the cat's place check casts thousands of rays at
@@ -863,9 +854,6 @@ static void on_init(Game* game) {
     clock_start(&g_clock, engine, g_scene, audio);
     load_seam(engine, "audio-kitchen-clock");
     basement_start(&g_basement, engine, g_scene, audio, (unsigned int)g_args.seed);
-    // Nobody goes into the dark down there without a light (spec 13.40).
-    if (!backpack_holds(&g_backpack, ITEM_FLASHLIGHT))
-        basement_bar(&g_basement, em, physics);
     lights_start_audio(&g_lights, audio);
     load_seam(engine, "audio-basement-lights");
     tv_start_audio(&g_tv, audio);
@@ -975,15 +963,11 @@ static void on_update(Game* game, double dt) {
     // What it senses is decided here, and what it does about it by its brain after this hook.
     cat_mind_sense(&g_mind, g_args.rain_mmh / CAT_HEAVY_RAIN, (float)dt);
     player_update(&g_player, game, dt);
-    // At the cellar flight's foot with no light, the player thinks why they can go no further
-    // (spec 13.40): once a visit, and again only after climbing back up to the hall.
-    if (basement_at_foot(feet)) {
-        if (!g_dark_said && !backpack_holds(&g_backpack, ITEM_FLASHLIGHT))
-            hud_think(&g_hud, "It's too dark. I can't see. I need to find a flashlight.");
-        g_dark_said = true;
-    } else if (feet[1] > FLOOR_Y - 0.5f) {
-        g_dark_said = false;
-    }
+    // Nobody goes into the dark down there without a light, and at the cellar flight's foot the
+    // player thinks why they can go no further (spec 13.40).
+    if (basement_hold(&g_basement, game->entity_manager, game->physics_world, feet,
+                      backpack_holds(&g_backpack, ITEM_FLASHLIGHT)))
+        hud_think(&g_hud, "It's too dark. I can't see. I need to find a flashlight.");
     for (int i = 0; i < DOORS; i++)
         if (g_door_hung[i])
             door_update(&g_doors[i], (float)dt);
@@ -1056,6 +1040,13 @@ static bool write_dump(const char* path) {
     return fclose(f) == 0;
 }
 
+// The bag off the bed (spec 13.40): the player has it and what is in it, and says so.
+static void take_backpack(void) {
+    backpack_take(&g_backpack);
+    hud_think(&g_hud, "My backpack. There's a flashlight in it.");
+    hud_hint(&g_hud, "Tab   Backpack", TAB_HINT_SECONDS);
+}
+
 static void on_pre_render(Game* game, double alpha) {
     (void)alpha;
     Engine* engine = game->engine;
@@ -1089,36 +1080,28 @@ static void on_pre_render(Game* game, double alpha) {
     float nearest = FLT_MAX;
     for (int i = 0; i < DOORS; i++) {
         const float d = g_door_hung[i]
-                            ? door_reach_distance(&g_doors[i], eye, forward, DOOR_REACH, DOOR_CONE)
+                            ? player_reach_distance(&g_player, g_doors[i].entity->position)
                             : FLT_MAX;
         if (d < nearest) {
             nearest = d;
             door = &g_doors[i];
         }
     }
-    const bool bag =
-        backpack_reach_distance(&g_backpack, eye, forward, DOOR_REACH, DOOR_CONE) < nearest;
+    const bool bag = !g_backpack.taken && player_reach_distance(&g_player, g_backpack.at) < nearest;
     if (input_action_pressed(&game->input, "interact")) {
-        if (bag) {
-            backpack_take(&g_backpack);
-            basement_unbar(&g_basement, game->entity_manager);
-            hud_think(&g_hud, "My backpack. There's a flashlight in it.");
-            g_tab_hint = TAB_HINT_SECONDS;
-        } else if (door) {
+        if (bag)
+            take_backpack();
+        else if (door)
             door_toggle(door);
-        }
     }
     const float dt = (float)game->sim_clock.delta;
-    g_tab_hint = fmaxf(g_tab_hint - dt, 0.0f);
     hud_prompt(&g_hud, bag    ? "E   Take the backpack"
                        : door ? (door_will_open(door) ? "E   Open door" : "E   Close door")
-                       : g_tab_hint > 0.0f ? "Tab   Backpack"
-                                           : NULL);
-    hud_update(&g_hud, dt);
-    backpack_menu_update(&g_menu, dt, (float)engine->win_width, (float)engine->win_height,
-                         (float)engine->fb_width / (float)engine->win_width);
+                              : NULL);
+    hud_update(&g_hud, dt, (float)engine->win_height);
+    backpack_menu_update(&g_menu, dt);
     sounds_update(&g_sounds);
-    lights_update(&g_lights, g_scene, game->time, (float)game->sim_clock.delta, eye, forward);
+    lights_update(&g_lights, g_scene, game->time, dt, eye, forward);
     tv_update(&g_tv, game->time);
     cat_mind_frame(&g_mind, game->time);
     cat_debug_draw(&g_cat, &g_mind, engine);
@@ -1179,51 +1162,45 @@ static void on_pre_render(Game* game, double alpha) {
 
 /*
  * Before the fixed steps: nobody moves under the loading screen, or while the backpack's screen is
- * up (spec 13.40). Tab opens that screen once the backpack is had and shuts it; Escape shuts it
- * through the UI's back, and frees the cursor otherwise. The screen frees a captured cursor and
- * captures it again as it shuts. Here and not in a later hook, so the frame that opens it walks no
- * step and the frame that shuts it loses none.
+ * up (spec 13.40). Tab opens that screen once the backpack is had; Tab or Escape shuts it, through
+ * the UI's own back. Here and not in a later hook, so the frame that opens it walks no step. The
+ * game's input is held through the frame that shuts it too, so the key that shut it reaches
+ * nothing else: Escape frees the cursor only with no screen up, and the cursor the player frees
+ * while the input is held comes back after.
  */
 static void on_frame_input(Game* game) {
     Engine* engine = game->engine;
     const bool loading = engine_loading_screen_shown(engine);
-    if (!loading && input_action_pressed(&game->input, "backpack")) {
-        if (backpack_menu_open(&g_menu))
-            backpack_menu_hide(&g_menu);
-        else if (g_backpack.taken)
+    const bool held = ui_captures_input(g_hud.ui);
+    const bool open = backpack_menu_open(&g_menu);
+    const bool tab = !loading && input_action_pressed(&game->input, "backpack");
+    if (tab && !open) {
+        if (g_backpack.taken)
             backpack_menu_show(&g_menu);
         else
             hud_think(&g_hud, "I'm not carrying anything.");
     }
-    if (backpack_menu_open(&g_menu)) {
-        double mx = 0.0, my = 0.0;
-        input_mouse_pos(&game->input, &mx, &my);
-        const UIInput in = {
-            .pointer_x = (float)mx,
-            .pointer_y = (float)my,
-            .pointer_down = input_mouse_down(&game->input, GLFW_MOUSE_BUTTON_LEFT),
-            .pointer_pressed = input_mouse_pressed(&game->input, GLFW_MOUSE_BUTTON_LEFT),
-            .pointer_released = input_mouse_released(&game->input, GLFW_MOUSE_BUTTON_LEFT),
-            .nav_up = input_action_pressed(&game->input, "menu_up"),
-            .nav_down = input_action_pressed(&game->input, "menu_down"),
-            .nav_left = input_action_pressed(&game->input, "menu_left"),
-            .nav_right = input_action_pressed(&game->input, "menu_right"),
-            .accept = input_action_pressed(&game->input, "menu_accept"),
-            .back = input_action_pressed(&game->input, "menu_back"),
-        };
-        ui_update(g_hud.ui, &in, (float)engine->win_width, (float)engine->win_height);
-        // After the UI's pass, which lays the grid out where this hit-tests it.
-        backpack_menu_input(&g_menu, &in);
-    }
-    const bool open = backpack_menu_open(&g_menu);
-    if (open != g_menu_was_open) {
-        if (open)
-            g_cursor_given_back = player_release_cursor(&g_player, engine);
-        else if (g_cursor_given_back)
-            player_capture_cursor(&g_player, engine);
-        g_menu_was_open = open;
-    }
-    input_set_suppressed(&game->input, loading || open);
+    double mx = 0.0, my = 0.0;
+    input_mouse_pos(&game->input, &mx, &my);
+    const UIInput in = {
+        .pointer_x = (float)mx,
+        .pointer_y = (float)my,
+        .pointer_down = input_mouse_down(&game->input, GLFW_MOUSE_BUTTON_LEFT),
+        .pointer_pressed = input_mouse_pressed(&game->input, GLFW_MOUSE_BUTTON_LEFT),
+        .pointer_released = input_mouse_released(&game->input, GLFW_MOUSE_BUTTON_LEFT),
+        .nav_up = input_action_pressed(&game->input, "menu_up"),
+        .nav_down = input_action_pressed(&game->input, "menu_down"),
+        .nav_left = input_action_pressed(&game->input, "menu_left"),
+        .nav_right = input_action_pressed(&game->input, "menu_right"),
+        .accept = input_action_pressed(&game->input, "menu_accept"),
+        .back = open && (tab || input_action_pressed(&game->input, "menu_back")),
+    };
+    // Laid out to the window as it is now, before the UI's pass hit-tests it.
+    const float w = (float)engine->win_width, h = (float)engine->win_height;
+    backpack_menu_layout(&g_menu, w, h, w > 0.0f ? (float)engine->fb_width / w : 1.0f);
+    ui_update(g_hud.ui, &in, w, h);
+    backpack_menu_input(&g_menu, &in);
+    input_set_suppressed(&game->input, loading || held || ui_captures_input(g_hud.ui));
 }
 
 // Before the engine goes: the HUD draws through its overlay hook, and the backpack's models are on
@@ -1358,7 +1335,7 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
     parse_hex("E8B923", a->cat_eyes);
     a->cat_clip_seconds = -1.0f;
     a->cat_seed = 1;
-    a->open_backpack = -1;
+    a->open_backpack = ITEM_NONE;
     a->local_exposure = -1;
     a->le_highlights = -1.0f;
     a->le_shadows = -1.0f;
@@ -1436,12 +1413,13 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
             a->no_play_prompt = true;
         } else if (!strcmp(s, "--flashlight")) {
             a->flashlight = true;
+            a->backpack = true;
         } else if (!strcmp(s, "--backpack")) {
             a->backpack = true;
         } else if (!strcmp(s, "--open-backpack") && has_next) {
             a->open_backpack = item_by_id(argv[++i]);
             a->backpack = true;
-            if (a->open_backpack < 0)
+            if (a->open_backpack == ITEM_NONE)
                 fprintf(stderr, "silent: --open-backpack names no item; leaving it shut\n");
         } else if (!strcmp(s, "--mute")) {
             a->mute = true;
