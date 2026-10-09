@@ -3,6 +3,7 @@
 #include <stdio.h>
 
 #include "cetra/ext/log.h"
+#include "cetra/game/audio.h"
 #include "cetra/scene.h"
 #include "cetra/water.h"
 
@@ -12,6 +13,7 @@
 #include "layout.h"
 #include "mats.h"
 #include "road.h"
+#include "sounds.h"
 #include "street.h"
 #include "trees.h"
 
@@ -198,8 +200,12 @@ void lake_ground_build(Kit* kit) {
 #define REED_BEDS     18 // clumps of clumps
 #define DROWNED_TREES 4
 
+// Against the other loops tools/fetch_sounds.py levels alike.
+#define LAPPING_VOLUME 0.35f
+
 static WaterWake g_wake;
 static bool g_always_drawn;
+static Sound* g_lapping;
 
 // The point `out` metres outside the shore (negative: over the water) on bearing `theta`.
 static void shore_at(float theta, float out, float* x, float* z) {
@@ -516,7 +522,19 @@ void lake_build(Kit* kit, Scene* scene, Trees* trees, unsigned int seed, bool al
     drowned(kit, trees, &state);
 }
 
+void lake_start_audio(AudioSystem* audio) {
+    g_lapping = sounds_loop(audio, "assets/audio/silent/lake_lapping.flac");
+    if (g_lapping)
+        audio_sound_set_volume(g_lapping, LAPPING_VOLUME);
+}
+
 void lake_update(const Scene* scene, const float eye[3], const float feet[3]) {
+    // One loop for the whole shore, where the eye is nearest to it, at the water's edge.
+    if (g_lapping) {
+        float x = 0.0f, z = 0.0f;
+        shore_at(atan2f(eye[2] - LAKE_Z, eye[0] - LAKE_X), 0.0f, &x, &z);
+        audio_sound_set_position(g_lapping, (vec3){x, LAKE_Y + 0.1f, z});
+    }
     Water* w = scene->water;
     if (!w)
         return;

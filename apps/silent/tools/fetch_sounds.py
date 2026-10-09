@@ -29,9 +29,11 @@ Writes the beat as WAV and the loops as FLAC, which is gapless and half a
 WAV's size, under assets/audio/silent/. With --audition DIR it writes every
 CASES preset and every CANDIDATES recording there instead -- a loop repeated
 over thirty seconds, so its seam can be heard -- to choose by ear. Needs
-ffmpeg. Downloads are cached under out/polyhaven_cache.
+ffmpeg. Downloads are cached under out/polyhaven_cache, which is a build directory's and starts
+empty in a fresh checkout, so --only names the jobs to fetch and make, and nothing else is
+downloaded or written.
 
-    python3 apps/silent/tools/fetch_sounds.py [--audition DIR]
+    python3 apps/silent/tools/fetch_sounds.py [--audition DIR] [--only JOB ...]
 """
 
 import argparse
@@ -94,6 +96,20 @@ RECORDINGS = {
     546279: ("Single drip - dripping", "Mega-X-stream", "546/546279_4937681"),
     792932: ("Slow Single Water Drop Splash", "qubodup", "792/792932_71257"),
     22438: ("Drip.wav", "Lunardrive", "22/22438_120830"),
+    # The lake and the cabin (spec 13.41): water lapping at a shore, a fire in a hearth, and a
+    # small room's own quiet.
+    518467: ("Small Waves Lapping on Lake Ontario Close Perspective", "robotjay",
+             "518/518467_476277"),
+    568819: ("200906 Water waves lapping, lake, gentle, close", "TRP", "568/568819_97550"),
+    464801: ("Tiny waves lapping #3.m4a", "guyburns", "464/464801_5454234"),
+    614299: ("Gentle waves on a lake", "TheFlyFishingFilmmaker", "614/614299_6501596"),
+    549208: ("Fireplace.wav", "OwennewO", "549/549208_11244040"),
+    718202: ("Fireplace woodstove with the lid open", "HullMusic", "718/718202_9307732"),
+    512685: ("Fireplace Crackles", "WavJunction.com", "512/512685_9514571"),
+    414298: ("ASTRONOMER FIREPLACE AMBI.wav", "schulmancreative", "414/414298_3718658"),
+    452516: ("room tone small log cabin quiet with fire in wood stove metal clinks.flac", "kyles",
+             "452/452516_612689"),
+    744447: ("Soft Room Tone", "callmethefoo", "744/744447_14793871"),
 }
 PREVIEW = "https://cdn.freesound.org/previews/%s-hq.mp3"
 CLOCK = 125968
@@ -108,6 +124,10 @@ JOBS = {
     "purr": {"seconds": 4.0, "stereo": False},
     # A television tuned to nothing (spec 13.30): its own hiss.
     "static": {"seconds": 8.0, "stereo": False},
+    # The lake's edge, the cabin's hearth and its room (spec 13.41), each placed in the world.
+    "lapping": {"seconds": 20.0, "stereo": False},
+    "hearth": {"seconds": 12.0, "stereo": False},
+    "room": {"seconds": 20.0, "stereo": False},
 }
 
 # What --audition renders for each job, to be chosen by ear.
@@ -117,6 +137,9 @@ CANDIDATES = {
     "wind": [502879, 386823, 843000],
     "purr": [553962, 463790, 656500, 575933],
     "static": [765159],
+    "lapping": [518467, 568819, 464801, 614299],
+    "hearth": [549208, 718202, 512685, 414298],
+    "room": [452516, 744447],
 }
 
 # What the game plays, chosen by ear from the candidates: file name -> (job,
@@ -128,6 +151,10 @@ LOOPS = {
     "cat_purr": ("purr", 656500),
     # An old set on a channel with no signal, chosen by ear.
     "tv_static": ("static", 765159),
+    # The lake's edge, the cabin's hearth and its room (spec 13.41).
+    "lake_lapping": ("lapping", 518467),
+    "hearth_fire": ("hearth", 549208),
+    "cabin_room": ("room", 744447),
 }
 
 # A ONESHOT, for a sound that happens once -- a meow, a footfall, a landing. The recording's
@@ -443,24 +470,37 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--audition",
                         help="write every case preset and candidate loop here, to choose by ear")
+    parser.add_argument("--only", nargs="+", metavar="JOB",
+                        help="only these jobs -- clock, or a loop's or a one-shot's -- downloading "
+                             "and writing nothing for the rest, whose files stay as they are")
     args = parser.parse_args()
+
+    def wanted(job):
+        return not args.only or job in args.only
+
     os.makedirs(CACHE_DIR, exist_ok=True)
     os.makedirs(OUT_DIR, exist_ok=True)
-    x = decode(CLOCK)
-    pair = cleanest_pair(x)
-    print("%s: beats at %.3f and %.3f s" % (credit(CLOCK), pair[0] / RATE, pair[1] / RATE))
+    if wanted("clock"):
+        x = decode(CLOCK)
+        pair = cleanest_pair(x)
+        print("%s: beats at %.3f and %.3f s" % (credit(CLOCK), pair[0] / RATE, pair[1] / RATE))
     if args.audition:
         os.makedirs(args.audition, exist_ok=True)
-        for name, preset in CASES.items():
-            t, k = make(x, pair, preset)
-            write(os.path.join(args.audition, "clock_%s_10s.wav" % name), run(t, k))
+        if wanted("clock"):
+            for name, preset in CASES.items():
+                t, k = make(x, pair, preset)
+                write(os.path.join(args.audition, "clock_%s_10s.wav" % name), run(t, k))
         for job, sounds in CANDIDATES.items():
+            if not wanted(job):
+                continue
             for sound in sounds:
                 y = loop(decode(sound, JOBS[job]["stereo"]), JOBS[job]["seconds"])
                 write(os.path.join(args.audition, "%s_%d_%s_30s.wav" % (
                     job, sound, RECORDINGS[sound][1])), repeat(y, 30.0))
                 print("%-6s %s" % (job, credit(sound)))
         for job, sounds in ONESHOT_CANDIDATES.items():
+            if not wanted(job):
+                continue
             for sound in sounds:
                 x = decode(sound)
                 for k, span in enumerate(events(x, job)):
@@ -472,18 +512,24 @@ def main():
         print(args.audition)
         return 0
 
-    tick, tock = make(x, pair, CASES[CASE])
-    write(os.path.join(OUT_DIR, "tick.wav"), tick)
-    write(os.path.join(OUT_DIR, "tock.wav"), tock)
-    print(os.path.join(OUT_DIR, "tick.wav"), os.path.join(OUT_DIR, "tock.wav"))
+    if wanted("clock"):
+        tick, tock = make(x, pair, CASES[CASE])
+        write(os.path.join(OUT_DIR, "tick.wav"), tick)
+        write(os.path.join(OUT_DIR, "tock.wav"), tock)
+        print(os.path.join(OUT_DIR, "tick.wav"), os.path.join(OUT_DIR, "tock.wav"))
     loops = {}
     for name, (job, sound) in LOOPS.items():
+        if not wanted(job):
+            continue
         print("%s: %s" % (name, credit(sound)))
         loops[name] = loop(decode(sound, JOBS[job]["stereo"]), JOBS[job]["seconds"])
         write_flac(os.path.join(OUT_DIR, name + ".flac"), loops[name])
     for name, (source, cut, gain) in MUFFLES.items():
-        write_flac(os.path.join(OUT_DIR, name + ".flac"), muffle(loops[source], cut, gain))
+        if source in loops:
+            write_flac(os.path.join(OUT_DIR, name + ".flac"), muffle(loops[source], cut, gain))
     for name, (job, sound, k) in ONESHOTS.items():
+        if not wanted(job):
+            continue
         x = decode(sound)
         y = oneshot(x, events(x, job)[k], job)
         path = os.path.join(OUT_DIR, name + ".wav")

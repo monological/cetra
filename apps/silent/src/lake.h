@@ -37,8 +37,13 @@ struct Trees;
 void lake_build(Kit* kit, struct Scene* scene, struct Trees* trees, unsigned int seed,
                 bool always_drawn);
 
-// Each frame: the water drawn only while the eye is in or near the valley, and a wake where the
-// feet wade.
+struct AudioSystem;
+
+// The water lapping at the shore, heard from wherever along it is nearest the eye.
+void lake_start_audio(struct AudioSystem* audio);
+
+// Each frame: the water drawn only while the eye is in or near the valley, a wake where the
+// feet wade, and the lapping moved along the shore to stay nearest the eye.
 void lake_update(const struct Scene* scene, const float eye[3], const float feet[3]);
 
 #endif // _SILENT_LAKE_H_

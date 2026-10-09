@@ -899,6 +899,8 @@ static void on_init(Game* game) {
     sounds_start(&g_sounds, audio, swung);
     load_seam(engine, "audio-sounds");
     kitchen_start_audio(audio);
+    lake_start_audio(audio);
+    cabin_start_audio(audio);
     clock_start(&g_clock, engine, g_scene, audio);
     load_seam(engine, "audio-kitchen-clock");
     basement_start(&g_basement, engine, g_scene, audio, (unsigned int)g_args.seed);
