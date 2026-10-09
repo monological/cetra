@@ -954,6 +954,40 @@ accumulation buffer holding it is upstream of the TAA resolve this pass delibera
 is the bisect lever. Costs no sampler unit anywhere: the post chain has its own ledger and this
 is its fifth declaration of sixteen.
 
+**Since 13.45 a cell with no history takes several samples.** The volume covers the view and no
+more, so as the camera turns the cells entering at the leading edge reproject outside the
+previous volume and have nothing to blend. Each kept its one jittered sample beside neighbours
+averaged over many frames: the jitter moves a sample across its whole depth slice, and the rain's
+binary cover tap and steep handover vary a great deal within one. A turn drew that difference as
+a hard-edged band along the grid's columns, gone when the camera stopped. Such a cell averages
+`fog_history_miss_samples` (4) points instead: this frame's and the ones before it in the Halton
+sequence, which its neighbours' averages weigh most, wrapping at the sequence's start. That is
+Unreal's and Flax's `MissedHistorySamplesCount`. On the `fog-miss` turn it takes the band from
+1.40 codes to 0.13. Three things about it are easy to get backwards.
+- **It is a branch in the inject's own `main`, and a second pass is the refused alternative.**
+  A pass that discarded every cell with history would keep identity by construction, against the
+  130 px an untaken branch once moved on this driver. It cost 2.8 ms of GPU on every frame the
+  camera moved, at 2, 4 or 8 samples alike: each layer attached is a render pass of its own on
+  this GPU, and a second walk over the 64 slices is 64 more. Drawn inside the inject's passes it
+  still cost 0.94 ms. The branch costs nothing on a still frame, where no cell misses, and only
+  the cells that miss otherwise. It renders the same pixels as the pass, and every still frame
+  and every cell with history to the pixel, which `fog-miss-static` and `fog-miss-confined` hold.
+- **A turn misses rows as well as columns.** A level turn grows a cell's height on screen by
+  cos t / cos(t + step), which takes the top and bottom rows near the leading edge over the
+  previous frame's vertical edge. The same growth makes a cell read its history from nearer the
+  top or bottom than itself, so a missed row's value creeps inward over the turn, and the turn
+  carries it across the screen. `fog-miss-count` holds the count to the geometry exactly: 34,048
+  cells a frame, 5 whole columns and 82 column-rows.
+- **It costs by what a sample costs.** On the fixture a turn reads within noise. In silent's rain
+  and clustered lights it is +1.0 ms of GPU while turning, +0.23 at two samples and +2.6 at
+  eight. A cut misses every cell and costs the full N on that frame.
+
+`FROXEL_HISTORY_MISS` compiles the same source a second time as `--fog-miss-probe`'s count: the
+same two tests in the same order, drawn with colour writes off under an occlusion query and made
+on first use. **Not every band at the leading edge of a turn is the fog's.** In silent the
+larger one was wet ground's reflection, which falls back to the environment's share where the
+previous frame's SSR trace does not reach (13.21's `wetReflection`).
+
 ## Cloud shadow
 
 `cloud_shadow_frag` (spec 11.39) — a 256² R16F sun-transmittance map marched
