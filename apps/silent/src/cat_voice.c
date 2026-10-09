@@ -32,7 +32,7 @@
 static Sound* load(AudioSystem* audio, const char* name) {
     char path[160];
     snprintf(path, sizeof(path), "assets/audio/silent/%s", name);
-    Sound* s = audio_sound_from_file_async(audio, path, AUDIO_BUS_SFX);
+    Sound* s = audio_sound_from_file(audio, path, AUDIO_BUS_SFX);
     if (!s)
         fprintf(stderr, "silent: cannot load %s\n", path);
     return s;

@@ -623,7 +623,7 @@ void mats_register(Kit* kit, Engine* engine, Scene* scene) {
     }
     // Every map in before this returns (spec 13.39): the kit frees a material it did not use when
     // it finishes, which a load still on its way would then write into.
-    engine_finish_texture_loads(engine, scene->tex_pool);
+    engine_finish_texture_loads(engine);
     for (int i = 0; i < MAT_COUNT; i++)
         if (SPECS[i].glow.nits > 0.0f && SPECS[i].glow.own_picture)
             material_set_emissive_tex(kit->materials[i], kit->materials[i]->albedo_tex);

@@ -59,9 +59,12 @@ void engine_apply_swap_interval(const Engine* engine);
 // And its free, with the engine.
 void loading_screen_frame(Engine* engine);
 void free_loading_screen(LoadingScreen* ls);
-// A draw between two of a frame's long pieces -- capture units, shader compiles -- which answers
-// no window events, since one could resize the targets the frame is drawing into.
-void loading_screen_tick(Engine* engine);
+// A draw between two pieces of long work inside a frame. It answers no window events, since one
+// could resize the targets the frame is drawing into; draws at most once a refresh, so it may be
+// called as often as is convenient; and does nothing with no screen shown. It puts back what it
+// binds -- the program, the VAO, texture units 0 and 1, the colour mask, and the framebuffer,
+// viewport, enables and blend state gl_pass_begin saves -- so a caller's GL state survives it.
+void loading_screen_tick(const Engine* engine);
 // Whether the screen hides the whole frame: shown, and not yet switching off as of the frame's
 // own last draw, so every question of it in one frame has one answer. Such a frame draws no
 // picture of its own, since nobody would see it.

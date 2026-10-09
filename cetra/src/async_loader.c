@@ -258,88 +258,28 @@ static void* worker_thread_func(void* arg) {
 
         result->callback = req->callback;
         result->user_data = req->user_data;
-        // Moved, not copied. submit_key is the only handle back to the in-flight
+        result->pool = req->pool;
+        // Moved, not copied. The key is the only handle back to the in-flight
         // registry, so it must exist for every result -- a copy here could fail
         // and strand the key claimed forever.
-        result->submit_key = req->filepath;
+        result->key = req->filepath;
         req->filepath = NULL;
 
-        // Embedded texture: decode the compressed bytes we copied from the
-        // aiScene (which may already be released). The submit key is the pool
-        // key too -- there is no path to resolve.
-        if (req->embedded_data) {
-            result->pool_key = safe_strdup(result->submit_key);
-            int ew, eh, ec;
-            unsigned char* edata = result->pool_key
-                                       ? stbi_load_from_memory(req->embedded_data,
-                                                               req->embedded_size, &ew, &eh, &ec, 0)
-                                       : NULL;
-            if (edata) {
-                finalize_decoded_result(result, edata, ew, eh, ec, req->desc);
-            } else {
-                result->success = false;
-                snprintf(result->error_msg, ASYNC_LOADER_MAX_ERROR_MSG,
-                         "Failed to decode embedded texture: %s",
-                         result->pool_key ? result->submit_key : "(alloc failed)");
-            }
-            goto enqueue_result;
-        }
-
-        // Normalize path
-        char* normalized_path = convert_and_normalize_path(result->submit_key);
-        if (!normalized_path) {
+        // The slow part, and the only part done here: a file's key is already the
+        // path it resolved to at submit, and an embedded image's is its "*N".
+        int width = 0, height = 0, channels = 0;
+        unsigned char* data = req->embedded_data
+                                  ? stbi_load_from_memory(req->embedded_data, req->embedded_size,
+                                                          &width, &height, &channels, 0)
+                                  : stbi_load(result->key, &width, &height, &channels, 0);
+        if (data) {
+            finalize_decoded_result(result, data, width, height, channels, req->desc);
+        } else {
             result->success = false;
-            snprintf(result->error_msg, ASYNC_LOADER_MAX_ERROR_MSG, "Failed to normalize path: %s",
-                     result->submit_key);
-            goto enqueue_result;
+            snprintf(result->error_msg, ASYNC_LOADER_MAX_ERROR_MSG, "Failed to decode %s: %s",
+                     req->embedded_data ? "embedded texture" : "texture", result->key);
         }
 
-        char* subpath = safe_strdup(normalized_path);
-        if (!subpath) {
-            result->success = false;
-            snprintf(result->error_msg, ASYNC_LOADER_MAX_ERROR_MSG,
-                     "Memory allocation failed for subpath");
-            free(normalized_path);
-            goto enqueue_result;
-        }
-
-        // Find existing subpath relative to pool directory
-        if (!find_existing_subpath(req->pool->directory, &subpath)) {
-            result->success = false;
-            snprintf(result->error_msg, ASYNC_LOADER_MAX_ERROR_MSG, "Texture file not found: %s",
-                     normalized_path);
-            free(normalized_path);
-            free(subpath);
-            goto enqueue_result;
-        }
-
-        // The resolved path, which is what the finished texture is pooled under
-        // -- deliberately not the submit key, which stays as handed in.
-        result->pool_key = safe_strdup(subpath);
-        free(normalized_path);
-        free(subpath);
-
-        if (!result->pool_key) {
-            result->success = false;
-            snprintf(result->error_msg, ASYNC_LOADER_MAX_ERROR_MSG,
-                     "Memory allocation failed for resolved texture path");
-            goto enqueue_result;
-        }
-
-        // Load image data (this is the slow part we're parallelizing)
-        int width, height, channels;
-        unsigned char* data = stbi_load(result->pool_key, &width, &height, &channels, 0);
-
-        if (!data) {
-            result->success = false;
-            snprintf(result->error_msg, ASYNC_LOADER_MAX_ERROR_MSG, "stbi_load failed: %s",
-                     result->pool_key);
-            goto enqueue_result;
-        }
-
-        finalize_decoded_result(result, data, width, height, channels, req->desc);
-
-    enqueue_result:
         // Add to completion queue
         result->next = NULL;
         cetra_mutex_lock(&loader->complete_mutex);
@@ -515,8 +455,7 @@ void free_async_loader(AsyncLoader* loader) {
         if (result->pixel_data) {
             stbi_image_free(result->pixel_data);
         }
-        free(result->submit_key);
-        free(result->pool_key);
+        free(result->key);
         free(result);
         result = next;
     }
@@ -631,22 +570,20 @@ void load_texture_async(AsyncLoader* loader, TexturePool* pool, const char* file
         return;
     }
 
-    // A file already in the pool is answered here. The pool holds a file under its RESOLVED path,
-    // which the request need not name, so submit_load's check of the request alone never finds
-    // one and every repeat request decoded the image again.
-    char* resolved = convert_and_normalize_path(filepath);
-    Texture* cached = NULL;
-    if (resolved && find_existing_subpath(pool->directory, &resolved))
-        cached = get_texture_from_pool_threadsafe(pool, resolved);
-    free(resolved);
-    if (cached) {
+    // Resolved here, once, and the resolved path is the key from then on: the pool's, the
+    // in-flight registry's and the file the worker reads. Keyed by the request as handed in, a
+    // file already pooled was never found and was decoded again, and the worker read the pool's
+    // directory while the main thread could replace it.
+    char* resolved = texture_pool_resolve(pool, filepath);
+    if (!resolved) {
+        log_error("Texture file not found: %s", filepath);
         if (callback) {
-            callback(cached, user_data);
+            callback(NULL, user_data);
         }
         return;
     }
-
-    submit_load(loader, pool, filepath, NULL, 0, desc, callback, user_data);
+    submit_load(loader, pool, resolved, NULL, 0, desc, callback, user_data);
+    free(resolved);
 }
 
 void load_texture_from_memory_async(AsyncLoader* loader, TexturePool* pool, const char* key,
@@ -668,8 +605,8 @@ void load_texture_from_memory_async(AsyncLoader* loader, TexturePool* pool, cons
  * Process completed texture loads on main thread
  * This is where GL calls happen (must be on main thread with GL context)
  */
-size_t async_loader_process_pending(AsyncLoader* loader, TexturePool* pool, size_t max_per_frame) {
-    if (!loader || !pool) {
+size_t async_loader_process_pending(AsyncLoader* loader, size_t max_per_frame) {
+    if (!loader) {
         return 0;
     }
 
@@ -694,10 +631,11 @@ size_t async_loader_process_pending(AsyncLoader* loader, TexturePool* pool, size
         }
 
         Texture* texture = NULL;
+        TexturePool* pool = result->pool;
 
         if (result->success) {
             // Check cache again (another thread may have loaded same texture)
-            texture = get_texture_from_pool_threadsafe(pool, result->pool_key);
+            texture = get_texture_from_pool_threadsafe(pool, result->key);
 
             if (!texture) {
                 // The shared publish, not a create/bind/upload/insert sequence
@@ -709,9 +647,8 @@ size_t async_loader_process_pending(AsyncLoader* loader, TexturePool* pool, size
                 //
                 // The dilate already ran, on the worker thread, which is the one
                 // step this path deliberately does not share.
-                texture =
-                    texture_pool_publish(pool, result->pool_key, result->pixel_data, result->width,
-                                         result->height, result->channels, result->desc);
+                texture = texture_pool_publish(pool, result->key, result->pixel_data, result->width,
+                                               result->height, result->channels, result->desc);
             }
 
             // Free pixel data now that it's on GPU
@@ -723,7 +660,7 @@ size_t async_loader_process_pending(AsyncLoader* loader, TexturePool* pool, size
 
         // Retire the key first: this decode is done, so a request arriving
         // afterwards must start a fresh one rather than join a finished load.
-        TextureWaiter* waiters = inflight_release(loader, pool, result->submit_key);
+        TextureWaiter* waiters = inflight_release(loader, pool, result->key);
 
         // Invoke callback
         if (result->callback) {
@@ -739,8 +676,7 @@ size_t async_loader_process_pending(AsyncLoader* loader, TexturePool* pool, size
         atomic_fetch_sub(&loader->pending_count, 1);
         atomic_fetch_add(&loader->completed_count, 1);
 
-        free(result->submit_key);
-        free(result->pool_key);
+        free(result->key);
         free(result);
         processed++;
     }

@@ -1577,22 +1577,26 @@ Texture* texture_load_file(TexturePool* pool, const char* filepath, TextureDesc 
         return NULL;
     }
 
-    char* subpath = convert_and_normalize_path(filepath);
+    char* subpath = texture_pool_resolve(pool, filepath);
     if (!subpath) {
-        log_error("Failed to normalize path: '%s'", filepath);
-        return NULL;
-    }
-
-    // Use find_existing_subpath to find a valid subpath
-    if (!find_existing_subpath(pool->directory, &subpath)) {
-        log_error("No valid subpath found for texture: '%s'", subpath);
-        free(subpath);
+        log_error("No valid subpath found for texture: '%s'", filepath);
         return NULL;
     }
 
     Texture* texture = _load_resolved(pool, subpath, desc);
     free(subpath);
     return texture;
+}
+
+char* texture_pool_resolve(const TexturePool* pool, const char* filepath) {
+    if (!pool || !pool->directory || !filepath)
+        return NULL;
+    char* subpath = convert_and_normalize_path(filepath);
+    if (subpath && !find_existing_subpath(pool->directory, &subpath)) {
+        free(subpath);
+        return NULL;
+    }
+    return subpath;
 }
 
 Texture* texture_load_path(TexturePool* pool, const char* path, TextureDesc desc) {

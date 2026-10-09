@@ -161,7 +161,7 @@ bool loading_screen_covers(const Engine* engine) {
     return engine_loading_screen_shown(engine) && engine->loading_screen->covering;
 }
 
-double engine_loading_screen_longest_wait(Engine* engine) {
+double engine_loading_screen_take_longest_wait(Engine* engine) {
     if (!engine_loading_screen_shown(engine))
         return 0.0;
     LoadingScreen* ls = engine->loading_screen;
@@ -304,11 +304,12 @@ void loading_screen_frame(Engine* engine) {
     LoadingScreen* ls = engine ? engine->loading_screen : NULL;
     if (!ls)
         return;
-    if (ls->shown)
+    if (ls->shown) {
         _loading_chance(ls);
-    if (ls->shown && _loading_advance(engine, ls)) {
-        _loading_draw(engine, ls, true);
-        ls->covering = ls->clock < ls->lift_at;
+        if (_loading_advance(engine, ls)) {
+            _loading_draw(engine, ls, true);
+            ls->covering = ls->clock < ls->lift_at;
+        }
     }
     // Put away whole once it is done, its targets and programs with it: they are a few
     // window-sized pictures nothing else will draw.
@@ -322,7 +323,7 @@ void loading_screen_frame(Engine* engine) {
 // without waiting for the display, and whatever the caller had bound put back. `poll` answers the
 // window's events too, which only a draw outside a frame may do: inside one, an event could resize
 // the targets the frame is drawing into.
-static void _loading_present(Engine* engine, bool poll) {
+static void _loading_present(const Engine* engine, bool poll) {
     LoadingScreen* ls = engine ? engine->loading_screen : NULL;
     if (!ls || !ls->shown)
         return;
@@ -364,10 +365,10 @@ static void _loading_present(Engine* engine, bool poll) {
     glColorMask(colour_mask[0], colour_mask[1], colour_mask[2], colour_mask[3]);
 }
 
-void engine_draw_loading_screen(Engine* engine) {
+void engine_draw_loading_screen(const Engine* engine) {
     _loading_present(engine, true);
 }
 
-void loading_screen_tick(Engine* engine) {
+void loading_screen_tick(const Engine* engine) {
     _loading_present(engine, false);
 }

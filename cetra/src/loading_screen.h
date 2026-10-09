@@ -31,8 +31,9 @@ void engine_show_loading_screen(Engine* engine);
 // Draw it now and answer the window's events: for an app's init, before engine_run, which draws
 // it with every frame and between the long pieces of one. Outside a frame only, since an event
 // may resize the window. It draws at most once a refresh, so call it as often as is convenient.
-// Headless it does nothing: there, only frames draw it, so the frame decides what it shows.
-void engine_draw_loading_screen(Engine* engine);
+// Headless it does nothing: there, only frames draw it, so the frame decides what it shows. A NULL
+// engine is no screen, and nothing: code with no engine to draw with may pass one.
+void engine_draw_loading_screen(const Engine* engine);
 
 // The game is ready: once its ident has played, the screen trades its LOADING sign for PLAY and
 // waits, still up, for the app to hide it -- at a press it chooses, since the engine does not know
@@ -52,6 +53,6 @@ bool engine_loading_screen_prompting(const Engine* engine);
 // engine_draw_loading_screen, a draw between the pieces of a long frame, or a frame -- since it was
 // shown or this was last asked, which starts the count again; 0 when it is not shown. Counted
 // headless too, where only frames draw it, so a headless run says how long a window would freeze.
-double engine_loading_screen_longest_wait(Engine* engine);
+double engine_loading_screen_take_longest_wait(Engine* engine);
 
 #endif
