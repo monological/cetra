@@ -971,7 +971,10 @@ Unreal's and Flax's `MissedHistorySamplesCount`. On the `fog-miss` turn it takes
   this GPU, and a second walk over the 64 slices is 64 more. Drawn inside the inject's passes it
   still cost 0.94 ms. The branch costs nothing on a still frame, where no cell misses, and only
   the cells that miss otherwise. It renders the same pixels as the pass, and every still frame
-  and every cell with history to the pixel, which `fog-miss-static` and `fog-miss-confined` hold.
+  and every cell with history to the pixel. The goldens hold the first, being the only frames
+  rendered before the branch existed; `fog-miss-confined` holds the second on a turn, and
+  `fog-miss-jitter` that TAA's jittered projection, which a window builds the volume from, makes
+  no still cell miss.
 - **A turn misses rows as well as columns.** A level turn grows a cell's height on screen by
   cos t / cos(t + step), which takes the top and bottom rows near the leading edge over the
   previous frame's vertical edge. The same growth makes a cell read its history from nearer the
@@ -982,9 +985,11 @@ Unreal's and Flax's `MissedHistorySamplesCount`. On the `fog-miss` turn it takes
   and clustered lights it is +1.0 ms of GPU while turning, +0.23 at two samples and +2.6 at
   eight. A cut misses every cell and costs the full N on that frame.
 
-`FROXEL_HISTORY_MISS` compiles the same source a second time as `--fog-miss-probe`'s count: the
-same two tests in the same order, drawn with colour writes off under an occlusion query and made
-on first use. **Not every band at the leading edge of a turn is the fog's.** In silent the
+`FROXEL_MISS_COUNT` compiles the same `main` a second time as `--fog-miss-probe`'s count: every
+other way out discards and the several-samples branch writes and returns, so the count is that
+branch rather than a second statement of when it is taken. It is drawn with colour writes off
+under an occlusion query, and made on first use. **Not every band at the leading edge of a turn
+is the fog's.** In silent the
 larger one was wet ground's reflection, which falls back to the environment's share where the
 previous frame's SSR trace does not reach (13.21's `wetReflection`).
 

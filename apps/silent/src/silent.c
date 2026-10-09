@@ -1484,9 +1484,10 @@ static void print_usage(const char* prog) {
     printf("      --no-history-rescale  The fog and temporal histories keep the exposure they\n"
            "                          were written at, so stepping outdoors settles slowly\n");
     printf("      --fog-history-miss-samples N  Samples a fog cell entering the view takes,\n"
-           "                          1..%d (1 = one, which bands the fog's edge on a turn)\n",
+           "                          1..%d (1 = its one sample, which bands the fog's edge\n"
+           "                          on a turn)\n",
            POSTFX_FOG_MISS_SAMPLES_MAX);
-    printf("      --render-scale F   Render at F of the window and upscale (0.5-1, default\n");
+    printf("      --render-scale F    Render at F of the window and upscale (0.5-1, default\n");
     printf("                          %.1f): the softer frame of the consoles it imitates\n",
            (double)DEFAULT_RENDER_SCALE);
     printf("      --msaa N            MSAA samples\n");

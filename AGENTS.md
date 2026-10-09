@@ -843,7 +843,7 @@ entry there before changing anything marked with a dagger.
   reconstruction, shared by the generation and accumulate sub-passes)
 - **Atmosphere †:** `froxel_inject/integrate/composite_frag` + `include/froxel.glsl`, and
   `aerial_lut_frag`. `froxel_inject_frag` is where every medium meets, and is compiled a second
-  time under `FROXEL_HISTORY_MISS` as `--fog-miss-probe`'s count (spec 13.45)
+  time under `FROXEL_MISS_COUNT` as `--fog-miss-probe`'s count (spec 13.45)
 - **Volumetric clouds:** `cloud_march_frag`, `sky_background_clouds_frag`, `sky_env_clouds_frag`
   (the background and env-cube variants), `cloud_noise_debug_frag`
 - **Cloud shadow †:** `cloud_shadow_frag` — a 256² R16F sun-transmittance map through the deck

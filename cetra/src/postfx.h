@@ -341,8 +341,8 @@ typedef struct PostFX {
     ShaderProgram* upsample_tent_program;     // Shared tent composite (bloom mips, SSR)
     ShaderProgram* ssr_fold_wet_program;      // SSR's fold when ground is wet (spec 13.9)
     ShaderProgram* froxel_inject_program;     // Per-cell scattering into the volume (spec 9.5)
-    ShaderProgram* froxel_miss_probe_program; // fog_miss_probe's count; made on first use
-    bool fog_miss_probe_failed;               // that count could not be made; never retried
+    ShaderProgram* froxel_miss_count_program; // fog_miss_probe's count; made on first use
+    bool froxel_miss_count_failed;            // that count could not be made; never retried
     ShaderProgram* froxel_integrate_program;  // Front-to-back gather along each slice column
     ShaderProgram* froxel_composite_program;
     ShaderProgram* fog_esm_program; // Builds fog_esm_array from the depth cascades // One trilinear
@@ -516,7 +516,6 @@ typedef struct PostFX {
     // path, a debug render mode bypassing the chain, fog switched off -- breaks
     // the adjacency without needing to remember to clear anything.
     int froxel_prev_frame;
-    GLuint fog_miss_query; // GL_SAMPLES_PASSED over fog_miss_probe's count
     // The composited 2D fog layer (inscatter.rgb, transmittance.a) and its
     // temporal accumulation, allocated on the first TAA frame with fog on.
     // Distinct from the volume's own accumulator above and gated the opposite
