@@ -25160,7 +25160,7 @@ def run_cook_gate(workdir):
         # texture-mips is deliberately in NEITHER set: its rows land on both
         # sides of the key by CONTENT (bark chains hit, layer/splat chains
         # re-cook), so it cannot be classified by site name.
-        seed_blind = {"veg-bark/1", "veg-leaf/1", "cluster-dag/1"}
+        seed_blind = {"veg-bark/1", "veg-leaf/2", "cluster-dag/1"}
         seeded = {"terrain-layer/1", "terrain-splat/1", "jolt-region/1", "erosion-field/1"}
         seen = {site for site, _, _, _, _ in key42["rows"]}
         # The tripwire for the rot that WILL fire: a recipe version bump
