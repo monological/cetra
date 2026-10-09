@@ -57,6 +57,7 @@
 #include "crossroads.h"
 #include "door.h"
 #include "fridge_map.h"
+#include "map_screen.h"
 #include "fences.h"
 #include "grounds.h"
 #include "hearth.h"
@@ -187,9 +188,11 @@ typedef struct SilentArgs {
     bool startup_ms;        // print where loading's time goes, a startup-ms row a step
     bool no_play_prompt;    // the loading screen lifts by itself once the game is ready
     bool flashlight;
-    bool backpack;        // the backpack already taken, and the flashlight in it
-    bool map;             // the town map already in it, and the fridge door bare
-    ItemId open_backpack; // the backpack's screen open on it at the start, or ITEM_NONE
+    bool backpack;           // the backpack already taken, and the flashlight in it
+    bool map;                // the town map already in it, and the fridge door bare
+    bool open_map;           // the map's screen open at the start, over the backpack's when that is
+    bool found[PLACE_COUNT]; // places found before the run starts, their marks not yet written
+    ItemId open_backpack;    // the backpack's screen open on it at the start, or ITEM_NONE
     bool mute;
     float rain_mmh;          // 0 = dry
     bool no_wind;            // still air: the rain falls straight
@@ -252,6 +255,9 @@ static Basement g_basement;
 static Backpack g_backpack;
 static BackpackMenu g_menu;
 static FridgeMap g_fridge_map;
+static MapScreen g_map_screen;
+// The places the player has found, which go on the map (spec 13.43).
+static Finds g_finds;
 
 // How long the prompt names a key once what it opens is had: Tab for the backpack, M for the map.
 #define HINT_SECONDS 5.0f
@@ -288,6 +294,20 @@ static const InputAction ACTIONS[] = {
     {"toggle_gui", {INPUT_KEY(GRAVE_ACCENT, 1), INPUT_KEY(G, 1)}},
     // The backpack's screen (spec 13.40): UI actions, so they read while it holds the game's input.
     {"backpack", {INPUT_KEY(TAB, 1), INPUT_PAD(BACK, 1)}, true},
+    // The map's screen (spec 13.43), and moving and zooming its view.
+    {"map", {INPUT_KEY(M, 1), INPUT_PAD(RIGHT_BUMPER, 1)}, true},
+    {"map_pan_x",
+     {INPUT_KEY(D, 1), INPUT_KEY(A, -1), INPUT_KEY(RIGHT, 1), INPUT_KEY(LEFT, -1),
+      INPUT_AXIS(LEFT_X, 1)},
+     true},
+    {"map_pan_y",
+     {INPUT_KEY(S, 1), INPUT_KEY(W, -1), INPUT_KEY(DOWN, 1), INPUT_KEY(UP, -1),
+      INPUT_AXIS(LEFT_Y, 1)},
+     true},
+    {"map_zoom",
+     {INPUT_AXIS(RIGHT_TRIGGER, 1), INPUT_AXIS(LEFT_TRIGGER, -1), INPUT_KEY(EQUAL, 1),
+      INPUT_KEY(MINUS, -1)},
+     true},
     {"menu_back", {INPUT_KEY(ESCAPE, 1), INPUT_PAD(B, 1)}, true},
     {"menu_up", {INPUT_KEY(UP, 1), INPUT_KEY(W, 1), INPUT_PAD(DPAD_UP, 1)}, true},
     {"menu_down", {INPUT_KEY(DOWN, 1), INPUT_KEY(S, 1), INPUT_PAD(DPAD_DOWN, 1)}, true},
@@ -891,10 +911,14 @@ static void on_init(Game* game) {
         backpack_add(&g_backpack, ITEM_TOWN_MAP);
     hud_start(&g_hud, engine);
     backpack_menu_start(&g_menu, g_hud.ui, g_hud.font, &g_backpack);
+    map_screen_start(&g_map_screen, g_hud.ui, engine, g_scene->tex_pool);
     if (g_args.open_backpack != ITEM_NONE) {
         backpack_menu_show(&g_menu);
         backpack_menu_choose(&g_menu, g_args.open_backpack);
     }
+    memcpy(g_finds.found, g_args.found, sizeof(g_finds.found));
+    if (g_args.open_map)
+        map_screen_show(&g_map_screen, MAP_TOWN, g_args.open_backpack != ITEM_NONE, g_finds.found);
     load_seam(engine, "backpack-hud");
     // Every static collider stands by now, and the cat's place check casts thousands of rays at
     // them: unoptimised, the broadphase is a chain each ray walks body by body. What comes after --
@@ -1075,6 +1099,21 @@ static void on_update(Game* game, double dt) {
     if (basement_hold(&g_basement, game->entity_manager, game->physics_world, feet,
                       backpack_holds(&g_backpack, ITEM_FLASHLIGHT)))
         hud_think(&g_hud, "It's too dark. I can't see. I need to find a flashlight.");
+    // What goes on the map (spec 13.43): a road out of town that cannot be followed, the cabin by
+    // the lake. With the map, a find is marked on it and M is hinted; without, it is remembered
+    // and written on once the map is had.
+    bool first = false;
+    const PlaceId place = finds_arrive(&g_finds, feet, &first);
+    if (place != PLACE_NONE) {
+        const bool mapped = backpack_holds(&g_backpack, ITEM_TOWN_MAP);
+        const char* thought = !first   ? PLACES[place].again
+                              : mapped ? PLACES[place].found_mapped
+                                       : PLACES[place].found;
+        if (thought)
+            hud_think(&g_hud, thought);
+        if (first && mapped)
+            hud_hint(&g_hud, "M   Map", HINT_SECONDS);
+    }
     for (int i = 0; i < DOORS; i++)
         if (g_door_hung[i])
             door_update(&g_doors[i], (float)dt);
@@ -1164,7 +1203,11 @@ static void take_map(void) {
     }
     fridge_map_take(&g_fridge_map);
     backpack_add(&g_backpack, ITEM_TOWN_MAP);
-    hud_think(&g_hud, "A map of the town. That'll come in handy.");
+    bool found = false;
+    for (int i = 0; i < PLACE_COUNT; i++)
+        found |= g_finds.found[i];
+    hud_think(&g_hud, found ? "A map of the town. I'll mark what I've found on it."
+                            : "A map of the town. That'll come in handy.");
     hud_hint(&g_hud, "M   Map", HINT_SECONDS);
 }
 
@@ -1240,6 +1283,7 @@ static void on_pre_render(Game* game, double alpha) {
                               : NULL);
     hud_update(&g_hud, dt, (float)engine->win_height);
     backpack_menu_update(&g_menu, dt);
+    map_screen_update(&g_map_screen, dt, feet, forward);
     sounds_update(&g_sounds);
     lights_update(&g_lights, g_scene, game->time, dt, eye, forward);
     tv_update(&g_tv, game->time);
@@ -1316,17 +1360,52 @@ static void on_pre_render(Game* game, double alpha) {
  * nothing else: Escape frees the cursor only with no screen up, and the cursor the player frees
  * while the input is held comes back after.
  */
+/*
+ * The screens over the game (specs 13.40 and 13.43), what is on top deciding what a key does:
+ *
+ *   on top        Tab                     M                         Escape / pad B
+ *   the game      the bag, if had         the map, if had           frees the cursor
+ *   the bag       closes it               the map over the bag      closes it
+ *   the map       closes it, then the     closes it                 closes it
+ *                 bag -- unless it was
+ *                 over the bag, where
+ *                 it goes back to it
+ *
+ * Every close is the UI's own back, which pops only a modal screen, so the HUD under them is never
+ * taken down; and the state is read from what is on top at the frame's start, so the key that
+ * opened a screen cannot close it in the same frame.
+ */
 static void on_frame_input(Game* game) {
     Engine* engine = game->engine;
     const bool loading = engine_loading_screen_shown(engine);
     const bool held = ui_captures_input(g_hud.ui);
-    const bool open = backpack_menu_open(&g_menu);
+    const bool bag_up = backpack_menu_open(&g_menu);
+    const bool map_up = map_screen_open(&g_map_screen);
     const bool tab = !loading && input_action_pressed(&game->input, "backpack");
-    if (tab && !open) {
-        if (g_backpack.taken)
-            backpack_menu_show(&g_menu);
-        else
-            hud_think(&g_hud, "I'm not carrying anything.");
+    const bool m = !loading && input_action_pressed(&game->input, "map");
+    const bool esc = input_action_pressed(&game->input, "menu_back");
+    const bool have_map = backpack_holds(&g_backpack, ITEM_TOWN_MAP);
+    bool back = false, bag_after = false;
+    if (map_up) {
+        back = tab || m || esc;
+        bag_after = tab && !g_map_screen.over_bag;
+    } else if (bag_up) {
+        back = tab || esc;
+        if (m && have_map)
+            map_screen_show(&g_map_screen, MAP_TOWN, true, g_finds.found);
+    } else {
+        if (tab) {
+            if (g_backpack.taken)
+                backpack_menu_show(&g_menu);
+            else
+                hud_think(&g_hud, "I'm not carrying anything.");
+        }
+        if (m) {
+            if (have_map)
+                map_screen_show(&g_map_screen, MAP_TOWN, false, g_finds.found);
+            else
+                hud_think(&g_hud, "I don't have a map.");
+        }
     }
     double mx = 0.0, my = 0.0;
     input_mouse_pos(&game->input, &mx, &my);
@@ -1341,13 +1420,25 @@ static void on_frame_input(Game* game) {
         .nav_left = input_action_pressed(&game->input, "menu_left"),
         .nav_right = input_action_pressed(&game->input, "menu_right"),
         .accept = input_action_pressed(&game->input, "menu_accept"),
-        .back = open && (tab || input_action_pressed(&game->input, "menu_back")),
+        .back = back,
     };
     // Laid out to the window as it is now, before the UI's pass hit-tests it.
     const float w = (float)engine->win_width, h = (float)engine->win_height;
     backpack_menu_layout(&g_menu, w, h, w > 0.0f ? (float)engine->fb_width / w : 1.0f);
+    map_screen_layout(&g_map_screen, w, h);
     ui_update(g_hud.ui, &in, w, h);
+    if (bag_after)
+        backpack_menu_show(&g_menu);
     backpack_menu_input(&g_menu, &in);
+    double sx = 0.0, sy = 0.0;
+    input_scroll(&game->input, &sx, &sy);
+    const MapControls controls = {
+        .pan = {input_action_value(&game->input, "map_pan_x"),
+                input_action_value(&game->input, "map_pan_y")},
+        .zoom = input_action_value(&game->input, "map_zoom"),
+        .wheel = (float)sy,
+    };
+    map_screen_input(&g_map_screen, &in, &controls, (float)engine->render_delta);
     input_set_suppressed(&game->input, loading || held || ui_captures_input(g_hud.ui));
 }
 
@@ -1359,6 +1450,7 @@ static void on_shutdown(Game* game) {
     if (g_args.tiles_probe && g_scene)
         shadow_tiles_probe(g_scene->shadow_system, g_scene);
     backpack_menu_free(&g_menu);
+    map_screen_free(&g_map_screen);
     hud_free(&g_hud);
     backpack_free(&g_backpack);
     cat_free(&g_cat);
@@ -1410,6 +1502,10 @@ static void print_usage(const char* prog) {
     printf("      --flashlight        Start with the flashlight, and on (F toggles it)\n");
     printf("      --backpack          Start with the backpack, the flashlight in it\n");
     printf("      --map               Start with the town map in the backpack, the fridge bare\n");
+    printf("      --open-map          Start with the map's screen open, over the backpack's\n"
+           "                          with --open-backpack; the map had\n");
+    printf("      --found LIST        Start with places found, written on the map when it\n"
+           "                          next opens: barricade,road-end,cabin or all\n");
     printf("      --open-backpack ITEM  Start with the backpack's screen open on ITEM\n"
            "                          (flashlight, map), and the backpack had\n");
     printf("      --mute              Without sound\n");
@@ -1582,6 +1678,20 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
         } else if (!strcmp(s, "--map")) {
             a->map = true;
             a->backpack = true;
+        } else if (!strcmp(s, "--open-map")) {
+            a->open_map = true;
+            a->map = true;
+            a->backpack = true;
+        } else if (!strcmp(s, "--found") && has_next) {
+            char list[128];
+            snprintf(list, sizeof(list), "%s", argv[++i]);
+            for (const char* id = strtok(list, ","); id; id = strtok(NULL, ",")) {
+                const PlaceId p = place_by_id(id);
+                for (int k = 0; k < PLACE_COUNT; k++)
+                    a->found[k] |= !strcmp(id, "all") || k == (int)p;
+                if (p == PLACE_NONE && strcmp(id, "all"))
+                    fprintf(stderr, "silent: --found names no place '%s'\n", id);
+            }
         } else if (!strcmp(s, "--open-backpack") && has_next) {
             a->open_backpack = item_by_id(argv[++i]);
             a->backpack = true;
