@@ -45,6 +45,7 @@ uniform float floorY;        // World height of max density
 // Water as a second medium (spec 11.33). 0 = air only.
 uniform int waterMedium;
 uniform float waterLevelY;
+uniform vec4 waterBounds;     // where the water is: Water.bounds, all zero = everywhere
 uniform vec3 waterExtinction; // per-channel; reduced to its mean here, see below
 uniform vec3 waterInscatter;  // scene radiance, pre-exposed with everything else
 // Cloud transmittance toward the sun (spec 11.39). NOT a fourth medium -- a visibility term
@@ -151,6 +152,7 @@ float halton(int index, int base) {
 
 #include "phase.glsl"
 #include "rain_phase.glsl"
+#include "water_bounds.glsl"
 
 // Is the air at world position P lit by the caster whose cascade block starts
 // at layer0? Walks cascades in index order and taps the FIRST whose box
@@ -229,8 +231,9 @@ void main() {
     // a submerged cell, and a submerged camera puts most of the frustum down here.
     //
     // Coherent by construction: the test is a world-Y half-space, so divergence is
-    // confined to the slice band straddling the surface.
-    if (waterMedium == 1 && P.y < waterLevelY) {
+    // confined to the slice band straddling the surface, and to the edges of the water's
+    // bounds.
+    if (waterMedium == 1 && waterUnder(waterLevelY, waterBounds, P)) {
         // Luminance mean, because a cell carries ONE scalar extinction and the integrate
         // pass multiplies one scalar transmittance. The colour moves into the in-scatter,
         // so distance fades the seabed TOWARD the body colour rather than reddening out

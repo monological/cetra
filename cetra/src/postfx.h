@@ -155,8 +155,9 @@ typedef enum PostFXSpecOccMode {
 // Local fog volumes carried as a plain uniform array; MAX_LOCAL_FOG in
 // froxel_inject_frag.glsl mirrors it. Sixteen AABB tests per cell is cheap beside the nine
 // cascade taps and the clustered light walk already in that loop, so binning them into
-// the cluster grid is the upgrade this defers, not a thing it needs. Holes are cut by tiling
-// boxes round them, three a hole and one more, which is why the cap is not smaller.
+// the cluster grid is the upgrade this defers, not a thing it needs. Volumes only add, so a
+// clear space inside a fog is the fog tiled round it in several boxes, and that is what the
+// count goes on.
 #define POSTFX_MAX_FOG_VOLUMES 16
 
 /*
@@ -600,6 +601,7 @@ typedef struct PostFX {
     int water_medium;          // 1 = the volume has a second medium below water_level
     int water_suppress_aerial; // 1 = drop the sky-view integral; it is air not crossed
     float water_level_y;       // world height of the still surface
+    vec4 water_bounds;         // where it is: Water.bounds, all zero = everywhere
     vec3 water_extinction;     // per-channel, per world unit
     vec3 water_inscatter;      // colour the absorbed energy returns as
 

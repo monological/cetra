@@ -10465,44 +10465,25 @@ WATER_BOUNDS_WHOLE = "-1e20,-1e20,1e20,1e20"
 WATER_BOUNDS_AWAY = "1000,1000,1001,1001"
 WATER_BOUNDS_CUT = "-1e20,-1e20,0,1e20"
 WATER_BOUNDS_MARGIN = 0.04
+# An eye under the level, over the fixture's floor, looking along it at the wedge.
+WATER_BOUNDS_UNDER_CAM = ["--cam-eye", "0,-0.6,6.4", "--cam-target", "0,-0.9,-1"]
+WATER_BOUNDS_ARMS = ["water-bounds-whole", "water-bounds-cut", "water-bounds-eye"]
+WATER_BOUNDS_RUNS = (
+    ("none", ["--no-water"]), ("whole", ["--water-bounds", WATER_BOUNDS_WHOLE]),
+    ("away", ["--water-bounds", WATER_BOUNDS_AWAY]), ("cut", ["--water-bounds", WATER_BOUNDS_CUT]),
+    ("under", WATER_BOUNDS_UNDER_CAM),
+    ("under_away", WATER_BOUNDS_UNDER_CAM + ["--water-bounds", WATER_BOUNDS_AWAY]),
+    ("under_none", WATER_BOUNDS_UNDER_CAM + ["--no-water"]),
+)
 
 
-def _water_bounds_arms(workdir, scene, unbounded):
-    """water-bounds-whole and water-bounds-cut, against the unbounded frame on disk."""
-    frames, err = {"unbounded": unbounded}, None
-    for name, extra in (("none", ["--no-water"]), ("whole", ["--water-bounds", WATER_BOUNDS_WHOLE]),
-                        ("away", ["--water-bounds", WATER_BOUNDS_AWAY]),
-                        ("cut", ["--water-bounds", WATER_BOUNDS_CUT])):
+def _water_bounds_frames(workdir, scene):
+    """`scene` under each of WATER_BOUNDS_RUNS: (frames by name, the first render error)."""
+    frames, err = {}, None
+    for name, extra in WATER_BOUNDS_RUNS:
         frames[name] = os.path.join(workdir, f"water_bounds_{name}.ppm")
         err = err or render(scene, frames[name], WATER_DOWNWELL_FLAGS + extra)
-    if err:
-        print(f"  water-bounds-whole ERROR render failed: {err.strip()[-200:]}")
-        return ["water-bounds-whole", "water-bounds-cut"]
-    failures = []
-    whole, _ = compare(frames["whole"], unbounded)
-    ok = whole == 0
-    print(f"  water-bounds-whole {'PASS' if ok else 'FAIL'}  {whole} px from the unbounded frame "
-          f"under bounds round the whole world (want 0)")
-    if not ok:
-        failures.append("water-bounds-whole")
-
-    pix = {k: _read_ppm(p) for k, p in frames.items()}
-    w, h = pix["unbounded"][0], pix["unbounded"][1]
-    left = (0.0, 0.0, 0.5 - WATER_BOUNDS_MARGIN, 1.0)
-    right = (0.5 + WATER_BOUNDS_MARGIN, 0.0, 1.0, 1.0)
-    away, _ = compare(frames["away"], frames["none"])
-    water_moves = [_water_box_max_delta(pix["unbounded"][2], pix["none"][2], w, h, box)
-                   for box in (left, right)]
-    inside = _water_box_max_delta(pix["cut"][2], pix["unbounded"][2], w, h, left)
-    outside = _water_box_max_delta(pix["cut"][2], pix["none"][2], w, h, right)
-    ok = away == 0 and min(water_moves) > 0 and inside == 0 and outside == 0
-    print(f"  water-bounds-cut {'PASS' if ok else 'FAIL'}  bounds off the water: {away} px from "
-          f"no water (want 0); cut down the middle: the inside half {inside} from the unbounded "
-          f"frame and the outside half {outside} from no water at most (want 0, 0), where water "
-          f"moves the halves {water_moves[0]} and {water_moves[1]} (want > 0)")
-    if not ok:
-        failures.append("water-bounds-cut")
-    return failures
+    return frames, err
 
 
 def _water_downwell_depths(on, off, w, h, box, key):
@@ -11344,7 +11325,9 @@ def run_water_gate(workdir):
                       middle are the unbounded frame on their side and the frame with no water
                       on the other, both at 0 px. On the downwell fixture, where the lit floor
                       shows the light under the level as well as the surface.
-      water-shoal     waves shorten over a rising bed, and ONLY over it. Needs
+      water-bounds-eye an eye under the level is in the water only inside the bounds: outside
+                      them the frame is the one with no water, to 0 px, and unbounded it is not.
+      water-shoal    waves shorten over a rising bed, and ONLY over it. Needs
                       --water-bed dome, since every other arm here runs over a bed the
                       vertex stage cannot see. The second half -- open water beyond the
                       dome unchanged -- is what stops a global roughness change passing
@@ -12200,8 +12183,46 @@ def run_water_gate(workdir):
 
     # The sea's bounds (spec 13.41), on the downwell fixture's lit floor, so the light under the
     # level is cut with the surface. The unbounded frame is the downwell arm's.
-    if not err:
-        failures += _water_bounds_arms(workdir, dw_high, dw_frames["high", "on"])
+    wb, wb_err = _water_bounds_frames(workdir, dw_high) if not err else ({}, err)
+    if wb_err:
+        for arm in WATER_BOUNDS_ARMS:
+            print(f"  {arm} ERROR render failed: {wb_err.strip()[-200:]}")
+        failures += WATER_BOUNDS_ARMS
+    else:
+        wb["unbounded"] = dw_frames["high", "on"]
+        whole, _ = compare(wb["whole"], wb["unbounded"])
+        ok = whole == 0
+        print(f"  water-bounds-whole {'PASS' if ok else 'FAIL'}  {whole} px from the unbounded "
+              f"frame under bounds round the whole world (want 0)")
+        if not ok:
+            failures.append("water-bounds-whole")
+
+        pix = {k: _read_ppm(p) for k, p in wb.items()}
+        w, h = pix["unbounded"][0], pix["unbounded"][1]
+        left = (0.0, 0.0, 0.5 - WATER_BOUNDS_MARGIN, 1.0)
+        right = (0.5 + WATER_BOUNDS_MARGIN, 0.0, 1.0, 1.0)
+        away, _ = compare(wb["away"], wb["none"])
+        water_moves = [_water_box_max_delta(pix["unbounded"][2], pix["none"][2], w, h, box)
+                       for box in (left, right)]
+        inside = _water_box_max_delta(pix["cut"][2], pix["unbounded"][2], w, h, left)
+        outside = _water_box_max_delta(pix["cut"][2], pix["none"][2], w, h, right)
+        ok = away == 0 and min(water_moves) > 0 and inside == 0 and outside == 0
+        print(f"  water-bounds-cut {'PASS' if ok else 'FAIL'}  bounds off the water: {away} px "
+              f"from no water (want 0); cut down the middle: the inside half {inside} from the "
+              f"unbounded frame and the outside half {outside} from no water at most (want 0, "
+              f"0), where water moves the halves {water_moves[0]} and {water_moves[1]} (want > 0)")
+        if not ok:
+            failures.append("water-bounds-cut")
+
+        # An eye under the level is in the water only inside the bounds: outside them nothing is
+        # submerged, so the frame is the dry one, where unbounded the water closes round the eye.
+        outside, _ = compare(wb["under_away"], wb["under_none"])
+        inside, _ = compare(wb["under"], wb["under_none"])
+        ok = outside == 0 and inside > 0
+        print(f"  water-bounds-eye {'PASS' if ok else 'FAIL'}  an eye under the level outside "
+              f"the bounds: {outside} px from no water (want 0); inside them {inside} (want > 0)")
+        if not ok:
+            failures.append("water-bounds-eye")
 
     # Shoaling, which needs the diagnostic bed: every other water arm runs over a bed
     # the vertex stage cannot see, so the whole Tier 3 path was untested.
@@ -19312,7 +19333,7 @@ CONFIG_NONVALUE_WIDGETS = (
     "Text", "TextColored", "TextDisabled", "TextUnformatted", "TextWrapped", "TreeNode_Str",
     "TreePop", "Unindent", "ImDrawList_AddRectFilled", "ImDrawList_AddImage",
     "BeginCombo", "EndCombo", "GetDrawData", "GetWindowPos", "GetWindowSize", "Render",
-    "SetItemDefaultFocus", "SetNextWindowBgAlpha", "StyleColorsDark",
+    "SetItemDefaultFocus", "SetNextWindowBgAlpha", "StyleColorsDark", "EndFrame",
 )
 
 # Controls whose target is chosen at RUNTIME from a table rather than named in
@@ -28432,7 +28453,10 @@ def run_rain_gate(workdir):
                     move the open water, which a crown thrown from the bed never reaches -- the
                     occlusion map holds no water, so the drop has to be met at the surface --
                     and not a pixel of the water under the roof.
-      rain-ledger   the rain variant declares no more samplers than the dry variant of the
+      water-bounds-rain  the same twin with the water's bounds off it (spec 13.41): no surface
+                    to strike, so the splashes land on the bed, 0 px from the twin with no
+                    water at all.
+      rain-ledger  the rain variant declares no more samplers than the dry variant of the
                     same materials: the cover is a tenant of the punctual array, and a unit
                     spent on it would be one the full variant does not have.
       rain-glass    the glazed twin, beaded panes against bare ones: the pane in the open moves,
@@ -29000,6 +29024,20 @@ def run_rain_gate(workdir):
           f"{RAIN_COVERED_MIN_PX})")
     if not ok:
         failures.append("rain-splash-water")
+
+    # And only where the water is (spec 13.41): bounds off it leave no surface to strike, so the
+    # splashes land on the bed exactly as they do with no water at all.
+    splashing = {"streakCount": 0, "mist": 0.0, "rippleStrength": 0.0, **RAIN_SPLASH_ARM}
+    away = shot("bounds_away", RAIN_LINEAR + ["--water-bounds", WATER_BOUNDS_AWAY], base=deep,
+                camera=RAIN_UNDER_ROOF_CAMERA, rain=splashing)
+    dry = shot("bounds_dry", base=deep, camera=RAIN_UNDER_ROOF_CAMERA, rain=splashing,
+               mutate=lambda s: s.pop("water"))
+    moved = compare(away, dry)[0] if away and dry else sys.maxsize
+    ok = moved == 0
+    print(f"  water-bounds-rain {'PASS' if ok else 'FAIL'}  splashes under bounds off the water: "
+          f"{moved} px from no water (want 0)")
+    if not ok:
+        failures.append("water-bounds-rain")
 
     bits, full = _pbr_feature_bits()
     rain_bit = bits["rain"]

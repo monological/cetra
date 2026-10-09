@@ -276,7 +276,7 @@ bool splashDroplet(int instance, out Drop d) {
     vec3 hit = above + rainTravel * ((map - pc.z) * RAIN_MAP_DEPTH_METRES);
     // Water is not in the occlusion map, so over flooded ground the map answers the bed: the
     // drop strikes the surface first, back up its own path. Waves are not followed.
-    if (hit.y < rainWaterLevel && waterBoundsCover(rainWaterBounds, hit.xz))
+    if (waterUnder(rainWaterLevel, rainWaterBounds, hit))
         hit += rainTravel * ((rainWaterLevel - hit.y) / rainTravel.y);
 
     float impact = mpDiameter(h.z, RAIN_SPLASH_MIN_MM);

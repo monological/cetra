@@ -2814,6 +2814,7 @@ static void upload_fog_uniforms(PostFX* fx, UniformManager* u, mat4 projection, 
     // which is the one "air only" state -- no separate enable to disagree with it.
     uniform_set_int(u, "waterMedium", fx->water_medium);
     uniform_set_float(u, "waterLevelY", fx->water_level_y);
+    uniform_set_vec4(u, "waterBounds", fx->water_bounds);
     uniform_set_vec3(u, "waterExtinction", fx->water_extinction);
     uniform_set_vec3(u, "waterInscatter", fx->water_inscatter);
     // The cloud deck, published by sky_publish_to_postfx. Tile 0 is the single off state --
