@@ -981,8 +981,13 @@ the first.
 - **`--loading-screen`:** the screen headless too. Its clock is then a frame's fixed step, so it
   lifts later in frames than it would windowed, where it runs on the wall clock.
 - **`--startup-ms`:** prints a `startup-ms` row for each loading step and held frame -- how long
-  it took -- and for when the lighting is in (`lit`) and the view comes up (`up`). A step that
-  freezes the screen is the row printed as it ends.
+  it took -- and for when the lighting is in (`lit`) and the view comes up (`up`). Each row's
+  `still=` is the longest the loading screen stood without a chance to draw in it, and the `up`
+  row's `still-worst=` and `after=` are the worst of the whole load and the row it ended (spec
+  13.39, the engine's `engine_loading_screen_longest_wait`). It is counted headless too, so
+  `-x --loading-screen --capture-budget-ms 100` measures what a window would freeze for:
+  `--loading-screen` keeps the screen up headless, and the budget paces the captures as a window
+  does while loading.
 
 **The frame is one sample with jittered TAA, headless as well as windowed.** Two reasons it is not
 the engine's usual headless setup:
