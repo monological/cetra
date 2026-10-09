@@ -26742,6 +26742,10 @@ def run_ui_gate(workdir):
                      which is what makes "zero means inherit" a resolution step
                      instead of a second drawing path -- and a style that DOES say
                      something must differ, or the comparison proves nothing.
+      ui-textured-uv the whole-picture textured quad emits vertices identical to
+                     the UV quad over {0, 0, 1, 1}, so it is that quad and not a
+                     second path (spec 13.43) -- and a quad over part of a picture
+                     must differ, or the UVs never reached the vertices.
       ui-elements-closed ui.h exports exactly the six element constructors. The
                      scope ratchet, asserted rather than promised.
       ui-settings-roundtrip write, read back into a ZEROED struct, and every field
@@ -26895,6 +26899,20 @@ def run_ui_gate(workdir):
                   f"style that says something does not ({differs:.0f}, want 1)")
     print(f"  ui-theme-identity     {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-theme-identity", ok)
+
+    # ---- a part of a picture
+    p = _ui_probe("textured-uv")
+    if not p:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        match = p[("whole", "match")][0]
+        differs = p[("part", "differs")][0]
+        ok = match == 1 and differs == 1
+        detail = (f"the whole-picture quad hashes identically to the UV quad over 0..1 "
+                  f"({match:.0f}, want 1) and a part of the picture does not ({differs:.0f}, "
+                  f"want 1)")
+    print(f"  ui-textured-uv        {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-textured-uv", ok)
 
     # ---- the closed element list
     try:
