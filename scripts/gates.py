@@ -30542,25 +30542,27 @@ def run_lighting_stream_gate(workdir):
     # A rest that puts one of two spots' shadows away, as silent's puts its flashlight away: the
     # burst's own shadow pass then has one per-frame layer where its frame has two, and an edge
     # chosen from that rebuilt the array in the burst and again in the frame, every paced frame.
-    rest = ["--gi-volume", "--capture-rest-unshadow", LSTREAM_REST_LIGHT, "--stream-probe", "10"]
-    held, held_text = _lstream_run(workdir, "rest_unshadow", rest + budget, LSTREAM_REST_FRAMES,
-                                   fixture=LSTREAM_REST_FIXTURE)
-    if held is None or "--capture-rest-unshadow: no" in held_text:
-        print(f"  capture-keeps-shadow-array ERROR  {held_text[-300:]}")
+    rest = ["--gi-volume", "--capture-rest-unshadow", LSTREAM_REST_LIGHT,
+            "--stream-probe", str(LSTREAM_PACED_EVERY)]
+    rest_shots, rest_text = _lstream_run(workdir, "rest_unshadow", rest + budget,
+                                         LSTREAM_REST_FRAMES, fixture=LSTREAM_REST_FIXTURE)
+    if rest_shots is None:
+        print(f"  capture-keeps-shadow-array ERROR  {rest_text[-300:]}")
         failures.append("capture-keeps-shadow-array")
     else:
-        builds = held_text.count("Punctual shadow array:")
-        # The volume still sweeping near the end says the bursts ran across the frames, a probe
-        # a frame, rather than in one.
-        near_end = _lstream_rows(held_text).get(LSTREAM_REST_FRAMES - 10, {})
-        captures = int(near_end.get("gi", {}).get(0, {}).get("captures", 0))
-        paced = 10 < captures < LSTREAM_REST_FRAMES
-        ok = builds <= LSTREAM_REST_MAX_BUILDS and paced
+        builds = rest_text.count("Punctual shadow array:")
+        # The volume still sweeping a row before the end says the bursts ran across the frames,
+        # a probe a frame, rather than in one.
+        row = LSTREAM_REST_FRAMES - LSTREAM_PACED_EVERY
+        captures = int(_lstream_rows(rest_text).get(row, {}).get("gi", {}).get(0, {})
+                       .get("captures", 0))
+        rest_paced = 10 < captures < LSTREAM_REST_FRAMES
+        ok = builds <= LSTREAM_REST_MAX_BUILDS and rest_paced
         print(f"  capture-keeps-shadow-array {'PASS' if ok else 'FAIL'}  a burst a frame for "
               f"{LSTREAM_REST_FRAMES} frames, its rest putting '{LSTREAM_REST_LIGHT}' away: the "
               f"punctual array built {builds} time(s) (want <= {LSTREAM_REST_MAX_BUILDS}); "
-              f"{captures} GI probes captured by frame {LSTREAM_REST_FRAMES - 10}, so the bursts "
-              f"were paced: {paced}")
+              f"{captures} GI probes captured by frame {row}, so the bursts were paced: "
+              f"{rest_paced}")
         if not ok:
             failures.append("capture-keeps-shadow-array")
 
