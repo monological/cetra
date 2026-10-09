@@ -200,6 +200,7 @@ typedef struct SilentArgs {
     bool tiles_probe;        // print the cached shadow tiles at exit
     float capture_budget_ms; // the engine's capture budget, pinned; below 0 = silent's own
     bool capture_timing;     // each GI volume prints what its sweep cost as it converges
+    float gi_cull_pixels;    // the GI world's cull_pixels
     bool profiler;           // per-pass timing and submission counts, reported at exit
     const char* audio_dump;  // headless: write what the listener hears here
     bool no_woods;           // no trees behind the yards, nor what lies under them
@@ -258,9 +259,9 @@ static bool g_loaded;           // the lighting round the eye first came in
 static float g_fade_seconds;    // since the view came up
 static float g_play_capture_ms; // the capture budget once loaded
 
-// The spawn: in the kitchen, facing the window.
-static const vec3 SPAWN_FEET = {1.5f, FLOOR_Y, 13.2f};
-static const float SPAWN_YAW = GLM_PIf; // toward -z, the street
+// The spawn: in the kitchen's back corner, looking across the room toward the hall door.
+static const vec3 SPAWN_FEET = {4.5f, FLOOR_Y, 13.3f};
+static const vec3 SPAWN_LOOK_AT = {0.5f, 1.0f, 10.5f};
 
 // Every action, one table: input_bind takes a single table and borrows it. The
 // player reads the move, sprint, look and cursor rows by name (player.h); the
@@ -983,12 +984,12 @@ static void on_init(Game* game) {
         engine->capture_budget_ms = LOADING_CAPTURE_MS;
     engine->capture_timing = g_args.capture_timing;
 
-    // In the kitchen looking down the room, or wherever --player-at put the player, on whatever
-    // stands under them there -- the ground, a floor, the dock -- looking along its yaw.
-    vec3 feet;
+    // In the kitchen's back corner looking across it to the hall door, or wherever --player-at
+    // put the player, on whatever stands under them there -- the ground, a floor, the dock --
+    // looking along its yaw.
+    vec3 feet, look;
     glm_vec3_copy((float*)SPAWN_FEET, feet);
-    float yaw = SPAWN_YAW;
-    vec3 look = {SPAWN_FEET[0], SPAWN_FEET[1] + PLAYER_EYE_HEIGHT, 0.0f};
+    glm_vec3_copy((float*)SPAWN_LOOK_AT, look);
     if (g_args.player_at_set) {
         const float x = g_args.player_at[0], z = g_args.player_at[1];
         // From two metres over the ground or the lake's water, under any roof over them.
@@ -997,7 +998,7 @@ static void on_init(Game* game) {
         const bool stood = physics_world_raycast_filtered(physics, from, (vec3){0.0f, -1.0f, 0.0f},
                                                           30.0f, 1u << OBJ_LAYER_STATIC, &hit);
         glm_vec3_copy((vec3){x, (stood ? hit.position[1] : land_height(x, z)) + 0.05f, z}, feet);
-        yaw = glm_rad(g_args.player_at[2]);
+        const float yaw = glm_rad(g_args.player_at[2]);
         glm_vec3_copy((vec3){x + sinf(yaw), feet[1] + PLAYER_EYE_HEIGHT, z + cosf(yaw)}, look);
     }
     const float eye_y = feet[1] + PLAYER_EYE_HEIGHT;
@@ -1008,7 +1009,9 @@ static void on_init(Game* game) {
                       .far = 250.0f};
     engine_set_camera(engine, create_camera(&cam));
 
-    player_init(&g_player, game, physics, em, feet, yaw);
+    const vec3 dir = {look[0] - feet[0], look[1] - eye_y, look[2] - feet[2]};
+    player_init(&g_player, game, physics, em, feet, atan2f(dir[0], dir[2]),
+                atan2f(dir[1], sqrtf(dir[0] * dir[0] + dir[2] * dir[2])));
     load_seam(engine, "player");
     // Sent somewhere or holding a clip from the command line, the cat has no mind of its own.
     if (g_cat.entity && !g_args.cat_go[0] && !g_args.cat_clip[0])
@@ -1207,6 +1210,8 @@ static void on_pre_render(Game* game, double alpha) {
         build_gi((vec3){MANSION_X, MANSION_Y, MANSION_Z});
         build_cabin_gi();
         build_probes();
+        if (g_scene->gi)
+            g_scene->gi->cull_pixels = g_args.gi_cull_pixels;
     }
     AABB at;
     aabb_empty(&at);
@@ -1365,6 +1370,8 @@ static void print_usage(const char* prog) {
            (double)LOADING_CAPTURE_MS);
     printf("      --capture-timing    Print what each GI volume's sweep cost, part by part, as\n"
            "                          it converges; slows the sweep\n");
+    printf("      --gi-cull-pixels F  A GI probe leaves out what spans fewer pixels than F\n"
+           "                          across its 16-pixel faces; 0, the default, takes all\n");
     printf("      --profiler          Per-pass timing and submission counts, at exit\n");
     printf("      --tile-views N      Shade every cached light from N views over its body\n"
            "                          rather than 8; 1 is its centre alone\n");
@@ -1536,6 +1543,8 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
             a->capture_budget_ms = (float)atof(argv[++i]);
         } else if (!strcmp(s, "--capture-timing")) {
             a->capture_timing = true;
+        } else if (!strcmp(s, "--gi-cull-pixels") && has_next) {
+            a->gi_cull_pixels = (float)atof(argv[++i]);
         } else if (!strcmp(s, "--tile-views") && has_next) {
             a->tile_views = atoi(argv[++i]);
         } else if (!strcmp(s, "--tile-stores") && has_next) {
