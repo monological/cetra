@@ -759,6 +759,19 @@ bool engine_gui_wants_keyboard(void);
 // The camera the frame renders; refuses NULL.
 void engine_set_camera(Engine* engine, Camera* camera);
 
+// A material's texture from a file, decoded on the engine's loader threads (spec 13.39): `path`
+// resolves against `pool`'s directory as texture_load_file's does, and `set` -- a
+// material_set_*_tex, or the app's own -- receives the texture once it is in `pool`, on the main
+// thread. That is at once when the pool already holds the file, else in
+// engine_finish_texture_loads or a later frame's uploads. `set` is not called for a file that
+// cannot be loaded, and `material` must outlive the load.
+void engine_load_material_texture(Engine* engine, TexturePool* pool, Material* material,
+                                  void (*set)(Material*, Texture*), const char* path,
+                                  TextureDesc desc);
+// Every texture the loader is decoding, uploaded into `pool` now, the loading screen drawn between
+// them: for an app's init, so what it asked for is set before anything draws.
+void engine_finish_texture_loads(Engine* engine, TexturePool* pool);
+
 // Scene
 void engine_add_scene(Engine* engine, Scene* scene);
 void engine_set_scene_by_index(Engine* engine, size_t scene_index);
