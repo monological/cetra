@@ -199,30 +199,32 @@ void trees_build(Trees* trees, Kit* kit, Scene* scene, unsigned int seed) {
         if (!free_ground(x, z))
             continue;
         const int which = placed % TREE_MODELS;
-        Mesh* model = models[which];
-        if (!model)
+        if (!models[which])
             continue;
 
         const float scale = TREE_SCALE_MIN + (TREE_SCALE_MAX - TREE_SCALE_MIN) * kit_xrnd(&state);
         const float yaw = kit_xrnd(&state) * 6.2831853f;
-        // A lean of a few degrees, as a dead tree has, and sunk a little into the ground so the
-        // flare of its roots is in it.
+        // A lean of a few degrees, as a dead tree has.
         const float lean = glm_rad(2.0f + 6.0f * kit_xrnd(&state));
-        const float y = land_height(x, z) - 0.25f;
-        SceneNode* node = create_node();
-        mat4 m;
-        glm_translate_make(m, (vec3){x, y, z});
-        glm_rotate_y(m, yaw, m);
-        glm_rotate_x(m, lean, m);
-        glm_scale_uni(m, scale);
-        glm_mat4_copy(m, node->original_transform);
-        node_add_mesh(node, mesh_ref(model));
-        node_add_child(groups[which], node);
-
-        trees_trunk_collider(kit, x, z, land_height(x, z),
-                             trees->trunk_radius[which] * scale * TREES_TRUNK_BODY,
-                             TREES_TRUNK_HEIGHT, yaw, lean);
+        trees_stand(trees, kit, which, x, z, scale, yaw, lean);
         placed++;
     }
     printf("silent: %d dead trees from %d models\n", placed, TREE_MODELS);
+}
+
+void trees_stand(Trees* trees, Kit* kit, int which, float x, float z, float scale, float yaw,
+                 float lean) {
+    const float y = land_height(x, z) - 0.25f;
+    SceneNode* node = create_node();
+    mat4 m;
+    glm_translate_make(m, (vec3){x, y, z});
+    glm_rotate_y(m, yaw, m);
+    glm_rotate_x(m, lean, m);
+    glm_scale_uni(m, scale);
+    glm_mat4_copy(m, node->original_transform);
+    node_add_mesh(node, mesh_ref(trees->dead[which]));
+    node_add_child(trees->groups[which], node);
+    trees_trunk_collider(kit, x, z, land_height(x, z),
+                         trees->trunk_radius[which] * scale * TREES_TRUNK_BODY, TREES_TRUNK_HEIGHT,
+                         yaw, lean);
 }

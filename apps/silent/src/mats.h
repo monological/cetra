@@ -110,6 +110,7 @@ typedef enum {
     MAT_ANODISED, // the flashlight's black anodised aluminium
     MAT_TRACK,    // the gravel track down to the lake (spec 13.41)
     MAT_SHORE,    // mud at the water's edge
+    MAT_REEDS,    // tools/make_reeds.py's clump, a cutout drawn from both sides
     MAT_COUNT
 } MatId;
 

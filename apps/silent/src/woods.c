@@ -319,19 +319,10 @@ static void plant(Planting* p, float x, float z, float kind, float yaw, float si
     Trees* trees = p->trees;
     mat4 m;
     if (sp->dead) {
-        const int d = model;
-        if (!trees->dead[d])
+        if (!trees->dead[model])
             return;
-        const float scale = DEAD_MIN + (DEAD_MAX - DEAD_MIN) * size;
-        const float tilt = glm_rad(2.0f + 6.0f * lean);
-        glm_translate_make(m, (vec3){x, land_height(x, z) - 0.25f, z});
-        glm_rotate_y(m, yaw, m);
-        glm_rotate_x(m, tilt, m);
-        glm_scale_uni(m, scale);
-        place(trees->groups[d], trees->dead[d], m);
-        trees_trunk_collider(p->kit, x, z, land_height(x, z),
-                             trees->trunk_radius[d] * scale * TREES_TRUNK_BODY, TREES_TRUNK_HEIGHT,
-                             yaw, tilt);
+        trees_stand(trees, p->kit, model, x, z, DEAD_MIN + (DEAD_MAX - DEAD_MIN) * size, yaw,
+                    glm_rad(2.0f + 6.0f * lean));
         p->dead++;
         return;
     }
