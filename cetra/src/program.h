@@ -389,6 +389,8 @@ ShaderProgram* create_ssgi_atrous_program();
 ShaderProgram* create_ssr_atrous_program();
 ShaderProgram* create_ssr_accum_program();
 ShaderProgram* create_froxel_inject_program();
+// The inject's count of the cells that took several samples, for the miss probe (spec 13.45).
+ShaderProgram* create_froxel_miss_probe_program();
 ShaderProgram* create_froxel_integrate_program();
 ShaderProgram* create_froxel_composite_program();
 // Downsamples the scene's depth cascades into the fog's own filterable

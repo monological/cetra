@@ -30643,13 +30643,23 @@ FOGMISS_SIZE = (640, 400)
 FOGMISS_ARGS = ["--fog", "--no-aerial", "--no-auto-exposure", "-E", "1.0", "--no-dither",
                 "--no-bloom", "--no-vignette", "--no-ssao"]
 FOGMISS_FLOOR_MIN = 0.25  # codes: the floor a band is measured against, never below a quarter code
-FOGMISS_RATIO_MAX = 2.0   # provisional until the fix is measured (spec 13.45)
+FOGMISS_RATIO_MAX = 1.5   # measured 0.53; 5.60 with one sample
+FOGMISS_REDUCE_MAX = 0.25  # the band against one sample's: measured 0.094
+FOGMISS_PRESENT_MIN = 3.0  # one sample's band against the floor, so there is one to remove: 5.60
+FOGMISS_SWEPT_MIN = 0.02   # codes the swept columns move between the two, so the pass did something
+FOGMISS_ONE = ["--fog-history-miss-samples", "1"]
+# The froxel_fog golden's recipe (goldens.py), whose camera never moves.
+FOGMISS_STATIC = ["-m", "contact_fixture.cscn", "--fog", "--no-aerial", "-f", "60",
+                  "--no-auto-exposure", "-E", "1.0", "-W", "640", "-H", "400"]
+_FOGMISS_PROBE = re.compile(r"fog-miss-probe frame=(\d+) armed=(\d) cells=(\d+)")
 
 
-def _fogmiss_grid_x():
-    """The fog volume's columns, read from the engine's own header."""
+def _fogmiss_grid():
+    """The fog volume's dimensions, read from the engine's own header."""
     with open(os.path.join(ROOT, "cetra", "src", "postfx.h")) as f:
-        return int(re.search(r"#define POSTFX_FROXEL_X\s+(\d+)", f.read()).group(1))
+        text = f.read()
+    return tuple(int(re.search(rf"#define POSTFX_FROXEL_{a}\s+(\d+)", text).group(1))
+                 for a in "XYZ")
 
 
 def _fogmiss_target(yaw_deg):
@@ -30663,15 +30673,36 @@ def _fogmiss_pose(yaw_deg):
         f"{c:.6f}" for c in _fogmiss_target(yaw_deg))
 
 
-def _fogmiss_missed(grid_x):
-    """The columns whose cells had no history on the last frame of the turn: a level camera
-    turning about its eye moves a cell by its column alone, so a column misses when its view
-    direction lay outside the previous frame's frustum."""
-    fovy = _cscn_camera(FOGMISS_FIXTURE)["fovy_deg"]
-    tan_h = math.tan(math.radians(fovy) / 2) * FOGMISS_SIZE[0] / FOGMISS_SIZE[1]
+def _fogmiss_missed(grid):
+    """The cells with no history on each frame of the turn, as (whole columns, column-rows,
+    edge rows).
+
+    A level camera turning about its eye keeps a direction's height and its distance in the
+    horizontal plane, so a cell at angle t from the view axis lay at t + step in the previous
+    frame: its column misses when that is outside the frustum, and in a column that does not, its
+    height on screen grew by cos(t) / cos(t + step), which takes the top and bottom rows near the
+    leading edge out of it. Depth moves by too little to miss at this step.
+
+    That growth is also why a cell reads its history from nearer the top or bottom than itself, so
+    a missed row's value is carried inward over the turn, and the turn carries it across the
+    screen. The edge rows are those the leading edge's growth, compounded over every frame of the
+    turn, could have reached, and two more for the history's trilinear spread."""
+    grid_x, grid_y, _ = grid
+    tan_v = math.tan(math.radians(_cscn_camera(FOGMISS_FIXTURE)["fovy_deg"]) / 2)
+    tan_h = tan_v * FOGMISS_SIZE[0] / FOGMISS_SIZE[1]
     step = math.radians(FOGMISS_STEP)
-    return [c for c in range(grid_x)
-            if abs(math.tan(math.atan((2 * (c + 0.5) / grid_x - 1) * tan_h) + step)) > tan_h]
+    columns, rows, most = [], 0, 1.0
+    for c in range(grid_x):
+        t = math.atan((2 * (c + 0.5) / grid_x - 1) * tan_h)
+        if abs(math.tan(t + step)) > tan_h:
+            columns.append(c)
+            continue
+        grow = math.cos(t) / math.cos(t + step)
+        most = max(most, grow)
+        rows += sum(1 for r in range(grid_y) if abs((2 * (r + 0.5) / grid_y - 1) * grow) > 1)
+    reach = most ** FOGMISS_STEPS
+    edge = sum(1 for r in range(grid_y // 2) if abs(2 * (r + 0.5) / grid_y - 1) * reach > 1) + 2
+    return columns, rows, edge
 
 
 def _fogmiss_run(workdir, tag, extra, turning):
@@ -30710,42 +30741,131 @@ def _fogmiss_columns(img, ref, grid_x):
     return [float(per_x[cols == c].mean()) for c in range(grid_x)]
 
 
+def _fogmiss_probe(log):
+    """{frame: (armed, cells)} from the run's --fog-miss-probe lines."""
+    return {int(m.group(1)): (int(m.group(2)), int(m.group(3)))
+            for m in _FOGMISS_PROBE.finditer(log)}
+
+
+def _fogmiss_px_in(a, b, x_end=None, y_range=None):
+    """Pixels that differ between two images, counted left of x_end and within y_range."""
+    w, h, pa = a
+    _, _, pb = b
+    ia = np.frombuffer(pa, dtype=np.uint8, count=w * h * 3).reshape(h, w, 3)
+    ib = np.frombuffer(pb, dtype=np.uint8, count=w * h * 3).reshape(h, w, 3)
+    y0, y1 = y_range if y_range else (0, h)
+    return int((ia != ib).any(axis=2)[y0:y1, :x_end].sum())
+
+
 def run_fog_miss_gate(workdir):
     """Fog cells without history while the camera turns (spec 13.45).
 
       fog-miss-band      on the turn's last frame, the columns that missed history differ from
                          the converged frame by no more than FOGMISS_RATIO_MAX of the clean
-                         columns' floor
+                         columns' floor, and by no more than FOGMISS_REDUCE_MAX of what they did
+                         with one sample, which itself stood FOGMISS_PRESENT_MIN over the floor
+      fog-miss-count     no cell took several samples before the turn, and on every frame of it
+                         exactly the cells the geometry says missed did
+      fog-miss-confined  against one sample, the turn's clean columns are 0 px away from the edge
+                         rows a missed row's value could have reached, and the columns it swept
+                         moved: no cell with history was touched
+      fog-miss-static    no cell of the froxel_fog golden's still camera takes several samples,
+                         and its frame is 0 px against one sample
 
-    The capture is closed form: a level camera turning about its eye moves every cell by its
-    column alone, so which columns missed is worked out here from the two cameras rather than
-    read back from the run it checks.
+    The capture is closed form: a level camera turning about its eye moves a cell by its column
+    and its height on screen alone, so which cells missed is worked out here from the two cameras
+    rather than read back from the run it checks.
     """
+    names = ("fog-miss-band", "fog-miss-count", "fog-miss-confined", "fog-miss-static")
     if not os.path.exists(asset(FOGMISS_FIXTURE)):
-        print(f"  fog-miss-band SKIP  {FOGMISS_FIXTURE} not found")
+        for name in names:
+            print(f"  {name} SKIP  {FOGMISS_FIXTURE} not found")
         return []
     failures = []
-    grid_x = _fogmiss_grid_x()
-    missed = _fogmiss_missed(grid_x)
+    grid = _fogmiss_grid()
+    grid_x, grid_y, grid_z = grid
+    missed, missed_rows, edge_rows = _fogmiss_missed(grid)
     swept = len(missed) * FOGMISS_STEPS
     # Far from everything the turn swept, with two columns for the history's trilinear spread.
     clean = list(range(0, max(0, grid_x - swept - 2)))
-    turned, turn_log = _fogmiss_run(workdir, "turn", [], True)
+    turned, turn_log = _fogmiss_run(workdir, "turn", ["--fog-miss-probe"], True)
     held, held_log = _fogmiss_run(workdir, "held", [], False)
-    if turned is None or held is None:
-        print(f"  fog-miss-band ERROR  {(turn_log if turned is None else held_log)[-300:]}")
-        failures.append("fog-miss-band")
-        return failures
+    one, one_log = _fogmiss_run(workdir, "turn_one", FOGMISS_ONE, True)
+    for img, log in ((turned, turn_log), (held, held_log), (one, one_log)):
+        if img is None:
+            for name in names[:3]:
+                print(f"  {name} ERROR  {log[-300:]}")
+                failures.append(name)
+            return failures
+
     d = _fogmiss_columns(turned, held, grid_x)
+    d_one = _fogmiss_columns(one, held, grid_x)
     band = sum(abs(d[c]) for c in missed) / max(1, len(missed))
-    floor = sum(abs(d[c]) for c in clean) / max(1, len(clean))
-    ratio = band / max(floor, FOGMISS_FLOOR_MIN)
-    ok = bool(missed) and ratio <= FOGMISS_RATIO_MAX
+    band_one = sum(abs(d_one[c]) for c in missed) / max(1, len(missed))
+    floor = max(sum(abs(d[c]) for c in clean) / max(1, len(clean)), FOGMISS_FLOOR_MIN)
+    ok = (bool(missed) and band / floor <= FOGMISS_RATIO_MAX
+          and band_one / floor >= FOGMISS_PRESENT_MIN
+          and band <= FOGMISS_REDUCE_MAX * band_one)
     print(f"  fog-miss-band {'PASS' if ok else 'FAIL'}  the {len(missed)} columns that missed "
-          f"history differ by {band:.3f} codes against the clean columns' {floor:.3f}: "
-          f"{ratio:.2f}x the floor (want <= {FOGMISS_RATIO_MAX})")
+          f"history differ by {band:.3f} codes, {band / floor:.2f}x the floor (want <= "
+          f"{FOGMISS_RATIO_MAX}); one sample's {band_one:.3f}, {band_one / floor:.2f}x (want >= "
+          f"{FOGMISS_PRESENT_MIN}); {band / max(band_one, 1e-9):.3f} of it (want <= "
+          f"{FOGMISS_REDUCE_MAX})")
     if not ok:
         failures.append("fog-miss-band")
+
+    want = len(missed) * grid_y * grid_z + missed_rows * grid_z
+    probe = _fogmiss_probe(turn_log)
+    frames = FOGMISS_STILL + FOGMISS_STEPS
+    turn = range(FOGMISS_STILL, frames)
+    # Frame 0 has no history at all, and takes one sample; every still frame after it is armed
+    # and finds nothing to take them, which is what keeps a still frame's cost and pixels its own.
+    still_wrong = [f for f in range(1, FOGMISS_STILL) if probe.get(f) != (1, 0)]
+    wrong = [(f, probe.get(f)) for f in turn if probe.get(f) != (1, want)]
+    ok = len(probe) == frames and probe.get(0) == (0, 0) and not still_wrong and not wrong
+    print(f"  fog-miss-count {'PASS' if ok else 'FAIL'}  {len(probe)} of {frames} frames probed; "
+          f"frame 0 {probe.get(0)} (want unarmed); {FOGMISS_STILL - 1 - len(still_wrong)} of "
+          f"{FOGMISS_STILL - 1} still frames armed with no cell taking several samples; "
+          f"{len(turn) - len(wrong)} of {len(turn)} turn frames took them in {want} cells "
+          f"({len(missed)} columns and {missed_rows} column-rows)"
+          f"{'' if not wrong else f', first wrong {wrong[0]}'}")
+    if not ok:
+        failures.append("fog-miss-count")
+
+    w, h, _ = turned
+    middle = (edge_rows * h // grid_y, (grid_y - edge_rows) * h // grid_y)
+    clean_px = _fogmiss_px_in(turned, one, len(clean) * w // grid_x, middle)
+    swept_cols = range(grid_x - swept, grid_x)
+    moved = sum(abs(d[c] - d_one[c]) for c in swept_cols) / max(1, len(swept_cols))
+    ok = bool(clean) and middle[1] > middle[0] and clean_px == 0 and moved >= FOGMISS_SWEPT_MIN
+    print(f"  fog-miss-confined {'PASS' if ok else 'FAIL'}  against one sample, {clean_px} px in "
+          f"the {len(clean)} clean columns away from the {edge_rows} rows at each edge (want 0); "
+          f"the {len(swept_cols)} swept columns moved {moved:.3f} codes (want >= "
+          f"{FOGMISS_SWEPT_MIN})")
+    if not ok:
+        failures.append("fog-miss-confined")
+
+    static = []
+    for tag, extra in (("static", ["--fog-miss-probe"]), ("static_one", FOGMISS_ONE)):
+        out = os.path.join(workdir, f"fogmiss_{tag}.ppm")
+        cmd = [RENDER, "-x", "-S", out] + [asset(a) if a.endswith(".cscn") else a
+                                           for a in FOGMISS_STATIC] + extra
+        r = _run(cmd, capture_output=True, text=True)
+        if r.returncode != 0 or not os.path.exists(out):
+            print(f"  fog-miss-static ERROR  {(r.stdout + r.stderr).strip()[-300:]}")
+            failures.append("fog-miss-static")
+            return failures
+        static.append((_read_ppm(out), r.stdout + r.stderr))
+    probe = _fogmiss_probe(static[0][1])
+    took = [f for f, (_, cells) in probe.items() if cells != 0]
+    armed = sum(1 for armed, _ in probe.values() if armed)
+    px = _fogmiss_px_in(static[0][0], static[1][0])
+    ok = armed > 0 and not took and px == 0
+    print(f"  fog-miss-static {'PASS' if ok else 'FAIL'}  the golden's still camera took several "
+          f"samples in a cell on {len(took)} of the {armed} armed frames (want 0, of more than "
+          f"none) and is {px} px against one sample (want 0)")
+    if not ok:
+        failures.append("fog-miss-static")
     return failures
 
 

@@ -173,6 +173,7 @@ typedef struct SilentArgs {
     bool negative_probe;     // print how much of the frame reaches the tonemap below zero
     bool exposure_probe;     // print what the meter decided, every frame it decides
     bool no_history_rescale; // histories keep the exposure they were written at (A/B)
+    int fog_miss_samples;    // samples a fog cell with no history takes; 0 = the engine's
     float render_scale;
     int msaa;
     bool cam_eye_set, cam_target_set;
@@ -696,6 +697,8 @@ static void build_post(const Engine* engine, bool night, bool grade) {
     fx->local_exposure_probe = g_args.le_probe;
     fx->negative_probe = g_args.negative_probe;
     fx->rescale_histories = !g_args.no_history_rescale;
+    if (g_args.fog_miss_samples > 0)
+        fx->fog_history_miss_samples = g_args.fog_miss_samples;
 }
 
 // Door `i`, or NULL when it was not hung.
@@ -1480,7 +1483,10 @@ static void print_usage(const char* prog) {
     printf("      --exposure-probe    Print what the meter decided, every frame it decides\n");
     printf("      --no-history-rescale  The fog and temporal histories keep the exposure they\n"
            "                          were written at, so stepping outdoors settles slowly\n");
-    printf("      --render-scale F    Render at F of the window and upscale (0.5-1, default\n");
+    printf("      --fog-history-miss-samples N  Samples a fog cell entering the view takes,\n"
+           "                          1..%d (1 = one, which bands the fog's edge on a turn)\n",
+           POSTFX_FOG_MISS_SAMPLES_MAX);
+    printf("      --render-scale F   Render at F of the window and upscale (0.5-1, default\n");
     printf("                          %.1f): the softer frame of the consoles it imitates\n",
            (double)DEFAULT_RENDER_SCALE);
     printf("      --msaa N            MSAA samples\n");
@@ -1637,6 +1643,8 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
             a->exposure_probe = true;
         } else if (!strcmp(s, "--no-history-rescale")) {
             a->no_history_rescale = true;
+        } else if (!strcmp(s, "--fog-history-miss-samples") && has_next) {
+            a->fog_miss_samples = atoi(argv[++i]);
         } else if (!strcmp(s, "--render-scale") && has_next) {
             a->render_scale = (float)atof(argv[++i]);
         } else if (!strcmp(s, "--msaa") && has_next) {

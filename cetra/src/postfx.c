@@ -103,6 +103,15 @@ static void draw_volume_slices(PostFX* fx, GLuint volume, UniformManager* um) {
     glBindVertexArray(0);
 }
 
+// The units froxel_inject_frag's samplers read, for either of its two programs.
+static void set_inject_samplers(ShaderProgram* program) {
+    glUseProgram(program->id);
+    uniform_set_int(program->uniforms, "shadowMaps", 1);
+    uniform_set_int(program->uniforms, "punctualShadowMaps", 2);
+    uniform_set_int(program->uniforms, "historyVolume", 3);
+    uniform_set_int(program->uniforms, "cloudShadowTex", 4);
+}
+
 // A ping-pong pair: two color FBOs of the same size/format (see PingPong)
 static bool create_pingpong(int width, int height, GLenum internal_format, PingPong* pp) {
     pp->valid = false;
@@ -749,6 +758,7 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     fx->fog_far = 60.0f;
     fx->fog_depth_dist = 1.0f;
     fx->fog_temporal_blend = 0.9f;
+    fx->fog_history_miss_samples = 4;
     fx->fog_esm_array = 0;
     fx->fog_esm_scratch = 0;
     fx->fog_esm_fbo = 0;
@@ -967,11 +977,7 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     uniform_set_int(fx->ssr_program->uniforms, "auxTex", 6);
     glUseProgram(fx->ssr_hiz_program->id);
     uniform_set_int(fx->ssr_hiz_program->uniforms, "srcTex", 0);
-    glUseProgram(fx->froxel_inject_program->id);
-    uniform_set_int(fx->froxel_inject_program->uniforms, "shadowMaps", 1);
-    uniform_set_int(fx->froxel_inject_program->uniforms, "punctualShadowMaps", 2);
-    uniform_set_int(fx->froxel_inject_program->uniforms, "historyVolume", 3);
-    uniform_set_int(fx->froxel_inject_program->uniforms, "cloudShadowTex", 4);
+    set_inject_samplers(fx->froxel_inject_program);
 
     // The stand-in for an absent optional sampler; see white_tex in postfx.h for why an
     // incomplete texture is worse than a real one.
@@ -2235,6 +2241,8 @@ void free_postfx(PostFX* fx) {
     fx->froxel_scatter[0] = 0;
     fx->froxel_scatter[1] = 0;
     gl_delete_texture(&fx->froxel_integrated);
+    if (fx->fog_miss_query)
+        glDeleteQueries(1, &fx->fog_miss_query);
 
     free_program(fx->bloom_bright_program);
     free_program(fx->bloom_down_program);
@@ -2265,6 +2273,7 @@ void free_postfx(PostFX* fx) {
     free_program(fx->upsample_tent_program);
     free_program(fx->ssr_fold_wet_program);
     free_program(fx->froxel_inject_program);
+    free_program(fx->froxel_miss_probe_program);
     free_program(fx->froxel_integrate_program);
     free_program(fx->froxel_composite_program);
     free_program(fx->taa_resolve_program);
@@ -2975,6 +2984,57 @@ static bool postfx_build_fog_esm(PostFX* fx) {
     return true;
 }
 
+// What both of froxel_inject_frag's programs read, so the miss probe's count finds the cells the
+// inject did.
+static void upload_inject_uniforms(PostFX* fx, UniformManager* u, mat4 projection, mat4 inv_view,
+                                   bool esm_on, int temporal) {
+    upload_fog_uniforms(fx, u, projection, inv_view);
+    uniform_set_int(u, "froxelDepth", fx->froxel_built_z);
+    uniform_set_int(u, "temporal", temporal);
+    uniform_set_float(u, "temporalBlend", fx->fog_temporal_blend);
+    uniform_set_float(u, "historyScale", _history_scale(fx, fx->froxel_prev_pre));
+    uniform_set_int(u, "esmEnabled", esm_on ? 1 : 0);
+    uniform_set_float(u, "esmK", fx->fog_esm_k);
+    // Where the spot's ESM landed: the layer after the cascades.
+    uniform_set_int(u, "spotEsmLayer", fx->fog_light_count * fx->fog_cascade_count);
+    uniform_set_int(u, "frameIndex", fx->frame_index);
+    uniform_set_mat4(u, "prevView", (float*)fx->froxel_prev_view);
+    uniform_set_mat4(u, "prevProjection", (float*)fx->froxel_prev_proj);
+    uniform_set_int(u, "missSamples",
+                    glm_imin(fx->fog_history_miss_samples, POSTFX_FOG_MISS_SAMPLES_MAX));
+}
+
+// Print how many fog cells took several samples this frame (spec 13.45), by drawing the inject's
+// counting variant over the volume just built with colour writes off and an occlusion query
+// round it. A frame whose cells cannot take them -- the first of a run or after a gap, or one
+// sample asked for -- prints none. Made on first use: nothing but the probe draws it.
+static void postfx_fog_miss_probe(PostFX* fx, GLuint volume, mat4 projection, mat4 inv_view,
+                                  bool esm_on, int temporal) {
+    const bool armed = temporal && fx->fog_history_miss_samples > 1;
+    if (armed && !fx->froxel_miss_probe_program && !fx->fog_miss_probe_failed) {
+        fx->froxel_miss_probe_program = create_froxel_miss_probe_program();
+        fx->fog_miss_probe_failed = fx->froxel_miss_probe_program == NULL;
+        if (fx->froxel_miss_probe_program)
+            set_inject_samplers(fx->froxel_miss_probe_program);
+    }
+    ShaderProgram* count = armed ? fx->froxel_miss_probe_program : NULL;
+    GLuint cells = 0;
+    if (count) {
+        if (!fx->fog_miss_query)
+            glGenQueries(1, &fx->fog_miss_query);
+        glUseProgram(count->id);
+        upload_inject_uniforms(fx, count->uniforms, projection, inv_view, esm_on, temporal);
+        glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+        glBeginQuery(GL_SAMPLES_PASSED, fx->fog_miss_query);
+        draw_volume_slices(fx, volume, count->uniforms);
+        glEndQuery(GL_SAMPLES_PASSED);
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        // Read at once: a probe's frame may stall, and the count belongs to the line it prints.
+        glGetQueryObjectuiv(fx->fog_miss_query, GL_QUERY_RESULT, &cells);
+    }
+    printf("fog-miss-probe frame=%d armed=%d cells=%u\n", fx->frame_index, count ? 1 : 0, cells);
+}
+
 // Build the fog scattering volume: light the medium once per cell, then
 // integrate front-to-back along each froxel column. Everything about froxel
 // parity, reprojection and the adjacency stamp lives here, so the composite
@@ -3028,19 +3088,11 @@ static void postfx_build_fog_volume(PostFX* fx, mat4 projection, mat4 view, bool
     glActiveTexture(GL_TEXTURE4);
     glBindTexture(GL_TEXTURE_2D, fx->cloud_shadow_tex ? fx->cloud_shadow_tex : fx->white_tex);
     glActiveTexture(GL_TEXTURE0);
-    upload_fog_uniforms(fx, iu, projection, inv_view);
-    uniform_set_int(iu, "froxelDepth", fx->froxel_built_z);
-    uniform_set_int(iu, "temporal", temporal);
-    uniform_set_float(iu, "temporalBlend", fx->fog_temporal_blend);
-    uniform_set_float(iu, "historyScale", _history_scale(fx, fx->froxel_prev_pre));
-    uniform_set_int(iu, "esmEnabled", esm_on ? 1 : 0);
-    uniform_set_float(iu, "esmK", fx->fog_esm_k);
-    // Where the spot's ESM landed: the layer after the cascades.
-    uniform_set_int(iu, "spotEsmLayer", fx->fog_light_count * fx->fog_cascade_count);
-    uniform_set_int(iu, "frameIndex", fx->frame_index);
-    uniform_set_mat4(iu, "prevView", (float*)fx->froxel_prev_view);
-    uniform_set_mat4(iu, "prevProjection", (float*)fx->froxel_prev_proj);
+    upload_inject_uniforms(fx, iu, projection, inv_view, esm_on, temporal);
     draw_volume_slices(fx, fx->froxel_scatter[write], iu);
+    if (fx->fog_miss_probe)
+        postfx_fog_miss_probe(fx, fx->froxel_scatter[write], projection, inv_view, esm_on,
+                              temporal);
 
     // 2. Integrate: slice k gathers 0..k. Reads the scatter volume, writes the
     // integrated one -- different textures, so no read-write hazard.

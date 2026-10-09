@@ -1608,6 +1608,18 @@ ShaderProgram* create_froxel_inject_program() {
     return create_post_program("froxel_inject", froxel_inject_frag_shader_str);
 }
 
+// The same source compiled for the miss probe's count (spec 13.45), whose main is the one under
+// FROXEL_HISTORY_MISS.
+ShaderProgram* create_froxel_miss_probe_program() {
+    char* source = shader_source_with_defines(froxel_inject_frag_shader_str,
+                                              "#define FROXEL_HISTORY_MISS 1\n");
+    if (!source)
+        return NULL;
+    ShaderProgram* program = create_post_program("froxel_miss_probe", source);
+    free(source);
+    return program;
+}
+
 ShaderProgram* create_froxel_integrate_program() {
     return create_post_program("froxel_integrate", froxel_integrate_frag_shader_str);
 }
