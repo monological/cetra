@@ -1581,9 +1581,11 @@ void kit_frame_soft_box(Kit* kit, const KitFrame* f, int mat, float a0, float a1
                     vec3 local = {0.0f, 0.0f, 0.0f};
                     glm_vec3_copy(c, local);
                     glm_vec3_muladds(n, r, local);
+                    // A face rounded all the way across an axis has no middle to puff: there u
+                    // is 1, or it bulges away from the faces it shares that round with.
                     if (puff != 0.0f) {
-                        const float u = flat[i] > 1e-5f ? c[i] / flat[i] : 0.0f;
-                        const float v = flat[j] > 1e-5f ? c[j] / flat[j] : 0.0f;
+                        const float u = flat[i] > 1e-5f ? c[i] / flat[i] : 1.0f;
+                        const float v = flat[j] > 1e-5f ? c[j] / flat[j] : 1.0f;
                         const float fu = 1.0f - u * u, fv = 1.0f - v * v;
                         local[k] += (float)s * puff * fu * fu * fv * fv;
                         if (flat[i] > 1e-5f)

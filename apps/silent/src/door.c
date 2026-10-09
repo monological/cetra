@@ -203,14 +203,17 @@ void door_update(Door* door, float dt) {
     place(door);
 }
 
-float door_reach_distance(const Door* door, const vec3 eye, const vec3 forward, float reach,
-                          float cone) {
-    if (!door->entity)
-        return FLT_MAX;
+float reach_distance(const vec3 at, const vec3 eye, const vec3 forward, float reach, float cone) {
     vec3 to = {0.0f, 0.0f, 0.0f};
-    glm_vec3_sub(door->entity->position, (float*)eye, to);
+    glm_vec3_sub((float*)at, (float*)eye, to);
     const float dist = glm_vec3_norm(to);
     if (dist > reach || dist < 1e-4f || glm_vec3_dot(to, (float*)forward) / dist < cosf(cone))
         return FLT_MAX;
     return dist;
+}
+
+float door_reach_distance(const Door* door, const vec3 eye, const vec3 forward, float reach,
+                          float cone) {
+    return door->entity ? reach_distance(door->entity->position, eye, forward, reach, cone)
+                        : FLT_MAX;
 }

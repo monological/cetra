@@ -44,6 +44,7 @@
 #include "cetra/game/input.h"
 #include "cetra/game/physics.h"
 
+#include "backpack.h"
 #include "basement.h"
 #include "candles.h"
 #include "cat.h"
@@ -59,6 +60,7 @@
 #include "hill.h"
 #include "home.h"
 #include "house.h"
+#include "hud.h"
 #include "interior.h"
 #include "kit.h"
 #include "kitchen.h"
@@ -68,7 +70,6 @@
 #include "mansion.h"
 #include "mats.h"
 #include "player.h"
-#include "prompt.h"
 #include "rain_bed.h"
 #include "sounds.h"
 #include "street.h"
@@ -179,6 +180,7 @@ typedef struct SilentArgs {
     bool startup_ms;        // print where loading's time goes, a startup-ms row a step
     bool no_play_prompt;    // the loading screen lifts by itself once the game is ready
     bool flashlight;
+    bool backpack; // the backpack already taken, and the flashlight in it
     bool mute;
     float rain_mmh;          // 0 = dry
     bool no_wind;            // still air: the rain falls straight
@@ -236,8 +238,9 @@ static FailingLamp g_failing[FAILING_LAMPS];
 enum { DOOR_HOME, DOOR_BATH, DOOR_BEDROOM, DOOR_BASEMENT, DOOR_MANSION, DOORS };
 static Door g_doors[DOORS];
 static bool g_door_hung[DOORS];
-static Prompt g_prompt;
+static Hud g_hud;
 static Basement g_basement;
+static Backpack g_backpack;
 
 // --audio-dump: the offline mix, pulled a frame's worth at a time so it keeps
 // step with the sim clock, as interleaved stereo at the engine's rate.
@@ -793,8 +796,10 @@ static void on_init(Game* game) {
     g_door_hung[DOOR_MANSION] =
         house_front_door(&g_doors[DOOR_MANSION], engine, g_scene, em, physics, mansion_origin);
     load_seam(engine, "doors");
-    prompt_start(&g_prompt, engine);
-    load_seam(engine, "prompt");
+    // The backpack on the bedroom's bed (spec 13.40), unless the run starts with it.
+    backpack_build(&g_backpack, engine, g_scene, g_args.backpack || g_args.flashlight);
+    hud_start(&g_hud, engine);
+    load_seam(engine, "backpack-hud");
     // Every static collider stands by now, and the cat's place check casts thousands of rays at
     // them: unoptimised, the broadphase is a chain each ray walks body by body. What comes after --
     // the cat's body, the player's -- the steps keep tidy.
@@ -1033,13 +1038,18 @@ static void on_pre_render(Game* game, double alpha) {
                           pinned ? &g_args.cam_target : NULL);
     }
 
-    if (input_action_pressed(&game->input, "flashlight"))
-        lights_toggle_flashlight(&g_lights);
+    // The flashlight is in the backpack (spec 13.40): until the player has it, F finds nothing.
+    if (input_action_pressed(&game->input, "flashlight")) {
+        if (backpack_holds(&g_backpack, ITEM_FLASHLIGHT))
+            lights_toggle_flashlight(&g_lights);
+        else
+            hud_think(&g_hud, "I don't have a flashlight.");
+    }
     vec3 eye = {0.0f, 0.0f, 0.0f}, forward = {0.0f, 0.0f, -1.0f};
     player_eye(&g_player, eye, forward);
 
-    // The nearest door the player is looking at says what the action key would do to it, and
-    // the key does it.
+    // The nearest thing the player is looking at in reach -- a door, or the backpack on the bed
+    // -- says what the action key would do to it, and the key does it.
     Door* door = NULL;
     float nearest = FLT_MAX;
     for (int i = 0; i < DOORS; i++) {
@@ -1051,11 +1061,21 @@ static void on_pre_render(Game* game, double alpha) {
             door = &g_doors[i];
         }
     }
-    if (door && input_action_pressed(&game->input, "interact"))
-        door_toggle(door);
-    prompt_show(&g_prompt, !door                  ? NULL
-                           : door_will_open(door) ? "E   Open door"
-                                                  : "E   Close door");
+    const bool bag =
+        backpack_reach_distance(&g_backpack, eye, forward, DOOR_REACH, DOOR_CONE) < nearest;
+    if (input_action_pressed(&game->input, "interact")) {
+        if (bag) {
+            backpack_take(&g_backpack);
+            hud_think(&g_hud, "My backpack. There's a flashlight in it.");
+        } else if (door) {
+            door_toggle(door);
+        }
+    }
+    hud_prompt(&g_hud, bag                    ? "E   Take the backpack"
+                       : !door                ? NULL
+                       : door_will_open(door) ? "E   Open door"
+                                              : "E   Close door");
+    hud_update(&g_hud, (float)game->sim_clock.delta);
     sounds_update(&g_sounds);
     lights_update(&g_lights, g_scene, game->time, (float)game->sim_clock.delta, eye, forward);
     tv_update(&g_tv, game->time);
@@ -1121,13 +1141,15 @@ static void on_frame_input(Game* game) {
     input_set_suppressed(&game->input, engine_loading_screen_shown(game->engine));
 }
 
-// Before the engine goes: the prompt draws through its overlay hook.
+// Before the engine goes: the HUD draws through its overlay hook, and the backpack's models are on
+// no graph the scene would free.
 static void on_shutdown(Game* game) {
     if (game && game->engine)
         profiler_report(game->engine->profiler);
     if (g_args.tiles_probe && g_scene)
         shadow_tiles_probe(g_scene->shadow_system, g_scene);
-    prompt_free(&g_prompt);
+    hud_free(&g_hud);
+    backpack_free(&g_backpack);
     cat_free(&g_cat);
 }
 
@@ -1172,7 +1194,8 @@ static void print_usage(const char* prog) {
     printf("      --loading-screen    The engine's loading screen headless too\n");
     printf("      --startup-ms        Print how long each loading step and held frame took\n");
     printf("      --no-play-prompt    Go straight in once loaded, without the screen's PLAY\n");
-    printf("      --flashlight        Start with the flashlight on (F toggles it)\n");
+    printf("      --flashlight        Start with the flashlight, and on (F toggles it)\n");
+    printf("      --backpack          Start with the backpack, the flashlight in it\n");
     printf("      --mute              Without sound\n");
     printf("      --audio-dump PATH   Headless: write what the listener hears as a WAV\n");
     printf("      --rain MM           Rain rate in mm/h (default %.0f)\n",
@@ -1216,8 +1239,8 @@ static void print_usage(const char* prog) {
     printf("      --no-eyeshine       Its eyes do not throw the flashlight back\n");
     printf("  In the window: click to capture the mouse, Tab to release it. WASD\n");
     printf("  walks, Shift hurries, the arrows or the mouse look, E opens and shuts\n");
-    printf("  a door you are facing, F the flashlight, G shows the GUI and frees the\n");
-    printf("  mouse for it while it is open.\n");
+    printf("  a door you are facing or takes what is in reach, F the flashlight once\n");
+    printf("  you have it, G shows the GUI and frees the mouse for it while it is open.\n");
     printf("  -h, --help              This message\n");
 }
 
@@ -1323,6 +1346,8 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
             a->no_play_prompt = true;
         } else if (!strcmp(s, "--flashlight")) {
             a->flashlight = true;
+        } else if (!strcmp(s, "--backpack")) {
+            a->backpack = true;
         } else if (!strcmp(s, "--mute")) {
             a->mute = true;
         } else if (!strcmp(s, "--audio-dump") && has_next) {

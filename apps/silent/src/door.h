@@ -63,8 +63,10 @@ bool door_will_open(const Door* door);
 // Per fixed step: eases the leaf and moves its body and node.
 void door_update(Door* door, float dt);
 
-// How far the eye is from the middle of the leaf's face when the door is in reach -- within
-// `reach` metres and less than `cone` radians off the view -- and FLT_MAX when it is not.
+// How far the eye is from `at` when it is in reach -- within `reach` metres and less than `cone`
+// radians off the view -- and FLT_MAX when it is not: what the player can put a hand to.
+float reach_distance(const vec3 at, const vec3 eye, const vec3 forward, float reach, float cone);
+// The same for the middle of the leaf's face.
 float door_reach_distance(const Door* door, const vec3 eye, const vec3 forward, float reach,
                           float cone);
 
