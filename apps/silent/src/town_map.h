@@ -1,6 +1,9 @@
 #ifndef _SILENT_TOWN_MAP_H_
 #define _SILENT_TOWN_MAP_H_
 
+#include <stdbool.h>
+#include <cglm/cglm.h>
+
 /*
  * The maps the player can carry (spec 13.43), and what the player finds that goes on one by hand
  * -- the roads out of town that cannot be followed, and the cabin down by the lake. Each PLACE is
@@ -13,16 +16,35 @@
 
 typedef enum { MAP_NONE = -1, MAP_TOWN, MAP_COUNT } MapId;
 
-typedef enum { PLACE_BARRICADE, PLACE_ROAD_END, PLACE_CABIN, PLACE_COUNT } PlaceId;
+typedef enum { PLACE_NONE = -1, PLACE_BARRICADE, PLACE_ROAD_END, PLACE_CABIN, PLACE_COUNT } PlaceId;
 
 typedef struct PlaceSpec {
     const char* id; // as a command line and tools/make_map.py name it
     MapId map;      // the map its mark goes on
     float box[4];   // where the feet find it, in plan: x0, x1, z0, z1
     float mark[2];  // where its mark goes on the map: world x, z
+    // What the player thinks on arriving: the first time with the map, which they mark it on; the
+    // first time without; and every time after, NULL for nothing.
+    const char* found_mapped;
+    const char* found;
+    const char* again;
 } PlaceSpec;
 
 extern const PlaceSpec PLACES[PLACE_COUNT];
+
+// The place a command line names, or PLACE_NONE.
+PlaceId place_by_id(const char* id);
+
+// What the player has found, and where their feet are among the places.
+typedef struct Finds {
+    bool found[PLACE_COUNT];
+    bool here[PLACE_COUNT]; // in its box, and not since out of it by FIND_LEAVE
+} Finds;
+
+// Per fixed step, with where the player's feet are: the place they come into on this step, or
+// PLACE_NONE -- once each time they come back to it from FIND_LEAVE away -- and in `first`
+// whether it is the first time. It is found from then on.
+PlaceId finds_arrive(Finds* f, const vec3 feet, bool* first);
 
 // A find's mark as the tool drew it: where it is in its map's marks picture, the point in it that
 // goes on the find's place, and how long it takes to write on. The marks picture holds the ink in
