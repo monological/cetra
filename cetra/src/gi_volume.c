@@ -1,8 +1,10 @@
 #include <math.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "gi_volume.h"
+#include "cook.h"
 #include "draw_list.h"
 #include "engine.h"
 #include "ibl.h"
@@ -45,10 +47,11 @@ static void gi_tile_origin(const GIVolume* gi, int probe, bool visibility, int* 
     }
 }
 
-// Every probe to capture again, from the first.
+// Every probe to capture again, from the first, and the cook asked again when it begins.
 static void gi_arm(GIVolume* gi) {
     gi->dirty_count = gi_probe_count(gi);
     gi->next_probe = 0;
+    gi->cook_tried = false;
 }
 
 // The grid over a box: cell centres, a far plane the diagonal clears, and a full sweep armed.
@@ -557,6 +560,113 @@ static AABB gi_volume_box(const GIVolume* gi) {
     return box;
 }
 
+// The cook's key for volume `index`'s opening sweep (spec 13.42): the scene its probes can see,
+// out to their far plane past the grid, the grid and how it is captured, and every other volume
+// whose light a probe can sample there -- a loaded one by the key it was swept under. False when
+// the scene cannot say what it is, or a loaded neighbour was swept with no key.
+static bool gi_volume_key(const GIWorld* world, size_t index, struct Engine* engine,
+                          struct Scene* scene, CookKey* key) {
+    const GIVolume* gi = world->volumes[index];
+    *key = cook_key("gi-volume/1");
+    char label[COOK_NAME_MAX];
+    snprintf(label, sizeof(label), "volume-%zu", index);
+    cook_key_label(key, label);
+    AABB reach = gi_volume_box(gi);
+    aabb_expand(&reach, gi->far_clip);
+    if (!scene_capture_fold(engine, scene, &reach, key))
+        return false;
+    for (int c = 0; c < 3; ++c) {
+        cook_key_i32(key, gi->counts[c]);
+        cook_key_f32(key, gi->grid_min[c]);
+        cook_key_f32(key, gi->spacing[c]);
+    }
+    cook_key_f32(key, gi->far_clip);
+    cook_key_u32(key, gi->classify ? 1u : 0u);
+    cook_key_i32(key, GI_CAPTURE_FACE);
+    cook_key_i32(key, GI_IRRADIANCE_RES);
+    cook_key_i32(key, GI_VISIBILITY_RES);
+    cook_key_i32(key, GI_TILE_BORDER);
+    cook_key_f32(key, world->cull_pixels);
+    return gi_world_fold(world, &reach, index, key);
+}
+
+bool gi_world_fold(const GIWorld* world, const AABB* box, size_t skip, CookKey* key) {
+    for (size_t j = 0; world && j < world->residency.count; ++j) {
+        const GIVolume* gi = world->volumes[j];
+        const AABB grid = gi_volume_box(gi);
+        if (j == skip || !aabb_overlaps(&grid, box))
+            continue;
+        const bool loaded = world->residency.items[j].state == RESIDENCY_LOADED && !gi->failed;
+        cook_key_u64(key, (uint64_t)j);
+        cook_key_u32(key, loaded ? 1u : 0u);
+        if (loaded && !gi->cook_keyed) {
+            key->valid = false;
+            return false;
+        }
+        if (loaded)
+            cook_key_u64(key, gi->cook_hash);
+    }
+    return key->valid;
+}
+
+// Volume `index`'s opening sweep from the cook, keyed as it begins and inside the burst, so the
+// lights are folded at rest (spec 13.42): its tiles into its slot and the volume swept, true; or
+// false, the key kept for the store, and the sweep runs live.
+static bool gi_volume_fetch(GIWorld* world, size_t index, struct Engine* engine,
+                            struct Scene* scene, const LightingAtlas* atlas) {
+    GIVolume* gi = world->volumes[index];
+    ResidencyItem* item = &world->residency.items[index];
+    gi->cook_tried = true;
+    gi->cook_keyed = false;
+    if (!cook_enabled())
+        return false;
+    CookKey key;
+    gi->cook_keyed = gi_volume_key(world, index, engine, scene, &key);
+    gi->cook_hash = key.hash;
+    if (!gi->cook_keyed) {
+        log_info("gi-cook volume=%zu result=unkeyable: something it sees cannot say what it is",
+                 index);
+        return false;
+    }
+    CookBlob blob = {NULL, 0};
+    if (!cook_fetch(&key, &blob, 1))
+        return false;
+    const AtlasRect rect = gi_volume_rect(gi, atlas, item->slot);
+    const size_t want = (size_t)rect.w * (size_t)rect.h * 4 * sizeof(uint16_t);
+    const bool fits = blob.size == want && lighting_atlas_restore(atlas, rect, blob.data);
+    free(blob.data);
+    if (!fits) {
+        log_warn("gi-cook volume=%zu: the cooked tiles do not fit its slot; sweeping live", index);
+        return false;
+    }
+    gi->dirty_count = 0;
+    gi->next_probe = 0;
+    residency_loaded(item);
+    return true;
+}
+
+// A swept volume's tiles into the cook, under the key its sweep began with -- and only if the
+// scene still folds to it, since a door opened or a light switched mid-sweep leaves tiles that
+// are no one scene's.
+static void gi_volume_store(const GIWorld* world, size_t index, struct Engine* engine,
+                            struct Scene* scene, const LightingAtlas* atlas) {
+    const GIVolume* gi = world->volumes[index];
+    if (!gi->cook_keyed)
+        return;
+    CookKey key;
+    if (!gi_volume_key(world, index, engine, scene, &key) || key.hash != gi->cook_hash) {
+        log_info("gi-cook volume=%zu result=unstable: the scene changed while it was swept", index);
+        return;
+    }
+    const AtlasRect rect = gi_volume_rect(gi, atlas, world->residency.items[index].slot);
+    uint16_t* texels = lighting_atlas_keep(atlas, rect);
+    if (!texels)
+        return;
+    const CookBlob blob = {texels, (size_t)rect.w * (size_t)rect.h * 4 * sizeof(uint16_t)};
+    cook_store(&key, &blob, 1);
+    free(texels);
+}
+
 // Which volumes are resident, from the camera. A swept volume that leaves keeps its tiles, read
 // out of `atlas` before its slot changes hands; one that leaves mid-sweep sweeps again when next
 // admitted.
@@ -660,13 +770,28 @@ void gi_world_update(GIWorld* world, struct Engine* engine, struct Scene* scene,
         const bool limited = !opening && world->rate > 0;
         if (limited && rate_left <= 0)
             continue;
+        // A sweep about to begin asks the cook first (spec 13.42), from inside the burst, where
+        // the lights are held at rest -- once the budget lets it begin, so that what it is keyed
+        // by is the scene its first probe sees. A hit costs the unit an upload does.
+        if (opening && world->cook && !gi->cook_tried && gi->next_probe == 0 &&
+            gi->dirty_count == gi_probe_count(gi)) {
+            if (took > 0 && !capture_budget_take(budget, false))
+                continue;
+            if (gi_volume_fetch(world, (size_t)due[k], engine, scene, atlas)) {
+                took++;
+                continue;
+            }
+        }
         const int swept =
             gi_volume_sweep(gi, engine, scene, atlas, gi_volume_rect(gi, atlas, item->slot),
                             limited ? rate_left : 0, opening, budget, &took);
         if (limited)
             rate_left -= swept;
-        if (gi->dirty_count <= 0 && opening)
+        if (gi->dirty_count <= 0 && opening) {
+            if (world->cook)
+                gi_volume_store(world, (size_t)due[k], engine, scene, atlas);
             residency_loaded(item);
+        }
         if (swept > 0 && gi->dirty_count <= 0 && engine->capture_timing) {
             gi_timing_print(gi, (size_t)due[k]);
             gi_print_heaviest(gi, (size_t)due[k], scene->draw_list, scene->wind);

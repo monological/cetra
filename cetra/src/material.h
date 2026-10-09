@@ -594,4 +594,11 @@ void material_set_splat_tex(Material* material, Texture* texture);
 void material_set_layer_albedo_tex(Material* material, int index, Texture* texture);
 void material_set_layer_surface_tex(Material* material, int index, Texture* texture);
 
+// Every texture slot a material has, in a fixed order and NULL where one is empty: the fourteen
+// maps, then each layer's albedo and surface -- every layer slot, not layer_count of them. One
+// list, so what freeing a material releases and what a capture's key folds (spec 13.42) cannot
+// disagree about what it holds.
+#define MATERIAL_TEXTURE_SLOTS (14 + 2 * MATERIAL_MAX_LAYERS)
+void material_textures(const Material* material, Texture* out[MATERIAL_TEXTURE_SLOTS]);
+
 #endif // _MATERIAL_H_

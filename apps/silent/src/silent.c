@@ -1220,8 +1220,14 @@ static void on_pre_render(Game* game, double alpha) {
         build_gi((vec3){MANSION_X, MANSION_Y, MANSION_Z});
         build_cabin_gi();
         build_probes();
-        if (g_scene->gi)
+        // Both cooked (spec 13.42): a launch after the first loads the house's light from disk
+        // instead of sweeping it, unless something it sees has changed. CETRA_NO_COOK=1 sweeps.
+        if (g_scene->gi) {
             g_scene->gi->cull_pixels = g_args.gi_cull_pixels;
+            g_scene->gi->cook = true;
+        }
+        if (g_scene->probe_set)
+            g_scene->probe_set->cook = true;
     }
     AABB at;
     aabb_empty(&at);

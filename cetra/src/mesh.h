@@ -145,6 +145,10 @@ typedef struct Mesh {
     // Times mesh_upload has run: an edit made in place and uploaded again leaves the mesh, its
     // id and its node the same, and this is what says the geometry is not.
     unsigned upload_count;
+    // What the mesh is, for a key that must not outlive it (spec 13.42): mesh_content_key's
+    // hash of its arrays, and the upload it was taken at.
+    uint64_t content_key;
+    unsigned content_key_upload;
 
     // Why this mesh is not being drawn, or NULL while it is: the reason the
     // last draw-list build settled on, logged when it changes rather than per
@@ -337,5 +341,10 @@ bool mesh_compute_normals(Mesh* mesh);
 // call it again after editing the arrays in place. Build the LOD chain before
 // attaching, since the chain rewrites the index array.
 void mesh_upload(Mesh* mesh);
+
+// The cook's hash of everything the mesh draws -- its draw mode, every array it uploaded and its
+// LOD chain -- taken once after each upload: what the mesh is, for a key that must not outlive it
+// (spec 13.42). 0 with the cook off, which a key reads as "cannot say".
+uint64_t mesh_content_key(Mesh* mesh);
 
 #endif // _MESH_H_

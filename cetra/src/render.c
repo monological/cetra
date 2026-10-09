@@ -8,8 +8,12 @@
 
 #include "animation.h"
 #include "async_loader.h"
+#include "build_digest.h" // generated: CETRA_BUILD_DIGEST
+#include "config_snapshot.h"
+#include "cook.h"
 #include "ext/log.h"
 #include "fire.h"
+#include "ibl.h"
 #include "layers_vt.h"
 #include "scene.h"
 #include "sky.h"
@@ -2068,6 +2072,118 @@ bool scene_capture_ready(const Engine* engine, const Scene* scene, SceneCaptureK
     // A reflection sees the room lit, and the volume's answer is that light: before it sweeps a
     // capture lights the room with the environment's ambient, which by day is many times it.
     return kind != SCENE_CAPTURE_RADIANCE || gi_world_ready_in(scene->gi, box);
+}
+
+// A material as a capture draws it: its rows ride config_snapshot_fold by name, so here only what
+// that table does not carry -- every texture slot, by content, and its hook's source and
+// parameters. False when a texture cannot say what it is.
+static bool _fold_material(CookKey* key, const Material* mat) {
+    Texture* textures[MATERIAL_TEXTURE_SLOTS];
+    material_textures(mat, textures);
+    for (size_t t = 0; t < MATERIAL_TEXTURE_SLOTS; t++) {
+        const Texture* tex = textures[t];
+        if (tex && tex->content_key == 0)
+            return false;
+        cook_key_u64(key, tex ? tex->content_key : 0);
+    }
+    const ShaderHook* hook = shader_hook_live(mat->shader_hook);
+    cook_key_str(key, hook && hook->surface ? hook->surface : "");
+    cook_key_str(key, hook && hook->offset ? hook->offset : "");
+    cook_key_i32(key, mat->shader_params.count);
+    for (int i = 0; i < mat->shader_params.count; i++) {
+        cook_key_str(key, mat->shader_params.list[i].name);
+        for (int c = 0; c < 4; c++)
+            cook_key_f32(key, mat->shader_params.list[i].value[c]);
+    }
+    return true;
+}
+
+bool scene_capture_fold(Engine* engine, Scene* scene, const AABB* box, CookKey* key) {
+    if (!key->valid)
+        return false;
+    cook_key_u64(key, CETRA_BUILD_DIGEST);
+    // The driver does the arithmetic, so its answer is the driver's.
+    const char* strings[] = {(const char*)glGetString(GL_VENDOR),
+                             (const char*)glGetString(GL_RENDERER),
+                             (const char*)glGetString(GL_VERSION)};
+    for (size_t s = 0; s < sizeof(strings) / sizeof(strings[0]); s++)
+        cook_key_str(key, strings[s] ? strings[s] : "");
+
+    // The lit surface's switches, which ride the engine's snapshot section with what a run
+    // decides and so are folded here by name.
+    const bool switches[] = {engine->energy_comp_enabled,     engine->clearcoat_enabled,
+                             engine->specular_enabled,        engine->sheen_enabled,
+                             engine->parallax_enabled,        engine->sss_enabled,
+                             engine->emissive_lights_enabled, engine->lod_enabled};
+    for (size_t s = 0; s < sizeof(switches) / sizeof(switches[0]); s++)
+        cook_key_u32(key, switches[s] ? 1u : 0u);
+    cook_key_f32(key, engine->specular_aa_strength);
+    cook_key_f32(key, engine->lod_bias);
+
+    config_snapshot_fold(engine, scene, key);
+
+    const Rain* rain = scene->rain;
+    cook_key_u32(key, rain ? 1u : 0u);
+    if (rain) {
+        cook_key_f32(key, rain->wetness);
+        cook_key_f32(key, rain->puddle_level);
+        for (int c = 0; c < 3; c++)
+            cook_key_f32(key, rain->travel[c]);
+    }
+    const Wind* wind = scene->wind;
+    cook_key_u32(key, wind ? 1u : 0u);
+    if (wind) {
+        cook_key_i32(key, (int32_t)wind->type);
+        for (int c = 0; c < 3; c++)
+            cook_key_f32(key, wind->direction[c]);
+        const float terms[] = {wind->strength,    wind->speed,      wind->gust_frequency,
+                               wind->gust_amount, wind->turbulence, wind->phase_variation,
+                               wind->air_speed};
+        for (size_t t = 0; t < sizeof(terms) / sizeof(terms[0]); t++)
+            cook_key_f32(key, terms[t]);
+    }
+    const IBLResources* ibl = scene->ibl;
+    cook_key_str(key, ibl && ibl->hdr_filepath ? ibl->hdr_filepath : "");
+    cook_key_f32(key, ibl ? ibl->intensity : 0.0f);
+    cook_key_u32(key, ibl && ibl->reflect_fog ? 1u : 0u);
+    for (int c = 0; c < 3; c++)
+        cook_key_f32(key, scene->world_origin[c]);
+
+    // Every item a capture of the box can draw, in the list's order, which is the graph's.
+    const CullView view = {.wind = scene->wind, .capture = true};
+    const DrawList* list = scene->draw_list;
+    for (size_t i = 0; list && i < list->count; ++i) {
+        const DrawItem* item = &list->items[i];
+        if (item->lane > DRAW_LANE_TRANSMISSIVE || !draw_item_visible(item, &view))
+            continue;
+        AABB bound;
+        if (draw_item_bounds(item, &view, &bound)) {
+            AABB world = {{0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}};
+            aabb_transform(bound.min, bound.max, item->node->global_transform, world.min,
+                           world.max);
+            if (!aabb_overlaps(&world, box))
+                continue;
+        }
+        const uint64_t mesh = mesh_content_key(item->mesh);
+        if (mesh == 0 || !_fold_material(key, item->mesh->material)) {
+            key->valid = false;
+            return false;
+        }
+        cook_key_u64(key, mesh);
+        for (int c = 0; c < 4; c++)
+            for (int r = 0; r < 4; r++)
+                cook_key_f32(key, item->node->global_transform[c][r]);
+        cook_key_u32(key, item->lane);
+        cook_key_u32(key, item->flags);
+        cook_key_u32(key, item->capture_always);
+        // Which material: its place in the registry, whose rows config_snapshot_fold folded in
+        // that order -- a name would not tell two unnamed materials apart.
+        size_t m = 0;
+        while (m < scene->material_count && scene->materials[m] != item->mesh->material)
+            m++;
+        cook_key_u64(key, (uint64_t)m);
+    }
+    return key->valid;
 }
 
 // The clock is read past a glFinish, at the start as well as at each later ask: a capture is

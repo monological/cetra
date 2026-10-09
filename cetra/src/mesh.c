@@ -14,6 +14,7 @@
 
 #include "animation.h"
 #include "common.h"
+#include "cook.h"
 #include "ext/log.h"
 #include "material.h"
 #include "mesh.h"
@@ -427,4 +428,34 @@ void mesh_upload(Mesh* mesh) {
     glBindVertexArray(0);
 
     mesh->gpu_vertex_count = mesh->vertex_count;
+}
+
+uint64_t mesh_content_key(Mesh* mesh) {
+    if (!mesh)
+        return 0;
+    if (mesh->content_key && mesh->content_key_upload == mesh->upload_count)
+        return mesh->content_key;
+    const size_t v = mesh->vertex_count;
+    CookKey key = cook_key("mesh-content/1");
+    cook_key_u32(&key, (uint32_t)mesh->draw_mode);
+    cook_key_u32(&key, mesh->is_skinned ? 1u : 0u);
+    cook_key_i32(&key, mesh->lod_levels);
+    for (int l = 0; l < mesh->lod_levels; l++) {
+        cook_key_u64(&key, (uint64_t)mesh->lod_offset[l]);
+        cook_key_u64(&key, (uint64_t)mesh->lod_count[l]);
+    }
+    // Each stream with its length, so an absent one folds as nothing rather than as its neighbour.
+    cook_key_bytes(&key, mesh->vertices, mesh->vertices ? v * 3 * sizeof(float) : 0);
+    cook_key_bytes(&key, mesh->normals, mesh->normals ? v * 3 * sizeof(float) : 0);
+    cook_key_bytes(&key, mesh->tangents, mesh->tangents ? v * 4 * sizeof(float) : 0);
+    cook_key_bytes(&key, mesh->tex_coords, mesh->tex_coords ? v * 2 * sizeof(float) : 0);
+    cook_key_bytes(&key, mesh->tex_coords2, mesh->tex_coords2 ? v * 2 * sizeof(float) : 0);
+    cook_key_bytes(&key, mesh->colors, mesh->colors ? v * 4 * sizeof(float) : 0);
+    cook_key_bytes(&key, mesh->morph, mesh->morph ? v * 3 * sizeof(float) : 0);
+    cook_key_bytes(&key, mesh->morph_normals, mesh->morph_normals ? v * 3 * sizeof(float) : 0);
+    cook_key_bytes(&key, mesh->indices,
+                   mesh->indices ? mesh_index_total(mesh) * sizeof(unsigned int) : 0);
+    mesh->content_key = key.valid ? key.hash : 0;
+    mesh->content_key_upload = mesh->upload_count;
+    return mesh->content_key;
 }

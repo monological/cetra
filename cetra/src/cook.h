@@ -40,6 +40,18 @@
  * formats), and anything whose producer is not a pure function of foldable
  * inputs -- the scatter stays live for that reason and for its gate story.
  *
+ * Two captures are the exception (spec 13.42): a GI volume's opening sweep and
+ * a reflection probe's atlas column. A capture is drawn by the GPU from the
+ * whole scene, so its key cannot be a list of a bake's arguments; it is
+ * scene_capture_fold instead -- the engine's own source (a build digest, so
+ * any engine change misses), the driver's strings, the settings, and every
+ * drawn thing in reach by content -- folded inside the capture burst, where
+ * the scene is held at rest (scene_set_capture_rest), so a candle's flicker
+ * or a clock's hands are not inputs. What is stored is the texels the capture
+ * left in the atlas, not a handle. Both are opt-in, GIWorld.cook and
+ * ReflectionProbeSet.cook, and a scene that changes while it is swept is not
+ * stored, since the key it began with no longer names what was captured.
+ *
  * Process-global behind cook_init/cook_shutdown -- the
  * texture_set_compression_enabled lever shape, because the wrapped sites span
  * five modules that share no context type. An app that never calls cook_init
@@ -102,6 +114,9 @@ typedef struct CookBlob {
 // reconfigures; the counters reset.
 void cook_init(const char* dir, bool enabled);
 void cook_shutdown(void); // prints the cook-summary row if anything ran
+// Configured and enabled. Every site may build its key regardless (above); this is for one whose
+// inputs cost a walk of the scene to fold, and so asks first.
+bool cook_enabled(void);
 
 // Hit: fills sections[0..section_count-1] and returns true, printing the
 // artefact's result=hit row. ANY other outcome -- disabled, no file, failed

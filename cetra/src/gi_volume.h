@@ -122,6 +122,13 @@ typedef struct GIVolume {
 
     GISweepTiming timing; // kept only while the engine's capture_timing is on
 
+    // The cook's key for this sweep's tiles (spec 13.42), folded as it began: tried once a sweep,
+    // and `cook_keyed` false when the scene could not say what it is (the cook off, a texture or
+    // a mesh with no identity), in which case the sweep runs live and nothing is stored.
+    uint64_t cook_hash;
+    bool cook_tried;
+    bool cook_keyed;
+
     bool failed; // One-shot: allocation is not retried every frame
 } GIVolume;
 
@@ -136,6 +143,9 @@ typedef struct GIWorld {
     // A probe leaves out what spans fewer pixels than this across a capture face (spec 13.42),
     // unless it gives off light or is under a node set capture_always; 0 = everything.
     float cull_pixels;
+    // true = a volume's opening sweep is fetched from the cook when one of the same scene was
+    // swept before, and stored when it was not (spec 13.42); false = every sweep runs live.
+    bool cook;
 
     // ENGINE-OWNED: read, never write.
     GIVolume** volumes; // owned; scene_add_gi_volume. One per residency item, in its order
@@ -187,6 +197,12 @@ bool gi_world_ready_in(const GIWorld* world, const AABB* box);
 
 // Re-arm every volume, for a change in the light every one of them saw.
 void gi_world_mark_dirty(GIWorld* world);
+
+// Fold into a capture's cook key the GI it reads where it sees `box` (spec 13.42): each volume
+// the box meets but `skip` (an index, or SIZE_MAX for none), whether it is swept, and a swept
+// one by the key it was swept under. False, the key invalid, when a swept volume has no key.
+struct CookKey;
+bool gi_world_fold(const GIWorld* world, const AABB* box, size_t skip, struct CookKey* key);
 
 // Re-express every grid after a world-origin shift (spec 11.62).
 //
