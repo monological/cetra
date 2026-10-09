@@ -59,6 +59,7 @@ bool hud_start(Hud* hud, Engine* engine) {
     memset(hud, 0, sizeof(*hud));
     hud->engine = engine;
     Font* font = load_font(engine->text_renderer->font_pool, HUD_FONT, 64.0f, true);
+    hud->font = font;
     if (!font) {
         fprintf(stderr, "silent: cannot load %s; no words on screen\n", HUD_FONT);
         return false;

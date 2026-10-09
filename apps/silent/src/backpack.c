@@ -1,4 +1,5 @@
 #include <float.h>
+#include <string.h>
 
 #include "backpack.h"
 #include "bedroom.h"
@@ -7,8 +8,19 @@
 #include "mats.h"
 
 const ItemSpec ITEMS[ITEM_COUNT] = {
-    [ITEM_FLASHLIGHT] = {"Flashlight", "A heavy metal flashlight. F turns it on and off."},
+    [ITEM_FLASHLIGHT] = {"flashlight",
+                         "Flashlight",
+                         "A heavy metal flashlight, its black paint worn through at the grip. "
+                         "F turns it on and off.",
+                         {3, 1}},
 };
+
+int item_by_id(const char* id) {
+    for (int i = 0; i < ITEM_COUNT; i++)
+        if (id && !strcmp(ITEMS[i].id, id))
+            return i;
+    return -1;
+}
 
 // How the bag lies on the quilt: its top toward the bed's head, turned a little off square,
 // rolled onto one side and sunk into the quilt, as something soft dropped on something soft.
@@ -100,6 +112,76 @@ static void flashlight(Kit* kit) {
                        0.0f);
 }
 
+// What the bag holds when it is found.
+static const ItemId CONTENTS[] = {ITEM_FLASHLIGHT};
+
+// Each of `order`'s footprints where it first fits in `rows` rows, in that order, reading the grid
+// a row at a time; false when one will not fit.
+static bool place(Backpack* bp, const ItemId* order, int n, int rows) {
+    bool used[BAG_MAX_ROWS][BAG_COLS];
+    memset(used, 0, sizeof(used));
+    for (int k = 0; k < n; k++) {
+        const int w = ITEMS[order[k]].cells[0], h = ITEMS[order[k]].cells[1];
+        bool placed = false;
+        for (int r = 0; r + h <= rows && !placed; r++)
+            for (int c = 0; c + w <= BAG_COLS && !placed; c++) {
+                bool free = true;
+                for (int y = r; y < r + h && free; y++)
+                    for (int x = c; x < c + w && free; x++)
+                        free = !used[y][x];
+                if (!free)
+                    continue;
+                for (int y = r; y < r + h; y++)
+                    for (int x = c; x < c + w; x++)
+                        used[y][x] = true;
+                bp->cell[order[k]][0] = c;
+                bp->cell[order[k]][1] = r;
+                placed = true;
+            }
+        if (!placed)
+            return false;
+    }
+    return true;
+}
+
+static int area(ItemId item) {
+    return ITEMS[item].cells[0] * ITEMS[item].cells[1];
+}
+
+// Where everything carried lies, as the header says, and the grid's rows: down to the last thing
+// and BAG_SPARE more.
+static void pack(Backpack* bp) {
+    // Largest first, each size in the order its things were had in.
+    ItemId largest[ITEM_COUNT] = {0};
+    int most = 0, n = 0;
+    for (int k = 0; k < bp->held_count; k++)
+        most = area(bp->held[k]) > most ? area(bp->held[k]) : most;
+    for (int a = most; a > 0; a--)
+        for (int k = 0; k < bp->held_count; k++)
+            if (area(bp->held[k]) == a)
+                largest[n++] = bp->held[k];
+    int rows = BAG_MIN_ROWS;
+    while (rows < BAG_MAX_ROWS && !place(bp, bp->held, bp->held_count, rows) &&
+           !place(bp, largest, bp->held_count, rows))
+        rows++;
+    int bottom = 0;
+    for (int k = 0; k < bp->held_count; k++) {
+        const ItemId item = bp->held[k];
+        const int end = bp->cell[item][1] + ITEMS[item].cells[1];
+        bottom = end > bottom ? end : bottom;
+    }
+    rows = bottom + BAG_SPARE;
+    bp->rows = rows < BAG_MIN_ROWS ? BAG_MIN_ROWS : rows > BAG_MAX_ROWS ? BAG_MAX_ROWS : rows;
+}
+
+// The bag's contents into the grid.
+static void unpack(Backpack* bp) {
+    for (int i = 0; i < KIT_COUNT(CONTENTS); i++)
+        if (!backpack_holds(bp, CONTENTS[i]))
+            bp->held[bp->held_count++] = CONTENTS[i];
+    pack(bp);
+}
+
 // A model as a kit of its own, built round its origin, its materials its own.
 static SceneNode* model(Engine* engine, Scene* scene, const char* name, void (*build)(Kit*),
                         bool casts) {
@@ -112,7 +194,9 @@ static SceneNode* model(Engine* engine, Scene* scene, const char* name, void (*b
 }
 
 void backpack_build(Backpack* bp, Engine* engine, Scene* scene, bool taken) {
-    *bp = (Backpack){.taken = taken};
+    *bp = (Backpack){.taken = taken, .rows = BAG_MIN_ROWS};
+    if (taken)
+        unpack(bp);
     bedroom_bed_top(bp->at);
     if (!taken) {
         // No capture keeps it: it is taken while the game runs.
@@ -142,12 +226,16 @@ void backpack_take(Backpack* bp) {
     if (bp->taken)
         return;
     bp->taken = true;
+    unpack(bp);
     free_node(bp->bag);
     bp->bag = NULL;
 }
 
 bool backpack_holds(const Backpack* bp, ItemId item) {
-    return bp->taken && item >= 0 && item < ITEM_COUNT;
+    for (int k = 0; k < bp->held_count; k++)
+        if (bp->held[k] == item)
+            return true;
+    return false;
 }
 
 void backpack_free(Backpack* bp) {
