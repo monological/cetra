@@ -305,8 +305,9 @@ void land_build(Kit* kit) {
 
     // Faceted, a flat normal a triangle, and the collider from the same cells -- less the
     // mansion's grounds, whose flat would be one long run of coplanar triangles and stand on a box
-    // of hill_build's, and less the lake's deep water, where nothing can stand. The flat ground's
-    // cells are not the land's at all. Under the woods the ground is their floor, the cells at its
+    // of hill_build's. The lake's bed collides all the way out: whatever keeps a wader out of the
+    // deep water, nobody falls through the bed if they get past it. The flat ground's cells are
+    // not the land's at all. Under the woods the ground is their floor, the cells at its
     // east edge taking it by a hash so the edge is ragged -- a hash of the cell's place east of the
     // lip, as it was before the grid reached west of it.
     const vec3 up = {0.0f, 1.0f, 0.0f};
@@ -331,12 +332,6 @@ void land_build(Kit* kit) {
             kit_tri_facing(kit, valley_mat(pa, pc, pb, mat), pa, pc, pb, up);
             kit_tri_facing(kit, valley_mat(pb, pc, pe, mat), pb, pc, pe, up);
             if (hill_on_grounds(mx, mz))
-                continue;
-            const float deep = -(LAKE_WADE_OUT + 1.5f);
-            if (lake_shore_distance(pa[0], pa[2]) < deep &&
-                lake_shore_distance(pb[0], pb[2]) < deep &&
-                lake_shore_distance(pc[0], pc[2]) < deep &&
-                lake_shore_distance(pe[0], pe[2]) < deep)
                 continue;
             const unsigned int tri[6] = {a, c, b, b, c, e};
             for (int k = 0; k < 6; k++)
