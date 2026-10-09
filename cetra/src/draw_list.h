@@ -83,7 +83,9 @@ typedef struct DrawItem {
     uint8_t flags;
     // Level from this mesh's chain, chosen from the camera and used by every
     // pass. A per-light level would let a caster's depth-map silhouette
-    // disagree with the surface it is shaded with, which reads as acne.
+    // disagree with the surface it is shaded with, which reads as acne. A light
+    // capture chooses its own from its eye while it draws (spec 13.42), after
+    // its burst's shadow pass, and the camera's are back when the burst ends.
     uint8_t lod;
     // The occlusion pass's per-frame CAMERA answer (spec 11.98) -- not a
     // material fact like `flags`, which is why it is not a flag bit. Zero at
@@ -131,6 +133,11 @@ typedef struct DrawList {
     // frame, so nothing can go stale by more than that.
     uint64_t stamp;
     bool valid;
+
+    // The selection every item's `lod` was last chosen by -- the camera's at build, a capture's
+    // while one draws -- so that choosing again by the same one walks nothing.
+    LodSelect lod_from;
+    bool lod_from_valid;
 } DrawList;
 
 // An empty list; NULL on OOM. free takes NULL.
@@ -164,7 +171,12 @@ bool draw_list_build(DrawList* list, struct Scene* scene, uint64_t stamp, const 
 
 // Every item's level chosen again, from `lod`, leaving the list otherwise as built: for a capture,
 // which draws from its own eye at its own resolution, and to give the camera's levels back after.
+// Nothing is walked when `lod` is the selection the levels were last chosen by.
 void draw_list_select_lod(DrawList* list, const LodSelect* lod);
+
+// A bias of `bias` for a view of `pixels_per_tan` pixels to a unit of tan: the levels that view's
+// resolution calls for, where the ladder's thresholds are a window's (spec 13.42).
+float draw_lod_bias_for(float bias, float pixels_per_tan);
 
 // What a pass culls against: its frustum, plus the wind field that moves
 // geometry off the import bounds a frustum test would otherwise use. (The
@@ -222,6 +234,11 @@ bool draw_item_visible(const DrawItem* item, const CullView* view);
 // Exported for the occlusion pass, which needs the same box the frustum test
 // uses -- a second bound would be a second thing to keep in agreement.
 bool draw_item_bounds(const DrawItem* item, const CullView* view, AABB* out);
+
+// Whether a light capture of `box` takes this item (spec 13.42): in a lane the capture or its
+// burst's shadow pass draws, not hidden from captures, and its bound under `wind` meeting the box
+// -- or no bound to be had. The one statement of what a capture's key must fold.
+bool draw_item_captured_in(const DrawItem* item, const struct Wind* wind, const AABB* box);
 
 // How large the item looks from `eye`: its import bound's radius over its distance, the measure LOD
 // picks a level by. FLT_MAX with the eye inside the bound.

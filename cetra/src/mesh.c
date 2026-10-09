@@ -352,6 +352,33 @@ static void _upload_float_stream(const Mesh* mesh, const float* data, GLuint* vb
     glEnableVertexAttribArray(attr);
 }
 
+// The float streams a mesh uploads besides its positions: one list, which the upload and the
+// content key both walk, so a stream added to one is in the other.
+typedef struct MeshFloatStream {
+    const float* data;
+    GLuint* vbo;
+    GLuint attr;
+    GLint components;
+} MeshFloatStream;
+
+enum { MESH_FLOAT_STREAMS = 7 };
+
+static void _float_streams(Mesh* mesh, MeshFloatStream out[MESH_FLOAT_STREAMS]) {
+    const MeshFloatStream streams[MESH_FLOAT_STREAMS] = {
+        {mesh->normals, &mesh->nbo, GL_ATTR_NORMAL, 3},
+        // Tangents are vec4: xyz tangent, w bitangent handedness.
+        {mesh->tangents, &mesh->tangent_vbo, GL_ATTR_TANGENT, 4},
+        {mesh->tex_coords, &mesh->tbo, GL_ATTR_TEXCOORD, 2},
+        // UV1 carries lightmap/AO coordinates, and on a wind material the branch phase and flex
+        // weight instead (spec 11.51).
+        {mesh->tex_coords2, &mesh->tbo2, GL_ATTR_TEXCOORD2, 2},
+        {mesh->colors, &mesh->color_vbo, GL_ATTR_COLOR, 4},
+        {mesh->morph, &mesh->morph_vbo, GL_ATTR_MORPH, 3},
+        {mesh->morph_normals, &mesh->morph_normal_vbo, GL_ATTR_MORPH_NORMAL, 3},
+    };
+    memcpy(out, streams, sizeof(streams));
+}
+
 static void _upload_int_stream(const Mesh* mesh, const int* data, GLuint* vbo, GLuint attr,
                                GLint components) {
     if (!data)
@@ -399,18 +426,11 @@ void mesh_upload(Mesh* mesh) {
                      GL_STATIC_DRAW);
     }
 
-    _upload_float_stream(mesh, mesh->normals, &mesh->nbo, GL_ATTR_NORMAL, 3);
-    // Tangents are vec4: xyz tangent, w bitangent handedness.
-    _upload_float_stream(mesh, mesh->tangents, &mesh->tangent_vbo, GL_ATTR_TANGENT, 4);
-    _upload_float_stream(mesh, mesh->tex_coords, &mesh->tbo, GL_ATTR_TEXCOORD, 2);
-    // UV1 carries lightmap/AO coordinates, and on a wind material the branch
-    // phase and flex weight instead (spec 11.51).
-    _upload_float_stream(mesh, mesh->tex_coords2, &mesh->tbo2, GL_ATTR_TEXCOORD2, 2);
-    _upload_float_stream(mesh, mesh->colors, &mesh->color_vbo, GL_ATTR_COLOR, 4);
-
-    _upload_float_stream(mesh, mesh->morph, &mesh->morph_vbo, GL_ATTR_MORPH, 3);
-    _upload_float_stream(mesh, mesh->morph_normals, &mesh->morph_normal_vbo, GL_ATTR_MORPH_NORMAL,
-                         3);
+    MeshFloatStream streams[MESH_FLOAT_STREAMS];
+    _float_streams(mesh, streams);
+    for (int s = 0; s < MESH_FLOAT_STREAMS; s++)
+        _upload_float_stream(mesh, streams[s].data, streams[s].vbo, streams[s].attr,
+                             streams[s].components);
 
     // The skinning pair is gated on is_skinned as well as on the array, because a
     // mesh can carry weights it does not use and binding them would put a
@@ -446,13 +466,11 @@ uint64_t mesh_content_key(Mesh* mesh) {
     }
     // Each stream with its length, so an absent one folds as nothing rather than as its neighbour.
     cook_key_bytes(&key, mesh->vertices, mesh->vertices ? v * 3 * sizeof(float) : 0);
-    cook_key_bytes(&key, mesh->normals, mesh->normals ? v * 3 * sizeof(float) : 0);
-    cook_key_bytes(&key, mesh->tangents, mesh->tangents ? v * 4 * sizeof(float) : 0);
-    cook_key_bytes(&key, mesh->tex_coords, mesh->tex_coords ? v * 2 * sizeof(float) : 0);
-    cook_key_bytes(&key, mesh->tex_coords2, mesh->tex_coords2 ? v * 2 * sizeof(float) : 0);
-    cook_key_bytes(&key, mesh->colors, mesh->colors ? v * 4 * sizeof(float) : 0);
-    cook_key_bytes(&key, mesh->morph, mesh->morph ? v * 3 * sizeof(float) : 0);
-    cook_key_bytes(&key, mesh->morph_normals, mesh->morph_normals ? v * 3 * sizeof(float) : 0);
+    MeshFloatStream streams[MESH_FLOAT_STREAMS];
+    _float_streams(mesh, streams);
+    for (int s = 0; s < MESH_FLOAT_STREAMS; s++)
+        cook_key_bytes(&key, streams[s].data,
+                       streams[s].data ? v * (size_t)streams[s].components * sizeof(float) : 0);
     cook_key_bytes(&key, mesh->indices,
                    mesh->indices ? mesh_index_total(mesh) * sizeof(unsigned int) : 0);
     mesh->content_key = key.valid ? key.hash : 0;

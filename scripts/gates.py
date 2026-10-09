@@ -36,7 +36,6 @@ import subprocess
 import sys
 import tempfile
 import time
-import zlib
 
 import numpy as np
 
@@ -30535,9 +30534,11 @@ def run_lighting_stream_gate(workdir):
 # resident volumes and sixteen probes, swept and captured unbudgeted in these frames.
 GICOOK_FRAMES = 12
 GICOOK_SITES = ("gi-volume/1", "probe-column/1")
-# Room 0's coloured walls: what the material, node and texture changes touch.
+# Room 0's coloured walls: what the material, node and texture changes touch, textured so that a
+# texture's bytes are among what the key must see.
 GICOOK_MATERIAL = "room0_colour"
 GICOOK_TEXTURE = "gicook_room0.png"
+GICOOK_COLOURS = ((200, 40, 30), (30, 40, 200))  # the texture, and its bytes changed
 # A paced run sweeps room 0's first volume a probe a frame over its 48, so a material changed on
 # this frame lands in the middle of that sweep.
 GICOOK_UNSTABLE_FRAME = 20
@@ -30545,20 +30546,16 @@ _GICOOK_UNSTABLE = re.compile(r"gi-cook volume=(\d+) result=unstable")
 
 
 def _gicook_png(path, rgb):
-    """A 4x4 PNG of one colour, written with zlib alone."""
-    def chunk(kind, data):
-        body = kind + data
-        return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body))
-
-    raw = b"".join(b"\x00" + bytes(rgb) * 4 for _ in range(4))
+    """A 4x4 PNG of one colour, through the emissive fixture's writer."""
+    gen = _import_fixture_gen("gen_emissive_fixture.py", group="gi-cook")
     with open(path, "wb") as f:
-        f.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", 4, 4, 8, 2, 0, 0, 0))
-                + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+        f.write(gen.png_rgb(4, 4, [[rgb] * 4] * 4))
 
 
 def _gicook_textured(workdir):
-    """The fixture with room 0's coloured walls textured from GICOOK_TEXTURE, which sits beside
-    the copied model and is written before each run. Returns the scene's path."""
+    """The fixture with room 0's coloured walls textured from GICOOK_TEXTURE, written beside the
+    copied model in the first colour. Returns the scene's path."""
+    _gicook_png(os.path.join(workdir, GICOOK_TEXTURE), GICOOK_COLOURS[0])
     with open(asset("stream_rooms.gltf")) as f:
         g = json.load(f)
     g["images"] = [{"uri": GICOOK_TEXTURE}]
@@ -30582,20 +30579,27 @@ def _gicook_rows(text, result):
             if site in GICOOK_SITES and res == result}
 
 
+def _gicook_count(rows):
+    """(volumes, probe columns) among a run's GI and probe cook rows."""
+    volumes = sum(1 for site, _name in rows if site == GICOOK_SITES[0])
+    return volumes, len(rows) - volumes
+
+
 def run_gi_cook_gate(workdir):
     """Converged lighting kept on disk (spec 13.42): a GI volume's opening sweep and a reflection
     probe's column stored by the cook under a key folded from the scene at rest, and loaded by the
-    next run of the same scene -- the lighting-stream fixture with --gi-cook.
+    next run of the same scene -- the lighting-stream fixture, room 0's walls textured, with
+    --gi-cook.
 
       gi-cook-hit       a second run against the first's directory captures nothing: every volume
                         and probe the first stored it loads by the same key, it captures no GI
                         probe and no reflection probe, and its frame is the first's to the bit
       gi-cook-pure      the scene paced a probe a frame keys every capture as the unbudgeted run
                         did, though each lands on another frame
-      gi-cook-miss      against the warm directory, each kind of change sweeps anew and stores: a
-                        node taken out, a material's roughness, a light's intensity, a light moved
-                        30 cm, the sun; and a texture's bytes changed under the same file name, in
-                        a scene whose own second run loads
+      gi-cook-miss      against the warm directory, each kind of change sweeps volumes and
+                        captures columns anew and stores them: a node taken out, a material's
+                        roughness, a light's intensity, a light moved 30 cm, the sun, and a
+                        texture's bytes changed under the same file name
       gi-cook-unstable  a material changed in the middle of a paced sweep: the volume being swept
                         says so, and is not stored
 
@@ -30606,11 +30610,12 @@ def run_gi_cook_gate(workdir):
         print(f"  gi-cook-hit SKIP  {LSTREAM_FIXTURE} not found")
         return []
     failures = []
+    textured = _gicook_textured(workdir)
 
-    def run(tag, extra, frames=GICOOK_FRAMES, mutate=None, fixture=LSTREAM_FIXTURE):
+    def run(tag, extra, frames=GICOOK_FRAMES, mutate=None):
         shots, text = _lstream_run(workdir, f"gicook_{tag}",
                                    extra + ["--stream-probe", str(frames)], frames,
-                                   mutate=mutate, fixture=fixture)
+                                   mutate=mutate, fixture=textured)
         if shots is None:
             print(f"  gi-cook      ERROR {tag}: {text[-300:]}")
         return shots, text
@@ -30634,12 +30639,12 @@ def run_gi_cook_gate(workdir):
     row = _lstream_rows(warm_text).get(GICOOK_FRAMES, {})
     gi_captures = sum(int(r["captures"]) for r in row.get("gi", {}).values())
     probe_captures = row.get("probe_captures", -1)
-    volumes = sum(1 for site, _name in stored if site == GICOOK_SITES[0])
+    volumes, columns = _gicook_count(stored)
     ae, _peak = compare(cold[GICOOK_FRAMES], warm[GICOOK_FRAMES])
-    ok = (volumes > 0 and len(stored) > volumes and loaded == stored and not again
+    ok = (volumes > 0 and columns > 0 and loaded == stored and not again
           and gi_captures == 0 and probe_captures == 0 and ae == 0)
     print(f"  gi-cook-hit {'PASS' if ok else 'FAIL'}  the cold run stored {volumes} volumes and "
-          f"{len(stored) - volumes} probe columns; the warm run loaded {len(loaded)} by the same "
+          f"{columns} probe columns; the warm run loaded {len(loaded)} by the same "
           f"keys: {loaded == stored}, stored {len(again)}, captured {gi_captures} GI probes and "
           f"{probe_captures} reflection probes, and its frame is {ae} px from the cold run's "
           f"(want both stored, all loaded, then 0, 0, 0 and 0 px)")
@@ -30676,22 +30681,15 @@ def run_gi_cook_gate(workdir):
     swept = {}
     for name, extra, mutate in changes:
         _shots, text = run(f"miss_{name}", cook("a") + extra, mutate=mutate)
-        swept[name] = sum(1 for site, _n in _gicook_rows(text, "cooked") if site == GICOOK_SITES[0])
-    textured = _gicook_textured(workdir)
-    texture = os.path.join(workdir, GICOOK_TEXTURE)
-    tex_runs = []
-    for tag, rgb in (("tex_cold", (200, 40, 30)), ("tex_warm", (200, 40, 30)),
-                     ("tex_bytes", (30, 40, 200))):
-        _gicook_png(texture, rgb)
-        _shots, text = run(f"miss_{tag}", cook("t"), fixture=textured)
-        tex_runs.append(text)
-    tex_hits = len(_gicook_rows(tex_runs[1], "hit"))
-    swept["texture"] = sum(1 for site, _n in _gicook_rows(tex_runs[2], "cooked")
-                           if site == GICOOK_SITES[0])
-    ok = all(n > 0 for n in swept.values()) and tex_hits > 0
-    print(f"  gi-cook-miss {'PASS' if ok else 'FAIL'}  volumes swept anew and stored: "
-          + ", ".join(f"{name} {n}" for name, n in swept.items())
-          + f"; the textured scene's own second run loaded {tex_hits} (want every count above 0)")
+        swept[name] = _gicook_count(_gicook_rows(text, "cooked"))
+    # Last, since it leaves the texture changed for every run after it.
+    _gicook_png(os.path.join(workdir, GICOOK_TEXTURE), GICOOK_COLOURS[1])
+    _shots, text = run("miss_texture", cook("a"))
+    swept["texture"] = _gicook_count(_gicook_rows(text, "cooked"))
+    ok = all(volumes > 0 and columns > 0 for volumes, columns in swept.values())
+    print(f"  gi-cook-miss {'PASS' if ok else 'FAIL'}  volumes and columns stored anew: "
+          + ", ".join(f"{name} {v}/{c}" for name, (v, c) in swept.items())
+          + " (want both above 0 for every change)")
     if not ok:
         failures.append("gi-cook-miss")
 
@@ -30699,8 +30697,8 @@ def run_gi_cook_gate(workdir):
     shaken, text = run("unstable", cook("u") + paced + rougher(GICOOK_UNSTABLE_FRAME),
                        frames=LSTREAM_PACED_FRAMES)
     unstable = sorted(set(_GICOOK_UNSTABLE.findall(text)), key=int)
-    kept = sorted((int(name.split("-")[1]) for site, name in _gicook_rows(text, "cooked")
-                   if site == GICOOK_SITES[0]))
+    kept = sorted(int(name.split("-")[1]) for site, name in _gicook_rows(text, "cooked")
+                  if site == GICOOK_SITES[0])
     leaked = [v for v in unstable if int(v) in kept]
     ok = (shaken is not None and unstable == ["0"] and not leaked
           and len(kept) == volumes - len(unstable))

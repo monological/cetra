@@ -48,9 +48,9 @@
  * drawn thing in reach by content -- folded inside the capture burst, where
  * the scene is held at rest (scene_set_capture_rest), so a candle's flicker
  * or a clock's hands are not inputs. What is stored is the texels the capture
- * left in the atlas, not a handle. Both are opt-in, GIWorld.cook and
- * ReflectionProbeSet.cook, and a scene that changes while it is swept is not
- * stored, since the key it began with no longer names what was captured.
+ * left in the atlas, not a handle. Both are opt-in, Scene.cook_lighting, and a
+ * scene that changes while it is swept is not stored, since the key it began
+ * with no longer names what was captured.
  *
  * Process-global behind cook_init/cook_shutdown -- the
  * texture_set_compression_enabled lever shape, because the wrapped sites span
@@ -76,7 +76,9 @@ typedef struct CookKey {
     uint64_t hash;
     char recipe[COOK_RECIPE_MAX];
     char name[COOK_NAME_MAX]; // report label; empty until cook_key_name
-    bool valid;               // false = recipe did not fit; fetch and store refuse
+    // false = the cook is off, the recipe did not fit, or a fold refused (cook_key_refuse);
+    // fetch and store refuse
+    bool valid;
 } CookKey;
 
 // A key built while the cook is disabled or unconfigured comes back INVALID,
@@ -87,8 +89,13 @@ CookKey cook_key(const char* recipe);        // "erosion/1" -- name + VERSION, o
 void cook_key_u32(CookKey* key, uint32_t v); // folds 4 LE bytes
 void cook_key_u64(CookKey* key, uint64_t v);
 void cook_key_i32(CookKey* key, int32_t v);
-void cook_key_f32(CookKey* key, float v);       // the IEEE bit pattern, never text
+void cook_key_f32(CookKey* key, float v); // the IEEE bit pattern, never text
+void cook_key_f32s(CookKey* key, const float* v, int n);
+void cook_key_bool(CookKey* key, bool v);
 void cook_key_str(CookKey* key, const char* s); // folds the bytes INCLUDING the NUL
+// For a fold that meets an input it cannot say what it is -- a mesh or a texture with no content
+// key: the key goes invalid, every later fold is a no-op, and fetch and store refuse it.
+void cook_key_refuse(CookKey* key);
 // Labels the artefact's report rows -- for a recipe stamped more than once
 // per run ("grass", "r_2_3"). REPORTING ONLY, never folded: a label is not an
 // input, and the first draft that folded it keyed the cluster DAGs by a
@@ -114,8 +121,8 @@ typedef struct CookBlob {
 // reconfigures; the counters reset.
 void cook_init(const char* dir, bool enabled);
 void cook_shutdown(void); // prints the cook-summary row if anything ran
-// Configured and enabled. Every site may build its key regardless (above); this is for one whose
-// inputs cost a walk of the scene to fold, and so asks first.
+// Configured and enabled. Every site may build its key regardless (above); this is for one that
+// says why a key could not be made, which with the cook off has nothing to say.
 bool cook_enabled(void);
 
 // Hit: fills sections[0..section_count-1] and returns true, printing the

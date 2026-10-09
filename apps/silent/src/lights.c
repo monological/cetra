@@ -298,12 +298,22 @@ void lights_start_audio(Lights* lights, AudioSystem* audio) {
     }
 }
 
+// The failing tube at `level` and the flashlight's beam on or off: what an update drives, and what
+// the captures' rest drives in its place.
+static void lights_apply(Lights* lights, float level, bool beam) {
+    if (lights->flicker)
+        lights->flicker->emissive_strength = lights->flicker_nits * level;
+    Light* f = lights->flashlight;
+    if (f) {
+        f->intensity = beam ? FLASHLIGHT_CANDELA : 0.0f;
+        f->cast_shadows = beam;
+    }
+}
+
 void lights_update(Lights* lights, Scene* scene, double time, float dt, const vec3 eye,
                    const vec3 forward) {
     const float level = lights->flicker ? flicker_level(time, lights->seed) : 1.0f;
     lights->level = level;
-    if (lights->flicker)
-        lights->flicker->emissive_strength = lights->flicker_nits * level;
 
     for (int t = 0; t < TUBE_COUNT; t++) {
         Sound* s = lights->buzz[t];
@@ -335,23 +345,22 @@ void lights_update(Lights* lights, Scene* scene, double time, float dt, const ve
     }
 
     Light* f = lights->flashlight;
-    if (!f)
-        return;
-    // The beam trails the head a little, as a hand-held torch does.
-    const float k = 1.0f - expf(-dt * 14.0f);
-    glm_vec3_lerp(lights->flashlight_dir, (float*)forward, k, lights->flashlight_dir);
-    glm_vec3_normalize(lights->flashlight_dir);
-    vec3 right, up = {0.0f, 1.0f, 0.0f}, pos;
-    glm_vec3_cross((float*)forward, up, right);
-    glm_vec3_normalize(right);
-    glm_vec3_copy((float*)eye, pos);
-    glm_vec3_muladds(right, 0.16f, pos);
-    pos[1] -= 0.22f;
-    glm_vec3_muladds((float*)forward, 0.1f, pos);
-    light_set_position(f, pos);
-    light_set_direction(f, lights->flashlight_dir);
-    f->intensity = lights->flashlight_on ? FLASHLIGHT_CANDELA : 0.0f;
-    f->cast_shadows = lights->flashlight_on;
+    if (f) {
+        // The beam trails the head a little, as a hand-held torch does.
+        const float k = 1.0f - expf(-dt * 14.0f);
+        glm_vec3_lerp(lights->flashlight_dir, (float*)forward, k, lights->flashlight_dir);
+        glm_vec3_normalize(lights->flashlight_dir);
+        vec3 right, up = {0.0f, 1.0f, 0.0f}, pos;
+        glm_vec3_cross((float*)forward, up, right);
+        glm_vec3_normalize(right);
+        glm_vec3_copy((float*)eye, pos);
+        glm_vec3_muladds(right, 0.16f, pos);
+        pos[1] -= 0.22f;
+        glm_vec3_muladds((float*)forward, 0.1f, pos);
+        light_set_position(f, pos);
+        light_set_direction(f, lights->flashlight_dir);
+    }
+    lights_apply(lights, level, lights->flashlight_on);
 }
 
 void lights_toggle_flashlight(Lights* lights) {
@@ -359,12 +368,5 @@ void lights_toggle_flashlight(Lights* lights) {
 }
 
 void lights_rest(Lights* lights, bool rest) {
-    if (lights->flicker)
-        lights->flicker->emissive_strength = lights->flicker_nits * (rest ? 1.0f : lights->level);
-    Light* f = lights->flashlight;
-    if (f) {
-        const bool on = lights->flashlight_on && !rest;
-        f->intensity = on ? FLASHLIGHT_CANDELA : 0.0f;
-        f->cast_shadows = on;
-    }
+    lights_apply(lights, rest ? 1.0f : lights->level, lights->flashlight_on && !rest);
 }

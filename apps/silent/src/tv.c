@@ -241,8 +241,6 @@ void tv_rest(Tv* tv, bool rest) {
     if (!tv->picture)
         return;
     // At rest: the first field, the hum at its start and the gain at its mean, which is 1.
-    if (rest)
-        tv_show(tv, (vec4){0.0f, 0.0f, TV_SIGMA, tv_mean(TV_SIGMA)});
-    else
-        tv_show(tv, tv->field);
+    const vec4 resting = {0.0f, 0.0f, TV_SIGMA, tv_mean(TV_SIGMA)};
+    tv_show(tv, rest ? resting : tv->field);
 }

@@ -185,6 +185,14 @@ static const float LOD_SWITCH[] = {0.045f, 0.022f, 0.011f};
 _Static_assert(sizeof(LOD_SWITCH) / sizeof(LOD_SWITCH[0]) == CETRA_LOD_MAX - 1,
                "LOD_SWITCH needs one threshold per level below the top");
 
+// The view LOD_SWITCH was set by, which the ladder itself does not hold: 1080 lines over a
+// 60-degree field, 935 pixels to a unit of tan.
+#define LOD_SWITCH_PIXELS_PER_TAN 935.0f
+
+float draw_lod_bias_for(float bias, float pixels_per_tan) {
+    return bias * pixels_per_tan / LOD_SWITCH_PIXELS_PER_TAN;
+}
+
 // Where a mesh sits in the world and how big it is, from its IMPORT bound --
 // undisplaced, and at bind pose for a skinned mesh. `out_radius` may be NULL
 // for a caller that only wants the centre.
@@ -430,12 +438,24 @@ bool draw_list_build(DrawList* list, Scene* scene, uint64_t stamp, const LodSele
 
     list->stamp = stamp;
     list->valid = true;
+    list->lod_from_valid = lod != NULL;
+    if (lod)
+        list->lod_from = *lod;
     return true;
 }
 
+static bool _lod_select_equal(const LodSelect* a, const LodSelect* b) {
+    return a->enabled == b->enabled && a->bias == b->bias && a->ortho_height == b->ortho_height &&
+           glm_vec3_eqv((float*)a->eye, (float*)b->eye);
+}
+
 void draw_list_select_lod(DrawList* list, const LodSelect* lod) {
-    for (size_t i = 0; list && i < list->count; ++i)
+    if (!list || !lod || (list->lod_from_valid && _lod_select_equal(&list->lod_from, lod)))
+        return;
+    for (size_t i = 0; i < list->count; ++i)
         list->items[i].lod = select_lod(list->items[i].mesh, list->items[i].node, lod);
+    list->lod_from = *lod;
+    list->lod_from_valid = true;
 }
 
 // The box a skinned mesh's POSE occupies, in object space: each bone's own
@@ -539,6 +559,22 @@ bool draw_item_visible(const DrawItem* item, const CullView* view) {
         return true;
     return frustum_test_aabb_transformed(view->frustum, box.min, box.max,
                                          item->node->global_transform);
+}
+
+bool draw_item_captured_in(const DrawItem* item, const Wind* wind, const AABB* box) {
+    // The lanes a capture draws and those its shadow pass casts from, named as the caster sets
+    // name theirs, so a lane added later is in no key until somebody says a capture takes it.
+    const unsigned lanes = (1u << DRAW_LANE_OPAQUE) | (1u << DRAW_LANE_BLEND) |
+                           (1u << DRAW_LANE_TRANSMISSIVE) | (1u << DRAW_LANE_SHADOW_ONLY);
+    const CullView view = {.wind = wind, .capture = true};
+    if (!(lanes & (1u << item->lane)) || !draw_item_visible(item, &view))
+        return false;
+    AABB bound;
+    if (!draw_item_bounds(item, &view, &bound))
+        return true;
+    AABB world = {{0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}};
+    aabb_transform(bound.min, bound.max, item->node->global_transform, world.min, world.max);
+    return aabb_overlaps(&world, box);
 }
 
 bool draw_run_key_equal(const DrawItem* head, const DrawItem* next) {

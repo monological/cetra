@@ -132,9 +132,22 @@ void cook_key_f32(CookKey* key, float v) {
     cook_key_u32(key, bits);
 }
 
+void cook_key_f32s(CookKey* key, const float* v, int n) {
+    for (int i = 0; i < n; i++)
+        cook_key_f32(key, v[i]);
+}
+
+void cook_key_bool(CookKey* key, bool v) {
+    cook_key_u32(key, v ? 1u : 0u);
+}
+
 void cook_key_str(CookKey* key, const char* s) {
     if (s)
         fold_bytes(key, s, strlen(s) + 1);
+}
+
+void cook_key_refuse(CookKey* key) {
+    key->valid = false;
 }
 
 void cook_key_label(CookKey* key, const char* name) {

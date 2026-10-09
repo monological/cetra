@@ -7,6 +7,7 @@
 #include "probe_set.h"
 #include "lighting_atlas.h"
 #include "light_cluster.h" // GpuProbeBlock, the block this fills half of
+#include "capture_key.h"
 #include "cook.h"
 #include "engine.h"
 #include "gi_volume.h"
@@ -173,32 +174,29 @@ static int next_face(ReflectionProbeSet* set, const struct Engine* engine,
 
 // The cook's key for probe `i`'s capture (spec 13.42): the scene it sees out to its far plane,
 // the probe and the column it fills, and the GI it is lit by, each volume by the key it was swept
-// under. False when any of it cannot say what it is.
-static bool probe_key(const ReflectionProbeSet* set, size_t i, struct Engine* engine,
-                      struct Scene* scene, CookKey* key) {
+// under.
+static CookKey probe_key(const ReflectionProbeSet* set, size_t i, struct Engine* engine,
+                         struct Scene* scene) {
     const ReflectionProbe* probe = set->probes[i];
-    *key = cook_key("probe-column/1");
+    CookKey key = cook_key("probe-column/1");
     char label[COOK_NAME_MAX];
     snprintf(label, sizeof(label), "probe-%zu", i);
-    cook_key_label(key, label);
+    cook_key_label(&key, label);
     AABB reach = {{probe->position[0], probe->position[1], probe->position[2]},
                   {probe->position[0], probe->position[1], probe->position[2]}};
     aabb_expand(&reach, probe->far_clip);
-    if (!scene_capture_fold(engine, scene, &reach, key))
-        return false;
-    for (int c = 0; c < 3; c++) {
-        cook_key_f32(key, probe->position[c]);
-        cook_key_f32(key, probe->box_min[c]);
-        cook_key_f32(key, probe->box_max[c]);
-    }
+    scene_capture_fold(engine, scene, &reach, &key);
+    cook_key_f32s(&key, probe->position, 3);
+    cook_key_f32s(&key, probe->box_min, 3);
+    cook_key_f32s(&key, probe->box_max, 3);
     const float terms[] = {probe->intensity, probe->box_fade, probe->near_clip, probe->far_clip};
-    for (size_t t = 0; t < sizeof(terms) / sizeof(terms[0]); t++)
-        cook_key_f32(key, terms[t]);
-    cook_key_u32(key, probe->environment_only ? 1u : 0u);
-    cook_key_i32(key, set->row0);
-    cook_key_i32(key, PROBE_ATLAS_ROWS);
-    cook_key_i32(key, PROBE_CUBEMAP_SIZE);
-    return gi_world_fold(scene->gi, &reach, SIZE_MAX, key);
+    cook_key_f32s(&key, terms, (int)(sizeof(terms) / sizeof(terms[0])));
+    cook_key_bool(&key, probe->environment_only);
+    const int column[] = {set->row0, PROBE_ATLAS_ROWS, PROBE_CUBEMAP_SIZE};
+    for (size_t c = 0; c < sizeof(column) / sizeof(column[0]); c++)
+        cook_key_i32(&key, column[c]);
+    gi_world_fold(scene->gi, &reach, SIZE_MAX, &key);
+    return key;
 }
 
 // Probe `i`'s capture from the cook, keyed as it is about to begin, inside the burst (spec
@@ -206,30 +204,18 @@ static bool probe_key(const ReflectionProbeSet* set, size_t i, struct Engine* en
 // store, and the capture taken live.
 static bool probe_fetch(ReflectionProbeSet* set, size_t i, struct Engine* engine,
                         struct Scene* scene, const LightingAtlas* atlas) {
-    ReflectionProbe* probe = set->probes[i];
     ResidencyItem* item = &set->residency.items[i];
-    probe->cook_keyed = false;
-    if (!cook_enabled())
-        return false;
-    CookKey key;
-    probe->cook_keyed = probe_key(set, i, engine, scene, &key);
-    probe->cook_hash = key.hash;
-    if (!probe->cook_keyed) {
-        log_info("probe-cook probe=%zu result=unkeyable: something it sees cannot say what it is",
-                 i);
+    const CookKey key = probe_key(set, i, engine, scene);
+    item->cook_hash = key.valid ? key.hash : 0;
+    if (!key.valid) {
+        if (cook_enabled())
+            log_info("probe-cook probe=%zu result=unkeyable: something it sees cannot say what it "
+                     "is",
+                     i);
         return false;
     }
-    CookBlob blob = {NULL, 0};
-    if (!cook_fetch(&key, &blob, 1))
+    if (!lighting_atlas_cook_fetch(atlas, probe_column(atlas, item), &key))
         return false;
-    const AtlasRect rect = probe_column(atlas, item);
-    const size_t want = (size_t)rect.w * (size_t)rect.h * 4 * sizeof(uint16_t);
-    const bool fits = blob.size == want && lighting_atlas_restore(atlas, rect, blob.data);
-    free(blob.data);
-    if (!fits) {
-        log_warn("probe-cook probe=%zu: the cooked column does not fit; capturing live", i);
-        return false;
-    }
     residency_loaded(item);
     return true;
 }
@@ -238,22 +224,16 @@ static bool probe_fetch(ReflectionProbeSet* set, size_t i, struct Engine* engine
 // the scene still folds to it.
 static void probe_store(const ReflectionProbeSet* set, size_t i, struct Engine* engine,
                         struct Scene* scene, const LightingAtlas* atlas) {
-    const ReflectionProbe* probe = set->probes[i];
-    if (!probe->cook_keyed)
+    const ResidencyItem* item = &set->residency.items[i];
+    if (!item->cook_hash)
         return;
-    CookKey key;
-    if (!probe_key(set, i, engine, scene, &key) || key.hash != probe->cook_hash) {
+    const CookKey key = probe_key(set, i, engine, scene);
+    if (!key.valid || key.hash != item->cook_hash) {
         log_info("probe-cook probe=%zu result=unstable: the scene changed while it was captured",
                  i);
         return;
     }
-    const AtlasRect rect = probe_column(atlas, &set->residency.items[i]);
-    uint16_t* texels = lighting_atlas_keep(atlas, rect);
-    if (!texels)
-        return;
-    const CookBlob blob = {texels, (size_t)rect.w * (size_t)rect.h * 4 * sizeof(uint16_t)};
-    cook_store(&key, &blob, 1);
-    free(texels);
+    lighting_atlas_cook_store(atlas, probe_column(atlas, item), &key);
 }
 
 // A whole capture published: into its column, the cubes it was made from dropped -- or, for a
@@ -327,7 +307,7 @@ void probe_set_update(ReflectionProbeSet* set, struct Engine* engine, struct Sce
         ReflectionProbe* probe = set->probes[i];
         // Keyed inside the burst, where the scene is at rest: a column the cook holds is loaded
         // instead of captured, and one it does not is stored once published.
-        const bool cook = multi && set->cook;
+        const bool cook = multi && scene->cook_lighting;
         if (probe->faces_captured == 0) {
             if (cook && probe_fetch(set, (size_t)i, engine, scene, atlas))
                 continue;

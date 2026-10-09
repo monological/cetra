@@ -4,8 +4,6 @@
 #include <cglm/cglm.h>
 #include <stdbool.h>
 
-#include "light.h"
-
 // FIRE_MAX and the per-fire caps, which the shaders' arrays are sized by.
 #include "../shaders/include/fire_constants.glsl"
 
@@ -146,6 +144,7 @@ typedef struct FireFlipbook {
     float* intensity;     // cd a frame at `box`
     float* centroid_y;    // 0..1 up the frame
     float mean_intensity; // cd over the loop at `box`
+    float mean_centroid;  // centroid_y over the loop
     vec3 color;           // linear Rec.709, luminance 1
 } FireFlipbook;
 
@@ -252,9 +251,8 @@ typedef struct Fire {
     float adapted_for[2];
     float mean_intensity;
     int mean_samples;
-    // The light as the fire last drove it, kept while fire_system_hold holds it at rest.
-    Light held;
-    bool holding;
+    // A FLIPBOOK's cards' centroid over its loop, beside `mean_intensity`: where it casts at rest.
+    vec3 mean_centroid;
 } Fire;
 
 typedef struct FireSystem {
@@ -333,9 +331,9 @@ void fire_system_drive(FireSystem* fs, struct SceneNode* root, float dt);
 
 // While the light is captured (spec 13.42): `rest` drives each fire's light from what the fire
 // casts at rest -- a FLAME standing straight and still, a FLIPBOOK at its loop's mean -- and its
-// embers at the vigour it usually burns with, keeping the light as it was; false puts both back.
-// A GRID fire's light has no rest and is left as it burns.
-void fire_system_hold(FireSystem* fs, struct SceneNode* root, bool rest);
+// embers at the vigour it usually burns with; false drives both from this frame's answer again.
+// A GRID fire's light has no rest and casts its answer either way.
+void fire_system_rest(FireSystem* fs, struct SceneNode* root, bool rest);
 
 // The world moved by -`delta` (an origin shift): what fires hold in world space moves with it.
 void fire_system_shift_origin(FireSystem* fs, const vec3 delta);

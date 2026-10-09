@@ -1683,25 +1683,28 @@ was kept:
   Apple's GL runs a geometry shader as a transform-feedback compute pass, slower than six draws.
   And only the chunks of a big mesh a face can see: 44% fewer triangles and a slower sweep, since
   every chunk is a draw.
-- **Each item's level comes from the PROBE** (`draw_list_select_lod`, at the face's resolution:
-  `lod_bias * face / (2 * 935)`), not the camera, which was an input that moved with the player.
-  `GIWorld.cull_pixels` leaves out what spans fewer pixels than that across a face, keeping
-  emitters and anything under a `capture_always` node; 0, everything, by default.
+- **Each item's level comes from the PROBE** (`draw_list_select_lod`, at the face's resolution,
+  `draw_lod_bias_for`), not the camera, which was an input that moved with the player; the
+  burst gives the camera's levels back as it ends. `GIWorld.cull_pixels` leaves out what spans
+  fewer pixels than that across a face, keeping emitters and anything under a `capture_always`
+  node; 0, everything, by default.
 - **A capture burst holds the scene at rest** (`scene_set_capture_rest`): `scene_capture_begin`
   calls the app's function with true before it settles the panels or draws its shadows,
-  `scene_capture_end` with false, and the engine holds its own fires at a still flame
-  (`fire_system_hold`) between them. An app holds what it animates and marks `capture_hidden`
+  `scene_capture_end` with false, and the engine drives its own fires from a still flame
+  (`fire_system_rest`) between them. An app holds what it animates and marks `capture_hidden`
   what moves every frame. So the frame a capture lands in no longer decides what it sees.
-- **A GI volume's opening sweep and a reflection probe's column are COOKED** under
-  `GIWorld.cook` and `ReflectionProbeSet.cook`. Both are off by default, since the suite shares
-  one cook directory; `gi-cook` gives each arm its own. The key is `scene_capture_fold`, folded
-  in the burst, at rest, as the first probe is about to be drawn:
+- **A GI volume's opening sweep and a reflection probe's column are COOKED** under one switch,
+  `Scene.cook_lighting`, since a probe's key holds its volumes'. Off by default, since the suite
+  shares one cook directory; `gi-cook` gives each arm its own. The key is `scene_capture_fold`
+  (`capture_key.c`), folded in the burst, at rest, as the first probe is about to be drawn:
   - the engine's source as a build digest (`cetra/gen_build_digest.py`), and the driver's strings;
-  - the settings, through `config_snapshot_fold`;
-  - every light that emits and reaches the box, whole, and every decal's images;
-  - every drawn item in reach, by content.
+  - every setting a capture reads, through `config_snapshot_fold` -- the table walked keeping all
+    but the rows named as not read, so a row added later is keyed by default;
+  - every light that emits and reaches the box, whole, and every decal that meets it;
+  - every item a capture of the box takes (`draw_item_captured_in`), by content, with its own
+    material.
 
-  A hit restores the texels. A sweep whose scene changed before it finished logs
+  A hit restores the texels (`lighting_atlas_cook_fetch`). A sweep whose scene changed before it finished logs
   `result=unstable` and stores nothing. Left out of the key: the cached shadow tiles' contents and
   the rain's cover, which follow how a sweep was paced, and a shadow cast into the reach from
   outside it.

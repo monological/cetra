@@ -202,7 +202,6 @@ typedef struct SilentArgs {
     bool capture_timing;     // each GI volume prints what its sweep cost as it converges
     float gi_cull_pixels;    // the GI world's cull_pixels
     float gi_cell;           // the home's GI cell in metres; 0 = HOME_GI_CELL
-    float mansion_gi_cell;   // > 0 lays the mansion's grid by spacing, classified; 0 = by hand
     bool profiler;           // per-pass timing and submission counts, reported at exit
     const char* audio_dump;  // headless: write what the listener hears here
     bool no_woods;           // no trees behind the yards, nor what lies under them
@@ -433,12 +432,6 @@ static void build_cabin_gi(void) {
 static void build_gi(const vec3 origin) {
     const vec3 lo = {-7.45f + origin[0], origin[1], 7.58f + origin[2]};
     const vec3 hi = {lo[0] + GI_COLS * GI_CELL, lo[1] + GI_TOP, lo[2] + GI_COLS * GI_CELL};
-    // Laid by spacing over the same box rather than placed by hand clear of every wall (spec
-    // 13.42's trial).
-    if (g_args.mansion_gi_cell > 0.0f) {
-        build_spaced_gi("mansion", lo, hi, g_args.mansion_gi_cell);
-        return;
-    }
     GIVolume* gi = create_gi_volume(GI_COLS, GI_ROWS, GI_COLS, lo, hi);
     if (!gi)
         return;
@@ -999,7 +992,6 @@ static void on_init(Game* game) {
     g_play_capture_ms = engine->capture_budget_ms;
     if (g_args.capture_budget_ms < 0.0f && !engine->headless)
         engine->capture_budget_ms = LOADING_CAPTURE_MS;
-    engine->capture_timing = g_args.capture_timing;
 
     // In the kitchen's back corner looking across it to the hall door, or wherever --player-at
     // put the player, on whatever stands under them there -- the ground, a floor, the dock --
@@ -1229,14 +1221,13 @@ static void on_pre_render(Game* game, double alpha) {
         build_gi((vec3){MANSION_X, MANSION_Y, MANSION_Z});
         build_cabin_gi();
         build_probes();
-        // Both cooked (spec 13.42): a launch after the first loads the house's light from disk
-        // instead of sweeping it, unless something it sees has changed. CETRA_NO_COOK=1 sweeps.
         if (g_scene->gi) {
             g_scene->gi->cull_pixels = g_args.gi_cull_pixels;
-            g_scene->gi->cook = true;
+            g_scene->gi->timing = g_args.capture_timing;
         }
-        if (g_scene->probe_set)
-            g_scene->probe_set->cook = true;
+        // Cooked (spec 13.42): a launch after the first loads the houses' light from disk instead
+        // of sweeping it, unless something it sees has changed. CETRA_NO_COOK=1 sweeps.
+        g_scene->cook_lighting = true;
     }
     AABB at;
     aabb_empty(&at);
@@ -1399,8 +1390,6 @@ static void print_usage(const char* prog) {
            "                          across its 16-pixel faces; 0, the default, takes all\n");
     printf("      --gi-cell M         The home's GI cell, metres (default %.2f)\n",
            (double)HOME_GI_CELL);
-    printf("      --mansion-gi-cell M Lay the mansion's GI grid on M m cells, its probes in\n"
-           "                          walls switched off, rather than the hand-placed one\n");
     printf("      --profiler          Per-pass timing and submission counts, at exit\n");
     printf("      --tile-views N      Shade every cached light from N views over its body\n"
            "                          rather than 8; 1 is its centre alone\n");
@@ -1576,8 +1565,6 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
             a->gi_cull_pixels = (float)atof(argv[++i]);
         } else if (!strcmp(s, "--gi-cell") && has_next) {
             a->gi_cell = (float)atof(argv[++i]);
-        } else if (!strcmp(s, "--mansion-gi-cell") && has_next) {
-            a->mansion_gi_cell = (float)atof(argv[++i]);
         } else if (!strcmp(s, "--tile-views") && has_next) {
             a->tile_views = atoi(argv[++i]);
         } else if (!strcmp(s, "--tile-stores") && has_next) {

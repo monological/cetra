@@ -334,6 +334,12 @@ typedef struct Scene {
     struct Rain* rain;             // falling rain and the wetness it leaves (optional)
     struct FireSystem* fire;       // fires and candle flames, and the lights they drive (optional)
 
+    // true = a GI volume's opening sweep and a reflection probe's column come from the cook when a
+    // capture of the same scene was stored there, and are stored when not (spec 13.42); false =
+    // every capture is taken live. One switch for both: a probe's key holds the keys of the
+    // volumes lighting it, so one cooked without the other is never found.
+    bool cook_lighting;
+
     // What the walk seeds the root with -- where the whole scene sits. Identity
     // for most apps; a model viewer puts its recentre offset here.
     //

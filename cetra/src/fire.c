@@ -235,8 +235,10 @@ bool fire_set_flipbook(Fire* fire, TexturePool* pool, const char* path) {
     }
     texture_apply_wrap(tex, GL_CLAMP_TO_EDGE, GL_CLAMP_TO_EDGE);
     b->sheet = texture_retain(tex);
-    for (int f = 0; f < b->frames; f++)
+    for (int f = 0; f < b->frames; f++) {
         b->mean_intensity += b->intensity[f] / (float)b->frames;
+        b->mean_centroid += b->centroid_y[f] / (float)b->frames;
+    }
     return true;
 }
 
@@ -640,7 +642,7 @@ static void _flame_light(Fire* fire) {
 static void _flipbook_light(Fire* fire, double t) {
     const FireFlipbook* b = &fire->flipbook;
     float total = 0.0f, mean = 0.0f;
-    vec3 weighted = GLM_VEC3_ZERO_INIT;
+    vec3 weighted = GLM_VEC3_ZERO_INIT, mean_weighted = GLM_VEC3_ZERO_INIT;
     for (int c = 0; c < fire_card_count(fire); c++) {
         const FireCard* card = &fire->cards.list[c];
         const double pos = fire_card_frame(b, card, t);
@@ -654,10 +656,13 @@ static void _flipbook_light(Fire* fire, double t) {
         const float y = b->centroid_y[f0] + (b->centroid_y[f1] - b->centroid_y[f0]) * blend;
         total += i;
         mean += b->mean_intensity * scale;
-        vec3 at = {0.0f, 0.0f, 0.0f};
-        glm_vec3_add((float*)fire->origin, (float*)card->base, at);
+        vec3 base = {0.0f, 0.0f, 0.0f}, at = {0.0f, 0.0f, 0.0f};
+        glm_vec3_add((float*)fire->origin, (float*)card->base, base);
+        glm_vec3_copy(base, at);
         at[1] += y * size[1];
         glm_vec3_muladds(at, i, weighted);
+        base[1] += b->mean_centroid * size[1];
+        glm_vec3_muladds(base, b->mean_intensity * scale, mean_weighted);
     }
     fire->intensity = total * fire->params.brightness;
     fire->mean_intensity = mean * fire->params.brightness;
@@ -665,6 +670,10 @@ static void _flipbook_light(Fire* fire, double t) {
         glm_vec3_scale(weighted, 1.0f / total, fire->centroid);
     else
         glm_vec3_copy(fire->origin, fire->centroid);
+    if (mean > 0.0f)
+        glm_vec3_scale(mean_weighted, 1.0f / mean, fire->mean_centroid);
+    else
+        glm_vec3_copy(fire->origin, fire->mean_centroid);
     glm_vec3_copy((float*)b->color, fire->color);
     fire->heat_release = 0.0f;
     fire->answered = true;
@@ -749,61 +758,43 @@ void fire_update(FireSystem* fs, const Wind* wind, double t) {
     }
 }
 
-// What a fire casts, as its light is driven from it: the fire's answer this frame, or what it
-// casts at rest (spec 13.42).
+// What a fire casts, as its light is driven from it: its answer this frame, or what it casts at
+// rest (spec 13.42) -- a FLAME standing straight and still, a FLIPBOOK at its loop's mean. A
+// GRID's light is a simulation's answer with no rest to give it, so it casts its answer either way.
 typedef struct FireCast {
     bool casting;
     float intensity; // cd
     vec3 color;
     vec3 centroid;
-    const vec4* spine; // a FLAME's, for its light's body; NULL for any other kind
+    // A FLAME's body, for its light's soft shadow: the spine's base and tip and its widest radius.
+    bool body;
+    vec3 base, tip;
+    float radius;
 } FireCast;
 
-static FireCast _live_cast(const Fire* fire) {
-    FireCast cast = {.casting = fire->enabled && fire->answered,
-                     .intensity = fire->intensity,
-                     .spine = fire->kind == FIRE_FLAME ? fire->spine : NULL};
+static FireCast _cast(const Fire* fire, bool rest) {
+    FireCast cast = {.casting = fire->enabled && fire->answered, .intensity = fire->intensity};
     glm_vec3_copy((float*)fire->color, cast.color);
     glm_vec3_copy((float*)fire->centroid, cast.centroid);
+    if (rest && fire->kind == FIRE_FLIPBOOK) {
+        cast.intensity = fire->mean_intensity;
+        glm_vec3_copy((float*)fire->mean_centroid, cast.centroid);
+    }
+    if (fire->kind != FIRE_FLAME)
+        return cast;
+    vec4 still[FIRE_SPINE_POINTS];
+    const vec4* spine = fire->spine;
+    if (rest) {
+        _flame_rest_spine(fire, still);
+        _flame_cast(fire, still, &cast.intensity, cast.centroid, cast.color);
+        spine = still;
+    }
+    cast.body = true;
+    glm_vec3_copy((float*)spine[0], cast.base);
+    glm_vec3_copy((float*)spine[FIRE_SPINE_POINTS - 1], cast.tip);
+    for (int p = 0; p < FIRE_SPINE_POINTS; p++)
+        cast.radius = fmaxf(cast.radius, spine[p][3]);
     return cast;
-}
-
-// What a fire casts at rest, into `spine` for a FLAME: a still flame straight up from its wick, a
-// FLIPBOOK's loop's mean at its mean height. False for a GRID, whose light is a simulation's
-// answer with no rest to give it, and for a fire not yet lit.
-static bool _rest_cast(const Fire* fire, vec4 spine[FIRE_SPINE_POINTS], FireCast* cast) {
-    if (!fire->enabled || !fire->answered)
-        return false;
-    *cast = _live_cast(fire);
-    if (fire->kind == FIRE_FLAME) {
-        _flame_rest_spine(fire, spine);
-        _flame_cast(fire, spine, &cast->intensity, cast->centroid, cast->color);
-        cast->spine = spine;
-        return true;
-    }
-    if (fire->kind != FIRE_FLIPBOOK || !fire->flipbook.sheet)
-        return false;
-    const FireFlipbook* b = &fire->flipbook;
-    float height = 0.0f;
-    for (int f = 0; f < b->frames; f++)
-        height += b->centroid_y[f] / (float)b->frames;
-    float total = 0.0f;
-    vec3 weighted = GLM_VEC3_ZERO_INIT;
-    for (int c = 0; c < fire_card_count(fire); c++) {
-        const FireCard* card = &fire->cards.list[c];
-        vec2 size = {0.0f, 0.0f};
-        fire_card_size(fire, card, size);
-        const float i = b->mean_intensity * size[0] * size[1] / fmaxf(b->box[0] * b->box[1], 1e-6f);
-        vec3 at = {0.0f, 0.0f, 0.0f};
-        glm_vec3_add((float*)fire->origin, (float*)card->base, at);
-        at[1] += height * size[1];
-        glm_vec3_muladds(at, i, weighted);
-        total += i;
-    }
-    cast->intensity = total * fire->params.brightness;
-    if (total > 0.0f)
-        glm_vec3_scale(weighted, 1.0f / total, cast->centroid);
-    return true;
 }
 
 // A point light's body from its flame, for the soft edge of its shadow: a capsule along the
@@ -811,13 +802,11 @@ static bool _rest_cast(const Fire* fire, vec4 spine[FIRE_SPINE_POINTS], FireCast
 // flame stretches, shrinks and leans its shadow's edge follows it. Its direction is written as
 // _drive_light writes the position; `to_node` takes world into the light's node's frame, NULL
 // for a light on no node.
-static void _drive_light_shape(const vec4* spine, Light* light, vec4* to_node) {
+static void _drive_light_shape(const FireCast* cast, Light* light, vec4* to_node) {
     vec3 axis = GLM_VEC3_ZERO_INIT;
-    glm_vec3_sub((float*)spine[FIRE_SPINE_POINTS - 1], (float*)spine[0], axis);
+    glm_vec3_sub((float*)cast->tip, (float*)cast->base, axis);
     const float length = glm_vec3_norm(axis);
-    float radius = 0.0f;
-    for (int p = 0; p < FIRE_SPINE_POINTS; p++)
-        radius = fmaxf(radius, spine[p][3]);
+    const float radius = cast->radius;
     // The body's length is between its end caps, which carry the radius past each end; the
     // spine is the whole flame, so a body as long as the spine reached a radius into the wax.
     light->source_radius = radius;
@@ -868,8 +857,8 @@ static void _drive_light(const Fire* fire, const FireCast* cast, SceneNode* root
             // and this frame's world copy, since this frame's walk has already run.
             light_set_position(light, local);
             glm_vec3_copy(at, light->global_position);
-            if (light->type == LIGHT_POINT && cast->spine)
-                _drive_light_shape(cast->spine, light, node ? inv : NULL);
+            if (light->type == LIGHT_POINT && cast->body)
+                _drive_light_shape(cast, light, node ? inv : NULL);
             break;
         }
         case LIGHT_AREA: {
@@ -881,6 +870,15 @@ static void _drive_light(const Fire* fire, const FireCast* cast, SceneNode* root
         default:
             break;
     }
+}
+
+// A fire's light and embers from what it casts, live or at rest. At rest a fire burns as it
+// usually does, so its embers glow at a vigour of 1.
+static void _drive_fire(Fire* fire, SceneNode* root, bool rest) {
+    const FireCast cast = _cast(fire, rest);
+    _drive_light(fire, &cast, root);
+    if (fire->embers)
+        fire->embers->emissive_drive = !fire->enabled ? 0.0f : rest ? 1.0f : fire->vigour;
 }
 
 void fire_system_drive(FireSystem* fs, SceneNode* root, float dt) {
@@ -901,37 +899,13 @@ void fire_system_drive(FireSystem* fs, SceneNode* root, float dt) {
                                ? fminf(fire->intensity / fire->mean_intensity, FIRE_VIGOUR_MAX)
                                : 1.0f;
         }
-        const FireCast cast = _live_cast(fire);
-        _drive_light(fire, &cast, root);
-        if (fire->embers)
-            fire->embers->emissive_drive = fire->enabled ? fire->vigour : 0.0f;
+        _drive_fire(fire, root, false);
     }
 }
 
-void fire_system_hold(FireSystem* fs, SceneNode* root, bool rest) {
-    if (!fs)
-        return;
-    for (int i = 0; i < fs->count; i++) {
-        Fire* fire = &fs->fires[i];
-        // At rest a fire burns as it usually does, so its embers glow at a vigour of 1.
-        if (fire->embers)
-            fire->embers->emissive_drive = !fire->enabled ? 0.0f : rest ? 1.0f : fire->vigour;
-        if (!fire->light)
-            continue;
-        if (!rest) {
-            if (fire->holding)
-                *fire->light = fire->held;
-            fire->holding = false;
-            continue;
-        }
-        vec4 spine[FIRE_SPINE_POINTS];
-        FireCast cast;
-        if (!_rest_cast(fire, spine, &cast))
-            continue;
-        fire->held = *fire->light;
-        fire->holding = true;
-        _drive_light(fire, &cast, root);
-    }
+void fire_system_rest(FireSystem* fs, SceneNode* root, bool rest) {
+    for (int i = 0; fs && i < fs->count; i++)
+        _drive_fire(&fs->fires[i], root, rest);
 }
 
 void fire_system_shift_origin(FireSystem* fs, const vec3 delta) {

@@ -82,14 +82,15 @@ char* config_snapshot_write(struct Engine* engine, struct Scene* scene, int* out
 // reason on failure; both to stdout, so a headless run records what it produced.
 bool config_snapshot_save(struct Engine* engine, struct Scene* scene, const char* path);
 
-// Fold into `key` the settings a light capture of this scene reads (spec 13.42): the scene,
-// shadow, sky, cloud, IBL, GI and rain settings, and every material's and decal's rows -- by the
-// same table the writer walks, so a setting added to it is folded for free. Leaves out what a run
-// decides rather than the scene: the camera, the post chain, the exposure and the engine's own
-// section; and the lights, which scene_capture_fold folds whole. A key that could not be folded
-// is left invalid.
+// Fold into `key` every singleton setting a light capture of this scene reads (spec 13.42), by
+// the same table the writer walks: every row but those named as not read -- what a run decides,
+// what only the camera's frame shows -- so a row added to the table is keyed unless it is excluded.
+// The arrays are the caller's, element by element: only what reaches a capture is its input.
 struct CookKey;
 void config_snapshot_fold(struct Engine* engine, struct Scene* scene, struct CookKey* key);
+// One decal's rows into `key`: where it stands and how it projects, not its images.
+struct Decal;
+void config_snapshot_fold_decal(const struct Decal* decal, struct CookKey* key);
 
 /*
  * Apply a snapshot to the live engine + scene. Returns the number of values
