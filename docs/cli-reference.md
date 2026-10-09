@@ -963,9 +963,18 @@ A grimy kitchen in a house on a foggy night street, walked in first person (spec
 13.25 the house is a plain two-storey clapboard one with a long P.T. hall, and the Gothic house
 stands at the end of the street, up a drive through dead trees. Its kitchen is a dining room, and
 the cat lives there. Everything of the Gothic house below is at the mansion's origin, (115, 8,
-40) added to its old coordinates. In the window: click to capture the mouse and Tab to release
+40) added to its old coordinates. In the window: click to capture the mouse and Escape to release
 it; WASD walks, Shift hurries, and the mouse or the arrow keys look. **F** (or pad Y) toggles the
-flashlight, **E** opens a door, and **G** or backtick shows the debug GUI.
+flashlight once it is found, **E** (or pad X) opens a door or takes what is in reach, **Tab** (or
+pad Back) opens the backpack, and **G** or backtick shows the debug GUI.
+
+**The backpack** (spec 13.40). It lies on the bed in the home's back bedroom, the flashlight in it;
+until it is taken F finds nothing and the cellar flight's foot is as far as the player goes. Its
+screen lists what it holds in a grid and turns the chosen one: the arrows, WASD or the D-pad walk
+the grid, and Enter, E, pad A or a click chooses; Tab or Escape (pad B) shuts it.
+- **`--backpack`:** starts with the backpack, the flashlight in it.
+- **`--open-backpack <item>`:** starts with its screen open on `<item>` (`flashlight`), for a
+  headless picture of it; it implies `--backpack`.
 
 **Capture:** `-x`, `-f <n>`, `-S <path>`, `--screenshot-every <n>`, and `-W`/`-H` for the window
 (default 1600x900).
@@ -1057,7 +1066,7 @@ crossroads at the street's west end.
   sim clock, so a headless frame catches the same instant of it every run. A frame that lands in a
   stutter burst shows that tube dark, which reads as the room being underlit when it is not; use
   this when comparing lighting.
-- **`--flashlight`:** starts with the torch on.
+- **`--flashlight`:** starts with the torch on, and so with the backpack it came in.
 - **`--no-static`:** the living room's television showing nothing (spec 13.30): its glass a faint
   blue-grey, no snow and no hiss. By default it shows snow, drawn past TAA, the room lit by a panel
   on its glass as bright as the picture averages.
