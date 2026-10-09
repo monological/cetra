@@ -324,6 +324,8 @@ typedef struct {
     float fog_near;               // Volume near (-1 = keep engine default; 0 derives from far)
     float fog_far;                // Volume far (-1 = keep engine default)
     float fog_depth_dist;         // Slice bias exponent (-1 = keep engine default)
+    int fog_miss_samples;         // Samples a fog cell with no history takes (0 = engine default)
+    int fog_miss_probe;           // Print how many fog cells had no history, each fog frame
     int contact_shadows;          // Enable screen-space contact shadows
     int contact_shadows_debug;    // Show the raw contact-shadow visibility term
     float cs_distance;            // March reach override (-1 = scene-scaled)

@@ -146,6 +146,9 @@ typedef enum PostFXSpecOccMode {
 #define POSTFX_FROXEL_Y 90
 #define POSTFX_FROXEL_Z 64
 
+// The most samples a fog cell with no history may take (spec 13.45).
+#define POSTFX_FOG_MISS_SAMPLES_MAX 8
+
 // Side of the fog's ESM cascades. Deliberately far below the scene's shadow
 // resolution and independent of it: the point is to throw the high-frequency
 // detail away, and a size that tracked the source would keep whatever the
@@ -335,10 +338,12 @@ typedef struct PostFX {
     ShaderProgram* lum_reduce_program;
     ShaderProgram* ssr_program;
     ShaderProgram* ssr_hiz_program;
-    ShaderProgram* upsample_tent_program;    // Shared tent composite (bloom mips, SSR)
-    ShaderProgram* ssr_fold_wet_program;     // SSR's fold when ground is wet (spec 13.9)
-    ShaderProgram* froxel_inject_program;    // Per-cell scattering into the volume (spec 9.5)
-    ShaderProgram* froxel_integrate_program; // Front-to-back gather along each slice column
+    ShaderProgram* upsample_tent_program;     // Shared tent composite (bloom mips, SSR)
+    ShaderProgram* ssr_fold_wet_program;      // SSR's fold when ground is wet (spec 13.9)
+    ShaderProgram* froxel_inject_program;     // Per-cell scattering into the volume (spec 9.5)
+    ShaderProgram* froxel_miss_probe_program; // fog_miss_probe's count; made on first use
+    bool fog_miss_probe_failed;               // that count could not be made; never retried
+    ShaderProgram* froxel_integrate_program;  // Front-to-back gather along each slice column
     ShaderProgram* froxel_composite_program;
     ShaderProgram* fog_esm_program; // Builds fog_esm_array from the depth cascades // One trilinear
                                     // tap, folded into the HDR scene
@@ -401,6 +406,7 @@ typedef struct PostFX {
     bool local_exposure_failed;           // could not be made; never retried
 
     bool negative_probe; // print how much of the frame reaches the tonemap below zero, each frame
+    bool fog_miss_probe; // print how many fog cells took several samples, each fog frame
 
     bool ssao_enabled;
     float ssao_radius; // Occlusion reach in view-space units
@@ -472,6 +478,9 @@ typedef struct PostFX {
     float fog_depth_dist;     // Slice bias on top of the exponential; 1 = pure exponential,
                               // >1 bunches slices toward fog_far, <1 toward the camera
     float fog_temporal_blend; // Weight the froxel accumulator gives its history
+    // Samples averaged by a cell with no history to blend, 1..POSTFX_FOG_MISS_SAMPLES_MAX;
+    // 1 = the one jittered sample every cell takes
+    int fog_history_miss_samples;
     // Volume dimensions, defaulted from the POSTFX_FROXEL_* constants. Runtime
     // because XY is what resolves a beam's SILHOUETTE: the volume traces it at
     // this density and the composite can only put a one-cell ramp under each
@@ -507,6 +516,7 @@ typedef struct PostFX {
     // path, a debug render mode bypassing the chain, fog switched off -- breaks
     // the adjacency without needing to remember to clear anything.
     int froxel_prev_frame;
+    GLuint fog_miss_query; // GL_SAMPLES_PASSED over fog_miss_probe's count
     // The composited 2D fog layer (inscatter.rgb, transmittance.a) and its
     // temporal accumulation, allocated on the first TAA frame with fog on.
     // Distinct from the volume's own accumulator above and gated the opposite

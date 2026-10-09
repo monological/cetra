@@ -109,9 +109,9 @@ uniform float rainForwardG; // the drops' refracted lobe
 uniform float rainNear;     // world units from the eye where it takes over from the streaks
 #include "rain_occlusion.glsl"
 
-// Temporal reprojection against the previous frame's volume. 0 freezes the
-// jitter and skips the blend, so headless renders stay byte-deterministic --
-// the same contract every other accumulator in this stack honours.
+// Temporal reprojection against the previous frame's volume. 1 when the frame
+// before this one built a volume; 0 on the first frame and after a gap, which
+// centres the sample and blends nothing, there being nothing to blend.
 uniform int temporal;
 uniform float temporalBlend; // History weight; higher averages more frames
 uniform int frameIndex;
@@ -119,6 +119,7 @@ uniform sampler3D historyVolume;
 uniform mat4 prevView;       // World -> the previous frame's view space
 uniform mat4 prevProjection; // Its focal terms map that to the previous volume
 uniform float historyScale;  // This frame's pre-exposure over the history's (spec 13.20)
+uniform int missSamples;     // Samples a cell with no history averages; 1 = its one (spec 13.45)
 
 const float PI = 3.14159265359;
 
@@ -446,6 +447,7 @@ bool froxelHistoryAt(float nearZ, out vec3 prevUvw) {
     return all(greaterThanEqual(prevUvw, vec3(0.0))) && all(lessThanEqual(prevUvw, vec3(1.0)));
 }
 
+#ifndef FROXEL_HISTORY_MISS
 void main() {
     // The VOLUME's near, not the camera's: see fogNear's owner in postfx.c.
     float nearZ = fogNear;
@@ -479,8 +481,38 @@ void main() {
             vec4 history = texture(historyVolume, prevUvw);
             history.rgb = min(history.rgb * historyScale, vec3(WS_MEDIA_MAX));
             result = mix(result, history, temporalBlend);
+        } else if (missSamples > 1) {
+            // A cell with no history (spec 13.45) -- one entering the volume as the camera
+            // turns or moves -- would show its one jittered sample beside neighbours averaged
+            // over many frames, and a turning camera drew the difference as a hard-edged band
+            // along the grid's columns. It takes the points before this one in the sequence
+            // too, the ones those averages weigh most, wrapping at the sequence's start.
+            for (int k = 1; k < missSamples; k++) {
+                int index = frameIndex + 1 - k;
+                if (index < 1)
+                    index += missSamples;
+                bool under;
+                result += froxelMediumAt(froxelJitter(index), nearZ, under);
+            }
+            result /= float(missSamples);
         }
     }
 
     FragColor = result;
 }
+#else
+/*
+ * The miss probe's count (spec 13.45), drawn with colour writes off under an occlusion query, on
+ * a frame whose cells may take several samples: what passes is every cell the main above gave
+ * them, found by the same two tests in the same order.
+ */
+void main() {
+    float nearZ = fogNear;
+    bool submerged;
+    froxelMediumAt(froxelJitter(frameIndex + 1), nearZ, submerged);
+    vec3 prevUvw;
+    if (submerged || froxelHistoryAt(nearZ, prevUvw))
+        discard;
+    FragColor = vec4(0.0);
+}
+#endif

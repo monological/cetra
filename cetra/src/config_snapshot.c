@@ -500,6 +500,7 @@ static const ConfigField CFG_FIELDS[] = {
     CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.fog", "far", fog_far),
     CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.fog", "depth_distribution", fog_depth_dist),
     CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.fog", "temporal_blend", fog_temporal_blend),
+    CFG_ROW(CFG_POSTFX, CFG_INT, "postfx.fog", "history_miss_samples", fog_history_miss_samples),
     CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.fog", "anisotropy", fog_anisotropy),
     CFG_ROW(CFG_POSTFX, CFG_FLOAT, "postfx.fog", "sun_boost", fog_sun_boost),
     // Both halves of the fog ambient's ownership, so a sky-driven session
