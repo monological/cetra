@@ -526,10 +526,12 @@ static const MatSpec SPECS[MAT_COUNT] = {
     [MAT_LOG] = {"log_bark", "pine_bark", {1, 1, 1}, 1.0f, 0.0f, 1.0f, .rain = {true, 0.7f}},
 };
 
-static Texture* load(TexturePool* pool, const char* set, const char* map, TextureDesc desc) {
+// A map of a material's set, decoded on the engine's loader threads and set by `put` once in.
+static void load(Engine* engine, Scene* scene, Material* m, void (*put)(Material*, Texture*),
+                 const char* set, const char* map, TextureDesc desc) {
     char file[128];
     snprintf(file, sizeof(file), "%s_%s.png", set, map);
-    return texture_load_file(pool, file, desc);
+    engine_load_material_texture(engine, scene->tex_pool, m, put, file, desc);
 }
 
 void mats_cutout(Material* m, float cutoff, TextureDesc* albedo) {
@@ -583,13 +585,14 @@ void mats_register(Kit* kit, Engine* engine, Scene* scene) {
         TextureDesc albedo_desc = texture_desc(true);
         if (s->cutout > 0.0f)
             mats_cutout(m, s->cutout, &albedo_desc);
-        // The pool caches by path, so a set two materials share loads once.
+        // A set two materials share decodes once: the loader joins a second request to the first,
+        // and the pool answers one for a file already in.
         if (s->set) {
             if (!s->surface_only)
-                material_set_albedo_tex(m, load(scene->tex_pool, s->set, "albedo", albedo_desc));
-            material_set_normal_tex(m, load(scene->tex_pool, s->set, "normal", normal_desc));
-            material_set_roughness_tex(m,
-                                       load(scene->tex_pool, s->set, "rough", texture_desc(false)));
+                load(engine, scene, m, material_set_albedo_tex, s->set, "albedo", albedo_desc);
+            load(engine, scene, m, material_set_normal_tex, s->set, "normal", normal_desc);
+            load(engine, scene, m, material_set_roughness_tex, s->set, "rough",
+                 texture_desc(false));
         }
         if (s->glass.transmission > 0.0f) {
             m->transmission = s->glass.transmission;
@@ -602,15 +605,13 @@ void mats_register(Kit* kit, Engine* engine, Scene* scene) {
             glm_vec3_copy((float*)s->glow.colour, m->emissive);
             m->emissive_strength = s->glow.nits;
             m->emissive_light = 1; // decoration: never a derived panel
-            if (s->glow.own_picture)
-                material_set_emissive_tex(m, m->albedo_tex);
         }
         if (s->rain.wet) {
             m->porosity = s->rain.porosity;
             m->rain_beads = s->rain.beads;
             if (s->rain.relief)
-                material_set_height_tex(m,
-                                        load(scene->tex_pool, s->set, "disp", texture_desc(false)));
+                load(engine, scene, m, material_set_height_tex, s->set, "disp",
+                     texture_desc(false));
         }
         if (s->scatter.strength > 0.0f && engine->postfx) {
             m->subsurface = s->scatter.strength;
@@ -619,10 +620,13 @@ void mats_register(Kit* kit, Engine* engine, Scene* scene) {
                 postfx_add_sss_profile(engine->postfx, s->scatter.colour, s->scatter.radius);
         }
         kit_material(kit, m, s->repeat_m, s->grime);
-        // Each material's textures load here, a second of them in all: the loading screen moves
-        // between them.
-        engine_draw_loading_screen(engine);
     }
+    // Every map in before this returns (spec 13.39): the kit frees a material it did not use when
+    // it finishes, which a load still on its way would then write into.
+    engine_finish_texture_loads(engine, scene->tex_pool);
+    for (int i = 0; i < MAT_COUNT; i++)
+        if (SPECS[i].glow.nits > 0.0f && SPECS[i].glow.own_picture)
+            material_set_emissive_tex(kit->materials[i], kit->materials[i]->albedo_tex);
 }
 
 void mats_daytime(Kit* kit) {

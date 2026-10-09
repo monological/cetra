@@ -38,6 +38,7 @@
 #include "texture.h"
 #include "import.h" // resolve_height_maps (POM height convention)
 #include "async_loader.h"
+#include "loading_screen.h"
 #include "text.h"
 #include "ltc.h"
 #include "render.h"
@@ -1703,6 +1704,49 @@ static void _engine_derive_camera(Engine* engine) {
 
     camera->aspect_ratio = (float)engine->fb_width / (float)engine->fb_height;
     camera_projection_matrix(camera, engine->projection_matrix);
+}
+
+/*
+ * Textures from files, decoded on the loader's threads
+ */
+typedef struct MaterialTextureLoad {
+    Material* material;
+    void (*set)(Material*, Texture*);
+} MaterialTextureLoad;
+
+static void _material_texture_loaded(Texture* texture, void* user) {
+    MaterialTextureLoad* load = user;
+    if (texture)
+        load->set(load->material, texture);
+    free(load);
+}
+
+void engine_load_material_texture(Engine* engine, TexturePool* pool, Material* material,
+                                  void (*set)(Material*, Texture*), const char* path,
+                                  TextureDesc desc) {
+    if (!engine || !engine->async_loader || !pool || !material || !set || !path) {
+        log_error("engine_load_material_texture: missing an argument");
+        return;
+    }
+    MaterialTextureLoad* load = malloc(sizeof(MaterialTextureLoad));
+    if (!load) {
+        log_error("engine_load_material_texture: out of memory for '%s'", path);
+        return;
+    }
+    *load = (MaterialTextureLoad){material, set};
+    load_texture_async(engine->async_loader, pool, path, desc, _material_texture_loaded, load);
+}
+
+void engine_finish_texture_loads(Engine* engine, TexturePool* pool) {
+    if (!engine || !engine->async_loader || !pool)
+        return;
+    // One upload at a time, so the screen can draw between them: an upload builds its mips and
+    // compresses on this thread, and a batch of them would hold the screen still.
+    while (async_loader_is_busy(engine->async_loader)) {
+        if (async_loader_process_pending(engine->async_loader, pool, 1) == 0)
+            cetra_sleep_ms(1);
+        engine_draw_loading_screen(engine);
+    }
 }
 
 /*

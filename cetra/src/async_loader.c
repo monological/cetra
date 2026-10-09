@@ -631,6 +631,21 @@ void load_texture_async(AsyncLoader* loader, TexturePool* pool, const char* file
         return;
     }
 
+    // A file already in the pool is answered here. The pool holds a file under its RESOLVED path,
+    // which the request need not name, so submit_load's check of the request alone never finds
+    // one and every repeat request decoded the image again.
+    char* resolved = convert_and_normalize_path(filepath);
+    Texture* cached = NULL;
+    if (resolved && find_existing_subpath(pool->directory, &resolved))
+        cached = get_texture_from_pool_threadsafe(pool, resolved);
+    free(resolved);
+    if (cached) {
+        if (callback) {
+            callback(cached, user_data);
+        }
+        return;
+    }
+
     submit_load(loader, pool, filepath, NULL, 0, desc, callback, user_data);
 }
 

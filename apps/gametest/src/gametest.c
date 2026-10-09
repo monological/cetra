@@ -2489,15 +2489,14 @@ static SceneNode* attach_rig(Scene* scene, Entity* entity, SceneNode* rig, float
 // Let every texture already in flight LAND, before the scene holding the materials
 // they will be set on is freed, or before a second scene claims the loader.
 //
-// Two things need this and neither has an API. The async callback holds a raw
-// Material* and there is no way to cancel one, so freeing underneath it writes into
-// released memory -- a byte-write fault far away in whatever now owns that address,
-// with a stack naming the texture and not the free. And a loader has one texture
-// pool (async_loader.h), while embedded texture keys are "*0", "*1", ... per FILE --
-// so two imported scenes in flight at once would answer each other's lookups.
-static void drain_async_loader(AsyncLoader* loader, Scene* scene) {
-    while (async_loader_is_busy(loader) || async_loader_pending_count(loader) > 0)
-        async_loader_process_pending(loader, scene->tex_pool, 64);
+// Two things need this. The async callback holds a raw Material* and there is no way
+// to cancel one, so freeing underneath it writes into released memory -- a
+// byte-write fault far away in whatever now owns that address, with a stack naming
+// the texture and not the free. And a loader has one texture pool (async_loader.h),
+// while embedded texture keys are "*0", "*1", ... per FILE -- so two imported scenes
+// in flight at once would answer each other's lookups.
+static void drain_async_loader(Engine* engine, Scene* scene) {
+    engine_finish_texture_loads(engine, scene->tex_pool);
 }
 
 // The imported model as a node that is NOT the scene root.
@@ -2720,7 +2719,7 @@ static void on_init(Game* game) {
             // could never reach the models that needed them most.
             if (!puppet_root || scene->skeleton_count == 0) {
                 fprintf(stderr, "gametest: '%s' has no rig; keeping the box\n", puppet_path);
-                drain_async_loader(engine->async_loader, scene);
+                drain_async_loader(engine, scene);
                 free_scene(scene);
                 scene = NULL;
                 puppet_root = NULL;
@@ -2989,7 +2988,7 @@ static void on_init(Game* game) {
             // the source bone's index, its parent's and its local rest BY VALUE, and the
             // sampler rebuilds the source hierarchy from those alone, so nothing points
             // back here afterwards.
-            drain_async_loader(engine->async_loader, scene);
+            drain_async_loader(engine, scene);
             Scene* rig = create_scene_from_model_path(SHARED_CLIP_RIG, NULL, engine->async_loader);
             Skeleton* source = (rig && rig->skeleton_count > 0) ? rig->skeletons[0] : NULL;
             if (!source)
@@ -2999,7 +2998,7 @@ static void on_init(Game* game) {
             for (size_t i = 0; i < sizeof SHARED_CLIPS / sizeof *SHARED_CLIPS; i++)
                 load_animations_from_file(scene, skeleton, SHARED_CLIPS[i], true, source);
             if (rig) {
-                drain_async_loader(engine->async_loader, rig);
+                drain_async_loader(engine, rig);
                 free_scene(rig);
             }
             idle = scene_find_animation(scene, "quiet_idle");
