@@ -28,7 +28,7 @@ uniform int sliceIndex;  // Which volume layer this draw is writing
 uniform int froxelDepth; // Slice count; mirrors POSTFX_FROXEL_Z
 uniform mat4 projection; // read by depth.glsl
 uniform mat4 invView;    // view -> world (camera pose)
-uniform float fogNear;   // Near end of the volume's exponential depth range
+uniform float fogNear;   // Near end of the volume's depth range: the VOLUME's, not the camera's
 uniform float fogFar;    // Far end of the volume's exponential depth range
 uniform float fogDepthDist; // Slice bias exponent; 1 = pure exponential
 
@@ -189,10 +189,10 @@ vec3 froxelJitter(int index) {
 // The medium at one sample of this cell, offset within it by `jitter` (0.5 = the centre): the
 // in-scattered radiance, pre-exposed, and the extinction. A sample under the water's surface is
 // the water's, with `submerged` set.
-vec4 froxelMediumAt(vec3 jitter, float nearZ, out bool submerged) {
+vec4 froxelMediumAt(vec3 jitter, out bool submerged) {
     submerged = false;
     vec2 cellUv = TexCoords + (jitter.xy - 0.5) / vec2(textureSize(historyVolume, 0).xy);
-    vec3 viewPos = froxelViewPos(cellUv, float(sliceIndex), jitter.z, nearZ, fogFar,
+    vec3 viewPos = froxelViewPos(cellUv, float(sliceIndex), jitter.z, fogNear, fogFar,
                                  float(froxelDepth), fogDepthDist);
     vec3 camPos = invView[3].xyz;
     vec3 P = (invView * vec4(viewPos, 1.0)).xyz;
@@ -210,8 +210,9 @@ vec4 froxelMediumAt(vec3 jitter, float nearZ, out bool submerged) {
     // A cell below the surface is water, not denser air, so the two media do not blend:
     // this REPLACES air's terms rather than adding to them, and everything the air path
     // computes below would be overwritten. So it returns here instead -- the whole light
-    // accumulation, its shadow taps, and the temporal reprojection are all dead work for
-    // a submerged cell, and a submerged camera puts most of the frustum down here.
+    // accumulation and its shadow taps are dead work for a submerged cell, as is the
+    // temporal reprojection, which `submerged` tells the caller to skip, and a submerged
+    // camera puts most of the frustum down here.
     //
     // Coherent by construction: the test is a world-Y half-space, so divergence is
     // confined to the slice band straddling the surface, and to the edges of the water's
@@ -429,17 +430,17 @@ vec4 froxelMediumAt(vec3 jitter, float nearZ, out bool submerged) {
 // trilinear mix of neighbours and the accumulation never settles -- it flickers rather than
 // converging. Reprojecting the centre makes a static camera read exactly this cell's own
 // history, which is what turns the blend into a running average of the jittered samples.
-bool froxelHistoryAt(float nearZ, out vec3 prevUvw) {
+bool froxelHistoryAt(out vec3 prevUvw) {
     prevUvw = vec3(0.0);
-    vec3 centreView = froxelViewPos(TexCoords, float(sliceIndex), 0.5, nearZ, fogFar,
+    vec3 centreView = froxelViewPos(TexCoords, float(sliceIndex), 0.5, fogNear, fogFar,
                                     float(froxelDepth), fogDepthDist);
     vec3 centreP = (invView * vec4(centreView, 1.0)).xyz;
     vec4 prevViewPos = prevView * vec4(centreP, 1.0);
     float prevZ = -prevViewPos.z;
-    if (prevZ <= nearZ)
+    if (prevZ <= fogNear)
         return false;
     vec2 prevUv = uvFromViewXY(prevViewPos.xy, prevZ, prevProjection);
-    float prevSlice = froxelViewZToSlice(prevZ, nearZ, fogFar, float(froxelDepth), fogDepthDist);
+    float prevSlice = froxelViewZToSlice(prevZ, fogNear, fogFar, float(froxelDepth), fogDepthDist);
     // Scatter cells sit at their slice centre (slice s spans continuous s..s+1), so continuous
     // coordinate c reads texel c-0.5, i.e. the normalized coordinate is just c/depth.
     prevUvw = vec3(prevUv, prevSlice / float(froxelDepth));
@@ -447,11 +448,10 @@ bool froxelHistoryAt(float nearZ, out vec3 prevUvw) {
     return all(greaterThanEqual(prevUvw, vec3(0.0))) && all(lessThanEqual(prevUvw, vec3(1.0)));
 }
 
-#ifndef FROXEL_HISTORY_MISS
+// Compiled a second time under FROXEL_MISS_COUNT (spec 13.45), as a count of the cells that took
+// several samples: every other way out discards, and that branch writes and returns, so the count
+// is the branch itself rather than a second statement of when it is taken.
 void main() {
-    // The VOLUME's near, not the camera's: see fogNear's owner in postfx.c.
-    float nearZ = fogNear;
-
     // Sub-cell sample offset. The offset is the SAME for every cell -- a
     // low-discrepancy shift of the whole grid -- so averaging successive frames
     // supersamples the volume rather than adding per-cell noise. It has to move
@@ -465,15 +465,21 @@ void main() {
     if (temporal == 1)
         jitter = froxelJitter(frameIndex + 1);
     bool submerged;
-    vec4 result = froxelMediumAt(jitter, nearZ, submerged);
+    vec4 result = froxelMediumAt(jitter, submerged);
     if (submerged) {
+#ifdef FROXEL_MISS_COUNT
+        discard;
+#endif
         FragColor = result;
         return;
     }
 
     if (temporal == 1) {
         vec3 prevUvw;
-        if (froxelHistoryAt(nearZ, prevUvw)) {
+        if (froxelHistoryAt(prevUvw)) {
+#ifdef FROXEL_MISS_COUNT
+            discard;
+#endif
             // The history was stored at its own frame's pre-exposure; brought to this
             // frame's, a change of exposure lands whole rather than at the blend's pace.
             // Only the in-scatter: extinction knows nothing of the exposure. Under the
@@ -482,6 +488,10 @@ void main() {
             history.rgb = min(history.rgb * historyScale, vec3(WS_MEDIA_MAX));
             result = mix(result, history, temporalBlend);
         } else if (missSamples > 1) {
+#ifdef FROXEL_MISS_COUNT
+            FragColor = vec4(0.0);
+            return;
+#endif
             // A cell with no history (spec 13.45) -- one entering the volume as the camera
             // turns or moves -- would show its one jittered sample beside neighbours averaged
             // over many frames, and a turning camera drew the difference as a hard-edged band
@@ -491,28 +501,17 @@ void main() {
                 int index = frameIndex + 1 - k;
                 if (index < 1)
                     index += missSamples;
+                // A later sample under the water's surface, in a cell straddling it, is
+                // averaged in as it is: a cell is the water's alone only when its first is.
                 bool under;
-                result += froxelMediumAt(froxelJitter(index), nearZ, under);
+                result += froxelMediumAt(froxelJitter(index), under);
             }
             result /= float(missSamples);
         }
     }
 
+#ifdef FROXEL_MISS_COUNT
+    discard;
+#endif
     FragColor = result;
 }
-#else
-/*
- * The miss probe's count (spec 13.45), drawn with colour writes off under an occlusion query, on
- * a frame whose cells may take several samples: what passes is every cell the main above gave
- * them, found by the same two tests in the same order.
- */
-void main() {
-    float nearZ = fogNear;
-    bool submerged;
-    froxelMediumAt(froxelJitter(frameIndex + 1), nearZ, submerged);
-    vec3 prevUvw;
-    if (submerged || froxelHistoryAt(nearZ, prevUvw))
-        discard;
-    FragColor = vec4(0.0);
-}
-#endif

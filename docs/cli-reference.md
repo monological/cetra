@@ -42,9 +42,9 @@ out of sight; this is what finds it. A whole-frame readback, so not for timing),
 takes, 1..8, default 4. Such a cell is one entering the view as the camera turns or moves, and with
 one sample it showed one jitter position beside neighbours averaged over many: a hard-edged band at
 the leading edge of a turn. 1 gives that back, for the A/B),
-`--fog-miss-probe` (spec 13.45 — diagnostic: every fog frame, a `fog-miss-probe frame= ran=
-cells=` row: whether the miss pass ran and how many cells it drew, from an occlusion query read at
-once, so not for timing),
+`--fog-miss-probe` (spec 13.45 — diagnostic: every fog frame, a `fog-miss-probe frame= armed=
+cells=` row: whether any cell could take several samples, history existing and more than one
+asked for, and how many did, from an occlusion query read at once, so not for timing),
 `--shadows-off-at <frame>` (spec 11.56 — diagnostic: clear `shadow_system->enabled` mid-run, which
 is the ONE state `--no-shadows` cannot produce. That flag clears the switch before frame 0, so no
 punctual layer is ever assigned and every index the depth pass maintains is still at its initial

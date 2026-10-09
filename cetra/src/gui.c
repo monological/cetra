@@ -1015,7 +1015,6 @@ static void _engine_gui_panel(Engine* engine) {
                       ImGuiSliderFlags_Logarithmic);
         igSliderFloat("Depth Distribution", &fx->fog_depth_dist, 0.25f, 4.0f, "%.2f", 0);
         igSliderFloat("Temporal Blend", &fx->fog_temporal_blend, 0.0f, 0.98f, "%.2f", 0);
-        // What a cell entering the view as the camera turns takes in place of its history.
         igSliderInt("History Miss Samples", &fx->fog_history_miss_samples, 1,
                     POSTFX_FOG_MISS_SAMPLES_MAX, "%d", 0);
         // Grid XY is what resolves a beam's silhouette; a change reallocates the

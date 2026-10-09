@@ -378,10 +378,12 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --fog              Volumetric fog: god rays + height haze\n");
     fprintf(stderr, "      --fog-density <f>  Fog extinction per world unit (implies --fog)\n");
     fprintf(stderr, "      --fog-height <f>   Fog height falloff in world units (implies --fog)\n");
-    fprintf(stderr, "      --fog-history-miss-samples <n>  Samples a fog cell with no history "
-                    "takes, 1..8 (default 4; 1 = one)\n");
-    fprintf(stderr, "      --fog-miss-probe   Print how many fog cells had no history, each fog "
-                    "frame\n");
+    fprintf(stderr,
+            "      --fog-history-miss-samples <n>  Samples a fog cell with no history takes, "
+            "1..%d (1 = its one jittered sample)\n",
+            POSTFX_FOG_MISS_SAMPLES_MAX);
+    fprintf(stderr, "      --fog-miss-probe   Print how many fog cells took several samples, "
+                    "each fog frame\n");
     fprintf(stderr, "      --contact-shadows  Screen-space contact shadows: key light + "
                     "map-less local lights\n");
     fprintf(stderr, "      --cs-debug         Show the raw contact-shadow term (implies enable)\n");
@@ -1875,12 +1877,6 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 return -1;
             }
             args->fog_miss_samples = atoi(argv[i]);
-            if (args->fog_miss_samples < 1 ||
-                args->fog_miss_samples > POSTFX_FOG_MISS_SAMPLES_MAX) {
-                fprintf(stderr, "Error: %s takes 1..%d\n", argv[i - 1],
-                        POSTFX_FOG_MISS_SAMPLES_MAX);
-                return -1;
-            }
         } else if (strcmp(argv[i], "--fog-miss-probe") == 0) {
             args->fog_miss_probe = 1;
         } else if (strcmp(argv[i], "--contact-shadows") == 0) {
