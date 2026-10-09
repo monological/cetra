@@ -138,7 +138,8 @@ typedef struct GIWorld {
     // is timed to the GPU's finish, so a timed sweep runs slower than an untimed one.
     bool timing;
     // A probe leaves out what spans fewer pixels than this across a capture face (spec 13.42),
-    // unless it gives off light or is under a node set capture_always; 0 = everything.
+    // unless it gives off light at rest, holds the probe inside its bound, or is under a node set
+    // capture_always; 0 = everything.
     float cull_pixels;
 
     // ENGINE-OWNED: read, never write.

@@ -938,15 +938,10 @@ void engine_resolve_material_variants(Engine* engine, Scene* scene) {
 // both flatten for real, and the row would report half the cost.
 // How the camera picks its levels.
 static LodSelect _camera_lod(const Engine* engine) {
-    LodSelect lod;
-    lod.enabled = engine->lod_enabled;
-    lod.bias = engine->lod_bias;
-    lod.ortho_height = 0.0f;
+    LodSelect lod = {.enabled = engine->lod_enabled, .bias = engine->lod_bias};
     if (engine->camera) {
         glm_vec3_copy(engine->camera->position, lod.eye);
         lod.ortho_height = camera_ortho_height(engine->camera);
-    } else {
-        glm_vec3_zero(lod.eye);
     }
     return lod;
 }
@@ -1451,14 +1446,9 @@ static CullView _scene_pass_prepare(Engine* engine, Scene* scene, Frustum* frust
     // The camera's own pass honours a node's draw distance; a capture, which re-enters here with
     // its own camera, does not -- the distance was measured from the camera, not from it.
     cull.distance = !cull.capture;
-    // A GI probe leaves out what is too small to see from it (spec 13.42); the shaded faces and
-    // the wall test both come through here, so they leave out the same. A reflection probe is a
-    // mirror and takes everything.
-    if (engine->capturing && engine->capture_kind == SCENE_CAPTURE_IRRADIANCE && scene->gi &&
-        scene->gi->cull_pixels > 0.0f) {
-        cull.min_projected = scene->gi->cull_pixels / (float)GI_CAPTURE_FACE;
-        glm_vec3_copy(engine->camera->position, cull.eye);
-    }
+    // A GI probe leaves out what its selection marked too small to see (spec 13.42); the shaded
+    // faces and the wall test both come through here, so they leave out the same.
+    cull.size = engine->capturing && engine->capture_kind == SCENE_CAPTURE_IRRADIANCE;
 
     // Flatten once. Cube captures re-enter here once a face with their own
     // camera; the stamp makes those reuses rather than rebuilds, which is right
@@ -2302,10 +2292,16 @@ void scene_capture_faces(Engine* engine, Scene* scene, struct IBLResources* ibl,
 
     // Each item at the level its size from the capture point calls for at the face's resolution, a
     // 90-degree face being face_size / 2 pixels to a unit of tan (spec 13.42): the camera's are for
-    // the window, and would make what a probe captured depend on where the camera stood. The burst
-    // gives the camera's back as it ends.
+    // the window, and would make what a probe captured depend on where the camera stood. A GI
+    // probe also marks what spans fewer than the world's cull_pixels across a face -- a radius
+    // over distance of r / d spans r / d * face_size of them -- once for all its faces and its wall
+    // test, since the selection is kept while the eye is. A reflection probe is a mirror and takes
+    // everything. The burst gives the camera's levels back as it ends.
+    const bool gi = engine->capture_kind == SCENE_CAPTURE_IRRADIANCE && scene->gi;
     LodSelect capture_lod = {.bias = draw_lod_bias_for(engine->lod_bias, 0.5f * (float)face_size),
-                             .enabled = engine->lod_enabled};
+                             .enabled = engine->lod_enabled,
+                             .min_projected =
+                                 gi ? scene->gi->cull_pixels / (float)face_size : 0.0f};
     glm_vec3_copy((float*)position, capture_lod.eye);
     draw_list_select_lod(scene->draw_list, &capture_lod);
 

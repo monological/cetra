@@ -1687,7 +1687,9 @@ was kept:
   `draw_lod_bias_for`), not the camera, which was an input that moved with the player; the
   burst gives the camera's levels back as it ends. `GIWorld.cull_pixels` leaves out what spans
   fewer pixels than that across a face, keeping emitters and anything under a `capture_always`
-  node; 0, everything, by default.
+  node; 0, everything, by default. It is the idea Lumen applies to its scene representation, settled per probe by the walk
+  that picks the levels (`DrawItem.small`), so the shaded faces and the wall test leave out the
+  same, and whether an item emits is asked there, in the burst, with what flickers held at rest.
 - **A capture burst holds the scene at rest** (`scene_set_capture_rest`): `scene_capture_begin`
   calls the app's function with true before it settles the panels or draws its shadows,
   `scene_capture_end` with false, and the engine drives its own fires from a still flame
