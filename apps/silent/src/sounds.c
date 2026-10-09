@@ -34,6 +34,7 @@ enum {
     ROOM_BASEMENT,
     ROOM_MANSION,
     ROOM_UPSTAIRS,
+    ROOM_CABIN,
     ROOMS
 };
 
@@ -91,6 +92,13 @@ static const Room ROOM_TABLE[ROOMS] = {
                        1,
                        {{{HOUSE_OUT_X0, CEIL_Y, HOUSE_OUT_Z0},
                          {HOUSE_OUT_X1, ROOFS_Y, KITCHEN_BACK_Z}}}},
+    // The cabin by the lake (spec 13.41), its one room to the roof.
+    [ROOM_CABIN] = {"cabin",
+                    false,
+                    false,
+                    1,
+                    {{{CABIN_X0, CABIN_FLOOR_Y - 0.5f, CABIN_Z0},
+                      {CABIN_X1, CABIN_RIDGE_Y + 0.5f, CABIN_Z1}}}},
 };
 
 typedef struct RoomLink {
@@ -114,6 +122,7 @@ static const RoomLink LINKS[] = {
     {ROOM_MANSION, ROOM_WORLD, WALL_THROUGH, FRONT_DOOR_THROUGH, SOUNDS_DOOR_MANSION},
     {ROOM_UPSTAIRS, ROOM_WORLD, WALL_THROUGH},
     {ROOM_UPSTAIRS, ROOM_MANSION, STOREY_THROUGH},
+    {ROOM_CABIN, ROOM_WORLD, WALL_THROUGH, FRONT_DOOR_THROUGH, SOUNDS_DOOR_CABIN},
 };
 #define LINK_COUNT ((int)(sizeof(LINKS) / sizeof(LINKS[0])))
 

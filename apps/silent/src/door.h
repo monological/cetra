@@ -50,10 +50,12 @@ bool door_hang(Door* door, Engine* engine, Scene* scene, EntityManager* em, Phys
                const char* name, DoorLeafFn leaf, const KitFrame* hinge, KitOpening opening,
                float swing);
 
-// The two leaves, which a door that never moves builds into the kit it is given. The Gothic
-// one's straps are on its -d face; the panelled one is the same both sides.
+// The leaves, which a door that never moves builds into the kit it is given. The Gothic one's
+// straps are on its -d face, the battened one's ledges on its +d face; the panelled one is the
+// same both sides.
 void door_leaf(Kit* kit, const KitFrame* f, const KitOpening* o, float t);
 void door_leaf_panelled(Kit* kit, const KitFrame* f, const KitOpening* o, float t);
+void door_leaf_battened(Kit* kit, const KitFrame* f, const KitOpening* o, float t);
 
 // Toward open if it is shut or shutting, toward shut otherwise.
 void door_toggle(Door* door);

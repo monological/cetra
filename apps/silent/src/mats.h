@@ -111,6 +111,7 @@ typedef enum {
     MAT_TRACK,    // the gravel track down to the lake (spec 13.41)
     MAT_SHORE,    // mud at the water's edge
     MAT_REEDS,    // tools/make_reeds.py's clump, a cutout drawn from both sides
+    MAT_TIN,      // the cabin's roof: corrugated iron rusted through its paint
     MAT_COUNT
 } MatId;
 

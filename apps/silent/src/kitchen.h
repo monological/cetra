@@ -23,4 +23,9 @@ void kitchen_preserves(Kit* kit, const KitFrame* f, KitRng* rng, float a0, float
 // A ladder-back chair standing on frame `f`'s origin, its sitter facing its +d.
 void kitchen_chair(Kit* kit, const KitFrame* f);
 
+// A stack of `count` white plates, and a mug with its handle toward +a, standing at (a, d) on
+// height y in frame `f`.
+void kitchen_plates(Kit* kit, const KitFrame* f, float a, float d, float y, int count);
+void kitchen_mug(Kit* kit, const KitFrame* f, float a, float d, float y);
+
 #endif // _SILENT_KITCHEN_H_

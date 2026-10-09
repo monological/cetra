@@ -34,7 +34,7 @@
  * base, a pipe at both ends.
  */
 
-#define KIT_MAX_MATERIALS 96
+#define KIT_MAX_MATERIALS 128
 #define KIT_MAX_OPENINGS  8
 #define KIT_COLLIDER_ONLY (-1) // a material slot that draws nothing and always collides
 #define KIT_MAX_POINTS    32   // in a pipe's path or a lathe's profile

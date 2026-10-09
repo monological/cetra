@@ -47,6 +47,7 @@
 #include "backpack.h"
 #include "backpack_menu.h"
 #include "basement.h"
+#include "cabin.h"
 #include "candles.h"
 #include "cat.h"
 #include "cat_brain.h"
@@ -233,9 +234,9 @@ static CatVoice g_voice;
 enum { FAILING_DRIVE, FAILING_LIP, FAILING_LAMPS };
 static FailingLamp g_failing[FAILING_LAMPS];
 
-// The doors that open: each house's front door, and the home's bathroom door (spec 13.25),
-// basement door (spec 13.31) and bedroom door (spec 13.40).
-enum { DOOR_HOME, DOOR_BATH, DOOR_BEDROOM, DOOR_BASEMENT, DOOR_MANSION, DOORS };
+// The doors that open: each house's front door, the home's bathroom door (spec 13.25),
+// basement door (spec 13.31) and bedroom door (spec 13.40), and the cabin's (spec 13.41).
+enum { DOOR_HOME, DOOR_BATH, DOOR_BEDROOM, DOOR_BASEMENT, DOOR_MANSION, DOOR_CABIN, DOORS };
 static Door g_doors[DOORS];
 static bool g_door_hung[DOORS];
 static Hud g_hud;
@@ -411,6 +412,17 @@ static void build_home_gi(void) {
                gi->counts[0] * gi->counts[1] * gi->counts[2]);
 }
 
+// The cabin's (spec 13.41), a metre a cell over its one room and the porch, from its floor to its
+// ridge, the probes in its log walls switched off as the home's are.
+static void build_cabin_gi(void) {
+    const vec3 lo = {CABIN_X0 - 2.6f, CABIN_FLOOR_Y - 0.2f, CABIN_Z0 - 0.3f};
+    const vec3 hi = {CABIN_X1 + 0.3f, CABIN_RIDGE_Y + 0.1f, CABIN_Z1 + 0.3f};
+    GIVolume* gi = create_gi_volume_spaced(lo, hi, HOME_GI_CELL);
+    if (gi && scene_add_gi_volume(g_scene, gi))
+        printf("silent: cabin GI %d probes, classified\n",
+               gi->counts[0] * gi->counts[1] * gi->counts[2]);
+}
+
 // The mansion's grid, its plan standing at `origin`.
 static void build_gi(const vec3 origin) {
     const vec3 lo = {-7.45f + origin[0], origin[1], 7.58f + origin[2]};
@@ -444,10 +456,11 @@ static void build_gi(const vec3 origin) {
 
 /*
  * Reflection probes in the home's kitchen, hall, living room, bathroom and bedroom
- * (spec 13.40), its stairwell down and its basement (spec 13.31), and in the
- * mansion's dining room, hall, great hall, study and the study's tower bay (spec
- * 13.25), twelve in the world: the engine keeps the nearest sixteen resident
- * and captures the mansion's as the drive brings them near. Without them every
+ * (spec 13.40), its stairwell down and its basement (spec 13.31), in the mansion's
+ * dining room, hall, great hall, study and the study's tower bay (spec 13.25), and
+ * in the cabin's one room by the lake (spec 13.41), thirteen in the world: the
+ * engine keeps the nearest sixteen resident and captures the mansion's as the drive
+ * brings them near, and the cabin's as the track does. Without them every
  * metal and every wet surface indoors reflects the only environment there is,
  * the night sky, and the hood, the sink and the floor go black. The great hall's
  * box goes up to the ridge, since the hall is open to its roof: a roof outside
@@ -477,7 +490,7 @@ typedef struct ProbeRoom {
     vec3 pos, lo, hi;
 } ProbeRoom;
 
-#define PROBE_ROOM_COUNT 12
+#define PROBE_ROOM_COUNT 13
 
 static void build_probes(void) {
     if (!g_scene->ibl || !g_scene->ibl->precomputed)
@@ -540,6 +553,14 @@ static void build_probes(void) {
          {TOWER_X - TOWER_APOTHEM + KIT_PANE_HALF, FLOOR2_Y,
           TOWER_Z - TOWER_APOTHEM + KIT_PANE_HALF},
          {TOWER_X + TOWER_APOTHEM, TOWER_CEIL_Y, TOWER_Z + TOWER_APOTHEM}},
+        // The cabin by the lake (spec 13.41): its one room out to the planes its door and its
+        // panes hang in, which are its walls' middles, and up to its eaves. A box to the ridge
+        // took in the tin's own top over the room, which then reflected the room rather than the
+        // sky, rust-dark beside the overhangs.
+        {false,
+         {0.5f * (CABIN_X0 + CABIN_X1), CABIN_FLOOR_Y + 1.5f, 0.5f * (CABIN_Z0 + CABIN_Z1) + 0.8f},
+         {CABIN_X0, CABIN_FLOOR_Y, CABIN_Z0},
+         {CABIN_X1, CABIN_EAVE_Y, CABIN_Z1}},
     };
     ReflectionProbeSet* set = create_reflection_probe_set();
     if (!set)
@@ -766,7 +787,11 @@ static void on_init(Game* game) {
     kit_init_beside(&lake, &kit, GLM_VEC3_ZERO);
     lake_build(&lake, g_scene, &trees, (unsigned int)g_args.seed, g_args.no_fog);
     trees_release(&trees);
-    load_seam(engine, "lake");
+    // The cabin on its bank, in a kit of its own too.
+    Kit cabin;
+    kit_init_beside(&cabin, &kit, GLM_VEC3_ZERO);
+    cabin_build(&cabin, (unsigned int)g_args.seed);
+    load_seam(engine, "lake-cabin");
     grounds_build(&kit, g_scene, (unsigned int)g_args.seed, !g_args.day, &g_failing[FAILING_DRIVE]);
     load_seam(engine, "grounds");
 
@@ -783,11 +808,12 @@ static void on_init(Game* game) {
     mansion_front_build(&mansion);
     load_seam(engine, "hearth-study-front");
 
-    Kit* const kits[] = {&kit, &mansion, &ground, &lake};
-    const char* const kit_names[] = {"world", "mansion", "ground", "lake"};
+    Kit* const kits[] = {&kit, &mansion, &ground, &lake, &cabin};
+    const char* const kit_names[] = {"world", "mansion", "ground", "lake", "cabin"};
     for (int i = 0; i < KIT_COUNT(kits); i++) {
         SceneNode* node = kit_finish(kits[i], kit_names[i]);
-        if (node && kits[i] == &lake && trees.reach > 0.0f)
+        // The lake's and the cabin's things are drawn only from within the fog's reach of them.
+        if (node && (kits[i] == &lake || kits[i] == &cabin) && trees.reach > 0.0f)
             node->draw_distance = trees.reach + 15.0f;
         load_seam(engine, kit_names[i]);
     }
@@ -804,11 +830,14 @@ static void on_init(Game* game) {
         for (int d = 0; d < kits[i]->drip_count && drip_count < RAIN_DRIP_MAX; d++)
             drips[drip_count++] = kits[i]->drips[d];
     printf("silent: %d of %d drip lines\n", drip_count, RAIN_DRIP_MAX);
+    g_scene->fire = create_fire_system();
     if (!g_args.no_candles) {
-        g_scene->fire = create_fire_system();
         candles_light(g_scene->fire, g_scene, &kit, !g_args.no_candle_shadows);
         candles_light(g_scene->fire, g_scene, &mansion, !g_args.no_candle_shadows);
+        candles_light(g_scene->fire, g_scene, &cabin, !g_args.no_candle_shadows);
     }
+    // The cabin's hearth, which is no candle and burns however they stand (spec 13.41).
+    cabin_light(g_scene->fire, g_scene, !g_args.no_candle_shadows);
     load_seam(engine, "candles");
     g_door_hung[DOOR_HOME] = home_front_door(&g_doors[DOOR_HOME], engine, g_scene, em, physics);
     g_door_hung[DOOR_BATH] = home_bath_door(&g_doors[DOOR_BATH], engine, g_scene, em, physics);
@@ -818,6 +847,10 @@ static void on_init(Game* game) {
         home_basement_door(&g_doors[DOOR_BASEMENT], engine, g_scene, em, physics);
     g_door_hung[DOOR_MANSION] =
         house_front_door(&g_doors[DOOR_MANSION], engine, g_scene, em, physics, mansion_origin);
+    g_door_hung[DOOR_CABIN] = cabin_door(&g_doors[DOOR_CABIN], engine, g_scene, em, physics);
+    // Left standing open by whoever went out, the fire showing through it down to the dock.
+    if (g_door_hung[DOOR_CABIN])
+        door_toggle(&g_doors[DOOR_CABIN]);
     load_seam(engine, "doors");
     // The backpack on the bedroom's bed (spec 13.40), unless the run starts with it.
     backpack_build(&g_backpack, engine, g_scene, g_args.backpack);
@@ -860,7 +893,8 @@ static void on_init(Game* game) {
     }
     const Door* swung[SOUNDS_DOORS] = {[SOUNDS_DOOR_HOME] = hung_door(DOOR_HOME),
                                        [SOUNDS_DOOR_MANSION] = hung_door(DOOR_MANSION),
-                                       [SOUNDS_DOOR_BASEMENT] = hung_door(DOOR_BASEMENT)};
+                                       [SOUNDS_DOOR_BASEMENT] = hung_door(DOOR_BASEMENT),
+                                       [SOUNDS_DOOR_CABIN] = hung_door(DOOR_CABIN)};
     load_seam(engine, "audio-device");
     sounds_start(&g_sounds, audio, swung);
     load_seam(engine, "audio-sounds");
@@ -1153,6 +1187,7 @@ static void on_pre_render(Game* game, double alpha) {
     if (engine->total_frames == 2 && !g_scene->gi && !g_args.no_gi) {
         build_home_gi();
         build_gi((vec3){MANSION_X, MANSION_Y, MANSION_Z});
+        build_cabin_gi();
         build_probes();
     }
     AABB at;

@@ -153,9 +153,10 @@ void street_car(Kit* kit, float x, float z, bool police) {
 }
 
 /*
- * The fog as boxes that together fill the world but stop at the two houses (spec 13.25): the
- * world's rectangle, cut into columns at each house's sides, a column holding a house split
- * round it. Two houses side by side along X make seven boxes, under the scene's eight.
+ * The fog as boxes that together fill the world but stop at the houses (spec 13.25) and the
+ * cabin by the lake (spec 13.41): the world's rectangle, cut into columns at each one's sides, a
+ * column holding a house split round it. Three side by side along X make ten boxes, under the
+ * scene's sixteen.
  *
  * Each box's density ramps in over the feather from every face, so where two meet they overlap
  * by exactly one feather: one ramps down as the other ramps up and the sum stays level, where
@@ -192,6 +193,11 @@ static FogHole home_hole(void) {
     return (FogHole){HOUSE_X0 - 0.7f, HOUSE_X1 + 0.7f, HOUSE_FRONT_Z - 0.4f, HOUSE_BACK_Z + 0.7f};
 }
 
+// The cabin's: its logs with a margin, its porch left in the fog as the home's is.
+static FogHole cabin_hole(void) {
+    return (FogHole){CABIN_X0 - 0.7f, CABIN_X1 + 0.7f, CABIN_Z0 - 0.7f, CABIN_Z1 + 0.7f};
+}
+
 static void fog(Scene* scene, bool night) {
     const float density = night ? FOG_NIGHT : FOG_DAY;
     const float F = 0.5f * FOG_FEATHER;
@@ -200,13 +206,14 @@ static void fog(Scene* scene, bool night) {
     const float wx0 = VALLEY_X0 - 30.0f, wx1 = WORLD_X1 + 20.0f, wz0 = WORLD_Z0 - 20.0f,
                 wz1 = VALLEY_Z1 + 20.0f;
     // West to east, which is the order the columns are cut in.
-    const FogHole holes[2] = {home_hole(), mansion_hole()};
+    enum { HOLES = 3 };
+    const FogHole holes[HOLES] = {cabin_hole(), home_hole(), mansion_hole()};
     float x = wx0;
-    for (int h = 0; h <= 2; h++) {
-        const float next = h < 2 ? holes[h].x0 : wx1;
+    for (int h = 0; h <= HOLES; h++) {
+        const float next = h < HOLES ? holes[h].x0 : wx1;
         // The open column up to the next house, and then the house's own, split round it.
-        fog_box(scene, density, x - (h > 0 ? F : 0.0f), next + (h < 2 ? F : 0.0f), wz0, wz1);
-        if (h == 2)
+        fog_box(scene, density, x - (h > 0 ? F : 0.0f), next + (h < HOLES ? F : 0.0f), wz0, wz1);
+        if (h == HOLES)
             break;
         const FogHole* o = &holes[h];
         fog_box(scene, density, o->x0 - F, o->x1 + F, wz0, o->z0);

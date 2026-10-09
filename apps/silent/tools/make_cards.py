@@ -523,6 +523,81 @@ def barricade_stripes(rng):
     return weather(a, rng, rust=0.1), 0.55
 
 
+# The lake's map (spec 13.41), fine enough to read from a step off, and what the atlas had room
+# left for.
+MAP_PX_PER_M = 520
+# The lake's shore as silent's ground is carved, in metres from its centre (lake.c): an ellipse
+# wobbled everywhere but due east, x east and z south.
+LAKE_RX, LAKE_RZ = 23.0, 17.0
+# The cabin's middle and the track's last points from the lake's centre, and the dock's end.
+MAP_CABIN = (31.5, -2.0)
+MAP_TRACK = [(46.0, -60.0), (42.0, -48.0), (33.0, -40.0), (23.0, -32.0), (19.0, -22.0),
+             (25.0, -14.0), (31.0, -7.0)]
+MAP_DOCK = ((24.0, -2.0), (11.0, -2.0))
+
+
+def lake_shore(t, inset=0.0):
+    e = LAKE_RX * LAKE_RZ / math.hypot(LAKE_RZ * math.cos(t), LAKE_RX * math.sin(t))
+    r = e * (1.0 + 0.07 * math.sin(2.0 * t) + 0.05 * math.sin(3.0 * t)) - inset
+    return r * math.cos(t), r * math.sin(t)
+
+
+def lake_map(rng):
+    """A survey map of the lake pinned up in the cabin (spec 13.41): its shore in ink, the depths
+    in pencil inside it, the track down to it dotted and the cabin a square on the east bank with
+    its dock -- and out in the deep water a spot circled hard in red, more than once."""
+    w, h = int(0.42 * MAP_PX_PER_M), int(0.3 * MAP_PX_PER_M)
+    img = Image.new("RGB", (w, h), tuple(int(c * 255) for c in PAPER))
+    draw = ImageDraw.Draw(img)
+    # The lake and the cabin's bank fill the sheet, the track running off its top edge.
+    scale = (w * 0.86) / (LAKE_RX + MAP_CABIN[0] + 10.0)
+    ox, oy = w * 0.07 + LAKE_RX * scale, h * 0.6
+
+    def px(p):
+        return (ox + p[0] * scale, oy + p[1] * scale)
+
+    # A faint survey grid.
+    step = max(int(w / 9), 8)
+    for gx in range(0, w, step):
+        draw.line([(gx, 0), (gx, h)], fill=(198, 196, 180), width=1)
+    for gy in range(0, h, step):
+        draw.line([(0, gy), (w, gy)], fill=(198, 196, 180), width=1)
+    # The depths in pencil, where the bed falls away, and the shore in ink.
+    pencil = (120, 118, 110)
+    for inset in (5.0, 10.0):
+        pts = [px(lake_shore(2.0 * math.pi * k / 120.0, inset)) for k in range(121)]
+        draw.line(pts, fill=pencil, width=1)
+    shore = [px(lake_shore(2.0 * math.pi * k / 180.0)) for k in range(181)]
+    draw.line(shore, fill=INK, width=2)
+    # The track, dashed, the cabin and its dock.
+    track = [px(p) for p in MAP_TRACK]
+    dash = max(w / 60.0, 2.0)
+    for a, b in zip(track, track[1:]):
+        n = max(int(math.hypot(b[0] - a[0], b[1] - a[1]) / dash), 1)
+        for i in range(0, n, 2):
+            t0, t1 = i / n, (i + 1) / n
+            draw.line([(a[0] + (b[0] - a[0]) * t0, a[1] + (b[1] - a[1]) * t0),
+                       (a[0] + (b[0] - a[0]) * t1, a[1] + (b[1] - a[1]) * t1)], fill=INK, width=1)
+    cx, cy = px(MAP_CABIN)
+    s = 2.5 * scale
+    draw.rectangle([cx - s, cy - 1.2 * s, cx + s, cy + 1.2 * s], outline=INK, width=1)
+    draw.line([px(MAP_DOCK[0]), px(MAP_DOCK[1])], fill=INK, width=2)
+    hand = ImageFont.truetype(io.BytesIO(fetch(HAND_FONT)), max(int(w * 0.085), 10))
+    draw.text((cx - 2.2 * s, cy + 1.6 * s), "cabin", fill=INK, font=hand)
+    deep = px(lake_shore(3.4, 12.0))
+    draw.text((deep[0] - 4, deep[1] - 8), "16", fill=pencil, font=hand)
+    # The spot out in the deep water, circled in red, over and over.
+    red = (150, 28, 24)
+    sx, sy = px((-6.0, 2.0))
+    for k in range(4):
+        r = (4.0 + 0.6 * k) * scale + rng.uniform(-1.0, 1.0)
+        jx, jy = rng.uniform(-1.5, 1.5), rng.uniform(-1.5, 1.5)
+        draw.ellipse([sx + jx - r * 1.25, sy + jy - r, sx + jx + r * 1.25, sy + jy + r],
+                     outline=red, width=1)
+    draw.text((sx + 5.5 * scale, sy - 2.5 * scale), "here?", fill=red, font=hand)
+    return age_paper(to_array(img), rng, edge=0.25), ROUGH_PAPER
+
+
 def pack(sizes, atlas=(ATLAS_W, ATLAS_H)):
     """Skyline packing: each card at the lowest place it fits, leftmost first."""
     atlas_w, atlas_h = atlas
@@ -641,6 +716,11 @@ def main():
         h, w = pixels.shape[:2]
         cards.append({"name": name, "pixels": pixels, "rough": rough,
                       "m": (w / SIGN_PX_PER_M, h / SIGN_PX_PER_M)})
+    # The lake's map in the cabin (spec 13.41), after the rest for the same reason.
+    pixels, rough = lake_map(rng)
+    h, w = pixels.shape[:2]
+    cards.append({"name": "lake_map", "pixels": pixels, "rough": rough,
+                  "m": (w / MAP_PX_PER_M, h / MAP_PX_PER_M)})
 
     spots = place(cards)
     albedo = np.ones((ATLAS_H, ATLAS_W, 3), dtype=np.float32) * PAPER * 0.8

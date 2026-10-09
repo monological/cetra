@@ -102,7 +102,7 @@ static const vec2 PLATE[] = {
     {0.118f, 0.014f}, {0.12f, 0.016f},  {0.117f, 0.017f}, {0.08f, 0.009f}, {0.0f, 0.008f},
 };
 
-static void plates(Kit* kit, const KitFrame* f, float a, float d, float y, int count) {
+void kitchen_plates(Kit* kit, const KitFrame* f, float a, float d, float y, int count) {
     for (int i = 0; i < count; i++)
         kit_frame_lathe(kit, f, MAT_CERAMIC, a, d, y + 0.012f * (float)i, PLATE, COUNT(PLATE), 32);
 }
@@ -114,7 +114,7 @@ static const vec2 MUG[] = {
     {0.0405f, 0.1f}, {0.037f, 0.1f}, {0.037f, 0.012f}, {0.0f, 0.012f},
 };
 
-static void mug(Kit* kit, const KitFrame* f, float a, float d, float y) {
+void kitchen_mug(Kit* kit, const KitFrame* f, float a, float d, float y) {
     kit_frame_lathe(kit, f, MAT_CERAMIC, a, d, y, MUG, COUNT(MUG), 24);
     enum { LOOP = 9 };
     vec3 handle[LOOP];
@@ -333,10 +333,10 @@ static void clutter(Kit* kit, const KitFrame* f, KitRng* rng, float a0, float a1
         const float d = kit_rrange(rng, 0.15f, 0.42f);
         switch ((int)(kit_rnd(rng) * 6.0f)) {
             case 0:
-                plates(kit, f, a, d, y, 2 + (int)(kit_rnd(rng) * 4.0f));
+                kitchen_plates(kit, f, a, d, y, 2 + (int)(kit_rnd(rng) * 4.0f));
                 break;
             case 1:
-                mug(kit, f, a, d, y);
+                kitchen_mug(kit, f, a, d, y);
                 break;
             case 2:
                 bottle(kit, f, rng, a, d, y, kit_rrange(rng, 0.16f, 0.24f));
@@ -436,8 +436,8 @@ static void window_wall(Kit* kit, KitRng* rng) {
     bowls(kit, &f, 1.55f, 0.32f, y, 3);
     towel_over(kit, &f, 1.78f, 2.02f, COUNTER_D, y);
     soap(kit, &f, SINK_A1 + 0.1f, 0.1f, y);
-    plates(kit, &f, SINK_A1 + 0.5f, 0.32f, y, 4);
-    mug(kit, &f, 3.95f, 0.18f, y);
+    kitchen_plates(kit, &f, SINK_A1 + 0.5f, 0.32f, y, 4);
+    kitchen_mug(kit, &f, 3.95f, 0.18f, y);
     pot(kit, &f, 4.35f, 0.3f, y);
     bottle(kit, &f, rng, 4.7f, 0.12f, y, 0.22f);
 
@@ -707,8 +707,8 @@ static void table(Kit* kit) {
     }
     kit_frame_box(kit, &f, KIT_COLLIDER_ONLY, -ha, ha, 0.0f, 0.78f, -hd, hd, true);
 
-    plates(kit, &f, -0.2f, -0.1f, 0.78f, 1);
-    mug(kit, &f, 0.25f, 0.15f, 0.78f);
+    kitchen_plates(kit, &f, -0.2f, -0.1f, 0.78f, 1);
+    kitchen_mug(kit, &f, 0.25f, 0.15f, 0.78f);
     // The letter, read and left on a blank sheet it came with, and a snapshot
     // taken down off the fridge.
     const KitFrame sheet = {{3.46f, FLOOR_Y, 12.9f}, -0.2f};
