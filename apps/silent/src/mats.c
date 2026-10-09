@@ -527,13 +527,15 @@ static const MatSpec SPECS[MAT_COUNT] = {
     /*
      * The bedroom (spec 13.40). The cotton scan is a pinkish beige, about (0.55, 0.43, 0.37)
      * linear, taken to an old sheet's cream; the bedspread is a burgundy jacquard, faded on the
-     * way in. The backpack is olive canvas, and the flashlight black anodised aluminium: the smear
-     * scan's relief under a dark metal, satin rather than polished.
+     * way in. The backpack is olive canvas: its scan is shot dark, (0.059, 0.051, 0.008) linear,
+     * and comes up to a worn olive's 0.13, or the bag is a hole in the quilt by lamplight. The
+     * flashlight is black anodised aluminium: the smear scan's relief under a dark metal, satin
+     * rather than polished.
      */
     [MAT_BEDDING] =
         {"bedding", "cotton_jersey", {1.15f, 1.35f, 1.5f}, 1.0f, 0.0f, 0.26f, .grime = 0.3f},
     [MAT_QUILT] = {"quilt", "quatrefoil_jacquard_fabric", {1, 1, 1}, 1.0f, 0.0f, 0.28f},
-    [MAT_CANVAS] = {"canvas", "book_pattern", {1, 1, 1}, 1.0f, 0.0f, 0.3f, .grime = 0.5f},
+    [MAT_CANVAS] = {"canvas", "book_pattern", {2.4f, 2.4f, 3.5f}, 1.0f, 0.0f, 0.3f, .grime = 0.5f},
     [MAT_ANODISED] =
         {"anodised", "Smear008", {0.09f, 0.09f, 0.1f}, 0.8f, 1.0f, 0.3f, true, .grime = 0.3f},
 };

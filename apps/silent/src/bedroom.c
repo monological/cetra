@@ -43,8 +43,10 @@
 
 static const KitFrame BED = {{BEDROOM_IN_X1 - OFF_WALL, FLOOR_Y, BED_Z}, -0.5f * GLM_PIf};
 
+// On the lamp's side of the quilt, a third of the way down from the turned-back roll, where the
+// lamp still reaches it.
 void bedroom_bed_top(vec3 out) {
-    kit_frame_point(&BED, 0.0f, MATTRESS_Y + MATTRESS_T + QUILT_T, 1.45f, out);
+    kit_frame_point(&BED, -0.28f, MATTRESS_Y + MATTRESS_T + QUILT_T, 1.0f, out);
 }
 
 // A brass knob turned out of a face along +d.
@@ -96,12 +98,12 @@ static void bed(Kit* kit) {
                        0.008f);
     for (int s = -1; s <= 1; s += 2) {
         const float a = (float)s * 0.33f;
-        kit_frame_soft_box(kit, f, MAT_BEDDING, a - 0.31f, a + 0.31f, top - 0.02f, top + 0.13f,
-                           0.09f, 0.5f, 0.06f, 0.03f);
+        kit_frame_soft_box(kit, f, MAT_BEDDING, a - 0.31f, a + 0.31f, top - 0.02f, top + 0.11f,
+                           0.09f, 0.5f, 0.065f, 0.04f);
     }
-    // The quilt from below the pillows to the foot, hanging over the sides, turned back at its
-    // head in a roll that shows its lining.
-    const float q0 = 0.62f, q1 = BED_LONG - 0.07f, over = in + 0.04f;
+    // The quilt from below the pillows to the foot, hanging over the sides and down inside the
+    // footboard, turned back at its head in a roll that shows its lining.
+    const float q0 = 0.62f, q1 = BED_LONG - 0.05f, over = in + 0.04f;
     kit_frame_soft_box(kit, f, MAT_QUILT, -over, over, top - 0.01f, top + QUILT_T, q0, q1, 0.03f,
                        0.012f);
     for (int s = -1; s <= 1; s += 2) {
@@ -109,6 +111,8 @@ static void bed(Kit* kit) {
         kit_frame_soft_box(kit, f, MAT_QUILT, a0, a1, 0.22f, top + QUILT_T - 0.02f, q0, q1, 0.015f,
                            0.0f);
     }
+    kit_frame_soft_box(kit, f, MAT_QUILT, -over, over, FOOT_TOP - 0.1f, top + QUILT_T - 0.02f,
+                       q1 - 0.03f, q1, 0.015f, 0.0f);
     kit_frame_soft_box(kit, f, MAT_QUILT, -over + 0.02f, over - 0.02f, top + 0.02f,
                        top + QUILT_T + 0.06f, q0 - 0.08f, q0 + 0.1f, 0.05f, 0.01f);
     kit_frame_box(kit, f, KIT_COLLIDER_ONLY, -BED_HALF, BED_HALF, 0.0f, top + QUILT_T, 0.0f,
