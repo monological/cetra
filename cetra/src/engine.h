@@ -768,9 +768,9 @@ void engine_set_camera(Engine* engine, Camera* camera);
 void engine_load_material_texture(Engine* engine, TexturePool* pool, Material* material,
                                   void (*set)(Material*, Texture*), const char* path,
                                   TextureDesc desc);
-// Every texture the loader is decoding, uploaded into `pool` now, the loading screen drawn between
-// them: for an app's init, so what it asked for is set before anything draws.
-void engine_finish_texture_loads(Engine* engine, TexturePool* pool);
+// Every texture the loader is decoding, uploaded now into the pool each was asked for, the loading
+// screen drawn between them: for an app's init, so what it asked for is set before anything draws.
+void engine_finish_texture_loads(Engine* engine);
 
 // Scene
 void engine_add_scene(Engine* engine, Scene* scene);

@@ -77,9 +77,9 @@ typedef struct Kit {
     // larger ones: a small cell of it holds a few triangles, and every shadow view pays a draw for
     // each cell in reach.
     float shadow_cell_scale;
-    // Drawn between the long pieces of kit_finish while the game loads (spec 13.39); NULL = no
-    // engine to draw with. A kit made beside another takes the other's.
-    struct Engine* loading;
+    // The engine, for the loading screen drawn between the long pieces of kit_finish (spec
+    // 13.39); NULL draws nothing. A kit made beside another takes the other's.
+    struct Engine* engine;
 
     // The edges water drips from in the rain (spec 13.12), in world space, for the rain to take.
     RainDripLine drips[RAIN_DRIP_MAX];

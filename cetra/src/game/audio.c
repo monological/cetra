@@ -36,7 +36,6 @@ struct Sound {
     ma_uint64 beep_frames;
     AudioBus bus;       // what a voice copied from it is routed through
     bool streamed;      // read from the file as it plays, so nothing decoded to copy
-    bool loading;       // decoding on the job thread; cleared once found done
     AudioSystem* audio; // borrowed; the tone stop-time and free_sound reach the engine here
 };
 
@@ -85,11 +84,10 @@ struct AudioSystem {
     AudioZone listener_zone;     // where the listener was at the last update
     float heard[AUDIO_ZONE_MAX]; // each zone's best path to the listener's, eased
     bool updated;                // an update has run, so zone gains ease rather than land
-    // Held by every file still decoding on the job thread (audio_sound_from_file_async), and the
-    // device stopped from the first such load until audio_system_wait_loaded, so it never mixes a
-    // sound partly decoded.
+    // Held by every file still decoding on the job thread: a file loaded while `loading` decodes
+    // there, and the device is stopped for the phase, so it never mixes a sound partly decoded.
     ma_fence loaded;
-    bool device_held;
+    bool loading; // between audio_system_begin_loading and audio_system_end_loading
 };
 
 // The AUDIO_SOURCE component payload: a Sound placed every frame at an offset in its entity's
@@ -380,8 +378,7 @@ Sound* audio_play_music(AudioSystem* audio, const char* path, bool loop) {
     return s;
 }
 
-// A sound decoded whole from a file, here or, `async`, on the job thread under the fence.
-static Sound* sound_from_file(AudioSystem* audio, const char* path, AudioBus bus, bool async) {
+Sound* audio_sound_from_file(AudioSystem* audio, const char* path, AudioBus bus) {
     if (!audio || !path)
         return NULL;
     Sound* s = calloc(1, sizeof(Sound));
@@ -390,22 +387,17 @@ static Sound* sound_from_file(AudioSystem* audio, const char* path, AudioBus bus
     s->audio = audio;
     s->bus = bus;
     // 2D until placed, as a tone is: spatialized from the start, it would sit at the world origin
-    // and fall off with the listener's distance from there.
+    // and fall off with the listener's distance from there. Decoded on the job thread while the
+    // system is loading, under the fence the end of the phase waits on.
     ma_uint32 flags = MA_SOUND_FLAG_DECODE | MA_SOUND_FLAG_NO_SPATIALIZATION;
-    if (async) {
+    if (audio->loading)
         flags |= MA_SOUND_FLAG_ASYNC;
-        if (!audio->no_device && !audio->device_held) {
-            ma_engine_stop(&audio->engine);
-            audio->device_held = true;
-        }
-    }
     if (ma_sound_init_from_file(&audio->engine, path, flags, group_for(audio, bus),
-                                async ? &audio->loaded : NULL, &s->sound) != MA_SUCCESS) {
+                                audio->loading ? &audio->loaded : NULL, &s->sound) != MA_SUCCESS) {
         log_error("audio: could not load %s", path);
         free(s);
         return NULL;
     }
-    s->loading = async;
     if (!track_sound(audio, s)) {
         sound_destroy(s);
         return NULL;
@@ -413,39 +405,25 @@ static Sound* sound_from_file(AudioSystem* audio, const char* path, AudioBus bus
     return s;
 }
 
-Sound* audio_sound_from_file(AudioSystem* audio, const char* path, AudioBus bus) {
-    return sound_from_file(audio, path, bus, false);
+void audio_system_begin_loading(AudioSystem* audio) {
+    if (!audio || audio->loading)
+        return;
+    audio->loading = true;
+    if (!audio->no_device)
+        ma_engine_stop(&audio->engine);
 }
 
-Sound* audio_sound_from_file_async(AudioSystem* audio, const char* path, AudioBus bus) {
-    return sound_from_file(audio, path, bus, true);
+bool audio_system_loading(const AudioSystem* audio) {
+    return audio && ma_atomic_load_32((ma_uint32*)&audio->loaded.counter) != 0;
 }
 
-bool audio_system_loading(AudioSystem* audio) {
-    if (!audio)
-        return false;
-    bool loading = false;
-    for (size_t i = 0; i < audio->sound_count; i++) {
-        Sound* s = audio->sounds[i];
-        if (!s->loading)
-            continue;
-        s->loading =
-            ma_resource_manager_data_source_result(s->sound.pResourceManagerDataSource) == MA_BUSY;
-        loading |= s->loading;
-    }
-    return loading;
-}
-
-void audio_system_wait_loaded(AudioSystem* audio) {
-    if (!audio)
+void audio_system_end_loading(AudioSystem* audio) {
+    if (!audio || !audio->loading)
         return;
     ma_fence_wait(&audio->loaded);
-    for (size_t i = 0; i < audio->sound_count; i++)
-        audio->sounds[i]->loading = false;
-    if (audio->device_held) {
+    audio->loading = false;
+    if (!audio->no_device)
         ma_engine_start(&audio->engine);
-        audio->device_held = false;
-    }
 }
 
 Sound* audio_sound_from_tone(AudioSystem* audio, float hz, AudioBus bus) {
@@ -674,6 +652,9 @@ float audio_zone_heard(const AudioSystem* audio, AudioZone z) {
 size_t audio_system_read_pcm(AudioSystem* audio, float* out, size_t frames) {
     if (!audio || !audio->no_device || !out)
         return 0;
+    // Never a partly decoded sound: the device is stopped for a loading phase, and the offline
+    // mix waits for the same fence -- at once when nothing is decoding.
+    ma_fence_wait(&audio->loaded);
     ma_uint64 read = 0;
     ma_engine_read_pcm_frames(&audio->engine, out, frames, &read);
     return (size_t)read;

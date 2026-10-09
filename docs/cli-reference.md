@@ -982,9 +982,10 @@ the first.
   lifts later in frames than it would windowed, where it runs on the wall clock.
 - **`--startup-ms`:** prints a `startup-ms` row for each loading step and held frame -- how long
   it took -- and for when the lighting is in (`lit`) and the view comes up (`up`). Each row's
-  `still=` is the longest the loading screen stood without a chance to draw in it, and the `up`
-  row's `still-worst=` and `after=` are the worst of the whole load and the row it ended (spec
-  13.39, the engine's `engine_loading_screen_longest_wait`). It is counted headless too, so
+  `still=` is the longest the loading screen stood without a chance to draw in it, and the `lit`
+  row's `worst-still=` the longest of the held frames after the first three (spec 13.39, the
+  engine's `engine_loading_screen_take_longest_wait`). `frame0` holds the sounds' last decoding,
+  which `game_run` waits for before the first frame. It is counted headless too, so
   `-x --loading-screen --capture-budget-ms 100` measures what a window would freeze for:
   `--loading-screen` keeps the screen up headless, and the budget paces the captures as a window
   does while loading.

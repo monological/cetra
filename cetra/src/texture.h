@@ -308,6 +308,10 @@ void texture_pool_probe(const TexturePool* pool, const char* label);
  */
 Texture* texture_load_file(TexturePool* pool, const char* filepath, TextureDesc desc);
 
+// The path `filepath` resolves to against the pool's directory -- what texture_load_file and the
+// async loader both key a file by -- or NULL when no such file exists. Owned by the caller.
+char* texture_pool_resolve(const TexturePool* pool, const char* filepath);
+
 /*
  * The same for a path that already names its file, relative to the working directory or
  * absolute, never searched for under the pool's directory: for an image another file names

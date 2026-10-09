@@ -19,7 +19,7 @@ void kit_init(Kit* kit, Scene* scene, EntityManager* em, PhysicsWorld* physics) 
 
 void kit_init_beside(Kit* kit, Kit* first, const vec3 origin) {
     kit_init(kit, first->scene, first->em, first->physics);
-    kit->loading = first->loading;
+    kit->engine = first->engine;
     glm_vec3_copy((float*)origin, kit->origin);
     for (int i = 0; i < first->material_count; i++)
         kit_material(kit, first->materials[i], first->repeat_m[i], first->grime[i]);
@@ -1638,13 +1638,6 @@ static int shadow_cell(Kit* kit, SceneNode* node, Material* shape, const CellTri
     return 1;
 }
 
-// The loading screen drawn, between the long pieces of a finish: the world's cells take a fifth of
-// a second.
-static void kit_breathe(const Kit* kit) {
-    if (kit->loading)
-        engine_draw_loading_screen(kit->loading);
-}
-
 // The shadow cells on `node`. Returns how many: 0 leaves every material casting from its own
 // mesh.
 static int shadow_cells(Kit* kit, SceneNode* node) {
@@ -1675,7 +1668,7 @@ static int shadow_cells(Kit* kit, SceneNode* node) {
         for (size_t t = 0; ok && t < mb->icount / 3; t++)
             order[n++] =
                 (CellTri){cell_key(kit, mb, (unsigned int)t), (unsigned int)i, (unsigned int)t};
-        kit_breathe(kit);
+        engine_draw_loading_screen(kit->engine);
     }
     int cells = 0;
     Material* shape = ok ? create_material() : NULL;
@@ -1683,14 +1676,14 @@ static int shadow_cells(Kit* kit, SceneNode* node) {
         shape->name = safe_strdup("shadow_cells");
         material_set_program(shape, kit->materials[first]->shader_program);
         qsort(order, n, sizeof(*order), cell_tri_order);
-        kit_breathe(kit);
+        engine_draw_loading_screen(kit->engine);
         for (size_t run = 0; run < n;) {
             size_t end = run;
             while (end < n && order[end].key == order[run].key)
                 end++;
             cells += shadow_cell(kit, node, shape, order + run, end - run, remap);
             run = end;
-            kit_breathe(kit);
+            engine_draw_loading_screen(kit->engine);
         }
         if (cells == 0)
             free_material(shape);

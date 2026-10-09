@@ -446,6 +446,35 @@ static bool _is_sampler_type(GLenum type) {
     }
 }
 
+// The indices of the program's `active` uniforms that are in no uniform block, into `loose`;
+// returns how many. Each block is asked for its members, into `member`, which both hold room for
+// `active`. A member the blocks fail to report only stays among the loose ones, where its type
+// is asked and found not to be a sampler, so a miss costs a query and never a wrong count.
+static GLsizei _uniforms_outside_blocks(GLuint program_id, GLint active, GLint* member,
+                                        GLuint* loose) {
+    for (GLint i = 0; i < active; ++i)
+        loose[i] = (GLuint)i;
+    GLint blocks = 0;
+    glGetProgramiv(program_id, GL_ACTIVE_UNIFORM_BLOCKS, &blocks);
+    for (GLint b = 0; b < blocks; ++b) {
+        GLint members = 0;
+        glGetActiveUniformBlockiv(program_id, (GLuint)b, GL_UNIFORM_BLOCK_ACTIVE_UNIFORMS,
+                                  &members);
+        if (members <= 0 || members > active)
+            continue;
+        glGetActiveUniformBlockiv(program_id, (GLuint)b, GL_UNIFORM_BLOCK_ACTIVE_UNIFORM_INDICES,
+                                  member);
+        for (GLint m = 0; m < members; ++m)
+            if (member[m] >= 0 && member[m] < active)
+                loose[member[m]] = (GLuint)active; // past every index: in a block
+    }
+    GLsizei n = 0;
+    for (GLint i = 0; i < active; ++i)
+        if (loose[i] != (GLuint)active)
+            loose[n++] = loose[i];
+    return n;
+}
+
 // How many texture image units the LINKED program spends.
 //
 // Counted from what the linker KEPT, which is the only authority on it. A driver
@@ -453,54 +482,37 @@ static bool _is_sampler_type(GLenum type) {
 // one does is not a thing the source can answer -- so the question is put to the
 // program rather than to a grep over the shader.
 //
-// A sampler cannot be a member of a uniform block, so the members are found from the blocks and
-// only the rest have their types asked. An active uniform is every member of every element of every
-// block too, and Apple's driver finds a uniform BY INDEX by walking all of them, so asking each its
-// type -- one call per uniform, or one batched call over them all -- cost more than compiling and
-// linking the program. -1 when it cannot be asked.
+// A sampler cannot be a member of a uniform block, so only the uniforms outside every block have
+// their types asked. An active uniform is every member of every element of every block too, and
+// Apple's driver finds a uniform BY INDEX by walking all of them, so asking each its type -- one
+// call per uniform, or one batched call over them all -- cost more than compiling and linking the
+// program. -1 when it cannot be asked.
 static int _count_program_samplers(GLuint program_id) {
-    GLint active = 0, blocks = 0;
+    GLint active = 0;
     glGetProgramiv(program_id, GL_ACTIVE_UNIFORMS, &active);
-    glGetProgramiv(program_id, GL_ACTIVE_UNIFORM_BLOCKS, &blocks);
     if (active <= 0)
         return active < 0 ? -1 : 0;
-    GLuint* index = malloc((size_t)active * sizeof(GLuint));
-    GLint* block = malloc((size_t)active * sizeof(GLint));
+    GLuint* loose = malloc((size_t)active * sizeof(GLuint));
+    GLint* member = malloc((size_t)active * sizeof(GLint));
+    GLint* type = malloc((size_t)active * sizeof(GLint));
     GLint* size = malloc((size_t)active * sizeof(GLint));
     int samplers = -1;
-    if (index && block && size) {
-        // Which uniforms are in a block, asked of the blocks: block[i] is 1 for a member.
-        memset(block, 0, (size_t)active * sizeof(GLint));
-        for (GLint b = 0; b < blocks; ++b) {
-            GLint members = 0;
-            glGetActiveUniformBlockiv(program_id, (GLuint)b, GL_UNIFORM_BLOCK_ACTIVE_UNIFORMS,
-                                      &members);
-            if (members <= 0 || members > active)
-                continue;
-            glGetActiveUniformBlockiv(program_id, (GLuint)b,
-                                      GL_UNIFORM_BLOCK_ACTIVE_UNIFORM_INDICES, size);
-            for (GLint m = 0; m < members; ++m)
-                if (size[m] >= 0 && size[m] < active)
-                    block[size[m]] = 1;
-        }
-        GLsizei loose = 0;
-        for (GLint i = 0; i < active; ++i)
-            if (!block[i])
-                index[loose++] = (GLuint)i;
+    if (loose && member && type && size) {
+        const GLsizei n = _uniforms_outside_blocks(program_id, active, member, loose);
         samplers = 0;
-        if (loose > 0) {
-            GLint* type = block;
-            glGetActiveUniformsiv(program_id, loose, index, GL_UNIFORM_TYPE, type);
-            glGetActiveUniformsiv(program_id, loose, index, GL_UNIFORM_SIZE, size);
+        if (n > 0) {
+            glGetActiveUniformsiv(program_id, n, loose, GL_UNIFORM_TYPE, type);
+            glGetActiveUniformsiv(program_id, n, loose, GL_UNIFORM_SIZE, size);
             // `size` is the array length, and an array of samplers spends a unit per element
             // rather than one for the declaration.
-            for (GLsizei k = 0; k < loose; ++k)
+            for (GLsizei k = 0; k < n; ++k)
                 if (_is_sampler_type((GLenum)type[k]))
                     samplers += size[k];
         }
     }
-    free(index);
-    free(block);
+    free(loose);
+    free(member);
+    free(type);
     free(size);
     return samplers;
 }

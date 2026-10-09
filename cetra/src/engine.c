@@ -1740,13 +1740,15 @@ void engine_load_material_texture(Engine* engine, TexturePool* pool, Material* m
     load_texture_async(engine->async_loader, pool, path, desc, _material_texture_loaded, load);
 }
 
-void engine_finish_texture_loads(Engine* engine, TexturePool* pool) {
-    if (!engine || !engine->async_loader || !pool)
+void engine_finish_texture_loads(Engine* engine) {
+    if (!engine || !engine->async_loader) {
+        log_error("engine_finish_texture_loads: no engine or no loader");
         return;
+    }
     // One upload at a time, so the screen can draw between them: an upload builds its mips and
     // compresses on this thread, and a batch of them would hold the screen still.
     while (async_loader_is_busy(engine->async_loader)) {
-        if (async_loader_process_pending(engine->async_loader, pool, 1) == 0)
+        if (async_loader_process_pending(engine->async_loader, 1) == 0)
             cetra_sleep_ms(1);
         engine_draw_loading_screen(engine);
     }
@@ -3394,10 +3396,9 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
         // difference.
         Scene* current_scene = shadow_scene;
 
-        // Process pending async texture uploads (max 5 per frame to avoid stutter)
-        if (current_scene && current_scene->tex_pool && engine->async_loader) {
-            async_loader_process_pending(engine->async_loader, current_scene->tex_pool, 5);
-        }
+        // Process pending async texture uploads (max 5 per frame to avoid stutter), each into
+        // the pool it was asked for.
+        async_loader_process_pending(engine->async_loader, 5);
 
         // (Re)build the material texture array once its sources have loaded
         // (a no-op until then; masks fall back to their scalar factors).

@@ -8,6 +8,8 @@
 #include "../camera.h"
 #include "../camera_rig.h"
 #include "../cook.h"
+#include "../loading_screen.h"
+#include "../thread.h"
 
 #include <cglm/cglm.h>
 #include <stdio.h>
@@ -342,6 +344,13 @@ void game_run(Game* game) {
     if (game->on_init) {
         game->on_init(game);
     }
+    // A loading phase init began ends before the first frame (spec 13.39): the sounds it loaded
+    // finish decoding on the audio's job thread while the loading screen moves.
+    while (audio_system_loading(game->audio)) {
+        engine_draw_loading_screen(game->engine);
+        cetra_sleep_ms(1);
+    }
+    audio_system_end_loading(game->audio);
     // The listener is placed where init left the camera before the first frame, and that first
     // update lands every zone's gain: a hook reading what a zone lets through on frame 1 hears
     // the room the game starts in, not the world the listener stood in until now.

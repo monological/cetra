@@ -631,53 +631,41 @@ static const Door* hung_door(int i) {
 // time goes is said as a startup-ms row, the time since the seam before and the longest the screen
 // stood still in it (spec 13.39).
 static double g_load_mark, g_settle_start;
-static double g_still_worst;   // ms, the longest the loading screen stood still, under --startup-ms
-static char g_still_after[32]; // the row that ended it
-static double still_since_asked(Engine* engine, const char* site) {
-    const double ms = engine_loading_screen_longest_wait(engine) * 1000.0;
-    if (ms > g_still_worst) {
-        g_still_worst = ms;
-        snprintf(g_still_after, sizeof(g_still_after), "%s", site);
-    }
-    return ms;
-}
-
 static void load_seam(Engine* engine, const char* site) {
     engine_draw_loading_screen(engine);
     const double now = glfwGetTime();
     if (g_args.startup_ms)
         printf("startup-ms site=%s ms=%.1f still=%.1f\n", site, (now - g_load_mark) * 1000.0,
-               still_since_asked(engine, site));
+               engine_loading_screen_take_longest_wait(engine) * 1000.0);
     g_load_mark = now;
 }
 
-// Under --startup-ms, the frames while the view is held, each the time since the last: the first
-// few by name, then the slowest; the whole wait once the lighting is in, and once the view comes
-// up, both from the end of on_init, with the longest the loading screen stood still in all of it.
+// Under --startup-ms, the frames while the view is held, each the time since the last and the
+// longest the screen stood still in it: the first few by name, then the slowest of each; the
+// whole wait once the lighting is in, and once the view comes up, both from the end of on_init.
 static void trace_settling(Engine* engine, bool lit, bool up) {
-    static double worst;
+    static double worst, worst_still;
     static bool lit_said, up_said;
     const double now = glfwGetTime();
     if (up) {
         if (!up_said)
-            printf("startup-ms site=up ms=%.1f frames=%zu still-worst=%.1f after=%s\n",
-                   (now - g_settle_start) * 1000.0, engine->total_frames, g_still_worst,
-                   g_still_after);
+            printf("startup-ms site=up ms=%.1f frames=%zu\n", (now - g_settle_start) * 1000.0,
+                   engine->total_frames);
         up_said = true;
         return;
     }
-    char site[32];
-    snprintf(site, sizeof(site), "frame%zu", engine->total_frames);
-    const double still = still_since_asked(engine, site);
+    const double still = engine_loading_screen_take_longest_wait(engine) * 1000.0;
     const double ms = (now - g_load_mark) * 1000.0;
-    if (engine->total_frames <= 3)
-        printf("startup-ms site=%s ms=%.1f still=%.1f\n", site, ms, still);
-    else if (ms > worst)
-        worst = ms;
+    if (engine->total_frames <= 3) {
+        printf("startup-ms site=frame%zu ms=%.1f still=%.1f\n", engine->total_frames, ms, still);
+    } else {
+        worst = fmax(worst, ms);
+        worst_still = fmax(worst_still, still);
+    }
     g_load_mark = now;
     if (lit && !lit_said)
-        printf("startup-ms site=lit ms=%.1f frames=%zu worst-frame-ms=%.1f\n",
-               (now - g_settle_start) * 1000.0, engine->total_frames, worst);
+        printf("startup-ms site=lit ms=%.1f frames=%zu worst-frame-ms=%.1f worst-still=%.1f\n",
+               (now - g_settle_start) * 1000.0, engine->total_frames, worst, worst_still);
     lit_said |= lit;
 }
 
@@ -704,7 +692,7 @@ static void on_init(Game* game) {
 
     Kit kit;
     kit_init(&kit, g_scene, em, physics);
-    kit.loading = engine;
+    kit.engine = engine;
     mats_register(&kit, engine, g_scene);
     load_seam(engine, "materials");
     // The player's house on the plan's origin (spec 13.25), its living room's television, its
@@ -826,6 +814,9 @@ static void on_init(Game* game) {
         game_set_audio_system(game, audio);
         if (g_args.mute)
             audio_set_bus_volume(audio, AUDIO_BUS_MASTER, 0.0f);
+        // Every sound below decodes on the audio's job thread while the rest loads, and
+        // game_run waits for them before the first frame (spec 13.39).
+        audio_system_begin_loading(audio);
     }
     const Door* swung[SOUNDS_DOORS] = {[SOUNDS_DOOR_HOME] = hung_door(DOOR_HOME),
                                        [SOUNDS_DOOR_MANSION] = hung_door(DOOR_MANSION),
@@ -934,14 +925,6 @@ static void on_init(Game* game) {
     }
     ex->probe = g_args.exposure_probe;
     load_seam(engine, "mind-exposure");
-    // The sounds decode on the audio's job thread while the rest loads (spec 13.39): the screen
-    // moves until they are in, and nothing is heard, or pulled offline, before.
-    if (audio) {
-        while (audio_system_loading(audio))
-            engine_draw_loading_screen(engine);
-        audio_system_wait_loaded(audio);
-    }
-    load_seam(engine, "audio-loaded");
     g_settle_start = g_load_mark;
 }
 

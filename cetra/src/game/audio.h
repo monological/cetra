@@ -86,16 +86,18 @@ Sound* audio_play_music(AudioSystem* audio, const char* path, bool loop);
 // (centred, no attenuation) until audio_sound_set_position places it in the
 // world. Both return NULL on failure.
 Sound* audio_sound_from_file(AudioSystem* audio, const char* path, AudioBus bus);
-// from_file, decoded on the audio's job thread instead of here (spec 13.39): the Sound comes back
-// at once and may be set up and started like any other, but the device stays stopped from the
-// first such load until audio_system_wait_loaded, which a game owes before its first frame. A
-// file that cannot be opened still fails here.
-Sound* audio_sound_from_file_async(AudioSystem* audio, const char* path, AudioBus bus);
-// Whether an async load is still decoding: for drawing a loading screen while it does.
-bool audio_system_loading(AudioSystem* audio);
-// Waits for every async load, then lets the device play.
-void audio_system_wait_loaded(AudioSystem* audio);
 Sound* audio_sound_from_tone(AudioSystem* audio, float hz, AudioBus bus);
+
+// A loading phase (spec 13.39): from begin to end, every file decodes on the audio's job thread
+// rather than in audio_sound_from_file, which returns at once with a Sound that may be set up and
+// started like any other, and the device is stopped, so nothing mixes a sound partly decoded.
+// game_run ends a phase the game began in its init before its first frame; a loop of the app's
+// own ends it itself. A file that cannot be opened still fails in the call.
+void audio_system_begin_loading(AudioSystem* audio);
+// Whether a file is still decoding: for drawing a loading screen while it does.
+bool audio_system_loading(const AudioSystem* audio);
+// Waits for every file still decoding, then lets the device play. Nothing outside a phase.
+void audio_system_end_loading(AudioSystem* audio);
 // Endless procedural noise, 2D until positioned like a tone, from a fixed seed so an offline
 // render is the same every run: a bed -- rain, wind, a room's hum -- rather than an event.
 Sound* audio_sound_from_noise(AudioSystem* audio, AudioNoise colour, AudioBus bus);

@@ -45,14 +45,11 @@ typedef struct InFlightLoad InFlightLoad;
  * Texture Load Result - intermediate data between load and GPU upload
  */
 typedef struct TextureLoadResult {
-    // The caller's submit string, and the handle back into the in-flight
-    // registry. Always non-NULL, including for a failed decode -- pool_key
-    // may not be.
-    char* submit_key;
-    // Key the finished Texture is stored in the pool under. For a file texture
-    // this is submit_key resolved against pool->directory; for an embedded one
-    // it is a copy of submit_key. NULL if the decode failed before resolution.
-    char* pool_key;
+    // The one key: the pool's, and the handle back into the in-flight registry.
+    // A file's resolved path, or an embedded image's "*N". Always non-NULL,
+    // including for a failed decode.
+    char* key;
+    TexturePool* pool; // the request's, which the texture is published into
     unsigned char* pixel_data;
     int width;
     int height;
@@ -124,7 +121,8 @@ void free_async_loader(AsyncLoader* loader);
  *
  * `callback` runs at most once per call, with the decoded Texture or NULL on
  * failure, and always on the main thread. It may run SYNCHRONOUSLY inside the
- * submit call -- on a pool hit or on bad arguments -- otherwise it runs later,
+ * submit call -- on a pool hit, a file that does not exist, or bad arguments --
+ * otherwise it runs later,
  * from async_loader_process_pending. It does NOT run if the loader is freed
  * while the load is still in flight, so it is not a safe place to hang the sole
  * ownership of `user_data`.
@@ -137,9 +135,10 @@ void free_async_loader(AsyncLoader* loader);
  * descs must submit it under two keys. (The texture pool has always been keyed
  * this way; dedup makes it bite sooner and more deterministically.)
  *
- * Keys are matched across the whole loader, not per pool. One AsyncLoader must
- * therefore serve one TexturePool at a time -- embedded keys ("*0", "*1", ...)
- * collide between any two glTF scenes.
+ * A file's key is the path it resolves to against the pool's directory, taken
+ * once at submit; an embedded image's is its "*N". Keys are matched within their
+ * pool -- two glTF scenes' "*0" are two images -- and a load is published into
+ * the pool it was asked for, whatever drains it.
  */
 void load_texture_async(AsyncLoader* loader, TexturePool* pool, const char* filepath,
                         TextureDesc desc, void (*callback)(Texture* tex, void* user_data),
@@ -155,10 +154,10 @@ void load_texture_from_memory_async(AsyncLoader* loader, TexturePool* pool, cons
                                     void* user_data);
 
 /*
- * Process completed texture loads on main thread (call each frame)
- * Returns number of textures finalized
+ * Process completed texture loads on main thread (call each frame), each into the
+ * pool it was asked for. Returns number of textures finalized
  */
-size_t async_loader_process_pending(AsyncLoader* loader, TexturePool* pool, size_t max_per_frame);
+size_t async_loader_process_pending(AsyncLoader* loader, size_t max_per_frame);
 
 /*
  * True while any submitted decode has not yet been finalized by

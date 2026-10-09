@@ -2485,7 +2485,8 @@ static void tiles_take_stores(ShadowSystem* ss, const Engine* engine) {
 
 // Draw one face, through `matrix`, into cell `cell` of the array -- counted from layer 0 --
 // over what the cell holds unless `clear`. False when the tile could not be bound, so nothing
-// was drawn.
+// was drawn. The loading screen moves after each: the frame the tiles open draws every face of
+// every light holding a block, and the first frames every mover's store cell besides.
 static bool draw_tile_cell(ShadowSystem* ss, const Engine* engine, const Scene* scene,
                            SubmitState* state, int cell, mat4 matrix, ShadowCasterSet set,
                            bool clear) {
@@ -2495,6 +2496,7 @@ static bool draw_tile_cell(ShadowSystem* ss, const Engine* engine, const Scene* 
         return false;
     draw_shadow_layer(ss, scene, scene->draw_list, matrix, state, set, engine);
     end_depth_tile();
+    loading_screen_tick(engine);
     return true;
 }
 
@@ -2544,9 +2546,8 @@ bool shadow_tile_lookup(const ShadowSystem* system, const Light* light, ShadowTi
 
 // Draw what the cached lights' blocks are missing. A light is not drawn until it emits: a
 // candle's light sits at the wick until its flame has burned a frame, and a face drawn from
-// there is a face drawn from the wrong place. The loading screen moves between faces: the frame
-// the tiles open draws every face of every light that holds a block.
-static void render_shadow_tiles(ShadowSystem* ss, Engine* engine, const Scene* scene,
+// there is a face drawn from the wrong place.
+static void render_shadow_tiles(ShadowSystem* ss, const Engine* engine, const Scene* scene,
                                 SubmitState* state) {
     const int edge = ss->punctual_map_size;
     for (int b = 0; b < ss->tile_block_count; ++b) {
@@ -2577,7 +2578,6 @@ static void render_shadow_tiles(ShadowSystem* ss, Engine* engine, const Scene* s
                 block->valid |= 1ull << f;
                 ss->tile_faces_drawn++;
             }
-            loading_screen_tick(engine);
         }
     }
 }
@@ -2598,7 +2598,7 @@ static bool tiles_any_dynamic(const ShadowSystem* ss) {
 // whole, still casters and movers both. A face drawn when no moving caster reached it this frame
 // holds nothing that moves, so it is kept from then on: without that, every face a cat ever
 // walked through would be drawn again every frame.
-static void render_shadow_movers(ShadowSystem* ss, Engine* engine, const Scene* scene,
+static void render_shadow_movers(ShadowSystem* ss, const Engine* engine, const Scene* scene,
                                  SubmitState* state) {
     const int edge = ss->punctual_map_size;
     Frustum view;
@@ -2635,8 +2635,6 @@ static void render_shadow_movers(ShadowSystem* ss, Engine* engine, const Scene* 
                 else
                     ss->mover_faces_whole++;
             }
-            // The first frames draw every store cell besides: the loading screen moves between.
-            loading_screen_tick(engine);
         }
     }
 }
