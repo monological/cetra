@@ -358,10 +358,14 @@ typedef struct ShadowSystem {
     // UBO carries, so a pass that allocated but never drew must leave it 0
     // rather than point the lookup at an undrawn layer.
     int punctual_layer_count;
-    // Layers the lights ASKED for this frame, which is where the rain's layer goes: past
+    // Layers the lights ASKED for in the last pass, which is where the rain's layer goes: past
     // every light layer, so no light's index can reach it. Stale while the system is
-    // off, since the pass that writes it does not run; the rain pass reads it only on.
+    // off, since the pass that writes it does not run.
     int punctual_light_layers;
+    // The layers this frame's per-frame lights take, counted before anything captures
+    // (shadow_punctual_frame_update, spec 13.44): what the array is laid out for all frame,
+    // its edge and its light layers both. -1 until a frame has counted them.
+    int punctual_frame_layers;
     bool punctual_pool_warned; // Latch so pool exhaustion logs once, not per frame
 
     // The rain's occlusion map (spec 13.9): which layer holds it (-1 = none this frame),
@@ -530,6 +534,15 @@ bool shadow_light_takes_tiles(const struct Light* light);
 // Once a frame, before anything captures: every depth pass of the frame draws what this
 // assigned, so a capture and the frame agree on which lights are shadowed.
 void shadow_tiles_update(ShadowSystem* ss, const struct Engine* engine, const struct Scene* scene);
+
+// Count the per-frame layers the lights casting now take, which the punctual array is laid out
+// for all frame (spec 13.44). Once a frame, before anything captures: a capture's own pass keeps
+// that layout wherever it needs no more, so one that puts a light away at rest rebuilds nothing.
+void shadow_punctual_frame_update(ShadowSystem* ss, const struct Scene* scene);
+
+// The edge the last depth pass drew per-frame light maps at, 0 when it drew none: what a light
+// still casting is captured at. Asked after the pass.
+int shadow_punctual_edge_drawn(const ShadowSystem* system);
 
 // Whether every cached light whose range reaches the box will be shadowed in a capture taken now:
 // holding a block that is whole, or that the capture's own depth pass will draw whole, which it

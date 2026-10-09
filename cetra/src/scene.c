@@ -669,6 +669,7 @@ LightingAtlas* scene_lighting_atlas(Scene* scene, struct Engine* engine) {
 void scene_update_lighting(Scene* scene, struct Engine* engine) {
     if (!scene || !engine)
         return;
+    shadow_punctual_frame_update(scene->shadow_system, scene);
     shadow_tiles_update(scene->shadow_system, engine, scene);
     // One allowance for every capture the frame takes, the GI's and the probes' (spec 13.32).
     CaptureBudget budget = {.ms = engine->capture_budget_ms, .engine = engine};

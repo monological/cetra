@@ -189,6 +189,7 @@ ShadowSystem* create_shadow_system(int default_map_size) {
         glm_mat4_identity(system->punctual_matrices[i]);
     }
     system->rain_layer = -1;
+    system->punctual_frame_layers = -1;
     glm_mat4_identity(system->rain_matrix);
     glm_mat4_identity(system->rain_lookup);
     // Past three times the furthest a candle flame's centroid was measured moving from its
@@ -301,20 +302,36 @@ static int punctual_edge_for(int light_layers) {
     return light_layers > 0 ? punctual_size_for(light_layers) : PUNCTUAL_SHADOW_MIN_SIZE;
 }
 
-// Grow the punctual array to hold `layers` maps at `edge`.
-// Demand-driven, like the cascade array: a spot-only scene builds one
-// layer rather than the pool ceiling, since every allocated layer is a scene
-// traversal per frame.
-//
-// The size is part of what "grow" means here. A scene that gains a point light
-// goes from one layer to seven, and seven layers do not fit at the edge one
-// affords -- so the rebuild is triggered by EITHER a larger layer count or a
-// size the budget no longer allows, not by the count alone.
+// The per-frame light layers the punctual array holds this pass, which the rain's layer sits past:
+// 0 while the system is off, when the count its pass writes is stale.
+static int punctual_layers_live(const ShadowSystem* system) {
+    return system->enabled ? system->punctual_light_layers : 0;
+}
+
+int shadow_punctual_edge_drawn(const ShadowSystem* system) {
+    return system && punctual_layers_live(system) > 0 ? system->punctual_map_size : 0;
+}
+
+// The per-frame light layers a pass lays the array out for: its own, or the frame's
+// (shadow_punctual_frame_update) where they are more. A capture holds the scene at rest, where a
+// light may stop casting, and an array laid out for its fewer layers was rebuilt in the capture
+// and again in its frame, every frame a capture ran, carrying every kept tile across both times
+// (spec 13.44). Before any frame has counted them, the pass's own.
+static int punctual_layers_laid_out(const ShadowSystem* system) {
+    const int own = punctual_layers_live(system);
+    return system->punctual_frame_layers > own ? system->punctual_frame_layers : own;
+}
+
 static void tiles_migrate(ShadowSystem* ss, GLuint old_tex, GLuint old_fbo, int old_edge);
 static void rain_migrate(ShadowSystem* ss, GLuint old_tex, GLuint old_fbo, int old_edge);
+static void tiles_layout(ShadowSystem* ss, const Scene* scene, int edge);
 static int tile_reference_count(const ShadowSystem* ss);
 static int tile_shading_views(const ShadowSystem* ss);
 
+// Make the punctual array hold `layers` maps at `edge`. Demand-driven, like the cascade array: a
+// spot-only scene builds one layer rather than the pool ceiling, since every allocated layer is a
+// scene traversal per frame. Rebuilt when it is short of layers or its edge changes, either way,
+// carrying the kept tiles and the rain's cover across.
 static int init_punctual_shadow_array(ShadowSystem* system, int layers, int edge) {
     if (layers < 1 || layers > PUNCTUAL_ARRAY_LAYERS + (int)PUNCTUAL_TILE_MAX_LAYERS)
         return -1;
@@ -346,14 +363,8 @@ static int init_punctual_shadow_array(ShadowSystem* system, int layers, int edge
     log_info("Punctual shadow array: %d layer(s) at %d^2 (%.0f MB) -- %d light layer(s) redrawn "
              "every frame",
              layers, edge, (double)layers * edge * edge * 4.0 / (1024.0 * 1024.0),
-             system->punctual_light_layers);
+             punctual_layers_laid_out(system));
     return 0;
-}
-
-// The rain's layer: past every light layer, or the first when shadows are off and no light
-// holds one.
-static int rain_layer_index(const ShadowSystem* system) {
-    return system->enabled ? system->punctual_light_layers : 0;
 }
 
 // The rain's map fills the corner of its layer, so a lookup's [0,1] has to land in [0,k] of an
@@ -378,7 +389,7 @@ static float rain_fold_lookup(ShadowSystem* ss) {
 static void rain_migrate(ShadowSystem* ss, GLuint old_tex, GLuint old_fbo, int old_edge) {
     if (ss->rain_layer < 0 || !old_tex || old_edge <= 0)
         return;
-    const int layer = rain_layer_index(ss);
+    const int layer = punctual_layers_live(ss); // the rain's layer sits past them
     if (layer >= ss->punctual_allocated_layers) {
         ss->rain_layer = -1;
         return;
@@ -399,27 +410,23 @@ static void rain_migrate(ShadowSystem* ss, GLuint old_tex, GLuint old_fbo, int o
     ss->rain_cover_spread *= scale;
 }
 
-// The punctual array's capacity this frame, which the shadow pass and the rain pass both ask
-// for. Two counts would rebuild the array between the passes on every frame it rains, wiping
-// the lights' maps -- and every kept tile with them.
+// The layers the punctual array needs for this pass: its lights', the rain's past them, and the
+// cached tiles' region, whichever reaches furthest.
 static int punctual_capacity(const ShadowSystem* system, const Scene* scene) {
-    const int lights_and_rain = rain_layer_index(system) + (rain_active(scene->rain) ? 1 : 0);
+    const int lights_and_rain =
+        punctual_layers_laid_out(system) + (rain_active(scene->rain) ? 1 : 0);
     const int tiles = system->tile_layers > 0 ? system->tile_base_layer + system->tile_layers : 0;
     return tiles > lights_and_rain ? tiles : lights_and_rain;
 }
 
-// The punctual array's edge this pass, which the shadow pass and the rain pass both ask for,
-// from the per-frame layers the rain's layer sits past (spec 13.44). A capture burst keeps the
-// edge the array has while its layers fit the budget there: it holds the scene at rest, where a
-// light may stop casting, and an edge chosen from that rebuilt the array in the burst and again in
-// its frame, every frame a capture ran, carrying every kept tile across both times -- as the
-// cascade array is grow-only on the count a capture forces to 1.
-static int punctual_edge(const Engine* engine, const ShadowSystem* system) {
-    const int light_layers = rain_layer_index(system);
-    if (engine->capture_kind != SCENE_CAPTURE_NONE && system->punctual_map_array &&
-        punctual_size_for(light_layers) >= system->punctual_map_size)
-        return system->punctual_map_size;
-    return punctual_edge_for(light_layers);
+// Lay the punctual array out for this pass and build it: the edge, the cached tiles' region at it,
+// and the capacity both take. One call, so no pass can lay it out one way and build it another --
+// which rebuilds the array between the passes of a frame and wipes every kept tile.
+static bool punctual_array_ready(ShadowSystem* system, const Scene* scene) {
+    const int edge = punctual_edge_for(punctual_layers_laid_out(system));
+    if (system->tile_block_count > 0)
+        tiles_layout(system, scene, edge);
+    return init_punctual_shadow_array(system, punctual_capacity(system, scene), edge) == 0;
 }
 
 static bool begin_punctual_shadow_pass(ShadowSystem* system, int layer) {
@@ -1336,6 +1343,29 @@ static int punctual_layers_for(const Light* light) {
     }
 }
 
+// The layers a light takes when the pool already hands out `needed`: all it needs or none -- a
+// cube short of one face is a light with holes in it, which is worse than one that does not cast
+// -- so -1 for a light the pool has no room left for, where a later one needing fewer may still
+// fit. 0 for a light the pool does not draw.
+static int punctual_take(const Light* light, int needed) {
+    if (!light->cast_shadows || shadow_light_takes_tiles(light))
+        return 0;
+    const int want = punctual_layers_for(light);
+    return needed + want > MAX_PUNCTUAL_SHADOW_LAYERS ? -1 : want;
+}
+
+void shadow_punctual_frame_update(ShadowSystem* ss, const Scene* scene) {
+    if (!ss || !scene)
+        return;
+    int needed = 0;
+    for (size_t i = 0; ss->enabled && i < scene->light_count; ++i) {
+        const int taken = scene->lights[i] ? punctual_take(scene->lights[i], needed) : 0;
+        if (taken > 0)
+            needed += taken;
+    }
+    ss->punctual_frame_layers = needed;
+}
+
 // Fill a light's layers with its light-space matrices, in the layer order its
 // consumer selects by, and return how many it wrote (so the render loop bounds
 // itself off this rather than re-deriving the point/else split).
@@ -1842,8 +1872,8 @@ bool shadow_tiles_cover(const ShadowSystem* ss, const AABB* box) {
 // every tile -- carried across when the array is rebuilt for it, lost when it is not -- so it
 // only ever rises; but it leaves room for the rain only once it has rained, since at the
 // largest edge a layer held for rain that never falls is 64 MB of nothing.
-static void tiles_layout(ShadowSystem* ss, const Scene* scene, int light_layers, int edge) {
-    const int base = light_layers + (rain_active(scene->rain) ? 1 : 0);
+static void tiles_layout(ShadowSystem* ss, const Scene* scene, int edge) {
+    const int base = punctual_layers_laid_out(ss) + (rain_active(scene->rain) ? 1 : 0);
     if (base > ss->tile_base_layer)
         ss->tile_base_layer = base;
     const int per_layer = tiles_per_layer(edge);
@@ -2771,9 +2801,7 @@ static bool shadow_build_msm(ShadowSystem* ss, Engine* engine) {
     //
     // The depth array is NOT the precedent, though it looks like one: it is
     // sized by MAX_SHADOW_LIGHTS, the compile-time ceiling, so no per-frame
-    // value reaches it and it has no shrink to refuse. The punctual array's edge
-    // is the other allocation keyed on a count that varies per frame, and it
-    // holds through a capture burst for the same reason (punctual_edge).
+    // value reaches it and it has no shrink to refuse.
     //
     // Surplus layers are inert, not merely unused: the resolve loop below runs
     // to `layers`, and the shader bounds its reads by numShadowLights, which is
@@ -3117,24 +3145,15 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
                 dir_overflow = light;
             continue;
         }
-        const int want = punctual_layers_for(light);
-        if (want == 0)
+        const int taken = punctual_take(light, punctual_needed);
+        if (taken < 0 && !pool_overflow)
+            pool_overflow = light;
+        if (taken <= 0)
             continue;
-
-        // A light takes all its faces or none: a cube short of one is a light with
-        // holes in it, which is worse than one that does not cast. A later light
-        // needing fewer may still fit.
-        if (punctual_needed + want > MAX_PUNCTUAL_SHADOW_LAYERS) {
-            if (!pool_overflow)
-                pool_overflow = light;
-            continue;
-        }
         light->shadow_layer = punctual_needed;
-        punctual_needed += want;
+        punctual_needed += taken;
     }
     ss->punctual_light_layers = punctual_needed;
-    // One edge for the pass, so the tiles are laid out for the array they are drawn into.
-    const int edge = punctual_edge(engine, ss);
 
     // Latched so a misconfigured scene reports once rather than every frame,
     // and re-arms if the overflow clears. Named, because the alternative is a
@@ -3176,8 +3195,6 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
         tiles_note_changes(ss, engine, scene, engine->total_frames);
         tiles_take_stores(ss, engine);
     }
-    if (ss->tile_block_count > 0)
-        tiles_layout(ss, scene, punctual_needed, edge);
 
     // Clamp the runtime count into the compile-time ceiling: the splits and
     // matrix arrays are sized by SHADOW_CASCADES and the count is writable
@@ -3397,8 +3414,7 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
     // caster. Reuses the allocation (a no-op once it is large enough), the
     // bound depth program, and the depth policy set above.
     const bool punctual_ready =
-        (punctual_needed > 0 || tiled > 0) &&
-        init_punctual_shadow_array(ss, punctual_capacity(ss, scene), edge) == 0;
+        (punctual_needed > 0 || tiled > 0) && punctual_array_ready(ss, scene);
     if (punctual_ready && punctual_needed > 0) {
         profiler_scope_begin(engine->profiler, "shadow punctual");
         for (size_t i = 0; i < scene->light_count; ++i) {
@@ -3564,9 +3580,8 @@ void shadow_render_rain_layer(Engine* engine, Scene* scene) {
         return;
     }
 
-    const int layer = rain_layer_index(ss);
-    if (init_punctual_shadow_array(ss, punctual_capacity(ss, scene), punctual_edge(engine, ss)) !=
-        0)
+    const int layer = punctual_layers_live(ss); // the rain's layer sits past them
+    if (!punctual_array_ready(ss, scene))
         return;
     if (!ss->depth_program) {
         ss->depth_program = engine_get_program(engine, "shadow_depth");

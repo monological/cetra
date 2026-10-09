@@ -409,7 +409,9 @@ cook directory; `--cook-dir` and `--no-cook` apply. silent turns it on),
 `--capture-rest-unshadow <light>` (spec 13.44 — a scene capture rest hook under which the named
 shadow-casting light casts none while a capture burst holds the scene at rest, and casts again
 after, which is what silent's rest does with its flashlight. The headless way to give a burst
-fewer per-frame shadow layers than its frame, which `capture-keeps-shadow-array` reads),
+fewer per-frame shadow layers than its frame, which `capture-keeps-shadow-array` reads. A light
+that does not exist or does not cast is refused, exiting 1, and the run prints
+`capture-rest-unshadow rests=N`, the bursts the hook held, at exit),
 `--road-width-at <frame:value>` (spec 11.68 — set every road's width mid-run. The `--layer-blend-at`
 idiom, and it exercises BOTH halves of the road path in one stroke: the segment block re-uploads
 and the composite cache's by-value key goes stale. A road is authored only in a `.cscn`, so this
