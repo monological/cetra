@@ -24,13 +24,15 @@ typedef struct PlaceSpec {
 
 extern const PlaceSpec PLACES[PLACE_COUNT];
 
-// A find's mark as the tool drew it: where it is in its map's marks picture, and the point in it
-// that goes on the find's place.
+// A find's mark as the tool drew it: where it is in its map's marks picture, the point in it that
+// goes on the find's place, and how long it takes to write on. The marks picture holds the ink in
+// alpha and, in red, when the pen reached each pixel as a fraction of `seconds`.
 typedef struct MapMark {
     PlaceId place;
     float uv[4];     // {u0, v0, u1, v1} in the marks picture, V down
     float size[2];   // print pixels
     float anchor[2]; // print pixels from the mark's top left to the point it marks
+    float seconds;
 } MapMark;
 
 // One map's art. The print and the marks are UI pictures, top row first; a world point (x, z)
