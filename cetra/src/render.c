@@ -14,6 +14,7 @@
 #include "ext/log.h"
 #include "fire.h"
 #include "ibl.h"
+#include "ies.h"
 #include "layers_vt.h"
 #include "scene.h"
 #include "sky.h"
@@ -2074,6 +2075,14 @@ bool scene_capture_ready(const Engine* engine, const Scene* scene, SceneCaptureK
     return kind != SCENE_CAPTURE_RADIANCE || gi_world_ready_in(scene->gi, box);
 }
 
+// A texture slot by what it holds; false when a texture cannot say what that is.
+static bool _fold_texture(CookKey* key, const Texture* tex) {
+    if (tex && tex->content_key == 0)
+        return false;
+    cook_key_u64(key, tex ? tex->content_key : 0);
+    return true;
+}
+
 // A material as a capture draws it: its rows ride config_snapshot_fold by name, so here only what
 // that table does not carry -- every texture slot, by content, and its hook's source and
 // parameters. False when a texture cannot say what it is.
@@ -2081,10 +2090,8 @@ static bool _fold_material(CookKey* key, const Material* mat) {
     Texture* textures[MATERIAL_TEXTURE_SLOTS];
     material_textures(mat, textures);
     for (size_t t = 0; t < MATERIAL_TEXTURE_SLOTS; t++) {
-        const Texture* tex = textures[t];
-        if (tex && tex->content_key == 0)
+        if (!_fold_texture(key, textures[t]))
             return false;
-        cook_key_u64(key, tex ? tex->content_key : 0);
     }
     const ShaderHook* hook = shader_hook_live(mat->shader_hook);
     cook_key_str(key, hook && hook->surface ? hook->surface : "");
@@ -2096,6 +2103,40 @@ static bool _fold_material(CookKey* key, const Material* mat) {
             cook_key_f32(key, mat->shader_params.list[i].value[c]);
     }
     return true;
+}
+
+// A light as a capture sees it, where the rest hook holds it: where it stands and faces, what it
+// gives off and the body that gives it, and its shadow. Not its name or the engine's slots for
+// it, nor `units`, since `intensity` is always in the canonical one.
+static void _fold_light(CookKey* key, const Light* light, const IesLibrary* ies) {
+    cook_key_i32(key, (int32_t)light->type);
+    for (int c = 0; c < 3; c++) {
+        cook_key_f32(key, light->global_position[c]);
+        cook_key_f32(key, light->direction[c]);
+        cook_key_f32(key, light->up[c]);
+        cook_key_f32(key, light->color[c]);
+        cook_key_f32(key, light->ambient[c]);
+    }
+    const float terms[] = {light->intensity,  light->specular,      light->range,
+                           light->cutOff,     light->outerCutOff,   light->size[0],
+                           light->size[1],    light->source_radius, light->source_length,
+                           light->shadow_near};
+    for (size_t t = 0; t < sizeof(terms) / sizeof(terms[0]); t++)
+        cook_key_f32(key, terms[t]);
+    cook_key_u32(key, light->cast_shadows ? 1u : 0u);
+    cook_key_u32(key, light->shadow_cache ? 1u : 0u);
+    cook_key_u32(key, light->shadow_follow ? 1u : 0u);
+    // An IES profile by its file and what was read from it.
+    const IesProfile* p =
+        ies && light->ies_profile >= 0 ? ies_library_at(ies, light->ies_profile) : NULL;
+    cook_key_str(key, p && p->path ? p->path : "");
+    if (p) {
+        cook_key_i32(key, p->v_taps);
+        cook_key_i32(key, p->h_taps);
+        const float shape[] = {p->span, p->v_lo, p->v_hi, p->peak_cd, p->support_deg};
+        for (size_t t = 0; t < sizeof(shape) / sizeof(shape[0]); t++)
+            cook_key_f32(key, shape[t]);
+    }
 }
 
 bool scene_capture_fold(Engine* engine, Scene* scene, const AABB* box, CookKey* key) {
@@ -2148,6 +2189,26 @@ bool scene_capture_fold(Engine* engine, Scene* scene, const AABB* box, CookKey* 
     cook_key_u32(key, ibl && ibl->reflect_fog ? 1u : 0u);
     for (int c = 0; c < 3; c++)
         cook_key_f32(key, scene->world_origin[c]);
+
+    // Every light that gives off anything and reaches the box -- a directional reaches every box
+    // -- in the list's order. One that emits nothing lights nothing wherever it stands, which is
+    // what keeps a flashlight held off at rest from keying the capture by where the player is.
+    for (size_t l = 0; l < scene->light_count; l++) {
+        const Light* light = scene->lights[l];
+        const float reach = light_cull_radius(light);
+        if (light->intensity <= 0.0f || (light->type != LIGHT_DIRECTIONAL &&
+                                         aabb_dist_sq(box, light->global_position) > reach * reach))
+            continue;
+        _fold_light(key, light, scene->ies_library);
+    }
+    // Every decal by its images: config_snapshot_fold folded where each is.
+    for (int d = 0; d < scene->decal_count; d++) {
+        if (!_fold_texture(key, scene->decals[d].albedo_tex) ||
+            !_fold_texture(key, scene->decals[d].surface_tex)) {
+            key->valid = false;
+            return false;
+        }
+    }
 
     // Every item a capture of the box can draw, in the list's order, which is the graph's.
     const CullView view = {.wind = scene->wind, .capture = true};

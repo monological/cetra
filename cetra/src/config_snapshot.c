@@ -1334,9 +1334,11 @@ void config_snapshot_fold(Engine* engine, Scene* scene, CookKey* key) {
     // What a light capture reads, and nothing a run decides: not the camera, the post chain or
     // the exposure -- a capture renders at unity from its own eye -- nor the engine's section,
     // whose overlays and capture budget differ between a window and a headless run of one scene.
+    // Nor the lights, whose rows here are three of their fields: scene_capture_fold takes each
+    // whole, and only those that reach what it captures.
     const unsigned owners = 1u << CFG_SCENE | 1u << CFG_SHADOW | 1u << CFG_SKY | 1u << CFG_CLOUDS |
                             1u << CFG_IBL | 1u << CFG_GI | 1u << CFG_RAIN | 1u << CFG_DECAL_ELEM |
-                            1u << CFG_LIGHT_ELEM | 1u << CFG_MATERIAL_ELEM;
+                            1u << CFG_MATERIAL_ELEM;
     cJSON* root = _snapshot_tree(engine, scene, owners, false, NULL);
     char* text = root ? cJSON_PrintUnformatted(root) : NULL;
     cJSON_Delete(root);
