@@ -10,6 +10,7 @@ layout(location = 5) in vec4 aColor;
 
 uniform mat4 model; // a turn and a translation: the normal takes its upper 3x3 as it is
 uniform mat4 viewProj;
+uniform bool hasColors; // false: the mesh has no colours, and reads as white
 
 out vec3 vWorld;
 out vec3 vNormal;
@@ -22,6 +23,6 @@ void main()
     vWorld = world.xyz;
     vNormal = mat3(model) * aNormal;
     vUv = aUv;
-    vColor = aColor;
+    vColor = hasColors ? aColor : vec4(1.0);
     gl_Position = viewProj * world;
 }

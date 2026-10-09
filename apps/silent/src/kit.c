@@ -1511,6 +1511,7 @@ void kit_frame_lathe_on(Kit* kit, const KitFrame* f, int mat, const vec3 base, c
 #define SOFT_STEP     0.08f // metres between cuts across a face's flat middle
 #define SOFT_BAND     4     // cuts across each half of a rounded edge
 #define SOFT_MAX_CUTS 48
+_Static_assert(SOFT_MAX_CUTS <= KIT_MAX_SIDES + 1, "a soft box's row of cuts is a Ring");
 
 // The cuts across one axis of a face from -h to h: SOFT_BAND across the rounded band at each
 // end, and about every SOFT_STEP across the flat between them.
@@ -1528,21 +1529,6 @@ static int soft_cuts(float h, float r, float* out) {
     return n;
 }
 
-// A triangle of a smooth surface, wound to agree with its corners' normals.
-static void soft_tri(Kit* kit, int mat, const vec3* p, const vec3* n, const unsigned int* idx,
-                     int a, int b, int c) {
-    vec3 cross = {0.0f, 0.0f, 0.0f}, sum = {0.0f, 0.0f, 0.0f};
-    corner_cross(p[a], p[b], p[c], cross);
-    if (glm_vec3_norm2(cross) < 1e-20f)
-        return;
-    glm_vec3_add((float*)n[a], (float*)n[b], sum);
-    glm_vec3_add(sum, (float*)n[c], sum);
-    if (glm_vec3_dot(cross, sum) >= 0.0f)
-        mb_tri(&kit->builders[mat], idx[a], idx[b], idx[c]);
-    else
-        mb_tri(&kit->builders[mat], idx[a], idx[c], idx[b]);
-}
-
 void kit_frame_soft_box(Kit* kit, const KitFrame* f, int mat, float a0, float a1, float y0,
                         float y1, float d0, float d1, float r, float puff) {
     if (!slot_ok(kit, mat))
@@ -1552,25 +1538,27 @@ void kit_frame_soft_box(Kit* kit, const KitFrame* f, int mat, float a0, float a1
     r = glm_clamp(r, 0.0f, glm_vec3_min((float*)half));
     const vec3 flat = {half[0] - r, half[1] - r, half[2] - r};
     const float inv = 1.0f / kit->repeat_m[mat], strength = kit->grime[mat];
+    float cuts[3][SOFT_MAX_CUTS];
+    int ncut[3];
+    for (int m = 0; m < 3; m++)
+        ncut[m] = soft_cuts(half[m], r, cuts[m]);
     for (int k = 0; k < 3; k++)
         for (int s = -1; s <= 1; s += 2) {
             const int i = (k + 1) % 3, j = (k + 2) % 3;
-            float cut_i[SOFT_MAX_CUTS], cut_j[SOFT_MAX_CUTS];
-            const int ni = soft_cuts(half[i], r, cut_i), nj = soft_cuts(half[j], r, cut_j);
             vec3 out = {0.0f, 0.0f, 0.0f}, face_n = {0.0f, 0.0f, 0.0f};
             out[k] = (float)s;
             kit_frame_dir(f, out[0], out[1], out[2], face_n);
             vec3 t = {0.0f, 0.0f, 0.0f}, bt = {0.0f, 0.0f, 0.0f};
             face_frame(face_n, t, bt);
-            vec3 pos[2][SOFT_MAX_CUTS], nrm[2][SOFT_MAX_CUTS];
-            unsigned int idx[2][SOFT_MAX_CUTS];
-            for (int jj = 0; jj < nj; jj++) {
-                const int row = jj & 1;
-                for (int ii = 0; ii < ni; ii++) {
+            // Each row of the face is a Ring: two of them in turn, a band between each pair.
+            Ring rows[2];
+            for (int jj = 0; jj < ncut[j]; jj++) {
+                Ring* row = &rows[jj & 1];
+                for (int ii = 0; ii < ncut[i]; ii++) {
                     vec3 q = {0.0f, 0.0f, 0.0f}, c = {0.0f, 0.0f, 0.0f}, n = {0.0f, 0.0f, 0.0f};
                     q[k] = (float)s * half[k];
-                    q[i] = cut_i[ii];
-                    q[j] = cut_j[jj];
+                    q[i] = cuts[i][ii];
+                    q[j] = cuts[j][jj];
                     for (int m = 0; m < 3; m++) {
                         c[m] = glm_clamp(q[m], -flat[m], flat[m]);
                         n[m] = q[m] - c[m];
@@ -1602,30 +1590,13 @@ void kit_frame_soft_box(Kit* kit, const KitFrame* f, int mat, float a0, float a1
                     glm_vec3_muladds(nw, -glm_vec3_dot(nw, tw), tw);
                     glm_vec3_normalize(tw);
                     const float grime = strength > 0.0f ? grime_amount(strength, p, 0.0f) : 0.0f;
-                    glm_vec3_copy(p, pos[row][ii]);
-                    glm_vec3_copy(nw, nrm[row][ii]);
-                    idx[row][ii] = kit_vertex(kit, mat, p, nw, tw, glm_vec3_dot(p, t) * inv,
+                    glm_vec3_copy(p, row->p[ii]);
+                    glm_vec3_copy(nw, row->n[ii]);
+                    row->idx[ii] = kit_vertex(kit, mat, p, nw, tw, glm_vec3_dot(p, t) * inv,
                                               glm_vec3_dot(p, bt) * inv, grime);
                 }
-                if (jj == 0)
-                    continue;
-                const int prev = row ^ 1;
-                for (int ii = 1; ii < ni; ii++) {
-                    const vec3 p[4] = {
-                        {pos[prev][ii - 1][0], pos[prev][ii - 1][1], pos[prev][ii - 1][2]},
-                        {pos[prev][ii][0], pos[prev][ii][1], pos[prev][ii][2]},
-                        {pos[row][ii][0], pos[row][ii][1], pos[row][ii][2]},
-                        {pos[row][ii - 1][0], pos[row][ii - 1][1], pos[row][ii - 1][2]}};
-                    const vec3 n[4] = {
-                        {nrm[prev][ii - 1][0], nrm[prev][ii - 1][1], nrm[prev][ii - 1][2]},
-                        {nrm[prev][ii][0], nrm[prev][ii][1], nrm[prev][ii][2]},
-                        {nrm[row][ii][0], nrm[row][ii][1], nrm[row][ii][2]},
-                        {nrm[row][ii - 1][0], nrm[row][ii - 1][1], nrm[row][ii - 1][2]}};
-                    const unsigned int q[4] = {idx[prev][ii - 1], idx[prev][ii], idx[row][ii],
-                                               idx[row][ii - 1]};
-                    soft_tri(kit, mat, p, n, q, 0, 1, 2);
-                    soft_tri(kit, mat, p, n, q, 0, 2, 3);
-                }
+                if (jj > 0)
+                    ring_band(kit, mat, &rows[(jj & 1) ^ 1], row, ncut[i] - 1);
             }
         }
 }
@@ -1827,7 +1798,7 @@ static int shadow_cells(Kit* kit, SceneNode* node) {
     return cells;
 }
 
-SceneNode* kit_finish(Kit* kit, const char* name) {
+static SceneNode* finish_node(Kit* kit, const char* name) {
     SceneNode* node = create_node();
     node_set_name(node, name);
     // The cells first: they read the builders, which handing a mesh over empties.
@@ -1857,6 +1828,18 @@ SceneNode* kit_finish(Kit* kit, const char* name) {
         node_add_mesh(node, mesh);
         kit->mesh_count++;
     }
+    return node;
+}
+
+SceneNode* kit_finish(Kit* kit, const char* name) {
+    SceneNode* node = finish_node(kit, name);
     node_add_child(kit->scene->root_node, node);
+    return node;
+}
+
+SceneNode* kit_finish_alone(Kit* kit, const char* name) {
+    SceneNode* node = finish_node(kit, name);
+    for (size_t i = 0; i < node->mesh_count; i++)
+        scene_add_material(kit->scene, node->meshes[i]->material);
     return node;
 }

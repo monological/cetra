@@ -15,7 +15,7 @@
  * Where the room is, is home.h's.
  */
 
-// Where something lying on the bed rests: the middle of the quilt's top near its foot.
+// Where something lying on the bed rests: on the quilt's top, on the lamp's side.
 void bedroom_bed_top(vec3 out);
 
 // The bed, the nightstands, the dresser, the rug and what stands on them into `kit`, and the lamp,

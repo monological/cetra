@@ -14,7 +14,7 @@
  * +z, d out into the room along -x. Its headboard stays under the window's sill. The room is
  * 2.76 m front to back, too short for a bed and a dresser at its foot, so the bed runs across it
  * and the dresser stands on the hall wall facing it, between the door and the front wall: the
- * door hangs on its back jamb and stands open along the stretch behind.
+ * door hangs on its back jamb and stands open across the room from there.
  */
 #define BED_Z      (0.5f * (BEDROOM_IN_Z0 + BEDROOM_IN_Z1))
 #define BED_HALF   0.75f // the frame's half width, posts included
@@ -24,6 +24,7 @@
 #define QUILT_T    0.06f
 #define HEAD_TOP   (GROUND_SILL - FLOOR_Y - 0.03f)
 #define FOOT_TOP   0.5f
+#define BALL_H     0.045f // the ball capping a post
 
 // The nightstands' half width along the wall, depth and height, either side of the bed.
 #define STAND_HALF  0.23f
@@ -35,8 +36,13 @@
 #define CHEST_Z1    (BEDROOM_DOOR_Z0 - ORNAMENT_CASING_W - 0.03f)
 #define CHEST_DEPTH 0.46f
 #define CHEST_H     1.05f
+#define CHEST_OVER  0.02f // its top's overhang past its sides and front
 
 #define LAMP_CANDELA 25.0f
+
+// The rag rug between the bed's foot and the chest's front, as wide as the bed.
+#define RUG_FROM_BED   0.13f
+#define RUG_FROM_CHEST 0.5f
 
 // What stands against a wall stands off it past the paper and the skirting.
 #define OFF_WALL (LINING + 0.02f)
@@ -62,7 +68,7 @@ static void post(Kit* kit, const KitFrame* f, float a, float d, float top) {
     const float h = 0.03f;
     kit_frame_box(kit, f, MAT_CASE, a - h, a + h, 0.0f, top, d - h, d + h, false);
     const vec2 ball[] = {{0.0f, 0.0f},    {0.022f, 0.004f}, {0.026f, 0.02f},
-                         {0.02f, 0.036f}, {0.006f, 0.044f}, {0.0f, 0.045f}};
+                         {0.02f, 0.036f}, {0.006f, 0.044f}, {0.0f, BALL_H}};
     kit_frame_lathe(kit, f, MAT_CASE, a, d, top, ball, KIT_COUNT(ball), 12);
 }
 
@@ -75,7 +81,7 @@ static void bed(Kit* kit) {
     const float in = BED_HALF - 0.03f;
     for (int s = -1; s <= 1; s += 2) {
         const float a = (float)s * in;
-        post(kit, f, a, 0.03f, HEAD_TOP - 0.045f);
+        post(kit, f, a, 0.03f, HEAD_TOP - BALL_H);
         post(kit, f, a, BED_LONG - 0.03f, FOOT_TOP);
         kit_frame_box(kit, f, MAT_CASE, a - 0.015f, a + 0.015f, 0.16f, 0.32f, 0.06f,
                       BED_LONG - 0.06f, false);
@@ -150,14 +156,14 @@ static void nightstand(Kit* kit, float a) {
 
 /*
  * The lamp on the front nightstand: a ceramic urn of a base and a drum shade, lit from inside,
- * which is the room's one light. Its light is cached, its body a bulb's. It is a kit of its own
- * that casts nothing: a fabric shade lets its light through, and drawn into the lamp's own
- * shadow it boxed the bulb in, lighting the wall above it and leaving the room dark.
+ * which is the room's one light. Its light is cached, its body a bulb's. It is a kit of its own,
+ * at the house's origin, that casts nothing: a fabric shade lets its light through, and drawn into
+ * the lamp's own shadow it boxed the bulb in, lighting the wall above it and leaving the room dark.
  */
-static void lamp(Engine* engine, Scene* scene, float a) {
+static void lamp(const Kit* house, Engine* engine, Scene* scene, float a) {
     Kit kit;
-    kit_init(&kit, scene, NULL, NULL);
-    mats_register(&kit, engine, scene);
+    mats_kit(&kit, engine, scene);
+    glm_vec3_copy((float*)house->origin, kit.origin);
     kit.casts_nothing = true;
     const KitFrame* f = &BED;
     const float d = 0.5f * STAND_DEPTH, y = STAND_H;
@@ -172,6 +178,7 @@ static void lamp(Engine* engine, Scene* scene, float a) {
     kit_finish(&kit, "bedside_lamp");
     vec3 at = {0.0f, 0.0f, 0.0f};
     kit_frame_point(f, a, shade_y + 0.09f, d, at);
+    glm_vec3_add(at, kit.origin, at);
     LightDesc light = {.name = "bedside_lamp",
                        .type = LIGHT_POINT,
                        .position = {at[0], at[1], at[2]},
@@ -209,7 +216,8 @@ static void chest(Kit* kit) {
     const float h = 0.5f * (CHEST_Z1 - CHEST_Z0), d1 = CHEST_DEPTH, top = CHEST_H - 0.03f;
     kit_frame_box(kit, &f, MAT_CASE, -h + 0.02f, h - 0.02f, 0.0f, 0.08f, 0.0f, d1 - 0.02f, false);
     kit_frame_box(kit, &f, MAT_CASE, -h, h, 0.08f, top, 0.0f, d1, false);
-    kit_frame_box(kit, &f, MAT_CASE, -h - 0.02f, h + 0.02f, top, CHEST_H, 0.0f, d1 + 0.02f, false);
+    kit_frame_box(kit, &f, MAT_CASE, -h - CHEST_OVER, h + CHEST_OVER, top, CHEST_H, 0.0f,
+                  d1 + CHEST_OVER, false);
     const float heights[4] = {0.24f, 0.22f, 0.2f, 0.18f};
     float y = 0.1f;
     for (int i = 0; i < 4; i++) {
@@ -243,10 +251,11 @@ void bedroom_build(Kit* kit, Engine* engine, Scene* scene) {
     const float back = BEDROOM_IN_Z1 - BED_Z - STAND_HALF - 0.05f;
     nightstand(kit, front);
     nightstand(kit, back);
-    lamp(engine, scene, front);
+    lamp(kit, engine, scene, front);
     bedside_things(kit, back);
     chest(kit);
-    // A rag rug on the boards between the bed and the chest.
-    kit_frame_box(kit, &KIT_WORLD, MAT_RUG, 1.05f, 2.75f, FLOOR_Y, FLOOR_Y + 0.008f, BED_Z - 0.75f,
-                  BED_Z + 0.75f, false);
+    const float chest_front = BEDROOM_IN_X0 + OFF_WALL + CHEST_DEPTH + CHEST_OVER;
+    const float bed_foot = BEDROOM_IN_X1 - OFF_WALL - BED_LONG;
+    kit_frame_box(kit, &KIT_WORLD, MAT_RUG, chest_front + RUG_FROM_CHEST, bed_foot - RUG_FROM_BED,
+                  FLOOR_Y, FLOOR_Y + 0.008f, BED_Z - BED_HALF, BED_Z + BED_HALF, false);
 }

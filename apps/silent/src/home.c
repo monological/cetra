@@ -670,13 +670,12 @@ static void lantern(Kit* kit, Scene* scene, const Facade* s, float a, float y) {
     scene_add_light(scene, create_light(&desc));
 }
 
-// The plant's leaves and stem, grown once with the engine's tree generator at a houseplant's
-// size, standing at `at` against the hall's east wall, or up to `room` metres out from there:
-// how far out it stands.
+// The plant's leaves and stem, grown once with the engine's tree generator, in the generator's
+// units: on no graph, and placed by whoever stands it somewhere.
 #define PLANT_SCALE 0.008f // the generator's units to metres, at most
 #define PLANT_CLEAR 0.01f  // its nearest leaf's gap to the wall's far face
 #define PLANT_TURNS 36     // the turns tried, for the one reaching least toward the wall
-static float plant(Engine* engine, Scene* scene, const vec3 at, float room) {
+static SceneNode* plant(Engine* engine, Scene* scene) {
     ShaderProgram* pbr = engine_get_program(engine, CETRA_PROGRAM_PBR);
     enum { CELL = 128 };
     BakedMaps maps = {.width = CELL * TG_LEAF_VARIANTS, .height = CELL, .albedo_channels = 4};
@@ -739,43 +738,32 @@ static float plant(Engine* engine, Scene* scene, const vec3 at, float room) {
         free_mesh(leaves);
     }
     tree_skeleton_free(&skel);
-    /*
-     * None of it through the wall it stands against: grown where the pot was, its leaves on that
-     * side went through and hung in the corners of the bathroom and the bedroom behind it (spec
-     * 13.40). A leaf may touch the wall, as one did before, but stops short of its far face. The
-     * plant is turned so its crown reaches least toward the wall, moved out from it as far as
-     * that crown needs and the console's top allows, and made smaller by only what is left.
-     */
-    float best = FLT_MAX, yaw = 0.0f;
+    return node;
+}
+
+// The turn about the vertical, of PLANT_TURNS, that leaves `node`'s meshes reaching least along
+// the level direction `toward`, into `yaw`: how far they reach that way, in the node's own units.
+static float least_reach(const SceneNode* node, const vec3 toward, float* yaw) {
+    float best = FLT_MAX;
+    *yaw = 0.0f;
     for (int k = 0; k < PLANT_TURNS; k++) {
         const float a = 2.0f * GLM_PIf * (float)k / (float)PLANT_TURNS;
         const float c = cosf(a), s = sinf(a);
         float reach = -FLT_MAX;
         for (size_t i = 0; i < node->mesh_count; i++) {
             const Mesh* mesh = node->meshes[i];
-            for (size_t v = 0; v < mesh->vertex_count; v++)
-                reach = fmaxf(reach, mesh->vertices[3 * v] * c + mesh->vertices[3 * v + 2] * s);
+            for (size_t v = 0; v < mesh->vertex_count; v++) {
+                // Turned by a as glm_rotate_y turns it, then measured along `toward`.
+                const float x = mesh->vertices[3 * v], z = mesh->vertices[3 * v + 2];
+                reach = fmaxf(reach, toward[0] * (x * c + z * s) + toward[2] * (z * c - x * s));
+            }
         }
         if (reach < best) {
             best = reach;
-            yaw = a;
+            *yaw = a;
         }
     }
-    const float limit = HALL_X1 + 0.5f * INT_WALL - PLANT_CLEAR;
-    float out = 0.0f, scale = PLANT_SCALE;
-    if (node->mesh_count && best > 0.0f) {
-        out = glm_clamp(at[0] + PLANT_SCALE * best - limit, 0.0f, room);
-        scale = fminf(PLANT_SCALE, (limit - (at[0] - out)) / best);
-    }
-    printf("silent: the hall plant at %.0f%% of its size, %.2f m out from its place\n",
-           (double)(100.0f * scale / PLANT_SCALE), (double)out);
-    mat4 m;
-    glm_translate_make(m, (vec3){at[0] - out, at[1], at[2]});
-    glm_rotate_y(m, yaw, m);
-    glm_scale_uni(m, scale);
-    glm_mat4_copy(m, node->original_transform);
-    node_add_child(scene->root_node, node);
-    return out;
+    return best;
 }
 
 /*
@@ -838,16 +826,38 @@ static void console(Kit* kit, Engine* engine, Scene* scene) {
     kit_frame_card(kit, &photo, MAT_CARDS, inner, (vec3){pic->size[0], 0.0f, 0.0f},
                    (vec3){0.0f, pic->size[1] * 0.96f, -pic->size[1] * 0.28f}, pic->uv);
 
-    // The plant, and the pot under it wherever it had to stand to keep its leaves out of the
-    // wall, no further out than the pot's rim at the console's front edge: the frame's d runs out
-    // from the wall, so that is d.
+    /*
+     * The plant in its pot, and none of it through the wall: grown where the pot was, its leaves
+     * on that side went through and hung in the corners of the bathroom and the bedroom behind it
+     * (spec 13.40). A leaf may touch the wall, as one did before, but stops short of its far face,
+     * which is at d = -INT_WALL, the frame's d running out from the wall. The plant is turned so
+     * its crown reaches least toward the wall, moved out from it as far as that crown needs and
+     * no further than the pot's rim at the console's front edge, and made smaller by only what is
+     * left; the pot stands under it wherever it went.
+     */
     const vec2 pot[] = {{0.0f, 0.0f},   {0.05f, 0.0f},   {0.065f, 0.12f}, {0.07f, 0.13f},
                         {0.06f, 0.13f}, {0.058f, 0.11f}, {0.0f, 0.11f}};
-    const float pot_d = 0.17f, pot_rim = 0.07f;
+    const float pot_d = 0.17f, pot_rim = 0.07f, room = depth - pot_rim - pot_d - 0.01f;
+    const float clear = PLANT_CLEAR - INT_WALL; // the nearest leaf's d
+    SceneNode* leaves = plant(engine, scene);
+    vec3 toward = {0.0f, 0.0f, 0.0f};
+    kit_frame_dir(&f, 0.0f, 0.0f, -1.0f, toward);
+    float yaw = 0.0f;
+    const float best = least_reach(leaves, toward, &yaw);
+    float out = 0.0f, scale = PLANT_SCALE;
+    if (leaves->mesh_count && best > 0.0f) {
+        out = glm_clamp(PLANT_SCALE * best - (pot_d - clear), 0.0f, room);
+        scale = fminf(PLANT_SCALE, (pot_d + out - clear) / best);
+    }
+    printf("silent: the hall plant at %.0f%% of its size, %.2f m out from its place\n",
+           (double)(100.0f * scale / PLANT_SCALE), (double)out);
     vec3 at = {0.0f, 0.0f, 0.0f};
-    kit_frame_point(&f, 0.2f, top + 0.11f, pot_d, at);
+    kit_frame_point(&f, 0.2f, top + 0.11f, pot_d + out, at);
     glm_vec3_add(at, kit->origin, at);
-    const float out = plant(engine, scene, at, depth - pot_rim - pot_d - 0.01f);
+    glm_translate_make(leaves->original_transform, at);
+    glm_rotate_y(leaves->original_transform, yaw, leaves->original_transform);
+    glm_scale_uni(leaves->original_transform, scale);
+    node_add_child(scene->root_node, leaves);
     kit_frame_lathe(kit, &f, MAT_CERAMIC, 0.2f, pot_d + out, top, pot, KIT_COUNT(pot), 14);
 }
 
@@ -1043,28 +1053,31 @@ bool home_front_door(Door* door, Engine* engine, Scene* scene, EntityManager* em
                      *opening, DOOR_SWING);
 }
 
-// The bathroom's, hung on its back jamb against the bathroom's face of the wall, so it swings
-// into the bathroom and stands open along the floor kept clear for it.
-bool home_bath_door(Door* door, Engine* engine, Scene* scene, EntityManager* em,
-                    PhysicsWorld* physics) {
-    const KitOpening* opening = &WALLS[HW_HALL_E_BATH].openings[O_BATH_DOOR];
-    // Turned a quarter, so a runs toward -z from the hinge and d into the bathroom.
+// A door in the hall's east wall, hung on the opening's back jamb against the far room's face of
+// the wall: turned a quarter, so a runs toward -z from the hinge and d into the room, it swings
+// in, a little past square, and stands open across the room from that jamb.
+#define EAST_DOOR_SWING 1.6f
+static bool east_door(Door* door, Engine* engine, Scene* scene, EntityManager* em,
+                      PhysicsWorld* physics, const char* name, const KitOpening* opening) {
     const float x = HALL_X1 + 0.5f * INT_WALL - 0.5f * DOOR_THICK - 0.005f;
     const KitFrame hinge = {{x, 0.0f, opening->to}, 0.5f * GLM_PIf};
-    return door_hang(door, engine, scene, em, physics, "bath_door", door_leaf_panelled, &hinge,
-                     *opening, 1.6f);
+    return door_hang(door, engine, scene, em, physics, name, door_leaf_panelled, &hinge, *opening,
+                     EAST_DOOR_SWING);
 }
 
-// The bedroom's (spec 13.40), the bathroom's way round: hung on its back jamb against the
-// bedroom's face of the wall, so it swings in and stands open along the room's back stretch of
-// that wall, leaving the front stretch to the dresser.
+// The bathroom's, standing open over the floor kept clear for it.
+bool home_bath_door(Door* door, Engine* engine, Scene* scene, EntityManager* em,
+                    PhysicsWorld* physics) {
+    return east_door(door, engine, scene, em, physics, "bath_door",
+                     &WALLS[HW_HALL_E_BATH].openings[O_BATH_DOOR]);
+}
+
+// The bedroom's (spec 13.40), standing open clear of the dresser, which has the wall's front
+// stretch.
 bool home_bedroom_door(Door* door, Engine* engine, Scene* scene, EntityManager* em,
                        PhysicsWorld* physics) {
-    const KitOpening* opening = &WALLS[HW_HALL_E_BEDROOM].openings[O_BEDROOM_DOOR];
-    const float x = HALL_X1 + 0.5f * INT_WALL - 0.5f * DOOR_THICK - 0.005f;
-    const KitFrame hinge = {{x, 0.0f, opening->to}, 0.5f * GLM_PIf};
-    return door_hang(door, engine, scene, em, physics, "bedroom_door", door_leaf_panelled, &hinge,
-                     *opening, 1.6f);
+    return east_door(door, engine, scene, em, physics, "bedroom_door",
+                     &WALLS[HW_HALL_E_BEDROOM].openings[O_BEDROOM_DOOR]);
 }
 
 // The basement's (spec 13.31), hung on its front jamb against the stairwell's face of the wall,

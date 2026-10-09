@@ -46,9 +46,11 @@
 // The way from the stairwell's foot into the basement, on the right at the bottom: the whole
 // width of the floor there, and a doorway's height under a header.
 #define FOOT_HEAD (BASEMENT_Y + 2.1f)
+static const KitOpening WAY_IN = {CELLAR_X0, CELLAR_FOOT_X, BASEMENT_Y, FOOT_HEAD, .door = true};
 // Feet this far over the basement's floor, or nearer, are at the flight's foot: its last two
-// steps and the floor below them.
+// steps and the floor below them. Feet over HALL_NEAR are back up near the hall.
 #define FOOT_REACH (2.0f * CELLAR_RISE + 0.05f)
+#define HALL_NEAR  (FLOOR_Y - 0.5f)
 
 // The bulb: on a cord from a rose on the stairwell's ceiling over the upper flight, low enough
 // that the door opens on it at a standing eye's height. Lengths from the pivot under the rose.
@@ -259,8 +261,7 @@ static void stairwell(Kit* kit) {
     kit_frame_box(kit, &KIT_WORLD, MAT_CELLAR_CONCRETE, CELLAR_X0, foot, FOOT_HEAD, JOIST_Y0, s0,
                   STAIRWELL_Z0, true);
 
-    const KitOpening way_in = {CELLAR_X0, foot, BASEMENT_Y, FOOT_HEAD, .door = true};
-    home_line_stairwell(kit, MAT_CELLAR_WALL, &way_in);
+    home_line_stairwell(kit, MAT_CELLAR_WALL, &WAY_IN);
     kit_frame_box(kit, &KIT_WORLD, MAT_CELLAR_DADO, CELLAR_HEAD_X - LINING, CELLAR_HEAD_X,
                   BASEMENT_Y, FLOOR_Y, STAIRWELL_Z0, CELLAR_Z1, false);
 
@@ -643,8 +644,7 @@ void basement_start(Basement* b, Engine* engine, Scene* scene, AudioSystem* audi
     // nothing: swinging in its own light's kept views, it would be a mover in them every frame,
     // and it is its light's body besides.
     Kit kit;
-    kit_init(&kit, scene, NULL, NULL);
-    mats_register(&kit, engine, scene);
+    mats_kit(&kit, engine, scene);
     kit.casts_nothing = true;
     bulb_parts(&kit);
     b->glass = kit.materials[MAT_BULB];
@@ -718,31 +718,43 @@ void basement_update(Basement* b, const Door* door, double time) {
     drip(b, time);
 }
 
-bool basement_at_foot(const vec3 feet) {
-    return feet[0] < HALL_X0 && feet[2] > STAIRWELL_Z0 && feet[2] < CELLAR_Z1 &&
-           feet[1] < BASEMENT_Y + FOOT_REACH;
-}
-
 // Filling the way in: its width, the partition's depth through, from the floor to the header.
-void basement_bar(Basement* b, EntityManager* em, PhysicsWorld* physics) {
+static void bar(Basement* b, EntityManager* em, PhysicsWorld* physics) {
     if (b->bar || !em || !physics)
         return;
     b->bar = create_entity(em, "basement_bar");
     if (!b->bar)
         return;
-    const float x0 = CELLAR_X0, x1 = CELLAR_FOOT_X;
-    glm_vec3_copy((vec3){0.5f * (x0 + x1), 0.5f * (BASEMENT_Y + FOOT_HEAD), STAIRWELL_WALL_Z},
+    const KitOpening* o = &WAY_IN;
+    glm_vec3_copy((vec3){0.5f * (o->from + o->to), 0.5f * (o->bottom + o->top), STAIRWELL_WALL_Z},
                   b->bar->position);
-    PhysicsShapeDesc box = {
-        .type = SHAPE_BOX,
-        .box.half_extents = {0.5f * (x1 - x0), 0.5f * (FOOT_HEAD - BASEMENT_Y), 0.5f * INT_WALL},
-        .density = 0.0f};
+    PhysicsShapeDesc box = {.type = SHAPE_BOX,
+                            .box.half_extents = {0.5f * (o->to - o->from),
+                                                 0.5f * (o->top - o->bottom), 0.5f * INT_WALL},
+                            .density = 0.0f};
     entity_add_rigid_body(b->bar, physics, &box, MOTION_STATIC, OBJ_LAYER_STATIC);
 }
 
-void basement_unbar(Basement* b, EntityManager* em) {
+static void unbar(Basement* b, EntityManager* em) {
     if (!b->bar)
         return;
     destroy_entity(em, b->bar);
     b->bar = NULL;
+}
+
+bool basement_hold(Basement* b, EntityManager* em, PhysicsWorld* physics, const vec3 feet,
+                   bool light) {
+    if (light)
+        unbar(b, em);
+    else
+        bar(b, em, physics);
+    if (feet[0] < HALL_X0 && feet[2] > STAIRWELL_Z0 && feet[2] < CELLAR_Z1 &&
+        feet[1] < BASEMENT_Y + FOOT_REACH) {
+        const bool arrived = !b->at_foot;
+        b->at_foot = true;
+        return arrived && !light;
+    }
+    if (feet[1] > HALL_NEAR)
+        b->at_foot = false;
+    return false;
 }

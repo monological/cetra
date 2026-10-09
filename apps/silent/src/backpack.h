@@ -19,7 +19,7 @@
  * arranges the bag, and it is never full.
  */
 
-typedef enum { ITEM_FLASHLIGHT, ITEM_COUNT } ItemId;
+typedef enum { ITEM_NONE = -1, ITEM_FLASHLIGHT, ITEM_COUNT } ItemId;
 
 #define BAG_COLS     8
 #define BAG_MIN_ROWS 4
@@ -35,13 +35,13 @@ typedef struct ItemSpec {
 
 extern const ItemSpec ITEMS[ITEM_COUNT];
 
-// The item a command line names, or -1.
-int item_by_id(const char* id);
+// The item a command line names, or ITEM_NONE.
+ItemId item_by_id(const char* id);
 
 typedef struct Backpack {
-    SceneNode* bag; // lying on the bed until it is taken, then NULL
-    vec3 at;        // the middle of it, which the player reaches for
-    bool taken;
+    bool taken;                    // the player has it
+    SceneNode* bag;                // lying on the bed until then
+    vec3 at;                       // the middle of it, which the player reaches for
     SceneNode* models[ITEM_COUNT]; // each thing in it alone, for the backpack's screen
     // What is carried, in the order it was had, and where each lies in the grid.
     ItemId held[ITEM_COUNT];
@@ -53,10 +53,6 @@ typedef struct Backpack {
 // The bag on the bed, or nothing there when it is already `taken`, and the models of what is in
 // it.
 void backpack_build(Backpack* bp, Engine* engine, Scene* scene, bool taken);
-// How far the eye is from the bag when it is in reach -- door_reach_distance's test -- and
-// FLT_MAX when it is not, or is taken.
-float backpack_reach_distance(const Backpack* bp, const vec3 eye, const vec3 forward, float reach,
-                              float cone);
 // Off the bed: the player has it, and what is in it.
 void backpack_take(Backpack* bp);
 // Whether the player has `item`.

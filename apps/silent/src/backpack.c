@@ -1,25 +1,23 @@
-#include <float.h>
 #include <string.h>
 
 #include "backpack.h"
 #include "bedroom.h"
-#include "door.h"
 #include "kit.h"
 #include "mats.h"
 
 const ItemSpec ITEMS[ITEM_COUNT] = {
     [ITEM_FLASHLIGHT] = {"flashlight",
-                         "Flashlight",
+                         "FLASHLIGHT",
                          "A heavy metal flashlight, its black paint worn through at the grip. "
                          "F turns it on and off.",
                          {3, 1}},
 };
 
-int item_by_id(const char* id) {
+ItemId item_by_id(const char* id) {
     for (int i = 0; i < ITEM_COUNT; i++)
         if (id && !strcmp(ITEMS[i].id, id))
-            return i;
-    return -1;
+            return (ItemId)i;
+    return ITEM_NONE;
 }
 
 // How the bag lies on the quilt: its top toward the bed's head, turned a little off square,
@@ -27,6 +25,8 @@ int item_by_id(const char* id) {
 #define BAG_YAW  (0.5f * GLM_PIf + 0.35f)
 #define BAG_ROLL 0.12f
 #define BAG_SINK 0.012f
+// Its middle over the quilt's top, which is what the player reaches for.
+#define BAG_REACH_Y 0.08f
 
 #define STRAP_POINTS 16
 
@@ -81,22 +81,25 @@ static void bag(Kit* kit) {
  * and in it a polished reflector behind the lens.
  */
 #define TORCH_HALF 0.15f
+#define TORCH_RIBS 6 // the knurling's rings round the barrel
 static void flashlight(Kit* kit) {
     const KitFrame* f = &KIT_WORLD;
-    vec2 body[KIT_MAX_POINTS];
-    int n = 0;
     const vec2 tail[] = {
         {0.0f, 0.0f}, {0.017f, 0.0f}, {0.0195f, 0.003f}, {0.0195f, 0.028f}, {0.0182f, 0.031f}};
+    const vec2 head[] = {{0.0182f, 0.16f}, {0.019f, 0.168f}, {0.019f, 0.2f},  {0.023f, 0.215f},
+                         {0.029f, 0.25f},  {0.031f, 0.26f},  {0.031f, 0.29f}, {0.0285f, 0.294f},
+                         {0.026f, 0.294f}, {0.026f, 0.288f}};
+    _Static_assert(KIT_COUNT(tail) + 2 * TORCH_RIBS + KIT_COUNT(head) <= KIT_MAX_POINTS,
+                   "the flashlight's profile overruns a lathe's");
+    vec2 body[KIT_MAX_POINTS];
+    int n = 0;
     for (int i = 0; i < KIT_COUNT(tail); i++)
         glm_vec2_copy((float*)tail[i], body[n++]);
-    for (int i = 0; i < 6; i++) {
+    for (int i = 0; i < TORCH_RIBS; i++) {
         const float z = 0.045f + 0.018f * (float)i;
         glm_vec2_copy((vec2){0.0182f, z}, body[n++]);
         glm_vec2_copy((vec2){0.0172f, z + 0.009f}, body[n++]);
     }
-    const vec2 head[] = {{0.0182f, 0.16f}, {0.019f, 0.168f}, {0.019f, 0.2f},  {0.023f, 0.215f},
-                         {0.029f, 0.25f},  {0.031f, 0.26f},  {0.031f, 0.29f}, {0.0285f, 0.294f},
-                         {0.026f, 0.294f}, {0.026f, 0.288f}};
     for (int i = 0; i < KIT_COUNT(head); i++)
         glm_vec2_copy((float*)head[i], body[n++]);
     const vec3 axis = {0.0f, 0.0f, 1.0f};
@@ -115,41 +118,56 @@ static void flashlight(Kit* kit) {
 // What the bag holds when it is found.
 static const ItemId CONTENTS[] = {ITEM_FLASHLIGHT};
 
-// Each of `order`'s footprints where it first fits in `rows` rows, in that order, reading the grid
-// a row at a time; false when one will not fit.
-static bool place(Backpack* bp, const ItemId* order, int n, int rows) {
+// Whether a `w` x `h` footprint at column `c`, row `r` is clear of what lies in `used`.
+static bool fits(const bool used[BAG_MAX_ROWS][BAG_COLS], int c, int r, int w, int h) {
+    for (int y = r; y < r + h; y++)
+        for (int x = c; x < c + w; x++)
+            if (used[y][x])
+                return false;
+    return true;
+}
+
+// `item` where it first fits, reading the grid a row at a time, into `cell`; false when it fits
+// nowhere in BAG_MAX_ROWS.
+static bool place_one(bool used[BAG_MAX_ROWS][BAG_COLS], ItemId item, int cell[2]) {
+    const int w = ITEMS[item].cells[0], h = ITEMS[item].cells[1];
+    for (int r = 0; r + h <= BAG_MAX_ROWS; r++)
+        for (int c = 0; c + w <= BAG_COLS; c++) {
+            if (!fits(used, c, r, w, h))
+                continue;
+            for (int y = r; y < r + h; y++)
+                for (int x = c; x < c + w; x++)
+                    used[y][x] = true;
+            cell[0] = c;
+            cell[1] = r;
+            return true;
+        }
+    return false;
+}
+
+// Each of `order`'s footprints where it first fits, in that order, into `cells`: the rows they
+// take, or past BAG_MAX_ROWS when one does not fit. First fit read a row at a time only ever adds
+// places after the ones it had, so a grid of any more rows packs them the same.
+static int place(const ItemId* order, int n, int cells[ITEM_COUNT][2]) {
     bool used[BAG_MAX_ROWS][BAG_COLS];
     memset(used, 0, sizeof(used));
+    int rows = 0;
     for (int k = 0; k < n; k++) {
-        const int w = ITEMS[order[k]].cells[0], h = ITEMS[order[k]].cells[1];
-        bool placed = false;
-        for (int r = 0; r + h <= rows && !placed; r++)
-            for (int c = 0; c + w <= BAG_COLS && !placed; c++) {
-                bool free = true;
-                for (int y = r; y < r + h && free; y++)
-                    for (int x = c; x < c + w && free; x++)
-                        free = !used[y][x];
-                if (!free)
-                    continue;
-                for (int y = r; y < r + h; y++)
-                    for (int x = c; x < c + w; x++)
-                        used[y][x] = true;
-                bp->cell[order[k]][0] = c;
-                bp->cell[order[k]][1] = r;
-                placed = true;
-            }
-        if (!placed)
-            return false;
+        if (!place_one(used, order[k], cells[order[k]]))
+            return BAG_MAX_ROWS + 1;
+        const int end = cells[order[k]][1] + ITEMS[order[k]].cells[1];
+        rows = end > rows ? end : rows;
     }
-    return true;
+    return rows;
 }
 
 static int area(ItemId item) {
     return ITEMS[item].cells[0] * ITEMS[item].cells[1];
 }
 
-// Where everything carried lies, as the header says, and the grid's rows: down to the last thing
-// and BAG_SPARE more.
+// Where everything carried lies, as the header says -- in the order it was had, unless that will
+// not fit the rows the grid has at the least and largest first takes fewer -- and the grid's
+// rows: down to the last thing and BAG_SPARE more.
 static void pack(Backpack* bp) {
     // Largest first, each size in the order its things were had in.
     ItemId largest[ITEM_COUNT] = {0};
@@ -160,17 +178,12 @@ static void pack(Backpack* bp) {
         for (int k = 0; k < bp->held_count; k++)
             if (area(bp->held[k]) == a)
                 largest[n++] = bp->held[k];
-    int rows = BAG_MIN_ROWS;
-    while (rows < BAG_MAX_ROWS && !place(bp, bp->held, bp->held_count, rows) &&
-           !place(bp, largest, bp->held_count, rows))
-        rows++;
-    int bottom = 0;
-    for (int k = 0; k < bp->held_count; k++) {
-        const ItemId item = bp->held[k];
-        const int end = bp->cell[item][1] + ITEMS[item].cells[1];
-        bottom = end > bottom ? end : bottom;
-    }
-    rows = bottom + BAG_SPARE;
+    int by_held[ITEM_COUNT][2] = {{0}}, by_size[ITEM_COUNT][2] = {{0}};
+    const int held_rows = place(bp->held, bp->held_count, by_held);
+    const int size_rows = place(largest, bp->held_count, by_size);
+    const bool by_size_wins = held_rows > BAG_MIN_ROWS && size_rows < held_rows;
+    memcpy(bp->cell, by_size_wins ? by_size : by_held, sizeof(bp->cell));
+    const int rows = (by_size_wins ? size_rows : held_rows) + BAG_SPARE;
     bp->rows = rows < BAG_MIN_ROWS ? BAG_MIN_ROWS : rows > BAG_MAX_ROWS ? BAG_MAX_ROWS : rows;
 }
 
@@ -182,44 +195,32 @@ static void unpack(Backpack* bp) {
     pack(bp);
 }
 
-// A model as a kit of its own, built round its origin, its materials its own.
-static SceneNode* model(Engine* engine, Scene* scene, const char* name, void (*build)(Kit*),
-                        bool casts) {
-    Kit kit;
-    kit_init(&kit, scene, NULL, NULL);
-    mats_register(&kit, engine, scene);
-    kit.casts_nothing = !casts;
-    build(&kit);
-    return kit_finish(&kit, name);
-}
-
 void backpack_build(Backpack* bp, Engine* engine, Scene* scene, bool taken) {
     *bp = (Backpack){.taken = taken, .rows = BAG_MIN_ROWS};
     if (taken)
         unpack(bp);
-    bedroom_bed_top(bp->at);
+    vec3 rest = {0.0f, 0.0f, 0.0f};
+    bedroom_bed_top(rest);
+    glm_vec3_copy(rest, bp->at);
+    bp->at[1] += BAG_REACH_Y;
     if (!taken) {
+        Kit kit;
+        mats_kit(&kit, engine, scene);
+        bag(&kit);
+        bp->bag = kit_finish(&kit, "backpack");
         // No capture keeps it: it is taken while the game runs.
-        bp->bag = model(engine, scene, "backpack", bag, true);
         bp->bag->capture_hidden = true;
-        const vec3 rest = {bp->at[0], bp->at[1] - BAG_SINK, bp->at[2]};
-        glm_translate_make(bp->bag->original_transform, (float*)rest);
+        glm_translate_make(bp->bag->original_transform,
+                           (vec3){rest[0], rest[1] - BAG_SINK, rest[2]});
         glm_rotate_y(bp->bag->original_transform, BAG_YAW, bp->bag->original_transform);
         glm_rotate_z(bp->bag->original_transform, BAG_ROLL, bp->bag->original_transform);
     }
-    bp->at[1] += 0.08f;
-    // Only ever drawn alone, on the backpack's screen. Off the graph, no draw registers its
-    // materials, which the scene then would not free: they are registered here.
-    SceneNode* torch = model(engine, scene, "flashlight", flashlight, false);
-    node_remove_child(scene->root_node, torch);
-    for (size_t i = 0; i < torch->mesh_count; i++)
-        scene_add_material(scene, torch->meshes[i]->material);
-    bp->models[ITEM_FLASHLIGHT] = torch;
-}
-
-float backpack_reach_distance(const Backpack* bp, const vec3 eye, const vec3 forward, float reach,
-                              float cone) {
-    return bp->taken ? FLT_MAX : reach_distance(bp->at, eye, forward, reach, cone);
+    // Only ever drawn alone, on the backpack's screen.
+    Kit kit;
+    mats_kit(&kit, engine, scene);
+    kit.casts_nothing = true;
+    flashlight(&kit);
+    bp->models[ITEM_FLASHLIGHT] = kit_finish_alone(&kit, "flashlight");
 }
 
 void backpack_take(Backpack* bp) {

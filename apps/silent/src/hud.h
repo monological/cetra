@@ -18,28 +18,33 @@
 typedef struct HudLine {
     UIElement* plate;
     UIElement* label;
-    char text[128];
-    float alpha; // what the plate and its words are drawn at
+    const float* fg; // its words' colour
+    float alpha;     // what the plate and its words are drawn at
 } HudLine;
 
 typedef struct Hud {
-    const Engine* engine; // borrowed: the window it is placed in
     UISystem* ui;
     Font* font; // the face every screen in it is set in, the font pool's
     UIScreen* screen;
     HudLine prompt, thought;
     float thought_age; // seconds since the thought was had
+    const char* hint;  // the prompt while no other is given, borrowed
+    float hint_left;   // seconds it has left
 } Hud;
 
 // False, with the reason printed, if the font or the UI cannot be made; the game runs on without
 // words.
 bool hud_start(Hud* hud, Engine* engine);
-// Show `text` as the prompt, or nothing for NULL. Cheap to call every frame with the same text.
+// Show `text` as the prompt, or the hint, or nothing, for NULL. Cheap to call every frame with
+// the same text.
 void hud_prompt(Hud* hud, const char* text);
-// Think `text`, in place of any thought on screen.
+// `text` as the prompt for `seconds` while no other is given, from the next hud_prompt.
+void hud_hint(Hud* hud, const char* text, float seconds);
+// Think `text`, in place of any thought on screen; the same thought again stays up.
 void hud_think(Hud* hud, const char* text);
-// Per frame: the thought's fade, and the lines placed in the window as it is now.
-void hud_update(Hud* hud, float dt);
+// Per frame: the thought's fade and the hint's time, and the lines placed in a window
+// `height` points tall.
+void hud_update(Hud* hud, float dt, float height);
 void hud_free(Hud* hud);
 
 #endif // _SILENT_HUD_H_
