@@ -117,6 +117,20 @@ add_custom_command(
     VERBATIM
 )
 
+# The engine's own source as one number (spec 13.42), for a cooked capture's key: any edit to the
+# library or a shader leaves every cooked capture unfindable. Re-digested whenever a source the
+# glob finds changes; the generator rewrites the header only when the number does.
+set(BUILD_DIGEST_HEADER ${SHADER_GEN_DIR}/build_digest.h)
+file(GLOB _digested CONFIGURE_DEPENDS
+    src/*.c src/*.h src/*.cpp src/game/*.c src/game/*.h src/procedural/*.c src/procedural/*.h)
+add_custom_command(
+    OUTPUT ${BUILD_DIGEST_HEADER}
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/gen_build_digest.py ${CMAKE_CURRENT_SOURCE_DIR} ${BUILD_DIGEST_HEADER}
+    DEPENDS ${_digested} ${SHADER_FILES} ${CMAKE_CURRENT_SOURCE_DIR}/gen_build_digest.py
+    COMMENT "Digesting the engine's source"
+    VERBATIM
+)
+
 # An app's own shaders as C strings (spec 13.29): cetra_embed_shaders(<target> <dir>) turns
 # <dir>/*.glsl into <target>_shaders.h, one `<stem>_shader_str` each, for the target alone to
 # include. The #include lines are left where they stand and resolved at runtime against the
@@ -156,7 +170,8 @@ file(GLOB CETRA_SOURCES
 
 # The static library. Listing the generated header as a source is what orders
 # its generation before the objects that include it.
-add_library(cetra STATIC ${CETRA_SOURCES} ${SHADER_HEADER} ${SHADER_INCLUDES_HEADER})
+add_library(cetra STATIC ${CETRA_SOURCES} ${SHADER_HEADER} ${SHADER_INCLUDES_HEADER}
+    ${BUILD_DIGEST_HEADER})
 
 # The internal tree as a target, for an in-tree app to link: what makes
 # #include "cetra/internal/foo.h" resolve. Nothing links it but add_cetra_app,

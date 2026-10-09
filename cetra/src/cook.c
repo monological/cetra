@@ -89,11 +89,15 @@ static void fold_bytes(CookKey* key, const void* data, size_t bytes) {
         key->hash = fnv1a64(key->hash, data, bytes);
 }
 
+bool cook_enabled(void) {
+    return g_cook.configured && g_cook.enabled;
+}
+
 CookKey cook_key(const char* recipe) {
     CookKey key;
     memset(&key, 0, sizeof(key));
     key.hash = FNV1A64_BASIS;
-    if (!g_cook.configured || !g_cook.enabled)
+    if (!cook_enabled())
         return key; // valid stays false; folds no-op, fetch and store refuse
     if (!recipe || strlen(recipe) >= sizeof(key.recipe)) {
         log_warn("cook: recipe '%s' does not fit; this artefact is uncacheable",

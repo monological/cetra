@@ -401,6 +401,12 @@ with `wall` for how much of a part is submission),
 `--gi-cull-pixels <f>` (spec 13.42, render and silent — the GI world's `cull_pixels`: a GI probe
 leaves out what spans fewer than f pixels across its 16-pixel faces, unless it gives off light or
 hangs under a node set `capture_always`. 0, the default, takes everything),
+`--gi-cook` (spec 13.42 — the GI world's and the probe set's `cook`: a volume's opening sweep and
+a probe's column are loaded from the cook when a run of the same scene stored them, and stored
+when not. The key is the scene at rest within the capture's reach, the engine's source and the
+driver, so any change to what a capture would see misses; a scene that changes during a sweep is
+not stored and logs `gi-cook volume=N result=unstable`. Off by default, since the suite shares one
+cook directory; `--cook-dir` and `--no-cook` apply. silent turns it on),
 `--road-width-at <frame:value>` (spec 11.68 — set every road's width mid-run. The `--layer-blend-at`
 idiom, and it exercises BOTH halves of the road path in one stroke: the segment block re-uploads
 and the composite cache's by-value key goes stale. A road is authored only in a `.cscn`, so this
@@ -1018,6 +1024,12 @@ the first.
 - **`--capture-timing`:** each GI volume prints its `gi-timing`, `gi-sizes` and `gi-heavy` rows as it
   converges (spec 13.42; the render app's flag of the same name). It slows the sweep, so time
   `lit` without it.
+
+**The house's light is cooked** (spec 13.42): the GI volumes' opening sweeps and the reflection
+probes' columns go into the cook (`cooked/`, or `CETRA_COOK_DIR`) the first time, and a later
+launch whose scene is the same loads them instead of capturing -- `lit` at about 2 s rather than
+13. Any change to the engine's source, the driver or what the captures see misses and captures
+again. `CETRA_NO_COOK=1` captures live.
 
 **The frame is one sample with jittered TAA, headless as well as windowed.** Two reasons it is not
 the engine's usual headless setup:

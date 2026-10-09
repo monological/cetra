@@ -10,6 +10,7 @@
 #include "cJSON.h"
 #include "camera.h"
 #include "camera_rig.h"
+#include "cook.h"
 #include "engine.h"
 #include "exposure.h"
 #include "gi_volume.h"
@@ -1259,19 +1260,21 @@ static bool _write_element(cJSON* array, ConfigOwner owner, const void* base, co
     return true;
 }
 
-char* config_snapshot_write(Engine* engine, Scene* scene, int* out_fields) {
+// The rows of every owner in `owners` (a bit per ConfigOwner) as a tree, with the source block
+// when asked; NULL, nothing leaked, on failure.
+static cJSON* _snapshot_tree(Engine* engine, Scene* scene, unsigned owners, bool with_source,
+                             int* out_fields) {
     int written = 0;
-    if (out_fields)
-        *out_fields = 0;
     cJSON* root = cJSON_CreateObject();
     if (!root)
         return NULL;
     cJSON_AddNumberToObject(root, "version", 1);
-    _write_source(root, engine);
+    if (with_source)
+        _write_source(root, engine);
 
     for (int i = 0; i < CFG_FIELD_COUNT; i++) {
         const ConfigField* f = &CFG_FIELDS[i];
-        if ((ConfigOwner)f->owner >= CFG_FIRST_ELEM_OWNER)
+        if ((ConfigOwner)f->owner >= CFG_FIRST_ELEM_OWNER || !(owners & (1u << f->owner)))
             continue;
         const void* base = _owner_base((ConfigOwner)f->owner, engine, scene);
         // An absent subsystem omits its whole section rather than writing it
@@ -1292,7 +1295,7 @@ char* config_snapshot_write(Engine* engine, Scene* scene, int* out_fields) {
     for (size_t a = 0; ok && a < CFG_ARRAY_COUNT; a++) {
         const ConfigArray* arr = &CFG_ARRAYS[a];
         const char* name = NULL;
-        if (!arr->at(scene, 0, &name))
+        if (!(owners & (1u << arr->owner)) || !arr->at(scene, 0, &name))
             continue;
         cJSON* array = cJSON_AddArrayToObject(root, arr->key);
         ok = array != NULL;
@@ -1308,12 +1311,40 @@ char* config_snapshot_write(Engine* engine, Scene* scene, int* out_fields) {
         cJSON_Delete(root);
         return NULL;
     }
+    if (out_fields)
+        *out_fields = written;
+    return root;
+}
 
+char* config_snapshot_write(Engine* engine, Scene* scene, int* out_fields) {
+    int written = 0;
+    if (out_fields)
+        *out_fields = 0;
+    cJSON* root = _snapshot_tree(engine, scene, ~0u, true, &written);
+    if (!root)
+        return NULL;
     char* text = cJSON_Print(root);
     cJSON_Delete(root);
     if (text && out_fields)
         *out_fields = written;
     return text;
+}
+
+void config_snapshot_fold(Engine* engine, Scene* scene, CookKey* key) {
+    // What a light capture reads, and nothing a run decides: not the camera, the post chain or
+    // the exposure -- a capture renders at unity from its own eye -- nor the engine's section,
+    // whose overlays and capture budget differ between a window and a headless run of one scene.
+    const unsigned owners = 1u << CFG_SCENE | 1u << CFG_SHADOW | 1u << CFG_SKY | 1u << CFG_CLOUDS |
+                            1u << CFG_IBL | 1u << CFG_GI | 1u << CFG_RAIN | 1u << CFG_DECAL_ELEM |
+                            1u << CFG_LIGHT_ELEM | 1u << CFG_MATERIAL_ELEM;
+    cJSON* root = _snapshot_tree(engine, scene, owners, false, NULL);
+    char* text = root ? cJSON_PrintUnformatted(root) : NULL;
+    cJSON_Delete(root);
+    if (text)
+        cook_key_str(key, text);
+    else
+        key->valid = false;
+    free(text);
 }
 
 bool config_snapshot_save(Engine* engine, Scene* scene, const char* path) {

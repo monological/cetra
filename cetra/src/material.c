@@ -382,47 +382,45 @@ Material* create_material() {
     return material;
 }
 
+void material_textures(const Material* material, Texture* out[MATERIAL_TEXTURE_SLOTS]) {
+    Texture* const maps[] = {material->albedo_tex,
+                             material->normal_tex,
+                             material->roughness_tex,
+                             material->metalness_tex,
+                             material->ambient_occlusion_tex,
+                             material->emissive_tex,
+                             material->height_tex,
+                             material->opacity_tex,
+                             material->microsurface_tex,
+                             material->anisotropy_tex,
+                             material->sheen_tex,
+                             material->reflectance_tex,
+                             material->clearcoat_normal_tex,
+                             material->splat_tex};
+    _Static_assert(sizeof(maps) / sizeof(maps[0]) + 2 * MATERIAL_MAX_LAYERS ==
+                       MATERIAL_TEXTURE_SLOTS,
+                   "MATERIAL_TEXTURE_SLOTS counts the maps above");
+    size_t n = 0;
+    for (size_t t = 0; t < sizeof(maps) / sizeof(maps[0]); t++)
+        out[n++] = maps[t];
+    // Every slot, not layer_count of them: lowering the count leaves the textures above it
+    // retained, and releasing only the live prefix would leak exactly the layers somebody
+    // edited away.
+    for (int i = 0; i < MATERIAL_MAX_LAYERS; i++) {
+        out[n++] = material->layers[i].albedo_tex;
+        out[n++] = material->layers[i].surface_tex;
+    }
+}
+
 void free_material(Material* material) {
     if (material) {
         if (material->name)
             free(material->name);
-        // Release all texture references
-        if (material->albedo_tex)
-            texture_release(material->albedo_tex);
-        if (material->normal_tex)
-            texture_release(material->normal_tex);
-        if (material->roughness_tex)
-            texture_release(material->roughness_tex);
-        if (material->metalness_tex)
-            texture_release(material->metalness_tex);
-        if (material->ambient_occlusion_tex)
-            texture_release(material->ambient_occlusion_tex);
-        if (material->emissive_tex)
-            texture_release(material->emissive_tex);
-        if (material->height_tex)
-            texture_release(material->height_tex);
-        if (material->opacity_tex)
-            texture_release(material->opacity_tex);
-        if (material->microsurface_tex)
-            texture_release(material->microsurface_tex);
-        if (material->anisotropy_tex)
-            texture_release(material->anisotropy_tex);
-        if (material->sheen_tex)
-            texture_release(material->sheen_tex);
-        if (material->reflectance_tex)
-            texture_release(material->reflectance_tex);
-        if (material->clearcoat_normal_tex)
-            texture_release(material->clearcoat_normal_tex);
-        if (material->splat_tex)
-            texture_release(material->splat_tex);
-        // Every slot, not layer_count of them: lowering the count leaves the
-        // textures above it retained, and releasing only the live prefix would
-        // leak exactly the layers somebody edited away.
-        for (int i = 0; i < MATERIAL_MAX_LAYERS; i++) {
-            if (material->layers[i].albedo_tex)
-                texture_release(material->layers[i].albedo_tex);
-            if (material->layers[i].surface_tex)
-                texture_release(material->layers[i].surface_tex);
+        Texture* textures[MATERIAL_TEXTURE_SLOTS];
+        material_textures(material, textures);
+        for (size_t t = 0; t < MATERIAL_TEXTURE_SLOTS; t++) {
+            if (textures[t])
+                texture_release(textures[t]);
         }
         free_material_layers_vt(material->layers_vt);
 

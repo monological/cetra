@@ -44,6 +44,11 @@ typedef struct Texture {
     // never stale for the same reason mean_rgb is not.
     int distribute_from_level;
 
+    // What it is, for a key that must not outlive it (spec 13.42): the cook's key for its pixels
+    // and how they are stored, set at upload; 0 when the cook was off then, which a key that
+    // needs it reads as "cannot say".
+    uint64_t content_key;
+
     size_t ref_count; // Reference count for shared ownership
 
     UT_hash_handle hh; // Makes this structure hashable

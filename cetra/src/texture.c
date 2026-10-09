@@ -959,10 +959,13 @@ static int texture_expected_levels(int width, int height) {
 // usable level 0 -- restored below by a direct upload when even the stack's
 // level-0 copy could not be made. out_distribute_level, when non-NULL, gets
 // the binary-alpha scan of whichever stack was uploaded (-1 on the early-out
-// paths and wherever the scan does not apply).
+// paths and wherever the scan does not apply). out_content gets the key's hash,
+// which names the pixels and how they are stored: the texture's identity for a
+// key that must not outlive it (spec 13.42), 0 with the cook off.
 static bool texture_upload_image(GLenum internal_format, GLenum data_format, int width, int height,
                                  int channels, TextureDesc desc, const unsigned char* pixels,
-                                 GLenum* out_internal_format, int* out_distribute_level) {
+                                 GLenum* out_internal_format, int* out_distribute_level,
+                                 uint64_t* out_content) {
     TextureBlockFormat block = texture_block_format_for(desc.use, channels);
     const TextureBlockFormat keyed_block = block; // what the key promises the payload is
     GLenum gl_block = texture_block_gl_format(block, desc.is_srgb);
@@ -985,6 +988,7 @@ static bool texture_upload_image(GLenum internal_format, GLenum data_format, int
     cook_key_u32(&tk, (uint32_t)gl_block);
     cook_key_u32(&tk, (uint32_t)internal_format);
     cook_key_bytes(&tk, pixels, (size_t)width * (size_t)height * (size_t)channels);
+    *out_content = tk.valid ? tk.hash : 0;
 
     const int expected = texture_expected_levels(width, height);
     CookBlob sections[TEXTURE_MAX_LEVELS];
@@ -1204,6 +1208,7 @@ Texture* create_texture() {
     texture->height = 0;
     texture->internal_format = 0;
     texture->data_format = 0;
+    texture->content_key = 0;
     // Matches texture_set_default_sampler_state, which is what every upload
     // path applies -- so the recorded value describes the texture object even
     // for the sites that never ask for anything else.
@@ -1493,7 +1498,7 @@ Texture* texture_pool_publish(TexturePool* pool, const char* key, const unsigned
     GLenum stored = internal_format;
     int distribute_level = -1;
     texture_upload_image(internal_format, data_format, width, height, channels, desc, pixels,
-                         &stored, &distribute_level);
+                         &stored, &distribute_level, &texture->content_key);
     check_gl_error("texture upload");
 
     texture->id = id;

@@ -63,6 +63,10 @@ typedef struct ReflectionProbeSet {
     int mask_bits;        // froxel/probe pairs the last build marked
 
     bool debug_atlas; // draw the raw atlas over the composited frame
+    // true = a probe's column is fetched from the cook when one of the same scene was captured
+    // before, and stored when it was not (spec 13.42); false = every capture is taken live. A
+    // world of one probe holds no column and is always taken live.
+    bool cook;
 } ReflectionProbeSet;
 
 // The probe every single-probe consumer means. NULL on an empty set and on one

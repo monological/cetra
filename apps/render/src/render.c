@@ -208,6 +208,8 @@ static void print_usage(const char* prog) {
                     "part, as it converges (slows the sweep)\n");
     fprintf(stderr, "      --gi-cull-pixels <f>  A GI probe leaves out what spans fewer pixels "
                     "across its 16-pixel faces (0..16; default 0, everything)\n");
+    fprintf(stderr, "      --gi-cook          Load GI sweeps and probe columns from the cook when "
+                    "a run of the same scene stored them, and store them when not\n");
     fprintf(stderr, "      --stream-probe N   Print the streamed lighting's residency every N "
                     "frames\n");
     fprintf(stderr, "      --capture-hide <node>  Leave a node out of every GI and probe capture "
@@ -1305,6 +1307,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
         } else if (strcmp(argv[i], "--gi-cull-pixels") == 0) {
             if (_ranged_arg(argc, argv, &i, 0.0f, 16.0f, &args->gi_cull_pixels) != 0)
                 return -1;
+        } else if (strcmp(argv[i], "--gi-cook") == 0) {
+            args->gi_cook = true;
         } else if (strcmp(argv[i], "--capture-hide") == 0 ||
                    strcmp(argv[i], "--remove-node") == 0) {
             const bool hide = strcmp(argv[i], "--capture-hide") == 0;
@@ -5022,6 +5026,7 @@ int main(int argc, char** argv) {
         if (args.gi_rate >= 0)
             scene->gi->rate = args.gi_rate;
         scene->gi->cull_pixels = args.gi_cull_pixels;
+        scene->gi->cook = args.gi_cook;
         scene->gi->debug_atlas = args.gi_debug != 0;
     }
 
@@ -5118,8 +5123,10 @@ int main(int argc, char** argv) {
         fprintf(stderr, "Warning: --probe requires an HDR environment (-e); skipping capture\n");
     }
 
-    if (scene->probe_set)
+    if (scene->probe_set) {
         scene->probe_set->debug_atlas = args.probe_set_debug != 0;
+        scene->probe_set->cook = args.gi_cook;
+    }
 
     /*
      * The water surface: the scene file supplies it, the flags override it.
