@@ -6,8 +6,9 @@
 
 /*
  * The maps the player can carry (spec 13.43), and what the player finds that goes on one by hand
- * -- the roads out of town that cannot be followed, and the cabin down by the lake. Each PLACE is
- * where the player's feet find it, and where its mark goes on its map.
+ * -- their own house, the roads out of town that cannot be followed, and the cabin down by the
+ * lake. Each PLACE is where the player's feet find it, and where its mark goes on its map; marks
+ * are written in the table's order.
  *
  * A map is an ID, so a second one is a row here and a run of a tool rather than new code: its
  * pictures, its frame and its marks are one MapArt, which tools/make_map.py generates into
@@ -16,7 +17,14 @@
 
 typedef enum { MAP_NONE = -1, MAP_TOWN, MAP_COUNT } MapId;
 
-typedef enum { PLACE_NONE = -1, PLACE_BARRICADE, PLACE_ROAD_END, PLACE_CABIN, PLACE_COUNT } PlaceId;
+typedef enum {
+    PLACE_NONE = -1,
+    PLACE_HOME,
+    PLACE_BARRICADE,
+    PLACE_ROAD_END,
+    PLACE_CABIN,
+    PLACE_COUNT
+} PlaceId;
 
 typedef struct PlaceSpec {
     const char* id; // as a command line and tools/make_map.py name it
@@ -28,6 +36,7 @@ typedef struct PlaceSpec {
     const char* found_mapped;
     const char* found;
     const char* again;
+    bool known; // found when its map is had, never walked into; its box is not read
 } PlaceSpec;
 
 extern const PlaceSpec PLACES[PLACE_COUNT];
@@ -45,6 +54,8 @@ typedef struct Finds {
 // PLACE_NONE -- once each time they come back to it from FIND_LEAVE away -- and in `first`
 // whether it is the first time. It is found from then on.
 PlaceId finds_arrive(Finds* f, const vec3 feet, bool* first);
+// The player has `map`: every place on it they know without going there is found.
+void finds_have_map(Finds* f, MapId map);
 
 // A find's mark as the tool drew it: where it is in its map's marks picture, the point in it that
 // goes on the find's place, and how long it takes to write on. The marks picture holds the ink in

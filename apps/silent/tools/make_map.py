@@ -31,6 +31,7 @@ import io
 import math
 import os
 import sys
+import zlib
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
@@ -1195,7 +1196,22 @@ def cross(pen, rng, half):
         pen.over([a, mid, b], 4.2, rng)
 
 
-def mark_barricade(rng):
+def mark_home(plan, rng):
+    """The player's own house: its footprint circled and gone round again, and "my house?"
+    written under it, in its back yard -- asked, not told, by someone not sure it is."""
+    _, _, x0, x1, z0, z1 = plan.all("home")[0]
+    rx, rz = 0.5 * (x1 - x0) * SCALE + 13.0, 0.5 * (z1 - z0) * SCALE + 12.0
+    pen = Pen(220, 200, (110, 70))
+    for k in range(2):
+        start, grow = -2.2 + rng.normal(0.0, 0.25), 1.0 + 0.06 * k
+        ring = [(rx * grow * math.cos(a), rz * grow * math.sin(a))
+                for a in np.linspace(start, start + 2 * math.pi + 0.45, 64)]
+        pen.stroke(ring, 3.4 if k == 0 else 2.8, rng, wobble=2.0)
+    pen.write(-62, rz + 30, "my house?", 34, angle=-3)
+    return pen
+
+
+def mark_barricade(plan, rng):
     """The north arm of Mill Road, barricaded."""
     pen = Pen(250, 150, (60, 90))
     cross(pen, rng, 26.0)
@@ -1204,7 +1220,7 @@ def mark_barricade(rng):
     return pen
 
 
-def mark_road_end(rng):
+def mark_road_end(plan, rng):
     """The street's end at the lip, where the bridge is printed and is not."""
     pen = Pen(320, 180, (250, 120))
     cross(pen, rng, 30.0)
@@ -1215,7 +1231,7 @@ def mark_road_end(rng):
     return pen
 
 
-def mark_cabin(rng):
+def mark_cabin(plan, rng):
     """The cabin by the lake, sketched in where it was found: a gable, a chimney with smoke
     going up, a door, and a ring round it."""
     pen = Pen(300, 160, (70, 82))
@@ -1233,7 +1249,15 @@ def mark_cabin(rng):
     return pen
 
 
-MARK_DRAWERS = {"barricade": mark_barricade, "road-end": mark_road_end, "cabin": mark_cabin}
+# Each takes the plan and the mark's own stream.
+MARK_DRAWERS = {"home": mark_home, "barricade": mark_barricade, "road-end": mark_road_end,
+                "cabin": mark_cabin}
+
+
+def mark_rng(pid):
+    """A mark's own stream, keyed by its place's name, so a place added or moved in the table
+    leaves every other mark's hand as it was."""
+    return np.random.default_rng([SEED, 2, zlib.crc32(pid.encode())])
 
 
 def arrow_strokes(rng):
@@ -1263,9 +1287,10 @@ def arrow_frame(strokes, theta):
 
 
 def draw_marks(plan, rng):
-    """The marks atlas: the arrow's turns in a grid, then each find's mark packed under it, each
-    as `Pen.atlas_image` keeps it. Returns the atlas, per mark its place, its pen, its sprite to
-    look at and its spot in the atlas, and the arrow pointing north-west to look at."""
+    """The marks atlas: the arrow's turns in a grid, drawn from `rng`, then each find's mark
+    packed under it, each from its own stream and as `Pen.atlas_image` keeps it. Returns the
+    atlas, per mark its place, its pen, its sprite to look at and its spot in the atlas, and the
+    arrow pointing north-west to look at."""
     atlas = Image.new("RGBA", (MARKS_W, MARKS_H), (0, 0, 0, 0))
     strokes = arrow_strokes(rng)
     arrow = None
@@ -1275,8 +1300,11 @@ def draw_marks(plan, rng):
         arrow = sprite if k == ARROW_FRAMES * 7 // 8 else arrow
         atlas.paste(pen.atlas_image(), ((k % ARROW_COLS) * ARROW_CELL, (k // ARROW_COLS) * ARROW_CELL))
     top = ARROW_CELL * ((ARROW_FRAMES + ARROW_COLS - 1) // ARROW_COLS)
-    pens = [(pid, MARK_DRAWERS[pid](rng)) for pid in plan.places]
-    sprites = [(pid, pen, pen.image(BLUE, rng)) for pid, pen in pens]
+    sprites = []
+    for pid in plan.places:
+        own = mark_rng(pid)
+        pen = MARK_DRAWERS[pid](plan, own)
+        sprites.append((pid, pen, pen.image(BLUE, own)))
     spots = pack([(img.width + 2 * MARK_PAD, img.height + 2 * MARK_PAD) for _, _, img in sprites],
                  atlas=(MARKS_W, MARKS_H - top))
     marks = []
