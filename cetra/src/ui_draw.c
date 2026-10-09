@@ -263,10 +263,15 @@ void ui_draw_rounded(UIDrawList* dl, UIRect r, float radius, vec4 fill, vec4 bor
 }
 
 void ui_draw_textured_quad(UIDrawList* dl, UIRect r, const Texture* tex, vec4 tint) {
-    if (!dl)
+    ui_draw_textured_quad_uv(dl, r, tex, (const float[4]){0.0f, 0.0f, 1.0f, 1.0f}, tint);
+}
+
+void ui_draw_textured_quad_uv(UIDrawList* dl, UIRect r, const Texture* tex, const float uv[4],
+                              vec4 tint) {
+    if (!dl || !uv)
         return;
-    _push_quad(dl, tex ? tex->id : dl->white, r.x, r.y, r.x + r.w, r.y + r.h, 0, 0, 1, 1, tint,
-               0.0f, 0.0f, tex ? UI_MODE_TEXTURE : UI_MODE_FILL, NULL);
+    _push_quad(dl, tex ? tex->id : dl->white, r.x, r.y, r.x + r.w, r.y + r.h, uv[0], uv[1], uv[2],
+               uv[3], tint, 0.0f, 0.0f, tex ? UI_MODE_TEXTURE : UI_MODE_FILL, NULL);
 }
 
 void ui_draw_9slice(UIDrawList* dl, UIRect r, const Texture* tex, const float insets[4],

@@ -7141,6 +7141,24 @@ static int run_ui_screens_probe(Game* game, const char* which) {
         const uint64_t sig_loud = ui_draw_list_signature(dl);
         ui_pop(ui);
         printf("ui theme-identity styled differs %.6f\n", sig_loud != sig_plain ? 1.0 : 0.0);
+    } else if (!strcmp(which, "textured-uv")) {
+        // The whole-picture quad is the UV quad over the whole picture, to the vertex; and a part
+        // of a picture must reach the vertices, or the first comparison proves nothing.
+        UIDrawList* dl = ui_draw_list(ui);
+        const Texture picture = {.width = 64, .height = 64};
+        const UIRect r = {100.0f, 80.0f, 320.0f, 240.0f};
+        vec4 tint = {1.0f, 0.9f, 0.8f, 1.0f};
+        ui_draw_list_begin(dl, 1280, 720);
+        ui_draw_textured_quad(dl, r, &picture, tint);
+        const uint64_t sig_whole = ui_draw_list_signature(dl);
+        ui_draw_list_begin(dl, 1280, 720);
+        ui_draw_textured_quad_uv(dl, r, &picture, (const float[4]){0.0f, 0.0f, 1.0f, 1.0f}, tint);
+        const uint64_t sig_uv = ui_draw_list_signature(dl);
+        ui_draw_list_begin(dl, 1280, 720);
+        ui_draw_textured_quad_uv(dl, r, &picture, (const float[4]){0.25f, 0.5f, 0.75f, 1.0f}, tint);
+        const uint64_t sig_part = ui_draw_list_signature(dl);
+        printf("ui textured-uv whole match %.6f\n", sig_whole == sig_uv ? 1.0 : 0.0);
+        printf("ui textured-uv part differs %.6f\n", sig_part != sig_whole ? 1.0 : 0.0);
     } else {
         fprintf(stderr, "ui-probe: unknown case '%s'\n", which);
         rc = 1;

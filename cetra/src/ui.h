@@ -144,6 +144,11 @@ void ui_draw_rounded(UIDrawList* dl, UIRect r, float radius, vec4 fill, vec4 bor
                      float border_width);
 // An image stretched over the rect, multiplied by `tint`.
 void ui_draw_textured_quad(UIDrawList* dl, UIRect r, const Texture* tex, vec4 tint);
+// A part of an image stretched over the rect, multiplied by `tint`: `uv` is {u0, v0, u1, v1}, v0
+// at the rect's top, so a picture stored top row first is addressed as it is seen. Several
+// pictures in one texture, or a view onto part of a large one, each cost a quad and no texture.
+void ui_draw_textured_quad_uv(UIDrawList* dl, UIRect r, const Texture* tex, const float uv[4],
+                              vec4 tint);
 // An image drawn as a nine-patch: the four corners keep their size, the four
 // edges stretch along one axis and the centre stretches along both. `insets`
 // is top, right, bottom, left in texture pixels.
