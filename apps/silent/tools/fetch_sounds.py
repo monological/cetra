@@ -151,10 +151,10 @@ LOOPS = {
     "cat_purr": ("purr", 656500),
     # An old set on a channel with no signal, chosen by ear.
     "tv_static": ("static", 765159),
-    # The lake's edge, the cabin's hearth and its room (spec 13.41).
-    "lake_lapping": ("lapping", 518467),
-    "hearth_fire": ("hearth", 549208),
-    "cabin_room": ("room", 744447),
+    # The lake's edge, the cabin's hearth and its room (spec 13.41), chosen by ear.
+    "lake_lapping": ("lapping", 568819),
+    "hearth_fire": ("hearth", 414298),
+    "cabin_room": ("room", 452516),
 }
 
 # A ONESHOT, for a sound that happens once -- a meow, a footfall, a landing. The recording's
