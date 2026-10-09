@@ -53,6 +53,11 @@ MARKS_W, MARKS_H = 1024, 1024
 ARROW_FRAMES, ARROW_CELL, ARROW_COLS = 64, 80, 8
 MARK_PAD = 6  # pixels round each mark, so filtering does not reach its neighbour
 INK_SS = 4
+# How a hand writes a mark on: a line at PEN_SPEED print pixels a second, a lift between lines,
+# and handwriting a letter at a time.
+PEN_SPEED = 240.0
+PEN_LIFT = 0.12
+CHAR_SECONDS = 0.07
 BLUE = (30, 52, 138)  # a ballpoint's blue
 RED = (170, 32, 28)  # the felt-tip that marks where you stand
 
@@ -1065,15 +1070,32 @@ def grime(out, rng, xx, yy):
 
 class Pen:
     """A sprite drawn by hand: coverage drawn at INK_SS times its size, in output pixels about
-    its anchor, the point on the print it marks."""
+    its anchor, the point on the print it marks. A timed pen also keeps a clock, and for every
+    pixel the first time the pen reached it, so the mark can be written on in the order it was
+    drawn: a line at PEN_SPEED, a lift of PEN_LIFT between lines, and handwriting along its line
+    at CHAR_SECONDS a letter."""
 
-    def __init__(self, w, h, anchor):
+    def __init__(self, w, h, anchor, timed=True):
         self.w, self.h, self.anchor = w, h, anchor
         self.cov = Image.new("L", (w * INK_SS, h * INK_SS), 0)
         self.d = ImageDraw.Draw(self.cov)
+        self.timed = timed
+        self.clock = 0.0
+        self.when = np.full((h * INK_SS, w * INK_SS), np.inf, dtype=np.float32)
 
     def at(self, x, y):
         return ((self.anchor[0] + x) * INK_SS, (self.anchor[1] + y) * INK_SS)
+
+    def _reach(self, cx, cy, r, t):
+        """The pen at time t over the disc of radius r round (cx, cy), in coverage pixels."""
+        x0, y0 = max(int(cx - r - 1), 0), max(int(cy - r - 1), 0)
+        x1, y1 = min(int(cx + r + 2), self.when.shape[1]), min(int(cy + r + 2), self.when.shape[0])
+        if x0 >= x1 or y0 >= y1:
+            return
+        yy, xx = np.mgrid[y0:y1, x0:x1].astype(np.float32) + 0.5
+        inside = (xx - cx) ** 2 + (yy - cy) ** 2 <= (r + 0.5) ** 2
+        window = self.when[y0:y1, x0:x1]
+        window[inside] = np.minimum(window[inside], t)
 
     def stroke(self, pts, width, rng=None, wobble=0.6, press=255):
         """A pen line through `pts`, wobbling as a hand does and pressing hardest in its middle."""
@@ -1086,9 +1108,13 @@ class Pen:
             pts = pts + j * (wobble / max(float(np.abs(j).max()), 1e-6))
         t = np.linspace(0.0, 1.0, n)
         radius = 0.5 * width * (0.55 + 0.45 * np.sin(np.pi * t)) * INK_SS
-        for (x, y), r in zip(pts, radius):
+        times = self.clock + arc(pts) / PEN_SPEED
+        for (x, y), r, when in zip(pts, radius, times):
             cx, cy = self.at(x, y)
             self.d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=press)
+            if self.timed:
+                self._reach(cx, cy, r, when)
+        self.clock = float(times[-1]) + PEN_LIFT
 
     def over(self, pts, width, rng, passes=2, spread=1.1):
         """A line gone over `passes` times, each a little off the last."""
@@ -1108,17 +1134,58 @@ class Pen:
         a = math.radians(angle)
         mid = (w / 2 - pad) / INK_SS
         cx, cy = self.at(x + mid * math.cos(a), y - mid * math.sin(a))
-        self.cov.paste(255, (int(cx - g.width / 2), int(cy - g.height / 2)), mask=g)
+        left, top = int(cx - g.width / 2), int(cy - g.height / 2)
+        self.cov.paste(255, (left, top), mask=g)
+        if not self.timed:
+            return
+        # Each glyph pixel reached as far along the line as it lies, a letter's time a letter.
+        seconds = CHAR_SECONDS * len(text)
+        glyphs = np.asarray(g, dtype=np.float32) > 32.0
+        gy, gx = np.mgrid[0:g.height, 0:g.width].astype(np.float32)
+        along = ((gx - g.width / 2.0) * math.cos(a) - (gy - g.height / 2.0) * math.sin(a)
+                 + (w / 2.0 - pad))
+        times = self.clock + np.clip(along / max(w - 2 * pad, 1), 0.0, 1.0) * seconds
+        y0, x0 = max(top, 0), max(left, 0)
+        y1, x1 = min(top + g.height, self.when.shape[0]), min(left + g.width, self.when.shape[1])
+        sub = (slice(y0 - top, y1 - top), slice(x0 - left, x1 - left))
+        window = self.when[y0:y1, x0:x1]
+        inked = glyphs[sub]
+        window[inked] = np.minimum(window[inked], times[sub][inked])
+        self.clock += seconds + PEN_LIFT
+
+    def seconds(self):
+        """How long the mark takes to write."""
+        return max(self.clock - PEN_LIFT, 1e-3)
 
     def image(self, colour, rng):
-        """The sprite at its size: the coverage in `colour`, the ink skipping a little."""
+        """The sprite at its size for looking at: the coverage in `colour`, the ink skipping a
+        little. Also keeps its alpha and, for a timed pen, each pixel's time as a fraction of the
+        mark's, which `atlas_image` puts into the marks picture."""
         cov = as_array(self.cov)
         skip = 0.80 + 0.20 * noise(cov.shape[0], cov.shape[1], 2 * INK_SS, rng)
         a = np.clip(cov * skip * 0.94, 0.0, 1.0)
         rgba = np.concatenate([np.broadcast_to(np.array(colour, np.float32) / 255.0, a.shape + (3,)),
                                a[..., None]], axis=-1)
         img = Image.fromarray((rgba * 255.0 + 0.5).astype(np.uint8))
-        return img.convert("RGBa").resize((self.w, self.h), Image.Resampling.LANCZOS).convert("RGBA")
+        img = img.convert("RGBa").resize((self.w, self.h), Image.Resampling.LANCZOS).convert("RGBA")
+        self.alpha = np.asarray(img)[..., 3]
+        self.fraction = np.zeros((self.h, self.w), dtype=np.float32)
+        if self.timed:
+            # A pixel is written when the pen first reaches any of it, and the soft edge the
+            # reduction left round the ink takes its neighbour's time.
+            blocks = self.when.reshape(self.h, INK_SS, self.w, INK_SS).min(axis=(1, 3))
+            spread = ndimage.minimum_filter(np.where(np.isfinite(blocks), blocks, 1e9), size=3)
+            blocks = np.where(np.isfinite(blocks), blocks, spread)
+            self.fraction = np.clip(np.where(blocks < 1e8, blocks, 0.0) / self.seconds(), 0.0, 1.0)
+        return img
+
+    def atlas_image(self):
+        """The sprite as the marks picture holds it: when the pen reached each pixel in red, as a
+        fraction of the mark's writing, and the ink in alpha. Its colour is the quad's tint."""
+        rgba = np.zeros((self.h, self.w, 4), dtype=np.uint8)
+        rgba[..., 0] = (self.fraction * 255.0 + 0.5).astype(np.uint8)
+        rgba[..., 3] = self.alpha
+        return Image.fromarray(rgba)
 
 
 def cross(pen, rng, half):
@@ -1187,7 +1254,7 @@ def arrow_strokes(rng):
 
 def arrow_frame(strokes, theta):
     """The arrow turned `theta` radians clockwise from up, in its own cell."""
-    pen = Pen(ARROW_CELL, ARROW_CELL, (ARROW_CELL / 2, ARROW_CELL / 2))
+    pen = Pen(ARROW_CELL, ARROW_CELL, (ARROW_CELL / 2, ARROW_CELL / 2), timed=False)
     c, s = math.cos(theta), math.sin(theta)
     for pts, width in strokes:
         turned = np.stack([pts[:, 0] * c - pts[:, 1] * s, pts[:, 0] * s + pts[:, 1] * c], axis=1)
@@ -1196,13 +1263,17 @@ def arrow_frame(strokes, theta):
 
 
 def draw_marks(plan, rng):
-    """The marks atlas: the arrow's turns in a grid, then each find's mark packed under it.
-    Returns the atlas and, per mark, its place, its spot in the atlas and its sprite."""
+    """The marks atlas: the arrow's turns in a grid, then each find's mark packed under it, each
+    as `Pen.atlas_image` keeps it. Returns the atlas, per mark its place, its pen, its sprite to
+    look at and its spot in the atlas, and the arrow pointing north-west to look at."""
     atlas = Image.new("RGBA", (MARKS_W, MARKS_H), (0, 0, 0, 0))
     strokes = arrow_strokes(rng)
+    arrow = None
     for k in range(ARROW_FRAMES):
-        frame = arrow_frame(strokes, 2.0 * math.pi * k / ARROW_FRAMES).image(RED, rng)
-        atlas.alpha_composite(frame, ((k % ARROW_COLS) * ARROW_CELL, (k // ARROW_COLS) * ARROW_CELL))
+        pen = arrow_frame(strokes, 2.0 * math.pi * k / ARROW_FRAMES)
+        sprite = pen.image(RED, rng)
+        arrow = sprite if k == ARROW_FRAMES * 7 // 8 else arrow
+        atlas.paste(pen.atlas_image(), ((k % ARROW_COLS) * ARROW_CELL, (k // ARROW_COLS) * ARROW_CELL))
     top = ARROW_CELL * ((ARROW_FRAMES + ARROW_COLS - 1) // ARROW_COLS)
     pens = [(pid, MARK_DRAWERS[pid](rng)) for pid in plan.places]
     sprites = [(pid, pen, pen.image(BLUE, rng)) for pid, pen in pens]
@@ -1211,9 +1282,9 @@ def draw_marks(plan, rng):
     marks = []
     for (pid, pen, img), (x, y) in zip(sprites, spots):
         spot = (x + MARK_PAD, y + top + MARK_PAD)
-        atlas.alpha_composite(img, spot)
+        atlas.paste(pen.atlas_image(), spot)
         marks.append((pid, pen, img, spot))
-    return atlas, marks
+    return atlas, marks, arrow
 
 
 def preview(img, plan, marks, arrow):
@@ -1399,7 +1470,8 @@ def write_art(plan, marks, faces):
         lines += ["                    {PLACE_%s," % pid.upper().replace("-", "_"),
                   "                     %s," % rect(uv),
                   "                     {%s, %s}," % (f(img.width), f(img.height)),
-                  "                     {%s, %s}}," % (f(pen.anchor[0]), f(pen.anchor[1]))]
+                  "                     {%s, %s}," % (f(pen.anchor[0]), f(pen.anchor[1])),
+                  "                     %s}," % f(pen.seconds())]
     lines += [
         "                },",
         "            .folded_cover = %s," % rect(faces[0]),
@@ -1424,13 +1496,12 @@ def main():
     sheet, folds = age(print_map(plan, print_rng), paper_rng)
     img = reduce(sheet)
     save(img, PRINT)
-    atlas, marks = draw_marks(plan, ink_rng)
+    atlas, marks, arrow = draw_marks(plan, ink_rng)
     save(atlas, MARKS)
     cover_rng = np.random.default_rng([SEED, 3])
     write_art(plan, marks, folded_set(img, folds, draw_cover(cover_rng)))
     if "--debug" in sys.argv[1:]:
         debug_overlay(img, plan).save(DEBUG)
-        arrow = atlas.crop((ARROW_CELL * 6, 0, ARROW_CELL * 7, ARROW_CELL))
         preview(img, plan, marks, arrow).save(PREVIEW)
         print("make_map: %s, %s" % (os.path.relpath(DEBUG, ROOT), os.path.relpath(PREVIEW, ROOT)))
     return 0
