@@ -42,7 +42,7 @@ static void set_cursor_captured(Player* p, Engine* engine, bool captured) {
 }
 
 void player_init(Player* p, Game* game, PhysicsWorld* physics, EntityManager* em, const vec3 feet,
-                 float yaw) {
+                 float yaw, float pitch) {
     *p = (Player){0};
     p->entity = create_entity(em, "player");
     glm_vec3_copy((vec3){feet[0], feet[1] + CAPSULE_REST + 0.02f, feet[2]}, p->entity->position);
@@ -62,7 +62,7 @@ void player_init(Player* p, Game* game, PhysicsWorld* physics, EntityManager* em
     p->rig->pitch_max = PITCH_LIMIT;
     glm_vec3_copy(p->entity->position, p->rig->anchor);
     camera_rig_set_distance(p->rig, 0.0f);
-    camera_rig_aim(p->rig, yaw, 0.0f);
+    camera_rig_aim(p->rig, yaw, pitch);
     engine_set_camera_rig(game->engine, p->rig);
 }
 

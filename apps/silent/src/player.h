@@ -35,10 +35,10 @@ typedef struct Player {
     bool skip_first_delta; // the first delta after a capture is a jump, not a movement
 } Player;
 
-// Stands the capsule on the floor at `feet`, looking along `yaw` (radians,
-// the rig's convention), and installs the rig on the engine.
+// Stands the capsule on the floor at `feet`, looking along `yaw` and `pitch` (radians, the rig's
+// convention: pitch up positive), and installs the rig on the engine.
 void player_init(Player* p, Game* game, PhysicsWorld* physics, EntityManager* em, const vec3 feet,
-                 float yaw);
+                 float yaw, float pitch);
 
 // Fixed step: turns the move actions into the capsule's velocity.
 void player_update(Player* p, Game* game, double dt);
