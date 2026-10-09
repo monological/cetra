@@ -399,12 +399,15 @@ static void build_sky(Engine* engine) {
 /*
  * The player's house is plainer and new, so its grid is laid from its bounds and the engine
  * switches off whatever probe lands in a wall (create_gi_volume_spaced): the basement, the
- * ground floor and the porch, a metre a cell. Nothing upstairs is lit or seen. The grid reaches a
+ * ground floor and the porch, 1.25 m a cell. Nothing upstairs is lit or seen. The grid reaches a
  * whole number of cells under the yard, so the ground floor's probes stand where they did before
  * the basement was dug (spec 13.31); its lowest layer lands in the basement's slab and is
- * switched off with the walls.
+ * switched off with the walls. At 1.25 m against 1.0 the house takes 450 probes rather than 792
+ * and sweeps about 30% sooner, for a shift in its bounce light of under a code on average
+ * (spec 13.42, phase 6).
  */
-#define HOME_GI_CELL 1.0f
+#define HOME_GI_CELL  1.25f
+#define CABIN_GI_CELL 1.0f
 
 // A grid laid over a building's bounds on `cell` metre cells, the probes in its walls switched
 // off.
@@ -425,7 +428,7 @@ static void build_home_gi(void) {
 // The cabin's (spec 13.41), over its one room and the porch, from its floor to its ridge.
 static void build_cabin_gi(void) {
     build_spaced_gi("cabin", (vec3){CABIN_PORCH_X0 - 0.3f, CABIN_FLOOR_Y - 0.2f, CABIN_Z0 - 0.3f},
-                    (vec3){CABIN_X1 + 0.3f, CABIN_RIDGE_Y + 0.1f, CABIN_Z1 + 0.3f}, HOME_GI_CELL);
+                    (vec3){CABIN_X1 + 0.3f, CABIN_RIDGE_Y + 0.1f, CABIN_Z1 + 0.3f}, CABIN_GI_CELL);
 }
 
 // The mansion's grid, its plan standing at `origin`.
