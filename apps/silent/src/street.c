@@ -195,9 +195,10 @@ static FogHole home_hole(void) {
 static void fog(Scene* scene, bool night) {
     const float density = night ? FOG_NIGHT : FOG_DAY;
     const float F = 0.5f * FOG_FEATHER;
-    // West across the chasm, so its far side is never clear air.
-    const float wx0 = CHASM_X - 50.0f, wx1 = WORLD_X1 + 20.0f, wz0 = WORLD_Z0 - 20.0f,
-                wz1 = WORLD_Z1 + 20.0f;
+    // West across the chasm, so its far side is never clear air, and on past the lake valley
+    // (spec 13.41).
+    const float wx0 = VALLEY_X0 - 30.0f, wx1 = WORLD_X1 + 20.0f, wz0 = WORLD_Z0 - 20.0f,
+                wz1 = VALLEY_Z1 + 20.0f;
     // West to east, which is the order the columns are cut in.
     const FogHole holes[2] = {home_hole(), mansion_hole()};
     float x = wx0;
@@ -306,6 +307,23 @@ void street_build(Kit* kit, Scene* scene, unsigned int seed, bool night, bool fo
         const float hx = 0.5f * fabsf(edges[i].bx - edges[i].ax) + 0.5f;
         const float hz = 0.5f * fabsf(edges[i].bz - edges[i].az) + 0.5f;
         kit_collider(kit, (vec3){cx, y, cz}, (vec3){hx, h, hz}, 0.0f);
+    }
+    // Round the lake valley (spec 13.41), down past its water: on south behind the woods behind
+    // ours, across its far end, and up its west side to the chasm's south lip.
+    const float vh = 16.0f, vy = -4.0f;
+    struct {
+        float ax, az, bx, bz;
+    } const valley[] = {
+        {x0, WOODS_EDGE_Z1, x0, VALLEY_WALL_Z1},
+        {x0, VALLEY_WALL_Z1, VALLEY_WALL_X0, VALLEY_WALL_Z1},
+        {VALLEY_WALL_X0, VALLEY_WALL_Z1, VALLEY_WALL_X0, RIDGE_Z - 2.0f},
+    };
+    for (size_t i = 0; i < sizeof(valley) / sizeof(valley[0]); i++) {
+        const float cx = 0.5f * (valley[i].ax + valley[i].bx),
+                    cz = 0.5f * (valley[i].az + valley[i].bz);
+        const float hx = 0.5f * fabsf(valley[i].bx - valley[i].ax) + 0.5f;
+        const float hz = 0.5f * fabsf(valley[i].bz - valley[i].az) + 0.5f;
+        kit_collider(kit, (vec3){cx, vy, cz}, (vec3){hx, vh, hz}, 0.0f);
     }
 
     if (fogged)

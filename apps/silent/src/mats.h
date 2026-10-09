@@ -108,6 +108,8 @@ typedef enum {
     MAT_QUILT,    // a jacquard bedspread, faded
     MAT_CANVAS,   // the backpack's olive canvas
     MAT_ANODISED, // the flashlight's black anodised aluminium
+    MAT_TRACK,    // the gravel track down to the lake (spec 13.41)
+    MAT_SHORE,    // mud at the water's edge
     MAT_COUNT
 } MatId;
 

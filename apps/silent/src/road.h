@@ -51,11 +51,15 @@ float road_distance(Road* road, float x, float z, float* along);
 float road_carve(Road* road, float x, float z, float h);
 
 // The centre line at `t` of the length, 0 at the start and 1 at the end, and the way it runs
-// there, a unit vector in plan.
+// there, a unit vector in plan. At the nearest sample.
 void road_point(Road* road, float t, float* x, float* z);
 void road_frame(Road* road, float t, float* x, float* z, float* dir_x, float* dir_z);
 
-// The surface, level across, as a ribbon of `mat` from `s0` to `s1` metres along.
+// The road's length, and its centre line `s` metres along it, between the samples.
+float road_length(Road* road);
+void road_at(Road* road, float s, float* x, float* z);
+
+// The surface, level across, as a ribbon of `mat` from exactly `s0` to exactly `s1` metres along.
 void road_ribbon(Kit* kit, Road* road, int mat, float s0, float s1);
 
 #endif // _SILENT_ROAD_H_
