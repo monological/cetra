@@ -104,7 +104,9 @@ over its inner 80%, per colour channel, and the mean is the energy check: 1 for 
 once and spread -- the reference the spread is measured against, a whole trace per band),
 `--water-drop x,z,frame` (press a ripple into the water there on that frame, repeatable) and
 `--water-touch-probe` (the ripples' deepest point and its distance from the first drop), spec
-13.4; `--no-water`, `--no-water-caustics`, `--no-water-glitter`, `--no-water-downwell`,
+13.4; `--water-bounds x0,z0,x1,z1` (hold the water to that xz rectangle: past it there is no
+surface, no light weakened under the level, no submerged medium and no rain landing on the plane;
+all zero, the default, is everywhere, spec 13.41); `--no-water`, `--no-water-caustics`, `--no-water-glitter`, `--no-water-downwell`,
 `--no-water-caustic-relief`, `--no-water-specks`, `--no-water-foam-history`,
 `--no-water-coverage`, `--no-water-lod`; specs 11.32 to 11.35 and 11.42 — suppresses the shadow catcher,
 see the pass order above. Gerstner is the default and allocates nothing; `fft` is an OCEAN and adds 64
@@ -1053,6 +1055,26 @@ crossroads at the street's west end.
   - the north barricade: `--cam-eye -51,1.7,-6 --cam-target -52,1.2,-20`;
   - the lip's face and the leaning pole from inside the chasm, with `--no-fog`: `--cam-eye
     -75,-6,14 --cam-target -67,-2,0`.
+
+**The lake and the cabin** (spec 13.41): through the gap in the south barricade, a gravel track
+down a valley to a lake, with a dock, two rowboats, reeds and drowned trees, and a log cabin on
+its east bank with a fire burning inside and its door left open.
+- **`--player-at X,Z[,YAW]`:** starts the player there, standing on the ground, facing YAW
+  degrees from +z, so the valley can be walked without the walk to it: `-52,30` is the
+  barricade's gap, `-65,113` the track's foot at the cabin. Over the water it stands the player
+  on the bed, under the surface, so take a pinned view to look at the lake.
+- **The lake is drawn only while the eye is in the valley** (west of x -40 and south of z 66,
+  until it is back past -36 or 60), so the chasm at the same depth stays dry. `--no-fog` draws
+  it everywhere.
+- **Pinned views:**
+  - the cabin from the dock, the fire through its door: `--cam-eye -78,-9.45,118 --cam-target
+    -64,-9.6,118`;
+  - out over the lake from the dock: `--cam-eye -80,-9.45,118 --cam-target -102,-11.6,127`;
+  - inside, toward the fireplace: `--cam-eye -66.4,-8.75,116.2 --cam-target -62.6,-9.5,118.6`;
+  - inside, toward the table and the door: `--cam-eye -62.9,-8.8,116.0 --cam-target
+    -66.0,-9.5,120.4`;
+  - the valley from over the south wall, with `--day --no-rain --no-fog`: `--cam-eye -80,95,170
+    --cam-target -80,-10,100`.
 
 **Look switches**, each an A/B for one part of the picture:
 - **`--no-grade`:** the frame without the green-grey LUT (`assets/lut/silent_grade.cube`, written
