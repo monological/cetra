@@ -283,7 +283,12 @@ static SceneNode* part(Engine* engine, Scene* scene, const char* name,
     mats_kit(&kit, engine, scene);
     const KitFrame f = {{0.0f, 0.0f, 0.0f}, CLOCK.yaw};
     build(&kit, &f);
-    return kit_finish(&kit, name);
+    SceneNode* node = kit_finish(&kit, name);
+    // It moves every frame, so no capture keeps it (spec 13.42): one would hold it where that
+    // frame put it, and two captures of one room would differ by where a hand stood.
+    if (node)
+        node->capture_hidden = true;
+    return node;
 }
 
 // Where a part turns about, in the world, and the axis it turns about.

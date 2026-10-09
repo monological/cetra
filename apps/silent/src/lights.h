@@ -28,6 +28,7 @@ typedef struct Lights {
     Material* flicker;  // the failing tube's strip, or NULL when none flickers
     float flicker_nits; // and its brightness when it holds
     int flicker_tube;   // which tube that is; -1 when none
+    float level;        // the failing tube's level as it was last driven, 1 when it holds
     unsigned int seed;
 
     Sound* buzz[LIGHTS_MAX_TUBES]; // each tube's ballast, NULL without audio
@@ -52,6 +53,11 @@ void lights_update(Lights* lights, Scene* scene, double time, float dt, const ve
                    const vec3 forward);
 
 void lights_toggle_flashlight(Lights* lights);
+
+// For the light's captures (spec 13.42): `rest` holds the failing tube lit and the flashlight off,
+// so no capture keeps a flicker's instant or the beam of a player standing in it; false puts them
+// back as the last update left them.
+void lights_rest(Lights* lights, bool rest);
 
 // A bare bulb on a failing supply (spec 13.31): 1 most of the time, and now and then dimming
 // for a second or so to between 0.3 and 0.65 and coming back. A pure function of the sim clock.

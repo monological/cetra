@@ -206,6 +206,7 @@ void lights_build(Lights* lights, Kit* kit, Engine* engine, Scene* scene, unsign
                   bool flicker, bool flashlight_on) {
     memset(lights, 0, sizeof(*lights));
     lights->flicker_tube = -1;
+    lights->level = 1.0f;
     lights->seed = seed;
     ShaderProgram* pbr = engine_get_program(engine, CETRA_PROGRAM_PBR);
     // The panels come from the strips: this is what turns them into light.
@@ -300,6 +301,7 @@ void lights_start_audio(Lights* lights, AudioSystem* audio) {
 void lights_update(Lights* lights, Scene* scene, double time, float dt, const vec3 eye,
                    const vec3 forward) {
     const float level = lights->flicker ? flicker_level(time, lights->seed) : 1.0f;
+    lights->level = level;
     if (lights->flicker)
         lights->flicker->emissive_strength = lights->flicker_nits * level;
 
@@ -354,4 +356,15 @@ void lights_update(Lights* lights, Scene* scene, double time, float dt, const ve
 
 void lights_toggle_flashlight(Lights* lights) {
     lights->flashlight_on = !lights->flashlight_on;
+}
+
+void lights_rest(Lights* lights, bool rest) {
+    if (lights->flicker)
+        lights->flicker->emissive_strength = lights->flicker_nits * (rest ? 1.0f : lights->level);
+    Light* f = lights->flashlight;
+    if (f) {
+        const bool on = lights->flashlight_on && !rest;
+        f->intensity = on ? FLASHLIGHT_CANDELA : 0.0f;
+        f->cast_shadows = on;
+    }
 }

@@ -675,6 +675,19 @@ static void drip(Basement* b, double time) {
     audio_play_voice(b->audio, b->drip, &d);
 }
 
+// The bulb's light where it hangs at `at`, from a supply at `level` (1 is full), its cached shadow
+// following it or not, and the glass glowing with it.
+static void bulb_light(Basement* b, const vec3 at, float level, bool follow) {
+    light_set_position(b->light, (float*)at);
+    b->light->shadow_follow = follow;
+    vec3 colour = GLM_VEC3_ZERO_INIT;
+    glm_vec3_lerp((float*)BULB_SAGGED, (float*)BULB_COLOUR, level, colour);
+    b->light->intensity = BULB_CANDELA * level;
+    glm_vec3_copy(colour, b->light->color);
+    b->glass->emissive_strength = BULB_NITS * level;
+    glm_vec3_copy(colour, b->glass->emissive);
+}
+
 static void bulb_update(Basement* b, const Door* door, double time) {
     if (!b->bulb || !b->light)
         return;
@@ -697,20 +710,12 @@ static void bulb_update(Basement* b, const Door* door, double time) {
     glm_rotate_z(m, along, m);
     glm_rotate_x(m, across, m);
     glm_mat4_copy(m, b->bulb->original_transform);
-    vec3 at = GLM_VEC3_ZERO_INIT;
-    glm_mat4_mulv3(m, (vec3){0.0f, -BULB_DROP, 0.0f}, 1.0f, at);
-    light_set_position(b->light, at);
-    b->light->shadow_follow = reach > FOLLOW_REACH;
-
+    glm_mat4_mulv3(m, (vec3){0.0f, -BULB_DROP, 0.0f}, 1.0f, b->at);
+    b->follow = reach > FOLLOW_REACH;
     // The supply sags now and then, and the filament goes dim and orange with it; never out, or
     // the light would leave its cached shadow undrawn.
-    const float level = lights_brownout(time, b->seed);
-    vec3 colour = GLM_VEC3_ZERO_INIT;
-    glm_vec3_lerp((float*)BULB_SAGGED, (float*)BULB_COLOUR, level, colour);
-    b->light->intensity = BULB_CANDELA * level;
-    glm_vec3_copy(colour, b->light->color);
-    b->glass->emissive_strength = BULB_NITS * level;
-    glm_vec3_copy(colour, b->glass->emissive);
+    b->level = lights_brownout(time, b->seed);
+    bulb_light(b, b->at, b->level, b->follow);
 }
 
 void basement_update(Basement* b, const Door* door, double time) {
@@ -757,4 +762,15 @@ bool basement_hold(Basement* b, EntityManager* em, PhysicsWorld* physics, const 
     if (feet[1] > HALL_NEAR)
         b->at_foot = false;
     return false;
+}
+
+void basement_rest(Basement* b, bool rest) {
+    if (!b->bulb || !b->light)
+        return;
+    // At rest the bulb hangs straight down from its rose, on a full supply.
+    vec3 hanging = {PIVOT[0], PIVOT[1] - BULB_DROP, PIVOT[2]};
+    if (rest)
+        bulb_light(b, hanging, 1.0f, false);
+    else
+        bulb_light(b, b->at, b->level, b->follow);
 }

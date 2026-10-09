@@ -23,6 +23,7 @@ typedef struct Tv {
     Light* glow;       // the set's light on the room, a panel over the picture
     float average;     // the picture's light over its area, as a share of the signal's mean
     vec3 speaker;      // world: where its hiss comes from
+    vec4 field;        // the field last shown: its number, the hum's phase, spread and mean
 } Tv;
 
 // Lays the set on its stand in the living room and hangs its light; with `on`, the picture over
@@ -32,5 +33,8 @@ void tv_build(Tv* tv, Kit* kit, Engine* engine, Scene* scene, bool on);
 void tv_start_audio(Tv* tv, AudioSystem* audio);
 // The field at `time` onto the picture, the glass and the light.
 void tv_update(Tv* tv, double time);
+// For the light's captures (spec 13.42): `rest` shows a field at the signal's long-run mean, with
+// no breath in its gain; false the field the last update showed.
+void tv_rest(Tv* tv, bool rest);
 
 #endif // _SILENT_TV_H_

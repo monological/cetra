@@ -213,20 +213,36 @@ void tv_start_audio(Tv* tv, AudioSystem* audio) {
     }
 }
 
+// A field onto the picture, the glass and the light: its number, the hum's phase, the noise's
+// spread and the signal's mean.
+static void tv_show(Tv* tv, const vec4 field) {
+    shader_params_set(&tv->picture->shader_params, "tvField", field);
+    shader_params_set(&tv->glass->shader_params, "tvField", field);
+    // The glass's light is the signal's mean, which its hook shapes; a glass whose hook did not
+    // build glows with it flat.
+    tv->glass->emissive_strength = TV_PEAK_NITS * field[3];
+    tv->glow->intensity = TV_PEAK_NITS * field[3] * tv->average;
+}
+
 void tv_update(Tv* tv, double time) {
     if (!tv->picture)
         return;
     const double field = floor(time * TV_FIELD_HZ);
     const float spread = TV_SIGMA * tv_gain(field);
-    const float mean = tv_mean(spread);
     // The field's number wraps where a float stops counting exactly, an even count so its parity
     // holds; the glass and the picture show the same field.
-    vec4 now = {(float)fmod(field, 16777216.0), (float)fmod(time / TV_HUM_PERIOD, 1.0), spread,
-                mean};
-    shader_params_set(&tv->picture->shader_params, "tvField", now);
-    shader_params_set(&tv->glass->shader_params, "tvField", now);
-    // The glass's light is the signal's mean, which its hook shapes; a glass whose hook did not
-    // build glows with it flat.
-    tv->glass->emissive_strength = TV_PEAK_NITS * mean;
-    tv->glow->intensity = TV_PEAK_NITS * mean * tv->average;
+    glm_vec4_copy((vec4){(float)fmod(field, 16777216.0), (float)fmod(time / TV_HUM_PERIOD, 1.0),
+                         spread, tv_mean(spread)},
+                  tv->field);
+    tv_show(tv, tv->field);
+}
+
+void tv_rest(Tv* tv, bool rest) {
+    if (!tv->picture)
+        return;
+    // At rest: the first field, the hum at its start and the gain at its mean, which is 1.
+    if (rest)
+        tv_show(tv, (vec4){0.0f, 0.0f, TV_SIGMA, tv_mean(TV_SIGMA)});
+    else
+        tv_show(tv, tv->field);
 }

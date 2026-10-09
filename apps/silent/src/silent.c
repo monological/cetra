@@ -721,6 +721,14 @@ static void trace_settling(Engine* engine, bool lit, bool up) {
     }
 }
 
+// The light held at rest while it is captured (spec 13.42), and put back after.
+static void rest_lights(bool rest, void* ctx) {
+    (void)ctx;
+    lights_rest(&g_lights, rest);
+    basement_rest(&g_basement, rest);
+    tv_rest(&g_tv, rest);
+}
+
 static void on_init(Game* game) {
     Engine* engine = game->engine;
     engine->show_fps = !engine->headless;
@@ -1008,6 +1016,8 @@ static void on_init(Game* game) {
                       .near = 0.05f,
                       .far = 250.0f};
     engine_set_camera(engine, create_camera(&cam));
+
+    scene_set_capture_rest(g_scene, rest_lights, NULL);
 
     const vec3 dir = {look[0] - feet[0], look[1] - eye_y, look[2] - feet[2]};
     player_init(&g_player, game, physics, em, feet, atan2f(dir[0], dir[2]),
