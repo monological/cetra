@@ -78,6 +78,7 @@
 #include "street.h"
 #include "study.h"
 #include "terrace.h"
+#include "town_plan.h"
 #include "trees.h"
 #include "tv.h"
 #include "woods.h"
@@ -204,6 +205,7 @@ typedef struct SilentArgs {
     float gi_cell;           // the home's GI cell in metres; 0 = HOME_GI_CELL
     bool profiler;           // per-pass timing and submission counts, reported at exit
     const char* audio_dump;  // headless: write what the listener hears here
+    const char* map_export;  // write the town's plan here for tools/make_map.py, and stop
     bool no_woods;           // no trees behind the yards, nor what lies under them
     bool no_cat;
     vec3 cat_fur, cat_eyes; // sRGB
@@ -793,6 +795,9 @@ static void on_init(Game* game) {
     FenceBreaches breaches;
     fences_build(&kit, (unsigned int)g_args.seed, &plots, &breaches);
     load_seam(engine, "fences");
+    // The town's plan for its map (spec 13.43), while the street's plots are known.
+    if (g_args.map_export)
+        town_plan_write(g_args.map_export, &plots, (unsigned int)g_args.seed);
     crossroads_build(&kit, g_scene, !g_args.day, &g_failing[FAILING_LIP]);
     load_seam(engine, "crossroads");
     Trees trees;
@@ -1372,6 +1377,7 @@ static void print_usage(const char* prog) {
            "                          (flashlight), and the backpack had\n");
     printf("      --mute              Without sound\n");
     printf("      --audio-dump PATH   Headless: write what the listener hears as a WAV\n");
+    printf("      --map-export PATH   Write the town's plan for tools/make_map.py and stop\n");
     printf("      --rain MM           Rain rate in mm/h (default %.0f)\n",
            (double)DEFAULT_RAIN_MMH);
     printf("      --no-rain           A dry night\n");
@@ -1545,6 +1551,8 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
             a->mute = true;
         } else if (!strcmp(s, "--audio-dump") && has_next) {
             a->audio_dump = argv[++i];
+        } else if (!strcmp(s, "--map-export") && has_next) {
+            a->map_export = argv[++i];
         } else if (!strcmp(s, "--rain") && has_next) {
             a->rain_mmh = fmaxf(0.0f, (float)atof(argv[++i]));
         } else if (!strcmp(s, "--no-rain")) {
@@ -1634,6 +1642,13 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
         fprintf(stderr, "silent: --audio-dump needs --headless, which renders sound offline; "
                         "ignoring it\n");
         a->audio_dump = NULL;
+    }
+    // The plan is written while the world is built: one hidden frame is all it needs.
+    if (a->map_export) {
+        a->headless = true;
+        a->frames = 1;
+        a->no_cat = true;
+        a->no_loading_screen = true;
     }
     return true;
 }

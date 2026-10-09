@@ -119,6 +119,10 @@ float lake_track_distance(float x, float z) {
     return road_distance(&g_track, x, z, NULL);
 }
 
+void lake_track_point(float t, float* x, float* z) {
+    road_point(&g_track, t, x, z);
+}
+
 // The valley's own shape, before the track and the pad: the ridge, the bowl and the bed.
 static float valley(float x, float z, float h) {
     const float ridge = RIDGE_RISE *
@@ -228,6 +232,10 @@ static void shore_at(float theta, float out, float* x, float* z) {
     const float r = shore_radius(theta) + out;
     *x = LAKE_X + r * cosf(theta);
     *z = LAKE_Z + r * sinf(theta);
+}
+
+void lake_shore_point(float theta, float* x, float* z) {
+    shore_at(theta, 0.0f, x, z);
 }
 
 static Water* water(Scene* scene) {

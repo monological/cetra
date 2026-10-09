@@ -238,11 +238,20 @@
 #define MANSION_Y 8.0f
 #define MANSION_Z 40.0f
 
+// The drive up the hill to them: its asphalt either side of its centre line.
+#define DRIVE_HALF 2.6f
+
 // The mansion's grounds: level at MANSION_Y round the house, inside its fence.
 #define GROUNDS_X0 (MANSION_X - 17.0f)
 #define GROUNDS_X1 (MANSION_X + 17.0f)
 #define GROUNDS_Z0 (MANSION_Z - 4.0f)
 #define GROUNDS_Z1 (MANSION_Z + 28.0f)
+
+// The graveyard on the slope beside the drive's switchback: its middle and half-sizes.
+#define GRAVEYARD_X  70.0f
+#define GRAVEYARD_Z  42.0f
+#define GRAVEYARD_HX 4.5f
+#define GRAVEYARD_HZ 3.5f
 
 // The walkable world: x from the chasm to WORLD_X1, past the hill the drive climbs to the
 // mansion, and z from the woods behind the far side's lots (spec 13.35) to WORLD_Z1.

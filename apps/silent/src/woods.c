@@ -158,6 +158,21 @@ static bool in_cutting(int i) {
     return fabsf(x - CROSS_X) + jitter < CROSS_CLEAR && x + jitter < -STREET_HALF_LEN;
 }
 
+// Whether the site of column i, row j is the lake valley's to plant rather than the town's: off
+// the town's grid, or in the old cutting south of the ridge's line.
+static bool valley_site(int i, int j) {
+    const bool cutting = in_cutting(i) && WORLD_Z0 + SITE_STEP * (float)j >= RIDGE_Z - 2.0f;
+    return !(i >= 0 && i < WOODS_COLS && j < WOODS_ROWS) || cutting;
+}
+
+float woods_cover(float x, float z) {
+    const int i = (int)floorf((x - WOODS_X0) / SITE_STEP);
+    const int j = (int)floorf((z - WORLD_Z0) / SITE_STEP);
+    if (valley_site(i, j))
+        return land_too_steep(x, z) ? -1.0f : valley_depth(x, z);
+    return lake_track_distance(x, z) < TRACK_CLEAR ? -1.0f : woods_depth(x, z);
+}
+
 /*
  * A conifer's sprays: the needle atlas on alpha-tested cards drawn from both sides, casting their
  * cut-out shadow and moving in the wind -- held at rest in the cached shadows, as the dead trees
@@ -364,8 +379,7 @@ static void valley_woods(Planting* p, const Mesh* const* rocks, unsigned int see
     const int rows = (int)ceilf((VALLEY_Z1 - WORLD_Z0) / SITE_STEP);
     for (int j = 0; j < rows; j++)
         for (int i = i0; i < i1; i++) {
-            const bool cutting = in_cutting(i) && WORLD_Z0 + SITE_STEP * (float)j >= RIDGE_Z - 2.0f;
-            if (i >= 0 && i < WOODS_COLS && j < WOODS_ROWS && !cutting)
+            if (!valley_site(i, j))
                 continue;
             float x = 0.0f, z = 0.0f;
             site_at(i, j, &state, &x, &z);
