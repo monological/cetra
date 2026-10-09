@@ -1,5 +1,4 @@
 #include <math.h>
-#include <stdio.h>
 
 #include "cetra/game/audio.h"
 #include "cetra/light.h"
@@ -23,8 +22,7 @@
  * the back one.
  *
  * Everything is in the world's coordinates, in a kit of its own; nothing in it moves but the
- * door, and nothing in it is grimed, since a log's grime would be the kit's edge darkening and a
- * log has no edges.
+ * door.
  */
 
 #define CORE      0.16f // the chinked core's thickness
@@ -38,16 +36,15 @@
 #define EAVE_OUT 0.45f // the roof past the side walls
 #define MID_Z    (0.5f * (CABIN_Z0 + CABIN_Z1))
 
-#define DECK_X0 (CABIN_X0 - 2.3f) // the porch's outer edge, toward the water
 #define DECK_Y  (CABIN_FLOOR_Y - 0.15f)
-#define ROOF_X0 (DECK_X0 - 0.35f) // the roof carries on over it
+#define ROOF_X0 (CABIN_PORCH_X0 - 0.35f) // the roof carries on over the porch
 #define ROOF_X1 (CABIN_X1 + 0.3f)
 
 #define DOOR_Z0      (MID_Z - 0.45f)
 #define DOOR_Z1      (MID_Z + 0.45f)
 #define DOORWAY_HEAD (CABIN_FLOOR_Y + 1.95f)
-#define WIN_X0       (-65.3f)
-#define WIN_X1       (-64.4f)
+#define WIN_X0       (CABIN_X0 + 1.7f) // the side walls' windows
+#define WIN_X1       (CABIN_X0 + 2.6f)
 #define WIN_SILL     (CABIN_FLOOR_Y + 0.95f)
 #define WIN_HEAD     (CABIN_FLOOR_Y + 1.65f)
 // The front's window, north of the door, which shows the fire to the dock.
@@ -69,7 +66,8 @@
 #define FIREBOX_Z1  (MID_Z + 0.45f)
 #define FIREBOX_Y0  (CABIN_FLOOR_Y + 0.2f)
 #define FIREBOX_Y1  (CABIN_FLOOR_Y + 1.0f)
-#define FIREBOX_D   0.45f // how deep it goes into the mass
+#define FIREBOX_D   0.45f                 // how deep it goes into the mass
+#define GRATE_X     (HEARTH_FACE + 0.22f) // the grate's middle, and the fire's on it
 
 #define TABLE_TOP (CABIN_FLOOR_Y + 0.74f)
 
@@ -127,9 +125,14 @@ static const KitWall WALLS[4] = {
      .opening_count = 1},
 };
 
+// The roof's underside at z.
+static float roof_under(float z) {
+    return CABIN_RIDGE_Y - PITCH * fabsf(z - MID_Z);
+}
+
 // The roof's top at z: the tin over the ridge, falling to the eaves.
 static float roof_y(float z) {
-    return CABIN_RIDGE_Y + ROOF_T - PITCH * fabsf(z - MID_Z);
+    return roof_under(z) + ROOF_T;
 }
 
 /*
@@ -145,19 +148,16 @@ static void log_piece(Kit* kit, const vec3 from, const vec3 axis, float len, flo
     kit_frame_lathe_on(kit, &KIT_WORLD, MAT_PORCH, from, axis, end, 2, sides);
 }
 
-// The roof's underside at z.
-static float roof_under(float z) {
-    return CABIN_RIDGE_Y - PITCH * fabsf(z - MID_Z);
-}
-
 /*
  * One wall's logs, course by course, each cut back clear of the openings it crosses and kept
  * under the roof: a side wall's stop a course short where the eave comes down over their outside,
  * and an end wall's top courses stop short of running on past the corners, where the roof slopes
  * down over them. The chinking core fills to the eave above the last of them.
  */
-static void wall_logs(Kit* kit, const KitWall* w, float lift) {
+static void wall_logs(Kit* kit, const KitWall* w) {
     const vec3 axis = {w->along_x ? 1.0f : 0.0f, 0.0f, w->along_x ? 0.0f : 1.0f};
+    // The side walls' courses half a course over the ends', so they interleave at the corners.
+    const float lift = w->along_x ? 0.5f * COURSE : 0.0f;
     for (float y = CABIN_FLOOR_Y + 0.6f * LOG_R + lift; y < CABIN_EAVE_Y - 0.3f * LOG_R;
          y += COURSE) {
         float lo = w->from - LOG_RUN, hi = w->to + LOG_RUN;
@@ -185,22 +185,18 @@ static void wall_logs(Kit* kit, const KitWall* w, float lift) {
     }
 }
 
-// A frame round an opening, in the wall's own frame: rough boards nailed round its reveal.
-static void casing(Kit* kit, const KitWall* w, const KitOpening* o, int glass) {
+// A frame round an opening, in the wall's own frame: rough boards nailed round its reveal, and a
+// window's sill, glass and bars.
+static void casing(Kit* kit, const KitWall* w, const KitOpening* o) {
     const KitWallFrame wf = kit_wall_frame(w);
     const KitFrame* f = &wf.f;
     const float at = wf.at, t = LOG_R + 0.03f, b = 0.07f;
-    kit_frame_box(kit, f, MAT_FENCE_BOARD, o->from - b, o->from, o->bottom, o->top + b, at - t,
-                  at + t, false);
-    kit_frame_box(kit, f, MAT_FENCE_BOARD, o->to, o->to + b, o->bottom, o->top + b, at - t, at + t,
-                  false);
-    kit_frame_box(kit, f, MAT_FENCE_BOARD, o->from - b, o->to + b, o->top, o->top + b, at - t,
-                  at + t, false);
-    if (glass < 0)
+    kit_frame_surround(kit, f, MAT_FENCE_BOARD, o, b, false, at - t, at + t);
+    if (o->door)
         return;
     kit_frame_box(kit, f, MAT_FENCE_BOARD, o->from - b, o->to + b, o->bottom - 0.05f, o->bottom,
                   at - t, at + t + 0.06f * (float)-wf.inner, false);
-    kit_frame_pane(kit, f, glass, o, at, w->thick);
+    kit_frame_pane(kit, f, MAT_WINDOW_GLASS, o, at, w->thick);
     // Four lights: a bar each way across the glass.
     const float mid = 0.5f * (o->bottom + o->top), centre = 0.5f * (o->from + o->to);
     kit_frame_box(kit, f, MAT_FENCE_BOARD, o->from, o->to, mid - 0.02f, mid + 0.02f, at - 0.02f,
@@ -212,13 +208,11 @@ static void casing(Kit* kit, const KitWall* w, const KitOpening* o, int glass) {
 static void walls(Kit* kit) {
     for (int i = 0; i < 4; i++) {
         kit_wall(kit, &WALLS[i]);
-        // The side walls' courses half a course over the ends', so they interleave at the corners.
-        wall_logs(kit, &WALLS[i], WALLS[i].along_x ? 0.5f * COURSE : 0.0f);
+        wall_logs(kit, &WALLS[i]);
     }
-    casing(kit, &WALLS[0], &WALLS[0].openings[0], -1);
-    casing(kit, &WALLS[0], &WALLS[0].openings[1], MAT_WINDOW_GLASS);
-    casing(kit, &WALLS[2], &WALLS[2].openings[0], MAT_WINDOW_GLASS);
-    casing(kit, &WALLS[3], &WALLS[3].openings[0], MAT_WINDOW_GLASS);
+    for (int i = 0; i < 4; i++)
+        for (int k = 0; k < WALLS[i].opening_count; k++)
+            casing(kit, &WALLS[i], &WALLS[i].openings[k]);
 }
 
 // The footing, the floor, and the tie logs across under the roof.
@@ -263,13 +257,13 @@ static void roof(Kit* kit) {
     const float side = 0.5f * (CABIN_Z1 - CABIN_Z0);
     const vec2 gable[3] = {{MID_Z - side, CABIN_EAVE_Y},
                            {MID_Z + side, CABIN_EAVE_Y},
-                           {MID_Z, roof_y(MID_Z) - ROOF_T - 0.02f}};
+                           {MID_Z, roof_under(MID_Z) - 0.02f}};
     const float gx[2] = {CABIN_X0, CABIN_X1};
     for (int g = 0; g < 2; g++)
         kit_frame_extrude(kit, &KIT_WORLD_Z, MAT_FENCE_BOARD, gable, 3, -gx[g] - 0.5f * CORE,
                           -gx[g] + 0.5f * CORE);
 
-    const float drip_y = roof_y(zn) - ROOF_T;
+    const float drip_y = roof_under(zn);
     kit_drip_run(kit, &KIT_WORLD, (vec3){ROOF_X0, drip_y, zn}, (vec3){ROOF_X1, drip_y, zn}, 0.6f,
                  0.0f);
     kit_drip_run(kit, &KIT_WORLD, (vec3){ROOF_X0, drip_y, zs}, (vec3){ROOF_X1, drip_y, zs}, 0.6f,
@@ -310,7 +304,7 @@ static void fireplace(Kit* kit) {
     kit_frame_box(kit, w, MAT_STONE, HEARTH_FACE - 0.5f, HEARTH_FACE, CABIN_FLOOR_Y,
                   CABIN_FLOOR_Y + 0.04f, fz0 + 0.1f, fz1 - 0.1f, false);
     // The grate, and two logs on it with a third across them.
-    const float gy = FIREBOX_Y0 + 0.08f, gx = HEARTH_FACE + 0.22f;
+    const float gy = FIREBOX_Y0 + 0.08f, gx = GRATE_X;
     for (int i = 0; i < 4; i++) {
         const float z = FIREBOX_Z0 + 0.15f + 0.2f * (float)i;
         kit_frame_box(kit, w, MAT_IRON, gx - 0.15f, gx + 0.15f, gy - 0.02f, gy, z - 0.01f,
@@ -346,14 +340,14 @@ static void fireplace(Kit* kit) {
 static void porch(Kit* kit) {
     const KitFrame* w = &KIT_WORLD;
     const float z0 = CABIN_Z0 + 0.3f, z1 = CABIN_Z1 - 0.3f;
-    kit_frame_box(kit, w, MAT_PORCH, DECK_X0, CABIN_X0 - 0.5f * CORE, CABIN_PAD_Y, DECK_Y, z0, z1,
-                  true);
-    kit_frame_box(kit, w, MAT_PORCH, DECK_X0 - 0.32f, DECK_X0, CABIN_PAD_Y,
+    kit_frame_box(kit, w, MAT_PORCH, CABIN_PORCH_X0, CABIN_X0 - 0.5f * CORE, CABIN_PAD_Y, DECK_Y,
+                  z0, z1, true);
+    kit_frame_box(kit, w, MAT_PORCH, CABIN_PORCH_X0 - 0.32f, CABIN_PORCH_X0, CABIN_PAD_Y,
                   0.5f * (CABIN_PAD_Y + DECK_Y), DOOR_Z0 - 0.15f, DOOR_Z1 + 0.15f, true);
-    const float px = DECK_X0 + 0.15f;
+    const float px = CABIN_PORCH_X0 + 0.15f;
     const float pz[2] = {z0 + 0.15f, z1 - 0.15f};
     for (int i = 0; i < 2; i++) {
-        const float top = roof_y(pz[i]) - ROOF_T;
+        const float top = roof_under(pz[i]);
         log_piece(kit, (vec3){px, DECK_Y, pz[i]}, (vec3){0.0f, 1.0f, 0.0f}, top - DECK_Y, 0.09f, 8);
     }
     // Rails of poles, two high: along each side, and across the front either side of the steps.
@@ -395,7 +389,8 @@ static void porch(Kit* kit) {
 
 // Split wood stacked against the south wall under the eave, end grain out.
 static void woodpile(Kit* kit, KitRng* rng) {
-    const float x0 = -66.4f, x1 = -63.6f, z = CABIN_Z1 + LOG_R + 0.02f, len = 0.42f;
+    const float x0 = CABIN_X0 + 0.6f, x1 = CABIN_X1 - 1.6f, z = CABIN_Z1 + LOG_R + 0.02f,
+                len = 0.42f;
     for (int layer = 0; layer < 5; layer++) {
         const float r = 0.065f, y = CABIN_PAD_Y + r + 2.0f * r * 0.92f * (float)layer;
         const float shift = (layer & 1) ? r : 0.0f;
@@ -528,12 +523,8 @@ static void shelves(Kit* kit, KitRng* rng) {
 static void lake_map(Kit* kit) {
     // Facing into the room off the front wall's logs: a runs along -z, d along +x.
     const KitFrame f = {{0.0f, 0.0f, 0.0f}, 0.5f * GLM_PIf};
-    const float w = CARDS[CARD_LAKE_MAP].size[0], h = CARDS[CARD_LAKE_MAP].size[1];
-    const float a = -(DOOR_Z1 + 0.75f), y = CABIN_FLOOR_Y + 1.5f, d = CABIN_X0 + LOG_R + 0.012f;
-    const float tilt = 0.03f, c = cosf(tilt), s = sinf(tilt);
-    const vec3 across = {w * c, w * s, 0.0f}, up = {-h * s, h * c, 0.0f};
-    const vec3 corner = {a - 0.5f * (across[0] + up[0]), y - 0.5f * (across[1] + up[1]), d};
-    kit_frame_card(kit, &f, MAT_CARDS, corner, across, up, CARDS[CARD_LAKE_MAP].uv);
+    kitchen_pin_card(kit, &f, CARD_LAKE_MAP, -(DOOR_Z1 + 0.75f), CABIN_FLOOR_Y + 1.5f,
+                     CABIN_X0 + LOG_R + 0.012f, 0.03f);
 }
 
 void cabin_build(Kit* kit, unsigned int seed) {
@@ -560,7 +551,7 @@ void cabin_light(FireSystem* fs, Scene* scene, bool shadows) {
     if (!fire_set_flipbook(fire, scene->tex_pool, "assets/textures/fire_hearth.json"))
         return;
     // Two cards on the grate out of step, the second a little smaller and further back.
-    const float gx = HEARTH_FACE + 0.22f, gy = FIREBOX_Y0 + 0.05f;
+    const float gx = GRATE_X, gy = FIREBOX_Y0 + 0.05f;
     fire->cards.list[0] = (FireCard){{gx, gy, MID_Z}, {0.78f, 0.61f}, 0.0f};
     fire->cards.list[1] = (FireCard){{gx + 0.06f, gy, MID_Z - 0.12f}, {0.6f, 0.47f}, 0.5f};
     fire->cards.count = 2;

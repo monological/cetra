@@ -1059,13 +1059,14 @@ crossroads at the street's west end.
 **The lake and the cabin** (spec 13.41): through the gap in the south barricade, a gravel track
 down a valley to a lake, with a dock, two rowboats, reeds and drowned trees, and a log cabin on
 its east bank with a fire burning inside and its door left open.
-- **`--player-at X,Z[,YAW]`:** starts the player there, standing on the ground, facing YAW
-  degrees from +z, so the valley can be walked without the walk to it: `-52,30` is the
-  barricade's gap, `-65,113` the track's foot at the cabin. Over the water it stands the player
-  on the bed, under the surface, so take a pinned view to look at the lake.
-- **The lake is drawn only while the eye is in the valley** (west of x -40 and south of z 66,
-  until it is back past -36 or 60), so the chasm at the same depth stays dry. `--no-fog` draws
-  it everywhere.
+- **`--player-at X,Z[,YAW]`:** starts the player there, standing on whatever is under them --
+  the ground, the cabin's floor, the dock -- facing YAW degrees from +z, so the valley can be
+  walked without the walk to it: `-52,30` is the barricade's gap, `-65,113` the track's foot at
+  the cabin, `-78,118,90` the dock looking at the cabin. Over open water it stands the player on
+  the bed, under the surface, so take a pinned view to look at the lake.
+- **The lake's water is on only within the fog's reach of it plus 15 m**, as the lake's and the
+  cabin's things are drawn; `--no-fog` keeps it on everywhere. The chasm at the same depth stays
+  dry either way: the water stops at its bounds.
 - **Pinned views:**
   - the cabin from the dock, the fire through its door: `--cam-eye -78,-9.45,118 --cam-target
     -64,-9.6,118`;

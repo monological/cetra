@@ -77,6 +77,7 @@ typedef struct Kit {
     // larger ones: a small cell of it holds a few triangles, and every shadow view pays a draw for
     // each cell in reach.
     float shadow_cell_scale;
+    float draw_distance; // how far off the camera draws what kit_finish hands over; 0, any way
     // The engine, for the loading screen drawn between the long pieces of kit_finish (spec
     // 13.39); NULL draws nothing. A kit made beside another takes the other's.
     struct Engine* engine;

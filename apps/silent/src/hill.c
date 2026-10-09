@@ -1,5 +1,5 @@
-#include <float.h>
 #include <math.h>
+#include <stddef.h>
 
 #include "hill.h"
 #include "layout.h"
@@ -90,8 +90,7 @@ float hill_height(float x, float z) {
 }
 
 float hill_drive_distance(float x, float z) {
-    float along = 0.0f;
-    return road_distance(&g_drive, x, z, &along);
+    return road_distance(&g_drive, x, z, NULL);
 }
 
 void hill_drive_point(float t, float* x, float* z) {
@@ -110,5 +109,5 @@ void hill_build(Kit* kit) {
     const vec3 half = {0.5f * (GROUNDS_X1 - GROUNDS_X0), 0.5f, 0.5f * (GROUNDS_Z1 - GROUNDS_Z0)};
     kit_collider(kit, centre, half, 0.0f);
 
-    road_ribbon(kit, &g_drive, MAT_ASPHALT, 0.0f, FLT_MAX);
+    road_ribbon(kit, &g_drive, MAT_ASPHALT, 0.0f, road_length(&g_drive));
 }

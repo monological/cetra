@@ -1801,6 +1801,7 @@ static int shadow_cells(Kit* kit, SceneNode* node) {
 static SceneNode* finish_node(Kit* kit, const char* name) {
     SceneNode* node = create_node();
     node_set_name(node, name);
+    node->draw_distance = kit->draw_distance;
     // The cells first: they read the builders, which handing a mesh over empties.
     kit->shadow_cell_count = kit->casts_nothing ? 0 : shadow_cells(kit, node);
     for (int i = 0; i < kit->material_count; i++) {

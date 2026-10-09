@@ -471,6 +471,7 @@ def main():
     parser.add_argument("--audition",
                         help="write every case preset and candidate loop here, to choose by ear")
     parser.add_argument("--only", nargs="+", metavar="JOB",
+                        choices=["clock", *JOBS, *ONESHOT_JOBS],
                         help="only these jobs -- clock, or a loop's or a one-shot's -- downloading "
                              "and writing nothing for the rest, whose files stay as they are")
     args = parser.parse_args()

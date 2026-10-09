@@ -290,47 +290,36 @@ void street_build(Kit* kit, Scene* scene, unsigned int seed, bool night, bool fo
     // the ground. Round the street, the woods behind both sides and the hill the drive climbs,
     // tall enough for the grounds up there and the woods' climb. Behind the street it stands well
     // inside the woods (spec 13.35), so the trees go on past it.
-    const float h = 14.0f, y = 9.0f;
+    // The lake valley's (spec 13.41) stand lower and reach down past its water.
+    const float y = 9.0f, h = 14.0f, vy = -4.0f, vh = 16.0f;
     const float x0 = -STREET_HALF_LEN + 1.0f, x1 = WORLD_X1 - 1.0f;
     const float z0 = WORLD_Z0 + 1.0f, z1 = WORLD_Z1 - 1.0f;
     struct {
-        float ax, az, bx, bz;
+        float ax, az, bx, bz, y, h;
     } const edges[] = {
         // Behind the far lots and behind ours, where the woods run on west past the crossroads;
         // the crossroads itself is closed by its barricades and the chasm's lip.
-        {x0, WOODS_EDGE_Z0, x0, TERRACE_BACK_Z},
-        {x0, BACK_FENCE_Z, x0, WOODS_EDGE_Z1},
-        {x0, WOODS_EDGE_Z1, WOODS_EAST_X, WOODS_EDGE_Z1}, // in the woods behind our side
-        {WOODS_EAST_X, WOODS_EDGE_Z1, WOODS_EAST_X, z1},  // and their east side
-        {WOODS_EAST_X, z1, x1, z1},                       // behind the mansion
-        {x1, z1, x1, z0},                                 // the hill's east side
-        {x1, z0, WOODS_EAST_X, z0},                       // the hill's north side
-        {WOODS_EAST_X, z0, WOODS_EAST_X, WOODS_EDGE_Z0},  // the far woods' east side
-        {WOODS_EAST_X, WOODS_EDGE_Z0, x0, WOODS_EDGE_Z0}, // in the woods behind them
+        {x0, WOODS_EDGE_Z0, x0, TERRACE_BACK_Z, y, h},
+        {x0, BACK_FENCE_Z, x0, WOODS_EDGE_Z1, y, h},
+        {x0, WOODS_EDGE_Z1, WOODS_EAST_X, WOODS_EDGE_Z1, y, h}, // in the woods behind our side
+        {WOODS_EAST_X, WOODS_EDGE_Z1, WOODS_EAST_X, z1, y, h},  // and their east side
+        {WOODS_EAST_X, z1, x1, z1, y, h},                       // behind the mansion
+        {x1, z1, x1, z0, y, h},                                 // the hill's east side
+        {x1, z0, WOODS_EAST_X, z0, y, h},                       // the hill's north side
+        {WOODS_EAST_X, z0, WOODS_EAST_X, WOODS_EDGE_Z0, y, h},  // the far woods' east side
+        {WOODS_EAST_X, WOODS_EDGE_Z0, x0, WOODS_EDGE_Z0, y, h}, // in the woods behind them
+        // Round the valley: on south behind the woods behind ours, across its far end, and up
+        // its west side to the chasm's south lip.
+        {x0, WOODS_EDGE_Z1, x0, VALLEY_WALL_Z1, vy, vh},
+        {x0, VALLEY_WALL_Z1, VALLEY_WALL_X0, VALLEY_WALL_Z1, vy, vh},
+        {VALLEY_WALL_X0, VALLEY_WALL_Z1, VALLEY_WALL_X0, RIDGE_Z - 2.0f, vy, vh},
     };
     for (size_t i = 0; i < sizeof(edges) / sizeof(edges[0]); i++) {
         const float cx = 0.5f * (edges[i].ax + edges[i].bx),
                     cz = 0.5f * (edges[i].az + edges[i].bz);
         const float hx = 0.5f * fabsf(edges[i].bx - edges[i].ax) + 0.5f;
         const float hz = 0.5f * fabsf(edges[i].bz - edges[i].az) + 0.5f;
-        kit_collider(kit, (vec3){cx, y, cz}, (vec3){hx, h, hz}, 0.0f);
-    }
-    // Round the lake valley (spec 13.41), down past its water: on south behind the woods behind
-    // ours, across its far end, and up its west side to the chasm's south lip.
-    const float vh = 16.0f, vy = -4.0f;
-    struct {
-        float ax, az, bx, bz;
-    } const valley[] = {
-        {x0, WOODS_EDGE_Z1, x0, VALLEY_WALL_Z1},
-        {x0, VALLEY_WALL_Z1, VALLEY_WALL_X0, VALLEY_WALL_Z1},
-        {VALLEY_WALL_X0, VALLEY_WALL_Z1, VALLEY_WALL_X0, RIDGE_Z - 2.0f},
-    };
-    for (size_t i = 0; i < sizeof(valley) / sizeof(valley[0]); i++) {
-        const float cx = 0.5f * (valley[i].ax + valley[i].bx),
-                    cz = 0.5f * (valley[i].az + valley[i].bz);
-        const float hx = 0.5f * fabsf(valley[i].bx - valley[i].ax) + 0.5f;
-        const float hz = 0.5f * fabsf(valley[i].bz - valley[i].az) + 0.5f;
-        kit_collider(kit, (vec3){cx, vy, cz}, (vec3){hx, vh, hz}, 0.0f);
+        kit_collider(kit, (vec3){cx, edges[i].y, cz}, (vec3){hx, edges[i].h, hz}, 0.0f);
     }
 
     if (fogged)

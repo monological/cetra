@@ -514,10 +514,8 @@ static void stove_wall(Kit* kit, KitRng* rng) {
     clutter(kit, &f, rng, s1 + 0.1f, len - 0.1f, 0.0f, 0.0f, COUNTER_TOP, 1);
 }
 
-// A card pinned upright facing out of its wall at d, centred at (a, y) and
-// turned `tilt` radians in its own plane.
-static void pin_card(Kit* kit, const KitFrame* f, CardId card, float a, float y, float d,
-                     float tilt) {
+void kitchen_pin_card(Kit* kit, const KitFrame* f, CardId card, float a, float y, float d,
+                      float tilt) {
     const float w = CARDS[card].size[0], h = CARDS[card].size[1];
     const float c = cosf(tilt), s = sinf(tilt);
     const vec3 across = {w * c, w * s, 0.0f}, up = {-h * s, h * c, 0.0f};
@@ -554,16 +552,16 @@ static void fridge(Kit* kit, const KitFrame* f, KitRng* rng, float a0, float a1)
     kit_frame_prism(kit, f, MAT_STEEL, a0 + 0.06f, d + 0.035f, 0.75f, 1.1f, 0.012f, 6);
 
     const float step = 0.0008f;
-    pin_card(kit, f, CARD_PHOTO_TREE, a0 + 0.26f, 1.47f, d + step, -0.06f);
-    pin_card(kit, f, CARD_PHOTO_LAKE, a0 + 0.45f, 1.53f, d + 2.0f * step, 0.04f);
-    pin_card(kit, f, CARD_PHOTO_ROAD, a0 + 0.59f, 1.40f, d + 3.0f * step, -0.03f);
+    kitchen_pin_card(kit, f, CARD_PHOTO_TREE, a0 + 0.26f, 1.47f, d + step, -0.06f);
+    kitchen_pin_card(kit, f, CARD_PHOTO_LAKE, a0 + 0.45f, 1.53f, d + 2.0f * step, 0.04f);
+    kitchen_pin_card(kit, f, CARD_PHOTO_ROAD, a0 + 0.59f, 1.40f, d + 3.0f * step, -0.03f);
     magnet(kit, f, MAT_PLASTIC, a0 + 0.262f, 1.505f, d + 2.0f * step);
     magnet(kit, f, MAT_CERAMIC, a0 + 0.45f, 1.575f, d + 3.0f * step);
     magnet(kit, f, MAT_BLACK, a0 + 0.59f, 1.46f, d + 4.0f * step);
 
-    pin_card(kit, f, CARD_PHOTO_PARK, a0 + 0.43f, 0.80f, d + step, 0.05f);
-    pin_card(kit, f, CARD_PHOTO_GARDEN, a0 + 0.50f, 0.99f, d + 2.0f * step, -0.07f);
-    pin_card(kit, f, CARD_NOTE, a0 + 0.30f, 1.03f, d + 3.0f * step, 0.03f);
+    kitchen_pin_card(kit, f, CARD_PHOTO_PARK, a0 + 0.43f, 0.80f, d + step, 0.05f);
+    kitchen_pin_card(kit, f, CARD_PHOTO_GARDEN, a0 + 0.50f, 0.99f, d + 2.0f * step, -0.07f);
+    kitchen_pin_card(kit, f, CARD_NOTE, a0 + 0.30f, 1.03f, d + 3.0f * step, 0.03f);
     magnet(kit, f, MAT_PLASTIC, a0 + 0.298f, 1.085f, d + 4.0f * step);
     magnet(kit, f, MAT_BLACK, a0 + 0.44f, 1.03f, d + 3.0f * step);
     magnet(kit, f, MAT_CERAMIC, a0 + 0.43f, 0.835f, d + 2.0f * step);
