@@ -180,39 +180,21 @@ float fogVisibility(int layer0, vec3 P) {
     return 1.0;
 }
 
-void main() {
-    // The VOLUME's near, not the camera's: see fogNear's owner in postfx.c.
-    float nearZ = fogNear;
+// The frame `index`'s offset within a cell: its point of the Halton sequence in each axis.
+vec3 froxelJitter(int index) {
+    return vec3(halton(index, 2), halton(index, 3), halton(index, 5));
+}
 
-    // Sub-cell sample offset. The offset is the SAME for every cell -- a
-    // low-discrepancy shift of the whole grid -- so averaging successive frames
-    // supersamples the volume rather than adding per-cell noise. It has to move
-    // laterally, not just in depth: the cascade tap is binary, so a shadow
-    // boundary lands on a cell edge and stair-steps at the grid's 160x90, and
-    // only an X/Y shift walks that edge across the cell. This is what replaces
-    // the 24 taps per ray the screen-space march averaged.
-    // Centred (no offset) when there is no history to average into, which keeps
-    // the first frame from sampling off-centre with nothing to blend against.
-    vec3 jitter = vec3(0.5);
-    if (temporal == 1) {
-        jitter = vec3(halton(frameIndex + 1, 2), halton(frameIndex + 1, 3),
-                      halton(frameIndex + 1, 5));
-    }
+// The medium at one sample of this cell, offset within it by `jitter` (0.5 = the centre): the
+// in-scattered radiance, pre-exposed, and the extinction. A sample under the water's surface is
+// the water's, with `submerged` set.
+vec4 froxelMediumAt(vec3 jitter, float nearZ, out bool submerged) {
+    submerged = false;
     vec2 cellUv = TexCoords + (jitter.xy - 0.5) / vec2(textureSize(historyVolume, 0).xy);
     vec3 viewPos = froxelViewPos(cellUv, float(sliceIndex), jitter.z, nearZ, fogFar,
                                  float(froxelDepth), fogDepthDist);
     vec3 camPos = invView[3].xyz;
     vec3 P = (invView * vec4(viewPos, 1.0)).xyz;
-    // The cell's UNJITTERED centre, kept for reprojection only. Reprojecting the
-    // jittered sample instead would land the history lookup at a different
-    // sub-cell offset every frame, so each frame reads a different trilinear mix
-    // of neighbours and the accumulation never settles -- it flickers rather
-    // than converging. Reprojecting the centre makes a static camera read
-    // exactly this cell's own history, which is what turns the blend into a
-    // running average of the jittered samples.
-    vec3 centreView = froxelViewPos(TexCoords, float(sliceIndex), 0.5, nearZ, fogFar,
-                                    float(froxelDepth), fogDepthDist);
-    vec3 centreP = (invView * vec4(centreView, 1.0)).xyz;
     // Direction from the camera toward this cell: the phase function's second
     // argument, and the froxel equivalent of the march's per-pixel rayDir.
     vec3 rayDir = worldRayDirFromEye(P - camPos, invView);
@@ -226,7 +208,7 @@ void main() {
 
     // A cell below the surface is water, not denser air, so the two media do not blend:
     // this REPLACES air's terms rather than adding to them, and everything the air path
-    // computes below would be overwritten. So it exits here instead -- the whole light
+    // computes below would be overwritten. So it returns here instead -- the whole light
     // accumulation, its shadow taps, and the temporal reprojection are all dead work for
     // a submerged cell, and a submerged camera puts most of the frustum down here.
     //
@@ -247,8 +229,8 @@ void main() {
         // there is nothing for the temporal accumulator to average: the value is
         // constant per frame, so blending it against its own history is a no-op.
         float bodySigma = dot(waterExtinction, vec3(0.2126, 0.7152, 0.0722));
-        FragColor = vec4(min(waterInscatter * preExposure, vec3(WS_MEDIA_MAX)), bodySigma);
-        return;
+        submerged = true;
+        return vec4(min(waterInscatter * preExposure, vec3(WS_MEDIA_MAX)), bodySigma);
     }
 
     /*
@@ -434,35 +416,69 @@ void main() {
     // Keep shafts HDR (they must bloom) but bound hostile parameter combos away
     // from fp16 overflow, as the screen-space march does. 500 now means 500x
     // white rather than 500 nits.
-    vec4 result = vec4(min(S * preExposure, vec3(WS_MEDIA_MAX)), sigma);
+    return vec4(min(S * preExposure, vec3(WS_MEDIA_MAX)), sigma);
+}
 
-    // Temporal reprojection: find where this cell's world position sat in the
-    // previous frame's volume and blend against it. Unlike the screen-space
-    // passes there is no velocity buffer to reproject by -- a froxel is a
-    // volume of air, not a surface -- so the previous camera does the mapping.
+// Temporal reprojection: where this cell sat in the previous frame's volume, and whether it sat
+// inside it at all. Unlike the screen-space passes there is no velocity buffer to reproject by --
+// a froxel is a volume of air, not a surface -- so the previous camera does the mapping.
+//
+// From the cell's UNJITTERED centre. Reprojecting the jittered sample instead would land the
+// history lookup at a different sub-cell offset every frame, so each frame reads a different
+// trilinear mix of neighbours and the accumulation never settles -- it flickers rather than
+// converging. Reprojecting the centre makes a static camera read exactly this cell's own
+// history, which is what turns the blend into a running average of the jittered samples.
+bool froxelHistoryAt(float nearZ, out vec3 prevUvw) {
+    prevUvw = vec3(0.0);
+    vec3 centreView = froxelViewPos(TexCoords, float(sliceIndex), 0.5, nearZ, fogFar,
+                                    float(froxelDepth), fogDepthDist);
+    vec3 centreP = (invView * vec4(centreView, 1.0)).xyz;
+    vec4 prevViewPos = prevView * vec4(centreP, 1.0);
+    float prevZ = -prevViewPos.z;
+    if (prevZ <= nearZ)
+        return false;
+    vec2 prevUv = uvFromViewXY(prevViewPos.xy, prevZ, prevProjection);
+    float prevSlice = froxelViewZToSlice(prevZ, nearZ, fogFar, float(froxelDepth), fogDepthDist);
+    // Scatter cells sit at their slice centre (slice s spans continuous s..s+1), so continuous
+    // coordinate c reads texel c-0.5, i.e. the normalized coordinate is just c/depth.
+    prevUvw = vec3(prevUv, prevSlice / float(froxelDepth));
+    // Off-volume reprojection has no history to blend: the standard disocclusion fallback.
+    return all(greaterThanEqual(prevUvw, vec3(0.0))) && all(lessThanEqual(prevUvw, vec3(1.0)));
+}
+
+void main() {
+    // The VOLUME's near, not the camera's: see fogNear's owner in postfx.c.
+    float nearZ = fogNear;
+
+    // Sub-cell sample offset. The offset is the SAME for every cell -- a
+    // low-discrepancy shift of the whole grid -- so averaging successive frames
+    // supersamples the volume rather than adding per-cell noise. It has to move
+    // laterally, not just in depth: the cascade tap is binary, so a shadow
+    // boundary lands on a cell edge and stair-steps at the grid's 160x90, and
+    // only an X/Y shift walks that edge across the cell. This is what replaces
+    // the 24 taps per ray the screen-space march averaged.
+    // Centred (no offset) when there is no history to average into, which keeps
+    // the first frame from sampling off-centre with nothing to blend against.
+    vec3 jitter = vec3(0.5);
+    if (temporal == 1)
+        jitter = froxelJitter(frameIndex + 1);
+    bool submerged;
+    vec4 result = froxelMediumAt(jitter, nearZ, submerged);
+    if (submerged) {
+        FragColor = result;
+        return;
+    }
+
     if (temporal == 1) {
-        vec4 prevViewPos = prevView * vec4(centreP, 1.0);
-        float prevZ = -prevViewPos.z;
-        if (prevZ > nearZ) {
-            vec2 prevUv = uvFromViewXY(prevViewPos.xy, prevZ, prevProjection);
-            float prevSlice =
-                froxelViewZToSlice(prevZ, nearZ, fogFar, float(froxelDepth), fogDepthDist);
-            // Scatter cells sit at their slice centre (slice s spans continuous
-            // s..s+1), so continuous coordinate c reads texel c-0.5, i.e. the
-            // normalized coordinate is just c/depth.
-            vec3 prevUvw = vec3(prevUv, prevSlice / float(froxelDepth));
-            // Off-volume reprojection has no history to blend, so those cells
-            // keep the current frame -- the standard disocclusion fallback.
-            if (all(greaterThanEqual(prevUvw, vec3(0.0))) &&
-                all(lessThanEqual(prevUvw, vec3(1.0)))) {
-                // The history was stored at its own frame's pre-exposure; brought to this
-                // frame's, a change of exposure lands whole rather than at the blend's pace.
-                // Only the in-scatter: extinction knows nothing of the exposure. Under the
-                // same ceiling as this frame's value, which a step up could otherwise pass.
-                vec4 history = texture(historyVolume, prevUvw);
-                history.rgb = min(history.rgb * historyScale, vec3(WS_MEDIA_MAX));
-                result = mix(result, history, temporalBlend);
-            }
+        vec3 prevUvw;
+        if (froxelHistoryAt(nearZ, prevUvw)) {
+            // The history was stored at its own frame's pre-exposure; brought to this
+            // frame's, a change of exposure lands whole rather than at the blend's pace.
+            // Only the in-scatter: extinction knows nothing of the exposure. Under the
+            // same ceiling as this frame's value, which a step up could otherwise pass.
+            vec4 history = texture(historyVolume, prevUvw);
+            history.rgb = min(history.rgb * historyScale, vec3(WS_MEDIA_MAX));
+            result = mix(result, history, temporalBlend);
         }
     }
 
