@@ -247,6 +247,7 @@ static BackpackMenu g_menu;
 static bool g_menu_was_open;
 static bool g_cursor_given_back; // the backpack's screen freed a captured cursor
 static float g_tab_hint;         // seconds the prompt still names Tab, after the bag is taken
+static bool g_dark_said;         // the dark at the cellar flight's foot was thought this visit
 
 // How long the prompt names Tab once the backpack is had.
 #define TAB_HINT_SECONDS 5.0f
@@ -862,6 +863,9 @@ static void on_init(Game* game) {
     clock_start(&g_clock, engine, g_scene, audio);
     load_seam(engine, "audio-kitchen-clock");
     basement_start(&g_basement, engine, g_scene, audio, (unsigned int)g_args.seed);
+    // Nobody goes into the dark down there without a light (spec 13.40).
+    if (!backpack_holds(&g_backpack, ITEM_FLASHLIGHT))
+        basement_bar(&g_basement, em, physics);
     lights_start_audio(&g_lights, audio);
     load_seam(engine, "audio-basement-lights");
     tv_start_audio(&g_tv, audio);
@@ -971,6 +975,15 @@ static void on_update(Game* game, double dt) {
     // What it senses is decided here, and what it does about it by its brain after this hook.
     cat_mind_sense(&g_mind, g_args.rain_mmh / CAT_HEAVY_RAIN, (float)dt);
     player_update(&g_player, game, dt);
+    // At the cellar flight's foot with no light, the player thinks why they can go no further
+    // (spec 13.40): once a visit, and again only after climbing back up to the hall.
+    if (basement_at_foot(feet)) {
+        if (!g_dark_said && !backpack_holds(&g_backpack, ITEM_FLASHLIGHT))
+            hud_think(&g_hud, "It's too dark. I can't see. I need to find a flashlight.");
+        g_dark_said = true;
+    } else if (feet[1] > FLOOR_Y - 0.5f) {
+        g_dark_said = false;
+    }
     for (int i = 0; i < DOORS; i++)
         if (g_door_hung[i])
             door_update(&g_doors[i], (float)dt);
@@ -1088,6 +1101,7 @@ static void on_pre_render(Game* game, double alpha) {
     if (input_action_pressed(&game->input, "interact")) {
         if (bag) {
             backpack_take(&g_backpack);
+            basement_unbar(&g_basement, game->entity_manager);
             hud_think(&g_hud, "My backpack. There's a flashlight in it.");
             g_tab_hint = TAB_HINT_SECONDS;
         } else if (door) {

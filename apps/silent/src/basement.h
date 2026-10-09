@@ -5,6 +5,8 @@
 #include "cetra/light.h"
 #include "cetra/scene.h"
 #include "cetra/game/audio.h"
+#include "cetra/game/entity.h"
+#include "cetra/game/physics.h"
 
 #include "door.h"
 #include "kit.h"
@@ -32,6 +34,8 @@ typedef struct Basement {
     Sound* drip; // decoded once and played as voices; NULL without audio
     double next_drip;
     KitRng drips; // the gaps between them
+
+    Entity* bar; // across the way in at the flight's foot while the player has no light; or NULL
 } Basement;
 
 // The foundation, the slab, the framing overhead, the beam and its posts, the stair and its
@@ -46,5 +50,16 @@ void basement_start(Basement* b, Engine* engine, Scene* scene, AudioSystem* audi
 // Per frame, before the frame draws: the swing, set going the first time `door` opens (NULL when
 // it was not hung), the dimming, and the drip.
 void basement_update(Basement* b, const Door* door, double time);
+
+/*
+ * The basement is dark past the bulb's reach at the flight's foot, and nobody goes into it
+ * without a light (spec 13.40): the way in from the foot is barred by a body nobody sees until
+ * the player has the flashlight. Whether `feet` are at the foot -- on its last steps or the floor
+ * below them -- is what says so to the player.
+ */
+bool basement_at_foot(const vec3 feet);
+// The bar across the way in, and gone again; each a no-op when it already is so.
+void basement_bar(Basement* b, EntityManager* em, PhysicsWorld* physics);
+void basement_unbar(Basement* b, EntityManager* em);
 
 #endif // _SILENT_BASEMENT_H_
