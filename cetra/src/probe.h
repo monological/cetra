@@ -59,10 +59,6 @@ typedef struct ReflectionProbe {
     // ENGINE-OWNED: how many of the scene capture's six faces are drawn while a capture is under
     // way (reflection_probe_capture_face); 0 otherwise.
     int faces_captured;
-    // ENGINE-OWNED: the cook's key for this capture (spec 13.42), folded as its first face began;
-    // `cook_keyed` false when the scene could not say what it is.
-    uint64_t cook_hash;
-    bool cook_keyed;
 } ReflectionProbe;
 
 // A probe is consumable once its prefiltered chain exists and it is switched on.

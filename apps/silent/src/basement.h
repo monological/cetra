@@ -18,6 +18,14 @@
  * home.h's.
  */
 
+// The bulb's light: where it hangs, its supply's level (1 is full) and whether its cached shadow
+// follows it.
+typedef struct BulbState {
+    vec3 at;
+    float level;
+    bool follow;
+} BulbState;
+
 /*
  * The bare bulb hanging in the stairwell, which is what the door opens on: lit, set swinging by
  * the draft the first time the door opens, and now and then dimming on a failing supply. And the
@@ -29,11 +37,7 @@ typedef struct Basement {
     Light* light;    // cached, its shadow following it while the swing is wide
     double drafted;  // when the door first opened, or -1 before
     unsigned int seed;
-    // As the last update left the light: where it hung, its supply's level and whether its
-    // shadow followed it.
-    vec3 at;
-    float level;
-    bool follow;
+    BulbState live; // as the last update left the light; hanging still on a full supply before
 
     AudioSystem* audio;
     Sound* drip; // decoded once and played as voices; NULL without audio

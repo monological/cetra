@@ -136,6 +136,15 @@ AtlasRect lighting_atlas_probe_rect(const LightingAtlas* atlas, int slot);
 uint16_t* lighting_atlas_keep(const LightingAtlas* atlas, AtlasRect rect);
 bool lighting_atlas_restore(const LightingAtlas* atlas, AtlasRect rect, const uint16_t* texels);
 
+// The same rectangle from the cook and into it (spec 13.42): a capture of a scene captured before
+// is texels from disk where kept ones come from memory. The fetch is false on a miss, an invalid
+// key or a stored rectangle of another size, and writes nothing then.
+struct CookKey;
+bool lighting_atlas_cook_fetch(const LightingAtlas* atlas, AtlasRect rect,
+                               const struct CookKey* key);
+void lighting_atlas_cook_store(const LightingAtlas* atlas, AtlasRect rect,
+                               const struct CookKey* key);
+
 // A rectangle back to what a new atlas holds, as though nothing had been written there. Leaves
 // framebuffer 0 bound.
 void lighting_atlas_clear(const LightingAtlas* atlas, AtlasRect rect);

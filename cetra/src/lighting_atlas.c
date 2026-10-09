@@ -2,6 +2,7 @@
 #include <string.h>
 
 #include "lighting_atlas.h"
+#include "cook.h"
 #include "engine.h"
 #include "texture.h"
 #include "uniform.h"
@@ -344,6 +345,28 @@ bool lighting_atlas_restore(const LightingAtlas* atlas, AtlasRect rect, const ui
     glBindTexture(GL_TEXTURE_2D, 0);
     check_gl_error("lighting atlas restore");
     return true;
+}
+
+bool lighting_atlas_cook_fetch(const LightingAtlas* atlas, AtlasRect rect, const CookKey* key) {
+    CookBlob blob = {NULL, 0};
+    if (!cook_fetch(key, &blob, 1))
+        return false;
+    const bool fits =
+        blob.size == rect_bytes(rect) && lighting_atlas_restore(atlas, rect, blob.data);
+    free(blob.data);
+    if (!fits)
+        log_warn("lighting atlas: the cooked %s does not fit its %dx%d rectangle; capturing live",
+                 key->name, rect.w, rect.h);
+    return fits;
+}
+
+void lighting_atlas_cook_store(const LightingAtlas* atlas, AtlasRect rect, const CookKey* key) {
+    uint16_t* texels = lighting_atlas_keep(atlas, rect);
+    if (!texels)
+        return;
+    const CookBlob blob = {texels, rect_bytes(rect)};
+    cook_store(key, &blob, 1);
+    free(texels);
 }
 
 void lighting_atlas_clear(const LightingAtlas* atlas, AtlasRect rect) {

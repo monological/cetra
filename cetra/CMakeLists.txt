@@ -118,15 +118,19 @@ add_custom_command(
 )
 
 # The engine's own source as one number (spec 13.42), for a cooked capture's key: any edit to the
-# library or a shader leaves every cooked capture unfindable. Re-digested whenever a source the
-# glob finds changes; the generator rewrites the header only when the number does.
+# library or a shader leaves every cooked capture unfindable. One list, handed to the generator
+# and depended on alike, so what is digested is what re-digests; the generator rewrites the header
+# only when the number changes.
 set(BUILD_DIGEST_HEADER ${SHADER_GEN_DIR}/build_digest.h)
 file(GLOB _digested CONFIGURE_DEPENDS
-    src/*.c src/*.h src/*.cpp src/game/*.c src/game/*.h src/procedural/*.c src/procedural/*.h)
+    src/*.c src/*.h src/*.cpp src/game/*.c src/game/*.h src/game/*.cpp
+    src/procedural/*.c src/procedural/*.h src/procedural/*.cpp)
 add_custom_command(
     OUTPUT ${BUILD_DIGEST_HEADER}
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/gen_build_digest.py ${CMAKE_CURRENT_SOURCE_DIR} ${BUILD_DIGEST_HEADER}
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/gen_build_digest.py
+        ${CMAKE_CURRENT_SOURCE_DIR} ${BUILD_DIGEST_HEADER} ${_digested} ${SHADER_FILES}
     DEPENDS ${_digested} ${SHADER_FILES} ${CMAKE_CURRENT_SOURCE_DIR}/gen_build_digest.py
+        ${CMAKE_CURRENT_SOURCE_DIR}/gen_shader_header.py
     COMMENT "Digesting the engine's source"
     VERBATIM
 )

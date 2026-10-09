@@ -69,23 +69,6 @@ typedef struct SceneCaptureState {
 bool scene_capture_ready(const Engine* engine, const struct Scene* scene, SceneCaptureKind kind,
                          const AABB* box);
 
-// Fold into `key` everything a capture of what lies in `box` reads (spec 13.42), so a cooked
-// capture is found only by a scene that would capture the same: the engine's own source and the
-// driver, the lit surface's switches, the settings and the materials (through
-// config_snapshot_fold), the rain's state, the wind, the environment's source, every light that
-// gives off anything and reaches `box`, every decal's images, and every drawn item whose bound
-// meets `box` -- its geometry, where it stands, how it is drawn and its material's textures and
-// hook. Inside a capture burst, so the lights are folded at rest. False, and the key invalid,
-// when something it reaches cannot say what it is -- a mesh or a texture with no content key,
-// with the cook off -- and the capture is then taken live.
-//
-// What it leaves out. Two inputs that are the pacing of a sweep rather than the scene: the cached
-// shadow tiles' contents, which the frames between bursts draw from the lights' live places, and
-// the rain's cover, which is mapped round the camera. And a shadow cast into `box` by something
-// outside it, which only a shadow's caster list could name.
-struct CookKey;
-bool scene_capture_fold(Engine* engine, struct Scene* scene, const AABB* box, struct CookKey* key);
-
 void scene_capture_begin(Engine* engine, struct Scene* scene, SceneCaptureKind kind,
                          SceneCaptureState* saved);
 void scene_capture_end(Engine* engine, struct Scene* scene, const SceneCaptureState* saved);

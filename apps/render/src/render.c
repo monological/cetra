@@ -3787,7 +3787,6 @@ int main(int argc, char** argv) {
         engine->instancing_enabled = false;
     if (args.capture_budget_ms >= 0.0f)
         engine->capture_budget_ms = args.capture_budget_ms;
-    engine->capture_timing = args.capture_timing;
     if (args.no_frustum_cull)
         engine->frustum_cull_enabled = false;
     if (args.no_occlusion_cull)
@@ -5026,9 +5025,10 @@ int main(int argc, char** argv) {
         if (args.gi_rate >= 0)
             scene->gi->rate = args.gi_rate;
         scene->gi->cull_pixels = args.gi_cull_pixels;
-        scene->gi->cook = args.gi_cook;
         scene->gi->debug_atlas = args.gi_debug != 0;
+        scene->gi->timing = args.capture_timing;
     }
+    scene->cook_lighting = args.gi_cook;
 
     // A scene file that authored its own probes wins over the flag, and says so:
     // --probe (or environment.probe_scene, which is the same request) asks for
@@ -5123,10 +5123,8 @@ int main(int argc, char** argv) {
         fprintf(stderr, "Warning: --probe requires an HDR environment (-e); skipping capture\n");
     }
 
-    if (scene->probe_set) {
+    if (scene->probe_set)
         scene->probe_set->debug_atlas = args.probe_set_debug != 0;
-        scene->probe_set->cook = args.gi_cook;
-    }
 
     /*
      * The water surface: the scene file supplies it, the flags override it.

@@ -347,10 +347,8 @@ typedef struct Engine {
     // clock decide the frame a capture lands in.
     float capture_budget_ms;
 
-    // A setting: each GI volume prints what its sweep cost, part by part, as it converges. Each
-    // part is bracketed by glFinish to be timed, so a timed sweep runs slower than an untimed one.
-    bool capture_timing;
-    // ENGINE-OWNED: where the draws of a timed capture are counted while it draws; NULL otherwise.
+    // ENGINE-OWNED: where a timed GI sweep's faces count their draws while it draws (spec 13.42),
+    // in place of the open profiler scope; NULL otherwise.
     struct SubmitStats* capture_submit;
 
     Camera* camera; // The camera the frame renders (engine_set_camera); borrowed

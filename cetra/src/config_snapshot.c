@@ -1260,21 +1260,19 @@ static bool _write_element(cJSON* array, ConfigOwner owner, const void* base, co
     return true;
 }
 
-// The rows of every owner in `owners` (a bit per ConfigOwner) as a tree, with the source block
-// when asked; NULL, nothing leaked, on failure.
-static cJSON* _snapshot_tree(Engine* engine, Scene* scene, unsigned owners, bool with_source,
-                             int* out_fields) {
+char* config_snapshot_write(Engine* engine, Scene* scene, int* out_fields) {
     int written = 0;
+    if (out_fields)
+        *out_fields = 0;
     cJSON* root = cJSON_CreateObject();
     if (!root)
         return NULL;
     cJSON_AddNumberToObject(root, "version", 1);
-    if (with_source)
-        _write_source(root, engine);
+    _write_source(root, engine);
 
     for (int i = 0; i < CFG_FIELD_COUNT; i++) {
         const ConfigField* f = &CFG_FIELDS[i];
-        if ((ConfigOwner)f->owner >= CFG_FIRST_ELEM_OWNER || !(owners & (1u << f->owner)))
+        if ((ConfigOwner)f->owner >= CFG_FIRST_ELEM_OWNER)
             continue;
         const void* base = _owner_base((ConfigOwner)f->owner, engine, scene);
         // An absent subsystem omits its whole section rather than writing it
@@ -1295,7 +1293,7 @@ static cJSON* _snapshot_tree(Engine* engine, Scene* scene, unsigned owners, bool
     for (size_t a = 0; ok && a < CFG_ARRAY_COUNT; a++) {
         const ConfigArray* arr = &CFG_ARRAYS[a];
         const char* name = NULL;
-        if (!(owners & (1u << arr->owner)) || !arr->at(scene, 0, &name))
+        if (!arr->at(scene, 0, &name))
             continue;
         cJSON* array = cJSON_AddArrayToObject(root, arr->key);
         ok = array != NULL;
@@ -1311,18 +1309,7 @@ static cJSON* _snapshot_tree(Engine* engine, Scene* scene, unsigned owners, bool
         cJSON_Delete(root);
         return NULL;
     }
-    if (out_fields)
-        *out_fields = written;
-    return root;
-}
 
-char* config_snapshot_write(Engine* engine, Scene* scene, int* out_fields) {
-    int written = 0;
-    if (out_fields)
-        *out_fields = 0;
-    cJSON* root = _snapshot_tree(engine, scene, ~0u, true, &written);
-    if (!root)
-        return NULL;
     char* text = cJSON_Print(root);
     cJSON_Delete(root);
     if (text && out_fields)
@@ -1330,23 +1317,80 @@ char* config_snapshot_write(Engine* engine, Scene* scene, int* out_fields) {
     return text;
 }
 
+// One row's value into a key, by its type: a float's IEEE bits, never its text.
+static void _fold_field(CookKey* key, const ConfigField* f, const void* base) {
+    const void* p = _field_ptr_const(base, f);
+    switch ((ConfigType)f->type) {
+        case CFG_BOOL:
+            cook_key_bool(key, *(const bool*)p);
+            return;
+        case CFG_INT:
+        case CFG_ENUM:
+            cook_key_i32(key, *(const int*)p);
+            return;
+        case CFG_FLOAT:
+            cook_key_f32(key, *(const float*)p);
+            return;
+        case CFG_DOUBLE:
+            cook_key_bytes(key, p, sizeof(double));
+            return;
+        case CFG_VEC2:
+        case CFG_VEC3:
+            cook_key_f32s(key, (const float*)p, f->type == CFG_VEC2 ? 2 : 3);
+            return;
+    }
+}
+
+/*
+ * Whether a light capture reads a singleton row (spec 13.42). Stated as what it does NOT read, so
+ * a row added to any owner is keyed unless somebody says otherwise -- a missed row is a capture
+ * kept for good under a key that no longer describes it, where a needless one costs a sweep.
+ *
+ * Left out: what a run decides rather than what a capture draws (the overlays, the targets' sizes
+ * and samples, the clear colour, the camera); everything after the scene pass (the post chain, the
+ * exposure -- a capture renders at unity); the GI world's re-convergence rate and debug view; and
+ * the rain's streaks, splashes, mist and drips, which only the camera's late draw and fog show.
+ */
+static bool _row_captured(const ConfigField* f) {
+    switch ((ConfigOwner)f->owner) {
+        case CFG_ENGINE:
+            return strcmp(f->section, "engine") != 0 && strcmp(f->section, "engine.overlays") != 0;
+        case CFG_POSTFX:
+        case CFG_EXPOSURE:
+        case CFG_CAMERA:
+            return false;
+        case CFG_GI:
+            return strcmp(f->key, "rate") != 0 && strcmp(f->key, "debug_atlas") != 0;
+        case CFG_RAIN: {
+            static const char* const late[] = {"streak", "shutter", "splash", "mist", "drip"};
+            for (size_t i = 0; i < sizeof(late) / sizeof(late[0]); i++)
+                if (strncmp(f->key, late[i], strlen(late[i])) == 0)
+                    return false;
+            return true;
+        }
+        default:
+            return true;
+    }
+}
+
 void config_snapshot_fold(Engine* engine, Scene* scene, CookKey* key) {
-    // What a light capture reads, and nothing a run decides: not the camera, the post chain or
-    // the exposure -- a capture renders at unity from its own eye -- nor the engine's section,
-    // whose overlays and capture budget differ between a window and a headless run of one scene.
-    // Nor the lights, whose rows here are three of their fields: scene_capture_fold takes each
-    // whole, and only those that reach what it captures.
-    const unsigned owners = 1u << CFG_SCENE | 1u << CFG_SHADOW | 1u << CFG_SKY | 1u << CFG_CLOUDS |
-                            1u << CFG_IBL | 1u << CFG_GI | 1u << CFG_RAIN | 1u << CFG_DECAL_ELEM |
-                            1u << CFG_MATERIAL_ELEM;
-    cJSON* root = _snapshot_tree(engine, scene, owners, false, NULL);
-    char* text = root ? cJSON_PrintUnformatted(root) : NULL;
-    cJSON_Delete(root);
-    if (text)
-        cook_key_str(key, text);
-    else
-        key->valid = false;
-    free(text);
+    for (int i = 0; i < CFG_FIELD_COUNT; i++) {
+        const ConfigField* f = &CFG_FIELDS[i];
+        if ((ConfigOwner)f->owner >= CFG_FIRST_ELEM_OWNER || !_row_captured(f))
+            continue;
+        // A subsystem the scene lacks folds as absent, so one gained or lost misses.
+        const void* base = _owner_base((ConfigOwner)f->owner, engine, scene);
+        cook_key_bool(key, base != NULL);
+        if (base)
+            _fold_field(key, f, base);
+    }
+}
+
+void config_snapshot_fold_decal(const Decal* decal, CookKey* key) {
+    for (int i = 0; i < CFG_FIELD_COUNT; i++) {
+        if ((ConfigOwner)CFG_FIELDS[i].owner == CFG_DECAL_ELEM)
+            _fold_field(key, &CFG_FIELDS[i], decal);
+    }
 }
 
 bool config_snapshot_save(Engine* engine, Scene* scene, const char* path) {

@@ -628,6 +628,11 @@ static void bulb_parts(Kit* kit) {
 // Where the cord hangs from, under the rose.
 static const vec3 PIVOT = {BULB_X, CEIL_Y - ROSE_DROP, BULB_Z};
 
+// The bulb at rest (spec 13.42): hanging straight down from its rose, on a full supply.
+static BulbState bulb_hanging(void) {
+    return (BulbState){{PIVOT[0], PIVOT[1] - BULB_DROP, PIVOT[2]}, 1.0f, false};
+}
+
 void basement_start(Basement* b, Engine* engine, Scene* scene, AudioSystem* audio,
                     unsigned int seed) {
     *b = (Basement){.drafted = -1.0,
@@ -661,6 +666,7 @@ void basement_start(Basement* b, Engine* engine, Scene* scene, AudioSystem* audi
                             .shadow_near = 0.05f};
     b->light = create_light(&desc);
     scene_add_light(scene, b->light);
+    b->live = bulb_hanging();
 }
 
 // Every few seconds a drop from the tap into the water under it, never quite on a beat.
@@ -675,16 +681,15 @@ static void drip(Basement* b, double time) {
     audio_play_voice(b->audio, b->drip, &d);
 }
 
-// The bulb's light where it hangs at `at`, from a supply at `level` (1 is full), its cached shadow
-// following it or not, and the glass glowing with it.
-static void bulb_light(Basement* b, const vec3 at, float level, bool follow) {
-    light_set_position(b->light, (float*)at);
-    b->light->shadow_follow = follow;
+// The bulb's light as `s` has it, and the glass glowing with it.
+static void bulb_light(Basement* b, const BulbState* s) {
+    light_set_position(b->light, (float*)s->at);
+    b->light->shadow_follow = s->follow;
     vec3 colour = GLM_VEC3_ZERO_INIT;
-    glm_vec3_lerp((float*)BULB_SAGGED, (float*)BULB_COLOUR, level, colour);
-    b->light->intensity = BULB_CANDELA * level;
+    glm_vec3_lerp((float*)BULB_SAGGED, (float*)BULB_COLOUR, s->level, colour);
+    b->light->intensity = BULB_CANDELA * s->level;
     glm_vec3_copy(colour, b->light->color);
-    b->glass->emissive_strength = BULB_NITS * level;
+    b->glass->emissive_strength = BULB_NITS * s->level;
     glm_vec3_copy(colour, b->glass->emissive);
 }
 
@@ -710,12 +715,12 @@ static void bulb_update(Basement* b, const Door* door, double time) {
     glm_rotate_z(m, along, m);
     glm_rotate_x(m, across, m);
     glm_mat4_copy(m, b->bulb->original_transform);
-    glm_mat4_mulv3(m, (vec3){0.0f, -BULB_DROP, 0.0f}, 1.0f, b->at);
-    b->follow = reach > FOLLOW_REACH;
+    glm_mat4_mulv3(m, (vec3){0.0f, -BULB_DROP, 0.0f}, 1.0f, b->live.at);
+    b->live.follow = reach > FOLLOW_REACH;
     // The supply sags now and then, and the filament goes dim and orange with it; never out, or
     // the light would leave its cached shadow undrawn.
-    b->level = lights_brownout(time, b->seed);
-    bulb_light(b, b->at, b->level, b->follow);
+    b->live.level = lights_brownout(time, b->seed);
+    bulb_light(b, &b->live);
 }
 
 void basement_update(Basement* b, const Door* door, double time) {
@@ -767,10 +772,6 @@ bool basement_hold(Basement* b, EntityManager* em, PhysicsWorld* physics, const 
 void basement_rest(Basement* b, bool rest) {
     if (!b->bulb || !b->light)
         return;
-    // At rest the bulb hangs straight down from its rose, on a full supply.
-    vec3 hanging = {PIVOT[0], PIVOT[1] - BULB_DROP, PIVOT[2]};
-    if (rest)
-        bulb_light(b, hanging, 1.0f, false);
-    else
-        bulb_light(b, b->at, b->level, b->follow);
+    const BulbState hanging = bulb_hanging();
+    bulb_light(b, rest ? &hanging : &b->live);
 }

@@ -8,13 +8,8 @@
 
 #include "animation.h"
 #include "async_loader.h"
-#include "build_digest.h" // generated: CETRA_BUILD_DIGEST
-#include "config_snapshot.h"
-#include "cook.h"
 #include "ext/log.h"
 #include "fire.h"
-#include "ibl.h"
-#include "ies.h"
 #include "layers_vt.h"
 #include "scene.h"
 #include "sky.h"
@@ -444,8 +439,8 @@ static const Rain* _rain_for_pass(const Engine* engine, const Scene* scene) {
     return rain;
 }
 
-// Where a draw site counts what it drew: the open profiler scope, or a timed capture's count,
-// which is the only one a capture has -- the profiler sits captures out.
+// Where a draw site counts what it drew: the open profiler scope, or a timed GI sweep's count while
+// its faces draw -- which then takes them from the profiler's capture row.
 static SubmitStats* _submit_stats(const Engine* engine) {
     return engine->capture_submit ? engine->capture_submit : profiler_submit(engine->profiler);
 }
@@ -2075,178 +2070,6 @@ bool scene_capture_ready(const Engine* engine, const Scene* scene, SceneCaptureK
     return kind != SCENE_CAPTURE_RADIANCE || gi_world_ready_in(scene->gi, box);
 }
 
-// A texture slot by what it holds; false when a texture cannot say what that is.
-static bool _fold_texture(CookKey* key, const Texture* tex) {
-    if (tex && tex->content_key == 0)
-        return false;
-    cook_key_u64(key, tex ? tex->content_key : 0);
-    return true;
-}
-
-// A material as a capture draws it: its rows ride config_snapshot_fold by name, so here only what
-// that table does not carry -- every texture slot, by content, and its hook's source and
-// parameters. False when a texture cannot say what it is.
-static bool _fold_material(CookKey* key, const Material* mat) {
-    Texture* textures[MATERIAL_TEXTURE_SLOTS];
-    material_textures(mat, textures);
-    for (size_t t = 0; t < MATERIAL_TEXTURE_SLOTS; t++) {
-        if (!_fold_texture(key, textures[t]))
-            return false;
-    }
-    const ShaderHook* hook = shader_hook_live(mat->shader_hook);
-    cook_key_str(key, hook && hook->surface ? hook->surface : "");
-    cook_key_str(key, hook && hook->offset ? hook->offset : "");
-    cook_key_i32(key, mat->shader_params.count);
-    for (int i = 0; i < mat->shader_params.count; i++) {
-        cook_key_str(key, mat->shader_params.list[i].name);
-        for (int c = 0; c < 4; c++)
-            cook_key_f32(key, mat->shader_params.list[i].value[c]);
-    }
-    return true;
-}
-
-// A light as a capture sees it, where the rest hook holds it: where it stands and faces, what it
-// gives off and the body that gives it, and its shadow. Not its name or the engine's slots for
-// it, nor `units`, since `intensity` is always in the canonical one.
-static void _fold_light(CookKey* key, const Light* light, const IesLibrary* ies) {
-    cook_key_i32(key, (int32_t)light->type);
-    for (int c = 0; c < 3; c++) {
-        cook_key_f32(key, light->global_position[c]);
-        cook_key_f32(key, light->direction[c]);
-        cook_key_f32(key, light->up[c]);
-        cook_key_f32(key, light->color[c]);
-        cook_key_f32(key, light->ambient[c]);
-    }
-    const float terms[] = {light->intensity,  light->specular,      light->range,
-                           light->cutOff,     light->outerCutOff,   light->size[0],
-                           light->size[1],    light->source_radius, light->source_length,
-                           light->shadow_near};
-    for (size_t t = 0; t < sizeof(terms) / sizeof(terms[0]); t++)
-        cook_key_f32(key, terms[t]);
-    cook_key_u32(key, light->cast_shadows ? 1u : 0u);
-    cook_key_u32(key, light->shadow_cache ? 1u : 0u);
-    cook_key_u32(key, light->shadow_follow ? 1u : 0u);
-    // An IES profile by its file and what was read from it.
-    const IesProfile* p =
-        ies && light->ies_profile >= 0 ? ies_library_at(ies, light->ies_profile) : NULL;
-    cook_key_str(key, p && p->path ? p->path : "");
-    if (p) {
-        cook_key_i32(key, p->v_taps);
-        cook_key_i32(key, p->h_taps);
-        const float shape[] = {p->span, p->v_lo, p->v_hi, p->peak_cd, p->support_deg};
-        for (size_t t = 0; t < sizeof(shape) / sizeof(shape[0]); t++)
-            cook_key_f32(key, shape[t]);
-    }
-}
-
-bool scene_capture_fold(Engine* engine, Scene* scene, const AABB* box, CookKey* key) {
-    if (!key->valid)
-        return false;
-    cook_key_u64(key, CETRA_BUILD_DIGEST);
-    // The driver does the arithmetic, so its answer is the driver's.
-    const char* strings[] = {(const char*)glGetString(GL_VENDOR),
-                             (const char*)glGetString(GL_RENDERER),
-                             (const char*)glGetString(GL_VERSION)};
-    for (size_t s = 0; s < sizeof(strings) / sizeof(strings[0]); s++)
-        cook_key_str(key, strings[s] ? strings[s] : "");
-
-    // The lit surface's switches, which ride the engine's snapshot section with what a run
-    // decides and so are folded here by name.
-    const bool switches[] = {engine->energy_comp_enabled,     engine->clearcoat_enabled,
-                             engine->specular_enabled,        engine->sheen_enabled,
-                             engine->parallax_enabled,        engine->sss_enabled,
-                             engine->emissive_lights_enabled, engine->lod_enabled};
-    for (size_t s = 0; s < sizeof(switches) / sizeof(switches[0]); s++)
-        cook_key_u32(key, switches[s] ? 1u : 0u);
-    cook_key_f32(key, engine->specular_aa_strength);
-    cook_key_f32(key, engine->lod_bias);
-
-    config_snapshot_fold(engine, scene, key);
-
-    const Rain* rain = scene->rain;
-    cook_key_u32(key, rain ? 1u : 0u);
-    if (rain) {
-        cook_key_f32(key, rain->wetness);
-        cook_key_f32(key, rain->puddle_level);
-        for (int c = 0; c < 3; c++)
-            cook_key_f32(key, rain->travel[c]);
-    }
-    const Wind* wind = scene->wind;
-    cook_key_u32(key, wind ? 1u : 0u);
-    if (wind) {
-        cook_key_i32(key, (int32_t)wind->type);
-        for (int c = 0; c < 3; c++)
-            cook_key_f32(key, wind->direction[c]);
-        const float terms[] = {wind->strength,    wind->speed,      wind->gust_frequency,
-                               wind->gust_amount, wind->turbulence, wind->phase_variation,
-                               wind->air_speed};
-        for (size_t t = 0; t < sizeof(terms) / sizeof(terms[0]); t++)
-            cook_key_f32(key, terms[t]);
-    }
-    const IBLResources* ibl = scene->ibl;
-    cook_key_str(key, ibl && ibl->hdr_filepath ? ibl->hdr_filepath : "");
-    cook_key_f32(key, ibl ? ibl->intensity : 0.0f);
-    cook_key_u32(key, ibl && ibl->reflect_fog ? 1u : 0u);
-    for (int c = 0; c < 3; c++)
-        cook_key_f32(key, scene->world_origin[c]);
-
-    // Every light that gives off anything and reaches the box -- a directional reaches every box
-    // -- in the list's order. One that emits nothing lights nothing wherever it stands, which is
-    // what keeps a flashlight held off at rest from keying the capture by where the player is.
-    for (size_t l = 0; l < scene->light_count; l++) {
-        const Light* light = scene->lights[l];
-        const float reach = light_cull_radius(light);
-        if (light->intensity <= 0.0f || (light->type != LIGHT_DIRECTIONAL &&
-                                         aabb_dist_sq(box, light->global_position) > reach * reach))
-            continue;
-        _fold_light(key, light, scene->ies_library);
-    }
-    // Every decal by its images: config_snapshot_fold folded where each is.
-    for (int d = 0; d < scene->decal_count; d++) {
-        if (!_fold_texture(key, scene->decals[d].albedo_tex) ||
-            !_fold_texture(key, scene->decals[d].surface_tex)) {
-            key->valid = false;
-            return false;
-        }
-    }
-
-    // Every item a capture of the box can draw, in the list's order, which is the graph's.
-    const CullView view = {.wind = scene->wind, .capture = true};
-    const DrawList* list = scene->draw_list;
-    for (size_t i = 0; list && i < list->count; ++i) {
-        const DrawItem* item = &list->items[i];
-        if (item->lane > DRAW_LANE_TRANSMISSIVE || !draw_item_visible(item, &view))
-            continue;
-        AABB bound;
-        if (draw_item_bounds(item, &view, &bound)) {
-            AABB world = {{0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}};
-            aabb_transform(bound.min, bound.max, item->node->global_transform, world.min,
-                           world.max);
-            if (!aabb_overlaps(&world, box))
-                continue;
-        }
-        const uint64_t mesh = mesh_content_key(item->mesh);
-        if (mesh == 0 || !_fold_material(key, item->mesh->material)) {
-            key->valid = false;
-            return false;
-        }
-        cook_key_u64(key, mesh);
-        for (int c = 0; c < 4; c++)
-            for (int r = 0; r < 4; r++)
-                cook_key_f32(key, item->node->global_transform[c][r]);
-        cook_key_u32(key, item->lane);
-        cook_key_u32(key, item->flags);
-        cook_key_u32(key, item->capture_always);
-        // Which material: its place in the registry, whose rows config_snapshot_fold folded in
-        // that order -- a name would not tell two unnamed materials apart.
-        size_t m = 0;
-        while (m < scene->material_count && scene->materials[m] != item->mesh->material)
-            m++;
-        cook_key_u64(key, (uint64_t)m);
-    }
-    return key->valid;
-}
-
 // The clock is read past a glFinish, at the start as well as at each later ask: a capture is
 // CPU submission and GPU work, the CPU runs ahead of the GPU, and without the sync the clock
 // would see the submission alone and leave the rest for the frame's swap to wait on; and the
@@ -2265,6 +2088,15 @@ bool capture_budget_take(CaptureBudget* budget, bool first) {
         return true;
     glFinish();
     return (glfwGetTime() - budget->start) * 1000.0 < (double)budget->ms;
+}
+
+// What animates held at rest for a capture burst, or driven live again (spec 13.42): the app's
+// own, through its hook, and the engine's fires. A capture is kept for good, and one taken at an
+// instant of a flicker would keep that instant.
+static void _capture_rest(Scene* scene, bool rest) {
+    if (scene->capture_rest)
+        scene->capture_rest(rest, scene->capture_rest_ctx);
+    fire_system_rest(scene->fire, scene->root_node, rest);
 }
 
 void scene_capture_begin(Engine* engine, Scene* scene, SceneCaptureKind kind,
@@ -2297,13 +2129,9 @@ void scene_capture_begin(Engine* engine, Scene* scene, SceneCaptureKind kind,
     // builds it otherwise, which is exactly why it cannot live inside that guard.
     engine_build_draw_list(engine, scene);
 
-    // The light held at rest for the burst (spec 13.42) -- the app's, then the engine's own fires
-    // -- before anything below derives from it: the panels from the emissive strengths, the
-    // shadows from where the lights stand. A capture is kept for good, and one taken at an instant
-    // of a flicker would keep that instant.
-    if (scene->capture_rest)
-        scene->capture_rest(true, scene->capture_rest_ctx);
-    fire_system_hold(scene->fire, scene->root_node, true);
+    // The light held at rest for the burst, before anything below derives from it: the panels from
+    // the emissive strengths, the shadows from where the lights stand.
+    _capture_rest(scene, true);
 
     // The derived emissive panels, once for the burst, which its faces no longer place
     // (spec 13.32) -- and before its shadow pass, so a panel first derived here is a light
@@ -2336,9 +2164,10 @@ void scene_capture_end(Engine* engine, Scene* scene, const SceneCaptureState* sa
     if (!engine || !scene || !saved)
         return;
     profiler_resume(engine->profiler);
-    fire_system_hold(scene->fire, scene->root_node, false);
-    if (scene->capture_rest)
-        scene->capture_rest(false, scene->capture_rest_ctx);
+    _capture_rest(scene, false);
+    // The camera's levels back, where each capture of the burst chose its own.
+    const LodSelect camera_lod = _camera_lod(engine);
+    draw_list_select_lod(scene->draw_list, &camera_lod);
     engine->capture_kind = saved->kind;
     engine_set_render_time(engine, saved->render_time, saved->render_delta);
     if (scene->shadow_system) {
@@ -2465,21 +2294,17 @@ void scene_capture_faces(Engine* engine, Scene* scene, struct IBLResources* ibl,
     mat4 views[6];
     ibl_capture_views((float*)position, views);
 
-    // Flattened from the camera, if this frame has not been yet: what the list settles from the
-    // eye that is not a level -- a node's draw distance -- belongs to the camera's pass.
-    engine_build_draw_list(engine, scene);
-
     // Per-face shading is evaluated from the capture point
     glm_vec3_copy((float*)position, camera->position);
     camera->near_clip = near_clip;
     camera->far_clip = far_clip;
     glm_perspective(glm_rad(90.0f), 1.0f, near_clip, far_clip, engine->projection_matrix);
 
-    // Each item at the level its size from the capture point calls for at the capture's
-    // resolution (spec 13.42), where the camera's are for the window and would make what a probe
-    // captured depend on where the camera stood. LOD_SWITCH holds no resolution, so a face is read
-    // as a 1080-line, 60-degree view, 935 pixels to a unit of tan, against its own face_size / 2.
-    LodSelect capture_lod = {.bias = engine->lod_bias * (float)face_size / (2.0f * 935.0f),
+    // Each item at the level its size from the capture point calls for at the face's resolution, a
+    // 90-degree face being face_size / 2 pixels to a unit of tan (spec 13.42): the camera's are for
+    // the window, and would make what a probe captured depend on where the camera stood. The burst
+    // gives the camera's back as it ends.
+    LodSelect capture_lod = {.bias = draw_lod_bias_for(engine->lod_bias, 0.5f * (float)face_size),
                              .enabled = engine->lod_enabled};
     glm_vec3_copy((float*)position, capture_lod.eye);
     draw_list_select_lod(scene->draw_list, &capture_lod);
@@ -2550,8 +2375,6 @@ void scene_capture_faces(Engine* engine, Scene* scene, struct IBLResources* ibl,
     glm_vec3_copy(saved_cam_pos, camera->position);
     camera->near_clip = saved_near;
     camera->far_clip = saved_far;
-    const LodSelect camera_lod = _camera_lod(engine);
-    draw_list_select_lod(scene->draw_list, &camera_lod);
     engine->refraction_enabled = saved_refraction;
     engine->capturing = saved_capturing;
     engine->current_render_mode = saved_render_mode;

@@ -55,22 +55,23 @@ struct LightingAtlas;
 struct LightingAtlasLayout;
 struct CaptureBudget;
 
-// Diameters on a capture face, in pixels, that a timed sweep sorts what its probes see into: under
-// 1/4, 1/2, 1, 2, 4 and 8, and the rest.
-#define GI_SIZE_BINS 7
+// The parts of a sweep a timed one prices: the bursts' setup, their shadow pass included; the six
+// shaded faces of each probe; the six back-face depth faces; and the tiles projected from them.
+typedef enum GISweepPart {
+    GI_PART_SETUP,
+    GI_PART_SHADED,
+    GI_PART_CLASSIFY,
+    GI_PART_PROJECT,
+    GI_PART_COUNT
+} GISweepPart;
 
-// What a sweep cost while the engine's capture_timing is on, each part as CPU time to submit it
-// and wall time until the GPU had drawn it. Printed and cleared as the volume converges.
+// What a sweep cost while its world's `timing` is on, each part as CPU time to submit it and wall
+// time until the GPU had drawn it. Printed and cleared as the volume converges.
 typedef struct GISweepTiming {
-    double setup_cpu, setup_wall;       // the bursts' setup, their shadow pass included
-    double shaded_cpu, shaded_wall;     // the six shaded faces of each probe
-    double classify_cpu, classify_wall; // the six back-face depth faces of each probe
-    double project_cpu, project_wall;   // the tiles projected from them
-    int frames;                         // frames the sweep captured in
-    SubmitStats submit;                 // what the faces drew
-    // What each probe had in reach, by its diameter on a face: items, and their triangles.
-    size_t size_items[GI_SIZE_BINS];
-    size_t size_triangles[GI_SIZE_BINS];
+    double cpu[GI_PART_COUNT];
+    double wall[GI_PART_COUNT];
+    int frames;         // frames the sweep captured in
+    SubmitStats submit; // what the faces drew
 } GISweepTiming;
 
 typedef struct GIVolume {
@@ -120,14 +121,7 @@ typedef struct GIVolume {
     // must stop advancing the moment the volume converges.
     int captures_total;
 
-    GISweepTiming timing; // kept only while the engine's capture_timing is on
-
-    // The cook's key for this sweep's tiles (spec 13.42), folded as it began: tried once a sweep,
-    // and `cook_keyed` false when the scene could not say what it is (the cook off, a texture or
-    // a mesh with no identity), in which case the sweep runs live and nothing is stored.
-    uint64_t cook_hash;
-    bool cook_tried;
-    bool cook_keyed;
+    GISweepTiming timing; // kept only while its world's `timing` is on
 
     bool failed; // One-shot: allocation is not retried every frame
 } GIVolume;
@@ -140,12 +134,12 @@ typedef struct GIWorld {
     bool enabled;     // false = no volume is captured or sampled
     int rate;         // probes a frame, across the world, while swept volumes re-converge; 0 = all
     bool debug_atlas; // draw the lighting atlas over the composited frame
+    // Each volume prints what its sweep cost, part by part, as it converges (spec 13.42); each part
+    // is timed to the GPU's finish, so a timed sweep runs slower than an untimed one.
+    bool timing;
     // A probe leaves out what spans fewer pixels than this across a capture face (spec 13.42),
     // unless it gives off light or is under a node set capture_always; 0 = everything.
     float cull_pixels;
-    // true = a volume's opening sweep is fetched from the cook when one of the same scene was
-    // swept before, and stored when it was not (spec 13.42); false = every sweep runs live.
-    bool cook;
 
     // ENGINE-OWNED: read, never write.
     GIVolume** volumes; // owned; scene_add_gi_volume. One per residency item, in its order
@@ -200,9 +194,9 @@ void gi_world_mark_dirty(GIWorld* world);
 
 // Fold into a capture's cook key the GI it reads where it sees `box` (spec 13.42): each volume
 // the box meets but `skip` (an index, or SIZE_MAX for none), whether it is swept, and a swept
-// one by the key it was swept under. False, the key invalid, when a swept volume has no key.
+// one by the key it was swept under -- the key refused for one swept with none.
 struct CookKey;
-bool gi_world_fold(const GIWorld* world, const AABB* box, size_t skip, struct CookKey* key);
+void gi_world_fold(const GIWorld* world, const AABB* box, size_t skip, struct CookKey* key);
 
 // Re-express every grid after a world-origin shift (spec 11.62).
 //

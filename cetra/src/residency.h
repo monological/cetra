@@ -54,6 +54,9 @@ typedef struct ResidencyItem {
     bool moved; // the last assignment admitted or evicted it
     ResidencyState state;
     uint16_t* kept; // its texels while it holds no slot, RGBA half floats; NULL when none
+
+    // The kind's: the cook's key its capture began with (spec 13.42), 0 when it had none.
+    uint64_t cook_hash;
 } ResidencyItem;
 
 typedef struct Residency {
