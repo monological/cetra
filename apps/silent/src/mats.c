@@ -560,6 +560,9 @@ static const MatSpec SPECS[MAT_COUNT] = {
     // The cabin's roof: iron the rust has come through, which sheds the rain.
     [MAT_TIN] =
         {"tin_roof", "rusty_corrugated_iron", {1, 1, 1}, 1.0f, 0.3f, 2.0f, .rain = {true, 0.0f}},
+    // tools/make_map.py's folded map: its glossy cover and the newsprint inside, as cards that
+    // carry their own UVs.
+    [MAT_TOWN_MAP] = {"town_map", "town_map_folded", {1, 1, 1}, 1.0f, 0.0f, 1.0f},
 };
 
 // A map of a material's set, decoded on the engine's loader threads and set by `put` once in.

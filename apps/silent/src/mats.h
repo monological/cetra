@@ -112,6 +112,7 @@ typedef enum {
     MAT_SHORE,    // mud at the water's edge
     MAT_REEDS,    // tools/make_reeds.py's clump, a cutout drawn from both sides
     MAT_TIN,      // the cabin's roof: corrugated iron rusted through its paint
+    MAT_TOWN_MAP, // the folded town map's cover and inside (spec 13.43): see map_art.h
     MAT_COUNT
 } MatId;
 

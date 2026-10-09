@@ -14,6 +14,10 @@ void kitchen_build(Kit* kit, unsigned int seed);
 // The fridge's hum, started at its motor; nothing when `audio` is NULL.
 void kitchen_start_audio(AudioSystem* audio);
 
+// Where the town map hangs on the freezer door (spec 13.43): the frame's origin is the middle of
+// the map's top edge on the door's face, its d out of the door into the room.
+void kitchen_fridge_map_frame(KitFrame* out);
+
 // Whether a point on the kitchen floor stands on the mat in front of the stove.
 bool kitchen_on_mat(const vec3 p);
 

@@ -2,6 +2,7 @@
 
 #include "backpack.h"
 #include "bedroom.h"
+#include "fridge_map.h"
 #include "kit.h"
 #include "mats.h"
 
@@ -10,7 +11,14 @@ const ItemSpec ITEMS[ITEM_COUNT] = {
                          "FLASHLIGHT",
                          "A heavy metal flashlight, its black paint worn through at the grip. "
                          "F turns it on and off.",
-                         {3, 1}},
+                         {3, 1},
+                         MAP_NONE},
+    [ITEM_TOWN_MAP] = {"map",
+                       "TOWN MAP",
+                       "A folded street map of Pale Ridge, taken off the fridge door. "
+                       "M opens it.",
+                       {2, 2},
+                       MAP_TOWN},
 };
 
 ItemId item_by_id(const char* id) {
@@ -221,6 +229,11 @@ void backpack_build(Backpack* bp, Engine* engine, Scene* scene, bool taken) {
     kit.casts_nothing = true;
     flashlight(&kit);
     bp->models[ITEM_FLASHLIGHT] = kit_finish_alone(&kit, "flashlight");
+    // Turned a quarter, so the grid's side-on picture of it is its cover.
+    mats_kit(&kit, engine, scene);
+    kit.casts_nothing = true;
+    fridge_map_closed(&kit, &KIT_WORLD_Z);
+    bp->models[ITEM_TOWN_MAP] = kit_finish_alone(&kit, "town_map_model");
 }
 
 void backpack_take(Backpack* bp) {
@@ -230,6 +243,14 @@ void backpack_take(Backpack* bp) {
     unpack(bp);
     free_node(bp->bag);
     bp->bag = NULL;
+}
+
+bool backpack_add(Backpack* bp, ItemId item) {
+    if (!bp->taken || backpack_holds(bp, item))
+        return false;
+    bp->held[bp->held_count++] = item;
+    pack(bp);
+    return true;
 }
 
 bool backpack_holds(const Backpack* bp, ItemId item) {
