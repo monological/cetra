@@ -59,6 +59,12 @@ Mesh* trees_grow_still(Trees* trees, int model);
 void trees_trunk_collider(Kit* kit, float x, float z, float ground, float radius, float height,
                           float yaw, float lean);
 
+// Dead model `which` standing at (x, z), `scale` of its native size, turned `yaw` and leaning
+// `lean` radians toward it, sunk a little so the flare of its roots is in the ground: hung in the
+// model's group, with its trunk's body. The model must have grown.
+void trees_stand(Trees* trees, Kit* kit, int which, float x, float z, float scale, float yaw,
+                 float lean);
+
 // Drops the models, once everything standing them about holds its own reference.
 void trees_release(Trees* trees);
 

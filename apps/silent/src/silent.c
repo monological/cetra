@@ -759,8 +759,14 @@ static void on_init(Game* game) {
     load_seam(engine, "trees");
     if (!g_args.no_woods)
         woods_build(&kit, engine, g_scene, &trees, &breaches, (unsigned int)g_args.seed);
-    trees_release(&trees);
     load_seam(engine, "woods");
+    // The lake (spec 13.41): its water, and in a kit of its own, drawn only within the fog's
+    // reach, the ring, the dock, the boats, the reeds and the drowned trees' bodies.
+    Kit lake;
+    kit_init_beside(&lake, &kit, GLM_VEC3_ZERO);
+    lake_build(&lake, g_scene, &trees, (unsigned int)g_args.seed, g_args.no_fog);
+    trees_release(&trees);
+    load_seam(engine, "lake");
     grounds_build(&kit, g_scene, (unsigned int)g_args.seed, !g_args.day, &g_failing[FAILING_DRIVE]);
     load_seam(engine, "grounds");
 
@@ -777,10 +783,12 @@ static void on_init(Game* game) {
     mansion_front_build(&mansion);
     load_seam(engine, "hearth-study-front");
 
-    Kit* const kits[] = {&kit, &mansion, &ground};
-    const char* const kit_names[] = {"world", "mansion", "ground"};
+    Kit* const kits[] = {&kit, &mansion, &ground, &lake};
+    const char* const kit_names[] = {"world", "mansion", "ground", "lake"};
     for (int i = 0; i < KIT_COUNT(kits); i++) {
-        kit_finish(kits[i], kit_names[i]);
+        SceneNode* node = kit_finish(kits[i], kit_names[i]);
+        if (node && kits[i] == &lake && trees.reach > 0.0f)
+            node->draw_distance = trees.reach + 15.0f;
         load_seam(engine, kit_names[i]);
     }
     kit_free_unused(kits, KIT_COUNT(kits));
@@ -1091,6 +1099,10 @@ static void on_pre_render(Game* game, double alpha) {
     }
     vec3 eye = {0.0f, 0.0f, 0.0f}, forward = {0.0f, 0.0f, -1.0f};
     player_eye(&g_player, eye, forward);
+    // The lake drawn while the camera is near it, and a wake where the player wades (spec 13.41).
+    vec3 feet = {0.0f, 0.0f, 0.0f};
+    player_feet(&g_player, feet);
+    lake_update(g_scene, engine->camera->position, feet);
 
     // The nearest thing the player is looking at in reach -- a door, or the backpack on the bed
     // -- says what the action key would do to it, and the key does it.
