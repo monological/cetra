@@ -36,6 +36,7 @@ struct Sound {
     ma_uint64 beep_frames;
     AudioBus bus;       // what a voice copied from it is routed through
     bool streamed;      // read from the file as it plays, so nothing decoded to copy
+    bool loading;       // decoding on the job thread; cleared once found done
     AudioSystem* audio; // borrowed; the tone stop-time and free_sound reach the engine here
 };
 
@@ -84,6 +85,11 @@ struct AudioSystem {
     AudioZone listener_zone;     // where the listener was at the last update
     float heard[AUDIO_ZONE_MAX]; // each zone's best path to the listener's, eased
     bool updated;                // an update has run, so zone gains ease rather than land
+    // Held by every file still decoding on the job thread (audio_sound_from_file_async), and the
+    // device stopped from the first such load until audio_system_wait_loaded, so it never mixes a
+    // sound partly decoded.
+    ma_fence loaded;
+    bool device_held;
 };
 
 // The AUDIO_SOURCE component payload: a Sound placed every frame at an offset in its entity's
@@ -219,8 +225,14 @@ AudioSystem* create_audio_system(bool headless) {
         cfg.sampleRate = AUDIO_OFFLINE_SAMPLE_RATE;
     }
 
+    if (ma_fence_init(&audio->loaded) != MA_SUCCESS) {
+        log_error("audio: fence init failed");
+        free(audio);
+        return NULL;
+    }
     if (ma_engine_init(&cfg, &audio->engine) != MA_SUCCESS) {
         log_error("audio: engine init failed");
+        ma_fence_uninit(&audio->loaded);
         free(audio);
         return NULL;
     }
@@ -231,6 +243,7 @@ AudioSystem* create_audio_system(bool headless) {
             for (int done = AUDIO_BUS_MASTER + 1; done < bus; done++)
                 ma_sound_group_uninit(&audio->groups[done]);
             ma_engine_uninit(&audio->engine);
+            ma_fence_uninit(&audio->loaded);
             free(audio);
             return NULL;
         }
@@ -253,6 +266,7 @@ void free_audio_system(AudioSystem* audio) {
     for (int bus = AUDIO_BUS_MASTER + 1; bus < AUDIO_BUS_COUNT; bus++)
         ma_sound_group_uninit(&audio->groups[bus]);
     ma_engine_uninit(&audio->engine);
+    ma_fence_uninit(&audio->loaded);
     free(audio);
 }
 
@@ -366,7 +380,8 @@ Sound* audio_play_music(AudioSystem* audio, const char* path, bool loop) {
     return s;
 }
 
-Sound* audio_sound_from_file(AudioSystem* audio, const char* path, AudioBus bus) {
+// A sound decoded whole from a file, here or, `async`, on the job thread under the fence.
+static Sound* sound_from_file(AudioSystem* audio, const char* path, AudioBus bus, bool async) {
     if (!audio || !path)
         return NULL;
     Sound* s = calloc(1, sizeof(Sound));
@@ -376,18 +391,61 @@ Sound* audio_sound_from_file(AudioSystem* audio, const char* path, AudioBus bus)
     s->bus = bus;
     // 2D until placed, as a tone is: spatialized from the start, it would sit at the world origin
     // and fall off with the listener's distance from there.
-    const ma_uint32 flags = MA_SOUND_FLAG_DECODE | MA_SOUND_FLAG_NO_SPATIALIZATION;
-    if (ma_sound_init_from_file(&audio->engine, path, flags, group_for(audio, bus), NULL,
-                                &s->sound) != MA_SUCCESS) {
+    ma_uint32 flags = MA_SOUND_FLAG_DECODE | MA_SOUND_FLAG_NO_SPATIALIZATION;
+    if (async) {
+        flags |= MA_SOUND_FLAG_ASYNC;
+        if (!audio->no_device && !audio->device_held) {
+            ma_engine_stop(&audio->engine);
+            audio->device_held = true;
+        }
+    }
+    if (ma_sound_init_from_file(&audio->engine, path, flags, group_for(audio, bus),
+                                async ? &audio->loaded : NULL, &s->sound) != MA_SUCCESS) {
         log_error("audio: could not load %s", path);
         free(s);
         return NULL;
     }
+    s->loading = async;
     if (!track_sound(audio, s)) {
         sound_destroy(s);
         return NULL;
     }
     return s;
+}
+
+Sound* audio_sound_from_file(AudioSystem* audio, const char* path, AudioBus bus) {
+    return sound_from_file(audio, path, bus, false);
+}
+
+Sound* audio_sound_from_file_async(AudioSystem* audio, const char* path, AudioBus bus) {
+    return sound_from_file(audio, path, bus, true);
+}
+
+bool audio_system_loading(AudioSystem* audio) {
+    if (!audio)
+        return false;
+    bool loading = false;
+    for (size_t i = 0; i < audio->sound_count; i++) {
+        Sound* s = audio->sounds[i];
+        if (!s->loading)
+            continue;
+        s->loading =
+            ma_resource_manager_data_source_result(s->sound.pResourceManagerDataSource) == MA_BUSY;
+        loading |= s->loading;
+    }
+    return loading;
+}
+
+void audio_system_wait_loaded(AudioSystem* audio) {
+    if (!audio)
+        return;
+    ma_fence_wait(&audio->loaded);
+    for (size_t i = 0; i < audio->sound_count; i++)
+        audio->sounds[i]->loading = false;
+    if (audio->device_held) {
+        ma_engine_start(&audio->engine);
+        audio->device_held = false;
+    }
 }
 
 Sound* audio_sound_from_tone(AudioSystem* audio, float hz, AudioBus bus) {

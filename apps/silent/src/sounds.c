@@ -120,7 +120,7 @@ static const RoomLink LINKS[] = {
 Sound* sounds_loop(AudioSystem* audio, const char* path) {
     if (!audio)
         return NULL;
-    Sound* s = audio_sound_from_file(audio, path, AUDIO_BUS_SFX);
+    Sound* s = audio_sound_from_file_async(audio, path, AUDIO_BUS_SFX);
     if (!s) {
         fprintf(stderr, "silent: cannot load %s\n", path);
         return NULL;

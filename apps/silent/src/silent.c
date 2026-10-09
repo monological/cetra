@@ -931,6 +931,14 @@ static void on_init(Game* game) {
     }
     ex->probe = g_args.exposure_probe;
     load_seam(engine, "mind-exposure");
+    // The sounds decode on the audio's job thread while the rest loads (spec 13.39): the screen
+    // moves until they are in, and nothing is heard, or pulled offline, before.
+    if (audio) {
+        while (audio_system_loading(audio))
+            engine_draw_loading_screen(engine);
+        audio_system_wait_loaded(audio);
+    }
+    load_seam(engine, "audio-loaded");
     g_settle_start = g_load_mark;
 }
 

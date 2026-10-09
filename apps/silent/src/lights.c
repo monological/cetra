@@ -288,7 +288,7 @@ void lights_start_audio(Lights* lights, AudioSystem* audio) {
         return;
     for (int t = 0; t < TUBE_COUNT; t++) {
         Sound* s =
-            audio_sound_from_file(audio, "assets/audio/silent/tube_buzz.flac", AUDIO_BUS_SFX);
+            audio_sound_from_file_async(audio, "assets/audio/silent/tube_buzz.flac", AUDIO_BUS_SFX);
         if (!s)
             continue;
         audio_sound_set_looping(s, true);
