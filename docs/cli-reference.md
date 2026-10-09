@@ -361,7 +361,8 @@ its by-value bake key go stale; all three exist in `render`, the first two in `f
 `--layers-vt-page-budget <n>` / `--layers-vt-probe <n>` / `--cam-at <frame:ex,ey,ez,tx,ty,tz>`
 (spec 11.67 — the paged near field's bisect levers, the churn and bake-rate knobs, the residency
 probe, and the camera teleport; all but `--cam-at` in `forest` too. `--cam-at` is REPEATABLE since
-13.24, up to 16, a schedule that walks one run through several places),
+13.24, up to 128 since 13.45, a schedule that walks one run through several places or turns the
+camera a step a frame),
 `--stream-probe <n>` / `--tile-blocks-per-frame <n>` / `--capture-hide <node>`
 / `--remove-node <node>` (spec 13.24, render only — lighting data that streams. The probe prints,
 every n frames and at exit, the resident GI volumes and reflection probes by slot, each one's

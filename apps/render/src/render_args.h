@@ -22,7 +22,7 @@
 #define RAIN_PROBE_AT_MAX 16
 
 // Entries in the --cam-at teleport schedule
-#define RENDER_CAM_AT_MAX      16
+#define RENDER_CAM_AT_MAX      128
 #define RENDER_MATERIAL_AT_MAX 8
 
 // --material-at: one parameter of every material of a name, set on a frame.
