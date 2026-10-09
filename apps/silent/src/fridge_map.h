@@ -18,8 +18,7 @@
  */
 
 typedef struct FridgeMap {
-    bool taken;      // the player has it
-    SceneNode* node; // hanging on the freezer door until then
+    SceneNode* node; // hanging on the freezer door; NULL once it is taken
     vec3 at;         // the middle of its cover, which the player reaches for
 } FridgeMap;
 
@@ -27,8 +26,10 @@ typedef struct FridgeMap {
 void fridge_map_build(FridgeMap* fm, Engine* engine, Scene* scene, bool taken);
 // Off the door.
 void fridge_map_take(FridgeMap* fm);
+// The magnet it hangs from, in the frame it hangs in; the magnet stays when it is taken.
+void fridge_map_magnet(Kit* kit, const KitFrame* f);
 
-// The folded map closed, its cover facing +d and centred on f's origin, for the backpack's screen.
+// The folded map closed, its cover facing +d and centred on f's origin.
 void fridge_map_closed(Kit* kit, const KitFrame* f);
 
 #endif // _SILENT_FRIDGE_MAP_H_

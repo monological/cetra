@@ -3,24 +3,27 @@
 A visitors' street map of Pale Ridge, printed in four colours on cheap paper and kept folded in a
 kitchen for years: tan blocks and house footprints, pale streets with their names, the woods,
 the lake and the gorge, Blackwood Manor on its hill as the landmark, and the title in the empty
-corner with a compass and a scale. Kept plain, to be read at a glance. Then the paper: its folds worn white, crumpled, stained by a mug and by
-water, foxed, grimed where it was held, its edges torn and two holes worn through where the
-folds cross. And the ink the player adds: an X and a note at each road out of town that cannot
-be followed, the cabin sketched in by the lake, and a red arrow for where they stand.
+corner with a compass and a scale. Kept plain, to be read at a glance. Then the paper: its folds
+worn white, crumpled, stained by a mug and by water, foxed, grimed where it was held, its edges
+torn and two holes worn through where the folds cross. And the ink the player adds: their own
+house circled, an X and a note at each road out of town that cannot be followed, the cabin
+sketched in by the lake, and a red arrow for where they stand.
 
 Everything printed is read from apps/silent/tools/town_plan.txt, which `silent --map-export`
 writes from the code that builds the town, so nothing here restates where anything is. The
 names are invented; each is one string in NAMES.
 
 The fonts are OFL fonts from Google Fonts, downloaded and cached rather than committed: PT Sans
-Narrow for the streets and the legend, Alfa Slab One for the title, and IM Fell English for the
-natural features.
+Narrow for the streets, Alfa Slab One for the title, IM Fell English for the natural features,
+and Reenie Beanie for the ink.
 
 Writes assets/textures/silent/ui_town_map.png, RGBA with the torn edge in alpha, and
-ui_town_map_marks.png beside it: the arrow turned in 64 steps, then each find's mark. Both are
-UI pictures, so they are stored TOP ROW FIRST and hold display values, unlike the world's
-textures. `--debug` also writes out/town_map_debug.png, the plan drawn raw in red over the
-print, and out/town_map_preview.png, the print with every mark on it.
+ui_town_map_marks.png beside it: the arrow turned in 64 steps, then each mark. Both are UI
+pictures, so they are stored TOP ROW FIRST and hold display values, unlike the world's
+textures. Then the folded map's texture set, town_map_folded_*.png, and apps/silent/src/map_art.h,
+the town map's row of the table the game reads all of it through. `--debug` also writes
+out/town_map_debug.png, the plan drawn raw in red over the print, and out/town_map_preview.png,
+the print with every mark on it.
 
     python3 apps/silent/tools/make_map.py [--debug]
 """
@@ -37,8 +40,8 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 from scipy import ndimage
 
-from fetch_textures import OUT_DIR, ROOT, fetch
-from make_cards import FONTS, HAND_FONT, SERIF_ITALIC, noise, pack
+from fetch_textures import CACHE_DIR, OUT_DIR, ROOT, fetch
+from make_cards import FONTS, HAND_FONT, SERIF_ITALIC, noise, pack, to_image
 
 PLAN = os.path.join(ROOT, "apps", "silent", "tools", "town_plan.txt")
 PRINT = os.path.join(OUT_DIR, "ui_town_map.png")
@@ -198,14 +201,13 @@ class Plan:
 # -- Geometry -------------------------------------------------------------------------------------
 
 def px(x, z):
-    """A world point as canvas pixels."""
+    """A world point as canvas pixels: numbers, or arrays of them."""
     return ((FRAME[0] + (x - WORLD_X0) * SCALE) * SS, (FRAME[1] + (z - WORLD_Z0) * SCALE) * SS)
 
 
 def px_all(pts):
     pts = np.asarray(pts, float)
-    return np.stack([(FRAME[0] + (pts[:, 0] - WORLD_X0) * SCALE) * SS,
-                     (FRAME[1] + (pts[:, 1] - WORLD_Z0) * SCALE) * SS], axis=1)
+    return np.stack(px(pts[:, 0], pts[:, 1]), axis=1)
 
 
 def rect(x0, x1, z0, z1):
@@ -277,10 +279,6 @@ def grow(mask, r):
 
 def as_array(mask):
     return np.asarray(mask, dtype=np.float32) / 255.0
-
-
-def to_mask(a):
-    return Image.fromarray(np.clip(a * 255.0 + 0.5, 0, 255).astype(np.uint8))
 
 
 # -- Lettering ------------------------------------------------------------------------------------
@@ -374,7 +372,7 @@ def draw_ground(sheet, plan, rng):
     parts, n = ndimage.label(woods)
     area = ndimage.sum(woods, parts, index=np.arange(1, n + 1))
     woods &= np.isin(parts, 1 + np.nonzero(area >= 300.0 * M * M)[0])
-    woods_mask = to_mask(woods.astype(np.float32))
+    woods_mask = to_image(woods.astype(np.float32))
     sheet.tint(woods_mask, WOODS)
 
     # The gorge, darkening as it falls away from its lip.
@@ -390,7 +388,7 @@ def draw_ground(sheet, plan, rng):
     sheet.c = ImageDraw.Draw(sheet.colour)
 
     sheet.tint(water, WATER)
-    return woods_mask, chasm, water, depth
+    return woods_mask, chasm, water
 
 
 def chasm_mask(plan):
@@ -416,7 +414,7 @@ def draw_contours(sheet, plan, keep):
         edge[:, 1:] |= level[:, 1:] != level[:, :-1]
         edge[1:, :] |= level[1:, :] != level[:-1, :]
         edge &= keep
-        sheet.line_mask(grow(to_mask(edge.astype(np.float32)), width), colour)
+        sheet.line_mask(grow(to_image(edge.astype(np.float32)), width), colour)
 
 
 def draw_gorge(sheet, plan, chasm, rng):
@@ -452,14 +450,9 @@ def draw_gorge(sheet, plan, chasm, rng):
     x, z = east_x - 40.0, ridge_z - 40.0
     controls = np.array([(x, WORLD_Z0 - 40.0), (x - 1.0, -20.0), (x - 2.0, z - 30.0),
                          (x - 7.0, z - 12.0), (x - 18.0, z - 2.0), (x - 60.0, z + 2.0)])
-    creek = resample(controls, 0.5)
-    creek = np.stack([ndimage.gaussian_filter1d(creek[:, 0], 24, mode="nearest"),
-                      ndimage.gaussian_filter1d(creek[:, 1], 24, mode="nearest")], axis=1)
+    creek = smooth_path(controls, 0.5, sigma=24)
     s = arc(creek)
-    meander = 2.2 * np.sin(s / 9.0) + 1.2 * np.sin(s / 3.7 + 1.3)
-    t = np.gradient(creek, axis=0)
-    t /= np.maximum(np.hypot(t[:, 0], t[:, 1]), 1e-9)[:, None]
-    creek = creek + meander[:, None] * np.stack([t[:, 1], -t[:, 0]], axis=1)
+    creek = offset(creek, (2.2 * np.sin(s / 9.0) + 1.2 * np.sin(s / 3.7 + 1.3))[:, None])
     creek_px = px_all(creek)
     sheet.k.line([tuple(p) for p in creek_px], fill=WATER_INK, width=int(0.5 * M), joint="curve")
     # Where its name goes: up in the gorge north of the bridge.
@@ -475,7 +468,7 @@ def draw_water_lines(sheet, water):
     for r, w, fade in ((0.0, 0.34, 0.0), (1.8, 0.16, 0.45), (4.2, 0.13, 0.70)):
         band = inside & (np.abs(d - r - w / 2.0) < w / 2.0) if r > 0 else inside & (d < w)
         colour = tuple(int(c + (255 - c) * fade) for c in WATER_INK)
-        sheet.line_mask(to_mask(band.astype(np.float32)), colour)
+        sheet.line_mask(to_image(band.astype(np.float32)), colour)
 
 
 def street_boxes(plan):
@@ -483,7 +476,7 @@ def street_boxes(plan):
     street carried north out of the frame."""
     street = plan.one("asphalt", "street")
     cross = plan.one("asphalt", "cross")
-    walks = [b for b in plan.all("sidewalk")]
+    walks = plan.all("sidewalk")
     off = -400.0
     asphalt = [street, cross, ("asphalt", "bridge", off, street[2], street[4], street[5]),
                ("asphalt", "north", cross[2], cross[3], off, cross[4])]
@@ -498,12 +491,12 @@ def street_boxes(plan):
     return asphalt, walks
 
 
-def smooth_path(pts, step):
-    """A polyline of canvas pixels resampled every `step` and eased, so a ribbon round it has no
-    kinks."""
+def smooth_path(pts, step, sigma=2.0):
+    """A polyline resampled every `step` and eased over `sigma` samples, so a ribbon round it has
+    no kinks."""
     pts = resample(pts, step)
-    return np.stack([ndimage.gaussian_filter1d(pts[:, 0], 2.0, mode="nearest"),
-                     ndimage.gaussian_filter1d(pts[:, 1], 2.0, mode="nearest")], axis=1)
+    return np.stack([ndimage.gaussian_filter1d(pts[:, 0], sigma, mode="nearest"),
+                     ndimage.gaussian_filter1d(pts[:, 1], sigma, mode="nearest")], axis=1)
 
 
 def ribbon(pts, half):
@@ -557,14 +550,14 @@ def draw_roads(sheet, plan, roads):
         for i in range(0, len(edge) - dash, dash * 2):
             dd.line([tuple(p) for p in edge[i:i + dash]], fill=255, width=int(0.3 * M))
     dashes = as_array(dashes) * (1.0 - as_array(grow(roads.paved, 2)))
-    sheet.line_mask(to_mask(dashes), CASING)
+    sheet.line_mask(to_image(dashes), CASING)
 
     # Casing round everything paved, a fainter line at each curb.
     casing = as_array(grow(roads.paved, int(0.22 * M))) * (1.0 - as_array(roads.paved))
-    sheet.line_mask(to_mask(casing), CASING)
+    sheet.line_mask(to_image(casing), CASING)
     curb = (as_array(grow(roads.road, int(0.12 * M))) * (1.0 - as_array(roads.road))
             * as_array(roads.walk))
-    sheet.line_mask(to_mask(curb), CURB)
+    sheet.line_mask(to_image(curb), CURB)
 
     # The bridge: its parapets drawn heavy, flaring out at the end it starts from.
     street = plan.one("asphalt", "street")
@@ -627,8 +620,9 @@ def draw_grounds(sheet, plan, rng, f_label):
         r = 0.55 * M
         sheet.k.rectangle([cx - r, cy - r, cx + r, cy + r], fill=INK)
 
+    # The manor pictured on them, the picture's foot on the house's south face.
     b = plan.one("landmark", "mansion")
-    draw_manor(sheet, b)
+    draw_manor(sheet, *px((b[2] + b[3]) / 2.0, b[5]), 0.65 * M)
     cx, cy = px((b[2] + b[3]) / 2.0, b[5] + 3.2)
     text_at(sheet.haloed, cx, cy, NAMES["house"], f_label, INK, tracking=0.12)
 
@@ -645,12 +639,7 @@ def draw_grounds(sheet, plan, rng, f_label):
     return g
 
 
-def draw_manor(sheet, b):
-    """The manor pictured on its grounds, the picture's foot on the house's south face."""
-    draw_manor_at(sheet, *px((b[2] + b[3]) / 2.0, b[5]), 0.65 * M)
-
-
-def draw_manor_at(sheet, bx, by, u):
+def draw_manor(sheet, bx, by, u):
     """The manor drawn standing, as a visitors' map pictures its sight: a steep gabled house of
     dark boards, a gable brought forward over the door, and the tower with its spire at the
     corner where the real one stands. Its foot's middle at canvas point (bx, by), `u` canvas
@@ -815,7 +804,7 @@ def draw_title(sheet):
 def print_map(plan, rng):
     """The plates, inked: the map as it came off the press, as multipliers of the paper."""
     sheet = Sheet()
-    woods, chasm, water, _ = draw_ground(sheet, plan, rng)
+    woods, chasm, water = draw_ground(sheet, plan, rng)
     roads = Roads(plan)
     lots = mask_of(lambda d: [d.rectangle(box_rect(b), fill=255) for b in plan.all("lot")])
     fenced = mask_of(lambda d: [d.rectangle(box_rect(b), fill=255)
@@ -885,21 +874,20 @@ def sheet_alpha(rng, vertical, horizontal):
     def tear(points):
         d.polygon([(float(x), float(y)) for x, y in points], fill=0)
 
+    def nick(f, edge, sign, across_x):
+        """A nick where the fold at `f` reaches the edge at `edge`, `sign` into the sheet."""
+        depth, width = rng.uniform(8, 22) * SS, rng.uniform(5, 11) * SS
+        pts = [(f - width, edge - sign * 20 * SS), (f - width * 0.3, edge + sign * depth * 0.5),
+               (f + rng.normal(0, 2) * SS, edge + sign * depth),
+               (f + width * 0.4, edge + sign * depth * 0.4), (f + width, edge - sign * 20 * SS)]
+        tear(pts if across_x else [(y, x) for x, y in pts])
+
     # Nicks where the folds reach the edges, where a folded sheet wears first.
-    for f, _, _ in vertical:
-        for edge, sign in ((p, 1), (H - p, -1)):
-            if rng.random() < 0.7:
-                depth, width = rng.uniform(8, 22) * SS, rng.uniform(5, 11) * SS
-                tear([(f - width, edge - sign * 20 * SS), (f - width * 0.3, edge + sign * depth * 0.5),
-                      (f + rng.normal(0, 2) * SS, edge + sign * depth),
-                      (f + width * 0.4, edge + sign * depth * 0.4), (f + width, edge - sign * 20 * SS)])
-    for f, _, _ in horizontal:
-        for edge, sign in ((p, 1), (W - p, -1)):
-            if rng.random() < 0.7:
-                depth, width = rng.uniform(8, 22) * SS, rng.uniform(5, 11) * SS
-                tear([(edge - sign * 20 * SS, f - width), (edge + sign * depth * 0.5, f - width * 0.3),
-                      (edge + sign * depth, f + rng.normal(0, 2) * SS),
-                      (edge + sign * depth * 0.4, f + width * 0.4), (edge - sign * 20 * SS, f + width)])
+    for group, across_x, far in ((vertical, True, H - p), (horizontal, False, W - p)):
+        for f, _, _ in group:
+            for edge, sign in ((p, 1), (far, -1)):
+                if rng.random() < 0.7:
+                    nick(f, edge, sign, across_x)
     # A corner torn off.
     cx, cy = W - p, p
     n = 14
@@ -920,17 +908,22 @@ def sheet_alpha(rng, vertical, horizontal):
     return as_array(m) > 0.5
 
 
-def paper_relief(rng, vertical, horizontal):
+def fold_distance(f, tilt, across_x, xx, yy):
+    """How far each pixel is from the fold at `f`, leaning `tilt`: across x from a vertical one,
+    across y from a horizontal one."""
+    if across_x:
+        return xx - (f + tilt * (yy - H / 2.0))
+    return yy - (f + tilt * (xx - W / 2.0))
+
+
+def paper_relief(rng, vertical, horizontal, xx, yy):
     """How far the sheet stands off the table, in pixels: the folds, a crumpling, and the grain.
     It is the slope of this that lights the sheet."""
-    yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
     h = np.zeros((H, W), np.float32)
-    for f, tilt, s in vertical:
-        d = xx - (f + tilt * (yy - H / 2.0))
-        h += s * (0.045 * np.abs(d) + 1.2 * np.exp(-(d / (4.0 * SS)) ** 2))
-    for f, tilt, s in horizontal:
-        d = yy - (f + tilt * (xx - W / 2.0))
-        h += s * (0.030 * np.abs(d) + 1.2 * np.exp(-(d / (4.0 * SS)) ** 2))
+    for group, across_x, slope in ((vertical, True, 0.045), (horizontal, False, 0.030)):
+        for f, tilt, s in group:
+            d = fold_distance(f, tilt, across_x, xx, yy)
+            h += s * (slope * np.abs(d) + 1.2 * np.exp(-(d / (4.0 * SS)) ** 2))
     # Crumpling: many random creases, worked out at a quarter size (where a slope is the same
     # slope, and a height a quarter of one) and smoothed up.
     q = 4
@@ -953,7 +946,9 @@ def age(ink, rng):
     folds it was kept in."""
     vertical, horizontal = folds(rng)
     alpha = sheet_alpha(rng, vertical, horizontal)
-    yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
+    # Each pixel's coordinates, as a column and a row that broadcast to the sheet.
+    yy = np.arange(H, dtype=np.float32)[:, None]
+    xx = np.arange(W, dtype=np.float32)[None, :]
 
     # The paper: yellowed, its grain, and browner in blotches.
     paper = PAPER * (0.985 + 0.03 * noise(H, W, 3, rng))[..., None]
@@ -965,9 +960,9 @@ def age(ink, rng):
     wear = np.zeros((H, W), np.float32)
     crease_dirt = np.zeros((H, W), np.float32)
     broken = noise(H, W, 7 * SS, rng)
-    for group, along_x in ((vertical, True), (horizontal, False)):
+    for group, across_x in ((vertical, True), (horizontal, False)):
         for f, tilt, s in group:
-            d = (xx - (f + tilt * (yy - H / 2.0))) if along_x else (yy - (f + tilt * (xx - W / 2.0)))
+            d = fold_distance(f, tilt, across_x, xx, yy)
             wear = np.maximum(wear, np.exp(-(d / (6.0 * SS)) ** 2) * (0.35 + 0.65 * broken))
             if s > 0:
                 crease_dirt = np.maximum(crease_dirt, np.exp(-(d / (1.4 * SS)) ** 2))
@@ -988,7 +983,7 @@ def age(ink, rng):
     out *= (1.0 - 0.20 * crease_dirt * (0.5 + 0.5 * broken))[..., None]
 
     # Lit from the top left: the folds and the crumpling.
-    h = paper_relief(rng, vertical, horizontal)
+    h = paper_relief(rng, vertical, horizontal, xx, yy)
     gy, gx = np.gradient(h)
     light = np.array([-0.42, -0.52, 0.74], np.float32)
     light /= np.linalg.norm(light)
@@ -1069,6 +1064,18 @@ def grime(out, rng, xx, yy):
 
 # -- The ink --------------------------------------------------------------------------------------
 
+@functools.lru_cache(maxsize=None)
+def hand_font(size):
+    """The ink's handwriting at `size` print pixels, at the pen's INK_SS times over."""
+    return ImageFont.truetype(io.BytesIO(fetch(HAND_FONT)), int(size * INK_SS))
+
+
+def wobbled(pts, rng, amount):
+    """`pts` as a hand draws them: moved by a smooth wander at most `amount` from where they were."""
+    j = ndimage.gaussian_filter1d(rng.normal(0.0, 1.0, pts.shape), 9.0, axis=0)
+    return pts + j * (amount / max(float(np.abs(j).max()), 1e-6))
+
+
 class Pen:
     """A sprite drawn by hand: coverage drawn at INK_SS times its size, in output pixels about
     its anchor, the point on the print it marks. A timed pen also keeps a clock, and for every
@@ -1105,8 +1112,7 @@ class Pen:
         if n < 2:
             return
         if rng is not None and wobble > 0.0:
-            j = ndimage.gaussian_filter1d(rng.normal(0.0, 1.0, (n, 2)), 9.0, axis=0)
-            pts = pts + j * (wobble / max(float(np.abs(j).max()), 1e-6))
+            pts = wobbled(pts, rng, wobble)
         t = np.linspace(0.0, 1.0, n)
         radius = 0.5 * width * (0.55 + 0.45 * np.sin(np.pi * t)) * INK_SS
         times = self.clock + arc(pts) / PEN_SPEED
@@ -1125,7 +1131,7 @@ class Pen:
 
     def write(self, x, y, text, size, angle=0.0):
         """Handwriting starting at (x, y), its line's middle, turned `angle` degrees."""
-        f = ImageFont.truetype(io.BytesIO(fetch(HAND_FONT)), int(size * INK_SS))
+        f = hand_font(size)
         pad = 6 * INK_SS
         w, h = int(f.getlength(text)) + 2 * pad, int(size * INK_SS * 1.7)
         g = Image.new("L", (w, h), 0)
@@ -1158,35 +1164,29 @@ class Pen:
         """How long the mark takes to write."""
         return max(self.clock - PEN_LIFT, 1e-3)
 
-    def image(self, colour, rng):
-        """The sprite at its size for looking at: the coverage in `colour`, the ink skipping a
-        little. Also keeps its alpha and, for a timed pen, each pixel's time as a fraction of the
-        mark's, which `atlas_image` puts into the marks picture."""
+    def images(self, colour, rng):
+        """The sprite at its size, twice: to look at, the coverage in `colour` with the ink
+        skipping a little; and as the marks picture holds it, when the pen reached each pixel in
+        red as a fraction of the mark's writing and the ink in alpha, its colour the quad's tint."""
         cov = as_array(self.cov)
         skip = 0.80 + 0.20 * noise(cov.shape[0], cov.shape[1], 2 * INK_SS, rng)
         a = np.clip(cov * skip * 0.94, 0.0, 1.0)
         rgba = np.concatenate([np.broadcast_to(np.array(colour, np.float32) / 255.0, a.shape + (3,)),
                                a[..., None]], axis=-1)
-        img = Image.fromarray((rgba * 255.0 + 0.5).astype(np.uint8))
+        img = to_image(rgba)
         img = img.convert("RGBa").resize((self.w, self.h), Image.Resampling.LANCZOS).convert("RGBA")
-        self.alpha = np.asarray(img)[..., 3]
-        self.fraction = np.zeros((self.h, self.w), dtype=np.float32)
+        fraction = np.zeros((self.h, self.w), dtype=np.float32)
         if self.timed:
             # A pixel is written when the pen first reaches any of it, and the soft edge the
             # reduction left round the ink takes its neighbour's time.
             blocks = self.when.reshape(self.h, INK_SS, self.w, INK_SS).min(axis=(1, 3))
             spread = ndimage.minimum_filter(np.where(np.isfinite(blocks), blocks, 1e9), size=3)
             blocks = np.where(np.isfinite(blocks), blocks, spread)
-            self.fraction = np.clip(np.where(blocks < 1e8, blocks, 0.0) / self.seconds(), 0.0, 1.0)
-        return img
-
-    def atlas_image(self):
-        """The sprite as the marks picture holds it: when the pen reached each pixel in red, as a
-        fraction of the mark's writing, and the ink in alpha. Its colour is the quad's tint."""
-        rgba = np.zeros((self.h, self.w, 4), dtype=np.uint8)
-        rgba[..., 0] = (self.fraction * 255.0 + 0.5).astype(np.uint8)
-        rgba[..., 3] = self.alpha
-        return Image.fromarray(rgba)
+            fraction = np.clip(np.where(blocks < 1e8, blocks, 0.0) / self.seconds(), 0.0, 1.0)
+        kept = np.zeros((self.h, self.w, 4), dtype=np.uint8)
+        kept[..., 0] = (fraction * 255.0 + 0.5).astype(np.uint8)
+        kept[..., 3] = np.asarray(img)[..., 3]
+        return img, Image.fromarray(kept)
 
 
 def cross(pen, rng, half):
@@ -1267,8 +1267,7 @@ def arrow_strokes(rng):
     strokes = []
     for k in range(2):
         pts = resample(np.array(outline, float) + (rng.normal(0, 0.8, 2) if k else 0), 0.3)
-        j = ndimage.gaussian_filter1d(rng.normal(0.0, 1.0, pts.shape), 9.0, axis=0)
-        strokes.append((pts + j * (0.7 / np.abs(j).max()), 3.6 if k == 0 else 2.8))
+        strokes.append((wobbled(pts, rng, 0.7), 3.6 if k == 0 else 2.8))
     for y in np.arange(-18.0, 10.0, 3.2):
         half = 15.0 * (y + 27.0) / 41.0 - 2.0
         if half > 1.0:
@@ -1288,29 +1287,28 @@ def arrow_frame(strokes, theta):
 
 def draw_marks(plan, rng):
     """The marks atlas: the arrow's turns in a grid, drawn from `rng`, then each find's mark
-    packed under it, each from its own stream and as `Pen.atlas_image` keeps it. Returns the
-    atlas, per mark its place, its pen, its sprite to look at and its spot in the atlas, and the
-    arrow pointing north-west to look at."""
+    packed under it, each from its own stream, all as `Pen.images` keeps them. Returns the atlas,
+    per mark its place, its pen, its sprite to look at and its spot in the atlas, and the arrow
+    pointing north-west to look at."""
     atlas = Image.new("RGBA", (MARKS_W, MARKS_H), (0, 0, 0, 0))
     strokes = arrow_strokes(rng)
     arrow = None
     for k in range(ARROW_FRAMES):
-        pen = arrow_frame(strokes, 2.0 * math.pi * k / ARROW_FRAMES)
-        sprite = pen.image(RED, rng)
+        sprite, kept = arrow_frame(strokes, 2.0 * math.pi * k / ARROW_FRAMES).images(RED, rng)
         arrow = sprite if k == ARROW_FRAMES * 7 // 8 else arrow
-        atlas.paste(pen.atlas_image(), ((k % ARROW_COLS) * ARROW_CELL, (k // ARROW_COLS) * ARROW_CELL))
+        atlas.paste(kept, ((k % ARROW_COLS) * ARROW_CELL, (k // ARROW_COLS) * ARROW_CELL))
     top = ARROW_CELL * ((ARROW_FRAMES + ARROW_COLS - 1) // ARROW_COLS)
     sprites = []
     for pid in plan.places:
         own = mark_rng(pid)
         pen = MARK_DRAWERS[pid](plan, own)
-        sprites.append((pid, pen, pen.image(BLUE, own)))
-    spots = pack([(img.width + 2 * MARK_PAD, img.height + 2 * MARK_PAD) for _, _, img in sprites],
+        sprites.append((pid, pen, *pen.images(BLUE, own)))
+    spots = pack([(img.width + 2 * MARK_PAD, img.height + 2 * MARK_PAD) for _, _, img, _ in sprites],
                  atlas=(MARKS_W, MARKS_H - top))
     marks = []
-    for (pid, pen, img), (x, y) in zip(sprites, spots):
+    for (pid, pen, img, kept), (x, y) in zip(sprites, spots):
         spot = (x + MARK_PAD, y + top + MARK_PAD)
-        atlas.paste(pen.atlas_image(), spot)
+        atlas.paste(kept, spot)
         marks.append((pid, pen, img, spot))
     return atlas, marks, arrow
 
@@ -1333,7 +1331,7 @@ def preview(img, plan, marks, arrow):
 def reduce(rgba):
     """The sheet at its final size, its colour held to six bits a channel: the paper's grain
     dithers the steps away, and the file is 40% smaller for it."""
-    img = Image.fromarray(np.clip(rgba * 255.0 + 0.5, 0, 255).astype(np.uint8))
+    img = to_image(rgba)
     img = img.convert("RGBa").resize((OUT_W, OUT_H), Image.Resampling.LANCZOS).convert("RGBA")
     a = np.asarray(img).copy()
     a[..., :3] = (a[..., :3] // 4) * 4 + 2
@@ -1399,7 +1397,7 @@ def draw_cover(rng):
               font(NARROW_BOLD, 40), COVER_NAVY, tracking=0.42)
     text_at(sheet.plain, n / 2.0, band + at(86), "and Visitors' Guide", font(SERIF_ITALIC, 28),
             SOFT_INK)
-    draw_manor_at(sheet, n / 2.0, band + at(214), at(98) / 24.0)
+    draw_manor(sheet, n / 2.0, band + at(214), at(98) / 24.0)
     sheet.c.rectangle([0, n - at(22), n, n], fill=COVER_RED)
     text_at(sheet.knockout, n / 2.0, n - at(11), NAMES["chamber"].upper(), font(NARROW_BOLD, 13),
             WHITE, tracking=0.25)
@@ -1431,7 +1429,7 @@ def age_cover(ink, rng):
     out = stock * (1.0 - (1.0 - ink) * (0.97 * (1.0 - wear))[..., None])
     a = (0.30 * np.exp(-edge / (24.0 * SS)))[..., None]
     out *= 1.0 - a * (1.0 - EDGE_BROWN)
-    img = Image.fromarray(np.clip(out * 255.0 + 0.5, 0, 255).astype(np.uint8))
+    img = to_image(out)
     return img.resize((FOLDED_FACE, FOLDED_FACE), Image.Resampling.LANCZOS)
 
 
@@ -1450,14 +1448,16 @@ def folded_set(img, folds, cover):
     box = tuple(int(round(v)) for v in (xs[i], ys[j], xs[i + 1], ys[j + 1]))
     inside = flat.crop(box).resize((FOLDED_FACE, FOLDED_FACE), Image.Resampling.LANCZOS)
     albedo = Image.new("RGB", (2 * FOLDED_FACE, FOLDED_FACE))
-    albedo.paste(cover, (0, 0))
-    albedo.paste(inside, (FOLDED_FACE, 0))
+    uvs = []
+    for k, face in enumerate((cover, inside)):
+        albedo.paste(face, (k * FOLDED_FACE, 0))
+        uvs.append((k * FOLDED_FACE / albedo.width, 0.0, (k + 1) * FOLDED_FACE / albedo.width, 1.0))
     save(albedo.transpose(Image.Transpose.FLIP_TOP_BOTTOM), FOLDED % "albedo")
     Image.new("RGB", (64, 32), (128, 128, 255)).save(FOLDED % "normal")
     rough = Image.new("RGB", (64, 32), (int(ROUGH_INSIDE * 255 + 0.5),) * 3)
     rough.paste((int(ROUGH_COVER * 255 + 0.5),) * 3, (0, 0, 32, 32))
     rough.save(FOLDED % "rough")
-    return (0.0, 0.0, 0.5, 1.0), (0.5, 0.0, 1.0, 1.0)
+    return uvs
 
 
 def write_art(plan, marks, faces):
@@ -1488,6 +1488,8 @@ def write_art(plan, marks, faces):
         "            .arrow_frames = %d," % ARROW_FRAMES,
         "            .arrow_cell = %d," % ARROW_CELL,
         "            .arrow_cols = %d," % ARROW_COLS,
+        "            .ink = %s," % rect(c / 255.0 for c in BLUE),
+        "            .arrow_ink = %s," % rect(c / 255.0 for c in RED),
         "            .mark_count = %d," % len(marks),
         "            .marks =",
         "                {",
@@ -1517,6 +1519,7 @@ def write_art(plan, marks, faces):
 
 
 def main():
+    os.makedirs(CACHE_DIR, exist_ok=True)
     plan = Plan(PLAN)
     # The print, the paper and the ink each draw from their own stream, so a change to what is
     # printed leaves the paper's wear and the hand's strokes where they were.
@@ -1529,6 +1532,7 @@ def main():
     cover_rng = np.random.default_rng([SEED, 3])
     write_art(plan, marks, folded_set(img, folds, draw_cover(cover_rng)))
     if "--debug" in sys.argv[1:]:
+        os.makedirs(os.path.dirname(DEBUG), exist_ok=True)
         debug_overlay(img, plan).save(DEBUG)
         preview(img, plan, marks, arrow).save(PREVIEW)
         print("make_map: %s, %s" % (os.path.relpath(DEBUG, ROOT), os.path.relpath(PREVIEW, ROOT)))

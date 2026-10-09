@@ -314,6 +314,10 @@ ShaderProgram* create_text_program();
 // textured quads and SDF glyphs, so a screen is one or two draws rather than
 // one per element.
 ShaderProgram* create_ui_program();
+// An app's fragment stage over the UI's own vertex stage, for ui_set_element_program and
+// ui_set_draw_program: it receives ui_vert.glsl's vUV, vColor, vPos, vRect, vParams and vBorder,
+// and is written against the uniform contract ui_frag.glsl declares.
+ShaderProgram* create_ui_draw_program(const char* name, const char* frag_source);
 
 // Bone Visualization Program
 ShaderProgram* create_bone_program();

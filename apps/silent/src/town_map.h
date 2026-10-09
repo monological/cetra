@@ -28,7 +28,6 @@ typedef enum {
 
 typedef struct PlaceSpec {
     const char* id; // as a command line and tools/make_map.py name it
-    MapId map;      // the map its mark goes on
     float box[4];   // where the feet find it, in plan: x0, x1, z0, z1
     float mark[2];  // where its mark goes on the map: world x, z
     // What the player thinks on arriving: the first time with the map, which they mark it on; the
@@ -36,7 +35,7 @@ typedef struct PlaceSpec {
     const char* found_mapped;
     const char* found;
     const char* again;
-    bool known; // found when its map is had, never walked into; its box is not read
+    bool known; // on its map from the first opening, never walked into; its box is not read
 } PlaceSpec;
 
 extern const PlaceSpec PLACES[PLACE_COUNT];
@@ -54,8 +53,8 @@ typedef struct Finds {
 // PLACE_NONE -- once each time they come back to it from FIND_LEAVE away -- and in `first`
 // whether it is the first time. It is found from then on.
 PlaceId finds_arrive(Finds* f, const vec3 feet, bool* first);
-// The player has `map`: every place on it they know without going there is found.
-void finds_have_map(Finds* f, MapId map);
+// Whether any place has been found by going there.
+bool finds_any(const Finds* f);
 
 // A find's mark as the tool drew it: where it is in its map's marks picture, the point in it that
 // goes on the find's place, and how long it takes to write on. The marks picture holds the ink in
@@ -82,6 +81,7 @@ typedef struct MapArt {
     // 2 pi k / arrow_frames, in square cells `arrow_cell` pixels a side, `arrow_cols` to a row from
     // the marks picture's top left; each frame's point is its cell's middle.
     int arrow_frames, arrow_cell, arrow_cols;
+    float ink[3], arrow_ink[3]; // the marks' colour and the arrow's, in display values
     int mark_count;
     MapMark marks[PLACE_COUNT];
     // The folded map's faces in its texture set, V up: its printed cover, and the panel that shows

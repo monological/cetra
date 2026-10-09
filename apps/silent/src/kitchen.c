@@ -2,6 +2,7 @@
 #include <stdint.h>
 
 #include "cards.h"
+#include "fridge_map.h"
 #include "kitchen.h"
 #include "layout.h"
 #include "mats.h"
@@ -518,9 +519,14 @@ static void stove_wall(Kit* kit, KitRng* rng) {
     clutter(kit, &f, rng, s1 + 0.1f, len - 0.1f, 0.0f, 0.0f, COUNTER_TOP, 1);
 }
 
+// Where the town map hangs on a fridge standing from a0 in frame f.
+static void fridge_map_frame(const KitFrame* f, float a0, KitFrame* out) {
+    *out = (KitFrame){.yaw = f->yaw};
+    kit_frame_point(f, a0 + FRIDGE_MAP_A, FRIDGE_MAP_Y, FRIDGE_D, out->origin);
+}
+
 void kitchen_fridge_map_frame(KitFrame* out) {
-    kit_frame_point(&STOVE_WALL, FRIDGE_MAP_A, FRIDGE_MAP_Y, FRIDGE_D, out->origin);
-    out->yaw = STOVE_WALL.yaw;
+    fridge_map_frame(&STOVE_WALL, 0.0f, out);
 }
 
 void kitchen_pin_card(Kit* kit, const KitFrame* f, CardId card, float a, float y, float d,
@@ -567,10 +573,9 @@ static void fridge(Kit* kit, const KitFrame* f, KitRng* rng, float a0, float a1)
     kitchen_pin_card(kit, f, CARD_PHOTO_ROAD, a0 + 0.59f, 1.40f, d + 3.0f * step, -0.03f);
     magnet(kit, f, MAT_PLASTIC, a0 + 0.262f, 1.505f, d + 2.0f * step);
     magnet(kit, f, MAT_BLACK, a0 + 0.59f, 1.46f, d + 4.0f * step);
-    // The map's magnet in its cover's top corner, clear of the name, deep enough to stand proud of
-    // the map it holds.
-    const float ma = a0 + FRIDGE_MAP_A - 0.053f, my = FRIDGE_MAP_Y - 0.017f;
-    kit_frame_pipe(kit, f, MAT_CERAMIC, (vec3[]){{ma, my, d}, {ma, my, d + 0.013f}}, 2, 0.013f, 16);
+    KitFrame hang;
+    fridge_map_frame(f, a0, &hang);
+    fridge_map_magnet(kit, &hang);
 
     kitchen_pin_card(kit, f, CARD_PHOTO_LAKE, a0 + 0.20f, 0.80f, d + step, 0.04f);
     magnet(kit, f, MAT_CERAMIC, a0 + 0.20f, 0.845f, d + 2.0f * step);

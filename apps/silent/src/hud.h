@@ -47,4 +47,10 @@ void hud_think(Hud* hud, const char* text);
 void hud_update(Hud* hud, float dt, float height);
 void hud_free(Hud* hud);
 
+// A padding of nothing: a zero is the style's.
+#define HUD_BARE 0.01f
+// A modal screen `name` in `ui` over the world, which fades in and centres what is put in it with
+// the world dimmed to `dim` behind it; its root in `root`.
+UIScreen* hud_modal_screen(UISystem* ui, const char* name, float dim, UIElement** root);
+
 #endif // _SILENT_HUD_H_

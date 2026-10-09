@@ -772,6 +772,10 @@ void engine_set_camera(Engine* engine, Camera* camera);
 void engine_load_material_texture(Engine* engine, TexturePool* pool, Material* material,
                                   void (*set)(Material*, Texture*), const char* path,
                                   TextureDesc desc);
+// The same for anything that is not a material: `got` receives the texture, or NULL for a file that
+// cannot be loaded, with `user`, on the main thread, as `set` would be called.
+void engine_load_texture(Engine* engine, TexturePool* pool, const char* path, TextureDesc desc,
+                         void (*got)(Texture* tex, void* user), void* user);
 // Every texture the loader is decoding, uploaded now into the pool each was asked for, the loading
 // screen drawn between them: for an app's init, so what it asked for is set before anything draws.
 void engine_finish_texture_loads(Engine* engine);

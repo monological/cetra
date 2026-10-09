@@ -11,10 +11,9 @@
 #include "town_map.h"
 
 /*
- * The map screen (spec 13.43): a map the player carries, opened by M over the world dimmed behind
- * it, or over the backpack's screen when opened from there. The sheet is a VIEW with a pan and a
- * zoom: at zoom 1 all of it fits, and zoomed in it moves by a drag, WASD or the stick, so a larger
- * map is a larger print and nothing here changes. Each found place's mark is written on stroke by
+ * The map screen (spec 13.43): a map the player carries, over whatever screen is under it. The
+ * sheet is a VIEW with a pan and a zoom: at zoom 1 all of it fits, and zoomed in it moves, so a
+ * larger map is a larger print and nothing here changes. Each mark due is written on stroke by
  * stroke the first time the map shows it, one after another, and a red arrow stands where the
  * player is, pointing the way they face. A modal screen in the HUD's UI system.
  */
@@ -26,33 +25,35 @@ typedef struct MapControls {
 } MapControls;
 
 typedef struct MapScreen {
+    Engine* engine;
     UISystem* ui; // the HUD's, borrowed
     UIScreen* screen;
     UIElement* paper;
     ShaderProgram* ink;
-    Texture* print[MAP_COUNT];
+    Texture* print[MAP_COUNT]; // NULL until the loader has it
     Texture* marks[MAP_COUNT];
-    MapId map;     // the one open, or MAP_NONE
-    bool over_bag; // opened from the backpack's screen, which closing it goes back to
-    float zoom;    // 1: the whole sheet
-    vec2 centre;   // the print pixel the view is centred on, before it is held to the sheet
+    MapId map;   // the one last opened, MAP_NONE before any
+    float zoom;  // 1: the whole sheet
+    vec2 centre; // the print pixel the view is centred on, before it is held to the sheet
     bool dragging;
-    float drag_from[2];          // the pointer, where the drag last moved the view
-    double clock;                // seconds the map has been open
-    bool shown[PLACE_COUNT];     // its mark has been written on
-    double writing[PLACE_COUNT]; // when on the clock its mark begins to be written; < 0, not now
-    float feet[2];               // where the player stands: world x, z
-    float heading;               // the way they face: radians clockwise from north
+    float drag_from[2]; // the pointer, where the drag last moved the view
+    double clock;       // seconds the map has been open this time
+    // When on the clock each place's mark began to be written: -inf once written whole, +inf when
+    // it is not written this time.
+    double began[PLACE_COUNT];
+    float feet[2]; // where the player stands: world x, z
+    float heading; // the way they face: radians clockwise from north
 } MapScreen;
 
-// False if there is no UI to show it in or its program will not build, which says why; M then
-// shows nothing.
-bool map_screen_start(MapScreen* ms, UISystem* ui, Engine* engine, TexturePool* pool);
+// Its screen in `ui`, and its pictures asked of the engine's loader. A program that will not build
+// is said once, and the map then shows no marks.
+void map_screen_start(MapScreen* ms, UISystem* ui, Engine* engine, TexturePool* pool);
 // Whether it is the screen on top.
 bool map_screen_open(const MapScreen* ms);
-// Up on `map`, whole and centred on the player, with every mark `found` and not yet written set to
-// be written one after another. It goes by the UI's own back.
-void map_screen_show(MapScreen* ms, MapId map, bool over_bag, const bool found[PLACE_COUNT]);
+// Up on `map`, whole and centred on the player, with every mark due and not yet written -- one
+// `found`, or a place known from the first opening -- set to be written one after another. It
+// goes by the UI's own back.
+void map_screen_show(MapScreen* ms, MapId map, const bool found[PLACE_COUNT]);
 // The paper sized to a window `width` x `height` points: each frame before the UI's pass.
 void map_screen_layout(MapScreen* ms, float width, float height);
 // The frame's pan and zoom while it is open, a drag by the pointer among them.

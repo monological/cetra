@@ -2,32 +2,15 @@
 #define _GAMETEST_UI_BACKDROP_H_
 
 /*
- * A custom fragment stage for one UI element (spec 12.2, escape hatch 2).
+ * A custom fragment stage for one UI element (spec 12.2, escape hatch 2), built over the UI's own
+ * vertex stage by create_ui_draw_program.
  *
  * It is written against the contract ui_frag.glsl declares -- uRect,
- * uResolution, uTime, uFocus, uTex -- and the vertex layout ui_vert.glsl uses,
- * so an element swaps between this and the default with no C change. The app
- * carries its own GLSL the way apps/network does; these are plain strings
- * rather than generated ones, because the shader header is built from
- * cetra/shaders and an app's shader is not the engine's.
+ * uResolution, uTime, uFocus, uTex -- so an element swaps between this and the
+ * default with no C change. The app carries its own GLSL the way apps/network
+ * does; this is a plain string rather than a generated one, because the shader
+ * header is built from cetra/shaders and an app's shader is not the engine's.
  */
-
-static const char* const UI_BACKDROP_VERT =
-    "#version 330 core\n"
-    "layout(location = 0) in vec2 aPos;\n"
-    "layout(location = 1) in vec2 aUV;\n"
-    "layout(location = 2) in vec4 aColor;\n"
-    "layout(location = 3) in vec4 aRect;\n"
-    "layout(location = 4) in vec4 aParams;\n"
-    "layout(location = 5) in vec4 aBorder;\n"
-    "out vec2 vPos;\n"
-    "out vec4 vColor;\n"
-    "uniform mat4 uProjection;\n"
-    "void main() {\n"
-    "    vPos = aPos;\n"
-    "    vColor = aColor;\n"
-    "    gl_Position = uProjection * vec4(aPos, 0.0, 1.0);\n"
-    "}\n";
 
 static const char* const UI_BACKDROP_FRAG =
     "#version 330 core\n"

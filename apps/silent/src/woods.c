@@ -165,11 +165,19 @@ static bool valley_site(int i, int j) {
     return !(i >= 0 && i < WOODS_COLS && j < WOODS_ROWS) || cutting;
 }
 
+// How far (x, z) is into the lake valley's woods where a tree can stand, and negative on ground
+// too steep for one.
+static float valley_cover(float x, float z) {
+    return land_too_steep(x, z) ? -1.0f : valley_depth(x, z);
+}
+
 float woods_cover(float x, float z) {
     const int i = (int)floorf((x - WOODS_X0) / SITE_STEP);
     const int j = (int)floorf((z - WORLD_Z0) / SITE_STEP);
     if (valley_site(i, j))
-        return land_too_steep(x, z) ? -1.0f : valley_depth(x, z);
+        return valley_cover(x, z);
+    // The town's planting tests the track after the site's draws, which is why its rule is not one
+    // function: folded into the depth it would skip a draw and move every later site.
     return lake_track_distance(x, z) < TRACK_CLEAR ? -1.0f : woods_depth(x, z);
 }
 
@@ -386,9 +394,8 @@ static void valley_woods(Planting* p, const Mesh* const* rocks, unsigned int see
             const float kind = kit_xrnd(&state), yaw = 2.0f * GLM_PIf * kit_xrnd(&state);
             const float size = kit_xrnd(&state), lean = kit_xrnd(&state);
             const float roll = kit_xrnd(&state);
-            const float depth = valley_depth(x, z);
-            if (depth <= 0.0f || roll > 0.45f + 0.5f * glm_smoothstep(0.0f, EDGE_THIN, depth) ||
-                land_too_steep(x, z))
+            const float depth = valley_cover(x, z);
+            if (depth <= 0.0f || roll > 0.45f + 0.5f * glm_smoothstep(0.0f, EDGE_THIN, depth))
                 continue;
             plant(p, x, z, kind, yaw, size, lean);
         }
