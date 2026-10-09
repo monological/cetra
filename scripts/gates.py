@@ -30629,6 +30629,126 @@ GICOOK_UNSTABLE_FRAME = 20
 _GICOOK_UNSTABLE = re.compile(r"gi-cook volume=(\d+) result=unstable")
 
 
+# Spec 13.45: a level camera turning about its eye on rain_fixture at silent's rate, the lamp's lit
+# rain entering at the leading edge as the turn ends -- where a fog cell with no history showed one
+# jittered sample against neighbours averaged over many, as a hard-edged band.
+FOGMISS_FIXTURE = "rain_fixture.cscn"
+FOGMISS_EYE = (0.0, 2.4, 11.0)
+FOGMISS_DIST = 15.05  # the fixture's own eye-to-target distance, kept: the fog's near follows it
+FOGMISS_YAW0 = -41.0  # degrees from -z, toward +x; the lamp enters at the right edge at the end
+FOGMISS_STEP = 1.72   # degrees a frame: silent's 1.8 rad/s at 60 Hz
+FOGMISS_STILL = 60    # frames held before the turn, enough for the volume to converge
+FOGMISS_STEPS = 15
+FOGMISS_SIZE = (640, 400)
+FOGMISS_ARGS = ["--fog", "--no-aerial", "--no-auto-exposure", "-E", "1.0", "--no-dither",
+                "--no-bloom", "--no-vignette", "--no-ssao"]
+FOGMISS_FLOOR_MIN = 0.25  # codes: the floor a band is measured against, never below a quarter code
+FOGMISS_RATIO_MAX = 2.0   # provisional until the fix is measured (spec 13.45)
+
+
+def _fogmiss_grid_x():
+    """The fog volume's columns, read from the engine's own header."""
+    with open(os.path.join(ROOT, "cetra", "src", "postfx.h")) as f:
+        return int(re.search(r"#define POSTFX_FROXEL_X\s+(\d+)", f.read()).group(1))
+
+
+def _fogmiss_target(yaw_deg):
+    yaw = math.radians(yaw_deg)
+    eye = FOGMISS_EYE
+    return (eye[0] + FOGMISS_DIST * math.sin(yaw), eye[1], eye[2] - FOGMISS_DIST * math.cos(yaw))
+
+
+def _fogmiss_pose(yaw_deg):
+    return ",".join(f"{c:g}" for c in FOGMISS_EYE) + "," + ",".join(
+        f"{c:.6f}" for c in _fogmiss_target(yaw_deg))
+
+
+def _fogmiss_missed(grid_x):
+    """The columns whose cells had no history on the last frame of the turn: a level camera
+    turning about its eye moves a cell by its column alone, so a column misses when its view
+    direction lay outside the previous frame's frustum."""
+    fovy = _cscn_camera(FOGMISS_FIXTURE)["fovy_deg"]
+    tan_h = math.tan(math.radians(fovy) / 2) * FOGMISS_SIZE[0] / FOGMISS_SIZE[1]
+    step = math.radians(FOGMISS_STEP)
+    return [c for c in range(grid_x)
+            if abs(math.tan(math.atan((2 * (c + 0.5) / grid_x - 1) * tan_h) + step)) > tan_h]
+
+
+def _fogmiss_run(workdir, tag, extra, turning):
+    """The fixture after the turn, or held at its last pose throughout; (image, log) or None."""
+    out = os.path.join(workdir, f"fogmiss_{tag}.ppm")
+    frames = FOGMISS_STILL + FOGMISS_STEPS
+    end = FOGMISS_YAW0 + FOGMISS_STEPS * FOGMISS_STEP
+    eye = ",".join(f"{c:g}" for c in FOGMISS_EYE)
+    if turning:
+        pose = ["--cam-eye", eye, "--cam-target",
+                ",".join(f"{c:.6f}" for c in _fogmiss_target(FOGMISS_YAW0))]
+        for k in range(FOGMISS_STEPS):
+            pose += ["--cam-at", f"{FOGMISS_STILL + k}:"
+                     + _fogmiss_pose(FOGMISS_YAW0 + (k + 1) * FOGMISS_STEP)]
+    else:
+        pose = ["--cam-eye", eye, "--cam-target",
+                ",".join(f"{c:.6f}" for c in _fogmiss_target(end))]
+    cmd = [RENDER, "-m", asset(FOGMISS_FIXTURE), "-x", "-f", str(frames), "-W",
+           str(FOGMISS_SIZE[0]), "-H", str(FOGMISS_SIZE[1]), "-S", out] + FOGMISS_ARGS + pose + extra
+    r = _run(cmd, capture_output=True, text=True)
+    if r.returncode != 0 or not os.path.exists(out):
+        return None, (r.stdout + r.stderr).strip()[-300:]
+    return _read_ppm(out), r.stdout + r.stderr
+
+
+def _fogmiss_columns(img, ref, grid_x):
+    """Each fog column's mean signed luma difference, in 8-bit codes: a band is an offset over
+    the whole column, which the mean keeps and pixel noise cancels out of."""
+    w, h, a = img
+    _, _, b = ref
+    weights = np.array([0.2126, 0.7152, 0.0722])
+    la = np.frombuffer(a, dtype=np.uint8, count=w * h * 3).reshape(h, w, 3) @ weights
+    lb = np.frombuffer(b, dtype=np.uint8, count=w * h * 3).reshape(h, w, 3) @ weights
+    per_x = (la - lb).mean(axis=0)
+    cols = np.arange(w) * grid_x // w
+    return [float(per_x[cols == c].mean()) for c in range(grid_x)]
+
+
+def run_fog_miss_gate(workdir):
+    """Fog cells without history while the camera turns (spec 13.45).
+
+      fog-miss-band      on the turn's last frame, the columns that missed history differ from
+                         the converged frame by no more than FOGMISS_RATIO_MAX of the clean
+                         columns' floor
+
+    The capture is closed form: a level camera turning about its eye moves every cell by its
+    column alone, so which columns missed is worked out here from the two cameras rather than
+    read back from the run it checks.
+    """
+    if not os.path.exists(asset(FOGMISS_FIXTURE)):
+        print(f"  fog-miss-band SKIP  {FOGMISS_FIXTURE} not found")
+        return []
+    failures = []
+    grid_x = _fogmiss_grid_x()
+    missed = _fogmiss_missed(grid_x)
+    swept = len(missed) * FOGMISS_STEPS
+    # Far from everything the turn swept, with two columns for the history's trilinear spread.
+    clean = list(range(0, max(0, grid_x - swept - 2)))
+    turned, turn_log = _fogmiss_run(workdir, "turn", [], True)
+    held, held_log = _fogmiss_run(workdir, "held", [], False)
+    if turned is None or held is None:
+        print(f"  fog-miss-band ERROR  {(turn_log if turned is None else held_log)[-300:]}")
+        failures.append("fog-miss-band")
+        return failures
+    d = _fogmiss_columns(turned, held, grid_x)
+    band = sum(abs(d[c]) for c in missed) / max(1, len(missed))
+    floor = sum(abs(d[c]) for c in clean) / max(1, len(clean))
+    ratio = band / max(floor, FOGMISS_FLOOR_MIN)
+    ok = bool(missed) and ratio <= FOGMISS_RATIO_MAX
+    print(f"  fog-miss-band {'PASS' if ok else 'FAIL'}  the {len(missed)} columns that missed "
+          f"history differ by {band:.3f} codes against the clean columns' {floor:.3f}: "
+          f"{ratio:.2f}x the floor (want <= {FOGMISS_RATIO_MAX})")
+    if not ok:
+        failures.append("fog-miss-band")
+    return failures
+
+
 def _gicook_png(path, rgb):
     """A 4x4 PNG of one colour, through the emissive fixture's writer."""
     gen = _import_fixture_gen("gen_emissive_fixture.py", group="gi-cook")
@@ -31375,6 +31495,8 @@ GATE_GROUPS = [
      run_lighting_stream_gate),
     ("gi-cook", "converged lighting kept on disk (GI sweeps, probe columns; spec 13.42):",
      run_gi_cook_gate),
+    ("fog-miss", "fog cells without history while the camera turns (spec 13.45):",
+     run_fog_miss_gate),
     ("decals", "clustered decals (projection, fade, surface, masks; spec 11.73):",
      run_decal_gate),
     ("config", "the session dumped to JSON and restored from it (spec 11.71):",
