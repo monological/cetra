@@ -797,6 +797,11 @@ static void on_init(Game* game) {
         house_front_door(&g_doors[DOOR_MANSION], engine, g_scene, em, physics, mansion_origin);
     prompt_start(&g_prompt, engine);
     load_seam(engine, "doors-prompt");
+    // Every static collider stands by now, and the cat's place check casts thousands of rays at
+    // them: unoptimised, the broadphase is a chain each ray walks body by body. What comes after --
+    // the cat's body, the player's -- the steps keep tidy.
+    physics_world_optimize(physics);
+    load_seam(engine, "physics-optimize");
     if (!g_args.no_cat) {
         CatDesc cat = {.at = g_args.cat_at,
                        .clip = g_args.cat_clip[0] ? g_args.cat_clip : NULL,
@@ -907,8 +912,6 @@ static void on_init(Game* game) {
 
     player_init(&g_player, game, physics, em, SPAWN_FEET, SPAWN_YAW);
     load_seam(engine, "player");
-    physics_world_optimize(physics);
-    load_seam(engine, "physics-optimize");
     // Sent somewhere or holding a clip from the command line, the cat has no mind of its own.
     if (g_cat.entity && !g_args.cat_go[0] && !g_args.cat_clip[0])
         cat_mind_create(&g_mind, &g_cat, game, &g_player, g_args.cat_seed, g_args.cat_blind,
