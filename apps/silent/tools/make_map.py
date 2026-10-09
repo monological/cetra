@@ -42,6 +42,8 @@ from make_cards import FONTS, HAND_FONT, SERIF_ITALIC, noise, pack
 PLAN = os.path.join(ROOT, "apps", "silent", "tools", "town_plan.txt")
 PRINT = os.path.join(OUT_DIR, "ui_town_map.png")
 MARKS = os.path.join(OUT_DIR, "ui_town_map_marks.png")
+FOLDED = os.path.join(OUT_DIR, "town_map_folded_%s.png")
+HEADER = os.path.join(ROOT, "apps", "silent", "src", "map_art.h")
 DEBUG = os.path.join(ROOT, "out", "town_map_debug.png")
 PREVIEW = os.path.join(ROOT, "out", "town_map_preview.png")
 
@@ -70,8 +72,12 @@ SCALE = (FRAME[2] - FRAME[0]) / 272.0  # output pixels a metre
 M = SCALE * SS  # canvas pixels a metre
 
 # The title's baseline middle, in output pixels: the empty corner past the world's edge, with
-# the compass and the scale beside it.
-TITLE = (1300, 1150)
+# the compass and the scale beside it, inside one fold's panel, which is the folded map's front.
+TITLE = (1275, 1110)
+# The folded map's two faces, as the sheet's (column, row) panels between its folds: the title's
+# panel in front, as a folded street map shows its title, and a panel of the town behind.
+FRONT_PANEL, BACK_PANEL = (2, 2), (1, 0)
+FOLDED_FACE = 512  # pixels a side of each face in the folded set
 FT = 3.28084  # feet a metre, for the scale
 
 NARROW_BOLD = FONTS + "ptsansnarrow/PT_Sans-Narrow-Web-Bold.ttf"
@@ -744,31 +750,37 @@ def draw_frame(sheet):
 
 
 def draw_title(sheet):
-    """The title in the empty corner past the world's edge, the compass beside it and a scale
-    under it."""
+    """The title in the empty corner past the world's edge, a word to a line so the whole block
+    fits the one panel the folded map shows in front; the compass beside it and a scale under
+    it."""
     cx, cy = TITLE[0] * SS, TITLE[1] * SS
     title = font(SLAB, 104)
-    tw = title.getlength(NAMES["town"])
-    ImageDraw.Draw(sheet.plain).text((cx, cy), NAMES["town"], font=title, fill=INK + (255,),
-                                     anchor="ms")
-    sheet.k.rectangle([cx - tw / 2, cy + 20 * SS, cx + tw / 2, cy + 24 * SS], fill=INK)
-    text_path(sheet.plain, [(cx - tw / 2, cy + 54 * SS), (cx + tw / 2, cy + 54 * SS)],
+    words = NAMES["town"].split()
+    tw = max(title.getlength(w) for w in words)
+    for i, word in enumerate(words):
+        ImageDraw.Draw(sheet.plain).text((cx, cy + 92 * SS * i), word, font=title,
+                                         fill=INK + (255,), anchor="ms")
+    y = cy + 92 * SS * (len(words) - 1)
+    sheet.k.rectangle([cx - tw / 2, y + 20 * SS, cx + tw / 2, y + 24 * SS], fill=INK)
+    text_path(sheet.plain, [(cx - tw / 2, y + 54 * SS), (cx + tw / 2, y + 54 * SS)],
               "STREET MAP", font(NARROW_BOLD, 32), INK, tracking=0.6)
-    text_at(sheet.plain, cx, cy + 96 * SS, "and Visitors' Guide", font(SERIF_ITALIC, 28), SOFT_INK)
-    text_at(sheet.plain, cx, cy + 136 * SS, NAMES["compliments"], font(NARROW, 15), SOFT_INK)
-    compass(sheet, cx + tw / 2 + 150 * SS, cy + 4 * SS)
+    text_at(sheet.plain, cx, y + 94 * SS, "and Visitors' Guide", font(SERIF_ITALIC, 28), SOFT_INK)
+    text_at(sheet.plain, cx, y + 130 * SS, NAMES["compliments"], font(NARROW, 15), SOFT_INK)
+    compass(sheet, cx + 330 * SS, cy + 40 * SS)
 
-    # The scale, in feet, under the title.
+    # The scale, in feet, under the title, centred with its unit.
+    small = font(NARROW, 14)
     seg = 50.0 / FT * M
     ticks = (0, 50, 100, 150, 200)
-    sx, sy = cx - seg * (len(ticks) - 1) / 2.0, cy + 186 * SS
+    bar = seg * (len(ticks) - 1)
+    unit = 14 * SS + small.getlength("FEET")
+    sx, sy = cx - (bar + unit) / 2.0, y + 172 * SS
     for i in range(len(ticks) - 1):
         sheet.k.rectangle([sx + seg * i, sy, sx + seg * (i + 1), sy + 6 * SS],
                           fill=INK if i % 2 == 0 else WHITE, outline=INK, width=SS)
     for i, t in enumerate(ticks):
-        text_at(sheet.plain, sx + seg * i, sy - 11 * SS, str(t), font(NARROW, 14), INK)
-    text_left(sheet.plain, sx + seg * (len(ticks) - 1) + 24 * SS, sy + 3 * SS, "FEET",
-              font(NARROW, 14), INK)
+        text_at(sheet.plain, sx + seg * i, sy - 11 * SS, str(t), small, INK)
+    text_left(sheet.plain, sx + bar + 14 * SS, sy + 3 * SS, "FEET", small, INK)
 
 
 def print_map(plan, rng):
@@ -918,7 +930,8 @@ def paper_relief(rng, vertical, horizontal):
 
 
 def age(ink, rng):
-    """The printed sheet, kept folded in a kitchen drawer for years, as RGBA in 0..1."""
+    """The printed sheet, kept folded in a kitchen drawer for years, as RGBA in 0..1, and the
+    folds it was kept in."""
     vertical, horizontal = folds(rng)
     alpha = sheet_alpha(rng, vertical, horizontal)
     yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
@@ -976,7 +989,7 @@ def age(ink, rng):
     a = (0.38 * np.exp(-edge / (22.0 * SS)) + 0.16 * np.exp(-edge / (60.0 * SS)))[..., None]
     out *= 1.0 - a * (1.0 - EDGE_BROWN)
     rgba = np.concatenate([np.clip(out, 0.0, 1.0), alpha[..., None].astype(np.float32)], axis=-1)
-    return rgba
+    return rgba, (vertical, horizontal)
 
 
 def window(out, centre, r):
@@ -1246,15 +1259,95 @@ def save(img, path):
                                               hashlib.sha256(data).hexdigest()[:16]))
 
 
+def folded_set(img, folds):
+    """The map as it hangs folded on the fridge: two of the sheet's panels cut along its own folds,
+    front and back side by side, over the paper's edge brown where the sheet is torn. A world
+    texture set like any other, so stored bottom row first, with a flat normal and a roughness
+    map small enough not to grow the engine's material array. Returns each face's UVs, V up."""
+    vertical, horizontal = folds
+    xs = [PAPER_INSET] + [f / SS for f, _, _ in vertical] + [OUT_W - PAPER_INSET]
+    ys = [PAPER_INSET] + [f / SS for f, _, _ in horizontal] + [OUT_H - PAPER_INSET]
+    edge = tuple(int(c * 255 + 0.5) for c in PAPER * EDGE_BROWN) + (255,)
+    flat = Image.alpha_composite(Image.new("RGBA", img.size, edge), img).convert("RGB")
+    albedo = Image.new("RGB", (2 * FOLDED_FACE, FOLDED_FACE))
+    faces = []
+    for k, (i, j) in enumerate((FRONT_PANEL, BACK_PANEL)):
+        box = tuple(int(round(v)) for v in (xs[i], ys[j], xs[i + 1], ys[j + 1]))
+        face = flat.crop(box).resize((FOLDED_FACE, FOLDED_FACE), Image.Resampling.LANCZOS)
+        albedo.paste(face, (k * FOLDED_FACE, 0))
+        faces.append((k / 2.0, 0.0, (k + 1) / 2.0, 1.0))
+    save(albedo.transpose(Image.Transpose.FLIP_TOP_BOTTOM), FOLDED % "albedo")
+    Image.new("RGB", (64, 32), (128, 128, 255)).save(FOLDED % "normal")
+    Image.new("RGB", (64, 32), (230, 230, 230)).save(FOLDED % "rough")
+    return faces
+
+
+def write_art(plan, marks, faces):
+    """map_art.h: the town map's row of the MapArt table town_map.h declares, as this run drew
+    it."""
+    def f(v):
+        return "%.6ff" % v
+
+    def rect(r):
+        return "{%s}" % ", ".join(f(v) for v in r)
+
+    lines = [
+        "// Generated by apps/silent/tools/make_map.py -- do not edit; rerun it.",
+        "// Included by town_map.c alone: it defines the table town_map.h declares.",
+        "#ifndef _SILENT_MAP_ART_H_",
+        "#define _SILENT_MAP_ART_H_",
+        "",
+        "const MapArt MAP_ART[MAP_COUNT] = {",
+        "    [MAP_TOWN] =",
+        "        {",
+        '            .print_file = "%s",' % os.path.basename(PRINT),
+        '            .marks_file = "%s",' % os.path.basename(MARKS),
+        "            .print_size = {%s, %s}," % (f(OUT_W), f(OUT_H)),
+        "            .marks_size = {%s, %s}," % (f(MARKS_W), f(MARKS_H)),
+        "            .origin = {%s, %s}," % (f(WORLD_X0), f(WORLD_Z0)),
+        "            .at = {%s, %s}," % (f(FRAME[0]), f(FRAME[1])),
+        "            .px_per_m = %s," % f(SCALE),
+        "            .arrow_frames = %d," % ARROW_FRAMES,
+        "            .arrow_cell = %d," % ARROW_CELL,
+        "            .arrow_cols = %d," % ARROW_COLS,
+        "            .mark_count = %d," % len(marks),
+        "            .marks =",
+        "                {",
+    ]
+    # Laid out as clang-format lays it, so the commit hook leaves the file as written.
+    for pid, pen, img, (x, y) in marks:
+        uv = (x / MARKS_W, y / MARKS_H, (x + img.width) / MARKS_W, (y + img.height) / MARKS_H)
+        lines += ["                    {PLACE_%s," % pid.upper().replace("-", "_"),
+                  "                     %s," % rect(uv),
+                  "                     {%s, %s}," % (f(img.width), f(img.height)),
+                  "                     {%s, %s}}," % (f(pen.anchor[0]), f(pen.anchor[1]))]
+    lines += [
+        "                },",
+        "            .folded_front = %s," % rect(faces[0]),
+        "            .folded_back = %s," % rect(faces[1]),
+        "            .seed = %du," % plan.seed,
+        "        },",
+        "};",
+        "",
+        "#endif // _SILENT_MAP_ART_H_",
+        "",
+    ]
+    with open(HEADER, "w") as out:
+        out.write("\n".join(lines))
+    print("make_map: %s" % os.path.relpath(HEADER, ROOT))
+
+
 def main():
     plan = Plan(PLAN)
     # The print, the paper and the ink each draw from their own stream, so a change to what is
     # printed leaves the paper's wear and the hand's strokes where they were.
     print_rng, paper_rng, ink_rng = (np.random.default_rng([SEED, k]) for k in range(3))
-    img = reduce(age(print_map(plan, print_rng), paper_rng))
+    sheet, folds = age(print_map(plan, print_rng), paper_rng)
+    img = reduce(sheet)
     save(img, PRINT)
     atlas, marks = draw_marks(plan, ink_rng)
     save(atlas, MARKS)
+    write_art(plan, marks, folded_set(img, folds))
     if "--debug" in sys.argv[1:]:
         debug_overlay(img, plan).save(DEBUG)
         arrow = atlas.crop((ARROW_CELL * 6, 0, ARROW_CELL * 7, ARROW_CELL))
