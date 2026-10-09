@@ -30043,15 +30043,19 @@ LSTREAM_PACED_EVERY = 10
 LSTREAM_PACED_AWAY = 50  # frames the paced walk spends in room 9
 LSTREAM_SINGLE_ARGS = ["--sky", "--sun-elevation", "-10", "--probe-scene"]
 LSTREAM_SINGLE_FRAMES = 20
-# Two per-frame shadowed spots and probes, with a GI volume of the flag's: one spot casts at
-# 4096 against the punctual budget and two at 2048, so a burst that puts one away at rest asks
-# for another edge than its frame (spec 13.44). Paced, a burst runs every frame.
+# Two per-frame shadowed spots and probes, with a GI volume of the flag's (spec 13.44). Paced, a
+# capture runs every frame, and its rest puts one spot away.
 LSTREAM_REST_FIXTURE = "cornell_rooms.cscn"
 LSTREAM_REST_LIGHT = "RoomsLampB"
 LSTREAM_REST_FRAMES = 60
-# The first frame's burst may build the array before its frame's own pass does, at the burst's
-# edge, and the frame then builds it again at its own; after that nothing may.
-LSTREAM_REST_MAX_BUILDS = 2
+# Each build of the punctual array the engine logs: its layers, its edge and its light layers.
+LSTREAM_ARRAY_BUILD = re.compile(
+    r"Punctual shadow array: (\d+) layer\(s\) at (\d+)\^2 .*? (\d+) light layer\(s\)")
+
+
+def _lstream_builds(text):
+    """Every build of the punctual array a run logged, as (layers, edge, light layers)."""
+    return [tuple(int(g) for g in m) for m in LSTREAM_ARRAY_BUILD.findall(text)]
 
 
 def _lstream_rooms():
@@ -30185,9 +30189,10 @@ def run_lighting_stream_gate(workdir):
                          unbudgeted walk's, digests and all
       stream-paced-single a world of one probe, paced a face a frame, is pending where the
                          unbudgeted run is captured, and lands on the same frame
-      capture-keeps-shadow-array  a burst whose rest puts a spot's shadow away keeps the
-                         punctual array its frame built: paced, a burst a frame, the array is
-                         built at most twice in sixty frames rather than twice in each (spec 13.44)
+      capture-keeps-shadow-array  captures whose rest puts one of two spots' shadows away keep
+                         the punctual array the frame laid out: paced, a capture a frame, the
+                         array is built once in sixty frames, at the two-light edge, which a copy
+                         with one spot casting shows to differ (spec 13.44)
 
     The walk teleports, which no player does: it is the worst case for every cap at once -- all
     of room 0's items leave and all of room 9's arrive in one frame -- and a walk can only ever
@@ -30197,7 +30202,9 @@ def run_lighting_stream_gate(workdir):
     first-come ranking reddens stream-nearest and stream-tiles; the 8-bit mask reddens
     stream-probes-16; forcing the classification flag to 1 reddens stream-classify; dropping the
     capture skip reddens stream-hidden; letting a capture run before its lights are shadowed
-    reddens stream-equal. At 13.25: the edge carried out without limit reddens stream-reach.
+    reddens stream-equal. At 13.25: the edge carried out without limit reddens stream-reach. At
+    13.44: a capture choosing the edge from its own layers builds the array 120 times in the sixty
+    frames of capture-keeps-shadow-array.
     """
     if not os.path.exists(asset(LSTREAM_FIXTURE)):
         print(f"  stream-equal SKIP  {LSTREAM_FIXTURE} not found")
@@ -30539,30 +30546,50 @@ def run_lighting_stream_gate(workdir):
         if not ok:
             failures.append("stream-paced-single")
 
-    # A rest that puts one of two spots' shadows away, as silent's puts its flashlight away: the
-    # burst's own shadow pass then has one per-frame layer where its frame has two, and an edge
-    # chosen from that rebuilt the array in the burst and again in the frame, every paced frame.
+    # A rest that puts one of two spots' shadows away, as an app puts its flashlight away: each
+    # capture's own pass then has one per-frame layer where the frame has two. The frame decides
+    # the edge before anything captures and every capture keeps it, so the array is built once, at
+    # the two-light edge, where an edge chosen by the capture rebuilt it there and again in the
+    # frame, every paced frame. A copy whose second spot never casts measures the one-light edge,
+    # so the premise that it differs is read rather than assumed from the budget, and the hook's
+    # own count says it ran in every capture.
+    if not os.path.exists(asset(LSTREAM_REST_FIXTURE)):
+        print(f"  capture-keeps-shadow-array SKIP  {LSTREAM_REST_FIXTURE} not found")
+        return failures
+
+    def one_spot(d):
+        for light in d["lights"]:
+            if light.get("name") == LSTREAM_REST_LIGHT:
+                light["cast_shadows"] = False
+
     rest = ["--gi-volume", "--capture-rest-unshadow", LSTREAM_REST_LIGHT,
-            "--stream-probe", str(LSTREAM_PACED_EVERY)]
+            "--stream-probe", str(LSTREAM_REST_FRAMES)]
     rest_shots, rest_text = _lstream_run(workdir, "rest_unshadow", rest + budget,
                                          LSTREAM_REST_FRAMES, fixture=LSTREAM_REST_FIXTURE)
-    if rest_shots is None:
-        print(f"  capture-keeps-shadow-array ERROR  {rest_text[-300:]}")
+    one_shots, one_text = _lstream_run(workdir, "rest_one_spot", ["--gi-volume"], 2,
+                                       mutate=one_spot, fixture=LSTREAM_REST_FIXTURE)
+    if rest_shots is None or one_shots is None:
+        print(f"  capture-keeps-shadow-array ERROR  "
+              f"{(rest_text if rest_shots is None else one_text)[-300:]}")
         failures.append("capture-keeps-shadow-array")
     else:
-        builds = rest_text.count("Punctual shadow array:")
-        # The volume still sweeping a row before the end says the bursts ran across the frames,
-        # a probe a frame, rather than in one.
-        row = LSTREAM_REST_FRAMES - LSTREAM_PACED_EVERY
-        captures = int(_lstream_rows(rest_text).get(row, {}).get("gi", {}).get(0, {})
-                       .get("captures", 0))
-        rest_paced = 10 < captures < LSTREAM_REST_FRAMES
-        ok = builds <= LSTREAM_REST_MAX_BUILDS and rest_paced
-        print(f"  capture-keeps-shadow-array {'PASS' if ok else 'FAIL'}  a burst a frame for "
-              f"{LSTREAM_REST_FRAMES} frames, its rest putting '{LSTREAM_REST_LIGHT}' away: the "
-              f"punctual array built {builds} time(s) (want <= {LSTREAM_REST_MAX_BUILDS}); "
-              f"{captures} GI probes captured by frame {row}, so the bursts were paced: "
-              f"{rest_paced}")
+        builds, alone = _lstream_builds(rest_text), _lstream_builds(one_text)
+        rests = re.search(r"capture-rest-unshadow rests=(\d+)", rest_text)
+        rests = int(rests.group(1)) if rests else 0
+        vol = _lstream_rows(rest_text).get(LSTREAM_REST_FRAMES, {}).get("gi", {}).get(0, {})
+        captures = int(vol.get("captures", 0))
+        # One GI probe a frame, the volume still sweeping, and the hook holding every capture.
+        paced = (vol.get("state") == "sweeping" and captures == LSTREAM_REST_FRAMES
+                 and rests >= captures)
+        premise = len(alone) == 1 and alone[0][2] == 1
+        kept = (premise and len(builds) == 1 and builds[0][2] == 2
+                and builds[0][1] != alone[0][1])
+        ok = kept and paced
+        print(f"  capture-keeps-shadow-array {'PASS' if ok else 'FAIL'}  a capture a frame for "
+              f"{LSTREAM_REST_FRAMES} frames, its rest putting '{LSTREAM_REST_LIGHT}' away "
+              f"({rests} rests, {captures} GI probes, volume {vol.get('state')}): the array built "
+              f"{builds} (want once, as (layers, edge, light layers), with 2 light layers), "
+              f"against one spot's edge {alone[0][1] if premise else alone} (want it to differ)")
         if not ok:
             failures.append("capture-keeps-shadow-array")
 

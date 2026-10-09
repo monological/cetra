@@ -119,12 +119,8 @@ static void _fold_scene(CookKey* key, Engine* engine, Scene* scene) {
     cook_key_f32(key, ibl ? ibl->intensity : 0.0f);
     cook_key_bool(key, ibl && ibl->reflect_fog);
     cook_key_f32s(key, scene->world_origin, 3);
-    // A light still casting at rest is drawn at the punctual array's edge, which a burst keeps
-    // from its frame (spec 13.44): the frame's own casters chose it, and nothing above states it.
-    const ShadowSystem* shadows = scene->shadow_system;
-    cook_key_i32(key, shadows && shadows->enabled && shadows->punctual_light_layers > 0
-                          ? shadows->punctual_map_size
-                          : 0);
+    // What a light still casting at rest is drawn at, which nothing above states (spec 13.44).
+    cook_key_i32(key, shadow_punctual_edge_drawn(scene->shadow_system));
 }
 
 /*

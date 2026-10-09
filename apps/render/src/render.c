@@ -3603,9 +3603,14 @@ void configure_sss_materials(Engine* engine, Scene* scene, float radius, const f
     }
 }
 
-// --capture-rest-unshadow's capture rest hook; `ctx` is the light.
+// The capture bursts _rest_unshadow has held at rest, printed at exit.
+static int g_rest_unshadow_count;
+
+// A capture rest hook: `ctx` is a Light that casts, which casts none at rest and casts again after.
 static void _rest_unshadow(bool rest, void* ctx) {
     ((Light*)ctx)->cast_shadows = !rest;
+    if (rest)
+        g_rest_unshadow_count++;
 }
 
 /*
@@ -5045,8 +5050,9 @@ int main(int argc, char** argv) {
         scene->gi->timing = args.capture_timing;
     }
     scene->cook_lighting = args.gi_cook;
-    // Refused outright rather than warned past: a run without the hook is the run it was asked
-    // to tell apart from.
+    // Refused outright rather than warned past, for two reasons: the hook's release casts again,
+    // which would give a light that never cast a shadow, and without a caster to put away the run
+    // is the one it was asked to tell apart from.
     if (args.capture_rest_unshadow) {
         Light* light = scene_find_light(scene, args.capture_rest_unshadow);
         if (!light || !light->cast_shadows) {
@@ -5425,6 +5431,8 @@ int main(int argc, char** argv) {
                               true);
     if (args.stream_probe > 0)
         stream_probe_print(scene, (int)engine->total_frames);
+    if (args.capture_rest_unshadow)
+        printf("capture-rest-unshadow rests=%d\n", g_rest_unshadow_count);
     if (args.decal_probe > 0)
         decal_probe_print(scene, (int)engine->total_frames, true,
                           light_cluster_decal_mask_digest(engine->light_cluster),
