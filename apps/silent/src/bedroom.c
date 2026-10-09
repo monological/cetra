@@ -3,6 +3,7 @@
 #include "cetra/light.h"
 
 #include "bedroom.h"
+#include "candles.h"
 #include "cards.h"
 #include "home.h"
 #include "mats.h"
@@ -195,7 +196,8 @@ static void bedside_things(Kit* kit, float a) {
 
 /*
  * The chest of drawers on the hall wall, facing the bed: a plinth, four graduated drawers with
- * two knobs each, an overhanging top, and on it a photograph in a frame on its stand.
+ * two knobs each, an overhanging top, and on it a photograph in a frame on its stand and a
+ * chamberstick, its candle half gone and burning, which is the light on this side of the room.
  */
 static void chest(Kit* kit) {
     const KitFrame f = {{BEDROOM_IN_X0 + OFF_WALL, FLOOR_Y, 0.5f * (CHEST_Z0 + CHEST_Z1)},
@@ -228,6 +230,7 @@ static void chest(Kit* kit) {
     const vec3 p_up = {0.0f, photo->size[1] * cosf(lean), -photo->size[1] * sinf(lean)};
     kit_frame_card(kit, &stand, MAT_CARDS, inset, (vec3){photo->size[0], 0.0f, 0.0f}, p_up,
                    photo->uv);
+    candle_chamber(kit, &f, -0.17f, CHEST_H, 0.25f, 0.07f);
 }
 
 void bedroom_build(Kit* kit, Engine* engine, Scene* scene) {
