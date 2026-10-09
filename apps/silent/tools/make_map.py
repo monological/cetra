@@ -2,8 +2,8 @@
 
 A visitors' street map of Pale Ridge, printed in four colours on cheap paper and kept folded in a
 kitchen for years: tan blocks and house footprints, pale streets with their names, the woods,
-the lake and the gorge, Blackwood Manor on its hill as the landmark, a legend and a street index
-in a box in the corner. Then the paper: its folds worn white, crumpled, stained by a mug and by
+the lake and the gorge, Blackwood Manor on its hill as the landmark, and the title in the empty
+corner with a compass and a scale. Kept plain, to be read at a glance. Then the paper: its folds worn white, crumpled, stained by a mug and by
 water, foxed, grimed where it was held, its edges torn and two holes worn through where the
 folds cross. And the ink the player adds: an X and a note at each road out of town that cannot
 be followed, the cabin sketched in by the lake, and a red arrow for where they stand.
@@ -61,20 +61,18 @@ W, H = OUT_W * SS, OUT_H * SS
 
 # The sheet inside the picture, in output pixels, leaving room round it for a torn edge.
 PAPER_INSET = 22
+# The fold crossings worn through, as (vertical fold, horizontal fold): two clear of any lettering.
+WORN_THROUGH = ((0, 0), (2, 1))
 # The printed frame, in output pixels, and the world it shows: x east and z south, in metres.
 FRAME = (100, 96, 1948, 1440)
 WORLD_X0, WORLD_Z0 = -127.0, -52.0
 SCALE = (FRAME[2] - FRAME[0]) / 272.0  # output pixels a metre
 M = SCALE * SS  # canvas pixels a metre
 
-# The legend's box, in output pixels, in the empty corner past the world's edge.
-LEGEND = (812, 1046, FRAME[2], FRAME[3])
-# The compass, in world metres: open hillside north of the drive.
-COMPASS = (131.0, -36.0)
-
-# Heights are metres from the street; the map prints feet above the sea.
-DATUM_FT = 612.0
-FT = 3.28084
+# The title's baseline middle, in output pixels: the empty corner past the world's edge, with
+# the compass and the scale beside it.
+TITLE = (1300, 1150)
+FT = 3.28084  # feet a metre, for the scale
 
 NARROW_BOLD = FONTS + "ptsansnarrow/PT_Sans-Narrow-Web-Bold.ttf"
 NARROW = FONTS + "ptsansnarrow/PT_Sans-Narrow-Web-Regular.ttf"
@@ -85,12 +83,9 @@ NAMES = {
     "street": "ALDER STREET",
     "cross": "MILL ROAD",
     "drive": "BLACKWOOD DRIVE",
-    "drive_index": "Blackwood Dr.",
     "track": "LAKE ROAD",
     "bridge": "GORGE BRIDGE",
     "house": "BLACKWOOD MANOR",
-    "house_year": "(1871)",
-    "house_poi": ("Blackwood Manor, 1871. Tours by", "appointment"),
     "hill": "Blackwood Hill",
     "graveyard": ("Old Hill", "Burying Ground"),
     "lake": "Calder Lake",
@@ -100,8 +95,7 @@ NAMES = {
     "south_woods": "Calder Woods",
     "north_road": "TO ROUTE 9",
     "west_road": "TO ASHGROVE",
-    "chamber": "Pale Ridge Chamber of Commerce",
-    "printer": "Printed by Calder Press, Pale Ridge  -  1987",
+    "compliments": "Compliments of the Pale Ridge Chamber of Commerce  -  1987",
 }
 
 
@@ -115,8 +109,6 @@ LOT_LINE = rgb(0.80, 0.69, 0.56)
 HOUSE_LIT = rgb(0.76, 0.60, 0.47)
 HOUSE_DARK = rgb(0.64, 0.49, 0.39)
 SHADOW = rgb(0.84, 0.74, 0.62)
-LANDMARK_LIT = rgb(0.72, 0.44, 0.37)
-LANDMARK_DARK = rgb(0.58, 0.33, 0.29)
 LAWN = rgb(0.80, 0.87, 0.67)
 WOODS = rgb(0.72, 0.82, 0.62)
 WATER = rgb(0.52, 0.76, 0.92)
@@ -130,7 +122,6 @@ CASING = rgb(0.56, 0.46, 0.36)
 CURB = rgb(0.80, 0.74, 0.66)
 CONTOUR = rgb(0.84, 0.73, 0.59)
 CONTOUR_INDEX = rgb(0.74, 0.60, 0.46)
-TREE = rgb(0.52, 0.64, 0.44)
 WOODS_INK = rgb(0.25, 0.37, 0.22)
 WATER_INK = rgb(0.26, 0.45, 0.56)
 WHITE = (255, 255, 255)
@@ -138,6 +129,7 @@ WHITE = (255, 255, 255)
 PAPER = np.array([0.95, 0.91, 0.80], dtype=np.float32)  # newsprint gone yellow
 BROWN = np.array([0.66, 0.47, 0.27], dtype=np.float32)  # what coffee and age leave
 GRIME = np.array([0.52, 0.48, 0.44], dtype=np.float32)
+EDGE_BROWN = np.array([0.74, 0.55, 0.36], dtype=np.float32)
 
 
 @functools.lru_cache(maxsize=None)
@@ -265,12 +257,6 @@ def grow(mask, r):
     return Image.fromarray(ndimage.maximum_filter(np.asarray(mask), size=2 * r + 1))
 
 
-def shrink(mask, r):
-    if r <= 0:
-        return mask
-    return Image.fromarray(ndimage.minimum_filter(np.asarray(mask), size=2 * r + 1))
-
-
 def as_array(mask):
     return np.asarray(mask, dtype=np.float32) / 255.0
 
@@ -385,14 +371,15 @@ def chasm_mask(plan):
 
 
 def draw_contours(sheet, plan, keep):
-    """Contour lines every metre, every fifth heavier, over the open ground. The gorge and the
-    world's edge carry no height worth drawing, so each of their cells takes its nearest
+    """Contour lines every two metres, every tenth metre heavier, over the open ground. The gorge
+    and the world's edge carry no height worth drawing, so each of their cells takes its nearest
     neighbour's before the field is smoothed."""
     valid = (plan.cover == ".") | (plan.cover == "t")
     _, (ri, ci) = ndimage.distance_transform_edt(~valid, return_indices=True)
     heights = ndimage.gaussian_filter(plan.height[ri, ci], 1.3)
     h = resample_grid(heights, plan, order=3)
-    for step, colour, width in ((1.0, CONTOUR, 1), (5.0, CONTOUR_INDEX, 2)):
+    keep = keep & (resample_grid(valid.astype(np.float32), plan, order=0) > 0.5)
+    for step, colour, width in ((2.0, CONTOUR, 1), (10.0, CONTOUR_INDEX, 2)):
         level = np.floor(h / step)
         edge = np.zeros((H, W), bool)
         edge[:, 1:] |= level[:, 1:] != level[:, :-1]
@@ -458,20 +445,6 @@ def draw_water_lines(sheet, water):
         band = inside & (np.abs(d - r - w / 2.0) < w / 2.0) if r > 0 else inside & (d < w)
         colour = tuple(int(c + (255 - c) * fade) for c in WATER_INK)
         sheet.line_mask(to_mask(band.astype(np.float32)), colour)
-
-
-def draw_trees(sheet, woods, rng):
-    """Small crowns scattered through the woods."""
-    inner = as_array(shrink(woods, int(1.6 * M))) > 0.5
-    step = 5.6 * M
-    for gy in np.arange(step * 0.5, H, step):
-        for gx in np.arange(step * 0.5, W, step):
-            x = gx + (rng.random() - 0.5) * step * 0.9
-            y = gy + (rng.random() - 0.5) * step * 0.9
-            if not (0 <= int(y) < H and 0 <= int(x) < W) or not inner[int(y), int(x)]:
-                continue
-            r = (0.65 + 0.35 * rng.random()) * M
-            sheet.k.ellipse([x - r, y - r, x + r, y + r], outline=TREE, width=SS)
 
 
 def street_boxes(plan):
@@ -592,9 +565,8 @@ def draw_lots(sheet, plan):
         sheet.k.line([px(x, z), px(x, z - 0.7)], fill=INK, width=SS)
 
 
-def draw_houses(sheet, plan, f_number):
-    """Each house as a gabled roof seen from above, lit from the north-west, with its shadow,
-    and its number on the lot between it and the street."""
+def draw_houses(sheet, plan):
+    """Each house as a gabled roof seen from above, lit from the north-west, with its shadow."""
     houses = plan.all("house") + plan.all("home")
     for b in houses:
         r = box_rect(b)
@@ -607,70 +579,27 @@ def draw_houses(sheet, plan, f_number):
         sheet.c.rectangle([mid, r[1], r[2], r[3]], fill=HOUSE_DARK)
         sheet.k.rectangle(r, outline=INK, width=SS + 1)
         sheet.k.line([(mid, r[1]), (mid, r[3])], fill=INK, width=SS)
-    # Odd numbers on the far side, even on the near, rising east from the crossroads.
-    for b in sorted(houses, key=lambda b: b[2]):
-        far = b[1].startswith("far")
-        k = int(b[1][-1])
-        number = 100 + 2 * k + (1 if far else 2)
-        z = b[4] - 1.6 if not far else b[5] + 1.6
-        x, y = px((b[2] + b[3]) / 2.0, z)
-        text_at(sheet.plain, x, y, str(number), f_number, SOFT_INK)
 
 
-def draw_grounds(sheet, plan, rng, f_label, f_small):
+def draw_grounds(sheet, plan, rng, f_label):
+    """The manor's grounds, fenced, with the gate the drive comes in by; the manor pictured on
+    them; and the burying ground down the hill."""
     grounds = plan.one("grounds", "mansion")
     sheet.c.rectangle(box_rect(grounds), fill=LAWN)
-    # A hedge all round but where the drive comes in through the gate.
     gate_x = plan.lines["drive"][1][-1, 0]
     x0, x1, z0, z1 = grounds[2] + 0.6, grounds[3] - 0.6, grounds[4] + 0.6, grounds[5] - 0.6
-    ring = [(x0, z0), (x1, z0), (x1, z1), (x0, z1), (x0, z0)]
-    for (ax, az), (bx, bz) in zip(ring, ring[1:]):
-        n = int(math.hypot(bx - ax, bz - az) / 0.9)
-        for i in range(n + 1):
-            x, z = ax + (bx - ax) * i / n, az + (bz - az) * i / n
-            if abs(z - z0) < 0.1 and abs(x - gate_x) < 2.8:
-                continue
-            cx, cy = px(x, z)
-            r = (0.42 + 0.12 * rng.random()) * M
-            sheet.k.ellipse([cx - r, cy - r, cx + r, cy + r], fill=TREE)
+    a, c = px(x0, z0), px(x1, z1)
+    sheet.k.rectangle([a[0], a[1], c[0], c[1]], outline=WOODS_INK, width=SS + 1)
+    sheet.k.line([px(gate_x - 2.8, z0), px(gate_x + 2.8, z0)], fill=WHITE, width=SS + 3)
     for side in (-1.0, 1.0):
         cx, cy = px(gate_x + side * 3.0, z0)
         r = 0.55 * M
         sheet.k.rectangle([cx - r, cy - r, cx + r, cy + r], fill=INK)
 
-    # The manor: a hipped roof, lit from the north-west, and the tower's spire.
     b = plan.one("landmark", "mansion")
-    x0, x1, z0, z1 = b[2], b[3], b[4], b[5]
-    half = (z1 - z0) / 2.0
-    ra, rb = (x0 + half, (z0 + z1) / 2.0), (x1 - half, (z0 + z1) / 2.0)
-    if ra[0] > rb[0]:
-        ra = rb = ((x0 + x1) / 2.0, (z0 + z1) / 2.0)
-    d = 0.6 * M
-    r = box_rect(b)
-    sheet.c.rectangle([r[0] + d, r[1] + d, r[2] + d, r[3] + d], fill=SHADOW)
-    faces = [([(x0, z0), (x1, z0), rb, ra], LANDMARK_LIT), ([(x0, z1), (x1, z1), rb, ra], LANDMARK_DARK),
-             ([(x0, z0), (x0, z1), ra], LANDMARK_LIT), ([(x1, z0), (x1, z1), rb], LANDMARK_DARK)]
-    for poly, colour in faces:
-        sheet.c.polygon([px(*p) for p in poly], fill=colour)
-    sheet.k.rectangle(r, outline=INK, width=SS + 1)
-    for p in ((x0, z0), (x1, z0), (x0, z1), (x1, z1)):
-        sheet.k.line([px(*p), px(*(ra if p[0] == x0 else rb))], fill=INK, width=SS)
-    sheet.k.line([px(*ra), px(*rb)], fill=INK, width=SS)
-    tower = plan.polys["tower"]
-    centre = tower.mean(axis=0)
-    for i in range(len(tower)):
-        a, c = tower[i], tower[(i + 1) % len(tower)]
-        mid = (a + c) / 2.0 - centre
-        lit = mid[0] + mid[1] < 0.0
-        sheet.c.polygon([px(*a), px(*c), px(*centre)], fill=LANDMARK_LIT if lit else LANDMARK_DARK)
-    sheet.k.polygon([px(*p) for p in tower], outline=INK, width=SS + 1)
-    for p in tower:
-        sheet.k.line([px(*p), px(*centre)], fill=INK, width=SS)
-
-    cx, cy = px((x0 + x1) / 2.0, z1 + 3.2)
+    draw_manor(sheet, b)
+    cx, cy = px((b[2] + b[3]) / 2.0, b[5] + 3.2)
     text_at(sheet.haloed, cx, cy, NAMES["house"], f_label, INK, tracking=0.12)
-    text_at(sheet.haloed, cx, cy + 0.95 * f_label.size, NAMES["house_year"], f_small, SOFT_INK)
-    poi(sheet, px(x1 + 2.8, (z0 + z1) / 2.0), 1)
 
     # The burying ground: its stones in rows, a fence round it.
     g = plan.one("graveyard", "graveyard")
@@ -682,8 +611,55 @@ def draw_grounds(sheet, plan, rng, f_label, f_small):
             sheet.k.line([(cx, cy - a), (cx, cy + a)], fill=SOFT_INK, width=SS)
             sheet.k.line([(cx - w, cy - a * 0.35), (cx + w, cy - a * 0.35)], fill=SOFT_INK, width=SS)
     dashed_rect(sheet.k, box_rect(g), 0.8 * M, SOFT_INK, SS + 1)
-    poi(sheet, px(g[3] + 2.2, g[4] - 1.0), 2)
     return g
+
+
+def draw_manor(sheet, b):
+    """The manor drawn standing, as a visitors' map pictures its sight: a steep gabled house of
+    dark boards, a gable brought forward over the door, and the tower with its spire at the
+    corner where the real one stands, the picture's foot on the house's south face."""
+    u = 0.65 * M  # canvas pixels to one of the drawing's units
+    bx, by = px((b[2] + b[3]) / 2.0, b[5])
+
+    def p(x, y):
+        return (bx + x * u, by - y * u)
+
+    wall, roof, spire = rgb(0.56, 0.52, 0.50), rgb(0.40, 0.38, 0.40), rgb(0.33, 0.31, 0.33)
+
+    def shape(points, fill):
+        sheet.c.polygon([p(*q) for q in points], fill=fill)
+        sheet.k.polygon([p(*q) for q in points], outline=INK, width=SS + 1)
+
+    def window(x, y, w=1.0, h=1.8):
+        pts = [(x - w / 2, y), (x - w / 2, y + h), (x, y + h + w * 0.7), (x + w / 2, y + h),
+               (x + w / 2, y)]
+        sheet.k.polygon([p(*q) for q in pts], fill=INK)
+
+    # The ground it stands on, a few tufts along it.
+    sheet.k.line([p(-15, 0), p(15, 0)], fill=INK, width=SS + 1)
+    for x in (-13.5, -12.2, 11.8, 13.4):
+        sheet.k.line([p(x, 0), p(x - 0.3, 0.8)], fill=WOODS_INK, width=SS)
+        sheet.k.line([p(x, 0), p(x + 0.4, 0.9)], fill=WOODS_INK, width=SS)
+    # Chimneys behind the roof, the house, its roof, the forward gable.
+    shape([(-1.0, 8), (-1.0, 13.6), (0.2, 13.6), (0.2, 8)], wall)
+    shape([(8.4, 7), (8.4, 11.6), (9.6, 11.6), (9.6, 7)], wall)
+    shape([(-6, 0), (-6, 7), (10, 7), (10, 0)], wall)
+    shape([(-6.8, 7), (2.0, 13.4), (10.8, 7)], roof)
+    shape([(2.6, 0), (2.6, 8.4), (8.4, 8.4), (8.4, 0)], wall)
+    shape([(2.0, 8.4), (5.5, 13.0), (9.0, 8.4)], roof)
+    # The tower: its shaft, a band under the spire, and the spire with its finial.
+    shape([(-11, 0), (-11, 12), (-6, 12), (-6, 0)], wall)
+    shape([(-11.6, 12), (-11.6, 13), (-5.4, 13), (-5.4, 12)], roof)
+    shape([(-11.4, 13), (-8.5, 22), (-5.6, 13)], spire)
+    sheet.k.line([p(-8.5, 22), p(-8.5, 23.6)], fill=INK, width=SS + 1)
+    # Windows in pointed arches, and the door under the gable.
+    for x in (-4.2, -1.4, 1.2):
+        window(x, 1.4)
+        window(x, 4.4)
+    window(5.5, 4.6, 1.2, 2.0)
+    for y in (2.0, 5.4, 8.8):
+        window(-8.5, y, 1.0, 1.6)
+    window(5.5, 0.0, 1.8, 2.4)
 
 
 def dashed_rect(draw, r, dash, fill, width):
@@ -694,21 +670,6 @@ def dashed_rect(draw, r, dash, fill, width):
             t0, t1 = i / n, min((i + 1) / n, 1.0)
             draw.line([(ax + (bx - ax) * t0, ay + (by - ay) * t0),
                        (ax + (bx - ax) * t1, ay + (by - ay) * t1)], fill=fill, width=width)
-
-
-def poi(sheet, at, number):
-    """A point of interest: its number in a ring, as the legend lists them."""
-    x, y = at
-    r = 1.45 * M
-    sheet.c.ellipse([x - r, y - r, x + r, y + r], fill=WHITE)
-    sheet.k.ellipse([x - r, y - r, x + r, y + r], outline=INK, width=SS + 1)
-    text_at(sheet.plain, x, y, str(number), font(NARROW_BOLD, 13), INK)
-
-
-def spot_height(sheet, x, y, feet, f):
-    r = 0.9 * M
-    sheet.k.polygon([(x, y - r), (x + r, y + r * 0.7), (x - r, y + r * 0.7)], fill=INK)
-    text_left(sheet.plain, x + 1.6 * r, y, "%d" % feet, f, SOFT_INK)
 
 
 def compass(sheet, x, y):
@@ -761,8 +722,6 @@ def draw_labels(sheet, plan, roads, creek, g):
     lake = plan.polys["shore"].mean(axis=0)
     text_at(sheet.haloed, *px(lake[0] - 1.0, lake[1] - 2.0), NAMES["lake"], font(SERIF_ITALIC, 34),
             WATER_INK, tracking=0.22)
-    text_at(sheet.plain, *px(lake[0] - 1.0, lake[1] + 4.0), "elev. %d ft" % (DATUM_FT - 12.0 * FT),
-            font(SERIF_ITALIC, 16), WATER_INK)
     text_path(sheet.knockout, [px(-87.0, 66.0), px(-87.0, 10.0)], NAMES["gorge"],
               font(NARROW_BOLD, 28), WHITE, tracking=0.45, upright=False)
     creek_px, creek_at = creek
@@ -776,194 +735,40 @@ def draw_labels(sheet, plan, roads, creek, g):
     text_at(sheet.haloed, gx, gy + 0.9 * f_small.size, NAMES["graveyard"][1], f_small, SOFT_INK)
 
 
-def draw_heights(sheet, plan):
-    """The hill's top as a spot height."""
-    gx0, gz0, step, cols, rows = plan.grid
-    open_ground = plan.cover == "."
-    zs = gz0 + step * (np.arange(rows) + 0.5)
-    xs = gx0 + step * (np.arange(cols) + 0.5)
-    inside = ((zs[:, None] > WORLD_Z0 + 6) & (xs[None, :] > 50.0) & (xs[None, :] < 128.0)
-              & (zs[:, None] < 30.0))
-    h = np.where(open_ground & inside, plan.height, -1e9)
-    j, i = np.unravel_index(np.argmax(h), h.shape)
-    x, y = px(xs[i], zs[j])
-    spot_height(sheet, x, y, DATUM_FT + h[j, i] * FT, font(NARROW, 15))
-
-
-def grid_ref(x, z):
-    """The margin grid's square a world point is in, as the index prints it."""
-    ox, oy = px(x, z)
-    col = int((ox / SS - FRAME[0]) / ((FRAME[2] - FRAME[0]) / 8))
-    row = int((oy / SS - FRAME[1]) / ((FRAME[3] - FRAME[1]) / 6))
-    return "%s%d" % ("ABCDEFGH"[min(max(col, 0), 7)], min(max(row, 0), 5) + 1)
-
-
 def draw_frame(sheet):
-    """The border, the grid letters and numbers round it."""
+    """The border: a heavy line round the map and a fine one outside it."""
     f = (FRAME[0] * SS, FRAME[1] * SS, FRAME[2] * SS, FRAME[3] * SS)
     sheet.k.rectangle(f, outline=INK, width=4 * SS)
     g = 9 * SS
     sheet.k.rectangle((f[0] - g, f[1] - g, f[2] + g, f[3] + g), outline=INK, width=SS + 1)
-    f_grid = font(NARROW_BOLD, 22)
-    cw, rh = (f[2] - f[0]) / 8.0, (f[3] - f[1]) / 6.0
-    for i in range(8):
-        x = f[0] + cw * (i + 0.5)
-        for y in (f[1] - 30 * SS, f[3] + 30 * SS):
-            text_at(sheet.plain, x, y, "ABCDEFGH"[i], f_grid, INK)
-        if i:
-            for y0, y1 in ((f[1] - g, f[1]), (f[3], f[3] + g)):
-                sheet.k.line([(f[0] + cw * i, y0), (f[0] + cw * i, y1)], fill=INK, width=SS + 1)
-    for j in range(6):
-        y = f[1] + rh * (j + 0.5)
-        for x in (f[0] - 30 * SS, f[2] + 30 * SS):
-            text_at(sheet.plain, x, y, str(j + 1), f_grid, INK)
-        if j:
-            for x0, x1 in ((f[0] - g, f[0]), (f[2], f[2] + g)):
-                sheet.k.line([(x0, f[1] + rh * j), (x1, f[1] + rh * j)], fill=INK, width=SS + 1)
 
 
-def draw_legend(sheet, plan):
-    """The box in the corner: the title, the legend, the points of interest, the street index
-    and the scale."""
-    L = [v * SS for v in LEGEND]
-    sheet.c.rectangle(L, fill=WHITE)
-    sheet.k.rectangle(L, fill=WHITE, outline=INK, width=4 * SS)
-    x0, y0 = L[0] + 26 * SS, L[1] + 22 * SS
+def draw_title(sheet):
+    """The title in the empty corner past the world's edge, the compass beside it and a scale
+    under it."""
+    cx, cy = TITLE[0] * SS, TITLE[1] * SS
+    title = font(SLAB, 104)
+    tw = title.getlength(NAMES["town"])
+    ImageDraw.Draw(sheet.plain).text((cx, cy), NAMES["town"], font=title, fill=INK + (255,),
+                                     anchor="ms")
+    sheet.k.rectangle([cx - tw / 2, cy + 20 * SS, cx + tw / 2, cy + 24 * SS], fill=INK)
+    text_path(sheet.plain, [(cx - tw / 2, cy + 54 * SS), (cx + tw / 2, cy + 54 * SS)],
+              "STREET MAP", font(NARROW_BOLD, 32), INK, tracking=0.6)
+    text_at(sheet.plain, cx, cy + 96 * SS, "and Visitors' Guide", font(SERIF_ITALIC, 28), SOFT_INK)
+    text_at(sheet.plain, cx, cy + 136 * SS, NAMES["compliments"], font(NARROW, 15), SOFT_INK)
+    compass(sheet, cx + tw / 2 + 150 * SS, cy + 4 * SS)
 
-    # The title, as large as the column holds.
-    tw = 400 * SS
-    size = 86
-    while font(SLAB, size).getlength(NAMES["town"]) > tw:
-        size -= 1
-    title = font(SLAB, size)
-    ImageDraw.Draw(sheet.plain).text((x0 + tw / 2, y0 + 50 * SS), NAMES["town"], font=title,
-                                     fill=INK + (255,), anchor="ms")
-    sheet.k.rectangle([x0, y0 + 98 * SS, x0 + tw, y0 + 102 * SS], fill=INK)
-    text_path(sheet.plain, [(x0, y0 + 126 * SS), (x0 + tw, y0 + 126 * SS)], "STREET MAP",
-              font(NARROW_BOLD, 30), INK, tracking=0.55)
-    text_at(sheet.plain, x0 + tw / 2, y0 + 164 * SS, "and Visitors' Guide", font(SERIF_ITALIC, 26),
-            SOFT_INK)
-    small = font(NARROW, 15)
-    for i, line in enumerate(("Compliments of the", NAMES["chamber"],
-                              "Main St. at the Square  -  Tel. 555-0143")):
-        text_at(sheet.plain, x0 + tw / 2, y0 + (210 + 19 * i) * SS, line, small, SOFT_INK)
-    text_at(sheet.plain, x0 + tw / 2, y0 + 290 * SS, NAMES["printer"], font(NARROW, 13), SOFT_INK)
-
-    # The legend.
-    lx = x0 + tw + 46 * SS
-    sheet.k.line([(lx - 22 * SS, L[1] + 16 * SS), (lx - 22 * SS, L[3] - 16 * SS)], fill=SOFT_INK,
-                 width=SS)
-    head = font(NARROW_BOLD, 19)
-    item = font(NARROW, 17)
-    text_left(sheet.plain, lx, y0 + 8 * SS, "LEGEND", head, INK)
-    rows = [("Residence", "house"), ("Public building, landmark", "landmark"),
-            ("Woods", "woods"), ("Park, grounds", "lawn"), ("Cemetery", "cemetery"),
-            ("Water", "water"), ("Paved road", "road"), ("Unpaved road", "track"),
-            ("Point of interest", "poi")]
-    for i, (label, kind) in enumerate(rows):
-        y = y0 + (40 + 30 * i) * SS
-        swatch(sheet, lx, y - 9 * SS, lx + 42 * SS, y + 9 * SS, kind)
-        text_left(sheet.plain, lx + 54 * SS, y, label, item, INK)
-
-    # The points of interest and the street index.
-    ix = lx + 260 * SS
-    sheet.k.line([(ix - 22 * SS, L[1] + 16 * SS), (ix - 22 * SS, L[3] - 16 * SS)], fill=SOFT_INK,
-                 width=SS)
-    text_left(sheet.plain, ix, y0 + 8 * SS, "POINTS OF INTEREST", head, INK)
-    pois = [NAMES["house_poi"],
-            (" ".join(NAMES["graveyard"]), None),
-            ("Calder Lake. Boats, fishing,", "summer cabins")]
-    y = y0 + 40 * SS
-    for i, (a, b) in enumerate(pois):
-        r = 1.45 * M
-        sheet.k.ellipse([ix - r + 10 * SS, y - r, ix + r + 10 * SS, y + r], outline=INK, width=SS + 1)
-        text_at(sheet.plain, ix + 10 * SS, y, str(i + 1), font(NARROW_BOLD, 13), INK)
-        text_left(sheet.plain, ix + 30 * SS, y, a, item, INK)
-        if b:
-            y += 21 * SS
-            text_left(sheet.plain, ix + 30 * SS, y, b, item, INK)
-        y += 28 * SS
-
-    y += 6 * SS
-    text_left(sheet.plain, ix, y, "STREET INDEX", head, INK)
-    street, cross = plan.one("asphalt", "street"), plan.one("asphalt", "cross")
-    drive = plan.lines["drive"][1]
-    track = plan.lines["track"][1]
-    index = [
-        ("Alder St.", grid_ref(street[2], 0.0), grid_ref(street[3], 0.0)),
-        (NAMES["drive_index"], grid_ref(*drive[0]), grid_ref(*drive[-1])),
-        ("Lake Rd.", grid_ref(*track[0]), grid_ref(*track[-1])),
-        ("Mill Rd.", grid_ref((cross[2] + cross[3]) / 2.0, WORLD_Z0 + 1.0),
-         grid_ref((cross[2] + cross[3]) / 2.0, cross[5])),
-    ]
-    width = 230 * SS
-    for name, a, b in index:
-        y += 22 * SS
-        refs = a if a == b else "%s-%s" % (a, b)
-        text_left(sheet.plain, ix, y, name, item, INK)
-        text_left(sheet.plain, ix + width, y, refs, item, INK, anchor="rm")
-        nx = ix + item.getlength(name) + 6 * SS
-        rx = ix + width - item.getlength(refs) - 6 * SS
-        for dx in np.arange(nx, rx, 7 * SS):
-            sheet.k.ellipse([dx - SS, y + 4 * SS, dx + SS, y + 6 * SS], fill=SOFT_INK)
-
-    # The scale, in feet and in metres.
-    sx, sy = ix, L[3] - 54 * SS
-    for unit, step, ticks, yy in (("FEET", 50.0 / FT, (0, 50, 100, 150), sy),
-                                  ("METRES", 10.0, (0, 10, 20, 30, 40), sy + 26 * SS)):
-        seg = step * M
-        n = len(ticks) - 1
-        for i in range(n):
-            fill = INK if i % 2 == 0 else WHITE
-            sheet.k.rectangle([sx + seg * i, yy, sx + seg * (i + 1), yy + 6 * SS], fill=fill,
-                              outline=INK, width=SS)
-        for i, t in enumerate(ticks):
-            text_at(sheet.plain, sx + seg * i, yy - 9 * SS if unit == "FEET" else yy + 16 * SS,
-                    str(t), font(NARROW, 13), INK)
-        text_left(sheet.plain, sx + seg * n + 10 * SS, yy + 3 * SS, unit, font(NARROW, 13), INK)
-
-
-def swatch(sheet, x0, y0, x1, y1, kind):
-    r = [x0, y0, x1, y1]
-    my = (y0 + y1) / 2.0
-    if kind == "house":
-        mid = (x0 + x1) / 2.0
-        sheet.c.rectangle([x0, y0, mid, y1], fill=HOUSE_LIT)
-        sheet.c.rectangle([mid, y0, x1, y1], fill=HOUSE_DARK)
-        sheet.k.rectangle(r, outline=INK, width=SS + 1)
-    elif kind == "landmark":
-        sheet.c.rectangle(r, fill=LANDMARK_LIT)
-        sheet.k.rectangle(r, outline=INK, width=SS + 1)
-    elif kind == "woods":
-        sheet.c.rectangle(r, fill=WOODS)
-        for cx in (x0 + 10 * SS, x0 + 22 * SS, x0 + 34 * SS):
-            sheet.k.ellipse([cx - 5 * SS, my - 5 * SS, cx + 5 * SS, my + 5 * SS], outline=TREE,
-                            width=SS + 1)
-    elif kind == "lawn":
-        sheet.c.rectangle(r, fill=LAWN)
-        sheet.k.rectangle(r, outline=TREE, width=SS + 1)
-    elif kind == "cemetery":
-        sheet.c.rectangle(r, fill=LAWN)
-        for cx in (x0 + 10 * SS, x0 + 21 * SS, x0 + 32 * SS):
-            sheet.k.line([(cx, my - 6 * SS), (cx, my + 6 * SS)], fill=SOFT_INK, width=SS)
-            sheet.k.line([(cx - 4 * SS, my - 2 * SS), (cx + 4 * SS, my - 2 * SS)], fill=SOFT_INK,
-                         width=SS)
-        dashed_rect(sheet.k, r, 5 * SS, SOFT_INK, SS)
-    elif kind == "water":
-        sheet.c.rectangle(r, fill=WATER)
-        sheet.k.rectangle(r, outline=WATER_INK, width=SS + 1)
-    elif kind == "road":
-        sheet.k.line([(x0, y0 + 3 * SS), (x1, y0 + 3 * SS)], fill=CASING, width=SS + 1)
-        sheet.k.line([(x0, y1 - 3 * SS), (x1, y1 - 3 * SS)], fill=CASING, width=SS + 1)
-    elif kind == "track":
-        for yy in (y0 + 4 * SS, y1 - 4 * SS):
-            for x in np.arange(x0, x1, 10 * SS):
-                sheet.k.line([(x, yy), (min(x + 5 * SS, x1), yy)], fill=CASING, width=SS + 1)
-    elif kind == "poi":
-        cx = (x0 + x1) / 2.0
-        rr = 1.45 * M
-        sheet.k.ellipse([cx - rr, my - rr, cx + rr, my + rr], outline=INK, width=SS + 1)
-        text_at(sheet.plain, cx, my, "1", font(NARROW_BOLD, 13), INK)
+    # The scale, in feet, under the title.
+    seg = 50.0 / FT * M
+    ticks = (0, 50, 100, 150, 200)
+    sx, sy = cx - seg * (len(ticks) - 1) / 2.0, cy + 186 * SS
+    for i in range(len(ticks) - 1):
+        sheet.k.rectangle([sx + seg * i, sy, sx + seg * (i + 1), sy + 6 * SS],
+                          fill=INK if i % 2 == 0 else WHITE, outline=INK, width=SS)
+    for i, t in enumerate(ticks):
+        text_at(sheet.plain, sx + seg * i, sy - 11 * SS, str(t), font(NARROW, 14), INK)
+    text_left(sheet.plain, sx + seg * (len(ticks) - 1) + 24 * SS, sy + 3 * SS, "FEET",
+              font(NARROW, 14), INK)
 
 
 def print_map(plan, rng):
@@ -978,17 +783,13 @@ def print_map(plan, rng):
         np.asarray(lots), np.asarray(fenced), np.asarray(roads.paved), np.asarray(roads.unpaved),
         np.asarray(water), np.asarray(chasm), np.asarray(woods)])), int(0.8 * M))) < 0.5)
     draw_contours(sheet, plan, keep)
-    draw_trees(sheet, woods, rng)
     creek = draw_gorge(sheet, plan, chasm, rng)
     draw_water_lines(sheet, water)
     draw_roads(sheet, plan, roads)
     draw_lots(sheet, plan)
-    draw_houses(sheet, plan, font(NARROW, 12))
-    g = draw_grounds(sheet, plan, rng, font(NARROW_BOLD, 21), font(SERIF_ITALIC, 16))
-    poi(sheet, px(*(plan.polys["shore"][np.argmin(plan.polys["shore"][:, 1])] + (8.0, -3.0))), 3)
-    draw_heights(sheet, plan)
+    draw_houses(sheet, plan)
+    g = draw_grounds(sheet, plan, rng, font(NARROW_BOLD, 21))
     draw_labels(sheet, plan, roads, creek, g)
-    compass(sheet, *px(*COMPASS))
 
     # Nothing of the map is printed past its frame.
     outside = Image.new("L", (W, H), 255)
@@ -998,7 +799,7 @@ def print_map(plan, rng):
     for layer in (sheet.haloed, sheet.plain, sheet.knockout):
         layer.paste((0, 0, 0, 0), mask=outside)
     draw_frame(sheet)
-    draw_legend(sheet, plan)
+    draw_title(sheet)
 
     # The lettering: knocked out of the key plate round the haloed, and left unprinted in the
     # colour plate where the gorge's name is.
@@ -1079,9 +880,8 @@ def sheet_alpha(rng, vertical, horizontal):
     pts += [(cx + 30 * SS, cy + 90 * SS), (cx + 30 * SS, cy - 30 * SS)]
     tear(pts)
     # Holes worn through where folds cross.
-    crossings = [(fv, fh) for fv, _, _ in vertical for fh, _, _ in horizontal]
-    for i in rng.choice(len(crossings), 2, replace=False):
-        x, y = crossings[i]
+    for i, j in WORN_THROUGH:
+        x, y = vertical[i][0], horizontal[j][0]
         k = 9
         r = rng.uniform(5, 9) * SS
         tear([(x + r * math.cos(2 * math.pi * j / k) * rng.uniform(0.5, 1.3),
@@ -1171,9 +971,10 @@ def age(ink, rng):
     out = foxing(out, rng)
     out = grime(out, rng, xx, yy)
 
-    # Browner and darker toward the edges, as handled paper goes.
-    out *= (1.0 - 0.30 * np.exp(-edge / (22.0 * SS)))[..., None]
-    out = out * (1.0 - 0.18 * np.exp(-edge / (60.0 * SS))[..., None] * (1.0 - BROWN / BROWN.max()))
+    # Browner toward the edges, as handled paper goes: toward a warm brown, since only taking
+    # blue and green away darkens yellowed paper to olive.
+    a = (0.38 * np.exp(-edge / (22.0 * SS)) + 0.16 * np.exp(-edge / (60.0 * SS)))[..., None]
+    out *= 1.0 - a * (1.0 - EDGE_BROWN)
     rgba = np.concatenate([np.clip(out, 0.0, 1.0), alpha[..., None].astype(np.float32)], axis=-1)
     return rgba
 
@@ -1447,10 +1248,12 @@ def save(img, path):
 
 def main():
     plan = Plan(PLAN)
-    rng = np.random.default_rng(SEED)
-    img = reduce(age(print_map(plan, rng), rng))
+    # The print, the paper and the ink each draw from their own stream, so a change to what is
+    # printed leaves the paper's wear and the hand's strokes where they were.
+    print_rng, paper_rng, ink_rng = (np.random.default_rng([SEED, k]) for k in range(3))
+    img = reduce(age(print_map(plan, print_rng), paper_rng))
     save(img, PRINT)
-    atlas, marks = draw_marks(plan, rng)
+    atlas, marks = draw_marks(plan, ink_rng)
     save(atlas, MARKS)
     if "--debug" in sys.argv[1:]:
         debug_overlay(img, plan).save(DEBUG)
