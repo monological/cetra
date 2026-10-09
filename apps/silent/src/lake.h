@@ -9,7 +9,7 @@
  */
 
 // Metres out from the shore the bed reaches wading depth, where a ring of bodies stops anyone
-// going further; past it nobody stands on the bed.
+// going further.
 #define LAKE_WADE_OUT 5.0f
 
 // `h`, the ground the rest of the world has at (x, z), with the valley carved into it: the
