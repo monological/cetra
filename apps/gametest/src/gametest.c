@@ -8412,8 +8412,7 @@ static bool ui_install(Engine* engine) {
     // The app carries its own GLSL, the apps/network precedent. Registered with
     // the engine's cache so the cache owns it; a failure is logged there and
     // leaves the backdrop as an ordinary panel rather than taking the menu down.
-    ui_backdrop_program =
-        create_program_from_source("ui_backdrop", UI_BACKDROP_VERT, UI_BACKDROP_FRAG, NULL);
+    ui_backdrop_program = create_ui_draw_program("ui_backdrop", UI_BACKDROP_FRAG);
     if (ui_backdrop_program)
         engine_add_program(engine, ui_backdrop_program);
 

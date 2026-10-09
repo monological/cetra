@@ -7,7 +7,7 @@
 #include "cetra/engine.h"
 #include "cetra/scene.h"
 
-#include "town_map.h"
+#include "kit.h"
 
 /*
  * The player's backpack (spec 13.40): an old canvas daypack lying on the bed in the home's
@@ -30,11 +30,11 @@ typedef enum { ITEM_NONE = -1, ITEM_FLASHLIGHT, ITEM_TOWN_MAP, ITEM_COUNT } Item
 #define BAG_SPARE    2 // empty rows always shown under what is carried
 
 typedef struct ItemSpec {
-    const char* id;   // as a command line names it
-    const char* name; // as the backpack's screen shows it
-    const char* line; // what the player knows about it
-    int cells[2];     // its footprint: across, down
-    MapId map;        // the map it is, or MAP_NONE
+    const char* id;          // as a command line names it
+    const char* name;        // as the backpack's screen shows it
+    const char* line;        // what the player knows about it
+    int cells[2];            // its footprint: across, down
+    void (*model)(Kit* kit); // its model alone, built in KIT_WORLD
 } ItemSpec;
 
 extern const ItemSpec ITEMS[ITEM_COUNT];

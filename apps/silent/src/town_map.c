@@ -12,7 +12,6 @@ const PlaceSpec PLACES[PLACE_COUNT] = {
     // The player's own house, circled the first time the map is opened, before anything they
     // found: marked in the middle of its footprint, which the print's house is drawn from.
     [PLACE_HOME] = {"home",
-                    MAP_TOWN,
                     {0.0f, 0.0f, 0.0f, 0.0f},
                     {0.5f * (HOUSE_OUT_X0 + HOUSE_OUT_X1), 0.5f * (HOUSE_OUT_Z0 + HOUSE_OUT_Z1)},
                     NULL,
@@ -22,7 +21,6 @@ const PlaceSpec PLACES[PLACE_COUNT] = {
     // The cross street's north arm, closed: found a few steps short of its barricade, anywhere
     // across the arm, and marked on the barricade's line.
     [PLACE_BARRICADE] = {"barricade",
-                         MAP_TOWN,
                          {CROSS_X0 + 1.0f, -STREET_HALF_LEN + 1.0f, CROSS_NORTH_Z - 0.5f,
                           CROSS_NORTH_Z + 5.5f},
                          {CROSS_X, CROSS_NORTH_Z - 1.5f},
@@ -32,7 +30,6 @@ const PlaceSpec PLACES[PLACE_COUNT] = {
     // The street straight on past the crossroads, where it breaks off at the chasm's lip: found
     // in the last few metres before the guard rail, and marked at the lip.
     [PLACE_ROAD_END] = {"road-end",
-                        MAP_TOWN,
                         {CROSS_X0 - 0.5f, CROSS_X0 + 6.0f, -(STREET_HALF_WIDTH + 1.0f),
                          STREET_HALF_WIDTH + 1.0f},
                         {CROSS_X0 - 0.5f, 0.0f},
@@ -42,7 +39,6 @@ const PlaceSpec PLACES[PLACE_COUNT] = {
     // The cabin on the lake's east shore: found from the track's last bend down onto its pad and
     // the bank, and marked where it stands. Said once.
     [PLACE_CABIN] = {"cabin",
-                     MAP_TOWN,
                      {CABIN_PAD_X0 - 11.0f, CABIN_PAD_X1 + 2.0f, CABIN_PAD_Z0 - 12.0f,
                       CABIN_PAD_Z1 + 3.0f},
                      {0.5f * (CABIN_X0 + CABIN_X1), 0.5f * (CABIN_Z0 + CABIN_Z1)},
@@ -79,7 +75,9 @@ PlaceId finds_arrive(Finds* f, const vec3 feet, bool* first) {
     return arrived;
 }
 
-void finds_have_map(Finds* f, MapId map) {
+bool finds_any(const Finds* f) {
     for (int i = 0; i < PLACE_COUNT; i++)
-        f->found[i] |= PLACES[i].known && PLACES[i].map == map;
+        if (f->found[i] && !PLACES[i].known)
+            return true;
+    return false;
 }

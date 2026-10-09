@@ -6,28 +6,6 @@
 #include "kit.h"
 #include "mats.h"
 
-const ItemSpec ITEMS[ITEM_COUNT] = {
-    [ITEM_FLASHLIGHT] = {"flashlight",
-                         "FLASHLIGHT",
-                         "A heavy metal flashlight, its black paint worn through at the grip. "
-                         "F turns it on and off.",
-                         {3, 1},
-                         MAP_NONE},
-    [ITEM_TOWN_MAP] = {"map",
-                       "TOWN MAP",
-                       "A folded street map of Pale Ridge, taken off the fridge door. "
-                       "M opens it.",
-                       {2, 2},
-                       MAP_TOWN},
-};
-
-ItemId item_by_id(const char* id) {
-    for (int i = 0; i < ITEM_COUNT; i++)
-        if (id && !strcmp(ITEMS[i].id, id))
-            return (ItemId)i;
-    return ITEM_NONE;
-}
-
 // How the bag lies on the quilt: its top toward the bed's head, turned a little off square,
 // rolled onto one side and sunk into the quilt, as something soft dropped on something soft.
 #define BAG_YAW  (0.5f * GLM_PIf + 0.35f)
@@ -123,6 +101,33 @@ static void flashlight(Kit* kit) {
                        0.0f);
 }
 
+// The town map folded, turned a quarter so the grid's side-on picture of it is its cover.
+static void town_map(Kit* kit) {
+    fridge_map_closed(kit, &KIT_WORLD_Z);
+}
+
+const ItemSpec ITEMS[ITEM_COUNT] = {
+    [ITEM_FLASHLIGHT] = {"flashlight",
+                         "FLASHLIGHT",
+                         "A heavy metal flashlight, its black paint worn through at the grip. "
+                         "F turns it on and off.",
+                         {3, 1},
+                         flashlight},
+    [ITEM_TOWN_MAP] = {"map",
+                       "TOWN MAP",
+                       "A folded street map of Pale Ridge, taken off the fridge door. "
+                       "M opens it.",
+                       {2, 2},
+                       town_map},
+};
+
+ItemId item_by_id(const char* id) {
+    for (int i = 0; i < ITEM_COUNT; i++)
+        if (id && !strcmp(ITEMS[i].id, id))
+            return (ItemId)i;
+    return ITEM_NONE;
+}
+
 // What the bag holds when it is found.
 static const ItemId CONTENTS[] = {ITEM_FLASHLIGHT};
 
@@ -198,9 +203,7 @@ static void pack(Backpack* bp) {
 // The bag's contents into the grid.
 static void unpack(Backpack* bp) {
     for (int i = 0; i < KIT_COUNT(CONTENTS); i++)
-        if (!backpack_holds(bp, CONTENTS[i]))
-            bp->held[bp->held_count++] = CONTENTS[i];
-    pack(bp);
+        backpack_add(bp, CONTENTS[i]);
 }
 
 void backpack_build(Backpack* bp, Engine* engine, Scene* scene, bool taken) {
@@ -211,11 +214,27 @@ void backpack_build(Backpack* bp, Engine* engine, Scene* scene, bool taken) {
     bedroom_bed_top(rest);
     glm_vec3_copy(rest, bp->at);
     bp->at[1] += BAG_REACH_Y;
+    // Every model, each only ever drawn alone, and the bag on the bed while it lies there: one kit
+    // apiece, beside the first, so the materials are made once and those none of them used freed
+    // after. Every kit is made before any is finished, which would free what it did not use.
+    Kit kits[ITEM_COUNT + 1];
+    Kit* finished[ITEM_COUNT + 1];
+    const int n = taken ? ITEM_COUNT : ITEM_COUNT + 1;
+    mats_kit(&kits[0], engine, scene);
+    for (int i = 0; i < n; i++) {
+        if (i > 0)
+            kit_init_beside(&kits[i], &kits[0], GLM_VEC3_ZERO);
+        finished[i] = &kits[i];
+    }
+    for (int i = 0; i < ITEM_COUNT; i++) {
+        kits[i].casts_nothing = true;
+        ITEMS[i].model(&kits[i]);
+        bp->models[i] = kit_finish_alone(&kits[i], ITEMS[i].id);
+    }
     if (!taken) {
-        Kit kit;
-        mats_kit(&kit, engine, scene);
-        bag(&kit);
-        bp->bag = kit_finish(&kit, "backpack");
+        Kit* kit = &kits[ITEM_COUNT];
+        bag(kit);
+        bp->bag = kit_finish(kit, "backpack");
         // No capture keeps it: it is taken while the game runs.
         bp->bag->capture_hidden = true;
         glm_translate_make(bp->bag->original_transform,
@@ -223,17 +242,7 @@ void backpack_build(Backpack* bp, Engine* engine, Scene* scene, bool taken) {
         glm_rotate_y(bp->bag->original_transform, BAG_YAW, bp->bag->original_transform);
         glm_rotate_z(bp->bag->original_transform, BAG_ROLL, bp->bag->original_transform);
     }
-    // Only ever drawn alone, on the backpack's screen.
-    Kit kit;
-    mats_kit(&kit, engine, scene);
-    kit.casts_nothing = true;
-    flashlight(&kit);
-    bp->models[ITEM_FLASHLIGHT] = kit_finish_alone(&kit, "flashlight");
-    // Turned a quarter, so the grid's side-on picture of it is its cover.
-    mats_kit(&kit, engine, scene);
-    kit.casts_nothing = true;
-    fridge_map_closed(&kit, &KIT_WORLD_Z);
-    bp->models[ITEM_TOWN_MAP] = kit_finish_alone(&kit, "town_map_model");
+    kit_free_unused(finished, n);
 }
 
 void backpack_take(Backpack* bp) {

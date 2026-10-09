@@ -56,9 +56,8 @@
 #include "clock.h"
 #include "crossroads.h"
 #include "door.h"
-#include "fridge_map.h"
-#include "map_screen.h"
 #include "fences.h"
+#include "fridge_map.h"
 #include "grounds.h"
 #include "hearth.h"
 #include "hill.h"
@@ -73,6 +72,7 @@
 #include "layout.h"
 #include "lights.h"
 #include "mansion.h"
+#include "map_screen.h"
 #include "mats.h"
 #include "player.h"
 #include "rain_bed.h"
@@ -80,6 +80,7 @@
 #include "street.h"
 #include "study.h"
 #include "terrace.h"
+#include "town_map.h"
 #include "town_plan.h"
 #include "trees.h"
 #include "tv.h"
@@ -261,6 +262,7 @@ static Finds g_finds;
 
 // How long the prompt names a key once what it opens is had: Tab for the backpack, M for the map.
 #define HINT_SECONDS 5.0f
+#define MAP_HINT     "M   Map"
 
 // --audio-dump: the offline mix, pulled a frame's worth at a time so it keeps
 // step with the sim clock, as interleaved stereo at the engine's rate.
@@ -818,9 +820,10 @@ static void on_init(Game* game) {
     FenceBreaches breaches;
     fences_build(&kit, (unsigned int)g_args.seed, &plots, &breaches);
     load_seam(engine, "fences");
-    // The town's plan for its map (spec 13.43), while the street's plots are known.
+    // The town's plan for its map (spec 13.43), while the street's plots are known: the whole of a
+    // run that asks for it.
     if (g_args.map_export)
-        town_plan_write(g_args.map_export, &plots, (unsigned int)g_args.seed);
+        exit(town_plan_write(g_args.map_export, &plots, (unsigned int)g_args.seed) ? 0 : 1);
     crossroads_build(&kit, g_scene, !g_args.day, &g_failing[FAILING_LIP]);
     load_seam(engine, "crossroads");
     Trees trees;
@@ -909,6 +912,10 @@ static void on_init(Game* game) {
     fridge_map_build(&g_fridge_map, engine, g_scene, g_args.map);
     if (g_args.map)
         backpack_add(&g_backpack, ITEM_TOWN_MAP);
+    // The map's print shows one seed's street, and another seed builds other houses.
+    if ((unsigned int)g_args.seed != MAP_ART[MAP_TOWN].seed)
+        fprintf(stderr, "silent: the town map shows seed %u's street, not seed %d's\n",
+                MAP_ART[MAP_TOWN].seed, g_args.seed);
     hud_start(&g_hud, engine);
     backpack_menu_start(&g_menu, g_hud.ui, g_hud.font, &g_backpack);
     map_screen_start(&g_map_screen, g_hud.ui, engine, g_scene->tex_pool);
@@ -917,10 +924,8 @@ static void on_init(Game* game) {
         backpack_menu_choose(&g_menu, g_args.open_backpack);
     }
     memcpy(g_finds.found, g_args.found, sizeof(g_finds.found));
-    if (g_args.map)
-        finds_have_map(&g_finds, MAP_TOWN);
     if (g_args.open_map)
-        map_screen_show(&g_map_screen, MAP_TOWN, g_args.open_backpack != ITEM_NONE, g_finds.found);
+        map_screen_show(&g_map_screen, MAP_TOWN, g_finds.found);
     load_seam(engine, "backpack-hud");
     // Every static collider stands by now, and the cat's place check casts thousands of rays at
     // them: unoptimised, the broadphase is a chain each ray walks body by body. What comes after --
@@ -1114,7 +1119,7 @@ static void on_update(Game* game, double dt) {
         if (thought)
             hud_think(&g_hud, thought);
         if (first && mapped)
-            hud_hint(&g_hud, "M   Map", HINT_SECONDS);
+            hud_hint(&g_hud, MAP_HINT, HINT_SECONDS);
     }
     for (int i = 0; i < DOORS; i++)
         if (g_door_hung[i])
@@ -1188,6 +1193,23 @@ static bool write_dump(const char* path) {
     return fclose(f) == 0;
 }
 
+// What the action key would act on: the nearest of what is in reach, a door to swing or a thing to
+// take, `prompt` naming the taking.
+typedef struct Reach {
+    float d;
+    Door* door;
+    void (*take)(void);
+    const char* prompt;
+} Reach;
+
+// `at` in the running for `reach`, as a door or a thing to take.
+static void reach_offer(Reach* reach, const vec3 at, Door* door, void (*take)(void),
+                        const char* prompt) {
+    const float d = player_reach_distance(&g_player, at);
+    if (d < reach->d)
+        *reach = (Reach){d, door, take, prompt};
+}
+
 // The bag off the bed (spec 13.40): the player has it and what is in it, and says so.
 static void take_backpack(void) {
     backpack_take(&g_backpack);
@@ -1197,21 +1219,16 @@ static void take_backpack(void) {
 
 // The map off the fridge (spec 13.43): into the backpack, once there is a backpack to put it in.
 static void take_map(void) {
-    if (!g_backpack.taken) {
+    if (!backpack_add(&g_backpack, ITEM_TOWN_MAP)) {
         hud_think(
             &g_hud,
             "I don't have anywhere to put this. Maybe I should find a backpack or something.");
         return;
     }
     fridge_map_take(&g_fridge_map);
-    backpack_add(&g_backpack, ITEM_TOWN_MAP);
-    bool found = false;
-    for (int i = 0; i < PLACE_COUNT; i++)
-        found |= g_finds.found[i];
-    finds_have_map(&g_finds, MAP_TOWN);
-    hud_think(&g_hud, found ? "A map of the town. I'll mark what I've found on it."
-                            : "A map of the town. That'll come in handy.");
-    hud_hint(&g_hud, "M   Map", HINT_SECONDS);
+    hud_think(&g_hud, finds_any(&g_finds) ? "A map of the town. I'll mark what I've found on it."
+                                          : "A map of the town. That'll come in handy.");
+    hud_hint(&g_hud, MAP_HINT, HINT_SECONDS);
 }
 
 static void on_pre_render(Game* game, double alpha) {
@@ -1247,43 +1264,25 @@ static void on_pre_render(Game* game, double alpha) {
 
     // The nearest thing the player is looking at in reach -- a door, the backpack on the bed or the
     // map on the fridge -- says what the action key would do to it, and the key does it.
-    Door* door = NULL;
-    float nearest = FLT_MAX;
-    for (int i = 0; i < DOORS; i++) {
-        const float d = g_door_hung[i]
-                            ? player_reach_distance(&g_player, g_doors[i].entity->position)
-                            : FLT_MAX;
-        if (d < nearest) {
-            nearest = d;
-            door = &g_doors[i];
-        }
-    }
-    enum { REACH_DOOR, REACH_BAG, REACH_MAP } reach = REACH_DOOR;
-    const float bag_d =
-        g_backpack.taken ? FLT_MAX : player_reach_distance(&g_player, g_backpack.at);
-    if (bag_d < nearest) {
-        nearest = bag_d;
-        reach = REACH_BAG;
-    }
-    const float map_d =
-        g_fridge_map.taken ? FLT_MAX : player_reach_distance(&g_player, g_fridge_map.at);
-    if (map_d < nearest)
-        reach = REACH_MAP;
-    if (reach != REACH_DOOR)
-        door = NULL;
+    Reach reach = {.d = FLT_MAX};
+    for (int i = 0; i < DOORS; i++)
+        if (g_door_hung[i])
+            reach_offer(&reach, g_doors[i].entity->position, &g_doors[i], NULL, NULL);
+    if (!g_backpack.taken)
+        reach_offer(&reach, g_backpack.at, NULL, take_backpack, "E   Take the backpack");
+    if (g_fridge_map.node)
+        reach_offer(&reach, g_fridge_map.at, NULL, take_map, "E   Take the map");
     if (input_action_pressed(&game->input, "interact")) {
-        if (reach == REACH_BAG)
-            take_backpack();
-        else if (reach == REACH_MAP)
-            take_map();
-        else if (door)
-            door_toggle(door);
+        if (reach.take)
+            reach.take();
+        else if (reach.door)
+            door_toggle(reach.door);
     }
     const float dt = (float)game->sim_clock.delta;
-    hud_prompt(&g_hud, reach == REACH_BAG   ? "E   Take the backpack"
-                       : reach == REACH_MAP ? "E   Take the map"
-                       : door ? (door_will_open(door) ? "E   Open door" : "E   Close door")
-                              : NULL);
+    hud_prompt(&g_hud, reach.take ? reach.prompt
+                       : reach.door
+                           ? (door_will_open(reach.door) ? "E   Open door" : "E   Close door")
+                           : NULL);
     hud_update(&g_hud, dt, (float)engine->win_height);
     backpack_menu_update(&g_menu, dt);
     map_screen_update(&g_map_screen, dt, feet, forward);
@@ -1356,27 +1355,22 @@ static void on_pre_render(Game* game, double alpha) {
 }
 
 /*
- * Before the fixed steps: nobody moves under the loading screen, or while the backpack's screen is
- * up (spec 13.40). Tab opens that screen once the backpack is had; Tab or Escape shuts it, through
- * the UI's own back. Here and not in a later hook, so the frame that opens it walks no step. The
- * game's input is held through the frame that shuts it too, so the key that shut it reaches
- * nothing else: Escape frees the cursor only with no screen up, and the cursor the player frees
- * while the input is held comes back after.
- */
-/*
  * The screens over the game (specs 13.40 and 13.43), what is on top deciding what a key does:
  *
  *   on top        Tab                     M                         Escape / pad B
  *   the game      the bag, if had         the map, if had           frees the cursor
  *   the bag       closes it               the map over the bag      closes it
- *   the map       closes it, then the     closes it                 closes it
- *                 bag -- unless it was
- *                 over the bag, where
- *                 it goes back to it
+ *   the map       closes it, and the bag  closes it                 closes it
+ *                 comes up if it was not
+ *                 already under it
  *
- * Every close is the UI's own back, which pops only a modal screen, so the HUD under them is never
- * taken down; and the state is read from what is on top at the frame's start, so the key that
- * opened a screen cannot close it in the same frame.
+ * A close is the UI's own back, which pops what is on top and is raised only while the bag or the
+ * map is, so the HUD under them is never taken down. The state is read from what is on top at the
+ * frame's start, so the key that opened a screen cannot close it in the same frame. Here, before
+ * the fixed steps, so nobody moves under the loading screen or a screen, and the frame that opens
+ * one walks no step. The game's input is held through the frame that shuts one too, so the key
+ * that shut it reaches nothing else: Escape frees the cursor only with no screen up, and the
+ * cursor the player frees while the input is held comes back after.
  */
 static void on_frame_input(Game* game) {
     Engine* engine = game->engine;
@@ -1391,11 +1385,11 @@ static void on_frame_input(Game* game) {
     bool back = false, bag_after = false;
     if (map_up) {
         back = tab || m || esc;
-        bag_after = tab && !g_map_screen.over_bag;
+        bag_after = tab;
     } else if (bag_up) {
         back = tab || esc;
         if (m && have_map)
-            map_screen_show(&g_map_screen, MAP_TOWN, true, g_finds.found);
+            map_screen_show(&g_map_screen, MAP_TOWN, g_finds.found);
     } else {
         if (tab) {
             if (g_backpack.taken)
@@ -1405,7 +1399,7 @@ static void on_frame_input(Game* game) {
         }
         if (m) {
             if (have_map)
-                map_screen_show(&g_map_screen, MAP_TOWN, false, g_finds.found);
+                map_screen_show(&g_map_screen, MAP_TOWN, g_finds.found);
             else
                 hud_think(&g_hud, "I don't have a map.");
         }
@@ -1430,6 +1424,7 @@ static void on_frame_input(Game* game) {
     backpack_menu_layout(&g_menu, w, h, w > 0.0f ? (float)engine->fb_width / w : 1.0f);
     map_screen_layout(&g_map_screen, w, h);
     ui_update(g_hud.ui, &in, w, h);
+    // Nothing to do when the map was over the bag, which its pop has just put back on top.
     if (bag_after)
         backpack_menu_show(&g_menu);
     backpack_menu_input(&g_menu, &in);
@@ -1681,26 +1676,24 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
             a->backpack = true;
         } else if (!strcmp(s, "--map")) {
             a->map = true;
-            a->backpack = true;
         } else if (!strcmp(s, "--open-map")) {
             a->open_map = true;
-            a->map = true;
-            a->backpack = true;
         } else if (!strcmp(s, "--found") && has_next) {
             char list[128];
             snprintf(list, sizeof(list), "%s", argv[++i]);
             for (const char* id = strtok(list, ","); id; id = strtok(NULL, ",")) {
                 const PlaceId p = place_by_id(id);
-                for (int k = 0; k < PLACE_COUNT; k++)
-                    a->found[k] |= !strcmp(id, "all") || k == (int)p;
-                if (p == PLACE_NONE && strcmp(id, "all"))
+                if (!strcmp(id, "all"))
+                    for (int k = 0; k < PLACE_COUNT; k++)
+                        a->found[k] = true;
+                else if (p != PLACE_NONE)
+                    a->found[p] = true;
+                else
                     fprintf(stderr, "silent: --found names no place '%s'\n", id);
             }
         } else if (!strcmp(s, "--open-backpack") && has_next) {
             a->open_backpack = item_by_id(argv[++i]);
             a->backpack = true;
-            // Only what is held can be chosen, and the map is had only off the fridge.
-            a->map |= a->open_backpack == ITEM_TOWN_MAP;
             if (a->open_backpack == ITEM_NONE)
                 fprintf(stderr, "silent: --open-backpack names no item; leaving it shut\n");
         } else if (!strcmp(s, "--mute")) {
@@ -1799,11 +1792,13 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
                         "ignoring it\n");
         a->audio_dump = NULL;
     }
-    // The plan is written while the world is built: one hidden frame is all it needs.
+    // Only what is held can be opened or chosen, the map is had only off the fridge, and it is
+    // carried in the backpack.
+    a->map |= a->open_map || a->open_backpack == ITEM_TOWN_MAP;
+    a->backpack |= a->map;
+    // The plan is written while the world is built, and the run stops there.
     if (a->map_export) {
         a->headless = true;
-        a->frames = 1;
-        a->no_cat = true;
         a->no_loading_screen = true;
     }
     return true;

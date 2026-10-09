@@ -1346,6 +1346,14 @@ ShaderProgram* create_ui_program() {
     return program;
 }
 
+ShaderProgram* create_ui_draw_program(const char* name, const char* frag_source) {
+    ShaderProgram* program =
+        create_program_from_source(name, ui_vert_shader_str, frag_source, NULL);
+    if (!program)
+        log_error("Failed to initialize ui draw program %s", name ? name : "?");
+    return program;
+}
+
 ShaderProgram* create_bone_program() {
     ShaderProgram* program = NULL;
 

@@ -30,6 +30,17 @@ static void box(FILE* f, const char* kind, const char* name, float x0, float x1,
     fprintf(f, "box %s %s %.3f %.3f %.3f %.3f\n", kind, name, x0, x1, z0, z1);
 }
 
+// `n` points along a curve to the end of its record: `at` takes 0..1 along an open one, and a
+// bearing round a closed one, to its point.
+static void points(FILE* f, int n, bool closed, void (*at)(float t, float* x, float* z)) {
+    for (int k = 0; k < n; k++) {
+        float x = 0.0f, z = 0.0f;
+        at(closed ? 2.0f * GLM_PIf * (float)k / (float)n : (float)k / (float)(n - 1), &x, &z);
+        fprintf(f, " %.3f %.3f", x, z);
+    }
+    fputc('\n', f);
+}
+
 static void plot(FILE* f, const char* kind, const char* side, int lot, const HousePlot* p) {
     if (street_lot_vacant(p))
         return;
@@ -94,8 +105,10 @@ bool town_plan_write(const char* path, const StreetPlots* plots, unsigned int se
 
     // Up the hill: the grounds, the mansion, and the graveyard by the drive.
     box(f, "grounds", "mansion", GROUNDS_X0, GROUNDS_X1, GROUNDS_Z0, GROUNDS_Z1);
-    box(f, "landmark", "mansion", HOUSE_OUT_X0 + MANSION_X, HOUSE_OUT_X1 + MANSION_X,
-        HOUSE_OUT_Z0 + MANSION_Z, HOUSE_OUT_Z1 + MANSION_Z);
+    vec3 m0 = {0.0f, 0.0f, 0.0f}, m1 = {0.0f, 0.0f, 0.0f};
+    mansion_at((vec3){HOUSE_OUT_X0, 0.0f, HOUSE_OUT_Z0}, m0);
+    mansion_at((vec3){HOUSE_OUT_X1, 0.0f, HOUSE_OUT_Z1}, m1);
+    box(f, "landmark", "mansion", m0[0], m1[0], m0[2], m1[2]);
     box(f, "graveyard", "graveyard", GRAVEYARD_X - GRAVEYARD_HX, GRAVEYARD_X + GRAVEYARD_HX,
         GRAVEYARD_Z - GRAVEYARD_HZ, GRAVEYARD_Z + GRAVEYARD_HZ);
 
@@ -106,21 +119,13 @@ bool town_plan_write(const char* path, const StreetPlots* plots, unsigned int se
     // The drive and the track along their centre lines, the chasm's lip -- down the east side to
     // where it turns, then west along the ridge -- and the lake's shore.
     fprintf(f, "line drive %.3f %d", DRIVE_HALF, DRIVE_SAMPLES);
-    for (int k = 0; k < DRIVE_SAMPLES; k++) {
-        float x = 0.0f, z = 0.0f;
-        hill_drive_point((float)k / (float)(DRIVE_SAMPLES - 1), &x, &z);
-        fprintf(f, " %.3f %.3f", x, z);
-    }
-    fprintf(f, "\nline track %.3f %d", TRACK_HALF, TRACK_SAMPLES);
-    for (int k = 0; k < TRACK_SAMPLES; k++) {
-        float x = 0.0f, z = 0.0f;
-        lake_track_point((float)k / (float)(TRACK_SAMPLES - 1), &x, &z);
-        fprintf(f, " %.3f %.3f", x, z);
-    }
+    points(f, DRIVE_SAMPLES, false, hill_drive_point);
+    fprintf(f, "line track %.3f %d", TRACK_HALF, TRACK_SAMPLES);
+    points(f, TRACK_SAMPLES, false, lake_track_point);
     const int east = (int)((RIDGE_Z - GRID_Z0) / LIP_STEP) + 1;
     const float turn = land_lip_x(RIDGE_Z);
     const int west = (int)((turn - GRID_X0) / LIP_STEP);
-    fprintf(f, "\nline lip 0.000 %d", east + west);
+    fprintf(f, "line lip 0.000 %d", east + west);
     for (int k = 0; k < east; k++) {
         const float z = GRID_Z0 + LIP_STEP * (float)k;
         fprintf(f, " %.3f %.3f", land_lip_x(z), z);
@@ -130,12 +135,7 @@ bool town_plan_write(const char* path, const StreetPlots* plots, unsigned int se
         fprintf(f, " %.3f %.3f", x, land_ridge_lip_z(x));
     }
     fprintf(f, "\npoly shore %d", SHORE_SAMPLES);
-    for (int k = 0; k < SHORE_SAMPLES; k++) {
-        float x = 0.0f, z = 0.0f;
-        lake_shore_point(2.0f * GLM_PIf * (float)k / (float)SHORE_SAMPLES, &x, &z);
-        fprintf(f, " %.3f %.3f", x, z);
-    }
-    fprintf(f, "\n");
+    points(f, SHORE_SAMPLES, true, lake_shore_point);
 
     // What the player finds, and where each goes on the map.
     for (int i = 0; i < PLACE_COUNT; i++)

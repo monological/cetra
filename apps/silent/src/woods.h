@@ -18,7 +18,7 @@ void woods_build(Kit* kit, Engine* engine, Scene* scene, Trees* trees,
                  const FenceBreaches* breaches, unsigned int seed);
 
 // How far (x, z) is into the woods, the town's or the lake valley's, by the rules that plant them:
-// positive inside, negative outside. What a map shows as woods.
+// positive inside, negative outside.
 float woods_cover(float x, float z);
 
 #endif // _SILENT_WOODS_H_

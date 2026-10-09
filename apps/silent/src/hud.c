@@ -19,6 +19,8 @@
 #define THOUGHT_STAY 4.0f
 #define THOUGHT_OUT  1.0f
 
+#define MODAL_FADE_IN 0.15f // seconds a screen over the world takes to come up
+
 static const vec4 PROMPT_FG = {0.88f, 0.88f, 0.84f, 1.0f};
 static const vec4 THOUGHT_FG = {0.80f, 0.78f, 0.70f, 1.0f};
 
@@ -144,4 +146,19 @@ void hud_update(Hud* hud, float dt, float height) {
 void hud_free(Hud* hud) {
     free_ui_system(hud->ui);
     memset(hud, 0, sizeof(*hud));
+}
+
+UIScreen* hud_modal_screen(UISystem* ui, const char* name, float dim, UIElement** root) {
+    UIScreen* screen = ui_screen(ui, name);
+    ui_screen_set_modal(screen, true);
+    ui_screen_transition(screen, UI_TRANSITION_FADE, MODAL_FADE_IN);
+    *root = ui_screen_root(screen);
+    (*root)->align_main = UI_ALIGN_CENTER;
+    (*root)->align_cross = UI_ALIGN_CENTER;
+    // The world dimmed behind it, out of the flow.
+    UIElement* backdrop = ui_panel(*root);
+    backdrop->fill = true;
+    const UIStyle style = {.bg = {0.0f, 0.0f, 0.0f, dim}, .corner_radius = HUD_BARE};
+    ui_set_style(backdrop, &style);
+    return screen;
 }

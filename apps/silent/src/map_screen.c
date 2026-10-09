@@ -4,15 +4,15 @@
 
 #include "cetra/program.h"
 
+#include "hud.h"
 #include "map_screen.h"
 #include "silent_shaders.h"
 
 // The paper's most of the window, at the print's own aspect.
 #define PAPER_W   0.94f
 #define PAPER_H   0.84f
+#define DIM       0.6f // the world behind it
 #define HINT_SIZE 14.0f
-#define FADE_IN   0.15f
-#define BARE      0.01f // a padding of nothing: a zero is the style's
 
 #define ZOOM_MAX   2.0f   // past this a 2048-pixel print magnifies soft on a Retina window
 #define ZOOM_RATE  1.5f   // the zoom's factor a second at a full trigger
@@ -25,9 +25,6 @@
 
 #define WHOLE 1e3f // a focus past any mark's writing: the mark whole
 
-// The ink's colours, the marks picture holding only where the ink is and when.
-static const vec4 BLUE = {30.0f / 255.0f, 52.0f / 255.0f, 138.0f / 255.0f, 1.0f};
-static const vec4 RED = {170.0f / 255.0f, 32.0f / 255.0f, 28.0f / 255.0f, 1.0f};
 static const vec4 HINT = {0.93f, 0.87f, 0.74f, 0.75f};
 static const vec4 WHITE = {1.0f, 1.0f, 1.0f, 1.0f};
 
@@ -53,122 +50,138 @@ static void view_centre(const MapScreen* ms, UIRect r, float out[2]) {
     }
 }
 
-// How far through its writing a found place's mark is, or below zero when it is not drawn.
-static float mark_focus(const MapScreen* ms, PlaceId place, float seconds) {
-    if (ms->shown[place])
-        return WHOLE;
-    if (ms->writing[place] < 0.0 || ms->clock < ms->writing[place])
-        return -1.0f;
-    return (float)((ms->clock - ms->writing[place]) / (double)seconds);
+// The print as the paper at `r` shows it: print pixel p lands at r's corner + (p - corner) * s.
+typedef struct View {
+    UIRect r;
+    float s;
+    float corner[2]; // the print pixel at r's top left
+} View;
+
+static View view_of(const MapScreen* ms, UIRect r) {
+    View v = {.r = r, .s = view_scale(ms, r)};
+    float c[2];
+    view_centre(ms, r, c);
+    v.corner[0] = c[0] - 0.5f * r.w / v.s;
+    v.corner[1] = c[1] - 0.5f * r.h / v.s;
+    return v;
+}
+
+// The window rect of the print-pixel box w x h whose top left is at print pixel (x, y).
+static UIRect on_paper(const View* v, float x, float y, float w, float h) {
+    return (UIRect){v->r.x + (x - v->corner[0]) * v->s, v->r.y + (y - v->corner[1]) * v->s,
+                    w * v->s, h * v->s};
 }
 
 // The sheet as the view sees it, then each mark written so far and the arrow, all through one
-// transform and clipped to the paper.
+// view and clipped to the paper.
 static void paper_draw(UIElement* el, UIDrawList* dl, void* user) {
     MapScreen* ms = user;
-    if (ms->map == MAP_NONE || !ms->print[ms->map])
-        return;
     const MapArt* art = &MAP_ART[ms->map];
-    const UIRect r = el->rect;
-    const float s = view_scale(ms, r);
-    float c[2];
-    view_centre(ms, r, c);
-    const float x0 = c[0] - 0.5f * r.w / s, y0 = c[1] - 0.5f * r.h / s;
+    const View v = view_of(ms, el->rect);
     const float pw = art->print_size[0], ph = art->print_size[1];
-    ui_push_clip(dl, r);
-    ui_draw_textured_quad_uv(
-        dl, r, ms->print[ms->map],
-        (const float[4]){x0 / pw, y0 / ph, (x0 + r.w / s) / pw, (y0 + r.h / s) / ph},
-        (float*)WHITE);
+    const float x1 = v.corner[0] + v.r.w / v.s, y1 = v.corner[1] + v.r.h / v.s;
+    ui_push_clip(dl, v.r);
+    ui_draw_textured_quad_uv(dl, v.r, ms->print[ms->map],
+                             (const float[4]){v.corner[0] / pw, v.corner[1] / ph, x1 / pw, y1 / ph},
+                             (float*)WHITE);
+    // The marks picture holds only where the ink is and when; its colours are the map's.
     Texture* marks = ms->marks[ms->map];
+    vec4 blue = {art->ink[0], art->ink[1], art->ink[2], 1.0f};
+    vec4 red = {art->arrow_ink[0], art->arrow_ink[1], art->arrow_ink[2], 1.0f};
     if (marks && ms->ink) {
         for (int i = 0; i < art->mark_count; i++) {
             const MapMark* m = &art->marks[i];
-            const float focus = mark_focus(ms, m->place, m->seconds);
-            if (focus < 0.0f)
+            const double written = ms->clock - ms->began[m->place];
+            if (written < 0.0)
                 continue;
             float p[2];
             to_print(art, PLACES[m->place].mark[0], PLACES[m->place].mark[1], p);
-            const UIRect q = {r.x + (p[0] - m->anchor[0] - x0) * s,
-                              r.y + (p[1] - m->anchor[1] - y0) * s, m->size[0] * s, m->size[1] * s};
-            ui_set_draw_program(dl, ms->ink, q, focus);
-            ui_draw_textured_quad_uv(dl, q, marks, m->uv, (float*)BLUE);
+            const UIRect q =
+                on_paper(&v, p[0] - m->anchor[0], p[1] - m->anchor[1], m->size[0], m->size[1]);
+            ui_set_draw_program(dl, ms->ink, v.r, fminf((float)(written / m->seconds), WHOLE));
+            ui_draw_textured_quad_uv(dl, q, marks, m->uv, blue);
         }
         // The arrow's frame nearest the player's facing, its middle on their feet.
         const int k = (int)lroundf(ms->heading / (2.0f * GLM_PIf) * (float)art->arrow_frames);
         const int frame = ((k % art->arrow_frames) + art->arrow_frames) % art->arrow_frames;
-        const float cell = (float)art->arrow_cell;
         const int col = frame % art->arrow_cols, row = frame / art->arrow_cols;
-        const float u = cell * (float)col, v = cell * (float)row;
+        const float cell = (float)art->arrow_cell;
+        const float u = cell * (float)col, t = cell * (float)row;
         const float mw = art->marks_size[0], mh = art->marks_size[1];
         float p[2];
         to_print(art, ms->feet[0], ms->feet[1], p);
-        const UIRect q = {r.x + (p[0] - 0.5f * cell - x0) * s, r.y + (p[1] - 0.5f * cell - y0) * s,
-                          cell * s, cell * s};
-        ui_set_draw_program(dl, ms->ink, q, WHOLE);
-        ui_draw_textured_quad_uv(dl, q, marks,
-                                 (const float[4]){u / mw, v / mh, (u + cell) / mw, (v + cell) / mh},
-                                 (float*)RED);
-        ui_set_draw_program(dl, NULL, r, 0.0f);
+        const UIRect q = on_paper(&v, p[0] - 0.5f * cell, p[1] - 0.5f * cell, cell, cell);
+        ui_set_draw_program(dl, ms->ink, v.r, WHOLE);
+        ui_draw_textured_quad_uv(
+            dl, q, marks, (const float[4]){u / mw, t / mh, (u + cell) / mw, (t + cell) / mh}, red);
+        ui_set_draw_program(dl, NULL, v.r, 0.0f);
     }
     ui_pop_clip(dl);
 }
 
-bool map_screen_start(MapScreen* ms, UISystem* ui, Engine* engine, TexturePool* pool) {
+static void got_picture(Texture* tex, void* user) {
+    *(Texture**)user = tex;
+}
+
+void map_screen_start(MapScreen* ms, UISystem* ui, Engine* engine, TexturePool* pool) {
     memset(ms, 0, sizeof(*ms));
     ms->map = MAP_NONE;
     ms->zoom = 1.0f;
     for (int i = 0; i < PLACE_COUNT; i++)
-        ms->writing[i] = -1.0;
+        ms->began[i] = INFINITY;
     if (!ui || !engine || !pool)
-        return false;
-    // UI pictures: top row first, and in display values, as the UI draws.
+        return;
+    ms->engine = engine;
+    ms->ui = ui;
+    // UI pictures: top row first, and in display values, as the UI draws. Decoded on the loader's
+    // threads, which have them long before anyone can open the map.
     for (int i = 0; i < MAP_COUNT; i++) {
-        ms->print[i] = texture_load_file(pool, MAP_ART[i].print_file, texture_desc(false));
-        ms->marks[i] = texture_load_file(pool, MAP_ART[i].marks_file, texture_desc(false));
+        engine_load_texture(engine, pool, MAP_ART[i].print_file, texture_desc(false), got_picture,
+                            &ms->print[i]);
+        engine_load_texture(engine, pool, MAP_ART[i].marks_file, texture_desc(false), got_picture,
+                            &ms->marks[i]);
     }
-    ms->ink = create_program_from_source("map_ink", map_ink_vert_shader_str,
-                                         map_ink_frag_shader_str, NULL);
+    ms->ink = create_ui_draw_program("map_ink", map_ink_frag_shader_str);
     if (ms->ink)
         engine_add_program(engine, ms->ink);
     else
         fprintf(stderr, "silent: the map's ink program did not build; the map shows no marks\n");
-    ms->ui = ui;
 
-    ms->screen = ui_screen(ui, "map");
-    ui_screen_set_modal(ms->screen, true);
-    ui_screen_transition(ms->screen, UI_TRANSITION_FADE, FADE_IN);
-    UIElement* root = ui_screen_root(ms->screen);
-    root->align_main = UI_ALIGN_CENTER;
-    root->align_cross = UI_ALIGN_CENTER;
+    UIElement* root = NULL;
+    ms->screen = hud_modal_screen(ui, "map", DIM, &root);
     root->spacing = 10.0f;
-    // The world dimmed behind it, out of the flow.
-    UIElement* backdrop = ui_panel(root);
-    backdrop->fill = true;
-    const UIStyle dim = {.bg = {0.0f, 0.0f, 0.0f, 0.6f}, .corner_radius = BARE};
-    ui_set_style(backdrop, &dim);
-
     ms->paper = ui_panel(root);
     for (int i = 0; i < 4; i++)
-        ms->paper->padding[i] = BARE;
+        ms->paper->padding[i] = HUD_BARE;
     ui_set_draw(ms->paper, paper_draw, ms);
     UIElement* hint = ui_label(root, "M  CLOSE        DRAG  MOVE        WHEEL  ZOOM");
     const UIStyle h = {
         .fg = {HINT[0], HINT[1], HINT[2], HINT[3]}, .font_size = HINT_SIZE, .tracking = 2.5f};
     ui_set_style(hint, &h);
-    return true;
 }
 
 bool map_screen_open(const MapScreen* ms) {
     return ms->screen && ui_top(ms->ui) == ms->screen;
 }
 
-void map_screen_show(MapScreen* ms, MapId map, bool over_bag, const bool found[PLACE_COUNT]) {
-    if (!ms->screen || map <= MAP_NONE || map >= MAP_COUNT || !ms->print[map] ||
-        map_screen_open(ms))
+void map_screen_show(MapScreen* ms, MapId map, const bool found[PLACE_COUNT]) {
+    if (!ms->screen || map <= MAP_NONE || map >= MAP_COUNT || map_screen_open(ms))
         return;
+    if (!ms->print[map])
+        engine_finish_texture_loads(ms->engine);
+    if (!ms->print[map])
+        return;
+    // A mark whose writing finished while the map was last open is whole from now on; one the
+    // closing cut off is written again.
+    if (ms->map != MAP_NONE) {
+        const MapArt* last = &MAP_ART[ms->map];
+        for (int i = 0; i < last->mark_count; i++) {
+            double* began = &ms->began[last->marks[i].place];
+            if (isfinite(*began) && ms->clock >= *began + (double)last->marks[i].seconds)
+                *began = -INFINITY;
+        }
+    }
     ms->map = map;
-    ms->over_bag = over_bag;
     ms->zoom = 1.0f;
     to_print(&MAP_ART[map], ms->feet[0], ms->feet[1], ms->centre);
     ms->dragging = false;
@@ -176,8 +189,11 @@ void map_screen_show(MapScreen* ms, MapId map, bool over_bag, const bool found[P
     double at = WRITE_DELAY;
     for (int i = 0; i < MAP_ART[map].mark_count; i++) {
         const MapMark* m = &MAP_ART[map].marks[i];
-        const bool due = found && found[m->place] && !ms->shown[m->place];
-        ms->writing[m->place] = due ? at : -1.0;
+        double* began = &ms->began[m->place];
+        if (*began == -INFINITY)
+            continue;
+        const bool due = PLACES[m->place].known || (found && found[m->place]);
+        *began = due ? at : INFINITY;
         at += due ? (double)m->seconds + WRITE_GAP : 0.0;
     }
     ui_push(ms->ui, ms->screen);
@@ -229,18 +245,8 @@ void map_screen_update(MapScreen* ms, float dt, const vec3 feet, const vec3 forw
     ms->feet[0] = feet[0];
     ms->feet[1] = feet[2];
     ms->heading = atan2f(forward[0], -forward[2]);
-    if (!map_screen_open(ms))
-        return;
-    ms->clock += dt;
-    // A mark once written is whole from then on.
-    for (int i = 0; i < MAP_ART[ms->map].mark_count; i++) {
-        const MapMark* m = &MAP_ART[ms->map].marks[i];
-        if (ms->writing[m->place] >= 0.0 &&
-            ms->clock >= ms->writing[m->place] + (double)m->seconds) {
-            ms->shown[m->place] = true;
-            ms->writing[m->place] = -1.0;
-        }
-    }
+    if (map_screen_open(ms))
+        ms->clock += dt;
 }
 
 void map_screen_free(MapScreen* ms) {

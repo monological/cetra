@@ -2,6 +2,7 @@
 #include <string.h>
 
 #include "backpack_menu.h"
+#include "hud.h"
 
 // The pane, in window points: its share of the window's width up to a most, the share of its
 // inside the chosen item's side takes, the picture's height over its width, and the most of the
@@ -16,8 +17,6 @@
 #define BRACKET      14.0f // the frame's corner brackets' arms
 #define ITEM_INSET   3.0f  // an item's footprint inside its cells
 #define TURN_RATE    0.6f  // radians a second
-#define FADE_IN      0.15f
-#define BARE         0.01f // a padding of nothing: a zero is the style's
 
 #define TITLE_SIZE 26.0f
 #define NAME_SIZE  22.0f
@@ -175,7 +174,7 @@ static UIElement* bare(UIElement* parent, UIDir dir, float spacing) {
     el->dir = dir;
     el->spacing = spacing;
     for (int i = 0; i < 4; i++)
-        el->padding[i] = BARE;
+        el->padding[i] = HUD_BARE;
     ui_set_draw(el, draw_nothing, NULL);
     return el;
 }
@@ -197,18 +196,8 @@ bool backpack_menu_start(BackpackMenu* menu, UISystem* ui, Font* font, const Bac
     menu->font = font;
     menu->pack = pack;
 
-    menu->screen = ui_screen(ui, "backpack");
-    ui_screen_set_modal(menu->screen, true);
-    ui_screen_transition(menu->screen, UI_TRANSITION_FADE, FADE_IN);
-    UIElement* root = ui_screen_root(menu->screen);
-    root->align_main = UI_ALIGN_CENTER;
-    root->align_cross = UI_ALIGN_CENTER;
-    // The world dimmed behind it, out of the flow.
-    UIElement* backdrop = ui_panel(root);
-    backdrop->fill = true;
-    const UIStyle dim = {.bg = {0.0f, 0.0f, 0.0f, 0.5f}, .corner_radius = BARE};
-    ui_set_style(backdrop, &dim);
-
+    UIElement* root = NULL;
+    menu->screen = hud_modal_screen(ui, "backpack", 0.5f, &root);
     menu->pane = bare(root, UI_COLUMN, 14.0f);
     for (int i = 0; i < 4; i++)
         menu->pane->padding[i] = PAD;

@@ -1737,7 +1737,16 @@ void engine_load_material_texture(Engine* engine, TexturePool* pool, Material* m
         return;
     }
     *load = (MaterialTextureLoad){material, set};
-    load_texture_async(engine->async_loader, pool, path, desc, _material_texture_loaded, load);
+    engine_load_texture(engine, pool, path, desc, _material_texture_loaded, load);
+}
+
+void engine_load_texture(Engine* engine, TexturePool* pool, const char* path, TextureDesc desc,
+                         void (*got)(Texture* tex, void* user), void* user) {
+    if (!engine || !engine->async_loader || !pool || !got || !path) {
+        log_error("engine_load_texture: missing an argument");
+        return;
+    }
+    load_texture_async(engine->async_loader, pool, path, desc, got, user);
 }
 
 void engine_finish_texture_loads(Engine* engine) {

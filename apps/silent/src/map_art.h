@@ -16,6 +16,8 @@ const MapArt MAP_ART[MAP_COUNT] = {
             .arrow_frames = 64,
             .arrow_cell = 80,
             .arrow_cols = 8,
+            .ink = {0.117647f, 0.203922f, 0.541176f},
+            .arrow_ink = {0.666667f, 0.125490f, 0.109804f},
             .mark_count = 4,
             .marks =
                 {
