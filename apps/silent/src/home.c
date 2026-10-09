@@ -926,7 +926,9 @@ static void living_room(Kit* kit, Scene* scene) {
                         {0.0405f, 0.1f}, {0.037f, 0.1f}, {0.037f, 0.012f}, {0.0f, 0.012f}};
     kit_frame_lathe(kit, &table, MAT_CERAMIC, 0.25f, 0.05f, 0.44f, mug, KIT_COUNT(mug), 18);
 
-    // The floor lamp: a weighted foot, a brass pole, a drum shade lit from inside.
+    // The floor lamp: a weighted foot, a brass pole, a drum shade lit from inside. The shade casts
+    // for its own bulb, so the light leaves it only at its two ends, a cone up the wall and one
+    // down it: the look chosen, where the bedside lamp's shade lets its light into the room.
     const float lx = -4.5f, lz = 12.45f, shade_y = FLOOR_Y + 1.32f;
     const vec2 foot[] = {
         {0.0f, 0.0f}, {0.15f, 0.0f}, {0.14f, 0.03f}, {0.03f, 0.05f}, {0.0f, 0.05f}};
@@ -1040,7 +1042,7 @@ void home_build(Kit* kit, Engine* engine, Scene* scene) {
     hall(kit, engine, scene);
     living_room(kit, scene);
     bathroom(kit, scene);
-    bedroom_build(kit, engine, scene);
+    bedroom_build(kit, scene);
 }
 
 // The front door, hung on its west jamb against the front wall's inner face so it swings into

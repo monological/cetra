@@ -3,7 +3,6 @@
 
 #include <cglm/cglm.h>
 
-#include "cetra/engine.h"
 #include "cetra/scene.h"
 
 #include "kit.h"
@@ -18,8 +17,8 @@
 // Where something lying on the bed rests: on the quilt's top, on the lamp's side.
 void bedroom_bed_top(vec3 out);
 
-// The bed, the nightstands, the dresser, the rug and what stands on them into `kit`, and the lamp,
-// a kit of its own, with its light.
-void bedroom_build(Kit* kit, Engine* engine, Scene* scene);
+// The bed, the nightstands, the dresser, the rug and what stands on them into `kit`, and the
+// lamp's light.
+void bedroom_build(Kit* kit, Scene* scene);
 
 #endif // _SILENT_BEDROOM_H_

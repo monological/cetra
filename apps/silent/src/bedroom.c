@@ -39,6 +39,7 @@
 #define CHEST_OVER  0.02f // its top's overhang past its sides and front
 
 #define LAMP_CANDELA 25.0f
+#define LAMP_BODY    0.03f // the bulb's radius
 
 // The rag rug between the bed's foot and the chest's front, as wide as the bed.
 #define RUG_FROM_BED   0.13f
@@ -156,29 +157,30 @@ static void nightstand(Kit* kit, float a) {
 
 /*
  * The lamp on the front nightstand: a ceramic urn of a base and a drum shade, lit from inside,
- * which is the room's one light. Its light is cached, its body a bulb's. It is a kit of its own,
- * at the house's origin, that casts nothing: a fabric shade lets its light through, and drawn into
- * the lamp's own shadow it boxed the bulb in, lighting the wall above it and leaving the room dark.
+ * which is the room's one light. Its light is cached, its body a bulb's, and nothing as near it
+ * as the shade casts for it: a fabric shade lets its light through, and drawn into the light's
+ * own shadow it boxed the bulb in, lighting the wall above it and leaving the room dark. A cube
+ * face clips at a near PLANE, so the shade is cleared by its largest offset from the bulb along
+ * one axis, 0.16 m at its rim, plus the body every view stands within; the wall behind, 0.22 m
+ * off, stays in, and the base's belly still shadows the nightstand under it.
  */
-static void lamp(const Kit* house, Engine* engine, Scene* scene, float a) {
-    Kit kit;
-    mats_kit(&kit, engine, scene);
-    glm_vec3_copy((float*)house->origin, kit.origin);
-    kit.casts_nothing = true;
+static void lamp(Kit* kit, Scene* scene, float a) {
     const KitFrame* f = &BED;
     const float d = 0.5f * STAND_DEPTH, y = STAND_H;
     const vec2 base[] = {{0.0f, 0.0f},   {0.06f, 0.0f}, {0.06f, 0.012f}, {0.045f, 0.03f},
                          {0.07f, 0.11f}, {0.06f, 0.2f}, {0.02f, 0.24f},  {0.015f, 0.29f},
                          {0.008f, 0.3f}, {0.0f, 0.3f}};
-    kit_frame_lathe(&kit, f, MAT_CERAMIC, a, d, y, base, KIT_COUNT(base), 16);
-    const float shade_y = y + 0.26f;
+    kit_frame_lathe(kit, f, MAT_CERAMIC, a, d, y, base, KIT_COUNT(base), 16);
+    const float shade_y = y + 0.26f, bulb = 0.09f; // the bulb, over the shade's foot
     const vec2 shade[] = {
         {0.16f, 0.0f}, {0.155f, 0.004f}, {0.1f, 0.2f}, {0.095f, 0.2f}, {0.15f, 0.004f}};
-    kit_frame_lathe(&kit, f, MAT_LAMPSHADE, a, d, shade_y, shade, KIT_COUNT(shade), 18);
-    kit_finish(&kit, "bedside_lamp");
+    kit_frame_lathe(kit, f, MAT_LAMPSHADE, a, d, shade_y, shade, KIT_COUNT(shade), 18);
+    float clear = 0.0f;
+    for (int i = 0; i < KIT_COUNT(shade); i++)
+        clear = fmaxf(clear, fmaxf(shade[i][0], fabsf(shade[i][1] - bulb)));
     vec3 at = {0.0f, 0.0f, 0.0f};
-    kit_frame_point(f, a, shade_y + 0.09f, d, at);
-    glm_vec3_add(at, kit.origin, at);
+    kit_frame_point(f, a, shade_y + bulb, d, at);
+    glm_vec3_add(at, kit->origin, at);
     LightDesc light = {.name = "bedside_lamp",
                        .type = LIGHT_POINT,
                        .position = {at[0], at[1], at[2]},
@@ -187,8 +189,8 @@ static void lamp(const Kit* house, Engine* engine, Scene* scene, float a) {
                        .range = 5.0f,
                        .cast_shadows = true,
                        .shadow_cache = true,
-                       .source_radius = 0.03f,
-                       .shadow_near = 0.05f};
+                       .source_radius = LAMP_BODY,
+                       .shadow_near = clear + LAMP_BODY};
     scene_add_light(scene, create_light(&light));
 }
 
@@ -245,13 +247,13 @@ static void chest(Kit* kit) {
     candle_chamber(kit, &f, -0.17f, CHEST_H, 0.25f, 0.07f);
 }
 
-void bedroom_build(Kit* kit, Engine* engine, Scene* scene) {
+void bedroom_build(Kit* kit, Scene* scene) {
     bed(kit);
     const float front = BEDROOM_IN_Z0 - BED_Z + STAND_HALF + 0.05f;
     const float back = BEDROOM_IN_Z1 - BED_Z - STAND_HALF - 0.05f;
     nightstand(kit, front);
     nightstand(kit, back);
-    lamp(kit, engine, scene, front);
+    lamp(kit, scene, front);
     bedside_things(kit, back);
     chest(kit);
     const float chest_front = BEDROOM_IN_X0 + OFF_WALL + CHEST_DEPTH + CHEST_OVER;
