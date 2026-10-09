@@ -30593,9 +30593,9 @@ def run_gi_cook_gate(workdir):
       gi-cook-pure      the scene paced a probe a frame keys every capture as the unbudgeted run
                         did, though each lands on another frame
       gi-cook-miss      against the warm directory, each kind of change sweeps anew and stores: a
-                        node taken out, a material's roughness, a light's intensity, the sun; and
-                        a texture's bytes changed under the same file name, in a scene whose own
-                        second run loads
+                        node taken out, a material's roughness, a light's intensity, a light moved
+                        30 cm, the sun; and a texture's bytes changed under the same file name, in
+                        a scene whose own second run loads
       gi-cook-unstable  a material changed in the middle of a paced sweep: the volume being swept
                         says so, and is not stored
 
@@ -30662,12 +30662,16 @@ def run_gi_cook_gate(workdir):
     def brighter(d):
         d["lights"][0]["intensity"] *= 1.5
 
+    def moved(d):
+        d["lights"][0]["position"][0] += 0.3
+
     def sun(d):
         d["environment"]["sun"]["azimuth"] = 30.0
 
     changes = [("node", ["--remove-node", GICOOK_MATERIAL], None),
                ("material", rougher(0), None),
                ("light", [], brighter),
+               ("light-moved", [], moved),
                ("sun", [], sun)]
     swept = {}
     for name, extra, mutate in changes:
