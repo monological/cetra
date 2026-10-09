@@ -201,6 +201,8 @@ typedef struct SilentArgs {
     float capture_budget_ms; // the engine's capture budget, pinned; below 0 = silent's own
     bool capture_timing;     // each GI volume prints what its sweep cost as it converges
     float gi_cull_pixels;    // the GI world's cull_pixels
+    float gi_cell;           // the home's GI cell in metres; 0 = HOME_GI_CELL
+    float mansion_gi_cell;   // > 0 lays the mansion's grid by spacing, classified; 0 = by hand
     bool profiler;           // per-pass timing and submission counts, reported at exit
     const char* audio_dump;  // headless: write what the listener hears here
     bool no_woods;           // no trees behind the yards, nor what lies under them
@@ -405,32 +407,39 @@ static void build_sky(Engine* engine) {
  */
 #define HOME_GI_CELL 1.0f
 
-// A grid laid over a building's bounds a metre a cell, the probes in its walls switched off.
-static void build_spaced_gi(const char* name, const vec3 lo, const vec3 hi) {
-    GIVolume* gi = create_gi_volume_spaced(lo, hi, HOME_GI_CELL);
+// A grid laid over a building's bounds on `cell` metre cells, the probes in its walls switched
+// off.
+static void build_spaced_gi(const char* name, const vec3 lo, const vec3 hi, float cell) {
+    GIVolume* gi = create_gi_volume_spaced(lo, hi, cell);
     if (gi && scene_add_gi_volume(g_scene, gi))
         printf("silent: %s GI %d probes, classified\n", name,
                gi->counts[0] * gi->counts[1] * gi->counts[2]);
 }
 
 static void build_home_gi(void) {
-    const float under = HOME_GI_CELL * ceilf(-BASEMENT_Y / HOME_GI_CELL);
+    const float cell = g_args.gi_cell > 0.0f ? g_args.gi_cell : HOME_GI_CELL;
+    const float under = cell * ceilf(-BASEMENT_Y / cell);
     build_spaced_gi("home", (vec3){HOUSE_X0 - 0.2f, -under, PORCH_Z0 - 0.2f},
-                    (vec3){HOUSE_X1 + 0.2f, CEIL_Y + 0.1f, HOUSE_BACK_Z + 0.2f});
+                    (vec3){HOUSE_X1 + 0.2f, CEIL_Y + 0.1f, HOUSE_BACK_Z + 0.2f}, cell);
 }
 
 // The cabin's (spec 13.41), over its one room and the porch, from its floor to its ridge.
 static void build_cabin_gi(void) {
     build_spaced_gi("cabin", (vec3){CABIN_PORCH_X0 - 0.3f, CABIN_FLOOR_Y - 0.2f, CABIN_Z0 - 0.3f},
-                    (vec3){CABIN_X1 + 0.3f, CABIN_RIDGE_Y + 0.1f, CABIN_Z1 + 0.3f});
+                    (vec3){CABIN_X1 + 0.3f, CABIN_RIDGE_Y + 0.1f, CABIN_Z1 + 0.3f}, HOME_GI_CELL);
 }
 
 // The mansion's grid, its plan standing at `origin`.
 static void build_gi(const vec3 origin) {
     const vec3 lo = {-7.45f + origin[0], origin[1], 7.58f + origin[2]};
-    GIVolume* gi = create_gi_volume(
-        GI_COLS, GI_ROWS, GI_COLS, lo,
-        (vec3){lo[0] + GI_COLS * GI_CELL, lo[1] + GI_TOP, lo[2] + GI_COLS * GI_CELL});
+    const vec3 hi = {lo[0] + GI_COLS * GI_CELL, lo[1] + GI_TOP, lo[2] + GI_COLS * GI_CELL};
+    // Laid by spacing over the same box rather than placed by hand clear of every wall (spec
+    // 13.42's trial).
+    if (g_args.mansion_gi_cell > 0.0f) {
+        build_spaced_gi("mansion", lo, hi, g_args.mansion_gi_cell);
+        return;
+    }
+    GIVolume* gi = create_gi_volume(GI_COLS, GI_ROWS, GI_COLS, lo, hi);
     if (!gi)
         return;
     if (!scene_add_gi_volume(g_scene, gi))
@@ -1388,6 +1397,10 @@ static void print_usage(const char* prog) {
            "                          it converges; slows the sweep\n");
     printf("      --gi-cull-pixels F  A GI probe leaves out what spans fewer pixels than F\n"
            "                          across its 16-pixel faces; 0, the default, takes all\n");
+    printf("      --gi-cell M         The home's GI cell, metres (default %.2f)\n",
+           (double)HOME_GI_CELL);
+    printf("      --mansion-gi-cell M Lay the mansion's GI grid on M m cells, its probes in\n"
+           "                          walls switched off, rather than the hand-placed one\n");
     printf("      --profiler          Per-pass timing and submission counts, at exit\n");
     printf("      --tile-views N      Shade every cached light from N views over its body\n"
            "                          rather than 8; 1 is its centre alone\n");
@@ -1561,6 +1574,10 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
             a->capture_timing = true;
         } else if (!strcmp(s, "--gi-cull-pixels") && has_next) {
             a->gi_cull_pixels = (float)atof(argv[++i]);
+        } else if (!strcmp(s, "--gi-cell") && has_next) {
+            a->gi_cell = (float)atof(argv[++i]);
+        } else if (!strcmp(s, "--mansion-gi-cell") && has_next) {
+            a->mansion_gi_cell = (float)atof(argv[++i]);
         } else if (!strcmp(s, "--tile-views") && has_next) {
             a->tile_views = atoi(argv[++i]);
         } else if (!strcmp(s, "--tile-stores") && has_next) {

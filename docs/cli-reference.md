@@ -1024,6 +1024,10 @@ the first.
 - **`--capture-timing`:** each GI volume prints its `gi-timing`, `gi-sizes` and `gi-heavy` rows as it
   converges (spec 13.42; the render app's flag of the same name). It slows the sweep, so time
   `lit` without it.
+- **`--gi-cell M`:** the home's GI cell in metres, laid over the house's bounds as by default.
+- **`--mansion-gi-cell M`:** the mansion's grid laid over the same box on M m cells, with the
+  engine switching off what lands in a wall, rather than the hand-placed 11x7x11 (spec 13.42's
+  spacing trial).
 
 **The house's light is cooked** (spec 13.42): the GI volumes' opening sweeps and the reflection
 probes' columns go into the cook (`cooked/`, or `CETRA_COOK_DIR`) the first time, and a later
