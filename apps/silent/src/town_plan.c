@@ -1,5 +1,4 @@
 #include <errno.h>
-#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -93,18 +92,10 @@ bool town_plan_write(const char* path, const StreetPlots* plots, unsigned int se
     for (int k = 0; k < TERRACE_LOTS; k++)
         plot(f, "house", "far", k, &plots->far[k]);
 
-    // Up the hill: the grounds, the mansion and its tower, and the graveyard by the drive.
+    // Up the hill: the grounds, the mansion, and the graveyard by the drive.
     box(f, "grounds", "mansion", GROUNDS_X0, GROUNDS_X1, GROUNDS_Z0, GROUNDS_Z1);
     box(f, "landmark", "mansion", HOUSE_OUT_X0 + MANSION_X, HOUSE_OUT_X1 + MANSION_X,
         HOUSE_OUT_Z0 + MANSION_Z, HOUSE_OUT_Z1 + MANSION_Z);
-    fprintf(f, "poly tower 8");
-    const float corner = TOWER_OUTER / cosf(GLM_PIf / 8.0f);
-    for (int k = 0; k < 8; k++) {
-        const float a = GLM_PIf / 8.0f + GLM_PIf / 4.0f * (float)k;
-        fprintf(f, " %.3f %.3f", TOWER_X + MANSION_X + corner * cosf(a),
-                TOWER_Z + MANSION_Z + corner * sinf(a));
-    }
-    fprintf(f, "\n");
     box(f, "graveyard", "graveyard", GRAVEYARD_X - GRAVEYARD_HX, GRAVEYARD_X + GRAVEYARD_HX,
         GRAVEYARD_Z - GRAVEYARD_HZ, GRAVEYARD_Z + GRAVEYARD_HZ);
 
