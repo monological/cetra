@@ -315,24 +315,37 @@ def text_left(layer, x, y, text, f, fill, anchor="lm"):
 # -- The print ------------------------------------------------------------------------------------
 
 class Sheet:
-    """The two printing plates and the lettering laid over them."""
+    """The two printing plates and the lettering laid over them, `size` canvas pixels."""
 
-    def __init__(self):
-        self.colour = Image.new("RGB", (W, H), WHITE)
-        self.key = Image.new("RGB", (W, H), WHITE)
+    def __init__(self, size=(W, H)):
+        self.colour = Image.new("RGB", size, WHITE)
+        self.key = Image.new("RGB", size, WHITE)
         self.c = ImageDraw.Draw(self.colour)
         self.k = ImageDraw.Draw(self.key)
         # Lettering that knocks the key plate out round itself, lettering that does not, and
         # lettering left unprinted in the colour plate so the paper shows through as letters.
-        self.haloed = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-        self.plain = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-        self.knockout = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        self.haloed = Image.new("RGBA", size, (0, 0, 0, 0))
+        self.plain = Image.new("RGBA", size, (0, 0, 0, 0))
+        self.knockout = Image.new("RGBA", size, (0, 0, 0, 0))
 
     def tint(self, mask, colour):
         self.colour.paste(colour, mask=mask)
 
     def line_mask(self, mask, colour):
         self.key.paste(colour, mask=mask)
+
+    def inked(self):
+        """The plates printed: the lettering knocked out of the key plate round the haloed and
+        left unprinted in the colour plate where it is knocked out, and the colour plate a
+        little out of register, as multipliers of the paper."""
+        halo = grow(self.haloed.getchannel("A"), int(0.35 * M))
+        self.key.paste(WHITE, mask=halo)
+        key = Image.alpha_composite(self.key.convert("RGBA"), self.haloed)
+        key = Image.alpha_composite(key, self.plain).convert("RGB")
+        self.colour.paste(WHITE, mask=self.knockout.getchannel("A"))
+        colour = np.roll(np.asarray(self.colour, dtype=np.float32) / 255.0, (-SS // 2, SS),
+                         axis=(0, 1))
+        return colour * (np.asarray(key, dtype=np.float32) / 255.0)
 
 
 def draw_ground(sheet, plan, rng):
@@ -621,11 +634,15 @@ def draw_grounds(sheet, plan, rng, f_label):
 
 
 def draw_manor(sheet, b):
+    """The manor pictured on its grounds, the picture's foot on the house's south face."""
+    draw_manor_at(sheet, *px((b[2] + b[3]) / 2.0, b[5]), 0.65 * M)
+
+
+def draw_manor_at(sheet, bx, by, u):
     """The manor drawn standing, as a visitors' map pictures its sight: a steep gabled house of
     dark boards, a gable brought forward over the door, and the tower with its spire at the
-    corner where the real one stands, the picture's foot on the house's south face."""
-    u = 0.65 * M  # canvas pixels to one of the drawing's units
-    bx, by = px((b[2] + b[3]) / 2.0, b[5])
+    corner where the real one stands. Its foot's middle at canvas point (bx, by), `u` canvas
+    pixels to one of the drawing's units; it is 30 units wide and 24 tall."""
 
     def p(x, y):
         return (bx + x * u, by - y * u)
@@ -813,17 +830,7 @@ def print_map(plan, rng):
     draw_frame(sheet)
     draw_title(sheet)
 
-    # The lettering: knocked out of the key plate round the haloed, and left unprinted in the
-    # colour plate where the gorge's name is.
-    halo = grow(sheet.haloed.getchannel("A"), int(0.35 * M))
-    sheet.key.paste(WHITE, mask=halo)
-    key = Image.alpha_composite(sheet.key.convert("RGBA"), sheet.haloed)
-    key = Image.alpha_composite(key, sheet.plain).convert("RGB")
-    sheet.colour.paste(WHITE, mask=sheet.knockout.getchannel("A"))
-
-    # The plates were not quite in register.
-    colour = np.roll(np.asarray(sheet.colour, dtype=np.float32) / 255.0, (-SS // 2, SS), axis=(0, 1))
-    return colour * (np.asarray(key, dtype=np.float32) / 255.0)
+    return sheet.inked()
 
 
 # -- The paper ------------------------------------------------------------------------------------
