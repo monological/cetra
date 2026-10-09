@@ -842,7 +842,8 @@ entry there before changing anything marked with a dagger.
 - **OIT:** `oit_resolve_frag` + `include/mboit.glsl` (the absorbance moments and their
   reconstruction, shared by the generation and accumulate sub-passes)
 - **Atmosphere †:** `froxel_inject/integrate/composite_frag` + `include/froxel.glsl`, and
-  `aerial_lut_frag`. `froxel_inject_frag` is where every medium meets
+  `aerial_lut_frag`. `froxel_inject_frag` is where every medium meets, and is compiled a second
+  time under `FROXEL_HISTORY_MISS` as `--fog-miss-probe`'s count (spec 13.45)
 - **Volumetric clouds:** `cloud_march_frag`, `sky_background_clouds_frag`, `sky_env_clouds_frag`
   (the background and env-cube variants), `cloud_noise_debug_frag`
 - **Cloud shadow †:** `cloud_shadow_frag` — a 256² R16F sun-transmittance map through the deck
@@ -1902,6 +1903,13 @@ on the `Scene`.
   volume one smooths what the volume itself generates, the 2D one cancels the
   jitter the composite inherits from the aux depth (which is why it is pointless
   without TAA). See `specs/9.5.1`.
+  **A fog cell with no history takes several samples** (spec 13.45): one entering the volume
+  as the camera turns has nothing to blend, and its one jittered sample beside neighbours
+  averaged over many frames drew a hard-edged band at the leading edge of a turn. It averages
+  `fog_history_miss_samples` (4) of the sequence's points, in a branch of the inject's own
+  `main` rather than a second pass, which cost 2.8 ms of GPU on any frame the camera moved,
+  whatever it drew: each layer attached is a render pass on this GPU. A still frame has no
+  such cell and pays nothing. See `docs/shader-subsystems.md`, Atmosphere.
   **Every history of LIGHT follows the exposure** (spec 13.20). The buffer is pre-exposed,
   so a history carries the exposure of the frame that wrote it, and unscaled an exposure
   change reached it only as fast as its blend decayed: stepping outdoors in silent, the fog

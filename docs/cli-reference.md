@@ -38,6 +38,13 @@ written at, so a change of exposure lags by the blend; the A/B for the rescale),
 read, read back, and a `negative-probe` row with the pixels below -0.0005 and below -0.005 and the
 most negative value. Light below zero is a bug wherever it comes from, and the tonemap clamps it
 out of sight; this is what finds it. A whole-frame readback, so not for timing),
+`--fog-history-miss-samples <n>` (spec 13.45: how many samples a fog cell with no history to blend
+takes, 1..8, default 4. Such a cell is one entering the view as the camera turns or moves, and with
+one sample it showed one jitter position beside neighbours averaged over many: a hard-edged band at
+the leading edge of a turn. 1 gives that back, for the A/B),
+`--fog-miss-probe` (spec 13.45 — diagnostic: every fog frame, a `fog-miss-probe frame= ran=
+cells=` row: whether the miss pass ran and how many cells it drew, from an occlusion query read at
+once, so not for timing),
 `--shadows-off-at <frame>` (spec 11.56 — diagnostic: clear `shadow_system->enabled` mid-run, which
 is the ONE state `--no-shadows` cannot produce. That flag clears the switch before frame 0, so no
 punctual layer is ever assigned and every index the depth pass maintains is still at its initial
@@ -1182,6 +1189,9 @@ the wind and the television's hiss, each heard from where it is.
   for comparison.
 - `--negative-probe` prints, each frame, how much of the frame reaches the tonemap below zero, as
   the render app's does (spec 13.21).
+- `--fog-history-miss-samples N` sets how many samples a fog cell entering the view takes, 1..8,
+  as the render app's does (spec 13.45). 1 shows the band a turn used to draw at the screen's
+  leading edge; it is History Miss Samples under G, in the Volumetric Fog section.
 - **Probe Coverage**, in the Render Mode list under G (spec 13.23), shows which surfaces fall
   outside the reflection probes and reflect the sky: they turn magenta. There are nine since
   13.25: four in the home, five in the mansion, which are captured as the drive brings them near.
