@@ -216,6 +216,8 @@ static void print_usage(const char* prog) {
                     "frames\n");
     fprintf(stderr, "      --capture-hide <node>  Leave a node out of every GI and probe capture "
                     "(repeatable)\n");
+    fprintf(stderr, "      --capture-rest-unshadow <light>  The light casts no shadow while a "
+                    "capture burst holds the scene at rest, as an app puts a flashlight away\n");
     fprintf(stderr, "      --remove-node <node>   Take a node out of the scene (repeatable)\n");
     fprintf(stderr,
             "      --draw-distance <node> <m>  The camera draws nothing of the node's past\n"
@@ -1312,6 +1314,12 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 return -1;
         } else if (strcmp(argv[i], "--gi-cook") == 0) {
             args->gi_cook = true;
+        } else if (strcmp(argv[i], "--capture-rest-unshadow") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->capture_rest_unshadow = argv[i];
         } else if (strcmp(argv[i], "--capture-hide") == 0 ||
                    strcmp(argv[i], "--remove-node") == 0) {
             const bool hide = strcmp(argv[i], "--capture-hide") == 0;
@@ -3595,6 +3603,12 @@ void configure_sss_materials(Engine* engine, Scene* scene, float radius, const f
     }
 }
 
+// --capture-rest-unshadow's rest: the light casts no shadow while a capture burst holds the scene,
+// and casts again after it, which is what silent does with its flashlight.
+static void _rest_unshadow(bool rest, void* ctx) {
+    ((Light*)ctx)->cast_shadows = !rest;
+}
+
 /*
  * CETRA MAIN
  */
@@ -5032,6 +5046,14 @@ int main(int argc, char** argv) {
         scene->gi->timing = args.capture_timing;
     }
     scene->cook_lighting = args.gi_cook;
+    if (args.capture_rest_unshadow) {
+        Light* light = scene_find_light(scene, args.capture_rest_unshadow);
+        if (light && light->cast_shadows)
+            scene_set_capture_rest(scene, _rest_unshadow, light);
+        else
+            fprintf(stderr, "Warning: --capture-rest-unshadow: no shadow-casting light '%s'\n",
+                    args.capture_rest_unshadow);
+    }
 
     // A scene file that authored its own probes wins over the flag, and says so:
     // --probe (or environment.probe_scene, which is the same request) asks for

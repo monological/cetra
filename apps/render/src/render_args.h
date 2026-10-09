@@ -233,7 +233,9 @@ typedef struct {
     bool capture_timing;      // The GI world's timing
     float gi_cull_pixels;     // The GI world's cull_pixels
     bool gi_cook;             // The scene's cook_lighting
-    int stream_probe;         // Print the streamed lighting's residency every N frames
+    // A shadow-casting light that casts none while a capture burst holds the scene at rest
+    const char* capture_rest_unshadow;
+    int stream_probe; // Print the streamed lighting's residency every N frames
     // Nodes by name: left out of every capture (spec 13.24), or taken out of the scene.
     const char* capture_hide[RENDER_NODE_NAMES_MAX];
     int capture_hide_count;
