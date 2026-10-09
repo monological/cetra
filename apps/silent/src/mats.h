@@ -118,6 +118,11 @@ void mats_register(Kit* kit, Engine* engine, Scene* scene);
 // a thing in the backpack -- with every surface the world has.
 void mats_kit(Kit* kit, Engine* engine, Scene* scene);
 
+// A bulb of `candela` and `colour` at `at`, world, inside a lampshade of `kit` (spec 13.40): the
+// shade's cloth glows with what of its light comes through. The first gives the shade its hook,
+// with the kit's engine; a shade whose hook will not build glows flat instead.
+void mats_shade_bulb(Kit* kit, const vec3 at, float candela, const vec3 colour);
+
 // Daytime: the street lamps' lenses go dark, and the stained glass is lit by the sky.
 void mats_daytime(Kit* kit);
 

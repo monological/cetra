@@ -939,17 +939,21 @@ static void living_room(Kit* kit, Scene* scene) {
     kit_frame_lathe(kit, w, MAT_LAMPSHADE, lx, lz, shade_y, shade, KIT_COUNT(shade), 20);
     kit_frame_box(kit, w, KIT_COLLIDER_ONLY, lx - 0.15f, lx + 0.15f, FLOOR_Y, shade_y + 0.3f,
                   lz - 0.15f, lz + 0.15f, true);
-    LightDesc lamp = {
-        .name = "floor_lamp",
-        .type = LIGHT_POINT,
-        .position = {lx + kit->origin[0], shade_y + 0.14f + kit->origin[1], lz + kit->origin[2]},
-        .color = {1.0f, 0.72f, 0.42f},
-        .intensity = 40.0f,
-        .range = 6.0f,
-        .cast_shadows = true,
-        .shadow_cache = true,
-        .source_radius = 0.03f,
-        .shadow_near = 0.05f};
+    // Its cloth glows with the bulb's light coming through it all the same.
+    const vec3 bulb = {lx + kit->origin[0], shade_y + 0.14f + kit->origin[1], lz + kit->origin[2]};
+    const vec3 warm = {1.0f, 0.72f, 0.42f};
+    const float candela = 40.0f;
+    mats_shade_bulb(kit, bulb, candela, warm);
+    LightDesc lamp = {.name = "floor_lamp",
+                      .type = LIGHT_POINT,
+                      .position = {bulb[0], bulb[1], bulb[2]},
+                      .color = {warm[0], warm[1], warm[2]},
+                      .intensity = candela,
+                      .range = 6.0f,
+                      .cast_shadows = true,
+                      .shadow_cache = true,
+                      .source_radius = 0.03f,
+                      .shadow_near = 0.05f};
     scene_add_light(scene, create_light(&lamp));
 }
 
