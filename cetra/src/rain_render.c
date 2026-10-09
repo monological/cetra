@@ -120,8 +120,9 @@ void rain_render_drops(RainRenderer* rr, Engine* engine, const Scene* scene,
     // still plane, which splashes and drips land on before the bed under it.
     const bool water = water_will_draw(scene->water, engine, engine->current_render_mode);
     const float water_level = water ? scene->water->level : -FLT_MAX;
-    static const vec4 NO_BOUNDS = {0.0f, 0.0f, 0.0f, 0.0f};
-    const float* water_bounds = water ? scene->water->bounds : NO_BOUNDS;
+    vec4 water_bounds = GLM_VEC4_ZERO_INIT;
+    if (water)
+        glm_vec4_copy(scene->water->bounds, water_bounds);
     RainDripSchedule sched = {0};
     if (rain_active(rain))
         rain_drip_schedule(rain, water_level, water_bounds, &sched);

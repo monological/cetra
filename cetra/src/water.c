@@ -24,6 +24,7 @@
 #include "texture.h"
 #include "uniform.h"
 #include "util.h"
+#include "water_bounds.h"
 
 /*
  * The three spectral bands, ported from the reference study.
@@ -654,6 +655,14 @@ void free_water(Water* water) {
     free(water);
 }
 
+// Whether the eye is under the water. Against the still level rather than the displaced surface:
+// a camera within a wave height of the waterline would otherwise change sides several times a
+// second as crests pass it, and every temporal history in the frame would reset each time.
+static bool _water_covers_eye(const Water* water, const Camera* cam) {
+    return cam && water_under(water->level, water->bounds, cam->position[0], cam->position[1],
+                              cam->position[2]);
+}
+
 void water_publish_to_postfx(const Water* water, const struct Scene* scene, struct Engine* engine) {
     if (!engine || !engine->postfx)
         return;
@@ -681,12 +690,11 @@ void water_publish_to_postfx(const Water* water, const struct Scene* scene, stru
      * submerged frame; aerial_volume belongs to the sky, which republishes every frame,
      * so clearing it here would make publish call order load-bearing.
      */
-    const Camera* cam = engine->camera;
-    const bool submerged = cam && cam->position[1] < water->level &&
-                           water_bounds_cover(water->bounds, cam->position[0], cam->position[2]);
+    const bool submerged = _water_covers_eye(water, engine->camera);
     fx->water_medium = submerged ? 1 : 0;
     fx->water_suppress_aerial = submerged ? 1 : 0;
     fx->water_level_y = water->level;
+    glm_vec4_copy((float*)water->bounds, fx->water_bounds);
     memcpy(fx->water_extinction, water->absorption, sizeof(vec3));
     /*
      * The same product the surface forms (spec 11.84): scatter is the FRACTION of what
@@ -3103,15 +3111,8 @@ void water_render(Water* water, struct Scene* scene, struct Engine* engine, cons
     // (spec 11.42). Not the reflection, which is an environment lookup already carrying it.
     sky_bind_cloud_shadow(scene->sky, program, SKY_CLOUD_SHADOW_UNIT);
 
-    // Which side of the surface the eye is on. Compared against the still level
-    // rather than the displaced surface: a camera within a wave height of the
-    // waterline would otherwise flip models several times a second as crests pass
-    // it, and every temporal history in the frame would reset each time.
-    vec3 cam_world;
-    glm_vec3_copy(engine->camera->position, cam_world);
-    const bool submerged = cam_world[1] < water->level &&
-                           water_bounds_cover(water->bounds, cam_world[0], cam_world[2]);
-    uniform_set_int(u, "cameraSubmerged", submerged ? 1 : 0);
+    // Which side of the surface the eye is on.
+    uniform_set_int(u, "cameraSubmerged", _water_covers_eye(water, engine->camera) ? 1 : 0);
 
     // The shoreline's coverage needs samples to be dithered into, and the same
     // two conditions the opaque lane's masked materials read decide whether

@@ -161,7 +161,7 @@ static float _drip_fall_time(float height_m, float vt) {
     return t;
 }
 
-void rain_drip_schedule(const Rain* rain, float water_level, const float* water_bounds,
+void rain_drip_schedule(const Rain* rain, float water_level, const float water_bounds[4],
                         RainDripSchedule* out) {
     *out = (RainDripSchedule){0};
     if (!rain || rain->drip_count <= 0)
@@ -175,11 +175,12 @@ void rain_drip_schedule(const Rain* rain, float water_level, const float* water_
     int live = 0;
     for (int i = 0; i < lines; i++) {
         const RainDripLine* l = &rain->drips[i];
-        // Over the water when the line's middle is, which a drip line short beside a lake is.
-        const bool wet =
-            !water_bounds || water_bounds_cover(water_bounds, 0.5f * (l->from[0] + l->to[0]),
-                                                0.5f * (l->from[2] + l->to[2]));
-        out->land[i] = wet ? fmaxf(l->ground, water_level) : l->ground;
+        // Into the water when the line's middle stands in it, which a drip line short beside a
+        // lake does.
+        out->land[i] = water_under(water_level, water_bounds, 0.5f * (l->from[0] + l->to[0]),
+                                   l->ground, 0.5f * (l->from[2] + l->to[2]))
+                           ? water_level
+                           : l->ground;
         const float fall =
             _drip_fall_time(fmaxf(l->from[1], l->to[1]) - out->land[i], out->terminal);
         out->period[i] = fmaxf(RAIN_DRIP_PERIOD_MIN, RAIN_DRIP_HANG_MIN + fall + RAIN_SPLASH_LIFE);
@@ -430,7 +431,7 @@ void rain_probe_print(const Rain* rain) {
            (double)rain->wind_mean[2], (double)rain->travel[0], (double)rain->travel[1],
            (double)rain->travel[2], (double)rain->streak_forward_g, (double)rain->mist_forward_g);
     RainDripSchedule sched;
-    rain_drip_schedule(rain, -FLT_MAX, NULL, &sched);
+    rain_drip_schedule(rain, -FLT_MAX, (const float[4]){0.0f}, &sched);
     printf("rain-probe drips lines=%d count=%d given=%d flow=%.9g draws=%d\n",
            rain->drip_line_count, rain->drip_count, sched.total, (double)_drip_flow(rain),
            rain_draws(rain) ? 1 : 0);

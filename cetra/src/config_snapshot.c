@@ -717,6 +717,8 @@ static const ConfigField CFG_FIELDS[] = {
     CFG_ROW(CFG_WATER, CFG_BOOL, "water", "enabled", enabled),
     CFG_ROW(CFG_WATER, CFG_FLOAT, "water", "level", level),
     CFG_ROW(CFG_WATER, CFG_FLOAT, "water", "extent", extent),
+    CFG_ROW(CFG_WATER, CFG_VEC2, "water", "bounds_min", bounds),
+    CFG_ROW(CFG_WATER, CFG_VEC2, "water", "bounds_max", bounds[2]),
     CFG_ROW(CFG_WATER, CFG_VEC3, "water", "absorption", absorption),
     CFG_ROW(CFG_WATER, CFG_VEC3, "water", "scatterAlbedo", scatter_albedo),
     CFG_ROW(CFG_WATER, CFG_VEC3, "water", "scatterGlow", scatter_glow),

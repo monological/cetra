@@ -15,9 +15,12 @@
 // surface passes its geometric normal, which on a beach face is the same direction read
 // off different data.
 
+#include "water_bounds.glsl"
+
 uniform float waterLevel;
 uniform vec2 waterWindDir; // unit; the longest wave's travel direction
 uniform float waterExtent; // the shoaling bed's domain; nothing outside it has a shore
+uniform vec4 waterBounds;  // Water.bounds: where the sea is at all; all zero = everywhere
 
 /*
  * The numbers this model stands on, in the one file both languages read.
@@ -153,7 +156,8 @@ float shoreSlope() {
 }
 
 /*
- * How much shore a point has: 1 well inside the bed's domain, 0 outside it.
+ * How much shore a point has: 1 well inside the bed's domain, 0 outside it, and 0 past the sea's
+ * bounds, where there is no sea to have run up.
  *
  * SQUARE, because that is the shape the bed texture covers -- ocean.glsl addresses it as
  * p / (waterExtent * 2) + 0.5, a square of half-width waterExtent centred on the origin. A lit
@@ -169,6 +173,8 @@ float shoreSlope() {
 const float SHORE_DOMAIN_FADE = 0.75;
 
 float shoreDomain(vec2 p) {
+    if (!waterBoundsCover(waterBounds, p))
+        return 0.0;
     vec2 d = abs(p) / max(waterExtent, 1.0e-4);
     return 1.0 - smoothstep(SHORE_DOMAIN_FADE, 1.0, max(d.x, d.y));
 }

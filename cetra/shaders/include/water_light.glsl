@@ -9,14 +9,12 @@
 // Scalars and one include only: pbr_frag is at its sixteen samplers.
 
 #include "fresnel.glsl"
-#include "water_bounds.glsl"
 
 uniform float waterIor;
 uniform vec3 waterAbsorption; // extinction per world unit, per channel
 // 1 = a surface under the level is lit through the water above it: a sea is drawn and its
 // downwell switch is on. 0 leaves every surface in air.
 uniform int waterDownwell;
-uniform vec4 waterBounds; // Water.bounds: min x, min z, max x, max z; all zero = everywhere
 
 /*
  * How much weaker the sky's diffuse light gets per unit of extinction, against a collimated
