@@ -91,6 +91,11 @@ SOURCES = {
     "cliff_side": {"saturation": 0.6},
     # The woods' fallen logs and stumps.
     "pine_bark": {"saturation": 0.7},
+    # The bedroom (spec 13.40): cotton for the sheets and the pillows, a jacquard bedspread gone
+    # faded, and olive cloth for the backpack's canvas.
+    "cotton_jersey": {},
+    "quatrefoil_jacquard_fabric": {"saturation": 0.7},
+    "book_pattern": {"diffuse": "col1"},
     # From ambientCG (https://ambientcg.com), also CC0: what Poly Haven has no
     # scan of -- brushed stainless, paper, a kitchen smear for the glass, and
     # the table's scratched enamel: a yellow paint with almost no rust, taken to

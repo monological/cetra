@@ -15,9 +15,9 @@
  * layout.h's footprint, its front door, hall, kitchen and clock where layout.h has them. The
  * ground floor is the hall, as in P.T., running straight from the front door to a window at the
  * back, with a cased opening half way; the kitchen and the living room off its front half, the
- * bathroom off its back; the stair and the back bedroom shut; and at the hall's end a door onto
- * the cellar stair, down to a basement under the whole house (basement.h, spec 13.31). Nobody
- * goes upstairs.
+ * bathroom and the back bedroom off its back (bedroom.h, spec 13.40); the stair shut; and at the
+ * hall's end a door onto the cellar stair, down to a basement under the whole house (basement.h,
+ * spec 13.31). Nobody goes upstairs.
  */
 
 // The cross walls behind the living room and the bathroom, and the bathroom's east wall.
@@ -42,6 +42,21 @@
 // And the hall's, front to back.
 #define HALL_IN_Z0 BAND_Z0
 #define HALL_IN_Z1 (HOUSE_BACK_Z - 0.5f * EXT_WALL)
+
+// A ground-floor window's sill and head.
+#define GROUND_SILL (FLOOR_Y + 0.85f)
+#define GROUND_HEAD (FLOOR_Y + 2.15f)
+
+// The back bedroom (spec 13.40), east of the hall's back half behind the bathroom: its door off
+// the hall, the window in its east wall, and its inner faces.
+#define BEDROOM_DOOR_Z0 17.6f
+#define BEDROOM_DOOR_Z1 18.4f
+#define BEDROOM_WIN_Z0  17.5f
+#define BEDROOM_WIN_Z1  18.5f
+#define BEDROOM_IN_X0   (HALL_X1 + 0.5f * INT_WALL)
+#define BEDROOM_IN_X1   (HOUSE_X1 - 0.5f * EXT_WALL)
+#define BEDROOM_IN_Z0   (HOME_SPLIT_Z + 0.5f * INT_WALL)
+#define BEDROOM_IN_Z1   (HOUSE_BACK_Z - 0.5f * EXT_WALL)
 
 // The living room's television's middle, west of the hall (negated): the sofa, the chair and the
 // table face it.
@@ -86,12 +101,14 @@ void home_build(Kit* kit, Engine* engine, Scene* scene);
 // `foot` in the partition's: the way into the basement at the bottom of the flight.
 void home_line_stairwell(Kit* kit, int mat, const KitOpening* foot);
 
-// The front door, the bathroom's and the basement's, hung to swing; false for one that could
-// not be.
+// The front door, the bathroom's, the bedroom's and the basement's, hung to swing; false for one
+// that could not be.
 bool home_front_door(Door* door, Engine* engine, Scene* scene, EntityManager* em,
                      PhysicsWorld* physics);
 bool home_bath_door(Door* door, Engine* engine, Scene* scene, EntityManager* em,
                     PhysicsWorld* physics);
+bool home_bedroom_door(Door* door, Engine* engine, Scene* scene, EntityManager* em,
+                       PhysicsWorld* physics);
 bool home_basement_door(Door* door, Engine* engine, Scene* scene, EntityManager* em,
                         PhysicsWorld* physics);
 

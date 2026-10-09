@@ -10,6 +10,7 @@
 #include "cetra/texture.h"
 #include "cetra/util.h"
 
+#include "bedroom.h"
 #include "cards.h"
 #include "home.h"
 #include "house.h"
@@ -21,13 +22,14 @@
  * The player's house (spec 13.25). The plan is layout.h's footprint without the tower: the hall
  * runs the whole depth on HALL_X0..HALL_X1, a cased opening across it on the front band's back
  * wall; the kitchen and the living room either side of its front half; the bathroom, a shut
- * laundry and the back bedroom east of its back half; and west of it the stair behind a shut
- * door, and at the hall's end the cellar stair, whose door opens, down to the basement under the
- * whole house (basement.c, spec 13.31). Every finish is a scan silent already has, tinted.
+ * laundry and the back bedroom east of its back half, the bedroom's door opening and the room
+ * furnished (bedroom.c, spec 13.40); and west of it the stair behind a shut door, and at the
+ * hall's end the cellar stair, whose door opens, down to the basement under the whole house
+ * (basement.c, spec 13.31). Every finish is a scan silent already has, tinted.
  *
  *     z            ground floor
  *     ^   +-------------+---+-----------------+
- *     |   |  cellar [c] | h |[b]  bedroom     |   [c] the cellar door
+ *     |   |  cellar [c] | h |[b]  bedroom     |   [c] the cellar door, [b] the bedroom's
  *     |   +-------------+ a |                 |   STAIRWELL_WALL_Z
  *     |   |  stair  [s] | l |                 |
  *     |   +-------------+ l +------+----------+   HOME_SPLIT_Z
@@ -46,10 +48,8 @@
 #define EAVE_OVERHANG 0.4f
 #define RAKE_OVERHANG 0.3f
 
-#define GROUND_SILL (FLOOR_Y + 0.85f)
-#define GROUND_HEAD (FLOOR_Y + 2.15f)
-#define UP_SILL     (FLOOR2_Y + 0.85f)
-#define UP_HEAD     (FLOOR2_Y + 2.0f)
+#define UP_SILL (FLOOR2_Y + 0.85f)
+#define UP_HEAD (FLOOR2_Y + 2.0f)
 
 // The cased opening across the hall, and the window at its far end.
 #define CASED_X0    (HALL_X0 + 0.25f)
@@ -141,7 +141,7 @@ static const KitWall WALLS[HW_COUNT] = {
     // shelves are against it.
     [HW_EAST] = {OUTSIDE(false, HOUSE_X1, HOUSE_FRONT_Z, HOUSE_BACK_Z, -1),
                  .openings = {WIN(14.9f, 15.5f, FLOOR_Y + 1.3f, FLOOR_Y + 1.9f),
-                              WIN(17.5f, 18.5f, GROUND_SILL, GROUND_HEAD),
+                              WIN(BEDROOM_WIN_Z0, BEDROOM_WIN_Z1, GROUND_SILL, GROUND_HEAD),
                               WIN(11.2f, 12.1f, UP_SILL, UP_HEAD),
                               WIN(15.2f, 16.1f, UP_SILL, UP_HEAD)},
                  .opening_count = 4},
@@ -155,7 +155,8 @@ static const KitWall WALLS[HW_COUNT] = {
                         .opening_count = 1},
     [HW_HALL_E_BEDROOM] = {INSIDE(false, HALL_X1, HOME_SPLIT_Z, HOUSE_BACK_Z, 1, MAT_PLASTER,
                                   MAT_CREAM),
-                           .openings = {DOORWAY(17.6f, 18.4f, DOOR_HEAD)}, .opening_count = 1},
+                           .openings = {DOORWAY(BEDROOM_DOOR_Z0, BEDROOM_DOOR_Z1, DOOR_HEAD)},
+                           .opening_count = 1},
     [HW_HALL_W_LIVING] = {INSIDE(false, HALL_X0, HOUSE_FRONT_Z, HOME_SPLIT_Z, 1, MAT_CREAM,
                                  MAT_WALLPAPER),
                           .openings = {DOORWAY(LIVING_DOOR_Z0, LIVING_DOOR_Z1, DOOR_HEAD)},
@@ -189,9 +190,9 @@ static const struct {
 } GLAZING[] = {
     {HW_FRONT,
      {NO_PANE, MAT_WINDOW_GLASS, MAT_WINDOW_GLASS, MAT_DARK_GLASS, MAT_DARK_GLASS, MAT_WINDOW_LIT}},
-    {HW_BACK, {MAT_WINDOW_GLASS, MAT_DARK_GLASS, MAT_DARK_GLASS, MAT_DARK_GLASS, MAT_DARK_GLASS}},
+    {HW_BACK, {MAT_WINDOW_GLASS, MAT_DARK_GLASS, MAT_WINDOW_GLASS, MAT_DARK_GLASS, MAT_DARK_GLASS}},
     {HW_WEST, {MAT_WINDOW_GLASS, MAT_WINDOW_GLASS, MAT_DARK_GLASS, MAT_DARK_GLASS}},
-    {HW_EAST, {MAT_DARK_GLASS, MAT_DARK_GLASS, MAT_DARK_GLASS, MAT_DARK_GLASS}},
+    {HW_EAST, {MAT_DARK_GLASS, MAT_WINDOW_GLASS, MAT_DARK_GLASS, MAT_DARK_GLASS}},
 };
 
 static float roof_y(float x) {
@@ -266,7 +267,6 @@ static void walls(Kit* kit) {
             if (GLAZING[k].glass[i] != NO_PANE)
                 window(kit, w, i, GLAZING[k].glass[i]);
     }
-    door_shut(kit, &WALLS[HW_HALL_E_BEDROOM], O_BEDROOM_DOOR);
     door_shut(kit, &WALLS[HW_HALL_W_STAIR], O_STAIR_DOOR);
     // The front door's threshold, under the leaf, and the basement door's (spec 13.31).
     const KitOpening* door = &WALLS[HW_FRONT].openings[O_FRONT_DOOR];
@@ -552,13 +552,15 @@ static void dress(Kit* kit, const RoomSide* sides, int count, float x, float z, 
 }
 
 // Points in each room, which sides of its walls are its own.
-#define HALL_MID_X  (0.5f * (HALL_X0 + HALL_X1))
-#define HALL_FRONT  12.0f
-#define HALL_BACK   16.0f
-#define LIVING_AT_X (0.5f * (LIVING_IN_X0 + LIVING_IN_X1))
-#define LIVING_AT_Z (0.5f * (LIVING_IN_Z0 + LIVING_IN_Z1))
-#define BATH_AT_X   (0.5f * (BATH_IN_X0 + BATH_IN_X1))
-#define BATH_AT_Z   (0.5f * (BATH_IN_Z0 + BATH_IN_Z1))
+#define HALL_MID_X   (0.5f * (HALL_X0 + HALL_X1))
+#define HALL_FRONT   12.0f
+#define HALL_BACK    16.0f
+#define LIVING_AT_X  (0.5f * (LIVING_IN_X0 + LIVING_IN_X1))
+#define LIVING_AT_Z  (0.5f * (LIVING_IN_Z0 + LIVING_IN_Z1))
+#define BATH_AT_X    (0.5f * (BATH_IN_X0 + BATH_IN_X1))
+#define BATH_AT_Z    (0.5f * (BATH_IN_Z0 + BATH_IN_Z1))
+#define BEDROOM_AT_X (0.5f * (BEDROOM_IN_X0 + BEDROOM_IN_X1))
+#define BEDROOM_AT_Z (0.5f * (BEDROOM_IN_Z0 + BEDROOM_IN_Z1))
 
 static void finishes(Kit* kit) {
     const float split = KITCHEN_BACK_Z - 0.5f * INT_WALL, past = KITCHEN_BACK_Z + 0.5f * INT_WALL;
@@ -585,6 +587,13 @@ static void finishes(Kit* kit) {
         {HW_SPLIT_WEST, LIVING_IN_X0, LIVING_IN_X1, -1},
     };
     dress(kit, living, KIT_COUNT(living), LIVING_AT_X, LIVING_AT_Z, true);
+    const RoomSide bedroom[] = {
+        {HW_HALL_E_BEDROOM, BEDROOM_IN_Z0, BEDROOM_IN_Z1, MAT_WALLPAPER},
+        {HW_SPLIT_EAST, BEDROOM_IN_X0, BEDROOM_IN_X1, MAT_WALLPAPER},
+        {HW_EAST, BEDROOM_IN_Z0, BEDROOM_IN_Z1, MAT_WALLPAPER},
+        {HW_BACK, BEDROOM_IN_X0, BEDROOM_IN_X1, MAT_WALLPAPER},
+    };
+    dress(kit, bedroom, KIT_COUNT(bedroom), BEDROOM_AT_X, BEDROOM_AT_Z, true);
     // The bathroom's door is cased on its side too; its tiles want no skirting.
     const Facade bath = facade_toward(&WALLS[HW_HALL_E_BATH], BATH_AT_X, BATH_AT_Z);
     ornament_casing(kit, &bath, MAT_MOULDING, &WALLS[HW_HALL_E_BATH].openings[O_BATH_DOOR]);
@@ -981,6 +990,7 @@ void home_build(Kit* kit, Engine* engine, Scene* scene) {
     hall(kit, engine, scene);
     living_room(kit, scene);
     bathroom(kit, scene);
+    bedroom_build(kit, engine, scene);
 }
 
 // The front door, hung on its west jamb against the front wall's inner face so it swings into
@@ -1002,6 +1012,18 @@ bool home_bath_door(Door* door, Engine* engine, Scene* scene, EntityManager* em,
     const float x = HALL_X1 + 0.5f * INT_WALL - 0.5f * DOOR_THICK - 0.005f;
     const KitFrame hinge = {{x, 0.0f, opening->to}, 0.5f * GLM_PIf};
     return door_hang(door, engine, scene, em, physics, "bath_door", door_leaf_panelled, &hinge,
+                     *opening, 1.6f);
+}
+
+// The bedroom's (spec 13.40), the bathroom's way round: hung on its back jamb against the
+// bedroom's face of the wall, so it swings in and stands open along the room's back stretch of
+// that wall, leaving the front stretch to the dresser.
+bool home_bedroom_door(Door* door, Engine* engine, Scene* scene, EntityManager* em,
+                       PhysicsWorld* physics) {
+    const KitOpening* opening = &WALLS[HW_HALL_E_BEDROOM].openings[O_BEDROOM_DOOR];
+    const float x = HALL_X1 + 0.5f * INT_WALL - 0.5f * DOOR_THICK - 0.005f;
+    const KitFrame hinge = {{x, 0.0f, opening->to}, 0.5f * GLM_PIf};
+    return door_hang(door, engine, scene, em, physics, "bedroom_door", door_leaf_panelled, &hinge,
                      *opening, 1.6f);
 }
 
