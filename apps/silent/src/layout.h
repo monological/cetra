@@ -274,16 +274,18 @@
 #define CABIN_PAD_Z0 112.0f
 #define CABIN_PAD_Z1 124.0f
 #define CABIN_PAD_Y  (-10.8f)
+#define TRACK_HALF   1.8f // the track down to it, either side of its centre line
 // The log cabin on it (spec 13.41): its walls' centre lines, the door in the middle of the west
 // one, onto the porch and the dock; its floor on a stone footing over the pad, its eaves north
 // and south and its ridge along x.
-#define CABIN_X0      (-67.0f)
-#define CABIN_X1      (-62.0f)
-#define CABIN_Z0      115.0f
-#define CABIN_Z1      121.0f
-#define CABIN_FLOOR_Y (CABIN_PAD_Y + 0.45f)
-#define CABIN_EAVE_Y  (CABIN_FLOOR_Y + 2.3f)
-#define CABIN_RIDGE_Y (CABIN_EAVE_Y + 1.5f)
+#define CABIN_X0       (-67.0f)
+#define CABIN_X1       (-62.0f)
+#define CABIN_Z0       115.0f
+#define CABIN_Z1       121.0f
+#define CABIN_FLOOR_Y  (CABIN_PAD_Y + 0.45f)
+#define CABIN_EAVE_Y   (CABIN_FLOOR_Y + 2.3f)
+#define CABIN_RIDGE_Y  (CABIN_EAVE_Y + 1.5f)
+#define CABIN_PORCH_X0 (CABIN_X0 - 2.3f) // the porch's outer edge, toward the water
 // The ground's extent past the world's: west of the chasm south of the ridge, and south of the
 // woods behind our side; east of VALLEY_X1 it is not there at all.
 #define VALLEY_X0 (-147.0f) // a whole number of grid steps west of CHASM_X

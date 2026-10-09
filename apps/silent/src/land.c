@@ -39,7 +39,7 @@
 #define LAND_X0 VALLEY_X0 // a whole number of steps west of the street's end, so lines still meet
 #define NORTH_RISE 12.0f  // metres the woods climb from the far lots' backs to the north edge
 #define SOUTH_FALL 4.0f   // and fall from our back fences to the south edge
-#define FALL_Z1    85.0f  // where that fall is whole
+#define FALL_Z1    85.0f  // where that fall is whole: the world's south edge before the valley
 #define LAND_NOISE 0.6f   // metres of lumps in the woods
 // The grid's column on the chasm's east lip, and its row on the south lip.
 #define I_LIP   ((int)((CHASM_X - LAND_X0) / LAND_STEP))
@@ -68,31 +68,44 @@ float land_terrace_height(float x) {
     return land_terrace_lot_height(lot < 0 ? 0 : (lot >= TERRACE_LOTS ? TERRACE_LOTS - 1 : lot));
 }
 
+// A lip's broken edge about `line`, `t` metres along it, from two waves at their own phases.
+static float broken_edge(float line, float t, float phase_a, float phase_b) {
+    return line - 0.25f +
+           1.75f * (0.6f * sinf(0.21f * t + phase_a) + 0.4f * sinf(0.53f * t + phase_b));
+}
+
 float land_lip_x(float z) {
-    const float ragged =
-        CHASM_X - 0.25f + 1.75f * (0.6f * sinf(0.21f * z + 1.3f) + 0.4f * sinf(0.53f * z + 0.4f));
+    const float edge = broken_edge(CHASM_X, z, 1.3f, 0.4f);
     // Straight across the road's end and its sidewalks, where the road broke off, a little past
     // the crossroads' ground so no cell of the grid's first column closes to nothing.
     const float road = STREET_HALF_WIDTH, straight = CROSS_X0 - 0.3f;
-    return straight + (ragged - straight) * glm_smoothstep(road, road + 3.0f, fabsf(z));
+    return straight + (edge - straight) * glm_smoothstep(road, road + 3.0f, fabsf(z));
 }
 
 float land_ridge_lip_z(float x) {
-    const float ragged =
-        RIDGE_Z - 0.25f + 1.75f * (0.6f * sinf(0.21f * x + 2.1f) + 0.4f * sinf(0.53f * x + 0.9f));
+    const float edge = broken_edge(RIDGE_Z, x, 2.1f, 0.9f);
     // Square to the east lip at their corner, so the two meet.
     const float corner = land_lip_x(RIDGE_Z);
-    return RIDGE_Z + (ragged - RIDGE_Z) * glm_smoothstep(0.0f, 4.0f, corner - x);
+    return RIDGE_Z + (edge - RIDGE_Z) * glm_smoothstep(0.0f, 4.0f, corner - x);
 }
 
-// The flat ground, which stands on boxes of its own: the street's plate and the terrace together,
-// the crossroads', and the cabin's pad down by the lake.
+float land_lip_clearance(float x, float z, float clear) {
+    // West of the corner the ridge's lip, north of it the chasm; east of it the east lip, west of
+    // it the chasm as far south as the corner.
+    if (x < land_lip_x(RIDGE_Z))
+        return z - (land_ridge_lip_z(x) + clear);
+    return z < RIDGE_Z ? x - (land_lip_x(z) + clear) : FLT_MAX;
+}
+
+// The flat ground, which stands on boxes of its own, each at its level: the street's plate and the
+// terrace together, whose lots step up behind the terrace's wall, the crossroads', and the cabin's
+// pad down by the lake.
 static const struct {
-    float x0, x1, z0, z1;
+    float x0, x1, z0, z1, y;
 } FLAT[] = {
-    {-STREET_HALF_LEN, STREET_HALF_LEN, TERRACE_BACK_Z, BACK_FENCE_Z},
-    {CROSS_X0, -STREET_HALF_LEN, CROSS_Z0, CROSS_Z1},
-    {CABIN_PAD_X0, CABIN_PAD_X1, CABIN_PAD_Z0, CABIN_PAD_Z1},
+    {-STREET_HALF_LEN, STREET_HALF_LEN, TERRACE_BACK_Z, BACK_FENCE_Z, 0.0f},
+    {CROSS_X0, -STREET_HALF_LEN, CROSS_Z0, CROSS_Z1, 0.0f},
+    {CABIN_PAD_X0, CABIN_PAD_X1, CABIN_PAD_Z0, CABIN_PAD_Z1, CABIN_PAD_Y},
 };
 
 // How far (x, z) is outside the flat ground.
@@ -103,13 +116,22 @@ static float flat_distance(float x, float z) {
     return d;
 }
 
-// Whether the grid leaves (x, z) out: the flat ground, and across the road's end past it, where
-// the road has gone over the edge.
-static bool on_flat(float x, float z) {
+// Which of FLAT's boxes (x, z) is on, or -1.
+static int flat_at(float x, float z) {
     for (int i = 0; i < KIT_COUNT(FLAT); i++)
         if (x > FLAT[i].x0 && x < FLAT[i].x1 && z > FLAT[i].z0 && z < FLAT[i].z1)
-            return true;
+            return i;
+    return -1;
+}
+
+// Across the road's end past the crossroads, where the road has gone over the edge.
+static bool past_road_end(float x, float z) {
     return x < CROSS_X0 && fabsf(z) < STREET_HALF_WIDTH;
+}
+
+// Whether the grid leaves (x, z) out: the flat ground, and past the road's end.
+static bool on_flat(float x, float z) {
+    return flat_at(x, z) >= 0 || past_road_end(x, z);
 }
 
 // East of the street's west end: the hill, the woods behind the lots, and their lumps.
@@ -147,28 +169,31 @@ static float west_height(float x, float z) {
     float h = NORTH_RISE * glm_smoothstep(CROSS_Z0, WORLD_Z0, z) * off_road -
               SOUTH_FALL * glm_smoothstep(CROSS_Z1, FALL_Z1, z);
     h += LAND_NOISE * hill_lumps(x, z) * glm_smoothstep(0.0f, 6.0f, flat_distance(x, z));
+    const float meet = glm_smoothstep(-STREET_HALF_LEN - 10.0f, -STREET_HALF_LEN, x);
+    if (meet <= 0.0f)
+        return h;
     const float east = east_height(-STREET_HALF_LEN, z);
-    return h + (east - h) * glm_smoothstep(-STREET_HALF_LEN - 10.0f, -STREET_HALF_LEN, x);
+    return h + (east - h) * meet;
 }
 
 float land_height(float x, float z) {
-    if (on_flat(x, z)) {
-        if (z > CABIN_PAD_Z0)
-            return CABIN_PAD_Y;
-        return z < TERRACE_WALL_Z && x > -STREET_HALF_LEN ? land_terrace_height(x) : 0.0f;
-    }
+    const int flat = flat_at(x, z);
+    if (flat >= 0)
+        return z < TERRACE_WALL_Z && x > -STREET_HALF_LEN ? land_terrace_height(x) : FLAT[flat].y;
+    if (past_road_end(x, z))
+        return 0.0f;
     return lake_ground(x, z, x < -STREET_HALF_LEN ? west_height(x, z) : east_height(x, z));
 }
 
 /*
  * One column of the lip's face, down from `top`, `u` metres along the lip: leaning out over the
- * chasm a little as it goes down so it shows from the top, and broken up by a lumpy offset. The
- * east lip's face leans west, the ridge's north. `f` takes the lean and the lumps down to nothing
- * where the two meet, so their columns there go straight down and never cross.
+ * chasm a little as it goes down so it shows from the top, and broken up by a lumpy offset. It
+ * leans out along `axis`, x on the east lip and z on the ridge's. `f` takes the lean and the lumps
+ * down to nothing where the two meet, so their columns there go straight down and never cross.
  */
-static void face_column(const vec3 top, float u, bool east, float f, vec3 col[CLIFF_ROWS + 1]) {
-    const float lean = f < 1.0f ? 0.2f * f : 0.2f, wobble = f < 1.0f ? 0.6f * f : 0.6f;
-    const float out = east ? top[0] : top[2], side = east ? top[2] : top[0];
+static void face_column(const vec3 top, float u, int axis, float f, vec3 col[CLIFF_ROWS + 1]) {
+    const float lean = 0.2f * f, wobble = 0.6f * f;
+    const float out = top[axis], side = top[2 - axis];
     for (int k = 0; k <= CLIFF_ROWS; k++) {
         const float depth = CLIFF_STEP * (float)k;
         // Buttresses and gullies down the face, and ledges across it, in two sizes.
@@ -179,9 +204,9 @@ static void face_column(const vec3 top, float u, bool east, float f, vec3 col[CL
                       0.9f * sinf(1.1f * u + 0.9f * depth + 0.3f) * sinf(0.7f * depth - 0.4f * u);
         const float o = out - lean * depth + lump * f;
         const float s = side + (k == 0 ? 0.0f : wobble * sinf(0.7f * depth + u));
-        col[k][0] = east ? o : s;
+        col[k][axis] = o;
         col[k][1] = top[1] - depth + (k == 0 ? 0.0f : 0.8f * sinf(0.9f * u + depth));
-        col[k][2] = east ? s : o;
+        col[k][2 - axis] = s;
     }
 }
 
@@ -220,7 +245,7 @@ static void cliff(Kit* kit) {
         }
         const float f = glm_smoothstep(0.0f, 12.0f, fabsf(u - RIDGE_Z));
         vec3 col[CLIFF_ROWS + 1];
-        face_column(top, u, east, f, col);
+        face_column(top, u, east ? 0 : 2, f, col);
         if (j > 0) {
             // Each strip faces out of the chasm's side it is on; the one round the corner, both.
             vec3 facing;
@@ -264,6 +289,15 @@ static bool cell_missing(int i, int j) {
     return (i < I_LIP && j < J_RIDGE) || (i >= I_VALLEY_EAST && j >= J_VALLEY);
 }
 
+// Whether triangle a, b, c is too steep to hold soil.
+static bool too_steep(const float* a, const float* b, const float* c) {
+    vec3 ab, ac, n;
+    glm_vec3_sub((float*)b, (float*)a, ab);
+    glm_vec3_sub((float*)c, (float*)a, ac);
+    glm_vec3_cross(ab, ac, n);
+    return fabsf(n[1]) < ROCK_SLOPE_COS * glm_vec3_norm(n);
+}
+
 // The valley's ground, by what lies on it: mud along the water, rock where it is too steep to hold
 // soil -- each only in the valley, so no cell the town had changes -- and otherwise the woods'.
 static int valley_mat(const float* a, const float* b, const float* c, int woods_mat) {
@@ -272,11 +306,30 @@ static int valley_mat(const float* a, const float* b, const float* c, int woods_
         return woods_mat;
     if (fminf(fminf(a[1], b[1]), c[1]) < LAKE_Y + 0.3f)
         return MAT_SHORE;
-    vec3 ab, ac, n;
-    glm_vec3_sub((float*)b, (float*)a, ab);
-    glm_vec3_sub((float*)c, (float*)a, ac);
-    glm_vec3_cross(ab, ac, n);
-    return fabsf(n[1]) < ROCK_SLOPE_COS * glm_vec3_norm(n) ? MAT_CLIFF : woods_mat;
+    return too_steep(a, b, c) ? MAT_CLIFF : woods_mat;
+}
+
+// The grid's vertex (i, j): on the east lip as far as the corner, and west of it on the ridge's.
+static void grid_vertex(int i, int j, float* p) {
+    p[0] = LAND_X0 + LAND_STEP * (float)i;
+    p[2] = WORLD_Z0 + LAND_STEP * (float)j;
+    if (i == I_LIP && j <= J_RIDGE)
+        p[0] = land_lip_x(p[2]);
+    else if (j == J_RIDGE && i < I_LIP)
+        p[2] = land_ridge_lip_z(p[0]);
+    p[1] = land_height(p[0], p[2]);
+}
+
+bool land_too_steep(float x, float z) {
+    const float gi = (x - LAND_X0) / LAND_STEP, gj = (z - WORLD_Z0) / LAND_STEP;
+    const int i = (int)floorf(gi), j = (int)floorf(gj);
+    vec3 a = {0.0f}, b = {0.0f}, c = {0.0f}, e = {0.0f};
+    grid_vertex(i, j, a);
+    grid_vertex(i + 1, j, b);
+    grid_vertex(i, j + 1, c);
+    grid_vertex(i + 1, j + 1, e);
+    // The cell's two triangles, as land_build lays them, meet along b-c.
+    return gi - (float)i + gj - (float)j < 1.0f ? too_steep(a, c, b) : too_steep(b, c, e);
 }
 
 void land_build(Kit* kit) {
@@ -290,18 +343,9 @@ void land_build(Kit* kit) {
         free(idx);
         return;
     }
-    // The column on the east lip as far as the corner, and west of it the row on the ridge's lip.
     for (int j = 0; j <= rows; j++)
-        for (int i = 0; i <= cols; i++) {
-            float* p = &pos[3 * (j * (cols + 1) + i)];
-            p[0] = LAND_X0 + LAND_STEP * (float)i;
-            p[2] = WORLD_Z0 + LAND_STEP * (float)j;
-            if (i == I_LIP && j <= J_RIDGE)
-                p[0] = land_lip_x(p[2]);
-            else if (j == J_RIDGE && i < I_LIP)
-                p[2] = land_ridge_lip_z(p[0]);
-            p[1] = land_height(p[0], p[2]);
-        }
+        for (int i = 0; i <= cols; i++)
+            grid_vertex(i, j, &pos[3 * (j * (cols + 1) + i)]);
 
     // Faceted, a flat normal a triangle, and the collider from the same cells -- less the
     // mansion's grounds, whose flat would be one long run of coplanar triangles and stand on a box

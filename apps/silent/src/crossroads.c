@@ -33,10 +33,10 @@ typedef struct Barricade {
 } Barricade;
 
 static const Barricade BARRICADES[] = {
-    {CROSS_NORTH_Z, -STREET_HALF_LEN - TERRACE_WALL_THICK, true, -1.0f, 0.0f, 0.0f},
+    {CROSS_NORTH_Z, -STREET_HALF_LEN - TERRACE_WALL_THICK, true, -1.0f},
     // The lake track's way (spec 13.41).
-    {CROSS_SOUTH_Z, -STREET_HALF_LEN + NEAR_END_FENCE_INSET, false, 1.0f, CROSS_X - 1.8f,
-     CROSS_X + 1.8f},
+    {CROSS_SOUTH_Z, -STREET_HALF_LEN + NEAR_END_FENCE_INSET, false, 1.0f, CROSS_X - TRACK_HALF,
+     CROSS_X + TRACK_HALF},
 };
 
 // The street carried on west, the cross street across it, their sidewalks, and the corners.
@@ -137,8 +137,9 @@ static void barricade(Kit* kit, const Barricade* b, unsigned int* state) {
     const bool gap = b->gap_x1 > b->gap_x0;
     // Across the road, the sign on the middle one; or either side of the gap, the sign's dragged
     // off past the west one, turned along the road.
-    const float xs[3] = {gap ? b->gap_x0 - 1.2f : CROSS_X - 2.2f, gap ? b->gap_x0 - 1.8f : CROSS_X,
-                         gap ? b->gap_x1 + 1.2f : CROSS_X + 2.2f};
+    static const float ACROSS[3] = {CROSS_X - 2.2f, CROSS_X, CROSS_X + 2.2f};
+    const float aside[3] = {b->gap_x0 - 1.2f, b->gap_x0 - 1.8f, b->gap_x1 + 1.2f};
+    const float* xs = gap ? aside : ACROSS;
     const float dragged = gap ? 2.5f * b->behind : 0.0f,
                 turned = gap ? 0.5f * GLM_PIf - 0.3f : 0.0f;
     for (int i = 0; i < 3; i++) {
@@ -148,14 +149,17 @@ static void barricade(Kit* kit, const Barricade* b, unsigned int* state) {
     }
     if (b->police)
         street_car(kit, CROSS_X + 0.4f, b->z + b->behind * 3.6f, true);
-    // The body that closes the arm, or the two either side of its gap.
-    const float spans[2][2] = {{lip, gap ? b->gap_x0 : b->east_x}, {b->gap_x1, b->east_x}};
-    for (int s = 0; s < (gap ? 2 : 1); s++) {
-        const float x0 = spans[s][0], x1 = spans[s][1];
-        const float pad0 = s == 0 ? 0.5f : 0.0f, pad1 = gap ? 0.0f : 0.5f;
-        kit_collider(kit, (vec3){0.5f * (x0 - pad0 + x1 + pad1), 1.5f, b->z},
-                     (vec3){0.5f * (x1 + pad1 - x0 + pad0), 1.5f, 0.2f}, 0.0f);
+    // The body that closes the arm, half a metre past both its ends; or one either side of the
+    // gap, each past its outer end.
+    if (!gap) {
+        kit_collider(kit, (vec3){0.5f * (lip + b->east_x), 1.5f, b->z},
+                     (vec3){0.5f * (b->east_x - lip) + 0.5f, 1.5f, 0.2f}, 0.0f);
+        return;
     }
+    const float spans[2][2] = {{lip - 0.5f, b->gap_x0}, {b->gap_x1, b->east_x + 0.5f}};
+    for (int s = 0; s < 2; s++)
+        kit_collider(kit, (vec3){0.5f * (spans[s][0] + spans[s][1]), 1.5f, b->z},
+                     (vec3){0.5f * (spans[s][1] - spans[s][0]), 1.5f, 0.2f}, 0.0f);
 }
 
 // What is left of the road where it broke off: slabs gone over the edge, the kerbs snapped,

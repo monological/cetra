@@ -29,7 +29,7 @@ typedef struct Door {
     // its -d face, the outside.
     vec3 hinge;
     float yaw;
-    KitOpening shape; // the leaf's outline: a from the hinge (0..width), y in the world
+    KitOpening shape; // the leaf's outline: a from the hinge (0..width), y up from the hinge's foot
     float swing;      // radians it turns, toward +d, to stand open
     // How far along its swing it is, 0 shut .. 1 open, travelling toward `want`.
     float travel;
@@ -38,14 +38,14 @@ typedef struct Door {
 } Door;
 
 // Builds `leaf` as a node and a body of its own, shut, hung at `hinge`'s origin in its frame.
-// `shape`'s from/to are along the frame from the hinge, its bottom and top in world y. False if
-// it has no body, and is then no door.
+// `shape`'s from/to are along the frame from the hinge, its bottom and top up from the hinge's
+// origin. False if it has no body, and is then no door.
 bool door_build(Door* door, Engine* engine, Scene* scene, EntityManager* em, PhysicsWorld* physics,
                 const char* name, DoorLeafFn leaf, const KitFrame* hinge, const KitOpening* shape,
                 float thick, float swing);
 // The same for a door hung in `opening` as its wall has it, from a hinge at one of its jambs: a
 // leaf DOOR_THICK thick filling the opening shy of a clearance all round, its foot just off the
-// floor.
+// sill. The opening's heights are up from the hinge's origin, its building's ground.
 bool door_hang(Door* door, Engine* engine, Scene* scene, EntityManager* em, PhysicsWorld* physics,
                const char* name, DoorLeafFn leaf, const KitFrame* hinge, KitOpening opening,
                float swing);
@@ -59,6 +59,8 @@ void door_leaf_battened(Kit* kit, const KitFrame* f, const KitOpening* o, float 
 
 // Toward open if it is shut or shutting, toward shut otherwise.
 void door_toggle(Door* door);
+// Open already, with no swing.
+void door_set_open(Door* door);
 // Whether the next toggle opens it.
 bool door_will_open(const Door* door);
 

@@ -17,8 +17,7 @@ static void pose(const Door* door, vec3 centre, float* yaw) {
     const float half_w = 0.5f * (door->shape.to - door->shape.from);
     const float half_h = 0.5f * (kit_opening_crown(&door->shape) - door->shape.bottom);
     const KitFrame now = {{door->hinge[0], door->hinge[1], door->hinge[2]}, *yaw};
-    kit_frame_point(&now, door->shape.from + half_w, 0.0f, 0.0f, centre);
-    centre[1] = door->shape.bottom + half_h;
+    kit_frame_point(&now, door->shape.from + half_w, door->shape.bottom + half_h, 0.0f, centre);
 }
 
 // The leaf's head height at a, from its outline: straight up the jambs, then the arch.
@@ -34,14 +33,11 @@ static float head_at(const vec2* outline, int count, float a) {
     return top;
 }
 
-// Oak boards with dark seams down both faces, two iron straps across the outside (-d) ending
-// in spear points, studded, with their knuckles at the hinge (`from`), and a ring to pull on
-// either side by the latch.
-void door_leaf(Kit* kit, const KitFrame* f, const KitOpening* o, float t) {
+// A leaf of boards in `mat` the shape of `o`, with dark seams down both faces.
+static void boards(Kit* kit, const KitFrame* f, const KitOpening* o, float t, int mat) {
     vec2 outline[KIT_OPENING_POINTS];
     const int n = kit_opening_outline(o, outline);
-    kit_frame_extrude(kit, f, MAT_WOOD, outline, n, -0.5f * t, 0.5f * t);
-    const float w = o->to - o->from;
+    kit_frame_extrude(kit, f, mat, outline, n, -0.5f * t, 0.5f * t);
     for (float a = o->from + PLANK; a < o->to - 0.05f; a += PLANK) {
         const float top = head_at(outline, n, a) - 0.01f;
         for (int side = -1; side <= 1; side += 2) {
@@ -50,6 +46,14 @@ void door_leaf(Kit* kit, const KitFrame* f, const KitOpening* o, float t) {
                           d + (float)side * 0.001f, false);
         }
     }
+}
+
+// Oak boards with dark seams down both faces, two iron straps across the outside (-d) ending
+// in spear points, studded, with their knuckles at the hinge (`from`), and a ring to pull on
+// either side by the latch.
+void door_leaf(Kit* kit, const KitFrame* f, const KitOpening* o, float t) {
+    boards(kit, f, o, t, MAT_WOOD);
+    const float w = o->to - o->from;
     const float out = -0.5f * t, h = kit_opening_crown(o) - o->bottom;
     const float heights[2] = {o->bottom + 0.28f, o->bottom + 0.62f * h};
     for (int s = 0; s < 2; s++) {
@@ -97,17 +101,7 @@ void door_leaf(Kit* kit, const KitFrame* f, const KitOpening* o, float t) {
  * its knuckle at the hinge (`from`), and a thumb latch -- a handle outside, its bar inside.
  */
 void door_leaf_battened(Kit* kit, const KitFrame* f, const KitOpening* o, float t) {
-    vec2 outline[KIT_OPENING_POINTS];
-    const int n = kit_opening_outline(o, outline);
-    kit_frame_extrude(kit, f, MAT_FENCE_BOARD, outline, n, -0.5f * t, 0.5f * t);
-    for (float a = o->from + PLANK; a < o->to - 0.05f; a += PLANK) {
-        const float top = head_at(outline, n, a) - 0.01f;
-        for (int side = -1; side <= 1; side += 2) {
-            const float d = (float)side * 0.5f * t;
-            kit_frame_box(kit, f, MAT_BLACK, a - 0.003f, a + 0.003f, o->bottom + 0.01f, top, d,
-                          d + (float)side * 0.001f, false);
-        }
-    }
+    boards(kit, f, o, t, MAT_FENCE_BOARD);
     const float in = 0.5f * t, w = o->to - o->from, h = kit_opening_crown(o) - o->bottom;
     const float ledge[2] = {o->bottom + 0.28f, o->bottom + h - 0.3f}, lw = 0.06f;
     for (int s = 0; s < 2; s++)
@@ -224,10 +218,8 @@ bool door_hang(Door* door, Engine* engine, Scene* scene, EntityManager* em, Phys
     opening.to -= opening.from;
     opening.from = 0.0f;
     KitOpening shape = kit_opening_grow(&opening, -DOOR_CLEARANCE);
-    // Into the world: the opening's heights are its building's, whose ground the hinge's
-    // height is, and the leaf stands a gap off the opening's sill.
-    shape.top += hinge->origin[1];
-    shape.bottom = hinge->origin[1] + opening.bottom + DOOR_SILL_GAP;
+    // Standing a gap off the opening's sill.
+    shape.bottom = opening.bottom + DOOR_SILL_GAP;
     return door_build(door, engine, scene, em, physics, name, leaf, hinge, &shape, DOOR_THICK,
                       swing);
 }
@@ -238,6 +230,12 @@ bool door_will_open(const Door* door) {
 
 void door_toggle(Door* door) {
     door->want = door_will_open(door) ? 1.0f : 0.0f;
+}
+
+void door_set_open(Door* door) {
+    door->travel = door->want = 1.0f;
+    if (door->entity)
+        place(door);
 }
 
 void door_update(Door* door, float dt) {

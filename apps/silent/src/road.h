@@ -43,7 +43,7 @@ typedef struct Road {
 float road_height(Road* road, float s);
 
 // How far (x, z) is from the road's centre line, in plan, and how far along it the nearest
-// point is.
+// point is, unless `along` is NULL.
 float road_distance(Road* road, float x, float z, float* along);
 
 // The ground `h` at (x, z) with the road carved in: a hair under the surface across its width,

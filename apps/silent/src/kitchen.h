@@ -3,6 +3,7 @@
 
 #include "cetra/game/audio.h"
 
+#include "cards.h"
 #include "kit.h"
 
 // Everything standing in the kitchen: the L of cabinets with the sink and the
@@ -27,5 +28,10 @@ void kitchen_chair(Kit* kit, const KitFrame* f);
 // height y in frame `f`.
 void kitchen_plates(Kit* kit, const KitFrame* f, float a, float d, float y, int count);
 void kitchen_mug(Kit* kit, const KitFrame* f, float a, float d, float y);
+
+// A card pinned upright facing out of its wall at d, centred at (a, y) and turned `tilt` radians
+// in its own plane.
+void kitchen_pin_card(Kit* kit, const KitFrame* f, CardId card, float a, float y, float d,
+                      float tilt);
 
 #endif // _SILENT_KITCHEN_H_

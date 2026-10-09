@@ -4,7 +4,7 @@ A scan would need an opacity channel, and the fetcher's sets have none, so the c
 a few dozen blades rising from a common foot, tapering, bending over as they go up, some broken
 off, among them a few stems carrying a cattail's dark head. Late in the year, so straw and dead
 olive rather than green. One picture is one clump, seen side on; the lake stands each clump as
-two or three cards crossed through its foot.
+two cards crossed through its foot.
 
 Writes reeds_{albedo,normal,rough}.png into assets/textures/silent/, the albedo RGBA with the
 blades in alpha, and like every map there BOTTOM ROW FIRST (see fetch_textures.py).
@@ -16,9 +16,9 @@ import os
 import sys
 
 import numpy as np
-from PIL import Image
 
 from fetch_textures import OUT_DIR
+from make_cards import to_image
 
 SIZE = 256
 SEED = 1341
@@ -29,6 +29,9 @@ STRAW = np.array([0.60, 0.53, 0.38])  # sRGB, dry reed
 OLIVE = np.array([0.36, 0.36, 0.24])  # and one not quite dead
 ROOT = np.array([0.20, 0.17, 0.12])  # the wet foot of the clump
 HEAD = np.array([0.24, 0.15, 0.09])  # a cattail's seed head
+
+# Every texel's centre, y up.
+GRID_Y, GRID_X = np.mgrid[0:SIZE, 0:SIZE].astype(np.float64) + 0.5
 
 
 def blade_path(rng, foot_x):
@@ -46,9 +49,8 @@ def blade_path(rng, foot_x):
     return x, y, t
 
 
-def stroke(cov, shade, x, y, t, width0, colour, rng):
+def stroke(cov, shade, x, y, t, width0, colour):
     """Paint one tapering stroke into the coverage and colour buffers."""
-    yy, xx = np.mgrid[0:SIZE, 0:SIZE].astype(np.float64) + 0.5
     for i in range(len(x) - 1):
         w = width0 * (1.0 - 0.85 * t[i]) + 0.4
         x0, y0, x1, y1 = x[i], y[i], x[i + 1], y[i + 1]
@@ -56,7 +58,7 @@ def stroke(cov, shade, x, y, t, width0, colour, rng):
         lo_y, hi_y = int(max(min(y0, y1) - w - 2, 0)), int(min(max(y0, y1) + w + 2, SIZE))
         if lo_x >= hi_x or lo_y >= hi_y:
             continue
-        px, py = xx[lo_y:hi_y, lo_x:hi_x], yy[lo_y:hi_y, lo_x:hi_x]
+        px, py = GRID_X[lo_y:hi_y, lo_x:hi_x], GRID_Y[lo_y:hi_y, lo_x:hi_x]
         dx, dy = x1 - x0, y1 - y0
         seg = max(dx * dx + dy * dy, 1e-6)
         s = np.clip(((px - x0) * dx + (py - y0) * dy) / seg, 0.0, 1.0)
@@ -80,8 +82,8 @@ def main():
         x, y, t = blade_path(rng, foot)
         mix = rng.random()
         colour = STRAW * mix + OLIVE * (1.0 - mix)
-        # Darker toward the wet foot.
-        stroke(cov, shade, x, y, t, rng.uniform(1.4, 2.4), colour * rng.uniform(0.75, 1.05), rng)
+        # Each blade a little lighter or darker than the next.
+        stroke(cov, shade, x, y, t, rng.uniform(1.4, 2.4), colour * rng.uniform(0.75, 1.05))
     for _ in range(CATTAILS):
         foot = SIZE * 0.5 + rng.normal(0.0, SIZE * 0.05)
         top = rng.uniform(0.7, 0.92) * SIZE
@@ -89,10 +91,10 @@ def main():
         t = np.linspace(0.0, 1.0, 48)
         x = foot + SIZE * lean * t
         y = top * t
-        stroke(cov, shade, x, y, t * 0.3, 1.0, STRAW * 0.8, rng)
+        stroke(cov, shade, x, y, t * 0.3, 1.0, STRAW * 0.8)
         # The head: a dark sausage near the top of the stem.
         h0, h1 = int(len(t) * 0.78), int(len(t) * 0.92)
-        stroke(cov, shade, x[h0:h1], y[h0:h1], np.zeros(h1 - h0), 3.6, HEAD, rng)
+        stroke(cov, shade, x[h0:h1], y[h0:h1], np.zeros(h1 - h0), 3.6, HEAD)
     # The foot of the clump in the mud.
     yy = np.arange(SIZE)[:, None] + 0.5
     foot_dark = np.clip(1.0 - yy / (SIZE * 0.25), 0.0, 1.0)
@@ -104,13 +106,8 @@ def main():
     normal[...] = [0.5, 0.5, 1.0]
     rough = np.full((SIZE, SIZE, 3), 0.85)
 
-    def save(array, name, mode):
-        img = Image.fromarray(np.clip(array * 255.0 + 0.5, 0, 255).astype(np.uint8), mode)
-        img.save(os.path.join(OUT_DIR, "reeds_%s.png" % name))
-
-    save(albedo, "albedo", "RGBA")
-    save(normal, "normal", "RGB")
-    save(rough, "rough", "RGB")
+    for name, array in (("albedo", albedo), ("normal", normal), ("rough", rough)):
+        to_image(array).save(os.path.join(OUT_DIR, "reeds_%s.png" % name))
     print("reeds: %d px, %d blades and %d cattails" % (SIZE, BLADES, CATTAILS))
     return 0
 

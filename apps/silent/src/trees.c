@@ -214,17 +214,16 @@ void trees_build(Trees* trees, Kit* kit, Scene* scene, unsigned int seed) {
 
 void trees_stand(Trees* trees, Kit* kit, int which, float x, float z, float scale, float yaw,
                  float lean) {
-    const float y = land_height(x, z) - 0.25f;
+    const float ground = land_height(x, z);
     SceneNode* node = create_node();
     mat4 m;
-    glm_translate_make(m, (vec3){x, y, z});
+    glm_translate_make(m, (vec3){x, ground - 0.25f, z});
     glm_rotate_y(m, yaw, m);
     glm_rotate_x(m, lean, m);
     glm_scale_uni(m, scale);
     glm_mat4_copy(m, node->original_transform);
     node_add_mesh(node, mesh_ref(trees->dead[which]));
     node_add_child(trees->groups[which], node);
-    trees_trunk_collider(kit, x, z, land_height(x, z),
-                         trees->trunk_radius[which] * scale * TREES_TRUNK_BODY, TREES_TRUNK_HEIGHT,
-                         yaw, lean);
+    trees_trunk_collider(kit, x, z, ground, trees->trunk_radius[which] * scale * TREES_TRUNK_BODY,
+                         TREES_TRUNK_HEIGHT, yaw, lean);
 }

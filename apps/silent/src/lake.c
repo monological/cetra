@@ -43,10 +43,17 @@
 #define BOWL_LONG   24.0f    // and this much further on the side toward the track and the cabin
 #define BOWL_FACING (-0.54f) // radians: that side's bearing from the lake's centre
 #define BEACH_SLOPE 0.06f    // the bank's rise per metre at the water's edge
+// Past this from the lake's centre the bowl has climbed back to the ground: the shore's widest,
+// with its wobble, plus the bowl's longest reach, and a metre for rounding.
+#define VALLEY_REACH (fmaxf(LAKE_RX, LAKE_RZ) * 1.12f + BOWL_REACH + BOWL_LONG + 1.0f)
+
+// Metres out from the shore the bed reaches wading depth, where a ring of bodies stops anyone
+// going further.
+#define WADE_OUT 5.0f
 
 #define SHELF_SLOPE 0.12f // the bed's fall per metre out from the shore: 0.6 m at the wading ring
 #define DROP        3.0f  // and then down, between DROP_FROM and DROP_TO metres out
-#define DROP_FROM   LAKE_WADE_OUT
+#define DROP_FROM   WADE_OUT
 #define DROP_TO     14.0f
 #define FLOOR_FALL  0.6f // a last fall to the deepest water, out to FLOOR_TO
 #define FLOOR_TO    30.0f
@@ -54,11 +61,21 @@
 
 #define PAD_SHOULDER 3.0f // metres over which the ground comes to the pad's level
 
+#define TRACK_ASPHALT 10.0f // metres of the cross street's south arm the track starts along
+
 // The track's line: on down the cross street's south arm, through the old cutting, round the
 // ridge's east end, and down the bank to the cabin's pad.
 static const float TRACK_POINTS[][2] = {
-    {-52.0f, 26.0f}, {-52.0f, 36.0f}, {-51.0f, 48.0f}, {-50.0f, 60.0f},  {-54.0f, 72.0f},
-    {-63.0f, 80.0f}, {-73.0f, 88.0f}, {-77.0f, 98.0f}, {-71.0f, 106.0f}, {-65.0f, 113.0f},
+    {CROSS_X, CROSS_Z1 - TRACK_ASPHALT},
+    {CROSS_X, CROSS_Z1},
+    {-51.0f, 48.0f},
+    {-50.0f, 60.0f},
+    {-54.0f, 72.0f},
+    {-63.0f, 80.0f},
+    {-73.0f, 88.0f},
+    {-77.0f, 98.0f},
+    {-71.0f, 106.0f},
+    {-65.0f, 113.0f},
 };
 
 // Level over the asphalt it starts on and at the pad, between them one grade, under the 8 degrees
@@ -66,11 +83,11 @@ static const float TRACK_POINTS[][2] = {
 static const RoadDesc TRACK = {
     .points = TRACK_POINTS,
     .point_count = (int)(sizeof(TRACK_POINTS) / sizeof(TRACK_POINTS[0])),
-    .half = 1.8f,
+    .half = TRACK_HALF,
     .shoulder = 4.0f,
     .y0 = ROAD_Y,
     .y1 = CABIN_PAD_Y,
-    .flat_run = 10.0f,
+    .flat_run = TRACK_ASPHALT,
     .flat_end = 3.0f,
     .rise = ROAD_RISE_GRADE,
     .ease = 10.0f,
@@ -86,14 +103,20 @@ static float shore_radius(float theta) {
     return ellipse * (1.0f + 0.07f * sinf(2.0f * theta) + 0.05f * sinf(3.0f * theta));
 }
 
-float lake_shore_distance(float x, float z) {
+// How far (x, z) is from the shoreline in plan, and its bearing from the lake's centre.
+static float shore_offset(float x, float z, float* theta) {
     const float dx = x - LAKE_X, dz = z - LAKE_Z;
-    return hypotf(dx, dz) - shore_radius(atan2f(dz, dx));
+    *theta = atan2f(dz, dx);
+    return hypotf(dx, dz) - shore_radius(*theta);
+}
+
+float lake_shore_distance(float x, float z) {
+    float theta = 0.0f;
+    return shore_offset(x, z, &theta);
 }
 
 float lake_track_distance(float x, float z) {
-    float along = 0.0f;
-    return road_distance(&g_track, x, z, &along);
+    return road_distance(&g_track, x, z, NULL);
 }
 
 // The valley's own shape, before the track and the pad: the ridge, the bowl and the bed.
@@ -104,8 +127,10 @@ static float valley(float x, float z, float h) {
     if (ridge > 0.0f)
         h += ridge;
     const float dx = x - LAKE_X, dz = z - LAKE_Z;
-    const float theta = atan2f(dz, dx);
-    const float d = hypotf(dx, dz) - shore_radius(theta);
+    if (dx * dx + dz * dz >= VALLEY_REACH * VALLEY_REACH)
+        return h;
+    float theta = 0.0f;
+    const float d = shore_offset(x, z, &theta);
     if (d >= 0.0f) {
         const float reach = BOWL_REACH + BOWL_LONG * fmaxf(0.0f, cosf(theta - BOWL_FACING));
         if (d >= reach)
@@ -160,8 +185,9 @@ void lake_ground_build(Kit* kit) {
  *
  * The engine's water is a plane to the horizon unless it is told where it ends, so it is held
  * to a rectangle round the basin whose every edge is under the bank: outside it there is no
- * water, and nothing below LAKE_Y elsewhere -- the chasm -- floods or darkens. It is drawn only
- * while the eye is in or near the valley, which the fog hides; in clear air, everywhere.
+ * water, and nothing below LAKE_Y elsewhere -- the chasm -- floods or darkens. Its surface, the
+ * light it takes from what is under it and its ripples cost a frame wherever the eye is, so it
+ * is on only within a reach of the eye that the fog hides; in clear air, always.
  *
  * Dark and still: a peat lake in the woods, tea-brown and opaque at arm's length, under a breath
  * of wind. No caustics and no motes, which such water would not show.
@@ -171,23 +197,17 @@ void lake_ground_build(Kit* kit) {
 #define WATER_X1 (-68.0f)
 #define WATER_Z0 97.0f
 #define WATER_Z1 141.0f
-// The eye is in the valley past the first of these and out of it before the second, so the
-// water does not flick on and off with a step back and forth.
-#define WATER_ON_X  (-40.0f)
-#define WATER_ON_Z  66.0f
-#define WATER_OFF_X (-36.0f)
-#define WATER_OFF_Z 60.0f
 
-#define RING_FOOT \
-    (-12.9f) // the wading ring's bodies, from under the bed at the ring to over a head
-#define RING_TOP  (-10.4f)
+// The wading ring's bodies, from under the bed at the ring to over a head.
+#define RING_FOOT (LAKE_Y - 0.9f)
+#define RING_TOP  (LAKE_Y + 1.6f)
 #define WAKE_PACE 0.6f // metres a wader moves for each ripple
 
-#define DOCK_X0   (-72.0f)         // where its deck leaves the bank
-#define DOCK_X1   (-85.0f)         // and its far end, over deep water
-#define DOCK_Z    118.0f           // its centre line, straight out from the cabin's door
-#define DOCK_HALF 0.8f             // half its width
-#define DOCK_Y    (-11.05f)        // the deck's top, a metre over the water
+#define DOCK_X0   (-72.0f)                       // where its deck leaves the bank
+#define DOCK_X1   (-85.0f)                       // and its far end, over deep water
+#define DOCK_Z    (0.5f * (CABIN_Z0 + CABIN_Z1)) // its centre line, out from the cabin's door
+#define DOCK_HALF 0.8f                           // half its width
+#define DOCK_Y    (LAKE_Y + 0.95f)               // the deck's top, a metre over the water
 #define DOCK_POST (DOCK_X1 + 0.3f) // the last pair of posts, standing up past the deck
 
 #define BOAT_HALF_LEN  1.8f
@@ -203,10 +223,6 @@ void lake_ground_build(Kit* kit) {
 // Against the other loops tools/fetch_sounds.py levels alike.
 #define LAPPING_VOLUME 0.35f
 
-static WaterWake g_wake;
-static bool g_always_drawn;
-static Sound* g_lapping;
-
 // The point `out` metres outside the shore (negative: over the water) on bearing `theta`.
 static void shore_at(float theta, float out, float* x, float* z) {
     const float r = shore_radius(theta) + out;
@@ -214,10 +230,10 @@ static void shore_at(float theta, float out, float* x, float* z) {
     *z = LAKE_Z + r * sinf(theta);
 }
 
-static void water(Scene* scene, bool always_drawn) {
+static Water* water(Scene* scene) {
     Water* w = create_water();
     if (!w)
-        return;
+        return NULL;
     w->level = LAKE_Y;
     glm_vec4_copy((vec4){WATER_X0, WATER_Z0, WATER_X1, WATER_Z1}, w->bounds);
     // No bed: the surface reads its column off the scene's depth, which the basin is, and a bed
@@ -230,7 +246,6 @@ static void water(Scene* scene, bool always_drawn) {
     glm_vec3_copy((vec3){0.002f, 0.003f, 0.003f}, w->scatter_albedo);
     w->caustics = false;
     w->specks = false;
-    w->enabled = always_drawn;
     scene->water = w;
 
     // The bank must stand over the water all round the rectangle, or the plane shows past it.
@@ -245,6 +260,7 @@ static void water(Scene* scene, bool always_drawn) {
            (double)lowest, (double)(lowest - LAKE_Y));
     if (lowest < LAKE_Y + 0.2f)
         log_warn("silent: the lake's bounds reach ground under its water: its edge will show");
+    return w;
 }
 
 // The ring's bearing where it crosses the line z on the east side, where the dock goes out.
@@ -253,7 +269,7 @@ static float ring_bearing(float z) {
     for (int k = 0; k < 30; k++) {
         const float mid = 0.5f * (lo + hi);
         float x = 0.0f, zm = 0.0f;
-        shore_at(mid, -LAKE_WADE_OUT, &x, &zm);
+        shore_at(mid, -WADE_OUT, &x, &zm);
         if (zm < z)
             lo = mid;
         else
@@ -272,11 +288,11 @@ static void ring(Kit* kit) {
     const float to = ring_bearing(DOCK_Z - DOCK_HALF - 0.3f) + 2.0f * GLM_PIf;
     const int chords = 48;
     float px = 0.0f, pz = 0.0f;
-    shore_at(from, -LAKE_WADE_OUT, &px, &pz);
+    shore_at(from, -WADE_OUT, &px, &pz);
     for (int k = 1; k <= chords; k++) {
         const float t = from + (to - from) * (float)k / (float)chords;
         float x = 0.0f, z = 0.0f;
-        shore_at(t, -LAKE_WADE_OUT, &x, &z);
+        shore_at(t, -WADE_OUT, &x, &z);
         const float dx = x - px, dz = z - pz;
         kit_collider(kit, (vec3){0.5f * (x + px), 0.5f * (RING_TOP + RING_FOOT), 0.5f * (z + pz)},
                      (vec3){0.15f, 0.5f * (RING_TOP - RING_FOOT), 0.5f * hypotf(dx, dz) + 0.1f},
@@ -323,8 +339,9 @@ static void dock(Kit* kit, unsigned int* state) {
                   z1, true);
     // From inside the ring out, down to below the bed and over a head.
     float ring_x = 0.0f, ring_z = 0.0f;
-    shore_at(0.0f, -LAKE_WADE_OUT, &ring_x, &ring_z);
-    const float bx0 = ring_x + 1.0f, bx1 = DOCK_X1 - 0.3f, foot = -16.5f, head = DOCK_Y + 1.0f;
+    shore_at(0.0f, -WADE_OUT, &ring_x, &ring_z);
+    const float bx0 = ring_x + 1.0f, bx1 = DOCK_X1 - 0.3f, foot = LAKE_Y - 4.5f,
+                head = DOCK_Y + 1.0f;
     const float yc = 0.5f * (foot + head), yh = 0.5f * (head - foot);
     for (int s = 0; s < 2; s++)
         kit_collider(kit, (vec3){0.5f * (bx0 + bx1), yc, s ? z1 + 0.15f : z0 - 0.15f},
@@ -511,10 +528,9 @@ static void drowned(Kit* kit, Trees* trees, unsigned int* state) {
     }
 }
 
-void lake_build(Kit* kit, Scene* scene, Trees* trees, unsigned int seed, bool always_drawn) {
+void lake_build(Lake* lake, Kit* kit, Scene* scene, Trees* trees, unsigned int seed, float reach) {
+    *lake = (Lake){.water = water(scene), .reach = reach};
     unsigned int state = seed * 2246822519u + 0x1341eu;
-    g_always_drawn = always_drawn;
-    water(scene, always_drawn);
     ring(kit);
     dock(kit, &state);
     boats(kit);
@@ -522,24 +538,28 @@ void lake_build(Kit* kit, Scene* scene, Trees* trees, unsigned int seed, bool al
     drowned(kit, trees, &state);
 }
 
-void lake_start_audio(AudioSystem* audio) {
-    g_lapping = sounds_loop(audio, "assets/audio/silent/lake_lapping.flac");
-    if (g_lapping)
-        audio_sound_set_volume(g_lapping, LAPPING_VOLUME);
+// One loop for the whole shore, at the water's edge on bearing `theta` from the lake's centre.
+static void lapping_at(const Lake* lake, float theta) {
+    float x = 0.0f, z = 0.0f;
+    shore_at(theta, 0.0f, &x, &z);
+    audio_sound_set_position(lake->lapping, (vec3){x, LAKE_Y + 0.1f, z});
 }
 
-void lake_update(const Scene* scene, const float eye[3], const float feet[3]) {
-    // One loop for the whole shore, where the eye is nearest to it, at the water's edge.
-    if (g_lapping) {
-        float x = 0.0f, z = 0.0f;
-        shore_at(atan2f(eye[2] - LAKE_Z, eye[0] - LAKE_X), 0.0f, &x, &z);
-        audio_sound_set_position(g_lapping, (vec3){x, LAKE_Y + 0.1f, z});
-    }
-    Water* w = scene->water;
-    if (!w)
+void lake_start_audio(Lake* lake, AudioSystem* audio) {
+    lake->lapping = sounds_loop(audio, "assets/audio/silent/lake_lapping.flac");
+    if (!lake->lapping)
         return;
-    if (!g_always_drawn)
-        w->enabled = w->enabled ? eye[0] < WATER_OFF_X && eye[2] > WATER_OFF_Z
-                                : eye[0] < WATER_ON_X && eye[2] > WATER_ON_Z;
-    water_wake(w, &g_wake, feet[0], feet[2], WAKE_PACE, feet[1] < LAKE_Y);
+    lapping_at(lake, 0.0f);
+    audio_sound_set_volume(lake->lapping, LAPPING_VOLUME);
+}
+
+void lake_update(Lake* lake, const float eye[3], const float feet[3]) {
+    if (lake->lapping)
+        lapping_at(lake, atan2f(eye[2] - LAKE_Z, eye[0] - LAKE_X));
+    if (!lake->water)
+        return;
+    lake->water->enabled =
+        lake->reach <= 0.0f ||
+        plan_box_distance(eye[0], eye[2], WATER_X0, WATER_X1, WATER_Z0, WATER_Z1) < lake->reach;
+    water_wake(lake->water, &lake->wake, feet[0], feet[2], WAKE_PACE, feet[1] < LAKE_Y);
 }

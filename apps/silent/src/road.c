@@ -55,6 +55,7 @@ static void sample(Road* r) {
         if (s >= r->length)
             break;
     }
+    assert(r->s[r->count - 1] >= r->length); // ROAD_SAMPLES holds the whole road
     r->box[0] = r->box[2] = r->x[0];
     r->box[1] = r->box[3] = r->z[0];
     for (int i = 1; i < r->count; i++) {
@@ -100,8 +101,7 @@ float road_height(Road* road, float s) {
 
 float road_distance(Road* road, float x, float z, float* along) {
     const Road* r = sampled(road);
-    float best = 1e30f;
-    *along = 0.0f;
+    float best = 1e30f, best_along = 0.0f;
     for (int i = 0; i + 1 < r->count; i++) {
         const float ax = r->x[i], az = r->z[i];
         const float bx = r->x[i + 1] - ax, bz = r->z[i + 1] - az;
@@ -112,9 +112,11 @@ float road_distance(Road* road, float x, float z, float* along) {
         const float d2 = dx * dx + dz * dz;
         if (d2 < best) {
             best = d2;
-            *along = r->s[i] + (r->s[i + 1] - r->s[i]) * t;
+            best_along = r->s[i] + (r->s[i + 1] - r->s[i]) * t;
         }
     }
+    if (along)
+        *along = best_along;
     return sqrtf(best);
 }
 
@@ -139,16 +141,21 @@ void road_point(Road* road, float t, float* x, float* z) {
     *z = r->z[i];
 }
 
-void road_frame(Road* road, float t, float* x, float* z, float* dir_x, float* dir_z) {
-    const Road* r = sampled(road);
-    const int i = (int)(glm_clamp(t, 0.0f, 1.0f) * (float)(r->count - 1));
+// The unit way the road runs at sample i: the run between its neighbours.
+static void sample_dir(const Road* r, int i, float* dir_x, float* dir_z) {
     const int a = i > 0 ? i - 1 : 0, b = i + 1 < r->count ? i + 1 : i;
-    *x = r->x[i];
-    *z = r->z[i];
     const float dx = r->x[b] - r->x[a], dz = r->z[b] - r->z[a];
     const float len = hypotf(dx, dz);
     *dir_x = len > 0.0f ? dx / len : 1.0f;
     *dir_z = len > 0.0f ? dz / len : 0.0f;
+}
+
+void road_frame(Road* road, float t, float* x, float* z, float* dir_x, float* dir_z) {
+    const Road* r = sampled(road);
+    const int i = (int)(glm_clamp(t, 0.0f, 1.0f) * (float)(r->count - 1));
+    *x = r->x[i];
+    *z = r->z[i];
+    sample_dir(r, i, dir_x, dir_z);
 }
 
 float road_length(Road* road) {
@@ -173,24 +180,27 @@ void road_at(Road* road, float s, float* x, float* z) {
     *z = r->z[i] + (r->z[i + 1] - r->z[i]) * t;
 }
 
-/*
- * One station of the ribbon `s` metres along: its centre and the unit way the road runs. On a
- * sample, the sample and the run between its neighbours; between samples, a point on the segment
- * and that segment's run, so a ribbon can start and stop exactly where it meets something else.
- */
-static void station(const Road* r, float s, float* x, float* z, float* tx, float* tz) {
+// The sample `s` metres along exactly, or -1.
+static int sample_at(const Road* r, float s) {
     for (int i = 0; i < r->count; i++)
-        if (r->s[i] == s) {
-            const int a = i > 0 ? i - 1 : 0, b = i + 1 < r->count ? i + 1 : i;
-            *x = r->x[i];
-            *z = r->z[i];
-            *tx = r->x[b] - r->x[a];
-            *tz = r->z[b] - r->z[a];
-            const float len = hypotf(*tx, *tz);
-            *tx /= len;
-            *tz /= len;
-            return;
-        }
+        if (r->s[i] == s)
+            return i;
+    return -1;
+}
+
+/*
+ * One station of the ribbon `s` metres along: its centre and the unit way the road runs. On sample
+ * `at`, the sample and the run between its neighbours; between samples (`at` < 0), a point on the
+ * segment and that segment's run, so a ribbon can start and stop exactly where it meets something
+ * else.
+ */
+static void station(const Road* r, int at, float s, float* x, float* z, float* tx, float* tz) {
+    if (at >= 0) {
+        *x = r->x[at];
+        *z = r->z[at];
+        sample_dir(r, at, tx, tz);
+        return;
+    }
     float t = 0.0f;
     const int i = segment(r, s, &t);
     *tx = r->x[i + 1] - r->x[i];
@@ -220,8 +230,10 @@ void road_ribbon(Kit* kit, Road* road, int mat, float s0, float s1) {
             s = r->s[i];
         else
             continue;
+        // A sample's own index; the ends are looked for, since either may fall on one.
+        const int at = i >= 0 && i < r->count ? i : sample_at(r, s);
         float x, z, tx, tz;
-        station(r, s, &x, &z, &tx, &tz);
+        station(r, at, s, &x, &z, &tx, &tz);
         const float y = road_height(road, s);
         const vec3 l = {x - tz * half, y, z + tx * half};
         const vec3 rt = {x + tz * half, y, z - tx * half};

@@ -224,6 +224,7 @@ static Player g_player;
 static Lights g_lights;
 static Tv g_tv;
 static Clock g_clock;
+static Lake g_lake;
 static RainBed g_rain_bed;
 static Sounds g_sounds;
 static Cat g_cat;
@@ -402,25 +403,24 @@ static void build_sky(Engine* engine) {
  */
 #define HOME_GI_CELL 1.0f
 
-static void build_home_gi(void) {
-    const float under = HOME_GI_CELL * ceilf(-BASEMENT_Y / HOME_GI_CELL);
-    const vec3 lo = {HOUSE_X0 - 0.2f, -under, PORCH_Z0 - 0.2f};
-    const vec3 hi = {HOUSE_X1 + 0.2f, CEIL_Y + 0.1f, HOUSE_BACK_Z + 0.2f};
+// A grid laid over a building's bounds a metre a cell, the probes in its walls switched off.
+static void build_spaced_gi(const char* name, const vec3 lo, const vec3 hi) {
     GIVolume* gi = create_gi_volume_spaced(lo, hi, HOME_GI_CELL);
     if (gi && scene_add_gi_volume(g_scene, gi))
-        printf("silent: home GI %d probes, classified\n",
+        printf("silent: %s GI %d probes, classified\n", name,
                gi->counts[0] * gi->counts[1] * gi->counts[2]);
 }
 
-// The cabin's (spec 13.41), a metre a cell over its one room and the porch, from its floor to its
-// ridge, the probes in its log walls switched off as the home's are.
+static void build_home_gi(void) {
+    const float under = HOME_GI_CELL * ceilf(-BASEMENT_Y / HOME_GI_CELL);
+    build_spaced_gi("home", (vec3){HOUSE_X0 - 0.2f, -under, PORCH_Z0 - 0.2f},
+                    (vec3){HOUSE_X1 + 0.2f, CEIL_Y + 0.1f, HOUSE_BACK_Z + 0.2f});
+}
+
+// The cabin's (spec 13.41), over its one room and the porch, from its floor to its ridge.
 static void build_cabin_gi(void) {
-    const vec3 lo = {CABIN_X0 - 2.6f, CABIN_FLOOR_Y - 0.2f, CABIN_Z0 - 0.3f};
-    const vec3 hi = {CABIN_X1 + 0.3f, CABIN_RIDGE_Y + 0.1f, CABIN_Z1 + 0.3f};
-    GIVolume* gi = create_gi_volume_spaced(lo, hi, HOME_GI_CELL);
-    if (gi && scene_add_gi_volume(g_scene, gi))
-        printf("silent: cabin GI %d probes, classified\n",
-               gi->counts[0] * gi->counts[1] * gi->counts[2]);
+    build_spaced_gi("cabin", (vec3){CABIN_PORCH_X0 - 0.3f, CABIN_FLOOR_Y - 0.2f, CABIN_Z0 - 0.3f},
+                    (vec3){CABIN_X1 + 0.3f, CABIN_RIDGE_Y + 0.1f, CABIN_Z1 + 0.3f});
 }
 
 // The mansion's grid, its plan standing at `origin`.
@@ -781,15 +781,18 @@ static void on_init(Game* game) {
     if (!g_args.no_woods)
         woods_build(&kit, engine, g_scene, &trees, &breaches, (unsigned int)g_args.seed);
     load_seam(engine, "woods");
-    // The lake (spec 13.41): its water, and in a kit of its own, drawn only within the fog's
-    // reach, the ring, the dock, the boats, the reeds and the drowned trees' bodies.
+    // The lake (spec 13.41): its water, and in a kit of its own the ring, the dock, the boats,
+    // the reeds and the drowned trees' bodies; then the cabin on its bank, in a kit of its own
+    // too. All of it is drawn, and the water on, only from within the fog's reach of it.
+    const float lake_reach = trees.reach > 0.0f ? trees.reach + 15.0f : 0.0f;
     Kit lake;
     kit_init_beside(&lake, &kit, GLM_VEC3_ZERO);
-    lake_build(&lake, g_scene, &trees, (unsigned int)g_args.seed, g_args.no_fog);
+    lake.draw_distance = lake_reach;
+    lake_build(&g_lake, &lake, g_scene, &trees, (unsigned int)g_args.seed, lake_reach);
     trees_release(&trees);
-    // The cabin on its bank, in a kit of its own too.
     Kit cabin;
     kit_init_beside(&cabin, &kit, GLM_VEC3_ZERO);
+    cabin.draw_distance = lake_reach;
     cabin_build(&cabin, (unsigned int)g_args.seed);
     load_seam(engine, "lake-cabin");
     grounds_build(&kit, g_scene, (unsigned int)g_args.seed, !g_args.day, &g_failing[FAILING_DRIVE]);
@@ -811,10 +814,7 @@ static void on_init(Game* game) {
     Kit* const kits[] = {&kit, &mansion, &ground, &lake, &cabin};
     const char* const kit_names[] = {"world", "mansion", "ground", "lake", "cabin"};
     for (int i = 0; i < KIT_COUNT(kits); i++) {
-        SceneNode* node = kit_finish(kits[i], kit_names[i]);
-        // The lake's and the cabin's things are drawn only from within the fog's reach of them.
-        if (node && (kits[i] == &lake || kits[i] == &cabin) && trees.reach > 0.0f)
-            node->draw_distance = trees.reach + 15.0f;
+        kit_finish(kits[i], kit_names[i]);
         load_seam(engine, kit_names[i]);
     }
     kit_free_unused(kits, KIT_COUNT(kits));
@@ -850,7 +850,7 @@ static void on_init(Game* game) {
     g_door_hung[DOOR_CABIN] = cabin_door(&g_doors[DOOR_CABIN], engine, g_scene, em, physics);
     // Left standing open by whoever went out, the fire showing through it down to the dock.
     if (g_door_hung[DOOR_CABIN])
-        door_toggle(&g_doors[DOOR_CABIN]);
+        door_set_open(&g_doors[DOOR_CABIN]);
     load_seam(engine, "doors");
     // The backpack on the bedroom's bed (spec 13.40), unless the run starts with it.
     backpack_build(&g_backpack, engine, g_scene, g_args.backpack);
@@ -899,7 +899,7 @@ static void on_init(Game* game) {
     sounds_start(&g_sounds, audio, swung);
     load_seam(engine, "audio-sounds");
     kitchen_start_audio(audio);
-    lake_start_audio(audio);
+    lake_start_audio(&g_lake, audio);
     cabin_start_audio(audio);
     clock_start(&g_clock, engine, g_scene, audio);
     load_seam(engine, "audio-kitchen-clock");
@@ -973,20 +973,26 @@ static void on_init(Game* game) {
     if (g_args.capture_budget_ms < 0.0f && !engine->headless)
         engine->capture_budget_ms = LOADING_CAPTURE_MS;
 
-    // In the kitchen, or wherever --player-at put the player, on the ground there.
+    // In the kitchen looking down the room, or wherever --player-at put the player, on whatever
+    // stands under them there -- the ground, a floor, the dock -- looking along its yaw.
     vec3 feet;
     glm_vec3_copy((float*)SPAWN_FEET, feet);
     float yaw = SPAWN_YAW;
+    vec3 look = {SPAWN_FEET[0], SPAWN_FEET[1] + PLAYER_EYE_HEIGHT, 0.0f};
     if (g_args.player_at_set) {
-        feet[0] = g_args.player_at[0];
-        feet[2] = g_args.player_at[1];
-        feet[1] = land_height(feet[0], feet[2]) + 0.05f;
+        const float x = g_args.player_at[0], z = g_args.player_at[1];
+        // From two metres over the ground or the lake's water, under any roof over them.
+        vec3 from = {x, fmaxf(land_height(x, z), LAKE_Y) + 2.0f, z};
+        RaycastHit hit;
+        const bool stood = physics_world_raycast_filtered(physics, from, (vec3){0.0f, -1.0f, 0.0f},
+                                                          30.0f, 1u << OBJ_LAYER_STATIC, &hit);
+        glm_vec3_copy((vec3){x, (stood ? hit.position[1] : land_height(x, z)) + 0.05f, z}, feet);
         yaw = glm_rad(g_args.player_at[2]);
+        glm_vec3_copy((vec3){x + sinf(yaw), feet[1] + PLAYER_EYE_HEIGHT, z + cosf(yaw)}, look);
     }
     const float eye_y = feet[1] + PLAYER_EYE_HEIGHT;
-    const float ahead = g_args.player_at_set ? 1.0f : feet[2];
     CameraDesc cam = {.position = {feet[0], eye_y, feet[2]},
-                      .look_at = {feet[0] + ahead * sinf(yaw), eye_y, feet[2] + ahead * cosf(yaw)},
+                      .look_at = {look[0], look[1], look[2]},
                       .fov = glm_rad(g_args.fov_deg > 0.0f ? g_args.fov_deg : 68.0f),
                       .near = 0.05f,
                       .far = 250.0f};
@@ -1135,10 +1141,10 @@ static void on_pre_render(Game* game, double alpha) {
     }
     vec3 eye = {0.0f, 0.0f, 0.0f}, forward = {0.0f, 0.0f, -1.0f};
     player_eye(&g_player, eye, forward);
-    // The lake drawn while the camera is near it, and a wake where the player wades (spec 13.41).
+    // The lake's water while the eye is near it, and a wake where the player wades (spec 13.41).
     vec3 feet = {0.0f, 0.0f, 0.0f};
     player_feet(&g_player, feet);
-    lake_update(g_scene, engine->camera->position, feet);
+    lake_update(&g_lake, eye, feet);
 
     // The nearest thing the player is looking at in reach -- a door, or the backpack on the bed
     // -- says what the action key would do to it, and the key does it.

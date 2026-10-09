@@ -526,14 +526,27 @@ def barricade_stripes(rng):
 # The lake's map (spec 13.41), fine enough to read from a step off, and what the atlas had room
 # left for.
 MAP_PX_PER_M = 520
-# The lake's shore as silent's ground is carved, in metres from its centre (lake.c): an ellipse
-# wobbled everywhere but due east, x east and z south.
+# The lake as silent's ground is carved (layout.h's LAKE_*, lake.c's shore_radius): its centre,
+# and an ellipse wobbled everywhere but due east, x east and z south. In the world as the C has
+# them, so moving one there means moving it here.
+LAKE_X, LAKE_Z = -96.0, 120.0
 LAKE_RX, LAKE_RZ = 23.0, 17.0
-# The cabin's middle and the track's last points from the lake's centre, and the dock's end.
-MAP_CABIN = (31.5, -2.0)
-MAP_TRACK = [(46.0, -60.0), (42.0, -48.0), (33.0, -40.0), (23.0, -32.0), (19.0, -22.0),
-             (25.0, -14.0), (31.0, -7.0)]
-MAP_DOCK = ((24.0, -2.0), (11.0, -2.0))
+# The cabin's middle (layout.h's CABIN_*), the track's last points (lake.c's TRACK_POINTS) and the
+# dock from the bank to its end (lake.c's DOCK_*).
+CABIN = (-64.5, 118.0)
+TRACK = [(-50.0, 60.0), (-54.0, 72.0), (-63.0, 80.0), (-73.0, 88.0), (-77.0, 98.0),
+         (-71.0, 106.0), (-65.0, 113.0)]
+DOCK = ((-72.0, 118.0), (-85.0, 118.0))
+
+
+def from_lake(p):
+    """A world point in metres from the lake's centre, as the map is drawn."""
+    return p[0] - LAKE_X, p[1] - LAKE_Z
+
+
+MAP_CABIN = from_lake(CABIN)
+MAP_TRACK = [from_lake(p) for p in TRACK]
+MAP_DOCK = tuple(from_lake(p) for p in DOCK)
 
 
 def lake_shore(t, inset=0.0):

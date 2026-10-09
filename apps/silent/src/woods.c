@@ -73,7 +73,10 @@ static const Species SPECIES[] = {
 #define WOODS_X0    (CHASM_X - 2.0f) // the grid's west edge, at the chasm
 #define SITE_STEP   5.0f             // the jittered grid's cell
 #define SITE_JITTER 0.42f            // of a cell, either way
-#define EDGE_THIN   5.0f             // metres in from the woods' edge over which they thin
+// The town's grid of sites, from the chasm to the woods' east edge and across the world.
+#define WOODS_COLS  ((int)ceilf((WOODS_EAST_X - WOODS_X0) / SITE_STEP))
+#define WOODS_ROWS  ((int)ceilf((WORLD_Z1 - WORLD_Z0) / SITE_STEP))
+#define EDGE_THIN   5.0f  // metres in from the woods' edge over which they thin
 #define EDGE_CLEAR  1.6f  // and the least a trunk stands from our back fences or the terrace's back
 #define DRIVE_CLEAR 7.0f  // from the drive's centre line
 #define CONIFER_MIN 0.10f // the generator's ~125 units to 12.5 m
@@ -88,13 +91,14 @@ static const Species SPECIES[] = {
 #define BOULDERS    30
 #define ROCK_MODELS 3
 
+#define LIP_CLEAR   2.5f // metres the woods stand back from the chasm's lips
+#define CROSS_CLEAR 9.0f // and from the cross street's centre line
+
 // The lake valley's woods (spec 13.41), on the same grid carried on west and south.
-#define TRACK_CLEAR     5.0f    // metres from the track's centre line
-#define SHORE_CLEAR     4.0f    // of bare bank at the water's edge
-#define PAD_CLEAR       3.0f    // round the cabin's pad
-#define LIP_CLEAR       2.5f    // from the chasm's lips, as the town's woods stand
-#define VALLEY_EDGE     3.0f    // inside the ground's edge
-#define ROCK_COS        0.8387f // and none where the ground is steeper than 33 degrees
+#define TRACK_CLEAR     5.0f // metres from the track's centre line
+#define SHORE_CLEAR     4.0f // of bare bank at the water's edge
+#define PAD_CLEAR       3.0f // round the cabin's pad
+#define VALLEY_EDGE     3.0f // inside the ground's edge
 #define VALLEY_STUMPS   10
 #define VALLEY_LOGS     14
 #define VALLEY_BOULDERS 30
@@ -102,8 +106,8 @@ static const Species SPECIES[] = {
 // How far (x, z) is into the woods west of the street, round the crossroads (spec 13.35): clear of
 // the lip, the cross street and the street, and of the barricades' lines.
 static float west_depth(float x, float z) {
-    const float lip = x - (land_lip_x(z) + 2.5f);
-    const float cross = fabsf(x - CROSS_X) - 9.0f;
+    const float lip = x - (land_lip_x(z) + LIP_CLEAR);
+    const float cross = fabsf(x - CROSS_X) - CROSS_CLEAR;
     const float street = fabsf(z) - (STREET_HALF_WIDTH + 3.0f);
     const float barricade = fminf(fabsf(z - CROSS_NORTH_Z), fabsf(z - CROSS_SOUTH_Z)) - 2.0f;
     return fminf(fminf(lip, cross), fminf(street, barricade));
@@ -129,10 +133,7 @@ static float woods_depth(float x, float z) {
 // How far (x, z) is into the lake valley's woods: clear of the track, the water's edge, the
 // cabin's pad, the chasm's lips and the ground's edge, and negative outside them.
 static float valley_depth(float x, float z) {
-    const float corner = land_lip_x(RIDGE_Z);
-    // The chasm: west of its east lip north of the corner, north of the ridge's lip west of it.
-    const float lip = x < corner ? z - (land_ridge_lip_z(x) + LIP_CLEAR)
-                                 : (z < RIDGE_Z ? x - (land_lip_x(z) + LIP_CLEAR) : FLT_MAX);
+    const float lip = land_lip_clearance(x, z, LIP_CLEAR);
     const float edge = fminf(fminf(x - (VALLEY_X0 + VALLEY_EDGE), (VALLEY_X1 - VALLEY_EDGE) - x),
                              (VALLEY_Z1 - VALLEY_EDGE) - z);
     const float pad =
@@ -142,11 +143,19 @@ static float valley_depth(float x, float z) {
     return fminf(fminf(lip, edge), fminf(pad, clear));
 }
 
-// Whether the ground at (x, z) is too steep to hold a tree: the ridge's flanks show rock.
-static bool too_steep(float x, float z) {
-    const float hx = 0.5f * (land_height(x + 1.0f, z) - land_height(x - 1.0f, z));
-    const float hz = 0.5f * (land_height(x, z + 1.0f) - land_height(x, z - 1.0f));
-    return 1.0f / sqrtf(1.0f + hx * hx + hz * hz) < ROCK_COS;
+// Site (i, j) of the woods' grid, jittered by two draws from `state`.
+static void site_at(int i, int j, unsigned int* state, float* x, float* z) {
+    *x = WOODS_X0 + SITE_STEP * ((float)i + 0.5f) +
+         SITE_STEP * SITE_JITTER * (2.0f * kit_xrnd(state) - 1.0f);
+    *z = WORLD_Z0 + SITE_STEP * ((float)j + 0.5f) +
+         SITE_STEP * SITE_JITTER * (2.0f * kit_xrnd(state) - 1.0f);
+}
+
+// Whether every site of the town's column i falls inside the cross street's clearance west of the
+// street: the old cutting, which the town's woods leave clear.
+static bool in_cutting(int i) {
+    const float x = WOODS_X0 + SITE_STEP * ((float)i + 0.5f), jitter = SITE_STEP * SITE_JITTER;
+    return fabsf(x - CROSS_X) + jitter < CROSS_CLEAR && x + jitter < -STREET_HALF_LEN;
 }
 
 /*
@@ -298,11 +307,9 @@ static void deadfall(Kit* kit, Trees* trees, SceneNode* parent, const FenceBreac
 typedef struct Planting {
     Kit* kit;
     Trees* trees;
-    Mesh** wood;
-    Mesh** sprays;
-    const float* trunk_radius;
-    SceneNode** wood_groups;
-    SceneNode** spray_groups;
+    Mesh *wood[CONIFER_MODELS], *sprays[CONIFER_MODELS];
+    float trunk_radius[CONIFER_MODELS];
+    SceneNode *wood_groups[CONIFER_MODELS], *spray_groups[CONIFER_MODELS];
     int conifers, dead;
 } Planting;
 
@@ -317,7 +324,6 @@ static void plant(Planting* p, float x, float z, float kind, float yaw, float si
     }
     const int model = sp->first + (int)(k / sp->share * (float)sp->models) % sp->models;
     Trees* trees = p->trees;
-    mat4 m;
     if (sp->dead) {
         if (!trees->dead[model])
             return;
@@ -326,21 +332,20 @@ static void plant(Planting* p, float x, float z, float kind, float yaw, float si
         p->dead++;
         return;
     }
-    const int c = model;
-    if (!p->wood[c])
+    if (!p->wood[model])
         return;
     const float scale = CONIFER_MIN + (CONIFER_MAX - CONIFER_MIN) * size;
-    const float tilt = glm_rad(2.0f * lean);
-    glm_translate_make(m, (vec3){x, land_height(x, z) - 0.2f, z});
+    const float tilt = glm_rad(2.0f * lean), ground = land_height(x, z);
+    mat4 m;
+    glm_translate_make(m, (vec3){x, ground - 0.2f, z});
     glm_rotate_y(m, yaw, m);
     glm_rotate_x(m, tilt, m);
     glm_scale_uni(m, scale);
-    place(p->wood_groups[c], p->wood[c], m);
-    if (p->sprays[c])
-        place(p->spray_groups[c], p->sprays[c], m);
-    trees_trunk_collider(p->kit, x, z, land_height(x, z),
-                         p->trunk_radius[c] * scale * TREES_TRUNK_BODY, TREES_TRUNK_HEIGHT, yaw,
-                         tilt);
+    place(p->wood_groups[model], p->wood[model], m);
+    if (p->sprays[model])
+        place(p->spray_groups[model], p->sprays[model], m);
+    trees_trunk_collider(p->kit, x, z, ground, p->trunk_radius[model] * scale * TREES_TRUNK_BODY,
+                         TREES_TRUNK_HEIGHT, yaw, tilt);
     p->conifers++;
 }
 
@@ -351,29 +356,25 @@ static void plant(Planting* p, float x, float z, float kind, float yaw, float si
  * From a stream of its own, so the town's woods are where they were. Then what lies on its
  * floor, the boulders down the bank to the water as well as in the trees.
  */
-static void valley_woods(Planting* p, const Mesh* const* rocks, unsigned int seed, int* props) {
+static void valley_woods(Planting* p, const Mesh* const* rocks, unsigned int seed) {
+    const int conifers = p->conifers, dead = p->dead;
     unsigned int state = seed * 2246822519u + 0x1341u;
-    const int town_cols = (int)ceilf((WOODS_EAST_X - WOODS_X0) / SITE_STEP);
-    const int town_rows = (int)ceilf((WORLD_Z1 - WORLD_Z0) / SITE_STEP);
     const int i0 = (int)floorf((VALLEY_X0 - WOODS_X0) / SITE_STEP);
     const int i1 = (int)ceilf((VALLEY_X1 - WOODS_X0) / SITE_STEP);
     const int rows = (int)ceilf((VALLEY_Z1 - WORLD_Z0) / SITE_STEP);
     for (int j = 0; j < rows; j++)
         for (int i = i0; i < i1; i++) {
-            const bool cutting =
-                i >= 2 && i <= 4 && WORLD_Z0 + SITE_STEP * (float)j >= RIDGE_Z - 2.0f;
-            if (i >= 0 && i < town_cols && j < town_rows && !cutting)
+            const bool cutting = in_cutting(i) && WORLD_Z0 + SITE_STEP * (float)j >= RIDGE_Z - 2.0f;
+            if (i >= 0 && i < WOODS_COLS && j < WOODS_ROWS && !cutting)
                 continue;
-            const float x = WOODS_X0 + SITE_STEP * ((float)i + 0.5f) +
-                            SITE_STEP * SITE_JITTER * (2.0f * kit_xrnd(&state) - 1.0f);
-            const float z = WORLD_Z0 + SITE_STEP * ((float)j + 0.5f) +
-                            SITE_STEP * SITE_JITTER * (2.0f * kit_xrnd(&state) - 1.0f);
+            float x = 0.0f, z = 0.0f;
+            site_at(i, j, &state, &x, &z);
             const float kind = kit_xrnd(&state), yaw = 2.0f * GLM_PIf * kit_xrnd(&state);
             const float size = kit_xrnd(&state), lean = kit_xrnd(&state);
-            const float keep = kit_xrnd(&state);
+            const float roll = kit_xrnd(&state);
             const float depth = valley_depth(x, z);
-            if (depth <= 0.0f || keep > 0.45f + 0.5f * glm_smoothstep(0.0f, EDGE_THIN, depth) ||
-                too_steep(x, z))
+            if (depth <= 0.0f || roll > 0.45f + 0.5f * glm_smoothstep(0.0f, EDGE_THIN, depth) ||
+                land_too_steep(x, z))
                 continue;
             plant(p, x, z, kind, yaw, size, lean);
         }
@@ -390,7 +391,7 @@ static void valley_woods(Planting* p, const Mesh* const* rocks, unsigned int see
         const float bank = lake_shore_distance(x, z);
         const bool rocky =
             (bank > 0.5f && bank < SHORE_CLEAR && lake_track_distance(x, z) > TRACK_CLEAR) ||
-            (depth > 0.0f && too_steep(x, z));
+            (depth > 0.0f && land_too_steep(x, z));
         if (depth < 1.0f && !(rocky && boulders < VALLEY_BOULDERS))
             continue;
         if (!rocky && stumps < VALLEY_STUMPS) {
@@ -409,9 +410,9 @@ static void valley_woods(Planting* p, const Mesh* const* rocks, unsigned int see
             boulders++;
         }
     }
-    props[0] = stumps;
-    props[1] = logs;
-    props[2] = boulders;
+    printf("silent: the lake valley's woods of %d conifers and %d dead trees, %d stumps, %d logs, "
+           "%d boulders\n",
+           p->conifers - conifers, p->dead - dead, stumps, logs, boulders);
 }
 
 void woods_build(Kit* kit, Engine* engine, Scene* scene, Trees* trees,
@@ -420,17 +421,16 @@ void woods_build(Kit* kit, Engine* engine, Scene* scene, Trees* trees,
     Material* needles = needles_material(scene, pbr);
     // The loading screen moves between the needles' bake and each model grown.
     engine_draw_loading_screen(engine);
-    Mesh *wood[CONIFER_MODELS], *sprays[CONIFER_MODELS];
-    float trunk_radius[CONIFER_MODELS];
+    Planting planting = {.kit = kit, .trees = trees};
     for (int i = 0; i < CONIFER_MODELS; i++) {
         TreeParams p;
         tree_params_preset(&p, CONIFERS[i].preset, CONIFERS[i].seed);
-        trunk_radius[i] = p.trunk_radius;
-        trees_grow(&p, trees->bark, needles, &wood[i], &sprays[i]);
-        if (wood[i])
-            wood[i]->lod_scale = WOODS_WOOD_LOD_SCALE;
-        if (sprays[i])
-            sprays[i]->lod_scale = WOODS_SPRAY_LOD_SCALE;
+        planting.trunk_radius[i] = p.trunk_radius;
+        trees_grow(&p, trees->bark, needles, &planting.wood[i], &planting.sprays[i]);
+        if (planting.wood[i])
+            planting.wood[i]->lod_scale = WOODS_WOOD_LOD_SCALE;
+        if (planting.sprays[i])
+            planting.sprays[i]->lod_scale = WOODS_SPRAY_LOD_SCALE;
         engine_draw_loading_screen(engine);
     }
 
@@ -438,28 +438,16 @@ void woods_build(Kit* kit, Engine* engine, Scene* scene, Trees* trees,
     node_set_name(root, "woods");
     root->draw_distance = trees->reach;
     node_add_child(scene->root_node, root);
-    SceneNode *wood_groups[CONIFER_MODELS], *spray_groups[CONIFER_MODELS];
     for (int i = 0; i < CONIFER_MODELS; i++)
-        wood_groups[i] = group_node(root);
+        planting.wood_groups[i] = group_node(root);
     for (int i = 0; i < CONIFER_MODELS; i++)
-        spray_groups[i] = group_node(root);
+        planting.spray_groups[i] = group_node(root);
 
-    Planting planting = {.kit = kit,
-                         .trees = trees,
-                         .wood = wood,
-                         .sprays = sprays,
-                         .trunk_radius = trunk_radius,
-                         .wood_groups = wood_groups,
-                         .spray_groups = spray_groups};
     unsigned int state = seed * 2246822519u + 0x13355u;
-    const int cols = (int)ceilf((WOODS_EAST_X - WOODS_X0) / SITE_STEP);
-    const int rows = (int)ceilf((WORLD_Z1 - WORLD_Z0) / SITE_STEP);
-    for (int j = 0; j < rows; j++)
-        for (int i = 0; i < cols; i++) {
-            const float x = WOODS_X0 + SITE_STEP * ((float)i + 0.5f) +
-                            SITE_STEP * SITE_JITTER * (2.0f * kit_xrnd(&state) - 1.0f);
-            const float z = WORLD_Z0 + SITE_STEP * ((float)j + 0.5f) +
-                            SITE_STEP * SITE_JITTER * (2.0f * kit_xrnd(&state) - 1.0f);
+    for (int j = 0; j < WOODS_ROWS; j++)
+        for (int i = 0; i < WOODS_COLS; i++) {
+            float x = 0.0f, z = 0.0f;
+            site_at(i, j, &state, &x, &z);
             const float depth = woods_depth(x, z);
             const float keep = 0.45f + 0.5f * glm_smoothstep(0.0f, EDGE_THIN, depth);
             const float kind = kit_xrnd(&state), yaw = 2.0f * GLM_PIf * kit_xrnd(&state);
@@ -472,7 +460,6 @@ void woods_build(Kit* kit, Engine* engine, Scene* scene, Trees* trees,
                 continue;
             plant(&planting, x, z, kind, yaw, size, lean);
         }
-    const int town_conifers = planting.conifers, town_dead = planting.dead;
 
     // What lies on the floor, scattered over the same bands by darts that miss outside them.
     Mesh* rocks[ROCK_MODELS] = {NULL};
@@ -518,24 +505,19 @@ void woods_build(Kit* kit, Engine* engine, Scene* scene, Trees* trees,
 
     for (int i = 0; i < breaches->count; i++)
         deadfall(kit, trees, root, &breaches->at[i], i * 2 + 1, &state);
+    printf("silent: woods of %d conifers and %d dead trees from %d models, %d stumps, %d logs, "
+           "%d boulders, %d deadfalls\n",
+           planting.conifers, planting.dead, CONIFER_MODELS, stumps, logs, boulders,
+           breaches->count);
 
-    int valley_props[3] = {0};
-    valley_woods(&planting, (const Mesh* const*)rocks, seed, valley_props);
+    valley_woods(&planting, (const Mesh* const*)rocks, seed);
     for (int i = 0; i < ROCK_MODELS; i++)
         if (rocks[i])
             free_mesh(rocks[i]);
     for (int i = 0; i < CONIFER_MODELS; i++) {
-        if (wood[i])
-            free_mesh(wood[i]);
-        if (sprays[i])
-            free_mesh(sprays[i]);
+        if (planting.wood[i])
+            free_mesh(planting.wood[i]);
+        if (planting.sprays[i])
+            free_mesh(planting.sprays[i]);
     }
-
-    printf("silent: woods of %d conifers and %d dead trees from %d models, %d stumps, %d logs, "
-           "%d boulders, %d deadfalls\n",
-           town_conifers, town_dead, CONIFER_MODELS, stumps, logs, boulders, breaches->count);
-    printf("silent: the lake valley's woods of %d conifers and %d dead trees, %d stumps, %d logs, "
-           "%d boulders\n",
-           planting.conifers - town_conifers, planting.dead - town_dead, valley_props[0],
-           valley_props[1], valley_props[2]);
 }
