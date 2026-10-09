@@ -121,6 +121,16 @@ void player_pre_render(Player* p, Game* game, const vec3* pin_eye, const vec3* p
                       input_action_value(&game->input, "look_y"));
 }
 
+bool player_release_cursor(Player* p, Engine* engine) {
+    const bool was = p->cursor_captured;
+    set_cursor_captured(p, engine, false);
+    return was;
+}
+
+void player_capture_cursor(Player* p, Engine* engine) {
+    set_cursor_captured(p, engine, true);
+}
+
 void player_feet(const Player* p, vec3 out) {
     glm_vec3_copy(p->entity->position, out);
     out[1] -= CAPSULE_REST;

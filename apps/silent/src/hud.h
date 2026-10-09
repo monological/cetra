@@ -25,6 +25,7 @@ typedef struct HudLine {
 typedef struct Hud {
     const Engine* engine; // borrowed: the window it is placed in
     UISystem* ui;
+    Font* font; // the face every screen in it is set in, the font pool's
     UIScreen* screen;
     HudLine prompt, thought;
     float thought_age; // seconds since the thought was had
