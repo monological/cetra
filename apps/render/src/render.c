@@ -3603,8 +3603,7 @@ void configure_sss_materials(Engine* engine, Scene* scene, float radius, const f
     }
 }
 
-// --capture-rest-unshadow's rest: the light casts no shadow while a capture burst holds the scene,
-// and casts again after it, which is what silent does with its flashlight.
+// --capture-rest-unshadow's capture rest hook; `ctx` is the light.
 static void _rest_unshadow(bool rest, void* ctx) {
     ((Light*)ctx)->cast_shadows = !rest;
 }
@@ -5046,13 +5045,17 @@ int main(int argc, char** argv) {
         scene->gi->timing = args.capture_timing;
     }
     scene->cook_lighting = args.gi_cook;
+    // Refused outright rather than warned past: a run without the hook is the run it was asked
+    // to tell apart from.
     if (args.capture_rest_unshadow) {
         Light* light = scene_find_light(scene, args.capture_rest_unshadow);
-        if (light && light->cast_shadows)
-            scene_set_capture_rest(scene, _rest_unshadow, light);
-        else
-            fprintf(stderr, "Warning: --capture-rest-unshadow: no shadow-casting light '%s'\n",
+        if (!light || !light->cast_shadows) {
+            fprintf(stderr, "Error: --capture-rest-unshadow: no shadow-casting light '%s'\n",
                     args.capture_rest_unshadow);
+            free_engine(engine);
+            return 1;
+        }
+        scene_set_capture_rest(scene, _rest_unshadow, light);
     }
 
     // A scene file that authored its own probes wins over the flag, and says so:

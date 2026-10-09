@@ -16,6 +16,7 @@
 #include "rain.h"
 #include "scene.h"
 #include "shader_hook.h"
+#include "shadow.h"
 #include "texture.h"
 #include "wind.h"
 
@@ -86,7 +87,7 @@ static void _fold_light(CookKey* key, const Light* light, const IesLibrary* ies)
 }
 
 // What every capture of the scene reads wherever its box is: the engine's own source, the driver,
-// the settings, the rain's state, the wind and the environment's source.
+// the settings, the rain's state, the wind, the environment's source and the punctual edge.
 static void _fold_scene(CookKey* key, Engine* engine, Scene* scene) {
     cook_key_u64(key, CETRA_BUILD_DIGEST);
     // The driver does the arithmetic, so its answer is the driver's.
@@ -118,6 +119,12 @@ static void _fold_scene(CookKey* key, Engine* engine, Scene* scene) {
     cook_key_f32(key, ibl ? ibl->intensity : 0.0f);
     cook_key_bool(key, ibl && ibl->reflect_fog);
     cook_key_f32s(key, scene->world_origin, 3);
+    // A light still casting at rest is drawn at the punctual array's edge, which a burst keeps
+    // from its frame (spec 13.44): the frame's own casters chose it, and nothing above states it.
+    const ShadowSystem* shadows = scene->shadow_system;
+    cook_key_i32(key, shadows && shadows->enabled && shadows->punctual_light_layers > 0
+                          ? shadows->punctual_map_size
+                          : 0);
 }
 
 /*
