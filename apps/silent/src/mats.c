@@ -557,6 +557,9 @@ static const MatSpec SPECS[MAT_COUNT] = {
     // tools/make_reeds.py's clump, one picture to a card; the cards carry their own UVs.
     [MAT_REEDS] =
         {"reeds", "reeds", {1, 1, 1}, 1.0f, 0.0f, 1.0f, .cutout = 0.4f, .rain = {true, 0.0f}},
+    // The cabin's roof: iron the rust has come through, which sheds the rain.
+    [MAT_TIN] =
+        {"tin_roof", "rusty_corrugated_iron", {1, 1, 1}, 1.0f, 0.3f, 2.0f, .rain = {true, 0.0f}},
 };
 
 // A map of a material's set, decoded on the engine's loader threads and set by `put` once in.

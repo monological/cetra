@@ -22,6 +22,7 @@ typedef enum {
     SOUNDS_DOOR_HOME,
     SOUNDS_DOOR_MANSION,
     SOUNDS_DOOR_BASEMENT,
+    SOUNDS_DOOR_CABIN,
     SOUNDS_DOORS
 } SoundsDoor;
 

@@ -92,6 +92,51 @@ void door_leaf(Kit* kit, const KitFrame* f, const KitOpening* o, float t) {
 }
 
 /*
+ * A cabin's door (spec 13.41): grey boards with dark seams down both faces, two ledges and a brace
+ * between them across the inside (+d), a rusted strap hinge outside along each ledge's line with
+ * its knuckle at the hinge (`from`), and a thumb latch -- a handle outside, its bar inside.
+ */
+void door_leaf_battened(Kit* kit, const KitFrame* f, const KitOpening* o, float t) {
+    vec2 outline[KIT_OPENING_POINTS];
+    const int n = kit_opening_outline(o, outline);
+    kit_frame_extrude(kit, f, MAT_FENCE_BOARD, outline, n, -0.5f * t, 0.5f * t);
+    for (float a = o->from + PLANK; a < o->to - 0.05f; a += PLANK) {
+        const float top = head_at(outline, n, a) - 0.01f;
+        for (int side = -1; side <= 1; side += 2) {
+            const float d = (float)side * 0.5f * t;
+            kit_frame_box(kit, f, MAT_BLACK, a - 0.003f, a + 0.003f, o->bottom + 0.01f, top, d,
+                          d + (float)side * 0.001f, false);
+        }
+    }
+    const float in = 0.5f * t, w = o->to - o->from, h = kit_opening_crown(o) - o->bottom;
+    const float ledge[2] = {o->bottom + 0.28f, o->bottom + h - 0.3f}, lw = 0.06f;
+    for (int s = 0; s < 2; s++)
+        kit_frame_box(kit, f, MAT_FENCE_BOARD, o->from + 0.04f, o->to - 0.04f, ledge[s] - lw,
+                      ledge[s] + lw, in, in + 0.025f, false);
+    const float a0 = o->from + 0.08f, a1 = o->to - 0.08f, bw = 0.1f;
+    const vec2 brace[] = {{a0, ledge[0] + lw},
+                          {a1, ledge[1] - lw - bw},
+                          {a1, ledge[1] - lw},
+                          {a0, ledge[0] + lw + bw}};
+    kit_frame_extrude(kit, f, MAT_FENCE_BOARD, brace, KIT_COUNT(brace), in, in + 0.022f);
+    for (int s = 0; s < 2; s++) {
+        const float y = ledge[s];
+        kit_frame_box(kit, f, MAT_LAMP_POST, o->from + 0.01f, o->from + 0.45f * w, y - 0.022f,
+                      y + 0.022f, -in, -in - 0.005f, false);
+        kit_frame_prism(kit, f, MAT_LAMP_POST, o->from, 0.0f, y - 0.05f, y + 0.05f, 0.014f, 8);
+    }
+    // The latch: a bent handle on the outside, and the bar it lifts across the inside.
+    const float la = o->from + 0.88f * w, ly = o->bottom + 1.0f;
+    const vec3 handle[] = {{la, ly + 0.09f, -in},
+                           {la, ly + 0.07f, -in - 0.035f},
+                           {la, ly - 0.07f, -in - 0.035f},
+                           {la, ly - 0.09f, -in}};
+    kit_frame_pipe(kit, f, MAT_LAMP_POST, handle, KIT_COUNT(handle), 0.007f, 6);
+    kit_frame_box(kit, f, MAT_LAMP_POST, la - 0.2f, la + 0.02f, ly + 0.03f, ly + 0.05f, in,
+                  in + 0.012f, false);
+}
+
+/*
  * A four-panel door, painted, as every house on the street has: a slab with two short panels
  * over two tall ones, each a raised field in a sunk frame on both faces, and a brass knob on a
  * rose either side by the latch. Flat-headed, which is the only head it is hung in.
