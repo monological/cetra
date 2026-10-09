@@ -704,6 +704,7 @@ static void on_init(Game* game) {
 
     Kit kit;
     kit_init(&kit, g_scene, em, physics);
+    kit.loading = engine;
     mats_register(&kit, engine, g_scene);
     load_seam(engine, "materials");
     // The player's house on the plan's origin (spec 13.25), its living room's television, its
@@ -731,8 +732,9 @@ static void on_init(Game* game) {
     kit_init_beside(&ground, &kit, GLM_VEC3_ZERO);
     ground.shadow_cell_scale = 6.0f;
     land_build(&ground);
+    load_seam(engine, "land");
     terrace_build(&kit, plots.far);
-    load_seam(engine, "land-terrace");
+    load_seam(engine, "terrace");
     FenceBreaches breaches;
     fences_build(&kit, (unsigned int)g_args.seed, &plots, &breaches);
     load_seam(engine, "fences");
@@ -795,8 +797,9 @@ static void on_init(Game* game) {
         home_basement_door(&g_doors[DOOR_BASEMENT], engine, g_scene, em, physics);
     g_door_hung[DOOR_MANSION] =
         house_front_door(&g_doors[DOOR_MANSION], engine, g_scene, em, physics, mansion_origin);
+    load_seam(engine, "doors");
     prompt_start(&g_prompt, engine);
-    load_seam(engine, "doors-prompt");
+    load_seam(engine, "prompt");
     // Every static collider stands by now, and the cat's place check casts thousands of rays at
     // them: unoptimised, the broadphase is a chain each ray walks body by body. What comes after --
     // the cat's body, the player's -- the steps keep tidy.

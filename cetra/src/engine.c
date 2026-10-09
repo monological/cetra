@@ -599,9 +599,6 @@ static int _setup_engine_glfw(Engine* engine, EngineWindowMode window_mode, cons
     // window is windowed, so a windowed request is the switch's own no-op, and
     // an out-of-range one is refused there by name rather than dropped here.
     engine_set_window_mode(engine, window_mode, monitor);
-    if (!engine->headless) {
-        glfwShowWindow(engine->window);
-    }
 
     // Both sizes from the window we actually got, not the one we asked for --
     // a window manager may grant something else, and these two writers (here
@@ -1241,6 +1238,12 @@ static int _engine_init(Engine* engine, const EngineConfig* cfg) {
     engine_render_size(engine, &engine->target_render_w, &engine->target_render_h);
     engine_post_size(engine, &engine->target_post_w, &engine->target_post_h);
 
+    // Shown only once everything it draws with is built (spec 13.39): shown before the programs
+    // and the post chain, it stood blank and unanswering for the second they took. A size the
+    // shown window turns out to have reaches the framebuffer-size callback, registered above, and
+    // the first frame's top rebuilds for it.
+    if (!engine->headless)
+        glfwShowWindow(engine->window);
     return 0;
 }
 
