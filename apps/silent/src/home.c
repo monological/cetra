@@ -1,3 +1,4 @@
+#include <float.h>
 #include <math.h>
 #include <string.h>
 
@@ -670,8 +671,12 @@ static void lantern(Kit* kit, Scene* scene, const Facade* s, float a, float y) {
 }
 
 // The plant's leaves and stem, grown once with the engine's tree generator at a houseplant's
-// size, in a pot.
-static void plant(Engine* engine, Scene* scene, const vec3 at) {
+// size, standing at `at` against the hall's east wall, or up to `room` metres out from there:
+// how far out it stands.
+#define PLANT_SCALE 0.008f // the generator's units to metres, at most
+#define PLANT_CLEAR 0.01f  // its nearest leaf's gap to the wall's far face
+#define PLANT_TURNS 36     // the turns tried, for the one reaching least toward the wall
+static float plant(Engine* engine, Scene* scene, const vec3 at, float room) {
     ShaderProgram* pbr = engine_get_program(engine, CETRA_PROGRAM_PBR);
     enum { CELL = 128 };
     BakedMaps maps = {.width = CELL * TG_LEAF_VARIANTS, .height = CELL, .albedo_channels = 4};
@@ -719,10 +724,6 @@ static void plant(Engine* engine, Scene* scene, const vec3 at) {
     tree_skeleton_build(&skel, &tp);
     SceneNode* node = create_node();
     node_set_name(node, "hall_plant");
-    mat4 m;
-    glm_translate_make(m, (float*)at);
-    glm_scale_uni(m, 0.008f);
-    glm_mat4_copy(m, node->original_transform);
     Mesh* bark = create_mesh();
     if (tree_mesh_bark(&skel, &tp, bark)) {
         bark->material = stem;
@@ -738,7 +739,43 @@ static void plant(Engine* engine, Scene* scene, const vec3 at) {
         free_mesh(leaves);
     }
     tree_skeleton_free(&skel);
+    /*
+     * None of it through the wall it stands against: grown where the pot was, its leaves on that
+     * side went through and hung in the corners of the bathroom and the bedroom behind it (spec
+     * 13.40). A leaf may touch the wall, as one did before, but stops short of its far face. The
+     * plant is turned so its crown reaches least toward the wall, moved out from it as far as
+     * that crown needs and the console's top allows, and made smaller by only what is left.
+     */
+    float best = FLT_MAX, yaw = 0.0f;
+    for (int k = 0; k < PLANT_TURNS; k++) {
+        const float a = 2.0f * GLM_PIf * (float)k / (float)PLANT_TURNS;
+        const float c = cosf(a), s = sinf(a);
+        float reach = -FLT_MAX;
+        for (size_t i = 0; i < node->mesh_count; i++) {
+            const Mesh* mesh = node->meshes[i];
+            for (size_t v = 0; v < mesh->vertex_count; v++)
+                reach = fmaxf(reach, mesh->vertices[3 * v] * c + mesh->vertices[3 * v + 2] * s);
+        }
+        if (reach < best) {
+            best = reach;
+            yaw = a;
+        }
+    }
+    const float limit = HALL_X1 + 0.5f * INT_WALL - PLANT_CLEAR;
+    float out = 0.0f, scale = PLANT_SCALE;
+    if (node->mesh_count && best > 0.0f) {
+        out = glm_clamp(at[0] + PLANT_SCALE * best - limit, 0.0f, room);
+        scale = fminf(PLANT_SCALE, (limit - (at[0] - out)) / best);
+    }
+    printf("silent: the hall plant at %.0f%% of its size, %.2f m out from its place\n",
+           (double)(100.0f * scale / PLANT_SCALE), (double)out);
+    mat4 m;
+    glm_translate_make(m, (vec3){at[0] - out, at[1], at[2]});
+    glm_rotate_y(m, yaw, m);
+    glm_scale_uni(m, scale);
+    glm_mat4_copy(m, node->original_transform);
     node_add_child(scene->root_node, node);
+    return out;
 }
 
 /*
@@ -801,14 +838,17 @@ static void console(Kit* kit, Engine* engine, Scene* scene) {
     kit_frame_card(kit, &photo, MAT_CARDS, inner, (vec3){pic->size[0], 0.0f, 0.0f},
                    (vec3){0.0f, pic->size[1] * 0.96f, -pic->size[1] * 0.28f}, pic->uv);
 
-    // The pot, and the plant standing in it.
+    // The plant, and the pot under it wherever it had to stand to keep its leaves out of the
+    // wall, no further out than the pot's rim at the console's front edge: the frame's d runs out
+    // from the wall, so that is d.
     const vec2 pot[] = {{0.0f, 0.0f},   {0.05f, 0.0f},   {0.065f, 0.12f}, {0.07f, 0.13f},
                         {0.06f, 0.13f}, {0.058f, 0.11f}, {0.0f, 0.11f}};
-    kit_frame_lathe(kit, &f, MAT_CERAMIC, 0.2f, 0.17f, top, pot, KIT_COUNT(pot), 14);
+    const float pot_d = 0.17f, pot_rim = 0.07f;
     vec3 at = {0.0f, 0.0f, 0.0f};
-    kit_frame_point(&f, 0.2f, top + 0.11f, 0.17f, at);
+    kit_frame_point(&f, 0.2f, top + 0.11f, pot_d, at);
     glm_vec3_add(at, kit->origin, at);
-    plant(engine, scene, at);
+    const float out = plant(engine, scene, at, depth - pot_rim - pot_d - 0.01f);
+    kit_frame_lathe(kit, &f, MAT_CERAMIC, 0.2f, pot_d + out, top, pot, KIT_COUNT(pot), 14);
 }
 
 static void hall(Kit* kit, Engine* engine, Scene* scene) {
