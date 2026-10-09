@@ -991,15 +991,33 @@ the cat lives there. Everything of the Gothic house below is at the mansion's or
 40) added to its old coordinates. In the window: click to capture the mouse and Escape to release
 it; WASD walks, Shift hurries, and the mouse or the arrow keys look. **F** (or pad Y) toggles the
 flashlight once it is found, **E** (or pad X) opens a door or takes what is in reach, **Tab** (or
-pad Back) opens the backpack, and **G** or backtick shows the debug GUI.
+pad Back) opens the backpack, **M** (or pad RB) opens the town map once it is had, and **G** or
+backtick shows the debug GUI.
 
 **The backpack** (spec 13.40). It lies on the bed in the home's back bedroom, the flashlight in it;
 until it is taken F finds nothing and the cellar flight's foot is as far as the player goes. Its
 screen lists what it holds in a grid and turns the chosen one: the arrows, WASD or the D-pad walk
 the grid, and Enter, E, pad A or a click chooses; Tab or Escape (pad B) shuts it.
 - **`--backpack`:** starts with the backpack, the flashlight in it.
-- **`--open-backpack <item>`:** starts with its screen open on `<item>` (`flashlight`), for a
-  headless picture of it; it implies `--backpack`.
+- **`--open-backpack <item>`:** starts with its screen open on `<item>` (`flashlight` or `map`),
+  for a headless picture of it; it implies `--backpack`, and `map` implies `--map`.
+
+**The town map** (spec 13.43). It hangs half open on the kitchen fridge's freezer door. E takes it
+into the backpack once the backpack is had, and M or pad RB opens it, from the game or from the
+backpack's screen. On the map: a drag, WASD, the arrows or the left stick move the view, and the
+wheel, `=` and `-`, or the triggers zoom it. M, Tab or Escape (pad B) shuts it; Tab from the game's
+map goes on to the backpack, and the map opened from the backpack goes back to it. Each place found
+-- the barricaded north arm, the road's end at the gorge, the cabin by the lake -- is written on in
+ink the next time the map opens, after the player's own house, which is circled the first time.
+- **`--map`:** starts with the map in the backpack, the fridge bare; it implies `--backpack`.
+- **`--open-map`:** starts with the map's screen open, over the backpack's under
+  `--open-backpack`; it implies `--map`.
+- **`--found <list>`:** starts with places found, written on the map when it next opens:
+  `barricade`, `road-end` and `cabin`, comma-separated, or `all`. The house is found with the map.
+- **`--map-export <path>`:** writes the town's plan, every shape the map prints, for
+  `tools/make_map.py`, and stops. It is headless with no cat and no loading screen. The committed
+  plan is `apps/silent/tools/town_plan.txt`; re-export it and rerun the tool when the street, the
+  lake, the hill or the land changes.
 
 **Capture:** `-x`, `-f <n>`, `-S <path>`, `--screenshot-every <n>`, and `-W`/`-H` for the window
 (default 1600x900).
