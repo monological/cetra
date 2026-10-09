@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "cetra/loading_screen.h"
 #include "cetra/look_at.h"
 #include "cetra/probe_set.h"
 
@@ -545,6 +546,7 @@ bool cat_create(Cat* cat, const CatDesc* desc, Game* game, PhysicsWorld* physics
     if (!cat->places)
         return false;
     cat_places_check(cat->places, physics);
+    engine_draw_loading_screen(game->engine);
     int at = desc->at ? cat_place_find(desc->at) : CAT_HOME;
     if (at < 0) {
         fprintf(stderr, "silent: no place called '%s' for the cat (%s); home instead\n", desc->at,

@@ -7,6 +7,7 @@
 #include "cetra/cscene.h"
 #include "cetra/engine.h"
 #include "cetra/import.h"
+#include "cetra/loading_screen.h"
 #include "cetra/look_at.h"
 #include "cetra/program.h"
 
@@ -161,6 +162,8 @@ bool cat_body_load(Cat* cat, const CatDesc* desc, Game* game, PhysicsWorld* phys
     cscene_free(coat);
     cat_set_fur(cat, desc->fur);
     cat_set_eyes(cat, desc->eyes);
+    // Between the import and the skinned program's compile, each a long piece of the load.
+    engine_draw_loading_screen(engine);
     ShaderProgram* skinned = engine_find_program(engine, CETRA_PROGRAM_PBR_SKINNED);
     if (!skinned) {
         skinned = create_pbr_skinned_program();

@@ -1,6 +1,7 @@
 #include <math.h>
 #include <stdio.h>
 
+#include "cetra/loading_screen.h"
 #include "cetra/material.h"
 #include "cetra/mesh.h"
 #include "cetra/procedural/rock.h"
@@ -260,6 +261,8 @@ void woods_build(Kit* kit, Engine* engine, Scene* scene, Trees* trees,
                  const FenceBreaches* breaches, unsigned int seed) {
     ShaderProgram* pbr = engine_get_program(engine, CETRA_PROGRAM_PBR);
     Material* needles = needles_material(scene, pbr);
+    // The loading screen moves between the needles' bake and each model grown.
+    engine_draw_loading_screen(engine);
     Mesh *wood[CONIFER_MODELS], *sprays[CONIFER_MODELS];
     float trunk_radius[CONIFER_MODELS];
     for (int i = 0; i < CONIFER_MODELS; i++) {
@@ -271,6 +274,7 @@ void woods_build(Kit* kit, Engine* engine, Scene* scene, Trees* trees,
             wood[i]->lod_scale = WOODS_WOOD_LOD_SCALE;
         if (sprays[i])
             sprays[i]->lod_scale = WOODS_SPRAY_LOD_SCALE;
+        engine_draw_loading_screen(engine);
     }
 
     SceneNode* root = create_node();

@@ -2544,8 +2544,9 @@ bool shadow_tile_lookup(const ShadowSystem* system, const Light* light, ShadowTi
 
 // Draw what the cached lights' blocks are missing. A light is not drawn until it emits: a
 // candle's light sits at the wick until its flame has burned a frame, and a face drawn from
-// there is a face drawn from the wrong place.
-static void render_shadow_tiles(ShadowSystem* ss, const Engine* engine, const Scene* scene,
+// there is a face drawn from the wrong place. The loading screen moves between faces: the frame
+// the tiles open draws every face of every light that holds a block.
+static void render_shadow_tiles(ShadowSystem* ss, Engine* engine, const Scene* scene,
                                 SubmitState* state) {
     const int edge = ss->punctual_map_size;
     for (int b = 0; b < ss->tile_block_count; ++b) {
@@ -2576,6 +2577,7 @@ static void render_shadow_tiles(ShadowSystem* ss, const Engine* engine, const Sc
                 block->valid |= 1ull << f;
                 ss->tile_faces_drawn++;
             }
+            loading_screen_tick(engine);
         }
     }
 }
@@ -2596,7 +2598,7 @@ static bool tiles_any_dynamic(const ShadowSystem* ss) {
 // whole, still casters and movers both. A face drawn when no moving caster reached it this frame
 // holds nothing that moves, so it is kept from then on: without that, every face a cat ever
 // walked through would be drawn again every frame.
-static void render_shadow_movers(ShadowSystem* ss, const Engine* engine, const Scene* scene,
+static void render_shadow_movers(ShadowSystem* ss, Engine* engine, const Scene* scene,
                                  SubmitState* state) {
     const int edge = ss->punctual_map_size;
     Frustum view;
@@ -2633,6 +2635,8 @@ static void render_shadow_movers(ShadowSystem* ss, const Engine* engine, const S
                 else
                     ss->mover_faces_whole++;
             }
+            // The first frames draw every store cell besides: the loading screen moves between.
+            loading_screen_tick(engine);
         }
     }
 }
