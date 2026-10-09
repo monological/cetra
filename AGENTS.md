@@ -1477,6 +1477,12 @@ speeds.
   round it through their walls. A light takes all its layers or none, and past a light the pool
   cannot fit, a later one needing fewer may still fit. The cap is the driver's uniform limit, not GL 4.1's
   guaranteed 1024 components: the uber program already used 1029 at eight layers.
+  **The array's edge follows the per-frame layers, and a capture burst keeps it** (spec 13.44):
+  one layer is drawn at 4096, more at less as the budget allows, none at 1024, and the cached
+  tiles are laid out for that edge. A burst holds the scene at rest, where a light may stop
+  casting -- silent puts its flashlight away -- so it keeps the edge the frame built while its
+  layers fit there. An edge chosen from the burst rebuilt the array in the burst and again in
+  the frame, every frame a capture ran, carrying every kept tile across both times.
 - **Cached point- and area-light shadows** (specs 13.16 and 13.27): a point light or a panel
   with `cast_shadows`, `shadow_cache` and a range keeps its faces as 256^2 TILES of the punctual
   array, past the per-frame layers and the rain's, drawn once and kept, under a 192 MiB budget
