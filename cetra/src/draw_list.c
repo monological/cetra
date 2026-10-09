@@ -226,12 +226,18 @@ static void item_world_bounds(const Mesh* mesh, const SceneNode* node, vec3 out_
     }
 }
 
-float draw_item_projected(const DrawItem* item, const vec3 eye) {
-    vec3 centre = {0.0f, 0.0f, 0.0f};
+// How large a mesh looks from a selection's eye: its bound's radius over its distance, or over half
+// the height of a parallel view. FLT_MAX with the eye at the bound's centre.
+static float projected_size(const Mesh* mesh, const SceneNode* node, const LodSelect* lod) {
+    // Zeroed for the same reason the bounds inside item_world_bounds are: an
+    // out-param filled by a callee reads as a use before write to cppcheck.
+    vec3 world_centre = {0.0f, 0.0f, 0.0f};
     float radius = 0.0f;
-    item_world_bounds(item->mesh, item->node, centre, &radius);
-    const float distance = glm_vec3_distance((float*)eye, centre);
-    return distance > radius ? radius / distance : FLT_MAX;
+    item_world_bounds(mesh, node, world_centre, &radius);
+    if (lod->ortho_height > 0.0f)
+        return radius / (0.5f * lod->ortho_height);
+    const float distance = glm_vec3_distance((float*)lod->eye, world_centre);
+    return distance < 1e-4f ? FLT_MAX : radius / distance;
 }
 
 float draw_item_view_depth(const DrawItem* item, const mat4 view) {
@@ -241,27 +247,11 @@ float draw_item_view_depth(const DrawItem* item, const mat4 view) {
     return -eye[2];
 }
 
-// Level for this item, from its own bounds. Zero whenever the chain is absent
-// or selection is off, which is what makes --no-lod reach the pre-chain frame.
-static uint8_t select_lod(const Mesh* mesh, const SceneNode* node, const LodSelect* lod) {
-    if (!lod || !lod->enabled || mesh->lod_levels <= 1)
+// Level for a mesh of a chain, at its projected size. The caller asks only where the mesh has a
+// chain and selection is on, which is what makes --no-lod reach the pre-chain frame.
+static uint8_t select_lod(const Mesh* mesh, float projected, const LodSelect* lod) {
+    if (projected == FLT_MAX)
         return 0;
-
-    // Zeroed for the same reason the bounds inside item_world_bounds are: an
-    // out-param filled by a callee reads as a use before write to cppcheck.
-    vec3 world_centre = {0.0f, 0.0f, 0.0f};
-    float radius = 0.0f;
-    item_world_bounds(mesh, node, world_centre, &radius);
-
-    float projected;
-    if (lod->ortho_height > 0.0f) {
-        projected = radius / (0.5f * lod->ortho_height);
-    } else {
-        float distance = glm_vec3_distance((float*)lod->eye, world_centre);
-        if (distance < 1e-4f)
-            return 0;
-        projected = radius / distance;
-    }
     // One factor, so a scale of 1 multiplies by exactly the bias it always did.
     projected *=
         (lod->bias > 0.0f ? lod->bias : 1.0f) * (mesh->lod_scale > 0.0f ? mesh->lod_scale : 1.0f);
@@ -348,6 +338,28 @@ static bool emits(const Material* mat) {
     return glm_vec3_max(factor) > 0.0f;
 }
 
+// An item's level and whether it is `small`, from how large it looks from `lod`'s eye, measured
+// once and only when one of the two needs it. Whether it gives off light is asked last, and here
+// rather than at build: a capture selects inside its burst, with what flickers held at rest, so a
+// light is counted as what the capture sees of it and not as the instant the camera built at.
+static void settle(DrawItem* item, const LodSelect* lod) {
+    item->lod = 0;
+    item->small = 0;
+    if (!lod)
+        return;
+    const bool chain = lod->enabled && item->mesh->lod_levels > 1;
+    const bool cut = lod->min_projected > 0.0f && !item->capture_always;
+    if (!chain && !cut)
+        return;
+    const float projected = projected_size(item->mesh, item->node, lod);
+    if (chain)
+        item->lod = select_lod(item->mesh, projected, lod);
+    // Under 1, or the eye is inside the bound: a probe is never cut off from what it stands in,
+    // whatever threshold it was given.
+    item->small =
+        cut && projected < 1.0f && projected < lod->min_projected && !emits(item->mesh->material);
+}
+
 // Depth-first, children left to right, a node's meshes before its gizmo --
 // the order the two recursive walks produced between them. `inherited` is the
 // nearest ancestor's pose, which a node without one takes, `hidden` whether
@@ -393,9 +405,9 @@ static bool append_node(DrawList* list, Scene* scene, SceneNode* node, const Lod
         DrawItem item = {.mesh = mesh,
                          .node = node,
                          .pose = mesh->is_skinned ? pose : NULL,
-                         .lod = select_lod(mesh, node, lod),
                          .beyond = past_reach(mesh, node, lod, reach),
-                         .capture_always = always || emits(mesh->material)};
+                         .capture_always = always};
+        settle(&item, lod);
         classify(mesh, scene->wind, &item.lane, &item.flags);
         // A pose, or a node said to move: either way a capture would freeze it into a
         // picture taken while the game runs. A node said to move is not still either, so a
@@ -446,14 +458,14 @@ bool draw_list_build(DrawList* list, Scene* scene, uint64_t stamp, const LodSele
 
 static bool _lod_select_equal(const LodSelect* a, const LodSelect* b) {
     return a->enabled == b->enabled && a->bias == b->bias && a->ortho_height == b->ortho_height &&
-           glm_vec3_eqv((float*)a->eye, (float*)b->eye);
+           a->min_projected == b->min_projected && glm_vec3_eqv((float*)a->eye, (float*)b->eye);
 }
 
 void draw_list_select_lod(DrawList* list, const LodSelect* lod) {
     if (!list || !lod || (list->lod_from_valid && _lod_select_equal(&list->lod_from, lod)))
         return;
     for (size_t i = 0; i < list->count; ++i)
-        list->items[i].lod = select_lod(list->items[i].mesh, list->items[i].node, lod);
+        settle(&list->items[i], lod);
     list->lod_from = *lod;
     list->lod_from_valid = true;
 }
@@ -549,8 +561,7 @@ bool draw_item_visible(const DrawItem* item, const CullView* view) {
         return false;
     if (view->distance && item->beyond)
         return false;
-    if (view->min_projected > 0.0f && !item->capture_always &&
-        draw_item_projected(item, view->eye) < view->min_projected)
+    if (view->size && item->small)
         return false;
     if (!view->frustum)
         return true;

@@ -60,7 +60,8 @@ enum {
     DRAW_HOOKED_CASTER = 1u << 7,
 };
 
-// How a view picks a level out of a mesh's LOD chain.
+// How a view picks a level out of a mesh's LOD chain, and what a GI capture leaves out for being
+// small (spec 13.42): both answer how large an item looks from one eye.
 typedef struct LodSelect {
     vec3 eye;           // where projected size is measured from
     float ortho_height; // > 0 = a parallel projection this tall in world units, under
@@ -68,6 +69,9 @@ typedef struct LodSelect {
                         //       the eye's distance does not enter; 0 = perspective
     float bias;         // > 1 holds detail longer, < 1 drops it sooner
     bool enabled;       // false pins every item to level 0
+    // > 0 = an item looking smaller than this is marked `small`, unless it is capture_always or
+    // gives off light; 0 = none is
+    float min_projected;
 } LodSelect;
 
 typedef struct DrawItem {
@@ -98,9 +102,12 @@ typedef struct DrawItem {
     // `occluded`, settled at build from the camera's eye, and read only through a CullView
     // that set `distance`. Zero with no camera to measure from.
     uint8_t beyond;
-    // Never cut from a GI capture for being small (spec 13.42): an emitter, whose light a
-    // capture must see however small it looks, or under a node set capture_always.
+    // Under a node set capture_always (spec 13.42): never `small`.
     uint8_t capture_always;
+    // Too small for the GI capture drawing it to see (spec 13.42): settled with `lod` by the
+    // selection that set min_projected, so once a probe, and read only through a CullView that
+    // set `size`. Zero under any other selection.
+    uint8_t small;
 } DrawItem;
 
 typedef struct DrawList {
@@ -169,9 +176,10 @@ void scene_graph_touched(void);
 bool draw_list_build(DrawList* list, struct Scene* scene, uint64_t stamp, const LodSelect* lod,
                      bool gizmos);
 
-// Every item's level chosen again, from `lod`, leaving the list otherwise as built: for a capture,
-// which draws from its own eye at its own resolution, and to give the camera's levels back after.
-// Nothing is walked when `lod` is the selection the levels were last chosen by.
+// Every item's level, and whether it is `small`, chosen again from `lod`, leaving the list
+// otherwise as built: for a capture, which draws from its own eye at its own resolution, and to
+// give the camera's levels back after. Nothing is walked when `lod` is the selection they were last
+// chosen by. Whether an item gives off light is asked here, so a capture asks it at rest.
 void draw_list_select_lod(DrawList* list, const LodSelect* lod);
 
 // A bias of `bias` for a view of `pixels_per_tan` pixels to a unit of tan: the levels that view's
@@ -210,10 +218,10 @@ typedef struct CullView {
     // node's draw distance is the camera's to honour; a light's volume or a capture that took
     // it would leave a shadow or a reflection missing for an eye standing far off.
     bool distance;
-    // > 0 only on a GI capture's view (spec 13.42): an item whose bound looks smaller than this
-    // from `eye`, as draw_item_projected measures it, is not drawn unless it is capture_always.
-    float min_projected;
-    vec3 eye;
+    // True only on a GI capture's own view (spec 13.42): says draw_item_visible may read
+    // item->small. A light's pass drawn while the capture runs takes every caster, so a shadow
+    // does not lose what the capture left out.
+    bool size;
 } CullView;
 
 // Whether this item survives the frustum.
@@ -239,10 +247,6 @@ bool draw_item_bounds(const DrawItem* item, const CullView* view, AABB* out);
 // burst's shadow pass draws, not hidden from captures, and its bound under `wind` meeting the box
 // -- or no bound to be had. The one statement of what a capture's key must fold.
 bool draw_item_captured_in(const DrawItem* item, const struct Wind* wind, const AABB* box);
-
-// How large the item looks from `eye`: its import bound's radius over its distance, the measure LOD
-// picks a level by. FLT_MAX with the eye inside the bound.
-float draw_item_projected(const DrawItem* item, const vec3 eye);
 
 // How far in front of the eye `view` puts the centre of the item's mesh, from its import bound:
 // what a back-to-front order sorts by.

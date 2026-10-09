@@ -1390,7 +1390,8 @@ static void print_usage(const char* prog) {
     printf("      --capture-timing    Print what each GI volume's sweep cost, part by part, as\n"
            "                          it converges; slows the sweep\n");
     printf("      --gi-cull-pixels F  A GI probe leaves out what spans fewer pixels than F\n"
-           "                          across its 16-pixel faces; 0, the default, takes all\n");
+           "                          across its %d-pixel faces; 0, the default, takes all\n",
+           GI_CAPTURE_FACE);
     printf("      --gi-cell M         The home's GI cell, metres (default %.2f)\n",
            (double)HOME_GI_CELL);
     printf("      --profiler          Per-pass timing and submission counts, at exit\n");

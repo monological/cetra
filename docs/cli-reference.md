@@ -396,8 +396,10 @@ faces and the projections -- with the faces' draws and triangles, which the prof
 row then goes without. Each part is bracketed by a glFinish, so a timed sweep runs slower than an
 untimed one; compare `cpu` with `wall` for how much of a part is submission),
 `--gi-cull-pixels <f>` (spec 13.42, render and silent — the GI world's `cull_pixels`: a GI probe
-leaves out what spans fewer than f pixels across its 16-pixel faces, unless it gives off light or
-hangs under a node set `capture_always`. 0, the default, takes everything),
+leaves out what spans fewer than f pixels across its 16-pixel faces, unless it gives off light
+with what flickers held at rest, holds the probe inside its bound, or hangs under a node set
+`capture_always`. Decided once a probe, for its shaded faces and its wall test alike. 0, the
+default, takes everything),
 `--gi-cook` (spec 13.42 — the scene's `cook_lighting`: a volume's opening sweep and
 a probe's column are loaded from the cook when a run of the same scene stored them, and stored
 when not. The key is the scene at rest within the capture's reach, the engine's source and the

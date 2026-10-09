@@ -206,8 +206,10 @@ static void print_usage(const char* prog) {
                     "may take (default 8 windowed, no limit headless; 0 = no limit)\n");
     fprintf(stderr, "      --capture-timing   Print what each GI volume's sweep cost, part by "
                     "part, as it converges (slows the sweep)\n");
-    fprintf(stderr, "      --gi-cull-pixels <f>  A GI probe leaves out what spans fewer pixels "
-                    "across its 16-pixel faces (0..16; default 0, everything)\n");
+    fprintf(stderr,
+            "      --gi-cull-pixels <f>  A GI probe leaves out what spans fewer pixels "
+            "across its %d-pixel faces (0..%d; default 0, everything)\n",
+            GI_CAPTURE_FACE, GI_CAPTURE_FACE);
     fprintf(stderr, "      --gi-cook          Load GI sweeps and probe columns from the cook when "
                     "a run of the same scene stored them, and store them when not\n");
     fprintf(stderr, "      --stream-probe N   Print the streamed lighting's residency every N "
@@ -1305,7 +1307,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
         } else if (strcmp(argv[i], "--capture-timing") == 0) {
             args->capture_timing = true;
         } else if (strcmp(argv[i], "--gi-cull-pixels") == 0) {
-            if (_ranged_arg(argc, argv, &i, 0.0f, 16.0f, &args->gi_cull_pixels) != 0)
+            if (_ranged_arg(argc, argv, &i, 0.0f, (float)GI_CAPTURE_FACE, &args->gi_cull_pixels) !=
+                0)
                 return -1;
         } else if (strcmp(argv[i], "--gi-cook") == 0) {
             args->gi_cook = true;
