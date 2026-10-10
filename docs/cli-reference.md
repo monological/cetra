@@ -1027,6 +1027,23 @@ ink the next time the map opens, after the player's own house, which is circled 
   plan is `apps/silent/tools/town_plan.txt`; re-export it and rerun the tool when the street, the
   lake, the hill or the land changes.
 
+**Walking** (spec 13.47). The body moves in 60 Hz physics steps and is drawn between the last two,
+so the eye moves every frame; it gets going in a third of a second and stops in a fifth. A flight
+of stairs collides as a ramp along its nosings and is climbed at the pace a person keeps on it,
+2.4 treads a second walking up the mansion's. The engine's gait (`gait.h`) times the steps from the
+ground covered, eases the eye up and down kerbs and steps, bobs the head 2 cm walking and 3.5
+jogging with a centimetre of sway, and lets each foot fall, which is heard on what it lands on.
+- **`--no-interp`:** draws the body where the last step left it, for the A/B.
+- **`--no-gait`:** the eye rides the body rigidly, with no bob, and a climb is not paced.
+- **`--bob <x>`:** the head's bob as a share of the gait's own (default 1; 0 is none). The engine's
+  Reduce Motion setting scales it with the camera's shake.
+- **`--climb <x>`:** the pace up and down a flight as a share of the gait's own (default 1).
+- **`--no-footsteps`:** walks without a sound.
+- **`--footstep-say`:** plays every footstep take in turn, two a second, for an audio dump.
+- **`--trace-gait`:** prints every fixed step's move (feet, rise, run, ground state and normal,
+  speed, grade, how much of it is a flight, pace), every frame's feet, eye, phase and speed, and
+  every footfall and the surface it fell on.
+
 **Capture:** `-x`, `-f <n>`, `-S <path>`, `--screenshot-every <n>`, and `-W`/`-H` for the window
 (default 1600x900).
 
