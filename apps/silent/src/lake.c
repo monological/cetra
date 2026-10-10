@@ -310,6 +310,11 @@ static void ring(Kit* kit) {
     }
 }
 
+bool lake_on_dock(const float p[3]) {
+    return p[0] < DOCK_X0 && p[0] > DOCK_X1 && fabsf(p[2] - DOCK_Z) < DOCK_HALF &&
+           fabsf(p[1] - DOCK_Y) < 0.1f;
+}
+
 /*
  * The dock, straight out from the cabin's door: posts in pairs out of the bed, the last pair
  * standing up past the deck to tie a boat to, two stringers and planks across them, a few gone.

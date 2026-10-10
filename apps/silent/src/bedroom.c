@@ -249,6 +249,21 @@ static void chest(Kit* kit) {
     candle_chamber(kit, &f, -0.17f, CHEST_H, 0.25f, 0.07f);
 }
 
+// The rug between the chest and the foot of the bed, along x from x0 to x1.
+static void rug_span(float* x0, float* x1) {
+    const float chest_front = BEDROOM_IN_X0 + OFF_WALL + CHEST_DEPTH + CHEST_OVER;
+    const float bed_foot = BEDROOM_IN_X1 - OFF_WALL - BED_LONG;
+    *x0 = chest_front + RUG_FROM_CHEST;
+    *x1 = bed_foot - RUG_FROM_BED;
+}
+
+bool bedroom_on_cloth(const vec3 p) {
+    float x0, x1;
+    rug_span(&x0, &x1);
+    return fabsf(p[1] - FLOOR_Y) < 0.05f && p[0] > x0 && p[0] < x1 && p[2] > BED_Z - BED_HALF &&
+           p[2] < BED_Z + BED_HALF;
+}
+
 void bedroom_build(Kit* kit, Scene* scene) {
     bed(kit);
     const float front = BEDROOM_IN_Z0 - BED_Z + STAND_HALF + 0.05f;
@@ -258,8 +273,8 @@ void bedroom_build(Kit* kit, Scene* scene) {
     lamp(kit, scene, front);
     bedside_things(kit, back);
     chest(kit);
-    const float chest_front = BEDROOM_IN_X0 + OFF_WALL + CHEST_DEPTH + CHEST_OVER;
-    const float bed_foot = BEDROOM_IN_X1 - OFF_WALL - BED_LONG;
-    kit_frame_box(kit, &KIT_WORLD, MAT_RUG, chest_front + RUG_FROM_CHEST, bed_foot - RUG_FROM_BED,
-                  FLOOR_Y, FLOOR_Y + 0.008f, BED_Z - BED_HALF, BED_Z + BED_HALF, false);
+    float x0, x1;
+    rug_span(&x0, &x1);
+    kit_frame_box(kit, &KIT_WORLD, MAT_RUG, x0, x1, FLOOR_Y, FLOOR_Y + 0.008f, BED_Z - BED_HALF,
+                  BED_Z + BED_HALF, false);
 }

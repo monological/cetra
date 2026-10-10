@@ -903,6 +903,29 @@ static void sofa(Kit* kit, const KitFrame* f, float ha, bool arms) {
     kit_frame_box(kit, f, KIT_COLLIDER_ONLY, -ha, ha, 0.0f, 0.88f, d0, d1, true);
 }
 
+// What lies on the ground floor's boards to walk on: the living room's rug and the mat by the
+// tub (whose near edge is BATH_IN_Z1 - 0.72), each x0, x1, z0, z1.
+static const float CLOTHS[2][4] = {
+    {-4.3f, -2.3f, 13.35f, 15.45f},
+    {1.2f, 2.2f, BATH_IN_Z1 - 0.72f - 0.55f, BATH_IN_Z1 - 0.72f - 0.05f},
+};
+
+bool home_on_cloth(const vec3 p) {
+    if (fabsf(p[1] - FLOOR_Y) > 0.05f)
+        return false;
+    for (size_t i = 0; i < sizeof(CLOTHS) / sizeof(CLOTHS[0]); i++)
+        if (p[0] > CLOTHS[i][0] && p[0] < CLOTHS[i][1] && p[2] > CLOTHS[i][2] &&
+            p[2] < CLOTHS[i][3])
+            return true;
+    return false;
+}
+
+static void cloth(Kit* kit, int which) {
+    const float* c = CLOTHS[which];
+    kit_frame_box(kit, &KIT_WORLD, MAT_RUG, c[0], c[1], FLOOR_Y, FLOOR_Y + 0.008f, c[2], c[3],
+                  false);
+}
+
 static void living_room(Kit* kit, Scene* scene) {
     // Facing +z, toward the television.
     const KitFrame couch = {{-TV_X, FLOOR_Y, 12.75f}, 0.0f};
@@ -911,7 +934,7 @@ static void living_room(Kit* kit, Scene* scene) {
     sofa(kit, &chair, 0.42f, true);
 
     const KitFrame* w = &KIT_WORLD;
-    kit_frame_box(kit, w, MAT_RUG, -4.3f, -2.3f, FLOOR_Y, FLOOR_Y + 0.008f, 13.35f, 15.45f, false);
+    cloth(kit, 0);
     // The coffee table, and on it a folded newspaper and a mug gone cold.
     const KitFrame table = {{-TV_X, FLOOR_Y, 14.2f}, 0.0f};
     kit_frame_box(kit, &table, MAT_WOOD, -0.5f, 0.5f, 0.4f, 0.44f, -0.26f, 0.26f, false);
@@ -1011,8 +1034,7 @@ static void bathroom(Kit* kit, Scene* scene) {
     const KitFrame east = {{BATH_IN_X1, FLOOR_Y, 15.2f}, -0.5f * GLM_PIf};
     kit_frame_bar(kit, &east, MAT_STAINLESS, -0.3f, 0.3f, 1.25f, 0.06f, 0.01f);
     kit_frame_box(kit, &east, MAT_TOWEL, -0.22f, 0.22f, 0.8f, 1.27f, 0.05f, 0.075f, false);
-    kit_frame_box(kit, w, MAT_RUG, 1.2f, 2.2f, FLOOR_Y, FLOOR_Y + 0.008f, z0 - 0.55f, z0 - 0.05f,
-                  false);
+    cloth(kit, 1);
 
     // The bulb, bare on a ceiling rose.
     const float bx = 1.35f, bz = 15.0f, by = CEIL_Y - 0.12f;

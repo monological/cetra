@@ -57,6 +57,7 @@
 #include "crossroads.h"
 #include "door.h"
 #include "fences.h"
+#include "footsteps.h"
 #include "fridge_map.h"
 #include "grounds.h"
 #include "hearth.h"
@@ -188,6 +189,8 @@ typedef struct SilentArgs {
     bool no_gait;
     float bob;   // the head's bob, as a share of the gait's own
     float climb; // the pace up and down a flight, as a share of the gait's own
+    bool no_footsteps;
+    bool footstep_say; // every footstep take in turn, for listening in an audio dump
     bool no_flicker;
     bool no_static;         // the living room's set showing nothing, a faint glow and no hiss
     bool no_loading_screen; // load under a black window, with no engine screen over it
@@ -238,6 +241,7 @@ typedef struct SilentArgs {
 static SilentArgs g_args;
 static Scene* g_scene;
 static Player g_player;
+static Footsteps g_footsteps;
 static Lights g_lights;
 static Tv g_tv;
 static Clock g_clock;
@@ -1084,6 +1088,9 @@ static void on_init(Game* game) {
     g_player.gait->bob_scale = g_args.bob * g_player.rig->shake_player_scale;
     g_player.gait->climb_up *= g_args.climb;
     g_player.gait->climb_down *= g_args.climb;
+    footsteps_start(&g_footsteps, g_args.no_footsteps ? NULL : game->audio, g_player.entity,
+                    (uint32_t)g_args.seed * 2654435761u + 1u);
+    g_footsteps.trace = g_args.trace_gait;
     load_seam(engine, "player");
     // Sent somewhere or holding a clip from the command line, the cat has no mind of its own.
     if (g_cat.entity && !g_args.cat_go[0] && !g_args.cat_clip[0])
@@ -1246,6 +1253,30 @@ static void take_map(void) {
     hud_hint(&g_hud, MAP_HINT, HINT_SECONDS);
 }
 
+// Ground out under the rain, past this much of a film, sounds wet underfoot.
+#define FOOTSTEPS_WET 0.3f
+
+// A foot the gait let fall this frame, heard where it came down on what the drawn `feet` stand
+// on (spec 13.47); or, under --footstep-say, every take in turn.
+static void footfall(const Game* game, const vec3 feet) {
+    vec3 from_body = {0.0f, 0.0f, 0.0f};
+    player_feet(&g_player, from_body);
+    glm_vec3_sub(from_body, g_player.entity->position, from_body);
+    if (g_args.footstep_say) {
+        footsteps_say(&g_footsteps, game->time, from_body);
+        return;
+    }
+    if (!g_player.gait->fell)
+        return;
+    const Rain* rain = g_scene->rain;
+    // The rain bed knows whether the head is under open sky, a frame late.
+    const bool wet = rain && rain->wetness > FOOTSTEPS_WET && g_rain_bed.open > 0.5f;
+    const float yaw = g_player.rig->yaw;
+    const vec3 right = {-cosf(yaw), 0.0f, sinf(yaw)};
+    footsteps_fall(&g_footsteps, &g_player.gait->footfall, footsteps_surface(feet, wet), from_body,
+                   right);
+}
+
 static void on_pre_render(Game* game, double alpha) {
     Engine* engine = game->engine;
     if (input_action_pressed(&game->input, "toggle_gui"))
@@ -1275,6 +1306,7 @@ static void on_pre_render(Game* game, double alpha) {
     vec3 feet = {0.0f, 0.0f, 0.0f};
     player_view_feet(&g_player, feet);
     lake_update(&g_lake, eye, feet);
+    footfall(game, feet);
 
     // The nearest thing the player is looking at in reach -- a door, the backpack on the bed or the
     // map on the fridge -- says what the action key would do to it, and the key does it.
@@ -1520,6 +1552,8 @@ static void print_usage(const char* prog) {
         "      --bob X             The head's bob as a share of the gait's (default 1; 0 none)\n");
     printf("      --climb X           The pace up and down a flight as a share of the gait's "
            "(default 1)\n");
+    printf("      --no-footsteps      Walk without a sound\n");
+    printf("      --footstep-say      Play every footstep take in turn, two a second\n");
     printf("      --no-flicker        Keep the failing ceiling tube steady\n");
     printf("      --no-static         The living room's television with nothing on it, no snow\n");
     printf("      --no-loading-screen Load under a black window, without the engine's screen\n");
@@ -1700,6 +1734,10 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
             a->bob = fmaxf(0.0f, (float)atof(argv[++i]));
         } else if (!strcmp(s, "--climb") && has_next) {
             a->climb = fmaxf(0.01f, (float)atof(argv[++i]));
+        } else if (!strcmp(s, "--no-footsteps")) {
+            a->no_footsteps = true;
+        } else if (!strcmp(s, "--footstep-say")) {
+            a->footstep_say = true;
         } else if (!strcmp(s, "--no-flicker")) {
             a->no_flicker = true;
         } else if (!strcmp(s, "--no-static")) {
