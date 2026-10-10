@@ -40,4 +40,8 @@ void mansion_candelabra_flame(vec3 out);
 // cushion, where a paw makes no sound.
 bool mansion_on_cloth(const vec3 p);
 
+// Whether a point of the WORLD is on any of the mansion's cloth: its rugs, its runners and the
+// window seat's cushion, where the mansion stands.
+bool mansion_cloth_at(const vec3 world);
+
 #endif // _SILENT_MANSION_H_

@@ -320,7 +320,20 @@ static void grid_vertex(int i, int j, float* p) {
     p[1] = land_height(p[0], p[2]);
 }
 
-bool land_too_steep(float x, float z) {
+// The ground cell (i, j) lays down under the woods, or the yard's: at the woods' east edge by a
+// hash, so the edge is ragged -- a hash of the cell's place east of the lip, as it was before the
+// grid reached west of it. `a` is the cell's corner at its least x and z.
+static int cell_ground(int i, int j, const float* a) {
+    const float mx = a[0] + 0.5f * LAND_STEP, mz = a[2] + 0.5f * LAND_STEP;
+    const unsigned int h = ((unsigned int)(i - I_LIP) * 73856093u) ^ ((unsigned int)j * 19349663u);
+    const float ragged = (float)(h % 1000u) / 1000.0f * 8.0f;
+    const bool woods = (mz < TERRACE_BACK_Z || mz > BACK_FENCE_Z || mx < -STREET_HALF_LEN) &&
+                       mx < WOODS_EAST_X - 4.0f + ragged;
+    return woods ? MAT_WOODS_FLOOR : MAT_DIRT;
+}
+
+// The triangle of the grid (x, z) falls in, as land_build winds it, and its cell's ground.
+static int facet_at(float x, float z, vec3 t[3]) {
     const float gi = (x - LAND_X0) / LAND_STEP, gj = (z - WORLD_Z0) / LAND_STEP;
     const int i = (int)floorf(gi), j = (int)floorf(gj);
     vec3 a = {0.0f}, b = {0.0f}, c = {0.0f}, e = {0.0f};
@@ -328,8 +341,24 @@ bool land_too_steep(float x, float z) {
     grid_vertex(i + 1, j, b);
     grid_vertex(i, j + 1, c);
     grid_vertex(i + 1, j + 1, e);
-    // The cell's two triangles, as land_build lays them, meet along b-c.
-    return gi - (float)i + gj - (float)j < 1.0f ? too_steep(a, c, b) : too_steep(b, c, e);
+    // The cell's two triangles meet along b-c.
+    const bool first = gi - (float)i + gj - (float)j < 1.0f;
+    glm_vec3_copy(first ? a : b, t[0]);
+    glm_vec3_copy(c, t[1]);
+    glm_vec3_copy(first ? b : e, t[2]);
+    return cell_ground(i, j, a);
+}
+
+bool land_too_steep(float x, float z) {
+    vec3 t[3];
+    facet_at(x, z, t);
+    return too_steep(t[0], t[1], t[2]);
+}
+
+int land_mat_at(float x, float z) {
+    vec3 t[3];
+    const int ground = facet_at(x, z, t);
+    return valley_mat(t[0], t[1], t[2], ground);
 }
 
 void land_build(Kit* kit) {
@@ -351,9 +380,7 @@ void land_build(Kit* kit) {
     // mansion's grounds, whose flat would be one long run of coplanar triangles and stand on a box
     // of hill_build's. The lake's bed collides all the way out: whatever keeps a wader out of the
     // deep water, nobody falls through the bed if they get past it. The flat ground's cells are
-    // not the land's at all. Under the woods the ground is their floor, the cells at its
-    // east edge taking it by a hash so the edge is ragged -- a hash of the cell's place east of the
-    // lip, as it was before the grid reached west of it.
+    // not the land's at all.
     const vec3 up = {0.0f, 1.0f, 0.0f};
     int n = 0;
     for (int j = 0; j < rows; j++)
@@ -365,14 +392,8 @@ void land_build(Kit* kit) {
             const float mx = pos[3 * a] + 0.5f * LAND_STEP, mz = pos[3 * a + 2] + 0.5f * LAND_STEP;
             if (on_flat(mx, mz))
                 continue;
-            const unsigned int h =
-                ((unsigned int)(i - I_LIP) * 73856093u) ^ ((unsigned int)j * 19349663u);
-            const float ragged = (float)(h % 1000u) / 1000.0f * 8.0f;
-            const bool woods =
-                (mz < TERRACE_BACK_Z || mz > BACK_FENCE_Z || mx < -STREET_HALF_LEN) &&
-                mx < WOODS_EAST_X - 4.0f + ragged;
-            const int mat = woods ? MAT_WOODS_FLOOR : MAT_DIRT;
             const float *pa = &pos[3 * a], *pb = &pos[3 * b], *pc = &pos[3 * c], *pe = &pos[3 * e];
+            const int mat = cell_ground(i, j, pa);
             kit_tri_facing(kit, valley_mat(pa, pc, pb, mat), pa, pc, pb, up);
             kit_tri_facing(kit, valley_mat(pb, pc, pe, mat), pb, pc, pe, up);
             if (hill_on_grounds(mx, mz))

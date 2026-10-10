@@ -339,4 +339,11 @@ static inline void mansion_at(const float local[3], float out[3]) {
     out[2] = local[2] + MANSION_Z;
 }
 
+// And back: a point of the world, in the house's plan.
+static inline void mansion_plan(const float world[3], float out[3]) {
+    out[0] = world[0] - MANSION_X;
+    out[1] = world[1] - MANSION_Y;
+    out[2] = world[2] - MANSION_Z;
+}
+
 #endif // _SILENT_LAYOUT_H_

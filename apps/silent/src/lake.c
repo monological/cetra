@@ -310,11 +310,6 @@ static void ring(Kit* kit) {
     }
 }
 
-bool lake_on_dock(const float p[3]) {
-    return p[0] < DOCK_X0 && p[0] > DOCK_X1 && fabsf(p[2] - DOCK_Z) < DOCK_HALF &&
-           fabsf(p[1] - DOCK_Y) < 0.1f;
-}
-
 /*
  * The dock, straight out from the cabin's door: posts in pairs out of the bed, the last pair
  * standing up past the deck to tie a boat to, two stringers and planks across them, a few gone.
@@ -348,8 +343,7 @@ static void dock(Kit* kit, unsigned int* state) {
         kit_frame_box(kit, &KIT_WORLD, MAT_PORCH, x - 0.08f, x + 0.08f, DOCK_Y - 0.045f, DOCK_Y,
                       z0 - 0.02f + jitter, z1 + 0.02f + jitter, false);
     }
-    kit_frame_box(kit, &KIT_WORLD, KIT_COLLIDER_ONLY, DOCK_X0, DOCK_X1, DOCK_Y - 0.4f, DOCK_Y, z0,
-                  z1, true);
+    kit_frame_floor(kit, &KIT_WORLD, MAT_PORCH, DOCK_X0, DOCK_X1, DOCK_Y - 0.4f, DOCK_Y, z0, z1);
     // From inside the ring out, down to below the bed and over a head.
     float ring_x = 0.0f, ring_z = 0.0f;
     shore_at(0.0f, -WADE_OUT, &ring_x, &ring_z);

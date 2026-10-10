@@ -94,6 +94,12 @@ typedef struct Game {
     // vectors describe the step that really happened rather than a wall-clock
     // interval the sim never took.
     EngineFrameClock sim_clock;
+    // The frame clock: `.time` is the sim time a frame is drawn at, `time` above and the part of
+    // a step the accumulator holds; `.delta` its advance since the frame before. It moves every
+    // frame, where the sim clock moves in whole steps, so what is drawn or eased frame by frame
+    // -- a look, a fade, a screen -- moves smoothly on a display faster than the step. 0 while
+    // paused.
+    EngineFrameClock frame_clock;
 
     // State
     bool paused;

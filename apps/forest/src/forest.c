@@ -2957,12 +2957,13 @@ static void on_pre_render(Game* game, double alpha) {
             camera_rig_set_distance(g_cam_rig, g_orbit_camera ? CAM_DISTANCE : 0.0f);
             camera_rig_set_probe(g_cam_rig, g_orbit_camera ? forest_cam_probe : NULL, NULL);
             // The stick and the arrows through the rig's own rate path, at the
-            // rig's own rates: exact headless, where the engine's dt is wall
-            // clock and this hook is handed an interpolant rather than a dt.
-            // Going through it is also what puts the player's look sensitivity
-            // and invert-Y on this camera, which a hand-rolled integration here
+            // rig's own rates, on the game's frame clock: exact headless, where
+            // the engine's dt is wall clock, and moving every frame, where the
+            // sim clock stands still on a frame that runs no step. Going
+            // through it is also what puts the player's look sensitivity and
+            // invert-Y on this camera, which a hand-rolled integration here
             // could not reach.
-            camera_rig_update(g_cam_rig, (float)game->sim_clock.delta,
+            camera_rig_update(g_cam_rig, (float)game->frame_clock.delta,
                               input_action_value(&game->input, "look_x"),
                               input_action_value(&game->input, "look_y"));
         }

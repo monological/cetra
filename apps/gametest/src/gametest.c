@@ -4090,9 +4090,10 @@ static void follow_camera_update(Game* game) {
         glm_clamp((drop - FOLLOW_CAM_DROP_START) / (FOLLOW_CAM_DROP_FULL - FOLLOW_CAM_DROP_START),
                   0.0f, 1.0f);
 
-    // On the sim clock rather than the frame's, so the turn is the same headless
-    // and windowed -- this hook is handed an interpolant, not a delta.
-    camera_rig_update(follow_rig, (float)game->sim_clock.delta,
+    // On the game's frame clock rather than the engine's wall clock, so the turn is the same
+    // headless and windowed, and rather than the sim clock, which stands still on a frame that
+    // runs no step.
+    camera_rig_update(follow_rig, (float)game->frame_clock.delta,
                       input_action_value(&game->input, "look_x"),
                       input_action_value(&game->input, "look_y"));
 }
@@ -7434,10 +7435,11 @@ static int run_cam_probe(const char* which) {
 #define GAIT_PROBE_EAST (0.5f * GLM_PIf) // the heading the walks take, facing +x
 
 typedef struct GaitTally {
-    int falls[4];      // by GaitFallKind
+    int falls[GAIT_FALL_KINDS];
     float first, last; // when the first and the last step fell, s
     float clock;       // seconds walked
-    float depth;       // the shallowest bob at a step's footfall, as a share of its full depth
+    float lowest;      // the head's lowest since the last step fell, m (the bob is never above 0)
+    float depth;       // the least a step's footfall came to the lowest of its step, as a share
     int leaned, leans; // footfalls followed by a sway toward their own foot, and footfalls
     int foot;          // the last step's foot, -1 before one
     float lean;        // the sway since it, at its furthest from the middle
@@ -7445,6 +7447,13 @@ typedef struct GaitTally {
 
 static void gait_tally_init(GaitTally* t) {
     *t = (GaitTally){.first = -1.0f, .depth = FLT_MAX, .foot = -1};
+}
+
+static Gait* gait_probe_gait(void) {
+    Gait* g = create_gait();
+    if (!g)
+        fprintf(stderr, "gait-probe: out of memory\n");
+    return g;
 }
 
 // The sway's last stretch is scored when the next foot comes down: toward the foot that struck,
@@ -7466,17 +7475,16 @@ static void gait_probe_frame(Gait* g, const vec3 move, bool grounded, float dt, 
     const float across = g->bob_offset[2];
     if (fabsf(across) > fabsf(t->lean))
         t->lean = across;
-    if (!g->fell)
-        return;
+    t->lowest = fminf(t->lowest, g->bob_offset[1]);
     t->falls[g->footfall.kind]++;
     if (g->footfall.kind != GAIT_FALL_STEP)
         return;
     if (t->first < 0.0f)
         t->first = t->clock;
     t->last = t->clock;
-    const float rise = fminf(g->bob_per_speed * g->speed, g->bob_max) * (1.0f - g->stairs);
-    if (rise > 1e-6f)
-        t->depth = fminf(t->depth, -g->bob_offset[1] / rise);
+    if (t->lowest < -1e-6f)
+        t->depth = fminf(t->depth, g->bob_offset[1] / t->lowest);
+    t->lowest = 0.0f;
     gait_tally_lean(t);
     t->foot = g->footfall.foot;
     t->lean = 0.0f;
@@ -7489,36 +7497,35 @@ static void gait_probe_walk(Gait* g, float speed, float seconds, float dt, GaitT
         gait_probe_frame(g, (vec3){speed * dt, 0.0f, 0.0f}, true, dt, t);
 }
 
+// A fixed step and the frame drawn after it, which a run of one step a frame is.
+static void gait_probe_tick(Gait* g, const vec3 move, bool grounded, float dt) {
+    gait_step(g, move, grounded, 1.6f, dt);
+    gait_frame(g, move, grounded, GAIT_PROBE_EAST, dt);
+}
+
 static int run_gait_probe(const char* which) {
-    Gait* g = create_gait();
+    Gait* g = gait_probe_gait();
     if (!g)
         return 1;
-    GaitTally t;
-    gait_tally_init(&t);
 
     if (!strcmp(which, "split")) {
         // Three seconds at 1.6 m/s in frames of 1/60, 1/120 and an uneven run of four lengths.
         const struct {
             const char* label;
             float dt[4];
-        } SPLITS[] = {{"60", {1.0f / 60.0f}},
-                      {"120", {1.0f / 120.0f}},
+        } SPLITS[] = {{"60", {1.0f / 60.0f, 1.0f / 60.0f, 1.0f / 60.0f, 1.0f / 60.0f}},
+                      {"120", {1.0f / 120.0f, 1.0f / 120.0f, 1.0f / 120.0f, 1.0f / 120.0f}},
                       {"uneven", {1.0f / 40.0f, 1.0f / 90.0f, 1.0f / 60.0f, 1.0f / 144.0f}}};
         for (size_t s = 0; s < sizeof(SPLITS) / sizeof(SPLITS[0]); s++) {
-            Gait* h = create_gait();
-            GaitTally u;
-            gait_tally_init(&u);
-            float clock = 0.0f;
-            for (int i = 0; clock < 3.0f - 1e-6f; i++) {
-                const float* dts = SPLITS[s].dt;
-                float dt = dts[dts[1] > 0.0f ? i % 4 : 0];
-                dt = fminf(dt, 3.0f - clock);
-                gait_probe_frame(h, (vec3){1.6f * dt, 0.0f, 0.0f}, true, dt, &u);
-                clock += dt;
+            gait_reset(g);
+            GaitTally t;
+            gait_tally_init(&t);
+            for (int i = 0; t.clock < 3.0f - 1e-6f; i++) {
+                const float dt = fminf(SPLITS[s].dt[i % 4], 3.0f - t.clock);
+                gait_probe_frame(g, (vec3){1.6f * dt, 0.0f, 0.0f}, true, dt, &t);
             }
-            printf("gait split %s end %.9g %d\n", SPLITS[s].label, (double)h->phase,
-                   u.falls[GAIT_FALL_STEP]);
-            free_gait(h);
+            printf("gait split %s end %.9g %d\n", SPLITS[s].label, (double)g->phase,
+                   t.falls[GAIT_FALL_STEP]);
         }
     } else if (!strcmp(which, "cadence")) {
         // Steps a minute between the first and last footfall of 30 s, after 2 s to settle.
@@ -7526,60 +7533,58 @@ static int run_gait_probe(const char* which) {
             const char* label;
             float speed;
         } PACES[] = {{"walk", 1.6f}, {"jog", 3.4f}};
-        for (size_t s = 0; s < 2; s++) {
-            Gait* h = create_gait();
-            gait_probe_walk(h, PACES[s].speed, 2.0f, 1.0f / 60.0f, NULL);
-            GaitTally u;
-            gait_tally_init(&u);
-            gait_probe_walk(h, PACES[s].speed, 30.0f, 1.0f / 60.0f, &u);
-            const float rate = 60.0f * (float)(u.falls[GAIT_FALL_STEP] - 1) / (u.last - u.first);
+        for (size_t s = 0; s < sizeof(PACES) / sizeof(PACES[0]); s++) {
+            gait_reset(g);
+            gait_probe_walk(g, PACES[s].speed, 2.0f, 1.0f / 60.0f, NULL);
+            GaitTally t;
+            gait_tally_init(&t);
+            gait_probe_walk(g, PACES[s].speed, 30.0f, 1.0f / 60.0f, &t);
+            const float rate = 60.0f * (float)(t.falls[GAIT_FALL_STEP] - 1) / (t.last - t.first);
             printf("gait cadence %s rate %.9g\n", PACES[s].label, (double)rate);
-            free_gait(h);
         }
     } else if (!strcmp(which, "rest")) {
         // A walk stopped part way through a step, and three seconds standing: the stride stops
         // where it was, the foot in the air is set down once, and the eye comes to rest on the
         // body.
-        gait_probe_walk(g, 1.6f, 2.35f, 1.0f / 60.0f, &t);
+        gait_probe_walk(g, 1.6f, 2.35f, 1.0f / 60.0f, NULL);
         const float through = g->phase - 0.5f - floorf(g->phase - 0.5f);
         GaitTally rest;
         gait_tally_init(&rest);
         gait_probe_walk(g, 0.0f, 3.0f, 1.0f / 60.0f, &rest);
         printf("gait rest stop through %.9g %d %d\n", (double)through, rest.falls[GAIT_FALL_SETTLE],
                rest.falls[GAIT_FALL_STEP]);
-        printf("gait rest end offset %.9g %.9g\n", (double)glm_vec3_norm(g->smooth_offset),
+        printf("gait rest end offset %.9g %.9g\n", (double)fabsf(g->smooth_offset),
                (double)glm_vec3_norm(g->bob_offset));
     } else if (!strcmp(which, "shuffle")) {
         // Standing and turning at 3 rad/s for 1.5 s, and then walking while turning.
-        float last = -1.0f, gap = FLT_MAX, clock = 0.0f;
+        const float dt = 1.0f / 60.0f;
+        float last = -1.0f, gap = FLT_MAX;
         int shuffles = 0;
-        for (int i = 0; i < 90; i++) {
-            const float dt = 1.0f / 60.0f;
-            clock += dt;
-            gait_frame(g, (vec3){0.0f, 0.0f, 0.0f}, true, 3.0f * clock, dt);
-            if (g->fell && g->footfall.kind == GAIT_FALL_SHUFFLE) {
-                if (last >= 0.0f)
-                    gap = fminf(gap, clock - last);
-                last = clock;
-                shuffles++;
-            }
+        for (int i = 1; i <= 90; i++) {
+            gait_frame(g, (vec3){0.0f, 0.0f, 0.0f}, true, 3.0f * (float)i * dt, dt);
+            if (g->footfall.kind != GAIT_FALL_SHUFFLE)
+                continue;
+            if (last >= 0.0f)
+                gap = fminf(gap, (float)i * dt - last);
+            last = (float)i * dt;
+            shuffles++;
         }
         printf("gait shuffle standing count %d %.9g\n", shuffles, (double)gap);
-        Gait* h = create_gait();
+        gait_reset(g);
         int walking = 0;
-        clock = 0.0f;
-        for (int i = 0; i < 90; i++) {
-            const float dt = 1.0f / 60.0f;
-            clock += dt;
-            gait_frame(h, (vec3){1.6f * dt, 0.0f, 0.0f}, true, 3.0f * clock, dt);
-            walking += h->fell && h->footfall.kind == GAIT_FALL_SHUFFLE;
+        for (int i = 1; i <= 90; i++) {
+            gait_frame(g, (vec3){1.6f * dt, 0.0f, 0.0f}, true, 3.0f * (float)i * dt, dt);
+            walking += g->footfall.kind == GAIT_FALL_SHUFFLE;
         }
-        printf("gait shuffle walking count %d 0\n", walking);
-        free_gait(h);
+        printf("gait shuffle walking count %d\n", walking);
     } else if (!strcmp(which, "bob-off")) {
         // The same walk with a kerb in it, at bob_scale 1 and 0: none at all at 0, and the eye's
         // lag the same to the bit, since the bob feeds nothing back.
-        Gait* off = create_gait();
+        Gait* off = gait_probe_gait();
+        if (!off) {
+            free_gait(g);
+            return 1;
+        }
         off->bob_scale = 0.0f;
         int nonzero = 0;
         float lag_apart = 0.0f, deepest = 0.0f;
@@ -7590,14 +7595,16 @@ static int run_gait_probe(const char* which) {
             gait_frame(off, move, true, GAIT_PROBE_EAST, dt);
             nonzero += off->bob_offset[0] != 0.0f || off->bob_offset[1] != 0.0f ||
                        off->bob_offset[2] != 0.0f;
-            lag_apart = fmaxf(lag_apart, glm_vec3_distance(g->smooth_offset, off->smooth_offset));
+            lag_apart = fmaxf(lag_apart, fabsf(g->smooth_offset - off->smooth_offset));
             deepest = fminf(deepest, g->bob_offset[1]);
         }
         printf("gait bob-off walk off %d %.9g\n", nonzero, (double)lag_apart);
-        printf("gait bob-off walk on %.9g 0\n", (double)deepest);
+        printf("gait bob-off walk on %.9g\n", (double)deepest);
         free_gait(off);
     } else if (!strcmp(which, "trough")) {
         // Five seconds at 1.6 m/s in frames of 1/120.
+        GaitTally t;
+        gait_tally_init(&t);
         gait_probe_walk(g, 1.6f, 5.0f, 1.0f / 120.0f, &t);
         printf("gait trough walk depth %.9g %d\n", (double)t.depth, t.falls[GAIT_FALL_STEP]);
         printf("gait trough walk lean %d %d\n", t.leaned, t.leans);
@@ -7612,20 +7619,18 @@ static int run_gait_probe(const char* which) {
         }
         // The clamps, read the instant after: a 40 cm rise and a 30 cm drop.
         const float instant = 1e-6f;
-        Gait* up = create_gait();
-        gait_frame(up, (vec3){0.0f, 0.4f, 0.0f}, true, GAIT_PROBE_EAST, instant);
-        Gait* down = create_gait();
-        gait_frame(down, (vec3){0.0f, -0.3f, 0.0f}, true, GAIT_PROBE_EAST, instant);
-        printf("gait spring clamp held %.9g %.9g\n", (double)up->lag, (double)down->lag);
+        gait_reset(g);
+        gait_frame(g, (vec3){0.0f, 0.4f, 0.0f}, true, GAIT_PROBE_EAST, instant);
+        const float up = g->lag;
+        gait_reset(g);
+        gait_frame(g, (vec3){0.0f, -0.3f, 0.0f}, true, GAIT_PROBE_EAST, instant);
+        printf("gait spring clamp held %.9g %.9g\n", (double)up, (double)g->lag);
         // In the air the same kerb is taken up at the air's rate: three frames on.
-        Gait* air = create_gait();
-        gait_frame(air, (vec3){0.0f, 0.15f, 0.0f}, false, GAIT_PROBE_EAST, dt);
-        gait_frame(air, (vec3){0.0f, 0.0f, 0.0f}, false, GAIT_PROBE_EAST, dt);
-        gait_frame(air, (vec3){0.0f, 0.0f, 0.0f}, false, GAIT_PROBE_EAST, dt);
-        printf("gait spring air 3 %.9g %.9g\n", (double)(3.0f * dt), (double)air->lag);
-        free_gait(up);
-        free_gait(down);
-        free_gait(air);
+        gait_reset(g);
+        gait_frame(g, (vec3){0.0f, 0.15f, 0.0f}, false, GAIT_PROBE_EAST, dt);
+        gait_frame(g, (vec3){0.0f, 0.0f, 0.0f}, false, GAIT_PROBE_EAST, dt);
+        gait_frame(g, (vec3){0.0f, 0.0f, 0.0f}, false, GAIT_PROBE_EAST, dt);
+        printf("gait spring air 3 %.9g %.9g\n", (double)(3.0f * dt), (double)g->lag);
     } else if (!strcmp(which, "flight")) {
         // A walker asking 1.6 m/s: 1.5 m level, a flight of 15 risers of 0.19 on goings of 0.25
         // collided as a ramp along its nosings -- 3.75 m of run for 2.85 of rise -- and 1.5 m
@@ -7636,11 +7641,9 @@ static int run_gait_probe(const char* which) {
         while (x < x2) {
             const float run = 1.6f * g->pace * dt;
             const float a = glm_clamp(x, x0, x1), b = glm_clamp(x + run, x0, x1);
-            const vec3 move = {run, (b - a) * (2.85f / 3.75f), 0.0f};
-            gait_step(g, move, true, 1.6f, dt);
-            gait_frame(g, move, true, GAIT_PROBE_EAST, dt);
+            gait_probe_tick(g, (vec3){run, (b - a) * (2.85f / 3.75f), 0.0f}, true, dt);
             x += run;
-            if (x > x0 && x <= x1 && g->fell && g->footfall.kind == GAIT_FALL_STEP)
+            if (x > x0 && x <= x1 && g->footfall.kind == GAIT_FALL_STEP)
                 on_flight++;
             if (fabsf(x - 0.5f * (x0 + x1)) < 0.5f * run + 1e-6f) {
                 mid_pace = g->pace;
@@ -7649,25 +7652,20 @@ static int run_gait_probe(const char* which) {
                 mid_grade = g->grade;
             }
         }
-        printf("gait flight ramp steps %d 15\n", on_flight);
-        printf("gait flight mid state %.9g %.9g %.9g %.9g %.9g\n", (double)mid_pace,
-               (double)mid_stairs, (double)mid_bob, (double)mid_grade, (double)g->climb_up);
+        printf("gait flight ramp steps %d\n", on_flight);
+        printf("gait flight mid state %.9g %.9g %.9g %.9g\n", (double)mid_pace, (double)mid_stairs,
+               (double)mid_bob, (double)mid_grade);
     } else if (!strcmp(which, "land")) {
         // A walk, 0.3 s in the air coming down at 2 m/s, and on the ground again.
         const float dt = 1.0f / 60.0f;
         gait_probe_walk(g, 1.6f, 1.0f, dt, NULL);
-        for (int i = 0; i < 18; i++) {
-            const vec3 move = {1.6f * dt, -2.0f * dt, 0.0f};
-            gait_step(g, move, false, 1.6f, dt);
-            gait_frame(g, move, false, GAIT_PROBE_EAST, dt);
-        }
+        for (int i = 0; i < 18; i++)
+            gait_probe_tick(g, (vec3){1.6f * dt, -2.0f * dt, 0.0f}, false, dt);
         int lands = 0, first = 0;
         float dip = 0.0f, when = 0.0f;
         for (int i = 0; i < 60; i++) {
-            const vec3 move = {1.6f * dt, 0.0f, 0.0f};
-            gait_step(g, move, true, 1.6f, dt);
-            gait_frame(g, move, true, GAIT_PROBE_EAST, dt);
-            const bool landed = g->fell && g->footfall.kind == GAIT_FALL_LAND;
+            gait_probe_tick(g, (vec3){1.6f * dt, 0.0f, 0.0f}, true, dt);
+            const bool landed = g->footfall.kind == GAIT_FALL_LAND;
             lands += landed;
             if (i == 0)
                 first = landed;
@@ -7686,11 +7684,12 @@ static int run_gait_probe(const char* which) {
         gait_probe_walk(g, 1.6f, 1.0f, 1.0f / 60.0f, NULL);
         const float before = g->phase;
         gait_frame(g, (vec3){2.4f, 0.0f, 0.0f}, true, GAIT_PROBE_EAST, 0.25f);
-        printf("gait hitch frame fell %d %.9g\n", g->fell ? 1 : 0,
+        printf("gait hitch frame fell %d %.9g\n", g->footfall.kind != GAIT_FALL_NONE,
                (double)(floorf(g->phase - 0.5f) - floorf(before - 0.5f)));
         const float held = g->phase;
         gait_frame(g, (vec3){1.0f, 0.0f, 0.0f}, true, GAIT_PROBE_EAST, 0.0f);
-        printf("gait hitch zero fell %d %.9g\n", g->fell ? 1 : 0, (double)(g->phase - held));
+        printf("gait hitch zero fell %d %.9g\n", g->footfall.kind != GAIT_FALL_NONE,
+               (double)(g->phase - held));
     } else {
         fprintf(stderr, "gait-probe: unknown case '%s'\n", which);
         free_gait(g);

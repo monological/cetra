@@ -8,16 +8,19 @@
 
 #include "cetra/gait.h"
 #include "cetra/game/audio.h"
-#include "cetra/game/entity.h"
+#include "cetra/game/physics.h"
+
+#include "kit.h"
 
 /*
- * The player's footsteps (spec 13.47): a recording of what the feet are on, played where the
- * foot comes down, each time the gait lets one fall.
+ * The player's footsteps (spec 13.47): a recording of what the feet are on, played where a foot
+ * comes down, each time the gait lets one fall.
  *
- * What the feet are on is read off the plan, as the cat's paws are, since no collider carries a
- * material: the lake and its muddy edge, a rug, the houses' floors, the cabin and the dock, the
- * street, the drive and the track, the woods, and grass everywhere else. Out in the rain, under
- * open sky, hard ground and grass are wet and sound it.
+ * What the feet are on is what they stand on: the material of the kit's body a ray down from them
+ * finds. Three things are not bodies of a material and are asked otherwise: a rug, which is drawn
+ * and not collided, by the rugs' own tests; the lake, by the feet being in it; and the open
+ * ground, one body of none, by what is drawn there -- the drive, the track, or the land's own
+ * ground. Out in the rain, under open sky, hard ground and grass are wet and sound it.
  *
  * Each surface has a few takes, from fetch_sounds.py; a footfall plays one it did not play last,
  * a little louder or quieter and higher or lower each time, from a seeded generator so a headless
@@ -43,30 +46,29 @@ typedef enum FootSurface {
 #define FOOTSTEP_TAKES 6
 
 typedef struct Footsteps {
-    AudioSystem* audio; // NULL: silent
-    const Entity* body; // what the voices ride
+    AudioSystem* audio;          // NULL: silent
+    PhysicsWorld* physics;       // what the ray down asks
+    const KitSurfaces* surfaces; // and what the body it finds is made of
     Sound* takes[FOOT_SURFACES][FOOTSTEP_TAKES];
     int count[FOOT_SURFACES];
-    int last[FOOT_SURFACES]; // the take played last, which is not played next
-    uint32_t rng;
+    int last[FOOT_SURFACES]; // the take played last, which is not played next; -1 before any
+    unsigned int rng;
     int said; // takes played by footsteps_say
     bool trace;
 } Footsteps;
 
-// The takes there are of each surface, from `audio`, which may be NULL; the voices ride `body`.
-void footsteps_start(Footsteps* f, AudioSystem* audio, const Entity* body, uint32_t seed);
+// The takes there are of each surface, from `audio`, which may be NULL.
+void footsteps_start(Footsteps* f, AudioSystem* audio, PhysicsWorld* physics,
+                     const KitSurfaces* surfaces, uint32_t seed);
 
-// What feet at `feet` stand on; `wet` is ground out under the rain.
-FootSurface footsteps_surface(const vec3 feet, bool wet);
-const char* footsteps_surface_name(FootSurface surface);
+// A foot came down: `feet` is where the feet are in the world, `yaw` the body's heading (radians
+// about +Y, facing (sin, 0, cos)), and `wetness` the rain's film on ground under open sky, 0 under
+// a roof or in no rain.
+void footsteps_fall(Footsteps* f, const GaitFootfall* fall, const vec3 feet, float yaw,
+                    float wetness);
 
-// A foot came down on `surface`: `feet` is where the feet are in the body's frame and `right` the
-// body's right, along which the foot that fell stands off.
-void footsteps_fall(Footsteps* f, const GaitFootfall* fall, FootSurface surface, const vec3 feet,
-                    const vec3 right);
-
-// Every take of every surface in turn, one each half second of `time`, for listening to them in
-// an audio dump (--footstep-say).
+// Every take of every surface in turn at `feet`, one each half second of `time`, for listening to
+// them in an audio dump.
 void footsteps_say(Footsteps* f, double time, const vec3 feet);
 
 #endif // _SILENT_FOOTSTEPS_H_

@@ -24,8 +24,9 @@
  * THE EYE LAGS THE GROUND, it does not follow it rigidly. A character controller climbs a kerb in
  * one step and drops off one in another, and an eye riding it rigidly jumps with it; this eye
  * trails the body's height on a critically damped spring and catches up, never further below
- * than `lag_below` nor above than `lag_above` -- the second smaller, so a low ceiling over a
- * flight going down is never put through. In the air it catches up at once, near enough.
+ * than `lag_below` nor above than `lag_above`. The gait does not know the body's height, so the
+ * clearance over the eye a low ceiling leaves is the caller's to keep `lag_above` inside. In the
+ * air it catches up at once, near enough.
  *
  * THE HEAD RISES AND FALLS OVER THE FEET, and is moved, never turned. It is lowest as a heel
  * strikes, highest over the standing foot, and swayed toward that foot once a stride. A body's
@@ -43,10 +44,12 @@
 #include <stdbool.h>
 
 typedef enum GaitFallKind {
+    GAIT_FALL_NONE,    // no foot came down
     GAIT_FALL_STEP,    // a heel striking, on level ground or a flight
     GAIT_FALL_SETTLE,  // the foot in the air set down by the other when the body stops
     GAIT_FALL_SHUFFLE, // a foot moved round while turning on the spot
     GAIT_FALL_LAND,    // both feet, coming down out of the air
+    GAIT_FALL_KINDS
 } GaitFallKind;
 
 typedef struct GaitFootfall {
@@ -64,11 +67,10 @@ typedef struct Gait {
     // gait_frame's:
     float phase;           // steps taken: a whole number has a foot under the body, x.5 a heel down
     float speed;           // ground speed, smoothed, m/s
-    vec3 smooth_offset;    // where the eye goes from where the body puts it: its lag on the
+    float smooth_offset;   // the eye's height from where the body puts it, m: its lag on the
                            // ground's height, and a landing's dip
     vec3 bob_offset;       // and where the head goes over the feet as they walk
-    bool fell;             // a foot came down this frame
-    GaitFootfall footfall; // which, while `fell`
+    GaitFootfall footfall; // the foot that came down this frame, of kind NONE when none did
     // The two halves' own state.
     float rise, run;  // the grade's sums, each weighted down by the ground walked since
     float air;        // seconds off the ground, by the steps
@@ -106,8 +108,11 @@ typedef struct Gait {
     float bob_max;                   // and the most it comes to, m
     float sway;                      // its sway from one foot to the other, side to side, m
     float sway_speed;                // the speed the sway is all there by, m/s
-    float bob_scale; // the player's: 1 as authored, 0 no bob at all, exactly as though none
+    float bob_scale;                 // 1 as authored, 0 no bob at all, exactly as though none
 } Gait;
+
+// A footfall kind's name: "none", "step", "settle", "shuffle" or "land".
+const char* gait_fall_name(GaitFallKind kind);
 
 // A gait standing still, with the settings above at the values they are argued for in gait.c.
 Gait* create_gait(void);

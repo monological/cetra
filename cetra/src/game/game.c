@@ -279,6 +279,8 @@ static void game_frame_update(Engine* engine, float dt) {
     // holds its time steady and takes no steps, so wind holds still and reports
     // no motion. engine_run samples this after we return.
     game->sim_clock.time = game->time;
+    game->frame_clock.delta = game->paused ? 0.0 : frame_time;
+    game->frame_clock.time = game->time + game->accumulator;
 }
 
 // Point the listener along the camera, push the frame's positions into the sources, and ease

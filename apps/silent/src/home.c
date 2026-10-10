@@ -345,8 +345,8 @@ static void floors(Kit* kit) {
     for (size_t i = 0; i < sizeof(FLOORS) / sizeof(FLOORS[0]); i++) {
         kit_frame_box(kit, w, FLOORS[i].mat, FLOORS[i].x0, FLOORS[i].x1, FLOOR_Y - FLOOR_BOARDS,
                       FLOOR_Y, FLOORS[i].z0, FLOORS[i].z1, false);
-        kit_frame_box(kit, w, KIT_COLLIDER_ONLY, FLOORS[i].x0, FLOORS[i].x1, 0.0f, FLOOR_Y,
-                      FLOORS[i].z0, FLOORS[i].z1, true);
+        kit_frame_floor(kit, w, FLOORS[i].mat, FLOORS[i].x0, FLOORS[i].x1, 0.0f, FLOOR_Y,
+                        FLOORS[i].z0, FLOORS[i].z1);
     }
     kit_frame_box(kit, w, MAT_CEILING, HOUSE_X0, HOUSE_X1, CEIL_Y, CEIL_Y + SLAB, HOUSE_FRONT_Z,
                   HOUSE_BACK_Z, false);
@@ -903,17 +903,19 @@ static void sofa(Kit* kit, const KitFrame* f, float ha, bool arms) {
     kit_frame_box(kit, f, KIT_COLLIDER_ONLY, -ha, ha, 0.0f, 0.88f, d0, d1, true);
 }
 
-// What lies on the ground floor's boards to walk on: the living room's rug and the mat by the
-// tub (whose near edge is BATH_IN_Z1 - 0.72), each x0, x1, z0, z1.
-static const float CLOTHS[2][4] = {
-    {-4.3f, -2.3f, 13.35f, 15.45f},
-    {1.2f, 2.2f, BATH_IN_Z1 - 0.72f - 0.55f, BATH_IN_Z1 - 0.72f - 0.05f},
+#define TUB_NEAR_Z (BATH_IN_Z1 - 0.72f) // the bath's edge toward the room
+
+// What lies on the ground floor's boards to walk on, each x0, x1, z0, z1.
+enum { CLOTH_RUG, CLOTH_BATH_MAT };
+static const float CLOTHS[][4] = {
+    [CLOTH_RUG] = {-4.3f, -2.3f, 13.35f, 15.45f},
+    [CLOTH_BATH_MAT] = {1.2f, 2.2f, TUB_NEAR_Z - 0.55f, TUB_NEAR_Z - 0.05f},
 };
 
 bool home_on_cloth(const vec3 p) {
     if (fabsf(p[1] - FLOOR_Y) > 0.05f)
         return false;
-    for (size_t i = 0; i < sizeof(CLOTHS) / sizeof(CLOTHS[0]); i++)
+    for (int i = 0; i < KIT_COUNT(CLOTHS); i++)
         if (p[0] > CLOTHS[i][0] && p[0] < CLOTHS[i][1] && p[2] > CLOTHS[i][2] &&
             p[2] < CLOTHS[i][3])
             return true;
@@ -934,7 +936,7 @@ static void living_room(Kit* kit, Scene* scene) {
     sofa(kit, &chair, 0.42f, true);
 
     const KitFrame* w = &KIT_WORLD;
-    cloth(kit, 0);
+    cloth(kit, CLOTH_RUG);
     // The coffee table, and on it a folded newspaper and a mug gone cold.
     const KitFrame table = {{-TV_X, FLOOR_Y, 14.2f}, 0.0f};
     kit_frame_box(kit, &table, MAT_WOOD, -0.5f, 0.5f, 0.4f, 0.44f, -0.26f, 0.26f, false);
@@ -990,7 +992,7 @@ static void living_room(Kit* kit, Scene* scene) {
  */
 static void bathroom(Kit* kit, Scene* scene) {
     const KitFrame* w = &KIT_WORLD;
-    const float x0 = 0.95f, x1 = BATH_IN_X1, z0 = BATH_IN_Z1 - 0.72f, z1 = BATH_IN_Z1;
+    const float x0 = 0.95f, x1 = BATH_IN_X1, z0 = TUB_NEAR_Z, z1 = BATH_IN_Z1;
     const float rim = FLOOR_Y + 0.56f, t = 0.06f;
     kit_frame_box(kit, w, MAT_CERAMIC, x0, x1, FLOOR_Y, rim, z0, z0 + t, false);
     kit_frame_box(kit, w, MAT_CERAMIC, x0, x1, FLOOR_Y, rim, z1 - t, z1, false);
@@ -1034,7 +1036,7 @@ static void bathroom(Kit* kit, Scene* scene) {
     const KitFrame east = {{BATH_IN_X1, FLOOR_Y, 15.2f}, -0.5f * GLM_PIf};
     kit_frame_bar(kit, &east, MAT_STAINLESS, -0.3f, 0.3f, 1.25f, 0.06f, 0.01f);
     kit_frame_box(kit, &east, MAT_TOWEL, -0.22f, 0.22f, 0.8f, 1.27f, 0.05f, 0.075f, false);
-    cloth(kit, 1);
+    cloth(kit, CLOTH_BATH_MAT);
 
     // The bulb, bare on a ceiling rose.
     const float bx = 1.35f, bz = 15.0f, by = CEIL_Y - 0.12f;

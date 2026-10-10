@@ -241,6 +241,7 @@ typedef struct SilentArgs {
 static SilentArgs g_args;
 static Scene* g_scene;
 static Player g_player;
+static KitSurfaces g_surfaces; // what the kits' bodies are made of, for the footsteps
 static Footsteps g_footsteps;
 static Lights g_lights;
 static Tv g_tv;
@@ -797,6 +798,7 @@ static void on_init(Game* game) {
     Kit kit;
     kit_init(&kit, g_scene, em, physics);
     kit.engine = engine;
+    kit.surfaces = &g_surfaces;
     mats_register(&kit, engine, g_scene);
     load_seam(engine, "materials");
     // The player's house on the plan's origin (spec 13.25), its living room's television, its
@@ -1084,11 +1086,10 @@ static void on_init(Game* game) {
     g_player.trace = g_args.trace_gait;
     g_player.interpolate = !g_args.no_interp;
     g_player.use_gait = !g_args.no_gait;
-    // Reduce Motion takes the bob as it takes the shake.
-    g_player.gait->bob_scale = g_args.bob * g_player.rig->shake_player_scale;
+    g_player.gait->bob_scale = g_args.bob;
     g_player.gait->climb_up *= g_args.climb;
     g_player.gait->climb_down *= g_args.climb;
-    footsteps_start(&g_footsteps, g_args.no_footsteps ? NULL : game->audio, g_player.entity,
+    footsteps_start(&g_footsteps, g_args.no_footsteps ? NULL : game->audio, physics, &g_surfaces,
                     (uint32_t)g_args.seed * 2654435761u + 1u);
     g_footsteps.trace = g_args.trace_gait;
     load_seam(engine, "player");
@@ -1253,28 +1254,19 @@ static void take_map(void) {
     hud_hint(&g_hud, MAP_HINT, HINT_SECONDS);
 }
 
-// Ground out under the rain, past this much of a film, sounds wet underfoot.
-#define FOOTSTEPS_WET 0.3f
-
-// A foot the gait let fall this frame, heard where it came down on what the drawn `feet` stand
-// on (spec 13.47); or, under --footstep-say, every take in turn.
+// A foot the gait let fall this frame, heard where the drawn `feet` came down (spec 13.47); or,
+// under --footstep-say, every take in turn.
 static void footfall(const Game* game, const vec3 feet) {
-    vec3 from_body = {0.0f, 0.0f, 0.0f};
-    player_feet(&g_player, from_body);
-    glm_vec3_sub(from_body, g_player.entity->position, from_body);
     if (g_args.footstep_say) {
-        footsteps_say(&g_footsteps, game->time, from_body);
+        footsteps_say(&g_footsteps, game->time, feet);
         return;
     }
-    if (!g_player.gait->fell)
+    if (g_player.gait->footfall.kind == GAIT_FALL_NONE)
         return;
-    const Rain* rain = g_scene->rain;
     // The rain bed knows whether the head is under open sky, a frame late.
-    const bool wet = rain && rain->wetness > FOOTSTEPS_WET && g_rain_bed.open > 0.5f;
-    const float yaw = g_player.rig->yaw;
-    const vec3 right = {-cosf(yaw), 0.0f, sinf(yaw)};
-    footsteps_fall(&g_footsteps, &g_player.gait->footfall, footsteps_surface(feet, wet), from_body,
-                   right);
+    const Rain* rain = g_scene->rain;
+    const float wetness = rain && g_rain_bed.open > 0.5f ? rain->wetness : 0.0f;
+    footsteps_fall(&g_footsteps, &g_player.gait->footfall, feet, g_player.rig->yaw, wetness);
 }
 
 static void on_pre_render(Game* game, double alpha) {
@@ -1287,9 +1279,9 @@ static void on_pre_render(Game* game, double alpha) {
         const float* c = g_cat.entity->position;
         vec3 target = {c[0], c[1] + 0.05f, c[2]};
         vec3 behind = {c[0] - 1.1f * sinf(g_cat.yaw), c[1] + 0.6f, c[2] - 1.1f * cosf(g_cat.yaw)};
-        player_pre_render(&g_player, game, alpha, &behind, &target);
+        player_pre_render(&g_player, game, &behind, &target);
     } else {
-        player_pre_render(&g_player, game, alpha, pinned ? &g_args.cam_eye : NULL,
+        player_pre_render(&g_player, game, pinned ? &g_args.cam_eye : NULL,
                           pinned ? &g_args.cam_target : NULL);
     }
 
@@ -1324,7 +1316,8 @@ static void on_pre_render(Game* game, double alpha) {
         else if (reach.door)
             door_toggle(reach.door);
     }
-    const float dt = (float)game->sim_clock.delta;
+    // What is drawn over the game eases by the frame, as the head turns.
+    const float dt = (float)game->frame_clock.delta;
     hud_prompt(&g_hud, reach.take ? reach.prompt
                        : reach.door
                            ? (door_will_open(reach.door) ? "E   Open door" : "E   Close door")
@@ -1333,8 +1326,8 @@ static void on_pre_render(Game* game, double alpha) {
     backpack_menu_update(&g_menu, dt);
     map_screen_update(&g_map_screen, dt, feet, forward);
     sounds_update(&g_sounds);
-    // The beam trails the head by the render clock, as the head turns each frame.
-    lights_update(&g_lights, g_scene, game->time, g_player.frame_dt, eye, forward);
+    // The beam trails the head by the frame, as the head turns.
+    lights_update(&g_lights, g_scene, game->time, dt, eye, forward);
     tv_update(&g_tv, game->time);
     cat_mind_frame(&g_mind, game->time);
     cat_debug_draw(&g_cat, &g_mind, engine);
@@ -1393,7 +1386,7 @@ static void on_pre_render(Game* game, double alpha) {
         engine_hide_loading_screen(engine);
     const bool up = lit && !engine_loading_screen_shown(engine);
     if (up)
-        g_fade_seconds += fminf((float)game->sim_clock.delta, 1.0f / 30.0f);
+        g_fade_seconds += fminf((float)game->frame_clock.delta, 1.0f / 30.0f);
     if (engine->postfx)
         glm_vec3_fill(engine->postfx->grade_gain,
                       glm_smoothstep(0.0f, FADE_IN_SECONDS, g_fade_seconds));
@@ -1500,6 +1493,7 @@ static void on_shutdown(Game* game) {
     backpack_free(&g_backpack);
     cat_free(&g_cat);
     player_free(&g_player);
+    kit_surfaces_release(&g_surfaces);
 }
 
 static void print_usage(const char* prog) {

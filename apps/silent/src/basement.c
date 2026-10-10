@@ -214,7 +214,7 @@ static void stair(Kit* kit) {
         kit_frame_box(kit, w, MAT_WOOD, x0 - NOSING, x1, y - TREAD_T, y, z0, z1, false);
     }
     // KIT_WORLD_Z's d runs west, down the flight.
-    kit_frame_ramp(kit, &KIT_WORLD_Z, z0, z1, (vec2){-nosing_x(BASEMENT_Y), BASEMENT_Y},
+    kit_frame_ramp(kit, &KIT_WORLD_Z, MAT_WOOD, z0, z1, (vec2){-nosing_x(BASEMENT_Y), BASEMENT_Y},
                    (vec2){-CELLAR_HEAD_X, FLOOR_Y});
 
     // The stringers, cut plumb at the last riser and level on the floor.

@@ -5,6 +5,7 @@
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
 
+#include "cetra/animation.h"
 #include "cetra/engine.h"
 #include "cetra/game/character.h"
 
@@ -66,11 +67,15 @@ void player_init(Player* p, Game* game, PhysicsWorld* physics, EntityManager* em
     // A window's first frame may run no step, and is drawn from here.
     glm_vec3_copy(p->entity->position, p->step_from);
     glm_vec3_copy(p->entity->position, p->view);
-    glm_vec3_copy(p->entity->position, p->drawn);
-    p->frame_at = game->time + game->accumulator;
+    p->heading = yaw;
     p->interpolate = true;
     p->gait = create_gait();
     p->use_gait = true;
+    // Lagging a descent, the eye goes no nearer the capsule's top than the near plane reaches,
+    // or under a ceiling the capsule only just clears the view would cut into it.
+    const Camera* cam = game->engine->camera;
+    p->gait->lag_above =
+        fmaxf(2.0f * CAPSULE_REST - PLAYER_EYE_HEIGHT - (cam ? cam->near_clip : 0.0f), 0.0f);
 
     p->rig = create_camera_rig();
     p->rig->steers_controls = true;
@@ -88,28 +93,50 @@ static float approach(float from, float to, float step) {
     return from < to ? fminf(from + step, to) : fmaxf(from - step, to);
 }
 
-// The horizontal velocity asked for this step, ramped from the last toward what the stick asks.
+// The horizontal velocity asked of the body this step: its heading turned toward what the stick
+// asks, and its speed ramped toward it -- or toward a stop, when asked round past REVERSE.
 static void ramp_move(Player* p, const vec3 want, bool grounded, float dt) {
     const float control = grounded ? 1.0f : AIR_CONTROL;
     const float asked = hypotf(want[0], want[2]);
-    float speed = hypotf(p->move[0], p->move[1]);
-    const bool moving = speed > 1e-4f;
-    float heading = moving ? atan2f(p->move[0], p->move[1]) : atan2f(want[0], want[2]);
+    float target = 0.0f;
     if (asked > 1e-4f) {
         const float to = atan2f(want[0], want[2]);
-        const float turn = remainderf(to - heading, 2.0f * GLM_PIf);
-        if (moving && fabsf(turn) > REVERSE) {
-            speed = fmaxf(speed - BRAKE * control * dt, 0.0f);
-        } else {
+        if (p->speed <= 1e-4f)
+            p->heading = to; // standing, it sets off the way it is asked
+        const float turn = wrap_pi(to - p->heading);
+        if (fabsf(turn) <= REVERSE) {
             const float most = TURN_RATE * control * dt;
-            heading = moving ? heading + glm_clamp(turn, -most, most) : to;
-            speed = approach(speed, asked, (asked > speed ? ACCEL : BRAKE) * control * dt);
+            p->heading = wrap_pi(p->heading + glm_clamp(turn, -most, most));
+            target = asked;
         }
-    } else {
-        speed = fmaxf(speed - BRAKE * control * dt, 0.0f);
     }
-    p->move[0] = speed * sinf(heading);
-    p->move[1] = speed * cosf(heading);
+    p->speed = approach(p->speed, target, (target > p->speed ? ACCEL : BRAKE) * control * dt);
+}
+
+// One line a fixed step: where the feet are, what the step moved, and what the gait made of it.
+static void trace_step(const Player* p, const Game* game, const CharacterController* cc,
+                       const vec3 moved) {
+    const float* at = p->entity->position;
+    printf("gait step %5ld feet %8.4f %8.4f %8.4f dy %+.4f dh %.4f ground %d up %.3f speed %.3f "
+           "grade %+.3f stairs %.2f pace %.3f\n",
+           lround(game->time / game->fixed_timestep), (double)at[0], (double)(at[1] - CAPSULE_REST),
+           (double)at[2], (double)moved[1], (double)hypotf(moved[0], moved[2]),
+           (int)cc->ground_state, (double)cc->ground_normal[1], (double)p->speed,
+           (double)p->gait->grade, (double)p->gait->stairs, (double)p->gait->pace);
+}
+
+// One line a frame, and one more for a foot that came down: the feet as drawn, the eye the walk
+// puts them under (which a pin overrides), and the stride.
+static void trace_frame(const Player* p, const Game* game, const vec3 eye) {
+    const size_t frame = game->engine->total_frames;
+    const Gait* g = p->gait;
+    if (g->footfall.kind != GAIT_FALL_NONE)
+        printf("gait fall frame %5zu %s %s speed %.3f\n", frame, gait_fall_name(g->footfall.kind),
+               g->footfall.foot ? "right" : "left", (double)g->footfall.speed);
+    printf("gait frame %5zu feet %.4f eye %.4f phase %.3f speed %.3f bob %+.4f %+.4f %+.4f\n",
+           frame, (double)(p->view[1] - CAPSULE_REST), (double)eye[1], (double)g->phase,
+           (double)g->speed, (double)g->bob_offset[0], (double)g->bob_offset[1],
+           (double)g->bob_offset[2]);
 }
 
 void player_update(Player* p, Game* game, double dt) {
@@ -133,21 +160,13 @@ void player_update(Player* p, Game* game, double dt) {
     vec3 moved;
     glm_vec3_sub(p->entity->position, p->step_from, moved);
     gait_step(p->gait, moved, grounded, hypotf(want[0], want[2]), (float)dt);
-    if (p->trace) {
-        const float* at = p->entity->position;
-        printf("gait step %5d feet %8.4f %8.4f %8.4f dy %+.4f dh %.4f ground %d up %.3f speed "
-               "%.3f grade %+.3f stairs %.2f pace %.3f\n",
-               p->steps, (double)at[0], (double)(at[1] - CAPSULE_REST), (double)at[2],
-               (double)moved[1], (double)hypotf(moved[0], moved[2]), (int)cc->ground_state,
-               (double)cc->ground_normal[1], (double)hypotf(p->move[0], p->move[1]),
-               (double)p->gait->grade, (double)p->gait->stairs, (double)p->gait->pace);
-    }
-    p->steps++;
+    if (p->trace)
+        trace_step(p, game, cc, moved);
     glm_vec3_copy(p->entity->position, p->step_from);
 
     // A climb is taken at the pace a person keeps on it. Jolt slides the capsule up a slope at the
-    // speed asked times the slope's cosine, and that is the run times the cosine again: 1.01 m/s
-    // of 1.6 up the mansion's flight, traced. Asked for the more, the run is the pace's.
+    // speed asked times the slope's cosine, which leaves a run of the speed asked times the
+    // cosine squared, 1 / (1 + grade^2); asked for that much more, the run is the pace's.
     if (p->use_gait) {
         const float up = fmaxf(p->gait->grade, 0.0f);
         glm_vec3_scale(want, p->gait->pace * (1.0f + up * up), want);
@@ -158,8 +177,8 @@ void player_update(Player* p, Game* game, double dt) {
     // as a slide.
     vec3 vel;
     character_controller_get_velocity(cc, vel);
-    vel[0] = p->move[0];
-    vel[2] = p->move[1];
+    vel[0] = p->speed * sinf(p->heading);
+    vel[2] = p->speed * cosf(p->heading);
     if (grounded)
         vel[1] = 0.0f;
     else
@@ -167,41 +186,28 @@ void player_update(Player* p, Game* game, double dt) {
     character_controller_set_velocity(cc, vel);
 }
 
-void player_pre_render(Player* p, Game* game, double alpha, const vec3* pin_eye,
-                       const vec3* pin_target) {
+void player_pre_render(Player* p, Game* game, const vec3* pin_eye, const vec3* pin_target) {
     Engine* engine = game->engine;
-    // The render clock: whole steps run plus the part of one the accumulator holds. It moves every
-    // frame, where the sim clock's delta is 0 on a frame that ran no step.
-    const double now = game->time + game->accumulator;
-    p->frame_dt = (float)fmax(now - p->frame_at, 0.0);
-    p->frame_at = now;
+    const float dt = (float)game->frame_clock.delta;
     // The body drawn between the last two steps, alpha of the way from the earlier: at most one
     // step behind, and never jumping a step at a time.
-    if (p->interpolate)
-        glm_vec3_lerp(p->step_from, p->entity->position, (float)alpha, p->view);
-    else
-        glm_vec3_copy(p->entity->position, p->view);
+    const double alpha = p->interpolate ? game->accumulator / game->fixed_timestep : 1.0;
+    vec3 view, moved;
+    glm_vec3_lerp(p->step_from, p->entity->position, (float)alpha, view);
+    glm_vec3_sub(view, p->view, moved);
+    glm_vec3_copy(view, p->view);
     // The stride goes on under a pinned camera, where its footsteps are still heard.
     CharacterController* cc = entity_get_character_controller(p->entity);
-    vec3 moved;
-    glm_vec3_sub(p->view, p->drawn, moved);
-    glm_vec3_copy(p->view, p->drawn);
-    gait_frame(p->gait, moved, cc && character_controller_is_grounded(cc), p->rig->yaw,
-               p->frame_dt);
-    if (p->trace && p->gait->fell) {
-        static const char* KINDS[] = {"step", "settle", "shuffle", "land"};
-        const GaitFootfall* f = &p->gait->footfall;
-        printf("gait fall frame %5d %s %s speed %.3f\n", p->frames, KINDS[f->kind],
-               f->foot ? "right" : "left", (double)f->speed);
+    gait_frame(p->gait, moved, cc && character_controller_is_grounded(cc), p->rig->yaw, dt);
+    // The eye the walk puts: the body's, lagging the ground and over the feet.
+    vec3 anchor;
+    glm_vec3_copy(p->view, anchor);
+    if (p->use_gait) {
+        anchor[1] += p->gait->smooth_offset;
+        glm_vec3_add(anchor, p->gait->bob_offset, anchor);
     }
     if (p->trace)
-        printf("gait frame %5d feet %.4f eye %.4f phase %.3f speed %.3f bob %+.4f %+.4f %+.4f\n",
-               p->frames, (double)(p->view[1] - CAPSULE_REST),
-               (double)(p->view[1] + p->gait->smooth_offset[1] + p->gait->bob_offset[1] +
-                        p->rig->look_lift),
-               (double)p->gait->phase, (double)p->gait->speed, (double)p->gait->bob_offset[0],
-               (double)p->gait->bob_offset[1], (double)p->gait->bob_offset[2]);
-    p->frames++;
+        trace_frame(p, game, (vec3){anchor[0], anchor[1] + p->rig->look_lift, anchor[2]});
     // What a hand reaches from: the body's own eye, which no lag or bob moves.
     glm_vec3_copy(p->view, p->reach_from);
     p->reach_from[1] += p->rig->look_lift;
@@ -230,12 +236,8 @@ void player_pre_render(Player* p, Game* game, double alpha, const vec3* pin_eye,
         p->cursor_wanted = true;
     set_cursor_captured(p, engine, p->cursor_wanted && !held);
 
-    glm_vec3_copy(p->view, p->rig->anchor);
-    if (p->use_gait) {
-        glm_vec3_add(p->rig->anchor, p->gait->smooth_offset, p->rig->anchor);
-        glm_vec3_add(p->rig->anchor, p->gait->bob_offset, p->rig->anchor);
-    }
-    camera_rig_update(p->rig, p->frame_dt, input_action_value(&game->input, "look_x"),
+    glm_vec3_copy(anchor, p->rig->anchor);
+    camera_rig_update(p->rig, dt, input_action_value(&game->input, "look_x"),
                       input_action_value(&game->input, "look_y"));
 }
 
