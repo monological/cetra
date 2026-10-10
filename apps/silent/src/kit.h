@@ -352,8 +352,18 @@ void kit_frame_surround(Kit* kit, const KitFrame* f, int mat, const KitOpening* 
 /*
  * A solid flight of `risers` steps, each `rise` high and `going` deep, climbing along +d from
  * d0 at floor height y0 between a0 and a1. The last riser lands on the floor above, so there
- * are risers - 1 treads; each step is a box down to y0, and collides.
+ * are risers - 1 treads; each step is a box down to y0. It collides as a ramp along its nosings
+ * (kit_frame_ramp), not as its steps.
  */
+/*
+ * What a flight collides as (spec 13.47): a slab with no faces, a0 to a1 across, whose top runs
+ * from `foot` on the floor below to `head` on the floor above, each (d, y) in the frame. Climbed
+ * tread by tread, the player's capsule rides each nosing up in a lump and can wedge for good
+ * against a riser it is standing too close to. On the ramp it walks a slope, and the steps of the
+ * climb are the gait's.
+ */
+void kit_frame_ramp(Kit* kit, const KitFrame* f, float a0, float a1, const vec2 foot,
+                    const vec2 head);
 void kit_frame_stair(Kit* kit, const KitFrame* f, int mat, float a0, float a1, float y0, float d0,
                      float rise, float going, int risers);
 // An upright prism standing at (a, d).

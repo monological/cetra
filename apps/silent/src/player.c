@@ -1,5 +1,6 @@
 #include <float.h>
 #include <math.h>
+#include <stdio.h>
 
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
@@ -49,11 +50,12 @@ void player_init(Player* p, Game* game, PhysicsWorld* physics, EntityManager* em
     CharacterControllerConfig cc = character_controller_default_config();
     cc.capsule_radius = CAPSULE_RADIUS;
     cc.capsule_half_height = CAPSULE_HALF_HEIGHT;
-    // The great hall's stair rises 19 cm a step, porch steps and kerbs 15: the stair is what
-    // this has to clear.
+    // Porch steps and kerbs rise 15 cm; a flight is a ramp (kit_frame_ramp), and the cellar's,
+    // the steepest, is pitched at 47 degrees.
     cc.step_height = 0.25f;
-    cc.max_slope_angle = glm_rad(45.0f);
+    cc.max_slope_angle = glm_rad(50.0f);
     entity_add_character_controller(p->entity, physics, &cc);
+    glm_vec3_copy(p->entity->position, p->step_from);
 
     p->rig = create_camera_rig();
     p->rig->steers_controls = true;
@@ -70,6 +72,20 @@ void player_update(Player* p, Game* game, double dt) {
     CharacterController* cc = p->entity ? entity_get_character_controller(p->entity) : NULL;
     if (!cc)
         return;
+    // Nothing has moved the capsule yet this step, so its position is where the last step left it.
+    if (p->trace) {
+        const float* at = p->entity->position;
+        vec3 d;
+        glm_vec3_sub((float*)at, p->step_from, d);
+        printf(
+            "gait step %5d feet %8.4f %8.4f %8.4f dy %+.4f dh %.4f ground %d up %.3f speed %.3f\n",
+            p->steps, (double)at[0], (double)(at[1] - CAPSULE_REST), (double)at[2], (double)d[1],
+            (double)sqrtf(d[0] * d[0] + d[2] * d[2]), (int)cc->ground_state,
+            (double)cc->ground_normal[1],
+            (double)sqrtf(cc->velocity[0] * cc->velocity[0] + cc->velocity[2] * cc->velocity[2]));
+    }
+    p->steps++;
+    glm_vec3_copy(p->entity->position, p->step_from);
     vec3 input_dir;
     input_action_move(&game->input, "move_x", "move_y", input_dir);
 

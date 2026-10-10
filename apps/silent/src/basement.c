@@ -202,8 +202,8 @@ static void raked_rail(Kit* kit, float x0, float x1, float z0, float z1) {
 /*
  * The stair down: a steep cellar flight going west from the door's threshold, which the door
  * swings in over, open treads housed between two stringers, walled in on both sides, the last
- * riser landing short of the wall ahead. Each tread's body is one rise deep, so what is under the
- * flight is not filled in.
+ * riser landing short of the wall ahead. It collides as a ramp along its pitch (spec 13.47), so
+ * what is under the flight is not filled in.
  */
 static void stair(Kit* kit) {
     const KitFrame* w = &KIT_WORLD;
@@ -212,8 +212,10 @@ static void stair(Kit* kit) {
         const float y = FLOOR_Y - (float)k * CELLAR_RISE;
         const float x1 = CELLAR_HEAD_X - (float)(k - 1) * CELLAR_GOING, x0 = x1 - CELLAR_GOING;
         kit_frame_box(kit, w, MAT_WOOD, x0 - NOSING, x1, y - TREAD_T, y, z0, z1, false);
-        kit_frame_box(kit, w, KIT_COLLIDER_ONLY, x0, x1, y - CELLAR_RISE, y, z0, z1, true);
     }
+    // KIT_WORLD_Z's d runs west, down the flight.
+    kit_frame_ramp(kit, &KIT_WORLD_Z, z0, z1, (vec2){-nosing_x(BASEMENT_Y), BASEMENT_Y},
+                   (vec2){-CELLAR_HEAD_X, FLOOR_Y});
 
     // The stringers, cut plumb at the last riser and level on the floor.
     const float foot = CELLAR_FOOT_X, heel = nosing_x(BASEMENT_Y + STRINGER_DOWN);

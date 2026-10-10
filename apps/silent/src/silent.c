@@ -183,6 +183,7 @@ typedef struct SilentArgs {
     float fov_deg;
     const char* pad_script;
     bool trace_player;
+    bool trace_gait;
     bool no_flicker;
     bool no_static;         // the living room's set showing nothing, a faint glow and no hiss
     bool no_loading_screen; // load under a black window, with no engine screen over it
@@ -1072,6 +1073,7 @@ static void on_init(Game* game) {
     const vec3 dir = {look[0] - feet[0], look[1] - eye_y, look[2] - feet[2]};
     player_init(&g_player, game, physics, em, feet, atan2f(dir[0], dir[2]),
                 atan2f(dir[1], sqrtf(dir[0] * dir[0] + dir[2] * dir[2])));
+    g_player.trace = g_args.trace_gait;
     load_seam(engine, "player");
     // Sent somewhere or holding a clip from the command line, the cat has no mind of its own.
     if (g_cat.entity && !g_args.cat_go[0] && !g_args.cat_clip[0])
@@ -1498,6 +1500,8 @@ static void print_usage(const char* prog) {
     printf("      --fov D             Vertical field of view, degrees (default 68)\n");
     printf("      --pad-script PATH   Replay a scripted pad on slot 0 (see input.h)\n");
     printf("      --trace-player      Print the player's position every 30 steps\n");
+    printf(
+        "      --trace-gait        Print every step's move: feet, rise, run, ground and speed\n");
     printf("      --no-flicker        Keep the failing ceiling tube steady\n");
     printf("      --no-static         The living room's television with nothing on it, no snow\n");
     printf("      --no-loading-screen Load under a black window, without the engine's screen\n");
@@ -1666,6 +1670,8 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
             a->pad_script = argv[++i];
         } else if (!strcmp(s, "--trace-player")) {
             a->trace_player = true;
+        } else if (!strcmp(s, "--trace-gait")) {
+            a->trace_gait = true;
         } else if (!strcmp(s, "--no-flicker")) {
             a->no_flicker = true;
         } else if (!strcmp(s, "--no-static")) {

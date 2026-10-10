@@ -33,6 +33,9 @@ typedef struct Player {
     bool cursor_wanted;    // the player's own choice: a click takes the cursor, Escape gives it up
     bool cursor_captured;  // what the window has
     bool skip_first_delta; // the first delta after a capture is a jump, not a movement
+    vec3 step_from; // where the capsule was when this fixed step began: the last step's result
+    bool trace;     // print every step's move (--trace-gait)
+    int steps;      // fixed steps run, for the trace
 } Player;
 
 // Stands the capsule on the floor at `feet`, looking along `yaw` and `pitch` (radians, the rig's
