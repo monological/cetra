@@ -28167,11 +28167,16 @@ RAIN_SKY_TAA = ["--sky", "--taa", "--headless-jitter"]
 RAIN_TAAU = ["--render-scale", "0.5"]
 RAIN_NEG_FRAMES = 30
 # The wet replacement at the leading edge of a turn (spec 13.46), on the shared TURN, under the sky
-# for the reason RAIN_SKY_TAA gives. Nothing that reads the whole frame may run -- the meter, bloom
-# -- or SSR's effect elsewhere reaches the edge's pixels and none can equal its --no-ssr twin.
-RAIN_EDGE_ARGS = ["--sky", "--no-auto-exposure", "-E", "1.0", "--no-bloom", "--no-dither"]
-RAIN_EDGE_MIN_PX = 500  # wet pixels at the leading edge: measured 1221
-RAIN_EDGE_BARE_MAX = 0.25  # provisional until the fix is measured (spec 13.46); 99.5% before it
+# for the reason RAIN_SKY_TAA gives, and with a reflection probe. Wet ground reflects within its
+# own column, so at the frame's edge the trace's hits fade, and the probe is what takes their
+# weight, as silent's do: with none the pair there is nearly empty, and wet ground at the edge
+# replaced too little for a fallback to be told from a reflection. Nothing that reads the whole
+# frame may run -- the meter, bloom -- or SSR's effect elsewhere reaches the edge's pixels and none
+# can equal its --no-ssr twin.
+RAIN_EDGE_ARGS = ["--sky", "--probe", "--no-auto-exposure", "-E", "1.0", "--no-bloom",
+                  "--no-dither"]
+RAIN_EDGE_MIN_PX = 2000  # wet pixels at the leading edge: measured 4130
+RAIN_EDGE_BARE_MAX = 0.10  # share of them left at their --no-ssr value: 98.0% before, 1.8% after
 # A medium lobe well off the streaks' 0.8, so a frame that read the wrong one would show it.
 RAIN_MIST_G = 0.3
 # A scene wind that gusts fast enough for two probe runs a few frames apart to sit at different
