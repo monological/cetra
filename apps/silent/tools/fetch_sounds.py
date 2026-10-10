@@ -110,6 +110,52 @@ RECORDINGS = {
     452516: ("room tone small log cabin quiet with fire in wood stove metal clinks.flac", "kyles",
              "452/452516_612689"),
     744447: ("Soft Room Tone", "callmethefoo", "744/744447_14793871"),
+    # The player's footsteps (spec 13.47), four candidates a surface.
+    539222: ("walking on a squeaky floor", "mrsorbias", "539/539222_3606949"),
+    635058: ("Walking Footsteps on Wood", "sillygrizzlies", "635/635058_5756735"),
+    362777: ("Walking_Wood.mp3", "taure", "362/362777_2940947"),
+    198962: ("footsteps on wood", "Mydo1", "198/198962_3138963"),
+    170506: ("Footsteps, Tile, Male Sneakers, Slow Pace.wav", "SpliceSound", "170/170506_1480854"),
+    565530: ("Kitchen Footsteps.WAV", "carsonbailie", "565/565530_7323818"),
+    50725: ("Footsteps on Tiles.wav", "RutgerMuller", "50/50725_179538"),
+    655367: ("rubber shoes on tiles footsteps.wav", "21100495", "655/655367_13723333"),
+    148466: ("FOLEY_Footsteps_Carpet_001.wav", "conleec", "148/148466_221578"),
+    545540: ("light footsteps on carpet walk.wav", "rsellick", "545/545540_6233742"),
+    164100: ("Walking Footsteps on Carpet.aif", "Abolla", "164/164100_2054457"),
+    463644: ("footsteps boots carpet.wav", "alec_mackay", "463/463644_6551032"),
+    546827: ("Footsteps Leather Concrete", "Kinoton", "546/546827_2247456"),
+    272260: ("concrete_14a_lightshoes_walk.wav", "sturmankin", "272/272260_4181170"),
+    545543: ("light footsteps on concrete walking.wav", "rsellick", "545/545543_6233742"),
+    459964: ("Footsteps on concrete", "florianreichelt", "459/459964_6253486"),
+    205817: ("footsteps pavement street", "Yuval", "205/205817_770707"),
+    539556: ("walking small street wet asphalt.wav", "Federico_Casazza", "539/539556_2549389"),
+    711434: ("Steps in the city | Raining", "csigusz_foxoup", "711/711434_7724386"),
+    553238: ("Walking through puddle", "NachtmahrTV", "553/553238_5620304"),
+    352870: ("Footsteps Dirt Gravel", "PotatokingXII", "352/352870_4187409"),
+    505831: ("Footsteps outdoors gravel.wav", "jedg", "505/505831_4024739"),
+    419164: ("03-Man walking gravel.wav", "14GPanskaHonc_Petr", "419/419164_8353567"),
+    556002: ("Footsteps_Mountain_Boots_Gravel_Mono.wav", "Nox_Sound", "556/556002_9250976"),
+    685286: ("Footsteps grass.wav", "emilgasi", "685/685286_12974819"),
+    505833: ("Footsteps grass.wav", "jedg", "505/505833_4024739"),
+    377323: ("steps_dry_grass.wav", "Mystikuum", "377/377323_1643758"),
+    389454: ("Footsteps_On_Dirt.wav", "lzmraul", "389/389454_6060491"),
+    670305: ("steps on wet field.wav", "bruno.auzet", "670/670305_11519060"),
+    760861: ("Walking through long grass and brush on wet ground wearing boots male",
+             "Whats_The_Frequency_Kennett", "760/760861_8254017"),
+    231317: ("Footsteps-Mud&Grass", "jonccox", "231/231317_3261532"),
+    231850: ("Walk Wet", "alegemaate", "231/231850_2531187"),
+    218305: ("01-20 Footsteps, sneakers on dry leaves.wav", "SpliceSound", "218/218305_1480854"),
+    524496: ("Footsteps in Forest.wav", "vero.marengere", "524/524496_6605732"),
+    398267: ("Walking on dry leaves and twigs.wav", "gabytoledosci", "398/398267_7618848"),
+    474113: ("Footsteps forest", "Juno24", "474/474113_8872754"),
+    543930: ("walking through thick wet mud 2.wav", "walthamstow_walker", "543/543930_12143735"),
+    670850: ("rubber boots in mud.wav", "bruno.auzet", "670/670850_11519060"),
+    455057: ("footsteps-mud.wav", "audioninja001", "455/455057_2699264"),
+    446257: ("Walking In Mud", "lukiacostello", "446/446257_932203"),
+    553863: ("deep water footsteps.wav", "bruno.auzet", "553/553863_11519060"),
+    342932: ("Wading in Shallow Water.wav", "ryansitz", "342/342932_5800259"),
+    583756: ("wet footsteps.mp3", "Bia12", "583/583756_4614795"),
+    369580: ("Slow Water Footsteps", "Adielees9", "369/369580_4800355"),
 }
 PREVIEW = "https://cdn.freesound.org/previews/%s-hq.mp3"
 CLOCK = 125968
@@ -162,6 +208,13 @@ LOOPS = {
 # falls away, faded, high-passed to take off handling rumble, and levelled like a loop by its
 # loud part. Each kind: the longest an event may be,
 # the tail kept after it, the high-pass, and how many events a recording may give.
+#
+# The player's footsteps (spec 13.47) are a kind a surface, step_<surface>, so a surface's set is
+# fetched or auditioned by its name, and the files are step_<surface>_<n>.wav. A shoe on a floor
+# or the ground is short; a wade, or a foot in mud, is a slosh and the foot drawn out after it.
+STEP = {"longest": 0.45, "tail": 0.1, "highpass": 70.0, "per": 6}
+WADE = {"longest": 0.9, "tail": 0.15, "highpass": 60.0, "per": 6}
+WALK_GAP = 0.55  # seconds between the steps of an audition's walk, a walking pace
 ONESHOT_JOBS = {
     "meow": {"longest": 1.6, "tail": 0.12, "highpass": 150.0, "per": 3},
     "trill": {"longest": 1.0, "tail": 0.08, "highpass": 120.0, "per": 3},
@@ -169,6 +222,17 @@ ONESHOT_JOBS = {
     "paw": {"longest": 0.14, "tail": 0.03, "highpass": 80.0, "per": 8},
     "land": {"longest": 0.5, "tail": 0.08, "highpass": 60.0, "per": 2},
     "drip": {"longest": 0.5, "tail": 0.25, "highpass": 250.0, "per": 4},
+    "step_wood": STEP,
+    "step_tile": STEP,
+    "step_cloth": STEP,
+    "step_concrete": STEP,
+    "step_pavement_wet": STEP,
+    "step_gravel": STEP,
+    "step_grass": STEP,
+    "step_grass_wet": STEP,
+    "step_forest": STEP,
+    "step_mud": WADE,
+    "step_water": WADE,
 }
 ONESHOT_CANDIDATES = {
     "meow": [110011, 412017, 479272, 528197, 455493, 66518],
@@ -177,6 +241,34 @@ ONESHOT_CANDIDATES = {
     "paw": [658429, 338352, 569255],
     "land": [803297, 584442, 191957],
     "drip": [815419, 546279, 792932, 22438],
+    "step_wood": [539222, 635058, 362777, 198962],
+    "step_tile": [170506, 565530, 50725, 655367],
+    "step_cloth": [148466, 545540, 164100, 463644],
+    "step_concrete": [546827, 272260, 545543, 459964],
+    "step_pavement_wet": [205817, 539556, 711434, 553238],
+    "step_gravel": [352870, 505831, 419164, 556002],
+    "step_grass": [685286, 505833, 377323, 389454],
+    "step_grass_wet": [670305, 760861, 231317, 231850],
+    "step_forest": [218305, 524496, 398267, 474113],
+    "step_mud": [543930, 670850, 455057, 446257],
+    "step_water": [553863, 342932, 583756, 369580],
+}
+# The player's footsteps (spec 13.47), chosen by ear from each candidate's walk: surface ->
+# recording. Its takes are the walk's, in the walk's order, as step_<surface>_1 to _6 -- the
+# count footsteps.h's FOOTSTEP_TAKES reads.
+FOOTSTEP_TAKES = 6
+FOOTSTEPS = {
+    "wood": 362777,
+    "tile": 170506,
+    "cloth": 545540,
+    "concrete": 272260,
+    "pavement_wet": 205817,
+    "gravel": 352870,
+    "grass": 685286,
+    "grass_wet": 760861,
+    "forest": 524496,
+    "mud": 543930,
+    "water": 369580,
 }
 # What the game plays: file name -> (job, recording, which event, by the order --audition
 # numbers them). Chosen by length and source, not yet by ear: the meows are one cat's three
@@ -196,6 +288,8 @@ ONESHOTS = {
     # The tap over the basement's laundry tub (spec 13.31), dripping into the water standing in
     # it: chosen by ear.
     "basement_drip": ("drip", 815419, 3),
+    **{"step_%s_%d" % (surface, k + 1): ("step_" + surface, sound, k)
+       for surface, sound in FOOTSTEPS.items() for k in range(FOOTSTEP_TAKES)},
 }
 ONESHOT_LEAD = 0.01  # seconds kept before an event's onset
 
@@ -466,6 +560,16 @@ def oneshot(x, span, job):
     return level(y, y[env > 0.25 * env.max()])
 
 
+def walk(takes):
+    """Takes one after another WALK_GAP apart, in the order they are numbered: a footstep set as a
+    walk on it sounds."""
+    gap = int(WALK_GAP * RATE)
+    out = np.zeros(gap * (len(takes) - 1) + max(t.size for t in takes))
+    for k, t in enumerate(takes):
+        out[k * gap:k * gap + t.size] += t
+    return out
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--audition",
@@ -502,10 +606,21 @@ def main():
         for job, sounds in ONESHOT_CANDIDATES.items():
             if not wanted(job):
                 continue
-            for sound in sounds:
+            for n, sound in enumerate(sounds):
                 x = decode(sound)
-                for k, span in enumerate(events(x, job)):
-                    y = oneshot(x, span, job)
+                spans = events(x, job)
+                takes = [oneshot(x, span, job) for span in spans]
+                if job.startswith("step_"):
+                    # A footstep is heard as a walk: one file a recording, not one a step, in a
+                    # folder a surface, numbered in the candidates' order so one can be named.
+                    folder = os.path.join(args.audition, job[len("step_"):])
+                    os.makedirs(folder, exist_ok=True)
+                    write(os.path.join(folder, "%d_%d_%s.wav" % (
+                        n + 1, sound, RECORDINGS[sound][1])), walk(takes))
+                    lengths = ", ".join("%.2f" % (y.size / RATE) for y in takes)
+                    print("%-17s %d %d: %d steps, %s s" % (job, n + 1, sound, len(takes), lengths))
+                    continue
+                for k, (span, y) in enumerate(zip(spans, takes)):
                     write(os.path.join(args.audition, "%s_%d_%s_%d.wav" % (
                         job, sound, RECORDINGS[sound][1], k)), y)
                     print("%-6s %d event %d: %.2f s at %.2f s" % (
