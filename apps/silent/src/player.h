@@ -5,6 +5,7 @@
 #include <cglm/cglm.h>
 
 #include "cetra/camera_rig.h"
+#include "cetra/gait.h"
 #include "cetra/game/entity.h"
 #include "cetra/game/game.h"
 #include "cetra/game/input.h"
@@ -38,11 +39,16 @@ typedef struct Player {
     vec3 step_from;   // where the capsule was when this fixed step began: the last step's result
     vec2 move;        // the horizontal velocity asked of the body, x and z, as it ramps
     vec3 view;        // where the capsule is drawn this frame, between the last two steps
+    vec3 drawn;       // and where it was drawn the frame before, for the gait's frame move
+    vec3 reach_from;  // the eye a hand reaches from: the body's, which no lag or bob moves
     double frame_at;  // the render clock at the last frame: game time and what is accumulated
     float frame_dt;   // seconds by that clock since the frame before
     bool interpolate; // draw the body between steps; false draws it at the last (--no-interp)
-    bool trace;       // print every step's move (--trace-gait)
+    Gait* gait;       // the stride, the footfalls, the eye's lag and the pace on a climb
+    bool use_gait;    // the gait moves the eye and paces a climb (--no-gait clears it)
+    bool trace;       // print every step's move and every frame's eye (--trace-gait)
     int steps;        // fixed steps run, for the trace
+    int frames;       // frames drawn, for the trace
 } Player;
 
 // Stands the capsule on the floor at `feet`, looking along `yaw` and `pitch` (radians, the rig's
@@ -52,6 +58,8 @@ void player_init(Player* p, Game* game, PhysicsWorld* physics, EntityManager* em
 
 // Fixed step: turns the move actions into the capsule's velocity.
 void player_update(Player* p, Game* game, double dt);
+
+void player_free(Player* p);
 
 // Per rendered frame, with the game's interpolant: the look, the cursor, and the rig onto the
 // head. Under a pin, the camera is held at eye/target instead.

@@ -185,6 +185,7 @@ typedef struct SilentArgs {
     bool trace_player;
     bool trace_gait;
     bool no_interp;
+    bool no_gait;
     bool no_flicker;
     bool no_static;         // the living room's set showing nothing, a faint glow and no hiss
     bool no_loading_screen; // load under a black window, with no engine screen over it
@@ -1076,6 +1077,7 @@ static void on_init(Game* game) {
                 atan2f(dir[1], sqrtf(dir[0] * dir[0] + dir[2] * dir[2])));
     g_player.trace = g_args.trace_gait;
     g_player.interpolate = !g_args.no_interp;
+    g_player.use_gait = !g_args.no_gait;
     load_seam(engine, "player");
     // Sent somewhere or holding a clip from the command line, the cat has no mind of its own.
     if (g_cat.entity && !g_args.cat_go[0] && !g_args.cat_clip[0])
@@ -1459,6 +1461,7 @@ static void on_shutdown(Game* game) {
     hud_free(&g_hud);
     backpack_free(&g_backpack);
     cat_free(&g_cat);
+    player_free(&g_player);
 }
 
 static void print_usage(const char* prog) {
@@ -1506,6 +1509,7 @@ static void print_usage(const char* prog) {
         "      --trace-gait        Print every step's move: feet, rise, run, ground and speed\n");
     printf(
         "      --no-interp         Draw the body where the last step left it, not between two\n");
+    printf("      --no-gait           The eye rides the body rigidly, and a climb is not paced\n");
     printf("      --no-flicker        Keep the failing ceiling tube steady\n");
     printf("      --no-static         The living room's television with nothing on it, no snow\n");
     printf("      --no-loading-screen Load under a black window, without the engine's screen\n");
@@ -1678,6 +1682,8 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
             a->trace_gait = true;
         } else if (!strcmp(s, "--no-interp")) {
             a->no_interp = true;
+        } else if (!strcmp(s, "--no-gait")) {
+            a->no_gait = true;
         } else if (!strcmp(s, "--no-flicker")) {
             a->no_flicker = true;
         } else if (!strcmp(s, "--no-static")) {
