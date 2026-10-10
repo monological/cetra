@@ -34,11 +34,12 @@ Gait* create_gait(void) {
     g->stairs_from = 0.25f;
     g->stairs_to = 0.5f;
     g->grade_reach = 0.5f; // two treads
-    // Up a flight at a walk of 1.6 m/s a person climbs about 0.35 m/s, 1.8 treads of 19 cm a
-    // second, and comes down a little faster; as shares of the speed asked, a jog climbs faster.
-    g->climb_up = 0.22f;
-    g->climb_down = 0.28f;
-    g->pace_floor = 0.6f;
+    // Up a flight of 19 cm risers on 25 cm goings, a brisk walker of 1.6 m/s takes 2.4 treads a
+    // second, climbing 0.46 m/s, and comes down at 3; as shares of the speed asked, so a jog takes
+    // the flight two at a time. A steeper flight is climbed slower, as people do.
+    g->climb_up = 0.29f;
+    g->climb_down = 0.36f;
+    g->pace_floor = 0.3f;
     g->speed_time = 0.15f;
     g->stop_speed = 0.15f;
     // Most of a kerb taken up in a fifth of a second, and the eye a hair behind in a fall.

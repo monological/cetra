@@ -186,7 +186,8 @@ typedef struct SilentArgs {
     bool trace_gait;
     bool no_interp;
     bool no_gait;
-    float bob; // the head's bob, as a share of the gait's own
+    float bob;   // the head's bob, as a share of the gait's own
+    float climb; // the pace up and down a flight, as a share of the gait's own
     bool no_flicker;
     bool no_static;         // the living room's set showing nothing, a faint glow and no hiss
     bool no_loading_screen; // load under a black window, with no engine screen over it
@@ -1081,6 +1082,8 @@ static void on_init(Game* game) {
     g_player.use_gait = !g_args.no_gait;
     // Reduce Motion takes the bob as it takes the shake.
     g_player.gait->bob_scale = g_args.bob * g_player.rig->shake_player_scale;
+    g_player.gait->climb_up *= g_args.climb;
+    g_player.gait->climb_down *= g_args.climb;
     load_seam(engine, "player");
     // Sent somewhere or holding a clip from the command line, the cat has no mind of its own.
     if (g_cat.entity && !g_args.cat_go[0] && !g_args.cat_clip[0])
@@ -1515,6 +1518,8 @@ static void print_usage(const char* prog) {
     printf("      --no-gait           The eye rides the body rigidly, and a climb is not paced\n");
     printf(
         "      --bob X             The head's bob as a share of the gait's (default 1; 0 none)\n");
+    printf("      --climb X           The pace up and down a flight as a share of the gait's "
+           "(default 1)\n");
     printf("      --no-flicker        Keep the failing ceiling tube steady\n");
     printf("      --no-static         The living room's television with nothing on it, no snow\n");
     printf("      --no-loading-screen Load under a black window, without the engine's screen\n");
@@ -1610,6 +1615,7 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
     a->render_scale = DEFAULT_RENDER_SCALE;
     a->rain_mmh = DEFAULT_RAIN_MMH;
     a->bob = 1.0f;
+    a->climb = 1.0f;
     parse_hex("262424", a->cat_fur);
     parse_hex("E8B923", a->cat_eyes);
     a->cat_clip_seconds = -1.0f;
@@ -1692,6 +1698,8 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
             a->no_gait = true;
         } else if (!strcmp(s, "--bob") && has_next) {
             a->bob = fmaxf(0.0f, (float)atof(argv[++i]));
+        } else if (!strcmp(s, "--climb") && has_next) {
+            a->climb = fmaxf(0.01f, (float)atof(argv[++i]));
         } else if (!strcmp(s, "--no-flicker")) {
             a->no_flicker = true;
         } else if (!strcmp(s, "--no-static")) {
