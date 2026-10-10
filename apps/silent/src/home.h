@@ -96,6 +96,9 @@
 // television, which is tv.c's.
 void home_build(Kit* kit, Engine* engine, Scene* scene);
 
+// Whether a point on the ground floor stands on cloth: the living room's rug or the bath mat.
+bool home_on_cloth(const vec3 p);
+
 // The stairwell's four walls inside, from the basement's floor to the ceiling, under one coat
 // of `mat` cut round their openings -- the back wall's window, the basement door -- and round
 // `foot` in the partition's: the way into the basement at the bottom of the flight.

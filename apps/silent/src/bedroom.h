@@ -21,4 +21,7 @@ void bedroom_bed_top(vec3 out);
 // lamp's light.
 void bedroom_build(Kit* kit, Scene* scene);
 
+// Whether a point on the bedroom's floor stands on its rug.
+bool bedroom_on_cloth(const vec3 p);
+
 #endif // _SILENT_BEDROOM_H_
