@@ -511,16 +511,26 @@ static void rotate_y(const vec3 in, float yaw, vec3 out) {
     out[2] = z;
 }
 
+// The entity a static body of the kit's rides, at `at` in the kit's coordinates; NULL when the kit
+// makes no bodies.
+static Entity* collider_entity(Kit* kit, const char* kind, const vec3 at) {
+    if (!kit->em || !kit->physics)
+        return NULL;
+    char name[48];
+    snprintf(name, sizeof(name), "kit_%s_%d", kind, kit->collider_count++);
+    Entity* e = create_entity(kit->em, name);
+    if (e)
+        glm_vec3_add((float*)at, kit->origin, e->position);
+    return e;
+}
+
 void kit_mesh_collider(Kit* kit, const float* vertices, int vertex_count,
                        const unsigned int* indices, int index_count) {
-    if (!kit->em || !kit->physics || vertex_count <= 0 || index_count <= 0)
+    if (vertex_count <= 0 || index_count <= 0)
         return;
-    char name[48];
-    snprintf(name, sizeof(name), "kit_mesh_%d", kit->collider_count++);
-    Entity* e = create_entity(kit->em, name);
+    Entity* e = collider_entity(kit, "mesh", (vec3){0.0f, 0.0f, 0.0f});
     if (!e)
         return;
-    glm_vec3_copy(kit->origin, e->position);
     PhysicsShapeDesc shape = {.type = SHAPE_MESH, .density = 0.0f};
     shape.mesh.vertices = vertices;
     shape.mesh.vertex_count = (size_t)vertex_count;
@@ -530,14 +540,9 @@ void kit_mesh_collider(Kit* kit, const float* vertices, int vertex_count,
 }
 
 void kit_collider(Kit* kit, const vec3 centre, const vec3 half, float yaw) {
-    if (!kit->em || !kit->physics)
-        return;
-    char name[48];
-    snprintf(name, sizeof(name), "kit_col_%d", kit->collider_count++);
-    Entity* e = create_entity(kit->em, name);
+    Entity* e = collider_entity(kit, "col", centre);
     if (!e)
         return;
-    glm_vec3_add((float*)centre, kit->origin, e->position);
     // Before the body, which reads the entity's rotation when it is created.
     if (yaw != 0.0f)
         entity_set_rotation_euler(e, (vec3){0.0f, yaw, 0.0f});
@@ -1438,7 +1443,42 @@ void kit_frame_stair(Kit* kit, const KitFrame* f, int mat, float a0, float a1, f
                      float rise, float going, int risers) {
     for (int i = 1; i < risers; i++)
         kit_frame_box(kit, f, mat, a0, a1, y0, y0 + (float)i * rise, d0 + (float)(i - 1) * going,
-                      d0 + (float)i * going, true);
+                      d0 + (float)i * going, false);
+    // The line through the nosings meets the floor one going before the first riser, and the
+    // floor above at the last.
+    kit_frame_ramp(kit, f, a0, a1, (vec2){d0 - going, y0},
+                   (vec2){d0 + (float)(risers - 1) * going, y0 + (float)risers * rise});
+}
+
+// How deep a ramp's slab is under its top.
+#define RAMP_THICK 0.2f
+
+void kit_frame_ramp(Kit* kit, const KitFrame* f, float a0, float a1, const vec2 foot,
+                    const vec2 head) {
+    const float run = head[0] - foot[0], rise = head[1] - foot[1];
+    const float len = sqrtf(run * run + rise * rise);
+    if (len < 1e-4f)
+        return;
+    // The top's normal in (d, y), turned up, and the slab's middle half its depth under the top.
+    const float up = run >= 0.0f ? 1.0f : -1.0f;
+    const float nd = -up * rise / len, ny = up * run / len;
+    vec3 centre = {0.0f, 0.0f, 0.0f};
+    kit_frame_point(f, 0.5f * (a0 + a1), 0.5f * (foot[1] + head[1]) - 0.5f * RAMP_THICK * ny,
+                    0.5f * (foot[0] + head[0]) - 0.5f * RAMP_THICK * nd, centre);
+    Entity* e = collider_entity(kit, "ramp", centre);
+    if (!e)
+        return;
+    // The slab's z along the line from foot to head: tilted about its x, then turned with the
+    // frame.
+    versor turn, tilt;
+    glm_quatv(turn, f->yaw, (vec3){0.0f, 1.0f, 0.0f});
+    glm_quatv(tilt, -atan2f(rise, run), (vec3){1.0f, 0.0f, 0.0f});
+    glm_quat_mul(turn, tilt, e->rotation);
+    PhysicsShapeDesc shape = {
+        .type = SHAPE_BOX,
+        .box.half_extents = {0.5f * fabsf(a1 - a0), 0.5f * RAMP_THICK, 0.5f * len},
+        .density = 0.0f};
+    entity_add_rigid_body(e, kit->physics, &shape, MOTION_STATIC, OBJ_LAYER_STATIC);
 }
 
 void kit_frame_prism(Kit* kit, const KitFrame* f, int mat, float a, float d, float y0, float y1,
