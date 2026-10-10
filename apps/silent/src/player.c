@@ -66,8 +66,11 @@ void player_init(Player* p, Game* game, PhysicsWorld* physics, EntityManager* em
     // A window's first frame may run no step, and is drawn from here.
     glm_vec3_copy(p->entity->position, p->step_from);
     glm_vec3_copy(p->entity->position, p->view);
+    glm_vec3_copy(p->entity->position, p->drawn);
     p->frame_at = game->time + game->accumulator;
     p->interpolate = true;
+    p->gait = create_gait();
+    p->use_gait = true;
 
     p->rig = create_camera_rig();
     p->rig->steers_controls = true;
@@ -113,33 +116,38 @@ void player_update(Player* p, Game* game, double dt) {
     CharacterController* cc = p->entity ? entity_get_character_controller(p->entity) : NULL;
     if (!cc)
         return;
-    // Nothing has moved the capsule yet this step, so its position is where the last step left it.
-    if (p->trace) {
-        const float* at = p->entity->position;
-        vec3 d;
-        glm_vec3_sub((float*)at, p->step_from, d);
-        printf(
-            "gait step %5d feet %8.4f %8.4f %8.4f dy %+.4f dh %.4f ground %d up %.3f speed %.3f\n",
-            p->steps, (double)at[0], (double)(at[1] - CAPSULE_REST), (double)at[2], (double)d[1],
-            (double)sqrtf(d[0] * d[0] + d[2] * d[2]), (int)cc->ground_state,
-            (double)cc->ground_normal[1],
-            (double)sqrtf(cc->velocity[0] * cc->velocity[0] + cc->velocity[2] * cc->velocity[2]));
-    }
-    p->steps++;
-    glm_vec3_copy(p->entity->position, p->step_from);
     vec3 input_dir;
     input_action_move(&game->input, "move_x", "move_y", input_dir);
-
     float yaw = 0.0f;
     camera_rig_move_basis(p->rig, &yaw);
     vec3 fwd = {sinf(yaw), 0.0f, cosf(yaw)};
     vec3 right = {-cosf(yaw), 0.0f, sinf(yaw)};
     const float speed = input_action_down(&game->input, "sprint") ? SPRINT_SPEED : WALK_SPEED;
-
     vec3 want = {0.0f, 0.0f, 0.0f};
     glm_vec3_muladds(fwd, -input_dir[2] * speed, want);
     glm_vec3_muladds(right, input_dir[0] * speed, want);
+
+    // Nothing has moved the capsule yet this step, so its position is where the last step left
+    // it, and the move from step_from is the last step's whole.
     const bool grounded = character_controller_is_grounded(cc);
+    vec3 moved;
+    glm_vec3_sub(p->entity->position, p->step_from, moved);
+    gait_step(p->gait, moved, grounded, hypotf(want[0], want[2]), (float)dt);
+    if (p->trace) {
+        const float* at = p->entity->position;
+        printf("gait step %5d feet %8.4f %8.4f %8.4f dy %+.4f dh %.4f ground %d up %.3f speed "
+               "%.3f grade %+.3f stairs %.2f pace %.3f\n",
+               p->steps, (double)at[0], (double)(at[1] - CAPSULE_REST), (double)at[2],
+               (double)moved[1], (double)hypotf(moved[0], moved[2]), (int)cc->ground_state,
+               (double)cc->ground_normal[1], (double)hypotf(p->move[0], p->move[1]),
+               (double)p->gait->grade, (double)p->gait->stairs, (double)p->gait->pace);
+    }
+    p->steps++;
+    glm_vec3_copy(p->entity->position, p->step_from);
+
+    // A climb is taken at the pace a person keeps on it.
+    if (p->use_gait)
+        glm_vec3_scale(want, p->gait->pace, want);
     ramp_move(p, want, grounded, (float)dt);
     // The ramp is kept here rather than read back, since Jolt cancels what pushes into steep
     // ground. Zero vertical on the ground: any residual downward speed is resolved along a slope
@@ -169,8 +177,31 @@ void player_pre_render(Player* p, Game* game, double alpha, const vec3* pin_eye,
         glm_vec3_lerp(p->step_from, p->entity->position, (float)alpha, p->view);
     else
         glm_vec3_copy(p->entity->position, p->view);
+    // The stride goes on under a pinned camera, where its footsteps are still heard.
+    CharacterController* cc = entity_get_character_controller(p->entity);
+    vec3 moved;
+    glm_vec3_sub(p->view, p->drawn, moved);
+    glm_vec3_copy(p->view, p->drawn);
+    gait_frame(p->gait, moved, cc && character_controller_is_grounded(cc), p->rig->yaw,
+               p->frame_dt);
+    if (p->trace && p->gait->fell) {
+        static const char* KINDS[] = {"step", "settle", "shuffle", "land"};
+        const GaitFootfall* f = &p->gait->footfall;
+        printf("gait fall frame %5d %s %s speed %.3f\n", p->frames, KINDS[f->kind],
+               f->foot ? "right" : "left", (double)f->speed);
+    }
+    if (p->trace)
+        printf("gait frame %5d feet %.4f eye %.4f phase %.3f speed %.3f\n", p->frames,
+               (double)(p->view[1] - CAPSULE_REST),
+               (double)(p->view[1] + p->gait->smooth_offset[1] + p->rig->look_lift),
+               (double)p->gait->phase, (double)p->gait->speed);
+    p->frames++;
+    // What a hand reaches from: the body's own eye, which no lag or bob moves.
+    glm_vec3_copy(p->view, p->reach_from);
+    p->reach_from[1] += p->rig->look_lift;
     if (pin_eye && pin_target) {
         camera_rig_set_pose(p->rig, *pin_eye, *pin_target);
+        glm_vec3_copy((float*)*pin_eye, p->reach_from);
         return;
     }
     const bool held = input_is_suppressed(&game->input);
@@ -194,8 +225,15 @@ void player_pre_render(Player* p, Game* game, double alpha, const vec3* pin_eye,
     set_cursor_captured(p, engine, p->cursor_wanted && !held);
 
     glm_vec3_copy(p->view, p->rig->anchor);
+    if (p->use_gait)
+        glm_vec3_add(p->rig->anchor, p->gait->smooth_offset, p->rig->anchor);
     camera_rig_update(p->rig, p->frame_dt, input_action_value(&game->input, "look_x"),
                       input_action_value(&game->input, "look_y"));
+}
+
+void player_free(Player* p) {
+    free_gait(p->gait);
+    p->gait = NULL;
 }
 
 void player_feet(const Player* p, vec3 out) {
@@ -221,9 +259,9 @@ void player_eye(const Player* p, vec3 eye, vec3 forward) {
 }
 
 float player_reach_distance(const Player* p, const vec3 at) {
-    vec3 eye = {0.0f, 0.0f, 0.0f}, forward = {0.0f, 0.0f, 0.0f}, to = {0.0f, 0.0f, 0.0f};
-    player_eye(p, eye, forward);
-    glm_vec3_sub((float*)at, eye, to);
+    vec3 forward = {0.0f, 0.0f, 0.0f}, to = {0.0f, 0.0f, 0.0f};
+    camera_rig_direction(p->rig, forward);
+    glm_vec3_sub((float*)at, (float*)p->reach_from, to);
     const float dist = glm_vec3_norm(to);
     if (dist > REACH || dist < 1e-4f || glm_vec3_dot(to, forward) / dist < cosf(REACH_CONE))
         return FLT_MAX;
