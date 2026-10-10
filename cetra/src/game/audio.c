@@ -339,6 +339,7 @@ bool audio_play_voice(AudioSystem* audio, const Sound* prototype, const AudioVoi
     v->follow = desc->follow ? desc->follow->id : 0;
     glm_vec3_copy((float*)desc->position, v->offset);
     ma_sound_set_volume(&v->sound, desc->volume > 0.0f ? desc->volume : 1.0f);
+    ma_sound_set_pitch(&v->sound, desc->pitch > 0.0f ? desc->pitch : 1.0f);
     place_voice(v, desc->follow);
     // Heard through its zone from the first sample, not faded in from whole.
     zone_ease(audio, &v->sound, 1.0f);

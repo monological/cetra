@@ -71,6 +71,8 @@ typedef struct AudioVoiceDesc {
     vec3 position;               // world, or in `follow`'s frame when it follows an entity
     const struct Entity* follow; // carried by this entity while it lives, or NULL to stay put
     float volume;                // linear gain; 0 is 1
+    float
+        pitch; // playback rate, so pitch and length together: 1.06 is 6% higher and shorter; 0 is 1
 } AudioVoiceDesc;
 
 // Play a positioned copy of a sound decoded from a file, on that sound's bus, once, and reap
