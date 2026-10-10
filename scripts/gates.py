@@ -28166,6 +28166,12 @@ RAIN_SSR_MIN_PX = 1000
 RAIN_SKY_TAA = ["--sky", "--taa", "--headless-jitter"]
 RAIN_TAAU = ["--render-scale", "0.5"]
 RAIN_NEG_FRAMES = 30
+# The wet replacement at the leading edge of a turn (spec 13.46), on the shared TURN, under the sky
+# for the reason RAIN_SKY_TAA gives. Nothing that reads the whole frame may run -- the meter, bloom
+# -- or SSR's effect elsewhere reaches the edge's pixels and none can equal its --no-ssr twin.
+RAIN_EDGE_ARGS = ["--sky", "--no-auto-exposure", "-E", "1.0", "--no-bloom", "--no-dither"]
+RAIN_EDGE_MIN_PX = 500  # wet pixels at the leading edge: measured 1221
+RAIN_EDGE_BARE_MAX = 0.25  # provisional until the fix is measured (spec 13.46); 99.5% before it
 # A medium lobe well off the streaks' 0.8, so a frame that read the wrong one would show it.
 RAIN_MIST_G = 0.3
 # A scene wind that gusts fast enough for two probe runs a few frames apart to sit at different
@@ -28463,6 +28469,11 @@ def run_rain_gate(workdir):
                     this group runs without TAA, where the two agree.
       rain-ssr-taau the same at render scale 0.5, where TAA also upscales: up to 578 px a frame
                     before the fix.
+      rain-ssr-edge on the last frame of a turn, the wet pixels at the leading edge -- those SSR
+                    changes when the camera is held -- take a reflection rather than their
+                    --no-ssr value. Wet ground reads the frame before's trace, and where the
+                    frame before did not reach it fell back to the environment's share alone,
+                    which flashed a strip at the leading edge of every turn in silent.
       rain-ripples  the flooded twin seen from under the roof, rings against none: the open
                     water rings, and the covered water nearest the camera does not move by a
                     pixel. From the fixture's own camera that water is too far off for a
@@ -28999,6 +29010,34 @@ def run_rain_gate(workdir):
     print(f"  rain-ssr-taau {'PASS' if ok else 'FAIL'}  {detail}")
     if not ok:
         failures.append("rain-ssr-taau")
+
+    # The leading edge of a turn (spec 13.46). Where wet ground's previous position was off the
+    # frame before, falling back to the environment's share alone left the pixel exactly what
+    # --no-ssr shows; a reflection there is what tells it apart. Exact, so it needs no contrast.
+    turn = _turn_yaws()
+    edge_runs = [_turn_run(workdir, f"rain_edge_{tag}", yaws, RAIN_EDGE_ARGS + extra)
+                 for tag, yaws, extra in (
+                     ("turn", turn, []), ("turn_bare", turn, ["--no-ssr"]),
+                     ("held", turn[-1:], []), ("held_bare", turn[-1:], ["--no-ssr"]))]
+    failed = next((log for img, log in edge_runs if img is None), None)
+    if failed is not None:
+        print(f"  rain-ssr-edge ERROR  {failed[-300:]}")
+        failures.append("rain-ssr-edge")
+    else:
+        turned, turned_bare, held, held_bare = (img for img, _ in edge_runs)
+        h, w, _ = turned.shape
+        edge = np.zeros(w, dtype=bool)
+        edge[_turn_missed(w, 1)[0]] = True
+        wet = (held != held_bare).any(axis=2) & edge
+        bare = wet & (turned == turned_bare).all(axis=2)
+        n_wet, n_bare = int(wet.sum()), int(bare.sum())
+        ok = n_wet >= RAIN_EDGE_MIN_PX and n_bare <= RAIN_EDGE_BARE_MAX * n_wet
+        print(f"  rain-ssr-edge {'PASS' if ok else 'FAIL'}  of the {n_wet} px in the "
+              f"{int(edge.sum())} leading columns that SSR changes when held (want >= "
+              f"{RAIN_EDGE_MIN_PX}), the turn left {n_bare} ({n_bare / max(n_wet, 1):.1%}) at "
+              f"their --no-ssr value (want <= {RAIN_EDGE_BARE_MAX:.0%})")
+        if not ok:
+            failures.append("rain-ssr-edge")
 
     # Rings against none on the flooded twin, looking out from under the roof.
     water = asset(RAIN_WATER_FIXTURE)
@@ -30629,18 +30668,19 @@ GICOOK_UNSTABLE_FRAME = 20
 _GICOOK_UNSTABLE = re.compile(r"gi-cook volume=(\d+) result=unstable")
 
 
-# Spec 13.45: a level camera turning about its eye on rain_fixture at silent's rate, the lamp's lit
-# rain entering at the leading edge as the turn ends -- where a fog cell with no history showed one
-# jittered sample against neighbours averaged over many, as a hard-edged band.
-FOGMISS_FIXTURE = "rain_fixture.cscn"
+# A level camera turning about rain_fixture's eye at silent's rate (specs 13.45 and 13.46): held
+# TURN_STILL frames, then turned TURN_STEP degrees a frame for TURN_STEPS more. It ends with the
+# lamp's lit rain and the sealed, filmed half of the ground at the leading edge, where whatever
+# reads the frame before has nothing to read.
+TURN_FIXTURE = "rain_fixture.cscn"
 # The fixture's eye-to-target distance, 15.048, rounded and kept rather than read: the render app
-# derives its near clip from that distance, and the band's figures move with it.
-FOGMISS_DIST = 15.05
-FOGMISS_YAW0 = -41.0  # degrees from -z, toward +x; the lamp enters at the right edge at the end
-FOGMISS_STEP = 1.72   # degrees a frame: silent's 1.8 rad/s at 60 Hz
-FOGMISS_STILL = 60    # frames held before the turn, enough for the volume to converge
-FOGMISS_STEPS = 15
-FOGMISS_SIZE = (640, 400)
+# derives its near clip from that distance, and every figure taken on the turn moves with it.
+TURN_DIST = 15.05
+TURN_YAW0 = -41.0  # degrees from -z, toward +x
+TURN_STEP = 1.72   # degrees a frame: silent's 1.8 rad/s at 60 Hz
+TURN_STILL = 60    # frames held before the turn, enough for the fog volume to converge
+TURN_STEPS = 15
+TURN_SIZE = (640, 400)
 FOGMISS_ARGS = ["--fog", "--no-aerial", "--no-auto-exposure", "-E", "1.0", "--no-dither",
                 "--no-bloom", "--no-vignette", "--no-ssao"]
 FOGMISS_SPREAD = 2  # cells a history's trilinear read carries a missed cell's value past it
@@ -30661,34 +30701,33 @@ def _fogmiss_grid():
                  for a in "XYZ")
 
 
-def _fogmiss_pose(yaw_deg):
+def _turn_pose(yaw_deg):
     """The fixture's eye and a target turned to `yaw_deg` about it, as --cam-eye and
     --cam-target take them."""
-    eye = _cscn_camera(FOGMISS_FIXTURE)["eye"]
+    eye = _cscn_camera(TURN_FIXTURE)["eye"]
     yaw = math.radians(yaw_deg)
-    target = (eye[0] + FOGMISS_DIST * math.sin(yaw), eye[1],
-              eye[2] - FOGMISS_DIST * math.cos(yaw))
+    target = (eye[0] + TURN_DIST * math.sin(yaw), eye[1], eye[2] - TURN_DIST * math.cos(yaw))
     return ",".join(f"{c:g}" for c in eye), ",".join(f"{c:.6f}" for c in target)
 
 
-def _fogmiss_missed(grid):
-    """The cells with no history on each frame of the turn, as (whole columns, column-rows,
-    edge rows).
+def _turn_yaws():
+    """Every pose of the turn, the held one first; its last is where a held twin stands."""
+    return [TURN_YAW0 + k * TURN_STEP for k in range(TURN_STEPS + 1)]
+
+
+def _turn_missed(grid_x, grid_y):
+    """The cells of a grid_x by grid_y grid over the frame whose previous position is off it on
+    each frame of the turn, as (whole columns, column-rows, the leading edge's growth a frame).
 
     A level camera turning about its eye keeps a direction's height and its distance in the
     horizontal plane, so a cell at angle t from the view axis lay at t + step in the previous
     frame: its column misses when that is outside the frustum, and in a column that does not, its
     height on screen grew by cos(t) / cos(t + step), which takes the top and bottom rows near the
-    leading edge out of it. Depth moves by too little to miss at this step.
-
-    That growth is also why a cell reads its history from nearer the top or bottom than itself, so
-    a missed row's value is carried inward over the turn, and the turn carries it across the
-    screen. The edge rows are those the leading edge's growth, compounded over every frame of the
-    turn, could have reached, and FOGMISS_SPREAD more."""
-    grid_x, grid_y, _ = grid
-    tan_v = math.tan(math.radians(_cscn_camera(FOGMISS_FIXTURE)["fovy_deg"]) / 2)
-    tan_h = tan_v * FOGMISS_SIZE[0] / FOGMISS_SIZE[1]
-    step = math.radians(FOGMISS_STEP)
+    leading edge out of it. A point's depth does not enter, so this holds for a pixel as for a
+    fog cell."""
+    tan_v = math.tan(math.radians(_cscn_camera(TURN_FIXTURE)["fovy_deg"]) / 2)
+    tan_h = tan_v * TURN_SIZE[0] / TURN_SIZE[1]
+    step = math.radians(TURN_STEP)
     columns, rows, most = [], 0, 1.0
     for c in range(grid_x):
         t = math.atan((2 * (c + 0.5) / grid_x - 1) * tan_h)
@@ -30698,23 +30737,20 @@ def _fogmiss_missed(grid):
         grow = math.cos(t) / math.cos(t + step)
         most = max(most, grow)
         rows += sum(1 for r in range(grid_y) if abs((2 * (r + 0.5) / grid_y - 1) * grow) > 1)
-    reach = most ** FOGMISS_STEPS
-    edge = sum(1 for r in range(grid_y // 2)
-               if abs(2 * (r + 0.5) / grid_y - 1) * reach > 1) + FOGMISS_SPREAD
-    return columns, rows, edge
+    return columns, rows, most
 
 
-def _fogmiss_run(workdir, tag, yaws, extra):
-    """The fixture posed at yaws[0], then at each later yaw a frame from FOGMISS_STILL on;
+def _turn_run(workdir, tag, yaws, args):
+    """The fixture posed at yaws[0], then at each later yaw a frame from TURN_STILL on;
     (codes as an array, log), or (None, the log's tail)."""
-    out = os.path.join(workdir, f"fogmiss_{tag}.ppm")
-    eye, target = _fogmiss_pose(yaws[0])
+    out = os.path.join(workdir, f"turn_{tag}.ppm")
+    eye, target = _turn_pose(yaws[0])
     pose = ["--cam-eye", eye, "--cam-target", target]
     for k, yaw in enumerate(yaws[1:]):
-        pose += ["--cam-at", f"{FOGMISS_STILL + k}:" + ",".join(_fogmiss_pose(yaw))]
-    cmd = [RENDER, "-m", asset(FOGMISS_FIXTURE), "-x", "-f", str(FOGMISS_STILL + FOGMISS_STEPS),
-           "-W", str(FOGMISS_SIZE[0]), "-H", str(FOGMISS_SIZE[1]), "-S", out]
-    r = _run(cmd + FOGMISS_ARGS + pose + extra, capture_output=True, text=True)
+        pose += ["--cam-at", f"{TURN_STILL + k}:" + ",".join(_turn_pose(yaw))]
+    cmd = [RENDER, "-m", asset(TURN_FIXTURE), "-x", "-f", str(TURN_STILL + TURN_STEPS),
+           "-W", str(TURN_SIZE[0]), "-H", str(TURN_SIZE[1]), "-S", out]
+    r = _run(cmd + args + pose, capture_output=True, text=True)
     if r.returncode != 0 or not os.path.exists(out):
         return None, (r.stdout + r.stderr).strip()[-300:]
     return _ppm_array(out), r.stdout + r.stderr
@@ -30757,21 +30793,28 @@ def run_fog_miss_gate(workdir):
     that carries the branch.
     """
     names = ("fog-miss-band", "fog-miss-count", "fog-miss-confined", "fog-miss-jitter")
-    if not os.path.exists(asset(FOGMISS_FIXTURE)):
+    if not os.path.exists(asset(TURN_FIXTURE)):
         for name in names:
-            print(f"  {name} SKIP  {FOGMISS_FIXTURE} not found")
+            print(f"  {name} SKIP  {TURN_FIXTURE} not found")
         return []
     failures = []
-    grid = _fogmiss_grid()
-    grid_x, grid_y, grid_z = grid
-    missed, missed_rows, edge_rows = _fogmiss_missed(grid)
-    swept = len(missed) * FOGMISS_STEPS
+    grid_x, grid_y, grid_z = _fogmiss_grid()
+    missed, missed_rows, grow = _turn_missed(grid_x, grid_y)
+    # The growth that takes a top or bottom row out of the frame is also why a cell reads its
+    # history from nearer the top or bottom than itself, so a missed row's value is carried
+    # inward over the turn, and the turn carries it across the screen. The edge rows are those
+    # the leading edge's growth, compounded over every frame of the turn, could have reached.
+    reach = grow ** TURN_STEPS
+    edge_rows = sum(1 for r in range(grid_y // 2)
+                    if abs(2 * (r + 0.5) / grid_y - 1) * reach > 1) + FOGMISS_SPREAD
+    swept = len(missed) * TURN_STEPS
     clean = list(range(0, max(0, grid_x - swept - FOGMISS_SPREAD)))
-    turn = [FOGMISS_YAW0 + k * FOGMISS_STEP for k in range(FOGMISS_STEPS + 1)]
+    turn = _turn_yaws()
     probe = ["--fog-miss-probe"]
-    runs = [_fogmiss_run(workdir, tag, yaws, extra) for tag, yaws, extra in (
-        ("turn", turn, probe), ("held", turn[-1:], []), ("turn_one", turn, FOGMISS_ONE),
-        ("held_jitter", turn[-1:], probe + FOGMISS_JITTER))]
+    runs = [_turn_run(workdir, f"fogmiss_{tag}", yaws, FOGMISS_ARGS + extra)
+            for tag, yaws, extra in (
+                ("turn", turn, probe), ("held", turn[-1:], []), ("turn_one", turn, FOGMISS_ONE),
+                ("held_jitter", turn[-1:], probe + FOGMISS_JITTER))]
     failed = next((log for img, log in runs if img is None), None)
     if failed is not None:
         for name in names:
@@ -30798,16 +30841,16 @@ def run_fog_miss_gate(workdir):
 
     want = len(missed) * grid_y * grid_z + missed_rows * grid_z
     counts = _fogmiss_probe(turn_log)
-    frames = FOGMISS_STILL + FOGMISS_STEPS
-    turning = range(FOGMISS_STILL, frames)
+    frames = TURN_STILL + TURN_STEPS
+    turning = range(TURN_STILL, frames)
     # Frame 0 has no history at all, and takes one sample; every still frame after it is armed
     # and finds nothing to take them, which is what keeps a still frame's cost and pixels its own.
-    still_wrong = [f for f in range(1, FOGMISS_STILL) if counts.get(f) != (1, 0)]
+    still_wrong = [f for f in range(1, TURN_STILL) if counts.get(f) != (1, 0)]
     wrong = [(f, counts.get(f)) for f in turning if counts.get(f) != (1, want)]
     ok = len(counts) == frames and counts.get(0) == (0, 0) and not still_wrong and not wrong
     print(f"  fog-miss-count {'PASS' if ok else 'FAIL'}  {len(counts)} of {frames} frames probed; "
-          f"frame 0 {counts.get(0)} (want unarmed); {FOGMISS_STILL - 1 - len(still_wrong)} of "
-          f"{FOGMISS_STILL - 1} still frames armed with no cell taking several samples; "
+          f"frame 0 {counts.get(0)} (want unarmed); {TURN_STILL - 1 - len(still_wrong)} of "
+          f"{TURN_STILL - 1} still frames armed with no cell taking several samples; "
           f"{len(turning) - len(wrong)} of {len(turning)} turn frames took them in {want} cells "
           f"({len(missed)} columns and {missed_rows} column-rows)"
           f"{'' if not wrong else f', first wrong {wrong[0]}'}")
