@@ -28068,6 +28068,232 @@ def run_camera_gate(workdir):
     return failed
 
 
+# The gait's defaults (gait.c's create_gait), restated because a gate cannot ask the binary for
+# them. A change to any of them is a change to how silent walks, which is what should go red.
+GAIT_STEP_BASE = 0.40      # a level step, m, at no speed
+GAIT_STEP_PER_SPEED = 0.25  # and longer by this per m/s
+GAIT_EYE_RATE = 20.0        # rad/s of the eye's spring on the ground
+GAIT_EYE_AIR_RATE = 60.0    # and in the air
+GAIT_LAG_BELOW = 0.25
+GAIT_LAG_ABOVE = 0.10
+GAIT_DIP_PER_SPEED = 0.03
+GAIT_DIP_RATE = 12.0
+GAIT_SETTLE_FROM = 0.2      # gait.c's SETTLE_FROM
+GAIT_SHUFFLE_TURN = math.radians(70.0)
+GAIT_SHUFFLE_GAP = 0.35
+
+_GAIT_PROBE = re.compile(r"^gait (\S+) (\S+) (\S+) (.*)$", re.M)
+
+
+def _gait_probe(case):
+    """{(label, key): [floats]} from one gametest --gait-probe run, or None. No window, no
+    physics and no world: the probe feeds the gait moves it makes up itself."""
+    return _gametest_probe("--gait-probe", _GAIT_PROBE, case)
+
+
+def _gait_spring(x0, rate, t):
+    """A critically damped spring let go from x0 at rest: where it is t seconds on."""
+    return x0 * (1.0 + rate * t) * math.exp(-rate * t)
+
+
+def run_gait_gate(workdir):
+    """The gait (spec 13.47): a walker's stride, footfalls, eye and pace, with no window.
+
+    gait.c takes displacements and a time and touches nothing else, so every case below is a
+    walk the probe makes up -- a straight one, a kerb, a fall, a flight as a ramp -- and every
+    arm a closed form or an equality, never a recording. None of it is silent: the app's own
+    walking is walked by a person, and these hold the module it is built on.
+
+      gait-split     three seconds at 1.6 m/s in frames of 1/60, 1/120 and an uneven run of four
+                     lengths take the same number of steps and end within a fiftieth of a step
+                     of each other. The stride runs on ground covered, so how the frames fall
+                     must not change how many steps a path takes.
+      gait-cadence   a walk of 1.6 m/s steps 120 times a minute and a jog of 3.4 163, from
+                     step = 0.40 + 0.25 * speed: the cadences people walk and jog at.
+      gait-rest      a walk stopped part way through a step sets the foot in the air down
+                     exactly once, takes no step standing, and leaves the eye on the body: no
+                     lag and no bob, to a millionth of a metre.
+      gait-shuffle   standing and turning 4.5 radians at 3 rad/s moves the feet three times,
+                     every 70 degrees and no closer than 0.35 s; turning while walking moves
+                     them only as steps.
+      gait-bob-off   at bob_scale 0 the head does not move one bit through a walk with a kerb
+                     in it, and the eye's lag is the same to the bit as at 1, since the bob
+                     feeds nothing back. The scale-1 run bobs 2 cm, so the arm is not green on
+                     a bob that never ran.
+      gait-trough    every footfall lands at the bottom of the bob, within a hundredth of its
+                     depth, and the sway between one footfall and the next leans toward the foot
+                     that came down. Built the other way round, the footsteps land at the top
+                     of the head's rise, which is half a step out and reads as a limp.
+      gait-spring    a 15 cm kerb taken in one frame is taken up as a critically damped spring
+                     at 20 rad/s, to the closed form at 1, 6 and 12 frames; a 40 cm rise holds
+                     the eye no more than 25 cm below and a 30 cm drop no more than 10 above;
+                     and in the air the same kerb goes at 60 rad/s.
+      gait-flight    a walker asking 1.6 m/s up a flight of 15 risers of 0.19 on goings of 0.25,
+                     collided as a ramp, takes 15 steps up it to within one (Blondel's rule, a
+                     step for every 2R + G of 0.63 m), at a pace of exactly climb / grade, with
+                     the flight counted whole and the bob faded out.
+      gait-land      0.3 s in the air coming down at 2 m/s lands once, on the frame it lands,
+                     and dips the eye 0.03 m per m/s -- 6 cm -- at 1/12 s, the critically damped
+                     spring's peak.
+      gait-hitch     one frame of a quarter second across six steps' ground lets one foot
+                     fall, not six, and a frame of no time moves nothing and lets none fall.
+    """
+    failed = []
+
+    def note(name, ok):
+        if not ok:
+            failed.append(name)
+
+    split = _gait_probe("split")
+    if not split:
+        print("  gait-split SKIP  no probe output")
+        note("gait-split", False)
+    else:
+        ends = {label: split[(label, "end")] for label in ("60", "120", "uneven")}
+        phases = [v[0] for v in ends.values()]
+        steps = {int(v[1]) for v in ends.values()}
+        ok = max(phases) - min(phases) < 0.02 and len(steps) == 1
+        print(f"  gait-split {'PASS' if ok else 'FAIL'}  3 s at 1.6 m/s ends at phase "
+              f"{', '.join(f'{k} {v[0]:.4f}' for k, v in ends.items())} (want within 0.02), "
+              f"in {sorted(steps)} steps (want one count)")
+        note("gait-split", ok)
+
+    cadence = _gait_probe("cadence")
+    if not cadence:
+        print("  gait-cadence SKIP  no probe output")
+        note("gait-cadence", False)
+    else:
+        rows = []
+        ok = True
+        for label, speed in (("walk", 1.6), ("jog", 3.4)):
+            want = 60.0 * speed / (GAIT_STEP_BASE + GAIT_STEP_PER_SPEED * speed)
+            got = cadence[(label, "rate")][0]
+            ok = ok and abs(got - want) / want < 0.005
+            rows.append(f"{label} {got:.2f} a minute (want {want:.2f})")
+        print(f"  gait-cadence {'PASS' if ok else 'FAIL'}  " + ", ".join(rows))
+        note("gait-cadence", ok)
+
+    rest = _gait_probe("rest")
+    if not rest:
+        print("  gait-rest SKIP  no probe output")
+        note("gait-rest", False)
+    else:
+        through, settles, steps = rest[("stop", "through")]
+        lag, bob = rest[("end", "offset")]
+        want_settles = 1 if through > GAIT_SETTLE_FROM else 0
+        ok = (int(settles) == want_settles == 1 and int(steps) == 0 and lag < 1e-6
+              and bob < 1e-6)
+        print(f"  gait-rest {'PASS' if ok else 'FAIL'}  stopped {through:.3f} of a step past a "
+              f"heel, it set {int(settles)} foot down (want 1) and took {int(steps)} steps "
+              f"standing (want 0); the eye's lag ended at {lag:.2e} m and the bob at {bob:.2e} "
+              f"(want under 1e-6)")
+        note("gait-rest", ok)
+
+    shuffle = _gait_probe("shuffle")
+    if not shuffle:
+        print("  gait-shuffle SKIP  no probe output")
+        note("gait-shuffle", False)
+    else:
+        count, gap = shuffle[("standing", "count")]
+        walking = shuffle[("walking", "count")][0]
+        want = math.floor(4.5 / GAIT_SHUFFLE_TURN)
+        ok = int(count) == want and gap >= GAIT_SHUFFLE_GAP - 1e-6 and int(walking) == 0
+        print(f"  gait-shuffle {'PASS' if ok else 'FAIL'}  4.5 rad turned standing moved the "
+              f"feet {int(count)} times (want {want}), {gap:.3f} s apart at the closest (want "
+              f"{GAIT_SHUFFLE_GAP} or more); turning while walking, {int(walking)} (want 0)")
+        note("gait-shuffle", ok)
+
+    off = _gait_probe("bob-off")
+    if not off:
+        print("  gait-bob-off SKIP  no probe output")
+        note("gait-bob-off", False)
+    else:
+        moved, lag_apart = off[("walk", "off")]
+        deepest = off[("walk", "on")][0]
+        ok = int(moved) == 0 and lag_apart == 0.0 and deepest < -0.019
+        print(f"  gait-bob-off {'PASS' if ok else 'FAIL'}  at scale 0 the head moved on "
+              f"{int(moved)} frames (want 0) and the eye's lag differed from scale 1's by "
+              f"{lag_apart:g} m (want 0, to the bit); at scale 1 it bobbed {-deepest * 100:.2f} cm")
+        note("gait-bob-off", ok)
+
+    trough = _gait_probe("trough")
+    if not trough:
+        print("  gait-trough SKIP  no probe output")
+        note("gait-trough", False)
+    else:
+        depth, falls = trough[("walk", "depth")]
+        leaned, leans = trough[("walk", "lean")]
+        ok = depth > 0.99 and int(falls) >= 8 and int(leaned) == int(leans) and leans >= 8
+        print(f"  gait-trough {'PASS' if ok else 'FAIL'}  over {int(falls)} footfalls the head "
+              f"was at least {depth:.4f} of the way down its bob (want over 0.99), and leaned "
+              f"toward the foot that came down after {int(leaned)} of {int(leans)}")
+        note("gait-trough", ok)
+
+    spring = _gait_probe("spring")
+    if not spring:
+        print("  gait-spring SKIP  no probe output")
+        note("gait-spring", False)
+    else:
+        worst = max(abs(lag - _gait_spring(-0.15, GAIT_EYE_RATE, t))
+                    for t, lag in (spring[("kerb", frames)] for frames in ("1", "6", "12")))
+        up, down = spring[("clamp", "held")]
+        t_air, air = spring[("air", "3")]
+        air_off = abs(air - _gait_spring(-0.15, GAIT_EYE_AIR_RATE, t_air))
+        clamped = abs(up + GAIT_LAG_BELOW) < 1e-5 and abs(down - GAIT_LAG_ABOVE) < 1e-5
+        ok = worst < 1e-5 and clamped and air_off < 1e-5
+        print(f"  gait-spring {'PASS' if ok else 'FAIL'}  a 15 cm kerb taken up off the closed "
+              f"form by at most {worst:.2e} m over 12 frames; a 40 cm rise held at {up} and a 30 "
+              f"cm drop at {down} (want -{GAIT_LAG_BELOW} and {GAIT_LAG_ABOVE}); in the air, "
+              f"{air_off:.2e} off at 3 frames (want both under 1e-5)")
+        note("gait-spring", ok)
+
+    flight = _gait_probe("flight")
+    if not flight:
+        print("  gait-flight SKIP  no probe output")
+        note("gait-flight", False)
+    else:
+        steps, want_steps = flight[("ramp", "steps")]
+        pace, stairs, bob, grade, climb = flight[("mid", "state")]
+        ok = (abs(steps - want_steps) <= 1 and abs(pace - climb / grade) < 1e-5
+              and stairs == 1.0 and bob == 0.0 and abs(grade - 2.85 / 3.75) < 0.05 * 2.85 / 3.75)
+        print(f"  gait-flight {'PASS' if ok else 'FAIL'}  {int(steps)} steps up 15 risers (want "
+              f"15 within 1); half way the grade was {grade:.4f} (want {2.85 / 3.75:.4f} within "
+              f"5%), the pace {pace:.5f} (want climb / grade = {climb / grade:.5f}), the flight "
+              f"counted at {stairs:g} (want 1) and the bob at {bob:g} (want 0)")
+        note("gait-flight", ok)
+
+    land = _gait_probe("land")
+    if not land:
+        print("  gait-land SKIP  no probe output")
+        note("gait-land", False)
+    else:
+        lands, first = land[("fall", "kinds")]
+        dip, when = land[("fall", "dip")]
+        want = -GAIT_DIP_PER_SPEED * 2.0
+        ok = (int(lands) == 1 and int(first) == 1 and abs(dip - want) < 0.01 * abs(want)
+              and abs(when - 1.0 / GAIT_DIP_RATE) <= 0.5 / 60.0 + 1e-6)
+        print(f"  gait-land {'PASS' if ok else 'FAIL'}  {int(lands)} landing (want 1), "
+              f"{'on' if first else 'NOT on'} the frame it landed; the eye dipped "
+              f"{dip * 100:.3f} cm at {when:.4f} s (want {want * 100:.3f} at "
+              f"{1.0 / GAIT_DIP_RATE:.4f})")
+        note("gait-land", ok)
+
+    hitch = _gait_probe("hitch")
+    if not hitch:
+        print("  gait-hitch SKIP  no probe output")
+        note("gait-hitch", False)
+    else:
+        fell, crossed = hitch[("frame", "fell")]
+        zero_fell, moved = hitch[("zero", "fell")]
+        ok = int(fell) == 1 and crossed >= 2 and int(zero_fell) == 0 and moved == 0.0
+        print(f"  gait-hitch {'PASS' if ok else 'FAIL'}  a quarter-second frame across "
+              f"{int(crossed)} heel strikes let {int(fell)} foot fall (want 1); a frame of no "
+              f"time let {int(zero_fell)} fall and moved the stride {moved:g} (want 0 and 0)")
+        note("gait-hitch", ok)
+
+    return failed
+
+
 RAIN_FIXTURE = "rain_fixture.cscn"
 RAIN_TOL = 1e-5        # relative, float32 physics against its double twin
 RAIN_PACE_TOL = 1e-4   # absolute, one schedule sliced at 60 and at 30 fps
@@ -31714,6 +31940,8 @@ GATE_GROUPS = [
      run_ragdoll_gate),
     ("camera", "the camera through a scripted pointer (drag, pan, release; spec 12.19):",
      run_camera_gate),
+    ("gait", "a walker's gait (stride, footfalls, the eye's lag and bob, a climb; spec 13.47):",
+     run_gait_gate),
     ("save", "save serialization (entities, spawners, drops, migrations; spec 12.3):",
      run_save_gate),
     ("ik", "two-bone IK (reach, clamp, the singular bind pose, the pole; spec 12.4):",
