@@ -3,6 +3,7 @@
 #include "candles.h"
 #include "gothic.h"
 #include "house.h"
+#include "interior.h"
 #include "mansion.h"
 #include "mats.h"
 #include "ornament.h"
@@ -338,6 +339,12 @@ bool mansion_on_cloth(const vec3 p) {
         return true;
     return fabsf(p[1] - (FLOOR_Y + SEAT_TOP)) < 0.05f && p[0] > SEAT_X0 && p[0] < SEAT_X1 &&
            p[2] > KITCHEN_Z0 && p[2] < SEAT_Z1;
+}
+
+bool mansion_cloth_at(const vec3 world) {
+    vec3 plan = {0.0f, 0.0f, 0.0f};
+    mansion_plan(world, plan);
+    return interior_on_cloth(plan) || mansion_on_cloth(plan);
 }
 
 /*

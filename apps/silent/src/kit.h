@@ -44,6 +44,22 @@
 
 #define KIT_COUNT(arr) ((int)(sizeof(arr) / sizeof((arr)[0])))
 
+/*
+ * What the kits' bodies are made of (spec 13.47), for whatever asks what it touched -- a foot
+ * coming down: each body's entity id, rising in the order the bodies were made, and its material
+ * slot. A body that only collides is of none and is not noted. Owned by the app, which hands it to
+ * the first kit; every kit made beside that one notes into it too, and it outlives them all.
+ */
+typedef struct KitSurfaces {
+    uint32_t* ids;
+    int* mats;
+    int count, capacity;
+} KitSurfaces;
+
+// The material slot of the body `e` rides, or KIT_COLLIDER_ONLY for a body of none or not a kit's.
+int kit_surface_of(const KitSurfaces* s, const Entity* e);
+void kit_surfaces_release(KitSurfaces* s);
+
 // A wick, in world space, and the flame it burns as a multiple of the fire's default FLAME.
 typedef struct KitWick {
     vec3 tip;
@@ -67,6 +83,7 @@ typedef struct Kit {
     // are taken, so a building built in its own plan's coordinates stands anywhere and looks
     // the same.
     vec3 origin;
+    KitSurfaces* surfaces; // where its bodies' materials are noted; NULL, nowhere
     int collider_count;
     int vertex_count;      // everything kit_finish handed over to be drawn
     int mesh_count;        // the meshes it handed it over as
@@ -191,8 +208,9 @@ static inline float kit_plan_distance(const vec3 p, const vec2 a, const vec2 b) 
 
 void kit_init(Kit* kit, Scene* scene, EntityManager* em, PhysicsWorld* physics);
 
-// A second kit over the same world and the same materials, in the same slots, standing at
-// `origin`: what a building somewhere else on the map is built into, so its meshes are its own
+// A second kit over the same world and the same materials, in the same slots, noting its bodies
+// where the first does, standing at `origin`: what a building somewhere else on the map is built
+// into, so its meshes are its own
 // and cull with it rather than stretching every material's mesh across the map. Neither kit
 // frees an unused material at its finish; kit_free_unused does, once both are finished.
 void kit_init_beside(Kit* kit, Kit* first, const vec3 origin);
@@ -350,22 +368,25 @@ void kit_frame_run(Kit* kit, const KitFrame* f, int mat, const vec2* profile, in
 void kit_frame_surround(Kit* kit, const KitFrame* f, int mat, const KitOpening* o, float w,
                         bool head_only, float d0, float d1);
 /*
+ * What a flight collides as (spec 13.47): a slab with no faces, a0 to a1 across, whose top runs
+ * from `foot` on the floor below to `head` on the floor above, each (d, y) in the frame, and is
+ * of material `mat`. A capsule climbing treads rides each nosing up in a lump and can wedge for
+ * good against a riser it stands too close to; on a ramp it walks a slope.
+ */
+void kit_frame_ramp(Kit* kit, const KitFrame* f, int mat, float a0, float a1, const vec2 foot,
+                    const vec2 head);
+/*
  * A solid flight of `risers` steps, each `rise` high and `going` deep, climbing along +d from
  * d0 at floor height y0 between a0 and a1. The last riser lands on the floor above, so there
- * are risers - 1 treads; each step is a box down to y0. It collides as a ramp along its nosings
- * (kit_frame_ramp), not as its steps.
+ * are risers - 1 treads; each step is a box down to y0. It is stood on as a ramp along its
+ * nosings (kit_frame_ramp), and is solid under it.
  */
-/*
- * What a flight collides as (spec 13.47): a slab with no faces, a0 to a1 across, whose top runs
- * from `foot` on the floor below to `head` on the floor above, each (d, y) in the frame. Climbed
- * tread by tread, the player's capsule rides each nosing up in a lump and can wedge for good
- * against a riser it is standing too close to. On the ramp it walks a slope, and the steps of the
- * climb are the gait's.
- */
-void kit_frame_ramp(Kit* kit, const KitFrame* f, float a0, float a1, const vec2 foot,
-                    const vec2 head);
 void kit_frame_stair(Kit* kit, const KitFrame* f, int mat, float a0, float a1, float y0, float d0,
                      float rise, float going, int risers);
+// A box that only collides, its top a floor of `mat` that something else draws: what is under
+// the boards a room shows.
+void kit_frame_floor(Kit* kit, const KitFrame* f, int mat, float a0, float a1, float y0, float y1,
+                     float d0, float d1);
 // An upright prism standing at (a, d).
 void kit_frame_prism(Kit* kit, const KitFrame* f, int mat, float a, float d, float y0, float y1,
                      float r, int sides);

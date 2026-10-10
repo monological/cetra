@@ -16761,9 +16761,18 @@ def _gametest_probe(flag, rx, case, env=None, extra=None):
 # real simplification and costs re-indexing those eleven; spec 12.5 recorded it rather
 # than doing it, since nothing else in that group was being changed.
 _AUDIO_PROBE = re.compile(r"^audio (\w+) (\w+) rms (-?[\d.]+) (-?[\d.]+)$", re.M)
-_AUDIO_NOISE = re.compile(r"^audio noise (\w+) rms (-?[\d.]+) bright (-?[\d.]+)$", re.M)
+# "audio <case> <label> rms <x> bright <y>": a level and a brightness, which the noise and the
+# pitch cases print.
+_AUDIO_BRIGHT = re.compile(r"^audio (\w+) (\w+) rms (-?[\d.]+) bright (-?[\d.]+)$", re.M)
+
+
+def _audio_bright(text, case):
+    """{label: (rms, bright)} from the rows of `case` in an --audio-probe run's output."""
+    return {label: (float(rms), float(bright))
+            for c, label, rms, bright in _AUDIO_BRIGHT.findall(text) if c == case}
+
+
 # A voice's pitch (spec 13.47): the probe plays the sine at 1, unset, and at this.
-_AUDIO_PITCH = re.compile(r"^audio pitch (\w+) rms (-?[\d.]+) bright (-?[\d.]+)$", re.M)
 AUDIO_PITCH_HIGH = 1.06
 # The zone arms (spec 13.33): the link the probe sets, how near a level must come to what a
 # link, a path or the fade predicts, and the fade's time constant and the probe's window, which
@@ -16921,7 +16930,7 @@ def run_audio_gate(workdir):
 
     # --- audio-noise -----------------------------------------------------------
     text, code = _gametest_probe_text("--audio-probe", "noise")
-    noise = {c: (float(r), float(b)) for c, r, b in _AUDIO_NOISE.findall(text)}
+    noise = _audio_bright(text, "noise")
     order = [noise.get(c, (0.0, float("nan")))[1] for c in ("white", "pink", "brown")]
     ok = (code == 0 and len(noise) == 3 and all(r > 0.02 for r, _ in noise.values())
           and order[0] > order[1] > order[2] and abs(order[0] - math.sqrt(2.0)) < 0.1)
@@ -17007,7 +17016,7 @@ def run_audio_gate(workdir):
 
     # --- audio-pitch ------------------------------------------------------------
     text, code = _gametest_probe_text("--audio-probe", "pitch", extra=["--audio-file", wav])
-    rows = {label: (float(rms), float(bright)) for label, rms, bright in _AUDIO_PITCH.findall(text)}
+    rows = _audio_bright(text, "pitch")
     if code != 0 or any(k not in rows for k in ("unset", "one", "high")):
         print("  audio-pitch FAIL  run failed or measured nothing")
         failures.append("audio-pitch")
@@ -28105,6 +28114,7 @@ GAIT_DIP_RATE = 12.0
 GAIT_SETTLE_FROM = 0.2      # gait.c's SETTLE_FROM
 GAIT_SHUFFLE_TURN = math.radians(70.0)
 GAIT_SHUFFLE_GAP = 0.35
+GAIT_CLIMB_UP = 0.29        # a climb's rate, as a share of the speed asked
 
 _GAIT_PROBE = re.compile(r"^gait (\S+) (\S+) (\S+) (.*)$", re.M)
 
@@ -28164,157 +28174,130 @@ def run_gait_gate(workdir):
     """
     failed = []
 
-    def note(name, ok):
+    def verdict(name, case, check):
+        """(ok, what it saw) for one probe case held to `check`, which takes its rows. The
+        caller prints the verdict line, whose literal name is what gate-arm-docs reads."""
+        rows = _gait_probe(case)
+        ok, said = check(rows) if rows else (False, "no probe output")
         if not ok:
             failed.append(name)
+        return ok, said
 
-    split = _gait_probe("split")
-    if not split:
-        print("  gait-split SKIP  no probe output")
-        note("gait-split", False)
-    else:
-        ends = {label: split[(label, "end")] for label in ("60", "120", "uneven")}
+    def split(r):
+        ends = {label: r[(label, "end")] for label in ("60", "120", "uneven")}
         phases = [v[0] for v in ends.values()]
         steps = {int(v[1]) for v in ends.values()}
         ok = max(phases) - min(phases) < 0.02 and len(steps) == 1
-        print(f"  gait-split {'PASS' if ok else 'FAIL'}  3 s at 1.6 m/s ends at phase "
-              f"{', '.join(f'{k} {v[0]:.4f}' for k, v in ends.items())} (want within 0.02), "
-              f"in {sorted(steps)} steps (want one count)")
-        note("gait-split", ok)
+        return ok, (f"3 s at 1.6 m/s ends at phase "
+                    f"{', '.join(f'{k} {v[0]:.4f}' for k, v in ends.items())} (want within 0.02), "
+                    f"in {sorted(steps)} steps (want one count)")
 
-    cadence = _gait_probe("cadence")
-    if not cadence:
-        print("  gait-cadence SKIP  no probe output")
-        note("gait-cadence", False)
-    else:
-        rows = []
+    def cadence(r):
+        said = []
         ok = True
         for label, speed in (("walk", 1.6), ("jog", 3.4)):
             want = 60.0 * speed / (GAIT_STEP_BASE + GAIT_STEP_PER_SPEED * speed)
-            got = cadence[(label, "rate")][0]
+            got = r[(label, "rate")][0]
             ok = ok and abs(got - want) / want < 0.005
-            rows.append(f"{label} {got:.2f} a minute (want {want:.2f})")
-        print(f"  gait-cadence {'PASS' if ok else 'FAIL'}  " + ", ".join(rows))
-        note("gait-cadence", ok)
+            said.append(f"{label} {got:.2f} a minute (want {want:.2f})")
+        return ok, ", ".join(said)
 
-    rest = _gait_probe("rest")
-    if not rest:
-        print("  gait-rest SKIP  no probe output")
-        note("gait-rest", False)
-    else:
-        through, settles, steps = rest[("stop", "through")]
-        lag, bob = rest[("end", "offset")]
-        want_settles = 1 if through > GAIT_SETTLE_FROM else 0
-        ok = (int(settles) == want_settles == 1 and int(steps) == 0 and lag < 1e-6
+    def rest(r):
+        through, settles, steps = r[("stop", "through")]
+        lag, bob = r[("end", "offset")]
+        ok = (through > GAIT_SETTLE_FROM and int(settles) == 1 and int(steps) == 0 and lag < 1e-6
               and bob < 1e-6)
-        print(f"  gait-rest {'PASS' if ok else 'FAIL'}  stopped {through:.3f} of a step past a "
-              f"heel, it set {int(settles)} foot down (want 1) and took {int(steps)} steps "
-              f"standing (want 0); the eye's lag ended at {lag:.2e} m and the bob at {bob:.2e} "
-              f"(want under 1e-6)")
-        note("gait-rest", ok)
+        return ok, (f"stopped {through:.3f} of a step past a heel (want past {GAIT_SETTLE_FROM}), "
+                    f"it set {int(settles)} foot down (want 1) and took {int(steps)} steps "
+                    f"standing (want 0); the eye's lag ended at {lag:.2e} m and the bob at "
+                    f"{bob:.2e} (want under 1e-6)")
 
-    shuffle = _gait_probe("shuffle")
-    if not shuffle:
-        print("  gait-shuffle SKIP  no probe output")
-        note("gait-shuffle", False)
-    else:
-        count, gap = shuffle[("standing", "count")]
-        walking = shuffle[("walking", "count")][0]
+    def shuffle(r):
+        count, gap = r[("standing", "count")]
+        walking = r[("walking", "count")][0]
         want = math.floor(4.5 / GAIT_SHUFFLE_TURN)
         ok = int(count) == want and gap >= GAIT_SHUFFLE_GAP - 1e-6 and int(walking) == 0
-        print(f"  gait-shuffle {'PASS' if ok else 'FAIL'}  4.5 rad turned standing moved the "
-              f"feet {int(count)} times (want {want}), {gap:.3f} s apart at the closest (want "
-              f"{GAIT_SHUFFLE_GAP} or more); turning while walking, {int(walking)} (want 0)")
-        note("gait-shuffle", ok)
+        return ok, (f"4.5 rad turned standing moved the feet {int(count)} times (want {want}), "
+                    f"{gap:.3f} s apart at the closest (want {GAIT_SHUFFLE_GAP} or more); turning "
+                    f"while walking, {int(walking)} (want 0)")
 
-    off = _gait_probe("bob-off")
-    if not off:
-        print("  gait-bob-off SKIP  no probe output")
-        note("gait-bob-off", False)
-    else:
-        moved, lag_apart = off[("walk", "off")]
-        deepest = off[("walk", "on")][0]
+    def bob_off(r):
+        moved, lag_apart = r[("walk", "off")]
+        deepest = r[("walk", "on")][0]
         ok = int(moved) == 0 and lag_apart == 0.0 and deepest < -0.019
-        print(f"  gait-bob-off {'PASS' if ok else 'FAIL'}  at scale 0 the head moved on "
-              f"{int(moved)} frames (want 0) and the eye's lag differed from scale 1's by "
-              f"{lag_apart:g} m (want 0, to the bit); at scale 1 it bobbed {-deepest * 100:.2f} cm")
-        note("gait-bob-off", ok)
+        return ok, (f"at scale 0 the head moved on {int(moved)} frames (want 0) and the eye's lag "
+                    f"differed from scale 1's by {lag_apart:g} m (want 0, to the bit); at scale 1 "
+                    f"it bobbed {-deepest * 100:.2f} cm")
 
-    trough = _gait_probe("trough")
-    if not trough:
-        print("  gait-trough SKIP  no probe output")
-        note("gait-trough", False)
-    else:
-        depth, falls = trough[("walk", "depth")]
-        leaned, leans = trough[("walk", "lean")]
+    def trough(r):
+        depth, falls = r[("walk", "depth")]
+        leaned, leans = r[("walk", "lean")]
         ok = depth > 0.99 and int(falls) >= 8 and int(leaned) == int(leans) and leans >= 8
-        print(f"  gait-trough {'PASS' if ok else 'FAIL'}  over {int(falls)} footfalls the head "
-              f"was at least {depth:.4f} of the way down its bob (want over 0.99), and leaned "
-              f"toward the foot that came down after {int(leaned)} of {int(leans)}")
-        note("gait-trough", ok)
+        return ok, (f"over {int(falls)} footfalls the head was at least {depth:.4f} of the way "
+                    f"down to the lowest of its step (want over 0.99), and leaned toward the foot "
+                    f"that came down after {int(leaned)} of {int(leans)}")
 
-    spring = _gait_probe("spring")
-    if not spring:
-        print("  gait-spring SKIP  no probe output")
-        note("gait-spring", False)
-    else:
+    def spring(r):
         worst = max(abs(lag - _gait_spring(-0.15, GAIT_EYE_RATE, t))
-                    for t, lag in (spring[("kerb", frames)] for frames in ("1", "6", "12")))
-        up, down = spring[("clamp", "held")]
-        t_air, air = spring[("air", "3")]
+                    for t, lag in (r[("kerb", frames)] for frames in ("1", "6", "12")))
+        up, down = r[("clamp", "held")]
+        t_air, air = r[("air", "3")]
         air_off = abs(air - _gait_spring(-0.15, GAIT_EYE_AIR_RATE, t_air))
         clamped = abs(up + GAIT_LAG_BELOW) < 1e-5 and abs(down - GAIT_LAG_ABOVE) < 1e-5
         ok = worst < 1e-5 and clamped and air_off < 1e-5
-        print(f"  gait-spring {'PASS' if ok else 'FAIL'}  a 15 cm kerb taken up off the closed "
-              f"form by at most {worst:.2e} m over 12 frames; a 40 cm rise held at {up} and a 30 "
-              f"cm drop at {down} (want -{GAIT_LAG_BELOW} and {GAIT_LAG_ABOVE}); in the air, "
-              f"{air_off:.2e} off at 3 frames (want both under 1e-5)")
-        note("gait-spring", ok)
+        return ok, (f"a 15 cm kerb taken up off the closed form by at most {worst:.2e} m over 12 "
+                    f"frames; a 40 cm rise held at {up} and a 30 cm drop at {down} (want "
+                    f"-{GAIT_LAG_BELOW} and {GAIT_LAG_ABOVE}); in the air, {air_off:.2e} off at 3 "
+                    f"frames (want both under 1e-5)")
 
-    flight = _gait_probe("flight")
-    if not flight:
-        print("  gait-flight SKIP  no probe output")
-        note("gait-flight", False)
-    else:
-        steps, want_steps = flight[("ramp", "steps")]
-        pace, stairs, bob, grade, climb = flight[("mid", "state")]
-        ok = (abs(steps - want_steps) <= 1 and abs(pace - climb / grade) < 1e-5
+    def flight(r):
+        steps = r[("ramp", "steps")][0]
+        pace, stairs, bob, grade = r[("mid", "state")]
+        ok = (abs(steps - 15) <= 1 and abs(pace - GAIT_CLIMB_UP / grade) < 1e-5
               and stairs == 1.0 and bob == 0.0 and abs(grade - 2.85 / 3.75) < 0.05 * 2.85 / 3.75)
-        print(f"  gait-flight {'PASS' if ok else 'FAIL'}  {int(steps)} steps up 15 risers (want "
-              f"15 within 1); half way the grade was {grade:.4f} (want {2.85 / 3.75:.4f} within "
-              f"5%), the pace {pace:.5f} (want climb / grade = {climb / grade:.5f}), the flight "
-              f"counted at {stairs:g} (want 1) and the bob at {bob:g} (want 0)")
-        note("gait-flight", ok)
+        return ok, (f"{int(steps)} steps up 15 risers (want 15 within 1); half way the grade was "
+                    f"{grade:.4f} (want {2.85 / 3.75:.4f} within 5%), the pace {pace:.5f} (want "
+                    f"{GAIT_CLIMB_UP} / grade = {GAIT_CLIMB_UP / grade:.5f}), the flight counted "
+                    f"at {stairs:g} (want 1) and the bob at {bob:g} (want 0)")
 
-    land = _gait_probe("land")
-    if not land:
-        print("  gait-land SKIP  no probe output")
-        note("gait-land", False)
-    else:
-        lands, first = land[("fall", "kinds")]
-        dip, when = land[("fall", "dip")]
+    def land(r):
+        lands, first = r[("fall", "kinds")]
+        dip, when = r[("fall", "dip")]
         want = -GAIT_DIP_PER_SPEED * 2.0
         ok = (int(lands) == 1 and int(first) == 1 and abs(dip - want) < 0.01 * abs(want)
               and abs(when - 1.0 / GAIT_DIP_RATE) <= 0.5 / 60.0 + 1e-6)
-        print(f"  gait-land {'PASS' if ok else 'FAIL'}  {int(lands)} landing (want 1), "
-              f"{'on' if first else 'NOT on'} the frame it landed; the eye dipped "
-              f"{dip * 100:.3f} cm at {when:.4f} s (want {want * 100:.3f} at "
-              f"{1.0 / GAIT_DIP_RATE:.4f})")
-        note("gait-land", ok)
+        return ok, (f"{int(lands)} landing (want 1), {'on' if first else 'NOT on'} the frame it "
+                    f"landed; the eye dipped {dip * 100:.3f} cm at {when:.4f} s (want "
+                    f"{want * 100:.3f} at {1.0 / GAIT_DIP_RATE:.4f})")
 
-    hitch = _gait_probe("hitch")
-    if not hitch:
-        print("  gait-hitch SKIP  no probe output")
-        note("gait-hitch", False)
-    else:
-        fell, crossed = hitch[("frame", "fell")]
-        zero_fell, moved = hitch[("zero", "fell")]
+    def hitch(r):
+        fell, crossed = r[("frame", "fell")]
+        zero_fell, moved = r[("zero", "fell")]
         ok = int(fell) == 1 and crossed >= 2 and int(zero_fell) == 0 and moved == 0.0
-        print(f"  gait-hitch {'PASS' if ok else 'FAIL'}  a quarter-second frame across "
-              f"{int(crossed)} heel strikes let {int(fell)} foot fall (want 1); a frame of no "
-              f"time let {int(zero_fell)} fall and moved the stride {moved:g} (want 0 and 0)")
-        note("gait-hitch", ok)
+        return ok, (f"a quarter-second frame across {int(crossed)} heel strikes let {int(fell)} "
+                    f"foot fall (want 1); a frame of no time let {int(zero_fell)} fall and moved "
+                    f"the stride {moved:g} (want 0 and 0)")
 
+    ok, said = verdict("gait-split", "split", split)
+    print(f"  gait-split {'PASS' if ok else 'FAIL'}  {said}")
+    ok, said = verdict("gait-cadence", "cadence", cadence)
+    print(f"  gait-cadence {'PASS' if ok else 'FAIL'}  {said}")
+    ok, said = verdict("gait-rest", "rest", rest)
+    print(f"  gait-rest {'PASS' if ok else 'FAIL'}  {said}")
+    ok, said = verdict("gait-shuffle", "shuffle", shuffle)
+    print(f"  gait-shuffle {'PASS' if ok else 'FAIL'}  {said}")
+    ok, said = verdict("gait-bob-off", "bob-off", bob_off)
+    print(f"  gait-bob-off {'PASS' if ok else 'FAIL'}  {said}")
+    ok, said = verdict("gait-trough", "trough", trough)
+    print(f"  gait-trough {'PASS' if ok else 'FAIL'}  {said}")
+    ok, said = verdict("gait-spring", "spring", spring)
+    print(f"  gait-spring {'PASS' if ok else 'FAIL'}  {said}")
+    ok, said = verdict("gait-flight", "flight", flight)
+    print(f"  gait-flight {'PASS' if ok else 'FAIL'}  {said}")
+    ok, said = verdict("gait-land", "land", land)
+    print(f"  gait-land {'PASS' if ok else 'FAIL'}  {said}")
+    ok, said = verdict("gait-hitch", "hitch", hitch)
+    print(f"  gait-hitch {'PASS' if ok else 'FAIL'}  {said}")
     return failed
 
 

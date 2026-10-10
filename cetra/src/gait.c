@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "animation.h"
 #include "ext/log.h"
 #include "gait.h"
 
@@ -120,25 +121,39 @@ static void spring(float* x, float* v, float w, float dt) {
     *v = (*v - w * c * dt) * e;
 }
 
+// Heels struck by a phase: it passes x.5 as each comes down.
+static float heels(float phase) {
+    return floorf(phase - 0.5f);
+}
+
+// The first foot offered in a frame is the one heard: a frame long enough for two is a hitch, and
+// two footsteps at once would say so.
+static void offer(Gait* g, GaitFallKind kind, int foot, float speed) {
+    if (g->footfall.kind != GAIT_FALL_NONE)
+        return;
+    g->footfall = (GaitFootfall){kind, foot, speed};
+    g->since = 0.0f;
+}
+
+const char* gait_fall_name(GaitFallKind kind) {
+    static const char* NAMES[GAIT_FALL_KINDS] = {"none", "step", "settle", "shuffle", "land"};
+    return (unsigned)kind < GAIT_FALL_KINDS ? NAMES[kind] : NAMES[GAIT_FALL_NONE];
+}
+
 void gait_frame(Gait* g, const vec3 move, bool grounded, float yaw, float dt) {
     if (!g) {
         log_error("gait_frame: NULL gait");
         return;
     }
-    g->fell = false;
+    g->footfall = (GaitFootfall){GAIT_FALL_NONE, 0, 0.0f};
     if (dt <= 0.0f)
         return;
     g->since += dt;
     const float run = hypotf(move[0], move[2]);
     g->speed += (run / dt - g->speed) * (1.0f - expf(-dt / g->speed_time));
 
-    // The first foot to come down this frame is the one heard: a frame long enough for two is a
-    // hitch, and two footsteps at once would say so.
-    GaitFootfall fall = {GAIT_FALL_STEP, 0, 0.0f};
-    bool falls = false;
     if (g->landing > 0.0f) {
-        fall = (GaitFootfall){GAIT_FALL_LAND, 0, g->landing};
-        falls = true;
+        offer(g, GAIT_FALL_LAND, 0, g->landing);
         // Pushed down at a speed that bottoms out at `depth` a 1/rate later.
         const float depth = fminf(g->dip_per_speed * g->landing, g->dip_max);
         g->dip_v -= depth * g->dip_rate * GLM_Ef;
@@ -148,36 +163,30 @@ void gait_frame(Gait* g, const vec3 move, bool grounded, float yaw, float dt) {
     if (grounded) {
         const float w = g->stairs;
         const float step = g->step_base + g->step_per_speed * g->speed;
-        const float before = floorf(g->phase - 0.5f);
+        const float before = heels(g->phase);
         g->phase += (1.0f - w) * run / step + w * (2.0f * fabsf(move[1]) + run) / g->flight_step;
-        const float after = floorf(g->phase - 0.5f);
-        if (after > before && !falls) {
-            fall = (GaitFootfall){GAIT_FALL_STEP, (int)after & 1, g->speed};
-            falls = true;
-        }
+        if (heels(g->phase) > before)
+            offer(g, GAIT_FALL_STEP, (int)heels(g->phase) & 1, g->speed);
     }
 
     const bool moving = g->speed > g->stop_speed * (g->moving ? 1.0f : START_MARGIN);
     if (g->moving && !moving && grounded) {
-        const float through = g->phase - 0.5f - floorf(g->phase - 0.5f);
+        const float through = g->phase - 0.5f - heels(g->phase);
         if (through > SETTLE_FROM) {
             g->phase += 1.0f - through;
-            if (!falls) {
-                fall = (GaitFootfall){GAIT_FALL_SETTLE, (int)floorf(g->phase - 0.5f) & 1, g->speed};
-                falls = true;
-            }
+            offer(g, GAIT_FALL_SETTLE, (int)heels(g->phase) & 1, g->speed);
         }
     }
     g->moving = moving;
     if (g->phase > PHASE_WRAP)
         g->phase -= PHASE_WRAP;
 
-    // Turning on the spot moves the feet too.
+    // Turning on the spot moves the feet too. A foot already down this frame has just reset
+    // `since`, which keeps a shuffle off it.
     if (g->yawed && grounded && !moving) {
-        g->turned += fabsf(remainderf(yaw - g->yaw, 2.0f * GLM_PIf));
-        if (g->turned >= g->shuffle_turn && g->since >= g->shuffle_gap && !falls) {
-            fall = (GaitFootfall){GAIT_FALL_SHUFFLE, g->shuffles++ & 1, 0.0f};
-            falls = true;
+        g->turned += fabsf(wrap_pi(yaw - g->yaw));
+        if (g->turned >= g->shuffle_turn && g->since >= g->shuffle_gap) {
+            offer(g, GAIT_FALL_SHUFFLE, g->shuffles++ & 1, 0.0f);
             g->turned = 0.0f;
         }
     } else {
@@ -186,17 +195,11 @@ void gait_frame(Gait* g, const vec3 move, bool grounded, float yaw, float dt) {
     g->yaw = yaw;
     g->yawed = true;
 
-    if (falls) {
-        g->footfall = fall;
-        g->fell = true;
-        g->since = 0.0f;
-    }
-
     // The body's rise is the eye's lag until the spring takes it up.
     g->lag = glm_clamp(g->lag - move[1], -g->lag_below, g->lag_above);
     spring(&g->lag, &g->lag_v, grounded ? g->eye_rate : g->eye_air_rate, dt);
     spring(&g->dip, &g->dip_v, g->dip_rate, dt);
-    glm_vec3_copy((vec3){0.0f, g->lag + g->dip, 0.0f}, g->smooth_offset);
+    g->smooth_offset = g->lag + g->dip;
 
     // The head over the feet: at its height over the standing foot at a whole phase, its lowest
     // as the next heel strikes, and over the foot that struck at x.5 by the next whole phase --

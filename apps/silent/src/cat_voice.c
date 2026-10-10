@@ -6,9 +6,7 @@
 
 #include "cat_clips.h"
 #include "cat_places.h"
-#include "interior.h"
 #include "kit.h"
-#include "layout.h"
 #include "mansion.h"
 #include "sounds.h"
 
@@ -53,12 +51,11 @@ static void play(CatVoice* v, const Sound* s, const vec3 at, float volume) {
 }
 
 // Whether its feet are on a rug, a runner or the window seat's cushion, where a paw makes no
-// sound. Those are in the house's plan, which the mansion stands at.
+// sound.
 static bool on_cloth(const Cat* cat) {
     vec3 feet = {0.0f, 0.0f, 0.0f};
     cat_feet(cat, feet);
-    const vec3 plan = {feet[0] - MANSION_X, feet[1] - MANSION_Y, feet[2] - MANSION_Z};
-    return interior_on_cloth(plan) || mansion_on_cloth(plan);
+    return mansion_cloth_at(feet);
 }
 
 // A paw on the rail is quieter than on the boards, and on cloth it makes no sound at all.

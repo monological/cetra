@@ -483,15 +483,15 @@ static void floors(Kit* kit) {
     vec2 notch[KIT_MAX_OUTLINE];
     int n = tower_notch(HOUSE_X0, HOUSE_FRONT_Z, HALL_X0, KITCHEN_BACK_Z, TOWER_APOTHEM, notch);
     kit_slab(kit, MAT_WOOD_FLOOR, notch, n, 0.0f, FLOOR_Y, false);
-    kit_frame_box(kit, w, KIT_COLLIDER_ONLY, HOUSE_X0, HALL_X0, 0.0f, FLOOR_Y, HOUSE_FRONT_Z,
-                  KITCHEN_BACK_Z, true);
+    kit_frame_floor(kit, w, MAT_WOOD_FLOOR, HOUSE_X0, HALL_X0, 0.0f, FLOOR_Y, HOUSE_FRONT_Z,
+                    KITCHEN_BACK_Z);
 
     // Between the storeys, over the whole front band, and the attic's floor over that.
     n = tower_notch(HOUSE_X0, HOUSE_FRONT_Z, HOUSE_X1, KITCHEN_BACK_Z, TOWER_APOTHEM, notch);
     kit_slab(kit, MAT_CEILING, notch, n, CEIL_Y, CEIL_Y + SLAB, false);
     kit_slab(kit, MAT_WOOD_FLOOR, notch, n, CEIL_Y + SLAB, FLOOR2_Y, false);
-    kit_frame_box(kit, w, KIT_COLLIDER_ONLY, HOUSE_X0, HOUSE_X1, CEIL_Y, FLOOR2_Y, HOUSE_FRONT_Z,
-                  KITCHEN_BACK_Z, true);
+    kit_frame_floor(kit, w, MAT_WOOD_FLOOR, HOUSE_X0, HOUSE_X1, CEIL_Y, FLOOR2_Y, HOUSE_FRONT_Z,
+                    KITCHEN_BACK_Z);
     // The upper ceiling runs in under the tower's walls to their inner face, and the walls that
     // close the study's tall bay off from the attic stand on it: walls starting level with its
     // underside put their feet in that plane, and the two fought.

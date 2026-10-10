@@ -31,9 +31,6 @@ float lake_shore_distance(float x, float z);
 // How far (x, z) is from the track's centre line.
 float lake_track_distance(float x, float z);
 
-// Whether a point stands on the dock's deck.
-bool lake_on_dock(const float p[3]);
-
 // The shoreline on bearing `theta` from the lake's middle, and the track's centre line at `t` of
 // its length, 0 on the cross street's asphalt and 1 on the cabin's pad.
 void lake_shore_point(float theta, float* x, float* z);

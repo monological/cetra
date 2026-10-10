@@ -222,8 +222,8 @@ static void floor_and_ties(Kit* kit) {
                   CABIN_FLOOR_Y - 0.04f, CABIN_Z0 - 0.15f, CABIN_Z1 + 0.15f, true);
     kit_frame_box(kit, w, MAT_PORCH, CABIN_X0, CABIN_X1, CABIN_FLOOR_Y - 0.04f, CABIN_FLOOR_Y,
                   CABIN_Z0, CABIN_Z1, false);
-    kit_frame_box(kit, w, KIT_COLLIDER_ONLY, CABIN_X0, CABIN_X1, CABIN_PAD_Y, CABIN_FLOOR_Y,
-                  CABIN_Z0, CABIN_Z1, true);
+    kit_frame_floor(kit, w, MAT_PORCH, CABIN_X0, CABIN_X1, CABIN_PAD_Y, CABIN_FLOOR_Y, CABIN_Z0,
+                    CABIN_Z1);
     for (int i = 0; i < 3; i++) {
         const float x = CABIN_X0 + 1.1f + 1.4f * (float)i;
         log_piece(kit, (vec3){x, CABIN_EAVE_Y - 0.12f, CABIN_Z0 - LOG_RUN},

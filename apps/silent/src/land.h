@@ -19,6 +19,9 @@ float land_height(float x, float z);
 
 // Whether the ground's facet at (x, z) is too steep to hold soil: where it shows the rock.
 bool land_too_steep(float x, float z);
+// The material the ground's facet at (x, z) is drawn in: the yard's, the woods' floor, the shore's
+// mud or the rock.
+int land_mat_at(float x, float z);
 
 // Where the ground ends at the chasm along the line z: west of it there is none, as far south as
 // RIDGE_Z, where the lip turns west.

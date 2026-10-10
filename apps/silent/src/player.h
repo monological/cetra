@@ -37,18 +37,14 @@ typedef struct Player {
     bool cursor_captured;  // what the window has
     bool skip_first_delta; // the first delta after a capture is a jump, not a movement
     vec3 step_from;   // where the capsule was when this fixed step began: the last step's result
-    vec2 move;        // the horizontal velocity asked of the body, x and z, as it ramps
+    float speed;      // the horizontal speed asked of the body, m/s, as it ramps
+    float heading;    // and the way it goes, radians about +Y, facing (sin, 0, cos)
     vec3 view;        // where the capsule is drawn this frame, between the last two steps
-    vec3 drawn;       // and where it was drawn the frame before, for the gait's frame move
     vec3 reach_from;  // the eye a hand reaches from: the body's, which no lag or bob moves
-    double frame_at;  // the render clock at the last frame: game time and what is accumulated
-    float frame_dt;   // seconds by that clock since the frame before
-    bool interpolate; // draw the body between steps; false draws it at the last (--no-interp)
+    bool interpolate; // draw the body between steps; false draws it at the last
     Gait* gait;       // the stride, the footfalls, the eye's lag and the pace on a climb
-    bool use_gait;    // the gait moves the eye and paces a climb (--no-gait clears it)
-    bool trace;       // print every step's move and every frame's eye (--trace-gait)
-    int steps;        // fixed steps run, for the trace
-    int frames;       // frames drawn, for the trace
+    bool use_gait;    // the gait moves the eye and paces a climb
+    bool trace;       // print every step's move and every frame's eye
 } Player;
 
 // Stands the capsule on the floor at `feet`, looking along `yaw` and `pitch` (radians, the rig's
@@ -56,15 +52,15 @@ typedef struct Player {
 void player_init(Player* p, Game* game, PhysicsWorld* physics, EntityManager* em, const vec3 feet,
                  float yaw, float pitch);
 
+// Frees what player_init made; the entity and the rig are the game's and the engine's.
+void player_free(Player* p);
+
 // Fixed step: turns the move actions into the capsule's velocity.
 void player_update(Player* p, Game* game, double dt);
 
-void player_free(Player* p);
-
-// Per rendered frame, with the game's interpolant: the look, the cursor, and the rig onto the
-// head. Under a pin, the camera is held at eye/target instead.
-void player_pre_render(Player* p, Game* game, double alpha, const vec3* pin_eye,
-                       const vec3* pin_target);
+// Per rendered frame: the body drawn between the last two steps, the gait, the look, the cursor,
+// and the rig onto the head. Under a pin, the camera is held at eye/target instead.
+void player_pre_render(Player* p, Game* game, const vec3* pin_eye, const vec3* pin_target);
 
 // Where the eye is this frame, and which way it looks.
 void player_eye(const Player* p, vec3 eye, vec3 forward);
