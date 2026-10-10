@@ -145,9 +145,13 @@ void player_update(Player* p, Game* game, double dt) {
     p->steps++;
     glm_vec3_copy(p->entity->position, p->step_from);
 
-    // A climb is taken at the pace a person keeps on it.
-    if (p->use_gait)
-        glm_vec3_scale(want, p->gait->pace, want);
+    // A climb is taken at the pace a person keeps on it. Jolt slides the capsule up a slope at the
+    // speed asked times the slope's cosine, and that is the run times the cosine again: 1.01 m/s
+    // of 1.6 up the mansion's flight, traced. Asked for the more, the run is the pace's.
+    if (p->use_gait) {
+        const float up = fmaxf(p->gait->grade, 0.0f);
+        glm_vec3_scale(want, p->gait->pace * (1.0f + up * up), want);
+    }
     ramp_move(p, want, grounded, (float)dt);
     // The ramp is kept here rather than read back, since Jolt cancels what pushes into steep
     // ground. Zero vertical on the ground: any residual downward speed is resolved along a slope
