@@ -34,7 +34,7 @@ static const struct {
     [FOOT_WATER] = {"water", 1.0f},
 };
 
-#define STEP_VOLUME   0.3f // a walking step on boards
+#define STEP_VOLUME   0.6f // a walking step on boards
 #define SETTLE_SHARE  0.6f // the foot set down beside the other as the body stops
 #define SHUFFLE_SHARE 0.4f // a foot moved round turning on the spot
 #define LAND_PER_FALL 0.2f // a landing, louder by this for each m/s it came down at
