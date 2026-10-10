@@ -191,10 +191,12 @@ void player_pre_render(Player* p, Game* game, double alpha, const vec3* pin_eye,
                f->foot ? "right" : "left", (double)f->speed);
     }
     if (p->trace)
-        printf("gait frame %5d feet %.4f eye %.4f phase %.3f speed %.3f\n", p->frames,
-               (double)(p->view[1] - CAPSULE_REST),
-               (double)(p->view[1] + p->gait->smooth_offset[1] + p->rig->look_lift),
-               (double)p->gait->phase, (double)p->gait->speed);
+        printf("gait frame %5d feet %.4f eye %.4f phase %.3f speed %.3f bob %+.4f %+.4f %+.4f\n",
+               p->frames, (double)(p->view[1] - CAPSULE_REST),
+               (double)(p->view[1] + p->gait->smooth_offset[1] + p->gait->bob_offset[1] +
+                        p->rig->look_lift),
+               (double)p->gait->phase, (double)p->gait->speed, (double)p->gait->bob_offset[0],
+               (double)p->gait->bob_offset[1], (double)p->gait->bob_offset[2]);
     p->frames++;
     // What a hand reaches from: the body's own eye, which no lag or bob moves.
     glm_vec3_copy(p->view, p->reach_from);
@@ -225,8 +227,10 @@ void player_pre_render(Player* p, Game* game, double alpha, const vec3* pin_eye,
     set_cursor_captured(p, engine, p->cursor_wanted && !held);
 
     glm_vec3_copy(p->view, p->rig->anchor);
-    if (p->use_gait)
+    if (p->use_gait) {
         glm_vec3_add(p->rig->anchor, p->gait->smooth_offset, p->rig->anchor);
+        glm_vec3_add(p->rig->anchor, p->gait->bob_offset, p->rig->anchor);
+    }
     camera_rig_update(p->rig, p->frame_dt, input_action_value(&game->input, "look_x"),
                       input_action_value(&game->input, "look_y"));
 }

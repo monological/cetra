@@ -53,6 +53,12 @@ Gait* create_gait(void) {
     g->dip_rate = 12.0f;
     g->shuffle_turn = glm_rad(70.0f);
     g->shuffle_gap = 0.35f;
+    // About half a body's own: 2 cm at a walk of 1.6 m/s, 3.5 at a jog, and a centimetre of sway.
+    g->bob_per_speed = 0.0125f;
+    g->bob_max = 0.035f;
+    g->sway = 0.01f;
+    g->sway_speed = 1.0f;
+    g->bob_scale = 1.0f;
     gait_reset(g);
     return g;
 }
@@ -190,4 +196,14 @@ void gait_frame(Gait* g, const vec3 move, bool grounded, float yaw, float dt) {
     spring(&g->lag, &g->lag_v, grounded ? g->eye_rate : g->eye_air_rate, dt);
     spring(&g->dip, &g->dip_v, g->dip_rate, dt);
     glm_vec3_copy((vec3){0.0f, g->lag + g->dip, 0.0f}, g->smooth_offset);
+
+    // The head over the feet: at its height over the standing foot at a whole phase, its lowest
+    // as the next heel strikes, and over the foot that struck at x.5 by the next whole phase --
+    // the left on an odd one, which is cos(pi * phase) = -1, the body's left.
+    const float level = (1.0f - g->stairs) * g->bob_scale;
+    const float rise = fminf(g->bob_per_speed * g->speed, g->bob_max) * level;
+    const float across =
+        0.5f * g->sway * fminf(g->speed / g->sway_speed, 1.0f) * level * cosf(GLM_PIf * g->phase);
+    const float down = 0.5f * rise * (1.0f - cosf(2.0f * GLM_PIf * g->phase));
+    glm_vec3_copy((vec3){-cosf(yaw) * across, -down, sinf(yaw) * across}, g->bob_offset);
 }

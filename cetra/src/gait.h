@@ -27,6 +27,14 @@
  * than `lag_below` nor above than `lag_above` -- the second smaller, so a low ceiling over a
  * flight going down is never put through. In the air it catches up at once, near enough.
  *
+ * THE HEAD RISES AND FALLS OVER THE FEET, and is moved, never turned. It is lowest as a heel
+ * strikes, highest over the standing foot, and swayed toward that foot once a stride. A body's
+ * centre rises and falls 4 to 5 cm walking and 6 to 8 jogging, and sways 2 to 4 cm; the defaults
+ * are about half, since the eyes turn against the head's motion to hold what they look at, and a
+ * camera carried at a body's full excursion reads as far more than a person feels. Nothing pitches
+ * or rolls the view, which is what makes a bob sickening: a move alone leaves the far distance
+ * still and only the near ground swims. It fades out on a flight, whose climb is its own rise.
+ *
  * NO GL, NO PHYSICS, NO CLOCK and no game type, as camera_rig.h, so an arm can drive it with no
  * window at all.
  */
@@ -58,6 +66,7 @@ typedef struct Gait {
     float speed;           // ground speed, smoothed, m/s
     vec3 smooth_offset;    // where the eye goes from where the body puts it: its lag on the
                            // ground's height, and a landing's dip
+    vec3 bob_offset;       // and where the head goes over the feet as they walk
     bool fell;             // a foot came down this frame
     GaitFootfall footfall; // which, while `fell`
     // The two halves' own state.
@@ -93,6 +102,11 @@ typedef struct Gait {
     float dip_rate;                  // rad/s of the dip's spring
     float shuffle_turn;              // radians turned standing for a shuffle step
     float shuffle_gap;               // the fewest seconds between two
+    float bob_per_speed;             // the head's rise and fall, top to bottom, m per m/s
+    float bob_max;                   // and the most it comes to, m
+    float sway;                      // its sway from one foot to the other, side to side, m
+    float sway_speed;                // the speed the sway is all there by, m/s
+    float bob_scale; // the player's: 1 as authored, 0 no bob at all, exactly as though none
 } Gait;
 
 // A gait standing still, with the settings above at the values they are argued for in gait.c.
@@ -107,8 +121,8 @@ void gait_reset(Gait* g);
 void gait_step(Gait* g, const vec3 move, bool grounded, float speed_asked, float dt);
 
 // A rendered frame's move -- the body as drawn this frame less as drawn the last -- whether the
-// last step ended on the ground, the body's heading (radians about +Y) and the frame's seconds.
-// A frame of no time changes nothing and lets no foot fall.
+// last step ended on the ground, the body's heading (radians about +Y, facing (sin, 0, cos)) and
+// the frame's seconds. A frame of no time changes nothing and lets no foot fall.
 void gait_frame(Gait* g, const vec3 move, bool grounded, float yaw, float dt);
 
 #endif // _GAIT_H_
