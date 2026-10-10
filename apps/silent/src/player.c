@@ -22,6 +22,14 @@
 #define SPRINT_SPEED 3.4f
 #define GRAVITY      9.81f
 
+// Getting going and stopping (spec 13.47): the speed ramps, quicker down than up, while the way it
+// goes turns fast, so a turn of the head does not skid like ice.
+#define ACCEL       5.0f  // m/s^2: a walk is reached in a third of a second
+#define BRAKE       8.0f  // m/s^2
+#define TURN_RATE   10.0f // rad/s the way it goes turns toward the way it is asked to
+#define REVERSE     1.75f // radians: asked round further than this, it stops before going back
+#define AIR_CONTROL 0.2f  // the share of those it keeps with no ground under it
+
 #define PITCH_LIMIT     1.45f
 #define MOUSE_LOOK_RATE 0.0022f // radians per pixel
 
@@ -55,7 +63,11 @@ void player_init(Player* p, Game* game, PhysicsWorld* physics, EntityManager* em
     cc.step_height = 0.25f;
     cc.max_slope_angle = glm_rad(50.0f);
     entity_add_character_controller(p->entity, physics, &cc);
+    // A window's first frame may run no step, and is drawn from here.
     glm_vec3_copy(p->entity->position, p->step_from);
+    glm_vec3_copy(p->entity->position, p->view);
+    p->frame_at = game->time + game->accumulator;
+    p->interpolate = true;
 
     p->rig = create_camera_rig();
     p->rig->steers_controls = true;
@@ -66,6 +78,35 @@ void player_init(Player* p, Game* game, PhysicsWorld* physics, EntityManager* em
     camera_rig_set_distance(p->rig, 0.0f);
     camera_rig_aim(p->rig, yaw, pitch);
     engine_set_camera_rig(game->engine, p->rig);
+}
+
+// Moves `from` toward `to` by at most `step`.
+static float approach(float from, float to, float step) {
+    return from < to ? fminf(from + step, to) : fmaxf(from - step, to);
+}
+
+// The horizontal velocity asked for this step, ramped from the last toward what the stick asks.
+static void ramp_move(Player* p, const vec3 want, bool grounded, float dt) {
+    const float control = grounded ? 1.0f : AIR_CONTROL;
+    const float asked = hypotf(want[0], want[2]);
+    float speed = hypotf(p->move[0], p->move[1]);
+    const bool moving = speed > 1e-4f;
+    float heading = moving ? atan2f(p->move[0], p->move[1]) : atan2f(want[0], want[2]);
+    if (asked > 1e-4f) {
+        const float to = atan2f(want[0], want[2]);
+        const float turn = remainderf(to - heading, 2.0f * GLM_PIf);
+        if (moving && fabsf(turn) > REVERSE) {
+            speed = fmaxf(speed - BRAKE * control * dt, 0.0f);
+        } else {
+            const float most = TURN_RATE * control * dt;
+            heading = moving ? heading + glm_clamp(turn, -most, most) : to;
+            speed = approach(speed, asked, (asked > speed ? ACCEL : BRAKE) * control * dt);
+        }
+    } else {
+        speed = fmaxf(speed - BRAKE * control * dt, 0.0f);
+    }
+    p->move[0] = speed * sinf(heading);
+    p->move[1] = speed * cosf(heading);
 }
 
 void player_update(Player* p, Game* game, double dt) {
@@ -95,24 +136,39 @@ void player_update(Player* p, Game* game, double dt) {
     vec3 right = {-cosf(yaw), 0.0f, sinf(yaw)};
     const float speed = input_action_down(&game->input, "sprint") ? SPRINT_SPEED : WALK_SPEED;
 
+    vec3 want = {0.0f, 0.0f, 0.0f};
+    glm_vec3_muladds(fwd, -input_dir[2] * speed, want);
+    glm_vec3_muladds(right, input_dir[0] * speed, want);
+    const bool grounded = character_controller_is_grounded(cc);
+    ramp_move(p, want, grounded, (float)dt);
+    // The ramp is kept here rather than read back, since Jolt cancels what pushes into steep
+    // ground. Zero vertical on the ground: any residual downward speed is resolved along a slope
+    // as a slide.
     vec3 vel;
     character_controller_get_velocity(cc, vel);
-    vec3 move = {0.0f, 0.0f, 0.0f};
-    glm_vec3_muladds(fwd, -input_dir[2] * speed, move);
-    glm_vec3_muladds(right, input_dir[0] * speed, move);
-    // SET, not accumulated, so letting go stops. Zero vertical on the ground:
-    // any residual downward speed is resolved along a slope as a slide.
-    vel[0] = move[0];
-    vel[2] = move[2];
-    if (character_controller_is_grounded(cc))
+    vel[0] = p->move[0];
+    vel[2] = p->move[1];
+    if (grounded)
         vel[1] = 0.0f;
     else
         vel[1] -= GRAVITY * (float)dt;
     character_controller_set_velocity(cc, vel);
 }
 
-void player_pre_render(Player* p, Game* game, const vec3* pin_eye, const vec3* pin_target) {
+void player_pre_render(Player* p, Game* game, double alpha, const vec3* pin_eye,
+                       const vec3* pin_target) {
     Engine* engine = game->engine;
+    // The render clock: whole steps run plus the part of one the accumulator holds. It moves every
+    // frame, where the sim clock's delta is 0 on a frame that ran no step.
+    const double now = game->time + game->accumulator;
+    p->frame_dt = (float)fmax(now - p->frame_at, 0.0);
+    p->frame_at = now;
+    // The body drawn between the last two steps, alpha of the way from the earlier: at most one
+    // step behind, and never jumping a step at a time.
+    if (p->interpolate)
+        glm_vec3_lerp(p->step_from, p->entity->position, (float)alpha, p->view);
+    else
+        glm_vec3_copy(p->entity->position, p->view);
     if (pin_eye && pin_target) {
         camera_rig_set_pose(p->rig, *pin_eye, *pin_target);
         return;
@@ -137,14 +193,18 @@ void player_pre_render(Player* p, Game* game, const vec3* pin_eye, const vec3* p
         p->cursor_wanted = true;
     set_cursor_captured(p, engine, p->cursor_wanted && !held);
 
-    glm_vec3_copy(p->entity->position, p->rig->anchor);
-    camera_rig_update(p->rig, (float)game->sim_clock.delta,
-                      input_action_value(&game->input, "look_x"),
+    glm_vec3_copy(p->view, p->rig->anchor);
+    camera_rig_update(p->rig, p->frame_dt, input_action_value(&game->input, "look_x"),
                       input_action_value(&game->input, "look_y"));
 }
 
 void player_feet(const Player* p, vec3 out) {
     glm_vec3_copy(p->entity->position, out);
+    out[1] -= CAPSULE_REST;
+}
+
+void player_view_feet(const Player* p, vec3 out) {
+    glm_vec3_copy((float*)p->view, out);
     out[1] -= CAPSULE_REST;
 }
 
