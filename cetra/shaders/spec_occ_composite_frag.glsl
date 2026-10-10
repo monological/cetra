@@ -52,18 +52,17 @@ vec4 splitOcclusionAt(vec2 uv)
 }
 
 // `spec`, the ambient specular going back at `uv`, with the share a wet surface's reflection
-// stands in for replaced by it. On anything not wet the specular goes back as it is. The read is
-// bilinear and blind to class, so where wet ground meets the catcher it can take a catcher's
-// pair, whose alpha is a Fresnel rather than a coverage; the late fold separates the classes and
-// this does not.
+// stands in for replaced by it. The read is bilinear and blind to class, so where wet ground meets
+// the catcher it can take a catcher's pair, whose alpha is a Fresnel rather than a coverage; the
+// late fold separates the classes and this does not.
 //
 // Off the edge of the frame before -- the strip a turn reveals at its leading edge -- wet ground
-// takes the nearest of that frame's reflections (spec 13.46). It used to go back as it was, what
-// --no-ssr shows, and wherever the environment's share is brighter than what the trace sees, as
-// on a wet street under a fogged night sky, that one frame flashed a strip at the leading edge
-// of every turn. The borrow fades out from WET_EDGE_REACH to twice it off the frame, so a cut
-// goes back as it was: lending one edge column to the whole frame lands further from the true
-// reflection than the environment's share does.
+// takes the nearest of that frame's reflections (spec 13.46). Taking the environment's share
+// alone there, what --no-ssr shows, flashes a strip at the leading edge of every turn wherever
+// that share is brighter than what the trace sees, as on a wet street under a fogged night sky.
+// The borrow fades out from WET_EDGE_REACH to twice it off the frame, so a cut takes the
+// environment's share: one edge column lent to the whole frame lands further from the true
+// reflection than that share does.
 const float WET_EDGE_REACH = 0.1; // of the frame: several times a fast turn's strip a frame
 vec3 wetReflection(vec2 uv, vec3 spec)
 {
@@ -71,9 +70,10 @@ vec3 wetReflection(vec2 uv, vec3 spec)
     if (!ssrMarkerIsWet(texelFetch(normalsTex, px, 0).a))
         return spec;
     vec2 prevUv = uv - texelFetch(auxTex, px, 0).xy;
-    vec2 over = max(abs(prevUv - 0.5) - 0.5, vec2(0.0));
-    float lend = 1.0 - smoothstep(WET_EDGE_REACH, 2.0 * WET_EDGE_REACH, max(over.x, over.y));
-    vec4 pair = texture(ssrPrevTex, clamp(prevUv, vec2(0.0), vec2(1.0))) * lend;
+    vec2 nearest = clamp(prevUv, vec2(0.0), vec2(1.0));
+    vec2 off = abs(prevUv - nearest);
+    float lend = 1.0 - smoothstep(WET_EDGE_REACH, 2.0 * WET_EDGE_REACH, max(off.x, off.y));
+    vec4 pair = texture(ssrPrevTex, nearest) * lend;
     return spec * (1.0 - pair.a) + pair.rgb * ssrPrevScale;
 }
 
