@@ -16762,6 +16762,9 @@ def _gametest_probe(flag, rx, case, env=None, extra=None):
 # than doing it, since nothing else in that group was being changed.
 _AUDIO_PROBE = re.compile(r"^audio (\w+) (\w+) rms (-?[\d.]+) (-?[\d.]+)$", re.M)
 _AUDIO_NOISE = re.compile(r"^audio noise (\w+) rms (-?[\d.]+) bright (-?[\d.]+)$", re.M)
+# A voice's pitch (spec 13.47): the probe plays the sine at 1, unset, and at this.
+_AUDIO_PITCH = re.compile(r"^audio pitch (\w+) rms (-?[\d.]+) bright (-?[\d.]+)$", re.M)
+AUDIO_PITCH_HIGH = 1.06
 # The zone arms (spec 13.33): the link the probe sets, how near a level must come to what a
 # link, a path or the fade predicts, and the fade's time constant and the probe's window, which
 # between them predict every window as the listener steps into the tone's zone.
@@ -16829,6 +16832,9 @@ def run_audio_gate(workdir):
                      window where AUDIO_ZONE_FADE puts it; a link opened lets it through
                      whole; a voice started in another zone is a quarter of itself
                      from its first window rather than fading down from whole
+      audio-pitch    a voice of a sine at pitch 1.06 is 1.06 times as bright as at 1,
+                     a sine's brightness being its frequency, and one with its pitch
+                     unset is the same as at 1 to the digit (spec 13.47)
 
     Falsified by hand at 13.33: audio-zone fails with the zone's gain never applied and
     with a file sound spatialized from the moment it is made, audio-zone-path with the
@@ -16998,6 +17004,24 @@ def run_audio_gate(workdir):
               f"window (want {AUDIO_ZONE_THROUGH})")
         if not ok:
             failures.append("audio-zone-fade")
+
+    # --- audio-pitch ------------------------------------------------------------
+    text, code = _gametest_probe_text("--audio-probe", "pitch", extra=["--audio-file", wav])
+    rows = {label: (float(rms), float(bright)) for label, rms, bright in _AUDIO_PITCH.findall(text)}
+    if code != 0 or any(k not in rows for k in ("unset", "one", "high")):
+        print("  audio-pitch FAIL  run failed or measured nothing")
+        failures.append("audio-pitch")
+    else:
+        ratio = rows["high"][1] / rows["one"][1]
+        ok = (abs(ratio - AUDIO_PITCH_HIGH) < 0.005 and rows["unset"] == rows["one"]
+              and rows["one"][0] > 0.05)
+        print(f"  audio-pitch {'PASS' if ok else 'FAIL'}  a voice at pitch {AUDIO_PITCH_HIGH} is "
+              f"{ratio:.4f} as bright as at 1 (want {AUDIO_PITCH_HIGH} +- 0.005, a sine's "
+              f"brightness being its frequency); unset it is "
+              f"{'the same to the digit' if rows['unset'] == rows['one'] else 'NOT the same'} as "
+              f"at 1 ({rows['unset']} and {rows['one']})")
+        if not ok:
+            failures.append("audio-pitch")
 
     return failures
 

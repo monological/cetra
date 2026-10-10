@@ -4550,6 +4550,30 @@ static int run_audio_probe(Game* game, const char* which, const char* file) {
                 printf("audio decode result rms %.6f %.6f\n", l, r);
             }
         }
+    } else if (!strcmp(which, "pitch")) {
+        // A voice of the sine three times, each played out before the next: its pitch unset, at
+        // 1 and at 1.06. A sine's brightness is its frequency, so the third is 1.06 times the
+        // second, and the first is the second.
+        Sound* proto = file ? audio_sound_from_file(audio, file, AUDIO_BUS_SFX) : NULL;
+        if (!proto) {
+            fprintf(stderr, "audio-probe pitch: needs --audio-file <wav>\n");
+            rc = 1;
+        } else {
+            static const struct {
+                const char* name;
+                float pitch;
+            } RATES[] = {{"unset", 0.0f}, {"one", 1.0f}, {"high", 1.06f}};
+            for (size_t i = 0; i < sizeof(RATES) / sizeof(RATES[0]); i++) {
+                const AudioVoiceDesc voice = {.position = {0.0f, 0.0f, -2.0f},
+                                              .pitch = RATES[i].pitch};
+                audio_play_voice(audio, proto, &voice);
+                float bright = 0.0f;
+                probe_measure(audio, &l, &r, &bright);
+                printf("audio pitch %s rms %.6f bright %.6f\n", RATES[i].name, l, bright);
+                for (int k = 0; k < 3; k++) // the rest of it, so it is not heard under the next
+                    probe_measure(audio, &l, &r, NULL);
+            }
+        }
     } else {
         fprintf(stderr, "audio-probe: unknown case '%s'\n", which);
         rc = 1;
