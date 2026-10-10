@@ -184,6 +184,7 @@ typedef struct SilentArgs {
     const char* pad_script;
     bool trace_player;
     bool trace_gait;
+    bool no_interp;
     bool no_flicker;
     bool no_static;         // the living room's set showing nothing, a faint glow and no hiss
     bool no_loading_screen; // load under a black window, with no engine screen over it
@@ -1074,6 +1075,7 @@ static void on_init(Game* game) {
     player_init(&g_player, game, physics, em, feet, atan2f(dir[0], dir[2]),
                 atan2f(dir[1], sqrtf(dir[0] * dir[0] + dir[2] * dir[2])));
     g_player.trace = g_args.trace_gait;
+    g_player.interpolate = !g_args.no_interp;
     load_seam(engine, "player");
     // Sent somewhere or holding a clip from the command line, the cat has no mind of its own.
     if (g_cat.entity && !g_args.cat_go[0] && !g_args.cat_clip[0])
@@ -1098,8 +1100,8 @@ static void on_init(Game* game) {
 }
 
 static void on_update(Game* game, double dt) {
-    // The cat first, while the player's body still holds the last step's solved velocity, which
-    // the player's own update replaces with the one it asks for.
+    // The cat first, while the player's body still holds the velocity the last step asked of it,
+    // which the player's own update replaces with this step's.
     vec3 feet = {0.0f, 0.0f, 0.0f};
     player_feet(&g_player, feet);
     cat_step(&g_cat, feet, (float)dt);
@@ -1237,7 +1239,6 @@ static void take_map(void) {
 }
 
 static void on_pre_render(Game* game, double alpha) {
-    (void)alpha;
     Engine* engine = game->engine;
     if (input_action_pressed(&game->input, "toggle_gui"))
         engine->show_gui = !engine->show_gui;
@@ -1247,9 +1248,9 @@ static void on_pre_render(Game* game, double alpha) {
         const float* c = g_cat.entity->position;
         vec3 target = {c[0], c[1] + 0.05f, c[2]};
         vec3 behind = {c[0] - 1.1f * sinf(g_cat.yaw), c[1] + 0.6f, c[2] - 1.1f * cosf(g_cat.yaw)};
-        player_pre_render(&g_player, game, &behind, &target);
+        player_pre_render(&g_player, game, alpha, &behind, &target);
     } else {
-        player_pre_render(&g_player, game, pinned ? &g_args.cam_eye : NULL,
+        player_pre_render(&g_player, game, alpha, pinned ? &g_args.cam_eye : NULL,
                           pinned ? &g_args.cam_target : NULL);
     }
 
@@ -1264,7 +1265,7 @@ static void on_pre_render(Game* game, double alpha) {
     player_eye(&g_player, eye, forward);
     // The lake's water while the eye is near it, and a wake where the player wades (spec 13.41).
     vec3 feet = {0.0f, 0.0f, 0.0f};
-    player_feet(&g_player, feet);
+    player_view_feet(&g_player, feet);
     lake_update(&g_lake, eye, feet);
 
     // The nearest thing the player is looking at in reach -- a door, the backpack on the bed or the
@@ -1292,7 +1293,8 @@ static void on_pre_render(Game* game, double alpha) {
     backpack_menu_update(&g_menu, dt);
     map_screen_update(&g_map_screen, dt, feet, forward);
     sounds_update(&g_sounds);
-    lights_update(&g_lights, g_scene, game->time, dt, eye, forward);
+    // The beam trails the head by the render clock, as the head turns each frame.
+    lights_update(&g_lights, g_scene, game->time, g_player.frame_dt, eye, forward);
     tv_update(&g_tv, game->time);
     cat_mind_frame(&g_mind, game->time);
     cat_debug_draw(&g_cat, &g_mind, engine);
@@ -1502,6 +1504,8 @@ static void print_usage(const char* prog) {
     printf("      --trace-player      Print the player's position every 30 steps\n");
     printf(
         "      --trace-gait        Print every step's move: feet, rise, run, ground and speed\n");
+    printf(
+        "      --no-interp         Draw the body where the last step left it, not between two\n");
     printf("      --no-flicker        Keep the failing ceiling tube steady\n");
     printf("      --no-static         The living room's television with nothing on it, no snow\n");
     printf("      --no-loading-screen Load under a black window, without the engine's screen\n");
@@ -1672,6 +1676,8 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
             a->trace_player = true;
         } else if (!strcmp(s, "--trace-gait")) {
             a->trace_gait = true;
+        } else if (!strcmp(s, "--no-interp")) {
+            a->no_interp = true;
         } else if (!strcmp(s, "--no-flicker")) {
             a->no_flicker = true;
         } else if (!strcmp(s, "--no-static")) {
