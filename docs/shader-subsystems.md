@@ -989,9 +989,9 @@ Unreal's and Flax's `MissedHistorySamplesCount`. On the `fog-miss` turn it takes
 other way out discards and the several-samples branch writes and returns, so the count is that
 branch rather than a second statement of when it is taken. It is drawn with colour writes off
 under an occlusion query, and made on first use. **Not every band at the leading edge of a turn
-is the fog's.** In silent the
-larger one was wet ground's reflection, which falls back to the environment's share where the
-previous frame's SSR trace does not reach (13.21's `wetReflection`).
+is the fog's.** In silent the larger one was wet ground's reflection, which fell back to the
+environment's share where the previous frame's SSR trace did not reach, until spec 13.46 had it
+take the nearest of that frame's reflections (see Rain, "Wet ground in SSR").
 
 ## Cloud shadow
 
@@ -1283,6 +1283,24 @@ visible:
   which now holds the frame before's wet reflections, so a puddle can see another's, bounded by its
   Fresnel. And the read is bilinear and blind to class, so where wet ground meets the catcher it
   can take a catcher's pair as wet; neither fixture has that border.
+- **Off the frame before's edge, wet ground takes the nearest of its reflections** (spec 13.46).
+  - **Why the edge needs it.** The strip a turn reveals at its leading edge has no previous
+    position on the frame. It used to take the environment's share alone, what `--no-ssr` shows.
+    At the edge the trace's hits fade (`edgeFade`: wet ground reflects within its own column, so
+    its hits sit at the edge too), and the reflection probe takes their weight. So wet ground at
+    the edge is the probe's reflection, and under a fogged night sky that is far darker than the
+    environment's share. Every turn in silent flashed a strip there for one frame: 0.62 codes over
+    the last fog columns, +3.4 on the rows of street. Borrowed, it is 0.08 against a floor of
+    0.05.
+  - **The borrow fades out between `WET_EDGE_REACH` (0.1 of the frame off its edge) and twice
+    that.** A cut has every position far off the frame, and lending one edge column to the whole
+    wet ground landed 1.24 codes from the true frame on a 90° cut, against 0.46 for the
+    environment's share. Past the reach a cut takes that share as it always did, and a turn of
+    up to several times the gate's rate is borrowed whole.
+  - **`rain-ssr-edge` holds it, and needs a probe.** Its rule: the wet pixels at the leading edge
+    of a turn must not sit at exactly their `--no-ssr` value, as 98% did before and 1.8% do now.
+    With no probe the pair at the edge is nearly empty, and a fallback cannot be told from a
+    reflection: the yard's own environment is too dark for one to show.
 - **Why before TAA.** Until 13.21 the late fold added the trace and SUBTRACTED the replaced share
   after TAA. What it took out was this frame's render-res specular; what it took it from TAA had
   resolved and, at a render scale, upscaled. On open ground they agreed; on a thin ripple or an

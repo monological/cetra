@@ -275,7 +275,11 @@ reflection REPLACES its share of the environment's rather than lerping the pixel
 replacement is made in the split composite, BEFORE TAA, from the frame before's trace** (spec
 13.21). Subtracted after TAA, it took this frame's share out of a frame TAA had already resolved,
 and every thin ripple and wet edge went below zero; `rain-ssr-taa` and `rain-ssr-taau` are what
-see that, since every other rain arm runs without TAA, where the two agree -- see
+see that, since every other rain arm runs without TAA, where the two agree. **Where the frame
+before did not reach -- the strip a turn reveals at its leading edge -- wet ground takes the
+nearest of its reflections** (spec 13.46): the environment's share alone flashed that strip on
+every turn in silent. The borrow fades back to that share past a tenth of the frame off its edge,
+so a cut does not lend one edge column to the whole ground, and `rain-ssr-edge` holds it -- see
 `docs/shader-subsystems.md`, Rain.
 
 **PostFX chain** (`postfx_run`): MSAA resolve -> OIT composite -> G-buffer resolves ->
