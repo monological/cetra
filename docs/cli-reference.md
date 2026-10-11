@@ -1042,9 +1042,15 @@ woods, shore or rock.
 - **`--no-footsteps`:** walks without a sound.
 - **`--footstep-say`:** plays every footstep take in turn, two a second, for an audio dump.
 - **`--trace-gait`:** prints every fixed step's move (feet, rise, run, ground state and normal,
-  speed, grade, how much of it is a flight, pace), every frame's feet, eye, phase and speed, and
-  every footfall and the surface it fell on. A surface with no recordings yet says so at startup
-  and in this trace.
+  speed, grade, how much of it is a flight, pace, whether the capsule is crouched), every frame's
+  feet, eye, phase, speed and how far the eye has gone down to a crouch, and every footfall and
+  the surface it fell on. A surface with no recordings yet says so at startup and in this trace.
+
+**Crouching** (spec 13.48). C or pad B crouches and stands, and Ctrl crouches while it is held;
+Shift asks to stand. The capsule is 1.15 m tall crouched, the eye 1.05 m up, the pace half a walk,
+the bob half and the footsteps 6 dB softer. Standing waits until there is room over the head.
+- **`--crouch`:** starts crouched, as though C had been pressed, so a headless run can show the
+  crouched eye.
 
 **Capture:** `-x`, `-f <n>`, `-S <path>`, `--screenshot-every <n>`, and `-W`/`-H` for the window
 (default 1600x900).
