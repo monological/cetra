@@ -28361,6 +28361,9 @@ def run_character_gate(workdir):
     def refused(r):
         under_stood, under_half, at = r[("under", "stood")]
         out_stood, out_half = r[("out", "stood")]
+        if int(under_stood) < 0:
+            return False, (f"the crouched capsule never got under the beam: it stopped at z "
+                           f"{at:.3f}, half-height {under_half:.3f}")
         ok = (int(under_stood) == 0 and abs(under_half - CHAR_CROUCH) < 1e-6
               and int(out_stood) == 1 and abs(out_half - CHAR_STAND) < 1e-6)
         return ok, (f"under the beam at z {at:.3f} standing was "
