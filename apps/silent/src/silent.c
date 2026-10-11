@@ -191,6 +191,7 @@ typedef struct SilentArgs {
     float climb; // the pace up and down a flight, as a share of the gait's own
     bool no_footsteps;
     bool footstep_say; // every footstep take in turn, for listening in an audio dump
+    bool crouch;       // start crouched
     bool no_flicker;
     bool no_static;         // the living room's set showing nothing, a faint glow and no hiss
     bool no_loading_screen; // load under a black window, with no engine screen over it
@@ -289,7 +290,7 @@ static const vec3 SPAWN_FEET = {4.5f, FLOOR_Y, 13.3f};
 static const vec3 SPAWN_LOOK_AT = {0.5f, 1.0f, 10.5f};
 
 // Every action, one table: input_bind takes a single table and borrows it. The
-// player reads the move, sprint, look and cursor rows by name (player.h); the
+// player reads the move, sprint, crouch, look and cursor rows by name (player.h); the
 // flashlight and the GUI are read here.
 static const InputAction ACTIONS[] = {
     {"move_x",
@@ -299,6 +300,10 @@ static const InputAction ACTIONS[] = {
      {INPUT_KEY(W, 1), INPUT_KEY(S, -1), INPUT_AXIS(LEFT_Y, -1), INPUT_PAD(DPAD_UP, 1),
       INPUT_PAD(DPAD_DOWN, -1)}},
     {"sprint", {INPUT_KEY(LEFT_SHIFT, 1), INPUT_PAD(LEFT_BUMPER, 1)}},
+    // A crouch held, and one toggled (spec 13.48). B is otherwise the screens' back, which reads
+    // only while a screen holds the game's input and these read nothing.
+    {"crouch", {INPUT_KEY(LEFT_CONTROL, 1)}},
+    {"crouch_toggle", {INPUT_KEY(C, 1), INPUT_PAD(B, 1)}},
     {"look_x", {INPUT_AXIS(RIGHT_X, 1), INPUT_KEY(RIGHT, 1), INPUT_KEY(LEFT, -1)}},
     {"look_y", {INPUT_AXIS(RIGHT_Y, -1), INPUT_KEY(UP, 1), INPUT_KEY(DOWN, -1)}},
     {"flashlight", {INPUT_KEY(F, 1), INPUT_PAD(Y, 1)}},
@@ -1087,6 +1092,7 @@ static void on_init(Game* game) {
     g_player.interpolate = !g_args.no_interp;
     g_player.use_gait = !g_args.no_gait;
     g_player.gait->bob_scale = g_args.bob;
+    g_player.crouch_latched = g_args.crouch;
     g_player.gait->climb_up *= g_args.climb;
     g_player.gait->climb_down *= g_args.climb;
     footsteps_start(&g_footsteps, g_args.no_footsteps ? NULL : game->audio, physics, &g_surfaces,
@@ -1266,7 +1272,8 @@ static void footfall(const Game* game, const vec3 feet) {
     // The rain bed knows whether the head is under open sky, a frame late.
     const Rain* rain = g_scene->rain;
     const float wetness = rain && g_rain_bed.open > 0.5f ? rain->wetness : 0.0f;
-    footsteps_fall(&g_footsteps, &g_player.gait->footfall, feet, g_player.rig->yaw, wetness);
+    footsteps_fall(&g_footsteps, &g_player.gait->footfall, feet, g_player.rig->yaw, wetness,
+                   g_player.crouched);
 }
 
 static void on_pre_render(Game* game, double alpha) {
@@ -1548,6 +1555,7 @@ static void print_usage(const char* prog) {
            "(default 1)\n");
     printf("      --no-footsteps      Walk without a sound\n");
     printf("      --footstep-say      Play every footstep take in turn, two a second\n");
+    printf("      --crouch            Start crouched, as though C had been pressed\n");
     printf("      --no-flicker        Keep the failing ceiling tube steady\n");
     printf("      --no-static         The living room's television with nothing on it, no snow\n");
     printf("      --no-loading-screen Load under a black window, without the engine's screen\n");
@@ -1614,7 +1622,8 @@ static void print_usage(const char* prog) {
     printf("      --trace-cat         Print what the cat is doing every 30 steps\n");
     printf("      --no-eyeshine       Its eyes do not throw the flashlight back\n");
     printf("  In the window: click to capture the mouse, Escape to release it. WASD\n");
-    printf("  walks, Shift hurries, the arrows or the mouse look, E opens and shuts\n");
+    printf("  walks, Shift hurries, C crouches or stands and Ctrl crouches while held,\n");
+    printf("  the arrows or the mouse look, E opens and shuts\n");
     printf("  a door you are facing or takes what is in reach, F the flashlight once\n");
     printf("  you have it, Tab opens and shuts the backpack, G shows the GUI and frees\n");
     printf("  the mouse for it while it is open.\n");
@@ -1732,6 +1741,8 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
             a->no_footsteps = true;
         } else if (!strcmp(s, "--footstep-say")) {
             a->footstep_say = true;
+        } else if (!strcmp(s, "--crouch")) {
+            a->crouch = true;
         } else if (!strcmp(s, "--no-flicker")) {
             a->no_flicker = true;
         } else if (!strcmp(s, "--no-static")) {
