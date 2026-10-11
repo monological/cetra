@@ -7817,6 +7817,10 @@ static int run_character_probe(const char* which) {
                        (double)crouched->half_height, (double)char_probe_z(crouched));
             }
         }
+        // A crouched body that never got under says so, rather than leaving the row out.
+        if (!asked)
+            printf("character beam under stood -1 %.9g %.9g\n", (double)crouched->half_height,
+                   (double)char_probe_z(crouched));
         printf("character beam standing reach %.9g\n", (double)char_probe_z(standing));
         printf("character beam crouched reach %.9g\n", (double)char_probe_z(crouched));
         const bool stood = character_controller_set_half_height(crouched, CHAR_PROBE_STAND);
