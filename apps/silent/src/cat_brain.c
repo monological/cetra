@@ -663,8 +663,8 @@ static void sense_player(CatMind* m, float dt) {
     if (m->sense_in <= 0.0f) {
         m->sense_in = SIGHT_EVERY;
         vec3 at = {0.0f, 0.0f, 0.0f}, gaze = {0.0f, 0.0f, 0.0f};
-        // Looking at the chest rather than the eyes, which the capsule's top may not reach; bent
-        // low, behind whatever stands between.
+        // Looking at the chest rather than the eyes, which the capsule's top may not reach. A
+        // crouched player's chest is lower, and so more often hidden.
         const vec3 chest = {feet[0], m->player_eye[1] - 0.4f, feet[2]};
         m->sees =
             !m->blind && cat->attached && !cat_eyes_shut(cat) && cat_eye(cat, at, gaze) &&

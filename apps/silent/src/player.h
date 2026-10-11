@@ -46,9 +46,8 @@ typedef struct Player {
     bool interpolate;    // draw the body between steps; false draws it at the last
     Gait* gait;          // the stride, the footfalls, the eye's lag and the pace on a climb
     bool use_gait;       // the gait moves the eye and paces a climb
-    bool crouched;       // the capsule is a crouch's
-    bool crouch_latched; // the toggle asks for a crouch; the held key asks besides
-    float crouch;        // 0..1, how far the eye has gone down toward a crouch's
+    bool crouch_toggled; // the toggle asks for a crouch; the held key asks besides
+    float crouch_eased;  // 0..1, how far the eye has gone down toward a crouch's
     bool trace;          // print every step's move and every frame's eye
 } Player;
 
@@ -73,6 +72,10 @@ void player_eye(const Player* p, vec3 eye, vec3 forward);
 // How high the body's eye is over its feet, metres: lower as it crouches, and not moved by the
 // stride or a pinned camera.
 float player_eye_height(const Player* p);
+
+// Whether the body is crouched: its capsule a crouch's, which it stays until there is room to
+// stand.
+bool player_crouched(const Player* p);
 
 // How far the eye is from `at` when a hand can go to it -- near enough and looked at -- and
 // FLT_MAX when it cannot.

@@ -5,6 +5,8 @@
 
 #include <Jolt/Jolt.h>
 
+#include "jolt_handles.hpp"
+
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
 #include <Jolt/Physics/Constraints/SwingTwistConstraint.h>
@@ -18,18 +20,6 @@ extern "C" {
 #include "ragdoll_jolt.h"
 #include "ext/log.h"
 }
-
-namespace {
-
-// JoltCImpl's OPAQUE_WRAPPER idiom (JoltC.cpp), restated locally: the two types
-// are the same object seen from two languages. physics_cook.cpp does this for
-// JPC_Shape; the physics world already holds the system handle, so nothing new
-// is plumbed to reach it.
-inline JPH::PhysicsSystem* to_jph(JPC_PhysicsSystem* system) {
-    return reinterpret_cast<JPH::PhysicsSystem*>(system);
-}
-
-} // namespace
 
 struct JoltRagdoll {
     JPH::Ref<JPH::RagdollSettings> settings;
@@ -223,5 +213,5 @@ extern "C" int jolt_ragdoll_world_body_count(const JPC_PhysicsSystem* system) {
     if (!system) {
         return 0;
     }
-    return (int)reinterpret_cast<const JPH::PhysicsSystem*>(system)->GetNumBodies();
+    return (int)to_jph(system)->GetNumBodies();
 }

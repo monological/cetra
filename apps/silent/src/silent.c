@@ -1092,7 +1092,7 @@ static void on_init(Game* game) {
     g_player.interpolate = !g_args.no_interp;
     g_player.use_gait = !g_args.no_gait;
     g_player.gait->bob_scale = g_args.bob;
-    g_player.crouch_latched = g_args.crouch;
+    g_player.crouch_toggled = g_args.crouch;
     g_player.gait->climb_up *= g_args.climb;
     g_player.gait->climb_down *= g_args.climb;
     footsteps_start(&g_footsteps, g_args.no_footsteps ? NULL : game->audio, physics, &g_surfaces,
@@ -1273,7 +1273,7 @@ static void footfall(const Game* game, const vec3 feet) {
     const Rain* rain = g_scene->rain;
     const float wetness = rain && g_rain_bed.open > 0.5f ? rain->wetness : 0.0f;
     footsteps_fall(&g_footsteps, &g_player.gait->footfall, feet, g_player.rig->yaw, wetness,
-                   g_player.crouched);
+                   player_crouched(&g_player));
 }
 
 static void on_pre_render(Game* game, double alpha) {

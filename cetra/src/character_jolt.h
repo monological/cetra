@@ -9,24 +9,28 @@ extern "C" {
 #endif
 
 /*
- * A character's shape changed while it stands in the world (spec 13.48), behind a C header. The
- * fourth one-TU split, after cluster_build.cpp, physics_cook.cpp and ragdoll_jolt.cpp, and for the
- * same reason: CharacterVirtual::SetShape and RotatedTranslatedShape are compiled into this binary
- * and JoltC binds neither. Lives in cetra/src/ root because the build globs C++ sources there and
- * only C sources under game/.
+ * A character controller's capsule, built and changed while it stands (spec 13.48), behind a C
+ * header: JoltC binds neither RotatedTranslatedShape nor CharacterVirtual::SetShape.
+ * jolt_handles.hpp says why this is C++ at cetra/src's root.
  */
 
 typedef struct JPC_CharacterVirtual JPC_CharacterVirtual;   // JoltC/JoltCharacter.h's opaque type
 typedef struct JPC_PhysicsSystem JPC_PhysicsSystem;         // JoltC/Functions.h's
+typedef struct JPC_Shape JPC_Shape;                         // JoltC/Functions.h's
 typedef struct JPC_TempAllocatorImpl JPC_TempAllocatorImpl; // JoltC/Functions.h's
 
-// Gives the character, and its inner body, a capsule of `radius` and cylinder `half_height` whose
-// centre is `offset_y` above the character's position, colliding as `object_layer` does. With
-// `check`, a capsule that would sink into what is round it deeper than Jolt lets bodies rest in
-// contact is refused: false, and the shape is left as it was.
-bool jolt_character_set_capsule(JPC_CharacterVirtual* character, JPC_PhysicsSystem* system,
-                                JPC_TempAllocatorImpl* allocator, uint32_t object_layer,
-                                float radius, float half_height, float offset_y, bool check);
+// A capsule of `radius` and cylinder `half_height` whose centre is `offset_y` above the point it
+// is placed at; at an offset of 0, a plain capsule. One reference, the caller's to release with
+// JPC_Shape_Release; NULL, said by name, for a capsule with no size.
+JPC_Shape* jolt_character_capsule(float radius, float half_height, float offset_y);
+
+// Gives the character, and its inner body, `shape`, colliding as `object_layer` does. With
+// `check`, a shape that would sink into what is round it deeper than Jolt lets bodies rest in
+// contact is refused, false and nothing changed. What is round it is Jolt's own contacts: a body
+// the character's listener lets it pass through still counts.
+bool jolt_character_set_shape(JPC_CharacterVirtual* character, JPC_PhysicsSystem* system,
+                              JPC_TempAllocatorImpl* allocator, uint32_t object_layer,
+                              const JPC_Shape* shape, bool check);
 
 #ifdef __cplusplus
 }
