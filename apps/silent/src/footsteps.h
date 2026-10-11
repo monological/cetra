@@ -62,10 +62,10 @@ void footsteps_start(Footsteps* f, AudioSystem* audio, PhysicsWorld* physics,
                      const KitSurfaces* surfaces, uint32_t seed);
 
 // A foot came down: `feet` is where the feet are in the world, `yaw` the body's heading (radians
-// about +Y, facing (sin, 0, cos)), and `wetness` the rain's film on ground under open sky, 0 under
-// a roof or in no rain.
+// about +Y, facing (sin, 0, cos)), `wetness` the rain's film on ground under open sky, 0 under
+// a roof or in no rain, and `crouched` whether the body is bent low, setting each foot down softly.
 void footsteps_fall(Footsteps* f, const GaitFootfall* fall, const vec3 feet, float yaw,
-                    float wetness);
+                    float wetness, bool crouched);
 
 // Every take of every surface in turn at `feet`, one each half second of `time`, for listening to
 // them in an audio dump.

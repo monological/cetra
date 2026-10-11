@@ -42,6 +42,7 @@ static const struct {
 #define STROLL_SPEED  1.6f // the pace whose steps are STEP_VOLUME, m/s; slower is softer
 #define JOG_FROM      2.2f // faster than this the feet come down harder
 #define JOG_SHARE     1.35f
+#define CROUCH_SHARE  0.5f  // a foot set down by a body bent low, -6 dB past its slower pace's
 #define LOUDNESS_JIT  0.19f // +-1.5 dB, as a share
 #define PITCH_JIT     0.04f
 #define FOOT_APART    0.12f // each foot off the body's middle
@@ -175,7 +176,7 @@ static void play(Footsteps* f, FootSurface s, float volume, const vec3 at) {
 }
 
 void footsteps_fall(Footsteps* f, const GaitFootfall* fall, const vec3 feet, float yaw,
-                    float wetness) {
+                    float wetness, bool crouched) {
     float share = 1.0f;
     float side = fall->foot ? 1.0f : -1.0f;
     switch (fall->kind) {
@@ -206,6 +207,8 @@ void footsteps_fall(Footsteps* f, const GaitFootfall* fall, const vec3 feet, flo
     // The foot that fell stands off the body's middle along its right.
     const vec3 at = {feet[0] - cosf(yaw) * side * FOOT_APART, feet[1],
                      feet[2] + sinf(yaw) * side * FOOT_APART};
+    if (crouched)
+        share *= CROUCH_SHARE;
     play(f, s, STEP_VOLUME * SURFACES[s].volume * share, at);
 }
 

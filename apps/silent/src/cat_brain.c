@@ -650,7 +650,7 @@ static void sense_player(CatMind* m, float dt) {
     player_velocity(m->player, vel);
     cat_feet(cat, here);
     glm_vec3_copy(feet, m->player_eye);
-    m->player_eye[1] += PLAYER_EYE_HEIGHT;
+    m->player_eye[1] += player_eye_height(m->player);
     m->player_speed = sqrtf(vel[0] * vel[0] + vel[2] * vel[2]);
     const float dx = here[0] - feet[0], dz = here[2] - feet[2];
     const float flat = sqrtf(dx * dx + dz * dz);
@@ -663,8 +663,9 @@ static void sense_player(CatMind* m, float dt) {
     if (m->sense_in <= 0.0f) {
         m->sense_in = SIGHT_EVERY;
         vec3 at = {0.0f, 0.0f, 0.0f}, gaze = {0.0f, 0.0f, 0.0f};
-        // Looking at the chest rather than the eyes, which the capsule's top may not reach.
-        const vec3 chest = {feet[0], feet[1] + PLAYER_EYE_HEIGHT - 0.4f, feet[2]};
+        // Looking at the chest rather than the eyes, which the capsule's top may not reach; bent
+        // low, behind whatever stands between.
+        const vec3 chest = {feet[0], m->player_eye[1] - 0.4f, feet[2]};
         m->sees =
             !m->blind && cat->attached && !cat_eyes_shut(cat) && cat_eye(cat, at, gaze) &&
             in_view(cat, at, chest) && m->game->physics_world &&
