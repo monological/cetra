@@ -12,6 +12,11 @@
 
 #include "character_jolt.h"
 
+// The layer the character is: its inner body's, and the one its shape is fitted against. JoltC's
+// update moves it as ObjectLayer(1), this, so a shape fitted against any other would fit by other
+// rules than it moves by.
+#define CHARACTER_LAYER OBJ_LAYER_DYNAMIC
+
 // Internal context for contact listener
 typedef struct CharacterContactContext {
     CharacterController* controller;
@@ -166,17 +171,17 @@ CharacterController* entity_add_character_controller(Entity* entity, PhysicsWorl
     if (entity_has_component(entity, COMPONENT_CHARACTER))
         return NULL;
 
-    // Create capsule shape for character
-    // Note: Jolt capsule is defined by half-height of the cylinder part + radius
-    const JPC_Shape* shape =
-        physics_create_capsule_shape(config->capsule_radius, config->capsule_half_height,
-                                     1000.0f); // Density not used for virtual character
+    // The capsule the character and its inner body each keep a reference to; this one is
+    // released once they have.
+    JPC_Shape* shape =
+        jolt_character_capsule(config->capsule_radius, config->capsule_half_height, 0.0f);
     if (!shape)
         return NULL;
 
     // Create settings
     JPC_CharacterVirtualSettings* settings = JPC_CharacterVirtualSettings_new();
     if (!settings) {
+        JPC_Shape_Release(shape);
         return NULL;
     }
 
@@ -191,9 +196,8 @@ CharacterController* entity_add_character_controller(Entity* entity, PhysicsWorl
                                                              config->penetration_recovery_speed);
 
     // Create inner body - a kinematic body that moves with the character and pushes dynamic objects
-    // Use DYNAMIC layer (same as other moving objects) as per Jolt's samples
     JPC_CharacterVirtualSettings_SetInnerBodyShape(settings, shape);
-    JPC_CharacterVirtualSettings_SetInnerBodyLayer(settings, OBJ_LAYER_DYNAMIC);
+    JPC_CharacterVirtualSettings_SetInnerBodyLayer(settings, CHARACTER_LAYER);
 
     // Create character
     float position[3] = {entity->position[0], entity->position[1], entity->position[2]};
@@ -206,6 +210,7 @@ CharacterController* entity_add_character_controller(Entity* entity, PhysicsWorl
                                  world->physics_system);
 
     JPC_CharacterVirtualSettings_delete(settings);
+    JPC_Shape_Release(shape);
 
     if (!jolt_char) {
         return NULL;
@@ -293,16 +298,19 @@ bool character_controller_set_half_height(CharacterController* cc, float half_he
         return false;
     if (half_height == cc->half_height)
         return true;
+    JPC_Shape* shape = jolt_character_capsule(cc->config.capsule_radius, half_height,
+                                              half_height - cc->config.capsule_half_height);
+    if (!shape)
+        return false;
     // Shorter, it lies inside the capsule it replaces and needs no check; taller, it may reach
     // into whatever is overhead.
-    const bool grows = half_height > cc->half_height;
-    if (!jolt_character_set_capsule(cc->jolt_character, cc->world->physics_system,
-                                    cc->world->temp_allocator, OBJ_LAYER_DYNAMIC,
-                                    cc->config.capsule_radius, half_height,
-                                    half_height - cc->config.capsule_half_height, grows))
-        return false;
-    cc->half_height = half_height;
-    return true;
+    const bool set = jolt_character_set_shape(cc->jolt_character, cc->world->physics_system,
+                                              cc->world->temp_allocator, CHARACTER_LAYER, shape,
+                                              half_height > cc->half_height);
+    JPC_Shape_Release(shape);
+    if (set)
+        cc->half_height = half_height;
+    return set;
 }
 
 CharacterGroundState character_controller_get_ground_state(const CharacterController* cc) {

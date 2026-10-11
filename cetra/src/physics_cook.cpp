@@ -4,6 +4,8 @@
 
 #include <Jolt/Jolt.h>
 
+#include "jolt_handles.hpp"
+
 #include <Jolt/Core/StreamIn.h>
 #include <Jolt/Core/StreamOut.h>
 #include <Jolt/Physics/Collision/PhysicsMaterial.h> // the ID maps hold Ref<PhysicsMaterial>,
@@ -94,15 +96,6 @@ class ByteStreamIn final : public JPH::StreamIn {
     size_t cursor_ = 0;
     bool failed_ = false;
 };
-
-// JoltCImpl's OPAQUE_WRAPPER idiom (JoltC.cpp), restated locally: the two
-// types are the same object seen from two languages.
-inline const JPH::Shape* to_jph(const JPC_Shape* shape) {
-    return reinterpret_cast<const JPH::Shape*>(shape);
-}
-inline JPC_Shape* to_jpc(JPH::Shape* shape) {
-    return reinterpret_cast<JPC_Shape*>(shape);
-}
 
 } // namespace
 

@@ -199,6 +199,8 @@ void footsteps_fall(Footsteps* f, const GaitFootfall* fall, const vec3 feet, flo
             side = 0.0f;
             break;
     }
+    if (crouched)
+        share *= CROUCH_SHARE;
     FootSurface s = ground(f, feet);
     if (wetness > WET_FROM && s == FOOT_CONCRETE)
         s = FOOT_PAVEMENT_WET;
@@ -207,8 +209,6 @@ void footsteps_fall(Footsteps* f, const GaitFootfall* fall, const vec3 feet, flo
     // The foot that fell stands off the body's middle along its right.
     const vec3 at = {feet[0] - cosf(yaw) * side * FOOT_APART, feet[1],
                      feet[2] + sinf(yaw) * side * FOOT_APART};
-    if (crouched)
-        share *= CROUCH_SHARE;
     play(f, s, STEP_VOLUME * SURFACES[s].volume * share, at);
 }
 

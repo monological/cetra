@@ -24,8 +24,7 @@
 #define GRAVITY      9.81f
 
 // A crouch (spec 13.48): a capsule 1.15 m tall with the eye at 1.05, taken at half a walk. People
-// crouch-walking keep the eye 1.0 to 1.2 m up and go 0.6 to 0.9 m/s. Nothing in the town that a
-// standing body cannot get under is open to this one.
+// crouch-walking keep the eye 1.0 to 1.2 m up and go 0.6 to 0.9 m/s.
 #define CROUCH_HALF_HEIGHT 0.295f
 #define CROUCH_EYE_HEIGHT  1.05f
 #define CROUCH_SPEED       0.8f
@@ -87,7 +86,7 @@ void player_init(Player* p, Game* game, PhysicsWorld* physics, EntityManager* em
 
     p->rig = create_camera_rig();
     p->rig->steers_controls = true;
-    p->rig->look_lift = PLAYER_EYE_HEIGHT - CAPSULE_REST;
+    p->rig->look_lift = player_eye_height(p) - CAPSULE_REST;
     p->rig->pitch_min = -PITCH_LIMIT;
     p->rig->pitch_max = PITCH_LIMIT;
     glm_vec3_copy(p->entity->position, p->rig->anchor);
@@ -121,6 +120,42 @@ static void ramp_move(Player* p, const vec3 want, bool grounded, float dt) {
     p->speed = approach(p->speed, target, (target > p->speed ? ACCEL : BRAKE) * control * dt);
 }
 
+// The capsule is a crouch's: the engine keeps the height it has.
+static bool crouched(const CharacterController* cc) {
+    return cc->half_height < CAPSULE_HALF_HEIGHT;
+}
+
+// Fixed step: the capsule a crouch's while the toggle or the held key asks, a standing body's
+// otherwise. Standing is refused under anything lower than a standing body, and asked again every
+// step until there is room. While a screen holds the game's input the stance is kept, or a held
+// crouch would stand up behind it.
+static void crouch_step(const Player* p, Game* game, CharacterController* cc) {
+    if (input_is_suppressed(&game->input))
+        return;
+    const bool want = p->crouch_toggled || input_action_down(&game->input, "crouch");
+    character_controller_set_half_height(cc, want ? CROUCH_HALF_HEIGHT : CAPSULE_HALF_HEIGHT);
+}
+
+// Per frame: the crouch keys, and the eye following the capsule down and up. A press is read once
+// a frame, since read in a fixed step it would count twice on a frame of two steps and not at all
+// on a frame of none; sprinting asks to stand.
+static void crouch_frame(Player* p, Game* game, const CharacterController* cc, float dt) {
+    if (input_action_pressed(&game->input, "crouch_toggle"))
+        p->crouch_toggled = !p->crouch_toggled;
+    if (input_action_pressed(&game->input, "sprint"))
+        p->crouch_toggled = false;
+    const bool low = cc && crouched(cc);
+    p->crouch_eased =
+        approach(p->crouch_eased, low ? 1.0f : 0.0f, dt / (low ? CROUCH_DOWN : CROUCH_UP));
+    p->rig->look_lift = player_eye_height(p) - CAPSULE_REST;
+    // Lagging a descent, the eye goes no nearer the capsule's top than the near plane reaches, or
+    // under a ceiling the capsule only just clears the view would cut into it. The capsule's
+    // height is its top over the feet, since the engine keeps its foot where it was.
+    const float tall = 2.0f * ((cc ? cc->half_height : CAPSULE_HALF_HEIGHT) + CAPSULE_RADIUS);
+    const Camera* cam = game->engine->camera;
+    p->gait->lag_above = fmaxf(tall - player_eye_height(p) - (cam ? cam->near_clip : 0.0f), 0.0f);
+}
+
 // One line a fixed step: where the feet are, what the step moved, and what the gait made of it.
 static void trace_step(const Player* p, const Game* game, const CharacterController* cc,
                        const vec3 moved) {
@@ -131,12 +166,12 @@ static void trace_step(const Player* p, const Game* game, const CharacterControl
            (double)at[2], (double)moved[1], (double)hypotf(moved[0], moved[2]),
            (int)cc->ground_state, (double)cc->ground_normal[1], (double)p->speed,
            (double)p->gait->grade, (double)p->gait->stairs, (double)p->gait->pace,
-           (int)p->crouched);
+           (int)crouched(cc));
 }
 
 // One line a frame, and one more for a foot that came down: the feet as drawn, the eye the walk
-// puts them under (which a pin overrides), and the stride.
-static void trace_frame(const Player* p, const Game* game, const vec3 eye) {
+// puts them under (which a pin overrides), the stride, and the bob the eye took.
+static void trace_frame(const Player* p, const Game* game, const vec3 eye, const vec3 bob) {
     const size_t frame = game->engine->total_frames;
     const Gait* g = p->gait;
     if (g->footfall.kind != GAIT_FALL_NONE)
@@ -145,30 +180,22 @@ static void trace_frame(const Player* p, const Game* game, const vec3 eye) {
     printf("gait frame %5zu feet %.4f eye %.4f phase %.3f speed %.3f bob %+.4f %+.4f %+.4f "
            "crouch %.3f\n",
            frame, (double)(p->view[1] - CAPSULE_REST), (double)eye[1], (double)g->phase,
-           (double)g->speed, (double)g->bob_offset[0], (double)g->bob_offset[1],
-           (double)g->bob_offset[2], (double)p->crouch);
+           (double)g->speed, (double)bob[0], (double)bob[1], (double)bob[2],
+           (double)p->crouch_eased);
 }
 
 void player_update(Player* p, Game* game, double dt) {
     CharacterController* cc = p->entity ? entity_get_character_controller(p->entity) : NULL;
     if (!cc)
         return;
-    // Crouched while the toggle or the held key asks. Standing again is refused under anything
-    // lower than a standing body, and asked again every step until there is room. While a screen
-    // holds the game's input the stance is kept, or a held crouch would stand up behind it.
-    if (!input_is_suppressed(&game->input)) {
-        const bool crouch = p->crouch_latched || input_action_down(&game->input, "crouch");
-        if (crouch != p->crouched && character_controller_set_half_height(
-                                         cc, crouch ? CROUCH_HALF_HEIGHT : CAPSULE_HALF_HEIGHT))
-            p->crouched = crouch;
-    }
+    crouch_step(p, game, cc);
     vec3 input_dir;
     input_action_move(&game->input, "move_x", "move_y", input_dir);
     float yaw = 0.0f;
     camera_rig_move_basis(p->rig, &yaw);
     vec3 fwd = {sinf(yaw), 0.0f, cosf(yaw)};
     vec3 right = {-cosf(yaw), 0.0f, sinf(yaw)};
-    const float speed = p->crouched                                 ? CROUCH_SPEED
+    const float speed = crouched(cc)                                ? CROUCH_SPEED
                         : input_action_down(&game->input, "sprint") ? SPRINT_SPEED
                                                                     : WALK_SPEED;
     vec3 want = {0.0f, 0.0f, 0.0f};
@@ -218,37 +245,21 @@ void player_pre_render(Player* p, Game* game, const vec3* pin_eye, const vec3* p
     glm_vec3_sub(view, p->view, moved);
     glm_vec3_copy(view, p->view);
     CharacterController* cc = entity_get_character_controller(p->entity);
-
-    // The crouch keys are read once a frame: a press read in a fixed step would count twice on a
-    // frame of two steps and not at all on a frame of none. Sprinting asks to stand.
-    if (input_action_pressed(&game->input, "crouch_toggle"))
-        p->crouch_latched = !p->crouch_latched;
-    if (input_action_pressed(&game->input, "sprint"))
-        p->crouch_latched = false;
-    // The eye follows the capsule down and up, eased in and out.
-    p->crouch = approach(p->crouch, p->crouched ? 1.0f : 0.0f,
-                         dt / (p->crouched ? CROUCH_DOWN : CROUCH_UP));
-    const float low = p->crouch * p->crouch * (3.0f - 2.0f * p->crouch);
-    p->rig->look_lift =
-        PLAYER_EYE_HEIGHT - CAPSULE_REST + low * (CROUCH_EYE_HEIGHT - PLAYER_EYE_HEIGHT);
-    // Lagging a descent, the eye goes no nearer the capsule's top than the near plane reaches,
-    // or under a ceiling the capsule only just clears the view would cut into it.
-    const float tall = 2.0f * ((cc ? cc->half_height : CAPSULE_HALF_HEIGHT) + CAPSULE_RADIUS);
-    const Camera* cam = engine->camera;
-    p->gait->lag_above = fmaxf(tall - player_eye_height(p) - (cam ? cam->near_clip : 0.0f), 0.0f);
-
+    crouch_frame(p, game, cc, dt);
     // The stride goes on under a pinned camera, where its footsteps are still heard.
     gait_frame(p->gait, moved, cc && character_controller_is_grounded(cc), p->rig->yaw, dt);
     // The eye the walk puts: the body's, lagging the ground and over the feet, which bob less
     // bent low.
-    vec3 anchor;
+    vec3 anchor, bob = {0.0f, 0.0f, 0.0f};
     glm_vec3_copy(p->view, anchor);
     if (p->use_gait) {
         anchor[1] += p->gait->smooth_offset;
-        glm_vec3_muladds(p->gait->bob_offset, 1.0f - (1.0f - CROUCH_BOB) * low, anchor);
+        glm_vec3_scale(p->gait->bob_offset, glm_smoothinterp(1.0f, CROUCH_BOB, p->crouch_eased),
+                       bob);
+        glm_vec3_add(anchor, bob, anchor);
     }
     if (p->trace)
-        trace_frame(p, game, (vec3){anchor[0], anchor[1] + p->rig->look_lift, anchor[2]});
+        trace_frame(p, game, (vec3){anchor[0], anchor[1] + p->rig->look_lift, anchor[2]}, bob);
     // What a hand reaches from: the body's own eye, which no lag or bob moves.
     glm_vec3_copy(p->view, p->reach_from);
     p->reach_from[1] += p->rig->look_lift;
@@ -310,7 +321,12 @@ void player_eye(const Player* p, vec3 eye, vec3 forward) {
 }
 
 float player_eye_height(const Player* p) {
-    return CAPSULE_REST + p->rig->look_lift;
+    return glm_smoothinterp(PLAYER_EYE_HEIGHT, CROUCH_EYE_HEIGHT, p->crouch_eased);
+}
+
+bool player_crouched(const Player* p) {
+    const CharacterController* cc = entity_get_character_controller(p->entity);
+    return cc && crouched(cc);
 }
 
 float player_reach_distance(const Player* p, const vec3 at) {

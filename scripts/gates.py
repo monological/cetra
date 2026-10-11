@@ -28116,6 +28116,29 @@ GAIT_SHUFFLE_TURN = math.radians(70.0)
 GAIT_SHUFFLE_GAP = 0.35
 GAIT_CLIMB_UP = 0.29        # a climb's rate, as a share of the speed asked
 
+def _probe_verdicts(probe, failed):
+    """verdict(name, case, check) for one probe's arms: (ok, what it saw) for `case` held to
+    `check`, which takes its rows, each case run once however many arms read it. A failure is
+    appended to `failed`; a row the check reads that the probe did not print is a failure naming
+    that row, never a KeyError, which would end the whole run. The caller prints the verdict
+    line, whose literal name is what gate-arm-docs reads."""
+    rows_of = {}
+
+    def verdict(name, case, check):
+        if case not in rows_of:
+            rows_of[case] = probe(case)
+        rows = rows_of[case]
+        try:
+            ok, said = check(rows) if rows else (False, "no probe output")
+        except KeyError as missing:
+            ok, said = False, f"the probe printed no {missing.args[0]} row"
+        if not ok:
+            failed.append(name)
+        return ok, said
+
+    return verdict
+
+
 _GAIT_PROBE = re.compile(r"^gait (\S+) (\S+) (\S+) (.*)$", re.M)
 
 
@@ -28173,15 +28196,7 @@ def run_gait_gate(workdir):
                      fall, not six, and a frame of no time moves nothing and lets none fall.
     """
     failed = []
-
-    def verdict(name, case, check):
-        """(ok, what it saw) for one probe case held to `check`, which takes its rows. The
-        caller prints the verdict line, whose literal name is what gate-arm-docs reads."""
-        rows = _gait_probe(case)
-        ok, said = check(rows) if rows else (False, "no probe output")
-        if not ok:
-            failed.append(name)
-        return ok, said
+    verdict = _probe_verdicts(_gait_probe, failed)
 
     def split(r):
         ends = {label: r[(label, "end")] for label in ("60", "120", "uneven")}
@@ -28301,9 +28316,6 @@ def run_gait_gate(workdir):
     return failed
 
 
-CHAR_STAND = 0.57       # the probe's standing cylinder half-height: 1.7 m tall
-CHAR_CROUCH = 0.295     # and crouched: 1.15 m
-CHAR_PADDING = 0.02     # character_controller_default_config's character_padding
 CHAR_FEET_TOL = 1e-4    # m
 
 _CHARACTER_PROBE = re.compile(r"^character (\S+) (\S+) (\S+) (.*)$", re.M)
@@ -28320,8 +28332,10 @@ def run_character_gate(workdir):
 
     The probe makes capsules of silent's size, 1.7 m standing and 1.15 crouched, on a floor with
     a beam across it whose underside is 1.4 m up, and walks them at it; and it shrinks and grows
-    one on open floor. A crouch shortens the capsule from the top and leaves its foot where it
-    was, so the controller's position never moves for it.
+    one on the floor clear of the beam. A crouch shortens the capsule from the top and leaves its
+    foot where it was, so the controller's position never moves for it. The probe prints its
+    fixture -- the capsule's radius, padding and two heights, and the beam's faces -- which the
+    arms read rather than restate.
 
       character-crouch-under   walked at the beam, the standing capsule stops with its centre a
                                radius and the padding short of the near face, and the crouched
@@ -28334,24 +28348,14 @@ def run_character_gate(workdir):
                                the taller one's was.
     """
     failed = []
-    probes = {}
-
-    def verdict(name, case, check):
-        """(ok, what it saw) for one probe case held to `check`, which takes its rows. The
-        caller prints the verdict line, whose literal name is what gate-arm-docs reads."""
-        if case not in probes:
-            probes[case] = _character_probe(case)
-        rows = probes[case]
-        ok, said = check(rows) if rows else (False, "no probe output")
-        if not ok:
-            failed.append(name)
-        return ok, said
+    verdict = _probe_verdicts(_character_probe, failed)
 
     def under(r):
-        face, back, radius = r[("beam", "z")]
+        radius, padding, _, _ = r[("capsule", "size")]
+        face, back = r[("beam", "z")]
         standing = r[("standing", "reach")][0]
         crouched = r[("crouched", "reach")][0]
-        stop = face - radius - CHAR_PADDING
+        stop = face - radius - padding
         ok = (int(r[("crouch", "set")][0]) == 1 and abs(standing - stop) < 0.01
               and crouched > back + radius)
         return ok, (f"standing stopped at z {standing:.4f} (want {stop:.4f}, the near face less a "
@@ -28359,17 +28363,15 @@ def run_character_gate(workdir):
                     f"{back + radius:.4f})")
 
     def refused(r):
+        _, _, stand, crouch = r[("capsule", "size")]
         under_stood, under_half, at = r[("under", "stood")]
         out_stood, out_half = r[("out", "stood")]
-        if int(under_stood) < 0:
-            return False, (f"the crouched capsule never got under the beam: it stopped at z "
-                           f"{at:.3f}, half-height {under_half:.3f}")
-        ok = (int(under_stood) == 0 and abs(under_half - CHAR_CROUCH) < 1e-6
-              and int(out_stood) == 1 and abs(out_half - CHAR_STAND) < 1e-6)
+        ok = (int(under_stood) == 0 and abs(under_half - crouch) < 1e-6
+              and int(out_stood) == 1 and abs(out_half - stand) < 1e-6)
         return ok, (f"under the beam at z {at:.3f} standing was "
                     f"{'allowed' if under_stood else 'refused'}, half-height {under_half:.3f}; "
                     f"past it {'allowed' if out_stood else 'refused'}, half-height "
-                    f"{out_half:.3f} (want refused at {CHAR_CROUCH}, allowed at {CHAR_STAND})")
+                    f"{out_half:.3f} (want refused at {crouch:g}, allowed at {stand:g})")
 
     def feet(r):
         legs = ("stand", "crouch", "rise")

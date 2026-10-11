@@ -4845,6 +4845,27 @@ static Animator* ik_probe_walker(Skeleton* skel, Animation* clip, float stride, 
     return an;
 }
 
+// A physics world and an entity manager with on_init's floor in them, its top at y 0: what a
+// probe stands things on. `game` may be NULL for a probe that needs none; the caller adds the rest
+// and optimises the broadphase.
+static PhysicsWorld* probe_floor_world(Game* game, EntityManager** em) {
+    PhysicsConfig config = physics_default_config();
+    PhysicsWorld* physics = create_physics_world(&config);
+    *em = physics ? create_entity_manager(game) : NULL;
+    if (!*em) {
+        if (physics)
+            free_physics_world(physics);
+        return NULL;
+    }
+    Entity* floor = create_entity(*em, "floor");
+    glm_vec3_copy((vec3){0.0f, -GAMETEST_FLOOR_HALF_Y, 0.0f}, floor->position);
+    PhysicsShapeDesc floor_shape = {.type = SHAPE_BOX,
+                                    .box.half_extents = {25.0f, GAMETEST_FLOOR_HALF_Y, 25.0f},
+                                    .density = 0.0f};
+    entity_add_rigid_body(floor, physics, &floor_shape, MOTION_STATIC, OBJ_LAYER_STATIC);
+    return physics;
+}
+
 // The world the three PLANTING cases need, on the scene the caller has already set: a
 // physics world, the floor on_init would have built, the ramp and steps, and a real
 // character capsule at the stand point.
@@ -4853,21 +4874,13 @@ static Animator* ik_probe_walker(Skeleton* skel, Animation* clip, float stride, 
 // not the body it was cast from, and in a world with no body that assertion is
 // vacuously true -- the arm would pass on a solver that had no filter at all.
 static PhysicsWorld* ik_probe_world(Game* game, const vec3 stand) {
-    PhysicsConfig physics_config = physics_default_config();
-    PhysicsWorld* physics = create_physics_world(&physics_config);
+    EntityManager* em = NULL;
+    PhysicsWorld* physics = probe_floor_world(game, &em);
     if (!physics)
         return NULL;
     game_set_physics_world(game, physics);
-    EntityManager* em = create_entity_manager(game);
     game_set_entity_manager(game, em);
     pbr_shader = engine_get_program(game->engine, CETRA_PROGRAM_PBR);
-
-    Entity* floor = create_entity(em, "floor");
-    glm_vec3_copy((vec3){0.0f, -GAMETEST_FLOOR_HALF_Y, 0.0f}, floor->position);
-    PhysicsShapeDesc floor_shape = {.type = SHAPE_BOX,
-                                    .box.half_extents = {25.0f, GAMETEST_FLOOR_HALF_Y, 25.0f},
-                                    .density = 0.0f};
-    entity_add_rigid_body(floor, physics, &floor_shape, MOTION_STATIC, OBJ_LAYER_STATIC);
 
     build_ik_ground(game);
 
@@ -7704,8 +7717,8 @@ static int run_gait_probe(const char* which) {
  * --character-probe (spec 13.48): a character controller's capsule changed while it stands in a
  * physics world, stepped as a game steps it, with no window. Capsules of silent's size, standing
  * and crouched, on a floor, walked at a beam across it lower than one and higher than the other;
- * and one shrunk and grown again on open floor. It prints what it finds, for gates.py's character
- * group to hold.
+ * and one shrunk and grown again on the floor clear of the beam. It prints the fixture and what it
+ * finds, for gates.py's character group to hold.
  */
 #define CHAR_PROBE_RADIUS  0.28f
 #define CHAR_PROBE_STAND   0.57f  // the cylinder's half-height standing: 1.7 m tall
@@ -7716,55 +7729,19 @@ static int run_gait_probe(const char* which) {
 #define CHAR_PROBE_DT      (1.0f / 60.0f)
 #define CHAR_PROBE_SPEED   1.0f
 
-typedef struct CharProbe {
-    PhysicsWorld* physics;
-    EntityManager* em;
-} CharProbe;
-
-static void char_probe_box(CharProbe* w, const char* name, const vec3 at, const vec3 half) {
-    Entity* e = create_entity(w->em, name);
-    glm_vec3_copy((float*)at, e->position);
-    PhysicsShapeDesc box = {.type = SHAPE_BOX, .density = 0.0f};
-    glm_vec3_copy((float*)half, box.box.half_extents);
-    entity_add_rigid_body(e, w->physics, &box, MOTION_STATIC, OBJ_LAYER_STATIC);
-}
-
-// A floor with its top at y 0, and with `beam` a beam across x -10..10 over the walk.
-static bool char_probe_world(CharProbe* w, bool beam) {
-    PhysicsConfig config = physics_default_config();
-    w->physics = create_physics_world(&config);
-    w->em = w->physics ? create_entity_manager(NULL) : NULL;
-    if (!w->em) {
-        fprintf(stderr, "character-probe: no physics world\n");
-        return false;
-    }
-    char_probe_box(w, "floor", (vec3){0.0f, -0.5f, 0.0f}, (vec3){25.0f, 0.5f, 25.0f});
-    if (beam)
-        char_probe_box(w, "beam",
-                       (vec3){0.0f, CHAR_PROBE_BEAM_Y + 0.3f,
-                              0.5f * (CHAR_PROBE_BEAM_Z0 + CHAR_PROBE_BEAM_Z1)},
-                       (vec3){10.0f, 0.3f, 0.5f * (CHAR_PROBE_BEAM_Z1 - CHAR_PROBE_BEAM_Z0)});
-    physics_world_optimize(w->physics);
-    return true;
-}
-
-// The entity manager goes first: its components hold bodies in the world.
-static void char_probe_free(CharProbe* w) {
-    if (w->em)
-        free_entity_manager(w->em);
-    if (w->physics)
-        free_physics_world(w->physics);
-}
-
-// A standing capsule with its feet on the floor at (x, z), stepping up what silent's does.
-static CharacterController* char_probe_body(CharProbe* w, const char* name, float x, float z) {
-    Entity* e = create_entity(w->em, name);
-    glm_vec3_copy((vec3){x, CHAR_PROBE_STAND + CHAR_PROBE_RADIUS + 0.02f, z}, e->position);
+// A standing capsule with its feet on the floor at (x, 0), stepping up what silent's does.
+static CharacterController* char_probe_body(PhysicsWorld* physics, EntityManager* em,
+                                            const char* name, float x) {
+    Entity* e = create_entity(em, name);
+    glm_vec3_copy((vec3){x, CHAR_PROBE_STAND + CHAR_PROBE_RADIUS + 0.02f, 0.0f}, e->position);
     CharacterControllerConfig cc = character_controller_default_config();
     cc.capsule_radius = CHAR_PROBE_RADIUS;
     cc.capsule_half_height = CHAR_PROBE_STAND;
     cc.step_height = 0.25f;
-    return entity_add_character_controller(e, w->physics, &cc);
+    CharacterController* c = entity_add_character_controller(e, physics, &cc);
+    if (!c)
+        fprintf(stderr, "character-probe: no character '%s'\n", name);
+    return c;
 }
 
 // One fixed step of a body walking along +z at `speed`, as an app asks it and the game steps it:
@@ -7785,87 +7762,103 @@ static float char_probe_z(const CharacterController* c) {
     return at[2];
 }
 
+// Two bodies walk at the beam from z 0 for four seconds, apart along it: one standing, one crouched
+// from the start. The crouched one asks to stand once as its middle passes under the beam's, and
+// again past it.
+static int char_probe_beam(PhysicsWorld* physics, EntityManager* em) {
+    CharacterController* standing = char_probe_body(physics, em, "standing", -3.0f);
+    CharacterController* crouched = char_probe_body(physics, em, "crouched", 3.0f);
+    if (!standing || !crouched)
+        return 1;
+    const bool shrank = character_controller_set_half_height(crouched, CHAR_PROBE_CROUCH);
+    printf("character beam crouch set %d %.9g\n", shrank, (double)crouched->half_height);
+    const float middle = 0.5f * (CHAR_PROBE_BEAM_Z0 + CHAR_PROBE_BEAM_Z1);
+    bool asked = false;
+    for (int i = 0; i < 240; i++) {
+        char_probe_walk(standing, CHAR_PROBE_SPEED);
+        char_probe_walk(crouched, CHAR_PROBE_SPEED);
+        physics_world_update(physics, CHAR_PROBE_DT, 1);
+        if (!asked && char_probe_z(crouched) >= middle) {
+            asked = true;
+            const bool stood = character_controller_set_half_height(crouched, CHAR_PROBE_STAND);
+            printf("character beam under stood %d %.9g %.9g\n", stood,
+                   (double)crouched->half_height, (double)char_probe_z(crouched));
+        }
+    }
+    printf("character beam standing reach %.9g\n", (double)char_probe_z(standing));
+    printf("character beam crouched reach %.9g\n", (double)char_probe_z(crouched));
+    const bool stood = character_controller_set_half_height(crouched, CHAR_PROBE_STAND);
+    printf("character beam out stood %d %.9g\n", stood, (double)crouched->half_height);
+    return 0;
+}
+
+// One body walking on open floor clear of the beam: a second standing, a second crouched, a second
+// standing again. Where its centre is and where the ground under it is, at the end of each, and how
+// many steps it was off the ground -- after half a second standing still to come down the 2 cm it
+// was put above the floor.
+static int char_probe_floor(PhysicsWorld* physics, EntityManager* em) {
+    CharacterController* c = char_probe_body(physics, em, "walker", 15.0f);
+    if (!c)
+        return 1;
+    const char* LEGS[] = {"stand", "crouch", "rise"};
+    const float HALVES[] = {CHAR_PROBE_STAND, CHAR_PROBE_CROUCH, CHAR_PROBE_STAND};
+    for (int i = 0; i < 30; i++) {
+        char_probe_walk(c, 0.0f);
+        physics_world_update(physics, CHAR_PROBE_DT, 1);
+    }
+    int air = 0;
+    for (int leg = 0; leg < 3; leg++) {
+        const bool set = character_controller_set_half_height(c, HALVES[leg]);
+        printf("character floor %s set %d %.9g\n", LEGS[leg], set, (double)c->half_height);
+        for (int i = 0; i < 60; i++) {
+            char_probe_walk(c, CHAR_PROBE_SPEED);
+            physics_world_update(physics, CHAR_PROBE_DT, 1);
+            if (!character_controller_is_grounded(c))
+                air++;
+        }
+        vec3 at = {0.0f, 0.0f, 0.0f};
+        character_controller_get_position(c, at);
+        printf("character floor %s y %.9g %.9g\n", LEGS[leg], (double)at[1],
+               (double)c->ground_position[1]);
+    }
+    printf("character floor air steps %d\n", air);
+    return 0;
+}
+
 static int run_character_probe(const char* which) {
-    CharProbe w = {0};
-    if (!strcmp(which, "beam")) {
-        // Two bodies walk at the beam from z 0 for four seconds, apart along it: one standing,
-        // one crouched from the start. The crouched one asks to stand once as its middle passes
-        // under the beam's, and again past it.
-        if (!char_probe_world(&w, true))
-            return 1;
-        CharacterController* standing = char_probe_body(&w, "standing", -3.0f, 0.0f);
-        CharacterController* crouched = char_probe_body(&w, "crouched", 3.0f, 0.0f);
-        if (!standing || !crouched) {
-            fprintf(stderr, "character-probe: no character\n");
-            char_probe_free(&w);
-            return 1;
-        }
-        const bool shrank = character_controller_set_half_height(crouched, CHAR_PROBE_CROUCH);
-        printf("character beam crouch set %d %.9g\n", shrank, (double)crouched->half_height);
-        printf("character beam beam z %.9g %.9g %.9g\n", (double)CHAR_PROBE_BEAM_Z0,
-               (double)CHAR_PROBE_BEAM_Z1, (double)CHAR_PROBE_RADIUS);
-        const float middle = 0.5f * (CHAR_PROBE_BEAM_Z0 + CHAR_PROBE_BEAM_Z1);
-        bool asked = false;
-        for (int i = 0; i < 240; i++) {
-            char_probe_walk(standing, CHAR_PROBE_SPEED);
-            char_probe_walk(crouched, CHAR_PROBE_SPEED);
-            physics_world_update(w.physics, CHAR_PROBE_DT, 1);
-            if (!asked && char_probe_z(crouched) >= middle) {
-                asked = true;
-                const bool stood = character_controller_set_half_height(crouched, CHAR_PROBE_STAND);
-                printf("character beam under stood %d %.9g %.9g\n", stood,
-                       (double)crouched->half_height, (double)char_probe_z(crouched));
-            }
-        }
-        // A crouched body that never got under says so, rather than leaving the row out.
-        if (!asked)
-            printf("character beam under stood -1 %.9g %.9g\n", (double)crouched->half_height,
-                   (double)char_probe_z(crouched));
-        printf("character beam standing reach %.9g\n", (double)char_probe_z(standing));
-        printf("character beam crouched reach %.9g\n", (double)char_probe_z(crouched));
-        const bool stood = character_controller_set_half_height(crouched, CHAR_PROBE_STAND);
-        printf("character beam out stood %d %.9g\n", stood, (double)crouched->half_height);
-    } else if (!strcmp(which, "floor")) {
-        // One body walking on open floor: a second standing, a second crouched, a second
-        // standing again. Where its centre is and where the ground under it is, at the end of
-        // each, and how many steps it was off the ground -- after half a second standing still
-        // to come down the 2 cm it was put above the floor.
-        if (!char_probe_world(&w, false))
-            return 1;
-        CharacterController* c = char_probe_body(&w, "walker", 0.0f, 0.0f);
-        if (!c) {
-            fprintf(stderr, "character-probe: no character\n");
-            char_probe_free(&w);
-            return 1;
-        }
-        const char* LEGS[] = {"stand", "crouch", "rise"};
-        const float HALVES[] = {CHAR_PROBE_STAND, CHAR_PROBE_CROUCH, CHAR_PROBE_STAND};
-        for (int i = 0; i < 30; i++) {
-            char_probe_walk(c, 0.0f);
-            physics_world_update(w.physics, CHAR_PROBE_DT, 1);
-        }
-        int air = 0;
-        for (int leg = 0; leg < 3; leg++) {
-            const bool set = character_controller_set_half_height(c, HALVES[leg]);
-            printf("character floor %s set %d %.9g\n", LEGS[leg], set, (double)c->half_height);
-            for (int i = 0; i < 60; i++) {
-                char_probe_walk(c, CHAR_PROBE_SPEED);
-                physics_world_update(w.physics, CHAR_PROBE_DT, 1);
-                if (!character_controller_is_grounded(c))
-                    air++;
-            }
-            vec3 at = {0.0f, 0.0f, 0.0f};
-            character_controller_get_position(c, at);
-            printf("character floor %s y %.9g %.9g\n", LEGS[leg], (double)at[1],
-                   (double)c->ground_position[1]);
-        }
-        printf("character floor air steps %d\n", air);
-    } else {
+    const bool beam = !strcmp(which, "beam");
+    if (!beam && strcmp(which, "floor")) {
         fprintf(stderr, "character-probe: unknown case '%s'\n", which);
         return 1;
     }
-    char_probe_free(&w);
-    return 0;
+    EntityManager* em = NULL;
+    PhysicsWorld* physics = probe_floor_world(NULL, &em);
+    if (!physics) {
+        fprintf(stderr, "character-probe: no physics world\n");
+        return 1;
+    }
+    // The beam across x -10..10, over the walk.
+    Entity* bar = create_entity(em, "beam");
+    glm_vec3_copy(
+        (vec3){0.0f, CHAR_PROBE_BEAM_Y + 0.3f, 0.5f * (CHAR_PROBE_BEAM_Z0 + CHAR_PROBE_BEAM_Z1)},
+        bar->position);
+    PhysicsShapeDesc box = {
+        .type = SHAPE_BOX,
+        .box.half_extents = {10.0f, 0.3f, 0.5f * (CHAR_PROBE_BEAM_Z1 - CHAR_PROBE_BEAM_Z0)}};
+    entity_add_rigid_body(bar, physics, &box, MOTION_STATIC, OBJ_LAYER_STATIC);
+    physics_world_optimize(physics);
+    // The fixture, so the gate restates none of it.
+    printf("character %s capsule size %.9g %.9g %.9g %.9g\n", which, (double)CHAR_PROBE_RADIUS,
+           (double)character_controller_default_config().character_padding,
+           (double)CHAR_PROBE_STAND, (double)CHAR_PROBE_CROUCH);
+    printf("character %s beam z %.9g %.9g\n", which, (double)CHAR_PROBE_BEAM_Z0,
+           (double)CHAR_PROBE_BEAM_Z1);
+
+    const int rc = beam ? char_probe_beam(physics, em) : char_probe_floor(physics, em);
+    // The entity manager goes first: its components hold bodies in the world.
+    free_entity_manager(em);
+    free_physics_world(physics);
+    return rc;
 }
 
 /*
