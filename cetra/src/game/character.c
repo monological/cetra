@@ -10,6 +10,8 @@
 #include <JoltC/JoltC.h>
 #include <JoltC/JoltCharacter.h>
 
+#include "character_jolt.h"
+
 // Internal context for contact listener
 typedef struct CharacterContactContext {
     CharacterController* controller;
@@ -220,6 +222,7 @@ CharacterController* entity_add_character_controller(Entity* entity, PhysicsWorl
     cc->entity = entity;
     cc->world = world;
     cc->config = *config;
+    cc->half_height = config->capsule_half_height;
     cc->enabled = true;
     cc->ground_state = CHAR_GROUND_IN_AIR;
 
@@ -283,6 +286,23 @@ void character_controller_add_velocity(CharacterController* cc, vec3 delta) {
     if (!cc)
         return;
     glm_vec3_add(cc->velocity, delta, cc->velocity);
+}
+
+bool character_controller_set_half_height(CharacterController* cc, float half_height) {
+    if (!cc || !cc->jolt_character || !cc->world)
+        return false;
+    if (half_height == cc->half_height)
+        return true;
+    // Shorter, it lies inside the capsule it replaces and needs no check; taller, it may reach
+    // into whatever is overhead.
+    const bool grows = half_height > cc->half_height;
+    if (!jolt_character_set_capsule(cc->jolt_character, cc->world->physics_system,
+                                    cc->world->temp_allocator, OBJ_LAYER_DYNAMIC,
+                                    cc->config.capsule_radius, half_height,
+                                    half_height - cc->config.capsule_half_height, grows))
+        return false;
+    cc->half_height = half_height;
+    return true;
 }
 
 CharacterGroundState character_controller_get_ground_state(const CharacterController* cc) {

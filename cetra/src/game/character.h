@@ -64,6 +64,7 @@ typedef struct CharacterController {
 
     // Runtime state
     vec3 velocity;
+    float half_height; // the capsule's cylinder half-height now: the config's until it is set
     CharacterGroundState ground_state;
     vec3 ground_position;
     vec3 ground_normal;
@@ -108,6 +109,12 @@ void character_controller_get_velocity(const CharacterController* cc, vec3 out);
 
 /// Add to velocity
 void character_controller_add_velocity(CharacterController* cc, vec3 delta);
+
+/// Makes the capsule's cylinder `half_height`, its foot where it was: the position stays the
+/// centre of the capsule the controller was made with, and a shorter one sits low in it (spec
+/// 13.48). A shorter one always fits; a taller one is refused where it would not, false and
+/// nothing changed.
+bool character_controller_set_half_height(CharacterController* cc, float half_height);
 
 /// Get ground state
 CharacterGroundState character_controller_get_ground_state(const CharacterController* cc);
