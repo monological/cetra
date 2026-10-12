@@ -7226,6 +7226,43 @@ static int run_ui_screens_probe(Game* game, const char* which) {
         const uint64_t sig_part = ui_draw_list_signature(dl);
         printf("ui textured-uv whole match %.6f\n", sig_whole == sig_uv ? 1.0 : 0.0);
         printf("ui textured-uv part differs %.6f\n", sig_part != sig_whole ? 1.0 : 0.0);
+    } else if (!strcmp(which, "opaque")) {
+        // One screen over another that looks different. Stacked plainly both draw; made opaque,
+        // the one on top draws exactly as it does alone; popped, the one under draws as it did.
+        UIScreen* under = ui_screen(ui, "under");
+        UIElement* under_rows[3];
+        ui_probe_column(under, under_rows);
+        UIScreen* over = ui_screen(ui, "over");
+        UIElement* over_rows[3];
+        ui_probe_column(over, over_rows);
+        UIStyle loud = {0};
+        loud.bg[0] = loud.bg[3] = 1.0f;
+        for (int i = 0; i < 3; i++)
+            ui_set_style(over_rows[i], &loud);
+        UIDrawList* dl = ui_draw_list(ui);
+
+        ui_push(ui, under);
+        ui_build(ui, 1280.0f, 720.0f, 0.0f);
+        const uint64_t sig_under = ui_draw_list_signature(dl);
+        ui_pop(ui);
+        ui_push(ui, over);
+        ui_build(ui, 1280.0f, 720.0f, 0.0f);
+        const uint64_t sig_over = ui_draw_list_signature(dl);
+        ui_pop(ui);
+
+        ui_push(ui, under);
+        ui_push(ui, over);
+        ui_build(ui, 1280.0f, 720.0f, 0.0f);
+        const uint64_t sig_plain = ui_draw_list_signature(dl);
+        ui_screen_set_opaque(over, true);
+        ui_build(ui, 1280.0f, 720.0f, 0.0f);
+        const uint64_t sig_opaque = ui_draw_list_signature(dl);
+        ui_pop(ui);
+        ui_build(ui, 1280.0f, 720.0f, 0.0f);
+        const uint64_t sig_popped = ui_draw_list_signature(dl);
+        printf("ui opaque plain differs %.6f\n", sig_plain != sig_over ? 1.0 : 0.0);
+        printf("ui opaque covered match %.6f\n", sig_opaque == sig_over ? 1.0 : 0.0);
+        printf("ui opaque popped match %.6f\n", sig_popped == sig_under ? 1.0 : 0.0);
     } else {
         fprintf(stderr, "ui-probe: unknown case '%s'\n", which);
         rc = 1;
@@ -9321,8 +9358,8 @@ static int run_save_probe(Game* game, const char* which) {
             return 1;
         printf("save unsaved wrote ok 1\n");
     } else if (!strcmp(which, "names")) {
-        // Two saved entities answer to one name, and the writer says so; a third with a
-        // name of its own is not mentioned.
+        // Two saved entities answer to one name, and the writer says so and keeps the first; a
+        // third with a name of its own is not mentioned.
         vec3 color = {0.5f, 0.5f, 0.5f};
         if (!spawn_box(game, "twin", (vec3){0.0f, 1.0f, 0.0f}, 0.5f, color) ||
             !spawn_box(game, "twin", (vec3){2.0f, 1.0f, 0.0f}, 0.5f, color) ||

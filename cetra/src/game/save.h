@@ -73,8 +73,8 @@ typedef struct SaveSystem SaveSystem;
  * written first and carried no consumer -- and the dead arms were not free:
  * the string case in the decoder returned a success it had not written a value
  * for, which would have handed the store an uninitialised buffer the day
- * anything reached it. The enum came back with its consumer (spec 13.49, silent's
- * cat, which is at one of a table of places); the string still wants one.
+ * anything reached it. The enum came back with a consumer (spec 13.49); the
+ * string still wants one.
  */
 typedef enum {
     SAVE_BOOL = 0,
@@ -223,8 +223,8 @@ void free_save_system(SaveSystem* save);
  * exactly as this module registers its own.
  *
  * `rows` and `base` are BORROWED and must outlive the system. False (logged) if
- * the section is already registered or there is no room; a bounded array that
- * refuses is the convention, not a silent drop.
+ * the section is already registered, a SAVE_ENUM row carries no names, or there
+ * is no room; a bounded array that refuses is the convention, not a silent drop.
  */
 bool save_register_table(SaveSystem* save, const char* section, int version, const SaveField* rows,
                          int count, void* base);
@@ -344,6 +344,7 @@ typedef struct SavePeek {
  * file cannot be read or parsed, is below SAVE_FLOOR, or does not carry the
  * section, or the section's migrations stop.
  */
-bool save_peek(SaveSystem* save, const char* path, const char* section, void* base, SavePeek* info);
+bool save_peek(const SaveSystem* save, const char* path, const char* section, void* base,
+               SavePeek* info);
 
 #endif // _GAME_SAVE_H_

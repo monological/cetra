@@ -163,9 +163,8 @@ void brain_stop(Brain* brain) {
     if (!brain)
         return;
     // Ended by what happened to the body rather than by doing it badly, so on its ordinary
-    // cooldown and not its fail one.
+    // cooldown and not its fail one. With nothing running, the next update chooses.
     stop(brain, true, BRAIN_DONE);
-    brain->interrupted = true;
 }
 
 const char* brain_current_name(const Brain* brain) {
