@@ -47,7 +47,7 @@ void hud_hint(Hud* hud, const char* text, float seconds);
 // Think `text`, in place of any thought on screen; the same thought again stays up.
 void hud_think(Hud* hud, const char* text);
 // The game was just saved (spec 13.49): in the window's bottom right corner a three-branched
-// candlestick lights its candles one after another beside "Saving...", then "Saved", and goes.
+// candlestick lights its candles one after another before "Saving...", then "Saved", and goes.
 // Saved again while it is up, it says so again without going out first.
 void hud_saved(Hud* hud);
 // Per frame: the thought's fade, the hint's time and the save mark's, and the lines placed in a
