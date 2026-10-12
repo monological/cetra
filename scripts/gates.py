@@ -26069,8 +26069,8 @@ def run_ik_gate(workdir):
 _SAVE_PROBE = re.compile(r"^save ([\w-]+) (\w+) (\w+)((?:\s+-?[\d.]+)+)$", re.M)
 
 
-def _save_probe(case, workdir):
-    """{(label, key): [numbers]} from one gametest --save-probe run, or None.
+def _save_probe_env(case, workdir):
+    """The environment one --save-probe case runs in.
 
     Each case writes into its OWN directory under the run's workdir, through the
     same CETRA_SETTINGS_DIR the settings path honours. Two reasons: a probe must
@@ -26079,7 +26079,23 @@ def _save_probe(case, workdir):
     """
     env = dict(os.environ)
     env["CETRA_SETTINGS_DIR"] = os.path.join(workdir, "save-" + case)
-    return _gametest_probe("--save-probe", _SAVE_PROBE, case, env=env)
+    return env
+
+
+def _save_probe(case, workdir):
+    """{(label, key): [numbers]} from one gametest --save-probe run, or None."""
+    return _gametest_probe("--save-probe", _SAVE_PROBE, case,
+                           env=_save_probe_env(case, workdir))
+
+
+def _save_probe_file(case, workdir):
+    """The JSON a --save-probe case left on disk, or None."""
+    try:
+        with open(os.path.join(workdir, "save-" + case, "probe.json"), "r",
+                  encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
 
 
 def run_save_gate(workdir):
@@ -26115,6 +26131,19 @@ def run_save_gate(workdir):
       save-migrate   a key whose MEANING changed (percent at version 1, a
                      fraction at version 2) is repaired by one registered step.
                      This is the only case a tagged format cannot detect itself.
+      save-unsaved   an entity marked `unsaved` (spec 13.49) has no record in the
+                     file, and a load leaves it where it is even against a file
+                     written before the mark, whose record drops as missing.
+      save-names     two saved entities with one name are said by name when the
+                     file is written, since a load gives every record by a name
+                     to the first entity that has it; a unique name is not.
+      save-enum      an index rides as its NAME: it reads back, and a build whose
+                     table lost that name leaves the field and counts one, with
+                     the file still loading. An index the table does not hold
+                     costs that key and not the write.
+      save-peek      one section read into a caller's object with nothing live
+                     moved, the file's version and wall clock with it; a table by
+                     ADDRESS is refused, since it would write the live value.
     """
     failed = []
 
@@ -26151,10 +26180,10 @@ def run_save_gate(workdir):
     # this arm needs a file that contains an entity -- the roundtrip case writes
     # none, so reading that one could never see a component at all.
     p_entities = _save_probe("entities", workdir)
-    path = os.path.join(workdir, "save-entities", "probe.json")
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            doc = json.load(f)
+    doc = _save_probe_file("entities", workdir)
+    if doc is None:
+        ok, detail = False, "cannot read what the probe wrote"
+    else:
         sections = [k for k in ("world", "gametest", "entities") if k in doc]
         versioned = [k for k in sections if isinstance(doc[k], dict) and "version" in doc[k]]
         entry = (doc.get("entities", {}).get("list") or [{}])[0]
@@ -26167,8 +26196,6 @@ def run_save_gate(workdir):
         detail = (f"{len(versioned)} of {len(sections)} sections carry their own version "
                   f"(want 3), the file carries one too, and the component rides as "
                   f"'rigid_body' ({named}) with {len(numeric)} numeric keys (want 0)")
-    except (OSError, ValueError) as e:
-        ok, detail = False, f"cannot read what the probe wrote ({e})"
     print(f"  save-format           {'PASS' if ok else 'FAIL'}  {detail}")
     note("save-format", ok)
 
@@ -26251,6 +26278,87 @@ def run_save_gate(workdir):
                   f"{scaled:.3f} at version 2 (want 0.750)")
     print(f"  save-migrate          {'PASS' if ok else 'FAIL'}  {detail}")
     note("save-migrate", ok)
+
+    # ---- unsaved
+    p = _save_probe("unsaved", workdir)
+    doc = _save_probe_file("unsaved", workdir)
+    if not p or doc is None:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        kept = p.get(("read", "kept"), [])
+        marked = p.get(("read", "marked"), [])
+        restored = p.get(("read", "restored"), [0])[0]
+        dropped = p.get(("read", "dropped"), [0])[0]
+        names = [e.get("name") for e in doc.get("entities", {}).get("list", [])]
+        ok = (len(kept) == 3 and len(marked) == 3
+              and all(close(a, b) for a, b in zip(kept, (1.0, 2.0, 3.0)))
+              and all(close(a, -9.0) for a in marked)
+              and restored == 1.0 and dropped == 1.0
+              and names == ["probe_kept"])
+        detail = (f"kept back at {kept} (want [1, 2, 3]), marked left at {marked} (want -9s), "
+                  f"{restored:.0f} restored and {dropped:.0f} dropped (want 1 and 1); written "
+                  f"again, the file holds {names} (want ['probe_kept'])")
+    print(f"  save-unsaved          {'PASS' if ok else 'FAIL'}  {detail}")
+    note("save-unsaved", ok)
+
+    # ---- names: what the writer SAYS, so the arm reads the run's whole output
+    text, code = _gametest_probe_text("--save-probe", "names",
+                                      env=_save_probe_env("names", workdir))
+    twins = text.count("saved entity is named 'twin'")
+    solos = text.count("saved entity is named 'solo'")
+    wrote = "save names wrote ok 1" in text
+    ok = code == 0 and wrote and twins == 1 and solos == 0
+    detail = (f"the write named 'twin' {twins} time(s) (want 1, for the second of two) and "
+              f"'solo' {solos} (want 0), and still wrote ({wrote})")
+    print(f"  save-names            {'PASS' if ok else 'FAIL'}  {detail}")
+    note("save-names", ok)
+
+    # ---- enum
+    p = _save_probe("enum", workdir)
+    doc = _save_probe_file("enum", workdir)
+    if not p or doc is None:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        room = p.get(("read", "room"), [-1])[0]
+        patched = p.get(("patched", "room"), [-1])[0]
+        counted = p.get(("patched", "dropped"), [0])[0]
+        loaded = p.get(("patched", "ok"), [0])[0]
+        outside = p.get(("outside", "wrote"), [0])[0]
+        summary = doc.get("summary", {})
+        # Read back as 2 here, under a table whose index 2 is another name, can only
+        # have been written as the name.
+        ok = (room == 2.0 and patched == 1.0 and counted == 1.0 and loaded == 1.0
+              and outside == 1.0 and "room" not in summary and "played" in summary)
+        detail = (f"'attic' back as {room:.0f} (want 2); under a table without it the field "
+                  f"stayed {patched:.0f} (want 1), {counted:.0f} counted (want 1), the file "
+                  f"loaded ({loaded:.0f}); index 7 wrote the file ({outside:.0f}) without its "
+                  f"key ({'room' not in summary})")
+    print(f"  save-enum             {'PASS' if ok else 'FAIL'}  {detail}")
+    note("save-enum", ok)
+
+    # ---- peek
+    p = _save_probe("peek", workdir)
+    if not p:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        read_ok = p.get(("read", "ok"), [0])[0]
+        played = p.get(("read", "played"), [0])[0]
+        at = p.get(("read", "at"), [])
+        live = p.get(("live", "played"), [-1])[0]
+        version = p.get(("stamp", "version"), [0])[0]
+        age = p.get(("stamp", "age"), [-99])[0]
+        refused = p.get(("refused", "ok"), [0])[0]
+        yaw = p.get(("refused", "player_yaw"), [0])[0]
+        ok = (read_ok == 1.0 and close(played, 42.5) and len(at) == 3
+              and all(close(a, b) for a, b in zip(at, (1.0, 2.0, 3.0)))
+              and live == 0.0 and version == 1.0 and -1.0 <= age <= 5.0
+              and refused == 1.0 and close(yaw, 3.0))
+        detail = (f"peeked played {played:.1f} at {at} (want 42.5 at [1, 2, 3]) with the live "
+                  f"one left at {live:.1f} (want 0); version {version:.0f}, stamped {age:.0f} s "
+                  f"before the write returned (want 0..5); the address table refused "
+                  f"({refused:.0f}) with player_yaw left at {yaw:.2f} (want 3)")
+    print(f"  save-peek             {'PASS' if ok else 'FAIL'}  {detail}")
+    note("save-peek", ok)
 
     return failed
 

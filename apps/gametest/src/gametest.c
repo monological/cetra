@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <time.h>
 
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
@@ -9032,6 +9033,29 @@ static bool probe_migrate_scaled(cJSON* section) {
     return true;
 }
 
+/*
+ * The enum and peek cases' own tables. The enum row's names are a MUTABLE row so the
+ * probe can stand in for a patched build -- a table that no longer holds a name a
+ * file was written with -- by swapping the pointer between the write and the read.
+ */
+static const char* const PROBE_ROOMS[] = {"hall", "kitchen", "attic"};
+static const char* const PROBE_ROOMS_PATCHED[] = {"hall", "kitchen", "cellar"};
+
+typedef struct ProbeSummary {
+    double played;
+    vec3 at;
+    int room;
+} ProbeSummary;
+
+static ProbeSummary probe_summary;
+
+static SaveField probe_summary_fields[] = {
+    SAVE_ROW(SAVE_DOUBLE, "played", ProbeSummary, played),
+    SAVE_ROW(SAVE_VEC3, "at", ProbeSummary, at),
+    SAVE_ROW_ENUM("room", ProbeSummary, room, PROBE_ROOMS, 3),
+};
+#define PROBE_SUMMARY_COUNT ((int)(sizeof(probe_summary_fields) / sizeof(probe_summary_fields[0])))
+
 static int save_probe_path(char* out, size_t cap, const char* slot) {
     if (!save_default_path(out, cap, slot)) {
         fprintf(stderr, "save-probe: could not resolve a save path\n");
@@ -9242,6 +9266,96 @@ static int run_save_probe(Game* game, const char* which) {
         printf("save migrate read ok %.6f\n", r.ok ? 1.0 : 0.0);
         printf("save migrate read steps %.6f\n", (double)r.migrations_run);
         printf("save migrate read scaled %.6f\n", (double)probe_state.scaled);
+    } else if (!strcmp(which, "unsaved")) {
+        // A file written while both were saved -- what a game wrote before it marked one --
+        // then the mark, both moved away, and a load: the kept one comes back, the marked
+        // one is not touched, and its record drops as though it were missing.
+        vec3 color = {0.5f, 0.5f, 0.5f};
+        Entity* kept = spawn_box(game, "probe_kept", (vec3){1.0f, 2.0f, 3.0f}, 0.5f, color);
+        Entity* marked = spawn_box(game, "probe_marked", (vec3){4.0f, 5.0f, 6.0f}, 0.5f, color);
+        if (!kept || !marked)
+            return 1;
+        if (!save_write(save_system, path))
+            return 1;
+        marked->unsaved = true;
+        Entity* moved[] = {kept, marked};
+        for (int i = 0; i < 2; i++) {
+            glm_vec3_copy((vec3){-9.0f, -9.0f, -9.0f}, moved[i]->position);
+            rigid_body_set_position(entity_get_rigid_body(moved[i]), moved[i]->position);
+        }
+        const SaveLoadResult r = save_read(save_system, path);
+        printf("save unsaved read kept %.6f %.6f %.6f\n", (double)kept->position[0],
+               (double)kept->position[1], (double)kept->position[2]);
+        printf("save unsaved read marked %.6f %.6f %.6f\n", (double)marked->position[0],
+               (double)marked->position[1], (double)marked->position[2]);
+        printf("save unsaved read restored %.6f\n", (double)r.entities_restored);
+        printf("save unsaved read dropped %.6f\n", (double)r.dropped_missing_entity);
+        // Written again with the mark: the file the arm reads holds no record of it.
+        if (!save_write(save_system, path))
+            return 1;
+        printf("save unsaved wrote ok 1\n");
+    } else if (!strcmp(which, "names")) {
+        // Two saved entities answer to one name, and the writer says so; a third with a
+        // name of its own is not mentioned.
+        vec3 color = {0.5f, 0.5f, 0.5f};
+        if (!spawn_box(game, "twin", (vec3){0.0f, 1.0f, 0.0f}, 0.5f, color) ||
+            !spawn_box(game, "twin", (vec3){2.0f, 1.0f, 0.0f}, 0.5f, color) ||
+            !spawn_box(game, "solo", (vec3){4.0f, 1.0f, 0.0f}, 0.5f, color))
+            return 1;
+        printf("save names wrote ok %.6f\n", save_write(save_system, path) ? 1.0 : 0.0);
+    } else if (!strcmp(which, "enum")) {
+        save_register_table(save_system, "summary", 1, probe_summary_fields, PROBE_SUMMARY_COUNT,
+                            &probe_summary);
+        probe_summary.room = 2;
+        if (!save_write(save_system, path))
+            return 1;
+        probe_summary.room = 0;
+        SaveLoadResult r = save_read(save_system, path);
+        printf("save enum read room %.6f\n", (double)probe_summary.room);
+        printf("save enum read dropped %.6f\n", (double)r.dropped_unknown_name);
+
+        // A build whose table no longer holds "attic": the field stays where it was and
+        // one name is counted, and the rest of the file still loads.
+        probe_summary_fields[2].names = PROBE_ROOMS_PATCHED;
+        probe_summary.room = 1;
+        r = save_read(save_system, path);
+        printf("save enum patched room %.6f\n", (double)probe_summary.room);
+        printf("save enum patched dropped %.6f\n", (double)r.dropped_unknown_name);
+        printf("save enum patched ok %.6f\n", r.ok ? 1.0 : 0.0);
+        probe_summary_fields[2].names = PROBE_ROOMS;
+
+        // An index the table does not hold costs that one key, not the save.
+        probe_summary.room = 7;
+        printf("save enum outside wrote %.6f\n", save_write(save_system, path) ? 1.0 : 0.0);
+    } else if (!strcmp(which, "peek")) {
+        save_register_table(save_system, "summary", 1, probe_summary_fields, PROBE_SUMMARY_COUNT,
+                            &probe_summary);
+        probe_summary = (ProbeSummary){.played = 42.5, .at = {1.0f, 2.0f, 3.0f}, .room = 1};
+        player_yaw = 1.25f;
+        if (!save_write(save_system, path))
+            return 1;
+        const time_t written = time(NULL);
+
+        // The live world moves on; a peek must leave every bit of it where it is.
+        probe_summary = (ProbeSummary){0};
+        player_yaw = 3.0f;
+        ProbeSummary scratch = {0};
+        SavePeek info = {0};
+        const bool ok = save_peek(save_system, path, "summary", &scratch, &info);
+        printf("save peek read ok %.6f\n", ok ? 1.0 : 0.0);
+        printf("save peek read played %.6f\n", scratch.played);
+        printf("save peek read at %.6f %.6f %.6f\n", (double)scratch.at[0], (double)scratch.at[1],
+               (double)scratch.at[2]);
+        printf("save peek read room %.6f\n", (double)scratch.room);
+        printf("save peek live played %.6f\n", probe_summary.played);
+        printf("save peek stamp version %.6f\n", (double)info.version);
+        printf("save peek stamp age %.6f\n", (double)written - info.saved_at);
+
+        // gametest's own table is by ADDRESS: peeked, it would write the live player_yaw.
+        ProbeSummary ignored = {0};
+        const bool refused = !save_peek(save_system, path, "gametest", &ignored, NULL);
+        printf("save peek refused ok %.6f\n", refused ? 1.0 : 0.0);
+        printf("save peek refused player_yaw %.6f\n", (double)player_yaw);
     } else {
         fprintf(stderr, "save-probe: unknown case '%s'\n", which);
         rc = 1;

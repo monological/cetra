@@ -18,6 +18,7 @@ typedef struct Entity {
     uint32_t id;
     char name[64];
     bool active;
+    bool unsaved; // left out of a save, written and read: the app rebuilds this state itself
 
     // Transform (always present, not a component)
     vec3 position;
