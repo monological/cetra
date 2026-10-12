@@ -16,15 +16,22 @@ static void on_resume(UIElement* el, void* user) {
         ui_pop(pm->ui);
 }
 
+static void on_settings(UIElement* el, void* user) {
+    (void)el;
+    PauseMenu* pm = user;
+    settings_menu_show(pm->settings);
+}
+
 static void on_exit(UIElement* el, void* user) {
     (void)el;
     PauseMenu* pm = user;
     pm->choice = PAUSE_EXIT;
 }
 
-void pause_menu_start(PauseMenu* pm, UISystem* ui) {
+void pause_menu_start(PauseMenu* pm, UISystem* ui, SettingsMenu* settings) {
     memset(pm, 0, sizeof(*pm));
     pm->ui = ui;
+    pm->settings = settings;
     if (!ui)
         return;
     UIElement* root = NULL;
@@ -32,7 +39,8 @@ void pause_menu_start(PauseMenu* pm, UISystem* ui) {
     UIElement* col = hud_column(root, WIDTH);
     hud_words(col, "Paused", HEADING_SIZE, HUD_HEADING_FG, 4.0f);
     pm->resume = hud_item(col, "Resume", ITEM_SIZE, on_resume, pm);
-    pm->exit = hud_item(col, "Exit to Desktop", ITEM_SIZE, on_exit, pm);
+    hud_item(col, "Settings", ITEM_SIZE, on_settings, pm);
+    hud_item(col, "Exit to Desktop", ITEM_SIZE, on_exit, pm);
 }
 
 void pause_menu_show(PauseMenu* pm) {

@@ -79,6 +79,7 @@
 #include "player.h"
 #include "rain_bed.h"
 #include "save_game.h"
+#include "settings_menu.h"
 #include "sounds.h"
 #include "street.h"
 #include "study.h"
@@ -246,7 +247,7 @@ typedef struct SilentArgs {
     bool no_autosave;         // a game that never saves itself
     bool title;               // the title headless too
     const char* title_screen; // a screen over the title at the start: games, delete
-    const char* pause_screen; // the pause menu up once the game is played: menu
+    const char* pause_screen; // the pause menu up once the game is played: menu, settings
 } SilentArgs;
 
 static SilentArgs g_args;
@@ -320,6 +321,7 @@ typedef enum { RUN_LOADING, RUN_TITLE, RUN_LEAVING, RUN_ENTERING, RUN_PLAYING } 
 static RunState g_run;
 static Title g_title;
 static PauseMenu g_pause;
+static SettingsMenu g_settings;
 static float g_fade; // 0 black .. 1 up, eased by the frame
 
 /*
@@ -887,12 +889,14 @@ static bool enter_game(Engine* engine, const char* load, const char* slot) {
     return true;
 }
 
-// The game played from here on, with the pause menu over it when the command line asks for a
-// picture of it (spec 13.50).
+// The game played from here on, with the pause menu over it, or the settings over that, when the
+// command line asks for a picture of them (spec 13.50).
 static void start_play(void) {
     g_run = RUN_PLAYING;
     if (g_args.pause_screen)
         pause_menu_show(&g_pause);
+    if (g_args.pause_screen && !strcmp(g_args.pause_screen, "settings"))
+        settings_menu_show(&g_settings);
 }
 
 // The light held at rest while it is captured (spec 13.42), and put back after.
@@ -1094,8 +1098,6 @@ static void on_init(Game* game) {
     AudioSystem* audio = create_audio_system(engine->headless);
     if (audio) {
         game_set_audio_system(game, audio);
-        if (g_args.mute)
-            audio_set_bus_volume(audio, AUDIO_BUS_MASTER, 0.0f);
         // Every sound below decodes on the audio's job thread while the rest loads, and
         // game_run waits for them before the first frame (spec 13.39).
         audio_system_begin_loading(audio);
@@ -1240,12 +1242,18 @@ static void on_init(Game* game) {
         if (g_door_hung[i])
             world.doors[world.door_count++] = &g_doors[i];
     save_game_start(&world);
-    pause_menu_start(&g_pause, g_hud.ui);
+    // What the player chose (spec 13.50), on the audio, the window, the camera and the player's
+    // own turn; --mute and --fov over it.
+    g_settings.mute = g_args.mute;
+    settings_menu_start(&g_settings, g_hud.ui, engine, game->audio, g_player.rig);
+    if (g_args.fov_deg > 0.0f && engine->camera)
+        engine->camera->fov_radians = glm_rad(g_args.fov_deg);
+    pause_menu_start(&g_pause, g_hud.ui, &g_settings);
     // The title, over the street, unless the run starts somewhere of its own -- headless, or
     // elsewhere on the command line -- and then it saves nowhere unless --slot says where. A run
     // whose UI could not be made has no title to wait at.
     if ((!engine->headless || g_args.title) && !starts_elsewhere(&g_args) && g_hud.ui)
-        title_start(&g_title, g_hud.ui, engine);
+        title_start(&g_title, g_hud.ui, engine, &g_settings);
     else
         enter_game(engine, g_args.load, g_args.slot);
 
@@ -1553,7 +1561,9 @@ static void on_pre_render(Game* game, double alpha) {
             }
             break;
         case RUN_TITLE:
-            if (g_title.choice != TITLE_WAITING)
+            if (g_title.choice == TITLE_EXIT)
+                game_quit(game);
+            else if (g_title.choice != TITLE_WAITING)
                 g_run = RUN_LEAVING;
             break;
         case RUN_LEAVING:
@@ -1623,7 +1633,9 @@ static void on_frame_input(Game* game) {
     const bool pause = playing && input_action_pressed(&game->input, "pause_menu");
     const bool have_map = backpack_holds(&g_backpack, ITEM_TOWN_MAP);
     bool back = false, bag_after = false, pause_after = false;
-    if (title_open(&g_title)) {
+    if (settings_menu_open(&g_settings)) {
+        back = esc;
+    } else if (title_open(&g_title)) {
         // The title's list and its question go back; the title itself does not.
         back = esc && title_backs(&g_title);
     } else if (pause_menu_open(&g_pause)) {
@@ -1677,6 +1689,7 @@ static void on_frame_input(Game* game) {
         pause_menu_show(&g_pause);
     if (pause_menu_take(&g_pause) == PAUSE_EXIT)
         game_quit(game);
+    settings_menu_frame(&g_settings);
     // Nothing to do when the map was over the bag, which its pop has just put back on top.
     if (bag_after)
         backpack_menu_show(&g_menu);
@@ -1691,9 +1704,10 @@ static void on_frame_input(Game* game) {
     };
     map_screen_input(&g_map_screen, &in, &controls, (float)engine->render_delta);
     // Nobody moves before the game is played -- under the loading screen, at the title, or while
-    // the chosen game comes up out of black -- nor while the pause menu is up, under which the
-    // world stands still as well.
-    hold_game(game, !playing ? HOLD_HELD : pause_menu_open(&g_pause) ? HOLD_FROZEN : HOLD_PLAYED);
+    // the chosen game comes up out of black -- nor while the pause menu or the settings over it
+    // are up, under which the world stands still as well.
+    const bool paused = pause_menu_open(&g_pause) || settings_menu_open(&g_settings);
+    hold_game(game, !playing ? HOLD_HELD : paused ? HOLD_FROZEN : HOLD_PLAYED);
     input_set_suppressed(&game->input, !playing || held || ui_captures_input(g_hud.ui));
 }
 
@@ -1846,7 +1860,8 @@ static void print_usage(const char* prog) {
     printf("      --no-autosave       A game from the title that never saves itself\n");
     printf("      --title             The title headless too\n");
     printf("      --title-screen S    The title with S over it: games, or delete (the newest)\n");
-    printf("      --pause-screen S    The pause menu up once the game is played: menu\n");
+    printf("      --pause-screen S    The pause menu up once the game is played: menu, or\n"
+           "                          settings over it\n");
     printf("  In the window: click to capture the mouse; Escape or pad Start pauses and\n");
     printf("  frees it. WASD\n");
     printf("  walks, Shift hurries, C crouches or stands and Ctrl crouches while held,\n");
@@ -2139,6 +2154,14 @@ int main(int argc, char** argv) {
                                     .height = g_args.height,
                                     .headless = g_args.headless,
                                     .profiler = g_args.profiler}};
+    // A window opens as the player chose it (spec 13.50).
+    settings_menu_load(&g_settings);
+    if (!g_args.headless) {
+        const GameSettings* chosen = &g_settings.settings;
+        config.engine.window_mode = (EngineWindowMode)chosen->window_mode;
+        config.engine.monitor = chosen->monitor[0] ? chosen->monitor : NULL;
+        config.engine.no_vsync = !chosen->vsync;
+    }
     // One sample under TAA, headless as in the window, so a screenshot is what
     // a player sees. Not MSAA: in fog this dense the fog composite takes ONE
     // depth for a multisampled edge pixel, and where half its samples are sky

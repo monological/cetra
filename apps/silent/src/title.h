@@ -8,20 +8,22 @@
 #include "cetra/ui.h"
 
 #include "save_game.h"
+#include "settings_menu.h"
 
 /*
  * The title (spec 13.49): once the game has loaded, the view down the street in the fog from the
- * far pavement, and over it Continue, New Game and Load Game. Load Game lists the games kept,
- * newest first, where each was left and how long it has been played, and one can be deleted from
- * the list after a yes. Three modal screens in the HUD's UI system, the list and the question
- * each hiding what it was opened over, and a camera rig of the title's own, installed on the
- * engine from the start, so the player's is never posed for it.
+ * far pavement, and over it Continue, New Game, Load Game, Settings and Exit to Desktop (spec
+ * 13.50). Load Game lists the games kept, newest first, where each was left and how long it has
+ * been played, and one can be deleted from the list after a yes. Three modal screens in the HUD's
+ * UI system, the list and the question each hiding what it was opened over, and a camera rig of
+ * the title's own, installed on the engine from the start, so the player's is never posed for it.
  */
 
-typedef enum { TITLE_WAITING, TITLE_NEW, TITLE_LOAD } TitleChoice;
+typedef enum { TITLE_WAITING, TITLE_NEW, TITLE_LOAD, TITLE_EXIT } TitleChoice;
 
 typedef struct Title {
-    UISystem* ui; // the HUD's, borrowed
+    UISystem* ui;           // the HUD's, borrowed
+    SettingsMenu* settings; // borrowed
     CameraRig* rig;
     UIScreen* main;
     UIScreen* games;
@@ -40,9 +42,9 @@ typedef struct Title {
     SaveSlot chosen;    // the slot a new game takes, or the one loaded
 } Title;
 
-// Its screens in `ui`, which may be NULL for none, and its rig on `engine`, so the view loads round
-// the title's eye; nothing shown yet.
-void title_start(Title* t, UISystem* ui, Engine* engine);
+// Its screens in `ui`, which may be NULL for none, opening `settings`, and its rig on `engine`, so
+// the view loads round the title's eye; nothing shown yet.
+void title_start(Title* t, UISystem* ui, Engine* engine, SettingsMenu* settings);
 // Up over the street, the games kept read again, on its first item: false with no UI to show.
 bool title_show(Title* t);
 // Over it, the screen called `name` -- "games", or "delete" asking about the newest game -- as
