@@ -61,8 +61,10 @@ static int focused_row(const Title* t) {
     return -1;
 }
 
+// `choice` made, with the slot it is about, if any, and the title's screens taken down.
 static void choose(Title* t, TitleChoice choice, const SaveSlot* slot) {
-    t->chosen = *slot;
+    if (slot)
+        t->chosen = *slot;
     t->choice = choice;
     while (title_open(t))
         ui_pop(t->ui);
@@ -94,6 +96,18 @@ static void on_load(UIElement* el, void* user) {
         return;
     ui_push(t->ui, t->games);
     ui_set_focus(t->games, t->rows[0]);
+}
+
+static void on_settings(UIElement* el, void* user) {
+    (void)el;
+    Title* t = user;
+    settings_menu_show(t->settings);
+}
+
+static void on_exit(UIElement* el, void* user) {
+    (void)el;
+    Title* t = user;
+    choose(t, TITLE_EXIT, NULL);
 }
 
 static void on_row(UIElement* el, void* user) {
@@ -131,9 +145,10 @@ static void on_yes(UIElement* el, void* user) {
 
 // ------------------------------------------------------------------------------- the screens
 
-void title_start(Title* t, UISystem* ui, Engine* engine) {
+void title_start(Title* t, UISystem* ui, Engine* engine, SettingsMenu* settings) {
     memset(t, 0, sizeof(*t));
     t->ui = ui;
+    t->settings = settings;
     t->rig = create_camera_rig();
     if (t->rig) {
         camera_rig_set_pose(t->rig, TITLE_EYE, TITLE_TARGET);
@@ -149,6 +164,8 @@ void title_start(Title* t, UISystem* ui, Engine* engine) {
     t->resume = hud_item(col, "Continue", ITEM_SIZE, on_resume, t);
     t->fresh = hud_item(col, "New Game", ITEM_SIZE, on_fresh, t);
     t->load = hud_item(col, "Load Game", ITEM_SIZE, on_load, t);
+    hud_item(col, "Settings", ITEM_SIZE, on_settings, t);
+    hud_item(col, "Exit to Desktop", ITEM_SIZE, on_exit, t);
     t->note = hud_words(col, "", ROW_SIZE, NOTE_FG, 1.0f);
 
     // The list and the question each take the place of what they are opened over, which would
