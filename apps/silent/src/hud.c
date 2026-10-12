@@ -32,12 +32,11 @@
 #define SAVE_END      (SAVE_LIGHTING + SAVE_STAY + SAVE_OUT)
 #define SAVE_ICON     34.0f // the candlestick's square, in points
 #define SAVE_MARGIN   26.0f // from the window's right and bottom edges
-#define SAVE_GAP      10.0f // between the words and the candlestick
+#define SAVE_GAP      10.0f // between the candlestick and the words
 #define SAVE_SIZE     18.0f // the words' size
 
 static const vec4 PROMPT_FG = {0.88f, 0.88f, 0.84f, 1.0f};
 static const vec4 THOUGHT_FG = {0.80f, 0.78f, 0.70f, 1.0f};
-static const vec4 IRON = {0.42f, 0.40f, 0.37f, 1.0f};
 
 // The words' look but their colour; the face and its size are the UI's.
 static const UIStyle WORDS = {.tracking = 1.0f, .line_spacing = 1.0f};
@@ -79,31 +78,34 @@ static void line_build(HudLine* line, UIElement* parent, const float* fg) {
     ui_set_draw(line->label, words_draw, line);
 }
 
-// The save mark in the bottom right corner of the window the element covers: the words, then the
-// candlestick.
+// The save mark in the bottom right corner of the window the element covers: the candlestick, then
+// the words, both in the words' colour. It is placed for the longer of its words, so the
+// candlestick stays where it is when they change.
 static void save_mark_draw(UIElement* el, UIDrawList* dl, void* user) {
     const Hud* hud = user;
     const float t = hud->saved_age;
     const float alpha = glm_clamp(fminf(t / SAVE_IN, (SAVE_END - t) / SAVE_OUT), 0.0f, 1.0f);
     if (alpha <= 0.0f)
         return;
-    const UIRect r = el->rect;
-    const UIRect icon = {r.x + r.w - SAVE_MARGIN - SAVE_ICON, r.y + r.h - SAVE_MARGIN - SAVE_ICON,
-                         SAVE_ICON, SAVE_ICON};
-    if (hud->candles) {
-        ui_set_draw_program(dl, hud->candles, icon,
-                            3.0f * glm_clamp(t / SAVE_LIGHTING, 0.0f, 1.0f));
-        ui_draw_quad(dl, icon, (vec4){IRON[0], IRON[1], IRON[2], alpha});
-        ui_set_draw_program(dl, NULL, icon, 0.0f);
-    }
     UIStyle style = WORDS;
     style.font_size = SAVE_SIZE;
     style.tracking = 1.5f;
     glm_vec4_copy((float*)THOUGHT_FG, style.fg);
     style.fg[3] *= alpha;
+    const float widest = ui_text_width(hud->font, SAVE_SIZE, style.tracking, "Saving...");
+    const UIRect r = el->rect;
+    const UIRect icon = {r.x + r.w - SAVE_MARGIN - widest - SAVE_GAP - SAVE_ICON,
+                         r.y + r.h - SAVE_MARGIN - SAVE_ICON, SAVE_ICON, SAVE_ICON};
+    if (hud->candles) {
+        ui_set_draw_program(dl, hud->candles, icon,
+                            3.0f * glm_clamp(t / SAVE_LIGHTING, 0.0f, 1.0f));
+        ui_draw_quad(dl, icon, style.fg);
+        ui_set_draw_program(dl, NULL, icon, 0.0f);
+    }
     const float lh = ui_line_height(hud->font, SAVE_SIZE, 1.0f);
-    const UIRect words = {r.x, icon.y + 0.5f * (SAVE_ICON - lh), icon.x - SAVE_GAP - r.x, lh};
-    ui_draw_text(dl, words, t < SAVE_LIGHTING ? "Saving..." : "Saved", &style, UI_ALIGN_END);
+    const UIRect words = {icon.x + SAVE_ICON + SAVE_GAP, icon.y + 0.5f * (SAVE_ICON - lh), widest,
+                          lh};
+    ui_draw_text(dl, words, t < SAVE_LIGHTING ? "Saving..." : "Saved", &style, UI_ALIGN_START);
 }
 
 static void line_set(HudLine* line, const char* text) {
