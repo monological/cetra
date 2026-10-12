@@ -319,6 +319,42 @@ static RunState g_run;
 static Title g_title;
 static float g_fade; // 0 black .. 1 up, eased by the frame
 
+/*
+ * Nothing is played before the game is: its sim is held, so a New Game is the world as it was
+ * built however long the title stood, and a load is put over that. The world's look goes on by
+ * this clock meanwhile, installed as the engine's render clock -- the rain still falls past the
+ * title, the lamps still fail, and the fade still eases. It takes up where the sim was drawn and
+ * runs by the frame: a fixed step headless, the wall clock in a window.
+ */
+static EngineFrameClock g_held_clock;
+
+// How far a frame moves what is drawn and eased by it, and the time it is drawn at: the sim's
+// while the game is played, the held clock's while it is not.
+static double look_dt(const Game* game) {
+    return game->paused ? g_held_clock.delta : game->frame_clock.delta;
+}
+
+static double look_time(const Game* game) {
+    return game->paused ? g_held_clock.time : game->time;
+}
+
+// Before the fixed steps: the sim held or let go, and the render clock that goes with it.
+static void hold_game(Game* game, bool held) {
+    Engine* engine = game->engine;
+    if (!held) {
+        game_unpause(game);
+        engine_set_render_clock(engine, &game->sim_clock);
+        return;
+    }
+    if (!game->paused)
+        g_held_clock.time = game->frame_clock.time;
+    g_held_clock.delta =
+        engine->headless ? ENGINE_FIXED_FRAME_DT : fmin(engine->delta_time, game->max_frame_time);
+    g_held_clock.time += g_held_clock.delta;
+    game_pause(game);
+    engine_set_render_clock(engine, &g_held_clock);
+}
+
 // The spawn: in the kitchen's back corner, looking across the room toward the hall door.
 static const vec3 SPAWN_FEET = {4.5f, FLOOR_Y, 13.3f};
 static const vec3 SPAWN_LOOK_AT = {0.5f, 1.0f, 10.5f};
@@ -1231,8 +1267,6 @@ static void on_update(Game* game, double dt) {
     for (int i = 0; i < DOORS; i++)
         if (g_door_hung[i])
             door_update(&g_doors[i], (float)dt);
-    for (int i = 0; i < FAILING_LAMPS; i++)
-        failing_lamp_update(&g_failing[i], game->time);
     if (g_args.trace_cat) {
         static int step;
         if (step++ % 30 == 0) {
@@ -1411,8 +1445,10 @@ static void on_pre_render(Game* game, double alpha) {
         else if (reach.door)
             door_toggle(reach.door);
     }
-    // What is drawn over the game eases by the frame, as the head turns.
-    const float dt = (float)game->frame_clock.delta;
+    // What is drawn over the game eases by the frame, as the head turns, and what only looks
+    // goes on while the game is held.
+    const float dt = (float)look_dt(game);
+    const double looks_at = look_time(game);
     hud_prompt(&g_hud, reach.take ? reach.prompt
                        : reach.door
                            ? (door_will_open(reach.door) ? "E   Open door" : "E   Close door")
@@ -1422,8 +1458,10 @@ static void on_pre_render(Game* game, double alpha) {
     map_screen_update(&g_map_screen, dt, feet, forward);
     sounds_update(&g_sounds);
     // The beam trails the head by the frame, as the head turns.
-    lights_update(&g_lights, g_scene, game->time, dt, eye, forward);
-    tv_update(&g_tv, game->time);
+    lights_update(&g_lights, g_scene, looks_at, dt, eye, forward);
+    for (int i = 0; i < FAILING_LAMPS; i++)
+        failing_lamp_update(&g_failing[i], looks_at);
+    tv_update(&g_tv, looks_at);
     cat_mind_frame(&g_mind, game->time);
     cat_debug_draw(&g_cat, &g_mind, engine);
     cat_update(&g_cat, game, g_scene, &g_lights, eye, (float)game->sim_clock.delta);
@@ -1506,7 +1544,7 @@ static void on_pre_render(Game* game, double alpha) {
     // tonemap, so the exposure and the day's meter never see it. Each frame's step is capped
     // because a frame of captures can be long.
     const bool up = g_run == RUN_TITLE || g_run == RUN_PLAYING;
-    const float step = fminf((float)game->frame_clock.delta, 1.0f / 30.0f);
+    const float step = fminf(dt, 1.0f / 30.0f);
     g_fade = up ? fminf(g_fade + step / FADE_IN_SECONDS, 1.0f)
                 : fmaxf(g_fade - step / FADE_OUT_SECONDS, 0.0f);
     if (engine->postfx)
@@ -1536,6 +1574,7 @@ static void on_pre_render(Game* game, double alpha) {
 static void on_frame_input(Game* game) {
     const Engine* engine = game->engine;
     const bool playing = g_run == RUN_PLAYING;
+    hold_game(game, !playing);
     const bool held = ui_captures_input(g_hud.ui);
     const bool bag_up = backpack_menu_open(&g_menu);
     const bool map_up = map_screen_open(&g_map_screen);
