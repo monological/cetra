@@ -21,13 +21,13 @@
  * last two, so the eye moves every frame however the frames fall against the steps. A crouch
  * (spec 13.48) shortens the capsule from the top and eases the eye down after it; it stands again
  * only where there is room over the head, and sprinting asks it to. The
- * mouse is captured on a click and released on Escape, and free whenever the
- * game's input is held -- a screen over the game, the loading screen -- coming
- * back as it was once that lets go; the arrows and the right stick look too, so
- * a headless or pad run reaches every control.
+ * mouse is captured on a click and free whenever the game's input is held -- a
+ * screen over the game, the pause menu, the loading screen -- coming back as it
+ * was once that lets go; the arrows and the right stick look too, so a headless
+ * or pad run reaches every control.
  *
- * It reads the actions "move_x", "move_y", "sprint", "crouch" (held), "crouch_toggle", "look_x",
- * "look_y" and "release_cursor" by name, from whatever table the app binds.
+ * It reads the actions "move_x", "move_y", "sprint", "crouch" (held), "crouch_toggle", "look_x"
+ * and "look_y" by name, from whatever table the app binds.
  */
 
 #define PLAYER_EYE_HEIGHT 1.62f // feet to eye standing, metres
@@ -35,7 +35,7 @@
 typedef struct Player {
     Entity* entity;
     CameraRig* rig;
-    bool cursor_wanted;    // the player's own choice: a click takes the cursor, Escape gives it up
+    bool cursor_wanted;    // the player's own choice: a click takes the cursor
     bool cursor_captured;  // what the window has
     bool skip_first_delta; // the first delta after a capture is a jump, not a movement
     vec3 step_from;      // where the capsule was when this fixed step began: the last step's result

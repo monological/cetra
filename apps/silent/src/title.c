@@ -17,69 +17,8 @@ static const vec3 TITLE_TARGET = {0.5f, 2.4f, 10.0f};
 #define ITEM_SIZE     26.0f
 #define ROW_SIZE      22.0f
 #define ITEM_WIDTH    520.0f
-#define ITEM_PAD      10.0f
-#define PLATE_ALPHA   0.45f // the plate behind the item the keys are on
 
-static const vec4 WORDMARK_FG = {0.78f, 0.80f, 0.76f, 0.85f};
-static const vec4 ITEM_FG = {0.62f, 0.63f, 0.60f, 1.0f};
-static const vec4 FOCUS_FG = {0.93f, 0.93f, 0.89f, 1.0f};
-static const vec4 DISABLED_FG = {0.35f, 0.36f, 0.34f, 1.0f};
 static const vec4 NOTE_FG = {0.80f, 0.78f, 0.70f, 1.0f};
-
-// An item as words on nothing, brightening onto a dim plate as the keys or the pointer come to it.
-static void item_draw(UIElement* el, UIDrawList* dl, void* user) {
-    (void)user;
-    if (!el->text || !el->text[0] || el->rect.h <= 0.0f)
-        return;
-    const float f = el->disabled ? 0.0f : el->t_focus;
-    if (f > 0.0f) {
-        const vec4 bg = {0.0f, 0.0f, 0.0f, PLATE_ALPHA * f};
-        ui_draw_rounded(dl, el->rect, 4.0f, (float*)bg, NULL, 0.0f);
-    }
-    UIStyle style = {.tracking = 1.5f, .font_size = el->style ? el->style->font_size : 0.0f};
-    if (el->disabled)
-        glm_vec4_copy((float*)DISABLED_FG, style.fg);
-    else
-        glm_vec4_lerp((float*)ITEM_FG, (float*)FOCUS_FG, f, style.fg);
-    // The words from the top of the rect, as the label would sit inside its padding.
-    ui_draw_text(dl, ui_rect_inset(el->rect, ITEM_PAD, ITEM_PAD, ITEM_PAD, ITEM_PAD), el->text,
-                 &style, el->align_cross);
-}
-
-static UIElement* item(UIElement* parent, const char* text, float size, UIActionFn action,
-                       void* user) {
-    UIElement* el = ui_button(parent, text, action, user);
-    const UIStyle style = {.font_size = size, .padding = {ITEM_PAD, ITEM_PAD, ITEM_PAD, ITEM_PAD}};
-    ui_set_style(el, &style);
-    ui_set_draw(el, item_draw, NULL);
-    el->size_mode[0] = UI_GROW;
-    el->align_cross = UI_ALIGN_CENTER;
-    return el;
-}
-
-// Shown or not without leaving the tree, which keeps what it has: a hidden item takes no height
-// and no key lands on it.
-static void item_shown(UIElement* el, bool shown) {
-    el->disabled = !shown;
-    el->size_mode[1] = shown ? UI_FIT : UI_FIXED;
-    el->size[1] = 0.0f;
-}
-
-static UIElement* column(UIElement* root, float width) {
-    UIElement* col = hud_bare(root, UI_COLUMN, 6.0f);
-    col->align_cross = UI_ALIGN_CENTER;
-    ui_set_size(col, UI_FIXED, width, UI_FIT, 0.0f);
-    return col;
-}
-
-static UIElement* words(UIElement* parent, const char* text, float size, const float* fg,
-                        float tracking) {
-    UIElement* el = ui_label(parent, text);
-    UIStyle style = {.font_size = size, .tracking = tracking, .padding = {6.0f, 0.0f, 18.0f, 0.0f}};
-    glm_vec4_copy((float*)fg, style.fg);
-    ui_set_style(el, &style);
-    return el;
-}
 
 // ------------------------------------------------------------------------------- the games
 
@@ -107,9 +46,9 @@ static void refresh(Title* t) {
         if (i < t->count)
             slot_label(&t->slots[i], label, sizeof(label));
         ui_set_text(t->rows[i], label);
-        item_shown(t->rows[i], i < t->count);
+        hud_item_shown(t->rows[i], i < t->count);
     }
-    item_shown(t->resume, t->count > 0);
+    hud_item_shown(t->resume, t->count > 0);
     t->load->disabled = t->count == 0;
 }
 
@@ -205,30 +144,31 @@ void title_start(Title* t, UISystem* ui, Engine* engine) {
 
     UIElement* root = NULL;
     t->main = hud_modal_screen(ui, "title", TITLE_DIM, &root);
-    UIElement* col = column(root, ITEM_WIDTH);
-    words(col, "s i l e n t", WORDMARK_SIZE, WORDMARK_FG, 6.0f);
-    t->resume = item(col, "Continue", ITEM_SIZE, on_resume, t);
-    t->fresh = item(col, "New Game", ITEM_SIZE, on_fresh, t);
-    t->load = item(col, "Load Game", ITEM_SIZE, on_load, t);
-    t->note = words(col, "", ROW_SIZE, NOTE_FG, 1.0f);
+    UIElement* col = hud_column(root, ITEM_WIDTH);
+    hud_words(col, "s i l e n t", WORDMARK_SIZE, HUD_HEADING_FG, 6.0f);
+    t->resume = hud_item(col, "Continue", ITEM_SIZE, on_resume, t);
+    t->fresh = hud_item(col, "New Game", ITEM_SIZE, on_fresh, t);
+    t->load = hud_item(col, "Load Game", ITEM_SIZE, on_load, t);
+    t->note = hud_words(col, "", ROW_SIZE, NOTE_FG, 1.0f);
 
     // The list and the question each take the place of what they are opened over, which would
     // otherwise show through.
     t->games = hud_modal_screen(ui, "games", LIST_DIM, &root);
     ui_screen_set_opaque(t->games, true);
-    col = column(root, 2.0f * ITEM_WIDTH);
-    words(col, "Load Game", ITEM_SIZE, WORDMARK_FG, 3.0f);
+    col = hud_column(root, 2.0f * ITEM_WIDTH);
+    hud_words(col, "Load Game", ITEM_SIZE, HUD_HEADING_FG, 3.0f);
     for (int i = 0; i < SAVE_GAME_SLOTS; i++)
-        t->rows[i] = item(col, "", ROW_SIZE, on_row, t);
-    words(col, "Delete   Delete a game        Escape   Back", ROW_SIZE * 0.8f, ITEM_FG, 1.0f);
+        t->rows[i] = hud_item(col, "", ROW_SIZE, on_row, t);
+    hud_words(col, "Delete   Delete a game        Escape   Back", ROW_SIZE * 0.8f, HUD_ITEM_FG,
+              1.0f);
 
     t->confirm = hud_modal_screen(ui, "delete", LIST_DIM, &root);
     ui_screen_set_opaque(t->confirm, true);
-    col = column(root, ITEM_WIDTH);
-    words(col, "Delete this game?", ITEM_SIZE, WORDMARK_FG, 2.0f);
-    t->asked = words(col, "", ROW_SIZE, ITEM_FG, 1.0f);
-    t->no = item(col, "No", ITEM_SIZE, on_no, t);
-    t->yes = item(col, "Yes", ITEM_SIZE, on_yes, t);
+    col = hud_column(root, ITEM_WIDTH);
+    hud_words(col, "Delete this game?", ITEM_SIZE, HUD_HEADING_FG, 2.0f);
+    t->asked = hud_words(col, "", ROW_SIZE, HUD_ITEM_FG, 1.0f);
+    t->no = hud_item(col, "No", ITEM_SIZE, on_no, t);
+    t->yes = hud_item(col, "Yes", ITEM_SIZE, on_yes, t);
 }
 
 bool title_show(Title* t) {
