@@ -63,6 +63,16 @@ static void set_cursor_captured(Player* p, Engine* engine, bool captured) {
     p->skip_first_delta = captured;
 }
 
+// The body where its entity stands, still, looking along `yaw` and `pitch`. A window's first frame
+// may run no step, and is drawn from here.
+static void stand(Player* p, float yaw, float pitch) {
+    glm_vec3_copy(p->entity->position, p->step_from);
+    glm_vec3_copy(p->entity->position, p->view);
+    p->speed = 0.0f;
+    p->heading = yaw;
+    camera_rig_aim(p->rig, yaw, pitch);
+}
+
 void player_init(Player* p, Game* game, PhysicsWorld* physics, EntityManager* em, const vec3 feet,
                  float yaw, float pitch) {
     *p = (Player){0};
@@ -76,10 +86,6 @@ void player_init(Player* p, Game* game, PhysicsWorld* physics, EntityManager* em
     cc.step_height = 0.25f;
     cc.max_slope_angle = glm_rad(50.0f);
     entity_add_character_controller(p->entity, physics, &cc);
-    // A window's first frame may run no step, and is drawn from here.
-    glm_vec3_copy(p->entity->position, p->step_from);
-    glm_vec3_copy(p->entity->position, p->view);
-    p->heading = yaw;
     p->interpolate = true;
     p->gait = create_gait();
     p->use_gait = true;
@@ -91,7 +97,7 @@ void player_init(Player* p, Game* game, PhysicsWorld* physics, EntityManager* em
     p->rig->pitch_max = PITCH_LIMIT;
     glm_vec3_copy(p->entity->position, p->rig->anchor);
     camera_rig_set_distance(p->rig, 0.0f);
-    camera_rig_aim(p->rig, yaw, pitch);
+    stand(p, yaw, pitch);
     engine_set_camera_rig(game->engine, p->rig);
 }
 
@@ -298,17 +304,13 @@ void player_free(Player* p) {
     p->gait = NULL;
 }
 
-void player_restore(Player* p, float yaw, float pitch) {
+void player_restore(Player* p) {
     CharacterController* cc = p->entity ? entity_get_character_controller(p->entity) : NULL;
     if (!cc)
         return;
     character_controller_get_position(cc, p->entity->position);
-    glm_vec3_copy(p->entity->position, p->step_from);
-    glm_vec3_copy(p->entity->position, p->view);
     character_controller_set_velocity(cc, GLM_VEC3_ZERO);
-    p->speed = 0.0f;
-    p->heading = yaw;
-    camera_rig_aim(p->rig, yaw, pitch);
+    stand(p, p->rig->yaw, p->rig->pitch);
     gait_reset(p->gait);
     // Down always fits; up is checked against what is over the head where it now stands.
     p->crouch_toggled = false;

@@ -8,121 +8,120 @@
 #include "cetra/util.h"
 #include "cetra/game/save.h"
 
-#include "sounds.h"
+#include "rooms.h"
 
 // A room's own save waits this long after the last write: a doorway walked back and forth is not
 // worth a write each way.
 #define ROOM_SAVE_GAP 10.0
 
-// Everything a save keeps, as one struct the tables are offsets into. Copied from the world before
-// a write and pushed back into it after a read.
-typedef struct SilentSave {
+// What a save keeps that no module holds as a field: worked out from the world before a write and
+// put back into it after a read. The summary is at offsets, which a list of saves peeks into.
+typedef struct Kept {
     double played; // seconds of play, kept here and nowhere else
     vec3 feet;
-    float yaw, pitch;
     bool bag;                   // the backpack taken
     int item_order[ITEM_COUNT]; // each thing's place in the order it was had, from 1; 0 not had
-    bool found[PLACE_COUNT];
     bool inked[PLACE_COUNT];
-    float door_travel[SAVE_GAME_DOORS];
-    float door_want[SAVE_GAME_DOORS];
-    bool flashlight_on;
-    double drafted; // when the basement door first let the draft in, sim seconds; -1 never
     int cat_place;
-    float cat_energy, cat_boredom, cat_alarm, cat_affinity;
-    float cat_since[CAT_PLACE_COUNT];
-} SilentSave;
+} Kept;
 
 static SaveSystem* g_system;
 static SaveWorld g_world;
-static SilentSave g_save;
-static char g_slot[16]; // the slot autosaves go to, or empty
-static bool g_due;      // a save is due at the next frame
-static bool g_room_due; // and one for a room, once the gap allows
+static Kept g_kept;
+static char g_slot[16];   // the slot autosaves go to, or empty
+static char g_path[1024]; // and its file
+static bool g_due;        // a save is due at the next frame
+static bool g_room_due;   // and one for a room, once the gap allows
 static double g_since_write;
 static int g_room = -1;
 
 static const SaveField SUMMARY[] = {
-    SAVE_ROW(SAVE_DOUBLE, "played", SilentSave, played),
-    SAVE_ROW(SAVE_VEC3, "feet", SilentSave, feet),
-};
-static const SaveField PLAYER[] = {
-    SAVE_ROW(SAVE_FLOAT, "yaw", SilentSave, yaw),
-    SAVE_ROW(SAVE_FLOAT, "pitch", SilentSave, pitch),
-};
-static const SaveField HOUSE[] = {
-    SAVE_ROW(SAVE_BOOL, "flashlight_on", SilentSave, flashlight_on),
-    SAVE_ROW(SAVE_DOUBLE, "basement_draft", SilentSave, drafted),
+    SAVE_ROW(SAVE_DOUBLE, "played", Kept, played),
+    SAVE_ROW(SAVE_VEC3, "feet", Kept, feet),
 };
 
-// The tables keyed by each thing's own id, built once the ids are known: a row per item, place,
-// door and cat place. The door keys are composed, so they are kept here.
+// Every other table is by address, keyed by each thing's own id, and built once the world is
+// known.
 static const char* g_cat_place_names[CAT_PLACE_COUNT];
+static SaveField g_player[2];
+static SaveField g_house[2];
 static SaveField g_items[1 + ITEM_COUNT];
 static SaveField g_finds[PLACE_COUNT];
 static SaveField g_inked[PLACE_COUNT];
-static SaveField g_doors[2 * SAVE_GAME_DOORS];
-static char g_door_keys[SAVE_GAME_DOORS][80];
+static SaveField g_door_travel[SAVE_GAME_DOORS];
+static SaveField g_door_want[SAVE_GAME_DOORS];
 static SaveField g_cat[5];
 static SaveField g_cat_since[CAT_PLACE_COUNT];
 
-#define AT(member) offsetof(SilentSave, member)
+#define ROW(type, key, addr) ((SaveField)SAVE_ROW_AT(type, key, addr))
 
-static SaveField row(unsigned char type, const char* key, size_t offset) {
-    return (SaveField){.type = type, .key = key, .offset = offset};
+// A table of rows by address, which never read their base; the save system asks for one all the
+// same.
+static void add_table(const char* section, const SaveField* rows, int count) {
+    save_register_table(g_system, section, 1, rows, count, g_world.game);
 }
 
-#define REGISTER(section, rows, count) \
-    save_register_table(g_system, section, 1, rows, count, &g_save)
+// The cat only with a mind to restore: held on a clip or sent somewhere from the command line, it
+// has none, and nothing about it is the game's.
+static bool cat_kept(void) {
+    const SaveWorld* w = &g_world;
+    return w->cat && w->cat->entity && w->mind && w->mind->brain;
+}
 
 bool save_game_start(const SaveWorld* world) {
     g_world = *world;
-    g_system = create_save_system(world->game);
+    const SaveWorld* w = &g_world;
+    g_system = create_save_system(w->game);
     if (!g_system)
         return false;
-    REGISTER("summary", SUMMARY, KIT_COUNT(SUMMARY));
-    REGISTER("player", PLAYER, KIT_COUNT(PLAYER));
-    REGISTER("house", HOUSE, KIT_COUNT(HOUSE));
+    save_register_table(g_system, "summary", 1, SUMMARY, KIT_COUNT(SUMMARY), &g_kept);
 
-    g_items[0] = row(SAVE_BOOL, "backpack", AT(bag));
+    g_player[0] = ROW(SAVE_FLOAT, "yaw", &w->player->rig->yaw);
+    g_player[1] = ROW(SAVE_FLOAT, "pitch", &w->player->rig->pitch);
+    add_table("player", g_player, KIT_COUNT(g_player));
+    g_house[0] = ROW(SAVE_BOOL, "flashlight_on", &w->lights->flashlight_on);
+    g_house[1] = ROW(SAVE_DOUBLE, "basement_draft", &w->basement->drafted);
+    add_table("house", g_house, KIT_COUNT(g_house));
+
+    g_items[0] = ROW(SAVE_BOOL, "backpack", &g_kept.bag);
     for (int i = 0; i < ITEM_COUNT; i++)
-        g_items[1 + i] = row(SAVE_INT, ITEMS[i].id, AT(item_order) + (size_t)i * sizeof(int));
-    REGISTER("items", g_items, 1 + ITEM_COUNT);
+        g_items[1 + i] = ROW(SAVE_INT, ITEMS[i].id, &g_kept.item_order[i]);
+    add_table("items", g_items, KIT_COUNT(g_items));
 
     for (int i = 0; i < PLACE_COUNT; i++) {
-        g_finds[i] = row(SAVE_BOOL, PLACES[i].id, AT(found) + (size_t)i * sizeof(bool));
-        g_inked[i] = row(SAVE_BOOL, PLACES[i].id, AT(inked) + (size_t)i * sizeof(bool));
+        g_finds[i] = ROW(SAVE_BOOL, PLACES[i].id, &w->finds->found[i]);
+        g_inked[i] = ROW(SAVE_BOOL, PLACES[i].id, &g_kept.inked[i]);
     }
-    REGISTER("finds", g_finds, PLACE_COUNT);
-    REGISTER("inked", g_inked, PLACE_COUNT);
+    add_table("finds", g_finds, PLACE_COUNT);
+    add_table("inked", g_inked, PLACE_COUNT);
 
-    const int doors = world->door_count < SAVE_GAME_DOORS ? world->door_count : SAVE_GAME_DOORS;
-    for (int d = 0; d < doors; d++) {
-        const char* name = world->doors[d]->entity->name;
-        snprintf(g_door_keys[d], sizeof(g_door_keys[d]), "%s.want", name);
-        g_doors[2 * d] = row(SAVE_FLOAT, name, AT(door_travel) + (size_t)d * sizeof(float));
-        g_doors[2 * d + 1] =
-            row(SAVE_FLOAT, g_door_keys[d], AT(door_want) + (size_t)d * sizeof(float));
+    for (int d = 0; d < w->door_count; d++) {
+        Door* door = w->doors[d];
+        g_door_travel[d] = ROW(SAVE_FLOAT, door->entity->name, &door->travel);
+        g_door_want[d] = ROW(SAVE_FLOAT, door->entity->name, &door->want);
     }
-    if (doors > 0)
-        REGISTER("doors", g_doors, 2 * doors);
+    if (w->door_count > 0) {
+        add_table("door_travel", g_door_travel, w->door_count);
+        add_table("door_want", g_door_want, w->door_count);
+    }
 
-    // The cat only with a mind to restore: held on a clip or sent somewhere from the command
-    // line, it has none, and nothing about it is the game's.
-    if (world->cat && world->cat->entity && world->mind && world->mind->brain) {
+    if (cat_kept()) {
+        CatMind* m = w->mind;
         for (int i = 0; i < CAT_PLACE_COUNT; i++) {
             g_cat_place_names[i] = CAT_PLACES[i].name;
-            g_cat_since[i] =
-                row(SAVE_FLOAT, CAT_PLACES[i].name, AT(cat_since) + (size_t)i * sizeof(float));
+            g_cat_since[i] = ROW(SAVE_FLOAT, CAT_PLACES[i].name, &m->since[i]);
         }
-        g_cat[0] = (SaveField)SAVE_ROW_ENUM("place", SilentSave, cat_place, g_cat_place_names,
-                                            CAT_PLACE_COUNT);
-        g_cat[1] = row(SAVE_FLOAT, "energy", AT(cat_energy));
-        g_cat[2] = row(SAVE_FLOAT, "boredom", AT(cat_boredom));
-        g_cat[3] = row(SAVE_FLOAT, "alarm", AT(cat_alarm));
-        g_cat[4] = row(SAVE_FLOAT, "affinity", AT(cat_affinity));
-        REGISTER("cat", g_cat, KIT_COUNT(g_cat));
-        REGISTER("cat_since", g_cat_since, CAT_PLACE_COUNT);
+        g_cat[0] = (SaveField){.type = SAVE_ENUM,
+                               .key = "place",
+                               .addr = &g_kept.cat_place,
+                               .names = g_cat_place_names,
+                               .name_count = CAT_PLACE_COUNT};
+        g_cat[1] = ROW(SAVE_FLOAT, "energy", &m->energy);
+        g_cat[2] = ROW(SAVE_FLOAT, "boredom", &m->boredom);
+        g_cat[3] = ROW(SAVE_FLOAT, "alarm", &m->alarm);
+        g_cat[4] = ROW(SAVE_FLOAT, "affinity", &m->affinity);
+        add_table("cat", g_cat, KIT_COUNT(g_cat));
+        add_table("cat_since", g_cat_since, CAT_PLACE_COUNT);
     }
     return true;
 }
@@ -136,36 +135,15 @@ void save_game_free(void) {
 
 static void gather(void) {
     const SaveWorld* w = &g_world;
-    player_feet(w->player, g_save.feet);
-    g_save.yaw = w->player->rig->yaw;
-    g_save.pitch = w->player->rig->pitch;
-
-    g_save.bag = w->backpack->taken;
-    memset(g_save.item_order, 0, sizeof(g_save.item_order));
+    player_feet(w->player, g_kept.feet);
+    g_kept.bag = w->backpack->taken;
+    memset(g_kept.item_order, 0, sizeof(g_kept.item_order));
     for (int k = 0; k < w->backpack->held_count; k++)
-        g_save.item_order[w->backpack->held[k]] = k + 1;
-
-    memcpy(g_save.found, w->finds->found, sizeof(g_save.found));
+        g_kept.item_order[w->backpack->held[k]] = k + 1;
     for (int i = 0; i < PLACE_COUNT; i++)
-        g_save.inked[i] = map_screen_inked(w->map_screen, (PlaceId)i);
-
-    for (int d = 0; d < w->door_count && d < SAVE_GAME_DOORS; d++) {
-        g_save.door_travel[d] = w->doors[d]->travel;
-        g_save.door_want[d] = w->doors[d]->want;
-    }
-    g_save.flashlight_on = w->lights->flashlight_on;
-    g_save.drafted = w->basement->drafted;
-
-    if (w->mind && w->mind->brain) {
-        const int at = cat_nearest_place(w->cat);
-        if (at >= 0)
-            g_save.cat_place = at;
-        g_save.cat_energy = w->mind->energy;
-        g_save.cat_boredom = w->mind->boredom;
-        g_save.cat_alarm = w->mind->alarm;
-        g_save.cat_affinity = w->mind->affinity;
-        memcpy(g_save.cat_since, w->mind->since, sizeof(g_save.cat_since));
-    }
+        g_kept.inked[i] = map_screen_inked(w->map_screen, (PlaceId)i);
+    if (cat_kept())
+        g_kept.cat_place = cat_nearest_place(w->cat);
 }
 
 static void apply(void) {
@@ -175,41 +153,33 @@ static void apply(void) {
     int count = 0;
     for (int order = 1; order <= ITEM_COUNT; order++)
         for (int i = 0; i < ITEM_COUNT; i++)
-            if (g_save.item_order[i] == order)
+            if (g_kept.item_order[i] == order)
                 held[count++] = (ItemId)i;
-    backpack_restore(w->backpack, g_save.bag, held, count);
+    backpack_restore(w->backpack, g_kept.bag, held, count);
     if (backpack_holds(w->backpack, ITEM_TOWN_MAP))
         fridge_map_take(w->fridge_map);
+    w->lights->flashlight_on =
+        w->lights->flashlight_on && backpack_holds(w->backpack, ITEM_FLASHLIGHT);
+    map_screen_restore(w->map_screen, g_kept.inked);
 
-    memcpy(w->finds->found, g_save.found, sizeof(g_save.found));
-    map_screen_restore(w->map_screen, g_save.inked);
-
-    for (int d = 0; d < w->door_count && d < SAVE_GAME_DOORS; d++)
-        door_set(w->doors[d], g_save.door_travel[d], g_save.door_want[d]);
-    w->lights->flashlight_on = g_save.flashlight_on && backpack_holds(w->backpack, ITEM_FLASHLIGHT);
-    w->basement->drafted = g_save.drafted;
-
-    if (w->mind && w->mind->brain) {
-        cat_put(w->cat, g_save.cat_place);
-        cat_mind_restore(w->mind, g_save.cat_energy, g_save.cat_boredom, g_save.cat_alarm,
-                         g_save.cat_affinity, g_save.cat_since);
+    for (int d = 0; d < w->door_count; d++)
+        door_set(w->doors[d], w->doors[d]->travel, w->doors[d]->want);
+    if (cat_kept()) {
+        cat_put(w->cat, g_kept.cat_place);
+        cat_mind_restore(w->mind);
     }
 
     // The engine's own section has put the body; what follows from where it stands is said
     // nothing about, since the player did not arrive anywhere.
-    player_restore(w->player, g_save.yaw, g_save.pitch);
+    player_restore(w->player);
     vec3 feet = {0.0f, 0.0f, 0.0f};
     player_feet(w->player, feet);
     finds_settle(w->finds, feet);
     basement_settle(w->basement, feet);
-    g_room = sounds_room_at(feet);
+    g_room = (int)room_at(feet);
 }
 
 // ------------------------------------------------------------------------------- the slots
-
-static bool slot_path(const char* slot, char* out, size_t cap) {
-    return save_default_path(out, cap, slot);
-}
 
 static void slot_name(int i, char* out, size_t cap) {
     snprintf(out, cap, "silent-%d", i + 1);
@@ -221,15 +191,15 @@ int save_game_list(SaveSlot* out) {
         SaveSlot s = {0};
         slot_name(i, s.name, sizeof(s.name));
         char path[1024];
-        if (!slot_path(s.name, path, sizeof(path)) || !path_exists(path))
+        if (!save_default_path(path, sizeof(path), s.name) || !path_exists(path))
             continue;
-        SilentSave peeked = {0};
+        Kept peeked = {0};
         SavePeek info = {0};
         if (!save_peek(g_system, path, "summary", &peeked, &info))
             continue;
         s.saved_at = info.saved_at;
         s.played = peeked.played;
-        glm_vec3_copy(peeked.feet, s.feet);
+        s.where = room_label(room_at(peeked.feet));
         // Newest first, by insertion.
         int k = n++;
         for (; k > 0 && out[k - 1].saved_at < s.saved_at; k--)
@@ -239,12 +209,12 @@ int save_game_list(SaveSlot* out) {
     return n;
 }
 
-bool save_game_free_slot(SaveSlot* out) {
+bool save_game_unused_slot(SaveSlot* out) {
     for (int i = 0; i < SAVE_GAME_SLOTS; i++) {
         *out = (SaveSlot){0};
         slot_name(i, out->name, sizeof(out->name));
         char path[1024];
-        if (slot_path(out->name, path, sizeof(path)) && !path_exists(path))
+        if (save_default_path(path, sizeof(path), out->name) && !path_exists(path))
             return true;
     }
     return false;
@@ -252,7 +222,7 @@ bool save_game_free_slot(SaveSlot* out) {
 
 bool save_game_load(const char* slot) {
     char path[1024];
-    if (!g_system || !slot_path(slot, path, sizeof(path)))
+    if (!g_system || !save_default_path(path, sizeof(path), slot))
         return false;
     // Over what the world was built with, so a section the file lacks keeps the new game's.
     gather();
@@ -262,64 +232,56 @@ bool save_game_load(const char* slot) {
         return false;
     }
     apply();
-    printf("silent: loaded %s, %.0f s played\n", slot, g_save.played);
+    printf("silent: loaded %s, %.0f s played\n", slot, g_kept.played);
     return true;
 }
 
 bool save_game_delete(const char* slot) {
     char path[1024];
-    return slot_path(slot, path, sizeof(path)) && remove(path) == 0;
+    return save_default_path(path, sizeof(path), slot) && remove(path) == 0;
 }
 
 // ------------------------------------------------------------------------------- autosaves
 
 void save_game_begin(const char* slot) {
-    snprintf(g_slot, sizeof(g_slot), "%s", slot ? slot : "");
+    g_slot[0] = g_path[0] = '\0';
+    if (slot && save_default_path(g_path, sizeof(g_path), slot))
+        snprintf(g_slot, sizeof(g_slot), "%s", slot);
+    else if (slot)
+        fprintf(stderr, "silent: nowhere to keep %s; this game is not saved\n", slot);
     g_due = g_room_due = false;
     g_since_write = 0.0;
 }
 
-const char* save_game_slot(void) {
-    return g_slot[0] ? g_slot : NULL;
-}
-
 static void write_now(const char* why) {
-    char path[1024];
-    if (!g_system || !g_slot[0] || !slot_path(g_slot, path, sizeof(path)))
+    if (!g_system || !g_slot[0])
         return;
     const double start = glfwGetTime();
     gather();
-    const bool ok = save_write(g_system, path);
+    const bool ok = save_write(g_system, g_path);
     printf("silent: %s %s (%s) in %.1f ms\n", ok ? "saved" : "could not save", g_slot, why,
            (glfwGetTime() - start) * 1000.0);
     g_due = g_room_due = false;
     g_since_write = 0.0;
 }
 
-void save_game_moment(SaveMoment moment) {
-    switch (moment) {
-        case SAVE_TOOK:
-        case SAVE_FOUND:
-            g_due = true;
-            break;
-        case SAVE_ROOM:
-            g_room_due = true;
-            break;
-        case SAVE_QUIT:
-            write_now("quit");
-            break;
-    }
+void save_game_due(void) {
+    g_due = true;
+}
+
+void save_game_quit(void) {
+    write_now("quit");
 }
 
 void save_game_frame(const vec3 feet, double dt) {
-    g_save.played += dt;
+    g_kept.played += dt;
     g_since_write += dt;
-    const int room = sounds_room_at(feet);
-    if (g_room >= 0 && room != g_room)
-        save_game_moment(SAVE_ROOM);
-    g_room = room;
+    const RoomId room = room_at(feet);
+    if (g_room >= 0 && (int)room != g_room)
+        g_room_due = true;
+    g_room = (int)room;
     if (g_due)
         write_now("progress");
     else if (g_room_due && g_since_write >= ROOM_SAVE_GAP)
-        write_now(sounds_room_label(room));
+        write_now(room_label(room));
 }

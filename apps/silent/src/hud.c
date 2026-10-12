@@ -148,6 +148,18 @@ void hud_free(Hud* hud) {
     memset(hud, 0, sizeof(*hud));
 }
 
+UIElement* hud_bare(UIElement* parent, UIDir dir, float spacing) {
+    // A fill that is there and see-through, since a zero would take the theme's.
+    static const UIStyle CLEAR = {.bg = {1.0f, 1.0f, 1.0f, 0.0f}};
+    UIElement* el = ui_panel(parent);
+    el->dir = dir;
+    el->spacing = spacing;
+    for (int i = 0; i < 4; i++)
+        el->padding[i] = HUD_BARE;
+    ui_set_style(el, &CLEAR);
+    return el;
+}
+
 UIScreen* hud_modal_screen(UISystem* ui, const char* name, float dim, UIElement** root) {
     UIScreen* screen = ui_screen(ui, name);
     ui_screen_set_modal(screen, true);

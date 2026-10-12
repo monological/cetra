@@ -508,9 +508,7 @@ void cat_step(Cat* cat, const vec3 player, float dt) {
     }
     NavSample s;
     nav_follower_sample(&cat->follower, &s);
-    glm_vec3_copy(s.position, cat->entity->position);
-    cat->entity->position[1] += CAT_HALF_HEIGHT;
-    glm_quatv(cat->entity->rotation, cat->yaw, (vec3){0.0f, 1.0f, 0.0f});
+    cat_stand(cat, s.position, cat->yaw);
 }
 
 void cat_trace(const Cat* cat, int step) {
@@ -566,9 +564,9 @@ void cat_put(Cat* cat, int place) {
     float turned = 0.0f;
     // What root motion the old clip had laid down goes with it, or the next step walks it off.
     animator_take_root_motion(cat->animator, travel, &turned);
-    cat_place_feet(place, cat->entity->position);
-    cat->entity->position[1] += CAT_HALF_HEIGHT;
-    glm_quatv(cat->entity->rotation, cat->yaw, (vec3){0.0f, 1.0f, 0.0f});
+    vec3 feet = {0.0f, 0.0f, 0.0f};
+    cat_place_feet(place, feet);
+    cat_stand(cat, feet, cat->yaw);
 }
 
 bool cat_create(Cat* cat, const CatDesc* desc, Game* game, PhysicsWorld* physics) {

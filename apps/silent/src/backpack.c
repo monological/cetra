@@ -270,15 +270,15 @@ bool backpack_holds(const Backpack* bp, ItemId item) {
 }
 
 void backpack_restore(Backpack* bp, bool taken, const ItemId* held, int count) {
-    if (taken && bp->bag) {
-        free_node(bp->bag);
-        bp->bag = NULL;
-    }
-    bp->taken = taken;
+    if (!taken)
+        return;
+    // Taken as the player takes it, then holding what it is said to hold rather than what it came
+    // with.
+    backpack_take(bp);
     bp->held_count = 0;
-    for (int k = 0; taken && k < count; k++)
-        if (held[k] > ITEM_NONE && held[k] < ITEM_COUNT && !backpack_holds(bp, held[k]))
-            bp->held[bp->held_count++] = held[k];
+    for (int k = 0; k < count; k++)
+        if (held[k] > ITEM_NONE && held[k] < ITEM_COUNT)
+            backpack_add(bp, held[k]);
     pack(bp);
 }
 

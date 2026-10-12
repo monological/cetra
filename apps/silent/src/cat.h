@@ -143,8 +143,8 @@ void cat_set_eyes(Cat* cat, const vec3 srgb);
 int cat_place(const Cat* cat);
 // The place it stands at, or the nearer end of the link it is on; -1 with no cat.
 int cat_nearest_place(const Cat* cat);
-// Stand it at `place` at once, resting as the place says, with nothing under way: where a load
-// (spec 13.49) puts it. Nothing for a cat held on a clip from the command line.
+// Stand it at `place` at once, resting as the place says, with nothing under way (spec 13.49).
+// Nothing for a cat held on a clip from the command line.
 void cat_put(Cat* cat, int place);
 // At rest where it was going, nothing under way.
 bool cat_settled(const Cat* cat);
@@ -156,6 +156,8 @@ bool cat_eyes_shut(const Cat* cat);
 bool cat_eye(const Cat* cat, vec3 at, vec3 forward);
 // Where its feet are.
 void cat_feet(const Cat* cat, vec3 out);
+// Its body stood on `feet`, facing `yaw`.
+void cat_stand(Cat* cat, const vec3 feet, float yaw);
 
 // Each fixed step: what it is doing, and where that puts it. `player` is the player's feet,
 // which it waits for rather than walks through.

@@ -54,13 +54,18 @@ PlaceId place_by_id(const char* id) {
     return PLACE_NONE;
 }
 
+// How far `feet` are in plan from place `i`'s box: 0 or less inside it.
+static float place_distance(int i, const vec3 feet) {
+    const float* b = PLACES[i].box;
+    return plan_box_distance(feet[0], feet[2], b[0], b[1], b[2], b[3]);
+}
+
 PlaceId finds_arrive(Finds* f, const vec3 feet, bool* first) {
     PlaceId arrived = PLACE_NONE;
     for (int i = 0; i < PLACE_COUNT; i++) {
         if (PLACES[i].known)
             continue;
-        const float* b = PLACES[i].box;
-        const float d = plan_box_distance(feet[0], feet[2], b[0], b[1], b[2], b[3]);
+        const float d = place_distance(i, feet);
         if (d <= 0.0f) {
             if (!f->here[i] && arrived == PLACE_NONE) {
                 arrived = (PlaceId)i;
@@ -76,11 +81,8 @@ PlaceId finds_arrive(Finds* f, const vec3 feet, bool* first) {
 }
 
 void finds_settle(Finds* f, const vec3 feet) {
-    for (int i = 0; i < PLACE_COUNT; i++) {
-        const float* b = PLACES[i].box;
-        f->here[i] =
-            !PLACES[i].known && plan_box_distance(feet[0], feet[2], b[0], b[1], b[2], b[3]) <= 0.0f;
-    }
+    for (int i = 0; i < PLACE_COUNT; i++)
+        f->here[i] = !PLACES[i].known && place_distance(i, feet) <= 0.0f;
 }
 
 bool finds_any(const Finds* f) {

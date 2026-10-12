@@ -57,12 +57,6 @@ static void brackets(UIDrawList* dl, UIRect r, float arm, float t, const vec4 co
     line_quad(dl, x1 - t, y1 - arm, t, arm, colour);
 }
 
-static void draw_nothing(UIElement* el, UIDrawList* dl, void* user) {
-    (void)el;
-    (void)dl;
-    (void)user;
-}
-
 // The pane: its ground, a hairline round it and brackets on its corners.
 static void pane_draw(UIElement* el, UIDrawList* dl, void* user) {
     (void)user;
@@ -168,20 +162,9 @@ static UIElement* label(UIElement* parent, const char* text, float size, const v
     return el;
 }
 
-// A container that draws nothing and has no padding of its own.
-static UIElement* bare(UIElement* parent, UIDir dir, float spacing) {
-    UIElement* el = ui_panel(parent);
-    el->dir = dir;
-    el->spacing = spacing;
-    for (int i = 0; i < 4; i++)
-        el->padding[i] = HUD_BARE;
-    ui_set_draw(el, draw_nothing, NULL);
-    return el;
-}
-
 // A hairline across its parent.
 static void rule(UIElement* parent) {
-    UIElement* el = bare(parent, UI_ROW, 0.0f);
+    UIElement* el = hud_bare(parent, UI_ROW, 0.0f);
     ui_set_size(el, UI_GROW, 0.0f, UI_FIXED, 1.0f);
     ui_set_draw(el, rule_draw, NULL);
 }
@@ -198,17 +181,17 @@ bool backpack_menu_start(BackpackMenu* menu, UISystem* ui, Font* font, const Bac
 
     UIElement* root = NULL;
     menu->screen = hud_modal_screen(ui, "backpack", 0.5f, &root);
-    menu->pane = bare(root, UI_COLUMN, 14.0f);
+    menu->pane = hud_bare(root, UI_COLUMN, 14.0f);
     for (int i = 0; i < 4; i++)
         menu->pane->padding[i] = PAD;
     ui_set_draw(menu->pane, pane_draw, NULL);
     label(menu->pane, "BACKPACK", TITLE_SIZE, AMBER, 5.0f);
     rule(menu->pane);
-    UIElement* body = bare(menu->pane, UI_ROW, GAP);
-    menu->grid = bare(body, UI_ROW, 0.0f);
+    UIElement* body = hud_bare(menu->pane, UI_ROW, GAP);
+    menu->grid = hud_bare(body, UI_ROW, 0.0f);
     ui_set_draw(menu->grid, grid_draw, menu);
-    menu->detail = bare(body, UI_COLUMN, 10.0f);
-    menu->view = bare(menu->detail, UI_ROW, 0.0f);
+    menu->detail = hud_bare(body, UI_COLUMN, 10.0f);
+    menu->view = hud_bare(menu->detail, UI_ROW, 0.0f);
     ui_set_draw(menu->view, view_draw, menu);
     // The name and the line hold their room while nothing is chosen, so choosing does not resize
     // the pane under the pointer.

@@ -54,10 +54,10 @@ bool map_screen_open(const MapScreen* ms);
 // `found`, or a place known from the first opening -- set to be written one after another. It
 // goes by the UI's own back.
 void map_screen_show(MapScreen* ms, MapId map, const bool found[PLACE_COUNT]);
-// Whether `place`'s mark has been written whole, so it is not written again: the state a save
-// keeps (spec 13.49). One still being written when the map was shut is not.
+// Whether `place`'s mark has been written whole, so it is not written again (spec 13.49). One
+// still being written when the map was shut is not.
 bool map_screen_inked(const MapScreen* ms, PlaceId place);
-// The marks written whole as a save left them.
+// Each mark written whole where `inked` says so, and to be written where not.
 void map_screen_restore(MapScreen* ms, const bool inked[PLACE_COUNT]);
 // The paper sized to a window `width` x `height` points: each frame before the UI's pass.
 void map_screen_layout(MapScreen* ms, float width, float height);

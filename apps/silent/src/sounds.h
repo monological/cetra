@@ -53,10 +53,4 @@ void sounds_update(Sounds* sounds);
 // it cannot be loaded, and NULL without audio.
 Sound* sounds_loop(AudioSystem* audio, const char* path);
 
-// The room a point is in, by the rooms' own boxes, a room added later winning as the zones do: 0
-// outdoors. Needs no audio.
-int sounds_room_at(const vec3 at);
-// A room as a player reads it: "Home, kitchen", "Outside".
-const char* sounds_room_label(int room);
-
 #endif // _SILENT_SOUNDS_H_

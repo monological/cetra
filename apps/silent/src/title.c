@@ -5,7 +5,6 @@
 #include <time.h>
 
 #include "hud.h"
-#include "sounds.h"
 
 // From the far pavement, back across the road to the house under its lamps: the first thing the
 // player sees of the place, and what they stand in front of later.
@@ -26,11 +25,6 @@ static const vec4 ITEM_FG = {0.62f, 0.63f, 0.60f, 1.0f};
 static const vec4 FOCUS_FG = {0.93f, 0.93f, 0.89f, 1.0f};
 static const vec4 DISABLED_FG = {0.35f, 0.36f, 0.34f, 1.0f};
 static const vec4 NOTE_FG = {0.80f, 0.78f, 0.70f, 1.0f};
-
-void title_view(vec3 eye, vec3 target) {
-    glm_vec3_copy((float*)TITLE_EYE, eye);
-    glm_vec3_copy((float*)TITLE_TARGET, target);
-}
 
 // An item as words on nothing, brightening onto a dim plate as the keys or the pointer come to it.
 static void item_draw(UIElement* el, UIDrawList* dl, void* user) {
@@ -66,26 +60,14 @@ static UIElement* item(UIElement* parent, const char* text, float size, UIAction
 // Shown or not without leaving the tree, which keeps what it has: a hidden item takes no height
 // and no key lands on it.
 static void item_shown(UIElement* el, bool shown) {
-    el->focusable = shown;
     el->disabled = !shown;
     el->size_mode[1] = shown ? UI_FIT : UI_FIXED;
     el->size[1] = 0.0f;
 }
 
-// A panel that lays out and draws nothing: a style cannot ask for no fill, since its zero inherits
-// the theme's.
-static void draw_nothing(UIElement* el, UIDrawList* dl, void* user) {
-    (void)el;
-    (void)dl;
-    (void)user;
-}
-
 static UIElement* column(UIElement* root, float width) {
-    UIElement* col = ui_panel(root);
-    ui_set_draw(col, draw_nothing, NULL);
-    col->dir = UI_COLUMN;
+    UIElement* col = hud_bare(root, UI_COLUMN, 6.0f);
     col->align_cross = UI_ALIGN_CENTER;
-    col->spacing = 6.0f;
     ui_set_size(col, UI_FIXED, width, UI_FIT, 0.0f);
     return col;
 }
@@ -114,28 +96,35 @@ static void slot_label(const SaveSlot* s, char* out, size_t cap) {
         snprintf(played, sizeof(played), "%d min", minutes);
     else
         snprintf(played, sizeof(played), "%d h %02d min", minutes / 60, minutes % 60);
-    snprintf(out, cap, "%s      %s      %s", sounds_room_label(sounds_room_at(s->feet)), when,
-             played);
+    snprintf(out, cap, "%s      %s      %s", s->where, when, played);
 }
 
 // The games kept, read again, onto the title's items and the list's rows.
 static void refresh(Title* t) {
     t->count = save_game_list(t->slots);
     for (int i = 0; i < SAVE_GAME_SLOTS; i++) {
+        char label[96] = "";
         if (i < t->count)
-            slot_label(&t->slots[i], t->labels[i], sizeof(t->labels[i]));
-        ui_set_text(t->rows[i], i < t->count ? t->labels[i] : "");
+            slot_label(&t->slots[i], label, sizeof(label));
+        ui_set_text(t->rows[i], label);
         item_shown(t->rows[i], i < t->count);
     }
     item_shown(t->resume, t->count > 0);
     t->load->disabled = t->count == 0;
-    t->load->focusable = t->count > 0;
+}
+
+// The game the list is on, or -1.
+static int focused_row(const Title* t) {
+    const UIElement* focused = ui_focused(t->games);
+    for (int i = 0; i < t->count; i++)
+        if (t->rows[i] == focused)
+            return i;
+    return -1;
 }
 
 static void choose(Title* t, TitleChoice choice, const SaveSlot* slot) {
     t->chosen = *slot;
     t->choice = choice;
-    t->up = false;
     while (title_open(t))
         ui_pop(t->ui);
 }
@@ -143,15 +132,14 @@ static void choose(Title* t, TitleChoice choice, const SaveSlot* slot) {
 static void on_resume(UIElement* el, void* user) {
     (void)el;
     Title* t = user;
-    if (t->count > 0)
-        choose(t, TITLE_LOAD, &t->slots[0]);
+    choose(t, TITLE_LOAD, &t->slots[0]);
 }
 
 static void on_fresh(UIElement* el, void* user) {
     (void)el;
     Title* t = user;
     SaveSlot slot;
-    if (save_game_free_slot(&slot)) {
+    if (save_game_unused_slot(&slot)) {
         choose(t, TITLE_NEW, &slot);
         return;
     }
@@ -160,15 +148,11 @@ static void on_fresh(UIElement* el, void* user) {
     ui_set_text(t->note, note);
 }
 
-// The list in the title's place rather than over it, which would show through; the title comes
-// back when the list goes.
 static void on_load(UIElement* el, void* user) {
     (void)el;
     Title* t = user;
     if (t->count == 0)
         return;
-    if (ui_top(t->ui) == t->main)
-        ui_pop(t->ui);
     ui_push(t->ui, t->games);
     ui_set_focus(t->games, t->rows[0]);
 }
@@ -180,34 +164,42 @@ static void on_row(UIElement* el, void* user) {
             choose(t, TITLE_LOAD, &t->slots[i]);
 }
 
-// The question goes either way; title_input puts the list back in its place, on the row asked
-// about or the one that took its place, or the title when no game is left.
+// Back to the list, on the game asked about.
 static void on_no(UIElement* el, void* user) {
     (void)el;
     Title* t = user;
     ui_pop(t->ui);
 }
 
+// Back to the list on the game that took the deleted one's place, or to the title when none is
+// left.
 static void on_yes(UIElement* el, void* user) {
     (void)el;
     Title* t = user;
-    if (t->doomed >= 0 && t->doomed < t->count)
-        save_game_delete(t->slots[t->doomed].name);
+    const int row = focused_row(t);
+    if (row >= 0)
+        save_game_delete(t->slots[row].name);
     ui_pop(t->ui);
     refresh(t);
     ui_set_text(t->note, "");
-    t->doomed = t->count == 0 ? -1 : t->doomed < t->count ? t->doomed : t->count - 1;
+    if (t->count > 0) {
+        ui_set_focus(t->games, t->rows[row >= 0 && row < t->count ? row : t->count - 1]);
+    } else {
+        ui_pop(t->ui);
+        ui_set_focus(t->main, t->fresh);
+    }
 }
 
 // ------------------------------------------------------------------------------- the screens
 
-void title_start(Title* t, UISystem* ui) {
+void title_start(Title* t, UISystem* ui, Engine* engine) {
     memset(t, 0, sizeof(*t));
     t->ui = ui;
-    t->doomed = -1;
     t->rig = create_camera_rig();
-    if (t->rig)
+    if (t->rig) {
         camera_rig_set_pose(t->rig, TITLE_EYE, TITLE_TARGET);
+        engine_set_camera_rig(engine, t->rig);
+    }
     if (!ui)
         return;
 
@@ -220,7 +212,10 @@ void title_start(Title* t, UISystem* ui) {
     t->load = item(col, "Load Game", ITEM_SIZE, on_load, t);
     t->note = words(col, "", ROW_SIZE, NOTE_FG, 1.0f);
 
+    // The list and the question each take the place of what they are opened over, which would
+    // otherwise show through.
     t->games = hud_modal_screen(ui, "games", LIST_DIM, &root);
+    ui_screen_set_opaque(t->games, true);
     col = column(root, 2.0f * ITEM_WIDTH);
     words(col, "Load Game", ITEM_SIZE, WORDMARK_FG, 3.0f);
     for (int i = 0; i < SAVE_GAME_SLOTS; i++)
@@ -228,6 +223,7 @@ void title_start(Title* t, UISystem* ui) {
     words(col, "Delete   Delete a game        Escape   Back", ROW_SIZE * 0.8f, ITEM_FG, 1.0f);
 
     t->confirm = hud_modal_screen(ui, "delete", LIST_DIM, &root);
+    ui_screen_set_opaque(t->confirm, true);
     col = column(root, ITEM_WIDTH);
     words(col, "Delete this game?", ITEM_SIZE, WORDMARK_FG, 2.0f);
     t->asked = words(col, "", ROW_SIZE, ITEM_FG, 1.0f);
@@ -235,19 +231,14 @@ void title_start(Title* t, UISystem* ui) {
     t->yes = item(col, "Yes", ITEM_SIZE, on_yes, t);
 }
 
-void title_frame(Title* t, Engine* engine) {
-    if (t->rig)
-        engine_set_camera_rig(engine, t->rig);
-}
-
-void title_show(Title* t) {
+bool title_show(Title* t) {
     if (!t->ui)
-        return;
+        return false;
     t->choice = TITLE_WAITING;
-    t->up = true;
     refresh(t);
     ui_push(t->ui, t->main);
     ui_set_focus(t->main, t->count > 0 ? t->resume : t->fresh);
+    return true;
 }
 
 void title_open_screen(Title* t, const char* name) {
@@ -255,7 +246,7 @@ void title_open_screen(Title* t, const char* name) {
         return;
     on_load(NULL, t);
     if (!strcmp(name, "delete"))
-        title_input(t, true);
+        title_ask_delete(t);
 }
 
 bool title_open(const Title* t) {
@@ -268,39 +259,15 @@ bool title_backs(const Title* t) {
     return top && (top == t->games || top == t->confirm);
 }
 
-void title_input(Title* t, bool delete_pressed) {
-    if (!t->ui)
+void title_ask_delete(Title* t) {
+    if (!t->ui || ui_top(t->ui) != t->games)
         return;
-    // Each screen takes the last one's place rather than going over it, where it would show
-    // through. The question gone, the list comes back on the row it was about; the list gone, or
-    // its last game deleted, the title on Load Game while there is something to load.
-    if (t->up && !title_open(t)) {
-        if (t->doomed >= 0 && t->doomed < t->count) {
-            ui_push(t->ui, t->games);
-            ui_set_focus(t->games, t->rows[t->doomed]);
-        } else {
-            ui_push(t->ui, t->main);
-            ui_set_focus(t->main, t->count > 0 ? t->load : t->fresh);
-        }
-        t->doomed = -1;
-    }
-    if (!delete_pressed || ui_top(t->ui) != t->games)
+    const int row = focused_row(t);
+    if (row < 0)
         return;
-    const UIElement* focused = ui_focused(t->games);
-    for (int i = 0; i < t->count; i++) {
-        if (t->rows[i] != focused)
-            continue;
-        t->doomed = i;
-        ui_set_text(t->asked, t->labels[i]);
-        ui_pop(t->ui);
-        ui_push(t->ui, t->confirm);
-        ui_set_focus(t->confirm, t->no);
-        return;
-    }
-}
-
-TitleChoice title_choice(const Title* t) {
-    return t->choice;
+    ui_set_text(t->asked, t->rows[row]->text);
+    ui_push(t->ui, t->confirm);
+    ui_set_focus(t->confirm, t->no);
 }
 
 void title_refused(Title* t) {

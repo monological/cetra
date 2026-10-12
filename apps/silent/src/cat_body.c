@@ -178,9 +178,7 @@ bool cat_body_load(Cat* cat, const CatDesc* desc, Game* game, PhysicsWorld* phys
         return false;
     // Where it is follows from the place it is at, which a save keeps rather than its pose.
     cat->entity->unsaved = true;
-    glm_vec3_copy((float*)feet, cat->entity->position);
-    cat->entity->position[1] += CAT_HALF_HEIGHT;
-    glm_quatv(cat->entity->rotation, yaw, (vec3){0.0f, 1.0f, 0.0f});
+    cat_stand(cat, feet, yaw);
     SceneNode* holder = create_node();
     node_set_name(holder, "cat");
     SceneNode* inner = create_node();
@@ -268,6 +266,12 @@ bool cat_eye(const Cat* cat, vec3 at, vec3 forward) {
 void cat_feet(const Cat* cat, vec3 out) {
     glm_vec3_copy((float*)cat->entity->position, out);
     out[1] -= CAT_HALF_HEIGHT;
+}
+
+void cat_stand(Cat* cat, const vec3 feet, float yaw) {
+    glm_vec3_copy((float*)feet, cat->entity->position);
+    cat->entity->position[1] += CAT_HALF_HEIGHT;
+    glm_quatv(cat->entity->rotation, yaw, (vec3){0.0f, 1.0f, 0.0f});
 }
 
 // What the flashlight throws on the eyes, seen back along the beam, unless a wall stands
