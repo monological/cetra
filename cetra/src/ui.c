@@ -655,9 +655,10 @@ static UIState _state_of(const UIElement* el) {
 }
 
 // Where a slider's track is. ONE definition, read by the draw and by the hit
-// test alike: two copies of this rectangle would drift, and the symptom would
-// be a bar that fills to a different place than the one you clicked.
-static UIRect _slider_track(const UISystem* ui, const UIElement* el) {
+// test alike, and by an app drawing its own slider: two copies of this
+// rectangle would drift, and the symptom would be a bar that fills to a
+// different place than the one you clicked.
+UIRect ui_slider_track(const UISystem* ui, const UIElement* el) {
     const UIStyle s = _resolve(ui, el, _state_of(el));
     const float lh = ui_line_height(s.font, s.font_size, s.line_spacing);
     return (UIRect){el->rect.x + s.padding[3], el->rect.y + s.padding[0] + lh + UI_FURNITURE_GAP,
@@ -733,7 +734,7 @@ static void _emit(UISystem* ui, UIElement* el) {
                     t = (*el->bound_float - el->range_lo) / span;
                 t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
 
-                const UIRect track = _slider_track(ui, el);
+                const UIRect track = ui_slider_track(ui, el);
                 vec4 bar_bg = {0.22f, 0.23f, 0.28f, 1.0f};
                 ui_draw_rounded(dl, track, UI_TRACK_H * 0.5f, bar_bg, NULL, 0.0f);
 
@@ -994,7 +995,7 @@ void ui_update(UISystem* ui, const UIInput* in, float width, float height) {
     if (ui->pressed && ui->pressed->kind == UI_SLIDER && in->pointer_down &&
         ui->pressed->bound_float) {
         UIElement* sl = ui->pressed;
-        const UIRect track = _slider_track(ui, sl);
+        const UIRect track = ui_slider_track(ui, sl);
         float t = track.w > 0.0f ? (in->pointer_x - track.x) / track.w : 0.0f;
         t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
         const float v = sl->range_lo + t * (sl->range_hi - sl->range_lo);
@@ -1295,6 +1296,15 @@ UIScreen* ui_top(const UISystem* ui) {
     if (!ui || ui->stack_count == 0)
         return NULL;
     return ui->stack[ui->stack_count - 1];
+}
+
+bool ui_on_stack(const UISystem* ui, const UIScreen* screen) {
+    if (!ui || !screen)
+        return false;
+    for (size_t i = 0; i < ui->stack_count; i++)
+        if (ui->stack[i] == screen)
+            return true;
+    return false;
 }
 
 UIElement* ui_focused(const UIScreen* screen) {

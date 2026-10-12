@@ -7226,6 +7226,21 @@ static int run_ui_screens_probe(Game* game, const char* which) {
         const uint64_t sig_part = ui_draw_list_signature(dl);
         printf("ui textured-uv whole match %.6f\n", sig_whole == sig_uv ? 1.0 : 0.0);
         printf("ui textured-uv part differs %.6f\n", sig_part != sig_whole ? 1.0 : 0.0);
+    } else if (!strcmp(which, "on-stack")) {
+        // On the stack is not on top: a screen pushed over keeps the one under it on the stack,
+        // and only a pop takes a screen off.
+        UIScreen* a = ui_screen(ui, "a");
+        UIScreen* b = ui_screen(ui, "b");
+        printf("ui on-stack empty a %.6f\n", ui_on_stack(ui, a) ? 1.0 : 0.0);
+        ui_push(ui, a);
+        printf("ui on-stack pushed a %.6f\n", ui_on_stack(ui, a) ? 1.0 : 0.0);
+        printf("ui on-stack pushed b %.6f\n", ui_on_stack(ui, b) ? 1.0 : 0.0);
+        ui_push(ui, b);
+        printf("ui on-stack under a %.6f\n", ui_on_stack(ui, a) ? 1.0 : 0.0);
+        printf("ui on-stack over b %.6f\n", ui_on_stack(ui, b) ? 1.0 : 0.0);
+        ui_pop(ui);
+        printf("ui on-stack popped b %.6f\n", ui_on_stack(ui, b) ? 1.0 : 0.0);
+        printf("ui on-stack popped a %.6f\n", ui_on_stack(ui, a) ? 1.0 : 0.0);
     } else if (!strcmp(which, "opaque")) {
         // One screen over another that looks different. Stacked plainly both draw; made opaque,
         // the one on top draws exactly as it does alone; popped, the one under draws as it did.

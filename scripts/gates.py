@@ -26896,6 +26896,9 @@ def run_ui_gate(workdir):
                      the UV quad over {0, 0, 1, 1}, so it is that quad and not a
                      second path (spec 13.43) -- and a quad over part of a picture
                      must differ, or the UVs never reached the vertices.
+      ui-on-stack    a screen pushed over another leaves the one under it on the
+                     stack though not on top, and a pop takes the top one off and
+                     nothing else (spec 13.50).
       ui-opaque      one screen over another draws both while it is plain, and draws
                      to the vertex as it does alone once it is opaque; popped, the
                      screen under it draws as it did (spec 13.49). The two screens
@@ -27081,6 +27084,21 @@ def run_ui_gate(workdir):
                   f"want 1)")
     print(f"  ui-textured-uv        {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-textured-uv", ok)
+
+    # ---- on the stack, not only on top
+    p = _ui_probe("on-stack")
+    if not p:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        keys = [("empty", "a"), ("pushed", "a"), ("pushed", "b"), ("under", "a"), ("over", "b"),
+                ("popped", "b"), ("popped", "a")]
+        got = [p[k][0] for k in keys]
+        want = [0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0]
+        ok = got == want
+        detail = ("on the stack " + " ".join(f"{s}-{n}={v:.0f}" for (s, n), v in zip(keys, got))
+                  + " (want 0 1 0 1 1 0 1: the one under counts, a pop takes only the top)")
+    print(f"  ui-on-stack           {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-on-stack", ok)
 
     # ---- a screen that hides the ones under it
     p = _ui_probe("opaque")

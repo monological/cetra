@@ -4,6 +4,7 @@
 
 #include "cetra/program.h"
 #include "cetra/text.h"
+#include "cetra/game/game.h"
 
 #include "hud.h"
 #include "silent_shaders.h"
@@ -42,8 +43,8 @@ static const vec4 THOUGHT_FG = {0.80f, 0.78f, 0.70f, 1.0f};
 
 const vec4 HUD_ITEM_FG = {0.62f, 0.63f, 0.60f, 1.0f};
 const vec4 HUD_FOCUS_FG = {0.93f, 0.93f, 0.89f, 1.0f};
-const vec4 HUD_DISABLED_FG = {0.35f, 0.36f, 0.34f, 1.0f};
 const vec4 HUD_HEADING_FG = {0.78f, 0.80f, 0.76f, 0.85f};
+static const vec4 DISABLED_FG = {0.35f, 0.36f, 0.34f, 1.0f};
 
 // The words' look but their colour; the face and its size are the UI's.
 static const UIStyle WORDS = {.tracking = 1.0f, .line_spacing = 1.0f};
@@ -226,36 +227,76 @@ UIElement* hud_bare(UIElement* parent, UIDir dir, float spacing) {
     return el;
 }
 
-// A menu item as words on nothing, brightening onto a dim plate as the keys or the pointer come to
-// it.
-static void item_draw(UIElement* el, UIDrawList* dl, void* user) {
-    (void)user;
-    if (!el->text || !el->text[0] || el->rect.h <= 0.0f)
-        return;
+UIRect hud_item_look(const UIElement* el, UIDrawList* dl, UIStyle* style) {
     const float f = el->disabled ? 0.0f : el->t_focus;
     if (f > 0.0f) {
         const vec4 bg = {0.0f, 0.0f, 0.0f, ITEM_PLATE * f};
         ui_draw_rounded(dl, el->rect, 4.0f, (float*)bg, NULL, 0.0f);
     }
-    UIStyle style = {.tracking = 1.5f, .font_size = el->style ? el->style->font_size : 0.0f};
+    *style = (UIStyle){.tracking = 1.5f, .font_size = el->style ? el->style->font_size : 0.0f};
     if (el->disabled)
-        glm_vec4_copy((float*)HUD_DISABLED_FG, style.fg);
+        glm_vec4_copy((float*)DISABLED_FG, style->fg);
     else
-        glm_vec4_lerp((float*)HUD_ITEM_FG, (float*)HUD_FOCUS_FG, f, style.fg);
-    // The words from the top of the rect, as the label would sit inside its padding.
-    ui_draw_text(dl, ui_rect_inset(el->rect, ITEM_PAD, ITEM_PAD, ITEM_PAD, ITEM_PAD), el->text,
-                 &style, el->align_cross);
+        glm_vec4_lerp((float*)HUD_ITEM_FG, (float*)HUD_FOCUS_FG, f, style->fg);
+    // From the top of the rect, as a label would sit inside its padding.
+    return ui_rect_inset(el->rect, ITEM_PAD, ITEM_PAD, ITEM_PAD, ITEM_PAD);
+}
+
+static void item_draw(UIElement* el, UIDrawList* dl, void* user) {
+    (void)user;
+    if (!el->text || !el->text[0] || el->rect.h <= 0.0f)
+        return;
+    UIStyle style;
+    const UIRect words = hud_item_look(el, dl, &style);
+    ui_draw_text(dl, words, el->text, &style, el->align_cross);
+}
+
+UIElement* hud_dress(UIElement* el, float size, UIDrawFn draw, void* user) {
+    const UIStyle style = {.font_size = size, .padding = {ITEM_PAD, ITEM_PAD, ITEM_PAD, ITEM_PAD}};
+    ui_set_style(el, &style);
+    ui_set_draw(el, draw, user);
+    el->size_mode[0] = UI_GROW;
+    return el;
 }
 
 UIElement* hud_item(UIElement* parent, const char* text, float size, UIActionFn action,
                     void* user) {
-    UIElement* el = ui_button(parent, text, action, user);
-    const UIStyle style = {.font_size = size, .padding = {ITEM_PAD, ITEM_PAD, ITEM_PAD, ITEM_PAD}};
-    ui_set_style(el, &style);
-    ui_set_draw(el, item_draw, NULL);
-    el->size_mode[0] = UI_GROW;
+    UIElement* el = hud_dress(ui_button(parent, text, action, user), size, item_draw, NULL);
     el->align_cross = UI_ALIGN_CENTER;
     return el;
+}
+
+static void back(UIElement* el, void* user) {
+    (void)el;
+    ui_pop(user);
+}
+
+UIElement* hud_back_item(UIElement* parent, const char* text, float size, UISystem* ui) {
+    return hud_item(parent, text, size, back, ui);
+}
+
+static void quit(UIElement* el, void* user) {
+    (void)el;
+    game_quit(user);
+}
+
+UIElement* hud_quit_item(UIElement* parent, float size, Game* game) {
+    return hud_item(parent, "Exit to Desktop", size, quit, game);
+}
+
+UIElement* hud_heading(UIElement* parent, const char* text) {
+    return hud_words(parent, text, HUD_HEADING_SIZE, HUD_HEADING_FG, 4.0f);
+}
+
+bool hud_on_top(const UISystem* ui, const UIScreen* screen) {
+    return screen && ui_top(ui) == screen;
+}
+
+void hud_show(UISystem* ui, UIScreen* screen, UIElement* focus) {
+    if (!screen || hud_on_top(ui, screen))
+        return;
+    ui_push(ui, screen);
+    ui_set_focus(screen, focus);
 }
 
 void hud_item_shown(UIElement* el, bool shown) {
