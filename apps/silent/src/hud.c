@@ -22,6 +22,8 @@
 #define THOUGHT_OUT  1.0f
 
 #define MODAL_FADE_IN 0.15f // seconds a screen over the world takes to come up
+#define ITEM_PAD      10.0f
+#define ITEM_PLATE    0.45f // the plate behind the menu item the keys are on
 
 // The save mark comes up over SAVE_IN, its candles lit one after another over SAVE_LIGHTING while
 // it says it is saving, then it says it saved for SAVE_STAY and goes over SAVE_OUT.
@@ -37,6 +39,11 @@
 
 static const vec4 PROMPT_FG = {0.88f, 0.88f, 0.84f, 1.0f};
 static const vec4 THOUGHT_FG = {0.80f, 0.78f, 0.70f, 1.0f};
+
+const vec4 HUD_ITEM_FG = {0.62f, 0.63f, 0.60f, 1.0f};
+const vec4 HUD_FOCUS_FG = {0.93f, 0.93f, 0.89f, 1.0f};
+const vec4 HUD_DISABLED_FG = {0.35f, 0.36f, 0.34f, 1.0f};
+const vec4 HUD_HEADING_FG = {0.78f, 0.80f, 0.76f, 0.85f};
 
 // The words' look but their colour; the face and its size are the UI's.
 static const UIStyle WORDS = {.tracking = 1.0f, .line_spacing = 1.0f};
@@ -216,6 +223,60 @@ UIElement* hud_bare(UIElement* parent, UIDir dir, float spacing) {
     for (int i = 0; i < 4; i++)
         el->padding[i] = HUD_BARE;
     ui_set_style(el, &CLEAR);
+    return el;
+}
+
+// A menu item as words on nothing, brightening onto a dim plate as the keys or the pointer come to
+// it.
+static void item_draw(UIElement* el, UIDrawList* dl, void* user) {
+    (void)user;
+    if (!el->text || !el->text[0] || el->rect.h <= 0.0f)
+        return;
+    const float f = el->disabled ? 0.0f : el->t_focus;
+    if (f > 0.0f) {
+        const vec4 bg = {0.0f, 0.0f, 0.0f, ITEM_PLATE * f};
+        ui_draw_rounded(dl, el->rect, 4.0f, (float*)bg, NULL, 0.0f);
+    }
+    UIStyle style = {.tracking = 1.5f, .font_size = el->style ? el->style->font_size : 0.0f};
+    if (el->disabled)
+        glm_vec4_copy((float*)HUD_DISABLED_FG, style.fg);
+    else
+        glm_vec4_lerp((float*)HUD_ITEM_FG, (float*)HUD_FOCUS_FG, f, style.fg);
+    // The words from the top of the rect, as the label would sit inside its padding.
+    ui_draw_text(dl, ui_rect_inset(el->rect, ITEM_PAD, ITEM_PAD, ITEM_PAD, ITEM_PAD), el->text,
+                 &style, el->align_cross);
+}
+
+UIElement* hud_item(UIElement* parent, const char* text, float size, UIActionFn action,
+                    void* user) {
+    UIElement* el = ui_button(parent, text, action, user);
+    const UIStyle style = {.font_size = size, .padding = {ITEM_PAD, ITEM_PAD, ITEM_PAD, ITEM_PAD}};
+    ui_set_style(el, &style);
+    ui_set_draw(el, item_draw, NULL);
+    el->size_mode[0] = UI_GROW;
+    el->align_cross = UI_ALIGN_CENTER;
+    return el;
+}
+
+void hud_item_shown(UIElement* el, bool shown) {
+    el->disabled = !shown;
+    el->size_mode[1] = shown ? UI_FIT : UI_FIXED;
+    el->size[1] = 0.0f;
+}
+
+UIElement* hud_column(UIElement* root, float width) {
+    UIElement* col = hud_bare(root, UI_COLUMN, 6.0f);
+    col->align_cross = UI_ALIGN_CENTER;
+    ui_set_size(col, UI_FIXED, width, UI_FIT, 0.0f);
+    return col;
+}
+
+UIElement* hud_words(UIElement* parent, const char* text, float size, const float* fg,
+                     float tracking) {
+    UIElement* el = ui_label(parent, text);
+    UIStyle style = {.font_size = size, .tracking = tracking, .padding = {6.0f, 0.0f, 18.0f, 0.0f}};
+    glm_vec4_copy((float*)fg, style.fg);
+    ui_set_style(el, &style);
     return el;
 }
 

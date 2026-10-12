@@ -64,4 +64,20 @@ UIElement* hud_bare(UIElement* parent, UIDir dir, float spacing);
 // the world dimmed to `dim` behind it; its root in `root`.
 UIScreen* hud_modal_screen(UISystem* ui, const char* name, float dim, UIElement** root);
 
+// The menus' look: items as words on nothing, the one the keys are on brightened onto a dim plate.
+extern const vec4 HUD_ITEM_FG;
+extern const vec4 HUD_FOCUS_FG;
+extern const vec4 HUD_DISABLED_FG;
+extern const vec4 HUD_HEADING_FG;
+// A menu item in `parent`, its words `size` points, calling `action` with `user` when chosen.
+UIElement* hud_item(UIElement* parent, const char* text, float size, UIActionFn action, void* user);
+// An item shown or not without leaving the tree: a hidden item takes no height and no key lands
+// on it.
+void hud_item_shown(UIElement* el, bool shown);
+// A column `width` points wide in `root`, centring what is put in it.
+UIElement* hud_column(UIElement* root, float width);
+// Words in `parent` that are not an item: a heading, a note.
+UIElement* hud_words(UIElement* parent, const char* text, float size, const float* fg,
+                     float tracking);
+
 #endif // _SILENT_HUD_H_

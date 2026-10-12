@@ -287,7 +287,7 @@ void player_pre_render(Player* p, Game* game, const vec3* pin_eye, const vec3* p
     // take it back, or its sliders could not be reached. The arrow keys still look. While the
     // game's input is held a click takes nothing either: nobody looks round a room they cannot see.
     // Captured after the look, so the jump a capture makes lands in the delta it skips.
-    if (engine->show_gui || input_action_pressed(&game->input, "release_cursor"))
+    if (engine->show_gui)
         p->cursor_wanted = false;
     else if (input_mouse_pressed(&game->input, GLFW_MOUSE_BUTTON_LEFT) &&
              !engine_gui_wants_mouse() && !held)
