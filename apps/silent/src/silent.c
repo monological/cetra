@@ -1497,7 +1497,8 @@ static void on_pre_render(Game* game, double alpha) {
                 g_run = RUN_PLAYING;
             break;
         case RUN_PLAYING:
-            save_game_frame(feet, game->frame_clock.delta);
+            if (save_game_frame(feet, game->frame_clock.delta))
+                hud_saved(&g_hud);
             break;
     }
     capture_budget(engine);

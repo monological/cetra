@@ -253,9 +253,9 @@ void save_game_begin(const char* slot) {
     g_since_write = 0.0;
 }
 
-static void write_now(const char* why) {
+static bool write_now(const char* why) {
     if (!g_system || !g_slot[0])
-        return;
+        return false;
     const double start = glfwGetTime();
     gather();
     const bool ok = save_write(g_system, g_path);
@@ -263,6 +263,7 @@ static void write_now(const char* why) {
            (glfwGetTime() - start) * 1000.0);
     g_due = g_room_due = false;
     g_since_write = 0.0;
+    return ok;
 }
 
 void save_game_due(void) {
@@ -273,7 +274,7 @@ void save_game_quit(void) {
     write_now("quit");
 }
 
-void save_game_frame(const vec3 feet, double dt) {
+bool save_game_frame(const vec3 feet, double dt) {
     g_kept.played += dt;
     g_since_write += dt;
     const RoomId room = room_at(feet);
@@ -281,7 +282,8 @@ void save_game_frame(const vec3 feet, double dt) {
         g_room_due = true;
     g_room = (int)room;
     if (g_due)
-        write_now("progress");
-    else if (g_room_due && g_since_write >= ROOM_SAVE_GAP)
-        write_now(room_label(room));
+        return write_now("progress");
+    if (g_room_due && g_since_write >= ROOM_SAVE_GAP)
+        return write_now(room_label(room));
+    return false;
 }
