@@ -70,6 +70,9 @@ void basement_update(Basement* b, const Door* door, double time);
  */
 bool basement_hold(Basement* b, EntityManager* em, PhysicsWorld* physics, const vec3 feet,
                    bool light);
+// Feet put somewhere by a load (spec 13.49): already at the foot if they are there, so arriving
+// there is not what the next step thinks about.
+void basement_settle(Basement* b, const vec3 feet);
 
 // For the light's captures (spec 13.42): `rest` hangs the bulb straight on a full supply; false
 // puts it back as the last update left it.

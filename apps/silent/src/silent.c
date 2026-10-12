@@ -77,6 +77,7 @@
 #include "mats.h"
 #include "player.h"
 #include "rain_bed.h"
+#include "save_game.h"
 #include "sounds.h"
 #include "street.h"
 #include "study.h"
@@ -237,6 +238,9 @@ typedef struct SilentArgs {
     unsigned int cat_seed; // its mind's seed
     bool cat_blind;        // it does not see or hear the player
     const char* cat_doing; // the activity it starts with, or NULL to choose
+    const char* slot;      // the save slot this run autosaves into, whatever kind of run it is
+    const char* load;      // a save slot to start from
+    bool no_autosave;      // a game that never saves itself
 } SilentArgs;
 
 static SilentArgs g_args;
@@ -284,6 +288,7 @@ static size_t g_dump_frames, g_dump_cap;
 static bool g_loaded;           // the lighting round the eye first came in
 static float g_fade_seconds;    // since the view came up
 static float g_play_capture_ms; // the capture budget once loaded
+static bool g_playing;          // the view is up on the game: saves are made from here on
 
 // The spawn: in the kitchen's back corner, looking across the room toward the hall door.
 static const vec3 SPAWN_FEET = {4.5f, FLOOR_Y, 13.3f};
@@ -1104,6 +1109,25 @@ static void on_init(Game* game) {
         cat_mind_create(&g_mind, &g_cat, game, &g_player, g_args.cat_seed, g_args.cat_blind,
                         g_args.cat_doing);
 
+    // What a save keeps (spec 13.49), and a game started from one.
+    SaveWorld world = {.game = game,
+                       .player = &g_player,
+                       .backpack = &g_backpack,
+                       .fridge_map = &g_fridge_map,
+                       .finds = &g_finds,
+                       .map_screen = &g_map_screen,
+                       .lights = &g_lights,
+                       .basement = &g_basement,
+                       .cat = &g_cat,
+                       .mind = &g_mind};
+    for (int i = 0; i < DOORS; i++)
+        if (g_door_hung[i])
+            world.doors[world.door_count++] = &g_doors[i];
+    save_game_start(&world);
+    if (g_args.load)
+        save_game_load(g_args.load);
+    save_game_begin(g_args.no_autosave ? NULL : g_args.slot);
+
     // Pinned at night: a meter would open the dark back up, which is the one
     // thing this place must not do. By day the meter maps what it reads to
     // the key on its own, so the camera is 1, and it is floored where that
@@ -1149,6 +1173,8 @@ static void on_update(Game* game, double dt) {
             hud_think(&g_hud, thought);
         if (first && mapped)
             hud_hint(&g_hud, MAP_HINT, HINT_SECONDS);
+        if (first)
+            save_game_moment(SAVE_FOUND);
     }
     for (int i = 0; i < DOORS; i++)
         if (g_door_hung[i])
@@ -1244,6 +1270,7 @@ static void take_backpack(void) {
     backpack_take(&g_backpack);
     hud_think(&g_hud, "My backpack. There's a flashlight in it.");
     hud_hint(&g_hud, "Tab   Backpack", HINT_SECONDS);
+    save_game_moment(SAVE_TOOK);
 }
 
 // The map off the fridge (spec 13.43): into the backpack, once there is a backpack to put it in.
@@ -1258,6 +1285,7 @@ static void take_map(void) {
     hud_think(&g_hud, finds_any(&g_finds) ? "A map of the town. I'll mark what I've found on it."
                                           : "A map of the town. That'll come in handy.");
     hud_hint(&g_hud, MAP_HINT, HINT_SECONDS);
+    save_game_moment(SAVE_TOOK);
 }
 
 // A foot the gait let fall this frame, heard where the drawn `feet` came down (spec 13.47); or,
@@ -1394,6 +1422,9 @@ static void on_pre_render(Game* game, double alpha) {
     const bool up = lit && !engine_loading_screen_shown(engine);
     if (up)
         g_fade_seconds += fminf((float)game->frame_clock.delta, 1.0f / 30.0f);
+    g_playing |= up;
+    if (g_playing)
+        save_game_frame(feet, game->frame_clock.delta);
     if (engine->postfx)
         glm_vec3_fill(engine->postfx->grade_gain,
                       glm_smoothstep(0.0f, FADE_IN_SECONDS, g_fade_seconds));
@@ -1494,6 +1525,10 @@ static void on_shutdown(Game* game) {
         profiler_report(game->engine->profiler);
     if (g_args.tiles_probe && g_scene)
         shadow_tiles_probe(g_scene->shadow_system, g_scene);
+    // While every entity is still alive.
+    if (g_playing)
+        save_game_moment(SAVE_QUIT);
+    save_game_free();
     backpack_menu_free(&g_menu);
     map_screen_free(&g_map_screen);
     hud_free(&g_hud);
@@ -1621,6 +1656,10 @@ static void print_usage(const char* prog) {
     printf("      --cat-cam           The camera follows the cat\n");
     printf("      --trace-cat         Print what the cat is doing every 30 steps\n");
     printf("      --no-eyeshine       Its eyes do not throw the flashlight back\n");
+    printf("      --load SLOT         Start from the game saved in SLOT (silent-1 .. silent-%d)\n",
+           SAVE_GAME_SLOTS);
+    printf("      --slot SLOT         Save this run into SLOT as it goes, whatever started it\n");
+    printf("      --no-autosave       Never save the game\n");
     printf("  In the window: click to capture the mouse, Escape to release it. WASD\n");
     printf("  walks, Shift hurries, C crouches or stands and Ctrl crouches while held,\n");
     printf("  the arrows or the mouse look, E opens and shuts\n");
@@ -1862,6 +1901,12 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
             a->cat_cam = true;
         } else if (!strcmp(s, "--trace-cat")) {
             a->trace_cat = true;
+        } else if (!strcmp(s, "--slot") && has_next) {
+            a->slot = argv[++i];
+        } else if (!strcmp(s, "--load") && has_next) {
+            a->load = argv[++i];
+        } else if (!strcmp(s, "--no-autosave")) {
+            a->no_autosave = true;
         } else if (!strcmp(s, "-h") || !strcmp(s, "--help")) {
             print_usage(argv[0]);
             return false;

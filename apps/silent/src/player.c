@@ -298,6 +298,25 @@ void player_free(Player* p) {
     p->gait = NULL;
 }
 
+void player_restore(Player* p, float yaw, float pitch) {
+    CharacterController* cc = p->entity ? entity_get_character_controller(p->entity) : NULL;
+    if (!cc)
+        return;
+    character_controller_get_position(cc, p->entity->position);
+    glm_vec3_copy(p->entity->position, p->step_from);
+    glm_vec3_copy(p->entity->position, p->view);
+    character_controller_set_velocity(cc, GLM_VEC3_ZERO);
+    p->speed = 0.0f;
+    p->heading = yaw;
+    camera_rig_aim(p->rig, yaw, pitch);
+    gait_reset(p->gait);
+    // Down always fits; up is checked against what is over the head where it now stands.
+    p->crouch_toggled = false;
+    character_controller_set_half_height(cc, CROUCH_HALF_HEIGHT);
+    const bool stood = character_controller_set_half_height(cc, CAPSULE_HALF_HEIGHT);
+    p->crouch_eased = stood ? 0.0f : 1.0f;
+}
+
 void player_feet(const Player* p, vec3 out) {
     glm_vec3_copy(p->entity->position, out);
     out[1] -= CAPSULE_REST;

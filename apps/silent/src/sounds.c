@@ -101,6 +101,33 @@ static const Room ROOM_TABLE[ROOMS] = {
                       {CABIN_X1, CABIN_RIDGE_Y + 0.5f, CABIN_Z1}}}},
 };
 
+// Each room as a player reads it, for a list of saves (spec 13.49).
+static const char* const ROOM_LABELS[ROOMS] = {
+    [ROOM_WORLD] = "Outside",
+    [ROOM_HOME] = "Home",
+    [ROOM_LIVING] = "Home, living room",
+    [ROOM_KITCHEN] = "Home, kitchen",
+    [ROOM_BASEMENT] = "Home, basement",
+    [ROOM_MANSION] = "Mansion",
+    [ROOM_UPSTAIRS] = "Mansion, upstairs",
+    [ROOM_CABIN] = "Cabin",
+};
+
+// A room's boxes in the world, into `boxes` (AUDIO_ZONE_BOXES long): the tower's with the
+// mansion's, and the mansion's moved to where it stands. How many.
+static int room_boxes(const Room* room, AABB* boxes) {
+    int n = 0;
+    for (int i = 0; i < room->box_count; i++)
+        boxes[n++] = room->boxes[i];
+    if (room->tower)
+        n += tower_boxes(room->boxes[0].min[1], room->boxes[0].max[1], &boxes[n]);
+    for (int i = 0; room->mansion && i < n; i++) {
+        mansion_at(boxes[i].min, boxes[i].min);
+        mansion_at(boxes[i].max, boxes[i].max);
+    }
+    return n;
+}
+
 typedef struct RoomLink {
     int a, b;         // rooms
     float shut, open; // `through` with its door shut and open; one with no door is always shut
@@ -150,18 +177,9 @@ void sounds_start(Sounds* sounds, AudioSystem* audio, const struct Door* const* 
         return;
     AudioZone zone[ROOMS] = {[ROOM_WORLD] = AUDIO_ZONE_WORLD};
     for (int r = ROOM_WORLD + 1; r < ROOMS; r++) {
-        const Room* room = &ROOM_TABLE[r];
         AABB boxes[AUDIO_ZONE_BOXES];
-        int n = 0;
-        for (int i = 0; i < room->box_count; i++)
-            boxes[n++] = room->boxes[i];
-        if (room->tower)
-            n += tower_boxes(room->boxes[0].min[1], room->boxes[0].max[1], &boxes[n]);
-        for (int i = 0; room->mansion && i < n; i++) {
-            mansion_at(boxes[i].min, boxes[i].min);
-            mansion_at(boxes[i].max, boxes[i].max);
-        }
-        zone[r] = audio_zone_add(audio, &(AudioZoneDesc){room->name, boxes, n});
+        const int n = room_boxes(&ROOM_TABLE[r], boxes);
+        zone[r] = audio_zone_add(audio, &(AudioZoneDesc){ROOM_TABLE[r].name, boxes, n});
     }
     bool outer[ROOMS] = {false};
     for (int i = 0; i < LINK_COUNT; i++) {
@@ -177,6 +195,25 @@ void sounds_start(Sounds* sounds, AudioSystem* audio, const struct Door* const* 
             sounds->outer[sounds->outer_count++] = zone[r];
     sounds->wind_outside = sounds_loop(audio, "assets/audio/silent/wind_outside.flac");
     sounds->wind_inside = sounds_loop(audio, "assets/audio/silent/wind_inside.flac");
+}
+
+int sounds_room_at(const vec3 at) {
+    int room = ROOM_WORLD;
+    for (int r = ROOM_WORLD + 1; r < ROOMS; r++) {
+        AABB boxes[AUDIO_ZONE_BOXES];
+        const int n = room_boxes(&ROOM_TABLE[r], boxes);
+        for (int i = 0; i < n; i++) {
+            const AABB* b = &boxes[i];
+            if (at[0] >= b->min[0] && at[0] <= b->max[0] && at[1] >= b->min[1] &&
+                at[1] <= b->max[1] && at[2] >= b->min[2] && at[2] <= b->max[2])
+                room = r;
+        }
+    }
+    return room;
+}
+
+const char* sounds_room_label(int room) {
+    return room >= 0 && room < ROOMS ? ROOM_LABELS[room] : ROOM_LABELS[ROOM_WORLD];
 }
 
 void sounds_update(Sounds* sounds) {

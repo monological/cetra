@@ -528,6 +528,8 @@ static void body(Kit* kit, const char* kind, int mat, const vec3 at, const verso
     Entity* e = create_entity(kit->em, name);
     if (!e)
         return;
+    // Built the same every run, so a save has nothing of it to keep.
+    e->unsaved = true;
     glm_vec3_add((float*)at, kit->origin, e->position);
     // Before the body, which reads the entity's rotation when it is created.
     glm_quat_copy((float*)rotation, e->rotation);

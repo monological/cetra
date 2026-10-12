@@ -534,12 +534,46 @@ void cat_trace(const Cat* cat, int step) {
 
 // ---------------------------------------------------------------------------------------------
 
+// At `at`, holding the posture it rests in there and facing the way it rests, with nothing under
+// way and nowhere to go.
+static void rest_at(Cat* cat, int at) {
+    const CatPlace* place = &CAT_PLACES[at];
+    nav_follower_start(&cat->follower, cat->places, at, at, NULL);
+    cat->mode = CAT_RESTING;
+    cat->posture = cat->want = cat->arrive_as = resting(place->rest);
+    cat->yaw = cat->face = place->yaw;
+    cat->goal = cat->leg = cat->act = -1;
+    cat->waiting = cat->landed = false;
+}
+
+int cat_nearest_place(const Cat* cat) {
+    if (!cat->entity)
+        return -1;
+    NavSample s;
+    nav_follower_sample(&cat->follower, &s);
+    if (cat->follower.arrived || s.link < 0)
+        return cat->follower.at;
+    const NavLink* l = &cat->places->links[s.link];
+    return s.progress < 0.5f ? l->from : l->to;
+}
+
+void cat_put(Cat* cat, int place) {
+    if (!cat->entity || cat->held || place < 0 || place >= CAT_PLACE_COUNT)
+        return;
+    rest_at(cat, place);
+    play(cat, HOLD[cat->posture], 0.0f);
+    vec3 travel = {0.0f, 0.0f, 0.0f};
+    float turned = 0.0f;
+    // What root motion the old clip had laid down goes with it, or the next step walks it off.
+    animator_take_root_motion(cat->animator, travel, &turned);
+    cat_place_feet(place, cat->entity->position);
+    cat->entity->position[1] += CAT_HALF_HEIGHT;
+    glm_quatv(cat->entity->rotation, cat->yaw, (vec3){0.0f, 1.0f, 0.0f});
+}
+
 bool cat_create(Cat* cat, const CatDesc* desc, Game* game, PhysicsWorld* physics) {
     memset(cat, 0, sizeof(*cat));
     cat->eye_bones[0] = cat->eye_bones[1] = -1;
-    cat->goal = -1;
-    cat->leg = -1;
-    cat->act = -1;
     cat->go = -1;
 
     cat->places = cat_places_build();
@@ -554,9 +588,7 @@ bool cat_create(Cat* cat, const CatDesc* desc, Game* game, PhysicsWorld* physics
         at = CAT_HOME;
     }
     const CatPlace* place = &CAT_PLACES[at];
-    nav_follower_start(&cat->follower, cat->places, at, at, NULL);
-    cat->posture = cat->want = cat->arrive_as = resting(place->rest);
-    cat->yaw = cat->face = place->yaw;
+    rest_at(cat, at);
     int clip = HOLD[cat->posture];
     if (desc->clip) {
         const int named = find_clip(desc->clip);

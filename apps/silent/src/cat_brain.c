@@ -612,6 +612,26 @@ bool cat_mind_create(CatMind* m, Cat* cat, Game* game, const Player* player, uin
     return true;
 }
 
+void cat_mind_restore(CatMind* m, float energy, float boredom, float alarm, float affinity,
+                      const float since[CAT_PLACE_COUNT]) {
+    if (!m->brain)
+        return;
+    m->energy = glm_clamp_zo(energy);
+    m->boredom = glm_clamp_zo(boredom);
+    m->alarm = fmaxf(0.0f, alarm);
+    m->affinity = glm_clamp_zo(affinity);
+    memcpy(m->since, since, sizeof(m->since));
+    const int first = m->cat->posture == CAT_CURL ? ACT_SLEEP : -1;
+    // Not yet in the house, it starts on this once it is; in it, the activity under way ends here.
+    if (m->brain->activity_count == 0) {
+        m->first = first;
+    } else if (first >= 0) {
+        brain_start(m->brain, first);
+    } else {
+        brain_stop(m->brain);
+    }
+}
+
 // The activities go in once the cat is in the house: until then it can neither move nor be
 // seen, and a brain with something to choose would begin it, fail, and hold that against it.
 static void wake_up(CatMind* m) {

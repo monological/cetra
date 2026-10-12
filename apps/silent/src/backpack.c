@@ -269,6 +269,19 @@ bool backpack_holds(const Backpack* bp, ItemId item) {
     return false;
 }
 
+void backpack_restore(Backpack* bp, bool taken, const ItemId* held, int count) {
+    if (taken && bp->bag) {
+        free_node(bp->bag);
+        bp->bag = NULL;
+    }
+    bp->taken = taken;
+    bp->held_count = 0;
+    for (int k = 0; taken && k < count; k++)
+        if (held[k] > ITEM_NONE && held[k] < ITEM_COUNT && !backpack_holds(bp, held[k]))
+            bp->held[bp->held_count++] = held[k];
+    pack(bp);
+}
+
 void backpack_free(Backpack* bp) {
     for (int i = 0; i < ITEM_COUNT; i++)
         free_node(bp->models[i]);

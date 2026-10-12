@@ -106,6 +106,10 @@ void brain_interrupt(Brain* brain);
 // there is no such activity or its begin refuses.
 bool brain_start(Brain* brain, int activity);
 
+// Stop whatever runs, its end told it was interrupted, and choose afresh on the next step: for a
+// body put somewhere its activity did not take it.
+void brain_stop(Brain* brain);
+
 // The name of what runs, or NULL.
 const char* brain_current_name(const Brain* brain);
 

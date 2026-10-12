@@ -164,6 +164,24 @@ bool map_screen_open(const MapScreen* ms) {
     return ms->screen && ui_top(ms->ui) == ms->screen;
 }
 
+bool map_screen_inked(const MapScreen* ms, PlaceId place) {
+    const double began = ms->began[place];
+    if (began == -INFINITY)
+        return true;
+    if (ms->map == MAP_NONE || !isfinite(began))
+        return false;
+    const MapArt* last = &MAP_ART[ms->map];
+    for (int i = 0; i < last->mark_count; i++)
+        if (last->marks[i].place == place)
+            return ms->clock >= began + (double)last->marks[i].seconds;
+    return false;
+}
+
+void map_screen_restore(MapScreen* ms, const bool inked[PLACE_COUNT]) {
+    for (int i = 0; i < PLACE_COUNT; i++)
+        ms->began[i] = inked[i] ? -INFINITY : INFINITY;
+}
+
 void map_screen_show(MapScreen* ms, MapId map, const bool found[PLACE_COUNT]) {
     if (!ms->screen || map <= MAP_NONE || map >= MAP_COUNT || map_screen_open(ms))
         return;
@@ -173,14 +191,9 @@ void map_screen_show(MapScreen* ms, MapId map, const bool found[PLACE_COUNT]) {
         return;
     // A mark whose writing finished while the map was last open is whole from now on; one the
     // closing cut off is written again.
-    if (ms->map != MAP_NONE) {
-        const MapArt* last = &MAP_ART[ms->map];
-        for (int i = 0; i < last->mark_count; i++) {
-            double* began = &ms->began[last->marks[i].place];
-            if (isfinite(*began) && ms->clock >= *began + (double)last->marks[i].seconds)
-                *began = -INFINITY;
-        }
-    }
+    for (int i = 0; i < PLACE_COUNT; i++)
+        if (map_screen_inked(ms, (PlaceId)i))
+            ms->began[i] = -INFINITY;
     ms->map = map;
     ms->zoom = 1.0f;
     to_print(&MAP_ART[map], ms->feet[0], ms->feet[1], ms->centre);
