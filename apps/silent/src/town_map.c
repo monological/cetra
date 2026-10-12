@@ -75,6 +75,14 @@ PlaceId finds_arrive(Finds* f, const vec3 feet, bool* first) {
     return arrived;
 }
 
+void finds_settle(Finds* f, const vec3 feet) {
+    for (int i = 0; i < PLACE_COUNT; i++) {
+        const float* b = PLACES[i].box;
+        f->here[i] =
+            !PLACES[i].known && plan_box_distance(feet[0], feet[2], b[0], b[1], b[2], b[3]) <= 0.0f;
+    }
+}
+
 bool finds_any(const Finds* f) {
     for (int i = 0; i < PLACE_COUNT; i++)
         if (f->found[i] && !PLACES[i].known)

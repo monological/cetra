@@ -76,6 +76,11 @@ typedef struct CatMind {
 bool cat_mind_create(CatMind* mind, Cat* cat, Game* game, const Player* player, uint32_t seed,
                      bool blind, const char* first);
 
+// Its needs as a save left them (spec 13.49), with the cat just put at a place: whatever it was
+// doing is dropped and it chooses again, asleep already if it is curled up.
+void cat_mind_restore(CatMind* mind, float energy, float boredom, float alarm, float affinity,
+                      const float since[CAT_PLACE_COUNT]);
+
 // Each fixed step, before the brains: what it senses and how its needs change. `rain` is how
 // hard it is raining, 0..1.
 void cat_mind_sense(CatMind* mind, float rain, float dt);

@@ -176,6 +176,8 @@ bool cat_body_load(Cat* cat, const CatDesc* desc, Game* game, PhysicsWorld* phys
     cat->entity = create_entity(game->entity_manager, "cat");
     if (!cat->entity)
         return false;
+    // Where it is follows from the place it is at, which a save keeps rather than its pose.
+    cat->entity->unsaved = true;
     glm_vec3_copy((float*)feet, cat->entity->position);
     cat->entity->position[1] += CAT_HALF_HEIGHT;
     glm_quatv(cat->entity->rotation, yaw, (vec3){0.0f, 1.0f, 0.0f});

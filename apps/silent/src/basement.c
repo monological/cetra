@@ -737,6 +737,8 @@ static void bar(Basement* b, EntityManager* em, PhysicsWorld* physics) {
     b->bar = create_entity(em, "basement_bar");
     if (!b->bar)
         return;
+    // Whether it stands follows from the backpack every step.
+    b->bar->unsaved = true;
     const KitOpening* o = &WAY_IN;
     glm_vec3_copy((vec3){0.5f * (o->from + o->to), 0.5f * (o->bottom + o->top), STAIRWELL_WALL_Z},
                   b->bar->position);
@@ -754,14 +756,19 @@ static void unbar(Basement* b, EntityManager* em) {
     b->bar = NULL;
 }
 
+// Whether `feet` are at the flight's foot: its last steps or the floor below them.
+static bool at_flight_foot(const vec3 feet) {
+    return feet[0] < HALL_X0 && feet[2] > STAIRWELL_Z0 && feet[2] < CELLAR_Z1 &&
+           feet[1] < BASEMENT_Y + FOOT_REACH;
+}
+
 bool basement_hold(Basement* b, EntityManager* em, PhysicsWorld* physics, const vec3 feet,
                    bool light) {
     if (light)
         unbar(b, em);
     else
         bar(b, em, physics);
-    if (feet[0] < HALL_X0 && feet[2] > STAIRWELL_Z0 && feet[2] < CELLAR_Z1 &&
-        feet[1] < BASEMENT_Y + FOOT_REACH) {
+    if (at_flight_foot(feet)) {
         const bool arrived = !b->at_foot;
         b->at_foot = true;
         return arrived && !light;
@@ -769,6 +776,10 @@ bool basement_hold(Basement* b, EntityManager* em, PhysicsWorld* physics, const 
     if (feet[1] > HALL_NEAR)
         b->at_foot = false;
     return false;
+}
+
+void basement_settle(Basement* b, const vec3 feet) {
+    b->at_foot = at_flight_foot(feet);
 }
 
 void basement_rest(Basement* b, bool rest) {

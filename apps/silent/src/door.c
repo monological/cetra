@@ -203,6 +203,8 @@ bool door_build(Door* door, Engine* engine, Scene* scene, EntityManager* em, Phy
     door->entity = create_entity(em, name);
     if (!door->entity)
         return false;
+    // The swing is the door's state and the body only follows it, so a save keeps the swing.
+    door->entity->unsaved = true;
     door->entity->node = node;
     place(door);
     PhysicsShapeDesc box = {
@@ -232,10 +234,15 @@ void door_toggle(Door* door) {
     door->want = door_will_open(door) ? 1.0f : 0.0f;
 }
 
-void door_set_open(Door* door) {
-    door->travel = door->want = 1.0f;
+void door_set(Door* door, float travel, float want) {
+    door->travel = glm_clamp_zo(travel);
+    door->want = glm_clamp_zo(want);
     if (door->entity)
         place(door);
+}
+
+void door_set_open(Door* door) {
+    door_set(door, 1.0f, 1.0f);
 }
 
 void door_update(Door* door, float dt) {

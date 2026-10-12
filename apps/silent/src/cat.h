@@ -141,6 +141,11 @@ void cat_set_eyes(Cat* cat, const vec3 srgb);
 
 // The place it stands at, or -1 between two.
 int cat_place(const Cat* cat);
+// The place it stands at, or the nearer end of the link it is on; -1 with no cat.
+int cat_nearest_place(const Cat* cat);
+// Stand it at `place` at once, resting as the place says, with nothing under way: where a load
+// (spec 13.49) puts it. Nothing for a cat held on a clip from the command line.
+void cat_put(Cat* cat, int place);
 // At rest where it was going, nothing under way.
 bool cat_settled(const Cat* cat);
 // Where it was going and doing what it does there: resting, or an act in place.

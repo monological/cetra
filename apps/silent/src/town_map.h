@@ -53,6 +53,9 @@ typedef struct Finds {
 // PLACE_NONE -- once each time they come back to it from FIND_LEAVE away -- and in `first`
 // whether it is the first time. It is found from then on.
 PlaceId finds_arrive(Finds* f, const vec3 feet, bool* first);
+// Feet put somewhere by a load (spec 13.49): already in the boxes they stand in, so standing there
+// is not an arrival.
+void finds_settle(Finds* f, const vec3 feet);
 // Whether any place has been found by going there.
 bool finds_any(const Finds* f);
 
