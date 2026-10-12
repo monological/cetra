@@ -2,9 +2,11 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "cetra/program.h"
 #include "cetra/text.h"
 
 #include "hud.h"
+#include "silent_shaders.h"
 
 // The face gametest's menus use, from the splash app's assets; relative to the repository root,
 // which is where every app in this tree is run from.
@@ -21,8 +23,21 @@
 
 #define MODAL_FADE_IN 0.15f // seconds a screen over the world takes to come up
 
+// The save mark comes up over SAVE_IN, its candles lit one after another over SAVE_LIGHTING while
+// it says it is saving, then it says it saved for SAVE_STAY and goes over SAVE_OUT.
+#define SAVE_IN       0.25f
+#define SAVE_LIGHTING 1.2f
+#define SAVE_STAY     1.6f
+#define SAVE_OUT      0.8f
+#define SAVE_END      (SAVE_LIGHTING + SAVE_STAY + SAVE_OUT)
+#define SAVE_ICON     34.0f // the candlestick's square, in points
+#define SAVE_MARGIN   26.0f // from the window's right and bottom edges
+#define SAVE_GAP      10.0f // between the words and the candlestick
+#define SAVE_SIZE     18.0f // the words' size
+
 static const vec4 PROMPT_FG = {0.88f, 0.88f, 0.84f, 1.0f};
 static const vec4 THOUGHT_FG = {0.80f, 0.78f, 0.70f, 1.0f};
+static const vec4 IRON = {0.42f, 0.40f, 0.37f, 1.0f};
 
 // The words' look but their colour; the face and its size are the UI's.
 static const UIStyle WORDS = {.tracking = 1.0f, .line_spacing = 1.0f};
@@ -64,6 +79,33 @@ static void line_build(HudLine* line, UIElement* parent, const float* fg) {
     ui_set_draw(line->label, words_draw, line);
 }
 
+// The save mark in the bottom right corner of the window the element covers: the words, then the
+// candlestick.
+static void save_mark_draw(UIElement* el, UIDrawList* dl, void* user) {
+    const Hud* hud = user;
+    const float t = hud->saved_age;
+    const float alpha = glm_clamp(fminf(t / SAVE_IN, (SAVE_END - t) / SAVE_OUT), 0.0f, 1.0f);
+    if (alpha <= 0.0f)
+        return;
+    const UIRect r = el->rect;
+    const UIRect icon = {r.x + r.w - SAVE_MARGIN - SAVE_ICON, r.y + r.h - SAVE_MARGIN - SAVE_ICON,
+                         SAVE_ICON, SAVE_ICON};
+    if (hud->candles) {
+        ui_set_draw_program(dl, hud->candles, icon,
+                            3.0f * glm_clamp(t / SAVE_LIGHTING, 0.0f, 1.0f));
+        ui_draw_quad(dl, icon, (vec4){IRON[0], IRON[1], IRON[2], alpha});
+        ui_set_draw_program(dl, NULL, icon, 0.0f);
+    }
+    UIStyle style = WORDS;
+    style.font_size = SAVE_SIZE;
+    style.tracking = 1.5f;
+    glm_vec4_copy((float*)THOUGHT_FG, style.fg);
+    style.fg[3] *= alpha;
+    const float lh = ui_line_height(hud->font, SAVE_SIZE, 1.0f);
+    const UIRect words = {r.x, icon.y + 0.5f * (SAVE_ICON - lh), icon.x - SAVE_GAP - r.x, lh};
+    ui_draw_text(dl, words, t < SAVE_LIGHTING ? "Saving..." : "Saved", &style, UI_ALIGN_END);
+}
+
 static void line_set(HudLine* line, const char* text) {
     if (line->label->text && strcmp(text, line->label->text) == 0)
         return;
@@ -100,6 +142,16 @@ bool hud_start(Hud* hud, Engine* engine) {
     ui_set_size(hud->prompt.label, UI_FIT, 0.0f, UI_FIXED,
                 ui_line_height(font, HUD_SIZE, 1.0f) + 8.0f);
     hud->thought_age = THOUGHT_IN + THOUGHT_STAY + THOUGHT_OUT;
+    // The save mark over the whole window, out of the column's flow, drawn in its corner.
+    hud->save_mark = ui_panel(root);
+    hud->save_mark->fill = true;
+    ui_set_draw(hud->save_mark, save_mark_draw, hud);
+    hud->saved_age = SAVE_END;
+    hud->candles = create_ui_draw_program("save_candles", candles_frag_shader_str);
+    if (hud->candles)
+        engine_add_program(engine, hud->candles);
+    else
+        fprintf(stderr, "silent: the save mark's candlestick did not build; it says so in words\n");
     ui_push(hud->ui, hud->screen);
     ui_attach(hud->ui, engine);
     return true;
@@ -125,12 +177,17 @@ void hud_think(Hud* hud, const char* text) {
     hud->thought_age = again ? hud->thought.alpha * THOUGHT_IN : 0.0f;
 }
 
+void hud_saved(Hud* hud) {
+    hud->saved_age = hud->saved_age < SAVE_END ? fminf(hud->saved_age, SAVE_LIGHTING) : 0.0f;
+}
+
 void hud_update(Hud* hud, float dt, float height) {
     if (!hud->ui)
         return;
     // From the window as it is now: a change of window mode resizes it.
     ui_screen_root(hud->screen)->padding[2] = HUD_LIFT * height;
     hud->hint_left = fmaxf(hud->hint_left - dt, 0.0f);
+    hud->saved_age = fminf(hud->saved_age + dt, SAVE_END);
 
     hud->thought_age += dt;
     const float t = hud->thought_age;

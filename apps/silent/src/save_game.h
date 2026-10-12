@@ -83,6 +83,7 @@ void save_game_due(void);
 // The game is ending: written now.
 void save_game_quit(void);
 // Per frame while the game is played: the play clock, the room the `feet` are in, and a save due.
-void save_game_frame(const vec3 feet, double dt);
+// True when it wrote one.
+bool save_game_frame(const vec3 feet, double dt);
 
 #endif // _SILENT_SAVE_GAME_H_
