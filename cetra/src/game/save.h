@@ -73,8 +73,8 @@ typedef struct SaveSystem SaveSystem;
  * written first and carried no consumer -- and the dead arms were not free:
  * the string case in the decoder returned a success it had not written a value
  * for, which would have handed the store an uninitialised buffer the day
- * anything reached it. config_snapshot.c has both if they are wanted back, and
- * wants a consumer before they return.
+ * anything reached it. The enum came back with its consumer (spec 13.49, silent's
+ * cat, which is at one of a table of places); the string still wants one.
  */
 typedef enum {
     SAVE_BOOL = 0,
@@ -83,6 +83,13 @@ typedef enum {
     SAVE_DOUBLE,
     SAVE_VEC3,
     SAVE_QUAT, // a cglm versor: four floats, x y z w
+    /*
+     * An int index into a table of names the row carries, written as the NAME. An
+     * index on disk means a different thing the day the table gains a member in
+     * the middle; a name means the same thing until somebody renames it, and a
+     * name this build does not know leaves the field as it is and is counted.
+     */
+    SAVE_ENUM,
 } SaveType;
 
 /*
@@ -124,6 +131,8 @@ typedef struct SaveField {
     void* addr;
     SaveGetFn get; // non-NULL means neither offset nor addr is used
     SaveSetFn set;
+    const char* const* names; // SAVE_ENUM: the name of each index, borrowed
+    int name_count;
 } SaveField;
 
 /*
@@ -158,6 +167,14 @@ typedef struct SaveField {
 #define SAVE_ROW_FN(type_, key_, get_, set_) \
     {.type = (unsigned char)(type_), .key = (key_), .get = (get_), .set = (set_)}
 
+// An int member written as the name at its index in `names_`, `count_` long.
+#define SAVE_ROW_ENUM(key_, struct_, member_, names_, count_) \
+    {.type = (unsigned char)SAVE_ENUM,                        \
+     .key = (key_),                                           \
+     .offset = offsetof(struct_, member_),                    \
+     .names = (names_),                                       \
+     .name_count = (count_)}
+
 // ------------------------------------------------------------------ result
 
 /*
@@ -186,6 +203,7 @@ typedef struct SaveLoadResult {
     int dropped_missing_entity;
     int dropped_unknown_spawner;
     int dropped_unknown_component;
+    int dropped_unknown_name; // a SAVE_ENUM name this build's table does not hold
 } SaveLoadResult;
 
 // ------------------------------------------------------------------ system
@@ -292,7 +310,10 @@ bool save_register_migration(SaveSystem* save, const char* section, int from_ver
 bool save_default_path(char* out, size_t cap, const char* slot);
 
 /*
- * Write every registered table. False, logged by name, on any failure.
+ * Write every registered table, and every entity not marked `unsaved`. False,
+ * logged by name, on any failure. The file carries the wall clock it was written
+ * at, `saved_at`, for a list of saves to say when; nothing a load restores reads
+ * it.
  *
  * Written to a temporary beside the target and renamed over it, which is a
  * DELIBERATE departure from settings.c and config_snapshot.c -- both overwrite
@@ -303,7 +324,26 @@ bool save_default_path(char* out, size_t cap, const char* slot);
 bool save_write(SaveSystem* save, const char* path);
 
 // Read a file over the live world. See SaveLoadResult for what a failure means
-// and what merely counts.
+// and what merely counts. A record naming an entity marked `unsaved` is dropped
+// as though the entity were missing: the app has said it rebuilds that state.
 SaveLoadResult save_read(SaveSystem* save, const char* path);
+
+typedef struct SavePeek {
+    int version;     // the file's own
+    double saved_at; // seconds since the epoch; 0 for a file written before the stamp
+} SavePeek;
+
+/*
+ * One registered section of a file, read into `base` -- a CALLER's object of the
+ * section's type -- with nothing live touched: what a list of saves shows without
+ * loading any of them. The section's own migrations run first, on the file's tree.
+ *
+ * Only a section whose rows are all OFFSETS can be peeked. A row by address or
+ * through a get/set pair writes wherever it points whatever `base` is, which is
+ * live state, so a table holding one is refused by name. False, logged, when the
+ * file cannot be read or parsed, is below SAVE_FLOOR, or does not carry the
+ * section, or the section's migrations stop.
+ */
+bool save_peek(SaveSystem* save, const char* path, const char* section, void* base, SavePeek* info);
 
 #endif // _GAME_SAVE_H_

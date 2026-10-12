@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "../animator.h"
 #include "../ext/log.h"
@@ -149,6 +150,7 @@ static void _load_value(const SaveField* f, const void* base, double* v) {
             v[0] = *(const bool*)p ? 1.0 : 0.0;
             break;
         case SAVE_INT:
+        case SAVE_ENUM:
             v[0] = *(const int*)p;
             break;
         case SAVE_FLOAT:
@@ -184,6 +186,19 @@ static bool _write_field(cJSON* obj, const SaveField* f, const void* base) {
             return cJSON_AddNumberToObject(obj, f->key, v[0]) != NULL;
         case SAVE_FLOAT:
             return json_add_float(obj, f->key, (float)v[0]);
+        case SAVE_ENUM: {
+            // An index the table does not hold is the app's bug, and it costs this one
+            // field rather than the player's whole save: the key is left out, and a
+            // load leaves the field where the app put it.
+            const int index = (int)v[0];
+            if (!f->names || index < 0 || index >= f->name_count) {
+                log_warn("save: '%s' is %d, which its table of %d names does not hold; not "
+                         "written",
+                         f->key, index, f->name_count);
+                return true;
+            }
+            return cJSON_AddStringToObject(obj, f->key, f->names[index]) != NULL;
+        }
         case SAVE_VEC3:
         case SAVE_QUAT: {
             const int n = _type_width((SaveType)f->type);
@@ -223,7 +238,9 @@ static const cJSON* _find_item(const cJSON* obj, const SaveField* f) {
 /*
  * Decode one item into up to four doubles, in the shape the row wants. Returns
  * the count, or 0 when the item cannot be that shape -- refused BY NAME rather
- * than coerced, because a silently-zeroed field reads as a value somebody chose.
+ * than coerced, because a silently-zeroed field reads as a value somebody chose --
+ * or -1 for an enum's name this build's table does not hold, which is a patched
+ * table rather than a malformed file and is counted as such.
  */
 static int _decode_value(const SaveField* f, const cJSON* item, double* out) {
     switch ((SaveType)f->type) {
@@ -232,6 +249,16 @@ static int _decode_value(const SaveField* f, const cJSON* item, double* out) {
                 return 0;
             out[0] = cJSON_IsTrue(item) ? 1.0 : 0.0;
             return 1;
+        case SAVE_ENUM:
+            if (!cJSON_IsString(item))
+                return 0;
+            for (int i = 0; f->names && i < f->name_count; i++) {
+                if (f->names[i] && strcmp(f->names[i], item->valuestring) == 0) {
+                    out[0] = i;
+                    return 1;
+                }
+            }
+            return -1;
         case SAVE_INT:
         case SAVE_FLOAT:
         case SAVE_DOUBLE:
@@ -269,6 +296,7 @@ static void _store_value(const SaveField* f, void* base, const double* v, int n)
             *(bool*)p = v[0] != 0.0;
             break;
         case SAVE_INT:
+        case SAVE_ENUM:
             *(int*)p = (int)v[0];
             break;
         case SAVE_FLOAT:
@@ -288,13 +316,19 @@ static void _store_value(const SaveField* f, void* base, const double* v, int n)
 }
 
 // One row against one already-located object. True when it stored something.
-static bool _read_field(const cJSON* obj, const SaveField* f, void* base) {
+static bool _read_field(const cJSON* obj, const SaveField* f, void* base, SaveLoadResult* r) {
     const cJSON* item = _find_item(obj, f);
     if (!item)
         return false;
 
     double v[4] = {0.0, 0.0, 0.0, 0.0};
     const int n = _decode_value(f, item, v);
+    if (n < 0) {
+        log_warn("save: '%s' names '%s', which this build does not know; left as it is", f->key,
+                 item->valuestring);
+        r->dropped_unknown_name++;
+        return false;
+    }
     if (n == 0) {
         log_warn("save: '%s' is not a value of the right shape; ignored", f->key);
         return false;
@@ -524,6 +558,21 @@ static bool _read_animator(const cJSON* entry, Animator* animator, Scene* scene)
     return true;
 }
 
+/*
+ * The entity a record by this name restores: the first one by that name that takes
+ * saved state. A record's name is its whole identity, so this is the one
+ * definition both directions use -- the writer to tell when two entities would
+ * answer to one record, the reader to find the one that does.
+ */
+static Entity* _find_saved(EntityManager* em, const char* name) {
+    for (size_t e = 0; e < em->count; e++) {
+        Entity* entity = em->entities[e];
+        if (entity && !entity->unsaved && strcmp(entity->name, name) == 0)
+            return entity;
+    }
+    return NULL;
+}
+
 static bool _write_entities(SaveSystem* save, cJSON* root, int* written) {
     EntityManager* em = save->game ? save->game->entity_manager : NULL;
     if (!em)
@@ -539,8 +588,15 @@ static bool _write_entities(SaveSystem* save, cJSON* root, int* written) {
 
     for (size_t e = 0; e < em->count; e++) {
         Entity* entity = em->entities[e];
-        if (!entity)
+        if (!entity || entity->unsaved)
             continue;
+        // Written anyway, since it is still this entity's state; but a load gives every
+        // record by this name to the first entity that has it, and this one keeps
+        // whatever it had.
+        if (_find_saved(em, entity->name) != entity)
+            log_warn("save: more than one saved entity is named '%s'; a load cannot tell them "
+                     "apart",
+                     entity->name);
         cJSON* obj = cJSON_CreateObject();
         if (!obj || !cJSON_AddItemToArray(list, obj)) {
             cJSON_Delete(obj);
@@ -634,16 +690,17 @@ static void _read_entities(SaveSystem* save, const cJSON* root, SaveLoadResult* 
             continue;
         }
 
-        Entity* entity = find_entity_by_name(em, name);
+        Entity* entity = _find_saved(em, name);
         if (!entity) {
             const char* spawner_name = json_string_or(entry, "spawner");
             if (!spawner_name) {
                 /*
-                 * An AUTHORED record whose target the scene no longer provides.
-                 * Dropped and counted rather than refused: a patched level is
-                 * the ordinary way this happens, and refusing the file would
-                 * mean every content edit invalidated every save already in
-                 * players' hands.
+                 * An AUTHORED record whose target the scene no longer provides --
+                 * or provides as `unsaved`, which a file written before the app
+                 * marked it still names. Dropped and counted rather than refused:
+                 * a patched level is the ordinary way this happens, and refusing
+                 * the file would mean every content edit invalidated every save
+                 * already in players' hands.
                  */
                 r->dropped_missing_entity++;
                 continue;
@@ -686,7 +743,7 @@ static void _read_entities(SaveSystem* save, const cJSON* root, SaveLoadResult* 
         }
 
         for (int i = 0; i < SAVE_ENTITY_COUNT; i++) {
-            if (_read_field(entry, &SAVE_ENTITY_FIELDS[i], entity))
+            if (_read_field(entry, &SAVE_ENTITY_FIELDS[i], entity, r))
                 r->fields_restored++;
         }
 
@@ -704,7 +761,7 @@ static void _read_entities(SaveSystem* save, const cJSON* root, SaveLoadResult* 
                 continue;
             }
             for (int i = 0; i < comp->count; i++) {
-                if (_read_field(cobj, &comp->rows[i], base))
+                if (_read_field(cobj, &comp->rows[i], base, r))
                     r->fields_restored++;
             }
         }
@@ -1040,6 +1097,7 @@ bool save_write(SaveSystem* save, const char* path) {
     if (!root)
         return false;
     cJSON_AddNumberToObject(root, "version", SAVE_FORMAT_VERSION);
+    cJSON_AddNumberToObject(root, "saved_at", (double)time(NULL));
 
     bool ok = true;
     int written = 0;
@@ -1085,6 +1143,56 @@ bool save_write(SaveSystem* save, const char* path) {
 
 // ------------------------------------------------------------------- read
 
+/*
+ * The file's tree, or NULL, logged by name. These are the two file-level refusals
+ * -- it will not parse, or it is older than SAVE_FLOOR; everything past here drops
+ * a record and counts it.
+ */
+static cJSON* _parse_file(const char* path, int* version) {
+    char* text = read_entire_file(path, NULL);
+    if (!text) {
+        log_error("save: cannot read '%s'", path);
+        return NULL;
+    }
+    cJSON* root = cJSON_Parse(text);
+    free(text);
+    if (!root) {
+        log_error("save: '%s' will not parse; nothing applied", path);
+        return NULL;
+    }
+    *version = json_int_or(root, "version", 0);
+    if (*version < SAVE_FLOOR) {
+        log_error("save: '%s' is version %d; this build reads %d and newer, nothing applied", path,
+                  *version, SAVE_FLOOR);
+        cJSON_Delete(root);
+        return NULL;
+    }
+    return root;
+}
+
+/*
+ * One registered table's section into `base`: the table's own for a load, a
+ * caller's for a peek. False when the file does not carry the section or its
+ * migrations stop, in which case nothing was stored.
+ */
+static bool _read_table(const SaveSystem* save, cJSON* root, const SaveTable* table, void* base,
+                        SaveLoadResult* r) {
+    cJSON* obj = _section(root, table->section, false);
+    if (!obj || !cJSON_IsObject(obj))
+        return false;
+    // A section absent a version is version 1: the first format wrote one, so
+    // this only covers a hand-written file, and guessing the oldest is the
+    // reading that runs every migration rather than skipping any.
+    const int was = json_int_or(obj, "version", 1);
+    if (!_migrate_section(save, table->section, obj, was, table->version, r))
+        return false;
+    for (int i = 0; i < table->count; i++) {
+        if (_read_field(obj, &table->rows[i], base, r))
+            r->fields_restored++;
+    }
+    return true;
+}
+
 SaveLoadResult save_read(SaveSystem* save, const char* path) {
     SaveLoadResult r = {0};
     if (!save || !path) {
@@ -1092,44 +1200,12 @@ SaveLoadResult save_read(SaveSystem* save, const char* path) {
         return r;
     }
 
-    char* text = read_entire_file(path, NULL);
-    if (!text) {
-        log_error("save: cannot read '%s'", path);
+    cJSON* root = _parse_file(path, &r.from_version);
+    if (!root)
         return r;
-    }
-    cJSON* root = cJSON_Parse(text);
-    free(text);
-    if (!root) {
-        log_error("save: '%s' will not parse; nothing applied", path);
-        return r;
-    }
 
-    r.from_version = json_int_or(root, "version", 0);
-    if (r.from_version < SAVE_FLOOR) {
-        // One of exactly two file-level refusals. Everything else in this
-        // function drops a record and counts it.
-        log_error("save: '%s' is version %d; this build reads %d and newer, nothing applied", path,
-                  r.from_version, SAVE_FLOOR);
-        cJSON_Delete(root);
-        return r;
-    }
-
-    for (int t = 0; t < save->table_count; t++) {
-        const SaveTable* table = &save->tables[t];
-        cJSON* obj = _section(root, table->section, false);
-        if (!obj || !cJSON_IsObject(obj))
-            continue;
-        // A section absent a version is version 1: the first format wrote one,
-        // so this only covers a hand-written file, and guessing the oldest is
-        // the reading that runs every migration rather than skipping any.
-        const int was = json_int_or(obj, "version", 1);
-        if (!_migrate_section(save, table->section, obj, was, table->version, &r))
-            continue;
-        for (int i = 0; i < table->count; i++) {
-            if (_read_field(obj, &table->rows[i], table->base))
-                r.fields_restored++;
-        }
-    }
+    for (int t = 0; t < save->table_count; t++)
+        _read_table(save, root, &save->tables[t], save->tables[t].base, &r);
 
     _read_entities(save, root, &r);
 
@@ -1137,6 +1213,50 @@ SaveLoadResult save_read(SaveSystem* save, const char* path) {
     r.ok = true;
     log_info("save: read '%s' (version %d, %d fields, %d entities, %d dropped)", path,
              r.from_version, r.fields_restored, r.entities_restored,
-             r.dropped_missing_entity + r.dropped_unknown_spawner + r.dropped_unknown_component);
+             r.dropped_missing_entity + r.dropped_unknown_spawner + r.dropped_unknown_component +
+                 r.dropped_unknown_name);
     return r;
+}
+
+bool save_peek(SaveSystem* save, const char* path, const char* section, void* base,
+               SavePeek* info) {
+    if (!save || !path || !section || !base) {
+        log_error("save: a peek needs a file, a section and an object to read into");
+        return false;
+    }
+    const SaveTable* table = NULL;
+    for (int t = 0; t < save->table_count && !table; t++) {
+        if (strcmp(save->tables[t].section, section) == 0)
+            table = &save->tables[t];
+    }
+    if (!table) {
+        log_error("save: no section '%s' is registered to peek", section);
+        return false;
+    }
+    for (int i = 0; i < table->count; i++) {
+        const SaveField* f = &table->rows[i];
+        if (f->addr || f->get || f->set) {
+            log_error("save: '%s.%s' writes live state wherever it is read into; section '%s' "
+                      "cannot be peeked",
+                      section, f->key, section);
+            return false;
+        }
+    }
+
+    SaveLoadResult r = {0};
+    cJSON* root = _parse_file(path, &r.from_version);
+    if (!root)
+        return false;
+    const bool ok = _read_table(save, root, table, base, &r);
+    if (!ok)
+        log_warn("save: '%s' carries no section '%s' this build can read", path, section);
+    if (info) {
+        // A double, not json_float_or: seconds since the epoch are past what a float holds to
+        // the minute.
+        const cJSON* at = cJSON_GetObjectItemCaseSensitive(root, "saved_at");
+        *info = (SavePeek){.version = r.from_version,
+                           .saved_at = cJSON_IsNumber(at) ? at->valuedouble : 0.0};
+    }
+    cJSON_Delete(root);
+    return ok;
 }
