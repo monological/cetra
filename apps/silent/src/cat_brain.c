@@ -573,6 +573,11 @@ const char* cat_mind_activities(void) {
     return list;
 }
 
+// What it is doing to begin with where it is put: curled up, it is already asleep.
+static int resting_activity(const Cat* cat) {
+    return cat->posture == CAT_CURL ? ACT_SLEEP : -1;
+}
+
 bool cat_mind_create(CatMind* m, Cat* cat, Game* game, const Player* player, uint32_t seed,
                      bool blind, const char* first) {
     memset(m, 0, sizeof(*m));
@@ -606,22 +611,19 @@ bool cat_mind_create(CatMind* m, Cat* cat, Game* game, const Player* player, uin
     if (first && m->first < 0)
         fprintf(stderr, "silent: the cat has no activity '%s' (%s)\n", first,
                 cat_mind_activities());
-    // Curled up where it starts, it is already asleep.
-    if (!first && cat->posture == CAT_CURL)
-        m->first = ACT_SLEEP;
+    if (!first)
+        m->first = resting_activity(cat);
     return true;
 }
 
-void cat_mind_restore(CatMind* m, float energy, float boredom, float alarm, float affinity,
-                      const float since[CAT_PLACE_COUNT]) {
+void cat_mind_restore(CatMind* m) {
     if (!m->brain)
         return;
-    m->energy = glm_clamp_zo(energy);
-    m->boredom = glm_clamp_zo(boredom);
-    m->alarm = fmaxf(0.0f, alarm);
-    m->affinity = glm_clamp_zo(affinity);
-    memcpy(m->since, since, sizeof(m->since));
-    const int first = m->cat->posture == CAT_CURL ? ACT_SLEEP : -1;
+    m->energy = glm_clamp_zo(m->energy);
+    m->boredom = glm_clamp_zo(m->boredom);
+    m->alarm = fmaxf(0.0f, m->alarm);
+    m->affinity = glm_clamp_zo(m->affinity);
+    const int first = resting_activity(m->cat);
     // Not yet in the house, it starts on this once it is; in it, the activity under way ends here.
     if (m->brain->activity_count == 0) {
         m->first = first;

@@ -2,10 +2,8 @@
 #include <stdio.h>
 
 #include "door.h"
-#include "home.h"
-#include "layout.h"
+#include "rooms.h"
 #include "sounds.h"
-#include "tower.h"
 
 // Every loop is levelled alike by tools/fetch_sounds.py, so this is the whole statement of how
 // loud the wind is.
@@ -23,110 +21,7 @@
 #define BASEMENT_DOOR_THROUGH 0.8f
 #define STOREY_THROUGH        0.5f
 
-// Over every roof and the tower's spire: where a house's rooms stop going up.
-#define ROOFS_Y 20.0f
-
-enum {
-    ROOM_WORLD, // the outdoors, outside every room
-    ROOM_HOME,
-    ROOM_LIVING,
-    ROOM_KITCHEN,
-    ROOM_BASEMENT,
-    ROOM_MANSION,
-    ROOM_UPSTAIRS,
-    ROOM_CABIN,
-    ROOMS
-};
-
-typedef struct Room {
-    const char* name;
-    bool mansion; // its boxes are in the mansion's plan, moved to where it stands
-    bool tower;   // and the tower's octagon with them, as high as the first box
-    int box_count;
-    AABB boxes[2];
-} Room;
-
-/*
- * The rooms, in the order they are added, since a room added later carves itself out of one
- * round it. The home over its footprint, which is its hall and everything shut; the living room
- * and the kitchen, each off the hall through an open doorway; and its basement -- the cellar
- * under it all and the flight down behind its door, so the door is the basement's boundary. The
- * mansion over its footprint and its tower, and its upper storey -- the rooms over the front and
- * the study's bay in the tower -- carved out of it; the gallery stays the great hall's, open to
- * it.
- */
-static const Room ROOM_TABLE[ROOMS] = {
-    [ROOM_HOME] = {"home",
-                   false,
-                   false,
-                   1,
-                   {{{HOUSE_OUT_X0, BASEMENT_Y, HOUSE_OUT_Z0},
-                     {HOUSE_OUT_X1, ROOFS_Y, HOUSE_OUT_Z1}}}},
-    [ROOM_LIVING] = {"living_room",
-                     false,
-                     false,
-                     1,
-                     {{{LIVING_IN_X0, SUBFLOOR_Y0, LIVING_IN_Z0},
-                       {LIVING_IN_X1, CEIL_Y, LIVING_IN_Z1}}}},
-    [ROOM_KITCHEN] = {"kitchen",
-                      false,
-                      false,
-                      1,
-                      {{{KITCHEN_X0, SUBFLOOR_Y0, KITCHEN_Z0}, {KITCHEN_X1, CEIL_Y, KITCHEN_Z1}}}},
-    [ROOM_BASEMENT] = {"basement",
-                       false,
-                       false,
-                       2,
-                       {{{CELLAR_X0, BASEMENT_Y, CELLAR_Z0}, {CELLAR_X1, SUBFLOOR_Y0, CELLAR_Z1}},
-                        {{CELLAR_X0, SUBFLOOR_Y0, STAIRWELL_Z0},
-                         {HALL_OUT_X0, CEIL_Y, CELLAR_Z1}}}},
-    [ROOM_MANSION] = {"mansion",
-                      true,
-                      true,
-                      1,
-                      {{{HOUSE_OUT_X0, 0.0f, HOUSE_OUT_Z0},
-                        {HOUSE_OUT_X1, ROOFS_Y, HOUSE_OUT_Z1}}}},
-    [ROOM_UPSTAIRS] = {"mansion_up",
-                       true,
-                       true,
-                       1,
-                       {{{HOUSE_OUT_X0, CEIL_Y, HOUSE_OUT_Z0},
-                         {HOUSE_OUT_X1, ROOFS_Y, KITCHEN_BACK_Z}}}},
-    // The cabin by the lake (spec 13.41), its one room to the roof.
-    [ROOM_CABIN] = {"cabin",
-                    false,
-                    false,
-                    1,
-                    {{{CABIN_X0, CABIN_FLOOR_Y - 0.5f, CABIN_Z0},
-                      {CABIN_X1, CABIN_RIDGE_Y + 0.5f, CABIN_Z1}}}},
-};
-
-// Each room as a player reads it, for a list of saves (spec 13.49).
-static const char* const ROOM_LABELS[ROOMS] = {
-    [ROOM_WORLD] = "Outside",
-    [ROOM_HOME] = "Home",
-    [ROOM_LIVING] = "Home, living room",
-    [ROOM_KITCHEN] = "Home, kitchen",
-    [ROOM_BASEMENT] = "Home, basement",
-    [ROOM_MANSION] = "Mansion",
-    [ROOM_UPSTAIRS] = "Mansion, upstairs",
-    [ROOM_CABIN] = "Cabin",
-};
-
-// A room's boxes in the world, into `boxes` (AUDIO_ZONE_BOXES long): the tower's with the
-// mansion's, and the mansion's moved to where it stands. How many.
-static int room_boxes(const Room* room, AABB* boxes) {
-    int n = 0;
-    for (int i = 0; i < room->box_count; i++)
-        boxes[n++] = room->boxes[i];
-    if (room->tower)
-        n += tower_boxes(room->boxes[0].min[1], room->boxes[0].max[1], &boxes[n]);
-    for (int i = 0; room->mansion && i < n; i++) {
-        mansion_at(boxes[i].min, boxes[i].min);
-        mansion_at(boxes[i].max, boxes[i].max);
-    }
-    return n;
-}
+_Static_assert(ROOM_BOXES <= AUDIO_ZONE_BOXES, "every room's boxes fit one zone");
 
 typedef struct RoomLink {
     int a, b;         // rooms
@@ -177,9 +72,9 @@ void sounds_start(Sounds* sounds, AudioSystem* audio, const struct Door* const* 
         return;
     AudioZone zone[ROOMS] = {[ROOM_WORLD] = AUDIO_ZONE_WORLD};
     for (int r = ROOM_WORLD + 1; r < ROOMS; r++) {
-        AABB boxes[AUDIO_ZONE_BOXES];
-        const int n = room_boxes(&ROOM_TABLE[r], boxes);
-        zone[r] = audio_zone_add(audio, &(AudioZoneDesc){ROOM_TABLE[r].name, boxes, n});
+        AABB boxes[ROOM_BOXES];
+        const int n = room_boxes((RoomId)r, boxes);
+        zone[r] = audio_zone_add(audio, &(AudioZoneDesc){room_name((RoomId)r), boxes, n});
     }
     bool outer[ROOMS] = {false};
     for (int i = 0; i < LINK_COUNT; i++) {
@@ -195,25 +90,6 @@ void sounds_start(Sounds* sounds, AudioSystem* audio, const struct Door* const* 
             sounds->outer[sounds->outer_count++] = zone[r];
     sounds->wind_outside = sounds_loop(audio, "assets/audio/silent/wind_outside.flac");
     sounds->wind_inside = sounds_loop(audio, "assets/audio/silent/wind_inside.flac");
-}
-
-int sounds_room_at(const vec3 at) {
-    int room = ROOM_WORLD;
-    for (int r = ROOM_WORLD + 1; r < ROOMS; r++) {
-        AABB boxes[AUDIO_ZONE_BOXES];
-        const int n = room_boxes(&ROOM_TABLE[r], boxes);
-        for (int i = 0; i < n; i++) {
-            const AABB* b = &boxes[i];
-            if (at[0] >= b->min[0] && at[0] <= b->max[0] && at[1] >= b->min[1] &&
-                at[1] <= b->max[1] && at[2] >= b->min[2] && at[2] <= b->max[2])
-                room = r;
-        }
-    }
-    return room;
-}
-
-const char* sounds_room_label(int room) {
-    return room >= 0 && room < ROOMS ? ROOM_LABELS[room] : ROOM_LABELS[ROOM_WORLD];
 }
 
 void sounds_update(Sounds* sounds) {

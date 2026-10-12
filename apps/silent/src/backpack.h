@@ -64,8 +64,8 @@ void backpack_take(Backpack* bp);
 bool backpack_add(Backpack* bp, ItemId item);
 // Whether the player has `item`.
 bool backpack_holds(const Backpack* bp, ItemId item);
-// The bag as a save left it (spec 13.49), over one backpack_build made lying on the bed: off it
-// when `taken`, holding `held` in the order each was had. Nothing is held without the bag.
+// The bag put as it is said to be (spec 13.49), over one backpack_build made lying on the bed: off
+// it when `taken`, holding `held` in the order each was had. Nothing is held without the bag.
 void backpack_restore(Backpack* bp, bool taken, const ItemId* held, int count);
 void backpack_free(Backpack* bp);
 

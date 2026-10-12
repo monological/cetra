@@ -59,7 +59,7 @@ void door_leaf_battened(Kit* kit, const KitFrame* f, const KitOpening* o, float 
 
 // Toward open if it is shut or shutting, toward shut otherwise.
 void door_toggle(Door* door);
-// `travel` along its swing already, and on its way to `want`: what a save left it at.
+// `travel` along its swing already, and on its way to `want`, each held to 0..1.
 void door_set(Door* door, float travel, float want);
 // Open already, with no swing.
 void door_set_open(Door* door);
