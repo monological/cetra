@@ -26135,8 +26135,9 @@ def run_save_gate(workdir):
                      file, and a load leaves it where it is even against a file
                      written before the mark, whose record drops as missing.
       save-names     two saved entities with one name are said by name when the
-                     file is written, since a load gives every record by a name
-                     to the first entity that has it; a unique name is not.
+                     file is written, and only the first is kept, since a load
+                     gives every record by a name to the first entity that has
+                     it; a unique name is not said, and is kept.
       save-enum      an index rides as its NAME: it reads back, and a build whose
                      table lost that name leaves the field and counts one, with
                      the file still loading. An index the table does not hold
@@ -26304,12 +26305,16 @@ def run_save_gate(workdir):
     # ---- names: what the writer SAYS, so the arm reads the run's whole output
     text, code = _gametest_probe_text("--save-probe", "names",
                                       env=_save_probe_env("names", workdir))
+    doc = _save_probe_file("names", workdir) or {}
+    names = [e.get("name") for e in doc.get("entities", {}).get("list", [])]
     twins = text.count("saved entity is named 'twin'")
     solos = text.count("saved entity is named 'solo'")
     wrote = "save names wrote ok 1" in text
-    ok = code == 0 and wrote and twins == 1 and solos == 0
+    ok = (code == 0 and wrote and twins == 1 and solos == 0
+          and names.count("twin") == 1 and names.count("solo") == 1)
     detail = (f"the write named 'twin' {twins} time(s) (want 1, for the second of two) and "
-              f"'solo' {solos} (want 0), and still wrote ({wrote})")
+              f"'solo' {solos} (want 0), and still wrote ({wrote}) one record each for 'twin' "
+              f"and 'solo' ({names.count('twin')}/{names.count('solo')}, want 1/1)")
     print(f"  save-names            {'PASS' if ok else 'FAIL'}  {detail}")
     note("save-names", ok)
 
@@ -26891,6 +26896,10 @@ def run_ui_gate(workdir):
                      the UV quad over {0, 0, 1, 1}, so it is that quad and not a
                      second path (spec 13.43) -- and a quad over part of a picture
                      must differ, or the UVs never reached the vertices.
+      ui-opaque      one screen over another draws both while it is plain, and draws
+                     to the vertex as it does alone once it is opaque; popped, the
+                     screen under it draws as it did (spec 13.49). The two screens
+                     look different, or the last comparison would prove nothing.
       ui-elements-closed ui.h exports exactly the six element constructors. The
                      scope ratchet, asserted rather than promised.
       ui-settings-roundtrip write, read back into a ZEROED struct, and every field
@@ -27072,6 +27081,21 @@ def run_ui_gate(workdir):
                   f"want 1)")
     print(f"  ui-textured-uv        {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-textured-uv", ok)
+
+    # ---- a screen that hides the ones under it
+    p = _ui_probe("opaque")
+    if not p:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        plain = p[("plain", "differs")][0]
+        covered = p[("covered", "match")][0]
+        popped = p[("popped", "match")][0]
+        ok = plain == 1 and covered == 1 and popped == 1
+        detail = (f"stacked plainly both draw ({plain:.0f}), opaque the top draws as it does "
+                  f"alone ({covered:.0f}), popped the one under draws as it did ({popped:.0f}); "
+                  f"want 1/1/1")
+    print(f"  ui-opaque             {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-opaque", ok)
 
     # ---- the closed element list
     try:

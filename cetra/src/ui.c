@@ -22,6 +22,7 @@ struct UIScreen {
     char* name;
     UIElement* root;
     bool modal;
+    bool opaque;
     UISystem* ui;
 
     // How this screen arrives, and how far in it is. `t_in` eases 0 -> 1 while
@@ -1053,8 +1054,16 @@ void ui_build(UISystem* ui, float width, float height, float dt) {
         return;
     ui_draw_list_begin(ui->dl, (int)width, (int)height);
     // Bottom to top: a pause screen over a HUD draws both, and the one on top
-    // is simply the one emitted last.
-    for (size_t i = 0; i < ui->stack_count; i++) {
+    // is simply the one emitted last -- from the highest opaque screen, which
+    // hides everything under it.
+    size_t from = 0;
+    for (size_t i = ui->stack_count; i-- > 0;) {
+        if (ui->stack[i] && ui->stack[i]->opaque) {
+            from = i;
+            break;
+        }
+    }
+    for (size_t i = from; i < ui->stack_count; i++) {
         UIScreen* s = ui->stack[i];
         if (!s || !s->root)
             continue;
@@ -1247,6 +1256,11 @@ UIElement* ui_screen_root(UIScreen* screen) {
 void ui_screen_set_modal(UIScreen* screen, bool modal) {
     if (screen)
         screen->modal = modal;
+}
+
+void ui_screen_set_opaque(UIScreen* screen, bool opaque) {
+    if (screen)
+        screen->opaque = opaque;
 }
 
 void ui_screen_transition(UIScreen* screen, UITransition kind, float seconds) {

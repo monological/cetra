@@ -371,6 +371,10 @@ UIElement* ui_screen_root(UIScreen* screen);
 // A modal screen consumes input: the game reads zero from every non-ui action
 // while one is on the stack. A non-modal screen (a HUD) draws and takes nothing.
 void ui_screen_set_modal(UIScreen* screen, bool modal);
+// An opaque screen hides every screen under it while it is on the stack: a menu that takes the
+// place of the one it was opened from, which keeps its focus for when it is back on top. The
+// world behind is still drawn; only the UI under it is not.
+void ui_screen_set_opaque(UIScreen* screen, bool opaque);
 
 /*
  * How a screen arrives. The transition is the SCREEN's, not the stack's, so a

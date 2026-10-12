@@ -87,6 +87,7 @@ struct SaveSystem {
 
 // Declared here so the entity walk can reach them; defined beside the
 // registration functions they belong to, which are written further down.
+static const SaveTable* _find_table(const SaveSystem* save, const char* section);
 static const SaveSpawner* _find_spawner(const SaveSystem* save, const char* name);
 static SaveSpawnRecord* _find_record(const SaveSystem* save, const char* entity_name);
 static bool _migrate_section(const SaveSystem* save, const char* section, cJSON* obj, int from,
@@ -191,7 +192,7 @@ static bool _write_field(cJSON* obj, const SaveField* f, const void* base) {
             // field rather than the player's whole save: the key is left out, and a
             // load leaves the field where the app put it.
             const int index = (int)v[0];
-            if (!f->names || index < 0 || index >= f->name_count) {
+            if (index < 0 || index >= f->name_count) {
                 log_warn("save: '%s' is %d, which its table of %d names does not hold; not "
                          "written",
                          f->key, index, f->name_count);
@@ -252,7 +253,7 @@ static int _decode_value(const SaveField* f, const cJSON* item, double* out) {
         case SAVE_ENUM:
             if (!cJSON_IsString(item))
                 return 0;
-            for (int i = 0; f->names && i < f->name_count; i++) {
+            for (int i = 0; i < f->name_count; i++) {
                 if (f->names[i] && strcmp(f->names[i], item->valuestring) == 0) {
                     out[0] = i;
                     return 1;
@@ -590,13 +591,13 @@ static bool _write_entities(SaveSystem* save, cJSON* root, int* written) {
         Entity* entity = em->entities[e];
         if (!entity || entity->unsaved)
             continue;
-        // Written anyway, since it is still this entity's state; but a load gives every
-        // record by this name to the first entity that has it, and this one keeps
-        // whatever it had.
-        if (_find_saved(em, entity->name) != entity)
-            log_warn("save: more than one saved entity is named '%s'; a load cannot tell them "
-                     "apart",
+        // A load gives a record by this name to the first entity that has it, so a second
+        // record would overwrite the first's state with this one's. Only the first is kept.
+        if (_find_saved(em, entity->name) != entity) {
+            log_warn("save: more than one saved entity is named '%s'; only the first is kept",
                      entity->name);
+            continue;
+        }
         cJSON* obj = cJSON_CreateObject();
         if (!obj || !cJSON_AddItemToArray(list, obj)) {
             cJSON_Delete(obj);
@@ -835,9 +836,14 @@ bool save_register_table(SaveSystem* save, const char* section, int version, con
         log_error("save: the section name 'entities' is reserved for the entity array");
         return false;
     }
-    for (int i = 0; i < save->table_count; i++) {
-        if (strcmp(save->tables[i].section, section) == 0) {
-            log_error("save: section '%s' is already registered", section);
+    if (_find_table(save, section)) {
+        log_error("save: section '%s' is already registered", section);
+        return false;
+    }
+    for (int i = 0; i < count; i++) {
+        if (rows[i].type == SAVE_ENUM && (!rows[i].names || rows[i].name_count <= 0)) {
+            log_error("save: '%s.%s' is an enum with no names to write it as", section,
+                      rows[i].key);
             return false;
         }
     }
@@ -871,6 +877,14 @@ bool save_register_spawner(SaveSystem* save, const char* name, SaveSpawnFn fn, v
     // rather than by a lookup that silently stopped matching.
     save->spawners[save->spawner_count++] = (SaveSpawner){.name = name, .fn = fn, .user = user};
     return true;
+}
+
+static const SaveTable* _find_table(const SaveSystem* save, const char* section) {
+    for (int i = 0; i < save->table_count; i++) {
+        if (strcmp(save->tables[i].section, section) == 0)
+            return &save->tables[i];
+    }
+    return NULL;
 }
 
 static const SaveSpawner* _find_spawner(const SaveSystem* save, const char* name) {
@@ -1218,17 +1232,13 @@ SaveLoadResult save_read(SaveSystem* save, const char* path) {
     return r;
 }
 
-bool save_peek(SaveSystem* save, const char* path, const char* section, void* base,
+bool save_peek(const SaveSystem* save, const char* path, const char* section, void* base,
                SavePeek* info) {
     if (!save || !path || !section || !base) {
         log_error("save: a peek needs a file, a section and an object to read into");
         return false;
     }
-    const SaveTable* table = NULL;
-    for (int t = 0; t < save->table_count && !table; t++) {
-        if (strcmp(save->tables[t].section, section) == 0)
-            table = &save->tables[t];
-    }
+    const SaveTable* table = _find_table(save, section);
     if (!table) {
         log_error("save: no section '%s' is registered to peek", section);
         return false;
