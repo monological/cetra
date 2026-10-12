@@ -397,6 +397,8 @@ void ui_push(UISystem* ui, UIScreen* screen);
 void ui_pop(UISystem* ui);
 void ui_pop_all(UISystem* ui);
 UIScreen* ui_top(const UISystem* ui);
+// Whether `screen` is on the stack at all, on top or under others.
+bool ui_on_stack(const UISystem* ui, const UIScreen* screen);
 
 // The element of `screen` the keyboard and pad are on, or NULL before the first press.
 UIElement* ui_focused(const UIScreen* screen);
@@ -417,6 +419,9 @@ UIElement* ui_slider(UIElement* parent, const char* text, float lo, float hi, fl
                      UIActionFn action, void* user);
 UIElement* ui_selector(UIElement* parent, const char* text, const char* const* options, int count,
                        int* bound, UIActionFn action, void* user);
+// Where a slider's track lies in the rect the last layout gave it, in window points: what a drag
+// is measured along, for a draw of its own (ui_set_draw) to put the track there too.
+UIRect ui_slider_track(const UISystem* ui, const UIElement* el);
 
 void ui_set_text(UIElement* el, const char* text);
 void ui_set_style(UIElement* el, const UIStyle* style);

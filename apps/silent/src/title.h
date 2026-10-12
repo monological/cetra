@@ -4,8 +4,8 @@
 #include <stdbool.h>
 
 #include "cetra/camera_rig.h"
-#include "cetra/engine.h"
 #include "cetra/ui.h"
+#include "cetra/game/game.h"
 
 #include "save_game.h"
 #include "settings_menu.h"
@@ -19,11 +19,10 @@
  * the title's own, installed on the engine from the start, so the player's is never posed for it.
  */
 
-typedef enum { TITLE_WAITING, TITLE_NEW, TITLE_LOAD, TITLE_EXIT } TitleChoice;
+typedef enum { TITLE_WAITING, TITLE_NEW, TITLE_LOAD } TitleChoice;
 
 typedef struct Title {
-    UISystem* ui;           // the HUD's, borrowed
-    SettingsMenu* settings; // borrowed
+    UISystem* ui; // the HUD's, borrowed
     CameraRig* rig;
     UIScreen* main;
     UIScreen* games;
@@ -42,18 +41,16 @@ typedef struct Title {
     SaveSlot chosen;    // the slot a new game takes, or the one loaded
 } Title;
 
-// Its screens in `ui`, which may be NULL for none, opening `settings`, and its rig on `engine`, so
-// the view loads round the title's eye; nothing shown yet.
-void title_start(Title* t, UISystem* ui, Engine* engine, SettingsMenu* settings);
+// Its screens in `ui`, which may be NULL for none, opening `settings` and quitting `game`, and its
+// rig on the game's engine, so the view loads round the title's eye; nothing shown yet.
+void title_start(Title* t, UISystem* ui, Game* game, SettingsMenu* settings);
 // Up over the street, the games kept read again, on its first item: false with no UI to show.
 bool title_show(Title* t);
 // Over it, the screen called `name` -- "games", or "delete" asking about the newest game -- as
 // though asked for: what a headless run opens to photograph it. NULL or another name does nothing.
 void title_open_screen(Title* t, const char* name);
-// Whether one of its screens is on top.
-bool title_open(const Title* t);
-// Whether `back` should take its top screen down: the list and the question, never the title.
-bool title_backs(const Title* t);
+// Whether its own first screen is on top, which back does not take down.
+bool title_on_main(const Title* t);
 // The game the list is on, asked about: what the delete key does there.
 void title_ask_delete(Title* t);
 // Back over the street after a game could not be loaded, saying so.

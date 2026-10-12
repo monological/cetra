@@ -67,10 +67,30 @@ UIScreen* hud_modal_screen(UISystem* ui, const char* name, float dim, UIElement*
 // The menus' look: items as words on nothing, the one the keys are on brightened onto a dim plate.
 extern const vec4 HUD_ITEM_FG;
 extern const vec4 HUD_FOCUS_FG;
-extern const vec4 HUD_DISABLED_FG;
 extern const vec4 HUD_HEADING_FG;
+#define HUD_HEADING_SIZE 34.0f // points
+#define HUD_ITEM_SIZE    26.0f
+#define HUD_ROW_SIZE     22.0f
+#define HUD_MENU_WIDTH   520.0f
+#define HUD_LIST_DIM     0.55f // the world behind a screen with more to read
 // A menu item in `parent`, its words `size` points, calling `action` with `user` when chosen.
 UIElement* hud_item(UIElement* parent, const char* text, float size, UIActionFn action, void* user);
+// An item that takes the screen on top of `ui` down, as back does: Resume, Back, No.
+UIElement* hud_back_item(UIElement* parent, const char* text, float size, UISystem* ui);
+// Exit to Desktop: the game ends, and what ending it saves is saved.
+struct Game;
+UIElement* hud_quit_item(UIElement* parent, float size, struct Game* game);
+// A heading over a menu's items.
+UIElement* hud_heading(UIElement* parent, const char* text);
+// For an element drawn in the items' look by a draw of its own: the plate behind it as the keys
+// come to it, `style` its words' look, and the rect inside its padding its words go in.
+UIRect hud_item_look(const UIElement* el, UIDrawList* dl, UIStyle* style);
+// `el` as a menu row of `size` points across its column, drawn by `draw` with `user`.
+UIElement* hud_dress(UIElement* el, float size, UIDrawFn draw, void* user);
+// Whether `screen` is on top of `ui`.
+bool hud_on_top(const UISystem* ui, const UIScreen* screen);
+// `screen` pushed over whatever is on top of `ui`, the keys on `focus`; nothing when it is on top.
+void hud_show(UISystem* ui, UIScreen* screen, UIElement* focus);
 // An item shown or not without leaving the tree: a hidden item takes no height and no key lands
 // on it.
 void hud_item_shown(UIElement* el, bool shown);

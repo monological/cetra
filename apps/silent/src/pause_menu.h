@@ -4,33 +4,28 @@
 #include <stdbool.h>
 
 #include "cetra/ui.h"
+#include "cetra/game/game.h"
 
 #include "settings_menu.h"
 
 /*
- * The pause menu (spec 13.50): Escape or pad Start while the game is played brings it up over the
- * world, which stands still under it, the rain and all. A modal screen in the HUD's UI system, in
- * the title's look. Resume, or its own back, takes it down, and Settings opens the settings over
- * it; what else is chosen is for the game to act on.
+ * The pause menu (spec 13.50): a modal screen in the HUD's UI system, in the menus' look, holding
+ * Resume, which takes it down as its back does, Settings, which opens the settings over it, and
+ * Exit to Desktop.
  */
 
-typedef enum { PAUSE_STAYING, PAUSE_EXIT } PauseChoice;
-
 typedef struct PauseMenu {
-    UISystem* ui;           // the HUD's, borrowed
-    SettingsMenu* settings; // borrowed
+    UISystem* ui; // the HUD's, borrowed
     UIScreen* screen;
     UIElement* resume;
-    PauseChoice choice; // chosen and not yet acted on; PAUSE_STAYING until then
 } PauseMenu;
 
-// Its screen in `ui`, which may be NULL for none, opening `settings`; nothing shown yet.
-void pause_menu_start(PauseMenu* pm, UISystem* ui, SettingsMenu* settings);
+// Its screen in `ui`, which may be NULL for none, opening `settings` and quitting `game`; nothing
+// shown yet.
+void pause_menu_start(PauseMenu* pm, UISystem* ui, Game* game, SettingsMenu* settings);
 // Up over the game, on Resume.
 void pause_menu_show(PauseMenu* pm);
-// Whether it is on top: the game stands still while it is.
-bool pause_menu_open(const PauseMenu* pm);
-// What was chosen, once; PAUSE_STAYING when nothing was.
-PauseChoice pause_menu_take(PauseMenu* pm);
+// Whether it is up, on top or under the settings.
+bool pause_menu_up(const PauseMenu* pm);
 
 #endif // _SILENT_PAUSE_MENU_H_

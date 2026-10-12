@@ -332,7 +332,6 @@ static float g_fade; // 0 black .. 1 up, eased by the frame
  * runs by the frame: a fixed step headless, the wall clock in a window.
  */
 static EngineFrameClock g_held_clock;
-static bool g_looking; // the held clock is the render clock
 
 /*
  * How the game is held each frame: played; FROZEN under the pause menu (spec 13.50), where the
@@ -349,14 +348,19 @@ static double frame_dt(const Game* game) {
                             : fmin(engine->delta_time, game->max_frame_time);
 }
 
+// Whether the held clock is the engine's render clock.
+static bool looking(const Game* game) {
+    return game->engine->render_clock == &g_held_clock;
+}
+
 // How far a frame moves what is drawn and eased by it, and the time it is drawn at: the sim's,
 // standing still while frozen, or the held clock's while the game is held.
 static double look_dt(const Game* game) {
-    return g_looking ? g_held_clock.delta : game->frame_clock.delta;
+    return looking(game) ? g_held_clock.delta : game->frame_clock.delta;
 }
 
 static double look_time(const Game* game) {
-    return g_looking ? g_held_clock.time : game->time;
+    return looking(game) ? g_held_clock.time : game->time;
 }
 
 // Before the fixed steps: the sim held or let go, and the render clock that goes with it.
@@ -367,13 +371,11 @@ static void hold_game(Game* game, Hold hold) {
     else
         game_pause(game);
     if (hold != HOLD_HELD) {
-        g_looking = false;
         engine_set_render_clock(engine, &game->sim_clock);
         return;
     }
-    if (!g_looking)
+    if (!looking(game))
         g_held_clock.time = game->frame_clock.time;
-    g_looking = true;
     g_held_clock.delta = frame_dt(game);
     g_held_clock.time += g_held_clock.delta;
     engine_set_render_clock(engine, &g_held_clock);
@@ -886,16 +888,22 @@ static bool enter_game(Engine* engine, const char* load, const char* slot) {
         return false;
     save_game_begin(g_args.no_autosave ? NULL : slot);
     engine_set_camera_rig(engine, g_player.rig);
+    settings_menu_apply(&g_settings);
     return true;
 }
 
-// The game played from here on, with the pause menu over it, or the settings over that, when the
-// command line asks for a picture of them (spec 13.50).
+// The game played from here on, with the pause menu over it, or the settings over that, the first
+// time, when the command line asks for a picture of them (spec 13.50).
 static void start_play(void) {
     g_run = RUN_PLAYING;
-    if (g_args.pause_screen)
+    const char* screen = g_args.pause_screen;
+    g_args.pause_screen = NULL;
+    if (!screen)
+        return;
+    const bool settings = !strcmp(screen, "settings");
+    if (settings || !strcmp(screen, "menu"))
         pause_menu_show(&g_pause);
-    if (g_args.pause_screen && !strcmp(g_args.pause_screen, "settings"))
+    if (settings)
         settings_menu_show(&g_settings);
 }
 
@@ -1199,9 +1207,10 @@ static void on_init(Game* game) {
         glm_vec3_copy((vec3){x + sinf(yaw), feet[1] + PLAYER_EYE_HEIGHT, z + cosf(yaw)}, look);
     }
     const float eye_y = feet[1] + PLAYER_EYE_HEIGHT;
+    // Its field of view is the settings' own, which they put on it once they are applied.
     CameraDesc cam = {.position = {feet[0], eye_y, feet[2]},
                       .look_at = {look[0], look[1], look[2]},
-                      .fov = glm_rad(g_args.fov_deg > 0.0f ? g_args.fov_deg : 68.0f),
+                      .fov = glm_rad(SETTINGS_FOV),
                       .near = 0.05f,
                       .far = 250.0f};
     engine_set_camera(engine, create_camera(&cam));
@@ -1243,17 +1252,15 @@ static void on_init(Game* game) {
             world.doors[world.door_count++] = &g_doors[i];
     save_game_start(&world);
     // What the player chose (spec 13.50), on the audio, the window, the camera and the player's
-    // own turn; --mute and --fov over it.
-    g_settings.mute = g_args.mute;
-    settings_menu_start(&g_settings, g_hud.ui, engine, game->audio, g_player.rig);
-    if (g_args.fov_deg > 0.0f && engine->camera)
-        engine->camera->fov_radians = glm_rad(g_args.fov_deg);
-    pause_menu_start(&g_pause, g_hud.ui, &g_settings);
+    // rig, which is installed until the title's is.
+    settings_menu_start(&g_settings, g_hud.ui, engine, game->audio);
+    settings_menu_apply(&g_settings);
+    pause_menu_start(&g_pause, g_hud.ui, game, &g_settings);
     // The title, over the street, unless the run starts somewhere of its own -- headless, or
     // elsewhere on the command line -- and then it saves nowhere unless --slot says where. A run
     // whose UI could not be made has no title to wait at.
     if ((!engine->headless || g_args.title) && !starts_elsewhere(&g_args) && g_hud.ui)
-        title_start(&g_title, g_hud.ui, engine, &g_settings);
+        title_start(&g_title, g_hud.ui, game, &g_settings);
     else
         enter_game(engine, g_args.load, g_args.slot);
 
@@ -1561,9 +1568,7 @@ static void on_pre_render(Game* game, double alpha) {
             }
             break;
         case RUN_TITLE:
-            if (g_title.choice == TITLE_EXIT)
-                game_quit(game);
-            else if (g_title.choice != TITLE_WAITING)
+            if (g_title.choice != TITLE_WAITING)
                 g_run = RUN_LEAVING;
             break;
         case RUN_LEAVING:
@@ -1605,63 +1610,57 @@ static void on_pre_render(Game* game, double alpha) {
  * The screens over the game (specs 13.40, 13.43 and 13.50), what is on top deciding what a key
  * does:
  *
- *   on top          Tab                     M                         Escape / pad B
- *   the game        the bag, if had         the map, if had           the pause menu (and Start)
- *   the bag         closes it               the map over the bag      closes it
- *   the map         closes it, and the bag  closes it                 closes it
- *                   comes up if it was not
- *                   already under it
- *   the pause menu  --                      --                        closes it
+ *   on top            Tab                     M                         Escape / pad B
+ *   the game          the bag, if had         the map, if had           the pause menu (and Start)
+ *   the bag           closes it               the map over the bag      closes it
+ *   the map           closes it, and the bag  closes it                 closes it
+ *                     comes up if it was not
+ *                     already under it
+ *   any other screen  --                      --                        closes it, but for the
+ *                                                                       title's own first screen
  *
  * A close is the UI's own back, which pops what is on top and is raised only while a screen is, so
  * the HUD under them is never taken down. The state is read from what is on top at the frame's
- * start, so the key that opened a screen cannot close it in the same frame, and the pause menu
- * goes up after the UI's pass, so the Start that opened it is not also an accept on Resume. Here,
- * before the fixed steps, so nobody moves under the loading screen or a screen, and the frame that
- * opens one walks no step. The game's input is held through the frame that shuts one too, so the
- * key that shut it reaches nothing else, and the cursor the input freed comes back after.
+ * start, so the key that opened a screen cannot close it in the same frame, and the Start that
+ * opens the pause menu is not also an accept on Resume. Here, before the fixed steps, so nobody
+ * moves under the loading screen or a screen, and the frame that opens one walks no step. The
+ * game's input is held through the frame that shuts one too, so the key that shut it reaches
+ * nothing else, and the cursor the input freed comes back after.
  */
 static void on_frame_input(Game* game) {
     const Engine* engine = game->engine;
     const bool playing = g_run == RUN_PLAYING;
-    const bool held = ui_captures_input(g_hud.ui);
-    const bool bag_up = backpack_menu_open(&g_menu);
-    const bool map_up = map_screen_open(&g_map_screen);
+    const bool modal_up = ui_captures_input(g_hud.ui);
     const bool tab = playing && input_action_pressed(&game->input, "backpack");
     const bool m = playing && input_action_pressed(&game->input, "map");
     const bool esc = input_action_pressed(&game->input, "menu_back");
     const bool pause = playing && input_action_pressed(&game->input, "pause_menu");
     const bool have_map = backpack_holds(&g_backpack, ITEM_TOWN_MAP);
-    bool back = false, bag_after = false, pause_after = false;
-    if (settings_menu_open(&g_settings)) {
-        back = esc;
-    } else if (title_open(&g_title)) {
-        // The title's list and its question go back; the title itself does not.
-        back = esc && title_backs(&g_title);
-    } else if (pause_menu_open(&g_pause)) {
-        back = esc;
-    } else if (pause) {
-        pause_after = true;
-    } else if (map_up) {
-        back = tab || m || esc;
-        bag_after = tab;
-    } else if (bag_up) {
-        back = tab || esc;
-        if (m && have_map)
-            map_screen_show(&g_map_screen, MAP_TOWN, g_finds.found);
-    } else {
-        if (tab) {
+    bool back = false, bag_after = false;
+    if (!modal_up) {
+        if (pause)
+            pause_menu_show(&g_pause);
+        if (tab && !pause) {
             if (g_backpack.taken)
                 backpack_menu_show(&g_menu);
             else
                 hud_think(&g_hud, "I'm not carrying anything.");
         }
-        if (m) {
+        if (m && !pause) {
             if (have_map)
                 map_screen_show(&g_map_screen, MAP_TOWN, g_finds.found);
             else
                 hud_think(&g_hud, "I don't have a map.");
         }
+    } else if (map_screen_open(&g_map_screen)) {
+        back = tab || m || esc;
+        bag_after = tab;
+    } else if (backpack_menu_open(&g_menu)) {
+        back = tab || esc;
+        if (m && have_map)
+            map_screen_show(&g_map_screen, MAP_TOWN, g_finds.found);
+    } else {
+        back = esc && !title_on_main(&g_title);
     }
     double mx = 0.0, my = 0.0;
     input_mouse_pos(&game->input, &mx, &my);
@@ -1675,7 +1674,7 @@ static void on_frame_input(Game* game) {
         .nav_down = input_action_pressed(&game->input, "menu_down"),
         .nav_left = input_action_pressed(&game->input, "menu_left"),
         .nav_right = input_action_pressed(&game->input, "menu_right"),
-        .accept = input_action_pressed(&game->input, "menu_accept"),
+        .accept = !pause && input_action_pressed(&game->input, "menu_accept"),
         .back = back,
     };
     // Laid out to the window as it is now, before the UI's pass hit-tests it.
@@ -1685,10 +1684,6 @@ static void on_frame_input(Game* game) {
     ui_update(g_hud.ui, &in, w, h);
     if (input_action_pressed(&game->input, "menu_delete"))
         title_ask_delete(&g_title);
-    if (pause_after)
-        pause_menu_show(&g_pause);
-    if (pause_menu_take(&g_pause) == PAUSE_EXIT)
-        game_quit(game);
     settings_menu_frame(&g_settings);
     // Nothing to do when the map was over the bag, which its pop has just put back on top.
     if (bag_after)
@@ -1704,11 +1699,11 @@ static void on_frame_input(Game* game) {
     };
     map_screen_input(&g_map_screen, &in, &controls, (float)engine->render_delta);
     // Nobody moves before the game is played -- under the loading screen, at the title, or while
-    // the chosen game comes up out of black -- nor while the pause menu or the settings over it
-    // are up, under which the world stands still as well.
-    const bool paused = pause_menu_open(&g_pause) || settings_menu_open(&g_settings);
-    hold_game(game, !playing ? HOLD_HELD : paused ? HOLD_FROZEN : HOLD_PLAYED);
-    input_set_suppressed(&game->input, !playing || held || ui_captures_input(g_hud.ui));
+    // the chosen game comes up out of black -- nor while the pause menu is up, under which the
+    // world stands still as well.
+    const bool pause_up = pause_menu_up(&g_pause);
+    hold_game(game, !playing ? HOLD_HELD : pause_up ? HOLD_FROZEN : HOLD_PLAYED);
+    input_set_suppressed(&game->input, !playing || modal_up || ui_captures_input(g_hud.ui));
 }
 
 // Before the engine goes: the HUD draws through its overlay hook, and the backpack's models are on
@@ -1722,6 +1717,8 @@ static void on_shutdown(Game* game) {
     if (g_run == RUN_PLAYING)
         save_game_quit();
     save_game_free();
+    // Settings changed and the window shut over them, with no screen gone to write them.
+    settings_menu_save(&g_settings);
     title_free(&g_title);
     backpack_menu_free(&g_menu);
     map_screen_free(&g_map_screen);
@@ -1863,8 +1860,8 @@ static void print_usage(const char* prog) {
     printf("      --pause-screen S    The pause menu up once the game is played: menu, or\n"
            "                          settings over it\n");
     printf("  In the window: click to capture the mouse; Escape or pad Start pauses and\n");
-    printf("  frees it. WASD\n");
-    printf("  walks, Shift hurries, C crouches or stands and Ctrl crouches while held,\n");
+    printf("  frees it. WASD walks, Shift hurries, C crouches or stands and Ctrl\n");
+    printf("  crouches while held,\n");
     printf("  the arrows or the mouse look, E opens and shuts\n");
     printf("  a door you are facing or takes what is in reach, F the flashlight once\n");
     printf("  you have it, Tab opens and shuts the backpack, G shows the GUI and frees\n");
@@ -2155,7 +2152,7 @@ int main(int argc, char** argv) {
                                     .headless = g_args.headless,
                                     .profiler = g_args.profiler}};
     // A window opens as the player chose it (spec 13.50).
-    settings_menu_load(&g_settings);
+    settings_menu_load(&g_settings, g_args.mute, g_args.fov_deg);
     if (!g_args.headless) {
         const GameSettings* chosen = &g_settings.settings;
         config.engine.window_mode = (EngineWindowMode)chosen->window_mode;
