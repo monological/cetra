@@ -1283,6 +1283,15 @@ UIScreen* ui_top(const UISystem* ui) {
     return ui->stack[ui->stack_count - 1];
 }
 
+UIElement* ui_focused(const UIScreen* screen) {
+    return screen ? screen->focused : NULL;
+}
+
+void ui_set_focus(UIScreen* screen, UIElement* el) {
+    if (screen)
+        screen->focused = el;
+}
+
 bool ui_captures_input(const UISystem* ui) {
     if (!ui)
         return false;

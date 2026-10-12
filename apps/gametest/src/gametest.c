@@ -7032,6 +7032,32 @@ static int run_ui_screens_probe(Game* game, const char* which) {
         up.nav_up = true;
         ui_update(ui, &up, 1280.0f, 720.0f);
         printf("ui nav up focus %.6f\n", (double)ui_probe_state_index(rows, 3, UI_STATE_FOCUS));
+    } else if (!strcmp(which, "focus-set")) {
+        // A menu opened on its middle row: focused before any press, reported back, moved on
+        // from by a press as though navigated there; and cleared, back to the first press
+        // acquiring the first row.
+        UIScreen* s = ui_screen(ui, "probe");
+        UIElement* rows[3];
+        ui_probe_column(s, rows);
+        ui_push(ui, s);
+        ui_set_focus(s, rows[1]);
+        const UIInput idle = {0};
+        ui_update(ui, &idle, 1280.0f, 720.0f);
+        printf("ui focus-set set focus %.6f\n",
+               (double)ui_probe_state_index(rows, 3, UI_STATE_FOCUS));
+        printf("ui focus-set reported same %.6f\n", ui_focused(s) == rows[1] ? 1.0 : 0.0);
+        UIInput down = {0};
+        down.nav_down = true;
+        ui_update(ui, &down, 1280.0f, 720.0f);
+        printf("ui focus-set down focus %.6f\n",
+               (double)ui_probe_state_index(rows, 3, UI_STATE_FOCUS));
+        ui_set_focus(s, NULL);
+        ui_update(ui, &idle, 1280.0f, 720.0f);
+        printf("ui focus-set cleared focus %.6f\n",
+               (double)ui_probe_state_index(rows, 3, UI_STATE_FOCUS));
+        ui_update(ui, &down, 1280.0f, 720.0f);
+        printf("ui focus-set acquired focus %.6f\n",
+               (double)ui_probe_state_index(rows, 3, UI_STATE_FOCUS));
     } else if (!strcmp(which, "hit")) {
         UIScreen* s = ui_screen(ui, "probe");
         UIElement* rows[3];
