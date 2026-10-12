@@ -26864,6 +26864,10 @@ def run_ui_gate(workdir):
                      the other way. Nothing is focused to begin with, so the first
                      press ACQUIRES and the wrap is the fourth press, not the
                      third.
+      ui-focus-set   a screen opened on its middle row is focused there before any
+                     press and says so, a press moves on from it as from a row
+                     navigated to, and clearing it puts the first press back to
+                     acquiring the first row (spec 13.49).
       ui-hit         a control claims its own centre and neither neighbour's; a
                      point in the panel's padding, and one in the gap between two
                      rows, belong to the parent and to no control. The pointer
@@ -26972,6 +26976,20 @@ def run_ui_gate(workdir):
                     "the end and a wrap back)")
     print(f"  ui-nav                {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-nav", ok)
+
+    # ---- focus set by the app
+    p = _ui_probe("focus-set")
+    if not p:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        seq = [p[(k, "focus")][0] for k in ("set", "down", "cleared", "acquired")]
+        same = p[("reported", "same")][0]
+        ok = seq == [1.0, 2.0, -1.0, 0.0] and same == 1.0
+        detail = ("focus " + " -> ".join(f"{v:.0f}" for v in seq)
+                  + f" (want 1 2 -1 0: set, moved on, cleared, acquired), reported back "
+                    f"({same:.0f})")
+    print(f"  ui-focus-set          {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-focus-set", ok)
 
     # ---- hit testing
     p = _ui_probe("hit")

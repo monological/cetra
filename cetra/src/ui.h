@@ -393,6 +393,12 @@ void ui_push(UISystem* ui, UIScreen* screen);
 void ui_pop(UISystem* ui);
 void ui_pop_all(UISystem* ui);
 UIScreen* ui_top(const UISystem* ui);
+
+// The element of `screen` the keyboard and pad are on, or NULL before the first press.
+UIElement* ui_focused(const UIScreen* screen);
+// Put them on `el`, an element of `screen`, as though navigated there: a menu that opens on its
+// first item. NULL leaves nothing focused, where the first press lands on the first element.
+void ui_set_focus(UIScreen* screen, UIElement* el);
 // True while a modal screen is on the stack -- what the game gates its own
 // input on, and what input_set_suppressed is driven from.
 bool ui_captures_input(const UISystem* ui);

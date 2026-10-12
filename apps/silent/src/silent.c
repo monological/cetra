@@ -82,6 +82,7 @@
 #include "street.h"
 #include "study.h"
 #include "terrace.h"
+#include "title.h"
 #include "town_map.h"
 #include "town_plan.h"
 #include "trees.h"
@@ -101,8 +102,9 @@
  */
 #define EXPOSURE_NIGHT 0.014f
 // How long the view takes to come up from black once the room's bounce light
-// is in.
-#define FADE_IN_SECONDS 1.0f
+// is in, and to go down to it from the title once a game is chosen.
+#define FADE_IN_SECONDS  1.0f
+#define FADE_OUT_SECONDS 0.6f
 // The engine's capture budget while the view is still black (spec 13.32): nothing on screen
 // is waiting, so the captures take most of each frame and the wait is short, while the window
 // still answers a few times a second. Once the view is up the engine's own budget stands.
@@ -198,7 +200,6 @@ typedef struct SilentArgs {
     bool no_loading_screen; // load under a black window, with no engine screen over it
     bool loading_screen;    // the screen headless too, where it is otherwise left out
     bool startup_ms;        // print where loading's time goes, a startup-ms row a step
-    bool no_play_prompt;    // the loading screen lifts by itself once the game is ready
     bool flashlight;
     bool backpack;           // the backpack already taken, and the flashlight in it
     bool map;                // the town map already in it, and the fridge door bare
@@ -230,17 +231,23 @@ typedef struct SilentArgs {
     char cat_clip[32];      // a clip by name, or empty for the place's own
     float cat_clip_seconds; // held this far in; below 0 it plays
     bool no_eyeshine;
-    char cat_go[32];       // a place it sets off for, or empty to stay
-    CatGait cat_gait;      // and how fast
-    bool cat_cam;          // the camera follows the cat
-    bool trace_cat;        // print what it is doing every 30 steps
-    bool cat_say;          // it makes every sound it has, in turn
-    unsigned int cat_seed; // its mind's seed
-    bool cat_blind;        // it does not see or hear the player
-    const char* cat_doing; // the activity it starts with, or NULL to choose
-    const char* slot;      // the save slot this run autosaves into, whatever kind of run it is
-    const char* load;      // a save slot to start from
-    bool no_autosave;      // a game that never saves itself
+    char cat_go[32];          // a place it sets off for, or empty to stay
+    CatGait cat_gait;         // and how fast
+    bool cat_cam;             // the camera follows the cat
+    bool trace_cat;           // print what it is doing every 30 steps
+    bool cat_say;             // it makes every sound it has, in turn
+    unsigned int cat_seed;    // its mind's seed
+    bool cat_blind;           // it does not see or hear the player
+    const char* cat_doing;    // the activity it starts with, or NULL to choose
+    const char* slot;         // the save slot this run saves into, with no title
+    const char* load;         // a save slot to start from, with no title
+    bool new_game;            // straight into a new game, with no title
+    bool no_autosave;         // a game that never saves itself
+    bool title;               // the title headless too
+    const char* title_screen; // a screen over the title at the start: games, delete
+    // The run starts somewhere of its own rather than at the title: from a save, a new game, or a
+    // state the command line gives it. It saves nowhere unless `slot` names somewhere.
+    bool test;
 } SilentArgs;
 
 static SilentArgs g_args;
@@ -285,10 +292,24 @@ static Finds g_finds;
 #define DUMP_RATE 48000
 static float* g_dump;
 static size_t g_dump_frames, g_dump_cap;
-static bool g_loaded;           // the lighting round the eye first came in
-static float g_fade_seconds;    // since the view came up
 static float g_play_capture_ms; // the capture budget once loaded
-static bool g_playing;          // the view is up on the game: saves are made from here on
+
+/*
+ * Where the run is (spec 13.49). It loads under the loading screen with the lighting brought in
+ * round the first view, comes up on the title over the street when it has one, goes black while
+ * the game chosen there is put in place and the lighting round the player comes in, and is played.
+ * A run with no title -- headless, or started from a state on the command line -- goes from
+ * loading straight to playing.
+ */
+typedef enum { RUN_LOADING, RUN_TITLE, RUN_LEAVING, RUN_ENTERING, RUN_PLAYING } RunState;
+static RunState g_run;
+static bool g_titled; // this run goes through the title
+static Title g_title;
+static float g_fade; // 0 black .. 1 up, eased by the frame
+
+static bool on_title(void) {
+    return g_titled && g_run <= RUN_LEAVING;
+}
 
 // The spawn: in the kitchen's back corner, looking across the room toward the hall door.
 static const vec3 SPAWN_FEET = {4.5f, FLOOR_Y, 13.3f};
@@ -336,12 +357,12 @@ static const InputAction ACTIONS[] = {
     {"menu_down", {INPUT_KEY(DOWN, 1), INPUT_KEY(S, 1), INPUT_PAD(DPAD_DOWN, 1)}, true},
     {"menu_left", {INPUT_KEY(LEFT, 1), INPUT_KEY(A, 1), INPUT_PAD(DPAD_LEFT, 1)}, true},
     {"menu_right", {INPUT_KEY(RIGHT, 1), INPUT_KEY(D, 1), INPUT_PAD(DPAD_RIGHT, 1)}, true},
-    {"menu_accept", {INPUT_KEY(ENTER, 1), INPUT_KEY(E, 1), INPUT_PAD(A, 1)}, true},
-    // PLAY on the loading screen: a UI action, so it reads while the game's input is held.
-    {"start",
-     {INPUT_KEY(ENTER, 1), INPUT_KEY(SPACE, 1), INPUT_KEY(E, 1), INPUT_MOUSE(LEFT, 1),
-      INPUT_PAD(A, 1), INPUT_PAD(START, 1)},
+    {"menu_accept",
+     {INPUT_KEY(ENTER, 1), INPUT_KEY(SPACE, 1), INPUT_KEY(E, 1), INPUT_PAD(A, 1),
+      INPUT_PAD(START, 1)},
      true},
+    // A game off the title's list (spec 13.49), after a yes.
+    {"menu_delete", {INPUT_KEY(DELETE, 1), INPUT_KEY(BACKSPACE, 1), INPUT_PAD(X, 1)}, true},
 };
 
 /*
@@ -776,6 +797,14 @@ static void trace_settling(Engine* engine, bool lit, bool up) {
     }
 }
 
+// What the captures may take of a frame (spec 13.32): most of it while the view is black, since
+// nothing on screen is waiting, and the play budget once it is up -- unless the run pinned one, and
+// headless, where the frame a capture lands in must never be the clock's to decide.
+static void capture_budget(Engine* engine, bool black) {
+    if (g_args.capture_budget_ms < 0.0f && !engine->headless)
+        engine->capture_budget_ms = black ? LOADING_CAPTURE_MS : g_play_capture_ms;
+}
+
 // The light held at rest while it is captured (spec 13.42), and put back after.
 static void rest_lights(bool rest, void* ctx) {
     (void)ctx;
@@ -1054,14 +1083,12 @@ static void on_init(Game* game) {
         if (g_args.tile_stores >= 0)
             ss->tile_store_cells = g_args.tile_stores;
     }
-    // The captures take most of each frame while the view is black and the engine's share from
-    // the frame it starts to come up, unless the run pinned a budget. Headless keeps the engine's
-    // 0, so the frame a capture lands in is never the clock's to decide.
+    // The play budget is the engine's, or the one the run pinned; until the view is up the
+    // captures take more.
     if (g_args.capture_budget_ms >= 0.0f)
         engine->capture_budget_ms = g_args.capture_budget_ms;
     g_play_capture_ms = engine->capture_budget_ms;
-    if (g_args.capture_budget_ms < 0.0f && !engine->headless)
-        engine->capture_budget_ms = LOADING_CAPTURE_MS;
+    capture_budget(engine, true);
 
     // In the kitchen's back corner looking across it to the hall door, or wherever --player-at
     // put the player, on whatever stands under them there -- the ground, a floor, the dock --
@@ -1124,9 +1151,19 @@ static void on_init(Game* game) {
         if (g_door_hung[i])
             world.doors[world.door_count++] = &g_doors[i];
     save_game_start(&world);
-    if (g_args.load)
-        save_game_load(g_args.load);
-    save_game_begin(g_args.no_autosave ? NULL : g_args.slot);
+    // The title, over the street, unless the run starts somewhere of its own -- headless, from a
+    // save, or from a state the command line gives it -- and then it saves nowhere unless --slot
+    // says where.
+    // A run whose UI could not be made has no title to wait at.
+    g_titled = !g_args.test && (!engine->headless || g_args.title) && g_hud.ui;
+    if (g_titled) {
+        title_start(&g_title, g_hud.ui);
+        title_frame(&g_title, engine);
+    } else {
+        if (g_args.load)
+            save_game_load(g_args.load);
+        save_game_begin(g_args.no_autosave ? NULL : g_args.slot);
+    }
 
     // Pinned at night: a meter would open the dark back up, which is the one
     // thing this place must not do. By day the meter maps what it reads to
@@ -1304,6 +1341,19 @@ static void footfall(const Game* game, const vec3 feet) {
                    player_crouched(&g_player));
 }
 
+// Into the game chosen at the title, under black (spec 13.49): a save put over the world as it was
+// built, or the world as built for a new game, then the player's own camera, and from now on the
+// game saves itself into its slot. False when the save could not be read, the title back up.
+static bool enter_game(Engine* engine) {
+    if (title_choice(&g_title) == TITLE_LOAD && !save_game_load(g_title.chosen.name)) {
+        title_refused(&g_title);
+        return false;
+    }
+    save_game_begin(g_args.no_autosave ? NULL : g_title.chosen.name);
+    engine_set_camera_rig(engine, g_player.rig);
+    return true;
+}
+
 static void on_pre_render(Game* game, double alpha) {
     Engine* engine = game->engine;
     if (input_action_pressed(&game->input, "toggle_gui"))
@@ -1327,8 +1377,16 @@ static void on_pre_render(Game* game, double alpha) {
         else
             hud_think(&g_hud, "I don't have a flashlight.");
     }
+    // Where the view is: the title's over the street while it is up, the player's after.
     vec3 eye = {0.0f, 0.0f, 0.0f}, forward = {0.0f, 0.0f, -1.0f};
-    player_eye(&g_player, eye, forward);
+    if (on_title()) {
+        vec3 target = {0.0f, 0.0f, 0.0f};
+        title_view(eye, target);
+        glm_vec3_sub(target, eye, forward);
+        glm_vec3_normalize(forward);
+    } else {
+        player_eye(&g_player, eye, forward);
+    }
     // The lake's water while the eye is near it, and a wake where the player wades (spec 13.41).
     vec3 feet = {0.0f, 0.0f, 0.0f};
     player_view_feet(&g_player, feet);
@@ -1336,15 +1394,18 @@ static void on_pre_render(Game* game, double alpha) {
     footfall(game, feet);
 
     // The nearest thing the player is looking at in reach -- a door, the backpack on the bed or the
-    // map on the fridge -- says what the action key would do to it, and the key does it.
+    // map on the fridge -- says what the action key would do to it, and the key does it. Nothing is
+    // in reach of a player who is not yet playing.
     Reach reach = {.d = FLT_MAX};
-    for (int i = 0; i < DOORS; i++)
-        if (g_door_hung[i])
-            reach_offer(&reach, g_doors[i].entity->position, &g_doors[i], NULL, NULL);
-    if (!g_backpack.taken)
-        reach_offer(&reach, g_backpack.at, NULL, take_backpack, "E   Take the backpack");
-    if (g_fridge_map.node)
-        reach_offer(&reach, g_fridge_map.at, NULL, take_map, "E   Take the map");
+    if (g_run == RUN_PLAYING) {
+        for (int i = 0; i < DOORS; i++)
+            if (g_door_hung[i])
+                reach_offer(&reach, g_doors[i].entity->position, &g_doors[i], NULL, NULL);
+        if (!g_backpack.taken)
+            reach_offer(&reach, g_backpack.at, NULL, take_backpack, "E   Take the backpack");
+        if (g_fridge_map.node)
+            reach_offer(&reach, g_fridge_map.at, NULL, take_map, "E   Take the map");
+    }
     if (input_action_pressed(&game->input, "interact")) {
         if (reach.take)
             reach.take();
@@ -1394,40 +1455,69 @@ static void on_pre_render(Game* game, double alpha) {
         // of sweeping it, unless something it sees has changed. CETRA_NO_COOK=1 sweeps.
         g_scene->cook_lighting = true;
     }
-    AABB at;
-    aabb_empty(&at);
-    aabb_add_point(&at, eye);
-    const bool lit = engine->total_frames > 2 && scene_lighting_ready_in(g_scene, &at);
     // Black until the opening sweep of the volume the eye is in has landed, and the reflection
     // probes round the eye with it, then up -- not every volume's: the mansion's sweeps only once
     // the drive brings its candles near. The sweep is spread over frames (spec 13.32), so without
     // this the room shows unlit by its own bounce light while it comes in, and its reflections
     // after it. A volume that could not be built lets the view up rather than holding it dark
-    // forever. The fade rides the grade's gain, after the tonemap, so the exposure and the day's
-    // meter never see it. Each frame's step is capped because a frame of captures can be long.
-    // Lit, the game is loaded: the captures go back to the play budget, so the frames are short
-    // again, and the loading screen offers PLAY, which the player's press lets go -- or it is let
-    // go at once, headless, where nobody presses, and under --no-play-prompt. It switches off once
-    // its ident has played (spec 13.34), and the fade waits for that.
-    if (lit && !g_loaded) {
-        g_loaded = true;
-        engine->capture_budget_ms = g_play_capture_ms;
-        if (engine->headless || g_args.no_play_prompt)
-            engine_hide_loading_screen(engine);
-        else
-            engine_loading_screen_ready(engine);
+    // forever. The eye is the title's while it is up and the player's once a game is chosen.
+    AABB at;
+    aabb_empty(&at);
+    aabb_add_point(&at, eye);
+    const bool lit = engine->total_frames > 2 && scene_lighting_ready_in(g_scene, &at);
+    const bool screen = engine_loading_screen_shown(engine);
+    switch (g_run) {
+        case RUN_LOADING:
+            // Lit, the game is loaded: the captures go back to the play budget, so the frames are
+            // short again, and the screen is let go. It switches off once its ident has played
+            // (spec 13.34), and what comes up waits for that.
+            if (lit) {
+                capture_budget(engine, false);
+                engine_hide_loading_screen(engine);
+            }
+            if (lit && !screen) {
+                g_run = g_titled ? RUN_TITLE : RUN_PLAYING;
+                if (g_titled) {
+                    title_show(&g_title);
+                    title_open_screen(&g_title, g_args.title_screen);
+                }
+            }
+            break;
+        case RUN_TITLE:
+            if (title_choice(&g_title) != TITLE_WAITING) {
+                g_run = RUN_LEAVING;
+                capture_budget(engine, true);
+            }
+            break;
+        case RUN_LEAVING:
+            if (g_fade > 0.0f)
+                break;
+            if (enter_game(engine)) {
+                g_run = RUN_ENTERING;
+            } else {
+                g_run = RUN_TITLE;
+                capture_budget(engine, false);
+            }
+            break;
+        case RUN_ENTERING:
+            if (lit) {
+                g_run = RUN_PLAYING;
+                capture_budget(engine, false);
+            }
+            break;
+        case RUN_PLAYING:
+            save_game_frame(feet, game->frame_clock.delta);
+            break;
     }
-    if (engine_loading_screen_prompting(engine) && input_action_pressed(&game->input, "start"))
-        engine_hide_loading_screen(engine);
-    const bool up = lit && !engine_loading_screen_shown(engine);
-    if (up)
-        g_fade_seconds += fminf((float)game->frame_clock.delta, 1.0f / 30.0f);
-    g_playing |= up;
-    if (g_playing)
-        save_game_frame(feet, game->frame_clock.delta);
+    // Up on the title and in the game, black between: the fade rides the grade's gain, after the
+    // tonemap, so the exposure and the day's meter never see it. Each frame's step is capped
+    // because a frame of captures can be long.
+    const bool up = g_run == RUN_TITLE || g_run == RUN_PLAYING;
+    const float step = fminf((float)game->frame_clock.delta, 1.0f / 30.0f);
+    g_fade = up ? fminf(g_fade + step / FADE_IN_SECONDS, 1.0f)
+                : fmaxf(g_fade - step / FADE_OUT_SECONDS, 0.0f);
     if (engine->postfx)
-        glm_vec3_fill(engine->postfx->grade_gain,
-                      glm_smoothstep(0.0f, FADE_IN_SECONDS, g_fade_seconds));
+        glm_vec3_fill(engine->postfx->grade_gain, glm_smoothstep(0.0f, 1.0f, g_fade));
     if (g_args.startup_ms)
         trace_settling(engine, lit, up);
 }
@@ -1451,17 +1541,20 @@ static void on_pre_render(Game* game, double alpha) {
  * cursor the player frees while the input is held comes back after.
  */
 static void on_frame_input(Game* game) {
-    Engine* engine = game->engine;
-    const bool loading = engine_loading_screen_shown(engine);
+    const Engine* engine = game->engine;
+    const bool playing = g_run == RUN_PLAYING;
     const bool held = ui_captures_input(g_hud.ui);
     const bool bag_up = backpack_menu_open(&g_menu);
     const bool map_up = map_screen_open(&g_map_screen);
-    const bool tab = !loading && input_action_pressed(&game->input, "backpack");
-    const bool m = !loading && input_action_pressed(&game->input, "map");
+    const bool tab = playing && input_action_pressed(&game->input, "backpack");
+    const bool m = playing && input_action_pressed(&game->input, "map");
     const bool esc = input_action_pressed(&game->input, "menu_back");
     const bool have_map = backpack_holds(&g_backpack, ITEM_TOWN_MAP);
     bool back = false, bag_after = false;
-    if (map_up) {
+    if (title_open(&g_title)) {
+        // The title's list and its question go back; the title itself does not.
+        back = esc && title_backs(&g_title);
+    } else if (map_up) {
         back = tab || m || esc;
         bag_after = tab;
     } else if (bag_up) {
@@ -1502,6 +1595,7 @@ static void on_frame_input(Game* game) {
     backpack_menu_layout(&g_menu, w, h, w > 0.0f ? (float)engine->fb_width / w : 1.0f);
     map_screen_layout(&g_map_screen, w, h);
     ui_update(g_hud.ui, &in, w, h);
+    title_input(&g_title, input_action_pressed(&game->input, "menu_delete"));
     // Nothing to do when the map was over the bag, which its pop has just put back on top.
     if (bag_after)
         backpack_menu_show(&g_menu);
@@ -1515,7 +1609,9 @@ static void on_frame_input(Game* game) {
         .wheel = (float)sy,
     };
     map_screen_input(&g_map_screen, &in, &controls, (float)engine->render_delta);
-    input_set_suppressed(&game->input, loading || held || ui_captures_input(g_hud.ui));
+    // Nobody moves before the game is played: under the loading screen, at the title, or while
+    // the chosen game comes up out of black.
+    input_set_suppressed(&game->input, !playing || held || ui_captures_input(g_hud.ui));
 }
 
 // Before the engine goes: the HUD draws through its overlay hook, and the backpack's models are on
@@ -1526,9 +1622,10 @@ static void on_shutdown(Game* game) {
     if (g_args.tiles_probe && g_scene)
         shadow_tiles_probe(g_scene->shadow_system, g_scene);
     // While every entity is still alive.
-    if (g_playing)
+    if (g_run == RUN_PLAYING)
         save_game_moment(SAVE_QUIT);
     save_game_free();
+    title_free(&g_title);
     backpack_menu_free(&g_menu);
     map_screen_free(&g_map_screen);
     hud_free(&g_hud);
@@ -1596,7 +1693,6 @@ static void print_usage(const char* prog) {
     printf("      --no-loading-screen Load under a black window, without the engine's screen\n");
     printf("      --loading-screen    The engine's loading screen headless too\n");
     printf("      --startup-ms        Print how long each loading step and held frame took\n");
-    printf("      --no-play-prompt    Go straight in once loaded, without the screen's PLAY\n");
     printf("      --flashlight        Start with the flashlight, and on (F toggles it)\n");
     printf("      --backpack          Start with the backpack, the flashlight in it\n");
     printf("      --map               Start with the town map in the backpack, the fridge bare\n");
@@ -1656,10 +1752,17 @@ static void print_usage(const char* prog) {
     printf("      --cat-cam           The camera follows the cat\n");
     printf("      --trace-cat         Print what the cat is doing every 30 steps\n");
     printf("      --no-eyeshine       Its eyes do not throw the flashlight back\n");
+    printf("  A run starts at the title over the street, in the window, unless it starts from a\n"
+           "  save, a new game or any state above -- the player, the bag, the map, the finds,\n"
+           "  the crouch, the cat's place or a pinned camera -- and then it saves nowhere unless\n"
+           "  --slot says where:\n");
     printf("      --load SLOT         Start from the game saved in SLOT (silent-1 .. silent-%d)\n",
            SAVE_GAME_SLOTS);
-    printf("      --slot SLOT         Save this run into SLOT as it goes, whatever started it\n");
-    printf("      --no-autosave       Never save the game\n");
+    printf("      --new-game          Start a new game without the title\n");
+    printf("      --slot SLOT         Save this run into SLOT as it goes\n");
+    printf("      --no-autosave       A game from the title that never saves itself\n");
+    printf("      --title             The title headless too\n");
+    printf("      --title-screen S    The title with S over it: games, or delete (the newest)\n");
     printf("  In the window: click to capture the mouse, Escape to release it. WASD\n");
     printf("  walks, Shift hurries, C crouches or stands and Ctrl crouches while held,\n");
     printf("  the arrows or the mouse look, E opens and shuts\n");
@@ -1792,8 +1895,6 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
             a->loading_screen = true;
         } else if (!strcmp(s, "--startup-ms")) {
             a->startup_ms = true;
-        } else if (!strcmp(s, "--no-play-prompt")) {
-            a->no_play_prompt = true;
         } else if (!strcmp(s, "--flashlight")) {
             a->flashlight = true;
             a->backpack = true;
@@ -1905,8 +2006,15 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
             a->slot = argv[++i];
         } else if (!strcmp(s, "--load") && has_next) {
             a->load = argv[++i];
+        } else if (!strcmp(s, "--new-game")) {
+            a->new_game = true;
         } else if (!strcmp(s, "--no-autosave")) {
             a->no_autosave = true;
+        } else if (!strcmp(s, "--title")) {
+            a->title = true;
+        } else if (!strcmp(s, "--title-screen") && has_next) {
+            a->title_screen = argv[++i];
+            a->title = true;
         } else if (!strcmp(s, "-h") || !strcmp(s, "--help")) {
             print_usage(argv[0]);
             return false;
@@ -1927,6 +2035,12 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
     // carried in the backpack.
     a->map |= a->open_map || a->open_backpack == ITEM_TOWN_MAP;
     a->backpack |= a->map;
+    bool found = false;
+    for (int k = 0; k < PLACE_COUNT; k++)
+        found |= a->found[k];
+    a->test = a->load || a->new_game || a->slot || a->player_at_set || found || a->backpack ||
+              a->flashlight || a->crouch || a->cat_at || a->cat_go[0] || a->cat_clip[0] ||
+              a->cat_doing || a->cat_cam || (a->cam_eye_set && a->cam_target_set);
     // The plan is written while the world is built, and the run stops there.
     if (a->map_export) {
         a->headless = true;
