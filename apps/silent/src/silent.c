@@ -1491,9 +1491,9 @@ static void on_pre_render(Game* game, double alpha) {
 
     // The nearest thing the player is looking at in reach -- a door, the backpack on the bed or the
     // map on the fridge -- says what the action key would do to it, and the key does it. Nothing is
-    // in reach of a player who is not yet playing.
+    // in reach of a player who is not yet playing, or behind a screen that holds the game's keys.
     Reach reach = {.d = FLT_MAX};
-    if (g_run == RUN_PLAYING) {
+    if (g_run == RUN_PLAYING && !ui_captures_input(g_hud.ui)) {
         for (int i = 0; i < DOORS; i++)
             if (g_door_hung[i])
                 reach_offer(&reach, g_doors[i].entity->position, &g_doors[i], NULL, NULL);
@@ -1629,6 +1629,11 @@ static void on_pre_render(Game* game, double alpha) {
             g_run = RUN_LOADING;
             break;
     }
+    // A step is what puts each entity's node where the entity is, and a held game runs none: so
+    // while it is held -- loading, at the title, under the pause menu, over a load -- the doors and
+    // the cat are put where they stand here, before the frame and its captures draw them.
+    if (game->paused)
+        sync_entity_transforms(game->entity_manager);
     capture_budget(engine);
     // Up on the title and in the game, black between: the fade rides the grade's gain, after the
     // tonemap, so the exposure and the day's meter never see it. It eases by the frame, so a game
