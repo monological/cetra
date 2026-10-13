@@ -37,17 +37,18 @@
 #define UBO_BINDING_PROBES          9
 #define UBO_BINDING_DECALS          10
 
+// GL 4.1's guaranteed GL_MAX_UNIFORM_BLOCK_SIZE, which every block but the light index pool fits.
+#define UBO_GUARANTEED_BLOCK_SIZE 16384
+
 // std140 byte sizes of the engine's blocks, asserted against the C mirror
 // structs (light_cluster.h) and validated against the driver's
-// GL_UNIFORM_BLOCK_DATA_SIZE by ubo_validate_program_block. None over the
-// GL 4.1 guaranteed GL_MAX_UNIFORM_BLOCK_SIZE minimum of 16384 -- except the
-// light index pool, which takes what the driver allows (spec 13.51).
+// GL_UNIFORM_BLOCK_DATA_SIZE by ubo_validate_program_block.
 #define UBO_LIGHTS_BLOCK_SIZE   15072
 #define UBO_CLUSTERS_BLOCK_SIZE 12288
-// The light index pool's bounds: the guaranteed size, and the most it is ever given. The size in
-// use is ubo_cluster_indices_block_size().
-#define UBO_CLUSTER_INDICES_BLOCK_MIN 16384
-#define UBO_CLUSTER_INDICES_BLOCK_MAX 65536
+// Over the guarantee, and the engine refuses a driver that allows less (spec 13.51): at 16 KB the
+// pool ran dry with nine lights a few metres from the camera, and every froxel past the point it
+// did shaded with no local light.
+#define UBO_CLUSTER_INDICES_BLOCK_SIZE 65536
 // Four floats, rounded up to std140's 16-byte block granularity.
 #define UBO_VIEW_BLOCK_SIZE 16
 
@@ -130,7 +131,7 @@ _Static_assert((UBO_SHORE_FILM_COLS * UBO_SHORE_FILM_SLOTS) % 4 == 0,
 _Static_assert(IES_POOL_FLOATS % 4 == 0, "the IES pool must be a whole number of vec4 rows");
 _Static_assert(IES_POOL_FLOATS >= UBO_IES_TAPS,
                "the IES pool must hold at least one profile at the ceiling");
-_Static_assert(UBO_IES_BLOCK_SIZE <= 16384,
+_Static_assert(UBO_IES_BLOCK_SIZE <= UBO_GUARANTEED_BLOCK_SIZE,
                "the IES block must fit GL 4.1's guaranteed GL_MAX_UNIFORM_BLOCK_SIZE");
 // ...and the C mirror against that size, the way light_cluster.h pins its three.
 // ubo_upload rejects only an OVER-size write, so a struct that drifted SHORT
@@ -153,7 +154,7 @@ _Static_assert(sizeof(GpuIesBlock) == UBO_IES_BLOCK_SIZE,
 #define UBO_VT_PAGES_VEC4S      (2 + VT_PAGE_TABLE_VEC4S)
 #define UBO_VT_PAGES_BLOCK_SIZE (UBO_VT_PAGES_VEC4S * 16)
 _Static_assert(VT_PAGE_TABLE_MAX % 4 == 0, "the page table must be a whole number of ivec4 rows");
-_Static_assert(UBO_VT_PAGES_BLOCK_SIZE <= 16384,
+_Static_assert(UBO_VT_PAGES_BLOCK_SIZE <= UBO_GUARANTEED_BLOCK_SIZE,
                "the page-table block must fit GL 4.1's guaranteed GL_MAX_UNIFORM_BLOCK_SIZE");
 _Static_assert(sizeof(GpuVtPageBlock) == UBO_VT_PAGES_BLOCK_SIZE,
                "VtPageBlock's C mirror must match its std140 size");
@@ -171,7 +172,7 @@ _Static_assert(sizeof(GpuVtPageBlock) == UBO_VT_PAGES_BLOCK_SIZE,
 // info(1) + two descriptor rows per road + the shared segment pool
 #define UBO_ROADS_VEC4S      (1 + MATERIAL_MAX_ROADS * 2 + ROAD_SEGS_MAX)
 #define UBO_ROADS_BLOCK_SIZE (UBO_ROADS_VEC4S * 16)
-_Static_assert(UBO_ROADS_BLOCK_SIZE <= 16384,
+_Static_assert(UBO_ROADS_BLOCK_SIZE <= UBO_GUARANTEED_BLOCK_SIZE,
                "the roads block must fit GL 4.1's guaranteed GL_MAX_UNIFORM_BLOCK_SIZE");
 _Static_assert(sizeof(GpuRoadsBlock) == UBO_ROADS_BLOCK_SIZE,
                "RoadsBlock's C mirror must match its std140 size");
@@ -196,7 +197,7 @@ _Static_assert(sizeof(GpuRoadsBlock) == UBO_ROADS_BLOCK_SIZE,
 // is not reachable here. The assert against sizeof is over there, where the
 // struct is, and is what catches either number drifting.
 #define UBO_PROBES_BLOCK_SIZE 7344
-_Static_assert(UBO_PROBES_BLOCK_SIZE <= 16384,
+_Static_assert(UBO_PROBES_BLOCK_SIZE <= UBO_GUARANTEED_BLOCK_SIZE,
                "the probes block must fit GL 4.1's guaranteed GL_MAX_UNIFORM_BLOCK_SIZE");
 
 /*
@@ -214,7 +215,7 @@ _Static_assert(UBO_PROBES_BLOCK_SIZE <= 16384,
 // info(16) + 16 decals x 5 rows(1280) + 3072 froxel masks packed 2 per word(6144).
 // A literal for the same reason UBO_PROBES_BLOCK_SIZE is one.
 #define UBO_DECALS_BLOCK_SIZE 7440
-_Static_assert(UBO_DECALS_BLOCK_SIZE <= 16384,
+_Static_assert(UBO_DECALS_BLOCK_SIZE <= UBO_GUARANTEED_BLOCK_SIZE,
                "the decals block must fit GL 4.1's guaranteed GL_MAX_UNIFORM_BLOCK_SIZE");
 
 typedef struct Ubo {
@@ -287,25 +288,5 @@ bool ubo_wire_program_block(GLuint program_id, const char* block_name, GLuint bi
 // uniform block. Eight hand-maintained upload sites is how a ninth pass gets
 // added silently wrong.
 bool ubo_wire_blocks(GLuint program_id);
-
-/*
- * The light index pool's size, read once from the context (spec 13.51).
- *
- * GL 4.1 guarantees a uniform block 16 KB, and a pool held to that ran out in silent's hall once
- * nine lights stood within a few metres of it: every froxel past the point it ran dry shaded with
- * no local light, a hard line across the frame. Drivers commonly allow 64 KB (Apple's GL on Metal
- * does), so the pool takes what the driver reports, at most UBO_CLUSTER_INDICES_BLOCK_MAX and at
- * least the guaranteed size.
- *
- * Process-wide because the two readers -- the shader splice in create_shader and the block check
- * in ubo_wire_blocks -- have no engine in hand, and a process has one context. CETRA_UBO_LIMIT
- * (bytes) caps what the driver reports, which is how the 16 KB path is reached on a driver that
- * allows more.
- *
- * Init runs after the context exists and before any program is built or any light cluster context
- * is made; it returns the driver's own figure. Before it, the size is the guaranteed one.
- */
-GLint ubo_limits_init(void);
-GLsizeiptr ubo_cluster_indices_block_size(void);
 
 #endif // _UBO_H_

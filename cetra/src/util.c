@@ -60,6 +60,12 @@ GLint get_gl_max_texture_size(void) {
     return n;
 }
 
+GLint get_gl_max_uniform_block_size(void) {
+    GLint n = 0;
+    glGetIntegerv(GL_MAX_UNIFORM_BLOCK_SIZE, &n);
+    return n;
+}
+
 void create_fullscreen_quad_vao(GLuint* vao, GLuint* vbo) {
     // positions        // texCoords
     static const float quad_vertices[] = {
