@@ -210,6 +210,7 @@ typedef struct SilentArgs {
     bool flashlight;
     bool backpack;           // the backpack already taken, and the flashlight in it
     bool map;                // the town map already in it, and the fridge door bare
+    bool key;                // the front door's key in it, and the workbench bare (spec 13.53)
     bool open_map;           // the map's screen open at the start, over the backpack's when that is
     bool found[PLACE_COUNT]; // places found before the run starts, their marks not yet written
     ItemId open_backpack;    // the backpack's screen open on it at the start, or ITEM_NONE
@@ -1088,6 +1089,8 @@ static void on_init(Game* game) {
         backpack_take(&g_backpack);
     if (g_args.map)
         backpack_add(&g_backpack, ITEM_TOWN_MAP);
+    if (g_args.key)
+        backpack_add(&g_backpack, ITEM_KEY);
     fridge_map_on_door(&g_fridge_map, !backpack_holds(&g_backpack, ITEM_TOWN_MAP));
     // The map's print shows one seed's street, and another seed builds other houses.
     if ((unsigned int)g_args.seed != MAP_ART[MAP_TOWN].seed)
@@ -1260,13 +1263,16 @@ static void on_init(Game* game) {
     // The house's story (spec 13.53): its front door locked, the key in the basement.
     story_start(
         &g_story,
-        &(StoryHouse){.audio = audio,
+        &(StoryHouse){.engine = engine,
+                      .scene = g_scene,
+                      .audio = audio,
                       .hud = &g_hud,
                       .backpack = &g_backpack,
                       .haunt = &g_haunt,
                       .front = g_door_hung[DOOR_HOME] ? &g_doors[DOOR_HOME] : NULL,
                       .cellar = g_door_hung[DOOR_BASEMENT] ? &g_doors[DOOR_BASEMENT] : NULL});
     g_story.trace = g_args.trace_haunt;
+    story_key_on_bench(&g_story, !backpack_holds(&g_backpack, ITEM_KEY));
 
     const vec3 dir = {look[0] - feet[0], look[1] - eye_y, look[2] - feet[2]};
     player_init(&g_player, game, physics, em, feet, atan2f(dir[0], dir[2]),
@@ -1485,6 +1491,17 @@ static void take_map(void) {
     save_game_due();
 }
 
+// The front door's key off the basement's workbench (spec 13.53), into the backpack.
+static void take_key(void) {
+    if (!backpack_add(&g_backpack, ITEM_KEY)) {
+        hud_think(&g_hud, "I don't have anywhere to put this.");
+        return;
+    }
+    story_key_on_bench(&g_story, false);
+    hud_think(&g_hud, "A key. It might fit the front door.");
+    save_game_due();
+}
+
 // A foot the gait let fall this frame, heard where the drawn `feet` came down (spec 13.47); or,
 // under --footstep-say, every take in turn.
 static void footfall(const Game* game, const vec3 feet) {
@@ -1549,6 +1566,8 @@ static void on_pre_render(Game* game, double alpha) {
             reach_offer(&reach, g_backpack.at, NULL, take_backpack, "E   Take the backpack");
         if (!backpack_holds(&g_backpack, ITEM_TOWN_MAP))
             reach_offer(&reach, g_fridge_map.at, NULL, take_map, "E   Take the map");
+        if (g_story.key && !backpack_holds(&g_backpack, ITEM_KEY))
+            reach_offer(&reach, g_story.key_at, NULL, take_key, "E   Take the key");
     }
     if (input_action_pressed(&game->input, "interact")) {
         if (reach.take)
@@ -1831,6 +1850,7 @@ static void on_shutdown(Game* game) {
     hud_free(&g_hud);
     backpack_free(&g_backpack);
     fridge_map_free(&g_fridge_map);
+    story_free(&g_story);
     cat_free(&g_cat);
     player_free(&g_player);
     kit_surfaces_release(&g_surfaces);
@@ -1902,13 +1922,15 @@ static void print_usage(const char* prog) {
     printf("      --flashlight        Start with the flashlight, and on (F toggles it)\n");
     printf("      --backpack          Start with the backpack, the flashlight in it\n");
     printf("      --map               Start with the town map in the backpack, the fridge bare\n");
+    printf("      --key               Start with the front door's key in the backpack, the\n"
+           "                          basement's workbench bare\n");
     printf("      --open-map          Start with the map's screen open, over the backpack's\n"
            "                          with --open-backpack; the map had\n");
     printf("      --found LIST        Start with places found, written on the map when it\n"
            "                          next opens: barricade,road-end,cabin or all (home\n"
            "                          is found with the map)\n");
     printf("      --open-backpack ITEM  Start with the backpack's screen open on ITEM\n"
-           "                          (flashlight, map), and the backpack had\n");
+           "                          (flashlight, map, key), and the backpack had\n");
     printf("      --mute              Without sound\n");
     printf("      --audio-dump PATH   Headless: write what the listener hears as a WAV\n");
     printf("      --map-export PATH   Write the town's plan for tools/make_map.py and stop\n");
@@ -2118,6 +2140,8 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
             a->backpack = true;
         } else if (!strcmp(s, "--map")) {
             a->map = true;
+        } else if (!strcmp(s, "--key")) {
+            a->key = true;
         } else if (!strcmp(s, "--open-map")) {
             a->open_map = true;
         } else if (!strcmp(s, "--found") && has_next) {
@@ -2252,7 +2276,8 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
     // Only what is held can be opened or chosen, the map is had only off the fridge, and it is
     // carried in the backpack.
     a->map |= a->open_map || a->open_backpack == ITEM_TOWN_MAP;
-    a->backpack |= a->map;
+    a->key |= a->open_backpack == ITEM_KEY;
+    a->backpack |= a->map || a->key;
     // The plan is written while the world is built, and the run stops there.
     if (a->map_export) {
         a->headless = true;

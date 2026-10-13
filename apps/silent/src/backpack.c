@@ -5,6 +5,7 @@
 #include "fridge_map.h"
 #include "kit.h"
 #include "mats.h"
+#include "story.h"
 
 // How the bag lies on the quilt: its top toward the bed's head, turned a little off square,
 // rolled onto one side and sunk into the quilt, as something soft dropped on something soft.
@@ -106,6 +107,11 @@ static void town_map(Kit* kit) {
     fridge_map_closed(kit, &KIT_WORLD_Z);
 }
 
+// The front door's key, standing on its edge so the grid's side-on picture of it is its face.
+static void front_door_key(Kit* kit) {
+    story_key_model(kit, &KIT_WORLD, 0.0f, false);
+}
+
 const ItemSpec ITEMS[ITEM_COUNT] = {
     [ITEM_FLASHLIGHT] = {"flashlight",
                          "FLASHLIGHT",
@@ -119,6 +125,12 @@ const ItemSpec ITEMS[ITEM_COUNT] = {
                        "M opens it.",
                        {2, 2},
                        town_map},
+    [ITEM_KEY] = {"key",
+                  "KEY",
+                  "A heavy old brass key, left on the workbench in the basement. It might fit "
+                  "the front door.",
+                  {2, 1},
+                  front_door_key},
 };
 
 ItemId item_by_id(const char* id) {
