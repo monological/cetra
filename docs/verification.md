@@ -852,19 +852,29 @@ worth stating plainly rather than leaving to be discovered:
 Spec 12.7 replaced the boxes with an eroded heightfield and added a lighting rig, and it
 brings three more blind spots — two of which cost hours before they were understood:
 
-- **The clustered light budget has no arm, and its failure looks like a renderer fault.**
-  `LC_MAX_CLUSTER_INDICES` was 6144 over 3072 froxels: an average of **two** lights per
-  froxel, and three lights with frustum-wide reach did not fit. Spec 13.6 took the indices
-  from a halfword to a byte and the block to GL 4.1's guaranteed 16 KB, which is 16384
-  slots, a little over five a froxel -- and as far as a UBO can go. A light whose sphere
-  holds the camera claims every tile of every slice out to its range, so that is still
-  what spends it. 12.7's two pool panels
-  were authored with `range = 0`, which `light_cull_radius` derives into the *thousands* of
-  units for a 90x90 panel, so both sat in every froxel and the pool overflowed. Since 12.7 a
-  starved cluster keeps the slots it was granted rather than losing every light, so the
-  symptom is now a dim corner instead of a black hole — but nothing measures the budget, and
-  the warning naming the widest-reaching light is the only instrument. **Read the warnings**:
-  it had been printing the answer on every run for hours.
+- **The clustered light budget's failure looks like a renderer fault.** A light whose sphere
+  holds the camera claims every tile of every slice out to its range, and that is what spends
+  the index pool. Its history:
+  - `LC_MAX_CLUSTER_INDICES` was 6144 over 3072 froxels, an average of **two** lights per
+    froxel, and three lights with frustum-wide reach did not fit. 12.7's two pool panels were
+    authored with `range = 0`, which `light_cull_radius` derives into the *thousands* of units
+    for a 90x90 panel, so both sat in every froxel and the pool overflowed.
+  - Spec 13.6 took the indices from a halfword to a byte and the block to GL 4.1's guaranteed
+    16 KB, 16384 slots.
+  - Spec 13.51 found silent's hall needing 18,270, once nine lights stood within a few metres
+    of it. It took the block to 64 KB, 65,536 slots, and the engine now refuses a driver that
+    allows less.
+
+  Running out still leaves one cluster partly lit and every cluster after it in the z-major
+  walk unlit: a hard horizontal line on a tile row that moves with the camera.
+
+  The `light-pool` group is the budget's arm:
+  - `pool-fit` stores more indices than 16 KB holds.
+  - `pool-overflow` holds the warning, which names the demand, the pool and the widest-reaching
+    light, and **repeats every 600 builds while an overflow lasts**. Until 13.51 it printed once
+    a session, so an overflow at load spent it, and one that came later went unreported.
+
+  **Read the warnings**: in 12.7 it had been printing the answer on every run for hours.
 - **Terrain correctness is asserted by ONE measurement, and it is not a picture.** The pool
   floor's *highest* point is checked against the swimmer foot probe at build time, because a
   floating character whose feet reach rock plants on the bottom. It has caught four separate
