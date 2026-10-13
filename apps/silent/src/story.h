@@ -22,11 +22,18 @@
  */
 
 typedef enum StoryStage {
+    STORY_NONE = -1,
     STORY_LOCKED,  // the front door locked, the haunting not yet begun from it
     STORY_HAUNTED, // the haunting begun from the front door
     STORY_OVER,    // the haunting ended at the cellar door
     STORY_OPEN,    // the front door unlocked: an ordinary door from then on
+    STORY_STAGE_COUNT
 } StoryStage;
+
+// Each stage as a save and a command line name it: "locked", "haunted", "over", "open".
+extern const char* const STORY_STAGE_NAMES[STORY_STAGE_COUNT];
+// The stage `name` names, or STORY_NONE.
+StoryStage story_stage_by_name(const char* name);
 
 // What the story takes hold of, borrowed; any may be NULL, and what it would do with it is not
 // done.
@@ -52,6 +59,7 @@ typedef struct Story {
     vec3 key_at;    // its middle, which the player reaches for
     double last;    // the sim time the last step reached
     int tries;      // the tries so far, which choose each one's knob take
+    bool rehaunt;   // put at a haunted stage: the haunting begins again once the game is played
     bool trace;     // say each turn of the story as it comes
 } Story;
 
@@ -68,5 +76,14 @@ void story_key_model(Kit* kit, const KitFrame* f, float y, bool flat);
 bool story_door(Story* s, Door* door, double time);
 // Per fixed step, after the doors have moved: the player's try under way.
 void story_step(Story* s, double time);
+/*
+ * The story put at `stage` (a load, or the command line), with the player's feet at `feet`:
+ * anywhere but in the house it is STORY_OPEN whatever the stage says, since they are out of it.
+ * Below that the front door is shut. The key lies on the workbench unless the backpack holds it. A
+ * try under way is dropped. Haunted, the haunting begins again at story_play.
+ */
+void story_restore(Story* s, StoryStage stage, const vec3 feet);
+// Per frame while the game is played, at sim time `time`: the haunting a restore left begun.
+void story_play(Story* s, double time);
 
 #endif // _SILENT_STORY_H_

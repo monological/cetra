@@ -1,10 +1,21 @@
 #include <math.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "basement.h"
 #include "mats.h"
+#include "rooms.h"
 #include "save_game.h"
 #include "story.h"
+
+const char* const STORY_STAGE_NAMES[STORY_STAGE_COUNT] = {"locked", "haunted", "over", "open"};
+
+StoryStage story_stage_by_name(const char* name) {
+    for (int i = 0; name && i < STORY_STAGE_COUNT; i++)
+        if (!strcmp(name, STORY_STAGE_NAMES[i]))
+            return (StoryStage)i;
+    return STORY_NONE;
+}
 
 // The key: KEY_LEN from its bow to the end of its bit, its shank KEY_SHANK about its middle, its
 // bow a ring of KEY_WIRE KEY_BOW across, and its bit KEY_BIT thick either side of its middle.
@@ -219,4 +230,35 @@ void story_step(Story* s, double time) {
         }
         say(s, "cellar door slammed", time);
     }
+}
+
+// Whether `at` is in the player's house, its basement included.
+static bool in_house(const vec3 at) {
+    const RoomId room = room_at(at);
+    return room == ROOM_HOME || room == ROOM_LIVING || room == ROOM_KITCHEN ||
+           room == ROOM_BASEMENT;
+}
+
+void story_restore(Story* s, StoryStage stage, const vec3 feet) {
+    s->stage = stage < STORY_LOCKED || stage >= STORY_STAGE_COUNT ? STORY_LOCKED : stage;
+    if (s->stage < STORY_OPEN && !in_house(feet))
+        s->stage = STORY_OPEN;
+    if (s->try.door)
+        door_jolt(s->try.door, 0.0f);
+    s->try = (DoorTry){0};
+    s->slamming = false;
+    s->last = -1.0;
+    if (s->stage < STORY_OPEN && s->house.front)
+        door_set(s->house.front, 0.0f, 0.0f);
+    story_key_on_bench(s, !(s->house.backpack && backpack_holds(s->house.backpack, ITEM_KEY)));
+    s->rehaunt = s->stage == STORY_HAUNTED;
+}
+
+void story_play(Story* s, double time) {
+    if (!s->rehaunt)
+        return;
+    s->rehaunt = false;
+    if (s->house.haunt)
+        haunt_begin(s->house.haunt, time, 0.0);
+    say(s, "haunted again", time);
 }

@@ -25,6 +25,7 @@ typedef struct Kept {
     bool bag;                   // the backpack taken
     int item_order[ITEM_COUNT]; // each thing's place in the order it was had, from 1; 0 not had
     bool inked[PLACE_COUNT];
+    int story_stage;
     int cat_place;
 } Kept;
 
@@ -53,6 +54,7 @@ static SaveField g_finds[PLACE_COUNT];
 static SaveField g_inked[PLACE_COUNT];
 static SaveField g_door_travel[SAVE_GAME_DOORS];
 static SaveField g_door_want[SAVE_GAME_DOORS];
+static SaveField g_story[1];
 static SaveField g_cat[5];
 static SaveField g_cat_since[CAT_PLACE_COUNT];
 
@@ -108,6 +110,15 @@ bool save_game_start(const SaveWorld* world) {
         add_table("door_want", g_door_want, w->door_count);
     }
 
+    if (w->story) {
+        g_story[0] = (SaveField){.type = SAVE_ENUM,
+                                 .key = "stage",
+                                 .addr = &g_kept.story_stage,
+                                 .names = STORY_STAGE_NAMES,
+                                 .name_count = STORY_STAGE_COUNT};
+        add_table("story", g_story, KIT_COUNT(g_story));
+    }
+
     if (cat_kept()) {
         CatMind* m = w->mind;
         for (int i = 0; i < CAT_PLACE_COUNT; i++) {
@@ -145,6 +156,8 @@ static void gather(void) {
         g_kept.item_order[w->backpack->held[k]] = k + 1;
     for (int i = 0; i < PLACE_COUNT; i++)
         g_kept.inked[i] = map_screen_inked(w->map_screen, (PlaceId)i);
+    if (w->story)
+        g_kept.story_stage = (int)w->story->stage;
     if (cat_kept())
         g_kept.cat_place = cat_nearest_place(w->cat);
 }
@@ -178,6 +191,10 @@ static void apply(void) {
     player_feet(w->player, feet);
     finds_settle(w->finds, feet);
     basement_settle(w->basement, feet, w->game->time);
+    // After the doors and the bag: it shuts a locked front door, and puts the key where the bag
+    // says it is.
+    if (w->story)
+        story_restore(w->story, (StoryStage)g_kept.story_stage, feet);
     g_room = (int)room_at(feet);
 }
 

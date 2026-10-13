@@ -16,6 +16,7 @@
 #include "lights.h"
 #include "map_screen.h"
 #include "player.h"
+#include "story.h"
 #include "town_map.h"
 
 /*
@@ -24,14 +25,15 @@
  * goes into another room or quits. There are no manual saves.
  *
  * What the file keeps is the player's body and look, the bag and what is in it, the places found
- * and the marks inked, each door's swing, the flashlight, the basement's draft, and where the cat
- * is with what it wants. A value a module holds as a field is read and written in place; the few
- * a module holds only in some other shape -- the order the bag's things were had, the marks
- * written whole, the cat's place -- are worked out before a write and put back after a read. Then
- * the module that owns a thing rebuilds what follows from it: a door's body, the bag's grid, the
- * cat's posture. Keys are each thing's own id, never an index a new item would renumber. A crouch
- * is not kept: a load stands the player up where there is room. Everything else -- the clock, the
- * lamps, the rain -- follows from the sim clock, which the engine's own section keeps.
+ * and the marks inked, each door's swing, the flashlight, the basement's draft, how far the house's
+ * story has gone, and where the cat is with what it wants. A value a module holds as a field is
+ * read and written in place; the few a module holds only in some other shape -- the order the bag's
+ * things were had, the marks written whole, the cat's place -- are worked out before a write and
+ * put back after a read. Then the module that owns a thing rebuilds what follows from it: a door's
+ * body, the bag's grid, the cat's posture. Keys are each thing's own id, never an index a new item
+ * would renumber. A crouch is not kept: a load stands the player up where there is room. Everything
+ * else -- the clock, the lamps, the rain -- follows from the sim clock, which the engine's own
+ * section keeps.
  */
 
 #define SAVE_GAME_SLOTS 8 // games kept at once, one slot each
@@ -48,6 +50,7 @@ typedef struct SaveWorld {
     MapScreen* map_screen;
     Lights* lights;
     Basement* basement;
+    Story* story;
     Cat* cat;
     CatMind* mind;
     Door* doors[SAVE_GAME_DOORS];
