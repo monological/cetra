@@ -3,9 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "cetra/gi_volume.h"
 #include "cetra/ibl.h"
-#include "cetra/probe_set.h"
 #include "cetra/program.h"
 #include "cetra/shader_params.h"
 
@@ -179,18 +177,12 @@ static void apply(Haunt* h, const HauntLive* s) {
         h->bedside->intensity = n->bedside_candela * s->mains;
         mats_shade_candela(h->house.shade, h->bedside_slot, n->bedside_candela * s->mains);
     }
-    // The light the house was captured in -- its bounce off every wall and its reflections -- is
-    // the light of lamps the cut has put out, so it is not seen; the captures, which keep it, see
-    // it. Nor is the sky's, which with no bounce to say how much of it a room sees is reflected
-    // whole in every glossy surface indoors.
+    // The light from no lamp -- the bounce the house was captured in, its reflections, and the
+    // sky's -- is one dial, the environment's strength, which the lit surface multiplies all of it
+    // by. The captures, which keep the bounce, see it whole.
     Scene* scene = h->house.scene;
-    if (scene && scene->gi)
-        scene->gi->hidden = !s->ambient;
-    ReflectionProbeSet* set = scene ? scene->probe_set : NULL;
-    for (int i = 0; set && i < h->probe_count; i++)
-        set->probes[i]->intensity = s->ambient ? n->probe_intensity[i] : 0.0f;
     if (scene && scene->ibl)
-        scene->ibl->intensity = s->ambient ? n->sky : 0.0f;
+        scene->ibl->intensity = n->sky * s->ambient;
 }
 
 // The lights the house's own modules drive, the kitchen's tubes and the cellar's bulb, on `share`
@@ -365,7 +357,7 @@ static bool watching(const vec3 feet, const vec3 forward) {
 }
 
 // The house as it was before it began.
-static const HauntLive NORMAL = {1.0f, 1.0f, 0.0f, 0.0f, 1.0f, true};
+static const HauntLive NORMAL = {1.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f};
 
 void haunt_start(Haunt* h, const HauntHouse* house, unsigned int seed) {
     *h = (Haunt){.house = *house, .seed = seed, .shade_slot = -1, .bedside_slot = -1};
@@ -467,11 +459,6 @@ void haunt_begin(Haunt* h, double time, double into) {
         n->lamp_head_nits = h->house.lamp_heads->emissive_strength;
     for (int i = 0; i < h->street_count; i++)
         n->street_candela[i] = h->street[i]->intensity;
-    const ReflectionProbeSet* set = h->house.scene ? h->house.scene->probe_set : NULL;
-    const size_t probes = set ? set->residency.count : 0;
-    h->probe_count = probes < HAUNT_PROBES ? (int)probes : HAUNT_PROBES;
-    for (int i = 0; i < h->probe_count; i++)
-        n->probe_intensity[i] = set->probes[i]->intensity;
     if (h->house.scene && h->house.scene->ibl)
         n->sky = h->house.scene->ibl->intensity;
     const PostFX* fx = h->house.engine ? h->house.engine->postfx : NULL;
@@ -652,13 +639,15 @@ void haunt_frame(Haunt* h, double time) {
     const double back = fmax(0.0, u - BLACKOUT_SECONDS);
     const float up = glm_smoothstep(0.0f, 1.0f, (float)(back / RISE_SECONDS));
     const float on = SUPPLY_OUT + (1.0f - SUPPLY_OUT) * up;
+    const float hall = on * failing(back, HALL_PERIOD, h->seed);
     h->live = (HauntLive){
-        .hall = on * failing(back, HALL_PERIOD, h->seed),
+        .hall = hall,
         .lamp = on * failing(back, LAMP_PERIOD, h->seed ^ 0x9e3779b9u),
         .red = 1.0f,
         .dark_out = 1.0f,
         .mains = SUPPLY_OUT,
-        .ambient = false,
+        // The bounce comes back with the hall's light, failing with it.
+        .ambient = hall,
     };
     apply(h, &h->live);
     tint_tv(h, 1.0f, on);
