@@ -4,11 +4,8 @@
 #include <string.h>
 
 #include "cetra/ibl.h"
-#include "cetra/mesh.h"
-#include "cetra/mesh_builder.h"
 #include "cetra/program.h"
 #include "cetra/shader_params.h"
-#include "cetra/util.h"
 
 #include "basement.h"
 #include "door_takes.h"
@@ -92,13 +89,6 @@ static const struct {
 // CELLAR_GAIN times its own light, swinging CELLAR_SWING times as hard as a draft swings it.
 #define CELLAR_GAIN  4.0f
 #define CELLAR_SWING 3.0f
-// The glow through the cellar door's cracks (crack_glow): its panel's nits and its distance behind
-// the leaf and past the opening, and its light on the hall's floor.
-#define GLOW_NITS    150.0f
-#define GLOW_BEHIND  0.1f
-#define GLOW_PAST    0.06f
-#define GLOW_CANDELA 1.5f
-#define GLOW_REACH   1.2f
 // The hall's pendant swings this far, radians, once it begins, pushed by nothing anyone can see,
 // and eases into it and out of it over PENDANT_EASE seconds; opening the cellar door catches it,
 // still in PENDANT_CAUGHT.
@@ -195,10 +185,6 @@ static void apply(Haunt* h, const HauntLive* s) {
     Scene* scene = h->house.scene;
     if (scene && scene->ibl)
         scene->ibl->intensity = n->sky * s->ambient;
-    if (h->glow_mat)
-        h->glow_mat->emissive_strength = GLOW_NITS * s->glow;
-    if (h->glow_light)
-        h->glow_light->intensity = GLOW_CANDELA * s->glow;
 }
 
 // The lights the house's own modules drive, the kitchen's tubes and the cellar's bulb, on `share`
@@ -371,111 +357,8 @@ static bool watching(const vec3 feet, const vec3 forward) {
     return front && across > 1e-4f && forward[2] > WATCH_COS * across;
 }
 
-/*
- * The crack glow: something red behind the cellar door, seen through the gaps round its leaf and
- * under it. A panel stands GLOW_BEHIND behind the leaf's middle -- past its thickness and the
- * furthest a try pulls its latch edge -- reaching GLOW_PAST beyond the opening's edges, behind
- * the wall, so every line through a gap ends on it; under the leaf the line ends on the floor
- * behind the sill, which glows too. A small light without a shadow lays it on the hall's floor in
- * front. None of it is in a capture or casts.
- */
-
-// A quad of the glow's mesh through four world corners, facing `n`.
-static void glow_quad(MeshBuilder* mb, const vec3 p[4], const vec3 n, const vec3 t) {
-    unsigned int idx[4];
-    for (int i = 0; i < 4; i++)
-        idx[i] = mb_vertex(mb, p[i], n, t, (i == 1 || i == 2) ? 1.0f : 0.0f, i >= 2 ? 1.0f : 0.0f,
-                           0.0f, 0.0f, NULL);
-    mb_tri(mb, idx[0], idx[1], idx[2]);
-    mb_tri(mb, idx[0], idx[2], idx[3]);
-}
-
-// The rectangle a_lo..a_hi by y_lo..y_hi at depth d in the door's frame `f`, facing the hall (-d).
-static void glow_face(MeshBuilder* mb, const KitFrame* f, float a_lo, float a_hi, float y_lo,
-                      float y_hi, float d, const vec3 n, const vec3 t) {
-    vec3 p[4];
-    kit_frame_point(f, a_hi, y_lo, d, p[0]);
-    kit_frame_point(f, a_lo, y_lo, d, p[1]);
-    kit_frame_point(f, a_lo, y_hi, d, p[2]);
-    kit_frame_point(f, a_hi, y_hi, d, p[3]);
-    glow_quad(mb, p, n, t);
-}
-
-static void crack_glow(Haunt* h) {
-    const Door* door = h->house.cellar;
-    Scene* scene = h->house.scene;
-    Engine* engine = h->house.engine;
-    if (!door || !door->entity || !scene || !engine)
-        return;
-    const KitFrame f = {{door->hinge[0], door->hinge[1], door->hinge[2]}, door->yaw};
-    const float a0 = door->shape.from - DOOR_CLEARANCE, a1 = door->shape.to + DOOR_CLEARANCE;
-    const float crown = kit_opening_crown(&door->shape), head = crown + DOOR_CLEARANCE;
-    const float face = -0.5f * DOOR_THICK, sill = FLOOR_Y + 0.002f;
-    vec3 n = GLM_VEC3_ZERO_INIT, t = GLM_VEC3_ZERO_INIT, up = {0.0f, 1.0f, 0.0f};
-    kit_frame_dir(&f, 0.0f, 0.0f, -1.0f, n);
-    kit_frame_dir(&f, 1.0f, 0.0f, 0.0f, t);
-    MeshBuilder mb;
-    if (!mb_init(&mb, 28, 42, false))
-        return;
-    // Behind the leaf, what a try shows as it pulls the leaf off its stop.
-    glow_face(&mb, &f, a0 - GLOW_PAST, a1 + GLOW_PAST, FLOOR_Y, head + GLOW_PAST, GLOW_BEHIND, n,
-              t);
-    // The cracks themselves, level with the leaf's face, so they show from anywhere in front of
-    // it: past a leaf as thick as this, a gap as narrow is seen through only head on.
-    glow_face(&mb, &f, a0, door->shape.from, FLOOR_Y, head, face, n, t);
-    glow_face(&mb, &f, door->shape.to, a1, FLOOR_Y, head, face, n, t);
-    glow_face(&mb, &f, a0, a1, crown, head, face, n, t);
-    glow_face(&mb, &f, door->shape.from, door->shape.to, FLOOR_Y, door->shape.bottom, face, n, t);
-    // And the floor under the leaf and behind it, which is what a look down into the gap under
-    // the door ends on.
-    vec3 floor[4];
-    kit_frame_point(&f, a0, sill, GLOW_BEHIND, floor[0]);
-    kit_frame_point(&f, a1, sill, GLOW_BEHIND, floor[1]);
-    kit_frame_point(&f, a1, sill, face, floor[2]);
-    kit_frame_point(&f, a0, sill, face, floor[3]);
-    glow_quad(&mb, floor, up, t);
-    Material* m = create_material();
-    Mesh* mesh = create_mesh();
-    if (!m || !mesh || !mb_transfer(&mb, mesh)) {
-        free_mesh(mesh);
-        free_material(m);
-        return;
-    }
-    m->name = safe_strdup("cellar_glow");
-    glm_vec3_zero(m->albedo);
-    glm_vec3_copy((float*)HALL_RED, m->emissive);
-    m->emissive_strength = 0.0f;
-    m->emissive_light = 1; // decoration: never a derived panel
-    m->roughness = 1.0f;
-    material_set_program(m, engine_get_program(engine, CETRA_PROGRAM_PBR));
-    scene_add_material(scene, m);
-    mesh->material = m;
-    mesh->shadow_role = MESH_SHADOW_NONE;
-    h->glow_node = create_node();
-    node_set_name(h->glow_node, "cellar_glow");
-    node_add_mesh(h->glow_node, mesh);
-    h->glow_node->capture_hidden = true;
-    h->glow_mat = m;
-    vec3 at = GLM_VEC3_ZERO_INIT;
-    kit_frame_point(&f, 0.5f * (a0 + a1), FLOOR_Y + 0.03f, -0.12f, at);
-    LightDesc desc = {.name = "cellar_glow",
-                      .type = LIGHT_POINT,
-                      .position = {at[0], at[1], at[2]},
-                      .color = {HALL_RED[0], HALL_RED[1], HALL_RED[2]},
-                      .intensity = 0.0f,
-                      .range = GLOW_REACH};
-    h->glow_light = create_light(&desc);
-    scene_add_light(scene, h->glow_light);
-}
-
-// The crack glow shown or not, its node on the graph only while it is.
-static void glow_shown(Haunt* h, bool shown) {
-    if (h->glow_node && h->house.scene)
-        kit_node_shown(h->house.scene->root_node, h->glow_node, shown);
-}
-
 // The house as it was before it began.
-static const HauntLive NORMAL = {1.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f};
+static const HauntLive NORMAL = {1.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f};
 
 void haunt_start(Haunt* h, const HauntHouse* house, unsigned int seed) {
     *h = (Haunt){.house = *house, .seed = seed, .shade_slot = -1, .bedside_slot = -1};
@@ -515,7 +398,6 @@ void haunt_start(Haunt* h, const HauntHouse* house, unsigned int seed) {
     } else if (engine && engine->postfx) {
         fprintf(stderr, "silent: the haunting's picture is not drained to red, its pass unbuilt\n");
     }
-    crack_glow(h);
     AudioSystem* audio = house->audio;
     if (!audio)
         return;
@@ -635,7 +517,6 @@ void haunt_end(Haunt* h) {
     if (!h->active)
         return;
     apply(h, &NORMAL);
-    glow_shown(h, false);
     house_supply(h, 1.0f);
     if (h->house.lights)
         lights_swing(h->house.lights, 0.0f, PENDANT_EASE);
@@ -656,12 +537,6 @@ void haunt_end(Haunt* h) {
     h->active = false;
     if (h->trace)
         printf("haunt end\n");
-}
-
-void haunt_free(Haunt* h) {
-    if (h->glow_node)
-        free_node(h->glow_node);
-    h->glow_node = NULL;
 }
 
 bool haunt_active(const Haunt* h) {
@@ -707,7 +582,6 @@ void haunt_step(Haunt* h, double time, const vec3 feet, const vec3 forward) {
         h->quiet = true;
         hush_door(h);
         drone_up(h, 0.0f);
-        glow_shown(h, false);
         if (h->house.lights)
             lights_swing(h->house.lights, 0.0f, PENDANT_CAUGHT);
         door_slam(cellar, 1.0f);
@@ -773,10 +647,6 @@ void haunt_frame(Haunt* h, double time) {
     const float up = glm_smoothstep(0.0f, 1.0f, (float)(back / RISE_SECONDS));
     const float on = SUPPLY_OUT + (1.0f - SUPPLY_OUT) * up;
     const float hall = on * failing(back, HALL_PERIOD, h->seed);
-    // The crack glow comes up with the red, and is gone the moment the cellar door is opened.
-    const Door* cellar = h->house.cellar;
-    const bool shut = cellar && cellar->travel <= 0.0f && cellar->want <= 0.0f;
-    const float glow = h->quiet || !shut ? 0.0f : up;
     h->live = (HauntLive){
         .hall = hall,
         .lamp = on * failing(back, LAMP_PERIOD, h->seed ^ 0x9e3779b9u),
@@ -785,9 +655,7 @@ void haunt_frame(Haunt* h, double time) {
         .mains = SUPPLY_OUT,
         // The bounce comes back with the hall's light, failing with it.
         .ambient = hall,
-        .glow = glow,
     };
-    glow_shown(h, glow > 0.0f);
     apply(h, &h->live);
     tint_tv(h, 1.0f, on);
     if (h->house.tv)

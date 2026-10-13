@@ -1817,7 +1817,6 @@ static void on_shutdown(Game* game) {
     hud_free(&g_hud);
     backpack_free(&g_backpack);
     fridge_map_free(&g_fridge_map);
-    haunt_free(&g_haunt);
     cat_free(&g_cat);
     player_free(&g_player);
     kit_surfaces_release(&g_surfaces);
