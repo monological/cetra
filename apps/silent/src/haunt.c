@@ -92,8 +92,12 @@ static const struct {
 // CELLAR_GAIN times its own light, swinging CELLAR_SWING times as hard as a draft swings it.
 #define CELLAR_GAIN  4.0f
 #define CELLAR_SWING 3.0f
-// The hall's pendant swings this far, radians, once it begins: pushed by nothing anyone can see.
-#define PENDANT_SWING 0.18f
+// The hall's pendant swings this far, radians, once it begins, pushed by nothing anyone can see,
+// and eases into it and out of it over PENDANT_EASE seconds; opening the cellar door catches it,
+// still in PENDANT_CAUGHT.
+#define PENDANT_SWING  0.18f
+#define PENDANT_EASE   2.5f
+#define PENDANT_CAUGHT 0.4f
 // The door beats wait to be watched for: the player in the front of the hall, short of WATCH_Z1
 // under the pendant, looking down it within the angle whose cosine is WATCH_COS, from WATCH_AFTER
 // seconds in, once the hall has come back red.
@@ -504,7 +508,7 @@ void haunt_begin(Haunt* h, double time, double into) {
         kitchen_fridge_run(h->house.fridge, false);
     house_supply(h, SUPPLY_OUT);
     if (h->house.lights)
-        h->house.lights->swing_want = PENDANT_SWING;
+        lights_swing(h->house.lights, PENDANT_SWING, PENDANT_EASE);
     drone_up(h, 0.0f);
     for (int i = 0; i < HAUNT_DRONE_TONES; i++)
         if (h->drone[i])
@@ -519,7 +523,7 @@ void haunt_end(Haunt* h) {
     apply(h, &NORMAL);
     house_supply(h, 1.0f);
     if (h->house.lights)
-        h->house.lights->swing_want = 0.0f;
+        lights_swing(h->house.lights, 0.0f, PENDANT_EASE);
     tint_tv(h, 0.0f, 1.0f);
     if (h->house.tv)
         tv_hiss(h->house.tv, 1.0f);
@@ -575,13 +579,15 @@ void haunt_step(Haunt* h, double time, const vec3 feet, const vec3 forward) {
     h->last_u = u;
 
     // The quiet: the player opening the cellar door -- the doors have just moved, so its want is
-    // the action key's -- stops it all dead, the tries and the drone, and the door is flung open
-    // and slams against its stop, on the stair's bulb lit red and swinging hard. Nothing at the
-    // door comes again.
+    // the action key's -- stops it all dead, the tries, the drone and the hall's pendant, and the
+    // door is flung open and slams against its stop, on the stair's bulb lit red and swinging
+    // hard. Nothing at the door comes again.
     if (cellar->want > 0.0f && !cellar->slam && !h->slamming) {
         h->quiet = true;
         hush_door(h);
         drone_up(h, 0.0f);
+        if (h->house.lights)
+            lights_swing(h->house.lights, 0.0f, PENDANT_CAUGHT);
         door_slam(cellar, 1.0f);
         h->slamming = true;
         Basement* b = h->house.basement;
