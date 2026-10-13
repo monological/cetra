@@ -2,6 +2,10 @@
 #define _SILENT_STORY_H_
 
 #include <stdbool.h>
+#include <cglm/cglm.h>
+
+#include "cetra/engine.h"
+#include "cetra/scene.h"
 
 #include "backpack.h"
 #include "door.h"
@@ -27,6 +31,8 @@ typedef enum StoryStage {
 // What the story takes hold of, borrowed; any may be NULL, and what it would do with it is not
 // done.
 typedef struct StoryHouse {
+    Engine* engine;
+    Scene* scene;
     AudioSystem* audio;
     Hud* hud;
     Backpack* backpack;
@@ -42,12 +48,21 @@ typedef struct Story {
     DoorTry try; // the player's try at a door that will not open, while it lasts
     Sound* slam; // the cellar door flung against its stop; NULL without audio
     bool slamming;
-    double last; // the sim time the last step reached
-    int tries;   // the tries so far, which choose each one's knob take
-    bool trace;  // say each turn of the story as it comes
+    SceneNode* key; // on the basement's workbench, and kept off the graph once it is taken
+    vec3 key_at;    // its middle, which the player reaches for
+    double last;    // the sim time the last step reached
+    int tries;      // the tries so far, which choose each one's knob take
+    bool trace;     // say each turn of the story as it comes
 } Story;
 
+// The story at its start, and the key lying on the basement's workbench.
 void story_start(Story* s, const StoryHouse* house);
+void story_free(Story* s);
+// The key on the workbench, or off it and kept: it is off it exactly while the backpack holds it.
+void story_key_on_bench(Story* s, bool on);
+// The front door's key, a heavy brass bit key along f's d and centred on its origin: `flat` lying
+// on its side on y, or standing on its edge, its bit up, about y.
+void story_key_model(Kit* kit, const KitFrame* f, float y, bool flat);
 // The action key on `door` at sim time `time`: true when the story took the press and the door
 // is to stay as it is, false when the door is the player's to open or shut.
 bool story_door(Story* s, Door* door, double time);

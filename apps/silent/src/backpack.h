@@ -22,7 +22,7 @@
  * arranges the bag, and it is never full.
  */
 
-typedef enum { ITEM_NONE = -1, ITEM_FLASHLIGHT, ITEM_TOWN_MAP, ITEM_COUNT } ItemId;
+typedef enum { ITEM_NONE = -1, ITEM_FLASHLIGHT, ITEM_TOWN_MAP, ITEM_KEY, ITEM_COUNT } ItemId;
 
 #define BAG_COLS     8
 #define BAG_MIN_ROWS 4

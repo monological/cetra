@@ -496,11 +496,13 @@ static void boxes(Kit* kit, KitRng* rng) {
     }
 }
 
+const KitFrame BASEMENT_BENCH = {{CELLAR_X1, BASEMENT_Y, 15.6f}, -0.5f * GLM_PIf};
+
 // A workbench on the east wall: a heavy top on four legs and a shelf under, a vise at its end, a
 // pegboard over it with the tools that were put back, and on it a jar of screws and an oil can.
 static void workbench(Kit* kit) {
-    const KitFrame f = {{CELLAR_X1, BASEMENT_Y, 15.6f}, -0.5f * GLM_PIf};
-    const float w = 1.8f, d = 0.6f, top = 0.9f, leg = 0.035f;
+    const KitFrame f = BASEMENT_BENCH;
+    const float w = 1.8f, d = 0.6f, top = BASEMENT_BENCH_TOP, leg = 0.035f;
     kit_frame_box(kit, &f, MAT_WOOD, 0.0f, w, top - 0.05f, top, 0.0f, d, false);
     for (int i = 0; i < 4; i++) {
         const float a = (i & 1) ? w - 0.06f : 0.06f, dd = (i & 2) ? d - 0.06f : 0.06f;

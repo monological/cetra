@@ -51,6 +51,11 @@ typedef struct Basement {
     bool at_foot; // the player has come down to the foot since last up in the hall
 } Basement;
 
+// The workbench on the basement's east wall: its frame, a along the wall from its north end and d
+// out from the wall, and the height of its top in it.
+extern const KitFrame BASEMENT_BENCH;
+#define BASEMENT_BENCH_TOP 0.9f
+
 // The foundation, the slab, the framing overhead, the beam and its posts, the stair and its
 // walls, what is kept down there and the damp standing on its floor, placed from `seed`, and the
 // bulb's rose on the ceiling.
