@@ -40,6 +40,8 @@ typedef struct Story {
     StoryStage stage;
     DoorTryTakes takes;
     DoorTry try; // the player's try at a door that will not open, while it lasts
+    Sound* slam; // the cellar door flung against its stop; NULL without audio
+    bool slamming;
     double last; // the sim time the last step reached
     int tries;   // the tries so far, which choose each one's knob take
     bool trace;  // say each turn of the story as it comes
