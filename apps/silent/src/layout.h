@@ -30,14 +30,22 @@
  *     +--------------------------------------------> x
  */
 
-#define FLOOR_Y  0.30f              // the house floor; the porch is level with it
-#define CEIL_Y   2.90f              // the ground storey's ceiling
-#define FLOOR2_Y 3.15f              // the upper floor; its boards and joists fill CEIL_Y..FLOOR2_Y
-#define CEIL2_Y  5.75f              // the upper storey's ceiling
-#define EAVE_Y   5.90f              // where the walls stop and the roof starts
-#define SLAB     0.12f              // a ceiling's thickness under a floor or the attic
-#define BASE_TOP (FLOOR_Y + 0.4f)   // the rubble base round the outside walls
-#define BOARDS_Y (BASE_TOP + 0.09f) // where the boards start, over the base's water table
+#define FLOOR_Y  0.30f // the house floor; the porch is level with it
+#define CEIL_Y   2.90f // the ground storey's ceiling
+#define FLOOR2_Y 3.15f // the upper floor; its boards and joists fill CEIL_Y..FLOOR2_Y
+#define CEIL2_Y  5.75f // the upper storey's ceiling
+#define EAVE_Y   5.90f // where the walls stop and the roof starts
+// The player's house stands HOME_RAISE taller in its ground storey than the plan above (spec
+// 13.52), and everything over that ceiling rises with it; the mansion keeps the plan's, which its
+// GI grid is fitted to.
+#define HOME_RAISE    0.5f
+#define HOME_CEIL_Y   (CEIL_Y + HOME_RAISE)
+#define HOME_FLOOR2_Y (FLOOR2_Y + HOME_RAISE)
+#define HOME_CEIL2_Y  (CEIL2_Y + HOME_RAISE)
+#define HOME_EAVE_Y   (EAVE_Y + HOME_RAISE)
+#define SLAB          0.12f              // a ceiling's thickness under a floor or the attic
+#define BASE_TOP      (FLOOR_Y + 0.4f)   // the rubble base round the outside walls
+#define BOARDS_Y      (BASE_TOP + 0.09f) // where the boards start, over the base's water table
 
 #define EXT_WALL 0.18f // exterior wall thickness
 #define INT_WALL 0.10f // interior
@@ -157,6 +165,7 @@
  * that the wind still drives the rain onto the window's lower half.
  */
 #define PENT_Y        3.3f // where it meets the wall
+#define HOME_PENT_Y   (PENT_Y + HOME_RAISE)
 #define PENT_PITCH    0.47f
 #define PENT_DEPTH    0.45f
 #define PORCH_ROOF_X1 0.9f

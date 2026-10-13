@@ -579,7 +579,7 @@ static void build_home_gi(void) {
     const float cell = g_args.gi_cell > 0.0f ? g_args.gi_cell : HOME_GI_CELL;
     const float under = cell * ceilf(-BASEMENT_Y / cell);
     build_spaced_gi("home", (vec3){HOUSE_X0 - 0.2f, -under, PORCH_Z0 - 0.2f},
-                    (vec3){HOUSE_X1 + 0.2f, CEIL_Y + 0.1f, HOUSE_BACK_Z + 0.2f}, cell);
+                    (vec3){HOUSE_X1 + 0.2f, HOME_CEIL_Y + 0.1f, HOUSE_BACK_Z + 0.2f}, cell);
 }
 
 // The cabin's (spec 13.41), over its one room and the porch, from its floor to its ridge.
@@ -666,30 +666,30 @@ static void build_probes(void) {
         {false,
          {2.48f, FLOOR_Y + 1.5f, 11.9f},
          {HALL_X1, FLOOR_Y, HOUSE_FRONT_Z + KIT_PANE_HALF},
-         {HOUSE_X1 - KIT_PANE_HALF, CEIL_Y, KITCHEN_BACK_Z}},
+         {HOUSE_X1 - KIT_PANE_HALF, HOME_CEIL_Y, KITCHEN_BACK_Z}},
         {false,
          {-0.75f, FLOOR_Y + 1.5f, 14.7f},
          {HALL_X0, FLOOR_Y, FRONT_DOOR_Z},
-         {HALL_X1, CEIL_Y, HOUSE_BACK_Z - KIT_PANE_HALF}},
+         {HALL_X1, HOME_CEIL_Y, HOUSE_BACK_Z - KIT_PANE_HALF}},
         {false,
          {-3.2f, FLOOR_Y + 1.5f, 13.3f},
          {HOUSE_X0 + KIT_PANE_HALF, FLOOR_Y, HOUSE_FRONT_Z + KIT_PANE_HALF},
-         {HALL_X0, CEIL_Y, HOME_SPLIT_Z}},
+         {HALL_X0, HOME_CEIL_Y, HOME_SPLIT_Z}},
         {false,
          {1.3f, FLOOR_Y + 1.4f, 15.2f},
          {HALL_X1, FLOOR_Y, KITCHEN_BACK_Z},
-         {BATH_X1, CEIL_Y, HOME_SPLIT_Z}},
+         {BATH_X1, HOME_CEIL_Y, HOME_SPLIT_Z}},
         {false,
          {1.8f, FLOOR_Y + 1.5f, 18.0f},
          {HALL_X1, FLOOR_Y, HOME_SPLIT_Z},
-         {HOUSE_X1 - KIT_PANE_HALF, CEIL_Y, HOUSE_BACK_Z - KIT_PANE_HALF}},
+         {HOUSE_X1 - KIT_PANE_HALF, HOME_CEIL_Y, HOUSE_BACK_Z - KIT_PANE_HALF}},
         // Its stairwell, from the basement's slab to the ceiling, and the basement under the
         // whole house (spec 13.31), which overlap only where the stairwell is under the floor.
         // The stairwell's probe is clear of the bulb hanging in it.
         {false,
          {-3.6f, 0.6f, 18.9f},
          {HOUSE_X0 + KIT_PANE_HALF, BASEMENT_Y, STAIRWELL_WALL_Z},
-         {HALL_X0, CEIL_Y, HOUSE_BACK_Z - KIT_PANE_HALF}},
+         {HALL_X0, HOME_CEIL_Y, HOUSE_BACK_Z - KIT_PANE_HALF}},
         {false,
          {-1.2f, BASEMENT_Y + 1.25f, 15.3f},
          {CELLAR_X0, BASEMENT_Y, CELLAR_Z0},

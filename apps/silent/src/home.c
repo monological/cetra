@@ -49,8 +49,8 @@
 #define EAVE_OVERHANG 0.4f
 #define RAKE_OVERHANG 0.3f
 
-#define UP_SILL (FLOOR2_Y + 0.85f)
-#define UP_HEAD (FLOOR2_Y + 2.0f)
+#define UP_SILL (HOME_FLOOR2_Y + 0.85f)
+#define UP_HEAD (HOME_FLOOR2_Y + 2.0f)
 
 // The cased opening across the hall, and the window at its far end.
 #define CASED_X0    (HALL_X0 + 0.25f)
@@ -74,11 +74,11 @@
 
 #define WIN(a0, a1, sill, head) {a0, a1, sill, head, KIT_ARCH_FLAT, 0.0f, false}
 #define DOORWAY(a0, a1, head)   {a0, a1, FLOOR_Y, head, KIT_ARCH_FLAT, 0.0f, true}
-#define OUTSIDE(along, at_, from_, to_, inner_)                                      \
-    .along_x = along, .at = at_, .from = from_, .to = to_, .y0 = 0.0f, .y1 = EAVE_Y, \
+#define OUTSIDE(along, at_, from_, to_, inner_)                                           \
+    .along_x = along, .at = at_, .from = from_, .to = to_, .y0 = 0.0f, .y1 = HOME_EAVE_Y, \
     .thick = EXT_WALL, .inner = inner_, .mat_inner = MAT_PLASTER, .mat_outer = MAT_SIDING
-#define INSIDE(along, at_, from_, to_, inner_, in, out)                                 \
-    .along_x = along, .at = at_, .from = from_, .to = to_, .y0 = FLOOR_Y, .y1 = CEIL_Y, \
+#define INSIDE(along, at_, from_, to_, inner_, in, out)                                      \
+    .along_x = along, .at = at_, .from = from_, .to = to_, .y0 = FLOOR_Y, .y1 = HOME_CEIL_Y, \
     .thick = INT_WALL, .inner = inner_, .mat_inner = in, .mat_outer = out
 
 typedef enum {
@@ -197,7 +197,7 @@ static const struct {
 };
 
 static float roof_y(float x) {
-    return EAVE_Y + (HOUSE_X1 + CORNER - fabsf(x)) * HOME_PITCH;
+    return HOME_EAVE_Y + (HOUSE_X1 + CORNER - fabsf(x)) * HOME_PITCH;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -290,7 +290,8 @@ static void outside_trim(Kit* kit) {
     const struct {
         int mat;
         float y0, y1, proud;
-    } BANDS[] = {{MAT_BRICK, 0.0f, 0.28f, 0.025f}, {MAT_TRIM, CEIL_Y, CEIL_Y + 0.18f, 0.03f}};
+    } BANDS[] = {{MAT_BRICK, 0.0f, 0.28f, 0.025f},
+                 {MAT_TRIM, HOME_CEIL_Y, HOME_CEIL_Y + 0.18f, 0.03f}};
     for (size_t b = 0; b < sizeof(BANDS) / sizeof(BANDS[0]); b++) {
         const float p = BANDS[b].proud, y0 = BANDS[b].y0, y1 = BANDS[b].y1;
         const int m = BANDS[b].mat;
@@ -305,16 +306,16 @@ static void outside_trim(Kit* kit) {
         for (int k = 0; k < 2; k++) {
             const float sx = i ? 1.0f : -1.0f, sz = k ? 1.0f : -1.0f;
             kit_frame_box(kit, w, MAT_TRIM, xs[i] - (sx > 0 ? c : 0.0f) - (sx < 0 ? p : 0.0f),
-                          xs[i] + (sx < 0 ? c : 0.0f) + (sx > 0 ? p : 0.0f), 0.28f, EAVE_Y,
+                          xs[i] + (sx < 0 ? c : 0.0f) + (sx > 0 ? p : 0.0f), 0.28f, HOME_EAVE_Y,
                           zs[k] + (sz > 0 ? 0.0f : -p), zs[k] + (sz > 0 ? p : 0.0f), false);
             kit_frame_box(kit, w, MAT_TRIM, xs[i] + (sx > 0 ? 0.0f : -p),
-                          xs[i] + (sx > 0 ? p : 0.0f), 0.28f, EAVE_Y, zs[k] - (sz > 0 ? c : 0.0f),
-                          zs[k] + (sz < 0 ? c : 0.0f), false);
+                          xs[i] + (sx > 0 ? p : 0.0f), 0.28f, HOME_EAVE_Y,
+                          zs[k] - (sz > 0 ? c : 0.0f), zs[k] + (sz < 0 ? c : 0.0f), false);
         }
     for (int s = -1; s <= 1; s += 2) {
         const float x = s < 0 ? x0 : x1;
-        kit_frame_box(kit, w, MAT_TRIM, x, x + (float)s * 0.03f, EAVE_Y - 0.25f, EAVE_Y, z0, z1,
-                      false);
+        kit_frame_box(kit, w, MAT_TRIM, x, x + (float)s * 0.03f, HOME_EAVE_Y - 0.25f, HOME_EAVE_Y,
+                      z0, z1, false);
     }
 }
 
@@ -348,12 +349,12 @@ static void floors(Kit* kit) {
         kit_frame_floor(kit, w, FLOORS[i].mat, FLOORS[i].x0, FLOORS[i].x1, 0.0f, FLOOR_Y,
                         FLOORS[i].z0, FLOORS[i].z1);
     }
-    kit_frame_box(kit, w, MAT_CEILING, HOUSE_X0, HOUSE_X1, CEIL_Y, CEIL_Y + SLAB, HOUSE_FRONT_Z,
-                  HOUSE_BACK_Z, false);
-    kit_frame_box(kit, w, MAT_WOOD_FLOOR, HOUSE_X0, HOUSE_X1, CEIL_Y + SLAB, FLOOR2_Y,
+    kit_frame_box(kit, w, MAT_CEILING, HOUSE_X0, HOUSE_X1, HOME_CEIL_Y, HOME_CEIL_Y + SLAB,
+                  HOUSE_FRONT_Z, HOUSE_BACK_Z, false);
+    kit_frame_box(kit, w, MAT_WOOD_FLOOR, HOUSE_X0, HOUSE_X1, HOME_CEIL_Y + SLAB, HOME_FLOOR2_Y,
                   HOUSE_FRONT_Z, HOUSE_BACK_Z, true);
-    kit_frame_box(kit, w, MAT_CEILING, HOUSE_X0, HOUSE_X1, CEIL2_Y, CEIL2_Y + SLAB, HOUSE_FRONT_Z,
-                  HOUSE_BACK_Z, false);
+    kit_frame_box(kit, w, MAT_CEILING, HOUSE_X0, HOUSE_X1, HOME_CEIL2_Y, HOME_CEIL2_Y + SLAB,
+                  HOUSE_FRONT_Z, HOUSE_BACK_Z, false);
 }
 
 // A roof slab under the plane y = y0 + gx x + gz z over the outline `xz` in plan: shingle on top
@@ -384,7 +385,7 @@ static void roof(Kit* kit) {
     // Each gable's apex a roof's thickness down, inside the slab, so no face of it lies in the
     // roof's plane.
     const float side = HOUSE_X1 + CORNER;
-    const vec2 gable[3] = {{-side, EAVE_Y}, {side, EAVE_Y}, {0.0f, ridge - ROOF_THICK}};
+    const vec2 gable[3] = {{-side, HOME_EAVE_Y}, {side, HOME_EAVE_Y}, {0.0f, ridge - ROOF_THICK}};
     const float gz[2] = {HOUSE_FRONT_Z, HOUSE_BACK_Z};
     for (int g = 0; g < 2; g++)
         kit_frame_extrude(kit, &KIT_WORLD, MAT_SIDING, gable, 3, gz[g] - CORNER, gz[g] + CORNER);
@@ -445,7 +446,7 @@ static void porch(Kit* kit) {
                   PORCH_Z0 - 0.6f, PORCH_Z0 - 0.3f, true);
 
     const float wall = HOUSE_FRONT_Z - CORNER;
-    const float y0 = PENT_Y - PENT_PITCH * wall; // the plane's height at z = 0
+    const float y0 = HOME_PENT_Y - PENT_PITCH * wall; // the plane's height at z = 0
     const float porch_edge = PORCH_Z0 - 0.1f, strip_edge = wall - PENT_DEPTH;
     const float x_start = PORCH_X0 - 0.15f, x_end = HOUSE_X1 + CORNER + 0.3f;
     const vec2 over[4] = {
@@ -516,13 +517,13 @@ static void dress(Kit* kit, const RoomSide* sides, int count, float x, float z, 
         const RoomSide* side = &sides[k];
         const KitWall* w = &WALLS[side->wall];
         Facade s = side->lining >= 0 ? line_wall(kit, w, side->lining, side->a0, side->a1, FLOOR_Y,
-                                                 CEIL_Y, x, z, NULL)
+                                                 HOME_CEIL_Y, x, z, NULL)
                                      : facade_toward(w, x, z);
         vec2 blocked[KIT_MAX_OPENINGS] = {{0.0f}}, spans[KIT_MAX_OPENINGS + 1];
         int nb = 0;
         for (int i = 0; i < w->opening_count; i++) {
             const KitOpening* o = &w->openings[i];
-            if (o->to < side->a0 || o->from > side->a1 || o->bottom > CEIL_Y)
+            if (o->to < side->a0 || o->from > side->a1 || o->bottom > HOME_CEIL_Y)
                 continue;
             ornament_casing(kit, &s, MAT_MOULDING, o);
             if (o->door)
@@ -539,14 +540,14 @@ static void dress(Kit* kit, const RoomSide* sides, int count, float x, float z, 
                        SKIRT_PROUD);
         if (crown) {
             const float f = s.face, o = s.out;
-            const vec2 cove[] = {{f, CEIL_Y - 0.12f},
-                                 {f + o * 0.012f, CEIL_Y - 0.115f},
-                                 {f + o * 0.02f, CEIL_Y - 0.09f},
-                                 {f + o * 0.045f, CEIL_Y - 0.05f},
-                                 {f + o * 0.08f, CEIL_Y - 0.025f},
-                                 {f + o * 0.095f, CEIL_Y - 0.012f},
-                                 {f + o * 0.1f, CEIL_Y},
-                                 {f, CEIL_Y}};
+            const vec2 cove[] = {{f, HOME_CEIL_Y - 0.12f},
+                                 {f + o * 0.012f, HOME_CEIL_Y - 0.115f},
+                                 {f + o * 0.02f, HOME_CEIL_Y - 0.09f},
+                                 {f + o * 0.045f, HOME_CEIL_Y - 0.05f},
+                                 {f + o * 0.08f, HOME_CEIL_Y - 0.025f},
+                                 {f + o * 0.095f, HOME_CEIL_Y - 0.012f},
+                                 {f + o * 0.1f, HOME_CEIL_Y},
+                                 {f, HOME_CEIL_Y}};
             kit_frame_run(kit, &s.f, MAT_MOULDING, cove, KIT_COUNT(cove), side->a0, side->a1);
         }
     }
@@ -607,12 +608,13 @@ static void finishes(Kit* kit) {
 void home_line_stairwell(Kit* kit, int mat, const KitOpening* foot) {
     const float x = 0.5f * (CELLAR_X0 + CELLAR_HEAD_X), z = 0.5f * (STAIRWELL_Z0 + CELLAR_Z1);
     const float hall = HALL_OUT_X0;
-    line_wall(kit, &WALLS[HW_BACK], mat, CELLAR_X0, hall, BASEMENT_Y, CEIL_Y, x, z, NULL);
-    line_wall(kit, &WALLS[HW_STAIRWELL], mat, CELLAR_X0, hall, BASEMENT_Y, CEIL_Y, x, z, foot);
-    line_wall(kit, &WALLS[HW_WEST], mat, STAIRWELL_Z0, CELLAR_Z1, BASEMENT_Y, CEIL_Y, x, z, NULL);
-    // The hall's wall only from the floor up: under it the stairwell's end is the basement's.
-    line_wall(kit, &WALLS[HW_HALL_W_STAIR], mat, STAIRWELL_Z0, CELLAR_Z1, FLOOR_Y, CEIL_Y, x, z,
+    line_wall(kit, &WALLS[HW_BACK], mat, CELLAR_X0, hall, BASEMENT_Y, HOME_CEIL_Y, x, z, NULL);
+    line_wall(kit, &WALLS[HW_STAIRWELL], mat, CELLAR_X0, hall, BASEMENT_Y, HOME_CEIL_Y, x, z, foot);
+    line_wall(kit, &WALLS[HW_WEST], mat, STAIRWELL_Z0, CELLAR_Z1, BASEMENT_Y, HOME_CEIL_Y, x, z,
               NULL);
+    // The hall's wall only from the floor up: under it the stairwell's end is the basement's.
+    line_wall(kit, &WALLS[HW_HALL_W_STAIR], mat, STAIRWELL_Z0, CELLAR_Z1, FLOOR_Y, HOME_CEIL_Y, x,
+              z, NULL);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1039,10 +1041,10 @@ static void bathroom(Kit* kit, Scene* scene) {
     cloth(kit, CLOTH_BATH_MAT);
 
     // The bulb, bare on a ceiling rose.
-    const float bx = 1.35f, bz = 15.0f, by = CEIL_Y - 0.12f;
+    const float bx = 1.35f, bz = 15.0f, by = HOME_CEIL_Y - 0.12f;
     const vec2 rose[] = {{0.0f, 0.0f},     {0.05f, 0.0f},    {0.045f, -0.02f},
                          {0.012f, -0.03f}, {0.012f, -0.07f}, {0.0f, -0.075f}};
-    kit_frame_lathe(kit, w, MAT_CERAMIC, bx, bz, CEIL_Y, rose, KIT_COUNT(rose), 12);
+    kit_frame_lathe(kit, w, MAT_CERAMIC, bx, bz, HOME_CEIL_Y, rose, KIT_COUNT(rose), 12);
     const vec2 glass[] = {{0.0f, 0.0f},    {0.012f, 0.004f}, {0.025f, 0.018f}, {0.03f, 0.035f},
                           {0.026f, 0.05f}, {0.014f, 0.062f}, {0.0f, 0.065f}};
     kit_frame_lathe(kit, w, MAT_BULB, bx, bz, by - 0.03f, glass, KIT_COUNT(glass), 14);

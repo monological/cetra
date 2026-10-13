@@ -509,8 +509,8 @@ static void stove_wall(Kit* kit, KitRng* rng) {
     // The hood: a canopy, a shoulder, and the duct to the ceiling.
     kit_frame_box(kit, &f, MAT_STEEL, s0 - 0.04f, s1 + 0.04f, 1.62f, 1.74f, 0.0f, 0.5f, false);
     kit_frame_box(kit, &f, MAT_STEEL, s0 + 0.1f, s1 - 0.1f, 1.74f, 1.86f, 0.0f, 0.36f, false);
-    kit_frame_box(kit, &f, MAT_STEEL, s0 + 0.22f, s1 - 0.22f, 1.86f, CEIL_Y - FLOOR_Y, 0.0f, 0.24f,
-                  false);
+    kit_frame_box(kit, &f, MAT_STEEL, s0 + 0.22f, s1 - 0.22f, 1.86f, HOME_CEIL_Y - FLOOR_Y, 0.0f,
+                  0.24f, false);
 
     // Tile behind the stove and on to the window wall.
     kit_frame_box(kit, &f, MAT_BACKSPLASH, fridge_w, start - KITCHEN_Z0, COUNTER_TOP, UPPER_Y0,

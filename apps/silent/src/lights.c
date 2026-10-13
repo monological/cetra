@@ -36,7 +36,8 @@ static const float TUBE_COLOUR[3] = {0.80f, 1.0f, 0.84f};
  * so the clock opposite the door reads from the doorway and the hall stays
  * dim. Warm, the way a filament is beside a fluorescent tube.
  */
-// Opposite the clock, short of the cased opening halfway down the hall.
+// Opposite the clock, short of the cased opening halfway down the hall, at the height it hung
+// before the ceiling rose (spec 13.52): the chain is the longer for it.
 static const vec3 BULB_AT = {-0.75f, CEIL_Y - 0.4f, 13.15f};
 #define BULB_CANDELA 30.0f
 
@@ -54,7 +55,7 @@ typedef struct Tube {
 // Over the room, over the window, and under the hood.
 static const Tube TUBES[] = {
     {"tube_ceiling",
-     {2.3f, CEIL_Y - 0.075f, 12.0f},
+     {2.3f, HOME_CEIL_Y - 0.075f, 12.0f},
      {1.0f, 0.0f, 0.0f},
      {0.0f, -1.0f, 0.0f},
      1.2f,
@@ -173,9 +174,9 @@ static void hall_bulb(Kit* kit, Scene* scene) {
     const float x = BULB_AT[0], y = BULB_AT[1], z = BULB_AT[2];
     const float top = y + 0.5f * LANTERN_H, bottom = y - 0.5f * LANTERN_H;
     const vec2 rose[] = {{0.0f, 0.0f}, {0.06f, 0.0f}, {0.05f, -0.02f}, {0.0f, -0.025f}};
-    kit_frame_lathe(kit, &KIT_WORLD, MAT_IRON, x, z, CEIL_Y, rose,
+    kit_frame_lathe(kit, &KIT_WORLD, MAT_IRON, x, z, HOME_CEIL_Y, rose,
                     (int)(sizeof(rose) / sizeof(rose[0])), 12);
-    kit_frame_pipe(kit, &KIT_WORLD, MAT_IRON, (vec3[]){{x, CEIL_Y, z}, {x, top + 0.09f, z}}, 2,
+    kit_frame_pipe(kit, &KIT_WORLD, MAT_IRON, (vec3[]){{x, HOME_CEIL_Y, z}, {x, top + 0.09f, z}}, 2,
                    0.006f, 6);
     const vec2 cap[] = {{0.0f, 0.0f}, {LANTERN_R + 0.03f, 0.0f}, {0.02f, 0.08f}, {0.0f, 0.09f}};
     kit_frame_lathe(kit, &KIT_WORLD, MAT_IRON, x, z, top, cap, (int)(sizeof(cap) / sizeof(cap[0])),
