@@ -151,12 +151,11 @@ bool hud_start(Hud* hud, Engine* engine) {
     // A line tall, words or none, with the label's own padding over and under it.
     ui_set_size(hud->prompt.label, UI_FIT, 0.0f, UI_FIXED,
                 ui_line_height(font, HUD_SIZE, 1.0f) + 8.0f);
-    hud->thought_age = THOUGHT_IN + THOUGHT_STAY + THOUGHT_OUT;
     // The save mark over the whole window, out of the column's flow, drawn in its corner.
     hud->save_mark = ui_panel(root);
     hud->save_mark->fill = true;
     ui_set_draw(hud->save_mark, save_mark_draw, hud);
-    hud->saved_age = SAVE_END;
+    hud_clear(hud);
     hud->candles = create_ui_draw_program("save_candles", candles_frag_shader_str);
     if (hud->candles)
         engine_add_program(engine, hud->candles);
@@ -195,8 +194,6 @@ void hud_clear(Hud* hud) {
     hud->hint_left = 0.0f;
     hud->saved_age = SAVE_END;
     hud->thought_age = THOUGHT_IN + THOUGHT_STAY + THOUGHT_OUT;
-    if (hud->ui)
-        line_set(&hud->thought, "");
 }
 
 void hud_update(Hud* hud, float dt, float height) {

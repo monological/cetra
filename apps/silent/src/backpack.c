@@ -206,7 +206,7 @@ static void unpack(Backpack* bp) {
         backpack_add(bp, CONTENTS[i]);
 }
 
-void backpack_build(Backpack* bp, Engine* engine, Scene* scene, bool taken) {
+void backpack_build(Backpack* bp, Engine* engine, Scene* scene) {
     *bp = (Backpack){.root = scene->root_node, .rows = BAG_MIN_ROWS};
     vec3 rest = {0.0f, 0.0f, 0.0f};
     bedroom_bed_top(rest);
@@ -237,8 +237,6 @@ void backpack_build(Backpack* bp, Engine* engine, Scene* scene, bool taken) {
     glm_rotate_y(bp->bag->original_transform, BAG_YAW, bp->bag->original_transform);
     glm_rotate_z(bp->bag->original_transform, BAG_ROLL, bp->bag->original_transform);
     kit_free_unused(finished, ITEM_COUNT + 1);
-    if (taken)
-        backpack_take(bp);
 }
 
 void backpack_take(Backpack* bp) {
@@ -246,19 +244,7 @@ void backpack_take(Backpack* bp) {
         return;
     bp->taken = true;
     unpack(bp);
-    // Kept rather than freed, so a world put back to its start (spec 13.50) lays it on the bed
-    // again.
-    node_remove_child(bp->root, bp->bag);
-}
-
-// Back on the bed, and nothing in the player's hands.
-static void put_back(Backpack* bp) {
-    if (!bp->taken)
-        return;
-    node_add_child(bp->root, bp->bag);
-    bp->taken = false;
-    bp->held_count = 0;
-    pack(bp);
+    kit_node_shown(bp->root, bp->bag, false);
 }
 
 bool backpack_add(Backpack* bp, ItemId item) {
@@ -277,12 +263,9 @@ bool backpack_holds(const Backpack* bp, ItemId item) {
 }
 
 void backpack_restore(Backpack* bp, bool taken, const ItemId* held, int count) {
-    put_back(bp);
-    if (!taken)
-        return;
-    // Taken as the player takes it, then holding what it is said to hold rather than what it came
-    // with.
-    backpack_take(bp);
+    // On the bed or not, then holding what it is said to hold rather than what it came with.
+    kit_node_shown(bp->root, bp->bag, !taken);
+    bp->taken = taken;
     bp->held_count = 0;
     for (int k = 0; k < count; k++)
         if (held[k] > ITEM_NONE && held[k] < ITEM_COUNT)
@@ -291,7 +274,7 @@ void backpack_restore(Backpack* bp, bool taken, const ItemId* held, int count) {
 }
 
 void backpack_free(Backpack* bp) {
-    // The bag off the graph once taken, and taken off it first when it is not.
+    // The bag is the backpack's wherever it lies.
     free_node(bp->bag);
     for (int i = 0; i < ITEM_COUNT; i++)
         free_node(bp->models[i]);

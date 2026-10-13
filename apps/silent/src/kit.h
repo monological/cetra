@@ -438,5 +438,8 @@ SceneNode* kit_finish(Kit* kit, const char* name);
 // The same node on no graph, for something drawn only on its own; its materials are registered
 // with the scene, which no draw walking past them would do, so the scene still frees them.
 SceneNode* kit_finish_alone(Kit* kit, const char* name);
+// `node` under `root` when `shown`, or off the graph and kept, for a thing taken that may be put
+// back (spec 13.50); the graph is not touched when it is already so.
+void kit_node_shown(SceneNode* root, SceneNode* node, bool shown);
 
 #endif // _SILENT_KIT_H_

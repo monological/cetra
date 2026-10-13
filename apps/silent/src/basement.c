@@ -637,8 +637,11 @@ static BulbState bulb_hanging(void) {
 
 void basement_start(Basement* b, Engine* engine, Scene* scene, AudioSystem* audio,
                     unsigned int seed) {
-    *b = (Basement){.drafted = -1.0, .seed = seed, .audio = audio};
-    basement_reset_drip(b);
+    *b = (Basement){.drafted = -1.0,
+                    .seed = seed,
+                    .audio = audio,
+                    .next_drip = DRIP_FIRST,
+                    .drips = {seed * 2246822519u + 77u}};
     if (audio) {
         b->drip = audio_sound_from_file(audio, DRIP_PATH, AUDIO_BUS_SFX);
         if (!b->drip)
@@ -666,11 +669,6 @@ void basement_start(Basement* b, Engine* engine, Scene* scene, AudioSystem* audi
     b->light = create_light(&desc);
     scene_add_light(scene, b->light);
     b->live = bulb_hanging();
-}
-
-void basement_reset_drip(Basement* b) {
-    b->next_drip = DRIP_FIRST;
-    b->drips = (KitRng){b->seed * 2246822519u + 77u};
 }
 
 // Every few seconds a drop from the tap into the water under it, never quite on a beat.
@@ -780,8 +778,11 @@ bool basement_hold(Basement* b, EntityManager* em, PhysicsWorld* physics, const 
     return false;
 }
 
-void basement_settle(Basement* b, const vec3 feet) {
+void basement_settle(Basement* b, const vec3 feet, double time) {
     b->at_foot = at_flight_foot(feet);
+    // The next drop as soon after `time` as the first was after the start, whichever way the clock
+    // was put.
+    b->next_drip = time + DRIP_FIRST;
 }
 
 void basement_rest(Basement* b, bool rest) {

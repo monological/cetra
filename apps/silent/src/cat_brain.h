@@ -32,6 +32,8 @@ typedef struct CatMind {
     int first;    // the activity to start once the cat is in the house, -1 to choose
     Game* game;
     const Player* player;
+    uint32_t seed;     // what the brain was made with, and is made with again on a renewal
+    const char* doing; // the activity it was told to start with, or NULL
     bool blind;
     float rain; // 0..1, how hard it rains
 
@@ -75,8 +77,9 @@ typedef struct CatMind {
 // names an activity to start with, or NULL to choose. False when there is no cat.
 bool cat_mind_create(CatMind* mind, Cat* cat, Game* game, const Player* player, uint32_t seed,
                      bool blind, const char* first);
-// Its brain gone from the cat's entity, so a mind can be made on it again (spec 13.50).
-void cat_mind_free(CatMind* mind);
+// Made again as cat_mind_create made it (spec 13.50): its random stream, its cooldowns and every
+// latch as they were, before a game is put over it. Nothing without a brain.
+void cat_mind_renew(CatMind* mind);
 
 // Its needs as they were just written over, held to their ranges, with the cat just put at a
 // place (spec 13.49): whatever it was doing is dropped and it chooses again, asleep already if it

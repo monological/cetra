@@ -18,14 +18,17 @@ typedef struct PauseMenu {
     UISystem* ui; // the HUD's, borrowed
     UIScreen* screen;
     UIElement* resume;
+    bool to_title; // Quit to Title chosen, and not yet taken
 } PauseMenu;
 
-// Its screen in `ui`, which may be NULL for none, opening `settings`, going back to the title by
-// `to_title` -- NULL leaves the item out -- and quitting `game`; nothing shown yet.
-void pause_menu_start(PauseMenu* pm, UISystem* ui, Game* game, SettingsMenu* settings,
-                      UIActionFn to_title);
+// Its screen in `ui`, which may be NULL for none, opening `settings`, offering Quit to Title on a
+// `titled` run, and quitting `game`; nothing shown yet.
+void pause_menu_start(PauseMenu* pm, UISystem* ui, Game* game, SettingsMenu* settings, bool titled);
 // Up over the game, on Resume.
 void pause_menu_show(PauseMenu* pm);
+// Whether Quit to Title was chosen, the menu taken down: true once for each choice. Until it is
+// taken the menu stays up, so the game under it stays frozen.
+bool pause_menu_take_to_title(PauseMenu* pm);
 // Whether it is up, on top or under the settings.
 bool pause_menu_up(const PauseMenu* pm);
 

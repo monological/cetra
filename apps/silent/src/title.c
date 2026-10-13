@@ -129,10 +129,9 @@ void title_start(Title* t, UISystem* ui, Game* game, SettingsMenu* settings) {
     memset(t, 0, sizeof(*t));
     t->ui = ui;
     t->rig = create_camera_rig();
-    if (t->rig) {
+    if (t->rig)
         camera_rig_set_pose(t->rig, TITLE_EYE, TITLE_TARGET);
-        engine_set_camera_rig(game->engine, t->rig);
-    }
+    title_view(t, game->engine);
     if (!ui)
         return;
 
@@ -165,6 +164,11 @@ void title_start(Title* t, UISystem* ui, Game* game, SettingsMenu* settings) {
     t->asked = hud_words(col, "", HUD_ROW_SIZE, HUD_ITEM_FG, 1.0f);
     t->no = hud_back_item(col, "No", HUD_ITEM_SIZE, ui);
     t->yes = hud_item(col, "Yes", HUD_ITEM_SIZE, on_yes, t);
+}
+
+void title_view(const Title* t, Engine* engine) {
+    if (t->rig)
+        engine_set_camera_rig(engine, t->rig);
 }
 
 bool title_show(Title* t) {

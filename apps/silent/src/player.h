@@ -60,8 +60,9 @@ void player_init(Player* p, Game* game, PhysicsWorld* physics, EntityManager* em
 void player_free(Player* p);
 
 // The body where its controller now stands, looking along its rig's yaw and pitch as just written
-// over (spec 13.49), still, its gait begun again. A crouch is not saved: it stands where there is
-// room over its head, and stays crouched where there is none until it walks out.
+// over (spec 13.49), still, its gait begun again, and the cursor not wanted until a click. A
+// crouch is not saved: it stands where there is room over its head, and stays crouched where there
+// is none until it walks out.
 void player_restore(Player* p);
 
 // Fixed step: turns the move actions into the capsule's velocity.

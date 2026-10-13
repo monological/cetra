@@ -55,10 +55,9 @@ typedef struct Backpack {
     int rows;                // the grid's, spare rows included
 } Backpack;
 
-// The bag on the bed, or nothing there when it is already `taken`, and the models of what is in
-// it.
-void backpack_build(Backpack* bp, Engine* engine, Scene* scene, bool taken);
-// Off the bed: the player has it, and what is in it.
+// The bag on the bed, and the models of what is in it.
+void backpack_build(Backpack* bp, Engine* engine, Scene* scene);
+// Off the bed, and kept: the player has it, and what is in it.
 void backpack_take(Backpack* bp);
 // `item` into the bag, packed with the rest: false, and nothing done, until the bag is taken or
 // when it already holds it.

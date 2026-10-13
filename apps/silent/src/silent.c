@@ -915,39 +915,6 @@ static void start_play(void) {
         settings_menu_show(&g_settings);
 }
 
-// Quit to Title, from the pause menu (spec 13.50): the game kept as it stands, then saved no more,
-// the menu down, and black while the world is put back.
-static void quit_to_title(UIElement* el, void* user) {
-    (void)el;
-    (void)user;
-    save_game_quit();
-    save_game_begin(NULL);
-    ui_pop(g_hud.ui);
-    g_run = RUN_RETURNING;
-}
-
-/*
- * The world put back as it was built (spec 13.50), for a game played from it again: the start kept
- * at load, over a cat whose mind is made afresh -- its random stream, its cooldowns and every
- * latch, none of which a save holds -- with what the screen and the player still had of the last
- * game let go.
- */
-static void reset_world(Game* game) {
-    if (g_mind.brain) {
-        cat_mind_free(&g_mind);
-        cat_mind_create(&g_mind, &g_cat, game, &g_player, g_args.cat_seed, g_args.cat_blind,
-                        g_args.cat_doing);
-    }
-    save_game_load(SAVE_GAME_START);
-    hud_clear(&g_hud);
-    basement_reset_drip(&g_basement);
-    // As at the start, a click takes the cursor.
-    g_player.cursor_wanted = false;
-    // Drawn where they were put while the game is held and no step moves their nodes: the doors,
-    // the cat.
-    sync_entity_transforms(game->entity_manager);
-}
-
 // The light held at rest while it is captured (spec 13.42), and put back after.
 static void rest_lights(bool rest, void* ctx) {
     (void)ctx;
@@ -1104,10 +1071,13 @@ static void on_init(Game* game) {
     load_seam(engine, "doors");
     // The backpack on the bedroom's bed (spec 13.40), and the town map on the fridge (spec 13.43),
     // unless the run starts with them.
-    backpack_build(&g_backpack, engine, g_scene, g_args.backpack);
-    fridge_map_build(&g_fridge_map, engine, g_scene, g_args.map);
+    backpack_build(&g_backpack, engine, g_scene);
+    fridge_map_build(&g_fridge_map, engine, g_scene);
+    if (g_args.backpack)
+        backpack_take(&g_backpack);
     if (g_args.map)
         backpack_add(&g_backpack, ITEM_TOWN_MAP);
+    fridge_map_on_door(&g_fridge_map, !backpack_holds(&g_backpack, ITEM_TOWN_MAP));
     // The map's print shows one seed's street, and another seed builds other houses.
     if ((unsigned int)g_args.seed != MAP_ART[MAP_TOWN].seed)
         fprintf(stderr, "silent: the town map shows seed %u's street, not seed %d's\n",
@@ -1306,8 +1276,8 @@ static void on_init(Game* game) {
         title_start(&g_title, g_hud.ui, game, &g_settings);
     else
         enter_game(engine, g_args.load, g_args.slot);
-    pause_menu_start(&g_pause, g_hud.ui, game, &g_settings,
-                     titled && save_game_keep_start() ? quit_to_title : NULL);
+    const bool can_return = titled && save_game_keep_start();
+    pause_menu_start(&g_pause, g_hud.ui, game, &g_settings, can_return);
 
     // Pinned at night: a meter would open the dark back up, which is the one
     // thing this place must not do. By day the meter maps what it reads to
@@ -1460,7 +1430,7 @@ static void take_map(void) {
             "I don't have anywhere to put this. Maybe I should find a backpack or something.");
         return;
     }
-    fridge_map_take(&g_fridge_map);
+    fridge_map_on_door(&g_fridge_map, false);
     hud_think(&g_hud, finds_any(&g_finds) ? "A map of the town. I'll mark what I've found on it."
                                           : "A map of the town. That'll come in handy.");
     hud_hint(&g_hud, MAP_HINT, HINT_SECONDS);
@@ -1529,7 +1499,7 @@ static void on_pre_render(Game* game, double alpha) {
                 reach_offer(&reach, g_doors[i].entity->position, &g_doors[i], NULL, NULL);
         if (!g_backpack.taken)
             reach_offer(&reach, g_backpack.at, NULL, take_backpack, "E   Take the backpack");
-        if (!g_fridge_map.taken)
+        if (!backpack_holds(&g_backpack, ITEM_TOWN_MAP))
             reach_offer(&reach, g_fridge_map.at, NULL, take_map, "E   Take the map");
     }
     if (input_action_pressed(&game->input, "interact")) {
@@ -1633,16 +1603,29 @@ static void on_pre_render(Game* game, double alpha) {
                 start_play();
             break;
         case RUN_PLAYING:
-            if (save_game_frame(feet, game->frame_clock.delta))
+            // Quit to Title (spec 13.50): the game kept as it stands, then saved no more, and black
+            // while the world is put back.
+            if (pause_menu_take_to_title(&g_pause)) {
+                save_game_quit();
+                save_game_begin(NULL);
+                g_run = RUN_RETURNING;
+            } else if (save_game_frame(feet, game->frame_clock.delta)) {
                 hud_saved(&g_hud);
+            }
             break;
         case RUN_RETURNING:
-            // At black, the world back to its start and the title's view in place of the player's,
-            // and the title up once the lighting round it is in.
+            // At black, the world back to the start kept at load and nothing on the screen, the
+            // title's view in place of the player's, and the title up once the lighting round it is
+            // in. A start that cannot be read would leave the played world under the title, so the
+            // game, already saved, ends instead.
             if (g_fade > 0.0f)
                 break;
-            reset_world(game);
-            engine_set_camera_rig(engine, g_title.rig);
+            if (!save_game_load_start()) {
+                game_quit(game);
+                break;
+            }
+            hud_clear(&g_hud);
+            title_view(&g_title, engine);
             g_run = RUN_LOADING;
             break;
     }
@@ -1755,11 +1738,10 @@ static void on_frame_input(Game* game) {
     map_screen_input(&g_map_screen, &in, &controls, (float)engine->render_delta);
     // Nobody moves before the game is played -- under the loading screen, at the title, or while
     // the chosen game comes up out of black -- nor while the pause menu is up, under which the
-    // world stands still as well. Asked again after the UI's pass, whose Quit to Title has just
-    // stopped the game.
-    const bool played = g_run == RUN_PLAYING, pause_up = pause_menu_up(&g_pause);
-    hold_game(game, !played ? HOLD_HELD : pause_up ? HOLD_FROZEN : HOLD_PLAYED);
-    input_set_suppressed(&game->input, !played || modal_up || ui_captures_input(g_hud.ui));
+    // world stands still as well.
+    const bool pause_up = pause_menu_up(&g_pause);
+    hold_game(game, !playing ? HOLD_HELD : pause_up ? HOLD_FROZEN : HOLD_PLAYED);
+    input_set_suppressed(&game->input, !playing || modal_up || ui_captures_input(g_hud.ui));
 }
 
 // Before the engine goes: the HUD draws through its overlay hook, and the backpack's models -- and
