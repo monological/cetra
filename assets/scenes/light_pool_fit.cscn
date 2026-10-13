@@ -1,0 +1,303 @@
+{
+ "version": 1,
+ "_comment": [
+  "16 lights round the eye: more index slots than a 16 KB pool holds, fewer than 64 KB (spec 13.51).",
+  "",
+  "Regenerate with: python3 assets/generators/gen_light_pool_fixture.py"
+ ],
+ "models": [
+  {
+   "path": "../models/lod_fixture.gltf"
+  }
+ ],
+ "lights": [
+  {
+   "name": "pool_00",
+   "type": "point",
+   "position": [
+    0.5,
+    3.0,
+    8.0
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_01",
+   "type": "point",
+   "position": [
+    0.46193976625564337,
+    3.0,
+    8.191341716182546
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_02",
+   "type": "point",
+   "position": [
+    0.3535533905932738,
+    3.0,
+    8.353553390593273
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_03",
+   "type": "point",
+   "position": [
+    0.19134171618254492,
+    3.0,
+    8.461939766255643
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_04",
+   "type": "point",
+   "position": [
+    3.061616997868383e-17,
+    3.0,
+    8.5
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_05",
+   "type": "point",
+   "position": [
+    -0.19134171618254486,
+    3.0,
+    8.461939766255643
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_06",
+   "type": "point",
+   "position": [
+    -0.35355339059327373,
+    3.0,
+    8.353553390593273
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_07",
+   "type": "point",
+   "position": [
+    -0.46193976625564337,
+    3.0,
+    8.191341716182546
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_08",
+   "type": "point",
+   "position": [
+    -0.5,
+    3.0,
+    8.0
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_09",
+   "type": "point",
+   "position": [
+    -0.4619397662556434,
+    3.0,
+    7.808658283817455
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_10",
+   "type": "point",
+   "position": [
+    -0.35355339059327384,
+    3.0,
+    7.646446609406726
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_11",
+   "type": "point",
+   "position": [
+    -0.19134171618254517,
+    3.0,
+    7.538060233744357
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_12",
+   "type": "point",
+   "position": [
+    -9.184850993605148e-17,
+    3.0,
+    7.5
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_13",
+   "type": "point",
+   "position": [
+    0.191341716182545,
+    3.0,
+    7.538060233744357
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_14",
+   "type": "point",
+   "position": [
+    0.3535533905932737,
+    3.0,
+    7.646446609406726
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_15",
+   "type": "point",
+   "position": [
+    0.46193976625564326,
+    3.0,
+    7.808658283817455
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  }
+ ],
+ "camera": {
+  "eye": [
+   0.0,
+   3.0,
+   8.0
+  ],
+  "target": [
+   0.0,
+   0.0,
+   0.0
+  ],
+  "fov": 50
+ },
+ "post": {
+  "exposure": 1.0
+ }
+}

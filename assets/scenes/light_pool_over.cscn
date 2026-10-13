@@ -1,0 +1,847 @@
+{
+ "version": 1,
+ "_comment": [
+  "48 lights round the eye: more index slots than the 64 KB pool holds (spec 13.51).",
+  "",
+  "Regenerate with: python3 assets/generators/gen_light_pool_fixture.py"
+ ],
+ "models": [
+  {
+   "path": "../models/lod_fixture.gltf"
+  }
+ ],
+ "lights": [
+  {
+   "name": "pool_00",
+   "type": "point",
+   "position": [
+    0.5,
+    3.0,
+    8.0
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_01",
+   "type": "point",
+   "position": [
+    0.4957224306869052,
+    3.0,
+    8.065263096110026
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_02",
+   "type": "point",
+   "position": [
+    0.48296291314453416,
+    3.0,
+    8.12940952255126
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_03",
+   "type": "point",
+   "position": [
+    0.46193976625564337,
+    3.0,
+    8.191341716182546
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_04",
+   "type": "point",
+   "position": [
+    0.43301270189221935,
+    3.0,
+    8.25
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_05",
+   "type": "point",
+   "position": [
+    0.3966766701456176,
+    3.0,
+    8.30438071450436
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_06",
+   "type": "point",
+   "position": [
+    0.3535533905932738,
+    3.0,
+    8.353553390593273
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_07",
+   "type": "point",
+   "position": [
+    0.30438071450436033,
+    3.0,
+    8.396676670145618
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_08",
+   "type": "point",
+   "position": [
+    0.25000000000000006,
+    3.0,
+    8.433012701892219
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_09",
+   "type": "point",
+   "position": [
+    0.19134171618254492,
+    3.0,
+    8.461939766255643
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_10",
+   "type": "point",
+   "position": [
+    0.12940952255126037,
+    3.0,
+    8.482962913144535
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_11",
+   "type": "point",
+   "position": [
+    0.06526309611002586,
+    3.0,
+    8.495722430686905
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_12",
+   "type": "point",
+   "position": [
+    3.061616997868383e-17,
+    3.0,
+    8.5
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_13",
+   "type": "point",
+   "position": [
+    -0.0652630961100258,
+    3.0,
+    8.495722430686905
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_14",
+   "type": "point",
+   "position": [
+    -0.12940952255126031,
+    3.0,
+    8.482962913144535
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_15",
+   "type": "point",
+   "position": [
+    -0.19134171618254475,
+    3.0,
+    8.461939766255643
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_16",
+   "type": "point",
+   "position": [
+    -0.24999999999999992,
+    3.0,
+    8.433012701892219
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_17",
+   "type": "point",
+   "position": [
+    -0.30438071450436033,
+    3.0,
+    8.396676670145618
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_18",
+   "type": "point",
+   "position": [
+    -0.35355339059327373,
+    3.0,
+    8.353553390593273
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_19",
+   "type": "point",
+   "position": [
+    -0.3966766701456175,
+    3.0,
+    8.30438071450436
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_20",
+   "type": "point",
+   "position": [
+    -0.43301270189221935,
+    3.0,
+    8.25
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_21",
+   "type": "point",
+   "position": [
+    -0.46193976625564337,
+    3.0,
+    8.191341716182546
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_22",
+   "type": "point",
+   "position": [
+    -0.4829629131445341,
+    3.0,
+    8.12940952255126
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_23",
+   "type": "point",
+   "position": [
+    -0.4957224306869052,
+    3.0,
+    8.065263096110026
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_24",
+   "type": "point",
+   "position": [
+    -0.5,
+    3.0,
+    8.0
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_25",
+   "type": "point",
+   "position": [
+    -0.4957224306869052,
+    3.0,
+    7.934736903889974
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_26",
+   "type": "point",
+   "position": [
+    -0.48296291314453416,
+    3.0,
+    7.870590477448739
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_27",
+   "type": "point",
+   "position": [
+    -0.4619397662556434,
+    3.0,
+    7.808658283817455
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_28",
+   "type": "point",
+   "position": [
+    -0.4330127018922194,
+    3.0,
+    7.75
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_29",
+   "type": "point",
+   "position": [
+    -0.3966766701456176,
+    3.0,
+    7.695619285495639
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_30",
+   "type": "point",
+   "position": [
+    -0.35355339059327395,
+    3.0,
+    7.646446609406726
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_31",
+   "type": "point",
+   "position": [
+    -0.30438071450436044,
+    3.0,
+    7.6033233298543825
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_32",
+   "type": "point",
+   "position": [
+    -0.2500000000000002,
+    3.0,
+    7.566987298107781
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_33",
+   "type": "point",
+   "position": [
+    -0.19134171618254475,
+    3.0,
+    7.538060233744357
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_34",
+   "type": "point",
+   "position": [
+    -0.12940952255126031,
+    3.0,
+    7.517037086855466
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_35",
+   "type": "point",
+   "position": [
+    -0.06526309611002581,
+    3.0,
+    7.5042775693130945
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_36",
+   "type": "point",
+   "position": [
+    -9.184850993605148e-17,
+    3.0,
+    7.5
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_37",
+   "type": "point",
+   "position": [
+    0.06526309611002563,
+    3.0,
+    7.5042775693130945
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_38",
+   "type": "point",
+   "position": [
+    0.12940952255126015,
+    3.0,
+    7.517037086855466
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_39",
+   "type": "point",
+   "position": [
+    0.19134171618254459,
+    3.0,
+    7.538060233744357
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_40",
+   "type": "point",
+   "position": [
+    0.25000000000000006,
+    3.0,
+    7.56698729810778
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_41",
+   "type": "point",
+   "position": [
+    0.30438071450435994,
+    3.0,
+    7.6033233298543825
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_42",
+   "type": "point",
+   "position": [
+    0.3535533905932737,
+    3.0,
+    7.646446609406726
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_43",
+   "type": "point",
+   "position": [
+    0.39667667014561747,
+    3.0,
+    7.695619285495639
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_44",
+   "type": "point",
+   "position": [
+    0.4330127018922192,
+    3.0,
+    7.75
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_45",
+   "type": "point",
+   "position": [
+    0.4619397662556434,
+    3.0,
+    7.808658283817455
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_46",
+   "type": "point",
+   "position": [
+    0.48296291314453405,
+    3.0,
+    7.870590477448739
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  },
+  {
+   "name": "pool_47",
+   "type": "point",
+   "position": [
+    0.4957224306869052,
+    3.0,
+    7.934736903889974
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 0.05,
+   "range": 40.0,
+   "cast_shadows": false
+  }
+ ],
+ "camera": {
+  "eye": [
+   0.0,
+   3.0,
+   8.0
+  ],
+  "target": [
+   0.0,
+   0.0,
+   0.0
+  ],
+  "fov": 50
+ },
+ "post": {
+  "exposure": 1.0
+ }
+}
