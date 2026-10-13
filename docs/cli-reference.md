@@ -1000,7 +1000,8 @@ the cat lives there. Everything of the Gothic house below is at the mansion's or
 Start) pauses, which frees it; WASD walks, Shift hurries, and the mouse or the arrow keys look.
 **F** (or pad Y) toggles the flashlight once it is found, **E** (or pad X) opens a door or takes
 what is in reach, **Tab** (or pad Back) opens the backpack, **M** (or pad RB) opens the town map
-once it is had, and **G** or backtick shows the debug GUI.
+once it is had, **K** (or a pad's right-stick click) begins and ends the haunting, and **G** or
+backtick shows the debug GUI.
 
 **The title, the saves and the pause menu** (specs 13.49 and 13.50).
 - **The title.** A windowed run comes up on it, over the street, with Continue (the newest game),
@@ -1084,6 +1085,24 @@ Shift asks to stand. The capsule is 1.15 m tall crouched, the eye 1.05 m up, the
 the bob half and the footsteps 6 dB softer. Standing waits until there is room over the head.
 - **`--crouch`:** starts crouched, as though C had been pressed, so a headless run can show the
   crouched eye.
+
+**The haunting** (spec 13.52). K (or a pad's right-stick click) begins it and ends it, for now.
+The power goes, every light in the house with it, and after a second and a half the hall, the
+floor lamp and the TV come back red. Its door beats wait until the player stands in the front of
+the hall looking down it:
+- an open cellar door slams;
+- 3 s on, the bathroom door creaks ajar, or shut if it stood open;
+- from 6 s, the cellar door is tried from the stair until the player comes within 2.2 m of it.
+
+Ending it puts the house back as it was; the doors stay where it moved them. Nothing of it is
+saved.
+- **`--haunt`:** begins it as the game is first played, and skips the title.
+- **`--haunt-at S`:** begins it S seconds in, the door beats as far in without waiting to be
+  watched for: past 3 the bathroom door stands where the creak left it, past 6 the tries are under
+  way.
+- **`--trace-haunt`:** prints each beat as it comes: when it was watched for, the slam, the creak,
+  each try with its turns of the knob and its shakes, the quiet.
+- **Headless:** with `--pad-script`, `rstick` on a frame presses K.
 
 **Capture:** `-x`, `-f <n>`, `-S <path>`, `--screenshot-every <n>`, and `-W`/`-H` for the window
 (default 1600x900).
