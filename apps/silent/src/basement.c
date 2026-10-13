@@ -637,11 +637,8 @@ static BulbState bulb_hanging(void) {
 
 void basement_start(Basement* b, Engine* engine, Scene* scene, AudioSystem* audio,
                     unsigned int seed) {
-    *b = (Basement){.drafted = -1.0,
-                    .seed = seed,
-                    .audio = audio,
-                    .next_drip = DRIP_FIRST,
-                    .drips = {seed * 2246822519u + 77u}};
+    *b = (Basement){.drafted = -1.0, .seed = seed, .audio = audio};
+    basement_reset_drip(b);
     if (audio) {
         b->drip = audio_sound_from_file(audio, DRIP_PATH, AUDIO_BUS_SFX);
         if (!b->drip)
@@ -669,6 +666,11 @@ void basement_start(Basement* b, Engine* engine, Scene* scene, AudioSystem* audi
     b->light = create_light(&desc);
     scene_add_light(scene, b->light);
     b->live = bulb_hanging();
+}
+
+void basement_reset_drip(Basement* b) {
+    b->next_drip = DRIP_FIRST;
+    b->drips = (KitRng){b->seed * 2246822519u + 77u};
 }
 
 // Every few seconds a drop from the tap into the water under it, never quite on a beat.

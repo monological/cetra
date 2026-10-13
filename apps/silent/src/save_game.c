@@ -158,6 +158,8 @@ static void apply(void) {
     backpack_restore(w->backpack, g_kept.bag, held, count);
     if (backpack_holds(w->backpack, ITEM_TOWN_MAP))
         fridge_map_take(w->fridge_map);
+    else
+        fridge_map_put_back(w->fridge_map);
     w->lights->flashlight_on =
         w->lights->flashlight_on && backpack_holds(w->backpack, ITEM_FLASHLIGHT);
     map_screen_restore(w->map_screen, g_kept.inked);
@@ -239,6 +241,17 @@ bool save_game_load(const char* slot) {
 bool save_game_delete(const char* slot) {
     char path[1024];
     return save_default_path(path, sizeof(path), slot) && remove(path) == 0;
+}
+
+bool save_game_keep_start(void) {
+    char path[1024];
+    if (!g_system || !save_default_path(path, sizeof(path), SAVE_GAME_START))
+        return false;
+    gather();
+    if (save_write(g_system, path))
+        return true;
+    fprintf(stderr, "silent: the world's start could not be kept; Quit to Title is off\n");
+    return false;
 }
 
 // ------------------------------------------------------------------------------- autosaves

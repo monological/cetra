@@ -616,6 +616,12 @@ bool cat_mind_create(CatMind* m, Cat* cat, Game* game, const Player* player, uin
     return true;
 }
 
+void cat_mind_free(CatMind* m) {
+    if (m->brain)
+        entity_remove_component(m->cat->entity, COMPONENT_BRAIN);
+    memset(m, 0, sizeof(*m));
+}
+
 void cat_mind_restore(CatMind* m) {
     if (!m->brain)
         return;

@@ -60,6 +60,8 @@ void basement_start(Basement* b, Engine* engine, Scene* scene, AudioSystem* audi
 // Per frame, before the frame draws: the swing, set going the first time `door` opens (NULL when
 // it was not hung), the dimming, and the drip.
 void basement_update(Basement* b, const Door* door, double time);
+// The drip as it starts, its first drop due early on a clock put back to the start (spec 13.50).
+void basement_reset_drip(Basement* b);
 
 /*
  * The basement is dark past the bulb's reach at the flight's foot, and nobody goes into it

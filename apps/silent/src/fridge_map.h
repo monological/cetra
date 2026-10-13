@@ -18,7 +18,9 @@
  */
 
 typedef struct FridgeMap {
-    SceneNode* node; // hanging on the freezer door; NULL once it is taken
+    bool taken;
+    SceneNode* node; // hanging on the freezer door, and kept off the graph once it is taken
+    SceneNode* root; // the scene's, which it hangs under
     vec3 at;         // the middle of its cover, which the player reaches for
 } FridgeMap;
 
@@ -26,6 +28,9 @@ typedef struct FridgeMap {
 void fridge_map_build(FridgeMap* fm, Engine* engine, Scene* scene, bool taken);
 // Off the door.
 void fridge_map_take(FridgeMap* fm);
+// Back on it, as the world was built (spec 13.50).
+void fridge_map_put_back(FridgeMap* fm);
+void fridge_map_free(FridgeMap* fm);
 // The magnet it hangs from, in the frame it hangs in; the magnet stays when it is taken.
 void fridge_map_magnet(Kit* kit, const KitFrame* f);
 

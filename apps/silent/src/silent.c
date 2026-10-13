@@ -315,9 +315,17 @@ static float g_play_capture_ms; // the capture budget once loaded
  * round the first view, comes up on the title over the street when it has one, goes black while
  * the game chosen there is put in place and the lighting round the player comes in, and is played.
  * A run with no title -- headless, or started from a state on the command line -- goes from
- * loading straight to playing.
+ * loading straight to playing. Quit to Title (spec 13.50) goes black, puts the world back to its
+ * start, and loads again round the title's view.
  */
-typedef enum { RUN_LOADING, RUN_TITLE, RUN_LEAVING, RUN_ENTERING, RUN_PLAYING } RunState;
+typedef enum {
+    RUN_LOADING,
+    RUN_TITLE,
+    RUN_LEAVING,
+    RUN_ENTERING,
+    RUN_PLAYING,
+    RUN_RETURNING
+} RunState;
 static RunState g_run;
 static Title g_title;
 static PauseMenu g_pause;
@@ -907,6 +915,39 @@ static void start_play(void) {
         settings_menu_show(&g_settings);
 }
 
+// Quit to Title, from the pause menu (spec 13.50): the game kept as it stands, then saved no more,
+// the menu down, and black while the world is put back.
+static void quit_to_title(UIElement* el, void* user) {
+    (void)el;
+    (void)user;
+    save_game_quit();
+    save_game_begin(NULL);
+    ui_pop(g_hud.ui);
+    g_run = RUN_RETURNING;
+}
+
+/*
+ * The world put back as it was built (spec 13.50), for a game played from it again: the start kept
+ * at load, over a cat whose mind is made afresh -- its random stream, its cooldowns and every
+ * latch, none of which a save holds -- with what the screen and the player still had of the last
+ * game let go.
+ */
+static void reset_world(Game* game) {
+    if (g_mind.brain) {
+        cat_mind_free(&g_mind);
+        cat_mind_create(&g_mind, &g_cat, game, &g_player, g_args.cat_seed, g_args.cat_blind,
+                        g_args.cat_doing);
+    }
+    save_game_load(SAVE_GAME_START);
+    hud_clear(&g_hud);
+    basement_reset_drip(&g_basement);
+    // As at the start, a click takes the cursor.
+    g_player.cursor_wanted = false;
+    // Drawn where they were put while the game is held and no step moves their nodes: the doors,
+    // the cat.
+    sync_entity_transforms(game->entity_manager);
+}
+
 // The light held at rest while it is captured (spec 13.42), and put back after.
 static void rest_lights(bool rest, void* ctx) {
     (void)ctx;
@@ -1255,14 +1296,18 @@ static void on_init(Game* game) {
     // rig, which is installed until the title's is.
     settings_menu_start(&g_settings, g_hud.ui, engine, game->audio);
     settings_menu_apply(&g_settings);
-    pause_menu_start(&g_pause, g_hud.ui, game, &g_settings);
     // The title, over the street, unless the run starts somewhere of its own -- headless, or
     // elsewhere on the command line -- and then it saves nowhere unless --slot says where. A run
-    // whose UI could not be made has no title to wait at.
-    if ((!engine->headless || g_args.title) && !starts_elsewhere(&g_args) && g_hud.ui)
+    // whose UI could not be made has no title to wait at. One with a title can go back to it, the
+    // world put back to how it stands now.
+    const bool titled =
+        (!engine->headless || g_args.title) && !starts_elsewhere(&g_args) && g_hud.ui;
+    if (titled)
         title_start(&g_title, g_hud.ui, game, &g_settings);
     else
         enter_game(engine, g_args.load, g_args.slot);
+    pause_menu_start(&g_pause, g_hud.ui, game, &g_settings,
+                     titled && save_game_keep_start() ? quit_to_title : NULL);
 
     // Pinned at night: a meter would open the dark back up, which is the one
     // thing this place must not do. By day the meter maps what it reads to
@@ -1484,7 +1529,7 @@ static void on_pre_render(Game* game, double alpha) {
                 reach_offer(&reach, g_doors[i].entity->position, &g_doors[i], NULL, NULL);
         if (!g_backpack.taken)
             reach_offer(&reach, g_backpack.at, NULL, take_backpack, "E   Take the backpack");
-        if (g_fridge_map.node)
+        if (!g_fridge_map.taken)
             reach_offer(&reach, g_fridge_map.at, NULL, take_map, "E   Take the map");
     }
     if (input_action_pressed(&game->input, "interact")) {
@@ -1555,13 +1600,14 @@ static void on_pre_render(Game* game, double alpha) {
         case RUN_LOADING:
             // Lit, the game is loaded and the screen is let go. It switches off once its ident has
             // played (spec 13.34), and what comes up waits for that: the title when the run has
-            // one, the game when it does not.
+            // one, the game when it does not. A return to the title loads here again, black.
             if (lit)
                 engine_hide_loading_screen(engine);
             if (lit && !screen) {
                 if (title_show(&g_title)) {
                     g_run = RUN_TITLE;
                     title_open_screen(&g_title, g_args.title_screen);
+                    g_args.title_screen = NULL;
                 } else {
                     start_play();
                 }
@@ -1589,6 +1635,15 @@ static void on_pre_render(Game* game, double alpha) {
         case RUN_PLAYING:
             if (save_game_frame(feet, game->frame_clock.delta))
                 hud_saved(&g_hud);
+            break;
+        case RUN_RETURNING:
+            // At black, the world back to its start and the title's view in place of the player's,
+            // and the title up once the lighting round it is in.
+            if (g_fade > 0.0f)
+                break;
+            reset_world(game);
+            engine_set_camera_rig(engine, g_title.rig);
+            g_run = RUN_LOADING;
             break;
     }
     capture_budget(engine);
@@ -1700,14 +1755,15 @@ static void on_frame_input(Game* game) {
     map_screen_input(&g_map_screen, &in, &controls, (float)engine->render_delta);
     // Nobody moves before the game is played -- under the loading screen, at the title, or while
     // the chosen game comes up out of black -- nor while the pause menu is up, under which the
-    // world stands still as well.
-    const bool pause_up = pause_menu_up(&g_pause);
-    hold_game(game, !playing ? HOLD_HELD : pause_up ? HOLD_FROZEN : HOLD_PLAYED);
-    input_set_suppressed(&game->input, !playing || modal_up || ui_captures_input(g_hud.ui));
+    // world stands still as well. Asked again after the UI's pass, whose Quit to Title has just
+    // stopped the game.
+    const bool played = g_run == RUN_PLAYING, pause_up = pause_menu_up(&g_pause);
+    hold_game(game, !played ? HOLD_HELD : pause_up ? HOLD_FROZEN : HOLD_PLAYED);
+    input_set_suppressed(&game->input, !played || modal_up || ui_captures_input(g_hud.ui));
 }
 
-// Before the engine goes: the HUD draws through its overlay hook, and the backpack's models are on
-// no graph the scene would free.
+// Before the engine goes: the HUD draws through its overlay hook, and the backpack's models -- and
+// the bag and the map once taken -- are on no graph the scene would free.
 static void on_shutdown(Game* game) {
     if (game && game->engine)
         profiler_report(game->engine->profiler);
@@ -1724,6 +1780,7 @@ static void on_shutdown(Game* game) {
     map_screen_free(&g_map_screen);
     hud_free(&g_hud);
     backpack_free(&g_backpack);
+    fridge_map_free(&g_fridge_map);
     cat_free(&g_cat);
     player_free(&g_player);
     kit_surfaces_release(&g_surfaces);
