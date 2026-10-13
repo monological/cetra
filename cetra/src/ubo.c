@@ -4,6 +4,33 @@
 
 #include "ext/log.h"
 
+static GLsizeiptr g_cluster_indices_block_size = UBO_CLUSTER_INDICES_BLOCK_MIN;
+
+GLint ubo_limits_init(void) {
+    GLint driver = 0;
+    glGetIntegerv(GL_MAX_UNIFORM_BLOCK_SIZE, &driver);
+    GLsizeiptr size = driver;
+    const char* lever = getenv("CETRA_UBO_LIMIT");
+    if (lever && *lever) {
+        const long cap = strtol(lever, NULL, 10);
+        if (cap > 0 && cap < size)
+            size = cap;
+    }
+    if (size > UBO_CLUSTER_INDICES_BLOCK_MAX)
+        size = UBO_CLUSTER_INDICES_BLOCK_MAX;
+    // Below the guaranteed size is a driver out of spec, or a lever set too low; the guaranteed
+    // size is still what every block here was built against.
+    if (size < UBO_CLUSTER_INDICES_BLOCK_MIN)
+        size = UBO_CLUSTER_INDICES_BLOCK_MIN;
+    // Whole std140 rows: the shader declares the pool as uvec4s.
+    g_cluster_indices_block_size = size & ~(GLsizeiptr)15;
+    return driver;
+}
+
+GLsizeiptr ubo_cluster_indices_block_size(void) {
+    return g_cluster_indices_block_size;
+}
+
 Ubo* create_ubo(GLsizeiptr size, GLuint binding) {
     Ubo* ubo = calloc(1, sizeof(Ubo));
     if (!ubo) {
@@ -82,7 +109,7 @@ bool ubo_wire_blocks(GLuint program_id) {
     ubo_wire_program_block(program_id, "ClusterBlock", UBO_BINDING_CLUSTERS,
                            UBO_CLUSTERS_BLOCK_SIZE);
     ubo_wire_program_block(program_id, "ClusterIndexBlock", UBO_BINDING_CLUSTER_INDICES,
-                           UBO_CLUSTER_INDICES_BLOCK_SIZE);
+                           ubo_cluster_indices_block_size());
     ubo_wire_program_block(program_id, "ViewParams", UBO_BINDING_VIEW, UBO_VIEW_BLOCK_SIZE);
     // The swash film's tips (spec 11.45). Declared by whatever includes shore.glsl -- the
     // water surface and any lit program that asked for shore wetness -- and stripped as
