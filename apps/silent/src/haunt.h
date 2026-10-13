@@ -83,9 +83,8 @@ typedef struct HauntNormal {
 
 // What the last frame drove the lights at: the hall's and the lamp's supply as a share of their
 // own, how far the hall has gone red, whether the night outside is gone, the share of its supply
-// every other light in the house gets, the share of its own the light from no lamp gets -- the
-// bounce and the reflections the house was captured in, and the sky's -- and how bright the glow
-// through the cellar door's cracks is, 0 for none.
+// every other light in the house gets, and the share of its own the light from no lamp gets -- the
+// bounce and the reflections the house was captured in, and the sky's.
 typedef struct HauntLive {
     float hall;
     float lamp;
@@ -93,7 +92,6 @@ typedef struct HauntLive {
     float dark_out;
     float mains;
     float ambient;
-    float glow;
 } HauntLive;
 
 typedef struct Haunt {
@@ -106,13 +104,7 @@ typedef struct Haunt {
     int bedside_slot;
     Light* street[HAUNT_STREET_LAMPS];
     int street_count;
-    PostFXPass* grade; // drains the picture to red; off while it is not haunted
-    // The glow through the cellar door's cracks: what is seen through them, on the graph only
-    // while it shows, its material, and the light it lays on the hall's floor. NULL without a
-    // cellar door.
-    SceneNode* glow_node;
-    Material* glow_mat;
-    Light* glow_light;
+    PostFXPass* grade;               // drains the picture to red; off while it is not haunted
     Sound* drone[HAUNT_DRONE_TONES]; // NULL without audio
     // What the doors sound like, each NULL without audio: the creak and the slam are
     // fire-and-forget, the knob and the rattle held, so the quiet can cut them dead.
@@ -140,8 +132,6 @@ typedef struct Haunt {
 // Takes hold of the house, and adds the picture's grade to the post chain, off; nothing happens
 // until it begins.
 void haunt_start(Haunt* h, const HauntHouse* house, unsigned int seed);
-// Frees what it made that the scene does not own: the crack glow's node.
-void haunt_free(Haunt* h);
 // Begins at sim time `time`; nothing when it already has. `into` above 0 begins it that many
 // seconds in, its door beats with it rather than waiting to be watched for.
 void haunt_begin(Haunt* h, double time, double into);
