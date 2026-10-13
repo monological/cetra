@@ -179,9 +179,6 @@ static void apply(void) {
     finds_settle(w->finds, feet);
     basement_settle(w->basement, feet, w->game->time);
     g_room = (int)room_at(feet);
-    // Drawn where they were put -- the doors, the cat -- while the game is held and no step moves
-    // their nodes.
-    sync_entity_transforms(w->game->entity_manager);
 }
 
 // ------------------------------------------------------------------------------- the slots
