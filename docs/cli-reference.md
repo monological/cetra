@@ -15,8 +15,8 @@ reason is recorded beside the flag rather than in whichever spec introduced it.
 - [apps/tree](#appstree) — its own flag set, and two defaults that read as bugs
 - [apps/forest](#appsforest) — instancing, LOD, culling, the island, erosion, streaming, origin
   shifting
-- [apps/silent](#appssilent) — the fog-street kitchen: framing, the look's A/B switches, and its
-  overcast day
+- [apps/silent](#appssilent) — the fog-street kitchen: the title, saves and pause menu, framing,
+  the look's A/B switches, and its overcast day
 - [The other apps](#the-other-apps-and-the-aa-mode-each-one-chose) — gametest, spores,
   shapes, pcb, and why splash is not in any of this
 
@@ -996,11 +996,44 @@ A grimy kitchen in a house on a foggy night street, walked in first person (spec
 13.25 the house is a plain two-storey clapboard one with a long P.T. hall, and the Gothic house
 stands at the end of the street, up a drive through dead trees. Its kitchen is a dining room, and
 the cat lives there. Everything of the Gothic house below is at the mansion's origin, (115, 8,
-40) added to its old coordinates. In the window: click to capture the mouse and Escape to release
-it; WASD walks, Shift hurries, and the mouse or the arrow keys look. **F** (or pad Y) toggles the
-flashlight once it is found, **E** (or pad X) opens a door or takes what is in reach, **Tab** (or
-pad Back) opens the backpack, **M** (or pad RB) opens the town map once it is had, and **G** or
-backtick shows the debug GUI.
+40) added to its old coordinates. In the window: click to capture the mouse, and **Escape** (or pad
+Start) pauses, which frees it; WASD walks, Shift hurries, and the mouse or the arrow keys look.
+**F** (or pad Y) toggles the flashlight once it is found, **E** (or pad X) opens a door or takes
+what is in reach, **Tab** (or pad Back) opens the backpack, **M** (or pad RB) opens the town map
+once it is had, and **G** or backtick shows the debug GUI.
+
+**The title, the saves and the pause menu** (specs 13.49 and 13.50).
+- **The title.** A windowed run comes up on it, over the street, with Continue (the newest game),
+  New Game, Load Game, Settings and Exit to Desktop. Load Game lists the games kept, newest first;
+  Delete asks about the one the list is on.
+- **The saves.** There are no manual saves: a game saves itself into its own slot, `silent-1` to
+  `silent-8`, when something is taken, a place is found, the player goes into another room (at most
+  every 10 s) and on quitting. The slots are JSON files in the per-user directory
+  (`~/Library/Application Support/cetra` on macOS); `CETRA_SETTINGS_DIR` puts them elsewhere.
+- **The pause menu.** Escape or pad Start opens it over the game, and everything stops under it,
+  the rain in the air included. It holds Resume, Settings, Quit to Title and Exit to Desktop;
+  Escape or pad B goes back.
+- **Quit to Title** saves the game, goes black, puts the world back as it was built and comes up on
+  the title. The world's start is kept at load in `silent-start.json` beside the slots, which no
+  list shows.
+- **Settings,** from either menu, holds Volume, Display (windowed, fullscreen, borderless), VSync,
+  Look speed, Invert look and Field of view. Each applies as it is changed, and they are kept in
+  `silent-settings.json` beside the slots. `--mute` and `--fov` win over the file.
+- **A run that starts somewhere of its own skips the title,** and saves nowhere unless `--slot`
+  says where. That is a headless run, or one started from a state on the command line: the flags
+  below, or the player, the bag, the map, the finds, the crouch, the cat's place or a pinned camera.
+  Such a run has no Quit to Title.
+
+The flags:
+- **`--load <slot>`:** starts from the game saved in `<slot>`.
+- **`--new-game`:** starts a new game, without the title.
+- **`--slot <slot>`:** saves this run into `<slot>` as it goes.
+- **`--no-autosave`:** a game from the title that never saves itself.
+- **`--title`:** the title headless too, for pictures and pad scripts.
+- **`--title-screen <s>`:** the title with `games` (the list) or `delete` (asking about the newest)
+  over it; it implies `--title`.
+- **`--pause-screen <s>`:** the pause menu (`menu`), or the settings over it (`settings`), up once
+  the game is played, for a headless picture of them.
 
 **The backpack** (spec 13.40). It lies on the bed in the home's back bedroom, the flashlight in it;
 until it is taken F finds nothing and the cellar flight's foot is as far as the player goes. Its
