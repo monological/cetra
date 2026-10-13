@@ -84,14 +84,9 @@ static const struct {
 #define KNOB_SHAKE    0.5f
 #define KNOB_VOLUME   4.0f
 #define RATTLE_VOLUME 5.0f
-// The quiet: once the door beats have begun, the player opening the cellar door stops everything
-// at it dead, and it flies open and slams against its stop; the stair's bulb comes on red, at
-// CELLAR_GAIN times its own light, swinging CELLAR_SWING times as hard as a draft swings it.
-#define CELLAR_GAIN  4.0f
-#define CELLAR_SWING 3.0f
 // The hall's pendant swings this far, radians, once it begins, pushed by nothing anyone can see,
-// and eases into it and out of it over PENDANT_EASE seconds; opening the cellar door catches it,
-// still in PENDANT_CAUGHT.
+// easing into it over PENDANT_EASE seconds; when it ends the pendant is caught, still in
+// PENDANT_CAUGHT.
 #define PENDANT_SWING  0.18f
 #define PENDANT_EASE   2.5f
 #define PENDANT_CAUGHT 0.4f
@@ -188,16 +183,12 @@ static void apply(Haunt* h, const HauntLive* s) {
 }
 
 // The lights the house's own modules drive, the kitchen's tubes and the cellar's bulb, on `share`
-// of their supply from now, in their own colour. Not part of apply: each rests itself.
+// of their supply from now. Not part of apply: each rests itself.
 static void house_supply(Haunt* h, float share) {
     if (h->house.lights)
         lights_set_mains(h->house.lights, share);
-    Basement* b = h->house.basement;
-    if (b) {
-        b->mains = share;
-        glm_vec3_one(b->tint);
-        b->gain = 1.0f;
-    }
+    if (h->house.basement)
+        h->house.basement->mains = share;
 }
 
 // The set's white `red` of the way to red, at `level` of its own brightness. Not part of apply: the
@@ -461,7 +452,6 @@ void haunt_begin(Haunt* h, double time, double into) {
     h->active = true;
     h->began = time - into;
     h->live = NORMAL;
-    h->quiet = false;
     h->slamming = false;
     // The door beats wait to be watched for -- unless this begins part-way in, when they are as far
     // in, and the doors stand where they would by then: the cellar door shut, and past the creak
@@ -505,7 +495,7 @@ void haunt_end(Haunt* h) {
     apply(h, &NORMAL);
     house_supply(h, 1.0f);
     if (h->house.lights)
-        lights_swing(h->house.lights, 0.0f, PENDANT_EASE);
+        lights_swing(h->house.lights, 0.0f, PENDANT_CAUGHT);
     tint_tv(h, 0.0f, 1.0f);
     if (h->house.tv)
         tv_hiss(h->house.tv, 1.0f);
@@ -539,8 +529,6 @@ void haunt_step(Haunt* h, double time, const vec3 feet, const vec3 forward) {
         if (h->trace)
             printf("haunt slam at %.3f\n", time - h->began);
     }
-    if (h->quiet)
-        return;
     if (!h->watched) {
         if (time - h->began < WATCH_AFTER || !watching(feet, forward))
             return;
@@ -559,30 +547,6 @@ void haunt_step(Haunt* h, double time, const vec3 feet, const vec3 forward) {
     }
     const double u = time - h->doors_at, was = h->last_u;
     h->last_u = u;
-
-    // The quiet: the player opening the cellar door -- the doors have just moved, so its want is
-    // the action key's -- stops it all dead, the tries, the drone and the hall's pendant, and the
-    // door is flung open and slams against its stop, on the stair's bulb lit red and swinging
-    // hard. Nothing at the door comes again.
-    if (cellar->want > 0.0f && !cellar->slam && !h->slamming) {
-        h->quiet = true;
-        hush_door(h);
-        drone_up(h, 0.0f);
-        if (h->house.lights)
-            lights_swing(h->house.lights, 0.0f, PENDANT_CAUGHT);
-        door_slam(cellar, 1.0f);
-        h->slamming = true;
-        Basement* b = h->house.basement;
-        if (b) {
-            b->mains = 1.0f;
-            glm_vec3_copy((float*)HALL_RED, b->tint);
-            b->gain = CELLAR_GAIN;
-            basement_swing(b, time, CELLAR_SWING);
-        }
-        if (h->trace)
-            printf("haunt flung open at %.3f\n", u);
-        return;
-    }
 
     Door* bath = h->house.bath;
     if (bath && was < CREAK_AT && CREAK_AT <= u) {
@@ -647,7 +611,7 @@ void haunt_frame(Haunt* h, double time) {
     if (h->house.tv)
         tv_hiss(h->house.tv, up);
     grade(h, 1.0f);
-    drone_up(h, h->quiet ? 0.0f : glm_smoothstep(0.0f, 1.0f, (float)(u / DRONE_RISE_SECONDS)));
+    drone_up(h, glm_smoothstep(0.0f, 1.0f, (float)(u / DRONE_RISE_SECONDS)));
 }
 
 void haunt_rest(Haunt* h, bool rest) {

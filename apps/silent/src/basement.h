@@ -18,15 +18,12 @@
  * home.h's.
  */
 
-// The bulb's light: where it hangs, its supply's level (1 is full), whether its cached shadow
-// follows it, a filter over its colour (white is its own) and how many times its own light it
-// gives.
+// The bulb's light: where it hangs, its supply's level (1 is full) and whether its cached shadow
+// follows it.
 typedef struct BulbState {
     vec3 at;
     float level;
     bool follow;
-    vec3 tint;
-    float gain;
 } BulbState;
 
 /*
@@ -39,14 +36,10 @@ typedef struct Basement {
     Material* glass; // its own, driven with the light
     Light* light;    // cached, its shadow following it while the swing is wide
     double drafted;  // when the door first opened, or -1 before
-    float gust;      // that draft's swing over the door's own: 1, or basement_swing's
     unsigned int seed;
-    // From the next update: the share of its supply the bulb gets, 1 by default, never quite 0 or
-    // the light leaves its cached shadow undrawn; a filter over its colour, white by default; and
-    // how many times its own light it gives, 1 by default. What the haunting (spec 13.52) drives.
+    // The share of its supply the bulb gets from the next update, 1 by default: what a power cut
+    // (spec 13.52) drives. Never quite 0 there, or the light leaves its cached shadow undrawn.
     float mains;
-    vec3 tint;
-    float gain;
     BulbState live; // as the last update left the light; hanging still on a full supply before
 
     AudioSystem* audio;
@@ -81,16 +74,12 @@ void basement_update(Basement* b, const Door* door, double time);
 bool basement_hold(Basement* b, EntityManager* em, PhysicsWorld* physics, const vec3 feet,
                    bool light);
 // Feet put somewhere rather than walked there (spec 13.49): already at the foot if they are there,
-// so arriving there is not what the next step thinks about; the clock put at `time`, which the
-// drip is timed again from (spec 13.50); and the draft's swing the door's own again.
+// so arriving there is not what the next step thinks about; and the clock put at `time`, which the
+// drip is timed again from (spec 13.50).
 void basement_settle(Basement* b, const vec3 feet, double time);
 
-// For the light's captures (spec 13.42): `rest` hangs the bulb straight on a full supply in its
-// own colour; false puts it back as the last update left it.
+// For the light's captures (spec 13.42): `rest` hangs the bulb straight on a full supply; false
+// puts it back as the last update left it.
 void basement_rest(Basement* b, bool rest);
-
-// The bulb set swinging from `time` as a draft does, `scale` times as wide and dying away `scale`
-// times as slowly (spec 13.52): what a door flung open does.
-void basement_swing(Basement* b, double time, float scale);
 
 #endif // _SILENT_BASEMENT_H_

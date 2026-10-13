@@ -9,6 +9,8 @@
 #define FRONT_PLAY  0.01f
 #define CELLAR_PLAY 0.004f
 #define TRY_VOLUME  1.2f
+// The flung cellar door against its stop, against the one-shots tools/fetch_sounds.py levels alike.
+#define SLAM_VOLUME 2.0f
 
 static void think(Story* s, const char* text) {
     if (s->house.hud)
@@ -55,10 +57,21 @@ static bool front_door(Story* s, Door* door, double time) {
 }
 
 // The cellar door: stuck until the haunting has begun, so nobody reaches the key down there
-// before it.
+// before it. Opened while the house is haunted, it ends the haunting first -- the lights, the
+// power and the colour back -- and then flies open and slams against its stop, on an ordinary
+// stair.
 static bool cellar_door(Story* s, Door* door, double time) {
-    const bool haunted = s->house.haunt && haunt_active(s->house.haunt);
-    if (haunted || s->stage != STORY_LOCKED || !door_shut(door))
+    if (s->house.haunt && haunt_active(s->house.haunt)) {
+        haunt_end(s->house.haunt);
+        door_slam(door, 1.0f);
+        s->slamming = true;
+        if (s->stage < STORY_OVER)
+            s->stage = STORY_OVER;
+        save_game_due();
+        say(s, "cellar door flung open, the haunting over", time);
+        return true;
+    }
+    if (s->stage != STORY_LOCKED || !door_shut(door))
         return false;
     try_door(s, door, time, false, CELLAR_PLAY);
     think(s, "It won't open. It's stuck.");
@@ -69,6 +82,9 @@ static bool cellar_door(Story* s, Door* door, double time) {
 void story_start(Story* s, const StoryHouse* house) {
     *s = (Story){.house = *house, .stage = STORY_LOCKED, .last = -1.0};
     door_try_takes_load(&s->takes, house->audio);
+    if (house->audio)
+        s->slam =
+            audio_sound_from_file(house->audio, "assets/audio/silent/door_slam.wav", AUDIO_BUS_SFX);
 }
 
 bool story_door(Story* s, Door* door, double time) {
@@ -85,4 +101,15 @@ void story_step(Story* s, double time) {
     const double was = s->last < 0.0 ? time : s->last;
     s->last = time;
     door_try_step(&s->try, &s->takes, was, time);
+    // The flung cellar door heard as it hits its stop.
+    Door* cellar = s->house.cellar;
+    if (s->slamming && cellar && !cellar->slam) {
+        s->slamming = false;
+        if (s->slam && s->house.audio && cellar->entity) {
+            AudioVoiceDesc d = {.volume = SLAM_VOLUME, .pitch = 1.0f};
+            glm_vec3_copy(cellar->entity->position, d.position);
+            audio_play_voice(s->house.audio, s->slam, &d);
+        }
+        say(s, "cellar door slammed", time);
+    }
 }

@@ -24,10 +24,10 @@
  * failing; the living room's lamp falters, the snow on the television goes red, and the picture is
  * drained to red. The clock stops, the fridge cuts out and the house goes quiet under a low drone;
  * the bathroom door creaks ajar -- or shut, if it stood open -- and the cellar door is tried hard
- * from the other side, on and on, until the player opens it: then everything at it stops dead, and
- * it flies open and slams on the stair's bulb, lit red and swinging.
+ * from the other side, on and on, until it is ended: the house's story ends it as the player opens
+ * that door (spec 13.53).
  *
- * One module with a beginning and an end, so a story can start it where a key does now. Every
+ * One module with a beginning and an end, which the house's story drives (story.h). Every
  * beat is a pure function of the seconds since it began and a seed, so a headless run shows the
  * same frame and plays the same sound every time; and nothing of it is saved -- the doors it moves
  * keep their own state, which is.
@@ -107,7 +107,7 @@ typedef struct Haunt {
     PostFXPass* grade;               // drains the picture to red; off while it is not haunted
     Sound* drone[HAUNT_DRONE_TONES]; // NULL without audio
     // What the doors sound like, each NULL without audio: the creak and the slam are
-    // fire-and-forget, the knob and the rattle held, so the quiet can cut them dead.
+    // fire-and-forget, the knob and the rattle held, so the end can cut them dead.
     Sound* creak;
     Sound* slam;
     Sound* knob[HAUNT_KNOB_TAKES];
@@ -117,12 +117,11 @@ typedef struct Haunt {
     double began; // the sim time it began at
     // The door beats wait for the player to watch for them, from the front of the hall down it:
     // whether they have, the sim time the beats began at then, and the seconds into them the last
-    // step reached, the beats since firing in the next. They stop for good once the player opens
-    // the cellar door (the quiet). The cellar door is being flung, shut or open.
+    // step reached, the beats since firing in the next. The cellar door, standing open when the
+    // beats begin, is slamming shut.
     bool watched;
     double doors_at;
     double last_u;
-    bool quiet;
     bool slamming;
     HauntNormal normal;
     HauntLive live;
@@ -139,8 +138,8 @@ void haunt_begin(Haunt* h, double time, double into);
 void haunt_end(Haunt* h);
 bool haunt_active(const Haunt* h);
 // Per fixed step at sim time `time`, after the doors have moved, the player's feet at `feet` and
-// looking along `forward`: whether they watch for the door beats yet, then the slam, the creak,
-// the tries, and the quiet.
+// looking along `forward`: whether they watch for the door beats yet, then the slam, the creak and
+// the tries.
 void haunt_step(Haunt* h, double time, const vec3 feet, const vec3 forward);
 // Per frame at sim time `time`: the lights, the windows, the set, the picture, the drone.
 void haunt_frame(Haunt* h, double time);

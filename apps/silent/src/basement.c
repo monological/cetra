@@ -632,18 +632,14 @@ static const vec3 PIVOT = {BULB_X, HOME_CEIL_Y - ROSE_DROP, BULB_Z};
 
 // The bulb at rest (spec 13.42): hanging straight down from its rose, on a full supply.
 static BulbState bulb_hanging(void) {
-    return (BulbState){
-        {PIVOT[0], PIVOT[1] - BULB_DROP, PIVOT[2]}, 1.0f, false, {1.0f, 1.0f, 1.0f}, 1.0f};
+    return (BulbState){{PIVOT[0], PIVOT[1] - BULB_DROP, PIVOT[2]}, 1.0f, false};
 }
 
 void basement_start(Basement* b, Engine* engine, Scene* scene, AudioSystem* audio,
                     unsigned int seed) {
     *b = (Basement){.drafted = -1.0,
-                    .gust = 1.0f,
                     .seed = seed,
                     .mains = 1.0f,
-                    .tint = {1.0f, 1.0f, 1.0f},
-                    .gain = 1.0f,
                     .audio = audio,
                     .next_drip = DRIP_FIRST,
                     .drips = {seed * 2246822519u + 77u}};
@@ -694,10 +690,8 @@ static void bulb_light(Basement* b, const BulbState* s) {
     b->light->shadow_follow = s->follow;
     vec3 colour = GLM_VEC3_ZERO_INIT;
     glm_vec3_lerp((float*)BULB_SAGGED, (float*)BULB_COLOUR, s->level, colour);
-    glm_vec3_mul(colour, (float*)s->tint, colour);
-    b->light->intensity = BULB_CANDELA * s->gain * s->level;
+    b->light->intensity = BULB_CANDELA * s->level;
     glm_vec3_copy(colour, b->light->color);
-    // The glass keeps its own nits whatever the gain, or it burns through the tone curve to white.
     b->glass->emissive_strength = BULB_NITS * s->level;
     glm_vec3_copy(colour, b->glass->emissive);
 }
@@ -713,12 +707,11 @@ static void bulb_update(Basement* b, const Door* door, double time) {
     float along = 0.0f, across = 0.0f, reach = 0.0f;
     if (b->drafted >= 0.0) {
         const float u = (float)(time - b->drafted), t = (float)time;
-        const float w = sqrtf(9.81f / BULB_DROP), fade = expf(-u / (DRAFT_DECAY * b->gust));
+        const float w = sqrtf(9.81f / BULB_DROP), fade = expf(-u / DRAFT_DECAY);
         const float sway = SWAY * glm_smoothstep(0.0f, 3.0f, u) * (0.65f + 0.35f * sinf(0.23f * t));
-        const float swing = DRAFT_SWING * b->gust * fade, side = DRAFT_SIDE * b->gust * fade;
-        along = -swing * sinf(w * u) + sway * sinf(w * t + 1.3f);
-        across = -side * sinf(w * u + 0.4f) + 0.5f * sway * sinf(w * t + 2.9f);
-        reach = swing * BULB_DROP;
+        along = -DRAFT_SWING * fade * sinf(w * u) + sway * sinf(w * t + 1.3f);
+        across = -DRAFT_SIDE * fade * sinf(w * u + 0.4f) + 0.5f * sway * sinf(w * t + 2.9f);
+        reach = DRAFT_SWING * fade * BULB_DROP;
     }
     mat4 m = GLM_MAT4_IDENTITY_INIT;
     glm_translate_make(m, (float*)PIVOT);
@@ -730,14 +723,7 @@ static void bulb_update(Basement* b, const Door* door, double time) {
     // The supply sags now and then, and the filament goes dim and orange with it; never out, or
     // the light would leave its cached shadow undrawn.
     b->live.level = lights_brownout(time, b->seed) * b->mains;
-    glm_vec3_copy(b->tint, b->live.tint);
-    b->live.gain = b->gain;
     bulb_light(b, &b->live);
-}
-
-void basement_swing(Basement* b, double time, float scale) {
-    b->drafted = time;
-    b->gust = scale;
 }
 
 void basement_update(Basement* b, const Door* door, double time) {
@@ -798,8 +784,6 @@ void basement_settle(Basement* b, const vec3 feet, double time) {
     // The next drop as soon after `time` as the first was after the start, whichever way the clock
     // was put.
     b->next_drip = time + DRIP_FIRST;
-    // A draft put back is the door's own, whatever swung the bulb before.
-    b->gust = 1.0f;
 }
 
 void basement_rest(Basement* b, bool rest) {
