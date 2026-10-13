@@ -48,10 +48,8 @@ static const float TUBE_COLOUR[3] = {0.80f, 1.0f, 0.84f};
 #define PENDANT_TOP   (HOME_CEIL_Y - PENDANT_ROSE - PENDANT_CHAIN - FIXTURE_CROWN_H) // the cage's
 static const vec3 PENDANT_PIVOT = {PENDANT_X, HOME_CEIL_Y - PENDANT_ROSE, PENDANT_Z};
 #define BULB_CANDELA 30.0f
-// Its swing eases toward what it is asked over SWING_EASE seconds, the long way round an
-// ellipse SWING_ACROSS as wide across as along, and the bulb's kept shadow follows it while it
-// carries the bulb further than SWING_FOLLOW.
-#define SWING_EASE   2.5f
+// Its swing goes round an ellipse SWING_ACROSS as wide across as along, and the bulb's kept shadow
+// follows it while it carries the bulb further than SWING_FOLLOW.
 #define SWING_ACROSS 0.3f
 #define SWING_FOLLOW 0.015f
 
@@ -250,7 +248,8 @@ static void pendant_light(Lights* lights, const vec3 at, bool follow) {
 static void pendant_update(Lights* lights, double time, float dt) {
     if (!lights->pendant)
         return;
-    lights->swing += (lights->swing_want - lights->swing) * (1.0f - expf(-dt / SWING_EASE));
+    const float ease = fmaxf(lights->swing_ease, 1e-3f);
+    lights->swing += (lights->swing_want - lights->swing) * (1.0f - expf(-dt / ease));
     const float drop = -lights->pendant_bulb, w = sqrtf(9.81f / drop), t = (float)time;
     mat4 m = GLM_MAT4_IDENTITY_INIT;
     glm_translate_make(m, (float*)PENDANT_PIVOT);
@@ -420,6 +419,11 @@ void lights_update(Lights* lights, Scene* scene, double time, float dt, const ve
 
 void lights_toggle_flashlight(Lights* lights) {
     lights->flashlight_on = !lights->flashlight_on;
+}
+
+void lights_swing(Lights* lights, float radians, float seconds) {
+    lights->swing_want = radians;
+    lights->swing_ease = seconds;
 }
 
 void lights_set_mains(Lights* lights, float mains) {

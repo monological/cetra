@@ -42,8 +42,8 @@ typedef struct Lights {
 
     // The hall's pendant (spec 13.52): its node, turned about its rose; the bulb's height under
     // the rose in it; its light, where the last update left it and whether its kept shadow
-    // followed; and its swing, radians, as it is now and as it is asked to be from the next
-    // update, 0 to hang still.
+    // followed; and its swing, radians, as it is now, as it is asked to be, and the seconds it
+    // eases over to get there (lights_swing).
     SceneNode* pendant;
     float pendant_bulb;
     Light* hall;
@@ -51,6 +51,7 @@ typedef struct Lights {
     bool hall_follows;
     float swing;
     float swing_want;
+    float swing_ease;
 } Lights;
 
 // The fixtures' bodies go into the kit; the strips and the flashlight straight
@@ -67,6 +68,10 @@ void lights_update(Lights* lights, Scene* scene, double time, float dt, const ve
                    const vec3 forward);
 
 void lights_toggle_flashlight(Lights* lights);
+
+// The hall's pendant swinging `radians` from the next update, easing there over about `seconds`;
+// 0 radians hangs it still (spec 13.52).
+void lights_swing(Lights* lights, float radians, float seconds);
 
 // The tubes on `mains` of their supply, their buzz with them, from now: what a power cut
 // (spec 13.52) drives. Never quite 0 there, or a tube's panel leaves its cached shadow undrawn.
