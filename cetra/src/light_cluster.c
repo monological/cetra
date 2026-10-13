@@ -32,11 +32,10 @@ LightClusterContext* create_light_cluster_context(void) {
         return NULL;
     }
     ctx->area_lights_enabled = true;
-    ctx->index_capacity = (uint32_t)ubo_cluster_indices_block_size();
     ctx->lights_ubo = create_ubo(UBO_LIGHTS_BLOCK_SIZE, UBO_BINDING_LIGHTS);
     ctx->clusters_ubo = create_ubo(UBO_CLUSTERS_BLOCK_SIZE, UBO_BINDING_CLUSTERS);
     ctx->cluster_indices_ubo =
-        create_ubo((GLsizeiptr)ctx->index_capacity, UBO_BINDING_CLUSTER_INDICES);
+        create_ubo(UBO_CLUSTER_INDICES_BLOCK_SIZE, UBO_BINDING_CLUSTER_INDICES);
     // Created here beside the other light blocks, but NOT uploaded here: it is
     // static per scene, so the per-frame path never touches it (ubo.h).
     ctx->ies_ubo = create_ubo(UBO_IES_BLOCK_SIZE, UBO_BINDING_IES);
@@ -525,7 +524,7 @@ static int _popcount8(uint8_t b) {
  *
  * Coverage is the number the fix follows from: a light touching every froxel is
  * one whose range wants bounding, and its radius says by how much. Counted off
- * the touch bitset the build already filled, on a path that runs once.
+ * the touch bitset the build already filled, on a path that runs only to warn.
  */
 static void _warn_index_overflow(const LightClusterContext* ctx, int starved, uint32_t dropped,
                                  uint32_t needed, bool capture) {
@@ -543,29 +542,30 @@ static void _warn_index_overflow(const LightClusterContext* ctx, int starved, ui
     }
 
     if (worst < 0) {
-        log_warn("Cluster index pool overflowed%s: needs %u of %u slots, %d of %d clusters "
+        log_warn("Cluster index pool overflowed%s: needs %u of %d slots, %d of %d clusters "
                  "starved, %u slots dropped",
-                 view, needed, ctx->index_capacity, starved, LC_CLUSTER_COUNT, dropped);
+                 view, needed, LC_MAX_CLUSTER_INDICES, starved, LC_CLUSTER_COUNT, dropped);
         return;
     }
 
     const char* name = ctx->packed[worst]->name ? ctx->packed[worst]->name : "unnamed";
-    log_warn("Cluster index pool overflowed%s: needs %u of %u slots, %d of %d clusters starved, "
+    log_warn("Cluster index pool overflowed%s: needs %u of %d slots, %d of %d clusters starved, "
              "%u slots dropped. Widest reach is light %d '%s', covering %d of %d clusters at "
              "radius %.0f -- bound its range",
-             view, needed, ctx->index_capacity, starved, LC_CLUSTER_COUNT, dropped, worst, name,
+             view, needed, LC_MAX_CLUSTER_INDICES, starved, LC_CLUSTER_COUNT, dropped, worst, name,
              worst_cover, LC_CLUSTER_COUNT, (double)ctx->packed_radius[worst]);
 }
 
 /*
- * Prefix-sum the counts into index-pool offsets, CLAMPING at the pool's capacity.
+ * Prefix-sum the counts into index-pool offsets, CLAMPING at the pool cap.
  *
- * The cluster the pool runs out in keeps whatever slots remain instead of
+ * The cluster the pool runs out in keeps whatever slots remain rather than
  * losing every light it had. Every cluster the walk reaches after it still gets
- * none: z-major, so on screen that is the rest of the slice's tile rows above a
- * hard horizontal line, and every deeper slice. Silent's hall drew exactly that
- * line across its far door at the old 16 KB pool (spec 13.51), which is why the
- * pool now takes the driver's limit and the warning fires per overflow.
+ * none, and the walk is z-major, so an overflow shows as a hard horizontal line
+ * on a tile row: the rest of that slice's rows above it, and every deeper slice,
+ * shade with no local light. It moves with the camera, which is what makes it
+ * read as a renderer fault rather than a budget spent, so the warning repeats
+ * while it lasts.
  *
  * Returns the live index count.
  */
@@ -576,7 +576,7 @@ static uint32_t _assign_index_offsets(LightClusterContext* ctx, bool capture) {
 
     for (int ci = 0; ci < LC_CLUSTER_COUNT; ci++) {
         uint32_t count = ctx->counts[ci];
-        const uint32_t room = ctx->index_capacity - total;
+        const uint32_t room = LC_MAX_CLUSTER_INDICES - total;
         if (count > room) {
             dropped += count - room;
             count = room;
@@ -587,14 +587,11 @@ static uint32_t _assign_index_offsets(LightClusterContext* ctx, bool capture) {
         total += count;
     }
 
-    if (starved) {
-        if (!ctx->index_overflowing[capture])
-            _warn_index_overflow(ctx, starved, dropped, total + dropped, capture);
-        ctx->index_overflowing[capture] = true;
-        ctx->index_fit_builds[capture] = 0;
-    } else if (ctx->index_overflowing[capture] &&
-               ++ctx->index_fit_builds[capture] >= LC_OVERFLOW_REARM) {
-        ctx->index_overflowing[capture] = false;
+    if (starved && ctx->index_warn_cooldown[capture] == 0) {
+        _warn_index_overflow(ctx, starved, dropped, total + dropped, capture);
+        ctx->index_warn_cooldown[capture] = LC_OVERFLOW_REPEAT;
+    } else if (ctx->index_warn_cooldown[capture] > 0) {
+        ctx->index_warn_cooldown[capture]--;
     }
     return total;
 }

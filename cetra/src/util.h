@@ -18,6 +18,8 @@ void check_gl_error(const char* where);
 GLint get_gl_max_texture_image_units(void);
 GLint get_gl_max_array_texture_layers(void);
 GLint get_gl_max_texture_size(void);
+// Bytes in one uniform block (GL 4.1 min 16384; the M1 Max reports 65536)
+GLint get_gl_max_uniform_block_size(void);
 
 // Fullscreen NDC quad (loc0 vec3 position, loc1 vec2 uv, GL_TRIANGLE_STRIP).
 // The caller owns and deletes the returned VAO/VBO.

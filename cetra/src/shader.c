@@ -5,7 +5,6 @@
 
 #include "ext/log.h"
 #include "shader.h"
-#include "ubo.h"
 #include "util.h"
 
 // The include/ chunks, unexpanded, by name. The only file that reads them.
@@ -348,15 +347,7 @@ Shader* create_shader(ShaderType type, const char* source) {
     shader->type = type;
     // Every source, whoever built it: an engine shader was expanded at build time and has no
     // #include line left, so for it this is a copy, and an app's or a scene file's resolves here.
-    char* expanded = _source_with_includes(source);
-    // And every source takes the light index pool's size (spec 13.51), since an app's shader can
-    // reach lights_ubo.glsl through an include as well as the engine's can. Inert where nothing
-    // declares the pool.
-    char rows[64];
-    snprintf(rows, sizeof(rows), "#define CETRA_CLUSTER_INDEX_ROWS %ld",
-             (long)(ubo_cluster_indices_block_size() / 16));
-    shader->source = expanded ? shader_source_with_defines(expanded, rows) : NULL;
-    free(expanded);
+    shader->source = _source_with_includes(source);
     if (!shader->source) {
         free(shader);
         return NULL;

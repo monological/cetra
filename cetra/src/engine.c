@@ -592,11 +592,19 @@ static int _setup_engine_glfw(Engine* engine, EngineWindowMode window_mode, cons
     if (engine->max_texture_image_units <= IBL_SKYBOX_TEXTURE_UNIT)
         log_error("GL reports only %d fragment texture units; the renderer needs %d",
                   engine->max_texture_image_units, IBL_SKYBOX_TEXTURE_UNIT + 1);
-    // Before any program is built or the light cluster context is made: both size the light
-    // index pool from it.
-    const GLint uniform_block_limit = ubo_limits_init();
-    log_info("Uniform blocks: driver allows %d bytes; light index pool %ld slots",
-             uniform_block_limit, (long)ubo_cluster_indices_block_size());
+    // Refused here rather than left to the link: every lit program declares the light index
+    // pool, and a driver too small for it fails each one with a block-size error that says nothing
+    // of why.
+    const GLint uniform_block_bytes = get_gl_max_uniform_block_size();
+    log_info("GL uniform blocks: %d bytes", uniform_block_bytes);
+    if (uniform_block_bytes < UBO_CLUSTER_INDICES_BLOCK_SIZE) {
+        log_error("GL allows %d-byte uniform blocks; the light index pool needs %d",
+                  uniform_block_bytes, UBO_CLUSTER_INDICES_BLOCK_SIZE);
+        glfwDestroyWindow(engine->window);
+        engine->window = NULL;
+        glfwTerminate();
+        return -1;
+    }
 
     // Into the requested mode BEFORE the sizes are read, so what lands below is
     // the size the window will actually render at rather than the windowed one
