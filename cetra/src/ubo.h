@@ -40,11 +40,14 @@
 // std140 byte sizes of the engine's blocks, asserted against the C mirror
 // structs (light_cluster.h) and validated against the driver's
 // GL_UNIFORM_BLOCK_DATA_SIZE by ubo_validate_program_block. None over the
-// GL 4.1 guaranteed GL_MAX_UNIFORM_BLOCK_SIZE minimum of 16384; the index pool
-// is exactly that.
-#define UBO_LIGHTS_BLOCK_SIZE          15072
-#define UBO_CLUSTERS_BLOCK_SIZE        12288
-#define UBO_CLUSTER_INDICES_BLOCK_SIZE 16384
+// GL 4.1 guaranteed GL_MAX_UNIFORM_BLOCK_SIZE minimum of 16384 -- except the
+// light index pool, which takes what the driver allows (spec 13.51).
+#define UBO_LIGHTS_BLOCK_SIZE   15072
+#define UBO_CLUSTERS_BLOCK_SIZE 12288
+// The light index pool's bounds: the guaranteed size, and the most it is ever given. The size in
+// use is ubo_cluster_indices_block_size().
+#define UBO_CLUSTER_INDICES_BLOCK_MIN 16384
+#define UBO_CLUSTER_INDICES_BLOCK_MAX 65536
 // Four floats, rounded up to std140's 16-byte block granularity.
 #define UBO_VIEW_BLOCK_SIZE 16
 
@@ -284,5 +287,25 @@ bool ubo_wire_program_block(GLuint program_id, const char* block_name, GLuint bi
 // uniform block. Eight hand-maintained upload sites is how a ninth pass gets
 // added silently wrong.
 bool ubo_wire_blocks(GLuint program_id);
+
+/*
+ * The light index pool's size, read once from the context (spec 13.51).
+ *
+ * GL 4.1 guarantees a uniform block 16 KB, and a pool held to that ran out in silent's hall once
+ * nine lights stood within a few metres of it: every froxel past the point it ran dry shaded with
+ * no local light, a hard line across the frame. Drivers commonly allow 64 KB (Apple's GL on Metal
+ * does), so the pool takes what the driver reports, at most UBO_CLUSTER_INDICES_BLOCK_MAX and at
+ * least the guaranteed size.
+ *
+ * Process-wide because the two readers -- the shader splice in create_shader and the block check
+ * in ubo_wire_blocks -- have no engine in hand, and a process has one context. CETRA_UBO_LIMIT
+ * (bytes) caps what the driver reports, which is how the 16 KB path is reached on a driver that
+ * allows more.
+ *
+ * Init runs after the context exists and before any program is built or any light cluster context
+ * is made; it returns the driver's own figure. Before it, the size is the guaranteed one.
+ */
+GLint ubo_limits_init(void);
+GLsizeiptr ubo_cluster_indices_block_size(void);
 
 #endif // _UBO_H_

@@ -18,6 +18,7 @@
 #include "shader_hook.h"
 #include "shadow.h"
 #include "texture.h"
+#include "ubo.h"
 #include "wind.h"
 
 // A texture slot by what it holds; the key refused when a texture cannot say what that is.
@@ -96,6 +97,9 @@ static void _fold_scene(CookKey* key, Engine* engine, Scene* scene) {
         const char* text = (const char*)glGetString(strings[s]);
         cook_key_str(key, text ? text : "");
     }
+    // And so is how many light indices it holds: a probe face that overflows a 16 KB pool and
+    // fits a 64 KB one is lit differently, and CETRA_UBO_LIMIT moves it on one driver.
+    cook_key_u64(key, (uint64_t)ubo_cluster_indices_block_size());
     config_snapshot_fold(engine, scene, key);
     const Rain* rain = scene->rain;
     cook_key_bool(key, rain != NULL);

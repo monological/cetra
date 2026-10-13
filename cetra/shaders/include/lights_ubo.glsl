@@ -65,8 +65,15 @@ layout(std140) uniform ClusterBlock {
     uvec4 clusters[768]; // 3072 words: (index-pool offset << 12) | count
 };
 
+// The pool's rows come from the driver's uniform block limit (spec 13.51), spliced into every
+// source by create_shader. Unspliced, it is GL 4.1's guaranteed 16 KB.
+#ifndef CETRA_CLUSTER_INDEX_ROWS
+#define CETRA_CLUSTER_INDEX_ROWS 1024
+#endif
+
 layout(std140) uniform ClusterIndexBlock {
-    uvec4 lightIndices[1024]; // 16384 8-bit light indices, four per uint, lowest byte first
+    // 16 8-bit light indices a row, four per uint, lowest byte first
+    uvec4 lightIndices[CETRA_CLUSTER_INDEX_ROWS];
 };
 
 // IES photometric profiles (spec 11.57). Its own block rather than room in

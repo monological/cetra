@@ -26,16 +26,22 @@ struct Light;
 //   slice(z) = floor(log2(z) * sliceScale + sliceBias)
 //   z(s)     = near * pow(far/near, s / LC_CLUSTER_Z)
 
-#define LC_CLUSTER_X           16
-#define LC_CLUSTER_Y           8
-#define LC_CLUSTER_Z           24
-#define LC_CLUSTER_COUNT       (LC_CLUSTER_X * LC_CLUSTER_Y * LC_CLUSTER_Z)
-#define LC_MAX_DIR_LIGHTS      4
-#define LC_MAX_CLUSTER_LIGHTS  128
-#define LC_MAX_CLUSTER_INDICES 16384
+#define LC_CLUSTER_X          16
+#define LC_CLUSTER_Y          8
+#define LC_CLUSTER_Z          24
+#define LC_CLUSTER_COUNT      (LC_CLUSTER_X * LC_CLUSTER_Y * LC_CLUSTER_Z)
+#define LC_MAX_DIR_LIGHTS     4
+#define LC_MAX_CLUSTER_LIGHTS 128
+// The index pool's storage: the most a driver's uniform block limit can give it, one byte a slot.
+// The slots in use are LightClusterContext.index_capacity (spec 13.51).
+#define LC_MAX_CLUSTER_INDICES UBO_CLUSTER_INDICES_BLOCK_MAX
 // A cluster's grid word is (index-pool offset << this) | light count, which
 // lights_ubo.glsl's clusterLightList unpacks with the same split.
 #define LC_GRID_COUNT_BITS 12
+// Builds of one kind the pool must fit for before its next overflow warns again: an overflow
+// warns once as it starts rather than every frame it lasts, and a view at the edge of one comes
+// and goes as the camera moves.
+#define LC_OVERFLOW_REARM 120
 
 // C mirrors of the std140 blocks (lights_ubo.glsl). Every member is a 16-byte
 // row (float[4] / int32_t[4]) or packs to whole rows, so the C layout equals
@@ -91,10 +97,11 @@ typedef struct GpuClusterBlock {
 
 typedef struct GpuClusterIndexBlock {
     // Four 8-bit light indices per uint32 on the GPU; a byte array IS that
-    // layout (index 4k = lowest byte). A byte and not a halfword because the
-    // pool is a UBO held to GL 4.1's guaranteed 16 KB, where the halfword pool
-    // held 6144 -- an average of two lights per froxel, which three lights
-    // around the camera spent on their own. It caps the light count at 256.
+    // layout (index 4k = lowest byte). A byte and not a halfword because a
+    // halfword pool held to GL 4.1's guaranteed 16 KB held 6144 -- an average of
+    // two lights per froxel, which three lights around the camera spent on their
+    // own. It caps the light count at 256. Only the first index_capacity bytes
+    // are the GPU's block; the rest is room for a driver that allows more.
     uint8_t indices[LC_MAX_CLUSTER_INDICES];
 } GpuClusterIndexBlock;
 
@@ -179,8 +186,8 @@ _Static_assert(sizeof(GpuDecalBlock) == UBO_DECALS_BLOCK_SIZE,
 _Static_assert(LC_CLUSTER_COUNT % 2 == 0, "the decal mask packs two froxels per word");
 _Static_assert(sizeof(GpuClusterBlock) == UBO_CLUSTERS_BLOCK_SIZE,
                "GpuClusterBlock must match the std140 ClusterBlock layout");
-_Static_assert(sizeof(GpuClusterIndexBlock) == UBO_CLUSTER_INDICES_BLOCK_SIZE,
-               "GpuClusterIndexBlock must match the std140 ClusterIndexBlock layout");
+_Static_assert(sizeof(GpuClusterIndexBlock) == UBO_CLUSTER_INDICES_BLOCK_MAX,
+               "GpuClusterIndexBlock must hold the largest ClusterIndexBlock a driver is given");
 _Static_assert(LC_MAX_CLUSTER_LIGHTS <= 256, "a cluster light index is one byte");
 _Static_assert(LC_MAX_CLUSTER_LIGHTS % 4 == 0, "the specular array packs four lights to a row");
 _Static_assert(LC_MAX_CLUSTER_INDICES <= (1u << (32 - LC_GRID_COUNT_BITS)),
@@ -233,6 +240,7 @@ typedef struct LightClusterContext {
     GpuDecalBlock decals;
     GpuClusterBlock grid;
     GpuClusterIndexBlock index_pool;
+    uint32_t index_capacity; // the pool's slots in use: the driver's block limit, 16384..65536
     LightClusterRange ranges[LC_MAX_CLUSTER_LIGHTS];
     // View-space bounding sphere per packed light (xyz center, w radius) for the
     // per-cluster AABB refinement in the fill
@@ -266,7 +274,12 @@ typedef struct LightClusterContext {
     // is the VIEW's, and a sweep of capture faces at load would otherwise spend the
     // only warning before the camera ever overflowed.
     bool warned_packed_overflow[2];
-    bool warned_index_overflow[2];
+    // The index pool's overflow, per kind as above, by EPISODE: one warns as it starts, and ends
+    // once the pool has fit for LC_OVERFLOW_REARM builds. Warned once a session, an overflow
+    // during load -- before the scene's lights have their ranges -- spent the only warning, and
+    // one that came later, when a room gained lights, was never reported.
+    bool index_overflowing[2];
+    uint32_t index_fit_builds[2];
     bool logged_first_build;
     bool area_lights_enabled; // false = LIGHT_AREA lights are skipped at gather
 } LightClusterContext;
