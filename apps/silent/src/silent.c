@@ -82,6 +82,7 @@
 #include "save_game.h"
 #include "settings_menu.h"
 #include "sounds.h"
+#include "story.h"
 #include "street.h"
 #include "study.h"
 #include "terrace.h"
@@ -279,6 +280,7 @@ static Tv g_tv;
 static Clock g_clock;
 static Fridge g_fridge;
 static Haunt g_haunt;
+static Story g_story;
 static Lake g_lake;
 static RainBed g_rain_bed;
 static Sounds g_sounds;
@@ -1255,6 +1257,16 @@ static void on_init(Game* game) {
                               .lamp_heads = kit.materials[MAT_LAMP_GLOW]},
                 (unsigned int)g_args.seed * 2654435761u + 13u);
     g_haunt.trace = g_args.trace_haunt;
+    // The house's story (spec 13.53): its front door locked, the key in the basement.
+    story_start(
+        &g_story,
+        &(StoryHouse){.audio = audio,
+                      .hud = &g_hud,
+                      .backpack = &g_backpack,
+                      .haunt = &g_haunt,
+                      .front = g_door_hung[DOOR_HOME] ? &g_doors[DOOR_HOME] : NULL,
+                      .cellar = g_door_hung[DOOR_BASEMENT] ? &g_doors[DOOR_BASEMENT] : NULL});
+    g_story.trace = g_args.trace_haunt;
 
     const vec3 dir = {look[0] - feet[0], look[1] - eye_y, look[2] - feet[2]};
     player_init(&g_player, game, physics, em, feet, atan2f(dir[0], dir[2]),
@@ -1364,6 +1376,8 @@ static void on_update(Game* game, double dt) {
     if (game->engine->camera_rig)
         camera_rig_direction(game->engine->camera_rig, forward);
     haunt_step(&g_haunt, game->time, feet, forward);
+    // The player's try at a door the story keeps shut (spec 13.53).
+    story_step(&g_story, game->time);
     if (g_args.trace_cat) {
         static int step;
         if (step++ % 30 == 0) {
@@ -1539,7 +1553,7 @@ static void on_pre_render(Game* game, double alpha) {
     if (input_action_pressed(&game->input, "interact")) {
         if (reach.take)
             reach.take();
-        else if (reach.door)
+        else if (reach.door && !story_door(&g_story, reach.door, game->time))
             door_toggle(reach.door);
     }
     // What is drawn over the game eases by the frame, as the head turns, and what only looks

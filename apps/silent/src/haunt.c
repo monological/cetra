@@ -8,7 +8,7 @@
 #include "cetra/shader_params.h"
 
 #include "basement.h"
-#include "door_takes.h"
+#include "door_try.h"
 #include "haunt.h"
 #include "kit.h"
 #include "layout.h"
@@ -293,21 +293,6 @@ static Try rattle_try(double u, unsigned int seed) {
     }
 }
 
-// The leaf off its stop around a hit `d` seconds from it: pulled out over the 50 ms before, the
-// latch hitting the strike, and let fall back over the 90 ms after.
-static float hit_pull(double d) {
-    return d < 0.0 ? glm_smoothstep(-0.05f, 0.0f, (float)d)
-                   : 1.0f - glm_smoothstep(0.0f, 0.09f, (float)d);
-}
-
-// The largest pull of `take`'s hits, started at `at`, at `u`, each as strong as its hit.
-static float take_pull(const DoorTake* take, double at, double u) {
-    float pull = 0.0f;
-    for (int i = 0; i < take->hits; i++)
-        pull = fmaxf(pull, take->strength[i] * hit_pull(u - (at + (double)take->at[i])));
-    return pull;
-}
-
 // How hard the tries come at `u` seconds into the rattle: harder over its first RATTLE_GROW.
 static float rattle_force(double u) {
     return glm_lerp(RATTLE_FORCE0, RATTLE_FORCE1,
@@ -319,9 +304,10 @@ static float rattle_jolt(const Haunt* h, double u) {
     const Try t = rattle_try(u, h->seed);
     float pull = 0.0f;
     for (int i = 0; i < t.turns; i++)
-        pull = fmaxf(pull, KNOB_SHAKE * take_pull(&DOOR_KNOB[t.knob[i]], t.at + t.turn_at[i], u));
+        pull =
+            fmaxf(pull, KNOB_SHAKE * door_take_pull(&DOOR_KNOB[t.knob[i]], t.at + t.turn_at[i], u));
     for (int j = 0; j < t.shakes; j++)
-        pull = fmaxf(pull, take_pull(&DOOR_RATTLE[0], t.at + shake_at(j), u));
+        pull = fmaxf(pull, door_take_pull(&DOOR_RATTLE[0], t.at + shake_at(j), u));
     const Door* door = h->house.cellar;
     const float width = door->shape.to - door->shape.from;
     return RATTLE_PLAY / width * rattle_force(u) * pull;

@@ -765,7 +765,7 @@ static float least_reach(const SceneNode* node, const vec3 toward, float* yaw) {
 /*
  * The console in the hall's back half, against the bathroom's wall past its door: a narrow
  * table with a drawer, and on it a wooden radio, the plant in its pot, an ashtray with a stub
- * in it, keys, and a photograph in a frame.
+ * in it, and a photograph in a frame.
  */
 static void console(Kit* kit, Engine* engine, Scene* scene) {
     const KitFrame f = {{HALL_X1 - 0.5f * INT_WALL, FLOOR_Y, 16.0f}, -0.5f * GLM_PIf};
@@ -793,23 +793,14 @@ static void console(Kit* kit, Engine* engine, Scene* scene) {
                            (vec3){-0.165f + 0.06f * (float)k, top + 0.05f, 0.2f},
                            (vec3){0.0f, 0.0f, 1.0f}, knob, KIT_COUNT(knob), 8);
 
-    // The ashtray and its stub, the keys, and the photograph on a little easel back.
+    // The ashtray and its stub, and the photograph on a little easel back. No keys: the one key in
+    // the house is in the basement (spec 13.53).
     const vec2 tray[] = {{0.0f, 0.0f},    {0.05f, 0.0f},    {0.055f, 0.02f},
                          {0.05f, 0.022f}, {0.045f, 0.008f}, {0.0f, 0.008f}};
     kit_frame_lathe(kit, &f, MAT_CERAMIC, 0.02f, 0.2f, top, tray, KIT_COUNT(tray), 12);
     kit_frame_lathe_on(
         kit, &f, MAT_PAPER, (vec3){0.0f, top + 0.014f, 0.2f}, (vec3){1.0f, 0.1f, 0.3f},
         (vec2[]){{0.0f, 0.0f}, {0.004f, 0.0f}, {0.004f, 0.035f}, {0.0f, 0.035f}}, 4, 6);
-    enum { RING = 11 };
-    vec3 ring[RING] = {{0.0f}};
-    for (int i = 0; i < RING; i++) {
-        const float t = 6.2831853f * (float)i / (float)(RING - 1);
-        glm_vec3_copy((vec3){0.12f + 0.016f * cosf(t), top + 0.003f, 0.09f + 0.016f * sinf(t)},
-                      ring[i]);
-    }
-    kit_frame_pipe(kit, &f, MAT_BRASS, ring, RING, 0.0018f, 5);
-    kit_frame_box(kit, &f, MAT_BRASS, 0.136f, 0.19f, top, top + 0.003f, 0.085f, 0.097f, false);
-    kit_frame_box(kit, &f, MAT_STEEL, 0.13f, 0.18f, top, top + 0.003f, 0.104f, 0.114f, false);
     const KitFrame stand = {{0.0f, 0.0f, 0.0f}, f.yaw - 0.25f};
     KitFrame photo = stand;
     kit_frame_point(&f, 0.36f, top, 0.1f, photo.origin);
