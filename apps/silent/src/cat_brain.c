@@ -586,6 +586,8 @@ bool cat_mind_create(CatMind* m, Cat* cat, Game* game, const Player* player, uin
     m->cat = cat;
     m->game = game;
     m->player = player;
+    m->seed = seed;
+    m->doing = first;
     m->blind = blind;
     m->energy = 0.55f;
     m->affinity = 0.5f;
@@ -616,10 +618,12 @@ bool cat_mind_create(CatMind* m, Cat* cat, Game* game, const Player* player, uin
     return true;
 }
 
-void cat_mind_free(CatMind* m) {
-    if (m->brain)
-        entity_remove_component(m->cat->entity, COMPONENT_BRAIN);
-    memset(m, 0, sizeof(*m));
+void cat_mind_renew(CatMind* m) {
+    if (!m->brain)
+        return;
+    const CatMind was = *m;
+    entity_remove_component(was.cat->entity, COMPONENT_BRAIN);
+    cat_mind_create(m, was.cat, was.game, was.player, was.seed, was.blind, was.doing);
 }
 
 void cat_mind_restore(CatMind* m) {

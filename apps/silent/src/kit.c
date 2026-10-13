@@ -1946,3 +1946,12 @@ SceneNode* kit_finish_alone(Kit* kit, const char* name) {
         scene_add_material(kit->scene, node->meshes[i]->material);
     return node;
 }
+
+void kit_node_shown(SceneNode* root, SceneNode* node, bool shown) {
+    if (!node || shown == (node->parent != NULL))
+        return;
+    if (shown)
+        node_add_child(root, node);
+    else
+        node_remove_child(node->parent, node);
+}

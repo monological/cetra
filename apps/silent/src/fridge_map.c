@@ -80,7 +80,7 @@ void fridge_map_closed(Kit* kit, const KitFrame* f) {
                         h - INSET, -THICK - LIFT, -1.0f);
 }
 
-void fridge_map_build(FridgeMap* fm, Engine* engine, Scene* scene, bool taken) {
+void fridge_map_build(FridgeMap* fm, Engine* engine, Scene* scene) {
     *fm = (FridgeMap){.root = scene->root_node};
     KitFrame f;
     kitchen_fridge_map_frame(&f);
@@ -91,22 +91,10 @@ void fridge_map_build(FridgeMap* fm, Engine* engine, Scene* scene, bool taken) {
     fm->node = kit_finish(&kit, "town_map");
     // No capture keeps it: it is taken while the game runs.
     fm->node->capture_hidden = true;
-    if (taken)
-        fridge_map_take(fm);
 }
 
-void fridge_map_take(FridgeMap* fm) {
-    if (fm->taken)
-        return;
-    fm->taken = true;
-    node_remove_child(fm->root, fm->node);
-}
-
-void fridge_map_put_back(FridgeMap* fm) {
-    if (!fm->taken)
-        return;
-    fm->taken = false;
-    node_add_child(fm->root, fm->node);
+void fridge_map_on_door(FridgeMap* fm, bool on) {
+    kit_node_shown(fm->root, fm->node, on);
 }
 
 void fridge_map_free(FridgeMap* fm) {

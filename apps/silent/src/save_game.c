@@ -14,6 +14,9 @@
 // worth a write each way.
 #define ROOM_SAVE_GAP 10.0
 
+// The world as it was built (spec 13.50), beside the slots and outside the ones a list shows.
+#define START_SLOT "silent-start"
+
 // What a save keeps that no module holds as a field: worked out from the world before a write and
 // put back into it after a read. The summary is at offsets, which a list of saves peeks into.
 typedef struct Kept {
@@ -156,10 +159,7 @@ static void apply(void) {
             if (g_kept.item_order[i] == order)
                 held[count++] = (ItemId)i;
     backpack_restore(w->backpack, g_kept.bag, held, count);
-    if (backpack_holds(w->backpack, ITEM_TOWN_MAP))
-        fridge_map_take(w->fridge_map);
-    else
-        fridge_map_put_back(w->fridge_map);
+    fridge_map_on_door(w->fridge_map, !backpack_holds(w->backpack, ITEM_TOWN_MAP));
     w->lights->flashlight_on =
         w->lights->flashlight_on && backpack_holds(w->backpack, ITEM_FLASHLIGHT);
     map_screen_restore(w->map_screen, g_kept.inked);
@@ -171,14 +171,17 @@ static void apply(void) {
         cat_mind_restore(w->mind);
     }
 
-    // The engine's own section has put the body; what follows from where it stands is said
-    // nothing about, since the player did not arrive anywhere.
+    // The engine's own section has put the body and the clock; what follows from where it stands
+    // is said nothing about, since the player did not arrive anywhere.
     player_restore(w->player);
     vec3 feet = {0.0f, 0.0f, 0.0f};
     player_feet(w->player, feet);
     finds_settle(w->finds, feet);
-    basement_settle(w->basement, feet);
+    basement_settle(w->basement, feet, w->game->time);
     g_room = (int)room_at(feet);
+    // Drawn where they were put -- the doors, the cat -- while the game is held and no step moves
+    // their nodes.
+    sync_entity_transforms(w->game->entity_manager);
 }
 
 // ------------------------------------------------------------------------------- the slots
@@ -226,8 +229,11 @@ bool save_game_load(const char* slot) {
     char path[1024];
     if (!g_system || !save_default_path(path, sizeof(path), slot))
         return false;
-    // Over what the world was built with, so a section the file lacks keeps the new game's.
+    // Over what the world was built with, so a section the file lacks keeps the new game's, and
+    // over a cat's mind as it was made, which a file holds only the needs of.
     gather();
+    if (cat_kept())
+        cat_mind_renew(g_world.mind);
     const SaveLoadResult r = save_read(g_system, path);
     if (!r.ok) {
         fprintf(stderr, "silent: the game in %s could not be read\n", slot);
@@ -243,15 +249,24 @@ bool save_game_delete(const char* slot) {
     return save_default_path(path, sizeof(path), slot) && remove(path) == 0;
 }
 
+// The world as it is now into `path`.
+static bool write_to(const char* path) {
+    gather();
+    return save_write(g_system, path);
+}
+
 bool save_game_keep_start(void) {
     char path[1024];
-    if (!g_system || !save_default_path(path, sizeof(path), SAVE_GAME_START))
+    if (!g_system || !save_default_path(path, sizeof(path), START_SLOT))
         return false;
-    gather();
-    if (save_write(g_system, path))
+    if (write_to(path))
         return true;
-    fprintf(stderr, "silent: the world's start could not be kept; Quit to Title is off\n");
+    fprintf(stderr, "silent: the world's start could not be kept\n");
     return false;
+}
+
+bool save_game_load_start(void) {
+    return save_game_load(START_SLOT);
 }
 
 // ------------------------------------------------------------------------------- autosaves
@@ -270,8 +285,7 @@ static bool write_now(const char* why) {
     if (!g_system || !g_slot[0])
         return false;
     const double start = glfwGetTime();
-    gather();
-    const bool ok = save_write(g_system, g_path);
+    const bool ok = write_to(g_path);
     printf("silent: %s %s (%s) in %.1f ms\n", ok ? "saved" : "could not save", g_slot, why,
            (glfwGetTime() - start) * 1000.0);
     g_due = g_room_due = false;

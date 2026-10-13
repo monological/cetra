@@ -312,6 +312,8 @@ void player_restore(Player* p) {
     character_controller_set_velocity(cc, GLM_VEC3_ZERO);
     stand(p, p->rig->yaw, p->rig->pitch);
     gait_reset(p->gait);
+    // A click takes the cursor, as at the start.
+    p->cursor_wanted = false;
     // Down always fits; up is checked against what is over the head where it now stands.
     p->crouch_toggled = false;
     character_controller_set_half_height(cc, CROUCH_HALF_HEIGHT);
