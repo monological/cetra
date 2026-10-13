@@ -48,6 +48,8 @@ typedef struct HauntHouse {
 
 // The street lamps it puts out, at most.
 #define HAUNT_STREET_LAMPS 32
+// The tones the drone is made of.
+#define HAUNT_DRONE_TONES 4
 
 // What the house was before it began, put back when it ends and held while captured.
 typedef struct HauntNormal {
@@ -82,7 +84,8 @@ typedef struct Haunt {
     int shade_slot; // its bulb in the shade's
     Light* street[HAUNT_STREET_LAMPS];
     int street_count;
-    PostFXPass* grade; // drains the picture to red; off while it is not haunted
+    PostFXPass* grade;               // drains the picture to red; off while it is not haunted
+    Sound* drone[HAUNT_DRONE_TONES]; // NULL without audio
     unsigned int seed;
     bool active;
     double began; // the sim time it began at
