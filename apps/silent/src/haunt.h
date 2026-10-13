@@ -52,9 +52,8 @@ typedef struct HauntHouse {
     Material* lamp_heads; // the street lamps' glowing heads
 } HauntHouse;
 
-// The street lamps it puts out, and the reflection probes it hides, at most.
+// The street lamps it puts out, at most.
 #define HAUNT_STREET_LAMPS 32
-#define HAUNT_PROBES       32
 // The tones the drone is made of, and the knob's tries.
 #define HAUNT_DRONE_TONES 4
 #define HAUNT_KNOB_TAKES  4
@@ -72,7 +71,6 @@ typedef struct HauntNormal {
     vec3 panes;
     float lamp_head_nits;
     float street_candela[HAUNT_STREET_LAMPS];
-    float probe_intensity[HAUNT_PROBES];
     float sky; // the environment's strength
     // The picture's finishing, which its grade takes over, and the fog's glow, which it puts out.
     bool vignette;
@@ -85,15 +83,15 @@ typedef struct HauntNormal {
 
 // What the last frame drove the lights at: the hall's and the lamp's supply as a share of their
 // own, how far the hall has gone red, whether the night outside is gone, the share of its supply
-// every other light in the house gets, and whether the light that comes from no lamp -- the bounce
-// and the reflections the house was captured in, and the sky's -- is seen.
+// every other light in the house gets, and the share of its own the light from no lamp gets -- the
+// bounce and the reflections the house was captured in, and the sky's.
 typedef struct HauntLive {
     float hall;
     float lamp;
     float red;
     float dark_out;
     float mains;
-    bool ambient;
+    float ambient;
 } HauntLive;
 
 typedef struct Haunt {
@@ -104,7 +102,6 @@ typedef struct Haunt {
     Light* bath;    // the bathroom's bare bulb
     Light* bedside; // the bedroom's lamp
     int bedside_slot;
-    int probe_count; // the reflection probes it hides
     Light* street[HAUNT_STREET_LAMPS];
     int street_count;
     PostFXPass* grade;               // drains the picture to red; off while it is not haunted
