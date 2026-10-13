@@ -21,8 +21,9 @@
  * -- the windows black, the street lamps out -- and the hall's light dies and comes back red,
  * failing; the living room's lamp falters, the snow on the television goes red, and the picture is
  * drained to red. The clock stops, the fridge cuts out and the house goes quiet under a low drone;
- * something climbs the cellar stair, the bathroom door creaks ajar, and the cellar door is tried
- * from the other side -- until the player comes near it, when everything at the door stops dead.
+ * something climbs the cellar stair, the bathroom door creaks ajar -- or shut, if it stood open --
+ * and the cellar door is tried from the other side -- until the player comes near it, when
+ * everything at the door stops dead.
  *
  * One module with a beginning and an end, so a story can start it where a key does now. Every
  * beat is a pure function of the seconds since it began and a seed, so a headless run shows the

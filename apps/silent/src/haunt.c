@@ -54,21 +54,23 @@ static const struct {
 #define DRONE_RISE_SECONDS 6.0
 
 // Something comes up the cellar flight from its foot, from CLIMB_AT: a footfall every CLIMB_STEP
-// seconds, the last three slower, heavy and a little low. Then the bathroom door drifts a hand's
-// width open with a creak, and then the cellar door is tried. The volumes are against the one-shots
+// seconds, the last three slower, heavy and a little low. Then the bathroom door creaks: a shut one
+// drifts a hand's width open over CREAK_SECONDS, an open one drifts shut over CREAK_SHUT_SECONDS,
+// the creak's own length. Then the cellar door is tried. The volumes are against the one-shots
 // tools/fetch_sounds.py levels alike, and are loud on purpose: a sound falls as one over its
 // distance, and the climb is heard through the cellar door besides.
-#define CLIMB_AT      3.0
-#define CLIMB_STEP    0.95
-#define CLIMB_SLOW    1.2
-#define CLIMB_VOLUME  5.0f
-#define CLIMB_PITCH   0.88f
-#define CREAK_AT      16.5
-#define CREAK_ANGLE   0.125f // radians: a hand's width at a house door's latch
-#define CREAK_SECONDS 2.5f
-#define CREAK_VOLUME  1.5f
-#define RATTLE_AT     19.0
-#define SLAM_VOLUME   2.0f
+#define CLIMB_AT           3.0
+#define CLIMB_STEP         0.95
+#define CLIMB_SLOW         1.2
+#define CLIMB_VOLUME       5.0f
+#define CLIMB_PITCH        0.88f
+#define CREAK_AT           16.5
+#define CREAK_ANGLE        0.125f // radians: a hand's width at a house door's latch
+#define CREAK_SECONDS      2.5f
+#define CREAK_SHUT_SECONDS 3.0f
+#define CREAK_VOLUME       1.5f
+#define RATTLE_AT          19.0
+#define SLAM_VOLUME        2.0f
 // A try at the cellar door: its knob turned and pulled, and from the third try on the door shaken
 // in its frame RATTLE_LAG in, the leaf pulled up to RATTLE_PLAY metres off its stop at the latch
 // edge on each of the take's hits; the knob's own hits move it KNOB_SHAKE as far. The tries come
@@ -404,7 +406,7 @@ void haunt_begin(Haunt* h, double time, double into) {
     h->slamming = false;
     // The door beats wait to be watched for -- unless this begins part-way in, when they are as far
     // in, and the doors stand where they would by then: the cellar door shut, and past the creak
-    // the bathroom door ajar.
+    // the bathroom door ajar if it was shut and shut if it was open.
     h->doors_at = -1.0;
     Door* cellar = h->house.cellar;
     if (into > 0.0 && cellar) {
@@ -413,9 +415,10 @@ void haunt_begin(Haunt* h, double time, double into) {
         if (cellar->travel > 0.0f || cellar->want > 0.0f)
             door_set(cellar, 0.0f, 0.0f);
         Door* bath = h->house.bath;
-        if (bath && into >= CREAK_AT && bath->travel <= 0.0f && bath->want <= 0.0f) {
-            const float ajar = door_travel_at(bath, CREAK_ANGLE);
-            door_set(bath, ajar, ajar);
+        if (bath && into >= CREAK_AT) {
+            const bool shut = bath->travel <= 0.0f && bath->want <= 0.0f;
+            const float to = shut ? door_travel_at(bath, CREAK_ANGLE) : 0.0f;
+            door_set(bath, to, to);
         }
     }
     // The house goes quiet as its lights die, as a supply failing would have it: the clock stops
@@ -515,11 +518,15 @@ void haunt_step(Haunt* h, double time, const vec3 feet, const vec3 forward) {
     }
 
     Door* bath = h->house.bath;
-    if (bath && was < CREAK_AT && CREAK_AT <= u && bath->travel <= 0.0f && bath->want <= 0.0f) {
-        door_drift(bath, door_travel_at(bath, CREAK_ANGLE), CREAK_SECONDS);
+    if (bath && was < CREAK_AT && CREAK_AT <= u) {
+        const bool shut = bath->travel <= 0.0f && bath->want <= 0.0f;
+        if (shut)
+            door_drift(bath, door_travel_at(bath, CREAK_ANGLE), CREAK_SECONDS);
+        else
+            door_drift(bath, 0.0f, CREAK_SHUT_SECONDS);
         voice(h, h->creak, bath->entity->position, CREAK_VOLUME, 1.0f);
         if (h->trace)
-            printf("haunt creak at %.3f\n", u);
+            printf("haunt creak %s at %.3f\n", shut ? "open" : "shut", u);
     }
 
     // The tries, only at a shut door: one the player has opened is not tried.
