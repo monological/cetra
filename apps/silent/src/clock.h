@@ -23,6 +23,11 @@ typedef struct Clock {
     Sound* tick; // NULL without audio
     Sound* tock;
     long beat; // the last beat heard; below zero before the first frame
+    // Stopped (spec 13.52), the pendulum held mid-swing and the train with it; and the seconds it
+    // has stood still in all, which it runs that much late by, and the time it last read.
+    bool stopped;
+    double lost;
+    double last;
 } Clock;
 
 // The case, into the world's kit. Call before kit_finish.
@@ -33,6 +38,8 @@ void clock_start(Clock* clock, Engine* engine, Scene* scene, AudioSystem* audio)
 
 // Per frame, before the transform walk: the swing, the hands and the beat.
 void clock_update(Clock* clock, double time);
+// Stopped dead, or going again from where it stood.
+void clock_stop(Clock* clock, bool stopped);
 
 // Where the pendulum's bob is in the world at sim time `time`: what a cat watches.
 void clock_bob(double time, vec3 out);

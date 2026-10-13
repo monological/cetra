@@ -11,8 +11,17 @@
 // chairs, the window's frame, and the clutter, placed from `seed`.
 void kitchen_build(Kit* kit, unsigned int seed);
 
+// What the fridge's compressor sounds like at its motor: its hum, and the clunk it stops with.
+typedef struct Fridge {
+    Sound* hum; // NULL without audio
+    Sound* clunk;
+    bool stopped; // its hum silenced
+} Fridge;
+
 // The fridge's hum, started at its motor; nothing when `audio` is NULL.
-void kitchen_start_audio(AudioSystem* audio);
+void kitchen_start_audio(Fridge* fridge, AudioSystem* audio);
+// The compressor running, or stopped with a clunk as it goes (spec 13.52).
+void kitchen_fridge_run(Fridge* fridge, bool running);
 
 // Where the town map hangs on the freezer door (spec 13.43): the frame's origin is the middle of
 // the map's top edge on the door's face, its d out of the door into the room.

@@ -344,6 +344,11 @@ void clock_start(Clock* clock, Engine* engine, Scene* scene, AudioSystem* audio)
     clock->tick = audio ? beat_sound(audio, "assets/audio/silent/tick.wav") : NULL;
     clock->tock = audio ? beat_sound(audio, "assets/audio/silent/tock.wav") : NULL;
     clock->beat = -1;
+    clock->last = -1.0;
+}
+
+void clock_stop(Clock* clock, bool stopped) {
+    clock->stopped = stopped;
 }
 
 /*
@@ -352,6 +357,11 @@ void clock_start(Clock* clock, Engine* engine, Scene* scene, AudioSystem* audio)
  * hand steps. The other hands creep, geared down from the same train.
  */
 void clock_update(Clock* clock, double time) {
+    // Stopped, the clock's own time stands where it stood: no swing, no beat, no hand moving.
+    if (clock->stopped && clock->last >= 0.0)
+        clock->lost += time - clock->last;
+    clock->last = time;
+    time -= clock->lost;
     turn(clock->pendulum, PIVOT_Y, PIVOT_D, swing_at(time));
 
     const long beat = (long)floor(time * 2.0 / PERIOD + 0.5);

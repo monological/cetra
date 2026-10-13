@@ -35,6 +35,12 @@ typedef struct Door {
     float travel;
     float want;
     Entity* entity;
+    // Moved by something other than the player (spec 13.52): radians the leaf stands past its swing
+    // toward +d, never saved; the seconds a whole swing takes on this move, 0 for the heavy door's
+    // own; and whether it is slamming shut, at full speed with no ease.
+    float jolt;
+    float pace;
+    bool slam;
 } Door;
 
 // Builds `leaf` as a node and a body of its own, shut, hung at `hinge`'s origin in its frame.
@@ -57,9 +63,20 @@ void door_leaf(Kit* kit, const KitFrame* f, const KitOpening* o, float t);
 void door_leaf_panelled(Kit* kit, const KitFrame* f, const KitOpening* o, float t);
 void door_leaf_battened(Kit* kit, const KitFrame* f, const KitOpening* o, float t);
 
-// Toward open if it is shut or shutting, toward shut otherwise.
+// Toward open if it is shut or shutting, toward shut otherwise, at the heavy door's own pace;
+// nothing while it slams, which is out of the player's hands.
 void door_toggle(Door* door);
-// `travel` along its swing already, and on its way to `want`, each held to 0..1.
+// The leaf `angle` radians past where its swing puts it, toward +d, placed now: a door shaken in
+// its frame. Nothing else reads it; 0 puts the leaf back.
+void door_jolt(Door* door, float angle);
+// On its way to `want` by itself, getting there `seconds` from now.
+void door_drift(Door* door, float want, float seconds);
+// Slammed shut from wherever it stands, in DOOR_SLAM_SECONDS from fully open; nothing when shut.
+void door_slam(Door* door);
+// Where along its swing the leaf stands `angle` radians open, as `travel`.
+float door_travel_at(const Door* door, float angle);
+// `travel` along its swing already, and on its way to `want` at the heavy door's pace, each held to
+// 0..1.
 void door_set(Door* door, float travel, float want);
 // Open already, with no swing.
 void door_set_open(Door* door);

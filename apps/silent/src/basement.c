@@ -785,6 +785,25 @@ void basement_settle(Basement* b, const vec3 feet, double time) {
     b->next_drip = time + DRIP_FIRST;
 }
 
+_Static_assert(BASEMENT_CLIMB == CELLAR_RISERS + 1, "the climb is the floor, each tread, the head");
+
+void basement_footfall(int k, float side, vec3 out) {
+    const float z = 0.5f * (STAIRWELL_Z0 + CELLAR_Z1) + side;
+    if (k <= 0) {
+        glm_vec3_copy((vec3){CELLAR_FOOT_X - 0.3f, BASEMENT_Y, z}, out);
+        return;
+    }
+    if (k >= CELLAR_RISERS) {
+        // The floor between the flight's head and the door, a few centimetres deep.
+        glm_vec3_copy((vec3){0.5f * (CELLAR_HEAD_X + HALL_OUT_X0), FLOOR_Y, z}, out);
+        return;
+    }
+    // Tread `t` down from the top, as the stair counts them: the middle of its going.
+    const int t = CELLAR_RISERS - k;
+    const float x = CELLAR_HEAD_X - ((float)t - 0.5f) * CELLAR_GOING;
+    glm_vec3_copy((vec3){x, FLOOR_Y - (float)t * CELLAR_RISE, z}, out);
+}
+
 void basement_rest(Basement* b, bool rest) {
     if (!b->bulb || !b->light)
         return;

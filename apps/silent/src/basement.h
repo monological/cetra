@@ -79,4 +79,10 @@ void basement_settle(Basement* b, const vec3 feet, double time);
 // puts it back as the last update left it.
 void basement_rest(Basement* b, bool rest);
 
+// Where a foot comes down climbing the cellar flight (spec 13.52), world: step `k` of
+// BASEMENT_CLIMB, from the floor at its foot (0) up every tread to the floor at its head behind the
+// door (the last), `side` metres across the flight from its middle.
+#define BASEMENT_CLIMB 13
+void basement_footfall(int k, float side, vec3 out);
+
 #endif // _SILENT_BASEMENT_H_

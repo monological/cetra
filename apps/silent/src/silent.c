@@ -60,6 +60,7 @@
 #include "footsteps.h"
 #include "fridge_map.h"
 #include "grounds.h"
+#include "haunt.h"
 #include "hearth.h"
 #include "hill.h"
 #include "home.h"
@@ -199,6 +200,9 @@ typedef struct SilentArgs {
     bool crouch;       // start crouched
     bool no_flicker;
     bool no_static;         // the living room's set showing nothing, a faint glow and no hiss
+    bool haunt;             // the haunting begins as the game is played (spec 13.52)
+    float haunt_at;         // and this many seconds of it already gone by
+    bool trace_haunt;       // print each of its beats as it comes
     bool no_loading_screen; // load under a black window, with no engine screen over it
     bool loading_screen;    // the screen headless too, where it is otherwise left out
     bool startup_ms;        // print where loading's time goes, a startup-ms row a step
@@ -264,7 +268,7 @@ static bool starts_elsewhere(const SilentArgs* a) {
         found |= a->found[k];
     return a->load || a->new_game || a->slot || a->player_at_set || found || a->backpack ||
            a->crouch || a->cat_at || a->cat_go[0] || a->cat_clip[0] || a->cat_doing || a->cat_cam ||
-           (a->cam_eye_set && a->cam_target_set);
+           a->haunt || (a->cam_eye_set && a->cam_target_set);
 }
 static Scene* g_scene;
 static Player g_player;
@@ -273,6 +277,8 @@ static Footsteps g_footsteps;
 static Lights g_lights;
 static Tv g_tv;
 static Clock g_clock;
+static Fridge g_fridge;
+static Haunt g_haunt;
 static Lake g_lake;
 static RainBed g_rain_bed;
 static Sounds g_sounds;
@@ -416,6 +422,8 @@ static const InputAction ACTIONS[] = {
     // game's input, and Escape there is that screen's back.
     {"pause_menu", {INPUT_KEY(ESCAPE, 1), INPUT_PAD(START, 1)}},
     {"toggle_gui", {INPUT_KEY(GRAVE_ACCENT, 1), INPUT_KEY(G, 1)}},
+    // The haunting (spec 13.52), begun and ended by hand until a story begins it.
+    {"haunt", {INPUT_KEY(K, 1), INPUT_PAD(RIGHT_THUMB, 1)}},
     // The backpack's screen (spec 13.40): UI actions, so they read while it holds the game's input.
     {"backpack", {INPUT_KEY(TAB, 1), INPUT_PAD(BACK, 1)}, true},
     // The map's screen (spec 13.43), and moving and zooming its view.
@@ -921,6 +929,7 @@ static void rest_lights(bool rest, void* ctx) {
     lights_rest(&g_lights, rest);
     basement_rest(&g_basement, rest);
     tv_rest(&g_tv, rest);
+    haunt_rest(&g_haunt, rest);
 }
 
 static void on_init(Game* game) {
@@ -1128,7 +1137,7 @@ static void on_init(Game* game) {
     load_seam(engine, "audio-device");
     sounds_start(&g_sounds, audio, swung);
     load_seam(engine, "audio-sounds");
-    kitchen_start_audio(audio);
+    kitchen_start_audio(&g_fridge, audio);
     lake_start_audio(&g_lake, audio);
     cabin_start_audio(audio);
     clock_start(&g_clock, engine, g_scene, audio);
@@ -1227,6 +1236,20 @@ static void on_init(Game* game) {
     engine_set_camera(engine, create_camera(&cam));
 
     scene_set_capture_rest(g_scene, rest_lights, NULL);
+    // The haunting takes hold of the house now, and begins only when it is played.
+    haunt_start(&g_haunt,
+                &(HauntHouse){.engine = engine,
+                              .scene = g_scene,
+                              .audio = audio,
+                              .clock = &g_clock,
+                              .tv = &g_tv,
+                              .fridge = &g_fridge,
+                              .cellar = g_door_hung[DOOR_BASEMENT] ? &g_doors[DOOR_BASEMENT] : NULL,
+                              .bath = g_door_hung[DOOR_BATH] ? &g_doors[DOOR_BATH] : NULL,
+                              .frosted = kit.materials[MAT_FROSTED],
+                              .shade = kit.materials[MAT_LAMPSHADE]},
+                (unsigned int)g_args.seed * 2654435761u + 13u);
+    g_haunt.trace = g_args.trace_haunt;
 
     const vec3 dir = {look[0] - feet[0], look[1] - eye_y, look[2] - feet[2]};
     player_init(&g_player, game, physics, em, feet, atan2f(dir[0], dir[2]),
@@ -1608,6 +1631,7 @@ static void on_pre_render(Game* game, double alpha) {
             if (pause_menu_take_to_title(&g_pause)) {
                 save_game_quit();
                 save_game_begin(NULL);
+                haunt_end(&g_haunt);
                 g_run = RUN_RETURNING;
             } else if (save_game_frame(feet, game->frame_clock.delta)) {
                 hud_saved(&g_hud);
@@ -1629,6 +1653,20 @@ static void on_pre_render(Game* game, double alpha) {
             g_run = RUN_LOADING;
             break;
     }
+    // The haunting (spec 13.52): begun as the game is first played when the command line asks,
+    // and by hand. It plays out on the sim's clock, so it stands still with the game.
+    if (g_run == RUN_PLAYING) {
+        if (g_args.haunt) {
+            g_args.haunt = false;
+            haunt_begin(&g_haunt, game->time, g_args.haunt_at);
+        } else if (input_action_pressed(&game->input, "haunt")) {
+            if (haunt_active(&g_haunt))
+                haunt_end(&g_haunt);
+            else
+                haunt_begin(&g_haunt, game->time, 0.0);
+        }
+    }
+    haunt_frame(&g_haunt, game->time);
     // A step is what puts each entity's node where the entity is, and a held game runs none: so
     // while it is held -- loading, at the title, under the pause menu, over a load -- the doors and
     // the cat are put where they stand here, before the frame and its captures draw them.
@@ -1828,6 +1866,10 @@ static void print_usage(const char* prog) {
     printf("      --crouch            Start crouched, as though C had been pressed\n");
     printf("      --no-flicker        Keep the failing ceiling tube steady\n");
     printf("      --no-static         The living room's television with nothing on it, no snow\n");
+    printf("      --haunt             The haunting begins as the game is played (K begins and\n"
+           "                          ends it)\n");
+    printf("      --haunt-at S        The haunting begun S seconds before the game is played\n");
+    printf("      --trace-haunt       Print each of the haunting's beats as it comes\n");
     printf("      --no-loading-screen Load under a black window, without the engine's screen\n");
     printf("      --loading-screen    The engine's loading screen headless too\n");
     printf("      --startup-ms        Print how long each loading step and held frame took\n");
@@ -1909,7 +1951,7 @@ static void print_usage(const char* prog) {
     printf("  the arrows or the mouse look, E opens and shuts\n");
     printf("  a door you are facing or takes what is in reach, F the flashlight once\n");
     printf("  you have it, Tab opens and shuts the backpack, G shows the GUI and frees\n");
-    printf("  the mouse for it while it is open.\n");
+    printf("  the mouse for it while it is open, K begins and ends the haunting.\n");
     printf("  -h, --help              This message\n");
 }
 
@@ -2030,6 +2072,13 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
             a->no_flicker = true;
         } else if (!strcmp(s, "--no-static")) {
             a->no_static = true;
+        } else if (!strcmp(s, "--haunt")) {
+            a->haunt = true;
+        } else if (!strcmp(s, "--haunt-at") && has_next) {
+            a->haunt = true;
+            a->haunt_at = fmaxf(0.0f, (float)atof(argv[++i]));
+        } else if (!strcmp(s, "--trace-haunt")) {
+            a->trace_haunt = true;
         } else if (!strcmp(s, "--no-loading-screen")) {
             a->no_loading_screen = true;
         } else if (!strcmp(s, "--loading-screen")) {

@@ -127,6 +127,10 @@ void mats_kit(Kit* kit, Engine* engine, Scene* scene);
 // shade's cloth glows with what of its light comes through. The first gives the shade its hook,
 // with the kit's engine; a shade whose hook will not build glows flat instead.
 void mats_shade_bulb(Kit* kit, const vec3 at, float candela, const vec3 colour);
+// Which of `shade`'s bulbs is the one at `at`, world, to 5 cm; -1 if none is.
+int mats_shade_slot(Material* shade, const vec3 at);
+// Bulb `slot` of `shade` at `candela`: what its cloth glows with when the bulb's light changes.
+void mats_shade_candela(Material* shade, int slot, float candela);
 
 // Daytime: the street lamps' lenses go dark, and the stained glass is lit by the sky.
 void mats_daytime(Kit* kit);

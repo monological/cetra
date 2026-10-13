@@ -184,6 +184,18 @@ static inline float kit_rrange(KitRng* r, float lo, float hi) {
     return lo + (hi - lo) * kit_rnd(r);
 }
 
+// A hash of three numbers to [0, 1): what a pure function of time draws from -- a flicker, a
+// brownout, a haunting -- so the same instant is the same draw on every run.
+static inline float kit_hash01(uint32_t a, uint32_t b, uint32_t c) {
+    uint32_t h = a * 0x8da6b343u ^ b * 0xd8163841u ^ c * 0xcb1ab31fu;
+    h ^= h >> 16;
+    h *= 0x7feb352du;
+    h ^= h >> 15;
+    h *= 0x846ca68bu;
+    h ^= h >> 16;
+    return (float)(h >> 8) * (1.0f / 16777216.0f);
+}
+
 // A second sequence, a xorshift, in [0, 1]: what the grounds, the dead trees, the woods and the
 // crossroads draw from, each on a state of its own so they take nothing from a kit's.
 static inline float kit_xrnd(unsigned int* state) {
