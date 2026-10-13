@@ -1000,8 +1000,8 @@ the cat lives there. Everything of the Gothic house below is at the mansion's or
 Start) pauses, which frees it; WASD walks, Shift hurries, and the mouse or the arrow keys look.
 **F** (or pad Y) toggles the flashlight once it is found, **E** (or pad X) opens a door or takes
 what is in reach, **Tab** (or pad Back) opens the backpack, **M** (or pad RB) opens the town map
-once it is had, **K** (or a pad's right-stick click) begins and ends the haunting, and **G** or
-backtick shows the debug GUI.
+once it is had, **K** (or a pad's right-stick click) begins and ends the haunting anywhere, and
+**G** or backtick shows the debug GUI.
 
 **The title, the saves and the pause menu** (specs 13.49 and 13.50).
 - **The title.** A windowed run comes up on it, over the street, with Continue (the newest game),
@@ -1022,8 +1022,8 @@ backtick shows the debug GUI.
   `silent-settings.json` beside the slots. `--mute` and `--fov` win over the file.
 - **A run that starts somewhere of its own skips the title,** and saves nowhere unless `--slot`
   says where. That is a headless run, or one started from a state on the command line: the flags
-  below, or the player, the bag, the map, the finds, the crouch, the cat's place or a pinned camera.
-  Such a run has no Quit to Title.
+  below, or the player, the bag, the map, the key, the finds, the crouch, the story, the haunting,
+  the cat's place or a pinned camera. Such a run has no Quit to Title.
 
 The flags:
 - **`--load <slot>`:** starts from the game saved in `<slot>`.
@@ -1041,8 +1041,9 @@ until it is taken F finds nothing and the cellar flight's foot is as far as the 
 screen lists what it holds in a grid and turns the chosen one: the arrows, WASD or the D-pad walk
 the grid, and Enter, E, pad A or a click chooses; Tab or Escape (pad B) shuts it.
 - **`--backpack`:** starts with the backpack, the flashlight in it.
-- **`--open-backpack <item>`:** starts with its screen open on `<item>` (`flashlight` or `map`),
-  for a headless picture of it; it implies `--backpack`, and `map` implies `--map`.
+- **`--open-backpack <item>`:** starts with its screen open on `<item>` (`flashlight`, `map` or
+  `key`), for a headless picture of it; it implies `--backpack`, `map` implies `--map` and `key`
+  implies `--key`.
 
 **The town map** (spec 13.43). It hangs half open on the kitchen fridge's freezer door. E takes it
 into the backpack once the backpack is had, and M or pad RB opens it, from the game or from the
@@ -1086,23 +1087,42 @@ the bob half and the footsteps 6 dB softer. Standing waits until there is room o
 - **`--crouch`:** starts crouched, as though C had been pressed, so a headless run can show the
   crouched eye.
 
-**The haunting** (spec 13.52). K (or a pad's right-stick click) begins it and ends it, for now.
-The power goes, every light in the house with it, and after a second and a half the hall, the
-floor lamp and the TV come back red. Its door beats wait until the player stands in the front of
-the hall looking down it:
+**The locked house** (spec 13.53). The front door is locked from the inside, and E at it tries
+it, the knob turned and the door rattled in its frame:
+- without the backpack, the player thinks it locked, and nothing more;
+- with it, the first try begins the haunting (below);
+- with the key, off the basement's workbench, and no map, the player thinks of the map in the
+  kitchen and the door stays shut;
+- with the key and the map, it opens, and is an ordinary door from then on.
+
+The cellar door is stuck until the haunting has begun. Opened while it lasts, it ends the haunting
+and flies open onto an ordinary stair. The key lies on the workbench below it, and E takes it into
+the backpack. How far the story has gone is saved: a game saved haunted loads haunted again, and a
+player saved anywhere but in the house finds the front door open.
+- **`--key`:** starts with the front door's key in the backpack, the workbench bare; it implies
+  `--backpack`.
+- **`--story <stage>`:** starts with the story at `locked`, `haunted` (the haunting begins as the
+  game is played), `over` (ended at the cellar door) or `open` (the front door unlocked). A player
+  started anywhere but in the house starts it `open` whatever this says.
+
+**The haunting** (spec 13.52). The story begins it, and K (or a pad's right-stick click) begins and
+ends it anywhere without moving the story. The power goes, every light in the house with it, and
+after a second and a half the hall, the floor lamp and the TV come back red. Its door beats wait
+until the player stands in the front of the hall looking down it:
 - an open cellar door slams;
 - 3 s on, the bathroom door creaks ajar, or shut if it stood open;
-- from 6 s, the cellar door is tried from the stair, on and on, until the player opens it with E;
-  then it flies open and slams against its stop, on the stair's bulb lit red and swinging hard.
+- from 6 s, the cellar door is tried from the stair, on and on, until the player opens it with E,
+  which ends the haunting.
 
-Ending it puts the house back as it was; the doors stay where it moved them. Nothing of it is
-saved.
+Ending it puts the house back as it was; the doors stay where it moved them.
 - **`--haunt`:** begins it as the game is first played, and skips the title.
 - **`--haunt-at S`:** begins it S seconds in, the door beats as far in without waiting to be
   watched for: past 3 the bathroom door stands where the creak left it, past 6 the tries are under
   way.
 - **`--trace-haunt`:** prints each beat as it comes: when it was watched for, the slam, the creak,
-  each try with its turns of the knob and its shakes, the door flung open.
+  each try with its turns of the knob and its shakes. And each turn of the story: a door tried, the
+  haunting begun, the cellar door flung open and slammed, the front door unlocked, a load haunted
+  again.
 - **Headless:** with `--pad-script`, `rstick` on a frame presses K.
 
 **Capture:** `-x`, `-f <n>`, `-S <path>`, `--screenshot-every <n>`, and `-W`/`-H` for the window
