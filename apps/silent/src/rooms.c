@@ -10,8 +10,9 @@
 typedef struct Room {
     const char* name;
     const char* label;
-    bool mansion; // its boxes are in the mansion's plan, moved to where it stands
-    bool tower;   // and the tower's octagon with them, as high as the first box
+    RoomId within; // the room it is carved out of, or ROOM_WORLD for a house
+    bool mansion;  // its boxes are in the mansion's plan, moved to where it stands
+    bool tower;    // and the tower's octagon with them, as high as the first box
     int box_count;
     AABB boxes[2];
 } Room;
@@ -29,6 +30,7 @@ static const Room ROOM_TABLE[ROOMS] = {
     [ROOM_WORLD] = {"world", "Outside"},
     [ROOM_HOME] = {"home",
                    "Home",
+                   ROOM_WORLD,
                    false,
                    false,
                    1,
@@ -36,6 +38,7 @@ static const Room ROOM_TABLE[ROOMS] = {
                      {HOUSE_OUT_X1, ROOFS_Y, HOUSE_OUT_Z1}}}},
     [ROOM_LIVING] = {"living_room",
                      "Home, living room",
+                     ROOM_HOME,
                      false,
                      false,
                      1,
@@ -43,6 +46,7 @@ static const Room ROOM_TABLE[ROOMS] = {
                        {LIVING_IN_X1, HOME_CEIL_Y, LIVING_IN_Z1}}}},
     [ROOM_KITCHEN] = {"kitchen",
                       "Home, kitchen",
+                      ROOM_HOME,
                       false,
                       false,
                       1,
@@ -50,6 +54,7 @@ static const Room ROOM_TABLE[ROOMS] = {
                         {KITCHEN_X1, HOME_CEIL_Y, KITCHEN_Z1}}}},
     [ROOM_BASEMENT] = {"basement",
                        "Home, basement",
+                       ROOM_HOME,
                        false,
                        false,
                        2,
@@ -58,6 +63,7 @@ static const Room ROOM_TABLE[ROOMS] = {
                          {HALL_OUT_X0, HOME_CEIL_Y, CELLAR_Z1}}}},
     [ROOM_MANSION] = {"mansion",
                       "Mansion",
+                      ROOM_WORLD,
                       true,
                       true,
                       1,
@@ -65,6 +71,7 @@ static const Room ROOM_TABLE[ROOMS] = {
                         {HOUSE_OUT_X1, ROOFS_Y, HOUSE_OUT_Z1}}}},
     [ROOM_UPSTAIRS] = {"mansion_up",
                        "Mansion, upstairs",
+                       ROOM_MANSION,
                        true,
                        true,
                        1,
@@ -73,6 +80,7 @@ static const Room ROOM_TABLE[ROOMS] = {
     // The cabin by the lake (spec 13.41), its one room to the roof.
     [ROOM_CABIN] = {"cabin",
                     "Cabin",
+                    ROOM_WORLD,
                     false,
                     false,
                     1,
@@ -102,6 +110,14 @@ const char* room_name(RoomId room) {
 
 const char* room_label(RoomId room) {
     return ROOM_TABLE[room >= 0 && room < ROOMS ? room : ROOM_WORLD].label;
+}
+
+RoomId room_house(RoomId room) {
+    if (room <= ROOM_WORLD || room >= ROOMS)
+        return ROOM_WORLD;
+    while (ROOM_TABLE[room].within != ROOM_WORLD)
+        room = ROOM_TABLE[room].within;
+    return room;
 }
 
 RoomId room_at(const vec3 at) {

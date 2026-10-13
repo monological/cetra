@@ -59,6 +59,7 @@
 #include "fences.h"
 #include "footsteps.h"
 #include "fridge_map.h"
+#include "house_key.h"
 #include "grounds.h"
 #include "haunt.h"
 #include "hearth.h"
@@ -281,6 +282,7 @@ static Lights g_lights;
 static Tv g_tv;
 static Clock g_clock;
 static Fridge g_fridge;
+static DoorSounds g_door_sounds;
 static Haunt g_haunt;
 static Story g_story;
 static Lake g_lake;
@@ -305,6 +307,7 @@ static Basement g_basement;
 static Backpack g_backpack;
 static BackpackMenu g_menu;
 static FridgeMap g_fridge_map;
+static HouseKey g_house_key;
 static MapScreen g_map_screen;
 // The places the player has found, which go on the map (spec 13.43).
 static Finds g_finds;
@@ -835,7 +838,7 @@ static void build_post(const Engine* engine, bool night, bool grade) {
 }
 
 // Door `i`, or NULL when it was not hung.
-static const Door* hung_door(int i) {
+static Door* hung_door(int i) {
     return g_door_hung[i] ? &g_doors[i] : NULL;
 }
 
@@ -912,10 +915,16 @@ static bool enter_game(Engine* engine, const char* load, const char* slot) {
     return true;
 }
 
-// The game played from here on, with the pause menu over it, or the settings over that, the first
-// time, when the command line asks for a picture of them (spec 13.50).
-static void start_play(void) {
+// The game played from sim time `time` on, haunted when the command line asks the first time or the
+// story was put back haunted (specs 13.52 and 13.53), with the pause menu over it, or the settings
+// over that, the first time, when the command line asks for a picture of them (spec 13.50).
+static void start_play(double time) {
     g_run = RUN_PLAYING;
+    if (g_args.haunt)
+        haunt_begin(&g_haunt, time, g_args.haunt_at);
+    else if (g_story.stage == STORY_HAUNTED)
+        haunt_begin(&g_haunt, time, 0.0);
+    g_args.haunt = false;
     const char* screen = g_args.pause_screen;
     g_args.pause_screen = NULL;
     if (!screen)
@@ -1082,17 +1091,20 @@ static void on_init(Game* game) {
     if (g_door_hung[DOOR_CABIN])
         door_set_open(&g_doors[DOOR_CABIN]);
     load_seam(engine, "doors");
-    // The backpack on the bedroom's bed (spec 13.40), and the town map on the fridge (spec 13.43),
-    // unless the run starts with them.
+    // The backpack on the bedroom's bed (spec 13.40), the town map on the fridge (spec 13.43) and
+    // the front door's key on the basement's workbench (spec 13.53), unless the run starts with
+    // them.
     backpack_build(&g_backpack, engine, g_scene);
     fridge_map_build(&g_fridge_map, engine, g_scene);
+    house_key_build(&g_house_key, engine, g_scene);
+    backpack_lay(&g_backpack, ITEM_TOWN_MAP, g_fridge_map.node);
+    backpack_lay(&g_backpack, ITEM_KEY, g_house_key.node);
     if (g_args.backpack)
         backpack_take(&g_backpack);
     if (g_args.map)
         backpack_add(&g_backpack, ITEM_TOWN_MAP);
     if (g_args.key)
         backpack_add(&g_backpack, ITEM_KEY);
-    fridge_map_on_door(&g_fridge_map, !backpack_holds(&g_backpack, ITEM_TOWN_MAP));
     // The map's print shows one seed's street, and another seed builds other houses.
     if ((unsigned int)g_args.seed != MAP_ART[MAP_TOWN].seed)
         fprintf(stderr, "silent: the town map shows seed %u's street, not seed %d's\n",
@@ -1242,18 +1254,21 @@ static void on_init(Game* game) {
     engine_set_camera(engine, create_camera(&cam));
 
     scene_set_capture_rest(g_scene, rest_lights, NULL);
+    // What the doors sound like, which every slam is heard by.
+    door_sounds_load(&g_door_sounds, audio);
     // The haunting takes hold of the house now, and begins only when it is played.
     haunt_start(&g_haunt,
                 &(HauntHouse){.engine = engine,
                               .scene = g_scene,
                               .audio = audio,
+                              .sounds = &g_door_sounds,
                               .clock = &g_clock,
                               .tv = &g_tv,
                               .fridge = &g_fridge,
                               .lights = &g_lights,
                               .basement = &g_basement,
-                              .cellar = g_door_hung[DOOR_BASEMENT] ? &g_doors[DOOR_BASEMENT] : NULL,
-                              .bath = g_door_hung[DOOR_BATH] ? &g_doors[DOOR_BATH] : NULL,
+                              .cellar = hung_door(DOOR_BASEMENT),
+                              .bath = hung_door(DOOR_BATH),
                               .filament = kit.materials[MAT_FILAMENT],
                               .shade = kit.materials[MAT_LAMPSHADE],
                               .bulbs = kit.materials[MAT_BULB],
@@ -1262,18 +1277,16 @@ static void on_init(Game* game) {
                 (unsigned int)g_args.seed * 2654435761u + 13u);
     g_haunt.trace = g_args.trace_haunt;
     // The house's story (spec 13.53): its front door locked, the key in the basement.
-    story_start(
-        &g_story,
-        &(StoryHouse){.engine = engine,
-                      .scene = g_scene,
-                      .audio = audio,
-                      .hud = &g_hud,
-                      .backpack = &g_backpack,
-                      .haunt = &g_haunt,
-                      .front = g_door_hung[DOOR_HOME] ? &g_doors[DOOR_HOME] : NULL,
-                      .cellar = g_door_hung[DOOR_BASEMENT] ? &g_doors[DOOR_BASEMENT] : NULL});
+    story_start(&g_story, &(StoryHouse){.sounds = &g_door_sounds,
+                                        .hud = &g_hud,
+                                        .backpack = &g_backpack,
+                                        .haunt = &g_haunt,
+                                        .front = hung_door(DOOR_HOME),
+                                        .cellar = hung_door(DOOR_BASEMENT)});
     g_story.trace = g_args.trace_haunt;
-    story_restore(&g_story, g_args.story != STORY_NONE ? g_args.story : STORY_LOCKED, feet);
+    if (g_args.story != STORY_NONE)
+        g_story.stage = g_args.story;
+    story_settle(&g_story, feet);
 
     const vec3 dir = {look[0] - feet[0], look[1] - eye_y, look[2] - feet[2]};
     player_init(&g_player, game, physics, em, feet, atan2f(dir[0], dir[2]),
@@ -1298,7 +1311,6 @@ static void on_init(Game* game) {
     SaveWorld world = {.game = game,
                        .player = &g_player,
                        .backpack = &g_backpack,
-                       .fridge_map = &g_fridge_map,
                        .finds = &g_finds,
                        .map_screen = &g_map_screen,
                        .lights = &g_lights,
@@ -1375,9 +1387,14 @@ static void on_update(Game* game, double dt) {
         if (first)
             save_game_due();
     }
-    for (int i = 0; i < DOORS; i++)
-        if (g_door_hung[i])
-            door_update(&g_doors[i], (float)dt);
+    // A door slammed is heard as it hits its stop.
+    for (int i = 0; i < DOORS; i++) {
+        if (!g_door_hung[i] || !door_update(&g_doors[i], (float)dt))
+            continue;
+        door_hear(&g_door_sounds, g_door_sounds.slam, &g_doors[i], DOOR_SLAM_VOLUME);
+        if (g_args.trace_haunt)
+            printf("door %s slammed at %.3f\n", g_doors[i].entity->name, game->time);
+    }
     // After the doors: the haunting moves the cellar door's leaf in its frame, which the step's end
     // carries to its body and node with the rest. Its door beats wait for where the player looks.
     vec3 forward = {0.0f, 0.0f, -1.0f};
@@ -1486,7 +1503,6 @@ static void take_map(void) {
             "I don't have anywhere to put this. Maybe I should find a backpack or something.");
         return;
     }
-    fridge_map_on_door(&g_fridge_map, false);
     hud_think(&g_hud, finds_any(&g_finds) ? "A map of the town. I'll mark what I've found on it."
                                           : "A map of the town. That'll come in handy.");
     hud_hint(&g_hud, MAP_HINT, HINT_SECONDS);
@@ -1499,7 +1515,6 @@ static void take_key(void) {
         hud_think(&g_hud, "I don't have anywhere to put this.");
         return;
     }
-    story_key_on_bench(&g_story, false);
     hud_think(&g_hud, "A key. It might fit the front door.");
     save_game_due();
 }
@@ -1556,9 +1571,10 @@ static void on_pre_render(Game* game, double alpha) {
     lake_update(&g_lake, eye, feet);
     footfall(game, feet);
 
-    // The nearest thing the player is looking at in reach -- a door, the backpack on the bed or the
-    // map on the fridge -- says what the action key would do to it, and the key does it. Nothing is
-    // in reach of a player who is not yet playing, or behind a screen that holds the game's keys.
+    // The nearest thing the player is looking at in reach -- a door, the backpack on the bed, the
+    // map on the fridge or the key on the workbench -- says what the action key would do to it, and
+    // the key does it. Nothing is in reach of a player who is not yet playing, or behind a screen
+    // that holds the game's keys.
     Reach reach = {.d = FLT_MAX};
     if (g_run == RUN_PLAYING && !ui_captures_input(g_hud.ui)) {
         for (int i = 0; i < DOORS; i++)
@@ -1568,8 +1584,8 @@ static void on_pre_render(Game* game, double alpha) {
             reach_offer(&reach, g_backpack.at, NULL, take_backpack, "E   Take the backpack");
         if (!backpack_holds(&g_backpack, ITEM_TOWN_MAP))
             reach_offer(&reach, g_fridge_map.at, NULL, take_map, "E   Take the map");
-        if (g_story.key && !backpack_holds(&g_backpack, ITEM_KEY))
-            reach_offer(&reach, g_story.key_at, NULL, take_key, "E   Take the key");
+        if (!backpack_holds(&g_backpack, ITEM_KEY))
+            reach_offer(&reach, g_house_key.at, NULL, take_key, "E   Take the key");
     }
     if (input_action_pressed(&game->input, "interact")) {
         if (reach.take)
@@ -1648,7 +1664,7 @@ static void on_pre_render(Game* game, double alpha) {
                     title_open_screen(&g_title, g_args.title_screen);
                     g_args.title_screen = NULL;
                 } else {
-                    start_play();
+                    start_play(game->time);
                 }
             }
             break;
@@ -1669,7 +1685,7 @@ static void on_pre_render(Game* game, double alpha) {
             break;
         case RUN_ENTERING:
             if (lit)
-                start_play();
+                start_play(game->time);
             break;
         case RUN_PLAYING:
             // Quit to Title (spec 13.50): the game kept as it stands, then saved no more, and black
@@ -1699,20 +1715,13 @@ static void on_pre_render(Game* game, double alpha) {
             g_run = RUN_LOADING;
             break;
     }
-    // The haunting (spec 13.52): begun as the game is first played when the command line asks or a
-    // game was put back haunted (spec 13.53), and by hand. It plays out on the sim's clock, so it
-    // stands still with the game.
-    if (g_run == RUN_PLAYING) {
-        story_play(&g_story, game->time);
-        if (g_args.haunt) {
-            g_args.haunt = false;
-            haunt_begin(&g_haunt, game->time, g_args.haunt_at);
-        } else if (input_action_pressed(&game->input, "haunt")) {
-            if (haunt_active(&g_haunt))
-                haunt_end(&g_haunt);
-            else
-                haunt_begin(&g_haunt, game->time, 0.0);
-        }
+    // The haunting (spec 13.52), by hand. It plays out on the sim's clock, so it stands still with
+    // the game.
+    if (g_run == RUN_PLAYING && input_action_pressed(&game->input, "haunt")) {
+        if (haunt_active(&g_haunt))
+            haunt_end(&g_haunt);
+        else
+            haunt_begin(&g_haunt, game->time, 0.0);
     }
     haunt_frame(&g_haunt, game->time);
     // A step is what puts each entity's node where the entity is, and a held game runs none: so
@@ -1854,7 +1863,7 @@ static void on_shutdown(Game* game) {
     hud_free(&g_hud);
     backpack_free(&g_backpack);
     fridge_map_free(&g_fridge_map);
-    story_free(&g_story);
+    house_key_free(&g_house_key);
     cat_free(&g_cat);
     player_free(&g_player);
     kit_surfaces_release(&g_surfaces);
@@ -2156,7 +2165,7 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
         } else if (!strcmp(s, "--story") && has_next) {
             a->story = story_stage_by_name(argv[++i]);
             if (a->story == STORY_NONE)
-                fprintf(stderr, "silent: --story names no stage; starting locked\n");
+                fprintf(stderr, "silent: --story names no stage; ignoring it\n");
         } else if (!strcmp(s, "--open-map")) {
             a->open_map = true;
         } else if (!strcmp(s, "--found") && has_next) {

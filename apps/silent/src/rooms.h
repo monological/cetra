@@ -32,5 +32,7 @@ const char* room_name(RoomId room);
 const char* room_label(RoomId room);
 // The room `at` is in.
 RoomId room_at(const vec3 at);
+// The house `room` is in -- ROOM_HOME, ROOM_MANSION or ROOM_CABIN -- or ROOM_WORLD outdoors.
+RoomId room_house(RoomId room);
 
 #endif // _SILENT_ROOMS_H_

@@ -3,9 +3,9 @@
 #include "backpack.h"
 #include "bedroom.h"
 #include "fridge_map.h"
+#include "house_key.h"
 #include "kit.h"
 #include "mats.h"
-#include "story.h"
 
 // How the bag lies on the quilt: its top toward the bed's head, turned a little off square,
 // rolled onto one side and sunk into the quilt, as something soft dropped on something soft.
@@ -107,11 +107,6 @@ static void town_map(Kit* kit) {
     fridge_map_closed(kit, &KIT_WORLD_Z);
 }
 
-// The front door's key, standing on its edge so the grid's side-on picture of it is its face.
-static void front_door_key(Kit* kit) {
-    story_key_model(kit, &KIT_WORLD, 0.0f, false);
-}
-
 const ItemSpec ITEMS[ITEM_COUNT] = {
     [ITEM_FLASHLIGHT] = {"flashlight",
                          "FLASHLIGHT",
@@ -130,7 +125,7 @@ const ItemSpec ITEMS[ITEM_COUNT] = {
                   "A heavy old brass key, left on the workbench in the basement. It might fit "
                   "the front door.",
                   {2, 1},
-                  front_door_key},
+                  house_key_model},
 };
 
 ItemId item_by_id(const char* id) {
@@ -212,6 +207,12 @@ static void pack(Backpack* bp) {
     bp->rows = rows < BAG_MIN_ROWS ? BAG_MIN_ROWS : rows > BAG_MAX_ROWS ? BAG_MAX_ROWS : rows;
 }
 
+// What lies in the world, each on the graph exactly while the bag does not hold it.
+static void lay_out(Backpack* bp) {
+    for (int i = 0; i < ITEM_COUNT; i++)
+        kit_node_shown(bp->root, bp->lying[i], !backpack_holds(bp, (ItemId)i));
+}
+
 // The bag's contents into the grid.
 static void unpack(Backpack* bp) {
     for (int i = 0; i < KIT_COUNT(CONTENTS); i++)
@@ -264,7 +265,13 @@ bool backpack_add(Backpack* bp, ItemId item) {
         return false;
     bp->held[bp->held_count++] = item;
     pack(bp);
+    lay_out(bp);
     return true;
+}
+
+void backpack_lay(Backpack* bp, ItemId item, SceneNode* node) {
+    bp->lying[item] = node;
+    lay_out(bp);
 }
 
 bool backpack_holds(const Backpack* bp, ItemId item) {
@@ -283,6 +290,7 @@ void backpack_restore(Backpack* bp, bool taken, const ItemId* held, int count) {
         if (held[k] > ITEM_NONE && held[k] < ITEM_COUNT)
             backpack_add(bp, held[k]);
     pack(bp);
+    lay_out(bp);
 }
 
 void backpack_free(Backpack* bp) {

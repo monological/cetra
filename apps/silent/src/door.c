@@ -232,6 +232,10 @@ bool door_will_open(const Door* door) {
     return door->want < 0.5f;
 }
 
+bool door_is_shut(const Door* door) {
+    return door->travel <= 0.0f && door->want <= 0.0f;
+}
+
 void door_toggle(Door* door) {
     if (door->slam)
         return;
@@ -248,7 +252,8 @@ void door_set(Door* door, float travel, float want) {
         place(door);
 }
 
-void door_jolt(Door* door, float angle) {
+void door_jolt(Door* door, float metres) {
+    const float angle = metres / (door->shape.to - door->shape.from);
     if (door->jolt == angle)
         return;
     door->jolt = angle;
@@ -264,10 +269,12 @@ void door_drift(Door* door, float want, float seconds) {
 
 void door_slam(Door* door, float want) {
     want = glm_clamp_zo(want);
-    if (door->slam || (door->travel == want && door->want == want))
+    if (door->want == want && (door->slam || door->travel == want))
         return;
-    // Unease where it stands, so the leaf does not jump as its swing stops being eased.
-    door->travel = glm_smoothstep(0.0f, 1.0f, door->travel);
+    // Unease where it stands, so the leaf does not jump as its swing stops being eased; a slam is
+    // never eased.
+    if (!door->slam)
+        door->travel = glm_smoothstep(0.0f, 1.0f, door->travel);
     door->want = want;
     door->pace = DOOR_SLAM_SECONDS;
     door->slam = true;
@@ -283,16 +290,18 @@ void door_set_open(Door* door) {
     door_set(door, 1.0f, 1.0f);
 }
 
-void door_update(Door* door, float dt) {
+bool door_update(Door* door, float dt) {
     if (!door->entity || door->travel == door->want)
-        return;
+        return false;
     const float step = dt / (door->pace > 0.0f ? door->pace : DOOR_SECONDS);
     door->travel = door->want > door->travel ? fminf(door->want, door->travel + step)
                                              : fmaxf(door->want, door->travel - step);
     // Where it was going, it goes on as the heavy door; a slam that has hit is shut, eased or not.
+    const bool hit = door->slam && door->travel == door->want;
     if (door->travel == door->want) {
         door->pace = 0.0f;
         door->slam = false;
     }
     place(door);
+    return hit;
 }
