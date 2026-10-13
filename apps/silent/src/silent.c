@@ -1247,7 +1247,9 @@ static void on_init(Game* game) {
                               .cellar = g_door_hung[DOOR_BASEMENT] ? &g_doors[DOOR_BASEMENT] : NULL,
                               .bath = g_door_hung[DOOR_BATH] ? &g_doors[DOOR_BATH] : NULL,
                               .frosted = kit.materials[MAT_FROSTED],
-                              .shade = kit.materials[MAT_LAMPSHADE]},
+                              .shade = kit.materials[MAT_LAMPSHADE],
+                              .panes = kit.materials[MAT_WINDOW_GLASS],
+                              .lamp_heads = kit.materials[MAT_LAMP_GLOW]},
                 (unsigned int)g_args.seed * 2654435761u + 13u);
     g_haunt.trace = g_args.trace_haunt;
 
