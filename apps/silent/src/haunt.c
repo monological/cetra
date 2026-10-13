@@ -73,8 +73,7 @@ static const struct {
 // from RATTLE_LAG in, the rattle's take after another, the leaf pulled up to RATTLE_PLAY metres
 // off its stop at the latch edge on each of the take's hits; the knob's own hits move it
 // KNOB_SHAKE as far. The tries come harder over RATTLE_GROW seconds, from RATTLE_FORCE0 to
-// RATTLE_FORCE1 of their volume and their pull, with a pause of TRY_GAP to TRY_GAP + TRY_SPREAD
-// between them.
+// RATTLE_FORCE1 of their volume and their pull, one straight after another.
 #define TRY_TURNS_MIN 2
 #define TRY_TURNS_MAX 4
 #define RATTLE_LAG    0.3
@@ -83,8 +82,6 @@ static const struct {
 #define RATTLE_FORCE0 0.8f
 #define RATTLE_FORCE1 1.2f
 #define KNOB_SHAKE    0.5f
-#define TRY_GAP       0.4
-#define TRY_SPREAD    1.0
 #define KNOB_VOLUME   4.0f
 #define RATTLE_VOLUME 5.0f
 // The quiet: once the door beats have begun, the player opening the cellar door stops everything
@@ -290,10 +287,9 @@ static Try rattle_try(double u, unsigned int seed) {
             len = fmax(len, shake_at(t.shakes));
         }
         t.end = at + len;
-        const double next = t.end + TRY_GAP + TRY_SPREAD * kit_hash01(k, 42u, seed);
-        if (u < next)
+        if (u < t.end)
             return t;
-        at = next;
+        at = t.end;
     }
 }
 

@@ -38,14 +38,17 @@ void fixture_bulb(Kit* kit, const KitFrame* f, float a, float y, float d) {
     }
 }
 
-// A face of the crown's pyramid, from its base edge p0..p1 to its apex, facing `out`.
+// A face of the crown's pyramid, from its base edge p0..p1 to its apex, facing `out`: a triangle,
+// since a quad with the apex twice loses its normal when it is wound the other way round.
 static void crown_face(Kit* kit, const KitFrame* f, const vec3 p0, const vec3 p1, const vec3 apex,
                        const vec3 out) {
-    const vec3 p[4] = {{p0[0], p0[1], p0[2]},
-                       {p1[0], p1[1], p1[2]},
-                       {apex[0], apex[1], apex[2]},
-                       {apex[0], apex[1], apex[2]}};
-    kit_frame_quad(kit, f, MAT_LANTERN_BRASS, p, out);
+    vec3 w0 = GLM_VEC3_ZERO_INIT, w1 = GLM_VEC3_ZERO_INIT, w2 = GLM_VEC3_ZERO_INIT;
+    vec3 o = GLM_VEC3_ZERO_INIT;
+    kit_frame_point(f, p0[0], p0[1], p0[2], w0);
+    kit_frame_point(f, p1[0], p1[1], p1[2], w1);
+    kit_frame_point(f, apex[0], apex[1], apex[2], w2);
+    kit_frame_dir(f, out[0], out[1], out[2], o);
+    kit_tri_facing(kit, MAT_LANTERN_BRASS, w0, w1, w2, o);
 }
 
 void fixture_lantern(Kit* kit, const KitFrame* f, float a, float y, float d, float r, float h) {
