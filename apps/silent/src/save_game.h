@@ -75,6 +75,12 @@ bool save_game_load(const char* slot);
 // `slot`'s file gone.
 bool save_game_delete(const char* slot);
 
+// The world as it was built (spec 13.50), kept in a slot no list shows, for a return to the title
+// to put back with save_game_load: the start every new game is played from.
+#define SAVE_GAME_START "silent-start"
+// The world as it is now kept as the start: false, said, when it could not be.
+bool save_game_keep_start(void);
+
 // From now on the game saves itself into `slot`; NULL, or a slot with nowhere to go, and it never
 // does.
 void save_game_begin(const char* slot);

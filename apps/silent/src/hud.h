@@ -50,6 +50,8 @@ void hud_think(Hud* hud, const char* text);
 // candlestick lights its candles one after another before "Saving...", then "Saved", and goes.
 // Saved again while it is up, it says so again without going out first.
 void hud_saved(Hud* hud);
+// Nothing thought, hinted or saved on screen, as at the start (spec 13.50).
+void hud_clear(Hud* hud);
 // Per frame: the thought's fade, the hint's time and the save mark's, and the lines placed in a
 // window `height` points tall.
 void hud_update(Hud* hud, float dt, float height);

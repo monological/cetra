@@ -6,7 +6,8 @@
 
 #define PAUSE_DIM 0.45f // the world dimmed behind it
 
-void pause_menu_start(PauseMenu* pm, UISystem* ui, Game* game, SettingsMenu* settings) {
+void pause_menu_start(PauseMenu* pm, UISystem* ui, Game* game, SettingsMenu* settings,
+                      UIActionFn to_title) {
     memset(pm, 0, sizeof(*pm));
     pm->ui = ui;
     if (!ui)
@@ -17,6 +18,8 @@ void pause_menu_start(PauseMenu* pm, UISystem* ui, Game* game, SettingsMenu* set
     hud_heading(col, "Paused");
     pm->resume = hud_back_item(col, "Resume", HUD_ITEM_SIZE, ui);
     settings_menu_item(col, HUD_ITEM_SIZE, settings);
+    if (to_title)
+        hud_item(col, "Quit to Title", HUD_ITEM_SIZE, to_title, NULL);
     hud_quit_item(col, HUD_ITEM_SIZE, game);
 }
 

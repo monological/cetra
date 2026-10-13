@@ -207,21 +207,18 @@ static void unpack(Backpack* bp) {
 }
 
 void backpack_build(Backpack* bp, Engine* engine, Scene* scene, bool taken) {
-    *bp = (Backpack){.taken = taken, .rows = BAG_MIN_ROWS};
-    if (taken)
-        unpack(bp);
+    *bp = (Backpack){.root = scene->root_node, .rows = BAG_MIN_ROWS};
     vec3 rest = {0.0f, 0.0f, 0.0f};
     bedroom_bed_top(rest);
     glm_vec3_copy(rest, bp->at);
     bp->at[1] += BAG_REACH_Y;
-    // Every model, each only ever drawn alone, and the bag on the bed while it lies there: one kit
-    // apiece, beside the first, so the materials are made once and those none of them used freed
-    // after. Every kit is made before any is finished, which would free what it did not use.
+    // Every model, each only ever drawn alone, and the bag on the bed: one kit apiece, beside the
+    // first, so the materials are made once and those none of them used freed after. Every kit is
+    // made before any is finished, which would free what it did not use.
     Kit kits[ITEM_COUNT + 1];
     Kit* finished[ITEM_COUNT + 1];
-    const int n = taken ? ITEM_COUNT : ITEM_COUNT + 1;
     mats_kit(&kits[0], engine, scene);
-    for (int i = 0; i < n; i++) {
+    for (int i = 0; i <= ITEM_COUNT; i++) {
         if (i > 0)
             kit_init_beside(&kits[i], &kits[0], GLM_VEC3_ZERO);
         finished[i] = &kits[i];
@@ -231,18 +228,17 @@ void backpack_build(Backpack* bp, Engine* engine, Scene* scene, bool taken) {
         ITEMS[i].model(&kits[i]);
         bp->models[i] = kit_finish_alone(&kits[i], ITEMS[i].id);
     }
-    if (!taken) {
-        Kit* kit = &kits[ITEM_COUNT];
-        bag(kit);
-        bp->bag = kit_finish(kit, "backpack");
-        // No capture keeps it: it is taken while the game runs.
-        bp->bag->capture_hidden = true;
-        glm_translate_make(bp->bag->original_transform,
-                           (vec3){rest[0], rest[1] - BAG_SINK, rest[2]});
-        glm_rotate_y(bp->bag->original_transform, BAG_YAW, bp->bag->original_transform);
-        glm_rotate_z(bp->bag->original_transform, BAG_ROLL, bp->bag->original_transform);
-    }
-    kit_free_unused(finished, n);
+    Kit* kit = &kits[ITEM_COUNT];
+    bag(kit);
+    bp->bag = kit_finish(kit, "backpack");
+    // No capture keeps it: it is taken while the game runs.
+    bp->bag->capture_hidden = true;
+    glm_translate_make(bp->bag->original_transform, (vec3){rest[0], rest[1] - BAG_SINK, rest[2]});
+    glm_rotate_y(bp->bag->original_transform, BAG_YAW, bp->bag->original_transform);
+    glm_rotate_z(bp->bag->original_transform, BAG_ROLL, bp->bag->original_transform);
+    kit_free_unused(finished, ITEM_COUNT + 1);
+    if (taken)
+        backpack_take(bp);
 }
 
 void backpack_take(Backpack* bp) {
@@ -250,8 +246,19 @@ void backpack_take(Backpack* bp) {
         return;
     bp->taken = true;
     unpack(bp);
-    free_node(bp->bag);
-    bp->bag = NULL;
+    // Kept rather than freed, so a world put back to its start (spec 13.50) lays it on the bed
+    // again.
+    node_remove_child(bp->root, bp->bag);
+}
+
+// Back on the bed, and nothing in the player's hands.
+static void put_back(Backpack* bp) {
+    if (!bp->taken)
+        return;
+    node_add_child(bp->root, bp->bag);
+    bp->taken = false;
+    bp->held_count = 0;
+    pack(bp);
 }
 
 bool backpack_add(Backpack* bp, ItemId item) {
@@ -270,6 +277,7 @@ bool backpack_holds(const Backpack* bp, ItemId item) {
 }
 
 void backpack_restore(Backpack* bp, bool taken, const ItemId* held, int count) {
+    put_back(bp);
     if (!taken)
         return;
     // Taken as the player takes it, then holding what it is said to hold rather than what it came
@@ -283,6 +291,8 @@ void backpack_restore(Backpack* bp, bool taken, const ItemId* held, int count) {
 }
 
 void backpack_free(Backpack* bp) {
+    // The bag off the graph once taken, and taken off it first when it is not.
+    free_node(bp->bag);
     for (int i = 0; i < ITEM_COUNT; i++)
         free_node(bp->models[i]);
     *bp = (Backpack){0};

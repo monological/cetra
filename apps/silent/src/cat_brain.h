@@ -75,6 +75,8 @@ typedef struct CatMind {
 // names an activity to start with, or NULL to choose. False when there is no cat.
 bool cat_mind_create(CatMind* mind, Cat* cat, Game* game, const Player* player, uint32_t seed,
                      bool blind, const char* first);
+// Its brain gone from the cat's entity, so a mind can be made on it again (spec 13.50).
+void cat_mind_free(CatMind* mind);
 
 // Its needs as they were just written over, held to their ranges, with the cat just put at a
 // place (spec 13.49): whatever it was doing is dropped and it chooses again, asleep already if it

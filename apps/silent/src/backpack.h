@@ -44,7 +44,8 @@ ItemId item_by_id(const char* id);
 
 typedef struct Backpack {
     bool taken;                    // the player has it
-    SceneNode* bag;                // lying on the bed until then
+    SceneNode* bag;                // lying on the bed until then, and kept off the graph after
+    SceneNode* root;               // the scene's, which the bag lies under on the bed
     vec3 at;                       // the middle of it, which the player reaches for
     SceneNode* models[ITEM_COUNT]; // each thing in it alone, for the backpack's screen
     // What is carried, in the order it was had, and where each lies in the grid.
@@ -64,8 +65,8 @@ void backpack_take(Backpack* bp);
 bool backpack_add(Backpack* bp, ItemId item);
 // Whether the player has `item`.
 bool backpack_holds(const Backpack* bp, ItemId item);
-// The bag put as it is said to be (spec 13.49), over one backpack_build made lying on the bed: off
-// it when `taken`, holding `held` in the order each was had. Nothing is held without the bag.
+// The bag put as it is said to be (spec 13.49), wherever it is now: back on the bed and empty, or
+// off it when `taken`, holding `held` in the order each was had. Nothing is held without the bag.
 void backpack_restore(Backpack* bp, bool taken, const ItemId* held, int count);
 void backpack_free(Backpack* bp);
 

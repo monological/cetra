@@ -10,8 +10,8 @@
 
 /*
  * The pause menu (spec 13.50): a modal screen in the HUD's UI system, in the menus' look, holding
- * Resume, which takes it down as its back does, Settings, which opens the settings over it, and
- * Exit to Desktop.
+ * Resume, which takes it down as its back does, Settings, which opens the settings over it, Quit to
+ * Title on a run that has one, and Exit to Desktop.
  */
 
 typedef struct PauseMenu {
@@ -20,9 +20,10 @@ typedef struct PauseMenu {
     UIElement* resume;
 } PauseMenu;
 
-// Its screen in `ui`, which may be NULL for none, opening `settings` and quitting `game`; nothing
-// shown yet.
-void pause_menu_start(PauseMenu* pm, UISystem* ui, Game* game, SettingsMenu* settings);
+// Its screen in `ui`, which may be NULL for none, opening `settings`, going back to the title by
+// `to_title` -- NULL leaves the item out -- and quitting `game`; nothing shown yet.
+void pause_menu_start(PauseMenu* pm, UISystem* ui, Game* game, SettingsMenu* settings,
+                      UIActionFn to_title);
 // Up over the game, on Resume.
 void pause_menu_show(PauseMenu* pm);
 // Whether it is up, on top or under the settings.

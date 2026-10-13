@@ -191,6 +191,14 @@ void hud_saved(Hud* hud) {
     hud->saved_age = hud->saved_age < SAVE_END ? fminf(hud->saved_age, SAVE_LIGHTING) : 0.0f;
 }
 
+void hud_clear(Hud* hud) {
+    hud->hint_left = 0.0f;
+    hud->saved_age = SAVE_END;
+    hud->thought_age = THOUGHT_IN + THOUGHT_STAY + THOUGHT_OUT;
+    if (hud->ui)
+        line_set(&hud->thought, "");
+}
+
 void hud_update(Hud* hud, float dt, float height) {
     if (!hud->ui)
         return;
