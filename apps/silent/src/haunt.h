@@ -48,8 +48,10 @@ typedef struct HauntHouse {
 
 // The street lamps it puts out, at most.
 #define HAUNT_STREET_LAMPS 32
-// The tones the drone is made of.
+// The tones the drone is made of, the footfall takes the climb plays, and the knob's tries.
 #define HAUNT_DRONE_TONES 4
+#define HAUNT_STEP_TAKES  6
+#define HAUNT_KNOB_TAKES  4
 
 // What the house was before it began, put back when it ends and held while captured.
 typedef struct HauntNormal {
@@ -86,9 +88,24 @@ typedef struct Haunt {
     int street_count;
     PostFXPass* grade;               // drains the picture to red; off while it is not haunted
     Sound* drone[HAUNT_DRONE_TONES]; // NULL without audio
+    // What the doors and the stair sound like, each NULL without audio: the steps, the creak and
+    // the slam are fire-and-forget, the knob and the rattle held, so the quiet can cut them dead.
+    Sound* steps[HAUNT_STEP_TAKES];
+    Sound* creak;
+    Sound* slam;
+    Sound* knob[HAUNT_KNOB_TAKES];
+    Sound* rattle;
     unsigned int seed;
     bool active;
     double began; // the sim time it began at
+    // The door beats wait for the player to watch for them, from the front of the hall down it:
+    // the sim time they began at then, below 0 until; and the seconds into them the last step
+    // reached, the beats since firing in the next. They stop for good once the player comes near
+    // the cellar door (the quiet). The cellar door is slamming shut.
+    double doors_at;
+    double last_u;
+    bool quiet;
+    bool slamming;
     HauntNormal normal;
     HauntLive live;
     bool trace; // say each beat as it comes
@@ -97,12 +114,17 @@ typedef struct Haunt {
 // Takes hold of the house, and adds the picture's grade to the post chain, off; nothing happens
 // until it begins.
 void haunt_start(Haunt* h, const HauntHouse* house, unsigned int seed);
-// Begins at sim time `time`, `into` seconds of it already gone by; nothing when it already has.
+// Begins at sim time `time`; nothing when it already has. `into` above 0 begins it that many
+// seconds in, its door beats with it rather than waiting to be watched for.
 void haunt_begin(Haunt* h, double time, double into);
 // Ends, everything it drove put back as it was before; nothing when it has not begun.
 void haunt_end(Haunt* h);
 bool haunt_active(const Haunt* h);
-// Per frame at sim time `time`: the lights, the windows, the set, the picture.
+// Per fixed step at sim time `time`, after the doors have moved, the player's feet at `feet` and
+// looking along `forward`: whether they watch for the door beats yet, then the slam, the climb,
+// the creak, the rattle, and the quiet.
+void haunt_step(Haunt* h, double time, const vec3 feet, const vec3 forward);
+// Per frame at sim time `time`: the lights, the windows, the set, the picture, the drone.
 void haunt_frame(Haunt* h, double time);
 // For the light's captures (spec 13.42): `rest` holds the house as it was before it began, so no
 // capture keeps any of it; false puts back what the last frame drove.
