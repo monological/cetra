@@ -57,8 +57,8 @@ static const KitOpening WAY_IN = {CELLAR_X0, CELLAR_FOOT_X, BASEMENT_Y, FOOT_HEA
 #define BULB_X       (-2.75f)
 #define BULB_Z       (0.5f * (STAIRWELL_Z0 + CELLAR_Z1))
 #define ROSE_DROP    0.026f
-#define CORD_L       0.82f
-#define GLASS_FOOT   1.01f
+#define CORD_L       (0.82f + HOME_RAISE) // the bulb as low as before the ceiling rose
+#define GLASS_FOOT   (1.01f + HOME_RAISE)
 #define GLASS_WIDEST 0.034f                      // over the glass's foot
 #define BULB_DROP    (GLASS_FOOT - GLASS_WIDEST) // to the glass's widest, where the light is
 #define BULB_CANDELA 30.0f
@@ -602,8 +602,8 @@ void basement_build(Kit* kit, unsigned int seed) {
     // The bulb's rose, which stays put while the bulb swings under it.
     const vec2 rose[] = {
         {0.0f, 0.0f}, {0.045f, 0.0f}, {0.04f, -0.018f}, {0.008f, -ROSE_DROP}, {0.0f, -ROSE_DROP}};
-    kit_frame_lathe(kit, &KIT_WORLD, MAT_CERAMIC, BULB_X, BULB_Z, CEIL_Y, rose, KIT_COUNT(rose),
-                    12);
+    kit_frame_lathe(kit, &KIT_WORLD, MAT_CERAMIC, BULB_X, BULB_Z, HOME_CEIL_Y, rose,
+                    KIT_COUNT(rose), 12);
 }
 
 // What swings, about the pivot at the origin: the cord, a black socket, the bulb's brass cap
@@ -628,7 +628,7 @@ static void bulb_parts(Kit* kit) {
 }
 
 // Where the cord hangs from, under the rose.
-static const vec3 PIVOT = {BULB_X, CEIL_Y - ROSE_DROP, BULB_Z};
+static const vec3 PIVOT = {BULB_X, HOME_CEIL_Y - ROSE_DROP, BULB_Z};
 
 // The bulb at rest (spec 13.42): hanging straight down from its rose, on a full supply.
 static BulbState bulb_hanging(void) {
