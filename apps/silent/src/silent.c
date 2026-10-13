@@ -1244,10 +1244,13 @@ static void on_init(Game* game) {
                               .clock = &g_clock,
                               .tv = &g_tv,
                               .fridge = &g_fridge,
+                              .lights = &g_lights,
+                              .basement = &g_basement,
                               .cellar = g_door_hung[DOOR_BASEMENT] ? &g_doors[DOOR_BASEMENT] : NULL,
                               .bath = g_door_hung[DOOR_BATH] ? &g_doors[DOOR_BATH] : NULL,
                               .frosted = kit.materials[MAT_FROSTED],
                               .shade = kit.materials[MAT_LAMPSHADE],
+                              .bulbs = kit.materials[MAT_BULB],
                               .panes = kit.materials[MAT_WINDOW_GLASS],
                               .lamp_heads = kit.materials[MAT_LAMP_GLOW]},
                 (unsigned int)g_args.seed * 2654435761u + 13u);

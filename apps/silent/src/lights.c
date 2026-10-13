@@ -207,6 +207,7 @@ void lights_build(Lights* lights, Kit* kit, Engine* engine, Scene* scene, unsign
     memset(lights, 0, sizeof(*lights));
     lights->flicker_tube = -1;
     lights->level = 1.0f;
+    lights->mains = 1.0f;
     lights->seed = seed;
     ShaderProgram* pbr = engine_get_program(engine, CETRA_PROGRAM_PBR);
     // The panels come from the strips: this is what turns them into light.
@@ -231,6 +232,7 @@ void lights_build(Lights* lights, Kit* kit, Engine* engine, Scene* scene, unsign
     for (int i = 0; i < TUBE_COUNT; i++) {
         tube_fixture(kit, &TUBES[i]);
         Material* m = tube_strip(scene, pbr, &TUBES[i]);
+        lights->strip[i] = m;
         if (flicker && TUBES[i].flicker) {
             lights->flicker = m;
             lights->flicker_nits = TUBES[i].nits;
@@ -288,11 +290,13 @@ void lights_start_audio(Lights* lights, AudioSystem* audio) {
     }
 }
 
-// The failing tube at `level` and the flashlight's beam on or off: what an update drives, and what
-// the captures' rest drives in its place.
-static void lights_apply(Lights* lights, float level, bool beam) {
-    if (lights->flicker)
-        lights->flicker->emissive_strength = lights->flicker_nits * level;
+// The tubes on `mains` with the failing one at `level`, and the flashlight's beam on or off: what
+// an update drives, and what the captures' rest drives in its place.
+static void lights_apply(Lights* lights, float mains, float level, bool beam) {
+    for (int t = 0; t < TUBE_COUNT; t++)
+        if (lights->strip[t])
+            lights->strip[t]->emissive_strength =
+                TUBES[t].nits * mains * (t == lights->flicker_tube ? level : 1.0f);
     Light* f = lights->flashlight;
     if (f) {
         f->intensity = beam ? FLASHLIGHT_CANDELA : 0.0f;
@@ -313,7 +317,7 @@ void lights_update(Lights* lights, Scene* scene, double time, float dt, const ve
             audio_sound_play(s);
             lights->buzzing[t] = true;
         }
-        const float lit = t == lights->flicker_tube ? level : 1.0f;
+        const float lit = lights->mains * (t == lights->flicker_tube ? level : 1.0f);
         audio_sound_set_volume(s, BUZZ_VOLUME * (TUBES[t].nits / BUZZ_NITS) * lit);
     }
 
@@ -350,13 +354,21 @@ void lights_update(Lights* lights, Scene* scene, double time, float dt, const ve
         light_set_position(f, pos);
         light_set_direction(f, lights->flashlight_dir);
     }
-    lights_apply(lights, level, lights->flashlight_on);
+    lights_apply(lights, lights->mains, level, lights->flashlight_on);
 }
 
 void lights_toggle_flashlight(Lights* lights) {
     lights->flashlight_on = !lights->flashlight_on;
 }
 
+void lights_set_mains(Lights* lights, float mains) {
+    lights->mains = mains;
+    lights_apply(lights, mains, lights->level, lights->flashlight_on);
+}
+
 void lights_rest(Lights* lights, bool rest) {
-    lights_apply(lights, rest ? 1.0f : lights->level, lights->flashlight_on && !rest);
+    if (rest)
+        lights_apply(lights, 1.0f, 1.0f, false);
+    else
+        lights_apply(lights, lights->mains, lights->level, lights->flashlight_on);
 }

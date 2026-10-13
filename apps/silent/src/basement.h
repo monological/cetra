@@ -37,6 +37,9 @@ typedef struct Basement {
     Light* light;    // cached, its shadow following it while the swing is wide
     double drafted;  // when the door first opened, or -1 before
     unsigned int seed;
+    // The share of its supply the bulb gets from the next update, 1 by default: what a power cut
+    // (spec 13.52) drives. Never quite 0 there, or the light leaves its cached shadow undrawn.
+    float mains;
     BulbState live; // as the last update left the light; hanging still on a full supply before
 
     AudioSystem* audio;

@@ -11,9 +11,11 @@
 #include "cetra/scene.h"
 #include "cetra/game/audio.h"
 
+#include "basement.h"
 #include "clock.h"
 #include "door.h"
 #include "kitchen.h"
+#include "lights.h"
 #include "tv.h"
 
 /*
@@ -39,16 +41,20 @@ typedef struct HauntHouse {
     Clock* clock;
     Tv* tv;
     Fridge* fridge;
+    Lights* lights;       // the kitchen's tubes
+    Basement* basement;   // the cellar stair's bulb
     Door* cellar;         // the basement door
     Door* bath;           // the bathroom door
     Material* frosted;    // the hall lanterns' glass, which nothing else wears
-    Material* shade;      // the lampshades' cloth, the floor lamp's bulb one of its own
+    Material* shade;      // the lampshades' cloth, each lamp's bulb one of its own
+    Material* bulbs;      // the bare bulbs' glass, the bathroom's among them
     Material* panes;      // the house's clear window glass
     Material* lamp_heads; // the street lamps' glowing heads
 } HauntHouse;
 
-// The street lamps it puts out, at most.
+// The street lamps it puts out, and the reflection probes it hides, at most.
 #define HAUNT_STREET_LAMPS 32
+#define HAUNT_PROBES       32
 // The tones the drone is made of, the footfall takes the climb plays, and the knob's tries.
 #define HAUNT_DRONE_TONES 4
 #define HAUNT_STEP_TAKES  6
@@ -61,23 +67,34 @@ typedef struct HauntNormal {
     vec3 glass;
     float glass_nits;
     float lamp_candela;
+    float bath_candela;
+    float bedside_candela;
+    float bulb_nits;
     vec3 panes;
     float lamp_head_nits;
     float street_candela[HAUNT_STREET_LAMPS];
-    // The picture's finishing, which its grade takes over.
+    float probe_intensity[HAUNT_PROBES];
+    float sky; // the environment's strength
+    // The picture's finishing, which its grade takes over, and the fog's glow, which it puts out.
     bool vignette;
     float vignette_strength, vignette_radius;
     bool grain;
     float grain_strength;
+    vec3 fog_ambient;
+    bool fog_from_sky;
 } HauntNormal;
 
 // What the last frame drove the lights at: the hall's and the lamp's supply as a share of their
-// own, how far the hall has gone red, and whether the night outside is gone.
+// own, how far the hall has gone red, whether the night outside is gone, the share of its supply
+// every other light in the house gets, and whether the light that comes from no lamp -- the bounce
+// and the reflections the house was captured in, and the sky's -- is seen.
 typedef struct HauntLive {
     float hall;
     float lamp;
     float red;
     float dark_out;
+    float mains;
+    bool ambient;
 } HauntLive;
 
 typedef struct Haunt {
@@ -85,6 +102,10 @@ typedef struct Haunt {
     Light* hall[2]; // the pendant over the hall and the lantern on its west wall
     Light* lamp;    // the living room's floor lamp
     int shade_slot; // its bulb in the shade's
+    Light* bath;    // the bathroom's bare bulb
+    Light* bedside; // the bedroom's lamp
+    int bedside_slot;
+    int probe_count; // the reflection probes it hides
     Light* street[HAUNT_STREET_LAMPS];
     int street_count;
     PostFXPass* grade;               // drains the picture to red; off while it is not haunted

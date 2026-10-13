@@ -222,6 +222,12 @@ void tv_start_audio(Tv* tv, AudioSystem* audio) {
         audio_sound_set_position(hiss, tv->speaker);
         audio_sound_set_volume(hiss, TV_HISS_VOLUME);
     }
+    tv->hiss = hiss;
+}
+
+void tv_hiss(Tv* tv, float share) {
+    if (tv->hiss)
+        audio_sound_set_volume(tv->hiss, TV_HISS_VOLUME * share);
 }
 
 // A field onto the picture, the glass and the light: its number, the hum's phase, the noise's

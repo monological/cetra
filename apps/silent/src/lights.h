@@ -30,6 +30,8 @@ typedef struct Lights {
     int flicker_tube;   // which tube that is; -1 when none
     float level;        // the failing tube's level as it was last driven, 1 when it holds
     unsigned int seed;
+    Material* strip[LIGHTS_MAX_TUBES]; // each tube's, NULL past the last
+    float mains; // the share of their supply the tubes get, 1 by default; lights_set_mains
 
     Sound* buzz[LIGHTS_MAX_TUBES]; // each tube's ballast, NULL without audio
     bool buzzing[LIGHTS_MAX_TUBES];
@@ -53,6 +55,10 @@ void lights_update(Lights* lights, Scene* scene, double time, float dt, const ve
                    const vec3 forward);
 
 void lights_toggle_flashlight(Lights* lights);
+
+// The tubes on `mains` of their supply, their buzz with them, from now: what a power cut
+// (spec 13.52) drives. Never quite 0 there, or a tube's panel leaves its cached shadow undrawn.
+void lights_set_mains(Lights* lights, float mains);
 
 // For the light's captures (spec 13.42): `rest` holds the failing tube lit and the flashlight off,
 // so no capture keeps a flicker's instant or the beam of a player standing in it; false puts them
