@@ -211,6 +211,7 @@ typedef struct SilentArgs {
     bool backpack;           // the backpack already taken, and the flashlight in it
     bool map;                // the town map already in it, and the fridge door bare
     bool key;                // the front door's key in it, and the workbench bare (spec 13.53)
+    StoryStage story;        // how far the house's story has gone at the start, or STORY_NONE
     bool open_map;           // the map's screen open at the start, over the backpack's when that is
     bool found[PLACE_COUNT]; // places found before the run starts, their marks not yet written
     ItemId open_backpack;    // the backpack's screen open on it at the start, or ITEM_NONE
@@ -270,7 +271,7 @@ static bool starts_elsewhere(const SilentArgs* a) {
         found |= a->found[k];
     return a->load || a->new_game || a->slot || a->player_at_set || found || a->backpack ||
            a->crouch || a->cat_at || a->cat_go[0] || a->cat_clip[0] || a->cat_doing || a->cat_cam ||
-           a->haunt || (a->cam_eye_set && a->cam_target_set);
+           a->haunt || a->story != STORY_NONE || (a->cam_eye_set && a->cam_target_set);
 }
 static Scene* g_scene;
 static Player g_player;
@@ -1272,7 +1273,7 @@ static void on_init(Game* game) {
                       .front = g_door_hung[DOOR_HOME] ? &g_doors[DOOR_HOME] : NULL,
                       .cellar = g_door_hung[DOOR_BASEMENT] ? &g_doors[DOOR_BASEMENT] : NULL});
     g_story.trace = g_args.trace_haunt;
-    story_key_on_bench(&g_story, !backpack_holds(&g_backpack, ITEM_KEY));
+    story_restore(&g_story, g_args.story != STORY_NONE ? g_args.story : STORY_LOCKED, feet);
 
     const vec3 dir = {look[0] - feet[0], look[1] - eye_y, look[2] - feet[2]};
     player_init(&g_player, game, physics, em, feet, atan2f(dir[0], dir[2]),
@@ -1302,6 +1303,7 @@ static void on_init(Game* game) {
                        .map_screen = &g_map_screen,
                        .lights = &g_lights,
                        .basement = &g_basement,
+                       .story = &g_story,
                        .cat = &g_cat,
                        .mind = &g_mind};
     for (int i = 0; i < DOORS; i++)
@@ -1697,9 +1699,11 @@ static void on_pre_render(Game* game, double alpha) {
             g_run = RUN_LOADING;
             break;
     }
-    // The haunting (spec 13.52): begun as the game is first played when the command line asks,
-    // and by hand. It plays out on the sim's clock, so it stands still with the game.
+    // The haunting (spec 13.52): begun as the game is first played when the command line asks or a
+    // game was put back haunted (spec 13.53), and by hand. It plays out on the sim's clock, so it
+    // stands still with the game.
     if (g_run == RUN_PLAYING) {
+        story_play(&g_story, game->time);
         if (g_args.haunt) {
             g_args.haunt = false;
             haunt_begin(&g_haunt, game->time, g_args.haunt_at);
@@ -1915,7 +1919,13 @@ static void print_usage(const char* prog) {
            "                          ends it)\n");
     printf("      --haunt-at S        The haunting begun S seconds before the game is played, its\n"
            "                          door beats too, without waiting to be watched for\n");
-    printf("      --trace-haunt       Print each of the haunting's beats as it comes\n");
+    printf(
+        "      --trace-haunt       Print each of the haunting's beats as it comes, and each turn\n"
+        "                          of the house's story\n");
+    printf("      --story STAGE       Start with the house's story at STAGE: locked (the front\n"
+           "                          door locked), haunted (the haunting begun from it), over\n"
+           "                          (ended at the cellar door) or open (the front door\n"
+           "                          unlocked). Anywhere out of the house it is open\n");
     printf("      --no-loading-screen Load under a black window, without the engine's screen\n");
     printf("      --loading-screen    The engine's loading screen headless too\n");
     printf("      --startup-ms        Print how long each loading step and held frame took\n");
@@ -2031,6 +2041,7 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
     a->cat_clip_seconds = -1.0f;
     a->cat_seed = 1;
     a->open_backpack = ITEM_NONE;
+    a->story = STORY_NONE;
     a->local_exposure = -1;
     a->le_highlights = -1.0f;
     a->le_shadows = -1.0f;
@@ -2142,6 +2153,10 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
             a->map = true;
         } else if (!strcmp(s, "--key")) {
             a->key = true;
+        } else if (!strcmp(s, "--story") && has_next) {
+            a->story = story_stage_by_name(argv[++i]);
+            if (a->story == STORY_NONE)
+                fprintf(stderr, "silent: --story names no stage; starting locked\n");
         } else if (!strcmp(s, "--open-map")) {
             a->open_map = true;
         } else if (!strcmp(s, "--found") && has_next) {
