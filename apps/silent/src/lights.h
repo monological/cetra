@@ -39,6 +39,18 @@ typedef struct Lights {
     Light* flashlight;
     bool flashlight_on;
     vec3 flashlight_dir; // smoothed, so the beam trails the look a little
+
+    // The hall's pendant (spec 13.52): its node, turned about its rose; the bulb's height under
+    // the rose in it; its light, where the last update left it and whether its kept shadow
+    // followed; and its swing, radians, as it is now and as it is asked to be from the next
+    // update, 0 to hang still.
+    SceneNode* pendant;
+    float pendant_bulb;
+    Light* hall;
+    vec3 hall_at;
+    bool hall_follows;
+    float swing;
+    float swing_want;
 } Lights;
 
 // The fixtures' bodies go into the kit; the strips and the flashlight straight
@@ -60,9 +72,9 @@ void lights_toggle_flashlight(Lights* lights);
 // (spec 13.52) drives. Never quite 0 there, or a tube's panel leaves its cached shadow undrawn.
 void lights_set_mains(Lights* lights, float mains);
 
-// For the light's captures (spec 13.42): `rest` holds the failing tube lit and the flashlight off,
-// so no capture keeps a flicker's instant or the beam of a player standing in it; false puts them
-// back as the last update left them.
+// For the light's captures (spec 13.42): `rest` holds the failing tube lit, the flashlight off and
+// the pendant's light hanging still, so no capture keeps a flicker's instant, the beam of a player
+// standing in it or a swing; false puts them back as the last update left them.
 void lights_rest(Lights* lights, bool rest);
 
 // A bare bulb on a failing supply (spec 13.31): 1 most of the time, and now and then dimming

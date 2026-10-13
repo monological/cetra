@@ -1248,7 +1248,7 @@ static void on_init(Game* game) {
                               .basement = &g_basement,
                               .cellar = g_door_hung[DOOR_BASEMENT] ? &g_doors[DOOR_BASEMENT] : NULL,
                               .bath = g_door_hung[DOOR_BATH] ? &g_doors[DOOR_BATH] : NULL,
-                              .frosted = kit.materials[MAT_FROSTED],
+                              .filament = kit.materials[MAT_FILAMENT],
                               .shade = kit.materials[MAT_LAMPSHADE],
                               .bulbs = kit.materials[MAT_BULB],
                               .panes = kit.materials[MAT_WINDOW_GLASS],

@@ -20,9 +20,8 @@ _Static_assert(HAUNT_KNOB_TAKES == DOOR_KNOB_TAKES, "a held sound for every knob
 // As it begins every light it drives goes out with the night outside -- the hall's, the lamp's and
 // the set's -- and the picture is drained to red unseen in the dark. BLACKOUT_SECONDS later they
 // come back up over RISE_SECONDS, already red, the hall at HALL_GAIN times what it gave: red is
-// the dimmest third of white to the eye, and with the bounce off every wall gone with the power,
-// the hall is lit by its two lights alone. The glass keeps its own nits, or it burns through the
-// tone curve to pink.
+// the dimmest third of white to the eye. The lanterns' filaments keep their own nits, or they burn
+// through the tone curve to white.
 #define BLACKOUT_SECONDS 1.5
 #define RISE_SECONDS     1.2
 static const vec3 HALL_RED = {1.0f, 0.02f, 0.01f};
@@ -93,6 +92,8 @@ static const struct {
 // CELLAR_GAIN times its own light, swinging CELLAR_SWING times as hard as a draft swings it.
 #define CELLAR_GAIN  4.0f
 #define CELLAR_SWING 3.0f
+// The hall's pendant swings this far, radians, once it begins: pushed by nothing anyone can see.
+#define PENDANT_SWING 0.18f
 // The door beats wait to be watched for: the player in the front of the hall, short of WATCH_Z1
 // under the pendant, looking down it within the angle whose cosine is WATCH_COS, from WATCH_AFTER
 // seconds in, once the hall has come back red.
@@ -149,10 +150,10 @@ static void apply(Haunt* h, const HauntLive* s) {
         glm_vec3_lerp((float*)n->hall_colour[i], (float*)HALL_RED, s->red, l->color);
         l->intensity = n->hall_candela[i] * gain * s->hall;
     }
-    Material* glass = h->house.frosted;
-    if (glass) {
-        glm_vec3_lerp((float*)n->glass, (float*)HALL_RED, s->red, glass->emissive);
-        glass->emissive_strength = n->glass_nits * s->hall;
+    Material* filament = h->house.filament;
+    if (filament) {
+        glm_vec3_lerp((float*)n->filament, (float*)HALL_RED, s->red, filament->emissive);
+        filament->emissive_strength = n->filament_nits * s->hall;
     }
     if (h->lamp) {
         h->lamp->intensity = n->lamp_candela * s->lamp;
@@ -441,9 +442,9 @@ void haunt_begin(Haunt* h, double time, double into) {
             glm_vec3_copy(h->hall[i]->color, n->hall_colour[i]);
             n->hall_candela[i] = h->hall[i]->intensity;
         }
-    if (h->house.frosted) {
-        glm_vec3_copy(h->house.frosted->emissive, n->glass);
-        n->glass_nits = h->house.frosted->emissive_strength;
+    if (h->house.filament) {
+        glm_vec3_copy(h->house.filament->emissive, n->filament);
+        n->filament_nits = h->house.filament->emissive_strength;
     }
     if (h->lamp)
         n->lamp_candela = h->lamp->intensity;
@@ -502,6 +503,8 @@ void haunt_begin(Haunt* h, double time, double into) {
     if (h->house.fridge)
         kitchen_fridge_run(h->house.fridge, false);
     house_supply(h, SUPPLY_OUT);
+    if (h->house.lights)
+        h->house.lights->swing_want = PENDANT_SWING;
     drone_up(h, 0.0f);
     for (int i = 0; i < HAUNT_DRONE_TONES; i++)
         if (h->drone[i])
@@ -515,6 +518,8 @@ void haunt_end(Haunt* h) {
         return;
     apply(h, &NORMAL);
     house_supply(h, 1.0f);
+    if (h->house.lights)
+        h->house.lights->swing_want = 0.0f;
     tint_tv(h, 0.0f, 1.0f);
     if (h->house.tv)
         tv_hiss(h->house.tv, 1.0f);

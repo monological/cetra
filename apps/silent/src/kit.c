@@ -42,6 +42,11 @@ void kit_free_unused(Kit* const* kits, int count) {
     }
 }
 
+void kit_keep_beside(Kit* first, const Kit* beside) {
+    for (int i = 0; i < beside->material_count && i < first->material_count; i++)
+        first->used[i] = first->used[i] || beside->used[i];
+}
+
 int kit_material(Kit* kit, Material* material, float repeat_m, float grime) {
     if (kit->material_count >= KIT_MAX_MATERIALS) {
         fprintf(stderr, "silent: kit is out of material slots (%d)\n", KIT_MAX_MATERIALS);

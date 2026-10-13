@@ -75,16 +75,17 @@ typedef enum {
     MAT_SHADE,        // the study lamp's green cased glass, faintly lit from inside
     MAT_BRASS_BRIGHT, // candlesticks and sconces: brass kept polished
     // The player's house (spec 13.25).
-    MAT_CREAM,      // the hall's plaster, gone the colour of old cream
-    MAT_HARDWOOD,   // its dark boards under a lacquer that still shines
-    MAT_WALLPAPER,  // the living room's faded paper
-    MAT_MOULDING,   // crown moulding, skirting and casings, painted white long ago
-    MAT_UPHOLSTERY, // the sofa and the armchair
-    MAT_MIRROR,     // the bathroom's mirror, its silvering spotted
-    MAT_LAMPSHADE,  // a lamp's fabric shade, lit from inside
-    MAT_FROSTED,    // a lantern's frosted glass, lit from inside
-    MAT_SCREEN,     // the television's glass, glowing with its picture
-    MAT_TV_STATIC,  // the picture on it, snow, drawn in the late draw (spec 13.30)
+    MAT_CREAM,         // the hall's plaster, gone the colour of old cream
+    MAT_HARDWOOD,      // its dark boards under a lacquer that still shines
+    MAT_WALLPAPER,     // the living room's faded paper
+    MAT_MOULDING,      // crown moulding, skirting and casings, painted white long ago
+    MAT_UPHOLSTERY,    // the sofa and the armchair
+    MAT_MIRROR,        // the bathroom's mirror, its silvering spotted
+    MAT_LAMPSHADE,     // a lamp's fabric shade, lit from inside
+    MAT_FILAMENT,      // a lantern bulb's filament, lit (spec 13.52)
+    MAT_LANTERN_BRASS, // the hall lanterns' aged brass, still glossy
+    MAT_SCREEN,        // the television's glass, glowing with its picture
+    MAT_TV_STATIC,     // the picture on it, snow, drawn in the late draw (spec 13.30)
     // The home's basement (spec 13.31).
     MAT_CELLAR_WALL,     // the stairwell down, painted a pale colour long ago
     MAT_CELLAR_DADO,     // the dark gloss band painted along the flight

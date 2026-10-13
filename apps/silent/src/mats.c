@@ -412,13 +412,25 @@ static const MatSpec SPECS[MAT_COUNT] = {
                        0.0f,
                        0.4f,
                        .glow = {{1.0f, 0.72f, 0.42f}, 25.0f}},
-    [MAT_FROSTED] = {"frosted_glass",
-                     NULL,
-                     {0.95f, 0.92f, 0.85f},
-                     0.3f,
-                     0.0f,
-                     1.0f,
-                     .glow = {{1.0f, 0.74f, 0.46f}, 90.0f}},
+    // A squirrel-cage filament, a few millimetres of wire seen through clear glass: bright enough
+    // that the bloom shows the bulb lit from across the hall.
+    [MAT_FILAMENT] = {"filament",
+                      NULL,
+                      {1.0f, 0.85f, 0.6f},
+                      0.3f,
+                      0.0f,
+                      1.0f,
+                      .glow = {{1.0f, 0.62f, 0.3f}, 5000.0f}},
+    // Brass gone dark in its corners and still glossy where it is handled: metal, under the smear
+    // scan's relief, glossier than the clock's.
+    [MAT_LANTERN_BRASS] = {"lantern_brass",
+                           "Smear008",
+                           {0.80f, 0.62f, 0.30f},
+                           0.35f,
+                           1.0f,
+                           0.3f,
+                           true,
+                           .grime = 0.45f},
     // A picture tube's glossy dark glass, smeared; it glows with whatever the set shows.
     [MAT_SCREEN] = {"tv_screen", "Smear008", {0.05f, 0.06f, 0.07f}, 0.15f, 0.0f, 0.3f, true},
     // The picture on the glass (spec 13.30): no photo set and no colour of its own, since the
