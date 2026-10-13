@@ -24,7 +24,8 @@
  * failing; the living room's lamp falters, the snow on the television goes red, and the picture is
  * drained to red. The clock stops, the fridge cuts out and the house goes quiet under a low drone;
  * the bathroom door creaks ajar -- or shut, if it stood open -- and the cellar door is tried hard
- * from the other side -- until the player comes near it, when everything at the door stops dead.
+ * from the other side, on and on, until the player opens it: then everything at it stops dead, and
+ * it flies open and slams on the stair's bulb, lit red and swinging.
  *
  * One module with a beginning and an end, so a story can start it where a key does now. Every
  * beat is a pure function of the seconds since it began and a seed, so a headless run shows the
@@ -118,14 +119,13 @@ typedef struct Haunt {
     bool active;
     double began; // the sim time it began at
     // The door beats wait for the player to watch for them, from the front of the hall down it:
-    // the sim time they began at then, below 0 until; and the seconds into them the last step
-    // reached, the beats since firing in the next. They stop for good once the player comes near
-    // the cellar door (the quiet), and whether they were near it at the last step. The cellar door
-    // is slamming shut.
+    // whether they have, the sim time the beats began at then, and the seconds into them the last
+    // step reached, the beats since firing in the next. They stop for good once the player opens
+    // the cellar door (the quiet). The cellar door is being flung, shut or open.
+    bool watched;
     double doors_at;
     double last_u;
     bool quiet;
-    bool near;
     bool slamming;
     HauntNormal normal;
     HauntLive live;

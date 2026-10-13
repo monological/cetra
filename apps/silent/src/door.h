@@ -71,8 +71,9 @@ void door_toggle(Door* door);
 void door_jolt(Door* door, float angle);
 // On its way to `want` by itself, getting there `seconds` from now.
 void door_drift(Door* door, float want, float seconds);
-// Slammed shut from wherever it stands, in DOOR_SLAM_SECONDS from fully open; nothing when shut.
-void door_slam(Door* door);
+// Flung to `want`, 0 shut and 1 open, from wherever it stands, in DOOR_SLAM_SECONDS over the whole
+// swing; nothing when it is already there.
+void door_slam(Door* door, float want);
 // Where along its swing the leaf stands `angle` radians open, as `travel`.
 float door_travel_at(const Door* door, float angle);
 // `travel` along its swing already, and on its way to `want` at the heavy door's pace, each held to

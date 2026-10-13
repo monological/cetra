@@ -22,12 +22,13 @@ _Static_assert(HAUNT_KNOB_TAKES == DOOR_KNOB_TAKES, "a held sound for every knob
 // As it begins every light it drives goes out with the night outside -- the hall's, the lamp's and
 // the set's -- and the picture is drained to red unseen in the dark. BLACKOUT_SECONDS later they
 // come back up over RISE_SECONDS, already red, the hall at HALL_GAIN times what it gave: red is
-// the dimmest third of white to the eye, and a hall at its own candela reads as dark rather than
-// red. The glass keeps its own nits, or it burns through the tone curve to pink.
+// the dimmest third of white to the eye, and with the bounce off every wall gone with the power,
+// the hall is lit by its two lights alone. The glass keeps its own nits, or it burns through the
+// tone curve to pink.
 #define BLACKOUT_SECONDS 1.5
 #define RISE_SECONDS     1.2
 static const vec3 HALL_RED = {1.0f, 0.02f, 0.01f};
-#define HALL_GAIN 2.5f
+#define HALL_GAIN 6.0f
 // Out is SUPPLY_OUT of the supply and a failing one never falls under SUPPLY_FLOOR, never nothing:
 // these lights cast cached shadows, and a cached light at nothing leaves its shadow undrawn
 // (basement.c's bulb, spec 13.31).
@@ -89,10 +90,11 @@ static const struct {
 #define TRY_SPREAD    1.0
 #define KNOB_VOLUME   4.0f
 #define RATTLE_VOLUME 5.0f
-// The quiet: a player coming within this far of the cellar door in plan, on its floor, once it is
-// being tried, stops everything at the door. Farther than the action key reaches, so it always
-// comes first; one already there when the tries begin has to come to it again.
-#define QUIET_REACH 2.2f
+// The quiet: once the door beats have begun, the player opening the cellar door stops everything
+// at it dead, and it flies open and slams against its stop; the stair's bulb comes on red, at
+// CELLAR_GAIN times its own light, swinging CELLAR_SWING times as hard as a draft swings it.
+#define CELLAR_GAIN  4.0f
+#define CELLAR_SWING 3.0f
 // The door beats wait to be watched for: the player in the front of the hall, short of WATCH_Z1
 // under the pendant, looking down it within the angle whose cosine is WATCH_COS, from WATCH_AFTER
 // seconds in, once the hall has come back red.
@@ -192,12 +194,16 @@ static void apply(Haunt* h, const HauntLive* s) {
 }
 
 // The lights the house's own modules drive, the kitchen's tubes and the cellar's bulb, on `share`
-// of their supply from now. Not part of apply: each rests itself.
+// of their supply from now, in their own colour. Not part of apply: each rests itself.
 static void house_supply(Haunt* h, float share) {
     if (h->house.lights)
         lights_set_mains(h->house.lights, share);
-    if (h->house.basement)
-        h->house.basement->mains = share;
+    Basement* b = h->house.basement;
+    if (b) {
+        b->mains = share;
+        glm_vec3_one(b->tint);
+        b->gain = 1.0f;
+    }
 }
 
 // The set's white `red` of the way to red, at `level` of its own brightness. Not part of apply: the
@@ -482,15 +488,14 @@ void haunt_begin(Haunt* h, double time, double into) {
     h->began = time - into;
     h->live = NORMAL;
     h->quiet = false;
-    // A player already at the cellar door has to come to it again for the quiet.
-    h->near = true;
     h->slamming = false;
     // The door beats wait to be watched for -- unless this begins part-way in, when they are as far
     // in, and the doors stand where they would by then: the cellar door shut, and past the creak
     // the bathroom door ajar if it was shut and shut if it was open.
-    h->doors_at = -1.0;
+    h->watched = false;
     Door* cellar = h->house.cellar;
     if (into > 0.0 && cellar) {
+        h->watched = true;
         h->doors_at = h->began;
         h->last_u = into;
         if (cellar->travel > 0.0f || cellar->want > 0.0f)
@@ -558,15 +563,16 @@ void haunt_step(Haunt* h, double time, const vec3 feet, const vec3 forward) {
     }
     if (h->quiet)
         return;
-    if (h->doors_at < 0.0) {
+    if (!h->watched) {
         if (time - h->began < WATCH_AFTER || !watching(feet, forward))
             return;
         // Watched for: the door beats begin, and a cellar door standing open slams shut in front of
         // the player.
+        h->watched = true;
         h->doors_at = time;
         h->last_u = 0.0;
         if (cellar->travel > 0.0f || cellar->want > 0.0f) {
-            door_slam(cellar);
+            door_slam(cellar, 0.0f);
             h->slamming = true;
         }
         if (h->trace)
@@ -576,19 +582,25 @@ void haunt_step(Haunt* h, double time, const vec3 feet, const vec3 forward) {
     const double u = time - h->doors_at, was = h->last_u;
     h->last_u = u;
 
-    // The quiet: once the door is being tried, a player coming near it stops it all dead -- the
-    // tries, the drone -- and nothing at the door comes again.
-    const float* door_at = cellar->entity->position;
-    const float dx = feet[0] - door_at[0], dz = feet[2] - door_at[2];
-    const bool near = feet[1] > FLOOR_Y - 0.3f && dx * dx + dz * dz < QUIET_REACH * QUIET_REACH;
-    const bool came = near && !h->near;
-    h->near = near;
-    if (u >= RATTLE_AT && came) {
+    // The quiet: the player opening the cellar door -- the doors have just moved, so its want is
+    // the action key's -- stops it all dead, the tries and the drone, and the door is flung open
+    // and slams against its stop, on the stair's bulb lit red and swinging hard. Nothing at the
+    // door comes again.
+    if (cellar->want > 0.0f && !cellar->slam && !h->slamming) {
         h->quiet = true;
         hush_door(h);
         drone_up(h, 0.0f);
+        door_slam(cellar, 1.0f);
+        h->slamming = true;
+        Basement* b = h->house.basement;
+        if (b) {
+            b->mains = 1.0f;
+            glm_vec3_copy((float*)HALL_RED, b->tint);
+            b->gain = CELLAR_GAIN;
+            basement_swing(b, time, CELLAR_SWING);
+        }
         if (h->trace)
-            printf("haunt quiet at %.3f, %.2f m from the door\n", u, sqrtf(dx * dx + dz * dz));
+            printf("haunt flung open at %.3f\n", u);
         return;
     }
 

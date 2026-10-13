@@ -1092,7 +1092,8 @@ floor lamp and the TV come back red. Its door beats wait until the player stands
 the hall looking down it:
 - an open cellar door slams;
 - 3 s on, the bathroom door creaks ajar, or shut if it stood open;
-- from 6 s, the cellar door is tried from the stair until the player comes within 2.2 m of it.
+- from 6 s, the cellar door is tried from the stair, on and on, until the player opens it with E;
+  then it flies open and slams against its stop, on the stair's bulb lit red and swinging hard.
 
 Ending it puts the house back as it was; the doors stay where it moved them. Nothing of it is
 saved.
@@ -1101,7 +1102,7 @@ saved.
   watched for: past 3 the bathroom door stands where the creak left it, past 6 the tries are under
   way.
 - **`--trace-haunt`:** prints each beat as it comes: when it was watched for, the slam, the creak,
-  each try with its turns of the knob and its shakes, the quiet.
+  each try with its turns of the knob and its shakes, the door flung open.
 - **Headless:** with `--pad-script`, `rstick` on a frame presses K.
 
 **Capture:** `-x`, `-f <n>`, `-S <path>`, `--screenshot-every <n>`, and `-W`/`-H` for the window
