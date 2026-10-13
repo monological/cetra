@@ -3,10 +3,33 @@
 
 #include "door_try.h"
 
-// The rattle comes this long after the knob is turned, and the knob's own hits pull the leaf this
-// share as far as the rattle's.
-#define TRY_LAG  0.3
-#define TRY_KNOB 0.5f
+// The knob's own hits pull the leaf this share as far as the rattle's.
+#define KNOB_SHARE 0.5f
+// A player's try is heard from right beside the door.
+#define HAND_VOLUME 1.2f
+
+void door_sounds_load(DoorSounds* s, AudioSystem* audio) {
+    *s = (DoorSounds){.audio = audio};
+    if (!audio)
+        return;
+    char path[96];
+    for (int i = 0; i < DOOR_KNOB_TAKES; i++) {
+        snprintf(path, sizeof(path), "assets/audio/silent/%s", DOOR_KNOB[i].file);
+        s->knob[i] = audio_sound_from_file(audio, path, AUDIO_BUS_SFX);
+    }
+    snprintf(path, sizeof(path), "assets/audio/silent/%s", DOOR_RATTLE[0].file);
+    s->rattle = audio_sound_from_file(audio, path, AUDIO_BUS_SFX);
+    s->slam = audio_sound_from_file(audio, "assets/audio/silent/door_slam.wav", AUDIO_BUS_SFX);
+    s->creak = audio_sound_from_file(audio, "assets/audio/silent/door_creak.wav", AUDIO_BUS_SFX);
+}
+
+void door_hear(const DoorSounds* s, const Sound* sound, const Door* door, float volume) {
+    if (!sound || !s->audio || !door->entity)
+        return;
+    AudioVoiceDesc d = {.volume = volume};
+    glm_vec3_copy(door->entity->position, d.position);
+    audio_play_voice(s->audio, sound, &d);
+}
 
 // The leaf off its stop around a hit `d` seconds from it: pulled out over the 50 ms before, the
 // latch hitting the strike, and let fall back over the 90 ms after.
@@ -15,66 +38,61 @@ static float hit_pull(double d) {
                    : 1.0f - glm_smoothstep(0.0f, 0.09f, (float)d);
 }
 
-float door_take_pull(const DoorTake* take, double at, double u) {
+// `take` started at `at`, at `u`: each hit's pull as strong as the hit, the largest of them.
+static float take_pull(const DoorTake* take, double at, double u) {
     float pull = 0.0f;
     for (int i = 0; i < take->hits; i++)
         pull = fmaxf(pull, take->strength[i] * hit_pull(u - (at + (double)take->at[i])));
     return pull;
 }
 
-void door_try_takes_load(DoorTryTakes* takes, AudioSystem* audio) {
-    *takes = (DoorTryTakes){.audio = audio};
-    if (!audio)
-        return;
-    char path[96];
-    for (int i = 0; i < DOOR_KNOB_TAKES; i++) {
-        snprintf(path, sizeof(path), "assets/audio/silent/%s", DOOR_KNOB[i].file);
-        takes->knob[i] = audio_sound_from_file(audio, path, AUDIO_BUS_SFX);
-    }
-    snprintf(path, sizeof(path), "assets/audio/silent/%s", DOOR_RATTLE[0].file);
-    takes->rattle = audio_sound_from_file(audio, path, AUDIO_BUS_SFX);
+double door_try_shake_at(int j) {
+    return DOOR_RATTLE_LAG + (double)j * (double)DOOR_RATTLE[0].seconds;
 }
 
-// A copy of `s` heard at `door`'s leaf.
-static void hear(const DoorTryTakes* takes, const Sound* s, const Door* door, float volume) {
-    if (!s || !takes->audio || !door->entity)
-        return;
-    AudioVoiceDesc d = {.volume = volume, .pitch = 1.0f};
-    glm_vec3_copy(door->entity->position, d.position);
-    audio_play_voice(takes->audio, s, &d);
+float door_try_pull(const DoorTry* t, double u) {
+    float pull = 0.0f;
+    for (int i = 0; i < t->turns; i++)
+        pull =
+            fmaxf(pull, KNOB_SHARE * take_pull(&DOOR_KNOB[t->knob[i]], t->at + t->turn_at[i], u));
+    for (int j = 0; j < t->shakes; j++)
+        pull = fmaxf(pull, take_pull(&DOOR_RATTLE[0], t->at + door_try_shake_at(j), u));
+    return pull;
 }
 
-// When the try is over: its knob's take played out, and its rattle's after it.
-static double try_end(const DoorTry* t) {
-    double len = DOOR_KNOB[t->knob].seconds;
-    if (t->shake)
-        len = fmax(len, TRY_LAG + DOOR_RATTLE[0].seconds);
-    return t->at + len;
+void door_hand_try_begin(DoorHandTry* t, const DoorSounds* s, Door* door, double time, bool shake,
+                         float play) {
+    const int knob = t->count % DOOR_KNOB_TAKES;
+    const int shakes = shake ? 1 : 0;
+    const DoorTry try = {
+        .at = time,
+        .turns = 1,
+        .knob = {knob},
+        .shakes = shakes,
+        .end = time + fmax(DOOR_KNOB[knob].seconds, shake ? door_try_shake_at(shakes) : 0.0),
+    };
+    *t = (DoorHandTry){door, try, play, time, t->count + 1};
+    door_hear(s, s->knob[knob], door, HAND_VOLUME);
 }
 
-void door_try_begin(DoorTry* t, const DoorTryTakes* takes, Door* door, double time, int knob,
-                    bool shake, float play, float volume) {
-    if (!door || !door->entity)
-        return;
-    knob = ((knob % DOOR_KNOB_TAKES) + DOOR_KNOB_TAKES) % DOOR_KNOB_TAKES;
-    *t = (DoorTry){door, time, knob, shake, play, volume};
-    hear(takes, takes->knob[knob], door, volume);
-}
-
-void door_try_step(DoorTry* t, const DoorTryTakes* takes, double was, double now) {
+void door_hand_try_step(DoorHandTry* t, const DoorSounds* s, double now) {
     if (!t->door)
         return;
-    const double rattle = t->at + TRY_LAG;
-    if (t->shake && was < rattle && rattle <= now)
-        hear(takes, takes->rattle, t->door, t->volume);
-    if (now >= try_end(t)) {
-        door_jolt(t->door, 0.0f);
-        t->door = NULL;
-        return;
+    const double was = t->last;
+    t->last = now;
+    for (int j = 0; j < t->try.shakes; j++) {
+        const double at = t->try.at + door_try_shake_at(j);
+        if (was < at && at <= now)
+            door_hear(s, s->rattle, t->door, HAND_VOLUME);
     }
-    float pull = TRY_KNOB * door_take_pull(&DOOR_KNOB[t->knob], t->at, now);
-    if (t->shake)
-        pull = fmaxf(pull, door_take_pull(&DOOR_RATTLE[0], rattle, now));
-    const float width = t->door->shape.to - t->door->shape.from;
-    door_jolt(t->door, t->play / width * pull);
+    if (now >= t->try.end)
+        door_hand_try_stop(t);
+    else
+        door_jolt(t->door, t->play * door_try_pull(&t->try, now));
+}
+
+void door_hand_try_stop(DoorHandTry* t) {
+    if (t->door)
+        door_jolt(t->door, 0.0f);
+    t->door = NULL;
 }

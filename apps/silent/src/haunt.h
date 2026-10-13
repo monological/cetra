@@ -14,6 +14,7 @@
 #include "basement.h"
 #include "clock.h"
 #include "door.h"
+#include "door_try.h"
 #include "kitchen.h"
 #include "lights.h"
 #include "tv.h"
@@ -24,20 +25,20 @@
  * failing; the living room's lamp falters, the snow on the television goes red, and the picture is
  * drained to red. The clock stops, the fridge cuts out and the house goes quiet under a low drone;
  * the bathroom door creaks ajar -- or shut, if it stood open -- and the cellar door is tried hard
- * from the other side, on and on, until it is ended: the house's story ends it as the player opens
- * that door (spec 13.53).
+ * from the other side, on and on, until it is ended.
  *
- * One module with a beginning and an end, which the house's story drives (story.h). Every
- * beat is a pure function of the seconds since it began and a seed, so a headless run shows the
- * same frame and plays the same sound every time; and nothing of it is saved -- the doors it moves
- * keep their own state, which is.
+ * One module with a beginning and an end. Every beat is a pure function of the seconds since it
+ * began and a seed, so a headless run shows the same frame and plays the same sound every time;
+ * and nothing of it is saved -- the doors it moves keep their own state, which is.
  */
 
-// What the haunting takes hold of, borrowed; any may be NULL, and what it would drive is left be.
+// What the haunting takes hold of, borrowed; any but `sounds` may be NULL, and what it would drive
+// is left be.
 typedef struct HauntHouse {
     Engine* engine;
     Scene* scene;
     AudioSystem* audio;
+    const DoorSounds* sounds; // the doors', the knob's and the rattle's held at the cellar door
     Clock* clock;
     Tv* tv;
     Fridge* fridge;
@@ -54,9 +55,8 @@ typedef struct HauntHouse {
 
 // The street lamps it puts out, at most.
 #define HAUNT_STREET_LAMPS 32
-// The tones the drone is made of, and the knob's tries.
+// The tones the drone is made of.
 #define HAUNT_DRONE_TONES 4
-#define HAUNT_KNOB_TAKES  4
 
 // What the house was before it began, put back when it ends and held while captured.
 typedef struct HauntNormal {
@@ -106,23 +106,15 @@ typedef struct Haunt {
     int street_count;
     PostFXPass* grade;               // drains the picture to red; off while it is not haunted
     Sound* drone[HAUNT_DRONE_TONES]; // NULL without audio
-    // What the doors sound like, each NULL without audio: the creak and the slam are
-    // fire-and-forget, the knob and the rattle held, so the end can cut them dead.
-    Sound* creak;
-    Sound* slam;
-    Sound* knob[HAUNT_KNOB_TAKES];
-    Sound* rattle;
     unsigned int seed;
     bool active;
     double began; // the sim time it began at
     // The door beats wait for the player to watch for them, from the front of the hall down it:
     // whether they have, the sim time the beats began at then, and the seconds into them the last
-    // step reached, the beats since firing in the next. The cellar door, standing open when the
-    // beats begin, is slamming shut.
+    // step reached, the beats since firing in the next.
     bool watched;
     double doors_at;
     double last_u;
-    bool slamming;
     HauntNormal normal;
     HauntLive live;
     bool trace; // say each beat as it comes

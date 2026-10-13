@@ -4,9 +4,6 @@
 #include <stdbool.h>
 #include <cglm/cglm.h>
 
-#include "cetra/engine.h"
-#include "cetra/scene.h"
-
 #include "backpack.h"
 #include "door.h"
 #include "door_try.h"
@@ -35,12 +32,10 @@ extern const char* const STORY_STAGE_NAMES[STORY_STAGE_COUNT];
 // The stage `name` names, or STORY_NONE.
 StoryStage story_stage_by_name(const char* name);
 
-// What the story takes hold of, borrowed; any may be NULL, and what it would do with it is not
-// done.
+// What the story takes hold of, borrowed. The doors are NULL when they were not hung, and what
+// the story would do at one is not done; the rest are required.
 typedef struct StoryHouse {
-    Engine* engine;
-    Scene* scene;
-    AudioSystem* audio;
+    const DoorSounds* sounds;
     Hud* hud;
     Backpack* backpack;
     Haunt* haunt;
@@ -51,39 +46,22 @@ typedef struct StoryHouse {
 typedef struct Story {
     StoryHouse house;
     StoryStage stage;
-    DoorTryTakes takes;
-    DoorTry try; // the player's try at a door that will not open, while it lasts
-    Sound* slam; // the cellar door flung against its stop; NULL without audio
-    bool slamming;
-    SceneNode* key; // on the basement's workbench, and kept off the graph once it is taken
-    vec3 key_at;    // its middle, which the player reaches for
-    double last;    // the sim time the last step reached
-    int tries;      // the tries so far, which choose each one's knob take
-    bool rehaunt;   // put at a haunted stage: the haunting begins again once the game is played
-    bool trace;     // say each turn of the story as it comes
+    DoorHandTry try; // the player's try at a door that will not open
+    bool trace;      // say each turn of the story as it comes
 } Story;
 
-// The story at its start, and the key lying on the basement's workbench.
+// The story at its start.
 void story_start(Story* s, const StoryHouse* house);
-void story_free(Story* s);
-// The key on the workbench, or off it and kept: it is off it exactly while the backpack holds it.
-void story_key_on_bench(Story* s, bool on);
-// The front door's key, a heavy brass bit key along f's d and centred on its origin: `flat` lying
-// on its side on y, or standing on its edge, its bit up, about y.
-void story_key_model(Kit* kit, const KitFrame* f, float y, bool flat);
 // The action key on `door` at sim time `time`: true when the story took the press and the door
 // is to stay as it is, false when the door is the player's to open or shut.
 bool story_door(Story* s, Door* door, double time);
-// Per fixed step, after the doors have moved: the player's try under way.
+// Per fixed step at sim time `time`, after the doors have moved: the player's try under way.
 void story_step(Story* s, double time);
 /*
- * The story put at `stage` (a load, or the command line), with the player's feet at `feet`:
- * anywhere but in the house it is STORY_OPEN whatever the stage says, since they are out of it.
- * Below that the front door is shut. The key lies on the workbench unless the backpack holds it. A
- * try under way is dropped. Haunted, the haunting begins again at story_play.
+ * The house put as its stage says (a load, or the command line), with the player's feet at `feet`:
+ * anywhere but in the house the stage is STORY_OPEN whatever it was, since they are out of it.
+ * Below that the front door is shut. A try under way is dropped.
  */
-void story_restore(Story* s, StoryStage stage, const vec3 feet);
-// Per frame while the game is played, at sim time `time`: the haunting a restore left begun.
-void story_play(Story* s, double time);
+void story_settle(Story* s, const vec3 feet);
 
 #endif // _SILENT_STORY_H_

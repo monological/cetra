@@ -12,12 +12,12 @@
 #include "cat.h"
 #include "cat_brain.h"
 #include "door.h"
-#include "fridge_map.h"
 #include "lights.h"
 #include "map_screen.h"
 #include "player.h"
-#include "story.h"
 #include "town_map.h"
+
+typedef struct Story Story;
 
 /*
  * A game's autosave (spec 13.49): one file per playthrough, a slot of the engine's save system
@@ -45,7 +45,6 @@ typedef struct SaveWorld {
     Game* game;
     Player* player;
     Backpack* backpack;
-    FridgeMap* fridge_map;
     Finds* finds;
     MapScreen* map_screen;
     Lights* lights;
@@ -92,7 +91,8 @@ void save_game_begin(const char* slot);
 void save_game_due(void);
 // The game is ending: written now.
 void save_game_quit(void);
-// Per frame while the game is played: the play clock, the room the `feet` are in, and a save due.
+// Per frame while the game is played: the play clock, the room the `feet` are in, the story's
+// stage, and a save due.
 // True when it wrote one.
 bool save_game_frame(const vec3 feet, double dt);
 

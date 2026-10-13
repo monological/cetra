@@ -9,6 +9,7 @@
 #include "cetra/game/save.h"
 
 #include "rooms.h"
+#include "story.h"
 
 // A room's own save waits this long after the last write: a doorway walked back and forth is not
 // worth a write each way.
@@ -25,7 +26,6 @@ typedef struct Kept {
     bool bag;                   // the backpack taken
     int item_order[ITEM_COUNT]; // each thing's place in the order it was had, from 1; 0 not had
     bool inked[PLACE_COUNT];
-    int story_stage;
     int cat_place;
 } Kept;
 
@@ -38,6 +38,7 @@ static bool g_due;        // a save is due at the next frame
 static bool g_room_due;   // and one for a room, once the gap allows
 static double g_since_write;
 static int g_room = -1;
+static int g_stage = -1; // the story's, as the last frame saw it
 
 static const SaveField SUMMARY[] = {
     SAVE_ROW(SAVE_DOUBLE, "played", Kept, played),
@@ -59,6 +60,15 @@ static SaveField g_cat[5];
 static SaveField g_cat_since[CAT_PLACE_COUNT];
 
 #define ROW(type, key, addr) ((SaveField)SAVE_ROW_AT(type, key, addr))
+// An int at `addr` written as the name at its index in `names`, `count` long.
+#define ENUM_ROW(key_, addr_, names_, count_) \
+    ((SaveField){.type = SAVE_ENUM,           \
+                 .key = (key_),               \
+                 .addr = (addr_),             \
+                 .names = (names_),           \
+                 .name_count = (count_)})
+
+_Static_assert(sizeof(StoryStage) == sizeof(int), "the story's stage is written as an int");
 
 // A table of rows by address, which never read their base; the save system asks for one all the
 // same.
@@ -110,14 +120,8 @@ bool save_game_start(const SaveWorld* world) {
         add_table("door_want", g_door_want, w->door_count);
     }
 
-    if (w->story) {
-        g_story[0] = (SaveField){.type = SAVE_ENUM,
-                                 .key = "stage",
-                                 .addr = &g_kept.story_stage,
-                                 .names = STORY_STAGE_NAMES,
-                                 .name_count = STORY_STAGE_COUNT};
-        add_table("story", g_story, KIT_COUNT(g_story));
-    }
+    g_story[0] = ENUM_ROW("stage", &w->story->stage, STORY_STAGE_NAMES, STORY_STAGE_COUNT);
+    add_table("story", g_story, KIT_COUNT(g_story));
 
     if (cat_kept()) {
         CatMind* m = w->mind;
@@ -125,11 +129,7 @@ bool save_game_start(const SaveWorld* world) {
             g_cat_place_names[i] = CAT_PLACES[i].name;
             g_cat_since[i] = ROW(SAVE_FLOAT, CAT_PLACES[i].name, &m->since[i]);
         }
-        g_cat[0] = (SaveField){.type = SAVE_ENUM,
-                               .key = "place",
-                               .addr = &g_kept.cat_place,
-                               .names = g_cat_place_names,
-                               .name_count = CAT_PLACE_COUNT};
+        g_cat[0] = ENUM_ROW("place", &g_kept.cat_place, g_cat_place_names, CAT_PLACE_COUNT);
         g_cat[1] = ROW(SAVE_FLOAT, "energy", &m->energy);
         g_cat[2] = ROW(SAVE_FLOAT, "boredom", &m->boredom);
         g_cat[3] = ROW(SAVE_FLOAT, "alarm", &m->alarm);
@@ -156,15 +156,13 @@ static void gather(void) {
         g_kept.item_order[w->backpack->held[k]] = k + 1;
     for (int i = 0; i < PLACE_COUNT; i++)
         g_kept.inked[i] = map_screen_inked(w->map_screen, (PlaceId)i);
-    if (w->story)
-        g_kept.story_stage = (int)w->story->stage;
     if (cat_kept())
         g_kept.cat_place = cat_nearest_place(w->cat);
 }
 
 static void apply(void) {
     const SaveWorld* w = &g_world;
-    // The bag first: the map off the fridge and the flashlight's light both follow from it.
+    // The bag first: what lies about the house and the flashlight's light both follow from it.
     ItemId held[ITEM_COUNT] = {ITEM_NONE};
     int count = 0;
     for (int order = 1; order <= ITEM_COUNT; order++)
@@ -172,7 +170,6 @@ static void apply(void) {
             if (g_kept.item_order[i] == order)
                 held[count++] = (ItemId)i;
     backpack_restore(w->backpack, g_kept.bag, held, count);
-    fridge_map_on_door(w->fridge_map, !backpack_holds(w->backpack, ITEM_TOWN_MAP));
     w->lights->flashlight_on =
         w->lights->flashlight_on && backpack_holds(w->backpack, ITEM_FLASHLIGHT);
     map_screen_restore(w->map_screen, g_kept.inked);
@@ -191,11 +188,10 @@ static void apply(void) {
     player_feet(w->player, feet);
     finds_settle(w->finds, feet);
     basement_settle(w->basement, feet, w->game->time);
-    // After the doors and the bag: it shuts a locked front door, and puts the key where the bag
-    // says it is.
-    if (w->story)
-        story_restore(w->story, (StoryStage)g_kept.story_stage, feet);
+    // After the doors, since a locked front door is shut whatever the file says.
+    story_settle(w->story, feet);
     g_room = (int)room_at(feet);
+    g_stage = (int)w->story->stage;
 }
 
 // ------------------------------------------------------------------------------- the slots
@@ -322,6 +318,11 @@ bool save_game_frame(const vec3 feet, double dt) {
     if (g_room >= 0 && (int)room != g_room)
         g_room_due = true;
     g_room = (int)room;
+    // The story moving on is kept at once.
+    const int stage = (int)g_world.story->stage;
+    if (g_stage >= 0 && stage != g_stage)
+        g_due = true;
+    g_stage = stage;
     if (g_due)
         return write_now("progress");
     if (g_room_due && g_since_write >= ROOM_SAVE_GAP)

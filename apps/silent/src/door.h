@@ -66,13 +66,14 @@ void door_leaf_battened(Kit* kit, const KitFrame* f, const KitOpening* o, float 
 // Toward open if it is shut or shutting, toward shut otherwise, at the heavy door's own pace;
 // nothing while it slams, which is out of the player's hands.
 void door_toggle(Door* door);
-// The leaf `angle` radians past where its swing puts it, toward +d, placed now: a door shaken in
-// its frame. Nothing else reads it; 0 puts the leaf back.
-void door_jolt(Door* door, float angle);
+// The leaf pulled `metres` past where its swing puts it at its latch edge, toward +d, placed now: a
+// door shaken in its frame. Nothing else reads it; 0 puts the leaf back.
+void door_jolt(Door* door, float metres);
 // On its way to `want` by itself, getting there `seconds` from now.
 void door_drift(Door* door, float want, float seconds);
 // Flung to `want`, 0 shut and 1 open, from wherever it stands, in DOOR_SLAM_SECONDS over the whole
-// swing; nothing when it is already there.
+// swing -- turning where it is if it was slamming the other way; nothing when it is already there
+// or on its way there.
 void door_slam(Door* door, float want);
 // Where along its swing the leaf stands `angle` radians open, as `travel`.
 float door_travel_at(const Door* door, float angle);
@@ -83,8 +84,10 @@ void door_set(Door* door, float travel, float want);
 void door_set_open(Door* door);
 // Whether the next toggle opens it.
 bool door_will_open(const Door* door);
+// Whether it stands shut and is not on its way open.
+bool door_is_shut(const Door* door);
 
-// Per fixed step: eases the leaf and moves its body and node.
-void door_update(Door* door, float dt);
+// Per fixed step: eases the leaf and moves its body and node. True on the step a slam hits.
+bool door_update(Door* door, float dt);
 
 #endif // _SILENT_DOOR_H_
