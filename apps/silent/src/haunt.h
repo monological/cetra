@@ -45,7 +45,7 @@ typedef struct HauntHouse {
     Basement* basement;   // the cellar stair's bulb
     Door* cellar;         // the basement door
     Door* bath;           // the bathroom door
-    Material* frosted;    // the hall lanterns' glass, which nothing else wears
+    Material* filament;   // the hall lanterns' bulbs' filaments, which nothing else wears
     Material* shade;      // the lampshades' cloth, each lamp's bulb one of its own
     Material* bulbs;      // the bare bulbs' glass, the bathroom's among them
     Material* panes;      // the house's clear window glass
@@ -62,8 +62,8 @@ typedef struct HauntHouse {
 typedef struct HauntNormal {
     vec3 hall_colour[2];
     float hall_candela[2];
-    vec3 glass;
-    float glass_nits;
+    vec3 filament;
+    float filament_nits;
     float lamp_candela;
     float bath_candela;
     float bedside_candela;

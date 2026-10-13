@@ -7,6 +7,7 @@
 #include "cetra/program.h"
 #include "cetra/util.h"
 
+#include "fixtures.h"
 #include "layout.h"
 #include "lights.h"
 #include "mats.h"
@@ -32,14 +33,26 @@ static const float TUBE_COLOUR[3] = {0.80f, 1.0f, 0.84f};
 #define FLASHLIGHT_CANDELA 900.0f
 
 /*
- * The hall's lantern: a 25 W bulb behind frosted glass, near the kitchen door,
- * so the clock opposite the door reads from the doorway and the hall stays
- * dim. Warm, the way a filament is beside a fluorescent tube.
+ * The hall's pendant (spec 13.52): a lantern of brass and clear glass on a chain from a rose on
+ * the ceiling, a 25 W filament bulb in it, near the kitchen door, so the clock opposite the door
+ * reads from the doorway and the hall stays dim. Warm, the way a filament is beside a fluorescent
+ * tube. Short of the cased opening halfway down the hall, its cage's top where the old lantern's
+ * was before the ceiling rose, so its chain is the longer for it.
  */
-// Opposite the clock, short of the cased opening halfway down the hall, at the height it hung
-// before the ceiling rose (spec 13.52): the chain is the longer for it.
-static const vec3 BULB_AT = {-0.75f, CEIL_Y - 0.4f, 13.15f};
+#define PENDANT_X    (-0.75f)
+#define PENDANT_Z    13.15f
+#define PENDANT_TOP  (CEIL_Y - 0.25f) // the cage's top
+#define PENDANT_R    0.09f
+#define PENDANT_H    0.3f
+#define PENDANT_ROSE 0.025f // under the ceiling, where the chain hangs from and the swing turns
+static const vec3 PENDANT_PIVOT = {PENDANT_X, HOME_CEIL_Y - PENDANT_ROSE, PENDANT_Z};
 #define BULB_CANDELA 30.0f
+// Its swing eases toward what it is asked over SWING_EASE seconds, the long way round an
+// ellipse SWING_ACROSS as wide across as along, and the bulb's kept shadow follows it while it
+// carries the bulb further than SWING_FOLLOW.
+#define SWING_EASE   2.5f
+#define SWING_ACROSS 0.3f
+#define SWING_FOLLOW 0.015f
 
 typedef struct Tube {
     const char* name; // the node's name, which the derived light takes
@@ -161,46 +174,91 @@ static void tube_fixture(Kit* kit, const Tube* t) {
     kit_box(kit, MAT_STEEL, centre, half, 0.0f, false);
 }
 
-// The pendant lantern (spec 13.25, after the hall in P.T.): a chain from a ceiling rose to an
-// iron cage of four frosted panes under a pyramid cap, a bulb's point light inside. Its shadow
-// is cached (spec 13.16), with a near plane past the glass round the bulb -- which would
-// otherwise shadow everything -- and softened by the bulb's size. The clock's pendulum and
-// hands swing their shadows with them.
-#define LANTERN_R         0.09f // half the cage's width
-#define LANTERN_H         0.3f
-#define BULB_SHADOW_NEAR  (LANTERN_R + 0.03f) // past the panes; the cage's corner posts still cast
-#define BULB_GLASS_RADIUS 0.03f
-static void hall_bulb(Kit* kit, Scene* scene) {
-    const float x = BULB_AT[0], y = BULB_AT[1], z = BULB_AT[2];
-    const float top = y + 0.5f * LANTERN_H, bottom = y - 0.5f * LANTERN_H;
-    const vec2 rose[] = {{0.0f, 0.0f}, {0.06f, 0.0f}, {0.05f, -0.02f}, {0.0f, -0.025f}};
-    kit_frame_lathe(kit, &KIT_WORLD, MAT_IRON, x, z, HOME_CEIL_Y, rose,
-                    (int)(sizeof(rose) / sizeof(rose[0])), 12);
-    kit_frame_pipe(kit, &KIT_WORLD, MAT_IRON, (vec3[]){{x, HOME_CEIL_Y, z}, {x, top + 0.09f, z}}, 2,
-                   0.006f, 6);
-    const vec2 cap[] = {{0.0f, 0.0f}, {LANTERN_R + 0.03f, 0.0f}, {0.02f, 0.08f}, {0.0f, 0.09f}};
-    kit_frame_lathe(kit, &KIT_WORLD, MAT_IRON, x, z, top, cap, (int)(sizeof(cap) / sizeof(cap[0])),
-                    4);
-    for (int i = 0; i < 4; i++) {
-        const float dx = (i & 1) ? LANTERN_R : -LANTERN_R, dz = (i & 2) ? LANTERN_R : -LANTERN_R;
-        kit_box(kit, MAT_IRON, (vec3){x + dx, y, z + dz}, (vec3){0.008f, 0.5f * LANTERN_H, 0.008f},
-                0.0f, false);
+// A chain of oval brass links from `y0` down to `y1` on the upright through the pendant's pivot,
+// in its own frame, each link turned a quarter from the last and hung through it.
+#define LINK_LEN  0.034f // outside, end to end
+#define LINK_WIDE 0.016f
+#define LINK_WIRE 0.0022f
+static void chain(Kit* kit, float y0, float y1) {
+    const float hy = 0.5f * LINK_LEN - LINK_WIRE, hx = 0.5f * LINK_WIDE - LINK_WIRE;
+    const float pitch = LINK_LEN - 4.0f * LINK_WIRE;
+    const int links = (int)ceilf((y0 - y1 - LINK_LEN) / pitch) + 1;
+    for (int i = 0; i < links; i++) {
+        const float yc = y0 - 0.5f * LINK_LEN - (float)i * pitch;
+        vec3 loop[13];
+        for (int k = 0; k < 13; k++) {
+            const float t = (float)k * GLM_PIf / 6.0f, across = hx * cosf(t);
+            glm_vec3_copy(
+                (vec3){(i & 1) ? 0.0f : across, yc + hy * sinf(t), (i & 1) ? across : 0.0f},
+                loop[k]);
+        }
+        kit_frame_pipe(kit, &KIT_WORLD, MAT_LANTERN_BRASS, loop, 13, LINK_WIRE, 5);
     }
-    kit_box(kit, MAT_IRON, (vec3){x, bottom - 0.01f, z},
-            (vec3){LANTERN_R + 0.015f, 0.012f, LANTERN_R + 0.015f}, 0.0f, false);
-    kit_box(kit, MAT_FROSTED, (vec3){x, y, z},
-            (vec3){LANTERN_R - 0.005f, 0.5f * LANTERN_H - 0.01f, LANTERN_R - 0.005f}, 0.0f, false);
+}
+
+// The pendant: a brass rose on the ceiling, and under it, in a kit of its own that turns about
+// the rose, the chain and the lantern. That kit casts nothing: swinging, it would be a mover in
+// its own light's kept views every frame. Its light is the bulb's, cached (spec 13.16) from the
+// filament, softened by the filament's size; the clock's pendulum and hands swing their shadows
+// with them.
+static void hall_pendant(Lights* lights, Kit* kit, Scene* scene) {
+    const vec2 rose[] = {{0.0f, -PENDANT_ROSE},
+                         {0.012f, -PENDANT_ROSE},
+                         {0.05f, -0.012f},
+                         {0.06f, -0.002f},
+                         {0.06f, 0.0f}};
+    kit_frame_lathe(kit, &KIT_WORLD, MAT_LANTERN_BRASS, PENDANT_X, PENDANT_Z, HOME_CEIL_Y, rose,
+                    KIT_COUNT(rose), 16);
+    Kit hang;
+    kit_init_beside(&hang, kit, GLM_VEC3_ZERO);
+    hang.casts_nothing = true;
+    const float top = PENDANT_TOP - PENDANT_PIVOT[1];
+    chain(&hang, 0.0f, top + FIXTURE_CROWN_H);
+    fixture_lantern(&hang, &KIT_WORLD, 0.0f, top, 0.0f, PENDANT_R, PENDANT_H);
+    lights->pendant = kit_finish(&hang, "hall_pendant");
+    kit_keep_beside(kit, &hang);
+    // A capture is kept for good, and a swinging lantern is somewhere else a moment later.
+    lights->pendant->capture_hidden = true;
+    glm_translate_make(lights->pendant->original_transform, (float*)PENDANT_PIVOT);
+    lights->pendant_bulb = top - FIXTURE_BULB_DROP;
     LightDesc desc = {.name = "hall_bulb",
                       .type = LIGHT_POINT,
-                      .position = {x, y, z},
+                      .position = {PENDANT_X, PENDANT_PIVOT[1] + lights->pendant_bulb, PENDANT_Z},
                       .color = {1.0f, 0.72f, 0.42f},
                       .intensity = BULB_CANDELA,
                       .range = 7.0f,
                       .cast_shadows = true,
                       .shadow_cache = true,
-                      .source_radius = BULB_GLASS_RADIUS,
-                      .shadow_near = BULB_SHADOW_NEAR};
-    scene_add_light(scene, create_light(&desc));
+                      .source_radius = FIXTURE_BULB_BODY,
+                      .shadow_near = FIXTURE_BULB_NEAR};
+    lights->hall = create_light(&desc);
+    scene_add_light(scene, lights->hall);
+    glm_vec3_copy(desc.position, lights->hall_at);
+}
+
+// The pendant's light at `at`, its kept shadow following it at any move or not.
+static void pendant_light(Lights* lights, const vec3 at, bool follow) {
+    if (!lights->hall)
+        return;
+    light_set_position(lights->hall, (float*)at);
+    lights->hall->shadow_follow = follow;
+}
+
+// The pendant swung for `time`, its swing eased `dt` toward what it is asked: a pendulum from the
+// rose to the bulb, round an ellipse.
+static void pendant_update(Lights* lights, double time, float dt) {
+    if (!lights->pendant)
+        return;
+    lights->swing += (lights->swing_want - lights->swing) * (1.0f - expf(-dt / SWING_EASE));
+    const float drop = -lights->pendant_bulb, w = sqrtf(9.81f / drop), t = (float)time;
+    mat4 m = GLM_MAT4_IDENTITY_INIT;
+    glm_translate_make(m, (float*)PENDANT_PIVOT);
+    glm_rotate_z(m, lights->swing * sinf(w * t), m);
+    glm_rotate_x(m, SWING_ACROSS * lights->swing * sinf(w * t + 1.1f), m);
+    glm_mat4_copy(m, lights->pendant->original_transform);
+    glm_mat4_mulv3(m, (vec3){0.0f, lights->pendant_bulb, 0.0f}, 1.0f, lights->hall_at);
+    lights->hall_follows = lights->swing * drop > SWING_FOLLOW;
+    pendant_light(lights, lights->hall_at, lights->hall_follows);
 }
 
 void lights_build(Lights* lights, Kit* kit, Engine* engine, Scene* scene, unsigned int seed,
@@ -229,7 +287,7 @@ void lights_build(Lights* lights, Kit* kit, Engine* engine, Scene* scene, unsign
     lights->flashlight_on = flashlight_on;
     glm_vec3_copy((vec3){0.0f, 0.0f, -1.0f}, lights->flashlight_dir);
 
-    hall_bulb(kit, scene);
+    hall_pendant(lights, kit, scene);
     for (int i = 0; i < TUBE_COUNT; i++) {
         tube_fixture(kit, &TUBES[i]);
         Material* m = tube_strip(scene, pbr, &TUBES[i]);
@@ -356,6 +414,7 @@ void lights_update(Lights* lights, Scene* scene, double time, float dt, const ve
         light_set_direction(f, lights->flashlight_dir);
     }
     lights_apply(lights, lights->mains, level, lights->flashlight_on);
+    pendant_update(lights, time, dt);
 }
 
 void lights_toggle_flashlight(Lights* lights) {
@@ -368,8 +427,12 @@ void lights_set_mains(Lights* lights, float mains) {
 }
 
 void lights_rest(Lights* lights, bool rest) {
-    if (rest)
+    if (rest) {
         lights_apply(lights, 1.0f, 1.0f, false);
-    else
+        pendant_light(lights, (vec3){PENDANT_X, PENDANT_PIVOT[1] + lights->pendant_bulb, PENDANT_Z},
+                      false);
+    } else {
         lights_apply(lights, lights->mains, lights->level, lights->flashlight_on);
+        pendant_light(lights, lights->hall_at, lights->hall_follows);
+    }
 }

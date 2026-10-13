@@ -229,6 +229,9 @@ void kit_init_beside(Kit* kit, Kit* first, const vec3 origin);
 
 // Frees each shared material no kit of `kits` used, the kit made first at kits[0].
 void kit_free_unused(Kit* const* kits, int count);
+// What `beside`, a kit made beside `first` and finished on its own, used counts as used by
+// `first`, so kit_free_unused over any list `first` is in keeps it.
+void kit_keep_beside(Kit* first, const Kit* beside);
 
 // Registers a material and returns its slot. The kit borrows the material
 // until kit_finish attaches it to a mesh.

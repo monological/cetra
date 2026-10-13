@@ -13,6 +13,7 @@
 
 #include "bedroom.h"
 #include "cards.h"
+#include "fixtures.h"
 #include "home.h"
 #include "house.h"
 #include "houses.h"
@@ -631,33 +632,26 @@ static void hang(Kit* kit, const Facade* s, CardId id, float a, float y) {
 }
 
 /*
- * A lantern on a wall: a backplate and an arm out to a little iron cage of four frosted panes
- * under a pyramid cap, a bulb's light inside it. Its shadow is cached, softened by the frosted
- * glass, which is what glows.
+ * A lantern on a wall (spec 13.52): a brass backplate, an arm curving up and out from it, and the
+ * hall's lantern hung from its end, a filament bulb's light inside. Its shadow is cached from the
+ * filament, so the brass casts and the clear panes do not.
  */
 #define LANTERN_CANDELA 22.0f
+#define LANTERN_R       0.065f
+#define LANTERN_H       0.22f
 static void lantern(Kit* kit, Scene* scene, const Facade* s, float a, float y) {
     const KitFrame* f = &s->f;
-    const float face = s->face, o = s->out, out = face + o * 0.2f;
-    kit_frame_box(kit, f, MAT_IRON, a - 0.05f, a + 0.05f, y - 0.1f, y + 0.12f, face,
+    const float face = s->face, o = s->out, out = face + o * 0.2f, top = y + 0.15f;
+    kit_frame_box(kit, f, MAT_LANTERN_BRASS, a - 0.045f, a + 0.045f, y - 0.09f, y + 0.13f, face,
                   face + o * 0.012f, false);
-    const vec3 arm[] = {
-        {a, y, face + o * 0.012f}, {a, y + 0.02f, face + o * 0.14f}, {a, y + 0.1f, out}};
-    kit_frame_pipe(kit, f, MAT_IRON, arm, KIT_COUNT(arm), 0.008f, 6);
-    const float h = 0.2f, r = 0.065f, y0 = y - 0.06f;
-    for (int i = 0; i < 4; i++) {
-        const float da = (i & 1) ? r : -r, dd = (i & 2) ? r : -r;
-        kit_frame_box(kit, f, MAT_IRON, a + da - 0.006f, a + da + 0.006f, y0, y0 + h,
-                      out + o * dd - 0.006f, out + o * dd + 0.006f, false);
-    }
-    kit_frame_box(kit, f, MAT_FROSTED, a - r, a + r, y0 + 0.01f, y0 + h - 0.01f, out - r * o,
-                  out + r * o, false);
-    kit_frame_box(kit, f, MAT_IRON, a - r - 0.01f, a + r + 0.01f, y0 - 0.02f, y0,
-                  out - (r + 0.01f) * o, out + (r + 0.01f) * o, false);
-    const vec2 cap[] = {{0.0f, 0.0f}, {0.1f, 0.0f}, {0.0f, 0.08f}};
-    kit_frame_lathe(kit, f, MAT_IRON, a, out, y0 + h, cap, KIT_COUNT(cap), 4);
+    const float hook = top + FIXTURE_CROWN_H;
+    const vec3 arm[] = {{a, y + 0.03f, face + o * 0.012f}, {a, y + 0.1f, face + o * 0.04f},
+                        {a, y + 0.17f, face + o * 0.09f},  {a, hook + 0.03f, face + o * 0.15f},
+                        {a, hook + 0.035f, out},           {a, hook - 0.004f, out}};
+    kit_frame_pipe(kit, f, MAT_LANTERN_BRASS, arm, KIT_COUNT(arm), 0.006f, 8);
+    fixture_lantern(kit, f, a, top, out, LANTERN_R, LANTERN_H);
     vec3 at = {0.0f, 0.0f, 0.0f};
-    kit_frame_point(f, a, y0 + 0.5f * h, out, at);
+    kit_frame_point(f, a, top - FIXTURE_BULB_DROP, out, at);
     glm_vec3_add(at, kit->origin, at);
     LightDesc desc = {.name = "hall_lantern",
                       .type = LIGHT_POINT,
@@ -667,8 +661,8 @@ static void lantern(Kit* kit, Scene* scene, const Facade* s, float a, float y) {
                       .range = 7.0f,
                       .cast_shadows = true,
                       .shadow_cache = true,
-                      .source_radius = r,
-                      .shadow_near = r + 0.02f};
+                      .source_radius = FIXTURE_BULB_BODY,
+                      .shadow_near = FIXTURE_BULB_NEAR};
     scene_add_light(scene, create_light(&desc));
 }
 
