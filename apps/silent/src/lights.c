@@ -36,15 +36,16 @@ static const float TUBE_COLOUR[3] = {0.80f, 1.0f, 0.84f};
  * The hall's pendant (spec 13.52): a lantern of brass and clear glass on a chain from a rose on
  * the ceiling, a 25 W filament bulb in it, near the kitchen door, so the clock opposite the door
  * reads from the doorway and the hall stays dim. Warm, the way a filament is beside a fluorescent
- * tube. Short of the cased opening halfway down the hall, its cage's top where the old lantern's
- * was before the ceiling rose, so its chain is the longer for it.
+ * tube. Short of the cased opening halfway down the hall, on a short chain, high enough to light
+ * the clock's face from over it.
  */
-#define PENDANT_X    (-0.75f)
-#define PENDANT_Z    13.15f
-#define PENDANT_TOP  (CEIL_Y - 0.25f) // the cage's top
-#define PENDANT_R    0.09f
-#define PENDANT_H    0.3f
-#define PENDANT_ROSE 0.025f // under the ceiling, where the chain hangs from and the swing turns
+#define PENDANT_X     (-0.75f)
+#define PENDANT_Z     13.15f
+#define PENDANT_R     0.09f
+#define PENDANT_H     0.3f
+#define PENDANT_ROSE  0.025f // under the ceiling, where the chain hangs from and the swing turns
+#define PENDANT_CHAIN 0.3f   // from the rose to the crown's ring
+#define PENDANT_TOP   (HOME_CEIL_Y - PENDANT_ROSE - PENDANT_CHAIN - FIXTURE_CROWN_H) // the cage's
 static const vec3 PENDANT_PIVOT = {PENDANT_X, HOME_CEIL_Y - PENDANT_ROSE, PENDANT_Z};
 #define BULB_CANDELA 30.0f
 // Its swing eases toward what it is asked over SWING_EASE seconds, the long way round an
