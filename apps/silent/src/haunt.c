@@ -3,6 +3,9 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "cetra/gi_volume.h"
+#include "cetra/ibl.h"
+#include "cetra/probe_set.h"
 #include "cetra/program.h"
 #include "cetra/shader_params.h"
 
@@ -16,15 +19,19 @@
 
 _Static_assert(HAUNT_KNOB_TAKES == DOOR_KNOB_TAKES, "a held sound for every knob take");
 
-// As it begins the night outside goes and the hall's light dies with it; the hall comes back red
-// this many seconds later, at HALL_GAIN times what it gave: red is the dimmest third of white to
-// the eye, and a hall at its own candela reads as dark rather than red. The glass keeps its own
-// nits, or it burns through the tone curve to pink.
-#define HALL_DARK_SECONDS 0.6
+// As it begins every light it drives goes out with the night outside -- the hall's, the lamp's and
+// the set's -- and the picture is drained to red unseen in the dark. BLACKOUT_SECONDS later they
+// come back up over RISE_SECONDS, already red, the hall at HALL_GAIN times what it gave: red is
+// the dimmest third of white to the eye, and a hall at its own candela reads as dark rather than
+// red. The glass keeps its own nits, or it burns through the tone curve to pink.
+#define BLACKOUT_SECONDS 1.5
+#define RISE_SECONDS     1.2
 static const vec3 HALL_RED = {1.0f, 0.02f, 0.01f};
 #define HALL_GAIN 2.5f
-// A failing supply never quite goes out: these lights cast cached shadows, and a cached light at
-// nothing leaves its shadow undrawn (basement.c's bulb, spec 13.31).
+// Out is SUPPLY_OUT of the supply and a failing one never falls under SUPPLY_FLOOR, never nothing:
+// these lights cast cached shadows, and a cached light at nothing leaves its shadow undrawn
+// (basement.c's bulb, spec 13.31).
+#define SUPPLY_OUT   1e-4f
 #define SUPPLY_FLOOR 0.03f
 // How often each circuit has an episode: the hall's often enough to keep the eye on it, the lamp's
 // seldom enough to catch it out.
@@ -33,11 +40,10 @@ static const vec3 HALL_RED = {1.0f, 0.02f, 0.01f};
 // The set's white as the hall goes red: its red lifted so the snow is as bright to the eye as a
 // red can be made, its others all but gone.
 static const vec3 TV_RED = {1.8f, 0.04f, 0.03f};
-// The picture, once the hall is red: drained to this red over GRADE_SECONDS, its edges taken
-// further down, and a little grain over it.
+// The picture while it is haunted: drained to this red, its edges taken further down, and a little
+// grain over it.
 static const vec3 GRADE_RED = {1.5f, 0.1f, 0.08f};
 #define GRADE_AMOUNT          0.8f
-#define GRADE_SECONDS         2.5
 #define GRADE_VIGNETTE        0.85f
 #define GRADE_VIGNETTE_RADIUS 0.4f
 #define GRADE_GRAIN           0.04f
@@ -161,14 +167,46 @@ static void apply(Haunt* h, const HauntLive* s) {
         h->house.lamp_heads->emissive_strength = n->lamp_head_nits * out;
     for (int i = 0; i < h->street_count; i++)
         h->street[i]->intensity = n->street_candela[i] * out;
+    // Every other light in the house on the share of its supply the cut leaves it.
+    if (h->bath)
+        h->bath->intensity = n->bath_candela * s->mains;
+    if (h->house.bulbs)
+        h->house.bulbs->emissive_strength = n->bulb_nits * s->mains;
+    if (h->bedside) {
+        h->bedside->intensity = n->bedside_candela * s->mains;
+        mats_shade_candela(h->house.shade, h->bedside_slot, n->bedside_candela * s->mains);
+    }
+    // The light the house was captured in -- its bounce off every wall and its reflections -- is
+    // the light of lamps the cut has put out, so it is not seen; the captures, which keep it, see
+    // it. Nor is the sky's, which with no bounce to say how much of it a room sees is reflected
+    // whole in every glossy surface indoors.
+    Scene* scene = h->house.scene;
+    if (scene && scene->gi)
+        scene->gi->hidden = !s->ambient;
+    ReflectionProbeSet* set = scene ? scene->probe_set : NULL;
+    for (int i = 0; set && i < h->probe_count; i++)
+        set->probes[i]->intensity = s->ambient ? n->probe_intensity[i] : 0.0f;
+    if (scene && scene->ibl)
+        scene->ibl->intensity = s->ambient ? n->sky : 0.0f;
 }
 
-// The set's white `red` of the way to red. Not part of apply: the set rests itself (tv_rest).
-static void tint_tv(Haunt* h, float red) {
+// The lights the house's own modules drive, the kitchen's tubes and the cellar's bulb, on `share`
+// of their supply from now. Not part of apply: each rests itself.
+static void house_supply(Haunt* h, float share) {
+    if (h->house.lights)
+        lights_set_mains(h->house.lights, share);
+    if (h->house.basement)
+        h->house.basement->mains = share;
+}
+
+// The set's white `red` of the way to red, at `level` of its own brightness. Not part of apply: the
+// set rests itself (tv_rest).
+static void tint_tv(Haunt* h, float red, float level) {
     if (!h->house.tv)
         return;
     vec3 tint = {1.0f, 1.0f, 1.0f};
     glm_vec3_lerp(tint, (float*)TV_RED, red, tint);
+    glm_vec3_scale(tint, level, tint);
     tv_tint(h->house.tv, tint);
 }
 
@@ -190,6 +228,8 @@ static void grade(Haunt* h, float w) {
         fx->vignette_radius = n->vignette_radius;
         fx->grain_enabled = n->grain;
         fx->grain_strength = n->grain_strength;
+        glm_vec3_copy((float*)n->fog_ambient, fx->fog_ambient);
+        fx->fog_ambient_from_sky = n->fog_from_sky;
         return;
     }
     fx->vignette_enabled = true;
@@ -197,6 +237,10 @@ static void grade(Haunt* h, float w) {
     fx->vignette_radius = glm_lerp(n->vignette_radius, GRADE_VIGNETTE_RADIUS, w);
     fx->grain_enabled = true;
     fx->grain_strength = glm_lerp(n->grain ? n->grain_strength : 0.0f, GRADE_GRAIN, w);
+    // The fog glows by a light no wall stops, which fills the rooms as a haze and the windows with
+    // the street's fog: put out with the rest, leaving it lit only by the lamps that are on.
+    fx->fog_ambient_from_sky = false;
+    glm_vec3_scale((float*)n->fog_ambient, 1.0f - w, fx->fog_ambient);
 }
 
 // When footfall `k` of the climb lands, in seconds since it began.
@@ -296,10 +340,10 @@ static bool watching(const vec3 feet, const vec3 forward) {
 }
 
 // The house as it was before it began.
-static const HauntLive NORMAL = {1.0f, 1.0f, 0.0f, 0.0f};
+static const HauntLive NORMAL = {1.0f, 1.0f, 0.0f, 0.0f, 1.0f, true};
 
 void haunt_start(Haunt* h, const HauntHouse* house, unsigned int seed) {
-    *h = (Haunt){.house = *house, .seed = seed, .shade_slot = -1};
+    *h = (Haunt){.house = *house, .seed = seed, .shade_slot = -1, .bedside_slot = -1};
     Scene* scene = house->scene;
     if (!scene)
         return;
@@ -308,10 +352,17 @@ void haunt_start(Haunt* h, const HauntHouse* house, unsigned int seed) {
     h->lamp = scene_find_light(scene, "floor_lamp");
     if (h->lamp)
         h->shade_slot = mats_shade_slot(house->shade, h->lamp->original_position);
-    if (!h->hall[0] || !h->hall[1] || !h->lamp || h->shade_slot < 0)
-        fprintf(stderr, "silent: the haunting finds%s%s%s%s\n", h->hall[0] ? "" : " no hall bulb",
-                h->hall[1] ? "" : " no hall lantern", h->lamp ? "" : " no floor lamp",
-                h->shade_slot >= 0 ? "" : " no lampshade bulb");
+    h->bath = scene_find_light(scene, "bath_bulb");
+    h->bedside = scene_find_light(scene, "bedside_lamp");
+    if (h->bedside)
+        h->bedside_slot = mats_shade_slot(house->shade, h->bedside->original_position);
+    if (!h->hall[0] || !h->hall[1] || !h->lamp || h->shade_slot < 0 || !h->bath || !h->bedside ||
+        h->bedside_slot < 0)
+        fprintf(stderr, "silent: the haunting finds%s%s%s%s%s%s%s\n",
+                h->hall[0] ? "" : " no hall bulb", h->hall[1] ? "" : " no hall lantern",
+                h->lamp ? "" : " no floor lamp", h->shade_slot >= 0 ? "" : " no lampshade bulb",
+                h->bath ? "" : " no bathroom bulb", h->bedside ? "" : " no bedside lamp",
+                h->bedside_slot >= 0 ? "" : " no bedside lampshade bulb");
     for (size_t i = 0; i < scene->light_count && h->street_count < HAUNT_STREET_LAMPS; i++) {
         Light* l = scene->lights[i];
         if (l->name && !strcmp(l->name, "street_lamp"))
@@ -385,12 +436,25 @@ void haunt_begin(Haunt* h, double time, double into) {
     }
     if (h->lamp)
         n->lamp_candela = h->lamp->intensity;
+    if (h->bath)
+        n->bath_candela = h->bath->intensity;
+    if (h->bedside)
+        n->bedside_candela = h->bedside->intensity;
+    if (h->house.bulbs)
+        n->bulb_nits = h->house.bulbs->emissive_strength;
     if (h->house.panes)
         glm_vec3_copy(h->house.panes->albedo, n->panes);
     if (h->house.lamp_heads)
         n->lamp_head_nits = h->house.lamp_heads->emissive_strength;
     for (int i = 0; i < h->street_count; i++)
         n->street_candela[i] = h->street[i]->intensity;
+    const ReflectionProbeSet* set = h->house.scene ? h->house.scene->probe_set : NULL;
+    const size_t probes = set ? set->residency.count : 0;
+    h->probe_count = probes < HAUNT_PROBES ? (int)probes : HAUNT_PROBES;
+    for (int i = 0; i < h->probe_count; i++)
+        n->probe_intensity[i] = set->probes[i]->intensity;
+    if (h->house.scene && h->house.scene->ibl)
+        n->sky = h->house.scene->ibl->intensity;
     const PostFX* fx = h->house.engine ? h->house.engine->postfx : NULL;
     if (fx) {
         n->vignette = fx->vignette_enabled;
@@ -398,6 +462,8 @@ void haunt_begin(Haunt* h, double time, double into) {
         n->vignette_radius = fx->vignette_radius;
         n->grain = fx->grain_enabled;
         n->grain_strength = fx->grain_strength;
+        glm_vec3_copy((float*)fx->fog_ambient, n->fog_ambient);
+        n->fog_from_sky = fx->fog_ambient_from_sky;
     }
     h->active = true;
     h->began = time - into;
@@ -422,11 +488,13 @@ void haunt_begin(Haunt* h, double time, double into) {
         }
     }
     // The house goes quiet as its lights die, as a supply failing would have it: the clock stops
-    // dead, the fridge's compressor cuts out with a clunk, and the drone starts up from nothing.
+    // dead, the fridge's compressor cuts out with a clunk, the tubes and the cellar's bulb go out
+    // for as long as it lasts, and the drone starts up from nothing.
     if (h->house.clock)
         clock_stop(h->house.clock, true);
     if (h->house.fridge)
         kitchen_fridge_run(h->house.fridge, false);
+    house_supply(h, SUPPLY_OUT);
     drone_up(h, 0.0f);
     for (int i = 0; i < HAUNT_DRONE_TONES; i++)
         if (h->drone[i])
@@ -439,7 +507,10 @@ void haunt_end(Haunt* h) {
     if (!h->active)
         return;
     apply(h, &NORMAL);
-    tint_tv(h, 0.0f);
+    house_supply(h, 1.0f);
+    tint_tv(h, 0.0f, 1.0f);
+    if (h->house.tv)
+        tv_hiss(h->house.tv, 1.0f);
     grade(h, 0.0f);
     for (int i = 0; i < HAUNT_DRONE_TONES; i++)
         if (h->drone[i])
@@ -555,16 +626,23 @@ void haunt_frame(Haunt* h, double time) {
     if (!h->active)
         return;
     const double u = time - h->began;
-    const bool dark = u < HALL_DARK_SECONDS;
+    // Out, then up to each circuit's own failing, its episodes counted from when it came back.
+    const double back = fmax(0.0, u - BLACKOUT_SECONDS);
+    const float up = glm_smoothstep(0.0f, 1.0f, (float)(back / RISE_SECONDS));
+    const float on = SUPPLY_OUT + (1.0f - SUPPLY_OUT) * up;
     h->live = (HauntLive){
-        .hall = dark ? SUPPLY_FLOOR : failing(u, HALL_PERIOD, h->seed),
-        .lamp = failing(u, LAMP_PERIOD, h->seed ^ 0x9e3779b9u),
-        .red = dark ? 0.0f : 1.0f,
+        .hall = on * failing(back, HALL_PERIOD, h->seed),
+        .lamp = on * failing(back, LAMP_PERIOD, h->seed ^ 0x9e3779b9u),
+        .red = 1.0f,
         .dark_out = 1.0f,
+        .mains = SUPPLY_OUT,
+        .ambient = false,
     };
     apply(h, &h->live);
-    tint_tv(h, h->live.red);
-    grade(h, glm_smoothstep(0.0f, 1.0f, (float)((u - HALL_DARK_SECONDS) / GRADE_SECONDS)));
+    tint_tv(h, 1.0f, on);
+    if (h->house.tv)
+        tv_hiss(h->house.tv, up);
+    grade(h, 1.0f);
     drone_up(h, h->quiet ? 0.0f : glm_smoothstep(0.0f, 1.0f, (float)(u / DRONE_RISE_SECONDS)));
 }
 

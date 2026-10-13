@@ -25,6 +25,7 @@ typedef struct Tv {
     vec3 speaker;      // world: where its hiss comes from
     vec4 field;        // the field last shown: its number, the hum's phase, spread and mean
     vec3 tint;         // a filter over the set's white; 1 is its own
+    Sound* hiss;       // NULL without audio or a picture
 } Tv;
 
 // Lays the set on its stand in the living room and hangs its light; with `on`, the picture over
@@ -32,6 +33,8 @@ typedef struct Tv {
 void tv_build(Tv* tv, Kit* kit, Engine* engine, Scene* scene, bool on);
 // The hiss, started at the set; nothing when it shows no picture or `audio` is NULL.
 void tv_start_audio(Tv* tv, AudioSystem* audio);
+// The hiss at `share` of its own volume (spec 13.52).
+void tv_hiss(Tv* tv, float share);
 // The field at `time` onto the picture, the glass and the light.
 void tv_update(Tv* tv, double time);
 // The picture, the glass and the set's light through `filter` (spec 13.52), until tinted again;

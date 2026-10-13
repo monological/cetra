@@ -773,7 +773,7 @@ void gi_world_bind(const GIWorld* world, const LightingAtlas* atlas, ShaderProgr
     float slots[GI_RESIDENT_MAX * 4][4];
     int published = 0;
     bool any_ready = false;
-    if (world && world->enabled && atlas && atlas->texture) {
+    if (world && world->enabled && !world->hidden && atlas && atlas->texture) {
         for (size_t i = 0; i < world->residency.count; ++i) {
             const ResidencyItem* item = &world->residency.items[i];
             if (item->slot < 0)

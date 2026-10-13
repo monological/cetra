@@ -132,6 +132,7 @@ typedef struct GIVolume {
 typedef struct GIWorld {
     // SETTINGS: plain stores.
     bool enabled;     // false = no volume is captured or sampled
+    bool hidden;      // true = no volume is sampled; they are still captured and kept
     int rate;         // probes a frame, across the world, while swept volumes re-converge; 0 = all
     bool debug_atlas; // draw the lighting atlas over the composited frame
     // Each volume prints what its sweep cost, part by part, as it converges (spec 13.42); each part

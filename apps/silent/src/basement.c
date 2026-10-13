@@ -639,6 +639,7 @@ void basement_start(Basement* b, Engine* engine, Scene* scene, AudioSystem* audi
                     unsigned int seed) {
     *b = (Basement){.drafted = -1.0,
                     .seed = seed,
+                    .mains = 1.0f,
                     .audio = audio,
                     .next_drip = DRIP_FIRST,
                     .drips = {seed * 2246822519u + 77u}};
@@ -721,7 +722,7 @@ static void bulb_update(Basement* b, const Door* door, double time) {
     b->live.follow = reach > FOLLOW_REACH;
     // The supply sags now and then, and the filament goes dim and orange with it; never out, or
     // the light would leave its cached shadow undrawn.
-    b->live.level = lights_brownout(time, b->seed);
+    b->live.level = lights_brownout(time, b->seed) * b->mains;
     bulb_light(b, &b->live);
 }
 
