@@ -5,7 +5,7 @@
 #include "mats.h"
 
 #define DOOR_SECONDS      1.2f  // shut to open, eased at both ends: a heavy door
-#define DOOR_SLAM_SECONDS 0.3f  // open to shut, flung: about 4 m/s at a house door's latch
+#define DOOR_SLAM_SECONDS 0.3f  // the whole swing, flung: about 4 m/s at a house door's latch
 #define DOOR_SILL_GAP     0.02f // a hung leaf's foot over the floor
 #define PLANK             0.17f // the boards' width, seams between them
 #define STRAP_H           0.06f
@@ -262,12 +262,13 @@ void door_drift(Door* door, float want, float seconds) {
     door->pace = span > 0.0f ? fmaxf(seconds, 1e-3f) / span : 0.0f;
 }
 
-void door_slam(Door* door) {
-    if (door->slam || (door->travel <= 0.0f && door->want <= 0.0f))
+void door_slam(Door* door, float want) {
+    want = glm_clamp_zo(want);
+    if (door->slam || (door->travel == want && door->want == want))
         return;
     // Unease where it stands, so the leaf does not jump as its swing stops being eased.
     door->travel = glm_smoothstep(0.0f, 1.0f, door->travel);
-    door->want = 0.0f;
+    door->want = want;
     door->pace = DOOR_SLAM_SECONDS;
     door->slam = true;
 }
