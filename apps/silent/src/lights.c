@@ -239,16 +239,6 @@ void lights_build(Lights* lights, Kit* kit, Engine* engine, Scene* scene, unsign
     }
 }
 
-static float hash01(uint32_t a, uint32_t b, uint32_t c) {
-    uint32_t h = a * 0x8da6b343u ^ b * 0xd8163841u ^ c * 0xcb1ab31fu;
-    h ^= h >> 16;
-    h *= 0x7feb352du;
-    h ^= h >> 15;
-    h *= 0x846ca68bu;
-    h ^= h >> 16;
-    return (float)(h >> 8) * (1.0f / 16777216.0f);
-}
-
 /*
  * A failing starter: steady for seconds at a time, then a burst of stutter --
  * dropping out, catching, half-lighting -- and steady again. A pure function
@@ -258,23 +248,23 @@ static float flicker_level(double t, unsigned int seed) {
     const double period = 6.0;
     const uint32_t cycle = (uint32_t)floor(t / period);
     const float in = (float)(t - (double)cycle * period);
-    const float start = 1.0f + 3.5f * hash01(cycle, 0u, seed);
-    const float len = 0.3f + 0.9f * hash01(cycle, 1u, seed);
+    const float start = 1.0f + 3.5f * kit_hash01(cycle, 0u, seed);
+    const float len = 0.3f + 0.9f * kit_hash01(cycle, 1u, seed);
     if (in < start || in > start + len)
         return 1.0f;
-    const float h = hash01(cycle, 100u + (uint32_t)((in - start) / 0.045f), seed);
+    const float h = kit_hash01(cycle, 100u + (uint32_t)((in - start) / 0.045f), seed);
     return h < 0.45f ? 0.04f : (h < 0.6f ? 0.5f : 1.0f);
 }
 
 float lights_brownout(double t, unsigned int seed) {
     const double period = 11.0;
     const uint32_t cycle = (uint32_t)floor(t / period);
-    if (hash01(cycle, 2u, seed) < 0.35f)
+    if (kit_hash01(cycle, 2u, seed) < 0.35f)
         return 1.0f;
     const float in = (float)(t - (double)cycle * period);
-    const float start = 1.0f + 7.0f * hash01(cycle, 3u, seed);
-    const float len = 0.35f + 1.1f * hash01(cycle, 4u, seed);
-    const float depth = 0.35f + 0.35f * hash01(cycle, 5u, seed);
+    const float start = 1.0f + 7.0f * kit_hash01(cycle, 3u, seed);
+    const float len = 0.35f + 1.1f * kit_hash01(cycle, 4u, seed);
+    const float depth = 0.35f + 0.35f * kit_hash01(cycle, 5u, seed);
     if (in < start || in > start + len)
         return 1.0f;
     // Down quickly, back slowly, as a filament cools and heats.

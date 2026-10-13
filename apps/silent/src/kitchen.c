@@ -741,18 +741,36 @@ static void table(Kit* kit) {
     cushion(kit, 3.35f, 12.12f, 0.35f + 0.12f);
 }
 
-// Against the other loops tools/fetch_sounds.py levels alike.
-#define FRIDGE_VOLUME 0.15f
+// Against the other loops and one-shots tools/fetch_sounds.py levels alike: the clunk is the
+// compressor's whole frame jarring, louder than its run.
+#define FRIDGE_VOLUME       0.15f
+#define FRIDGE_CLUNK_VOLUME 0.5f
 
-void kitchen_start_audio(AudioSystem* audio) {
-    Sound* hum = sounds_loop(audio, "assets/audio/silent/fridge_hum.flac");
-    if (!hum)
+void kitchen_start_audio(Fridge* fridge, AudioSystem* audio) {
+    *fridge = (Fridge){0};
+    fridge->hum = sounds_loop(audio, "assets/audio/silent/fridge_hum.flac");
+    if (!fridge->hum)
         return;
     // Behind the fridge and near the floor, where the compressor sits.
     vec3 motor = {0.0f, 0.0f, 0.0f};
     kit_frame_point(&STOVE_WALL, 0.5f * FRIDGE_W, 0.2f, 0.08f, motor);
-    audio_sound_set_position(hum, motor);
-    audio_sound_set_volume(hum, FRIDGE_VOLUME);
+    audio_sound_set_position(fridge->hum, motor);
+    audio_sound_set_volume(fridge->hum, FRIDGE_VOLUME);
+    fridge->clunk =
+        audio_sound_from_file(audio, "assets/audio/silent/fridge_clunk.wav", AUDIO_BUS_SFX);
+    if (fridge->clunk) {
+        audio_sound_set_position(fridge->clunk, motor);
+        audio_sound_set_volume(fridge->clunk, FRIDGE_CLUNK_VOLUME);
+    }
+}
+
+void kitchen_fridge_run(Fridge* fridge, bool running) {
+    if (!fridge->hum || fridge->stopped == !running)
+        return;
+    fridge->stopped = !running;
+    audio_sound_set_volume(fridge->hum, running ? FRIDGE_VOLUME : 0.0f);
+    if (!running && fridge->clunk)
+        audio_sound_play(fridge->clunk);
 }
 
 void kitchen_build(Kit* kit, unsigned int seed) {

@@ -644,6 +644,31 @@ void mats_shade_bulb(Kit* kit, const vec3 at, float candela, const vec3 colour) 
     shader_params_set(&shade->shader_params, name, (vec4){colour[0], colour[1], colour[2], 0.0f});
 }
 
+// The param holding bulb `slot` of `shade`, or NULL.
+static ShaderParam* shade_bulb(Material* shade, int slot) {
+    char name[SHADER_PARAM_NAME];
+    snprintf(name, sizeof(name), "shadeBulb%d", slot);
+    for (int i = 0; i < shade->shader_params.count; i++)
+        if (strcmp(shade->shader_params.list[i].name, name) == 0)
+            return &shade->shader_params.list[i];
+    return NULL;
+}
+
+int mats_shade_slot(Material* shade, const vec3 at) {
+    for (int slot = 0; shade && slot < SHADE_BULBS; slot++) {
+        const ShaderParam* p = shade_bulb(shade, slot);
+        if (p && glm_vec3_distance((float*)p->value, (float*)at) < 0.05f)
+            return slot;
+    }
+    return -1;
+}
+
+void mats_shade_candela(Material* shade, int slot, float candela) {
+    ShaderParam* p = shade && slot >= 0 ? shade_bulb(shade, slot) : NULL;
+    if (p)
+        p->value[3] = candela;
+}
+
 void mats_register(Kit* kit, Engine* engine, Scene* scene) {
     // Registered in order into an empty kit, so the slot IS the MatId.
     assert(kit->material_count == 0);

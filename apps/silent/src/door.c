@@ -4,16 +4,18 @@
 #include "layout.h"
 #include "mats.h"
 
-#define DOOR_SECONDS  1.2f  // shut to open, eased at both ends: a heavy door
-#define DOOR_SILL_GAP 0.02f // a hung leaf's foot over the floor
-#define PLANK         0.17f // the boards' width, seams between them
-#define STRAP_H       0.06f
-#define STRAP_T       0.006f
+#define DOOR_SECONDS      1.2f  // shut to open, eased at both ends: a heavy door
+#define DOOR_SLAM_SECONDS 0.3f  // open to shut, flung: about 4 m/s at a house door's latch
+#define DOOR_SILL_GAP     0.02f // a hung leaf's foot over the floor
+#define PLANK             0.17f // the boards' width, seams between them
+#define STRAP_H           0.06f
+#define STRAP_T           0.006f
 
-// The leaf's middle, in the world, and the yaw it is turned to, at a swing of `travel`.
+// The leaf's middle, in the world, and the yaw it is turned to, at a swing of `travel` and the jolt
+// past it. A slam is not eased: it travels flat out until it hits.
 static void pose(const Door* door, vec3 centre, float* yaw) {
-    const float eased = glm_smoothstep(0.0f, 1.0f, door->travel);
-    *yaw = door->yaw - door->swing * eased;
+    const float eased = door->slam ? door->travel : glm_smoothstep(0.0f, 1.0f, door->travel);
+    *yaw = door->yaw - (door->swing * eased + door->jolt);
     const float half_w = 0.5f * (door->shape.to - door->shape.from);
     const float half_h = 0.5f * (kit_opening_crown(&door->shape) - door->shape.bottom);
     const KitFrame now = {{door->hinge[0], door->hinge[1], door->hinge[2]}, *yaw};
@@ -231,14 +233,49 @@ bool door_will_open(const Door* door) {
 }
 
 void door_toggle(Door* door) {
+    if (door->slam)
+        return;
     door->want = door_will_open(door) ? 1.0f : 0.0f;
+    door->pace = 0.0f;
 }
 
 void door_set(Door* door, float travel, float want) {
     door->travel = glm_clamp_zo(travel);
     door->want = glm_clamp_zo(want);
+    door->pace = 0.0f;
+    door->slam = false;
     if (door->entity)
         place(door);
+}
+
+void door_jolt(Door* door, float angle) {
+    if (door->jolt == angle)
+        return;
+    door->jolt = angle;
+    if (door->entity)
+        place(door);
+}
+
+void door_drift(Door* door, float want, float seconds) {
+    door->want = glm_clamp_zo(want);
+    const float span = fabsf(door->want - door->travel);
+    door->pace = span > 0.0f ? fmaxf(seconds, 1e-3f) / span : 0.0f;
+}
+
+void door_slam(Door* door) {
+    if (door->slam || (door->travel <= 0.0f && door->want <= 0.0f))
+        return;
+    // Unease where it stands, so the leaf does not jump as its swing stops being eased.
+    door->travel = glm_smoothstep(0.0f, 1.0f, door->travel);
+    door->want = 0.0f;
+    door->pace = DOOR_SLAM_SECONDS;
+    door->slam = true;
+}
+
+float door_travel_at(const Door* door, float angle) {
+    // The smoothstep's inverse, on its rising half.
+    const float e = glm_clamp_zo(angle / door->swing);
+    return 0.5f - sinf(asinf(1.0f - 2.0f * e) / 3.0f);
 }
 
 void door_set_open(Door* door) {
@@ -248,8 +285,13 @@ void door_set_open(Door* door) {
 void door_update(Door* door, float dt) {
     if (!door->entity || door->travel == door->want)
         return;
-    const float step = dt / DOOR_SECONDS;
+    const float step = dt / (door->pace > 0.0f ? door->pace : DOOR_SECONDS);
     door->travel = door->want > door->travel ? fminf(door->want, door->travel + step)
                                              : fmaxf(door->want, door->travel - step);
+    // Where it was going, it goes on as the heavy door; a slam that has hit is shut, eased or not.
+    if (door->travel == door->want) {
+        door->pace = 0.0f;
+        door->slam = false;
+    }
     place(door);
 }

@@ -24,6 +24,7 @@ typedef struct Tv {
     float average;     // the picture's light over its area, as a share of the signal's mean
     vec3 speaker;      // world: where its hiss comes from
     vec4 field;        // the field last shown: its number, the hum's phase, spread and mean
+    vec3 tint;         // a filter over the set's white; 1 is its own
 } Tv;
 
 // Lays the set on its stand in the living room and hangs its light; with `on`, the picture over
@@ -33,8 +34,11 @@ void tv_build(Tv* tv, Kit* kit, Engine* engine, Scene* scene, bool on);
 void tv_start_audio(Tv* tv, AudioSystem* audio);
 // The field at `time` onto the picture, the glass and the light.
 void tv_update(Tv* tv, double time);
-// For the light's captures (spec 13.42): `rest` shows a field at the signal's long-run mean, with
-// no breath in its gain; false the field the last update showed.
+// The picture, the glass and the set's light through `filter` (spec 13.52), until tinted again;
+// nothing when it shows no picture.
+void tv_tint(Tv* tv, const vec3 filter);
+// For the light's captures (spec 13.42): `rest` shows a field at the signal's long-run mean in the
+// set's own white, with no breath in its gain; false the field the last update showed, tinted.
 void tv_rest(Tv* tv, bool rest);
 
 #endif // _SILENT_TV_H_

@@ -94,6 +94,19 @@ static char* tv_join(const char* a, const char* b) {
     return out;
 }
 
+// The set's white through `filter`, everywhere its colour lives: the picture's peak, the glass's
+// light and the room's.
+static void tv_colour(Tv* tv, const vec3 filter) {
+    vec3 white = {0.0f, 0.0f, 0.0f};
+    glm_vec3_mul((float*)TV_WHITE, (float*)filter, white);
+    const float width = PICTURE_A1 - PICTURE_A0, height = PICTURE_Y1 - PICTURE_Y0;
+    shader_params_set(&tv->picture->shader_params, "tvWhite",
+                      (vec4){TV_PEAK_NITS * white[0], TV_PEAK_NITS * white[1],
+                             TV_PEAK_NITS * white[2], width / height});
+    glm_vec3_copy(white, tv->glass->emissive);
+    glm_vec3_copy(white, tv->glow->color);
+}
+
 // The picture: a card on the glass, the static's program over it in the late draw, and the
 // glass's hook, which gives its light the picture's shape. Each from tv_picture.glsl and its own
 // file, so the glass and the picture are one statement of the tube and the hum bar.
@@ -120,9 +133,7 @@ static void tv_picture(Tv* tv, Kit* kit, Engine* engine) {
     ShaderParams* p = &tv->picture->shader_params;
     shader_params_set(p, "tvTube", tube);
     shader_params_set(p, "tvSignal", (vec4){TV_LINES, TV_SAMPLES, TV_BLACK, TV_GAMMA});
-    shader_params_set(p, "tvWhite",
-                      (vec4){TV_PEAK_NITS * TV_WHITE[0], TV_PEAK_NITS * TV_WHITE[1],
-                             TV_PEAK_NITS * TV_WHITE[2], width / height});
+    tv_colour(tv, tv->tint);
 
     // The glass's light, placed in the picture by where it is: its UVs are the smear's.
     char* glass_source = tv_join(tv_picture_shader_str, tv_glass_shader_str);
@@ -147,7 +158,7 @@ static void tv_picture(Tv* tv, Kit* kit, Engine* engine) {
 }
 
 void tv_build(Tv* tv, Kit* kit, Engine* engine, Scene* scene, bool on) {
-    *tv = (Tv){0};
+    *tv = (Tv){.tint = {1.0f, 1.0f, 1.0f}};
     // The cabinet on its stand, the glass, two knobs and rabbit ears.
     const KitFrame* f = &TV_SET;
     kit_frame_box(kit, f, MAT_WOOD, -0.5f, 0.5f, 0.0f, 0.5f, 0.0f, 0.45f, true);
@@ -237,10 +248,19 @@ void tv_update(Tv* tv, double time) {
     tv_show(tv, tv->field);
 }
 
+void tv_tint(Tv* tv, const vec3 filter) {
+    if (!tv->picture)
+        return;
+    glm_vec3_copy((float*)filter, tv->tint);
+    tv_colour(tv, tv->tint);
+}
+
 void tv_rest(Tv* tv, bool rest) {
     if (!tv->picture)
         return;
-    // At rest: the first field, the hum at its start and the gain at its mean, which is 1.
+    // At rest: the first field, the hum at its start and the gain at its mean, which is 1, in the
+    // set's own white.
     const vec4 resting = {0.0f, 0.0f, TV_SIGMA, tv_mean(TV_SIGMA)};
     tv_show(tv, rest ? resting : tv->field);
+    tv_colour(tv, rest ? (vec3){1.0f, 1.0f, 1.0f} : tv->tint);
 }
