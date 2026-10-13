@@ -26,7 +26,9 @@ clipping, so the gains in the app are the only statement of how loud
 anything is.
 
 Writes the beat as WAV and the loops as FLAC, which is gapless and half a
-WAV's size, under assets/audio/silent/. With --audition DIR it writes every
+WAV's size, under assets/audio/silent/, and GENERATES apps/silent/src/door_takes.h,
+where in each of the haunting's door takes the door hits its stop -- so never
+edit that header; rerun this. With --audition DIR it writes every
 CASES preset and every CANDIDATES recording there instead -- a loop repeated
 over thirty seconds, so its seam can be heard -- to choose by ear. Needs
 ffmpeg. Downloads are cached under out/polyhaven_cache, which is a build directory's and starts
@@ -38,6 +40,7 @@ downloaded or written.
 
 import argparse
 import os
+import shutil
 import subprocess
 import sys
 
@@ -156,6 +159,12 @@ RECORDINGS = {
     342932: ("Wading in Shallow Water.wav", "ryansitz", "342/342932_5800259"),
     583756: ("wet footsteps.mp3", "Bia12", "583/583756_4614795"),
     369580: ("Slow Water Footsteps", "Adielees9", "369/369580_4800355"),
+    # The haunting (spec 13.52), chosen by ear: the basement door shaken in its frame, its knob
+    # tried, a door slammed, and the bathroom door creaking ajar.
+    444704: ("RattlingLockedDoor.mp3", "shelbyshark", "444/444704_8644110"),
+    727791: ("doorknob rattle", "DrFahrts", "727/727791_10249017"),
+    571797: ("Door slamming hard", "NachtmahrTV", "571/571797_5620304"),
+    426228: ("squeaky door", "derjuli", "426/426228_2573247"),
 }
 PREVIEW = "https://cdn.freesound.org/previews/%s-hq.mp3"
 CLOCK = 125968
@@ -207,7 +216,8 @@ LOOPS = {
 # events are found by their envelope, each cut from just before its onset to a tail after it
 # falls away, faded, high-passed to take off handling rumble, and levelled like a loop by its
 # loud part. Each kind: the longest an event may be,
-# the tail kept after it, the high-pass, and how many events a recording may give.
+# the tail kept after it, the high-pass, and how many events a recording may give -- and
+# optionally `join`, the gap under which two loud runs are one event (60 ms unless it says).
 #
 # The player's footsteps (spec 13.47) are a kind a surface, step_<surface>, so a surface's set is
 # fetched or auditioned by its name, and the files are step_<surface>_<n>.wav. A shoe on a floor
@@ -233,6 +243,14 @@ ONESHOT_JOBS = {
     "step_forest": STEP,
     "step_mud": WADE,
     "step_water": WADE,
+    # The haunting's door (spec 13.52). A try at a locked door is a burst of clacks a tenth of a
+    # second or two apart, which a 60 ms join would cut into single clicks: one try is one take.
+    "rattle": {"longest": 2.0, "tail": 0.15, "highpass": 70.0, "per": 4, "join": 0.3},
+    "knob": {"longest": 2.0, "tail": 0.12, "highpass": 90.0, "per": 8, "join": 0.3},
+    # A slam keeps its low thump and the frame ringing after it.
+    "slam": {"longest": 1.6, "tail": 0.6, "highpass": 35.0, "per": 2},
+    # The fridge's compressor stopping: the whirl dying and the clunk.
+    "clunk": {"longest": 2.0, "tail": 0.4, "highpass": 35.0, "per": 3, "join": 0.2},
 }
 ONESHOT_CANDIDATES = {
     "meow": [110011, 412017, 479272, 528197, 455493, 66518],
@@ -252,6 +270,10 @@ ONESHOT_CANDIDATES = {
     "step_forest": [218305, 524496, 398267, 474113],
     "step_mud": [543930, 670850, 455057, 446257],
     "step_water": [553863, 342932, 583756, 369580],
+    "rattle": [444704],
+    "knob": [727791],
+    "slam": [571797],
+    "clunk": [573936],
 }
 # The player's footsteps (spec 13.47), chosen by ear from each candidate's walk: surface ->
 # recording. Its takes are the walk's, in the walk's order, as step_<surface>_1 to _6 -- the
@@ -290,8 +312,34 @@ ONESHOTS = {
     "basement_drip": ("drip", 815419, 3),
     **{"step_%s_%d" % (surface, k + 1): ("step_" + surface, sound, k)
        for surface, sound in FOOTSTEPS.items() for k in range(FOOTSTEP_TAKES)},
+    # The haunting (spec 13.52), chosen by ear: the basement door shaken in its frame, four tries
+    # at its knob for the game to pick among, a door slammed, and the fridge's compressor stopping.
+    "door_rattle": ("rattle", 444704, 1),
+    "door_knob_1": ("knob", 727791, 0),
+    "door_knob_2": ("knob", 727791, 1),
+    "door_knob_3": ("knob", 727791, 2),
+    "door_knob_4": ("knob", 727791, 3),
+    "door_slam": ("slam", 571797, 0),
+    "fridge_clunk": ("clunk", 573936, 0),
 }
+
+# The door takes the haunting moves the basement door's leaf with, and the header that says where
+# in each the door hits its stop: a kind -> its files, in the order the game numbers them.
+DOOR_TAKES = {
+    "RATTLE": ["door_rattle"],
+    "KNOB": ["door_knob_1", "door_knob_2", "door_knob_3", "door_knob_4"],
+}
+DOOR_TAKE_HITS = 24  # the most hits a take keeps, its loudest
+DOOR_HEADER = os.path.join(ROOT, "apps", "silent", "src", "door_takes.h")
 ONESHOT_LEAD = 0.01  # seconds kept before an event's onset
+
+# A one-shot cut by hand where no envelope would find it -- one stretch of a longer take, chosen
+# by ear: file name -> (job, recording, from, to in seconds, high-pass Hz). Shaped and levelled
+# as a found event is.
+CUTS = {
+    # The bathroom door drifting ajar (spec 13.52): one slow squeal of the hinge.
+    "door_creak": ("creak", 426228, 1.0, 4.0, 100.0),
+}
 
 # The layers heard through the house's walls: file name -> (loop, low-pass
 # Hz, level). A wall passes the low end and little of the rest.
@@ -520,9 +568,10 @@ def envelope(x, hz=30.0):
 def events(x, job):
     """The recording's events for `job`, cleanest first, as (start, end) samples: each a run of
     the envelope above a sixth of the way from the recording's floor to its loudest, runs closer
-    than 60 ms joined, from just before the onset to the job's tail after it falls away, and no
-    longer than the job allows. Cleanest is loudest over the floor."""
+    than the job's join joined, from just before the onset to the job's tail after it falls away,
+    and no longer than the job allows. Cleanest is loudest over the floor."""
     j = ONESHOT_JOBS[job]
+    join = int(j.get("join", 0.06) * RATE)
     env = envelope(x)
     floor = np.percentile(env, 20)
     above = env > floor + (env.max() - floor) / 6.0
@@ -535,7 +584,7 @@ def events(x, job):
         ends.append(x.size)
     runs = []
     for s, e in zip(starts, ends):
-        if runs and s - runs[-1][1] < int(0.06 * RATE):
+        if runs and s - runs[-1][1] < join:
             runs[-1][1] = e
         else:
             runs.append([s, e])
@@ -550,14 +599,85 @@ def events(x, job):
     return [(s, e) for _, s, e in found[:j["per"]]]
 
 
-def oneshot(x, span, job):
-    """One event cut out, faded in over 3 ms and out over its last 40, high-passed, and levelled
-    by its loud part."""
+def oneshot(x, span, job, highpass=None):
+    """One event cut out, faded in over 3 ms and out over its last 40, high-passed (at the job's
+    unless given), and levelled by its loud part."""
     s, e = span
     y = shape(x[s:e], 0.003, max(1, min(int(0.04 * RATE), (e - s) // 3)),
-              ONESHOT_JOBS[job]["highpass"])
+              ONESHOT_JOBS[job]["highpass"] if highpass is None else highpass)
     env = envelope(y, 60.0)
     return level(y, y[env > 0.25 * env.max()])
+
+
+def take(name):
+    """A ONESHOTS row's take."""
+    job, sound, k = ONESHOTS[name]
+    x = decode(sound)
+    return oneshot(x, events(x, job)[k], job)
+
+
+def hand_cut(name):
+    """A CUTS row's stretch, shaped as a one-shot."""
+    job, sound, start, end, highpass = CUTS[name]
+    return oneshot(decode(sound), (int(start * RATE), int(end * RATE)), job, highpass)
+
+
+def hits(y):
+    """Where in a take the door hits its stop: every clack, in seconds from the take's start, with
+    its loudness as a share of the take's loudest -- the peaks of a fast envelope, at least 50 ms
+    apart and standing a tenth of the loudest above their surroundings."""
+    env = envelope(y, 120.0)
+    top = env.max()
+    peaks, props = signal.find_peaks(env, height=0.2 * top, distance=int(0.05 * RATE),
+                                     prominence=0.1 * top)
+    strength = props["peak_heights"] / top
+    keep = np.sort(np.argsort(-strength)[:DOOR_TAKE_HITS])
+    return peaks[keep] / RATE, strength[keep]
+
+
+def write_door_takes(takes):
+    """door_takes.h: each door take's file, length and hits, as `takes` (file name -> its samples)
+    has them, laid out as clang-format lays it so the commit hook leaves the file as written."""
+    def f(v):
+        return "%.4ff" % v
+
+    lines = [
+        "// Generated by apps/silent/tools/fetch_sounds.py -- do not edit; rerun it.",
+        "// Included by haunt.c alone.",
+        "#ifndef _SILENT_DOOR_TAKES_H_",
+        "#define _SILENT_DOOR_TAKES_H_",
+        "",
+        "#define DOOR_TAKE_HITS %d" % DOOR_TAKE_HITS,
+        "",
+        "// A take at the basement door: its file under assets/audio/silent, its length in seconds,",
+        "// and where in it the door hits its stop -- seconds from its start, and loudness as a share",
+        "// of its loudest hit.",
+        "typedef struct {",
+        "    const char* file;",
+        "    float seconds;",
+        "    int hits;",
+        "    float at[DOOR_TAKE_HITS];",
+        "    float strength[DOOR_TAKE_HITS];",
+        "} DoorTake;",
+    ]
+    for kind, names in DOOR_TAKES.items():
+        lines += ["", "#define DOOR_%s_TAKES %d" % (kind, len(names)),
+                  "static const DoorTake DOOR_%s[DOOR_%s_TAKES] = {" % (kind, kind)]
+        for name in names:
+            y = takes[name]
+            at, strength = hits(y)
+            lines += ["    {.file = \"%s.wav\"," % name,
+                      "     .seconds = %s," % f(y.size / RATE),
+                      "     .hits = %d," % at.size,
+                      "     .at = {%s}," % ", ".join(f(v) for v in at),
+                      "     .strength = {%s}}," % ", ".join(f(v) for v in strength)]
+        lines += ["};"]
+    lines += ["", "#endif // _SILENT_DOOR_TAKES_H_", ""]
+    with open(DOOR_HEADER, "w") as out:
+        out.write("\n".join(lines))
+    if shutil.which("clang-format"):
+        subprocess.run(["clang-format", "-i", DOOR_HEADER], check=True)
+    print(os.path.relpath(DOOR_HEADER, ROOT))
 
 
 def walk(takes):
@@ -575,7 +695,8 @@ def main():
     parser.add_argument("--audition",
                         help="write every case preset and candidate loop here, to choose by ear")
     parser.add_argument("--only", nargs="+", metavar="JOB",
-                        choices=["clock", *JOBS, *ONESHOT_JOBS],
+                        choices=["clock", *JOBS, *ONESHOT_JOBS,
+                                 *sorted({cut[0] for cut in CUTS.values()})],
                         help="only these jobs -- clock, or a loop's or a one-shot's -- downloading "
                              "and writing nothing for the rest, whose files stay as they are")
     args = parser.parse_args()
@@ -625,6 +746,10 @@ def main():
                         job, sound, RECORDINGS[sound][1], k)), y)
                     print("%-6s %d event %d: %.2f s at %.2f s" % (
                         job, sound, k, y.size / RATE, span[0] / RATE))
+        for name, (job, sound, start, end, _) in CUTS.items():
+            if wanted(job):
+                write(os.path.join(args.audition, name + ".wav"), hand_cut(name))
+                print("%-6s %d, %.2f to %.2f s" % (job, sound, start, end))
         print(args.audition)
         return 0
 
@@ -646,11 +771,20 @@ def main():
     for name, (job, sound, k) in ONESHOTS.items():
         if not wanted(job):
             continue
-        x = decode(sound)
-        y = oneshot(x, events(x, job)[k], job)
+        y = take(name)
         path = os.path.join(OUT_DIR, name + ".wav")
         write(path, y)
         print("%s: %s, event %d, %.2f s" % (path, credit(sound), k, y.size / RATE))
+    door = [name for names in DOOR_TAKES.values() for name in names]
+    if any(wanted(ONESHOTS[name][0]) for name in door):
+        write_door_takes({name: take(name) for name in door})
+    for name, (job, sound, start, end, _) in CUTS.items():
+        if not wanted(job):
+            continue
+        y = hand_cut(name)
+        path = os.path.join(OUT_DIR, name + ".wav")
+        write(path, y)
+        print("%s: %s, %.2f to %.2f s" % (path, credit(sound), start, end))
     return 0
 
 
