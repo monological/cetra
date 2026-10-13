@@ -37,6 +37,16 @@ static const vec3 GRADE_RED = {1.5f, 0.1f, 0.08f};
 #define GRADE_VIGNETTE_RADIUS 0.4f
 #define GRADE_GRAIN           0.04f
 
+// The drone the house goes quiet under, risen over DRONE_RISE_SECONDS: two low tones a beat apart
+// that throb against each other, the tritone between them and their octave -- what a laptop's
+// speaker, which gives nothing under about 100 Hz, carries of it. Volumes against a tone's own
+// amplitude, a quarter of full scale.
+static const struct {
+    float hz;
+    float volume;
+} DRONE[HAUNT_DRONE_TONES] = {{55.0f, 0.1f}, {55.6f, 0.1f}, {77.8f, 0.03f}, {110.9f, 0.05f}};
+#define DRONE_RISE_SECONDS 6.0
+
 // 1 inside a..b, coming up and going down over `edge` seconds: a filament's warmth, which keeps a
 // light from snapping on and off like a strobe.
 static float pulse(float t, float a, float b, float edge) {
@@ -177,6 +187,19 @@ void haunt_start(Haunt* h, const HauntHouse* house, unsigned int seed) {
     } else if (engine && engine->postfx) {
         fprintf(stderr, "silent: the haunting's picture is not drained to red, its pass unbuilt\n");
     }
+    // The drone is heard whole wherever the player stands: it is in their head, not in a room.
+    for (int i = 0; house->audio && i < HAUNT_DRONE_TONES; i++) {
+        h->drone[i] = audio_sound_from_tone(house->audio, DRONE[i].hz, AUDIO_BUS_SFX);
+        if (h->drone[i])
+            audio_sound_set_looping(h->drone[i], true);
+    }
+}
+
+// The drone `rise` of the way up, from silent.
+static void drone_up(Haunt* h, float rise) {
+    for (int i = 0; i < HAUNT_DRONE_TONES; i++)
+        if (h->drone[i])
+            audio_sound_set_volume(h->drone[i], DRONE[i].volume * rise);
 }
 
 void haunt_begin(Haunt* h, double time, double into) {
@@ -212,6 +235,16 @@ void haunt_begin(Haunt* h, double time, double into) {
     h->active = true;
     h->began = time - into;
     h->live = NORMAL;
+    // The house goes quiet as its lights die, as a supply failing would have it: the clock stops
+    // dead, the fridge's compressor cuts out with a clunk, and the drone starts up from nothing.
+    if (h->house.clock)
+        clock_stop(h->house.clock, true);
+    if (h->house.fridge)
+        kitchen_fridge_run(h->house.fridge, false);
+    drone_up(h, 0.0f);
+    for (int i = 0; i < HAUNT_DRONE_TONES; i++)
+        if (h->drone[i])
+            audio_sound_play(h->drone[i]);
     if (h->trace)
         printf("haunt begin at %.3f, %.3f s in\n", time, into);
 }
@@ -222,6 +255,13 @@ void haunt_end(Haunt* h) {
     apply(h, &NORMAL);
     tint_tv(h, 0.0f);
     grade(h, 0.0f);
+    for (int i = 0; i < HAUNT_DRONE_TONES; i++)
+        if (h->drone[i])
+            audio_sound_stop(h->drone[i]);
+    if (h->house.clock)
+        clock_stop(h->house.clock, false);
+    if (h->house.fridge)
+        kitchen_fridge_run(h->house.fridge, true);
     h->active = false;
     if (h->trace)
         printf("haunt end\n");
@@ -245,6 +285,7 @@ void haunt_frame(Haunt* h, double time) {
     apply(h, &h->live);
     tint_tv(h, h->live.red);
     grade(h, glm_smoothstep(0.0f, 1.0f, (float)((u - HALL_DARK_SECONDS) / GRADE_SECONDS)));
+    drone_up(h, glm_smoothstep(0.0f, 1.0f, (float)(u / DRONE_RISE_SECONDS)));
 }
 
 void haunt_rest(Haunt* h, bool rest) {
