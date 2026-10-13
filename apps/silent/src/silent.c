@@ -1355,6 +1355,12 @@ static void on_update(Game* game, double dt) {
     for (int i = 0; i < DOORS; i++)
         if (g_door_hung[i])
             door_update(&g_doors[i], (float)dt);
+    // After the doors: the haunting moves the cellar door's leaf in its frame, which the step's end
+    // carries to its body and node with the rest. Its door beats wait for where the player looks.
+    vec3 forward = {0.0f, 0.0f, -1.0f};
+    if (game->engine->camera_rig)
+        camera_rig_direction(game->engine->camera_rig, forward);
+    haunt_step(&g_haunt, game->time, feet, forward);
     if (g_args.trace_cat) {
         static int step;
         if (step++ % 30 == 0) {
@@ -1870,7 +1876,8 @@ static void print_usage(const char* prog) {
     printf("      --no-static         The living room's television with nothing on it, no snow\n");
     printf("      --haunt             The haunting begins as the game is played (K begins and\n"
            "                          ends it)\n");
-    printf("      --haunt-at S        The haunting begun S seconds before the game is played\n");
+    printf("      --haunt-at S        The haunting begun S seconds before the game is played, its\n"
+           "                          door beats too, without waiting to be watched for\n");
     printf("      --trace-haunt       Print each of the haunting's beats as it comes\n");
     printf("      --no-loading-screen Load under a black window, without the engine's screen\n");
     printf("      --loading-screen    The engine's loading screen headless too\n");
