@@ -19,13 +19,12 @@
 #include "tv.h"
 
 /*
- * The haunting (spec 13.52), after P.T.: the player's house turns on them. The night outside goes
- * -- the windows black, the street lamps out -- and the hall's light dies and comes back red,
+ * The haunting (spec 13.52), after P.T.: the player's house turns on them. The power goes -- every
+ * light in the house, the night outside, the windows black -- and the hall's light comes back red,
  * failing; the living room's lamp falters, the snow on the television goes red, and the picture is
  * drained to red. The clock stops, the fridge cuts out and the house goes quiet under a low drone;
- * something climbs the cellar stair, the bathroom door creaks ajar -- or shut, if it stood open --
- * and the cellar door is tried from the other side -- until the player comes near it, when
- * everything at the door stops dead.
+ * the bathroom door creaks ajar -- or shut, if it stood open -- and the cellar door is tried hard
+ * from the other side -- until the player comes near it, when everything at the door stops dead.
  *
  * One module with a beginning and an end, so a story can start it where a key does now. Every
  * beat is a pure function of the seconds since it began and a seed, so a headless run shows the
@@ -55,9 +54,8 @@ typedef struct HauntHouse {
 // The street lamps it puts out, and the reflection probes it hides, at most.
 #define HAUNT_STREET_LAMPS 32
 #define HAUNT_PROBES       32
-// The tones the drone is made of, the footfall takes the climb plays, and the knob's tries.
+// The tones the drone is made of, and the knob's tries.
 #define HAUNT_DRONE_TONES 4
-#define HAUNT_STEP_TAKES  6
 #define HAUNT_KNOB_TAKES  4
 
 // What the house was before it began, put back when it ends and held while captured.
@@ -110,9 +108,8 @@ typedef struct Haunt {
     int street_count;
     PostFXPass* grade;               // drains the picture to red; off while it is not haunted
     Sound* drone[HAUNT_DRONE_TONES]; // NULL without audio
-    // What the doors and the stair sound like, each NULL without audio: the steps, the creak and
-    // the slam are fire-and-forget, the knob and the rattle held, so the quiet can cut them dead.
-    Sound* steps[HAUNT_STEP_TAKES];
+    // What the doors sound like, each NULL without audio: the creak and the slam are
+    // fire-and-forget, the knob and the rattle held, so the quiet can cut them dead.
     Sound* creak;
     Sound* slam;
     Sound* knob[HAUNT_KNOB_TAKES];
@@ -123,10 +120,12 @@ typedef struct Haunt {
     // The door beats wait for the player to watch for them, from the front of the hall down it:
     // the sim time they began at then, below 0 until; and the seconds into them the last step
     // reached, the beats since firing in the next. They stop for good once the player comes near
-    // the cellar door (the quiet). The cellar door is slamming shut.
+    // the cellar door (the quiet), and whether they were near it at the last step. The cellar door
+    // is slamming shut.
     double doors_at;
     double last_u;
     bool quiet;
+    bool near;
     bool slamming;
     HauntNormal normal;
     HauntLive live;
@@ -143,8 +142,8 @@ void haunt_begin(Haunt* h, double time, double into);
 void haunt_end(Haunt* h);
 bool haunt_active(const Haunt* h);
 // Per fixed step at sim time `time`, after the doors have moved, the player's feet at `feet` and
-// looking along `forward`: whether they watch for the door beats yet, then the slam, the climb,
-// the creak, the rattle, and the quiet.
+// looking along `forward`: whether they watch for the door beats yet, then the slam, the creak,
+// the tries, and the quiet.
 void haunt_step(Haunt* h, double time, const vec3 feet, const vec3 forward);
 // Per frame at sim time `time`: the lights, the windows, the set, the picture, the drone.
 void haunt_frame(Haunt* h, double time);

@@ -59,38 +59,39 @@ static const struct {
 } DRONE[HAUNT_DRONE_TONES] = {{55.0f, 0.05f}, {55.6f, 0.05f}, {77.8f, 0.015f}, {110.9f, 0.025f}};
 #define DRONE_RISE_SECONDS 6.0
 
-// Something comes up the cellar flight from its foot, from CLIMB_AT: a footfall every CLIMB_STEP
-// seconds, the last three slower, heavy and a little low. Then the bathroom door creaks: a shut one
-// drifts a hand's width open over CREAK_SECONDS, an open one drifts shut over CREAK_SHUT_SECONDS,
-// the creak's own length. Then the cellar door is tried. The volumes are against the one-shots
-// tools/fetch_sounds.py levels alike, and are loud on purpose: a sound falls as one over its
-// distance, and the climb is heard through the cellar door besides.
-#define CLIMB_AT           3.0
-#define CLIMB_STEP         0.95
-#define CLIMB_SLOW         1.2
-#define CLIMB_VOLUME       5.0f
-#define CLIMB_PITCH        0.88f
-#define CREAK_AT           16.5
+// The bathroom door creaks at CREAK_AT: a shut one drifts a hand's width open over CREAK_SECONDS,
+// an open one drifts shut over CREAK_SHUT_SECONDS, the creak's own length. Then from RATTLE_AT the
+// cellar door is tried. The volumes are against the one-shots tools/fetch_sounds.py levels alike,
+// and are loud on purpose: a sound falls as one over its distance.
+#define CREAK_AT           3.0
 #define CREAK_ANGLE        0.125f // radians: a hand's width at a house door's latch
 #define CREAK_SECONDS      2.5f
 #define CREAK_SHUT_SECONDS 3.0f
 #define CREAK_VOLUME       1.5f
-#define RATTLE_AT          19.0
+#define RATTLE_AT          6.0
 #define SLAM_VOLUME        2.0f
-// A try at the cellar door: its knob turned and pulled, and from the third try on the door shaken
-// in its frame RATTLE_LAG in, the leaf pulled up to RATTLE_PLAY metres off its stop at the latch
-// edge on each of the take's hits; the knob's own hits move it KNOB_SHAKE as far. The tries come
-// harder over RATTLE_GROW seconds, with a pause of TRY_GAP to TRY_GAP + TRY_SPREAD between them.
+// A try at the cellar door: its knob turned and pulled TRY_TURNS_MIN to TRY_TURNS_MAX times over,
+// a take after another, and from the second try on the door shaken in its frame all through it
+// from RATTLE_LAG in, the rattle's take after another, the leaf pulled up to RATTLE_PLAY metres
+// off its stop at the latch edge on each of the take's hits; the knob's own hits move it
+// KNOB_SHAKE as far. The tries come harder over RATTLE_GROW seconds, from RATTLE_FORCE0 to
+// RATTLE_FORCE1 of their volume and their pull, with a pause of TRY_GAP to TRY_GAP + TRY_SPREAD
+// between them.
+#define TRY_TURNS_MIN 2
+#define TRY_TURNS_MAX 4
 #define RATTLE_LAG    0.3
-#define RATTLE_PLAY   0.012f
+#define RATTLE_PLAY   0.03f
 #define RATTLE_GROW   20.0
-#define KNOB_SHAKE    0.35f
-#define TRY_GAP       0.8
-#define TRY_SPREAD    1.7
-#define KNOB_VOLUME   3.5f
-#define RATTLE_VOLUME 3.5f
-// The quiet: a player within this far of the cellar door in plan, on its floor, stops everything
-// at the door. Farther than the action key reaches, so it always comes first.
+#define RATTLE_FORCE0 0.8f
+#define RATTLE_FORCE1 1.2f
+#define KNOB_SHAKE    0.5f
+#define TRY_GAP       0.4
+#define TRY_SPREAD    1.0
+#define KNOB_VOLUME   4.0f
+#define RATTLE_VOLUME 5.0f
+// The quiet: a player coming within this far of the cellar door in plan, on its floor, once it is
+// being tried, stops everything at the door. Farther than the action key reaches, so it always
+// comes first; one already there when the tries begin has to come to it again.
 #define QUIET_REACH 2.2f
 // The door beats wait to be watched for: the player in the front of the hall, short of WATCH_Z1
 // under the pendant, looking down it within the angle whose cosine is WATCH_COS, from WATCH_AFTER
@@ -243,33 +244,48 @@ static void grade(Haunt* h, float w) {
     glm_vec3_scale((float*)n->fog_ambient, 1.0f - w, fx->fog_ambient);
 }
 
-// When footfall `k` of the climb lands, in seconds since it began.
-static double climb_at(int k) {
-    const int fast = BASEMENT_CLIMB - 3;
-    return CLIMB_AT + CLIMB_STEP * (double)(k < fast ? k : fast) +
-           CLIMB_SLOW * (double)(k > fast ? k - fast : 0);
-}
-
-// A try at the cellar door: when it starts, seconds into the rattle; which knob take it turns; and
-// whether the door is shaken with it, and when it is all over.
+// A try at the cellar door: when it starts, seconds into the rattle; the knob takes it turns, one
+// after another, and when each starts from the try's start; how many of the rattle's takes it
+// shakes the door through, one after another from RATTLE_LAG in, 0 for the knob alone; and when it
+// is all over.
 typedef struct Try {
     double at;
-    int knob;
-    bool shake;
+    int turns;
+    int knob[TRY_TURNS_MAX];
+    double turn_at[TRY_TURNS_MAX];
+    int shakes;
     double end;
 } Try;
 
+// When shake `j` of a try starts, from the try's start.
+static double shake_at(int j) {
+    return RATTLE_LAG + (double)j * (double)DOOR_RATTLE[0].seconds;
+}
+
 // The try under way at `u` seconds into the rattle, or the last one begun, walked from the first:
-// the first two only the knob, as though whoever is there tried it before pulling.
+// the first only the knob, as though whoever is there tried it before pulling. No take turns twice
+// running, its held sound being one.
 static Try rattle_try(double u, unsigned int seed) {
     double at = 0.0;
     for (uint32_t k = 0;; k++) {
-        Try t = {.at = at,
-                 .knob = (int)(kit_hash01(k, 40u, seed) * (float)DOOR_KNOB_TAKES) % DOOR_KNOB_TAKES,
-                 .shake = k >= 2 && kit_hash01(k, 41u, seed) < 0.8f};
-        double len = DOOR_KNOB[t.knob].seconds;
-        if (t.shake)
-            len = fmax(len, RATTLE_LAG + DOOR_RATTLE[0].seconds);
+        Try t = {.at = at};
+        const int span = TRY_TURNS_MAX - TRY_TURNS_MIN + 1;
+        t.turns = TRY_TURNS_MIN + (int)(kit_hash01(k, 43u, seed) * (float)span) % span;
+        double len = 0.0;
+        for (int i = 0; i < t.turns; i++) {
+            const float pick = kit_hash01(k, 40u + 16u * (uint32_t)i, seed);
+            t.knob[i] = i == 0 ? (int)(pick * DOOR_KNOB_TAKES) % DOOR_KNOB_TAKES
+                               : (t.knob[i - 1] + 1 +
+                                  (int)(pick * (DOOR_KNOB_TAKES - 1)) % (DOOR_KNOB_TAKES - 1)) %
+                                     DOOR_KNOB_TAKES;
+            t.turn_at[i] = len;
+            len += DOOR_KNOB[t.knob[i]].seconds;
+        }
+        if (k >= 1) {
+            t.shakes = (int)ceil((len - RATTLE_LAG) / (double)DOOR_RATTLE[0].seconds);
+            t.shakes = t.shakes < 1 ? 1 : t.shakes;
+            len = fmax(len, shake_at(t.shakes));
+        }
         t.end = at + len;
         const double next = t.end + TRY_GAP + TRY_SPREAD * kit_hash01(k, 42u, seed);
         if (u < next)
@@ -295,15 +311,18 @@ static float take_pull(const DoorTake* take, double at, double u) {
 
 // How hard the tries come at `u` seconds into the rattle: harder over its first RATTLE_GROW.
 static float rattle_force(double u) {
-    return 0.7f + 0.3f * glm_smoothstep(0.0f, 1.0f, (float)(u / RATTLE_GROW));
+    return glm_lerp(RATTLE_FORCE0, RATTLE_FORCE1,
+                    glm_smoothstep(0.0f, 1.0f, (float)(u / RATTLE_GROW)));
 }
 
 // The cellar door's leaf `u` seconds into the rattle: radians off its stop.
 static float rattle_jolt(const Haunt* h, double u) {
     const Try t = rattle_try(u, h->seed);
-    float pull = KNOB_SHAKE * take_pull(&DOOR_KNOB[t.knob], t.at, u);
-    if (t.shake)
-        pull = fmaxf(pull, take_pull(&DOOR_RATTLE[0], t.at + RATTLE_LAG, u));
+    float pull = 0.0f;
+    for (int i = 0; i < t.turns; i++)
+        pull = fmaxf(pull, KNOB_SHAKE * take_pull(&DOOR_KNOB[t.knob[i]], t.at + t.turn_at[i], u));
+    for (int j = 0; j < t.shakes; j++)
+        pull = fmaxf(pull, take_pull(&DOOR_RATTLE[0], t.at + shake_at(j), u));
     const Door* door = h->house.cellar;
     const float width = door->shape.to - door->shape.from;
     return RATTLE_PLAY / width * rattle_force(u) * pull;
@@ -389,13 +408,7 @@ void haunt_start(Haunt* h, const HauntHouse* house, unsigned int seed) {
         if (h->drone[i])
             audio_sound_set_looping(h->drone[i], true);
     }
-    // The climb takes the player's own steps on boards, its own copies so a run without footsteps
-    // still hears it.
     char path[96];
-    for (int i = 0; i < HAUNT_STEP_TAKES; i++) {
-        snprintf(path, sizeof(path), "assets/audio/silent/step_wood_%d.wav", i + 1);
-        h->steps[i] = audio_sound_from_file(audio, path, AUDIO_BUS_SFX);
-    }
     h->creak = audio_sound_from_file(audio, "assets/audio/silent/door_creak.wav", AUDIO_BUS_SFX);
     h->slam = audio_sound_from_file(audio, "assets/audio/silent/door_slam.wav", AUDIO_BUS_SFX);
     // The tries are heard from the leaf's hall side, where the knob and the latch are: in the hall,
@@ -469,6 +482,8 @@ void haunt_begin(Haunt* h, double time, double into) {
     h->began = time - into;
     h->live = NORMAL;
     h->quiet = false;
+    // A player already at the cellar door has to come to it again for the quiet.
+    h->near = true;
     h->slamming = false;
     // The door beats wait to be watched for -- unless this begins part-way in, when they are as far
     // in, and the doors stand where they would by then: the cellar door shut, and past the creak
@@ -561,31 +576,20 @@ void haunt_step(Haunt* h, double time, const vec3 feet, const vec3 forward) {
     const double u = time - h->doors_at, was = h->last_u;
     h->last_u = u;
 
-    // The quiet: once something is on the stair, a player coming near the door stops it all dead
-    // -- the climb, the tries, the drone -- and nothing at the door comes again.
+    // The quiet: once the door is being tried, a player coming near it stops it all dead -- the
+    // tries, the drone -- and nothing at the door comes again.
     const float* door_at = cellar->entity->position;
     const float dx = feet[0] - door_at[0], dz = feet[2] - door_at[2];
-    if (u >= CLIMB_AT && feet[1] > FLOOR_Y - 0.3f &&
-        dx * dx + dz * dz < QUIET_REACH * QUIET_REACH) {
+    const bool near = feet[1] > FLOOR_Y - 0.3f && dx * dx + dz * dz < QUIET_REACH * QUIET_REACH;
+    const bool came = near && !h->near;
+    h->near = near;
+    if (u >= RATTLE_AT && came) {
         h->quiet = true;
         hush_door(h);
         drone_up(h, 0.0f);
         if (h->trace)
             printf("haunt quiet at %.3f, %.2f m from the door\n", u, sqrtf(dx * dx + dz * dz));
         return;
-    }
-
-    for (int k = 0; k < BASEMENT_CLIMB; k++) {
-        const double at = climb_at(k);
-        if (was >= at || at > u)
-            continue;
-        vec3 foot = {0.0f, 0.0f, 0.0f};
-        basement_footfall(k, (k & 1) ? 0.1f : -0.1f, foot);
-        const int take = (int)(kit_hash01((uint32_t)k, 50u, h->seed) * (float)HAUNT_STEP_TAKES);
-        const float pitch = CLIMB_PITCH + 0.08f * (kit_hash01((uint32_t)k, 51u, h->seed) - 0.5f);
-        voice(h, h->steps[take % HAUNT_STEP_TAKES], foot, CLIMB_VOLUME, pitch);
-        if (h->trace)
-            printf("haunt footfall %d at %.3f\n", k, u);
     }
 
     Door* bath = h->house.bath;
@@ -608,16 +612,22 @@ void haunt_step(Haunt* h, double time, const vec3 feet, const vec3 forward) {
     const double r = u - RATTLE_AT, r_was = was - RATTLE_AT;
     const Try t = rattle_try(r, h->seed);
     const float force = rattle_force(r);
-    Sound* knob = h->knob[t.knob];
-    if (r_was < t.at && t.at <= r && knob) {
-        audio_sound_set_volume(knob, KNOB_VOLUME * force);
-        audio_sound_play(knob);
-        if (h->trace)
-            printf("haunt try at %.3f, knob %d%s\n", u, t.knob + 1, t.shake ? ", shaken" : "");
+    if (h->trace && r_was < t.at && t.at <= r)
+        printf("haunt try at %.3f, %d turns, %d shakes\n", u, t.turns, t.shakes);
+    for (int i = 0; i < t.turns; i++) {
+        const double at = t.at + t.turn_at[i];
+        Sound* knob = h->knob[t.knob[i]];
+        if (r_was < at && at <= r && knob) {
+            audio_sound_set_volume(knob, KNOB_VOLUME * force);
+            audio_sound_play(knob);
+        }
     }
-    if (t.shake && r_was < t.at + RATTLE_LAG && t.at + RATTLE_LAG <= r && h->rattle) {
-        audio_sound_set_volume(h->rattle, RATTLE_VOLUME * force);
-        audio_sound_play(h->rattle);
+    for (int j = 0; j < t.shakes; j++) {
+        const double at = t.at + shake_at(j);
+        if (r_was < at && at <= r && h->rattle) {
+            audio_sound_set_volume(h->rattle, RATTLE_VOLUME * force);
+            audio_sound_play(h->rattle);
+        }
     }
     door_jolt(cellar, rattle_jolt(h, r));
 }
