@@ -57,19 +57,16 @@ double door_try_shake_at(int j);
 float door_try_pull(const DoorTry* t, double u);
 
 // A player's try at a door that will not open (NULL when none is under way): the knob turned once
-// and, when it is shaken, the door after it, the leaf pulled at most `play` metres off its stop at
-// its latch edge. Its count of tries chooses each one's knob take.
+// and the door shaken after it. Its count of tries chooses each one's knob take.
 typedef struct DoorHandTry {
     Door* door;
     DoorTry try;
-    float play;
     double last; // the sim time the last step reached
     int count;
 } DoorHandTry;
 
 // Tries `door` from `time`, the knob heard now.
-void door_hand_try_begin(DoorHandTry* t, const DoorSounds* s, Door* door, double time, bool shake,
-                         float play);
+void door_hand_try_begin(DoorHandTry* t, const DoorSounds* s, Door* door, double time);
 // Per fixed step at sim time `now`, after the doors have moved: the rattle heard as its time comes
 // and the leaf placed off its stop, or back on it once the try is over.
 void door_hand_try_step(DoorHandTry* t, const DoorSounds* s, double now);

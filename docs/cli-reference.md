@@ -1090,8 +1090,8 @@ the bob half and the footsteps 6 dB softer. Standing waits until there is room o
 **The locked house** (specs 13.53 and 13.54). The front door is locked from the inside, and the
 key lies on the basement's workbench, down the cellar stair the backpack's flashlight gets the
 player down. E takes it into the backpack, and the haunting (below) begins as it does: the cellar
-door slams shut over the player's head, and 4 s on it is tried from the hall side as they come
-back up, until they open it themselves at the top of the flight. E at the front door:
+door slams shut over the player's head, the haunting tries it as they climb back up, and they
+open it themselves at the top of the flight. E at the front door:
 - without the key, tries it, the knob turned and the door rattled in its frame, and the player
   thinks it locked;
 - with the key and no map, the player thinks of the map in the kitchen and the door stays shut;

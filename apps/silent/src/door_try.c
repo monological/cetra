@@ -7,8 +7,10 @@
 // hits pull the leaf KNOB_SHARE as far as the rattle's.
 #define RATTLE_LAG 0.3
 #define KNOB_SHARE 0.5f
-// A player's try is heard from right beside the door.
+// A player's try is heard from right beside the door, which is yanked hard enough to rattle in its
+// frame: the leaf pulled at most HAND_PLAY metres off its stop at its latch edge.
 #define HAND_VOLUME 1.2f
+#define HAND_PLAY   0.01f
 
 void door_sounds_load(DoorSounds* s, AudioSystem* audio) {
     *s = (DoorSounds){.audio = audio};
@@ -77,12 +79,11 @@ float door_try_pull(const DoorTry* t, double u) {
     return pull;
 }
 
-void door_hand_try_begin(DoorHandTry* t, const DoorSounds* s, Door* door, double time, bool shake,
-                         float play) {
+void door_hand_try_begin(DoorHandTry* t, const DoorSounds* s, Door* door, double time) {
     const int knob = t->count % DOOR_KNOB_TAKES;
     DoorTry try = {.at = time, .turns = 1, .knob = {knob}};
-    door_try_lay(&try, shake);
-    *t = (DoorHandTry){door, try, play, time, t->count + 1};
+    door_try_lay(&try, true);
+    *t = (DoorHandTry){door, try, time, t->count + 1};
     door_hear(s, s->knob[knob], door, HAND_VOLUME);
 }
 
@@ -99,7 +100,7 @@ void door_hand_try_step(DoorHandTry* t, const DoorSounds* s, double now) {
     if (now >= t->try.end)
         door_hand_try_stop(t);
     else
-        door_jolt(t->door, t->play * door_try_pull(&t->try, now));
+        door_jolt(t->door, HAND_PLAY * door_try_pull(&t->try, now));
 }
 
 void door_hand_try_stop(DoorHandTry* t) {

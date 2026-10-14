@@ -56,13 +56,12 @@ static const struct {
 // What it begins with, heard whole wherever the player is.
 #define CUE_VOLUME 0.5f
 
-// The bathroom door creaks CREAK_AT after the player first stands in the hall -- begun by the key,
-// as they come up through the cellar door: a shut one drifts a hand's width open over
-// CREAK_SECONDS, an open one drifts shut over CREAK_SHUT_SECONDS, the creak's own length. The
-// cellar door is tried from RATTLE_AT after the haunting began, once it stands shut -- begun by the
-// key, as the player turns back to the cellar stair -- until it is opened on the tries. The volumes
-// are against the one-shots tools/fetch_sounds.py levels alike, and are loud on purpose: a sound
-// falls as one over its distance.
+// The bathroom door creaks CREAK_AT after the player first stands in the hall: a shut one drifts a
+// hand's width open over CREAK_SECONDS, an open one drifts shut over CREAK_SHUT_SECONDS, the
+// creak's own length. The cellar door is tried from RATTLE_AT after the haunting began, once it
+// stands shut, until it is opened on the tries. The volumes are against the one-shots
+// tools/fetch_sounds.py levels alike, and are loud on purpose: a sound falls as one over its
+// distance.
 #define CREAK_AT           1.0
 #define CREAK_ANGLE        0.125f // radians: a hand's width at a house door's latch
 #define CREAK_SECONDS      2.5f
@@ -403,24 +402,28 @@ void haunt_begin(Haunt* h, double time, double into) {
     h->began = time - into;
     h->live = NORMAL;
     // The slam and the creak wait for the player -- unless this begins part-way in, when they are
-    // past, and the doors stand where they would by then: the cellar door shut, and the bathroom
-    // door ajar if it was shut and shut if it was open. What came before `into` is not played.
+    // past, and the doors stand where they would by then: the cellar door shut, its tries under way
+    // past RATTLE_AT, and the bathroom door ajar if it was shut and shut if it was open. What came
+    // before `into` is not played.
+    const bool past = into > 0.0;
     h->stepped = time;
-    h->watched = false;
+    h->watched = past;
     h->hall_at = -1.0;
-    h->creaked = false;
+    h->creaked = past;
     h->tries = HAUNT_TRIES_WAITING;
     Door* cellar = h->house.cellar;
-    if (into > 0.0 && cellar) {
-        h->watched = true;
-        h->creaked = true;
+    if (past && cellar) {
         if (!door_is_shut(cellar))
             door_set(cellar, 0.0f, 0.0f);
-        Door* bath = h->house.bath;
-        if (bath) {
-            const float to = door_is_shut(bath) ? door_travel_at(bath, CREAK_ANGLE) : 0.0f;
-            door_set(bath, to, to);
+        if (into >= RATTLE_AT) {
+            h->tries = HAUNT_TRIES_ON;
+            h->tries_at = h->began + RATTLE_AT;
         }
+    }
+    Door* bath = h->house.bath;
+    if (past && bath) {
+        const float to = door_is_shut(bath) ? door_travel_at(bath, CREAK_ANGLE) : 0.0f;
+        door_set(bath, to, to);
     }
     // The house goes quiet as its lights die, as a supply failing would have it: the clock stops
     // dead, the fridge's compressor cuts out with a clunk, the tubes and the cellar's bulb go out
@@ -477,9 +480,10 @@ bool haunt_active(const Haunt* h) {
 // open slams shut in front of them; and soon after they first stand in the hall, the bathroom door
 // creaks.
 static void door_beats(Haunt* h, double time, const vec3 feet, const vec3 forward) {
-    if (!h->watched && time - h->began >= WATCH_AFTER && watching(feet, forward)) {
+    Door* cellar = h->house.cellar;
+    if (cellar && !h->watched && time - h->began >= WATCH_AFTER && watching(feet, forward)) {
         h->watched = true;
-        door_slam(h->house.cellar, 0.0f);
+        door_slam(cellar, 0.0f);
         if (h->trace)
             printf("haunt watched at %.3f\n", time - h->began);
     }
@@ -505,17 +509,20 @@ static void door_beats(Haunt* h, double time, const vec3 feet, const vec3 forwar
         printf("haunt creak %s at %.3f\n", shut ? "open" : "shut", time - h->began);
 }
 
-// The tries at the cellar door from `was` to `u` seconds into the haunting: from RATTLE_AT, once
-// the door stands shut, until it is opened on them.
-static void cellar_tries(Haunt* h, double u, double was) {
+// The tries at the cellar door, from the step at sim time `before` to the one at `time`: from
+// RATTLE_AT into the haunting, once the door stands shut, from their first however late that is,
+// until the door is opened on them.
+static void cellar_tries(Haunt* h, double time, double before) {
     Door* cellar = h->house.cellar;
-    if (u < RATTLE_AT || h->tries == HAUNT_TRIES_OVER)
+    const double u = time - h->began;
+    if (!cellar || u < RATTLE_AT || h->tries == HAUNT_TRIES_OVER)
         return;
     const bool shut = door_is_shut(cellar);
     if (h->tries == HAUNT_TRIES_WAITING) {
         if (!shut)
             return;
         h->tries = HAUNT_TRIES_ON;
+        h->tries_at = time;
     } else if (!shut) {
         h->tries = HAUNT_TRIES_OVER;
         hush_door(h);
@@ -524,7 +531,7 @@ static void cellar_tries(Haunt* h, double u, double was) {
         return;
     }
     const DoorSounds* s = h->house.sounds;
-    const double r = u - RATTLE_AT, r_was = was - RATTLE_AT;
+    const double r = time - h->tries_at, r_was = before - h->tries_at;
     const DoorTry t = rattle_try(r, h->seed);
     const float force = rattle_force(r);
     if (h->trace && r_was < t.at && t.at <= r)
@@ -548,12 +555,12 @@ static void cellar_tries(Haunt* h, double u, double was) {
 }
 
 void haunt_step(Haunt* h, double time, const vec3 feet, const vec3 forward) {
-    if (!h->active || !h->house.cellar)
+    if (!h->active)
         return;
     const double before = h->stepped;
     h->stepped = time;
     door_beats(h, time, feet, forward);
-    cellar_tries(h, time - h->began, before - h->began);
+    cellar_tries(h, time, before);
 }
 
 void haunt_frame(Haunt* h, double time) {
