@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include <string.h>
 
 #include "backpack.h"
@@ -5,6 +6,7 @@
 #include "fridge_map.h"
 #include "house_key.h"
 #include "kit.h"
+#include "library.h"
 #include "mats.h"
 
 // How the bag lies on the quilt: its top toward the bed's head, turned a little off square,
@@ -62,58 +64,19 @@ static void bag(Kit* kit) {
     kit_frame_box(kit, f, MAT_BRASS, 0.05f, 0.058f, 0.142f, 0.148f, -0.005f, 0.02f, false);
 }
 
-/*
- * The flashlight along its own d, 0.3 m from its tail cap to its bezel, centred on its origin:
- * a knurled barrel holding the cells, a collar with a rubber switch, a head flaring to the bezel,
- * and in it a polished reflector behind the lens.
- */
-#define TORCH_HALF 0.15f
-#define TORCH_RIBS 6 // the knurling's rings round the barrel
-static void flashlight(Kit* kit) {
-    const KitFrame* f = &KIT_WORLD;
-    const vec2 tail[] = {
-        {0.0f, 0.0f}, {0.017f, 0.0f}, {0.0195f, 0.003f}, {0.0195f, 0.028f}, {0.0182f, 0.031f}};
-    const vec2 head[] = {{0.0182f, 0.16f}, {0.019f, 0.168f}, {0.019f, 0.2f},  {0.023f, 0.215f},
-                         {0.029f, 0.25f},  {0.031f, 0.26f},  {0.031f, 0.29f}, {0.0285f, 0.294f},
-                         {0.026f, 0.294f}, {0.026f, 0.288f}};
-    _Static_assert(KIT_COUNT(tail) + 2 * TORCH_RIBS + KIT_COUNT(head) <= KIT_MAX_POINTS,
-                   "the flashlight's profile overruns a lathe's");
-    vec2 body[KIT_MAX_POINTS];
-    int n = 0;
-    for (int i = 0; i < KIT_COUNT(tail); i++)
-        glm_vec2_copy((float*)tail[i], body[n++]);
-    for (int i = 0; i < TORCH_RIBS; i++) {
-        const float z = 0.045f + 0.018f * (float)i;
-        glm_vec2_copy((vec2){0.0182f, z}, body[n++]);
-        glm_vec2_copy((vec2){0.0172f, z + 0.009f}, body[n++]);
-    }
-    for (int i = 0; i < KIT_COUNT(head); i++)
-        glm_vec2_copy((float*)head[i], body[n++]);
-    const vec3 axis = {0.0f, 0.0f, 1.0f};
-    kit_frame_lathe_on(kit, f, MAT_ANODISED, (vec3){0.0f, 0.0f, -TORCH_HALF}, axis, body, n, 24);
-    // The reflector, its inside toward the lens, and the lens.
-    const vec2 cup[] = {{0.026f, 0.02f}, {0.006f, 0.0f}};
-    kit_frame_lathe_on(kit, f, MAT_STAINLESS, (vec3){0.0f, 0.0f, TORCH_HALF - 0.05f}, axis, cup,
-                       KIT_COUNT(cup), 24);
-    const vec2 lens[] = {{0.0f, 0.0f}, {0.026f, 0.0f}, {0.026f, 0.002f}, {0.0f, 0.002f}};
-    kit_frame_lathe_on(kit, f, MAT_GLASS_CLEAR, (vec3){0.0f, 0.0f, TORCH_HALF - 0.032f}, axis, lens,
-                       KIT_COUNT(lens), 24);
-    kit_frame_soft_box(kit, f, MAT_BLACK, -0.006f, 0.006f, 0.016f, 0.0235f, 0.025f, 0.045f, 0.003f,
-                       0.0f);
-}
-
 // The town map folded, turned a quarter so the grid's side-on picture of it is its cover.
 static void town_map(Kit* kit) {
     fridge_map_closed(kit, &KIT_WORLD_Z);
 }
 
 const ItemSpec ITEMS[ITEM_COUNT] = {
+    // tools/make_flashlight_blender.py makes it, its lamp the node named as the item is.
     [ITEM_FLASHLIGHT] = {"flashlight",
                          "FLASHLIGHT",
-                         "A heavy metal flashlight, its black paint worn through at the grip. "
-                         "F turns it on and off.",
-                         {3, 1},
-                         flashlight},
+                         "An army flashlight. It clips to the jacket. F turns it on and off.",
+                         {1, 2},
+                         NULL,
+                         "assets/models/flashlight.glb"},
     [ITEM_TOWN_MAP] = {"map",
                        "TOWN MAP",
                        "A folded street map of Pale Ridge, taken off the fridge door. "
@@ -213,6 +176,22 @@ static void lay_out(Backpack* bp) {
         kit_node_shown(bp->root, bp->lying[i], !backpack_holds(bp, (ItemId)i));
 }
 
+// `item`'s model from its file: the node named as it is, alone, its materials the game's; NULL,
+// said by name, when there is none.
+static SceneNode* model_from_file(Engine* engine, Scene* scene, const ItemSpec* item) {
+    SceneNode* file = library_take(engine, scene, item->file, item->id, NULL);
+    if (!file)
+        return NULL;
+    mat4 frame = GLM_MAT4_IDENTITY_INIT;
+    SceneNode* model = library_find(file, item->id, frame);
+    if (model)
+        node_remove_child(model->parent, model);
+    else
+        fprintf(stderr, "silent: %s has no '%s'\n", item->file, item->id);
+    free_node(file);
+    return model;
+}
+
 // The bag's contents into the grid.
 static void unpack(Backpack* bp) {
     for (int i = 0; i < KIT_COUNT(CONTENTS); i++)
@@ -238,8 +217,15 @@ void backpack_build(Backpack* bp, Engine* engine, Scene* scene) {
     }
     for (int i = 0; i < ITEM_COUNT; i++) {
         kits[i].casts_nothing = true;
-        ITEMS[i].model(&kits[i]);
+        if (ITEMS[i].model)
+            ITEMS[i].model(&kits[i]);
+        // A model from a file leaves its kit empty, finished all the same so it lets go of what
+        // it holds.
         bp->models[i] = kit_finish_alone(&kits[i], ITEMS[i].id);
+        if (ITEMS[i].file) {
+            free_node(bp->models[i]);
+            bp->models[i] = model_from_file(engine, scene, &ITEMS[i]);
+        }
     }
     Kit* kit = &kits[ITEM_COUNT];
     bag(kit);

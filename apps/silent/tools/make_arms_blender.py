@@ -104,8 +104,8 @@ FACE = Vector((0.0, cage_model.DOOR_Y, cage_model.DOOR_FRAME_R + cage_model.RING
 # from the standing eye. It rides the body's lean, never the head's look.
 LAMP_AT = Vector((0.10, -0.25, 0.05))
 FLASHLIGHT_GLB = os.path.join(ROOT, "assets", "models", "flashlight.glb")
-# The lamp model's axes onto the Lamp bone's: its lens's +z along the bone's +Y, its up its +Z.
-LAMP_TURN = Matrix(((-1.0, 0.0, 0.0), (0.0, 0.0, 1.0), (0.0, 1.0, 0.0))).to_4x4()
+# The lamp model's axes onto the Lamp bone's: its lens's -x along the bone's +Y, its up its +Z.
+LAMP_TURN = Matrix(((0.0, 0.0, -1.0), (-1.0, 0.0, 0.0), (0.0, 1.0, 0.0))).to_4x4()
 
 # The hand: a sculpted right hand and its rig, which `load_hand` brings in at HAND_LENGTH from the
 # wrist to the middle finger's tip and measures in its own frame -- a along it from the wrist to

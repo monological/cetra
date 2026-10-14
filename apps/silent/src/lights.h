@@ -16,7 +16,7 @@
 
 /*
  * The house's light: the kitchen's fluorescent tubes, a bare bulb in the hall,
- * and the player's flashlight.
+ * and the player's flashlight, an army lamp clipped to their jacket (spec 13.55).
  *
  * A tube is a flat EMISSIVE strip in a mesh of its own, and the engine's
  * emissive-light pass turns each one into an LTC area panel every frame from
@@ -39,6 +39,11 @@ typedef struct Lights {
     Light* flashlight;
     bool flashlight_on;
     vec3 flashlight_dir; // smoothed, so the beam trails the look a little
+    // The beam held on something (spec 13.55): where from and which way, and how far, 0..1, it
+    // has gone from riding the player to that. Above 0 it is lit whatever the switch says.
+    vec3 hold_at;
+    vec3 hold_dir;
+    float hold;
 
     // The hall's pendant (spec 13.52): its node, turned about its rose; the bulb's height under
     // the rose in it; its light, where the last update left it and whether its kept shadow
@@ -63,11 +68,17 @@ void lights_build(Lights* lights, Kit* kit, Engine* engine, Scene* scene, unsign
 void lights_start_audio(Lights* lights, AudioSystem* audio);
 
 // Per frame, before the frame draws: the flicker, the tubes' shadows and
-// buzz, and the flashlight riding the eye.
+// buzz, and the flashlight clipped to the jacket under the eye, pointing where it looks.
 void lights_update(Lights* lights, Scene* scene, double time, float dt, const vec3 eye,
                    const vec3 forward);
 
 void lights_toggle_flashlight(Lights* lights);
+// The beam, from the next update, `weight` of the way from where the player has it to leaving
+// `at` along `dir`, and lit while `weight` is above 0; 0 gives it back to the player and the
+// switch.
+void lights_flashlight_hold(Lights* lights, const vec3 at, const vec3 dir, float weight);
+// Whether the beam is lit: its switch on, or held.
+bool lights_flashlight_lit(const Lights* lights);
 
 // The hall's pendant swinging `radians` from the next update, easing there over about `seconds`;
 // 0 radians hangs it still (spec 13.52).

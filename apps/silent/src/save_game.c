@@ -172,6 +172,9 @@ static void apply(void) {
     backpack_restore(w->backpack, g_kept.bag, held, count);
     w->lights->flashlight_on =
         w->lights->flashlight_on && backpack_holds(w->backpack, ITEM_FLASHLIGHT);
+    // A hold under way is not kept (spec 13.55): the birdcage back on the bench, open exactly when
+    // its key has been taken.
+    inspect_drop(w->inspect, backpack_holds(w->backpack, ITEM_KEY));
     map_screen_restore(w->map_screen, g_kept.inked);
 
     for (int d = 0; d < w->door_count; d++)

@@ -11,10 +11,10 @@
 
 /*
  * The player's backpack (spec 13.40): an old canvas daypack lying on the bed in the home's
- * bedroom, with a flashlight in it. Taking it takes what is in it, and the flashlight works from
- * then on; what is found later goes into it once it is had (the town map off the fridge, spec
- * 13.43). Each thing in it is a model of its own on no scene graph, which the backpack's screen
- * shows on its own.
+ * bedroom, with a flashlight in it, an army lamp that clips to the jacket (spec 13.55). Taking it
+ * takes what is in it, and the flashlight works from then on; what is found later goes into it once
+ * it is had (the town map off the fridge, spec 13.43). Each thing in it is a model of its own on no
+ * scene graph, which the backpack's screen shows on its own.
  *
  * What is carried lies in a grid of cells, each thing across its own footprint, and the GAME packs
  * it: a thing goes where it first fits, in the order it was had; when one will not fit, everything
@@ -35,6 +35,7 @@ typedef struct ItemSpec {
     const char* line;        // what the player knows about it
     int cells[2];            // its footprint: across, down
     void (*model)(Kit* kit); // its model alone, built in KIT_WORLD
+    const char* file;        // or its model from this file: the node in it named as `id` is
 } ItemSpec;
 
 extern const ItemSpec ITEMS[ITEM_COUNT];

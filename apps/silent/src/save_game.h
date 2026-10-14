@@ -12,6 +12,7 @@
 #include "cat.h"
 #include "cat_brain.h"
 #include "door.h"
+#include "inspect.h"
 #include "lights.h"
 #include "map_screen.h"
 #include "player.h"
@@ -45,6 +46,7 @@ typedef struct SaveWorld {
     Game* game;
     Player* player;
     Backpack* backpack;
+    Inspect* inspect;
     Finds* finds;
     MapScreen* map_screen;
     Lights* lights;
