@@ -51,5 +51,8 @@ static const ArmsClipSpec ARMS_CLIPS[ARMS_CLIP_COUNT] = {
 static const float ARMS_KEY_ON_BONE[16] = {
     0.618369f,  -0.682057f, 0.390409f, 0.000000f, 0.785870f,  0.540032f, -0.301287f, 0.000000f,
     -0.005338f, 0.493116f,  0.869947f, 0.000000f, -0.000889f, 0.034076f, 0.031037f,  1.000000f};
+// Where the flashlight's lens is clipped on, from the standing eye in the body's frame: x
+// the player's left, y up, z the way they face. The `Lamp` bone starts there.
+static const float ARMS_LAMP[3] = {0.1000f, -0.2500f, 0.0500f};
 
 #endif // _SILENT_ARMS_CLIPS_H_
