@@ -53,6 +53,8 @@ static const struct {
     float volume;
 } DRONE[HAUNT_DRONE_TONES] = {{55.0f, 0.05f}, {55.6f, 0.05f}, {77.8f, 0.015f}, {110.9f, 0.025f}};
 #define DRONE_RISE_SECONDS 6.0
+// What it begins with, heard whole wherever the player is, at the music's level.
+#define CUE_VOLUME 0.5f
 
 // The bathroom door creaks at CREAK_AT: a shut one drifts a hand's width open over CREAK_SECONDS,
 // an open one drifts shut over CREAK_SHUT_SECONDS, the creak's own length. Then from RATTLE_AT the
@@ -343,6 +345,9 @@ void haunt_start(Haunt* h, const HauntHouse* house, unsigned int seed) {
         if (h->drone[i])
             audio_sound_set_looping(h->drone[i], true);
     }
+    h->cue = audio_sound_from_file(audio, "assets/audio/silent/veil.flac", AUDIO_BUS_SFX);
+    if (h->cue)
+        audio_sound_set_volume(h->cue, CUE_VOLUME);
     // The tries are held at the leaf's hall side, where the knob and the latch are: heard in the
     // hall, not through the door.
     const DoorSounds* s = house->sounds;
@@ -436,6 +441,7 @@ void haunt_begin(Haunt* h, double time, double into) {
     for (int i = 0; i < HAUNT_DRONE_TONES; i++)
         if (h->drone[i])
             audio_sound_play(h->drone[i]);
+    audio_sound_play(h->cue);
     if (h->trace)
         printf("haunt begin at %.3f, %.3f s in\n", time, into);
 }
@@ -454,6 +460,7 @@ void haunt_end(Haunt* h) {
     for (int i = 0; i < HAUNT_DRONE_TONES; i++)
         if (h->drone[i])
             audio_sound_stop(h->drone[i]);
+    audio_sound_stop(h->cue);
     // A door slamming goes on shutting; the bathroom door stands where it drifted to.
     hush_door(h);
     if (h->house.clock)
