@@ -106,6 +106,7 @@ typedef struct Haunt {
     int street_count;
     PostFXPass* grade;               // drains the picture to red; off while it is not haunted
     Sound* drone[HAUNT_DRONE_TONES]; // NULL without audio
+    Sound* cue;                      // heard from its start as it begins; NULL without audio
     unsigned int seed;
     bool active;
     double began; // the sim time it began at
