@@ -4,7 +4,7 @@
 #include "rooms.h"
 #include "story.h"
 
-const char* const STORY_STAGE_NAMES[STORY_STAGE_COUNT] = {"locked", "haunted", "over", "open"};
+const char* const STORY_STAGE_NAMES[STORY_STAGE_COUNT] = {"locked", "haunted", "open"};
 
 StoryStage story_stage_by_name(const char* name) {
     for (int i = 0; name && i < STORY_STAGE_COUNT; i++)
@@ -14,22 +14,16 @@ StoryStage story_stage_by_name(const char* name) {
 }
 
 // A locked front door is yanked hard enough to rattle in its frame, the leaf pulled FRONT_PLAY
-// metres off its stop at its latch edge; a stuck cellar door only gives a little.
-#define FRONT_PLAY  0.01f
-#define CELLAR_PLAY 0.004f
-// The front door tried with the bag, the player feels something coming DREAD_FELT seconds on,
-// the first thought read and the try heard out, and the haunting begins at DREAD_BEGINS.
-#define DREAD_FELT   3.5
-#define DREAD_BEGINS 5.0
+// metres off its stop at its latch edge.
+#define FRONT_PLAY 0.01f
 
 static void say(const Story* s, const char* what, double time) {
     if (s->trace)
         printf("story %s at %.3f\n", what, time);
 }
 
-// The front door, locked from the inside. With the backpack -- whose flashlight is what lets the
-// player down the cellar stair to the key -- the first try sets the haunting coming. The key opens
-// it, once the player has the map off the fridge too: false then, and the door is the player's.
+// The front door, locked from the inside. The key opens it, once the player has the map off the
+// fridge too, and the haunting ends as it does: false then, and the door is the player's.
 static bool front_door(Story* s, Door* door, double time) {
     const Backpack* bp = s->house.backpack;
     if (backpack_holds(bp, ITEM_KEY)) {
@@ -39,6 +33,7 @@ static bool front_door(Story* s, Door* door, double time) {
             return true;
         }
         hud_think(s->house.hud, "It fits.");
+        haunt_end(s->house.haunt);
         s->stage = STORY_OPEN;
         say(s, "front door unlocked", time);
         return false;
@@ -49,86 +44,41 @@ static bool front_door(Story* s, Door* door, double time) {
         say(s, "front door locked, no bag", time);
         return true;
     }
-    if (s->stage == STORY_LOCKED && s->dread < 0.0) {
-        hud_think(s->house.hud, "It's locked from the inside. I need to find a key.");
-        s->dread = time;
-        s->felt = false;
-        say(s, "front door locked, the haunting coming", time);
-        return true;
-    }
-    if (s->dread >= 0.0) {
-        say(s, "front door locked, the haunting still coming", time);
-        return true;
-    }
-    hud_think(s->house.hud, "I need to find the key.");
+    hud_think(s->house.hud, "It's locked from the inside. I need to find a key.");
     say(s, "front door locked", time);
     return true;
 }
 
-// The cellar door: stuck until the haunting has begun, so nobody reaches the key down there
-// before it. Opened while the house is haunted, it ends the haunting first -- the lights, the
-// power and the colour back -- and then flies open and slams against its stop, on an ordinary
-// stair.
-static bool cellar_door(Story* s, Door* door, double time) {
-    if (haunt_active(s->house.haunt)) {
-        haunt_end(s->house.haunt);
-        door_slam(door, 1.0f);
-        if (s->stage < STORY_OVER)
-            s->stage = STORY_OVER;
-        say(s, "cellar door flung open, the haunting over", time);
-        return true;
-    }
-    if (s->stage != STORY_LOCKED || !door_is_shut(door))
-        return false;
-    door_hand_try_begin(&s->try, s->house.sounds, door, time, false, CELLAR_PLAY);
-    hud_think(s->house.hud, "It won't open. It's stuck.");
-    say(s, "cellar door stuck", time);
-    return true;
-}
-
 void story_start(Story* s, const StoryHouse* house) {
-    *s = (Story){.house = *house, .stage = STORY_LOCKED, .dread = -1.0};
+    *s = (Story){.house = *house, .stage = STORY_LOCKED};
 }
 
 bool story_door(Story* s, Door* door, double time) {
     if (door == s->house.front && s->stage < STORY_OPEN)
         return front_door(s, door, time);
-    if (door == s->house.cellar)
-        return cellar_door(s, door, time);
     return false;
 }
 
-// The haunting the front door set coming: felt, then begun. Only from a locked house: ended at the
-// cellar door in the meantime, it does not begin again.
-static void dread_step(Story* s, double time) {
-    if (s->dread < 0.0)
-        return;
-    const double u = time - s->dread;
-    if (!s->felt && u >= DREAD_FELT) {
-        hud_think(s->house.hud, "That's weird... I feel like something is happening.");
-        s->felt = true;
-        say(s, "something felt", time);
-    }
-    if (u < DREAD_BEGINS)
-        return;
-    s->dread = -1.0;
+// The haunting, begun as the key leaves the bench, and the cellar door slammed shut over the
+// player's head down there; standing shut already, it does not move.
+void story_key(Story* s, double time) {
     if (s->stage != STORY_LOCKED)
         return;
     haunt_begin(s->house.haunt, time, 0.0);
+    if (s->house.cellar)
+        door_slam(s->house.cellar, 0.0f);
     s->stage = STORY_HAUNTED;
-    say(s, "the haunting begun", time);
+    say(s, "key taken, the haunting begun", time);
 }
 
 void story_step(Story* s, double time) {
     door_hand_try_step(&s->try, s->house.sounds, time);
-    dread_step(s, time);
 }
 
 void story_settle(Story* s, const vec3 feet) {
     if (s->stage < STORY_OPEN && room_house(room_at(feet)) != ROOM_HOME)
         s->stage = STORY_OPEN;
     door_hand_try_stop(&s->try);
-    s->dread = -1.0;
     if (s->stage < STORY_OPEN && s->house.front)
         door_set(s->house.front, 0.0f, 0.0f);
 }
