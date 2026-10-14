@@ -49,8 +49,8 @@ void sounds_start(Sounds* sounds, AudioSystem* audio, const struct Door* const* 
 // swing into its link, and the wind's two layers.
 void sounds_update(Sounds* sounds);
 
-// A loop from a file, playing silent until its volume is set; NULL, with a line on stderr, when
-// it cannot be loaded, and NULL without audio.
-Sound* sounds_loop(AudioSystem* audio, const char* path);
+// A loop from a file on `bus`, playing silent until its volume is set; NULL, with a line on
+// stderr, when it cannot be loaded, and NULL without audio.
+Sound* sounds_loop(AudioSystem* audio, const char* path, AudioBus bus);
 
 #endif // _SILENT_SOUNDS_H_

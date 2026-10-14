@@ -57,7 +57,7 @@ typedef struct Story {
 // The story at its start.
 void story_start(Story* s, const StoryHouse* house);
 // The action key on `door` at sim time `time`: true when the story took the press and the door
-// is to stay as it is, false when the door is the player's to open or shut.
+// is not to be toggled, false when the door is the player's to open or shut.
 bool story_door(Story* s, Door* door, double time);
 // Per fixed step at sim time `time`, after the doors have moved: the player's try under way, and
 // the haunting on its way.

@@ -323,7 +323,7 @@ static Finds g_finds;
 #define DUMP_RATE 48000
 static float* g_dump;
 static size_t g_dump_frames, g_dump_cap;
-static double g_dump_time;      // seconds of the mix pulled so far
+static double g_dump_time;      // seconds of the mix due so far
 static float g_play_capture_ms; // the capture budget once loaded
 
 /*
@@ -918,14 +918,12 @@ static bool enter_game(Engine* engine, const char* load, const char* slot) {
     return true;
 }
 
-// What is heard (spec 13.53): only the music under the loading screen and the title, the world's
-// own sounds coming up with the game's picture as it is played and going down with it.
-static void world_heard(Game* game) {
-    if (!game->audio)
-        return;
+// What is heard (spec 13.53), with the picture `shown` as far up as it is: only the music under the
+// loading screen and the title, the world's own sounds coming up with the game's picture as it is
+// played and going down with it.
+static void world_heard(Game* game, float shown) {
     const bool played = g_run == RUN_PLAYING || g_run == RUN_RETURNING;
-    const float up = played ? glm_smoothstep(0.0f, 1.0f, g_fade) : 0.0f;
-    audio_set_bus_volume(game->audio, AUDIO_BUS_SFX, g_settings.settings.sfx_volume * up);
+    audio_set_bus_fade(game->audio, AUDIO_BUS_SFX, played ? shown : 0.0f);
 }
 
 // The game played from sim time `time` on, haunted when the command line asks the first time or the
@@ -933,6 +931,8 @@ static void world_heard(Game* game) {
 // over that, the first time, when the command line asks for a picture of them (spec 13.50).
 static void start_play(double time) {
     g_run = RUN_PLAYING;
+    if (g_args.audio_dump)
+        printf("silent: played from %.3f s into the audio dump\n", g_dump_time);
     if (g_args.haunt)
         haunt_begin(&g_haunt, time, g_args.haunt_at);
     else if (g_story.stage == STORY_HAUNTED)
@@ -1179,16 +1179,10 @@ static void on_init(Game* game) {
     tv_start_audio(&g_tv, audio);
     cat_voice_start(&g_voice, &g_cat, audio, g_args.cat_say);
     load_seam(engine, "audio-tv-cat");
-    // The music (spec 13.53), on repeat under the loading screen, the title and the game alike, and
-    // placed nowhere, so heard whole wherever the player is.
-    Sound* music =
-        audio ? audio_sound_from_file(audio, "assets/audio/silent/undertow.flac", AUDIO_BUS_MUSIC)
-              : NULL;
-    if (music) {
-        audio_sound_set_looping(music, true);
-        audio_sound_set_volume(music, MUSIC_VOLUME);
-        audio_sound_play(music);
-    }
+    // The music (spec 13.53), on repeat from the end of the load, under the title and the game
+    // alike, and placed nowhere, so heard whole wherever the player is.
+    audio_sound_set_volume(sounds_loop(audio, "assets/audio/silent/undertow.flac", AUDIO_BUS_MUSIC),
+                           MUSIC_VOLUME);
 
     // Before the sky: its reflections are baked through the fog set here.
     build_post(engine, !g_args.day, !g_args.no_grade);
@@ -1361,8 +1355,8 @@ static void on_init(Game* game) {
         enter_game(engine, g_args.load, g_args.slot);
     const bool can_return = titled && save_game_keep_start();
     pause_menu_start(&g_pause, g_hud.ui, game, &g_settings, can_return);
-    // Before the first frame mixes anything: the settings just put the world's sounds up whole.
-    world_heard(game);
+    // Before the first frame mixes anything, from black.
+    world_heard(game, 0.0f);
 
     // Pinned at night: a meter would open the dark back up, which is the one
     // thing this place must not do. By day the meter maps what it reads to
@@ -1447,13 +1441,12 @@ static void on_update(Game* game, double dt) {
     }
 }
 
-// The mix pulled from the offline device for as long as the frame is drawn over -- the sim's
-// time, or the held clock's under the title -- so the sound and the picture keep step at any frame
-// rate, and the title is heard too.
+// The mix pulled from the offline device for the frame's own length, as a device plays on through
+// the loading screen, the title and the pause menu alike, so the sound and the picture keep step.
 static void dump_audio(Game* game) {
     if (!g_args.audio_dump || !game->audio)
         return;
-    g_dump_time += look_dt(game);
+    g_dump_time += frame_dt(game);
     const size_t due = (size_t)llround(g_dump_time * DUMP_RATE);
     if (due <= g_dump_frames)
         return;
@@ -1642,9 +1635,10 @@ static void on_pre_render(Game* game, double alpha) {
     cat_voice_update(&g_voice, eye, cat_mind_at_ease(&g_mind), (float)game->sim_clock.delta);
     clock_update(&g_clock, game->time);
     basement_update(&g_basement, hung_door(DOOR_BASEMENT), game->time);
-    // The rain on the roof, heard through the floor from the basement.
+    // The rain on the roof, heard through the floor from the basement: the cover over the head
+    // eased by the clock the frame is drawn by, as the zones are.
     rain_bed_update(&g_rain_bed, g_scene->rain, g_scene->shadow_system, eye, g_sounds.past_walls,
-                    (float)game->sim_clock.delta);
+                    (float)engine->render_delta);
     dump_audio(game);
 
     // The volume goes in on the third frame, not at load. The tubes' panels are
@@ -1719,19 +1713,20 @@ static void on_pre_render(Game* game, double alpha) {
             if (pause_menu_take_to_title(&g_pause)) {
                 save_game_quit();
                 save_game_begin(NULL);
-                haunt_end(&g_haunt);
                 g_run = RUN_RETURNING;
             } else if (save_game_frame(feet, game->frame_clock.delta)) {
                 hud_saved(&g_hud);
             }
             break;
         case RUN_RETURNING:
-            // At black, the world back to the start kept at load and nothing on the screen, the
-            // title's view in place of the player's, and the title up once the lighting round it is
-            // in. A start that cannot be read would leave the played world under the title, so the
-            // game, already saved, ends instead.
+            // At black, the haunting ended -- faded out with everything else rather than cut -- the
+            // world back to the start kept at load and nothing on the screen, the title's view in
+            // place of the player's, and the title up once the lighting round it is in. A start
+            // that cannot be read would leave the played world under the title, so the game,
+            // already saved, ends instead.
             if (g_fade > 0.0f)
                 break;
+            haunt_end(&g_haunt);
             if (!save_game_load_start()) {
                 game_quit(game);
                 break;
@@ -1764,9 +1759,10 @@ static void on_pre_render(Game* game, double alpha) {
     const float step = fminf((float)frame_dt(game), 1.0f / 30.0f);
     g_fade = up ? fminf(g_fade + step / FADE_IN_SECONDS, 1.0f)
                 : fmaxf(g_fade - step / FADE_OUT_SECONDS, 0.0f);
+    const float shown = glm_smoothstep(0.0f, 1.0f, g_fade);
     if (engine->postfx)
-        glm_vec3_fill(engine->postfx->grade_gain, glm_smoothstep(0.0f, 1.0f, g_fade));
-    world_heard(game);
+        glm_vec3_fill(engine->postfx->grade_gain, shown);
+    world_heard(game, shown);
     if (g_args.startup_ms)
         trace_settling(engine, lit, up);
 }

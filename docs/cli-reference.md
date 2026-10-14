@@ -1264,8 +1264,9 @@ That is gametest's pair, so a walk can be driven and read back with no controlle
 the wind and the television's hiss, each heard from where it is.
 - **`--mute`:** silences all of it.
 - **`--audio-dump <path>`:** with `-x`, writes what the listener hears as a 48 kHz stereo WAV,
-  pulled a frame at a time so it keeps step with the picture. Pinned with `--cam-eye` and
-  `--cam-target`, it is how a spot sounds without a window. Without `-x` it is ignored, since a
+  pulled a frame at a time so it keeps step with the picture, from the first frame through the
+  title and the pause menu as a device plays; the run prints how far into it play began. Pinned
+  with `--cam-eye` and `--cam-target`, it is how a spot sounds without a window. Without `-x` it is ignored, since a
   windowed run plays to the device and leaves nothing to pull.
 
 **`--day` is an overcast day** (spec 13.7).

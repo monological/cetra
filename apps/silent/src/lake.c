@@ -553,7 +553,7 @@ static void lapping_at(const Lake* lake, float theta) {
 }
 
 void lake_start_audio(Lake* lake, AudioSystem* audio) {
-    lake->lapping = sounds_loop(audio, "assets/audio/silent/lake_lapping.flac");
+    lake->lapping = sounds_loop(audio, "assets/audio/silent/lake_lapping.flac", AUDIO_BUS_SFX);
     if (!lake->lapping)
         return;
     lapping_at(lake, 0.0f);

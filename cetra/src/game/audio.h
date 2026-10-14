@@ -57,6 +57,9 @@ void audio_set_bus_volume(AudioSystem* audio, AudioBus bus, float volume);
 // the widget happened to default to and silently rewrites the real volume the
 // first time it is touched.
 float audio_get_bus_volume(const AudioSystem* audio, AudioBus bus);
+// A game's own gain on a bus, under the volume a player chose: the two multiply, so a game fading
+// a bus never fights a settings screen setting it. 1 until set; MASTER has none.
+void audio_set_bus_fade(AudioSystem* audio, AudioBus bus, float gain);
 
 // Fire-and-forget 2D: miniaudio owns the voice and reaps it at the end.
 void audio_play_oneshot(AudioSystem* audio, const char* path, AudioBus bus);

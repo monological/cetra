@@ -576,12 +576,12 @@ void cabin_light(FireSystem* fs, Scene* scene, bool shadows) {
 }
 
 void cabin_start_audio(AudioSystem* audio) {
-    Sound* fire = sounds_loop(audio, "assets/audio/silent/hearth_fire.flac");
+    Sound* fire = sounds_loop(audio, "assets/audio/silent/hearth_fire.flac", AUDIO_BUS_SFX);
     if (fire) {
         audio_sound_set_position(fire, (vec3){HEARTH_FACE + 0.25f, FIREBOX_Y0 + 0.3f, MID_Z});
         audio_sound_set_volume(fire, HEARTH_VOLUME);
     }
-    Sound* room = sounds_loop(audio, "assets/audio/silent/cabin_room.flac");
+    Sound* room = sounds_loop(audio, "assets/audio/silent/cabin_room.flac", AUDIO_BUS_SFX);
     if (room) {
         audio_sound_set_position(room,
                                  (vec3){0.5f * (CABIN_X0 + CABIN_X1), CABIN_FLOOR_Y + 1.5f, MID_Z});

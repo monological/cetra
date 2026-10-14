@@ -53,7 +53,7 @@ static const struct {
     float volume;
 } DRONE[HAUNT_DRONE_TONES] = {{55.0f, 0.05f}, {55.6f, 0.05f}, {77.8f, 0.015f}, {110.9f, 0.025f}};
 #define DRONE_RISE_SECONDS 6.0
-// What it begins with, heard whole wherever the player is, at the music's level.
+// What it begins with, heard whole wherever the player is.
 #define CUE_VOLUME 0.5f
 
 // The bathroom door creaks at CREAK_AT: a shut one drifts a hand's width open over CREAK_SECONDS,
@@ -239,22 +239,14 @@ static DoorTry rattle_try(double u, unsigned int seed) {
         DoorTry t = {.at = at};
         const int span = TRY_TURNS_MAX - TRY_TURNS_MIN + 1;
         t.turns = TRY_TURNS_MIN + (int)(kit_hash01(k, 43u, seed) * (float)span) % span;
-        double len = 0.0;
         for (int i = 0; i < t.turns; i++) {
             const float pick = kit_hash01(k, 40u + 16u * (uint32_t)i, seed);
             t.knob[i] = i == 0 ? (int)(pick * DOOR_KNOB_TAKES) % DOOR_KNOB_TAKES
                                : (t.knob[i - 1] + 1 +
                                   (int)(pick * (DOOR_KNOB_TAKES - 1)) % (DOOR_KNOB_TAKES - 1)) %
                                      DOOR_KNOB_TAKES;
-            t.turn_at[i] = len;
-            len += DOOR_KNOB[t.knob[i]].seconds;
         }
-        if (k >= 1) {
-            t.shakes = (int)ceil((len - DOOR_RATTLE_LAG) / (double)DOOR_RATTLE[0].seconds);
-            t.shakes = t.shakes < 1 ? 1 : t.shakes;
-            len = fmax(len, door_try_shake_at(t.shakes));
-        }
-        t.end = at + len;
+        door_try_lay(&t, k >= 1);
         if (u < t.end)
             return t;
         at = t.end;
@@ -265,12 +257,6 @@ static DoorTry rattle_try(double u, unsigned int seed) {
 static float rattle_force(double u) {
     return glm_lerp(RATTLE_FORCE0, RATTLE_FORCE1,
                     glm_smoothstep(0.0f, 1.0f, (float)(u / RATTLE_GROW)));
-}
-
-// The cellar door's leaf `u` seconds into the rattle: metres off its stop at the latch edge.
-static float rattle_jolt(const Haunt* h, double u) {
-    const DoorTry t = rattle_try(u, h->seed);
-    return RATTLE_PLAY * rattle_force(u) * door_try_pull(&t, u);
 }
 
 // The held takes at the cellar door, stopped.
@@ -441,7 +427,9 @@ void haunt_begin(Haunt* h, double time, double into) {
     for (int i = 0; i < HAUNT_DRONE_TONES; i++)
         if (h->drone[i])
             audio_sound_play(h->drone[i]);
-    audio_sound_play(h->cue);
+    // From its start, so only a haunting begun at its own start: one begun part way in is past it.
+    if (into <= 0.0)
+        audio_sound_play(h->cue);
     if (h->trace)
         printf("haunt begin at %.3f, %.3f s in\n", time, into);
 }
@@ -509,11 +497,8 @@ void haunt_step(Haunt* h, double time, const vec3 feet, const vec3 forward) {
             printf("haunt creak %s at %.3f\n", shut ? "open" : "shut", u);
     }
 
-    // The tries, only at a shut door: one the player has opened is not tried.
-    if (u < RATTLE_AT || !door_is_shut(cellar)) {
-        door_jolt(cellar, 0.0f);
+    if (u < RATTLE_AT)
         return;
-    }
     const double r = u - RATTLE_AT, r_was = was - RATTLE_AT;
     const DoorTry t = rattle_try(r, h->seed);
     const float force = rattle_force(r);
@@ -534,7 +519,7 @@ void haunt_step(Haunt* h, double time, const vec3 feet, const vec3 forward) {
             audio_sound_play(s->rattle);
         }
     }
-    door_jolt(cellar, rattle_jolt(h, r));
+    door_jolt(cellar, RATTLE_PLAY * force * door_try_pull(&t, r));
 }
 
 void haunt_frame(Haunt* h, double time) {

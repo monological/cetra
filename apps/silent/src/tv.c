@@ -217,7 +217,7 @@ void tv_build(Tv* tv, Kit* kit, Engine* engine, Scene* scene, bool on) {
 void tv_start_audio(Tv* tv, AudioSystem* audio) {
     if (!tv->picture)
         return;
-    Sound* hiss = sounds_loop(audio, "assets/audio/silent/tv_static.flac");
+    Sound* hiss = sounds_loop(audio, "assets/audio/silent/tv_static.flac", AUDIO_BUS_SFX);
     if (hiss) {
         audio_sound_set_position(hiss, tv->speaker);
         audio_sound_set_volume(hiss, TV_HISS_VOLUME);

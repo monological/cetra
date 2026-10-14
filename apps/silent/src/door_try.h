@@ -32,12 +32,11 @@ void door_sounds_load(DoorSounds* s, AudioSystem* audio);
 void door_hear(const DoorSounds* s, const Sound* sound, const Door* door, float volume);
 
 #define DOOR_TRY_TURNS 4 // the knob's turns in a try, at most
-// The door is shaken from this long after the knob is first turned.
-#define DOOR_RATTLE_LAG 0.3
 
 // A try, in seconds: when it starts; the knob takes it turns, one after another, and when each
 // starts from the try's start; how many of the rattle's takes it shakes the door through, one
-// after another from DOOR_RATTLE_LAG in, 0 for the knob alone; and when it is all over.
+// after another from a moment after the knob is first turned, 0 for the knob alone; and when it is
+// all over.
 typedef struct DoorTry {
     double at;
     int turns;
@@ -47,6 +46,10 @@ typedef struct DoorTry {
     double end;
 } DoorTry;
 
+// `t`'s turns, from its `at`, `turns` and `knob`, laid end to end: when each starts, and when it is
+// over -- shaken, when `shake`, from the first turn on for as long as the turns last, and once at
+// least.
+void door_try_lay(DoorTry* t, bool shake);
 // When shake `j` of a try starts, from the try's start.
 double door_try_shake_at(int j);
 // How far off its stop `t` pulls the leaf at `u`, 0..1: the largest pull of any of its takes'

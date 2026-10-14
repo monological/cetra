@@ -37,7 +37,7 @@ typedef struct Door {
     Entity* entity;
     // Moved by something other than the player (spec 13.52): radians the leaf stands past its swing
     // toward +d, never saved; the seconds a whole swing takes on this move, 0 for the heavy door's
-    // own; and whether it is slamming shut, at full speed with no ease.
+    // own; and whether it is slamming, flung to `want` at full speed with no ease.
     float jolt;
     float pace;
     bool slam;
