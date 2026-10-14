@@ -1087,24 +1087,23 @@ the bob half and the footsteps 6 dB softer. Standing waits until there is room o
 - **`--crouch`:** starts crouched, as though C had been pressed, so a headless run can show the
   crouched eye.
 
-**The locked house** (spec 13.53). The front door is locked from the inside, and E at it tries
-it, the knob turned and the door rattled in its frame:
-- without the backpack, the player thinks it locked, and nothing more;
-- with it, the first try is locked too, the player thinks something is happening 3.5 s on, and
-  the haunting (below) begins 5 s after the try; the cellar door is stuck until it does;
-- with the key, off the basement's workbench, and no map, the player thinks of the map in the
-  kitchen and the door stays shut;
-- with the key and the map, it opens, and is an ordinary door from then on.
+**The locked house** (specs 13.53 and 13.54). The front door is locked from the inside, and the
+key lies on the basement's workbench, down the cellar stair the backpack's flashlight gets the
+player down. E takes it into the backpack, and the haunting (below) begins as it does: the cellar
+door slams shut over the player's head, and they open it again themselves at the top of the
+flight. E at the front door:
+- without the key, tries it, the knob turned and the door rattled in its frame, and the player
+  thinks it locked;
+- with the key and no map, the player thinks of the map in the kitchen and the door stays shut;
+- with the key and the map, it opens, the haunting ends, and it is an ordinary door from then on.
 
-The cellar door is stuck until the haunting has begun. Opened while it lasts, it ends the haunting
-and flies open onto an ordinary stair. The key lies on the workbench below it, and E takes it into
-the backpack. How far the story has gone is saved: a game saved haunted loads haunted again, and a
-player saved anywhere but in the house finds the front door open.
-- **`--key`:** starts with the front door's key in the backpack, the workbench bare; it implies
-  `--backpack`.
-- **`--story <stage>`:** starts with the story at `locked`, `haunted` (the haunting begins as the
-  game is played), `over` (ended at the cellar door) or `open` (the front door unlocked). A player
-  started anywhere but in the house starts it `open` whatever this says.
+How far the story has gone is saved: a game saved haunted loads haunted again, and a player saved
+anywhere but in the house finds the front door open.
+- **`--key`:** starts with the front door's key in the backpack, the workbench bare, and nothing
+  begun; it implies `--backpack`.
+- **`--story <stage>`:** starts with the story at `locked`, `haunted` (the key taken: the haunting
+  begins as the game is played) or `open` (the front door unlocked). A player started anywhere but
+  in the house starts it `open` whatever this says.
 
 **The haunting** (spec 13.52). The story begins it, and K (or a pad's right-stick click) begins and
 ends it anywhere without moving the story. The power goes, every light in the house with it, and
@@ -1112,8 +1111,8 @@ after a second and a half the hall, the floor lamp and the TV come back red. Its
 until the player stands in the front of the hall looking down it:
 - an open cellar door slams;
 - 3 s on, the bathroom door creaks ajar, or shut if it stood open;
-- from 6 s, the cellar door is tried from the stair, on and on, until the player opens it with E,
-  which ends the haunting.
+- from 6 s, the cellar door is tried from the stair, on and on, until the player opens it on
+  nobody, which stops the tries for good.
 
 Ending it puts the house back as it was; the doors stay where it moved them.
 - **`--haunt`:** begins it as the game is first played, and skips the title.
@@ -1121,9 +1120,9 @@ Ending it puts the house back as it was; the doors stay where it moved them.
   watched for: past 3 the bathroom door stands where the creak left it, past 6 the tries are under
   way.
 - **`--trace-haunt`:** prints each beat as it comes: when it was watched for, the slam, the creak,
-  each try with its turns of the knob and its shakes. And each turn of the story: a door tried, the
-  haunting begun, the cellar door flung open and slammed, the front door unlocked, a load haunted
-  again.
+  each try with its turns of the knob and its shakes, and the tries over. And each turn of the
+  story: a door tried, the key taken and the haunting begun, the front door unlocked, a load
+  haunted again.
 - **Headless:** with `--pad-script`, `rstick` on a frame presses K.
 
 **Capture:** `-x`, `-f <n>`, `-S <path>`, `--screenshot-every <n>`, and `-W`/`-H` for the window
