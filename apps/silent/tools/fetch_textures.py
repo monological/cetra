@@ -20,22 +20,17 @@ the results land in assets/textures/silent/. Run from anywhere:
 
 import argparse
 import io
-import json
 import os
-import re
 import sys
-import urllib.request
 import zipfile
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+from polyhaven import ROOT, fetch, polyhaven_urls
+
 OUT_DIR = os.path.join(ROOT, "assets", "textures", "silent")
-CACHE_DIR = os.path.join(ROOT, "out", "polyhaven_cache")
 SIZE = 256
-API = "https://api.polyhaven.com/files/%s"
-INFO = "https://api.polyhaven.com/info/%s"
 FONT = "/System/Library/Fonts/Supplemental/Arial.ttf"
 
 # Poly Haven id -> what is done to it. `saturation` scales chroma (1 = as
@@ -124,24 +119,6 @@ ACG_ZIP = "https://ambientcg.com/get?file=%s_1K-JPG.zip"
 ACG_MAPS = {"albedo": "Color", "normal": "NormalGL", "rough": "Roughness"}
 
 
-def fetch(url, cache_name=None):
-    """The bytes at `url`, from the cache when they are there.
-
-    Cached under `cache_name`, or the URL's last part with anything a file name
-    cannot hold on every platform replaced (ambientCG's end in `get?file=`).
-    """
-    name = cache_name or re.sub(r'[<>:"/\\|?*]', "_", url.rsplit("/", 1)[-1])
-    path = os.path.join(CACHE_DIR, name)
-    if not os.path.exists(path):
-        req = urllib.request.Request(url, headers={"User-Agent": "cetra-silent/1.0"})
-        with urllib.request.urlopen(req, timeout=60) as r:
-            data = r.read()
-        with open(path, "wb") as f:
-            f.write(data)
-    with open(path, "rb") as f:
-        return f.read()
-
-
 def open_ambientcg(name, spec):
     """The maps an ambientCG 1K zip holds, by this app's names (missing ones
     absent), and a line saying which."""
@@ -157,13 +134,11 @@ def open_ambientcg(name, spec):
 def open_polyhaven(name, spec):
     """A Poly Haven set's maps at 1k, by this app's names, and a line giving the
     size of what was scanned."""
-    files = json.loads(fetch(API % name, name + "_files.json"))
-    info = json.loads(fetch(INFO % name, name + "_info.json"))
     keys = {"albedo": spec.get("diffuse", "Diffuse"), "normal": "nor_gl", "rough": "Rough"}
     if spec.get("disp"):
         keys["disp"] = "Displacement"
-    out = {kind: Image.open(io.BytesIO(fetch(files[key]["1k"]["jpg"]["url"])))
-           for kind, key in keys.items()}
+    urls, info = polyhaven_urls(name, keys)
+    out = {kind: Image.open(io.BytesIO(fetch(url))) for kind, url in urls.items()}
     dims = info.get("dimensions") or [0, 0]
     return out, "%.2f x %.2f m" % (dims[0] / 1000.0, dims[1] / 1000.0)
 
@@ -233,7 +208,6 @@ def main():
     parser.add_argument("sets", nargs="*", help="only these sets (default: every one)")
     args = parser.parse_args()
     os.makedirs(OUT_DIR, exist_ok=True)
-    os.makedirs(CACHE_DIR, exist_ok=True)
     for name, spec in SOURCES.items():
         if args.sets and name not in args.sets:
             continue
