@@ -108,7 +108,7 @@ void cat_voice_start(CatVoice* v, Cat* cat, AudioSystem* audio, bool say) {
     v->hiss = load(audio, "cat_hiss.wav");
     v->land_hard = load(audio, "cat_land_hard.wav");
     v->land_soft = load(audio, "cat_land_soft.wav");
-    Sound* purr = sounds_loop(audio, "assets/audio/silent/cat_purr.flac");
+    Sound* purr = sounds_loop(audio, "assets/audio/silent/cat_purr.flac", AUDIO_BUS_SFX);
     if (purr) {
         v->purr = entity_add_audio_source_at(cat->entity, purr, CHEST);
         if (!v->purr)

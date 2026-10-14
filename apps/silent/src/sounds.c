@@ -48,10 +48,10 @@ static const RoomLink LINKS[] = {
 };
 #define LINK_COUNT ((int)(sizeof(LINKS) / sizeof(LINKS[0])))
 
-Sound* sounds_loop(AudioSystem* audio, const char* path) {
+Sound* sounds_loop(AudioSystem* audio, const char* path, AudioBus bus) {
     if (!audio)
         return NULL;
-    Sound* s = audio_sound_from_file(audio, path, AUDIO_BUS_SFX);
+    Sound* s = audio_sound_from_file(audio, path, bus);
     if (!s) {
         fprintf(stderr, "silent: cannot load %s\n", path);
         return NULL;
@@ -88,8 +88,9 @@ void sounds_start(Sounds* sounds, AudioSystem* audio, const struct Door* const* 
     for (int r = ROOM_WORLD + 1; r < ROOMS; r++)
         if (outer[r])
             sounds->outer[sounds->outer_count++] = zone[r];
-    sounds->wind_outside = sounds_loop(audio, "assets/audio/silent/wind_outside.flac");
-    sounds->wind_inside = sounds_loop(audio, "assets/audio/silent/wind_inside.flac");
+    sounds->wind_outside =
+        sounds_loop(audio, "assets/audio/silent/wind_outside.flac", AUDIO_BUS_SFX);
+    sounds->wind_inside = sounds_loop(audio, "assets/audio/silent/wind_inside.flac", AUDIO_BUS_SFX);
 }
 
 void sounds_update(Sounds* sounds) {

@@ -748,7 +748,7 @@ static void table(Kit* kit) {
 
 void kitchen_start_audio(Fridge* fridge, AudioSystem* audio) {
     *fridge = (Fridge){0};
-    fridge->hum = sounds_loop(audio, "assets/audio/silent/fridge_hum.flac");
+    fridge->hum = sounds_loop(audio, "assets/audio/silent/fridge_hum.flac", AUDIO_BUS_SFX);
     if (!fridge->hum)
         return;
     // Behind the fridge and near the floor, where the compressor sits.

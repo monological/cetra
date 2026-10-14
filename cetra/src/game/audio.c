@@ -290,6 +290,15 @@ void audio_set_bus_volume(AudioSystem* audio, AudioBus bus, float volume) {
         ma_sound_group_set_volume(group, volume);
 }
 
+void audio_set_bus_fade(AudioSystem* audio, AudioBus bus, float gain) {
+    // The group's OUTPUT-BUS volume, a stage ma_sound_group_set_volume never touches, as a zone's
+    // gain is a sound's: the two multiply with nothing cached.
+    ma_sound_group* group =
+        audio && bus > AUDIO_BUS_MASTER && bus < AUDIO_BUS_COUNT ? group_for(audio, bus) : NULL;
+    if (group)
+        ma_node_set_output_bus_volume(group, 0, gain);
+}
+
 // A free voice, or the oldest playing one stopped and handed over.
 static void release_voice(AudioVoice* v) {
     ma_sound_uninit(&v->sound);

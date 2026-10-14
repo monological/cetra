@@ -11,8 +11,7 @@ typedef struct Room {
     const char* name;
     const char* label;
     RoomId within; // the room it is carved out of, or ROOM_WORLD for a house
-    bool mansion;  // its boxes are in the mansion's plan, moved to where it stands
-    bool tower;    // and the tower's octagon with them, as high as the first box
+    bool tower;    // the tower's octagon with its boxes, as high as the first
     int box_count;
     AABB boxes[2];
 } Room;
@@ -32,14 +31,12 @@ static const Room ROOM_TABLE[ROOMS] = {
                    "Home",
                    ROOM_WORLD,
                    false,
-                   false,
                    1,
                    {{{HOUSE_OUT_X0, BASEMENT_Y, HOUSE_OUT_Z0},
                      {HOUSE_OUT_X1, ROOFS_Y, HOUSE_OUT_Z1}}}},
     [ROOM_LIVING] = {"living_room",
                      "Home, living room",
                      ROOM_HOME,
-                     false,
                      false,
                      1,
                      {{{LIVING_IN_X0, SUBFLOOR_Y0, LIVING_IN_Z0},
@@ -48,14 +45,12 @@ static const Room ROOM_TABLE[ROOMS] = {
                       "Home, kitchen",
                       ROOM_HOME,
                       false,
-                      false,
                       1,
                       {{{KITCHEN_X0, SUBFLOOR_Y0, KITCHEN_Z0},
                         {KITCHEN_X1, HOME_CEIL_Y, KITCHEN_Z1}}}},
     [ROOM_BASEMENT] = {"basement",
                        "Home, basement",
                        ROOM_HOME,
-                       false,
                        false,
                        2,
                        {{{CELLAR_X0, BASEMENT_Y, CELLAR_Z0}, {CELLAR_X1, SUBFLOOR_Y0, CELLAR_Z1}},
@@ -65,14 +60,12 @@ static const Room ROOM_TABLE[ROOMS] = {
                       "Mansion",
                       ROOM_WORLD,
                       true,
-                      true,
                       1,
                       {{{HOUSE_OUT_X0, 0.0f, HOUSE_OUT_Z0},
                         {HOUSE_OUT_X1, ROOFS_Y, HOUSE_OUT_Z1}}}},
     [ROOM_UPSTAIRS] = {"mansion_up",
                        "Mansion, upstairs",
                        ROOM_MANSION,
-                       true,
                        true,
                        1,
                        {{{HOUSE_OUT_X0, CEIL_Y, HOUSE_OUT_Z0},
@@ -81,7 +74,6 @@ static const Room ROOM_TABLE[ROOMS] = {
     [ROOM_CABIN] = {"cabin",
                     "Cabin",
                     ROOM_WORLD,
-                    false,
                     false,
                     1,
                     {{{CABIN_X0, CABIN_FLOOR_Y - 0.5f, CABIN_Z0},
@@ -97,7 +89,9 @@ int room_boxes(RoomId room, AABB out[ROOM_BOXES]) {
         out[n++] = r->boxes[i];
     if (r->tower)
         n += tower_boxes(r->boxes[0].min[1], r->boxes[0].max[1], &out[n]);
-    for (int i = 0; r->mansion && i < n; i++) {
+    // A mansion room's boxes are in the mansion's plan, moved to where it stands.
+    const bool mansion = room_house(room) == ROOM_MANSION;
+    for (int i = 0; mansion && i < n; i++) {
         mansion_at(out[i].min, out[i].min);
         mansion_at(out[i].max, out[i].max);
     }

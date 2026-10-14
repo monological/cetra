@@ -3,7 +3,9 @@
 
 #include "door_try.h"
 
-// The knob's own hits pull the leaf this share as far as the rattle's.
+// The door is shaken from RATTLE_LAG seconds after the knob is first turned, and the knob's own
+// hits pull the leaf KNOB_SHARE as far as the rattle's.
+#define RATTLE_LAG 0.3
 #define KNOB_SHARE 0.5f
 // A player's try is heard from right beside the door.
 #define HAND_VOLUME 1.2f
@@ -47,7 +49,22 @@ static float take_pull(const DoorTake* take, double at, double u) {
 }
 
 double door_try_shake_at(int j) {
-    return DOOR_RATTLE_LAG + (double)j * (double)DOOR_RATTLE[0].seconds;
+    return RATTLE_LAG + (double)j * (double)DOOR_RATTLE[0].seconds;
+}
+
+void door_try_lay(DoorTry* t, bool shake) {
+    double len = 0.0;
+    for (int i = 0; i < t->turns; i++) {
+        t->turn_at[i] = len;
+        len += DOOR_KNOB[t->knob[i]].seconds;
+    }
+    t->shakes = 0;
+    if (shake) {
+        t->shakes = (int)ceil((len - RATTLE_LAG) / (double)DOOR_RATTLE[0].seconds);
+        t->shakes = t->shakes < 1 ? 1 : t->shakes;
+        len = fmax(len, door_try_shake_at(t->shakes));
+    }
+    t->end = t->at + len;
 }
 
 float door_try_pull(const DoorTry* t, double u) {
@@ -63,14 +80,8 @@ float door_try_pull(const DoorTry* t, double u) {
 void door_hand_try_begin(DoorHandTry* t, const DoorSounds* s, Door* door, double time, bool shake,
                          float play) {
     const int knob = t->count % DOOR_KNOB_TAKES;
-    const int shakes = shake ? 1 : 0;
-    const DoorTry try = {
-        .at = time,
-        .turns = 1,
-        .knob = {knob},
-        .shakes = shakes,
-        .end = time + fmax(DOOR_KNOB[knob].seconds, shake ? door_try_shake_at(shakes) : 0.0),
-    };
+    DoorTry try = {.at = time, .turns = 1, .knob = {knob}};
+    door_try_lay(&try, shake);
     *t = (DoorHandTry){door, try, play, time, t->count + 1};
     door_hear(s, s->knob[knob], door, HAND_VOLUME);
 }
