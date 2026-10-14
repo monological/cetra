@@ -25,7 +25,7 @@
  * failing; the living room's lamp falters, the snow on the television goes red, and the picture is
  * drained to red. The clock stops, the fridge cuts out and the house goes quiet under a low drone;
  * the bathroom door creaks ajar -- or shut, if it stood open -- and the cellar door is tried hard
- * from the other side, on and on, until it is ended.
+ * from the other side, on and on, until it is opened on nobody or the haunting is ended.
  *
  * One module with a beginning and an end. Every beat is a pure function of the seconds since it
  * began and a seed, so a headless run shows the same frame and plays the same sound every time;
@@ -116,6 +116,7 @@ typedef struct Haunt {
     bool watched;
     double doors_at;
     double last_u;
+    bool tries_done; // the cellar door opened on its tries: nobody there, and they stop for good
     HauntNormal normal;
     HauntLive live;
     bool trace; // say each beat as it comes

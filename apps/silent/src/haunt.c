@@ -58,8 +58,9 @@ static const struct {
 
 // The bathroom door creaks at CREAK_AT: a shut one drifts a hand's width open over CREAK_SECONDS,
 // an open one drifts shut over CREAK_SHUT_SECONDS, the creak's own length. Then from RATTLE_AT the
-// cellar door is tried. The volumes are against the one-shots tools/fetch_sounds.py levels alike,
-// and are loud on purpose: a sound falls as one over its distance.
+// cellar door is tried, until it is found open. The volumes are against the one-shots
+// tools/fetch_sounds.py levels alike, and are loud on purpose: a sound falls as one over its
+// distance.
 #define CREAK_AT           3.0
 #define CREAK_ANGLE        0.125f // radians: a hand's width at a house door's latch
 #define CREAK_SECONDS      2.5f
@@ -400,6 +401,7 @@ void haunt_begin(Haunt* h, double time, double into) {
     // in, and the doors stand where they would by then: the cellar door shut, and past the creak
     // the bathroom door ajar if it was shut and shut if it was open.
     h->watched = false;
+    h->tries_done = false;
     Door* cellar = h->house.cellar;
     if (into > 0.0 && cellar) {
         h->watched = true;
@@ -497,8 +499,15 @@ void haunt_step(Haunt* h, double time, const vec3 feet, const vec3 forward) {
             printf("haunt creak %s at %.3f\n", shut ? "open" : "shut", u);
     }
 
-    if (u < RATTLE_AT)
+    if (u < RATTLE_AT || h->tries_done)
         return;
+    if (!door_is_shut(cellar)) {
+        h->tries_done = true;
+        hush_door(h);
+        if (h->trace)
+            printf("haunt tries over at %.3f, the cellar door opened\n", u);
+        return;
+    }
     const double r = u - RATTLE_AT, r_was = was - RATTLE_AT;
     const DoorTry t = rattle_try(r, h->seed);
     const float force = rattle_force(r);

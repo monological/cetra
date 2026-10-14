@@ -1293,7 +1293,8 @@ static void on_init(Game* game) {
                               .lamp_heads = kit.materials[MAT_LAMP_GLOW]},
                 (unsigned int)g_args.seed * 2654435761u + 13u);
     g_haunt.trace = g_args.trace_haunt;
-    // The house's story (spec 13.53): its front door locked, the key in the basement.
+    // The house's story (specs 13.53 and 13.54): its front door locked, the key in the basement,
+    // and the haunting begun as it is taken.
     story_start(&g_story, &(StoryHouse){.sounds = &g_door_sounds,
                                         .hud = &g_hud,
                                         .backpack = &g_backpack,
@@ -1490,16 +1491,17 @@ static bool write_dump(const char* path) {
 }
 
 // What the action key would act on: the nearest of what is in reach, a door to swing or a thing to
-// take, `prompt` naming the taking.
+// take at sim time `time`, `prompt` naming the taking.
+typedef void (*ReachTake)(double time);
 typedef struct Reach {
     float d;
     Door* door;
-    void (*take)(void);
+    ReachTake take;
     const char* prompt;
 } Reach;
 
 // `at` in the running for `reach`, as a door or a thing to take.
-static void reach_offer(Reach* reach, const vec3 at, Door* door, void (*take)(void),
+static void reach_offer(Reach* reach, const vec3 at, Door* door, ReachTake take,
                         const char* prompt) {
     const float d = player_reach_distance(&g_player, at);
     if (d < reach->d)
@@ -1507,7 +1509,7 @@ static void reach_offer(Reach* reach, const vec3 at, Door* door, void (*take)(vo
 }
 
 // The bag off the bed (spec 13.40): the player has it and what is in it, and says so.
-static void take_backpack(void) {
+static void take_backpack(double time) {
     backpack_take(&g_backpack);
     hud_think(&g_hud, "My backpack. There's a flashlight in it.");
     hud_hint(&g_hud, "Tab   Backpack", HINT_SECONDS);
@@ -1515,7 +1517,7 @@ static void take_backpack(void) {
 }
 
 // The map off the fridge (spec 13.43): into the backpack, once there is a backpack to put it in.
-static void take_map(void) {
+static void take_map(double time) {
     if (!backpack_add(&g_backpack, ITEM_TOWN_MAP)) {
         hud_think(
             &g_hud,
@@ -1528,13 +1530,15 @@ static void take_map(void) {
     save_game_due();
 }
 
-// The front door's key off the basement's workbench (spec 13.53), into the backpack.
-static void take_key(void) {
+// The front door's key off the basement's workbench (spec 13.53), into the backpack, and the
+// haunting with it (spec 13.54).
+static void take_key(double time) {
     if (!backpack_add(&g_backpack, ITEM_KEY)) {
         hud_think(&g_hud, "I don't have anywhere to put this.");
         return;
     }
     hud_think(&g_hud, "A key. It might fit the front door.");
+    story_key(&g_story, time);
     save_game_due();
 }
 
@@ -1608,7 +1612,7 @@ static void on_pre_render(Game* game, double alpha) {
     }
     if (input_action_pressed(&game->input, "interact")) {
         if (reach.take)
-            reach.take();
+            reach.take(game->time);
         else if (reach.door && !story_door(&g_story, reach.door, game->time))
             door_toggle(reach.door);
     }
@@ -1955,9 +1959,9 @@ static void print_usage(const char* prog) {
         "      --trace-haunt       Print each of the haunting's beats as it comes, and each turn\n"
         "                          of the house's story\n");
     printf("      --story STAGE       Start with the house's story at STAGE: locked (the front\n"
-           "                          door locked), haunted (the haunting begun from it), over\n"
-           "                          (ended at the cellar door) or open (the front door\n"
-           "                          unlocked). Anywhere out of the house it is open\n");
+           "                          door locked), haunted (the key taken and the haunting\n"
+           "                          begun with it) or open (the front door unlocked).\n"
+           "                          Anywhere out of the house it is open\n");
     printf("      --no-loading-screen Load under a black window, without the engine's screen\n");
     printf("      --loading-screen    The engine's loading screen headless too\n");
     printf("      --startup-ms        Print how long each loading step and held frame took\n");
