@@ -1090,8 +1090,8 @@ the bob half and the footsteps 6 dB softer. Standing waits until there is room o
 **The locked house** (specs 13.53 and 13.54). The front door is locked from the inside, and the
 key lies on the basement's workbench, down the cellar stair the backpack's flashlight gets the
 player down. E takes it into the backpack, and the haunting (below) begins as it does: the cellar
-door slams shut over the player's head, and they open it again themselves at the top of the
-flight. E at the front door:
+door slams shut over the player's head, and 4 s on it is tried from the hall side as they come
+back up, until they open it themselves at the top of the flight. E at the front door:
 - without the key, tries it, the knob turned and the door rattled in its frame, and the player
   thinks it locked;
 - with the key and no map, the player thinks of the map in the kitchen and the door stays shut;
@@ -1107,18 +1107,19 @@ anywhere but in the house finds the front door open.
 
 **The haunting** (spec 13.52). The story begins it, and K (or a pad's right-stick click) begins and
 ends it anywhere without moving the story. The power goes, every light in the house with it, and
-after a second and a half the hall, the floor lamp and the TV come back red. Its door beats wait
-until the player stands in the front of the hall looking down it:
-- an open cellar door slams;
-- 3 s on, the bathroom door creaks ajar, or shut if it stood open;
-- from 6 s, the cellar door is tried from the stair, on and on, until the player opens it on
-  nobody, which stops the tries for good.
+after a second and a half the hall, the floor lamp and the TV come back red. Then the doors:
+- from 4 s, as soon as it stands shut, the cellar door is tried from its other side -- from the
+  hall, when the key began it, as the player comes back up the stair -- on and on, until the player
+  opens it on nobody, which stops the tries for good;
+- a second after the player first stands in the hall, the bathroom door creaks ajar, or shut if
+  it stood open;
+- the first time the player stands in the front of the hall looking back down it, an open cellar
+  door slams.
 
 Ending it puts the house back as it was; the doors stay where it moved them.
 - **`--haunt`:** begins it as the game is first played, and skips the title.
-- **`--haunt-at S`:** begins it S seconds in, the door beats as far in without waiting to be
-  watched for: past 3 the bathroom door stands where the creak left it, past 6 the tries are under
-  way.
+- **`--haunt-at S`:** begins it S seconds in, the slam and the creak past, the bathroom door where
+  the creak left it; past 4 the tries are under way.
 - **`--trace-haunt`:** prints each beat as it comes: when it was watched for, the slam, the creak,
   each try with its turns of the knob and its shakes, and the tries over. And each turn of the
   story: a door tried, the key taken and the haunting begun, the front door unlocked, a load
