@@ -177,6 +177,10 @@ void hud_hint(Hud* hud, const char* text, float seconds) {
 }
 
 void hud_think(Hud* hud, const char* text) {
+    hud_think_for(hud, text, THOUGHT_STAY);
+}
+
+void hud_think_for(Hud* hud, const char* text, float seconds) {
     if (!hud->ui)
         return;
     // The same thought had again carries on from as far as it had come in, rather than going out
@@ -184,6 +188,7 @@ void hud_think(Hud* hud, const char* text) {
     const bool again = line_shown(&hud->thought) && strcmp(text, hud->thought.label->text) == 0;
     line_set(&hud->thought, text);
     hud->thought_age = again ? hud->thought.alpha * THOUGHT_IN : 0.0f;
+    hud->thought_stay = seconds;
 }
 
 void hud_saved(Hud* hud) {
@@ -193,7 +198,7 @@ void hud_saved(Hud* hud) {
 void hud_clear(Hud* hud) {
     hud->hint_left = 0.0f;
     hud->saved_age = SAVE_END;
-    hud->thought_age = THOUGHT_IN + THOUGHT_STAY + THOUGHT_OUT;
+    hud->thought_age = THOUGHT_IN + hud->thought_stay + THOUGHT_OUT;
 }
 
 void hud_update(Hud* hud, float dt, float height) {
@@ -207,9 +212,9 @@ void hud_update(Hud* hud, float dt, float height) {
     hud->thought_age += dt;
     const float t = hud->thought_age;
     const float alpha = t < THOUGHT_IN ? t / THOUGHT_IN
-                        : t < THOUGHT_IN + THOUGHT_STAY
+                        : t < THOUGHT_IN + hud->thought_stay
                             ? 1.0f
-                            : 1.0f - (t - THOUGHT_IN - THOUGHT_STAY) / THOUGHT_OUT;
+                            : 1.0f - (t - THOUGHT_IN - hud->thought_stay) / THOUGHT_OUT;
     hud->thought.alpha = glm_clamp(alpha, 0.0f, 1.0f);
     if (hud->thought.alpha <= 0.0f)
         line_set(&hud->thought, "");

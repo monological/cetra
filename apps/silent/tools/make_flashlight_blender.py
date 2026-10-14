@@ -7,17 +7,18 @@ from the model as it was downloaded, sized and placed for the game.
 Reads assets/models/army_flashlight.glb, which says who made it and under what licence, and
 writes:
 
-  - assets/models/flashlight.glb: the lamp as one mesh, LAMP_HEIGHT tall, its lens toward +z, the
+  - assets/models/flashlight.glb: the lamp as one mesh, LAMP_HEIGHT tall, its lens toward -x, the
     back of its clip at its origin level with the lens's middle, and a node `lens` at the lens's
     middle, where the beam starts. The source's credit is in the file's copyright;
   - with --preview, stills of it from four sides into out/flashlight_blender/sheet.png.
 
-MODEL space is the game's: y up, the lens toward +z. The source comes in no stated unit, about 620
-of them tall, with its lens toward Blender's -y -- which is the game's +z once exported -- so it
-is only scaled and moved.
+MODEL space is the game's: y up, the lens toward -x, which is how the backpack's pictures stand a
+thing -- its face to their side. The source comes in no stated unit, about 620 of them tall, with
+its lens toward Blender's -y, so it is scaled, moved and turned a quarter about its height.
 """
 
 import argparse
+import math
 import os
 import sys
 
@@ -65,7 +66,9 @@ def build():
     lens = Vector(((g_lo.x + g_hi.x) * 0.5, g_lo.y, (g_lo.z + g_hi.z) * 0.5))
     origin = Vector((lens.x, hi.y, lens.z))
     scale = LAMP_HEIGHT / (hi.z - lo.z)
-    to_metres = Matrix.Scale(scale, 4) @ Matrix.Translation(-origin)
+    # Blender's -y to -x, which is the game's -x once exported.
+    to_metres = (Matrix.Rotation(-0.5 * math.pi, 4, "Z") @ Matrix.Scale(scale, 4) @
+                 Matrix.Translation(-origin))
     for o in parts:
         world = o.matrix_world.copy()
         o.data.transform(to_metres @ world)
@@ -88,7 +91,7 @@ def build():
     bpy.context.scene.collection.objects.link(empty)
     size = (hi - lo) * scale
     print(f"flashlight: {size.x * 100:.1f} x {size.z * 100:.1f} cm, {size.y * 100:.1f} cm deep, "
-          f"the lens {abs(empty.location.y) * 100:.1f} cm out from the clip's back", flush=True)
+          f"the lens {empty.location.length * 100:.1f} cm out from the clip's back", flush=True)
     return lamp, empty
 
 
@@ -147,9 +150,9 @@ def preview(lamp):
     mid = (lo + hi) * 0.5
     os.makedirs(OUT, exist_ok=True)
     tiles = []
-    for name, d in (("front", Vector((0.0, -1.0, 0.0))), ("side", Vector((1.0, 0.0, 0.0))),
+    for name, d in (("front", Vector((-1.0, 0.0, 0.0))), ("side", Vector((0.0, -1.0, 0.0))),
                     ("top", Vector((0.0, 0.0, 1.0))),
-                    ("three", Vector((0.8, -1.0, 0.5)).normalized())):
+                    ("three", Vector((-1.0, -0.8, 0.5)).normalized())):
         cam.location = mid + d
         cam.rotation_euler = (mid - cam.location).to_track_quat("-Z", "Y").to_euler()
         path = os.path.join(OUT, f"{name}.png")

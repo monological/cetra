@@ -7,6 +7,7 @@
 #include "cetra/program.h"
 #include "cetra/util.h"
 
+#include "arms_clips.h"
 #include "fixtures.h"
 #include "layout.h"
 #include "lights.h"
@@ -399,26 +400,44 @@ void lights_update(Lights* lights, Scene* scene, double time, float dt, const ve
 
     Light* f = lights->flashlight;
     if (f) {
-        // The beam trails the head a little, as a hand-held torch does.
+        // The beam trails the head a little, as the body turns after it.
         const float k = 1.0f - expf(-dt * 14.0f);
         glm_vec3_lerp(lights->flashlight_dir, (float*)forward, k, lights->flashlight_dir);
         glm_vec3_normalize(lights->flashlight_dir);
-        vec3 right, up = {0.0f, 1.0f, 0.0f}, pos;
-        glm_vec3_cross((float*)forward, up, right);
-        glm_vec3_normalize(right);
+        // Clipped to the jacket's chest: under the eye by the body's heading, which the head's
+        // pitch does not move.
+        vec3 ahead = {forward[0], 0.0f, forward[2]}, left, up = {0.0f, 1.0f, 0.0f}, pos, dir;
+        if (glm_vec3_norm2(ahead) < 1e-8f)
+            glm_vec3_copy(lights->flashlight_dir, ahead);
+        ahead[1] = 0.0f;
+        glm_vec3_normalize(ahead);
+        glm_vec3_cross(up, ahead, left);
         glm_vec3_copy((float*)eye, pos);
-        glm_vec3_muladds(right, 0.16f, pos);
-        pos[1] -= 0.22f;
-        glm_vec3_muladds((float*)forward, 0.1f, pos);
+        glm_vec3_muladds(left, ARMS_LAMP[0], pos);
+        pos[1] += ARMS_LAMP[1];
+        glm_vec3_muladds(ahead, ARMS_LAMP[2], pos);
+        glm_vec3_lerp(pos, lights->hold_at, lights->hold, pos);
+        glm_vec3_lerp(lights->flashlight_dir, lights->hold_dir, lights->hold, dir);
+        glm_vec3_normalize(dir);
         light_set_position(f, pos);
-        light_set_direction(f, lights->flashlight_dir);
+        light_set_direction(f, dir);
     }
-    lights_apply(lights, lights->mains, level, lights->flashlight_on);
+    lights_apply(lights, lights->mains, level, lights_flashlight_lit(lights));
     pendant_update(lights, time, dt);
 }
 
 void lights_toggle_flashlight(Lights* lights) {
     lights->flashlight_on = !lights->flashlight_on;
+}
+
+void lights_flashlight_hold(Lights* lights, const vec3 at, const vec3 dir, float weight) {
+    glm_vec3_copy((float*)at, lights->hold_at);
+    glm_vec3_normalize_to((float*)dir, lights->hold_dir);
+    lights->hold = glm_clamp(weight, 0.0f, 1.0f);
+}
+
+bool lights_flashlight_lit(const Lights* lights) {
+    return lights->flashlight_on || lights->hold > 0.0f;
 }
 
 void lights_swing(Lights* lights, float radians, float seconds) {
@@ -428,7 +447,7 @@ void lights_swing(Lights* lights, float radians, float seconds) {
 
 void lights_set_mains(Lights* lights, float mains) {
     lights->mains = mains;
-    lights_apply(lights, mains, lights->level, lights->flashlight_on);
+    lights_apply(lights, mains, lights->level, lights_flashlight_lit(lights));
 }
 
 void lights_rest(Lights* lights, bool rest) {
@@ -437,7 +456,7 @@ void lights_rest(Lights* lights, bool rest) {
         pendant_light(lights, (vec3){PENDANT_X, PENDANT_PIVOT[1] + lights->pendant_bulb, PENDANT_Z},
                       false);
     } else {
-        lights_apply(lights, lights->mains, lights->level, lights->flashlight_on);
+        lights_apply(lights, lights->mains, lights->level, lights_flashlight_lit(lights));
         pendant_light(lights, lights->hall_at, lights->hall_follows);
     }
 }

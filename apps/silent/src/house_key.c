@@ -1,6 +1,5 @@
 #include <math.h>
 
-#include "basement.h"
 #include "house_key.h"
 #include "mats.h"
 
@@ -11,11 +10,6 @@
 #define KEY_BOW   0.03f
 #define KEY_WIRE  0.0035f
 #define KEY_BIT   0.0025f
-// Where it lies on the basement's workbench, in the bench's frame (BASEMENT_BENCH): in the clear
-// stretch between the vise and the jar, turned off square as if it had been put down in a hurry.
-#define KEY_BENCH_A    0.85f
-#define KEY_BENCH_D    0.3f
-#define KEY_BENCH_TURN 1.2f
 
 // A point of the key, `u` along it from its bow, `v` up across it toward its bit, `w` through its
 // thickness.
@@ -58,19 +52,16 @@ void house_key_model(Kit* kit) {
 
 void house_key_build(HouseKey* key, Engine* engine, Scene* scene) {
     *key = (HouseKey){0};
-    kit_frame_point(&BASEMENT_BENCH, KEY_BENCH_A, BASEMENT_BENCH_TOP, KEY_BENCH_D, key->at);
     Kit kit;
     mats_kit(&kit, engine, scene);
     house_key_model(&kit);
     key->node = kit_finish(&kit, "front_door_key");
     // No capture keeps it: it is taken while the game runs.
     key->node->capture_hidden = true;
-    // Laid on its side, its shank on the bench's top.
-    glm_translate_make(key->node->original_transform,
-                       (vec3){key->at[0], key->at[1] + KEY_SHANK, key->at[2]});
-    glm_rotate_y(key->node->original_transform, BASEMENT_BENCH.yaw + KEY_BENCH_TURN,
-                 key->node->original_transform);
-    glm_rotate_z(key->node->original_transform, -0.5f * GLM_PIf, key->node->original_transform);
+}
+
+void house_key_place(HouseKey* key, const mat4 world) {
+    glm_mat4_copy((vec4*)world, key->node->original_transform);
 }
 
 void house_key_free(HouseKey* key) {

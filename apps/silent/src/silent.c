@@ -44,9 +44,11 @@
 #include "cetra/game/input.h"
 #include "cetra/game/physics.h"
 
+#include "arms.h"
 #include "backpack.h"
 #include "backpack_menu.h"
 #include "basement.h"
+#include "birdcage.h"
 #include "cabin.h"
 #include "candles.h"
 #include "cat.h"
@@ -67,6 +69,7 @@
 #include "home.h"
 #include "house.h"
 #include "hud.h"
+#include "inspect.h"
 #include "interior.h"
 #include "kit.h"
 #include "kitchen.h"
@@ -106,6 +109,10 @@
  * past what the night is pinned at.
  */
 #define EXPOSURE_NIGHT 0.014f
+// The night's exposure while the flashlight is held on something in the hands (spec 13.55), as a
+// share of the pin: a thing 0.4 m from the beam takes some 25 times the light of a wall 2 m off,
+// and the eye stops down for it as the beam comes onto it.
+#define EXPOSURE_HELD 0.0625f
 // How long the view takes to come up from black once the room's bounce light
 // is in, and to go down to it from the title once a game is chosen.
 #define FADE_IN_SECONDS  1.0f
@@ -213,7 +220,9 @@ typedef struct SilentArgs {
     bool flashlight;
     bool backpack;           // the backpack already taken, and the flashlight in it
     bool map;                // the town map already in it, and the fridge door bare
-    bool key;                // the front door's key in it, and the workbench bare (spec 13.53)
+    bool key;                // the front door's key in it, and its birdcage open and empty
+    const char* inspect;     // the birdcage in the hands once played: pickup, closed or open
+    bool trace_hold;         // print each of the hold's states and its clips' events
     StoryStage story;        // how far the house's story has gone at the start, or STORY_NONE
     bool open_map;           // the map's screen open at the start, over the backpack's when that is
     bool found[PLACE_COUNT]; // places found before the run starts, their marks not yet written
@@ -274,7 +283,8 @@ static bool starts_elsewhere(const SilentArgs* a) {
         found |= a->found[k];
     return a->load || a->new_game || a->slot || a->player_at_set || found || a->backpack ||
            a->crouch || a->cat_at || a->cat_go[0] || a->cat_clip[0] || a->cat_doing || a->cat_cam ||
-           a->haunt || a->story != STORY_NONE || (a->cam_eye_set && a->cam_target_set);
+           a->haunt || a->story != STORY_NONE || a->inspect ||
+           (a->cam_eye_set && a->cam_target_set);
 }
 static Scene* g_scene;
 static Player g_player;
@@ -310,6 +320,10 @@ static Backpack g_backpack;
 static BackpackMenu g_menu;
 static FridgeMap g_fridge_map;
 static HouseKey g_house_key;
+// The key's birdcage on the workbench, the arms that pick it up, and the hold (spec 13.55).
+static Birdcage g_cage;
+static Arms g_arms;
+static Inspect g_inspect;
 static MapScreen g_map_screen;
 // The places the player has found, which go on the map (spec 13.43).
 static Finds g_finds;
@@ -428,6 +442,8 @@ static const InputAction ACTIONS[] = {
     {"look_y", {INPUT_AXIS(RIGHT_Y, -1), INPUT_KEY(UP, 1), INPUT_KEY(DOWN, -1)}},
     {"flashlight", {INPUT_KEY(F, 1), INPUT_PAD(Y, 1)}},
     {"interact", {INPUT_KEY(E, 1), INPUT_PAD(X, 1)}},
+    // What is held set down (spec 13.55). B toggles a crouch too, which nothing held lets happen.
+    {"put_down", {INPUT_MOUSE(RIGHT, 1), INPUT_PAD(B, 1)}},
     // The pause menu (spec 13.50): a game action, so it reads nothing while a screen holds the
     // game's input, and Escape there is that screen's back.
     {"pause_menu", {INPUT_KEY(ESCAPE, 1), INPUT_PAD(START, 1)}},
@@ -938,6 +954,12 @@ static void start_play(double time) {
     else if (g_story.stage == STORY_HAUNTED)
         haunt_begin(&g_haunt, time, 0.0);
     g_args.haunt = false;
+    // The birdcage in the hands from the start, wherever the player stands (spec 13.55).
+    if (g_args.inspect && !strcmp(g_args.inspect, "pickup"))
+        inspect_pick_up(&g_inspect);
+    else if (g_args.inspect)
+        inspect_start_held(&g_inspect, !strcmp(g_args.inspect, "open"));
+    g_args.inspect = NULL;
     const char* screen = g_args.pause_screen;
     g_args.pause_screen = NULL;
     if (!screen)
@@ -957,6 +979,8 @@ static void rest_lights(bool rest, void* ctx) {
     tv_rest(&g_tv, rest);
     haunt_rest(&g_haunt, rest);
 }
+
+static void take_key(double time);
 
 static void on_init(Game* game) {
     Engine* engine = game->engine;
@@ -1105,8 +1129,8 @@ static void on_init(Game* game) {
         door_set_open(&g_doors[DOOR_CABIN]);
     load_seam(engine, "doors");
     // The backpack on the bedroom's bed (spec 13.40), the town map on the fridge (spec 13.43) and
-    // the front door's key on the basement's workbench (spec 13.53), unless the run starts with
-    // them.
+    // the front door's key in a birdcage on the basement's workbench (specs 13.53 and 13.55),
+    // unless the run starts with them.
     backpack_build(&g_backpack, engine, g_scene);
     fridge_map_build(&g_fridge_map, engine, g_scene);
     house_key_build(&g_house_key, engine, g_scene);
@@ -1118,6 +1142,13 @@ static void on_init(Game* game) {
         backpack_add(&g_backpack, ITEM_TOWN_MAP);
     if (g_args.key)
         backpack_add(&g_backpack, ITEM_KEY);
+    birdcage_build(&g_cage, engine, g_scene);
+    arms_load(&g_arms, engine, g_scene);
+    inspect_init(&g_inspect, engine, &g_arms, &g_cage, &g_house_key, &g_lights, &g_hud, &g_player,
+                 take_key);
+    g_inspect.trace = g_args.trace_hold;
+    inspect_drop(&g_inspect, backpack_holds(&g_backpack, ITEM_KEY));
+    load_seam(engine, "birdcage-arms");
     // The map's print shows one seed's street, and another seed builds other houses.
     if ((unsigned int)g_args.seed != MAP_ART[MAP_TOWN].seed)
         fprintf(stderr, "silent: the town map shows seed %u's street, not seed %d's\n",
@@ -1329,6 +1360,7 @@ static void on_init(Game* game) {
     SaveWorld world = {.game = game,
                        .player = &g_player,
                        .backpack = &g_backpack,
+                       .inspect = &g_inspect,
                        .finds = &g_finds,
                        .map_screen = &g_map_screen,
                        .lights = &g_lights,
@@ -1530,7 +1562,7 @@ static void take_map(double time) {
     save_game_due();
 }
 
-// The front door's key off the basement's workbench (spec 13.53), into the backpack, and the
+// The front door's key out of its birdcage (specs 13.53 and 13.55), into the backpack, and the
 // haunting with it (spec 13.54).
 static void take_key(double time) {
     if (!backpack_add(&g_backpack, ITEM_KEY)) {
@@ -1540,6 +1572,12 @@ static void take_key(double time) {
     hud_think(&g_hud, "A key. It might fit the front door.");
     story_key(&g_story, time);
     save_game_due();
+}
+
+// The birdcage off the workbench into the hands (spec 13.55), which take the key out of it.
+static void pick_up_cage(double time) {
+    (void)time;
+    inspect_pick_up(&g_inspect);
 }
 
 // A foot the gait let fall this frame, heard where the drawn `feet` came down (spec 13.47); or,
@@ -1573,6 +1611,11 @@ static void on_pre_render(Game* game, double alpha) {
         player_pre_render(&g_player, game, pinned ? &g_args.cam_eye : NULL,
                           pinned ? &g_args.cam_target : NULL);
     }
+    // Something held (spec 13.55) poses the view and holds the beam, before either is read, and at
+    // night the eye stops down with the beam. By day the meter does it.
+    inspect_frame(&g_inspect, game);
+    if (!g_args.day)
+        engine->exposure.multiplier = EXPOSURE_NIGHT * glm_lerp(1.0f, EXPOSURE_HELD, g_lights.hold);
 
     // The flashlight is in the backpack (spec 13.40): until the player has it, F finds nothing.
     if (input_action_pressed(&game->input, "flashlight")) {
@@ -1595,11 +1638,11 @@ static void on_pre_render(Game* game, double alpha) {
     footfall(game, feet);
 
     // The nearest thing the player is looking at in reach -- a door, the backpack on the bed, the
-    // map on the fridge or the key on the workbench -- says what the action key would do to it, and
-    // the key does it. Nothing is in reach of a player who is not yet playing, or behind a screen
-    // that holds the game's keys.
+    // map on the fridge or the key's birdcage on the workbench -- says what the action key would do
+    // to it, and the key does it. Nothing is in reach of a player who is not yet playing, who holds
+    // something, or who is behind a screen that holds the game's keys.
     Reach reach = {.d = FLT_MAX};
-    if (g_run == RUN_PLAYING && !ui_captures_input(g_hud.ui)) {
+    if (g_run == RUN_PLAYING && !ui_captures_input(g_hud.ui) && !inspect_active(&g_inspect)) {
         for (int i = 0; i < DOORS; i++)
             if (g_door_hung[i])
                 reach_offer(&reach, g_doors[i].entity->position, &g_doors[i], NULL, NULL);
@@ -1607,8 +1650,8 @@ static void on_pre_render(Game* game, double alpha) {
             reach_offer(&reach, g_backpack.at, NULL, take_backpack, "E   Take the backpack");
         if (!backpack_holds(&g_backpack, ITEM_TOWN_MAP))
             reach_offer(&reach, g_fridge_map.at, NULL, take_map, "E   Take the map");
-        if (!backpack_holds(&g_backpack, ITEM_KEY))
-            reach_offer(&reach, g_house_key.at, NULL, take_key, "E   Take the key");
+        if (!backpack_holds(&g_backpack, ITEM_KEY) && g_cage.node)
+            reach_offer(&reach, g_cage.at, NULL, pick_up_cage, "E   Pick up");
     }
     if (input_action_pressed(&game->input, "interact")) {
         if (reach.take)
@@ -1620,7 +1663,8 @@ static void on_pre_render(Game* game, double alpha) {
     // goes on while the game is held.
     const float dt = (float)look_dt(game);
     const double looks_at = look_time(game);
-    hud_prompt(&g_hud, reach.take ? reach.prompt
+    hud_prompt(&g_hud, inspect_active(&g_inspect) ? inspect_prompt(&g_inspect)
+                       : reach.take               ? reach.prompt
                        : reach.door
                            ? (door_will_open(reach.door) ? "E   Open door" : "E   Close door")
                            : NULL);
@@ -1890,6 +1934,9 @@ static void on_shutdown(Game* game) {
     hud_free(&g_hud);
     backpack_free(&g_backpack);
     fridge_map_free(&g_fridge_map);
+    inspect_free(&g_inspect);
+    arms_free(&g_arms);
+    birdcage_free(&g_cage);
     house_key_free(&g_house_key);
     cat_free(&g_cat);
     player_free(&g_player);
@@ -1968,8 +2015,11 @@ static void print_usage(const char* prog) {
     printf("      --flashlight        Start with the flashlight, and on (F toggles it)\n");
     printf("      --backpack          Start with the backpack, the flashlight in it\n");
     printf("      --map               Start with the town map in the backpack, the fridge bare\n");
-    printf("      --key               Start with the front door's key in the backpack, the\n"
-           "                          basement's workbench bare\n");
+    printf("      --key               Start with the front door's key in the backpack, its\n"
+           "                          birdcage open and empty on the basement's workbench\n");
+    printf("      --inspect HOW       Start holding the birdcage, wherever the player stands:\n"
+           "                          pickup (from the bench), closed or open\n");
+    printf("      --trace-hold        Print each of the hold's states and its clips' events\n");
     printf("      --open-map          Start with the map's screen open, over the backpack's\n"
            "                          with --open-backpack; the map had\n");
     printf("      --found LIST        Start with places found, written on the map when it\n"
@@ -2189,6 +2239,15 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
             a->map = true;
         } else if (!strcmp(s, "--key")) {
             a->key = true;
+        } else if (!strcmp(s, "--inspect") && has_next) {
+            a->inspect = argv[++i];
+            if (strcmp(a->inspect, "pickup") && strcmp(a->inspect, "closed") &&
+                strcmp(a->inspect, "open")) {
+                fprintf(stderr, "silent: --inspect takes pickup, closed or open; ignoring it\n");
+                a->inspect = NULL;
+            }
+        } else if (!strcmp(s, "--trace-hold")) {
+            a->trace_hold = true;
         } else if (!strcmp(s, "--story") && has_next) {
             a->story = story_stage_by_name(argv[++i]);
             if (a->story == STORY_NONE)

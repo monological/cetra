@@ -27,9 +27,10 @@ typedef struct Hud {
     Font* font; // the face every screen in it is set in, the font pool's
     UIScreen* screen;
     HudLine prompt, thought;
-    float thought_age; // seconds since the thought was had
-    const char* hint;  // the prompt while no other is given, borrowed
-    float hint_left;   // seconds it has left
+    float thought_age;  // seconds since the thought was had
+    float thought_stay; // and how long it stays before it fades
+    const char* hint;   // the prompt while no other is given, borrowed
+    float hint_left;    // seconds it has left
     UIElement* save_mark;
     struct ShaderProgram*
         candles;     // the save mark's candlestick, the engine's; NULL for words alone
@@ -46,6 +47,8 @@ void hud_prompt(Hud* hud, const char* text);
 void hud_hint(Hud* hud, const char* text, float seconds);
 // Think `text`, in place of any thought on screen; the same thought again stays up.
 void hud_think(Hud* hud, const char* text);
+// The same, staying `seconds` before it fades rather than a thought's usual few.
+void hud_think_for(Hud* hud, const char* text, float seconds);
 // The game was just saved (spec 13.49): in the window's bottom right corner a three-branched
 // candlestick lights its candles one after another before "Saving...", then "Saved", and goes.
 // Saved again while it is up, it says so again without going out first.

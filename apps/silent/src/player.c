@@ -136,7 +136,7 @@ static bool crouched(const CharacterController* cc) {
 // step until there is room. While a screen holds the game's input the stance is kept, or a held
 // crouch would stand up behind it.
 static void crouch_step(const Player* p, Game* game, CharacterController* cc) {
-    if (input_is_suppressed(&game->input))
+    if (input_is_suppressed(&game->input) || p->holding)
         return;
     const bool want = p->crouch_toggled || input_action_down(&game->input, "crouch");
     character_controller_set_half_height(cc, want ? CROUCH_HALF_HEIGHT : CAPSULE_HALF_HEIGHT);
@@ -146,9 +146,9 @@ static void crouch_step(const Player* p, Game* game, CharacterController* cc) {
 // a frame, since read in a fixed step it would count twice on a frame of two steps and not at all
 // on a frame of none; sprinting asks to stand.
 static void crouch_frame(Player* p, Game* game, const CharacterController* cc, float dt) {
-    if (input_action_pressed(&game->input, "crouch_toggle"))
+    if (input_action_pressed(&game->input, "crouch_toggle") && !p->holding)
         p->crouch_toggled = !p->crouch_toggled;
-    if (input_action_pressed(&game->input, "sprint"))
+    if (input_action_pressed(&game->input, "sprint") && !p->holding)
         p->crouch_toggled = false;
     const bool low = cc && crouched(cc);
     p->crouch_eased =
@@ -195,8 +195,9 @@ void player_update(Player* p, Game* game, double dt) {
     if (!cc)
         return;
     crouch_step(p, game, cc);
-    vec3 input_dir;
-    input_action_move(&game->input, "move_x", "move_y", input_dir);
+    vec3 input_dir = {0.0f, 0.0f, 0.0f};
+    if (!p->holding)
+        input_action_move(&game->input, "move_x", "move_y", input_dir);
     float yaw = 0.0f;
     camera_rig_move_basis(p->rig, &yaw);
     vec3 fwd = {sinf(yaw), 0.0f, cosf(yaw)};
@@ -277,7 +278,7 @@ void player_pre_render(Player* p, Game* game, const vec3* pin_eye, const vec3* p
     const bool held = input_is_suppressed(&game->input);
     if (p->cursor_captured && p->skip_first_delta) {
         p->skip_first_delta = false;
-    } else if (p->cursor_captured && !held) {
+    } else if (p->cursor_captured && !held && !p->holding) {
         double dx = 0.0, dy = 0.0;
         input_mouse_delta(&game->input, &dx, &dy);
         camera_rig_aim(p->rig, p->rig->yaw - (float)dx * MOUSE_LOOK_RATE,
@@ -295,8 +296,13 @@ void player_pre_render(Player* p, Game* game, const vec3* pin_eye, const vec3* p
     set_cursor_captured(p, engine, p->cursor_wanted && !held);
 
     glm_vec3_copy(anchor, p->rig->anchor);
-    camera_rig_update(p->rig, dt, input_action_value(&game->input, "look_x"),
-                      input_action_value(&game->input, "look_y"));
+    const float look = p->holding ? 0.0f : 1.0f;
+    camera_rig_update(p->rig, dt, look * input_action_value(&game->input, "look_x"),
+                      look * input_action_value(&game->input, "look_y"));
+}
+
+void player_hold(Player* p, bool holding) {
+    p->holding = holding;
 }
 
 void player_free(Player* p) {

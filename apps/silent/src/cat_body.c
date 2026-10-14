@@ -278,7 +278,7 @@ void cat_stand(Cat* cat, const vec3 feet, float yaw) {
 // between them or the lids are shut.
 float cat_body_shine(const Cat* cat, Game* game, const Lights* lights, const vec3 viewer) {
     if (!cat->eyeshine || !cat->attached || cat_eyes_shut(cat) || !lights || !lights->flashlight ||
-        !lights->flashlight_on)
+        !lights_flashlight_lit(lights))
         return 0.0f;
     vec3 at = {0.0f, 0.0f, 0.0f}, gaze = {0.0f, 0.0f, 0.0f};
     if (!cat_eye(cat, at, gaze))
