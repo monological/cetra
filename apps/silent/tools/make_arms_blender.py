@@ -12,17 +12,20 @@ Builds everything from nothing, so nothing in a user's Blender reaches it, and w
     `open`, the pickup's framing and where the key rides in the right hand -- rerun this, never
     edit the header;
   - out/arms_blender/arms.blend, to open and look at; with --preview, the player's own view of
-    each pose, lit by a torch, tiled into out/arms_blender/preview/sheet.png; and with --movie,
-    the clips played in turn into out/arms_blender/movie.mp4, the side view beside the eye's.
+    each pose, lit by the lamp on the chest, tiled into out/arms_blender/preview/sheet.png; and
+    with --movie, the clips played in turn into out/arms_blender/movie.mp4, the side view beside
+    the eye's.
 
 MODEL space is the player's BODY: the standing eye at the origin, x the player's left, y up, z the
 way they face -- turned with their yaw, never pitched. Blender is z up; `bv` (from the cage's
 script) is the one place the two meet.
 
-THE RIG. `Root` at the eye. Under it, two bones that deform nothing: `View`, at the eye, its +Y
+THE RIG. `Root` at the eye. Under it, three bones that deform nothing: `View`, at the eye, its +Y
 where the eye looks and its +Z up -- the game puts the camera on it while the arms are up, so a
-clip's lean and look are authored with its hands -- and `Cage`, the held cage's own frame at its
-base's middle (its +Y up, its +Z out of its face). And each arm: UpperArm, ForeArm, its
+clip's lean and look are authored with its hands -- `Cage`, the held cage's own frame at its
+base's middle (its +Y up, its +Z out of its face), and `Lamp`, the flashlight's beam from its lens
+on the chest, its +Y on the middle of the cage's face all through every clip. And each arm:
+UpperArm, ForeArm, its
 ForeTwist, Hand, and four bones a finger and the thumb. The hands are posed by reaching: a two-bone
 solve from the shoulder to where the clip puts the wrist, its elbow turned away from the thumb, the
 hand turned toward its forearm as far as the pose allows, each finger fanned and bent.
@@ -94,6 +97,15 @@ BENCH = Vector((0.0, -PICKUP_DROP, PICKUP_DISTANCE))
 HOLD = Vector((0.0, -0.275, 0.36))         # where the held cage's base is, in front of the chest
 CAGE_R = cage_model.CAGE_R + cage_model.BAR_WIRE  # how far its sides stand from its axis
 CAGE_MID = 0.11                            # where the hands take it by its sides, up from its base
+# The middle of the cage's face, in its frame: what the lamp is aimed at all through the clips.
+FACE = Vector((0.0, cage_model.DOOR_Y, cage_model.DOOR_FRAME_R + cage_model.RING_WIRE))
+
+# The flashlight is clipped to the jacket's left chest, out of the right hand's way: its lens here
+# from the standing eye. It rides the body's lean, never the head's look.
+LAMP_AT = Vector((0.10, -0.25, 0.05))
+FLASHLIGHT_GLB = os.path.join(ROOT, "assets", "models", "flashlight.glb")
+# The lamp model's axes onto the Lamp bone's: its lens's +z along the bone's +Y, its up its +Z.
+LAMP_TURN = Matrix(((-1.0, 0.0, 0.0), (0.0, 0.0, 1.0), (0.0, 1.0, 0.0))).to_4x4()
 
 # The hand: a sculpted right hand and its rig, which `load_hand` brings in at HAND_LENGTH from the
 # wrist to the middle finger's tip and measures in its own frame -- a along it from the wrist to
@@ -609,6 +621,8 @@ def solve(f):
     M["View"] = frame(eye, Vector((0.0, math.sin(p), math.cos(p))),
                       Vector((0.0, math.cos(p), -math.sin(p))))
     M["Cage"] = f.cage.copy()
+    lamp = leaned(LAMP_AT, f.lean)
+    M["Lamp"] = frame(lamp, f.cage @ FACE - lamp, Vector((0.0, 1.0, 0.0)))
     for s, side in SIDES:
         hand = f.hands[s]
         shoulder, elbow, wrist = arm_of(hand, side, f.lean)
@@ -642,9 +656,12 @@ def rest_hand(side):
 REST = Frame(0.0, -20.0, cage_frame(HOLD), {s: rest_hand(side) for s, side in SIDES})
 
 
+FRAMES = ("Root", "View", "Cage", "Lamp")  # the bones that deform nothing, Root first
+
+
 def bones_list():
     """(name, parent) in the order they are built and solved."""
-    out = [("Root", None), ("View", "Root"), ("Cage", "Root")]
+    out = [("Root", None)] + [(b, "Root") for b in FRAMES[1:]]
     for s, _ in SIDES:
         out += [(f"UpperArm.{s}", "Root"), (f"ForeArm.{s}", f"UpperArm.{s}"),
                 (f"ForeTwist.{s}", f"ForeArm.{s}"), (f"Hand.{s}", f"ForeArm.{s}")]
@@ -657,11 +674,11 @@ def bones_list():
 
 
 BONES = bones_list()
-DEFORMING = [n for n, _ in BONES if n not in ("Root", "View", "Cage")]
+DEFORMING = [n for n, _ in BONES if n not in FRAMES]
 
 
 def bone_length(name):
-    if name in ("Root", "View", "Cage"):
+    if name in FRAMES:
         return 0.1
     side, part = name[-1], name[:-2]
     if part == "UpperArm":
@@ -1618,13 +1635,13 @@ def self_check(path):
     problems = [f"no clip '{c}' (have {sorted(anims)})" for c in CLIPS if c not in anims]
     problems += [f"a clip '{a}' that is none of this script's" for a in anims if a not in CLIPS]
     joints = {js["nodes"][j]["name"] for j in js["skins"][0]["joints"]}
-    problems += [f"no bone '{b}'" for b in ("View", "Cage", "Hand.R") if b not in joints
+    problems += [f"no bone '{b}'" for b in ("View", "Cage", "Lamp", "Hand.R") if b not in joints
                  and b not in {n.get("name") for n in js["nodes"]}]
-    # The game reads View and Cage as frames in the body's space: what the file says they are at
-    # rest must be what was authored.
+    # The game reads View, Cage and Lamp as frames in the body's space: what the file says they
+    # are at rest must be what was authored.
     g = node_globals(js)
     rest = solve(REST)
-    for b in ("View", "Cage"):
+    for b in FRAMES[1:]:
         if b in g:
             have, want = g[b], rest[b]
             err = max(abs(have[i][j] - want[i][j]) for i in range(3) for j in range(4))
@@ -1710,6 +1727,10 @@ def write_header():
         "// column-major.",
         f'#define ARMS_KEY_BONE "{KEY_BONE}"',
         f"static const float ARMS_KEY_ON_BONE[16] = {{{cols}}};",
+        "// Where the flashlight's lens is clipped on, from the standing eye in the body's frame: x",
+        "// the player's left, y up, z the way they face. The `Lamp` bone starts there.",
+        "static const float ARMS_LAMP[3] = {"
+        f"{LAMP_AT.x:.4f}f, {LAMP_AT.y:.4f}f, {LAMP_AT.z:.4f}f}};",
         "",
         "#endif // _SILENT_ARMS_CLIPS_H_",
         "",
@@ -1719,12 +1740,13 @@ def write_header():
 
 
 # ---------------------------------------------------------------------------------------------
-# The arms as the player sees them, lit by a torch: stills of single instants and movies of the
-# clips, each with the whole of the arms from the player's right beside it.
+# The arms as the player sees them, lit by the lamp on their chest: stills of single instants and
+# movies of the clips, each with the whole of the arms from the player's right beside it.
 
 
 class Stage:
-    """The cage on a bench in a dark room, the arms, a torch and a camera at the eye."""
+    """The cage on a bench in a dark room, the arms, the lamp on the chest and a camera at the
+    eye."""
 
     def __init__(self, arm, rig, width):
         self.arm, self.rig = arm, rig
@@ -1763,13 +1785,26 @@ class Stage:
         self.cam = bpy.data.objects.new("eye", self.cam_data)
         scene.collection.objects.link(self.cam)
         scene.camera = self.cam
+        # The flashlight as the game has it: 900 candela, full inside 9 degrees and gone by 21. A
+        # cage 0.4 m from it is lit at 5600 lux, so the picture is exposed for that.
+        scene.view_settings.exposure = -2.0
         torch_data = bpy.data.lights.new("torch", "SPOT")
-        torch_data.energy = 60.0
-        torch_data.spot_size = math.radians(50.0)
-        torch_data.spot_blend = 0.5
+        torch_data.energy = 900.0 * 4.0 * math.pi / 683.0
+        torch_data.spot_size = math.radians(42.0)
+        torch_data.spot_blend = 1.0 - 9.0 / 21.0
         torch_data.shadow_soft_size = 0.01
         self.torch = bpy.data.objects.new("torch", torch_data)
         scene.collection.objects.link(self.torch)
+        # The lamp itself, seen only from the side, as the game draws no body; the light leaves
+        # its lens, so the lamp casts nothing. Nor do the arms, as in the game.
+        before = set(bpy.data.objects)
+        bpy.ops.import_scene.gltf(filepath=FLASHLIGHT_GLB)
+        found = {re.sub(r"\.\d+$", "", o.name): o for o in set(bpy.data.objects) - before}
+        self.lamp = found["flashlight"]
+        self.lens = mv(found["lens"].location)
+        self.lamp.visible_shadow = False
+        for o in arm.children:
+            o.visible_shadow = False
         # A soft light from above, so a pose can be read where the torch does not reach.
         fill_data = bpy.data.lights.new("fill", "AREA")
         fill_data.energy = 25.0
@@ -1798,16 +1833,17 @@ class Stage:
             self.key.matrix_world = self.hang.matrix_world
             self.key.hide_render = False
         self.view = M["View"]
-        eye = self.view.translation
-        look = self.view.to_3x3() @ Vector((0.0, 1.0, 0.0))
-        up = self.view.to_3x3() @ Vector((0.0, 0.0, 1.0))
-        # The torch where the game holds it: right of and under the eye, a little ahead.
-        right = look.cross(up)
-        self.torch.location = bv(*(eye + right * 0.16 - up * 0.22 + look * 0.1))
-        self.torch.rotation_euler = bv(*look).to_track_quat("-Z", "Y").to_euler()
+        lamp = M["Lamp"]
+        self.torch.location = bv(*lamp.translation)
+        self.torch.rotation_euler = bv(*(lamp.to_3x3() @ Vector((0.0, 1.0, 0.0)))).to_track_quat(
+            "-Z", "Y").to_euler()
+        # The lamp's model, its lens toward +z, put with its lens on the bone and facing along it.
+        self.lamp.matrix_world = (BV4 @ lamp @ LAMP_TURN @ Matrix.Translation(-self.lens) @
+                                  BV4.inverted())
 
     def shoot(self, which, path):
         """The player's own view, or the whole of the arms from their right, into `path`."""
+        self.lamp.hide_render = which == "eye"
         if which == "eye":
             self.cam_data.type = "PERSP"
             self.cam.location = bv(*self.view.translation)
