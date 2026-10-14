@@ -131,6 +131,8 @@
 #define DEFAULT_RAIN_MMH 6.0f
 // Rain the cat finds as interesting as rain gets, mm/h: the default is about half of it.
 #define CAT_HEAVY_RAIN 12.0f
+// The music, against the loops tools/fetch_sounds.py levels alike: well over the wind.
+#define MUSIC_VOLUME 0.5f
 // The rain is art-directed here, and has to be. In fog this dense a drop refracts glowing air
 // about as bright as itself, so rain at its physical opacity shows only right under a lamp --
 // true of real rain in fog, and not what this street is for. So each streak is brighter than
@@ -321,6 +323,7 @@ static Finds g_finds;
 #define DUMP_RATE 48000
 static float* g_dump;
 static size_t g_dump_frames, g_dump_cap;
+static double g_dump_time;      // seconds of the mix pulled so far
 static float g_play_capture_ms; // the capture budget once loaded
 
 /*
@@ -915,6 +918,16 @@ static bool enter_game(Engine* engine, const char* load, const char* slot) {
     return true;
 }
 
+// What is heard (spec 13.53): only the music under the loading screen and the title, the world's
+// own sounds coming up with the game's picture as it is played and going down with it.
+static void world_heard(Game* game) {
+    if (!game->audio)
+        return;
+    const bool played = g_run == RUN_PLAYING || g_run == RUN_RETURNING;
+    const float up = played ? glm_smoothstep(0.0f, 1.0f, g_fade) : 0.0f;
+    audio_set_bus_volume(game->audio, AUDIO_BUS_SFX, g_settings.settings.sfx_volume * up);
+}
+
 // The game played from sim time `time` on, haunted when the command line asks the first time or the
 // story was put back haunted (specs 13.52 and 13.53), with the pause menu over it, or the settings
 // over that, the first time, when the command line asks for a picture of them (spec 13.50).
@@ -1166,6 +1179,16 @@ static void on_init(Game* game) {
     tv_start_audio(&g_tv, audio);
     cat_voice_start(&g_voice, &g_cat, audio, g_args.cat_say);
     load_seam(engine, "audio-tv-cat");
+    // The music (spec 13.53), on repeat under the loading screen, the title and the game alike, and
+    // placed nowhere, so heard whole wherever the player is.
+    Sound* music =
+        audio ? audio_sound_from_file(audio, "assets/audio/silent/undertow.flac", AUDIO_BUS_MUSIC)
+              : NULL;
+    if (music) {
+        audio_sound_set_looping(music, true);
+        audio_sound_set_volume(music, MUSIC_VOLUME);
+        audio_sound_play(music);
+    }
 
     // Before the sky: its reflections are baked through the fog set here.
     build_post(engine, !g_args.day, !g_args.no_grade);
@@ -1338,6 +1361,8 @@ static void on_init(Game* game) {
         enter_game(engine, g_args.load, g_args.slot);
     const bool can_return = titled && save_game_keep_start();
     pause_menu_start(&g_pause, g_hud.ui, game, &g_settings, can_return);
+    // Before the first frame mixes anything: the settings just put the world's sounds up whole.
+    world_heard(game);
 
     // Pinned at night: a meter would open the dark back up, which is the one
     // thing this place must not do. By day the meter maps what it reads to
@@ -1422,13 +1447,14 @@ static void on_update(Game* game, double dt) {
     }
 }
 
-// The mix up to the sim clock's now, pulled from the offline device: as many
-// frames as the clock has run since the last pull, so the sound and the
-// picture keep step at any frame rate.
+// The mix pulled from the offline device for as long as the frame is drawn over -- the sim's
+// time, or the held clock's under the title -- so the sound and the picture keep step at any frame
+// rate, and the title is heard too.
 static void dump_audio(Game* game) {
     if (!g_args.audio_dump || !game->audio)
         return;
-    const size_t due = (size_t)llround(game->time * DUMP_RATE);
+    g_dump_time += look_dt(game);
+    const size_t due = (size_t)llround(g_dump_time * DUMP_RATE);
     if (due <= g_dump_frames)
         return;
     const size_t want = due - g_dump_frames;
@@ -1740,6 +1766,7 @@ static void on_pre_render(Game* game, double alpha) {
                 : fmaxf(g_fade - step / FADE_OUT_SECONDS, 0.0f);
     if (engine->postfx)
         glm_vec3_fill(engine->postfx->grade_gain, glm_smoothstep(0.0f, 1.0f, g_fade));
+    world_heard(game);
     if (g_args.startup_ms)
         trace_settling(engine, lit, up);
 }

@@ -323,9 +323,9 @@ static void game_pre_render(Engine* engine, Scene* scene) {
     // fixed steps, 0 on a frame that took none and 0 while paused.
     if (game->entity_manager)
         update_all_animators(game->entity_manager, (float)game->sim_clock.delta);
-    // The listener follows the posed camera, its zones eased by the sim clock as the animators
-    // are.
-    game_listen(game, (float)game->sim_clock.delta);
+    // The listener follows the posed camera, its zones eased by the clock the frame is drawn by:
+    // the sim's, or one of the app's own while it holds the sim and the view still moves.
+    game_listen(game, (float)engine->render_clock->delta);
 }
 
 // engine_run's render hook: hand the app its on_render with the interpolation
@@ -353,9 +353,12 @@ void game_run(Game* game) {
         cetra_sleep_ms(1);
     }
     audio_system_end_loading(game->audio);
-    // The listener is placed where init left the camera before the first frame, and that first
-    // update lands every zone's gain: a hook reading what a zone lets through on frame 1 hears
-    // the room the game starts in, not the world the listener stood in until now.
+    // The listener is placed where init left the view before the first frame -- an installed rig's
+    // pose, which the first frame puts on the camera before it draws -- and that first update lands
+    // every zone's gain: a hook reading what a zone lets through on frame 1 hears the room the game
+    // starts in, not the world the listener stood in until now.
+    if (game->engine->camera)
+        camera_rig_apply(game->engine->camera_rig, game->engine->camera);
     game_listen(game, 0.0f);
     // The engine owns the frame loop; the game plugs in its per-frame sim + render,
     // and stashes itself as the engine's user data so the callbacks can find it.
