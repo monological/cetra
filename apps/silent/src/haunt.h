@@ -28,8 +28,9 @@
  * from its other side, on and on, until it is opened on nobody or the haunting is ended.
  *
  * One module with a beginning and an end. Every beat is a pure function of the seconds since it
- * began and a seed, so a headless run shows the same frame and plays the same sound every time;
- * and nothing of it is saved -- the doors it moves keep their own state, which is.
+ * began, a seed, where the player stands and looks, and whether the cellar door stands shut, so a
+ * headless run shows the same frame and plays the same sound every time; and nothing of it is
+ * saved -- the doors it moves keep their own state, which is.
  */
 
 // What the haunting takes hold of, borrowed; any but `sounds` may be NULL, and what it would drive
@@ -114,7 +115,7 @@ typedef struct Haunt {
     unsigned int seed;
     bool active;
     double began;   // the sim time it began at
-    double stepped; // the sim time of the last step: the beats since then fire in the next
+    double stepped; // the sim time of the last step: the tries' hits since then fire in the next
     // The slam waits for the player to watch for it, from the front of the hall down it, and the
     // creak for them to stand in the hall: whether they have watched, the sim time they first stood
     // there or < 0, and whether the bathroom door has creaked.
@@ -122,6 +123,7 @@ typedef struct Haunt {
     double hall_at;
     bool creaked;
     HauntTries tries;
+    double tries_at; // the sim time the tries got under way, once they have
     HauntNormal normal;
     HauntLive live;
     bool trace; // say each beat as it comes
@@ -138,7 +140,7 @@ void haunt_end(Haunt* h);
 bool haunt_active(const Haunt* h);
 // Per fixed step at sim time `time`, after the doors have moved, the player's feet at `feet` and
 // looking along `forward`: the slam once they watch for it, the creak soon after they stand in the
-// hall, and the tries at the cellar door, which wait for nobody.
+// hall, and the tries at the cellar door, which wait only for it to stand shut.
 void haunt_step(Haunt* h, double time, const vec3 feet, const vec3 forward);
 // Per frame at sim time `time`: the lights, the windows, the set, the picture, the drone.
 void haunt_frame(Haunt* h, double time);

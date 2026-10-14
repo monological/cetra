@@ -1416,7 +1416,7 @@ static void on_update(Game* game, double dt) {
             printf("door %s slammed at %.3f\n", g_doors[i].entity->name, game->time);
     }
     // After the doors: the haunting moves the cellar door's leaf in its frame, which the step's end
-    // carries to its body and node with the rest. Its door beats wait for where the player looks.
+    // carries to its body and node with the rest. Its slam waits for where the player looks.
     vec3 forward = {0.0f, 0.0f, -1.0f};
     if (game->engine->camera_rig)
         camera_rig_direction(game->engine->camera_rig, forward);
@@ -1953,8 +1953,8 @@ static void print_usage(const char* prog) {
     printf("      --no-static         The living room's television with nothing on it, no snow\n");
     printf("      --haunt             The haunting begins as the game is played (K begins and\n"
            "                          ends it)\n");
-    printf("      --haunt-at S        The haunting begun S seconds before the game is played, its\n"
-           "                          door beats too, without waiting to be watched for\n");
+    printf("      --haunt-at S        The haunting begun S seconds before the game is played, the\n"
+           "                          slam and the creak past, the tries on their clock\n");
     printf(
         "      --trace-haunt       Print each of the haunting's beats as it comes, and each turn\n"
         "                          of the house's story\n");

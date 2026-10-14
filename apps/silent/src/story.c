@@ -13,18 +13,20 @@ StoryStage story_stage_by_name(const char* name) {
     return STORY_NONE;
 }
 
-// A locked front door is yanked hard enough to rattle in its frame, the leaf pulled FRONT_PLAY
-// metres off its stop at its latch edge.
-#define FRONT_PLAY 0.01f
-
 static void say(const Story* s, const char* what, double time) {
     if (s->trace)
         printf("story %s at %.3f\n", what, time);
 }
 
-// The front door, locked from the inside. The key opens it, once the player has the map off the
-// fridge too, and the haunting ends as it does: false then, and the door is the player's.
-static bool front_door(Story* s, Door* door, double time) {
+void story_start(Story* s, const StoryHouse* house) {
+    *s = (Story){.house = *house, .stage = STORY_LOCKED};
+}
+
+// The front door, locked from the inside, is the only door the story keeps. The key opens it, once
+// the player has the map off the fridge too, and the haunting ends as it does.
+bool story_door(Story* s, Door* door, double time) {
+    if (door != s->house.front || s->stage == STORY_OPEN)
+        return false;
     const Backpack* bp = s->house.backpack;
     if (backpack_holds(bp, ITEM_KEY)) {
         if (!backpack_holds(bp, ITEM_TOWN_MAP)) {
@@ -38,7 +40,7 @@ static bool front_door(Story* s, Door* door, double time) {
         say(s, "front door unlocked", time);
         return false;
     }
-    door_hand_try_begin(&s->try, s->house.sounds, door, time, true, FRONT_PLAY);
+    door_hand_try_begin(&s->try, s->house.sounds, door, time);
     if (!bp->taken) {
         hud_think(s->house.hud, "It's locked. From the inside? I need a key... and my bag.");
         say(s, "front door locked, no bag", time);
@@ -49,18 +51,10 @@ static bool front_door(Story* s, Door* door, double time) {
     return true;
 }
 
-void story_start(Story* s, const StoryHouse* house) {
-    *s = (Story){.house = *house, .stage = STORY_LOCKED};
-}
-
-bool story_door(Story* s, Door* door, double time) {
-    if (door == s->house.front && s->stage < STORY_OPEN)
-        return front_door(s, door, time);
-    return false;
-}
-
 // The haunting, begun as the key leaves the bench, and the cellar door slammed shut over the
-// player's head down there; standing shut already, it does not move.
+// player's head down there -- standing shut already, it does not move -- for the haunting to try it
+// from the hall as they turn back to the stair, until they open it, and for the bathroom door to
+// creak as they step out into the hall.
 void story_key(Story* s, double time) {
     if (s->stage != STORY_LOCKED)
         return;
