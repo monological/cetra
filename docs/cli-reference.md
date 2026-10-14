@@ -1090,7 +1090,8 @@ the bob half and the footsteps 6 dB softer. Standing waits until there is room o
 **The locked house** (spec 13.53). The front door is locked from the inside, and E at it tries
 it, the knob turned and the door rattled in its frame:
 - without the backpack, the player thinks it locked, and nothing more;
-- with it, the first try begins the haunting (below);
+- with it, the first try is locked too, the player thinks something is happening 3.5 s on, and
+  the haunting (below) begins 5 s after the try; the cellar door is stuck until it does;
 - with the key, off the basement's workbench, and no map, the player thinks of the map in the
   kitchen and the door stays shut;
 - with the key and the map, it opens, and is an ordinary door from then on.
