@@ -301,10 +301,6 @@ void player_pre_render(Player* p, Game* game, const vec3* pin_eye, const vec3* p
                       look * input_action_value(&game->input, "look_y"));
 }
 
-void player_hold(Player* p, bool holding) {
-    p->holding = holding;
-}
-
 void player_free(Player* p) {
     free_gait(p->gait);
     p->gait = NULL;
