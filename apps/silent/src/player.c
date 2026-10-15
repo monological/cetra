@@ -154,6 +154,13 @@ static void ramp_move(Player* p, const vec3 want, bool grounded, float dt) {
     p->speed = approach(p->speed, target, (target > p->speed ? ACCEL : BRAKE) * control * dt);
 }
 
+// Standing on something: Jolt's "on ground". Steep ground is what the capsule slides down or only
+// leans on, and gravity goes on acting there, as in Jolt's own sample; counted as standing, a wall
+// brushed in mid-air held the body up and it walked straight out over the cellar flight.
+static bool standing(const CharacterController* cc) {
+    return cc && character_controller_get_ground_state(cc) == CHAR_GROUND_ON_GROUND;
+}
+
 // The capsule is a crouch's: the engine keeps the height it has.
 static bool crouched(const CharacterController* cc) {
     return cc->half_height < CAPSULE_HALF_HEIGHT;
@@ -239,7 +246,7 @@ void player_update(Player* p, Game* game, double dt) {
 
     // Nothing has moved the capsule yet this step, so its position is where the last step left
     // it, and the move from step_from is the last step's whole.
-    const bool grounded = character_controller_is_grounded(cc);
+    const bool grounded = standing(cc);
     vec3 moved;
     glm_vec3_sub(p->entity->position, p->step_from, moved);
     gait_step(p->gait, moved, grounded, hypotf(want[0], want[2]), (float)dt);
@@ -279,10 +286,10 @@ void player_pre_render(Player* p, Game* game, const vec3* pin_eye, const vec3* p
     glm_vec3_lerp(p->step_from, p->entity->position, (float)alpha, view);
     glm_vec3_sub(view, p->view, moved);
     glm_vec3_copy(view, p->view);
-    CharacterController* cc = entity_get_character_controller(p->entity);
+    const CharacterController* cc = entity_get_character_controller(p->entity);
     crouch_frame(p, game, cc, dt);
     // The stride goes on under a pinned camera, where its footsteps are still heard.
-    gait_frame(p->gait, moved, cc && character_controller_is_grounded(cc), p->rig->yaw, dt);
+    gait_frame(p->gait, moved, standing(cc), p->rig->yaw, dt);
     // The eye the walk puts: the body's, lagging the ground and over the feet, which bob less
     // bent low.
     vec3 anchor, bob = {0.0f, 0.0f, 0.0f};
