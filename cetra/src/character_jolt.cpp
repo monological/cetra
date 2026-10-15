@@ -48,3 +48,9 @@ extern "C" bool jolt_character_set_shape(JPC_CharacterVirtual* character, JPC_Ph
     jph_character->SetInnerBodyShape(to_jph(shape));
     return true;
 }
+
+extern "C" void jolt_character_support_below(JPC_CharacterVirtualSettings* settings, float y) {
+    // A contact's signed distance from the plane is its height over `y`; behind it, it can support.
+    if (settings)
+        to_jph(settings)->mSupportingVolume = JPH::Plane(JPH::Vec3::sAxisY(), -y);
+}

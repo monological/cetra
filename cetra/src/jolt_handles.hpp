@@ -17,12 +17,16 @@
 #include <Jolt/Physics/PhysicsSystem.h>
 
 typedef struct JPC_CharacterVirtual JPC_CharacterVirtual;
+typedef struct JPC_CharacterVirtualSettings JPC_CharacterVirtualSettings;
 typedef struct JPC_PhysicsSystem JPC_PhysicsSystem;
 typedef struct JPC_Shape JPC_Shape;
 typedef struct JPC_TempAllocatorImpl JPC_TempAllocatorImpl;
 
 inline JPH::CharacterVirtual* to_jph(JPC_CharacterVirtual* character) {
     return reinterpret_cast<JPH::CharacterVirtual*>(character);
+}
+inline JPH::CharacterVirtualSettings* to_jph(JPC_CharacterVirtualSettings* settings) {
+    return reinterpret_cast<JPH::CharacterVirtualSettings*>(settings);
 }
 inline JPH::PhysicsSystem* to_jph(JPC_PhysicsSystem* system) {
     return reinterpret_cast<JPH::PhysicsSystem*>(system);
