@@ -113,6 +113,9 @@
 // share of the pin: a thing 0.4 m from the beam takes some 25 times the light of a wall 2 m off,
 // and the eye stops down for it as the beam comes onto it.
 #define EXPOSURE_HELD 0.0625f
+// How far along the look the flashlight's beam is aimed at, past anything: from the chest its
+// aim is then within a degree and a half of the look's.
+#define LAMP_REACH 12.0f
 // How long the view takes to come up from black once the room's bounce light
 // is in, and to go down to it from the title once a game is chosen.
 #define FADE_IN_SECONDS  1.0f
@@ -1672,8 +1675,17 @@ static void on_pre_render(Game* game, double alpha) {
     backpack_menu_update(&g_menu, dt);
     map_screen_update(&g_map_screen, dt, feet, forward);
     sounds_update(&g_sounds);
-    // The beam trails the head by the frame, as the head turns.
-    lights_update(&g_lights, g_scene, looks_at, dt, eye, forward);
+    // The beam trails the head by the frame, as the head turns, and meets what the look meets
+    // (spec 13.55): the first wall or door along it, or far enough off that it does not matter.
+    float meets = LAMP_REACH;
+    RaycastHit seen;
+    if (game->physics_world &&
+        physics_world_raycast_filtered(game->physics_world, eye, forward, LAMP_REACH,
+                                       (1u << OBJ_LAYER_STATIC) | (1u << OBJ_LAYER_KINEMATIC),
+                                       &seen) &&
+        seen.hit)
+        meets = seen.distance;
+    lights_update(&g_lights, g_scene, looks_at, dt, eye, forward, meets);
     for (int i = 0; i < FAILING_LAMPS; i++)
         failing_lamp_update(&g_failing[i], looks_at);
     tv_update(&g_tv, looks_at);
