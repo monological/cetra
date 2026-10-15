@@ -22,8 +22,8 @@ def cached_path(url, cache_name=None):
                         cache_name or re.sub(r'[<>:"/\\|?*]', "_", url.rsplit("/", 1)[-1]))
 
 
-def fetch(url, cache_name=None):
-    """The bytes at `url`, from the cache when they are there."""
+def fetched(url, cache_name=None):
+    """Where `url`'s bytes are kept, downloaded first when they are not there yet."""
     path = cached_path(url, cache_name)
     if not os.path.exists(path):
         os.makedirs(CACHE_DIR, exist_ok=True)
@@ -32,7 +32,12 @@ def fetch(url, cache_name=None):
             data = r.read()
         with open(path, "wb") as f:
             f.write(data)
-    with open(path, "rb") as f:
+    return path
+
+
+def fetch(url, cache_name=None):
+    """The bytes at `url`, from the cache when they are there."""
+    with open(fetched(url, cache_name), "rb") as f:
         return f.read()
 
 
