@@ -25,6 +25,20 @@ def read_glb(path):
     return js, binary
 
 
+def triangles(js):
+    """How many triangles a glb's meshes hold, every primitive indexed."""
+    return sum(js["accessors"][p["indices"]]["count"] // 3
+               for m in js["meshes"] for p in m["primitives"])
+
+
+def credit(path, what):
+    """What a downloaded model's author is owed, from the notes its file came with: `what` it is,
+    its title, its author, where it came from and under what licence."""
+    notes = read_glb(path)[0].get("asset", {}).get("extras", {})
+    return (f"{what}: \"{notes.get('title', '')}\" by {notes.get('author', '')}, "
+            f"{notes.get('source', '')}, {notes.get('license', '')}")
+
+
 def accessor(js, binary, index):
     acc = js["accessors"][index]
     view = js["bufferViews"][acc["bufferView"]]

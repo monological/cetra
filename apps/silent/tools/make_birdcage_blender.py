@@ -11,12 +11,14 @@ Builds everything from nothing, so nothing in a user's Blender reaches it, and w
     --preview, stills lit as the basement lights it, tiled into
     out/birdcage_blender/preview/sheet_<surface>.png.
 
-make_arms_blender.py imports this to stand the cage in its own scene, so the hands are posed
-round the real thing: `build_cage` and the dimensions are for that, and nothing runs on import.
+make_arms_blender.py imports this for the cage's dimensions and where its door, hinge and hook
+are, and stands birdcage.glb in its own scene, so the hands are posed round the real thing.
+Nothing runs on import.
 
 Everything is authored in MODEL space as the game reads it: x the cage's left, y up, z forward --
-the face looks along +z -- and the base's foot at y = 0. Blender is z up; `bv` is the one place
-the two meet.
+the face looks along +z -- and the base's foot at y = 0. Blender is z up; blender_kit's `bv` is
+the one place the two meet. Its roughness and metal map is MASK_SIZE square, as every model's
+masks are.
 
 THE CAGE is a birdcage cast solid: a round base, and over it a closed shell the shape of a cage's
 bars and dome, hollow inside, with the bars, rings and tracery standing out of it in relief, a
@@ -40,207 +42,18 @@ import os
 import sys
 
 import bpy
-import bmesh
 from mathutils import Matrix, Vector
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from glb import read_glb  # noqa: E402 -- the tools' own modules, found beside this one
-from polyhaven import cached_path, fetch, polyhaven_urls  # noqa: E402
+# The tools' own modules, found beside this one.
+from blender_kit import (BV, MASK_SIZE, Parts, apply_boolean, bv, export_glb, finish,  # noqa: E402
+                         lathe, pin, placed, polyhaven_images, rendered, resmooth, save_sheet,
+                         shrink, smooth, sphere, tube, use_gpu)
+from glb import read_glb, triangles  # noqa: E402
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 OUT = os.path.join(ROOT, "out", "birdcage_blender")
 CAGE_GLB = os.path.join(ROOT, "assets", "models", "birdcage.glb")
-
-
-# ---------------------------------------------------------------------------------------------
-# Spaces
-
-
-def bv(x, y, z):
-    """A model-space point (x left, y up, z forward) in Blender's space."""
-    return Vector((x, -z, y))
-
-
-# The model-to-Blender turn as a matrix, for transforms rather than points.
-BV = Matrix(((1.0, 0.0, 0.0), (0.0, 0.0, -1.0), (0.0, 1.0, 0.0)))
-
-
-def smooth(t):
-    t = max(0.0, min(1.0, t))
-    return t * t * (3.0 - 2.0 * t)
-
-
-# ---------------------------------------------------------------------------------------------
-# Materials: linear colours, and metallic. The game takes these as they are.
-
-
-def srgb(hexcode):
-    c = [int(hexcode[i:i + 2], 16) / 255.0 for i in (0, 2, 4)]
-    return tuple(x / 12.92 if x <= 0.04045 else ((x + 0.055) / 1.055) ** 2.4 for x in c)
-
-
-MATERIALS = {
-    # name: (base colour, roughness, metallic), what a part is before its surface is baked.
-    "cage_unbaked": (srgb("3A3632"), 0.58, 0.85),
-}
-
-
-def make_materials():
-    mats = {}
-    for name, (col, rough, metal) in MATERIALS.items():
-        m = bpy.data.materials.new(name)
-        m.use_backface_culling = True
-        bsdf = next(n for n in m.node_tree.nodes if n.type == "BSDF_PRINCIPLED")
-        bsdf.inputs["Base Color"].default_value = (*col, 1.0)
-        bsdf.inputs["Roughness"].default_value = rough
-        bsdf.inputs["Metallic"].default_value = metal
-        mats[name] = m
-    return mats
-
-
-# ---------------------------------------------------------------------------------------------
-# Building meshes in model space
-
-
-class Parts:
-    """Vertices and faces gathered in model space for one object."""
-
-    def __init__(self):
-        self.v = []
-        self.f = []
-
-    def add(self, verts, faces):
-        o = len(self.v)
-        self.v += verts
-        self.f += [tuple(i + o for i in face) for face in faces]
-
-
-def tube(pts, r, segs=8, closed=False):
-    """A round tube of radius `r` along model-space points, its rings turned by parallel
-    transport so it never twists, capped at both ends when it is open."""
-    n = len(pts)
-    tangents = []
-    for i in range(n):
-        if closed:
-            a, b = pts[i - 1], pts[(i + 1) % n]
-        else:
-            a, b = pts[max(i - 1, 0)], pts[min(i + 1, n - 1)]
-        tangents.append((b - a).normalized())
-    t0 = tangents[0]
-    ref = Vector((0.0, 1.0, 0.0)) if abs(t0.y) < 0.9 else Vector((1.0, 0.0, 0.0))
-    normal = (ref - t0 * ref.dot(t0)).normalized()
-    verts = []
-    for i in range(n):
-        if i > 0:
-            axis = tangents[i - 1].cross(tangents[i])
-            if axis.length > 1e-9:
-                normal = Matrix.Rotation(tangents[i - 1].angle(tangents[i]), 3,
-                                         axis.normalized()) @ normal
-            normal = (normal - tangents[i] * normal.dot(tangents[i])).normalized()
-        binormal = tangents[i].cross(normal)
-        for k in range(segs):
-            a = 2.0 * math.pi * k / segs
-            verts.append(pts[i] + (normal * math.cos(a) + binormal * math.sin(a)) * r)
-    faces = []
-    for i in range(n if closed else n - 1):
-        j = (i + 1) % n
-        for k in range(segs):
-            k2 = (k + 1) % segs
-            faces.append((i * segs + k, i * segs + k2, j * segs + k2, j * segs + k))
-    if not closed:
-        start, end = len(verts), len(verts) + 1
-        verts += [pts[0], pts[-1]]
-        last = (n - 1) * segs
-        for k in range(segs):
-            k2 = (k + 1) % segs
-            faces.append((start, k2, k))
-            faces.append((end, last + k, last + k2))
-    return verts, faces
-
-
-def lathe(profile, segs=48):
-    """A solid of revolution about the y axis from (radius, height) points, bottom to top. An end
-    of radius 0 closes that end on the axis; any other end is left open."""
-    bottom = profile[0] if profile[0][0] == 0.0 else None
-    top = profile[-1] if profile[-1][0] == 0.0 else None
-    ring = profile[(1 if bottom else 0):len(profile) - (1 if top else 0)]
-    verts = []
-    for r, y in ring:
-        for k in range(segs):
-            a = 2.0 * math.pi * k / segs
-            verts.append(Vector((r * math.sin(a), y, r * math.cos(a))))
-    faces = []
-    for i in range(len(ring) - 1):
-        for k in range(segs):
-            k2 = (k + 1) % segs
-            faces.append((i * segs + k, i * segs + k2, (i + 1) * segs + k2, (i + 1) * segs + k))
-    if bottom:
-        c = len(verts)
-        verts.append(Vector((0.0, bottom[1], 0.0)))
-        faces += [(c, (k + 1) % segs, k) for k in range(segs)]
-    if top:
-        c, last = len(verts), (len(ring) - 1) * segs
-        verts.append(Vector((0.0, top[1], 0.0)))
-        faces += [(c, last + k, last + (k + 1) % segs) for k in range(segs)]
-    return verts, faces
-
-
-def placed(shape, at):
-    """A shape's vertices moved to `at`, its faces as they were."""
-    verts, faces = shape
-    return [v + at for v in verts], faces
-
-
-def sphere(centre, r, rings=8, segs=12):
-    profile = [(r * math.sin(math.pi * i / rings), -r * math.cos(math.pi * i / rings))
-               for i in range(1, rings)]
-    return placed(lathe([(0.0, -r)] + profile + [(0.0, r)], segs), centre)
-
-
-def pin(r, half):
-    """A short upright cylinder, capped, about its middle."""
-    return lathe([(0.0, -half), (r, -half), (r, half), (0.0, half)], 12)
-
-
-def finish(name, parts, mat, sharp_degrees=35.0, recalc=True):
-    """An object of the gathered model-space parts, in Blender space, smooth but for edges
-    sharper than `sharp_degrees`."""
-    me = bpy.data.meshes.new(name)
-    me.from_pydata([bv(*v) for v in parts.v], [], parts.f)
-    me.update()
-    bm = bmesh.new()
-    bm.from_mesh(me)
-    bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=1e-7)
-    if recalc:
-        bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
-    limit = math.radians(sharp_degrees)
-    for f in bm.faces:
-        f.smooth = True
-    for e in bm.edges:
-        if not e.is_manifold or e.calc_face_angle(0.0) > limit:
-            e.smooth = False
-    bm.to_mesh(me)
-    bm.free()
-    if mat:
-        me.materials.append(mat)
-    ob = bpy.data.objects.new(name, me)
-    bpy.context.scene.collection.objects.link(ob)
-    return ob
-
-
-def apply_boolean(ob, cutter):
-    """`ob` with `cutter` taken out of it, the cutter removed."""
-    mod = ob.modifiers.new("cut", "BOOLEAN")
-    mod.operation = "DIFFERENCE"
-    mod.solver = "EXACT"
-    mod.object = cutter
-    depsgraph = bpy.context.evaluated_depsgraph_get()
-    cut = bpy.data.meshes.new_from_object(ob.evaluated_get(depsgraph))
-    ob.modifiers.remove(mod)
-    old = ob.data
-    ob.data = cut
-    bpy.data.meshes.remove(old)
-    bpy.data.objects.remove(cutter)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -475,16 +288,15 @@ def door_point(u, v, rho):
 def door_plate(rings_n=56, segs=144):
     """The door as a closed solid: a front following the face's height, a back on its curve, and
     a round edge between."""
-    height = face_height
     parts = Parts()
-    front = [door_point(0.0, 0.0, DOOR_BACK + DOOR_T + height(0.0, 0.0))]
+    front = [door_point(0.0, 0.0, DOOR_BACK + DOOR_T + face_height(0.0, 0.0))]
     back = [door_point(0.0, 0.0, DOOR_BACK)]
     for k in range(1, rings_n + 1):
         rr = k / rings_n
         for m in range(segs):
             a = 2.0 * math.pi * m / segs
             u, v = rr * math.cos(a), rr * math.sin(a)
-            front.append(door_point(u, v, DOOR_BACK + DOOR_T + height(u, v)))
+            front.append(door_point(u, v, DOOR_BACK + DOOR_T + face_height(u, v)))
             back.append(door_point(u, v, DOOR_BACK))
 
     def grid(offset, flip):
@@ -553,22 +365,8 @@ def opening_cutter():
     return parts
 
 
-def resmooth(ob, sharp_degrees=35.0):
-    """Smooth again after a cut, but for edges sharper than `sharp_degrees`."""
-    bm = bmesh.new()
-    bm.from_mesh(ob.data)
-    limit = math.radians(sharp_degrees)
-    for f in bm.faces:
-        f.smooth = True
-    for e in bm.edges:
-        if not e.is_manifold or e.calc_face_angle(0.0) > limit:
-            e.smooth = False
-    bm.to_mesh(ob.data)
-    bm.free()
-
-
-def build_cage(mats):
-    iron = mats["cage_unbaked"]
+def build_cage():
+    """The cage's parts, with no material until their surface is baked, and the key's hang."""
     body = Parts()
     base(body)
     bars(body)
@@ -577,16 +375,16 @@ def build_cage(mats):
     crown(body)
     hook(body)
     knuckles(body)
-    cage = finish("cage", body, iron)
+    cage = finish("cage", body, None)
 
     shell_parts = Parts()
     shell_parts.add(*shell())
-    hull = finish("cage_shell", shell_parts, iron)
+    hull = finish("cage_shell", shell_parts, None)
     apply_boolean(hull, finish("cage_opening", opening_cutter(), None))
     resmooth(hull)
     hull.parent = cage
 
-    door = finish("cage_door", door_plate(), iron)
+    door = finish("cage_door", door_plate(), None)
     apply_boolean(door, finish("cage_door_cut", door_cutter(), None))
     resmooth(door)
     # Hung on its hinge: its origin there, a child of the cage.
@@ -621,35 +419,11 @@ INSIDE = 0.92               # how dark it is deep in the hollow, as a share
 BUMP = 0.0006               # metres of relief the scan's height map makes, white over black
 
 
-def use_gpu():
-    """Cycles on whatever GPU this machine has, or its CPU; which, as a word."""
-    prefs = bpy.context.preferences.addons["cycles"].preferences
-    for kind in ("METAL", "OPTIX", "CUDA", "HIP", "ONEAPI"):
-        try:
-            prefs.compute_device_type = kind
-        except TypeError:
-            continue
-        prefs.get_devices()
-        if any(d.type == kind for d in prefs.devices):
-            for d in prefs.devices:
-                d.use = d.type == kind
-            bpy.context.scene.cycles.device = "GPU"
-            return kind
-    bpy.context.scene.cycles.device = "CPU"
-    return "CPU"
-
-
 def scan(name):
     """A Poly Haven scan's colour, its packed occlusion, roughness and metal, and its height, as
     Blender images; and how many metres of the cage one copy of it covers."""
-    urls, info = polyhaven_urls(name, {"albedo": "Diffuse", "arm": "arm", "height": "Displacement"},
-                                "2k")
-    images = {}
-    for kind, url in urls.items():
-        fetch(url)
-        img = bpy.data.images.load(cached_path(url), check_existing=True)
-        img.colorspace_settings.name = "sRGB" if kind == "albedo" else "Non-Color"
-        images[kind] = img
+    images, info = polyhaven_images(
+        name, {"albedo": "Diffuse", "arm": "arm", "height": "Displacement"}, "2k")
     size = (info.get("dimensions") or [1000.0])[0] / 1000.0
     return images, size * SURFACE_SCALE
 
@@ -817,6 +591,7 @@ def bake_surface(objects, surface):
     rm = bpy.data.images.new("cage_rough_metal", ATLAS, ATLAS, alpha=False)
     rm.colorspace_settings.name = "Non-Color"
     rm.pixels.foreach_set(packed)
+    shrink(rm, MASK_SIZE)
     rm.filepath_raw = os.path.join(TEXTURES, "cage_rough_metal.png")
     rm.file_format = "PNG"
     rm.save()
@@ -860,18 +635,13 @@ def texture(objects, surface):
 def export(path, objects):
     for ob in bpy.context.scene.objects:
         ob.select_set(ob in objects)
-    props = bpy.ops.export_scene.gltf.get_rna_type().properties.keys()
-    want = dict(
+    export_glb(
         filepath=path, export_format="GLB", export_yup=True, use_selection=True,
         export_apply=False, export_animations=False, export_skins=False,
         export_materials="EXPORT", export_normals=True, export_texcoords=True,
         export_tangents=True, export_image_format="JPEG", export_jpeg_quality=92,
         export_cameras=False, export_lights=False, export_extras=False,
     )
-    missing = [k for k in want if k not in props]
-    if missing:
-        print(f"export: this Blender has no {', '.join(missing)}; left at its defaults", flush=True)
-    bpy.ops.export_scene.gltf(**{k: v for k, v in want.items() if k in props})
 
 
 def self_check_cage(path):
@@ -885,9 +655,7 @@ def self_check_cage(path):
         problems = [f"'{n}' is not a child of 'cage'" for n in children if by_name[n] not in under]
     if problems:
         sys.exit("self-check:\n  " + "\n  ".join(problems))
-    tris = sum(js["accessors"][p["indices"]]["count"] // 3
-               for m in js["meshes"] for p in m["primitives"])
-    print(f"self-check: cage, shell, door and key hang; {tris} triangles, "
+    print(f"self-check: cage, shell, door and key hang; {triangles(js)} triangles, "
           f"{os.path.getsize(path) / 1024:.0f} KiB", flush=True)
 
 
@@ -924,8 +692,6 @@ def key_stand_in(hang):
 
 def preview(door, hang, surface, width=520):
     """Stills lit as the basement lights it: a dark room, and a torch held beside the eye."""
-    import numpy as np
-
     key_stand_in(hang)
     scene = bpy.context.scene
     scene.render.engine = "CYCLES"
@@ -963,12 +729,7 @@ def preview(door, hang, surface, width=520):
         at = eye + side * 0.25 - Vector((0.0, 0.2, 0.0))
         torch.location = bv(*at)
         torch.rotation_euler = (bv(*target) - bv(*at)).to_track_quat("-Z", "Y").to_euler()
-        scene.render.filepath = os.path.join(OUT, "preview", f"{surface}_{stem}.png")
-        bpy.ops.render.render(write_still=True)
-        img = bpy.data.images.load(scene.render.filepath)
-        px = np.array(img.pixels[:], dtype=np.float32).reshape(img.size[1], img.size[0], 4)
-        bpy.data.images.remove(img)
-        return px
+        return rendered(os.path.join(OUT, "preview", f"{surface}_{stem}.png"))
 
     mid = Vector((0.0, 0.13, 0.0))
     views = [("front", Vector((0.0, 0.13, 2.0))), ("threeq", Vector((-1.3, 0.8, 1.3))),
@@ -981,15 +742,8 @@ def preview(door, hang, surface, width=520):
     opened = [shoot(e, mid, 0.3, f"open_{n}") for n, e in views[:2]]
     opened.append(shoot(Vector((-0.6, DOOR_Y + 0.25, 2.0)), door_at, 0.13, "open_close"))
     door.rotation_euler = (0.0, 0.0, 0.0)
-    rows = [np.concatenate(shut, axis=1), np.concatenate(opened + [close], axis=1)]
-    sheet = np.concatenate(rows[::-1], axis=0)
-    h, w = sheet.shape[:2]
-    out = bpy.data.images.new("sheet", w, h, alpha=True)
-    out.pixels.foreach_set(sheet.ravel())
-    out.filepath_raw = os.path.join(OUT, "preview", f"sheet_{surface}.png")
-    out.file_format = "PNG"
-    out.save()
-    print(f"preview: {out.filepath_raw}", flush=True)
+    save_sheet(shut + opened + [close], len(shut),
+               os.path.join(OUT, "preview", f"sheet_{surface}.png"))
 
 
 # ---------------------------------------------------------------------------------------------
@@ -1009,8 +763,7 @@ def main():
     args = args_after_dashes()
     os.makedirs(OUT, exist_ok=True)
     bpy.ops.wm.read_factory_settings(use_empty=True)
-    mats = make_materials()
-    cage, hull, door, hang = build_cage(mats)
+    cage, hull, door, hang = build_cage()
     tris = sum(len(p.vertices) - 2 for ob in (cage, hull, door) for p in ob.data.polygons)
     print(f"cage: {tris} triangles", flush=True)
     texture([cage, hull, door], args.surface)

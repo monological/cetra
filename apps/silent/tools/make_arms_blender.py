@@ -48,6 +48,7 @@ the check that no pose asks a wrist for what a wrist cannot do, and --movie play
 
 import argparse
 import bisect
+import functools
 import math
 import os
 import re
@@ -60,10 +61,12 @@ from mathutils import Matrix, Quaternion, Vector
 from mathutils.bvhtree import BVHTree
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import make_birdcage_blender as cage_model  # noqa: E402 -- the tools' own modules, found beside this one
-from glb import read_glb  # noqa: E402
-from make_birdcage_blender import BV, Parts, bv, finish, lathe, placed, smooth, srgb  # noqa: E402
-from polyhaven import cached_path, fetch, polyhaven_urls  # noqa: E402
+# The tools' own modules, found beside this one.
+import make_birdcage_blender as cage_model  # noqa: E402
+from blender_kit import (BV, Parts, bv, export_glb, finish, import_glb, lathe,  # noqa: E402
+                         material, mv, polyhaven_images, rendered, save_sheet, shrink_masks,
+                         smooth, srgb, use_gpu)
+from glb import credit, read_glb, triangles  # noqa: E402
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 OUT = os.path.join(ROOT, "out", "arms_blender")
@@ -71,11 +74,6 @@ GLB = os.path.join(ROOT, "assets", "models", "arms.glb")
 HEADER = os.path.join(ROOT, "apps", "silent", "src", "arms_clips.h")
 FPS = 30
 BV4 = BV.to_4x4()
-
-
-def mv(v):
-    """A Blender-space vector in model space."""
-    return Vector((v.x, v.z, -v.y))
 
 
 # ---------------------------------------------------------------------------------------------
@@ -196,24 +194,19 @@ def load_hand():
     palm_len = digits["Middle"]["joints"][1].x
     grip = 0.55 * palm_len
     near = [v for v in verts if abs(v.x - grip) < 0.01 and abs(v.y) < 0.012]
-    js, _ = read_glb(HAND_GLB)
-    notes = js.get("asset", {}).get("extras", {})
     mat = skin.data.materials[0]
     mat.name = "arm_skin"
+    shrink_masks(mat)
     for o in new:
         bpy.data.objects.remove(o)
     # Its own clip goes too, or the export carries it beside this rig's.
     for a in set(bpy.data.actions) - before_actions:
         bpy.data.actions.remove(a)
     HAND.update(verts=verts, faces=faces, uvs=uvs, weights=weights, digits=digits, cut=cut,
-                material=mat, palm_len=palm_len, grip=grip,
-                palm_side=min(v.z for v in near), back_side=max(v.z for v in near),
-                credit=(f"Hands: \"{notes.get('title', '')}\" by {notes.get('author', '')}, "
-                        f"{notes.get('source', '')}, {notes.get('license', '')}; modified. "
-                        "This model is CC-BY-SA 4.0."))
-    print(f"hand: {len(verts)} vertices, palm {palm_len:.3f} m, back of the hand "
-          f"{HAND['back_side']:.4f} and palm {HAND['palm_side']:.4f} off its axis, the wrist cut "
-          f"{2.0 * cut[0]:.3f} by {2.0 * cut[1]:.3f} m", flush=True)
+                material=mat, palm_len=palm_len, grip=grip, palm_side=min(v.z for v in near),
+                credit=credit(HAND_GLB, "Hands") + "; modified. This model is CC-BY-SA 4.0.")
+    print(f"hand: {len(verts)} vertices, palm {palm_len:.3f} m, palm {HAND['palm_side']:.4f} off "
+          f"its axis, the wrist cut {2.0 * cut[0]:.3f} by {2.0 * cut[1]:.3f} m", flush=True)
 
 
 def arm_weights(x, own):
@@ -472,13 +465,11 @@ def iron():
     what fingers close on. The door is left out: nothing grips it, and the forefinger that opens
     it is placed on it exactly."""
     if not _IRON:
-        before = set(bpy.data.objects)
-        bpy.ops.import_scene.gltf(filepath=cage_model.CAGE_GLB)
-        new = set(bpy.data.objects) - before
+        new = import_glb(cage_model.CAGE_GLB)
         dg = bpy.context.evaluated_depsgraph_get()
         verts, polys = [], []
-        for ob in new:
-            if ob.type != "MESH" or re.sub(r"\.\d+$", "", ob.name) == "cage_door":
+        for name, ob in new.items():
+            if ob.type != "MESH" or name == "cage_door":
                 continue
             ev = ob.evaluated_get(dg)
             me = ev.to_mesh()
@@ -486,7 +477,7 @@ def iron():
             verts += [mv(ob.matrix_world @ v.co) for v in me.vertices]
             polys += [[first + i for i in p.vertices] for p in me.polygons]
             ev.to_mesh_clear()
-        for ob in new:
+        for ob in new.values():
             bpy.data.objects.remove(ob)
         _IRON.append(BVHTree.FromPolygons(verts, polys))
     return _IRON[0]
@@ -542,12 +533,6 @@ def close_on(hand, side, cage, skip=()):
         thumb = closed(lambda t: touches(finger_chain(hand._replace(thumb=t), side, "Thumb")[0],
                                          to_cage), hand.thumb)
     return hand._replace(fingers=fingers, thumb=thumb)
-
-
-def wrist_for_tip(hand, side, name, tip):
-    """The hand moved so the tip of `name` is at `tip`, turned and bent as it is."""
-    joints, _ = finger_chain(hand, side, name)
-    return hand._replace(wrist=hand.wrist + (tip - joints[-1]))
 
 
 def wrist_for_grip(hand, side, at):
@@ -1081,9 +1066,8 @@ def clip_wait():
 
 
 # The door's swing in `open`: it turns from shut to DOOR_OPEN between these, eased as `smooth`
-# eases, and the pinch rides its free edge for the first DOOR_RIDE of the way.
+# eases, and the pinch rides its free edge for the first half or so of the way.
 DOOR_FROM, DOOR_TO = 0.5, 0.98
-DOOR_RIDE = 0.55
 
 
 def door_angle(t):
@@ -1234,9 +1218,9 @@ class Rig:
             p = self.parent[n]
             self.rest_rel[n] = (self.rest[p].inverted() @ self.rest[n]) if p else self.rest[n]
 
-    def basis(self, f):
-        """Each bone's matrix_basis for a Frame."""
-        M = {n: BV4 @ m for n, m in solve(f).items()}
+    def basis(self, solved):
+        """Each bone's matrix_basis for a solved Frame."""
+        M = {n: BV4 @ m for n, m in solved.items()}
         out = {}
         for n, _ in BONES:
             p = self.parent[n]
@@ -1247,8 +1231,10 @@ class Rig:
         return out
 
 
+@functools.cache
 def clip_named(name):
-    """A clip of CLIPS made continuous, its last key where CLIPS says it ends."""
+    """A clip of CLIPS made continuous, its last key where CLIPS says it ends. Built once: its
+    hands close on the cage by search."""
     seconds, looping, keys, _ = CLIPS[name]
     clip = Clip(keys(), looping)
     if abs(clip.seconds - seconds) > 1e-6:
@@ -1265,7 +1251,7 @@ def key_clip(arm, rig, name, clip):
     channels, prev = {}, {}
     for f in range(frames + 1):
         t = min(f / FPS, clip.seconds)
-        for n, b in rig.basis(clip.at(t)).items():
+        for n, b in rig.basis(solve(clip.at(t))).items():
             loc, q, _ = b.decompose()
             if n in prev and prev[n].dot(q) < 0.0:
                 q = -q
@@ -1290,19 +1276,6 @@ def key_clip(arm, rig, name, clip):
 
 # ---------------------------------------------------------------------------------------------
 # The meshes, built in the bind pose
-
-
-def ring(centre, x_ax, z_ax, rx, rz, n, power=2.0):
-    """A closed loop of n points round `centre` in the plane of x_ax and z_ax, a superellipse of
-    half-axes rx and rz (power 2 an ellipse, more a rounder box)."""
-    out = []
-    for k in range(n):
-        t = 2.0 * math.pi * k / n
-        c, s = math.cos(t), math.sin(t)
-        cx = math.copysign(abs(c) ** (2.0 / power), c)
-        sz = math.copysign(abs(s) ** (2.0 / power), s)
-        out.append(centre + x_ax * (rx * cx) + z_ax * (rz * sz))
-    return out
 
 
 def sweep(rings, cap_start=True, cap_end=True):
@@ -1372,10 +1345,10 @@ def sleeve_radius(along_fore):
     return r + 0.001 * math.exp(-(to_cuff / 0.004) ** 2)
 
 
-def sleeve_mesh(f, side, parts, uvs):
-    """The jacket's sleeve, from behind the shoulder to its cuff short of the wrist, wrinkled where
-    an arm bends, its cuff a band with a lip and the cloth's edge turned in."""
-    M = solve(f)
+def sleeve_mesh(M, side, parts, uvs):
+    """The jacket's sleeve on the solved pose `M`, from behind the shoulder to its cuff short of
+    the wrist, wrinkled where an arm bends, its cuff a band with a lip and the cloth's edge turned
+    in."""
     s_name = "L" if side > 0 else "R"
     up_m, fore_m = M[f"UpperArm.{s_name}"], M[f"ForeArm.{s_name}"]
     shoulder, elbow = up_m.translation, fore_m.translation
@@ -1434,13 +1407,11 @@ def sleeve_mesh(f, side, parts, uvs):
         for k in range(n):
             uvs[base + i * n + k] = (k / n * circ / SLEEVE_TILE, rows[i] / SLEEVE_TILE)
     uvs[base + len(rings) * n] = (0.0, 0.0)
-    return wrist, fore_dir
 
 
-def button_mesh(f, side, parts):
-    """A horn button on the cuff, on its outer side."""
+def button_mesh(M, side, parts):
+    """A horn button on the cuff, on its outer side, on the solved pose `M`."""
     s_name = "L" if side > 0 else "R"
-    M = solve(f)
     elbow = M[f"ForeArm.{s_name}"].translation
     wrist = M[f"Hand.{s_name}"].translation
     fore = (wrist - elbow).normalized()
@@ -1513,28 +1484,12 @@ def paint(obj, colour_of):
 # Materials
 
 
-def material(name, colour, rough, metal=0.0):
-    m = bpy.data.materials.new(name)
-    m.use_backface_culling = True
-    bsdf = next(n for n in m.node_tree.nodes if n.type == "BSDF_PRINCIPLED")
-    bsdf.inputs["Base Color"].default_value = (*colour, 1.0)
-    bsdf.inputs["Roughness"].default_value = rough
-    bsdf.inputs["Metallic"].default_value = metal
-    return m, bsdf
-
-
 def cloth_material():
     """The jacket's olive canvas: Poly Haven's CC0 `book_pattern` weave, repeated along the
     sleeve, darkened toward a field jacket's olive drab."""
     # It ships colourways rather than one Diffuse; the first is the olive.
-    urls, _ = polyhaven_urls("book_pattern", {"albedo": "col1", "normal": "nor_gl",
-                                              "rough": "Rough"}, "1k")
-    images = {}
-    for kind, url in urls.items():
-        fetch(url)
-        img = bpy.data.images.load(cached_path(url), check_existing=True)
-        img.colorspace_settings.name = "sRGB" if kind == "albedo" else "Non-Color"
-        images[kind] = img
+    images, _ = polyhaven_images("book_pattern", {"albedo": "col1", "normal": "nor_gl",
+                                                  "rough": "Rough"}, "1k")
     m, bsdf = material("arm_sleeve", (1.0, 1.0, 1.0), 0.85)
     tree = m.node_tree
     albedo = tree.nodes.new("ShaderNodeTexImage")
@@ -1548,6 +1503,7 @@ def cloth_material():
     nmap = tree.nodes.new("ShaderNodeNormalMap")
     tree.links.new(normal.outputs["Color"], nmap.inputs["Color"])
     tree.links.new(nmap.outputs["Normal"], bsdf.inputs["Normal"])
+    shrink_masks(m)
     return m
 
 
@@ -1559,7 +1515,7 @@ def build_meshes(arm):
     for s, side in SIDES:
         hand_ob = hand_mesh(s, side)
         cloth, uvs = Parts(), {}
-        sleeve_mesh(REST, side, cloth, uvs)
+        sleeve_mesh(rest, side, cloth, uvs)
         sleeve = finish(f"sleeve_{s}", cloth, cloth_m, sharp_degrees=80.0)
         uv = sleeve.data.uv_layers.new(name="UV")
         for loop in sleeve.data.loops:
@@ -1568,7 +1524,7 @@ def build_meshes(arm):
         paint(sleeve, lambda p, open_: (0.55 + 0.45 * open_,) * 3)
 
         buttons = Parts()
-        button_mesh(REST, side, buttons)
+        button_mesh(rest, side, buttons)
         button = finish(f"button_{s}", buttons, button_m)
         weigh(button, rest, [f"ForeArm.{s}"], 0.01)
         objects += [hand_ob, sleeve, button]
@@ -1584,8 +1540,7 @@ def build_meshes(arm):
 
 
 def export(path):
-    props = bpy.ops.export_scene.gltf.get_rna_type().properties.keys()
-    want = dict(
+    export_glb(
         filepath=path, export_format="GLB", export_yup=True, use_selection=False,
         export_apply=False, export_animations=True, export_animation_mode="ACTIONS",
         export_force_sampling=True, export_frame_step=1, export_optimize_animation_size=False,
@@ -1598,10 +1553,6 @@ def export(path):
         export_rest_position_armature=True, export_anim_slide_to_zero=False,
         export_reset_pose_bones=True, export_bake_animation=False,
     )
-    missing = [k for k in want if k not in props]
-    if missing:
-        print(f"export: this Blender has no {', '.join(missing)}; left at its defaults", flush=True)
-    bpy.ops.export_scene.gltf(**{k: v for k, v in want.items() if k in props})
 
 
 def node_globals(js):
@@ -1652,15 +1603,14 @@ def self_check(path):
                 problems.append(f"{b} rests at\n{have}\nnot\n{want}")
     if problems:
         sys.exit("self-check:\n  " + "\n  ".join(problems))
-    tris = sum(js["accessors"][p["indices"]]["count"] // 3
-               for m in js["meshes"] for p in m["primitives"])
-    print(f"self-check: {len(joints)} joints, {len(anims)} clips, {tris} triangles, "
+    print(f"self-check: {len(joints)} joints, {len(anims)} clips, {triangles(js)} triangles, "
           f"{os.path.getsize(path) / 1024:.0f} KiB", flush=True)
 
 
 KEY_BONE = "Index3.R"  # the forefinger's last bone, which the key rides once it is taken
 
 
+@functools.cache
 def key_on_finger():
     """The key's frame in KEY_BONE's while the pinch carries it, as it is when the pinch closes:
     its bow's wire between the pads, its face to them, lying along the door's opening with its bit
@@ -1761,10 +1711,7 @@ class Stage:
     def __init__(self, arm, rig, width):
         self.arm, self.rig = arm, rig
         scene = self.scene = bpy.context.scene
-        before = set(bpy.data.objects)
-        bpy.ops.import_scene.gltf(filepath=cage_model.CAGE_GLB)
-        # By the names the file gives them, whatever Blender suffixed to a second import's.
-        found = {re.sub(r"\.\d+$", "", o.name): o for o in set(bpy.data.objects) - before}
+        found = import_glb(cage_model.CAGE_GLB)
         self.cage, self.shell = found["cage"], found["cage_shell"]
         self.door, self.hang = found["cage_door"], found["key_hang"]
         self.door_rest = self.door.matrix_basis.copy()
@@ -1807,9 +1754,7 @@ class Stage:
         scene.collection.objects.link(self.torch)
         # The lamp itself, seen only from the side, as the game draws no body; the light leaves
         # its lens, so the lamp casts nothing. Nor do the arms, as in the game.
-        before = set(bpy.data.objects)
-        bpy.ops.import_scene.gltf(filepath=FLASHLIGHT_GLB)
-        found = {re.sub(r"\.\d+$", "", o.name): o for o in set(bpy.data.objects) - before}
+        found = import_glb(FLASHLIGHT_GLB)
         self.lamp = found["flashlight"]
         self.lens = mv(found["lens"].location)
         self.lamp.visible_shadow = False
@@ -1827,14 +1772,14 @@ class Stage:
     def pose(self, name, clip, t):
         """Everything as `name` has it `t` seconds in: the arms, the cage, its door and the key."""
         f = clip.at(t)
-        for n, b in self.rig.basis(f).items():
+        M = solve(f)
+        for n, b in self.rig.basis(M).items():
             self.arm.pose.bones[n].matrix_basis = b
         self.cage.matrix_world = BV4 @ f.cage @ BV4.inverted()
         angle = door_angle(t) if name == "open" else (
             cage_model.DOOR_OPEN if name in ("wait", "take") else 0.0)
         self.door.matrix_basis = self.door_rest @ Matrix.Rotation(angle, 4, "Z")
         bpy.context.view_layer.update()
-        M = solve(f)
         if name == "take" and t >= KEY_TAKEN:
             # The stand-in's mesh is in Blender's space, so its frame is the body's turned there.
             self.key.matrix_world = BV4 @ M[KEY_BONE] @ key_on_finger() @ BV4.inverted()
@@ -1847,12 +1792,13 @@ class Stage:
         self.torch.location = bv(*lamp.translation)
         self.torch.rotation_euler = bv(*(lamp.to_3x3() @ Vector((0.0, 1.0, 0.0)))).to_track_quat(
             "-Z", "Y").to_euler()
-        # The lamp's model, its lens toward +z, put with its lens on the bone and facing along it.
+        # The lamp's model, its lens toward -x, put with its lens on the bone and facing along it.
         self.lamp.matrix_world = (BV4 @ lamp @ LAMP_TURN @ Matrix.Translation(-self.lens) @
                                   BV4.inverted())
 
     def shoot(self, which, path):
-        """The player's own view, or the whole of the arms from their right, into `path`."""
+        """The player's own view, or the whole of the arms from their right, into `path`, and
+        its pixels."""
         self.lamp.hide_render = which == "eye"
         if which == "eye":
             self.cam_data.type = "PERSP"
@@ -1866,17 +1812,14 @@ class Stage:
             self.cam.location = bv(*(at + Vector((-2.0, 0.3, 0.0))))
             self.cam.rotation_euler = (bv(*at) - self.cam.location).to_track_quat(
                 "-Z", "Y").to_euler()
-        self.scene.render.filepath = path
-        bpy.ops.render.render(write_still=True)
+        return rendered(path)
 
 
 def stills(arm, rig, specs, width=640):
     """Each clip@seconds in `specs`, from the eye and from the side, tiled into one sheet."""
-    import numpy as np
-
     stage = Stage(arm, rig, width)
     stage.scene.render.engine = "CYCLES"
-    cage_model.use_gpu()
+    use_gpu()
     stage.scene.cycles.samples = 96
     stage.scene.cycles.use_denoising = True
     os.makedirs(os.path.join(OUT, "preview"), exist_ok=True)
@@ -1888,24 +1831,9 @@ def stills(arm, rig, specs, width=640):
         clip = clips.setdefault(name, clip_named(name))
         stage.pose(name, clip, t)
         for which in ("eye", "side"):
-            path = os.path.join(OUT, "preview", f"{name}_{t:.2f}_{which}.png")
-            stage.shoot(which, path)
-            img = bpy.data.images.load(path)
-            px = np.array(img.pixels[:], dtype=np.float32).reshape(img.size[1], img.size[0], 4)
-            bpy.data.images.remove(img)
-            tiles.append(px)
-    cols = 4
-    while len(tiles) % cols:
-        tiles.append(np.zeros_like(tiles[0]))
-    rows = [np.concatenate(tiles[i:i + cols], axis=1) for i in range(0, len(tiles), cols)]
-    sheet = np.concatenate(rows[::-1], axis=0)
-    h, w = sheet.shape[:2]
-    out = bpy.data.images.new("sheet", w, h, alpha=True)
-    out.pixels.foreach_set(sheet.ravel())
-    out.filepath_raw = os.path.join(OUT, "preview", "sheet.png")
-    out.file_format = "PNG"
-    out.save()
-    print(f"preview: {out.filepath_raw}", flush=True)
+            tiles.append(stage.shoot(which, os.path.join(OUT, "preview",
+                                                         f"{name}_{t:.2f}_{which}.png")))
+    save_sheet(tiles, 4, os.path.join(OUT, "preview", "sheet.png"))
 
 
 def movies(arm, rig, names, width=640):
