@@ -48,8 +48,11 @@ typedef struct Player {
     bool use_gait;       // the gait moves the eye and paces a climb
     bool crouch_toggled; // the toggle asks for a crouch; the held key asks besides
     float crouch_eased;  // 0..1, how far the eye has gone down toward a crouch's
-    bool holding;        // both hands hold something: no walking, looking or crouching
-    bool trace;          // print every step's move and every frame's eye
+    // Both hands hold something (spec 13.55): the body stops with its stance kept, nothing turns
+    // the view, which what is held poses, and the cursor stays captured, where a screen holding the
+    // game's input would free it.
+    bool holding;
+    bool trace; // print every step's move and every frame's eye
 } Player;
 
 // Stands the capsule on the floor at `feet`, looking along `yaw` and `pitch` (radians, the rig's
@@ -68,11 +71,6 @@ void player_restore(Player* p);
 
 // Fixed step: turns the move actions into the capsule's velocity.
 void player_update(Player* p, Game* game, double dt);
-
-// Something held in both hands (spec 13.55), or put down: while held the body comes to a stop and
-// stays, its stance kept, and neither the mouse nor the look actions turn the view, which whatever
-// is held poses. The cursor stays captured, where a screen holding the game's input would free it.
-void player_hold(Player* p, bool holding);
 
 // Per rendered frame: the body drawn between the last two steps, the gait, the look, the cursor,
 // and the rig onto the head. Under a pin, the camera is held at eye/target instead.

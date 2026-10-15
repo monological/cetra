@@ -104,7 +104,7 @@ static void take_hold(Inspect* in) {
     camera_rig_set_pose(in->rig, in->player->rig->pose.eye, in->player->rig->pose.look);
     camera_rig_blend_from_here(in->rig, SETTLE);
     engine_set_camera_rig(in->game->engine, in->rig);
-    player_hold(in->player, true);
+    in->player->holding = true;
     in->spin = 0.0f;
     in->carried = false;
 }
@@ -180,7 +180,7 @@ static void begin_return(Inspect* in) {
 static void let_go(Inspect* in) {
     arms_show(in->arms, false);
     engine_set_camera_rig(in->game->engine, in->player->rig);
-    player_hold(in->player, false);
+    in->player->holding = false;
     lights_flashlight_release(in->lights);
     enter(in, INSPECT_NONE);
 }
