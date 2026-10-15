@@ -1740,6 +1740,13 @@ def write_header():
     ]
     with open(HEADER, "w") as f:
         f.write("\n".join(lines))
+    # Laid out as the commit hook lays it out, so a run that changes nothing changes no byte.
+    import shutil
+    import subprocess
+
+    fmt = shutil.which("clang-format") or "/opt/homebrew/bin/clang-format"
+    if os.path.exists(fmt):
+        subprocess.run([fmt, "-i", HEADER], check=True)
 
 
 # ---------------------------------------------------------------------------------------------
