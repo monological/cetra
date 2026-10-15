@@ -287,13 +287,16 @@ void player_pre_render(Player* p, Game* game, const vec3* pin_eye, const vec3* p
     // The debug GUI wants the pointer: while it is open the cursor is free and a click does not
     // take it back, or its sliders could not be reached. The arrow keys still look. While the
     // game's input is held a click takes nothing either: nobody looks round a room they cannot see.
-    // Captured after the look, so the jump a capture makes lands in the delta it skips.
+    // A window shares the desktop, so there the cursor waits for a click; fullscreen has nothing
+    // else on the screen to point at, and takes it whenever play has the input. Captured after the
+    // look, so the jump a capture makes lands in the delta it skips.
     if (engine->show_gui)
         p->cursor_wanted = false;
     else if (input_mouse_pressed(&game->input, GLFW_MOUSE_BUTTON_LEFT) &&
              !engine_gui_wants_mouse() && !held)
         p->cursor_wanted = true;
-    set_cursor_captured(p, engine, p->cursor_wanted && !held);
+    const bool fullscreen = engine->window_mode == ENGINE_WINDOW_FULLSCREEN && !engine->show_gui;
+    set_cursor_captured(p, engine, (p->cursor_wanted || fullscreen) && !held);
 
     glm_vec3_copy(anchor, p->rig->anchor);
     const float look = p->holding ? 0.0f : 1.0f;
