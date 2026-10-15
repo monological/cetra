@@ -609,13 +609,12 @@ static int _setup_engine_glfw(Engine* engine, EngineWindowMode window_mode, cons
     // Into the requested mode BEFORE the sizes are read, so what lands below is
     // the size the window will actually render at rather than the windowed one
     // it was created with. The callback is not registered yet, which is exactly
-    // why this has to precede the read rather than rely on it. Unguarded: the
-    // window is windowed, so a windowed request is the switch's own no-op, and
-    // an out-of-range one is refused there by name rather than dropped here.
+    // why this has to precede the read rather than rely on it. A windowed request
+    // is the switch's own no-op, and an out-of-range one is refused there by name.
     // Fullscreen is laid over its monitor BORDERLESS for now, the same rectangle: GLFW will
     // not show a window that is already on a monitor, and this one is shown only at the end
-    // of creation, so put there now it was never seen at all. It goes onto the monitor once
-    // it is shown.
+    // of creation, so put there now it was never seen at all. The show puts it in the mode
+    // asked for.
     engine_set_window_mode(
         engine, window_mode == ENGINE_WINDOW_FULLSCREEN ? ENGINE_WINDOW_BORDERLESS : window_mode,
         monitor);
@@ -1264,8 +1263,9 @@ static int _engine_init(Engine* engine, const EngineConfig* cfg) {
     // the first frame's top rebuilds for it.
     if (!engine->headless) {
         glfwShowWindow(engine->window);
-        if (cfg->window_mode == ENGINE_WINDOW_FULLSCREEN)
-            engine_set_window_mode(engine, ENGINE_WINDOW_FULLSCREEN, cfg->monitor);
+        // The mode asked for, now it is shown: a no-op for any but fullscreen, which went on
+        // borderless above.
+        engine_set_window_mode(engine, cfg->window_mode, cfg->monitor);
         // Asked of the window system, not assumed: a window it would not show runs the whole
         // game with nothing on the screen.
         if (!glfwGetWindowAttrib(engine->window, GLFW_VISIBLE))
