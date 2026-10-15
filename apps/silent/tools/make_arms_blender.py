@@ -103,6 +103,9 @@ FACE = Vector((0.0, cage_model.DOOR_Y, cage_model.DOOR_FRAME_R + cage_model.RING
 # The flashlight is clipped to the jacket's left chest, out of the right hand's way: its lens here
 # from the standing eye. It rides the body's lean, never the head's look.
 LAMP_AT = Vector((0.10, -0.25, 0.05))
+# Where it is aimed, from the middle of the cage's face, in the body's frame: low and to the left,
+# so the light sits on the cage rather than being thrown up past it onto the wall behind.
+LAMP_AIM = Vector((0.03, -0.05, 0.0))
 FLASHLIGHT_GLB = os.path.join(ROOT, "assets", "models", "flashlight.glb")
 # The lamp model's axes onto the Lamp bone's: its lens's -x along the bone's +Y, its up its +Z.
 LAMP_TURN = Matrix(((0.0, 0.0, -1.0), (-1.0, 0.0, 0.0), (0.0, 1.0, 0.0))).to_4x4()
@@ -622,7 +625,7 @@ def solve(f):
                       Vector((0.0, math.cos(p), -math.sin(p))))
     M["Cage"] = f.cage.copy()
     lamp = leaned(LAMP_AT, f.lean)
-    M["Lamp"] = frame(lamp, f.cage @ FACE - lamp, Vector((0.0, 1.0, 0.0)))
+    M["Lamp"] = frame(lamp, f.cage @ FACE + LAMP_AIM - lamp, Vector((0.0, 1.0, 0.0)))
     for s, side in SIDES:
         hand = f.hands[s]
         shoulder, elbow, wrist = arm_of(hand, side, f.lean)
