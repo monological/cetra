@@ -611,10 +611,9 @@ static int _setup_engine_glfw(Engine* engine, EngineWindowMode window_mode, cons
     // it was created with. The callback is not registered yet, which is exactly
     // why this has to precede the read rather than rely on it. A windowed request
     // is the switch's own no-op, and an out-of-range one is refused there by name.
-    // Fullscreen is laid over its monitor BORDERLESS for now, the same rectangle: GLFW will
-    // not show a window that is already on a monitor, and this one is shown only at the end
-    // of creation, so put there now it was never seen at all. The show puts it in the mode
-    // asked for.
+    // Fullscreen is laid over its monitor BORDERLESS for now, the same rectangle: on Windows
+    // and X11 taking a monitor shows the window, and it stays hidden until the end of creation.
+    // It takes the monitor there, still hidden on macOS, just before it is shown.
     engine_set_window_mode(
         engine, window_mode == ENGINE_WINDOW_FULLSCREEN ? ENGINE_WINDOW_BORDERLESS : window_mode,
         monitor);
@@ -1262,10 +1261,16 @@ static int _engine_init(Engine* engine, const EngineConfig* cfg) {
     // shown window turns out to have reaches the framebuffer-size callback, registered above, and
     // the first frame's top rebuilds for it.
     if (!engine->headless) {
-        glfwShowWindow(engine->window);
-        // The mode asked for, now it is shown: a no-op for any but fullscreen, which went on
-        // borderless above.
+        // The mode asked for while still hidden, so the window first appears in it: a no-op for
+        // any but fullscreen, which went on borderless above. Shown borderless and switched after,
+        // it lost focus in the switch, and a fullscreen window that loses focus is minimized.
         engine_set_window_mode(engine, cfg->window_mode, cfg->monitor);
+        // GLFW will not show a window already on a monitor, and shows one by focusing it, as
+        // its own creation of a fullscreen window does.
+        if (glfwGetWindowMonitor(engine->window))
+            glfwFocusWindow(engine->window);
+        else
+            glfwShowWindow(engine->window);
         // Asked of the window system, not assumed: a window it would not show runs the whole
         // game with nothing on the screen.
         if (!glfwGetWindowAttrib(engine->window, GLFW_VISIBLE))
