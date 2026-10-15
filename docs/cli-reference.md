@@ -1041,8 +1041,8 @@ The flags:
 
 **The backpack** (spec 13.40). It lies on the bed in the home's back bedroom, the flashlight in it;
 until it is taken F finds nothing and the cellar flight's foot is as far as the player goes. The
-flashlight is an army lamp clipped to the jacket's left chest (spec 13.55), its beam aimed at what
-the player looks at. Its
+flashlight is an army lamp clipped high on the jacket's chest, a little to the left (spec 13.55),
+its beam aimed at what the player looks at. Its
 screen lists what it holds in a grid and turns the chosen one: the arrows, WASD or the D-pad walk
 the grid, and Enter, E, pad A or a click chooses; Tab or Escape (pad B) shuts it.
 - **`--backpack`:** starts with the backpack, the flashlight in it.
