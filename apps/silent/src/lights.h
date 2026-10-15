@@ -79,6 +79,8 @@ void lights_toggle_flashlight(Lights* lights);
 // `at` along `dir`, and lit while `weight` is above 0; 0 gives it back to the player and the
 // switch.
 void lights_flashlight_hold(Lights* lights, const vec3 at, const vec3 dir, float weight);
+// The beam given back to the player and the switch.
+void lights_flashlight_release(Lights* lights);
 // Whether the beam is lit: its switch on, or held.
 bool lights_flashlight_lit(const Lights* lights);
 

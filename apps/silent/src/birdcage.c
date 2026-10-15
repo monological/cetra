@@ -1,7 +1,5 @@
 #include <stdio.h>
 
-#include "cetra/program.h"
-
 #include "basement.h"
 #include "birdcage.h"
 #include "library.h"
@@ -21,8 +19,7 @@ bool birdcage_build(Birdcage* cage, Engine* engine, Scene* scene) {
     cage->node = library_take(engine, scene, CAGE_MODEL, "birdcage", NULL);
     if (!cage->node)
         return false;
-    mat4 frame = GLM_MAT4_IDENTITY_INIT;
-    cage->door = library_find(cage->node, "cage_door", frame);
+    cage->door = library_find(cage->node, "cage_door", NULL);
     if (!cage->door || !library_find(cage->node, "key_hang", cage->hang)) {
         fprintf(stderr, "silent: %s has no door or no hook\n", CAGE_MODEL);
         free_node(cage->node);
@@ -30,7 +27,7 @@ bool birdcage_build(Birdcage* cage, Engine* engine, Scene* scene) {
         return false;
     }
     glm_mat4_copy(cage->door->original_transform, cage->door_rest);
-    node_set_program(cage->node, engine_get_program(engine, CETRA_PROGRAM_PBR));
+    library_programs(engine, cage->node);
     // It is moved while the game runs, so no capture keeps it.
     cage->node->capture_hidden = true;
 

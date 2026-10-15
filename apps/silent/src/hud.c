@@ -191,6 +191,10 @@ void hud_think_for(Hud* hud, const char* text, float seconds) {
     hud->thought_stay = seconds;
 }
 
+bool hud_thinking(const Hud* hud) {
+    return hud->ui && line_shown(&hud->thought);
+}
+
 void hud_saved(Hud* hud) {
     hud->saved_age = hud->saved_age < SAVE_END ? fminf(hud->saved_age, SAVE_LIGHTING) : 0.0f;
 }

@@ -17,13 +17,15 @@
 
 // The model in `path` under a node named `name`, its file's own frame, and its library in
 // `*library` when that is not NULL; NULL, said by name, when it cannot be loaded. Its textures are
-// in when this returns: two files' embedded pictures go by the same names, so no load is left in
-// flight for the next file's to answer.
+// in when this returns.
 SceneNode* library_take(Engine* engine, Scene* game, const char* path, const char* name,
                         Scene** library);
 
-// The node named `name` under `root` and its frame in `root`'s, every transform between them taken
-// in; NULL when there is none.
+// Every material under `model` drawn with the lit surface, skinned where its mesh is.
+void library_programs(Engine* engine, SceneNode* model);
+
+// The node named `name` under `root`, `root` itself left out, and its frame in `root`'s in `frame`
+// when that is not NULL, every transform between them taken in; NULL when there is none.
 SceneNode* library_find(SceneNode* root, const char* name, mat4 frame);
 
 #endif // _SILENT_LIBRARY_H_

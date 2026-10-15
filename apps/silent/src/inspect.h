@@ -43,7 +43,7 @@ typedef void (*InspectTakeFn)(double time);
 typedef struct Inspect {
     InspectState state;
     float t; // seconds in the state
-    Engine* engine;
+    Game* game;
     Arms* arms;
     Birdcage* cage;
     HouseKey* key;
@@ -51,31 +51,29 @@ typedef struct Inspect {
     Hud* hud;
     Player* player;
     InspectTakeFn take;
-    CameraRig* rig; // the view while it lasts, this module's
-    mat4 body;      // the pickup's framing in the world: the standing eye before the cage
-    vec3 from_eye;  // the view a glide starts from
-    vec3 from_dir;
+    CameraRig* rig;  // the view while it lasts, this module's
     float spin;      // the player's turn of the cage on the palm, radians
     float spin_from; // what it was as it began to be turned back
     float door;      // the door's angle, radians
-    float beat;      // seconds since the look, below 0 before it
+    float quiet;     // seconds no thought has been on the screen since the look's
     int thoughts;    // the beat's lines had so far
     bool carried;    // the key is in the pinch
-    double time;     // the sim time of this frame, for the take
     bool trace;      // print every state and event
 } Inspect;
 
 // Nothing held. All but the rig are borrowed.
-void inspect_init(Inspect* in, Engine* engine, Arms* arms, Birdcage* cage, HouseKey* key,
+void inspect_init(Inspect* in, Game* game, Arms* arms, Birdcage* cage, HouseKey* key,
                   Lights* lights, Hud* hud, Player* player, InspectTakeFn take);
 void inspect_free(Inspect* in);
 
+// Whether the cage can be picked up: the arms, the cage and the view were all had.
+bool inspect_ready(const Inspect* in);
 // The cage picked up from the bench: the view starts settling onto it.
 void inspect_pick_up(Inspect* in);
 // Already holding it, for a picture: shut and being turned, or open with the hand waiting.
 void inspect_start_held(Inspect* in, bool open);
 // Per rendered frame, after the player's own and before anything reads the view or the beam.
-void inspect_frame(Inspect* in, Game* game);
+void inspect_frame(Inspect* in);
 // Whether something is held, or the view is still going to or from it.
 bool inspect_active(const Inspect* in);
 // What the action keys would do now, or NULL.

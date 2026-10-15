@@ -405,8 +405,12 @@ void lights_update(Lights* lights, Scene* scene, double time, float dt, const ve
         const float k = 1.0f - expf(-dt * 14.0f);
         glm_vec3_lerp(lights->flashlight_dir, (float*)forward, k, lights->flashlight_dir);
         glm_vec3_normalize(lights->flashlight_dir);
-        lights->flashlight_reach =
-            lights->flashlight_reach > 0.0f ? glm_lerp(lights->flashlight_reach, reach, k) : reach;
+        // Forgotten while the beam is dark, so it comes on aimed where the look is, not eased
+        // there.
+        lights->flashlight_reach = !lights_flashlight_lit(lights) ? 0.0f
+                                   : lights->flashlight_reach > 0.0f
+                                       ? glm_lerp(lights->flashlight_reach, reach, k)
+                                       : reach;
         // Clipped to the jacket's chest: under the eye by the body's heading, which the head's
         // pitch does not move.
         vec3 ahead = {forward[0], 0.0f, forward[2]}, left, up = {0.0f, 1.0f, 0.0f}, pos, dir;
@@ -444,6 +448,10 @@ void lights_flashlight_hold(Lights* lights, const vec3 at, const vec3 dir, float
     glm_vec3_copy((float*)at, lights->hold_at);
     glm_vec3_normalize_to((float*)dir, lights->hold_dir);
     lights->hold = glm_clamp(weight, 0.0f, 1.0f);
+}
+
+void lights_flashlight_release(Lights* lights) {
+    lights->hold = 0.0f;
 }
 
 bool lights_flashlight_lit(const Lights* lights) {

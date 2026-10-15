@@ -34,7 +34,7 @@ typedef struct ItemSpec {
     const char* name;        // as the backpack's screen shows it
     const char* line;        // what the player knows about it
     int cells[2];            // its footprint: across, down
-    void (*model)(Kit* kit); // its model alone, built in KIT_WORLD
+    void (*model)(Kit* kit); // its model alone, built in KIT_WORLD, when it has no file
     const char* file;        // or its model from this file: the node in it named as `id` is
 } ItemSpec;
 

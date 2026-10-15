@@ -182,8 +182,7 @@ static SceneNode* model_from_file(Engine* engine, Scene* scene, const ItemSpec* 
     SceneNode* file = library_take(engine, scene, item->file, item->id, NULL);
     if (!file)
         return NULL;
-    mat4 frame = GLM_MAT4_IDENTITY_INIT;
-    SceneNode* model = library_find(file, item->id, frame);
+    SceneNode* model = library_find(file, item->id, NULL);
     if (model)
         node_remove_child(model->parent, model);
     else
@@ -204,30 +203,27 @@ void backpack_build(Backpack* bp, Engine* engine, Scene* scene) {
     bedroom_bed_top(rest);
     glm_vec3_copy(rest, bp->at);
     bp->at[1] += BAG_REACH_Y;
-    // Every model, each only ever drawn alone, and the bag on the bed: one kit apiece, beside the
-    // first, so the materials are made once and those none of them used freed after. Every kit is
-    // made before any is finished, which would free what it did not use.
+    // The bag on the bed and every model built here, each only ever drawn alone: one kit apiece,
+    // beside the bag's, so the materials are made once and those none of them used freed after.
+    // Every kit is made before any is finished, which would free what it did not use. A model from
+    // a file has no kit.
     Kit kits[ITEM_COUNT + 1];
     Kit* finished[ITEM_COUNT + 1];
-    mats_kit(&kits[0], engine, scene);
-    for (int i = 0; i <= ITEM_COUNT; i++) {
-        if (i > 0)
-            kit_init_beside(&kits[i], &kits[0], GLM_VEC3_ZERO);
-        finished[i] = &kits[i];
-    }
+    int count = 0;
+    Kit* kit = finished[count++] = &kits[0];
+    mats_kit(kit, engine, scene);
     for (int i = 0; i < ITEM_COUNT; i++) {
-        kits[i].casts_nothing = true;
-        if (ITEMS[i].model)
-            ITEMS[i].model(&kits[i]);
-        // A model from a file leaves its kit empty, finished all the same so it lets go of what
-        // it holds.
-        bp->models[i] = kit_finish_alone(&kits[i], ITEMS[i].id);
-        if (ITEMS[i].file) {
-            free_node(bp->models[i]);
-            bp->models[i] = model_from_file(engine, scene, &ITEMS[i]);
-        }
+        if (ITEMS[i].file)
+            continue;
+        Kit* item = finished[count] = &kits[count];
+        count++;
+        kit_init_beside(item, kit, GLM_VEC3_ZERO);
+        item->casts_nothing = true;
+        ITEMS[i].model(item);
     }
-    Kit* kit = &kits[ITEM_COUNT];
+    for (int i = 0, k = 1; i < ITEM_COUNT; i++)
+        bp->models[i] = ITEMS[i].file ? model_from_file(engine, scene, &ITEMS[i])
+                                      : kit_finish_alone(finished[k++], ITEMS[i].id);
     bag(kit);
     bp->bag = kit_finish(kit, "backpack");
     // No capture keeps it: it is taken while the game runs.
@@ -235,7 +231,7 @@ void backpack_build(Backpack* bp, Engine* engine, Scene* scene) {
     glm_translate_make(bp->bag->original_transform, (vec3){rest[0], rest[1] - BAG_SINK, rest[2]});
     glm_rotate_y(bp->bag->original_transform, BAG_YAW, bp->bag->original_transform);
     glm_rotate_z(bp->bag->original_transform, BAG_ROLL, bp->bag->original_transform);
-    kit_free_unused(finished, ITEM_COUNT + 1);
+    kit_free_unused(finished, count);
 }
 
 void backpack_take(Backpack* bp) {

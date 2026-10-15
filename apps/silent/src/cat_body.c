@@ -6,12 +6,12 @@
 
 #include "cetra/cscene.h"
 #include "cetra/engine.h"
-#include "cetra/import.h"
 #include "cetra/loading_screen.h"
 #include "cetra/look_at.h"
-#include "cetra/program.h"
 
 #include "cetra/game/animator_component.h"
+
+#include "library.h"
 
 #define CAT_MODEL "assets/models/cat.glb"
 // The coat: the render app's scene for the cat, whose material block is the one statement of
@@ -56,27 +56,20 @@ static void dress(Material* m, const CetraSceneDesc* coat) {
     }
 }
 
-// The import's materials, moved from the model's scene -- which is never drawn -- to the
-// game's, each with the cat's coat on; its colours are cat_set_fur's and cat_set_eyes'.
-static void take_materials(SceneNode* node, Scene* library, Scene* game, Cat* cat,
-                           const CetraSceneDesc* coat) {
+// The import's materials, each with the cat's coat on; its colours are cat_set_fur's and
+// cat_set_eyes'. Meshes may share one, which is dressed again to the same coat.
+static void dress_materials(SceneNode* node, Cat* cat, const CetraSceneDesc* coat) {
     for (size_t i = 0; i < node->mesh_count; i++) {
         Mesh* mesh = node->meshes[i];
         Material* m = mesh->material;
         if (!m)
             continue;
         const char* name = m->name ? m->name : "";
-        // Meshes may share one: it is moved and dressed once.
-        if (scene_release_material(library, m)) {
-            scene_add_material(game, m);
-            dress(m, coat);
-            if (!strcmp(name, "cat_eye")) {
-                // Its glow is the eyeshine, which lights nothing: no panel is derived from it.
-                m->emissive_strength = 0.0f;
-                m->emissive_light = 1;
-            }
-        }
+        dress(m, coat);
         if (!strcmp(name, "cat_eye")) {
+            // Its glow is the eyeshine, which lights nothing: no panel is derived from it.
+            m->emissive_strength = 0.0f;
+            m->emissive_light = 1;
             cat->eye = m;
         } else if (!strcmp(name, "cat_fur")) {
             cat->fur = m;
@@ -91,7 +84,7 @@ static void take_materials(SceneNode* node, Scene* library, Scene* game, Cat* ca
             cat->skin = node;
     }
     for (size_t i = 0; i < node->children_count; i++)
-        take_materials(node->children[i], library, game, cat, coat);
+        dress_materials(node->children[i], cat, coat);
 }
 
 void cat_set_fur(Cat* cat, const vec3 srgb) {
@@ -123,54 +116,29 @@ void cat_set_eyes(Cat* cat, const vec3 srgb) {
     glm_vec3_copy(cat->eye->albedo, cat->eye->emissive);
 }
 
-// The model as a node that is not its scene's root, which cannot be moved under one of its
-// own descendants: the root's children go into a wrapper carrying the root's own transform.
-static SceneNode* take_model(const Scene* library) {
-    SceneNode* root = library->root_node;
-    SceneNode* wrapper = create_node();
-    if (!wrapper)
-        return NULL;
-    node_set_name(wrapper, "cat_model");
-    glm_mat4_copy(root->original_transform, wrapper->original_transform);
-    // Bounded rather than drained: node_add_child refuses a cycle, and a while on a refusal
-    // would spin forever.
-    for (size_t guard = root->children_count; guard > 0 && root->children_count > 0; guard--)
-        node_add_child(wrapper, root->children[0]);
-    return wrapper;
-}
-
 bool cat_body_load(Cat* cat, const CatDesc* desc, Game* game, PhysicsWorld* physics,
                    const vec3 feet, float yaw) {
     Engine* engine = game->engine;
     // The model's own scene, owned by the engine from here and never drawn: the game draws
-    // only its own. The model carries no textures, so nothing is left in flight on the loader.
-    Scene* library = create_scene_from_model_path(CAT_MODEL, NULL, engine->async_loader);
-    if (!library || library->skeleton_count == 0) {
+    // only its own.
+    Scene* library = NULL;
+    SceneNode* model = library_take(engine, game->scene, CAT_MODEL, "cat_model", &library);
+    if (!model || library->skeleton_count == 0) {
         fprintf(stderr, "silent: cannot load the cat from %s\n", CAT_MODEL);
-        if (library)
-            free_scene(library);
+        if (model)
+            free_node(model);
         return false;
     }
-    engine_add_scene(engine, library);
-    SceneNode* model = take_model(library);
-    if (!model)
-        return false;
     CetraSceneDesc* coat = cscene_load(CAT_COAT);
     if (!coat)
         fprintf(stderr, "silent: no coat for the cat in %s\n", CAT_COAT);
-    take_materials(model, library, game->scene, cat, coat);
+    dress_materials(model, cat, coat);
     cscene_free(coat);
     cat_set_fur(cat, desc->fur);
     cat_set_eyes(cat, desc->eyes);
     // Between the import and the skinned program's compile, each a long piece of the load.
     engine_draw_loading_screen(engine);
-    ShaderProgram* skinned = engine_find_program(engine, CETRA_PROGRAM_PBR_SKINNED);
-    if (!skinned) {
-        skinned = create_pbr_skinned_program();
-        if (skinned)
-            engine_add_program(engine, skinned);
-    }
-    node_set_programs(model, engine_get_program(engine, CETRA_PROGRAM_PBR), skinned);
+    library_programs(engine, model);
 
     // The entity stands at its body's middle, so the model hangs below it to the feet.
     cat->entity = create_entity(game->entity_manager, "cat");

@@ -175,6 +175,14 @@
 #define WIND_GUST_FREQUENCY 0.6f
 #define WIND_GUST_AMOUNT    0.5f
 
+// --inspect: the birdcage picked up from the bench, held shut, or held open (spec 13.55).
+typedef enum {
+    INSPECT_START_NONE,
+    INSPECT_START_PICKUP,
+    INSPECT_START_CLOSED,
+    INSPECT_START_OPEN
+} InspectStart;
+
 typedef struct SilentArgs {
     bool headless;
     int frames;
@@ -224,7 +232,7 @@ typedef struct SilentArgs {
     bool backpack;           // the backpack already taken, and the flashlight in it
     bool map;                // the town map already in it, and the fridge door bare
     bool key;                // the front door's key in it, and its birdcage open and empty
-    const char* inspect;     // the birdcage in the hands once played: pickup, closed or open
+    InspectStart inspect;    // the birdcage in the hands once played, and how
     bool trace_hold;         // print each of the hold's states and its clips' events
     StoryStage story;        // how far the house's story has gone at the start, or STORY_NONE
     bool open_map;           // the map's screen open at the start, over the backpack's when that is
@@ -327,6 +335,7 @@ static HouseKey g_house_key;
 static Birdcage g_cage;
 static Arms g_arms;
 static Inspect g_inspect;
+static float g_exposure_hold; // the lamp's hold the night's exposure was last set for
 static MapScreen g_map_screen;
 // The places the player has found, which go on the map (spec 13.43).
 static Finds g_finds;
@@ -958,11 +967,11 @@ static void start_play(double time) {
         haunt_begin(&g_haunt, time, 0.0);
     g_args.haunt = false;
     // The birdcage in the hands from the start, wherever the player stands (spec 13.55).
-    if (g_args.inspect && !strcmp(g_args.inspect, "pickup"))
+    if (g_args.inspect == INSPECT_START_PICKUP)
         inspect_pick_up(&g_inspect);
-    else if (g_args.inspect)
-        inspect_start_held(&g_inspect, !strcmp(g_args.inspect, "open"));
-    g_args.inspect = NULL;
+    else if (g_args.inspect != INSPECT_START_NONE)
+        inspect_start_held(&g_inspect, g_args.inspect == INSPECT_START_OPEN);
+    g_args.inspect = INSPECT_START_NONE;
     const char* screen = g_args.pause_screen;
     g_args.pause_screen = NULL;
     if (!screen)
@@ -1147,7 +1156,7 @@ static void on_init(Game* game) {
         backpack_add(&g_backpack, ITEM_KEY);
     birdcage_build(&g_cage, engine, g_scene);
     arms_load(&g_arms, engine, g_scene);
-    inspect_init(&g_inspect, engine, &g_arms, &g_cage, &g_house_key, &g_lights, &g_hud, &g_player,
+    inspect_init(&g_inspect, game, &g_arms, &g_cage, &g_house_key, &g_lights, &g_hud, &g_player,
                  take_key);
     g_inspect.trace = g_args.trace_hold;
     inspect_drop(&g_inspect, backpack_holds(&g_backpack, ITEM_KEY));
@@ -1615,10 +1624,13 @@ static void on_pre_render(Game* game, double alpha) {
                           pinned ? &g_args.cam_target : NULL);
     }
     // Something held (spec 13.55) poses the view and holds the beam, before either is read, and at
-    // night the eye stops down with the beam. By day the meter does it.
-    inspect_frame(&g_inspect, game);
-    if (!g_args.day)
+    // night the eye stops down with the beam; by day the meter does it. Written only as the hold
+    // moves, so nothing else that sets the exposure is overruled the rest of the time.
+    inspect_frame(&g_inspect);
+    if (!g_args.day && g_lights.hold != g_exposure_hold) {
         engine->exposure.multiplier = EXPOSURE_NIGHT * glm_lerp(1.0f, EXPOSURE_HELD, g_lights.hold);
+        g_exposure_hold = g_lights.hold;
+    }
 
     // The flashlight is in the backpack (spec 13.40): until the player has it, F finds nothing.
     if (input_action_pressed(&game->input, "flashlight")) {
@@ -1653,8 +1665,11 @@ static void on_pre_render(Game* game, double alpha) {
             reach_offer(&reach, g_backpack.at, NULL, take_backpack, "E   Take the backpack");
         if (!backpack_holds(&g_backpack, ITEM_TOWN_MAP))
             reach_offer(&reach, g_fridge_map.at, NULL, take_map, "E   Take the map");
+        // Without the arms the key is taken straight from the cage, so the story goes on.
         if (!backpack_holds(&g_backpack, ITEM_KEY) && g_cage.node)
-            reach_offer(&reach, g_cage.at, NULL, pick_up_cage, "E   Pick up");
+            reach_offer(&reach, g_cage.at, NULL,
+                        inspect_ready(&g_inspect) ? pick_up_cage : take_key,
+                        inspect_ready(&g_inspect) ? "E   Pick up" : "E   Take the key");
     }
     if (input_action_pressed(&game->input, "interact")) {
         if (reach.take)
@@ -1677,9 +1692,10 @@ static void on_pre_render(Game* game, double alpha) {
     sounds_update(&g_sounds);
     // The beam trails the head by the frame, as the head turns, and meets what the look meets
     // (spec 13.55): the first wall or door along it, or far enough off that it does not matter.
+    // Asked only while the beam is lit and the player has it.
     float meets = LAMP_REACH;
     RaycastHit seen;
-    if (game->physics_world &&
+    if (lights_flashlight_lit(&g_lights) && g_lights.hold < 1.0f && game->physics_world &&
         physics_world_raycast_filtered(game->physics_world, eye, forward, LAMP_REACH,
                                        (1u << OBJ_LAYER_STATIC) | (1u << OBJ_LAYER_KINEMATIC),
                                        &seen) &&
@@ -2252,12 +2268,13 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
         } else if (!strcmp(s, "--key")) {
             a->key = true;
         } else if (!strcmp(s, "--inspect") && has_next) {
-            a->inspect = argv[++i];
-            if (strcmp(a->inspect, "pickup") && strcmp(a->inspect, "closed") &&
-                strcmp(a->inspect, "open")) {
+            const char* how = argv[++i];
+            a->inspect = !strcmp(how, "pickup")   ? INSPECT_START_PICKUP
+                         : !strcmp(how, "closed") ? INSPECT_START_CLOSED
+                         : !strcmp(how, "open")   ? INSPECT_START_OPEN
+                                                  : INSPECT_START_NONE;
+            if (a->inspect == INSPECT_START_NONE)
                 fprintf(stderr, "silent: --inspect takes pickup, closed or open; ignoring it\n");
-                a->inspect = NULL;
-            }
         } else if (!strcmp(s, "--trace-hold")) {
             a->trace_hold = true;
         } else if (!strcmp(s, "--story") && has_next) {
@@ -2399,7 +2416,13 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
     // carried in the backpack.
     a->map |= a->open_map || a->open_backpack == ITEM_TOWN_MAP;
     a->key |= a->open_backpack == ITEM_KEY;
-    a->backpack |= a->map || a->key;
+    // The birdcage's key goes into the backpack, so the cage is held with one, and never once the
+    // key is had: it would be taken a second time from an empty cage.
+    if (a->inspect != INSPECT_START_NONE && a->key) {
+        fprintf(stderr, "silent: --inspect needs the key still in its cage; ignoring it\n");
+        a->inspect = INSPECT_START_NONE;
+    }
+    a->backpack |= a->map || a->key || a->inspect != INSPECT_START_NONE;
     // The plan is written while the world is built, and the run stops there.
     if (a->map_export) {
         a->headless = true;

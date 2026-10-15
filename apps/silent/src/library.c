@@ -1,7 +1,7 @@
 #include <stdio.h>
-#include <string.h>
 
 #include "cetra/import.h"
+#include "cetra/program.h"
 
 #include "library.h"
 
@@ -25,6 +25,8 @@ SceneNode* library_take(Engine* engine, Scene* game, const char* path, const cha
         return NULL;
     }
     engine_add_scene(engine, lib);
+    // Its maps in before anything draws it: a picture of it drawn once and kept, as the
+    // backpack's are, would keep a model with none.
     engine_finish_texture_loads(engine);
     // The root's children into a node carrying the root's own transform: a root cannot be moved
     // under a node of another graph. Bounded rather than drained, since node_add_child refuses a
@@ -43,27 +45,24 @@ SceneNode* library_take(Engine* engine, Scene* game, const char* path, const cha
     return model;
 }
 
-// `name` under `node`, `above` the frame `node` is in; the frame of what was found in `frame`.
-static SceneNode* find_from(SceneNode* node, const char* name, const mat4 above, mat4 frame) {
-    mat4 here;
-    glm_mat4_mul((vec4*)above, node->original_transform, here);
-    if (node->name && !strcmp(node->name, name)) {
-        glm_mat4_copy(here, frame);
-        return node;
+void library_programs(Engine* engine, SceneNode* model) {
+    ShaderProgram* skinned = engine_find_program(engine, CETRA_PROGRAM_PBR_SKINNED);
+    if (!skinned) {
+        skinned = create_pbr_skinned_program();
+        if (skinned)
+            engine_add_program(engine, skinned);
     }
-    for (size_t i = 0; i < node->children_count; i++) {
-        SceneNode* found = find_from(node->children[i], name, here, frame);
-        if (found)
-            return found;
-    }
-    return NULL;
+    node_set_programs(model, engine_get_program(engine, CETRA_PROGRAM_PBR), skinned);
 }
 
 SceneNode* library_find(SceneNode* root, const char* name, mat4 frame) {
-    for (size_t i = 0; i < root->children_count; i++) {
-        SceneNode* found = find_from(root->children[i], name, GLM_MAT4_IDENTITY, frame);
-        if (found)
-            return found;
+    SceneNode* found = NULL;
+    for (size_t i = 0; i < root->children_count && !found; i++)
+        found = node_find(root->children[i], name);
+    if (found && frame) {
+        glm_mat4_copy(found->original_transform, frame);
+        for (const SceneNode* up = found->parent; up && up != root; up = up->parent)
+            glm_mat4_mul((vec4*)up->original_transform, frame, frame);
     }
-    return NULL;
+    return found;
 }
