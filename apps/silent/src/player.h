@@ -20,14 +20,18 @@
  * rather than starting and stopping dead. The body moves in fixed steps and is drawn between the
  * last two, so the eye moves every frame however the frames fall against the steps. A crouch
  * (spec 13.48) shortens the capsule from the top and eases the eye down after it; it stands again
- * only where there is room over the head, and sprinting asks it to. The
- * mouse is captured on a click and free whenever the game's input is held -- a
- * screen over the game, the pause menu, the loading screen -- coming back as it
- * was once that lets go; the arrows and the right stick look too, so a headless
- * or pad run reaches every control.
+ * only where there is room over the head, and sprinting asks it to. The arrows and the right stick
+ * look as well as the mouse, so a headless or pad run reaches every control.
+ *
+ * It owns the window's cursor. In play the mouse looks: in exclusive fullscreen at once, in a
+ * window once a click takes it. While the game's input is held -- a screen over the game, the
+ * pause menu, the title -- the cursor is shown only while the mouse is what drives the screen, and
+ * hidden from the moment a key or a pad does; under the loading screen it is hidden.
  *
  * It reads the actions "move_x", "move_y", "sprint", "crouch" (held), "crouch_toggle", "look_x"
- * and "look_y" by name, from whatever table the app binds.
+ * and "look_y" by name, from whatever table the app binds, and the screens' "menu_up",
+ * "menu_down", "menu_left", "menu_right", "menu_accept", "menu_back", "map_pan_x", "map_pan_y"
+ * and "map_zoom".
  */
 
 #define PLAYER_EYE_HEIGHT 1.62f // feet to eye standing, metres
@@ -35,9 +39,11 @@
 typedef struct Player {
     Entity* entity;
     CameraRig* rig;
-    bool cursor_wanted;    // the player's own choice: a click takes the cursor
-    bool cursor_captured;  // what the window has
-    bool skip_first_delta; // the first delta after a capture is a jump, not a movement
+    bool cursor_wanted;    // in a window, the player's own choice: a click takes the cursor
+    int cursor_mode;       // the window's GLFW_CURSOR_* mode; 0 until the first frame sets one
+    bool cursor_captured;  // the mode is GLFW_CURSOR_DISABLED: the mouse looks
+    bool pointing;         // the mouse, not a key or a pad, drives the screen over the game
+    bool skip_first_delta; // the first delta after the mode changes is a jump, not a movement
     vec3 step_from;      // where the capsule was when this fixed step began: the last step's result
     float speed;         // the horizontal speed asked of the body, m/s, as it ramps
     float heading;       // and the way it goes, radians about +Y, facing (sin, 0, cos)

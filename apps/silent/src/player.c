@@ -8,6 +8,7 @@
 #include "cetra/animation.h"
 #include "cetra/engine.h"
 #include "cetra/game/character.h"
+#include "cetra/loading_screen.h"
 
 #include "player.h"
 
@@ -50,17 +51,44 @@
 #define REACH      1.9f
 #define REACH_CONE 0.6f
 
-// Raw motion where the platform has it, so the desktop's acceleration curve
-// stays out of the look. Nothing captures headless: there is no pointer.
-static void set_cursor_captured(Player* p, Engine* engine, bool captured) {
-    if (engine->headless || captured == p->cursor_captured)
+// The window's cursor: DISABLED while the mouse looks, with raw motion where the platform has it
+// so the desktop's acceleration curve stays out of the look, NORMAL to point, HIDDEN otherwise.
+// A change moves the cursor -- a capture centres it, a release puts it back -- so the delta after
+// one is not a movement. Nothing is set headless: there is no pointer.
+static void set_cursor_mode(Player* p, Engine* engine, int mode) {
+    if (engine->headless || mode == p->cursor_mode)
         return;
-    glfwSetInputMode(engine->window, GLFW_CURSOR,
-                     captured ? GLFW_CURSOR_DISABLED : GLFW_CURSOR_NORMAL);
+    const bool captured = mode == GLFW_CURSOR_DISABLED;
+    glfwSetInputMode(engine->window, GLFW_CURSOR, mode);
     if (glfwRawMouseMotionSupported())
         glfwSetInputMode(engine->window, GLFW_RAW_MOUSE_MOTION, captured ? GLFW_TRUE : GLFW_FALSE);
+    p->cursor_mode = mode;
     p->cursor_captured = captured;
-    p->skip_first_delta = captured;
+    p->skip_first_delta = true;
+}
+
+// What drives a screen from the keys or a pad.
+static const char* const SCREEN_ACTIONS[] = {"menu_up",    "menu_down",   "menu_left",
+                                             "menu_right", "menu_accept", "menu_back",
+                                             "map_pan_x",  "map_pan_y",   "map_zoom"};
+
+// Whether the mouse is what drives the screen over the game: moved, clicked or scrolled since one
+// of the screen's keys or a pad last did.
+static bool pointing(Player* p, const GameInputState* input) {
+    double dx = 0.0, dy = 0.0, sx = 0.0, sy = 0.0;
+    input_mouse_delta(input, &dx, &dy);
+    input_scroll(input, &sx, &sy);
+    if (p->skip_first_delta)
+        p->skip_first_delta = false;
+    else if (dx != 0.0 || dy != 0.0)
+        p->pointing = true;
+    if (sx != 0.0 || sy != 0.0 || input_mouse_pressed(input, GLFW_MOUSE_BUTTON_LEFT) ||
+        input_mouse_pressed(input, GLFW_MOUSE_BUTTON_RIGHT))
+        p->pointing = true;
+    for (size_t i = 0; i < sizeof(SCREEN_ACTIONS) / sizeof(SCREEN_ACTIONS[0]); i++)
+        if (input_action_value(input, SCREEN_ACTIONS[i]) != 0.0f)
+            p->pointing = false;
+    return p->pointing;
 }
 
 // The body where its entity stands, still, looking along `yaw` and `pitch`. A window's first frame
@@ -284,19 +312,27 @@ void player_pre_render(Player* p, Game* game, const vec3* pin_eye, const vec3* p
         camera_rig_aim(p->rig, p->rig->yaw - (float)dx * MOUSE_LOOK_RATE,
                        p->rig->pitch - (float)dy * MOUSE_LOOK_RATE);
     }
-    // The debug GUI wants the pointer: while it is open the cursor is free and a click does not
-    // take it back, or its sliders could not be reached. The arrow keys still look. While the
-    // game's input is held a click takes nothing either: nobody looks round a room they cannot see.
+    // The debug GUI wants the pointer: while it is open the cursor is shown and a click does not
+    // take it, or its sliders could not be reached. The arrow keys still look. While the game's
+    // input is held a click takes nothing either: nobody looks round a room they cannot see.
     // A window shares the desktop, so there the cursor waits for a click; fullscreen has nothing
-    // else on the screen to point at, and takes it whenever play has the input. Captured after the
-    // look, so the jump a capture makes lands in the delta it skips.
-    if (engine->show_gui)
+    // else on the screen to point at, and takes it whenever play has the input. A screen over the
+    // game opens with the cursor hidden, as the key that opened it leaves it, and shows it once
+    // the mouse moves; the loading screen takes any press, a click included, and points at nothing.
+    // Set after the look, so the jump a change makes lands in the delta it skips.
+    int mode = GLFW_CURSOR_NORMAL;
+    if (engine->show_gui) {
         p->cursor_wanted = false;
-    else if (input_mouse_pressed(&game->input, GLFW_MOUSE_BUTTON_LEFT) &&
-             !engine_gui_wants_mouse() && !held)
-        p->cursor_wanted = true;
-    const bool fullscreen = engine->window_mode == ENGINE_WINDOW_FULLSCREEN && !engine->show_gui;
-    set_cursor_captured(p, engine, (p->cursor_wanted || fullscreen) && !held);
+    } else if (!held) {
+        if (input_mouse_pressed(&game->input, GLFW_MOUSE_BUTTON_LEFT) && !engine_gui_wants_mouse())
+            p->cursor_wanted = true;
+        if (p->cursor_wanted || engine->window_mode == ENGINE_WINDOW_FULLSCREEN)
+            mode = GLFW_CURSOR_DISABLED;
+        p->pointing = false;
+    } else if (engine_loading_screen_shown(engine) || !pointing(p, &game->input)) {
+        mode = GLFW_CURSOR_HIDDEN;
+    }
+    set_cursor_mode(p, engine, mode);
 
     glm_vec3_copy(anchor, p->rig->anchor);
     const float look = p->holding ? 0.0f : 1.0f;
