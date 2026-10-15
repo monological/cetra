@@ -1037,7 +1037,9 @@ The flags:
   the game is played, for a headless picture of them.
 
 **The backpack** (spec 13.40). It lies on the bed in the home's back bedroom, the flashlight in it;
-until it is taken F finds nothing and the cellar flight's foot is as far as the player goes. Its
+until it is taken F finds nothing and the cellar flight's foot is as far as the player goes. The
+flashlight is an army lamp clipped to the jacket's left chest (spec 13.55), its beam aimed at what
+the player looks at. Its
 screen lists what it holds in a grid and turns the chosen one: the arrows, WASD or the D-pad walk
 the grid, and Enter, E, pad A or a click chooses; Tab or Escape (pad B) shuts it.
 - **`--backpack`:** starts with the backpack, the flashlight in it.
@@ -1087,11 +1089,12 @@ the bob half and the footsteps 6 dB softer. Standing waits until there is room o
 - **`--crouch`:** starts crouched, as though C had been pressed, so a headless run can show the
   crouched eye.
 
-**The locked house** (specs 13.53 and 13.54). The front door is locked from the inside, and the
-key lies on the basement's workbench, down the cellar stair the backpack's flashlight gets the
-player down. E takes it into the backpack, and the haunting (below) begins as it does: the cellar
-door slams shut over the player's head, the haunting tries it as they climb back up, and they
-open it themselves at the top of the flight. E at the front door:
+**The locked house** (specs 13.53, 13.54 and 13.55). The front door is locked from the inside, and
+the key hangs in a birdcage on the basement's workbench, down the cellar stair the backpack's
+flashlight gets the player down. The player takes it out of the cage in their own hands (below)
+into the backpack, and the haunting begins as it does: the cellar door slams shut over the
+player's head, the haunting tries it as they climb back up, and they open it themselves at the top
+of the flight. E at the front door:
 - without the key, tries it, the knob turned and the door rattled in its frame, and the player
   thinks it locked;
 - with the key and no map, the player thinks of the map in the kitchen and the door stays shut;
@@ -1099,11 +1102,33 @@ open it themselves at the top of the flight. E at the front door:
 
 How far the story has gone is saved: a game saved haunted loads haunted again, and a player saved
 anywhere but in the house finds the front door open.
-- **`--key`:** starts with the front door's key in the backpack, the workbench bare, and nothing
-  begun; it implies `--backpack`.
+- **`--key`:** starts with the front door's key in the backpack, its birdcage open and empty on
+  the workbench, and nothing begun; it implies `--backpack`.
 - **`--story <stage>`:** starts with the story at `locked`, `haunted` (the key taken: the haunting
   begins as the game is played) or `open` (the front door unlocked). A player started anywhere but
   in the house starts it `open` whatever this says.
+
+**The birdcage** (spec 13.55). E at the cage on the workbench picks it up:
+- The view glides to a framing set from the cage, and the player's arms, in an olive field
+  jacket's sleeves, lift it. The body stays where it stood.
+- The flashlight clipped to the jacket comes on and is held on the cage whatever its switch says,
+  and at night the exposure stops down four stops while it is.
+- The player thinks "What is this thing...?", then "The face... I think it opens.", and from then
+  on the mouse, the right stick or the arrows spin the cage on the palm.
+- E opens its face, and E again takes the key into the backpack as it goes out of sight. The hands
+  set the cage down, open and empty, and the view glides back.
+- RMB or pad B, before it is opened, sets it back down shut.
+
+Neither the hold nor the player's place in it is saved: a load or a return to the title puts the
+cage back on the bench at once, open exactly when the key is had.
+- **`--inspect pickup|closed|open`:** the cage in the hands once the game is played, wherever the
+  player stands: picked up from the bench, already held shut, or held open with the hand waiting
+  before it. It skips the title.
+- **`--trace-hold`:** prints each of the hold's states and its clips' events, with the frame each
+  came on.
+- **Headless:** with `--pad-script`, `x` on a frame is E, and `b` puts it down.
+- **Pinned view:** the cage on the bench, with `--backpack --flashlight`: `--cam-eye
+  3.95,-0.75,16.35 --cam-target 4.61,-1.38,16.45`.
 
 **The haunting** (spec 13.52). The story begins it, and K (or a pad's right-stick click) begins and
 ends it anywhere without moving the story. The power goes, every light in the house with it, and
