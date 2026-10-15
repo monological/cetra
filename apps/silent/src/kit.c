@@ -1960,3 +1960,13 @@ void kit_node_shown(SceneNode* root, SceneNode* node, bool shown) {
     else
         node_remove_child(node->parent, node);
 }
+
+void kit_node_casts(SceneNode* node, bool casts) {
+    if (!node)
+        return;
+    for (size_t i = 0; i < node->mesh_count; i++)
+        if (node->meshes[i]->shadow_role != MESH_SHADOW_ONLY)
+            node->meshes[i]->shadow_role = casts ? MESH_SHADOW_CASTS : MESH_SHADOW_NONE;
+    for (size_t i = 0; i < node->children_count; i++)
+        kit_node_casts(node->children[i], casts);
+}
