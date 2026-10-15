@@ -38,7 +38,8 @@ typedef struct Lights {
 
     Light* flashlight;
     bool flashlight_on;
-    vec3 flashlight_dir; // smoothed, so the beam trails the look a little
+    vec3 flashlight_dir;    // smoothed, so the beam trails the look a little
+    float flashlight_reach; // smoothed, metres: how far along it the look meets something
     // The beam held on something (spec 13.55): where from and which way, and how far, 0..1, it
     // has gone from riding the player to that. Above 0 it is lit whatever the switch says.
     vec3 hold_at;
@@ -67,10 +68,11 @@ void lights_build(Lights* lights, Kit* kit, Engine* engine, Scene* scene, unsign
 // A buzz at each tube, from `audio`, which may be NULL.
 void lights_start_audio(Lights* lights, AudioSystem* audio);
 
-// Per frame, before the frame draws: the flicker, the tubes' shadows and
-// buzz, and the flashlight clipped to the jacket under the eye, pointing where it looks.
+// Per frame, before the frame draws: the flicker, the tubes' shadows and buzz, and the flashlight
+// clipped to the jacket under the eye, aimed at what the look along `forward` meets `reach` metres
+// off.
 void lights_update(Lights* lights, Scene* scene, double time, float dt, const vec3 eye,
-                   const vec3 forward);
+                   const vec3 forward, float reach);
 
 void lights_toggle_flashlight(Lights* lights);
 // The beam, from the next update, `weight` of the way from where the player has it to leaving

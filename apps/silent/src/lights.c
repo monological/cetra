@@ -365,7 +365,7 @@ static void lights_apply(Lights* lights, float mains, float level, bool beam) {
 }
 
 void lights_update(Lights* lights, Scene* scene, double time, float dt, const vec3 eye,
-                   const vec3 forward) {
+                   const vec3 forward, float reach) {
     const float level = lights->flicker ? flicker_level(time, lights->seed) : 1.0f;
     lights->level = level;
 
@@ -400,10 +400,13 @@ void lights_update(Lights* lights, Scene* scene, double time, float dt, const ve
 
     Light* f = lights->flashlight;
     if (f) {
-        // The beam trails the head a little, as the body turns after it.
+        // The beam trails the head a little, as the body turns after it, and the distance it
+        // meets the look at eases after the look's own, so it does not jump past an edge.
         const float k = 1.0f - expf(-dt * 14.0f);
         glm_vec3_lerp(lights->flashlight_dir, (float*)forward, k, lights->flashlight_dir);
         glm_vec3_normalize(lights->flashlight_dir);
+        lights->flashlight_reach =
+            lights->flashlight_reach > 0.0f ? glm_lerp(lights->flashlight_reach, reach, k) : reach;
         // Clipped to the jacket's chest: under the eye by the body's heading, which the head's
         // pitch does not move.
         vec3 ahead = {forward[0], 0.0f, forward[2]}, left, up = {0.0f, 1.0f, 0.0f}, pos, dir;
@@ -416,8 +419,15 @@ void lights_update(Lights* lights, Scene* scene, double time, float dt, const ve
         glm_vec3_muladds(left, ARMS_LAMP[0], pos);
         pos[1] += ARMS_LAMP[1];
         glm_vec3_muladds(ahead, ARMS_LAMP[2], pos);
+        // Aimed at what the look meets: along the look from the chest, it would pass under it up
+        // close and light a wall a hand's breadth below where the player looks.
+        vec3 meets;
+        glm_vec3_copy((float*)eye, meets);
+        glm_vec3_muladds(lights->flashlight_dir, lights->flashlight_reach, meets);
+        glm_vec3_sub(meets, pos, dir);
+        glm_vec3_normalize(dir);
         glm_vec3_lerp(pos, lights->hold_at, lights->hold, pos);
-        glm_vec3_lerp(lights->flashlight_dir, lights->hold_dir, lights->hold, dir);
+        glm_vec3_lerp(dir, lights->hold_dir, lights->hold, dir);
         glm_vec3_normalize(dir);
         light_set_position(f, pos);
         light_set_direction(f, dir);
