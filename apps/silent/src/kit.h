@@ -456,5 +456,8 @@ SceneNode* kit_finish_alone(Kit* kit, const char* name);
 // `node` under `root` when `shown`, or off the graph and kept, for a thing taken that may be put
 // back (spec 13.50); the graph is not touched when it is already so.
 void kit_node_shown(SceneNode* root, SceneNode* node, bool shown);
+// Every mesh under `node` casting a light's shadows, or drawn and casting nothing: for a thing so
+// near a light that its shadow fills the room. A mesh that only casts is left as it is.
+void kit_node_casts(SceneNode* node, bool casts);
 
 #endif // _SILENT_KIT_H_

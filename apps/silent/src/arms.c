@@ -12,15 +12,6 @@
 
 static const char* const AT_BONES[ARMS_AT_COUNT] = {"View", "Cage", "Lamp", ARMS_KEY_BONE};
 
-// Every mesh under `node` drawn and casting nothing: so near the eye a sleeve would put the room in
-// its shadow, and the flashlight's own beam with it.
-static void cast_nothing(SceneNode* node) {
-    for (size_t i = 0; i < node->mesh_count; i++)
-        node->meshes[i]->shadow_role = MESH_SHADOW_NONE;
-    for (size_t i = 0; i < node->children_count; i++)
-        cast_nothing(node->children[i]);
-}
-
 // Nothing kept: what was made is let go, so nothing reads a rig that is not whole.
 static bool refused(Arms* arms) {
     arms_free(arms);
@@ -43,7 +34,9 @@ bool arms_load(Arms* arms, Engine* engine, Scene* scene) {
         fprintf(stderr, "silent: %s has no '%s'; its bones are read in its own frame\n", ARMS_MODEL,
                 ARMS_SKIN);
     library_programs(engine, arms->node);
-    cast_nothing(arms->node);
+    // So near the eye a sleeve would put the room in its shadow, and the flashlight's own beam
+    // with it.
+    kit_node_casts(arms->node, false);
     // It moves with the player, so no capture keeps it.
     arms->node->capture_hidden = true;
 

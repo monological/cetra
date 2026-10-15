@@ -6,6 +6,7 @@
 #include "cetra/game/input.h"
 
 #include "inspect.h"
+#include "kit.h"
 
 // Seconds the view takes to settle onto the pickup's framing, and to go back after.
 #define SETTLE 0.6f
@@ -105,6 +106,10 @@ static void take_hold(Inspect* in) {
     camera_rig_blend_from_here(in->rig, SETTLE);
     engine_set_camera_rig(in->game->engine, in->rig);
     in->player->holding = true;
+    // In the hands the cage and its key are a hand's breadth from the lamp on the chest, and would
+    // throw a shadow over most of the wall the beam lights; the arms holding them cast none.
+    kit_node_casts(in->cage->node, false);
+    kit_node_casts(in->key->node, false);
     in->spin = 0.0f;
     in->carried = false;
 }
@@ -182,6 +187,8 @@ static void let_go(Inspect* in) {
     engine_set_camera_rig(in->game->engine, in->player->rig);
     in->player->holding = false;
     lights_flashlight_release(in->lights);
+    kit_node_casts(in->cage->node, true);
+    kit_node_casts(in->key->node, true);
     enter(in, INSPECT_NONE);
 }
 
