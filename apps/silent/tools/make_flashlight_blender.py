@@ -15,6 +15,9 @@ writes:
 MODEL space is the game's: y up, the lens toward -x, which is how the backpack's pictures stand a
 thing -- its face to their side. The source comes in no stated unit, about 620 of them tall, with
 its lens toward Blender's -y, so it is scaled, moved and turned a quarter about its height.
+
+The game draws it only in the backpack's pictures, a few hundred pixels across, so it is cut down
+to about LAMP_TRIANGLES and its maps to PICTURE_SIZE, its masks to the kit's MASK_SIZE.
 """
 
 import argparse
@@ -27,20 +30,18 @@ import bpy
 from mathutils import Matrix, Vector
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from glb import read_glb  # noqa: E402 -- the tools' own module, found beside this one
+# The tools' own modules, found beside this one.
+from blender_kit import export_glb, rendered, save_sheet, shrink, shrink_masks  # noqa: E402
+from glb import credit, read_glb, triangles  # noqa: E402
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 SOURCE = os.path.join(ROOT, "assets", "models", "army_flashlight.glb")
 GLB = os.path.join(ROOT, "assets", "models", "flashlight.glb")
 OUT = os.path.join(ROOT, "out", "flashlight_blender")
-LAMP_HEIGHT = 0.15     # metres from its foot to the top of the loop it hangs by
+LAMP_HEIGHT = 0.15           # metres from its foot to the top of the loop it hangs by
 LENS_PART = "FlashLight_16"  # the source's part that is the lens's glass
-
-
-def credit(path):
-    notes = read_glb(path)[0].get("asset", {}).get("extras", {})
-    return (f"Flashlight: \"{notes.get('title', '')}\" by {notes.get('author', '')}, "
-            f"{notes.get('source', '')}, {notes.get('license', '')}; resized.")
+LAMP_TRIANGLES = 5000        # about how many it keeps of the source's 35,445
+PICTURE_SIZE = 512           # its colour and normal maps, square
 
 
 def bounds(objects):
@@ -53,7 +54,8 @@ def bounds(objects):
 
 
 def build():
-    """The source's parts joined into one object `flashlight` in metres, and the empty `lens`."""
+    """The source's parts joined into one object `flashlight` in metres, cut down and its maps
+    made small, and the empty `lens`."""
     bpy.ops.wm.read_factory_settings(use_empty=True)
     bpy.ops.import_scene.gltf(filepath=SOURCE)
     parts = [o for o in bpy.data.objects if o.type == "MESH"]
@@ -86,6 +88,16 @@ def build():
         bpy.ops.object.join()
     lamp = parts[0]
     lamp.name = lamp.data.name = "flashlight"
+    # Cut down when it is exported; its shape is the source's, its seams kept.
+    tris = sum(len(p.vertices) - 2 for p in lamp.data.polygons)
+    cut = lamp.modifiers.new("cut", "DECIMATE")
+    cut.ratio = min(1.0, LAMP_TRIANGLES / tris)
+    cut.use_collapse_triangulate = True
+    for mat in lamp.data.materials:
+        for node in mat.node_tree.nodes:
+            if node.type == "TEX_IMAGE" and node.image:
+                shrink(node.image, PICTURE_SIZE)
+        shrink_masks(mat)
     empty = bpy.data.objects.new("lens", None)
     empty.location = to_metres @ lens
     bpy.context.scene.collection.objects.link(empty)
@@ -96,18 +108,13 @@ def build():
 
 
 def export(path):
-    props = bpy.ops.export_scene.gltf.get_rna_type().properties.keys()
-    want = dict(
+    export_glb(
         filepath=path, export_format="GLB", export_yup=True, use_selection=False,
         export_apply=True, export_animations=False, export_materials="EXPORT",
         export_normals=True, export_texcoords=True, export_tangents=True,
         export_image_format="AUTO", export_cameras=False, export_lights=False,
-        export_extras=False, export_copyright=credit(SOURCE),
+        export_extras=False, export_copyright=credit(SOURCE, "Flashlight") + "; resized.",
     )
-    missing = [k for k in want if k not in props]
-    if missing:
-        print(f"export: this Blender has no {', '.join(missing)}; left at its defaults", flush=True)
-    bpy.ops.export_scene.gltf(**{k: v for k, v in want.items() if k in props})
 
 
 def self_check(path):
@@ -118,15 +125,12 @@ def self_check(path):
         problems.append("no credit in its copyright")
     if problems:
         sys.exit("self-check:\n  " + "\n  ".join(problems))
-    tris = sum(js["accessors"][p["indices"]]["count"] // 3
-               for m in js["meshes"] for p in m["primitives"])
-    print(f"self-check: {tris} triangles, {os.path.getsize(path) / 1024:.0f} KiB", flush=True)
+    print(f"self-check: {triangles(js)} triangles, {os.path.getsize(path) / 1024:.0f} KiB",
+          flush=True)
 
 
 def preview(lamp):
     """The lamp from the front, the side, above and three-quarters, tiled into one sheet."""
-    import numpy as np
-
     scene = bpy.context.scene
     scene.render.engine = "CYCLES"
     scene.cycles.samples = 64
@@ -155,20 +159,8 @@ def preview(lamp):
                     ("three", Vector((-1.0, -0.8, 0.5)).normalized())):
         cam.location = mid + d
         cam.rotation_euler = (mid - cam.location).to_track_quat("-Z", "Y").to_euler()
-        path = os.path.join(OUT, f"{name}.png")
-        scene.render.filepath = path
-        bpy.ops.render.render(write_still=True)
-        img = bpy.data.images.load(path)
-        tiles.append(np.array(img.pixels[:], dtype=np.float32).reshape(
-            img.size[1], img.size[0], 4))
-        bpy.data.images.remove(img)
-    sheet = np.concatenate(tiles, axis=1)
-    out = bpy.data.images.new("sheet", sheet.shape[1], sheet.shape[0], alpha=True)
-    out.pixels.foreach_set(sheet.ravel())
-    out.filepath_raw = os.path.join(OUT, "sheet.png")
-    out.file_format = "PNG"
-    out.save()
-    print(f"preview: {out.filepath_raw}", flush=True)
+        tiles.append(rendered(os.path.join(OUT, f"{name}.png")))
+    save_sheet(tiles, len(tiles), os.path.join(OUT, "sheet.png"))
 
 
 def main():
@@ -183,4 +175,5 @@ def main():
         preview(lamp)
 
 
-main()
+if __name__ == "__main__":
+    main()
