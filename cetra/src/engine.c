@@ -612,7 +612,13 @@ static int _setup_engine_glfw(Engine* engine, EngineWindowMode window_mode, cons
     // why this has to precede the read rather than rely on it. Unguarded: the
     // window is windowed, so a windowed request is the switch's own no-op, and
     // an out-of-range one is refused there by name rather than dropped here.
-    engine_set_window_mode(engine, window_mode, monitor);
+    // Fullscreen is laid over its monitor BORDERLESS for now, the same rectangle: GLFW will
+    // not show a window that is already on a monitor, and this one is shown only at the end
+    // of creation, so put there now it was never seen at all. It goes onto the monitor once
+    // it is shown.
+    engine_set_window_mode(
+        engine, window_mode == ENGINE_WINDOW_FULLSCREEN ? ENGINE_WINDOW_BORDERLESS : window_mode,
+        monitor);
 
     // Both sizes from the window we actually got, not the one we asked for --
     // a window manager may grant something else, and these two writers (here
@@ -1256,8 +1262,15 @@ static int _engine_init(Engine* engine, const EngineConfig* cfg) {
     // and the post chain, it stood blank and unanswering for the second they took. A size the
     // shown window turns out to have reaches the framebuffer-size callback, registered above, and
     // the first frame's top rebuilds for it.
-    if (!engine->headless)
+    if (!engine->headless) {
         glfwShowWindow(engine->window);
+        if (cfg->window_mode == ENGINE_WINDOW_FULLSCREEN)
+            engine_set_window_mode(engine, ENGINE_WINDOW_FULLSCREEN, cfg->monitor);
+        // Asked of the window system, not assumed: a window it would not show runs the whole
+        // game with nothing on the screen.
+        if (!glfwGetWindowAttrib(engine->window, GLFW_VISIBLE))
+            log_warn("create_engine: the window could not be shown");
+    }
     return 0;
 }
 
