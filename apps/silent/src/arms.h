@@ -32,30 +32,29 @@ typedef enum {
 } ArmsAt;
 
 typedef struct Arms {
-    SceneNode* node; // the arms, at the body; on the graph only while shown
-    SceneNode* root; // the scene's, which they go under
-    Animator* animator;
+    SceneNode* node;    // the arms, at the body; on the graph only while shown
+    SceneNode* root;    // the scene's, which they go under
+    Animator* animator; // NULL when they could not be had
     const Animation* clips[ARMS_CLIP_COUNT];
-    ArmsClipId playing;
     int bones[ARMS_AT_COUNT];
-    mat4 bind[ARMS_AT_COUNT]; // each of those bones' frames at bind, in the skin's frame
-    mat4 skin;                // the skinned meshes' frame in the node's
-    mat4 body;                // where the body was last put, in the world
-    bool shown;
+    mat4 skin;        // the skinned meshes' frame in the node's
+    mat4 key_on_bone; // the carried key's frame in its bone's
 } Arms;
 
-// The arms, off the graph, playing nothing; false, said by name, when the model or its rig cannot
-// be had, and the game goes on without them.
+// The arms, off the graph, playing nothing; false, said by name and with nothing kept, when the
+// model or its rig cannot be had, and the game goes on without them.
 bool arms_load(Arms* arms, Engine* engine, Scene* scene);
 void arms_free(Arms* arms);
 
 // On the graph or off it.
 void arms_show(Arms* arms, bool shown);
+// The body at `body` in the world.
+void arms_place(Arms* arms, const mat4 body);
 // `clip` from its start, crossfaded from what played over `fade` seconds; looping as it is made.
 void arms_play(Arms* arms, ArmsClipId clip, float fade);
-// Per rendered frame, before anything reads them: the body at `body` in the world, and the clip
-// `dt` seconds on. `events` hears each of the clip's events as it is passed, with `user`.
-void arms_frame(Arms* arms, const mat4 body, float dt, AnimatorEventFn events, void* user);
+// Per rendered frame, before anything reads them: the clip `dt` seconds on, its events heard by
+// whatever the animator's callback is.
+void arms_frame(Arms* arms, float dt);
 // Seconds into the clip playing, and whether a clip that does not loop has come to its end.
 float arms_seconds(const Arms* arms);
 bool arms_done(const Arms* arms);
