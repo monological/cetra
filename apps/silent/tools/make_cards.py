@@ -32,7 +32,8 @@ import textwrap
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-from fetch_textures import CACHE_DIR, ROOT, fetch, open_polyhaven
+from fetch_textures import open_polyhaven
+from polyhaven import CACHE_DIR, ROOT, fetch
 
 OUT_DIR = os.path.join(ROOT, "assets", "textures", "silent")
 HEADER = os.path.join(ROOT, "apps", "silent", "src", "cards.h")

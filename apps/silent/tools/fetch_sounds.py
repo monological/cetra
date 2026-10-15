@@ -48,7 +48,7 @@ import numpy as np
 import scipy.io.wavfile as wavfile
 import scipy.signal as signal
 
-from fetch_textures import CACHE_DIR, ROOT, fetch
+from polyhaven import CACHE_DIR, ROOT, fetch
 
 OUT_DIR = os.path.join(ROOT, "assets", "audio", "silent")
 RATE = 48000

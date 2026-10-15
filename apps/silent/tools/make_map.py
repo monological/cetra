@@ -40,7 +40,8 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 from scipy import ndimage
 
-from fetch_textures import CACHE_DIR, OUT_DIR, ROOT, fetch
+from fetch_textures import OUT_DIR
+from polyhaven import CACHE_DIR, ROOT, fetch
 from make_cards import FONTS, HAND_FONT, SERIF_ITALIC, noise, pack, to_image
 
 PLAN = os.path.join(ROOT, "apps", "silent", "tools", "town_plan.txt")

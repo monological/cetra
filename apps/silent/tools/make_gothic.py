@@ -25,7 +25,8 @@ import sys
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter
 
-from fetch_textures import CACHE_DIR, ROOT, open_polyhaven
+from fetch_textures import open_polyhaven
+from polyhaven import CACHE_DIR, ROOT
 from make_cards import noise, place, save_rough, to_array, to_image, veneer, write_header
 
 OUT_DIR = os.path.join(ROOT, "assets", "textures", "silent")
