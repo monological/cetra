@@ -1020,6 +1020,9 @@ once it is had, **K** (or a pad's right-stick click) begins and ends the hauntin
 - **Settings,** from either menu, holds Volume, Display (windowed, fullscreen, borderless), VSync,
   Look speed, Invert look and Field of view. Each applies as it is changed, and they are kept in
   `silent-settings.json` beside the slots. `--mute` and `--fov` win over the file.
+- **The cursor.** In play the mouse looks: in fullscreen at once, and in a window or borderless
+  once a click takes it. The title and every menu show the cursor only while the mouse is in use,
+  hiding it from the moment a menu key or a pad is. The loading screen shows none.
 - **A run that starts somewhere of its own skips the title,** and saves nowhere unless `--slot`
   says where. That is a headless run, or one started from a state on the command line: the flags
   below, or the player, the bag, the map, the key, the finds, the crouch, the story, the haunting,

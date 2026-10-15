@@ -1003,6 +1003,9 @@ static void on_init(Game* game) {
     // game's from the first.
     if ((!engine->headless || g_args.loading_screen) && !g_args.no_loading_screen)
         engine_show_loading_screen(engine);
+    // Nothing to point at while the game loads. The player's first frame takes the cursor over.
+    if (!engine->headless)
+        glfwSetInputMode(engine->window, GLFW_CURSOR, GLFW_CURSOR_HIDDEN);
 
     g_scene = create_scene();
     game_set_scene(game, g_scene);
