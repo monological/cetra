@@ -194,6 +194,13 @@ CharacterController* entity_add_character_controller(Entity* entity, PhysicsWorl
     JPC_CharacterVirtualSettings_SetCharacterPadding(settings, config->character_padding);
     JPC_CharacterVirtualSettings_SetPenetrationRecoverySpeed(settings,
                                                              config->penetration_recovery_speed);
+    // Only the lower sphere stands on anything, as Jolt's own sample has it. Jolt's default lets
+    // any contact support, so a wall brushing the capsule's side reads as steep ground: the
+    // character counts as supported in mid-air, and the update never sticks it to the floor it has
+    // just walked off -- off the bottom of a steep ramp it goes straight on. The sphere's centre is
+    // the cylinder's half height under the middle, and a crouch, which keeps the foot, leaves it
+    // there.
+    jolt_character_support_below(settings, -config->capsule_half_height);
 
     // Create inner body - a kinematic body that moves with the character and pushes dynamic objects
     JPC_CharacterVirtualSettings_SetInnerBodyShape(settings, shape);
