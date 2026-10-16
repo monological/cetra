@@ -33,13 +33,9 @@ typedef struct Hud {
     float hint_left;    // seconds it has left
     UIElement* save_mark;
     struct ShaderProgram*
-        candles;     // the save mark's candlestick, the engine's; NULL for words alone
-    float saved_age; // seconds since the game was saved
-    // Something drawn over the window by what owns it while it is set (spec 13.56): a gauge a
-    // task on screen needs, such as the boat's pull cord.
-    UIElement* gauge;
-    UIDrawFn gauge_draw;
-    void* gauge_user;
+        candles;      // the save mark's candlestick, the engine's; NULL for words alone
+    float saved_age;  // seconds since the game was saved
+    UIElement* gauge; // over the window, drawn by hud_set_gauge's draw (spec 13.56)
 } Hud;
 
 // False, with the reason printed, if the font or the UI cannot be made; the game runs on without

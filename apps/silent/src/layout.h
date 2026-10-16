@@ -288,7 +288,7 @@
 #define LAKE_RZ 17.0f
 #define LAKE_Y  (-12.0f) // the still water
 // The spot circled "here?" on the cabin's lake map, in the deep water near the middle, where the
-// boat's motor dies (spec 13.56); tools/make_cards.py draws it from these.
+// boat's motor dies (spec 13.56). tools/make_cards.py states it again, as it does LAKE_*.
 #define LAKE_MARK_X  (LAKE_X - 6.0f)
 #define LAKE_MARK_Z  (LAKE_Z + 2.0f)
 #define CABIN_PAD_X0 (-71.0f) // the cabin's level pad, cut into the east bank on grid lines

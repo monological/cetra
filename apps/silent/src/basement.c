@@ -4,6 +4,7 @@
 #include "cetra/light.h"
 
 #include "basement.h"
+#include "fixtures.h"
 #include "home.h"
 #include "kitchen.h"
 #include "lights.h"
@@ -74,9 +75,6 @@ static const vec3 BULB_SAGGED = {1.0f, 0.55f, 0.25f};
 #define DRAFT_SIDE  0.05f
 #define DRAFT_DECAY 3.5f // seconds
 #define SWAY        0.012f
-// While the swing still carries the glass further than this, the bulb's kept shadow follows it at
-// any move. The sway left after it stays under the shadows' tolerance and costs no redraw.
-#define FOLLOW_REACH 0.015f
 
 // The tap's drip (tools/fetch_sounds.py): seconds to the first, the least between two and how
 // much more at random, and its level against the house's other sounds.
@@ -715,13 +713,13 @@ static void bulb_update(Basement* b, const Door* door, double time) {
         across = -DRAFT_SIDE * fade * sinf(w * u + 0.4f) + 0.5f * sway * sinf(w * t + 2.9f);
         reach = DRAFT_SWING * fade * BULB_DROP;
     }
-    mat4 m = GLM_MAT4_IDENTITY_INIT;
-    glm_translate_make(m, (float*)PIVOT);
-    glm_rotate_z(m, along, m);
-    glm_rotate_x(m, across, m);
-    glm_mat4_copy(m, b->bulb->original_transform);
-    glm_mat4_mulv3(m, (vec3){0.0f, -BULB_DROP, 0.0f}, 1.0f, b->live.at);
-    b->live.follow = reach > FOLLOW_REACH;
+    mat4 turn = GLM_MAT4_IDENTITY_INIT;
+    glm_rotate_z(turn, along, turn);
+    glm_rotate_x(turn, across, turn);
+    fixture_hang(b->bulb, PIVOT, turn, BULB_DROP, b->live.at);
+    // Following while the draft's swing is wide: the sway left after it stays under the shadows'
+    // tolerance and costs no redraw.
+    b->live.follow = reach > FIXTURE_SWING_FOLLOW;
     // The supply sags now and then, and the filament goes dim and orange with it; never out, or
     // the light would leave its cached shadow undrawn.
     b->live.level = lights_brownout(time, b->seed) * b->mains;

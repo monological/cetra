@@ -1,5 +1,6 @@
 #include <math.h>
 
+#include "kit.h"
 #include "pull_cord.h"
 
 #define SWEEP      0.9f  // seconds end to end at first
@@ -28,13 +29,6 @@ static const vec4 MARKER = {0.95f, 0.95f, 0.92f, 1.0f};
 static const vec4 MISS = {0.82f, 0.26f, 0.2f, 1.0f};
 static const vec4 MARK_EMPTY = {0.88f, 0.88f, 0.84f, 0.35f};
 
-static float rnd(unsigned int* s) {
-    *s ^= *s << 13;
-    *s ^= *s >> 17;
-    *s ^= *s << 5;
-    return (float)(*s & 0xffffffu) / 16777216.0f;
-}
-
 // Where the marker is along the bar, 0..1: up it and back down, at the sweep's pace.
 static float marker(const PullCord* pc) {
     const float t = fmodf(pc->run / pc->sweep, 2.0f);
@@ -45,7 +39,7 @@ static float marker(const PullCord* pc) {
 static void move_zone(PullCord* pc) {
     const float span = 1.0f - 2.0f * ZONE_EDGE - ZONE;
     for (int i = 0; i < 8; i++) {
-        const float z = ZONE_EDGE + span * rnd(&pc->state);
+        const float z = ZONE_EDGE + span * kit_xrnd(&pc->state);
         if (fabsf(z - pc->zone) >= ZONE_APART) {
             pc->zone = z;
             return;
@@ -56,26 +50,20 @@ static void move_zone(PullCord* pc) {
 
 void pull_cord_open(PullCord* pc, unsigned int seed) {
     const float alpha = pc->alpha;
-    *pc = (PullCord){.open = true, .sweep = SWEEP, .zone = 0.5f, .since = FLASH, .alpha = alpha};
+    *pc = (PullCord){.sweep = SWEEP, .zone = 0.5f, .since = FLASH, .alpha = alpha};
     pc->state = seed ? seed : 0x9e3779b9u;
     move_zone(pc);
 }
 
-void pull_cord_close(PullCord* pc) {
-    pc->open = false;
-}
-
-void pull_cord_update(PullCord* pc, float dt) {
-    pc->alpha = fminf(fmaxf(pc->alpha + (pc->open ? dt : -dt) / FADE, 0.0f), 1.0f);
-    if (!pc->open)
+void pull_cord_update(PullCord* pc, bool shown, float dt) {
+    pc->alpha = fminf(fmaxf(pc->alpha + (shown ? dt : -dt) / FADE, 0.0f), 1.0f);
+    if (!shown)
         return;
     pc->run += dt;
     pc->since += dt;
 }
 
 bool pull_cord_pull(PullCord* pc) {
-    if (!pc->open)
-        return false;
     const float m = marker(pc);
     pc->last_good = m >= pc->zone && m <= pc->zone + ZONE;
     pc->since = 0.0f;

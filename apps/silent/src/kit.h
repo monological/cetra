@@ -205,6 +205,11 @@ static inline float kit_xrnd(unsigned int* state) {
     return (float)(*state & 0xffffffu) / 16777215.0f;
 }
 
+// `from` moved toward `to` by at most `step`.
+static inline float kit_approach(float from, float to, float step) {
+    return from < to ? fminf(from + step, to) : fmaxf(from - step, to);
+}
+
 // The parts of lo..hi clear of the `n` intervals `blocked` (each {from, to}, in any order and
 // overlapping or not), in order, into `out`, which holds n + 1. Returns their count.
 int kit_clear_spans(float lo, float hi, const vec2* blocked, int n, vec2* out);

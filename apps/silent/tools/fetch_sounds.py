@@ -227,7 +227,7 @@ LOOPS = {
     "lake_lapping": ("lapping", 568819),
     "hearth_fire": ("hearth", 414298),
     "cabin_room": ("room", 452516),
-    # The boat (spec 13.56), chosen by what each is, not yet by ear.
+    # The boat (spec 13.56), chosen by what each is.
     "outboard_run": ("outboard", 637742),
     "hull_slap": ("slap", 851577),
 }
@@ -271,9 +271,7 @@ ONESHOT_JOBS = {
     "slam": {"longest": 1.6, "tail": 0.6, "highpass": 35.0, "per": 2},
     # The fridge's compressor stopping: the whirl dying and the clunk.
     "clunk": {"longest": 2.0, "tail": 0.4, "highpass": 35.0, "per": 3, "join": 0.2},
-    # The boat (spec 13.56): a recoil starter's cord pulled out and running back, and the hull
-    # knocking on something, its ring after it.
-    "pull": {"longest": 1.0, "tail": 0.12, "highpass": 90.0, "per": 6},
+    # The boat (spec 13.56): the hull knocking on something, its ring after it.
     "knock": {"longest": 0.6, "tail": 0.3, "highpass": 50.0, "per": 4},
 }
 ONESHOT_CANDIDATES = {
@@ -298,7 +296,6 @@ ONESHOT_CANDIDATES = {
     "knob": [727791],
     "slam": [571797],
     "clunk": [573936],
-    "pull": [222809],
     "knock": [637206],
 }
 # The player's footsteps (spec 13.47), chosen by ear from each candidate's walk: surface ->
@@ -347,7 +344,7 @@ ONESHOTS = {
     "door_knob_4": ("knob", 727791, 3),
     "door_slam": ("slam", 571797, 0),
     "fridge_clunk": ("clunk", 573936, 0),
-    # The boat (spec 13.56), the loudest, not yet chosen by ear.
+    # The boat (spec 13.56), the loudest take.
     "boat_knock": ("knock", 637206, 0),
 }
 

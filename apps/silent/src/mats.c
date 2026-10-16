@@ -112,6 +112,21 @@ typedef struct MatSpec {
 #define STAINED_NIGHT_NITS 25.0f
 #define STAINED_DAY_NITS   1500.0f
 
+// The jars' clear glass, under the rain's beads or not.
+#define CLEAR_GLASS(name, beads_)                                                        \
+    {                                                                                    \
+        name, "Smear008", {0.94f, 1.0f, 0.95f}, 0.12f, 0.0f, 0.3f, true, .grime = 0.35f, \
+            .glass = {0.97f, 0.004f, {0.90f, 0.97f, 0.90f}, 0.025f}, .rain = {           \
+                true,                                                                    \
+                -1.0f,                                                                   \
+                .beads = beads_                                                          \
+            }                                                                            \
+    }
+// A squirrel-cage filament, a few millimetres of wire seen through clear glass: bright enough
+// that the bloom shows the bulb lit from across a room.
+#define FILAMENT(name) \
+    {name, NULL, {1.0f, 0.85f, 0.6f}, 0.3f, 0.0f, 1.0f, .glow = {{1.0f, 0.62f, 0.3f}, 5000.0f}}
+
 /*
  * The repeats follow each scan's real size where that reads right and depart
  * from it where the reference asks: the kitchen's 30 cm floor tiles are the
@@ -189,16 +204,7 @@ static const MatSpec SPECS[MAT_COUNT] = {
                          .grime = 0.35f,
                          .glass = {0.95f, 0.004f, {0.80f, 0.50f, 0.22f}, 0.008f},
                          .rain = {true, -1.0f, .beads = RAIN_BEADS_OFF}},
-    [MAT_GLASS_CLEAR] = {"clear_glass",
-                         "Smear008",
-                         {0.94f, 1.0f, 0.95f},
-                         0.12f,
-                         0.0f,
-                         0.3f,
-                         true,
-                         .grime = 0.35f,
-                         .glass = {0.97f, 0.004f, {0.90f, 0.97f, 0.90f}, 0.025f},
-                         .rain = {true, -1.0f, .beads = RAIN_BEADS_OFF}},
+    [MAT_GLASS_CLEAR] = CLEAR_GLASS("clear_glass", RAIN_BEADS_OFF),
     // What is in the jars, off one granular scan: a red-brown sauce or spice,
     // pale grain, and something pickled.
     [MAT_CONTENTS] = {"contents_red", "grass_ground", {0.46f, 0.15f, 0.07f}, 0.5f, 0.0f, 0.25f},
@@ -412,15 +418,7 @@ static const MatSpec SPECS[MAT_COUNT] = {
                        0.0f,
                        0.4f,
                        .glow = {{1.0f, 0.72f, 0.42f}, 25.0f}},
-    // A squirrel-cage filament, a few millimetres of wire seen through clear glass: bright enough
-    // that the bloom shows the bulb lit from across the hall.
-    [MAT_FILAMENT] = {"filament",
-                      NULL,
-                      {1.0f, 0.85f, 0.6f},
-                      0.3f,
-                      0.0f,
-                      1.0f,
-                      .glow = {{1.0f, 0.62f, 0.3f}, 5000.0f}},
+    [MAT_FILAMENT] = FILAMENT("filament"),
     // Brass gone dark in its corners and still glossy where it is handled: metal, under the smear
     // scan's relief, glossier than the clock's.
     [MAT_LANTERN_BRASS] = {"lantern_brass",
@@ -576,23 +574,8 @@ static const MatSpec SPECS[MAT_COUNT] = {
     // carry their own UVs.
     [MAT_TOWN_MAP] = {"town_map", "town_map_folded", {1, 1, 1}, 1.0f, 0.0f, 1.0f},
     // The dock lamp's globe is the jars' glass where the rain beads.
-    [MAT_LAMP_GLASS] = {"lamp_glass",
-                        "Smear008",
-                        {0.94f, 1.0f, 0.95f},
-                        0.12f,
-                        0.0f,
-                        0.3f,
-                        true,
-                        .grime = 0.35f,
-                        .glass = {0.97f, 0.004f, {0.90f, 0.97f, 0.90f}, 0.025f},
-                        .rain = {true, -1.0f, .beads = RAIN_BEADS_ON}},
-    [MAT_LAMP_FILAMENT] = {"lamp_filament",
-                           NULL,
-                           {1.0f, 0.85f, 0.6f},
-                           0.3f,
-                           0.0f,
-                           1.0f,
-                           .glow = {{1.0f, 0.62f, 0.3f}, 5000.0f}},
+    [MAT_LAMP_GLASS] = CLEAR_GLASS("lamp_glass", RAIN_BEADS_ON),
+    [MAT_LAMP_FILAMENT] = FILAMENT("lamp_filament"),
 };
 
 // A map of a material's set, decoded on the engine's loader threads and set by `put` once in.

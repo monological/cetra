@@ -36,8 +36,15 @@ void fixture_lantern(Kit* kit, const KitFrame* f, float a, float y, float d, flo
 // and a bulb hung FIXTURE_BULB_DROP under the top, its filament of material `filament`.
 void fixture_lantern_round(Kit* kit, const KitFrame* f, float a, float y, float d, float r, float h,
                            int glass, int filament);
-// A chain of oval brass links from `y0` down to `y1` on the upright through (a, d), each link
-// turned a quarter from the last and hung through it.
-void fixtures_chain(Kit* kit, const KitFrame* f, float a, float d, float y0, float y1);
+// A chain of oval brass links from `y0` down to `y1` on the kit's upright through its origin, each
+// link turned a quarter from the last and hung through it.
+void fixtures_chain(Kit* kit, float y0, float y1);
+
+// How far a hung bulb swings from straight down before its light's kept shadow follows it rather
+// than stepping after it, metres.
+#define FIXTURE_SWING_FOLLOW 0.015f
+// A lamp hung from `pivot`, turned there by `turn`: its node placed, and where its bulb, `drop`
+// straight under the pivot hanging still, has gone in `bulb`.
+void fixture_hang(SceneNode* node, const vec3 pivot, const mat4 turn, float drop, vec3 bulb);
 
 #endif // _SILENT_FIXTURES_H_

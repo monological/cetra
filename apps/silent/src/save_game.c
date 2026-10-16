@@ -27,12 +27,9 @@ typedef struct Kept {
     int item_order[ITEM_COUNT]; // each thing's place in the order it was had, from 1; 0 not had
     bool inked[PLACE_COUNT];
     int cat_place;
-    // The boat (spec 13.56): where it is in plan and which way it points, whether the player is
-    // in it, and whether its motor is still to die this trip. Kept rather than the boat's own,
-    // since putting the player in or out of it is a change the boat makes from what it was.
-    vec3 boat; // x, z, heading
-    bool boat_riding;
-    bool boat_cut_armed;
+    // The boat (spec 13.56). Kept rather than the boat's own, since putting the player in or out
+    // of it is a change the boat makes from what it was.
+    BoatState boat;
 } Kept;
 
 static SaveSystem* g_system;
@@ -136,9 +133,9 @@ bool save_game_start(const SaveWorld* world) {
     add_table("story", g_story, KIT_COUNT(g_story));
 
     if (boat_kept()) {
-        g_boat[0] = ROW(SAVE_VEC3, "at", &g_kept.boat);
-        g_boat[1] = ROW(SAVE_BOOL, "riding", &g_kept.boat_riding);
-        g_boat[2] = ROW(SAVE_BOOL, "cut_armed", &g_kept.boat_cut_armed);
+        g_boat[0] = ROW(SAVE_VEC3, "at", &g_kept.boat.at);
+        g_boat[1] = ROW(SAVE_BOOL, "riding", &g_kept.boat.riding);
+        g_boat[2] = ROW(SAVE_BOOL, "cut_armed", &g_kept.boat.cut_armed);
         add_table("boat", g_boat, KIT_COUNT(g_boat));
     }
 
@@ -177,11 +174,8 @@ static void gather(void) {
         g_kept.inked[i] = map_screen_inked(w->map_screen, (PlaceId)i);
     if (cat_kept())
         g_kept.cat_place = cat_nearest_place(w->cat);
-    if (boat_kept()) {
-        glm_vec3_copy((vec3){w->boat->x, w->boat->z, w->boat->heading}, g_kept.boat);
-        g_kept.boat_riding = w->boat->riding;
-        g_kept.boat_cut_armed = w->boat->cut_armed;
-    }
+    if (boat_kept())
+        g_kept.boat = boat_state(w->boat);
 }
 
 static void apply(void) {
@@ -212,11 +206,8 @@ static void apply(void) {
     // is said nothing about, since the player did not arrive anywhere.
     player_restore(w->player);
     // The boat where it was, its motor off, and the player in it if they were (spec 13.56).
-    if (boat_kept()) {
-        boat_place(w->boat, w->player, g_kept.boat[0], g_kept.boat[1], g_kept.boat[2],
-                   g_kept.boat_riding);
-        w->boat->cut_armed = g_kept.boat_cut_armed;
-    }
+    if (boat_kept())
+        boat_place(w->boat, w->player, &g_kept.boat);
     vec3 feet = {0.0f, 0.0f, 0.0f};
     player_feet(w->player, feet);
     finds_settle(w->finds, feet);

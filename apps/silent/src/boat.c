@@ -7,13 +7,14 @@
 
 #include "boat.h"
 #include "boat_shape.h"
-#include "lake.h"
 #include "layout.h"
 #include "library.h"
 #include "mats.h"
 #include "sounds.h"
 
 #define BOAT_MODEL "assets/models/boat.glb"
+
+_Static_assert(BOAT_DRY_COUNT <= WATER_DRY_MAX, "the hull's dry shapes fit the water's");
 
 // How it goes (spec 13.56): a 3.4 m wooden boat under an old six horsepower, about a little over
 // 3 m/s flat out, getting there in a few seconds and coasting a long way. Thrust in m/s/s at full
@@ -79,7 +80,7 @@
 #define RUN_IDLE_PITCH  1.0f
 #define RUN_FULL_PITCH  1.8f
 #define SLAP_VOLUME     0.35f
-// The one-shots, under the loop running flat out: chosen by their levels, not yet by ear.
+// The one-shots, under the loop running flat out.
 #define PULL_VOLUME  0.7f
 #define COUGH_VOLUME 0.55f
 #define CATCH_VOLUME 0.55f
@@ -87,22 +88,10 @@
 #define STOP_VOLUME  0.45f
 #define KNOCK_VOLUME 0.7f
 
-static float approach(float from, float to, float step) {
-    return from < to ? fminf(from + step, to) : fmaxf(from - step, to);
-}
-
-// The boat's frame in plan: toward the bow, and to its left.
-static void plan_axes(float heading, vec2 fwd, vec2 left) {
-    fwd[0] = sinf(heading), fwd[1] = cosf(heading);
-    left[0] = cosf(heading), left[1] = -sinf(heading);
-}
-
-// A point of the boat's frame, (x left, z toward the bow), in plan at (x, z, heading).
-static void plan_point(float x, float z, float heading, float lx, float lz, vec2 out) {
-    vec2 fwd = {0.0f, 0.0f}, left = {0.0f, 0.0f};
-    plan_axes(heading, fwd, left);
-    out[0] = x + lx * left[0] + lz * fwd[0];
-    out[1] = z + lx * left[1] + lz * fwd[1];
+// The boat's frame at (x, z, heading) on the still water: (a, y, d) to its left, up and toward its
+// bow.
+static KitFrame plan(float x, float z, float heading) {
+    return (KitFrame){{x, LAKE_Y, z}, heading};
 }
 
 static void voice(const Boat* b, Sound* sound, const vec3 at, float volume, float pitch) {
@@ -115,9 +104,8 @@ static void voice(const Boat* b, Sound* sound, const vec3 at, float volume, floa
 
 // Where the motor is, from the boat's place in plan: for a sound, which the swell does not move.
 static void motor_world(const Boat* b, vec3 out) {
-    vec2 at = {0.0f, 0.0f};
-    plan_point(b->x, b->z, b->heading, b->motor_at[0], b->motor_at[2], at);
-    glm_vec3_copy((vec3){at[0], LAKE_Y + b->motor_at[1], at[1]}, out);
+    const KitFrame f = plan(b->x, b->z, b->heading);
+    kit_frame_point(&f, b->motor_at[0], b->motor_at[1], b->motor_at[2], out);
 }
 
 // The boat's frame in the world this frame, its swell on it: drawn at (x, z, heading) at `time`.
@@ -139,8 +127,8 @@ static void boat_matrix(const Boat* b, float x, float z, float heading, double t
 // Building
 
 // The boat turned over on the bank, its gunwales on the ground: the model with no motor, bracket
-// or tank, rolled about its keel.
-static SceneNode* upturned(Engine* engine, Scene* scene) {
+// or tank, rolled about its keel, and the body round it in `kit`.
+static SceneNode* upturned(Engine* engine, Scene* scene, Kit* kit, const KitFrame* bank) {
     SceneNode* node = library_take(engine, scene, BOAT_MODEL, "boat_upturned", NULL);
     if (!node)
         return NULL;
@@ -148,35 +136,29 @@ static SceneNode* upturned(Engine* engine, Scene* scene) {
     for (size_t i = 0; i < sizeof(GONE) / sizeof(GONE[0]); i++)
         free_node(library_find(node, GONE[i], NULL));
     library_programs(engine, node);
-    float x = 0.0f, z = 0.0f, ground = 0.0f, heading = 0.0f;
-    lake_bank_boat(&x, &z, &ground, &heading);
-    // Its gunwale is the hull's top, its sheer's lowest; turned over it rests there.
-    const float gunwale = 0.31f;
-    glm_translate_make(node->original_transform, (vec3){x, ground + gunwale, z});
-    glm_rotate_y(node->original_transform, heading, node->original_transform);
+    glm_translate_make(node->original_transform,
+                       (vec3){bank->origin[0], bank->origin[1] + BOAT_GUNWALE_Y, bank->origin[2]});
+    glm_rotate_y(node->original_transform, bank->yaw, node->original_transform);
     glm_rotate_z(node->original_transform, GLM_PIf, node->original_transform);
     node_add_child(scene->root_node, node);
+    const float tall = BOAT_GUNWALE_Y + BOAT_DRAFT;
+    vec3 middle = {0.0f, 0.0f, 0.0f};
+    kit_frame_point(bank, 0.0f, 0.5f * tall, 0.5f * (BOAT_BOW_Z + BOAT_STERN_Z), middle);
+    kit_collider(kit, middle,
+                 (vec3){BOAT_HALF_BEAM, 0.5f * tall, 0.5f * (BOAT_BOW_Z - BOAT_STERN_Z)},
+                 bank->yaw);
     return node;
 }
 
 // The rope from the moored boat's bow eye down to the water and up to the dock's post, in a kit of
 // its own beside the lake's, so it can be taken off the graph while the boat is out.
-static SceneNode* tie(Kit* lake_kit, const mat4 bow_eye) {
-    float x = 0.0f, z = 0.0f, heading = 0.0f;
-    vec3 knot = {0.0f, 0.0f, 0.0f};
-    lake_mooring(&x, &z, &heading, knot);
-    mat4 moored = GLM_MAT4_IDENTITY_INIT;
-    glm_translate_make(moored, (vec3){x, LAKE_Y, z});
-    glm_rotate_y(moored, heading, moored);
-    vec3 bow = {0.0f, 0.0f, 0.0f};
-    mat4 at = GLM_MAT4_IDENTITY_INIT;
-    glm_mat4_mul(moored, (vec4*)bow_eye, at);
-    glm_vec3_copy(at[3], bow);
+static SceneNode* tie(Kit* lake_kit, const LakeBerths* berths, const vec3 bow_eye) {
     vec3 rope[3];
-    glm_vec3_copy(bow, rope[0]);
-    glm_vec3_copy((vec3){0.5f * (bow[0] + knot[0]), LAKE_Y + 0.1f, 0.5f * (bow[2] + knot[2])},
-                  rope[1]);
-    glm_vec3_copy(knot, rope[2]);
+    kit_frame_point(&berths->moored, bow_eye[0], bow_eye[1], bow_eye[2], rope[0]);
+    glm_vec3_copy((float*)berths->post, rope[2]);
+    glm_vec3_copy(
+        (vec3){0.5f * (rope[0][0] + rope[2][0]), LAKE_Y + 0.1f, 0.5f * (rope[0][2] + rope[2][2])},
+        rope[1]);
     Kit kit;
     kit_init_beside(&kit, lake_kit, GLM_VEC3_ZERO);
     kit.draw_distance = lake_kit->draw_distance;
@@ -202,7 +184,7 @@ static bool where(SceneNode* model, const char* name, vec3 out) {
     mat4 frame = GLM_MAT4_IDENTITY_INIT;
     if (!library_find(model, name, frame))
         return false;
-    glm_mat4_mulv3(model->original_transform, frame[3], 1.0f, out);
+    glm_vec3_copy(frame[3], out);
     return true;
 }
 
@@ -210,6 +192,7 @@ bool boat_build(Boat* b, Engine* engine, Scene* scene, Water* water, Kit* lake_k
     memset(b, 0, sizeof(*b));
     b->scene = scene;
     b->water = water;
+    lake_berths(&b->berths);
     b->node = library_take(engine, scene, BOAT_MODEL, "boat", NULL);
     if (!b->node)
         return false;
@@ -218,9 +201,9 @@ bool boat_build(Boat* b, Engine* engine, Scene* scene, Water* water, Kit* lake_k
     b->prop = part(b->node, "prop", b->prop_rest);
     b->cord = part(b->node, "cord", b->cord_rest);
     b->rope = part(b->node, "cord_rope", b->rope_rest);
-    mat4 bow_eye = GLM_MAT4_IDENTITY_INIT;
+    vec3 bow_eye = {0.0f, 0.0f, 0.0f};
     if (!b->motor || !b->prop || !b->cord || !b->rope || !where(b->node, "seat", b->seat) ||
-        !library_find(b->node, "bow_eye", bow_eye)) {
+        !where(b->node, "bow_eye", bow_eye)) {
         free_node(b->node);
         b->node = NULL;
         return false;
@@ -232,15 +215,14 @@ bool boat_build(Boat* b, Engine* engine, Scene* scene, Water* water, Kit* lake_k
     b->node->capture_hidden = true;
     b->node->draw_distance = reach;
     node_add_child(scene->root_node, b->node);
-    b->tie = tie(lake_kit, bow_eye);
-    b->upturned = upturned(engine, scene);
+    b->tie = tie(lake_kit, &b->berths, bow_eye);
+    b->upturned = upturned(engine, scene, lake_kit, &b->berths.bank);
     if (b->upturned)
         b->upturned->draw_distance = reach;
-    float x = 0.0f, z = 0.0f, heading = 0.0f;
-    lake_mooring(&x, &z, &heading, NULL);
-    boat_place(b, NULL, x, z, heading, false);
-    printf("silent: boat: moored at %.1f, %.1f; %d dry shapes in its hull\n", (double)x, (double)z,
-           BOAT_DRY_COUNT);
+    const BoatState moored = {.riding = false};
+    boat_place(b, NULL, &moored);
+    printf("silent: boat: moored at %.1f, %.1f; %d dry shapes in its hull\n", (double)b->x,
+           (double)b->z, BOAT_DRY_COUNT);
     return true;
 }
 
@@ -270,116 +252,152 @@ void boat_free(Boat* b) {
 }
 
 // ---------------------------------------------------------------------------------------------
+// The motor
+
+// The motor into `to`: heard stopping by hand or dying, its stumble begun, or its cord taken up.
+static void motor_enter(Boat* b, BoatMotor to) {
+    vec3 at = {0.0f, 0.0f, 0.0f};
+    motor_world(b, at);
+    if (to == BOAT_MOTOR_OFF && b->motor_state == BOAT_MOTOR_RUNNING) {
+        voice(b, b->sounds.stop, at, STOP_VOLUME, 1.0f);
+    } else if (to == BOAT_MOTOR_DYING) {
+        voice(b, b->sounds.dies, at, DIES_VOLUME, 1.0f);
+        b->dying_time = 0.0f;
+        b->dying_from = fmaxf(b->rpm, IDLE);
+    } else if (to == BOAT_MOTOR_RUNNING) {
+        b->rpm = fmaxf(b->rpm, IDLE);
+    } else if (to == BOAT_MOTOR_PULLING) {
+        pull_cord_open(&b->pull, (unsigned int)(b->clock * 1000.0) * 2654435761u + 17u);
+    }
+    b->motor_state = to;
+}
+
+// The motor's speed this step: coming up toward what the throttle asks, running down, or
+// stumbling to a stop.
+static void motor_step(Boat* b, float dt) {
+    switch (b->motor_state) {
+        case BOAT_MOTOR_RUNNING:
+            b->rpm = kit_approach(b->rpm, IDLE + (1.0f - IDLE) * fabsf(b->throttle), REV_UP * dt);
+            // The first time on a trip it reaches the marked spot, it dies.
+            if (b->cut_armed && hypotf(b->x - LAKE_MARK_X, b->z - LAKE_MARK_Z) < CUT_NEAR) {
+                b->cut_armed = false;
+                motor_enter(b, BOAT_MOTOR_DYING);
+            }
+            break;
+        case BOAT_MOTOR_DYING: {
+            b->dying_time += dt;
+            const float t = b->dying_time, left = fmaxf(1.0f - t / DIE_TIME, 0.0f);
+            b->rpm = b->dying_from * left * (0.55f + 0.45f * sinf(31.0f * t) * sinf(9.0f * t));
+            if (t >= DIE_TIME) {
+                motor_enter(b, BOAT_MOTOR_OFF);
+                b->rpm = 0.0f;
+                b->cut_out = true;
+            }
+            break;
+        }
+        default:
+            b->rpm = kit_approach(b->rpm, 0.0f, REV_DOWN * dt);
+            break;
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
 // Placing, getting in and out
 
 // Where the rider's feet are in the boat at (x, z, heading): under the seated eye, a standing
 // body's eye height below it, which a disabled controller only needs for a save.
 static void rider_feet(const Boat* b, float x, float z, float heading, vec3 out) {
-    vec2 at = {0.0f, 0.0f};
-    plan_point(x, z, heading, b->seat[0], b->seat[2], at);
-    glm_vec3_copy((vec3){at[0], LAKE_Y + b->seat[1] - PLAYER_EYE_HEIGHT, at[1]}, out);
+    const KitFrame f = plan(x, z, heading);
+    kit_frame_point(&f, b->seat[0], b->seat[1] - PLAYER_EYE_HEIGHT, b->seat[2], out);
 }
 
-static void set_moored(Boat* b, bool moored) {
-    b->moored = moored;
-    kit_node_shown(b->scene->root_node, b->tie, moored);
+// The boat onto `to`, its rope tied exactly while it is moored.
+static void set_berth(Boat* b, BoatBerth to) {
+    b->berth = to;
+    kit_node_shown(b->scene->root_node, b->tie, to == BOAT_MOORED);
 }
 
-void boat_place(Boat* b, Player* p, float x, float z, float heading, bool riding) {
+// The view easing round over `seconds` to look ahead over the bow, `down` radians into the boat.
+static void look_ahead(const Boat* b, Player* p, float seconds, float down) {
+    camera_rig_blend_from_here(p->rig, seconds);
+    camera_rig_aim(p->rig, b->heading, -down);
+}
+
+BoatState boat_state(const Boat* b) {
+    return (BoatState){.at = {b->x, b->z, b->heading},
+                       .riding = b->berth == BOAT_AFLOAT,
+                       .cut_armed = b->cut_armed};
+}
+
+void boat_place(Boat* b, Player* p, const BoatState* s) {
+    const bool was = b->berth == BOAT_AFLOAT;
     // Nobody in it, it is at its mooring: the only other place it is left is being brought
     // onto it.
-    if (!riding)
-        lake_mooring(&x, &z, &heading, NULL);
-    b->x = b->prev_x = x;
-    b->z = b->prev_z = z;
-    b->heading = b->prev_heading = b->drawn_heading = heading;
+    const KitFrame* m = &b->berths.moored;
+    b->x = b->prev_x = s->riding ? s->at[0] : m->origin[0];
+    b->z = b->prev_z = s->riding ? s->at[1] : m->origin[2];
+    b->heading = b->prev_heading = b->drawn_heading = s->riding ? s->at[2] : m->yaw;
     b->speed = b->slip = b->yaw_rate = b->throttle = b->tiller = b->rpm = 0.0f;
     b->motor_state = BOAT_MOTOR_OFF;
-    b->docking = false;
-    pull_cord_close(&b->pull);
-    set_moored(b, !riding);
-    if (p && riding && !p->riding) {
+    b->cut_armed = s->cut_armed;
+    set_berth(b, s->riding ? BOAT_AFLOAT : BOAT_MOORED);
+    if (!p)
+        return;
+    if (s->riding) {
         player_board(p, 0.0f);
-        camera_rig_aim(p->rig, heading, p->rig->pitch);
-    } else if (p && !riding && p->riding) {
+        look_ahead(b, p, 0.0f, 0.12f);
+        vec3 feet = {0.0f, 0.0f, 0.0f};
+        rider_feet(b, b->x, b->z, b->heading, feet);
+        player_carry(p, feet);
+    } else if (was) {
         // Out where the body now stands, which whatever placed the boat has put it.
         vec3 feet = {0.0f, 0.0f, 0.0f};
         player_feet(p, feet);
         player_disembark(p, feet, p->rig->yaw, 0.0f);
     }
-    b->riding = riding;
-    b->cut_armed = riding;
-    if (riding && p) {
-        vec3 feet = {0.0f, 0.0f, 0.0f};
-        rider_feet(b, x, z, heading, feet);
-        player_carry(p, feet);
-    }
 }
 
 float boat_reach(const Boat* b, const Player* p) {
-    if (!b->node || b->riding || !b->moored)
+    if (!b->node || b->berth != BOAT_MOORED)
         return FLT_MAX;
-    // The boat's middle at its gunwales, from the eye a hand reaches from.
-    vec3 at = {0.0f, 0.0f, 0.0f}, to = {0.0f, 0.0f, 0.0f}, forward = {0.0f, 0.0f, 0.0f};
-    glm_mat4_mulv3(b->node->original_transform, (vec3){0.0f, 0.3f, 0.0f}, 1.0f, at);
-    glm_vec3_sub(at, (float*)p->reach_from, to);
-    const float dist = glm_vec3_norm(to);
-    camera_rig_direction(p->rig, forward);
-    if (dist > BOARD_REACH || dist < 1e-4f || glm_vec3_dot(to, forward) / dist < cosf(BOARD_CONE))
-        return FLT_MAX;
-    return dist;
+    // The boat's middle at its gunwales.
+    vec3 at = {0.0f, 0.0f, 0.0f};
+    kit_frame_point(&b->berths.moored, 0.0f, BOAT_GUNWALE_Y, 0.0f, at);
+    return player_reach_within(p, at, BOARD_REACH, BOARD_CONE);
 }
 
 void boat_board(Boat* b, Player* p, Hud* hud) {
-    if (b->riding || !b->node)
+    if (b->berth != BOAT_MOORED || !b->node)
         return;
-    set_moored(b, false);
-    b->docking = false;
-    b->riding = true;
+    set_berth(b, BOAT_AFLOAT);
     b->cut_armed = true;
     player_board(p, VIEW_EASE);
-    // Sat facing the bow, looking a little down into the boat.
-    camera_rig_aim(p->rig, b->heading, -0.12f);
+    look_ahead(b, p, VIEW_EASE, 0.12f);
     if (hud && !b->told)
         hud_think(hud, "It still has a motor on it.");
 }
 
 bool boat_riding(const Boat* b) {
-    return b->riding;
+    return b->berth == BOAT_AFLOAT;
 }
 
 // Alongside the dock and slow enough to step out.
 static bool can_get_out(const Boat* b) {
-    float mx = 0.0f, mz = 0.0f, mh = 0.0f;
-    lake_mooring(&mx, &mz, &mh, NULL);
-    return b->riding && b->motor_state != BOAT_MOTOR_PULLING && fabsf(b->speed) < MOOR_SLOW &&
-           hypotf(b->x - mx, b->z - mz) < MOOR_NEAR;
+    const float* m = b->berths.moored.origin;
+    return b->berth == BOAT_AFLOAT && b->motor_state != BOAT_MOTOR_PULLING &&
+           fabsf(b->speed) < MOOR_SLOW && hypotf(b->x - m[0], b->z - m[2]) < MOOR_NEAR;
 }
 
-// Out onto the dock beside the mooring, facing back along it to the shore; the motor stopped, and
-// the boat brought round onto its mooring.
+// Out onto the dock beside the mooring; the motor stopped, and the boat brought round onto its
+// mooring.
 static void get_out(Boat* b, Player* p) {
-    if (b->motor_state == BOAT_MOTOR_RUNNING) {
-        vec3 at = {0.0f, 0.0f, 0.0f};
-        motor_world(b, at);
-        voice(b, b->sounds.stop, at, STOP_VOLUME, 1.0f);
-    }
-    b->motor_state = BOAT_MOTOR_OFF;
-    b->rpm = 0.0f;
-    pull_cord_close(&b->pull);
-    b->riding = false;
-    b->docking = true;
-    float mx = 0.0f, mz = 0.0f, mh = 0.0f;
-    lake_mooring(&mx, &mz, &mh, NULL);
-    float box[4];
-    lake_dock_box(box);
-    // On the deck, a stride in from its south edge, level with the boat's middle.
-    const vec3 feet = {mx, LAKE_Y + 0.95f, box[1] + 0.3f + 0.45f};
-    player_disembark(p, feet, 0.5f * GLM_PIf, VIEW_EASE);
+    motor_enter(b, BOAT_MOTOR_OFF);
+    set_berth(b, BOAT_DOCKING);
+    player_disembark(p, b->berths.landing, b->berths.landing_yaw, VIEW_EASE);
 }
 
 const char* boat_prompt(const Boat* b) {
-    if (!b->riding)
+    if (b->berth != BOAT_AFLOAT)
         return NULL;
     switch (b->motor_state) {
         case BOAT_MOTOR_OFF:
@@ -400,19 +418,16 @@ const char* boat_prompt(const Boat* b) {
 static void look_at_motor(const Boat* b, Player* p) {
     mat4 m = GLM_MAT4_IDENTITY_INIT;
     glm_mat4_mul((vec4*)b->motor_rest, (vec4*)b->cord_rest, m);
-    vec3 to = {0.0f, 0.0f, 0.0f};
+    vec3 to = {0.0f, 0.0f, 0.0f}, w = {0.0f, 0.0f, 0.0f};
     glm_vec3_sub(m[3], (float*)b->seat, to);
-    vec2 fwd = {0.0f, 0.0f}, left = {0.0f, 0.0f};
-    plan_axes(b->heading, fwd, left);
-    const float wx = to[0] * left[0] + to[2] * fwd[0], wz = to[0] * left[1] + to[2] * fwd[1];
+    const KitFrame f = plan(b->x, b->z, b->heading);
+    kit_frame_dir(&f, to[0], to[1], to[2], w);
     camera_rig_blend_from_here(p->rig, VIEW_EASE);
-    camera_rig_aim(p->rig, atan2f(wx, wz), asinf(to[1] / fmaxf(glm_vec3_norm(to), 1e-4f)));
+    camera_rig_aim(p->rig, atan2f(w[0], w[2]), asinf(w[1] / fmaxf(glm_vec3_norm(w), 1e-4f)));
 }
 
 void boat_open_cord(Boat* b, Player* p, Hud* hud) {
-    b->motor_state = BOAT_MOTOR_PULLING;
-    b->motor_time = 0.0f;
-    pull_cord_open(&b->pull, (unsigned int)(b->clock * 1000.0) * 2654435761u + 17u);
+    motor_enter(b, BOAT_MOTOR_PULLING);
     if (hud)
         hud_set_gauge(hud, pull_cord_draw, &b->pull);
     if (p)
@@ -420,10 +435,7 @@ void boat_open_cord(Boat* b, Player* p, Hud* hud) {
 }
 
 void boat_start_motor(Boat* b) {
-    b->motor_state = BOAT_MOTOR_RUNNING;
-    b->motor_time = 0.0f;
-    b->rpm = IDLE;
-    pull_cord_close(&b->pull);
+    motor_enter(b, BOAT_MOTOR_RUNNING);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -432,28 +444,29 @@ void boat_start_motor(Boat* b) {
 // The deepest any rim point stands in what the boat may not enter, and which way is out: the
 // ground short of the open water, or the dock.
 static float deepest(const Boat* b, vec2 out) {
+    const KitFrame f = plan(b->x, b->z, b->heading);
+    const float* box = b->berths.dock;
     float worst = 0.0f;
-    float box[4];
-    lake_dock_box(box);
     for (int i = 0; i <= BOAT_RIM_COUNT; i++) {
         // The rim round, and the motor's leg behind the transom.
-        const float lx = i < BOAT_RIM_COUNT ? BOAT_RIM[i][0] : 0.0f;
-        const float lz = i < BOAT_RIM_COUNT ? BOAT_RIM[i][1] : BOAT_STERN_Z - 0.3f;
-        vec2 p = {0.0f, 0.0f};
-        plan_point(b->x, b->z, b->heading, lx, lz, p);
-        const float open = lake_open_water(p[0], p[1]);
+        vec3 p = {0.0f, 0.0f, 0.0f};
+        if (i < BOAT_RIM_COUNT)
+            kit_frame_point(&f, BOAT_RIM[i][0], 0.0f, BOAT_RIM[i][1], p);
+        else
+            kit_frame_point(&f, b->prop_at[0], 0.0f, b->prop_at[2], p);
+        const float open = lake_open_water(p[0], p[2]);
         if (-open > worst) {
             const float e = 0.2f;
-            vec2 g = {lake_open_water(p[0] + e, p[1]) - lake_open_water(p[0] - e, p[1]),
-                      lake_open_water(p[0], p[1] + e) - lake_open_water(p[0], p[1] - e)};
+            vec2 g = {lake_open_water(p[0] + e, p[2]) - lake_open_water(p[0] - e, p[2]),
+                      lake_open_water(p[0], p[2] + e) - lake_open_water(p[0], p[2] - e)};
             if (glm_vec2_norm(g) > 1e-6f) {
                 glm_vec2_normalize(g);
                 worst = -open;
                 glm_vec2_copy(g, out);
             }
         }
-        if (p[0] > box[0] && p[0] < box[2] && p[1] > box[1] && p[1] < box[3]) {
-            const float d[4] = {p[0] - box[0], box[2] - p[0], p[1] - box[1], box[3] - p[1]};
+        if (p[0] > box[0] && p[0] < box[2] && p[2] > box[1] && p[2] < box[3]) {
+            const float d[4] = {p[0] - box[0], box[2] - p[0], p[2] - box[1], box[3] - p[2]};
             const vec2 n[4] = {{-1.0f, 0.0f}, {1.0f, 0.0f}, {0.0f, -1.0f}, {0.0f, 1.0f}};
             int k = 0;
             for (int j = 1; j < 4; j++)
@@ -477,58 +490,38 @@ static void bump(Boat* b) {
             return;
         b->x += n[0] * depth;
         b->z += n[1] * depth;
-        vec2 fwd = {0.0f, 0.0f}, left = {0.0f, 0.0f};
-        plan_axes(b->heading, fwd, left);
-        vec2 v = {fwd[0] * b->speed + left[0] * b->slip, fwd[1] * b->speed + left[1] * b->slip};
-        const float into = -glm_vec2_dot(v, n);
+        const KitFrame f = plan(b->x, b->z, b->heading);
+        vec3 v = {0.0f, 0.0f, 0.0f}, fwd = {0.0f, 0.0f, 0.0f}, left = {0.0f, 0.0f, 0.0f};
+        kit_frame_dir(&f, b->slip, 0.0f, b->speed, v);
+        kit_frame_dir(&f, 0.0f, 0.0f, 1.0f, fwd);
+        kit_frame_dir(&f, 1.0f, 0.0f, 0.0f, left);
+        const float into = -(v[0] * n[0] + v[2] * n[1]);
         if (into > 0.0f) {
             v[0] += n[0] * into;
-            v[1] += n[1] * into;
-            b->speed = glm_vec2_dot(v, fwd);
-            b->slip = glm_vec2_dot(v, left);
+            v[2] += n[1] * into;
+            b->speed = glm_vec3_dot(v, fwd);
+            b->slip = glm_vec3_dot(v, left);
             // A knock costs the turn; leaning on the bank does not, or it could never turn off it.
             if (into > KNOCK_SPEED) {
                 b->yaw_rate *= BUMP_TURN;
-                if (into > b->knock_speed) {
-                    b->knocked = true;
-                    b->knock_speed = into;
-                }
+                b->knock_speed = fmaxf(b->knock_speed, into);
             }
         }
     }
 }
 
-// The motor's speed this step: coming up toward what the throttle asks, running down, or
-// stumbling to a stop.
-static void motor_step(Boat* b, float dt) {
-    b->motor_time += dt;
-    switch (b->motor_state) {
-        case BOAT_MOTOR_RUNNING:
-            b->rpm = approach(b->rpm, IDLE + (1.0f - IDLE) * fabsf(b->throttle), REV_UP * dt);
-            // The first time on a trip it reaches the marked spot, it dies.
-            if (b->cut_armed && hypotf(b->x - LAKE_MARK_X, b->z - LAKE_MARK_Z) < CUT_NEAR) {
-                b->cut_armed = false;
-                b->motor_state = BOAT_MOTOR_DYING;
-                b->motor_time = 0.0f;
-                b->dying_from = fmaxf(b->rpm, IDLE);
-                vec3 motor = {0.0f, 0.0f, 0.0f};
-                motor_world(b, motor);
-                voice(b, b->sounds.dies, motor, DIES_VOLUME, 1.0f);
-            }
-            break;
-        case BOAT_MOTOR_DYING: {
-            const float t = b->motor_time, left = fmaxf(1.0f - t / DIE_TIME, 0.0f);
-            b->rpm = b->dying_from * left * (0.55f + 0.45f * sinf(31.0f * t) * sinf(9.0f * t));
-            if (t >= DIE_TIME) {
-                b->motor_state = BOAT_MOTOR_OFF;
-                b->rpm = 0.0f;
-                b->cut_out = true;
-            }
-            break;
-        }
-        default:
-            b->rpm = approach(b->rpm, 0.0f, REV_DOWN * dt);
-            break;
+// Brought round onto its mooring, then tied there.
+static void dock_step(Boat* b, float dt) {
+    const KitFrame* m = &b->berths.moored;
+    const float k = 1.0f - expf(-dt / (0.3f * DOCK_EASE));
+    b->x += (m->origin[0] - b->x) * k;
+    b->z += (m->origin[2] - b->z) * k;
+    b->heading = wrap_pi(b->heading + wrap_pi(m->yaw - b->heading) * k);
+    b->speed = b->slip = b->yaw_rate = 0.0f;
+    if (hypotf(m->origin[0] - b->x, m->origin[2] - b->z) < 0.01f &&
+        fabsf(wrap_pi(m->yaw - b->heading)) < 0.005f) {
+        b->x = m->origin[0], b->z = m->origin[2], b->heading = m->yaw;
+        set_berth(b, BOAT_MOORED);
     }
 }
 
@@ -540,52 +533,36 @@ void boat_step(Boat* b, Game* game, Player* p, float dt) {
     b->prev_heading = b->heading;
     b->clock += dt;
     motor_step(b, dt);
-    if (b->moored)
+    if (b->berth == BOAT_DOCKING)
+        dock_step(b, dt);
+    if (b->berth != BOAT_AFLOAT)
         return;
-    if (b->docking) {
-        // Brought round onto its mooring, then tied there.
-        float mx = 0.0f, mz = 0.0f, mh = 0.0f;
-        lake_mooring(&mx, &mz, &mh, NULL);
-        const float k = 1.0f - expf(-dt / (0.3f * DOCK_EASE));
-        b->x += (mx - b->x) * k;
-        b->z += (mz - b->z) * k;
-        b->heading = wrap_pi(b->heading + wrap_pi(mh - b->heading) * k);
-        b->speed = b->slip = b->yaw_rate = 0.0f;
-        if (hypotf(mx - b->x, mz - b->z) < 0.01f && fabsf(wrap_pi(mh - b->heading)) < 0.005f) {
-            b->x = mx, b->z = mz, b->heading = mh;
-            b->docking = false;
-            set_moored(b, true);
-        }
-        return;
-    }
     // What the hands ask: the throttle only while the motor runs, the tiller any time.
     const bool running = b->motor_state == BOAT_MOTOR_RUNNING;
-    const float want_throttle =
-        b->riding && running ? input_action_value(&game->input, "move_y") : 0.0f;
-    const float want_tiller = b->riding ? -input_action_value(&game->input, "move_x") : 0.0f;
-    b->throttle = approach(b->throttle, glm_clamp(want_throttle, -1.0f, 1.0f), THROTTLE_RATE * dt);
-    b->tiller = approach(b->tiller, glm_clamp(want_tiller, -1.0f, 1.0f), TILLER_RATE * dt);
+    const float want_throttle = running ? input_action_value(&game->input, "move_y") : 0.0f;
+    const float want_tiller = -input_action_value(&game->input, "move_x");
+    b->throttle =
+        kit_approach(b->throttle, glm_clamp(want_throttle, -1.0f, 1.0f), THROTTLE_RATE * dt);
+    b->tiller = kit_approach(b->tiller, glm_clamp(want_tiller, -1.0f, 1.0f), TILLER_RATE * dt);
 
     const bool driven = running || b->motor_state == BOAT_MOTOR_DYING;
     const float push = driven ? b->throttle * (b->throttle < 0.0f ? REVERSE : 1.0f) : 0.0f;
-    const float thrust =
-        THRUST * push * fminf(b->rpm / IDLE, 1.0f) * (driven ? (0.4f + 0.6f * b->rpm) : 0.0f);
+    const float thrust = THRUST * push * fminf(b->rpm / IDLE, 1.0f) * (0.4f + 0.6f * b->rpm);
     b->speed += (thrust - DRAG_LIN * b->speed - DRAG_QUAD * b->speed * fabsf(b->speed)) * dt;
     const float steer = TURN_MAX * b->tiller *
                         (TURN_BY_THRUST * thrust / THRUST + TURN_BY_SPEED * b->speed / TOP_SPEED);
     b->yaw_rate += (steer - b->yaw_rate) * (1.0f - expf(-dt / YAW_EASE));
     b->slip += (-b->yaw_rate * b->speed * SLIP_GAIN - b->slip * SLIP_DAMP) * dt;
     b->heading = wrap_pi(b->heading + b->yaw_rate * dt);
-    vec2 fwd = {0.0f, 0.0f}, left = {0.0f, 0.0f};
-    plan_axes(b->heading, fwd, left);
-    b->x += (fwd[0] * b->speed + left[0] * b->slip) * dt;
-    b->z += (fwd[1] * b->speed + left[1] * b->slip) * dt;
+    const KitFrame f = plan(b->x, b->z, b->heading);
+    vec3 v = {0.0f, 0.0f, 0.0f};
+    kit_frame_dir(&f, b->slip, 0.0f, b->speed, v);
+    b->x += v[0] * dt;
+    b->z += v[2] * dt;
     bump(b);
-    if (b->riding) {
-        vec3 feet = {0.0f, 0.0f, 0.0f};
-        rider_feet(b, b->x, b->z, b->heading, feet);
-        player_carry(p, feet);
-    }
+    vec3 feet = {0.0f, 0.0f, 0.0f};
+    rider_feet(b, b->x, b->z, b->heading, feet);
+    player_carry(p, feet);
     if (b->trace && lround(b->clock / dt) % 30 == 0)
         printf("boat %7.2f x %8.3f z %8.3f heading %+.3f speed %+.3f slip %+.3f yaw %+.3f "
                "throttle %+.2f tiller %+.2f rpm %.2f motor %d open %.2f\n",
@@ -599,7 +576,7 @@ void boat_step(Boat* b, Game* game, Player* p, float dt) {
 
 // E and RMB in the boat, read once a frame.
 static void hands(Boat* b, Game* game, Player* p, Hud* hud) {
-    if (!b->riding)
+    if (b->berth != BOAT_AFLOAT)
         return;
     vec3 motor = {0.0f, 0.0f, 0.0f};
     motor_world(b, motor);
@@ -621,9 +598,8 @@ static void hands(Boat* b, Game* game, Player* p, Hud* hud) {
                       0.92f + 0.16f * (float)(b->pull.good % 3) / 2.0f);
                 if (pull_cord_caught(&b->pull)) {
                     voice(b, b->sounds.caught, motor, CATCH_VOLUME, 1.0f);
-                    boat_start_motor(b);
-                    camera_rig_blend_from_here(p->rig, VIEW_EASE);
-                    camera_rig_aim(p->rig, b->heading, -0.08f);
+                    motor_enter(b, BOAT_MOTOR_RUNNING);
+                    look_ahead(b, p, VIEW_EASE, 0.08f);
                     if (hud && !b->told) {
                         hud_hint(hud, "W  S   Throttle      A  D   Steer", 6.0f);
                         b->told = true;
@@ -633,20 +609,15 @@ static void hands(Boat* b, Game* game, Player* p, Hud* hud) {
                           0.95f + 0.1f * (float)b->pull.good);
                 }
             } else if (back) {
-                b->motor_state = BOAT_MOTOR_OFF;
-                pull_cord_close(&b->pull);
-                camera_rig_blend_from_here(p->rig, VIEW_EASE);
-                camera_rig_aim(p->rig, b->heading, -0.08f);
+                motor_enter(b, BOAT_MOTOR_OFF);
+                look_ahead(b, p, VIEW_EASE, 0.08f);
             }
             break;
         case BOAT_MOTOR_RUNNING:
-            if (e) {
-                voice(b, b->sounds.stop, motor, STOP_VOLUME, 1.0f);
-                b->motor_state = BOAT_MOTOR_OFF;
-                b->motor_time = 0.0f;
-            } else if (back && can_get_out(b)) {
+            if (e)
+                motor_enter(b, BOAT_MOTOR_OFF);
+            else if (back && can_get_out(b))
                 get_out(b, p);
-            }
             break;
         case BOAT_MOTOR_DYING:
             break;
@@ -657,44 +628,41 @@ static void hands(Boat* b, Game* game, Player* p, Hud* hud) {
 // start handle and its cord out as far as the last pull has them.
 static void parts_frame(Boat* b, double time, float dt) {
     const float shake = VIBRATION * b->rpm * sinf(97.0f * (float)time);
-    mat4 m = GLM_MAT4_IDENTITY_INIT;
+    vec4* m = b->motor->original_transform;
     glm_mat4_copy(b->motor_rest, m);
     glm_translate(m, (vec3){shake, 0.0f, 0.0f});
     glm_rotate_y(m, -TILLER_SWING * b->tiller, m);
-    glm_mat4_copy(m, b->motor->original_transform);
     b->prop_angle = fmodf(b->prop_angle + PROP_REVS * 2.0f * GLM_PIf * b->rpm * dt, 2.0f * GLM_PIf);
+    m = b->prop->original_transform;
     glm_mat4_copy(b->prop_rest, m);
     glm_rotate_z(m, b->prop_angle, m);
-    glm_mat4_copy(m, b->prop->original_transform);
     b->cord_yank += dt;
     const float y = b->cord_yank;
     const float out = y < CORD_OUT ? y / CORD_OUT : fmaxf(1.0f - (y - CORD_OUT) / CORD_BACK, 0.0f);
-    const float reach = CORD_REACH * out * out * (3.0f - 2.0f * out);
+    const float reach = CORD_REACH * glm_smooth(out);
+    m = b->cord->original_transform;
     glm_mat4_copy(b->cord_rest, m);
     glm_translate(m, (vec3){0.0f, 0.0f, reach});
-    glm_mat4_copy(m, b->cord->original_transform);
     // The rope is a metre long in the file, squashed at rest to almost nothing.
+    m = b->rope->original_transform;
     glm_mat4_copy(b->rope_rest, m);
     const float rest_len = glm_vec3_norm(b->rope_rest[2]);
     glm_scale(m, (vec3){1.0f, 1.0f, fmaxf(reach, 1e-3f) / fmaxf(rest_len, 1e-6f)});
-    glm_mat4_copy(m, b->rope->original_transform);
 }
 
 // The hull's dry shapes on the water, where the boat is drawn.
 static void dry_frame(const Boat* b, float x, float z, float heading) {
     if (!b->water)
         return;
-    vec2 fwd = {0.0f, 0.0f}, left = {0.0f, 0.0f};
-    plan_axes(heading, fwd, left);
+    const KitFrame f = plan(x, z, heading);
+    WaterDomain* d = &b->water->domain;
     for (int i = 0; i < BOAT_DRY_COUNT; i++) {
-        vec2 c = {0.0f, 0.0f};
-        plan_point(x, z, heading, 0.0f, BOAT_DRY[i][0], c);
-        b->water->dry[i] = (WaterDry){.centre = {c[0], c[1]},
-                                      .along = {fwd[0], fwd[1]},
-                                      .half = {BOAT_DRY[i][1], BOAT_DRY[i][2]},
-                                      .power = BOAT_DRY[i][3]};
+        vec3 c = {0.0f, 0.0f, 0.0f};
+        kit_frame_point(&f, 0.0f, 0.0f, BOAT_DRY[i][0], c);
+        d->dry[i] =
+            water_dry_make(c[0], c[2], heading, BOAT_DRY[i][1], BOAT_DRY[i][2], BOAT_DRY[i][3]);
     }
-    b->water->dry_count = BOAT_DRY_COUNT;
+    d->dry_count = BOAT_DRY_COUNT;
 }
 
 static void sounds_frame(Boat* b, float x, float z) {
@@ -714,32 +682,30 @@ static void sounds_frame(Boat* b, float x, float z) {
         const float fast = fminf(fabsf(b->speed) / TOP_SPEED, 1.0f);
         audio_sound_set_volume(s->slap, SLAP_VOLUME * (0.25f + 0.75f * fast));
     }
-    if (b->knocked) {
+    if (b->knock_speed > 0.0f) {
         voice(b, s->knock, (vec3){x, LAKE_Y + 0.2f, z},
               KNOCK_VOLUME * fminf(0.4f + b->knock_speed, 1.0f), 1.0f);
-        b->knocked = false;
         b->knock_speed = 0.0f;
     }
 }
 
-void boat_frame(Boat* b, Game* game, Player* p, Hud* hud, double time, float dt) {
+void boat_frame(Boat* b, Game* game, Player* p, Hud* hud, float alpha, double time, float dt) {
     if (!b->node)
         return;
     hands(b, game, p, hud);
-    pull_cord_update(&b->pull, dt);
+    pull_cord_update(&b->pull, b->motor_state == BOAT_MOTOR_PULLING, dt);
     if (b->cut_out) {
         b->cut_out = false;
         if (hud)
             hud_think(hud, "No... not out here.");
     }
     // Drawn between the last two steps.
-    const float alpha = (float)(game->accumulator / game->fixed_timestep);
     const float x = glm_lerp(b->prev_x, b->x, alpha), z = glm_lerp(b->prev_z, b->z, alpha);
     const float heading = wrap_pi(b->prev_heading + wrap_pi(b->heading - b->prev_heading) * alpha);
     boat_matrix(b, x, z, heading, time, b->node->original_transform);
     parts_frame(b, time, dt);
     dry_frame(b, x, z, heading);
-    if (b->riding) {
+    if (b->berth == BOAT_AFLOAT) {
         vec3 eye;
         glm_mat4_mulv3(b->node->original_transform, b->seat, 1.0f, eye);
         player_seat(p, eye, wrap_pi(heading - b->drawn_heading));

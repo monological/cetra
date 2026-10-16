@@ -183,7 +183,7 @@ void fixture_lantern_round(Kit* kit, const KitFrame* f, float a, float y, float 
     hang_bulb(kit, f, a, d, top, filament);
 }
 
-void fixtures_chain(Kit* kit, const KitFrame* f, float a, float d, float y0, float y1) {
+void fixtures_chain(Kit* kit, float y0, float y1) {
     const float hy = 0.5f * LINK_LEN - LINK_WIRE, hx = 0.5f * LINK_WIDE - LINK_WIRE;
     const float pitch = LINK_LEN - 4.0f * LINK_WIRE;
     const int links = (int)ceilf((y0 - y1 - LINK_LEN) / pitch) + 1;
@@ -192,10 +192,18 @@ void fixtures_chain(Kit* kit, const KitFrame* f, float a, float d, float y0, flo
         vec3 loop[13];
         for (int k = 0; k < 13; k++) {
             const float t = (float)k * GLM_PIf / 6.0f, across = hx * cosf(t);
-            glm_vec3_copy((vec3){a + ((i & 1) ? 0.0f : across), yc + hy * sinf(t),
-                                 d + ((i & 1) ? across : 0.0f)},
-                          loop[k]);
+            glm_vec3_copy(
+                (vec3){(i & 1) ? 0.0f : across, yc + hy * sinf(t), (i & 1) ? across : 0.0f},
+                loop[k]);
         }
-        kit_frame_pipe(kit, f, MAT_LANTERN_BRASS, loop, 13, LINK_WIRE, 5);
+        kit_frame_pipe(kit, &KIT_WORLD, MAT_LANTERN_BRASS, loop, 13, LINK_WIRE, 5);
     }
+}
+
+void fixture_hang(SceneNode* node, const vec3 pivot, const mat4 turn, float drop, vec3 bulb) {
+    mat4 m = GLM_MAT4_IDENTITY_INIT;
+    glm_translate_make(m, (float*)pivot);
+    glm_mat4_mul(m, (vec4*)turn, m);
+    glm_mat4_copy(m, node->original_transform);
+    glm_mat4_mulv3(m, (vec3){0.0f, -drop, 0.0f}, 1.0f, bulb);
 }
