@@ -113,7 +113,9 @@ once and spread -- the reference the spread is measured against, a whole trace p
 `--water-touch-probe` (the ripples' deepest point and its distance from the first drop), spec
 13.4; `--water-bounds x0,z0,x1,z1` (hold the water to that xz rectangle: past it there is no
 surface, no light weakened under the level, no submerged medium and no rain landing on the plane;
-all zero, the default, is everywhere, spec 13.41); `--no-water`, `--no-water-caustics`, `--no-water-glitter`, `--no-water-downwell`,
+all zero, the default, is everywhere, spec 13.41); `--water-dry cx,cz,yaw,hl,hw[,power]` (a dry
+shape: no water inside that superellipse, its length along the yaw in degrees from +z, power 2 an
+ellipse by default -- the inside of a floating hull, spec 13.56); `--no-water`, `--no-water-caustics`, `--no-water-glitter`, `--no-water-downwell`,
 `--no-water-caustic-relief`, `--no-water-specks`, `--no-water-foam-history`,
 `--no-water-coverage`, `--no-water-lod`; specs 11.32 to 11.35 and 11.42 — suppresses the shadow catcher,
 see the pass order above. Gerstner is the default and allocates nothing; `fft` is an OCEAN and adds 64
@@ -1263,7 +1265,25 @@ its east bank with a fire burning inside and its door left open.
   - inside, toward the table and the door: `--cam-eye -62.9,-8.8,116.0 --cam-target
     -66.0,-9.5,120.4`;
   - the valley from over the south wall, with `--day --no-rain --no-fog`: `--cam-eye -80,95,170
-    --cam-target -80,-10,100`.
+    --cam-target -80,-10,100`;
+  - the dock lamp and the moored boat under it from the dock's foot: `--cam-eye -77.5,-9.45,118.3
+    --cam-target -84,-10.3,116.8`; the lantern close: `--cam-eye -82.3,-9.5,118.0 --cam-target
+    -83.5,-9.15,116.7`.
+
+**The lake's waves and the motorboat** (spec 13.56):
+- **`--lake-waves fft|gerstner`:** the lake's wave model. FFT is the default: a breeze of 5 m/s
+  over 150 m, no swell, about 1.2 ms more CPU at the dock than Gerstner's, and only within the
+  lake's reach.
+- **The boat:** E from the dock's end gets in, E starts the motor by its pull cord, W S A D drive
+  it, E stops it, and RMB gets out alongside the dock. The motor dies the first time on a trip that
+  the boat reaches the spot circled on the cabin's lake map.
+- **`--in-boat`:** starts sat in the boat at its mooring. **`--boat-at X,Z[,H]`:** sat in it out on
+  the lake, heading H degrees from +z (-90 by default, the way it moors); `-100,120,-60` is near
+  the middle. **`--boat-running`:** with its motor running. **`--pull-cord`:** with its pull
+  cord's bar up. Each implies `--in-boat`.
+- **`--trace-boat`:** its place, speed, slip, turn, throttle, tiller, motor and how far it is into
+  the open water, every half second of steps. With `--pad-script` it is how its handling is read
+  headless.
 
 **Look switches**, each an A/B for one part of the picture:
 - **`--no-grade`:** the frame without the green-grey LUT (`assets/lut/silent_grade.cube`, written
