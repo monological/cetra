@@ -72,12 +72,20 @@
 // WAKE_SPEED.
 #define WAKE_PACE  0.35f
 #define WAKE_SPEED 0.25f
-// Against the other loops tools/fetch_sounds.py levels alike.
-#define RUN_IDLE_VOLUME 0.3f
-#define RUN_FULL_VOLUME 0.7f
-#define RUN_IDLE_PITCH  0.75f
-#define RUN_FULL_PITCH  1.5f
+// Against the other loops tools/fetch_sounds.py levels alike. The motor's loop is a recording of
+// one idling, so it plays at its own rate idling and faster as the motor opens up.
+#define RUN_IDLE_VOLUME 0.35f
+#define RUN_FULL_VOLUME 0.75f
+#define RUN_IDLE_PITCH  1.0f
+#define RUN_FULL_PITCH  1.8f
 #define SLAP_VOLUME     0.35f
+// The one-shots, under the loop running flat out: chosen by their levels, not yet by ear.
+#define PULL_VOLUME  0.7f
+#define COUGH_VOLUME 0.55f
+#define CATCH_VOLUME 0.55f
+#define DIES_VOLUME  0.45f
+#define STOP_VOLUME  0.45f
+#define KNOCK_VOLUME 0.7f
 
 static float approach(float from, float to, float step) {
     return from < to ? fminf(from + step, to) : fmaxf(from - step, to);
@@ -103,6 +111,13 @@ static void voice(const Boat* b, Sound* sound, const vec3 at, float volume, floa
     AudioVoiceDesc d = {.volume = volume, .pitch = pitch};
     glm_vec3_copy((float*)at, d.position);
     audio_play_voice(b->sounds.audio, sound, &d);
+}
+
+// Where the motor is, from the boat's place in plan: for a sound, which the swell does not move.
+static void motor_world(const Boat* b, vec3 out) {
+    vec2 at = {0.0f, 0.0f};
+    plan_point(b->x, b->z, b->heading, b->motor_at[0], b->motor_at[2], at);
+    glm_vec3_copy((vec3){at[0], LAKE_Y + b->motor_at[1], at[1]}, out);
 }
 
 // The boat's frame in the world this frame, its swell on it: drawn at (x, z, heading) at `time`.
@@ -339,9 +354,9 @@ static bool can_get_out(const Boat* b) {
 // the boat brought round onto its mooring.
 static void get_out(Boat* b, Player* p) {
     if (b->motor_state == BOAT_MOTOR_RUNNING) {
-        vec3 at;
-        glm_mat4_mulv3(b->node->original_transform, b->motor_at, 1.0f, at);
-        voice(b, b->sounds.stop, at, 0.8f, 1.0f);
+        vec3 at = {0.0f, 0.0f, 0.0f};
+        motor_world(b, at);
+        voice(b, b->sounds.stop, at, STOP_VOLUME, 1.0f);
     }
     b->motor_state = BOAT_MOTOR_OFF;
     b->rpm = 0.0f;
@@ -490,6 +505,9 @@ static void motor_step(Boat* b, float dt) {
                 b->motor_state = BOAT_MOTOR_DYING;
                 b->motor_time = 0.0f;
                 b->dying_from = fmaxf(b->rpm, IDLE);
+                vec3 motor = {0.0f, 0.0f, 0.0f};
+                motor_world(b, motor);
+                voice(b, b->sounds.dies, motor, DIES_VOLUME, 1.0f);
             }
             break;
         case BOAT_MOTOR_DYING: {
@@ -577,8 +595,8 @@ void boat_step(Boat* b, Game* game, Player* p, float dt) {
 static void hands(Boat* b, Game* game, Player* p, Hud* hud) {
     if (!b->riding)
         return;
-    vec3 motor;
-    glm_mat4_mulv3(b->node->original_transform, b->motor_at, 1.0f, motor);
+    vec3 motor = {0.0f, 0.0f, 0.0f};
+    motor_world(b, motor);
     const bool e = input_action_pressed(&game->input, "interact");
     const bool back = input_action_pressed(&game->input, "put_down");
     switch (b->motor_state) {
@@ -593,10 +611,10 @@ static void hands(Boat* b, Game* game, Player* p, Hud* hud) {
                 const bool good = pull_cord_pull(&b->pull);
                 b->cord_yank = 0.0f;
                 camera_rig_shake(p->rig, good ? 0.012f : 0.006f, 0.25f);
-                voice(b, b->sounds.pull, motor, 0.9f,
+                voice(b, b->sounds.pull, motor, PULL_VOLUME,
                       0.92f + 0.16f * (float)(b->pull.good % 3) / 2.0f);
                 if (pull_cord_caught(&b->pull)) {
-                    voice(b, b->sounds.caught, motor, 1.0f, 1.0f);
+                    voice(b, b->sounds.caught, motor, CATCH_VOLUME, 1.0f);
                     boat_start_motor(b);
                     camera_rig_blend_from_here(p->rig, VIEW_EASE);
                     camera_rig_aim(p->rig, b->heading, -0.08f);
@@ -605,7 +623,8 @@ static void hands(Boat* b, Game* game, Player* p, Hud* hud) {
                         b->told = true;
                     }
                 } else if (good) {
-                    voice(b, b->sounds.cough, motor, 0.9f, 0.95f + 0.1f * (float)b->pull.good);
+                    voice(b, b->sounds.cough, motor, COUGH_VOLUME,
+                          0.95f + 0.1f * (float)b->pull.good);
                 }
             } else if (back) {
                 b->motor_state = BOAT_MOTOR_OFF;
@@ -616,7 +635,7 @@ static void hands(Boat* b, Game* game, Player* p, Hud* hud) {
             break;
         case BOAT_MOTOR_RUNNING:
             if (e) {
-                voice(b, b->sounds.stop, motor, 0.8f, 1.0f);
+                voice(b, b->sounds.stop, motor, STOP_VOLUME, 1.0f);
                 b->motor_state = BOAT_MOTOR_OFF;
                 b->motor_time = 0.0f;
             } else if (back && can_get_out(b)) {
@@ -672,10 +691,10 @@ static void dry_frame(const Boat* b, float x, float z, float heading) {
     b->water->dry_count = BOAT_DRY_COUNT;
 }
 
-static void sounds_frame(Boat* b, float x, float z, float heading) {
+static void sounds_frame(Boat* b, float x, float z) {
     BoatSounds* s = &b->sounds;
-    vec3 motor;
-    glm_mat4_mulv3(b->node->original_transform, b->motor_at, 1.0f, motor);
+    vec3 motor = {0.0f, 0.0f, 0.0f};
+    motor_world(b, motor);
     if (s->run) {
         const float r = glm_clamp((b->rpm - IDLE) / (1.0f - IDLE), 0.0f, 1.0f);
         const float on = glm_clamp(b->rpm / IDLE, 0.0f, 1.0f);
@@ -690,11 +709,11 @@ static void sounds_frame(Boat* b, float x, float z, float heading) {
         audio_sound_set_volume(s->slap, SLAP_VOLUME * (0.25f + 0.75f * fast));
     }
     if (b->knocked) {
-        voice(b, s->knock, (vec3){x, LAKE_Y + 0.2f, z}, fminf(0.4f + b->knock_speed, 1.0f), 1.0f);
+        voice(b, s->knock, (vec3){x, LAKE_Y + 0.2f, z},
+              KNOCK_VOLUME * fminf(0.4f + b->knock_speed, 1.0f), 1.0f);
         b->knocked = false;
         b->knock_speed = 0.0f;
     }
-    (void)heading;
 }
 
 void boat_frame(Boat* b, Game* game, Player* p, Hud* hud, double time, float dt) {
@@ -726,5 +745,5 @@ void boat_frame(Boat* b, Game* game, Player* p, Hud* hud, double time, float dt)
         glm_mat4_mulv3(b->node->original_transform, b->prop_at, 1.0f, wash);
         water_wake(b->water, &b->wake, wash[0], wash[2], WAKE_PACE, fabsf(b->speed) > WAKE_SPEED);
     }
-    sounds_frame(b, x, z, heading);
+    sounds_frame(b, x, z);
 }

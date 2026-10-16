@@ -165,6 +165,17 @@ RECORDINGS = {
     727791: ("doorknob rattle", "DrFahrts", "727/727791_10249017"),
     571797: ("Door slamming hard", "NachtmahrTV", "571/571797_5620304"),
     426228: ("squeaky door", "derjuli", "426/426228_2573247"),
+    # The boat's outboard (spec 13.56): a long take of one starting, idling and running, its idle,
+    # its run, a recoil starter pulled, an engine stalling, and water at a hull.
+    637203: ("boat outboard motor throaty start false starts idle rattle take off ride various "
+             "speeds accelerate decelerate.flac", "kyles", "637/637203_612689"),
+    637742: ("outboard motor boat idle or slow rattly3 quieter.flac", "kyles", "637/637742_612689"),
+    637744: ("outboard motor boat onboard high speed.flac", "kyles", "637/637744_612689"),
+    222809: ("pull-recoil.wav", "gthall", "222/222809_1573847"),
+    852408: ("the engine finally stalled", "monosfera", "852/852408_3625175"),
+    637206: ("boat knocks fiberglass water laps on hull.flac", "kyles", "637/637206_612689"),
+    851577: ("Ammersee Sailboat Cabin ~ Gentle Lake Waves from Inside", "myLoop",
+             "851/851577_18387771"),
 }
 PREVIEW = "https://cdn.freesound.org/previews/%s-hq.mp3"
 CLOCK = 125968
@@ -183,6 +194,10 @@ JOBS = {
     "lapping": {"seconds": 20.0, "stereo": False},
     "hearth": {"seconds": 12.0, "stereo": False},
     "room": {"seconds": 20.0, "stereo": False},
+    # The boat's outboard idling, which the game re-pitches up as it opens up, and the water at its
+    # hull (spec 13.56), each placed on the boat.
+    "outboard": {"seconds": 6.0, "stereo": False},
+    "slap": {"seconds": 12.0, "stereo": False},
 }
 
 # What --audition renders for each job, to be chosen by ear.
@@ -195,6 +210,8 @@ CANDIDATES = {
     "lapping": [518467, 568819, 464801, 614299],
     "hearth": [549208, 718202, 512685, 414298],
     "room": [452516, 744447],
+    "outboard": [637742, 637744],
+    "slap": [851577, 637206],
 }
 
 # What the game plays, chosen by ear from the candidates: file name -> (job,
@@ -210,6 +227,9 @@ LOOPS = {
     "lake_lapping": ("lapping", 568819),
     "hearth_fire": ("hearth", 414298),
     "cabin_room": ("room", 452516),
+    # The boat (spec 13.56), chosen by what each is, not yet by ear.
+    "outboard_run": ("outboard", 637742),
+    "hull_slap": ("slap", 851577),
 }
 
 # A ONESHOT, for a sound that happens once -- a meow, a footfall, a landing. The recording's
@@ -251,6 +271,10 @@ ONESHOT_JOBS = {
     "slam": {"longest": 1.6, "tail": 0.6, "highpass": 35.0, "per": 2},
     # The fridge's compressor stopping: the whirl dying and the clunk.
     "clunk": {"longest": 2.0, "tail": 0.4, "highpass": 35.0, "per": 3, "join": 0.2},
+    # The boat (spec 13.56): a recoil starter's cord pulled out and running back, and the hull
+    # knocking on something, its ring after it.
+    "pull": {"longest": 1.0, "tail": 0.12, "highpass": 90.0, "per": 6},
+    "knock": {"longest": 0.6, "tail": 0.3, "highpass": 50.0, "per": 4},
 }
 ONESHOT_CANDIDATES = {
     "meow": [110011, 412017, 479272, 528197, 455493, 66518],
@@ -274,6 +298,8 @@ ONESHOT_CANDIDATES = {
     "knob": [727791],
     "slam": [571797],
     "clunk": [573936],
+    "pull": [222809],
+    "knock": [637206],
 }
 # The player's footsteps (spec 13.47), chosen by ear from each candidate's walk: surface ->
 # recording. Its takes are the walk's, in the walk's order, as step_<surface>_1 to _6 -- the
@@ -321,6 +347,8 @@ ONESHOTS = {
     "door_knob_4": ("knob", 727791, 3),
     "door_slam": ("slam", 571797, 0),
     "fridge_clunk": ("clunk", 573936, 0),
+    # The boat (spec 13.56), the loudest, not yet chosen by ear.
+    "boat_knock": ("knock", 637206, 0),
 }
 
 # The door takes the haunting moves the basement door's leaf with, and the header that says where
@@ -339,6 +367,16 @@ ONESHOT_LEAD = 0.01  # seconds kept before an event's onset
 CUTS = {
     # The bathroom door drifting ajar (spec 13.52): one slow squeal of the hinge.
     "door_creak": ("creak", 426228, 1.0, 4.0, 100.0),
+    # The boat's outboard (spec 13.56), read off the takes' loudness rather than chosen by ear: a
+    # false start's cough and the catch into its idle from the long take, and the stalling
+    # engine's last stumble, whole for the motor dying and its end for one switched off.
+    "outboard_cough": ("cough", 637203, 68.2, 69.2, 60.0),
+    # A whole pull of the recoil starter, the rip and the cord running back, which the envelope
+    # cuts to the rip alone.
+    "outboard_pull": ("pull", 222809, 12.02, 12.62, 90.0),
+    "outboard_catch": ("catch", 637203, 69.4, 73.0, 40.0),
+    "outboard_die": ("die", 852408, 38.5, 43.8, 40.0),
+    "outboard_stop": ("stop", 852408, 41.2, 43.8, 40.0),
 }
 
 # The layers heard through the house's walls: file name -> (loop, low-pass
