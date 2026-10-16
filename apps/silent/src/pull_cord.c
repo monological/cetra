@@ -3,9 +3,9 @@
 #include "kit.h"
 #include "pull_cord.h"
 
-#define SWEEP      0.9f  // seconds end to end at first
-#define QUICKEN    0.88f // the sweep's share of itself after each good pull
-#define ZONE       0.11f // the lit zone's share of the bar
+#define SWEEP      1.1f  // seconds end to end at first
+#define QUICKEN    0.94f // the sweep's share of itself after each good pull
+#define ZONE       0.16f // the lit zone's share of the bar
 #define ZONE_EDGE  0.06f // and how near either end it may lie
 #define ZONE_APART 0.25f // a new zone at least this far along from the last
 #define FLASH      0.3f  // seconds a pull's flash lasts
@@ -64,12 +64,16 @@ void pull_cord_update(PullCord* pc, bool shown, float dt) {
 }
 
 bool pull_cord_pull(PullCord* pc) {
-    const float m = marker(pc);
-    pc->last_good = m >= pc->zone && m <= pc->zone + ZONE;
+    // Good while the marker as drawn touches the zone, not only its middle.
+    const float m = marker(pc), grace = 0.5f * MARKER_W / BAR_W;
+    pc->last_good = m >= pc->zone - grace && m <= pc->zone + ZONE + grace;
     pc->since = 0.0f;
     if (pc->last_good) {
         pc->good++;
+        // Quicker from where it is: the run scaled with the sweep, or the marker would jump to
+        // wherever the new pace puts it, as often as not going the other way.
         pc->sweep *= QUICKEN;
+        pc->run *= QUICKEN;
         move_zone(pc);
     }
     return pc->last_good;
