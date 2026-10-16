@@ -275,6 +275,9 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --water-extent <f> Half-size of the shoaling bed (implies --water)\n");
     fprintf(stderr, "      --water-bounds x0,z0,x1,z1  Where the water is, world XZ; nowhere\n"
                     "                         else (implies --water)\n");
+    fprintf(stderr, "      --water-dry cx,cz,yaw,hl,hw[,p]  A dry shape: no water inside that\n"
+                    "                         superellipse, yaw in degrees from +z, power 2 by\n"
+                    "                         default (implies --water)\n");
     fprintf(stderr, "      --water-waves <m>  gerstner (default) or fft spectral cascades\n");
     fprintf(stderr, "      --no-water-caustics  Drop the surface's light focusing\n");
     fprintf(stderr, "      --no-water-glitter Drop the analytic sun lobe on the water\n");
@@ -1379,6 +1382,24 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                         argv[i]);
                 return -1;
             }
+            args->water = 1;
+        } else if (strcmp(argv[i], "--water-dry") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            float* d = args->water_dry;
+            d[5] = 2.0f;
+            const int got =
+                sscanf(argv[i], "%f,%f,%f,%f,%f,%f", &d[0], &d[1], &d[2], &d[3], &d[4], &d[5]);
+            if (got < 5 || d[3] <= 0.0f || d[4] <= 0.0f || d[5] <= 0.0f) {
+                fprintf(stderr,
+                        "Error: --water-dry wants cx,cz,yaw,half_length,half_width[,power] with "
+                        "both halves and the power over 0, got '%s'\n",
+                        argv[i]);
+                return -1;
+            }
+            args->water_dry_set = 1;
             args->water = 1;
         } else if (strcmp(argv[i], "--water-probe") == 0) {
             args->water_probe = 1;
@@ -5244,6 +5265,15 @@ int main(int argc, char** argv) {
             water->extent = args.water_extent;
         if (args.water_bounds[2] > args.water_bounds[0])
             memcpy(water->bounds, args.water_bounds, sizeof(water->bounds));
+        if (args.water_dry_set) {
+            const float* d = args.water_dry;
+            const float turn = glm_rad(d[2]);
+            water->dry[0] = (WaterDry){.centre = {d[0], d[1]},
+                                       .along = {sinf(turn), cosf(turn)},
+                                       .half = {d[3], d[4]},
+                                       .power = d[5]};
+            water->dry_count = 1;
+        }
         if (args.water_waves >= 0)
             water->wave_model = args.water_waves ? WATER_WAVES_FFT : WATER_WAVES_GERSTNER;
         if (args.no_water_caustics)
