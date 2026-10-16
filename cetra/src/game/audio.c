@@ -11,6 +11,7 @@
 #include "../ext/log.h"
 
 #include <math.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -402,6 +403,17 @@ Sound* audio_sound_from_file(AudioSystem* audio, const char* path, AudioBus bus)
     ma_uint32 flags = MA_SOUND_FLAG_DECODE | MA_SOUND_FLAG_NO_SPATIALIZATION;
     if (audio->loading)
         flags |= MA_SOUND_FLAG_ASYNC;
+    // A file that cannot be opened is refused before the fence is handed over: miniaudio's failed
+    // asynchronous init releases the fence once more than it acquired it, and the end of the phase
+    // asserts on the count (spec 13.56).
+    FILE* probe = audio->loading ? fopen(path, "rb") : NULL;
+    if (audio->loading && !probe) {
+        log_error("audio: could not load %s", path);
+        free(s);
+        return NULL;
+    }
+    if (probe)
+        fclose(probe);
     if (ma_sound_init_from_file(&audio->engine, path, flags, group_for(audio, bus),
                                 audio->loading ? &audio->loaded : NULL, &s->sound) != MA_SUCCESS) {
         log_error("audio: could not load %s", path);
@@ -508,6 +520,11 @@ void audio_sound_set_looping(Sound* sound, bool loop) {
 void audio_sound_set_volume(Sound* sound, float volume) {
     if (sound)
         ma_sound_set_volume(&sound->sound, volume);
+}
+
+void audio_sound_set_pitch(Sound* sound, float pitch) {
+    if (sound && pitch > 0.0f)
+        ma_sound_set_pitch(&sound->sound, pitch);
 }
 
 void audio_sound_set_position(Sound* sound, vec3 world_pos) {

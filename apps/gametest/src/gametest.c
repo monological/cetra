@@ -4575,6 +4575,23 @@ static int run_audio_probe(Game* game, const char* which, const char* file) {
                 for (int k = 0; k < 3; k++) // the rest of it, so it is not heard under the next
                     probe_measure(audio, &l, &r, NULL);
             }
+            // A held tone at its own rate, then re-pitched to 1.06 while it plays (spec 13.56):
+            // a tone, since a looped file's seam is a click that brightens the window it falls in.
+            Sound* held = audio_sound_from_tone(audio, 440.0f, AUDIO_BUS_SFX);
+            if (held) {
+                audio_sound_set_looping(held, true);
+                audio_sound_set_position(held, (vec3){0.0f, 0.0f, -2.0f});
+                audio_sound_play(held);
+                for (int step = 0; step < 2; step++) {
+                    float bright = 0.0f;
+                    probe_measure(audio, &l, &r, NULL); // the gains and the rate settled
+                    probe_measure(audio, &l, &r, &bright);
+                    printf("audio pitch %s rms %.6f bright %.6f\n", step ? "held_high" : "held_one",
+                           l, bright);
+                    audio_sound_set_pitch(held, 1.06f);
+                }
+                audio_sound_stop(held);
+            }
         }
     } else {
         fprintf(stderr, "audio-probe: unknown case '%s'\n", which);
