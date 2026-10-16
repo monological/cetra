@@ -6,6 +6,9 @@
 
 struct SceneNode;
 
+// GLFW's key codes run up to GLFW_KEY_LAST, 348; engine.c holds the two together.
+#define INPUT_KEYS 349
+
 // The engine's own reading of the pointer, written by its GLFW callbacks
 // before the app's are called. Positions are FRAMEBUFFER pixels with +Y up,
 // which is the space the app callbacks receive and engine_mouse_to_drag_plane
@@ -31,6 +34,10 @@ typedef struct InputState {
     // Scroll over a GUI panel reaches ImGui and not this.
     double scroll_dx;
     double scroll_dy;
+    // The keys pressed since the previous frame ended, by GLFW key code, on the wheel's schedule:
+    // a tap that went down and up between two polls of the keys is still a press. Keys a GUI
+    // field takes reach ImGui and not this.
+    bool key_pressed[INPUT_KEYS];
 } InputState;
 
 void init_input_state(InputState* state);

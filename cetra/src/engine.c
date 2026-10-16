@@ -1494,6 +1494,8 @@ static void _engine_mouse_button_callback(GLFWwindow* window, int button, int ac
     _engine_pointer_button(engine, button, action, mods, mouse_fb_x, mouse_fb_y);
 }
 
+_Static_assert(INPUT_KEYS == GLFW_KEY_LAST + 1, "InputState.key_pressed takes every GLFW key");
+
 static void _engine_key_callback(GLFWwindow* window, int key, int scancode, int action, int mods) {
     if (!window)
         return;
@@ -1509,6 +1511,8 @@ static void _engine_key_callback(GLFWwindow* window, int key, int scancode, int 
     if (engine_gui_wants_keyboard())
         return;
 
+    if (action == GLFW_PRESS && key >= 0 && key < INPUT_KEYS)
+        engine->input.key_pressed[key] = true;
     if (engine->key_callback) {
         engine->key_callback(engine, key, scancode, action, mods);
     }
@@ -3492,9 +3496,10 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
 
         glfwSwapBuffers(engine->window);
         // Events arrive only inside a poll, so the frame's hooks have read
-        // this frame's wheel by now and the next poll starts the next.
+        // this frame's wheel and key presses by now and the next poll starts the next.
         engine->input.scroll_dx = 0.0;
         engine->input.scroll_dy = 0.0;
+        memset(engine->input.key_pressed, 0, sizeof(engine->input.key_pressed));
         glfwPollEvents();
         // A scripted pointer's batch lands where the real one just did, so its
         // wheel reaches the next frame's hooks on the same schedule.
