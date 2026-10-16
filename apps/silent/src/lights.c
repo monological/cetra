@@ -174,28 +174,6 @@ static void tube_fixture(Kit* kit, const Tube* t) {
     kit_box(kit, MAT_STEEL, centre, half, 0.0f, false);
 }
 
-// A chain of oval brass links from `y0` down to `y1` on the upright through the pendant's pivot,
-// in its own frame, each link turned a quarter from the last and hung through it.
-#define LINK_LEN  0.034f // outside, end to end
-#define LINK_WIDE 0.016f
-#define LINK_WIRE 0.0022f
-static void chain(Kit* kit, float y0, float y1) {
-    const float hy = 0.5f * LINK_LEN - LINK_WIRE, hx = 0.5f * LINK_WIDE - LINK_WIRE;
-    const float pitch = LINK_LEN - 4.0f * LINK_WIRE;
-    const int links = (int)ceilf((y0 - y1 - LINK_LEN) / pitch) + 1;
-    for (int i = 0; i < links; i++) {
-        const float yc = y0 - 0.5f * LINK_LEN - (float)i * pitch;
-        vec3 loop[13];
-        for (int k = 0; k < 13; k++) {
-            const float t = (float)k * GLM_PIf / 6.0f, across = hx * cosf(t);
-            glm_vec3_copy(
-                (vec3){(i & 1) ? 0.0f : across, yc + hy * sinf(t), (i & 1) ? across : 0.0f},
-                loop[k]);
-        }
-        kit_frame_pipe(kit, &KIT_WORLD, MAT_LANTERN_BRASS, loop, 13, LINK_WIRE, 5);
-    }
-}
-
 // The pendant: a brass rose on the ceiling, and under it, in a kit of its own that turns about
 // the rose, the chain and the lantern. That kit casts nothing: swinging, it would be a mover in
 // its own light's kept views every frame. Its light is the bulb's, cached (spec 13.16) from the
@@ -213,7 +191,7 @@ static void hall_pendant(Lights* lights, Kit* kit, Scene* scene) {
     kit_init_beside(&hang, kit, GLM_VEC3_ZERO);
     hang.casts_nothing = true;
     const float top = PENDANT_TOP - PENDANT_PIVOT[1];
-    chain(&hang, 0.0f, top + FIXTURE_CROWN_H);
+    fixtures_chain(&hang, &KIT_WORLD, 0.0f, 0.0f, 0.0f, top + FIXTURE_CROWN_H);
     fixture_lantern(&hang, &KIT_WORLD, 0.0f, top, 0.0f, PENDANT_R, PENDANT_H);
     lights->pendant = kit_finish(&hang, "hall_pendant");
     kit_keep_beside(kit, &hang);

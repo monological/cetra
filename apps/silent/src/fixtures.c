@@ -12,7 +12,19 @@
 #define CAGE_R     0.009f  // the squirrel cage's radius
 #define CAGE_H     0.011f  // its half height
 
-void fixture_bulb(Kit* kit, const KitFrame* f, float a, float y, float d) {
+// The round lantern's.
+#define RIM        0.012f // how far its dish and its cap reach past the glass
+#define BAND       0.012f // the brass round the glass's foot and its top
+#define GLASS_WALL 0.003f
+#define STRAPS     6
+#define STRAP      0.0028f // a strap's radius, standing just off the glass
+#define DOME       0.07f   // the cap's height over the glass, to its crown
+
+#define LINK_LEN  0.034f // a chain link, outside, end to end
+#define LINK_WIDE 0.016f
+#define LINK_WIRE 0.0022f
+
+void fixture_bulb(Kit* kit, const KitFrame* f, float a, float y, float d, int filament) {
     // A clear pear of glass, widest at the filament, its neck up into the socket.
     const vec2 glass[] = {{0.0f, -0.034f},   {0.01f, -0.032f}, {0.019f, -0.025f},
                           {0.026f, -0.012f}, {0.028f, 0.0f},   {0.026f, 0.014f},
@@ -29,7 +41,7 @@ void fixture_bulb(Kit* kit, const KitFrame* f, float a, float y, float d) {
         zig[i][1] = y + ((i & 1) ? -CAGE_H : CAGE_H);
         zig[i][2] = d + CAGE_R * sinf(t);
     }
-    kit_frame_pipe(kit, f, MAT_FILAMENT, zig, KIT_COUNT(zig), WIRE, 4);
+    kit_frame_pipe(kit, f, filament, zig, KIT_COUNT(zig), WIRE, 4);
     // Its two leads down from the socket.
     for (int s = -1; s <= 1; s += 2) {
         const vec3 lead[2] = {{a + 0.004f * (float)s, y + 0.052f, d},
@@ -49,6 +61,29 @@ static void crown_face(Kit* kit, const KitFrame* f, const vec3 p0, const vec3 p1
     kit_frame_point(f, apex[0], apex[1], apex[2], w2);
     kit_frame_dir(f, out[0], out[1], out[2], o);
     kit_tri_facing(kit, MAT_LANTERN_BRASS, w0, w1, w2, o);
+}
+
+// A lantern's finial standing on its crown at `base`, and the ring it hangs by, whose top is
+// FIXTURE_CROWN_H over the cage's `top`.
+static void finial_ring(Kit* kit, const KitFrame* f, float a, float d, float base, float top) {
+    const vec2 finial[] = {{0.0f, -0.01f},   {0.01f, -0.004f}, {0.013f, 0.006f},
+                           {0.009f, 0.016f}, {0.005f, 0.022f}, {0.0f, 0.025f}};
+    kit_frame_lathe(kit, f, MAT_LANTERN_BRASS, a, d, base, finial, KIT_COUNT(finial), 12);
+    vec3 ring[13];
+    const float ring_y = top + FIXTURE_CROWN_H - 0.012f;
+    for (int i = 0; i < 13; i++) {
+        const float t = (float)i * GLM_PIf / 6.0f;
+        glm_vec3_copy((vec3){a + 0.012f * cosf(t), ring_y + 0.012f * sinf(t), d}, ring[i]);
+    }
+    kit_frame_pipe(kit, f, MAT_LANTERN_BRASS, ring, KIT_COUNT(ring), 0.0025f, 5);
+}
+
+// The bulb, hung from under a lantern's `top` on a short rod into its socket.
+static void hang_bulb(Kit* kit, const KitFrame* f, float a, float d, float top, int filament) {
+    const float bulb = top - FIXTURE_BULB_DROP;
+    const vec3 rod[2] = {{a, bulb + 0.11f, d}, {a, top + 0.002f, d}};
+    kit_frame_pipe(kit, f, MAT_LANTERN_BRASS, rod, 2, 0.004f, 8);
+    fixture_bulb(kit, f, a, bulb, d, filament);
 }
 
 void fixture_lantern(Kit* kit, const KitFrame* f, float a, float y, float d, float r, float h) {
@@ -97,19 +132,70 @@ void fixture_lantern(Kit* kit, const KitFrame* f, float a, float y, float d, flo
     crown_face(kit, f, c[1], c[2], apex, (vec3){1.0f, 0.6f, 0.0f});
     crown_face(kit, f, c[2], c[3], apex, (vec3){0.0f, 0.6f, 1.0f});
     crown_face(kit, f, c[3], c[0], apex, (vec3){-1.0f, 0.6f, 0.0f});
-    const vec2 finial[] = {{0.0f, -0.01f},   {0.01f, -0.004f}, {0.013f, 0.006f},
-                           {0.009f, 0.016f}, {0.005f, 0.022f}, {0.0f, 0.025f}};
-    kit_frame_lathe(kit, f, MAT_LANTERN_BRASS, a, d, apex[1], finial, KIT_COUNT(finial), 12);
-    vec3 ring[13];
-    const float ring_y = top + FIXTURE_CROWN_H - 0.012f;
-    for (int i = 0; i < 13; i++) {
-        const float t = (float)i * GLM_PIf / 6.0f;
-        glm_vec3_copy((vec3){a + 0.012f * cosf(t), ring_y + 0.012f * sinf(t), d}, ring[i]);
+    finial_ring(kit, f, a, d, apex[1], top);
+    hang_bulb(kit, f, a, d, top, MAT_FILAMENT);
+}
+
+void fixture_lantern_round(Kit* kit, const KitFrame* f, float a, float y, float d, float r, float h,
+                           int glass, int filament) {
+    const float top = y, foot = y - h;
+    // A brass dish under the glass, a drop finial under it.
+    const vec2 dish[] = {
+        {0.0f, foot - 0.05f},    {0.007f, foot - 0.046f},       {0.012f, foot - 0.034f},
+        {0.009f, foot - 0.024f}, {0.6f * r, foot - 0.014f},     {r + RIM, foot - 0.004f},
+        {r + RIM, foot + BAND},  {r - GLASS_WALL, foot + BAND}, {0.0f, foot + BAND}};
+    kit_frame_lathe(kit, f, MAT_LANTERN_BRASS, a, d, 0.0f, dish, KIT_COUNT(dish), 24);
+    // The globe: a glass cylinder with a wall, up its outside and down its inside, so a lantern
+    // seen through is two layers of glass and not one.
+    const vec2 globe[] = {{r, foot + BAND},
+                          {r, top - BAND},
+                          {r - GLASS_WALL, top - BAND},
+                          {r - GLASS_WALL, foot + BAND}};
+    kit_frame_lathe(kit, f, glass, a, d, 0.0f, globe, KIT_COUNT(globe), 24);
+    // Brass straps up the glass, and a band round its foot and its top.
+    for (int i = 0; i < STRAPS; i++) {
+        const float t = (float)i * 2.0f * GLM_PIf / STRAPS;
+        const float sa = a + (r + STRAP) * cosf(t), sd = d + (r + STRAP) * sinf(t);
+        const vec3 strap[2] = {{sa, foot, sd}, {sa, top, sd}};
+        kit_frame_pipe(kit, f, MAT_LANTERN_BRASS, strap, 2, STRAP, 6);
     }
-    kit_frame_pipe(kit, f, MAT_LANTERN_BRASS, ring, KIT_COUNT(ring), 0.0025f, 5);
-    // The bulb, hung from the slab's middle on a short rod into its socket.
-    const float bulb = top - FIXTURE_BULB_DROP;
-    const vec3 rod[2] = {{a, bulb + 0.11f, d}, {a, top + 0.002f, d}};
-    kit_frame_pipe(kit, f, MAT_LANTERN_BRASS, rod, 2, 0.004f, 8);
-    fixture_bulb(kit, f, a, bulb, d);
+    const float bands[2] = {foot + BAND, top - BAND};
+    for (int k = 0; k < 2; k++) {
+        vec3 band[25];
+        for (int i = 0; i < 25; i++) {
+            const float t = (float)i * GLM_PIf / 12.0f;
+            glm_vec3_copy((vec3){a + (r + STRAP) * cosf(t), bands[k], d + (r + STRAP) * sinf(t)},
+                          band[i]);
+        }
+        kit_frame_pipe(kit, f, MAT_LANTERN_BRASS, band, KIT_COUNT(band), 1.4f * STRAP, 6);
+    }
+    // A domed cap over the glass, the finial on its crown.
+    const float crown = top + DOME;
+    const vec2 dome[] = {{0.0f, top - BAND},
+                         {r + RIM, top - BAND},
+                         {r + RIM, top + 0.006f},
+                         {0.85f * r, top + 0.3f * DOME},
+                         {0.55f * r, top + 0.7f * DOME},
+                         {0.18f * r, top + 0.95f * DOME},
+                         {0.0f, crown}};
+    kit_frame_lathe(kit, f, MAT_LANTERN_BRASS, a, d, 0.0f, dome, KIT_COUNT(dome), 24);
+    finial_ring(kit, f, a, d, crown, top);
+    hang_bulb(kit, f, a, d, top, filament);
+}
+
+void fixtures_chain(Kit* kit, const KitFrame* f, float a, float d, float y0, float y1) {
+    const float hy = 0.5f * LINK_LEN - LINK_WIRE, hx = 0.5f * LINK_WIDE - LINK_WIRE;
+    const float pitch = LINK_LEN - 4.0f * LINK_WIRE;
+    const int links = (int)ceilf((y0 - y1 - LINK_LEN) / pitch) + 1;
+    for (int i = 0; i < links; i++) {
+        const float yc = y0 - 0.5f * LINK_LEN - (float)i * pitch;
+        vec3 loop[13];
+        for (int k = 0; k < 13; k++) {
+            const float t = (float)k * GLM_PIf / 6.0f, across = hx * cosf(t);
+            glm_vec3_copy((vec3){a + ((i & 1) ? 0.0f : across), yc + hy * sinf(t),
+                                 d + ((i & 1) ? across : 0.0f)},
+                          loop[k]);
+        }
+        kit_frame_pipe(kit, f, MAT_LANTERN_BRASS, loop, 13, LINK_WIRE, 5);
+    }
 }

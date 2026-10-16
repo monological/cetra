@@ -575,6 +575,24 @@ static const MatSpec SPECS[MAT_COUNT] = {
     // tools/make_map.py's folded map: its glossy cover and the newsprint inside, as cards that
     // carry their own UVs.
     [MAT_TOWN_MAP] = {"town_map", "town_map_folded", {1, 1, 1}, 1.0f, 0.0f, 1.0f},
+    // The dock lamp's globe is the jars' glass where the rain beads.
+    [MAT_LAMP_GLASS] = {"lamp_glass",
+                        "Smear008",
+                        {0.94f, 1.0f, 0.95f},
+                        0.12f,
+                        0.0f,
+                        0.3f,
+                        true,
+                        .grime = 0.35f,
+                        .glass = {0.97f, 0.004f, {0.90f, 0.97f, 0.90f}, 0.025f},
+                        .rain = {true, -1.0f, .beads = RAIN_BEADS_ON}},
+    [MAT_LAMP_FILAMENT] = {"lamp_filament",
+                           NULL,
+                           {1.0f, 0.85f, 0.6f},
+                           0.3f,
+                           0.0f,
+                           1.0f,
+                           .glow = {{1.0f, 0.62f, 0.3f}, 5000.0f}},
 };
 
 // A map of a material's set, decoded on the engine's loader threads and set by `put` once in.
