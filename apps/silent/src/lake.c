@@ -195,12 +195,22 @@ void lake_ground_build(Kit* kit) {
  *
  * Dark and still: a peat lake in the woods, tea-brown and opaque at arm's length, under a breath
  * of wind. No caustics and no motes, which such water would not show.
+ *
+ * Its waves are the spectral sea's (spec 13.56), with no swell, which needs an ocean. The wind
+ * sea is livelier than the lake's own 40 m of fetch would make it: 3.5 m/s over that seeds 14 cm
+ * ripples, Hs 2 cm, which read as still water from the dock. This seeds 0.6 s wavelets, Hs 7 cm,
+ * a breeze ruffling the whole lake. They lie in the bands that only shade, so the surface itself
+ * barely moves.
  */
 
 #define WATER_X0 (-124.0f) // where the water is: round the basin, its edges under the bank
 #define WATER_X1 (-68.0f)
 #define WATER_Z0 97.0f
 #define WATER_Z1 141.0f
+
+#define LAKE_SEA_DEPTH  4.0f   // metres, the bed's past the drop-off
+#define LAKE_WIND_SPEED 5.0f   // m/s at the 10 m reference height
+#define LAKE_FETCH      150.0f // metres of open water the wind has crossed
 
 // The wading ring's bodies, from under the bed at the ring to over a head.
 #define RING_FOOT (LAKE_Y - 0.9f)
@@ -238,7 +248,7 @@ void lake_shore_point(float theta, float* x, float* z) {
     shore_at(theta, 0.0f, x, z);
 }
 
-static Water* water(Scene* scene) {
+static Water* water(Scene* scene, WaterWaveModel waves) {
     Water* w = create_water();
     if (!w)
         return NULL;
@@ -247,6 +257,14 @@ static Water* water(Scene* scene) {
     // No bed: the surface reads its column off the scene's depth, which the basin is, and a bed
     // would only bring a shore's surf to a lake with none.
     w->height_at = NULL;
+    w->wave_model = waves;
+    // The street's breeze, down the valley.
+    glm_vec2_copy((vec2){0.0f, 1.0f}, w->wind_dir);
+    // A lake's own sea: the breeze over the water's length, and no swell, which needs an ocean.
+    w->sea.sea_depth = LAKE_SEA_DEPTH;
+    w->sea.wind_sea.wind_speed = LAKE_WIND_SPEED;
+    w->sea.wind_sea.fetch = LAKE_FETCH;
+    w->sea.swell.scale = 0.0f;
     w->amplitude = 0.015f;
     w->wavelength = 3.0f;
     w->steepness = 0.3f;
@@ -535,8 +553,9 @@ static void drowned(Kit* kit, Trees* trees, unsigned int* state) {
     }
 }
 
-void lake_build(Lake* lake, Kit* kit, Scene* scene, Trees* trees, unsigned int seed, float reach) {
-    *lake = (Lake){.water = water(scene), .reach = reach};
+void lake_build(Lake* lake, Kit* kit, Scene* scene, Trees* trees, unsigned int seed, float reach,
+                WaterWaveModel waves) {
+    *lake = (Lake){.water = water(scene, waves), .reach = reach};
     unsigned int state = seed * 2246822519u + 0x1341eu;
     ring(kit);
     dock(kit, &state);

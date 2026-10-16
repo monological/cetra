@@ -257,6 +257,7 @@ typedef struct SilentArgs {
     const char* audio_dump;  // headless: write what the listener hears here
     const char* map_export;  // write the town's plan here for tools/make_map.py, and stop
     bool no_woods;           // no trees behind the yards, nor what lies under them
+    WaterWaveModel lake_waves;
     bool no_cat;
     vec3 cat_fur, cat_eyes; // sRGB
     const char* cat_at;     // a place by name, or NULL for home
@@ -1079,7 +1080,8 @@ static void on_init(Game* game) {
     Kit lake;
     kit_init_beside(&lake, &kit, GLM_VEC3_ZERO);
     lake.draw_distance = lake_reach;
-    lake_build(&g_lake, &lake, g_scene, &trees, (unsigned int)g_args.seed, lake_reach);
+    lake_build(&g_lake, &lake, g_scene, &trees, (unsigned int)g_args.seed, lake_reach,
+               g_args.lake_waves);
     trees_release(&trees);
     Kit cabin;
     kit_init_beside(&cabin, &kit, GLM_VEC3_ZERO);
@@ -2092,6 +2094,7 @@ static void print_usage(const char* prog) {
            SHADOW_TILE_STORE_CELLS);
     printf("      --tiles-probe       The cached shadow tiles and each light's block, at exit\n");
     printf("      --no-woods          Without the woods behind the yards\n");
+    printf("      --lake-waves MODEL  The lake's waves: fft (default) or gerstner\n");
     printf("      --no-cat            Without the cat\n");
     printf("      --cat-fur RRGGBB    The cat's coat, as sRGB hex (default 262424)\n");
     printf("      --cat-eyes RRGGBB   Its eyes (default E8B923)\n");
@@ -2151,6 +2154,7 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
     a->seed = 7;
     a->render_scale = DEFAULT_RENDER_SCALE;
     a->rain_mmh = DEFAULT_RAIN_MMH;
+    a->lake_waves = WATER_WAVES_FFT;
     a->bob = 1.0f;
     a->climb = 1.0f;
     parse_hex("262424", a->cat_fur);
@@ -2344,6 +2348,14 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
             a->profiler = true;
         } else if (!strcmp(s, "--no-woods")) {
             a->no_woods = true;
+        } else if (!strcmp(s, "--lake-waves") && has_next) {
+            const char* m = argv[++i];
+            if (!strcmp(m, "fft"))
+                a->lake_waves = WATER_WAVES_FFT;
+            else if (!strcmp(m, "gerstner"))
+                a->lake_waves = WATER_WAVES_GERSTNER;
+            else
+                fprintf(stderr, "silent: --lake-waves takes fft or gerstner; ignoring it\n");
         } else if (!strcmp(s, "--no-cat")) {
             a->no_cat = true;
         } else if (!strcmp(s, "--cat-fur") && has_next) {
