@@ -2,6 +2,7 @@
 #define _SILENT_LAKE_H_
 
 #include "cetra/game/audio.h"
+#include "cetra/light.h"
 #include "cetra/scene.h"
 #include "cetra/water.h"
 
@@ -18,6 +19,14 @@ typedef struct Lake {
     float reach;    // the water is on while the eye is this near it in plan; 0 = always
     Sound* lapping; // NULL until lake_start_audio
     WaterWake wake;
+    // The dock lamp's chain and lantern, swinging about the hook under the crook's end, and the
+    // light at its bulb, lamp_drop under the hook (spec 13.56).
+    SceneNode* lantern;
+    Light* lamp;
+    const Scene* scene; // whose breeze swings it; none hangs it still
+    vec3 lamp_pivot;
+    float lamp_drop;
+    float swing[2], swing_rate[2]; // radians leaning downwind and swaying across, and their rates
 } Lake;
 
 // `h`, the ground the rest of the world has at (x, z), with the valley carved into it: the
@@ -53,7 +62,12 @@ void lake_build(Lake* lake, Kit* kit, Scene* scene, struct Trees* trees, unsigne
 void lake_start_audio(Lake* lake, AudioSystem* audio);
 
 // Each frame, from this frame's eye: the water on or off by its reach, a wake where the feet
-// wade, and the lapping moved to the shore on the eye's bearing from the lake's middle.
-void lake_update(Lake* lake, const float eye[3], const float feet[3]);
+// wade, the lapping moved to the shore on the eye's bearing from the lake's middle, and the dock
+// lamp swung `dt` on by the breeze at `time`.
+void lake_update(Lake* lake, const float eye[3], const float feet[3], double time, float dt);
+
+// The dock lamp hanging straight down while `rest`, for a capture that keeps what it sees, and
+// where its swing has it after.
+void lake_rest(Lake* lake, bool rest);
 
 #endif // _SILENT_LAKE_H_
