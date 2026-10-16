@@ -16950,6 +16950,9 @@ def run_audio_gate(workdir):
       audio-pitch    a voice of a sine at pitch 1.06 is 1.06 times as bright as at 1,
                      a sine's brightness being its frequency, and one with its pitch
                      unset is the same as at 1 to the digit (spec 13.47)
+      audio-held-pitch a held tone re-pitched to 1.06 while it plays is 1.06 times as
+                     bright as before (spec 13.56): audio_sound_set_pitch, what a motor's
+                     loop follows its speed by
 
     Falsified by hand at 13.33: audio-zone fails with the zone's gain never applied and
     with a file sound spatialized from the moment it is made, audio-zone-path with the
@@ -17137,6 +17140,20 @@ def run_audio_gate(workdir):
               f"at 1 ({rows['unset']} and {rows['one']})")
         if not ok:
             failures.append("audio-pitch")
+        # A held sound re-pitched while it plays (spec 13.56), the motor's loop's way.
+        held = ("held_one", "held_high")
+        if any(k not in rows for k in held):
+            print("  audio-held-pitch FAIL  measured nothing")
+            failures.append("audio-held-pitch")
+        else:
+            ratio = rows["held_high"][1] / rows["held_one"][1]
+            # The tone is quieter than the file, measured 0.044 at its 2 m: heard is what is asked.
+            ok = abs(ratio - AUDIO_PITCH_HIGH) < 0.005 and rows["held_one"][0] > 0.02
+            print(f"  audio-held-pitch {'PASS' if ok else 'FAIL'}  a held tone re-pitched to "
+                  f"{AUDIO_PITCH_HIGH} as it plays is {ratio:.4f} as bright (want "
+                  f"{AUDIO_PITCH_HIGH} +- 0.005)")
+            if not ok:
+                failures.append("audio-held-pitch")
 
     return failures
 
