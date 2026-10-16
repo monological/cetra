@@ -988,6 +988,7 @@ static void start_play(double time) {
 static void rest_lights(bool rest, void* ctx) {
     (void)ctx;
     lights_rest(&g_lights, rest);
+    lake_rest(&g_lake, rest);
     basement_rest(&g_basement, rest);
     tv_rest(&g_tv, rest);
     haunt_rest(&g_haunt, rest);
@@ -1654,7 +1655,7 @@ static void on_pre_render(Game* game, double alpha) {
     // The lake's water while the eye is near it, and a wake where the player wades (spec 13.41).
     vec3 feet = {0.0f, 0.0f, 0.0f};
     player_view_feet(&g_player, feet);
-    lake_update(&g_lake, eye, feet);
+    lake_update(&g_lake, eye, feet, look_time(game), (float)look_dt(game));
     footfall(game, feet);
 
     // The nearest thing the player is looking at in reach -- a door, the backpack on the bed, the
