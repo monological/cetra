@@ -286,6 +286,10 @@ static void set_moored(Boat* b, bool moored) {
 }
 
 void boat_place(Boat* b, Player* p, float x, float z, float heading, bool riding) {
+    // Nobody in it, it is at its mooring: the only other place it is left is being brought
+    // onto it.
+    if (!riding)
+        lake_mooring(&x, &z, &heading, NULL);
     b->x = b->prev_x = x;
     b->z = b->prev_z = z;
     b->heading = b->prev_heading = b->drawn_heading = heading;
@@ -293,13 +297,15 @@ void boat_place(Boat* b, Player* p, float x, float z, float heading, bool riding
     b->motor_state = BOAT_MOTOR_OFF;
     b->docking = false;
     pull_cord_close(&b->pull);
-    float mx = 0.0f, mz = 0.0f, mh = 0.0f;
-    lake_mooring(&mx, &mz, &mh, NULL);
-    set_moored(b,
-               !riding && hypotf(x - mx, z - mz) < 0.05f && fabsf(wrap_pi(heading - mh)) < 0.01f);
-    if (riding && p && !b->riding) {
+    set_moored(b, !riding);
+    if (p && riding && !p->riding) {
         player_board(p, 0.0f);
         camera_rig_aim(p->rig, heading, p->rig->pitch);
+    } else if (p && !riding && p->riding) {
+        // Out where the body now stands, which whatever placed the boat has put it.
+        vec3 feet = {0.0f, 0.0f, 0.0f};
+        player_feet(p, feet);
+        player_disembark(p, feet, p->rig->yaw, 0.0f);
     }
     b->riding = riding;
     b->cut_armed = riding;

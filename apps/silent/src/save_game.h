@@ -9,6 +9,7 @@
 
 #include "backpack.h"
 #include "basement.h"
+#include "boat.h"
 #include "cat.h"
 #include "cat_brain.h"
 #include "door.h"
@@ -27,7 +28,8 @@ typedef struct Story Story;
  *
  * What the file keeps is the player's body and look, the bag and what is in it, the places found
  * and the marks inked, each door's swing, the flashlight, the basement's draft, how far the house's
- * story has gone, and where the cat is with what it wants. A value a module holds as a field is
+ * story has gone, where the boat is and whether the player is in it, and where the cat is with what
+ * it wants. A value a module holds as a field is
  * read and written in place; the few a module holds only in some other shape -- the order the bag's
  * things were had, the marks written whole, the cat's place -- are worked out before a write and
  * put back after a read. Then the module that owns a thing rebuilds what follows from it: a door's
@@ -52,6 +54,7 @@ typedef struct SaveWorld {
     Lights* lights;
     Basement* basement;
     Story* story;
+    Boat* boat; // NULL, or one with no model, is left out
     Cat* cat;
     CatMind* mind;
     Door* doors[SAVE_GAME_DOORS];

@@ -27,6 +27,12 @@ typedef struct Kept {
     int item_order[ITEM_COUNT]; // each thing's place in the order it was had, from 1; 0 not had
     bool inked[PLACE_COUNT];
     int cat_place;
+    // The boat (spec 13.56): where it is in plan and which way it points, whether the player is
+    // in it, and whether its motor is still to die this trip. Kept rather than the boat's own,
+    // since putting the player in or out of it is a change the boat makes from what it was.
+    vec3 boat; // x, z, heading
+    bool boat_riding;
+    bool boat_cut_armed;
 } Kept;
 
 static SaveSystem* g_system;
@@ -56,6 +62,7 @@ static SaveField g_inked[PLACE_COUNT];
 static SaveField g_door_travel[SAVE_GAME_DOORS];
 static SaveField g_door_want[SAVE_GAME_DOORS];
 static SaveField g_story[1];
+static SaveField g_boat[3];
 static SaveField g_cat[5];
 static SaveField g_cat_since[CAT_PLACE_COUNT];
 
@@ -74,6 +81,11 @@ _Static_assert(sizeof(StoryStage) == sizeof(int), "the story's stage is written 
 // same.
 static void add_table(const char* section, const SaveField* rows, int count) {
     save_register_table(g_system, section, 1, rows, count, g_world.game);
+}
+
+// The boat only with its model: a lake with none has nothing to keep.
+static bool boat_kept(void) {
+    return g_world.boat && g_world.boat->node;
 }
 
 // The cat only with a mind to restore: held on a clip or sent somewhere from the command line, it
@@ -123,6 +135,13 @@ bool save_game_start(const SaveWorld* world) {
     g_story[0] = ENUM_ROW("stage", &w->story->stage, STORY_STAGE_NAMES, STORY_STAGE_COUNT);
     add_table("story", g_story, KIT_COUNT(g_story));
 
+    if (boat_kept()) {
+        g_boat[0] = ROW(SAVE_VEC3, "at", &g_kept.boat);
+        g_boat[1] = ROW(SAVE_BOOL, "riding", &g_kept.boat_riding);
+        g_boat[2] = ROW(SAVE_BOOL, "cut_armed", &g_kept.boat_cut_armed);
+        add_table("boat", g_boat, KIT_COUNT(g_boat));
+    }
+
     if (cat_kept()) {
         CatMind* m = w->mind;
         for (int i = 0; i < CAT_PLACE_COUNT; i++) {
@@ -158,6 +177,11 @@ static void gather(void) {
         g_kept.inked[i] = map_screen_inked(w->map_screen, (PlaceId)i);
     if (cat_kept())
         g_kept.cat_place = cat_nearest_place(w->cat);
+    if (boat_kept()) {
+        glm_vec3_copy((vec3){w->boat->x, w->boat->z, w->boat->heading}, g_kept.boat);
+        g_kept.boat_riding = w->boat->riding;
+        g_kept.boat_cut_armed = w->boat->cut_armed;
+    }
 }
 
 static void apply(void) {
@@ -187,6 +211,12 @@ static void apply(void) {
     // The engine's own section has put the body and the clock; what follows from where it stands
     // is said nothing about, since the player did not arrive anywhere.
     player_restore(w->player);
+    // The boat where it was, its motor off, and the player in it if they were (spec 13.56).
+    if (boat_kept()) {
+        boat_place(w->boat, w->player, g_kept.boat[0], g_kept.boat[1], g_kept.boat[2],
+                   g_kept.boat_riding);
+        w->boat->cut_armed = g_kept.boat_cut_armed;
+    }
     vec3 feet = {0.0f, 0.0f, 0.0f};
     player_feet(w->player, feet);
     finds_settle(w->finds, feet);
