@@ -20,7 +20,6 @@
 uniform float waterLevel;
 uniform vec2 waterWindDir; // unit; the longest wave's travel direction
 uniform float waterExtent; // the shoaling bed's domain; nothing outside it has a shore
-uniform vec4 waterBounds;  // Water.bounds: where the sea is at all; all zero = everywhere
 
 /*
  * The numbers this model stands on, in the one file both languages read.
@@ -173,7 +172,7 @@ float shoreSlope() {
 const float SHORE_DOMAIN_FADE = 0.75;
 
 float shoreDomain(vec2 p) {
-    if (!waterReaches(waterBounds, p))
+    if (!waterReaches(p))
         return 0.0;
     vec2 d = abs(p) / max(waterExtent, 1.0e-4);
     return 1.0 - smoothstep(SHORE_DOMAIN_FADE, 1.0, max(d.x, d.y));

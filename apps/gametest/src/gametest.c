@@ -4552,6 +4552,29 @@ static int run_audio_probe(Game* game, const char* which, const char* file) {
                 printf("audio decode result rms %.6f %.6f\n", l, r);
             }
         }
+    } else if (!strcmp(which, "load")) {
+        // Inside a loading phase (spec 13.56): `file`, beside it `<file>.junk`, which is no audio,
+        // and `<file>.missing`, which is not there. The two are refused, the phase still ends,
+        // and the good one plays.
+        if (!file) {
+            fprintf(stderr, "audio-probe load: needs --audio-file <wav>\n");
+            rc = 1;
+        } else {
+            char missing[1024], junk[1024];
+            snprintf(missing, sizeof(missing), "%s.missing", file);
+            snprintf(junk, sizeof(junk), "%s.junk", file);
+            audio_system_begin_loading(audio);
+            const Sound* gone = audio_sound_from_file(audio, missing, AUDIO_BUS_SFX);
+            const Sound* bad = audio_sound_from_file(audio, junk, AUDIO_BUS_SFX);
+            Sound* good = audio_sound_from_file(audio, file, AUDIO_BUS_SFX);
+            audio_system_end_loading(audio);
+            printf("audio load refused missing %d junk %d\n", gone == NULL, bad == NULL);
+            if (good) {
+                audio_sound_play(good);
+                probe_measure(audio, &l, &r, NULL);
+                printf("audio load good rms %.6f %.6f\n", l, r);
+            }
+        }
     } else if (!strcmp(which, "pitch")) {
         // A voice of the sine three times, each played out before the next: its pitch unset, at
         // 1 and at 1.06. A sine's brightness is its frequency, so the third is 1.06 times the

@@ -659,8 +659,8 @@ void free_water(Water* water) {
 // a camera within a wave height of the waterline would otherwise change sides several times a
 // second as crests pass it, and every temporal history in the frame would reset each time.
 static bool _water_covers_eye(const Water* water, const Camera* cam) {
-    return cam && water_under(water->level, water->bounds, water->dry, water->dry_count,
-                              cam->position[0], cam->position[1], cam->position[2]);
+    return cam && water_under(water->level, &water->domain, cam->position[0], cam->position[1],
+                              cam->position[2]);
 }
 
 void water_publish_to_postfx(const Water* water, const struct Scene* scene, struct Engine* engine) {
@@ -694,8 +694,7 @@ void water_publish_to_postfx(const Water* water, const struct Scene* scene, stru
     fx->water_medium = submerged ? 1 : 0;
     fx->water_suppress_aerial = submerged ? 1 : 0;
     fx->water_level_y = water->level;
-    glm_vec4_copy((float*)water->bounds, fx->water_bounds);
-    fx->water_dry_count = water_dry_pack(water->dry, water->dry_count, fx->water_dry);
+    fx->water_domain = water->domain;
     memcpy(fx->water_extinction, water->absorption, sizeof(vec3));
     /*
      * The same product the surface forms (spec 11.84): scatter is the FRACTION of what
@@ -1855,7 +1854,7 @@ bool water_shore_runup_params(const Water* water, const struct Scene* scene,
  */
 static void _water_publish_sea(const Water* water, const struct Scene* scene, UniformManager* u,
                                bool gate_wetness) {
-    water_upload_dry(water, u);
+    water_domain_upload(water ? &water->domain : NULL, u);
     if (!water) {
         uniform_set_float(u, "waterSurfHeight", 0.0f);
         uniform_set_int(u, "waterDownwell", 0);
@@ -1876,17 +1875,16 @@ static void _water_publish_sea(const Water* water, const struct Scene* scene, Un
     // the level is lit through the water, and the water judges its caustics against that.
     // Only while the sea is drawn -- switched off, there is nothing over the surface.
     uniform_set_int(u, "waterDownwell", water_active(water) && water->downwell ? 1 : 0);
-    uniform_set_vec4(u, "waterBounds", water->bounds);
     uniform_set_float(u, "waterIor", water->ior);
     uniform_set_vec3(u, "waterAbsorption", (const float*)&water->absorption);
 }
 
-void water_upload_dry(const Water* water, UniformManager* u) {
-    float packed[2 * WATER_DRY_MAX][4];
-    const int n = water ? water_dry_pack(water->dry, water->dry_count, packed) : 0;
+void water_domain_upload(const WaterDomain* domain, UniformManager* u) {
+    const int n = domain ? glm_imin(domain->dry_count, WATER_DRY_MAX) : 0;
+    uniform_set_vec4(u, "waterBounds", domain ? domain->bounds : GLM_VEC4_ZERO);
     uniform_set_int(u, "waterDryCount", n);
     if (n > 0)
-        uniform_set_vec4_array(u, "waterDry", &packed[0][0], 2 * n);
+        uniform_set_vec4_array(u, "waterDry", (const float*)domain->dry, 2 * n);
 }
 
 /*

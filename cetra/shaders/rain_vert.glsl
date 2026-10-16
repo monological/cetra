@@ -41,7 +41,6 @@ uniform float splashStandsFor;  // the splashes each drawn one stands for, 1 or 
 uniform float splashSize;       // scale on the droplets' diameter
 uniform vec3 rainTravel;        // unit direction the rain, and the occlusion map, looks along
 uniform float rainWaterLevel;   // world Y of the still water drawn this frame; far below if none
-uniform vec4 rainWaterBounds;   // where that water is: Water.bounds, all zero = everywhere
 
 // The drips (spec 13.12): instances past the splashes, RAIN_DRIP_INSTANCES to a slot. Per line:
 // its ends, and its schedule -- cycle in seconds, the chance a slot drips in one, the running
@@ -276,7 +275,7 @@ bool splashDroplet(int instance, out Drop d) {
     vec3 hit = above + rainTravel * ((map - pc.z) * RAIN_MAP_DEPTH_METRES);
     // Water is not in the occlusion map, so over flooded ground the map answers the bed: the
     // drop strikes the surface first, back up its own path. Waves are not followed.
-    if (waterUnder(rainWaterLevel, rainWaterBounds, hit))
+    if (waterUnder(rainWaterLevel, hit))
         hit += rainTravel * ((rainWaterLevel - hit.y) / rainTravel.y);
 
     float impact = mpDiameter(h.z, RAIN_SPLASH_MIN_MM);

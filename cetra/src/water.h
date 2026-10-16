@@ -7,7 +7,7 @@
 
 #include "common.h"       // RenderMode, for water_will_draw
 #include "shore_runup.h"  // ShoreRunupParams, for the CPU twin the film is driven by
-#include "water_bounds.h" // WaterDry
+#include "water_bounds.h" // WaterDomain
 #include "sky.h"          // SKY_CLOUD_SHADOW_UNIT, asserted against this file's own ledger below
 
 /*
@@ -326,13 +326,10 @@ typedef struct Water {
     // surface, which the projected grid takes from the frustum -- outside this the bed
     // field reads its nearest edge texel, which is open water.
     float extent;
-    // Where the water is at all, world XZ: min x, min z, max x, max z; all zero = everywhere
-    // (spec 13.41). A lake below a world's other low ground keeps its edges under its own banks.
-    vec4 bounds;
-    // Where inside the bounds it is not (spec 13.56): the inside of a hull floating on it, which
-    // sits below the level. The first `dry_count` are read; an app moves them with the hull.
-    WaterDry dry[WATER_DRY_MAX];
-    int dry_count;
+    // Where the water is at all (spec 13.41) -- a lake below a world's other low ground keeps
+    // its edges under its own banks -- and where inside that it is not (spec 13.56), the inside
+    // of a hull floating on it, which an app moves with the hull.
+    WaterDomain domain;
 
     // Optical properties of the body, authored rather than derived from a
     // transparency slider. absorption is extinction per world unit per channel,
@@ -720,9 +717,6 @@ void water_publish_to_postfx(const Water* water, const struct Scene* scene, stru
  * only, no sampler unit. A NULL water publishes the off state.
  */
 void water_bind_sea(const Water* water, const struct Scene* scene, ShaderProgram* program);
-
-// The water's dry shapes to a program that includes water_bounds.glsl; a NULL water uploads none.
-void water_upload_dry(const Water* water, UniformManager* u);
 
 /*
  * The sea state the run-up runs at, for a caller that wants to evaluate the CPU twin.
