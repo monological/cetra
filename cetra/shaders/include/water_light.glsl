@@ -30,15 +30,15 @@ const float WATER_SKY_DOWNWELL_PER_EXTINCTION = 1.0;
 
 /*
  * How far below the still surface `p` is, in world units; 0 above it, outside the sea's bounds,
- * or with no sea.
+ * in one of its dry shapes, or with no sea.
  *
  * Measured against the level everywhere the bounds reach, not only inside `waterExtent`: that is
  * the shoaling bed's domain, and the sea runs on past it. An unbounded sea runs to the horizon,
  * so there a dry pit sunk below the level is lit as though flooded.
  */
 float waterDepthBelow(vec3 p) {
-    return waterDownwell == 1 && waterBoundsCover(waterBounds, p.xz) ? max(waterLevel - p.y, 0.0)
-                                                                      : 0.0;
+    return waterDownwell == 1 && waterReaches(waterBounds, p.xz) ? max(waterLevel - p.y, 0.0)
+                                                                  : 0.0;
 }
 
 /*

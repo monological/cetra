@@ -10467,13 +10467,22 @@ WATER_BOUNDS_CUT = "-1e20,-1e20,0,1e20"
 WATER_BOUNDS_MARGIN = 0.04
 # An eye under the level, over the fixture's floor, looking along it at the wedge.
 WATER_BOUNDS_UNDER_CAM = ["--cam-eye", "0,-0.6,6.4", "--cam-target", "0,-0.9,-1"]
-WATER_BOUNDS_ARMS = ["water-bounds-whole", "water-bounds-cut", "water-bounds-eye"]
+# water-dry-* (spec 13.56): a dry shape is the bounds' rule turned inside out, so its arms are the
+# bounds' arms. The cut is a superellipse 10 km across, so square that its edge is the line x = 0
+# over the whole fixture, standing on the other side of it from the bounds' cut.
+WATER_DRY_AWAY = "1000,1000,0,1,1"
+WATER_DRY_CUT = "-1e4,0,90,1e4,1e4,40"
+WATER_DRY_OVER = "0,0,0,1e4,1e4"  # over everything
+WATER_BOUNDS_ARMS = ["water-bounds-whole", "water-bounds-cut", "water-bounds-eye",
+                     "water-dry-away", "water-dry-cut", "water-dry-eye"]
 WATER_BOUNDS_RUNS = (
     ("none", ["--no-water"]), ("whole", ["--water-bounds", WATER_BOUNDS_WHOLE]),
     ("away", ["--water-bounds", WATER_BOUNDS_AWAY]), ("cut", ["--water-bounds", WATER_BOUNDS_CUT]),
     ("under", WATER_BOUNDS_UNDER_CAM),
     ("under_away", WATER_BOUNDS_UNDER_CAM + ["--water-bounds", WATER_BOUNDS_AWAY]),
     ("under_none", WATER_BOUNDS_UNDER_CAM + ["--no-water"]),
+    ("dry_away", ["--water-dry", WATER_DRY_AWAY]), ("dry_cut", ["--water-dry", WATER_DRY_CUT]),
+    ("under_dry", WATER_BOUNDS_UNDER_CAM + ["--water-dry", WATER_DRY_OVER]),
 )
 
 
@@ -11327,6 +11336,13 @@ def run_water_gate(workdir):
                       shows the light under the level as well as the surface.
       water-bounds-eye an eye under the level is in the water only inside the bounds: outside
                       them the frame is the one with no water, to 0 px, and unbounded it is not.
+      water-dry-away  a dry shape off the water leaves the frame at 0 px (spec 13.56).
+      water-dry-cut   a dry shape over the frame's left half: that half is the frame with no
+                      water and the other the frame with no dry shape, both at 0 px, on the
+                      downwell fixture, so the light under the level goes with the surface.
+      water-dry-eye   an eye under the level inside a dry shape over everything is not in the
+                      water: the frame is the one with no water, to 0 px, which an eye test
+                      that forgot the shape would not give, arming the water's medium.
       water-shoal    waves shorten over a rising bed, and ONLY over it. Needs
                       --water-bed dome, since every other arm here runs over a bed the
                       vertex stage cannot see. The second half -- open water beyond the
@@ -12223,6 +12239,35 @@ def run_water_gate(workdir):
               f"the bounds: {outside} px from no water (want 0); inside them {inside} (want > 0)")
         if not ok:
             failures.append("water-bounds-eye")
+
+        # Dry shapes (spec 13.56), the bounds turned inside out: one off the water leaves the
+        # frame alone; one over the frame's left half takes the water and the light under it
+        # there and nowhere else; an eye under the level inside one is not in the water. That
+        # takes one over everything, since round the eye alone the water beyond it shows from
+        # below, and over everything only an eye test that forgot it would arm the water's
+        # medium and move the frame.
+        away, _ = compare(wb["dry_away"], wb["unbounded"])
+        ok = away == 0
+        print(f"  water-dry-away {'PASS' if ok else 'FAIL'}  a dry shape off the water: {away} px "
+              f"from the frame with none (want 0)")
+        if not ok:
+            failures.append("water-dry-away")
+        inside = _water_box_max_delta(pix["dry_cut"][2], pix["none"][2], w, h, left)
+        outside = _water_box_max_delta(pix["dry_cut"][2], pix["unbounded"][2], w, h, right)
+        ok = inside == 0 and outside == 0 and min(water_moves) > 0
+        print(f"  water-dry-cut {'PASS' if ok else 'FAIL'}  dry down the middle: the dry half "
+              f"{inside} from no water and the wet half {outside} from the frame with no dry "
+              f"shape at most (want 0, 0)")
+        if not ok:
+            failures.append("water-dry-cut")
+        dry_eye, _ = compare(wb["under_dry"], wb["under_none"])
+        wet_eye, _ = compare(wb["under"], wb["under_none"])
+        ok = dry_eye == 0 and wet_eye > 0
+        print(f"  water-dry-eye {'PASS' if ok else 'FAIL'}  an eye under the level in a dry "
+              f"shape over everything: {dry_eye} px from no water (want 0); with none "
+              f"{wet_eye} (want > 0)")
+        if not ok:
+            failures.append("water-dry-eye")
 
     # Shoaling, which needs the diagnostic bed: every other water arm runs over a bed
     # the vertex stage cannot see, so the whole Tier 3 path was untested.
@@ -29068,6 +29113,8 @@ def run_rain_gate(workdir):
       water-bounds-rain  the same twin with the water's bounds off it (spec 13.41): no surface
                     to strike, so the splashes land on the bed, 0 px from the twin with no
                     water at all.
+      water-dry-rain  the same twin under a dry shape over all of it (spec 13.56): 0 px from
+                    the twin with no water, as for the bounds.
       rain-ledger  the rain variant declares no more samplers than the dry variant of the
                     same materials: the cover is a tenant of the punctual array, and a unit
                     spent on it would be one the full variant does not have.
@@ -29655,6 +29702,16 @@ def run_rain_gate(workdir):
           f"{moved} px from no water (want 0)")
     if not ok:
         failures.append("water-bounds-rain")
+
+    # And not where a dry shape is (spec 13.56): one over the whole twin is no water to strike.
+    covered = shot("dry_over", RAIN_LINEAR + ["--water-dry", WATER_DRY_OVER], base=deep,
+                   camera=RAIN_UNDER_ROOF_CAMERA, rain=splashing)
+    moved = compare(covered, dry)[0] if covered and dry else sys.maxsize
+    ok = moved == 0
+    print(f"  water-dry-rain {'PASS' if ok else 'FAIL'}  splashes under a dry shape over the "
+          f"water: {moved} px from no water (want 0)")
+    if not ok:
+        failures.append("water-dry-rain")
 
     bits, full = _pbr_feature_bits()
     rain_bit = bits["rain"]

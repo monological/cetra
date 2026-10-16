@@ -173,7 +173,7 @@ float shoreSlope() {
 const float SHORE_DOMAIN_FADE = 0.75;
 
 float shoreDomain(vec2 p) {
-    if (!waterBoundsCover(waterBounds, p))
+    if (!waterReaches(waterBounds, p))
         return 0.0;
     vec2 d = abs(p) / max(waterExtent, 1.0e-4);
     return 1.0 - smoothstep(SHORE_DOMAIN_FADE, 1.0, max(d.x, d.y));

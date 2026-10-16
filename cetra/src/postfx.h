@@ -9,6 +9,8 @@
 #include "program.h"
 #include "util.h"
 
+#include "../shaders/include/water_dry_constants.glsl"
+
 struct Profiler;
 
 // Max distinct per-material SSS scatter profiles per scene. C-side only: the
@@ -607,12 +609,14 @@ typedef struct PostFX {
     // GUI's and nothing clears it per frame; water_suppress_aerial is ANDed by the
     // composite rather than clearing aerial_volume, because that handle is the sky's and
     // the sky republishes it every frame.
-    int water_medium;          // 1 = the volume has a second medium below water_level
-    int water_suppress_aerial; // 1 = drop the sky-view integral; it is air not crossed
-    float water_level_y;       // world height of the still surface
-    vec4 water_bounds;         // where it is: Water.bounds, all zero = everywhere
-    vec3 water_extinction;     // per-channel, per world unit
-    vec3 water_inscatter;      // colour the absorbed energy returns as
+    int water_medium;                      // 1 = the volume has a second medium below water_level
+    int water_suppress_aerial;             // 1 = drop the sky-view integral; it is air not crossed
+    float water_level_y;                   // world height of the still surface
+    vec4 water_bounds;                     // where it is: Water.bounds, all zero = everywhere
+    float water_dry[2 * WATER_DRY_MAX][4]; // and where inside them it is not: Water.dry, packed
+    int water_dry_count;                   // how many of water_dry's pairs are shapes
+    vec3 water_extinction;                 // per-channel, per world unit
+    vec3 water_inscatter;                  // colour the absorbed energy returns as
 
     // Falling rain as a medium (spec 13.9), published per frame by rain_publish_to_postfx;
     // postfx never learns about Rain. A request that arms the froxel pass, as water's is.

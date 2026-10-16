@@ -4,6 +4,8 @@
 #include <cglm/cglm.h>
 #include <stdbool.h>
 
+#include "water_bounds.h" // WaterDry
+
 // RAIN_DRIP_MAX, which the vertex stage's drip arrays are sized by.
 #include "../shaders/include/rain_constants.glsl"
 
@@ -212,10 +214,10 @@ typedef struct RainDripSchedule {
     float terminal; // m/s, a RAIN_DRIP_MM drop's terminal velocity times `fall_scale`
 } RainDripSchedule;
 
-// `water_level` is the world Y of a still water surface, -FLT_MAX for none, and `water_bounds`
-// where it is (Water.bounds, all zero = everywhere).
+// `water_level` is the world Y of a still water surface, -FLT_MAX for none, `water_bounds` where
+// it is (Water.bounds, all zero = everywhere) and its `dry_count` dry shapes where it is not.
 void rain_drip_schedule(const Rain* rain, float water_level, const float water_bounds[4],
-                        RainDripSchedule* out);
+                        const WaterDry* dry, int dry_count, RainDripSchedule* out);
 
 // The fraction of the ripple cells a drop lands in, 0..1: none when nothing falls, all of
 // them from moderate rain up.
