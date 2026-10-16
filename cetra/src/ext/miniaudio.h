@@ -68426,9 +68426,16 @@ static ma_result ma_resource_manager_data_buffer_node_acquire_critical_section(m
                 /*
                 Fences were acquired before posting the job, but since the job was not able to
                 be posted, we need to make sure we release them so nothing gets stuck waiting.
+
+                cetra (spec 13.56): not under WAIT_INIT, where the job was run here rather than
+                posted and its own failure path has already released both. Releasing them again
+                left a shared fence's counter one short of what it was handed, and its waiter
+                asserted -- a file that would not open or would not decode, loaded under a fence.
                 */
-                if (pInitFence != NULL) { ma_fence_release(pInitFence); }
-                if (pDoneFence != NULL) { ma_fence_release(pDoneFence); }
+                if ((flags & MA_RESOURCE_MANAGER_DATA_SOURCE_FLAG_WAIT_INIT) == 0) {
+                    if (pInitFence != NULL) { ma_fence_release(pInitFence); }
+                    if (pDoneFence != NULL) { ma_fence_release(pDoneFence); }
+                }
 
                 if ((flags & MA_RESOURCE_MANAGER_DATA_SOURCE_FLAG_WAIT_INIT) != 0) {
                     ma_resource_manager_inline_notification_uninit(pInitNotification);

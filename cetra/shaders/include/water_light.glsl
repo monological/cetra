@@ -37,8 +37,7 @@ const float WATER_SKY_DOWNWELL_PER_EXTINCTION = 1.0;
  * so there a dry pit sunk below the level is lit as though flooded.
  */
 float waterDepthBelow(vec3 p) {
-    return waterDownwell == 1 && waterReaches(waterBounds, p.xz) ? max(waterLevel - p.y, 0.0)
-                                                                  : 0.0;
+    return waterDownwell == 1 && waterUnder(waterLevel, p) ? waterLevel - p.y : 0.0;
 }
 
 /*

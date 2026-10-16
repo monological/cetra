@@ -112,8 +112,8 @@ void audio_sound_stop(Sound* sound);
 // For a file: ma looping. For a tone: continuous (no auto-stop) when true.
 void audio_sound_set_looping(Sound* sound, bool loop);
 void audio_sound_set_volume(Sound* sound, float volume);
-// The playback rate, so higher is also faster through it, as a voice's pitch is (spec 13.56): what
-// makes one recording of a motor its whole range of speeds. 1 until set; 0 or less is ignored.
+// The playback rate, so higher is also faster through it, as a voice's pitch is (spec 13.56). 1
+// until set; 0 or less is ignored.
 void audio_sound_set_pitch(Sound* sound, float pitch);
 // Places the voice in the world and enables 3D attenuation and panning.
 void audio_sound_set_position(Sound* sound, vec3 world_pos);

@@ -1399,7 +1399,6 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                         argv[i]);
                 return -1;
             }
-            args->water_dry_set = 1;
             args->water = 1;
         } else if (strcmp(argv[i], "--water-probe") == 0) {
             args->water_probe = 1;
@@ -5264,15 +5263,11 @@ int main(int argc, char** argv) {
         if (args.water_extent > 0.0f)
             water->extent = args.water_extent;
         if (args.water_bounds[2] > args.water_bounds[0])
-            memcpy(water->bounds, args.water_bounds, sizeof(water->bounds));
-        if (args.water_dry_set) {
-            const float* d = args.water_dry;
-            const float turn = glm_rad(d[2]);
-            water->dry[0] = (WaterDry){.centre = {d[0], d[1]},
-                                       .along = {sinf(turn), cosf(turn)},
-                                       .half = {d[3], d[4]},
-                                       .power = d[5]};
-            water->dry_count = 1;
+            memcpy(water->domain.bounds, args.water_bounds, sizeof(water->domain.bounds));
+        const float* d = args.water_dry;
+        if (d[3] > 0.0f) {
+            water->domain.dry[0] = water_dry_make(d[0], d[1], glm_rad(d[2]), d[3], d[4], d[5]);
+            water->domain.dry_count = 1;
         }
         if (args.water_waves >= 0)
             water->wave_model = args.water_waves ? WATER_WAVES_FFT : WATER_WAVES_GERSTNER;

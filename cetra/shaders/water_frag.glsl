@@ -1373,7 +1373,7 @@ void main() {
     path = min(path, maxPath);
     // Past the sea's bounds, or inside a dry shape such as a hull, there is no water at all
     // (specs 13.41 and 13.56).
-    if (!waterReaches(waterBounds, WorldPos.xz))
+    if (!waterReaches(WorldPos.xz))
         discard;
 
     // Transmitted share: the scene behind, bent along the refracted ray and then

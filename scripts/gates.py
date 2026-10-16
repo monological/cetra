@@ -16953,6 +16953,10 @@ def run_audio_gate(workdir):
       audio-held-pitch a held tone re-pitched to 1.06 while it plays is 1.06 times as
                      bright as before (spec 13.56): audio_sound_set_pitch, what a motor's
                      loop follows its speed by
+      audio-load     inside a loading phase, a file that is not there and one that is no
+                     audio are both refused, the phase still ends, and a good file loaded
+                     beside them plays (spec 13.56) -- miniaudio released the phase's fence
+                     twice for a load that failed, and its end asserted
 
     Falsified by hand at 13.33: audio-zone fails with the zone's gain never applied and
     with a file sound spatialized from the moment it is made, audio-zone-path with the
@@ -17154,6 +17158,24 @@ def run_audio_gate(workdir):
                   f"{AUDIO_PITCH_HIGH} +- 0.005)")
             if not ok:
                 failures.append("audio-held-pitch")
+
+    # --- audio-load -------------------------------------------------------------
+    with open(wav + ".junk", "w") as f:
+        f.write("<html><body>429 Too Many Requests</body></html>\n")
+    text, code = _gametest_probe_text("--audio-probe", "load", extra=["--audio-file", wav])
+    refused = re.search(r"^audio load refused missing (\d) junk (\d)$", text, re.M)
+    good = [(float(l), float(rr)) for c, label, l, rr in _AUDIO_PROBE.findall(text)
+            if c == "load" and label == "good"]
+    energy = avg(good[0]) if good else 0.0
+    ok = (code == 0 and refused is not None and refused.groups() == ("1", "1")
+          and energy > 0.05)
+    print(f"  audio-load {'PASS' if ok else 'FAIL'}  in a loading phase a missing file and a "
+          f"file of no audio are "
+          f"{'refused' if refused and refused.groups() == ('1', '1') else 'NOT both refused'}, "
+          f"the phase ends ({'exit 0' if code == 0 else f'exit {code}'}), and the good one "
+          f"plays at rms {energy:.4f} (want > 0.05)")
+    if not ok:
+        failures.append("audio-load")
 
     return failures
 
