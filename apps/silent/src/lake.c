@@ -4,9 +4,11 @@
 
 #include "cetra/ext/log.h"
 #include "cetra/game/audio.h"
+#include "cetra/light.h"
 #include "cetra/scene.h"
 #include "cetra/water.h"
 
+#include "fixtures.h"
 #include "hill.h"
 #include "lake.h"
 #include "land.h"
@@ -224,6 +226,19 @@ void lake_ground_build(Kit* kit) {
 #define DOCK_Y    (LAKE_Y + 0.95f)               // the deck's top, a metre over the water
 #define DOCK_POST (DOCK_X1 + 0.3f) // the last pair of posts, standing up past the deck
 
+// The dock lamp's post, on the deck's south edge over the moored boat, and its crook carrying
+// the lantern out over the water.
+#define LAMP_X       (DOCK_X1 + 1.5f)
+#define LAMP_Z       (DOCK_Z - DOCK_HALF + 0.1f)
+#define LAMP_POST    0.022f // the post's radius
+#define LAMP_TALL    2.4f   // from the deck to the crook's top
+#define LAMP_REACH   0.6f   // how far out the crook carries the lantern
+#define LAMP_CHAIN   0.16f  // from the crook's hook to the lantern's ring
+#define LAMP_R       0.075f // the globe's radius
+#define LAMP_H       0.24f  // and its height
+#define LAMP_CANDELA 60.0f
+#define LAMP_RANGE   10.0f
+
 #define BOAT_HALF_LEN  1.8f
 #define BOAT_HALF_BEAM 0.62f
 #define BOAT_DEPTH     0.42f  // keel below the gunwale amidships
@@ -372,6 +387,59 @@ static void dock(Kit* kit, unsigned int* state) {
         kit_collider(kit, (vec3){0.5f * (bx0 + bx1), yc, s ? z1 + 0.15f : z0 - 0.15f},
                      (vec3){0.5f * (bx0 - bx1), yh, 0.15f}, 0.0f);
     kit_collider(kit, (vec3){bx1 - 0.15f, yc, DOCK_Z}, (vec3){0.15f, yh, DOCK_HALF + 0.3f}, 0.0f);
+}
+
+/*
+ * The dock lamp (spec 13.56): a brass post on a flanged foot on the deck's edge, bending over in
+ * a shepherd's crook, and from its hook on a short chain a round lantern over the moored boat.
+ * It stands still, so it is the lake kit's, and its light is cached from the filament: the brass
+ * shadows it and the glass does not.
+ */
+static void dock_lamp(Kit* kit, Scene* scene) {
+    const vec2 flange[] = {{0.0f, 0.0f},    {0.07f, 0.0f},   {0.07f, 0.014f}, {0.045f, 0.026f},
+                           {0.034f, 0.07f}, {0.04f, 0.085f}, {0.034f, 0.1f},  {LAMP_POST, 0.11f}};
+    kit_frame_lathe(kit, &KIT_WORLD, MAT_LANTERN_BRASS, LAMP_X, LAMP_Z, DOCK_Y, flange,
+                    KIT_COUNT(flange), 20);
+    // Up the post, then over in a cubic, its end turned down to the hook.
+    const float rise = DOCK_Y + LAMP_TALL - 0.25f;
+    const vec2 c[4] = {{LAMP_Z, rise},
+                       {LAMP_Z, DOCK_Y + LAMP_TALL + 0.08f},
+                       {LAMP_Z - LAMP_REACH, DOCK_Y + LAMP_TALL + 0.1f},
+                       {LAMP_Z - LAMP_REACH, DOCK_Y + LAMP_TALL - 0.12f}};
+    enum { CROOK = 16 };
+    vec3 path[CROOK + 1];
+    glm_vec3_copy((vec3){LAMP_X, DOCK_Y + 0.1f, LAMP_Z}, path[0]);
+    for (int i = 0; i < CROOK; i++) {
+        const float t = (float)i / (CROOK - 1), u = 1.0f - t;
+        const float b0 = u * u * u, b1 = 3.0f * u * u * t, b2 = 3.0f * u * t * t, b3 = t * t * t;
+        glm_vec3_copy((vec3){LAMP_X, b0 * c[0][1] + b1 * c[1][1] + b2 * c[2][1] + b3 * c[3][1],
+                             b0 * c[0][0] + b1 * c[1][0] + b2 * c[2][0] + b3 * c[3][0]},
+                      path[i + 1]);
+    }
+    kit_frame_pipe(kit, &KIT_WORLD, MAT_LANTERN_BRASS, path, CROOK + 1, LAMP_POST, 10);
+    // A ball on the crook's end, the chain from it, and the lantern.
+    const float hook = c[3][1], lamp_z = c[3][0];
+    const vec2 knob[] = {
+        {0.0f, -0.032f}, {0.022f, -0.026f}, {0.03f, -0.01f}, {0.022f, 0.006f}, {LAMP_POST, 0.01f}};
+    kit_frame_lathe(kit, &KIT_WORLD, MAT_LANTERN_BRASS, LAMP_X, lamp_z, hook, knob, KIT_COUNT(knob),
+                    14);
+    const float hung = hook - 0.03f - LAMP_CHAIN, top = hung - FIXTURE_CROWN_H;
+    fixtures_chain(kit, &KIT_WORLD, LAMP_X, lamp_z, hook - 0.03f, hung);
+    fixture_lantern_round(kit, &KIT_WORLD, LAMP_X, top, lamp_z, LAMP_R, LAMP_H, MAT_LAMP_GLASS,
+                          MAT_LAMP_FILAMENT);
+    kit_collider(kit, (vec3){LAMP_X, DOCK_Y + 0.5f * LAMP_TALL, LAMP_Z},
+                 (vec3){0.05f, 0.5f * LAMP_TALL, 0.05f}, 0.0f);
+    LightDesc desc = {.name = "dock_lamp",
+                      .type = LIGHT_POINT,
+                      .position = {LAMP_X, top - FIXTURE_BULB_DROP, lamp_z},
+                      .color = {1.0f, 0.70f, 0.40f},
+                      .intensity = LAMP_CANDELA,
+                      .range = LAMP_RANGE,
+                      .cast_shadows = true,
+                      .shadow_cache = true,
+                      .source_radius = FIXTURE_BULB_BODY,
+                      .shadow_near = FIXTURE_BULB_NEAR};
+    scene_add_light(scene, create_light(&desc));
 }
 
 /*
@@ -559,6 +627,7 @@ void lake_build(Lake* lake, Kit* kit, Scene* scene, Trees* trees, unsigned int s
     unsigned int state = seed * 2246822519u + 0x1341eu;
     ring(kit);
     dock(kit, &state);
+    dock_lamp(kit, scene);
     boats(kit);
     reeds(kit, &state);
     drowned(kit, trees, &state);

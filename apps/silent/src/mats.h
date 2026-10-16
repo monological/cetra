@@ -114,6 +114,9 @@ typedef enum {
     MAT_REEDS,    // tools/make_reeds.py's clump, a cutout drawn from both sides
     MAT_TIN,      // the cabin's roof: corrugated iron rusted through its paint
     MAT_TOWN_MAP, // the folded town map's cover and inside (spec 13.43): see map_art.h
+    // The dock lamp (spec 13.56).
+    MAT_LAMP_GLASS,    // its globe: the clear glass, out in the rain
+    MAT_LAMP_FILAMENT, // its bulb's filament: the hall's, but on no mains the haunting cuts
     MAT_COUNT
 } MatId;
 
