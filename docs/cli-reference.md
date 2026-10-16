@@ -1122,7 +1122,7 @@ anywhere but in the house finds the front door open.
   on the mouse, the right stick or the arrows spin the cage on the palm.
 - E opens its face, and E again takes the key into the backpack as it goes out of sight. The hands
   set the cage down, open and empty, and the view glides back.
-- RMB or pad B, before it is opened, sets it back down shut.
+- Q (or a right click, or pad B), before it is opened, sets it back down shut.
 
 Neither the hold nor the player's place in it is saved: a load or a return to the title puts the
 cage back on the bench at once, open exactly when the key is had.
@@ -1275,7 +1275,7 @@ its east bank with a fire burning inside and its door left open.
   over 150 m, no swell, about 1.2 ms more CPU at the dock than Gerstner's, and only within the
   lake's reach.
 - **The boat:** E from the dock's end gets in, E starts the motor by its pull cord, W S A D drive
-  it, E stops it, and RMB gets out alongside the dock. The motor dies the first time on a trip that
+  it, E stops it, and Q (or a right click) gets out alongside the dock. The motor dies the first time on a trip that
   the boat reaches the spot circled on the cabin's lake map.
 - **`--in-boat`:** starts sat in the boat at its mooring. **`--boat-at X,Z[,H]`:** sat in it out on
   the lake, heading H degrees from +z (-90 by default, the way it moors); `-100,120,-60` is near

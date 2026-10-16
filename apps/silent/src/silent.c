@@ -467,8 +467,9 @@ static const InputAction ACTIONS[] = {
     {"look_y", {INPUT_AXIS(RIGHT_Y, -1), INPUT_KEY(UP, 1), INPUT_KEY(DOWN, -1)}},
     {"flashlight", {INPUT_KEY(F, 1), INPUT_PAD(Y, 1)}},
     {"interact", {INPUT_KEY(E, 1), INPUT_PAD(X, 1)}},
-    // What is held set down (spec 13.55). B toggles a crouch too, which nothing held lets happen.
-    {"put_down", {INPUT_MOUSE(RIGHT, 1), INPUT_PAD(B, 1)}},
+    // What is held set down, and out of the boat (specs 13.55 and 13.56): Q, or a right click for
+    // a mouse. B toggles a crouch too, which nothing held lets happen.
+    {"put_down", {INPUT_KEY(Q, 1), INPUT_MOUSE(RIGHT, 1), INPUT_PAD(B, 1)}},
     // The pause menu (spec 13.50): a game action, so it reads nothing while a screen holds the
     // game's input, and Escape there is that screen's back.
     {"pause_menu", {INPUT_KEY(ESCAPE, 1), INPUT_PAD(START, 1)}},

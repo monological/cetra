@@ -141,7 +141,7 @@ bool inspect_active(const Inspect* in) {
 
 const char* inspect_prompt(const Inspect* in) {
     if (in->state == INSPECT_HOLDING && in->thoughts >= 2)
-        return "E   Open    RMB   Put down";
+        return "E   Open    Q   Put down";
     if (in->state == INSPECT_OPEN)
         return "E   Take the key";
     return NULL;

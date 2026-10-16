@@ -401,12 +401,11 @@ const char* boat_prompt(const Boat* b) {
         return NULL;
     switch (b->motor_state) {
         case BOAT_MOTOR_OFF:
-            return can_get_out(b) ? "E   Start the motor      RMB   Get out"
-                                  : "E   Start the motor";
+            return can_get_out(b) ? "E   Start the motor      Q   Get out" : "E   Start the motor";
         case BOAT_MOTOR_PULLING:
-            return "E   Pull the cord      RMB   Let go";
+            return "E   Pull the cord      Q   Let go";
         case BOAT_MOTOR_RUNNING:
-            return can_get_out(b) ? "E   Stop the motor      RMB   Get out" : "E   Stop the motor";
+            return can_get_out(b) ? "E   Stop the motor      Q   Get out" : "E   Stop the motor";
         case BOAT_MOTOR_DYING:
             break;
     }
@@ -574,7 +573,7 @@ void boat_step(Boat* b, Game* game, Player* p, float dt) {
 // ---------------------------------------------------------------------------------------------
 // The frame
 
-// E and RMB in the boat, read once a frame.
+// E and Q in the boat, read once a frame.
 static void hands(Boat* b, Game* game, Player* p, Hud* hud) {
     if (b->berth != BOAT_AFLOAT)
         return;

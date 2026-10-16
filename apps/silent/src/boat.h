@@ -23,7 +23,7 @@
  * E from the dock gets in, onto the stern seat beside the tiller. E starts the motor by its pull
  * cord (pull_cord.h); running, W and S work the throttle, A and D the tiller, and E stops it. The
  * first time on a trip that the boat reaches the spot circled on the cabin's lake map the motor
- * dies, and has to be started again. Alongside the dock RMB gets out, and the boat is brought
+ * dies, and has to be started again. Alongside the dock Q gets out, and the boat is brought
  * round onto its mooring and tied.
  *
  * The boat moves in fixed steps in plan -- where it is, which way it points, how fast it goes and
@@ -122,14 +122,14 @@ float boat_reach(const Boat* b, const Player* p);
 void boat_board(Boat* b, Player* p, Hud* hud);
 // Whether the player is in the boat.
 bool boat_riding(const Boat* b);
-// What E and RMB do in the boat now, for the prompt; NULL while riding with nothing to do, and
+// What E and Q do in the boat now, for the prompt; NULL while riding with nothing to do, and
 // while not riding.
 const char* boat_prompt(const Boat* b);
 
 // Fixed step: the throttle, the tiller and the motor; the boat moved and bumped off what it meets,
 // and the rider carried in it.
 void boat_step(Boat* b, Game* game, Player* p, float dt);
-// Per frame, before player_pre_render: E and RMB in the boat, the boat drawn `alpha` of the way
+// Per frame, before player_pre_render: E and Q in the boat, the boat drawn `alpha` of the way
 // from its last step to this one with its swell, its motor turned, its propeller spun, the cord,
 // the dry shapes, the rider's seat, the wake and the sounds; `time` and `dt` the clock things are
 // drawn by.
