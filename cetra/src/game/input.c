@@ -65,9 +65,11 @@ void input_init(GameInputState* input, Engine* engine) {
      * the press edge lands on one frame and the release on the next. Holding a
      * button is unaffected, because its state was never in doubt.
      *
-     * Keys have exactly the same hole and are deliberately NOT made sticky
-     * here: it would make a tapped key read as held for an extra frame in every
-     * app that polls one, which is a wider change than this defect warrants.
+     * Keys have exactly the same hole and are NOT made sticky: GLFW's sticky
+     * keys hold back every RELEASE a frame, so every key would read as held a
+     * frame longer in every app that polls one. A tap is latched instead, by
+     * the engine's key callback (InputState.key_pressed, spec 13.56), which
+     * delays nothing.
      */
     glfwSetInputMode(engine->window, GLFW_STICKY_MOUSE_BUTTONS, GLFW_TRUE);
 
@@ -173,8 +175,11 @@ void input_update(GameInputState* input) {
     // state and cannot strand this way, so they poll regardless.
     bool focused =
         input->engine->headless || glfwGetWindowAttrib(window, GLFW_FOCUSED) == GLFW_TRUE;
+    // Down now, or pressed since the last poll: a tap that went down and up between two polls is
+    // down for this one frame rather than never.
+    const bool* tapped = input->engine->input.key_pressed;
     for (int key = GLFW_KEY_SPACE; key <= GLFW_KEY_LAST; key++)
-        input->now.keys[key] = focused && glfwGetKey(window, key) == GLFW_PRESS;
+        input->now.keys[key] = focused && (glfwGetKey(window, key) == GLFW_PRESS || tapped[key]);
     for (int button = 0; button <= GLFW_MOUSE_BUTTON_LAST; button++)
         input->now.mouse_buttons[button] =
             focused && glfwGetMouseButton(window, button) == GLFW_PRESS;
