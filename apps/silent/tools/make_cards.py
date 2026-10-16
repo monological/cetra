@@ -600,7 +600,8 @@ def lake_map(rng):
     draw.text((cx - 2.2 * s, cy + 1.6 * s), "cabin", fill=INK, font=hand)
     deep = px(lake_shore(3.4, 12.0))
     draw.text((deep[0] - 4, deep[1] - 8), "16", fill=pencil, font=hand)
-    # The spot out in the deep water, circled in red, over and over.
+    # The spot out in the deep water, circled in red, over and over: layout.h's LAKE_MARK_*, where
+    # the boat's motor dies.
     red = (150, 28, 24)
     sx, sy = px((-6.0, 2.0))
     for k in range(4):

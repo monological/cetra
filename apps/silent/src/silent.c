@@ -49,6 +49,7 @@
 #include "backpack_menu.h"
 #include "basement.h"
 #include "birdcage.h"
+#include "boat.h"
 #include "cabin.h"
 #include "candles.h"
 #include "cat.h"
@@ -258,6 +259,14 @@ typedef struct SilentArgs {
     const char* map_export;  // write the town's plan here for tools/make_map.py, and stop
     bool no_woods;           // no trees behind the yards, nor what lies under them
     WaterWaveModel lake_waves;
+    // The boat (spec 13.56): started sat in it, at its mooring or out at boat_at (x, z, and the
+    // heading in degrees from +z), its motor running or its pull cord up.
+    bool in_boat;
+    bool boat_at_set;
+    vec3 boat_at;
+    bool boat_running;
+    bool pull_cord;
+    bool trace_boat;
     bool no_cat;
     vec3 cat_fur, cat_eyes; // sRGB
     const char* cat_at;     // a place by name, or NULL for home
@@ -295,7 +304,7 @@ static bool starts_elsewhere(const SilentArgs* a) {
         found |= a->found[k];
     return a->load || a->new_game || a->slot || a->player_at_set || found || a->backpack ||
            a->crouch || a->cat_at || a->cat_go[0] || a->cat_clip[0] || a->cat_doing || a->cat_cam ||
-           a->haunt || a->story != STORY_NONE || a->inspect ||
+           a->haunt || a->story != STORY_NONE || a->inspect || a->in_boat ||
            (a->cam_eye_set && a->cam_target_set);
 }
 static Scene* g_scene;
@@ -310,6 +319,7 @@ static DoorSounds g_door_sounds;
 static Haunt g_haunt;
 static Story g_story;
 static Lake g_lake;
+static Boat g_boat;
 static RainBed g_rain_bed;
 static Sounds g_sounds;
 static Cat g_cat;
@@ -973,6 +983,22 @@ static void start_play(double time) {
     else if (g_args.inspect != INSPECT_START_NONE)
         inspect_start_held(&g_inspect, g_args.inspect == INSPECT_START_OPEN);
     g_args.inspect = INSPECT_START_NONE;
+    // Sat in the boat from the start (spec 13.56), at its mooring or out on the water.
+    if (g_args.in_boat) {
+        float x = 0.0f, z = 0.0f, heading = 0.0f;
+        lake_mooring(&x, &z, &heading, NULL);
+        if (g_args.boat_at_set) {
+            x = g_args.boat_at[0];
+            z = g_args.boat_at[1];
+            heading = glm_rad(g_args.boat_at[2]);
+        }
+        boat_place(&g_boat, &g_player, x, z, heading, true);
+        if (g_args.boat_running)
+            boat_start_motor(&g_boat);
+        else if (g_args.pull_cord)
+            boat_open_cord(&g_boat, &g_player, &g_hud);
+        g_args.in_boat = false;
+    }
     const char* screen = g_args.pause_screen;
     g_args.pause_screen = NULL;
     if (!screen)
@@ -1074,9 +1100,10 @@ static void on_init(Game* game) {
     if (!g_args.no_woods)
         woods_build(&kit, engine, g_scene, &trees, &breaches, (unsigned int)g_args.seed);
     load_seam(engine, "woods");
-    // The lake (spec 13.41): its water, and in a kit of its own the ring, the dock, the boats,
-    // the reeds and the drowned trees' bodies; then the cabin on its bank, in a kit of its own
-    // too. All of it is drawn, and the water on, only from within the fog's reach of it.
+    // The lake (spec 13.41): its water, and in a kit of its own the ring, the dock and its lamp,
+    // the reeds and the drowned trees' bodies; the motorboat at the dock and its twin on the bank
+    // (spec 13.56); then the cabin on its bank, in a kit of its own too. All of it is drawn, and
+    // the water on, only from within the fog's reach of it.
     const float lake_reach = trees.reach > 0.0f ? trees.reach + 15.0f : 0.0f;
     Kit lake;
     kit_init_beside(&lake, &kit, GLM_VEC3_ZERO);
@@ -1084,6 +1111,8 @@ static void on_init(Game* game) {
     lake_build(&g_lake, &lake, g_scene, &trees, (unsigned int)g_args.seed, lake_reach,
                g_args.lake_waves);
     trees_release(&trees);
+    boat_build(&g_boat, engine, g_scene, g_lake.water, &lake, lake_reach);
+    g_boat.trace = g_args.trace_boat;
     Kit cabin;
     kit_init_beside(&cabin, &kit, GLM_VEC3_ZERO);
     cabin.draw_distance = lake_reach;
@@ -1219,6 +1248,7 @@ static void on_init(Game* game) {
     load_seam(engine, "audio-sounds");
     kitchen_start_audio(&g_fridge, audio);
     lake_start_audio(&g_lake, audio);
+    boat_start_audio(&g_boat, audio);
     cabin_start_audio(audio);
     clock_start(&g_clock, engine, g_scene, audio);
     load_seam(engine, "audio-kitchen-clock");
@@ -1435,6 +1465,8 @@ static void on_update(Game* game, double dt) {
     // What it senses is decided here, and what it does about it by its brain after this hook.
     cat_mind_sense(&g_mind, g_args.rain_mmh / CAT_HEAVY_RAIN, (float)dt);
     player_update(&g_player, game, dt);
+    // The boat moved by its motor and its tiller, carrying the player sat in it (spec 13.56).
+    boat_step(&g_boat, game, &g_player, (float)dt);
     // Nobody goes into the dark down there without a light, and at the cellar flight's foot the
     // player thinks why they can go no further (spec 13.40).
     if (basement_hold(&g_basement, game->entity_manager, game->physics_world, feet,
@@ -1558,6 +1590,12 @@ static void reach_offer(Reach* reach, const vec3 at, Door* door, ReachTake take,
         *reach = (Reach){d, door, take, prompt};
 }
 
+// Into the boat from the dock (spec 13.56).
+static void board_boat(double time) {
+    (void)time;
+    boat_board(&g_boat, &g_player, &g_hud);
+}
+
 // The bag off the bed (spec 13.40): the player has it and what is in it, and says so.
 static void take_backpack(double time) {
     backpack_take(&g_backpack);
@@ -1619,6 +1657,8 @@ static void on_pre_render(Game* game, double alpha) {
     if (input_action_pressed(&game->input, "toggle_gui"))
         engine->show_gui = !engine->show_gui;
     const bool pinned = g_args.cam_eye_set && g_args.cam_target_set;
+    // The boat drawn where its steps have it, and the seat in it the player's eye is (spec 13.56).
+    boat_frame(&g_boat, game, &g_player, &g_hud, look_time(game), (float)look_dt(game));
     if (g_args.cat_cam && g_cat.entity) {
         // Over the cat's shoulder, looking where it is going.
         const float* c = g_cat.entity->position;
@@ -1655,7 +1695,7 @@ static void on_pre_render(Game* game, double alpha) {
     // The lake's water while the eye is near it, and a wake where the player wades (spec 13.41).
     vec3 feet = {0.0f, 0.0f, 0.0f};
     player_view_feet(&g_player, feet);
-    lake_update(&g_lake, eye, feet, look_time(game), (float)look_dt(game));
+    lake_update(&g_lake, eye, feet, !boat_riding(&g_boat), look_time(game), (float)look_dt(game));
     footfall(game, feet);
 
     // The nearest thing the player is looking at in reach -- a door, the backpack on the bed, the
@@ -1663,7 +1703,8 @@ static void on_pre_render(Game* game, double alpha) {
     // to it, and the key does it. Nothing is in reach of a player who is not yet playing, who holds
     // something, or who is behind a screen that holds the game's keys.
     Reach reach = {.d = FLT_MAX};
-    if (g_run == RUN_PLAYING && !ui_captures_input(g_hud.ui) && !inspect_active(&g_inspect)) {
+    if (g_run == RUN_PLAYING && !ui_captures_input(g_hud.ui) && !inspect_active(&g_inspect) &&
+        !boat_riding(&g_boat)) {
         for (int i = 0; i < DOORS; i++)
             if (g_door_hung[i])
                 reach_offer(&reach, g_doors[i].entity->position, &g_doors[i], NULL, NULL);
@@ -1676,6 +1717,10 @@ static void on_pre_render(Game* game, double alpha) {
             reach_offer(&reach, g_cage.at, NULL,
                         inspect_ready(&g_inspect) ? pick_up_cage : take_key,
                         inspect_ready(&g_inspect) ? "E   Pick up" : "E   Take the key");
+        // The moored boat from the dock, which is further down than a hand goes.
+        const float boat = boat_reach(&g_boat, &g_player);
+        if (boat < reach.d)
+            reach = (Reach){boat, NULL, board_boat, "E   Get in the boat"};
     }
     if (input_action_pressed(&game->input, "interact")) {
         if (reach.take)
@@ -1688,6 +1733,7 @@ static void on_pre_render(Game* game, double alpha) {
     const float dt = (float)look_dt(game);
     const double looks_at = look_time(game);
     hud_prompt(&g_hud, inspect_active(&g_inspect) ? inspect_prompt(&g_inspect)
+                       : boat_riding(&g_boat)     ? boat_prompt(&g_boat)
                        : reach.take               ? reach.prompt
                        : reach.door
                            ? (door_will_open(reach.door) ? "E   Open door" : "E   Close door")
@@ -1971,6 +2017,7 @@ static void on_shutdown(Game* game) {
     inspect_free(&g_inspect);
     arms_free(&g_arms);
     birdcage_free(&g_cage);
+    boat_free(&g_boat);
     house_key_free(&g_house_key);
     cat_free(&g_cat);
     player_free(&g_player);
@@ -2096,6 +2143,12 @@ static void print_usage(const char* prog) {
     printf("      --tiles-probe       The cached shadow tiles and each light's block, at exit\n");
     printf("      --no-woods          Without the woods behind the yards\n");
     printf("      --lake-waves MODEL  The lake's waves: fft (default) or gerstner\n");
+    printf("      --in-boat           Start sat in the boat at its mooring\n");
+    printf("      --boat-at x,z[,h]   Sat in it out on the lake instead, heading h degrees\n"
+           "                          from +z (implies --in-boat)\n");
+    printf("      --boat-running      With its motor running (implies --in-boat)\n");
+    printf("      --pull-cord         With its pull cord up (implies --in-boat)\n");
+    printf("      --trace-boat        Print the boat's place, speed and motor every half second\n");
     printf("      --no-cat            Without the cat\n");
     printf("      --cat-fur RRGGBB    The cat's coat, as sRGB hex (default 262424)\n");
     printf("      --cat-eyes RRGGBB   Its eyes (default E8B923)\n");
@@ -2357,6 +2410,19 @@ static bool parse_args(int argc, char** argv, SilentArgs* a) {
                 a->lake_waves = WATER_WAVES_GERSTNER;
             else
                 fprintf(stderr, "silent: --lake-waves takes fft or gerstner; ignoring it\n");
+        } else if (!strcmp(s, "--in-boat")) {
+            a->in_boat = true;
+        } else if (!strcmp(s, "--boat-at") && has_next) {
+            a->boat_at[2] = -90.0f;
+            a->boat_at_set =
+                sscanf(argv[++i], "%f,%f,%f", &a->boat_at[0], &a->boat_at[1], &a->boat_at[2]) >= 2;
+            a->in_boat |= a->boat_at_set;
+        } else if (!strcmp(s, "--boat-running")) {
+            a->boat_running = a->in_boat = true;
+        } else if (!strcmp(s, "--pull-cord")) {
+            a->pull_cord = a->in_boat = true;
+        } else if (!strcmp(s, "--trace-boat")) {
+            a->trace_boat = true;
         } else if (!strcmp(s, "--no-cat")) {
             a->no_cat = true;
         } else if (!strcmp(s, "--cat-fur") && has_next) {

@@ -52,19 +52,33 @@ struct Trees;
 
 // The lake itself: the water, calm and dark and held to its own basin, its waves of the model
 // `waves`, and what stands at its edge -- the ring that stops a wader, the dock out from the
-// cabin's bank, reeds, a few drowned trees, and two rowboats, one moored at the dock and one
-// turned over on the bank. The dead trees must still hold their models. The water is on only
-// while the eye is within `reach` of it, 0 for always.
+// cabin's bank and its lamp, reeds, a few drowned trees, and the body round the boat turned over
+// on the bank. The dead trees must still hold their models. The water is on only while the eye is
+// within `reach` of it, 0 for always.
 void lake_build(Lake* lake, Kit* kit, Scene* scene, struct Trees* trees, unsigned int seed,
                 float reach, WaterWaveModel waves);
+
+// Where the boat is kept (spec 13.56): its middle in plan and its heading (radians about +Y, the
+// bow toward (sin, 0, cos)) moored off the dock's end, and the point on the dock's tall post its
+// rope ties to when `post` is not NULL.
+void lake_mooring(float* x, float* z, float* heading, vec3 post);
+// Where its twin lies turned over on the bank: its middle in plan, the ground there, its heading.
+void lake_bank_boat(float* x, float* z, float* ground, float* heading);
+// How far (x, z) is out in the water a boat can take, past the bodies that stop a wader: negative
+// short of it.
+float lake_open_water(float x, float z);
+// The dock in plan, the bodies down its sides and across its end included: min x, min z, max x,
+// max z.
+void lake_dock_box(float box[4]);
 
 // The water lapping at the shore, on the cabin's bank until the eye moves it.
 void lake_start_audio(Lake* lake, AudioSystem* audio);
 
-// Each frame, from this frame's eye: the water on or off by its reach, a wake where the feet
-// wade, the lapping moved to the shore on the eye's bearing from the lake's middle, and the dock
-// lamp swung `dt` on by the breeze at `time`.
-void lake_update(Lake* lake, const float eye[3], const float feet[3], double time, float dt);
+// Each frame, from this frame's eye: the water on or off by its reach, a wake where the feet wade
+// when they are `afoot` (not sat in the boat), the lapping moved to the shore on the eye's bearing
+// from the lake's middle, and the dock lamp swung `dt` on by the breeze at `time`.
+void lake_update(Lake* lake, const float eye[3], const float feet[3], bool afoot, double time,
+                 float dt);
 
 // The dock lamp hanging straight down while `rest`, for a capture that keeps what it sees, and
 // where its swing has it after.

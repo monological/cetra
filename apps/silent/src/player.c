@@ -229,6 +229,11 @@ void player_update(Player* p, Game* game, double dt) {
     CharacterController* cc = p->entity ? entity_get_character_controller(p->entity) : NULL;
     if (!cc)
         return;
+    // Riding, the boat carries the body after this, so this step's move is from here.
+    if (p->riding) {
+        glm_vec3_copy(p->entity->position, p->step_from);
+        return;
+    }
     crouch_step(p, game, cc);
     vec3 input_dir = {0.0f, 0.0f, 0.0f};
     if (!p->holding)
@@ -287,14 +292,20 @@ void player_pre_render(Player* p, Game* game, const vec3* pin_eye, const vec3* p
     glm_vec3_sub(view, p->view, moved);
     glm_vec3_copy(view, p->view);
     const CharacterController* cc = entity_get_character_controller(p->entity);
-    crouch_frame(p, game, cc, dt);
-    // The stride goes on under a pinned camera, where its footsteps are still heard.
-    gait_frame(p->gait, moved, standing(cc), p->rig->yaw, dt);
-    // The eye the walk puts: the body's, lagging the ground and over the feet, which bob less
-    // bent low.
     vec3 anchor, bob = {0.0f, 0.0f, 0.0f};
-    glm_vec3_copy(p->view, anchor);
-    if (p->use_gait) {
+    if (p->riding) {
+        // Sat in the boat: the eye is the seat's, and nothing walks.
+        glm_vec3_copy(p->seat_eye, anchor);
+        anchor[1] -= p->rig->look_lift;
+    } else {
+        crouch_frame(p, game, cc, dt);
+        // The stride goes on under a pinned camera, where its footsteps are still heard.
+        gait_frame(p->gait, moved, standing(cc), p->rig->yaw, dt);
+        // The eye the walk puts: the body's, lagging the ground and over the feet, which bob less
+        // bent low.
+        glm_vec3_copy(p->view, anchor);
+    }
+    if (p->use_gait && !p->riding) {
         anchor[1] += p->gait->smooth_offset;
         glm_vec3_scale(p->gait->bob_offset, glm_smoothinterp(1.0f, CROUCH_BOB, p->crouch_eased),
                        bob);
@@ -302,9 +313,13 @@ void player_pre_render(Player* p, Game* game, const vec3* pin_eye, const vec3* p
     }
     if (p->trace)
         trace_frame(p, game, (vec3){anchor[0], anchor[1] + p->rig->look_lift, anchor[2]}, bob);
-    // What a hand reaches from: the body's own eye, which no lag or bob moves.
-    glm_vec3_copy(p->view, p->reach_from);
-    p->reach_from[1] += p->rig->look_lift;
+    // What a hand reaches from: the body's own eye, which no lag or bob moves, or the seat's.
+    if (p->riding) {
+        glm_vec3_copy(p->seat_eye, p->reach_from);
+    } else {
+        glm_vec3_copy(p->view, p->reach_from);
+        p->reach_from[1] += p->rig->look_lift;
+    }
     if (pin_eye && pin_target) {
         camera_rig_set_pose(p->rig, *pin_eye, *pin_target);
         glm_vec3_copy((float*)*pin_eye, p->reach_from);
@@ -367,6 +382,49 @@ void player_restore(Player* p) {
     character_controller_set_half_height(cc, CROUCH_HALF_HEIGHT);
     const bool stood = character_controller_set_half_height(cc, CAPSULE_HALF_HEIGHT);
     p->crouch_eased = stood ? 0.0f : 1.0f;
+}
+
+void player_board(Player* p, float seconds) {
+    CharacterController* cc = entity_get_character_controller(p->entity);
+    if (!cc)
+        return;
+    // Stood up first, so the body gets out of the boat a standing one; nothing is over its head.
+    p->crouch_toggled = false;
+    p->crouch_eased = 0.0f;
+    character_controller_set_half_height(cc, CAPSULE_HALF_HEIGHT);
+    p->rig->look_lift = player_eye_height(p) - CAPSULE_REST;
+    character_controller_set_velocity(cc, GLM_VEC3_ZERO);
+    cc->enabled = false;
+    p->speed = 0.0f;
+    p->riding = true;
+    gait_reset(p->gait);
+    camera_rig_blend_from_here(p->rig, seconds);
+}
+
+void player_carry(Player* p, const vec3 feet) {
+    CharacterController* cc = entity_get_character_controller(p->entity);
+    glm_vec3_copy((vec3){feet[0], feet[1] + CAPSULE_REST, feet[2]}, p->entity->position);
+    if (cc)
+        character_controller_set_position(cc, p->entity->position);
+}
+
+void player_seat(Player* p, const vec3 eye, float turn) {
+    glm_vec3_copy((float*)eye, p->seat_eye);
+    if (turn != 0.0f)
+        camera_rig_aim(p->rig, p->rig->yaw + turn, p->rig->pitch);
+}
+
+void player_disembark(Player* p, const vec3 feet, float yaw, float seconds) {
+    CharacterController* cc = entity_get_character_controller(p->entity);
+    if (!cc)
+        return;
+    camera_rig_blend_from_here(p->rig, seconds);
+    player_carry(p, feet);
+    character_controller_set_velocity(cc, GLM_VEC3_ZERO);
+    cc->enabled = true;
+    p->riding = false;
+    stand(p, yaw, p->rig->pitch);
+    gait_reset(p->gait);
 }
 
 void player_feet(const Player* p, vec3 out) {

@@ -35,6 +35,11 @@ typedef struct Hud {
     struct ShaderProgram*
         candles;     // the save mark's candlestick, the engine's; NULL for words alone
     float saved_age; // seconds since the game was saved
+    // Something drawn over the window by what owns it while it is set (spec 13.56): a gauge a
+    // task on screen needs, such as the boat's pull cord.
+    UIElement* gauge;
+    UIDrawFn gauge_draw;
+    void* gauge_user;
 } Hud;
 
 // False, with the reason printed, if the font or the UI cannot be made; the game runs on without
@@ -55,6 +60,9 @@ bool hud_thinking(const Hud* hud);
 // candlestick lights its candles one after another before "Saving...", then "Saved", and goes.
 // Saved again while it is up, it says so again without going out first.
 void hud_saved(Hud* hud);
+// `draw` called with `user` and the whole window's rect each frame, over the world and under any
+// screen, until it is set again; NULL draws nothing.
+void hud_set_gauge(Hud* hud, UIDrawFn draw, void* user);
 // Nothing thought, hinted or saved on screen, as at the start (spec 13.50).
 void hud_clear(Hud* hud);
 // Per frame: the thought's fade, the hint's time and the save mark's, and the lines placed in a
