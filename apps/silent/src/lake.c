@@ -4,12 +4,9 @@
 
 #include "cetra/ext/log.h"
 #include "cetra/game/audio.h"
-#include "cetra/light.h"
 #include "cetra/scene.h"
 #include "cetra/water.h"
-#include "cetra/wind.h"
 
-#include "fixtures.h"
 #include "hill.h"
 #include "lake.h"
 #include "land.h"
@@ -230,29 +227,9 @@ void lake_ground_build(Kit* kit) {
 #define DOCK_Y    (LAKE_Y + 0.95f)               // the deck's top, a metre over the water
 #define DOCK_POST (DOCK_X1 + 0.3f) // the last pair of posts, standing up past the deck
 
-// The dock lamp's post, on the deck's south edge over the moored boat, and its crook carrying
-// the lantern out over the water.
-#define LAMP_X       (DOCK_X1 + 1.5f)
-#define LAMP_Z       (DOCK_Z - DOCK_HALF + 0.1f)
-#define LAMP_POST    0.022f // the post's radius
-#define LAMP_TALL    2.4f   // from the deck to the crook's top
-#define LAMP_REACH   0.6f   // how far out the crook carries the lantern
-#define LAMP_CHAIN   0.16f  // from the crook's hook to the lantern's ring
-#define LAMP_R       0.075f // the globe's radius
-#define LAMP_H       0.24f  // and its height
-#define LAMP_CANDELA 60.0f
-#define LAMP_RANGE   10.0f
-
-// The lantern's swing in the breeze: how far it leans downwind at a gust's peak, how hard the
-// gust's turbulence pushes it about (rad/s/s at the peak, a share of that across the wind), and
-// its damping. Its own swing is 1.24 s; these give swings to about 11 degrees along the wind and
-// 5 across, the bulb moving up to 7 cm.
-#define SWING_LEAN   0.08f
-#define SWING_PUSH   0.9f
-#define SWING_ACROSS 0.6f
-#define SWING_DAMP   0.1f
-#define SWING_STEP   (1.0f / 240.0f) // seconds the pendulum is integrated in
-#define SWING_FOLLOW 0.015f          // metres the bulb moves before its kept shadow follows it
+// The dock lamp's post, on the deck's south edge over the moored boat.
+#define LAMP_X (DOCK_X1 + 1.5f)
+#define LAMP_Z (DOCK_Z - DOCK_HALF + 0.1f)
 
 #define REED_BEDS     18 // clumps of clumps
 #define DROWNED_TREES 4
@@ -276,7 +253,7 @@ static Water* water(Scene* scene, WaterWaveModel waves) {
     if (!w)
         return NULL;
     w->level = LAKE_Y;
-    glm_vec4_copy((vec4){WATER_X0, WATER_Z0, WATER_X1, WATER_Z1}, w->bounds);
+    glm_vec4_copy((vec4){WATER_X0, WATER_Z0, WATER_X1, WATER_Z1}, w->domain.bounds);
     // No bed: the surface reads its column off the scene's depth, which the basin is, and a bed
     // would only bring a shore's surf to a lake with none.
     w->height_at = NULL;
@@ -398,183 +375,36 @@ static void dock(Kit* kit, unsigned int* state) {
 }
 
 /*
- * The dock lamp (spec 13.56): a brass post on a flanged foot on the deck's edge, bending over in
- * a shepherd's crook, and from its hook on a short chain a round lantern over the moored boat,
- * swinging in the breeze. The post is the lake kit's. The chain and the lantern are a kit of their
- * own that turns about the hook, the hall pendant's way: it casts nothing, since swinging it would
- * be a mover in its own light's kept views every frame, and no capture keeps it. The light is the
- * bulb's, cached from the filament, and follows it.
- */
-static void dock_lamp(Lake* lake, Kit* kit, Scene* scene) {
-    const vec2 flange[] = {{0.0f, 0.0f},    {0.07f, 0.0f},   {0.07f, 0.014f}, {0.045f, 0.026f},
-                           {0.034f, 0.07f}, {0.04f, 0.085f}, {0.034f, 0.1f},  {LAMP_POST, 0.11f}};
-    kit_frame_lathe(kit, &KIT_WORLD, MAT_LANTERN_BRASS, LAMP_X, LAMP_Z, DOCK_Y, flange,
-                    KIT_COUNT(flange), 20);
-    // Up the post, then over in a cubic, its end turned down to the hook.
-    const float rise = DOCK_Y + LAMP_TALL - 0.25f;
-    const vec2 c[4] = {{LAMP_Z, rise},
-                       {LAMP_Z, DOCK_Y + LAMP_TALL + 0.08f},
-                       {LAMP_Z - LAMP_REACH, DOCK_Y + LAMP_TALL + 0.1f},
-                       {LAMP_Z - LAMP_REACH, DOCK_Y + LAMP_TALL - 0.12f}};
-    enum { CROOK = 16 };
-    vec3 path[CROOK + 1];
-    glm_vec3_copy((vec3){LAMP_X, DOCK_Y + 0.1f, LAMP_Z}, path[0]);
-    for (int i = 0; i < CROOK; i++) {
-        const float t = (float)i / (CROOK - 1), u = 1.0f - t;
-        const float b0 = u * u * u, b1 = 3.0f * u * u * t, b2 = 3.0f * u * t * t, b3 = t * t * t;
-        glm_vec3_copy((vec3){LAMP_X, b0 * c[0][1] + b1 * c[1][1] + b2 * c[2][1] + b3 * c[3][1],
-                             b0 * c[0][0] + b1 * c[1][0] + b2 * c[2][0] + b3 * c[3][0]},
-                      path[i + 1]);
-    }
-    kit_frame_pipe(kit, &KIT_WORLD, MAT_LANTERN_BRASS, path, CROOK + 1, LAMP_POST, 10);
-    // A ball on the crook's end; the chain hangs from under it.
-    const float hook = c[3][1], lamp_z = c[3][0];
-    const vec2 knob[] = {
-        {0.0f, -0.032f}, {0.022f, -0.026f}, {0.03f, -0.01f}, {0.022f, 0.006f}, {LAMP_POST, 0.01f}};
-    kit_frame_lathe(kit, &KIT_WORLD, MAT_LANTERN_BRASS, LAMP_X, lamp_z, hook, knob, KIT_COUNT(knob),
-                    14);
-    kit_collider(kit, (vec3){LAMP_X, DOCK_Y + 0.5f * LAMP_TALL, LAMP_Z},
-                 (vec3){0.05f, 0.5f * LAMP_TALL, 0.05f}, 0.0f);
-    // The chain and the lantern, round the pivot under the ball.
-    glm_vec3_copy((vec3){LAMP_X, hook - 0.03f, lamp_z}, lake->lamp_pivot);
-    const float top = -LAMP_CHAIN - FIXTURE_CROWN_H;
-    Kit hang;
-    kit_init_beside(&hang, kit, GLM_VEC3_ZERO);
-    hang.casts_nothing = true;
-    hang.draw_distance = kit->draw_distance;
-    fixtures_chain(&hang, &KIT_WORLD, 0.0f, 0.0f, 0.0f, -LAMP_CHAIN);
-    fixture_lantern_round(&hang, &KIT_WORLD, 0.0f, top, 0.0f, LAMP_R, LAMP_H, MAT_LAMP_GLASS,
-                          MAT_LAMP_FILAMENT);
-    lake->lantern = kit_finish(&hang, "dock_lantern");
-    kit_keep_beside(kit, &hang);
-    if (lake->lantern) {
-        lake->lantern->capture_hidden = true;
-        glm_translate_make(lake->lantern->original_transform, lake->lamp_pivot);
-    }
-    lake->lamp_drop = FIXTURE_BULB_DROP - top;
-    LightDesc desc = {.name = "dock_lamp",
-                      .type = LIGHT_POINT,
-                      .position = {LAMP_X, lake->lamp_pivot[1] - lake->lamp_drop, lamp_z},
-                      .color = {1.0f, 0.70f, 0.40f},
-                      .intensity = LAMP_CANDELA,
-                      .range = LAMP_RANGE,
-                      .cast_shadows = true,
-                      .shadow_cache = true,
-                      .source_radius = FIXTURE_BULB_BODY,
-                      .shadow_near = FIXTURE_BULB_NEAR};
-    lake->lamp = create_light(&desc);
-    scene_add_light(scene, lake->lamp);
-}
-
-// The breeze's way in plan, down the valley when there is no wind to say.
-static void lamp_downwind(const Wind* wind, vec3 along) {
-    glm_vec3_copy((vec3){0.0f, 0.0f, 1.0f}, along);
-    if (wind && fabsf(wind->direction[0]) + fabsf(wind->direction[2]) > 1e-4f)
-        glm_vec3_normalize_to((vec3){wind->direction[0], 0.0f, wind->direction[2]}, along);
-}
-
-// The lantern swung `dt` on by the breeze at `time`: a pendulum from the hook to the bulb, leaning
-// downwind as far as the gust blows and pushed about by its turbulence, along the wind and across
-// it. Integrated in steps of SWING_STEP whatever the frame's length.
-static void lamp_swing(Lake* lake, double time, float dt) {
-    const Wind* wind = lake->scene ? lake->scene->wind : NULL;
-    if (!wind || dt <= 0.0f)
-        return;
-    const float w = sqrtf(9.81f / lake->lamp_drop);
-    const int steps = (int)ceilf(dt / SWING_STEP);
-    const float h = dt / (float)steps;
-    for (int i = 0; i < steps; i++) {
-        const float t = (float)time - dt + h * (float)(i + 1);
-        const float gust = wind_gust(wind, t);
-        for (int k = 0; k < 2; k++) {
-            const float p = 1.7f * (float)k;
-            const float turb = sinf(1.3f * t + p) + 0.7f * sinf(2.9f * t + 2.0f * p) +
-                               0.5f * sinf(4.7f * t + 3.0f * p) + 0.35f * sinf(6.1f * t + 5.0f * p);
-            const float lean = k ? 0.0f : SWING_LEAN * gust;
-            const float push = (k ? SWING_ACROSS : 1.0f) * SWING_PUSH * gust * turb;
-            const float accel = -w * w * (lake->swing[k] - lean) -
-                                2.0f * SWING_DAMP * w * lake->swing_rate[k] + push;
-            lake->swing_rate[k] += accel * h;
-            lake->swing[k] += lake->swing_rate[k] * h;
-        }
-    }
-}
-
-// The lantern where its swing has it, or hanging straight down at rest, and its light at the
-// bulb, the kept shadow following while the bulb is further than SWING_FOLLOW from straight down.
-static void lamp_place(Lake* lake, bool rest) {
-    if (!lake->lantern || !lake->lamp)
-        return;
-    const float lean = rest ? 0.0f : lake->swing[0], sway = rest ? 0.0f : lake->swing[1];
-    // Leaning downwind turns it about the level line across the wind; swaying across, about the
-    // wind's own line.
-    vec3 along = {0.0f, 0.0f, 0.0f}, across = {0.0f, 0.0f, 0.0f};
-    lamp_downwind(lake->scene ? lake->scene->wind : NULL, along);
-    glm_vec3_cross(along, GLM_YUP, across);
-    mat4 m = GLM_MAT4_IDENTITY_INIT;
-    glm_translate_make(m, lake->lamp_pivot);
-    glm_rotate(m, lean, across);
-    glm_rotate(m, sway, along);
-    glm_mat4_copy(m, lake->lantern->original_transform);
-    vec3 bulb = {0.0f, 0.0f, 0.0f};
-    glm_mat4_mulv3(m, (vec3){0.0f, -lake->lamp_drop, 0.0f}, 1.0f, bulb);
-    light_set_position(lake->lamp, bulb);
-    lake->lamp->shadow_follow = lake->lamp_drop * sqrtf(lean * lean + sway * sway) > SWING_FOLLOW;
-}
-
-void lake_rest(Lake* lake, bool rest) {
-    lamp_place(lake, rest);
-}
-
-/*
  * Where the boats are kept (spec 13.56). The motorboat moors off the dock's end on its south side,
  * its bow to the tall post. The bodies down the dock's side stand 0.6 m off its gunwale. Its
- * twin lies turned over on the bank north of the dock, along the shore. Both are boat.c's
- * models; the lake says where they are and stands the body round the upturned one.
+ * twin lies turned over on the bank north of the dock, along the shore.
  */
-#define MOOR_X         (DOCK_X1 + 2.0f)
-#define MOOR_Z         (DOCK_Z - DOCK_HALF - 0.95f)
-#define MOOR_HEADING   (-0.5f * GLM_PIf - 0.06f) // the bow toward -x, at the post
-#define BANK_X         (-74.6f)
-#define BANK_Z         112.8f
-#define BANK_HEADING   (-2.89f) // the bow up the shore, a little out from it
-#define BANK_HALF_LEN  1.75f
-#define BANK_HALF_BEAM 0.56f
-#define BANK_TALL      0.42f // keel over gunwale, turned over
+#define MOOR_X       (DOCK_X1 + 2.0f)
+#define MOOR_Z       (DOCK_Z - DOCK_HALF - 0.95f)
+#define MOOR_HEADING (-0.5f * GLM_PIf - 0.06f) // the bow toward -x, at the post
+#define BANK_X       (-74.6f)
+#define BANK_Z       112.8f
+#define BANK_HEADING (-2.89f) // the bow up the shore, a little out from it
 
-void lake_mooring(float* x, float* z, float* heading, vec3 post) {
-    *x = MOOR_X;
-    *z = MOOR_Z;
-    *heading = MOOR_HEADING;
-    if (post)
-        glm_vec3_copy((vec3){DOCK_POST, DOCK_Y + 0.35f, DOCK_Z - DOCK_HALF + 0.06f}, post);
-}
-
-void lake_bank_boat(float* x, float* z, float* ground, float* heading) {
-    *x = BANK_X;
-    *z = BANK_Z;
-    *ground = land_height(BANK_X, BANK_Z);
-    *heading = BANK_HEADING;
+void lake_berths(LakeBerths* out) {
+    float ring_x = 0.0f, ring_z = 0.0f;
+    shore_at(0.0f, -WADE_OUT, &ring_x, &ring_z);
+    *out = (LakeBerths){
+        .moored = {{MOOR_X, LAKE_Y, MOOR_Z}, MOOR_HEADING},
+        .post = {DOCK_POST, DOCK_Y + 0.35f, DOCK_Z - DOCK_HALF + 0.06f},
+        // A stride in from the deck's south edge, level with the boat's middle.
+        .landing = {MOOR_X, DOCK_Y, DOCK_Z - DOCK_HALF + 0.45f},
+        .landing_yaw = 0.5f * GLM_PIf,
+        // The deck, and the bodies down its sides and across its end.
+        .dock = {DOCK_X1 - 0.45f, DOCK_Z - DOCK_HALF - 0.3f, ring_x + 1.0f,
+                 DOCK_Z + DOCK_HALF + 0.3f},
+        .bank = {{BANK_X, land_height(BANK_X, BANK_Z), BANK_Z}, BANK_HEADING},
+        .lamp = {{LAMP_X, DOCK_Y, LAMP_Z}, GLM_PIf},
+    };
 }
 
 float lake_open_water(float x, float z) {
     return -lake_shore_distance(x, z) - WADE_OUT - RING_HALF - RING_SAG;
-}
-
-void lake_dock_box(float box[4]) {
-    float ring_x = 0.0f, ring_z = 0.0f;
-    shore_at(0.0f, -WADE_OUT, &ring_x, &ring_z);
-    box[0] = DOCK_X1 - 0.45f;
-    box[1] = DOCK_Z - DOCK_HALF - 0.3f;
-    box[2] = ring_x + 1.0f;
-    box[3] = DOCK_Z + DOCK_HALF + 0.3f;
-}
-
-// The body round the upturned boat, its keel up and its gunwales on the ground.
-static void bank_boat(Kit* kit) {
-    kit_collider(kit, (vec3){BANK_X, land_height(BANK_X, BANK_Z) + 0.5f * BANK_TALL, BANK_Z},
-                 (vec3){BANK_HALF_LEN, 0.5f * BANK_TALL, BANK_HALF_BEAM},
-                 BANK_HEADING - 0.5f * GLM_PIf);
 }
 
 /*
@@ -627,12 +457,10 @@ static void drowned(Kit* kit, Trees* trees, unsigned int* state) {
 
 void lake_build(Lake* lake, Kit* kit, Scene* scene, Trees* trees, unsigned int seed, float reach,
                 WaterWaveModel waves) {
-    *lake = (Lake){.water = water(scene, waves), .reach = reach, .scene = scene};
+    *lake = (Lake){.water = water(scene, waves), .reach = reach};
     unsigned int state = seed * 2246822519u + 0x1341eu;
     ring(kit);
     dock(kit, &state);
-    dock_lamp(lake, kit, scene);
-    bank_boat(kit);
     reeds(kit, &state);
     drowned(kit, trees, &state);
 }
@@ -652,16 +480,15 @@ void lake_start_audio(Lake* lake, AudioSystem* audio) {
     audio_sound_set_volume(lake->lapping, LAPPING_VOLUME);
 }
 
-void lake_update(Lake* lake, const float eye[3], const float feet[3], bool afoot, double time,
-                 float dt) {
+void lake_update(Lake* lake, const float eye[3], const float feet[3]) {
     if (lake->lapping)
         lapping_at(lake, atan2f(eye[2] - LAKE_Z, eye[0] - LAKE_X));
-    lamp_swing(lake, time, dt);
-    lamp_place(lake, false);
     if (!lake->water)
         return;
     lake->water->enabled =
         lake->reach <= 0.0f ||
         plan_box_distance(eye[0], eye[2], WATER_X0, WATER_X1, WATER_Z0, WATER_Z1) < lake->reach;
-    water_wake(lake->water, &lake->wake, feet[0], feet[2], WAKE_PACE, afoot && feet[1] < LAKE_Y);
+    // Wading where the water is, which the inside of a boat floating on it is not.
+    water_wake(lake->water, &lake->wake, feet[0], feet[2], WAKE_PACE,
+               water_under(LAKE_Y, &lake->water->domain, feet[0], feet[1], feet[2]));
 }

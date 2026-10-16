@@ -49,10 +49,8 @@ static const float TUBE_COLOUR[3] = {0.80f, 1.0f, 0.84f};
 #define PENDANT_TOP   (HOME_CEIL_Y - PENDANT_ROSE - PENDANT_CHAIN - FIXTURE_CROWN_H) // the cage's
 static const vec3 PENDANT_PIVOT = {PENDANT_X, HOME_CEIL_Y - PENDANT_ROSE, PENDANT_Z};
 #define BULB_CANDELA 30.0f
-// Its swing goes round an ellipse SWING_ACROSS as wide across as along, and the bulb's kept shadow
-// follows it while it carries the bulb further than SWING_FOLLOW.
+// Its swing goes round an ellipse SWING_ACROSS as wide across as along.
 #define SWING_ACROSS 0.3f
-#define SWING_FOLLOW 0.015f
 
 typedef struct Tube {
     const char* name; // the node's name, which the derived light takes
@@ -191,7 +189,7 @@ static void hall_pendant(Lights* lights, Kit* kit, Scene* scene) {
     kit_init_beside(&hang, kit, GLM_VEC3_ZERO);
     hang.casts_nothing = true;
     const float top = PENDANT_TOP - PENDANT_PIVOT[1];
-    fixtures_chain(&hang, &KIT_WORLD, 0.0f, 0.0f, 0.0f, top + FIXTURE_CROWN_H);
+    fixtures_chain(&hang, 0.0f, top + FIXTURE_CROWN_H);
     fixture_lantern(&hang, &KIT_WORLD, 0.0f, top, 0.0f, PENDANT_R, PENDANT_H);
     lights->pendant = kit_finish(&hang, "hall_pendant");
     kit_keep_beside(kit, &hang);
@@ -230,13 +228,11 @@ static void pendant_update(Lights* lights, double time, float dt) {
     const float ease = fmaxf(lights->swing_ease, 1e-3f);
     lights->swing += (lights->swing_want - lights->swing) * (1.0f - expf(-dt / ease));
     const float drop = -lights->pendant_bulb, w = sqrtf(9.81f / drop), t = (float)time;
-    mat4 m = GLM_MAT4_IDENTITY_INIT;
-    glm_translate_make(m, (float*)PENDANT_PIVOT);
-    glm_rotate_z(m, lights->swing * sinf(w * t), m);
-    glm_rotate_x(m, SWING_ACROSS * lights->swing * sinf(w * t + 1.1f), m);
-    glm_mat4_copy(m, lights->pendant->original_transform);
-    glm_mat4_mulv3(m, (vec3){0.0f, lights->pendant_bulb, 0.0f}, 1.0f, lights->hall_at);
-    lights->hall_follows = lights->swing * drop > SWING_FOLLOW;
+    mat4 turn = GLM_MAT4_IDENTITY_INIT;
+    glm_rotate_z(turn, lights->swing * sinf(w * t), turn);
+    glm_rotate_x(turn, SWING_ACROSS * lights->swing * sinf(w * t + 1.1f), turn);
+    fixture_hang(lights->pendant, PENDANT_PIVOT, turn, drop, lights->hall_at);
+    lights->hall_follows = lights->swing * drop > FIXTURE_SWING_FOLLOW;
     pendant_light(lights, lights->hall_at, lights->hall_follows);
 }
 

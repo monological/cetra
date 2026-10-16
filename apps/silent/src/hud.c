@@ -116,15 +116,13 @@ static void save_mark_draw(UIElement* el, UIDrawList* dl, void* user) {
     ui_draw_text(dl, words, t < SAVE_LIGHTING ? "Saving..." : "Saved", &style, UI_ALIGN_START);
 }
 
-static void gauge_draw(UIElement* el, UIDrawList* dl, void* user) {
-    const Hud* hud = user;
-    if (hud->gauge_draw)
-        hud->gauge_draw(el, dl, hud->gauge_user);
+// The gauge's draw while nothing is set: a panel with no draw of its own paints its rect.
+static void draw_nothing(UIElement* el, UIDrawList* dl, void* user) {
+    (void)el, (void)dl, (void)user;
 }
 
 void hud_set_gauge(Hud* hud, UIDrawFn draw, void* user) {
-    hud->gauge_draw = draw;
-    hud->gauge_user = user;
+    ui_set_draw(hud->gauge, draw ? draw : draw_nothing, user);
 }
 
 static void line_set(HudLine* line, const char* text) {
@@ -169,7 +167,7 @@ bool hud_start(Hud* hud, Engine* engine) {
     // A gauge over the whole window, out of the flow too, drawn by whatever set it.
     hud->gauge = ui_panel(root);
     hud->gauge->fill = true;
-    ui_set_draw(hud->gauge, gauge_draw, hud);
+    hud_set_gauge(hud, NULL, NULL);
     hud_clear(hud);
     hud->candles = create_ui_draw_program("save_candles", candles_frag_shader_str);
     if (hud->candles)

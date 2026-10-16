@@ -65,7 +65,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import make_birdcage_blender as cage_model  # noqa: E402
 from blender_kit import (BV, Parts, bv, export_glb, finish, import_glb, lathe,  # noqa: E402
                          material, mv, polyhaven_images, rendered, save_sheet, shrink_masks,
-                         smooth, srgb, use_gpu)
+                         smooth, srgb, sweep, use_gpu)
 from glb import credit, read_glb, triangles  # noqa: E402
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
@@ -1276,27 +1276,6 @@ def key_clip(arm, rig, name, clip):
 
 # ---------------------------------------------------------------------------------------------
 # The meshes, built in the bind pose
-
-
-def sweep(rings, cap_start=True, cap_end=True):
-    """Faces joining a list of equal-length rings, capped by a point at either end."""
-    n = len(rings[0])
-    verts = [p for r in rings for p in r]
-    faces = []
-    for i in range(len(rings) - 1):
-        for k in range(n):
-            k2 = (k + 1) % n
-            faces.append((i * n + k, i * n + k2, (i + 1) * n + k2, (i + 1) * n + k))
-    for at, index, flip in ((cap_start, 0, True), (cap_end, len(rings) - 1, False)):
-        if not at:
-            continue
-        c = len(verts)
-        verts.append(sum(rings[index], Vector()) / n)
-        for k in range(n):
-            k2 = (k + 1) % n
-            f = (c, index * n + k, index * n + k2)
-            faces.append(f[::-1] if flip else f)
-    return verts, faces
 
 
 def hand_mesh(s, side):

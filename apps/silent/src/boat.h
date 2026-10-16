@@ -12,6 +12,7 @@
 
 #include "hud.h"
 #include "kit.h"
+#include "lake.h"
 #include "player.h"
 #include "pull_cord.h"
 
@@ -32,6 +33,12 @@
  * it moves.
  */
 
+typedef enum BoatBerth {
+    BOAT_MOORED,  // tied at the dock, empty
+    BOAT_AFLOAT,  // out, the player in it
+    BOAT_DOCKING, // empty, being brought round onto its mooring
+} BoatBerth;
+
 typedef enum BoatMotor {
     BOAT_MOTOR_OFF,
     BOAT_MOTOR_PULLING, // the cord being pulled to start it
@@ -39,11 +46,18 @@ typedef enum BoatMotor {
     BOAT_MOTOR_DYING, // stumbling to a stop
 } BoatMotor;
 
+// What a save keeps of the boat.
+typedef struct BoatState {
+    vec3 at;        // in plan x and z, and its heading
+    bool riding;    // the player in it; otherwise it is at its mooring
+    bool cut_armed; // its motor still to die this trip
+} BoatState;
+
 typedef struct BoatSounds {
     AudioSystem* audio;
     Sound* run;  // the motor, a loop re-pitched by how fast it turns
     Sound* slap; // water against the hull, a loop louder as the boat goes faster
-    Sound* pull; // and one-shots
+    Sound* pull; // the cord pulled
     Sound* cough;
     Sound* caught;
     Sound* dies;
@@ -53,8 +67,9 @@ typedef struct BoatSounds {
 
 typedef struct Boat {
     Scene* scene;
-    Water* water;    // the lake's, which its dry shapes keep out of the hull; NULL for none
-    SceneNode* node; // the boat, on the graph
+    Water* water;      // the lake's, which its dry shapes keep out of the hull; NULL for none
+    LakeBerths berths; // where the lake keeps it
+    SceneNode* node;   // the boat, on the graph
     SceneNode* motor;
     SceneNode* prop;
     SceneNode* cord;
@@ -75,20 +90,17 @@ typedef struct Boat {
     float throttle; // -1..1, eased to what is asked
     float tiller;   // -1..1, eased: positive turns the bow left
     float rpm;      // 0 stopped .. 1 flat out
-    double clock;   // seconds of the boat's own, for its swell
+    double clock;   // seconds of steps run: the trace's clock, and the pull cord's seed
+    BoatBerth berth;
     BoatMotor motor_state;
-    float motor_time; // seconds in this state
-    float dying_from; // the rpm a stumble began at
-    bool moored;      // tied at the dock, where it does not move
-    bool docking;     // being brought round onto its mooring
-    bool riding;      // the player in it
-    bool cut_armed;   // the motor dies at the marked spot this trip
-    bool cut_out;     // it just died there: thought about once the motor is still
-    bool knocked;     // it just bumped something, heard in the frame
-    bool told;        // the controls have been hinted
-    float knock_speed;
-    float cord_yank; // seconds since the handle was last pulled
-    float prop_angle;
+    float dying_time;    // seconds into its stumble
+    float dying_from;    // the rpm the stumble began at
+    bool cut_armed;      // the motor dies at the marked spot this trip
+    bool cut_out;        // it just died there: thought about once the motor is still
+    bool told;           // the controls have been hinted
+    float knock_speed;   // m/s of the hardest knock since the last frame, heard there; 0 for none
+    float cord_yank;     // seconds since the handle was last pulled
+    float prop_angle;    // radians the propeller has turned
     float drawn_heading; // the heading drawn last frame, so the view turns with the boat
     WaterWake wake;
     PullCord pull;
@@ -97,8 +109,8 @@ typedef struct Boat {
 } Boat;
 
 // The boat moored off the dock's end and its twin on the bank, both drawn to `reach` of the eye,
-// 0 for always; the mooring rope in a kit beside `lake_kit`. False, said by name, when the model
-// cannot be loaded: the lake has no boat.
+// 0 for always; the twin's body and the mooring rope in `lake_kit`'s world. False, said by name,
+// when the model cannot be loaded: the lake has no boat.
 bool boat_build(Boat* b, Engine* engine, Scene* scene, Water* water, Kit* lake_kit, float reach);
 // Its motor's, its hull's and its bumps' sounds, decoded in the audio's loading phase.
 void boat_start_audio(Boat* b, AudioSystem* audio);
@@ -117,15 +129,16 @@ const char* boat_prompt(const Boat* b);
 // Fixed step: the throttle, the tiller and the motor; the boat moved and bumped off what it meets,
 // and the rider carried in it.
 void boat_step(Boat* b, Game* game, Player* p, float dt);
-// Per frame, before player_pre_render: E and RMB in the boat, the boat drawn between its last two
-// steps with its swell, its motor turned, its propeller spun, the cord, the dry shapes, the
-// rider's seat, the wake and the sounds; `time` and `dt` the clock things are drawn by.
-void boat_frame(Boat* b, Game* game, Player* p, Hud* hud, double time, float dt);
+// Per frame, before player_pre_render: E and RMB in the boat, the boat drawn `alpha` of the way
+// from its last step to this one with its swell, its motor turned, its propeller spun, the cord,
+// the dry shapes, the rider's seat, the wake and the sounds; `time` and `dt` the clock things are
+// drawn by.
+void boat_frame(Boat* b, Game* game, Player* p, Hud* hud, float alpha, double time, float dt);
 
-// The boat with the player in it at (x, z) facing `heading` when `riding`, or else at its mooring
-// with the player out of it where the body stands; its motor off (spec 13.56's saves and start
-// flags).
-void boat_place(Boat* b, Player* p, float x, float z, float heading, bool riding);
+BoatState boat_state(const Boat* b);
+// The boat as `s` has it, its motor off: the player put in it or taken out of it to where the
+// body stands.
+void boat_place(Boat* b, Player* p, const BoatState* s);
 // The motor running at once, for a start that wants it so.
 void boat_start_motor(Boat* b);
 // Its pull cord up, for a picture of it.

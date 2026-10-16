@@ -532,6 +532,8 @@ MAP_PX_PER_M = 520
 # them, so moving one there means moving it here.
 LAKE_X, LAKE_Z = -96.0, 120.0
 LAKE_RX, LAKE_RZ = 23.0, 17.0
+# The spot circled "here?" in the deep water, from the lake's centre (layout.h's LAKE_MARK_*).
+LAKE_MARK = (-6.0, 2.0)
 # The cabin's middle (layout.h's CABIN_*), the track's last points (lake.c's TRACK_POINTS) and the
 # dock from the bank to its end (lake.c's DOCK_*).
 CABIN = (-64.5, 118.0)
@@ -600,10 +602,9 @@ def lake_map(rng):
     draw.text((cx - 2.2 * s, cy + 1.6 * s), "cabin", fill=INK, font=hand)
     deep = px(lake_shore(3.4, 12.0))
     draw.text((deep[0] - 4, deep[1] - 8), "16", fill=pencil, font=hand)
-    # The spot out in the deep water, circled in red, over and over: layout.h's LAKE_MARK_*, where
-    # the boat's motor dies.
+    # The spot out in the deep water, circled in red, over and over, where the boat's motor dies.
     red = (150, 28, 24)
-    sx, sy = px((-6.0, 2.0))
+    sx, sy = px(LAKE_MARK)
     for k in range(4):
         r = (4.0 + 0.6 * k) * scale + rng.uniform(-1.0, 1.0)
         jx, jy = rng.uniform(-1.5, 1.5), rng.uniform(-1.5, 1.5)

@@ -9,6 +9,7 @@
 #define BOAT_BOW_Z     1.6932f  // the stem's foremost point
 #define BOAT_STERN_Z   -1.6932f // the transom's aftmost
 #define BOAT_HALF_BEAM 0.5318f
+#define BOAT_GUNWALE_Y 0.3125f // its top, which it rests on turned over
 
 // Where no water may show inside the hull: superellipses round the z axis, inside its
 // waterline 2.5 cm under the design one; together they cover 97.6% of it.

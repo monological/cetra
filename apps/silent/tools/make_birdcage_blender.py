@@ -46,9 +46,10 @@ from mathutils import Matrix, Vector
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # The tools' own modules, found beside this one.
-from blender_kit import (BV, MASK_SIZE, Parts, apply_boolean, bv, export_glb, finish,  # noqa: E402
-                         lathe, pin, placed, polyhaven_images, rendered, resmooth, save_sheet,
-                         shrink, smooth, sphere, tube, use_gpu)
+from blender_kit import (BV, Graph, Parts, apply_boolean, assign_material,  # noqa: E402
+                         bake_atlas, baked_material, blender_argv, bv, export_model, finish, lathe,
+                         pin, placed, rendered, resmooth, save_sheet, scan, smooth, sphere, tube,
+                         use_gpu)
 from glb import read_glb, triangles  # noqa: E402
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
@@ -419,71 +420,6 @@ INSIDE = 0.92               # how dark it is deep in the hollow, as a share
 BUMP = 0.0006               # metres of relief the scan's height map makes, white over black
 
 
-def scan(name):
-    """A Poly Haven scan's colour, its packed occlusion, roughness and metal, and its height, as
-    Blender images; and how many metres of the cage one copy of it covers."""
-    images, info = polyhaven_images(
-        name, {"albedo": "Diffuse", "arm": "arm", "height": "Displacement"}, "2k")
-    size = (info.get("dimensions") or [1000.0])[0] / 1000.0
-    return images, size * SURFACE_SCALE
-
-
-def unwrap(objects):
-    """Every part's faces laid out together in one atlas, at one texel density."""
-    bpy.ops.object.select_all(action="DESELECT")
-    for ob in objects:
-        ob.select_set(True)
-    bpy.context.view_layer.objects.active = objects[0]
-    bpy.ops.object.mode_set(mode="EDIT")
-    bpy.ops.mesh.select_all(action="SELECT")
-    bpy.ops.uv.smart_project(angle_limit=math.radians(60.0), island_margin=0.002,
-                             scale_to_bounds=False)
-    bpy.ops.uv.pack_islands(margin=0.002, rotate=True)
-    bpy.ops.object.mode_set(mode="OBJECT")
-
-
-def sock(sockets, identifier):
-    return next(s for s in sockets if s.identifier == identifier)
-
-
-class Graph:
-    """A material's node tree, built a node at a time."""
-
-    def __init__(self, mat):
-        self.tree = mat.node_tree
-        self.tree.nodes.clear()
-
-    def node(self, kind, **props):
-        n = self.tree.nodes.new(kind)
-        for k, v in props.items():
-            setattr(n, k, v)
-        return n
-
-    def link(self, out, into):
-        self.tree.links.new(out, into)
-
-    def math(self, op, a, b):
-        n = self.node("ShaderNodeMath", operation=op, use_clamp=True)
-        for socket, value in zip(n.inputs, (a, b)):
-            if isinstance(value, float):
-                socket.default_value = value
-            else:
-                self.link(value, socket)
-        return n.outputs[0]
-
-    def mix(self, kind, factor, a, b, blend="MIX"):
-        """A mix of two of `kind` (FLOAT or RGBA), `factor` of the way to `b`."""
-        n = self.node("ShaderNodeMix", data_type=kind, blend_type=blend)
-        suffix = "Float" if kind == "FLOAT" else "Color"
-        for ident, value in (("Factor_Float", factor), ("A_" + suffix, a), ("B_" + suffix, b)):
-            socket = sock(n.inputs, ident)
-            if isinstance(value, (float, tuple)):
-                socket.default_value = value
-            else:
-                self.link(value, socket)
-        return sock(n.outputs, "Result_" + suffix)
-
-
 def surface_material(images, tile):
     """The cage's surface as a shader: the scan, worn bare where the form stands out, grimed where
     it is sheltered and dark deep inside. It writes the colour, the roughness and the metal into
@@ -538,110 +474,15 @@ def surface_material(images, tile):
     return mat, {"colour": colour, "rough": rough, "metal": metal}, bsdf, emit, out, target
 
 
-def bake_surface(objects, surface):
-    """The cage's parts' surface baked into a colour, a roughness and metal, and a normal image,
-    saved under TEXTURES; the images by name."""
-    images, tile = scan(surface)
-    mat, values, bsdf, emit, out, target = surface_material(images, tile)
-    for ob in objects:
-        ob.data.materials.clear()
-        ob.data.materials.append(mat)
-        for p in ob.data.polygons:
-            p.material_index = 0
-    unwrap(objects)
-    scene = bpy.context.scene
-    scene.render.engine = "CYCLES"
-    device = use_gpu()
-    scene.cycles.samples = 64
-    bake = scene.render.bake
-    bake.margin = 16
-    bake.margin_type = "EXTEND"
-    os.makedirs(TEXTURES, exist_ok=True)
-    links = mat.node_tree.links
-    baked = {}
-    for name, colour_space in (("colour", "sRGB"), ("rough", "Non-Color"), ("metal", "Non-Color"),
-                               ("normal", "Non-Color")):
-        img = bpy.data.images.new(f"cage_{name}", ATLAS, ATLAS, alpha=False)
-        img.colorspace_settings.name = colour_space
-        target.image = img
-        for link in list(out.inputs["Surface"].links) + list(emit.inputs["Color"].links):
-            links.remove(link)
-        if name == "normal":
-            links.new(bsdf.outputs["BSDF"], out.inputs["Surface"])
-            bpy.ops.object.bake(type="NORMAL", normal_space="TANGENT", use_clear=True)
-        else:
-            links.new(values[name], emit.inputs["Color"])
-            links.new(emit.outputs["Emission"], out.inputs["Surface"])
-            bpy.ops.object.bake(type="EMIT", use_clear=True)
-        img.filepath_raw = os.path.join(TEXTURES, f"cage_{name}.png")
-        img.file_format = "PNG"
-        img.save()
-        baked[name] = img
-        print(f"baked {name} on {device}", flush=True)
-    # Roughness in green and metal in blue, as glTF reads them from one image.
-    import numpy as np
-    px = ATLAS * ATLAS * 4
-    rough = np.empty(px, dtype=np.float32)
-    metal = np.empty(px, dtype=np.float32)
-    baked["rough"].pixels.foreach_get(rough)
-    baked["metal"].pixels.foreach_get(metal)
-    packed = np.ones(px, dtype=np.float32)
-    packed[1::4] = rough[0::4]
-    packed[2::4] = metal[0::4]
-    rm = bpy.data.images.new("cage_rough_metal", ATLAS, ATLAS, alpha=False)
-    rm.colorspace_settings.name = "Non-Color"
-    rm.pixels.foreach_set(packed)
-    shrink(rm, MASK_SIZE)
-    rm.filepath_raw = os.path.join(TEXTURES, "cage_rough_metal.png")
-    rm.file_format = "PNG"
-    rm.save()
-    return {"colour": baked["colour"], "rough_metal": rm, "normal": baked["normal"]}
-
-
-def baked_material(images):
-    """What the game draws: the baked maps, wired as glTF exports them."""
-    mat = bpy.data.materials.new("cage_iron")
-    mat.use_backface_culling = True
-    g = Graph(mat)
-    bsdf = g.node("ShaderNodeBsdfPrincipled")
-    out = g.node("ShaderNodeOutputMaterial")
-    g.link(bsdf.outputs["BSDF"], out.inputs["Surface"])
-    colour = g.node("ShaderNodeTexImage", image=images["colour"])
-    g.link(colour.outputs["Color"], bsdf.inputs["Base Color"])
-    rm = g.node("ShaderNodeTexImage", image=images["rough_metal"])
-    split = g.node("ShaderNodeSeparateColor")
-    g.link(rm.outputs["Color"], split.inputs["Color"])
-    g.link(split.outputs["Green"], bsdf.inputs["Roughness"])
-    g.link(split.outputs["Blue"], bsdf.inputs["Metallic"])
-    normal = g.node("ShaderNodeTexImage", image=images["normal"])
-    nmap = g.node("ShaderNodeNormalMap")
-    g.link(normal.outputs["Color"], nmap.inputs["Color"])
-    g.link(nmap.outputs["Normal"], bsdf.inputs["Normal"])
-    return mat
-
-
 def texture(objects, surface):
-    images = bake_surface(objects, surface)
-    mat = baked_material(images)
-    for ob in objects:
-        ob.data.materials.clear()
-        ob.data.materials.append(mat)
+    """The cage's parts' surface baked into one atlas, saved under TEXTURES, and drawn from it."""
+    images, tile = scan(surface, SURFACE_SCALE)
+    baked = bake_atlas(objects, surface_material(images, tile), "cage", TEXTURES, ATLAS, 0.002)
+    assign_material(objects, baked_material("cage_iron", baked))
 
 
 # ---------------------------------------------------------------------------------------------
-# Export, and what the export is held to
-
-
-def export(path, objects):
-    for ob in bpy.context.scene.objects:
-        ob.select_set(ob in objects)
-    export_glb(
-        filepath=path, export_format="GLB", export_yup=True, use_selection=True,
-        export_apply=False, export_animations=False, export_skins=False,
-        export_materials="EXPORT", export_normals=True, export_texcoords=True,
-        export_tangents=True, export_image_format="JPEG", export_jpeg_quality=92,
-        export_cameras=False, export_lights=False, export_extras=False,
-    )
+# What the export is held to
 
 
 def self_check_cage(path):
@@ -755,8 +596,7 @@ def args_after_dashes():
                     help="the Poly Haven scan the cage is made of (a texture's id)")
     ap.add_argument("--preview", action="store_true", help="render stills of the cage")
     ap.add_argument("--no-export", action="store_true", help="build and preview only")
-    argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
-    return ap.parse_args(argv)
+    return ap.parse_args(blender_argv())
 
 
 def main():
@@ -771,7 +611,7 @@ def main():
     if args.no_export:
         print("not exported", flush=True)
     else:
-        export(CAGE_GLB, [cage, hull, door, hang])
+        export_model(CAGE_GLB, [cage, hull, door, hang])
         self_check_cage(CAGE_GLB)
         print(f"wrote {CAGE_GLB}", flush=True)
     # Last, since it leaves a camera, a world and a stand-in key in the scene.

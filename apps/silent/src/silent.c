@@ -58,6 +58,7 @@
 #include "cat_voice.h"
 #include "clock.h"
 #include "crossroads.h"
+#include "dock_lamp.h"
 #include "door.h"
 #include "fences.h"
 #include "footsteps.h"
@@ -319,6 +320,7 @@ static DoorSounds g_door_sounds;
 static Haunt g_haunt;
 static Story g_story;
 static Lake g_lake;
+static DockLamp g_dock_lamp;
 static Boat g_boat;
 static RainBed g_rain_bed;
 static Sounds g_sounds;
@@ -985,14 +987,12 @@ static void start_play(double time) {
     g_args.inspect = INSPECT_START_NONE;
     // Sat in the boat from the start (spec 13.56), at its mooring or out on the water.
     if (g_args.in_boat) {
-        float x = 0.0f, z = 0.0f, heading = 0.0f;
-        lake_mooring(&x, &z, &heading, NULL);
-        if (g_args.boat_at_set) {
-            x = g_args.boat_at[0];
-            z = g_args.boat_at[1];
-            heading = glm_rad(g_args.boat_at[2]);
-        }
-        boat_place(&g_boat, &g_player, x, z, heading, true);
+        BoatState s = boat_state(&g_boat);
+        s.riding = s.cut_armed = true;
+        if (g_args.boat_at_set)
+            glm_vec3_copy((vec3){g_args.boat_at[0], g_args.boat_at[1], glm_rad(g_args.boat_at[2])},
+                          s.at);
+        boat_place(&g_boat, &g_player, &s);
         if (g_args.boat_running)
             boat_start_motor(&g_boat);
         else if (g_args.pull_cord)
@@ -1014,7 +1014,7 @@ static void start_play(double time) {
 static void rest_lights(bool rest, void* ctx) {
     (void)ctx;
     lights_rest(&g_lights, rest);
-    lake_rest(&g_lake, rest);
+    dock_lamp_rest(&g_dock_lamp, rest);
     basement_rest(&g_basement, rest);
     tv_rest(&g_tv, rest);
     haunt_rest(&g_haunt, rest);
@@ -1111,6 +1111,9 @@ static void on_init(Game* game) {
     lake_build(&g_lake, &lake, g_scene, &trees, (unsigned int)g_args.seed, lake_reach,
                g_args.lake_waves);
     trees_release(&trees);
+    LakeBerths berths;
+    lake_berths(&berths);
+    dock_lamp_build(&g_dock_lamp, &lake, g_scene, &berths.lamp);
     boat_build(&g_boat, engine, g_scene, g_lake.water, &lake, lake_reach);
     g_boat.trace = g_args.trace_boat;
     Kit cabin;
@@ -1583,12 +1586,16 @@ typedef struct Reach {
     const char* prompt;
 } Reach;
 
+// A door or a thing to take `d` from the eye in the running for `reach`.
+static void reach_nearer(Reach* reach, float d, Door* door, ReachTake take, const char* prompt) {
+    if (d < reach->d)
+        *reach = (Reach){d, door, take, prompt};
+}
+
 // `at` in the running for `reach`, as a door or a thing to take.
 static void reach_offer(Reach* reach, const vec3 at, Door* door, ReachTake take,
                         const char* prompt) {
-    const float d = player_reach_distance(&g_player, at);
-    if (d < reach->d)
-        *reach = (Reach){d, door, take, prompt};
+    reach_nearer(reach, player_reach_distance(&g_player, at), door, take, prompt);
 }
 
 // Into the boat from the dock (spec 13.56).
@@ -1659,7 +1666,8 @@ static void on_pre_render(Game* game, double alpha) {
         engine->show_gui = !engine->show_gui;
     const bool pinned = g_args.cam_eye_set && g_args.cam_target_set;
     // The boat drawn where its steps have it, and the seat in it the player's eye is (spec 13.56).
-    boat_frame(&g_boat, game, &g_player, &g_hud, look_time(game), (float)look_dt(game));
+    boat_frame(&g_boat, game, &g_player, &g_hud, (float)alpha, look_time(game),
+               (float)look_dt(game));
     if (g_args.cat_cam && g_cat.entity) {
         // Over the cat's shoulder, looking where it is going.
         const float* c = g_cat.entity->position;
@@ -1696,7 +1704,8 @@ static void on_pre_render(Game* game, double alpha) {
     // The lake's water while the eye is near it, and a wake where the player wades (spec 13.41).
     vec3 feet = {0.0f, 0.0f, 0.0f};
     player_view_feet(&g_player, feet);
-    lake_update(&g_lake, eye, feet, !boat_riding(&g_boat), look_time(game), (float)look_dt(game));
+    lake_update(&g_lake, eye, feet);
+    dock_lamp_update(&g_dock_lamp, look_time(game), (float)look_dt(game));
     footfall(game, feet);
 
     // The nearest thing the player is looking at in reach -- a door, the backpack on the bed, the
@@ -1718,10 +1727,8 @@ static void on_pre_render(Game* game, double alpha) {
             reach_offer(&reach, g_cage.at, NULL,
                         inspect_ready(&g_inspect) ? pick_up_cage : take_key,
                         inspect_ready(&g_inspect) ? "E   Pick up" : "E   Take the key");
-        // The moored boat from the dock, which is further down than a hand goes.
-        const float boat = boat_reach(&g_boat, &g_player);
-        if (boat < reach.d)
-            reach = (Reach){boat, NULL, board_boat, "E   Get in the boat"};
+        reach_nearer(&reach, boat_reach(&g_boat, &g_player), NULL, board_boat,
+                     "E   Get in the boat");
     }
     if (input_action_pressed(&game->input, "interact")) {
         if (reach.take)

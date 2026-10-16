@@ -112,6 +112,8 @@ bool player_crouched(const Player* p);
 // How far the eye is from `at` when a hand can go to it -- near enough and looked at -- and
 // FLT_MAX when it cannot.
 float player_reach_distance(const Player* p, const vec3 at);
+// The same for a reach of its own: within `reach` metres, and `cone` radians of the look.
+float player_reach_within(const Player* p, const vec3 at, float reach, float cone);
 
 // Where the body's feet are, and how fast it moved over the last step: the capsule's own, which
 // a camera pinned elsewhere does not move.

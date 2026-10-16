@@ -46,6 +46,8 @@ together into one atlas, and a shader that takes a CC0 scan of painted metal fro
 import argparse
 import math
 import os
+import re
+import statistics
 import sys
 
 import bmesh
@@ -54,15 +56,17 @@ from mathutils import Matrix, Vector
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # The tools' own modules, found beside this one.
-from blender_kit import (MASK_SIZE, Parts, bv, export_glb, finish, lathe,  # noqa: E402
-                         placed, polyhaven_images, rendered, save_sheet, shrink, shrink_masks,
-                         srgb, tube, use_gpu)
+from blender_kit import (Graph, Parts, assign_material, bake_atlas, baked_material,  # noqa: E402
+                         blender_argv, bv, export_model, finish, import_glb, lathe,
+                         mean_brightness, mv, placed, rendered, save_sheet, scan, shrink_masks,
+                         srgb, sweep, tube, use_gpu)
 from glb import credit, read_glb, triangles  # noqa: E402
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 SOURCE = os.path.join(ROOT, "assets", "models", "wooden_boat.glb")
 GLB = os.path.join(ROOT, "assets", "models", "boat.glb")
 HEADER = os.path.join(ROOT, "apps", "silent", "src", "boat_shape.h")
+WATER_DRY = os.path.join(ROOT, "cetra", "shaders", "include", "water_dry_constants.glsl")
 OUT = os.path.join(ROOT, "out", "boat_blender")
 TEXTURES = os.path.join(OUT, "textures")
 
@@ -81,14 +85,14 @@ SEAT_FORWARD = 0.14     # and forward of the seat's middle, sitting on its fore 
 
 def hull_import():
     """The source's hull in model metres, one object `hull`, and its measures."""
-    bpy.ops.import_scene.gltf(filepath=SOURCE)
-    parts = [o for o in bpy.data.objects if o.type == "MESH"]
+    imported = list(import_glb(SOURCE).values())
+    parts = [o for o in imported if o.type == "MESH"]
     for o in parts:
         world = o.matrix_world.copy()
         o.data.transform(world)
         o.parent = None
         o.matrix_world = Matrix.Identity(4)
-    for o in [o for o in bpy.data.objects if o.type != "MESH"]:
+    for o in [o for o in imported if o.type != "MESH"]:
         bpy.data.objects.remove(o)
     if len(parts) > 1:
         with bpy.context.temp_override(active_object=parts[0], selected_editable_objects=parts):
@@ -104,7 +108,7 @@ def hull_import():
 
 
 def model_points(ob):
-    return [Vector((v.co.x, v.co.z, -v.co.y)) for v in ob.data.vertices]
+    return [mv(v.co) for v in ob.data.vertices]
 
 
 def section(ob, y):
@@ -113,8 +117,7 @@ def section(ob, y):
     bm.from_mesh(ob.data)
     cut = bmesh.ops.bisect_plane(bm, geom=bm.verts[:] + bm.edges[:] + bm.faces[:],
                                  plane_co=(0.0, 0.0, y), plane_no=(0.0, 0.0, 1.0))
-    pts = [Vector((e.co.x, e.co.z, -e.co.y)) for e in cut["geom_cut"]
-           if isinstance(e, bmesh.types.BMVert)]
+    pts = [mv(e.co) for e in cut["geom_cut"] if isinstance(e, bmesh.types.BMVert)]
     bm.free()
     return pts
 
@@ -184,10 +187,25 @@ def transom(points):
     return max(p.y for p in top), aft
 
 
+def gunwale(points, stations=12):
+    """The gunwale's height, what the boat rests on turned over: the median of the hull's tops at
+    `stations` along it. The source's rail is a few vertices tens of centimetres apart, so a
+    station can miss them and see only the frames, and the stem rises over the rest."""
+    zs = [p.z for p in points]
+    z0, z1 = min(zs), max(zs)
+    tops = []
+    for i in range(stations):
+        a, b = z0 + (z1 - z0) * i / stations, z0 + (z1 - z0) * (i + 1) / stations
+        ys = [p.y for p in points if a <= p.z < b]
+        if ys:
+            tops.append(max(ys))
+    return statistics.median(tops)
+
+
 # ---------------------------------------------------------------------------------------------
 # Shapes, in model space
 
-def superellipse_ring(cx, cz, hw, hl, y, p=3.5, n=40):
+def superellipse_ring(cx, cz, hw, hl, y, p, n=40):
     """A ring of points at height y, round a superellipse hw across and hl along."""
     ring = []
     for i in range(n):
@@ -212,26 +230,6 @@ def airfoil_ring(cz, chord, half, y, n=32):
     return ring
 
 
-def loft(rings, cap0=True, cap1=True):
-    """Quads between rings of equal count, each end capped with a fan to its middle."""
-    n = len(rings[0])
-    verts = [v for r in rings for v in r]
-    faces = []
-    for i in range(len(rings) - 1):
-        for k in range(n):
-            k2 = (k + 1) % n
-            faces.append((i * n + k, i * n + k2, (i + 1) * n + k2, (i + 1) * n + k))
-    for cap, idx in ((cap0, 0), (cap1, len(rings) - 1)):
-        if not cap:
-            continue
-        c = len(verts)
-        verts.append(sum(rings[idx], Vector()) / n)
-        base = idx * n
-        faces += [(c, base + (k + 1) % n, base + k) if idx == 0 else (c, base + k, base + (k + 1) % n)
-                  for k in range(n)]
-    return verts, faces
-
-
 def lathe_z(profile, x, y, segs=24):
     """A solid of revolution about a line along z through (x, y), from (radius, z) points; an end
     of radius 0 closes it on the axis."""
@@ -239,7 +237,7 @@ def lathe_z(profile, x, y, segs=24):
     for r, z in profile:
         rings.append([Vector((x + r * math.cos(2 * math.pi * k / segs),
                               y + r * math.sin(2 * math.pi * k / segs), z)) for k in range(segs)])
-    return loft(rings)
+    return sweep(rings)
 
 
 def box(lo, hi):
@@ -255,7 +253,7 @@ def fin(outline_zy, x0, x1):
     """A flat plate in the yz plane from x0 to x1 over a convex outline of (z, y) points."""
     a = [Vector((x0, y, z)) for z, y in outline_zy]
     b = [Vector((x1, y, z)) for z, y in outline_zy]
-    return loft([a, b])
+    return sweep([a, b])
 
 
 # ---------------------------------------------------------------------------------------------
@@ -293,11 +291,11 @@ def hood(parts):
                          (HOOD_Y0 + 0.13, 0.114, 0.17, 4.4), (HOOD_Y0 + 0.17, 0.108, 0.162, 4.0),
                          (HOOD_Y0 + 0.19, 0.096, 0.148, 3.6), (HOOD_Y0 + 0.2, 0.07, 0.115, 3.2)):
         rings.append(superellipse_ring(0.0, COWL_Z, hw, hl, y, p))
-    part(parts, loft(rings), COWL)
+    part(parts, sweep(rings), COWL)
     # The seal round the hood's foot, standing just proud of it.
     seal = [superellipse_ring(0.0, COWL_Z, 0.119, 0.175, y, 4.6) for y in (HOOD_Y0 - 0.008,
                                                                               HOOD_Y0 + 0.008)]
-    part(parts, loft(seal), SEAL)
+    part(parts, sweep(seal), SEAL)
     # The fuel cap on top, aft.
     cap = lathe([(0.0, 0.0), (0.022, 0.0), (0.022, 0.012), (0.0, 0.014)], 16)
     part(parts, placed(cap, Vector((0.0, HOOD_Y0 + 0.196, COWL_Z - 0.07))), RUBBER)
@@ -307,7 +305,7 @@ def pan(parts):
     rings = [superellipse_ring(0.0, COWL_Z + 0.005, hw, hl, y, 4.2)
              for y, hw, hl in ((PAN_Y[0], 0.095, 0.15), (PAN_Y[0] + 0.04, 0.108, 0.165),
                                (PAN_Y[1], 0.111, 0.168))]
-    part(parts, loft(rings), PAN)
+    part(parts, sweep(rings), PAN)
 
 
 def leg(parts):
@@ -316,7 +314,7 @@ def leg(parts):
                            (PLATE_Y + 0.12, 0.155, 0.034), (PLATE_Y + 0.01, 0.145, 0.031),
                            (GEAR_Y + 0.03, 0.135, 0.027)):
         rings.append(airfoil_ring(-0.035, chord, half, y))
-    part(parts, loft(rings), LEG)
+    part(parts, sweep(rings), LEG)
     # The swivel housing round the bracket's tube, top and bottom, part of what turns.
     sw = lathe([(0.0, -0.03), (0.034, -0.03), (0.034, 0.03), (0.0, 0.03)], 16)
     for y0 in (-0.02, -0.17):
@@ -324,7 +322,7 @@ def leg(parts):
     # The cavitation plate over the propeller.
     plate = [superellipse_ring(0.0, -0.12, 0.075, 0.125, y, 2.6) for y in (PLATE_Y - 0.004,
                                                                              PLATE_Y + 0.004)]
-    part(parts, loft(plate), LEG)
+    part(parts, sweep(plate), LEG)
 
 
 def gearcase(parts):
@@ -428,7 +426,7 @@ def fuel_tank(parts, at):
     x, y, z = at
     rings = [superellipse_ring(x, z, hw, hl, y + h, 5.0) for h, hw, hl in
              ((0.0, 0.11, 0.17), (0.012, 0.118, 0.178), (0.17, 0.118, 0.178), (0.19, 0.11, 0.17))]
-    part(parts, loft(rings), TANK_RED)
+    part(parts, sweep(rings), TANK_RED)
     cap = lathe([(0.0, 0.0), (0.03, 0.0), (0.03, 0.022), (0.0, 0.024)], 16)
     part(parts, placed(cap, Vector((x + 0.05, y + 0.19, z - 0.09))), RUBBER)
     handle = [Vector((x - 0.05, y + 0.19, z + 0.04)), Vector((x - 0.05, y + 0.25, z + 0.06)),
@@ -553,60 +551,6 @@ DETAIL = 1.6                     # the scan's brightness about its mean, raised 
 CHIPS = (0.72, 0.86)             # where the scan's roughness says its paint is worn through
 
 
-def sock(sockets, identifier):
-    return next(s for s in sockets if s.identifier == identifier)
-
-
-class Graph:
-    """A material's node tree, built a node at a time."""
-
-    def __init__(self, mat):
-        self.tree = mat.node_tree
-        self.tree.nodes.clear()
-
-    def node(self, kind, **props):
-        n = self.tree.nodes.new(kind)
-        for k, v in props.items():
-            setattr(n, k, v)
-        return n
-
-    def link(self, out, into):
-        self.tree.links.new(out, into)
-
-    def math(self, op, a, b, clamp=True):
-        n = self.node("ShaderNodeMath", operation=op, use_clamp=clamp)
-        for socket, value in zip(n.inputs, (a, b)):
-            if isinstance(value, float):
-                socket.default_value = value
-            else:
-                self.link(value, socket)
-        return n.outputs[0]
-
-    def mix(self, kind, factor, a, b, blend="MIX"):
-        n = self.node("ShaderNodeMix", data_type=kind, blend_type=blend)
-        suffix = "Float" if kind == "FLOAT" else "Color"
-        for ident, value in (("Factor_Float", factor), ("A_" + suffix, a), ("B_" + suffix, b)):
-            socket = sock(n.inputs, ident)
-            if isinstance(value, (float, tuple)):
-                socket.default_value = value
-            else:
-                self.link(value, socket)
-        return sock(n.outputs, "Result_" + suffix)
-
-
-def scan():
-    """The scan's maps, how many metres one copy covers, and its colour's mean brightness."""
-    import numpy as np
-    images, info = polyhaven_images(
-        SURFACE, {"albedo": "Diffuse", "arm": "arm", "height": "Displacement"}, "2k")
-    size = (info.get("dimensions") or [1000.0])[0] / 1000.0
-    px = np.empty(len(images["albedo"].pixels), dtype=np.float32)
-    images["albedo"].pixels.foreach_get(px)
-    rgb = px.reshape(-1, 4)[:, :3]
-    mean = float(np.mean(rgb @ np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)))
-    return images, size * SURFACE_SCALE, mean
-
-
 def surface_material(images, tile, mean, waterline):
     """The paint, the scan's detail on it, worn, grimed and scummed; an emission for the colour,
     roughness and metal bakes and a BSDF with relief for the normal's."""
@@ -686,101 +630,15 @@ def surface_material(images, tile, mean, waterline):
     return mat, {"colour": colour, "rough": rough, "metal": metal}, bsdf, emit, out, target
 
 
-def unwrap(objects):
-    bpy.ops.object.select_all(action="DESELECT")
-    for ob in objects:
-        ob.select_set(True)
-    bpy.context.view_layer.objects.active = objects[0]
-    bpy.ops.object.mode_set(mode="EDIT")
-    bpy.ops.mesh.select_all(action="SELECT")
-    bpy.ops.uv.smart_project(angle_limit=math.radians(60.0), island_margin=0.003,
-                             scale_to_bounds=False)
-    bpy.ops.uv.pack_islands(margin=0.003, rotate=True)
-    bpy.ops.object.mode_set(mode="OBJECT")
-
-
-def bake_surface(objects):
-    images, tile, mean = scan()
-    # The parts stand where they will in the boat, whose waterline is Blender's z = 0.
-    mat, values, bsdf, emit, out, target = surface_material(images, tile, mean, 0.0)
-    for ob in objects:
-        ob.data.materials.clear()
-        ob.data.materials.append(mat)
-    unwrap(objects)
-    scene = bpy.context.scene
-    scene.render.engine = "CYCLES"
-    device = use_gpu()
-    scene.cycles.samples = 64
-    bake = scene.render.bake
-    bake.margin = 16
-    bake.margin_type = "EXTEND"
-    os.makedirs(TEXTURES, exist_ok=True)
-    links = mat.node_tree.links
-    baked = {}
-    for name, space in (("colour", "sRGB"), ("rough", "Non-Color"), ("metal", "Non-Color"),
-                        ("normal", "Non-Color")):
-        img = bpy.data.images.new(f"outboard_{name}", ATLAS, ATLAS, alpha=False)
-        img.colorspace_settings.name = space
-        target.image = img
-        for link in list(out.inputs["Surface"].links) + list(emit.inputs["Color"].links):
-            links.remove(link)
-        if name == "normal":
-            links.new(bsdf.outputs["BSDF"], out.inputs["Surface"])
-            bpy.ops.object.bake(type="NORMAL", normal_space="TANGENT", use_clear=True)
-        else:
-            links.new(values[name], emit.inputs["Color"])
-            links.new(emit.outputs["Emission"], out.inputs["Surface"])
-            bpy.ops.object.bake(type="EMIT", use_clear=True)
-        img.filepath_raw = os.path.join(TEXTURES, f"outboard_{name}.png")
-        img.file_format = "PNG"
-        img.save()
-        baked[name] = img
-        print(f"baked {name} on {device}", flush=True)
-    import numpy as np
-    px = ATLAS * ATLAS * 4
-    rough = np.empty(px, dtype=np.float32)
-    metal = np.empty(px, dtype=np.float32)
-    baked["rough"].pixels.foreach_get(rough)
-    baked["metal"].pixels.foreach_get(metal)
-    packed = np.ones(px, dtype=np.float32)
-    packed[1::4] = rough[0::4]
-    packed[2::4] = metal[0::4]
-    rm = bpy.data.images.new("outboard_rough_metal", ATLAS, ATLAS, alpha=False)
-    rm.colorspace_settings.name = "Non-Color"
-    rm.pixels.foreach_set(packed)
-    shrink(rm, MASK_SIZE)
-    rm.filepath_raw = os.path.join(TEXTURES, "outboard_rough_metal.png")
-    rm.file_format = "PNG"
-    rm.save()
-    return {"colour": baked["colour"], "rough_metal": rm, "normal": baked["normal"]}
-
-
-def baked_material(images):
-    mat = bpy.data.materials.new("outboard")
-    mat.use_backface_culling = True
-    g = Graph(mat)
-    bsdf = g.node("ShaderNodeBsdfPrincipled")
-    out = g.node("ShaderNodeOutputMaterial")
-    g.link(bsdf.outputs["BSDF"], out.inputs["Surface"])
-    colour = g.node("ShaderNodeTexImage", image=images["colour"])
-    g.link(colour.outputs["Color"], bsdf.inputs["Base Color"])
-    rm = g.node("ShaderNodeTexImage", image=images["rough_metal"])
-    split = g.node("ShaderNodeSeparateColor")
-    g.link(rm.outputs["Color"], split.inputs["Color"])
-    g.link(split.outputs["Green"], bsdf.inputs["Roughness"])
-    g.link(split.outputs["Blue"], bsdf.inputs["Metallic"])
-    normal = g.node("ShaderNodeTexImage", image=images["normal"])
-    nmap = g.node("ShaderNodeNormalMap")
-    g.link(normal.outputs["Color"], nmap.inputs["Color"])
-    g.link(nmap.outputs["Normal"], bsdf.inputs["Normal"])
-    return mat
-
-
 def texture(objects):
-    mat = baked_material(bake_surface(objects))
+    """The outboard's and the tank's surface baked into one atlas, saved under TEXTURES, and drawn
+    from it; the paint attributes the bake read dropped."""
+    images, tile = scan(SURFACE, SURFACE_SCALE)
+    # The parts stand where they will in the boat, whose waterline is Blender's z = 0.
+    shader = surface_material(images, tile, mean_brightness(images["albedo"]), 0.0)
+    baked = bake_atlas(objects, shader, "outboard", TEXTURES, ATLAS, 0.003)
+    assign_material(objects, baked_material("outboard", baked))
     for ob in objects:
-        ob.data.materials.clear()
-        ob.data.materials.append(mat)
         for name in [a.name for a in ob.data.color_attributes]:
             ob.data.color_attributes.remove(ob.data.color_attributes[name])
 
@@ -789,7 +647,7 @@ def texture(objects):
 # Where no water may show: superellipses inside the hull's waterline, fitted greedily
 
 
-def fit_dry(grid, width, count=4, coverage=0.99):
+def fit_dry(grid, width, count, coverage=0.99):
     """Up to `count` superellipses (centre z, half length, half width, power), each in turn the
     one covering most of what the others leave inside the planking, all inside the outer skin.
     Between the two skins the planks hide the water; inside the inner one is where it would
@@ -813,17 +671,18 @@ def fit_dry(grid, width, count=4, coverage=0.99):
     pts = np.array(pts)
     covered = np.zeros(len(pts), dtype=bool)
     t = np.linspace(0.0, 2.0 * np.pi, 72, endpoint=False)
+    c, s = np.cos(t), np.sin(t)
+    # A unit superellipse of each power, its points across and along.
+    rings = {p: (np.sign(c) * np.abs(c) ** (2.0 / p), np.sign(s) * np.abs(s) ** (2.0 / p))
+             for p in (2.0, 2.4, 3.0, 4.0)}
     shapes = []
     for _ in range(count):
         best = None
         for cz in np.linspace(zs[0], zs[-1], 48):
             for hl in np.linspace(0.08, 0.5 * (zs[-1] - zs[0]), 32):
-                for p in (2.0, 2.4, 3.0, 4.0):
-                    c, s = np.cos(t), np.sin(t)
-                    ex = np.sign(c) * np.abs(c) ** (2.0 / p)
-                    ez = cz + hl * np.sign(s) * np.abs(s) ** (2.0 / p)
+                for p, (ex, along) in rings.items():
                     # The widest it may be: every boundary point inside the outline.
-                    room = w_at(ez)
+                    room = w_at(cz + hl * along)
                     need = np.abs(ex)
                     ok = need > 1e-6
                     if np.any(room[~ok] <= 0.0):
@@ -856,7 +715,13 @@ def rim(points, n=16):
     return half + [(-x, z) for x, z in reversed(half[1:-1])]
 
 
-def write_header(shapes, cover, rim_pts, extent):
+def water_dry_max():
+    """How many dry shapes the engine's water takes, from the constants both its languages read."""
+    with open(WATER_DRY) as f:
+        return int(re.search(r"#define\s+WATER_DRY_MAX\s+(\d+)", f.read()).group(1))
+
+
+def write_header(shapes, cover, rim_pts, extent, gunwale_y):
     lines = [
         "// GENERATED by apps/silent/tools/make_boat_blender.py from assets/models/wooden_boat.glb",
         "// (spec 13.56). Do not edit: rerun the tool.",
@@ -869,6 +734,7 @@ def write_header(shapes, cover, rim_pts, extent):
         f"#define BOAT_BOW_Z     {extent[1]:.4f}f // the stem's foremost point",
         f"#define BOAT_STERN_Z   {extent[0]:.4f}f // the transom's aftmost",
         f"#define BOAT_HALF_BEAM {extent[2]:.4f}f",
+        f"#define BOAT_GUNWALE_Y {gunwale_y:.4f}f // its top, which it rests on turned over",
         "",
         f"// Where no water may show inside the hull: superellipses round the z axis, inside its",
         f"// waterline {DRY_DEPTH * 100:.1f} cm under the design one; together they cover"
@@ -929,25 +795,12 @@ def build():
     zs = [p.z for p in points]
     extent = (min(zs), max(zs), max(abs(p.x) for p in points))
     grid, width = outline(section(hull, -DRY_DEPTH))
-    shapes, cover = fit_dry(grid, width)
-    write_header(shapes, cover, rim(points), extent)
+    shapes, cover = fit_dry(grid, width, water_dry_max())
+    write_header(shapes, cover, rim(points), extent, gunwale(points))
     print(f"boat: {extent[1] - extent[0]:.2f} m long, {2 * extent[2]:.2f} m in the beam; the "
           f"motor's swivel at z {pivot.z:.3f}, {pivot.y:.3f} over the water; the seat's eye at "
           f"z {seat_z + SEAT_FORWARD:.3f}, {seat_top + SEAT_EYE:.3f} over it", flush=True)
     return root, [hull, brk, motor, prop, cord, rope, tank, eye, bow_eye]
-
-
-def export(path, objects):
-    for ob in bpy.context.scene.objects:
-        ob.select_set(ob in objects)
-    export_glb(
-        filepath=path, export_format="GLB", export_yup=True, use_selection=True,
-        export_apply=False, export_animations=False, export_skins=False,
-        export_materials="EXPORT", export_normals=True, export_texcoords=True,
-        export_tangents=True, export_image_format="JPEG", export_jpeg_quality=92,
-        export_cameras=False, export_lights=False, export_extras=False,
-        export_copyright=credit(SOURCE, "Hull") + "; the outboard and tank modelled for silent.",
-    )
 
 
 NODES = ("boat", "hull", "bracket", "motor", "prop", "cord", "cord_rope", "tank", "seat",
@@ -966,7 +819,7 @@ def self_check(path):
           f"{os.path.getsize(path) / 1024:.0f} KiB", flush=True)
 
 
-def preview(root):
+def preview():
     """The boat on a grey ground under a soft sky, from four sides and from the seat."""
     scene = bpy.context.scene
     scene.render.engine = "CYCLES"
@@ -996,10 +849,8 @@ def preview(root):
         cam.rotation_euler = (bv(*target) - bv(*eye)).to_track_quat("-Z", "Y").to_euler()
         return rendered(os.path.join(OUT, f"{stem}.png"))
 
-    seat = bpy.data.objects["seat"].matrix_world.translation
-    seat_m = Vector((seat.x, seat.z, -seat.y))
-    motor = bpy.data.objects["motor"].matrix_world.translation
-    motor_m = Vector((motor.x, motor.z, -motor.y))
+    seat_m = mv(bpy.data.objects["seat"].matrix_world.translation)
+    motor_m = mv(bpy.data.objects["motor"].matrix_world.translation)
     tiles = [
         shoot(Vector((-3.2, 1.6, -3.4)), Vector((0.0, 0.0, -0.4)), "aft_quarter"),
         shoot(Vector((-4.6, 0.6, 0.2)), Vector((0.0, 0.0, 0.0)), "side"),
@@ -1015,8 +866,7 @@ def args_after_dashes():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--preview", action="store_true", help="render stills of the boat")
     ap.add_argument("--no-export", action="store_true", help="build and preview only")
-    argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
-    return ap.parse_args(argv)
+    return ap.parse_args(blender_argv())
 
 
 def main():
@@ -1027,11 +877,12 @@ def main():
     if args.no_export:
         print("not exported", flush=True)
     else:
-        export(GLB, [root] + objects)
+        export_model(GLB, [root] + objects,
+                     credit(SOURCE, "Hull") + "; the outboard and tank modelled for silent.")
         self_check(GLB)
         print(f"wrote {GLB}", flush=True)
     if args.preview:
-        preview(root)
+        preview()
 
 
 if __name__ == "__main__":

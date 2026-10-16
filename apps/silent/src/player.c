@@ -10,6 +10,7 @@
 #include "cetra/game/character.h"
 #include "cetra/loading_screen.h"
 
+#include "kit.h"
 #include "player.h"
 
 // The capsule: 1.7 m tall, 0.3 across the shoulders' half. Its origin is its
@@ -129,11 +130,6 @@ void player_init(Player* p, Game* game, PhysicsWorld* physics, EntityManager* em
     engine_set_camera_rig(game->engine, p->rig);
 }
 
-// Moves `from` toward `to` by at most `step`.
-static float approach(float from, float to, float step) {
-    return from < to ? fminf(from + step, to) : fmaxf(from - step, to);
-}
-
 // The horizontal velocity asked of the body this step: its heading turned toward what the stick
 // asks, and its speed ramped toward it -- or toward a stop, when asked round past REVERSE.
 static void ramp_move(Player* p, const vec3 want, bool grounded, float dt) {
@@ -151,7 +147,7 @@ static void ramp_move(Player* p, const vec3 want, bool grounded, float dt) {
             target = asked;
         }
     }
-    p->speed = approach(p->speed, target, (target > p->speed ? ACCEL : BRAKE) * control * dt);
+    p->speed = kit_approach(p->speed, target, (target > p->speed ? ACCEL : BRAKE) * control * dt);
 }
 
 // Standing on something: Jolt's "on ground". Steep ground is what the capsule slides down or only
@@ -187,7 +183,7 @@ static void crouch_frame(Player* p, Game* game, const CharacterController* cc, f
         p->crouch_toggled = false;
     const bool low = cc && crouched(cc);
     p->crouch_eased =
-        approach(p->crouch_eased, low ? 1.0f : 0.0f, dt / (low ? CROUCH_DOWN : CROUCH_UP));
+        kit_approach(p->crouch_eased, low ? 1.0f : 0.0f, dt / (low ? CROUCH_DOWN : CROUCH_UP));
     p->rig->look_lift = player_eye_height(p) - CAPSULE_REST;
     // Lagging a descent, the eye goes no nearer the capsule's top than the near plane reaches, or
     // under a ceiling the capsule only just clears the view would cut into it. The capsule's
@@ -292,34 +288,28 @@ void player_pre_render(Player* p, Game* game, const vec3* pin_eye, const vec3* p
     glm_vec3_sub(view, p->view, moved);
     glm_vec3_copy(view, p->view);
     const CharacterController* cc = entity_get_character_controller(p->entity);
-    vec3 anchor, bob = {0.0f, 0.0f, 0.0f};
-    if (p->riding) {
-        // Sat in the boat: the eye is the seat's, and nothing walks.
-        glm_vec3_copy(p->seat_eye, anchor);
-        anchor[1] -= p->rig->look_lift;
-    } else {
+    // The body's own eye less the rig's lift, which no lag or bob moves: sat in a boat, the seat's.
+    vec3 body, anchor, bob = {0.0f, 0.0f, 0.0f};
+    glm_vec3_copy(p->view, body);
+    if (p->riding)
+        glm_vec3_sub(p->seat_eye, (vec3){0.0f, p->rig->look_lift, 0.0f}, body);
+    glm_vec3_copy(body, anchor);
+    if (!p->riding) {
         crouch_frame(p, game, cc, dt);
         // The stride goes on under a pinned camera, where its footsteps are still heard.
         gait_frame(p->gait, moved, standing(cc), p->rig->yaw, dt);
-        // The eye the walk puts: the body's, lagging the ground and over the feet, which bob less
-        // bent low.
-        glm_vec3_copy(p->view, anchor);
-    }
-    if (p->use_gait && !p->riding) {
-        anchor[1] += p->gait->smooth_offset;
-        glm_vec3_scale(p->gait->bob_offset, glm_smoothinterp(1.0f, CROUCH_BOB, p->crouch_eased),
-                       bob);
-        glm_vec3_add(anchor, bob, anchor);
+        // The eye the walk puts: lagging the ground and over the feet, which bob less bent low.
+        if (p->use_gait) {
+            anchor[1] += p->gait->smooth_offset;
+            glm_vec3_scale(p->gait->bob_offset, glm_smoothinterp(1.0f, CROUCH_BOB, p->crouch_eased),
+                           bob);
+            glm_vec3_add(anchor, bob, anchor);
+        }
     }
     if (p->trace)
         trace_frame(p, game, (vec3){anchor[0], anchor[1] + p->rig->look_lift, anchor[2]}, bob);
-    // What a hand reaches from: the body's own eye, which no lag or bob moves, or the seat's.
-    if (p->riding) {
-        glm_vec3_copy(p->seat_eye, p->reach_from);
-    } else {
-        glm_vec3_copy(p->view, p->reach_from);
-        p->reach_from[1] += p->rig->look_lift;
-    }
+    // What a hand reaches from.
+    glm_vec3_add(body, (vec3){0.0f, p->rig->look_lift, 0.0f}, p->reach_from);
     if (pin_eye && pin_target) {
         camera_rig_set_pose(p->rig, *pin_eye, *pin_target);
         glm_vec3_copy((float*)*pin_eye, p->reach_from);
@@ -367,6 +357,15 @@ void player_free(Player* p) {
     p->gait = NULL;
 }
 
+// The crouch let go, and the capsule stood up where it is if there is room over its head, crouched
+// if not: down always fits, and up is checked.
+static void stand_up(Player* p, CharacterController* cc) {
+    p->crouch_toggled = false;
+    character_controller_set_half_height(cc, CROUCH_HALF_HEIGHT);
+    const bool stood = character_controller_set_half_height(cc, CAPSULE_HALF_HEIGHT);
+    p->crouch_eased = stood ? 0.0f : 1.0f;
+}
+
 void player_restore(Player* p) {
     CharacterController* cc = p->entity ? entity_get_character_controller(p->entity) : NULL;
     if (!cc)
@@ -377,21 +376,15 @@ void player_restore(Player* p) {
     gait_reset(p->gait);
     // A click takes the cursor, as at the start.
     p->cursor_wanted = false;
-    // Down always fits; up is checked against what is over the head where it now stands.
-    p->crouch_toggled = false;
-    character_controller_set_half_height(cc, CROUCH_HALF_HEIGHT);
-    const bool stood = character_controller_set_half_height(cc, CAPSULE_HALF_HEIGHT);
-    p->crouch_eased = stood ? 0.0f : 1.0f;
+    stand_up(p, cc);
 }
 
 void player_board(Player* p, float seconds) {
     CharacterController* cc = entity_get_character_controller(p->entity);
     if (!cc)
         return;
-    // Stood up first, so the body gets out of the boat a standing one; nothing is over its head.
-    p->crouch_toggled = false;
-    p->crouch_eased = 0.0f;
-    character_controller_set_half_height(cc, CAPSULE_HALF_HEIGHT);
+    // Stood up first, so the body gets out of the boat a standing one.
+    stand_up(p, cc);
     p->rig->look_lift = player_eye_height(p) - CAPSULE_REST;
     character_controller_set_velocity(cc, GLM_VEC3_ZERO);
     cc->enabled = false;
@@ -458,12 +451,16 @@ bool player_crouched(const Player* p) {
     return cc && crouched(cc);
 }
 
-float player_reach_distance(const Player* p, const vec3 at) {
+float player_reach_within(const Player* p, const vec3 at, float reach, float cone) {
     vec3 forward = {0.0f, 0.0f, 0.0f}, to = {0.0f, 0.0f, 0.0f};
     camera_rig_direction(p->rig, forward);
     glm_vec3_sub((float*)at, (float*)p->reach_from, to);
     const float dist = glm_vec3_norm(to);
-    if (dist > REACH || dist < 1e-4f || glm_vec3_dot(to, forward) / dist < cosf(REACH_CONE))
+    if (dist > reach || dist < 1e-4f || glm_vec3_dot(to, forward) / dist < cosf(cone))
         return FLT_MAX;
     return dist;
+}
+
+float player_reach_distance(const Player* p, const vec3 at) {
+    return player_reach_within(p, at, REACH, REACH_CONE);
 }
