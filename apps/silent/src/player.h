@@ -58,7 +58,11 @@ typedef struct Player {
     // the view, which what is held poses, and the cursor stays captured, where a screen holding the
     // game's input would free it.
     bool holding;
-    bool trace; // print every step's move and every frame's eye
+    // Sat in a boat (spec 13.56): the boat carries the body, its controller off; the view looks
+    // round from the seat, which neither the walk nor a crouch moves.
+    bool riding;
+    vec3 seat_eye; // the seated eye this frame, where the boat has it
+    bool trace;    // print every step's move and every frame's eye
 } Player;
 
 // Stands the capsule on the floor at `feet`, looking along `yaw` and `pitch` (radians, the rig's
@@ -77,6 +81,18 @@ void player_restore(Player* p);
 
 // Fixed step: turns the move actions into the capsule's velocity.
 void player_update(Player* p, Game* game, double dt);
+
+// Sat down in a boat (spec 13.56): standing height, the gait begun again, the controller off, and
+// the view easing to the seat over `seconds`.
+void player_board(Player* p, float seconds);
+// Fixed step, riding: the body carried to `feet`, the controller with it, so a save finds it there.
+void player_carry(Player* p, const vec3 feet);
+// Per frame, riding, before player_pre_render: the seated eye, and how far the boat has turned
+// since the last frame, which turns the view with it.
+void player_seat(Player* p, const vec3 eye, float turn);
+// Out of the boat and standing at `feet`, looking along `yaw`: the controller on again there, and
+// the view easing to it over `seconds`.
+void player_disembark(Player* p, const vec3 feet, float yaw, float seconds);
 
 // Per rendered frame: the body drawn between the last two steps, the gait, the look, the cursor,
 // and the rig onto the head. Under a pin, the camera is held at eye/target instead.

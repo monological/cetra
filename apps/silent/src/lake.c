@@ -215,9 +215,12 @@ void lake_ground_build(Kit* kit) {
 #define LAKE_WIND_SPEED 5.0f   // m/s at the 10 m reference height
 #define LAKE_FETCH      150.0f // metres of open water the wind has crossed
 
-// The wading ring's bodies, from under the bed at the ring to over a head.
+// The wading ring's bodies, from under the bed at the ring to over a head, and half their
+// thickness; on chords of the curve, they stand a few centimetres further out than it.
 #define RING_FOOT (LAKE_Y - 0.9f)
 #define RING_TOP  (LAKE_Y + 1.6f)
+#define RING_HALF 0.15f
+#define RING_SAG  0.1f
 #define WAKE_PACE 0.6f // metres a wader moves for each ripple
 
 #define DOCK_X0   (-72.0f)                       // where its deck leaves the bank
@@ -250,13 +253,6 @@ void lake_ground_build(Kit* kit) {
 #define SWING_DAMP   0.1f
 #define SWING_STEP   (1.0f / 240.0f) // seconds the pendulum is integrated in
 #define SWING_FOLLOW 0.015f          // metres the bulb moves before its kept shadow follows it
-
-#define BOAT_HALF_LEN  1.8f
-#define BOAT_HALF_BEAM 0.62f
-#define BOAT_DEPTH     0.42f  // keel below the gunwale amidships
-#define BOAT_SKIN      0.035f // the planking's thickness
-#define BOAT_STATIONS  14
-#define BOAT_GIRTH     5
 
 #define REED_BEDS     18 // clumps of clumps
 #define DROWNED_TREES 4
@@ -348,7 +344,7 @@ static void ring(Kit* kit) {
         shore_at(t, -WADE_OUT, &x, &z);
         const float dx = x - px, dz = z - pz;
         kit_collider(kit, (vec3){0.5f * (x + px), 0.5f * (RING_TOP + RING_FOOT), 0.5f * (z + pz)},
-                     (vec3){0.15f, 0.5f * (RING_TOP - RING_FOOT), 0.5f * hypotf(dx, dz) + 0.1f},
+                     (vec3){RING_HALF, 0.5f * (RING_TOP - RING_FOOT), 0.5f * hypotf(dx, dz) + 0.1f},
                      atan2f(dx, dz));
         px = x;
         pz = z;
@@ -531,134 +527,54 @@ void lake_rest(Lake* lake, bool rest) {
 }
 
 /*
- * A rowboat, built round a frame at its gunwale's height amidships with a toward the bow: a
- * round-bilged clinker-less hull, its half-breadth fuller aft to a transom and running out to a
- * point at the bow, its sheer rising forward. Turned over, it lies keel up on its gunwales.
+ * Where the boats are kept (spec 13.56). The motorboat moors off the dock's end on its south side,
+ * its bow to the tall post. The bodies down the dock's side stand 0.6 m off its gunwale. Its
+ * twin lies turned over on the bank north of the dock, along the shore. Both are boat.c's
+ * models; the lake says where they are and stands the body round the upturned one.
  */
-typedef struct Boat {
-    KitFrame f;
-    bool upturned;
-} Boat;
+#define MOOR_X         (DOCK_X1 + 2.0f)
+#define MOOR_Z         (DOCK_Z - DOCK_HALF - 0.95f)
+#define MOOR_HEADING   (-0.5f * GLM_PIf - 0.06f) // the bow toward -x, at the post
+#define BANK_X         (-74.6f)
+#define BANK_Z         112.8f
+#define BANK_HEADING   (-2.89f) // the bow up the shore, a little out from it
+#define BANK_HALF_LEN  1.75f
+#define BANK_HALF_BEAM 0.56f
+#define BANK_TALL      0.42f // keel over gunwale, turned over
 
-static float boat_breadth(float u) {
-    return BOAT_HALF_BEAM * (u < 0.0f ? 1.0f - 0.35f * u * u : sqrtf(fmaxf(0.0f, 1.0f - u * u)));
+void lake_mooring(float* x, float* z, float* heading, vec3 post) {
+    *x = MOOR_X;
+    *z = MOOR_Z;
+    *heading = MOOR_HEADING;
+    if (post)
+        glm_vec3_copy((vec3){DOCK_POST, DOCK_Y + 0.35f, DOCK_Z - DOCK_HALF + 0.06f}, post);
 }
 
-// The boat's own (a, y, d) -- a toward the bow, y up from the gunwale, d to starboard -- into
-// its frame, keel up when it is turned over.
-static void boat_xyz(const Boat* b, float a, float y, float d, vec3 out) {
-    out[0] = a;
-    out[1] = b->upturned ? -y : y;
-    out[2] = b->upturned ? -d : d;
+void lake_bank_boat(float* x, float* z, float* ground, float* heading) {
+    *x = BANK_X;
+    *z = BANK_Z;
+    *ground = land_height(BANK_X, BANK_Z);
+    *heading = BANK_HEADING;
 }
 
-// A point of the skin `inset` in from its outside, `u` along the boat (-1 the transom, 1 the
-// bow), `phi` round its side from the gunwale (0) to the keel (pi / 2), on `side`.
-static void boat_skin(const Boat* b, float u, float phi, float side, float inset, vec3 out) {
-    const float breadth = fmaxf(boat_breadth(u) - inset, 0.0f);
-    const float depth = BOAT_DEPTH * (1.0f - 0.25f * u * u) - inset;
-    const float sheer = 0.06f * u * u + 0.12f * fmaxf(u, 0.0f) * u * u;
-    boat_xyz(b, BOAT_HALF_LEN * u, sheer - depth * sinf(phi), side * breadth * cosf(phi), out);
+float lake_open_water(float x, float z) {
+    return -lake_shore_distance(x, z) - WADE_OUT - RING_HALF - RING_SAG;
 }
 
-static void boat_quad(Kit* kit, const Boat* b, int mat, vec3 p[4], float oa, float oy, float od) {
-    vec3 out = {0.0f, 0.0f, 0.0f};
-    boat_xyz(b, oa, oy, od, out);
-    kit_frame_quad(kit, &b->f, mat, (const vec3*)p, out);
+void lake_dock_box(float box[4]) {
+    float ring_x = 0.0f, ring_z = 0.0f;
+    shore_at(0.0f, -WADE_OUT, &ring_x, &ring_z);
+    box[0] = DOCK_X1 - 0.45f;
+    box[1] = DOCK_Z - DOCK_HALF - 0.3f;
+    box[2] = ring_x + 1.0f;
+    box[3] = DOCK_Z + DOCK_HALF + 0.3f;
 }
 
-static void boat(Kit* kit, const Boat* b, bool oars) {
-    // Painted outside, bare weathered boards within.
-    for (int s = -1; s <= 1; s += 2)
-        for (int i = 0; i < BOAT_STATIONS; i++)
-            for (int j = 0; j < BOAT_GIRTH; j++) {
-                const float u0 = -1.0f + 2.0f * (float)i / BOAT_STATIONS;
-                const float u1 = -1.0f + 2.0f * (float)(i + 1) / BOAT_STATIONS;
-                const float p0 = 0.5f * GLM_PIf * (float)j / BOAT_GIRTH;
-                const float p1 = 0.5f * GLM_PIf * (float)(j + 1) / BOAT_GIRTH;
-                const float pm = 0.5f * (p0 + p1);
-                for (int inner = 0; inner < 2; inner++) {
-                    const float inset = inner ? BOAT_SKIN : 0.0f, sign = inner ? -1.0f : 1.0f;
-                    vec3 q[4];
-                    boat_skin(b, u0, p0, (float)s, inset, q[0]);
-                    boat_skin(b, u1, p0, (float)s, inset, q[1]);
-                    boat_skin(b, u1, p1, (float)s, inset, q[2]);
-                    boat_skin(b, u0, p1, (float)s, inset, q[3]);
-                    boat_quad(kit, b, inner ? MAT_FENCE_BOARD : MAT_SIDING_B, q, 0.0f,
-                              -sign * sinf(pm), sign * (float)s * cosf(pm));
-                }
-            }
-    // The transom, both faces.
-    for (int j = 0; j < BOAT_GIRTH; j++) {
-        const float p0 = 0.5f * GLM_PIf * (float)j / BOAT_GIRTH;
-        const float p1 = 0.5f * GLM_PIf * (float)(j + 1) / BOAT_GIRTH;
-        for (int inner = 0; inner < 2; inner++) {
-            const float inset = inner ? BOAT_SKIN : 0.0f;
-            const float u = -1.0f + (inner ? BOAT_SKIN / BOAT_HALF_LEN : 0.0f);
-            vec3 q[4];
-            boat_skin(b, u, p0, 1.0f, inset, q[0]);
-            boat_skin(b, u, p1, 1.0f, inset, q[1]);
-            boat_skin(b, u, p1, -1.0f, inset, q[2]);
-            boat_skin(b, u, p0, -1.0f, inset, q[3]);
-            boat_quad(kit, b, inner ? MAT_FENCE_BOARD : MAT_SIDING_B, q, inner ? 1.0f : -1.0f, 0.0f,
-                      0.0f);
-        }
-    }
-    // A rail along each gunwale.
-    for (int s = -1; s <= 1; s += 2) {
-        vec3 rail[9];
-        for (int k = 0; k < 9; k++)
-            boat_skin(b, -1.0f + 2.0f * (float)k / 8.0f, 0.0f, (float)s, 0.5f * BOAT_SKIN, rail[k]);
-        kit_frame_pipe(kit, &b->f, MAT_PORCH, rail, 9, 0.028f, 6);
-    }
-    // Two thwarts and the stern seat, across below the gunwale.
-    static const float SEATS[3][2] = {{-0.82f, -0.62f}, {-0.2f, 0.0f}, {0.35f, 0.55f}};
-    for (int k = 0; k < 3; k++) {
-        const float u = 0.5f * (SEATS[k][0] + SEATS[k][1]);
-        const float half = boat_breadth(u) * 0.93f - BOAT_SKIN;
-        vec3 lo = {0.0f, 0.0f, 0.0f}, hi = {0.0f, 0.0f, 0.0f};
-        boat_xyz(b, BOAT_HALF_LEN * SEATS[k][0], -0.2f, -half, lo);
-        boat_xyz(b, BOAT_HALF_LEN * SEATS[k][1], -0.16f, half, hi);
-        kit_frame_box(kit, &b->f, MAT_FENCE_BOARD, lo[0], hi[0], lo[1], hi[1], lo[2], hi[2], false);
-    }
-    if (!oars)
-        return;
-    // A pair of oars shipped along the thwarts, their blades aft.
-    for (int s = -1; s <= 1; s += 2) {
-        const float d = 0.18f * (float)s;
-        vec3 shaft[2];
-        boat_xyz(b, 1.25f, -0.13f, d, shaft[0]);
-        boat_xyz(b, -1.05f, -0.13f, d * 1.3f, shaft[1]);
-        kit_frame_pipe(kit, &b->f, MAT_PORCH, shaft, 2, 0.022f, 6);
-        vec3 lo = {0.0f, 0.0f, 0.0f}, hi = {0.0f, 0.0f, 0.0f};
-        boat_xyz(b, -1.05f, -0.135f, d * 1.3f - 0.07f, lo);
-        boat_xyz(b, -1.6f, -0.125f, d * 1.3f + 0.07f, hi);
-        kit_frame_box(kit, &b->f, MAT_PORCH, lo[0], hi[0], lo[1], hi[1], lo[2], hi[2], false);
-    }
-}
-
-static void boats(Kit* kit) {
-    // Moored off the dock's end on its south side, its bow to the tall post, floating a hand's
-    // breadth deep, and tied to it.
-    const Boat moored = {
-        {{DOCK_X1 + 1.9f, LAKE_Y - 0.12f + BOAT_DEPTH, DOCK_Z - DOCK_HALF - 1.1f}, GLM_PIf + 0.06f},
-        false};
-    boat(kit, &moored, true);
-    vec3 bow = {0.0f, 0.0f, 0.0f}, rope[3];
-    kit_frame_point(&moored.f, BOAT_HALF_LEN - 0.15f, 0.2f, 0.0f, bow);
-    glm_vec3_copy(bow, rope[0]);
-    glm_vec3_copy(
-        (vec3){0.5f * (bow[0] + DOCK_POST), LAKE_Y + 0.1f, 0.5f * (bow[2] + DOCK_Z - DOCK_HALF)},
-        rope[1]);
-    glm_vec3_copy((vec3){DOCK_POST, DOCK_Y + 0.35f, DOCK_Z - DOCK_HALF + 0.06f}, rope[2]);
-    kit_frame_pipe(kit, &KIT_WORLD, MAT_POLE, rope, 3, 0.012f, 5);
-
-    // Turned over on the bank north of the dock, above the water's edge, along the shore.
-    const float bx = -74.6f, bz = 112.8f;
-    const Boat beached = {{{bx, land_height(bx, bz) + 0.03f, bz}, 0.5f * GLM_PIf + 0.25f}, true};
-    boat(kit, &beached, false);
-    kit_collider(kit, (vec3){bx, beached.f.origin[1] + 0.25f, bz},
-                 (vec3){BOAT_HALF_LEN + 0.05f, 0.25f, BOAT_HALF_BEAM + 0.05f}, beached.f.yaw);
+// The body round the upturned boat, its keel up and its gunwales on the ground.
+static void bank_boat(Kit* kit) {
+    kit_collider(kit, (vec3){BANK_X, land_height(BANK_X, BANK_Z) + 0.5f * BANK_TALL, BANK_Z},
+                 (vec3){BANK_HALF_LEN, 0.5f * BANK_TALL, BANK_HALF_BEAM},
+                 BANK_HEADING - 0.5f * GLM_PIf);
 }
 
 /*
@@ -716,7 +632,7 @@ void lake_build(Lake* lake, Kit* kit, Scene* scene, Trees* trees, unsigned int s
     ring(kit);
     dock(kit, &state);
     dock_lamp(lake, kit, scene);
-    boats(kit);
+    bank_boat(kit);
     reeds(kit, &state);
     drowned(kit, trees, &state);
 }
@@ -736,7 +652,8 @@ void lake_start_audio(Lake* lake, AudioSystem* audio) {
     audio_sound_set_volume(lake->lapping, LAPPING_VOLUME);
 }
 
-void lake_update(Lake* lake, const float eye[3], const float feet[3], double time, float dt) {
+void lake_update(Lake* lake, const float eye[3], const float feet[3], bool afoot, double time,
+                 float dt) {
     if (lake->lapping)
         lapping_at(lake, atan2f(eye[2] - LAKE_Z, eye[0] - LAKE_X));
     lamp_swing(lake, time, dt);
@@ -746,5 +663,5 @@ void lake_update(Lake* lake, const float eye[3], const float feet[3], double tim
     lake->water->enabled =
         lake->reach <= 0.0f ||
         plan_box_distance(eye[0], eye[2], WATER_X0, WATER_X1, WATER_Z0, WATER_Z1) < lake->reach;
-    water_wake(lake->water, &lake->wake, feet[0], feet[2], WAKE_PACE, feet[1] < LAKE_Y);
+    water_wake(lake->water, &lake->wake, feet[0], feet[2], WAKE_PACE, afoot && feet[1] < LAKE_Y);
 }
