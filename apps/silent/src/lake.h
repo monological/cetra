@@ -41,13 +41,13 @@ void lake_ground_build(Kit* kit);
 
 struct Trees;
 
-// The lake itself: the water, calm and dark and held to its own basin, and what stands at its
-// edge -- the ring that stops a wader, the dock out from the cabin's bank, reeds, a few drowned
-// trees, and two rowboats, one moored at the dock and one turned over on the bank. The dead trees
-// must still hold their models. The water is on only while the eye is within `reach` of it, 0
-// for always.
+// The lake itself: the water, calm and dark and held to its own basin, its waves of the model
+// `waves`, and what stands at its edge -- the ring that stops a wader, the dock out from the
+// cabin's bank, reeds, a few drowned trees, and two rowboats, one moored at the dock and one
+// turned over on the bank. The dead trees must still hold their models. The water is on only
+// while the eye is within `reach` of it, 0 for always.
 void lake_build(Lake* lake, Kit* kit, Scene* scene, struct Trees* trees, unsigned int seed,
-                float reach);
+                float reach, WaterWaveModel waves);
 
 // The water lapping at the shore, on the cabin's bank until the eye moves it.
 void lake_start_audio(Lake* lake, AudioSystem* audio);
