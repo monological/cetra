@@ -122,8 +122,9 @@ void boat_step(Boat* b, Game* game, Player* p, float dt);
 // rider's seat, the wake and the sounds; `time` and `dt` the clock things are drawn by.
 void boat_frame(Boat* b, Game* game, Player* p, Hud* hud, double time, float dt);
 
-// The boat at (x, z) facing `heading`, its motor off: moored if that is its mooring, else on the
-// water, with the player in it when `riding` (spec 13.56's saves and start flags).
+// The boat with the player in it at (x, z) facing `heading` when `riding`, or else at its mooring
+// with the player out of it where the body stands; its motor off (spec 13.56's saves and start
+// flags).
 void boat_place(Boat* b, Player* p, float x, float z, float heading, bool riding);
 // The motor running at once, for a start that wants it so.
 void boat_start_motor(Boat* b);

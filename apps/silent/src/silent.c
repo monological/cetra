@@ -1414,6 +1414,7 @@ static void on_init(Game* game) {
                        .lights = &g_lights,
                        .basement = &g_basement,
                        .story = &g_story,
+                       .boat = &g_boat,
                        .cat = &g_cat,
                        .mind = &g_mind};
     for (int i = 0; i < DOORS; i++)
