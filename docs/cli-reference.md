@@ -227,7 +227,23 @@ and reaches the pre-11.33 frame),
 `--film`, `--sky` (`--sun-elevation`, `--sun-azimuth`, `--sky-debug`; `--overcast <0..1>`,
 `--sky-scale <f|photometric>` and `--sky-probe`, spec 13.7, whose entries in
 `docs/shader-subsystems.md` say what each changes), `-e/--env <hdr>`,
-`--world-scale <units-per-km>` (atmosphere scale; 1000 = 1 unit is 1 metre), `--no-aerial`,
+`--world-scale <units-per-km>` (atmosphere scale; 1000 = 1 unit is 1 metre),
+`--typical-size <metres>` (spec 13.57 — the size of what the scene holds, `Engine.typical_size`: 1
+for rooms, the default, and 0.001 for a circuit board. Every length the engine chose for itself --
+AO's reach, SSR's thickness, the contact march's start, a soft particle's fade, the cascade near
+plane, the streaming margins -- is its metre value times this; nothing the scene states is touched.
+Overrides a `.cscn`'s `typicalSize`, and refuses anything but a positive number, "1mm" included.
+**It is not `--import-scale`**, which scales the model and leaves every one of the engine's lengths
+at a metre's: a board imported a thousand times larger renders as a room, and its lights, fog and
+camera have to be scaled with it by hand),
+`--fit-clip` (spec 13.57 — the camera's near and far planes fitted every frame to the mesh boxes in
+front of the eye, with the shadow catcher's quad or a bounded water's rectangle when one draws.
+Far is 1.1 times the farthest depth. Near is 0.9 times the larger of the nearest depth and the
+nearest distance times the frustum corner's cosine, and never under far / 1e4. Over an unbounded
+sea the camera keeps the planes it has. **The boxes are at rest**: wind, a skinned pose, the
+terrain's morph or a hook's offset can carry geometry past a fitted plane. A `.cscn` camera's
+`fitClip` is the same switch, and with it on the render app's own per-frame near stands down),
+`--no-aerial`,
 `--no-cloud-shadows` (spec 11.39 — the deck casts into the froxel fog by default whenever
 `--clouds` is on, because a cloud that casts nothing is wrong rather than un-featured.
 **`--sky-debug` now shows the shadow map itself** as a tile below the two cloud-noise fields
@@ -433,7 +449,8 @@ field is a plain write that changes nothing in the graph, so this is the headles
 after something has kept what it decided. A frame that is not a number, a value past an enum's
 labels, and a material the scene does not have are each refused by name rather than run as a no-op),
 `--pointer-script <path>` / `--trace-camera` (spec 12.19 — replay a MOUSE from a text file, and
-print the pose the frame draws from. The pointer script is `--pad-script`'s grammar through the
+print the pose the frame draws from, its near and far planes at the line's end since spec 13.57,
+which is what the `fit-clip` group reads. The pointer script is `--pad-script`'s grammar through the
 same parser: one line per frame or `from-to` range, `#` comments, the last matching line winning,
 with tokens `at=x,y` (framebuffer pixels, +Y up), `by=dx,dy`, `down`, `shift` and `wheel=<f>`. A
 range states the pointer's STATE, so a press is `down` appearing and a release is it going. It

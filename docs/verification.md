@@ -8,7 +8,7 @@ Three instruments, answering different questions:
 | instrument | asserts | blind to |
 |---|---|---|
 | `scripts/gates.py` | analytic properties — a ratio, a count, a penumbra width, whether two runs agree | anything nobody wrote an arm for; a bar too slack to fail |
-| `scripts/goldens.py` | 32 committed PNGs, pixel for pixel | whether the image is RIGHT — only whether it changed |
+| `scripts/goldens.py` | 33 committed PNGs, pixel for pixel | whether the image is RIGHT — only whether it changed |
 | a hand A/B | everything else | nothing, and that is the problem: it has no bar unless you measure one |
 
 **The one rule that governs all three: a pixel count quoted without its noise floor is not a
@@ -27,6 +27,8 @@ up as a difference. The corpus must not be re-baked off macOS.
 - [Running the gates](#running-the-gates) — which binaries a number describes, what a release run
   moves, why frame counts are a correctness question, how to read a `--profiler` table
 - [Deterministic renders](#deterministic-renders) — the bar, the noise floor, reading a diff
+- [The scale twin](#the-scale-twin) — a scene and itself shrunk 1024 times at 0 px, why that is
+  exact, and what it cannot see
 - [What breaks determinism](#what-breaks-determinism) — the per-source table, and the trap that
   two runs of one build are not two builds
 - [Assets, and which are safe](#assets-and-which-are-safe) — the per-asset ledger
@@ -164,6 +166,47 @@ magick compare -metric AE -compose src before.ppm after.ppm diff.png
 magick diff.png -negate -morphology Dilate disk:4 -negate -resize 1000x big.png
 ```
 
+### The scale twin
+
+**`scale-twin` (spec 13.57) renders each of its scenes twice, as it is and shrunk 1024 times,
+and passes only at 0 px.**
+- **What the twin scales:** it multiplies by K = 2^-10 every length the scene states — positions,
+  ranges, sizes, a light's body, the camera's eye and target, an SSS radius, a material's
+  thickness, the fog's near and far — and the typical size.
+- **What follows from it:** point and spot candela go as K², so illuminance is unchanged, and fog
+  density per metre goes as 1/K. Directional lux, a panel's nits, exposure and the environment
+  stay.
+- **So a twin differs only where the ENGINE holds a length of its own:** a tuning length that does
+  not follow `Engine.typical_size`.
+
+**0 px is exact, not a tolerance.** Multiplying by a power of two is exact in floating point, and
+so is every sum, difference, product, quotient and square root of numbers it has scaled: the twin
+does the original's arithmetic with the exponent moved. A moved pixel names a missed length.
+- **The one exception is fp16's subnormals**: a length stored under fp16's normal range, 6.1e-5 m.
+- **A scene already measured in millimetres is twinned by GROWING it** (K = 1024), and the argument
+  holds unchanged that way. The board's view depths run from a millimetre to a few centimetres;
+  shrunk, they fall under that floor, and a bisect run in that direction returned noise before
+  this was understood.
+
+**A key the twin cannot classify is refused by name, never copied.** Copied unscaled, it would
+render a twin that differs, and the difference would read as a length the engine holds.
+- Every block the twin walks is classified key by key (`TWIN_LIGHT_KEYS`, `TWIN_PROBE_KEYS`, and so
+  on), and a flag the rows pass is listed in `TWIN_FLAGS` by kind.
+- A material's lengths are read from `material.c`'s `.length = true` rows.
+- So a new length gets its row there before a fixture using it gets a twin row.
+
+**What it cannot see:**
+- **Scenes whose physics does not scale** with the scene: water, whose waves gravity sets, rain,
+  particles, and anything animated. Each excluded fixture is listed beside `TWIN_ROWS` with its
+  reason.
+- **The classification itself.** The twin proves that every length scales with the scene, not that
+  each follows the right thing: a physical length wrongly multiplied by the typical size scales
+  with the scene too, and twins to 0 px. That is how an SSS profile's radius came to be rewritten
+  by the size until a review read it.
+
+**`fit-clip` holds a fitted camera's planes to the fit** worked out in the gate from the board's
+glTF in double precision, at the board's three views and from inside the table, within 1e-4.
+
 ### What breaks determinism
 
 **"Two runs of one build match" does NOT mean "two builds match."** This is the
@@ -267,6 +310,7 @@ covers it either.
 | `assets/scenes/postfx_convergence_fixture.cscn` | no | no | **the metering instrument** (spec 11.52), and the only fixture in the corpus with `"auto_exposure": true` -- every other one pins exposure, by CLI or by authoring `post.exposure` with no `auto_exposure` key, which `cscene_apply` turns into a pin. It was written for an auto-exposure convergence gate in spec 10.2 and **no script referenced it for nine specs**; the `exposure` group wires it now. Read through `--exposure-probe`, not as pixels: all 24 goldens pin exposure, so no golden can see a metering change, which is exactly why auto-exposure was the least-tested subsystem shipping on by default. **Read only CONVERGED frames** -- the meter reads a PRE-EXPOSED frame, so its own value sits inside a feedback loop until the scene settles, which on this fixture is frame 91 -- the gap touches the deadband around 18 and is pushed back out twice first, so the arms use 150 as margin over 91, not over 18. Measured on it: gain 0.490 uniform, 0.531 centre-weighted, 0.842 spot. |
 | `assets/scenes/cornell_box.cscn`, `assets/scenes/cornell_leak.cscn` | no | no | **the reference pair for derived area lights, and they are deliberately NOT converted to use them** (spec 11.49). Each authors a hand-placed light beside an emissive quad that emits a token 1 nit -- the pre-11.49 idiom -- and three gate arms work by generating a DERIVED twin at run time (`cscn_copy`) and comparing: does a fitted panel light the room the same (`emissive-match`), lift the indirect term the same (`emissive-gi`), add the same to a reflection probe (`emissive-spec`). Convert the committed fixture and there is no authored side left to compare against. The twin is generated rather than committed so the two halves cannot differ in anything the mutation does not touch. **Two traps.** `cornell_box`'s authored light sits at y 1.97 and its quad at y 1.98 while the generator's comment says the light mirrors the quad -- so they never quite matched; `emissive-fit` asserts **1.98**, the mesh's value, since the fit is a fit of the MESH, and `EMISSIVE_MATCH_EPS` 0.03 is sized for that 1 cm. And `cornell_box` cannot see an area panel's shadow AT ALL -- toggling `cast_shadows` moves no band, for the authored light either -- which is why `cornell_leak` exists: one room cut in half by a partition, where an unshadowed derived panel reads 0.41 of the lit half straight through the wall and a `light_overrides` entry takes it to an exact 0. |
 | `assets/scenes/cornell_rooms.cscn` | no | no | **the clustered-specular-probe instrument** (spec 11.70), and the fourth variant `gen_cornell_rooms.py` emits. Two rooms joined by a doorway over **ONE floor mesh spanning both**, and that shared mesh is the whole design of the fixture: per-DRAW probe selection -- the cheaper answer 11.70 refused -- hands one mesh a single probe and lights half of it with the wrong room's reflections, while every per-room measurement still passes. Split the floor in two and the fixture stops being able to tell the two designs apart. **The doorway is at the FRONT**, not the middle, because a doorway in the middle puts the near half of the partition directly in front of the band where the two probes overlap -- the only place a seam can be seen at all. Lit by SPOTS rather than the area panels its emissive quads suggest, `cornell_leak`'s stated reason plus a scalloped shadow blob the panels printed at the partition base; the partition carries its own thickness (`ROOMS_PARTITION_HALF`) rather than the leak room's 6 cm, which is thinner than a shadow texel here. **It authors its own `environment` block**, and that is load-bearing rather than tidy: a probe cannot be created without a precomputed IBL, so with only the gate arms passing `--sky` the file opened by hand rendered with its probes refused -- the `beach_fixture` trap, a second time. Read as the dark room's floor against a variant that moves probe B's CAPTURE POINT into room A and changes nothing else, which isolates selection from storage: **1.82x**, with the lit room as an in-frame control at **0.0000** drift. **Was known open and is CLOSED (spec 11.76):** the stair-stepped region on the right room's floor was the specular-occlusion cone resolving to fully-lit or fully-dark either side of an epsilon, at half res and then magnified -- which is why it tracked shadows without being one. Reading the reflection lobe against the sector bitmask removed it and the band beside it together. The lesson generalises past this fixture: **a screen-space artifact that appears and disappears with an unrelated toggle is worth suspecting as a discontinuity in a term that toggle happens to move**, rather than as a property of the thing toggled. |
+| `assets/scenes/board_fixture.cscn` | no | no | **the true-scale instrument** (spec 13.57): a circuit board in metres -- a 0402 is a millimetre long -- at a typical size of 0.001 with fitted planes, lit by three area panels and a lamp, on a table. **0 px x2 same build** (its golden baked, then checked). The golden is the three-quarter view at a pinned exposure of 0.0088. Its three views are `scale-twin` rows, run GROWN 1024 times, since shrunk its depths fall under fp16's normal range. `fit-clip` works its planes out from its glTF. **Contact shadows reach no light on it**: the frame is byte-identical without `--contact-shadows`, since its panels are area lights and its lamp casts a map of its own. Generated by `gen_board_fixture.py`, whose header carries the other two views' flags. |
 | `assets/models/emissive_fixture.gltf` | no | no | **the derived-area-light instrument** (spec 11.49), read through `--emissive-light-probe` rather than as pixels, because a panel half a metre out or sqrt(2) too wide still lights a room and no frame can tell a correct fit from a plausible one. Five emitters, each answering a question nothing else in the corpus asks. `emissive_quad` carries the only emissive TEXTURE in the corpus, half black and half white, so the 1x1-top-mip readback has an answer known in advance (0.5) rather than one measured off itself. `emissive_box` is a closed cube whose faces cancel -- planarity 0. `emissive_strip` is 2.0 x 0.25 rotated 30 degrees IN ITS OWN PLANE, which is the case the covariance principal axis gets wrong and an axis-aligned bound reads as 1.8571 x 1.2165. `emissive_split` (two strips, fill 0.2857) and `emissive_ell` (fill 0.51) are both perfectly FLAT -- planarity exactly 1.0 -- and exist because planarity does not reject non-rectangles; two of them rather than one because they fail for different reasons, disjoint against concave. **Every emitter lies on z = 0, so two overlapping in xy z-fight** -- the L and the split did, and the constraint is written beside the generator. Generated by `gen_emissive_fixture.py`; the lighting comparison lives on `cornell_box` instead, since it needs a hand-authored panel to compare against. |
 | `assets/scenes/overdraw_layers.cscn`, `assets/scenes/overdraw_tiles.cscn` | no | no | **the depth-complexity instruments** (spec 11.31). `layers` is N full-frame opaque quads submitted far-to-near, so the counter must read exactly N -- which is how the budget's 2x error was found. `tiles` is a 24x24 grid of distinct meshes at complexity 1.00, built so the prepass has nothing to reject and can only cost. |
 | `assets/scenes/ies_fixture.cscn` (+ five `.ies` files) | no | no | **the IES photometric instrument** (spec 11.57), and **every candela in it is a closed form of its two angles** rather than a measurement. That is the whole design: an IES reader cannot be tested against a picture, because a table resampled off the wrong plane still lights a room plausibly -- and it cannot be tested against a REAL `.ies` either, because nobody knows what a real luminaire's candela at 37.5 degrees ought to be. Ground truth is PAINTED. Five files, each answering a question no other does: one horizontal plane (rotational, most real downlights), 0..180 (bilateral -- the case a modulo fold gets wrong), 0..90 (quadrant, the second mirror), 0..360 (none, where a reader assuming a mirror renders the far half backwards), and `ies_tinytail.ies`, whose 90-degree candela is 1.2e-6 rather than 0 -- the only input the tail SNAP acts on, and so the only one that can tell an enforced exact zero from an inherited one. The horizontal ramp is MONOTONE on purpose: a symmetric one reads the same whether the reader mirrors or wraps. `gen_ies_fixture.py` **imports and runs `tools/gen_ies_table.py`** rather than reimplementing it -- the `gen_hair_fixture` pattern, holding the tool, the C reader and the shader to one arithmetic. The scene authors NO intensity, which is what exercises the peak-seeding path. **Its light is a POINT**, which is load-bearing twice over: it is what makes the roll authorable-and-unauthored case real, and it is why `ies-replace` has to build its own spots -- `spotConeFactor` returns 1.0 for every non-spot, so on this scene as authored multiplying the profile by the cone and replacing the cone with it are byte-identical, and the feature's central claim went untested for a spec cycle. Three of the six arms read `--ies-probe` and three render; **both halves are needed and neither substitutes**, because the shader is a THIRD implementation of the same table and no probe reaches it. |

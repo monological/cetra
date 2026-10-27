@@ -213,8 +213,8 @@ functions. `apply_transform_to_nodes` used to fuse `prev := global` into the
 traversal, so a second walk in one frame made every node's previous pose its
 current one, zeroed every motion vector and stopped TAA reprojecting. The engine
 owns the latch and calls it once; anyone may call the walk again after a late
-graph change. **No golden can see that failure** -- all 32 are single frames with
-TAA off, thirty-one of them static scenes under a static camera and the last a rig
+graph change. **No golden can see that failure** -- all 33 are single frames with
+TAA off, thirty-two of them static scenes under a static camera and the last a rig
 posed purely by frame index, measured. None has motion in it that TAA would
 reproject -- which is what the `transform` and `shadow-lag` gate groups exist for.
 
@@ -1360,6 +1360,58 @@ What replaced it is `camera_rig.h`, which has no mode enum either — a follow c
 that moves, a viewer orbit one that does not, first person is a distance of zero, and a pinned
 pose derives all three. What varies is which fields a caller writes, not which branch runs.
 
+## The Typical Size (spec 13.57)
+
+**`Engine.typical_size` is the size, in metres, of what the scene holds**: 1 for people and
+rooms, the default, and 0.001 for a circuit board. It is `EngineConfig.typical_size` at creation
+and `engine_set_typical_size` after; a `.cscn`'s `typicalSize`, the render app's
+`--typical-size`, the snapshot row `engine.typical_size` and the GUI's "Typical Size (m)" all
+reach it. Every length in the engine is one of three kinds, and the kind decides what the size
+does to it:
+- **Physical: what the scene states.** Positions, a light's range, size and body, an SSS
+  profile's radius, a material's thickness, fog density per metre. Never rewritten, since a
+  board states them in metres at its own size.
+- **Tuning: what the engine chose for itself**, every one of them tuned on rooms. Among them:
+  GTAO's radius, SSR's thickness and reach, the contact march's start, the depth tolerances of the
+  AO blur and the a-trous filters, a soft particle's fade, the cascade and GI capture near planes,
+  and the streaming margins. Each is its metre value times the size, read where it is used:
+  `engine->typical_size` in C, `ViewParams.typicalSize` in GLSL. PostFX's settable ones are
+  written by `postfx_reset_lengths` when the size is set, so an app sets the size first and its
+  own values after.
+- **Fitted: worked out each frame**, which is a `fit_clip` camera's near and far.
+
+**A camera's planes are its owner's, or the fit's.** `Camera.fit_clip` fits them each frame,
+inside `_engine_derive_camera` on the pose just written:
+- **What it fits to:** the mesh boxes in front of the eye (`scene_for_each_mesh_box`), plus the
+  shadow catcher's quad or a bounded water's rectangle when one draws, each box from its owner
+  (`render_shadow_catcher_box`, `water_surface_box`).
+- **The planes:** far is 1.1 times the farthest depth. Near is 0.9 times the larger of the nearest
+  depth and the nearest distance times the frustum corner's cosine. The second bound is what fits
+  a close-up, where a box reaching behind the eye takes the first to zero. Near is never under
+  far / `CAMERA_CLIP_RATIO_MAX` (1e4).
+- **Over an unbounded sea the camera keeps the planes it has**, since a sea with no bounds reaches
+  the horizon.
+- **The boxes are at rest**, so wind, a skinned pose, the terrain's morph or a hook's offset can
+  carry geometry past a fitted plane.
+
+Four things about it are easy to get backwards.
+- **The size writes no camera plane, no light and no SSS profile.** It once wrote the installed
+  camera's planes, which did nothing at creation, with no camera installed yet, and overwrote the
+  app's own on a runtime change. It also wrote SSS slot 0's radius, which is an authored profile
+  once an app replaces the table.
+- **A ranking keeps metres, and its margin is times the size.** The cached tiles, the GI volumes
+  and the reflection probes rank by distance in metres against `MARGIN * typical_size`. Dividing
+  the distance instead put it in a unit nothing else in the engine uses.
+- **A clip w is a length only under perspective.** Under a parallel projection it is the number 1,
+  so a floor on it is `1e-4 * (projectionIsOrtho() ? 1.0 : typicalSize)`. Scaled
+  unconditionally, every contact-shadow ray under a parallel projection stopped from a typical
+  size of 1e4.
+- **`scale-twin` holds it, and cannot see the classification.** Every corpus scene renders at 0 px
+  against itself shrunk 1024 times, which is exact and not a tolerance. But a physical length
+  wrongly multiplied by the size scales with the scene too, and twins exactly: that is how SSS
+  slot 0 was missed. A scene already in millimetres is twinned by growing it, since shrunk its
+  depths fall under fp16's normal range. `docs/verification.md`, The scale twin, has the argument.
+
 ## Key Data Structures
 
 **Every public struct's fields play one of three roles, and the header says which** (spec
@@ -1389,8 +1441,9 @@ matrices (`view_matrix`, `projection_matrix` un-jittered, `draw_projection` TAA-
 11.108: `show_gui`, `show_fps`, `show_wireframe`, `show_xyz`, `exit_after_frames`,
 `screenshot_every`) and `clear_color` (11.107); headless flag; embedded
 `PostFX* postfx`; bone-overlay + shadow-catcher programs; async loader; text renderer. By
-function: the sample count and the two scales (clamp + rebuild), the screenshot path (owned),
-the callbacks and the clock (installs).
+function: the sample count and the two scales (clamp + rebuild), the typical size
+(`engine_set_typical_size`, spec 13.57: PostFX's tuning lengths and the camera rig follow it), the
+screenshot path (owned), the callbacks and the clock (installs).
 
 **Scene:** root SceneNode (`scene_set_root`); lights; **particle_systems (owned)**; cameras;
 materials; skeletons + animations -- the registries, each an `scene_add_*`; texture pool;
@@ -1474,8 +1527,8 @@ shadow indices and the emissive source id are the engine's.
 
 **Camera:** position and look-at (`camera_set_position` / `camera_set_look_at`, which re-derive
 the orbit); the orbit (theta/phi/distance) and the aspect, DERIVED, written by the orbit moves
-and the frame; settings: up, FOV, near/far, the ortho height and switch, `max_distance`, the two
-speeds.
+and the frame; settings: up, FOV, near/far, `fit_clip` (spec 13.57: near and far fitted each
+frame, see The Typical Size), the ortho height and switch, `max_distance`, the two speeds.
 
 ## Lighting Environment
 
@@ -2009,7 +2062,7 @@ on the `Scene`.
 **`docs/verification.md` owns this** — how to run the two suites, what a release run moves, the
 determinism-by-source table, the per-asset ledger of what is safe to compare, and the cross-build
 recipe with the six times it has moved. `scripts/gates.py` asserts analytic properties;
-`scripts/goldens.py` compares 32 committed PNGs.
+`scripts/goldens.py` compares 33 committed PNGs.
 
 **`assets/` is split by KIND since spec 12.8** — `scenes/`, `models/`, `textures/`, `goldens/`,
 `generators/`, `lut/`, `ies/`, `data/`, with `abandoned_window/` and `ivy_arcade/` left
