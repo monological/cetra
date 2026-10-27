@@ -127,9 +127,11 @@ float marchOcclusion(vec3 P, vec3 n, float ndl, vec3 dirVS, float reach, float j
     // Near-camera pixels can otherwise skip across the whole frame in 8 steps,
     // stepping clean over every occluder. Shrink tMax so the screen reach caps
     // at MAX_UV_LEN (GTAO's MAX_SCREEN_RADIUS idiom).
-    // Clip w is a view depth under perspective, and 1 under a parallel projection.
+    // Clip w is a view depth under perspective, and the number 1 under a parallel projection,
+    // so its floor is a length only under perspective.
+    float wFloor = 1e-4 * (projectionIsOrtho() ? 1.0 : typicalSize);
     vec4 clipEnd = clipP + tMax * clipL;
-    if (clipEnd.w > 1e-4 * typicalSize) {
+    if (clipEnd.w > wFloor) {
         vec2 uvEnd = (clipEnd.xy / clipEnd.w) * 0.5 + 0.5;
         float uvLen = length(uvEnd - TexCoords);
         if (uvLen > MAX_UV_LEN)
@@ -156,7 +158,7 @@ float marchOcclusion(vec3 P, vec3 n, float ndl, vec3 dirVS, float reach, float j
     for (int i = 0; i < STEPS; i++) {
         float t = (float(i) + jitter) / float(STEPS) * tMax;
         vec4 clipS = clipP + t * clipL;
-        if (clipS.w <= 1e-4 * typicalSize)
+        if (clipS.w <= wFloor)
             break; // reached the camera plane
         vec2 uv = (clipS.xy / clipS.w) * 0.5 + 0.5;
         if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0)

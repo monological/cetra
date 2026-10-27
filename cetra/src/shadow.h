@@ -235,7 +235,7 @@ typedef struct ShadowTileSeen {
 // A cached light in the frame's ranking.
 typedef struct ShadowTileRank {
     struct Light* light;
-    float distance; // from the camera to its reach, 0 inside it, in typical sizes
+    float distance; // from the camera to its reach, 0 inside it
     int order;      // its index in the scene's lights, which breaks a tie in distance
     int block;      // the block it holds this frame, -1 for none
 } ShadowTileRank;
@@ -443,9 +443,10 @@ typedef struct ShadowSystem {
     ShadowTileRank* tile_rank;
     size_t tile_rank_count;
     size_t tile_rank_capacity;
-    int tile_held;         // ranked lights holding a block
-    GLuint tile_copy_fbo;  // reads one face while the punctual FBO writes its copy
-    bool tile_full_warned; // latches, as the pool's does
+    float tile_rank_margin; // how much nearer a light must be to take what a ranked one holds
+    int tile_held;          // ranked lights holding a block
+    GLuint tile_copy_fbo;   // reads one face while the punctual FBO writes its copy
+    bool tile_full_warned;  // latches, as the pool's does
     bool tile_range_warned;
     bool tile_store_warned;
 

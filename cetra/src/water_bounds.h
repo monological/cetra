@@ -41,9 +41,14 @@ static inline WaterDry water_dry_make(float x, float z, float yaw, float half_le
                       .power = power};
 }
 
+// Whether the bounds `b` are the zero rectangle, which bounds nothing.
+static inline bool water_bounds_everywhere(const vec4 b) {
+    return b[0] == 0.0f && b[1] == 0.0f && b[2] == 0.0f && b[3] == 0.0f;
+}
+
 // Whether the bounds `b` cover (x, z).
 static inline bool water_bounds_cover(const vec4 b, float x, float z) {
-    if (b[0] == 0.0f && b[1] == 0.0f && b[2] == 0.0f && b[3] == 0.0f)
+    if (water_bounds_everywhere(b))
         return true;
     return x >= b[0] && z >= b[1] && x <= b[2] && z <= b[3];
 }

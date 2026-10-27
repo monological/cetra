@@ -785,8 +785,8 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     // Separable SSS profile ( targets allocated lazily on first skin frame).
     // The engine toggle gates the effect; these set the blur width/tint.
     // Default skin profile in slot 0 (rgb = per-channel scatter weight with red
-    // widest, w = world radius, set below); the app overwrites/extends this per skin material.
-    glm_vec3_copy((vec3){1.0f, 0.3f, 0.2f}, fx->sss_profiles[0]);
+    // widest, w = world radius); the app overwrites/extends this per skin material.
+    glm_vec4_copy((vec4){1.0f, 0.3f, 0.2f, 0.2f}, fx->sss_profiles[0]);
     fx->sss_profile_count = 1;
     postfx_reset_lengths(fx, 1.0f);
     fx->sss_ready = false;
@@ -1746,7 +1746,6 @@ void postfx_reset_lengths(PostFX* fx, float typical_size) {
     fx->dof_focus_range = 1.5f * s;
     fx->fog_height_falloff = 4.0f * s;
     fx->fog_far = 60.0f * s;
-    fx->sss_profiles[0][3] = 0.2f * s; // the default profile's world radius
 }
 
 void postfx_reset_sss_profiles(PostFX* fx) {

@@ -19,6 +19,8 @@
 #include <stdbool.h>
 #include <stdlib.h>
 
+#include "aabb.h"
+
 typedef struct Camera {
     // ENGINE-OWNED: derived state. Read freely, never write.
     char* name;         // Copied at creation; freed with the camera
@@ -49,16 +51,28 @@ typedef struct Camera {
     bool fit_clip;
 } Camera;
 
-// The clip planes a camera takes when its desc names none, in metres.
-#define CAMERA_NEAR_DEFAULT 0.1f
-#define CAMERA_FAR_DEFAULT  1000.0f
-
 // The deepest far-to-near ratio a fitted camera is given. D24's step at the far plane is
 // far x (far / near) / 2^24, so at this ratio the farthest surface resolves 6e-4 of its own
 // distance: a tenth of a millimetre at 160 mm. A fit only reaches it when the eye stands inside a
 // box; framing from outside, the ratio is about the scene's depth over its distance, near 100 for
 // a board 2 mm from the lens, where the step is a micrometre.
 #define CAMERA_CLIP_RATIO_MAX 1e4f
+
+// What a fit_clip camera frames, folded a box at a time from camera_clip_fit_begin.
+typedef struct CameraClipFit {
+    vec3 eye;
+    vec3 forward;
+    float nearest_depth;   // along the view, clamped at 0
+    float nearest_dist_sq; // from the eye, 0 for a box holding it
+    float farthest_depth;  // along the view; 0 = nothing folded yet
+} CameraClipFit;
+
+void camera_clip_fit_begin(CameraClipFit* fit, const Camera* camera);
+// A box wholly behind the eye adds nothing.
+void camera_clip_fit_add(CameraClipFit* fit, const AABB* box);
+// The camera's planes from what was folded: far past the farthest depth, near short of the
+// nearest bound and never under far / CAMERA_CLIP_RATIO_MAX. Nothing folded leaves both alone.
+void camera_clip_fit_apply(Camera* camera, const CameraClipFit* fit);
 
 // What a camera is created from. Fill the fields you mean with designated
 // initialisers and leave the rest zero: zero is the default, named beside each
@@ -79,8 +93,8 @@ typedef struct CameraDesc {
     vec3 look_at;       // the origin
     vec3 up;            // 0 = +Y
     float fov;          // radians; 0 = 60 degrees
-    float near;         // 0 = CAMERA_NEAR_DEFAULT
-    float far;          // 0 = CAMERA_FAR_DEFAULT
+    float near;         // 0 = 0.1
+    float far;          // 0 = 1000
     float ortho_height; // 0 = perspective
 } CameraDesc;
 

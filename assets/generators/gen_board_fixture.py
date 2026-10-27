@@ -26,52 +26,11 @@ not committed.
 Regenerate with: python3 assets/generators/gen_board_fixture.py
 """
 
-import base64
-import json
 import math
-import struct
-from fixture_paths import asset_path, asset_ref
+from fixture_paths import asset_ref
+from gltf_pieces import cube, gltf_of, sphere, write_json
 
 MM = 0.001
-
-# A unit cube centred on the origin, one quad per face so each face carries its own normal.
-CUBE_FACES = [
-    ((1, 0, 0), [(0.5, -0.5, 0.5), (0.5, -0.5, -0.5), (0.5, 0.5, -0.5), (0.5, 0.5, 0.5)]),
-    ((-1, 0, 0), [(-0.5, -0.5, -0.5), (-0.5, -0.5, 0.5), (-0.5, 0.5, 0.5), (-0.5, 0.5, -0.5)]),
-    ((0, 1, 0), [(-0.5, 0.5, 0.5), (0.5, 0.5, 0.5), (0.5, 0.5, -0.5), (-0.5, 0.5, -0.5)]),
-    ((0, -1, 0), [(-0.5, -0.5, -0.5), (0.5, -0.5, -0.5), (0.5, -0.5, 0.5), (-0.5, -0.5, 0.5)]),
-    ((0, 0, 1), [(-0.5, -0.5, 0.5), (0.5, -0.5, 0.5), (0.5, 0.5, 0.5), (-0.5, 0.5, 0.5)]),
-    ((0, 0, -1), [(0.5, -0.5, -0.5), (-0.5, -0.5, -0.5), (-0.5, 0.5, -0.5), (0.5, 0.5, -0.5)]),
-]
-
-
-def cube():
-    positions, normals, indices = [], [], []
-    for n, quad in CUBE_FACES:
-        base = len(positions)
-        positions += quad
-        normals += [n] * 4
-        indices += [base, base + 1, base + 2, base, base + 2, base + 3]
-    return positions, normals, indices
-
-
-def sphere(lat=12, lon=16):
-    """A UV sphere of diameter 1, so a node's scale is the ball's diameter."""
-    positions, normals, indices = [], [], []
-    for i in range(lat + 1):
-        theta = math.pi * i / lat
-        for j in range(lon + 1):
-            phi = 2.0 * math.pi * j / lon
-            n = (math.sin(theta) * math.cos(phi), math.cos(theta), math.sin(theta) * math.sin(phi))
-            positions.append(tuple(0.5 * c for c in n))
-            normals.append(n)
-    for i in range(lat):
-        for j in range(lon):
-            a = i * (lon + 1) + j
-            b = a + lon + 1
-            indices += [a, a + 1, b, a + 1, b + 1, b]
-    return positions, normals, indices
-
 
 SHAPES = {"cube": cube(), "sphere": sphere()}
 
@@ -188,67 +147,6 @@ for i in range(8):
 trace("bus", (ROW_X[0] + 0.6, BUS_Z), (QX - QHALF - 0.3, BUS_Z))
 
 
-def pack(fmt, rows):
-    return b"".join(struct.pack(fmt, *row) for row in rows)
-
-
-def bounds(points):
-    return ([min(p[i] for p in points) for i in range(3)],
-            [max(p[i] for p in points) for i in range(3)])
-
-
-def gltf_of(pieces):
-    """Each shape packed once, one mesh per (shape, material), a node per piece."""
-    data, buffer_views, accessors = b"", [], []
-    shape_access = {}
-    for shape, (positions, normals, indices) in SHAPES.items():
-        chunks = [("POSITION", pack("<3f", positions), "VEC3", len(positions), bounds(positions),
-                   5126, 34962),
-                  ("NORMAL", pack("<3f", normals), "VEC3", len(normals), None, 5126, 34962),
-                  (None, pack("<H", [(i,) for i in indices]), "SCALAR", len(indices), None,
-                   5123, 34963)]
-        attributes = {}
-        for name, blob, kind, count, b, component, target in chunks:
-            buffer_views.append({"buffer": 0, "byteOffset": len(data), "byteLength": len(blob),
-                                 "target": target})
-            data += blob
-            accessor = {"bufferView": len(buffer_views) - 1, "componentType": component,
-                        "count": count, "type": kind}
-            if b:
-                accessor["min"], accessor["max"] = b
-            accessors.append(accessor)
-            if name:
-                attributes[name] = len(accessors) - 1
-        shape_access[shape] = (attributes, len(accessors) - 1)
-
-    materials = list(MATERIALS)
-    meshes, mesh_of = [], {}
-    for _, shape, material, *_ in pieces:
-        if (shape, material) not in mesh_of:
-            attributes, index = shape_access[shape]
-            mesh_of[(shape, material)] = len(meshes)
-            meshes.append({"name": f"{material}_{shape}", "primitives": [{
-                "attributes": attributes, "indices": index,
-                "material": materials.index(material)}]})
-    nodes = [{"name": name, "mesh": mesh_of[(shape, material)], "translation": list(centre),
-              "scale": list(size)} for name, shape, material, centre, size in pieces]
-    materials_out = [{"name": m, "pbrMetallicRoughness": {
-        "baseColorFactor": MATERIALS[m][0], "metallicFactor": MATERIALS[m][1],
-        "roughnessFactor": MATERIALS[m][2]}} for m in materials]
-    return {
-        "asset": {"version": "2.0", "generator": "gen_board_fixture.py"},
-        "scene": 0,
-        "scenes": [{"nodes": list(range(len(nodes)))}],
-        "nodes": nodes,
-        "meshes": meshes,
-        "materials": materials_out,
-        "accessors": accessors,
-        "bufferViews": buffer_views,
-        "buffers": [{"uri": "data:application/octet-stream;base64,"
-                     + base64.b64encode(data).decode("ascii"), "byteLength": len(data)}],
-    }
-
-
 def softbox(name, centre, size, nits):
     """An area panel at `centre`, `size` wide and tall (both mm), facing the board's middle."""
     aim = [a - c for a, c in zip((0.0, TOP, 0.0), centre)]
@@ -289,12 +187,6 @@ scene_desc = {
 }
 
 
-def write_json(name, obj):
-    with open(asset_path(name), "w") as f:
-        json.dump(obj, f, indent=1)
-        f.write("\n")
-
-
-write_json("board_fixture.gltf", gltf_of(pieces))
+write_json("board_fixture.gltf", gltf_of("gen_board_fixture.py", SHAPES, MATERIALS, pieces))
 write_json("board_fixture.cscn", scene_desc)
 print(f"wrote board_fixture (.gltf + .cscn), {len(pieces)} pieces")

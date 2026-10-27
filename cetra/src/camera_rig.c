@@ -155,7 +155,7 @@ static void _rig_derive(const CameraRig* rig, CameraRigPose* out) {
         glm_vec3_mulsubs(dir, arm, want_eye);
         const float clear = glm_clamp(rig->probe(rig->probe_user, look, want_eye, arm), 0.0f, 1.0f);
         if (clear * arm < arm)
-            arm = glm_max(clear * arm - rig->probe_skin * size, rig->min_dist);
+            arm = glm_max(clear * arm - rig->probe_skin, rig->min_dist);
     }
 
     glm_vec3_copy(look, out->eye);

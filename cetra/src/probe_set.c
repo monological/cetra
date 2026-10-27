@@ -18,10 +18,9 @@
 #include "util.h"
 #include "ext/log.h"
 
-// How much nearer a non-resident probe must be than a resident one to take its column, in
-// typical sizes, which the ranking measures in: a camera in a doorway between two rooms' probes
-// would otherwise trade the last column back and forth on every step, and each trade is an
-// upload.
+// How much nearer a non-resident probe must be than a resident one to take its column, x the
+// typical size: a camera in a doorway between two rooms' probes would otherwise trade the last
+// column back and forth on every step, and each trade is an upload.
 #define PROBE_STREAM_MARGIN 1.0f
 
 ReflectionProbeSet* create_reflection_probe_set(void) {
@@ -142,8 +141,9 @@ static void probe_set_rank(ReflectionProbeSet* set, const struct Engine* engine,
         glm_vec3_copy(engine->camera->position, eye);
     for (size_t i = 0; i < set->residency.count; ++i) {
         const AABB box = probe_box(set->probes[i]);
-        set->residency.items[i].distance = sqrtf(aabb_dist_sq(&box, eye)) / engine->typical_size;
+        set->residency.items[i].distance = sqrtf(aabb_dist_sq(&box, eye));
     }
+    set->residency.margin = PROBE_STREAM_MARGIN * engine->typical_size;
     residency_assign(&set->residency, atlas ? probe_keep_column : NULL, atlas);
 }
 

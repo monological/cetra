@@ -162,33 +162,37 @@ static void _material_gui_label(char* out, size_t out_size, const Material* mate
         snprintf(out, out_size, "%d: <unnamed>", index);
 }
 
-/*
- * A slider over a length (spec 13.57): `lo` and `hi` are its range at a typical size of a metre,
- * and both follow `size`. Under a tenth of a metre it reads in millimetres, where a board's 30 mm
- * light range would otherwise show as 0.0 m.
- */
+// The unit a length control reads in at a typical size of `size` (spec 13.57): metres, or under a
+// tenth of a metre millimetres, where a board's 30 mm light range would show as 0.0 m. Replaces
+// `fmt` for millimetres.
+static float _length_unit(float size, const char** fmt) {
+    if (size >= 0.1f)
+        return 1.0f;
+    *fmt = "%.3g mm";
+    return 1000.0f;
+}
+
+// A slider over a length: `lo` and `hi` are its range at a typical size of a metre, and follow it.
 static bool _length_slider(const char* label, float* metres, float lo, float hi, float size,
                            const char* fmt, ImGuiSliderFlags flags) {
-    if (size >= 0.1f)
-        return igSliderFloat(label, metres, lo * size, hi * size, fmt, flags);
-    float mm = *metres * 1000.0f;
-    if (!igSliderFloat(label, &mm, lo * size * 1000.0f, hi * size * 1000.0f, "%.3g mm", flags))
+    const float unit = _length_unit(size, &fmt);
+    float shown = *metres * unit;
+    if (!igSliderFloat(label, &shown, lo * size * unit, hi * size * unit, fmt, flags))
         return false;
-    *metres = mm * 0.001f;
+    *metres = shown / unit;
     return true;
 }
 
 // A drag over a position or an extent, by _length_slider's rules; `speed` is per pixel at a metre.
 static bool _length_drag3(const char* label, float* metres, float speed, float lo, float hi,
                           float size, const char* fmt) {
-    if (size >= 0.1f)
-        return igDragFloat3(label, metres, speed * size, lo * size, hi * size, fmt, 0);
-    vec3 mm;
-    glm_vec3_scale(metres, 1000.0f, mm);
-    if (!igDragFloat3(label, mm, speed * size * 1000.0f, lo * size * 1000.0f, hi * size * 1000.0f,
-                      "%.3g mm", 0))
+    const float unit = _length_unit(size, &fmt);
+    vec3 shown;
+    glm_vec3_scale(metres, unit, shown);
+    if (!igDragFloat3(label, shown, speed * size * unit, lo * size * unit, hi * size * unit, fmt,
+                      0))
         return false;
-    glm_vec3_scale(mm, 0.001f, metres);
+    glm_vec3_divs(shown, unit, metres);
     return true;
 }
 

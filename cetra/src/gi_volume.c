@@ -22,14 +22,13 @@
 #define IRR_PITCH (GI_IRRADIANCE_RES + 2 * GI_TILE_BORDER)
 #define VIS_PITCH (GI_VISIBILITY_RES + 2 * GI_TILE_BORDER)
 
-// How much nearer a non-resident volume must be than a resident one to take its slot, in
-// typical sizes, which the ranking measures in. A volume is a building's worth of grid, so a
-// camera between two buildings is the case this guards: without it the last slot changes hands
-// on every step.
+// How much nearer a non-resident volume must be than a resident one to take its slot, x the
+// typical size. A volume is a building's worth of grid, so a camera between two buildings is the
+// case this guards: without it the last slot changes hands on every step.
 #define GI_STREAM_MARGIN 2.0f
 
-// Capture near plane, x the typical size. Fixed rather than scene-scaled: a probe sits in open
-// space by construction (cell centres), and the depth it writes is only ever read back as a
+// Capture near plane, x the typical size, and not fitted to the scene's bounds: a probe sits in
+// open space by construction (cell centres), and the depth it writes is only ever read back as a
 // distance, so the near plane's only job is to not clip the room it is in.
 #define GI_NEAR_CLIP 0.05f
 
@@ -65,7 +64,7 @@ static void gi_arm(GIVolume* gi) {
 // concerned.
 static void gi_fit_planes(GIVolume* gi, float typical_size) {
     gi->near_clip = GI_NEAR_CLIP * typical_size;
-    gi->far_clip = gi->diagonal * 1.5f + 1.0f * typical_size;
+    gi->far_clip = gi->diagonal * 1.5f + typical_size;
     gi->fit_size = typical_size;
 }
 
@@ -572,9 +571,9 @@ static void gi_world_rank(GIWorld* world, const struct Engine* engine, const Lig
     for (size_t i = 0; i < world->residency.count; ++i) {
         const GIVolume* gi = world->volumes[i];
         const AABB box = gi_volume_box(gi);
-        world->residency.items[i].distance =
-            gi->failed ? -1.0f : sqrtf(aabb_dist_sq(&box, eye)) / engine->typical_size;
+        world->residency.items[i].distance = gi->failed ? -1.0f : sqrtf(aabb_dist_sq(&box, eye));
     }
+    world->residency.margin = GI_STREAM_MARGIN * engine->typical_size;
     GIKeep keep = {world, atlas};
     residency_assign(&world->residency, atlas ? gi_keep_slot : NULL, &keep);
     // Admitted with nothing kept, a volume's slot holds another's tiles: it sweeps from the start.

@@ -650,10 +650,10 @@ void engine_set_ss_scale(Engine* engine, int ss_scale);
 void engine_set_render_scale(Engine* engine, float render_scale);
 // The size, in metres, of the things the scene holds: 1 for people and rooms, 0.001 for a
 // circuit board (spec 13.57). Every length the engine chooses for itself -- how far an effect
-// looks, a bias, a floor -- is its metre value times this, and this writes the defaults the
-// engine owns that way: PostFX's (postfx_reset_lengths) and the installed camera's near and far.
-// The installed camera rig takes the size itself. An app sets the size first and its own values
-// after. Refused unless positive and finite.
+// looks, a bias, a floor -- is its metre value times this, and this writes PostFX's defaults that
+// way (postfx_reset_lengths) and hands the installed camera rig the size. A camera's planes stay
+// its owner's, or the engine's under Camera.fit_clip. An app sets the size first and its own
+// values after. Refused unless positive and finite.
 void engine_set_typical_size(Engine* engine, float metres);
 // Re-centre the world on the camera, snapped to `lattice` (spec 11.62). Applies
 // at the next frame top like the render-scale switch above, and only on X and Z.

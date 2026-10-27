@@ -309,7 +309,7 @@ int cscene_setup(RenderArgs* args, CetraSceneDesc** out_cscn) {
     if (args->fov_deg <= 0.0f && cscn->has_cam_fov) {
         args->fov_deg = cscn->cam_fov;
     }
-    if (args->typical_size <= 0.0f && cscn->has_typical_size) {
+    if (args->typical_size <= 0.0f && cscn->typical_size > 0.0f) {
         args->typical_size = cscn->typical_size;
     }
     if (cscn->cam_fit_clip)
@@ -1009,6 +1009,11 @@ void apply_cscene_trees(Engine* engine, Scene* scene, const CetraSceneDesc* cscn
  * volume's opening sweep if the scene has one. Returns false when the scene authored none,
  * which is what leaves the auto-placement path below untouched.
  */
+void probe_capture_planes(float radius, float typical_size, float* near_clip, float* far_clip) {
+    *near_clip = fmaxf(0.005f * radius, 0.01f * typical_size);
+    *far_clip = 10.0f * fmaxf(radius, typical_size);
+}
+
 bool apply_cscene_probes(Scene* scene, const CetraSceneDesc* cscn, int row0, float typical_size) {
     if (!scene || !cscn || cscn->probe_count <= 0)
         return false;
@@ -1044,9 +1049,8 @@ bool apply_cscene_probes(Scene* scene, const CetraSceneDesc* cscn, int row0, flo
         // is actually looking at.
         vec3 span;
         glm_vec3_sub(probe->box_max, probe->box_min, span);
-        const float radius = 0.5f * glm_vec3_norm(span);
-        probe->near_clip = fmaxf(0.005f * radius, 0.01f * typical_size);
-        probe->far_clip = 10.0f * fmaxf(radius, typical_size);
+        probe_capture_planes(0.5f * glm_vec3_norm(span), typical_size, &probe->near_clip,
+                             &probe->far_clip);
         probe->environment_only = p->env_only;
         const int n = (int)set->residency.count;
 

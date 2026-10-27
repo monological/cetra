@@ -1,4 +1,6 @@
 #include <cglm/cglm.h>
+#include <float.h>
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -42,8 +44,8 @@ Camera* create_camera(const CameraDesc* desc) {
 
     camera->aspect_ratio = 16.0f / 9.0f; // re-derived from the framebuffer each frame
     camera->fov_radians = desc->fov > 0.0f ? desc->fov : glm_rad(60.0f);
-    camera->near_clip = desc->near > 0.0f ? desc->near : CAMERA_NEAR_DEFAULT;
-    camera->far_clip = desc->far > 0.0f ? desc->far : CAMERA_FAR_DEFAULT;
+    camera->near_clip = desc->near > 0.0f ? desc->near : 0.1f;
+    camera->far_clip = desc->far > 0.0f ? desc->far : 1000.0f;
     camera->is_orthographic = desc->ortho_height > 0.0f;
     camera->ortho_height = desc->ortho_height;
 
@@ -114,4 +116,50 @@ void camera_projection_matrix(const Camera* camera, mat4 projection) {
 
     glm_perspective(camera->fov_radians, camera->aspect_ratio, camera->near_clip, camera->far_clip,
                     projection);
+}
+
+// A fitted camera's margins (spec 13.57): far past the farthest box, near short of the nearest.
+#define CLIP_FIT_FAR_MARGIN  1.1f
+#define CLIP_FIT_NEAR_MARGIN 0.9f
+
+void camera_clip_fit_begin(CameraClipFit* fit, const Camera* camera) {
+    *fit = (CameraClipFit){.nearest_depth = FLT_MAX, .nearest_dist_sq = FLT_MAX};
+    glm_vec3_copy((float*)camera->position, fit->eye);
+    camera_forward(camera, fit->forward);
+}
+
+void camera_clip_fit_add(CameraClipFit* fit, const AABB* box) {
+    // A box's depths span its centre's depth plus or minus its half-extent along |forward|.
+    vec3 centre, half, rel, reach;
+    glm_vec3_add((float*)box->min, (float*)box->max, centre);
+    glm_vec3_scale(centre, 0.5f, centre);
+    glm_vec3_sub((float*)box->max, (float*)box->min, half);
+    glm_vec3_scale(half, 0.5f, half);
+    glm_vec3_sub(centre, fit->eye, rel);
+    glm_vec3_abs(fit->forward, reach);
+    const float mid = glm_vec3_dot(rel, fit->forward);
+    const float spread = glm_vec3_dot(half, reach);
+    const float lo = mid - spread, hi = mid + spread;
+    if (hi <= 0.0f)
+        return;
+    fit->nearest_depth = fminf(fit->nearest_depth, fmaxf(lo, 0.0f));
+    fit->nearest_dist_sq = fminf(fit->nearest_dist_sq, aabb_dist_sq(box, fit->eye));
+    fit->farthest_depth = fmaxf(fit->farthest_depth, hi);
+}
+
+void camera_clip_fit_apply(Camera* camera, const CameraClipFit* fit) {
+    if (!(fit->farthest_depth > 0.0f))
+        return;
+    camera->far_clip = fit->farthest_depth * CLIP_FIT_FAR_MARGIN;
+    float nearest = fit->nearest_depth;
+    if (!camera->is_orthographic) {
+        // Inside the frustum a point's depth is at least its distance times the cosine of the
+        // frustum's corner ray, so the distance is a second bound, and the one that holds where a
+        // box reaching behind the eye takes the first to zero.
+        const float k = tanf(0.5f * camera->fov_radians);
+        const float k2 = k * k * (1.0f + camera->aspect_ratio * camera->aspect_ratio);
+        nearest = fmaxf(nearest, sqrtf(fit->nearest_dist_sq) / sqrtf(1.0f + k2));
+    }
+    camera->near_clip =
+        fmaxf(nearest * CLIP_FIT_NEAR_MARGIN, camera->far_clip / CAMERA_CLIP_RATIO_MAX);
 }

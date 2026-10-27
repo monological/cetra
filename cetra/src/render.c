@@ -1340,12 +1340,23 @@ static float _halton(int index, int base) {
 // water rather than as z-fighting. Two stand-in ground planes in one scene is
 // not a configuration to arbitrate; water is the more specific one, so it
 // wins and the catcher sits the frame out.
-static void _draw_shadow_catcher(Engine* engine, Scene* scene, mat4 view, mat4 projection,
-                                 RenderMode render_mode) {
+bool render_shadow_catcher_box(const Engine* engine, const Scene* scene, RenderMode render_mode,
+                               AABB* out) {
     if (!scene->shadow_catcher || water_will_draw(scene->water, engine, render_mode) ||
         !scene->shadow_system || !scene->shadow_system->enabled ||
         scene->shadow_system->directional_count == 0 || !engine->shadow_catcher_program ||
         !engine->catcher_vao)
+        return false;
+    // catcher_vert.glsl's quad: centred on the origin at y = 0, the dome's radius out.
+    const float r = scene->skybox_gp_radius;
+    *out = (AABB){{-r, 0.0f, -r}, {r, 0.0f, r}};
+    return true;
+}
+
+static void _draw_shadow_catcher(Engine* engine, Scene* scene, mat4 view, mat4 projection,
+                                 RenderMode render_mode) {
+    AABB quad;
+    if (!render_shadow_catcher_box(engine, scene, render_mode, &quad))
         return;
     profiler_scope_begin(engine->profiler, "shadow catcher");
     ShaderProgram* catcher = engine->shadow_catcher_program;

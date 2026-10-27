@@ -5,6 +5,7 @@
 #include <stdbool.h>
 #include <cglm/cglm.h>
 
+#include "aabb.h"         // AABB, for water_surface_box
 #include "common.h"       // RenderMode, for water_will_draw
 #include "shore_runup.h"  // ShoreRunupParams, for the CPU twin the film is driven by
 #include "water_bounds.h" // WaterDomain
@@ -780,6 +781,10 @@ float water_effective_steepness(const Water* water);
  * leaving the frame with no floor.
  */
 bool water_will_draw(const Water* water, const struct Engine* engine, RenderMode render_mode);
+
+// The water's surface as a flat box at its level over its bounds, or false for a sea with none,
+// whose projected grid reaches the horizon.
+bool water_surface_box(const Water* water, AABB* out);
 
 /*
  * Draw the surface into the currently bound scene FBO. Callers gate on
