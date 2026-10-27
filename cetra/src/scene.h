@@ -368,9 +368,9 @@ typedef struct Scene {
     bool render_skybox;
     float skybox_brightness;       // Linear env multiplier (tone mapping is the post pass's job)
     bool skybox_ground_projection; // Project env onto finite dome + ground
-    // The dome's radius, which the shadow catcher's quad also takes, and the HDR's capture
-    // height above the ground, in metres: SCENE_GP_RADIUS_DEFAULT and SCENE_GP_HEIGHT_DEFAULT,
-    // sized for rooms. A scene of another size sets them (spec 13.57).
+    // The dome's radius and the HDR's capture height above the ground, in metres:
+    // SCENE_GP_RADIUS_DEFAULT and SCENE_GP_HEIGHT_DEFAULT, sized for rooms. A scene of another
+    // size sets them (spec 13.57).
     float skybox_gp_radius;
     float skybox_gp_height;
     bool shadow_catcher;           // Ground plane receiving shadows over the skybox
@@ -600,24 +600,11 @@ void node_print(const SceneNode* node, int depth);
 void scene_print(const Scene* scene);
 
 // bounds
-void scene_bounds(Scene* scene, vec3 out_min, vec3 out_max);
-void scene_bounding_sphere(Scene* scene, vec3 out_center, float* out_radius);
+void scene_bounds(const Scene* scene, vec3 out_min, vec3 out_max);
+void scene_bounding_sphere(const Scene* scene, vec3 out_center, float* out_radius);
 
-// How deep the scene's mesh boxes lie in front of a viewpoint, for fitting clip planes (spec
-// 13.57): each mesh's box in world space, as scene_bounds builds it, at its rest bounds. A box
-// with no part in front of `eye` along unit `forward` is skipped. Of the rest it folds into
-// `range`, which it starts empty: the nearest depth along `forward` any reaches, clamped at 0;
-// the nearest straight-line distance from the eye to one, 0 for a box holding it; and the
-// farthest depth any reaches. False when no box is in front.
-typedef struct SceneDepthRange {
-    float nearest_depth;
-    float nearest_distance;
-    float farthest_depth;
-} SceneDepthRange;
-bool scene_depth_range(const Scene* scene, const vec3 eye, const vec3 forward,
-                       SceneDepthRange* range);
-// The same fold for one more box, for geometry with no mesh: false when it is all behind the eye.
-bool scene_depth_range_add(SceneDepthRange* range, const AABB* box, const vec3 eye,
-                           const vec3 forward);
+// Every mesh's world box, at its rest bounds, handed to `fn` -- the boxes scene_bounds unions.
+typedef void (*SceneBoxFn)(const AABB* box, void* user);
+void scene_for_each_mesh_box(const Scene* scene, SceneBoxFn fn, void* user);
 
 #endif // _SCENE_H_

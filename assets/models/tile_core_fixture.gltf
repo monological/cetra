@@ -44,7 +44,7 @@
  ],
  "meshes": [
   {
-   "name": "core_wall",
+   "name": "core_wall_cube",
    "primitives": [
     {
      "attributes": {
@@ -57,7 +57,7 @@
    ]
   },
   {
-   "name": "core_wax",
+   "name": "core_wax_cube",
    "primitives": [
     {
      "attributes": {

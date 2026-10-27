@@ -476,8 +476,7 @@ typedef struct MaterialParam {
     // packed form -- nothing else in this layer knows what a GUI is.
     const char* const* enum_labels;
     int enum_count;
-    // A length in metres, so the range an editor offers follows the typical size (spec 13.57).
-    bool length;
+    bool length; // true = a length in metres (spec 13.57)
 } MaterialParam;
 
 /*

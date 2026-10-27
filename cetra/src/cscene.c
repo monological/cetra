@@ -1,3 +1,4 @@
+#include <float.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -2052,18 +2053,6 @@ static void parse_camera(CetraSceneDesc* d, const cJSON* root) {
     warn_unknown_keys(cam, known, sizeof(known) / sizeof(known[0]), "camera");
 }
 
-static void parse_typical_size(CetraSceneDesc* d, const cJSON* root) {
-    float v = 0.0f;
-    if (!get_float(root, "typicalSize", &v))
-        return;
-    if (!(v > 0.0f && isfinite(v))) {
-        log_warn("cscene: typicalSize %g is not a positive length in metres; ignored", (double)v);
-        return;
-    }
-    d->has_typical_size = true;
-    d->typical_size = v;
-}
-
 CetraSceneDesc* cscene_load(const char* path) {
     char* text = read_entire_file(path, NULL);
     if (!text) {
@@ -2110,7 +2099,7 @@ CetraSceneDesc* cscene_load(const char* path) {
     parse_shader_hooks(d, root);
     parse_materials(d, root);
     parse_camera(d, root);
-    parse_typical_size(d, root);
+    _ranged_float(root, "scene", "typicalSize", FLT_MIN, FLT_MAX, &d->typical_size);
     cJSON_Delete(root);
 
     log_info("cscene '%s': model '%s', %d light(s), %d override(s), %d material(s)", path,

@@ -472,11 +472,12 @@ TWIN_PIN = ["--no-auto-exposure", "-E", "1.0"]
 # floor: its path holds no length of the engine's (no shadow map, AO, SSR or contact shadows),
 # so it must be 0 px whatever else is true. It is also run GROWN, since a floor written
 # max(x, metres) only bites a shrink: grown, it is the exactness argument checked alone.
+TWIN_CALIBRATE = TWIN_PIN + ["--no-shadows", "--no-ssao", "--no-ssr", "--cs-distance", "0"]
+# The framing two of the area-light rows share.
+TWIN_AREA_VIEW = ["--no-scene-file", "--cam-eye", "0,1.6,6", "--cam-target", "0,0.5,0"]
 TWIN_ROWS = [
-    ("calibrate", "dir_shadow_fixture.cscn",
-     TWIN_PIN + ["--no-shadows", "--no-ssao", "--no-ssr", "--cs-distance", "0"], 30, TWIN_K),
-    ("calibrate-grown", "dir_shadow_fixture.cscn",
-     TWIN_PIN + ["--no-shadows", "--no-ssao", "--no-ssr", "--cs-distance", "0"], 30, 1.0 / TWIN_K),
+    ("calibrate", "dir_shadow_fixture.cscn", TWIN_CALIBRATE, 30, TWIN_K),
+    ("calibrate-grown", "dir_shadow_fixture.cscn", TWIN_CALIBRATE, 30, 1.0 / TWIN_K),
     ("aerial", "aerial_fixture.cscn", TWIN_PIN, 30, TWIN_K),
     ("clouds", "aerial_fixture.cscn", TWIN_PIN + ["--clouds"], 30, TWIN_K),
     ("clouds-lowsun", "aerial_fixture.cscn", TWIN_PIN + ["--clouds", "--sun-elevation", "5"], 30,
@@ -496,11 +497,9 @@ TWIN_ROWS = [
     ("dir-shadow", "dir_shadow_fixture.cscn", TWIN_PIN, 30, TWIN_K),
     ("ortho-shadow", "dir_shadow_fixture.cscn", TWIN_PIN + ["--ortho", "12"], 30, TWIN_K),
     ("roughness-sweep", "area_light_fixture.gltf",
-     TWIN_PIN + ["--no-scene-file", "--cam-eye", "0,1.6,6", "--cam-target", "0,0.5,0",
-                 "--area-light", "0,2.2,1.2,0,-0.6,-0.8,2.0,0.7,30"], 2, TWIN_K),
+     TWIN_PIN + TWIN_AREA_VIEW + ["--area-light", "0,2.2,1.2,0,-0.6,-0.8,2.0,0.7,30"], 2, TWIN_K),
     ("backface-dark", "area_light_fixture.gltf",
-     TWIN_PIN + ["--no-scene-file", "--cam-eye", "0,1.6,6", "--cam-target", "0,0.5,0",
-                 "--area-light", "0,2.2,1.2,0,0.6,0.8,2.0,0.7,30"], 2, TWIN_K),
+     TWIN_PIN + TWIN_AREA_VIEW + ["--area-light", "0,2.2,1.2,0,0.6,0.8,2.0,0.7,30"], 2, TWIN_K),
     ("guard-thin-panel", "area_light_guard.gltf",
      TWIN_PIN + ["--no-scene-file", "--fov", "50.0",
                  "--cam-eye", "0.549,0.780,1.525", "--cam-target", "0.549,0.500,0.000",
@@ -524,23 +523,65 @@ TWIN_ROWS = [
       "--purkinje"], 30, TWIN_K),
     ("tile-core", "tile_core_fixture.cscn", TWIN_PIN, 30, TWIN_K),
 ]
-# The render app's flags whose argument states lengths: the comma-separated components a twin
-# multiplies by K, None for all of them.
-TWIN_LENGTH_FLAGS = {
-    "--cam-eye": None, "--cam-target": None, "--shadow-center": None,
+# The render app's flags the rows pass, by what their argument is: a switch takes none, a value
+# is unitless, and a length's comma-separated components are multiplied by K -- all of them, or
+# those a tuple names. A flag not here is refused, as a scene key is.
+TWIN_SWITCH, TWIN_VALUE, TWIN_LENGTH = "switch", "value", "length"
+TWIN_FLAGS = {
+    **dict.fromkeys(
+        ("--no-auto-exposure", "--no-shadows", "--no-ssao", "--no-ssr", "--clouds", "--fog",
+         "--no-aerial", "--cs-debug", "--no-pcss", "--translucent-shadows", "--gi-volume",
+         "--no-scene-file", "--no-bloom", "--no-sss", "--oit-moments", "--dof", "--no-dither",
+         "--no-vignette", "--purkinje"), TWIN_SWITCH),
+    **dict.fromkeys(
+        ("-E", "--sun-elevation", "--fov", "--dof-max-coc", "--dof-blades", "--dof-rotation",
+         "--flare", "--chromatic-aberration"), TWIN_VALUE),
+    **dict.fromkeys(
+        ("--cam-eye", "--cam-target", "--ortho", "--dof-focus", "--dof-range", "--cs-distance"),
+        TWIN_LENGTH),
     "--area-light": (0, 1, 2, 6, 7),  # px,py,pz,dx,dy,dz,w,h,I[,r,g,b]
-    "--ortho": None, "--dof-focus": None, "--dof-range": None, "--ao-radius": None,
-    "--cs-distance": None, "--fog-height": None, "--light-size": None,
 }
-# And whose argument is PER length, which a twin divides by K: extinction per metre.
-TWIN_PER_LENGTH_FLAGS = ("--fog-density",)
 # Flags that make the render app build a sky. --world-scale is another, which is why a twin
 # passes it only where its original already has one.
 TWIN_SKY_FLAGS = ("--sky", "--clouds", "--sun-elevation", "--sun-azimuth")
-# A material's lengths; every other material key a twin copies is a ratio, a colour or a name.
-TWIN_MATERIAL_LENGTHS = ("thickness", "attenuationDistance", "furLength")
+# How each block of a .cscn a twin walks is shrunk, key by key: LEN is a length, PER_LEN per
+# length (extinction per metre), KEEP neither, and a key in none of them is refused.
+TWIN_LEN, TWIN_PER_LEN, TWIN_KEEP = "len", "per_len", "keep"
+TWIN_LIGHT_KEYS = {
+    **dict.fromkeys(("position", "range", "size", "source_radius", "source_length",
+                     "shadow_near"), TWIN_LEN),
+    **dict.fromkeys(("name", "type", "color", "intensity", "intensity_unit", "direction", "up",
+                     "cone", "profile", "cast_shadows", "shadow_cache", "specular",
+                     "shadow_follow"), TWIN_KEEP),
+}
+TWIN_PROBE_KEYS = {**dict.fromkeys(("position", "boxMin", "boxMax"), TWIN_LEN),
+                   **dict.fromkeys(("intensity", "boxFade", "envOnly"), TWIN_KEEP)}
+TWIN_FOG_KEYS = {**dict.fromkeys(("near", "far"), TWIN_LEN), "density": TWIN_PER_LEN,
+                 **dict.fromkeys(("enabled", "anisotropy", "depthDistribution", "ambient"),
+                                 TWIN_KEEP)}
+# post's other blocks are exposure, tone and lens settings, none of them a length.
+TWIN_POST_KEEP = ("tonemap", "exposure", "auto_exposure", "camera", "render_scale", "flare",
+                  "bloom", "chromatic_aberration", "metering", "lut", "purkinje", "glare",
+                  "local_exposure")
+TWIN_SSS_KEYS = {"radius": TWIN_LEN, "color": TWIN_KEEP}
+TWIN_LAYER_KEYS = {"uvScale": TWIN_LEN, "albedo": TWIN_KEEP, "surface": TWIN_KEEP}
 # Material keys whose lengths a twin cannot reach: a shader's own numbers, and roads.
 TWIN_MATERIAL_REFUSED = ("roads", "shaderParams", "lateShader", "shaderHook")
+
+
+def _material_params():
+    """material.c's MATERIAL_PARAMS: every row's name, and the names of the rows marked lengths.
+
+    Read from the source rather than restated, so a length added there is shrunk by the twin
+    the day it is added rather than copied as a ratio.
+    """
+    with open(os.path.join(ROOT, "cetra", "src", "material.c")) as f:
+        src = f.read()
+    table = src[src.index("MATERIAL_PARAMS[] = {"):]
+    table = table[:table.index("\n};")]
+    names = set(re.findall(r'\{"(\w+)",\s*"', table))
+    lengths = set(re.findall(r'\{"(\w+)",[^{}]*\.length\s*=\s*true', table))
+    return names, lengths
 
 
 def _twin_scene(d, k):
@@ -560,23 +601,28 @@ def _twin_scene(d, k):
     def refuse(what):
         raise ValueError(f"the scale twin does not know how to shrink {what}")
 
+    def shrink(block, rules, where):
+        for sub in block:
+            rule = rules.get(sub)
+            if rule == TWIN_LEN:
+                block[sub] = times(block[sub])
+            elif rule == TWIN_PER_LEN:
+                block[sub] = times(block[sub], 1.0 / k)
+            elif rule != TWIN_KEEP and not sub.startswith("_"):
+                refuse(f"{where}.{sub}")
+
+    param_names, param_lengths = _material_params()
     for key in list(d):
         if key.startswith("_") or key in ("version", "models", "environment"):
             continue
         if key == "typicalSize":
             d[key] = times(d[key])
         elif key == "camera":
-            for sub in d["camera"]:
-                if sub in ("eye", "target"):
-                    d["camera"][sub] = times(d["camera"][sub])
-                elif sub not in ("fov", "fitClip"):
-                    refuse(f"camera.{sub}")
+            shrink(d["camera"], {"eye": TWIN_LEN, "target": TWIN_LEN, "fov": TWIN_KEEP,
+                                 "fitClip": TWIN_KEEP}, "camera")
         elif key == "lights":
             for light in d["lights"]:
-                for sub in ("position", "range", "size", "source_radius", "source_length",
-                            "shadow_near"):
-                    if sub in light:
-                        light[sub] = times(light[sub])
+                shrink(light, TWIN_LIGHT_KEYS, f"light {light.get('name')!r}")
                 if light.get("type", "point") in ("point", "spot"):
                     # Absent, the loader seeds it from an IES file's own candela, which the
                     # twin cannot reach.
@@ -585,47 +631,42 @@ def _twin_scene(d, k):
                     light["intensity"] *= k * k
         elif key == "probes":
             for probe in d["probes"]:
-                for sub in ("position", "boxMin", "boxMax"):
-                    probe[sub] = times(probe[sub])
+                shrink(probe, TWIN_PROBE_KEYS, "probe")
         elif key == "materials":
             for name, m in d["materials"].items():
                 if not isinstance(m, dict):
                     continue
+                where = f"materials.{name}"
                 for sub in m:
-                    if sub in TWIN_MATERIAL_LENGTHS:
-                        m[sub] = times(m[sub])
-                    elif sub in TWIN_MATERIAL_REFUSED:
-                        refuse(f"materials.{name}.{sub}")
+                    if sub in TWIN_MATERIAL_REFUSED:
+                        refuse(f"{where}.{sub}")
                     elif sub == "sss":
                         # Absent, the radius is the engine's default profile's.
                         if "radius" not in m["sss"]:
-                            refuse(f"materials.{name}.sss with no radius")
-                        m["sss"]["radius"] = times(m["sss"]["radius"])
+                            refuse(f"{where}.sss with no radius")
+                        shrink(m["sss"], TWIN_SSS_KEYS, f"{where}.sss")
                     elif sub == "layers":
                         for layer in m["layers"]:
                             if "uvScale" not in layer:
-                                refuse(f"a layer of materials.{name} with no uvScale")
-                            layer["uvScale"] = times(layer["uvScale"])
-                    elif sub == "splatDomain":
+                                refuse(f"a layer of {where} with no uvScale")
+                            shrink(layer, TWIN_LAYER_KEYS, f"a layer of {where}")
+                    elif sub in param_lengths or sub == "splatDomain":
                         m[sub] = times(m[sub])
+                    elif sub not in param_names and not sub.startswith("_"):
+                        refuse(f"{where}.{sub}")
         elif key == "post":
             for sub in d["post"]:
                 if sub == "fog":
-                    fog = d["post"]["fog"]
-                    if "density" in fog:
-                        fog["density"] = times(fog["density"], 1.0 / k)
-                    for far in ("near", "far"):
-                        if far in fog:
-                            fog[far] = times(fog[far])
-                elif sub == "passes":
-                    refuse("post.passes")
+                    shrink(d["post"]["fog"], TWIN_FOG_KEYS, "post.fog")
+                elif sub not in TWIN_POST_KEEP:
+                    refuse(f"post.{sub}")
         else:
             refuse(key)
 
 
 def _twin_flags(extra, k, sky, size):
-    """The render app's flags for the twin: lengths times `k`, the import, any `sky` and the
-    original's typical `size` with them.
+    """The render app's flags for the twin: lengths times `k`, with the import, any `sky`, and
+    a typical size where the scene states `size` none.
 
     A component is rescaled through repr, which a C strtod reads back as the same double, so
     the float the app stores is exactly K times the original's.
@@ -633,17 +674,22 @@ def _twin_flags(extra, k, sky, size):
     out, i = [], 0
     while i < len(extra):
         flag = extra[i]
+        kind = TWIN_FLAGS.get(flag)
+        if kind is None:
+            raise ValueError(f"the scale twin does not know how to shrink {flag}")
         out.append(flag)
-        if flag in TWIN_LENGTH_FLAGS or flag in TWIN_PER_LENGTH_FLAGS:
-            which = TWIN_LENGTH_FLAGS.get(flag)
-            f = 1.0 / k if flag in TWIN_PER_LENGTH_FLAGS else k
-            parts = extra[i + 1].split(",")
-            out.append(",".join(repr(float(p) * f) if which is None or j in which else p
-                                for j, p in enumerate(parts)))
-            i += 2
-            continue
         i += 1
-    out += ["--import-scale", repr(k), "--typical-size", repr(size * k)]
+        if kind == TWIN_SWITCH:
+            continue
+        arg = extra[i]
+        if kind != TWIN_VALUE:
+            arg = ",".join(repr(float(p) * k) if kind == TWIN_LENGTH or j in kind else p
+                           for j, p in enumerate(arg.split(",")))
+        out.append(arg)
+        i += 1
+    out += ["--import-scale", repr(k)]
+    if size is None:
+        out += ["--typical-size", repr(k)]
     return out + ["--world-scale", repr(1000.0 * k)] if sky else out
 
 
@@ -656,33 +702,44 @@ def run_scale_twin_gate(workdir):
     two differ in nothing but the twin's arithmetic.
     """
     failures = []
+    originals = {}  # (scene, flags, frames) -> the original leg, which two rows can share
+
+    def leg(name, tag, src, mutate, flags, frames):
+        path = src
+        if src.endswith(".cscn"):
+            path = cscn_copy(src, os.path.join(workdir, f"twin_{name}_{tag}.cscn"), mutate)
+        out = os.path.join(workdir, f"twin_{name}_{tag}.ppm")
+        err = render(path, out, flags, frames=frames)
+        if err:
+            print(f"  {name:<20} ERROR rendering leg {tag}: {err.strip()[-200:]}")
+            return None
+        return out
+
     for name, scene, extra, frames, k in TWIN_ROWS:
         src = asset(scene)
-        sky, size = any(f in TWIN_SKY_FLAGS for f in extra), 1.0
+        sky, size = any(f in TWIN_SKY_FLAGS for f in extra), None
         if src.endswith(".cscn"):
             with open(src) as f:
                 d = json.load(f)
             sky = sky or d.get("environment", {}).get("mode") == "sky"
-            size = d.get("typicalSize", size)
-        legs = []
-        for leg, factor in (("a", None), ("b", k)):
-            if src.endswith(".cscn"):
-                path = cscn_copy(src, os.path.join(workdir, f"twin_{name}_{leg}.cscn"),
-                                 (lambda d, f=factor: _twin_scene(d, f)) if factor else
-                                 (lambda d: None))
-            else:
-                path = src
-            flags = _twin_flags(extra, factor, sky, size) if factor else list(extra)
-            out = os.path.join(workdir, f"twin_{name}_{leg}.ppm")
-            err = render(path, out, flags, frames=frames)
-            if err:
-                print(f"  {name:<20} ERROR rendering leg {leg}: {err.strip()[-200:]}")
-                break
-            legs.append(out)
-        if len(legs) != 2:
+            size = d.get("typicalSize")
+        try:
+            twin_flags = _twin_flags(extra, k, sky, size)
+            key = (scene, tuple(extra), frames)
+            if key not in originals:
+                originals[key] = leg(name, "a", src, lambda d: None, list(extra), frames)
+            a = originals[key]
+            b = a and leg(name, "b", src, lambda d: _twin_scene(d, k), twin_flags, frames)
+        except ValueError as e:
+            print(f"  {name:<20} REFUSED  {e}")
             failures.append(name)
             continue
-        ae, pae = compare(*legs)
+        if not b:
+            failures.append(name)
+            continue
+        with open(a, "rb") as fa, open(b, "rb") as fb:
+            same = fa.read() == fb.read()
+        ae, pae = (0, 0.0) if same else compare(a, b)
         ok = ae == 0
         print(f"  {name:<20} {'PASS' if ok else 'FAIL'}  {ae} px, peak {pae * 255:.0f}/255")
         if not ok:
@@ -19603,9 +19660,6 @@ CONFIG_PERTURB_EXCEPTIONS = {
     "engine.msaa_samples": "engine_set_msaa_samples validates; 5 is not a sample count",
     "engine.render_scale": "clamped to [0.5, 1], and forced to 1 headless without jitter",
     "camera.near_clip": "render.c recomputes it every frame from the camera-to-target distance",
-    # Perturb turns camera.fit_clip on, and a fitted camera's planes are the engine's every
-    # frame (spec 13.57) -- its near too, which the row above already excuses for its own reason.
-    "camera.far_clip": "fit_clip is perturbed on, and the engine fits the far plane every frame",
     # This fixture runs without --clouds, so flipping the switch asks for a layer
     # whose noise bake -- a one-shot at startup -- never ran. Refused by name, and
     # config-clouds is the arm that reads both halves of that.
@@ -19641,6 +19695,13 @@ CONFIG_PERTURB_EXCEPTIONS = {
     "lights[sky_moon].intensity": "sky_update_moon rewrites the coupled moon light every "
                                   "frame, cycle or not",
 }
+
+# Switches that OWN other rows, as (block, key). The main perturb pass holds each at its value,
+# so the rows it owns are checked there, and a second restore flips it alone, which checks the
+# switch. Perturbed with the rest, a switch would excuse every row it owns.
+CONFIG_PERTURB_HELD = (
+    ("camera", "fit_clip"),  # a fitted camera's planes are the engine's every frame (spec 13.57)
+)
 
 
 def _config_perturb(node, top=True):
@@ -19764,10 +19825,27 @@ CONFIG_GUI_TABLE_DRIVEN = {
     "v": "the material editor's float/colour buffer: one control per MATERIAL_PARAMS row, "
          "written back through material_param_set, so the materials array carries it",
     "iv": "the same, for that editor's int and enum rows",
-    "metres": "the length helpers' own parameter (spec 13.57): each call site is counted by the "
-              "member it passes",
-    "mm": "the same helpers' millimetre buffer under a small typical size",
 }
+
+# gui.c's helpers that wrap one value widget over the member their caller passes as the second
+# argument. Their bodies are blanked before the widget scan, and their call sites are counted
+# instead -- a helper's own parameter names are not members of anything.
+CONFIG_GUI_HELPERS = ("_begin_effect_group", "_length_slider", "_length_drag3")
+
+
+def _config_gui_source():
+    """gui.c with the bodies of CONFIG_GUI_HELPERS' definitions blanked."""
+    src = open(os.path.join(ROOT, "cetra", "src", "gui.c")).read()
+    for name in CONFIG_GUI_HELPERS:
+        m = re.search(r'^static [^\n(]*\b' + name + r'\([^)]*\)\s*\{', src, re.M)
+        if not m:
+            continue
+        depth, end = 1, m.end()
+        while depth:
+            depth += {"{": 1, "}": -1}.get(src[end], 0)
+            end += 1
+        src = src[:m.end()] + src[end - 1:]
+    return src
 
 
 def _config_gui_widgets_unclassified():
@@ -19779,17 +19857,11 @@ def _config_gui_widgets_unclassified():
 
 def _config_gui_members():
     """Every struct member a gui.c control writes, by its trailing name."""
-    src = open(os.path.join(ROOT, "cetra", "src", "gui.c")).read()
-    widgets = (r'ig(?:' + "|".join(CONFIG_VALUE_WIDGETS) + r')'
-               r'\s*\(\s*(?:"[^"]*"|[\w\->\.]+)\s*,\s*&?([A-Za-z_][A-Za-z0-9_\->\.\[\]]*)')
-    found = [m.group(1) for m in re.finditer(widgets, src)]
-    # The effect-group helper is a checkbox too, and it owns every master switch; the two length
-    # helpers (spec 13.57) are a slider and a drag over the member each call site names.
-    found += [m.group(1) for m in
-              re.finditer(r'_begin_effect_group\(\s*"[^"]*"\s*,\s*&([A-Za-z_][\w\->\.\[\]]*)', src)]
-    found += [m.group(1) for m in
-              re.finditer(r'_length_(?:slider|drag3)\(\s*(?:"[^"]*"|[\w\->\.]+)\s*,\s*'
-                          r'&?([A-Za-z_][A-Za-z0-9_\->\.\[\]]*)', src)]
+    src = _config_gui_source()
+    calls = "|".join(["ig(?:" + "|".join(CONFIG_VALUE_WIDGETS) + ")", *CONFIG_GUI_HELPERS])
+    controls = (r'\b(?:' + calls + r')'
+                r'\s*\(\s*(?:"[^"]*"|[\w\->\.]+)\s*,\s*&?([A-Za-z_][A-Za-z0-9_\->\.\[\]]*)')
+    found = [m.group(1) for m in re.finditer(controls, src)]
     return {re.split(r'->|\.', re.sub(r'\[[^\]]*\]', '', e))[-1] for e in found}
 
 
@@ -19994,16 +20066,27 @@ def run_config_gate(workdir):
     # commonest defect there is: a row whose apply silently does nothing.
     # Measured when this arm was written: 4 rows were dead, at 0 px, silently.
     perturbed_json = os.path.join(workdir, "config_perturb_in.json")
+    held_json = os.path.join(workdir, "config_perturb_held.json")
     with open(orig_json) as f:
-        d = json.load(f)
+        orig = json.load(f)
+    d, flipped = json.loads(json.dumps(orig)), json.loads(json.dumps(orig))
     moved = _config_perturb(d)
-    with open(perturbed_json, "w") as f:
-        json.dump(d, f, indent=1)
-    _, back, _ = _config_run(workdir, "perturb", ["--config", perturbed_json], model=None)
+    for block, key in CONFIG_PERTURB_HELD:
+        d[block][key] = orig[block][key]
+        flipped[block][key] = not orig[block][key]
+    for path, doc in ((perturbed_json, d), (held_json, flipped)):
+        with open(path, "w") as f:
+            json.dump(doc, f, indent=1)
+    held = {f"{block}.{key}" for block, key in CONFIG_PERTURB_HELD}
     lost = []
-    if os.path.exists(back):
+    for tag, asked, path in (("perturb", d, perturbed_json), ("perturb_held", flipped, held_json)):
+        _, back, _ = _config_run(workdir, tag, ["--config", path], model=None)
+        if not os.path.exists(back):
+            break
         with open(back) as f:
-            lost = _config_diff_scalars(d, json.load(f))
+            diff = _config_diff_scalars(asked, json.load(f))
+        # The second restore asks only whether each held switch carries.
+        lost += diff if asked is d else [p for p in diff if p in held]
     unexpected = sorted(set(lost) - set(CONFIG_PERTURB_EXCEPTIONS))
     # An exception that starts surviving is also a finding: the note is then a
     # lie, and the list is the only thing standing between this arm and vacuity.

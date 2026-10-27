@@ -101,6 +101,9 @@ typedef struct CameraRig {
     CameraRigPose stated;
     vec3 stated_derive;
     float wide; // the smoothed arm response, 0..1
+    // Metres, Engine.typical_size (spec 13.57): the first-person threshold and aim follow it. 1
+    // until a rig is installed (engine_set_camera_rig).
+    float typical_size;
     // DERIVED from the near/far pairs and `wide` every update, and shortened by
     // the probe. They are here rather than under SETTINGS because the response
     // is their only writer: a caller storing into one would be a second writer
@@ -136,10 +139,6 @@ typedef struct CameraRig {
     // SETTINGS: plain stores. Write them directly, at any time.
     vec3 anchor;     // the point the rig is about; an app writes it each frame
     float look_lift; // the aim point above the anchor
-    // Metres: the size of what the scene holds (spec 13.57), which the first-person threshold,
-    // the first-person aim and `probe_skin` follow. 1 at creation; installing the rig, and
-    // changing the engine's size while it is installed, gives it the engine's.
-    float typical_size;
     float pitch_min, pitch_max;
     // Radians per second per unit of input, so a caller passes -1..1 from an
     // action or a stick and the rate lives here rather than in each app. These
@@ -192,9 +191,9 @@ typedef struct CameraRig {
     float max_dist;
 
     // Where an arm may be shortened to, once a probe has reported. `skin` backs
-    // off from the hit, in typical sizes; `min_dist` is the floor, because
-    // collapsing onto the anchor fills the frame with whatever the camera was
-    // following and starts clipping it through the near plane.
+    // off from the hit; `min_dist` is the floor, because collapsing onto the
+    // anchor fills the frame with whatever the camera was following and starts
+    // clipping it through the near plane.
     CameraRigProbeFn probe;
     void* probe_user;
     float probe_skin;

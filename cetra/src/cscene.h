@@ -739,8 +739,8 @@ typedef struct CetraSceneDesc {
     float cam_fov;     // vertical, degrees
     bool cam_fit_clip; // camera.fitClip (spec 13.57): Camera.fit_clip
 
-    // typicalSize (spec 13.57): metres, the size of what the scene holds (Engine.typical_size).
-    bool has_typical_size;
+    // typicalSize (spec 13.57): metres, the size of what the scene holds (Engine.typical_size);
+    // 0 = unset.
     float typical_size;
 } CetraSceneDesc;
 

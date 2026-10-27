@@ -1050,6 +1050,14 @@ bool water_will_draw(const Water* water, const struct Engine* engine, RenderMode
     return water_active(water) && engine && render_mode == RENDER_MODE_PBR && !engine->capturing;
 }
 
+bool water_surface_box(const Water* water, AABB* out) {
+    const float* b = water->domain.bounds;
+    if (water_bounds_everywhere(b))
+        return false;
+    *out = (AABB){{b[0], water->level, b[1]}, {b[2], water->level, b[3]}};
+    return true;
+}
+
 // One indexed lattice over [-0.5, 0.5]^2, positions only. The vertex stage reads it as
 // SCREEN space and casts a ray through each point onto the water plane, so this buffer
 // depends on neither the resolution nor the extent and is built once. No normals: a

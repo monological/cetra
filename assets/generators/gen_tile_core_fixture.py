@@ -23,49 +23,21 @@ cannot ask for, so a pixel's value divided by its unshadowed twin's is how much 
 Regenerate with: python3 assets/generators/gen_tile_core_fixture.py
 """
 
-import base64
-import json
-import struct
-from fixture_paths import asset_path, asset_ref
+from fixture_paths import asset_ref
+from gltf_pieces import cube, gltf_of, write_json
 
-# A unit cube centred on the origin, one quad per face so each face carries its own normal.
-FACES = [
-    ((1, 0, 0), [(0.5, -0.5, 0.5), (0.5, -0.5, -0.5), (0.5, 0.5, -0.5), (0.5, 0.5, 0.5)]),
-    ((-1, 0, 0), [(-0.5, -0.5, -0.5), (-0.5, -0.5, 0.5), (-0.5, 0.5, 0.5), (-0.5, 0.5, -0.5)]),
-    ((0, 1, 0), [(-0.5, 0.5, 0.5), (0.5, 0.5, 0.5), (0.5, 0.5, -0.5), (-0.5, 0.5, -0.5)]),
-    ((0, -1, 0), [(-0.5, -0.5, -0.5), (0.5, -0.5, -0.5), (0.5, -0.5, 0.5), (-0.5, -0.5, 0.5)]),
-    ((0, 0, 1), [(-0.5, -0.5, 0.5), (0.5, -0.5, 0.5), (0.5, 0.5, 0.5), (-0.5, 0.5, 0.5)]),
-    ((0, 0, -1), [(0.5, -0.5, -0.5), (-0.5, -0.5, -0.5), (-0.5, 0.5, -0.5), (0.5, 0.5, -0.5)]),
-]
-positions, normals, indices = [], [], []
-for n, quad in FACES:
-    base = len(positions)
-    positions += quad
-    normals += [n] * 4
-    indices += [base, base + 1, base + 2, base, base + 2, base + 3]
-
-
-def pack(fmt, rows):
-    return b"".join(struct.pack(fmt, *row) for row in rows)
-
-
-def bounds(points):
-    return ([min(p[i] for p in points) for i in range(3)],
-            [max(p[i] for p in points) for i in range(3)])
-
-
-# Name -> (base colour, roughness).
+# Name -> (base colour, metallic, roughness).
 MATERIALS = {
-    "core_wall": ([0.7, 0.7, 0.7, 1.0], 0.9),
-    "core_wax": ([0.85, 0.8, 0.7, 1.0], 0.5),
+    "core_wall": ([0.7, 0.7, 0.7, 1.0], 0.0, 0.9),
+    "core_wax": ([0.85, 0.8, 0.7, 1.0], 0.0, 0.5),
 }
 
 
 def box(name, material, lo, hi):
-    """A piece spanning world `lo` to `hi`, as the cube's node."""
+    """A piece spanning world `lo` to `hi`, as a cube's node."""
     centre = tuple((a + b) / 2 for a, b in zip(lo, hi))
     size = tuple(b - a for a, b in zip(lo, hi))
-    return (name, material, centre, size)
+    return (name, "cube", material, centre, size)
 
 
 CENTRE_Y = 1.0
@@ -80,58 +52,6 @@ PIECES = [
     box("rim", "core_wax", (-RIM_HALF, CENTRE_Y - RIM_HALF, RIM_FAR),
         (RIM_HALF, CENTRE_Y + RIM_HALF, RIM_NEAR)),
 ]
-
-CUBE_ATTRIBUTES = [
-    ("POSITION", pack("<3f", positions), "VEC3", len(positions), bounds(positions)),
-    ("NORMAL", pack("<3f", [map(float, n) for n in normals]), "VEC3", len(normals), None),
-]
-CUBE_INDICES = (pack("<H", [(i,) for i in indices]), len(indices))
-
-
-def gltf_of(pieces):
-    """The pieces as a glTF: the cube packed once, one mesh per material, a node per piece."""
-    data, buffer_views, accessors = b"", [], []
-    attributes = {}
-    chunks = [(name, blob, kind, count, b, 5126, 34962)
-              for name, blob, kind, count, b in CUBE_ATTRIBUTES]
-    chunks.append((None, CUBE_INDICES[0], "SCALAR", CUBE_INDICES[1], None, 5123, 34963))
-    for name, blob, kind, count, b, component, target in chunks:
-        buffer_views.append({"buffer": 0, "byteOffset": len(data), "byteLength": len(blob),
-                             "target": target})
-        data += blob
-        accessor = {"bufferView": len(buffer_views) - 1, "componentType": component,
-                    "count": count, "type": kind}
-        if b:
-            accessor["min"], accessor["max"] = b
-        accessors.append(accessor)
-        if name:
-            attributes[name] = len(accessors) - 1
-    index = len(accessors) - 1
-
-    materials = []
-    for _, material, *_ in pieces:
-        if material not in materials:
-            materials.append(material)
-    meshes = [{"name": m, "primitives": [{"attributes": attributes, "indices": index,
-                                          "material": i}]} for i, m in enumerate(materials)]
-    nodes = [{"name": name, "mesh": materials.index(material), "translation": list(centre),
-              "scale": list(size)} for name, material, centre, size in pieces]
-    materials_out = [{"name": m, "pbrMetallicRoughness": {
-        "baseColorFactor": MATERIALS[m][0], "metallicFactor": 0.0,
-        "roughnessFactor": MATERIALS[m][1]}} for m in materials]
-    return {
-        "asset": {"version": "2.0", "generator": "gen_tile_core_fixture.py"},
-        "scene": 0,
-        "scenes": [{"nodes": list(range(len(nodes)))}],
-        "nodes": nodes,
-        "meshes": meshes,
-        "materials": materials_out,
-        "accessors": accessors,
-        "bufferViews": buffer_views,
-        "buffers": [{"uri": "data:application/octet-stream;base64,"
-                     + base64.b64encode(data).decode("ascii"), "byteLength": len(data)}],
-    }
-
 
 scene_desc = {
     "version": 1,
@@ -155,12 +75,7 @@ scene_desc = {
 }
 
 
-def write_json(name, obj):
-    with open(asset_path(name), "w") as f:
-        json.dump(obj, f, indent=1)
-        f.write("\n")
-
-
-write_json("tile_core_fixture.gltf", gltf_of(PIECES))
+write_json("tile_core_fixture.gltf",
+           gltf_of("gen_tile_core_fixture.py", {"cube": cube()}, MATERIALS, PIECES))
 write_json("tile_core_fixture.cscn", scene_desc)
 print("wrote tile_core_fixture (.gltf + .cscn)")

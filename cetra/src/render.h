@@ -293,6 +293,10 @@ void render_light_overlay(Engine* engine, Scene* scene);
 // Whether this frame's list holds anything drawn in the late draw (spec 13.29).
 bool render_has_late_items(const Scene* scene);
 
+// The shadow catcher's quad in world space, or false when it does not draw in `render_mode`.
+bool render_shadow_catcher_box(const Engine* engine, const Scene* scene, RenderMode render_mode,
+                               AABB* out);
+
 // The scene's MATERIAL_PASS_LATE_DRAW meshes onto the late draw's canvas (spec 13.29), farthest
 // first, each through its own late surface program with the frame's depth, fog and clock bound
 // by name. Called from the late draw, so after this frame's list was built by the scene pass.

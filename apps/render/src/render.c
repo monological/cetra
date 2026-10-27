@@ -1,3 +1,4 @@
+#include <float.h>
 #include <limits.h>
 #include <math.h>
 #include <stdlib.h>
@@ -1869,15 +1870,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 return -1;
             }
         } else if (strcmp(argv[i], "--typical-size") == 0) {
-            if (++i >= argc) {
-                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+            if (_ranged_arg(argc, argv, &i, FLT_MIN, FLT_MAX, &args->typical_size) != 0)
                 return -1;
-            }
-            args->typical_size = (float)atof(argv[i]);
-            if (!(args->typical_size > 0.0f && isfinite(args->typical_size))) {
-                fprintf(stderr, "Error: --typical-size must be a positive length in metres\n");
-                return -1;
-            }
         } else if (strcmp(argv[i], "--fit-clip") == 0) {
             args->fit_clip = 1;
         } else if (strcmp(argv[i], "--no-unit-scale") == 0) {
@@ -4724,27 +4718,26 @@ int main(int argc, char** argv) {
     // it keeps framing and zoom range proportional at any model scale. An
     // explicit --ground still wins. 5x radius leaves headroom past the 2.5x
     // auto-framing distance (cap = 0.7 * 5 = 3.5x radius).
+    //
+    // The library's room-sized default, in typical sizes rather than metres (spec 13.57), stands
+    // where there is no dome too: the shadow catcher sizes its quad off this radius. Fitting it to
+    // the scene there, as the dome is, was measured in spec 11.22 to move contact_debug_golden by
+    // 1 px.
+    scene->skybox_gp_radius = SCENE_GP_RADIUS_DEFAULT * engine->typical_size;
     if (scene->render_skybox && scene->skybox_ground_projection) {
         // The single policy site for the dome geometry: an explicit arg wins,
-        // else scale to the scene, else keep the human-scale defaults. The
+        // else scale to the scene, else keep the default above. The
         // height tracks the radius at the defaults' 1.2/5 ratio -- a fixed
         // human-scale capture height against a scene-scaled dome squashes the
         // projection geometry and smears the panorama's floor into radial
         // streaks around large models.
-        scene->skybox_gp_radius = args.ground_radius > 0.0f ? args.ground_radius
-                                  : scene_radius > 0.0f
-                                      ? scene_radius * 5.0f
-                                      : SCENE_GP_RADIUS_DEFAULT * engine->typical_size;
+        if (args.ground_radius > 0.0f)
+            scene->skybox_gp_radius = args.ground_radius;
+        else if (scene_radius > 0.0f)
+            scene->skybox_gp_radius = scene_radius * 5.0f;
         scene->skybox_gp_height = args.ground_height > 0.0f
                                       ? args.ground_height
                                       : scene->skybox_gp_radius * (1.2f / 5.0f);
-    } else {
-        // The shadow catcher sizes its quad off this radius too, so with no dome
-        // it keeps the library's room-sized default in typical sizes rather than in
-        // metres (spec 13.57). Fitting it to the scene instead, as the dome is, was
-        // measured in spec 11.22 to move contact_debug_golden by 1 px, and is still
-        // not this branch's trade to make.
-        scene->skybox_gp_radius = SCENE_GP_RADIUS_DEFAULT * engine->typical_size;
     }
 
     // Fit the shadow frustum to the scene; the library default (ortho 2000)
@@ -5200,11 +5193,10 @@ int main(int argc, char** argv) {
 
             // Capture frustum: scene-scaled near, far past the dome so the
             // projected environment lands in the capture
-            const float size = engine->typical_size;
-            probe->near_clip = fmaxf(0.005f * scene_radius, 0.01f * size);
-            probe->far_clip = (scene->render_skybox && scene->skybox_ground_projection)
-                                  ? 2.0f * scene->skybox_gp_radius
-                                  : 10.0f * fmaxf(scene_radius, size);
+            probe_capture_planes(scene_radius, engine->typical_size, &probe->near_clip,
+                                 &probe->far_clip);
+            if (scene->render_skybox && scene->skybox_ground_projection)
+                probe->far_clip = 2.0f * scene->skybox_gp_radius;
             probe->environment_only = probe_env_only;
             // Installed uncaptured: the engine captures it in the first frame.
             // probe_set_add takes the probe whatever it answers, freeing it on failure.

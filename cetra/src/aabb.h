@@ -85,6 +85,13 @@ static inline float aabb_dist_sq(const AABB* box, const vec3 p) {
     return d;
 }
 
+// Corner `c` of a box, 0..7: bit 0 takes max x, bit 1 max y, bit 2 max z.
+static inline void aabb_corner(const AABB* box, int c, vec3 out) {
+    out[0] = (c & 1) ? box->max[0] : box->min[0];
+    out[1] = (c & 2) ? box->max[1] : box->min[1];
+    out[2] = (c & 4) ? box->max[2] : box->min[2];
+}
+
 // Whether two boxes share a point; boxes that only touch at a face do.
 static inline bool aabb_overlaps(const AABB* a, const AABB* b) {
     for (int i = 0; i < 3; ++i)

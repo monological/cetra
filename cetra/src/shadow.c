@@ -1723,9 +1723,9 @@ static void tile_block_free(ShadowTileBlock* block) {
     *block = tile_block_blank(block->first, block->cells);
 }
 
-// How much nearer a light without a block must be than one holding one to take it, in typical
-// sizes, which the ranking measures in: a camera between two candles would otherwise trade one
-// block between them on every step, and each trade redraws every face.
+// How much nearer a light without a block must be than one holding one to take it, x the typical
+// size: a camera between two candles would otherwise trade one block between them on every step,
+// and each trade redraws every face.
 #define TILE_STREAM_MARGIN 2.0f
 
 // How far a light's reach is from the camera: 0 inside its range.
@@ -1749,6 +1749,7 @@ static bool tiles_rank(ShadowSystem* ss, const Engine* engine, const Scene* scen
     if (!grow_array((void**)&ss->tile_rank, &ss->tile_rank_capacity, scene->light_count,
                     sizeof(ShadowTileRank), 16))
         return false;
+    ss->tile_rank_margin = TILE_STREAM_MARGIN * engine->typical_size;
     vec3 eye = {0.0f, 0.0f, 0.0f};
     if (engine->camera)
         glm_vec3_copy(engine->camera->position, eye);
@@ -1758,7 +1759,7 @@ static bool tiles_rank(ShadowSystem* ss, const Engine* engine, const Scene* scen
             continue;
         ss->tile_rank[ss->tile_rank_count++] = (ShadowTileRank){
             .light = light,
-            .distance = tile_light_distance(light, eye) / engine->typical_size,
+            .distance = tile_light_distance(light, eye),
             .order = (int)i,
             .block = tile_block_of(ss, light),
         };
@@ -1774,7 +1775,7 @@ static bool tile_rank_farther(const ShadowSystem* ss, size_t r, size_t* k) {
     if (*k <= r + 1)
         return false;
     --*k;
-    return ss->tile_rank[*k].distance > ss->tile_rank[r].distance + TILE_STREAM_MARGIN;
+    return ss->tile_rank[*k].distance > ss->tile_rank[r].distance + ss->tile_rank_margin;
 }
 
 // The ranked light holding a block with room for `cells` that the light ranked `r` may take it

@@ -285,8 +285,8 @@ static void _apply_ss_scale(ConfigApplyCtx* ctx, void* base, const ConfigField* 
     engine_set_ss_scale(ctx->engine, (int)v[0]);
 }
 
-// It writes PostFX's lengths and the camera's planes, so its row restores before theirs and
-// they then restore over the defaults it wrote. Only on a change, as the sun's angles: restored
+// It writes PostFX's lengths, so its row restores before theirs and they then restore over the
+// defaults it wrote. Only on a change, as the sun's angles: restored
 // onto the session it came from, it has nothing to write.
 static void _apply_typical_size(ConfigApplyCtx* ctx, void* base, const ConfigField* f,
                                 const double* v, int n) {

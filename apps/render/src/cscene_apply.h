@@ -82,6 +82,10 @@ void apply_cscene_trees(struct Engine* engine, Scene* scene, const CetraSceneDes
 // `typical_size` is the engine's, which the capture planes' floors follow.
 bool apply_cscene_probes(Scene* scene, const CetraSceneDesc* cscn, int row0, float typical_size);
 
+// A reflection probe's capture planes for what it sees out to `radius`: near a two-hundredth of it
+// and far ten times it, each held off a typical size's own floor.
+void probe_capture_planes(float radius, float typical_size, float* near_clip, float* far_clip);
+
 // GI volumes (spec 13.24), one grid per authored box. False when the file authored none.
 bool apply_cscene_gi_volumes(Scene* scene, const CetraSceneDesc* cscn);
 

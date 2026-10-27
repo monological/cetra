@@ -30,7 +30,7 @@ CameraDrag* create_camera_drag(Engine* engine, CameraRig* rig) {
     drag->sensitivity = 0.002f;
     drag->pan_per_unit = 0.0005f;
     drag->zoom_step = 0.9f;
-    drag->min_dist = 0.05f * engine->typical_size;
+    drag->min_dist = 0.05f;
     drag->auto_orbit_speed = 0.5f;
     drag->auto_orbit_min_dist = 2000.0f;
     drag->auto_orbit_max_dist = 3000.0f;
@@ -136,7 +136,7 @@ void camera_drag_on_scroll(CameraDrag* drag, double xoffset, double yoffset) {
     // unit along the view, and the DoF focus, the near clip and the distance cap
     // all start reading a one-unit subject. Reachable on a trackpad.
     const float want = drag->rig->dist * powf(drag->zoom_step, (float)yoffset);
-    camera_rig_set_distance(drag->rig, glm_max(want, drag->min_dist));
+    camera_rig_set_distance(drag->rig, glm_max(want, drag->min_dist * drag->engine->typical_size));
 }
 
 bool camera_drag_on_key(CameraDrag* drag, int key, int action, int mods) {
