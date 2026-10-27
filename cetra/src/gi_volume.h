@@ -95,6 +95,11 @@ typedef struct GIVolume {
     // squared moment is written. Derived from the grid, so it lives here rather
     // than being recomputed per sweep.
     float far_clip;
+    float near_clip;
+    float diagonal; // the grid's, which far_clip is fit from
+    // The typical size the two planes were fit for; gi_world_update fits them again, and sweeps
+    // again, when the engine's is another.
+    float fit_size;
 
     // Atlas rows the irradiance block takes in the volume's slot. Irradiance tiles occupy the
     // top rows and visibility the rest; both are addressed by probe index.

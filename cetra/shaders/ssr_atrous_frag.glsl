@@ -33,6 +33,8 @@ uniform int stepSize;          // Tap spacing in texels (1, 2, 4, ...)
 // 1D B3-spline [1/4, 1/2, 1/4]; the 2D kernel is the outer product.
 const float KERNEL[3] = float[3](0.25, 0.5, 0.25);
 
+#include "view.glsl"
+
 void main()
 {
     float centerZ = texture(linDepthTex, TexCoords).z;
@@ -43,7 +45,7 @@ void main()
 
     // Depth tolerance scales with the depth itself so the edge test is
     // scene-scale invariant (2% of view distance).
-    float zTol = 0.02 * abs(centerZ) + 1e-4;
+    float zTol = 0.02 * abs(centerZ) + 1e-4 * typicalSize;
 
     vec4 sum = vec4(0.0);
     float wSum = 0.0;

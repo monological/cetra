@@ -95,3 +95,11 @@ vec3 sceneLight(vec3 c)
 {
     return clamp(c, vec3(0.0), vec3(WS_SCENE_MAX));
 }
+
+// The aux buffer clears linear view Z to 0 where nothing drew, and every surface sits at -near
+// or deeper, so a Z at or above this is the sky: a tenth of a millimetre at a typical size of a
+// metre.
+float skyLinZ()
+{
+    return -1e-4 * typicalSize;
+}

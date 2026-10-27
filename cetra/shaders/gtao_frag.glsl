@@ -58,7 +58,7 @@ const float HALF_PI = 1.57079632679;
 const int SLICES = 2;                 // Screen-space sweep directions
 const int STEPS = 8;                  // Horizon-march samples per side
 const uint SECTOR_COUNT = 32u;        // Bits in the visibility mask
-const float THICKNESS = 0.25;         // Assumed view-space depth of an occluder
+const float THICKNESS = 0.25;         // Assumed depth of an occluder, x typicalSize
 const float MAX_SCREEN_RADIUS = 0.08; // Clamp UV reach so near geometry can't thrash
 const float HEIGHT_BIAS = 0.04;       // Min sin(elevation) a sample needs to count as an occluder
 
@@ -157,7 +157,7 @@ void main()
     // reconstructed neighbor carries up to ~a texel of depth-slope as phantom
     // "height". Computed before any divergent branch (derivative rules).
     float zGrain = fwidth(linZ);
-    if (linZ >= -1e-4) {
+    if (linZ >= skyLinZ()) {
         // Sky / background: the aux buffer clears to 0 there (opaque geometry
         // always has linear Z <= -near < 0). Fully unoccluded, no bounce. The
         // bent normal is view-facing: the consumer's zero-normal guard returns
@@ -268,12 +268,12 @@ void main()
                 if (sUV.x < 0.0 || sUV.x > 1.0 || sUV.y < 0.0 || sUV.y > 1.0)
                     continue;
                 float sZ = texture(linDepthTex, sUV).z;
-                if (sZ >= -1e-4)
+                if (sZ >= skyLinZ())
                     continue; // sky / background sample
 
                 vec3 sVec = viewPosFromLinZ(sUV, sZ) - P;
                 float len = length(sVec);
-                if (len < 1e-4 || len > radius)
+                if (len < 1e-4 * typicalSize || len > radius)
                     continue;
 
                 // Skip samples at/below the tangent plane. On a flat surface seen
@@ -291,7 +291,7 @@ void main()
                 // camera by THICKNESS) give the finite angular slab it blocks.
                 float aFront = sign(dot(sVec, tangent)) *
                                acos(clamp(dot(sVec, V) / len, -1.0, 1.0));
-                vec3 backVec = sVec - V * THICKNESS;
+                vec3 backVec = sVec - V * (THICKNESS * typicalSize);
                 float aBack = sign(dot(backVec, tangent)) *
                               acos(clamp(dot(normalize(backVec), V), -1.0, 1.0));
 

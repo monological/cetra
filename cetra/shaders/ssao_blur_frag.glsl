@@ -20,6 +20,8 @@ uniform sampler2D auxTex; // Aux G-buffer; .z = linear view-Z (< 0), 0 = sky
 uniform vec2 texelSize;
 uniform int edgeAware; // 1 = depth-bilateral; 0 = plain box (byte-identical legacy)
 
+#include "view.glsl"
+
 void main()
 {
     // A weighted 4x4 box. edgeAware == 0 pins every weight to 1.0 -> the plain box
@@ -30,7 +32,7 @@ void main()
     // the depth cliff onto the floor ("dripping"); within a surface the weights
     // are ~uniform, so the noise tile still cancels, only the cliff is rejected.
     float zc = texture(auxTex, TexCoords).z;
-    float tol = max(0.05 * abs(zc), 0.02);
+    float tol = max(0.05 * abs(zc), 0.02 * typicalSize);
     float result = 0.0;
     vec3 bentSum = vec3(0.0);
     float wsum = 0.0;

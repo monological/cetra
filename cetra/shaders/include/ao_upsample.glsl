@@ -20,6 +20,8 @@
 // arrangement, which is what lets two programs with different unit ledgers
 // share one expression.
 
+#include "view.glsl"
+
 // The depth a half-res AO texel was computed from.
 //
 // GTAO reads the FULL-res aux with NEAREST (postfx.c forces the filter), so an
@@ -55,7 +57,7 @@ vec4 aoFetchBilateral(sampler2D aoT, sampler2D auxT, vec2 uv, vec2 aoRes, float 
     // agree on where the depth buffer stops meaning anything -- and an unbound
     // auxTex reads 0, which lands here too and leaves the plain filtered answer
     // this function replaces.
-    if (zRef >= -1e-4)
+    if (zRef >= skyLinZ())
         return texture(aoT, uv);
 
     vec2 st = uv * aoRes - 0.5;
@@ -66,7 +68,7 @@ vec4 aoFetchBilateral(sampler2D aoT, sampler2D auxT, vec2 uv, vec2 aoRes, float 
     // The blur's tolerance, verbatim: proportional to depth because view-Z
     // precision and surface slope both scale with distance, floored so a
     // surface at the near plane still admits its own neighbours.
-    float tol = max(0.05 * abs(zRef), 0.02);
+    float tol = max(0.05 * abs(zRef), 0.02 * typicalSize);
 
     vec4 sum = vec4(0.0);
     float wsum = 0.0;

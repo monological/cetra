@@ -128,10 +128,10 @@ const float PI = 3.14159265359;
 #include "view.glsl"
 // A cached point light's faces (spec 13.16), read through punctualShadowMaps above.
 #include "tile_lookup.glsl"
-// How far nearer the light than a cell of air a stored surface must be to shadow it, in
-// metres: a cell has no surface of its own to be acne on, so this need only clear the
+// How far nearer the light than a cell of air a stored surface must be to shadow it, x
+// typicalSize: a cell has no surface of its own to be acne on, so this need only clear the
 // stored depth's quantisation and the faces' polygon offset.
-#define FOG_TILE_BIAS 0.02
+#define FOG_TILE_BIAS (0.02 * typicalSize)
 
 // Van der Corput radical inverse in the given base: successive frames land at
 // low-discrepancy positions, so a fixed number of them average to an evenly

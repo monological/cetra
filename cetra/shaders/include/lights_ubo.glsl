@@ -11,6 +11,8 @@
 // Inverse, for volume passes marching the same slices (froxel fog, B1):
 //   z(s) = near * pow(far/near, s / CLUSTER_Z)
 
+#include "view.glsl" // typicalSize, getDistanceAtt's near floor
+
 const int CLUSTER_X = 16;
 const int CLUSTER_Y = 8;
 const int CLUSTER_Z = 24;
@@ -314,8 +316,9 @@ bool punctualNeedsFrame(uint li) {
 // live curve -- squared, so it lands C1 and the cutoff has no visible edge.
 //
 // invSqrAttRadius is 1/range^2, precomputed on the CPU into attenCutoff.x; 0
-// means unbounded. The near floor is a 1 cm sphere, since 1/d^2 is singular at
-// the light's own position and one INF pixel survives every clamp downstream.
+// means unbounded. The near floor is a sphere of a hundredth of the typical size, a
+// centimetre at one metre, since 1/d^2 is singular at the light's own position and one INF
+// pixel survives every clamp downstream.
 //
 // rangeFade is the window's root, and the window is its square. Split out for
 // an area panel, whose LTC integral carries its own falloff and takes the
@@ -326,7 +329,7 @@ float rangeFade(float sqrDist, float invSqrAttRadius) {
 }
 
 float getDistanceAtt(float sqrDist, float invSqrAttRadius) {
-    float atten = 1.0 / max(sqrDist, 1e-4);
+    float atten = 1.0 / max(sqrDist, 1e-4 * typicalSize * typicalSize);
     float smoothFactor = rangeFade(sqrDist, invSqrAttRadius);
     return atten * smoothFactor * smoothFactor;
 }

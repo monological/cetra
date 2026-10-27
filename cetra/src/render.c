@@ -2016,6 +2016,7 @@ void engine_render_scene(Engine* engine, Scene* scene) {
         glm_mat4_copy(draw_projection, pctx.proj);
         pctx.scene = scene;
         pctx.scene_depth_texture = particle_depth;
+        pctx.typical_size = engine->typical_size;
         for (size_t i = 0; i < scene->particle_system_count; i++)
             particle_system_render(scene->particle_systems[i], &pctx);
         glDepthMask(GL_TRUE);

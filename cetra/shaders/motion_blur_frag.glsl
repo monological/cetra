@@ -17,9 +17,10 @@ uniform float scale;              // Shutter: velocity multiplier (motion_blur_s
 uniform float maxBlurPx;          // Blur-radius clamp = MOTION_BLUR_TILE (neighbor-max reach)
 
 const int SAMPLES = 16;
-const float SOFT_Z = 1.0; // soft depth-compare extent (view-space units)
+const float SOFT_Z = 1.0; // soft depth-compare extent, x typicalSize
 
 #include "noise.glsl"
+#include "view.glsl"
 
 // aux .z is view-space Z (negative in front); sky/uncovered texels are cleared
 // to 0 (no geometry). Map those to "infinitely far" so a moving foreground
@@ -31,7 +32,7 @@ float viewDist(float z) {
 
 // 1 when a is (softly) in front of b, 0 behind. Distances are POSITIVE.
 float zCompare(float a, float b) {
-    return clamp(1.0 - (a - b) / SOFT_Z, 0.0, 1.0);
+    return clamp(1.0 - (a - b) / (SOFT_Z * typicalSize), 0.0, 1.0);
 }
 
 // Full weight at the tap, falling to 0 as the offset reaches the blur length.

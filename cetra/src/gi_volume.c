@@ -23,9 +23,15 @@
 #define VIS_PITCH (GI_VISIBILITY_RES + 2 * GI_TILE_BORDER)
 
 // How much nearer a non-resident volume must be than a resident one to take its slot, in
-// metres. A volume is a building's worth of grid, so a camera between two buildings is
-// the case this guards: without it the last slot changes hands on every step.
+// typical sizes, which the ranking measures in. A volume is a building's worth of grid, so a
+// camera between two buildings is the case this guards: without it the last slot changes hands
+// on every step.
 #define GI_STREAM_MARGIN 2.0f
+
+// Capture near plane, x the typical size. Fixed rather than scene-scaled: a probe sits in open
+// space by construction (cell centres), and the depth it writes is only ever read back as a
+// distance, so the near plane's only job is to not clip the room it is in.
+#define GI_NEAR_CLIP 0.05f
 
 static int gi_probe_count(const GIVolume* gi) {
     return gi->counts[0] * gi->counts[1] * gi->counts[2];
@@ -54,7 +60,16 @@ static void gi_arm(GIVolume* gi) {
     gi->next_probe = 0;
 }
 
-// The grid over a box: cell centres, a far plane the diagonal clears, and a full sweep armed.
+// The capture planes for a typical size. A probe sees the whole volume, so far is the diagonal
+// plus headroom -- anything past it is "nothing hit" as far as the visibility moments are
+// concerned.
+static void gi_fit_planes(GIVolume* gi, float typical_size) {
+    gi->near_clip = GI_NEAR_CLIP * typical_size;
+    gi->far_clip = gi->diagonal * 1.5f + 1.0f * typical_size;
+    gi->fit_size = typical_size;
+}
+
+// The grid over a box: cell centres, planes for a typical size of a metre, and a full sweep armed.
 static void gi_fit(GIVolume* gi, const vec3 aabb_min, const vec3 aabb_max) {
     for (int c = 0; c < 3; ++c) {
         float extent = aabb_max[c] - aabb_min[c];
@@ -63,11 +78,10 @@ static void gi_fit(GIVolume* gi, const vec3 aabb_min, const vec3 aabb_max) {
         gi->spacing[c] = extent / (float)gi->counts[c];
         gi->grid_min[c] = aabb_min[c];
     }
-    // A probe sees the whole volume, so the diagonal plus headroom -- anything
-    // past this is "nothing hit" as far as the visibility moments are concerned.
     vec3 extent = {0};
     glm_vec3_sub((float*)aabb_max, (float*)aabb_min, extent);
-    gi->far_clip = glm_vec3_norm(extent) * 1.5f + 1.0f;
+    gi->diagonal = glm_vec3_norm(extent);
+    gi_fit_planes(gi, 1.0f);
     gi_arm(gi);
 }
 
@@ -207,11 +221,6 @@ static void gi_probe_position(const GIVolume* gi, int index, vec3 out) {
     out[2] = gi->grid_min[2] + ((float)iz + 0.5f) * gi->spacing[2];
 }
 
-// Capture near plane. Fixed rather than scene-scaled: a probe sits in open space
-// by construction (cell centres), and the depth it writes is only ever read back
-// as a distance, so the near plane's only job is to not clip the room it is in.
-#define GI_NEAR_CLIP 0.05f
-
 // What a projection writes: gi_project_frag's three modes.
 enum { GI_PROJECT_IRRADIANCE = 0, GI_PROJECT_VISIBILITY = 1, GI_PROJECT_CLASSIFY = 2 };
 
@@ -256,7 +265,7 @@ static void gi_project_tile(GIVolume* gi, const LightingAtlas* atlas, AtlasRect 
     uniform_set_int(u, "backDepth", 2);
     uniform_set_vec2(u, "tileOrigin", (const float[]){(float)ox, (float)oy});
     uniform_set_float(u, "tileRes", (float)res);
-    uniform_set_float(u, "nearZ", GI_NEAR_CLIP);
+    uniform_set_float(u, "nearZ", gi->near_clip);
     uniform_set_float(u, "farZ", gi->far_clip);
     uniform_set_int(u, "mode", mode);
     // The irradiance tile's alpha is the classification's: written by the opening sweep, never
@@ -363,7 +372,7 @@ static int gi_volume_sweep(GIVolume* gi, struct Engine* engine, struct Scene* sc
         gi_probe_position(gi, probe, pos);
         double t0 = gi_clock_start(timing);
         scene_capture_faces(engine, scene, scene->ibl, pos, gi->capture_color, gi->capture_depth,
-                            GI_CAPTURE_FACE, GI_NEAR_CLIP, gi->far_clip, SCENE_FACES_SHADED, 0, 6);
+                            GI_CAPTURE_FACE, gi->near_clip, gi->far_clip, SCENE_FACES_SHADED, 0, 6);
         gi_clock_stop(timing, t0, GI_PART_SHADED);
         static const int lit[] = {GI_PROJECT_IRRADIANCE, GI_PROJECT_VISIBILITY};
         gi_project(gi, atlas, slot, probe, lit, 2, hysteresis, timing);
@@ -377,7 +386,7 @@ static int gi_volume_sweep(GIVolume* gi, struct Engine* engine, struct Scene* sc
         if (gi->classify && opening) {
             t0 = gi_clock_start(timing);
             scene_capture_faces(engine, scene, scene->ibl, pos, gi->capture_color,
-                                gi->classify_depth, GI_CAPTURE_FACE, GI_NEAR_CLIP, gi->far_clip,
+                                gi->classify_depth, GI_CAPTURE_FACE, gi->near_clip, gi->far_clip,
                                 SCENE_FACES_BACK_DEPTH, 0, 6);
             gi_clock_stop(timing, t0, GI_PART_CLASSIFY);
             static const int wall[] = {GI_PROJECT_CLASSIFY};
@@ -563,7 +572,8 @@ static void gi_world_rank(GIWorld* world, const struct Engine* engine, const Lig
     for (size_t i = 0; i < world->residency.count; ++i) {
         const GIVolume* gi = world->volumes[i];
         const AABB box = gi_volume_box(gi);
-        world->residency.items[i].distance = gi->failed ? -1.0f : sqrtf(aabb_dist_sq(&box, eye));
+        world->residency.items[i].distance =
+            gi->failed ? -1.0f : sqrtf(aabb_dist_sq(&box, eye)) / engine->typical_size;
     }
     GIKeep keep = {world, atlas};
     residency_assign(&world->residency, atlas ? gi_keep_slot : NULL, &keep);
@@ -579,6 +589,15 @@ void gi_world_update(GIWorld* world, struct Engine* engine, struct Scene* scene,
                      CaptureBudget* budget) {
     if (!world || !world->enabled || world->residency.count == 0 || !engine || !scene)
         return;
+    // Before anything is keyed, fetched or captured: a volume's planes follow the typical size,
+    // and texels captured through other planes are not this volume's light.
+    for (size_t i = 0; i < world->residency.count; ++i) {
+        GIVolume* gi = world->volumes[i];
+        if (gi->fit_size != engine->typical_size) {
+            gi_fit_planes(gi, engine->typical_size);
+            gi_arm(gi);
+        }
+    }
     gi_world_rank(world, engine, scene->lighting_atlas);
     Residency* res = &world->residency;
     bool work = false;

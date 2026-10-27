@@ -11,7 +11,7 @@
 // per-renderer fields if a second emitter needs a different look.
 #define PARTICLE_HDR_GAIN       6.0f  // push color >1.0 so bloom haloes the motes
 #define PARTICLE_AMBIENT_FLOOR  0.18f // brightness of motes in full shadow
-#define PARTICLE_SOFT_FADE_DIST 0.5f  // world-space soft-particle fade band
+#define PARTICLE_SOFT_FADE_DIST 0.5f  // soft-particle fade band, x the typical size
 #define PARTICLE_DEPTH_UNIT     7     // free sampler unit for the resolved scene depth
 #define PARTICLE_SPRITE_UNIT    8     // free sampler unit for the optional sprite
 
@@ -176,7 +176,7 @@ static void billboard_draw(ParticleRenderer* r, const ParticleInstanceView* view
         glBindTexture(GL_TEXTURE_2D, ctx->scene_depth_texture);
         uniform_set_int(u, "sceneDepth", PARTICLE_DEPTH_UNIT);
         uniform_set_int(u, "uSoftEnabled", 1);
-        uniform_set_float(u, "softDist", PARTICLE_SOFT_FADE_DIST);
+        uniform_set_float(u, "softDist", PARTICLE_SOFT_FADE_DIST * ctx->typical_size);
     } else {
         uniform_set_int(u, "uSoftEnabled", 0);
     }

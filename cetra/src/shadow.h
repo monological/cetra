@@ -235,7 +235,7 @@ typedef struct ShadowTileSeen {
 // A cached light in the frame's ranking.
 typedef struct ShadowTileRank {
     struct Light* light;
-    float distance; // from the camera to its reach, 0 inside it
+    float distance; // from the camera to its reach, 0 inside it, in typical sizes
     int order;      // its index in the scene's lights, which breaks a tie in distance
     int block;      // the block it holds this frame, -1 for none
 } ShadowTileRank;
@@ -619,9 +619,12 @@ typedef struct CascadeCamera {
 // the texel and the snap stops holding edges still, which is the shimmer it
 // exists to prevent. Pass the scene centre; the origin reproduces the arithmetic
 // from before it was a parameter.
+//
+// typical_size is Engine.typical_size, which the box's near plane follows.
 void compute_cascade_light_space_matrix(vec3 direction, const CascadeCamera* cam, float slice_near,
                                         float slice_far, float scene_pad, int map_size,
-                                        vec3 snap_anchor, mat4 dest, vec4 out_params);
+                                        vec3 snap_anchor, float typical_size, mat4 dest,
+                                        vec4 out_params);
 
 // Upload the cascade uniform contract (cascadeCount, cascadeSplits, and the
 // count-strided lightSpaceMatrix/cascadeParams layers as ranged array

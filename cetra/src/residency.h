@@ -46,7 +46,8 @@ typedef enum ResidencyState {
 
 typedef struct ResidencyItem {
     // SETTINGS: the kind writes it before each assignment.
-    float distance; // from the camera to the item's box; negative = may not be resident
+    float distance; // from the camera to the item's box, in the margin's unit; negative = may not
+                    // be resident
 
     // ENGINE-OWNED: read, never write; residency_loaded is how a kind says its texels are in.
     int slot;   // the slot held, or -1
@@ -65,7 +66,7 @@ typedef struct Residency {
     size_t capacity;
     int slots;                       // how many there are, at most RESIDENCY_SLOTS_MAX
     int holder[RESIDENCY_SLOTS_MAX]; // each slot's item, or -1
-    float margin;                    // metres nearer a challenger must be
+    float margin;                    // how much nearer a challenger must be, in the kind's unit
 } Residency;
 
 // Read a LOADED item's texels out of the slot it is about to give up: NULL keeps nothing, and
