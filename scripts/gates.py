@@ -475,6 +475,16 @@ TWIN_PIN = ["--no-auto-exposure", "-E", "1.0"]
 TWIN_CALIBRATE = TWIN_PIN + ["--no-shadows", "--no-ssao", "--no-ssr", "--cs-distance", "0"]
 # The framing two of the area-light rows share.
 TWIN_AREA_VIEW = ["--no-scene-file", "--cam-eye", "0,1.6,6", "--cam-target", "0,0.5,0"]
+# The circuit board at true scale (gen_board_fixture.py) in its three views: the scene file's
+# three-quarter camera, the whole board, and 2 mm from an 0402. Its golden is the first.
+BOARD_VIEWS = {
+    "quarter": [],
+    "whole": ["--cam-eye", "0,0.11,0.075", "--cam-target", "0,0,0.004"],
+    "close": ["--cam-eye", "-0.00897,0.00292,0.01329", "--cam-target", "-0.01,0.0018,0.012"],
+}
+# Its exposure, pinned where auto-exposure settles on the three-quarter view, and the contact
+# shadows a board's pictures take.
+BOARD_LOOK = ["--no-auto-exposure", "-E", "0.0088", "--contact-shadows"]
 TWIN_ROWS = [
     ("calibrate", "dir_shadow_fixture.cscn", TWIN_CALIBRATE, 30, TWIN_K),
     ("calibrate-grown", "dir_shadow_fixture.cscn", TWIN_CALIBRATE, 30, 1.0 / TWIN_K),
@@ -522,6 +532,10 @@ TWIN_ROWS = [
      ["--no-auto-exposure", "--no-dither", "--no-vignette", "--no-bloom", "--no-ssao",
       "--purkinje"], 30, TWIN_K),
     ("tile-core", "tile_core_fixture.cscn", TWIN_PIN, 30, TWIN_K),
+    # GROWN: the board's view depths run from a millimetre to a few centimetres, and shrunk a
+    # further 1024 times they fall under fp16's normal range, the one exception TWIN_K states.
+    *((f"board-{view}", "board_fixture.cscn", BOARD_LOOK + flags, 30, 1.0 / TWIN_K)
+      for view, flags in BOARD_VIEWS.items()),
 ]
 # The render app's flags the rows pass, by what their argument is: a switch takes none, a value
 # is unitless, and a length's comma-separated components are multiplied by K -- all of them, or
@@ -532,7 +546,7 @@ TWIN_FLAGS = {
         ("--no-auto-exposure", "--no-shadows", "--no-ssao", "--no-ssr", "--clouds", "--fog",
          "--no-aerial", "--cs-debug", "--no-pcss", "--translucent-shadows", "--gi-volume",
          "--no-scene-file", "--no-bloom", "--no-sss", "--oit-moments", "--dof", "--no-dither",
-         "--no-vignette", "--purkinje"), TWIN_SWITCH),
+         "--no-vignette", "--purkinje", "--contact-shadows"), TWIN_SWITCH),
     **dict.fromkeys(
         ("-E", "--sun-elevation", "--fov", "--dof-max-coc", "--dof-blades", "--dof-rotation",
          "--flare", "--chromatic-aberration"), TWIN_VALUE),
@@ -744,6 +758,115 @@ def run_scale_twin_gate(workdir):
         print(f"  {name:<20} {'PASS' if ok else 'FAIL'}  {ae} px, peak {pae * 255:.0f}/255")
         if not ok:
             failures.append(name)
+    return failures
+
+
+# A fitted camera's planes (spec 13.57), held to the fit worked out here from the board's own
+# glTF, every node of which is a unit shape at its translation and scale. The margins and the
+# ratio are camera.c's and camera.h's.
+FIT_FAR_MARGIN, FIT_NEAR_MARGIN, FIT_RATIO_MAX = 1.1, 0.9, 1e4
+# An eye inside the table's box, looking along it.
+FIT_INSIDE_VIEW = ["--cam-eye", "0.1,-0.005,0.1", "--cam-target", "0.1,-0.005,0"]
+# How far a traced plane may sit from this file's answer, relative: the engine fits in float.
+FIT_REL_TOL = 1e-4
+
+
+def _board_boxes():
+    """The board fixture's world boxes, one a node."""
+    with open(asset("board_fixture.gltf")) as f:
+        nodes = json.load(f)["nodes"]
+    return [([t - s / 2 for t, s in zip(n["translation"], n["scale"])],
+             [t + s / 2 for t, s in zip(n["translation"], n["scale"])]) for n in nodes]
+
+
+def _fit_expected(boxes, eye, target, fov_degrees, aspect):
+    """(near, far, nearest depth, nearest distance) for a camera fitting `boxes`: far past the
+    farthest depth of a box in front of the eye, near short of the larger of the nearest depth
+    and the nearest distance times the frustum corner's cosine, never under far / the ratio."""
+    f = [t - e for t, e in zip(target, eye)]
+    length = math.sqrt(sum(c * c for c in f))
+    f = [c / length for c in f]
+    nearest_depth = nearest_dist = math.inf
+    farthest = 0.0
+    for lo, hi in boxes:
+        mid = sum(((a + b) / 2 - e) * d for a, b, e, d in zip(lo, hi, eye, f))
+        spread = sum((b - a) / 2 * abs(d) for a, b, d in zip(lo, hi, f))
+        if mid + spread <= 0.0:
+            continue
+        nearest_depth = min(nearest_depth, max(mid - spread, 0.0))
+        gap = [max(a - e, 0.0, e - b) for a, b, e in zip(lo, hi, eye)]
+        nearest_dist = min(nearest_dist, math.sqrt(sum(g * g for g in gap)))
+        farthest = max(farthest, mid + spread)
+    far = farthest * FIT_FAR_MARGIN
+    k = math.tan(math.radians(fov_degrees) / 2)
+    nearest = max(nearest_depth, nearest_dist / math.sqrt(1 + k * k * (1 + aspect * aspect)))
+    return max(nearest * FIT_NEAR_MARGIN, far / FIT_RATIO_MAX), far, nearest_depth, nearest_dist
+
+
+def run_fit_clip_gate(workdir):
+    """A fitted camera's near and far planes (spec 13.57), read off --trace-camera.
+
+    The answer is worked out here from the board's glTF in double precision, so a plane that
+    moves is held to the geometry rather than to a recording of itself.
+
+      fit-bracket  at each of the board's three views the traced planes are the fit's: far 1.1
+                   times the farthest depth of a box in front of the eye, near 0.9 times the
+                   larger of the nearest depth and the nearest distance times the frustum
+                   corner's cosine. Planes that were not fitted, or a fit that missed a box,
+                   are not within FIT_REL_TOL of these.
+      fit-inside   an eye inside the table's box, where the nearest depth and distance are both
+                   0, takes the floor: near is far / 1e4.
+    """
+    failures = []
+    boxes = _board_boxes()
+    with open(asset("board_fixture.cscn")) as f:
+        fov = json.load(f)["camera"]["fov"]
+    width, height = 400, 300
+
+    def fitted(view, flags):
+        """(traced near, traced far, expected) for the board under `flags`, or None."""
+        out = os.path.join(workdir, f"fit_{view}.ppm")
+        r = _run([RENDER, "-m", asset("board_fixture.cscn"), "-x", "-f", "2", "-W", str(width),
+                  "-H", str(height), "-S", out, "--trace-camera", *flags],
+                 capture_output=True, text=True)
+        rows = RENDER_CAM.findall(r.stdout + r.stderr)
+        if r.returncode != 0 or not rows:
+            return None
+        row = rows[-1]
+        eye, target = [float(x) for x in row[1:4]], [float(x) for x in row[4:7]]
+        return (float(row[11]), float(row[12]),
+                _fit_expected(boxes, eye, target, fov, width / height))
+
+    def close(got, want):
+        return abs(got - want) <= FIT_REL_TOL * want
+
+    ok, parts = True, []
+    for view, flags in BOARD_VIEWS.items():
+        got = fitted(view, flags)
+        if got is None:
+            ok = False
+            parts.append(f"{view}: no trace")
+            continue
+        near, far, (want_near, want_far, _, _) = got
+        ok &= close(near, want_near) and close(far, want_far)
+        parts.append(f"{view} near {near * 1e3:.3g} mm far {far * 1e3:.3g} mm "
+                     f"(want {want_near * 1e3:.3g}, {want_far * 1e3:.3g})")
+    print(f"  fit-bracket  {'PASS' if ok else 'FAIL'}  {'; '.join(parts)}")
+    if not ok:
+        failures.append("fit-bracket")
+
+    got = fitted("inside", FIT_INSIDE_VIEW)
+    if got is None:
+        ok, detail = False, "no trace"
+    else:
+        near, far, (want_near, want_far, depth, dist) = got
+        ok = (depth == 0.0 and dist == 0.0 and close(near, far / FIT_RATIO_MAX)
+              and close(near, want_near) and close(far, want_far))
+        detail = (f"near {near * 1e3:.4g} mm against far / 1e4 {far / FIT_RATIO_MAX * 1e3:.4g} mm, "
+                  f"the eye's nearest depth {depth} and distance {dist} (want 0 and 0)")
+    print(f"  fit-inside   {'PASS' if ok else 'FAIL'}  {detail}")
+    if not ok:
+        failures.append("fit-inside")
     return failures
 
 
@@ -32555,6 +32678,7 @@ GATE_GROUPS = [
     ("scale", "scale invariance (lights x1000, exposure /1000):", run_scale_gates),
     ("scale-twin", "the same scene shrunk 1024 times, to the pixel (spec 13.57):",
      run_scale_twin_gate),
+    ("fit-clip", "a fitted camera's near and far planes (spec 13.57):", run_fit_clip_gate),
     ("penumbra", "area shadow (analytic penumbra):", run_penumbra_gate),
     ("grazing", "punctual grazing (leak wall base):", run_grazing_gate),
     ("dir-shadow", "cascade shadow (analytic ellipse):", run_dir_shadow_gate),

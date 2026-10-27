@@ -336,6 +336,15 @@ RECIPES = [
     {"name": "ortho_shadow", "scene": "assets/scenes/dir_shadow_fixture.cscn", "size": (800, 600),
      "flags": ["-f", "30", "-W", "400", "-H", "300", "--no-auto-exposure", "-E", "1.0",
                "--ortho", "12"]},
+    # A circuit board at true scale (spec 13.57): a 0402 a millimetre long, a typical size of a
+    # millimetre and fitted planes, in the scene file's three-quarter view. Every other golden
+    # is a world of rooms, so all of them together prove only that the metre path did not move;
+    # this is the picture of the millimetre one, and the reference pcb's 3D view is held to.
+    # Exposure is pinned where auto-exposure settles on this view, and contact shadows are on
+    # because pcb's pictures take them.
+    {"name": "board_fixture", "scene": "assets/scenes/board_fixture.cscn", "size": (1600, 1200),
+     "flags": ["-f", "30", "-W", "800", "-H", "600", "--no-auto-exposure", "-E", "0.0088",
+               "--contact-shadows"]},
     # --- animation ------------------------------------------------------------
     # The first SKINNED golden (spec 12.1). Every arm in the `anim` gate group is
     # an identity or a bone-space number, and both kinds pass under a skinning
