@@ -2046,8 +2046,9 @@ static void parse_camera(CetraSceneDesc* d, const cJSON* root) {
         log_warn("cscene: camera needs both eye and target; ignored");
     }
     d->has_cam_fov = get_float(cam, "fov", &d->cam_fov);
+    get_bool(cam, "fitClip", &d->cam_fit_clip);
 
-    static const char* const known[] = {"eye", "target", "fov"};
+    static const char* const known[] = {"eye", "target", "fov", "fitClip"};
     warn_unknown_keys(cam, known, sizeof(known) / sizeof(known[0]), "camera");
 }
 

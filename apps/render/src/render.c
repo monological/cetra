@@ -459,6 +459,8 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --import-scale <f> Extra uniform scale on the imported model\n");
     fprintf(stderr, "      --typical-size <m> Size of what the scene holds, in metres "
                     "(default 1; 0.001 for a circuit board)\n");
+    fprintf(stderr, "      --fit-clip         Fit the camera's near and far planes to the scene "
+                    "each frame\n");
     fprintf(stderr,
             "      --no-unit-scale    Skip unit normalization (raw file units; FBX is cm)\n");
     fprintf(
@@ -1876,6 +1878,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 fprintf(stderr, "Error: --typical-size must be a positive length in metres\n");
                 return -1;
             }
+        } else if (strcmp(argv[i], "--fit-clip") == 0) {
+            args->fit_clip = 1;
         } else if (strcmp(argv[i], "--no-unit-scale") == 0) {
             args->no_unit_scale = 1;
         } else if (strcmp(argv[i], "--no-aerial") == 0) {
@@ -3380,7 +3384,7 @@ void pre_render_callback(Engine* engine, Scene* current_scene) {
     // load-time near at the default 2.5x-radius framing (so nothing changes
     // until the user zooms), then shrinks with the camera so close-ups don't
     // clip into the model.
-    if (engine->camera && view_rig && clip_near_max > 0.0f) {
+    if (engine->camera && view_rig && clip_near_max > 0.0f && !engine->camera->fit_clip) {
         // The RIG's arm, not the camera's: the engine applies the rig after this
         // hook returns, so the camera still holds last frame's pose here. Same
         // quantity, read from the thing that has already worked it out.
@@ -4925,7 +4929,11 @@ int main(int argc, char** argv) {
     camera->is_orthographic = args.ortho_height > 0.0f;
     if (camera->is_orthographic)
         camera->ortho_height = args.ortho_height;
-    printf("Camera clip planes: near=%.4f, far=%.2f\n", auto_near, auto_far);
+    // Fitted, the planes above stand only until the first frame, and the per-frame near below
+    // gives way to the engine's.
+    camera->fit_clip = args.fit_clip != 0;
+    printf("Camera clip planes: near=%.4f, far=%.2f%s\n", auto_near, auto_far,
+           camera->fit_clip ? " (fitted each frame)" : "");
 
     // Arm the per-frame distance-adaptive near (see the render callback). The
     // floor matches the orbit's 10% minimum zoom (0.02 * 0.25 * camera_distance).

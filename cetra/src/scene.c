@@ -1,4 +1,5 @@
 
+#include <float.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1434,6 +1435,61 @@ void scene_bounds(Scene* scene, vec3 out_min, vec3 out_max) {
     }
     glm_vec3_copy(bounds.min, out_min);
     glm_vec3_copy(bounds.max, out_max);
+}
+
+bool scene_depth_range_add(SceneDepthRange* range, const AABB* box, const vec3 eye,
+                           const vec3 forward) {
+    // A linear function over a box takes its extremes at the corners.
+    float lo = FLT_MAX, hi = -FLT_MAX;
+    for (int c = 0; c < 8; c++) {
+        const vec3 corner = {(c & 1) ? box->max[0] : box->min[0],
+                             (c & 2) ? box->max[1] : box->min[1],
+                             (c & 4) ? box->max[2] : box->min[2]};
+        vec3 rel;
+        glm_vec3_sub((float*)corner, (float*)eye, rel);
+        const float depth = glm_vec3_dot(rel, (float*)forward);
+        lo = fminf(lo, depth);
+        hi = fmaxf(hi, depth);
+    }
+    if (hi <= 0.0f)
+        return false;
+    range->nearest_depth = fminf(range->nearest_depth, fmaxf(lo, 0.0f));
+    range->nearest_distance = fminf(range->nearest_distance, sqrtf(aabb_dist_sq(box, eye)));
+    range->farthest_depth = fmaxf(range->farthest_depth, hi);
+    return true;
+}
+
+static bool _node_depth_range(const SceneNode* node, const vec3 eye, const vec3 forward,
+                              SceneDepthRange* range) {
+    if (!node)
+        return false;
+    bool any = false;
+    for (size_t i = 0; i < node->mesh_count; i++) {
+        const Mesh* mesh = node->meshes[i];
+        if (!mesh || mesh->vertex_count == 0)
+            continue;
+        // The box scene_bounds folds this mesh into, on its own.
+        AABB box;
+        aabb_empty(&box);
+        for (int c = 0; c < 8; c++) {
+            vec4 corner = {(c & 1) ? mesh->aabb.max[0] : mesh->aabb.min[0],
+                           (c & 2) ? mesh->aabb.max[1] : mesh->aabb.min[1],
+                           (c & 4) ? mesh->aabb.max[2] : mesh->aabb.min[2], 1.0f};
+            vec4 world;
+            glm_mat4_mulv((vec4*)node->global_transform, corner, world);
+            aabb_add_point(&box, world);
+        }
+        any |= scene_depth_range_add(range, &box, eye, forward);
+    }
+    for (size_t i = 0; i < node->children_count; i++)
+        any |= _node_depth_range(node->children[i], eye, forward, range);
+    return any;
+}
+
+bool scene_depth_range(const Scene* scene, const vec3 eye, const vec3 forward,
+                       SceneDepthRange* range) {
+    *range = (SceneDepthRange){FLT_MAX, FLT_MAX, 0.0f};
+    return scene && _node_depth_range(scene->root_node, eye, forward, range);
 }
 
 void scene_bounding_sphere(Scene* scene, vec3 out_center, float* out_radius) {

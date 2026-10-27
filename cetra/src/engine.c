@@ -1729,6 +1729,56 @@ void engine_set_camera(Engine* engine, Camera* camera) {
     engine->camera = camera;
 }
 
+// A fitted camera's margins (spec 13.57): far past the farthest box in front of the eye, near
+// short of the nearest.
+#define CLIP_FIT_FAR_MARGIN  1.1f
+#define CLIP_FIT_NEAR_MARGIN 0.9f
+
+// Near and far for a fit_clip camera, from the scene's boxes in front of it, the shadow catcher's
+// quad and the water's rectangle among them when they are drawn. Nothing in front keeps the
+// planes it has.
+static void _engine_fit_clip(Engine* engine, const Scene* scene) {
+    Camera* camera = engine->camera;
+    vec3 forward = {0.0f, 0.0f, 0.0f};
+    camera_forward(camera, forward);
+    SceneDepthRange range;
+    bool any = scene_depth_range(scene, camera->position, forward, &range);
+    const bool water = water_will_draw(scene->water, engine, engine->current_render_mode);
+    if (scene->shadow_catcher && !water) {
+        const float r = scene->skybox_gp_radius;
+        const AABB quad = {{-r, 0.0f, -r}, {r, 0.0f, r}};
+        any |= scene_depth_range_add(&range, &quad, camera->position, forward);
+    }
+    if (water) {
+        // An unbounded sea's rectangle is its extent, the square its bed is drawn over.
+        const Water* w = scene->water;
+        const float* b = w->domain.bounds;
+        const bool everywhere = b[0] == 0.0f && b[1] == 0.0f && b[2] == 0.0f && b[3] == 0.0f;
+        const AABB sea = everywhere ? (AABB){{-w->extent, w->level, -w->extent},
+                                             {w->extent, w->level, w->extent}}
+                                    : (AABB){{b[0], w->level, b[1]}, {b[2], w->level, b[3]}};
+        any |= scene_depth_range_add(&range, &sea, camera->position, forward);
+    }
+    if (!any)
+        return;
+
+    camera->far_clip = range.farthest_depth * CLIP_FIT_FAR_MARGIN;
+    float nearest = range.nearest_depth;
+    if (!camera->is_orthographic) {
+        // Inside the frustum a point's depth is at least its distance times the cosine of the
+        // frustum's corner ray, so the distance is a second bound, and the one that holds where a
+        // box reaching behind the eye -- the board under a close-up -- takes the first to zero.
+        const float aspect = engine->fb_width > 0 && engine->fb_height > 0
+                                 ? (float)engine->fb_width / (float)engine->fb_height
+                                 : camera->aspect_ratio;
+        const float ty = tanf(0.5f * camera->fov_radians);
+        const float tx = ty * aspect;
+        nearest = fmaxf(nearest, range.nearest_distance / sqrtf(1.0f + tx * tx + ty * ty));
+    }
+    camera->near_clip =
+        fmaxf(nearest * CLIP_FIT_NEAR_MARGIN, camera->far_clip / CAMERA_CLIP_RATIO_MAX);
+}
+
 // The view and projection matrices, and the camera's aspect, from the camera
 // and the framebuffer as they stand.
 static void _engine_derive_camera(Engine* engine) {
@@ -3357,6 +3407,9 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
         // converted.
         if (engine->camera)
             camera_rig_apply(engine->camera_rig, engine->camera);
+        // After the walk, so the boxes are this frame's, and on the pose the rig just wrote.
+        if (engine->camera && engine->camera->fit_clip && shadow_scene)
+            _engine_fit_clip(engine, shadow_scene);
         _engine_derive_camera(engine);
 
         // The fires: their steps, on the GPU, and what they cast handed to the lights and
