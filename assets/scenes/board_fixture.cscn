@@ -2,8 +2,8 @@
  "version": 1,
  "_comment": [
   "A circuit board at true scale (spec 13.57), in metres: a 0402 is a millimetre long.",
-  "Render under the studio HDR, -e my_models/studio_small_03_8k.hdr. The camera here is",
-  "the three-quarter view; the generator's header gives the whole-board and close-up ones.",
+  "Lit by a tabletop studio of area panels. The camera here is the three-quarter view;",
+  "the generator's header gives the whole-board and close-up ones.",
   "",
   "Regenerate with: python3 assets/generators/gen_board_fixture.py"
  ],
@@ -13,7 +13,90 @@
   }
  ],
  "typicalSize": 0.001,
+ "environment": {
+  "ambient": [
+   1.5,
+   1.5,
+   1.5
+  ]
+ },
  "lights": [
+  {
+   "name": "key",
+   "type": "area",
+   "position": [
+    -0.15,
+    0.22,
+    0.18
+   ],
+   "direction": [
+    0.4682961920914452,
+    -0.6818392556851443,
+    -0.5619554305097342
+   ],
+   "size": [
+    0.2,
+    0.15
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 400.0,
+   "intensity_unit": "nits",
+   "cast_shadows": true
+  },
+  {
+   "name": "fill",
+   "type": "area",
+   "position": [
+    0.26,
+    0.12,
+    0.04
+   ],
+   "direction": [
+    -0.9012872962733219,
+    -0.41043236876446665,
+    -0.13865958404204953
+   ],
+   "size": [
+    0.3,
+    0.2
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 80.0,
+   "intensity_unit": "nits"
+  },
+  {
+   "name": "back",
+   "type": "area",
+   "position": [
+    -0.184,
+    0.124,
+    -0.202
+   ],
+   "direction": [
+    0.6145576591985822,
+    -0.4088144428581873,
+    0.6746774302071392
+   ],
+   "size": [
+    0.3,
+    0.08
+   ],
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "intensity": 250.0,
+   "intensity_unit": "nits"
+  },
   {
    "name": "lamp",
    "type": "point",
