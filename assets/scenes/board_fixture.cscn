@@ -27,7 +27,7 @@
     0.97,
     0.92
    ],
-   "intensity": 0.01,
+   "intensity": 0.05,
    "intensity_unit": "candela",
    "range": 0.3,
    "cast_shadows": true
