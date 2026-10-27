@@ -8,7 +8,9 @@
               terminations over tin pads, under a few traces in the mask.
     qfn       a 5 x 5 mm QFN-32 at (22, 10) mm, eight tin lands a side at 0.5 mm pitch.
     bga       a 7 x 7 mm BGA at (22, -12) mm on an 8 x 8 grid of 0.5 mm balls at 0.8 mm pitch.
-    light     a point light 30 mm over the board.
+    table     a matte grey top 300 mm square under the board.
+    lights    a tabletop studio: a key softbox to the front left, a larger fill to the right and a
+              strip overhead behind, all area panels, and a point light 30 mm over the board.
 
 Everything is in metres, nothing is scaled up: a 0402 is a millimetre long. The scene file's
 camera is the three-quarter view; the other two are flags, at the views the twin gate and the
@@ -18,8 +20,8 @@ board's golden render:
     close-up     --cam-eye -0.00897,0.00292,0.01329 --cam-target -0.01,0.0018,0.012
                  (2 mm from the middle resistor's centre)
 
-The scene renders under the studio HDR (Poly Haven's studio_small_03, CC0), which is not
-committed: -e my_models/studio_small_03_8k.hdr.
+The studio is the scene file's own panels rather than an HDR, so the board needs nothing that is
+not committed.
 
 Regenerate with: python3 assets/generators/gen_board_fixture.py
 """
@@ -86,6 +88,7 @@ MATERIALS = {
     "board_ceramic": ([0.55, 0.42, 0.28, 1.0], 0.0, 0.55),
     "board_epoxy": ([0.035, 0.035, 0.035, 1.0], 0.0, 0.55),
     "board_substrate": ([0.10, 0.12, 0.05, 1.0], 0.0, 0.4),
+    "board_table": ([0.42, 0.42, 0.43, 1.0], 0.0, 0.8),
 }
 
 pieces = []  # (name, shape, material, centre, size)
@@ -104,6 +107,7 @@ TOP = THICK
 box("fr4", "board_fr4", (-HALF_X, MASK, -HALF_Z), (HALF_X, THICK - MASK, HALF_Z))
 box("mask_top", "board_mask", (-HALF_X, THICK - MASK, -HALF_Z), (HALF_X, THICK, HALF_Z))
 box("mask_bottom", "board_mask", (-HALF_X, 0.0, -HALF_Z), (HALF_X, MASK, HALF_Z))
+box("table", "board_table", (-150.0, -10.0, -150.0), (150.0, 0.0, 150.0))
 
 PAD = 0.03     # a pad's tin over the mask
 SEAT = 0.04    # where a part's underside sits, over its pad and solder
@@ -245,18 +249,31 @@ def gltf_of(pieces):
     }
 
 
+def softbox(name, centre, size, nits):
+    """An area panel at `centre`, `size` wide and tall (both mm), facing the board's middle."""
+    aim = [a - c for a, c in zip((0.0, TOP, 0.0), centre)]
+    length = math.sqrt(sum(x * x for x in aim))
+    return {"name": name, "type": "area", "position": [c * MM for c in centre],
+            "direction": [x / length for x in aim], "size": [s * MM for s in size],
+            "color": [1.0, 1.0, 1.0], "intensity": nits, "intensity_unit": "nits"}
+
+
 scene_desc = {
     "version": 1,
     "_comment": [
         "A circuit board at true scale (spec 13.57), in metres: a 0402 is a millimetre long.",
-        "Render under the studio HDR, -e my_models/studio_small_03_8k.hdr. The camera here is",
-        "the three-quarter view; the generator's header gives the whole-board and close-up ones.",
+        "Lit by a tabletop studio of area panels. The camera here is the three-quarter view;",
+        "the generator's header gives the whole-board and close-up ones.",
         "",
         "Regenerate with: python3 assets/generators/gen_board_fixture.py",
     ],
     "models": [{"path": asset_ref("board_fixture.gltf")}],
     "typicalSize": 0.001,
+    "environment": {"ambient": [1.5, 1.5, 1.5]},
     "lights": [
+        dict(softbox("key", (-150.0, 220.0, 180.0), (200.0, 150.0), 400.0), cast_shadows=True),
+        softbox("fill", (260.0, 120.0, 40.0), (300.0, 200.0), 80.0),
+        softbox("back", (-184.0, 124.0, -202.0), (300.0, 80.0), 250.0),
         {"name": "lamp", "type": "point", "position": [5.0 * MM, (TOP + 30.0) * MM, 6.0 * MM],
          "color": [1.0, 0.97, 0.92], "intensity": 0.05, "intensity_unit": "candela",
          "range": 0.3, "cast_shadows": True},
