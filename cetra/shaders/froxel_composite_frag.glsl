@@ -97,7 +97,7 @@ void main() {
     // which is the same integral the aerial volume holds, so applying it there
     // too would count the same air twice and wash the sky out. A slice count of
     // zero is how a medium says it is absent.
-    bool sky = (linZ >= -1e-4);
+    bool sky = (linZ >= skyLinZ());
     // PLANAR depth, not the ray length the screen-space march used: volume
     // slices are constant-depth planes (froxelViewPos puts every cell of a slice
     // at the same view z), so feeding it a radial distance would index deeper

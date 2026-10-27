@@ -516,7 +516,8 @@ void compute_directional_light_space_matrix(vec3 direction, vec3 scene_center, f
 
 void compute_cascade_light_space_matrix(vec3 direction, const CascadeCamera* cam, float slice_near,
                                         float slice_far, float scene_pad, int map_size,
-                                        vec3 snap_anchor, mat4 dest, vec4 out_params) {
+                                        vec3 snap_anchor, float typical_size, mat4 dest,
+                                        vec4 out_params) {
     vec3 light_dir;
     glm_vec3_normalize_to(direction, light_dir);
 
@@ -583,7 +584,7 @@ void compute_cascade_light_space_matrix(vec3 direction, const CascadeCamera* cam
     mat4 light_view;
     glm_lookat(eye, center, up, light_view);
 
-    float ortho_near = 0.1f;
+    float ortho_near = 0.1f * typical_size;
     float ortho_far = back + radius;
     mat4 light_projection;
     glm_ortho(-radius, radius, -radius, radius, ortho_near, ortho_far, light_projection);
@@ -1704,9 +1705,9 @@ static void tile_block_free(ShadowTileBlock* block) {
     *block = tile_block_blank(block->first, block->cells);
 }
 
-// How much nearer a light without a block must be than one holding one to take it, in metres:
-// a camera between two candles would otherwise trade one block between them on every step, and
-// each trade redraws every face.
+// How much nearer a light without a block must be than one holding one to take it, in typical
+// sizes, which the ranking measures in: a camera between two candles would otherwise trade one
+// block between them on every step, and each trade redraws every face.
 #define TILE_STREAM_MARGIN 2.0f
 
 // How far a light's reach is from the camera: 0 inside its range.
@@ -1739,7 +1740,7 @@ static bool tiles_rank(ShadowSystem* ss, const Engine* engine, const Scene* scen
             continue;
         ss->tile_rank[ss->tile_rank_count++] = (ShadowTileRank){
             .light = light,
-            .distance = tile_light_distance(light, eye),
+            .distance = tile_light_distance(light, eye) / engine->typical_size,
             .order = (int)i,
             .block = tile_block_of(ss, light),
         };
@@ -3269,7 +3270,7 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
         // from 0.0000 to 0.1757, light leaking into a thin caster's band.
         //
         // The cause is not the slicing, it is the RATIO the fit ends up with.
-        // compute_cascade_light_space_matrix spends [0.1, 2*radius + scene_pad]
+        // compute_cascade_light_space_matrix spends [0.1 x the typical size, 2*radius + scene_pad]
         // of depth on a box 2*radius wide, so depth-per-unit-of-extent is
         // 1 + scene_pad/(2*radius) -- and scene_pad is far_plane * 0.5, fixed.
         // Tightening a slice therefore shrinks BOTH, but not equally: on
@@ -3337,10 +3338,10 @@ void render_shadow_depth_pass(Engine* engine, Scene* scene) {
                 for (int c = 0; c < cc - 1; c++) {
                     int layer = (int)slot * cc + c;
                     vec4* params = &ss->cascade_params[layer];
-                    compute_cascade_light_space_matrix(light->direction, &cam, slice_near,
-                                                       ss->cascade_splits[c], scene_pad,
-                                                       ss->default_map_size, ss->scene_center,
-                                                       ss->cascade_matrices[layer], *params);
+                    compute_cascade_light_space_matrix(
+                        light->direction, &cam, slice_near, ss->cascade_splits[c], scene_pad,
+                        ss->default_map_size, ss->scene_center, engine->typical_size,
+                        ss->cascade_matrices[layer], *params);
                     slice_near = ss->cascade_splits[c];
                 }
                 int last = (int)slot * cc + (cc - 1);

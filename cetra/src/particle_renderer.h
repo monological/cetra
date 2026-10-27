@@ -17,6 +17,7 @@ typedef struct ParticleRenderContext {
     mat4 proj;
     struct Scene* scene;        // lights[] + shadow_system (used from M3)
     GLuint scene_depth_texture; // single-sample scene depth for soft particles (0 = off, M4)
+    float typical_size;         // metres, Engine.typical_size: the soft fade band follows it
 } ParticleRenderContext;
 
 // Pluggable output. Billboard now; mesh/ribbon renderers later reuse this

@@ -55,6 +55,7 @@ uniform int frameIndex;        // rotates the start jitter, only under temporal
 
 #include "depth.glsl"      // viewPosFromLinZ; requires the projection uniform above
 #include "lights_ubo.glsl" // the cluster list, getDistanceAtt, spotConeFactor
+#include "view.glsl"       // typicalSize, skyLinZ
 
 const int STEPS = 16;          // march samples over the (clamped) reach; a finer stride catches a
                                // thin near-contact without over-marching
@@ -65,7 +66,6 @@ const float THICK_FRAC = 1.0;  // occluder thickness, x csDistance. The canonica
                                // far side of the depth cliff as an occluder -- a near contact sits a
                                // SMALL depth behind its receiver, a silhouette straddle a LARGE one.
 const float MAX_UV_LEN = 0.15; // clamp screen reach so near-camera pixels don't stride the frame
-const float SKY_Z = -1e-4;     // linZ at or above this is the sky/shadow-catcher sentinel
 const float GRAZE_LIFT = 4.0;  // slope-scaled start-offset gain: a ray grazing its own surface
                                // (low N.L) skims and self-shadows, so lift it up to (1+this)x the
                                // base offset; a face-on ray (high N.L, the one that must catch a
@@ -107,7 +107,7 @@ float marchOcclusion(vec3 P, vec3 n, float ndl, vec3 dirVS, float reach, float j
     // where a ray skims its own surface into a self-shadow. Without a normal, a
     // distance-only floor still lifts the ray off the depth buffer.
     float grazeLift = 1.0 + GRAZE_LIFT * smoothstep(0.5, 0.1, ndl);
-    float startBias = max(0.02, 0.01 * (-P.z)) * grazeLift;
+    float startBias = max(0.02 * typicalSize, 0.01 * (-P.z)) * grazeLift;
     vec3 startV = P + n * startBias;
 
     // Clamp a camera-facing ray so its far end stays in front of the near
@@ -127,8 +127,9 @@ float marchOcclusion(vec3 P, vec3 n, float ndl, vec3 dirVS, float reach, float j
     // Near-camera pixels can otherwise skip across the whole frame in 8 steps,
     // stepping clean over every occluder. Shrink tMax so the screen reach caps
     // at MAX_UV_LEN (GTAO's MAX_SCREEN_RADIUS idiom).
+    // Clip w is a view depth under perspective, and 1 under a parallel projection.
     vec4 clipEnd = clipP + tMax * clipL;
-    if (clipEnd.w > 1e-4) {
+    if (clipEnd.w > 1e-4 * typicalSize) {
         vec2 uvEnd = (clipEnd.xy / clipEnd.w) * 0.5 + 0.5;
         float uvLen = length(uvEnd - TexCoords);
         if (uvLen > MAX_UV_LEN)
@@ -155,7 +156,7 @@ float marchOcclusion(vec3 P, vec3 n, float ndl, vec3 dirVS, float reach, float j
     for (int i = 0; i < STEPS; i++) {
         float t = (float(i) + jitter) / float(STEPS) * tMax;
         vec4 clipS = clipP + t * clipL;
-        if (clipS.w <= 1e-4)
+        if (clipS.w <= 1e-4 * typicalSize)
             break; // reached the camera plane
         vec2 uv = (clipS.xy / clipS.w) * 0.5 + 0.5;
         if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0)
@@ -168,7 +169,7 @@ float marchOcclusion(vec3 P, vec3 n, float ndl, vec3 dirVS, float reach, float j
         // than bias is self-contact quantization, deeper than thick is the far side
         // of a silhouette, not an occluder on this ray's path.
         float delta = sceneZ - rayZ;
-        if (sceneZ < SKY_Z && delta > bias && delta < thick) {
+        if (sceneZ < skyLinZ() && delta > bias && delta < thick) {
             hit = true;
             hitT = t;
             hitUV = uv;
@@ -192,7 +193,7 @@ float marchOcclusion(vec3 P, vec3 n, float ndl, vec3 dirVS, float reach, float j
 
 void main() {
     float linZ = texture(linDepthTex, TexCoords).z;
-    if (linZ >= SKY_Z) {
+    if (linZ >= skyLinZ()) {
         FragColor = vec4(1.0); // sky and the shadow-catcher floor: nothing to occlude
         return;
     }

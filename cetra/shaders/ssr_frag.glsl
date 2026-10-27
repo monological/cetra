@@ -295,8 +295,8 @@ void main()
     // depth rounding flips them "behind" it in row-aliased phase (banded
     // false self-hits). Clamp rays heading toward the camera so the end
     // point stays safely in front of the near plane.
-    vec3 startV = fragPos + n * max(0.02, 0.002 * length(fragPos));
-    if (startV.z > -(nearV + 0.01)) {
+    vec3 startV = fragPos + n * max(0.02 * typicalSize, 0.002 * length(fragPos));
+    if (startV.z > -(nearV + 0.01 * typicalSize)) {
         FragColor = probe;
         return;
     }
