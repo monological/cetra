@@ -451,6 +451,240 @@ def run_scale_gates(workdir):
     return failures
 
 
+# The scale twin (spec 13.57): the same scene shrunk by TWIN_K renders the same picture. Every
+# length the scene states is multiplied by K and every physical quantity matched to it, so a
+# twin differs only where the ENGINE holds a length of its own.
+#
+# K is a power of two because multiplying by one is exact in floating point, and so is every
+# sum, difference, product, quotient and square root of numbers it has scaled. So the answer is
+# 0 px and not a tolerance: a pixel that moves names a length that was missed. The one place
+# the argument fails is a length stored under fp16's normal range (6.1e-5 m), which a twin
+# whose nearest surface is 6 cm or more from the eye stays clear of.
+TWIN_K = 2.0 ** -10
+# The corpus pins exposure; every row repeats it, as the golden it came from does.
+TWIN_PIN = ["--no-auto-exposure", "-E", "1.0"]
+# (name, scene, flags, frames, K). The golden corpus's scenes at their recipes' flags, less those
+# whose physics does not scale with the scene:
+#   water_fixture, water_submerged  gravity sets the waves' lengths and speeds
+#   local_exposure                  abandoned_window carries dust particles and a wind
+#   puppet                          an animated rig
+# and tile_core for the cached tiles, which no golden renders. `calibrate` is the instrument's
+# floor: its path holds no length of the engine's (no shadow map, AO, SSR or contact shadows),
+# so it must be 0 px whatever else is true. It is also run GROWN, since a floor written
+# max(x, metres) only bites a shrink: grown, it is the exactness argument checked alone.
+TWIN_ROWS = [
+    ("calibrate", "dir_shadow_fixture.cscn",
+     TWIN_PIN + ["--no-shadows", "--no-ssao", "--no-ssr", "--cs-distance", "0"], 30, TWIN_K),
+    ("calibrate-grown", "dir_shadow_fixture.cscn",
+     TWIN_PIN + ["--no-shadows", "--no-ssao", "--no-ssr", "--cs-distance", "0"], 30, 1.0 / TWIN_K),
+    ("aerial", "aerial_fixture.cscn", TWIN_PIN, 30, TWIN_K),
+    ("clouds", "aerial_fixture.cscn", TWIN_PIN + ["--clouds"], 30, TWIN_K),
+    ("clouds-lowsun", "aerial_fixture.cscn", TWIN_PIN + ["--clouds", "--sun-elevation", "5"], 30,
+     TWIN_K),
+    ("froxel-fog", "contact_fixture.cscn", TWIN_PIN + ["--fog", "--no-aerial"], 60, TWIN_K),
+    ("contact-debug", "contact_fixture.cscn", TWIN_PIN + ["--cs-debug"], 120, TWIN_K),
+    ("ao", "ao_fixture.cscn", TWIN_PIN, 30, TWIN_K),
+    ("translucent-shadow", "translucent_shadow_fixture.cscn",
+     TWIN_PIN + ["--no-pcss", "--translucent-shadows"], 30, TWIN_K),
+    ("mask", "mask_fixture.cscn", TWIN_PIN, 30, TWIN_K),
+    ("layer", "layer_fixture.cscn", TWIN_PIN, 30, TWIN_K),
+    ("layer-vt", "layer_vt_fixture.cscn", TWIN_PIN, 30, TWIN_K),
+    ("cornell-box", "cornell_box.cscn", TWIN_PIN + ["--gi-volume"], 30, TWIN_K),
+    ("cornell-leak", "cornell_leak.cscn", TWIN_PIN, 30, TWIN_K),
+    ("cornell-point", "cornell_point.cscn", TWIN_PIN, 30, TWIN_K),
+    ("cornell-rooms", "cornell_rooms.cscn", TWIN_PIN, 30, TWIN_K),
+    ("dir-shadow", "dir_shadow_fixture.cscn", TWIN_PIN, 30, TWIN_K),
+    ("ortho-shadow", "dir_shadow_fixture.cscn", TWIN_PIN + ["--ortho", "12"], 30, TWIN_K),
+    ("roughness-sweep", "area_light_fixture.gltf",
+     TWIN_PIN + ["--no-scene-file", "--cam-eye", "0,1.6,6", "--cam-target", "0,0.5,0",
+                 "--area-light", "0,2.2,1.2,0,-0.6,-0.8,2.0,0.7,30"], 2, TWIN_K),
+    ("backface-dark", "area_light_fixture.gltf",
+     TWIN_PIN + ["--no-scene-file", "--cam-eye", "0,1.6,6", "--cam-target", "0,0.5,0",
+                 "--area-light", "0,2.2,1.2,0,0.6,0.8,2.0,0.7,30"], 2, TWIN_K),
+    ("guard-thin-panel", "area_light_guard.gltf",
+     TWIN_PIN + ["--no-scene-file", "--fov", "50.0",
+                 "--cam-eye", "0.549,0.780,1.525", "--cam-target", "0.549,0.500,0.000",
+                 "--area-light", "0,2.2,1.2,0,-0.6,-0.8,0.25,1.8,30"], 2, TWIN_K),
+    ("sheen", "sheen_fixture.gltf", TWIN_PIN, 30, TWIN_K),
+    ("specular", "specular_fixture.gltf", TWIN_PIN, 30, TWIN_K),
+    ("clearcoat", "clearcoat_fixture.gltf", TWIN_PIN, 30, TWIN_K),
+    ("skin-curvature", "skin_curvature_fixture.cscn",
+     TWIN_PIN + ["--no-bloom", "--no-sss", "--no-shadows"], 30, TWIN_K),
+    ("skin-sss", "skin_curvature_fixture.cscn", TWIN_PIN + ["--no-bloom", "--no-shadows"], 30,
+     TWIN_K),
+    ("oit-moments", "oit_sphere_fixture.gltf",
+     ["--no-auto-exposure", "-E", "0.08", "--oit-moments"], 30, TWIN_K),
+    ("dof", "dof_fixture.cscn",
+     TWIN_PIN + ["--no-bloom", "--dof", "--dof-focus", "6", "--dof-range", "1.5",
+                 "--dof-max-coc", "8", "--dof-blades", "6", "--dof-rotation", "15"], 30, TWIN_K),
+    ("flare", "flare_fixture.cscn",
+     TWIN_PIN + ["--flare", "0.15", "--chromatic-aberration", "12"], 30, TWIN_K),
+    ("purkinje", "purkinje_fixture.cscn",
+     ["--no-auto-exposure", "--no-dither", "--no-vignette", "--no-bloom", "--no-ssao",
+      "--purkinje"], 30, TWIN_K),
+    ("tile-core", "tile_core_fixture.cscn", TWIN_PIN, 30, TWIN_K),
+]
+# The render app's flags whose argument states lengths: the comma-separated components a twin
+# multiplies by K, None for all of them.
+TWIN_LENGTH_FLAGS = {
+    "--cam-eye": None, "--cam-target": None, "--shadow-center": None,
+    "--area-light": (0, 1, 2, 6, 7),  # px,py,pz,dx,dy,dz,w,h,I[,r,g,b]
+    "--ortho": None, "--dof-focus": None, "--dof-range": None, "--ao-radius": None,
+    "--cs-distance": None, "--fog-height": None, "--light-size": None,
+}
+# And whose argument is PER length, which a twin divides by K: extinction per metre.
+TWIN_PER_LENGTH_FLAGS = ("--fog-density",)
+# Flags that make the render app build a sky. --world-scale is another, which is why a twin
+# passes it only where its original already has one.
+TWIN_SKY_FLAGS = ("--sky", "--clouds", "--sun-elevation", "--sun-azimuth")
+# A material's lengths; every other material key a twin copies is a ratio, a colour or a name.
+TWIN_MATERIAL_LENGTHS = ("thickness", "attenuationDistance", "furLength")
+# Material keys whose lengths a twin cannot reach: a shader's own numbers, and roads.
+TWIN_MATERIAL_REFUSED = ("roads", "shaderParams", "lateShader", "shaderHook")
+
+
+def _twin_scene(d, k):
+    """Shrink a .cscn dict by `k` in place: every length it states times k, its physics matched.
+
+    Point and spot intensity goes as k^2, so the light a surface receives is unchanged; a
+    directional's lux and a panel's nits are already per area and stay. Fog density is per
+    metre and goes as 1/k. Nothing in `environment` is a length: angles, radiances and the sky's
+    own kilometres, which the render app joins to the scene through --world-scale.
+
+    A key the twin does not know is REFUSED by name rather than copied. Copied unscaled it would
+    render a twin that differs, and the difference would read as a length the engine holds.
+    """
+    def times(v, f=k):
+        return [x * f for x in v] if isinstance(v, list) else v * f
+
+    def refuse(what):
+        raise ValueError(f"the scale twin does not know how to shrink {what}")
+
+    for key in list(d):
+        if key.startswith("_") or key in ("version", "models", "environment"):
+            continue
+        if key == "camera":
+            for sub in d["camera"]:
+                if sub in ("eye", "target"):
+                    d["camera"][sub] = times(d["camera"][sub])
+                elif sub != "fov":
+                    refuse(f"camera.{sub}")
+        elif key == "lights":
+            for light in d["lights"]:
+                for sub in ("position", "range", "size", "source_radius", "source_length",
+                            "shadow_near"):
+                    if sub in light:
+                        light[sub] = times(light[sub])
+                if light.get("type", "point") in ("point", "spot"):
+                    # Absent, the loader seeds it from an IES file's own candela, which the
+                    # twin cannot reach.
+                    if "intensity" not in light:
+                        refuse(f"light {light.get('name')!r} with no authored intensity")
+                    light["intensity"] *= k * k
+        elif key == "probes":
+            for probe in d["probes"]:
+                for sub in ("position", "boxMin", "boxMax"):
+                    probe[sub] = times(probe[sub])
+        elif key == "materials":
+            for name, m in d["materials"].items():
+                if not isinstance(m, dict):
+                    continue
+                for sub in m:
+                    if sub in TWIN_MATERIAL_LENGTHS:
+                        m[sub] = times(m[sub])
+                    elif sub in TWIN_MATERIAL_REFUSED:
+                        refuse(f"materials.{name}.{sub}")
+                    elif sub == "sss":
+                        # Absent, the radius is the engine's default profile's.
+                        if "radius" not in m["sss"]:
+                            refuse(f"materials.{name}.sss with no radius")
+                        m["sss"]["radius"] = times(m["sss"]["radius"])
+                    elif sub == "layers":
+                        for layer in m["layers"]:
+                            if "uvScale" not in layer:
+                                refuse(f"a layer of materials.{name} with no uvScale")
+                            layer["uvScale"] = times(layer["uvScale"])
+                    elif sub == "splatDomain":
+                        m[sub] = times(m[sub])
+        elif key == "post":
+            for sub in d["post"]:
+                if sub == "fog":
+                    fog = d["post"]["fog"]
+                    if "density" in fog:
+                        fog["density"] = times(fog["density"], 1.0 / k)
+                    for far in ("near", "far"):
+                        if far in fog:
+                            fog[far] = times(fog[far])
+                elif sub == "passes":
+                    refuse("post.passes")
+        else:
+            refuse(key)
+
+
+def _twin_flags(extra, k, sky):
+    """The render app's flags for the twin: lengths times `k`, the import and any `sky` with them.
+
+    A component is rescaled through repr, which a C strtod reads back as the same double, so
+    the float the app stores is exactly K times the original's.
+    """
+    out, i = [], 0
+    while i < len(extra):
+        flag = extra[i]
+        out.append(flag)
+        if flag in TWIN_LENGTH_FLAGS or flag in TWIN_PER_LENGTH_FLAGS:
+            which = TWIN_LENGTH_FLAGS.get(flag)
+            f = 1.0 / k if flag in TWIN_PER_LENGTH_FLAGS else k
+            parts = extra[i + 1].split(",")
+            out.append(",".join(repr(float(p) * f) if which is None or j in which else p
+                                for j, p in enumerate(parts)))
+            i += 2
+            continue
+        i += 1
+    out += ["--import-scale", repr(k)]
+    return out + ["--world-scale", repr(1000.0 * k)] if sky else out
+
+
+def run_scale_twin_gate(workdir):
+    """The same scene shrunk 1024 times renders the same picture, to the pixel (spec 13.57).
+
+    Each row renders its fixture twice, as it is and as its twin, and passes only at 0 px: the
+    twin is exact by construction (see TWIN_K), so a moved pixel is a length of the engine's own
+    that did not follow the scene. Both legs render a copy of the scene through cscn_copy, so the
+    two differ in nothing but the twin's arithmetic.
+    """
+    failures = []
+    for name, scene, extra, frames, k in TWIN_ROWS:
+        src = asset(scene)
+        sky = any(f in TWIN_SKY_FLAGS for f in extra)
+        if src.endswith(".cscn"):
+            with open(src) as f:
+                sky = sky or json.load(f).get("environment", {}).get("mode") == "sky"
+        legs = []
+        for leg, factor in (("a", None), ("b", k)):
+            if src.endswith(".cscn"):
+                path = cscn_copy(src, os.path.join(workdir, f"twin_{name}_{leg}.cscn"),
+                                 (lambda d, f=factor: _twin_scene(d, f)) if factor else
+                                 (lambda d: None))
+            else:
+                path = src
+            flags = _twin_flags(extra, factor, sky) if factor else list(extra)
+            out = os.path.join(workdir, f"twin_{name}_{leg}.ppm")
+            err = render(path, out, flags, frames=frames)
+            if err:
+                print(f"  {name:<20} ERROR rendering leg {leg}: {err.strip()[-200:]}")
+                break
+            legs.append(out)
+        if len(legs) != 2:
+            failures.append(name)
+            continue
+        ae, pae = compare(*legs)
+        ok = ae == 0
+        print(f"  {name:<20} {'PASS' if ok else 'FAIL'}  {ae} px, peak {pae * 255:.0f}/255")
+        if not ok:
+            failures.append(name)
+    return failures
+
+
 # Area-shadow penumbra gate (spec 10.4). The fixture's geometry is chosen so the
 # answer is known before rendering: a panel of half-width r at height H over an
 # occluder of half-width a at height h puts the umbra edge at
@@ -32219,6 +32453,8 @@ def _hooks_post_order(frames):
 
 GATE_GROUPS = [
     ("scale", "scale invariance (lights x1000, exposure /1000):", run_scale_gates),
+    ("scale-twin", "the same scene shrunk 1024 times, to the pixel (spec 13.57):",
+     run_scale_twin_gate),
     ("penumbra", "area shadow (analytic penumbra):", run_penumbra_gate),
     ("grazing", "punctual grazing (leak wall base):", run_grazing_gate),
     ("dir-shadow", "cascade shadow (analytic ellipse):", run_dir_shadow_gate),
