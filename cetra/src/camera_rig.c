@@ -5,8 +5,8 @@
 #include "camera.h"
 #include "ext/log.h"
 
-// Below this the eye and the aim point coincide and there is no aim POINT to
-// give, only an aim direction. See the header: the target goes one unit out.
+// Below this, x the typical size, the eye and the aim point coincide and there is no aim POINT
+// to give, only an aim direction. See the header: the target goes one unit out.
 #define RIG_FIRST_PERSON_EPS 1e-4f
 
 CameraRig* create_camera_rig(void) {
@@ -16,6 +16,7 @@ CameraRig* create_camera_rig(void) {
         return NULL;
     }
     camera_rig_set_distance(rig, 5.0f);
+    rig->typical_size = 1.0f;
     rig->pitch_min = -1.5f;
     rig->pitch_max = 1.5f;
     // Radians a second at full deflection. A comfortable turn for a stick or a
@@ -146,23 +147,25 @@ static void _rig_derive(const CameraRig* rig, CameraRigPose* out) {
      * ground the lift is 0 and the two agree, which is why nothing that walks
      * can see it.
      */
+    const float size = rig->typical_size;
     float arm = rig->dist;
-    if (rig->probe && arm > RIG_FIRST_PERSON_EPS) {
+    if (rig->probe && arm > RIG_FIRST_PERSON_EPS * size) {
         vec3 want_eye;
         glm_vec3_copy(look, want_eye);
         glm_vec3_mulsubs(dir, arm, want_eye);
         const float clear = glm_clamp(rig->probe(rig->probe_user, look, want_eye, arm), 0.0f, 1.0f);
         if (clear * arm < arm)
-            arm = glm_max(clear * arm - rig->probe_skin, rig->min_dist);
+            arm = glm_max(clear * arm - rig->probe_skin * size, rig->min_dist);
     }
 
     glm_vec3_copy(look, out->eye);
     out->eye[1] += rig->eye_lift;
     glm_vec3_mulsubs(dir, arm, out->eye);
 
-    if (arm < RIG_FIRST_PERSON_EPS) {
+    if (arm < RIG_FIRST_PERSON_EPS * size) {
         // First person has no aim POINT, only an aim direction. See the header.
-        glm_vec3_add(out->eye, dir, out->look);
+        glm_vec3_copy(out->eye, out->look);
+        glm_vec3_muladds(dir, size, out->look);
     } else {
         glm_vec3_copy(look, out->look);
     }
@@ -342,7 +345,7 @@ void camera_rig_set_pose(CameraRig* rig, const vec3 eye, const vec3 look) {
     rig->near_eye_lift = rig->far_eye_lift = rig->eye_lift = 0.0f;
     glm_vec3_copy((float*)look, rig->anchor);
 
-    if (dist > RIG_FIRST_PERSON_EPS) {
+    if (dist > RIG_FIRST_PERSON_EPS * rig->typical_size) {
         vec3 dir;
         glm_vec3_divs(arm, dist, dir);
         camera_rig_set_distance(rig, dist);

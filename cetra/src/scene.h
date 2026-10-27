@@ -192,6 +192,10 @@ typedef struct Occluder {
     vec3 box_max;
 } Occluder;
 
+// The ground projection's dome radius and capture height a scene starts with, in metres.
+#define SCENE_GP_RADIUS_DEFAULT 5.0f
+#define SCENE_GP_HEIGHT_DEFAULT 1.5f
+
 /*
  * Scene
  */
@@ -364,8 +368,11 @@ typedef struct Scene {
     bool render_skybox;
     float skybox_brightness;       // Linear env multiplier (tone mapping is the post pass's job)
     bool skybox_ground_projection; // Project env onto finite dome + ground
-    float skybox_gp_radius;        // Dome radius in world units (meters)
-    float skybox_gp_height;        // HDR capture height above ground
+    // The dome's radius, which the shadow catcher's quad also takes, and the HDR's capture
+    // height above the ground, in metres: SCENE_GP_RADIUS_DEFAULT and SCENE_GP_HEIGHT_DEFAULT,
+    // sized for rooms. A scene of another size sets them (spec 13.57).
+    float skybox_gp_radius;
+    float skybox_gp_height;
     bool shadow_catcher;           // Ground plane receiving shadows over the skybox
     float shadow_catcher_strength; // Shadow darkness 0..1
 
@@ -574,11 +581,11 @@ void scene_publish_fog_volumes_to_postfx(const Scene* scene, struct PostFX* fx);
 
 // skeleton
 void scene_add_skeleton(Scene* scene, Skeleton* skeleton);
-Skeleton* scene_find_skeleton(Scene* scene, const char* name);
+Skeleton* scene_find_skeleton(const Scene* scene, const char* name);
 
 // animation
 void scene_add_animation(Scene* scene, Animation* animation);
-Animation* scene_find_animation(Scene* scene, const char* name);
+Animation* scene_find_animation(const Scene* scene, const char* name);
 
 // viz
 void scene_set_xyz_program(Scene* scene, ShaderProgram* xyz_shader_program);

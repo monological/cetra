@@ -30,7 +30,7 @@ CameraDrag* create_camera_drag(Engine* engine, CameraRig* rig) {
     drag->sensitivity = 0.002f;
     drag->pan_per_unit = 0.0005f;
     drag->zoom_step = 0.9f;
-    drag->min_dist = 0.05f;
+    drag->min_dist = 0.05f * engine->typical_size;
     drag->auto_orbit_speed = 0.5f;
     drag->auto_orbit_min_dist = 2000.0f;
     drag->auto_orbit_max_dist = 3000.0f;
@@ -146,8 +146,9 @@ bool camera_drag_on_key(CameraDrag* drag, int key, int action, int mods) {
         return false;
 
     CameraRig* rig = drag->rig;
-    // Scaled by the arm so the feel carries across models of any size.
-    const float base = fmaxf(rig->dist, 1.0f);
+    // Scaled by the arm so the feel carries across models of any size, and never under a
+    // typical size, so a camera on its anchor still moves.
+    const float base = fmaxf(rig->dist, drag->engine->typical_size);
     const float move_speed = base * 0.1f;
     const float pan_speed = base * 0.05f;
     static const float ORBIT_STEP = 0.1f;

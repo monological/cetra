@@ -4728,19 +4728,20 @@ int main(int argc, char** argv) {
         // projection geometry and smears the panorama's floor into radial
         // streaks around large models.
         scene->skybox_gp_radius = args.ground_radius > 0.0f ? args.ground_radius
-                                  : scene_radius > 0.0f     ? scene_radius * 5.0f
-                                                            : 5.0f;
+                                  : scene_radius > 0.0f
+                                      ? scene_radius * 5.0f
+                                      : SCENE_GP_RADIUS_DEFAULT * engine->typical_size;
         scene->skybox_gp_height = args.ground_height > 0.0f
                                       ? args.ground_height
                                       : scene->skybox_gp_radius * (1.2f / 5.0f);
+    } else {
+        // The shadow catcher sizes its quad off this radius too, so with no dome
+        // it keeps the library's room-sized default in typical sizes rather than in
+        // metres (spec 13.57). Fitting it to the scene instead, as the dome is, was
+        // measured in spec 11.22 to move contact_debug_golden by 1 px, and is still
+        // not this branch's trade to make.
+        scene->skybox_gp_radius = SCENE_GP_RADIUS_DEFAULT * engine->typical_size;
     }
-    // KNOWN, NOT FIXED HERE: the shadow catcher sizes its quad off
-    // skybox_gp_radius, which the block above only fits for a projected dome. A
-    // catcher in a scene without one therefore sits at scene.c's human-scale 5.0
-    // default whatever the model's scale. It predates this branch -- a sky-lit
-    // scene with no ground projection already hit it -- and giving the catcher
-    // its own radius was measured to move contact_debug_golden by 1 px, which is
-    // not a trade to make inside a moment-shadow change. Filed in spec 11.22.
 
     // Fit the shadow frustum to the scene; the library default (ortho 2000)
     // leaves a human-sized model with no effective shadow map resolution
@@ -4778,7 +4779,7 @@ int main(int argc, char** argv) {
     }
     if (scene->shadow_system && scene_radius > 0.0f) {
         scene->shadow_system->ortho_size = scene_radius * 2.0f;
-        scene->shadow_system->near_plane = 0.1f;
+        scene->shadow_system->near_plane = 0.1f * engine->typical_size;
         scene->shadow_system->far_plane = scene_radius * 8.0f;
 
         // Contact-hardening shadows on by default in the viewer. The library
@@ -4912,8 +4913,9 @@ int main(int argc, char** argv) {
     // precision they z-fight into per-pixel speckle along every seam that
     // shifts with each pose. Keep the range tight around the scene (the old
     // "far < 100 -> 10000" fallback gave a ~700000:1 ratio on human-scale
-    // models). near is the dominant precision term, so lift it off zero.
-    float auto_near = fmaxf(scene_radius * 0.05f, 0.05f);
+    // models). near is the dominant precision term, so lift it off zero -- by an amount the
+    // typical size sets, since a floor in metres clips the whole of a millimetre scene.
+    float auto_near = fmaxf(scene_radius * 0.05f, 0.05f * engine->typical_size);
     float auto_far = scene_radius * 40.0f;
     camera->near_clip = auto_near;
     camera->far_clip = auto_far;
@@ -4928,15 +4930,15 @@ int main(int argc, char** argv) {
     // Arm the per-frame distance-adaptive near (see the render callback). The
     // floor matches the orbit's 10% minimum zoom (0.02 * 0.25 * camera_distance).
     clip_near_max = auto_near;
-    clip_near_floor = fmaxf(auto_near * 0.1f, 0.005f);
+    clip_near_floor = fmaxf(auto_near * 0.1f, 0.005f * engine->typical_size);
 
     // AO/GI reach scales with the scene like the shadow frustum and the dome:
     // the meter-scale default (0.4) is sub-resolution on large scenes -- the
     // whole effect collapses below one depth texel and gates itself off. 1% of
     // the bounding radius keeps the reach local (contact occlusion, room-scale
     // bounce); much larger and the sparse 8-step march ring-aliases distant
-    // geometry into concentric bands. Small scenes keep the tuned default;
-    // --ao-radius pins an explicit reach.
+    // geometry into concentric bands. Small scenes keep the tuned default, which
+    // the typical size has already scaled; --ao-radius pins an explicit reach.
     if (engine->postfx) {
         if (args.ao_radius > 0.0f) {
             engine->postfx->ssao_radius = args.ao_radius;
@@ -4959,7 +4961,8 @@ int main(int argc, char** argv) {
             // a few percent of the scene, so the march covers the near-contact
             // gap without streaking. A CLI --cs-distance (incl. 0 = off) wins.
             engine->postfx->cs_distance =
-                args.cs_distance >= 0.0f ? args.cs_distance : fmaxf(0.3f, scene_radius * 0.02f);
+                args.cs_distance >= 0.0f ? args.cs_distance
+                                         : fmaxf(engine->postfx->cs_distance, scene_radius * 0.02f);
 
             // Fog parameters are world-space too: fixed meter-scale density
             // on a large-unit scene is invisible (or opaque soup on a tiny
@@ -5118,7 +5121,8 @@ int main(int argc, char** argv) {
     // --probe (or environment.probe_scene, which is the same request) asks for
     // ONE auto-placed probe, and a file carrying a probes[] array has already
     // answered where its rooms are.
-    const bool authored_probes = apply_cscene_probes(scene, cscn, args.probe_set_res);
+    const bool authored_probes =
+        apply_cscene_probes(scene, cscn, args.probe_set_res, engine->typical_size);
     if (authored_probes && args.probe) {
         fprintf(stderr, "Warning: the scene file authors reflection probes; --probe ignored\n");
     }
@@ -5188,10 +5192,11 @@ int main(int argc, char** argv) {
 
             // Capture frustum: scene-scaled near, far past the dome so the
             // projected environment lands in the capture
-            probe->near_clip = fmaxf(0.005f * scene_radius, 0.01f);
+            const float size = engine->typical_size;
+            probe->near_clip = fmaxf(0.005f * scene_radius, 0.01f * size);
             probe->far_clip = (scene->render_skybox && scene->skybox_ground_projection)
                                   ? 2.0f * scene->skybox_gp_radius
-                                  : 10.0f * fmaxf(scene_radius, 1.0f);
+                                  : 10.0f * fmaxf(scene_radius, size);
             probe->environment_only = probe_env_only;
             // Installed uncaptured: the engine captures it in the first frame.
             // probe_set_add takes the probe whatever it answers, freeing it on failure.

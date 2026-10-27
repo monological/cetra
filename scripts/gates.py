@@ -19761,6 +19761,9 @@ CONFIG_GUI_TABLE_DRIVEN = {
     "v": "the material editor's float/colour buffer: one control per MATERIAL_PARAMS row, "
          "written back through material_param_set, so the materials array carries it",
     "iv": "the same, for that editor's int and enum rows",
+    "metres": "the length helpers' own parameter (spec 13.57): each call site is counted by the "
+              "member it passes",
+    "mm": "the same helpers' millimetre buffer under a small typical size",
 }
 
 
@@ -19777,9 +19780,13 @@ def _config_gui_members():
     widgets = (r'ig(?:' + "|".join(CONFIG_VALUE_WIDGETS) + r')'
                r'\s*\(\s*(?:"[^"]*"|[\w\->\.]+)\s*,\s*&?([A-Za-z_][A-Za-z0-9_\->\.\[\]]*)')
     found = [m.group(1) for m in re.finditer(widgets, src)]
-    # The effect-group helper is a checkbox too, and it owns every master switch.
+    # The effect-group helper is a checkbox too, and it owns every master switch; the two length
+    # helpers (spec 13.57) are a slider and a drag over the member each call site names.
     found += [m.group(1) for m in
               re.finditer(r'_begin_effect_group\(\s*"[^"]*"\s*,\s*&([A-Za-z_][\w\->\.\[\]]*)', src)]
+    found += [m.group(1) for m in
+              re.finditer(r'_length_(?:slider|drag3)\(\s*(?:"[^"]*"|[\w\->\.]+)\s*,\s*'
+                          r'&?([A-Za-z_][A-Za-z0-9_\->\.\[\]]*)', src)]
     return {re.split(r'->|\.', re.sub(r'\[[^\]]*\]', '', e))[-1] for e in found}
 
 

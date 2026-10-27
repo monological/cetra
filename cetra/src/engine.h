@@ -652,7 +652,8 @@ void engine_set_render_scale(Engine* engine, float render_scale);
 // circuit board (spec 13.57). Every length the engine chooses for itself -- how far an effect
 // looks, a bias, a floor -- is its metre value times this, and this writes the defaults the
 // engine owns that way: PostFX's (postfx_reset_lengths) and the installed camera's near and far.
-// An app sets the size first and its own values after. Refused unless positive and finite.
+// The installed camera rig takes the size itself. An app sets the size first and its own values
+// after. Refused unless positive and finite.
 void engine_set_typical_size(Engine* engine, float metres);
 // Re-centre the world on the camera, snapped to `lattice` (spec 11.62). Applies
 // at the next frame top like the render-scale switch above, and only on X and Z.
@@ -889,7 +890,8 @@ bool engine_set_pointer_script(Engine* engine, const char* path);
  * writing the camera in the same frame, every one of them reasoned out
  * independently, and a single slot is what makes those guards unnecessary
  * rather than uniform. Installing a second rig replaces the first and says so,
- * because a silent swap is how two writers start fighting.
+ * because a silent swap is how two writers start fighting. Installing gives the
+ * rig the engine's typical size.
  */
 void engine_set_camera_rig(Engine* engine, struct CameraRig* rig);
 
