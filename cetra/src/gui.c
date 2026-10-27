@@ -162,11 +162,41 @@ static void _material_gui_label(char* out, size_t out_size, const Material* mate
         snprintf(out, out_size, "%d: <unnamed>", index);
 }
 
+/*
+ * A slider over a length (spec 13.57): `lo` and `hi` are its range at a typical size of a metre,
+ * and both follow `size`. Under a tenth of a metre it reads in millimetres, where a board's 30 mm
+ * light range would otherwise show as 0.0 m.
+ */
+static bool _length_slider(const char* label, float* metres, float lo, float hi, float size,
+                           const char* fmt, ImGuiSliderFlags flags) {
+    if (size >= 0.1f)
+        return igSliderFloat(label, metres, lo * size, hi * size, fmt, flags);
+    float mm = *metres * 1000.0f;
+    if (!igSliderFloat(label, &mm, lo * size * 1000.0f, hi * size * 1000.0f, "%.3g mm", flags))
+        return false;
+    *metres = mm * 0.001f;
+    return true;
+}
+
+// A drag over a position or an extent, by _length_slider's rules; `speed` is per pixel at a metre.
+static bool _length_drag3(const char* label, float* metres, float speed, float lo, float hi,
+                          float size, const char* fmt) {
+    if (size >= 0.1f)
+        return igDragFloat3(label, metres, speed * size, lo * size, hi * size, fmt, 0);
+    vec3 mm;
+    glm_vec3_scale(metres, 1000.0f, mm);
+    if (!igDragFloat3(label, mm, speed * size * 1000.0f, lo * size * 1000.0f, hi * size * 1000.0f,
+                      "%.3g mm", 0))
+        return false;
+    glm_vec3_scale(mm, 0.001f, metres);
+    return true;
+}
+
 // One control for one row of the shared material vocabulary. Every row gets one
 // rather than a hand-written widget per property, so a property added for the
 // scene file turns up here for free and the two cannot disagree about what
 // exists.
-static void _material_param_control(Material* material, const MaterialParam* p) {
+static void _material_param_control(Material* material, const MaterialParam* p, float size) {
     // A texture is read-only here: the panel has no file picker, and showing
     // whether one is bound is more use than a control that cannot bind it.
     if (p->type == MATERIAL_PARAM_TEXTURE) {
@@ -186,7 +216,8 @@ static void _material_param_control(Material* material, const MaterialParam* p) 
             changed = igSliderFloat3(p->key, v, p->min, p->max, "%.3f", 0);
             break;
         case MATERIAL_PARAM_FLOAT:
-            changed = igSliderFloat(p->key, v, p->min, p->max, "%.3f", 0);
+            changed = p->length ? _length_slider(p->key, v, p->min, p->max, size, "%.3f", 0)
+                                : igSliderFloat(p->key, v, p->min, p->max, "%.3f", 0);
             break;
         case MATERIAL_PARAM_INT: {
             // Named where the table names them: dragging an integer to reach "leaf"
@@ -207,8 +238,8 @@ static void _material_param_control(Material* material, const MaterialParam* p) 
 
 // The material property editor, in its own window so it can be moved, resized
 // and closed. `open` is the caller's persistent flag and doubles as the close
-// button's target.
-static void _engine_gui_material_window(Material* material, int index, bool* open) {
+// button's target; `size` is the engine's typical size, which its lengths follow.
+static void _engine_gui_material_window(Material* material, int index, bool* open, float size) {
     // "###" pins the window ID while the visible title tracks the selection.
     // Without it a rename or a different material would read as a new window
     // and lose the position and size the user put it in.
@@ -248,7 +279,7 @@ static void _engine_gui_material_window(Material* material, int index, bool* ope
             igIndent(0.0f);
         for (; i < MATERIAL_PARAM_COUNT && strcmp(MATERIAL_PARAMS[i].group, group) == 0; i++) {
             if (group_open)
-                _material_param_control(material, &MATERIAL_PARAMS[i]);
+                _material_param_control(material, &MATERIAL_PARAMS[i], size);
         }
         if (group_open)
             igUnindent(0.0f);
@@ -263,6 +294,7 @@ static void _engine_gui_material_window(Material* material, int index, bool* ope
 // beneath them. Bound directly to the same engine/scene/postfx fields.
 static void _engine_gui_panel(Engine* engine) {
     Camera* camera = engine->camera;
+    const float size = engine->typical_size; // what every length control's range follows
     igSetNextWindowPos((ImVec2){15, 15}, ImGuiCond_FirstUseEver, (ImVec2){0, 0});
     igSetNextWindowSize((ImVec2){320, 660}, ImGuiCond_FirstUseEver);
     if (!igBegin("Cetra", NULL, 0)) {
@@ -353,7 +385,7 @@ static void _engine_gui_panel(Engine* engine) {
 
             if (light->type == LIGHT_POINT || light->type == LIGHT_SPOT) {
                 float range = light->range;
-                if (igSliderFloat("Range", &range, 0.0f, 100.0f, "%.1f m", 0))
+                if (_length_slider("Range", &range, 0.0f, 100.0f, size, "%.1f m", 0))
                     light->range = range;
                 if (igIsItemHovered(0))
                     igSetTooltip("Where the inverse-square falloff is windowed to zero. Also "
@@ -601,9 +633,9 @@ static void _engine_gui_panel(Engine* engine) {
         // Log scale + wide range: the dome radius is a world-space distance
         // apps typically scale to the scene, anywhere from a few units
         // (meter-scale models) to thousands (large-unit assets).
-        igSliderFloat("Dome Radius", &scene->skybox_gp_radius, 1.0f, 10000.0f, "%.2f m",
-                      ImGuiSliderFlags_Logarithmic);
-        igSliderFloat("Capture Height", &scene->skybox_gp_height, 0.1f, 10.0f, "%.2f m", 0);
+        _length_slider("Dome Radius", &scene->skybox_gp_radius, 1.0f, 10000.0f, size, "%.2f m",
+                       ImGuiSliderFlags_Logarithmic);
+        _length_slider("Capture Height", &scene->skybox_gp_height, 0.1f, 10.0f, size, "%.2f m", 0);
         _end_effect_group();
 
         igSliderFloat("IBL Intensity", &scene->ibl->intensity, 0.0f, 4.0f, "%.2f", 0);
@@ -646,8 +678,9 @@ static void _engine_gui_panel(Engine* engine) {
                 igPushID_Int(i);
                 igText("Decal %d", i);
                 igCheckbox("Enabled", &decal->enabled);
-                igDragFloat3("Position", decal->position, 0.05f, -1000.0f, 1000.0f, "%.2f", 0);
-                igDragFloat3("Half Extent", decal->half_extent, 0.02f, 0.01f, 100.0f, "%.2f", 0);
+                _length_drag3("Position", decal->position, 0.05f, -1000.0f, 1000.0f, size, "%.2f");
+                _length_drag3("Half Extent", decal->half_extent, 0.02f, 0.01f, 100.0f, size,
+                              "%.2f");
                 igDragFloat3("Direction", decal->direction, 0.01f, -1.0f, 1.0f, "%.2f", 0);
                 igSliderFloat("Opacity", &decal->opacity, 0.0f, 1.0f, "%.2f", 0);
                 igSliderFloat("Angle Fade", &decal->angle_fade, 0.0f, 89.0f, "%.0f deg", 0);
@@ -956,8 +989,8 @@ static void _engine_gui_panel(Engine* engine) {
         // Log scale + wide range: the AO/GI reach is a world-space distance, so
         // apps scale it to the scene (meter-scale models sit near the bottom,
         // large-unit scenes in the hundreds).
-        igSliderFloat("AO Radius", &fx->ssao_radius, 0.05f, 1000.0f, "%.2f m",
-                      ImGuiSliderFlags_Logarithmic);
+        _length_slider("AO Radius", &fx->ssao_radius, 0.05f, 1000.0f, size, "%.2f m",
+                       ImGuiSliderFlags_Logarithmic);
         igSliderFloat("AO Strength", &fx->ssao_strength, 0.0f, 1.0f, "%.2f", 0);
         static const char* const spec_occ_names[] = {"Off", "Legacy", "Split"};
         // The combo writes its INDEX straight back into the enum, so a label
@@ -979,8 +1012,8 @@ static void _engine_gui_panel(Engine* engine) {
         igSliderFloat("CS Strength", &fx->cs_strength, 0.0f, 1.0f, "%.2f", 0);
         // Log scale + wide range: the march reach is a world-space distance the
         // app scales to the scene, like SSR Distance.
-        igSliderFloat("CS Distance", &fx->cs_distance, 0.01f, 1000.0f, "%.3f m",
-                      ImGuiSliderFlags_Logarithmic);
+        _length_slider("CS Distance", &fx->cs_distance, 0.01f, 1000.0f, size, "%.3f m",
+                       ImGuiSliderFlags_Logarithmic);
         // The pass needs something to march toward -- a shadow-casting
         // directional, or a local light that has no shadow map to be sharpened
         // against. Say so rather than let the toggle look inert.
@@ -993,8 +1026,8 @@ static void _engine_gui_panel(Engine* engine) {
         // Log scale + wide range: the march reach is a world-space distance
         // the app scales to the scene (a couple of units on meter-scale
         // models, thousands on large-unit assets)
-        igSliderFloat("SSR Distance", &fx->ssr_max_distance, 1.0f, 20000.0f, "%.2f m",
-                      ImGuiSliderFlags_Logarithmic);
+        _length_slider("SSR Distance", &fx->ssr_max_distance, 1.0f, 20000.0f, size, "%.2f m",
+                       ImGuiSliderFlags_Logarithmic);
         igSliderFloat("SSR Floor Rough", &fx->ssr_floor_roughness, 0.0f, 1.0f, "%.2f", 0);
         bool ssr_full_res = fx->ssr_full_res;
         if (igCheckbox("SSR Full Res", &ssr_full_res))
@@ -1011,20 +1044,21 @@ static void _engine_gui_panel(Engine* engine) {
         _begin_effect_group("Volumetric Fog", &fx->fog_enabled);
         // Log scale + wide range: density and falloff are world-space
         // quantities apps scale to the scene (tiny values on large-unit
-        // assets) — the SSR Distance slider precedent
-        igSliderFloat("Fog Density", &fx->fog_density, 0.00001f, 1.0f, "%.5f",
+        // assets) — the SSR Distance slider precedent. Density is per metre, so its range goes as
+        // the inverse of the typical size.
+        igSliderFloat("Fog Density", &fx->fog_density, 0.00001f / size, 1.0f / size, "%.5f",
                       ImGuiSliderFlags_Logarithmic);
-        igSliderFloat("Height Falloff", &fx->fog_height_falloff, 0.05f, 5000.0f, "%.2f",
-                      ImGuiSliderFlags_Logarithmic);
+        _length_slider("Height Falloff", &fx->fog_height_falloff, 0.05f, 5000.0f, size, "%.2f",
+                       ImGuiSliderFlags_Logarithmic);
         igSliderFloat("Anisotropy", &fx->fog_anisotropy, -0.9f, 0.9f, "%.2f", 0);
         igSliderFloat("Sun Boost", &fx->fog_sun_boost, 0.0f, 8.0f, "%.2f", 0);
         // The volume's own depth range, which is NOT the camera's: the mapping
         // is exponential, so a near pinned to the clip plane spends most of the
         // slices on air in front of the lens. 0 derives it from Far.
-        igSliderFloat("Volume Near", &fx->fog_near, 0.0f, 20.0f, "%.2f",
-                      ImGuiSliderFlags_Logarithmic);
-        igSliderFloat("Volume Far", &fx->fog_far, 1.0f, 5000.0f, "%.1f",
-                      ImGuiSliderFlags_Logarithmic);
+        _length_slider("Volume Near", &fx->fog_near, 0.0f, 20.0f, size, "%.2f",
+                       ImGuiSliderFlags_Logarithmic);
+        _length_slider("Volume Far", &fx->fog_far, 1.0f, 5000.0f, size, "%.1f",
+                       ImGuiSliderFlags_Logarithmic);
         igSliderFloat("Depth Distribution", &fx->fog_depth_dist, 0.25f, 4.0f, "%.2f", 0);
         igSliderFloat("Temporal Blend", &fx->fog_temporal_blend, 0.0f, 0.98f, "%.2f", 0);
         igSliderInt("History Miss Samples", &fx->fog_history_miss_samples, 1,
@@ -1071,7 +1105,8 @@ static void _engine_gui_panel(Engine* engine) {
             for (int p = 0; p < engine->postfx->sss_profile_count; p++) {
                 char label[32];
                 snprintf(label, sizeof(label), "SSS Radius %d", p);
-                igSliderFloat(label, &engine->postfx->sss_profiles[p][3], 0.0f, 2.0f, "%.3f", 0);
+                _length_slider(label, &engine->postfx->sss_profiles[p][3], 0.0f, 2.0f, size, "%.3f",
+                               0);
             }
             igUnindent(0.0f);
         }
@@ -1171,9 +1206,9 @@ static void _engine_gui_panel(Engine* engine) {
         igCheckbox("Autofocus", &fx->dof_autofocus);
         // Manual focus distance is only meaningful when autofocus is off.
         igBeginDisabled(fx->dof_autofocus);
-        igSliderFloat("Focus Dist", &fx->dof_focus_distance, 0.0f, 100.0f, "%.2f", 0);
+        _length_slider("Focus Dist", &fx->dof_focus_distance, 0.0f, 100.0f, size, "%.2f", 0);
         igEndDisabled();
-        igSliderFloat("Focus Range", &fx->dof_focus_range, 0.1f, 100.0f, "%.2f", 0);
+        _length_slider("Focus Range", &fx->dof_focus_range, 0.1f, 100.0f, size, "%.2f", 0);
         igSliderFloat("Max CoC", &fx->dof_max_coc, 0.0f, 40.0f, "%.1f", 0);
         igSliderInt("Blades", &fx->dof_blades, 0, 9, "%d", 0);
         igSliderFloat("Rotation", &fx->dof_rotation, 0.0f, 180.0f, "%.0f deg", 0);
@@ -1197,25 +1232,25 @@ static void _engine_gui_panel(Engine* engine) {
          */
         CameraRig* rig = engine->camera_rig;
         if (rig) {
-            igDragFloat3("Anchor", rig->anchor, 0.1f, -1000.0f, 1000.0f, "%.2f", 0);
+            _length_drag3("Anchor", rig->anchor, 0.1f, -1000.0f, 1000.0f, size, "%.2f");
             float dist = rig->dist, yaw = rig->yaw, pitch = rig->pitch;
-            if (igSliderFloat("Distance", &dist, 0.0f, 3000.0f, "%.2f", 0))
+            if (_length_slider("Distance", &dist, 0.0f, 3000.0f, size, "%.2f", 0))
                 camera_rig_set_distance(rig, dist);
             bool aimed = igSliderFloat("Yaw", &yaw, -GLM_PI, GLM_PI, "%.3f", 0);
             aimed |= igSliderFloat("Pitch", &pitch, -GLM_PI_2, GLM_PI_2, "%.3f", 0);
             if (aimed)
                 camera_rig_aim(rig, yaw, pitch);
-            igSliderFloat("Look Lift", &rig->look_lift, -10.0f, 10.0f, "%.2f", 0);
+            _length_slider("Look Lift", &rig->look_lift, -10.0f, 10.0f, size, "%.2f", 0);
         } else {
             vec3 look_at;
             glm_vec3_copy(camera->look_at, look_at);
-            if (igDragFloat3("Look At", look_at, 0.1f, -100.0f, 100.0f, "%.2f", 0))
+            if (_length_drag3("Look At", look_at, 0.1f, -100.0f, 100.0f, size, "%.2f"))
                 camera_set_look_at(camera, look_at);
         }
         igDragFloat3("Up", camera->up_vector, 0.1f, -25.0f, 25.0f, "%.2f", 0);
         igSliderFloat("FOV", &camera->fov_radians, 0.1f, GLM_PI, "%.3f", 0);
-        igSliderFloat("Near Clip", &camera->near_clip, 0.01f, 100.0f, "%.3f", 0);
-        igSliderFloat("Far Clip", &camera->far_clip, 0.1f, 10000.0f, "%.1f", 0);
+        _length_slider("Near Clip", &camera->near_clip, 0.01f, 100.0f, size, "%.3f", 0);
+        _length_slider("Far Clip", &camera->far_clip, 0.1f, 10000.0f, size, "%.1f", 0);
         // Camera diagnostic: overlay the live pose next to the FPS, and print an
         // exact-repro CLI line to stdout so a grazing interactive view can be
         // reproduced headlessly (--cam-eye/--cam-target override the orbit framing).
@@ -1338,7 +1373,8 @@ static void _engine_gui_panel(Engine* engine) {
             igSetNextWindowPos((ImVec2){panel_pos.x + panel_size.x + 12.0f, panel_pos.y},
                                ImGuiCond_FirstUseEver, (ImVec2){0, 0});
             igSetNextWindowSize((ImVec2){470.0f, 560.0f}, ImGuiCond_FirstUseEver);
-            _engine_gui_material_window(scene->materials[mat_sel], mat_sel, &mat_editor_open);
+            _engine_gui_material_window(scene->materials[mat_sel], mat_sel, &mat_editor_open,
+                                        engine->typical_size);
         }
     }
 }

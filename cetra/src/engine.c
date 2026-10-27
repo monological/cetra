@@ -1685,6 +1685,8 @@ void engine_set_camera_rig(Engine* engine, CameraRig* rig) {
     if (engine->camera_rig && rig && engine->camera_rig != rig)
         log_info("camera rig replaced; the previous one no longer moves the camera");
     engine->camera_rig = rig;
+    if (rig)
+        rig->typical_size = engine->typical_size;
 }
 
 bool engine_set_pointer_script(Engine* engine, const char* path) {
@@ -2269,6 +2271,8 @@ void engine_set_typical_size(Engine* engine, float metres) {
         engine->camera->near_clip = CAMERA_NEAR_DEFAULT * metres;
         engine->camera->far_clip = CAMERA_FAR_DEFAULT * metres;
     }
+    if (engine->camera_rig)
+        engine->camera_rig->typical_size = metres;
 }
 
 void engine_set_2d_preset(Engine* engine, Scene* scene) {

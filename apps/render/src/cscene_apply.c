@@ -1007,7 +1007,7 @@ void apply_cscene_trees(Engine* engine, Scene* scene, const CetraSceneDesc* cscn
  * volume's opening sweep if the scene has one. Returns false when the scene authored none,
  * which is what leaves the auto-placement path below untouched.
  */
-bool apply_cscene_probes(Scene* scene, const CetraSceneDesc* cscn, int row0) {
+bool apply_cscene_probes(Scene* scene, const CetraSceneDesc* cscn, int row0, float typical_size) {
     if (!scene || !cscn || cscn->probe_count <= 0)
         return false;
 
@@ -1043,8 +1043,8 @@ bool apply_cscene_probes(Scene* scene, const CetraSceneDesc* cscn, int row0) {
         vec3 span;
         glm_vec3_sub(probe->box_max, probe->box_min, span);
         const float radius = 0.5f * glm_vec3_norm(span);
-        probe->near_clip = fmaxf(0.005f * radius, 0.01f);
-        probe->far_clip = 10.0f * fmaxf(radius, 1.0f);
+        probe->near_clip = fmaxf(0.005f * radius, 0.01f * typical_size);
+        probe->far_clip = 10.0f * fmaxf(radius, typical_size);
         probe->environment_only = p->env_only;
         const int n = (int)set->residency.count;
 

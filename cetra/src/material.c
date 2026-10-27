@@ -86,20 +86,20 @@ const MaterialParam MATERIAL_PARAMS[] = {
 
     {"ior", "Transmission", MP(ior, MATERIAL_PARAM_FLOAT, 1.0f, 3.0f)},
     {"transmission", "Transmission", MP(transmission, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},
-    {"thickness", "Transmission", MP(thickness, MATERIAL_PARAM_FLOAT, 0.0f, 5.0f)},
+    {"thickness", "Transmission", MP(thickness, MATERIAL_PARAM_FLOAT, 0.0f, 5.0f), .length = true},
     {"attenuationColor", "Transmission", MP(attenuation_color, MATERIAL_PARAM_COLOR, 0.0f, 1.0f)},
     // Reaches 0 because that is how this field spells glTF's default of infinity;
     // an editor dragging to the bottom of the range turns absorption off rather
     // than driving the extinction to a divide by zero.
     {"attenuationDistance", "Transmission",
-     MP(attenuation_distance, MATERIAL_PARAM_FLOAT, 0.0f, 20.0f)},
+     MP(attenuation_distance, MATERIAL_PARAM_FLOAT, 0.0f, 20.0f), .length = true},
     {"filmThickness", "Transmission", MP(filmThickness, MATERIAL_PARAM_FLOAT, 0.0f, 1000.0f)},
 
     {"curvatureScale", "Skin", MP(curvature_scale, MATERIAL_PARAM_FLOAT, 0.0f, 2.0f)},
 
     // A coat of shells over a skinned mesh (spec 13.17). furLayers is the switch: 0 draws none.
     {"furLayers", "Fur", MP(fur_layers, MATERIAL_PARAM_INT, 0.0f, 32.0f)},
-    {"furLength", "Fur", MP(fur_length, MATERIAL_PARAM_FLOAT, 0.0f, 0.05f)},
+    {"furLength", "Fur", MP(fur_length, MATERIAL_PARAM_FLOAT, 0.0f, 0.05f), .length = true},
     {"furDensity", "Fur", MP(fur_density, MATERIAL_PARAM_FLOAT, 50.0f, 4000.0f)},
     {"furThickness", "Fur", MP(fur_thickness, MATERIAL_PARAM_FLOAT, 0.05f, 1.0f)},
     {"furRootShade", "Fur", MP(fur_root_shade, MATERIAL_PARAM_FLOAT, 0.0f, 1.0f)},

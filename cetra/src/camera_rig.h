@@ -31,7 +31,8 @@
  *
  * FIRST PERSON has no aim POINT, only an aim direction, and the header says so
  * rather than the code smoothing it over: at `dist` 0 the eye and the look
- * point would coincide, so the target is put one unit along the aim. One unit
+ * point would coincide, so the target is put one unit along the aim -- one
+ * `typical_size`, which is a metre in a world of people and rooms. One unit
  * rather than any other because that is what both hand-rolled first-person
  * cameras already used, and because `distance(position, look_at)` is read
  * downstream -- by the DoF autofocus, by the near-clip recompute and by
@@ -135,6 +136,10 @@ typedef struct CameraRig {
     // SETTINGS: plain stores. Write them directly, at any time.
     vec3 anchor;     // the point the rig is about; an app writes it each frame
     float look_lift; // the aim point above the anchor
+    // Metres: the size of what the scene holds (spec 13.57), which the first-person threshold,
+    // the first-person aim and `probe_skin` follow. 1 at creation; installing the rig, and
+    // changing the engine's size while it is installed, gives it the engine's.
+    float typical_size;
     float pitch_min, pitch_max;
     // Radians per second per unit of input, so a caller passes -1..1 from an
     // action or a stick and the rate lives here rather than in each app. These
@@ -187,9 +192,9 @@ typedef struct CameraRig {
     float max_dist;
 
     // Where an arm may be shortened to, once a probe has reported. `skin` backs
-    // off from the hit; `min_dist` is the floor, because collapsing onto the
-    // anchor fills the frame with whatever the camera was following and starts
-    // clipping it through the near plane.
+    // off from the hit, in typical sizes; `min_dist` is the floor, because
+    // collapsing onto the anchor fills the frame with whatever the camera was
+    // following and starts clipping it through the near plane.
     CameraRigProbeFn probe;
     void* probe_user;
     float probe_skin;

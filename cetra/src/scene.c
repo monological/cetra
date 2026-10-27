@@ -109,8 +109,8 @@ Scene* create_scene() {
     scene->render_skybox = false;
     scene->skybox_brightness = 1.0f;
     scene->skybox_ground_projection = false;
-    scene->skybox_gp_radius = 5.0f;
-    scene->skybox_gp_height = 1.5f;
+    scene->skybox_gp_radius = SCENE_GP_RADIUS_DEFAULT;
+    scene->skybox_gp_height = SCENE_GP_HEIGHT_DEFAULT;
     scene->shadow_catcher = false;
     scene->shadow_catcher_strength = 0.55f;
 
@@ -771,7 +771,7 @@ void scene_add_skeleton(Scene* scene, Skeleton* skeleton) {
     scene->skeleton_count = new_count;
 }
 
-Skeleton* scene_find_skeleton(Scene* scene, const char* name) {
+Skeleton* scene_find_skeleton(const Scene* scene, const char* name) {
     if (!scene || !name)
         return NULL;
 
@@ -806,7 +806,7 @@ void scene_add_animation(Scene* scene, Animation* animation) {
     scene->animation_count = new_count;
 }
 
-Animation* scene_find_animation(Scene* scene, const char* name) {
+Animation* scene_find_animation(const Scene* scene, const char* name) {
     if (!scene || !name)
         return NULL;
 

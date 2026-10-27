@@ -79,7 +79,8 @@ void apply_cscene_trees(struct Engine* engine, Scene* scene, const CetraSceneDes
 // engine to capture. True when it took the scene's probes, which is what tells the
 // caller to skip the single auto-placed probe --probe would otherwise install. Must
 // run after the model recenter, since the probes are placed in world space.
-bool apply_cscene_probes(Scene* scene, const CetraSceneDesc* cscn, int row0);
+// `typical_size` is the engine's, which the capture planes' floors follow.
+bool apply_cscene_probes(Scene* scene, const CetraSceneDesc* cscn, int row0, float typical_size);
 
 // GI volumes (spec 13.24), one grid per authored box. False when the file authored none.
 bool apply_cscene_gi_volumes(Scene* scene, const CetraSceneDesc* cscn);
