@@ -258,7 +258,7 @@ scene_desc = {
     "typicalSize": 0.001,
     "lights": [
         {"name": "lamp", "type": "point", "position": [5.0 * MM, (TOP + 30.0) * MM, 6.0 * MM],
-         "color": [1.0, 0.97, 0.92], "intensity": 0.01, "intensity_unit": "candela",
+         "color": [1.0, 0.97, 0.92], "intensity": 0.05, "intensity_unit": "candela",
          "range": 0.3, "cast_shadows": True},
     ],
     "materials": {
