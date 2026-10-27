@@ -340,8 +340,9 @@ RECIPES = [
     # millimetre and fitted planes, in the scene file's three-quarter view. Every other golden
     # is a world of rooms, so all of them together prove only that the metre path did not move;
     # this is the picture of the millimetre one, and the reference pcb's 3D view is held to.
-    # Exposure is pinned where auto-exposure settles on this view, and contact shadows are on
-    # because pcb's pictures take them.
+    # Exposure is pinned where auto-exposure settles on this view. Contact shadows are on
+    # because pcb's pictures take them; they reach no light here, the panels being area lights
+    # and the lamp casting a map of its own.
     {"name": "board_fixture", "scene": "assets/scenes/board_fixture.cscn", "size": (1600, 1200),
      "flags": ["-f", "30", "-W", "800", "-H", "600", "--no-auto-exposure", "-E", "0.0088",
                "--contact-shadows"]},

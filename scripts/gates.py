@@ -483,7 +483,8 @@ BOARD_VIEWS = {
     "close": ["--cam-eye", "-0.00897,0.00292,0.01329", "--cam-target", "-0.01,0.0018,0.012"],
 }
 # Its exposure, pinned where auto-exposure settles on the three-quarter view, and the contact
-# shadows a board's pictures take.
+# shadows a board's pictures take -- which reach no light here: the panels are area lights and
+# the lamp casts a map of its own.
 BOARD_LOOK = ["--no-auto-exposure", "-E", "0.0088", "--contact-shadows"]
 TWIN_ROWS = [
     ("calibrate", "dir_shadow_fixture.cscn", TWIN_CALIBRATE, 30, TWIN_K),
