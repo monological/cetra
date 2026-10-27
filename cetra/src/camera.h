@@ -43,11 +43,22 @@ typedef struct Camera {
     bool is_orthographic; // true = parallel projection; fov_radians is then unused
     float ortho_height;   // World-space height of the ortho view volume; width is
                           // ortho_height * aspect_ratio
+    // true = the engine sets near_clip and far_clip each frame to bracket the scene's mesh boxes
+    // in front of the eye (spec 13.57), for a viewer looking at something. A first-person camera
+    // in a room keeps its own planes: a box holding the eye takes near to its floor.
+    bool fit_clip;
 } Camera;
 
 // The clip planes a camera takes when its desc names none, in metres.
 #define CAMERA_NEAR_DEFAULT 0.1f
 #define CAMERA_FAR_DEFAULT  1000.0f
+
+// The deepest far-to-near ratio a fitted camera is given. D24's step at the far plane is
+// far x (far / near) / 2^24, so at this ratio the farthest surface resolves 6e-4 of its own
+// distance: a tenth of a millimetre at 160 mm. A fit only reaches it when the eye stands inside a
+// box; framing from outside, the ratio is about the scene's depth over its distance, near 100 for
+// a board 2 mm from the lens, where the step is a micrometre.
+#define CAMERA_CLIP_RATIO_MAX 1e4f
 
 // What a camera is created from. Fill the fields you mean with designated
 // initialisers and leave the rest zero: zero is the default, named beside each

@@ -267,7 +267,8 @@ scene_desc = {
         "board_mask_copper": {"clearcoat": 1.0, "clearcoatRoughness": 0.05},
         "board_fr4": {"sss": {"color": [1.0, 0.85, 0.5], "radius": 0.5 * MM}},
     },
-    "camera": {"eye": [0.062, 0.042, 0.068], "target": [0.006, 0.0, 0.002], "fov": 35},
+    "camera": {"eye": [0.062, 0.042, 0.068], "target": [0.006, 0.0, 0.002], "fov": 35,
+               "fitClip": True},
 }
 
 

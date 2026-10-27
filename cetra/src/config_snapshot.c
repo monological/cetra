@@ -631,6 +631,7 @@ static const ConfigField CFG_FIELDS[] = {
     CFG_ROW(CFG_CAMERA, CFG_FLOAT, "camera", "fov_radians", fov_radians),
     CFG_ROW(CFG_CAMERA, CFG_FLOAT, "camera", "near_clip", near_clip),
     CFG_ROW(CFG_CAMERA, CFG_FLOAT, "camera", "far_clip", far_clip),
+    CFG_ROW(CFG_CAMERA, CFG_BOOL, "camera", "fit_clip", fit_clip),
     // Which PROJECTION, and the one field the other kind needs. Both rows or
     // neither: restoring the height onto a perspective camera changes nothing,
     // and restoring the flag without it gives an orthographic camera whatever

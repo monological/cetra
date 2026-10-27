@@ -317,6 +317,7 @@ typedef struct {
     int no_unit_scale;            // Skip import unit normalization (raw file units)
     float import_scale;           // Extra uniform scale on top of unit normalization (1 = none)
     float typical_size;           // Metres, the size of what the scene holds (0 = the engine's 1)
+    int fit_clip;                 // The engine fits the camera's planes to the scene each frame
     int no_aerial;                // Disable aerial perspective (on by default with --sky)
     int sky_rebake_stress;        // Diagnostic: N headless sun re-bakes then restore
     int fog;                      // Enable volumetric fog

@@ -569,7 +569,7 @@ def _twin_scene(d, k):
             for sub in d["camera"]:
                 if sub in ("eye", "target"):
                     d["camera"][sub] = times(d["camera"][sub])
-                elif sub != "fov":
+                elif sub not in ("fov", "fitClip"):
                     refuse(f"camera.{sub}")
         elif key == "lights":
             for light in d["lights"]:
@@ -19603,6 +19603,9 @@ CONFIG_PERTURB_EXCEPTIONS = {
     "engine.msaa_samples": "engine_set_msaa_samples validates; 5 is not a sample count",
     "engine.render_scale": "clamped to [0.5, 1], and forced to 1 headless without jitter",
     "camera.near_clip": "render.c recomputes it every frame from the camera-to-target distance",
+    # Perturb turns camera.fit_clip on, and a fitted camera's planes are the engine's every
+    # frame (spec 13.57) -- its near too, which the row above already excuses for its own reason.
+    "camera.far_clip": "fit_clip is perturbed on, and the engine fits the far plane every frame",
     # This fixture runs without --clouds, so flipping the switch asks for a layer
     # whose noise bake -- a one-shot at startup -- never ran. Refused by name, and
     # config-clouds is the arm that reads both halves of that.
@@ -28062,7 +28065,7 @@ def _cam_probe_basis():
 
 RENDER_CAM = re.compile(
     r"^cam (\d+) eye (\S+) (\S+) (\S+) target (\S+) (\S+) (\S+) "
-    r"dist (\S+) theta (\S+) phi (\S+) ortho (\S+)$", re.M)
+    r"dist (\S+) theta (\S+) phi (\S+) ortho (\S+) near (\S+) far (\S+)$", re.M)
 
 # create_mouse_drag_controller's defaults, restated because a gate cannot ask the
 # binary for them. If a rewrite changes either, these arms fail -- which is right:
@@ -28090,7 +28093,8 @@ def _pointer_run(workdir, binary, tag, script, frames, extra=()):
     return {int(row[0]): {"eye": [float(x) for x in row[1:4]],
                           "target": [float(x) for x in row[4:7]],
                           "dist": float(row[7]), "theta": float(row[8]),
-                          "phi": float(row[9]), "ortho": float(row[10])} for row in rows}
+                          "phi": float(row[9]), "ortho": float(row[10]),
+                          "near": float(row[11]), "far": float(row[12])} for row in rows}
 
 
 def _render_pointer_run(workdir, tag, script, frames):

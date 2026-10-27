@@ -1249,8 +1249,12 @@ static void _engine_gui_panel(Engine* engine) {
         }
         igDragFloat3("Up", camera->up_vector, 0.1f, -25.0f, 25.0f, "%.2f", 0);
         igSliderFloat("FOV", &camera->fov_radians, 0.1f, GLM_PI, "%.3f", 0);
+        // Fitted, the engine writes both planes every frame, so the sliders only read them.
+        igCheckbox("Fit Clip Planes", &camera->fit_clip);
+        igBeginDisabled(camera->fit_clip);
         _length_slider("Near Clip", &camera->near_clip, 0.01f, 100.0f, size, "%.3f", 0);
         _length_slider("Far Clip", &camera->far_clip, 0.1f, 10000.0f, size, "%.1f", 0);
+        igEndDisabled();
         // Camera diagnostic: overlay the live pose next to the FPS, and print an
         // exact-repro CLI line to stdout so a grazing interactive view can be
         // reproduced headlessly (--cam-eye/--cam-target override the orbit framing).
