@@ -1505,6 +1505,16 @@ bool shadow_light_takes_tiles(const Light* light) {
     return light_wants_tiles(light) && light->range > 0.0f;
 }
 
+bool shadow_scene_casts_cascades(const Scene* scene) {
+    for (size_t i = 0; i < scene->light_count; ++i) {
+        const Light* light = scene->lights[i];
+        if (light && light->cast_shadows && !shadow_light_takes_tiles(light) &&
+            light->type == LIGHT_DIRECTIONAL)
+            return true;
+    }
+    return false;
+}
+
 static int tiles_per_layer(int edge) {
     const int per_row = edge / SHADOW_TILE_SIZE;
     return per_row * per_row;

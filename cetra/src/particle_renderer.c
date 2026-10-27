@@ -176,7 +176,8 @@ static void billboard_draw(ParticleRenderer* r, const ParticleInstanceView* view
         glBindTexture(GL_TEXTURE_2D, ctx->scene_depth_texture);
         uniform_set_int(u, "sceneDepth", PARTICLE_DEPTH_UNIT);
         uniform_set_int(u, "uSoftEnabled", 1);
-        uniform_set_float(u, "softDist", PARTICLE_SOFT_FADE_DIST * ctx->typical_size);
+        const float size = ctx->typical_size > 0.0f ? ctx->typical_size : 1.0f;
+        uniform_set_float(u, "softDist", PARTICLE_SOFT_FADE_DIST * size);
     } else {
         uniform_set_int(u, "uSoftEnabled", 0);
     }

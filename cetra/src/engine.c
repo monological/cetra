@@ -1733,9 +1733,13 @@ static void _fit_add_box(const AABB* box, void* fit) {
     camera_clip_fit_add(fit, box);
 }
 
+// How far a sea with no bounds is fitted out, x the typical size: the reach a camera has by
+// default, since such a sea runs on to the horizon wherever the far plane is put.
+#define SEA_REACH 1000.0f
+
 // A fit_clip camera's planes, from what the frame draws at rest: the scene's mesh boxes, and the
-// shadow catcher's quad or a bounded water's rectangle when one draws. A sea with no bounds
-// reaches the horizon, so over one the camera keeps the planes it has.
+// shadow catcher's quad or the water's rectangle when one draws -- a sea with no bounds as a
+// square SEA_REACH out from under the eye.
 static void _engine_fit_clip(const Engine* engine, Camera* camera) {
     const Scene* scene = engine_get_scene(engine);
     if (!scene)
@@ -1745,8 +1749,12 @@ static void _engine_fit_clip(const Engine* engine, Camera* camera) {
     scene_for_each_mesh_box(scene, _fit_add_box, &fit);
     AABB box;
     if (water_will_draw(scene->water, engine, engine->current_render_mode)) {
-        if (!water_surface_box(scene->water, &box))
-            return;
+        if (!water_surface_box(scene->water, &box)) {
+            const float r = SEA_REACH * engine->typical_size;
+            const float* eye = camera->position;
+            box = (AABB){{eye[0] - r, scene->water->level, eye[2] - r},
+                         {eye[0] + r, scene->water->level, eye[2] + r}};
+        }
         camera_clip_fit_add(&fit, &box);
     } else if (render_shadow_catcher_box(engine, scene, engine->current_render_mode, &box)) {
         camera_clip_fit_add(&fit, &box);

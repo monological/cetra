@@ -3004,6 +3004,7 @@ static void upload_inject_uniforms(PostFX* fx, UniformManager* u, mat4 projectio
     uniform_set_int(u, "frameIndex", fx->frame_index);
     uniform_set_mat4(u, "prevView", (float*)fx->froxel_prev_view);
     uniform_set_mat4(u, "prevProjection", (float*)fx->froxel_prev_proj);
+    uniform_set_float(u, "prevFogNear", postfx_fog_near(fx, fx->froxel_prev_proj));
     uniform_set_int(u, "missSamples",
                     glm_imin(fx->fog_history_miss_samples, POSTFX_FOG_MISS_SAMPLES_MAX));
 }

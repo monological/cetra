@@ -290,6 +290,8 @@ typedef struct ShadowSystem {
     // tighter one clips into. The snap anchor decides only whether the lattice
     // arithmetic stays exact, and degrades gradually.
     vec3 scene_center;
+    // The scene-fit map's extent, in metres sized for rooms; a scene of another size sets them
+    // (spec 13.57).
     float ortho_size;
     float near_plane;
     float far_plane;
@@ -391,7 +393,8 @@ typedef struct ShadowSystem {
     float rain_ask_open;      // 1 = rain reaches it, 0 = covered
 
     // Cached point-light shadows (spec 13.16), in tiles of the punctual array.
-    float tile_tolerance; // metres a light's views may move from where they were drawn
+    float tile_tolerance; // metres a light's views may move from where they were drawn, sized for
+                          // rooms; a scene of another size sets it
     bool tile_refresh;    // redraw every face every frame: what a kept face must equal
     // Views a light with a body is drawn from: 0 = SHADOW_TILE_VIEWS, at most that.
     int tile_views;
@@ -530,6 +533,10 @@ int shadow_live_punctual_layer(const ShadowSystem* system, const struct Light* l
 // Whether a light's shadow is cached in tiles rather than drawn into the pool every frame:
 // a shadow-casting point or area light asking for it, with the range its faces end at.
 bool shadow_light_takes_tiles(const struct Light* light);
+
+// Whether a directional light casts this frame: what directional_count counts once the depth pass
+// has run, asked of the lights themselves for whatever runs before it.
+bool shadow_scene_casts_cascades(const struct Scene* scene);
 
 // Give the cached lights their blocks for this frame, nearest the camera first (spec 13.24).
 // Once a frame, before anything captures: every depth pass of the frame draws what this
