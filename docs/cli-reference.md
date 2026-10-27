@@ -239,9 +239,10 @@ camera have to be scaled with it by hand),
 `--fit-clip` (spec 13.57 — the camera's near and far planes fitted every frame to the mesh boxes in
 front of the eye, with the shadow catcher's quad or a bounded water's rectangle when one draws.
 Far is 1.1 times the farthest depth. Near is 0.9 times the larger of the nearest depth and the
-nearest distance times the frustum corner's cosine, and never under far / 1e4. Over an unbounded
-sea the camera keeps the planes it has. **The boxes are at rest**: wind, a skinned pose, the
-terrain's morph or a hook's offset can carry geometry past a fitted plane. A `.cscn` camera's
+nearest distance times the frustum corner's cosine, and never under far / 1e4. A sea with no
+bounds is fitted as a square a thousand typical sizes out from under the eye. **The boxes are at
+rest**: wind, a skinned pose, the terrain's morph, a hook's offset or a wave's crest can carry
+geometry past a fitted plane, and particles, fire and rain are not counted. A `.cscn` camera's
 `fitClip` is the same switch, and with it on the render app's own per-frame near stands down),
 `--no-aerial`,
 `--no-cloud-shadows` (spec 11.39 — the deck casts into the froxel fog by default whenever

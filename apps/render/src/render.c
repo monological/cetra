@@ -2800,8 +2800,17 @@ static void apply_model_recenter(Scene* scene) {
  * and shrink near proportionally, clamped to the load-time value so the
  * default framing renders exactly as before.
  */
-static float clip_near_max = 0.0f;   // Load-time near (0.05 x scene radius)
-static float clip_near_floor = 0.0f; // Lower bound (matches the 10% min zoom)
+static float clip_scene_radius = -1.0f; // The loaded scene's radius; negative until armed
+
+// The load-time near, and the lower bound the per-frame one keeps (the 10% minimum zoom's), both
+// read off the typical size as it stands, so a size changed at run time reaches them.
+static float clip_near_max(const Engine* engine) {
+    return fmaxf(clip_scene_radius * 0.05f, 0.05f * engine->typical_size);
+}
+
+static float clip_near_floor(const Engine* engine) {
+    return fmaxf(clip_near_max(engine) * 0.1f, 0.005f * engine->typical_size);
+}
 
 /*
  * --water-bed dome: an analytic bed that rises to a shoal in the middle of the drawn
@@ -3378,12 +3387,12 @@ void pre_render_callback(Engine* engine, Scene* current_scene) {
     // load-time near at the default 2.5x-radius framing (so nothing changes
     // until the user zooms), then shrinks with the camera so close-ups don't
     // clip into the model.
-    if (engine->camera && view_rig && clip_near_max > 0.0f && !engine->camera->fit_clip) {
+    if (engine->camera && view_rig && clip_scene_radius >= 0.0f && !engine->camera->fit_clip) {
         // The RIG's arm, not the camera's: the engine applies the rig after this
         // hook returns, so the camera still holds last frame's pose here. Same
         // quantity, read from the thing that has already worked it out.
         engine->camera->near_clip =
-            fmaxf(fminf(0.02f * view_rig->dist, clip_near_max), clip_near_floor);
+            fmaxf(fminf(0.02f * view_rig->dist, clip_near_max(engine)), clip_near_floor(engine));
     }
 }
 
@@ -4912,7 +4921,8 @@ int main(int argc, char** argv) {
     // "far < 100 -> 10000" fallback gave a ~700000:1 ratio on human-scale
     // models). near is the dominant precision term, so lift it off zero -- by an amount the
     // typical size sets, since a floor in metres clips the whole of a millimetre scene.
-    float auto_near = fmaxf(scene_radius * 0.05f, 0.05f * engine->typical_size);
+    clip_scene_radius = scene_radius; // and arms the per-frame near in the pre-render hook
+    float auto_near = clip_near_max(engine);
     float auto_far = scene_radius * 40.0f;
     camera->near_clip = auto_near;
     camera->far_clip = auto_far;
@@ -4927,11 +4937,6 @@ int main(int argc, char** argv) {
     camera->fit_clip = args.fit_clip != 0;
     printf("Camera clip planes: near=%.4f, far=%.2f%s\n", auto_near, auto_far,
            camera->fit_clip ? " (fitted each frame)" : "");
-
-    // Arm the per-frame distance-adaptive near (see the render callback). The
-    // floor matches the orbit's 10% minimum zoom (0.02 * 0.25 * camera_distance).
-    clip_near_max = auto_near;
-    clip_near_floor = fmaxf(auto_near * 0.1f, 0.005f * engine->typical_size);
 
     // AO/GI reach scales with the scene like the shadow frustum and the dome:
     // the meter-scale default (0.4) is sub-resolution on large scenes -- the

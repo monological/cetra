@@ -1387,12 +1387,14 @@ inside `_engine_derive_camera` on the pose just written:
   (`render_shadow_catcher_box`, `water_surface_box`).
 - **The planes:** far is 1.1 times the farthest depth. Near is 0.9 times the larger of the nearest
   depth and the nearest distance times the frustum corner's cosine. The second bound is what fits
-  a close-up, where a box reaching behind the eye takes the first to zero. Near is never under
-  far / `CAMERA_CLIP_RATIO_MAX` (1e4).
-- **Over an unbounded sea the camera keeps the planes it has**, since a sea with no bounds reaches
-  the horizon.
-- **The boxes are at rest**, so wind, a skinned pose, the terrain's morph or a hook's offset can
-  carry geometry past a fitted plane.
+  a close-up, where a box reaching behind the eye takes the first to zero; past the farthest
+  depth it says no box reaches the frustum, and is dropped, or near would pass far. Near is never
+  under far / `CAMERA_CLIP_RATIO_MAX` (1e4).
+- **A sea with no bounds is a square `SEA_REACH` (1000 typical sizes) out from under the eye**,
+  the reach a camera has by default. It used to keep the planes the camera had, which after a
+  frame fitted without it were the meshes' alone.
+- **The boxes are at rest**, so wind, a skinned pose, the terrain's morph, a hook's offset or a
+  wave's crest can carry geometry past a fitted plane. Particles, fire and rain are not counted.
 
 Four things about it are easy to get backwards.
 - **The size writes no camera plane, no light and no SSS profile.** It once wrote the installed

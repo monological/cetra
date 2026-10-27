@@ -117,6 +117,7 @@ uniform int frameIndex;
 uniform sampler3D historyVolume;
 uniform mat4 prevView;       // World -> the previous frame's view space
 uniform mat4 prevProjection; // Its focal terms map that to the previous volume
+uniform float prevFogNear;   // That volume's near end, which a fitted camera moves every frame
 uniform float historyScale;  // This frame's pre-exposure over the history's (spec 13.20)
 uniform int missSamples;     // Samples a cell with no history averages; 1 = its one (spec 13.45)
 
@@ -436,10 +437,11 @@ bool froxelHistoryAt(out vec3 prevUvw) {
     vec3 centreP = (invView * vec4(centreView, 1.0)).xyz;
     vec4 prevViewPos = prevView * vec4(centreP, 1.0);
     float prevZ = -prevViewPos.z;
-    if (prevZ <= fogNear)
+    if (prevZ <= prevFogNear)
         return false;
     vec2 prevUv = uvFromViewXY(prevViewPos.xy, prevZ, prevProjection);
-    float prevSlice = froxelViewZToSlice(prevZ, fogNear, fogFar, float(froxelDepth), fogDepthDist);
+    float prevSlice =
+        froxelViewZToSlice(prevZ, prevFogNear, fogFar, float(froxelDepth), fogDepthDist);
     // Scatter cells sit at their slice centre (slice s spans continuous s..s+1), so continuous
     // coordinate c reads texel c-0.5, i.e. the normalized coordinate is just c/depth.
     prevUvw = vec3(prevUv, prevSlice / float(froxelDepth));

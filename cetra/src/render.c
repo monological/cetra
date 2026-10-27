@@ -1344,7 +1344,7 @@ bool render_shadow_catcher_box(const Engine* engine, const Scene* scene, RenderM
                                AABB* out) {
     if (!scene->shadow_catcher || water_will_draw(scene->water, engine, render_mode) ||
         !scene->shadow_system || !scene->shadow_system->enabled ||
-        scene->shadow_system->directional_count == 0 || !engine->shadow_catcher_program ||
+        !shadow_scene_casts_cascades(scene) || !engine->shadow_catcher_program ||
         !engine->catcher_vao)
         return false;
     // catcher_vert.glsl's quad: centred on the origin at y = 0, the dome's radius out.

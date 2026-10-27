@@ -155,10 +155,13 @@ void camera_clip_fit_apply(Camera* camera, const CameraClipFit* fit) {
     if (!camera->is_orthographic) {
         // Inside the frustum a point's depth is at least its distance times the cosine of the
         // frustum's corner ray, so the distance is a second bound, and the one that holds where a
-        // box reaching behind the eye takes the first to zero.
+        // box reaching behind the eye takes the first to zero. Past the farthest depth it says no
+        // box reaches the frustum at all, and binds nothing.
         const float k = tanf(0.5f * camera->fov_radians);
         const float k2 = k * k * (1.0f + camera->aspect_ratio * camera->aspect_ratio);
-        nearest = fmaxf(nearest, sqrtf(fit->nearest_dist_sq) / sqrtf(1.0f + k2));
+        const float bound = sqrtf(fit->nearest_dist_sq) / sqrtf(1.0f + k2);
+        if (bound <= fit->farthest_depth)
+            nearest = fmaxf(nearest, bound);
     }
     camera->near_clip =
         fmaxf(nearest * CLIP_FIT_NEAR_MARGIN, camera->far_clip / CAMERA_CLIP_RATIO_MAX);

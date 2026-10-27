@@ -1365,10 +1365,13 @@ static void _fold_field(CookKey* key, const ConfigField* f, const void* base) {
  * and samples, the clear colour, the camera); everything after the scene pass (the post chain, the
  * exposure -- a capture renders at unity); the GI world's re-convergence rate and debug view; and
  * the rain's streaks, splashes, mist and drips, which only the camera's late draw and fog show.
+ * The typical size is the one engine row kept: a capture draws with the lengths it sets.
  */
 static bool _row_captured(const ConfigField* f) {
     switch ((ConfigOwner)f->owner) {
         case CFG_ENGINE:
+            if (strcmp(f->key, "typical_size") == 0)
+                return true;
             return strcmp(f->section, "engine") != 0 && strcmp(f->section, "engine.overlays") != 0;
         case CFG_POSTFX:
         case CFG_EXPOSURE:
