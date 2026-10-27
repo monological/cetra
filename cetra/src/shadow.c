@@ -1293,15 +1293,33 @@ static const Light* scene_first_spot_light(const Scene* scene) {
 
 // One perspective light-space matrix: eye at `pos`, looking down `dir_in`, rolled so `up` is
 // up in the map. All three punctual types reduce to this; only the fov and the axes differ.
+// glm_lookat's view, given its forward axis rather than a point to look at. A look-at of pos + dir
+// recovers the axis as (pos + dir) - pos, which loses it to rounding in proportion to how far the
+// light stands from the origin: the same light shadowed differently at another place or scale
+// (spec 13.57). Only an axis-aligned direction came back exactly, which is why a point light's
+// faces never showed it and a panel's did.
+static void look_along(const vec3 pos, const vec3 f, const vec3 up, mat4 view) {
+    vec3 s, u;
+    glm_vec3_crossn((float*)f, (float*)up, s);
+    glm_vec3_cross(s, (float*)f, u);
+    glm_mat4_identity(view);
+    for (int i = 0; i < 3; ++i) {
+        view[i][0] = s[i];
+        view[i][1] = u[i];
+        view[i][2] = -f[i];
+    }
+    view[3][0] = -glm_vec3_dot(s, (float*)pos);
+    view[3][1] = -glm_vec3_dot(u, (float*)pos);
+    view[3][2] = glm_vec3_dot((float*)f, (float*)pos);
+}
+
 static void compute_perspective_light_space_up(const vec3 pos, const vec3 dir_in, const vec3 up,
                                                float fov, float near_plane, float far_plane,
                                                mat4 dest) {
     vec3 dir;
     glm_vec3_normalize_to((float*)dir_in, dir);
-    vec3 target;
-    glm_vec3_add((float*)pos, dir, target);
-    mat4 view, proj;
-    glm_lookat((float*)pos, target, (float*)up, view);
+    mat4 view = GLM_MAT4_IDENTITY_INIT, proj;
+    look_along(pos, dir, up, view);
     glm_perspective(fov, 1.0f, near_plane, far_plane, proj);
     glm_mat4_mul(proj, view, dest);
 }
