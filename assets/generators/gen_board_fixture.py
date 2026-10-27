@@ -2,13 +2,13 @@
 """Generate the circuit board at true scale (spec 13.57): a board in metres, the way pcb draws one.
 
     board     100 x 60 mm of FR4, 1.6 mm thick, under a glossy green solder mask, its bottom at
-              y = 0 so the render app's recentre leaves it where it is.
+              y = 0.
     passives  a row of eight 0402 parts along x at z = 12 mm, resistors (white alumina under a
               black overcoat) and capacitors (tan ceramic) in turn, 1.0 x 0.5 mm, on tin
               terminations over tin pads, under a few traces in the mask.
     qfn       a 5 x 5 mm QFN-32 at (22, 10) mm, eight tin lands a side at 0.5 mm pitch.
     bga       a 7 x 7 mm BGA at (22, -12) mm on an 8 x 8 grid of 0.5 mm balls at 0.8 mm pitch.
-    table     a matte grey top 300 mm square under the board.
+    table     a matte grey top 300 mm square under the board, its top at y = 0.
     lights    a tabletop studio: a key softbox to the front left, a larger fill to the right and a
               strip overhead behind, all area panels, and a point light 30 mm over the board.
 
