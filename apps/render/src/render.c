@@ -457,6 +457,8 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "      --ibl-intensity <f>  Environment light strength (default: engine)\n");
     fprintf(stderr, "      --no-scene-file    Ignore any .cscn scene file (model loads bare)\n");
     fprintf(stderr, "      --import-scale <f> Extra uniform scale on the imported model\n");
+    fprintf(stderr, "      --typical-size <m> Size of what the scene holds, in metres "
+                    "(default 1; 0.001 for a circuit board)\n");
     fprintf(stderr,
             "      --no-unit-scale    Skip unit normalization (raw file units; FBX is cm)\n");
     fprintf(
@@ -1862,6 +1864,16 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->import_scale = (float)atof(argv[i]);
             if (args->import_scale <= 0.0f) {
                 fprintf(stderr, "Error: --import-scale must be positive\n");
+                return -1;
+            }
+        } else if (strcmp(argv[i], "--typical-size") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
+                return -1;
+            }
+            args->typical_size = (float)atof(argv[i]);
+            if (!(args->typical_size > 0.0f && isfinite(args->typical_size))) {
+                fprintf(stderr, "Error: --typical-size must be a positive length in metres\n");
                 return -1;
             }
         } else if (strcmp(argv[i], "--no-unit-scale") == 0) {
@@ -3796,7 +3808,8 @@ int main(int argc, char** argv) {
                         .headless = args.headless != 0,
                         .headless_jitter = args.headless_jitter != 0,
                         .profiler = args.profiler_enabled != 0,
-                        .ss_scale = args.ssaa};
+                        .ss_scale = args.ssaa,
+                        .typical_size = args.typical_size};
     if (args.render_scale != 0.0f) {
         // TAAU is a temporal reconstruction: it needs the resolve running and
         // the jitter live. Windowed runs force TAA on below; headless must opt

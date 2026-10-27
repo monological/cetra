@@ -45,6 +45,10 @@ typedef struct Camera {
                           // ortho_height * aspect_ratio
 } Camera;
 
+// The clip planes a camera takes when its desc names none, in metres.
+#define CAMERA_NEAR_DEFAULT 0.1f
+#define CAMERA_FAR_DEFAULT  1000.0f
+
 // What a camera is created from. Fill the fields you mean with designated
 // initialisers and leave the rest zero: zero is the default, named beside each
 // field. A vec3 left zero is the default too, which is why look_at defaults to
@@ -64,8 +68,8 @@ typedef struct CameraDesc {
     vec3 look_at;       // the origin
     vec3 up;            // 0 = +Y
     float fov;          // radians; 0 = 60 degrees
-    float near;         // 0 = 0.1
-    float far;          // 0 = 1000
+    float near;         // 0 = CAMERA_NEAR_DEFAULT
+    float far;          // 0 = CAMERA_FAR_DEFAULT
     float ortho_height; // 0 = perspective
 } CameraDesc;
 

@@ -563,7 +563,9 @@ def _twin_scene(d, k):
     for key in list(d):
         if key.startswith("_") or key in ("version", "models", "environment"):
             continue
-        if key == "camera":
+        if key == "typicalSize":
+            d[key] = times(d[key])
+        elif key == "camera":
             for sub in d["camera"]:
                 if sub in ("eye", "target"):
                     d["camera"][sub] = times(d["camera"][sub])
@@ -621,8 +623,9 @@ def _twin_scene(d, k):
             refuse(key)
 
 
-def _twin_flags(extra, k, sky):
-    """The render app's flags for the twin: lengths times `k`, the import and any `sky` with them.
+def _twin_flags(extra, k, sky, size):
+    """The render app's flags for the twin: lengths times `k`, the import, any `sky` and the
+    original's typical `size` with them.
 
     A component is rescaled through repr, which a C strtod reads back as the same double, so
     the float the app stores is exactly K times the original's.
@@ -640,7 +643,7 @@ def _twin_flags(extra, k, sky):
             i += 2
             continue
         i += 1
-    out += ["--import-scale", repr(k)]
+    out += ["--import-scale", repr(k), "--typical-size", repr(size * k)]
     return out + ["--world-scale", repr(1000.0 * k)] if sky else out
 
 
@@ -655,10 +658,12 @@ def run_scale_twin_gate(workdir):
     failures = []
     for name, scene, extra, frames, k in TWIN_ROWS:
         src = asset(scene)
-        sky = any(f in TWIN_SKY_FLAGS for f in extra)
+        sky, size = any(f in TWIN_SKY_FLAGS for f in extra), 1.0
         if src.endswith(".cscn"):
             with open(src) as f:
-                sky = sky or json.load(f).get("environment", {}).get("mode") == "sky"
+                d = json.load(f)
+            sky = sky or d.get("environment", {}).get("mode") == "sky"
+            size = d.get("typicalSize", size)
         legs = []
         for leg, factor in (("a", None), ("b", k)):
             if src.endswith(".cscn"):
@@ -667,7 +672,7 @@ def run_scale_twin_gate(workdir):
                                  (lambda d: None))
             else:
                 path = src
-            flags = _twin_flags(extra, factor, sky) if factor else list(extra)
+            flags = _twin_flags(extra, factor, sky, size) if factor else list(extra)
             out = os.path.join(workdir, f"twin_{name}_{leg}.ppm")
             err = render(path, out, flags, frames=frames)
             if err:
@@ -19556,6 +19561,7 @@ CONFIG_GUI_LOCALS = {
     "msaa": "msaa_samples",
     "msm_size_idx": "msm_size",
     "pending_scale": "render_scale",
+    "pending_size": "typical_size",
     "rm": "current_render_mode",
     "so": "spec_occlusion_mode",
     "tm": "tonemap_mode",

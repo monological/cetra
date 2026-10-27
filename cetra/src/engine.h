@@ -110,7 +110,8 @@ typedef struct Engine {
     // BY FUNCTION: msaa_samples, ss_scale and render_scale (each clamps and
     // rebuilds the targets at the next frame top), window_mode (moves the
     // window, keeping the windowed rectangle current), vsync (re-applied when a
-    // mode change drops it), screenshot_path (owned
+    // mode change drops it), typical_size (writes the tuning lengths it sets),
+    // screenshot_path (owned
     // string), the five callbacks and user_data (installs), and the animation
     // clock (engine_set_render_clock samples a borrowed one each frame, and
     // the overlay, engine_set_overlay),
@@ -350,6 +351,8 @@ typedef struct Engine {
     // ENGINE-OWNED: where a timed GI sweep's faces count their draws while it draws (spec 13.42),
     // in place of the open profiler scope; NULL otherwise.
     struct SubmitStats* capture_submit;
+
+    float typical_size; // metres: the size of what the scene holds; engine_set_typical_size
 
     Camera* camera; // The camera the frame renders (engine_set_camera); borrowed
 
@@ -627,6 +630,7 @@ typedef struct EngineConfig {
     int msaa_samples;             // scene target sample count; 0 = 4; 1 = off
     int ss_scale;                 // supersampling factor, clamped to [1, 2]; 0 = 1
     float render_scale;           // render-resolution scale in [0.5, 1]; 0 = 1
+    float typical_size;           // metres: the size of what the scene holds; 0 = 1
     EngineWindowMode window_mode; // 0 = windowed; the window is shown already in it
     const char* monitor;          // display name for a non-windowed mode; NULL = primary
 } EngineConfig;
@@ -644,6 +648,12 @@ void engine_set_ss_scale(Engine* engine, int ss_scale);
 // at the next frame top. Forced to 1 in headless without headless_jitter,
 // which TAAU needs to reconstruct from.
 void engine_set_render_scale(Engine* engine, float render_scale);
+// The size, in metres, of the things the scene holds: 1 for people and rooms, 0.001 for a
+// circuit board (spec 13.57). Every length the engine chooses for itself -- how far an effect
+// looks, a bias, a floor -- is its metre value times this, and this writes the defaults the
+// engine owns that way: PostFX's (postfx_reset_lengths) and the installed camera's near and far.
+// An app sets the size first and its own values after. Refused unless positive and finite.
+void engine_set_typical_size(Engine* engine, float metres);
 // Re-centre the world on the camera, snapped to `lattice` (spec 11.62). Applies
 // at the next frame top like the render-scale switch above, and only on X and Z.
 //

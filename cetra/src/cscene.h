@@ -737,6 +737,10 @@ typedef struct CetraSceneDesc {
     float cam_target[3];
     bool has_cam_fov;
     float cam_fov; // vertical, degrees
+
+    // typicalSize (spec 13.57): metres, the size of what the scene holds (Engine.typical_size).
+    bool has_typical_size;
+    float typical_size;
 } CetraSceneDesc;
 
 // The engine LightType a parsed CSceneLightType denotes. Exported because the

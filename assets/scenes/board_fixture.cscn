@@ -12,6 +12,7 @@
    "path": "../models/board_fixture.gltf"
   }
  ],
+ "typicalSize": 0.001,
  "lights": [
   {
    "name": "lamp",

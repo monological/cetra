@@ -44,7 +44,8 @@ layout(std140) uniform ViewParams {
     float preExposure;        // scene radiance -> working space
     float oneOverPreExposure; // working space -> scene radiance (metering only)
     float exposureEV100;      // the camera's EV100; debug and GUI readout
-    float _viewPad;
+    float typicalSize;        // metres, Engine.typical_size: a tuning length is its metre value
+                              // times this (spec 13.57)
 };
 
 // Working-space ceilings. Each is a headroom budget: how many stops over

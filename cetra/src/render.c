@@ -1512,7 +1512,7 @@ void engine_render_scene(Engine* engine, Scene* scene) {
         return;
     }
 
-    SceneNode* root_node = scene->root_node;
+    const SceneNode* root_node = scene->root_node;
     if (!root_node) {
         log_error("error: render called with NULL root node");
         return;
@@ -1632,7 +1632,8 @@ void engine_render_scene(Engine* engine, Scene* scene) {
             pre = 1.0f;
         else if (engine->postfx)
             engine->postfx->pre_exposure = pre;
-        const float view_params[4] = {pre, 1.0f / pre, exposure_ev100(&engine->exposure), 0.0f};
+        const float view_params[4] = {pre, 1.0f / pre, exposure_ev100(&engine->exposure),
+                                      engine->typical_size};
         ubo_upload(engine->view_ubo, view_params, sizeof(view_params));
     }
 
