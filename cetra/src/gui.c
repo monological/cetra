@@ -789,6 +789,18 @@ static void _engine_gui_panel(Engine* engine) {
         igCollapsingHeader_TreeNodeFlags("Post", ImGuiTreeNodeFlags_DefaultOpen)) {
         PostFX* fx = engine->postfx;
 
+        // Applied on release, as the render scale below: it rewrites every length's default, so
+        // a value typed a digit at a time would write each digit's defaults in turn.
+        static float pending_size = 1.0f;
+        igInputFloat("Typical Size (m)", &pending_size, 0.0f, 0.0f, "%g", 0);
+        if (igIsItemDeactivatedAfterEdit())
+            engine_set_typical_size(engine, pending_size);
+        else if (!igIsItemActive())
+            pending_size = engine->typical_size;
+        if (igIsItemHovered(0))
+            igSetTooltip("The size of what the scene holds: 1 for rooms, 0.001 for a circuit "
+                         "board. Writes the engine's own length defaults from it.");
+
         igSeparatorText("Anti-aliasing");
         bool msaa = engine->msaa_samples > 1;
         if (igCheckbox("MSAA 4x", &msaa))

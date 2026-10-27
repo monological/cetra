@@ -180,6 +180,7 @@ static Engine* _engine_alloc(const EngineConfig* cfg) {
     engine->headless = cfg->headless;
     engine->headless_jitter = cfg->headless_jitter;
     engine->capture_budget_ms = cfg->headless ? 0.0f : ENGINE_CAPTURE_BUDGET_MS;
+    engine->typical_size = 1.0f;
     engine->fb_width = 0;
     engine->fb_height = 0;
     engine->vsync = !cfg->no_vsync;
@@ -2248,7 +2249,26 @@ Engine* create_engine(const EngineConfig* cfg) {
         free_engine(engine);
         return NULL;
     }
+    // After init, since it writes PostFX's lengths.
+    if (cfg->typical_size != 0.0f)
+        engine_set_typical_size(engine, cfg->typical_size);
     return engine;
+}
+
+void engine_set_typical_size(Engine* engine, float metres) {
+    if (!engine)
+        return;
+    if (!(metres > 0.0f && isfinite(metres))) {
+        log_warn("engine_set_typical_size: %g is not a positive length in metres; kept %g",
+                 (double)metres, (double)engine->typical_size);
+        return;
+    }
+    engine->typical_size = metres;
+    postfx_reset_lengths(engine->postfx, metres);
+    if (engine->camera) {
+        engine->camera->near_clip = CAMERA_NEAR_DEFAULT * metres;
+        engine->camera->far_clip = CAMERA_FAR_DEFAULT * metres;
+    }
 }
 
 void engine_set_2d_preset(Engine* engine, Scene* scene) {

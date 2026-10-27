@@ -901,6 +901,11 @@ int postfx_scaled_dim(int post_dim, float render_scale);
 bool postfx_resize(PostFX* fx, int width, int height, int ss_scale, float render_scale);
 void free_postfx(PostFX* fx);
 
+// Every length PostFX defaults to, written as its metre default times `typical_size` (spec
+// 13.57): the AO radius, the contact-shadow reach, SSR's reach and thickness floor, the DoF focus
+// and range, the fog's height falloff and far, and the default SSS profile's radius.
+void postfx_reset_lengths(PostFX* fx, float typical_size);
+
 // Per-material SSS scatter profiles. The app resets the table when it configures
 // a scene's skin materials, then adds one profile per distinct skin material
 // (color = per-channel scatter weight, radius = world-space blur width); the

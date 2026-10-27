@@ -666,7 +666,6 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     fx->flare_chroma = 2.0f; // pixels at the frame edge
     fx->flare_source_lod = 2;
     fx->ssao_enabled = true;
-    fx->ssao_radius = 0.4f;
     fx->ssao_strength = 0.8f;
     fx->spec_occlusion_mode =
         POSTFX_SPEC_OCC_SPLIT;           // Ambient spec on its own target, occluded in post
@@ -674,14 +673,11 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     fx->contact_shadows_enabled = false; // Opt-in (spec 9.3); off leaves the frame untouched
     fx->cs_strength = 0.23f;             // Subtle: it stacks on CSM + AO in the same crevices, so a
                                          // higher weight crushes near-contacts to hard black
-    fx->cs_distance = 0.3f;              // View-space reach; apps scene-scale this
     fx->ssgi_enabled = false;            // experimental; off by default
     fx->ssgi_intensity = 1.0f;
     fx->normals_enabled = true;
     fx->ssr_enabled = true;
     fx->ssr_strength = 1.0f;
-    fx->ssr_max_distance = 8.0f;
-    fx->ssr_thickness_min = 0.05f; // View units; apps scene-scale it (never down)
     // Glossy surfaces only (the floor and polished trim): rougher curved
     // surfaces self-graze their own silhouette in screen space and dash
     fx->ssr_max_roughness = 0.25f;
@@ -739,23 +735,19 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     // Depth of field (off by default; targets allocated lazily on first enable)
     fx->dof_enabled = false;
     fx->dof_autofocus = true; // Track the camera's subject unless a focus is pinned
-    fx->dof_focus_distance = 3.0f;
-    fx->dof_focus_range = 1.5f;
-    fx->dof_max_coc = 6.0f; // ~12px max blur — a natural background falloff,
-                            // not the over-creamy look of a larger radius
-    fx->dof_blades = 0;     // Circular aperture; >= 3 warps the kernel to an N-gon
+    fx->dof_max_coc = 6.0f;   // ~12px max blur — a natural background falloff,
+                              // not the over-creamy look of a larger radius
+    fx->dof_blades = 0;       // Circular aperture; >= 3 warps the kernel to an N-gon
     fx->dof_rotation = 0.0f;
     fx->dof_ready = false;
     fx->flare_ready = false;
 
     // Volumetric fog (off by default; targets allocated lazily on first
-    // enable). World-space defaults are meter-scale; apps scene-scale them.
+    // enable). Its density is the medium's, per metre, and a small scene states its own.
     fx->fog_enabled = false;
     fx->fog_density = 0.02f;
-    fx->fog_height_falloff = 4.0f;
     fx->fog_floor_y = 0.0f;
     fx->fog_near = 0.0f; // derive
-    fx->fog_far = 60.0f;
     fx->fog_depth_dist = 1.0f;
     fx->fog_temporal_blend = 0.9f;
     fx->fog_history_miss_samples = 4;
@@ -793,9 +785,10 @@ PostFX* create_postfx(int width, int height, int ss_scale, float render_scale) {
     // Separable SSS profile ( targets allocated lazily on first skin frame).
     // The engine toggle gates the effect; these set the blur width/tint.
     // Default skin profile in slot 0 (rgb = per-channel scatter weight with red
-    // widest, w = world radius); the app overwrites/extends this per skin material.
-    glm_vec4_copy((vec4){1.0f, 0.3f, 0.2f, 0.2f}, fx->sss_profiles[0]);
+    // widest, w = world radius, set below); the app overwrites/extends this per skin material.
+    glm_vec3_copy((vec3){1.0f, 0.3f, 0.2f}, fx->sss_profiles[0]);
     fx->sss_profile_count = 1;
+    postfx_reset_lengths(fx, 1.0f);
     fx->sss_ready = false;
     fx->oit_ready = false;
     fx->spec_ready = false;
@@ -1739,6 +1732,21 @@ bool postfx_resize(PostFX* fx, int width, int height, int ss_scale, float render
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     check_gl_error("postfx_resize");
     return true;
+}
+
+void postfx_reset_lengths(PostFX* fx, float typical_size) {
+    if (!fx)
+        return;
+    const float s = typical_size;
+    fx->ssao_radius = 0.4f * s;
+    fx->cs_distance = 0.3f * s; // view-space reach
+    fx->ssr_max_distance = 8.0f * s;
+    fx->ssr_thickness_min = 0.05f * s; // view units
+    fx->dof_focus_distance = 3.0f * s;
+    fx->dof_focus_range = 1.5f * s;
+    fx->fog_height_falloff = 4.0f * s;
+    fx->fog_far = 60.0f * s;
+    fx->sss_profiles[0][3] = 0.2f * s; // the default profile's world radius
 }
 
 void postfx_reset_sss_profiles(PostFX* fx) {

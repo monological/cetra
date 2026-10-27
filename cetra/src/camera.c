@@ -42,8 +42,8 @@ Camera* create_camera(const CameraDesc* desc) {
 
     camera->aspect_ratio = 16.0f / 9.0f; // re-derived from the framebuffer each frame
     camera->fov_radians = desc->fov > 0.0f ? desc->fov : glm_rad(60.0f);
-    camera->near_clip = desc->near > 0.0f ? desc->near : 0.1f;
-    camera->far_clip = desc->far > 0.0f ? desc->far : 1000.0f;
+    camera->near_clip = desc->near > 0.0f ? desc->near : CAMERA_NEAR_DEFAULT;
+    camera->far_clip = desc->far > 0.0f ? desc->far : CAMERA_FAR_DEFAULT;
     camera->is_orthographic = desc->ortho_height > 0.0f;
     camera->ortho_height = desc->ortho_height;
 

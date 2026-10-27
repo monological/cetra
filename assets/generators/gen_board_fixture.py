@@ -255,6 +255,7 @@ scene_desc = {
         "Regenerate with: python3 assets/generators/gen_board_fixture.py",
     ],
     "models": [{"path": asset_ref("board_fixture.gltf")}],
+    "typicalSize": 0.001,
     "lights": [
         {"name": "lamp", "type": "point", "position": [5.0 * MM, (TOP + 30.0) * MM, 6.0 * MM],
          "color": [1.0, 0.97, 0.92], "intensity": 0.01, "intensity_unit": "candela",

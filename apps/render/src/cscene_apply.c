@@ -309,6 +309,9 @@ int cscene_setup(RenderArgs* args, CetraSceneDesc** out_cscn) {
     if (args->fov_deg <= 0.0f && cscn->has_cam_fov) {
         args->fov_deg = cscn->cam_fov;
     }
+    if (args->typical_size <= 0.0f && cscn->has_typical_size) {
+        args->typical_size = cscn->typical_size;
+    }
     printf("Scene file: %d light(s), %d material override(s), env=%s, camera=%s\n",
            cscn->light_count, cscn->material_count,
            cscn->env_mode == CSCENE_ENV_HDR   ? "hdr"

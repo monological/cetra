@@ -285,6 +285,17 @@ static void _apply_ss_scale(ConfigApplyCtx* ctx, void* base, const ConfigField* 
     engine_set_ss_scale(ctx->engine, (int)v[0]);
 }
 
+// It writes PostFX's lengths and the camera's planes, so its row restores before theirs and
+// they then restore over the defaults it wrote. Only on a change, as the sun's angles: restored
+// onto the session it came from, it has nothing to write.
+static void _apply_typical_size(ConfigApplyCtx* ctx, void* base, const ConfigField* f,
+                                const double* v, int n) {
+    (void)n;
+    if ((float)v[0] == *(const float*)_field_ptr_const(base, f))
+        return;
+    engine_set_typical_size(ctx->engine, (float)v[0]);
+}
+
 static void _apply_ssr_full_res(ConfigApplyCtx* ctx, void* base, const ConfigField* f,
                                 const double* v, int n) {
     (void)base;
@@ -389,6 +400,8 @@ static void _apply_cloud_enabled(ConfigApplyCtx* ctx, void* base, const ConfigFi
  */
 static const ConfigField CFG_FIELDS[] = {
     // --- engine
+    // First: it writes defaults that rows below restore over.
+    CFG_ROW_FN(CFG_ENGINE, CFG_FLOAT, "engine", "typical_size", typical_size, _apply_typical_size),
     CFG_ROW_ENUM(CFG_ENGINE, "engine", "render_mode", current_render_mode, CFG_RENDER_MODES),
     CFG_ROW_FN(CFG_ENGINE, CFG_INT, "engine", "msaa_samples", msaa_samples, _apply_msaa),
     // A bool that changes frames only on the live TAA path at one sample, but
