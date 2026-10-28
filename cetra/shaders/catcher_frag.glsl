@@ -25,6 +25,7 @@ layout(location = 7) out vec4 SpecOut;    // Ambient specular; the catcher emits
 #define CSM_OUTERMOST_PCF
 #define CSM_PCF_HALF_KERNEL 2
 #include "csm.glsl"
+#include "receiver_plane.glsl"
 
 // Cloud deck (spec 11.41): it darkens this plane the way a caster does.
 #include "cloud_shadow.glsl"
@@ -41,19 +42,49 @@ uniform mat4 view;
 // untouched.
 uniform int surfaceMode;
 
-float occlusion_from(int slot)
+// csmOutermostOcclusion with every tap compared against this plane's own depth there, as pbr_frag's
+// PCF compares against a receiver's plane (spec 13.58). The receiver is a plane by construction,
+// so a surface lying in it cannot shadow it and the bias is the depth floor: an occluder resting
+// on the plane casts however short it is. The flat shadowBias the other outermost consumers take
+// is a fraction of the map's depth range, about 4% of the scene's radius along the light, and
+// every occluder shorter than that cast nothing here. `ddxWorld` and `ddyWorld` are the plane's
+// screen derivatives, taken by the caller where control flow is uniform.
+float occlusion_from(int slot, vec3 ddxWorld, vec3 ddyWorld)
 {
-    return csmOutermostOcclusion(WorldPos, slot);
+    int layer = slot * cascadeCount + (cascadeCount - 1);
+    vec4 lightSpace = lightSpaceMatrix[layer] * vec4(WorldPos, 1.0);
+    vec3 proj = lightSpace.xyz / lightSpace.w * 0.5 + 0.5;
+    if (proj.z > 1.0 || proj.x < 0.0 || proj.x > 1.0 || proj.y < 0.0 || proj.y > 1.0)
+        return 0.0;
+    if (msmEnabled == 1)
+        return csmMomentOcclusion(layer, proj.xy, proj.z);
+
+    vec2 duv_dz = receiverPlaneGradient(mat3(lightSpaceMatrix[layer]) * ddxWorld,
+                                        mat3(lightSpaceMatrix[layer]) * ddyWorld);
+    vec2 kernelStep = shadowTexelSize * 1.5;
+    float ref = proj.z - SHADOW_PLANE_BIAS_FLOOR;
+    float shadow = 0.0;
+    for (int x = -CSM_PCF_HALF_KERNEL; x <= CSM_PCF_HALF_KERNEL; x++) {
+        for (int y = -CSM_PCF_HALF_KERNEL; y <= CSM_PCF_HALF_KERNEL; y++) {
+            vec2 offset = vec2(float(x), float(y)) * kernelStep;
+            float depth = texture(shadowMaps, vec3(proj.xy + offset, float(layer))).r;
+            shadow += ref + receiverPlaneBias(duv_dz, offset) > depth ? 1.0 : 0.0;
+        }
+    }
+    const float taps = float(2 * CSM_PCF_HALF_KERNEL + 1) * float(2 * CSM_PCF_HALF_KERNEL + 1);
+    return 1.0 - (1.0 - shadow / taps) * csmTransmittance(layer, proj.xy, proj.z);
 }
 
 void main()
 {
+    vec3 ddxWorld = dFdx(WorldPos);
+    vec3 ddyWorld = dFdy(WorldPos);
     float darkness = 0.0;
     for (int i = 0; i < numShadowLights && i < MAX_SHADOW_LIGHTS; i++) {
         // What survives BOTH the caster and the deck. Composed as transmittances
         // rather than added as darknesses, so a fragment already in full geometric
         // shadow cannot be darkened past black by a cloud sitting over it.
-        float sun = (1.0 - occlusion_from(i)) * cloudSunForSlot(WorldPos, i);
+        float sun = (1.0 - occlusion_from(i, ddxWorld, ddyWorld)) * cloudSunForSlot(WorldPos, i);
         darkness += shadowLightWeight[i] * (1.0 - sun);
     }
 
