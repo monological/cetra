@@ -1536,7 +1536,11 @@ frame, see The Typical Size), the ortho height and switch, `max_distance`, the t
 
 - **Shadows:** cascaded shadow maps (up to 3 cascades, up to 3 shadow-casting lights
   into a `GL_TEXTURE_2D_ARRAY`), per-cascade bounding-sphere ortho fitting, 3x3 PCF by
-  default with optional PCSS contact-hardening. Stored on `scene->shadow_system`. The
+  default with optional PCSS contact-hardening. Stored on `scene->shadow_system`.
+  **A cascade's soft-shadow thresholds are counted in texels of its map, never as a fraction of
+  its depth range** (spec 13.58). The range is mostly the scene pad its eye is pushed back by,
+  about 4% of the scene's radius, and a fraction of it dropped every occluder shorter than that;
+  see `docs/shader-subsystems.md`, Cascade soft shadows. The
   per-frame PUNCTUAL pool is sixteen layers of one array: a spot takes one, a point light six,
   and an area light FIVE (spec 13.27) -- a cube in the panel's own frame, its width axis, its
   up and its normal standing for x, y and z, with the face behind the panel never drawn, since

@@ -26,7 +26,8 @@ Image finishing: [Tonemap / exposure](#tonemap--exposure) ·
 [Local exposure](#local-exposure) · [Film grain](#film-grain) · [The CRT](#the-crt)
 
 Lighting and occlusion: [Specular occlusion](#specular-occlusion) · [IES profiles](#ies-profiles) ·
-[Contact shadows](#contact-shadows) · [Area-light shadows](#area-light-shadows) ·
+[Contact shadows](#contact-shadows) · [Cascade soft shadows](#cascade-soft-shadows) ·
+[Area-light shadows](#area-light-shadows) ·
 [Cached shadows](#cached-shadows) ·
 [Clustered specular probes](#clustered-specular-probes)
 
@@ -422,6 +423,30 @@ Reads the cluster list through `#include "lights_ubo.glsl"` with **no C-side bin
 context's lifetime, which `froxel_inject` has relied on since 9.5.
 A CACHED point light (spec 13.16) holds tiles rather than a layer and counts as mapped:
 the mapless count asks `shadow_light_mapped`, never the layer field.
+
+## Cascade soft shadows
+
+`cascadeOpaqueTap` in `pbr_frag` (PCSS): a blocker search over a disk the emitter's size, the
+average blocker's distance setting a penumbra, then PCF over that penumbra, every tap compared
+against the receiver's plane (`include/receiver_plane.glsl`). The catcher (`catcher_frag`)
+compares against its own plane the same way, through a 5x5 kernel on the outermost cascade.
+
+**Every threshold here is counted in texels of the sampled cascade's map, never as a fraction of
+its depth range** (spec 13.58).
+- **What the depth range is:** a cascade's light eye is pushed back past its slice by the scene
+  pad (`0.5 * far_plane`, and the render app's far plane is 8 scene radii). So the range, and any
+  fraction of it, is about 4% of the scene's radius, at any scale.
+- **What a fraction of it cost:** the blocker search gated at 1% of the distance from that eye,
+  and the catcher took a flat 0.5% of the range. Every occluder shorter than that cast no soft
+  shadow, and nothing on the catcher. A resistor on pcb's board lost its shadow, and its printed
+  marking, 10 µm taller, cast a ghost of the text.
+- **Now:** the blocker margin is one texel (`CSM_BLOCKER_TEXELS`, the cached tiles'
+  `TILE_BIAS_TEXELS`), and the catcher's bias is the receiver-plane floor.
+- **The cost, accepted on look:** the old margin also hid a shadow map's self-shadowing at a
+  curved surface's terminator, which PCF has always shown and PCSS now shows too.
+- **The particles, the water and the fog keep the flat bias:** air and a refracted bed have no
+  plane to extrapolate.
+- **What holds it:** the `pcss` gate group, on `short_occluder_fixture`.
 
 ## Area-light shadows
 
