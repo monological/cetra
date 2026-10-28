@@ -732,15 +732,16 @@ float linearizeOrthoDepth(float d01, vec2 nf) {
 // scale of px/py cancels bit-exactly through the gradient's ratio, so only
 // the whole-vector scale matters, and none is cheapest.
 //
-// Blocker classification separation, relative on linearized ortho depth: a
-// blocker must be genuinely NEARER the light than the receiver's plane, not
-// merely within filter-bias distance of it -- a receiver sits within filter
-// bias of itself, which 10.4 measured dragging the average blocker depth and
-// collapsing the penumbra to a third of its width. Relative means the
-// required separation scales with the cascade's full depth range (eye
-// pushback included) -- deliberate, so one constant serves every fit; do not
-// "fix" it into an absolute epsilon without re-running the gates.
-#define CSM_BLOCKER_SEPARATION 0.99
+// Blocker classification separation, in texels of the sampled cascade's map (spec 13.58): a
+// blocker must be genuinely NEARER the light than the receiver's plane, not merely within
+// filter-bias distance of it -- a receiver sits within filter bias of itself, which 10.4 measured
+// dragging the average blocker depth and collapsing the penumbra to a third of its width.
+// Counted in texels, which scale with every fit, and never as a fraction of the distance from the
+// cascade's eye: that distance is mostly the padding the eye is pushed back by, about 4% of the
+// scene's radius, and every occluder shorter than that lost its soft shadow. One texel, the
+// cached tiles' margin (TILE_BIAS_TEXELS): an occluder needs a little more than that along the
+// light to block.
+#define CSM_BLOCKER_TEXELS 1.0
 
 vec2 csmPlaneGradient(int layer, vec3 ddxWorld, vec3 ddyWorld) {
     return receiverPlaneGradient(mat3(lightSpaceMatrix[layer]) * ddxWorld,
@@ -828,6 +829,7 @@ float cascadeOpaqueTap(int layer, vec3 projCoords, vec2 duv_dz, float lightSize)
     //    slope, and a per-tap filter bias is the wrong scale for "what is
     //    occluding me" -- a receiver sits within filter bias of itself.
     float zReceiver = linearizeOrthoDepth(currentDepth, nearFar);
+    float separation = CSM_BLOCKER_TEXELS * frustumWidth * shadowTexelSize.x;
     float blockerSum = 0.0;
     float blockerCount = 0.0;
     for (int i = 0; i < 16; i++) {
@@ -836,7 +838,7 @@ float cascadeOpaqueTap(int layer, vec3 projCoords, vec2 duv_dz, float lightSize)
         float zTap = linearizeOrthoDepth(d, nearFar);
         float zPlane =
             linearizeOrthoDepth(currentDepth + receiverPlaneBias(duv_dz, off), nearFar);
-        if (zTap < zPlane * CSM_BLOCKER_SEPARATION) {
+        if (zTap < zPlane - separation) {
             blockerSum += zTap;
             blockerCount += 1.0;
         }
