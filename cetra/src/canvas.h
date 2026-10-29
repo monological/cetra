@@ -54,8 +54,9 @@ typedef struct CanvasLayer {
     struct CanvasLayerData* data;
 
     // SETTINGS: plain stores. Write them directly, at any time.
-    float opacity; // the layer as a whole; 1 when added
-    int order;     // drawn lowest first, ties in the order added; its index when added
+    float opacity;     // the layer as a whole; 1 when added
+    int order;         // drawn lowest first, ties in the order added; its index when added
+    bool above_active; // drawn after a view's active layer, as holes or a ratsnest are
 } CanvasLayer;
 
 // A set of layers, by their index. Empty means every layer.
@@ -89,10 +90,12 @@ static inline bool canvas_layer_set_empty(const CanvasLayerSet* set) {
  */
 typedef struct CanvasTags CanvasTags;
 
-// Where shapes of one layer overlap, a raised one's colour shows, else the
-// first added's; the layer is translucent as a whole, its overlaps drawn once.
-// An object's state wins over its net's for colour and outline; the larger dim
-// wins, and either tag hides or raises.
+// Where shapes of one layer overlap, a raised one's colour shows; otherwise
+// which shows is not defined beyond a shape covering a pixel well winning over
+// another's edge, so give shapes that overlap one colour or raise one. The
+// layer is translucent as a whole, its overlaps drawn once. An object's state
+// wins over its net's for colour and outline; the larger dim wins, and either
+// tag hides or raises.
 typedef struct CanvasTagState {
     uint32_t colour;  // in place of the shape's style colour; 0 = the style's
     uint32_t outline; // a ring just outside a shape (not text), under its layer's other
@@ -272,14 +275,23 @@ CanvasEdit* create_canvas_edit(const Canvas* canvas);
 void free_canvas_edit(CanvasEdit* edit);
 
 // Each is refused by name, and leaves the edit as it was, for a shape with no
-// layer, a negative width or stroke, or no extent.
+// layer, a negative width or stroke, a width, radius or size of 2^30 units or
+// more, no extent, or one cut into more than 65536 pieces at the tile grid --
+// and a shape refused part way is taken out whole.
+//
+// Segments, arcs and polygons are cut at the tile grid and so drawn wherever
+// the view is. A circle, a box and a string are kept whole in their anchor's
+// tile, and a view whose centre is 2^30 units or more from that tile does not
+// draw them: their rim at the largest radius, a string's far end past 2^30
+// units of it.
 void canvas_edit_segment(CanvasEdit* edit, const CanvasSegment* segment);
 void canvas_edit_arc(CanvasEdit* edit, const CanvasArc* arc);
 void canvas_edit_circle(CanvasEdit* edit, const CanvasCircle* circle);
 void canvas_edit_box(CanvasEdit* edit, const CanvasBox* box);
 void canvas_edit_polyline(CanvasEdit* edit, const CanvasPolyline* line);
 // Triangulated here, on the edit's thread, and cut at tile edges. Refused also
-// for a ring of fewer than three points.
+// for a ring of fewer than three points, and for a polygon 2^30 units wide or
+// tall or more: each of its fill triangles keeps its far outline points.
 void canvas_edit_polygon(CanvasEdit* edit, const CanvasPolygon* polygon);
 // Laid out here, on the edit's thread, which only reads the font. Refused also
 // for no font, one that is not SDF, or no size; an empty string adds nothing.
@@ -288,8 +300,10 @@ void canvas_edit_text(CanvasEdit* edit, const CanvasText* text);
 void canvas_edit_remove_object(CanvasEdit* edit, uint32_t object);
 void canvas_edit_clear_layer(CanvasEdit* edit, CanvasLayer* layer);
 
-// Merges the edit into the canvas, in time proportional to the edit, and
-// empties it for reuse. The tiles it touched upload at the next draw.
+// Merges the edit into the canvas and empties it for reuse; the tiles it
+// touched upload at the next draw. An add costs time in proportion to what it
+// adds; a remove, to the items in the tiles its object reaches; a clear, to
+// the layer's tiles and the objects the canvas holds.
 void canvas_apply(Canvas* canvas, CanvasEdit* edit);
 
 /*

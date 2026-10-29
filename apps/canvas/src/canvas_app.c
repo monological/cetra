@@ -10,16 +10,16 @@
  * gate group can measure the picture against closed forms without restating
  * the sheet's layout.
  *
- * A debug harness for one internal header: the glyphs sheet measures text
- * against stb_truetype's own rasterizer, which only its header reaches.
+ * A debug harness for two internal headers: the glyphs sheet measures text
+ * against stb_truetype's own rasterizer, which only its header reaches, and
+ * --edit-thread fills an edit through the engine's thread shim, which is what
+ * builds on Windows as well.
  */
 
 #include <math.h>
-#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
@@ -27,8 +27,9 @@
 #include "cetra/camera.h"
 #include "cetra/canvas.h"
 #include "cetra/engine.h"
-#include "cetra/postfx.h"
 #include "cetra/internal/ext/stb_truetype.h"
+#include "cetra/internal/thread.h"
+#include "cetra/postfx.h"
 #include "cetra/program.h"
 #include "cetra/scene.h"
 #include "cetra/text.h"
@@ -228,9 +229,9 @@ static void sheet_areas(SheetContext* ctx) {
     CanvasEdit* edit = ctx->edit;
     const CanvasPaint paint = white_paint(ctx->canvas);
     const double s = ppu_px(ctx);
-    const int64_t half = MM(0.9);
+    const int64_t half = MM(0.75);
 #define CELL(i, j) \
-    ((CanvasPoint){MM(-3.0 + 2.0 * (i)) + ctx->offset, MM(1.5 - 3.0 * (j)) + ctx->offset})
+    ((CanvasPoint){MM(-3.2 + 1.6 * (i)) + ctx->offset, MM(1.5 - 3.0 * (j)) + ctx->offset})
 #define PROBE(name, centre, fmt, ...)                     \
     do {                                                  \
         if (ctx->probe) {                                 \
@@ -296,6 +297,19 @@ static void sheet_areas(SheetContext* ctx) {
         &(CanvasSegment){.paint = paint, .a = ba, .b = bb, .width = MM(0.2), .flat_ends = true});
     PROBE("bar", c, "len %.6f w %.6f", hypot((double)(bb.x - ba.x), (double)(bb.y - ba.y)) * s,
           MM(0.2) * s);
+
+    // Three quarters of a circle with flat ends, clockwise from south round to east: an arc of
+    // more than half a turn, whose flat ends' inner ramp is measured only near each end.
+    c = CELL(4, 0);
+    canvas_edit_arc(edit, &(CanvasArc){.paint = paint,
+                                       .a = {c.x, c.y - MM(0.5)},
+                                       .b = {c.x + MM(0.5), c.y},
+                                       .radius = MM(0.5),
+                                       .width = MM(0.1),
+                                       .clockwise = true,
+                                       .major = true,
+                                       .flat_ends = true});
+    PROBE("flat-arc", c, "r %.6f w %.6f sweep %.9f", MM(0.5) * s, MM(0.1) * s, 4.71238898038469);
 #undef PROBE
 #undef CELL
 }
@@ -334,27 +348,25 @@ static void poly_hole(Poly* p) {
 static void probe_polygon(const SheetContext* ctx, const char* name, CanvasPoint centre,
                           const Poly* p) {
     const double s = ppu_px(ctx);
-    double area = 0.0, perimeter = 0.0;
     double* xy = malloc(p->n * 2 * sizeof(double));
     if (!xy)
         return;
+    for (size_t i = 0; i < p->n; i++) {
+        xy[2 * i] = (double)(p->pts[i].x - p->pts[0].x);
+        xy[2 * i + 1] = (double)(p->pts[i].y - p->pts[0].y);
+    }
+    double area = 0.0, perimeter = 0.0;
     for (size_t r = 0; r <= p->hole_count; r++) {
         const size_t start = r ? p->holes[r - 1] : 0;
         const size_t end = r < p->hole_count ? p->holes[r] : p->n;
         double ring = 0.0;
         for (size_t i = start, j = end - 1; i < end; j = i++) {
-            const double ax = (double)(p->pts[j].x - p->pts[0].x);
-            const double ay = (double)(p->pts[j].y - p->pts[0].y);
-            const double bx = (double)(p->pts[i].x - p->pts[0].x);
-            const double by = (double)(p->pts[i].y - p->pts[0].y);
-            ring += ax * by - bx * ay;
-            perimeter += hypot(bx - ax, by - ay);
+            const double* a = xy + 2 * j;
+            const double* b = xy + 2 * i;
+            ring += a[0] * b[1] - b[0] * a[1];
+            perimeter += hypot(b[0] - a[0], b[1] - a[1]);
         }
         area += r == 0 ? fabs(ring) / 2.0 : -fabs(ring) / 2.0;
-    }
-    for (size_t i = 0; i < p->n; i++) {
-        xy[2 * i] = (double)(p->pts[i].x - p->pts[0].x);
-        xy[2 * i + 1] = (double)(p->pts[i].y - p->pts[0].y);
     }
     Triangulation t;
     double tri_area = 0.0;
@@ -366,14 +378,9 @@ static void probe_polygon(const SheetContext* ctx, const char* name, CanvasPoint
             tri_area += fabs((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])) / 2.0;
         }
     }
-    printf("canvas polygons %s", name);
-    double x0, y0, x1, y1;
-    fb_of(ctx, (CanvasPoint){centre.x - MM(1.2), centre.y + MM(1.2)}, &x0, &y0);
-    fb_of(ctx, (CanvasPoint){centre.x + MM(1.2), centre.y - MM(1.2)}, &x1, &y1);
-    printf(" box %ld %ld %ld %ld area %.6f perimeter %.6f triangulated %.6f triangles %zu points "
-           "%zu holes %zu\n",
-           lround(x0), lround(y0), lround(x1), lround(y1), area * s * s, perimeter * s,
-           tri_area * s * s, t.count, p->n, p->hole_count);
+    probe_cell(ctx, "polygons", name, centre, MM(1.2));
+    printf(" area %.6f perimeter %.6f triangulated %.6f triangles %zu points %zu holes %zu\n",
+           area * s * s, perimeter * s, tri_area * s * s, t.count, p->n, p->hole_count);
     free_triangulation(&t);
     free(xy);
 }
@@ -804,12 +811,17 @@ static void sheet_tags(SheetContext* ctx) {
     canvas_tags_set(tags, 4, (CanvasTagState){.hidden = true});
     BOX(4, red, 0, 4);
     // Two boxes overlapping: the second raised, so its colour wins where they
-    // meet; then the same pair with neither raised, where the first does.
+    // meet; then the same pair with neither raised, where the first does. The
+    // raised box's left edge lies 0.7 of the way across a pixel, so that pixel
+    // is under half covered by it: a fringe, which the box beneath takes.
     const CanvasPoint c5 = CELL(5), c6 = CELL(6);
+    double edge_x, edge_y;
+    fb_of(ctx, c5, &edge_x, &edge_y);
+    const int64_t nudge = llround((floor(edge_x) + 0.7 - edge_x) / ppu_px(ctx));
     canvas_tags_set(tags, 5, (CanvasTagState){.colour = 0x0000ffffu, .raised = true});
     BOX(5, red, 0, 0);
     canvas_edit_box(edit, &(CanvasBox){.paint = {layer, red, 0, 5},
-                                       .centre = {c5.x + MM(0.5), c5.y},
+                                       .centre = {c5.x + MM(0.5) + nudge, c5.y},
                                        .size_x = MM(1.0),
                                        .size_y = MM(1.0)});
     canvas_tags_set(tags, 6, (CanvasTagState){.colour = 0x0000ffffu});
@@ -841,6 +853,8 @@ static void sheet_tags(SheetContext* ctx) {
         probe_pixel(ctx, "dim", CELL(3), 0x808080);
         probe_pixel(ctx, "hidden", CELL(4), 0x000000);
         probe_pixel(ctx, "raised", (CanvasPoint){c5.x + MM(0.25), c5.y}, 0x0000ff);
+        printf("canvas tags raised-fringe at %ld %ld want %06x\n", (long)floor(edge_x),
+               (long)floor(edge_y), 0xff0000u);
         probe_pixel(ctx, "first-added", (CanvasPoint){c6.x + MM(0.25), c6.y}, 0xff0000);
         probe_pixel(ctx, "outline-body", CELL(7), 0xff0000);
         probe_pixel(ctx, "outline-ring", (CanvasPoint){CELL(7).x + MM(0.5 + ring_mm), CELL(7).y},
@@ -917,6 +931,22 @@ static void board_via(CanvasEdit* edit, const Board* b, uint32_t net, uint32_t o
     canvas_edit_circle(edit, &under);
 }
 
+// A trace 0.2 mm wide through points given in the left side's frame, turned to
+// `side`.
+static void board_route(CanvasEdit* edit, const Board* b, CanvasPaint paint, int side,
+                        const double (*points)[2], size_t count) {
+    CanvasPoint line[4];
+    for (size_t i = 0; i < count && i < 4; i++) {
+        double x, y;
+        board_turn(side, points[i][0], points[i][1], &x, &y);
+        line[i] = board_at(b, x, y);
+    }
+    canvas_edit_polyline(edit, &(CanvasPolyline){.paint = paint,
+                                                 .points = line,
+                                                 .count = count < 4 ? count : 4,
+                                                 .width = MM(0.2)});
+}
+
 static void board_label(CanvasEdit* edit, const Board* b, const char* text, double x, double y,
                         double size) {
     canvas_edit_text(edit, &(CanvasText){.paint = {b->silk, b->silk_s, 0, 0},
@@ -967,17 +997,7 @@ static void board_fill(CanvasEdit* edit, const Board* b) {
             board_pad(edit, b, b->top, b->top_s, pin, 200 + pin, x0, y0, 1.4, 0.3, side * QUARTER);
             const double route[4][2] = {
                 {-4.35, y}, {-6.0, y}, {-6.0 - 1.2 * fabs(y), vy}, {-10.5, vy}};
-            CanvasPoint top[4];
-            for (int i = 0; i < 4; i++) {
-                double x, yy;
-                board_turn(side, route[i][0], route[i][1], &x, &yy);
-                top[i] = board_at(b, x, yy);
-            }
-            canvas_edit_polyline(edit,
-                                 &(CanvasPolyline){.paint = {b->top, b->top_s, pin, 300 + pin},
-                                                   .points = top,
-                                                   .count = 4,
-                                                   .width = MM(0.2)});
+            board_route(edit, b, (CanvasPaint){b->top, b->top_s, pin, 300 + pin}, side, route, 4);
             double vx, vyy;
             board_turn(side, -10.5, vy, &vx, &vyy);
             board_via(edit, b, pin, 400 + pin, vx, vyy, 0.3, 0.15);
@@ -1014,17 +1034,8 @@ static void board_fill(CanvasEdit* edit, const Board* b) {
                                           .centre = board_at(b, tx, ty),
                                           .radius = MM(0.45)});
             }
-            CanvasPoint line[4];
-            for (size_t i = 0; i < bn; i++) {
-                double x, yy;
-                board_turn(side, bottom[i][0], bottom[i][1], &x, &yy);
-                line[i] = board_at(b, x, yy);
-            }
-            canvas_edit_polyline(
-                edit, &(CanvasPolyline){.paint = {b->bottom, b->bottom_s, pin, 500 + pin},
-                                        .points = line,
-                                        .count = bn,
-                                        .width = MM(0.2)});
+            board_route(edit, b, (CanvasPaint){b->bottom, b->bottom_s, pin, 500 + pin}, side,
+                        bottom, bn);
         }
     }
     canvas_edit_box(edit, &(CanvasBox){.paint = {b->silk, b->silk_s, 0, 0},
@@ -1165,6 +1176,7 @@ static void sheet_board(SheetContext* ctx) {
     b->silk = canvas_add_layer(canvas, "silk");
     b->edge = canvas_add_layer(canvas, "edge");
     b->transient = canvas_add_layer(canvas, "transient");
+    b->transient->above_active = true; // a ratsnest shows over whichever copper is active
     b->plane->opacity = 0.35f;
     b->bottom->opacity = 0.7f;
     b->top->opacity = 0.85f;
@@ -1186,9 +1198,9 @@ static void sheet_board(SheetContext* ctx) {
     canvas_tags_set(tags, BOARD_PICKED, (CanvasTagState){.outline = 0xffffffffu});
 
     if (ctx->edit_thread) {
-        pthread_t thread;
-        if (pthread_create(&thread, NULL, board_thread, ctx->edit) == 0)
-            pthread_join(thread, NULL);
+        cetra_thread_t thread;
+        if (cetra_thread_create(&thread, board_thread, ctx->edit))
+            cetra_thread_join(thread);
     } else {
         board_fill(ctx->edit, b);
     }
@@ -1260,12 +1272,6 @@ static int view_at(float x) {
     return 0;
 }
 
-static double now_ms(void) {
-    struct timespec t;
-    clock_gettime(CLOCK_MONOTONIC, &t);
-    return (double)t.tv_sec * 1e3 + (double)t.tv_nsec * 1e-6;
-}
-
 static void draw_view(Engine* engine, void* user) {
     (void)user;
     lay_out_views(engine);
@@ -1280,14 +1286,14 @@ static void draw_view(Engine* engine, void* user) {
     double start = 0.0;
     if (g_budget) {
         glFinish();
-        start = now_ms();
+        start = glfwGetTime();
     }
     for (int i = 0; i < g_view_count; i++)
         if (g_only_view < 0 || g_only_view == i)
             canvas_draw(g_canvas, &g_views[i]);
     if (g_budget) {
         glFinish();
-        printf("canvas budget %d ms %.3f\n", engine->frame_count, now_ms() - start);
+        printf("canvas budget %d ms %.3f\n", engine->frame_count, (glfwGetTime() - start) * 1e3);
         fflush(stdout);
     }
     if (g_after_draw)
@@ -1431,9 +1437,7 @@ int main(int argc, char** argv) {
     const double cy = isnan(view_y) ? sheet->centre_mm[1] : view_y;
     const double cw = isnan(view_w) ? sheet->width_mm : view_w;
     CanvasView* view = &g_views[0];
-    *view = (CanvasView){.width = (float)width / (float)g_view_count,
-                         .height = (float)height,
-                         .points_per_unit = (double)width / (double)g_view_count / (cw * 1e6),
+    *view = (CanvasView){.points_per_unit = (double)width / (double)g_view_count / (cw * 1e6),
                          .mirror_x = mirror,
                          .background = sheet->background};
     // The centre in whole units plus its fraction, from millimetres and the offset.
@@ -1441,6 +1445,7 @@ int main(int argc, char** argv) {
     view->centre = (CanvasPoint){(int64_t)floor(ux) + offset, (int64_t)floor(uy) + offset};
     view->fraction[0] = ux - floor(ux);
     view->fraction[1] = uy - floor(uy);
+    lay_out_views(engine);
 
     Font* font = load_font(engine->text_renderer->font_pool, "apps/splash/assets/Roboto-Bold.ttf",
                            64.0f, true);
@@ -1465,10 +1470,10 @@ int main(int argc, char** argv) {
     if (split) {
         view->active = ctx.active[0];
         g_views[1] = *view;
-        g_views[1].x = view->width;
         g_views[1].mirror_x = !mirror;
         g_views[1].shown = ctx.under_shown;
         g_views[1].active = ctx.active[1];
+        lay_out_views(engine);
     }
     g_only_view = only_view;
     g_budget = budget;

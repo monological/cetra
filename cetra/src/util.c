@@ -98,6 +98,12 @@ GLPassState gl_pass_begin(void) {
     GLPassState s;
     glGetIntegerv(GL_VIEWPORT, s.viewport);
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &s.fbo);
+    glGetIntegerv(GL_CURRENT_PROGRAM, &s.program);
+    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &s.vertex_array);
+    glGetIntegerv(GL_BLEND_EQUATION_RGB, &s.blend_equation[0]);
+    glGetIntegerv(GL_BLEND_EQUATION_ALPHA, &s.blend_equation[1]);
+    glGetBooleanv(GL_COLOR_WRITEMASK, s.colour_mask);
+    glGetFloatv(GL_COLOR_CLEAR_VALUE, s.clear_colour);
     glGetIntegerv(GL_BLEND_SRC_RGB, &s.blend_func[0]);
     glGetIntegerv(GL_BLEND_DST_RGB, &s.blend_func[1]);
     glGetIntegerv(GL_BLEND_SRC_ALPHA, &s.blend_func[2]);
@@ -128,8 +134,13 @@ static void _gl_set(GLenum cap, GLboolean on) {
 void gl_pass_end(const GLPassState* s) {
     glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)s->fbo);
     glViewport(s->viewport[0], s->viewport[1], s->viewport[2], s->viewport[3]);
+    glUseProgram((GLuint)s->program);
+    glBindVertexArray((GLuint)s->vertex_array);
     glBlendFuncSeparate((GLenum)s->blend_func[0], (GLenum)s->blend_func[1],
                         (GLenum)s->blend_func[2], (GLenum)s->blend_func[3]);
+    glBlendEquationSeparate((GLenum)s->blend_equation[0], (GLenum)s->blend_equation[1]);
+    glColorMask(s->colour_mask[0], s->colour_mask[1], s->colour_mask[2], s->colour_mask[3]);
+    glClearColor(s->clear_colour[0], s->clear_colour[1], s->clear_colour[2], s->clear_colour[3]);
     glCullFace((GLenum)s->cull_face);
     glPolygonMode(GL_FRONT_AND_BACK, (GLenum)s->polygon_mode);
     _gl_set(GL_DEPTH_TEST, s->depth);

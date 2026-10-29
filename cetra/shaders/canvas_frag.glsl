@@ -80,11 +80,14 @@ float arcDistance() {
         t += TAU;
     if (t <= sweep) {
         // The band, and the inner half of a flat end's ramp: -cross(s, p) is how far p lies
-        // inside the radial line through s, and cross(e, p) inside the one through e.
+        // inside the radial line through s, and cross(e, p) inside the one through e. Each is
+        // the distance to its end only within a quarter turn of it: past that the line runs on
+        // through the far side of the centre, and on an arc of more than half a turn it would
+        // cut the band away there.
         float d = abs(length(p) - r) - hw;
-        if ((vFlags & CANVAS_FLAG_FLAT_A) != 0u)
+        if ((vFlags & CANVAS_FLAG_FLAT_A) != 0u && t < 0.25 * TAU)
             d = max(d, -cross2(s, p));
-        if ((vFlags & CANVAS_FLAG_FLAT_B) != 0u)
+        if ((vFlags & CANVAS_FLAG_FLAT_B) != 0u && sweep - t < 0.25 * TAU)
             d = max(d, cross2(e, p));
         return d;
     }
@@ -105,30 +108,13 @@ float arcDistance() {
     return length(q) - hw;
 }
 
-// The outer half of a fill's edge ramp: only the side away from the polygon, which the fill's own
-// ramp stops at; past an end, the distance to the polygon's corner there.
+// The outer half of a fill's edge ramp: a segment with no width, on the side away from the
+// polygon only, which the fill's own ramp stops at; past an end, the distance to the polygon's
+// corner there.
 float edgeDistance() {
-    float len = vShape.x;
-    float along = vLocal.x, across = vLocal.y;
-    if (across < 0.0)
+    if (vLocal.y < 0.0)
         discard;
-    if (along < 0.0) {
-        if ((vFlags & CANVAS_FLAG_CUT_A) != 0u) {
-            if (along < -CUT_OVERLAP)
-                discard;
-            return across;
-        }
-        return length(vec2(along, across));
-    }
-    if (along > len) {
-        if ((vFlags & CANVAS_FLAG_CUT_B) != 0u) {
-            if (along - len > CUT_OVERLAP)
-                discard;
-            return across;
-        }
-        return length(vec2(along - len, across));
-    }
-    return across;
+    return segmentDistance();
 }
 
 // A glyph: its font's distance field, whose value is vShape.x on the outline and falls by

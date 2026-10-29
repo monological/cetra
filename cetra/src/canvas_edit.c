@@ -6,6 +6,7 @@
 #include "ext/log.h"
 #include "text.h"
 #include "triangulate.h"
+#include "util.h"
 
 // The most pieces one shape is split into. Past it the shape reaches across
 // more of the plane than any drawing needs, and splitting it would be an
@@ -37,67 +38,67 @@ void free_canvas_edit(CanvasEdit* edit) {
     free(edit);
 }
 
-static bool _grow(void** items, size_t* cap, size_t want, size_t size) {
-    if (want <= *cap)
-        return true;
-    size_t next = *cap ? *cap * 2 : 64;
-    while (next < want)
-        next *= 2;
-    void* grown = realloc(*items, next * size);
-    if (!grown) {
-        log_error("canvas: out of memory growing an edit");
-        return false;
-    }
-    *items = grown;
-    *cap = next;
-    return true;
-}
-
 static bool _step(CanvasEdit* edit, CanvasStep step) {
-    if (!_grow((void**)&edit->steps, &edit->step_cap, edit->step_count + 1, sizeof(CanvasStep)))
+    if (!grow_array((void**)&edit->steps, &edit->step_cap, edit->step_count + 1, sizeof(CanvasStep),
+                    64))
         return false;
     edit->steps[edit->step_count++] = step;
     return true;
 }
 
-// The pieces of one shape go in together or not at all: reserved first, then
-// filled, then recorded as one step.
+// Where an edit stood before a shape began, so a shape refused part way --
+// one of its pieces across too many tiles, or memory running out -- is taken
+// out whole: a shape goes in together or not at all.
+typedef struct EditMark {
+    size_t pieces, fills, steps, last_count;
+} EditMark;
+
+static EditMark _mark(const CanvasEdit* edit) {
+    return (EditMark){edit->piece_count, edit->fill_count, edit->step_count,
+                      edit->step_count ? edit->steps[edit->step_count - 1].count : 0};
+}
+
+static void _rollback(CanvasEdit* edit, EditMark mark) {
+    edit->piece_count = mark.pieces;
+    edit->fill_count = mark.fills;
+    edit->step_count = mark.steps;
+    if (mark.steps)
+        edit->steps[mark.steps - 1].count = mark.last_count;
+}
+
+// Room for `count` more pieces, which _commit then records.
 static CanvasPiece* _reserve(CanvasEdit* edit, size_t count) {
-    if (!_grow((void**)&edit->pieces, &edit->piece_cap, edit->piece_count + count,
-               sizeof(CanvasPiece)))
+    if (!grow_array((void**)&edit->pieces, &edit->piece_cap, edit->piece_count + count,
+                    sizeof(CanvasPiece), 64))
         return NULL;
     return edit->pieces + edit->piece_count;
 }
 
-static void _commit(CanvasEdit* edit, size_t count) {
+// Records the next `count` items of a kind as added: onto the last step when
+// it adds the same kind and ends where these begin, else as a step of their own.
+static bool _extend(CanvasEdit* edit, CanvasStepKind kind, size_t* items, size_t count) {
     CanvasStep* last = edit->step_count ? &edit->steps[edit->step_count - 1] : NULL;
-    if (last && last->kind == CANVAS_STEP_ADD && last->first + last->count == edit->piece_count) {
+    if (last && last->kind == kind && last->first + last->count == *items) {
         last->count += count;
-        edit->piece_count += count;
-        return;
+    } else if (!_step(edit, (CanvasStep){.kind = kind, .first = *items, .count = count})) {
+        return false;
     }
-    if (_step(edit,
-              (CanvasStep){.kind = CANVAS_STEP_ADD, .first = edit->piece_count, .count = count}))
-        edit->piece_count += count;
+    *items += count;
+    return true;
+}
+
+static bool _commit(CanvasEdit* edit, size_t count) {
+    return _extend(edit, CANVAS_STEP_ADD, &edit->piece_count, count);
 }
 
 // A fill triangle, added at once: a polygon's triangles are many and each is
 // cut on its own, so they are not reserved together.
-static void _add_fill(CanvasEdit* edit, const CanvasFillPiece* piece) {
-    if (!_grow((void**)&edit->fills, &edit->fill_cap, edit->fill_count + 1,
-               sizeof(CanvasFillPiece)))
-        return;
+static bool _add_fill(CanvasEdit* edit, const CanvasFillPiece* piece) {
+    if (!grow_array((void**)&edit->fills, &edit->fill_cap, edit->fill_count + 1,
+                    sizeof(CanvasFillPiece), 64))
+        return false;
     edit->fills[edit->fill_count] = *piece;
-    CanvasStep* last = edit->step_count ? &edit->steps[edit->step_count - 1] : NULL;
-    if (last && last->kind == CANVAS_STEP_ADD_FILLS &&
-        last->first + last->count == edit->fill_count) {
-        last->count++;
-        edit->fill_count++;
-        return;
-    }
-    if (_step(edit,
-              (CanvasStep){.kind = CANVAS_STEP_ADD_FILLS, .first = edit->fill_count, .count = 1}))
-        edit->fill_count++;
+    return _extend(edit, CANVAS_STEP_ADD_FILLS, &edit->fill_count, 1);
 }
 
 // The tile holding a unit: its index, floored, so -1 is in tile -1.
@@ -109,21 +110,36 @@ static int64_t _tile_origin(int64_t tile, int shift) {
     return tile * ((int64_t)1 << shift);
 }
 
-// Starts a piece anchored in the tile of `anchor`, with its paint.
+static int32_t _rel(int64_t v, int64_t tile, int shift) {
+    return (int32_t)(v - _tile_origin(tile, shift));
+}
+
+// Starts a piece anchored in the tile of `anchor`, with its paint, its first
+// point the anchor.
 static CanvasPiece* _piece(CanvasPiece* piece, int shift, const CanvasPaint* paint,
                            CanvasPoint anchor, uint32_t kind, uint32_t flags) {
     memset(piece, 0, sizeof(*piece));
     piece->layer = paint->layer;
     piece->tx = _tile_of(anchor.x, shift);
     piece->ty = _tile_of(anchor.y, shift);
+    piece->record.p[0] = _rel(anchor.x, piece->tx, shift);
+    piece->record.p[1] = _rel(anchor.y, piece->ty, shift);
     piece->record.u[0] = canvas_record_head(kind, flags, paint->style);
     piece->record.u[1] = paint->net;
     piece->record.u[2] = paint->object;
     return piece;
 }
 
-static int32_t _rel(int64_t v, int64_t tile, int shift) {
-    return (int32_t)(v - _tile_origin(tile, shift));
+// A two-point piece's second point.
+static void _piece_b(CanvasPiece* piece, int shift, CanvasPoint b) {
+    piece->record.p[2] = _rel(b.x, piece->tx, shift);
+    piece->record.p[3] = _rel(b.y, piece->ty, shift);
+}
+
+// The flags on the ends of piece k of n of a shape that was split.
+static uint32_t _end_flags(size_t k, size_t n, bool flat_ends) {
+    uint32_t flags = k == 0 ? (flat_ends ? CANVAS_FLAG_FLAT_A : 0u) : CANVAS_FLAG_CUT_A;
+    return flags | (k + 1 == n ? (flat_ends ? CANVAS_FLAG_FLAT_B : 0u) : CANVAS_FLAG_CUT_B);
 }
 
 static void _bound(CanvasPiece* piece, int64_t x0, int64_t y0, int64_t x1, int64_t y1,
@@ -190,20 +206,14 @@ static bool _segment(CanvasEdit* edit, const CanvasPaint* paint, CanvasPoint a, 
             to.x = a.x + llround((double)dx * t);
             to.y = a.y + llround((double)dy * t);
         }
-        uint32_t flags = 0;
-        flags |= k == 0 ? (flat_ends ? CANVAS_FLAG_FLAT_A : 0) : CANVAS_FLAG_CUT_A;
-        flags |= k + 1 == n ? (flat_ends ? CANVAS_FLAG_FLAT_B : 0) : CANVAS_FLAG_CUT_B;
-        CanvasPiece* piece = _piece(&pieces[k], shift, paint, from, CANVAS_KIND_SEGMENT, flags);
-        piece->record.p[0] = _rel(from.x, piece->tx, shift);
-        piece->record.p[1] = _rel(from.y, piece->ty, shift);
-        piece->record.p[2] = _rel(to.x, piece->tx, shift);
-        piece->record.p[3] = _rel(to.y, piece->ty, shift);
+        CanvasPiece* piece = _piece(&pieces[k], shift, paint, from, CANVAS_KIND_SEGMENT,
+                                    _end_flags(k, n, flat_ends));
+        _piece_b(piece, shift, to);
         piece->record.f[0] = (float)((double)width * 0.5);
         _bound(piece, from.x, from.y, to.x, to.y, half);
         from = to;
     }
-    _commit(edit, n);
-    return true;
+    return _commit(edit, n);
 }
 
 void canvas_edit_segment(CanvasEdit* edit, const CanvasSegment* segment) {
@@ -216,7 +226,21 @@ void canvas_edit_segment(CanvasEdit* edit, const CanvasSegment* segment) {
         log_error("canvas: a segment with no extent is refused");
         return;
     }
-    _segment(edit, &segment->paint, segment->a, segment->b, segment->width, segment->flat_ends);
+    const EditMark mark = _mark(edit);
+    if (!_segment(edit, &segment->paint, segment->a, segment->b, segment->width,
+                  segment->flat_ends))
+        _rollback(edit, mark);
+}
+
+// A polyline's segments, round-joined; false, with some of them added, when
+// one is refused.
+static bool _polyline(CanvasEdit* edit, const CanvasPaint* paint, const CanvasPoint* points,
+                      size_t count, int64_t width, bool closed) {
+    const size_t segments = closed ? count : count - 1;
+    for (size_t i = 0; i < segments; i++)
+        if (!_segment(edit, paint, points[i], points[(i + 1) % count], width, false))
+            return false;
+    return true;
 }
 
 void canvas_edit_polyline(CanvasEdit* edit, const CanvasPolyline* line) {
@@ -232,11 +256,9 @@ void canvas_edit_polyline(CanvasEdit* edit, const CanvasPolyline* line) {
         log_error("canvas: a polyline with no width is refused");
         return;
     }
-    const size_t segments = line->closed ? line->count : line->count - 1;
-    for (size_t i = 0; i < segments; i++)
-        if (!_segment(edit, &line->paint, line->points[i], line->points[(i + 1) % line->count],
-                      line->width, false))
-            return;
+    const EditMark mark = _mark(edit);
+    if (!_polyline(edit, &line->paint, line->points, line->count, line->width, line->closed))
+        _rollback(edit, mark);
 }
 
 // Puts the bound of a circular arc into min/max: its ends, and wherever it
@@ -261,31 +283,27 @@ void canvas_edit_arc(CanvasEdit* edit, const CanvasArc* arc) {
         return;
     if (!_length_ok(arc->width, "arc", "width") || !_length_ok(arc->radius, "arc", "radius"))
         return;
-    const double ax = (double)arc->a.x, ay = (double)arc->a.y;
-    const double bx = (double)arc->b.x, by = (double)arc->b.y;
+    // A clockwise arc from a to b is the counter-clockwise one from b to a, the
+    // same way round, so every record runs counter-clockwise.
+    const CanvasPoint a = arc->clockwise ? arc->b : arc->a;
+    const CanvasPoint b = arc->clockwise ? arc->a : arc->b;
+    const double ax = (double)a.x, ay = (double)a.y;
+    const double bx = (double)b.x, by = (double)b.y;
     const double chord = hypot(bx - ax, by - ay);
     if (chord == 0.0) {
         log_error("canvas: an arc from a point to itself is refused");
         return;
     }
-    // The centre is left of the chord for a counter-clockwise arc the short
-    // way, and for a clockwise one the long way.
+    // The centre is left of the chord the short way, and right of it the long.
     const double r = fmax((double)arc->radius, chord * 0.5);
     const double h = sqrt(fmax(r * r - chord * chord * 0.25, 0.0));
-    const double side = arc->clockwise == arc->major ? 1.0 : -1.0;
+    const double side = arc->major ? -1.0 : 1.0;
     const double cx = (ax + bx) * 0.5 - side * h * (by - ay) / chord;
     const double cy = (ay + by) * 0.5 + side * h * (bx - ax) / chord;
     const double start = atan2(ay - cy, ax - cx);
     double sweep = atan2(by - cy, bx - cx) - start;
-    if (arc->clockwise) {
-        sweep = -sweep;
-        while (sweep <= 0.0)
-            sweep += TURN;
-        sweep = -sweep; // signed: negative runs clockwise
-    } else {
-        while (sweep <= 0.0)
-            sweep += TURN;
-    }
+    while (sweep <= 0.0)
+        sweep += TURN;
 
     // Split only an arc that reaches past its first point's tile, into pieces
     // of at most a quarter turn whose chords are no longer than a tile.
@@ -293,14 +311,14 @@ void canvas_edit_arc(CanvasEdit* edit, const CanvasArc* arc) {
     const double tile = (double)((int64_t)1 << shift);
     double whole[4];
     _arc_bound(cx, cy, r, start, sweep, whole);
-    const double ox = (double)_tile_origin(_tile_of(arc->a.x, shift), shift);
-    const double oy = (double)_tile_origin(_tile_of(arc->a.y, shift), shift);
+    const double ox = (double)_tile_origin(_tile_of(a.x, shift), shift);
+    const double oy = (double)_tile_origin(_tile_of(a.y, shift), shift);
     const bool fits = whole[0] >= ox - tile && whole[2] < ox + 2.0 * tile &&
                       whole[1] >= oy - tile && whole[3] < oy + 2.0 * tile;
     size_t n = 1;
     if (!fits) {
-        const double by_turn = ceil(fabs(sweep) / (TURN / 4.0));
-        const double by_length = ceil(r * fabs(sweep) / tile);
+        const double by_turn = ceil(sweep / (TURN / 4.0));
+        const double by_length = ceil(r * sweep / tile);
         const double want = fmax(by_turn, by_length);
         if (want > CANVAS_SPLIT_MAX) {
             log_error("canvas: an arc across more than %d tiles is refused", CANVAS_SPLIT_MAX);
@@ -312,22 +330,17 @@ void canvas_edit_arc(CanvasEdit* edit, const CanvasArc* arc) {
     if (!pieces)
         return;
     const int64_t half = (arc->width + 1) / 2;
-    CanvasPoint from = arc->a;
+    CanvasPoint from = a;
     for (size_t k = 0; k < n; k++) {
-        CanvasPoint to = arc->b;
+        CanvasPoint to = b;
         if (k + 1 < n) {
             const double t = start + sweep * (double)(k + 1) / (double)n;
             to.x = llround(cx + r * cos(t));
             to.y = llround(cy + r * sin(t));
         }
-        uint32_t flags = arc->clockwise ? CANVAS_FLAG_CLOCKWISE : 0;
-        flags |= k == 0 ? (arc->flat_ends ? CANVAS_FLAG_FLAT_A : 0) : CANVAS_FLAG_CUT_A;
-        flags |= k + 1 == n ? (arc->flat_ends ? CANVAS_FLAG_FLAT_B : 0) : CANVAS_FLAG_CUT_B;
-        CanvasPiece* piece = _piece(&pieces[k], shift, &arc->paint, from, CANVAS_KIND_ARC, flags);
-        piece->record.p[0] = _rel(from.x, piece->tx, shift);
-        piece->record.p[1] = _rel(from.y, piece->ty, shift);
-        piece->record.p[2] = _rel(to.x, piece->tx, shift);
-        piece->record.p[3] = _rel(to.y, piece->ty, shift);
+        CanvasPiece* piece = _piece(&pieces[k], shift, &arc->paint, from, CANVAS_KIND_ARC,
+                                    _end_flags(k, n, arc->flat_ends));
+        _piece_b(piece, shift, to);
         // The centre from the midpoint of this piece's own chord, which keeps
         // the float small however far the canvas is from its origin.
         const double mx = ((double)from.x + (double)to.x) * 0.5;
@@ -336,10 +349,10 @@ void canvas_edit_arc(CanvasEdit* edit, const CanvasArc* arc) {
         piece->record.f[1] = (float)(cx - mx);
         piece->record.f[2] = (float)(cy - my);
         piece->record.f[3] = (float)r;
-        double b[4];
-        _arc_bound(cx, cy, r, start + sweep * (double)k / (double)n, sweep / (double)n, b);
-        _bound(piece, (int64_t)floor(b[0]), (int64_t)floor(b[1]), (int64_t)ceil(b[2]),
-               (int64_t)ceil(b[3]), half);
+        double box[4];
+        _arc_bound(cx, cy, r, start + sweep * (double)k / (double)n, sweep / (double)n, box);
+        _bound(piece, (int64_t)floor(box[0]), (int64_t)floor(box[1]), (int64_t)ceil(box[2]),
+               (int64_t)ceil(box[3]), half);
         from = to;
     }
     _commit(edit, n);
@@ -360,8 +373,6 @@ void canvas_edit_circle(CanvasEdit* edit, const CanvasCircle* circle) {
         return;
     const int shift = edit->tile_shift;
     _piece(piece, shift, &circle->paint, circle->centre, CANVAS_KIND_CIRCLE, 0);
-    piece->record.p[0] = _rel(circle->centre.x, piece->tx, shift);
-    piece->record.p[1] = _rel(circle->centre.y, piece->ty, shift);
     piece->record.p[2] = (int32_t)circle->radius;
     piece->record.p[3] = (int32_t)circle->stroke;
     const int64_t reach = circle->radius + (circle->stroke + 1) / 2;
@@ -384,8 +395,6 @@ void canvas_edit_box(CanvasEdit* edit, const CanvasBox* box) {
         return;
     const int shift = edit->tile_shift;
     _piece(piece, shift, &box->paint, box->centre, CANVAS_KIND_BOX, 0);
-    piece->record.p[0] = _rel(box->centre.x, piece->tx, shift);
-    piece->record.p[1] = _rel(box->centre.y, piece->ty, shift);
     piece->record.p[2] = (int32_t)box->stroke;
     piece->record.f[0] = (float)((double)box->size_x * 0.5);
     piece->record.f[1] = (float)((double)box->size_y * 0.5);
@@ -504,30 +513,31 @@ static int64_t _cross3(CanvasPoint a, CanvasPoint b, CanvasPoint c) {
 // A fill triangle in the tile (tx, ty), its corners given, and the nine
 // outline points its inner ramp is measured against (canvas_record.h).
 // Corners that rounded onto a line add nothing.
-static void _fill(CanvasEdit* edit, const CanvasPaint* paint, int64_t tx, int64_t ty,
+static bool _fill(CanvasEdit* edit, const CanvasPaint* paint, int64_t tx, int64_t ty,
                   const CanvasPoint c[3], const CanvasPoint near[9]) {
     if (_cross3(c[0], c[1], c[2]) == 0)
-        return;
+        return true;
     const int shift = edit->tile_shift;
     CanvasFillPiece piece = {.layer = paint->layer, .tx = tx, .ty = ty};
+    CanvasFill* fill = &piece.fill;
     piece.min[0] = piece.max[0] = c[0].x;
     piece.min[1] = piece.max[1] = c[0].y;
-    const uint32_t head = canvas_record_head(CANVAS_KIND_FILL, 0, paint->style);
     for (int k = 0; k < 3; k++) {
-        CanvasFillVertex* v = &piece.triangle.v[k];
-        v->p[0] = _rel(c[k].x, tx, shift);
-        v->p[1] = _rel(c[k].y, ty, shift);
-        for (int n = 0; n < 9; n++) {
-            v->near[2 * n] = _rel(near[n].x, tx, shift);
-            v->near[2 * n + 1] = _rel(near[n].y, ty, shift);
-        }
-        v->u[0] = head, v->u[1] = paint->net, v->u[2] = paint->object;
+        fill->p[2 * k] = _rel(c[k].x, tx, shift);
+        fill->p[2 * k + 1] = _rel(c[k].y, ty, shift);
         piece.min[0] = c[k].x < piece.min[0] ? c[k].x : piece.min[0];
         piece.min[1] = c[k].y < piece.min[1] ? c[k].y : piece.min[1];
         piece.max[0] = c[k].x > piece.max[0] ? c[k].x : piece.max[0];
         piece.max[1] = c[k].y > piece.max[1] ? c[k].y : piece.max[1];
     }
-    _add_fill(edit, &piece);
+    for (int n = 0; n < 9; n++) {
+        fill->near[2 * n] = _rel(near[n].x, tx, shift);
+        fill->near[2 * n + 1] = _rel(near[n].y, ty, shift);
+    }
+    fill->u[0] = canvas_record_head(CANVAS_KIND_FILL, 0, paint->style);
+    fill->u[1] = paint->net;
+    fill->u[2] = paint->object;
+    return _add_fill(edit, &piece);
 }
 
 // One triangle of a polygon: whole when it fits in two tiles each way of its
@@ -544,10 +554,8 @@ static bool _polygon_triangle(CanvasEdit* edit, const CanvasPaint* paint, const 
     }
     const int64_t tx0 = _tile_of(x0, shift), tx1 = _tile_of(x1, shift);
     const int64_t ty0 = _tile_of(y0, shift), ty1 = _tile_of(y1, shift);
-    if (tx1 - tx0 <= 1 && ty1 - ty0 <= 1) {
-        _fill(edit, paint, tx0, ty0, tri, near);
-        return true;
-    }
+    if (tx1 - tx0 <= 1 && ty1 - ty0 <= 1)
+        return _fill(edit, paint, tx0, ty0, tri, near);
     if ((tx1 - tx0 + 1) * (ty1 - ty0 + 1) > CANVAS_SPLIT_MAX) {
         log_error("canvas: a polygon triangle across more than %d tiles is refused",
                   CANVAS_SPLIT_MAX);
@@ -561,17 +569,35 @@ static bool _polygon_triangle(CanvasEdit* edit, const CanvasPaint* paint, const 
             const int n = _clip_triangle(tri, &box, c);
             for (int k = 1; k + 1 < n; k++) {
                 const CanvasPoint fan[3] = {c[0].p, c[k].p, c[k + 1].p};
-                _fill(edit, paint, tx, ty, fan, near);
+                if (!_fill(edit, paint, tx, ty, fan, near))
+                    return false;
             }
         }
     }
     return true;
 }
 
+// A crossing of an outline edge with the tile grid, and its place along it.
+typedef struct EdgeCut {
+    double t;
+    CanvasPoint p;
+} EdgeCut;
+
+static int _cut_order(const void* a, const void* b) {
+    const double ta = ((const EdgeCut*)a)->t, tb = ((const EdgeCut*)b)->t;
+    return (ta > tb) - (ta < tb);
+}
+
 // The outer half of an outline edge's ramp from a to b, cut where it crosses
-// the tile grid at the points the triangles were cut at.
+// the tile grid at the points the triangles were cut at. Every record has its
+// polygon on its left, so an edge with it on the right is laid down b to a.
 static bool _polygon_edge(CanvasEdit* edit, const CanvasPaint* paint, CanvasPoint a, CanvasPoint b,
                           bool inside_left) {
+    if (!inside_left) {
+        const CanvasPoint t = a;
+        a = b;
+        b = t;
+    }
     const int shift = edit->tile_shift;
     const int64_t side = (int64_t)1 << shift;
     const int64_t ta[2] = {_tile_of(a.x, shift), _tile_of(a.y, shift)};
@@ -582,15 +608,12 @@ static bool _polygon_edge(CanvasEdit* edit, const CanvasPaint* paint, CanvasPoin
         return false;
     }
     // Every crossing with its place along the edge, then sorted along it.
-    typedef struct Cut {
-        double t;
-        CanvasPoint p;
-    } Cut;
-    Cut* cuts = malloc((size_t)(lines + 2) * sizeof(Cut));
+    EdgeCut few[16];
+    EdgeCut* cuts = lines + 2 <= 16 ? few : malloc((size_t)(lines + 2) * sizeof(EdgeCut));
     if (!cuts)
         return false;
     size_t n = 0;
-    cuts[n++] = (Cut){0.0, a};
+    cuts[n++] = (EdgeCut){0.0, a};
     const double dx = (double)(b.x - a.x), dy = (double)(b.y - a.y);
     for (int axis = 0; axis < 2; axis++) {
         const int64_t lo = ta[axis] < tb[axis] ? ta[axis] : tb[axis];
@@ -598,65 +621,107 @@ static bool _polygon_edge(CanvasEdit* edit, const CanvasPaint* paint, CanvasPoin
         for (int64_t k = lo + 1; k <= hi; k++) {
             const int64_t at = k * side;
             const double t = axis == 0 ? ((double)(at - a.x)) / dx : ((double)(at - a.y)) / dy;
-            cuts[n++] = (Cut){t, _crossing(a, b, axis, at)};
+            cuts[n++] = (EdgeCut){t, _crossing(a, b, axis, at)};
         }
     }
-    cuts[n++] = (Cut){1.0, b};
-    for (size_t i = 1; i < n; i++) // few, and nearly in order already
-        for (size_t j = i; j > 0 && cuts[j - 1].t > cuts[j].t; j--) {
-            const Cut t = cuts[j];
-            cuts[j] = cuts[j - 1];
-            cuts[j - 1] = t;
-        }
+    cuts[n++] = (EdgeCut){1.0, b};
+    qsort(cuts + 1, n - 2, sizeof(EdgeCut), _cut_order);
     CanvasPiece* pieces = _reserve(edit, n - 1);
-    if (!pieces) {
-        free(cuts);
-        return false;
-    }
     size_t made = 0;
-    for (size_t i = 0; i + 1 < n; i++) {
+    for (size_t i = 0; pieces && i + 1 < n; i++) {
         const CanvasPoint p = cuts[i].p, q = cuts[i + 1].p;
         if (p.x == q.x && p.y == q.y)
             continue;
-        uint32_t flags = inside_left ? CANVAS_FLAG_INSIDE_LEFT : 0;
-        flags |= i > 0 ? CANVAS_FLAG_CUT_A : 0;
-        flags |= i + 2 < n ? CANVAS_FLAG_CUT_B : 0;
+        // A crossing on a corner of the outline is the corner, not a cut: the
+        // corner keeps its round outer ramp.
+        uint32_t flags = (p.x != a.x || p.y != a.y) ? CANVAS_FLAG_CUT_A : 0u;
+        flags |= (q.x != b.x || q.y != b.y) ? CANVAS_FLAG_CUT_B : 0u;
         // Anchored where its middle is, so both ends are within a tile of it.
         const CanvasPoint mid = {p.x + (q.x - p.x) / 2, p.y + (q.y - p.y) / 2};
         CanvasPiece* piece = _piece(&pieces[made++], shift, paint, mid, CANVAS_KIND_EDGE, flags);
         piece->record.p[0] = _rel(p.x, piece->tx, shift);
         piece->record.p[1] = _rel(p.y, piece->ty, shift);
-        piece->record.p[2] = _rel(q.x, piece->tx, shift);
-        piece->record.p[3] = _rel(q.y, piece->ty, shift);
+        _piece_b(piece, shift, q);
         _bound(piece, p.x, p.y, q.x, q.y, 1);
     }
-    free(cuts);
-    _commit(edit, made);
-    return true;
+    if (cuts != few)
+        free(cuts);
+    return pieces && _commit(edit, made);
 }
 
-// The point after (or before) point i on its own ring.
-static size_t _ring_step(const CanvasPolygon* polygon, size_t i, bool forward) {
-    size_t start = 0, end = polygon->hole_count ? polygon->holes[0] : polygon->count;
-    for (size_t h = 0; h < polygon->hole_count && i >= end; h++) {
-        start = polygon->holes[h];
-        end = h + 1 < polygon->hole_count ? polygon->holes[h + 1] : polygon->count;
-    }
-    if (forward)
-        return i + 1 < end ? i + 1 : start;
-    return i > start ? i - 1 : end - 1;
+// Ring r's points, [start, end): the outline, then each hole.
+static void _ring(const CanvasPolygon* polygon, size_t r, size_t* start, size_t* end) {
+    *start = r ? polygon->holes[r - 1] : 0;
+    *end = r < polygon->hole_count ? polygon->holes[r] : polygon->count;
 }
 
+// Every ring at least three points and in order, tested so that no sum can
+// wrap whatever the hole list holds.
 static bool _rings_ok(const CanvasPolygon* polygon) {
-    const size_t outer = polygon->hole_count ? polygon->holes[0] : polygon->count;
-    if (!polygon->points || outer < 3)
+    if (!polygon->points || (polygon->hole_count && !polygon->holes))
         return false;
-    for (size_t h = 0; h < polygon->hole_count; h++) {
-        const size_t end = h + 1 < polygon->hole_count ? polygon->holes[h + 1] : polygon->count;
-        if (polygon->holes[h] < outer || end < polygon->holes[h] + 3 || end > polygon->count)
+    for (size_t r = 0; r <= polygon->hole_count; r++) {
+        size_t start, end;
+        _ring(polygon, r, &start, &end);
+        if (end > polygon->count || start > end || end - start < 3)
             return false;
     }
     return true;
+}
+
+// The point after (or before) point i on the ring [start, end) that is not
+// the same point, so a repeated point does not stand in for an outline edge.
+static size_t _ring_walk(const CanvasPoint* pts, size_t i, size_t start, size_t end, bool forward) {
+    size_t j = i;
+    for (size_t step = 1; step < end - start; step++) {
+        j = forward ? (j + 1 < end ? j + 1 : start) : (j > start ? j - 1 : end - 1);
+        if (pts[j].x != pts[i].x || pts[j].y != pts[i].y)
+            break;
+    }
+    return j;
+}
+
+// A filled polygon: its triangles, each cut at the tile grid, then its
+// outline's outer ramp. False, with some of it added, when a piece is refused.
+static bool _polygon_fill(CanvasEdit* edit, const CanvasPolygon* polygon, const double* xy,
+                          const size_t* before, const size_t* after) {
+    const CanvasPoint* pts = polygon->points;
+    Triangulation tris;
+    if (!triangulate_polygon(xy, polygon->count, polygon->holes, polygon->hole_count, &tris) ||
+        tris.count == 0) {
+        log_error("canvas: a polygon of %zu points gave no triangles", polygon->count);
+        free_triangulation(&tris);
+        return false;
+    }
+    bool ok = true;
+    for (size_t t = 0; ok && t < tris.count; t++) {
+        const uint32_t* v = tris.indices + t * 3;
+        const CanvasPoint tri[3] = {pts[v[0]], pts[v[1]], pts[v[2]]};
+        CanvasPoint near[9] = {tri[0], tri[1], tri[2]};
+        for (int k = 0; k < 3; k++) {
+            near[3 + 2 * k] = pts[before[v[k]]];
+            near[4 + 2 * k] = pts[after[v[k]]];
+        }
+        ok = _polygon_triangle(edit, &polygon->paint, tri, near);
+    }
+    free_triangulation(&tris);
+
+    // The outer ramp: the polygon lies left of an outline wound
+    // counter-clockwise, and outside a hole, so left of one wound clockwise.
+    for (size_t r = 0; ok && r <= polygon->hole_count; r++) {
+        size_t start, end;
+        _ring(polygon, r, &start, &end);
+        double area = 0.0;
+        for (size_t i = start, j = end - 1; i < end; j = i++)
+            area += xy[2 * j] * xy[2 * i + 1] - xy[2 * i] * xy[2 * j + 1];
+        const bool inside_left = r == 0 ? area > 0.0 : area < 0.0;
+        for (size_t i = start; ok && i < end; i++) {
+            const CanvasPoint a = pts[i], b = pts[i + 1 < end ? i + 1 : start];
+            if (a.x != b.x || a.y != b.y)
+                ok = _polygon_edge(edit, &polygon->paint, a, b, inside_left);
+        }
+    }
+    return ok;
 }
 
 void canvas_edit_polygon(CanvasEdit* edit, const CanvasPolygon* polygon) {
@@ -670,79 +735,68 @@ void canvas_edit_polygon(CanvasEdit* edit, const CanvasPolygon* polygon) {
         return;
     }
     const CanvasPoint* pts = polygon->points;
-    const size_t rings = polygon->hole_count + 1;
+    CanvasPoint lo = pts[0], hi = pts[0];
+    for (size_t i = 1; i < polygon->count; i++) {
+        lo.x = pts[i].x < lo.x ? pts[i].x : lo.x, hi.x = pts[i].x > hi.x ? pts[i].x : hi.x;
+        lo.y = pts[i].y < lo.y ? pts[i].y : lo.y, hi.y = pts[i].y > hi.y ? pts[i].y : hi.y;
+    }
+    if ((uint64_t)hi.x - (uint64_t)lo.x >= (uint64_t)CANVAS_LENGTH_MAX ||
+        (uint64_t)hi.y - (uint64_t)lo.y >= (uint64_t)CANVAS_LENGTH_MAX) {
+        log_error("canvas: a polygon wider than %lld units is refused",
+                  (long long)CANVAS_LENGTH_MAX - 1);
+        return;
+    }
+    const EditMark mark = _mark(edit);
     if (polygon->stroke > 0) {
-        for (size_t r = 0; r < rings; r++) {
-            const size_t start = r ? polygon->holes[r - 1] : 0;
-            const size_t end = r < polygon->hole_count ? polygon->holes[r] : polygon->count;
-            canvas_edit_polyline(edit, &(CanvasPolyline){.paint = polygon->paint,
-                                                         .points = pts + start,
-                                                         .count = end - start,
-                                                         .width = polygon->stroke,
-                                                         .closed = true});
+        for (size_t r = 0; r <= polygon->hole_count; r++) {
+            size_t start, end;
+            _ring(polygon, r, &start, &end);
+            if (!_polyline(edit, &polygon->paint, pts + start, end - start, polygon->stroke,
+                           true)) {
+                _rollback(edit, mark);
+                return;
+            }
         }
         return;
     }
 
     // Triangulated about the first point, so the doubles stay small however
-    // far the polygon is from the origin.
+    // far the polygon is from the origin; and each point's neighbours on its
+    // ring, which every triangle at it measures its inner ramp against.
     double* xy = malloc(polygon->count * 2 * sizeof(double));
-    if (!xy) {
+    size_t* around = malloc(polygon->count * 2 * sizeof(size_t));
+    if (!xy || !around) {
         log_error("canvas: out of memory triangulating a polygon");
-        return;
-    }
-    for (size_t i = 0; i < polygon->count; i++) {
-        xy[2 * i] = (double)(pts[i].x - pts[0].x);
-        xy[2 * i + 1] = (double)(pts[i].y - pts[0].y);
-    }
-    Triangulation tris;
-    const bool triangulated =
-        triangulate_polygon(xy, polygon->count, polygon->holes, polygon->hole_count, &tris);
-    if (!triangulated || tris.count == 0) {
-        log_error("canvas: a polygon of %zu points gave no triangles", polygon->count);
         free(xy);
-        free_triangulation(&tris);
+        free(around);
         return;
     }
-    for (size_t t = 0; t < tris.count; t++) {
-        const uint32_t* v = tris.indices + t * 3;
-        const CanvasPoint tri[3] = {pts[v[0]], pts[v[1]], pts[v[2]]};
-        CanvasPoint near[9] = {tri[0], tri[1], tri[2]};
-        for (int k = 0; k < 3; k++) {
-            near[3 + 2 * k] = pts[_ring_step(polygon, v[k], false)];
-            near[4 + 2 * k] = pts[_ring_step(polygon, v[k], true)];
-        }
-        if (!_polygon_triangle(edit, &polygon->paint, tri, near))
-            break;
-    }
-    free_triangulation(&tris);
-
-    // The outer ramp: the polygon lies left of an outline wound
-    // counter-clockwise, and outside a hole, so left of one wound clockwise.
-    for (size_t r = 0; r < rings; r++) {
-        const size_t start = r ? polygon->holes[r - 1] : 0;
-        const size_t end = r < polygon->hole_count ? polygon->holes[r] : polygon->count;
-        double area = 0.0;
-        for (size_t i = start, j = end - 1; i < end; j = i++)
-            area += xy[2 * j] * xy[2 * i + 1] - xy[2 * i] * xy[2 * j + 1];
-        const bool inside_left = r == 0 ? area > 0.0 : area < 0.0;
+    size_t* before = around;
+    size_t* after = around + polygon->count;
+    for (size_t r = 0; r <= polygon->hole_count; r++) {
+        size_t start, end;
+        _ring(polygon, r, &start, &end);
         for (size_t i = start; i < end; i++) {
-            const CanvasPoint a = pts[i], b = pts[i + 1 < end ? i + 1 : start];
-            if ((a.x != b.x || a.y != b.y) &&
-                !_polygon_edge(edit, &polygon->paint, a, b, inside_left)) {
-                free(xy);
-                return;
-            }
+            xy[2 * i] = (double)(pts[i].x - pts[0].x);
+            xy[2 * i + 1] = (double)(pts[i].y - pts[0].y);
+            before[i] = _ring_walk(pts, i, start, end, false);
+            after[i] = _ring_walk(pts, i, start, end, true);
         }
     }
+    if (!_polygon_fill(edit, polygon, xy, before, after))
+        _rollback(edit, mark);
     free(xy);
+    free(around);
 }
 
 /*
  * Text. A string is a record a glyph, each placed by its pen from the string's
  * anchor in ems, with the em and the angle on the record: the vertex stage
  * scales and turns them, so a string at any size or turn is the same layout.
- * The advances and the kerning are the font's, as the UI applies them.
+ * The advances and the kerning are the font's, the kerning applied before each
+ * glyph's advance as the UI applies it. One difference from the UI, which
+ * drops a character its atlas does not hold: here it advances by its own
+ * width, so a string's width does not depend on what the atlas was built with.
  */
 
 // The next codepoint of a UTF-8 string, stepping past it; a byte that starts
@@ -779,6 +833,7 @@ static int _utf8_next(const unsigned char** s) {
 
 typedef struct TextGlyph {
     int codepoint;
+    const GlyphInfo* glyph;
     double pen; // ems from the string's start, along its baseline
 } TextGlyph;
 
@@ -794,7 +849,7 @@ static double _text_layout(const Font* font, const char* string, TextGlyph* out,
         pen += font_kern_advance(font, prev, cp) * em;
         const GlyphInfo* g = cp < CANVAS_GLYPH_CODEPOINTS ? font_get_glyph(font, cp) : NULL;
         if (out && g && g->x1 > g->x0 && g->y1 > g->y0)
-            out[n++] = (TextGlyph){cp, pen};
+            out[n++] = (TextGlyph){cp, g, pen};
         pen += font_advance(font, cp) * em;
         prev = cp;
     }
@@ -863,12 +918,10 @@ void canvas_edit_text(CanvasEdit* edit, const CanvasText* text) {
     // The ink of the whole string in its own frame, in ems from the anchor.
     double lo[2] = {INFINITY, INFINITY}, hi[2] = {-INFINITY, -INFINITY};
     for (size_t i = 0; i < n; i++) {
-        const GlyphInfo* g = font_get_glyph(font, glyphs[i].codepoint);
+        const GlyphInfo* g = glyphs[i].glyph;
         CanvasPiece* piece =
             _piece(&pieces[i], shift, &text->paint, text->anchor, CANVAS_KIND_GLYPH, flags);
         piece->font = font;
-        piece->record.p[0] = _rel(text->anchor.x, piece->tx, shift);
-        piece->record.p[1] = _rel(text->anchor.y, piece->ty, shift);
         piece->record.p[2] = glyphs[i].codepoint;
         piece->record.f[0] = (float)(glyphs[i].pen - ax);
         piece->record.f[1] = (float)-ay;

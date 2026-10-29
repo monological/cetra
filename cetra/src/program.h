@@ -188,6 +188,10 @@ bool program_accepts_draw_mode(const ShaderProgram* program, GLenum draw_mode);
 #define CETRA_PROGRAM_PARTICLE    "particle"
 // Registered at creation like the rest, though not one an app has reason to ask for.
 #define CETRA_PROGRAM_RAIN "rain"
+// Registered by the first canvas that draws, and shared by every one after it.
+#define CETRA_PROGRAM_CANVAS           "canvas"
+#define CETRA_PROGRAM_CANVAS_FILL      "canvas_fill"
+#define CETRA_PROGRAM_CANVAS_COMPOSITE "canvas_composite"
 
 // Longest "pbr_skinned-<mask>-h<hook id>" plus its terminator, with room to spare.
 #define PBR_VARIANT_NAME_MAX 48

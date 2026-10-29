@@ -28519,19 +28519,36 @@ def _shapes_pointer_run(workdir, tag, script, frames):
 
 def _canvas_run(workdir, tag, *args):
     """apps/canvas headless at 400x300 points under --canvas-probe: its picture's path and its probe
-    lines keyed by (sheet, name), or None and the tail of its output when it failed."""
+    lines keyed by (sheet, name). A run that failed or hung prints the tail of its output and gives
+    None and no lines, so an arm reads an empty dict and fails rather than the group stopping."""
     out = os.path.join(workdir, f"canvas_{tag}.ppm")
     cmd = [_bin("canvas"), "-x", "-f", "2", "-W", "400", "-H", "300", "-S", out,
            "--canvas-probe", *args]
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=_PROBE_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        print(f"    apps/canvas {tag}: no exit in {_PROBE_TIMEOUT} s")
+        return None, {}
     if r.returncode != 0 or not os.path.exists(out):
-        return None, (r.stdout + r.stderr)[-400:]
+        print(f"    apps/canvas {tag} failed: {(r.stdout + r.stderr)[-400:]}")
+        return None, {}
     probe = {}
     for line in r.stdout.splitlines():
         p = line.split()
         if len(p) >= 3 and p[0] == "canvas":
             probe[(p[1], p[2])] = p[3:]
     return out, probe
+
+
+def _canvas_cell(tokens):
+    """A probe line's cell: its box in framebuffer pixels and its named measures."""
+    box = tuple(int(v) for v in tokens[1:5])
+    return box, {tokens[k]: float(tokens[k + 1]) for k in range(5, len(tokens) - 1, 2)}
+
+
+def _rgb_near(pixel, want, codes):
+    """Whether a pixel's red, green and blue are each within `codes` of 0xRRGGBB `want`."""
+    return all(abs(int(c) - ((want >> sh) & 255)) <= codes for c, sh in zip(pixel[:3], (16, 8, 0)))
 
 
 def _canvas_area(name, m):
@@ -28560,6 +28577,8 @@ def _canvas_area(name, m):
                 2 * (m["w"] + m["h"]) + 2 * math.pi * hs + 2 * (m["w"] + m["h"] - 2 * m["s"]))
     if name == "bar":
         return m["len"] * m["w"], 2 * (m["len"] + m["w"])
+    if name == "flat-arc":
+        return m["sweep"] * m["r"] * m["w"], 2 * m["sweep"] * m["r"] + 2 * m["w"]
     return None
 
 
@@ -28572,7 +28591,9 @@ def run_canvas_gate(workdir):
 
       canvas-areas   each shape's coverage summed over its cell against its closed-form area --
                      a circle, a ring, a rounded box, a capsule, a quarter arc, a box turned 45
-                     degrees, an outline and a flat-ended bar. The error grows with the edge and
+                     degrees, an outline, a flat-ended bar, and a flat-ended arc of three quarters
+                     of a turn given clockwise, whose flat ends' inner ramp once cut away most of
+                     its band (a third of its area drawn). The error grows with the edge and
                      not the area, so it is bounded per pixel of perimeter: within 0.03. Sharp
                      corners at 45 degrees sit at 0.02, from the method rather than the shader --
                      every row of such an edge falls at the same phase of the pixel grid, and an
@@ -28629,8 +28650,10 @@ def run_canvas_gate(workdir):
                      code as one arm, half of white. A layer's coverage is resolved before it is
                      painted, so it is translucent as a whole and not shape by shape.
       canvas-tags    a box a state -- a style's colour, a net's, an object's over its net's, a
-                     dim, a hidden one, a raised one winning an overlap and the first added
-                     winning one without, an outline's ring and its body -- and an outlined trace
+                     dim, a hidden one, a raised one winning an overlap, and its edge pixel under
+                     half covered by it going to the box beneath (a raised fringe once took the
+                     whole pixel), the first added winning one without, an outline's ring and its
+                     body -- and an outlined trace
                      of two segments at its joint, where one segment's ring runs inside the
                      other's body: the trace's colour shows there, not the ring's. Rings are
                      painted last, after every shape of the layer has spent its pixels. Each
@@ -28664,22 +28687,21 @@ def run_canvas_gate(workdir):
     # ---- areas
     areas, probe = _canvas_run(workdir, "areas", "--sheet", "areas")
     if not areas:
-        ok, detail = False, f"the app failed: {probe}"
+        ok, detail = False, "the app failed"
     else:
         cov = _canvas_coverage(areas)
         rows, worst = [], 0.0
         for (sheet, name), tokens in sorted(probe.items()):
             if sheet != "areas":
                 continue
-            x0, y0, x1, y1 = (int(v) for v in tokens[1:5])
-            m = {tokens[k]: float(tokens[k + 1]) for k in range(5, len(tokens), 2)}
+            (x0, y0, x1, y1), m = _canvas_cell(tokens)
             area, perimeter = _canvas_area(name, m)
             got = float(cov[y0:y1, x0:x1].sum())
             per_edge = (got - area) / perimeter
             worst = max(worst, abs(per_edge))
             rows.append(f"{name} {got:.1f}/{area:.1f} ({per_edge:+.4f})")
-        ok = len(rows) == 8 and worst <= 0.03
-        detail = (f"{len(rows)} shapes (want 8), worst {worst:.4f} px of edge (want <= 0.03): "
+        ok = len(rows) == 9 and worst <= 0.03
+        detail = (f"{len(rows)} shapes (want 9), worst {worst:.4f} px of edge (want <= 0.03): "
                   + ", ".join(rows))
     print(f"  canvas-areas        {'PASS' if ok else 'FAIL'}  {detail}")
     note("canvas-areas", ok)
@@ -28687,7 +28709,7 @@ def run_canvas_gate(workdir):
     # ---- ramp
     path, probe = _canvas_run(workdir, "ramp", "--sheet", "ramp")
     if not path:
-        ok, detail = False, f"the app failed: {probe}"
+        ok, detail = False, "the app failed"
     else:
         cov = _canvas_coverage(path)
         rows, ok = [], True
@@ -28708,7 +28730,7 @@ def run_canvas_gate(workdir):
     # ---- thin
     path, probe = _canvas_run(workdir, "thin", "--sheet", "thin")
     if not path or ("thin", "across") not in probe or ("thin", "down") not in probe:
-        ok, detail = False, f"the app failed or printed no lines: {probe}"
+        ok, detail = False, "the app failed or printed no lines"
     else:
         cov = _canvas_coverage(path)
         t = probe[("thin", "across")]
@@ -28795,13 +28817,13 @@ def run_canvas_gate(workdir):
     # ---- polygons
     polygons, probe = _canvas_run(workdir, "polygons", "--sheet", "polygons")
     cells = {name: tokens for (sheet, name), tokens in probe.items()
-             if polygons and sheet == "polygons"}
+             if sheet == "polygons"}
     if not polygons or len(cells) != 6:
         ok, detail = False, f"the app failed or printed {len(cells)} polygons (want 6)"
     else:
         rows, ok = [], True
         for name, tokens in sorted(cells.items()):
-            m = {tokens[k]: float(tokens[k + 1]) for k in range(5, len(tokens), 2)}
+            _, m = _canvas_cell(tokens)
             want_count = m["points"] - 2 + 2 * m["holes"]
             good = (abs(m["triangulated"] - m["area"]) <= 1e-9 * m["area"]
                     and m["triangles"] == want_count)
@@ -28819,8 +28841,7 @@ def run_canvas_gate(workdir):
         for label, path in (("4 mm", polygons), ("65 um", tiny)):
             cov = _canvas_coverage(path)
             for name, tokens in sorted(cells.items()):
-                x0, y0, x1, y1 = (int(v) for v in tokens[1:5])
-                m = {tokens[k]: float(tokens[k + 1]) for k in range(5, len(tokens), 2)}
+                (x0, y0, x1, y1), m = _canvas_cell(tokens)
                 per_edge = (float(cov[y0:y1, x0:x1].sum()) - m["area"]) / m["perimeter"]
                 worst = max(worst, abs(per_edge))
                 if label == "65 um":
@@ -28834,27 +28855,27 @@ def run_canvas_gate(workdir):
     # ---- text
     glyphs, probe = _canvas_run(workdir, "glyphs", "--sheet", "glyphs")
     cells = {name: tokens for (sheet, name), tokens in probe.items()
-             if glyphs and sheet == "glyphs" and tokens[0] == "box"}
+             if sheet == "glyphs" and tokens[0] == "box"}
     if not glyphs or len(cells) != 5:
         ok, detail = False, f"the app failed or printed {len(cells)} glyphs (want 5)"
     else:
         cov = _canvas_coverage(glyphs)
         errors, rows = [], []
         for name, tokens in sorted(cells.items()):
-            x0, y0, x1, y1 = (int(v) for v in tokens[1:5])
-            stb = float(tokens[8])
+            (x0, y0, x1, y1), m = _canvas_cell(tokens)
+            stb = m["stb"]
             rel = (float(cov[y0:y1, x0:x1].sum()) - stb) / stb
             errors.append(rel)
             rows.append(f"{name} {rel:+.2%}")
         mean = sum(errors) / len(errors)
         ok = max(abs(e) for e in errors) <= 0.006 and abs(mean) <= 0.003
-        detail = (f"at a {float(cells['B'][6]):.0f} px em, each within 0.6% (worst "
+        detail = (f"at a {_canvas_cell(cells['B'])[1]['em']:.0f} px em, each within 0.6% (worst "
                   f"{max(abs(e) for e in errors):.2%}), mean {mean:+.2%} (want within 0.3%): "
                   + ", ".join(rows))
     print(f"  canvas-glyph-edge   {'PASS' if ok else 'FAIL'}  {detail}")
     note("canvas-glyph-edge", ok)
 
-    width = probe.get(("glyphs", "width")) if glyphs else None
+    width = probe.get(("glyphs", "width"))
     if not width:
         ok, detail = False, "the app printed no width"
     else:
@@ -28866,7 +28887,7 @@ def run_canvas_gate(workdir):
 
     # ---- layers and tags
     path, probe = _canvas_run(workdir, "overlap", "--sheet", "overlap")
-    both, one = probe.get(("overlap", "both")) if path else None, probe.get(("overlap", "one"))
+    both, one = probe.get(("overlap", "both")), probe.get(("overlap", "one"))
     if not path or not both or not one:
         ok, detail = False, "the app failed or printed no points"
     else:
@@ -28879,26 +28900,27 @@ def run_canvas_gate(workdir):
     note("canvas-overlap-once", ok)
 
     path, probe = _canvas_run(workdir, "tags", "--sheet", "tags")
-    cells = {name: tokens for (sheet, name), tokens in probe.items() if path and sheet == "tags"}
-    if not path or len(cells) != 10:
-        ok, detail = False, f"the app failed or printed {len(cells)} points (want 10)"
+    cells = {name: tokens for (sheet, name), tokens in probe.items() if sheet == "tags"}
+    if not path or len(cells) != 11:
+        ok, detail = False, f"the app failed or printed {len(cells)} points (want 11)"
     else:
         img = _ppm_array(path)
         rows, ok = [], True
         for name, tokens in sorted(cells.items()):
             x, y, want = int(tokens[1]), int(tokens[2]), int(tokens[4], 16)
-            got = [int(v) for v in img[y, x, :3]]
-            good = all(abs(g - ((want >> s) & 255)) <= 2 for g, s in zip(got, (16, 8, 0)))
+            got = img[y, x]
+            good = _rgb_near(got, want, 2)
             ok = ok and good
             if not good:
-                rows.append(f"{name} {got[0]:02x}{got[1]:02x}{got[2]:02x} (want {want:06x})")
-        detail = ("10 points each its state's colour within 2 codes" if ok
+                rows.append(f"{name} {int(got[0]):02x}{int(got[1]):02x}{int(got[2]):02x} "
+                            f"(want {want:06x})")
+        detail = ("11 points each its state's colour within 2 codes" if ok
                   else "wrong: " + ", ".join(rows))
     print(f"  canvas-tags         {'PASS' if ok else 'FAIL'}  {detail}")
     note("canvas-tags", ok)
 
     board, probe = _canvas_run(workdir, "board", "--sheet", "board", "-f", "8")
-    steps = {name: tokens for (sheet, name), tokens in probe.items() if board and sheet == "board"}
+    steps = {name: tokens for (sheet, name), tokens in probe.items() if sheet == "board"}
     if not board or len(steps) != 7:
         ok, detail = False, f"the app failed or printed {len(steps)} steps (want 7)"
     else:
@@ -28948,7 +28970,7 @@ def run_canvas_gate(workdir):
     note("canvas-split", ok)
 
     under, probe = _canvas_run(workdir, "board_ui", "--sheet", "board", "--ui")
-    panel = probe.get(("ui", "panel")) if under else None
+    panel = probe.get(("ui", "panel"))
     if not under or not panel or not plain:
         ok, detail = False, "a run failed or printed no panel"
     else:
@@ -28956,7 +28978,7 @@ def run_canvas_gate(workdir):
         want = int(panel[5], 16)
         u, p = _ppm_array(under), _ppm_array(plain)
         centre = [int(v) for v in u[(y0 + y1) // 2, (x0 + x1) // 2, :3]]
-        good = all(abs(c - ((want >> sh) & 255)) <= 2 for c, sh in zip(centre, (16, 8, 0)))
+        good = _rgb_near(centre, want, 2)
         # Outside the panel, grown by a few pixels for its edge, the canvas is
         # as it is with no UI at all.
         mask = np.ones(u.shape[:2], bool)

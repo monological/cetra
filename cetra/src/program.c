@@ -1355,23 +1355,23 @@ ShaderProgram* create_ui_draw_program(const char* name, const char* frag_source)
 }
 
 ShaderProgram* create_canvas_program() {
-    ShaderProgram* program =
-        create_program_from_source("canvas", canvas_vert_shader_str, canvas_frag_shader_str, NULL);
+    ShaderProgram* program = create_program_from_source(
+        CETRA_PROGRAM_CANVAS, canvas_vert_shader_str, canvas_frag_shader_str, NULL);
     if (!program)
         log_error("Failed to initialize canvas shader program");
     return program;
 }
 
 ShaderProgram* create_canvas_fill_program() {
-    ShaderProgram* program = create_program_from_source("canvas_fill", canvas_fill_vert_shader_str,
-                                                        canvas_fill_frag_shader_str, NULL);
+    ShaderProgram* program = create_program_from_source(
+        CETRA_PROGRAM_CANVAS_FILL, canvas_fill_vert_shader_str, canvas_fill_frag_shader_str, NULL);
     if (!program)
         log_error("Failed to initialize canvas fill shader program");
     return program;
 }
 
 ShaderProgram* create_canvas_composite_program() {
-    return create_post_program("canvas_composite", canvas_composite_frag_shader_str);
+    return create_post_program(CETRA_PROGRAM_CANVAS_COMPOSITE, canvas_composite_frag_shader_str);
 }
 
 ShaderProgram* create_bone_program() {
