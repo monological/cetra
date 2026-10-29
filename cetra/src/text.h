@@ -34,19 +34,24 @@ typedef struct Font {
     int atlas_width;
     int atlas_height;
 
-    // Glyph data
+    // Glyph data, built once at load: printable ASCII and nothing else. Every
+    // length is in pixels at the base size, the atlas's own.
     GlyphInfo* glyph_cache;
-    float base_size;
+    float base_size; // ascent to descent
+    float em_size;   // the em square's side
     float line_height;
     float ascent;
     float descent;
 
-    // SDF parameters
+    // SDF parameters: a texel's value is sdf_edge on a glyph's outline and
+    // falls by sdf_falloff per pixel outward, reaching 0 sdf_spread pixels out.
     bool is_sdf;
     float sdf_spread;
-    float sdf_scale;
+    float sdf_edge;
+    float sdf_falloff;
 
-    // stb_truetype data (kept for dynamic glyph generation)
+    // stb_truetype's face, read for kerning and the advance of a character the
+    // atlas does not hold.
     unsigned char* ttf_buffer;
     void* stb_font_info;
 
@@ -142,8 +147,11 @@ Font* get_font(FontPool* pool, const char* name);
 void font_retain(Font* font);
 void font_release(Font* font);
 
-// Glyph access
-GlyphInfo* font_get_glyph(Font* font, int codepoint);
+// Glyph access. NULL for a codepoint the atlas does not hold.
+GlyphInfo* font_get_glyph(const Font* font, int codepoint);
+// A codepoint's advance in base-size pixels, whether the atlas holds it or not:
+// what a layout spaces a character it cannot draw by.
+float font_advance(const Font* font, int codepoint);
 // The pair adjustment between two codepoints, in pixels AT THE FONT'S BASE
 // SIZE -- the same units as GlyphInfo.advance_x, so a caller applies one scale
 // to both and the two cannot drift apart.
@@ -174,9 +182,9 @@ void text_mesh_rebuild(TextMesh* mesh);
 void text_mesh_upload(TextMesh* mesh);
 
 // Text measurement
-float text_measure_width(Font* font, const char* text, float size);
-void text_measure_bounds(Font* font, const char* text, float size, float* out_x0, float* out_y0,
-                         float* out_x1, float* out_y1);
+float text_measure_width(const Font* font, const char* text, float size);
+void text_measure_bounds(const Font* font, const char* text, float size, float* out_x0,
+                         float* out_y0, float* out_x1, float* out_y1);
 
 // TextRenderer
 TextRenderer* create_text_renderer(void);

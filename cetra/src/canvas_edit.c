@@ -4,6 +4,7 @@
 
 #include "canvas_record.h"
 #include "ext/log.h"
+#include "text.h"
 #include "triangulate.h"
 
 // The most pieces one shape is split into. Past it the shape reaches across
@@ -735,6 +736,166 @@ void canvas_edit_polygon(CanvasEdit* edit, const CanvasPolygon* polygon) {
         }
     }
     free(xy);
+}
+
+/*
+ * Text. A string is a record a glyph, each placed by its pen from the string's
+ * anchor in ems, with the em and the angle on the record: the vertex stage
+ * scales and turns them, so a string at any size or turn is the same layout.
+ * The advances and the kerning are the font's, as the UI applies them.
+ */
+
+// The next codepoint of a UTF-8 string, stepping past it; a byte that starts
+// no whole sequence is one U+FFFD.
+static int _utf8_next(const unsigned char** s) {
+    const unsigned char* p = *s;
+    int cp, extra;
+    if (p[0] < 0x80) {
+        *s = p + 1;
+        return p[0];
+    }
+    if ((p[0] & 0xe0) == 0xc0)
+        cp = p[0] & 0x1f, extra = 1;
+    else if ((p[0] & 0xf0) == 0xe0)
+        cp = p[0] & 0x0f, extra = 2;
+    else if ((p[0] & 0xf8) == 0xf0)
+        cp = p[0] & 0x07, extra = 3;
+    else
+        extra = -1, cp = 0;
+    for (int i = 1; i <= extra; i++) {
+        if ((p[i] & 0xc0) != 0x80) {
+            extra = -1;
+            break;
+        }
+        cp = cp << 6 | (p[i] & 0x3f);
+    }
+    if (extra < 0) {
+        *s = p + 1;
+        return 0xfffd;
+    }
+    *s = p + 1 + extra;
+    return cp;
+}
+
+typedef struct TextGlyph {
+    int codepoint;
+    double pen; // ems from the string's start, along its baseline
+} TextGlyph;
+
+// Lays a string out: the pen of each glyph with ink, written to `out` when it
+// is given, with room for one a byte, and the advance of the whole in ems.
+static double _text_layout(const Font* font, const char* string, TextGlyph* out, size_t* count) {
+    const double em = 1.0 / font->em_size;
+    double pen = 0.0;
+    int prev = 0;
+    size_t n = 0;
+    for (const unsigned char* s = (const unsigned char*)string; *s;) {
+        const int cp = _utf8_next(&s);
+        pen += font_kern_advance(font, prev, cp) * em;
+        const GlyphInfo* g = cp < CANVAS_GLYPH_CODEPOINTS ? font_get_glyph(font, cp) : NULL;
+        if (out && g && g->x1 > g->x0 && g->y1 > g->y0)
+            out[n++] = (TextGlyph){cp, pen};
+        pen += font_advance(font, cp) * em;
+        prev = cp;
+    }
+    if (count)
+        *count = n;
+    return pen;
+}
+
+static bool _font_ok(const Font* font) {
+    return font && font->is_sdf && font->em_size > 0.0f;
+}
+
+int64_t canvas_text_width(const CanvasText* text) {
+    if (!text || !_font_ok(text->font) || !text->string)
+        return 0;
+    return llround(_text_layout(text->font, text->string, NULL, NULL) * (double)text->size);
+}
+
+void canvas_edit_text(CanvasEdit* edit, const CanvasText* text) {
+    if (!text || !_paint_ok(edit, &text->paint, "string"))
+        return;
+    const Font* font = text->font;
+    if (!_font_ok(font)) {
+        log_error("canvas: a string with %s is refused",
+                  font ? "a font that is not SDF" : "no font");
+        return;
+    }
+    if (!_length_ok(text->size, "string", "size"))
+        return;
+    if (text->size == 0) {
+        log_error("canvas: a string with no size is refused");
+        return;
+    }
+    if (!text->string || !*text->string)
+        return;
+    const size_t len = strlen(text->string);
+    if (len > CANVAS_SPLIT_MAX) {
+        log_error("canvas: a string of %zu bytes is refused (at most %d)", len, CANVAS_SPLIT_MAX);
+        return;
+    }
+    TextGlyph* glyphs = malloc(len * sizeof(TextGlyph));
+    if (!glyphs) {
+        log_error("canvas: out of memory laying out a string");
+        return;
+    }
+    size_t n = 0;
+    const double width = _text_layout(font, text->string, glyphs, &n);
+    CanvasPiece* pieces = n ? _reserve(edit, n) : NULL;
+    if (!pieces) {
+        free(glyphs);
+        return;
+    }
+
+    // The anchor's place on the string, in ems from its start on the baseline.
+    const double em = 1.0 / font->em_size;
+    const double ax = text->align_x == CANVAS_ALIGN_CENTRE  ? width * 0.5
+                      : text->align_x == CANVAS_ALIGN_RIGHT ? width
+                                                            : 0.0;
+    const double ay = text->align_y == CANVAS_ALIGN_BOTTOM ? font->descent * em
+                      : text->align_y == CANVAS_ALIGN_MIDDLE
+                          ? (font->ascent + font->descent) * em * 0.5
+                      : text->align_y == CANVAS_ALIGN_TOP ? font->ascent * em
+                                                          : 0.0;
+    const int shift = edit->tile_shift;
+    const uint32_t flags = text->mirrored ? CANVAS_FLAG_MIRROR : 0u;
+    // The ink of the whole string in its own frame, in ems from the anchor.
+    double lo[2] = {INFINITY, INFINITY}, hi[2] = {-INFINITY, -INFINITY};
+    for (size_t i = 0; i < n; i++) {
+        const GlyphInfo* g = font_get_glyph(font, glyphs[i].codepoint);
+        CanvasPiece* piece =
+            _piece(&pieces[i], shift, &text->paint, text->anchor, CANVAS_KIND_GLYPH, flags);
+        piece->font = font;
+        piece->record.p[0] = _rel(text->anchor.x, piece->tx, shift);
+        piece->record.p[1] = _rel(text->anchor.y, piece->ty, shift);
+        piece->record.p[2] = glyphs[i].codepoint;
+        piece->record.f[0] = (float)(glyphs[i].pen - ax);
+        piece->record.f[1] = (float)-ay;
+        piece->record.f[2] = (float)text->size;
+        piece->record.f[3] = (float)text->angle;
+        const double x = glyphs[i].pen - ax;
+        lo[0] = fmin(lo[0], x + g->x0 * em), hi[0] = fmax(hi[0], x + g->x1 * em);
+        lo[1] = fmin(lo[1], -ay - g->y1 * em), hi[1] = fmax(hi[1], -ay - g->y0 * em);
+    }
+    // Its bound: the ink's four corners mirrored and turned about the anchor.
+    // Every glyph is in the anchor's tile, so each takes the whole string's.
+    const double c = cos(text->angle), s = sin(text->angle), size = (double)text->size;
+    const double mirror = text->mirrored ? -1.0 : 1.0;
+    double b[4] = {INFINITY, INFINITY, -INFINITY, -INFINITY};
+    for (int k = 0; k < 4; k++) {
+        const double x = (k & 1 ? hi[0] : lo[0]) * size * mirror,
+                     y = (k & 2 ? hi[1] : lo[1]) * size;
+        const double px = c * x - s * y, py = s * x + c * y;
+        b[0] = fmin(b[0], px), b[1] = fmin(b[1], py);
+        b[2] = fmax(b[2], px), b[3] = fmax(b[3], py);
+    }
+    for (size_t i = 0; i < n; i++)
+        _bound(&pieces[i], text->anchor.x + (int64_t)floor(b[0]),
+               text->anchor.y + (int64_t)floor(b[1]), text->anchor.x + (int64_t)ceil(b[2]),
+               text->anchor.y + (int64_t)ceil(b[3]), 1);
+    _commit(edit, n);
+    free(glyphs);
 }
 
 void canvas_edit_remove_object(CanvasEdit* edit, uint32_t object) {

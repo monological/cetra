@@ -7,6 +7,7 @@
 #include "ext/log.h"
 #include "ext/uthash.h"
 #include "program.h"
+#include "text.h"
 #include "uniform.h"
 #include "util.h"
 
@@ -23,8 +24,17 @@
 // overflowing. A view wider than this is far past any detail anyway.
 #define CANVAS_VIEW_REACH (INT64_C(1) << 30)
 
-// The units the canvas program reads its tables from: its own ledger.
-enum { CANVAS_UNIT_TILES = 0, CANVAS_UNIT_STYLES = 1, CANVAS_UNIT_TAGS = 2 };
+// The units the canvas program reads its tables from: its own ledger. A font's
+// atlas is on a unit of its own, CANVAS_UNIT_FONTS plus its slot, since GL 4.1
+// indexes a sampler array only by a value the same across a draw.
+enum {
+    CANVAS_UNIT_TILES = 0,
+    CANVAS_UNIT_STYLES = 1,
+    CANVAS_UNIT_TAGS = 2,
+    CANVAS_UNIT_GLYPHS = 3,
+    CANVAS_UNIT_FONTS = 4,
+    CANVAS_UNIT_END = CANVAS_UNIT_FONTS + CANVAS_FONT_MAX,
+};
 
 // What the canvas registers its programs as, so every canvas shares them.
 #define CANVAS_PROGRAM           "canvas"
@@ -241,6 +251,12 @@ typedef struct CanvasData {
 
     CanvasObject* objects;
 
+    // The fonts its strings are drawn with, in the order first applied: a
+    // glyph record's slot.
+    const Font* fonts[CANVAS_FONT_MAX];
+    uint32_t font_count;
+    bool glyphs_dirty;
+
     // GL, made at the first draw.
     bool gl_ready, gl_failed;
     ShaderProgram* program; // shapes
@@ -249,6 +265,7 @@ typedef struct CanvasData {
     GLuint quad_vao, quad_vbo;
     GLuint style_buffer, style_texture;
     GLuint tile_buffer, tile_texture;
+    GLuint glyph_buffer, glyph_texture;
     int32_t* tile_table;
     uint32_t tile_table_cap;
     GLuint target_fbo, target_texture;
@@ -343,8 +360,11 @@ void free_canvas(Canvas* canvas) {
             glDeleteBuffers(1, &d->style_buffer);
         if (d->tile_buffer)
             glDeleteBuffers(1, &d->tile_buffer);
+        if (d->glyph_buffer)
+            glDeleteBuffers(1, &d->glyph_buffer);
         gl_delete_texture(&d->style_texture);
         gl_delete_texture(&d->tile_texture);
+        gl_delete_texture(&d->glyph_texture);
         gl_delete_texture(&d->target_texture);
         gl_delete_fbo(&d->target_fbo);
         free(d->coord_by_index);
@@ -597,6 +617,19 @@ static void _clear_layer(const CanvasData* d, CanvasLayer* layer) {
     }
 }
 
+// A font's slot among the canvas's, taking the next free one for a font not
+// yet drawn with; -1 when all are taken.
+static int _font_slot(CanvasData* d, const Font* font) {
+    for (uint32_t i = 0; i < d->font_count; i++)
+        if (d->fonts[i] == font)
+            return (int)i;
+    if (d->font_count == CANVAS_FONT_MAX)
+        return -1;
+    d->fonts[d->font_count] = font;
+    d->glyphs_dirty = true;
+    return (int)d->font_count++;
+}
+
 void canvas_apply(Canvas* canvas, CanvasEdit* edit) {
     if (!canvas || !edit)
         return;
@@ -604,13 +637,21 @@ void canvas_apply(Canvas* canvas, CanvasEdit* edit) {
     if (edit->tile_shift != d->tile_shift) {
         log_error("canvas: an edit made for another canvas's tiles is refused");
     } else {
-        uint32_t refused = 0;
+        uint32_t refused = 0, fonts_refused = 0;
         for (size_t s = 0; s < edit->step_count; s++) {
             const CanvasStep* step = &edit->steps[s];
             switch (step->kind) {
                 case CANVAS_STEP_ADD:
                     for (size_t i = 0; i < step->count; i++) {
                         CanvasPiece* p = &edit->pieces[step->first + i];
+                        if (p->font) {
+                            const int slot = _font_slot(d, p->font);
+                            if (slot < 0) {
+                                fonts_refused++;
+                                continue;
+                            }
+                            p->record.p[3] = slot;
+                        }
                         _add(d, CANVAS_SHAPES, p->layer, p->tx, p->ty, p->min, p->max, &p->record,
                              &refused);
                     }
@@ -634,6 +675,9 @@ void canvas_apply(Canvas* canvas, CanvasEdit* edit) {
             log_error("canvas: %u shape(s) refused: a layer of another canvas, a style it does "
                       "not have, or out of memory",
                       refused);
+        if (fonts_refused)
+            log_error("canvas: %u glyph(s) refused: a canvas draws with at most %d fonts",
+                      fonts_refused, CANVAS_FONT_MAX);
         canvas->generation++;
     }
     edit->piece_count = 0;
@@ -680,6 +724,9 @@ static bool _gl_ready(Canvas* canvas) {
     glGenTextures(1, &d->style_texture);
     glGenBuffers(1, &d->tile_buffer);
     glGenTextures(1, &d->tile_texture);
+    glGenBuffers(1, &d->glyph_buffer);
+    glGenTextures(1, &d->glyph_texture);
+    d->glyphs_dirty = true;
     d->gl_ready = true;
     return true;
 }
@@ -827,6 +874,45 @@ static void _styles_upload(CanvasData* d) {
     glTexBuffer(GL_TEXTURE_BUFFER, GL_RGBA8, d->style_buffer);
     free(texels);
     d->styles_dirty = false;
+}
+
+/*
+ * The glyph table, laid out as canvas_constants.glsl states: for each font,
+ * first its own numbers -- its em in atlas pixels, the value at a glyph's
+ * outline, how fast the value falls a pixel and how far it reaches -- then for
+ * each codepoint its box in ems from the pen, y up, and its rectangle of the
+ * atlas, bottom row first so both mix the same way across the quad.
+ */
+static void _glyphs_upload(CanvasData* d) {
+    if (!d->glyphs_dirty)
+        return;
+    const size_t per_font = (size_t)CANVAS_GLYPH_CODEPOINTS * 2;
+    float* texels = calloc((size_t)CANVAS_FONT_MAX * per_font * 4, sizeof(float));
+    if (!texels)
+        return;
+    for (uint32_t slot = 0; slot < d->font_count; slot++) {
+        const Font* font = d->fonts[slot];
+        const float em = font->em_size;
+        float* base = texels + slot * per_font * 4;
+        const float numbers[4] = {em, font->sdf_edge, font->sdf_falloff, font->sdf_spread};
+        memcpy(base, numbers, sizeof(numbers));
+        for (int cp = 1; cp < CANVAS_GLYPH_CODEPOINTS; cp++) {
+            const GlyphInfo* g = font_get_glyph(font, cp);
+            if (!g)
+                continue;
+            const float glyph[8] = {g->x0 / em, -g->y1 / em, g->x1 / em, -g->y0 / em,
+                                    g->u0,      g->v1,       g->u1,      g->v0};
+            memcpy(base + (size_t)cp * 8, glyph, sizeof(glyph));
+        }
+    }
+    glBindBuffer(GL_TEXTURE_BUFFER, d->glyph_buffer);
+    glBufferData(GL_TEXTURE_BUFFER,
+                 (GLsizeiptr)((size_t)CANVAS_FONT_MAX * per_font * 4 * sizeof(float)), texels,
+                 GL_STATIC_DRAW);
+    glBindTexture(GL_TEXTURE_BUFFER, d->glyph_texture);
+    glTexBuffer(GL_TEXTURE_BUFFER, GL_RGBA32F, d->glyph_buffer);
+    free(texels);
+    d->glyphs_dirty = false;
 }
 
 // Each tile coordinate's offset from the view's integer centre, and whether
@@ -983,10 +1069,15 @@ static void _view_uniforms(const ShaderProgram* program, const Canvas* canvas,
     uniform_set_float(u, "uPixelsPerUnit", ppu);
     uniform_set_float(u, "uMirror", view->mirror_x ? -1.0f : 1.0f);
     uniform_set_float(u, "uShapeMinPx", canvas->shape_min_px);
+    uniform_set_float(u, "uTextMinPx", canvas->text_min_px);
     uniform_set_int(u, "uTagCount", (int)canvas->data->tags->count);
     uniform_set_int(u, "uTiles", CANVAS_UNIT_TILES);
     uniform_set_int(u, "uStyles", CANVAS_UNIT_STYLES);
     uniform_set_int(u, "uTags", CANVAS_UNIT_TAGS);
+    uniform_set_int(u, "uGlyphs", CANVAS_UNIT_GLYPHS);
+    static const char* FONTS[CANVAS_FONT_MAX] = {"uFont0", "uFont1", "uFont2", "uFont3"};
+    for (int slot = 0; slot < CANVAS_FONT_MAX; slot++)
+        uniform_set_int(u, FONTS[slot], CANVAS_UNIT_FONTS + slot);
 }
 
 void canvas_draw(Canvas* canvas, const CanvasView* view) {
@@ -1024,6 +1115,7 @@ void canvas_draw(Canvas* canvas, const CanvasView* view) {
                 _store_upload(canvas, d->layers[i]->data, s);
         _styles_upload(d);
         _tags_upload(d->tags);
+        _glyphs_upload(d);
         _tiles_upload(d, view, (w * 0.5 + 2.0) / ppu, (h * 0.5 + 2.0) / ppu);
 
         glBindFramebuffer(GL_FRAMEBUFFER, d->target_fbo);
@@ -1043,14 +1135,20 @@ void canvas_draw(Canvas* canvas, const CanvasView* view) {
         glBindTexture(GL_TEXTURE_BUFFER, d->style_texture);
         glActiveTexture(GL_TEXTURE0 + CANVAS_UNIT_TAGS);
         glBindTexture(GL_TEXTURE_BUFFER, d->tags->texture);
+        glActiveTexture(GL_TEXTURE0 + CANVAS_UNIT_GLYPHS);
+        glBindTexture(GL_TEXTURE_BUFFER, d->glyph_texture);
+        for (uint32_t slot = 0; slot < d->font_count; slot++) {
+            glActiveTexture(GL_TEXTURE0 + CANVAS_UNIT_FONTS + slot);
+            glBindTexture(GL_TEXTURE_2D, d->fonts[slot]->atlas_texture_id);
+        }
 
         const CanvasLayer* order[CANVAS_LAYER_MAX] = {NULL};
         const uint32_t n = _draw_order(d, view, order);
         for (uint32_t i = 0; i < n; i++)
             _draw_layer(d, order[i]);
-        for (int unit = CANVAS_UNIT_TAGS; unit >= CANVAS_UNIT_TILES; unit--) {
+        for (int unit = CANVAS_UNIT_END - 1; unit >= CANVAS_UNIT_TILES; unit--) {
             glActiveTexture(GL_TEXTURE0 + (GLenum)unit);
-            glBindTexture(GL_TEXTURE_BUFFER, 0);
+            glBindTexture(unit >= CANVAS_UNIT_FONTS ? GL_TEXTURE_2D : GL_TEXTURE_BUFFER, 0);
         }
 
         // The view's rectangle into the frame, opaque: what the canvas drew

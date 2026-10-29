@@ -22,6 +22,11 @@
  *   EDGE     p = a, b              f unused: the outer half of a polygon edge's
  *                                    ramp, its polygon left of a to b when
  *                                    FLAG_INSIDE_LEFT is set
+ *   GLYPH    p = the string's      f = its pen (x, y) in ems from the anchor,
+ *              anchor, codepoint,      in the string's own frame; the em in
+ *              font slot               units; the string's angle
+ *            FLAG_MIRROR flips it across the line through the anchor. The font
+ *            slot is the canvas's (its four fonts), filled in when applied.
  * A cut end (FLAG_CUT_*) is where an edit split a shape reaching too far from
  * its tile: it has no cap and no edge ramp, so the pieces meet with no seam.
  */
@@ -77,11 +82,12 @@ typedef struct CanvasTriangle {
 } CanvasTriangle;
 
 // A record as an edit holds it: what tile it belongs to, with the tile's index
-// filled in when the edit is applied.
+// filled in when the edit is applied, and a glyph's font slot likewise.
 typedef struct CanvasPiece {
     CanvasLayer* layer;
-    int64_t tx, ty;         // its tile
-    int64_t min[2], max[2]; // its bound in units
+    const struct Font* font; // a glyph's; NULL for every other kind
+    int64_t tx, ty;          // its tile
+    int64_t min[2], max[2];  // its bound in units
     CanvasRecord record;
 } CanvasPiece;
 

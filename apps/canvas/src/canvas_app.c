@@ -9,6 +9,9 @@
  * how big it is, in framebuffer pixels with rows from the top, so the `canvas`
  * gate group can measure the picture against closed forms without restating
  * the sheet's layout.
+ *
+ * A debug harness for one internal header: the glyphs sheet measures text
+ * against stb_truetype's own rasterizer, which only its header reaches.
  */
 
 #include <math.h>
@@ -23,8 +26,10 @@
 #include "cetra/canvas.h"
 #include "cetra/engine.h"
 #include "cetra/postfx.h"
+#include "cetra/internal/ext/stb_truetype.h"
 #include "cetra/program.h"
 #include "cetra/scene.h"
+#include "cetra/text.h"
 #include "cetra/triangulate.h"
 
 #define MM(v) ((int64_t)llround((v) * 1e6))
@@ -43,6 +48,7 @@ typedef struct SheetContext {
     const CanvasView* view; // the view it will be drawn in
     double fb_scale;        // framebuffer pixels per window point
     bool probe;             // print where its shapes land
+    const Font* font;       // what its text is set in
 } SheetContext;
 
 // Framebuffer pixels per unit in the sheet's view.
@@ -518,6 +524,213 @@ static void sheet_long_short(SheetContext* ctx) {
     line_sheet(ctx, (int64_t)1 << 18, (int64_t)1 << 14);
 }
 
+/*
+ * The symbol sheet: an integrated circuit as a schematic draws one, its pin
+ * names inside the body, the top row's turned to read down it, its pin numbers
+ * along the pins, and a row of sizes down to where text stops being drawn.
+ */
+static void sheet_symbol(SheetContext* ctx) {
+    Canvas* canvas = ctx->canvas;
+    CanvasEdit* edit = ctx->edit;
+    const int64_t offset = ctx->offset;
+    CanvasLayer* body = canvas_add_layer(canvas, "body");
+    CanvasLayer* graphics = canvas_add_layer(canvas, "graphics");
+    CanvasLayer* text = canvas_add_layer(canvas, "text");
+    const CanvasPaint fill = {.layer = body, .style = canvas_add_style(canvas, 0xffffc2ffu)};
+    const CanvasPaint line = {.layer = graphics, .style = canvas_add_style(canvas, 0x840000ffu)};
+    const CanvasPaint name = {.layer = text, .style = canvas_add_style(canvas, 0x008484ffu)};
+    const CanvasPaint number = {.layer = text, .style = canvas_add_style(canvas, 0xa90000ffu)};
+    const CanvasPaint label = {.layer = text, .style = canvas_add_style(canvas, 0x404040ffu)};
+#define AT(x, y) ((CanvasPoint){MM(x) + offset, MM(y) + offset})
+    const double PI = 3.141592653589793, PITCH = 2.54, LEAD = 2.54;
+    const double hx = 7.62, hy = 11.43; // the body's half size
+
+    canvas_edit_box(edit, &(CanvasBox){.paint = fill,
+                                       .centre = AT(0.0, 0.0),
+                                       .size_x = MM(2.0 * hx),
+                                       .size_y = MM(2.0 * hy)});
+    canvas_edit_box(edit, &(CanvasBox){.paint = line,
+                                       .centre = AT(0.0, 0.0),
+                                       .size_x = MM(2.0 * hx),
+                                       .size_y = MM(2.0 * hy),
+                                       .stroke = MM(0.254)});
+
+    static const char* LEFT[] = {"VDD", "PA0", "PA1", "PA2", "NRST", "GND"};
+    static const char* RIGHT[] = {"PB0", "PB1/SCL", "PB2/SDA", "PB3", "SWDIO", "SWCLK"};
+    static const char* TOP[] = {"VBAT", "VDDA", "VREF+"};
+    char digits[8];
+    int pin = 1;
+    for (int i = 0; i < 6; i++, pin++) {
+        const double y = 3.81 - i * PITCH;
+        canvas_edit_segment(
+            edit, &(CanvasSegment){
+                      .paint = line, .a = AT(-hx - LEAD, y), .b = AT(-hx, y), .width = MM(0.152)});
+        canvas_edit_text(edit, &(CanvasText){.paint = name,
+                                             .font = ctx->font,
+                                             .string = LEFT[i],
+                                             .anchor = AT(-hx + 0.6, y),
+                                             .size = MM(1.27),
+                                             .align_y = CANVAS_ALIGN_MIDDLE});
+        snprintf(digits, sizeof(digits), "%d", pin);
+        canvas_edit_text(edit, &(CanvasText){.paint = number,
+                                             .font = ctx->font,
+                                             .string = digits,
+                                             .anchor = AT(-hx - LEAD * 0.5, y + 0.25),
+                                             .size = MM(1.0),
+                                             .align_x = CANVAS_ALIGN_CENTRE});
+    }
+    for (int i = 0; i < 6; i++, pin++) {
+        const double y = -8.89 + i * PITCH;
+        canvas_edit_segment(
+            edit, &(CanvasSegment){
+                      .paint = line, .a = AT(hx, y), .b = AT(hx + LEAD, y), .width = MM(0.152)});
+        canvas_edit_text(edit, &(CanvasText){.paint = name,
+                                             .font = ctx->font,
+                                             .string = RIGHT[i],
+                                             .anchor = AT(hx - 0.6, y),
+                                             .size = MM(1.27),
+                                             .align_x = CANVAS_ALIGN_RIGHT,
+                                             .align_y = CANVAS_ALIGN_MIDDLE});
+        snprintf(digits, sizeof(digits), "%d", pin);
+        canvas_edit_text(edit, &(CanvasText){.paint = number,
+                                             .font = ctx->font,
+                                             .string = digits,
+                                             .anchor = AT(hx + LEAD * 0.5, y + 0.25),
+                                             .size = MM(1.0),
+                                             .align_x = CANVAS_ALIGN_CENTRE});
+    }
+    // The top row: names turned a quarter clockwise to read down into the body,
+    // numbers a quarter the other way along the pin's left side.
+    for (int i = 0; i < 3; i++, pin++) {
+        const double x = -PITCH + i * PITCH;
+        canvas_edit_segment(
+            edit, &(CanvasSegment){
+                      .paint = line, .a = AT(x, hy), .b = AT(x, hy + LEAD), .width = MM(0.152)});
+        canvas_edit_text(edit, &(CanvasText){.paint = name,
+                                             .font = ctx->font,
+                                             .string = TOP[i],
+                                             .anchor = AT(x, hy - 0.6),
+                                             .size = MM(1.27),
+                                             .angle = -PI * 0.5,
+                                             .align_y = CANVAS_ALIGN_MIDDLE});
+        snprintf(digits, sizeof(digits), "%d", pin);
+        canvas_edit_text(edit, &(CanvasText){.paint = number,
+                                             .font = ctx->font,
+                                             .string = digits,
+                                             .anchor = AT(x - 0.25, hy + LEAD * 0.5),
+                                             .size = MM(1.0),
+                                             .angle = PI * 0.5,
+                                             .align_x = CANVAS_ALIGN_CENTRE});
+    }
+    canvas_edit_text(edit, &(CanvasText){.paint = label,
+                                         .font = ctx->font,
+                                         .string = "U1",
+                                         .anchor = AT(-hx, hy + 0.6),
+                                         .size = MM(1.27),
+                                         .align_y = CANVAS_ALIGN_BOTTOM});
+    canvas_edit_text(edit, &(CanvasText){.paint = label,
+                                         .font = ctx->font,
+                                         .string = "STM32G431K",
+                                         .anchor = AT(0.0, -hy - 0.6),
+                                         .size = MM(1.27),
+                                         .align_x = CANVAS_ALIGN_CENTRE,
+                                         .align_y = CANVAS_ALIGN_TOP});
+
+    // Beside it: the same words mirrored, as a board's underside reads, and a
+    // row of sizes halving down past the canvas's smallest.
+    canvas_edit_text(edit, &(CanvasText){.paint = label,
+                                         .font = ctx->font,
+                                         .string = "Bottom silk",
+                                         .anchor = AT(14.0, 9.5),
+                                         .size = MM(1.5)});
+    canvas_edit_text(edit, &(CanvasText){.paint = label,
+                                         .font = ctx->font,
+                                         .string = "Bottom silk",
+                                         .anchor = AT(14.0, 7.0),
+                                         .size = MM(1.5),
+                                         .align_x = CANVAS_ALIGN_RIGHT,
+                                         .mirrored = true});
+    double y = 4.0;
+    for (double size = 2.0; size > 0.02; size *= 0.5) {
+        char words[32];
+        snprintf(words, sizeof(words), "%.3g mm text", size);
+        canvas_edit_text(edit, &(CanvasText){.paint = label,
+                                             .font = ctx->font,
+                                             .string = words,
+                                             .anchor = AT(14.0, y),
+                                             .size = MM(size)});
+        y -= size * 1.2 + 0.3;
+    }
+#undef AT
+}
+
+/*
+ * The glyphs sheet: one character a cell, white on black, each the size of a
+ * large heading, so the gate can sum its coverage against stb_truetype's own
+ * rasterizer at the same em; and one kerned string, whose width it checks
+ * against the font's advances and kerning summed here.
+ */
+static const char GLYPHS[] = "Bg@We";
+
+static void sheet_glyphs(SheetContext* ctx) {
+    const CanvasPaint paint = white_paint(ctx->canvas);
+    const stbtt_fontinfo* info = (const stbtt_fontinfo*)ctx->font->stb_font_info;
+    const int64_t size = MM(1.0), half = MM(0.75);
+    const double em_px = (double)size * ppu_px(ctx);
+    for (int i = 0; GLYPHS[i]; i++) {
+        const CanvasPoint centre = {MM(-3.0 + 1.5 * i) + ctx->offset, MM(1.0) + ctx->offset};
+        const char one[2] = {GLYPHS[i], 0};
+        canvas_edit_text(ctx->edit, &(CanvasText){.paint = paint,
+                                                  .font = ctx->font,
+                                                  .string = one,
+                                                  .anchor = centre,
+                                                  .size = size,
+                                                  .align_x = CANVAS_ALIGN_CENTRE,
+                                                  .align_y = CANVAS_ALIGN_MIDDLE});
+        if (!ctx->probe)
+            continue;
+        // stb's own coverage of the glyph at the same em: an exact-area
+        // rasterizer, quantised to a byte a pixel.
+        const float scale = stbtt_ScaleForMappingEmToPixels(info, (float)em_px);
+        int x0, y0, x1, y1;
+        stbtt_GetCodepointBitmapBox(info, GLYPHS[i], scale, scale, &x0, &y0, &x1, &y1);
+        const int w = x1 - x0, h = y1 - y0;
+        unsigned char* pixels = calloc((size_t)w * (size_t)h, 1);
+        double area = 0.0;
+        if (pixels) {
+            stbtt_MakeCodepointBitmap(info, pixels, w, h, w, scale, scale, GLYPHS[i]);
+            for (int k = 0; k < w * h; k++)
+                area += pixels[k] / 255.0;
+            free(pixels);
+        }
+        char cell[8];
+        snprintf(cell, sizeof(cell), "%c", GLYPHS[i]);
+        probe_cell(ctx, "glyphs", cell, centre, half);
+        printf(" em %.4f stb %.4f\n", em_px, area);
+    }
+    const CanvasText kerned = {.paint = paint,
+                               .font = ctx->font,
+                               .string = "AVATAR To Wave",
+                               .anchor = {MM(-3.9) + ctx->offset, MM(-1.5) + ctx->offset},
+                               .size = size};
+    canvas_edit_text(ctx->edit, &kerned);
+    if (ctx->probe) {
+        // The font's advances and pair adjustments in its own units, then
+        // scaled to the em, all in double.
+        const double per_unit = (double)size * stbtt_ScaleForMappingEmToPixels(info, 1.0f);
+        double units = 0.0;
+        int prev = 0;
+        for (const char* p = kerned.string; *p; p++) {
+            int advance, bearing;
+            stbtt_GetCodepointHMetrics(info, *p, &advance, &bearing);
+            units += advance + (prev ? stbtt_GetCodepointKernAdvance(info, prev, *p) : 0);
+            prev = *p;
+        }
+        printf("canvas glyphs width %lld stb %.1f\n", (long long)canvas_text_width(&kerned),
+               units * per_unit);
+    }
+}
+
 typedef struct Sheet {
     const char* name;
     void (*build)(SheetContext* ctx);
@@ -535,6 +748,8 @@ static const Sheet SHEETS[] = {
     // A view 10 micrometres across, centred on the line half a piece from a cut.
     {"long", sheet_long, {1.835008, 0.262144}, 0.01, 0x000000ffu},
     {"long-short", sheet_long_short, {1.835008, 0.262144}, 0.01, 0x000000ffu},
+    {"symbol", sheet_symbol, {8.0, 1.0}, 48.0, 0xf5f4efffu},
+    {"glyphs", sheet_glyphs, {0.0, 0.0}, 8.0, 0x000000ffu},
 };
 
 static const Sheet* find_sheet(const char* name) {
@@ -694,12 +909,20 @@ int main(int argc, char** argv) {
     g_view.fraction[0] = ux - floor(ux);
     g_view.fraction[1] = uy - floor(uy);
 
+    const Font* font = load_font(engine->text_renderer->font_pool,
+                                 "apps/splash/assets/Roboto-Bold.ttf", 64.0f, true);
+    if (!font) {
+        free_canvas(g_canvas);
+        free_engine(engine);
+        return 1;
+    }
     SheetContext ctx = {.canvas = g_canvas,
                         .edit = create_canvas_edit(g_canvas),
                         .offset = (int64_t)offset,
                         .view = &g_view,
                         .fb_scale = (double)engine->fb_width / (double)engine->win_width,
-                        .probe = probe};
+                        .probe = probe,
+                        .font = font};
     sheet->build(&ctx);
     canvas_apply(g_canvas, ctx.edit);
     free_canvas_edit(ctx.edit);
