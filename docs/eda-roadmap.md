@@ -51,8 +51,8 @@ These come from pcb's `ARCH.md` sections 8 and 9, and every item below has to re
 | # | Item | Status | First needed by pcb's step | Spec |
 |---|------|--------|----------------------------|------|
 | 1 | The 2D canvas | **Built**, spec 14.0; images, drag offsets and the rest below are left for later | 6, the window (the schematic); then 7, the layout | 14.0 |
-| 2 | Idle mode: drawing only when something changed | Not started | 6 | |
-| 3 | Skipping the 3D scene pass when no 3D view is shown | Not started | 8, the 3D view | |
+| 2 | Idle mode: drawing only when something changed | Not started; next, as spec 14.1, for frames that draw no 3D scene | 6 | |
+| 3 | Skipping the 3D scene pass when no 3D view is shown | Not started; takes a still 3D view drawn on demand, moved from item 2 | 8, the 3D view | |
 | 4 | Drawing the 3D scene into part of the window | Not started | 8 | |
 | 5 | Text input and scrolling panes in the UI | Not started | 6 (the command palette and the `/` jump); 9 (the chat) | |
 | 6 | The text editor widget | Not started | 6 (the code view) | |
@@ -197,20 +197,27 @@ something moves (live routing). Input still reaches the screen within one frame.
 waits is a minimized window, which blocks on `glfwWaitEventsTimeout(0.1)` (`engine.c`, the
 nothing-to-draw branch of the loop).
 
+**Scope, decided while planning spec 14.1:**
+
+- **Idle mode covers the frames that draw no 3D scene**: the schematic, the layout, the code editor
+  and the chat. A frame that draws the 3D scene keeps the loop drawing every frame, as today.
+- **It is a switch an app turns on, off by default**, so every game, every other app and every
+  golden is unchanged. pcb and `apps/canvas` turn it on.
+- **A still 3D view drawn on demand moved to item 3** (below), with what keeps a 3D frame alive and
+  the accumulation pcb's ARCH asks for. Only with pcb's 3D view is there a board to judge it on.
+
 **To decide in its spec:**
 
 - **Who says something changed.** An input event wakes the loop by itself. Work finished on another
   thread does not, so the app needs a call that asks for a frame, and a thread needs a way to wake
-  the loop (GLFW's `glfwPostEmptyEvent`).
-- **Idle is not "stop" in 3D.** pcb wants a still 3D view to keep accumulating TAA's jitter until it
-  is clean. So a 3D view draws until it has converged and then stops, which needs a test for
-  "converged".
-- **What else keeps a frame alive.** Anything the engine animates or settles over time: the GI and
-  probe captures paced by the capture budget, auto-exposure adapting, cached shadow tiles opening,
-  async texture uploads, the fog's and the other temporal histories, particles, wind, a clock in a
-  shader. Each either asks for frames until it is done, or is held while idle.
+  the loop (GLFW's `glfwPostEmptyEvent`, used nowhere in cetra yet).
+- **What else keeps a frame alive without a 3D scene**: the UI's eases and screen transitions, the
+  debug GUI (ImGui spreads input over frames), the loading screen, texture loads in flight. Each asks
+  for frames until it is done.
 - **The clock across a wait.** The first frame after a long wait must not hand the simulation the
   whole wait as one step.
+- **A wait must not advance the frame counter.** A gap in it is how the shadow tiles and the fog's
+  histories tell that history was lost, as the minimized window's undrawn frames do today.
 - **Headless.** A headless run has no events to wait on, and `--frames N` has to keep its meaning.
 
 ---
@@ -230,6 +237,29 @@ and keeping the overlay.
 - **What still runs** while the scene is off: uploads, captures, the shadow tiles.
 - **Coming back.** The temporal histories are many frames old when the scene returns, so the first
   frame back is treated as a cut, as a render-scale change resets them (spec 11.8).
+
+**A still 3D view drawn on demand** (moved from item 2 while planning spec 14.1). CAD programs
+redraw a 3D view only when it moves or its model changes (KiCad, FreeCAD, Fusion); redrawing every
+frame is a game's habit. None of this is for a game, which moves every frame.
+
+- **TAA never comes to rest by itself.** Each history blends the new frame in at a fixed 3%, the
+  jitter cycles through 8 positions (16 when upscaling), and several noise seeds never repeat, so
+  "draw until frames stop changing" has no end. There are two ways to stop:
+  - **Count frames**: draw until every history has forgotten the last change to under half a colour
+    code, about 200 frames with TAA and 420 upscaling, from the histories' blend factors and the
+    chain AO and specular occlusion form into TAA. The picture is TAA's as today.
+  - **Accumulate**: while the view is still, average jittered frames equally over a longer sequence,
+    16 to 64 positions, then stop. This is supersampling spread over time, as Blender's Eevee
+    viewport does, and as Unreal's Movie Render Queue does for cinematics. It is what pcb's ARCH asks
+    for, and it is cleaner on what a board is full of, thin traces and small text, where TAA's
+    leftover shimmer shows.
+- **Accumulating needs an exact statement of when the 3D picture changed.** A false "changed" throws
+  the clean image away, and today a material, light or setting write is a plain field write that
+  nothing reports.
+- **What keeps a 3D frame alive.** The engine's own work that finishes: GI sweeps and probe captures,
+  cached shadow tiles opening and a mover's 120-frame hold, auto-exposure until it snaps. And what
+  never finishes: wind, water, rain, fire, particles, cloud drift, the sky cycle, an animated surface
+  hook, an app shader reading `time`.
 
 ---
 
