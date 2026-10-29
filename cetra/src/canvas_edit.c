@@ -4,6 +4,7 @@
 
 #include "canvas_record.h"
 #include "ext/log.h"
+#include "triangulate.h"
 
 // The most pieces one shape is split into. Past it the shape reaches across
 // more of the plane than any drawing needs, and splitting it would be an
@@ -30,6 +31,7 @@ void free_canvas_edit(CanvasEdit* edit) {
     if (!edit)
         return;
     free(edit->pieces);
+    free(edit->fills);
     free(edit->steps);
     free(edit);
 }
@@ -76,6 +78,25 @@ static void _commit(CanvasEdit* edit, size_t count) {
     if (_step(edit,
               (CanvasStep){.kind = CANVAS_STEP_ADD, .first = edit->piece_count, .count = count}))
         edit->piece_count += count;
+}
+
+// A fill triangle, added at once: a polygon's triangles are many and each is
+// cut on its own, so they are not reserved together.
+static void _add_fill(CanvasEdit* edit, const CanvasFillPiece* piece) {
+    if (!_grow((void**)&edit->fills, &edit->fill_cap, edit->fill_count + 1,
+               sizeof(CanvasFillPiece)))
+        return;
+    edit->fills[edit->fill_count] = *piece;
+    CanvasStep* last = edit->step_count ? &edit->steps[edit->step_count - 1] : NULL;
+    if (last && last->kind == CANVAS_STEP_ADD_FILLS &&
+        last->first + last->count == edit->fill_count) {
+        last->count++;
+        edit->fill_count++;
+        return;
+    }
+    if (_step(edit,
+              (CanvasStep){.kind = CANVAS_STEP_ADD_FILLS, .first = edit->fill_count, .count = 1}))
+        edit->fill_count++;
 }
 
 // The tile holding a unit: its index, floored, so -1 is in tile -1.
@@ -376,6 +397,344 @@ void canvas_edit_box(CanvasEdit* edit, const CanvasBox* box) {
     piece->min[0] = box->centre.x - ex, piece->max[0] = box->centre.x + ex;
     piece->min[1] = box->centre.y - ey, piece->max[1] = box->centre.y + ey;
     _commit(edit, 1);
+}
+
+/*
+ * Polygons. A filled polygon is its triangles and its outline's outer ramp:
+ * the triangles carry the inner half of the ramp on their outline edges, and
+ * EDGE records the outer half. Anything reaching past a tile is cut at the
+ * tile grid, and every point where an edge crosses a grid line is found from
+ * the edge's two ends taken in one order: the triangles either side of a grid
+ * line, and the edge records along it, then share their corners to the unit,
+ * so the pieces meet with no crack.
+ */
+
+// Where the line through a and b crosses x = at (axis 0) or y = at (axis 1),
+// rounded onto the unit grid.
+static CanvasPoint _crossing(CanvasPoint a, CanvasPoint b, int axis, int64_t at) {
+    if (b.x < a.x || (b.x == a.x && b.y < a.y)) {
+        const CanvasPoint t = a;
+        a = b;
+        b = t;
+    }
+    if (axis == 0) {
+        const double t = (double)(at - a.x) / (double)(b.x - a.x);
+        return (CanvasPoint){at, a.y + llround(t * (double)(b.y - a.y))};
+    }
+    const double t = (double)(at - a.y) / (double)(b.y - a.y);
+    return (CanvasPoint){a.x + llround(t * (double)(b.x - a.x)), at};
+}
+
+// A corner of a triangle being clipped, and the line the edge arriving at it
+// lies on: 0 to 2 the triangle's own edges (k from corner k to k + 1), 3 and 4
+// the tile's left and right sides, 5 and 6 its bottom and top.
+typedef struct ClipCorner {
+    CanvasPoint p;
+    int line;
+} ClipCorner;
+
+#define CLIP_MAX 12 // a triangle clipped by four lines has at most seven corners
+
+typedef struct ClipBox {
+    int64_t x0, x1, y0, y1;
+} ClipBox;
+
+static bool _clip_inside(CanvasPoint p, int line, const ClipBox* box) {
+    switch (line) {
+        case 3:
+            return p.x >= box->x0;
+        case 4:
+            return p.x <= box->x1;
+        case 5:
+            return p.y >= box->y0;
+        default:
+            return p.y <= box->y1;
+    }
+}
+
+// Where the edge on `line` crosses the tile side `side`: a triangle edge from
+// its ends, or two of the tile's sides at their corner.
+static CanvasPoint _clip_cross(const CanvasPoint tri[3], int line, int side, const ClipBox* box) {
+    const int64_t at = side == 3 ? box->x0 : side == 4 ? box->x1 : side == 5 ? box->y0 : box->y1;
+    if (line < 3)
+        return _crossing(tri[line], tri[(line + 1) % 3], side <= 4 ? 0 : 1, at);
+    const int64_t x = line == 3 ? box->x0 : line == 4 ? box->x1 : at;
+    const int64_t y = line == 5 ? box->y0 : line == 6 ? box->y1 : at;
+    return (CanvasPoint){x, y};
+}
+
+// Sutherland-Hodgman against the tile's four sides in turn.
+static int _clip_triangle(const CanvasPoint tri[3], const ClipBox* box, ClipCorner out[CLIP_MAX]) {
+    ClipCorner a[CLIP_MAX], b[CLIP_MAX];
+    a[0] = (ClipCorner){tri[0], 2};
+    a[1] = (ClipCorner){tri[1], 0};
+    a[2] = (ClipCorner){tri[2], 1};
+    int n = 3;
+    ClipCorner* in = a;
+    ClipCorner* next = b;
+    for (int side = 3; side <= 6 && n > 0; side++) {
+        int m = 0;
+        for (int j = 0; j < n && m + 2 <= CLIP_MAX; j++) {
+            const ClipCorner* p = &in[(j + n - 1) % n];
+            const ClipCorner* q = &in[j];
+            const bool p_in = _clip_inside(p->p, side, box), q_in = _clip_inside(q->p, side, box);
+            if (p_in && q_in) {
+                next[m++] = *q;
+            } else if (p_in) {
+                next[m++] = (ClipCorner){_clip_cross(tri, q->line, side, box), q->line};
+            } else if (q_in) {
+                next[m++] = (ClipCorner){_clip_cross(tri, q->line, side, box), side};
+                next[m++] = *q;
+            }
+        }
+        n = m;
+        ClipCorner* t = in;
+        in = next;
+        next = t;
+    }
+    memcpy(out, in, (size_t)n * sizeof(ClipCorner));
+    return n;
+}
+
+static int64_t _cross3(CanvasPoint a, CanvasPoint b, CanvasPoint c) {
+    return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+}
+
+// A fill triangle in the tile (tx, ty), its corners given, and the nine
+// outline points its inner ramp is measured against (canvas_record.h).
+// Corners that rounded onto a line add nothing.
+static void _fill(CanvasEdit* edit, const CanvasPaint* paint, int64_t tx, int64_t ty,
+                  const CanvasPoint c[3], const CanvasPoint near[9]) {
+    if (_cross3(c[0], c[1], c[2]) == 0)
+        return;
+    const int shift = edit->tile_shift;
+    CanvasFillPiece piece = {.layer = paint->layer, .tx = tx, .ty = ty};
+    piece.min[0] = piece.max[0] = c[0].x;
+    piece.min[1] = piece.max[1] = c[0].y;
+    const uint32_t head = canvas_record_head(CANVAS_KIND_FILL, 0, paint->style);
+    for (int k = 0; k < 3; k++) {
+        CanvasFillVertex* v = &piece.triangle.v[k];
+        v->p[0] = _rel(c[k].x, tx, shift);
+        v->p[1] = _rel(c[k].y, ty, shift);
+        for (int n = 0; n < 9; n++) {
+            v->near[2 * n] = _rel(near[n].x, tx, shift);
+            v->near[2 * n + 1] = _rel(near[n].y, ty, shift);
+        }
+        v->u[0] = head, v->u[1] = paint->net, v->u[2] = paint->object;
+        piece.min[0] = c[k].x < piece.min[0] ? c[k].x : piece.min[0];
+        piece.min[1] = c[k].y < piece.min[1] ? c[k].y : piece.min[1];
+        piece.max[0] = c[k].x > piece.max[0] ? c[k].x : piece.max[0];
+        piece.max[1] = c[k].y > piece.max[1] ? c[k].y : piece.max[1];
+    }
+    _add_fill(edit, &piece);
+}
+
+// One triangle of a polygon: whole when it fits in two tiles each way of its
+// lowest, else cut into each tile it crosses, each cut piece a fan. Every
+// piece carries the whole triangle's nine outline points.
+static bool _polygon_triangle(CanvasEdit* edit, const CanvasPaint* paint, const CanvasPoint tri[3],
+                              const CanvasPoint near[9]) {
+    const int shift = edit->tile_shift;
+    int64_t x0 = tri[0].x, y0 = tri[0].y;
+    int64_t x1 = x0, y1 = y0;
+    for (int k = 1; k < 3; k++) {
+        x0 = tri[k].x < x0 ? tri[k].x : x0, x1 = tri[k].x > x1 ? tri[k].x : x1;
+        y0 = tri[k].y < y0 ? tri[k].y : y0, y1 = tri[k].y > y1 ? tri[k].y : y1;
+    }
+    const int64_t tx0 = _tile_of(x0, shift), tx1 = _tile_of(x1, shift);
+    const int64_t ty0 = _tile_of(y0, shift), ty1 = _tile_of(y1, shift);
+    if (tx1 - tx0 <= 1 && ty1 - ty0 <= 1) {
+        _fill(edit, paint, tx0, ty0, tri, near);
+        return true;
+    }
+    if ((tx1 - tx0 + 1) * (ty1 - ty0 + 1) > CANVAS_SPLIT_MAX) {
+        log_error("canvas: a polygon triangle across more than %d tiles is refused",
+                  CANVAS_SPLIT_MAX);
+        return false;
+    }
+    for (int64_t ty = ty0; ty <= ty1; ty++) {
+        for (int64_t tx = tx0; tx <= tx1; tx++) {
+            const ClipBox box = {_tile_origin(tx, shift), _tile_origin(tx + 1, shift),
+                                 _tile_origin(ty, shift), _tile_origin(ty + 1, shift)};
+            ClipCorner c[CLIP_MAX];
+            const int n = _clip_triangle(tri, &box, c);
+            for (int k = 1; k + 1 < n; k++) {
+                const CanvasPoint fan[3] = {c[0].p, c[k].p, c[k + 1].p};
+                _fill(edit, paint, tx, ty, fan, near);
+            }
+        }
+    }
+    return true;
+}
+
+// The outer half of an outline edge's ramp from a to b, cut where it crosses
+// the tile grid at the points the triangles were cut at.
+static bool _polygon_edge(CanvasEdit* edit, const CanvasPaint* paint, CanvasPoint a, CanvasPoint b,
+                          bool inside_left) {
+    const int shift = edit->tile_shift;
+    const int64_t side = (int64_t)1 << shift;
+    const int64_t ta[2] = {_tile_of(a.x, shift), _tile_of(a.y, shift)};
+    const int64_t tb[2] = {_tile_of(b.x, shift), _tile_of(b.y, shift)};
+    const int64_t lines = _abs64(tb[0] - ta[0]) + _abs64(tb[1] - ta[1]);
+    if (lines + 1 > CANVAS_SPLIT_MAX) {
+        log_error("canvas: a polygon edge across more than %d tiles is refused", CANVAS_SPLIT_MAX);
+        return false;
+    }
+    // Every crossing with its place along the edge, then sorted along it.
+    typedef struct Cut {
+        double t;
+        CanvasPoint p;
+    } Cut;
+    Cut* cuts = malloc((size_t)(lines + 2) * sizeof(Cut));
+    if (!cuts)
+        return false;
+    size_t n = 0;
+    cuts[n++] = (Cut){0.0, a};
+    const double dx = (double)(b.x - a.x), dy = (double)(b.y - a.y);
+    for (int axis = 0; axis < 2; axis++) {
+        const int64_t lo = ta[axis] < tb[axis] ? ta[axis] : tb[axis];
+        const int64_t hi = ta[axis] < tb[axis] ? tb[axis] : ta[axis];
+        for (int64_t k = lo + 1; k <= hi; k++) {
+            const int64_t at = k * side;
+            const double t = axis == 0 ? ((double)(at - a.x)) / dx : ((double)(at - a.y)) / dy;
+            cuts[n++] = (Cut){t, _crossing(a, b, axis, at)};
+        }
+    }
+    cuts[n++] = (Cut){1.0, b};
+    for (size_t i = 1; i < n; i++) // few, and nearly in order already
+        for (size_t j = i; j > 0 && cuts[j - 1].t > cuts[j].t; j--) {
+            const Cut t = cuts[j];
+            cuts[j] = cuts[j - 1];
+            cuts[j - 1] = t;
+        }
+    CanvasPiece* pieces = _reserve(edit, n - 1);
+    if (!pieces) {
+        free(cuts);
+        return false;
+    }
+    size_t made = 0;
+    for (size_t i = 0; i + 1 < n; i++) {
+        const CanvasPoint p = cuts[i].p, q = cuts[i + 1].p;
+        if (p.x == q.x && p.y == q.y)
+            continue;
+        uint32_t flags = inside_left ? CANVAS_FLAG_INSIDE_LEFT : 0;
+        flags |= i > 0 ? CANVAS_FLAG_CUT_A : 0;
+        flags |= i + 2 < n ? CANVAS_FLAG_CUT_B : 0;
+        // Anchored where its middle is, so both ends are within a tile of it.
+        const CanvasPoint mid = {p.x + (q.x - p.x) / 2, p.y + (q.y - p.y) / 2};
+        CanvasPiece* piece = _piece(&pieces[made++], shift, paint, mid, CANVAS_KIND_EDGE, flags);
+        piece->record.p[0] = _rel(p.x, piece->tx, shift);
+        piece->record.p[1] = _rel(p.y, piece->ty, shift);
+        piece->record.p[2] = _rel(q.x, piece->tx, shift);
+        piece->record.p[3] = _rel(q.y, piece->ty, shift);
+        _bound(piece, p.x, p.y, q.x, q.y, 1);
+    }
+    free(cuts);
+    _commit(edit, made);
+    return true;
+}
+
+// The point after (or before) point i on its own ring.
+static size_t _ring_step(const CanvasPolygon* polygon, size_t i, bool forward) {
+    size_t start = 0, end = polygon->hole_count ? polygon->holes[0] : polygon->count;
+    for (size_t h = 0; h < polygon->hole_count && i >= end; h++) {
+        start = polygon->holes[h];
+        end = h + 1 < polygon->hole_count ? polygon->holes[h + 1] : polygon->count;
+    }
+    if (forward)
+        return i + 1 < end ? i + 1 : start;
+    return i > start ? i - 1 : end - 1;
+}
+
+static bool _rings_ok(const CanvasPolygon* polygon) {
+    const size_t outer = polygon->hole_count ? polygon->holes[0] : polygon->count;
+    if (!polygon->points || outer < 3)
+        return false;
+    for (size_t h = 0; h < polygon->hole_count; h++) {
+        const size_t end = h + 1 < polygon->hole_count ? polygon->holes[h + 1] : polygon->count;
+        if (polygon->holes[h] < outer || end < polygon->holes[h] + 3 || end > polygon->count)
+            return false;
+    }
+    return true;
+}
+
+void canvas_edit_polygon(CanvasEdit* edit, const CanvasPolygon* polygon) {
+    if (!polygon || !_paint_ok(edit, &polygon->paint, "polygon"))
+        return;
+    if (!_length_ok(polygon->stroke, "polygon", "stroke"))
+        return;
+    if (!_rings_ok(polygon)) {
+        log_error("canvas: a polygon whose outline or a hole has fewer than three points is "
+                  "refused");
+        return;
+    }
+    const CanvasPoint* pts = polygon->points;
+    const size_t rings = polygon->hole_count + 1;
+    if (polygon->stroke > 0) {
+        for (size_t r = 0; r < rings; r++) {
+            const size_t start = r ? polygon->holes[r - 1] : 0;
+            const size_t end = r < polygon->hole_count ? polygon->holes[r] : polygon->count;
+            canvas_edit_polyline(edit, &(CanvasPolyline){.paint = polygon->paint,
+                                                         .points = pts + start,
+                                                         .count = end - start,
+                                                         .width = polygon->stroke,
+                                                         .closed = true});
+        }
+        return;
+    }
+
+    // Triangulated about the first point, so the doubles stay small however
+    // far the polygon is from the origin.
+    double* xy = malloc(polygon->count * 2 * sizeof(double));
+    if (!xy) {
+        log_error("canvas: out of memory triangulating a polygon");
+        return;
+    }
+    for (size_t i = 0; i < polygon->count; i++) {
+        xy[2 * i] = (double)(pts[i].x - pts[0].x);
+        xy[2 * i + 1] = (double)(pts[i].y - pts[0].y);
+    }
+    Triangulation tris;
+    const bool triangulated =
+        triangulate_polygon(xy, polygon->count, polygon->holes, polygon->hole_count, &tris);
+    if (!triangulated || tris.count == 0) {
+        log_error("canvas: a polygon of %zu points gave no triangles", polygon->count);
+        free(xy);
+        free_triangulation(&tris);
+        return;
+    }
+    for (size_t t = 0; t < tris.count; t++) {
+        const uint32_t* v = tris.indices + t * 3;
+        const CanvasPoint tri[3] = {pts[v[0]], pts[v[1]], pts[v[2]]};
+        CanvasPoint near[9] = {tri[0], tri[1], tri[2]};
+        for (int k = 0; k < 3; k++) {
+            near[3 + 2 * k] = pts[_ring_step(polygon, v[k], false)];
+            near[4 + 2 * k] = pts[_ring_step(polygon, v[k], true)];
+        }
+        if (!_polygon_triangle(edit, &polygon->paint, tri, near))
+            break;
+    }
+    free_triangulation(&tris);
+
+    // The outer ramp: the polygon lies left of an outline wound
+    // counter-clockwise, and outside a hole, so left of one wound clockwise.
+    for (size_t r = 0; r < rings; r++) {
+        const size_t start = r ? polygon->holes[r - 1] : 0;
+        const size_t end = r < polygon->hole_count ? polygon->holes[r] : polygon->count;
+        double area = 0.0;
+        for (size_t i = start, j = end - 1; i < end; j = i++)
+            area += xy[2 * j] * xy[2 * i + 1] - xy[2 * i] * xy[2 * j + 1];
+        const bool inside_left = r == 0 ? area > 0.0 : area < 0.0;
+        for (size_t i = start; i < end; i++) {
+            const CanvasPoint a = pts[i], b = pts[i + 1 < end ? i + 1 : start];
+            if ((a.x != b.x || a.y != b.y) &&
+                !_polygon_edge(edit, &polygon->paint, a, b, inside_left)) {
+                free(xy);
+                return;
+            }
+        }
+    }
+    free(xy);
 }
 
 void canvas_edit_remove_object(CanvasEdit* edit, uint32_t object) {

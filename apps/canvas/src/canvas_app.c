@@ -25,6 +25,7 @@
 #include "cetra/postfx.h"
 #include "cetra/program.h"
 #include "cetra/scene.h"
+#include "cetra/triangulate.h"
 
 #define MM(v) ((int64_t)llround((v) * 1e6))
 
@@ -282,6 +283,156 @@ static void sheet_areas(SheetContext* ctx) {
 }
 
 /*
+ * The polygons sheet: filled polygons, concave and holed, one a cell. Each
+ * prints its area by the shoelace formula over the units it was given, its
+ * outline's length, and the area of its own triangulation, which must agree.
+ */
+typedef struct Poly {
+    CanvasPoint pts[160];
+    size_t n;
+    size_t holes[8];
+    size_t hole_count;
+} Poly;
+
+// A point at (x, y) millimetres from the centre, turned by `turn` radians.
+static void poly_add(Poly* p, CanvasPoint centre, double x, double y, double turn) {
+    const double c = cos(turn), s = sin(turn);
+    p->pts[p->n++] = (CanvasPoint){centre.x + MM(x * c - y * s), centre.y + MM(x * s + y * c)};
+}
+
+// A regular ring of `sides` points `radius` millimetres about (x, y) from the centre.
+static void poly_ring(Poly* p, CanvasPoint centre, double x, double y, double radius, int sides,
+                      double turn) {
+    for (int i = 0; i < sides; i++) {
+        const double a = turn + 6.283185307179586 * i / sides;
+        poly_add(p, centre, x + radius * cos(a), y + radius * sin(a), 0.0);
+    }
+}
+
+static void poly_hole(Poly* p) {
+    p->holes[p->hole_count++] = p->n;
+}
+
+static void probe_polygon(const SheetContext* ctx, const char* name, CanvasPoint centre,
+                          const Poly* p) {
+    const double s = ppu_px(ctx);
+    double area = 0.0, perimeter = 0.0;
+    double* xy = malloc(p->n * 2 * sizeof(double));
+    if (!xy)
+        return;
+    for (size_t r = 0; r <= p->hole_count; r++) {
+        const size_t start = r ? p->holes[r - 1] : 0;
+        const size_t end = r < p->hole_count ? p->holes[r] : p->n;
+        double ring = 0.0;
+        for (size_t i = start, j = end - 1; i < end; j = i++) {
+            const double ax = (double)(p->pts[j].x - p->pts[0].x);
+            const double ay = (double)(p->pts[j].y - p->pts[0].y);
+            const double bx = (double)(p->pts[i].x - p->pts[0].x);
+            const double by = (double)(p->pts[i].y - p->pts[0].y);
+            ring += ax * by - bx * ay;
+            perimeter += hypot(bx - ax, by - ay);
+        }
+        area += r == 0 ? fabs(ring) / 2.0 : -fabs(ring) / 2.0;
+    }
+    for (size_t i = 0; i < p->n; i++) {
+        xy[2 * i] = (double)(p->pts[i].x - p->pts[0].x);
+        xy[2 * i + 1] = (double)(p->pts[i].y - p->pts[0].y);
+    }
+    Triangulation t;
+    double tri_area = 0.0;
+    if (triangulate_polygon(xy, p->n, p->holes, p->hole_count, &t)) {
+        for (size_t k = 0; k < t.count; k++) {
+            const double* a = xy + 2 * t.indices[3 * k];
+            const double* b = xy + 2 * t.indices[3 * k + 1];
+            const double* c = xy + 2 * t.indices[3 * k + 2];
+            tri_area += fabs((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])) / 2.0;
+        }
+    }
+    printf("canvas polygons %s", name);
+    double x0, y0, x1, y1;
+    fb_of(ctx, (CanvasPoint){centre.x - MM(1.2), centre.y + MM(1.2)}, &x0, &y0);
+    fb_of(ctx, (CanvasPoint){centre.x + MM(1.2), centre.y - MM(1.2)}, &x1, &y1);
+    printf(" box %ld %ld %ld %ld area %.6f perimeter %.6f triangulated %.6f triangles %zu points "
+           "%zu holes %zu\n",
+           lround(x0), lround(y0), lround(x1), lround(y1), area * s * s, perimeter * s,
+           tri_area * s * s, t.count, p->n, p->hole_count);
+    free_triangulation(&t);
+    free(xy);
+}
+
+static void sheet_polygons(SheetContext* ctx) {
+    const CanvasPaint paint = white_paint(ctx->canvas);
+#define CELL(i, j) \
+    ((CanvasPoint){MM(-2.6 + 2.6 * (i)) + ctx->offset, MM(1.5 - 3.0 * (j)) + ctx->offset})
+    static Poly p;
+    const struct {
+        const char* name;
+        int i, j;
+    } cells[6] = {{"holed", 0, 0},  {"star", 1, 0},  {"ell", 2, 0},
+                  {"holes3", 0, 1}, {"round", 1, 1}, {"comb", 2, 1}};
+    for (int k = 0; k < 6; k++) {
+        const CanvasPoint c = CELL(cells[k].i, cells[k].j);
+        memset(&p, 0, sizeof(p));
+        switch (k) {
+            case 0: // a square with a square hole, its edges off the pixel grid
+                poly_add(&p, c, -1.003, -1.003, 0.0), poly_add(&p, c, 1.003, -1.003, 0.0);
+                poly_add(&p, c, 1.003, 1.003, 0.0), poly_add(&p, c, -1.003, 1.003, 0.0);
+                poly_hole(&p);
+                poly_add(&p, c, -0.497, -0.497, 0.0), poly_add(&p, c, 0.497, -0.497, 0.0);
+                poly_add(&p, c, 0.497, 0.497, 0.0), poly_add(&p, c, -0.497, 0.497, 0.0);
+                break;
+            case 1: // a five-pointed star
+                for (int s = 0; s < 10; s++) {
+                    const double r = s % 2 ? 0.4 : 1.0;
+                    const double a = 1.5707963267948966 + 6.283185307179586 * s / 10.0;
+                    poly_add(&p, c, r * cos(a), r * sin(a), 0.0);
+                }
+                break;
+            case 2: // an L turned 15 degrees
+                poly_add(&p, c, -0.8, -0.8, 0.2618), poly_add(&p, c, 0.8, -0.8, 0.2618);
+                poly_add(&p, c, 0.8, -0.3, 0.2618), poly_add(&p, c, -0.3, -0.3, 0.2618);
+                poly_add(&p, c, -0.3, 0.8, 0.2618), poly_add(&p, c, -0.8, 0.8, 0.2618);
+                break;
+            case 3: // a plate with three octagonal holes, the holes wound either way
+                poly_add(&p, c, -1.0, -0.8, 0.0), poly_add(&p, c, 1.0, -0.8, 0.0);
+                poly_add(&p, c, 1.0, 0.8, 0.0), poly_add(&p, c, -1.0, 0.8, 0.0);
+                poly_hole(&p);
+                poly_ring(&p, c, -0.55, 0.3, 0.25, 8, 0.1);
+                poly_hole(&p);
+                poly_ring(&p, c, 0.55, 0.3, 0.25, 8, 0.2);
+                poly_hole(&p);
+                for (int s = 7; s >= 0; s--) // clockwise
+                    poly_add(&p, c, 0.25 * cos(0.3 + 0.7853981633974483 * s),
+                             -0.35 + 0.25 * sin(0.3 + 0.7853981633974483 * s), 0.0);
+                break;
+            case 4: // a circle of 64 sides
+                poly_ring(&p, c, 0.0, 0.0, 1.0, 64, 0.05);
+                break;
+            default: // a comb: six teeth 0.2 wide and 0.16 apart, every gap's corners reflex
+                poly_add(&p, c, -1.0, -0.9, 0.0), poly_add(&p, c, 1.0, -0.9, 0.0);
+                for (int t = 0; t < 6; t++) {
+                    const double right = 1.0 - 0.36 * t, left = right - 0.2;
+                    poly_add(&p, c, right, 0.9, 0.0);
+                    poly_add(&p, c, left, 0.9, 0.0);
+                    if (t < 5) {
+                        poly_add(&p, c, left, -0.4, 0.0);
+                        poly_add(&p, c, left - 0.16, -0.4, 0.0);
+                    }
+                }
+                break;
+        }
+        canvas_edit_polygon(ctx->edit, &(CanvasPolygon){.paint = paint,
+                                                        .points = p.pts,
+                                                        .count = p.n,
+                                                        .holes = p.holes,
+                                                        .hole_count = p.hole_count});
+        if (ctx->probe)
+            probe_polygon(ctx, cells[k].name, c, &p);
+    }
+#undef CELL
+}
+
+/*
  * The ramp sheet: boxes whose left edge falls a known fraction across a pixel.
  * The pixel the edge crosses holds 1 - f, the one before it 0 and the one
  * after 1: coverage is clamp(0.5 - d) with d the distance past the edge.
@@ -378,6 +529,7 @@ typedef struct Sheet {
 static const Sheet SHEETS[] = {
     {"shapes", sheet_shapes, {-2.0, 0.5}, 24.0, 0x14181effu},
     {"areas", sheet_areas, {0.0, 0.0}, 8.0, 0x000000ffu},
+    {"polygons", sheet_polygons, {0.0, 0.0}, 8.0, 0x000000ffu},
     {"ramp", sheet_ramp, {0.0, 0.0}, 8.0, 0x000000ffu},
     {"thin", sheet_thin, {0.0, 0.0}, 8.0, 0x000000ffu},
     // A view 10 micrometres across, centred on the line half a piece from a cut.

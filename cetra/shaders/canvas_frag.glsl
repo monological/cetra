@@ -11,10 +11,12 @@
 // overlap of a single colour shows nowhere.
 
 #include "canvas_constants.glsl"
+#include "canvas_pass.glsl"
 
 flat in uint vKind;
 flat in uint vFlags;
 flat in vec4 vColor;
+flat in float vRaised;
 flat in vec4 vShape;
 flat in vec4 vEnds;
 in vec2 vLocal;
@@ -100,6 +102,32 @@ float arcDistance() {
     return length(q) - hw;
 }
 
+// The outer half of a fill's edge ramp: only the side away from the polygon, which the fill's own
+// ramp stops at; past an end, the distance to the polygon's corner there.
+float edgeDistance() {
+    float len = vShape.x;
+    float along = vLocal.x, across = vLocal.y;
+    if (across < 0.0)
+        discard;
+    if (along < 0.0) {
+        if ((vFlags & CANVAS_FLAG_CUT_A) != 0u) {
+            if (along < -CUT_OVERLAP)
+                discard;
+            return across;
+        }
+        return length(vec2(along, across));
+    }
+    if (along > len) {
+        if ((vFlags & CANVAS_FLAG_CUT_B) != 0u) {
+            if (along - len > CUT_OVERLAP)
+                discard;
+            return across;
+        }
+        return length(vec2(along - len, across));
+    }
+    return across;
+}
+
 float circleDistance() {
     float d = length(vLocal) - vShape.x;
     return vShape.y > 0.0 ? abs(d) - vShape.y : d;
@@ -121,10 +149,9 @@ void main() {
         d = arcDistance();
     else if (vKind == CANVAS_KIND_CIRCLE)
         d = circleDistance();
+    else if (vKind == CANVAS_KIND_EDGE)
+        d = edgeDistance();
     else
         d = boxDistance();
-    float coverage = clamp(0.5 - d, 0.0, 1.0);
-    if (coverage <= 0.0)
-        discard;
-    FragColor = vColor * coverage;
+    FragColor = canvasOutput(vColor, vRaised > 0.5, clamp(0.5 - d, 0.0, 1.0));
 }

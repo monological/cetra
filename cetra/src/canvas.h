@@ -199,6 +199,19 @@ typedef struct CanvasPolyline {
     bool closed;
 } CanvasPolyline;
 
+// An outline and the holes in it: the outline is the points up to the first
+// hole's start, and each hole runs from its start to the next one's or the
+// end, each a ring in either winding. Filled when stroke is 0, its edges
+// antialiased; otherwise every ring drawn `stroke` wide with round joins.
+typedef struct CanvasPolygon {
+    CanvasPaint paint;
+    const CanvasPoint* points;
+    size_t count;
+    const size_t* holes;
+    size_t hole_count;
+    int64_t stroke;
+} CanvasPolygon;
+
 /*
  * Edits: built on any thread, applied on the main thread. An edit is a list of
  * steps applied in order, so removing an object and adding it again replaces
@@ -217,6 +230,9 @@ void canvas_edit_arc(CanvasEdit* edit, const CanvasArc* arc);
 void canvas_edit_circle(CanvasEdit* edit, const CanvasCircle* circle);
 void canvas_edit_box(CanvasEdit* edit, const CanvasBox* box);
 void canvas_edit_polyline(CanvasEdit* edit, const CanvasPolyline* line);
+// Triangulated here, on the edit's thread, and cut at tile edges. Refused also
+// for a ring of fewer than three points.
+void canvas_edit_polygon(CanvasEdit* edit, const CanvasPolygon* polygon);
 void canvas_edit_remove_object(CanvasEdit* edit, uint32_t object);
 void canvas_edit_clear_layer(CanvasEdit* edit, CanvasLayer* layer);
 
