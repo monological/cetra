@@ -72,10 +72,15 @@ static void _engine_mouse_button_callback(GLFWwindow* window, int button, int ac
 static void _engine_key_callback(GLFWwindow* window, int key, int scancode, int action, int mods);
 static void _engine_scroll_callback(GLFWwindow* window, double xoffset, double yoffset);
 static void _engine_framebuffer_size_callback(GLFWwindow* window, int fb_width, int fb_height);
+static void _engine_char_callback(GLFWwindow* window, unsigned int codepoint);
+static void _engine_refresh_callback(GLFWwindow* window);
+static void _engine_focus_callback(GLFWwindow* window, int focused);
+static void _engine_cursor_enter_callback(GLFWwindow* window, int entered);
 static void _engine_derive_camera(Engine* engine);
 static void _engine_pointer_script_frame(Engine* engine);
 static void _engine_pointer_script_free(Engine* engine);
 static bool _engine_pointer_script_cursor(const Engine* engine, double* fb_x, double* fb_y);
+static bool _engine_pointer_script_running(const Engine* engine);
 static SceneNode* _perform_engine_ray_picking(Engine* engine, double mouse_fb_x, double mouse_fb_y);
 static void _destroy_msaa_attachments(Engine* engine);
 
@@ -317,6 +322,15 @@ static Engine* _engine_alloc(const EngineConfig* cfg) {
     engine->exit_after_frames = 0;
     engine->total_frames = 0;
     engine->user_data = NULL;
+
+    engine->idle = cfg->idle;
+    engine->scene_draws = false;
+    engine->woken = false;
+    atomic_init(&engine->frame_requested, false);
+    atomic_init(&engine->waiting, false);
+    atomic_init(&engine->work_out, 0);
+    engine->wake_at = 0.0;
+    engine->time_waited = 0.0;
 
     engine->ltc = NULL;
     engine->brdf_lut = 0;
@@ -886,6 +900,122 @@ static void _engine_advance_frame(Engine* engine) {
     }
 }
 
+// Idle mode (spec 14.1) ------------------------------------------------------------------------
+
+// True when the scene has anything for the camera to draw: an item, an environment, water,
+// falling rain, a fire or a particle system. A frame with one draws the next too, whatever idle
+// mode says: a still 3D view drawn on demand is roadmap item 3's, and until it is built a 3D
+// scene runs as it always has. Read once the frame's draw list is built.
+static bool _engine_scene_draws(const Scene* scene) {
+    if (!scene)
+        return false;
+    return (scene->draw_list && scene->draw_list->count > 0) || scene->ibl || scene->sky ||
+           scene->water || rain_draws(scene->rain) || fire_system_active(scene->fire) ||
+           scene->particle_system_count > 0;
+}
+
+// True when something asks for the next frame. Spends nothing, so the headless end can ask before
+// the screenshot and the wait can ask again after the poll.
+static bool _engine_frame_wanted(const Engine* engine) {
+    return engine->scene_draws || engine->woken || atomic_load(&engine->frame_requested) ||
+           (engine->wake_at > 0.0 && glfwGetTime() >= engine->wake_at) ||
+           engine_loading_screen_shown(engine) || _engine_pointer_script_running(engine);
+}
+
+// True while something will ask for a frame later with no event to wake on yet: work out on
+// another thread, or a timed wake. A headless run does not end while one is. Asked BEFORE
+// _engine_frame_wanted wherever both decide, for engine_end_work's reason.
+static bool _engine_frame_pending(const Engine* engine) {
+    return atomic_load(&engine->work_out) > 0 || engine->wake_at > 0.0;
+}
+
+// The headless end, asked before the frame's screenshot: nothing asks for another frame and
+// nothing will, so this one is the last and its screenshot the run's.
+static void _engine_idle_end_headless(Engine* engine) {
+    if (!engine->idle || !engine->headless)
+        return;
+    const bool pending = _engine_frame_pending(engine);
+    if (!pending && !_engine_frame_wanted(engine))
+        glfwSetWindowShouldClose(engine->window, GLFW_TRUE);
+}
+
+// Idle mode's end of a frame: wait until something wants the next one. The wait is kept out of
+// the clocks -- delta_time through last_frame_time, the windowed render_time through time_waited
+// -- and total_frames does not advance, so the next frame is adjacent to this one and every
+// history that tests for a gap keeps what it had.
+static void _engine_idle_wait(Engine* engine) {
+    for (;;) {
+        // Raised before the flags are read, as a request stores its flag before it reads this:
+        // either the request sees the loop waiting and wakes it, or the loop sees the request.
+        atomic_store(&engine->waiting, true);
+        const bool pending = _engine_frame_pending(engine);
+        if (_engine_frame_wanted(engine) || glfwWindowShouldClose(engine->window))
+            break;
+        // Headless has no events: with nothing pending nothing will ever wake it. One more frame
+        // is drawn, and its own end closes the run with its screenshot.
+        if (engine->headless && !pending)
+            break;
+        const double start = glfwGetTime();
+        if (engine->wake_at > 0.0)
+            glfwWaitEventsTimeout(engine->wake_at > start ? engine->wake_at - start : 0.0);
+        else
+            glfwWaitEvents();
+        const double waited = glfwGetTime() - start;
+        engine->time_waited += waited;
+        engine->last_frame_time += waited;
+    }
+    atomic_store(&engine->waiting, false);
+    // What woke the loop is spent: the frame about to begin is the one it asked for.
+    engine->woken = false;
+    atomic_store(&engine->frame_requested, false);
+    if (engine->wake_at > 0.0 && glfwGetTime() >= engine->wake_at)
+        engine->wake_at = 0.0;
+}
+
+void engine_request_frame(Engine* engine) {
+    if (!engine) {
+        log_error("engine_request_frame: NULL engine");
+        return;
+    }
+    atomic_store(&engine->frame_requested, true);
+    // A loop waiting for events sees no flag: an empty event wakes it, GLFW's one call that may be
+    // made from any thread. After the store, as the wait raises `waiting` before its reads.
+    if (atomic_load(&engine->waiting))
+        glfwPostEmptyEvent();
+}
+
+void engine_request_frame_after(Engine* engine, double seconds) {
+    if (!engine) {
+        log_error("engine_request_frame_after: NULL engine");
+        return;
+    }
+    const double at = glfwGetTime() + (seconds > 0.0 ? seconds : 0.0);
+    if (engine->wake_at <= 0.0 || at < engine->wake_at)
+        engine->wake_at = at;
+}
+
+void engine_begin_work(Engine* engine) {
+    if (!engine) {
+        log_error("engine_begin_work: NULL engine");
+        return;
+    }
+    atomic_fetch_add(&engine->work_out, 1);
+}
+
+void engine_end_work(Engine* engine) {
+    if (!engine) {
+        log_error("engine_end_work: NULL engine");
+        return;
+    }
+    // The request first. A headless loop reads the work count before the request, so it sees
+    // either the work still out or the request already made, and never neither.
+    engine_request_frame(engine);
+    if (atomic_fetch_sub(&engine->work_out, 1) <= 0) {
+        atomic_fetch_add(&engine->work_out, 1);
+        log_error("engine_end_work: no work was begun");
+    }
+}
+
 // Frame-top self-heal: if the sizes the engine now derives disagree with what
 // the post chain was built at, rebuild. Keyed on the built sizes rather than
 // on an event flag so that every trigger -- the GUI slider, a window resize,
@@ -1093,9 +1223,16 @@ static int _setup_engine_gui(Engine* engine) {
     glfwSetCursorPosCallback(engine->window, _engine_cursor_position_callback);
     glfwSetFramebufferSizeCallback(engine->window, _engine_framebuffer_size_callback);
     glfwSetKeyCallback(engine->window, _engine_key_callback);
-    // Text input has no engine-side logic, so hand it straight to the backend.
-    glfwSetCharCallback(engine->window, ImGui_ImplGlfw_CharCallback);
+    glfwSetCharCallback(engine->window, _engine_char_callback);
     glfwSetScrollCallback(engine->window, _engine_scroll_callback);
+    // Three the engine has no use for but idle mode's wait (spec 14.1): a window uncovered wants
+    // drawing, and ImGui's backend, installed without its own callbacks, is owed focus and the
+    // cursor entering or leaving. Not the refresh for a hidden window, which shows nothing to
+    // refresh and is still sent one by its first poll on macOS: headless, that was a frame more.
+    if (!engine->headless)
+        glfwSetWindowRefreshCallback(engine->window, _engine_refresh_callback);
+    glfwSetWindowFocusCallback(engine->window, _engine_focus_callback);
+    glfwSetCursorEnterCallback(engine->window, _engine_cursor_enter_callback);
 
     return 0;
 }
@@ -1348,6 +1485,7 @@ static void _engine_framebuffer_size_callback(GLFWwindow* window, int fb_width, 
     if (!engine)
         return;
 
+    engine->woken = true;
     engine->fb_width = fb_width;
     engine->fb_height = fb_height;
     glfwGetWindowSize(window, &engine->win_width, &engine->win_height);
@@ -1430,6 +1568,7 @@ static void _engine_cursor_position_callback(GLFWwindow* window, double xpos, do
     if (!engine)
         return;
 
+    engine->woken = true;
     ImGui_ImplGlfw_CursorPosCallback(window, xpos, ypos);
 
     // A script REPLACES the mouse, as --pad-script replaces the pad. ImGui still
@@ -1482,6 +1621,7 @@ static void _engine_mouse_button_callback(GLFWwindow* window, int button, int ac
     if (!engine)
         return;
 
+    engine->woken = true;
     ImGui_ImplGlfw_MouseButtonCallback(window, button, action, mods);
 
     if (engine->pointer_script)
@@ -1505,6 +1645,7 @@ static void _engine_key_callback(GLFWwindow* window, int key, int scancode, int 
     if (!engine)
         return;
 
+    engine->woken = true;
     ImGui_ImplGlfw_KeyCallback(window, key, scancode, action, mods);
 
     // Don't drive the camera / app hotkeys while the GUI has keyboard focus
@@ -1536,10 +1677,42 @@ static void _engine_scroll_callback(GLFWwindow* window, double xoffset, double y
     ImGui_ImplGlfw_ScrollCallback(window, xoffset, yoffset);
 
     Engine* engine = glfwGetWindowUserPointer(window);
-    if (!engine || engine->pointer_script)
+    if (!engine)
+        return;
+    engine->woken = true;
+    if (engine->pointer_script)
         return;
 
     _engine_pointer_scroll(engine, xoffset, yoffset);
+}
+
+// Text input has no engine-side logic: it goes straight to the backend, and wakes idle mode's wait.
+static void _engine_char_callback(GLFWwindow* window, unsigned int codepoint) {
+    ImGui_ImplGlfw_CharCallback(window, codepoint);
+    Engine* engine = glfwGetWindowUserPointer(window);
+    if (engine)
+        engine->woken = true;
+}
+
+// The window's contents were lost -- it was uncovered, or shown -- and want drawing again.
+static void _engine_refresh_callback(GLFWwindow* window) {
+    Engine* engine = glfwGetWindowUserPointer(window);
+    if (engine)
+        engine->woken = true;
+}
+
+static void _engine_focus_callback(GLFWwindow* window, int focused) {
+    ImGui_ImplGlfw_WindowFocusCallback(window, focused);
+    Engine* engine = glfwGetWindowUserPointer(window);
+    if (engine)
+        engine->woken = true;
+}
+
+static void _engine_cursor_enter_callback(GLFWwindow* window, int entered) {
+    ImGui_ImplGlfw_CursorEnterCallback(window, entered);
+    Engine* engine = glfwGetWindowUserPointer(window);
+    if (engine)
+        engine->woken = true;
 }
 
 /*
@@ -1571,6 +1744,7 @@ _Static_assert(offsetof(PointerScriptRange, range) == 0,
 typedef struct PointerScript {
     PointerScriptRange* ranges;
     size_t count;
+    int last; // the last frame any range covers; past it every frame is idle
     int frame;
     double x, y; // where the cursor has been walked to
     bool down;   // as of the previous frame, so a change is an edge
@@ -1659,6 +1833,12 @@ static void _engine_pointer_script_frame(Engine* engine) {
         _engine_pointer_scroll(engine, 0.0, r->wheel);
 }
 
+// True while the script has a frame left to play: it is input, and idle mode draws for it.
+static bool _engine_pointer_script_running(const Engine* engine) {
+    const PointerScript* s = engine->pointer_script;
+    return s && s->frame <= s->last;
+}
+
 static bool _engine_pointer_script_cursor(const Engine* engine, double* fb_x, double* fb_y) {
     const PointerScript* s = engine->pointer_script;
     if (!s)
@@ -1713,6 +1893,10 @@ bool engine_set_pointer_script(Engine* engine, const char* path) {
         free(s);
         return false;
     }
+    s->last = -1;
+    for (size_t i = 0; i < s->count; i++)
+        if (s->ranges[i].range.to > s->last)
+            s->last = s->ranges[i].range.to;
     _engine_pointer_script_free(engine);
     engine->pointer_script = s;
     log_info("pointer script '%s': %zu ranges", path, s->count);
@@ -3296,9 +3480,10 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
         // tick the scene's particle systems -- no framework owns the sim, so
         // the engine is the tick's natural home (the scene-citizen contract).
         if (!frame_clock) {
+            // Live, less the time idle mode spent waiting: what animates resumes where it was.
             double frame_time = engine->headless
                                     ? (double)engine->total_frames * ENGINE_FIXED_FRAME_DT
-                                    : current_time;
+                                    : current_time - engine->time_waited;
             engine_set_render_time(engine, frame_time, frame_dt);
             Scene* tick_scene = engine_get_scene(engine);
             if (tick_scene)
@@ -3495,6 +3680,7 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
         // scene_add_material, so its registry was empty and every consumer
         // silently saw a scene with no materials at all.
         engine_build_draw_list(engine, shadow_scene);
+        engine->scene_draws = _engine_scene_draws(shadow_scene);
         // SSS writes attachment 4 (skin diffuse) only when it has real work: the
         // feature is on AND the scene carries a subsurface material. This keeps a
         // non-skin scene byte-identical to master (the blur/composite would add 0)
@@ -3587,6 +3773,8 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
             _save_framebuffer_ppm(engine, numbered);
         }
 
+        _engine_idle_end_headless(engine);
+
         // Capture the final frame before exit if a screenshot was requested
         if (engine->screenshot_path && glfwWindowShouldClose(engine->window)) {
             _save_framebuffer_ppm(engine, engine->screenshot_path);
@@ -3602,6 +3790,8 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
         // A scripted pointer's batch lands where the real one just did, so its
         // wheel reaches the next frame's hooks on the same schedule.
         _engine_pointer_script_frame(engine);
+        if (engine->idle)
+            _engine_idle_wait(engine);
     }
 }
 
