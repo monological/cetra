@@ -50,7 +50,7 @@ These come from pcb's `ARCH.md` sections 8 and 9, and every item below has to re
 
 | # | Item | Status | First needed by pcb's step | Spec |
 |---|------|--------|----------------------------|------|
-| 1 | The 2D canvas | In progress | 6, the window (the schematic); then 7, the layout | 14.0 |
+| 1 | The 2D canvas | **Built**, spec 14.0; the UI's text cut awaits a judgement, and images, drag offsets and the rest below are left for later | 6, the window (the schematic); then 7, the layout | 14.0 |
 | 2 | Idle mode: drawing only when something changed | Not started | 6 | |
 | 3 | Skipping the 3D scene pass when no 3D view is shown | Not started | 8, the 3D view | |
 | 4 | Drawing the 3D scene into part of the window | Not started | 8 | |
@@ -154,6 +154,31 @@ object). It never reads back from the GPU.
     shows, else the first added's.
   - **Images, and datasheet pages with them, moved out of 14.0** to pcb's datasheet step, which
     needs texture residency of its own.
+
+**What 14.0 found that this list did not say:**
+- **The ring of a picked shape has a pixel or two of error at a joint's inner corners.** The ring
+  wants the least distance over all of an object's shapes, which max blending cannot give; three
+  more passes a layer would. Invisible at 1x.
+- **Where shapes of one layer overlap, the first added shows**, after any raised one. pcb's own
+  order of adding is therefore part of what it draws.
+- **The active layer is drawn last, over everything**, holes and silk included, as ARCH says. pcb
+  draws a plated hole as a ring on each copper layer for that reason, not as a hole layer above.
+- **For idle mode (item 2):** `canvas_generation` changes with every edit applied, layer or style
+  added, and style or tag written, a shared tag table's included. A layer's opacity and order and
+  a view are plain settings and change nothing there; an app knows when it writes them.
+- **Buffer textures are not yet checked on Linux and Windows.** They are core in GL 3.1, below the
+  4.1 the engine requires, so the risk is a driver's bug; the build VMs were gone for this spec.
+
+**Left for later**, each with a need named:
+- **Images and datasheet pages**, with the texture residency they need, for pcb's step 10. A record
+  kind is free for them.
+- **A per-tag offset**, so a dragged object moves without an edit, for pcb's step 7.
+- **Triangles supplied by the caller**, such as pcb's own constrained triangulation, in place of
+  the canvas's earcut.
+- **Glyphs beyond ASCII**, with a dense glyph index, alongside items 5 and 6, which need them too.
+- **Dashed lines**, for schematic buses and courtyards.
+- **A transparent view background**, for the canvas over the 3D view (items 3 and 4).
+- **One target shared by several canvases**, should pcb draw two canvases in one window.
 
 ---
 
