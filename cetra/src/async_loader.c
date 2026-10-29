@@ -252,6 +252,10 @@ static void* worker_thread_func(void* arg) {
             free(req->filepath);
             free(req->embedded_data);
             free(req);
+            // Told before the count drops, so a loop that reads the count first sees one of the
+            // two: the load still out, or the frame it asks for.
+            if (loader->notify)
+                loader->notify(loader->notify_user);
             atomic_fetch_sub(&loader->pending_count, 1);
             continue;
         }
@@ -290,6 +294,8 @@ static void* worker_thread_func(void* arg) {
         }
         loader->complete_tail = result;
         cetra_mutex_unlock(&loader->complete_mutex);
+        if (loader->notify)
+            loader->notify(loader->notify_user);
 
         free(req->filepath);
         free(req->embedded_data);
@@ -702,4 +708,20 @@ size_t async_loader_pending_count(AsyncLoader* loader) {
         return 0;
     }
     return atomic_load(&loader->pending_count);
+}
+
+bool async_loader_has_results(AsyncLoader* loader) {
+    if (!loader)
+        return false;
+    cetra_mutex_lock(&loader->complete_mutex);
+    const bool waiting = loader->complete_head != NULL;
+    cetra_mutex_unlock(&loader->complete_mutex);
+    return waiting;
+}
+
+void async_loader_set_notify(AsyncLoader* loader, void (*notify)(void* user), void* user) {
+    if (!loader)
+        return;
+    loader->notify = notify;
+    loader->notify_user = user;
 }

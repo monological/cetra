@@ -479,6 +479,7 @@ typedef struct Engine {
     // Latched at NewFrame time: an ImGui frame is open this iteration and must
     // be closed with a matching igRender. Pairs the begin/end across the loop.
     bool gui_frame_active;
+    bool gui_had_input; // this frame's GUI took queued input, so idle mode draws it once more
 
     // The frame's animation clock. Every pass that animates from time reads
     // these two, so they cannot disagree -- wind displaces the shadow caster and

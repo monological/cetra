@@ -321,6 +321,7 @@ struct UIElement {
     UIDrawFn draw;                 // ui_set_draw
     void* draw_user;               //   "
     struct ShaderProgram* program; // ui_set_element_program
+    bool program_animates;         //   " -- it reads uTime, so it moves with nothing changed
 
     // SETTINGS: plain writes at any time.
     UIDir dir;           // how this element's CHILDREN are laid out

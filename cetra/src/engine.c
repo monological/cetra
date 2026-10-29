@@ -914,19 +914,38 @@ static bool _engine_scene_draws(const Scene* scene) {
            scene->particle_system_count > 0;
 }
 
+// A loader thread finished a decode, which only a frame can deliver: an idle loop asleep in its
+// wait would otherwise hold it until the next input. The loader knows nothing of the engine, so
+// it takes this, with the engine as its user pointer.
+static void _engine_loader_notify(void* engine) {
+    engine_request_frame(engine);
+}
+
+// The debug GUI takes queued input a frame at a time, and some of what an event does -- a hover's
+// highlight, a popup opening -- shows only the frame after the one that took it. So a frame whose
+// GUI took input asks for the next, and so does one leaving events in the queue.
+static void _engine_gui_wants_frame(Engine* engine) {
+    if (!engine->gui_frame_active)
+        return;
+    if (engine->gui_had_input || igGetCurrentContext()->InputEventsQueue.Size > 0)
+        engine_request_frame(engine);
+}
+
 // True when something asks for the next frame. Spends nothing, so the headless end can ask before
 // the screenshot and the wait can ask again after the poll.
 static bool _engine_frame_wanted(const Engine* engine) {
     return engine->scene_draws || engine->woken || atomic_load(&engine->frame_requested) ||
            (engine->wake_at > 0.0 && glfwGetTime() >= engine->wake_at) ||
-           engine_loading_screen_shown(engine) || _engine_pointer_script_running(engine);
+           engine_loading_screen_shown(engine) || _engine_pointer_script_running(engine) ||
+           async_loader_has_results(engine->async_loader);
 }
 
 // True while something will ask for a frame later with no event to wake on yet: work out on
-// another thread, or a timed wake. A headless run does not end while one is. Asked BEFORE
-// _engine_frame_wanted wherever both decide, for engine_end_work's reason.
+// another thread, a texture still decoding, or a timed wake. A headless run does not end while
+// one is. Asked BEFORE _engine_frame_wanted wherever both decide, for engine_end_work's reason.
 static bool _engine_frame_pending(const Engine* engine) {
-    return atomic_load(&engine->work_out) > 0 || engine->wake_at > 0.0;
+    return atomic_load(&engine->work_out) > 0 || async_loader_is_busy(engine->async_loader) ||
+           engine->wake_at > 0.0;
 }
 
 // The headless end, asked before the frame's screenshot: nothing asks for another frame and
@@ -1295,6 +1314,7 @@ static int _engine_init(Engine* engine, const EngineConfig* cfg) {
         log_error("Failed to create async loader");
         return -1;
     }
+    async_loader_set_notify(engine->async_loader, _engine_loader_notify, engine);
 
     // Initialize text renderer
     engine->text_renderer = create_text_renderer();
@@ -3458,9 +3478,11 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
         // decision so gui_render_frame pairs its igRender with this NewFrame
         // even if the panel flags are toggled mid-frame.
         engine->gui_frame_active = engine->show_gui || engine->show_fps || engine->show_camera_hud;
+        engine->gui_had_input = false;
         if (engine->gui_frame_active) {
             ImGui_ImplOpenGL3_NewFrame();
             ImGui_ImplGlfw_NewFrame();
+            engine->gui_had_input = igGetCurrentContext()->InputEventsQueue.Size > 0;
             igNewFrame();
         }
 
@@ -3758,6 +3780,7 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
         engine->current_render_mode = saved_render_mode;
 
         engine_present_frame(engine, frame_mode);
+        _engine_gui_wants_frame(engine);
         profiler_end_frame(engine->profiler);
 
         // Engine-owned frame limit (CI/headless): requests close so the

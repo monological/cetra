@@ -17,7 +17,8 @@
  *
  * Under --idle the engine draws only when something asks (spec 14.1), and a
  * headless run prints a line a frame and one at exit, which the `idle` gate
- * group reads.
+ * group reads. --gui-click hands the debug GUI a click through cimgui, since a
+ * scripted pointer reaches the engine's input and not ImGui's.
  */
 
 #include <math.h>
@@ -40,6 +41,10 @@
 #include "cetra/text.h"
 #include "cetra/triangulate.h"
 #include "cetra/ui.h"
+
+// Dear ImGui via cimgui, for --gui-click's click handed to the debug GUI.
+#define CIMGUI_DEFINE_ENUMS_AND_STRUCTS
+#include "cimgui.h"
 
 #define MM(v) ((int64_t)llround((v) * 1e6))
 
@@ -1350,6 +1355,16 @@ enum { IDLE_WAKES_MAX = 8 };
 static double g_wakes[IDLE_WAKES_MAX];
 static int g_wake_count, g_wake_next;
 static bool g_idle_say;
+static const char* g_idle_load;  // --idle-load: a texture asked for on the first frame
+static TexturePool* g_idle_pool; //   the pool it goes into
+static bool g_gui_click;         // --gui-click: a click handed to the debug GUI on the first frame
+static UISystem* g_ui_enter;     // --ui-enter: the UI, given an input pass of nothing each frame
+
+static void on_idle_loaded(Texture* tex, void* user) {
+    (void)user;
+    if (g_idle_say)
+        printf("canvas idle loaded %d %d\n", tex ? tex->width : 0, tex ? tex->height : 0);
+}
 
 static void on_update(Engine* engine, float dt) {
     (void)dt;
@@ -1358,6 +1373,24 @@ static void on_update(Engine* engine, float dt) {
         printf("canvas idle frame %zu delta %.6f\n", engine->total_frames + 1, engine->delta_time);
     if (g_wake_next < g_wake_count)
         engine_request_frame_after(engine, g_wakes[g_wake_next++]);
+    // The input pass an app owes its UI, with no input: it is what settles the focused button's
+    // state, which its ease then follows.
+    if (g_ui_enter)
+        ui_update(g_ui_enter, &(UIInput){0}, (float)engine->win_width, (float)engine->win_height);
+    // Both on the first frame, after it has begun: what a later frame does with them is idle
+    // mode's to arrange.
+    if (engine->total_frames == 0 && g_idle_load)
+        engine_load_texture(engine, g_idle_pool, g_idle_load, texture_desc(true), on_idle_loaded,
+                            NULL);
+    if (engine->total_frames == 0 && g_gui_click) {
+        // Queued as GLFW's callbacks queue them, all three in one batch: ImGui takes them a frame
+        // at a time.
+        ImGuiIO* io = igGetIO_Nil();
+        ImGuiIO_AddMousePosEvent(io, (float)engine->win_width * 0.5f,
+                                 (float)engine->win_height * 0.5f);
+        ImGuiIO_AddMouseButtonEvent(io, 0, true);
+        ImGuiIO_AddMouseButtonEvent(io, 0, false);
+    }
 }
 
 static void to_points(const Engine* engine, double fb_x, double fb_y, float* x, float* y) {
@@ -1392,7 +1425,8 @@ static void usage(const char* argv0) {
             "          [--sheet NAME] [--view X,Y,WIDTH (mm)] [--offset UNITS] [--mirror]\n"
             "          [--tile-shift N] [--canvas-probe] [--picture] [--edit-thread]\n"
             "          [--split] [--only-view 0|1] [--ui] [--budget]\n"
-            "          [--idle] [--idle-wake S,...] [--pointer-script PATH]\n",
+            "          [--idle] [--idle-wake S,...] [--idle-load PATH] [--pointer-script PATH]\n"
+            "          [--ui-enter] [--gui-click]\n",
             argv0);
 }
 
@@ -1409,7 +1443,7 @@ static const char* IDENTITY_PASS = "#version 330 core\n"
 
 int main(int argc, char** argv) {
     bool headless = false, mirror = false, probe = false, picture = false, edit_thread = false;
-    bool split = false, with_ui = false, budget = false, idle = false;
+    bool split = false, with_ui = false, budget = false, idle = false, ui_enter = false;
     int frames = 0, width = 960, height = 600, tile_shift = 0, only_view = -1;
     const char* screenshot = NULL;
     const char* pointer_script = NULL;
@@ -1464,6 +1498,12 @@ int main(int argc, char** argv) {
                 g_wakes[g_wake_count++] = atof(tok);
         } else if (strcmp(argv[i], "--pointer-script") == 0 && more) {
             pointer_script = argv[++i];
+        } else if (strcmp(argv[i], "--idle-load") == 0 && more) {
+            g_idle_load = argv[++i];
+        } else if (strcmp(argv[i], "--ui-enter") == 0) {
+            ui_enter = true;
+        } else if (strcmp(argv[i], "--gui-click") == 0) {
+            g_gui_click = true;
         } else {
             usage(argv[0]);
             return 2;
@@ -1494,6 +1534,12 @@ int main(int argc, char** argv) {
     engine_set_camera(engine, create_camera(&(CameraDesc){.position = {0.0f, 0.0f, 1.0f}}));
     engine_set_2d_preset(engine, scene);
     glm_vec3_zero(engine->clear_color);
+    // A scene not loaded from a file has no texture directory: --idle-load names its file from
+    // the working directory.
+    g_idle_pool = scene->tex_pool;
+    if (g_idle_load)
+        set_texture_pool_directory(g_idle_pool, ".");
+    engine->show_gui = g_gui_click;
     if (picture) {
         ShaderProgram* pass = create_post_pass_program("canvas_identity", IDENTITY_PASS);
         if (pass) {
@@ -1566,6 +1612,13 @@ int main(int argc, char** argv) {
         UIElement* panel = ui_panel(ui_screen_root(screen));
         ui_set_size(panel, UI_FIXED, 160.0f, UI_FIXED, 90.0f);
         ui_set_style(panel, &(UIStyle){.bg = {0.2f, 0.6f, 0.9f, 1.0f}});
+        // Under --ui-enter, the panel fades in and a button in it takes focus, so the UI has a
+        // screen entering and an ease to play out before it is still.
+        if (ui_enter) {
+            ui_screen_transition(screen, UI_TRANSITION_FADE, 0.25f);
+            ui_set_focus(screen, ui_button(panel, "OK", NULL, NULL));
+            g_ui_enter = ui;
+        }
         ui_push(ui, screen);
         ui_attach(ui, engine);
         ui_layout(screen, (float)width, (float)height);
