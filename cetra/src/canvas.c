@@ -627,7 +627,8 @@ void canvas_apply(Canvas* canvas, CanvasEdit* edit) {
                     for (size_t i = 0; i < step->count; i++) {
                         CanvasPiece* p = &edit->pieces[step->first + i];
                         // A font slot is spent only on a glyph that will be added.
-                        if (!_owns_layer(d, p->layer)) {
+                        const uint16_t style = (uint16_t)(p->record.u[0] >> 16);
+                        if (!_owns_layer(d, p->layer) || style >= d->style_count) {
                             refused++;
                             continue;
                         }

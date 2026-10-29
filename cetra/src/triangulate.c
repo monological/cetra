@@ -558,13 +558,15 @@ bool triangulate_polygon(const double* xy, size_t count, const size_t* holes, si
         return false;
     for (size_t h = 0; h < hole_count; h++) {
         const size_t end = h + 1 < hole_count ? holes[h + 1] : count;
-        if (holes[h] < outer_end || end < holes[h] + 3 || end > count)
+        // Written so no sum can wrap, whatever the hole list holds.
+        if (holes[h] < outer_end || end > count || end < holes[h] || end - holes[h] < 3)
             return false;
     }
 
-    // Every point once, two more for each hole's bridge and each diagonal
-    // split; a ring of n points splits at most n times.
-    EarState s = {.cap = count * 3 + hole_count * 2 + 16};
+    // Every point once, two more for each hole's bridge, and two for each
+    // diagonal split, of which the bridged ring of count + 2 * hole_count
+    // points takes at most as many.
+    EarState s = {.cap = 3 * (count + 2 * hole_count) + 16};
     s.pool = malloc(s.cap * sizeof(EarNode));
     if (!s.pool)
         return false;
