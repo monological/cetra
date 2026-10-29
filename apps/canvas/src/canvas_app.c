@@ -835,9 +835,13 @@ static void sheet_tags(SheetContext* ctx) {
         probe_pixel(ctx, "outline-body", CELL(7), 0xff0000);
         probe_pixel(ctx, "outline-ring", (CanvasPoint){CELL(7).x + MM(0.5 + ring_mm), CELL(7).y},
                     0xffff00);
-        // The joint, just inside the trace's top edge: the first segment's
-        // ring passes through here, inside the second segment's body.
-        probe_pixel(ctx, "outline-joint", (CanvasPoint){c8.x, c8.y + MM(0.1)}, 0xff0000);
+        // On the second segment's centre line, as far from the joint as the
+        // first segment's ring is from its end: that ring passes through here,
+        // inside the second segment's body.
+        const double along = 0.15 + ring_mm, unit = sqrt(0.6 * 0.6 + 0.4 * 0.4);
+        probe_pixel(ctx, "outline-joint",
+                    (CanvasPoint){c8.x + MM(along * 0.6 / unit), c8.y - MM(along * 0.4 / unit)},
+                    0xff0000);
     }
 #undef CELL
 }
