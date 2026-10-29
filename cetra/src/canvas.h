@@ -89,12 +89,17 @@ static inline bool canvas_layer_set_empty(const CanvasLayerSet* set) {
  */
 typedef struct CanvasTags CanvasTags;
 
+// Where shapes of one layer overlap, a raised one's colour shows, else the
+// first added's; the layer is translucent as a whole, its overlaps drawn once.
+// An object's state wins over its net's for colour and outline; the larger dim
+// wins, and either tag hides or raises.
 typedef struct CanvasTagState {
     uint32_t colour;  // in place of the shape's style colour; 0 = the style's
-    uint32_t outline; // a ring round a shape, for a candidate under the cursor; 0 = none
+    uint32_t outline; // a ring just outside a shape (not text), under its layer's other
+                      // shapes, for a candidate under the cursor; 0 = none
     float dim;        // 0 = as drawn, 1 = black
     bool hidden;
-    bool raised; // wins where shapes of its layer overlap
+    bool raised;
 } CanvasTagState;
 
 CanvasTags* create_canvas_tags(void);
@@ -116,7 +121,6 @@ typedef struct Canvas {
     struct Engine* engine;
     uint64_t uploads;        // tile ranges uploaded, ever
     uint64_t bytes_uploaded; // geometry bytes uploaded, ever
-    uint64_t generation;     // changes whenever what the canvas draws may have
     struct CanvasData* data;
 
     // SETTINGS: plain stores. Write them directly, at any time.
@@ -139,6 +143,11 @@ uint16_t canvas_add_style(Canvas* canvas, uint32_t rgba);
 void canvas_set_style(Canvas* canvas, uint16_t style, uint32_t rgba);
 
 CanvasTags* canvas_tags(const Canvas* canvas);
+
+// Changes whenever what the canvas draws may have: an edit applied, a layer or
+// a style added, a style or a tag written, its tag table's writes included
+// when it is shared. A setting written directly changes nothing here.
+uint64_t canvas_generation(const Canvas* canvas);
 
 /*
  * Shapes. Each starts with what it is drawn with and what it belongs to.

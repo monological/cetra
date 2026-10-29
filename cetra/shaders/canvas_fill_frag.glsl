@@ -27,5 +27,6 @@ void main() {
         d = min(d, segmentDistance(vPixel, vNear[k], vNear[3 + 2 * k]));
         d = min(d, segmentDistance(vPixel, vNear[k], vNear[4 + 2 * k]));
     }
-    FragColor = canvasOutput(vColor, vRaised > 0.5, clamp(0.5 + d, 0.0, 1.0));
+    FragColor = canvasOutput(vColor, vRaised > 0.5 ? CANVAS_RANK_RAISED : CANVAS_RANK_SHAPE,
+                             clamp(0.5 + d, 0.0, 1.0));
 }

@@ -30,16 +30,19 @@ vec4 canvasTagTexel(uint tag, int i) {
 }
 
 // A shape's colour, from u = (head, net, object, tile): the object's colour if it states one,
-// else the net's, else the style's, dimmed by the larger of the two dims; raised when either tag
-// raises it. False when either tag hides it.
-bool canvasColour(uvec4 u, out vec4 colour, out float raised) {
+// else the net's, else the style's, dimmed by the larger of the two dims; its outline the
+// object's if it states one, else the net's, alpha 0 for none; raised when either tag raises
+// it. False when either tag hides it.
+bool canvasColour(uvec4 u, out vec4 colour, out vec4 outline, out float raised) {
     colour = texelFetch(uStyles, int(u.x >> 16));
+    outline = vec4(0.0);
     float dim = 0.0;
     bool hidden = false;
     raised = 0.0;
-    vec4 netColour = vec4(0.0), objectColour = vec4(0.0);
+    vec4 netColour = vec4(0.0), objectColour = vec4(0.0), objectOutline = vec4(0.0);
     if (u.y != 0u && int(u.y) < uTagCount) {
         netColour = canvasTagTexel(u.y, 0);
+        outline = canvasTagTexel(u.y, 1);
         vec4 m = canvasTagTexel(u.y, 2);
         dim = m.r;
         hidden = m.g > 0.5;
@@ -47,6 +50,7 @@ bool canvasColour(uvec4 u, out vec4 colour, out float raised) {
     }
     if (u.z != 0u && int(u.z) < uTagCount) {
         objectColour = canvasTagTexel(u.z, 0);
+        objectOutline = canvasTagTexel(u.z, 1);
         vec4 m = canvasTagTexel(u.z, 2);
         dim = max(dim, m.r);
         hidden = hidden || m.g > 0.5;
@@ -56,6 +60,8 @@ bool canvasColour(uvec4 u, out vec4 colour, out float raised) {
         colour = objectColour;
     else if (netColour.a > 0.0)
         colour = netColour;
+    if (objectOutline.a > 0.0)
+        outline = objectOutline;
     colour.rgb *= 1.0 - dim;
     return !hidden;
 }

@@ -16,6 +16,7 @@
 flat in uint vKind;
 flat in uint vFlags;
 flat in vec4 vColor;
+flat in vec4 vOutline;
 flat in float vRaised;
 flat in vec4 vShape;
 flat in vec4 vEnds;
@@ -24,6 +25,8 @@ in vec2 vLocal;
 out vec4 FragColor;
 
 const float TAU = 6.283185307179586;
+
+uniform vec2 uRing; // an outline ring's inner and outer distance outside a shape, in pixels
 
 float cross2(vec2 a, vec2 b) {
     return a.x * b.y - a.y * b.x;
@@ -172,5 +175,14 @@ void main() {
         d = glyphDistance();
     else
         d = boxDistance();
-    FragColor = canvasOutput(vColor, vRaised > 0.5, clamp(0.5 - d, 0.0, 1.0));
+    // An outline is a ring uRing.x to uRing.y pixels outside the shape. Its inner ramp starts at
+    // least half a pixel out, where the shape's own ends, so a pixel is the shape's or the ring's
+    // and never both.
+    if (vOutline.a > 0.0 && d > 0.5) {
+        float ring = max(uRing.x - d, d - uRing.y);
+        FragColor = canvasOutput(vOutline, CANVAS_RANK_RING, clamp(0.5 - ring, 0.0, 1.0));
+        return;
+    }
+    FragColor = canvasOutput(vColor, vRaised > 0.5 ? CANVAS_RANK_RAISED : CANVAS_RANK_SHAPE,
+                             clamp(0.5 - d, 0.0, 1.0));
 }

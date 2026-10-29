@@ -16,10 +16,12 @@ layout(location = 2) in uvec4 aU;
 uniform float uShapeMinPx;
 uniform float uTextMinPx;
 uniform samplerBuffer uGlyphs; // canvas_constants.glsl's glyph table
+uniform vec2 uRing;            // an outline ring's inner and outer distance outside a shape
 
 flat out uint vKind;
 flat out uint vFlags;
 flat out vec4 vColor;
+flat out vec4 vOutline; // alpha 0 = no ring
 flat out float vRaised;
 flat out vec4 vShape; // the kind's measures, in pixels
 flat out vec4 vEnds;  // an arc's sector: from xy counter-clockwise to zw
@@ -56,11 +58,16 @@ void main() {
 
     ivec4 tile = texelFetch(uTiles, int(aU.w));
     vRaised = 0.0;
-    if (kind == CANVAS_KIND_NONE || tile.z == 0 || !canvasColour(aU, vColor, vRaised))
+    vOutline = vec4(0.0);
+    if (kind == CANVAS_KIND_NONE || tile.z == 0 || !canvasColour(aU, vColor, vOutline, vRaised))
         return;
 
-    // The quad's corners as a strip: (0, 0), (1, 0), (0, 1), (1, 1).
+    // The quad's corners as a strip: (0, 0), (1, 0), (0, 1), (1, 1). A shape with an outline
+    // reaches out to its ring; a glyph has none, its quad being its atlas cell.
     vec2 c = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1));
+    if (kind == CANVAS_KIND_GLYPH)
+        vOutline = vec4(0.0);
+    float pad = PAD + (vOutline.a > 0.0 ? uRing.y : 0.0);
     vec2 pos;
     float span;
 
@@ -74,8 +81,8 @@ void main() {
         vec2 n = vec2(-dir.y, dir.x);
         bool roundA = (flags & (CANVAS_FLAG_FLAT_A | CANVAS_FLAG_CUT_A)) == 0u;
         bool roundB = (flags & (CANVAS_FLAG_FLAT_B | CANVAS_FLAG_CUT_B)) == 0u;
-        float along = c.x == 0.0 ? -(roundA ? hw : 0.0) - PAD : len + (roundB ? hw : 0.0) + PAD;
-        float across = (c.y * 2.0 - 1.0) * (hw + PAD);
+        float along = c.x == 0.0 ? -(roundA ? hw : 0.0) - pad : len + (roundB ? hw : 0.0) + pad;
+        float across = (c.y * 2.0 - 1.0) * (hw + pad);
         pos = a + dir * along + n * across;
         vLocal = vec2(along, across);
         vShape = vec4(len, hw, 0.0, 0.0);
@@ -84,7 +91,7 @@ void main() {
         vec2 centre = toPixels(aP.xy, tile.xy);
         float r = float(aP.z) * uPixelsPerUnit;
         float hs = aP.w > 0 ? max(float(aP.w) * uPixelsPerUnit * 0.5, 0.5) : 0.0;
-        vLocal = (c * 2.0 - 1.0) * (r + hs + PAD);
+        vLocal = (c * 2.0 - 1.0) * (r + hs + pad);
         pos = centre + vLocal;
         vShape = vec4(r, hs, 0.0, 0.0);
         span = 2.0 * (r + hs);
@@ -95,7 +102,7 @@ void main() {
         float hs = aP.z > 0 ? max(float(aP.z) * uPixelsPerUnit * 0.5, 0.5) : 0.0;
         vec2 u = vec2(cos(aF.w), sin(aF.w));
         vec2 v = vec2(-u.y, u.x);
-        vLocal = (c * 2.0 - 1.0) * (halfSize + hs + PAD);
+        vLocal = (c * 2.0 - 1.0) * (halfSize + hs + pad);
         pos = centre + u * vLocal.x + v * vLocal.y;
         vShape = vec4(halfSize, corner, hs);
         span = 2.0 * (max(halfSize.x, halfSize.y) + hs);
@@ -130,7 +137,7 @@ void main() {
                 hi = max(hi, axes[q] * r);
             }
         }
-        float grow = hw + PAD;
+        float grow = hw + pad;
         vLocal = mix(lo - grow, hi + grow, c);
         pos = centre + vLocal;
         vShape = vec4(r, hw, sweep, 0.0);
@@ -147,10 +154,10 @@ void main() {
         vec2 out_ = vec2(dir.y, -dir.x); // the right of a to b
         if ((flags & CANVAS_FLAG_INSIDE_LEFT) == 0u)
             out_ = -out_;
-        float extA = (flags & CANVAS_FLAG_CUT_A) != 0u ? PAD : 0.5 + PAD;
-        float extB = (flags & CANVAS_FLAG_CUT_B) != 0u ? PAD : 0.5 + PAD;
+        float extA = (flags & CANVAS_FLAG_CUT_A) != 0u ? PAD : 0.5 + pad;
+        float extB = (flags & CANVAS_FLAG_CUT_B) != 0u ? PAD : 0.5 + pad;
         float along = c.x == 0.0 ? -extA : len + extB;
-        float across = c.y == 0.0 ? -PAD : 0.5 + PAD;
+        float across = c.y == 0.0 ? -PAD : 0.5 + pad;
         pos = a + dir * along + out_ * across;
         vLocal = vec2(along, across);
         vShape = vec4(len, 0.0, 0.0, 0.0);

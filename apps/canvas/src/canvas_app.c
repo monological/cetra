@@ -15,6 +15,7 @@
  */
 
 #include <math.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -48,6 +49,7 @@ typedef struct SheetContext {
     const CanvasView* view; // the view it will be drawn in
     double fb_scale;        // framebuffer pixels per window point
     bool probe;             // print where its shapes land
+    bool edit_thread;       // fill the edit on a thread of its own, where a sheet can
     const Font* font;       // what its text is set in
 } SheetContext;
 
@@ -731,6 +733,459 @@ static void sheet_glyphs(SheetContext* ctx) {
     }
 }
 
+/*
+ * The overlap sheet: two capsules crossing in a layer drawn at half opacity.
+ * Where they overlap the layer is drawn once, so the crossing is no brighter
+ * than either arm.
+ */
+static void sheet_overlap(SheetContext* ctx) {
+    CanvasPaint paint = white_paint(ctx->canvas);
+    paint.layer->opacity = 0.5f;
+    const int64_t o = ctx->offset;
+    canvas_edit_segment(ctx->edit, &(CanvasSegment){.paint = paint,
+                                                    .a = {MM(-2.0) + o, MM(-1.0) + o},
+                                                    .b = {MM(2.0) + o, MM(1.0) + o},
+                                                    .width = MM(0.8)});
+    canvas_edit_segment(ctx->edit, &(CanvasSegment){.paint = paint,
+                                                    .a = {MM(-2.0) + o, MM(1.0) + o},
+                                                    .b = {MM(2.0) + o, MM(-1.0) + o},
+                                                    .width = MM(0.8)});
+    if (ctx->probe) {
+        double x, y;
+        fb_of(ctx, (CanvasPoint){o, o}, &x, &y);
+        printf("canvas overlap both at %ld %ld\n", lround(x), lround(y));
+        fb_of(ctx, (CanvasPoint){MM(-1.6) + o, MM(-0.8) + o}, &x, &y);
+        printf("canvas overlap one at %ld %ld\n", lround(x), lround(y));
+    }
+}
+
+/*
+ * The tags sheet: a box a cell, each drawn through a different tag state, and
+ * where each should land on screen. The colour a pixel takes where shapes of a
+ * layer overlap is a raised one's, then the first added's.
+ */
+static void probe_pixel(const SheetContext* ctx, const char* name, CanvasPoint p, uint32_t rgb) {
+    double x, y;
+    fb_of(ctx, p, &x, &y);
+    printf("canvas tags %s at %ld %ld want %06x\n", name, lround(x), lround(y), rgb);
+}
+
+static void sheet_tags(SheetContext* ctx) {
+    Canvas* canvas = ctx->canvas;
+    CanvasEdit* edit = ctx->edit;
+    CanvasTags* tags = canvas_tags(canvas);
+    CanvasLayer* layer = canvas_add_layer(canvas, "tags");
+    const uint16_t red = canvas_add_style(canvas, 0xff0000ffu);
+    const uint16_t white = canvas_add_style(canvas, 0xffffffffu);
+    const int64_t o = ctx->offset;
+#define CELL(i) ((CanvasPoint){MM(-3.5 + 1.75 * ((i) % 5)) + o, MM(1.0 - 2.0 * ((i) / 5)) + o})
+#define BOX(i, style_, net_, object_)                                           \
+    canvas_edit_box(edit, &(CanvasBox){.paint = {layer, style_, net_, object_}, \
+                                       .centre = CELL(i),                       \
+                                       .size_x = MM(1.0),                       \
+                                       .size_y = MM(1.0)})
+    BOX(0, red, 0, 0);
+    canvas_tags_set(tags, 1, (CanvasTagState){.colour = 0x00ff00ffu});
+    BOX(1, red, 1, 0);
+    canvas_tags_set(tags, 2, (CanvasTagState){.colour = 0x0000ffffu});
+    BOX(2, red, 1, 2);
+    canvas_tags_set(tags, 3, (CanvasTagState){.dim = 0.5f});
+    BOX(3, white, 0, 3);
+    canvas_tags_set(tags, 4, (CanvasTagState){.hidden = true});
+    BOX(4, red, 0, 4);
+    // Two boxes overlapping: the second raised, so its colour wins where they
+    // meet; then the same pair with neither raised, where the first does.
+    const CanvasPoint c5 = CELL(5), c6 = CELL(6);
+    canvas_tags_set(tags, 5, (CanvasTagState){.colour = 0x0000ffffu, .raised = true});
+    BOX(5, red, 0, 0);
+    canvas_edit_box(edit, &(CanvasBox){.paint = {layer, red, 0, 5},
+                                       .centre = {c5.x + MM(0.5), c5.y},
+                                       .size_x = MM(1.0),
+                                       .size_y = MM(1.0)});
+    canvas_tags_set(tags, 6, (CanvasTagState){.colour = 0x0000ffffu});
+    BOX(6, red, 0, 0);
+    canvas_edit_box(edit, &(CanvasBox){.paint = {layer, red, 0, 6},
+                                       .centre = {c6.x + MM(0.5), c6.y},
+                                       .size_x = MM(1.0),
+                                       .size_y = MM(1.0)});
+    // An outline: a ring a little outside the box.
+    canvas_tags_set(tags, 7, (CanvasTagState){.outline = 0xffff00ffu});
+    BOX(7, red, 0, 7);
+    // An outlined trace of two segments, round-joined: the ring stays outside
+    // the trace, and at the joint each segment's ring is under the other's body.
+    const CanvasPoint c8 = CELL(8);
+    canvas_tags_set(tags, 8, (CanvasTagState){.outline = 0xffff00ffu});
+    const CanvasPoint trace[] = {
+        {c8.x - MM(0.6), c8.y - MM(0.4)}, {c8.x, c8.y}, {c8.x + MM(0.6), c8.y - MM(0.4)}};
+    canvas_edit_polyline(
+        edit, &(CanvasPolyline){
+                  .paint = {layer, red, 0, 8}, .points = trace, .count = 3, .width = MM(0.3)});
+#undef BOX
+    if (ctx->probe) {
+        // A point well inside each box, and the outline's ring: a box's edge is
+        // 0.5 mm from its centre, and its ring 1.75 points past that.
+        const double ring_mm = 1.75 / (ctx->view->points_per_unit * 1e6);
+        probe_pixel(ctx, "style", CELL(0), 0xff0000);
+        probe_pixel(ctx, "net-colour", CELL(1), 0x00ff00);
+        probe_pixel(ctx, "object-over-net", CELL(2), 0x0000ff);
+        probe_pixel(ctx, "dim", CELL(3), 0x808080);
+        probe_pixel(ctx, "hidden", CELL(4), 0x000000);
+        probe_pixel(ctx, "raised", (CanvasPoint){c5.x + MM(0.25), c5.y}, 0x0000ff);
+        probe_pixel(ctx, "first-added", (CanvasPoint){c6.x + MM(0.25), c6.y}, 0xff0000);
+        probe_pixel(ctx, "outline-body", CELL(7), 0xff0000);
+        probe_pixel(ctx, "outline-ring", (CanvasPoint){CELL(7).x + MM(0.5 + ring_mm), CELL(7).y},
+                    0xffff00);
+        // The joint, just inside the trace's top edge: the first segment's
+        // ring passes through here, inside the second segment's body.
+        probe_pixel(ctx, "outline-joint", (CanvasPoint){c8.x, c8.y + MM(0.1)}, 0xff0000);
+    }
+#undef CELL
+}
+
+/*
+ * The board sheet: a dense two-layer board, made the way pcb would make one.
+ * Its layers, styles and tags are set on the main thread, and its shapes are
+ * filled into the edit by board_fill, which touches nothing else and so runs
+ * on a thread of its own under --edit-thread.
+ *
+ * Under --canvas-probe it also runs a script, a step a frame after the first
+ * draw, printing what each frame uploaded: a tag written, a style written, a
+ * segment added, the same removed, and a transient layer refilled twice.
+ */
+typedef struct Board {
+    CanvasLayer *plane, *bottom, *top, *silk, *edge, *holes, *transient;
+    uint16_t plane_s, bottom_s, top_s, silk_s, edge_s, hole_s, wire_s;
+    const Font* font;
+    int64_t offset;
+} Board;
+
+static Board g_board;
+static void (*g_after_draw)(void); // a sheet's frame script, run after each draw
+
+enum { BOARD_GND = 99, BOARD_HIGHLIGHT = 7, BOARD_PICKED = 701, BOARD_REMOVED = 330 };
+
+static CanvasPoint board_at(const Board* b, double x, double y) {
+    return (CanvasPoint){MM(x) + b->offset, MM(y) + b->offset};
+}
+
+// A point of the left side's frame turned to side `side`, a quarter turn
+// counter-clockwise each.
+static void board_turn(int side, double x, double y, double* ox, double* oy) {
+    for (int s = 0; s < side; s++) {
+        const double t = x;
+        x = -y, y = t;
+    }
+    *ox = x, *oy = y;
+}
+
+static void board_pad(CanvasEdit* edit, const Board* b, CanvasLayer* layer, uint16_t style,
+                      uint32_t net, uint32_t object, double x, double y, double sx, double sy,
+                      double angle) {
+    canvas_edit_box(edit, &(CanvasBox){.paint = {layer, style, net, object},
+                                       .centre = board_at(b, x, y),
+                                       .size_x = MM(sx),
+                                       .size_y = MM(sy),
+                                       .corner = MM(fmin(sx, sy) * 0.25),
+                                       .angle = angle});
+}
+
+static void board_via(CanvasEdit* edit, const Board* b, uint32_t net, uint32_t object, double x,
+                      double y, double ring, double hole) {
+    const CanvasCircle pad = {
+        .paint = {b->top, b->top_s, net, object}, .centre = board_at(b, x, y), .radius = MM(ring)};
+    canvas_edit_circle(edit, &pad);
+    CanvasCircle under = pad;
+    under.paint.layer = b->bottom, under.paint.style = b->bottom_s;
+    canvas_edit_circle(edit, &under);
+    canvas_edit_circle(edit, &(CanvasCircle){.paint = {b->holes, b->hole_s, 0, object},
+                                             .centre = pad.centre,
+                                             .radius = MM(hole)});
+}
+
+static void board_label(CanvasEdit* edit, const Board* b, const char* text, double x, double y,
+                        double size) {
+    canvas_edit_text(edit, &(CanvasText){.paint = {b->silk, b->silk_s, 0, 0},
+                                         .font = b->font,
+                                         .string = text,
+                                         .anchor = board_at(b, x, y),
+                                         .size = MM(size),
+                                         .align_x = CANVAS_ALIGN_CENTRE,
+                                         .align_y = CANVAS_ALIGN_MIDDLE});
+}
+
+static void board_fill(CanvasEdit* edit, const Board* b) {
+    const double QUARTER = 1.5707963267948966;
+    // The outline: a 60 by 40 mm board, its corners rounded.
+    CanvasPoint outline[4 * 9];
+    size_t n = 0;
+    for (int c = 0; c < 4; c++) {
+        const double cx = (c == 0 || c == 3) ? 27.0 : -27.0, cy = c < 2 ? 17.0 : -17.0;
+        for (int k = 0; k <= 8; k++) {
+            const double t = (c + k / 8.0) * QUARTER;
+            outline[n++] = board_at(b, cx + 3.0 * cos(t), cy + 3.0 * sin(t));
+        }
+    }
+    canvas_edit_polyline(edit, &(CanvasPolyline){.paint = {b->edge, b->edge_s, 0, 0},
+                                                 .points = outline,
+                                                 .count = n,
+                                                 .width = MM(0.15),
+                                                 .closed = true});
+
+    // The ground plane, cleared round every via and mounting hole.
+    enum { RING = 12, VIAS = 48, MOUNTS = 4 };
+    static CanvasPoint plane[4 + (VIAS + MOUNTS) * RING];
+    static size_t holes[VIAS + MOUNTS];
+    size_t pn = 0, hn = 0;
+    plane[pn++] = board_at(b, -29.0, -19.0), plane[pn++] = board_at(b, 29.0, -19.0);
+    plane[pn++] = board_at(b, 29.0, 19.0), plane[pn++] = board_at(b, -29.0, 19.0);
+
+    // U1, a 48-pin quad flat pack: each side's twelve pads fan out on the top
+    // layer to a via, and the bottom layer carries them on -- to U2 or U3 from
+    // the middle of the left and right sides, to the edge fingers from the
+    // bottom side, and to test points from the rest.
+    for (int side = 0; side < 4; side++) {
+        for (int k = 0; k < 12; k++) {
+            const uint32_t pin = (uint32_t)(side * 12 + k + 1);
+            const double y = (5.5 - k) * 0.5, vy = 2.2 * y;
+            double x0, y0;
+            board_turn(side, -4.35, y, &x0, &y0);
+            board_pad(edit, b, b->top, b->top_s, pin, 200 + pin, x0, y0, 1.4, 0.3, side * QUARTER);
+            const double route[4][2] = {
+                {-4.35, y}, {-6.0, y}, {-6.0 - 1.2 * fabs(y), vy}, {-10.5, vy}};
+            CanvasPoint top[4];
+            for (int i = 0; i < 4; i++) {
+                double x, yy;
+                board_turn(side, route[i][0], route[i][1], &x, &yy);
+                top[i] = board_at(b, x, yy);
+            }
+            canvas_edit_polyline(edit,
+                                 &(CanvasPolyline){.paint = {b->top, b->top_s, pin, 300 + pin},
+                                                   .points = top,
+                                                   .count = 4,
+                                                   .width = MM(0.2)});
+            double vx, vyy;
+            board_turn(side, -10.5, vy, &vx, &vyy);
+            board_via(edit, b, pin, 400 + pin, vx, vyy, 0.3, 0.15);
+            holes[hn++] = pn;
+            for (int i = 0; i < RING; i++) {
+                const double t = i * 4.0 * QUARTER / RING;
+                plane[pn++] = board_at(b, vx + 0.55 * cos(t), vyy - 0.55 * sin(t));
+            }
+
+            double bottom[4][2];
+            size_t bn = 0;
+            if ((side == 0 || side == 2) && k >= 4 && k <= 7) {
+                const double py = (1.5 - (k - 4)) * 1.27;
+                const double r[4][2] = {
+                    {-10.5, vy}, {-13.0, vy}, {-13.0 - fabs(vy - py), py}, {-17.3, py}};
+                memcpy(bottom, r, sizeof(r)), bn = 4;
+            } else if (side == 1) {
+                const double r[4][2] = {{-10.5, vy},
+                                        {-12.0, vy},
+                                        {-12.0 - 0.8 * fabs(vy), 1.8 * vy},
+                                        {-17.5, 1.8 * vy}};
+                memcpy(bottom, r, sizeof(r)), bn = 4;
+                double fx, fy;
+                board_turn(side, -18.5, 1.8 * vy, &fx, &fy);
+                board_pad(edit, b, b->bottom, b->bottom_s, pin, 600 + pin, fx, fy, 2.5, 1.2,
+                          side * QUARTER);
+            } else {
+                const double r[2][2] = {{-10.5, vy}, {-14.5, vy}};
+                memcpy(bottom, r, sizeof(r)), bn = 2;
+                double tx, ty;
+                board_turn(side, -15.0, vy, &tx, &ty);
+                canvas_edit_circle(
+                    edit, &(CanvasCircle){.paint = {b->bottom, b->bottom_s, pin, 600 + pin},
+                                          .centre = board_at(b, tx, ty),
+                                          .radius = MM(0.45)});
+            }
+            CanvasPoint line[4];
+            for (size_t i = 0; i < bn; i++) {
+                double x, yy;
+                board_turn(side, bottom[i][0], bottom[i][1], &x, &yy);
+                line[i] = board_at(b, x, yy);
+            }
+            canvas_edit_polyline(
+                edit, &(CanvasPolyline){.paint = {b->bottom, b->bottom_s, pin, 500 + pin},
+                                        .points = line,
+                                        .count = bn,
+                                        .width = MM(0.2)});
+        }
+    }
+    canvas_edit_box(edit, &(CanvasBox){.paint = {b->silk, b->silk_s, 0, 0},
+                                       .centre = board_at(b, 0.0, 0.0),
+                                       .size_x = MM(7.0),
+                                       .size_y = MM(7.0),
+                                       .stroke = MM(0.15)});
+    canvas_edit_circle(edit, &(CanvasCircle){.paint = {b->silk, b->silk_s, 0, 0},
+                                             .centre = board_at(b, -2.8, 2.8),
+                                             .radius = MM(0.3)});
+    board_label(edit, b, "U1", 0.0, 0.0, 1.5);
+
+    // U2 and U3, eight-pin small outlines whose inner rows the bottom layer
+    // reaches through vias of their own.
+    for (int u = 0; u < 2; u++) {
+        const double cx = u == 0 ? -20.0 : 20.0, dir = u == 0 ? 1.0 : -1.0;
+        for (int row = 0; row < 2; row++)
+            for (int k = 0; k < 4; k++) {
+                const double py = (1.5 - k) * 1.27, px = cx + (row ? -2.7 : 2.7) * dir;
+                board_pad(edit, b, b->top, b->top_s, 0, 0, px, py, 1.5, 0.6, 0.0);
+                if (row == 0)
+                    board_via(edit, b, 0, 0, px, py, 0.3, 0.15);
+            }
+        canvas_edit_box(edit, &(CanvasBox){.paint = {b->silk, b->silk_s, 0, 0},
+                                           .centre = board_at(b, cx, 0.0),
+                                           .size_x = MM(3.9),
+                                           .size_y = MM(5.4),
+                                           .stroke = MM(0.15)});
+        board_label(edit, b, u == 0 ? "U2" : "U3", cx, 3.9, 1.0);
+    }
+
+    // Decoupling capacitors at U1's corners, turned 45 degrees, and a column of
+    // resistors at each end.
+    static const char* CAPS[] = {"C1", "C2", "C3", "C4"};
+    for (int c = 0; c < 4; c++) {
+        const double sx = (c == 0 || c == 3) ? 1.0 : -1.0, sy = c < 2 ? 1.0 : -1.0;
+        const double cx = 7.2 * sx, cy = 7.2 * sy, angle = QUARTER * 0.5 * sx * sy;
+        for (int p = 0; p < 2; p++) {
+            const double d = p ? 0.75 : -0.75;
+            board_pad(edit, b, b->top, b->top_s, p ? BOARD_GND : 0, 700 + 2 * c + p + 1,
+                      cx + d * cos(angle), cy + d * sin(angle), 0.8, 0.95, angle);
+        }
+        board_label(edit, b, CAPS[c], cx + 1.9 * sx, cy + 0.6 * sy, 0.9);
+    }
+    for (int r = 0; r < 8; r++) {
+        const double cx = r < 4 ? -26.0 : 26.0, cy = -6.0 + (r % 4) * 4.0;
+        char name[8];
+        snprintf(name, sizeof(name), "R%d", r + 1);
+        board_pad(edit, b, b->top, b->top_s, 0, 0, cx - 0.8, cy, 0.8, 0.95, 0.0);
+        board_pad(edit, b, b->top, b->top_s, 0, 0, cx + 0.8, cy, 0.8, 0.95, 0.0);
+        board_label(edit, b, name, cx, cy + 1.3, 0.9);
+    }
+
+    // Mounting holes, plated, on the ground net.
+    for (int m = 0; m < MOUNTS; m++) {
+        const double mx = (m & 1) ? 25.5 : -25.5, my = (m & 2) ? 15.5 : -15.5;
+        board_via(edit, b, BOARD_GND, 0, mx, my, 1.6, 1.1);
+        holes[hn++] = pn;
+        for (int i = 0; i < RING; i++) {
+            const double t = i * 4.0 * QUARTER / RING;
+            plane[pn++] = board_at(b, mx + 2.0 * cos(t), my - 2.0 * sin(t));
+        }
+    }
+    canvas_edit_polygon(edit, &(CanvasPolygon){.paint = {b->plane, b->plane_s, BOARD_GND, 0},
+                                               .points = plane,
+                                               .count = pn,
+                                               .holes = holes,
+                                               .hole_count = hn});
+    board_label(edit, b, "CETRA CANVAS  REV A", 0.0, 17.6, 1.2);
+    board_label(edit, b, "J1", 0.0, -14.6, 1.0);
+}
+
+static void* board_thread(void* edit) {
+    board_fill((CanvasEdit*)edit, &g_board);
+    return NULL;
+}
+
+static void board_script(void) {
+    static int frame;
+    static uint64_t uploads, bytes, generation;
+    const uint64_t du = g_canvas->uploads - uploads, db = g_canvas->bytes_uploaded - bytes;
+    const uint64_t dg = canvas_generation(g_canvas) - generation;
+    static const char* STEPS[] = {"first",  "tag",       "style",          "add",
+                                  "remove", "transient", "transient-again"};
+    if (frame < (int)(sizeof(STEPS) / sizeof(STEPS[0])))
+        printf("canvas board %s uploads %llu bytes %llu generation %llu\n", STEPS[frame],
+               (unsigned long long)du, (unsigned long long)db, (unsigned long long)dg);
+    uploads = g_canvas->uploads, bytes = g_canvas->bytes_uploaded;
+    generation = canvas_generation(g_canvas);
+
+    // The next frame's step.
+    const Board* b = &g_board;
+    CanvasEdit* edit = create_canvas_edit(g_canvas);
+    switch (frame) {
+        case 0:
+            canvas_tags_set(canvas_tags(g_canvas), 702, (CanvasTagState){.outline = 0xffffffffu});
+            break;
+        case 1:
+            canvas_set_style(g_canvas, b->silk_s, 0xf0f0d0ffu);
+            break;
+        case 2:
+            canvas_edit_segment(edit, &(CanvasSegment){.paint = {b->top, b->top_s, 0, 9001},
+                                                       .a = board_at(b, 1.0, 1.0),
+                                                       .b = board_at(b, 1.5, 1.5),
+                                                       .width = MM(0.2)});
+            break;
+        case 3:
+            canvas_edit_remove_object(edit, 9001);
+            break;
+        case 4:
+        case 5:
+            // A transient layer, cleared and filled again: fifty lines in one
+            // tile, as a rubber band or a ratsnest would be each frame.
+            canvas_edit_clear_layer(edit, b->transient);
+            for (int i = 0; i < 50; i++)
+                canvas_edit_segment(
+                    edit, &(CanvasSegment){.paint = {b->transient, b->wire_s, 0, 0},
+                                           .a = board_at(b, 0.5, 0.5 + i * 0.05),
+                                           .b = board_at(b, 3.5, 0.5 + i * 0.06 + frame * 0.1),
+                                           .width = MM(0.02)});
+            break;
+        default:
+            break;
+    }
+    canvas_apply(g_canvas, edit);
+    free_canvas_edit(edit);
+    frame++;
+    fflush(stdout);
+}
+
+static void sheet_board(SheetContext* ctx) {
+    Canvas* canvas = ctx->canvas;
+    Board* b = &g_board;
+    *b = (Board){.font = ctx->font, .offset = ctx->offset};
+    b->plane = canvas_add_layer(canvas, "in1.gnd");
+    b->bottom = canvas_add_layer(canvas, "bottom");
+    b->top = canvas_add_layer(canvas, "top");
+    b->silk = canvas_add_layer(canvas, "silk");
+    b->edge = canvas_add_layer(canvas, "edge");
+    b->holes = canvas_add_layer(canvas, "holes");
+    b->transient = canvas_add_layer(canvas, "transient");
+    b->plane->opacity = 0.35f;
+    b->bottom->opacity = 0.7f;
+    b->top->opacity = 0.85f;
+    b->plane_s = canvas_add_style(canvas, 0xb08a3cffu);
+    b->bottom_s = canvas_add_style(canvas, 0x4d7fc4ffu);
+    b->top_s = canvas_add_style(canvas, 0xc83434ffu);
+    b->silk_s = canvas_add_style(canvas, 0xe6e6e6ffu);
+    b->edge_s = canvas_add_style(canvas, 0xd8c75affu);
+    b->hole_s = canvas_add_style(canvas, 0x001023ffu);
+    b->wire_s = canvas_add_style(canvas, 0xffffffffu);
+
+    // One net highlighted, raised over its neighbours and every other net
+    // dimmed; one pad picked, outlined.
+    CanvasTags* tags = canvas_tags(canvas);
+    for (uint32_t net = 1; net <= 48; net++)
+        canvas_tags_set(tags, net,
+                        net == BOARD_HIGHLIGHT
+                            ? (CanvasTagState){.colour = 0xffe08aff, .raised = true}
+                            : (CanvasTagState){.dim = 0.35f});
+    canvas_tags_set(tags, BOARD_PICKED, (CanvasTagState){.outline = 0xffffffffu});
+
+    if (ctx->edit_thread) {
+        pthread_t thread;
+        if (pthread_create(&thread, NULL, board_thread, ctx->edit) == 0)
+            pthread_join(thread, NULL);
+    } else {
+        board_fill(ctx->edit, b);
+    }
+    // One trace removed after the rest is in: its pad and its via stay.
+    canvas_apply(canvas, ctx->edit);
+    canvas_edit_remove_object(ctx->edit, BOARD_REMOVED);
+    if (ctx->probe)
+        g_after_draw = board_script;
+}
+
 typedef struct Sheet {
     const char* name;
     void (*build)(SheetContext* ctx);
@@ -750,6 +1205,9 @@ static const Sheet SHEETS[] = {
     {"long-short", sheet_long_short, {1.835008, 0.262144}, 0.01, 0x000000ffu},
     {"symbol", sheet_symbol, {8.0, 1.0}, 48.0, 0xf5f4efffu},
     {"glyphs", sheet_glyphs, {0.0, 0.0}, 8.0, 0x000000ffu},
+    {"overlap", sheet_overlap, {0.0, 0.0}, 8.0, 0x000000ffu},
+    {"tags", sheet_tags, {0.0, 0.0}, 9.0, 0x000000ffu},
+    {"board", sheet_board, {0.0, 0.0}, 66.0, 0x001023ffu},
 };
 
 static const Sheet* find_sheet(const char* name) {
@@ -774,6 +1232,8 @@ static void draw_view(Engine* engine, void* user) {
         g_probe_target = false;
     }
     canvas_draw(g_canvas, &g_view);
+    if (g_after_draw)
+        g_after_draw();
 }
 
 static void to_points(const Engine* engine, double fb_x, double fb_y, float* x, float* y) {
@@ -806,7 +1266,7 @@ static void usage(const char* argv0) {
     fprintf(stderr,
             "usage: %s [-x] [-f frames] [-S out.ppm] [-W points] [-H points]\n"
             "          [--sheet NAME] [--view X,Y,WIDTH (mm)] [--offset UNITS] [--mirror]\n"
-            "          [--tile-shift N] [--canvas-probe] [--picture]\n",
+            "          [--tile-shift N] [--canvas-probe] [--picture] [--edit-thread]\n",
             argv0);
 }
 
@@ -822,7 +1282,7 @@ static const char* IDENTITY_PASS = "#version 330 core\n"
                                    "}\n";
 
 int main(int argc, char** argv) {
-    bool headless = false, mirror = false, probe = false, picture = false;
+    bool headless = false, mirror = false, probe = false, picture = false, edit_thread = false;
     int frames = 0, width = 960, height = 600, tile_shift = 0;
     const char* screenshot = NULL;
     const char* sheet_name = "shapes";
@@ -857,6 +1317,8 @@ int main(int argc, char** argv) {
             probe = true;
         } else if (strcmp(argv[i], "--picture") == 0) {
             picture = true;
+        } else if (strcmp(argv[i], "--edit-thread") == 0) {
+            edit_thread = true;
         } else {
             usage(argv[0]);
             return 2;
@@ -922,6 +1384,7 @@ int main(int argc, char** argv) {
                         .view = &g_view,
                         .fb_scale = (double)engine->fb_width / (double)engine->win_width,
                         .probe = probe,
+                        .edit_thread = edit_thread,
                         .font = font};
     sheet->build(&ctx);
     canvas_apply(g_canvas, ctx.edit);
