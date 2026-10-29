@@ -29044,9 +29044,10 @@ def _canvas_coverage(path):
 
 def _idle_run(workdir, tag, *args, frames=50, idle=True, binary=None):
     """An app headless at 400x300 points, under --idle unless told otherwise: its picture's path,
-    and from apps/canvas's idle lines each frame's delta_time and the run's frames drawn and seconds
-    waited, as {"deltas": [...], "frames": n, "waited": s}. A run that failed or hung prints the
-    tail of its output and gives None and an empty dict."""
+    and from apps/canvas's idle lines each frame's delta_time, the run's frames drawn and seconds
+    waited, and the size of a texture it loaded, as {"deltas": [...], "frames": n, "waited": s,
+    "loaded": (w, h)}. A run that failed or hung prints the tail of its output and gives None and
+    an empty dict."""
     out = os.path.join(workdir, f"idle_{tag}.ppm")
     cmd = [binary or _bin("canvas"), "-x", "-f", str(frames), "-W", "400", "-H", "300", "-S", out,
            *(["--idle"] if idle else []), *args]
@@ -29065,6 +29066,8 @@ def _idle_run(workdir, tag, *args, frames=50, idle=True, binary=None):
             said["deltas"].append(float(p[5]))
         elif p[:3] == ["canvas", "idle", "frames"] and len(p) == 6:
             said["frames"], said["waited"] = int(p[3]), float(p[5])
+        elif p[:3] == ["canvas", "idle", "loaded"] and len(p) == 5:
+            said["loaded"] = (int(p[3]), int(p[4]))
     return out, said
 
 
@@ -29091,6 +29094,17 @@ def run_idle_gate(workdir):
       idle-3d        apps/render --idle on a 3D fixture draws every one of its frames -- a scene
                      with anything in it keeps the loop drawing -- and its last is the fixture
                      without idle mode, 0 px.
+      idle-ui        a UI panel fading in over 0.25 s with a button in it taking focus: frames
+                     while the fade plays and the focus eases, then the end, within 60 frames of
+                     the 200 allowed. The ease snaps to its target within a quarter of a code;
+                     an exponential approach that never arrived held the loop to the last frame.
+      idle-gui       a click handed to the debug GUI on the first frame: at least 3 frames, as
+                     ImGui takes the press and the release a frame apart and shows the second a
+                     frame later, then the end, within 10. With nothing to ask for them the run
+                     ended at the first.
+      idle-load      a 2048x1608 texture asked for on the first frame: the loop waits while it
+                     decodes rather than drawing, 2 frames, the second delivering it. The loader's
+                     thread wakes the loop when the decode is done.
     """
     failed = []
 
@@ -29166,6 +29180,36 @@ def run_idle_gate(workdir):
                   f"{ae} px from the fixture without idle mode (want 0)")
     print(f"  idle-3d             {'PASS' if ok else 'FAIL'}  {detail}")
     note("idle-3d", ok)
+
+    _, said = _idle_run(workdir, "ui", "--sheet", "shapes", "--ui", "--ui-enter", frames=200)
+    if "frames" not in said:
+        ok, detail = False, "the run failed"
+    else:
+        ok = 15 <= said["frames"] <= 60
+        detail = (f"{said['frames']} frames of 200 (want 15 to 60: the 0.25 s fade's 15 at the "
+                  f"least, and an end)")
+    print(f"  idle-ui             {'PASS' if ok else 'FAIL'}  {detail}")
+    note("idle-ui", ok)
+
+    _, said = _idle_run(workdir, "gui", "--sheet", "shapes", "--gui-click", frames=200)
+    if "frames" not in said:
+        ok, detail = False, "the run failed"
+    else:
+        ok = 3 <= said["frames"] <= 10
+        detail = f"{said['frames']} frames of 200 (want 3 to 10)"
+    print(f"  idle-gui            {'PASS' if ok else 'FAIL'}  {detail}")
+    note("idle-gui", ok)
+
+    _, said = _idle_run(workdir, "load", "--sheet", "shapes", "--idle-load",
+                        os.path.relpath(asset("fire_hearth_color.png")), frames=200)
+    if "frames" not in said:
+        ok, detail = False, "the run failed"
+    else:
+        ok = said["frames"] == 2 and said["waited"] > 0.0 and said.get("loaded") == (2048, 1608)
+        detail = (f"{said['frames']} frames (want 2), {said['waited']:.3f} s waited for the decode "
+                  f"(want > 0), delivered at {said.get('loaded')} (want (2048, 1608))")
+    print(f"  idle-load           {'PASS' if ok else 'FAIL'}  {detail}")
+    note("idle-load", ok)
 
     return failed
 

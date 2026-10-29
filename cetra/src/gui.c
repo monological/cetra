@@ -1389,10 +1389,10 @@ static void _engine_gui_panel(Engine* engine) {
 
 // Frameless FPS readout pinned to the top-right corner, with an optional live
 // camera-pose block (show_camera_hud) beneath it. FPS-only keeps the original
-// 90px/transparent placement byte-for-byte.
+// 90px/transparent placement byte-for-byte; idle mode widens it for its count.
 static void _engine_gui_fps_overlay(Engine* engine) {
     bool cam = engine->show_camera_hud && engine->camera;
-    float width = cam ? 300.0f : 90.0f;
+    float width = cam ? 300.0f : engine->idle ? 160.0f : 90.0f;
     igSetNextWindowPos((ImVec2){(float)engine->win_width - width, 10.0f}, ImGuiCond_Always,
                        (ImVec2){0, 0});
     igSetNextWindowBgAlpha(cam ? 0.35f : 0.0f);
@@ -1402,6 +1402,9 @@ static void _engine_gui_fps_overlay(Engine* engine) {
                     ImGuiWindowFlags_AlwaysAutoResize)) {
         if (engine->show_fps)
             igText("%.1f FPS", engine->fps);
+        // Under idle mode, the frames drawn so far: a still window's count stands still.
+        if (engine->show_fps && engine->idle)
+            igText("idle, %zu drawn", engine->total_frames);
         if (cam) {
             Camera* c = engine->camera;
             igText("eye    %.1f %.1f %.1f", c->position[0], c->position[1], c->position[2]);

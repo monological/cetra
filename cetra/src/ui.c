@@ -66,6 +66,11 @@ struct UISystem {
     // Seeded off-screen so the first frame counts as movement without a second
     // field to say the first frame has not happened yet.
     float last_pointer_x, last_pointer_y;
+
+    // The last build left something moving -- an ease short of its target, a
+    // screen still entering, an element whose program reads uTime -- so the
+    // next frame draws something new and idle mode is asked for it (spec 14.1).
+    bool animating;
 };
 
 // ------------------------------------------------------------------- theme
@@ -393,8 +398,12 @@ void ui_set_draw(UIElement* el, UIDrawFn draw, void* user) {
 }
 
 void ui_set_element_program(UIElement* el, ShaderProgram* program) {
-    if (el)
-        el->program = program;
+    if (!el)
+        return;
+    el->program = program;
+    // A uniform the program never reads is not active and has no location: one reading uTime
+    // draws something new every frame.
+    el->program_animates = program && glGetUniformLocation(program->id, "uTime") >= 0;
 }
 
 void ui_set_size(UIElement* el, UISize x_mode, float x, UISize y_mode, float y) {
@@ -769,7 +778,16 @@ static void _emit(UISystem* ui, UIElement* el) {
         _emit(ui, el->children[i]);
 }
 
-static void _ease(UIElement* el, float dt) {
+// One eased value a step toward its target, and onto it once within a quarter of an 8-bit code:
+// an exponential approach never arrives, and a UI that asks for frames until it is still would
+// ask for them forever.
+static float _ease_toward(float t, float target, float k) {
+    t += (target - t) * k;
+    return fabsf(target - t) < 1.0f / 1024.0f ? target : t;
+}
+
+// Eases `el` and its subtree; true while anything in it is still moving.
+static bool _ease(UIElement* el, float dt) {
     const float step = (UI_EASE_SECONDS > 0.0f) ? dt / UI_EASE_SECONDS : 1.0f;
     const float hover_target =
         (el->state == UI_STATE_HOVER || el->state == UI_STATE_ACTIVE) ? 1.0f : 0.0f;
@@ -778,11 +796,14 @@ static void _ease(UIElement* el, float dt) {
     const float value_target =
         (el->kind == UI_TOGGLE && el->bound_bool && *el->bound_bool) ? 1.0f : 0.0f;
     const float k = step < 1.0f ? step : 1.0f;
-    el->t_hover += (hover_target - el->t_hover) * k;
-    el->t_focus += (focus_target - el->t_focus) * k;
-    el->t_value += (value_target - el->t_value) * k;
+    el->t_hover = _ease_toward(el->t_hover, hover_target, k);
+    el->t_focus = _ease_toward(el->t_focus, focus_target, k);
+    el->t_value = _ease_toward(el->t_value, value_target, k);
+    bool moving = el->t_hover != hover_target || el->t_focus != focus_target ||
+                  el->t_value != value_target || (el->program && el->program_animates);
     for (size_t i = 0; i < el->child_count; i++)
-        _ease(el->children[i], dt);
+        moving |= _ease(el->children[i], dt);
+    return moving;
 }
 
 // --------------------------------------------------------------------- input
@@ -1065,6 +1086,7 @@ void ui_build(UISystem* ui, float width, float height, float dt) {
             break;
         }
     }
+    ui->animating = false;
     for (size_t i = from; i < ui->stack_count; i++) {
         UIScreen* s = ui->stack[i];
         if (!s || !s->root)
@@ -1074,7 +1096,8 @@ void ui_build(UISystem* ui, float width, float height, float dt) {
             if (s->t_in > 1.0f)
                 s->t_in = 1.0f;
         }
-        _ease(s->root, dt);
+        ui->animating |= _screen_t(s) < 1.0f;
+        ui->animating |= _ease(s->root, dt);
         ui_layout(s, width, height);
         // Locals, because the subtree reads the entrance through the DRAW
         // LIST's offset and alpha -- which is what _emit actually consults.
@@ -1134,6 +1157,8 @@ static void _ui_overlay(Engine* engine, void* user) {
     const float dt = engine->headless ? (float)ENGINE_FIXED_FRAME_DT : (float)engine->delta_time;
     ui_build(ui, (float)engine->win_width, (float)engine->win_height, dt);
     ui_draw_list_render(ui->dl);
+    if (ui->animating)
+        engine_request_frame(engine);
 }
 
 UISystem* create_ui_system(Engine* engine) {
