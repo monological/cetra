@@ -24,9 +24,10 @@ struct ShaderProgram;
  * display as anywhere else, while still being captured at full framebuffer
  * resolution.
  *
- * WHERE IT DRAWS. Through engine_set_overlay, after tone mapping and before the
- * debug GUI, so nothing here is graded, bloomed, grained, temporally filtered
- * or rescaled by --render-scale. A menu's text reaches the display as authored.
+ * WHERE IT DRAWS. As an engine overlay (engine_add_overlay), after tone mapping
+ * and before the debug GUI, so nothing here is graded, bloomed, grained,
+ * temporally filtered or rescaled by --render-scale. A menu's text reaches the
+ * display as authored.
  *
  * This header is the DRAW half. The element tree, layout and focus model are
  * built on top of it and reach the same primitives, so anything the element
@@ -348,15 +349,21 @@ struct UIElement {
     void* action_user;
 };
 
-// The system owns the screens, the theme, the font and the draw list.
+// The order ui_attach adds the system's overlay at: over anything an app adds
+// at a lower order, such as a 2D canvas.
+#define UI_OVERLAY_ORDER 100
+
+// The system owns the screens, the theme, the font and the draw list. Freeing
+// it takes it off the engine ui_attach added it to.
 UISystem* create_ui_system(struct Engine* engine);
 void free_ui_system(UISystem* ui);
-// Installs the overlay hook, so the system draws itself every frame.
+// Adds the system as an overlay at UI_OVERLAY_ORDER, so it draws itself every
+// frame; once only.
 void ui_attach(UISystem* ui, struct Engine* engine);
 void ui_set_font(UISystem* ui, Font* font, float size);
 void ui_set_theme(UISystem* ui, const UITheme* theme); // copied
 const UITheme* ui_theme(const UISystem* ui);
-UIDrawList* ui_draw_list(UISystem* ui);
+UIDrawList* ui_draw_list(const UISystem* ui);
 
 // A screen is full-screen by construction; there are no floating windows, which
 // is most of what this layer does not have to implement.
@@ -366,8 +373,8 @@ UIScreen* ui_screen(UISystem* ui, const char* name);
 // a screen BY name -- which is what a `--ui-screen` flag or a save file has --
 // had to keep its own chain of string compares beside its own handles, and
 // extend it for every screen added.
-UIScreen* ui_find_screen(UISystem* ui, const char* name);
-UIElement* ui_screen_root(UIScreen* screen);
+UIScreen* ui_find_screen(const UISystem* ui, const char* name);
+UIElement* ui_screen_root(const UIScreen* screen);
 // A modal screen consumes input: the game reads zero from every non-ui action
 // while one is on the stack. A non-modal screen (a HUD) draws and takes nothing.
 void ui_screen_set_modal(UIScreen* screen, bool modal);

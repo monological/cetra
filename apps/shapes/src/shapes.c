@@ -40,8 +40,8 @@ static void canvas_trace(Engine* engine, Scene* scene) {
         app_trace_camera(engine);
 }
 
-// A drag on a shape moves it, a drag on empty canvas pans, the wheel zooms.
-static CanvasController* canvas = NULL;
+// A drag on a shape moves it, a drag on empty space pans, the wheel zooms.
+static PlaneDrag* drag = NULL;
 
 /*
  * Callbacks
@@ -52,17 +52,17 @@ void error_callback(int error, const char* description) {
 
 void cursor_position_callback(Engine* engine, double xpos, double ypos) {
     (void)engine;
-    canvas_on_cursor(canvas, xpos, ypos);
+    plane_drag_on_cursor(drag, xpos, ypos);
 }
 
 void mouse_button_callback(Engine* engine, int button, int action, int mods) {
     (void)engine;
-    canvas_on_button(canvas, button, action, mods);
+    plane_drag_on_button(drag, button, action, mods);
 }
 
 void scroll_callback(Engine* engine, double xoffset, double yoffset) {
     (void)engine;
-    canvas_on_scroll(canvas, xoffset, yoffset);
+    plane_drag_on_scroll(drag, xoffset, yoffset);
 }
 
 void key_callback(Engine* engine, int key, int scancode, int action, int mods) {
@@ -95,10 +95,10 @@ int main(int argc, char** argv) {
     /*
      * Headless, a frame limit and a scripted pointer (spec 12.19).
      *
-     * This app had none of them, which made the 2D canvas the one camera in the
-     * tree no automated run could reach: it is the only caller of
-     * CanvasController, and a conversion nothing can check is a conversion
-     * verified by hand or not at all.
+     * This app had none of them, which made its plane camera the one camera in
+     * the tree no automated run could reach: it is the only caller of
+     * PlaneDrag, and a conversion nothing can check is a conversion verified
+     * by hand or not at all.
      */
     bool headless = false;
     int frames = 0;
@@ -135,7 +135,7 @@ int main(int argc, char** argv) {
     engine_set_cursor_position_callback(engine, cursor_position_callback);
     engine_set_scroll_callback(engine, scroll_callback);
     engine_set_key_callback(engine, key_callback);
-    canvas = create_canvas_controller(engine);
+    drag = create_plane_drag(engine);
 
     /*
      * Set up shaders.
@@ -236,7 +236,7 @@ int main(int argc, char** argv) {
     engine_run(engine, NULL, NULL, canvas_trace);
 
     printf("Cleaning up...\n");
-    free_canvas_controller(canvas);
+    free_plane_drag(drag);
     free_engine(engine);
 
     printf("Goodbye Friend...\n");

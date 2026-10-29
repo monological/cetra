@@ -458,7 +458,7 @@ range states the pointer's STATE, so a press is `down` appearing and a release i
 drives the engine's own pointer path, so a replayed drag reaches the drag state, the ray picking
 and the app's forwarded callback exactly as a hand does — which is what let the `camera` group
 assert a viewer camera that nothing could press before. `apps/tree` and `apps/shapes` take both
-too, and shapes gained `-x` and `-f` with them: it is `CanvasController`'s only caller, so the 2D
+too, and shapes gained `-x` and `-f` with them: it is `PlaneDrag`'s only caller, so the plane
 camera had no automated coverage at all until it could run headless),
 `--config-dump <path>` / `--config <path>` (spec 11.71 — dump the whole tuned session to JSON on
 exit, and restore one. **See "Reproducing a session" below for when to reach for it**; the one thing

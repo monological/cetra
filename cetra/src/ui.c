@@ -39,8 +39,9 @@ struct UIScreen {
 };
 
 struct UISystem {
-    Engine* engine; // borrowed
-    UIDrawList* dl; // owned
+    Engine* engine;   // borrowed
+    Engine* attached; // borrowed: the engine ui_attach added this to, which free takes it off
+    UIDrawList* dl;   // owned
 
     UITheme theme;
     Font* font;
@@ -1160,6 +1161,8 @@ UISystem* create_ui_system(Engine* engine) {
 void free_ui_system(UISystem* ui) {
     if (!ui)
         return;
+    if (ui->attached)
+        engine_remove_overlay(ui->attached, _ui_overlay, ui);
     for (size_t i = 0; i < ui->screen_count; i++) {
         if (ui->screens[i]) {
             _free_element(ui->screens[i]->root);
@@ -1174,9 +1177,10 @@ void free_ui_system(UISystem* ui) {
 }
 
 void ui_attach(UISystem* ui, Engine* engine) {
-    if (!ui || !engine)
+    if (!ui || !engine || ui->attached)
         return;
-    engine_set_overlay(engine, _ui_overlay, ui);
+    if (engine_add_overlay(engine, _ui_overlay, ui, UI_OVERLAY_ORDER))
+        ui->attached = engine;
 }
 
 void ui_set_font(UISystem* ui, Font* font, float size) {
@@ -1201,11 +1205,11 @@ const UITheme* ui_theme(const UISystem* ui) {
     return ui ? &ui->theme : NULL;
 }
 
-UIDrawList* ui_draw_list(UISystem* ui) {
+UIDrawList* ui_draw_list(const UISystem* ui) {
     return ui ? ui->dl : NULL;
 }
 
-UIScreen* ui_find_screen(UISystem* ui, const char* name) {
+UIScreen* ui_find_screen(const UISystem* ui, const char* name) {
     if (!ui || !name)
         return NULL;
     for (size_t i = 0; i < ui->screen_count; i++)
@@ -1250,7 +1254,7 @@ UIScreen* ui_screen(UISystem* ui, const char* name) {
     return s;
 }
 
-UIElement* ui_screen_root(UIScreen* screen) {
+UIElement* ui_screen_root(const UIScreen* screen) {
     return screen ? screen->root : NULL;
 }
 

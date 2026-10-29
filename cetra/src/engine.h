@@ -73,6 +73,31 @@ typedef void (*MouseButtonCallback)(struct Engine* engine, int button, int actio
 typedef void (*KeyCallback)(struct Engine* engine, int key, int scancode, int action, int mods);
 typedef void (*ScrollCallback)(struct Engine* engine, double xoffset, double yoffset);
 
+// Where an app draws AFTER tone mapping (engine_add_overlay). Overlays run at
+// the end of the present pass, once the post chain has written the
+// display-resolution frame, and before the debug GUI -- which is a developer's
+// overlay and belongs on top of the game's.
+//
+// They exist because `render` is not this. That hook draws into the MSAA HDR
+// scene target at RENDER resolution, so what it emits is graded, bloomed,
+// grained, temporally filtered and rescaled by --render-scale: right for scene
+// content, wrong for a menu, whose text should reach the display as authored
+// and at the display's own resolution.
+//
+// They are the frame's last draws before the screenshot read-back, so what they
+// emit is captured headless -- which is what lets an overlay be a golden.
+typedef void (*EngineOverlayFunc)(struct Engine* engine, void* user);
+
+// The most overlays an engine draws; engine_add_overlay refuses past it.
+#define ENGINE_OVERLAY_MAX 8
+
+// One of Engine.overlays.
+typedef struct EngineOverlay {
+    EngineOverlayFunc draw;
+    void* user; // borrowed
+    int order;  // drawn lowest first; equal orders in the order they were added
+} EngineOverlay;
+
 // An animation clock an embedder can substitute for the wall clock (see
 // Engine.render_clock). The embedder owns the storage and keeps it current;
 // engine_run samples it once per frame.
@@ -114,9 +139,8 @@ typedef struct Engine {
     // screenshot_path (owned
     // string), the five callbacks and user_data (installs), and the animation
     // clock (engine_set_render_clock samples a borrowed one each frame, and
-    // the overlay, engine_set_overlay),
     // engine_set_render_time sets a frame's directly for a loop that is not
-    // engine_run).
+    // engine_run), and the overlays (engine_add_overlay, engine_remove_overlay).
     //
     // Everything else -- the feature toggles, the draw levers, the overlays,
     // the run's counts, clear_color, current_render_mode -- is
@@ -482,11 +506,11 @@ typedef struct Engine {
     // has an early return (escape key) that a store would silently skip.
     const EngineFrameClock* render_clock;
 
-    // Drawn after tone mapping, before the debug GUI (engine_set_overlay).
-    // NULL is the entire off state -- the call site is a pointer compare, so a
-    // frame with no overlay is the frame that existed before this hook did.
-    void (*overlay)(struct Engine* engine, void* user);
-    void* overlay_user;
+    // Drawn after tone mapping, before the debug GUI, lowest order first
+    // (engine_add_overlay). An empty list is the entire off state: a frame with
+    // no overlay is the frame that existed before overlays did.
+    EngineOverlay overlays[ENGINE_OVERLAY_MAX];
+    int overlay_count;
 
     // The loading screen (loading_screen.h): made when first shown, NULL until then.
     LoadingScreen* loading_screen;
@@ -596,21 +620,6 @@ typedef struct Engine {
 typedef void (*EngineUpdateFunc)(Engine* engine, float dt);
 typedef void (*EnginePreRenderFunc)(Engine* engine, Scene* scene);
 typedef void (*EngineRenderFunc)(Engine* engine, Scene* scene);
-
-// The one place an app may draw AFTER tone mapping (engine_set_overlay). It
-// runs at the end of the present pass, once the post chain has written the
-// display-resolution frame, and before the debug GUI -- which is a developer's
-// overlay and belongs on top of the game's.
-//
-// It exists because `render` is not this. That hook draws into the MSAA HDR
-// scene target at RENDER resolution, so what it emits is graded, bloomed,
-// grained, temporally filtered and rescaled by --render-scale: right for scene
-// content, wrong for a menu, whose text should reach the display as authored
-// and at the display's own resolution.
-//
-// It is the frame's last draw before the screenshot read-back, so what it
-// emits is captured headless -- which is what lets an overlay be a golden.
-typedef void (*EngineOverlayFunc)(Engine* engine, void* user);
 
 // What an engine is created from: the window, and every setting that the
 // window or the first render-target build reads. Fill the fields you mean with
@@ -754,8 +763,11 @@ void engine_set_vsync(Engine* engine, bool vsync);
 void engine_set_2d_preset(Engine* engine, Scene* scene);
 // Where the final frame is written on exit, PPM; NULL clears it. Owned.
 void engine_set_screenshot_path(Engine* engine, const char* path);
-// Installs the post-tone-map overlay draw; NULL clears it. Borrowed `user`.
-void engine_set_overlay(Engine* engine, EngineOverlayFunc overlay, void* user);
+// Adds a post-tone-map draw at `order`, `user` borrowed. False, and nothing
+// added, when ENGINE_OVERLAY_MAX are already added or this draw and user are.
+bool engine_add_overlay(Engine* engine, EngineOverlayFunc draw, void* user, int order);
+// Takes the draw added with this user off; anything else is left alone.
+void engine_remove_overlay(Engine* engine, EngineOverlayFunc draw, const void* user);
 
 // GLFW callbacks
 void engine_set_error_callback(Engine* engine, GLFWerrorfun error_callback);

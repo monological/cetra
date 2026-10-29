@@ -2468,11 +2468,46 @@ static void _engine_late_draw(void* user, const PostFXLateDraw* late) {
     }
 }
 
-void engine_set_overlay(Engine* engine, EngineOverlayFunc overlay, void* user) {
+static int _engine_find_overlay(const Engine* engine, EngineOverlayFunc draw, const void* user) {
+    for (int i = 0; i < engine->overlay_count; i++)
+        if (engine->overlays[i].draw == draw && engine->overlays[i].user == user)
+            return i;
+    return -1;
+}
+
+bool engine_add_overlay(Engine* engine, EngineOverlayFunc draw, void* user, int order) {
+    if (!engine || !draw) {
+        log_error("engine_add_overlay: no engine or no draw");
+        return false;
+    }
+    if (_engine_find_overlay(engine, draw, user) >= 0) {
+        log_error("engine_add_overlay: this draw and user are already added");
+        return false;
+    }
+    if (engine->overlay_count == ENGINE_OVERLAY_MAX) {
+        log_error("engine_add_overlay: all %d overlays are taken", ENGINE_OVERLAY_MAX);
+        return false;
+    }
+    // After every entry of the same order, so equal orders draw in the order they were added.
+    int at = engine->overlay_count;
+    while (at > 0 && engine->overlays[at - 1].order > order) {
+        engine->overlays[at] = engine->overlays[at - 1];
+        at--;
+    }
+    engine->overlays[at] = (EngineOverlay){.draw = draw, .user = user, .order = order};
+    engine->overlay_count++;
+    return true;
+}
+
+void engine_remove_overlay(Engine* engine, EngineOverlayFunc draw, const void* user) {
     if (!engine)
         return;
-    engine->overlay = overlay;
-    engine->overlay_user = user;
+    int at = _engine_find_overlay(engine, draw, user);
+    if (at < 0)
+        return;
+    engine->overlay_count--;
+    for (int i = at; i < engine->overlay_count; i++)
+        engine->overlays[i] = engine->overlays[i + 1];
 }
 
 void engine_set_render_time(Engine* engine, double time, double delta) {
@@ -2574,11 +2609,19 @@ void engine_present_frame(Engine* engine, RenderMode frame_mode) {
     if (fx_scene && fx_scene->fire && fx_scene->fire->debug_field >= 0)
         fire_render_slice(engine->fire_renderer, fx_scene->fire, engine->fb_height);
 
-    // The app's overlay, then the GUI: both draw after tone mapping, and the
+    // The app's overlays, then the GUI: all draw after tone mapping, and the
     // debug panel goes over the game's own screens rather than under them.
-    if (engine->overlay) {
+    // Walked over a copy, so an overlay may take itself or another off as it
+    // draws; one taken off before its turn is not drawn, since its user may be
+    // gone with it.
+    if (engine->overlay_count > 0) {
+        EngineOverlay overlays[ENGINE_OVERLAY_MAX];
+        int count = engine->overlay_count;
+        memcpy(overlays, engine->overlays, sizeof(overlays[0]) * (size_t)count);
         profiler_scope_begin(engine->profiler, "overlay");
-        engine->overlay(engine, engine->overlay_user);
+        for (int i = 0; i < count; i++)
+            if (_engine_find_overlay(engine, overlays[i].draw, overlays[i].user) >= 0)
+                overlays[i].draw(engine, overlays[i].user);
         profiler_scope_end(engine->profiler);
     }
 

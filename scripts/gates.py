@@ -28512,8 +28512,8 @@ def _render_pointer_run(workdir, tag, script, frames):
 
 
 def _shapes_pointer_run(workdir, tag, script, frames):
-    """The 2D canvas, which no automated run could reach at all until shapes
-    gained a headless mode: it is the only caller of CanvasController."""
+    """The plane camera, which no automated run could reach at all until shapes
+    gained a headless mode: it is the only caller of PlaneDrag."""
     return _pointer_run(workdir, _bin("shapes"), f"canvas_{tag}", script, frames)
 
 
