@@ -1426,6 +1426,18 @@ static void on_scroll(Engine* engine, double xoffset, double yoffset) {
     canvas_view_zoom_at(&g_views[view_at(g_last_x)], g_last_x, g_last_y, pow(1.15, yoffset));
 }
 
+// G opens the debug GUI and F the FPS readout, which under --idle counts the frames drawn.
+static void on_key(Engine* engine, int key, int scancode, int action, int mods) {
+    (void)scancode;
+    (void)mods;
+    if (action != GLFW_PRESS)
+        return;
+    if (key == GLFW_KEY_G)
+        engine->show_gui = !engine->show_gui;
+    else if (key == GLFW_KEY_F)
+        engine->show_fps = !engine->show_fps;
+}
+
 static void usage(const char* argv0) {
     fprintf(stderr,
             "usage: %s [-x] [-f frames] [-S out.ppm] [-W points] [-H points]\n"
@@ -1642,6 +1654,7 @@ int main(int argc, char** argv) {
     engine_set_cursor_position_callback(engine, on_cursor);
     engine_set_mouse_button_callback(engine, on_button);
     engine_set_scroll_callback(engine, on_scroll);
+    engine_set_key_callback(engine, on_key);
 
     engine_run(engine, on_update, NULL, NULL);
     if (g_idle_say)
