@@ -29102,9 +29102,11 @@ def run_idle_gate(workdir):
                      ImGui takes the press and the release a frame apart and shows the second a
                      frame later, then the end, within 10. With nothing to ask for them the run
                      ended at the first.
-      idle-load      a 2048x1608 texture asked for on the first frame: the loop waits while it
-                     decodes rather than drawing, 2 frames, the second delivering it. The loader's
-                     thread wakes the loop when the decode is done.
+      idle-load      a 2048x1608 texture asked for on the frame a 0.5 s wake draws: the loop waits
+                     while it decodes rather than drawing, 3 frames, the third delivering it. The
+                     loader's thread wakes the loop when the decode is done. Asked for on the
+                     first frame instead, it passed with no wake at all: something a hidden window
+                     is sent in its first tenth of a second woke the loop after the decode.
     """
     failed = []
 
@@ -29200,14 +29202,14 @@ def run_idle_gate(workdir):
     print(f"  idle-gui            {'PASS' if ok else 'FAIL'}  {detail}")
     note("idle-gui", ok)
 
-    _, said = _idle_run(workdir, "load", "--sheet", "shapes", "--idle-load",
+    _, said = _idle_run(workdir, "load", "--sheet", "shapes", "--idle-wake", "0.5", "--idle-load",
                         os.path.relpath(asset("fire_hearth_color.png")), frames=200)
     if "frames" not in said:
         ok, detail = False, "the run failed"
     else:
-        ok = said["frames"] == 2 and said["waited"] > 0.0 and said.get("loaded") == (2048, 1608)
-        detail = (f"{said['frames']} frames (want 2), {said['waited']:.3f} s waited for the decode "
-                  f"(want > 0), delivered at {said.get('loaded')} (want (2048, 1608))")
+        ok = said["frames"] == 3 and said.get("loaded") == (2048, 1608)
+        detail = (f"{said['frames']} frames (want 3), {said['waited']:.3f} s waited for the wake "
+                  f"and the decode, delivered at {said.get('loaded')} (want (2048, 1608))")
     print(f"  idle-load           {'PASS' if ok else 'FAIL'}  {detail}")
     note("idle-load", ok)
 
