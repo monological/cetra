@@ -29,8 +29,11 @@ void main() {
     // Outside every clip plane: a triangle of three such corners draws nothing, and the three
     // corners of one triangle share their tile and their tags.
     gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+    // A polygon's outline ring is drawn by its edge records, outside it.
     ivec4 tile = texelFetch(uTiles, int(aU.w));
-    if ((aU.x & 63u) != CANVAS_KIND_FILL || tile.z == 0 || !canvasColour(aU, vColor, vRaised))
+    vec4 outline;
+    if ((aU.x & 63u) != CANVAS_KIND_FILL || tile.z == 0 ||
+        !canvasColour(aU, vColor, outline, vRaised))
         return;
     vNear[0] = canvasPixels(aNear0.xy, tile.xy);
     vNear[1] = canvasPixels(aNear0.zw, tile.xy);

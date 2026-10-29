@@ -28625,6 +28625,24 @@ def run_canvas_gate(workdir):
                      edge through a pixel as straight, and its curls are not.
       canvas-text-width a kerned string's width from canvas_text_width against the font's own
                      advances and pair adjustments, summed by the app in double: within 1e-5.
+      canvas-overlap-once two capsules crossing in a layer at half opacity: the crossing the same
+                     code as one arm, half of white. A layer's coverage is resolved before it is
+                     painted, so it is translucent as a whole and not shape by shape.
+      canvas-tags    a box a state -- a style's colour, a net's, an object's over its net's, a
+                     dim, a hidden one, a raised one winning an overlap and the first added
+                     winning one without, an outline's ring and its body -- and an outlined trace
+                     of two segments at its joint, where one segment's ring runs inside the
+                     other's body: the trace's colour shows there, not the ring's. Rings are
+                     painted last, after every shape of the layer has spent its pixels. Each
+                     within 2 codes.
+      canvas-uploads the board sheet over eight frames, what each uploaded: a tag written and a
+                     style written upload nothing, a segment added one range and removed the same
+                     range, and a transient layer of fifty lines, cleared and filled again, one
+                     range of 75 slots each frame whatever the board holds. Every step changes
+                     canvas_generation, the tag table's writes included.
+      canvas-edit-thread the board filled into its edit on a thread of its own, against it filled
+                     on the main thread: 0 px. An edit holds no GL and reads nothing the main
+                     thread writes.
     """
     failed = []
 
@@ -28834,6 +28852,68 @@ def run_canvas_gate(workdir):
         detail = f"{got} units against the font's {want:.1f} (want within 1e-5)"
     print(f"  canvas-text-width   {'PASS' if ok else 'FAIL'}  {detail}")
     note("canvas-text-width", ok)
+
+    # ---- layers and tags
+    path, probe = _canvas_run(workdir, "overlap", "--sheet", "overlap")
+    both, one = probe.get(("overlap", "both")) if path else None, probe.get(("overlap", "one"))
+    if not path or not both or not one:
+        ok, detail = False, "the app failed or printed no points"
+    else:
+        img = _ppm_array(path)
+        a = int(img[int(both[2]), int(both[1]), 0])
+        b = int(img[int(one[2]), int(one[1]), 0])
+        ok = a == b and abs(a - 127.5) <= 1.0
+        detail = f"the crossing {a}, one arm {b} (want equal, and half of white)"
+    print(f"  canvas-overlap-once {'PASS' if ok else 'FAIL'}  {detail}")
+    note("canvas-overlap-once", ok)
+
+    path, probe = _canvas_run(workdir, "tags", "--sheet", "tags")
+    cells = {name: tokens for (sheet, name), tokens in probe.items() if path and sheet == "tags"}
+    if not path or len(cells) != 10:
+        ok, detail = False, f"the app failed or printed {len(cells)} points (want 10)"
+    else:
+        img = _ppm_array(path)
+        rows, ok = [], True
+        for name, tokens in sorted(cells.items()):
+            x, y, want = int(tokens[1]), int(tokens[2]), int(tokens[4], 16)
+            got = [int(v) for v in img[y, x, :3]]
+            good = all(abs(g - ((want >> s) & 255)) <= 2 for g, s in zip(got, (16, 8, 0)))
+            ok = ok and good
+            if not good:
+                rows.append(f"{name} {got[0]:02x}{got[1]:02x}{got[2]:02x} (want {want:06x})")
+        detail = ("10 points each its state's colour within 2 codes" if ok
+                  else "wrong: " + ", ".join(rows))
+    print(f"  canvas-tags         {'PASS' if ok else 'FAIL'}  {detail}")
+    note("canvas-tags", ok)
+
+    board, probe = _canvas_run(workdir, "board", "--sheet", "board", "-f", "8")
+    steps = {name: tokens for (sheet, name), tokens in probe.items() if board and sheet == "board"}
+    if not board or len(steps) != 7:
+        ok, detail = False, f"the app failed or printed {len(steps)} steps (want 7)"
+    else:
+        s = {name: (int(t[1]), int(t[3]), int(t[5])) for name, t in steps.items()}
+        transient = 75 * 48  # fifty records and their slack, a range of 1.5 times
+        ok = (s["tag"][:2] == (0, 0) and s["style"][:2] == (0, 0)
+              and s["add"][0] == 1 and s["remove"] == (1, s["add"][1], s["remove"][2])
+              and s["transient"][:2] == (1, transient)
+              and s["transient-again"][:2] == (1, transient)
+              and all(v[2] > 0 for v in s.values()) and s["first"][1] > 100 * transient)
+        detail = ", ".join(f"{name} {v[0]} range(s) {v[1]} B" for name, v in s.items()) + (
+            "; every step changed the generation" if all(v[2] > 0 for v in s.values())
+            else "; a step left the generation as it was")
+    print(f"  canvas-uploads      {'PASS' if ok else 'FAIL'}  {detail}")
+    note("canvas-uploads", ok)
+
+    threaded, _ = _canvas_run(workdir, "board_thread", "--sheet", "board", "--edit-thread")
+    plain, _ = _canvas_run(workdir, "board_plain", "--sheet", "board")
+    if not threaded or not plain:
+        ok, detail = False, "a run failed"
+    else:
+        ae, pae = compare(plain, threaded)
+        ok = ae == 0
+        detail = f"{ae} px differ, peak {pae:.4f} (want 0)"
+    print(f"  canvas-edit-thread  {'PASS' if ok else 'FAIL'}  {detail}")
+    note("canvas-edit-thread", ok)
 
     return failed
 

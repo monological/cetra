@@ -23,6 +23,9 @@
 // so its offset and every record's offset from it add in int32 without
 // overflowing. A view wider than this is far past any detail anyway.
 #define CANVAS_VIEW_REACH (INT64_C(1) << 30)
+// An outline ring's gap from its shape and its width, in window points.
+#define CANVAS_RING_GAP_PT   1.0
+#define CANVAS_RING_WIDTH_PT 1.5
 
 // The units the canvas program reads its tables from: its own ledger. A font's
 // atlas is on a unit of its own, CANVAS_UNIT_FONTS plus its slot, since GL 4.1
@@ -49,6 +52,7 @@ struct CanvasTags {
     CanvasTagState* states;
     uint32_t count; // one past the largest tag set, at least 1
     uint32_t cap;
+    uint32_t outlined; // tags whose state draws a ring, so a draw knows whether to
     uint64_t generation;
     GLuint buffer, texture;
     uint32_t capacity;             // tags the GPU buffer holds
@@ -95,6 +99,8 @@ bool canvas_tags_set(CanvasTags* tags, uint32_t tag, CanvasTagState state) {
         tags->states = grown;
         tags->cap = cap;
     }
+    tags->outlined -= tags->states[tag].outline != 0;
+    tags->outlined += state.outline != 0;
     tags->states[tag] = state;
     if (tag + 1 > tags->count)
         tags->count = tag + 1;
@@ -200,12 +206,6 @@ typedef struct CanvasRun {
     bool dirty;
 } CanvasRun;
 
-typedef struct CanvasTile {
-    int64_t key[2];
-    CanvasRun runs[CANVAS_STORES];
-    UT_hash_handle hh;
-} CanvasTile;
-
 // A layer's buffer for one kind of item: its tiles' ranges one after another.
 typedef struct CanvasStore {
     GLuint vao, vbo;
@@ -213,6 +213,13 @@ typedef struct CanvasStore {
     uint32_t capacity; // slots the buffer holds
     bool dirty;        // a tile's run wants uploading
 } CanvasStore;
+
+typedef struct CanvasTile {
+    int64_t key[2];
+    CanvasRun runs[CANVAS_STORES];
+    CanvasStore* stores; // its layer's, which a run of it changing makes dirty
+    UT_hash_handle hh;
+} CanvasTile;
 
 typedef struct CanvasLayerData {
     CanvasTile* tiles;
@@ -235,6 +242,7 @@ typedef struct CanvasObject {
 
 typedef struct CanvasData {
     int tile_shift;
+    uint64_t generation; // its own; canvas_generation adds its tags'
     CanvasLayer* layers[CANVAS_LAYER_MAX];
     uint32_t layer_count;
 
@@ -400,7 +408,7 @@ CanvasLayer* canvas_add_layer(Canvas* canvas, const char* name) {
     layer->opacity = 1.0f;
     layer->order = (int)layer->index;
     d->layers[d->layer_count++] = layer;
-    canvas->generation++;
+    canvas->data->generation++;
     return layer;
 }
 
@@ -424,7 +432,7 @@ uint16_t canvas_add_style(Canvas* canvas, uint32_t rgba) {
     }
     d->styles[d->style_count] = rgba;
     d->styles_dirty = true;
-    canvas->generation++;
+    canvas->data->generation++;
     return (uint16_t)d->style_count++;
 }
 
@@ -438,11 +446,15 @@ void canvas_set_style(Canvas* canvas, uint16_t style, uint32_t rgba) {
     }
     d->styles[style] = rgba;
     d->styles_dirty = true;
-    canvas->generation++;
+    canvas->data->generation++;
 }
 
 CanvasTags* canvas_tags(const Canvas* canvas) {
     return canvas ? canvas->data->tags : NULL;
+}
+
+uint64_t canvas_generation(const Canvas* canvas) {
+    return canvas ? canvas->data->generation + canvas->data->tags->generation : 0;
 }
 
 /*
@@ -485,6 +497,7 @@ static CanvasTile* _tile(CanvasLayerData* ld, int64_t tx, int64_t ty) {
     if (!tile)
         return NULL;
     tile->key[0] = tx, tile->key[1] = ty;
+    tile->stores = ld->stores;
     HASH_ADD(hh, ld->tiles, key, sizeof(tile->key), tile);
     return tile;
 }
@@ -588,14 +601,10 @@ static void _remove_object(CanvasData* d, uint32_t object) {
             if (kept != run->count) {
                 run->count = kept;
                 run->dirty = true;
+                entry->tiles[i]->stores[s].dirty = true;
             }
         }
     }
-    // A removed tile's layer is not known from here, so every store is asked
-    // whether it has a dirty run at the next upload.
-    for (uint32_t l = 0; l < d->layer_count; l++)
-        for (int s = 0; s < CANVAS_STORES; s++)
-            d->layers[l]->data->stores[s].dirty = true;
     HASH_DEL(d->objects, entry);
     free(entry->tiles);
     free(entry);
@@ -678,7 +687,8 @@ void canvas_apply(Canvas* canvas, CanvasEdit* edit) {
         if (fonts_refused)
             log_error("canvas: %u glyph(s) refused: a canvas draws with at most %d fonts",
                       fonts_refused, CANVAS_FONT_MAX);
-        canvas->generation++;
+        if (edit->step_count)
+            canvas->data->generation++;
     }
     edit->piece_count = 0;
     edit->fill_count = 0;
@@ -1026,10 +1036,13 @@ static void _draw_layer(const CanvasData* d, const CanvasLayer* layer) {
     const float opacity = layer->opacity < 0.0f   ? 0.0f
                           : layer->opacity > 1.0f ? 1.0f
                                                   : layer->opacity;
+    // The ring pass only while some tag draws a ring, and only for shapes:
+    // a polygon's ring is its edge records'.
+    const int passes = d->tags->outlined ? 5 : 4;
     glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_TRUE);
     glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
     glClear(GL_COLOR_BUFFER_BIT);
-    for (int pass = 0; pass < 4; pass++) {
+    for (int pass = 0; pass < passes; pass++) {
         if (pass == 0) {
             glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_TRUE);
             glBlendEquationSeparate(GL_FUNC_ADD, GL_MAX);
@@ -1041,7 +1054,7 @@ static void _draw_layer(const CanvasData* d, const CanvasLayer* layer) {
         }
         // Fills first, then shapes, among them the outer half of each fill's
         // edge ramp.
-        if (fills->end) {
+        if (fills->end && pass < 4) {
             glUseProgram(d->fill_program->id);
             uniform_set_int(d->fill_program->uniforms, "uPass", pass);
             uniform_set_float(d->fill_program->uniforms, "uOpacity", opacity);
@@ -1060,12 +1073,14 @@ static void _draw_layer(const CanvasData* d, const CanvasLayer* layer) {
 
 // What both canvas programs read of the view.
 static void _view_uniforms(const ShaderProgram* program, const Canvas* canvas,
-                           const CanvasView* view, const float size[2], float ppu) {
+                           const CanvasView* view, const float size[2], float ppu,
+                           const float ring[2]) {
     UniformManager* u = program->uniforms;
     glUseProgram(program->id);
     const float fraction[2] = {(float)view->fraction[0], (float)view->fraction[1]};
     uniform_set_vec2(u, "uFraction", fraction);
     uniform_set_vec2(u, "uSize", size);
+    uniform_set_vec2(u, "uRing", ring);
     uniform_set_float(u, "uPixelsPerUnit", ppu);
     uniform_set_float(u, "uMirror", view->mirror_x ? -1.0f : 1.0f);
     uniform_set_float(u, "uShapeMinPx", canvas->shape_min_px);
@@ -1127,8 +1142,13 @@ void canvas_draw(Canvas* canvas, const CanvasView* view) {
 
         glEnable(GL_BLEND);
         const float size[2] = {(float)w, (float)h};
-        _view_uniforms(d->program, canvas, view, size, (float)ppu);
-        _view_uniforms(d->fill_program, canvas, view, size, (float)ppu);
+        // A ring from one point outside a shape to two and a half: at least a
+        // pixel out, where the shape's own ramp has ended.
+        const float ring[2] = {(float)fmax(1.0, CANVAS_RING_GAP_PT * sx),
+                               (float)fmax(1.0, CANVAS_RING_GAP_PT * sx) +
+                                   (float)(CANVAS_RING_WIDTH_PT * sx)};
+        _view_uniforms(d->program, canvas, view, size, (float)ppu, ring);
+        _view_uniforms(d->fill_program, canvas, view, size, (float)ppu, ring);
         glActiveTexture(GL_TEXTURE0 + CANVAS_UNIT_TILES);
         glBindTexture(GL_TEXTURE_BUFFER, d->tile_texture);
         glActiveTexture(GL_TEXTURE0 + CANVAS_UNIT_STYLES);
