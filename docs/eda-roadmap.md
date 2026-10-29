@@ -129,7 +129,16 @@ object). It never reads back from the GPU.
   added to the tile's int32 offset from the view in the shader, so precision does not depend on how
   far from the origin the view is. Long shapes are split at tile edges.
 - **Text in world units:** laid out by the canvas, sized by the em, cut at the font's true edge,
-  dropped below a pixel size.
+  dropped below a pixel size. Built in phase 5:
+  - A string is a record a glyph, laid out on the edit's thread, its pen in ems, so its size and
+    turn ride the record.
+  - A canvas draws with at most four fonts, one texture unit each.
+  - The font's true edge is half a code under stb's stated on-edge value, since stb truncates the
+    field's texels. Cut at the stated value, every glyph was 0.65% thin against stb's own
+    rasterizer.
+  - Glyphs are indexed by codepoint, so the table holds ASCII, as the atlas does. A denser index
+    comes with glyphs beyond ASCII (items 5 and 6).
+  - The UI's cut moves to the same edge at the end of 14.0, once its before and after are judged.
 - **Several views at once:** a view is a value (a rectangle, a pan, a zoom, and its own shown layers
   and active layer), drawn by `canvas_draw` into one target the canvas owns.
 - **Retained, not rebuilt**, with three deviations from what is written above:
