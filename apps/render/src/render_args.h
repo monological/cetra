@@ -515,6 +515,7 @@ typedef struct {
     int height_set;
     int headless;
     int headless_jitter; // Apply TAA jitter in headless (lets temporal effects converge)
+    int idle;            // Engine idle mode: a frame only when something asks (a scene always asks)
     int max_frames;      // Exit after this many frames (0 = run forever)
     int show_bones;
     int check_stretch; // One-shot CPU skinning stretch diagnostic

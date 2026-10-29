@@ -29042,6 +29042,134 @@ def _canvas_coverage(path):
     return _ppm_array(path)[:, :, 0] / 255.0
 
 
+def _idle_run(workdir, tag, *args, frames=50, idle=True, binary=None):
+    """An app headless at 400x300 points, under --idle unless told otherwise: its picture's path,
+    and from apps/canvas's idle lines each frame's delta_time and the run's frames drawn and seconds
+    waited, as {"deltas": [...], "frames": n, "waited": s}. A run that failed or hung prints the
+    tail of its output and gives None and an empty dict."""
+    out = os.path.join(workdir, f"idle_{tag}.ppm")
+    cmd = [binary or _bin("canvas"), "-x", "-f", str(frames), "-W", "400", "-H", "300", "-S", out,
+           *(["--idle"] if idle else []), *args]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=_PROBE_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        print(f"    {os.path.basename(cmd[0])} {tag}: no exit in {_PROBE_TIMEOUT} s")
+        return None, {}
+    if r.returncode != 0 or not os.path.exists(out):
+        print(f"    {os.path.basename(cmd[0])} {tag} failed: {(r.stdout + r.stderr)[-400:]}")
+        return None, {}
+    said = {"deltas": []}
+    for line in r.stdout.splitlines():
+        p = line.split()
+        if p[:3] == ["canvas", "idle", "frame"] and len(p) == 6:
+            said["deltas"].append(float(p[5]))
+        elif p[:3] == ["canvas", "idle", "frames"] and len(p) == 6:
+            said["frames"], said["waited"] = int(p[3]), float(p[5])
+    return out, said
+
+
+def run_idle_gate(workdir):
+    """Idle mode (spec 14.1): with it on, the engine draws a frame only when something asks for
+    one, and waits for events in between. Headless there are no events, and a run ends at the
+    first frame after which nothing asks for another and no work is out; apps/canvas prints each
+    frame's delta_time and, at exit, the frames drawn and the seconds waited. The noise floor is
+    0 px: two runs of one sheet are identical.
+
+      idle-still     a still sheet under --idle -f 50 draws 1 frame and ends, and its picture is
+                     the sheet drawn for one frame without idle mode, 0 px.
+      idle-timed     two timed wakes, 0.2 s and 0.3 s, each asked for on the frame before: 3
+                     frames, from the first to the last at least the 0.5 s asked for, and each
+                     delta_time under the wake it followed. The wait is kept out of the clock: a
+                     frame after a wait advances what animates by a frame and not by the wait.
+      idle-thread    the board filled on a thread while the loop runs, between engine_begin_work
+                     and engine_end_work: the loop waits rather than drawing, 2 frames, and the
+                     last is the board drawn without idle mode, 0 px. A headless run does not
+                     end while work is out.
+      idle-pointer   a scripted drag across the shapes sheet: a frame each frame the script
+                     plays, none after, and the last is the same drag without idle mode at that
+                     frame, 0 px. The drag must move the sheet, or two still frames would agree.
+      idle-3d        apps/render --idle on a 3D fixture draws every one of its frames -- a scene
+                     with anything in it keeps the loop drawing -- and its last is the fixture
+                     without idle mode, 0 px.
+    """
+    failed = []
+
+    def note(name, ok):
+        if not ok:
+            failed.append(name)
+
+    still, said = _idle_run(workdir, "still", "--sheet", "shapes")
+    plain, _ = _idle_run(workdir, "still_plain", "--sheet", "shapes", frames=1, idle=False)
+    if not still or not plain or "frames" not in said:
+        ok, detail = False, "a run failed"
+    else:
+        ae, _ = compare(plain, still)
+        ok = said["frames"] == 1 and ae == 0
+        detail = f"{said['frames']} frame(s) drawn of 50 (want 1), {ae} px from one plain frame"
+    print(f"  idle-still          {'PASS' if ok else 'FAIL'}  {detail}")
+    note("idle-still", ok)
+
+    _, said = _idle_run(workdir, "timed", "--sheet", "shapes", "--idle-wake", "0.2,0.3")
+    d = said.get("deltas", [])
+    if "frames" not in said or len(d) != 3:
+        ok, detail = False, f"a run failed or printed {len(d)} frames"
+    else:
+        span = d[1] + d[2] + said["waited"]
+        ok = said["frames"] == 3 and span >= 0.5 and d[1] < 0.2 and d[2] < 0.3
+        detail = (f"{said['frames']} frames (want 3), {span:.3f} s from the first to the last "
+                  f"(want >= 0.5), delta_time {d[1]:.4f} and {d[2]:.4f} s after the waits "
+                  f"(want under 0.2 and 0.3), {said['waited']:.3f} s waited")
+    print(f"  idle-timed          {'PASS' if ok else 'FAIL'}  {detail}")
+    note("idle-timed", ok)
+
+    late, said = _idle_run(workdir, "thread", "--sheet", "board", "--edit-thread")
+    board, _ = _idle_run(workdir, "board_plain", "--sheet", "board", frames=2, idle=False)
+    if not late or not board or "frames" not in said:
+        ok, detail = False, "a run failed"
+    else:
+        ae, _ = compare(board, late)
+        ok = said["frames"] == 2 and said["waited"] > 0.0 and ae == 0
+        detail = (f"{said['frames']} frames (want 2), {said['waited']:.3f} s waited for the "
+                  f"thread (want > 0), {ae} px from the board drawn plainly (want 0)")
+    print(f"  idle-thread         {'PASS' if ok else 'FAIL'}  {detail}")
+    note("idle-thread", ok)
+
+    script = os.path.join(workdir, "idle_drag.txt")
+    with open(script, "w") as f:
+        f.write("2 at=600,400\n3-10 down by=12,-6\n")
+    dragged, said = _idle_run(workdir, "drag", "--sheet", "shapes", "--pointer-script", script)
+    played = 12  # the script's frames 0 to 10, played after frames 1 to 11, and the frame after
+    plain_drag, _ = _idle_run(workdir, "drag_plain", "--sheet", "shapes", "--pointer-script",
+                              script, frames=played, idle=False)
+    if not dragged or not plain_drag or not plain or "frames" not in said:
+        ok, detail = False, "a run failed"
+    else:
+        ae, _ = compare(plain_drag, dragged)
+        moved, _ = compare(plain, dragged)
+        ok = said["frames"] == played and ae == 0 and moved > 1000
+        detail = (f"{said['frames']} frames (want {played}), {ae} px from the drag without idle "
+                  f"mode (want 0), {moved} px moved from the still sheet (want > 1000)")
+    print(f"  idle-pointer        {'PASS' if ok else 'FAIL'}  {detail}")
+    note("idle-pointer", ok)
+
+    fixture = ("-m", asset("mask_fixture.cscn"))
+    shot, _ = _idle_run(workdir, "3d", *fixture, "--screenshot-every", "12", frames=12,
+                        binary=RENDER)
+    shot_plain, _ = _idle_run(workdir, "3d_plain", *fixture, frames=12, idle=False, binary=RENDER)
+    last = os.path.join(workdir, "idle_3d_000012.ppm")
+    if not shot or not shot_plain:
+        ok, detail = False, "a run failed"
+    else:
+        ae, _ = compare(shot_plain, shot)
+        ok = os.path.exists(last) and ae == 0
+        detail = (f"frame 12 {'drawn' if os.path.exists(last) else 'never drawn'} of 12, "
+                  f"{ae} px from the fixture without idle mode (want 0)")
+    print(f"  idle-3d             {'PASS' if ok else 'FAIL'}  {detail}")
+    note("idle-3d", ok)
+
+    return failed
+
+
 def run_camera_gate(workdir):
     """The camera, asserted through a SCRIPTED POINTER (spec 12.19).
 
@@ -33555,6 +33683,8 @@ GATE_GROUPS = [
      run_camera_gate),
     ("canvas", "the 2D canvas (areas, ramp, thin lines, four twins, fills, text; spec 14.0):",
      run_canvas_gate),
+    ("idle", "idle mode (a frame only when something asks: still, timed, thread, input; 14.1):",
+     run_idle_gate),
     ("gait", "a walker's gait (stride, footfalls, the eye's lag and bob, a climb; spec 13.47):",
      run_gait_gate),
     ("character", "a character's capsule changed while it stands (crouch, stand, feet; spec 13.48):",

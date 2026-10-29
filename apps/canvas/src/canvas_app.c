@@ -14,9 +14,14 @@
  * against stb_truetype's own rasterizer, which only its header reaches, and
  * --edit-thread fills an edit through the engine's thread shim, which is what
  * builds on Windows as well.
+ *
+ * Under --idle the engine draws only when something asks (spec 14.1), and a
+ * headless run prints a line a frame and one at exit, which the `idle` gate
+ * group reads.
  */
 
 #include <math.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -56,6 +61,7 @@ typedef struct SheetContext {
     double fb_scale;        // framebuffer pixels per window point
     bool probe;             // print where its shapes land
     bool edit_thread;       // fill the edit on a thread of its own, where a sheet can
+    Engine* idle;           // non-NULL under --idle: that thread fills it while the loop runs
     const Font* font;       // what its text is set in
 
     // Written by a sheet that has two sides: the layers a split's mirrored
@@ -1113,6 +1119,36 @@ static void* board_thread(void* edit) {
     return NULL;
 }
 
+/*
+ * Under --idle with --edit-thread the board arrives as pcb's would: filled on a
+ * thread while the loop runs, after a pause standing for a parse. The loop
+ * waits for it rather than drawing, and the update hook applies it on the frame
+ * its end wakes.
+ */
+enum { BOARD_LATE_MS = 50 };
+static CanvasEdit* g_late_edit;
+static atomic_bool g_late_ready;
+static cetra_thread_t g_late_thread;
+
+static void* board_late_thread(void* engine) {
+    cetra_sleep_ms(BOARD_LATE_MS);
+    board_fill(g_late_edit, &g_board);
+    atomic_store(&g_late_ready, true);
+    engine_end_work(engine);
+    return NULL;
+}
+
+static void board_late_apply(void) {
+    if (!g_late_edit || !atomic_load(&g_late_ready))
+        return;
+    cetra_thread_join(g_late_thread);
+    canvas_apply(g_canvas, g_late_edit);
+    canvas_edit_remove_object(g_late_edit, BOARD_REMOVED);
+    canvas_apply(g_canvas, g_late_edit);
+    free_canvas_edit(g_late_edit);
+    g_late_edit = NULL;
+}
+
 static void board_script(void) {
     static int frame;
     static uint64_t uploads, bytes, generation;
@@ -1197,7 +1233,15 @@ static void sheet_board(SheetContext* ctx) {
                             : (CanvasTagState){.dim = 0.35f});
     canvas_tags_set(tags, BOARD_PICKED, (CanvasTagState){.outline = 0xffffffffu});
 
-    if (ctx->edit_thread) {
+    if (ctx->edit_thread && ctx->idle) {
+        g_late_edit = create_canvas_edit(canvas);
+        engine_begin_work(ctx->idle);
+        if (!cetra_thread_create(&g_late_thread, board_late_thread, ctx->idle)) {
+            board_fill(g_late_edit, b);
+            atomic_store(&g_late_ready, true);
+            engine_end_work(ctx->idle);
+        }
+    } else if (ctx->edit_thread) {
         cetra_thread_t thread;
         if (cetra_thread_create(&thread, board_thread, ctx->edit))
             cetra_thread_join(thread);
@@ -1300,6 +1344,22 @@ static void draw_view(Engine* engine, void* user) {
         g_after_draw();
 }
 
+// Under --idle: the timed wakes --idle-wake asks for, one each frame in turn,
+// and, headless, a line a frame and one at exit for the `idle` gate group.
+enum { IDLE_WAKES_MAX = 8 };
+static double g_wakes[IDLE_WAKES_MAX];
+static int g_wake_count, g_wake_next;
+static bool g_idle_say;
+
+static void on_update(Engine* engine, float dt) {
+    (void)dt;
+    board_late_apply();
+    if (g_idle_say)
+        printf("canvas idle frame %zu delta %.6f\n", engine->total_frames + 1, engine->delta_time);
+    if (g_wake_next < g_wake_count)
+        engine_request_frame_after(engine, g_wakes[g_wake_next++]);
+}
+
 static void to_points(const Engine* engine, double fb_x, double fb_y, float* x, float* y) {
     *x = (float)(fb_x * engine->win_width / engine->fb_width);
     *y = (float)((engine->fb_height - fb_y) * engine->win_height / engine->fb_height);
@@ -1331,7 +1391,8 @@ static void usage(const char* argv0) {
             "usage: %s [-x] [-f frames] [-S out.ppm] [-W points] [-H points]\n"
             "          [--sheet NAME] [--view X,Y,WIDTH (mm)] [--offset UNITS] [--mirror]\n"
             "          [--tile-shift N] [--canvas-probe] [--picture] [--edit-thread]\n"
-            "          [--split] [--only-view 0|1] [--ui] [--budget]\n",
+            "          [--split] [--only-view 0|1] [--ui] [--budget]\n"
+            "          [--idle] [--idle-wake S,...] [--pointer-script PATH]\n",
             argv0);
 }
 
@@ -1348,9 +1409,10 @@ static const char* IDENTITY_PASS = "#version 330 core\n"
 
 int main(int argc, char** argv) {
     bool headless = false, mirror = false, probe = false, picture = false, edit_thread = false;
-    bool split = false, with_ui = false, budget = false;
+    bool split = false, with_ui = false, budget = false, idle = false;
     int frames = 0, width = 960, height = 600, tile_shift = 0, only_view = -1;
     const char* screenshot = NULL;
+    const char* pointer_script = NULL;
     const char* sheet_name = "shapes";
     double view_x = NAN, view_y = NAN, view_w = NAN;
     long long offset = 0;
@@ -1393,6 +1455,15 @@ int main(int argc, char** argv) {
             with_ui = true;
         } else if (strcmp(argv[i], "--budget") == 0) {
             budget = true;
+        } else if (strcmp(argv[i], "--idle") == 0) {
+            idle = true;
+        } else if (strcmp(argv[i], "--idle-wake") == 0 && more) {
+            // Seconds, comma-separated: each asked for on its frame in turn.
+            for (const char* tok = strtok(argv[++i], ","); tok && g_wake_count < IDLE_WAKES_MAX;
+                 tok = strtok(NULL, ","))
+                g_wakes[g_wake_count++] = atof(tok);
+        } else if (strcmp(argv[i], "--pointer-script") == 0 && more) {
+            pointer_script = argv[++i];
         } else {
             usage(argv[0]);
             return 2;
@@ -1404,12 +1475,18 @@ int main(int argc, char** argv) {
         return 2;
     }
 
-    EngineConfig cfg = {.title = "canvas", .width = width, .height = height, .headless = headless};
+    EngineConfig cfg = {
+        .title = "canvas", .width = width, .height = height, .headless = headless, .idle = idle};
     Engine* engine = create_engine(&cfg);
     if (!engine)
         return 1;
     engine->exit_after_frames = frames;
     engine_set_screenshot_path(engine, screenshot);
+    if (pointer_script && !engine_set_pointer_script(engine, pointer_script)) {
+        free_engine(engine);
+        return 1;
+    }
+    g_idle_say = idle && headless;
     // An empty scene and a camera on it: the canvas draws over the frame, and
     // the frame wants a scene to be the frame of.
     Scene* scene = create_scene();
@@ -1461,6 +1538,7 @@ int main(int argc, char** argv) {
                         .fb_scale = (double)engine->fb_width / (double)engine->win_width,
                         .probe = probe,
                         .edit_thread = edit_thread,
+                        .idle = idle ? engine : NULL,
                         .font = font};
     sheet->build(&ctx);
     canvas_apply(g_canvas, ctx.edit);
@@ -1505,7 +1583,9 @@ int main(int argc, char** argv) {
     engine_set_mouse_button_callback(engine, on_button);
     engine_set_scroll_callback(engine, on_scroll);
 
-    engine_run(engine, NULL, NULL, NULL);
+    engine_run(engine, on_update, NULL, NULL);
+    if (g_idle_say)
+        printf("canvas idle frames %zu waited %.6f\n", engine->total_frames, engine->time_waited);
     free_ui_system(ui);
     free_canvas(g_canvas);
     free_engine(engine);

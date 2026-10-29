@@ -550,6 +550,9 @@ static void print_usage(const char* prog) {
     fprintf(stderr,
             "      --headless-jitter  Apply TAA sub-pixel jitter in headless (needs --taa;\n");
     fprintf(stderr, "                         non-deterministic, but converges temporal SSR/AA)\n");
+    fprintf(stderr,
+            "      --idle             Engine idle mode; a scene with anything in it still\n");
+    fprintf(stderr, "                         draws every frame\n");
     fprintf(stderr, "  -b, --show-bones       Enable bone X-ray overlay\n");
     fprintf(stderr, "      --check-stretch    Report triangle edges stretched by skinning\n");
     fprintf(stderr,
@@ -842,6 +845,8 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
             args->headless = 1;
         } else if (strcmp(argv[i], "--headless-jitter") == 0) {
             args->headless_jitter = 1;
+        } else if (strcmp(argv[i], "--idle") == 0) {
+            args->idle = 1;
         } else if (strcmp(argv[i], "-b") == 0 || strcmp(argv[i], "--show-bones") == 0) {
             args->show_bones = 1;
         } else if (strcmp(argv[i], "--check-stretch") == 0) {
@@ -3814,6 +3819,7 @@ int main(int argc, char** argv) {
                         .height = args.height,
                         .headless = args.headless != 0,
                         .headless_jitter = args.headless_jitter != 0,
+                        .idle = args.idle != 0,
                         .profiler = args.profiler_enabled != 0,
                         .ss_scale = args.ssaa,
                         .typical_size = args.typical_size};

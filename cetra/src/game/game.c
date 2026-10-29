@@ -190,15 +190,17 @@ double game_get_fps(const Game* game) {
     return (game && game->engine) ? (double)game->engine->fps : 0.0;
 }
 
-// engine_run's per-frame update hook: poll input, quit on escape, advance the
-// fixed-timestep sim (physics/entities/particles), and stash the interpolation
-// alpha for the render callback. Runs once per frame, before the render.
+// engine_run's per-frame update hook: poll input, advance the fixed-timestep
+// sim (physics/entities/particles), and stash the interpolation alpha for the
+// render callback. Runs once per frame, before the render.
 static void game_frame_update(Engine* engine, float dt) {
     Game* game = engine_get_user_data(engine);
 
-    // No steps taken yet this frame. Set before the early return below so a
-    // frame that bails still reports an honest zero advance rather than last
-    // frame's.
+    // A game is never idle (spec 14.1): its sim steps on time, and a gamepad,
+    // read by polling, sends no event that would wake a waiting loop.
+    engine_request_frame(engine);
+
+    // No steps taken yet this frame.
     game->sim_clock.delta = 0.0;
 
     input_update(&game->input);
@@ -331,8 +333,7 @@ static void game_pre_render(Engine* engine, Scene* scene) {
 static void game_scene_render(Engine* engine, Scene* scene) {
     (void)scene;
     Game* game = engine_get_user_data(engine);
-    // Interpolation alpha, derived (not stored) so an escape-key early-return
-    // in game_frame_update can't leave it stale.
+    // Interpolation alpha, derived rather than stored, so nothing can leave it stale.
     game->on_render(game, game->accumulator / game->fixed_timestep);
 }
 
