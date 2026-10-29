@@ -17,13 +17,11 @@
 #define CANVAS_KIND_FILL 6u // a triangle of a filled polygon, in the layer's fill buffer
 #define CANVAS_KIND_GLYPH 7u // one character of a string
 
-#define CANVAS_FLAG_FLAT_A 1u       // end a is flat
-#define CANVAS_FLAG_FLAT_B 2u       // end b is flat
-#define CANVAS_FLAG_CUT_A 4u        // end a is where a longer shape was split: no cap, no ramp
-#define CANVAS_FLAG_CUT_B 8u        // end b likewise
-#define CANVAS_FLAG_CLOCKWISE 16u   // an arc runs clockwise from a to b
-#define CANVAS_FLAG_INSIDE_LEFT 32u // an edge's polygon lies to the left of a to b
-#define CANVAS_FLAG_MIRROR 64u      // a glyph of mirrored text, flipped across its anchor's line
+#define CANVAS_FLAG_FLAT_A 1u  // end a is flat
+#define CANVAS_FLAG_FLAT_B 2u  // end b is flat
+#define CANVAS_FLAG_CUT_A 4u   // end a is where a longer shape was split: no cap, no ramp
+#define CANVAS_FLAG_CUT_B 8u   // end b likewise
+#define CANVAS_FLAG_MIRROR 16u // a glyph of mirrored text, flipped across its anchor's line
 
 // The glyph table (canvas_vert.glsl's uGlyphs): CANVAS_GLYPH_CODEPOINTS entries a font, two
 // texels each, for each of the CANVAS_FONT_MAX fonts a canvas draws with. Codepoint 0 draws

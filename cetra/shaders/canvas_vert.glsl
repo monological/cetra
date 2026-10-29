@@ -30,10 +30,6 @@ out vec2 vLocal;      // in the shape's own frame, in pixels; for a glyph, its p
 const float PAD = 1.0; // the outer half of the edge ramp
 const float TAU = 6.283185307179586;
 
-vec2 toPixels(ivec2 rel, ivec2 tileOffset) {
-    return canvasPixels(rel, tileOffset);
-}
-
 float cross2(vec2 a, vec2 b) {
     return a.x * b.y - a.y * b.x;
 }
@@ -61,19 +57,23 @@ void main() {
     vOutline = vec4(0.0);
     if (kind == CANVAS_KIND_NONE || tile.z == 0 || !canvasColour(aU, vColor, vOutline, vRaised))
         return;
-
-    // The quad's corners as a strip: (0, 0), (1, 0), (0, 1), (1, 1). A shape with an outline
-    // reaches out to its ring; a glyph has none, its quad being its atlas cell.
-    vec2 c = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1));
+    // A glyph has no ring, its quad being its atlas cell.
     if (kind == CANVAS_KIND_GLYPH)
         vOutline = vec4(0.0);
-    float pad = PAD + (vOutline.a > 0.0 ? uRing.y : 0.0);
+    if (!canvasInPass(vRaised, vOutline.a))
+        return;
+
+    // The quad's corners as a strip: (0, 0), (1, 0), (0, 1), (1, 1). A shape with an outline
+    // reaches out to its ring in the passes that draw it.
+    vec2 c = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1));
+    bool ringed = vOutline.a > 0.0 && (uPass == 0 || uPass == 4);
+    float pad = PAD + (ringed ? uRing.y : 0.0);
     vec2 pos;
     float span;
 
     if (kind == CANVAS_KIND_SEGMENT) {
-        vec2 a = toPixels(aP.xy, tile.xy);
-        vec2 b = toPixels(aP.zw, tile.xy);
+        vec2 a = canvasPixels(aP.xy, tile.xy);
+        vec2 b = canvasPixels(aP.zw, tile.xy);
         float hw = max(aF.x * uPixelsPerUnit, 0.5); // never narrower than a pixel
         vec2 d = b - a;
         float len = length(d);
@@ -88,7 +88,7 @@ void main() {
         vShape = vec4(len, hw, 0.0, 0.0);
         span = len + 2.0 * hw;
     } else if (kind == CANVAS_KIND_CIRCLE) {
-        vec2 centre = toPixels(aP.xy, tile.xy);
+        vec2 centre = canvasPixels(aP.xy, tile.xy);
         float r = float(aP.z) * uPixelsPerUnit;
         float hs = aP.w > 0 ? max(float(aP.w) * uPixelsPerUnit * 0.5, 0.5) : 0.0;
         vLocal = (c * 2.0 - 1.0) * (r + hs + pad);
@@ -96,7 +96,7 @@ void main() {
         vShape = vec4(r, hs, 0.0, 0.0);
         span = 2.0 * (r + hs);
     } else if (kind == CANVAS_KIND_BOX) {
-        vec2 centre = toPixels(aP.xy, tile.xy);
+        vec2 centre = canvasPixels(aP.xy, tile.xy);
         vec2 halfSize = aF.xy * uPixelsPerUnit;
         float corner = min(aF.z * uPixelsPerUnit, min(halfSize.x, halfSize.y));
         float hs = aP.z > 0 ? max(float(aP.z) * uPixelsPerUnit * 0.5, 0.5) : 0.0;
@@ -107,24 +107,13 @@ void main() {
         vShape = vec4(halfSize, corner, hs);
         span = 2.0 * (max(halfSize.x, halfSize.y) + hs);
     } else if (kind == CANVAS_KIND_ARC) {
-        vec2 a = toPixels(aP.xy, tile.xy);
-        vec2 b = toPixels(aP.zw, tile.xy);
+        // Counter-clockwise from a to b, an edit having swapped a clockwise arc's ends.
+        vec2 a = canvasPixels(aP.xy, tile.xy);
+        vec2 b = canvasPixels(aP.zw, tile.xy);
         vec2 centre = (a + b) * 0.5 + aF.yz * uPixelsPerUnit;
         float r = aF.w * uPixelsPerUnit;
         float hw = max(aF.x * uPixelsPerUnit, 0.5);
-        // The sector runs counter-clockwise from s to e, so a clockwise arc is its ends swapped,
-        // and so are their flags: A is the sector's start from here on.
-        bool clockwise = (flags & CANVAS_FLAG_CLOCKWISE) != 0u;
-        vec2 da = normalize(a - centre), db = normalize(b - centre);
-        vec2 s = clockwise ? db : da;
-        vec2 e = clockwise ? da : db;
-        if (clockwise) {
-            uint ends = flags & (CANVAS_FLAG_FLAT_A | CANVAS_FLAG_CUT_A);
-            uint other = flags & (CANVAS_FLAG_FLAT_B | CANVAS_FLAG_CUT_B);
-            vFlags = (flags & ~(CANVAS_FLAG_FLAT_A | CANVAS_FLAG_FLAT_B | CANVAS_FLAG_CUT_A |
-                                CANVAS_FLAG_CUT_B)) |
-                     (ends << 1) | (other >> 1);
-        }
+        vec2 s = normalize(a - centre), e = normalize(b - centre);
         float sweep = turnFrom(s, e);
         if (sweep <= 0.0)
             sweep = TAU;
@@ -145,15 +134,13 @@ void main() {
         span = max(hi.x - lo.x, hi.y - lo.y) + 2.0 * hw;
     } else if (kind == CANVAS_KIND_EDGE) {
         // The outer half of a fill's edge ramp: a band from a pixel inside the edge to a pixel
-        // and a half outside, its across measured outwards, past the ends to a polygon's corners.
-        vec2 a = toPixels(aP.xy, tile.xy);
-        vec2 b = toPixels(aP.zw, tile.xy);
+        // and a half outside, the polygon on the left of a to b, past the ends to its corners.
+        vec2 a = canvasPixels(aP.xy, tile.xy);
+        vec2 b = canvasPixels(aP.zw, tile.xy);
         vec2 d = b - a;
         float len = length(d);
         vec2 dir = len > 1e-6 ? d / len : vec2(1.0, 0.0);
         vec2 out_ = vec2(dir.y, -dir.x); // the right of a to b
-        if ((flags & CANVAS_FLAG_INSIDE_LEFT) == 0u)
-            out_ = -out_;
         float extA = (flags & CANVAS_FLAG_CUT_A) != 0u ? PAD : 0.5 + pad;
         float extB = (flags & CANVAS_FLAG_CUT_B) != 0u ? PAD : 0.5 + pad;
         float along = c.x == 0.0 ? -extA : len + extB;
@@ -166,19 +153,21 @@ void main() {
         // The glyph's box about its pen, in ems, mirrored and turned about the string's anchor.
         // The box is the atlas's whole cell, so it already holds the outer half of the ramp
         // wherever the field reaches half a pixel; past that the string is too small to draw.
-        int base = aP.w * CANVAS_GLYPH_CODEPOINTS * 2;
-        vec4 font = texelFetch(uGlyphs, base);             // em, edge, falloff, spread
-        vec4 box = texelFetch(uGlyphs, base + aP.z * 2);   // x0, y0, x1, y1
-        vec4 cell = texelFetch(uGlyphs, base + aP.z * 2 + 1);
         float emPx = aF.z * uPixelsPerUnit;
-        float atlasPx = emPx / font.x; // framebuffer pixels an atlas pixel spans
-        if (emPx < uTextMinPx || font.w * atlasPx < 0.5)
+        if (emPx < uTextMinPx)
             return;
+        int base = aP.w * CANVAS_GLYPH_CODEPOINTS * 2;
+        vec4 font = texelFetch(uGlyphs, base); // em, edge, falloff, spread
+        float atlasPx = emPx / font.x;         // framebuffer pixels an atlas pixel spans
+        if (font.w * atlasPx < 0.5)
+            return;
+        vec4 box = texelFetch(uGlyphs, base + aP.z * 2); // x0, y0, x1, y1
+        vec4 cell = texelFetch(uGlyphs, base + aP.z * 2 + 1);
         vec2 local = (aF.xy + mix(box.xy, box.zw, c)) * emPx;
         if ((flags & CANVAS_FLAG_MIRROR) != 0u)
             local.x = -local.x;
         vec2 u = vec2(cos(aF.w), sin(aF.w));
-        pos = toPixels(aP.xy, tile.xy) + u * local.x + vec2(-u.y, u.x) * local.y;
+        pos = canvasPixels(aP.xy, tile.xy) + u * local.x + vec2(-u.y, u.x) * local.y;
         vLocal = mix(cell.xy, cell.zw, c);
         vShape = vec4(font.y, font.z / atlasPx, float(aP.w), 0.0);
         span = emPx;
@@ -186,7 +175,9 @@ void main() {
         return;
     }
 
-    if (span < uShapeMinPx)
+    // A polygon's edge pieces are not shapes of their own: dropping one by its length would
+    // harden the outline wherever a piece is short or cut short at the tile grid.
+    if (kind != CANVAS_KIND_EDGE && span < uShapeMinPx)
         return;
     gl_Position = canvasClip(pos);
 }

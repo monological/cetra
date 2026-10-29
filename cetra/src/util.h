@@ -27,20 +27,27 @@ void create_fullscreen_quad_vao(GLuint* vao, GLuint* vbo);
 void draw_fullscreen_quad(GLuint vao);
 
 /*
- * The state a pass changes and must hand back: the framebuffer, the viewport, the blend
- * function, the face culled, the polygon mode, and the depth test, blend, face culling and
- * scissor every such pass wants off -- a scissor left on by an overlay clips a full-screen pass.
- * Begin saves and disables, and fills polygons -- a pass drawn in the wireframe debug view's
- * lines writes only a quad's outline; end restores, on every exit including the failure ones, so
- * a pass never leaves the pipeline in a state its caller did not put it in -- including one it
- * turned ON, which is why each switch is restored in both directions.
+ * The state a pass changes and must hand back: the framebuffer, the viewport, the program, the
+ * vertex array, the blend function and equations, the colour mask, the clear colour, the face
+ * culled, the polygon mode, and the depth test, blend, face culling and scissor every such pass
+ * wants off -- a scissor left on by an overlay clips a full-screen pass. Begin saves and
+ * disables, and fills polygons -- a pass drawn in the wireframe debug view's lines writes only a
+ * quad's outline; end restores, on every exit including the failure ones, so a pass never leaves
+ * the pipeline in a state its caller did not put it in -- including one it turned ON, which is
+ * why each switch is restored in both directions. Texture bindings are not saved: a pass binds
+ * what it reads.
  */
 typedef struct GLPassState {
     GLint viewport[4];
     GLint fbo;
-    GLint blend_func[4]; // src RGB, dst RGB, src alpha, dst alpha
-    GLint cull_face;     // GL_BACK, GL_FRONT or both
-    GLint polygon_mode;  // GL_FILL or GL_LINE, front and back alike
+    GLint program;
+    GLint vertex_array;
+    GLint blend_func[4];     // src RGB, dst RGB, src alpha, dst alpha
+    GLint blend_equation[2]; // RGB, alpha
+    GLboolean colour_mask[4];
+    GLfloat clear_colour[4];
+    GLint cull_face;    // GL_BACK, GL_FRONT or both
+    GLint polygon_mode; // GL_FILL or GL_LINE, front and back alike
     GLboolean depth;
     GLboolean blend;
     GLboolean cull;

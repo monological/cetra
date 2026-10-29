@@ -15,13 +15,15 @@
  * By kind:
  *   SEGMENT  p = a, b              f = half width
  *   ARC      p = a, b              f = half width, centre minus the chord's
- *                                      midpoint (x, y), radius
+ *                                      midpoint (x, y), radius; counter-
+ *                                      clockwise from a to b, an edit having
+ *                                      swapped the ends of a clockwise one
  *   CIRCLE   p = centre, radius,   f unused
  *              stroke
  *   BOX      p = centre, stroke    f = half size x, half size y, corner, angle
  *   EDGE     p = a, b              f unused: the outer half of a polygon edge's
- *                                    ramp, its polygon left of a to b when
- *                                    FLAG_INSIDE_LEFT is set
+ *                                    ramp, its polygon left of a to b, an edit
+ *                                    having swapped the ends where it was not
  *   GLYPH    p = the string's      f = its pen (x, y) in ems from the anchor,
  *              anchor, codepoint,      in the string's own frame; the em in
  *              font slot               units; the string's angle
@@ -36,8 +38,9 @@
 #include "../shaders/include/canvas_constants.glsl"
 #include "canvas.h"
 
-// The largest radius, stroke or size a record holds: past it the int32 fields
-// overflow and the float ones lose units.
+// The largest radius, stroke or size a record holds, and the widest a polygon
+// may be: past it the int32 fields overflow -- a fill keeps its triangle's far
+// outline points -- and the float ones lose units.
 #define CANVAS_LENGTH_MAX (INT64_C(1) << 30)
 
 typedef struct CanvasRecord {
@@ -53,9 +56,9 @@ static inline uint32_t canvas_record_head(uint32_t kind, uint32_t flags, uint16_
 }
 
 /*
- * A corner of a fill triangle, read by canvas_fill_vert.glsl from the layer's
- * fill buffer, three to a triangle:
- *   p     ivec2      this corner, an int32 offset from the tile's origin
+ * A fill triangle, one instance of canvas_fill_vert.glsl, which picks its
+ * corner by gl_VertexID:
+ *   p     ivec2 x 3  its corners, int32 offsets from the tile's origin
  *   near  ivec2 x 9  the outline points a pixel's inner ramp is measured
  *                    against, in the same frame: the three corners of the
  *                    triangle the polygon was cut into, then each one's
@@ -66,20 +69,15 @@ static inline uint32_t canvas_record_head(uint32_t kind, uint32_t flags, uint16_
  *                    band inside its outline to the triangle next to it.
  *   u     uvec4      kind FILL and the style, as a record's head; net; object;
  *                    tile
- * The three corners of a triangle carry the same near and u, and a piece
- * clipped from a triangle carries the whole triangle's near.
+ * A piece clipped from a triangle carries the whole triangle's near.
  */
-typedef struct CanvasFillVertex {
-    int32_t p[2];
+typedef struct CanvasFill {
+    int32_t p[6];
     int32_t near[18]; // corner 0, 1, 2, then corner 0's before and after, 1's, 2's
     uint32_t u[4];
-} CanvasFillVertex;
+} CanvasFill;
 
-_Static_assert(sizeof(CanvasFillVertex) == 96, "canvas_fill_vert.glsl reads a 96-byte corner");
-
-typedef struct CanvasTriangle {
-    CanvasFillVertex v[3];
-} CanvasTriangle;
+_Static_assert(sizeof(CanvasFill) == 112, "canvas_fill_vert.glsl reads a 112-byte triangle");
 
 // A record as an edit holds it: what tile it belongs to, with the tile's index
 // filled in when the edit is applied, and a glyph's font slot likewise.
@@ -96,7 +94,7 @@ typedef struct CanvasFillPiece {
     CanvasLayer* layer;
     int64_t tx, ty;
     int64_t min[2], max[2];
-    CanvasTriangle triangle;
+    CanvasFill fill;
 } CanvasFillPiece;
 
 typedef enum CanvasStepKind {

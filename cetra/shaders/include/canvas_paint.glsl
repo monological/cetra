@@ -9,6 +9,7 @@ uniform isamplerBuffer uTiles; // per tile: its origin less the view's centre, a
 uniform samplerBuffer uStyles; // a colour per style
 uniform samplerBuffer uTags;   // three texels per tag: colour, outline, (dim, hidden, raised)
 uniform int uTagCount;
+uniform int uPass;             // canvas_pass.glsl's
 uniform vec2 uFraction;        // the view's centre past its integer unit
 uniform float uPixelsPerUnit;
 uniform float uMirror;         // -1 to see the canvas from the other side
@@ -40,7 +41,7 @@ bool canvasColour(uvec4 u, out vec4 colour, out vec4 outline, out float raised) 
     bool hidden = false;
     raised = 0.0;
     vec4 netColour = vec4(0.0), objectColour = vec4(0.0), objectOutline = vec4(0.0);
-    if (u.y != 0u && int(u.y) < uTagCount) {
+    if (u.y != 0u && u.y < uint(uTagCount)) {
         netColour = canvasTagTexel(u.y, 0);
         outline = canvasTagTexel(u.y, 1);
         vec4 m = canvasTagTexel(u.y, 2);
@@ -48,7 +49,7 @@ bool canvasColour(uvec4 u, out vec4 colour, out vec4 outline, out float raised) 
         hidden = m.g > 0.5;
         raised = max(raised, m.b);
     }
-    if (u.z != 0u && int(u.z) < uTagCount) {
+    if (u.z != 0u && u.z < uint(uTagCount)) {
         objectColour = canvasTagTexel(u.z, 0);
         objectOutline = canvasTagTexel(u.z, 1);
         vec4 m = canvasTagTexel(u.z, 2);
@@ -64,4 +65,13 @@ bool canvasColour(uvec4 u, out vec4 colour, out vec4 outline, out float raised) 
         outline = objectOutline;
     colour.rgb *= 1.0 - dim;
     return !hidden;
+}
+
+// Whether an instance can paint anything in this pass (canvas_pass.glsl), so one that cannot is
+// dropped before it is rasterised: the raised pass draws raised shapes alone, the solid pass none
+// of them (a raised shape's solid pixels went in the raised pass), and the ring pass only shapes
+// with a ring.
+bool canvasInPass(float raised, float outline) {
+    return !(uPass == 1 && raised < 0.5) && !(uPass == 2 && raised > 0.5) &&
+           !(uPass == 4 && outline == 0.0);
 }
