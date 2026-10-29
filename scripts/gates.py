@@ -28517,6 +28517,218 @@ def _shapes_pointer_run(workdir, tag, script, frames):
     return _pointer_run(workdir, _bin("shapes"), f"canvas_{tag}", script, frames)
 
 
+def _canvas_run(workdir, tag, *args):
+    """apps/canvas headless at 400x300 points under --canvas-probe: its picture's path and its probe
+    lines keyed by (sheet, name), or None and the tail of its output when it failed."""
+    out = os.path.join(workdir, f"canvas_{tag}.ppm")
+    cmd = [_bin("canvas"), "-x", "-f", "2", "-W", "400", "-H", "300", "-S", out,
+           "--canvas-probe", *args]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0 or not os.path.exists(out):
+        return None, (r.stdout + r.stderr)[-400:]
+    probe = {}
+    for line in r.stdout.splitlines():
+        p = line.split()
+        if len(p) >= 3 and p[0] == "canvas":
+            probe[(p[1], p[2])] = p[3:]
+    return out, probe
+
+
+def _canvas_area(name, m):
+    """A shape of the areas sheet as (area, perimeter) in framebuffer pixels, from its measures."""
+    if name == "circle":
+        return math.pi * m["r"] ** 2, 2 * math.pi * m["r"]
+    if name == "ring":
+        return 2 * math.pi * m["r"] * m["s"], 4 * math.pi * m["r"]
+    if name == "rbox":
+        return (m["w"] * m["h"] - (4 - math.pi) * m["c"] ** 2,
+                2 * (m["w"] + m["h"]) - (8 - 2 * math.pi) * m["c"])
+    if name == "capsule":
+        return m["len"] * m["w"] + math.pi * (m["w"] / 2) ** 2, 2 * m["len"] + math.pi * m["w"]
+    if name == "arc":
+        return (m["sweep"] * m["r"] * m["w"] + math.pi * (m["w"] / 2) ** 2,
+                2 * m["sweep"] * m["r"] + math.pi * m["w"])
+    if name == "turned":
+        return m["w"] * m["h"], 2 * (m["w"] + m["h"])
+    if name == "outline":
+        # Its stroke centred on the edge: the outside offset rounds the corners by half the
+        # stroke, the inside stays square.
+        hs = m["s"] / 2
+        outer = m["w"] * m["h"] + 2 * (m["w"] + m["h"]) * hs + math.pi * hs * hs
+        inner = (m["w"] - m["s"]) * (m["h"] - m["s"])
+        return (outer - inner,
+                2 * (m["w"] + m["h"]) + 2 * math.pi * hs + 2 * (m["w"] + m["h"] - 2 * m["s"]))
+    if name == "bar":
+        return m["len"] * m["w"], 2 * (m["len"] + m["w"])
+    return None
+
+
+def run_canvas_gate(workdir):
+    """The 2D canvas (spec 14.0): its shapes measured against closed forms, and four twins,
+    each a picture that must equal another drawn a different way. Every sheet is white on black
+    in apps/canvas, so a pixel's red code over 255 is its coverage, and the app prints where it
+    put each shape (--canvas-probe) so nothing here restates its layout. The noise floor is 0 px:
+    two runs of one sheet are identical.
+
+      canvas-areas   each shape's coverage summed over its cell against its closed-form area --
+                     a circle, a ring, a rounded box, a capsule, a quarter arc, a box turned 45
+                     degrees, an outline and a flat-ended bar. The error grows with the edge and
+                     not the area, so it is bounded per pixel of perimeter: within 0.03. Sharp
+                     corners at 45 degrees sit at 0.02, from the method rather than the shader --
+                     every row of such an edge falls at the same phase of the pixel grid, and an
+                     exact distance sampled at pixel centres gives the same sum.
+      canvas-ramp    a box edge a known fraction f across a pixel: that pixel holds 1 - f to the
+                     8-bit store's rounding, the one before it 0 and the one after 1. Coverage is
+                     clamp(0.5 - d) with d the distance past the edge, so this is its shape.
+      canvas-thin    lines a tenth of a pixel wide, across and down, off the pixel grid: every
+                     column across the first and every row across the second sums to one pixel.
+                     A line is never drawn narrower than a pixel.
+      canvas-translation the areas sheet 2^40 units from the origin draws the sheet at it, 0 px:
+                     every position reaches the shader as an int32 offset from a tile and a
+                     tile's int32 offset from the view, so nothing is a float until it is a
+                     distance from the view.
+      canvas-long-segment a line 3.8e9 units long, cut into hundreds of pieces, seen 10 um across
+                     in the middle of a piece, against a short copy of it: within 5 codes. A
+                     piece ends up to 2^23 units from the view, exact as a float, and scaling it
+                     to pixels rounds it by about 0.02 px at this zoom, 80 px a micrometre. The
+                     line must be drawn, or two empty frames would agree.
+      canvas-mirror  the shapes sheet drawn mirrored against it drawn plain and flipped, to a
+                     code: mirroring is exact in the geometry, and the rasterizer interpolates a
+                     mirrored triangle's varyings in the other order, which rounds a handful of
+                     pixels a code apart (5 at 400x300, none at 960x600).
+      canvas-target  the shapes sheet drawn into the picture the CRT and an app's after-tonemap
+                     pass draw into, against it drawn into the window, 0 px. The app says which
+                     it drew into, or the two runs could be the same path.
+    """
+    failed = []
+
+    def note(name, ok):
+        if not ok:
+            failed.append(name)
+
+    # ---- areas
+    areas, probe = _canvas_run(workdir, "areas", "--sheet", "areas")
+    if not areas:
+        ok, detail = False, f"the app failed: {probe}"
+    else:
+        cov = _canvas_coverage(areas)
+        rows, worst = [], 0.0
+        for (sheet, name), tokens in sorted(probe.items()):
+            if sheet != "areas":
+                continue
+            x0, y0, x1, y1 = (int(v) for v in tokens[1:5])
+            m = {tokens[k]: float(tokens[k + 1]) for k in range(5, len(tokens), 2)}
+            area, perimeter = _canvas_area(name, m)
+            got = float(cov[y0:y1, x0:x1].sum())
+            per_edge = (got - area) / perimeter
+            worst = max(worst, abs(per_edge))
+            rows.append(f"{name} {got:.1f}/{area:.1f} ({per_edge:+.4f})")
+        ok = len(rows) == 8 and worst <= 0.03
+        detail = (f"{len(rows)} shapes (want 8), worst {worst:.4f} px of edge (want <= 0.03): "
+                  + ", ".join(rows))
+    print(f"  canvas-areas        {'PASS' if ok else 'FAIL'}  {detail}")
+    note("canvas-areas", ok)
+
+    # ---- ramp
+    path, probe = _canvas_run(workdir, "ramp", "--sheet", "ramp")
+    if not path:
+        ok, detail = False, f"the app failed: {probe}"
+    else:
+        cov = _canvas_coverage(path)
+        rows, ok = [], True
+        for (sheet, name), tokens in sorted(probe.items()):
+            if sheet != "ramp":
+                continue
+            col, y0, y1, want = int(tokens[1]), int(tokens[3]), int(tokens[4]), float(tokens[6])
+            before, at, after = cov[y0:y1, col - 1], cov[y0:y1, col], cov[y0:y1, col + 1]
+            good = (before.max() == 0.0 and after.min() == 1.0
+                    and np.abs(at * 255.0 - want * 255.0).max() <= 1.0)
+            ok = ok and good
+            rows.append(f"{name} {at.min():.3f}..{at.max():.3f} (want {want:.3f})")
+        ok = ok and len(rows) == 5
+        detail = f"{len(rows)} edges (want 5), the pixel each crosses: " + ", ".join(rows)
+    print(f"  canvas-ramp         {'PASS' if ok else 'FAIL'}  {detail}")
+    note("canvas-ramp", ok)
+
+    # ---- thin
+    path, probe = _canvas_run(workdir, "thin", "--sheet", "thin")
+    if not path or ("thin", "across") not in probe or ("thin", "down") not in probe:
+        ok, detail = False, f"the app failed or printed no lines: {probe}"
+    else:
+        cov = _canvas_coverage(path)
+        t = probe[("thin", "across")]
+        across = cov[int(t[4]):int(t[5]), int(t[1]):int(t[2])].sum(axis=0)
+        t = probe[("thin", "down")]
+        down = cov[int(t[1]):int(t[2]), int(t[4]):int(t[5])].sum(axis=1)
+        ok = (np.abs(across - 1.0).max() <= 2.0 / 255.0
+              and np.abs(down - 1.0).max() <= 2.0 / 255.0)
+        detail = (f"columns across {across.min():.4f}..{across.max():.4f}, rows down "
+                  f"{down.min():.4f}..{down.max():.4f} (want 1 within 2/255)")
+    print(f"  canvas-thin         {'PASS' if ok else 'FAIL'}  {detail}")
+    note("canvas-thin", ok)
+
+    # ---- translation
+    far, _ = _canvas_run(workdir, "areas_far", "--sheet", "areas", "--offset", str(1 << 40))
+    if not areas or not far:
+        ok, detail = False, "a run failed"
+    else:
+        ae, pae = compare(areas, far)
+        drawn = float(_canvas_coverage(areas).sum())
+        ok = ae == 0 and drawn > 1000.0
+        detail = f"{ae} px differ, peak {pae:.4f} (want 0), {drawn:.0f} px^2 drawn"
+    print(f"  canvas-translation  {'PASS' if ok else 'FAIL'}  {detail}")
+    note("canvas-translation", ok)
+
+    # ---- long segment
+    long_, _ = _canvas_run(workdir, "long", "--sheet", "long")
+    short, _ = _canvas_run(workdir, "long_short", "--sheet", "long-short")
+    if not long_ or not short:
+        ok, detail = False, "a run failed"
+    else:
+        ae, pae = compare(long_, short)
+        drawn = float(_canvas_coverage(long_).mean())
+        ok = pae <= 5.0 / 255.0 and drawn > 0.1
+        detail = (f"{ae} px differ, peak {pae * 255:.0f} codes (want <= 5), the line covers "
+                  f"{drawn:.1%} of the frame")
+    print(f"  canvas-long-segment {'PASS' if ok else 'FAIL'}  {detail}")
+    note("canvas-long-segment", ok)
+
+    # ---- mirror
+    plain, _ = _canvas_run(workdir, "shapes", "--sheet", "shapes")
+    mirrored, _ = _canvas_run(workdir, "shapes_mirror", "--sheet", "shapes", "--mirror")
+    if not plain or not mirrored:
+        ok, detail = False, "a run failed"
+    else:
+        a, b = _ppm_array(plain), _ppm_array(mirrored)
+        differ = int(np.any(a[:, ::-1] != b, axis=2).sum())
+        peak = float(np.abs(a[:, ::-1] - b).max())
+        asymmetric = int(np.any(a[:, ::-1] != a, axis=2).sum())
+        ok = peak <= 1.0 and asymmetric > 0
+        detail = (f"{differ} px differ from the plain sheet flipped, peak {peak:.0f} code(s) "
+                  f"(want <= 1); the sheet is not its own mirror image ({asymmetric} px)")
+    print(f"  canvas-mirror       {'PASS' if ok else 'FAIL'}  {detail}")
+    note("canvas-mirror", ok)
+
+    # ---- target
+    picture, probe = _canvas_run(workdir, "shapes_picture", "--sheet", "shapes", "--picture")
+    if not plain or not picture:
+        ok, detail = False, "a run failed"
+    else:
+        target = (probe.get(("frame", "target")) or ["?"])[0]
+        ae, pae = compare(plain, picture)
+        ok = ae == 0 and target == "picture"
+        detail = f"{ae} px differ, peak {pae:.4f} (want 0), drawn into the {target} (want picture)"
+    print(f"  canvas-target       {'PASS' if ok else 'FAIL'}  {detail}")
+    note("canvas-target", ok)
+
+    return failed
+
+
+def _canvas_coverage(path):
+    """A white-on-black canvas picture as an (h, w) array of coverage, 0..1."""
+    return _ppm_array(path)[:, :, 0] / 255.0
+
+
 def run_camera_gate(workdir):
     """The camera, asserted through a SCRIPTED POINTER (spec 12.19).
 
@@ -33028,6 +33240,8 @@ GATE_GROUPS = [
      run_ragdoll_gate),
     ("camera", "the camera through a scripted pointer (drag, pan, release; spec 12.19):",
      run_camera_gate),
+    ("canvas", "the 2D canvas (areas, ramp, thin lines, four twins; spec 14.0):",
+     run_canvas_gate),
     ("gait", "a walker's gait (stride, footfalls, the eye's lag and bob, a climb; spec 13.47):",
      run_gait_gate),
     ("character", "a character's capsule changed while it stands (crouch, stand, feet; spec 13.48):",

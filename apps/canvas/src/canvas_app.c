@@ -4,6 +4,11 @@
  *
  * A sheet is laid out in millimetres and drawn in nanometres, the units pcb
  * gives the canvas, so every length here goes through MM().
+ *
+ * Under --canvas-probe a sheet also prints where each of its shapes landed and
+ * how big it is, in framebuffer pixels with rows from the top, so the `canvas`
+ * gate group can measure the picture against closed forms without restating
+ * the sheet's layout.
  */
 
 #include <math.h>
@@ -17,6 +22,8 @@
 #include "cetra/camera.h"
 #include "cetra/canvas.h"
 #include "cetra/engine.h"
+#include "cetra/postfx.h"
+#include "cetra/program.h"
 #include "cetra/scene.h"
 
 #define MM(v) ((int64_t)llround((v) * 1e6))
@@ -25,11 +32,49 @@ static Canvas* g_canvas;
 static CanvasView g_view;
 static bool g_panning;
 static float g_last_x, g_last_y; // the cursor, window points
+static bool g_probe_target;      // say once which framebuffer the overlay drew into
+
+// What a sheet is built with.
+typedef struct SheetContext {
+    Canvas* canvas;
+    CanvasEdit* edit;
+    int64_t offset;         // added to every coordinate
+    const CanvasView* view; // the view it will be drawn in
+    double fb_scale;        // framebuffer pixels per window point
+    bool probe;             // print where its shapes land
+} SheetContext;
+
+// Framebuffer pixels per unit in the sheet's view.
+static double ppu_px(const SheetContext* ctx) {
+    return ctx->view->points_per_unit * ctx->fb_scale;
+}
+
+// A unit's place in the framebuffer, rows from the top.
+static void fb_of(const SheetContext* ctx, CanvasPoint p, double* x, double* y) {
+    float px, py;
+    canvas_view_point_of(ctx->view, p, &px, &py);
+    *x = px * ctx->fb_scale;
+    *y = py * ctx->fb_scale;
+}
+
+// Prints a cell's box, `half` units each way of its centre, then the caller's
+// measures; the line is ended by the caller.
+static void probe_cell(const SheetContext* ctx, const char* sheet, const char* name,
+                       CanvasPoint centre, int64_t half) {
+    double x0, y0, x1, y1;
+    fb_of(ctx, (CanvasPoint){centre.x - half, centre.y + half}, &x0, &y0);
+    fb_of(ctx, (CanvasPoint){centre.x + half, centre.y - half}, &x1, &y1);
+    printf("canvas %s %s box %ld %ld %ld %ld", sheet, name, lround(x0), lround(y0), lround(x1),
+           lround(y1));
+}
 
 /*
  * The shapes sheet: one row of each kind, at sizes from a hair to a pad.
  */
-static void sheet_shapes(Canvas* canvas, CanvasEdit* edit, int64_t offset) {
+static void sheet_shapes(SheetContext* ctx) {
+    Canvas* canvas = ctx->canvas;
+    CanvasEdit* edit = ctx->edit;
+    const int64_t offset = ctx->offset;
     CanvasLayer* copper = canvas_add_layer(canvas, "copper");
     CanvasLayer* silk = canvas_add_layer(canvas, "silk");
     const uint16_t orange = canvas_add_style(canvas, 0xc8873affu);
@@ -151,15 +196,193 @@ static void sheet_shapes(Canvas* canvas, CanvasEdit* edit, int64_t offset) {
 #undef AT
 }
 
+// White on a black background, so a pixel's red code over 255 is its coverage.
+static CanvasPaint white_paint(Canvas* canvas) {
+    return (CanvasPaint){.layer = canvas_add_layer(canvas, "white"),
+                         .style = canvas_add_style(canvas, 0xffffffffu)};
+}
+
+/*
+ * The areas sheet: one shape a cell, each with an area in closed form.
+ */
+static void sheet_areas(SheetContext* ctx) {
+    CanvasEdit* edit = ctx->edit;
+    const CanvasPaint paint = white_paint(ctx->canvas);
+    const double s = ppu_px(ctx);
+    const int64_t half = MM(0.9);
+#define CELL(i, j) \
+    ((CanvasPoint){MM(-3.0 + 2.0 * (i)) + ctx->offset, MM(1.5 - 3.0 * (j)) + ctx->offset})
+#define PROBE(name, centre, fmt, ...)                     \
+    do {                                                  \
+        if (ctx->probe) {                                 \
+            probe_cell(ctx, "areas", name, centre, half); \
+            printf(" " fmt "\n", __VA_ARGS__);            \
+        }                                                 \
+    } while (0)
+
+    CanvasPoint c = CELL(0, 0);
+    canvas_edit_circle(edit, &(CanvasCircle){.paint = paint, .centre = c, .radius = MM(0.5)});
+    PROBE("circle", c, "r %.6f", MM(0.5) * s);
+
+    c = CELL(1, 0);
+    canvas_edit_circle(
+        edit, &(CanvasCircle){.paint = paint, .centre = c, .radius = MM(0.5), .stroke = MM(0.1)});
+    PROBE("ring", c, "r %.6f s %.6f", MM(0.5) * s, MM(0.1) * s);
+
+    c = CELL(2, 0);
+    canvas_edit_box(
+        edit,
+        &(CanvasBox){
+            .paint = paint, .centre = c, .size_x = MM(1.2), .size_y = MM(0.8), .corner = MM(0.2)});
+    PROBE("rbox", c, "w %.6f h %.6f c %.6f", MM(1.2) * s, MM(0.8) * s, MM(0.2) * s);
+
+    // A capsule turned 30 degrees: its ends rounded onto units, its length measured from them.
+    c = CELL(3, 0);
+    const CanvasPoint ca = {c.x - MM(0.5 * 0.8660254037844387), c.y - MM(0.5 * 0.5)};
+    const CanvasPoint cb = {c.x + MM(0.5 * 0.8660254037844387), c.y + MM(0.5 * 0.5)};
+    canvas_edit_segment(edit, &(CanvasSegment){.paint = paint, .a = ca, .b = cb, .width = MM(0.2)});
+    PROBE("capsule", c, "len %.6f w %.6f", hypot((double)(cb.x - ca.x), (double)(cb.y - ca.y)) * s,
+          MM(0.2) * s);
+
+    // A quarter of a circle about the cell's centre, counter-clockwise from east to north.
+    c = CELL(0, 1);
+    canvas_edit_arc(edit, &(CanvasArc){.paint = paint,
+                                       .a = {c.x + MM(0.5), c.y},
+                                       .b = {c.x, c.y + MM(0.5)},
+                                       .radius = MM(0.5),
+                                       .width = MM(0.1)});
+    PROBE("arc", c, "r %.6f w %.6f sweep %.9f", MM(0.5) * s, MM(0.1) * s, 1.5707963267948966);
+
+    c = CELL(1, 1);
+    canvas_edit_box(edit, &(CanvasBox){.paint = paint,
+                                       .centre = c,
+                                       .size_x = MM(1.0),
+                                       .size_y = MM(0.3),
+                                       .angle = 0.7853981633974483});
+    PROBE("turned", c, "w %.6f h %.6f", MM(1.0) * s, MM(0.3) * s);
+
+    c = CELL(2, 1);
+    canvas_edit_box(
+        edit,
+        &(CanvasBox){
+            .paint = paint, .centre = c, .size_x = MM(1.0), .size_y = MM(0.6), .stroke = MM(0.1)});
+    PROBE("outline", c, "w %.6f h %.6f s %.6f", MM(1.0) * s, MM(0.6) * s, MM(0.1) * s);
+
+    // A flat-ended bar turned -20 degrees.
+    c = CELL(3, 1);
+    const CanvasPoint ba = {c.x - MM(0.5 * 0.9396926207859084), c.y + MM(0.5 * 0.3420201433256687)};
+    const CanvasPoint bb = {c.x + MM(0.5 * 0.9396926207859084), c.y - MM(0.5 * 0.3420201433256687)};
+    canvas_edit_segment(
+        edit,
+        &(CanvasSegment){.paint = paint, .a = ba, .b = bb, .width = MM(0.2), .flat_ends = true});
+    PROBE("bar", c, "len %.6f w %.6f", hypot((double)(bb.x - ba.x), (double)(bb.y - ba.y)) * s,
+          MM(0.2) * s);
+#undef PROBE
+#undef CELL
+}
+
+/*
+ * The ramp sheet: boxes whose left edge falls a known fraction across a pixel.
+ * The pixel the edge crosses holds 1 - f, the one before it 0 and the one
+ * after 1: coverage is clamp(0.5 - d) with d the distance past the edge.
+ */
+static void sheet_ramp(SheetContext* ctx) {
+    const CanvasPaint paint = white_paint(ctx->canvas);
+    const double s = ppu_px(ctx);
+    const double fb_w = ctx->view->width * ctx->fb_scale;
+    const double fb_h = ctx->view->height * ctx->fb_scale;
+    const double fractions[] = {0.1, 0.3, 0.5, 0.7, 0.9};
+    for (int i = 0; i < 5; i++) {
+        // The edge at pixel column k plus f, from the view's centre; with this
+        // view a pixel is a whole number of units, so the edge lands exactly.
+        const int k = (int)(fb_w * 0.15) + i * (int)(fb_w * 0.16);
+        const int64_t edge = llround((k + fractions[i] - fb_w * 0.5) / s);
+        const int64_t top = llround((fb_h * 0.25) / s), bottom = -top;
+        canvas_edit_box(ctx->edit,
+                        &(CanvasBox){.paint = paint,
+                                     .centre = {edge + MM(0.25) + ctx->offset, ctx->offset},
+                                     .size_x = MM(0.5),
+                                     .size_y = top - bottom});
+        if (ctx->probe)
+            printf("canvas ramp f%.1f col %d rows %ld %ld want %.6f\n", fractions[i], k,
+                   lround(fb_h * 0.5 - fb_h * 0.2), lround(fb_h * 0.5 + fb_h * 0.2),
+                   1.0 - fractions[i]);
+    }
+}
+
+/*
+ * The thin sheet: lines a tenth of a pixel wide, one across and one down, each
+ * off the pixel grid. Widened to a pixel, each column across the first (and
+ * each row across the second) sums to exactly one pixel of coverage.
+ */
+static void sheet_thin(SheetContext* ctx) {
+    const CanvasPaint paint = white_paint(ctx->canvas);
+    const double s = ppu_px(ctx);
+    const int64_t o = ctx->offset;
+    const int64_t width = llround(0.1 / s);
+    const int64_t across = llround(0.37 / s), down = llround(-0.63 / s);
+    canvas_edit_segment(ctx->edit, &(CanvasSegment){.paint = paint,
+                                                    .a = {o - MM(3.0), o + across},
+                                                    .b = {o + MM(3.0), o + across},
+                                                    .width = width});
+    canvas_edit_segment(ctx->edit, &(CanvasSegment){.paint = paint,
+                                                    .a = {o + down, o - MM(2.0)},
+                                                    .b = {o + down, o + MM(2.0)},
+                                                    .width = width});
+    if (ctx->probe) {
+        // Away from the ends and from where the two cross.
+        double x0, y0, x1, y1;
+        fb_of(ctx, (CanvasPoint){o + MM(1.0), o + across}, &x0, &y0);
+        fb_of(ctx, (CanvasPoint){o + MM(2.5), o + across}, &x1, &y1);
+        printf("canvas thin across cols %ld %ld rows %ld %ld\n", lround(x0), lround(x1),
+               lround(y0) - 4, lround(y0) + 4);
+        fb_of(ctx, (CanvasPoint){o + down, o + MM(1.5)}, &x0, &y0);
+        fb_of(ctx, (CanvasPoint){o + down, o + MM(0.5)}, &x1, &y1);
+        printf("canvas thin down rows %ld %ld cols %ld %ld\n", lround(y0), lround(y1),
+               lround(x0) - 4, lround(x0) + 4);
+    }
+}
+
+/*
+ * One line at a slope of 1 in 7, through the origin and through the view's
+ * centre at (7, 1) * 2^18: long, reaching about 1.9e9 units each way from the
+ * origin and so cut into hundreds of pieces, or short, reaching just past the
+ * view either side of its centre. Seen deep in the middle of one of the long
+ * line's pieces the two should draw the same pixels.
+ */
+static void line_sheet(SheetContext* ctx, int64_t centre, int64_t k) {
+    const CanvasPaint paint = white_paint(ctx->canvas);
+    const int64_t x = ctx->offset + 7 * centre, y = ctx->offset + centre;
+    canvas_edit_segment(ctx->edit, &(CanvasSegment){.paint = paint,
+                                                    .a = {x - 7 * k, y - k},
+                                                    .b = {x + 7 * k, y + k},
+                                                    .width = MM(0.002)});
+}
+
+static void sheet_long(SheetContext* ctx) {
+    line_sheet(ctx, 0, (int64_t)1 << 28);
+}
+
+static void sheet_long_short(SheetContext* ctx) {
+    line_sheet(ctx, (int64_t)1 << 18, (int64_t)1 << 14);
+}
+
 typedef struct Sheet {
     const char* name;
-    void (*build)(Canvas* canvas, CanvasEdit* edit, int64_t offset);
+    void (*build)(SheetContext* ctx);
     double centre_mm[2]; // where a view of it starts
     double width_mm;     // how much of it the window's width shows
+    uint32_t background;
 } Sheet;
 
 static const Sheet SHEETS[] = {
-    {"shapes", sheet_shapes, {-2.0, 0.5}, 24.0},
+    {"shapes", sheet_shapes, {-2.0, 0.5}, 24.0, 0x14181effu},
+    {"areas", sheet_areas, {0.0, 0.0}, 8.0, 0x000000ffu},
+    {"ramp", sheet_ramp, {0.0, 0.0}, 8.0, 0x000000ffu},
+    {"thin", sheet_thin, {0.0, 0.0}, 8.0, 0x000000ffu},
+    // A view 10 micrometres across, centred on the line half a piece from a cut.
+    {"long", sheet_long, {1.835008, 0.262144}, 0.01, 0x000000ffu},
+    {"long-short", sheet_long_short, {1.835008, 0.262144}, 0.01, 0x000000ffu},
 };
 
 static const Sheet* find_sheet(const char* name) {
@@ -177,6 +400,12 @@ static void draw_view(Engine* engine, void* user) {
     (void)user;
     g_view.width = (float)engine->win_width;
     g_view.height = (float)engine->win_height;
+    if (g_probe_target) {
+        printf("canvas frame target %s\n",
+               postfx_picture_fbo(engine->postfx) ? "picture" : "window");
+        fflush(stdout);
+        g_probe_target = false;
+    }
     canvas_draw(g_canvas, &g_view);
 }
 
@@ -210,12 +439,23 @@ static void usage(const char* argv0) {
     fprintf(stderr,
             "usage: %s [-x] [-f frames] [-S out.ppm] [-W points] [-H points]\n"
             "          [--sheet NAME] [--view X,Y,WIDTH (mm)] [--offset UNITS] [--mirror]\n"
-            "          [--tile-shift N]\n",
+            "          [--tile-shift N] [--canvas-probe] [--picture]\n",
             argv0);
 }
 
+// An after-tonemap pass that changes nothing, so the frame is drawn into the
+// picture rather than the window, as a CRT or a grade puts it.
+static const char* IDENTITY_PASS = "#version 330 core\n"
+                                   "in vec2 TexCoords;\n"
+                                   "out vec4 FragColor;\n"
+                                   "uniform sampler2D sceneColor;\n"
+                                   "void main() {\n"
+                                   "    FragColor = vec4(texelFetch(sceneColor, "
+                                   "ivec2(gl_FragCoord.xy), 0).rgb, 1.0);\n"
+                                   "}\n";
+
 int main(int argc, char** argv) {
-    bool headless = false, mirror = false;
+    bool headless = false, mirror = false, probe = false, picture = false;
     int frames = 0, width = 960, height = 600, tile_shift = 0;
     const char* screenshot = NULL;
     const char* sheet_name = "shapes";
@@ -246,6 +486,10 @@ int main(int argc, char** argv) {
             mirror = true;
         } else if (strcmp(argv[i], "--tile-shift") == 0 && more) {
             tile_shift = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--canvas-probe") == 0) {
+            probe = true;
+        } else if (strcmp(argv[i], "--picture") == 0) {
+            picture = true;
         } else {
             usage(argv[0]);
             return 2;
@@ -270,16 +514,19 @@ int main(int argc, char** argv) {
     engine_set_camera(engine, create_camera(&(CameraDesc){.position = {0.0f, 0.0f, 1.0f}}));
     engine_set_2d_preset(engine, scene);
     glm_vec3_zero(engine->clear_color);
+    if (picture) {
+        ShaderProgram* pass = create_post_pass_program("canvas_identity", IDENTITY_PASS);
+        if (pass) {
+            engine_add_program(engine, pass);
+            postfx_add_pass(engine->postfx, POSTFX_AT_AFTER_TONEMAP, pass);
+        }
+    }
 
     g_canvas = create_canvas(engine, &(CanvasDesc){.tile_shift = tile_shift});
     if (!g_canvas) {
         free_engine(engine);
         return 1;
     }
-    CanvasEdit* edit = create_canvas_edit(g_canvas);
-    sheet->build(g_canvas, edit, (int64_t)offset);
-    canvas_apply(g_canvas, edit);
-    free_canvas_edit(edit);
 
     const double cx = isnan(view_x) ? sheet->centre_mm[0] : view_x;
     const double cy = isnan(view_y) ? sheet->centre_mm[1] : view_y;
@@ -288,12 +535,24 @@ int main(int argc, char** argv) {
                           .height = (float)height,
                           .points_per_unit = (double)width / (cw * 1e6),
                           .mirror_x = mirror,
-                          .background = 0x14181eff};
+                          .background = sheet->background};
     // The centre in whole units plus its fraction, from millimetres and the offset.
     const double ux = cx * 1e6, uy = cy * 1e6;
     g_view.centre = (CanvasPoint){(int64_t)floor(ux) + offset, (int64_t)floor(uy) + offset};
     g_view.fraction[0] = ux - floor(ux);
     g_view.fraction[1] = uy - floor(uy);
+
+    SheetContext ctx = {.canvas = g_canvas,
+                        .edit = create_canvas_edit(g_canvas),
+                        .offset = (int64_t)offset,
+                        .view = &g_view,
+                        .fb_scale = (double)engine->fb_width / (double)engine->win_width,
+                        .probe = probe};
+    sheet->build(&ctx);
+    canvas_apply(g_canvas, ctx.edit);
+    free_canvas_edit(ctx.edit);
+    fflush(stdout);
+    g_probe_target = probe;
 
     engine_add_overlay(engine, draw_view, NULL, 0);
     engine_set_cursor_position_callback(engine, on_cursor);
