@@ -319,6 +319,10 @@ ShaderProgram* create_ui_program();
 // and is written against the uniform contract ui_frag.glsl declares.
 ShaderProgram* create_ui_draw_program(const char* name, const char* frag_source);
 
+// The 2D canvas's shapes, and a view of it into the frame (spec 14.0).
+ShaderProgram* create_canvas_program();
+ShaderProgram* create_canvas_composite_program();
+
 // Bone Visualization Program
 ShaderProgram* create_bone_program();
 
