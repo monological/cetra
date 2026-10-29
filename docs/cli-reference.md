@@ -18,7 +18,7 @@ reason is recorded beside the flag rather than in whichever spec introduced it.
 - [apps/silent](#appssilent) — the fog-street kitchen: the title, saves and pause menu, framing,
   the look's A/B switches, and its overcast day
 - [The other apps](#the-other-apps-and-the-aa-mode-each-one-chose) — gametest, spores,
-  shapes, pcb, and why splash is not in any of this
+  shapes, pcb, why splash is not in any of this, and the 2D canvas's own app
 
 ---
 
@@ -1781,3 +1781,29 @@ It never calls `engine_run` — it clears and swaps the DEFAULT framebuffer in i
 SDF text straight to it, so `engine->framebuffer` is built and never bound. Its anti-aliasing is the
 GLFW window hint, no app-side sample count reaches it, and the engine's screenshot path lives inside
 the loop it does not use.
+
+**`apps/canvas`** (spec 14.0) is the 2D canvas's own app, and takes no part in the AA question
+either: the canvas draws after tone mapping into a single-sample target of its own, with every edge
+antialiased by its exact distance, and leaves the window's multisampling switched off while it does.
+It takes the capture set `-x`, `-f`, `-S`, `-W` and `-H`, and:
+- `--sheet NAME` picks what is drawn: `shapes` (the default), `areas`, `polygons`, `ramp`, `thin`,
+  `long`, `long-short`, `glyphs`, `tags`, `overlap`, `symbol` or `board`. Each is laid out in
+  millimetres and drawn in nanometres, pcb's units.
+- `--view X,Y,WIDTH` centres the view on (X, Y) mm and shows WIDTH mm across it, in place of the
+  sheet's own framing. `--offset UNITS` moves the whole sheet, and the view with it, that many units
+  from the origin: `--offset 1099511627776` (2^40) is what `canvas-translation` draws at.
+- `--mirror` draws the view mirrored, as a board seen from below. `--tile-shift N` makes the canvas
+  with tiles of 2^N units, 22 by default; 16 cuts nearly every shape at a tile edge.
+- `--split` draws two views side by side; on the board the second is the underside, mirrored,
+  showing the plane, the bottom copper and the outline. `--only-view 0|1` draws one of the two
+  alone, for the twin.
+- `--ui` puts a panel of the game UI over the canvas, at `UI_OVERLAY_ORDER`. `--picture` adds an
+  after-tonemap pass that changes nothing, so the overlays draw into PostFX's picture rather than
+  the window.
+- `--edit-thread` fills the board's edit on a thread of its own.
+- `--canvas-probe` prints where each shape of a sheet landed and its measures, in framebuffer pixels
+  with rows from the top; on the board it also runs a script, a step a frame, printing what each
+  frame uploaded. `--budget` prints each frame's canvas draws in milliseconds, timed between two
+  `glFinish` calls. Both are what the `canvas` gate group reads.
+
+In a window a drag pans and the wheel zooms the view under the cursor.
