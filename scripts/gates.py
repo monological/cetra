@@ -28635,6 +28635,10 @@ def run_canvas_gate(workdir):
                      edges at its triangle's corners, not its triangle's own: an ear of the 64-gon
                      is under half a pixel thick, and asking only it left most of the inner ramp
                      to the triangle beside it, at 0.047 px of outline over.
+      canvas-refused-whole the polygons sheet with tiles of 4096 units, where some polygons'
+                     triangles cross more tiles than an edit splits a shape into and are refused:
+                     every polygon is drawn whole or not at all. A refused polygon used to keep
+                     the triangles added before the refused one and its whole outline.
       canvas-glyph-edge five characters at a 100 px em -- a B, a g, an @, a W and an e -- each
                      summed against stb_truetype's own exact-area rasterizer at the same em:
                      each within 0.6% and the five's mean within 0.3%. stb TRUNCATES each
@@ -28851,6 +28855,30 @@ def run_canvas_gate(workdir):
                   f"with 65 um tiles: " + ", ".join(rows))
     print(f"  canvas-polygon-areas {'PASS' if ok else 'FAIL'}  {detail}")
     note("canvas-polygon-areas", ok)
+
+    whole, probe = _canvas_run(workdir, "polygons_refused", "--sheet", "polygons",
+                               "--tile-shift", "12")
+    cells = {name: tokens for (sheet, name), tokens in probe.items() if sheet == "polygons"}
+    if not whole or len(cells) != 6:
+        ok, detail = False, f"the app failed or printed {len(cells)} polygons (want 6)"
+    else:
+        cov = _canvas_coverage(whole)
+        drawn, refused, partial = [], [], []
+        for name, tokens in sorted(cells.items()):
+            (x0, y0, x1, y1), m = _canvas_cell(tokens)
+            got = float(cov[y0:y1, x0:x1].sum())
+            if got == 0.0:
+                refused.append(name)
+            elif abs(got - m["area"]) <= 0.01 * m["perimeter"]:
+                drawn.append(name)
+            else:
+                partial.append(f"{name} {got:.0f}/{m['area']:.0f}")
+        ok = not partial and drawn and refused
+        detail = (f"drawn whole: {', '.join(drawn) or 'none'}; refused whole: "
+                  f"{', '.join(refused) or 'none'}; part drawn: {', '.join(partial) or 'none'} "
+                  f"(want none, and at least one of each other)")
+    print(f"  canvas-refused-whole {'PASS' if ok else 'FAIL'}  {detail}")
+    note("canvas-refused-whole", ok)
 
     # ---- text
     glyphs, probe = _canvas_run(workdir, "glyphs", "--sheet", "glyphs")
