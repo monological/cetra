@@ -1130,7 +1130,9 @@ static void* board_thread(void* edit) {
  * waits for it rather than drawing, and the update hook applies it on the frame
  * its end wakes.
  */
-enum { BOARD_LATE_MS = 50 };
+// Past the first tenth of a second, in which a hidden window is sent something that wakes a
+// waiting loop: a board ready inside it was drawn whether or not its thread woke the loop.
+enum { BOARD_LATE_MS = 300 };
 static CanvasEdit* g_late_edit;
 static atomic_bool g_late_ready;
 static cetra_thread_t g_late_thread;
@@ -1355,10 +1357,11 @@ enum { IDLE_WAKES_MAX = 8 };
 static double g_wakes[IDLE_WAKES_MAX];
 static int g_wake_count, g_wake_next;
 static bool g_idle_say;
-static const char* g_idle_load;  // --idle-load: a texture asked for on the first frame
+static const char* g_idle_load;  // --idle-load: a texture asked for once the timed wakes are spent
 static TexturePool* g_idle_pool; //   the pool it goes into
-static bool g_gui_click;         // --gui-click: a click handed to the debug GUI on the first frame
-static UISystem* g_ui_enter;     // --ui-enter: the UI, given an input pass of nothing each frame
+static bool g_idle_load_asked;
+static bool g_gui_click;     // --gui-click: a click handed to the debug GUI on the first frame
+static UISystem* g_ui_enter; // --ui-enter: the UI, given an input pass of nothing each frame
 
 static void on_idle_loaded(Texture* tex, void* user) {
     (void)user;
@@ -1371,17 +1374,21 @@ static void on_update(Engine* engine, float dt) {
     board_late_apply();
     if (g_idle_say)
         printf("canvas idle frame %zu delta %.6f\n", engine->total_frames + 1, engine->delta_time);
+    // On the first frame with no timed wake left to ask for. After a wake, the run is past what a
+    // window's first moments send it, any of which could wake the loop in the load's place.
+    if (g_idle_load && !g_idle_load_asked && g_wake_next == g_wake_count) {
+        engine_load_texture(engine, g_idle_pool, g_idle_load, texture_desc(true), on_idle_loaded,
+                            NULL);
+        g_idle_load_asked = true;
+    }
     if (g_wake_next < g_wake_count)
         engine_request_frame_after(engine, g_wakes[g_wake_next++]);
     // The input pass an app owes its UI, with no input: it is what settles the focused button's
     // state, which its ease then follows.
     if (g_ui_enter)
         ui_update(g_ui_enter, &(UIInput){0}, (float)engine->win_width, (float)engine->win_height);
-    // Both on the first frame, after it has begun: what a later frame does with them is idle
-    // mode's to arrange.
-    if (engine->total_frames == 0 && g_idle_load)
-        engine_load_texture(engine, g_idle_pool, g_idle_load, texture_desc(true), on_idle_loaded,
-                            NULL);
+    // On the first frame, after it has begun: what a later frame does with it is idle mode's to
+    // arrange.
     if (engine->total_frames == 0 && g_gui_click) {
         // Queued as GLFW's callbacks queue them, all three in one batch: ImGui takes them a frame
         // at a time.
