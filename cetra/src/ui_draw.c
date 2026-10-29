@@ -401,7 +401,7 @@ float ui_line_height(const Font* font, float size, float line_spacing) {
 // whole string's: alignment is per line, and positioning every line by the
 // longest one's width left each shorter line aligned to that line's edge
 // instead of to the rect it was drawn into.
-static float _line_width(Font* font, float size, float tracking, const unsigned char* p) {
+static float _line_width(const Font* font, float size, float tracking, const unsigned char* p) {
     const float scale = size / font->base_size;
     float w = 0.0f;
     int prev = 0;
@@ -422,7 +422,7 @@ static float _line_width(Font* font, float size, float tracking, const unsigned 
 // of the copies had already drifted -- charging a kerning pair across a glyph
 // the atlas had refused -- so the rule now exists once and every measurement
 // and the draw all reach it.
-float ui_text_width(Font* font, float size, float tracking, const char* text) {
+float ui_text_width(const Font* font, float size, float tracking, const char* text) {
     if (!font || !text || font->base_size <= 0.0f)
         return 0.0f;
     float best = 0.0f;
@@ -438,7 +438,7 @@ float ui_text_width(Font* font, float size, float tracking, const char* text) {
     return best;
 }
 
-size_t ui_text_wrap_point(Font* font, float size, float tracking, const char* text,
+size_t ui_text_wrap_point(const Font* font, float size, float tracking, const char* text,
                           float max_width) {
     if (!font || !text || font->base_size <= 0.0f)
         return text ? strlen(text) : 0;

@@ -84,12 +84,20 @@ static void generate_glyph_atlas(Font* font, const char* charset) {
     font->ascent = ascent_i * scale;
     font->descent = descent_i * scale;
     font->line_height = (ascent_i - descent_i + line_gap) * scale;
+    font->em_size = scale / stbtt_ScaleForMappingEmToPixels(info, 1.0f);
 
     // Start with 1024 to avoid resize issues with large SDF glyphs
     int atlas_size = 1024;
     int padding = font->is_sdf ? (int)(font->sdf_spread + 1) : 2;
     int on_edge_value = 180;
     float pixel_dist_scale = font->is_sdf ? (float)on_edge_value / font->sdf_spread : 0;
+    if (font->is_sdf) {
+        // stb truncates each texel to its byte, so a texel holds half a code
+        // less than its distance on average and the outline reads at half a
+        // code under on_edge_value: 0.022 of a pixel inside it otherwise.
+        font->sdf_edge = ((float)on_edge_value - 0.5f) / 255.0f;
+        font->sdf_falloff = pixel_dist_scale / 255.0f;
+    }
 
     // Allocate atlas
     unsigned char* atlas_data = calloc(atlas_size * atlas_size, 1);
@@ -291,7 +299,6 @@ Font* load_font(FontPool* pool, const char* filepath, float base_size, bool use_
     font->base_size = base_size;
     font->is_sdf = use_sdf;
     font->sdf_spread = use_sdf ? 8.0f : 0.0f;
-    font->sdf_scale = 1.0f;
     font->ref_count = 1;
 
     // Generate atlas
@@ -332,13 +339,25 @@ void font_release(Font* font) {
         font->ref_count--;
 }
 
-GlyphInfo* font_get_glyph(Font* font, int codepoint) {
+GlyphInfo* font_get_glyph(const Font* font, int codepoint) {
     if (!font)
         return NULL;
 
     GlyphInfo* glyph;
     HASH_FIND_INT(font->glyph_cache, &codepoint, glyph);
     return glyph;
+}
+
+float font_advance(const Font* font, int codepoint) {
+    const GlyphInfo* glyph = font_get_glyph(font, codepoint);
+    if (glyph)
+        return glyph->advance_x;
+    if (!font || !font->stb_font_info)
+        return 0.0f;
+    const stbtt_fontinfo* info = (const stbtt_fontinfo*)font->stb_font_info;
+    int advance, left_bearing;
+    stbtt_GetCodepointHMetrics(info, codepoint, &advance, &left_bearing);
+    return (float)advance * stbtt_ScaleForPixelHeight(info, font->base_size);
 }
 
 // --- TextMesh ---
@@ -467,7 +486,7 @@ void text_mesh_rebuild(TextMesh* mesh) {
     if (!mesh || !mesh->font || !mesh->text)
         return;
 
-    Font* font = mesh->font;
+    const Font* font = mesh->font;
     float scale = mesh->font_size / font->base_size;
 
     size_t char_count = mesh->text_length;
@@ -616,7 +635,7 @@ float font_kern_advance(const Font* font, int prev_codepoint, int codepoint) {
     return (float)kern * stbtt_ScaleForPixelHeight(info, font->base_size);
 }
 
-float text_measure_width(Font* font, const char* text, float size) {
+float text_measure_width(const Font* font, const char* text, float size) {
     if (!font || !text)
         return 0.0f;
 
@@ -641,8 +660,8 @@ float text_measure_width(Font* font, const char* text, float size) {
     return width > max_width ? width : max_width;
 }
 
-void text_measure_bounds(Font* font, const char* text, float size, float* out_x0, float* out_y0,
-                         float* out_x1, float* out_y1) {
+void text_measure_bounds(const Font* font, const char* text, float size, float* out_x0,
+                         float* out_y0, float* out_x1, float* out_y1) {
     if (!font || !text) {
         if (out_x0)
             *out_x0 = 0;

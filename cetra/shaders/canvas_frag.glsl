@@ -128,6 +128,23 @@ float edgeDistance() {
     return across;
 }
 
+// A glyph: its font's distance field, whose value is vShape.x on the outline and falls by
+// vShape.y a framebuffer pixel outward. The four fonts are four units, chosen by branch, and
+// read at the atlas's own level: there is one, and a branch on a flat value has no derivatives.
+uniform sampler2D uFont0;
+uniform sampler2D uFont1;
+uniform sampler2D uFont2;
+uniform sampler2D uFont3;
+
+float glyphDistance() {
+    int slot = int(vShape.z);
+    float value = slot == 0   ? textureLod(uFont0, vLocal, 0.0).r
+                  : slot == 1 ? textureLod(uFont1, vLocal, 0.0).r
+                  : slot == 2 ? textureLod(uFont2, vLocal, 0.0).r
+                              : textureLod(uFont3, vLocal, 0.0).r;
+    return (vShape.x - value) / vShape.y;
+}
+
 float circleDistance() {
     float d = length(vLocal) - vShape.x;
     return vShape.y > 0.0 ? abs(d) - vShape.y : d;
@@ -151,6 +168,8 @@ void main() {
         d = circleDistance();
     else if (vKind == CANVAS_KIND_EDGE)
         d = edgeDistance();
+    else if (vKind == CANVAS_KIND_GLYPH)
+        d = glyphDistance();
     else
         d = boxDistance();
     FragColor = canvasOutput(vColor, vRaised > 0.5, clamp(0.5 - d, 0.0, 1.0));

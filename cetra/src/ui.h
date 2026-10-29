@@ -205,16 +205,13 @@ void ui_set_draw_program(UIDrawList* dl, struct ShaderProgram* program, UIRect r
  * drawing MUST apply identical kerning and tracking, or a centred string is
  * centred against a width it does not have and a hit test lands beside the
  * glyph the player aimed at. One advance rule, used by both.
- *
- * The font is non-const because a glyph is baked into the atlas on first use:
- * measuring a string is what CAUSES its glyphs to exist.
  */
-float ui_text_width(Font* font, float size, float tracking, const char* text);
+float ui_text_width(const Font* font, float size, float tracking, const char* text);
 float ui_line_height(const Font* font, float size, float line_spacing);
 // The byte offset at which `text` exceeds `max_width`, breaking on the last
 // word boundary at or before it. Returns the length when the whole string fits,
 // so a caller loops until it consumes the string.
-size_t ui_text_wrap_point(Font* font, float size, float tracking, const char* text,
+size_t ui_text_wrap_point(const Font* font, float size, float tracking, const char* text,
                           float max_width);
 
 /*

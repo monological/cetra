@@ -28583,10 +28583,10 @@ def run_canvas_gate(workdir):
       canvas-thin    lines a tenth of a pixel wide, across and down, off the pixel grid: every
                      column across the first and every row across the second sums to one pixel.
                      A line is never drawn narrower than a pixel.
-      canvas-translation the areas sheet 2^40 units from the origin draws the sheet at it, 0 px:
-                     every position reaches the shader as an int32 offset from a tile and a
-                     tile's int32 offset from the view, so nothing is a float until it is a
-                     distance from the view.
+      canvas-translation the areas sheet and the glyphs sheet 2^40 units from the origin each
+                     draw the sheet at it, 0 px: every position reaches the shader as an int32
+                     offset from a tile and a tile's int32 offset from the view, so nothing is a
+                     float until it is a distance from the view.
       canvas-long-segment a line 3.8e9 units long, cut into hundreds of pieces, seen 10 um across
                      in the middle of a piece, against a short copy of it: within 5 codes. A
                      piece ends up to 2^23 units from the view, exact as a float, and scaling it
@@ -28614,6 +28614,17 @@ def run_canvas_gate(workdir):
                      edges at its triangle's corners, not its triangle's own: an ear of the 64-gon
                      is under half a pixel thick, and asking only it left most of the inner ramp
                      to the triangle beside it, at 0.047 px of outline over.
+      canvas-glyph-edge five characters at a 100 px em -- a B, a g, an @, a W and an e -- each
+                     summed against stb_truetype's own exact-area rasterizer at the same em:
+                     each within 0.6% and the five's mean within 0.3%. stb TRUNCATES each
+                     distance-field texel to its byte, so an outline is stored half a code under
+                     its edge value on average; cut at the edge value itself, every glyph came
+                     out 0.022 atlas pixels thin, a mean of -0.65%. What remains is the field's
+                     bilinear reconstruction, which rounds a W's sharp points and fills an @'s
+                     inner curls. At a 30 px em the @ is 2.1% over: clamp(0.5 - d) takes the
+                     edge through a pixel as straight, and its curls are not.
+      canvas-text-width a kerned string's width from canvas_text_width against the font's own
+                     advances and pair adjustments, summed by the app in double: within 1e-5.
     """
     failed = []
 
@@ -28684,13 +28695,18 @@ def run_canvas_gate(workdir):
 
     # ---- translation
     far, _ = _canvas_run(workdir, "areas_far", "--sheet", "areas", "--offset", str(1 << 40))
-    if not areas or not far:
+    near_text, _ = _canvas_run(workdir, "glyphs_near", "--sheet", "glyphs")
+    far_text, _ = _canvas_run(workdir, "glyphs_far", "--sheet", "glyphs", "--offset", str(1 << 40))
+    if not areas or not far or not near_text or not far_text:
         ok, detail = False, "a run failed"
     else:
         ae, pae = compare(areas, far)
+        te, tpae = compare(near_text, far_text)
         drawn = float(_canvas_coverage(areas).sum())
-        ok = ae == 0 and drawn > 1000.0
-        detail = f"{ae} px differ, peak {pae:.4f} (want 0), {drawn:.0f} px^2 drawn"
+        text_drawn = float(_canvas_coverage(near_text).sum())
+        ok = ae == 0 and te == 0 and drawn > 1000.0 and text_drawn > 1000.0
+        detail = (f"shapes {ae} px differ, text {te} px (want 0 and 0), {drawn:.0f} and "
+                  f"{text_drawn:.0f} px^2 drawn")
     print(f"  canvas-translation  {'PASS' if ok else 'FAIL'}  {detail}")
     note("canvas-translation", ok)
 
@@ -28785,6 +28801,39 @@ def run_canvas_gate(workdir):
                   f"with 65 um tiles: " + ", ".join(rows))
     print(f"  canvas-polygon-areas {'PASS' if ok else 'FAIL'}  {detail}")
     note("canvas-polygon-areas", ok)
+
+    # ---- text
+    glyphs, probe = _canvas_run(workdir, "glyphs", "--sheet", "glyphs")
+    cells = {name: tokens for (sheet, name), tokens in probe.items()
+             if glyphs and sheet == "glyphs" and tokens[0] == "box"}
+    if not glyphs or len(cells) != 5:
+        ok, detail = False, f"the app failed or printed {len(cells)} glyphs (want 5)"
+    else:
+        cov = _canvas_coverage(glyphs)
+        errors, rows = [], []
+        for name, tokens in sorted(cells.items()):
+            x0, y0, x1, y1 = (int(v) for v in tokens[1:5])
+            stb = float(tokens[8])
+            rel = (float(cov[y0:y1, x0:x1].sum()) - stb) / stb
+            errors.append(rel)
+            rows.append(f"{name} {rel:+.2%}")
+        mean = sum(errors) / len(errors)
+        ok = max(abs(e) for e in errors) <= 0.006 and abs(mean) <= 0.003
+        detail = (f"at a {float(cells['B'][6]):.0f} px em, each within 0.6% (worst "
+                  f"{max(abs(e) for e in errors):.2%}), mean {mean:+.2%} (want within 0.3%): "
+                  + ", ".join(rows))
+    print(f"  canvas-glyph-edge   {'PASS' if ok else 'FAIL'}  {detail}")
+    note("canvas-glyph-edge", ok)
+
+    width = probe.get(("glyphs", "width")) if glyphs else None
+    if not width:
+        ok, detail = False, "the app printed no width"
+    else:
+        got, want = int(width[0]), float(width[2])
+        ok = want > 0 and abs(got - want) <= 1e-5 * want
+        detail = f"{got} units against the font's {want:.1f} (want within 1e-5)"
+    print(f"  canvas-text-width   {'PASS' if ok else 'FAIL'}  {detail}")
+    note("canvas-text-width", ok)
 
     return failed
 
@@ -33305,7 +33354,7 @@ GATE_GROUPS = [
      run_ragdoll_gate),
     ("camera", "the camera through a scripted pointer (drag, pan, release; spec 12.19):",
      run_camera_gate),
-    ("canvas", "the 2D canvas (areas, ramp, thin lines, four twins; spec 14.0):",
+    ("canvas", "the 2D canvas (areas, ramp, thin lines, four twins, fills, text; spec 14.0):",
      run_canvas_gate),
     ("gait", "a walker's gait (stride, footfalls, the eye's lag and bob, a climb; spec 13.47):",
      run_gait_gate),

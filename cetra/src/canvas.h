@@ -35,6 +35,7 @@
 #include <stdint.h>
 
 struct Engine;
+struct Font;
 
 typedef struct CanvasPoint {
     int64_t x, y;
@@ -119,7 +120,8 @@ typedef struct Canvas {
     struct CanvasData* data;
 
     // SETTINGS: plain stores. Write them directly, at any time.
-    float text_min_px;  // a string whose em is smaller is not drawn
+    float text_min_px;  // a string whose em is smaller is not drawn, nor one too small for
+                        // its font's distance field to hold a pixel's edge ramp
     float shape_min_px; // a shape spanning less is not drawn; 0 = every shape
 } Canvas;
 
@@ -212,6 +214,43 @@ typedef struct CanvasPolygon {
     int64_t stroke;
 } CanvasPolygon;
 
+// Where a string's anchor sits on it: across, at its start, middle or end...
+typedef enum CanvasAlignX {
+    CANVAS_ALIGN_LEFT,
+    CANVAS_ALIGN_CENTRE,
+    CANVAS_ALIGN_RIGHT,
+} CanvasAlignX;
+
+// ...and up it, on the baseline, or at the font's descent, the middle of its
+// ascent and descent, or its ascent.
+typedef enum CanvasAlignY {
+    CANVAS_ALIGN_BASELINE,
+    CANVAS_ALIGN_BOTTOM,
+    CANVAS_ALIGN_MIDDLE,
+    CANVAS_ALIGN_TOP,
+} CanvasAlignY;
+
+// A line of text, `size` its em as a font size is, turned by `angle` radians
+// counter-clockwise about its anchor and, when mirrored, flipped across the
+// line through the anchor along it, as bottom-side silkscreen is. The font must
+// be an SDF font, and outlive the canvas; the string is UTF-8, and a character
+// the font's atlas does not hold draws nothing and advances by its own width.
+typedef struct CanvasText {
+    CanvasPaint paint;
+    const struct Font* font;
+    const char* string;
+    CanvasPoint anchor;
+    int64_t size;
+    double angle;
+    CanvasAlignX align_x;
+    CanvasAlignY align_y;
+    bool mirrored;
+} CanvasText;
+
+// The string's advance from its first character's pen to past its last, in
+// units: what canvas_edit_text lays it out by, and so what to place it by.
+int64_t canvas_text_width(const CanvasText* text);
+
 /*
  * Edits: built on any thread, applied on the main thread. An edit is a list of
  * steps applied in order, so removing an object and adding it again replaces
@@ -233,6 +272,10 @@ void canvas_edit_polyline(CanvasEdit* edit, const CanvasPolyline* line);
 // Triangulated here, on the edit's thread, and cut at tile edges. Refused also
 // for a ring of fewer than three points.
 void canvas_edit_polygon(CanvasEdit* edit, const CanvasPolygon* polygon);
+// Laid out here, on the edit's thread, which only reads the font. Refused also
+// for no font, one that is not SDF, or no size; an empty string adds nothing.
+// A canvas draws with at most four fonts, and canvas_apply refuses a fifth.
+void canvas_edit_text(CanvasEdit* edit, const CanvasText* text);
 void canvas_edit_remove_object(CanvasEdit* edit, uint32_t object);
 void canvas_edit_clear_layer(CanvasEdit* edit, CanvasLayer* layer);
 

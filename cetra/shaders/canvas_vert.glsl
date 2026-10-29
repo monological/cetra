@@ -14,6 +14,8 @@ layout(location = 1) in vec4 aF;
 layout(location = 2) in uvec4 aU;
 
 uniform float uShapeMinPx;
+uniform float uTextMinPx;
+uniform samplerBuffer uGlyphs; // canvas_constants.glsl's glyph table
 
 flat out uint vKind;
 flat out uint vFlags;
@@ -21,7 +23,7 @@ flat out vec4 vColor;
 flat out float vRaised;
 flat out vec4 vShape; // the kind's measures, in pixels
 flat out vec4 vEnds;  // an arc's sector: from xy counter-clockwise to zw
-out vec2 vLocal;
+out vec2 vLocal;      // in the shape's own frame, in pixels; for a glyph, its place in the atlas
 
 const float PAD = 1.0; // the outer half of the edge ramp
 const float TAU = 6.283185307179586;
@@ -153,6 +155,26 @@ void main() {
         vLocal = vec2(along, across);
         vShape = vec4(len, 0.0, 0.0, 0.0);
         span = len;
+    } else if (kind == CANVAS_KIND_GLYPH) {
+        // The glyph's box about its pen, in ems, mirrored and turned about the string's anchor.
+        // The box is the atlas's whole cell, so it already holds the outer half of the ramp
+        // wherever the field reaches half a pixel; past that the string is too small to draw.
+        int base = aP.w * CANVAS_GLYPH_CODEPOINTS * 2;
+        vec4 font = texelFetch(uGlyphs, base);             // em, edge, falloff, spread
+        vec4 box = texelFetch(uGlyphs, base + aP.z * 2);   // x0, y0, x1, y1
+        vec4 cell = texelFetch(uGlyphs, base + aP.z * 2 + 1);
+        float emPx = aF.z * uPixelsPerUnit;
+        float atlasPx = emPx / font.x; // framebuffer pixels an atlas pixel spans
+        if (emPx < uTextMinPx || font.w * atlasPx < 0.5)
+            return;
+        vec2 local = (aF.xy + mix(box.xy, box.zw, c)) * emPx;
+        if ((flags & CANVAS_FLAG_MIRROR) != 0u)
+            local.x = -local.x;
+        vec2 u = vec2(cos(aF.w), sin(aF.w));
+        pos = toPixels(aP.xy, tile.xy) + u * local.x + vec2(-u.y, u.x) * local.y;
+        vLocal = mix(cell.xy, cell.zw, c);
+        vShape = vec4(font.y, font.z / atlasPx, float(aP.w), 0.0);
+        span = emPx;
     } else {
         return;
     }
