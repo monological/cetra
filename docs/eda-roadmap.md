@@ -151,7 +151,7 @@ object). It never reads back from the GPU.
     and selection belong to objects. Built in phase 6: a tag's state is a colour, a pick outline
     (a ring drawn last, under its layer's other shapes, so it stays outside a picked trace at its
     joints), a dim, hidden and raised. Where shapes of a layer overlap, a raised one's colour
-    shows, else the first added's.
+    shows; otherwise which shows is not defined.
   - **Images, and datasheet pages with them, moved out of 14.0** to pcb's datasheet step, which
     needs texture residency of its own.
 
@@ -159,10 +159,14 @@ object). It never reads back from the GPU.
 - **The ring of a picked shape has a pixel or two of error at a joint's inner corners.** The ring
   wants the least distance over all of an object's shapes, which max blending cannot give; three
   more passes a layer would. Invisible at 1x.
-- **Where shapes of one layer overlap, the first added shows**, after any raised one. pcb's own
-  order of adding is therefore part of what it draws.
-- **The active layer is drawn last, over everything**, holes and silk included, as ARCH says. pcb
-  draws a plated hole as a ring on each copper layer for that reason, not as a hole layer above.
+- **Where shapes of one layer overlap in different colours, which colour shows is not defined**,
+  beyond a raised shape winning and a shape covering a pixel well winning over another's edge.
+  Fills draw before shapes, and a tile's place in its buffer moves as it grows, so neither the
+  order of adding nor any other order holds. pcb gives shapes that overlap one colour, or raises
+  the one that should show.
+- **The active layer is drawn after the others**, as ARCH says, **except layers kept above it**
+  (`CanvasLayer.above_active`, added by the reviews): holes, a ratsnest and a selection overlay
+  stay over whichever copper is active.
 - **For idle mode (item 2):** `canvas_generation` changes with every edit applied, layer or style
   added, and style or tag written, a shared tag table's included. A layer's opacity and order and
   a view are plain settings and change nothing there; an app knows when it writes them.
