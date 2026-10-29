@@ -1362,6 +1362,14 @@ ShaderProgram* create_canvas_program() {
     return program;
 }
 
+ShaderProgram* create_canvas_fill_program() {
+    ShaderProgram* program = create_program_from_source("canvas_fill", canvas_fill_vert_shader_str,
+                                                        canvas_fill_frag_shader_str, NULL);
+    if (!program)
+        log_error("Failed to initialize canvas fill shader program");
+    return program;
+}
+
 ShaderProgram* create_canvas_composite_program() {
     return create_post_program("canvas_composite", canvas_composite_frag_shader_str);
 }

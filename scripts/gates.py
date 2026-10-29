@@ -28599,6 +28599,21 @@ def run_canvas_gate(workdir):
       canvas-target  the shapes sheet drawn into the picture the CRT and an app's after-tonemap
                      pass draw into, against it drawn into the window, 0 px. The app says which
                      it drew into, or the two runs could be the same path.
+      canvas-tiles   the shapes sheet with 65 um tiles, every shape cut into pieces, against it
+                     with the default 4 mm tiles, to a code. The pieces overlap at each cut by a
+                     pixel, and a layer resolves its coverage by the LARGEST any piece gives a
+                     pixel, which is idempotent there: before that resolve it was 2,482 px apart,
+                     by up to 20%.
+      canvas-triangulation each polygon of the polygons sheet -- holed, a star, an L, a plate
+                     with three holes wound either way, a 64-gon, a comb -- triangulates to its
+                     own area by the shoelace formula, to a part in a billion, in n - 2 + 2h
+                     triangles for n points and h holes: every point a corner and no more.
+      canvas-polygon-areas each polygon's coverage against that area, within 0.01 px per pixel
+                     of outline, with the default tiles and with 65 um ones, which cut every
+                     triangle at the grid. A pixel's inner ramp is measured against the outline
+                     edges at its triangle's corners, not its triangle's own: an ear of the 64-gon
+                     is under half a pixel thick, and asking only it left most of the inner ramp
+                     to the triangle beside it, at 0.047 px of outline over.
     """
     failed = []
 
@@ -28720,6 +28735,56 @@ def run_canvas_gate(workdir):
         detail = f"{ae} px differ, peak {pae:.4f} (want 0), drawn into the {target} (want picture)"
     print(f"  canvas-target       {'PASS' if ok else 'FAIL'}  {detail}")
     note("canvas-target", ok)
+
+    # ---- tiles
+    tiny, _ = _canvas_run(workdir, "shapes_tiny", "--sheet", "shapes", "--tile-shift", "16")
+    if not plain or not tiny:
+        ok, detail = False, "a run failed"
+    else:
+        ae, pae = compare(plain, tiny)
+        ok = round(pae * 255) <= 1
+        detail = f"{ae} px differ, peak {pae * 255:.0f} code(s) (want <= 1)"
+    print(f"  canvas-tiles        {'PASS' if ok else 'FAIL'}  {detail}")
+    note("canvas-tiles", ok)
+
+    # ---- polygons
+    polygons, probe = _canvas_run(workdir, "polygons", "--sheet", "polygons")
+    cells = {name: tokens for (sheet, name), tokens in probe.items()
+             if polygons and sheet == "polygons"}
+    if not polygons or len(cells) != 6:
+        ok, detail = False, f"the app failed or printed {len(cells)} polygons (want 6)"
+    else:
+        rows, ok = [], True
+        for name, tokens in sorted(cells.items()):
+            m = {tokens[k]: float(tokens[k + 1]) for k in range(5, len(tokens), 2)}
+            want_count = m["points"] - 2 + 2 * m["holes"]
+            good = (abs(m["triangulated"] - m["area"]) <= 1e-9 * m["area"]
+                    and m["triangles"] == want_count)
+            ok = ok and good
+            rows.append(f"{name} {m['triangles']:.0f}/{want_count:.0f}")
+        detail = "areas agree, triangles (want n - 2 + 2h): " + ", ".join(rows)
+    print(f"  canvas-triangulation {'PASS' if ok else 'FAIL'}  {detail}")
+    note("canvas-triangulation", ok)
+
+    tiny, _ = _canvas_run(workdir, "polygons_tiny", "--sheet", "polygons", "--tile-shift", "16")
+    if not polygons or not tiny or len(cells) != 6:
+        ok, detail = False, "a run failed"
+    else:
+        worst, rows = 0.0, []
+        for label, path in (("4 mm", polygons), ("65 um", tiny)):
+            cov = _canvas_coverage(path)
+            for name, tokens in sorted(cells.items()):
+                x0, y0, x1, y1 = (int(v) for v in tokens[1:5])
+                m = {tokens[k]: float(tokens[k + 1]) for k in range(5, len(tokens), 2)}
+                per_edge = (float(cov[y0:y1, x0:x1].sum()) - m["area"]) / m["perimeter"]
+                worst = max(worst, abs(per_edge))
+                if label == "65 um":
+                    rows.append(f"{name} {per_edge:+.4f}")
+        ok = worst <= 0.01
+        detail = (f"worst {worst:.4f} px of outline (want <= 0.01) over both tile sizes; "
+                  f"with 65 um tiles: " + ", ".join(rows))
+    print(f"  canvas-polygon-areas {'PASS' if ok else 'FAIL'}  {detail}")
+    note("canvas-polygon-areas", ok)
 
     return failed
 

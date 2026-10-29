@@ -26,8 +26,9 @@
 // The units the canvas program reads its tables from: its own ledger.
 enum { CANVAS_UNIT_TILES = 0, CANVAS_UNIT_STYLES = 1, CANVAS_UNIT_TAGS = 2 };
 
-// What the canvas registers its two programs as, so every canvas shares them.
+// What the canvas registers its programs as, so every canvas shares them.
 #define CANVAS_PROGRAM           "canvas"
+#define CANVAS_FILL_PROGRAM      "canvas_fill"
 #define CANVAS_COMPOSITE_PROGRAM "canvas_composite"
 
 /*
@@ -174,24 +175,45 @@ typedef struct CanvasCoord {
     UT_hash_handle hh;
 } CanvasCoord;
 
-// A layer's tile: the records it keeps, and the range of the layer's buffer
-// they are uploaded into.
-typedef struct CanvasTile {
-    int64_t key[2];
-    CanvasRecord* records;
+// The two kinds of thing a layer keeps, each in a buffer of its own: shape
+// records, an instance each, and fill triangles, three corners each.
+enum { CANVAS_SHAPES = 0, CANVAS_FILLS = 1, CANVAS_STORES = 2 };
+static const size_t CANVAS_ITEM_SIZE[CANVAS_STORES] = {sizeof(CanvasRecord),
+                                                       sizeof(CanvasTriangle)};
+
+// A tile's items of one kind, and the range of its layer's buffer they upload
+// into.
+typedef struct CanvasRun {
+    void* items;
     uint32_t count, cap;
     uint32_t slot, slots; // slots 0 = no range yet
     bool dirty;
+} CanvasRun;
+
+typedef struct CanvasTile {
+    int64_t key[2];
+    CanvasRun runs[CANVAS_STORES];
     UT_hash_handle hh;
 } CanvasTile;
 
+// A layer's buffer for one kind of item: its tiles' ranges one after another.
+typedef struct CanvasStore {
+    GLuint vao, vbo;
+    uint32_t end;      // slots in use, live and dead; what a draw covers
+    uint32_t capacity; // slots the buffer holds
+    bool dirty;        // a tile's run wants uploading
+} CanvasStore;
+
 typedef struct CanvasLayerData {
     CanvasTile* tiles;
-    GLuint vao, vbo;
-    uint32_t end;      // slots in use in the buffer, live and dead; what a draw covers
-    uint32_t capacity; // slots the buffer holds
-    bool dirty;        // a tile wants uploading
+    CanvasStore stores[CANVAS_STORES];
 } CanvasLayerData;
+
+// The object an item belongs to.
+static uint32_t _item_object(int store, const void* items, uint32_t i) {
+    return store == CANVAS_SHAPES ? ((const CanvasRecord*)items)[i].u[2]
+                                  : ((const CanvasTriangle*)items)[i].v[0].u[2];
+}
 
 // The tiles an object has records in, which a remove looks through.
 typedef struct CanvasObject {
@@ -221,7 +243,8 @@ typedef struct CanvasData {
 
     // GL, made at the first draw.
     bool gl_ready, gl_failed;
-    ShaderProgram* program;
+    ShaderProgram* program; // shapes
+    ShaderProgram* fill_program;
     ShaderProgram* composite;
     GLuint quad_vao, quad_vbo;
     GLuint style_buffer, style_texture;
@@ -230,8 +253,8 @@ typedef struct CanvasData {
     uint32_t tile_table_cap;
     GLuint target_fbo, target_texture;
     int target_w, target_h;
-    CanvasRecord* scratch; // a tile's range, its records then dead slots
-    uint32_t scratch_cap;
+    void* scratch; // a tile's range, its items then dead slots
+    size_t scratch_bytes;
 } CanvasData;
 
 int canvas_tile_shift(const Canvas* canvas) {
@@ -274,7 +297,8 @@ static void _free_tiles(CanvasLayerData* ld) {
     CanvasTile *tile, *next;
     HASH_ITER(hh, ld->tiles, tile, next) {
         HASH_DEL(ld->tiles, tile);
-        free(tile->records);
+        for (int s = 0; s < CANVAS_STORES; s++)
+            free(tile->runs[s].items);
         free(tile);
     }
 }
@@ -288,10 +312,12 @@ void free_canvas(Canvas* canvas) {
             CanvasLayer* layer = d->layers[i];
             CanvasLayerData* ld = layer->data;
             _free_tiles(ld);
-            if (ld->vbo)
-                glDeleteBuffers(1, &ld->vbo);
-            if (ld->vao)
-                glDeleteVertexArrays(1, &ld->vao);
+            for (int s = 0; s < CANVAS_STORES; s++) {
+                if (ld->stores[s].vbo)
+                    glDeleteBuffers(1, &ld->stores[s].vbo);
+                if (ld->stores[s].vao)
+                    glDeleteVertexArrays(1, &ld->stores[s].vao);
+            }
             free(ld);
             free(layer->name);
             free(layer);
@@ -443,16 +469,18 @@ static CanvasTile* _tile(CanvasLayerData* ld, int64_t tx, int64_t ty) {
     return tile;
 }
 
-static bool _tile_push(CanvasTile* tile, const CanvasRecord* record) {
-    if (tile->count == tile->cap) {
-        const uint32_t cap = tile->cap ? tile->cap * 2 : 16;
-        CanvasRecord* grown = realloc(tile->records, cap * sizeof(CanvasRecord));
+static bool _run_push(CanvasRun* run, int store, const void* item) {
+    const size_t size = CANVAS_ITEM_SIZE[store];
+    if (run->count == run->cap) {
+        const uint32_t cap = run->cap ? run->cap * 2 : 16;
+        void* grown = realloc(run->items, cap * size);
         if (!grown)
             return false;
-        tile->records = grown;
-        tile->cap = cap;
+        run->items = grown;
+        run->cap = cap;
     }
-    tile->records[tile->count++] = *record;
+    memcpy((char*)run->items + run->count++ * size, item, size);
+    run->dirty = true;
     return true;
 }
 
@@ -487,37 +515,38 @@ static bool _owns_layer(const CanvasData* d, const CanvasLayer* layer) {
     return layer && layer->index < d->layer_count && d->layers[layer->index] == layer;
 }
 
-static void _add(CanvasData* d, const CanvasPiece* piece, uint32_t* refused) {
-    const uint16_t style = (uint16_t)(piece->record.u[0] >> 16);
-    if (!_owns_layer(d, piece->layer) || style >= d->style_count) {
+// Adds an item of `store` -- a record or a triangle, its tile index fields
+// filled here -- to its layer's tile, and grows the tile coordinate's bound.
+static void _add(CanvasData* d, int store, CanvasLayer* layer, int64_t tx, int64_t ty,
+                 const int64_t min[2], const int64_t max[2], void* item, uint32_t* refused) {
+    const uint32_t* head = store == CANVAS_SHAPES ? ((const CanvasRecord*)item)->u
+                                                  : ((const CanvasTriangle*)item)->v[0].u;
+    const uint16_t style = (uint16_t)(head[0] >> 16);
+    CanvasCoord* coord = _owns_layer(d, layer) && style < d->style_count ? _coord(d, tx, ty) : NULL;
+    CanvasTile* tile = coord ? _tile(layer->data, tx, ty) : NULL;
+    if (!tile) {
         (*refused)++;
         return;
     }
-    CanvasCoord* coord = _coord(d, piece->tx, piece->ty);
-    CanvasLayerData* ld = piece->layer->data;
-    CanvasTile* tile = _tile(ld, piece->tx, piece->ty);
-    CanvasRecord record = piece->record;
-    if (!coord || !tile) {
-        (*refused)++;
-        return;
+    if (store == CANVAS_SHAPES) {
+        ((CanvasRecord*)item)->u[3] = coord->index;
+    } else {
+        for (int k = 0; k < 3; k++)
+            ((CanvasTriangle*)item)->v[k].u[3] = coord->index;
     }
-    record.u[3] = coord->index;
-    if (!_tile_push(tile, &record)) {
+    if (!_run_push(&tile->runs[store], store, item)) {
         (*refused)++;
         return;
     }
     for (int axis = 0; axis < 2; axis++) {
-        coord->min[axis] =
-            piece->min[axis] < coord->min[axis] ? piece->min[axis] : coord->min[axis];
-        coord->max[axis] =
-            piece->max[axis] > coord->max[axis] ? piece->max[axis] : coord->max[axis];
+        coord->min[axis] = min[axis] < coord->min[axis] ? min[axis] : coord->min[axis];
+        coord->max[axis] = max[axis] > coord->max[axis] ? max[axis] : coord->max[axis];
     }
-    tile->dirty = true;
-    ld->dirty = true;
-    _note_object(d, record.u[2], tile);
+    layer->data->stores[store].dirty = true;
+    _note_object(d, head[2], tile);
 }
 
-// Takes an object's records out of every tile it was in, keeping the order of
+// Takes an object's items out of every tile it was in, keeping the order of
 // the rest: where shapes overlap, the order they were added decides.
 static void _remove_object(CanvasData* d, uint32_t object) {
     CanvasObject* entry = NULL;
@@ -525,20 +554,28 @@ static void _remove_object(CanvasData* d, uint32_t object) {
     if (!entry)
         return;
     for (uint32_t i = 0; i < entry->count; i++) {
-        CanvasTile* tile = entry->tiles[i];
-        uint32_t kept = 0;
-        for (uint32_t r = 0; r < tile->count; r++)
-            if (tile->records[r].u[2] != object)
-                tile->records[kept++] = tile->records[r];
-        if (kept != tile->count) {
-            tile->count = kept;
-            tile->dirty = true;
+        for (int s = 0; s < CANVAS_STORES; s++) {
+            CanvasRun* run = &entry->tiles[i]->runs[s];
+            const size_t size = CANVAS_ITEM_SIZE[s];
+            uint32_t kept = 0;
+            for (uint32_t r = 0; r < run->count; r++) {
+                if (_item_object(s, run->items, r) == object)
+                    continue;
+                if (kept != r)
+                    memcpy((char*)run->items + kept * size, (char*)run->items + r * size, size);
+                kept++;
+            }
+            if (kept != run->count) {
+                run->count = kept;
+                run->dirty = true;
+            }
         }
     }
-    // A removed tile's layer is not known from here, so every layer is asked
-    // whether it has a dirty tile at the next upload.
+    // A removed tile's layer is not known from here, so every store is asked
+    // whether it has a dirty run at the next upload.
     for (uint32_t l = 0; l < d->layer_count; l++)
-        d->layers[l]->data->dirty = true;
+        for (int s = 0; s < CANVAS_STORES; s++)
+            d->layers[l]->data->stores[s].dirty = true;
     HASH_DEL(d->objects, entry);
     free(entry->tiles);
     free(entry);
@@ -550,10 +587,12 @@ static void _clear_layer(const CanvasData* d, CanvasLayer* layer) {
     CanvasLayerData* ld = layer->data;
     CanvasTile *tile, *next;
     HASH_ITER(hh, ld->tiles, tile, next) {
-        if (tile->count) {
-            tile->count = 0;
-            tile->dirty = true;
-            ld->dirty = true;
+        for (int s = 0; s < CANVAS_STORES; s++) {
+            if (tile->runs[s].count) {
+                tile->runs[s].count = 0;
+                tile->runs[s].dirty = true;
+                ld->stores[s].dirty = true;
+            }
         }
     }
 }
@@ -570,8 +609,18 @@ void canvas_apply(Canvas* canvas, CanvasEdit* edit) {
             const CanvasStep* step = &edit->steps[s];
             switch (step->kind) {
                 case CANVAS_STEP_ADD:
-                    for (size_t i = 0; i < step->count; i++)
-                        _add(d, &edit->pieces[step->first + i], &refused);
+                    for (size_t i = 0; i < step->count; i++) {
+                        CanvasPiece* p = &edit->pieces[step->first + i];
+                        _add(d, CANVAS_SHAPES, p->layer, p->tx, p->ty, p->min, p->max, &p->record,
+                             &refused);
+                    }
+                    break;
+                case CANVAS_STEP_ADD_FILLS:
+                    for (size_t i = 0; i < step->count; i++) {
+                        CanvasFillPiece* p = &edit->fills[step->first + i];
+                        _add(d, CANVAS_FILLS, p->layer, p->tx, p->ty, p->min, p->max, &p->triangle,
+                             &refused);
+                    }
                     break;
                 case CANVAS_STEP_REMOVE_OBJECT:
                     _remove_object(d, step->object);
@@ -588,6 +637,7 @@ void canvas_apply(Canvas* canvas, CanvasEdit* edit) {
         canvas->generation++;
     }
     edit->piece_count = 0;
+    edit->fill_count = 0;
     edit->step_count = 0;
 }
 
@@ -608,13 +658,19 @@ static bool _gl_ready(Canvas* canvas) {
         if (d->program)
             engine_add_program(engine, d->program);
     }
+    d->fill_program = engine_find_program(engine, CANVAS_FILL_PROGRAM);
+    if (!d->fill_program) {
+        d->fill_program = create_canvas_fill_program();
+        if (d->fill_program)
+            engine_add_program(engine, d->fill_program);
+    }
     d->composite = engine_find_program(engine, CANVAS_COMPOSITE_PROGRAM);
     if (!d->composite) {
         d->composite = create_canvas_composite_program();
         if (d->composite)
             engine_add_program(engine, d->composite);
     }
-    if (!d->program || !d->composite) {
+    if (!d->program || !d->fill_program || !d->composite) {
         log_error("canvas: its programs did not build, so it draws nothing");
         d->gl_failed = true;
         return false;
@@ -628,23 +684,45 @@ static bool _gl_ready(Canvas* canvas) {
     return true;
 }
 
-static void _layer_gl(CanvasLayerData* ld) {
-    if (ld->vao)
+// A store's vertex array: shape records as instances of a unit quad, fill
+// triangles as corners, three to a triangle.
+static void _store_gl(CanvasStore* store, int kind) {
+    if (store->vao)
         return;
-    glGenVertexArrays(1, &ld->vao);
-    glGenBuffers(1, &ld->vbo);
-    glBindVertexArray(ld->vao);
-    glBindBuffer(GL_ARRAY_BUFFER, ld->vbo);
-    const GLsizei stride = (GLsizei)sizeof(CanvasRecord);
-    glEnableVertexAttribArray(0);
-    glVertexAttribIPointer(0, 4, GL_INT, stride, (const void*)offsetof(CanvasRecord, p));
-    glVertexAttribDivisor(0, 1);
-    glEnableVertexAttribArray(1);
-    glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, stride, (const void*)offsetof(CanvasRecord, f));
-    glVertexAttribDivisor(1, 1);
-    glEnableVertexAttribArray(2);
-    glVertexAttribIPointer(2, 4, GL_UNSIGNED_INT, stride, (const void*)offsetof(CanvasRecord, u));
-    glVertexAttribDivisor(2, 1);
+    glGenVertexArrays(1, &store->vao);
+    glGenBuffers(1, &store->vbo);
+    glBindVertexArray(store->vao);
+    glBindBuffer(GL_ARRAY_BUFFER, store->vbo);
+    if (kind == CANVAS_SHAPES) {
+        const GLsizei stride = (GLsizei)sizeof(CanvasRecord);
+        glEnableVertexAttribArray(0);
+        glVertexAttribIPointer(0, 4, GL_INT, stride, (const void*)offsetof(CanvasRecord, p));
+        glVertexAttribDivisor(0, 1);
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, stride,
+                              (const void*)offsetof(CanvasRecord, f));
+        glVertexAttribDivisor(1, 1);
+        glEnableVertexAttribArray(2);
+        glVertexAttribIPointer(2, 4, GL_UNSIGNED_INT, stride,
+                               (const void*)offsetof(CanvasRecord, u));
+        glVertexAttribDivisor(2, 1);
+    } else {
+        // The corner, its nine outline points as four ivec4 and an ivec2, then u.
+        const GLsizei stride = (GLsizei)sizeof(CanvasFillVertex);
+        const size_t near = offsetof(CanvasFillVertex, near);
+        glEnableVertexAttribArray(0);
+        glVertexAttribIPointer(0, 2, GL_INT, stride, (const void*)offsetof(CanvasFillVertex, p));
+        for (GLuint k = 0; k < 4; k++) {
+            glEnableVertexAttribArray(1 + k);
+            glVertexAttribIPointer(1 + k, 4, GL_INT, stride,
+                                   (const void*)(near + k * 4 * sizeof(int32_t)));
+        }
+        glEnableVertexAttribArray(5);
+        glVertexAttribIPointer(5, 2, GL_INT, stride, (const void*)(near + 16 * sizeof(int32_t)));
+        glEnableVertexAttribArray(6);
+        glVertexAttribIPointer(6, 4, GL_UNSIGNED_INT, stride,
+                               (const void*)offsetof(CanvasFillVertex, u));
+    }
     glBindVertexArray(0);
 }
 
@@ -655,77 +733,84 @@ static uint32_t _slots_for(uint32_t count) {
     return slots < CANVAS_TILE_MIN_SLOTS ? CANVAS_TILE_MIN_SLOTS : slots;
 }
 
-// Writes a tile's range: its records, then dead slots to the end of the range.
-static void _upload_range(Canvas* canvas, uint32_t slot, uint32_t slots,
-                          const CanvasRecord* records, uint32_t count) {
+// Writes a range of a store's buffer: `count` items, then dead slots to the
+// end of the range. A dead slot is all zero: a record of kind NONE, or a
+// triangle with no area.
+static void _upload_range(Canvas* canvas, int store, uint32_t slot, uint32_t slots,
+                          const void* items, uint32_t count) {
     CanvasData* d = canvas->data;
+    const size_t size = CANVAS_ITEM_SIZE[store];
+    const size_t bytes = (size_t)slots * size;
     if (slots == 0)
         return;
-    if (slots > d->scratch_cap) {
-        CanvasRecord* grown = realloc(d->scratch, slots * sizeof(CanvasRecord));
+    if (bytes > d->scratch_bytes) {
+        void* grown = realloc(d->scratch, bytes);
         if (!grown) {
             log_error("canvas: out of memory uploading a tile");
             return;
         }
         d->scratch = grown;
-        d->scratch_cap = slots;
+        d->scratch_bytes = bytes;
     }
     if (count)
-        memcpy(d->scratch, records, count * sizeof(CanvasRecord));
-    memset(d->scratch + count, 0, (slots - count) * sizeof(CanvasRecord));
-    glBufferSubData(GL_ARRAY_BUFFER, (GLintptr)slot * (GLintptr)sizeof(CanvasRecord),
-                    (GLsizeiptr)slots * (GLsizeiptr)sizeof(CanvasRecord), d->scratch);
+        memcpy(d->scratch, items, count * size);
+    memset((char*)d->scratch + count * size, 0, bytes - count * size);
+    glBufferSubData(GL_ARRAY_BUFFER, (GLintptr)slot * (GLintptr)size, (GLsizeiptr)bytes,
+                    d->scratch);
     canvas->uploads++;
-    canvas->bytes_uploaded += (uint64_t)slots * sizeof(CanvasRecord);
+    canvas->bytes_uploaded += bytes;
 }
 
 /*
- * A layer's buffer holds its tiles' ranges one after another. A tile that
+ * A store's buffer holds its tiles' ranges one after another. A tile that
  * outgrows its range takes a new one at the end and its old one is written
  * dead; when the end passes the buffer, or the dead ranges outweigh the live
  * ones, every tile is laid out again from the start and uploaded whole.
  */
-static void _layer_upload(Canvas* canvas, CanvasLayer* layer) {
-    CanvasLayerData* ld = layer->data;
-    if (!ld->dirty)
+static void _store_upload(Canvas* canvas, CanvasLayerData* ld, int s) {
+    CanvasStore* store = &ld->stores[s];
+    if (!store->dirty)
         return;
-    _layer_gl(ld);
-    glBindBuffer(GL_ARRAY_BUFFER, ld->vbo);
+    _store_gl(store, s);
+    glBindBuffer(GL_ARRAY_BUFFER, store->vbo);
 
     uint32_t live = 0;
     CanvasTile *tile, *next;
     HASH_ITER(hh, ld->tiles, tile, next) {
-        if (tile->dirty && tile->count > tile->slots) {
-            if (tile->slots)
-                _upload_range(canvas, tile->slot, tile->slots, NULL, 0);
-            tile->slots = _slots_for(tile->count);
-            tile->slot = ld->end;
-            ld->end += tile->slots;
+        CanvasRun* run = &tile->runs[s];
+        if (run->dirty && run->count > run->slots) {
+            if (run->slots)
+                _upload_range(canvas, s, run->slot, run->slots, NULL, 0);
+            run->slots = _slots_for(run->count);
+            run->slot = store->end;
+            store->end += run->slots;
         }
-        live += tile->slots;
+        live += run->slots;
     }
 
-    if (ld->end > ld->capacity || ld->end > 2 * live + 4096) {
+    if (store->end > store->capacity || store->end > 2 * live + 4096) {
         uint32_t end = 0;
         HASH_ITER(hh, ld->tiles, tile, next) {
-            tile->slots = _slots_for(tile->count);
-            tile->slot = end;
-            end += tile->slots;
-            tile->dirty = true;
+            CanvasRun* run = &tile->runs[s];
+            run->slots = _slots_for(run->count);
+            run->slot = end;
+            end += run->slots;
+            run->dirty = true;
         }
-        ld->end = end;
-        ld->capacity = end + end / 2 + 1024;
-        glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)ld->capacity * (GLsizeiptr)sizeof(CanvasRecord),
+        store->end = end;
+        store->capacity = end + end / 2 + 1024;
+        glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)store->capacity * (GLsizeiptr)CANVAS_ITEM_SIZE[s],
                      NULL, GL_DYNAMIC_DRAW);
     }
 
     HASH_ITER(hh, ld->tiles, tile, next) {
-        if (!tile->dirty)
+        CanvasRun* run = &tile->runs[s];
+        if (!run->dirty)
             continue;
-        _upload_range(canvas, tile->slot, tile->slots, tile->records, tile->count);
-        tile->dirty = false;
+        _upload_range(canvas, s, run->slot, run->slots, run->items, run->count);
+        run->dirty = false;
     }
-    ld->dirty = false;
+    store->dirty = false;
 }
 
 static void _styles_upload(CanvasData* d) {
@@ -838,6 +923,72 @@ static void _clear_colour(uint32_t rgba) {
                  (float)((rgba >> 8) & 255) / 255.0f, 1.0f);
 }
 
+/*
+ * A layer, resolved in the view's target with its alpha as scratch, in the
+ * passes canvas_pass.glsl describes: alpha cleared, the largest coverage into
+ * it (max is idempotent where a cut shape or a polygon's corner covers a pixel
+ * twice), then the colour passes, each painting by alpha and zeroing it, so
+ * the first shape to reach a pixel spends its whole coverage. Blend and mask
+ * changes do not end a render pass on a tiled GPU, where a framebuffer switch
+ * per layer would store and reload the whole target.
+ */
+static void _draw_layer(const CanvasData* d, const CanvasLayer* layer) {
+    const CanvasStore* fills = &layer->data->stores[CANVAS_FILLS];
+    const CanvasStore* shapes = &layer->data->stores[CANVAS_SHAPES];
+    if (!fills->end && !shapes->end)
+        return;
+    const float opacity = layer->opacity < 0.0f   ? 0.0f
+                          : layer->opacity > 1.0f ? 1.0f
+                                                  : layer->opacity;
+    glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_TRUE);
+    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    for (int pass = 0; pass < 4; pass++) {
+        if (pass == 0) {
+            glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_TRUE);
+            glBlendEquationSeparate(GL_FUNC_ADD, GL_MAX);
+            glBlendFuncSeparate(GL_ONE, GL_ZERO, GL_ONE, GL_ONE);
+        } else {
+            glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+            glBlendEquation(GL_FUNC_ADD);
+            glBlendFuncSeparate(GL_DST_ALPHA, GL_ONE_MINUS_DST_ALPHA, GL_ZERO, GL_ZERO);
+        }
+        // Fills first, then shapes, among them the outer half of each fill's
+        // edge ramp.
+        if (fills->end) {
+            glUseProgram(d->fill_program->id);
+            uniform_set_int(d->fill_program->uniforms, "uPass", pass);
+            uniform_set_float(d->fill_program->uniforms, "uOpacity", opacity);
+            glBindVertexArray(fills->vao);
+            glDrawArrays(GL_TRIANGLES, 0, (GLsizei)fills->end * 3);
+        }
+        if (shapes->end) {
+            glUseProgram(d->program->id);
+            uniform_set_int(d->program->uniforms, "uPass", pass);
+            uniform_set_float(d->program->uniforms, "uOpacity", opacity);
+            glBindVertexArray(shapes->vao);
+            glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, (GLsizei)shapes->end);
+        }
+    }
+}
+
+// What both canvas programs read of the view.
+static void _view_uniforms(const ShaderProgram* program, const Canvas* canvas,
+                           const CanvasView* view, const float size[2], float ppu) {
+    UniformManager* u = program->uniforms;
+    glUseProgram(program->id);
+    const float fraction[2] = {(float)view->fraction[0], (float)view->fraction[1]};
+    uniform_set_vec2(u, "uFraction", fraction);
+    uniform_set_vec2(u, "uSize", size);
+    uniform_set_float(u, "uPixelsPerUnit", ppu);
+    uniform_set_float(u, "uMirror", view->mirror_x ? -1.0f : 1.0f);
+    uniform_set_float(u, "uShapeMinPx", canvas->shape_min_px);
+    uniform_set_int(u, "uTagCount", (int)canvas->data->tags->count);
+    uniform_set_int(u, "uTiles", CANVAS_UNIT_TILES);
+    uniform_set_int(u, "uStyles", CANVAS_UNIT_STYLES);
+    uniform_set_int(u, "uTags", CANVAS_UNIT_TAGS);
+}
+
 void canvas_draw(Canvas* canvas, const CanvasView* view) {
     if (!canvas || !view || view->points_per_unit <= 0.0)
         return;
@@ -869,7 +1020,8 @@ void canvas_draw(Canvas* canvas, const CanvasView* view) {
 
     if (_target(d, w, h)) {
         for (uint32_t i = 0; i < d->layer_count; i++)
-            _layer_upload(canvas, d->layers[i]);
+            for (int s = 0; s < CANVAS_STORES; s++)
+                _store_upload(canvas, d->layers[i]->data, s);
         _styles_upload(d);
         _tags_upload(d->tags);
         _tiles_upload(d, view, (w * 0.5 + 2.0) / ppu, (h * 0.5 + 2.0) / ppu);
@@ -882,21 +1034,9 @@ void canvas_draw(Canvas* canvas, const CanvasView* view) {
         glClear(GL_COLOR_BUFFER_BIT);
 
         glEnable(GL_BLEND);
-        glBlendEquation(GL_FUNC_ADD);
-        glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA); // premultiplied
-        glUseProgram(d->program->id);
-        UniformManager* u = d->program->uniforms;
-        const float fraction[2] = {(float)view->fraction[0], (float)view->fraction[1]};
         const float size[2] = {(float)w, (float)h};
-        uniform_set_vec2(u, "uFraction", fraction);
-        uniform_set_vec2(u, "uSize", size);
-        uniform_set_float(u, "uPixelsPerUnit", (float)ppu);
-        uniform_set_float(u, "uMirror", view->mirror_x ? -1.0f : 1.0f);
-        uniform_set_float(u, "uShapeMinPx", canvas->shape_min_px);
-        uniform_set_int(u, "uTagCount", (int)d->tags->count);
-        uniform_set_int(u, "uTiles", CANVAS_UNIT_TILES);
-        uniform_set_int(u, "uStyles", CANVAS_UNIT_STYLES);
-        uniform_set_int(u, "uTags", CANVAS_UNIT_TAGS);
+        _view_uniforms(d->program, canvas, view, size, (float)ppu);
+        _view_uniforms(d->fill_program, canvas, view, size, (float)ppu);
         glActiveTexture(GL_TEXTURE0 + CANVAS_UNIT_TILES);
         glBindTexture(GL_TEXTURE_BUFFER, d->tile_texture);
         glActiveTexture(GL_TEXTURE0 + CANVAS_UNIT_STYLES);
@@ -906,13 +1046,8 @@ void canvas_draw(Canvas* canvas, const CanvasView* view) {
 
         const CanvasLayer* order[CANVAS_LAYER_MAX] = {NULL};
         const uint32_t n = _draw_order(d, view, order);
-        for (uint32_t i = 0; i < n; i++) {
-            const CanvasLayerData* ld = order[i]->data;
-            if (ld->end == 0)
-                continue;
-            glBindVertexArray(ld->vao);
-            glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, (GLsizei)ld->end);
-        }
+        for (uint32_t i = 0; i < n; i++)
+            _draw_layer(d, order[i]);
         for (int unit = CANVAS_UNIT_TAGS; unit >= CANVAS_UNIT_TILES; unit--) {
             glActiveTexture(GL_TEXTURE0 + (GLenum)unit);
             glBindTexture(GL_TEXTURE_BUFFER, 0);
@@ -923,6 +1058,7 @@ void canvas_draw(Canvas* canvas, const CanvasView* view) {
         glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)pass.fbo);
         glViewport((GLint)x0, gl_y, w, h);
         glDisable(GL_BLEND);
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
         glUseProgram(d->composite->id);
         const int origin[4] = {(int)x0, gl_y, 0, 0};
         uniform_set_ivec4(d->composite->uniforms, "uOrigin", origin);
