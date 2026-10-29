@@ -146,7 +146,10 @@ object). It never reads back from the GPU.
     changes. A buffer per tile meant a draw per tile per layer, thousands zoomed out, at about 2 µs
     a draw on Apple's GL.
   - **Each shape carries two tags**, a net and an object, where ARCH has a net ID only: diff colours
-    and selection belong to objects.
+    and selection belong to objects. Built in phase 6: a tag's state is a colour, a pick outline
+    (a ring drawn last, under its layer's other shapes, so it stays outside a picked trace at its
+    joints), a dim, hidden and raised. Where shapes of a layer overlap, a raised one's colour
+    shows, else the first added's.
   - **Images, and datasheet pages with them, moved out of 14.0** to pcb's datasheet step, which
     needs texture residency of its own.
 
