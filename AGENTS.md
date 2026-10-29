@@ -49,6 +49,21 @@ a demo that could not show the feature -- found in five minutes by the person wh
 after seven review agents and nineteen passing arms had not. Run the app at the end of each phase
 that changes what it draws.
 
+**The 14.x series has a master plan, `docs/eda-roadmap.md`, and every 14.x spec keeps it true.**
+It lists what cetra gains so that pcb, an EDA program, can be built on it: the 2D canvas,
+idle mode, skipping the 3D pass, the 3D scene in part of the window, text input and scrolling panes,
+the editor widget, rendering at any scale, and the glTF import's differences. Read the item before
+planning its spec. Then update the roadmap on the spec's own branch, at least in its as-built
+commit, whenever any of these happens:
+- an item is started or finished, or gets a spec number;
+- a decision listed under "To decide" is made;
+- the spec does something other than what the roadmap says, which is stated with the reason;
+- an item, or a need of pcb's, is found that the roadmap does not list;
+- the order changes.
+
+A roadmap that still describes the plan from before the work is how this tree's documents have gone
+wrong before: the next spec plans against it and trusts it.
+
 ## Build System
 
 ```bash
