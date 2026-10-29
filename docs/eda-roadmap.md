@@ -116,9 +116,15 @@ object). It never reads back from the GPU.
   the UI at `UI_OVERLAY_ORDER`, over a canvas added lower. Built in phase 1, which also made
   `free_ui_system` take the UI off the list (it used to leave the engine holding a freed pointer)
   and renamed the canvas controller `PlaneDrag`, so the canvas could have the name.
-- **Filling a polygon: triangulated on the CPU** by a port of earcut, in cetra, with antialiased
-  contour edges. A stencil had nowhere to live: the window is multisampled and the picture FBO has
-  colour only.
+- **Filling a polygon: triangulated on the CPU** by a port of earcut, in cetra (`triangulate.h`,
+  public), with antialiased contour edges. A stencil had nowhere to live: the window is
+  multisampled and the picture FBO has colour only. Built in phase 4: a fill's inner ramp is
+  measured against the outline edges at its triangle's corners, since an ear thinner than half a
+  pixel leaves its band to the triangle beside it.
+- **A layer resolves its coverage by the largest any shape gives a pixel**, then paints each pixel
+  once, inside the view's one render pass. Max rather than union, because a shape cut at a tile and
+  a polygon's corners cover a pixel twice and max is idempotent there. Built in phase 4, earlier
+  than planned, because fills needed it.
 - **Tiles and precision:** tiles of 2^22 units; each shape stored as int32 offsets from its tile,
   added to the tile's int32 offset from the view in the shader, so precision does not depend on how
   far from the origin the view is. Long shapes are split at tile edges.
