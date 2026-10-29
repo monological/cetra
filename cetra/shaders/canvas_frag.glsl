@@ -58,7 +58,13 @@ float segmentDistance() {
             return flatEnd(along - len, across, hw);
         return length(vec2(along - len, across)) - hw;
     }
-    return across - hw;
+    // Between the ends: the sides, and the inner half of a flat end's ramp.
+    float d = across - hw;
+    if ((vFlags & CANVAS_FLAG_FLAT_A) != 0u)
+        d = max(d, -along);
+    if ((vFlags & CANVAS_FLAG_FLAT_B) != 0u)
+        d = max(d, along - len);
+    return d;
 }
 
 float arcDistance() {
@@ -67,8 +73,16 @@ float arcDistance() {
     float t = atan(cross2(s, p), dot(s, p));
     if (t < 0.0)
         t += TAU;
-    if (t <= sweep)
-        return abs(length(p) - r) - hw;
+    if (t <= sweep) {
+        // The band, and the inner half of a flat end's ramp: -cross(s, p) is how far p lies
+        // inside the radial line through s, and cross(e, p) inside the one through e.
+        float d = abs(length(p) - r) - hw;
+        if ((vFlags & CANVAS_FLAG_FLAT_A) != 0u)
+            d = max(d, -cross2(s, p));
+        if ((vFlags & CANVAS_FLAG_FLAT_B) != 0u)
+            d = max(d, cross2(e, p));
+        return d;
+    }
     // Past the sector: the nearer end by angle, and the tangent there pointing away from the arc.
     bool atEnd = t - sweep < TAU - t;
     vec2 dir = atEnd ? e : s;
