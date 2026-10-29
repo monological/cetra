@@ -223,14 +223,14 @@ void app_trace_camera(const Engine* engine) {
 }
 
 /*
- * Canvas Controller Implementation
+ * PlaneDrag Implementation
  */
 
-CanvasController* create_canvas_controller(Engine* engine) {
+PlaneDrag* create_plane_drag(Engine* engine) {
     if (!engine) {
         return NULL;
     }
-    CanvasController* ctrl = calloc(1, sizeof(CanvasController));
+    PlaneDrag* ctrl = calloc(1, sizeof(PlaneDrag));
     if (!ctrl) {
         return NULL;
     }
@@ -256,13 +256,13 @@ CanvasController* create_canvas_controller(Engine* engine) {
     return ctrl;
 }
 
-void free_canvas_controller(CanvasController* ctrl) {
+void free_plane_drag(PlaneDrag* ctrl) {
     if (ctrl)
         free_camera_rig(ctrl->rig);
     free(ctrl);
 }
 
-void canvas_world_under_cursor(const Engine* engine, double fb_x, double fb_y, vec3 out) {
+static void _plane_point_under(const Engine* engine, double fb_x, double fb_y, vec3 out) {
     glm_vec3_zero(out);
     if (!engine || !engine->camera || engine->fb_height <= 0) {
         return;
@@ -274,7 +274,11 @@ void canvas_world_under_cursor(const Engine* engine, double fb_x, double fb_y, v
     out[2] = camera->look_at[2];
 }
 
-void canvas_on_button(CanvasController* ctrl, int button, int action, int mods) {
+void plane_drag_point_under(const PlaneDrag* drag, double fb_x, double fb_y, vec3 out) {
+    _plane_point_under(drag ? drag->engine : NULL, fb_x, fb_y, out);
+}
+
+void plane_drag_on_button(PlaneDrag* ctrl, int button, int action, int mods) {
     (void)mods;
     if (!ctrl || !ctrl->engine || button != GLFW_MOUSE_BUTTON_LEFT) {
         return;
@@ -294,16 +298,16 @@ void canvas_on_button(CanvasController* ctrl, int button, int action, int mods) 
 // Slide the whole view with the cursor: the world point that was under the
 // press stays under it. The eye and the target move together, so the view
 // direction never changes.
-static void _canvas_pan(CanvasController* ctrl) {
+static void _plane_pan(PlaneDrag* ctrl) {
     Engine* engine = ctrl->engine;
     Camera* camera = engine->camera;
     if (!camera) {
         return;
     }
     vec3 press = GLM_VEC3_ZERO_INIT, now = GLM_VEC3_ZERO_INIT, offset, delta;
-    canvas_world_under_cursor(engine, engine->input.center_fb_x, engine->input.center_fb_y, press);
-    canvas_world_under_cursor(engine, engine->input.center_fb_x + engine->input.drag_fb_x,
-                              engine->input.center_fb_y + engine->input.drag_fb_y, now);
+    _plane_point_under(engine, engine->input.center_fb_x, engine->input.center_fb_y, press);
+    _plane_point_under(engine, engine->input.center_fb_x + engine->input.drag_fb_x,
+                       engine->input.center_fb_y + engine->input.drag_fb_y, now);
     glm_vec3_sub(press, now, offset);
     // As a delta from the latched target rather than from the current one,
     // so a sequence of motion events does not accumulate rounding.
@@ -313,7 +317,7 @@ static void _canvas_pan(CanvasController* ctrl) {
     camera_rig_set_pose(ctrl->rig, camera->position, camera->look_at);
 }
 
-void canvas_on_cursor(CanvasController* ctrl, double fb_x, double fb_y) {
+void plane_drag_on_cursor(PlaneDrag* ctrl, double fb_x, double fb_y) {
     if (!ctrl || !ctrl->engine) {
         return;
     }
@@ -334,12 +338,12 @@ void canvas_on_cursor(CanvasController* ctrl, double fb_x, double fb_y) {
         target[2] = node->original_transform[3][2];
         node_set_position(node, target);
     } else if (ctrl->panning) {
-        _canvas_pan(ctrl);
+        _plane_pan(ctrl);
     }
 }
 
 // Zoom about the cursor: the world point under it stays under it.
-void canvas_on_scroll(CanvasController* ctrl, double xoffset, double yoffset) {
+void plane_drag_on_scroll(PlaneDrag* ctrl, double xoffset, double yoffset) {
     (void)xoffset;
     if (!ctrl || !ctrl->engine || !ctrl->engine->camera) {
         return;
@@ -352,7 +356,7 @@ void canvas_on_scroll(CanvasController* ctrl, double xoffset, double yoffset) {
         return;
     }
     vec3 anchor = GLM_VEC3_ZERO_INIT;
-    canvas_world_under_cursor(engine, fb_x, fb_y, anchor);
+    _plane_point_under(engine, fb_x, fb_y, anchor);
 
     // Each bound applies on its own, so a range with one end set is one-sided.
     float h_new = h * powf(ctrl->zoom_step, (float)yoffset);

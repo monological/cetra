@@ -50,7 +50,7 @@ These come from pcb's `ARCH.md` sections 8 and 9, and every item below has to re
 
 | # | Item | Status | First needed by pcb's step | Spec |
 |---|------|--------|----------------------------|------|
-| 1 | The 2D canvas | Not started | 6, the window (the schematic); then 7, the layout | 14.0, proposed |
+| 1 | The 2D canvas | In progress | 6, the window (the schematic); then 7, the layout | 14.0 |
 | 2 | Idle mode: drawing only when something changed | Not started | 6 | |
 | 3 | Skipping the 3D scene pass when no 3D view is shown | Not started | 8, the 3D view | |
 | 4 | Drawing the 3D scene into part of the window | Not started | 8 | |
@@ -98,38 +98,42 @@ datasheets.
 index over its exact geometry, ranked by its own rules (mode, shown layers, the more specific
 object). It never reads back from the GPU.
 
-**What cetra has today:**
+**What cetra had before 14.0:**
 
-- **The overlay hook** (`engine_set_overlay`, `engine.h`): the one place an app draws after tone
-  mapping, at display resolution, captured by a headless screenshot. It is a single slot, and the
-  game UI already installs itself into it.
+- **The overlay hook**: the one place an app draws after tone mapping, at display resolution,
+  captured by a headless screenshot. It was a single slot, which the game UI took.
 - **The UI's draw list** (`ui_draw.c`): quads, 9-slice, rounded rectangles whose corners and
   borders are an exact signed-distance evaluation, and SDF glyph runs, batched by texture, program
-  and clip. It works in window points, top-left origin, +Y down.
+  and clip. It works in window points, top-left origin, +Y down, and is rebuilt every frame.
 - **SDF text** (`text.c`), whose `Font` and `font_get_glyph` the UI already shares.
-- **The canvas controller** (`app.h`): pan and zoom on a square-on orthographic camera over a plane,
-  the wheel zooming about the point under the cursor. It works in the camera's float world units,
-  not in nanometre tiles, so it may not fit the canvas as it is.
-- **`engine_set_2d_preset`**, the 2D defaults for a scene drawn through the camera. The canvas draws
-  after tone mapping, so the preset may not concern it.
+- **The canvas controller** (`app.h`): pan and zoom on a square-on orthographic camera over a plane.
+  It moves a scene's camera, in float world units, so it does not fit the canvas.
+- **No polygon triangulation** anywhere in `cetra/src`.
 
-**To decide in its spec:**
+**Decided in spec 14.0** (`specs/14.0-the-2d-canvas.md` has the reasons):
 
-- **Sharing the overlay.** The canvas and the UI both draw there, the canvas under the status line,
-  palette and chat. The slot becomes an ordered list, or the canvas is drawn by the app inside its
-  own overlay before the UI.
-- **Filling a polygon.** One quad per primitive fills a circle or a rounded rectangle, but not an
-  arbitrary polygon with holes, which a pour is. Either cetra triangulates (pcb's CDT stays in pcb)
-  or the caller hands over triangles, or the fill is done with a stencil.
-- **The size of a tile.** A float holds 24 bits, and 2^24 nm is about 16.8 mm, so a tile up to that
-  size holds its positions to a nanometre. How far a frame reaches, and how a camera far from the
-  origin is handled, follows from that.
-- **Text in world units.** Pin names, reference designators and net labels scale and rotate with
-  the board, unlike UI text, and drop out when too small to read.
-- **Several canvases at once.** The schematic and the layout both stay loaded; the split shows two
-  of them, each in its own rectangle of the window with its own pan and zoom.
-- **Retained, not rebuilt.** The UI's draw list is one vertex buffer; the canvas keeps a buffer per
-  tile and touches only what changed.
+- **Sharing the overlay: an ordered list** of up to eight post-tonemap draws (`engine_add_overlay`),
+  the UI at `UI_OVERLAY_ORDER`, over a canvas added lower. Built in phase 1, which also made
+  `free_ui_system` take the UI off the list (it used to leave the engine holding a freed pointer)
+  and renamed the canvas controller `PlaneDrag`, so the canvas could have the name.
+- **Filling a polygon: triangulated on the CPU** by a port of earcut, in cetra, with antialiased
+  contour edges. A stencil had nowhere to live: the window is multisampled and the picture FBO has
+  colour only.
+- **Tiles and precision:** tiles of 2^22 units; each shape stored as int32 offsets from its tile,
+  added to the tile's int32 offset from the view in the shader, so precision does not depend on how
+  far from the origin the view is. Long shapes are split at tile edges.
+- **Text in world units:** laid out by the canvas, sized by the em, cut at the font's true edge,
+  dropped below a pixel size.
+- **Several views at once:** a view is a value (a rectangle, a pan, a zoom, and its own shown layers
+  and active layer), drawn by `canvas_draw` into one target the canvas owns.
+- **Retained, not rebuilt**, with three deviations from what is written above:
+  - **A tile is a range of its layer's buffer**, not a buffer of its own, uploaded alone when it
+    changes. A buffer per tile meant a draw per tile per layer, thousands zoomed out, at about 2 µs
+    a draw on Apple's GL.
+  - **Each shape carries two tags**, a net and an object, where ARCH has a net ID only: diff colours
+    and selection belong to objects.
+  - **Images, and datasheet pages with them, moved out of 14.0** to pcb's datasheet step, which
+    needs texture residency of its own.
 
 ---
 

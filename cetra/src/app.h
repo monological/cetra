@@ -4,9 +4,10 @@
 
 /*
  * App helpers: the two input adapters an app forwards its callbacks to, one for
- * a 3D viewer and one for a 2D canvas, a three-point light rig, and the input
- * gate. Neither owns the drag; the engine's input state does, and both read it
- * from there. Each is created with defaults and tuned by writing its fields.
+ * a 3D viewer and one for a plane under an orthographic camera, a three-point
+ * light rig, and the input gate. Neither owns the drag; the engine's input
+ * state does, and both read it from there. Each is created with defaults and
+ * tuned by writing its fields.
  *
  * NEITHER IS A CAMERA, since spec 12.19. Both turn a pointer into what a
  * `camera_rig.h` rig is told, and the rig decides where the eye goes. The one
@@ -81,16 +82,17 @@ void camera_drag_on_scroll(CameraDrag* drag, double xoffset, double yoffset);
 bool camera_drag_on_key(CameraDrag* drag, int key, int action, int mods);
 
 /*
- * Canvas Controller
+ * A POINTER driving a camera over a plane, the 2D twin of CameraDrag: a
+ * square-on orthographic camera, where a drag on empty space pans, a drag on a
+ * picked node moves it in the plane, and the wheel zooms about the point under
+ * the cursor. An app with gestures of its own (handles, corners) runs them
+ * first and hands this what is left; the drag itself lives in engine->input.
  *
- * The 2D twin of the drag controller, for a square-on orthographic camera
- * over a plane: a drag on empty space pans, a drag on a picked node moves it
- * in the plane, and the wheel zooms about the point under the cursor. An app
- * with gestures of its own (handles, corners) runs them first and hands the
- * controller what is left; the drag itself lives in engine->input.
+ * It moves a scene's camera. The 2D canvas (canvas.h) is not a scene and pans
+ * its own views.
  */
-typedef struct CanvasController {
-    // ENGINE-OWNED (by the controller): the pan in flight.
+typedef struct PlaneDrag {
+    // ENGINE-OWNED (by the adapter): the pan in flight.
     Engine* engine;
     // The rig it writes its pose through; owned. Its ARITHMETIC is this file's
     // and always was -- a 2D camera pans and zooms an ortho height and never
@@ -104,27 +106,28 @@ typedef struct CanvasController {
     float zoom_min; // ortho_height range; a bound left 0 is unclamped
     float zoom_max;
     float zoom_step; // ortho_height factor per wheel notch, default 0.9
-} CanvasController;
+} PlaneDrag;
 
-CanvasController* create_canvas_controller(Engine* engine);
-void free_canvas_controller(CanvasController* ctrl);
+PlaneDrag* create_plane_drag(Engine* engine);
+void free_plane_drag(PlaneDrag* drag);
 
-// The world point under a framebuffer position on a square-on orthographic
-// camera: look_at + (fb - fb_centre) * (ortho_height / fb_height), both axes.
-void canvas_world_under_cursor(const Engine* engine, double fb_x, double fb_y, vec3 out);
+// The world point under a framebuffer position on the engine's square-on
+// orthographic camera: look_at + (fb - fb_centre) * (ortho_height / fb_height),
+// both axes.
+void plane_drag_point_under(const PlaneDrag* drag, double fb_x, double fb_y, vec3 out);
 
 // Forwarded from the app's mouse-button callback, after any picking of its
 // own. A left press pans when the engine's pick found nothing; a release
 // stops.
-void canvas_on_button(CanvasController* ctrl, int button, int action, int mods);
+void plane_drag_on_button(PlaneDrag* drag, int button, int action, int mods);
 
 // Forwarded from the app's cursor callback, in framebuffer pixels. Moves the
 // picked node on the drag plane (x and y; z untouched), else pans.
-void canvas_on_cursor(CanvasController* ctrl, double fb_x, double fb_y);
+void plane_drag_on_cursor(PlaneDrag* drag, double fb_x, double fb_y);
 
 // Forwarded from the app's scroll callback. Zooms ortho_height by
 // zoom_step^yoffset about the point under the cursor, within the range.
-void canvas_on_scroll(CanvasController* ctrl, double xoffset, double yoffset);
+void plane_drag_on_scroll(PlaneDrag* drag, double xoffset, double yoffset);
 
 // The camera pose a frame draws from, on stdout, at a width that makes a textual
 // diff of two runs a bit diff.
