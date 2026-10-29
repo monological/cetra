@@ -26,6 +26,8 @@ reason is recorded beside the flag rather than in whichever spec introduced it.
 
 **PostFX / environment CLI flags** (render app): `--taa`, `--render-scale <f>`
 (TAAU; headless needs `--taa --headless-jitter`),
+`--idle` (spec 14.1 — the engine's idle mode. A scene with anything in it still draws every frame,
+so a scene loaded here draws as it does without it, which is what the `idle-3d` arm holds),
 `--render-scale-at <frame:scale[,...]>` (diagnostic: switch scale mid-run,
 exercising the runtime rebuild; same headless preconditions),
 `--exposure-at <frame:multiplier>` (spec 13.20 — diagnostic: write the exposure multiplier on a
@@ -1805,5 +1807,19 @@ It takes the capture set `-x`, `-f`, `-S`, `-W` and `-H`, and:
   with rows from the top; on the board it also runs a script, a step a frame, printing what each
   frame uploaded. `--budget` prints each frame's canvas draws in milliseconds, timed between two
   `glFinish` calls. Both are what the `canvas` gate group reads.
+- `--idle` turns on the engine's idle mode (spec 14.1): a frame is drawn only when something asks
+  for one. Under it:
+  - `--edit-thread` stops joining its thread: the board is filled while the loop runs, after a
+    pause standing for a parse, and applied on the frame its end wakes.
+  - `--idle-wake S,...` asks for timed wakes, each on its frame in turn.
+  - `--idle-load PATH` loads a texture, named from the working directory, once those wakes are
+    spent.
+  - `--ui-enter`, with `--ui`, fades the panel in and puts focus on a button in it.
+  - `--gui-click` opens the debug GUI and hands it a click on the first frame.
 
-In a window a drag pans and the wheel zooms the view under the cursor.
+  Headless, the run ends at the first frame after which nothing asks for another. It prints each
+  frame's `delta_time`, the frames drawn and the seconds waited, which the `idle` gate group reads.
+- `--pointer-script PATH` replays a scripted pointer (spec 12.19's grammar) in place of the mouse.
+
+In a window a drag pans and the wheel zooms the view under the cursor. G opens the debug GUI, and F
+the FPS readout, which under `--idle` counts the frames drawn.
