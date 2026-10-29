@@ -51,7 +51,7 @@ These come from pcb's `ARCH.md` sections 8 and 9, and every item below has to re
 | # | Item | Status | First needed by pcb's step | Spec |
 |---|------|--------|----------------------------|------|
 | 1 | The 2D canvas | **Built**, spec 14.0; images, drag offsets and the rest below are left for later | 6, the window (the schematic); then 7, the layout | 14.0 |
-| 2 | Idle mode: drawing only when something changed | Not started; next, as spec 14.1, for frames that draw no 3D scene | 6 | |
+| 2 | Idle mode: drawing only when something changed | **Built**, spec 14.1, for frames that draw no 3D scene | 6 | 14.1 |
 | 3 | Skipping the 3D scene pass when no 3D view is shown | Not started; takes a still 3D view drawn on demand, moved from item 2 | 8, the 3D view | |
 | 4 | Drawing the 3D scene into part of the window | Not started | 8 | |
 | 5 | Text input and scrolling panes in the UI | Not started | 6 (the command palette and the `/` jump); 9 (the chat) | |
@@ -193,32 +193,42 @@ object). It never reads back from the GPU.
 **What pcb needs**: nothing drawn unless something changed, and continuous drawing back on while
 something moves (live routing). Input still reaches the screen within one frame.
 
-**What cetra has today**: `engine_run` draws every frame, throttled by vsync. The only path that
-waits is a minimized window, which blocks on `glfwWaitEventsTimeout(0.1)` (`engine.c`, the
-nothing-to-draw branch of the loop).
+**What cetra had before 14.1**: `engine_run` drew every frame, throttled by vsync. The only path
+that waited was a minimized window, which blocks on `glfwWaitEventsTimeout(0.1)`.
 
-**Scope, decided while planning spec 14.1:**
+**Built in spec 14.1** (`specs/14.1-idle-mode.md` has the reasons):
 
 - **Idle mode covers the frames that draw no 3D scene**: the schematic, the layout, the code editor
-  and the chat. A frame that draws the 3D scene keeps the loop drawing every frame, as today.
-- **It is a switch an app turns on, off by default**, so every game, every other app and every
-  golden is unchanged. pcb and `apps/canvas` turn it on.
+  and the chat. A frame whose scene has anything to draw keeps the loop drawing every frame, as
+  before: an item, an IBL, a sky, water, falling rain, a fire, a particle system.
+- **It is a switch an app turns on, off by default** (`Engine.idle`, `EngineConfig.idle`), so every
+  game, every other app and every golden is unchanged. pcb and `apps/canvas` turn it on.
 - **A still 3D view drawn on demand moved to item 3** (below), with what keeps a 3D frame alive and
   the accumulation pcb's ARCH asks for. Only with pcb's 3D view is there a board to judge it on.
+- **Who says something changed:**
+  - input, through every window callback, refresh, focus and cursor-enter added;
+  - `engine_request_frame`, from any thread, which wakes a waiting loop with `glfwPostEmptyEvent`;
+  - `engine_request_frame_after`, a timed wake, for pcb's blink;
+  - `engine_begin_work` and `engine_end_work`, around a thread's result, such as a parse;
+  - the engine's own: the UI while it eases or a screen enters, the debug GUI while ImGui takes
+    queued input, the texture loader when a decode is done, the loading screen, a pointer script.
 
-**To decide in its spec:**
+  A change made inside a frame is drawn by that frame, so pcb asks only for changes made elsewhere.
+- **The clock across a wait.** The wait is kept out of `delta_time` and the windowed `render_time`,
+  so what animates resumes where it stopped.
+- **The frame counter** advances only on drawn frames, so the frame after a wait is adjacent to the
+  last and no history is dropped.
+- **Headless**, a run in idle mode ends at the first frame after which nothing asks for another and
+  no work is out, and that frame is its screenshot: what `pcb render` wants. `--frames N` is then
+  the most it draws. A run without idle mode is unchanged.
+- **pcb's part:**
+  - set `idle`;
+  - call `engine_end_work` (or `engine_request_frame`) when a worker publishes a snapshot;
+  - while live routing runs, call `engine_request_frame` each frame;
+  - read a gamepad, if ever, the same way, since pads send no events.
 
-- **Who says something changed.** An input event wakes the loop by itself. Work finished on another
-  thread does not, so the app needs a call that asks for a frame, and a thread needs a way to wake
-  the loop (GLFW's `glfwPostEmptyEvent`, used nowhere in cetra yet).
-- **What else keeps a frame alive without a 3D scene**: the UI's eases and screen transitions, the
-  debug GUI (ImGui spreads input over frames), the loading screen, texture loads in flight. Each asks
-  for frames until it is done.
-- **The clock across a wait.** The first frame after a long wait must not hand the simulation the
-  whole wait as one step.
-- **A wait must not advance the frame counter.** A gap in it is how the shadow tiles and the fog's
-  histories tell that history was lost, as the minimized window's undrawn frames do today.
-- **Headless.** A headless run has no events to wait on, and `--frames N` has to keep its meaning.
+**Left for later:** a gamepad that wakes the loop by itself. GLFW polls pads, and sends no event
+for them.
 
 ---
 
