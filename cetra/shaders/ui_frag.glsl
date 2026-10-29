@@ -4,7 +4,7 @@ in vec2 vUV;
 in vec4 vColor;
 in vec2 vPos;
 in vec4 vRect;
-in vec4 vParams; // x corner radius, y border width, z mode, w unused
+in vec4 vParams; // x corner radius, y border width, z mode, w a glyph's edge
 in vec4 vBorder;
 
 out vec4 FragColor;
@@ -41,13 +41,16 @@ void main() {
     if (mode == UI_MODE_GLYPH) {
         // The SDF core of text_frag.glsl, deliberately the same formula: two
         // renderers disagreeing about where a glyph's edge is would show as
-        // text that changes weight depending on which one drew it.
+        // text that changes weight depending on which one drew it. The edge is
+        // the font's (Font.sdf_edge), where its field has the outline; cut at
+        // 0.5, text was drawn about two atlas pixels bolder than the face.
         float dist = texture(uTex, vUV).r;
+        float edge = vParams.w;
         // fwidth alone, with no constant added. A fixed smoothing term is a
         // fixed blur in FIELD units, so it widens as the glyph shrinks: at menu
         // sizes it is most of the edge, and the text reads soft and uneven.
         float sw = max(fwidth(dist) * 0.5, 1e-4);
-        float core = smoothstep(0.5 - sw, 0.5 + sw, dist);
+        float core = smoothstep(edge - sw, edge + sw, dist);
         float alpha = core * vColor.a;
         if (alpha < 0.003)
             discard;

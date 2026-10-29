@@ -801,7 +801,7 @@ void render_text_2d_effect(TextRenderer* renderer, TextMesh* mesh, const TextEff
     uniform_set_mat4(u, "model", (float*)mesh->transform);
     uniform_set_int(u, "isScreenSpace", 1);
     uniform_set_int(u, "useSDF", mesh->font->is_sdf ? 1 : 0);
-    uniform_set_float(u, "sdfEdge", 0.5f);
+    uniform_set_float(u, "sdfEdge", mesh->font->sdf_edge);
     uniform_set_float(u, "sdfSmoothing", 0.1f);
 
     // Effect uniforms
@@ -862,7 +862,7 @@ void render_text_3d(TextRenderer* renderer, TextMesh* mesh, mat4 view, mat4 proj
     uniform_set_mat4(u, "model", (float*)mesh->transform);
     uniform_set_int(u, "isScreenSpace", 0);
     uniform_set_int(u, "useSDF", mesh->font->is_sdf ? 1 : 0);
-    uniform_set_float(u, "sdfEdge", 0.5f);
+    uniform_set_float(u, "sdfEdge", mesh->font->sdf_edge);
     uniform_set_float(u, "sdfSmoothing", 0.1f);
 
     // Bind font atlas
