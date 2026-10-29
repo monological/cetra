@@ -109,10 +109,14 @@ float arcDistance() {
 }
 
 // The outer half of a fill's edge ramp: a segment with no width, on the side away from the
-// polygon only, which the fill's own ramp stops at; past an end, the distance to the polygon's
-// corner there.
+// polygon, which the fill's own ramp stops at; past an end, the distance to the polygon's corner
+// there. It reaches a thirty-second of a pixel inside: a pixel centre on the edge has coverage
+// 0.5 whichever side rounding puts it, and cut exactly at the line, which side a pass kept it on
+// depended on the quad it was interpolated across. One the fill did not own either was then never
+// painted, and its alpha was left for the next layer. The overlap gives the same coverage twice,
+// which the layer's max absorbs.
 float edgeDistance() {
-    if (vLocal.y < 0.0)
+    if (vLocal.y < -1.0 / 32.0)
         discard;
     return segmentDistance();
 }
