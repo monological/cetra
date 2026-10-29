@@ -19,6 +19,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
@@ -32,16 +33,20 @@
 #include "cetra/scene.h"
 #include "cetra/text.h"
 #include "cetra/triangulate.h"
+#include "cetra/ui.h"
 
 #define MM(v) ((int64_t)llround((v) * 1e6))
 
 static Canvas* g_canvas;
-static CanvasView g_view;
-static bool g_panning;
+static CanvasView g_views[2]; // the window's views, side by side under --split
+static int g_view_count = 1;
+static int g_only_view = -1;     // under --only-view, the one of the split drawn
+static int g_drag_view = -1;     // the view a drag pans
 static float g_last_x, g_last_y; // the cursor, window points
 static bool g_probe_target;      // say once which framebuffer the overlay drew into
+static bool g_budget;            // time each frame's canvas draws
 
-// What a sheet is built with.
+// What a sheet is built with, and what it says about a split's two views.
 typedef struct SheetContext {
     Canvas* canvas;
     CanvasEdit* edit;
@@ -51,6 +56,11 @@ typedef struct SheetContext {
     bool probe;             // print where its shapes land
     bool edit_thread;       // fill the edit on a thread of its own, where a sheet can
     const Font* font;       // what its text is set in
+
+    // Written by a sheet that has two sides: the layers a split's mirrored
+    // view shows (empty = every one), and each view's active layer.
+    CanvasLayerSet under_shown;
+    const CanvasLayer* active[2];
 } SheetContext;
 
 // Framebuffer pixels per unit in the sheet's view.
@@ -857,8 +867,8 @@ static void sheet_tags(SheetContext* ctx) {
  * segment added, the same removed, and a transient layer refilled twice.
  */
 typedef struct Board {
-    CanvasLayer *plane, *bottom, *top, *silk, *edge, *holes, *transient;
-    uint16_t plane_s, bottom_s, top_s, silk_s, edge_s, hole_s, wire_s;
+    CanvasLayer *plane, *bottom, *top, *silk, *edge, *transient;
+    uint16_t plane_s, bottom_s, top_s, silk_s, edge_s, wire_s;
     const Font* font;
     int64_t offset;
 } Board;
@@ -893,17 +903,18 @@ static void board_pad(CanvasEdit* edit, const Board* b, CanvasLayer* layer, uint
                                        .angle = angle});
 }
 
+// A plated hole: a ring on each copper layer from the drill's radius out to the
+// pad's, so the hole shows whatever is under it.
 static void board_via(CanvasEdit* edit, const Board* b, uint32_t net, uint32_t object, double x,
                       double y, double ring, double hole) {
-    const CanvasCircle pad = {
-        .paint = {b->top, b->top_s, net, object}, .centre = board_at(b, x, y), .radius = MM(ring)};
+    const CanvasCircle pad = {.paint = {b->top, b->top_s, net, object},
+                              .centre = board_at(b, x, y),
+                              .radius = MM((ring + hole) * 0.5),
+                              .stroke = MM(ring - hole)};
     canvas_edit_circle(edit, &pad);
     CanvasCircle under = pad;
     under.paint.layer = b->bottom, under.paint.style = b->bottom_s;
     canvas_edit_circle(edit, &under);
-    canvas_edit_circle(edit, &(CanvasCircle){.paint = {b->holes, b->hole_s, 0, object},
-                                             .centre = pad.centre,
-                                             .radius = MM(hole)});
 }
 
 static void board_label(CanvasEdit* edit, const Board* b, const char* text, double x, double y,
@@ -1153,7 +1164,6 @@ static void sheet_board(SheetContext* ctx) {
     b->top = canvas_add_layer(canvas, "top");
     b->silk = canvas_add_layer(canvas, "silk");
     b->edge = canvas_add_layer(canvas, "edge");
-    b->holes = canvas_add_layer(canvas, "holes");
     b->transient = canvas_add_layer(canvas, "transient");
     b->plane->opacity = 0.35f;
     b->bottom->opacity = 0.7f;
@@ -1163,7 +1173,6 @@ static void sheet_board(SheetContext* ctx) {
     b->top_s = canvas_add_style(canvas, 0xc83434ffu);
     b->silk_s = canvas_add_style(canvas, 0xe6e6e6ffu);
     b->edge_s = canvas_add_style(canvas, 0xd8c75affu);
-    b->hole_s = canvas_add_style(canvas, 0x001023ffu);
     b->wire_s = canvas_add_style(canvas, 0xffffffffu);
 
     // One net highlighted, raised over its neighbours and every other net
@@ -1188,6 +1197,14 @@ static void sheet_board(SheetContext* ctx) {
     canvas_edit_remove_object(ctx->edit, BOARD_REMOVED);
     if (ctx->probe)
         g_after_draw = board_script;
+
+    // Seen from below, a split's second view shows the plane, the bottom copper
+    // and the outline, the bottom active; the first, the top active.
+    canvas_layer_set_add(&ctx->under_shown, b->plane);
+    canvas_layer_set_add(&ctx->under_shown, b->bottom);
+    canvas_layer_set_add(&ctx->under_shown, b->edge);
+    ctx->active[0] = b->top;
+    ctx->active[1] = b->bottom;
 }
 
 typedef struct Sheet {
@@ -1225,17 +1242,54 @@ static const Sheet* find_sheet(const char* name) {
  * The window.
  */
 
+// The window's views, each an equal share of its width.
+static void lay_out_views(const Engine* engine) {
+    const float part = (float)engine->win_width / (float)g_view_count;
+    for (int i = 0; i < g_view_count; i++) {
+        g_views[i].x = part * (float)i;
+        g_views[i].y = 0.0f;
+        g_views[i].width = part;
+        g_views[i].height = (float)engine->win_height;
+    }
+}
+
+static int view_at(float x) {
+    for (int i = g_view_count - 1; i > 0; i--)
+        if (x >= g_views[i].x)
+            return i;
+    return 0;
+}
+
+static double now_ms(void) {
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return (double)t.tv_sec * 1e3 + (double)t.tv_nsec * 1e-6;
+}
+
 static void draw_view(Engine* engine, void* user) {
     (void)user;
-    g_view.width = (float)engine->win_width;
-    g_view.height = (float)engine->win_height;
+    lay_out_views(engine);
     if (g_probe_target) {
         printf("canvas frame target %s\n",
                postfx_picture_fbo(engine->postfx) ? "picture" : "window");
         fflush(stdout);
         g_probe_target = false;
     }
-    canvas_draw(g_canvas, &g_view);
+    // Under --budget, the draws' whole cost, GPU included: finished before the
+    // clock starts and before it stops.
+    double start = 0.0;
+    if (g_budget) {
+        glFinish();
+        start = now_ms();
+    }
+    for (int i = 0; i < g_view_count; i++)
+        if (g_only_view < 0 || g_only_view == i)
+            canvas_draw(g_canvas, &g_views[i]);
+    if (g_budget) {
+        glFinish();
+        printf("canvas budget %d ms %.3f\n", engine->frame_count, now_ms() - start);
+        fflush(stdout);
+    }
     if (g_after_draw)
         g_after_draw();
 }
@@ -1248,8 +1302,8 @@ static void to_points(const Engine* engine, double fb_x, double fb_y, float* x, 
 static void on_cursor(Engine* engine, double fb_x, double fb_y) {
     float x, y;
     to_points(engine, fb_x, fb_y, &x, &y);
-    if (g_panning)
-        canvas_view_pan(&g_view, x - g_last_x, y - g_last_y);
+    if (g_drag_view >= 0)
+        canvas_view_pan(&g_views[g_drag_view], x - g_last_x, y - g_last_y);
     g_last_x = x, g_last_y = y;
 }
 
@@ -1257,20 +1311,21 @@ static void on_button(Engine* engine, int button, int action, int mods) {
     (void)engine;
     (void)mods;
     if (button == GLFW_MOUSE_BUTTON_LEFT)
-        g_panning = action == GLFW_PRESS;
+        g_drag_view = action == GLFW_PRESS ? view_at(g_last_x) : -1;
 }
 
 static void on_scroll(Engine* engine, double xoffset, double yoffset) {
     (void)engine;
     (void)xoffset;
-    canvas_view_zoom_at(&g_view, g_last_x, g_last_y, pow(1.15, yoffset));
+    canvas_view_zoom_at(&g_views[view_at(g_last_x)], g_last_x, g_last_y, pow(1.15, yoffset));
 }
 
 static void usage(const char* argv0) {
     fprintf(stderr,
             "usage: %s [-x] [-f frames] [-S out.ppm] [-W points] [-H points]\n"
             "          [--sheet NAME] [--view X,Y,WIDTH (mm)] [--offset UNITS] [--mirror]\n"
-            "          [--tile-shift N] [--canvas-probe] [--picture] [--edit-thread]\n",
+            "          [--tile-shift N] [--canvas-probe] [--picture] [--edit-thread]\n"
+            "          [--split] [--only-view 0|1] [--ui] [--budget]\n",
             argv0);
 }
 
@@ -1287,7 +1342,8 @@ static const char* IDENTITY_PASS = "#version 330 core\n"
 
 int main(int argc, char** argv) {
     bool headless = false, mirror = false, probe = false, picture = false, edit_thread = false;
-    int frames = 0, width = 960, height = 600, tile_shift = 0;
+    bool split = false, with_ui = false, budget = false;
+    int frames = 0, width = 960, height = 600, tile_shift = 0, only_view = -1;
     const char* screenshot = NULL;
     const char* sheet_name = "shapes";
     double view_x = NAN, view_y = NAN, view_w = NAN;
@@ -1323,6 +1379,14 @@ int main(int argc, char** argv) {
             picture = true;
         } else if (strcmp(argv[i], "--edit-thread") == 0) {
             edit_thread = true;
+        } else if (strcmp(argv[i], "--split") == 0) {
+            split = true;
+        } else if (strcmp(argv[i], "--only-view") == 0 && more) {
+            only_view = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--ui") == 0) {
+            with_ui = true;
+        } else if (strcmp(argv[i], "--budget") == 0) {
+            budget = true;
         } else {
             usage(argv[0]);
             return 2;
@@ -1361,22 +1425,25 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    // Each view shows the sheet's width across its own share of the window.
+    g_view_count = split ? 2 : 1;
     const double cx = isnan(view_x) ? sheet->centre_mm[0] : view_x;
     const double cy = isnan(view_y) ? sheet->centre_mm[1] : view_y;
     const double cw = isnan(view_w) ? sheet->width_mm : view_w;
-    g_view = (CanvasView){.width = (float)width,
-                          .height = (float)height,
-                          .points_per_unit = (double)width / (cw * 1e6),
-                          .mirror_x = mirror,
-                          .background = sheet->background};
+    CanvasView* view = &g_views[0];
+    *view = (CanvasView){.width = (float)width / (float)g_view_count,
+                         .height = (float)height,
+                         .points_per_unit = (double)width / (double)g_view_count / (cw * 1e6),
+                         .mirror_x = mirror,
+                         .background = sheet->background};
     // The centre in whole units plus its fraction, from millimetres and the offset.
     const double ux = cx * 1e6, uy = cy * 1e6;
-    g_view.centre = (CanvasPoint){(int64_t)floor(ux) + offset, (int64_t)floor(uy) + offset};
-    g_view.fraction[0] = ux - floor(ux);
-    g_view.fraction[1] = uy - floor(uy);
+    view->centre = (CanvasPoint){(int64_t)floor(ux) + offset, (int64_t)floor(uy) + offset};
+    view->fraction[0] = ux - floor(ux);
+    view->fraction[1] = uy - floor(uy);
 
-    const Font* font = load_font(engine->text_renderer->font_pool,
-                                 "apps/splash/assets/Roboto-Bold.ttf", 64.0f, true);
+    Font* font = load_font(engine->text_renderer->font_pool, "apps/splash/assets/Roboto-Bold.ttf",
+                           64.0f, true);
     if (!font) {
         free_canvas(g_canvas);
         free_engine(engine);
@@ -1385,7 +1452,7 @@ int main(int argc, char** argv) {
     SheetContext ctx = {.canvas = g_canvas,
                         .edit = create_canvas_edit(g_canvas),
                         .offset = (int64_t)offset,
-                        .view = &g_view,
+                        .view = view,
                         .fb_scale = (double)engine->fb_width / (double)engine->win_width,
                         .probe = probe,
                         .edit_thread = edit_thread,
@@ -1393,8 +1460,40 @@ int main(int argc, char** argv) {
     sheet->build(&ctx);
     canvas_apply(g_canvas, ctx.edit);
     free_canvas_edit(ctx.edit);
-    fflush(stdout);
+    // The split's second view: the same place seen from the other side, with
+    // the layers the sheet says that side shows.
+    if (split) {
+        view->active = ctx.active[0];
+        g_views[1] = *view;
+        g_views[1].x = view->width;
+        g_views[1].mirror_x = !mirror;
+        g_views[1].shown = ctx.under_shown;
+        g_views[1].active = ctx.active[1];
+    }
+    g_only_view = only_view;
+    g_budget = budget;
     g_probe_target = probe;
+
+    // Under --ui, a panel of the game UI over the canvas, at the UI's order.
+    UISystem* ui = NULL;
+    if (with_ui) {
+        ui = create_ui_system(engine);
+        ui_set_font(ui, font, 18.0f);
+        UIScreen* screen = ui_screen(ui, "panel");
+        UIElement* panel = ui_panel(ui_screen_root(screen));
+        ui_set_size(panel, UI_FIXED, 160.0f, UI_FIXED, 90.0f);
+        ui_set_style(panel, &(UIStyle){.bg = {0.2f, 0.6f, 0.9f, 1.0f}});
+        ui_push(ui, screen);
+        ui_attach(ui, engine);
+        ui_layout(screen, (float)width, (float)height);
+        if (probe) {
+            const double s = ctx.fb_scale;
+            const UIRect r = panel->rect;
+            printf("canvas ui panel %ld %ld %ld %ld want 3399e6\n", lround(r.x * s),
+                   lround(r.y * s), lround((r.x + r.w) * s), lround((r.y + r.h) * s));
+        }
+    }
+    fflush(stdout);
 
     engine_add_overlay(engine, draw_view, NULL, 0);
     engine_set_cursor_position_callback(engine, on_cursor);
@@ -1402,6 +1501,7 @@ int main(int argc, char** argv) {
     engine_set_scroll_callback(engine, on_scroll);
 
     engine_run(engine, NULL, NULL, NULL);
+    free_ui_system(ui);
     free_canvas(g_canvas);
     free_engine(engine);
     return 0;
