@@ -50,7 +50,7 @@ These come from pcb's `ARCH.md` sections 8 and 9, and every item below has to re
 
 | # | Item | Status | First needed by pcb's step | Spec |
 |---|------|--------|----------------------------|------|
-| 1 | The 2D canvas | **Built**, spec 14.0; the UI's text cut awaits a judgement, and images, drag offsets and the rest below are left for later | 6, the window (the schematic); then 7, the layout | 14.0 |
+| 1 | The 2D canvas | **Built**, spec 14.0; images, drag offsets and the rest below are left for later | 6, the window (the schematic); then 7, the layout | 14.0 |
 | 2 | Idle mode: drawing only when something changed | Not started | 6 | |
 | 3 | Skipping the 3D scene pass when no 3D view is shown | Not started | 8, the 3D view | |
 | 4 | Drawing the 3D scene into part of the window | Not started | 8 | |
@@ -138,7 +138,9 @@ object). It never reads back from the GPU.
     rasterizer.
   - Glyphs are indexed by codepoint, so the table holds ASCII, as the atlas does. A denser index
     comes with glyphs beyond ASCII (items 5 and 6).
-  - The UI's cut moves to the same edge at the end of 14.0, once its before and after are judged.
+  - The UI's glyphs and the text meshes cut at the same edge, judged on before and after pictures
+    of silent's and gametest's menus: they had been drawn about two atlas pixels bolder than the
+    face.
 - **Several views at once:** a view is a value (a rectangle, a pan, a zoom, and its own shown layers
   and active layer), drawn by `canvas_draw` into one target the canvas owns. Built in phases 2
   and 7: a board split as two views, the second from below with its own layers, each equal to

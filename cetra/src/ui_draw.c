@@ -35,7 +35,7 @@ typedef struct UIVertex {
     float u, v;
     float color[4];
     float rect[4];   // min.xy, max.xy -- the quad's own bounds, for the corner SDF
-    float params[4]; // corner radius, border width, mode, unused
+    float params[4]; // corner radius, border width, mode, a glyph's field value at its outline
     float border[4];
 } UIVertex;
 
@@ -168,16 +168,17 @@ static UIBatch* _batch_for(UIDrawList* dl, GLuint texture) {
 // The quad's own corners ARE the rect the corner SDF measures against -- there
 // was a `rect` parameter for a caller that wanted to differ, every call site
 // passed NULL, and the fallback was the only path that ever ran.
-static void _push_quad(UIDrawList* dl, GLuint texture, float x0, float y0, float x1, float y1,
+// False when nothing was pushed.
+static bool _push_quad(UIDrawList* dl, GLuint texture, float x0, float y0, float x1, float y1,
                        float u0, float v0, float u1, float v1, const float color[4], float radius,
                        float border_w, float mode, const float border[4]) {
     if (!dl || x1 <= x0 || y1 <= y0)
-        return;
+        return false;
     if (!_reserve_verts(dl, 4) || !_reserve_idx(dl, 6))
-        return;
+        return false;
     UIBatch* batch = _batch_for(dl, texture);
     if (!batch)
-        return;
+        return false;
 
     static const float opaque_white[4] = {1.0f, 1.0f, 1.0f, 1.0f};
     static const float no_border[4] = {0.0f, 0.0f, 0.0f, 0.0f};
@@ -209,6 +210,7 @@ static void _push_quad(UIDrawList* dl, GLuint texture, float x0, float y0, float
     for (int i = 0; i < 6; i++)
         dl->idx[dl->icount++] = base + order[i];
     batch->index_count += 6;
+    return true;
 }
 
 // ---------------------------------------------------------------- primitives
@@ -564,8 +566,12 @@ void ui_draw_text(UIDrawList* dl, UIRect r, const char* text, const UIStyle* sty
         }
         const float x1 = x0 + (g->x1 - g->x0) * scale;
         const float y1 = y0 + (g->y1 - g->y0) * scale;
-        _push_quad(dl, font->atlas_texture_id, x0, y0, x1, y1, g->u0, g->v0, g->u1, g->v1, color,
-                   0.0f, 0.0f, UI_MODE_GLYPH, NULL);
+        // A glyph is cut where its font's field has its outline, or half way
+        // up a coverage bitmap's, which the quad's last parameter carries.
+        if (_push_quad(dl, font->atlas_texture_id, x0, y0, x1, y1, g->u0, g->v0, g->u1, g->v1,
+                       color, 0.0f, 0.0f, UI_MODE_GLYPH, NULL))
+            for (size_t k = dl->vcount - 4; k < dl->vcount; k++)
+                dl->verts[k].params[3] = font->is_sdf ? font->sdf_edge : 0.5f;
         pen_x += g->advance_x * scale;
         prev = (int)*p;
     }
