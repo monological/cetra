@@ -28643,6 +28643,17 @@ def run_canvas_gate(workdir):
       canvas-edit-thread the board filled into its edit on a thread of its own, against it filled
                      on the main thread: 0 px. An edit holds no GL and reads nothing the main
                      thread writes.
+      canvas-split   the board as two views side by side, the second mirrored and showing only
+                     the plane, the bottom copper and the outline, each with its own active
+                     layer: each half equals its view drawn alone, 0 px. The views share one
+                     target and one tile table, both refilled per view.
+      canvas-under-ui the game UI's panel over the board: its centre the panel's colour, and
+                     outside it the canvas as it is with no UI, 0 px. The canvas is an overlay
+                     under UI_OVERLAY_ORDER.
+      canvas-budget  both views of the board split at 1920x1080 points, a framebuffer of
+                     3840x2160 on this machine, each frame's canvas draws timed between two
+                     glFinish calls: the median under 6 ms. A timing arm: the bound is this
+                     machine's (2.55 ms measured on an M1 Max) and does not travel.
     """
     failed = []
 
@@ -28914,6 +28925,64 @@ def run_canvas_gate(workdir):
         detail = f"{ae} px differ, peak {pae:.4f} (want 0)"
     print(f"  canvas-edit-thread  {'PASS' if ok else 'FAIL'}  {detail}")
     note("canvas-edit-thread", ok)
+
+    # ---- views
+    split, _ = _canvas_run(workdir, "split", "--sheet", "board", "--split")
+    left, _ = _canvas_run(workdir, "split_left", "--sheet", "board", "--split", "--only-view", "0")
+    right, _ = _canvas_run(workdir, "split_right", "--sheet", "board", "--split", "--only-view",
+                           "1")
+    if not split or not left or not right:
+        ok, detail = False, "a run failed"
+    else:
+        s, a, b = _ppm_array(split), _ppm_array(left), _ppm_array(right)
+        half = s.shape[1] // 2
+        left_differ = int(np.any(s[:, :half] != a[:, :half], axis=2).sum())
+        right_differ = int(np.any(s[:, half:] != b[:, half:], axis=2).sum())
+        # The two halves are different pictures: one mirrored, showing fewer layers.
+        unlike = int(np.any(s[:, :half] != s[:, half:2 * half], axis=2).sum())
+        ok = left_differ == 0 and right_differ == 0 and unlike > 1000
+        detail = (f"left half {left_differ} px from the left view alone, right half "
+                  f"{right_differ} px from the right alone (want 0 and 0); the halves differ by "
+                  f"{unlike} px")
+    print(f"  canvas-split        {'PASS' if ok else 'FAIL'}  {detail}")
+    note("canvas-split", ok)
+
+    under, probe = _canvas_run(workdir, "board_ui", "--sheet", "board", "--ui")
+    panel = probe.get(("ui", "panel")) if under else None
+    if not under or not panel or not plain:
+        ok, detail = False, "a run failed or printed no panel"
+    else:
+        x0, y0, x1, y1 = (int(v) for v in panel[:4])
+        want = int(panel[5], 16)
+        u, p = _ppm_array(under), _ppm_array(plain)
+        centre = [int(v) for v in u[(y0 + y1) // 2, (x0 + x1) // 2, :3]]
+        good = all(abs(c - ((want >> sh) & 255)) <= 2 for c, sh in zip(centre, (16, 8, 0)))
+        # Outside the panel, grown by a few pixels for its edge, the canvas is
+        # as it is with no UI at all.
+        mask = np.ones(u.shape[:2], bool)
+        mask[max(y0 - 4, 0):y1 + 4, max(x0 - 4, 0):x1 + 4] = False
+        outside = int((np.any(u != p, axis=2) & mask).sum())
+        ok = good and outside == 0
+        detail = (f"the panel's centre {centre[0]:02x}{centre[1]:02x}{centre[2]:02x} (want "
+                  f"{want:06x}), {outside} px differ outside it (want 0)")
+    print(f"  canvas-under-ui     {'PASS' if ok else 'FAIL'}  {detail}")
+    note("canvas-under-ui", ok)
+
+    _, probe = _canvas_run(workdir, "budget", "--sheet", "board", "--split", "--budget", "-W",
+                           "1920", "-H", "1080", "-f", "30")
+    timed = sorted((int(name), float(t[1])) for (sheet, name), t in probe.items()
+                   if sheet == "budget")
+    frames = [ms for _, ms in timed]
+    if len(frames) < 10:
+        ok, detail = False, f"{len(frames)} frames timed (want 30)"
+    else:
+        steady = sorted(frames[2:])
+        median = steady[len(steady) // 2]
+        ok = median <= 6.0
+        detail = (f"the board split at 1920x1080 points, both views: median {median:.2f} ms over "
+                  f"{len(steady)} frames (want <= 6; a timing arm, this machine's)")
+    print(f"  canvas-budget       {'PASS' if ok else 'FAIL'}  {detail}")
+    note("canvas-budget", ok)
 
     return failed
 
