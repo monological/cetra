@@ -29442,6 +29442,12 @@ def run_canvas_gate(workdir):
                      own pair adjustment at the font's base size: equal for every pair, and some
                      pairs kerned. The font answers from a table it builds at load, since asking
                      stb at every step was three quarters of a text walk.
+      canvas-atlas-fields every glyph's texels in the font's atlas, read back from the GPU,
+                     against stb_truetype's own distance field for that glyph rasterised by the
+                     app with the font's stated parameters: equal to the byte, for every glyph,
+                     and the glyph's metrics with them. The fields are rasterised across threads
+                     and packed afterwards, so a band handing one glyph's field to another's
+                     place is what this sees.
       canvas-overlap-once two capsules crossing in a layer at half opacity: the crossing the same
                      code as one arm, half of white. A layer's coverage is resolved before it is
                      painted, so it is translucent as a whole and not shape by shape.
@@ -29715,6 +29721,17 @@ def run_canvas_gate(workdir):
                   f"own (want some kerned and none differing)")
     print(f"  canvas-kern-pairs   {'PASS' if ok else 'FAIL'}  {detail}")
     note("canvas-kern-pairs", ok)
+
+    atlas = probe.get(("glyphs", "atlas"))
+    if not atlas:
+        ok, detail = False, "the app printed no atlas"
+    else:
+        count, differ = int(atlas[0]), int(atlas[2])
+        ok = count > 200 and differ == 0
+        detail = (f"{count} glyphs, {differ} whose texels differ from stb_truetype's own field "
+                  f"(want over 200 and none)")
+    print(f"  canvas-atlas-fields {'PASS' if ok else 'FAIL'}  {detail}")
+    note("canvas-atlas-fields", ok)
 
     # ---- layers and tags
     path, probe = _canvas_run(workdir, "overlap", "--sheet", "overlap")
