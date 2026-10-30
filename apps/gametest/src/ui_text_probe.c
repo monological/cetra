@@ -1019,14 +1019,15 @@ static int probe_rows_anchor(UISystem* ui) {
             before = b->rect.y;
         }
     }
-    // The wheel up a unit brings a row above into the built set, measured twice its estimate: the
-    // first row moves down by the wheel's step and nothing more.
-    pass(ui, &(UIInput){.pointer_x = pane->rect.x + 50.0f,
-                        .pointer_y = pane->rect.y + 50.0f,
-                        .wheel_y = 1.0f});
+    // The row above it, built and out of view, built again half as tall again: the first row in
+    // view does not move.
+    g_built_h = 90.0f;
+    ui_scroll_rows_changed(pane, 0, first);
+    pass(ui, &(UIInput){.pointer_x = -1.0f, .pointer_y = -1.0f});
+    const UIElement* above = built_row(pane, first - 1);
+    printf("ui rows-anchor above height %.6f\n", above ? (double)above->rect.h : -1.0);
     const UIElement* again = built_row(pane, first);
     printf("ui rows-anchor first moved %.6f\n", again ? (double)(again->rect.y - before) : -1.0);
-    printf("ui rows-anchor step points %.6f\n", (double)PROBE_SIZE);
     g_built_h = 30.0f;
     return 0;
 }

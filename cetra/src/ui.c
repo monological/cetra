@@ -892,6 +892,12 @@ static int _row_at(const struct UIRows* r, float y) {
     return lo;
 }
 
+// The first row any of which shows below `y`: past the row at `y` when only its gap is there.
+static int _row_seen(const struct UIRows* r, float y) {
+    const int k = _row_at(r, y);
+    return (k + 1 < r->count && r->top[k] + r->height[k] <= y) ? k + 1 : k;
+}
+
 /*
  * The heights of a pane's built rows, as this measure found them, kept. A new width makes every
  * kept height an estimate again, measured as each row is next built. A height that changed above
@@ -909,7 +915,7 @@ static void _rows_measure(const UISystem* ui, UIElement* pane) {
         r->width = width;
     }
     _rows_tops(ui, pane);
-    const int first = _row_at(r, pane->scroll);
+    const int first = _row_seen(r, pane->scroll);
     for (size_t k = 0; k < pane->child_count; k++) {
         const int row = r->child_row[k];
         const float h = pane->children[k]->rect.h;
