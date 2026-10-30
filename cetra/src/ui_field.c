@@ -85,30 +85,28 @@ struct UIField {
     void* key_user;
 };
 
-static void _rows_refresh(UIField* f);
+// The rows the text breaks into, kept by ui_lines_break until the width or the style changes. A
+// single-line field is one row, whatever it holds.
+static void _break_rows(UIField* f) {
+    if (!f->state.single_line) {
+        ui_lines_break(&f->rows, &f->text, f->wrap);
+        return;
+    }
+    if (grow_array((void**)&f->rows.starts, &f->rows.capacity, 1, sizeof(size_t), 8)) {
+        f->rows.starts[0] = 0;
+        f->rows.count = 1;
+    }
+}
 
-// The measuring text follows the buffer, and the rows the text.
+// After an edit the measuring text follows the buffer, and the rows are broken again for it at
+// once: stb_textedit asks for them before the next layout.
 static void _sync(UIField* f) {
     f->text.text = f->buf;
     f->text.length = (size_t)f->len;
     f->text.runs = f->el->runs;
     f->text.run_count = f->el->run_count;
-    _rows_refresh(f);
-}
-
-static void _rows_refresh(UIField* f) {
     f->rows.count = 0;
-    for (size_t from = 0;;) {
-        if (!grow_array((void**)&f->rows.starts, &f->rows.capacity, f->rows.count + 1,
-                        sizeof(size_t), 8))
-            return;
-        f->rows.starts[f->rows.count++] = from;
-        const size_t end =
-            f->state.single_line ? (size_t)f->len : ui_text_break(&f->text, from, f->wrap);
-        if (end >= (size_t)f->len)
-            break;
-        from = f->buf[end] == '\n' ? end + 1 : end;
-    }
+    _break_rows(f);
 }
 
 // The row holding byte `at`: the last that starts at or before it.
@@ -211,23 +209,30 @@ static int _row_end(const UIField* f, const STB_TexteditState* s, int cursor) {
     return (int)ui_lines_end(&f->rows, &f->text, row);
 }
 
-// A codepoint's width at byte `line_start + i`: from where it is drawn to where the next is, so
-// stb_textedit's sum of widths along a row is the walk's own pen.
+/*
+ * A codepoint's width at byte `line_start + i`: from where it is drawn to where the next is -- its
+ * advance and its pair with the next -- so stb_textedit's sum of widths along a row is the walk's
+ * own pen. Walked from the glyph itself, since a pair is all a pen carries between two glyphs: stb
+ * asks for every width along a row to place a click, and from the row's start each was a walk of
+ * the row.
+ */
 static float _glyph_width(UIField* f, int line_start, int i) {
     const int at = line_start + i;
     if (at >= f->len)
         return 0.0f;
     if (f->buf[at] == '\n')
         return -1.0f; // IMSTB_TEXTEDIT_GETWIDTH_NEWLINE
-    const int next = _next_index(f, at);
-    return ui_text_pen(&f->text, (size_t)line_start, (size_t)next) -
-           ui_text_pen(&f->text, (size_t)line_start, (size_t)at);
+    return ui_text_pen(&f->text, (size_t)at, (size_t)_next_index(f, at));
 }
 
+// The row starting at `start`, from the rows already broken: stb asks for each row in turn from the
+// text's start, and breaking each again was a walk of the text.
 static void _layout_row(StbTexteditRow* r, UIField* f, int start) {
-    const int end =
-        f->state.single_line ? f->len : (int)ui_text_break(&f->text, (size_t)start, f->wrap);
-    const bool newline = end < f->len && f->buf[end] == '\n';
+    const size_t row = _row_of(f, start);
+    const bool last = row + 1 >= f->rows.count;
+    const int next = last ? f->len : (int)f->rows.starts[row + 1];
+    const bool newline = next > start && f->buf[next - 1] == '\n';
+    const int end = newline ? next - 1 : next;
     r->x0 = 0.0f;
     r->x1 = ui_text_span_width(&f->text, (size_t)start, (size_t)end);
     r->baseline_y_delta = f->line_h;
@@ -365,12 +370,16 @@ void ui_field_break(const UISystem* ui, UIElement* el, const UIStyle* s, float w
     UIField* f = el->field;
     if (!f)
         return;
+    // Runs set since the last break are a new copy at a new address -- or none -- so a pointer that
+    // moved is new runs, in faces the rows were not broken for.
+    if (f->text.runs != el->runs || f->text.run_count != el->run_count)
+        f->rows.count = 0;
     f->text = ui_text_make(ui_draw_list(ui), f->buf, (size_t)f->len, s, el->runs, el->run_count);
     glm_vec4_copy((float*)s->fg, f->color);
     f->text.color = f->color;
     f->line_h = ui_text_line_height(&f->text, s->line_spacing);
     f->wrap = (f->flags & UI_FIELD_MULTILINE) ? width : INFINITY;
-    _sync(f);
+    _break_rows(f);
 }
 
 float ui_field_content_height(const UIElement* el) {
@@ -395,15 +404,21 @@ void ui_field_set_text(UIElement* el, const char* text) {
         return;
     }
     UIField* f = el->field;
-    free(el->runs);
-    el->runs = NULL;
-    el->run_count = 0;
     const size_t n = text ? strlen(text) : 0;
-    if (n > FIELD_MAX_BYTES || !_reserve(f, (int)n)) {
+    if (n > FIELD_MAX_BYTES) {
         log_error("ui_field_set_text: %zu bytes is more than a field holds", n);
         return;
     }
-    memcpy(f->buf, text ? text : "", n + 1);
+    if (!_reserve(f, (int)n)) {
+        log_error("ui_field_set_text: out of memory for %zu bytes", n);
+        return;
+    }
+    free(el->runs);
+    el->runs = NULL;
+    el->run_count = 0;
+    // Moved rather than copied: the text may be the field's own, or part of it, which is never
+    // longer than the buffer and so never grew it.
+    memmove(f->buf, text ? text : "", n + 1);
     f->len = (int)n;
     stb_textedit_initialize_state(&f->state, !(f->flags & UI_FIELD_MULTILINE));
     f->state.cursor = f->state.select_start = f->state.select_end = f->len;
@@ -444,6 +459,13 @@ static bool _has_selection(const UIField* f) {
     return f->state.select_start != f->state.select_end;
 }
 
+// The selection's two ends in order, whichever way it was made.
+static void _selection(const UIField* f, int* lo, int* hi) {
+    const int a = f->state.select_start, b = f->state.select_end;
+    *lo = a < b ? a : b;
+    *hi = a < b ? b : a;
+}
+
 static void _select(UIField* f, int a, int b) {
     f->state.select_start = a;
     f->state.select_end = b;
@@ -455,9 +477,8 @@ static void _select(UIField* f, int a, int b) {
 static void _copy(const UISystem* ui, const UIField* f) {
     if (!_has_selection(f))
         return;
-    const int lo =
-        f->state.select_start < f->state.select_end ? f->state.select_start : f->state.select_end;
-    const int hi = f->state.select_start ^ f->state.select_end ^ lo;
+    int lo, hi;
+    _selection(f, &lo, &hi);
     char* copy = malloc((size_t)(hi - lo) + 1);
     if (!copy)
         return;
@@ -796,21 +817,27 @@ static void _keep_caret_in_view(UIField* f, UIRect content) {
         f->scroll_y = cy;
 }
 
+// Keeps the content's scroll inside the text. Only a single-line field scrolls sideways: a
+// multi-line one wraps at its width.
 static void _clamp_scroll(UIField* f, UIRect content) {
-    float widest = 0.0f;
-    for (size_t i = 0; i < f->rows.count; i++) {
-        const float w =
-            ui_text_span_width(&f->text, f->rows.starts[i], ui_lines_end(&f->rows, &f->text, i));
-        widest = w > widest ? w : widest;
-    }
-    const float max_x = widest + CARET_WIDTH - content.w;
-    const float max_y = f->line_h * (float)f->rows.count - content.h;
-    f->scroll_x =
-        f->scroll_x > (max_x > 0.0f ? max_x : 0.0f) ? (max_x > 0.0f ? max_x : 0.0f) : f->scroll_x;
-    f->scroll_y =
-        f->scroll_y > (max_y > 0.0f ? max_y : 0.0f) ? (max_y > 0.0f ? max_y : 0.0f) : f->scroll_y;
-    f->scroll_x = f->scroll_x < 0.0f ? 0.0f : f->scroll_x;
-    f->scroll_y = f->scroll_y < 0.0f ? 0.0f : f->scroll_y;
+    const float wide =
+        f->state.single_line ? ui_text_span_width(&f->text, 0, (size_t)f->len) : 0.0f;
+    const float max_x = glm_max(wide + CARET_WIDTH - content.w, 0.0f);
+    const float max_y = glm_max(f->line_h * (float)f->rows.count - content.h, 0.0f);
+    f->scroll_x = glm_clamp(f->scroll_x, 0.0f, max_x);
+    f->scroll_y = glm_clamp(f->scroll_y, 0.0f, max_y);
+}
+
+// The rows any of which show through `content` at the scroll: [*first, *last).
+static void _rows_shown(const UIField* f, UIRect content, size_t* first, size_t* last) {
+    *first = 0;
+    *last = f->rows.count;
+    if (f->line_h <= 0.0f)
+        return;
+    const size_t lo = (size_t)(f->scroll_y / f->line_h);
+    const size_t hi = (size_t)ceilf((f->scroll_y + content.h) / f->line_h);
+    *first = lo < f->rows.count ? lo : f->rows.count;
+    *last = hi < f->rows.count ? hi : f->rows.count;
 }
 
 double ui_field_draw(const UISystem* ui, UIElement* el, const UIStyle* s, UIRect content,
@@ -821,13 +848,14 @@ double ui_field_draw(const UISystem* ui, UIElement* el, const UIStyle* s, UIRect
     if (!f)
         return INFINITY;
     glm_vec4_copy((float*)s->fg, f->color);
-    _sync(f);
     _clamp_scroll(f, content);
     if (focused)
         _keep_caret_in_view(f, content);
 
     ui_push_clip(dl, content);
     const float ox = content.x - f->scroll_x, oy = content.y - f->scroll_y;
+    size_t first, last;
+    _rows_shown(f, content, &first, &last);
 
     // The selection, behind the text, row by row.
     if (_has_selection(f)) {
@@ -835,10 +863,9 @@ double ui_field_draw(const UISystem* ui, UIElement* el, const UIStyle* s, UIRect
         vec4 tint = {0.25f, 0.45f, 0.85f, 0.55f};
         if (theme->selection[3] > 0.0f)
             glm_vec4_copy((float*)theme->selection, tint);
-        const int lo = f->state.select_start < f->state.select_end ? f->state.select_start
-                                                                   : f->state.select_end;
-        const int hi = f->state.select_start ^ f->state.select_end ^ lo;
-        for (size_t i = 0; i < f->rows.count; i++) {
+        int lo, hi;
+        _selection(f, &lo, &hi);
+        for (size_t i = first; i < last; i++) {
             const size_t start = f->rows.starts[i];
             const size_t next = i + 1 < f->rows.count ? f->rows.starts[i + 1] : (size_t)f->len;
             if ((size_t)lo >= next || (size_t)hi <= start)
@@ -864,7 +891,7 @@ double ui_field_draw(const UISystem* ui, UIElement* el, const UIStyle* s, UIRect
         ui_draw_text(dl, (UIRect){ox, oy, content.w + f->scroll_x, f->line_h}, el->text, &dim,
                      UI_ALIGN_START);
     } else {
-        for (size_t i = 0; i < f->rows.count; i++)
+        for (size_t i = first; i < last; i++)
             ui_text_draw_span(dl, &f->text, f->rows.starts[i], ui_lines_end(&f->rows, &f->text, i),
                               ox, ui_text_baseline(&f->text, oy + f->line_h * (float)i));
     }

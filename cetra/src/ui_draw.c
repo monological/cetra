@@ -550,12 +550,51 @@ float ui_text_longest_word(const UIText* t) {
     return best;
 }
 
+float ui_text_widest_line(const UIText* t) {
+    if (!t)
+        return 0.0f;
+    float best = 0.0f;
+    for (size_t from = 0; from <= t->length;) {
+        const char* nl = memchr(t->text + from, '\n', t->length - from);
+        const size_t to = nl ? (size_t)(nl - t->text) : t->length;
+        const float w = ui_text_span_width(t, from, to);
+        best = w > best ? w : best;
+        from = to + 1;
+    }
+    return best;
+}
+
 float ui_text_line_height(const UIText* t, float line_spacing) {
     return ui_line_height(t->font, t->size, line_spacing);
 }
 
 float ui_text_baseline(const UIText* t, float top) {
     return _text_ok(t) ? top + t->font->ascent * (t->size / t->font->base_size) : top;
+}
+
+bool ui_lines_break(UILines* lines, const UIText* t, float width) {
+    if (lines->count > 0 && lines->width == width && lines->font == t->font &&
+        lines->size == t->size && lines->tracking == t->tracking)
+        return false;
+    lines->count = 0;
+    for (size_t from = 0;;) {
+        if (!grow_array((void**)&lines->starts, &lines->capacity, lines->count + 1, sizeof(size_t),
+                        8)) {
+            log_error("ui: out of memory breaking text into lines");
+            lines->count = 0;
+            return false;
+        }
+        lines->starts[lines->count++] = from;
+        const size_t end = ui_text_break(t, from, width);
+        if (end >= t->length)
+            break;
+        from = t->text[end] == '\n' ? end + 1 : end;
+    }
+    lines->width = width;
+    lines->font = t->font;
+    lines->size = t->size;
+    lines->tracking = t->tracking;
+    return true;
 }
 
 size_t ui_lines_end(const UILines* lines, const UIText* t, size_t i) {
@@ -581,15 +620,7 @@ float ui_text_width(const Font* font, float size, float tracking, const char* te
     if (!font || !text || font->base_size <= 0.0f)
         return 0.0f;
     const UIText t = _plain_text(font, size, tracking, text);
-    float best = 0.0f;
-    for (size_t from = 0; from <= t.length;) {
-        const char* nl = memchr(text + from, '\n', t.length - from);
-        const size_t to = nl ? (size_t)(nl - text) : t.length;
-        const float w = ui_text_span_width(&t, from, to);
-        best = w > best ? w : best;
-        from = to + 1;
-    }
-    return best;
+    return ui_text_widest_line(&t);
 }
 
 size_t ui_text_wrap_point(const Font* font, float size, float tracking, const char* text,

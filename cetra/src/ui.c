@@ -614,6 +614,8 @@ void ui_set_text(UIElement* el, const char* text) {
         return;
     free(el->text);
     el->text = text ? safe_strdup(text) : NULL;
+    if (el->kind == UI_TEXT_FIELD)
+        return; // a field's text is its placeholder, and its runs are its buffer's
     free(el->runs);
     el->runs = NULL;
     el->run_count = 0;
@@ -756,19 +758,6 @@ static UIText _element_text(const UISystem* ui, const UIElement* el, const UISty
                         el->run_count);
 }
 
-// The widest of a text's '\n'-separated lines.
-static float _widest_line(const UIText* t) {
-    float best = 0.0f;
-    for (size_t from = 0; from <= t->length;) {
-        const char* nl = memchr(t->text + from, '\n', t->length - from);
-        const size_t to = nl ? (size_t)(nl - t->text) : t->length;
-        const float w = ui_text_span_width(t, from, to);
-        best = w > best ? w : best;
-        from = to + 1;
-    }
-    return best;
-}
-
 /*
  * What one element's own content wants along `axis` (0 across, 1 down), before any parent has a
  * say. The height of a wrapping label is its lines, which its width decided: that is why the
@@ -781,7 +770,7 @@ static float _intrinsic(const UISystem* ui, const UIElement* el, int axis) {
     if (el->kind != UI_TEXT_FIELD && el->text && el->text[0] && s.font) {
         if (axis == 0) {
             const UIText t = _element_text(ui, el, &s);
-            v = el->wrap ? ui_text_longest_word(&t) : _widest_line(&t);
+            v = el->wrap ? ui_text_longest_word(&t) : ui_text_widest_line(&t);
         } else {
             // One line height PER LINE. ui_draw_text starts a new line at every
             // '\n' it is given, so charging one made an authored two-line label
@@ -1117,10 +1106,9 @@ static void _arrange(const UISystem* ui, UIElement* el, UIRect screen, int axis)
 }
 
 /*
- * A wrapping or styled label's lines, broken at the width the first pass gave it and kept while
- * what they were broken for -- the width, the face, the size and the tracking -- is unchanged. The
- * text and the runs drop them when set, so a kept break is never for other text. The layout runs
- * several times a frame, and breaking a long label is a walk of all of it.
+ * A wrapping or styled label's lines, broken at the width the first pass gave it and kept by
+ * ui_lines_break while that and the style are unchanged. The text and the runs drop them when
+ * set, so a kept break is never for other text.
  */
 static void _break_lines(const UISystem* ui, UIElement* el) {
     for (size_t i = 0; i < el->child_count; i++)
@@ -1140,38 +1128,18 @@ static void _break_lines(const UISystem* ui, UIElement* el) {
     const UIStyle s = _resolve(ui, el, UI_STATE_NORMAL);
     float pad[4];
     _padding_from(el, &s, pad);
-    const float width = el->wrap ? el->rect.w - pad[1] - pad[3] : INFINITY;
-    UILines* lines = el->lines;
-    if (lines && lines->width == width && lines->font == s.font && lines->size == s.font_size &&
-        lines->tracking == s.tracking)
-        return;
-    if (!lines) {
-        lines = calloc(1, sizeof(UILines));
-        if (!lines) {
+    if (!el->lines) {
+        el->lines = calloc(1, sizeof(UILines));
+        if (!el->lines) {
             log_error("ui: out of memory breaking a label into lines");
             return;
         }
-        el->lines = lines;
     }
-    lines->count = 0;
     const UIText t = _element_text(ui, el, &s);
-    for (size_t from = 0;;) {
-        if (!grow_array((void**)&lines->starts, &lines->capacity, lines->count + 1, sizeof(size_t),
-                        8)) {
-            _drop_lines(el);
-            return;
-        }
-        lines->starts[lines->count++] = from;
-        const size_t end = ui_text_break(&t, from, width);
-        if (end >= t.length)
-            break;
-        from = t.text[end] == '\n' ? end + 1 : end;
-    }
-    lines->width = width;
-    lines->font = s.font;
-    lines->size = s.font_size;
-    lines->tracking = s.tracking;
-    el->wraps++;
+    if (ui_lines_break(el->lines, &t, el->wrap ? el->rect.w - pad[1] - pad[3] : INFINITY))
+        el->wraps++;
+    else if (el->lines->count == 0)
+        _drop_lines(el);
 }
 
 static float _pane_view(const UISystem* ui, const UIElement* el);

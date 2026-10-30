@@ -41,6 +41,9 @@ float ui_text_span_width(const UIText* t, size_t from, size_t to);
 size_t ui_text_break(const UIText* t, size_t from, float max_width);
 // The widest word, so a wrapping label is never measured narrower than one.
 float ui_text_longest_word(const UIText* t);
+// The widest of the text's '\n'-separated lines: what a text that does not wrap is measured by,
+// each line placed by its own width rather than by the longest one's.
+float ui_text_widest_line(const UIText* t);
 // The line height of the text's face at its size, times `line_spacing` (0 is 1).
 float ui_text_line_height(const UIText* t, float line_spacing);
 // Draws bytes [from, to) with its pen starting at `x` and its baseline at `baseline`.
@@ -50,8 +53,8 @@ void ui_text_draw_span(UIDrawList* dl, const UIText* t, size_t from, size_t to, 
 float ui_text_baseline(const UIText* t, float top);
 
 /*
- * A label's lines, as ui.c breaks them: wrapped at its width, or at its '\n's alone when it does
- * not wrap and only carries runs. Kept while what they were broken for is unchanged.
+ * A text's lines -- a label's, or a multi-line field's rows: wrapped at a width, or at its '\n's
+ * alone. Kept while what they were broken for is unchanged.
  */
 typedef struct UILines {
     size_t* starts; // the byte each line starts at
@@ -61,6 +64,14 @@ typedef struct UILines {
     float size, tracking;
 } UILines;
 
+/*
+ * Breaks `t` into `lines` at `width` -- INFINITY breaks only at its '\n's -- unless they hold the
+ * lines of the same width, face, size and tracking already: a caller whose text changed sets
+ * `count` to 0 first. A long text is a walk of all of it, and the layout runs several times a
+ * frame. True when it broke them; false when it kept them, or ran out of memory, which leaves
+ * `count` 0.
+ */
+bool ui_lines_break(UILines* lines, const UIText* t, float width);
 // The end of line `i`, its '\n' and any spaces it wrapped at left off.
 size_t ui_lines_end(const UILines* lines, const UIText* t, size_t i);
 // Draws each of `lines` a line height below the last, from `r`'s top, placed by `align` on its own
