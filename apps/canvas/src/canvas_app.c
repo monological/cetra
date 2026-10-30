@@ -36,7 +36,9 @@
 #include "cetra/fuzzy.h"
 #include "cetra/glyph_cache.h"
 #include "cetra/internal/ext/stb_truetype.h"
+#include "cetra/internal/text_doc_edit.h" // text_doc_ranges, the parse's errors as they stand
 #include "cetra/internal/thread.h"
+#include "cetra/internal/ui_editor_hooks.h" // where the editor drew a range, for the probe
 #include "cetra/postfx.h"
 #include "cetra/program.h"
 #include "cetra/scene.h"
@@ -1525,34 +1527,225 @@ static bool build_font_sheet(UISystem* ui, Engine* engine, Font* label) {
     return true;
 }
 
-// ---- --editor FILE: the code editor (spec 14.4) over the whole window, on a file's text.
+/*
+ * --editor FILE: the code editor (spec 14.4) over the whole window, on a file's text, with what
+ * pcb would hand it standing in for pcb:
+ * - an S-expression highlighter on pcb's lexical rules, a line at a time;
+ * - a "parse" on a thread of its own, its brackets and strings checked, whose errors come back a
+ *   few versions behind and are underlined where the typing since has moved them;
+ * - F6, an edit landed at the text's start as another view's would be;
+ * - F7, the file read again through the text's whole new text.
+ * --editor-lag N takes each parse's result N frames after it began, so a headless run repeats.
+ */
+
+enum {
+    STYLE_COMMENT = 1,
+    STYLE_STRING,
+    STYLE_KEYWORD,
+    STYLE_NUMBER,
+    STYLE_BRACKET,
+    STYLE_HEAD,
+    STYLE_ERROR,
+    STYLE_LANDED,
+};
+
+#define PARSE_ERRORS_MAX 64
+
+typedef struct ParseJob {
+    char* text;
+    size_t len;
+    uint64_t version;
+    TextRange errors[PARSE_ERRORS_MAX];
+    size_t error_count;
+    cetra_thread_t thread;
+    bool running;
+    size_t started; // the frame it began on
+} ParseJob;
 
 typedef struct EditorSheet {
     TextDoc* doc;
     GlyphCache* face;
     UIElement* editor;
+    const char* path;
+    ParseJob job;
+    uint64_t parsed; // the version the last result was for; UINT64_MAX for none
+    int lag;         // frames from a parse's start to its result being taken
 } EditorSheet;
 
-static EditorSheet g_editor_sheet;
+static EditorSheet g_editor_sheet = {.parsed = UINT64_MAX, .lag = 1};
+
+// A byte that ends an atom, on pcb's rules: whitespace, a bracket, a quote or a comment's start.
+static bool sexpr_stop(char c) {
+    return c == ' ' || c == '\t' || c == '(' || c == ')' || c == '"' || c == ';';
+}
+
+// A line coloured on pcb's lexical rules: a comment from ';' to the line's end, a string on one
+// line with its escapes, brackets, an atom after '(' as the form's head, `:keywords` and numbers.
+static size_t sexpr_line(const char* line, size_t len, uint32_t* state, TextSpan* spans, size_t max,
+                         void* user) {
+    (void)user;
+    size_t n = 0;
+    bool head = false;
+    for (size_t i = 0; i < len;) {
+        const char c = line[i];
+        size_t j = i + 1;
+        uint16_t style = 0;
+        if (c == ';') {
+            j = len;
+            style = STYLE_COMMENT;
+        } else if (c == '"') {
+            while (j < len && line[j] != '"')
+                j += line[j] == '\\' ? 2 : 1;
+            j = j < len ? j + 1 : len;
+            style = STYLE_STRING;
+        } else if (c == '(' || c == ')') {
+            style = STYLE_BRACKET;
+        } else if (c == ' ' || c == '\t') {
+            i++;
+            continue;
+        } else {
+            j = i;
+            while (j < len && !sexpr_stop(line[j]))
+                j++;
+            const bool digit = (c >= '0' && c <= '9') || ((c == '-' || c == '.') && i + 1 < len &&
+                                                          line[i + 1] >= '0' && line[i + 1] <= '9');
+            style = c == ':' ? STYLE_KEYWORD : digit ? STYLE_NUMBER : head ? STYLE_HEAD : 0;
+        }
+        if (style && n < max)
+            spans[n] = (TextSpan){(uint32_t)i, (uint32_t)(j - i), style};
+        n += style != 0;
+        head = c == '(';
+        i = j;
+    }
+    *state = 0;
+    return n;
+}
+
+// The parse: brackets left open or closing nothing, and a string its line ends inside.
+static void* parse_thread(void* arg) {
+    ParseJob* job = arg;
+    size_t open[256];
+    size_t depth = 0;
+    job->error_count = 0;
+    for (size_t i = 0; i < job->len; i++) {
+        const char c = job->text[i];
+        if (c == ';') {
+            while (i < job->len && job->text[i] != '\n')
+                i++;
+        } else if (c == '"') {
+            size_t j = i + 1;
+            while (j < job->len && job->text[j] != '"' && job->text[j] != '\n')
+                j += job->text[j] == '\\' ? 2 : 1;
+            if (j >= job->len || job->text[j] != '"') {
+                if (job->error_count < PARSE_ERRORS_MAX)
+                    job->errors[job->error_count++] = (TextRange){i, j, STYLE_ERROR};
+            }
+            i = j;
+        } else if (c == '(') {
+            if (depth < 256)
+                open[depth] = i;
+            depth++;
+        } else if (c == ')') {
+            if (depth)
+                depth--;
+            else if (job->error_count < PARSE_ERRORS_MAX)
+                job->errors[job->error_count++] = (TextRange){i, i + 1, STYLE_ERROR};
+        }
+    }
+    for (size_t d = 0; d < depth && d < 256 && job->error_count < PARSE_ERRORS_MAX; d++)
+        job->errors[job->error_count++] = (TextRange){open[d], open[d] + 1, STYLE_ERROR};
+    return NULL;
+}
+
+// Once a frame: a parse begun on a text that changed, and its result taken `lag` frames after,
+// at the version it read.
+static void editor_host_frame(const Engine* engine) {
+    EditorSheet* s = &g_editor_sheet;
+    ParseJob* job = &s->job;
+    if (job->running && engine->total_frames - job->started >= (size_t)s->lag) {
+        cetra_thread_join(job->thread);
+        job->running = false;
+        text_doc_set_ranges(s->doc, 0, job->version, job->errors, job->error_count);
+        s->parsed = job->version;
+        free(job->text);
+        job->text = NULL;
+    }
+    if (!job->running && s->parsed != s->doc->version) {
+        job->text = text_doc_text(s->doc, &job->len);
+        job->version = s->doc->version;
+        job->started = engine->total_frames;
+        job->running = job->text && cetra_thread_create(&job->thread, parse_thread, job);
+        if (!job->running) {
+            free(job->text);
+            job->text = NULL;
+        }
+    }
+}
+
+// F6: an edit made in another view landed at the text's start, marked where it landed.
+static bool host_land(UIElement* el, void* user) {
+    (void)el;
+    (void)user;
+    TextDoc* doc = g_editor_sheet.doc;
+    static const char LANDED[] = "(note landed)\n";
+    text_doc_replace(doc, 0, 0, LANDED, sizeof(LANDED) - 1);
+    const TextRange mark = {0, sizeof(LANDED) - 2, STYLE_LANDED};
+    text_doc_set_ranges(doc, 1, doc->version, &mark, 1);
+    return true;
+}
+
+// F7: the file read again, as after an undo on pcb's timeline wrote it.
+static bool host_reload(UIElement* el, void* user) {
+    (void)el;
+    (void)user;
+    long len = 0;
+    char* bytes = read_entire_file(g_editor_sheet.path, &len);
+    if (!bytes)
+        return false;
+    text_doc_set_text(g_editor_sheet.doc, bytes, (size_t)len);
+    free(bytes);
+    return true;
+}
+
+static const UIEditorCommand HOST_LAND = {"land-edit", "Land an edit from another view", host_land,
+                                          NULL};
+static const UIEditorCommand HOST_RELOAD = {"reload", "Read the file again", host_reload, NULL};
+static const UIEditorBinding HOST_KEYS[] = {{GLFW_KEY_F6, 0, &HOST_LAND},
+                                            {GLFW_KEY_F7, 0, &HOST_RELOAD}};
+static UIEditorMode g_host_mode = {
+    .name = "pcb", .bindings = HOST_KEYS, .binding_count = 2, .types = true};
 
 static bool build_editor(UISystem* ui, const char* path) {
     long len = 0;
     char* bytes = read_entire_file(path, &len);
     if (!bytes)
         return false;
+    g_editor_sheet.path = path;
     g_editor_sheet.doc = create_text_doc(bytes, (size_t)len);
     free(bytes);
     g_editor_sheet.face = create_glyph_cache(EDITOR_FONT, 13.0f);
     if (!g_editor_sheet.doc || !g_editor_sheet.face)
         return false;
+    text_doc_set_highlighter(g_editor_sheet.doc, sexpr_line, NULL, false);
     UITheme theme = *ui_theme(ui);
     theme.editor_face = g_editor_sheet.face;
     theme.editor_size = 13.0f;
+    UIEditorStyle* st = theme.editor_styles;
+    glm_vec4_copy((vec4){0.45f, 0.55f, 0.45f, 1.0f}, st[STYLE_COMMENT].text);
+    glm_vec4_copy((vec4){0.82f, 0.71f, 0.47f, 1.0f}, st[STYLE_STRING].text);
+    glm_vec4_copy((vec4){0.55f, 0.75f, 0.95f, 1.0f}, st[STYLE_KEYWORD].text);
+    glm_vec4_copy((vec4){0.85f, 0.62f, 0.82f, 1.0f}, st[STYLE_NUMBER].text);
+    glm_vec4_copy((vec4){0.55f, 0.56f, 0.62f, 1.0f}, st[STYLE_BRACKET].text);
+    glm_vec4_copy((vec4){0.95f, 0.76f, 0.45f, 1.0f}, st[STYLE_HEAD].text);
+    glm_vec4_copy((vec4){0.95f, 0.30f, 0.30f, 1.0f}, st[STYLE_ERROR].underline);
+    glm_vec4_copy((vec4){0.30f, 0.65f, 0.35f, 0.30f}, st[STYLE_LANDED].background);
     ui_set_theme(ui, &theme);
     UIScreen* screen = ui_screen(ui, "editor");
     ui_screen_set_modal(screen, false);
     UIElement* root = ui_screen_root(screen);
     g_editor_sheet.editor = ui_editor(root, g_editor_sheet.doc);
+    g_host_mode.parent = ui_editor_standard_mode();
+    ui_editor_set_mode(g_editor_sheet.editor, &g_host_mode);
     ui_push(ui, screen);
     ui_set_focus(screen, g_editor_sheet.editor);
     return true;
@@ -1618,6 +1811,8 @@ static void on_update(Engine* engine, float dt) {
     if (g_probe)
         say_typed(engine);
     live_ui_update(engine);
+    if (g_editor_sheet.doc)
+        editor_host_frame(engine);
     history_stream(engine);
     // The input pass an app owes its UI, with no input: it is what settles the focused button's
     // state, which its ease then follows.
@@ -2145,7 +2340,7 @@ static void usage(const char* argv0) {
             "          [--split] [--only-view 0|1] [--ui] [--budget]\n"
             "          [--idle] [--idle-wake S,...] [--idle-load PATH] [--input-script PATH]\n"
             "          [--ui-enter] [--ui-text TEXT] [--gui-click] [--history] [--palette]\n"
-            "          [--font-sheet] [--editor FILE]\n",
+            "          [--font-sheet] [--editor FILE] [--editor-lag FRAMES]\n",
             argv0);
 }
 
@@ -2230,6 +2425,8 @@ int main(int argc, char** argv) {
             font_sheet = true;
         } else if (strcmp(argv[i], "--editor") == 0 && more) {
             editor_file = argv[++i];
+        } else if (strcmp(argv[i], "--editor-lag") == 0 && more) {
+            g_editor_sheet.lag = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--palette") == 0) {
             palette = true;
         } else if (strcmp(argv[i], "--ui-text") == 0 && more) {
@@ -2458,6 +2655,21 @@ int main(int argc, char** argv) {
         for (size_t i = 0; i < n; i++)
             printf(" %zu %zu", s[i].anchor, s[i].head);
         printf("\n");
+        // The parse's errors as they stand, and where the first is drawn, in framebuffer pixels.
+        size_t count = 0;
+        const TextRange* r = text_doc_ranges(g_editor_sheet.doc, 0, &count);
+        printf("canvas editor errors %zu", count);
+        for (size_t i = 0; i < count; i++)
+            printf(" %zu %zu", r[i].start, r[i].end);
+        printf("\n");
+        float ex = 0.0f, ey = 0.0f;
+        if (count && ui_editor_point_of(g_editor_sheet.editor, r[0].start, &ex, &ey))
+            printf("canvas editor error_at %ld %ld\n", lround(ex * ctx.fb_scale),
+                   lround(ey * ctx.fb_scale));
+    }
+    if (g_editor_sheet.job.running) {
+        cetra_thread_join(g_editor_sheet.job.thread);
+        free(g_editor_sheet.job.text);
     }
     board_late_settle(true);
     free_ui_system(ui);

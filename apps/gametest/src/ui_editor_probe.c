@@ -1107,6 +1107,50 @@ static int probe_editor_host_undo(UISystem* ui) {
     return 0;
 }
 
+// ---- The host's edits: carets, selections and the view through them
+
+#define HOST_TEXT "abc def ghi\nline two\n"
+
+static int probe_editor_host_edit(UISystem* ui) {
+    TextDoc* doc = create_text_doc(HOST_TEXT, strlen(HOST_TEXT));
+    UIElement* ed = editor_fixture(ui, doc, 600.0f, 300.0f);
+    editor_pass(ui);
+    // Before a selection: it moves by the change's length.
+    reset(doc, ed, HOST_TEXT, 4, 7);
+    text_doc_replace(doc, 0, 3, "xxxxx", 5);
+    say_flag("editor-host-edit", "before", "moved", one_selection(ed, 6, 9));
+    // After it: nothing moves.
+    reset(doc, ed, HOST_TEXT, 4, 7);
+    text_doc_replace(doc, 8, 11, "", 0);
+    say_flag("editor-host-edit", "after", "kept", one_selection(ed, 4, 7));
+    // Inside it: its far end moves with the change, its near end stays.
+    reset(doc, ed, HOST_TEXT, 4, 7);
+    text_doc_replace(doc, 5, 6, "EE", 2);
+    say_flag("editor-host-edit", "inside", "grown", one_selection(ed, 4, 8));
+    // Over a caret: it goes to the end of the new bytes.
+    reset(doc, ed, HOST_TEXT, 5, 5);
+    text_doc_replace(doc, 4, 7, "Q", 1);
+    say_flag("editor-host-edit", "over", "end", one_selection(ed, 5, 5));
+    // Put in at a caret by the host: the caret stays before it, the host's text not typed.
+    reset(doc, ed, HOST_TEXT, 4, 4);
+    text_doc_replace(doc, 4, 4, "zz", 2);
+    say_flag("editor-host-edit", "at", "before", one_selection(ed, 4, 4));
+    // A whole new text that changes only past the caret: the caret stays.
+    reset(doc, ed, HOST_TEXT, 2, 2);
+    text_doc_set_text(doc, "abc def ghi\nline 2\n", 19);
+    say_flag("editor-host-edit", "reload", "kept", one_selection(ed, 2, 2));
+    // Two editors of one text: an edit in one moves the other's caret.
+    UIScreen* s = ui_top(ui);
+    UIElement* twin = ui_editor(ui_screen_root(s), doc);
+    ui_set_size(twin, UI_FIXED, 300.0f, UI_FIXED, 200.0f);
+    editor_pass(ui);
+    ui_editor_set_selections(twin, &(TextSelection){12, 12}, 1);
+    ui_editor_set_selections(ed, &(TextSelection){0, 0}, 1);
+    type(ui, "ab");
+    say_flag("editor-host-edit", "twin", "moved", one_selection(twin, 14, 14));
+    return 0;
+}
+
 int run_ui_editor_probe(Game* game, UISystem* ui, Font* font, const char* which) {
     (void)game;
     (void)ui;
@@ -1139,5 +1183,7 @@ int run_ui_editor_probe(Game* game, UISystem* ui, Font* font, const char* which)
         return probe_editor_mode(ui);
     if (!strcmp(which, "editor-host-undo"))
         return probe_editor_host_undo(ui);
+    if (!strcmp(which, "editor-host-edit"))
+        return probe_editor_host_edit(ui);
     return -1;
 }
