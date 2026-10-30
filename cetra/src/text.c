@@ -273,6 +273,52 @@ static void _free_pairs(struct FontPairs* p) {
     free(p);
 }
 
+/*
+ * Every glyph's distance field, rasterised across threads before any is packed (spec 14.3): the
+ * rasterising was nearly all of a font's load, each glyph's field is a function of the glyph alone,
+ * and the packing stays serial, so the atlas is the same to the byte.
+ */
+typedef struct AtlasGlyph {
+    unsigned char* sdf; // NULL for a glyph with no outline
+    int w, h, x0, y0;
+} AtlasGlyph;
+
+typedef struct AtlasBake {
+    const stbtt_fontinfo* info;
+    const uint32_t* codepoints;
+    AtlasGlyph* glyphs;
+    float scale, pixel_dist_scale;
+    int spread, on_edge;
+} AtlasBake;
+
+static void _atlas_band(void* ctx, int begin, int end) {
+    const AtlasBake* b = ctx;
+    for (int i = begin; i < end; i++) {
+        /*
+         * ONE SDF call per glyph, and its pixels are kept.
+         *
+         * This asked twice -- once for the metrics, discarding the bitmap, and again for the
+         * bitmap -- and that cost three separate defects.
+         *
+         * stbtt_GetGlyphSDF returns NULL for a glyph with no outline (a SPACE, most of all) and
+         * returns it BEFORE writing *width, *height, *xoff or *yoff ("if empty, return NULL",
+         * stb_truetype.h). So the metrics probe read four UNINITIALISED locals for every blank
+         * glyph, advanced the packing by whatever the stack happened to hold, and put a later
+         * glyph's destination outside the atlas. That is a heap overflow which faults only when the
+         * allocation ends on a page boundary -- so it crashed occasionally and corrupted quietly
+         * the rest of the time, and looked like flakiness because uninitialised stack differs run
+         * to run. The glyphs are zeroed for that reason: an empty glyph must measure zero.
+         *
+         * The discarded return was also a leaked rasterisation per glyph, and rasterising twice is
+         * the expensive half of building an atlas.
+         */
+        AtlasGlyph* g = &b->glyphs[i];
+        g->sdf =
+            stbtt_GetCodepointSDF(b->info, b->scale, (int)b->codepoints[i], b->spread, b->on_edge,
+                                  b->pixel_dist_scale, &g->w, &g->h, &g->x0, &g->y0);
+    }
+}
+
 static void generate_glyph_atlas(Font* font) {
     if (!font || !font->stb_font_info)
         return;
@@ -301,17 +347,31 @@ static void generate_glyph_atlas(Font* font) {
         font->sdf_falloff = pixel_dist_scale / 255.0f;
     }
 
-    // Allocate atlas
+    uint32_t codepoints[ATLAS_CODEPOINTS_MAX];
+    const size_t codepoint_count = _atlas_codepoints(info, codepoints);
+    AtlasGlyph* fields = calloc(codepoint_count ? codepoint_count : 1, sizeof(AtlasGlyph));
     unsigned char* atlas_data = calloc(atlas_size * atlas_size, 1);
-    if (!atlas_data)
+    if (!fields || !atlas_data) {
+        free(fields);
+        free(atlas_data);
         return;
+    }
+    if (font->is_sdf) {
+        AtlasBake bake = {.info = info,
+                          .codepoints = codepoints,
+                          .glyphs = fields,
+                          .scale = scale,
+                          .pixel_dist_scale = pixel_dist_scale,
+                          .spread = (int)font->sdf_spread,
+                          .on_edge = on_edge_value};
+        const int count = (int)codepoint_count;
+        cetra_bake_bands(count, cetra_bake_workers(0, count), _atlas_band, &bake);
+    }
 
     int cursor_x = padding;
     int cursor_y = padding;
     int row_height = 0;
 
-    uint32_t codepoints[ATLAS_CODEPOINTS_MAX];
-    const size_t codepoint_count = _atlas_codepoints(info, codepoints);
     for (size_t i = 0; i < codepoint_count; i++) {
         const int codepoint = (int)codepoints[i]; // stb_truetype's own type, inside this loop only
 
@@ -319,37 +379,17 @@ static void generate_glyph_atlas(Font* font) {
         int advance, left_bearing;
         stbtt_GetCodepointHMetrics(info, codepoint, &advance, &left_bearing);
 
-        /*
-         * ONE SDF call per glyph, and its pixels are kept.
-         *
-         * This asked twice -- once for the metrics, discarding the bitmap, and
-         * again below for the bitmap -- and that cost three separate defects.
-         *
-         * stbtt_GetGlyphSDF returns NULL for a glyph with no outline (a SPACE,
-         * most of all) and returns it BEFORE writing *width, *height, *xoff or
-         * *yoff ("if empty, return NULL", stb_truetype.h). So the metrics probe
-         * read four UNINITIALISED locals for every blank glyph, advanced
-         * cursor_x and row_height by whatever the stack happened to hold, and
-         * put a later glyph's destination outside the atlas. That is a heap
-         * overflow which faults only when the allocation ends on a page
-         * boundary -- so it crashed occasionally and corrupted quietly the rest
-         * of the time, and looked like flakiness because uninitialised stack
-         * differs run to run.
-         *
-         * The discarded return was also a leaked rasterisation per glyph, and
-         * rasterising twice is the expensive half of building an atlas.
-         *
-         * Initialised to zero here because a NULL return leaves them untouched:
-         * an empty glyph must measure zero, not whatever was in the frame.
-         */
         int x0 = 0, y0 = 0, x1 = 0, y1 = 0;
         int glyph_w = 0, glyph_h = 0;
         unsigned char* sdf_data = NULL;
 
         if (font->is_sdf) {
-            sdf_data =
-                stbtt_GetCodepointSDF(info, scale, codepoint, (int)font->sdf_spread, on_edge_value,
-                                      pixel_dist_scale, &glyph_w, &glyph_h, &x0, &y0);
+            sdf_data = fields[i].sdf;
+            fields[i].sdf = NULL; // freed below, once copied
+            glyph_w = fields[i].w;
+            glyph_h = fields[i].h;
+            x0 = fields[i].x0;
+            y0 = fields[i].y0;
             x1 = x0 + glyph_w;
             y1 = y0 + glyph_h;
         } else {
@@ -378,6 +418,12 @@ static void generate_glyph_atlas(Font* font) {
             int new_size = atlas_size * 2;
             unsigned char* new_data = calloc(new_size * new_size, 1);
             if (!new_data) {
+                if (sdf_data)
+                    stbtt_FreeSDF(sdf_data, NULL);
+                for (size_t k = i; k < codepoint_count; k++)
+                    if (fields[k].sdf)
+                        stbtt_FreeSDF(fields[k].sdf, NULL);
+                free(fields);
                 free(atlas_data);
                 return;
             }
@@ -430,6 +476,7 @@ static void generate_glyph_atlas(Font* font) {
         if (glyph_h > row_height)
             row_height = glyph_h;
     }
+    free(fields);
     for (GlyphInfo* g = font->glyph_cache; g; g = g->hh.next) {
         g->u0 /= (float)atlas_size;
         g->v0 /= (float)atlas_size;

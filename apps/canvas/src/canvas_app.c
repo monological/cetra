@@ -703,6 +703,44 @@ static void sheet_symbol(SheetContext* ctx) {
  */
 static const char GLYPHS[] = "Bg@We";
 
+// Every glyph's texels in the font's atlas against stb's own distance field for it, rasterised here
+// with the parameters the font states, and the count of glyphs whose texels differ.
+static void probe_atlas(const Font* font) {
+    const stbtt_fontinfo* info = (const stbtt_fontinfo*)font->stb_font_info;
+    const int side = font->atlas_width;
+    unsigned char* atlas = malloc((size_t)side * (size_t)font->atlas_height);
+    if (!atlas || font->atlas_height != side) {
+        free(atlas);
+        return;
+    }
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glBindTexture(GL_TEXTURE_2D, font->atlas_texture_id);
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_RED, GL_UNSIGNED_BYTE, atlas);
+    const float scale = stbtt_ScaleForPixelHeight(info, font->base_size);
+    const int on_edge =
+        (int)lroundf(font->sdf_edge * 255.0f + 0.5f); // the edge is half a code under
+    const float per_pixel = (float)on_edge / font->sdf_spread;
+    int glyphs = 0, differ = 0;
+    for (const GlyphInfo* g = font->glyph_cache; g; g = g->hh.next) {
+        int w = 0, h = 0, x0 = 0, y0 = 0;
+        unsigned char* sdf =
+            stbtt_GetCodepointSDF(info, scale, (int)g->codepoint, (int)font->sdf_spread, on_edge,
+                                  per_pixel, &w, &h, &x0, &y0);
+        const int u = (int)lroundf(g->u0 * (float)side), v = (int)lroundf(g->v0 * (float)side);
+        bool same = w == (int)lroundf((g->u1 - g->u0) * (float)side) && (float)x0 == g->x0 &&
+                    (float)y0 == g->y0;
+        for (int row = 0; same && row < h; row++)
+            same = memcmp(atlas + (size_t)(v + row) * (size_t)side + (size_t)u,
+                          sdf + (size_t)row * (size_t)w, (size_t)w) == 0;
+        glyphs++;
+        differ += !same;
+        if (sdf)
+            stbtt_FreeSDF(sdf, NULL);
+    }
+    free(atlas);
+    printf("canvas glyphs atlas %d differ %d\n", glyphs, differ);
+}
+
 static void sheet_glyphs(SheetContext* ctx) {
     const CanvasPaint paint = white_paint(ctx->canvas);
     const stbtt_fontinfo* info = (const stbtt_fontinfo*)ctx->font->stb_font_info;
@@ -772,6 +810,7 @@ static void sheet_glyphs(SheetContext* ctx) {
                     font_kern_advance(ctx->font, a->codepoint, b->codepoint) != (float)kern * base;
             }
         printf("canvas glyphs pairs %d kerned %d differ %d\n", pairs, kerned_pairs, differ);
+        probe_atlas(ctx->font);
     }
 }
 
