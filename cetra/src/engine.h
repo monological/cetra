@@ -579,8 +579,10 @@ typedef struct Engine {
     Exposure exposure;
 
     InputState input;
-    // The scripted pointer, or NULL for the real one (engine_set_pointer_script).
-    struct PointerScript* pointer_script;
+    // The scripted input, or NULL for the real devices (engine_set_input_script).
+    struct InputScript* input_script;
+    // The clipboard of a headless run, owned; a window's is the system's (engine_clipboard_get).
+    char* clipboard;
     // What moves the camera, or NULL for an app that poses it itself
     // (engine_set_camera_rig); borrowed.
     struct CameraRig* camera_rig;
@@ -791,6 +793,13 @@ bool engine_gui_wants_mouse(void);
 // ask the same question itself, or typing in a slider also walks.
 bool engine_gui_wants_keyboard(void);
 
+// The clipboard's text, UTF-8, never NULL: the system's in a window, and headless one the engine
+// keeps, so a test run never reads or overwrites the user's. The pointer is valid until the next
+// clipboard call.
+const char* engine_clipboard_get(Engine* engine);
+// Puts `text` on the clipboard, copied; NULL is the empty string.
+void engine_clipboard_set(Engine* engine, const char* text);
+
 // The camera the frame renders; refuses NULL.
 void engine_set_camera(Engine* engine, Camera* camera);
 
@@ -904,23 +913,33 @@ void engine_set_render_time(Engine* engine, double time, double delta);
 bool engine_cursor_fb(const Engine* engine, double* fb_x, double* fb_y);
 
 /*
- * Replay a POINTER from a text file instead of reading the mouse (spec 12.19),
- * the way input_set_pad_script replays a gamepad. False, logged, when the file
- * cannot be read or a line does not parse; installing a second script frees the
- * first.
+ * Replay a POINTER and TYPING from a text file (specs 12.19 and 14.2), the way
+ * input_set_pad_script replays a gamepad. False, logged, when the file cannot be
+ * read or a line does not parse; installing a second script frees the first.
  *
  * The grammar is frame_script's, shared with the pad: one line per frame or
- * `from-to` range, `#` comments, the last matching line winning. Tokens are
- * `at=x,y` (framebuffer pixels, +Y up), `by=dx,dy` (per frame, where `at` is
- * absent), `down`, `shift` and `wheel=<f>`. A range states the pointer's STATE,
- * so a press is `down` appearing and a release is it going; `shift` is read at
- * the press, which is the only moment GLFW's modifier reaches the input state.
+ * `from-to` range, `#` comments, the last matching line winning.
  *
- * It drives the engine's own pointer path, so a replayed drag reaches the drag
- * state, the ray picking and the app's forwarded callback exactly as a hand
- * does -- which is what lets an arm assert a camera nothing could press before.
+ * The pointer's tokens are `at=x,y` (framebuffer pixels, +Y up), `by=dx,dy` (per
+ * frame, where `at` is absent), `down`, `shift` and `wheel=<f>`. A range states
+ * the pointer's STATE, so a press is `down` appearing and a release is it going;
+ * `shift` is read at the press, which is the only moment GLFW's modifier reaches
+ * the input state. A script REPLACES the mouse.
+ *
+ * The typing tokens are `type=TEXT`, UTF-8 with `\s` for a space and `\\` for a
+ * backslash, one character event each; and `key=NAME`, one press, its modifiers
+ * joined before it by `+` from `shift`, `ctrl`, `alt`, `super` and `mod` -- the
+ * platform's shortcut modifier, Cmd on macOS and Ctrl elsewhere, so a script runs
+ * the same on every platform (`key=mod+a`). Names are a letter, a digit, or one of
+ * left right up down home end pageup pagedown backspace delete enter tab escape
+ * space slash. They are EVENTS, delivered on every frame of their range in the
+ * line's order, and they add to the keyboard rather than replacing it.
+ *
+ * It drives the engine's own paths, so a replayed drag reaches the drag state,
+ * the ray picking and the app's forwarded callback exactly as a hand does, and a
+ * replayed key the event list and the app's key callback as a keyboard does.
  */
-bool engine_set_pointer_script(Engine* engine, const char* path);
+bool engine_set_input_script(Engine* engine, const char* path);
 
 /*
  * What moves the camera this frame (spec 12.19). Borrowed: the app owns the rig

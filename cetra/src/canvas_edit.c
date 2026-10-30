@@ -794,42 +794,10 @@ void canvas_edit_polygon(CanvasEdit* edit, const CanvasPolygon* polygon) {
  * anchor in ems, with the em and the angle on the record: the vertex stage
  * scales and turns them, so a string at any size or turn is the same layout.
  * The advances and the kerning are the font's, the kerning applied before each
- * glyph's advance as the UI applies it. One difference from the UI, which
- * drops a character its atlas does not hold: here it advances by its own
- * width, so a string's width does not depend on what the atlas was built with.
+ * glyph's advance as the UI applies it, and a character the atlas does not hold
+ * advances by its own width, as the UI's does, so a string's width does not
+ * depend on what the atlas was built with.
  */
-
-// The next codepoint of a UTF-8 string, stepping past it; a byte that starts
-// no whole sequence is one U+FFFD.
-static int _utf8_next(const unsigned char** s) {
-    const unsigned char* p = *s;
-    int cp, extra;
-    if (p[0] < 0x80) {
-        *s = p + 1;
-        return p[0];
-    }
-    if ((p[0] & 0xe0) == 0xc0)
-        cp = p[0] & 0x1f, extra = 1;
-    else if ((p[0] & 0xf0) == 0xe0)
-        cp = p[0] & 0x0f, extra = 2;
-    else if ((p[0] & 0xf8) == 0xf0)
-        cp = p[0] & 0x07, extra = 3;
-    else
-        extra = -1, cp = 0;
-    for (int i = 1; i <= extra; i++) {
-        if ((p[i] & 0xc0) != 0x80) {
-            extra = -1;
-            break;
-        }
-        cp = cp << 6 | (p[i] & 0x3f);
-    }
-    if (extra < 0) {
-        *s = p + 1;
-        return 0xfffd;
-    }
-    *s = p + 1 + extra;
-    return cp;
-}
 
 typedef struct TextGlyph {
     int codepoint;
@@ -845,7 +813,7 @@ static double _text_layout(const Font* font, const char* string, TextGlyph* out,
     int prev = 0;
     size_t n = 0;
     for (const unsigned char* s = (const unsigned char*)string; *s;) {
-        const int cp = _utf8_next(&s);
+        const int cp = text_utf8_next(&s);
         pen += font_kern_advance(font, prev, cp) * em;
         const GlyphInfo* g = cp < CANVAS_GLYPH_CODEPOINTS ? font_get_glyph(font, cp) : NULL;
         if (out && g && g->x1 > g->x0 && g->y1 > g->y0)

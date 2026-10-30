@@ -392,6 +392,12 @@ static float _advance_between(const Font* font, int prev, int cp, float scale, f
     return font_kern_advance(font, prev, cp) * scale + tracking;
 }
 
+// A glyph's own advance, held by the atlas or not: one it lacks is spaced by the face's width for
+// it and drawn as a box (_missing_box), so the text it sits in measures what it draws.
+static float _glyph_advance(const Font* font, const GlyphInfo* g, int cp, float scale) {
+    return (g ? g->advance_x : font_advance(font, cp)) * scale;
+}
+
 float ui_line_height(const Font* font, float size, float line_spacing) {
     if (!font || font->base_size <= 0.0f)
         return size;
@@ -407,14 +413,11 @@ static float _line_width(const Font* font, float size, float tracking, const uns
     const float scale = size / font->base_size;
     float w = 0.0f;
     int prev = 0;
-    for (; *p && *p != '\n'; p++) {
-        const GlyphInfo* g = font_get_glyph(font, (int)*p);
-        if (!g) {
-            prev = 0;
-            continue;
-        }
-        w += _advance_between(font, prev, (int)*p, scale, tracking) + g->advance_x * scale;
-        prev = (int)*p;
+    while (*p && *p != '\n') {
+        const int cp = text_utf8_next(&p);
+        w += _advance_between(font, prev, cp, scale, tracking) +
+             _glyph_advance(font, font_get_glyph(font, cp), cp, scale);
+        prev = cp;
     }
     return w;
 }
@@ -445,28 +448,19 @@ size_t ui_text_wrap_point(const Font* font, float size, float tracking, const ch
     if (!font || !text || font->base_size <= 0.0f)
         return text ? strlen(text) : 0;
     const float scale = size / font->base_size;
-    const size_t len = strlen(text);
+    const unsigned char* start = (const unsigned char*)text;
     float w = 0.0f;
     size_t last_break = 0;
     int prev = 0;
-    for (size_t i = 0; i < len; i++) {
-        const unsigned char c = (unsigned char)text[i];
-        if (c == '\n')
+    for (const unsigned char* p = start; *p;) {
+        const size_t i = (size_t)(p - start);
+        if (*p == '\n')
             return i;
-        const GlyphInfo* g = font_get_glyph(font, (int)c);
-        // A glyph the atlas cannot produce contributes NOTHING: no advance, and
-        // no pair adjustment either. Charging kerning and tracking for an absent
-        // glyph made this loop measure a longer string than the width and draw
-        // loops did -- three spellings of one rule, already disagreeing, under a
-        // header promising they cannot.
-        if (!g) {
-            prev = 0;
-            if (c == ' ')
-                last_break = i + 1;
-            continue;
-        }
-        const float adv =
-            _advance_between(font, prev, (int)c, scale, tracking) + g->advance_x * scale;
+        const int cp = text_utf8_next(&p);
+        // The measuring rule _line_width and the draw use, glyph held or not: three spellings
+        // of one rule disagreed here once, charging a pair across a glyph the atlas refused.
+        const float adv = _advance_between(font, prev, cp, scale, tracking) +
+                          _glyph_advance(font, font_get_glyph(font, cp), cp, scale);
         if (w + adv > max_width && i > 0) {
             // Break at the last space if there was one; a single word longer
             // than the line breaks mid-word rather than overflowing, because
@@ -474,11 +468,22 @@ size_t ui_text_wrap_point(const Font* font, float size, float tracking, const ch
             return last_break > 0 ? last_break : i;
         }
         w += adv;
-        prev = (int)c;
-        if (c == ' ')
-            last_break = i + 1;
+        prev = cp;
+        if (cp == ' ')
+            last_break = (size_t)(p - start);
     }
-    return len;
+    return (size_t)strlen(text);
+}
+
+// A character the atlas does not hold, drawn as an outlined box over its own advance from the
+// baseline to most of the ascent, so a missing glyph is seen rather than a silent gap.
+static void _missing_box(UIDrawList* dl, float pen_x, float baseline, float advance, float ascent,
+                         const float color[4]) {
+    static const float clear[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    const float inset = advance * 0.12f;
+    const float stroke = ascent * 0.08f > 1.0f ? ascent * 0.08f : 1.0f;
+    _push_quad(dl, dl->white, pen_x + inset, baseline - ascent * 0.72f, pen_x + advance - inset,
+               baseline, 0.0f, 0.0f, 1.0f, 1.0f, clear, 0.0f, stroke, UI_MODE_FILL, color);
 }
 
 static float _align_pen(UIRect r, UIAlign align, float line_w) {
@@ -532,23 +537,28 @@ void ui_draw_text(UIDrawList* dl, UIRect r, const char* text, const UIStyle* sty
                          : 1.0f;
 
     int prev = 0;
-    for (const unsigned char* p = (const unsigned char*)text; *p; p++) {
+    for (const unsigned char* p = (const unsigned char*)text; *p;) {
         if (*p == '\n') {
+            p++;
             // The NEXT line's own width decides where it starts.
-            pen_x = _align_pen(r, align, _line_width(font, size, tracking, p + 1));
+            pen_x = _align_pen(r, align, _line_width(font, size, tracking, p));
             pen_y += line_h;
             prev = 0; // no pair spans a line break
             continue;
         }
-        const GlyphInfo* g = font_get_glyph(font, (int)*p);
-        if (!g) {
-            prev = 0;
-            continue;
-        }
+        const int cp = text_utf8_next(&p);
+        const GlyphInfo* g = font_get_glyph(font, cp);
         // The same rule the measurement used, so what is drawn is exactly as
         // wide as what was measured -- otherwise a centred string is centred
         // against a width it does not have.
-        pen_x += _advance_between(font, prev, (int)*p, scale, tracking);
+        pen_x += _advance_between(font, prev, cp, scale, tracking);
+        prev = cp;
+        if (!g) {
+            const float adv = _glyph_advance(font, NULL, cp, scale);
+            _missing_box(dl, pen_x, pen_y, adv, font->ascent * scale, color);
+            pen_x += adv;
+            continue;
+        }
         // GlyphInfo's box is stb's, and stb's is Y-DOWN: y0 is the offset from
         // the baseline to the TOP of the bitmap, NEGATIVE above it. So the box
         // is ADDED to the pen, never subtracted.
@@ -573,7 +583,6 @@ void ui_draw_text(UIDrawList* dl, UIRect r, const char* text, const UIStyle* sty
             for (size_t k = dl->vcount - 4; k < dl->vcount; k++)
                 dl->verts[k].params[3] = font->is_sdf ? font->sdf_edge : 0.5f;
         pen_x += g->advance_x * scale;
-        prev = (int)*p;
     }
 }
 

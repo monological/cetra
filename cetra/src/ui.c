@@ -1110,6 +1110,20 @@ bool ui_build(UISystem* ui, float width, float height, float dt) {
 
 // ---------------------------------------------------------------- the system
 
+void ui_input_add_keyboard(UIInput* in, const Engine* engine) {
+    if (!in || !engine) {
+        log_error("ui_input_add_keyboard: NULL input or engine");
+        return;
+    }
+    in->wheel_y = (float)engine->input.scroll_dy;
+    in->key_events = engine->input.key_events;
+    in->key_event_count = engine->input.key_event_count;
+    // The wall clock and not the engine's: idle mode keeps its waits out of that one, and two
+    // clicks a long wait apart would read as a double click.
+    in->time =
+        engine->headless ? (double)engine->total_frames * ENGINE_FIXED_FRAME_DT : glfwGetTime();
+}
+
 static void _ui_overlay(Engine* engine, void* user) {
     UISystem* ui = user;
     if (!ui || !engine)

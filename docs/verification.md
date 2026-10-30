@@ -492,7 +492,7 @@ either suite has exercised GLFW's real joystick backends** (evdev, IOKit, XInput
 ledger in `specs/11.109-gamepad-input.md` records that as owed.
 
 **The same is now true of the MOUSE, and for the same reason.** Spec 12.19 gave the pointer the
-seam the pad already had -- `--pointer-script`, the same frame-range grammar through the same
+seam the pad already had -- `--input-script`, the same frame-range grammar through the same
 parser -- so a drag, a shift-pan and a wheel notch are asserted in the `camera` group with no
 hand on a mouse. What that covers is everything above the seam: the drag state, the ray picking
 and the app's own forwarded callback all run exactly as they do for a real event. **GLFW's real

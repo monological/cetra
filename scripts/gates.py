@@ -27650,8 +27650,10 @@ def run_ui_gate(workdir):
     """The game UI layer (spec 12.2), asserted where it is a pure function: layout
     is (tree, width, height) with no GL and no clock, the input pass takes a
     struct of values rather than a device, and the settings file is a table
-    walked both ways. So every arm below runs with no window and no GPU at all --
-    the two menu GOLDENS are what see pixels.
+    walked both ways. So the arms run with no window and no GPU, through
+    gametest's probe -- all but the ones spec 14.2 added END TO END, which run
+    apps/canvas headless, since what they assert is the path from the engine's
+    input and the font's atlas to the UI's picture.
 
       ui-layout      a column at 1280x720 lands on its closed form: the panel
                      centred, its height the padding plus three rows plus two
@@ -27709,6 +27711,15 @@ def run_ui_gate(workdir):
                      survives; the window mode rides the file as a name; an absent
                      file leaves defaults rather than zeros; and apply reaches the
                      mixer.
+      ui-typed       an input script's typing reaches the UI through
+                     ui_input_add_keyboard, every event in its order: characters
+                     past ASCII as their codepoints, a key with the platform's
+                     shortcut modifier for `mod`, and a later line's key on its own
+                     frame (spec 14.2, end to end).
+      ui-glyphs      é, Ω and µ draw from the atlas, which held printable ASCII
+                     only until spec 14.2: each puts ink where a space puts none, and
+                     é is not e. A codepoint the atlas lacks draws its box rather
+                     than a silent gap (end to end).
     """
     failed = []
 
@@ -27951,6 +27962,48 @@ def run_ui_gate(workdir):
                   f"apply reaches the mixer ({p[('applied', 'master')][0]:.3f})")
     print(f"  ui-settings-roundtrip {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-settings-roundtrip", ok)
+
+    # ---- typing, from the engine to the UI's input (spec 14.2)
+    script = os.path.join(workdir, "ui_typed.script")
+    with open(script, "w", encoding="utf-8") as f:
+        f.write("2 type=aé\\sΩ key=mod+a key=shift+left\n4 key=backspace\n")
+    said = _canvas_shot(os.path.join(workdir, "ui_typed.ppm"), 8, "--canvas-probe",
+                        "--input-script", script)
+    typed = [line.split()[2:] for line in (said or "").splitlines()
+             if line.startswith("canvas typed")]
+    mod = 8 if sys.platform == "darwin" else 2  # GLFW_MOD_SUPER, GLFW_MOD_CONTROL
+    # GLFW_KEY_A 65, GLFW_KEY_LEFT 263 with GLFW_MOD_SHIFT 1, GLFW_KEY_BACKSPACE 259.
+    want = [["c61", "ce9", "c20", "c3a9", f"k65+{mod}", "k263+1"], ["k259+0"]]
+    ok = typed == want
+    detail = f"the UI was handed {typed} (want {want})"
+    print(f"  ui-typed              {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-typed", ok)
+
+    # ---- glyphs past ASCII, and the box for one the atlas lacks
+    def panel_crop(tag, text):
+        out, probe = _canvas_run(workdir, f"glyph_{tag}", "--ui-text", text)
+        panel = probe.get(("ui", "panel"))
+        if not out or not panel:
+            return None
+        x0, y0, x1, y1 = (int(v) for v in panel[:4])
+        return _ppm_array(out)[y0:y1, x0:x1, :3]
+
+    crops = {tag: panel_crop(tag, text) for tag, text in
+             (("blank", " "), ("e", "e"), ("eacute", "é"), ("omega", "Ω"), ("micro", "µ"),
+              ("missing", "你"))}
+    if any(c is None for c in crops.values()):
+        ok, detail = False, "a run failed or printed no panel"
+    else:
+        def differ(a, b):
+            return int(np.any(crops[a] != crops[b], axis=2).sum())
+        ink = {tag: differ(tag, "blank") for tag in ("eacute", "omega", "micro", "missing")}
+        accent = differ("eacute", "e")
+        ok = all(v > 40 for v in ink.values()) and accent > 20
+        detail = (f"ink over a space: é {ink['eacute']}, Ω {ink['omega']}, µ {ink['micro']}, "
+                  f"the missing box {ink['missing']} px (want each over 40); é differs from e by "
+                  f"{accent} px (want over 20)")
+    print(f"  ui-glyphs             {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-glyphs", ok)
 
     return failed
 
@@ -28490,7 +28543,7 @@ def _pointer_run(workdir, binary, tag, script, frames, extra=()):
     with open(path, "w") as f:
         f.write(script)
     r = subprocess.run([binary, "-x", "-f", str(frames), *extra,
-                        "--pointer-script", path, "--trace-camera"],
+                        "--input-script", path, "--trace-camera"],
                        capture_output=True, text=True, timeout=_PROBE_TIMEOUT)
     rows = RENDER_CAM.findall(r.stdout + r.stderr)
     if r.returncode != 0 or not rows:
@@ -29157,9 +29210,9 @@ def run_idle_gate(workdir):
     script = os.path.join(workdir, "idle_drag.txt")
     with open(script, "w") as f:
         f.write("2 at=600,400\n3-10 down by=12,-6\n")
-    dragged, said = _idle_run(workdir, "drag", "--sheet", "shapes", "--pointer-script", script)
+    dragged, said = _idle_run(workdir, "drag", "--sheet", "shapes", "--input-script", script)
     played = 12  # the script's frames 0 to 10, played after frames 1 to 11, and the frame after
-    plain_drag, _ = _idle_run(workdir, "drag_plain", "--sheet", "shapes", "--pointer-script",
+    plain_drag, _ = _idle_run(workdir, "drag_plain", "--sheet", "shapes", "--input-script",
                               script, frames=played, idle=False)
     if not dragged or not plain_drag or not plain or "frames" not in said:
         ok, detail = False, "a run failed"
@@ -29227,7 +29280,7 @@ def run_camera_gate(workdir):
     Until this group existed nothing in the suite had ever pressed a mouse, so
     the camera four apps move with a drag was covered by no arm and no golden --
     `docs/verification.md` recorded the hole for the follow camera's rotation and
-    it was wider than that. --pointer-script replays a drag through the engine's
+    it was wider than that. --input-script replays a drag through the engine's
     own pointer path, so what these arms read is the code a hand reaches.
 
     Every arm below is a CLOSED FORM rather than a recorded pose, and that is the

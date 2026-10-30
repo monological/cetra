@@ -71,13 +71,14 @@ static int _setup_engine_gui(Engine* engine);
 static void _engine_cursor_position_callback(GLFWwindow* window, double xpos, double ypos);
 static void _engine_mouse_button_callback(GLFWwindow* window, int button, int action, int mods);
 static void _engine_key_callback(GLFWwindow* window, int key, int scancode, int action, int mods);
+static void _engine_char_callback(GLFWwindow* window, unsigned int codepoint);
 static void _engine_scroll_callback(GLFWwindow* window, double xoffset, double yoffset);
 static void _engine_framebuffer_size_callback(GLFWwindow* window, int fb_width, int fb_height);
 static void _engine_derive_camera(Engine* engine);
-static void _engine_pointer_script_frame(Engine* engine);
-static void _engine_pointer_script_free(Engine* engine);
-static bool _engine_pointer_script_cursor(const Engine* engine, double* fb_x, double* fb_y);
-static bool _engine_pointer_script_running(const Engine* engine);
+static void _engine_input_script_frame(Engine* engine);
+static void _engine_input_script_free(Engine* engine);
+static bool _engine_input_script_cursor(const Engine* engine, double* fb_x, double* fb_y);
+static bool _engine_input_script_running(const Engine* engine);
 static SceneNode* _perform_engine_ray_picking(Engine* engine, double mouse_fb_x, double mouse_fb_y);
 static void _destroy_msaa_attachments(Engine* engine);
 
@@ -433,7 +434,8 @@ void free_engine(Engine* engine) {
         free(engine->screenshot_path);
     }
 
-    _engine_pointer_script_free(engine);
+    _engine_input_script_free(engine);
+    free(engine->clipboard);
 
     // GL objects must be released while the context still exists, i.e. before
     // the window is destroyed; and there is a context to release them into
@@ -948,7 +950,7 @@ typedef enum { IDLE_DRAW, IDLE_WAIT, IDLE_DONE } IdleNext;
 // Under idle mode, what follows this frame: the next drawn, a wait for something to ask, or --
 // headless, with nothing asking and nothing out that will -- the end of the run.
 //
-// Everything that knows it wants a frame asks during the frame (engine_request_frame); the pointer
+// Everything that knows it wants a frame asks during the frame (engine_request_frame); the input
 // script alone is asked here, since its frame plays after this is decided, at the end of the
 // frame's events. The work out is read BEFORE the request: engine_end_work asks before it lowers
 // its count, so this sees one or the other and never neither.
@@ -957,7 +959,7 @@ static IdleNext _engine_idle_next(const Engine* engine) {
     const bool pending = atomic_load(&w->work_out) > 0 ||
                          async_loader_is_busy(engine->async_loader) || isfinite(w->wake_at);
     if (atomic_load(&w->requested) || glfwGetTime() >= w->wake_at ||
-        _engine_pointer_script_running(engine))
+        _engine_input_script_running(engine))
         return IDLE_DRAW;
     return pending || !engine->headless ? IDLE_WAIT : IDLE_DONE;
 }
@@ -1267,9 +1269,9 @@ static int _setup_engine_gui(Engine* engine) {
     glfwSetCursorPosCallback(engine->window, _engine_cursor_position_callback);
     glfwSetFramebufferSizeCallback(engine->window, _engine_framebuffer_size_callback);
     glfwSetKeyCallback(engine->window, _engine_key_callback);
-    // Text input, focus and the cursor entering or leaving have no engine-side logic, so they go
-    // straight to the backend, which is owed all three when installed without its own callbacks.
-    glfwSetCharCallback(engine->window, ImGui_ImplGlfw_CharCallback);
+    glfwSetCharCallback(engine->window, _engine_char_callback);
+    // Focus and the cursor entering or leaving have no engine-side logic, so they go straight to
+    // the backend, which is owed both when installed without its own callbacks.
     glfwSetWindowFocusCallback(engine->window, ImGui_ImplGlfw_WindowFocusCallback);
     glfwSetCursorEnterCallback(engine->window, ImGui_ImplGlfw_CursorEnterCallback);
     glfwSetScrollCallback(engine->window, _engine_scroll_callback);
@@ -1568,8 +1570,8 @@ bool engine_cursor_fb(const Engine* engine, double* fb_x, double* fb_y) {
     // cursor is gets the real one while everything else gets the script: the
     // 2D canvas zooms about the point under the cursor, and read the window
     // corner instead.
-    if (engine->pointer_script)
-        return _engine_pointer_script_cursor(engine, fb_x, fb_y);
+    if (engine->input_script)
+        return _engine_input_script_cursor(engine, fb_x, fb_y);
     if (!engine->window)
         return false;
     double wx = 0.0, wy = 0.0;
@@ -1612,7 +1614,7 @@ static void _engine_cursor_position_callback(GLFWwindow* window, double xpos, do
     // A script REPLACES the mouse, as --pad-script replaces the pad. ImGui still
     // sees the event above, or the debug GUI goes deaf under a script; nothing
     // below it does, or the two pointers fight over one InputState.
-    if (engine->pointer_script || engine_gui_wants_mouse()) {
+    if (engine->input_script || engine_gui_wants_mouse()) {
         return;
     }
 
@@ -1661,7 +1663,7 @@ static void _engine_mouse_button_callback(GLFWwindow* window, int button, int ac
 
     ImGui_ImplGlfw_MouseButtonCallback(window, button, action, mods);
 
-    if (engine->pointer_script)
+    if (engine->input_script)
         return;
 
     // Not an early return on a zero-area window: it must still be able to end
@@ -1674,6 +1676,45 @@ static void _engine_mouse_button_callback(GLFWwindow* window, int button, int ac
 
 _Static_assert(INPUT_KEYS == GLFW_KEY_LAST + 1, "InputState.key_pressed takes every GLFW key");
 
+// One typing event into the frame's list. A batch past the list's size loses the rest, which a
+// hand cannot type between two frames; it is said once.
+static void _engine_typed(Engine* engine, InputKeyEvent ev) {
+    InputState* in = &engine->input;
+    if (in->key_event_count >= INPUT_KEY_EVENTS) {
+        static bool warned = false;
+        if (!warned)
+            log_warn("more than %d typing events between two frames: the rest are dropped",
+                     INPUT_KEY_EVENTS);
+        warned = true;
+        return;
+    }
+    in->key_events[in->key_event_count++] = ev;
+}
+
+/*
+ * A key and a character, the halves of their GLFW callbacks below that a scripted
+ * key reaches as well (spec 14.2), as the pointer's are: everything after ImGui
+ * has seen the event. The GUI's text field keeps what it takes from both, or
+ * typing a name in a slider also drives the app.
+ */
+static void _engine_key(Engine* engine, int key, int scancode, int action, int mods) {
+    if (engine_gui_wants_keyboard())
+        return;
+
+    if (action == GLFW_PRESS && key >= 0 && key < INPUT_KEYS)
+        engine->input.key_pressed[key] = true;
+    if (action != GLFW_RELEASE && key >= 0)
+        _engine_typed(engine, (InputKeyEvent){.key = key, .mods = mods});
+    if (engine->key_callback) {
+        engine->key_callback(engine, key, scancode, action, mods);
+    }
+}
+
+static void _engine_char(Engine* engine, unsigned int codepoint) {
+    if (!engine_gui_wants_keyboard())
+        _engine_typed(engine, (InputKeyEvent){.codepoint = codepoint});
+}
+
 static void _engine_key_callback(GLFWwindow* window, int key, int scancode, int action, int mods) {
     if (!window)
         return;
@@ -1683,17 +1724,37 @@ static void _engine_key_callback(GLFWwindow* window, int key, int scancode, int 
         return;
 
     ImGui_ImplGlfw_KeyCallback(window, key, scancode, action, mods);
+    _engine_key(engine, key, scancode, action, mods);
+}
 
-    // Don't drive the camera / app hotkeys while the GUI has keyboard focus
-    // (e.g. an active text field).
-    if (engine_gui_wants_keyboard())
+static void _engine_char_callback(GLFWwindow* window, unsigned int codepoint) {
+    ImGui_ImplGlfw_CharCallback(window, codepoint);
+
+    Engine* engine = glfwGetWindowUserPointer(window);
+    if (engine)
+        _engine_char(engine, codepoint);
+}
+
+const char* engine_clipboard_get(Engine* engine) {
+    if (!engine)
+        return "";
+    if (engine->headless || !engine->window)
+        return engine->clipboard ? engine->clipboard : "";
+    const char* text = glfwGetClipboardString(engine->window);
+    return text ? text : "";
+}
+
+void engine_clipboard_set(Engine* engine, const char* text) {
+    if (!engine) {
+        log_error("engine_clipboard_set: NULL engine");
         return;
-
-    if (action == GLFW_PRESS && key >= 0 && key < INPUT_KEYS)
-        engine->input.key_pressed[key] = true;
-    if (engine->key_callback) {
-        engine->key_callback(engine, key, scancode, action, mods);
     }
+    if (engine->headless || !engine->window) {
+        free(engine->clipboard);
+        engine->clipboard = safe_strdup(text ? text : "");
+        return;
+    }
+    glfwSetClipboardString(engine->window, text ? text : "");
 }
 
 static void _engine_pointer_scroll(Engine* engine, double xoffset, double yoffset) {
@@ -1713,27 +1774,30 @@ static void _engine_scroll_callback(GLFWwindow* window, double xoffset, double y
     ImGui_ImplGlfw_ScrollCallback(window, xoffset, yoffset);
 
     Engine* engine = glfwGetWindowUserPointer(window);
-    if (!engine || engine->pointer_script)
+    if (!engine || engine->input_script)
         return;
 
     _engine_pointer_scroll(engine, xoffset, yoffset);
 }
 
 /*
- * The scripted pointer (spec 12.19).
+ * The scripted input (specs 12.19 and 14.2).
  *
- * The gamepad's seam, for the other device: --pad-script replaces the poll, this
+ * The gamepad's seam, for the other devices: --pad-script replaces the poll, this
  * replaces the event batch, and both replay a frame-range script through the
  * code a real device drives. It exists because the viewer camera -- the thing
  * four apps move with a drag -- had never been asserted by anything, there being
- * no way to press a mouse from a test.
+ * no way to press a mouse from a test; and typing, since 14.2, for the same reason.
  *
  * A range states the pointer's STATE over its frames, as the pad's does, and the
  * EDGES are derived here: `down` appearing is a press and `down` going is a
  * release. `shift` is read at the press only, because that is when GLFW's
  * modifier reaches InputState and a real hand cannot add it mid-drag either.
+ * Typing is EVENTS instead, a key being a press and its release in one frame.
  */
-typedef struct PointerScriptRange {
+#define INPUT_SCRIPT_TYPED 32 // typing events one line may carry
+
+typedef struct InputScriptRange {
     FrameScriptRange range; // first, by frame_script.h's contract
     bool has_at;
     double at_x, at_y; // framebuffer pixels, +Y up: engine_cursor_fb's space
@@ -1741,20 +1805,22 @@ typedef struct PointerScriptRange {
     bool down;
     bool shift;
     double wheel;
-} PointerScriptRange;
-_Static_assert(offsetof(PointerScriptRange, range) == 0,
+    InputKeyEvent typed[INPUT_SCRIPT_TYPED]; // in the line's order
+    int typed_count;
+} InputScriptRange;
+_Static_assert(offsetof(InputScriptRange, range) == 0,
                "frame_script.h reads the frame range off the front of this");
 
-typedef struct PointerScript {
-    PointerScriptRange* ranges;
+typedef struct InputScript {
+    InputScriptRange* ranges;
     size_t count;
     int last; // the last frame any range covers; past it every frame is idle
     int frame;
     double x, y; // where the cursor has been walked to
     bool down;   // as of the previous frame, so a change is an edge
-} PointerScript;
+} InputScript;
 
-static const PointerScriptRange k_pointer_idle = {0};
+static const InputScriptRange k_input_idle = {0};
 
 static bool _pointer_pair(const char* value, double* a, double* b) {
     char* end = NULL;
@@ -1766,8 +1832,112 @@ static bool _pointer_pair(const char* value, double* a, double* b) {
     return end != second && *end == '\0';
 }
 
-static bool _pointer_token(void* range, const char* tok, const char* path, int line) {
-    PointerScriptRange* r = range;
+static bool _script_typed(InputScriptRange* r, InputKeyEvent ev, const char* path, int line) {
+    if (r->typed_count >= INPUT_SCRIPT_TYPED) {
+        log_error("%s:%d: more than %d typing events on one line; spread them over frames", path,
+                  line, INPUT_SCRIPT_TYPED);
+        return false;
+    }
+    r->typed[r->typed_count++] = ev;
+    return true;
+}
+
+// `type=` text: UTF-8, `\s` a space and `\\` a backslash, since a space ends the token.
+static bool _script_type(InputScriptRange* r, const char* text, const char* path, int line) {
+    for (const unsigned char* s = (const unsigned char*)text; *s;) {
+        uint32_t cp;
+        if (s[0] == '\\') {
+            if (s[1] != 's' && s[1] != '\\') {
+                log_error("%s:%d: type= knows the escapes \\s and \\\\ only", path, line);
+                return false;
+            }
+            cp = s[1] == 's' ? ' ' : '\\';
+            s += 2;
+        } else {
+            cp = (uint32_t)text_utf8_next(&s);
+        }
+        if (!_script_typed(r, (InputKeyEvent){.codepoint = cp}, path, line))
+            return false;
+    }
+    return true;
+}
+
+// A key name to its GLFW code; GLFW_KEY_UNKNOWN for none.
+static int _script_key_code(const char* name, size_t n) {
+    if (n == 1 && name[0] >= 'a' && name[0] <= 'z')
+        return GLFW_KEY_A + (name[0] - 'a');
+    if (n == 1 && name[0] >= '0' && name[0] <= '9')
+        return GLFW_KEY_0 + (name[0] - '0');
+    static const struct {
+        const char* name;
+        int key;
+    } named[] = {
+        {"left", GLFW_KEY_LEFT},
+        {"right", GLFW_KEY_RIGHT},
+        {"up", GLFW_KEY_UP},
+        {"down", GLFW_KEY_DOWN},
+        {"home", GLFW_KEY_HOME},
+        {"end", GLFW_KEY_END},
+        {"pageup", GLFW_KEY_PAGE_UP},
+        {"pagedown", GLFW_KEY_PAGE_DOWN},
+        {"backspace", GLFW_KEY_BACKSPACE},
+        {"delete", GLFW_KEY_DELETE},
+        {"enter", GLFW_KEY_ENTER},
+        {"tab", GLFW_KEY_TAB},
+        {"escape", GLFW_KEY_ESCAPE},
+        {"space", GLFW_KEY_SPACE},
+        {"slash", GLFW_KEY_SLASH},
+    };
+    for (size_t i = 0; i < sizeof(named) / sizeof(named[0]); i++)
+        if (strlen(named[i].name) == n && strncmp(named[i].name, name, n) == 0)
+            return named[i].key;
+    return GLFW_KEY_UNKNOWN;
+}
+
+// A modifier's GLFW bit; 0 for none. `mod` is the platform's shortcut modifier.
+static int _script_mod_bit(const char* name, size_t n) {
+#ifdef __APPLE__
+    const int shortcut = GLFW_MOD_SUPER;
+#else
+    const int shortcut = GLFW_MOD_CONTROL;
+#endif
+    if (n == 5 && strncmp(name, "shift", 5) == 0)
+        return GLFW_MOD_SHIFT;
+    if (n == 4 && strncmp(name, "ctrl", 4) == 0)
+        return GLFW_MOD_CONTROL;
+    if (n == 3 && strncmp(name, "alt", 3) == 0)
+        return GLFW_MOD_ALT;
+    if (n == 5 && strncmp(name, "super", 5) == 0)
+        return GLFW_MOD_SUPER;
+    if (n == 3 && strncmp(name, "mod", 3) == 0)
+        return shortcut;
+    return 0;
+}
+
+// `key=` with its modifiers before it, joined by `+`: `key=mod+shift+z`.
+static bool _script_key(InputScriptRange* r, const char* spec, const char* path, int line) {
+    int mods = 0;
+    const char* part = spec;
+    for (const char* plus = strchr(part, '+'); plus; plus = strchr(part, '+')) {
+        const int bit = _script_mod_bit(part, (size_t)(plus - part));
+        if (!bit) {
+            log_error("%s:%d: key=%s: '%.*s' is not a modifier", path, line, spec,
+                      (int)(plus - part), part);
+            return false;
+        }
+        mods |= bit;
+        part = plus + 1;
+    }
+    const int key = _script_key_code(part, strlen(part));
+    if (key == GLFW_KEY_UNKNOWN) {
+        log_error("%s:%d: key=%s: no key is named '%s'", path, line, spec, part);
+        return false;
+    }
+    return _script_typed(r, (InputKeyEvent){.key = key, .mods = mods}, path, line);
+}
+
+static bool _input_token(void* range, const char* tok, const char* path, int line) {
+    InputScriptRange* r = range;
     if (strcmp(tok, "idle") == 0)
         return true;
     if (strcmp(tok, "down") == 0) {
@@ -1805,19 +1975,23 @@ static bool _pointer_token(void* range, const char* tok, const char* path, int l
             }
             return true;
         }
+        if (n == 4 && strncmp(tok, "type", 4) == 0)
+            return _script_type(r, eq + 1, path, line);
+        if (n == 3 && strncmp(tok, "key", 3) == 0)
+            return _script_key(r, eq + 1, path, line);
     }
     log_error("%s:%d: unknown token '%s'", path, line, tok);
     return false;
 }
 
 // One frame of the script, in the order a hand produces: the cursor moves,
-// then the button changes under it, then the wheel turns.
-static void _engine_pointer_script_frame(Engine* engine) {
-    PointerScript* s = engine->pointer_script;
+// then the button changes under it, then the wheel turns, then the typing.
+static void _engine_input_script_frame(Engine* engine) {
+    InputScript* s = engine->input_script;
     if (!s)
         return;
-    const PointerScriptRange* r =
-        frame_script_at(s->ranges, s->count, sizeof(*r), &k_pointer_idle, s->frame++);
+    const InputScriptRange* r =
+        frame_script_at(s->ranges, s->count, sizeof(*r), &k_input_idle, s->frame++);
 
     double x = r->has_at ? r->at_x : s->x + r->by_x;
     double y = r->has_at ? r->at_y : s->y + r->by_y;
@@ -1835,16 +2009,26 @@ static void _engine_pointer_script_frame(Engine* engine) {
 
     if (r->wheel != 0.0)
         _engine_pointer_scroll(engine, 0.0, r->wheel);
+
+    for (int i = 0; i < r->typed_count; i++) {
+        const InputKeyEvent* ev = &r->typed[i];
+        if (ev->key) {
+            _engine_key(engine, ev->key, 0, GLFW_PRESS, ev->mods);
+            _engine_key(engine, ev->key, 0, GLFW_RELEASE, ev->mods);
+        } else {
+            _engine_char(engine, ev->codepoint);
+        }
+    }
 }
 
 // True while the script has a frame left to play: it is input, and idle mode draws for it.
-static bool _engine_pointer_script_running(const Engine* engine) {
-    const PointerScript* s = engine->pointer_script;
+static bool _engine_input_script_running(const Engine* engine) {
+    const InputScript* s = engine->input_script;
     return s && s->frame <= s->last;
 }
 
-static bool _engine_pointer_script_cursor(const Engine* engine, double* fb_x, double* fb_y) {
-    const PointerScript* s = engine->pointer_script;
+static bool _engine_input_script_cursor(const Engine* engine, double* fb_x, double* fb_y) {
+    const InputScript* s = engine->input_script;
     if (!s)
         return false;
     *fb_x = s->x;
@@ -1852,13 +2036,13 @@ static bool _engine_pointer_script_cursor(const Engine* engine, double* fb_x, do
     return true;
 }
 
-static void _engine_pointer_script_free(Engine* engine) {
-    PointerScript* s = engine->pointer_script;
+static void _engine_input_script_free(Engine* engine) {
+    InputScript* s = engine->input_script;
     if (!s)
         return;
     free(s->ranges);
     free(s);
-    engine->pointer_script = NULL;
+    engine->input_script = NULL;
 }
 
 void engine_set_camera_rig(Engine* engine, CameraRig* rig) {
@@ -1873,24 +2057,24 @@ void engine_set_camera_rig(Engine* engine, CameraRig* rig) {
         rig->typical_size = engine->typical_size;
 }
 
-bool engine_set_pointer_script(Engine* engine, const char* path) {
+bool engine_set_input_script(Engine* engine, const char* path) {
     if (!engine || !path) {
-        log_error("engine_set_pointer_script: NULL engine or path");
+        log_error("engine_set_input_script: NULL engine or path");
         return false;
     }
     char* text = read_entire_file(path, NULL);
     if (!text) {
-        log_error("pointer script '%s': cannot read", path);
+        log_error("input script '%s': cannot read", path);
         return false;
     }
-    PointerScript* s = calloc(1, sizeof(PointerScript));
+    InputScript* s = calloc(1, sizeof(InputScript));
     if (!s) {
         free(text);
-        log_error("pointer script '%s': out of memory", path);
+        log_error("input script '%s': out of memory", path);
         return false;
     }
-    bool ok = frame_script_parse(text, path, sizeof(PointerScriptRange), &k_pointer_idle,
-                                 _pointer_token, (void**)&s->ranges, &s->count);
+    bool ok = frame_script_parse(text, path, sizeof(InputScriptRange), &k_input_idle, _input_token,
+                                 (void**)&s->ranges, &s->count);
     free(text);
     if (!ok) {
         free(s->ranges);
@@ -1898,9 +2082,9 @@ bool engine_set_pointer_script(Engine* engine, const char* path) {
         return false;
     }
     s->last = frame_script_last(s->ranges, s->count, sizeof(*s->ranges));
-    _engine_pointer_script_free(engine);
-    engine->pointer_script = s;
-    log_info("pointer script '%s': %zu ranges", path, s->count);
+    _engine_input_script_free(engine);
+    engine->input_script = s;
+    log_info("input script '%s': %zu ranges", path, s->count);
     return true;
 }
 
@@ -3795,15 +3979,16 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
 
         glfwSwapBuffers(engine->window);
         // Events arrive only inside a poll, so the frame's hooks have read
-        // this frame's wheel and key presses by now and the next poll starts the next.
+        // this frame's wheel, key presses and typing by now and the next poll starts the next.
         engine->input.scroll_dx = 0.0;
         engine->input.scroll_dy = 0.0;
         memset(engine->input.key_pressed, 0, sizeof(engine->input.key_pressed));
+        engine->input.key_event_count = 0;
         _engine_frame_events(engine);
-        // A scripted pointer's batch lands where the real one just did, so its
-        // wheel reaches the next frame's hooks on the same schedule -- and after
+        // A scripted batch lands where the real one just did, so its wheel and
+        // typing reach the next frame's hooks on the same schedule -- and after
         // idle mode's wait, which is what makes the next frame draw its last.
-        _engine_pointer_script_frame(engine);
+        _engine_input_script_frame(engine);
     }
 }
 

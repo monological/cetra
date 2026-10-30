@@ -451,12 +451,16 @@ words rather than `frame:value`, since a label may hold a space ("vegetation bra
 field is a plain write that changes nothing in the graph, so this is the headless way to change one
 after something has kept what it decided. A frame that is not a number, a value past an enum's
 labels, and a material the scene does not have are each refused by name rather than run as a no-op),
-`--pointer-script <path>` / `--trace-camera` (spec 12.19 — replay a MOUSE from a text file, and
+`--input-script <path>` / `--trace-camera` (spec 12.19 — replay a MOUSE from a text file, and
 print the pose the frame draws from, its near and far planes at the line's end since spec 13.57,
-which is what the `fit-clip` group reads. The pointer script is `--pad-script`'s grammar through the
+which is what the `fit-clip` group reads. It was `--pointer-script` until spec 14.2 added typing to
+it. The input script is `--pad-script`'s grammar through the
 same parser: one line per frame or `from-to` range, `#` comments, the last matching line winning,
 with tokens `at=x,y` (framebuffer pixels, +Y up), `by=dx,dy`, `down`, `shift` and `wheel=<f>`. A
-range states the pointer's STATE, so a press is `down` appearing and a release is it going. It
+range states the pointer's STATE, so a press is `down` appearing and a release is it going. Typing
+is events: `type=TEXT` (UTF-8, `\s` a space and `\\` a backslash) and `key=NAME` with modifiers
+joined before it by `+` (`shift`, `ctrl`, `alt`, `super`, and `mod`, the platform's shortcut key:
+`key=mod+k`), delivered on every frame of their range in the line's order. It
 drives the engine's own pointer path, so a replayed drag reaches the drag state, the ray picking
 and the app's forwarded callback exactly as a hand does — which is what let the `camera` group
 assert a viewer camera that nothing could press before. `apps/tree` and `apps/shapes` take both
@@ -1820,7 +1824,8 @@ It takes the capture set `-x`, `-f`, `-S`, `-W` and `-H`, and:
 
   Headless, the run ends at the first frame after which nothing asks for another. It prints each
   frame's `delta_time`, the frames drawn and the seconds waited, which the `idle` gate group reads.
-- `--pointer-script PATH` replays a scripted pointer (spec 12.19's grammar) in place of the mouse.
+- `--input-script PATH` replays a scripted pointer and typing (the render app's entry above has
+  the grammar) in place of the mouse.
 
 In a window a drag pans and the wheel zooms the view under the cursor. G opens the debug GUI, and F
 the FPS readout, which under `--idle` counts the frames drawn.

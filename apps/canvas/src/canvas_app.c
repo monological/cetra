@@ -1373,6 +1373,26 @@ static const char* g_idle_load; // --idle-load: a texture asked for as late work
 static bool g_late_started;     // the late work has been started
 static bool g_gui_click;        // --gui-click: a click handed to the debug GUI on the first frame
 static UISystem* g_ui_enter;    // --ui-enter: the UI, given an input pass of nothing each frame
+static bool g_say_typed;        // --canvas-probe: say what each frame's input was given to type
+static const char* g_ui_text;   // --ui-text: a label in the --ui panel
+
+// What the UI is handed to type this frame, through the helper an app uses, one token an event:
+// `c<hex>` a character, `k<key>+<mods>` a key.
+static void say_typed(const Engine* engine) {
+    UIInput in = {0};
+    ui_input_add_keyboard(&in, engine);
+    if (in.key_event_count == 0)
+        return;
+    printf("canvas typed");
+    for (int i = 0; i < in.key_event_count; i++) {
+        const InputKeyEvent* ev = &in.key_events[i];
+        if (ev->key)
+            printf(" k%d+%d", ev->key, ev->mods);
+        else
+            printf(" c%x", (unsigned)ev->codepoint);
+    }
+    printf("\n");
+}
 
 static void on_idle_loaded(Texture* tex, void* user) {
     (void)user;
@@ -1402,6 +1422,8 @@ static void on_update(Engine* engine, float dt) {
     start_late_work(engine);
     if (g_wake_next < g_wake_count)
         engine_request_frame_after(engine, g_wakes[g_wake_next++]);
+    if (g_say_typed)
+        say_typed(engine);
     // The input pass an app owes its UI, with no input: it is what settles the focused button's
     // state, which its ease then follows.
     if (g_ui_enter)
@@ -1463,8 +1485,8 @@ static void usage(const char* argv0) {
             "          [--sheet NAME] [--view X,Y,WIDTH (mm)] [--offset UNITS] [--mirror]\n"
             "          [--tile-shift N] [--canvas-probe] [--picture] [--edit-thread]\n"
             "          [--split] [--only-view 0|1] [--ui] [--budget]\n"
-            "          [--idle] [--idle-wake S,...] [--idle-load PATH] [--pointer-script PATH]\n"
-            "          [--ui-enter] [--gui-click]\n",
+            "          [--idle] [--idle-wake S,...] [--idle-load PATH] [--input-script PATH]\n"
+            "          [--ui-enter] [--ui-text TEXT] [--gui-click]\n",
             argv0);
 }
 
@@ -1484,7 +1506,7 @@ int main(int argc, char** argv) {
     bool split = false, with_ui = false, budget = false, idle = false, ui_enter = false;
     int frames = 0, width = 960, height = 600, tile_shift = 0, only_view = -1;
     const char* screenshot = NULL;
-    const char* pointer_script = NULL;
+    const char* input_script = NULL;
     const char* sheet_name = "shapes";
     double view_x = NAN, view_y = NAN, view_w = NAN;
     long long offset = 0;
@@ -1534,13 +1556,16 @@ int main(int argc, char** argv) {
             for (const char* tok = strtok(argv[++i], ","); tok && g_wake_count < IDLE_WAKES_MAX;
                  tok = strtok(NULL, ","))
                 g_wakes[g_wake_count++] = atof(tok);
-        } else if (strcmp(argv[i], "--pointer-script") == 0 && more) {
-            pointer_script = argv[++i];
+        } else if (strcmp(argv[i], "--input-script") == 0 && more) {
+            input_script = argv[++i];
         } else if (strcmp(argv[i], "--idle-load") == 0 && more) {
             g_idle_load = argv[++i];
         } else if (strcmp(argv[i], "--ui-enter") == 0) {
             with_ui = true;
             ui_enter = true;
+        } else if (strcmp(argv[i], "--ui-text") == 0 && more) {
+            with_ui = true;
+            g_ui_text = argv[++i];
         } else if (strcmp(argv[i], "--gui-click") == 0) {
             g_gui_click = true;
         } else {
@@ -1561,7 +1586,7 @@ int main(int argc, char** argv) {
         return 1;
     engine->exit_after_frames = frames;
     engine_set_screenshot_path(engine, screenshot);
-    if (pointer_script && !engine_set_pointer_script(engine, pointer_script)) {
+    if (input_script && !engine_set_input_script(engine, input_script)) {
         free_engine(engine);
         return 1;
     }
@@ -1640,6 +1665,7 @@ int main(int argc, char** argv) {
     g_only_view = only_view;
     g_budget = budget;
     g_probe_target = probe;
+    g_say_typed = probe;
 
     // Under --ui, a panel of the game UI over the canvas, at the UI's order.
     UISystem* ui = NULL;
@@ -1650,6 +1676,8 @@ int main(int argc, char** argv) {
         UIElement* panel = ui_panel(ui_screen_root(screen));
         ui_set_size(panel, UI_FIXED, 160.0f, UI_FIXED, 90.0f);
         ui_set_style(panel, &(UIStyle){.bg = {0.2f, 0.6f, 0.9f, 1.0f}});
+        if (g_ui_text)
+            ui_label(panel, g_ui_text);
         // Under --ui-enter, the panel fades in and a button in it takes focus, so the UI has a
         // screen entering and an ease to play out before it is still.
         if (ui_enter) {
