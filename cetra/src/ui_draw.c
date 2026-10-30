@@ -6,6 +6,7 @@
 #include "ext/log.h"
 #include "program.h"
 #include "ui.h"
+#include "ui_text.h"
 #include "uniform.h"
 #include "util.h"
 
@@ -184,7 +185,10 @@ static bool _push_quad(UIDrawList* dl, GLuint texture, float x0, float y0, float
     static const float no_border[4] = {0.0f, 0.0f, 0.0f, 0.0f};
     const float* c = color ? color : opaque_white;
     const float* bc = border ? border : no_border;
-    const float rc[4] = {x0, y0, x1, y1};
+    // The corner SDF's rect moves with the quad, or a rounded corner is measured where the quad
+    // was before the offset and a sliding screen's panels lose their corners.
+    const float rc[4] = {x0 + dl->offset_x, y0 + dl->offset_y, x1 + dl->offset_x,
+                         y1 + dl->offset_y};
 
     const unsigned int base = (unsigned int)dl->vcount;
     const float params[4] = {radius, border_w, mode, 0.0f};
@@ -339,6 +343,9 @@ void ui_push_clip(UIDrawList* dl, UIRect r) {
         dl->clip_refused++;
         return;
     }
+    // Where it lands, as the quads it clips do.
+    r.x += dl->offset_x;
+    r.y += dl->offset_y;
     // Intersect with the enclosing clip, so a child cannot escape its parent
     // whatever order the rects arrive in.
     if (dl->clip_depth > 0) {
@@ -367,7 +374,7 @@ void ui_set_draw_program(UIDrawList* dl, ShaderProgram* program, UIRect rect, fl
     if (!dl)
         return;
     dl->cur_program = program;
-    dl->cur_rect = rect;
+    dl->cur_rect = (UIRect){rect.x + dl->offset_x, rect.y + dl->offset_y, rect.w, rect.h};
     dl->cur_focus = focus;
 }
 
@@ -405,40 +412,182 @@ float ui_line_height(const Font* font, float size, float line_spacing) {
     return lh * (line_spacing > 0.0f ? line_spacing : 1.0f);
 }
 
-// One LINE's width -- up to the next newline or the end of the string. Not the
-// whole string's: alignment is per line, and positioning every line by the
-// longest one's width left each shorter line aligned to that line's edge
-// instead of to the rect it was drawn into.
-static float _line_width(const Font* font, float size, float tracking, const unsigned char* p) {
-    const float scale = size / font->base_size;
-    float w = 0.0f;
-    int prev = 0;
-    while (*p && *p != '\n') {
-        const int cp = text_utf8_next(&p);
-        w += _advance_between(font, prev, cp, scale, tracking) +
-             _glyph_advance(font, font_get_glyph(font, cp), cp, scale);
-        prev = cp;
-    }
-    return w;
+UIText ui_text_make(const UIDrawList* dl, const char* text, size_t length, const UIStyle* style,
+                    const UITextRun* runs, size_t run_count) {
+    static const float default_fg[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+    UIText t = {.text = text ? text : "",
+                .length = text ? length : 0,
+                .runs = runs,
+                .run_count = runs ? run_count : 0};
+    t.font = (style && style->font) ? style->font : (dl ? dl->font : NULL);
+    t.size = (style && style->font_size > 0.0f) ? style->font_size : (dl ? dl->font_size : 0.0f);
+    t.tracking = style ? style->tracking : 0.0f;
+    t.color = style ? style->fg : default_fg;
+    return t;
 }
 
-// The widest line, as the max over _line_width rather than a walk of its own.
-// The per-glyph advance rule was spelled out three times in this file and one
-// of the copies had already drifted -- charging a kerning pair across a glyph
-// the atlas had refused -- so the rule now exists once and every measurement
-// and the draw all reach it.
+static bool _text_ok(const UIText* t) {
+    return t->font && t->font->base_size > 0.0f && t->size > 0.0f;
+}
+
+/*
+ * The one advance rule, walked. Every measurement, every break and the draw take their glyphs
+ * from here: the per-glyph rule was spelled out three times in this file once, and one copy had
+ * already drifted -- charging a kerning pair across a glyph the atlas had refused.
+ */
+typedef struct UIWalk {
+    const UIText* t;
+    size_t pos;            // the byte of the next glyph
+    size_t run;            // the first run not wholly before `pos`
+    int prev;              // the glyph before, 0 at a line's start or past a change of face
+    const Font* prev_font; //
+} UIWalk;
+
+typedef struct UIGlyph {
+    size_t at; // its first byte
+    int cp;
+    Font* font;
+    const float* color;
+    const GlyphInfo* g; // NULL when the atlas lacks it
+    float scale;        // the face's pixels to points
+    float before;       // the pair and tracking the pen moves by before it
+    float advance;      // the pen's move past it
+} UIGlyph;
+
+static UIWalk _walk(const UIText* t, size_t from) {
+    return (UIWalk){.t = t, .pos = from};
+}
+
+// The next glyph before byte `to`; false at `to`.
+static bool _walk_next(UIWalk* w, size_t to, UIGlyph* out) {
+    const UIText* t = w->t;
+    if (w->pos >= to || w->pos >= t->length)
+        return false;
+    while (w->run < t->run_count && t->runs[w->run].start + t->runs[w->run].length <= w->pos)
+        w->run++;
+    const UITextRun* r =
+        (w->run < t->run_count && t->runs[w->run].start <= w->pos) ? &t->runs[w->run] : NULL;
+    const unsigned char* p = (const unsigned char*)t->text + w->pos;
+    out->at = w->pos;
+    out->cp = text_utf8_next(&p);
+    w->pos = (size_t)((const char*)p - t->text);
+    out->font = (r && r->font && r->font->base_size > 0.0f) ? r->font : t->font;
+    out->color = (r && r->color[3] > 0.0f) ? r->color : t->color;
+    out->g = font_get_glyph(out->font, out->cp);
+    out->scale = t->size / out->font->base_size;
+    if (out->font != w->prev_font)
+        w->prev = 0;
+    out->before = _advance_between(out->font, w->prev, out->cp, out->scale, t->tracking);
+    out->advance = _glyph_advance(out->font, out->g, out->cp, out->scale);
+    w->prev = out->cp;
+    w->prev_font = out->font;
+    return true;
+}
+
+float ui_text_span_width(const UIText* t, size_t from, size_t to) {
+    if (!t || !_text_ok(t))
+        return 0.0f;
+    UIWalk w = _walk(t, from);
+    UIGlyph g;
+    float x = 0.0f;
+    while (_walk_next(&w, to, &g))
+        x += g.before + g.advance;
+    return x;
+}
+
+float ui_text_pen(const UIText* t, size_t from, size_t at) {
+    if (!t || !_text_ok(t))
+        return 0.0f;
+    UIWalk w = _walk(t, from);
+    UIGlyph g;
+    float x = 0.0f;
+    while (_walk_next(&w, at, &g))
+        x += g.before + g.advance;
+    // The pair with the glyph AT `at`, which is where that glyph is drawn.
+    if (at < t->length && t->text[at] != '\n' && _walk_next(&w, t->length, &g))
+        x += g.before;
+    return x;
+}
+
+size_t ui_text_break(const UIText* t, size_t from, float max_width) {
+    if (!t)
+        return 0;
+    if (!_text_ok(t))
+        return t->length;
+    UIWalk w = _walk(t, from);
+    UIGlyph g;
+    float x = 0.0f;
+    size_t last_break = from; // none: a line never breaks at its own start
+    while (w.pos < t->length && t->text[w.pos] != '\n' && _walk_next(&w, t->length, &g)) {
+        const float adv = g.before + g.advance;
+        if (x + adv > max_width && g.at > from) {
+            // Break at the last space if there was one; a single word longer
+            // than the line breaks mid-word rather than overflowing, because
+            // the alternative is a menu whose text leaves its panel.
+            return last_break > from ? last_break : g.at;
+        }
+        x += adv;
+        if (g.cp == ' ')
+            last_break = w.pos;
+    }
+    return w.pos;
+}
+
+float ui_text_longest_word(const UIText* t) {
+    if (!t)
+        return 0.0f;
+    float best = 0.0f;
+    size_t start = 0;
+    for (size_t i = 0; i <= t->length; i++) {
+        if (i < t->length && t->text[i] != ' ' && t->text[i] != '\n')
+            continue;
+        if (i > start) {
+            const float w = ui_text_span_width(t, start, i);
+            best = w > best ? w : best;
+        }
+        start = i + 1;
+    }
+    return best;
+}
+
+float ui_text_line_height(const UIText* t, float line_spacing) {
+    return ui_line_height(t->font, t->size, line_spacing);
+}
+
+float ui_text_baseline(const UIText* t, float top) {
+    return _text_ok(t) ? top + t->font->ascent * (t->size / t->font->base_size) : top;
+}
+
+size_t ui_lines_end(const UILines* lines, const UIText* t, size_t i) {
+    const size_t start = lines->starts[i];
+    size_t end = i + 1 < lines->count ? lines->starts[i + 1] : t->length;
+    if (end > start && t->text[end - 1] == '\n')
+        end--;
+    while (end > start && t->text[end - 1] == ' ')
+        end--;
+    return end;
+}
+
+// A string in one face and size, as the measuring calls below take it.
+static UIText _plain_text(const Font* font, float size, float tracking, const char* text) {
+    const UIStyle s = {.font = (Font*)font, .font_size = size, .tracking = tracking};
+    return ui_text_make(NULL, text, text ? strlen(text) : 0, &s, NULL, 0);
+}
+
+// The widest line. One LINE's width, not the whole string's, is what alignment wants: positioning
+// every line by the longest one's left each shorter line aligned to that line's edge instead of to
+// the rect it was drawn into.
 float ui_text_width(const Font* font, float size, float tracking, const char* text) {
     if (!font || !text || font->base_size <= 0.0f)
         return 0.0f;
+    const UIText t = _plain_text(font, size, tracking, text);
     float best = 0.0f;
-    for (const unsigned char* p = (const unsigned char*)text; *p;) {
-        const float w = _line_width(font, size, tracking, p);
-        if (w > best)
-            best = w;
-        while (*p && *p != '\n')
-            p++;
-        if (*p == '\n')
-            p++;
+    for (size_t from = 0; from <= t.length;) {
+        const char* nl = memchr(text + from, '\n', t.length - from);
+        const size_t to = nl ? (size_t)(nl - text) : t.length;
+        const float w = ui_text_span_width(&t, from, to);
+        best = w > best ? w : best;
+        from = to + 1;
     }
     return best;
 }
@@ -447,32 +596,8 @@ size_t ui_text_wrap_point(const Font* font, float size, float tracking, const ch
                           float max_width) {
     if (!font || !text || font->base_size <= 0.0f)
         return text ? strlen(text) : 0;
-    const float scale = size / font->base_size;
-    const unsigned char* start = (const unsigned char*)text;
-    float w = 0.0f;
-    size_t last_break = 0;
-    int prev = 0;
-    for (const unsigned char* p = start; *p;) {
-        const size_t i = (size_t)(p - start);
-        if (*p == '\n')
-            return i;
-        const int cp = text_utf8_next(&p);
-        // The measuring rule _line_width and the draw use, glyph held or not: three spellings
-        // of one rule disagreed here once, charging a pair across a glyph the atlas refused.
-        const float adv = _advance_between(font, prev, cp, scale, tracking) +
-                          _glyph_advance(font, font_get_glyph(font, cp), cp, scale);
-        if (w + adv > max_width && i > 0) {
-            // Break at the last space if there was one; a single word longer
-            // than the line breaks mid-word rather than overflowing, because
-            // the alternative is a menu whose text leaves its panel.
-            return last_break > 0 ? last_break : i;
-        }
-        w += adv;
-        prev = cp;
-        if (cp == ' ')
-            last_break = (size_t)(p - start);
-    }
-    return (size_t)strlen(text);
+    const UIText t = _plain_text(font, size, tracking, text);
+    return ui_text_break(&t, 0, max_width);
 }
 
 // A character the atlas does not hold, drawn as an outlined box over its own advance from the
@@ -494,30 +619,11 @@ static float _align_pen(UIRect r, UIAlign align, float line_w) {
     return r.x;
 }
 
-void ui_draw_text(UIDrawList* dl, UIRect r, const char* text, const UIStyle* style, UIAlign align) {
-    if (!dl || !text)
+void ui_text_draw_span(UIDrawList* dl, const UIText* t, size_t from, size_t to, float x,
+                       float baseline) {
+    if (!dl || !t || !_text_ok(t))
         return;
-
-    Font* font = (style && style->font) ? style->font : dl->font;
-    const float size = (style && style->font_size > 0.0f) ? style->font_size : dl->font_size;
-    if (!font || font->base_size <= 0.0f || size <= 0.0f)
-        return;
-
-    static const float default_fg[4] = {1.0f, 1.0f, 1.0f, 1.0f};
-    const float* color = style ? style->fg : default_fg;
-    const float tracking = style ? style->tracking : 0.0f;
-    const float line_spacing = style ? style->line_spacing : 0.0f;
-
-    const float scale = size / font->base_size;
-    const float line_h = ui_line_height(font, size, line_spacing);
-
-    float pen_x =
-        _align_pen(r, align, _line_width(font, size, tracking, (const unsigned char*)text));
-
-    // The baseline convention text.c uses, deliberately: the pen starts an
-    // ascent below the top, so a string drawn here and one drawn through the
-    // text renderer sit on the same line rather than a few pixels apart.
-    float pen_y = r.y + font->ascent * scale;
+    const float ascent = t->font->ascent * (t->size / t->font->base_size);
 
     // One framebuffer pixel, expressed in points. Every glyph QUAD CORNER is
     // snapped to this grid below.
@@ -536,29 +642,21 @@ void ui_draw_text(UIDrawList* dl, UIRect r, const char* text, const UIStyle* sty
                          ? (float)dl->width / (float)dl->engine->fb_width
                          : 1.0f;
 
-    int prev = 0;
-    for (const unsigned char* p = (const unsigned char*)text; *p;) {
-        if (*p == '\n') {
-            p++;
-            // The NEXT line's own width decides where it starts.
-            pen_x = _align_pen(r, align, _line_width(font, size, tracking, p));
-            pen_y += line_h;
-            prev = 0; // no pair spans a line break
-            continue;
-        }
-        const int cp = text_utf8_next(&p);
-        const GlyphInfo* g = font_get_glyph(font, cp);
+    UIWalk w = _walk(t, from);
+    UIGlyph s;
+    float pen_x = x;
+    while (_walk_next(&w, to, &s)) {
         // The same rule the measurement used, so what is drawn is exactly as
         // wide as what was measured -- otherwise a centred string is centred
         // against a width it does not have.
-        pen_x += _advance_between(font, prev, cp, scale, tracking);
-        prev = cp;
-        if (!g) {
-            const float adv = _glyph_advance(font, NULL, cp, scale);
-            _missing_box(dl, pen_x, pen_y, adv, font->ascent * scale, color);
-            pen_x += adv;
+        pen_x += s.before;
+        if (!s.g) {
+            _missing_box(dl, pen_x, baseline, s.advance, ascent, s.color);
+            pen_x += s.advance;
             continue;
         }
+        const GlyphInfo* g = s.g;
+        const float scale = s.scale;
         // GlyphInfo's box is stb's, and stb's is Y-DOWN: y0 is the offset from
         // the baseline to the TOP of the bitmap, NEGATIVE above it. So the box
         // is ADDED to the pen, never subtracted.
@@ -569,7 +667,7 @@ void ui_draw_text(UIDrawList* dl, UIRect r, const char* text, const UIStyle* sty
         // different heights and the line reads as a ragged baseline rather than
         // as a uniform offset anyone would notice.
         float x0 = pen_x + g->x0 * scale;
-        float y0 = pen_y + g->y0 * scale;
+        float y0 = baseline + g->y0 * scale;
         if (px > 0.0f) {
             x0 = floorf(x0 / px + 0.5f) * px;
             y0 = floorf(y0 / px + 0.5f) * px;
@@ -578,11 +676,50 @@ void ui_draw_text(UIDrawList* dl, UIRect r, const char* text, const UIStyle* sty
         const float y1 = y0 + (g->y1 - g->y0) * scale;
         // A glyph is cut where its font's field has its outline, or half way
         // up a coverage bitmap's, which the quad's last parameter carries.
-        if (_push_quad(dl, font->atlas_texture_id, x0, y0, x1, y1, g->u0, g->v0, g->u1, g->v1,
-                       color, 0.0f, 0.0f, UI_MODE_GLYPH, NULL))
+        if (_push_quad(dl, s.font->atlas_texture_id, x0, y0, x1, y1, g->u0, g->v0, g->u1, g->v1,
+                       s.color, 0.0f, 0.0f, UI_MODE_GLYPH, NULL))
             for (size_t k = dl->vcount - 4; k < dl->vcount; k++)
-                dl->verts[k].params[3] = font->is_sdf ? font->sdf_edge : 0.5f;
-        pen_x += g->advance_x * scale;
+                dl->verts[k].params[3] = s.font->is_sdf ? s.font->sdf_edge : 0.5f;
+        pen_x += s.advance;
+    }
+}
+
+void ui_draw_text(UIDrawList* dl, UIRect r, const char* text, const UIStyle* style, UIAlign align) {
+    if (!dl || !text)
+        return;
+    const UIText t = ui_text_make(dl, text, strlen(text), style, NULL, 0);
+    if (!_text_ok(&t))
+        return;
+    const float line_h = ui_text_line_height(&t, style ? style->line_spacing : 0.0f);
+    // The baseline convention text.c uses, deliberately: the pen starts an
+    // ascent below the top, so a string drawn here and one drawn through the
+    // text renderer sit on the same line rather than a few pixels apart.
+    float baseline = ui_text_baseline(&t, r.y);
+    for (size_t from = 0;;) {
+        const char* nl = memchr(text + from, '\n', t.length - from);
+        const size_t to = nl ? (size_t)(nl - text) : t.length;
+        // Each line's own width decides where it starts.
+        ui_text_draw_span(dl, &t, from, to, _align_pen(r, align, ui_text_span_width(&t, from, to)),
+                          baseline);
+        if (!nl)
+            break;
+        from = to + 1;
+        baseline += line_h;
+    }
+}
+
+void ui_draw_text_lines(UIDrawList* dl, UIRect r, const UIText* t, const UILines* lines,
+                        float line_spacing, UIAlign align) {
+    if (!dl || !t || !lines || !_text_ok(t))
+        return;
+    const float line_h = ui_text_line_height(t, line_spacing);
+    float baseline = ui_text_baseline(t, r.y);
+    for (size_t i = 0; i < lines->count; i++) {
+        const size_t from = lines->starts[i];
+        const size_t to = ui_lines_end(lines, t, i);
+        ui_text_draw_span(dl, t, from, to, _align_pen(r, align, ui_text_span_width(t, from, to)),
+                          baseline);
+        baseline += line_h;
     }
 }
 
@@ -738,6 +875,24 @@ uint64_t ui_draw_list_signature(const UIDrawList* dl) {
     if (!dl || !dl->verts)
         return FNV1A64_BASIS;
     return fnv1a64(FNV1A64_BASIS, dl->verts, dl->vcount * sizeof(UIVertex));
+}
+
+size_t ui_draw_list_quad_count(const UIDrawList* dl) {
+    return dl ? dl->vcount / 4 : 0;
+}
+
+bool ui_draw_list_quad(const UIDrawList* dl, size_t i, UIRect* rect, vec4 color, int* kind) {
+    if (!dl || i >= dl->vcount / 4)
+        return false;
+    // _push_quad's corner order: top left first, bottom right third.
+    const UIVertex* v = &dl->verts[i * 4];
+    if (rect)
+        *rect = (UIRect){v[0].x, v[0].y, v[2].x - v[0].x, v[2].y - v[0].y};
+    if (color)
+        memcpy(color, v[0].color, sizeof(float) * 4);
+    if (kind)
+        *kind = (int)(v[0].params[2] + 0.5f);
+    return true;
 }
 
 bool ui_draw_list_render(UIDrawList* dl) {

@@ -27711,6 +27711,22 @@ def run_ui_gate(workdir):
                      survives; the window mode rides the file as a name; an absent
                      file leaves defaults rather than zeros; and apply reaches the
                      mixer.
+      ui-wrap-label  a label with `wrap` set, stretched across a fixed 300-point
+                     panel, breaks into the lines ui_text_wrap_point gives at its
+                     280-point width, measures that many line heights plus its
+                     padding, and draws no glyph past its width; given no width,
+                     it measures as its longest word (spec 14.2).
+      ui-wrap-cache  laying a wrapped label out again at the same width breaks
+                     nothing again; a new width, and new text, each break it once.
+      ui-runs-draw   a styled run colours exactly its bytes' glyphs, the rest
+                     keep the label's colour, and a run in another face draws that
+                     face's glyph.
+      ui-runs-wrap   a run in a wider face takes more of a wrapped line, so the
+                     label breaks into more lines, and nothing it draws reaches
+                     past the label.
+      ui-runs-refused runs out of order, overlapping, past the text or inside a
+                     UTF-8 sequence are each refused and leave the runs set before;
+                     setting the text clears them.
       ui-typed       an input script's typing reaches the UI through
                      ui_input_add_keyboard, every event in its order: characters
                      past ASCII as their codepoints, a key with the platform's
@@ -27962,6 +27978,77 @@ def run_ui_gate(workdir):
                   f"apply reaches the mixer ({p[('applied', 'master')][0]:.3f})")
     print(f"  ui-settings-roundtrip {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-settings-roundtrip", ok)
+
+    # ---- wrapped labels (spec 14.2)
+    p = _ui_probe("wrap-label")
+    if not p:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        _, _, w, h = p[("label", "rect")]
+        lines, want_lines = p[("lines", "count")][0], p[("lines", "want")][0]
+        lh, inner = p[("line", "height")][0], p[("inner", "width")][0]
+        right = p[("drawn", "right")][0]
+        fit, word = p[("fit", "width")][0], p[("fit", "word")][0]
+        # A label's own padding is 4 above and below, from the default style.
+        ok = (lines == want_lines and lines > 1 and close(h, lines * lh + 8.0) and close(w, inner)
+              and right <= inner + 0.5 and close(fit, word))
+        detail = (f"{lines:.0f} lines (want {want_lines:.0f}, over 1), {h:.2f} high (want "
+                  f"{lines * lh + 8.0:.2f}), {w:.2f} wide (want {inner:.0f}), drawn to {right:.2f} "
+                  f"(want within {inner:.0f}); with no width it is {fit:.3f} wide, its longest "
+                  f"word {word:.3f}")
+    print(f"  ui-wrap-label         {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-wrap-label", ok)
+
+    p = _ui_probe("wrap-cache")
+    if not p:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        seq = [p[(k, "wraps")][0] for k in ("first", "again", "wider", "retext")]
+        ok = seq == [1, 1, 2, 3]
+        detail = (f"broken {seq[0]:.0f} time(s) first, {seq[1]:.0f} after two more layouts, "
+                  f"{seq[2]:.0f} at a new width, {seq[3]:.0f} after new text (want 1, 1, 2, 3)")
+    print(f"  ui-wrap-cache         {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-wrap-cache", ok)
+
+    # ---- styled runs
+    p = _ui_probe("runs-draw")
+    if not p:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        colors = [p.get((f"glyph{i}", "color")) for i in range(4)]
+        red, own = [1.0, 0.0, 0.0], [0.92, 0.92, 0.92]
+        plain_w, face_w = p[("face", "widths")]
+        ok = (p[("glyphs", "count")][0] == 4 and colors[0] == own and colors[1] == red
+              and colors[2] == red and colors[3] == own and abs(face_w - plain_w) > 1.0)
+        detail = (f"glyph colours {colors} (want own, red, red, own); the run's glyph in another "
+                  f"face is {face_w:.2f} wide against {plain_w:.2f}")
+    print(f"  ui-runs-draw          {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-runs-draw", ok)
+
+    p = _ui_probe("runs-wrap")
+    if not p:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        plain_lines, face_lines = p[("lines", "plain")][0], p[("lines", "face")][0]
+        right, width = p[("drawn", "right")][0], p[("label", "width")][0]
+        ok = face_lines > plain_lines and right <= width + 0.5
+        detail = (f"{plain_lines:.0f} lines in one face, {face_lines:.0f} with a word in a wider "
+                  f"one (want more), drawn to {right:.2f} of {width:.2f}")
+    print(f"  ui-runs-wrap          {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-runs-wrap", ok)
+
+    p = _ui_probe("runs-refused")
+    if not p:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        verdicts = {k: p[(k, "ok")][0] for k in ("valid", "order", "overlap", "past", "split")}
+        kept, retext = p[("kept", "count")][0], p[("retext", "count")][0]
+        ok = (verdicts == {"valid": 1, "order": 0, "overlap": 0, "past": 0, "split": 0}
+              and kept == 3 and retext == 0)
+        detail = (f"accepted {verdicts} (want only valid), {kept:.0f} runs kept through the "
+                  f"refusals (want 3), {retext:.0f} after new text (want 0)")
+    print(f"  ui-runs-refused       {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-runs-refused", ok)
 
     # ---- typing, from the engine to the UI's input (spec 14.2)
     script = os.path.join(workdir, "ui_typed.script")

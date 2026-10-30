@@ -6,6 +6,7 @@
 #include "engine.h"
 #include "ext/log.h"
 #include "ui.h"
+#include "ui_text.h"
 #include "util.h"
 
 // How fast hover and focus reach their target, in seconds. Short enough that a
@@ -289,6 +290,14 @@ static UIElement* _new_element(UIElement* parent, UIKind kind) {
     return el;
 }
 
+static void _drop_lines(UIElement* el) {
+    if (!el->lines)
+        return;
+    free(el->lines->starts);
+    free(el->lines);
+    el->lines = NULL;
+}
+
 static void _free_element(UIElement* el) {
     if (!el)
         return;
@@ -296,6 +305,8 @@ static void _free_element(UIElement* el) {
         _free_element(el->children[i]);
     free(el->children);
     free(el->text);
+    free(el->runs);
+    _drop_lines(el);
     free(el->style);
     free(el);
 }
@@ -371,6 +382,64 @@ void ui_set_text(UIElement* el, const char* text) {
         return;
     free(el->text);
     el->text = text ? safe_strdup(text) : NULL;
+    free(el->runs);
+    el->runs = NULL;
+    el->run_count = 0;
+    _drop_lines(el);
+}
+
+// Whether byte `i` of `s` starts a codepoint or is the end: never inside a UTF-8 sequence.
+static bool _codepoint_boundary(const char* s, size_t i) {
+    return ((unsigned char)s[i] & 0xc0) != 0x80;
+}
+
+bool ui_set_text_runs(UIElement* el, const UITextRun* runs, size_t count) {
+    if (!el) {
+        log_error("ui_set_text_runs: NULL element");
+        return false;
+    }
+    if (runs && count > 0) {
+        if (el->kind != UI_LABEL) {
+            log_error("ui_set_text_runs: only a label takes styled runs");
+            return false;
+        }
+        const char* text = el->text ? el->text : "";
+        const size_t len = strlen(text);
+        size_t reached = 0;
+        for (size_t i = 0; i < count; i++) {
+            const UITextRun* r = &runs[i];
+            if (r->start < reached) {
+                log_error("ui_set_text_runs: run %zu starts at byte %zu, before the run before it "
+                          "ends at %zu",
+                          i, r->start, reached);
+                return false;
+            }
+            if (r->start > len || r->length > len - r->start) {
+                log_error("ui_set_text_runs: run %zu reaches past the text's %zu bytes", i, len);
+                return false;
+            }
+            if (!_codepoint_boundary(text, r->start) ||
+                !_codepoint_boundary(text, r->start + r->length)) {
+                log_error("ui_set_text_runs: run %zu starts or ends inside a UTF-8 sequence", i);
+                return false;
+            }
+            reached = r->start + r->length;
+        }
+    }
+    UITextRun* copy = NULL;
+    if (runs && count > 0) {
+        copy = malloc(count * sizeof(UITextRun));
+        if (!copy) {
+            log_error("ui_set_text_runs: out of memory");
+            return false;
+        }
+        memcpy(copy, runs, count * sizeof(UITextRun));
+    }
+    free(el->runs);
+    el->runs = copy;
+    el->run_count = copy ? count : 0;
+    _drop_lines(el);
+    return true;
 }
 
 void ui_set_style(UIElement* el, const UIStyle* style) {
@@ -446,35 +515,69 @@ static void _padding_from(const UIElement* el, const UIStyle* s, float out[4]) {
     memcpy(out, s->padding, sizeof(float) * 4);
 }
 
-// What one element's own content wants, before any parent has a say.
-static void _intrinsic(const UISystem* ui, const UIElement* el, float* out_w, float* out_h) {
+// The text an element lays out and draws: its own, in a resolved style, with its runs.
+static UIText _element_text(const UISystem* ui, const UIElement* el, const UIStyle* s) {
+    return ui_text_make(ui->dl, el->text, el->text ? strlen(el->text) : 0, s, el->runs,
+                        el->run_count);
+}
+
+// The widest of a text's '\n'-separated lines.
+static float _widest_line(const UIText* t) {
+    float best = 0.0f;
+    for (size_t from = 0; from <= t->length;) {
+        const char* nl = memchr(t->text + from, '\n', t->length - from);
+        const size_t to = nl ? (size_t)(nl - t->text) : t->length;
+        const float w = ui_text_span_width(t, from, to);
+        best = w > best ? w : best;
+        from = to + 1;
+    }
+    return best;
+}
+
+/*
+ * What one element's own content wants along `axis` (0 across, 1 down), before any parent has a
+ * say. The height of a wrapping label is its lines, which its width decided: that is why the
+ * layout settles every width before it measures any height.
+ */
+static float _intrinsic(const UISystem* ui, const UIElement* el, int axis) {
     const UIStyle s = _resolve(ui, el, UI_STATE_NORMAL);
-    float w = 0.0f, h = 0.0f;
+    float v = 0.0f;
     if (el->text && el->text[0] && s.font) {
-        w = ui_text_width(s.font, s.font_size, s.tracking, el->text);
-        // One line height PER LINE. ui_draw_text starts a new line at every
-        // '\n' it is given, so charging one made an authored two-line label
-        // measure half its height and draw outside its own rect and its
-        // parent's -- with the layout numbers all looking correct.
-        int lines = 1;
-        for (const char* p = el->text; *p; p++)
-            if (*p == '\n')
-                lines++;
-        h = ui_line_height(s.font, s.font_size, s.line_spacing) * (float)lines;
+        if (axis == 0) {
+            const UIText t = _element_text(ui, el, &s);
+            v = el->wrap ? ui_text_longest_word(&t) : _widest_line(&t);
+        } else {
+            // One line height PER LINE. ui_draw_text starts a new line at every
+            // '\n' it is given, so charging one made an authored two-line label
+            // measure half its height and draw outside its own rect and its
+            // parent's -- with the layout numbers all looking correct.
+            size_t lines = 1;
+            if (el->wrap && el->lines)
+                lines = el->lines->count;
+            else
+                for (const char* p = el->text; *p; p++)
+                    if (*p == '\n')
+                        lines++;
+            v = ui_line_height(s.font, s.font_size, s.line_spacing) * (float)lines;
+        }
     }
 
     switch (el->kind) {
         case UI_TOGGLE:
-            w += UI_FURNITURE_GAP + UI_KNOB_W;
-            h = h > UI_KNOB_H ? h : UI_KNOB_H;
+            if (axis == 0)
+                v += UI_FURNITURE_GAP + UI_KNOB_W;
+            else
+                v = v > UI_KNOB_H ? v : UI_KNOB_H;
             break;
         case UI_SELECTOR:
-            w += UI_FURNITURE_GAP + _widest_option(el, &s);
+            if (axis == 0)
+                v += UI_FURNITURE_GAP + _widest_option(el, &s);
             break;
         case UI_SLIDER:
             // The track sits on its own row under the label, so the height grows
             // rather than the width.
-            h += UI_FURNITURE_GAP + UI_TRACK_H;
+            if (axis == 1)
+                v += UI_FURNITURE_GAP + UI_TRACK_H;
             break;
         default:
             break;
@@ -482,8 +585,7 @@ static void _intrinsic(const UISystem* ui, const UIElement* el, float* out_w, fl
 
     float pad[4];
     _padding_from(el, &s, pad);
-    *out_w = w + pad[1] + pad[3];
-    *out_h = h + pad[0] + pad[2];
+    return axis == 0 ? v + pad[1] + pad[3] : v + pad[0] + pad[2];
 }
 
 static float _spacing_of(const UISystem* ui, const UIElement* el) {
@@ -499,57 +601,67 @@ static void _padding_of(const UISystem* ui, const UIElement* el, float out[4]) {
 }
 
 /*
+ * The layout runs ONE AXIS AT A TIME: every width (measure, then arrange), then each wrapping
+ * label's lines at the width it was given, then every height. Widths never depended on heights,
+ * so splitting the pass changes no number; it is what lets a height depend on a width.
+ */
+static int _main_axis(const UIElement* el) {
+    return el->dir == UI_ROW ? 0 : 1;
+}
+
+static float* _pos(UIRect* r, int axis) {
+    return axis == 0 ? &r->x : &r->y;
+}
+
+static float* _len(UIRect* r, int axis) {
+    return axis == 0 ? &r->w : &r->h;
+}
+
+/*
  * Pass 1, bottom-up: every element gets the size its own content wants. A GROW
  * axis is measured too, at its FIT size -- that is the MINIMUM it will accept,
  * and it is what a FIT parent measures against, which is what stops the two
  * modes being mutually recursive.
  */
-static void _measure(const UISystem* ui, UIElement* el) {
+static void _measure(const UISystem* ui, UIElement* el, int axis) {
     for (size_t i = 0; i < el->child_count; i++)
-        _measure(ui, el->children[i]);
+        _measure(ui, el->children[i], axis);
 
-    float w = 0.0f, h = 0.0f;
-    _intrinsic(ui, el, &w, &h);
+    float v = _intrinsic(ui, el, axis);
 
     if (el->child_count > 0) {
         float pad[4];
         _padding_of(ui, el, pad);
         const float gap = _spacing_of(ui, el);
-        float main = 0.0f, cross = 0.0f;
+        const bool along = _main_axis(el) == axis;
+        float sum = 0.0f, most = 0.0f;
         size_t counted = 0;
         for (size_t i = 0; i < el->child_count; i++) {
-            const UIElement* c = el->children[i];
+            UIElement* c = el->children[i];
             if (c->fill)
                 continue; // a backdrop is outside the flow
-            const float cw = c->rect.w, ch = c->rect.h;
-            if (el->dir == UI_ROW) {
-                main += cw;
-                cross = ch > cross ? ch : cross;
-            } else {
-                main += ch;
-                cross = cw > cross ? cw : cross;
-            }
+            const float cl = *_len(&c->rect, axis);
+            sum += cl;
+            most = cl > most ? cl : most;
             counted++;
         }
-        if (counted > 1)
-            main += gap * (float)(counted - 1);
+        if (along && counted > 1)
+            sum += gap * (float)(counted - 1);
 
-        const float kids_w = (el->dir == UI_ROW ? main : cross) + pad[1] + pad[3];
-        const float kids_h = (el->dir == UI_ROW ? cross : main) + pad[0] + pad[2];
-        w = kids_w > w ? kids_w : w;
-        h = kids_h > h ? kids_h : h;
+        const float kids = (along ? sum : most) + (axis == 0 ? pad[1] + pad[3] : pad[0] + pad[2]);
+        v = kids > v ? kids : v;
     }
 
-    el->rect.w = (el->size_mode[0] == UI_FIXED) ? el->size[0] : w;
-    el->rect.h = (el->size_mode[1] == UI_FIXED) ? el->size[1] : h;
+    *_len(&el->rect, axis) = (el->size_mode[axis] == UI_FIXED) ? el->size[axis] : v;
 }
 
-// Pass 2, top-down: `el` already has its final rect; place the children inside
-// it, expanding GROW axes into whatever is left over.
-static void _arrange(const UISystem* ui, UIElement* el, UIRect screen) {
+// Pass 2, top-down: `el` already has its final extent on `axis`; place the children along it,
+// expanding GROW into whatever is left over.
+static void _arrange(const UISystem* ui, UIElement* el, UIRect screen, int axis) {
     float pad[4];
     _padding_of(ui, el, pad);
-    const UIRect inner = ui_rect_inset(el->rect, pad[0], pad[1], pad[2], pad[3]);
+    UIRect inner = ui_rect_inset(el->rect, pad[0], pad[1], pad[2], pad[3]);
+    const float in_pos = *_pos(&inner, axis), in_len = *_len(&inner, axis);
     const float gap = _spacing_of(ui, el);
 
     // A fill element ignores the flow entirely and covers the screen. It is
@@ -557,31 +669,54 @@ static void _arrange(const UISystem* ui, UIElement* el, UIRect screen) {
     for (size_t i = 0; i < el->child_count; i++) {
         UIElement* c = el->children[i];
         if (c->fill) {
-            c->rect = screen;
-            _arrange(ui, c, screen);
+            *_pos(&c->rect, axis) = *_pos(&screen, axis);
+            *_len(&c->rect, axis) = *_len(&screen, axis);
+            _arrange(ui, c, screen, axis);
         }
+    }
+
+    if (_main_axis(el) != axis) {
+        // Across: a GROW child stretches to the inner extent, a smaller one is placed by the
+        // cross alignment.
+        for (size_t i = 0; i < el->child_count; i++) {
+            UIElement* c = el->children[i];
+            if (c->fill)
+                continue;
+            float* cl = _len(&c->rect, axis);
+            float* cp = _pos(&c->rect, axis);
+            if (c->size_mode[axis] == UI_GROW)
+                *cl = in_len;
+            *cp = in_pos;
+            if (*cl < in_len) {
+                if (el->align_cross == UI_ALIGN_CENTER)
+                    *cp += (in_len - *cl) * 0.5f;
+                else if (el->align_cross == UI_ALIGN_END)
+                    *cp += in_len - *cl;
+            }
+            _arrange(ui, c, screen, axis);
+        }
+        return;
     }
 
     float used = 0.0f;
     size_t counted = 0, grow_count = 0;
     for (size_t i = 0; i < el->child_count; i++) {
-        const UIElement* c = el->children[i];
+        UIElement* c = el->children[i];
         if (c->fill)
             continue;
-        used += (el->dir == UI_ROW) ? c->rect.w : c->rect.h;
-        if (c->size_mode[el->dir == UI_ROW ? 0 : 1] == UI_GROW)
+        used += *_len(&c->rect, axis);
+        if (c->size_mode[axis] == UI_GROW)
             grow_count++;
         counted++;
     }
     if (counted > 1)
         used += gap * (float)(counted - 1);
 
-    const float avail = (el->dir == UI_ROW) ? inner.w : inner.h;
-    const float leftover = avail - used;
+    const float leftover = in_len - used;
     const float share = (grow_count > 0 && leftover > 0.0f) ? leftover / (float)grow_count : 0.0f;
 
     // With nothing growing, the whole run is placed by the main-axis alignment.
-    float cursor = (el->dir == UI_ROW) ? inner.x : inner.y;
+    float cursor = in_pos;
     if (grow_count == 0 && leftover > 0.0f) {
         if (el->align_main == UI_ALIGN_CENTER)
             cursor += leftover * 0.5f;
@@ -593,47 +728,79 @@ static void _arrange(const UISystem* ui, UIElement* el, UIRect screen) {
         UIElement* c = el->children[i];
         if (c->fill)
             continue;
-
-        if (el->dir == UI_ROW) {
-            if (c->size_mode[0] == UI_GROW)
-                c->rect.w += share;
-            if (c->size_mode[1] == UI_GROW)
-                c->rect.h = inner.h;
-            c->rect.x = cursor;
-            c->rect.y = inner.y;
-            if (c->rect.h < inner.h) {
-                if (el->align_cross == UI_ALIGN_CENTER)
-                    c->rect.y += (inner.h - c->rect.h) * 0.5f;
-                else if (el->align_cross == UI_ALIGN_END)
-                    c->rect.y += inner.h - c->rect.h;
-            }
-            cursor += c->rect.w + gap;
-        } else {
-            if (c->size_mode[1] == UI_GROW)
-                c->rect.h += share;
-            if (c->size_mode[0] == UI_GROW)
-                c->rect.w = inner.w;
-            c->rect.y = cursor;
-            c->rect.x = inner.x;
-            if (c->rect.w < inner.w) {
-                if (el->align_cross == UI_ALIGN_CENTER)
-                    c->rect.x += (inner.w - c->rect.w) * 0.5f;
-                else if (el->align_cross == UI_ALIGN_END)
-                    c->rect.x += inner.w - c->rect.w;
-            }
-            cursor += c->rect.h + gap;
-        }
-        _arrange(ui, c, screen);
+        float* cl = _len(&c->rect, axis);
+        if (c->size_mode[axis] == UI_GROW)
+            *cl += share;
+        *_pos(&c->rect, axis) = cursor;
+        cursor += *cl + gap;
+        _arrange(ui, c, screen, axis);
     }
+}
+
+/*
+ * A wrapping or styled label's lines, broken at the width the first pass gave it and kept while
+ * what they were broken for -- the width, the face, the size and the tracking -- is unchanged. The
+ * text and the runs drop them when set, so a kept break is never for other text. The layout runs
+ * several times a frame, and breaking a long label is a walk of all of it.
+ */
+static void _break_lines(const UISystem* ui, UIElement* el) {
+    for (size_t i = 0; i < el->child_count; i++)
+        _break_lines(ui, el->children[i]);
+    if (el->kind != UI_LABEL || !el->text || !(el->wrap || el->runs)) {
+        _drop_lines(el);
+        return;
+    }
+    const UIStyle s = _resolve(ui, el, UI_STATE_NORMAL);
+    float pad[4];
+    _padding_from(el, &s, pad);
+    const float width = el->wrap ? el->rect.w - pad[1] - pad[3] : INFINITY;
+    UILines* lines = el->lines;
+    if (lines && lines->width == width && lines->font == s.font && lines->size == s.font_size &&
+        lines->tracking == s.tracking)
+        return;
+    if (!lines) {
+        lines = calloc(1, sizeof(UILines));
+        if (!lines) {
+            log_error("ui: out of memory breaking a label into lines");
+            return;
+        }
+        el->lines = lines;
+    }
+    lines->count = 0;
+    const UIText t = _element_text(ui, el, &s);
+    for (size_t from = 0;;) {
+        if (!grow_array((void**)&lines->starts, &lines->capacity, lines->count + 1, sizeof(size_t),
+                        8)) {
+            _drop_lines(el);
+            return;
+        }
+        lines->starts[lines->count++] = from;
+        const size_t end = ui_text_break(&t, from, width);
+        if (end >= t.length)
+            break;
+        from = t.text[end] == '\n' ? end + 1 : end;
+    }
+    lines->width = width;
+    lines->font = s.font;
+    lines->size = s.font_size;
+    lines->tracking = s.tracking;
+    el->wraps++;
 }
 
 void ui_layout(UIScreen* screen, float width, float height) {
     if (!screen || !screen->root || !screen->ui)
         return;
     const UIRect full = {0.0f, 0.0f, width, height};
-    _measure(screen->ui, screen->root);
-    screen->root->rect = full;
-    _arrange(screen->ui, screen->root, full);
+    UIElement* root = screen->root;
+    _measure(screen->ui, root, 0);
+    root->rect.x = full.x;
+    root->rect.w = full.w;
+    _arrange(screen->ui, root, full, 0);
+    _break_lines(screen->ui, root);
+    _measure(screen->ui, root, 1);
+    root->rect.y = full.y;
+    root->rect.h = full.h;
+    _arrange(screen->ui, root, full, 1);
 }
 
 // --------------------------------------------------------------------- emit
@@ -683,7 +850,13 @@ static void _emit(UISystem* ui, UIElement* el) {
             case UI_ROOT:
                 break; // lays its children out and draws nothing itself
             case UI_LABEL:
-                ui_draw_text(dl, el->rect, el->text, &s, el->align_cross);
+                if (el->lines) {
+                    const UIText t = _element_text(ui, el, &s);
+                    ui_draw_text_lines(dl, el->rect, &t, el->lines, s.line_spacing,
+                                       el->align_cross);
+                } else {
+                    ui_draw_text(dl, el->rect, el->text, &s, el->align_cross);
+                }
                 break;
             case UI_PANEL:
                 ui_draw_rect(dl, el->rect, &s);
