@@ -33,6 +33,7 @@
 #include "cetra/camera.h"
 #include "cetra/canvas.h"
 #include "cetra/engine.h"
+#include "cetra/fuzzy.h"
 #include "cetra/internal/ext/stb_truetype.h"
 #include "cetra/internal/thread.h"
 #include "cetra/postfx.h"
@@ -1381,6 +1382,7 @@ static const char* g_ui_text;   // --ui-text: a label in the --ui panel
 static UISystem* g_ui_live;     // the UI given the real pointer and keyboard each frame
 // The pointer's button as the callbacks saw it since the last frame, for the UI's input pass.
 static bool g_ptr_down, g_ptr_pressed, g_ptr_released;
+static int g_ptr_mods; // the modifiers held at the last press
 
 // The UI's input pass with the real pointer and keyboard; the presses and releases seen since the
 // last frame are spent.
@@ -1391,7 +1393,8 @@ static void live_ui_update(Engine* engine) {
                   .pointer_y = g_last_y,
                   .pointer_down = g_ptr_down,
                   .pointer_pressed = g_ptr_pressed,
-                  .pointer_released = g_ptr_released};
+                  .pointer_released = g_ptr_released,
+                  .pointer_mods = g_ptr_mods};
     ui_input_add_keyboard(&in, engine);
     ui_update(g_ui_live, &in, (float)engine->win_width, (float)engine->win_height);
     g_ptr_pressed = g_ptr_released = false;
@@ -1435,6 +1438,9 @@ static void start_late_work(Engine* engine) {
                             texture_desc(true), on_idle_loaded, NULL);
 }
 
+static void open_asked(void);
+static void history_stream(Engine* engine);
+
 static void on_update(Engine* engine, float dt) {
     (void)dt;
     board_late_settle(false);
@@ -1446,6 +1452,8 @@ static void on_update(Engine* engine, float dt) {
     if (g_say_typed)
         say_typed(engine);
     live_ui_update(engine);
+    open_asked();
+    history_stream(engine);
     // The input pass an app owes its UI, with no input: it is what settles the focused button's
     // state, which its ease then follows.
     if (g_ui_enter)
@@ -1484,9 +1492,10 @@ static bool over_ui(void) {
 
 static void on_button(Engine* engine, int button, int action, int mods) {
     (void)engine;
-    (void)mods;
     if (button != GLFW_MOUSE_BUTTON_LEFT)
         return;
+    if (action == GLFW_PRESS)
+        g_ptr_mods = mods;
     g_ptr_down = action == GLFW_PRESS;
     g_ptr_pressed |= action == GLFW_PRESS;
     g_ptr_released |= action == GLFW_RELEASE;
@@ -1520,8 +1529,89 @@ static const char* HISTORY_LINES[] = {
     "flipped U4 to the bottom side and moved its decoupling with it",
 };
 
+// A reply streamed into the history a word a frame, as an agent's answer arrives.
+static const char* HISTORY_REPLY =
+    "checking the board for that now: the ground pour keeps 0.3 mm from every pad and the "
+    "mounting hole has its own clearance, so the pour stops where the clearance does";
+
+static UIScreen* g_history; // the column's screen
+static UIElement* g_history_pane;
+static UIElement* g_history_input;
+static Font* g_mono;       // the second face, for a part's name
+static UIElement* g_reply; // the message being streamed into, or NULL
+static size_t g_reply_at;  // how much of HISTORY_REPLY is in it
+static Engine* g_engine;   // for the input's submit, which has no engine of its own
+
+// One message at the end of the history: the speaker in a colour, and on a line naming C12, the
+// part in the second face.
+static UIElement* history_add(const char* speaker, const char* said) {
+    char text[512];
+    snprintf(text, sizeof(text), "%s: %s", speaker, said);
+    UIElement* msg = ui_label(g_history_pane, text);
+    msg->wrap = true;
+    msg->size_mode[0] = UI_GROW;
+    const bool agent = speaker[0] == 'a';
+    UITextRun runs[2] = {
+        {.start = 0,
+         .length = strlen(speaker),
+         .color = {agent ? 0.45f : 0.55f, agent ? 0.70f : 0.85f, agent ? 1.0f : 0.55f, 1.0f}}};
+    size_t count = 1;
+    const char* part = strstr(text, "C12");
+    if (g_mono && part)
+        runs[count++] = (UITextRun){.start = (size_t)(part - text), .length = 3, .font = g_mono};
+    ui_set_text_runs(msg, runs, count);
+    return msg;
+}
+
+// The input line's Enter: the message joins the history and a reply starts to stream.
+static void on_history_submit(UIElement* el, void* user) {
+    (void)user;
+    if (!ui_field_text(el)[0])
+        return;
+    history_add("you", ui_field_text(el));
+    ui_field_set_text(el, "");
+    g_reply = history_add("agent", "");
+    g_reply_at = 0;
+    if (g_engine)
+        engine_request_frame(g_engine);
+}
+
+// The next word of the reply, a frame at a time headless and every 50 ms in a window, asking for
+// the frame it will be drawn in.
+static void history_stream(Engine* engine) {
+    if (!g_reply)
+        return;
+    static double next;
+    const double now = glfwGetTime();
+    if (!engine->headless && now < next) {
+        engine_request_frame_after(engine, next - now);
+        return;
+    }
+    const char* rest = HISTORY_REPLY + g_reply_at;
+    const char* space = strchr(rest + (*rest == ' '), ' ');
+    g_reply_at = space ? (size_t)(space - HISTORY_REPLY) : strlen(HISTORY_REPLY);
+    char said[512];
+    snprintf(said, sizeof(said), "%.*s", (int)g_reply_at, HISTORY_REPLY);
+    char text[520];
+    snprintf(text, sizeof(text), "agent: %s", said);
+    ui_set_text(g_reply, text);
+    const UITextRun speaker = {.start = 0, .length = 5, .color = {0.45f, 0.70f, 1.0f, 1.0f}};
+    ui_set_text_runs(g_reply, &speaker, 1);
+    if (!space) {
+        g_reply = NULL;
+        return;
+    }
+    next = now + 0.05;
+    if (engine->headless)
+        engine_request_frame(engine);
+    else
+        engine_request_frame_after(engine, 0.05);
+}
+
 static void build_history(UISystem* ui, Font* mono) {
+    g_mono = mono;
     UIScreen* s = ui_screen(ui, "history");
+    g_history = s;
     ui_screen_set_modal(s, false);
     UIElement* root = ui_screen_root(s);
     root->dir = UI_ROW;
@@ -1531,43 +1621,335 @@ static void build_history(UISystem* ui, Font* mono) {
     ui_set_style(column, &(UIStyle){.bg = {0.10f, 0.11f, 0.14f, 1.0f},
                                     .corner_radius = 1.0f,
                                     .padding = {12.0f, 12.0f, 12.0f, 12.0f}});
+    column->spacing = 10.0f;
     UIElement* pane = ui_scroll(column);
+    g_history_pane = pane;
     ui_set_size(pane, UI_GROW, 0.0f, UI_GROW, 0.0f);
     pane->follow_end = true;
     pane->spacing = 10.0f;
     const size_t kinds = sizeof(HISTORY_LINES) / sizeof(HISTORY_LINES[0]);
     for (int i = 0; i < HISTORY_MESSAGES; i++) {
-        const bool agent = i % 3 != 1;
-        const char* speaker = agent ? "agent" : "you";
-        char text[256];
-        snprintf(text, sizeof(text), "%s: %s (%d)", speaker, HISTORY_LINES[(size_t)i % kinds], i);
-        UIElement* msg = ui_label(pane, text);
-        msg->wrap = true;
-        msg->size_mode[0] = UI_GROW;
-        // The speaker in a colour, and on every fifth message a part's name in the second face.
-        UITextRun runs[2] = {
-            {.start = 0,
-             .length = strlen(speaker),
-             .color = {agent ? 0.45f : 0.55f, agent ? 0.70f : 0.85f, agent ? 1.0f : 0.55f, 1.0f}}};
-        size_t count = 1;
-        const char* part = strstr(text, "C12");
-        if (mono && i % 5 == 0 && part)
-            runs[count++] = (UITextRun){.start = (size_t)(part - text), .length = 3, .font = mono};
-        ui_set_text_runs(msg, runs, count);
+        char said[256];
+        snprintf(said, sizeof(said), "%s (%d)", HISTORY_LINES[(size_t)i % kinds], i);
+        // Every fifth line naming C12 shows it in the second face.
+        UIElement* msg = history_add(i % 3 != 1 ? "agent" : "you", said);
+        if (i % 5 != 0 && msg->run_count > 1)
+            ui_set_text_runs(msg, msg->runs, 1);
     }
+    g_history_input = ui_text_field(column, UI_FIELD_MULTILINE | UI_FIELD_SUBMIT_ON_ENTER,
+                                    on_history_submit, NULL);
+    ui_set_text(g_history_input, "Message");
+    ui_set_size(g_history_input, UI_GROW, 0.0f, UI_FIT, 0.0f);
+    g_history_input->max_rows = 6;
     ui_push(ui, s);
 }
 
-// G opens the debug GUI and F the FPS readout, which under --idle counts the frames drawn.
+/*
+ * --palette: Cmd+K (Ctrl+K elsewhere) opens a field over the app's own commands, each with its key,
+ * filtered and ordered by fuzzy_match with the matched letters highlighted; `/` opens a jump over
+ * generated names the same way. Up and Down move the highlight, Enter or a click runs it, Esc
+ * closes. Matching is fuzzy_match's and the tie-break the list's own order, as pcb's will be its
+ * natural order.
+ */
+#define PALETTE_ROWS 12
+#define JUMP_NAMES   5000
+
+typedef struct Command {
+    const char* name;
+    const char* key;
+    void (*run)(Engine* engine);
+} Command;
+
+static CanvasView g_home_view; // the first view as it began, which Reset view goes back to
+
+static void cmd_fps(Engine* e) {
+    e->show_fps = !e->show_fps;
+}
+static void cmd_gui(Engine* e) {
+    e->show_gui = !e->show_gui;
+}
+static void cmd_zoom(Engine* e, double by) {
+    CanvasView* v = &g_views[0];
+    (void)e;
+    canvas_view_zoom_at(v, v->x + v->width * 0.5f, v->y + v->height * 0.5f, by);
+}
+static void cmd_zoom_in(Engine* e) {
+    cmd_zoom(e, 1.25);
+}
+static void cmd_zoom_out(Engine* e) {
+    cmd_zoom(e, 0.8);
+}
+static void cmd_left(Engine* e) {
+    (void)e;
+    canvas_view_pan(&g_views[0], 60.0f, 0.0f);
+}
+static void cmd_right(Engine* e) {
+    (void)e;
+    canvas_view_pan(&g_views[0], -60.0f, 0.0f);
+}
+static void cmd_up(Engine* e) {
+    (void)e;
+    canvas_view_pan(&g_views[0], 0.0f, 60.0f);
+}
+static void cmd_down(Engine* e) {
+    (void)e;
+    canvas_view_pan(&g_views[0], 0.0f, -60.0f);
+}
+static void cmd_reset(Engine* e) {
+    (void)e;
+    const CanvasView keep = g_views[0];
+    g_views[0] = g_home_view;
+    g_views[0].x = keep.x, g_views[0].y = keep.y;
+    g_views[0].width = keep.width, g_views[0].height = keep.height;
+}
+static void cmd_print(Engine* e) {
+    (void)e;
+    printf("canvas view centre %lld %lld\n", (long long)g_views[0].centre.x,
+           (long long)g_views[0].centre.y);
+}
+
+static const Command COMMANDS[] = {
+    {"Toggle FPS readout", "F", cmd_fps},
+    {"Toggle debug GUI", "G", cmd_gui},
+    {"Zoom in", "=", cmd_zoom_in},
+    {"Zoom out", "-", cmd_zoom_out},
+    {"Pan left", "", cmd_left},
+    {"Pan right", "", cmd_right},
+    {"Pan up", "", cmd_up},
+    {"Pan down", "", cmd_down},
+    {"Reset view", "0", cmd_reset},
+    {"Print view centre", "P", cmd_print},
+};
+#define COMMAND_COUNT ((int)(sizeof(COMMANDS) / sizeof(COMMANDS[0])))
+
+static UIScreen* g_palette;
+static UIElement* g_pal_field;
+static UIElement* g_pal_rows[PALETTE_ROWS];
+static UIElement* g_pal_names[PALETTE_ROWS];
+static UIElement* g_pal_keys[PALETTE_ROWS];
+static int g_pal_match[PALETTE_ROWS];
+static int g_pal_count, g_pal_selected;
+static bool g_pal_jump; // the list is the jump's names rather than the commands
+static char g_jump_names[JUMP_NAMES][24];
+// Asked for by a key and done after the next input pass: 1 the palette, 2 the jump, 3 the caret
+// into the history's input line.
+static int g_open_palette;
+
+static const char* pal_name(int i) {
+    return g_pal_jump ? g_jump_names[i] : COMMANDS[i].name;
+}
+
+// The highlighted row in the theme's focus colour, the rest bare.
+static void palette_restyle(void) {
+    for (int r = 0; r < PALETTE_ROWS; r++) {
+        const bool lit = r == g_pal_selected && r < g_pal_count;
+        ui_set_style(g_pal_rows[r], &(UIStyle){.bg = {0.16f, 0.34f, 0.62f, lit ? 1.0f : 0.0f},
+                                               .corner_radius = 5.0f,
+                                               .padding = {5.0f, 10.0f, 5.0f, 10.0f}});
+    }
+}
+
+typedef struct Hit {
+    int index, score;
+} Hit;
+
+static int hit_order(const void* a, const void* b) {
+    const Hit* x = a;
+    const Hit* y = b;
+    if (x->score != y->score)
+        return y->score - x->score;
+    return x->index - y->index;
+}
+
+// The list for what is in the field: every item that matches, best first and in the list's own
+// order among equals, the first PALETTE_ROWS of them shown with their matched letters lit.
+static void palette_filter(void) {
+    static Hit hits[JUMP_NAMES];
+    const char* query = ui_field_text(g_pal_field);
+    const int total = g_pal_jump ? JUMP_NAMES : COMMAND_COUNT;
+    int found = 0;
+    for (int i = 0; i < total; i++) {
+        const int score = fuzzy_match(query, pal_name(i), NULL, 0);
+        if (score >= 0)
+            hits[found++] = (Hit){i, score};
+    }
+    qsort(hits, (size_t)found, sizeof(Hit), hit_order);
+    g_pal_count = found < PALETTE_ROWS ? found : PALETTE_ROWS;
+    for (int r = 0; r < PALETTE_ROWS; r++) {
+        UIElement* row = g_pal_rows[r];
+        if (r >= g_pal_count) {
+            ui_set_size(row, UI_GROW, 0.0f, UI_FIXED, 0.0f);
+            row->disabled = true;
+            ui_set_text(g_pal_names[r], "");
+            ui_set_text(g_pal_keys[r], "");
+            continue;
+        }
+        const int item = hits[r].index;
+        g_pal_match[r] = item;
+        ui_set_size(row, UI_GROW, 0.0f, UI_FIT, 0.0f);
+        row->disabled = false;
+        ui_set_text(g_pal_names[r], pal_name(item));
+        ui_set_text(g_pal_keys[r], g_pal_jump ? "" : COMMANDS[item].key);
+        size_t at[FUZZY_QUERY_MAX];
+        UITextRun lit[FUZZY_QUERY_MAX];
+        size_t n = 0;
+        if (query[0] && fuzzy_match(query, pal_name(item), at, FUZZY_QUERY_MAX) >= 0)
+            for (const unsigned char* p = (const unsigned char*)query; *p && n < FUZZY_QUERY_MAX;) {
+                text_utf8_next(&p);
+                const unsigned char* c = (const unsigned char*)pal_name(item) + at[n];
+                const unsigned char* end = c;
+                text_utf8_next(&end);
+                lit[n] = (UITextRun){.start = at[n],
+                                     .length = (size_t)(end - c),
+                                     .color = {1.0f, 0.78f, 0.30f, 1.0f}};
+                n++;
+            }
+        ui_set_text_runs(g_pal_names[r], lit, n);
+    }
+    g_pal_selected = 0;
+    palette_restyle();
+}
+
+static void palette_close(void) {
+    UISystem* ui = g_ui_live;
+    if (ui_top(ui) == g_palette)
+        ui_pop(ui);
+}
+
+// Runs the item at row `r` and closes the palette; a name from the jump is said, there being
+// nothing in this app to jump to.
+static void palette_run(int r) {
+    if (r < 0 || r >= g_pal_count)
+        return;
+    const int item = g_pal_match[r];
+    palette_close();
+    if (g_pal_jump)
+        printf("canvas jump %s\n", g_jump_names[item]);
+    else
+        COMMANDS[item].run(g_engine);
+}
+
+static void on_palette_change(UIElement* el, void* user) {
+    (void)el;
+    (void)user;
+    palette_filter();
+}
+
+static void on_palette_submit(UIElement* el, void* user) {
+    (void)el;
+    (void)user;
+    palette_run(g_pal_selected);
+}
+
+static void on_palette_row(UIElement* el, void* user) {
+    (void)el;
+    palette_run((int)(intptr_t)user);
+}
+
+// Up and Down move the highlight while the caret stays in the field.
+static bool on_palette_key(UIElement* el, const InputKeyEvent* key, void* user) {
+    (void)el;
+    (void)user;
+    if (key->key != GLFW_KEY_UP && key->key != GLFW_KEY_DOWN)
+        return false;
+    const int step = key->key == GLFW_KEY_UP ? -1 : 1;
+    const int to = g_pal_selected + step;
+    if (to >= 0 && to < g_pal_count) {
+        g_pal_selected = to;
+        palette_restyle();
+    }
+    return true;
+}
+
+static void build_palette(UISystem* ui) {
+    for (int i = 0; i < JUMP_NAMES; i++) {
+        static const char* kinds[] = {"net", "U", "R", "C", "bank/mem"};
+        const int k = i % 5;
+        if (k == 0)
+            snprintf(g_jump_names[i], sizeof(g_jump_names[i]), "net_%04d", i / 5);
+        else if (k == 4)
+            snprintf(g_jump_names[i], sizeof(g_jump_names[i]), "bank/mem[%d]", i / 5);
+        else
+            snprintf(g_jump_names[i], sizeof(g_jump_names[i]), "%s%d", kinds[k], i / 5 + 1);
+    }
+    g_palette = ui_screen(ui, "palette");
+    UIElement* box = ui_panel(ui_screen_root(g_palette));
+    ui_set_size(box, UI_FIXED, 420.0f, UI_FIT, 0.0f);
+    box->spacing = 6.0f;
+    g_pal_field = ui_text_field(box, 0, on_palette_submit, NULL);
+    ui_set_size(g_pal_field, UI_GROW, 0.0f, UI_FIT, 0.0f);
+    ui_field_set_on_change(g_pal_field, on_palette_change, NULL);
+    ui_field_set_on_key(g_pal_field, on_palette_key, NULL);
+    // The rows in a pane that fits them, a container with no look of its own, and no gaps between
+    // them, so the rows a short list hides take no room at all. A spacing of zero is the theme's,
+    // so a thousandth of a point stands for none.
+    UIElement* list = ui_scroll(box);
+    ui_set_size(list, UI_GROW, 0.0f, UI_FIT, 0.0f);
+    list->spacing = 0.001f;
+    for (int r = 0; r < PALETTE_ROWS; r++) {
+        UIElement* row = ui_panel(list);
+        row->dir = UI_ROW;
+        row->focusable = true;
+        row->action = on_palette_row;
+        row->action_user = (void*)(intptr_t)r;
+        g_pal_rows[r] = row;
+        g_pal_names[r] = ui_label(row, "");
+        ui_set_size(g_pal_names[r], UI_GROW, 0.0f, UI_FIT, 0.0f);
+        g_pal_keys[r] = ui_label(row, "");
+    }
+}
+
+static void palette_open(bool jump) {
+    g_pal_jump = jump;
+    ui_set_text(g_pal_field, jump ? "Jump to a part or net" : "Type a command");
+    ui_field_set_text(g_pal_field, "");
+    palette_filter();
+    if (!ui_on_stack(g_ui_live, g_palette))
+        ui_push(g_ui_live, g_palette);
+    ui_set_focus(g_palette, g_pal_field);
+}
+
+// What the canvas app's own keys do, in a view: G the debug GUI, F the FPS readout, = and - zoom, 0
+// resets the view, P prints it; Enter puts the caret in the history's input line, Cmd+K (Ctrl+K)
+// opens the palette and / the jump. None of them while the UI takes the keyboard.
 static void on_key(Engine* engine, int key, int scancode, int action, int mods) {
     (void)scancode;
-    (void)mods;
-    if (action != GLFW_PRESS)
+    if (action != GLFW_PRESS || (g_ui_live && ui_wants_keyboard(g_ui_live)))
         return;
-    if (key == GLFW_KEY_G)
-        engine->show_gui = !engine->show_gui;
+#ifdef __APPLE__
+    const bool shortcut = (mods & GLFW_MOD_SUPER) != 0;
+#else
+    const bool shortcut = (mods & GLFW_MOD_CONTROL) != 0;
+#endif
+    if (g_palette && key == GLFW_KEY_K && shortcut)
+        g_open_palette = 1;
+    else if (g_palette && key == GLFW_KEY_SLASH && !mods)
+        g_open_palette = 2;
+    else if (g_history && (key == GLFW_KEY_ENTER || key == GLFW_KEY_KP_ENTER))
+        g_open_palette = 3;
+    else if (key == GLFW_KEY_G)
+        cmd_gui(engine);
     else if (key == GLFW_KEY_F)
-        engine->show_fps = !engine->show_fps;
+        cmd_fps(engine);
+    else if (key == GLFW_KEY_EQUAL)
+        cmd_zoom_in(engine);
+    else if (key == GLFW_KEY_MINUS)
+        cmd_zoom_out(engine);
+    else if (key == GLFW_KEY_0)
+        cmd_reset(engine);
+    else if (key == GLFW_KEY_P)
+        cmd_print(engine);
+}
+
+// The palette is opened after the frame's input pass, so the key that asked for it -- `/` brings
+// its character too -- is not typed into it; and the input line is focused after it for the same
+// reason, or its Enter would be its first key.
+static void open_asked(void) {
+    if (g_open_palette == 3)
+        ui_set_focus(g_history, g_history_input);
+    else if (g_open_palette)
+        palette_open(g_open_palette == 2);
+    g_open_palette = 0;
 }
 
 static void usage(const char* argv0) {
@@ -1577,7 +1959,7 @@ static void usage(const char* argv0) {
             "          [--tile-shift N] [--canvas-probe] [--picture] [--edit-thread]\n"
             "          [--split] [--only-view 0|1] [--ui] [--budget]\n"
             "          [--idle] [--idle-wake S,...] [--idle-load PATH] [--input-script PATH]\n"
-            "          [--ui-enter] [--ui-text TEXT] [--gui-click] [--history]\n",
+            "          [--ui-enter] [--ui-text TEXT] [--gui-click] [--history] [--palette]\n",
             argv0);
 }
 
@@ -1595,7 +1977,7 @@ static const char* IDENTITY_PASS = "#version 330 core\n"
 int main(int argc, char** argv) {
     bool headless = false, mirror = false, probe = false, picture = false, edit_thread = false;
     bool split = false, with_ui = false, budget = false, idle = false, ui_enter = false;
-    bool history = false;
+    bool history = false, palette = false;
     int frames = 0, width = 960, height = 600, tile_shift = 0, only_view = -1;
     const char* screenshot = NULL;
     const char* input_script = NULL;
@@ -1657,6 +2039,8 @@ int main(int argc, char** argv) {
             ui_enter = true;
         } else if (strcmp(argv[i], "--history") == 0) {
             history = true;
+        } else if (strcmp(argv[i], "--palette") == 0) {
+            palette = true;
         } else if (strcmp(argv[i], "--ui-text") == 0 && more) {
             with_ui = true;
             g_ui_text = argv[++i];
@@ -1764,12 +2148,18 @@ int main(int argc, char** argv) {
     g_say_typed = probe;
 
     // Under --ui, a panel of the game UI over the canvas, at the UI's order; under --history, the
-    // side column, given the real pointer and keyboard.
+    // side column, and under --palette the palette, given the real pointer and keyboard.
+    g_engine = engine;
+    g_home_view = g_views[0];
     UISystem* ui = NULL;
-    if (with_ui || history) {
+    if (with_ui || history || palette) {
         ui = create_ui_system(engine);
         ui_set_font(ui, font, 18.0f);
         ui_attach(ui, engine);
+    }
+    if (palette) {
+        build_palette(ui);
+        g_ui_live = ui;
     }
     if (history) {
         Font* mono = load_font(engine->text_renderer->font_pool,
@@ -1782,12 +2172,13 @@ int main(int argc, char** argv) {
             const double s = ctx.fb_scale;
             const UIElement* column = ui_screen_root(screen)->children[0];
             const UIElement* pane = column->children[0];
-            printf("canvas history column %ld %ld %ld %ld pane %ld %ld %ld %ld want 1a1c24\n",
+            printf("canvas history column %ld %ld %ld %ld pane %ld %ld %ld %ld want 1a1c24 "
+                   "input %ld\n",
                    lround(column->rect.x * s), lround(column->rect.y * s),
                    lround((column->rect.x + column->rect.w) * s),
                    lround((column->rect.y + column->rect.h) * s), lround(pane->rect.x * s),
                    lround(pane->rect.y * s), lround((pane->rect.x + pane->rect.w) * s),
-                   lround((pane->rect.y + pane->rect.h) * s));
+                   lround((pane->rect.y + pane->rect.h) * s), lround(g_history_input->rect.y * s));
         }
     }
     if (with_ui) {
@@ -1824,6 +2215,19 @@ int main(int argc, char** argv) {
     engine_run(engine, on_update, NULL, NULL);
     if (g_idle_say)
         printf("canvas idle frames %zu waited %.6f\n", engine->total_frames, engine->time_waited);
+    // The palette as the run left it: whether it is open, its text's length, the rows it shows, the
+    // first row's item and that item's matched bytes; and its field's box in framebuffer pixels.
+    if (probe && g_palette) {
+        printf("canvas palette state %d %zu %d %d", ui_on_stack(ui, g_palette) ? 1 : 0,
+               strlen(ui_field_text(g_pal_field)), g_pal_count, g_pal_count ? g_pal_match[0] : -1);
+        for (size_t i = 0; g_pal_count && i < g_pal_names[0]->run_count; i++)
+            printf(" %zu", g_pal_names[0]->runs[i].start);
+        printf("\n");
+        const double s = ctx.fb_scale;
+        const UIRect r = g_pal_field->rect;
+        printf("canvas palette field %ld %ld %ld %ld\n", lround(r.x * s), lround(r.y * s),
+               lround((r.x + r.w) * s), lround((r.y + r.h) * s));
+    }
     board_late_settle(true);
     free_ui_system(ui);
     free_canvas(g_canvas);
