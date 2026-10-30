@@ -373,8 +373,13 @@ struct UIElement {
     UIDir dir;           // how this element's CHILDREN are laid out
     UISize size_mode[2]; // x, y
     float size[2];       // the number FIXED uses
-    float padding[4];    // top, right, bottom, left; 0 = the style's
-    float spacing;       // gap between children; 0 = the theme's, negative = none
+    // The most a FIT or GROW element measures along each axis; 0 = no most. A scrolling pane past
+    // it scrolls; anything else draws past it.
+    float max_size[2];
+    // An element's two inheritable lengths: 0 takes the style's or the theme's, and a negative one
+    // is none. The padding goes per side: top, right, bottom, left.
+    float padding[4];
+    float spacing; // the gap between children
     UIAlign align_main, align_cross;
     bool focusable;
     bool disabled;

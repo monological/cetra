@@ -699,11 +699,10 @@ static float _widest_option(const UIElement* el, const UIStyle* s) {
  * places for it to stop being.
  */
 static void _padding_from(const UIElement* el, const UIStyle* s, float out[4]) {
-    if (el->padding[0] || el->padding[1] || el->padding[2] || el->padding[3]) {
-        memcpy(out, el->padding, sizeof(float) * 4);
-        return;
-    }
-    memcpy(out, s->padding, sizeof(float) * 4);
+    const bool own = el->padding[0] || el->padding[1] || el->padding[2] || el->padding[3];
+    memcpy(out, own ? el->padding : s->padding, sizeof(float) * 4);
+    for (int i = 0; i < 4; i++)
+        out[i] = glm_max(out[i], 0.0f); // a negative side is none
 }
 
 // The text an element lays out and draws: its own, in a resolved style, with its runs.
@@ -725,12 +724,12 @@ static float _intrinsic(const UISystem* ui, const UIElement* el, int axis) {
             const UIText t = _element_text(ui, el, &s);
             v = el->wrap ? ui_text_longest_word(&t) : ui_text_widest_line(&t);
         } else {
-            // One line height PER LINE. ui_draw_text starts a new line at every
-            // '\n' it is given, so charging one made an authored two-line label
-            // measure half its height and draw outside its own rect and its
+            // One line height PER LINE: a label's, as it broke them; any other element's, one a
+            // '\n', since ui_draw_text starts a new line at each. Charging one made an authored
+            // two-line label measure half its height and draw outside its own rect and its
             // parent's -- with the layout numbers all looking correct.
             size_t lines = 1;
-            if (el->wrap && el->lines)
+            if (el->lines)
                 lines = el->lines->count;
             else
                 for (const char* p = el->text; *p; p++)
@@ -797,6 +796,17 @@ static float* _pos(UIRect* r, int axis) {
 
 static float* _len(UIRect* r, int axis) {
     return axis == 0 ? &r->w : &r->h;
+}
+
+// `len` held to the element's most along `axis`, when it names one.
+static float _at_most(const UIElement* el, int axis, float len) {
+    return el->max_size[axis] > 0.0f ? glm_min(len, el->max_size[axis]) : len;
+}
+
+// Whether a growing child can take no more room along `axis`: it is at its most.
+static bool _grown_full(const UIElement* el, int axis) {
+    const float len = axis == 0 ? el->rect.w : el->rect.h;
+    return el->max_size[axis] > 0.0f && len >= el->max_size[axis];
 }
 
 // Sums a pane's row tops again when a height, the count or its spacing has changed.
@@ -922,7 +932,8 @@ static void _measure(const UISystem* ui, UIElement* el, int axis) {
         v = pad[0] + pad[2];
     }
 
-    *_len(&el->rect, axis) = (el->size_mode[axis] == UI_FIXED) ? el->size[axis] : v;
+    *_len(&el->rect, axis) =
+        (el->size_mode[axis] == UI_FIXED) ? el->size[axis] : _at_most(el, axis, v);
 }
 
 /*
@@ -962,8 +973,8 @@ static void _arrange(const UISystem* ui, UIElement* el, UIRect screen, int axis)
     }
 
     if (_main_axis(el) != axis) {
-        // Across: a GROW child stretches to the inner extent, a smaller one is placed by the
-        // cross alignment.
+        // Across: a GROW child stretches to the inner extent, up to its most, and a smaller one is
+        // placed by the cross alignment.
         for (size_t i = 0; i < el->child_count; i++) {
             UIElement* c = el->children[i];
             if (c->fill)
@@ -971,7 +982,7 @@ static void _arrange(const UISystem* ui, UIElement* el, UIRect screen, int axis)
             float* cl = _len(&c->rect, axis);
             float* cp = _pos(&c->rect, axis);
             if (c->size_mode[axis] == UI_GROW)
-                *cl = in_len;
+                *cl = _at_most(c, axis, in_len);
             *cp = in_pos;
             if (*cl < in_len) {
                 if (el->align_cross == UI_ALIGN_CENTER)
@@ -1006,29 +1017,54 @@ static void _arrange(const UISystem* ui, UIElement* el, UIRect screen, int axis)
     }
 
     float used = 0.0f;
-    size_t counted = 0, grow_count = 0;
+    size_t counted = 0, growing = 0;
     for (size_t i = 0; i < el->child_count; i++) {
         UIElement* c = el->children[i];
         if (c->fill)
             continue;
         used += *_len(&c->rect, axis);
-        if (c->size_mode[axis] == UI_GROW)
-            grow_count++;
+        if (c->size_mode[axis] == UI_GROW && !_grown_full(c, axis))
+            growing++;
         counted++;
     }
     if (counted > 1)
         used += gap * (float)(counted - 1);
 
-    const float leftover = in_len - used;
-    const float share = (grow_count > 0 && leftover > 0.0f) ? leftover / (float)grow_count : 0.0f;
+    // The room left is shared among the growing children. One that would pass its most takes it
+    // and no more, and what it leaves is shared again among the rest, round by round. What no
+    // child can take is placed by the main-axis alignment.
+    float room = in_len - used;
+    while (growing > 0 && room > 0.0f) {
+        const float share = room / (float)growing;
+        bool held = false;
+        for (size_t i = 0; i < el->child_count; i++) {
+            UIElement* c = el->children[i];
+            if (c->fill || c->size_mode[axis] != UI_GROW || _grown_full(c, axis))
+                continue;
+            float* cl = _len(&c->rect, axis);
+            if (c->max_size[axis] > 0.0f && *cl + share >= c->max_size[axis]) {
+                room -= c->max_size[axis] - *cl;
+                *cl = c->max_size[axis];
+                growing--;
+                held = true;
+            }
+        }
+        if (held)
+            continue;
+        for (size_t i = 0; i < el->child_count; i++) {
+            UIElement* c = el->children[i];
+            if (!c->fill && c->size_mode[axis] == UI_GROW && !_grown_full(c, axis))
+                *_len(&c->rect, axis) += share;
+        }
+        room = 0.0f;
+    }
 
-    // With nothing growing, the whole run is placed by the main-axis alignment.
     float cursor = in_pos;
-    if (grow_count == 0 && leftover > 0.0f) {
+    if (room > 0.0f) {
         if (el->align_main == UI_ALIGN_CENTER)
-            cursor += leftover * 0.5f;
+            cursor += room * 0.5f;
         else if (el->align_main == UI_ALIGN_END)
-            cursor += leftover;
+            cursor += room;
     }
     // A pane's content runs on past it, moved up by its scroll; the rects stay window positions.
     if (el->kind == UI_SCROLL && axis == 1)
@@ -1038,17 +1074,15 @@ static void _arrange(const UISystem* ui, UIElement* el, UIRect screen, int axis)
         UIElement* c = el->children[i];
         if (c->fill)
             continue;
-        float* cl = _len(&c->rect, axis);
-        if (c->size_mode[axis] == UI_GROW)
-            *cl += share;
         *_pos(&c->rect, axis) = cursor;
-        cursor += *cl + gap;
+        cursor += *_len(&c->rect, axis) + gap;
         _arrange(ui, c, screen, axis);
     }
 }
 
 /*
- * A wrapping or styled label's lines, broken at the width the first pass gave it and kept by
+ * Every label with text keeps its lines, one way however it is drawn: broken at the width the
+ * first pass gave it when it wraps, at its '\n's alone when it does not, and kept by
  * ui_lines_break while that and the style are unchanged. The text and the runs drop them when
  * set, so a kept break is never for other text.
  */
@@ -1063,7 +1097,7 @@ static void _break_lines(const UISystem* ui, UIElement* el) {
         ui_field_break(ui, el, &s, el->rect.w - pad[1] - pad[3]);
         return;
     }
-    if (el->kind != UI_LABEL || !el->text || !(el->wrap || el->runs)) {
+    if (el->kind != UI_LABEL || !el->text || !el->text[0]) {
         _drop_lines(el);
         return;
     }
@@ -1313,8 +1347,6 @@ static void _emit(UISystem* ui, UIElement* el) {
                     const UIText t = _element_text(ui, el, &s);
                     ui_draw_text_lines(dl, el->rect, &t, el->lines, s.line_spacing,
                                        el->align_cross);
-                } else {
-                    ui_draw_text(dl, el->rect, el->text, &s, el->align_cross);
                 }
                 break;
             case UI_PANEL:

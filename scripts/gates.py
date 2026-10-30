@@ -27771,6 +27771,12 @@ def run_ui_gate(workdir):
                      where it was.
       ui-rows-focus  the focused row stays built and focused when the pane is
                      scrolled far from it, beside the rows in view.
+      ui-max-size    a fitting pane of 30 rows held to 200 points is that tall and
+                     scrolls; a growing child held to 100 takes it and its siblings
+                     share the rest; two held and centred leave the rest to the
+                     alignment; a fixed element ignores its most.
+      ui-padding-none a negative padding and spacing are none, a zero one the
+                     style's and the theme's, and the padding goes per side.
       ui-field-type  typed characters make the field's text, the caret at its end,
                      and on_change fires once for a pass that changed it and not
                      for one that did not.
@@ -28337,6 +28343,45 @@ def run_ui_gate(workdir):
                   f"{held:.0f} rows held (want at most {held_most + 1})")
     print(f"  ui-rows-focus         {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-rows-focus", ok)
+
+    # ---- the most an element measures, and lengths that are none
+    p = _ui_probe("max-size")
+    if not p:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        h, content = p[("pane", "height")][0], p[("pane", "content")][0]
+        scrolled = p[("pane", "scrolled")][0]
+        held, rest = p[("held", "width")][0], p[("rest", "widths")]
+        both, offset = p[("centred", "widths")], p[("centred", "offset")][0]
+        fixed = p[("fixed", "width")][0]
+        want_content = 30 * row_h + 29 * row_gap
+        ok = (close(h, 200.0) and close(content, want_content) and scrolled > 0
+              and close(held, 100.0) and all(close(w, 250.0) for w in rest)
+              and all(close(w, 100.0) for w in both) and close(offset, 200.0)
+              and close(fixed, 50.0))
+        detail = (f"a fitting pane held to 200 is {h:.0f} tall over {content:.0f} of content "
+                  f"(want {want_content:.0f}), and the wheel scrolls it {scrolled:.0f}; a growing "
+                  f"child held to 100 takes {held:.0f} and its siblings {rest} (want 250 each); two "
+                  f"held to 100 and centred {both} at {offset:.0f} (want 200); a fixed one with a "
+                  f"most of 10 keeps {fixed:.0f} (want 50)")
+    print(f"  ui-max-size           {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-max-size", ok)
+
+    p = _ui_probe("padding-none")
+    if not p:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        none, inherit, sides = (p[(k, "rect")] for k in ("none", "inherit", "sides"))
+        first = p[("first", "offset")]
+        ok = (close(none[2], 20.0) and close(none[3], 40.0) and first == [0.0, 0.0]
+              and inherit[2] > 20.0 and inherit[3] > 40.0
+              and close(sides[2], 32.0) and close(sides[3], 20.0))
+        detail = (f"negative padding and spacing: two 20-point children in {none[2]:.0f} x "
+                  f"{none[3]:.0f} (want 20 x 40) from its corner {first}; zero inherits, "
+                  f"{inherit[2]:.0f} x {inherit[3]:.0f} (want more); none above and below and 6 "
+                  f"either side, {sides[2]:.0f} x {sides[3]:.0f} (want 32 x 20)")
+    print(f"  ui-padding-none       {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-padding-none", ok)
 
     # ---- the text field: each probe line says 1 where its text was the one it wanted
     def flags_ok(p, keys):
