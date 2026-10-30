@@ -27921,6 +27921,16 @@ def run_ui_gate(workdir):
                      added below, "XY" typed at both, undone, Esc to one caret, the
                      word at it taken by Cmd+D and found again round the text's end
                      (end to end).
+      ui-editor-host-edit the host's edits through an editor: a selection moved by an
+                     edit before it, kept by one after it, grown by one inside it; a
+                     caret under replaced bytes at their end, and before bytes the
+                     host put in at it; a whole new text changing past the caret
+                     keeping it; a second editor of the same text moved by typing in
+                     the first.
+      ui-editor-ranges-late apps/canvas --editor's parse on its own thread, taken six
+                     frames after it began: the text it read had an unclosed '(' at
+                     byte 9, three bytes were typed before it since, and the error is
+                     at 12 and underlined there in red (end to end).
       ui-type-palette apps/canvas --palette driven by a script: mod+K opens it and
                      "zo" filters the commands to Zoom in and Zoom out, the first
                      lit at its first two bytes, with the text in the field (end to
@@ -28886,6 +28896,36 @@ def run_ui_gate(workdir):
               f"was, [1, 0, 3])")
     print(f"  ui-editor-script      {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-editor-script", ok)
+
+    ok, detail = doc_flags("editor-host-edit", 7, "a selection through the host's edits before it, "
+                           "after it and inside it, a caret under replaced bytes and at an "
+                           "insertion, a whole new text changing past the caret, and a second "
+                           "editor of the same text")
+    print(f"  ui-editor-host-edit   {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-editor-host-edit", ok)
+
+    # ---- a parse's errors, read a few versions back, underlined where the typing since put them
+    late_path = os.path.join(workdir, "editor_late.ckt")
+    with open(late_path, "w", encoding="utf-8", newline="") as f:
+        f.write("(inst a)\n(net b\n(part c)\n")
+    late_script = os.path.join(workdir, "editor_late.script")
+    with open(late_script, "w", encoding="utf-8") as f:
+        f.write("2 type=XYZ\n")
+    late_out, late = _canvas_run(workdir, "editor_late", "--editor", late_path, "--editor-lag",
+                                 "6", "--input-script", late_script, frames=8)
+    errors = [int(v) for v in late.get(("editor", "errors"), [])]
+    at = [int(v) for v in late.get(("editor", "error_at"), [])]
+    red = 0
+    if late_out and len(at) == 2:
+        img = _ppm_array(late_out)
+        box = img[at[1]:at[1] + 40, at[0]:at[0] + 24]
+        red = int(np.count_nonzero((box[..., 0] > 170) & (box[..., 1] < 120) & (box[..., 2] < 120)))
+    ok = errors == [1, 12, 13] and red > 0
+    detail = (f"the parse of the text before 'XYZ' was typed, taken six frames on: errors {errors} "
+              f"(want one at bytes 12 to 13, the unclosed '(' moved past the typing; 9 to 10 is "
+              f"the version it read), {red} red pixels under it at {at} (want some)")
+    print(f"  ui-editor-ranges-late {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-editor-ranges-late", ok)
 
     # ---- the palette, end to end
     script = os.path.join(workdir, "ui_palette.script")
