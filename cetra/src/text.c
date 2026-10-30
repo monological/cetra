@@ -549,19 +549,28 @@ void font_release(Font* font) {
         font->ref_count--;
 }
 
-GlyphInfo* font_get_glyph(const Font* font, uint32_t codepoint) {
-    if (!font)
-        return NULL;
-    if (codepoint < 256)
-        return font->glyph_latin[codepoint];
-
+/*
+ * The pen steps once a character of every text walk, so what it rarely needs -- the hash, the
+ * face's own advance and kerning -- is kept out of line (noinline). Inlined into the step, they
+ * made every character save and restore eight registers, and a walk took a fifth longer than the
+ * two calls the step replaced.
+ */
+__attribute__((noinline)) static GlyphInfo* _glyph_hashed(const Font* font, uint32_t codepoint) {
     GlyphInfo* glyph;
     HASH_FIND(hh, font->glyph_cache, &codepoint, sizeof(uint32_t), glyph);
     return glyph;
 }
 
+static inline GlyphInfo* _glyph_of(const Font* font, uint32_t codepoint) {
+    return codepoint < 256 ? font->glyph_latin[codepoint] : _glyph_hashed(font, codepoint);
+}
+
+GlyphInfo* font_get_glyph(const Font* font, uint32_t codepoint) {
+    return font ? _glyph_of(font, codepoint) : NULL;
+}
+
 // A character's advance from the face itself, for one the atlas does not hold.
-static float _advance_face(const Font* font, uint32_t codepoint) {
+__attribute__((noinline)) static float _advance_face(const Font* font, uint32_t codepoint) {
     if (!font || !font->stb_font_info)
         return 0.0f;
     const stbtt_fontinfo* info = (const stbtt_fontinfo*)font->stb_font_info;
@@ -856,7 +865,8 @@ static bool _font_ok(const Font* font) {
 
 // A pair's adjustment from the face's own tables: a character the atlas does not hold, which a
 // layout still spaces, or a face with no kerning, which stb answers at once.
-static float _kern_face(const Font* font, uint32_t prev_codepoint, uint32_t codepoint) {
+__attribute__((noinline)) static float _kern_face(const Font* font, uint32_t prev_codepoint,
+                                                  uint32_t codepoint) {
     const stbtt_fontinfo* info = (const stbtt_fontinfo*)font->stb_font_info;
     const int kern = stbtt_GetCodepointKernAdvance(info, (int)prev_codepoint, (int)codepoint);
     // Base-size pixels, matching how advance_x was baked, so one scale covers both at draw time.
@@ -864,7 +874,7 @@ static float _kern_face(const Font* font, uint32_t prev_codepoint, uint32_t code
 }
 
 // A pair's adjustment between two glyphs of `font`'s atlas.
-static float _kern_glyphs(const Font* font, const GlyphInfo* prev, const GlyphInfo* glyph) {
+static inline float _kern_glyphs(const Font* font, const GlyphInfo* prev, const GlyphInfo* glyph) {
     if (!font->kern_pairs)
         return _kern_face(font, prev->codepoint, glyph->codepoint);
     return (float)font->kern_pairs[(size_t)prev->pair_row * font->kern_side + glyph->pair_row] *
@@ -879,20 +889,39 @@ float font_kern_advance(const Font* font, uint32_t prev_codepoint, uint32_t code
     return a && b ? _kern_glyphs(font, a, b) : _kern_face(font, prev_codepoint, codepoint);
 }
 
-FontStep font_pen_step(FontPen* pen, const Font* font, uint32_t codepoint) {
-    FontStep step = {.glyph = font_get_glyph(font, codepoint)};
+// Every step's rule, for any character: font_pen_step's own branch takes the common case.
+__attribute__((noinline)) static FontStep _pen_step(FontPen* pen, const Font* font,
+                                                    uint32_t codepoint) {
     if (!pen || !_font_ok(font)) {
         if (pen)
             *pen = (FontPen){0};
-        return step;
+        return (FontStep){.glyph = font_get_glyph(font, codepoint)};
     }
-    step.joined = pen->font == font;
+    FontStep step = {.glyph = _glyph_of(font, codepoint), .joined = pen->font == font};
     if (step.joined)
         step.kern = pen->glyph && step.glyph ? _kern_glyphs(font, pen->glyph, step.glyph)
                                              : _kern_face(font, pen->codepoint, codepoint);
     step.advance = step.glyph ? step.glyph->advance_x : _advance_face(font, codepoint);
     *pen = (FontPen){.font = font, .codepoint = codepoint, .glyph = step.glyph};
     return step;
+}
+
+FontStep font_pen_step(FontPen* pen, const Font* font, uint32_t codepoint) {
+    // The common case, which makes no call and so saves nothing on entry: a character under U+0100
+    // the atlas holds, after one it holds in the same face, read from the table. The same answer
+    // _pen_step gives.
+    const GlyphInfo* glyph = pen && font && codepoint < 256 ? font->glyph_latin[codepoint] : NULL;
+    if (glyph && pen->font == font && pen->glyph && font->kern_pairs) {
+        const FontStep step = {
+            .glyph = glyph,
+            .kern = _kern_glyphs(font, pen->glyph, glyph),
+            .advance = glyph->advance_x,
+            .joined = true,
+        };
+        *pen = (FontPen){.font = font, .codepoint = codepoint, .glyph = glyph};
+        return step;
+    }
+    return _pen_step(pen, font, codepoint);
 }
 
 float text_measure_width(const Font* font, const char* text, float size) {
