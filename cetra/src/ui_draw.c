@@ -380,34 +380,6 @@ void ui_set_draw_program(UIDrawList* dl, ShaderProgram* program, UIRect rect, fl
 
 // ----------------------------------------------------------------- text
 
-/*
- * The one advance rule, used by measuring, wrapping and drawing alike.
- *
- * Between two glyphs the pen moves by the face's own KERN pair plus the style's
- * TRACKING; after a glyph it moves by that glyph's advance. Both are applied
- * BETWEEN glyphs rather than after each, so neither a leading nor a trailing
- * gap creeps into a measured width -- which is what would make a centred string
- * sit off-centre by half a tracking.
- *
- * Everything that needs a width has to go through this, or a string is centred
- * against a width it does not have and a hit test lands beside the glyph the
- * player aimed at.
- */
-static float _advance_between(const Font* font, uint32_t prev, const GlyphInfo* prev_g, uint32_t cp,
-                              const GlyphInfo* g, float scale, float tracking) {
-    if (prev == 0)
-        return 0.0f;
-    const float kern =
-        prev_g && g ? font_kern_glyphs(font, prev_g, g) : font_kern_advance(font, prev, cp);
-    return kern * scale + tracking;
-}
-
-// A glyph's own advance, held by the atlas or not: one it lacks is spaced by the face's width for
-// it and drawn as a box (_missing_box), so the text it sits in measures what it draws.
-static float _glyph_advance(const Font* font, const GlyphInfo* g, uint32_t cp, float scale) {
-    return (g ? g->advance_x : font_advance(font, cp)) * scale;
-}
-
 float ui_line_height(const Font* font, float size, float line_spacing) {
     if (!font || font->base_size <= 0.0f)
         return size;
@@ -434,17 +406,22 @@ static bool _text_ok(const UIText* t) {
 }
 
 /*
- * The one advance rule, walked. Every measurement, every break and the draw take their glyphs
+ * The one advance rule, walked: the font's pen step (font_pen_step), plus the style's TRACKING
+ * between two glyphs of one face. Every measurement, every break and the draw take their glyphs
  * from here: the per-glyph rule was spelled out three times in this file once, and one copy had
  * already drifted -- charging a kerning pair across a glyph the atlas had refused.
+ *
+ * The pair and the tracking are applied BETWEEN glyphs rather than after each, so neither a
+ * leading nor a trailing gap creeps into a measured width -- which is what would make a centred
+ * string sit off-centre by half a tracking, and a hit test land beside the glyph aimed at. A glyph
+ * the atlas lacks advances by the face's own width for it and is drawn as a box (_missing_box), so
+ * the text it sits in measures what it draws.
  */
 typedef struct UIWalk {
     const UIText* t;
-    size_t pos;              // the byte of the next glyph
-    size_t run;              // the first run not wholly before `pos`
-    uint32_t prev;           // the glyph before, 0 at a line's start or past a change of face
-    const GlyphInfo* prev_g; // its glyph, NULL when the atlas lacks it
-    const Font* prev_font;   //
+    size_t pos;  // the byte of the next glyph
+    size_t run;  // the first run not wholly before `pos`
+    FontPen pen; // the glyph before; zeroed at a line's start
 } UIWalk;
 
 typedef struct UIGlyph {
@@ -477,16 +454,11 @@ static bool _walk_next(UIWalk* w, size_t to, UIGlyph* out) {
     w->pos = (size_t)(p - t->text);
     out->font = (r && r->font && r->font->base_size > 0.0f) ? r->font : t->font;
     out->color = (r && r->color[3] > 0.0f) ? r->color : t->color;
-    out->g = font_get_glyph(out->font, out->cp);
     out->scale = t->size / out->font->base_size;
-    if (out->font != w->prev_font)
-        w->prev = 0;
-    out->before =
-        _advance_between(out->font, w->prev, w->prev_g, out->cp, out->g, out->scale, t->tracking);
-    out->advance = _glyph_advance(out->font, out->g, out->cp, out->scale);
-    w->prev = out->cp;
-    w->prev_g = out->g;
-    w->prev_font = out->font;
+    const FontStep step = font_pen_step(&w->pen, out->font, out->cp);
+    out->g = step.glyph;
+    out->before = step.joined ? step.kern * out->scale + t->tracking : 0.0f;
+    out->advance = step.advance * out->scale;
     return true;
 }
 
@@ -518,6 +490,11 @@ float ui_text_pen(const UIText* t, size_t from, size_t at) {
 size_t ui_text_break(const UIText* t, size_t from, float max_width) {
     if (!t)
         return 0;
+    // At no width a line ends only at a '\n', which needs no walk of its glyphs to find.
+    if (isinf(max_width)) {
+        const char* nl = memchr(t->text + from, '\n', t->length - from);
+        return nl ? (size_t)(nl - t->text) : t->length;
+    }
     if (!_text_ok(t))
         return t->length;
     UIWalk w = _walk(t, from);
@@ -608,7 +585,7 @@ float ui_text_baseline(const UIText* t, float top) {
 
 // The measures dropped, for a text that changed or is now in another style.
 static void _drop_measures(UILines* lines) {
-    lines->has_widest_line = lines->has_longest_word = false;
+    memset(lines->measures, 0, sizeof(lines->measures));
 }
 
 // Makes `lines` the text's style's, emptied when they were another's.
@@ -624,14 +601,12 @@ static void _lines_for(UILines* lines, const UIText* t) {
 
 bool ui_lines_measure(UILines* lines, const UIText* t, bool wrap, float* width) {
     _lines_for(lines, t);
-    bool* has = wrap ? &lines->has_longest_word : &lines->has_widest_line;
-    float* kept = wrap ? &lines->longest_word : &lines->widest_line;
-    const bool walk = !*has;
-    if (walk) {
-        *kept = wrap ? ui_text_longest_word(t) : ui_text_widest_line(t);
-        *has = true;
-    }
-    *width = *kept;
+    UIMeasure* m = &lines->measures[wrap];
+    const bool walk = !m->taken;
+    if (walk)
+        *m = (UIMeasure){.value = wrap ? ui_text_longest_word(t) : ui_text_widest_line(t),
+                         .taken = true};
+    *width = m->value;
     return walk;
 }
 
@@ -653,11 +628,7 @@ static bool _break_from(UILines* lines, const UIText* t, float width, size_t lin
             return false;
         }
         lines->starts[lines->count++] = from;
-        // At no width a line ends only at a '\n', which needs no walk of its glyphs to find.
-        const char* nl = isinf(width) ? memchr(t->text + from, '\n', t->length - from) : NULL;
-        const size_t end = !isinf(width) ? ui_text_break(t, from, width)
-                           : nl          ? (size_t)(nl - t->text)
-                                         : t->length;
+        const size_t end = ui_text_break(t, from, width);
         if (end >= t->length)
             break;
         from = t->text[end] == '\n' ? end + 1 : end;

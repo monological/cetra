@@ -1302,6 +1302,79 @@ static int probe_max_size(UISystem* ui) {
     return 0;
 }
 
+// The glyph rows of `el`'s text as built: their quads' vertical centres, each row once, in order.
+// Every glyph of the probe's text is the same letter, so a row's quads share one centre.
+static size_t glyph_rows(UISystem* ui, float* rows, size_t cap) {
+    UIRect quads[64];
+    vec4 colors[64];
+    const size_t n = glyph_quads(ui, quads, colors, 64);
+    size_t count = 0;
+    for (size_t i = 0; i < n; i++) {
+        const float y = quads[i].y + quads[i].h * 0.5f;
+        bool seen = false;
+        for (size_t k = 0; k < count; k++)
+            seen = seen || fabsf(rows[k] - y) < 0.5f;
+        if (!seen && count < cap)
+            rows[count++] = y;
+    }
+    return count;
+}
+
+// A screen holding one control, built alone, and its glyph rows.
+static size_t built_rows(UISystem* ui, UIScreen* s, float* rows, size_t cap) {
+    ui_push(ui, s);
+    ui_build(ui, 1280.0f, 720.0f, 1.0f);
+    const size_t n = glyph_rows(ui, rows, cap);
+    ui_pop(ui);
+    return n;
+}
+
+// Controls whose text is two lines draw it where their height was measured for it: a button's on
+// its centre, as one line's is, and a slider's label above its track.
+static int probe_control_lines(UISystem* ui) {
+    float one[4], two[4], label[4];
+    UIScreen* s1 = ui_screen(ui, "single");
+    UIScreen* s2 = ui_screen(ui, "twice");
+    UIScreen* s3 = ui_screen(ui, "slider");
+    UIElement* single = ui_button(ui_screen_root(s1), "xx", NULL, NULL);
+    UIElement* twice = ui_button(ui_screen_root(s2), "xx\nxx", NULL, NULL);
+    static float value = 0.5f;
+    UIElement* slider = ui_slider(ui_screen_root(s3), "xx\nxx", 0.0f, 1.0f, &value, NULL, NULL);
+    const size_t n1 = built_rows(ui, s1, one, 4);
+    const size_t n2 = built_rows(ui, s2, two, 4);
+    const size_t n3 = built_rows(ui, s3, label, 4);
+    // A row's centre less the button's: the same for one line and for two lines' middle.
+    const float mid1 = single->rect.y + single->rect.h * 0.5f;
+    const float mid2 = twice->rect.y + twice->rect.h * 0.5f;
+    printf("ui control-lines rows count %zu %zu %zu\n", n1, n2, n3);
+    if (n1 == 1 && n2 == 2) {
+        printf("ui control-lines one offset %.6f\n", (double)(one[0] - mid1));
+        printf("ui control-lines two offset %.6f\n", (double)((two[0] + two[1]) * 0.5f - mid2));
+    }
+    if (n3 == 2) {
+        const UIRect track = ui_slider_track(ui, slider);
+        printf("ui control-lines slider clear %.6f\n", (double)(track.y - label[1]));
+    }
+    return 0;
+}
+
+// A text mesh's per-character colour, by character: in "héllo" the é is character 1 of 5.
+static int probe_text_mesh(Font* font) {
+    TextMesh* mesh = create_text_mesh(font, "h\xc3\xa9llo", 32.0f);
+    if (!mesh)
+        return 1;
+    printf("ui text-mesh chars count %zu\n", mesh->char_count);
+    text_mesh_set_char_color(mesh, 1, (vec4){1.0f, 0.0f, 0.0f, 1.0f});
+    text_mesh_set_char_color(mesh, 5, (vec4){0.0f, 0.0f, 1.0f, 1.0f}); // past the last: ignored
+    text_mesh_rebuild(mesh);
+    const size_t quads = mesh->vertex_count / 4;
+    printf("ui text-mesh quads count %zu\n", quads);
+    for (size_t q = 0; q < quads; q++)
+        printf("ui text-mesh quad%zu green %.6f\n", q, (double)mesh->vertices[q * 4].g);
+    free_text_mesh(mesh);
+    return 0;
+}
+
 static int probe_padding_none(UISystem* ui) {
     UIScreen* s = ui_screen(ui, "padding");
     ui_screen_set_modal(s, false);
@@ -1459,6 +1532,10 @@ int run_ui_text_probe(Game* game, UISystem* ui, Font* font, const char* which) {
         return probe_max_size(ui);
     if (!strcmp(which, "padding-none"))
         return probe_padding_none(ui);
+    if (!strcmp(which, "control-lines"))
+        return probe_control_lines(ui);
+    if (!strcmp(which, "text-mesh"))
+        return probe_text_mesh(font);
     if (!strcmp(which, "rows-built"))
         return probe_rows_built(ui);
     if (!strcmp(which, "rows-measure"))
