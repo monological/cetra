@@ -447,14 +447,6 @@ void ui_field_set_on_key(UIElement* el, UIKeyFn on_key, void* user) {
 
 // ------------------------------------------------------------------- the keys
 
-#ifdef __APPLE__
-#define SHORTCUT_MOD GLFW_MOD_SUPER // Cmd: select all, copy, undo, and to a line's end
-#define WORD_MOD     GLFW_MOD_ALT   // Option: a word at a time
-#else
-#define SHORTCUT_MOD GLFW_MOD_CONTROL
-#define WORD_MOD     GLFW_MOD_CONTROL
-#endif
-
 static bool _has_selection(const UIField* f) {
     return f->state.select_start != f->state.select_end;
 }
@@ -582,8 +574,8 @@ static void _type(UIField* f, uint32_t cp) {
 static bool _key(const UISystem* ui, UIElement* el, UIField* f, const InputKeyEvent* ev) {
     const int mods = ev->mods;
     const int sh = (mods & GLFW_MOD_SHIFT) ? STB_TEXTEDIT_K_SHIFT : 0;
-    const bool shortcut = (mods & SHORTCUT_MOD) != 0;
-    const bool word = (mods & WORD_MOD) != 0;
+    const bool shortcut = (mods & ENGINE_MOD_SHORTCUT) != 0;
+    const bool word = (mods & ENGINE_MOD_WORD) != 0;
     const bool ro = (f->flags & UI_FIELD_READ_ONLY) != 0;
     const bool multi = (f->flags & UI_FIELD_MULTILINE) != 0;
 #ifdef __APPLE__

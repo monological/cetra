@@ -1539,10 +1539,13 @@ static UIElement* g_history_pane;
 static UIElement* g_history_input;
 static Font* g_mono;     // the second face, for a part's name
 static Engine* g_engine; // for the input's submit, which has no engine of its own
-// The history, the app's own: each message's text, whether the agent said it, and whether a part
-// it names is set in the second face. The pane builds rows from it.
-static char* g_msgs[HISTORY_MAX];
-static bool g_msg_agent[HISTORY_MAX], g_msg_mono[HISTORY_MAX];
+// The history, the app's own, which the pane builds rows from.
+typedef struct Message {
+    char* text; // "speaker: what was said"
+    bool agent; // the agent said it, rather than you
+    bool mono;  // a part it names is set in the second face
+} Message;
+static Message g_msgs[HISTORY_MAX];
 static int g_msg_count;
 static int g_reply = -1;  // the message being streamed into, or -1
 static size_t g_reply_at; // how much of HISTORY_REPLY is in it
@@ -1553,9 +1556,7 @@ static int history_push(bool agent, const char* said, bool mono) {
         return -1;
     char text[512];
     snprintf(text, sizeof(text), "%s: %s", agent ? "agent" : "you", said);
-    g_msgs[g_msg_count] = strdup(text);
-    g_msg_agent[g_msg_count] = agent;
-    g_msg_mono[g_msg_count] = mono;
+    g_msgs[g_msg_count] = (Message){.text = strdup(text), .agent = agent, .mono = mono};
     if (g_history_pane && g_history_pane->rows)
         ui_scroll_set_row_count(g_history_pane, g_msg_count + 1);
     return g_msg_count++;
@@ -1574,16 +1575,17 @@ static void build_message(UIElement* row, int index, void* user) {
     ui_set_style(f, &(UIStyle){.bg = {0.10f, 0.11f, 0.14f, 1.0f},
                                .border = {0.10f, 0.11f, 0.14f, 1.0f},
                                .padding = {1.0f, 1.0f, 1.0f, 1.0f}});
-    const char* text = g_msgs[index];
+    const Message* m = &g_msgs[index];
+    const char* text = m->text;
     ui_field_set_text(f, text);
-    const bool agent = g_msg_agent[index];
+    const bool agent = m->agent;
     UITextRun runs[2] = {
         {.start = 0,
-         .length = agent ? 5 : 3,
+         .length = strcspn(text, ":"),
          .color = {agent ? 0.45f : 0.55f, agent ? 0.70f : 0.85f, agent ? 1.0f : 0.55f, 1.0f}}};
     size_t count = 1;
     const char* part = strstr(text, "C12");
-    if (g_mono && g_msg_mono[index] && part)
+    if (g_mono && m->mono && part)
         runs[count++] = (UITextRun){.start = (size_t)(part - text), .length = 3, .font = g_mono};
     ui_set_text_runs(f, runs, count);
 }
@@ -1617,8 +1619,8 @@ static void history_stream(Engine* engine) {
     g_reply_at = space ? (size_t)(space - HISTORY_REPLY) : strlen(HISTORY_REPLY);
     char text[520];
     snprintf(text, sizeof(text), "agent: %.*s", (int)g_reply_at, HISTORY_REPLY);
-    free(g_msgs[g_reply]);
-    g_msgs[g_reply] = strdup(text);
+    free(g_msgs[g_reply].text);
+    g_msgs[g_reply].text = strdup(text);
     ui_scroll_rows_changed(g_history_pane, g_reply, 1);
     if (!space) {
         g_reply = -1;
@@ -1910,10 +1912,9 @@ static void build_palette(UISystem* ui) {
     ui_set_size(g_pal_field, UI_GROW, 0.0f, UI_FIT, 0.0f);
     ui_field_set_on_change(g_pal_field, on_palette_change, NULL);
     ui_field_set_on_key(g_pal_field, on_palette_key, NULL);
-    // The rows in a pane with no gaps between them. A spacing of zero is the theme's, so a
-    // thousandth of a point stands for none.
+    // The rows in a pane with no gaps between them.
     g_pal_list = ui_scroll(box);
-    g_pal_list->spacing = 0.001f;
+    g_pal_list->spacing = -1.0f;
 }
 
 static void palette_open(bool jump) {
@@ -1933,11 +1934,7 @@ static void on_key(Engine* engine, int key, int scancode, int action, int mods) 
     (void)scancode;
     if (action != GLFW_PRESS || (g_ui_live && ui_wants_keyboard(g_ui_live)))
         return;
-#ifdef __APPLE__
-    const bool shortcut = (mods & GLFW_MOD_SUPER) != 0;
-#else
-    const bool shortcut = (mods & GLFW_MOD_CONTROL) != 0;
-#endif
+    const bool shortcut = (mods & ENGINE_MOD_SHORTCUT) != 0;
     if (g_palette && key == GLFW_KEY_K && shortcut)
         palette_open(false);
     else if (g_palette && key == GLFW_KEY_SLASH && !mods)
@@ -1956,6 +1953,13 @@ static void on_key(Engine* engine, int key, int scancode, int action, int mods) 
         cmd_reset(engine);
     else if (key == GLFW_KEY_P)
         cmd_print(engine);
+}
+
+// A rect in window points as its corners in framebuffer pixels, `s` to a point, after a space: the
+// box a gate crops the screenshot by.
+static void say_box(UIRect r, double s) {
+    printf(" %ld %ld %ld %ld", lround(r.x * s), lround(r.y * s), lround((r.x + r.w) * s),
+           lround((r.y + r.h) * s));
 }
 
 static void usage(const char* argv0) {
@@ -2178,13 +2182,11 @@ int main(int argc, char** argv) {
             const double s = ctx.fb_scale;
             const UIElement* column = ui_screen_root(screen)->children[0];
             const UIElement* pane = column->children[0];
-            printf("canvas history column %ld %ld %ld %ld pane %ld %ld %ld %ld want 1a1c24 "
-                   "input %ld\n",
-                   lround(column->rect.x * s), lround(column->rect.y * s),
-                   lround((column->rect.x + column->rect.w) * s),
-                   lround((column->rect.y + column->rect.h) * s), lround(pane->rect.x * s),
-                   lround(pane->rect.y * s), lround((pane->rect.x + pane->rect.w) * s),
-                   lround((pane->rect.y + pane->rect.h) * s), lround(g_history_input->rect.y * s));
+            printf("canvas history column");
+            say_box(column->rect, s);
+            printf(" pane");
+            say_box(pane->rect, s);
+            printf(" want 1a1c24 input %ld\n", lround(g_history_input->rect.y * s));
         }
     }
     if (with_ui) {
@@ -2204,10 +2206,9 @@ int main(int argc, char** argv) {
         ui_push(ui, screen);
         ui_layout(screen, (float)width, (float)height);
         if (probe) {
-            const double s = ctx.fb_scale;
-            const UIRect r = panel->rect;
-            printf("canvas ui panel %ld %ld %ld %ld want 3399e6\n", lround(r.x * s),
-                   lround(r.y * s), lround((r.x + r.w) * s), lround((r.y + r.h) * s));
+            printf("canvas ui panel");
+            say_box(panel->rect, ctx.fb_scale);
+            printf(" want 3399e6\n");
         }
     }
     fflush(stdout);
@@ -2234,10 +2235,9 @@ int main(int argc, char** argv) {
             printf(" %zu", lit[i].start);
         printf("\n");
         printf("canvas palette list rows %d built %zu\n", g_pal_count, g_pal_list->child_count);
-        const double s = ctx.fb_scale;
-        const UIRect r = g_pal_field->rect;
-        printf("canvas palette field %ld %ld %ld %ld\n", lround(r.x * s), lround(r.y * s),
-               lround((r.x + r.w) * s), lround((r.y + r.h) * s));
+        printf("canvas palette field");
+        say_box(g_pal_field->rect, ctx.fb_scale);
+        printf("\n");
     }
     board_late_settle(true);
     free_ui_system(ui);

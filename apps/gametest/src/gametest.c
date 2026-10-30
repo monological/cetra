@@ -6949,11 +6949,6 @@ static float ui_probe_state_index(UIElement** rows, int n, UIState want) {
     return -1.0f;
 }
 
-static void ui_probe_rect(const char* which, const char* label, UIRect r) {
-    printf("ui %s %s rect %.6f %.6f %.6f %.6f\n", which, label, (double)r.x, (double)r.y,
-           (double)r.w, (double)r.h);
-}
-
 // Three equal buttons in a fixed-width panel: the smallest tree that exercises
 // FIXED, GROW, padding and spacing at once, and the one every arm below shares
 // so a number that moves means the layout moved and not the fixture.

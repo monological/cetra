@@ -900,6 +900,15 @@ static bool _engine_frame_renderable(const Engine* engine) {
     return !engine->render_suspended && engine->fb_width > 0 && engine->fb_height > 0;
 }
 
+// Events arrive only inside a poll, so by the next one the frame's hooks have read this frame's
+// wheel, key presses and typing, and the next poll starts the next frame's.
+static void _engine_clear_latches(Engine* engine) {
+    engine->input.scroll_dx = 0.0;
+    engine->input.scroll_dy = 0.0;
+    memset(engine->input.key_pressed, 0, sizeof(engine->input.key_pressed));
+    engine->input.key_event_count = 0;
+}
+
 // Close out a loop iteration: advance the frame clock and honour the engine's
 // own frame limit. Runs on undrawn frames too, so a headless run still exits
 // at --frames N if the window is zero-area or a rebuild failed -- otherwise
@@ -1896,11 +1905,6 @@ static int _script_key_code(const char* name, size_t n) {
 
 // A modifier's GLFW bit; 0 for none. `mod` is the platform's shortcut modifier.
 static int _script_mod_bit(const char* name, size_t n) {
-#ifdef __APPLE__
-    const int shortcut = GLFW_MOD_SUPER;
-#else
-    const int shortcut = GLFW_MOD_CONTROL;
-#endif
     if (n == 5 && strncmp(name, "shift", 5) == 0)
         return GLFW_MOD_SHIFT;
     if (n == 4 && strncmp(name, "ctrl", 4) == 0)
@@ -1910,7 +1914,7 @@ static int _script_mod_bit(const char* name, size_t n) {
     if (n == 5 && strncmp(name, "super", 5) == 0)
         return GLFW_MOD_SUPER;
     if (n == 3 && strncmp(name, "mod", 3) == 0)
-        return shortcut;
+        return ENGINE_MOD_SHORTCUT;
     return 0;
 }
 
@@ -3632,6 +3636,8 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
             // a repeat and the table freezes rather than emptying.
             profiler_end_frame(engine->profiler);
             _engine_advance_frame(engine);
+            // No hook reads what arrives while minimized, so none of it waits for the next frame.
+            _engine_clear_latches(engine);
             if (engine->headless)
                 glfwPollEvents();
             else
@@ -3978,12 +3984,7 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
         }
 
         glfwSwapBuffers(engine->window);
-        // Events arrive only inside a poll, so the frame's hooks have read
-        // this frame's wheel, key presses and typing by now and the next poll starts the next.
-        engine->input.scroll_dx = 0.0;
-        engine->input.scroll_dy = 0.0;
-        memset(engine->input.key_pressed, 0, sizeof(engine->input.key_pressed));
-        engine->input.key_event_count = 0;
+        _engine_clear_latches(engine);
         _engine_frame_events(engine);
         // A scripted batch lands where the real one just did, so its wheel and
         // typing reach the next frame's hooks on the same schedule -- and after

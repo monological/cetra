@@ -25,7 +25,7 @@
 static const char* PARAGRAPH = "the quick brown fox jumps over the lazy dog and keeps on running "
                                "past the river and over the hill until the evening comes";
 
-static void probe_rect(const char* which, const char* label, UIRect r) {
+void ui_probe_rect(const char* which, const char* label, UIRect r) {
     printf("ui %s %s rect %.6f %.6f %.6f %.6f\n", which, label, (double)r.x, (double)r.y,
            (double)r.w, (double)r.h);
 }
@@ -99,7 +99,7 @@ static int probe_wrap_label(UISystem* ui, Font* font) {
     UIElement* label = NULL;
     wrap_fixture(ui, &label, 300.0f, PARAGRAPH);
     ui_layout(ui_top(ui), 1280.0f, 720.0f);
-    probe_rect("wrap-label", "label", label->rect);
+    ui_probe_rect("wrap-label", "label", label->rect);
     const float inner = 300.0f - 20.0f;
     printf("ui wrap-label inner width %.6f\n", (double)inner);
     printf("ui wrap-label lines count %.6f\n", (double)(label->lines ? label->lines->count : 0));
@@ -295,7 +295,7 @@ static void say_scroll(const char* which, const char* label, const UIElement* pa
 static int probe_scroll_layout(UISystem* ui) {
     UIElement* rows[PANE_ROWS];
     UIElement* pane = pane_fixture(ui, rows, PANE_ROWS, false, false);
-    probe_rect("scroll-layout", "pane", pane->rect);
+    ui_probe_rect("scroll-layout", "pane", pane->rect);
     printf("ui scroll-layout content height %.6f\n", (double)pane->scroll_content);
     printf("ui scroll-layout rows at %.6f %.6f %.6f\n", (double)rows[0]->rect.y,
            (double)rows[1]->rect.y, (double)rows[3]->rect.y);
@@ -442,8 +442,8 @@ static int probe_scroll_bar(UISystem* ui) {
         if (r.w == 6.0f && r.x > pane->rect.x + pane->rect.w - 10.0f)
             thumb = r;
     }
-    probe_rect("scroll-bar", "pane", pane->rect);
-    probe_rect("scroll-bar", "thumb", thumb);
+    ui_probe_rect("scroll-bar", "pane", pane->rect);
+    ui_probe_rect("scroll-bar", "thumb", thumb);
     printf("ui scroll-bar content height %.6f\n", (double)pane->scroll_content);
     const float tx = thumb.x + 3.0f, ty = thumb.y + thumb.h * 0.5f;
     pass(ui, &(UIInput){
@@ -463,14 +463,6 @@ static int probe_scroll_bar(UISystem* ui) {
 }
 
 // ---- the text field
-
-#ifdef __APPLE__
-#define SHORTCUT GLFW_MOD_SUPER
-#define WORD     GLFW_MOD_ALT
-#else
-#define SHORTCUT GLFW_MOD_CONTROL
-#define WORD     GLFW_MOD_CONTROL
-#endif
 
 static InputKeyEvent g_events[256];
 static int g_event_count;
@@ -584,7 +576,7 @@ static int probe_field_edit(UISystem* ui) {
     one_key(ui, GLFW_KEY_LEFT, 0);
     one_key(ui, GLFW_KEY_LEFT, 0);
     printf("ui field-edit left caret %d\n", cursor_of(field));
-    one_key(ui, GLFW_KEY_LEFT, WORD);
+    one_key(ui, GLFW_KEY_LEFT, ENGINE_MOD_WORD);
     printf("ui field-edit word caret %d\n", cursor_of(field));
     one_key(ui, GLFW_KEY_HOME, 0);
     printf("ui field-edit home caret %d\n", cursor_of(field));
@@ -592,7 +584,7 @@ static int probe_field_edit(UISystem* ui) {
     printf("ui field-edit end caret %d\n", cursor_of(field));
     one_key(ui, GLFW_KEY_BACKSPACE, 0);
     say_text("field-edit", "backspace", field, "hello worl");
-    one_key(ui, GLFW_KEY_BACKSPACE, WORD);
+    one_key(ui, GLFW_KEY_BACKSPACE, ENGINE_MOD_WORD);
     say_text("field-edit", "wordback", field, "hello ");
     one_key(ui, GLFW_KEY_HOME, 0);
     one_key(ui, GLFW_KEY_DELETE, 0);
@@ -638,7 +630,7 @@ static int probe_field_select(Game* game, UISystem* ui, Font* font) {
     for (int i = 0; i < 5; i++)
         one_key(ui, GLFW_KEY_RIGHT, GLFW_MOD_SHIFT);
     say_field("field-select", "shift", field);
-    one_key(ui, GLFW_KEY_A, SHORTCUT);
+    one_key(ui, GLFW_KEY_A, ENGINE_MOD_SHORTCUT);
     say_field("field-select", "all", field);
 
     // Two presses close together on "beta" select it; a third, the whole line.
@@ -663,8 +655,8 @@ static int probe_field_select(Game* game, UISystem* ui, Font* font) {
     printf("ui field-select runs ok %d\n", ui_set_text_runs(ro, &run, 1) ? 1 : 0);
     ui_set_focus(s, ro);
     pass(ui, &(UIInput){.pointer_x = -1.0f, .pointer_y = -1.0f});
-    one_key(ui, GLFW_KEY_A, SHORTCUT);
-    one_key(ui, GLFW_KEY_C, SHORTCUT);
+    one_key(ui, GLFW_KEY_A, ENGINE_MOD_SHORTCUT);
+    one_key(ui, GLFW_KEY_C, ENGINE_MOD_SHORTCUT);
     const char* clip = engine_clipboard_get(game->engine);
     printf("ui field-select copied plain %d\n", strcmp(clip, "net SDA ok") == 0 ? 1 : 0);
     // An editable field refuses runs.
@@ -678,21 +670,21 @@ static int probe_field_clipboard(const Game* game, UISystem* ui) {
     ui_field_set_text(field, "hello world");
     for (int i = 0; i < 5; i++)
         one_key(ui, GLFW_KEY_LEFT, GLFW_MOD_SHIFT);
-    one_key(ui, GLFW_KEY_C, SHORTCUT);
+    one_key(ui, GLFW_KEY_C, ENGINE_MOD_SHORTCUT);
     printf("ui field-clipboard copied clip %d\n",
            strcmp(engine_clipboard_get(engine), "world") == 0 ? 1 : 0);
     one_key(ui, GLFW_KEY_HOME, 0);
-    one_key(ui, GLFW_KEY_V, SHORTCUT);
+    one_key(ui, GLFW_KEY_V, ENGINE_MOD_SHORTCUT);
     say_text("field-clipboard", "pasted", field, "worldhello world");
     // A single-line field takes a pasted newline as a space.
     engine_clipboard_set(engine, "a\nb");
     one_key(ui, GLFW_KEY_END, 0);
-    one_key(ui, GLFW_KEY_V, SHORTCUT);
+    one_key(ui, GLFW_KEY_V, ENGINE_MOD_SHORTCUT);
     say_text("field-clipboard", "flattened", field, "worldhello worlda b");
     // Cut takes the selection to the clipboard.
     for (int i = 0; i < 3; i++)
         one_key(ui, GLFW_KEY_LEFT, GLFW_MOD_SHIFT);
-    one_key(ui, GLFW_KEY_X, SHORTCUT);
+    one_key(ui, GLFW_KEY_X, ENGINE_MOD_SHORTCUT);
     say_text("field-clipboard", "cut", field, "worldhello world");
     printf("ui field-clipboard cutcopied clip %d\n",
            strcmp(engine_clipboard_get(engine), "a b") == 0 ? 1 : 0);
@@ -702,11 +694,11 @@ static int probe_field_clipboard(const Game* game, UISystem* ui) {
     ui_field_set_text(ro, "fixed");
     ui_set_focus(s, ro);
     pass(ui, &(UIInput){.pointer_x = -1.0f, .pointer_y = -1.0f});
-    one_key(ui, GLFW_KEY_A, SHORTCUT);
-    one_key(ui, GLFW_KEY_X, SHORTCUT);
+    one_key(ui, GLFW_KEY_A, ENGINE_MOD_SHORTCUT);
+    one_key(ui, GLFW_KEY_X, ENGINE_MOD_SHORTCUT);
     printf("ui field-clipboard rocopied clip %d\n",
            strcmp(engine_clipboard_get(engine), "fixed") == 0 ? 1 : 0);
-    one_key(ui, GLFW_KEY_V, SHORTCUT);
+    one_key(ui, GLFW_KEY_V, ENGINE_MOD_SHORTCUT);
     ev_text("typed");
     type_pass(ui);
     say_text("field-clipboard", "readonly", ro, "fixed");
@@ -717,13 +709,13 @@ static int probe_field_undo(UISystem* ui) {
     const UIElement* field = field_fixture(ui, 0, NULL);
     ev_text("abc def");
     type_pass(ui);
-    one_key(ui, GLFW_KEY_Z, SHORTCUT);
+    one_key(ui, GLFW_KEY_Z, ENGINE_MOD_SHORTCUT);
     say_text("field-undo", "undo1", field, "abc");
-    one_key(ui, GLFW_KEY_Z, SHORTCUT);
+    one_key(ui, GLFW_KEY_Z, ENGINE_MOD_SHORTCUT);
     say_text("field-undo", "undo2", field, "");
-    one_key(ui, GLFW_KEY_Z, SHORTCUT | GLFW_MOD_SHIFT);
+    one_key(ui, GLFW_KEY_Z, ENGINE_MOD_SHORTCUT | GLFW_MOD_SHIFT);
     say_text("field-undo", "redo1", field, "abc");
-    one_key(ui, GLFW_KEY_Z, SHORTCUT | GLFW_MOD_SHIFT);
+    one_key(ui, GLFW_KEY_Z, ENGINE_MOD_SHORTCUT | GLFW_MOD_SHIFT);
     say_text("field-undo", "redo2", field, "abc def");
     return 0;
 }
@@ -817,7 +809,7 @@ static int probe_field_multiline(UISystem* ui, Font* font) {
     size_t rows = 0;
     ui_field_inspect(field, NULL, NULL, NULL, NULL, NULL, &rows);
     printf("ui field-multiline rows count %zu\n", rows);
-    probe_rect("field-multiline", "field", field->rect);
+    ui_probe_rect("field-multiline", "field", field->rect);
     printf("ui field-multiline line height %.6f\n", (double)ui_line_height(font, PROBE_SIZE, 1.0f));
     // Up from the end keeps the caret's x, give or take a glyph.
     ui_build(ui, 1280.0f, 720.0f, 0.0f);

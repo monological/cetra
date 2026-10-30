@@ -26092,6 +26092,13 @@ def _ui_probe(case, env=None):
     return _gametest_probe("--ui-probe", _UI_PROBE, case, env=env)
 
 
+def _probe_wrong(p, want):
+    """The probe keys whose first number is not the one `want` names, as {"label key": got}:
+    empty when every one holds. A key the probe never printed reads as None."""
+    return {f"{a} {b}": p.get((a, b), [None])[0] for (a, b), v in want.items()
+            if p.get((a, b), [None])[0] != v}
+
+
 # "ik <case> <label> <key> <numbers...>" from gametest --ik-probe. The character
 # class admits no letters and no exponent on purpose: a nan or an inf prints a line
 # this cannot match, so the key vanishes from the dict and the arm fails on absence.
@@ -28309,7 +28316,7 @@ def run_ui_gate(workdir):
 
     # ---- the text field: each probe line says 1 where its text was the one it wanted
     def flags_ok(p, keys):
-        return all(p.get((label, key), [0])[0] == 1 for label, key in keys)
+        return not _probe_wrong(p, {k: 1 for k in keys})
 
     p = _ui_probe("field-type")
     if not p:
@@ -28370,7 +28377,7 @@ def run_ui_gate(workdir):
     else:
         keys = [("copied", "clip"), ("pasted", "text"), ("flattened", "text"), ("cut", "text"),
                 ("cutcopied", "clip"), ("rocopied", "clip"), ("readonly", "text")]
-        wrong = [label for label, key in keys if p.get((label, key), [0])[0] != 1]
+        wrong = _probe_wrong(p, {k: 1 for k in keys})
         ok = not wrong
         detail = ("copy, paste, a flattened newline, cut, and a read-only field's copy that "
                   "neither cuts nor pastes, each as it should be" if ok else f"wrong: {wrong}")
@@ -28382,11 +28389,11 @@ def run_ui_gate(workdir):
         ok, detail = False, "the probe produced nothing"
     else:
         steps = ("undo1", "undo2", "redo1", "redo2")
-        wrong = [k for k in steps if p.get((k, "text"), [0])[0] != 1]
+        wrong = _probe_wrong(p, {(k, "text"): 1 for k in steps})
         ok = not wrong
         detail = ("'abc def' undoes to 'abc' then nothing, and redoes back a word at a time"
-                  if ok else f"the text was not the one wanted after {wrong} (want 'abc', '', "
-                  f"'abc', 'abc def'; the probe's stderr names each)")
+                  if ok else f"the text was not the one wanted after {list(wrong)} (want 'abc', "
+                  f"'', 'abc', 'abc def'; the probe's stderr names each)")
     print(f"  ui-field-undo         {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-field-undo", ok)
 
@@ -28441,8 +28448,7 @@ def run_ui_gate(workdir):
                 ("escape", "focus"): 1, ("escape", "onstack"): 1, ("before", "text"): 1,
                 ("newline", "text"): 1, ("chat", "submits"): 1, ("modal", "before"): 1,
                 ("modal", "after"): 0}
-        wrong = {f"{a} {b}": p.get((a, b), [None])[0] for (a, b), v in want.items()
-                 if p.get((a, b), [None])[0] != v}
+        wrong = _probe_wrong(p, want)
         ok = not wrong
         detail = "every key did what it should" if ok else f"wrong: {wrong}"
     print(f"  ui-field-keys         {'PASS' if ok else 'FAIL'}  {detail}")
@@ -28455,8 +28461,7 @@ def run_ui_gate(workdir):
         want = {("wants", "editing"): 1, ("hover", "kept"): 1, ("nothing", "focus"): 1,
                 ("wants", "after"): 0, ("click", "field"): 1, ("click", "button"): 1,
                 ("wants", "button"): 0}
-        wrong = {f"{a} {b}": p.get((a, b), [None])[0] for (a, b), v in want.items()
-                 if p.get((a, b), [None])[0] != v}
+        wrong = _probe_wrong(p, want)
         ok = not wrong
         detail = "the focus went where it should" if ok else f"wrong: {wrong}"
     print(f"  ui-field-focus        {'PASS' if ok else 'FAIL'}  {detail}")
@@ -28481,17 +28486,11 @@ def run_ui_gate(workdir):
     script = os.path.join(workdir, "ui_palette.script")
     with open(script, "w", encoding="utf-8") as f:
         f.write("2 key=mod+k\n4 type=zo\n")
-    out = os.path.join(workdir, "ui_palette.ppm")
-    said = _canvas_shot(out, 8, "--sheet", "board", "--palette", "--canvas-probe",
-                        "--input-script", script)
-    state = field = None
-    for line in (said or "").splitlines():
-        t = line.split()
-        if t[:3] == ["canvas", "palette", "state"]:
-            state = [int(v) for v in t[3:]]
-        elif t[:3] == ["canvas", "palette", "field"]:
-            field = [int(v) for v in t[3:7]]
-    if not state or not field:
+    out, probe = _canvas_run(workdir, "palette", "--sheet", "board", "--palette",
+                             "--input-script", script, frames=8)
+    state = [int(v) for v in probe.get(("palette", "state"), [])]
+    field = [int(v) for v in probe.get(("palette", "field"), [])[:4]]
+    if not out or not state or not field:
         ok, detail = False, "the run failed or printed no palette"
     else:
         x0, y0, x1, y1 = field
@@ -29151,11 +29150,11 @@ def _canvas_shot(out, frames, *args):
     return r.stdout
 
 
-def _canvas_run(workdir, tag, *args):
-    """apps/canvas under --canvas-probe: its picture's path and its probe lines keyed by
-    (sheet, name), or None and no lines for a run that failed."""
+def _canvas_run(workdir, tag, *args, frames=2):
+    """apps/canvas under --canvas-probe for `frames` frames: its picture's path and its probe
+    lines keyed by (sheet, name), or None and no lines for a run that failed."""
     out = os.path.join(workdir, f"canvas_{tag}.ppm")
-    stdout = _canvas_shot(out, 2, "--canvas-probe", *args)
+    stdout = _canvas_shot(out, frames, "--canvas-probe", *args)
     if stdout is None:
         return None, {}
     probe = {}
