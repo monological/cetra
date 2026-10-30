@@ -378,7 +378,9 @@ earlier draft of this entry named each item after a UIKit call, which read as a 
      breaking only the last line again, with the caret, the selection, the scroll and undo kept.
   6. **The pointer from the engine**: `InputState` latches the press, the release and their
      modifiers as it does the keys, and `ui_input_read` hands all of it to the UI, replacing
-     `ui_input_add_keyboard` and every app's own pointer state.
+     `ui_input_add_keyboard` and every app's own pointer state. `engine_fb_to_points` is the
+     one conversion from the engine's pixels to window points, so pcb pans by it rather than
+     by a copy.
   7. **`fuzzy_match` fills a `FuzzyPositions`**, which says how many it wrote.
   8. **One home for UTF-8**, in `text.c`: `next`, its exact mirror `prev`, `encode` and
      `is_continuation`, refusing what is no character both ways, and a codepoint is a `uint32_t`
