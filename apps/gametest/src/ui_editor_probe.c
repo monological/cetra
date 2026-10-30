@@ -6,13 +6,16 @@
 
 #include "ui_editor_probe.h"
 
+#include <GLFW/glfw3.h>
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "cetra/engine.h"
 #include "cetra/glyph_cache.h"
+#include "cetra/internal/ui_field.h"         // ui_system_engine, for the clipboard
 #include "cetra/internal/ext/stb_truetype.h" // the rasteriser the glyph cache's bitmaps are held to
 #include "cetra/internal/text_doc_edit.h"    // the editor's half of the text, which the arms drive
 #include "cetra/internal/ui_editor_hooks.h"  // the editor's wrapping and where it put things
@@ -747,6 +750,363 @@ static int probe_editor_anchor(UISystem* ui) {
     return 0;
 }
 
+// ---- Keys
+
+static double g_key_time;
+
+// One input pass carrying `events`, the pointer off the editor, and one build.
+static void send_keys(UISystem* ui, const InputKeyEvent* events, int count) {
+    ui_update(ui,
+              &(UIInput){.pointer_x = -1.0f,
+                         .pointer_y = -1.0f,
+                         .key_events = events,
+                         .key_event_count = count,
+                         .time = (g_key_time += 1.0)},
+              1280.0f, 720.0f);
+    ui_build(ui, 1280.0f, 720.0f, 1.0f);
+}
+
+static void key(UISystem* ui, int k, int mods) {
+    const InputKeyEvent e = {.key = k, .mods = mods};
+    send_keys(ui, &e, 1);
+}
+
+static void type(UISystem* ui, const char* text) {
+    InputKeyEvent e[64] = {0};
+    int n = 0;
+    for (const char* p = text; *p && n < 64;)
+        e[n++] = (InputKeyEvent){.codepoint = text_utf8_next(&p)};
+    send_keys(ui, e, n);
+}
+
+// The editor's one selection is (anchor, head).
+static bool one_selection(const UIElement* ed, size_t anchor, size_t head) {
+    const TextSelection* s = NULL;
+    const size_t n = ui_editor_selections(ed, &s, NULL);
+    if (n != 1 || s[0].anchor != anchor || s[0].head != head) {
+        fprintf(stderr, "  selections %zu, the first %zu %zu, want %zu %zu\n", n,
+                n ? s[0].anchor : 0, n ? s[0].head : 0, anchor, head);
+        return false;
+    }
+    return true;
+}
+
+static void reset(TextDoc* doc, UIElement* ed, const char* text, size_t anchor, size_t head) {
+    text_doc_set_text(doc, text, strlen(text));
+    ui_editor_set_selections(ed, &(TextSelection){anchor, head}, 1);
+}
+
+#define KEYS_TEXT "alpha beta\n  gamma(delta)\nlast"
+#define WORD      INPUT_MOD_WORD
+#define SHORT     INPUT_MOD_SHORTCUT
+
+static int probe_editor_keys(UISystem* ui) {
+    TextDoc* doc = create_text_doc(KEYS_TEXT, strlen(KEYS_TEXT));
+    UIElement* ed = editor_fixture(ui, doc, 600.0f, 300.0f);
+    editor_pass(ui);
+    Engine* engine = ui_system_engine(ui);
+    reset(doc, ed, KEYS_TEXT, 0, 0);
+    key(ui, GLFW_KEY_RIGHT, 0);
+    say_flag("editor-keys", "right", "ok", one_selection(ed, 1, 1));
+    key(ui, GLFW_KEY_RIGHT, GLFW_MOD_SHIFT);
+    say_flag("editor-keys", "shift_right", "ok", one_selection(ed, 1, 2));
+    reset(doc, ed, KEYS_TEXT, 1, 3);
+    key(ui, GLFW_KEY_LEFT, 0);
+    say_flag("editor-keys", "left_collapse", "ok", one_selection(ed, 1, 1));
+    reset(doc, ed, KEYS_TEXT, 0, 0);
+    key(ui, GLFW_KEY_RIGHT, WORD);
+#ifdef __APPLE__
+    say_flag("editor-keys", "word_right", "ok", one_selection(ed, 5, 5)); // the word's end
+#else
+    say_flag("editor-keys", "word_right", "ok", one_selection(ed, 6, 6)); // the next word's start
+#endif
+    reset(doc, ed, KEYS_TEXT, 9, 9);
+    key(ui, GLFW_KEY_LEFT, WORD);
+    say_flag("editor-keys", "word_left", "ok", one_selection(ed, 6, 6));
+    reset(doc, ed, KEYS_TEXT, 3, 3);
+    key(ui, GLFW_KEY_DOWN, 0);
+    say_flag("editor-keys", "down", "ok", one_selection(ed, 14, 14));
+    key(ui, GLFW_KEY_END, 0);
+    say_flag("editor-keys", "end", "ok", one_selection(ed, 25, 25));
+    reset(doc, ed, KEYS_TEXT, 20, 20);
+    key(ui, GLFW_KEY_HOME, 0);
+    const bool first = one_selection(ed, 13, 13);
+    key(ui, GLFW_KEY_HOME, 0);
+    say_flag("editor-keys", "home", "ok", first && one_selection(ed, 11, 11));
+#ifdef __APPLE__
+    reset(doc, ed, KEYS_TEXT, 20, 20);
+    key(ui, GLFW_KEY_UP, GLFW_MOD_SUPER);
+#else
+    reset(doc, ed, KEYS_TEXT, 20, 20);
+    key(ui, GLFW_KEY_HOME, GLFW_MOD_CONTROL);
+#endif
+    say_flag("editor-keys", "doc_start", "ok", one_selection(ed, 0, 0));
+    reset(doc, ed, KEYS_TEXT, 5, 5);
+    key(ui, GLFW_KEY_BACKSPACE, 0);
+    say_flag("editor-keys", "backspace", "ok",
+             doc_is_str(doc, "alph beta\n  gamma(delta)\nlast") && one_selection(ed, 4, 4));
+    reset(doc, ed, KEYS_TEXT, 0, 0);
+    key(ui, GLFW_KEY_DELETE, 0);
+    say_flag("editor-keys", "delete", "ok",
+             doc_is_str(doc, "lpha beta\n  gamma(delta)\nlast") && one_selection(ed, 0, 0));
+    reset(doc, ed, KEYS_TEXT, 10, 10);
+    key(ui, GLFW_KEY_BACKSPACE, WORD);
+    say_flag("editor-keys", "word_delete", "ok",
+             doc_is_str(doc, "alpha \n  gamma(delta)\nlast") && one_selection(ed, 6, 6));
+    reset(doc, ed, KEYS_TEXT, 24, 24);
+    key(ui, GLFW_KEY_ENTER, 0);
+    say_flag("editor-keys", "enter_indents", "ok",
+             doc_is_str(doc, "alpha beta\n  gamma(delta\n  )\nlast") && one_selection(ed, 27, 27));
+    reset(doc, ed, KEYS_TEXT, 26, 26);
+    key(ui, GLFW_KEY_TAB, 0);
+    const bool tabbed = doc_is_str(doc, "alpha beta\n  gamma(delta)\n    last");
+    key(ui, GLFW_KEY_TAB, GLFW_MOD_SHIFT);
+    say_flag("editor-keys", "tab_outdent", "ok", tabbed && doc_is_str(doc, KEYS_TEXT));
+    reset(doc, ed, KEYS_TEXT, 3, 3);
+    key(ui, GLFW_KEY_A, SHORT);
+    say_flag("editor-keys", "select_all", "ok", one_selection(ed, 0, strlen(KEYS_TEXT)));
+    reset(doc, ed, KEYS_TEXT, 6, 10);
+    key(ui, GLFW_KEY_C, SHORT);
+    ui_editor_set_selections(ed, &(TextSelection){0, 0}, 1);
+    key(ui, GLFW_KEY_V, SHORT);
+    say_flag("editor-keys", "copy_paste", "ok",
+             !strcmp(engine_clipboard_get(engine), "beta") &&
+                 doc_is_str(doc, "betaalpha beta\n  gamma(delta)\nlast"));
+    reset(doc, ed, KEYS_TEXT, 0, 5);
+    key(ui, GLFW_KEY_X, SHORT);
+    say_flag("editor-keys", "cut", "ok",
+             !strcmp(engine_clipboard_get(engine), "alpha") &&
+                 doc_is_str(doc, " beta\n  gamma(delta)\nlast"));
+    reset(doc, ed, KEYS_TEXT, 0, 0);
+    type(ui, "zz\xc3\xa9");
+    const bool typed = doc_is_str(doc, "zz\xc3\xa9" KEYS_TEXT) && one_selection(ed, 4, 4);
+    key(ui, GLFW_KEY_Z, SHORT);
+    const bool undone = doc_is_str(doc, KEYS_TEXT) && one_selection(ed, 0, 0);
+    key(ui, GLFW_KEY_Z, SHORT | GLFW_MOD_SHIFT);
+    say_flag("editor-keys", "type_undo_redo", "ok",
+             typed && undone && doc_is_str(doc, "zz\xc3\xa9" KEYS_TEXT));
+    // Every command listed once, by a name and a description.
+    size_t count = 0;
+    const UIEditorCommand* cmds = ui_editor_commands(&count);
+    bool listed = count >= 40;
+    for (size_t i = 0; listed && i < count; i++) {
+        listed = cmds[i].name && cmds[i].description && cmds[i].run;
+        for (size_t k = i + 1; listed && k < count; k++)
+            listed = strcmp(cmds[i].name, cmds[k].name) != 0;
+    }
+    say_flag("editor-keys", "commands", "listed", listed);
+    return 0;
+}
+
+static bool selections_are(const UIElement* ed, const size_t* heads, size_t n) {
+    const TextSelection* s = NULL;
+    const size_t count = ui_editor_selections(ed, &s, NULL);
+    bool ok = count == n;
+    for (size_t i = 0; ok && i < n; i++)
+        ok = s[i].head == heads[i];
+    if (!ok) {
+        fprintf(stderr, "  %zu selections:", count);
+        for (size_t i = 0; i < count; i++)
+            fprintf(stderr, " %zu-%zu", s[i].anchor, s[i].head);
+        fprintf(stderr, "\n");
+    }
+    return ok;
+}
+
+#define CARETS_TEXT "one\ntwo\nthree\nfour\nfive"
+
+static int probe_editor_carets(UISystem* ui) {
+    TextDoc* doc = create_text_doc(CARETS_TEXT, strlen(CARETS_TEXT));
+    UIElement* ed = editor_fixture(ui, doc, 600.0f, 300.0f);
+    editor_pass(ui);
+    // Typing at five carets, one at each line's start: one action.
+    const TextSelection starts[] = {{0, 0}, {4, 4}, {8, 8}, {14, 14}, {19, 19}};
+    ui_editor_set_selections(ed, starts, 5);
+    type(ui, "x");
+    const size_t after[] = {1, 6, 11, 18, 24};
+    say_flag("editor-carets", "type", "five",
+             doc_is_str(doc, "xone\nxtwo\nxthree\nxfour\nxfive") && selections_are(ed, after, 5));
+    // Selections that overlap are one.
+    text_doc_set_text(doc, CARETS_TEXT, strlen(CARETS_TEXT));
+    const TextSelection overlap[] = {{0, 3}, {2, 6}};
+    ui_editor_set_selections(ed, overlap, 2);
+    say_flag("editor-carets", "merge", "one", one_selection(ed, 0, 6));
+    // Five lines pasted at five carets: one each.
+    ui_editor_set_selections(ed, starts, 5);
+    engine_clipboard_set(ui_system_engine(ui), "A\nB\nC\nD\nE");
+    key(ui, GLFW_KEY_V, SHORT);
+    say_flag("editor-carets", "paste", "split",
+             doc_is_str(doc, "Aone\nBtwo\nCthree\nDfour\nEfive"));
+    // Cmd+D: the word at the caret, then its next match, then the one after.
+    text_doc_set_text(doc, "two one two\ntwo", 15);
+    ui_editor_set_selections(ed, &(TextSelection){1, 1}, 1);
+    key(ui, GLFW_KEY_D, SHORT);
+    key(ui, GLFW_KEY_D, SHORT);
+    key(ui, GLFW_KEY_D, SHORT);
+    const size_t matches[] = {3, 11, 15};
+    say_flag("editor-carets", "next_match", "three", selections_are(ed, matches, 3));
+    // Esc: back to the primary alone, the last added.
+    key(ui, GLFW_KEY_ESCAPE, 0);
+    say_flag("editor-carets", "escape", "one", one_selection(ed, 12, 15));
+    // A caret a row below, twice, at the same column.
+    text_doc_set_text(doc, CARETS_TEXT, strlen(CARETS_TEXT));
+    ui_editor_set_selections(ed, &(TextSelection){1, 1}, 1);
+#ifdef __APPLE__
+    key(ui, GLFW_KEY_DOWN, GLFW_MOD_SUPER | GLFW_MOD_ALT);
+    key(ui, GLFW_KEY_DOWN, GLFW_MOD_SUPER | GLFW_MOD_ALT);
+#else
+    key(ui, GLFW_KEY_DOWN, GLFW_MOD_CONTROL | GLFW_MOD_ALT);
+    key(ui, GLFW_KEY_DOWN, GLFW_MOD_CONTROL | GLFW_MOD_ALT);
+#endif
+    const size_t column[] = {1, 5, 9};
+    say_flag("editor-carets", "column", "three", selections_are(ed, column, 3));
+    // Option+click adds a caret where it lands.
+    ui_editor_set_selections(ed, &(TextSelection){0, 0}, 1);
+    float x = 0.0f, y = 0.0f;
+    ui_editor_point_of(ed, 9, &x, &y);
+    ui_update(ui,
+              &(UIInput){.pointer_x = x + 1.0f,
+                         .pointer_y = y + 4.0f,
+                         .pointer_pressed = true,
+                         .pointer_down = true,
+                         .pointer_mods = GLFW_MOD_ALT,
+                         .time = (g_key_time += 1.0)},
+              1280.0f, 720.0f);
+    ui_update(ui,
+              &(UIInput){.pointer_x = x + 1.0f,
+                         .pointer_y = y + 4.0f,
+                         .pointer_released = true,
+                         .time = (g_key_time += 1.0)},
+              1280.0f, 720.0f);
+    const size_t clicked[] = {0, 9};
+    say_flag("editor-carets", "alt_click", "two", selections_are(ed, clicked, 2));
+    // Find: the next match of the query after the caret, selected.
+    ui_editor_set_selections(ed, &(TextSelection){0, 0}, 1);
+    ui_editor_find(ed, "f", 0);
+    const bool found = ui_editor_run(ed, "find-next") && one_selection(ed, 14, 15);
+    const bool again = ui_editor_run(ed, "find-next") && one_selection(ed, 19, 20);
+    say_flag("editor-carets", "find", "next", found && again);
+    return 0;
+}
+
+// ---- A vim-like mode, built through the public calls alone
+
+static UIEditorMode g_normal, g_insert;
+static int g_count, g_pending;
+
+static bool vim_normal(UIElement* el, const InputKeyEvent* k, void* user) {
+    (void)user;
+    if (!k->codepoint)
+        return false; // a key: the standard mode's, below
+    const uint32_t c = k->codepoint;
+    if (c >= '1' && c <= '9') {
+        g_count = g_count * 10 + (int)(c - '0');
+        return true;
+    }
+    const int n = g_count ? g_count : 1;
+    g_count = 0;
+    if (g_pending == 'd') {
+        g_pending = 0;
+        if (c == 'w')
+            ui_editor_apply(el, UI_OP_DELETE, UI_MOTION_WORD_END, n);
+        return true;
+    }
+    switch (c) {
+        case 'x':
+            ui_editor_apply(el, UI_OP_DELETE, UI_MOTION_CHAR_RIGHT, n);
+            break;
+        case 'i':
+            ui_editor_set_mode(el, &g_insert);
+            break;
+        case 'd':
+            g_pending = 'd';
+            break;
+        case 'j':
+            ui_editor_apply(el, UI_OP_MOVE, UI_MOTION_LINE_DOWN, n);
+            break;
+        default:
+            break;
+    }
+    return true; // a normal mode takes every character, and types none
+}
+
+static bool vim_insert(UIElement* el, const InputKeyEvent* k, void* user) {
+    (void)user;
+    if (k->key != GLFW_KEY_ESCAPE)
+        return false;
+    ui_editor_set_mode(el, &g_normal);
+    return true;
+}
+
+#define MODE_TEXT "hello world\nsecond line\nthird line"
+
+static int probe_editor_mode(UISystem* ui) {
+    g_normal = (UIEditorMode){.name = "normal",
+                              .parent = ui_editor_standard_mode(),
+                              .read_key = vim_normal,
+                              .block_caret = true};
+    g_insert = (UIEditorMode){.name = "insert",
+                              .parent = ui_editor_standard_mode(),
+                              .read_key = vim_insert,
+                              .types = true};
+    TextDoc* doc = create_text_doc(MODE_TEXT, strlen(MODE_TEXT));
+    UIElement* ed = editor_fixture(ui, doc, 600.0f, 300.0f);
+    editor_pass(ui);
+    ui_editor_set_mode(ed, &g_normal);
+    type(ui, "x");
+    say_flag("editor-mode", "x", "deletes", doc_is_str(doc, "ello world\nsecond line\nthird line"));
+    type(ui, "dw");
+    say_flag("editor-mode", "dw", "deletes", doc_is_str(doc, " world\nsecond line\nthird line"));
+    type(ui, "2j");
+    say_flag("editor-mode", "count", "moves", one_selection(ed, 19, 19));
+    type(ui, "iZ");
+    say_flag("editor-mode", "insert", "types",
+             doc_is_str(doc, " world\nsecond line\nZthird line") &&
+                 !strcmp(ui_editor_mode(ed)->name, "insert"));
+    key(ui, GLFW_KEY_RIGHT, 0); // the standard mode's key, under insert
+    say_flag("editor-mode", "inherits", "arrow", one_selection(ed, 21, 21));
+    key(ui, GLFW_KEY_ESCAPE, 0);
+    type(ui, "q");
+    say_flag("editor-mode", "escape", "normal",
+             !strcmp(ui_editor_mode(ed)->name, "normal") &&
+                 doc_is_str(doc, " world\nsecond line\nZthird line"));
+    return 0;
+}
+
+// ---- A host that keeps its own undo
+
+static int g_host_undos;
+
+static bool host_undo(UIElement* el, void* user) {
+    (void)el;
+    (void)user;
+    g_host_undos++;
+    return true;
+}
+
+static const UIEditorCommand HOST_UNDO = {"host-undo", "The host's own undo", host_undo, NULL};
+static const UIEditorBinding HOST_KEYS[] = {{GLFW_KEY_Z, INPUT_MOD_SHORTCUT, &HOST_UNDO}};
+
+static int probe_editor_host_undo(UISystem* ui) {
+    TextDoc* doc = create_text_doc("", 0);
+    doc->keep_undo = false;
+    UIElement* ed = editor_fixture(ui, doc, 600.0f, 300.0f);
+    editor_pass(ui);
+    const UIEditorMode host = {.name = "host",
+                               .parent = ui_editor_standard_mode(),
+                               .bindings = HOST_KEYS,
+                               .binding_count = 1,
+                               .types = true};
+    ui_editor_set_mode(ed, &host);
+    type(ui, "ab");
+    key(ui, GLFW_KEY_Z, SHORT);
+    say_flag("editor-host-undo", "host", "ran", g_host_undos == 1);
+    say_flag("editor-host-undo", "text", "kept", doc_is_str(doc, "ab"));
+    say_flag("editor-host-undo", "own", "refused", !ui_editor_run(ed, "undo"));
+    ui_editor_set_mode(ed, NULL);
+    return 0;
+}
+
 int run_ui_editor_probe(Game* game, UISystem* ui, Font* font, const char* which) {
     (void)game;
     (void)ui;
@@ -771,5 +1131,13 @@ int run_ui_editor_probe(Game* game, UISystem* ui, Font* font, const char* which)
         return probe_editor_hit(ui);
     if (!strcmp(which, "editor-anchor"))
         return probe_editor_anchor(ui);
+    if (!strcmp(which, "editor-keys"))
+        return probe_editor_keys(ui);
+    if (!strcmp(which, "editor-carets"))
+        return probe_editor_carets(ui);
+    if (!strcmp(which, "editor-mode"))
+        return probe_editor_mode(ui);
+    if (!strcmp(which, "editor-host-undo"))
+        return probe_editor_host_undo(ui);
     return -1;
 }

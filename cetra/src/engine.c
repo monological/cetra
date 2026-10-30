@@ -1901,6 +1901,13 @@ static int _script_key_code(const char* name, size_t n) {
         return GLFW_KEY_A + (name[0] - 'a');
     if (n == 1 && name[0] >= '0' && name[0] <= '9')
         return GLFW_KEY_0 + (name[0] - '0');
+    // f1 to f25.
+    if ((n == 2 || n == 3) && name[0] == 'f' && name[1] >= '1' && name[1] <= '9' &&
+        (n == 2 || (name[2] >= '0' && name[2] <= '9'))) {
+        const int k = n == 2 ? name[1] - '0' : (name[1] - '0') * 10 + (name[2] - '0');
+        if (k >= 1 && k <= 25)
+            return GLFW_KEY_F1 + k - 1;
+    }
     static const struct {
         const char* name;
         int key;

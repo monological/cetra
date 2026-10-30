@@ -25,7 +25,7 @@ void ui_editor_drag(const UISystem* ui, UIElement* el, UIRect content, float x, 
 // The wheel, in its units, + away.
 void ui_editor_wheel(const UISystem* ui, UIElement* el, UIRect content, float wheel);
 // One key while the editor holds the focus; true when it used it.
-bool ui_editor_key(UISystem* ui, UIElement* el, UIRect content, const InputKeyEvent* ev);
+bool ui_editor_key(const UISystem* ui, UIElement* el, UIRect content, const InputKeyEvent* ev);
 // Draws it; the seconds until its caret next changes, INFINITY when it will not.
 double ui_editor_draw(const UISystem* ui, UIElement* el, const UIStyle* s, UIRect content,
                       bool focused, double now, bool blink);
