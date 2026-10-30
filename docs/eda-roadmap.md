@@ -399,8 +399,9 @@ earlier draft of this entry named each item after a UIKit call, which read as a 
       its measures, and stopped measuring a FIXED axis, and that screen's two layouts went from
       0.117 ms to 0.014.
   12. **A kerning table: built**, at load, kerning being three quarters of a text walk. With the
-      glyphs under U+0100 found without the hash, and a walk asking `font_kern_glyphs` by the
-      glyphs it holds, a walk went from 1.09 ms to 0.15.
+      glyphs under U+0100 found without the hash, and every layout stepping one pen
+      (`font_pen_step`) that reads a pair from the glyphs it holds, a walk went from 1.09 ms to
+      0.14.
   13. **Re-breaking only the edited line: not built.** With the kerning table, a keystroke in a
       20 KB field takes 0.32 ms, under the 1 ms bar. The editor's own core decides it again at its
       sizes: at 1,000 KB a keystroke is still 14 ms.
