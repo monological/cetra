@@ -29448,10 +29448,12 @@ def run_canvas_gate(workdir):
                      edge through a pixel as straight, and its curls are not.
       canvas-text-width a kerned string's width from canvas_text_width against the font's own
                      advances and pair adjustments, summed by the app in double: within 1e-5.
-      canvas-kern-pairs every pair of the atlas's glyphs, font_kern_advance against stb_truetype's
-                     own pair adjustment at the font's base size: equal for every pair, and some
-                     pairs kerned. The font answers from a table it builds at load, since asking
-                     stb at every step was three quarters of a text walk.
+      canvas-kern-pairs every pair of the atlas's glyphs, font_kern_advance by codepoint and
+                     font_kern_glyphs by glyph against stb_truetype's own pair adjustment at the
+                     font's base size: equal for every pair both ways, and some pairs kerned.
+                     The font answers from a table it builds at load, since asking stb at every
+                     step was three quarters of a text walk, and the walks ask by the glyphs they
+                     hold.
       canvas-atlas-fields every glyph's texels in the font's atlas, read back from the GPU,
                      against stb_truetype's own distance field for that glyph rasterised by the
                      app with the font's stated parameters: equal to the byte, for every glyph,
@@ -29726,9 +29728,11 @@ def run_canvas_gate(workdir):
         ok, detail = False, "the app printed no pairs"
     else:
         count, kerned, differ = int(pairs[0]), int(pairs[2]), int(pairs[4])
-        ok = count > 0 and kerned > 0 and differ == 0
-        detail = (f"{count} pairs, {kerned} of them kerned, {differ} differing from stb_truetype's "
-                  f"own (want some kerned and none differing)")
+        by_glyph = int(pairs[6]) if len(pairs) > 6 else -1
+        ok = count > 0 and kerned > 0 and differ == 0 and by_glyph == 0
+        detail = (f"{count} pairs, {kerned} of them kerned; differing from stb_truetype's own, "
+                  f"{differ} by codepoint and {by_glyph} by glyph (want some kerned and none "
+                  f"differing)")
     print(f"  canvas-kern-pairs   {'PASS' if ok else 'FAIL'}  {detail}")
     note("canvas-kern-pairs", ok)
 

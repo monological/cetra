@@ -393,11 +393,13 @@ void ui_set_draw_program(UIDrawList* dl, ShaderProgram* program, UIRect rect, fl
  * against a width it does not have and a hit test lands beside the glyph the
  * player aimed at.
  */
-static float _advance_between(const Font* font, uint32_t prev, uint32_t cp, float scale,
-                              float tracking) {
+static float _advance_between(const Font* font, uint32_t prev, const GlyphInfo* prev_g, uint32_t cp,
+                              const GlyphInfo* g, float scale, float tracking) {
     if (prev == 0)
         return 0.0f;
-    return font_kern_advance(font, prev, cp) * scale + tracking;
+    const float kern =
+        prev_g && g ? font_kern_glyphs(font, prev_g, g) : font_kern_advance(font, prev, cp);
+    return kern * scale + tracking;
 }
 
 // A glyph's own advance, held by the atlas or not: one it lacks is spaced by the face's width for
@@ -438,10 +440,11 @@ static bool _text_ok(const UIText* t) {
  */
 typedef struct UIWalk {
     const UIText* t;
-    size_t pos;            // the byte of the next glyph
-    size_t run;            // the first run not wholly before `pos`
-    uint32_t prev;         // the glyph before, 0 at a line's start or past a change of face
-    const Font* prev_font; //
+    size_t pos;              // the byte of the next glyph
+    size_t run;              // the first run not wholly before `pos`
+    uint32_t prev;           // the glyph before, 0 at a line's start or past a change of face
+    const GlyphInfo* prev_g; // its glyph, NULL when the atlas lacks it
+    const Font* prev_font;   //
 } UIWalk;
 
 typedef struct UIGlyph {
@@ -478,9 +481,11 @@ static bool _walk_next(UIWalk* w, size_t to, UIGlyph* out) {
     out->scale = t->size / out->font->base_size;
     if (out->font != w->prev_font)
         w->prev = 0;
-    out->before = _advance_between(out->font, w->prev, out->cp, out->scale, t->tracking);
+    out->before =
+        _advance_between(out->font, w->prev, w->prev_g, out->cp, out->g, out->scale, t->tracking);
     out->advance = _glyph_advance(out->font, out->g, out->cp, out->scale);
     w->prev = out->cp;
+    w->prev_g = out->g;
     w->prev_font = out->font;
     return true;
 }

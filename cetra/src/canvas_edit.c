@@ -811,15 +811,22 @@ static double _text_layout(const Font* font, const char* string, TextGlyph* out,
     const double em = 1.0 / font->em_size;
     double pen = 0.0;
     uint32_t prev = 0;
+    const GlyphInfo* prev_g = NULL;
     size_t n = 0;
     for (const char* s = string; *s;) {
         const uint32_t cp = text_utf8_next(&s);
-        pen += font_kern_advance(font, prev, cp) * em;
-        const GlyphInfo* g = cp < CANVAS_GLYPH_CODEPOINTS ? font_get_glyph(font, cp) : NULL;
+        const GlyphInfo* held = font_get_glyph(font, cp); // NULL when the atlas lacks it
+        if (prev)
+            pen += (prev_g && held ? font_kern_glyphs(font, prev_g, held)
+                                   : font_kern_advance(font, prev, cp)) *
+                   em;
+        // Drawn only under the glyph table's size, which a glyph record indexes by codepoint.
+        const GlyphInfo* g = cp < CANVAS_GLYPH_CODEPOINTS ? held : NULL;
         if (out && g && g->x1 > g->x0 && g->y1 > g->y0)
             out[n++] = (TextGlyph){cp, g, pen};
-        pen += font_advance(font, cp) * em;
+        pen += (held ? held->advance_x : font_advance(font, cp)) * em;
         prev = cp;
+        prev_g = held;
     }
     if (count)
         *count = n;

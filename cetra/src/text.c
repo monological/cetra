@@ -841,8 +841,7 @@ float font_kern_advance(const Font* font, uint32_t prev_codepoint, uint32_t code
         const GlyphInfo* a = font_get_glyph(font, prev_codepoint);
         const GlyphInfo* b = font_get_glyph(font, codepoint);
         if (a && b)
-            return (float)font->kern_pairs[(size_t)a->pair_row * font->kern_side + b->pair_row] *
-                   font->kern_scale;
+            return font_kern_glyphs(font, a, b);
     }
     // A character the atlas does not hold, which a layout still spaces, or a face with no kerning.
     const stbtt_fontinfo* info = (const stbtt_fontinfo*)font->stb_font_info;
@@ -852,6 +851,16 @@ float font_kern_advance(const Font* font, uint32_t prev_codepoint, uint32_t code
     // Base-size pixels, matching how advance_x was baked, so one scale covers
     // both at draw time.
     return (float)kern * stbtt_ScaleForPixelHeight(info, font->base_size);
+}
+
+float font_kern_glyphs(const Font* font, const GlyphInfo* prev, const GlyphInfo* glyph) {
+    if (!font || !prev || !glyph)
+        return 0.0f;
+    // A face with no kerning keeps no table, and stb answers it at once.
+    if (!font->kern_pairs)
+        return font_kern_advance(font, prev->codepoint, glyph->codepoint);
+    return (float)font->kern_pairs[(size_t)prev->pair_row * font->kern_side + glyph->pair_row] *
+           font->kern_scale;
 }
 
 float text_measure_width(const Font* font, const char* text, float size) {

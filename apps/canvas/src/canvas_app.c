@@ -797,9 +797,10 @@ static void sheet_glyphs(SheetContext* ctx) {
         }
         printf("canvas glyphs width %lld stb %.1f\n", (long long)canvas_text_width(&kerned),
                units * per_unit);
-        // Every pair of the atlas's glyphs, the font's kerning against stb's own at its base size.
+        // Every pair of the atlas's glyphs, the font's kerning by codepoint and by glyph against
+        // stb's own at its base size.
         const float base = stbtt_ScaleForPixelHeight(info, ctx->font->base_size);
-        int pairs = 0, kerned_pairs = 0, differ = 0;
+        int pairs = 0, kerned_pairs = 0, differ = 0, glyphs_differ = 0;
         for (const GlyphInfo* a = ctx->font->glyph_cache; a; a = a->hh.next)
             for (const GlyphInfo* b = ctx->font->glyph_cache; b; b = b->hh.next) {
                 const int kern =
@@ -808,8 +809,10 @@ static void sheet_glyphs(SheetContext* ctx) {
                 kerned_pairs += kern != 0;
                 differ +=
                     font_kern_advance(ctx->font, a->codepoint, b->codepoint) != (float)kern * base;
+                glyphs_differ += font_kern_glyphs(ctx->font, a, b) != (float)kern * base;
             }
-        printf("canvas glyphs pairs %d kerned %d differ %d\n", pairs, kerned_pairs, differ);
+        printf("canvas glyphs pairs %d kerned %d differ %d glyphs %d\n", pairs, kerned_pairs,
+               differ, glyphs_differ);
         probe_atlas(ctx->font);
     }
 }
