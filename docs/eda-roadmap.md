@@ -55,13 +55,13 @@ These come from pcb's `ARCH.md` sections 8 and 9, and every item below has to re
 | 3 | Skipping the 3D scene pass when no 3D view is shown | Not started; takes a still 3D view drawn on demand, moved from item 2 | 8, the 3D view | |
 | 4 | Drawing the 3D scene into part of the window | Not started | 8 | |
 | 5 | Text input and scrolling panes in the UI | **Built**, spec 14.2, and its follow-ups, spec 14.3; composing text in an input method, glyphs past the atlas and the rest below are left for later | 6 (the command palette and the `/` jump); 9 (the chat) | 14.2, 14.3 |
-| 6 | The text editor widget | Not started; a second text core, sharing 14.2's keys, UTF-8 walk and measuring | 6 (the code view) | |
+| 6 | The text editor widget | **Started**, spec 14.4: a second text core, sharing 14.2's keys and 14.3's UTF-8 home | 6 (the code view) | 14.4 |
 | 7 | Rendering at any scale, in true units | **Built**, specs 13.57 and 13.58; the macro depth of field left | Already used by pcb's pictures | |
 | 8 | What the glTF import does not read, or reads otherwise | Not needed by pcb; three bugs worth fixing for cetra's own sake | None | |
 
 **Proposed order**: 1, 2, 5, 6, then 3 and 4 together when pcb starts its 3D view. 1, 2 and 5 are
-built, 5 with its follow-ups (14.3). 6 is next, and stands on several of them: the UTF-8 home, one
-way a label lays out and the font's kerning table. The canvas went first because
+built, 5 with its follow-ups (14.3). 6 is under way in spec 14.4, and stands on several of them:
+the UTF-8 home, typed input, the clipboard and the input script. The canvas went first because
 the schematic and the layout both stand on it, and it is the largest. Item 8's bugs and the macro
 depth of field can be taken whenever they fit.
 
@@ -437,15 +437,35 @@ want a piece table or an array of lines. What 14.2 wrote once for both:
   gives the editor its colouring's measure too;
 - typed input, the clipboard and the input script that drives them headless.
 
-**To decide in its spec:**
+**Decided in spec 14.4** (talked through 2026-10-30):
 
-- **The buffer.** vis keeps its text in a piece table; lite keeps an array of lines.
-- **Seams to the host**: undo handed to the host, colour spans taken from the host, and edits from
-  outside applied without losing the caret, the selection or the scroll.
-- **The mode and key-map seam**, so a vim mode is an addition.
-- **Speed**: a large file drawn within a frame, only the visible lines laid out.
-- **A monospaced font**, and how glyphs are cached for it.
-- **Headless**: the widget drawn and driven with no window, for tests.
+- **The buffer: an array of lines** (lite's), each pointing into the file as loaded until it is
+  edited, so a file opens with one copy and one scan, and typing touches one line. Not a piece
+  table: its wins are cheap undo and free snapshots, and undo is pcb's while pcb's reader copies
+  the bytes anyway. **The text and the editor are two objects**, as in lite and vis, so pcb's split
+  can show one file twice and pcb lands view edits in the text whether or not it is shown.
+- **Positions are bytes from the file's start**, as pcb's splices count them, a CR before an LF
+  belonging to the line ending and a byte-order mark counting.
+- **Seams to the host**:
+  - every user action is reported, with its changes, the selections before and after, and a
+    version;
+  - the host's edits land by byte range, or as a whole new text trimmed to the change, with carets,
+    selections and scroll moving through them;
+  - colours come two ways: a highlighter asked a line at a time (pcb's strings and comments never
+    cross a line), and the host's ranges given at the version they were read from and moved through
+    the typing since.
+- **Undo**: the text keeps its own, for an app with no timeline, and a host switches it off and
+  binds the keys to its own.
+- **Several carets from the start.**
+- **Keys: vis's motions, text objects and operators**, which a mode turns keys into; a key a mode
+  does not bind falls to its parent, and every command is listed by name and description for a
+  host's command table.
+- **Speed**: only the rows in view laid out; bars of 1 ms for a keystroke and a jump in a 10 MB
+  file.
+- **The font: JetBrains Mono**, drawn from bitmaps made at the exact pixel size rather than the UI's
+  distance fields, which go soft at code sizes.
+- **Wrapping from the start**; sideways scrolling is left for later.
+- **Headless** as the field is: the input script drives it, a probe reads it.
 
 ---
 
