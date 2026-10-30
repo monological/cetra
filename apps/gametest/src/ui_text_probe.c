@@ -5,6 +5,7 @@
  */
 
 #include "ui_text_probe.h"
+#include "ui_bench.h"
 
 #include <math.h>
 #include <stdint.h>
@@ -1428,6 +1429,8 @@ int run_ui_text_probe(Game* game, UISystem* ui, Font* font, const char* which) {
         return probe_match();
     if (!strcmp(which, "utf8"))
         return probe_utf8();
+    if (!strcmp(which, "bench"))
+        return run_ui_bench(game, ui, font);
     if (!strcmp(which, "max-size"))
         return probe_max_size(ui);
     if (!strcmp(which, "padding-none"))
