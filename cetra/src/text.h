@@ -192,6 +192,10 @@ float font_advance(const Font* font, uint32_t codepoint);
 // and looks like a font without kerning rather than a reader that cannot see
 // it. 0 when the face defines no pair, which is the correct no-op.
 float font_kern_advance(const Font* font, uint32_t prev_codepoint, uint32_t codepoint);
+// The same pair adjustment between two glyphs of `font`'s atlas, for a caller that already holds
+// them: a text walk looks each glyph up for its advance, and asking by codepoint looked both up
+// again. A character the atlas lacks has no glyph and goes through font_kern_advance.
+float font_kern_glyphs(const Font* font, const GlyphInfo* prev, const GlyphInfo* glyph);
 
 // TextMesh
 TextMesh* create_text_mesh(Font* font, const char* text, float font_size);
