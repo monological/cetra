@@ -27758,9 +27758,9 @@ def run_ui_gate(workdir):
                      builds nothing, a new width measures again without building
                      the rows again, and a row marked changed is built again.
       ui-rows-anchor a row scrolled to is shown at the pane's bottom though the rows
-                     above it measured twice their estimate; a row above the view
-                     measured taller as the wheel brings it in moves the first row in
-                     view by the wheel's step and nothing more.
+                     above it measured twice their estimate; the row above the view
+                     built again half as tall again leaves the first row in view
+                     where it was.
       ui-rows-focus  the focused row stays built and focused when the pane is
                      scrolled far from it, beside the rows in view.
       ui-field-type  typed characters make the field's text, the caret at its end,
@@ -28282,11 +28282,11 @@ def run_ui_gate(workdir):
     else:
         shown = p[("reveal", "shown")][0]
         bottoms = p.get(("reveal", "bottoms"), [0.0, -1.0])
-        moved, step = p[("first", "moved")][0], p[("step", "points")][0]
-        ok = shown == 1 and close(bottoms[0], bottoms[1]) and close(moved, step)
+        above, moved = p[("above", "height")][0], p[("first", "moved")][0]
+        ok = shown == 1 and close(bottoms[0], bottoms[1]) and close(above, 90.0) and close(moved, 0)
         detail = (f"row 100 shown {shown:.0f}, its bottom {bottoms[0]:.1f} (want the pane's "
-                  f"{bottoms[1]:.1f}); the first row in view moved {moved:.2f} (want the step "
-                  f"{step:.0f})")
+                  f"{bottoms[1]:.1f}); the row above the view built again {above:.0f} tall (want "
+                  f"90), the first row in view moved {moved:.2f} (want 0)")
     print(f"  ui-rows-anchor        {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-rows-anchor", ok)
 
