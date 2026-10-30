@@ -393,15 +393,16 @@ void ui_set_draw_program(UIDrawList* dl, ShaderProgram* program, UIRect rect, fl
  * against a width it does not have and a hit test lands beside the glyph the
  * player aimed at.
  */
-static float _advance_between(const Font* font, int prev, int cp, float scale, float tracking) {
-    if (prev <= 0)
+static float _advance_between(const Font* font, uint32_t prev, uint32_t cp, float scale,
+                              float tracking) {
+    if (prev == 0)
         return 0.0f;
     return font_kern_advance(font, prev, cp) * scale + tracking;
 }
 
 // A glyph's own advance, held by the atlas or not: one it lacks is spaced by the face's width for
 // it and drawn as a box (_missing_box), so the text it sits in measures what it draws.
-static float _glyph_advance(const Font* font, const GlyphInfo* g, int cp, float scale) {
+static float _glyph_advance(const Font* font, const GlyphInfo* g, uint32_t cp, float scale) {
     return (g ? g->advance_x : font_advance(font, cp)) * scale;
 }
 
@@ -439,13 +440,13 @@ typedef struct UIWalk {
     const UIText* t;
     size_t pos;            // the byte of the next glyph
     size_t run;            // the first run not wholly before `pos`
-    int prev;              // the glyph before, 0 at a line's start or past a change of face
+    uint32_t prev;         // the glyph before, 0 at a line's start or past a change of face
     const Font* prev_font; //
 } UIWalk;
 
 typedef struct UIGlyph {
     size_t at; // its first byte
-    int cp;
+    uint32_t cp;
     Font* font;
     const float* color;
     const GlyphInfo* g; // NULL when the atlas lacks it
@@ -467,10 +468,10 @@ static bool _walk_next(UIWalk* w, size_t to, UIGlyph* out) {
         w->run++;
     const UITextRun* r =
         (w->run < t->run_count && t->runs[w->run].start <= w->pos) ? &t->runs[w->run] : NULL;
-    const unsigned char* p = (const unsigned char*)t->text + w->pos;
+    const char* p = t->text + w->pos;
     out->at = w->pos;
     out->cp = text_utf8_next(&p);
-    w->pos = (size_t)((const char*)p - t->text);
+    w->pos = (size_t)(p - t->text);
     out->font = (r && r->font && r->font->base_size > 0.0f) ? r->font : t->font;
     out->color = (r && r->color[3] > 0.0f) ? r->color : t->color;
     out->g = font_get_glyph(out->font, out->cp);

@@ -1774,20 +1774,17 @@ static int hit_order(const void* a, const void* b) {
 
 // The runs lighting what the field matched in `name`, one a matched character; how many.
 static size_t palette_lit(const char* name, UITextRun* lit) {
-    const char* query = ui_field_text(g_pal_field);
-    size_t at[FUZZY_QUERY_MAX];
-    size_t n = 0;
-    if (!query[0] || fuzzy_match(query, name, at, FUZZY_QUERY_MAX) < 0)
+    FuzzyPositions matched;
+    if (fuzzy_match(ui_field_text(g_pal_field), name, &matched) < 0)
         return 0;
-    for (const unsigned char* p = (const unsigned char*)query; *p && n < FUZZY_QUERY_MAX; n++) {
-        text_utf8_next(&p);
-        const unsigned char* end = (const unsigned char*)name + at[n];
+    for (size_t n = 0; n < matched.count; n++) {
+        const char* end = name + matched.at[n];
         text_utf8_next(&end);
-        lit[n] = (UITextRun){.start = at[n],
-                             .length = (size_t)(end - ((const unsigned char*)name + at[n])),
+        lit[n] = (UITextRun){.start = matched.at[n],
+                             .length = (size_t)(end - (name + matched.at[n])),
                              .color = {1.0f, 0.78f, 0.30f, 1.0f}};
     }
-    return n;
+    return matched.count;
 }
 
 static void on_palette_row(UIElement* el, void* user);
@@ -1826,7 +1823,7 @@ static void palette_filter(void) {
     const int total = g_pal_jump ? JUMP_NAMES : COMMAND_COUNT;
     int found = 0;
     for (int i = 0; i < total; i++) {
-        const int score = fuzzy_match(query, pal_name(i), NULL, 0);
+        const int score = fuzzy_match(query, pal_name(i), NULL);
         if (score >= 0)
             g_pal_hits[found++] = (Hit){i, score};
     }

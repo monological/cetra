@@ -4,6 +4,8 @@
 #include <GL/glew.h>
 #include <cglm/cglm.h>
 #include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
 #include "ext/uthash.h"
 
 // Forward declarations
@@ -11,7 +13,7 @@ struct ShaderProgram;
 
 // Glyph information for a single character
 typedef struct GlyphInfo {
-    int codepoint;
+    uint32_t codepoint;
     float advance_x;
     float left_bearing;
 
@@ -147,15 +149,33 @@ Font* get_font(FontPool* pool, const char* name);
 void font_retain(Font* font);
 void font_release(Font* font);
 
-// The next codepoint of a UTF-8 string, stepping past it; a byte that starts no whole sequence
-// is one U+FFFD. Stops at a NUL inside a sequence, so a NUL-terminated string is never overread.
-int text_utf8_next(const unsigned char** s);
+/*
+ * UTF-8, the one place its rules are (spec 14.3). A codepoint is a uint32_t throughout cetra.
+ *
+ * What is no character is refused both ways: a surrogate half, or a value past U+10FFFF. Decoding,
+ * so are an overlong form, a lead byte that can only start one (C0, C1, F5 to FF) and a sequence
+ * cut short: each such byte is one U+FFFD, a byte at a time, so malformed text is stepped over and
+ * never swallows the character after it.
+ */
+// The codepoint starting at *s, *s moved past it. Stops at a NUL inside a sequence, so a
+// NUL-terminated string is never overread.
+uint32_t text_utf8_next(const char** s);
+// The codepoint ending at *s, *s moved back to its start: next's mirror, so from where next left
+// it, it returns what next did and lands where next began, malformed bytes too. 0 at `start`,
+// which *s never moves before.
+uint32_t text_utf8_prev(const char** s, const char* start);
+// `codepoint`'s bytes into `out`: their count, 1 to 4, or 0 for a value that is no character,
+// with `out` untouched.
+size_t text_utf8_encode(uint32_t codepoint, char out[4]);
+// Whether `byte` continues a character: a character starts at byte i of a string exactly when this
+// is false.
+bool text_utf8_is_continuation(char byte);
 
 // Glyph access. NULL for a codepoint the atlas does not hold.
-GlyphInfo* font_get_glyph(const Font* font, int codepoint);
+GlyphInfo* font_get_glyph(const Font* font, uint32_t codepoint);
 // A codepoint's advance in base-size pixels, whether the atlas holds it or not:
 // what a layout spaces a character it cannot draw by.
-float font_advance(const Font* font, int codepoint);
+float font_advance(const Font* font, uint32_t codepoint);
 // The pair adjustment between two codepoints, in pixels AT THE FONT'S BASE
 // SIZE -- the same units as GlyphInfo.advance_x, so a caller applies one scale
 // to both and the two cannot drift apart.
@@ -164,7 +184,7 @@ float font_advance(const Font* font, int codepoint);
 // ships its kerning; a reader that knows only `kern` returns 0 for most of them
 // and looks like a font without kerning rather than a reader that cannot see
 // it. 0 when the face defines no pair, which is the correct no-op.
-float font_kern_advance(const Font* font, int prev_codepoint, int codepoint);
+float font_kern_advance(const Font* font, uint32_t prev_codepoint, uint32_t codepoint);
 
 // TextMesh
 TextMesh* create_text_mesh(Font* font, const char* text, float font_size);

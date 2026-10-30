@@ -27808,7 +27808,14 @@ def run_ui_gate(workdir):
                      inside words ("rn": "route net" over "print"); case does not
                      matter; the best placement is found, not the first ("st" in
                      "fast stop" at 5 and 6); positions are byte offsets in a UTF-8
-                     name; an empty query matches at 0.
+                     name; an empty query matches at 0; the positions say how many
+                     they are, none for no match or an empty query.
+      ui-utf8        text.c's UTF-8: every length's first and last codepoint
+                     encodes and decodes back; surrogates and values past
+                     U+10FFFF encode to nothing; overlong forms, a surrogate, bad
+                     lead bytes and a cut sequence decode to one U+FFFD a byte; prev
+                     mirrors next at every step over good and bad bytes, and does
+                     not move at the start.
       ui-type-palette apps/canvas --palette driven by a script: mod+K opens it and
                      "zo" filters the commands to Zoom in and Zoom out, the first
                      lit at its first two bytes, with the text in the field (end to
@@ -28474,13 +28481,31 @@ def run_ui_gate(workdir):
     else:
         s = {k: p[(k, "score")][0] for k in ("none", "starts", "inside", "upper", "best", "utf8",
                                              "empty")}
+        counts = [p.get((k, "count"), [None])[0] for k in ("none", "starts", "utf8", "empty")]
         ok = (s["none"] == -1 and s["starts"] > s["inside"] > 0 and s["upper"] == s["starts"]
               and p[("best", "at")] == [5, 6] and p[("utf8", "at")] == [3, 4, 5]
-              and p[("starts", "at")] == [0, 6] and s["empty"] == 0)
+              and p[("starts", "at")] == [0, 6] and s["empty"] == 0 and counts == [0, 2, 3, 0])
         detail = (f"scores {s}; 'st' in 'fast stop' at {p.get(('best', 'at'))} (want 5, 6), 'sum' "
-                  f"in 'résumé' at {p.get(('utf8', 'at'))} (want bytes 3, 4, 5)")
+                  f"in 'résumé' at {p.get(('utf8', 'at'))} (want bytes 3, 4, 5); positions "
+                  f"written for no match, 'rn', 'sum' and '' {counts} (want 0, 2, 3, 0)")
     print(f"  ui-match              {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-match", ok)
+
+    p = _ui_probe("utf8")
+    if not p:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        want = {("roundtrip", "ok"): 7, ("encode", "refused"): 3, ("mirror", "steps"): 15,
+                ("mirror", "off"): 0, ("start", "returns"): 0, ("start", "moved"): 0}
+        wrong = _probe_wrong(p, want)
+        replaced, length = p[("malformed", "fffd")][0], p[("malformed", "bytes")][0]
+        ok = not wrong and replaced == length
+        detail = (f"7 edge codepoints round-trip, 3 non-characters refused, {replaced:.0f} U+FFFD "
+                  f"from {length:.0f} malformed bytes (want one a byte), prev mirrors next at every "
+                  f"step" if ok else f"wrong: {wrong}; {replaced:.0f} U+FFFD from {length:.0f} "
+                  f"malformed bytes (want one a byte)")
+    print(f"  ui-utf8               {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-utf8", ok)
 
     # ---- the palette, end to end
     script = os.path.join(workdir, "ui_palette.script")

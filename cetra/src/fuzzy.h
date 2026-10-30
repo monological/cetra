@@ -10,8 +10,8 @@
  * The best-scoring placement, not the first: a small dynamic program over the query's and the
  * name's characters, after fzf's second algorithm. A match scores more at a word's start -- the
  * name's start, after a space, `_`, `-`, `/`, `.`, `:` or `[`, or where lower case turns upper --
- * and for each character run on from the one before, and a gap costs a little. So `rtnt` takes
- * "route net" on its word starts rather than the first r, t, n and t it meets.
+ * and for each character run on from the one before, and a gap costs a little. So `st` takes
+ * "fast stop" at its second word's start rather than at the first s and t it meets.
  *
  * ASCII letters match either case; any other character matches only itself. No GL, no allocation.
  */
@@ -22,10 +22,15 @@
 #define FUZZY_QUERY_MAX 32
 #define FUZZY_NAME_MAX  256
 
+// Where a match placed the query: one byte offset into the name a codepoint of the query, in order.
+typedef struct FuzzyPositions {
+    size_t count; // the query's codepoints; 0 for no match or an empty query
+    size_t at[FUZZY_QUERY_MAX];
+} FuzzyPositions;
+
 // The score of `query` against `name`, higher being better, or -1 when the name does not hold the
-// query's characters in order. An empty query matches every name at 0. When `positions` is given
-// and holds the query's length in codepoints (`cap`), it receives the byte offset in `name` of each
-// matched character, in order.
-int fuzzy_match(const char* query, const char* name, size_t* positions, size_t cap);
+// query's characters in order. An empty query matches every name at 0. `positions` may be NULL for
+// the score alone.
+int fuzzy_match(const char* query, const char* name, FuzzyPositions* positions);
 
 #endif // _FUZZY_H_

@@ -597,11 +597,6 @@ void ui_set_text(UIElement* el, const char* text) {
     _drop_lines(el);
 }
 
-// Whether byte `i` of `s` starts a codepoint or is the end: never inside a UTF-8 sequence.
-static bool _codepoint_boundary(const char* s, size_t i) {
-    return ((unsigned char)s[i] & 0xc0) != 0x80;
-}
-
 bool ui_set_text_runs(UIElement* el, const UITextRun* runs, size_t count) {
     if (!el) {
         log_error("ui_set_text_runs: NULL element");
@@ -630,8 +625,8 @@ bool ui_set_text_runs(UIElement* el, const UITextRun* runs, size_t count) {
                 log_error("ui_set_text_runs: run %zu reaches past the text's %zu bytes", i, len);
                 return false;
             }
-            if (!_codepoint_boundary(text, r->start) ||
-                !_codepoint_boundary(text, r->start + r->length)) {
+            if (text_utf8_is_continuation(text[r->start]) ||
+                text_utf8_is_continuation(text[r->start + r->length])) {
                 log_error("ui_set_text_runs: run %zu starts or ends inside a UTF-8 sequence", i);
                 return false;
             }

@@ -800,7 +800,7 @@ void canvas_edit_polygon(CanvasEdit* edit, const CanvasPolygon* polygon) {
  */
 
 typedef struct TextGlyph {
-    int codepoint;
+    uint32_t codepoint;
     const GlyphInfo* glyph;
     double pen; // ems from the string's start, along its baseline
 } TextGlyph;
@@ -810,10 +810,10 @@ typedef struct TextGlyph {
 static double _text_layout(const Font* font, const char* string, TextGlyph* out, size_t* count) {
     const double em = 1.0 / font->em_size;
     double pen = 0.0;
-    int prev = 0;
+    uint32_t prev = 0;
     size_t n = 0;
-    for (const unsigned char* s = (const unsigned char*)string; *s;) {
-        const int cp = text_utf8_next(&s);
+    for (const char* s = string; *s;) {
+        const uint32_t cp = text_utf8_next(&s);
         pen += font_kern_advance(font, prev, cp) * em;
         const GlyphInfo* g = cp < CANVAS_GLYPH_CODEPOINTS ? font_get_glyph(font, cp) : NULL;
         if (out && g && g->x1 > g->x0 && g->y1 > g->y0)

@@ -122,21 +122,22 @@ static size_t _row_of(const UIField* f, int at) {
     return lo;
 }
 
+// The byte past the character at `i`, and the start of the one before it: stb_textedit's steps,
+// which run past the ends, as its own (ImGui's) do.
 static int _next_index(const UIField* f, int i) {
     if (i >= f->len)
         return f->len + 1;
-    const unsigned char* p = (const unsigned char*)f->buf + i;
+    const char* p = f->buf + i;
     text_utf8_next(&p);
-    return (int)((const char*)p - f->buf);
+    return (int)(p - f->buf);
 }
 
 static int _prev_index(const UIField* f, int i) {
     if (i <= 0)
         return -1;
-    int j = i - 1;
-    while (j > 0 && ((unsigned char)f->buf[j] & 0xc0) == 0x80)
-        j--;
-    return j;
+    const char* p = f->buf + i;
+    text_utf8_prev(&p, f->buf);
+    return (int)(p - f->buf);
 }
 
 // What a byte starts, for word moves: 0 blank, 1 punctuation, 2 a word's (letters, digits, `_`
@@ -542,26 +543,13 @@ static void _merge_typing(UIField* f) {
 
 // One character typed.
 static void _type(UIField* f, uint32_t cp) {
-    if (cp < 0x20 || cp == 0x7f || cp > 0x10ffff || (f->flags & UI_FIELD_READ_ONLY))
+    if (cp < 0x20 || cp == 0x7f || (f->flags & UI_FIELD_READ_ONLY))
         return;
     char utf8[4];
-    int n = 0;
-    if (cp < 0x80) {
-        utf8[n++] = (char)cp;
-    } else if (cp < 0x800) {
-        utf8[n++] = (char)(0xc0 | (cp >> 6));
-        utf8[n++] = (char)(0x80 | (cp & 0x3f));
-    } else if (cp < 0x10000) {
-        utf8[n++] = (char)(0xe0 | (cp >> 12));
-        utf8[n++] = (char)(0x80 | ((cp >> 6) & 0x3f));
-        utf8[n++] = (char)(0x80 | (cp & 0x3f));
-    } else {
-        utf8[n++] = (char)(0xf0 | (cp >> 18));
-        utf8[n++] = (char)(0x80 | ((cp >> 12) & 0x3f));
-        utf8[n++] = (char)(0x80 | ((cp >> 6) & 0x3f));
-        utf8[n++] = (char)(0x80 | (cp & 0x3f));
-    }
-    stb_textedit_text(f, &f->state, utf8, n);
+    const size_t n = text_utf8_encode(cp, utf8);
+    if (n == 0)
+        return; // no character: a surrogate half, or past the last plane
+    stb_textedit_text(f, &f->state, utf8, (int)n);
     _merge_typing(f);
 }
 

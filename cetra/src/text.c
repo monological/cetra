@@ -19,7 +19,7 @@
 // The codepoints an atlas holds, as inclusive ranges: printable ASCII, Latin-1, Greek, and the
 // symbols technical prose reaches for. One the face lacks is left out, and draws as the UI's
 // missing-glyph box rather than as the face's own .notdef.
-static const int ATLAS_RANGES[][2] = {
+static const uint32_t ATLAS_RANGES[][2] = {
     {0x20, 0x7e},     // printable ASCII
     {0xa0, 0xff},     // Latin-1
     {0x391, 0x3a9},   // Greek capitals
@@ -41,44 +41,111 @@ static const int ATLAS_RANGES[][2] = {
 #define ATLAS_CODEPOINTS_MAX 512 // over the ranges' total, which _atlas_codepoints holds it to
 
 // The ranges' codepoints the face holds, in order.
-static size_t _atlas_codepoints(const stbtt_fontinfo* info, int out[ATLAS_CODEPOINTS_MAX]) {
+static size_t _atlas_codepoints(const stbtt_fontinfo* info, uint32_t out[ATLAS_CODEPOINTS_MAX]) {
     size_t n = 0;
     for (size_t r = 0; r < sizeof(ATLAS_RANGES) / sizeof(ATLAS_RANGES[0]); r++)
-        for (int cp = ATLAS_RANGES[r][0]; cp <= ATLAS_RANGES[r][1] && n < ATLAS_CODEPOINTS_MAX;
+        for (uint32_t cp = ATLAS_RANGES[r][0]; cp <= ATLAS_RANGES[r][1] && n < ATLAS_CODEPOINTS_MAX;
              cp++)
-            if (stbtt_FindGlyphIndex(info, cp) != 0)
+            if (stbtt_FindGlyphIndex(info, (int)cp) != 0)
                 out[n++] = cp;
     return n;
 }
 
-int text_utf8_next(const unsigned char** s) {
-    const unsigned char* p = *s;
-    int cp, extra;
+// --- UTF-8 ---
+
+// What no character is: a surrogate half, or past the last plane.
+static bool _not_a_character(uint32_t cp) {
+    return cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff);
+}
+
+uint32_t text_utf8_next(const char** s) {
+    const unsigned char* p = (const unsigned char*)*s;
+    // A lead byte's payload, how many continuations follow it, and the least value a sequence that
+    // long may hold: anything under it is an overlong form of a shorter one. C0 and C1 can only
+    // start an overlong two-byte form, and F5 to FF only a value past U+10FFFF.
+    uint32_t cp, least;
+    int extra;
     if (p[0] < 0x80) {
-        *s = p + 1;
+        *s += 1;
         return p[0];
-    }
-    if ((p[0] & 0xe0) == 0xc0)
-        cp = p[0] & 0x1f, extra = 1;
-    else if ((p[0] & 0xf0) == 0xe0)
-        cp = p[0] & 0x0f, extra = 2;
-    else if ((p[0] & 0xf8) == 0xf0)
-        cp = p[0] & 0x07, extra = 3;
-    else
-        extra = -1, cp = 0;
-    for (int i = 1; i <= extra; i++) {
-        if ((p[i] & 0xc0) != 0x80) {
-            extra = -1;
-            break;
-        }
-        cp = cp << 6 | (p[i] & 0x3f);
-    }
-    if (extra < 0) {
-        *s = p + 1;
+    } else if (p[0] >= 0xc2 && p[0] <= 0xdf) {
+        cp = p[0] & 0x1fu, extra = 1, least = 0x80;
+    } else if (p[0] >= 0xe0 && p[0] <= 0xef) {
+        cp = p[0] & 0x0fu, extra = 2, least = 0x800;
+    } else if (p[0] >= 0xf0 && p[0] <= 0xf4) {
+        cp = p[0] & 0x07u, extra = 3, least = 0x10000;
+    } else {
+        *s += 1;
         return 0xfffd;
     }
-    *s = p + 1 + extra;
+    for (int i = 1; i <= extra; i++) {
+        if (!text_utf8_is_continuation((char)p[i])) { // a NUL ends it here too
+            *s += 1;
+            return 0xfffd;
+        }
+        cp = cp << 6 | (p[i] & 0x3fu);
+    }
+    if (cp < least || _not_a_character(cp)) {
+        *s += 1;
+        return 0xfffd;
+    }
+    *s += 1 + extra;
     return cp;
+}
+
+/*
+ * The character ending at *s starts at the nearest byte before it that is no continuation, within a
+ * sequence's four bytes, when a whole sequence from there ends exactly at *s. Otherwise the byte
+ * before *s stood alone going forward, a U+FFFD, and so it does going back. That holds because a
+ * byte that is no continuation is always where `next` stops: no sequence carries one inside it.
+ */
+uint32_t text_utf8_prev(const char** s, const char* start) {
+    const char* end = *s;
+    if (end <= start)
+        return 0;
+    for (const char* q = end - 1; q >= start && end - q <= 4; q--) {
+        if (text_utf8_is_continuation(*q))
+            continue;
+        const char* p = q;
+        const uint32_t cp = text_utf8_next(&p);
+        if (p == end) {
+            *s = q;
+            return cp;
+        }
+        break;
+    }
+    *s = end - 1;
+    const char* p = *s;
+    return text_utf8_next(&p);
+}
+
+size_t text_utf8_encode(uint32_t codepoint, char out[4]) {
+    if (_not_a_character(codepoint))
+        return 0;
+    if (codepoint < 0x80) {
+        out[0] = (char)codepoint;
+        return 1;
+    }
+    if (codepoint < 0x800) {
+        out[0] = (char)(0xc0 | codepoint >> 6);
+        out[1] = (char)(0x80 | (codepoint & 0x3f));
+        return 2;
+    }
+    if (codepoint < 0x10000) {
+        out[0] = (char)(0xe0 | codepoint >> 12);
+        out[1] = (char)(0x80 | ((codepoint >> 6) & 0x3f));
+        out[2] = (char)(0x80 | (codepoint & 0x3f));
+        return 3;
+    }
+    out[0] = (char)(0xf0 | codepoint >> 18);
+    out[1] = (char)(0x80 | ((codepoint >> 12) & 0x3f));
+    out[2] = (char)(0x80 | ((codepoint >> 6) & 0x3f));
+    out[3] = (char)(0x80 | (codepoint & 0x3f));
+    return 4;
+}
+
+bool text_utf8_is_continuation(char byte) {
+    return ((unsigned char)byte & 0xc0) == 0x80;
 }
 
 // --- FontPool ---
@@ -168,10 +235,10 @@ static void generate_glyph_atlas(Font* font) {
     int cursor_y = padding;
     int row_height = 0;
 
-    int codepoints[ATLAS_CODEPOINTS_MAX];
+    uint32_t codepoints[ATLAS_CODEPOINTS_MAX];
     const size_t codepoint_count = _atlas_codepoints(info, codepoints);
     for (size_t i = 0; i < codepoint_count; i++) {
-        int codepoint = codepoints[i];
+        const int codepoint = (int)codepoints[i]; // stb_truetype's own type, inside this loop only
 
         // Get glyph metrics
         int advance, left_bearing;
@@ -268,7 +335,7 @@ static void generate_glyph_atlas(Font* font) {
         // the old size sampled the wrong quarter of the new one.
         GlyphInfo* glyph = calloc(1, sizeof(GlyphInfo));
         if (glyph) {
-            glyph->codepoint = codepoint;
+            glyph->codepoint = codepoints[i];
             glyph->advance_x = advance * scale;
             glyph->left_bearing = left_bearing * scale;
             glyph->x0 = (float)x0;
@@ -281,7 +348,7 @@ static void generate_glyph_atlas(Font* font) {
             glyph->u1 = (float)(cursor_x + glyph_w);
             glyph->v1 = (float)(cursor_y + glyph_h);
 
-            HASH_ADD_INT(font->glyph_cache, codepoint, glyph);
+            HASH_ADD(hh, font->glyph_cache, codepoint, sizeof(uint32_t), glyph);
         }
 
         cursor_x += glyph_w + padding;
@@ -404,16 +471,16 @@ void font_release(Font* font) {
         font->ref_count--;
 }
 
-GlyphInfo* font_get_glyph(const Font* font, int codepoint) {
+GlyphInfo* font_get_glyph(const Font* font, uint32_t codepoint) {
     if (!font)
         return NULL;
 
     GlyphInfo* glyph;
-    HASH_FIND_INT(font->glyph_cache, &codepoint, glyph);
+    HASH_FIND(hh, font->glyph_cache, &codepoint, sizeof(uint32_t), glyph);
     return glyph;
 }
 
-float font_advance(const Font* font, int codepoint) {
+float font_advance(const Font* font, uint32_t codepoint) {
     const GlyphInfo* glyph = font_get_glyph(font, codepoint);
     if (glyph)
         return glyph->advance_x;
@@ -421,7 +488,7 @@ float font_advance(const Font* font, int codepoint) {
         return 0.0f;
     const stbtt_fontinfo* info = (const stbtt_fontinfo*)font->stb_font_info;
     int advance, left_bearing;
-    stbtt_GetCodepointHMetrics(info, codepoint, &advance, &left_bearing);
+    stbtt_GetCodepointHMetrics(info, (int)codepoint, &advance, &left_bearing);
     return (float)advance * stbtt_ScaleForPixelHeight(info, font->base_size);
 }
 
@@ -576,7 +643,7 @@ void text_mesh_rebuild(TextMesh* mesh) {
     size_t char_idx = 0;
 
     for (size_t i = 0; i < char_count; i++) {
-        int codepoint = (unsigned char)mesh->text[i];
+        const uint32_t codepoint = (unsigned char)mesh->text[i];
 
         // Handle newlines (Y-down: increase y to go down)
         if (codepoint == '\n') {
@@ -688,11 +755,11 @@ void text_mesh_upload(TextMesh* mesh) {
 
 // --- Text Measurement ---
 
-float font_kern_advance(const Font* font, int prev_codepoint, int codepoint) {
-    if (!font || !font->stb_font_info || prev_codepoint <= 0 || font->base_size <= 0.0f)
+float font_kern_advance(const Font* font, uint32_t prev_codepoint, uint32_t codepoint) {
+    if (!font || !font->stb_font_info || prev_codepoint == 0 || font->base_size <= 0.0f)
         return 0.0f;
     const stbtt_fontinfo* info = (const stbtt_fontinfo*)font->stb_font_info;
-    const int kern = stbtt_GetCodepointKernAdvance(info, prev_codepoint, codepoint);
+    const int kern = stbtt_GetCodepointKernAdvance(info, (int)prev_codepoint, (int)codepoint);
     if (kern == 0)
         return 0.0f;
     // Base-size pixels, matching how advance_x was baked, so one scale covers
@@ -748,7 +815,7 @@ void text_measure_bounds(const Font* font, const char* text, float size, float* 
     bool has_glyphs = false;
 
     for (const char* p = text; *p; p++) {
-        int codepoint = (unsigned char)*p;
+        const uint32_t codepoint = (unsigned char)*p;
 
         if (codepoint == '\n') {
             cursor_x = 0.0f;
