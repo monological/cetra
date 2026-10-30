@@ -793,10 +793,9 @@ void canvas_edit_polygon(CanvasEdit* edit, const CanvasPolygon* polygon) {
  * Text. A string is a record a glyph, each placed by its pen from the string's
  * anchor in ems, with the em and the angle on the record: the vertex stage
  * scales and turns them, so a string at any size or turn is the same layout.
- * The advances and the kerning are the font's, the kerning applied before each
- * glyph's advance as the UI applies it, and a character the atlas does not hold
- * advances by its own width, as the UI's does, so a string's width does not
- * depend on what the atlas was built with.
+ * The advances and the kerning are the font's pen step, the UI's walk's too, so
+ * a character the atlas does not hold advances by its own width and a string's
+ * width does not depend on what the atlas was built with.
  */
 
 typedef struct TextGlyph {
@@ -810,23 +809,17 @@ typedef struct TextGlyph {
 static double _text_layout(const Font* font, const char* string, TextGlyph* out, size_t* count) {
     const double em = 1.0 / font->em_size;
     double pen = 0.0;
-    uint32_t prev = 0;
-    const GlyphInfo* prev_g = NULL;
+    FontPen walk = {0};
     size_t n = 0;
     for (const char* s = string; *s;) {
         const uint32_t cp = text_utf8_next(&s);
-        const GlyphInfo* held = font_get_glyph(font, cp); // NULL when the atlas lacks it
-        if (prev)
-            pen += (prev_g && held ? font_kern_glyphs(font, prev_g, held)
-                                   : font_kern_advance(font, prev, cp)) *
-                   em;
+        const FontStep step = font_pen_step(&walk, font, cp);
+        pen += step.kern * em;
         // Drawn only under the glyph table's size, which a glyph record indexes by codepoint.
-        const GlyphInfo* g = cp < CANVAS_GLYPH_CODEPOINTS ? held : NULL;
+        const GlyphInfo* g = cp < CANVAS_GLYPH_CODEPOINTS ? step.glyph : NULL;
         if (out && g && g->x1 > g->x0 && g->y1 > g->y0)
             out[n++] = (TextGlyph){cp, g, pen};
-        pen += (held ? held->advance_x : font_advance(font, cp)) * em;
-        prev = cp;
-        prev_g = held;
+        pen += step.advance * em;
     }
     if (count)
         *count = n;

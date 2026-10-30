@@ -61,6 +61,11 @@ float ui_text_baseline(const UIText* t, float top);
  * alone -- and its measures. Kept while what they were taken for is unchanged: a long text is a
  * walk of all of it, and the layout runs several times a frame. Zeroed, they hold nothing.
  */
+typedef struct UIMeasure {
+    float value;
+    bool taken; // `value` holds the measure; zeroed, it does not
+} UIMeasure;
+
 typedef struct UILines {
     size_t* starts; // the byte each line starts at
     size_t count, capacity;
@@ -68,8 +73,7 @@ typedef struct UILines {
     // The face, size and tracking the lines and the measures are for. A text in another drops both.
     const Font* font;
     float size, tracking;
-    float widest_line, longest_word; // each kept while its flag says it was taken
-    bool has_widest_line, has_longest_word;
+    UIMeasure measures[2]; // the widest line, and the longest word: by `wrap`
 } UILines;
 
 // Sets `*width` to the text's widest line, or its longest word when `wrap`: what an element is

@@ -27780,6 +27780,15 @@ def run_ui_gate(workdir):
                      alignment; a fixed element ignores its most.
       ui-padding-none a negative padding and spacing are none, a zero one the
                      style's and the theme's, and the padding goes per side.
+      ui-control-lines a button and a slider whose text is two lines draw it through
+                     the lines their height was measured from: the button's two
+                     rows sit on its centre exactly as one row does, and the
+                     slider's second row lies above its track. Centred as one
+                     line, a two-line button's text sat half a line low and a
+                     slider's track crossed its second line.
+      ui-text-mesh   a text mesh's per-character colour counts characters, not
+                     bytes: "héllo" is 5, its é is character 1 and only that quad
+                     takes the colour.
       ui-field-type  typed characters make the field's text, the caret at its end,
                      and on_change fires once for a pass that changed it and not
                      for one that did not.
@@ -28398,6 +28407,35 @@ def run_ui_gate(workdir):
                   f"either side, {sides[2]:.0f} x {sides[3]:.0f} (want 32 x 20)")
     print(f"  ui-padding-none       {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-padding-none", ok)
+
+    p = _ui_probe("control-lines")
+    counts = p.get(("rows", "count")) if p else None
+    if not counts:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        one = p.get(("one", "offset"), [None])[0]
+        two = p.get(("two", "offset"), [None])[0]
+        clear = p.get(("slider", "clear"), [None])[0]
+        ok = (counts == [1, 2, 2] and one is not None and two is not None
+              and abs(two - one) <= 0.01 and clear is not None and clear > 0)
+        detail = (f"rows {counts} (want 1, 2, 2); a row's centre off the button's centre {one} "
+                  f"for one line and {two} for two lines' middle (want equal); the slider's "
+                  f"track {clear} points below its second row (want over 0)")
+    print(f"  ui-control-lines      {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-control-lines", ok)
+
+    p = _ui_probe("text-mesh")
+    if not p:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        greens = [p.get((f"quad{q}", "green"), [None])[0] for q in range(5)]
+        want = {("chars", "count"): 5, ("quads", "count"): 5}
+        wrong = _probe_wrong(p, want)
+        ok = not wrong and greens == [1, 0, 1, 1, 1]
+        detail = (f"5 characters and 5 quads, only the é's coloured (greens {greens})" if ok
+                  else f"wrong: {wrong}; greens {greens} (want 1, 0, 1, 1, 1)")
+    print(f"  ui-text-mesh          {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-text-mesh", ok)
 
     # ---- the text field: each probe line says 1 where its text was the one it wanted
     def flags_ok(p, keys):
@@ -29449,11 +29487,12 @@ def run_canvas_gate(workdir):
       canvas-text-width a kerned string's width from canvas_text_width against the font's own
                      advances and pair adjustments, summed by the app in double: within 1e-5.
       canvas-kern-pairs every pair of the atlas's glyphs, font_kern_advance by codepoint and
-                     font_kern_glyphs by glyph against stb_truetype's own pair adjustment at the
-                     font's base size: equal for every pair both ways, and some pairs kerned.
-                     The font answers from a table it builds at load, since asking stb at every
-                     step was three quarters of a text walk, and the walks ask by the glyphs they
-                     hold.
+                     the second of two font_pen_step calls against stb_truetype's own pair
+                     adjustment at the font's base size: equal for every pair both ways, the
+                     step joined and advancing by the second glyph's width, and some pairs
+                     kerned. The font answers from a table it builds at load, since asking stb
+                     at every step was three quarters of a text walk, and the pen reads it from
+                     the glyphs it holds, which is what the UI's walk and the canvas take.
       canvas-atlas-fields every glyph's texels in the font's atlas, read back from the GPU,
                      against stb_truetype's own distance field for that glyph rasterised by the
                      app with the font's stated parameters: equal to the byte, for every glyph,
@@ -29728,11 +29767,11 @@ def run_canvas_gate(workdir):
         ok, detail = False, "the app printed no pairs"
     else:
         count, kerned, differ = int(pairs[0]), int(pairs[2]), int(pairs[4])
-        by_glyph = int(pairs[6]) if len(pairs) > 6 else -1
-        ok = count > 0 and kerned > 0 and differ == 0 and by_glyph == 0
+        by_pen = int(pairs[6]) if len(pairs) > 6 else -1
+        ok = count > 0 and kerned > 0 and differ == 0 and by_pen == 0
         detail = (f"{count} pairs, {kerned} of them kerned; differing from stb_truetype's own, "
-                  f"{differ} by codepoint and {by_glyph} by glyph (want some kerned and none "
-                  f"differing)")
+                  f"{differ} asked by codepoint and {by_pen} stepped by the pen (want some kerned "
+                  f"and none differing)")
     print(f"  canvas-kern-pairs   {'PASS' if ok else 'FAIL'}  {detail}")
     note("canvas-kern-pairs", ok)
 

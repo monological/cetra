@@ -41,14 +41,19 @@ static const uint32_t ATLAS_RANGES[][2] = {
 };
 #define ATLAS_CODEPOINTS_MAX 512 // over the ranges' total, which _atlas_codepoints holds it to
 
-// The ranges' codepoints the face holds, in order.
-static size_t _atlas_codepoints(const stbtt_fontinfo* info, uint32_t out[ATLAS_CODEPOINTS_MAX]) {
+// The ranges' codepoints the face holds, in order, and each one's glyph in the face.
+static size_t _atlas_codepoints(const stbtt_fontinfo* info, uint32_t out[ATLAS_CODEPOINTS_MAX],
+                                int glyph_index[ATLAS_CODEPOINTS_MAX]) {
     size_t n = 0;
     for (size_t r = 0; r < sizeof(ATLAS_RANGES) / sizeof(ATLAS_RANGES[0]); r++)
         for (uint32_t cp = ATLAS_RANGES[r][0]; cp <= ATLAS_RANGES[r][1] && n < ATLAS_CODEPOINTS_MAX;
-             cp++)
-            if (stbtt_FindGlyphIndex(info, (int)cp) != 0)
-                out[n++] = cp;
+             cp++) {
+            const int glyph = stbtt_FindGlyphIndex(info, (int)cp);
+            if (glyph != 0) {
+                out[n] = cp;
+                glyph_index[n++] = glyph;
+            }
+        }
     return n;
 }
 
@@ -307,9 +312,7 @@ static void generate_glyph_atlas(Font* font) {
     // A glyph's row is its place in `codepoints`: its kerning row, and GlyphInfo.pair_row.
     uint32_t codepoints[ATLAS_CODEPOINTS_MAX];
     int glyph_index[ATLAS_CODEPOINTS_MAX];
-    const size_t count = _atlas_codepoints(info, codepoints);
-    for (size_t i = 0; i < count; i++)
-        glyph_index[i] = stbtt_FindGlyphIndex(info, (int)codepoints[i]);
+    const size_t count = _atlas_codepoints(info, codepoints, glyph_index);
     AtlasGlyph* fields = font->is_sdf ? calloc(count ? count : 1, sizeof(AtlasGlyph)) : NULL;
     unsigned char* atlas_data = calloc(atlas_size * atlas_size, 1);
     if ((font->is_sdf && !fields) || !atlas_data) {
@@ -332,7 +335,8 @@ static void generate_glyph_atlas(Font* font) {
                       .pixel_dist_scale = pixel_dist_scale,
                       .spread = (int)font->sdf_spread,
                       .on_edge = on_edge_value};
-    cetra_bake_bands((int)count, cetra_bake_workers(0, (int)count), _atlas_band, &bake);
+    if (fields || font->kern_pairs)
+        cetra_bake_bands((int)count, cetra_bake_workers(0, (int)count), _atlas_band, &bake);
 
     int cursor_x = padding;
     int cursor_y = padding;
@@ -340,11 +344,9 @@ static void generate_glyph_atlas(Font* font) {
 
     bool placed = true;
     for (size_t i = 0; i < count; i++) {
-        const int codepoint = (int)codepoints[i]; // stb_truetype's own type, inside this loop only
-
         // Get glyph metrics
         int advance, left_bearing;
-        stbtt_GetCodepointHMetrics(info, codepoint, &advance, &left_bearing);
+        stbtt_GetGlyphHMetrics(info, glyph_index[i], &advance, &left_bearing);
 
         int x0 = 0, y0 = 0, x1 = 0, y1 = 0;
         int glyph_w = 0, glyph_h = 0;
@@ -358,7 +360,7 @@ static void generate_glyph_atlas(Font* font) {
             x1 = x0 + glyph_w;
             y1 = y0 + glyph_h;
         } else {
-            stbtt_GetCodepointBitmapBox(info, codepoint, scale, scale, &x0, &y0, &x1, &y1);
+            stbtt_GetGlyphBitmapBox(info, glyph_index[i], scale, scale, &x0, &y0, &x1, &y1);
             glyph_w = x1 - x0;
             glyph_h = y1 - y0;
         }
@@ -391,8 +393,8 @@ static void generate_glyph_atlas(Font* font) {
                 for (int row = 0; field->sdf && row < glyph_h; row++)
                     memcpy(dest + row * atlas_size, field->sdf + row * glyph_w, glyph_w);
             } else {
-                stbtt_MakeCodepointBitmap(info, dest, glyph_w, glyph_h, atlas_size, scale, scale,
-                                          codepoint);
+                stbtt_MakeGlyphBitmap(info, dest, glyph_w, glyph_h, atlas_size, scale, scale,
+                                      glyph_index[i]);
             }
         }
 
@@ -558,10 +560,8 @@ GlyphInfo* font_get_glyph(const Font* font, uint32_t codepoint) {
     return glyph;
 }
 
-float font_advance(const Font* font, uint32_t codepoint) {
-    const GlyphInfo* glyph = font_get_glyph(font, codepoint);
-    if (glyph)
-        return glyph->advance_x;
+// A character's advance from the face itself, for one the atlas does not hold.
+static float _advance_face(const Font* font, uint32_t codepoint) {
     if (!font || !font->stb_font_info)
         return 0.0f;
     const stbtt_fontinfo* info = (const stbtt_fontinfo*)font->stb_font_info;
@@ -570,7 +570,20 @@ float font_advance(const Font* font, uint32_t codepoint) {
     return (float)advance * stbtt_ScaleForPixelHeight(info, font->base_size);
 }
 
+float font_advance(const Font* font, uint32_t codepoint) {
+    const GlyphInfo* glyph = font_get_glyph(font, codepoint);
+    return glyph ? glyph->advance_x : _advance_face(font, codepoint);
+}
+
 // --- TextMesh ---
+
+// The characters of `text` as text_mesh_rebuild walks them: a malformed byte is one.
+static size_t _char_count(const char* text) {
+    size_t n = 0;
+    for (const char* p = text; *p; n++)
+        text_utf8_next(&p);
+    return n;
+}
 
 TextMesh* create_text_mesh(Font* font, const char* text, float font_size) {
     if (!font)
@@ -586,6 +599,7 @@ TextMesh* create_text_mesh(Font* font, const char* text, float font_size) {
     mesh->font_size = font_size;
     mesh->text = text ? safe_strdup(text) : safe_strdup("");
     mesh->text_length = strlen(mesh->text);
+    mesh->char_count = _char_count(mesh->text);
 
     glm_vec4_one(mesh->color);
     glm_mat4_identity(mesh->transform);
@@ -628,6 +642,7 @@ void text_mesh_set_text(TextMesh* mesh, const char* text) {
     free(mesh->text);
     mesh->text = text ? safe_strdup(text) : safe_strdup("");
     mesh->text_length = strlen(mesh->text);
+    mesh->char_count = _char_count(mesh->text);
     mesh->needs_rebuild = true;
 
     // Reset per-character arrays
@@ -652,16 +667,16 @@ void text_mesh_set_font_size(TextMesh* mesh, float size) {
 }
 
 void text_mesh_set_char_color(TextMesh* mesh, size_t index, vec4 color) {
-    if (!mesh || index >= mesh->text_length)
+    if (!mesh || index >= mesh->char_count)
         return;
 
     // Allocate char_colors if needed
     if (!mesh->char_colors) {
-        mesh->char_colors = malloc(mesh->text_length * 4 * sizeof(float));
+        mesh->char_colors = malloc(mesh->char_count * 4 * sizeof(float));
         if (!mesh->char_colors)
             return;
         // Initialize with default color
-        for (size_t i = 0; i < mesh->text_length; i++) {
+        for (size_t i = 0; i < mesh->char_count; i++) {
             memcpy(&mesh->char_colors[i * 4], mesh->color, 4 * sizeof(float));
         }
     }
@@ -671,12 +686,12 @@ void text_mesh_set_char_color(TextMesh* mesh, size_t index, vec4 color) {
 }
 
 void text_mesh_set_char_offset(TextMesh* mesh, size_t index, vec3 offset) {
-    if (!mesh || index >= mesh->text_length)
+    if (!mesh || index >= mesh->char_count)
         return;
 
     // Allocate char_offsets if needed
     if (!mesh->char_offsets) {
-        mesh->char_offsets = calloc(mesh->text_length * 3, sizeof(float));
+        mesh->char_offsets = calloc(mesh->char_count * 3, sizeof(float));
         if (!mesh->char_offsets)
             return;
     }
@@ -699,9 +714,9 @@ void text_mesh_rebuild(TextMesh* mesh) {
     const Font* font = mesh->font;
     float scale = mesh->font_size / font->base_size;
 
-    size_t char_count = mesh->text_length;
-    size_t required_verts = char_count * 4;
-    size_t required_indices = char_count * 6;
+    // A quad a character at the most.
+    size_t required_verts = mesh->char_count * 4;
+    size_t required_indices = mesh->char_count * 6;
 
     // Reallocate if needed
     if (required_verts > mesh->vertex_capacity) {
@@ -720,7 +735,7 @@ void text_mesh_rebuild(TextMesh* mesh) {
     size_t ii = 0;
     size_t char_idx = 0;
 
-    // A quad a character, of which a string has at most one a byte; char_idx counts characters.
+    // char_idx counts characters, as the per-character colours and offsets are indexed.
     for (const char* p = mesh->text; *p;) {
         const uint32_t codepoint = text_utf8_next(&p);
 
@@ -834,33 +849,50 @@ void text_mesh_upload(TextMesh* mesh) {
 
 // --- Text Measurement ---
 
-float font_kern_advance(const Font* font, uint32_t prev_codepoint, uint32_t codepoint) {
-    if (!font || !font->stb_font_info || prev_codepoint == 0 || font->base_size <= 0.0f)
-        return 0.0f;
-    if (font->kern_pairs) {
-        const GlyphInfo* a = font_get_glyph(font, prev_codepoint);
-        const GlyphInfo* b = font_get_glyph(font, codepoint);
-        if (a && b)
-            return font_kern_glyphs(font, a, b);
-    }
-    // A character the atlas does not hold, which a layout still spaces, or a face with no kerning.
-    const stbtt_fontinfo* info = (const stbtt_fontinfo*)font->stb_font_info;
-    const int kern = stbtt_GetCodepointKernAdvance(info, (int)prev_codepoint, (int)codepoint);
-    if (kern == 0)
-        return 0.0f;
-    // Base-size pixels, matching how advance_x was baked, so one scale covers
-    // both at draw time.
-    return (float)kern * stbtt_ScaleForPixelHeight(info, font->base_size);
+// Whether `font` can answer a measure at all.
+static bool _font_ok(const Font* font) {
+    return font && font->stb_font_info && font->base_size > 0.0f;
 }
 
-float font_kern_glyphs(const Font* font, const GlyphInfo* prev, const GlyphInfo* glyph) {
-    if (!font || !prev || !glyph)
-        return 0.0f;
-    // A face with no kerning keeps no table, and stb answers it at once.
+// A pair's adjustment from the face's own tables: a character the atlas does not hold, which a
+// layout still spaces, or a face with no kerning, which stb answers at once.
+static float _kern_face(const Font* font, uint32_t prev_codepoint, uint32_t codepoint) {
+    const stbtt_fontinfo* info = (const stbtt_fontinfo*)font->stb_font_info;
+    const int kern = stbtt_GetCodepointKernAdvance(info, (int)prev_codepoint, (int)codepoint);
+    // Base-size pixels, matching how advance_x was baked, so one scale covers both at draw time.
+    return kern ? (float)kern * stbtt_ScaleForPixelHeight(info, font->base_size) : 0.0f;
+}
+
+// A pair's adjustment between two glyphs of `font`'s atlas.
+static float _kern_glyphs(const Font* font, const GlyphInfo* prev, const GlyphInfo* glyph) {
     if (!font->kern_pairs)
-        return font_kern_advance(font, prev->codepoint, glyph->codepoint);
+        return _kern_face(font, prev->codepoint, glyph->codepoint);
     return (float)font->kern_pairs[(size_t)prev->pair_row * font->kern_side + glyph->pair_row] *
            font->kern_scale;
+}
+
+float font_kern_advance(const Font* font, uint32_t prev_codepoint, uint32_t codepoint) {
+    if (!_font_ok(font) || prev_codepoint == 0)
+        return 0.0f;
+    const GlyphInfo* a = font_get_glyph(font, prev_codepoint);
+    const GlyphInfo* b = font_get_glyph(font, codepoint);
+    return a && b ? _kern_glyphs(font, a, b) : _kern_face(font, prev_codepoint, codepoint);
+}
+
+FontStep font_pen_step(FontPen* pen, const Font* font, uint32_t codepoint) {
+    FontStep step = {.glyph = font_get_glyph(font, codepoint)};
+    if (!pen || !_font_ok(font)) {
+        if (pen)
+            *pen = (FontPen){0};
+        return step;
+    }
+    step.joined = pen->font == font;
+    if (step.joined)
+        step.kern = pen->glyph && step.glyph ? _kern_glyphs(font, pen->glyph, step.glyph)
+                                             : _kern_face(font, pen->codepoint, codepoint);
+    step.advance = step.glyph ? step.glyph->advance_x : _advance_face(font, codepoint);
+    *pen = (FontPen){.font = font, .codepoint = codepoint, .glyph = step.glyph};
+    return step;
 }
 
 float text_measure_width(const Font* font, const char* text, float size) {

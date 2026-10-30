@@ -706,6 +706,12 @@ static void _padding_from(const UIElement* el, const UIStyle* s, float out[4]) {
         out[i] = glm_max(out[i], 0.0f); // a negative side is none
 }
 
+// Whether an element's text wraps at its width: a label's, when it asks to. Any other draws a line
+// a '\n', so `wrap` on a control is not read.
+static bool _wraps(const UIElement* el) {
+    return el->kind == UI_LABEL && el->wrap;
+}
+
 // An element's lines, made on first use; NULL out of memory.
 static UILines* _text_lines(UIElement* el) {
     if (!el->lines) {
@@ -733,7 +739,7 @@ static float _intrinsic(const UISystem* ui, UIElement* el, int axis) {
     UILines* lines = el->text && el->text[0] && s.font ? _text_lines(el) : NULL;
     if (lines && axis == 0) {
         const UIText t = _element_text(ui, el, &s);
-        if (ui_lines_measure(lines, &t, el->wrap, &v))
+        if (ui_lines_measure(lines, &t, _wraps(el), &v))
             el->measures++;
     } else if (lines) {
         // One line height PER LINE, as the layout broke them. Charging one made an authored
@@ -1114,8 +1120,7 @@ static void _break_lines(const UISystem* ui, UIElement* el) {
     if (!_text_lines(el))
         return;
     const UIText t = _element_text(ui, el, &s);
-    const bool wraps = el->kind == UI_LABEL && el->wrap;
-    if (ui_lines_break(el->lines, &t, wraps ? el->rect.w - pad[1] - pad[3] : INFINITY))
+    if (ui_lines_break(el->lines, &t, _wraps(el) ? el->rect.w - pad[1] - pad[3] : INFINITY))
         el->wraps++;
     else if (el->lines->count == 0)
         _drop_lines(el);
@@ -1261,14 +1266,28 @@ void ui_layout(UIScreen* screen, float width, float height) {
 
 // --------------------------------------------------------------------- emit
 
-// A control's label sits on the vertical centre of its row, not at the top of
-// its padding box: ui_draw_text places a baseline an ascent below the rect's
-// top, which is what a LABEL wants and what makes a button's text ride high.
-static UIRect _centred_row(UIRect box, const UIStyle* s) {
-    const float lh = ui_line_height(s->font, s->font_size, s->line_spacing);
-    UIRect r = {box.x + s->padding[3], box.y + (box.h - lh) * 0.5f,
-                box.w - s->padding[1] - s->padding[3], lh};
-    return r;
+// How many lines an element's text draws in: its lines, as the layout broke them and its height
+// counts them, or one.
+static size_t _text_rows(const UIElement* el) {
+    return el->lines && el->lines->count > 0 ? el->lines->count : 1;
+}
+
+// `rows` lines of a control's text on the vertical centre of its box, not at the top of its
+// padding box: a line's baseline is an ascent below its top, which is what a LABEL wants and what
+// makes a button's text ride high.
+static UIRect _centred_rows(UIRect box, const UIStyle* s, size_t rows) {
+    const float h = ui_line_height(s->font, s->font_size, s->line_spacing) * (float)rows;
+    return (UIRect){box.x + s->padding[3], box.y + (box.h - h) * 0.5f,
+                    box.w - s->padding[1] - s->padding[3], h};
+}
+
+// A control's text, through the lines its height was measured from, `block` that many rows tall.
+static void _draw_control_text(UISystem* ui, const UIElement* el, const UIStyle* s, UIRect block,
+                               UIAlign align) {
+    if (!el->lines)
+        return;
+    const UIText t = _element_text(ui, el, s);
+    ui_draw_text_lines(ui->dl, block, &t, el->lines, s->line_spacing, align);
 }
 
 // The input pass writes `state`; the easing follows it. Deriving the state back
@@ -1284,8 +1303,10 @@ static UIState _state_of(const UIElement* el) {
 // different place than the one you clicked.
 UIRect ui_slider_track(const UISystem* ui, const UIElement* el) {
     const UIStyle s = _resolve(ui, el, _state_of(el));
-    const float lh = ui_line_height(s.font, s.font_size, s.line_spacing);
-    return (UIRect){el->rect.x + s.padding[3], el->rect.y + s.padding[0] + lh + UI_FURNITURE_GAP,
+    const float label_h =
+        ui_line_height(s.font, s.font_size, s.line_spacing) * (float)_text_rows(el);
+    return (UIRect){el->rect.x + s.padding[3],
+                    el->rect.y + s.padding[0] + label_h + UI_FURNITURE_GAP,
                     el->rect.w - s.padding[1] - s.padding[3], UI_TRACK_H};
 }
 
@@ -1365,9 +1386,9 @@ static void _emit(UISystem* ui, UIElement* el) {
                 ui_draw_rect(dl, el->rect, &s);
                 // The label stops where the knob begins -- the same reservation
                 // _intrinsic measured, so the two cannot disagree about the gap.
-                UIRect inner = _centred_row(el->rect, &s);
+                UIRect inner = _centred_rows(el->rect, &s, _text_rows(el));
                 inner.w -= UI_KNOB_W + UI_FURNITURE_GAP;
-                ui_draw_text(dl, inner, el->text, &s, UI_ALIGN_START);
+                _draw_control_text(ui, el, &s, inner, UI_ALIGN_START);
                 // Everything below is driven by t_value, not by the bool: the
                 // value flips at once and the PICTURE crosses over, which is
                 // what makes a switch feel thrown rather than teleported.
@@ -1395,12 +1416,13 @@ static void _emit(UISystem* ui, UIElement* el) {
             }
             case UI_SLIDER: {
                 ui_draw_rect(dl, el->rect, &s);
-                // The label takes the text row; the track takes the row below it,
-                // which is the height _intrinsic reserved.
+                // The label takes its rows at the top; the track takes the row below them, which
+                // is the height _intrinsic reserved.
                 const UIRect label = {el->rect.x + s.padding[3], el->rect.y + s.padding[0],
                                       el->rect.w - s.padding[1] - s.padding[3],
-                                      ui_line_height(s.font, s.font_size, s.line_spacing)};
-                ui_draw_text(dl, label, el->text, &s, UI_ALIGN_START);
+                                      ui_line_height(s.font, s.font_size, s.line_spacing) *
+                                          (float)_text_rows(el)};
+                _draw_control_text(ui, el, &s, label, UI_ALIGN_START);
 
                 const float span = el->range_hi - el->range_lo;
                 float t = 0.0f;
@@ -1420,17 +1442,20 @@ static void _emit(UISystem* ui, UIElement* el) {
             }
             case UI_SELECTOR: {
                 ui_draw_rect(dl, el->rect, &s);
-                const UIRect inner = _centred_row(el->rect, &s);
-                ui_draw_text(dl, inner, el->text, &s, UI_ALIGN_START);
+                _draw_control_text(ui, el, &s, _centred_rows(el->rect, &s, _text_rows(el)),
+                                   UI_ALIGN_START);
+                // The chosen option is one line, on the box's centre.
                 const int idx = el->bound_int ? *el->bound_int : 0;
                 if (el->options && idx >= 0 && idx < el->option_count)
-                    ui_draw_text(dl, inner, el->options[idx], &s, UI_ALIGN_END);
+                    ui_draw_text(dl, _centred_rows(el->rect, &s, 1), el->options[idx], &s,
+                                 UI_ALIGN_END);
                 break;
             }
             case UI_BUTTON:
             default:
                 ui_draw_rect(dl, el->rect, &s);
-                ui_draw_text(dl, _centred_row(el->rect, &s), el->text, &s, UI_ALIGN_CENTER);
+                _draw_control_text(ui, el, &s, _centred_rows(el->rect, &s, _text_rows(el)),
+                                   UI_ALIGN_CENTER);
                 break;
         }
     }

@@ -124,11 +124,12 @@ typedef struct TextMesh {
     mat4 transform;
 
     char* text;
-    size_t text_length;
+    size_t text_length; // bytes
+    size_t char_count;  // characters, as text_utf8_next steps them: what the arrays below index
 
     vec4 color;
 
-    // Per-character animation
+    // Per-character animation, one entry a character, a '\n' included
     float* char_colors;
     float* char_offsets;
 
@@ -192,10 +193,30 @@ float font_advance(const Font* font, uint32_t codepoint);
 // and looks like a font without kerning rather than a reader that cannot see
 // it. 0 when the face defines no pair, which is the correct no-op.
 float font_kern_advance(const Font* font, uint32_t prev_codepoint, uint32_t codepoint);
-// The same pair adjustment between two glyphs of `font`'s atlas, for a caller that already holds
-// them: a text walk looks each glyph up for its advance, and asking by codepoint looked both up
-// again. A character the atlas lacks has no glyph and goes through font_kern_advance.
-float font_kern_glyphs(const Font* font, const GlyphInfo* prev, const GlyphInfo* glyph);
+
+/*
+ * A pen walking a string a character at a time (spec 14.3): the one advance rule every text layout
+ * shares, so no two layouts space a string differently. Each step looks its character's glyph up
+ * once, and the kerning with the character before is read from the two glyphs. Zeroed, a pen is at
+ * a string's start, and a character in another face than the one before starts it afresh.
+ */
+typedef struct FontPen {
+    const Font* font;       // the face of the character before; NULL at a start
+    uint32_t codepoint;     // the character before
+    const GlyphInfo* glyph; // its glyph, NULL when the atlas lacks it
+} FontPen;
+
+// One character's step, in pixels at its font's base size, as GlyphInfo.advance_x is.
+typedef struct FontStep {
+    const GlyphInfo* glyph; // NULL when the atlas lacks the character, which still advances
+    float kern;             // the pair with the character before; 0 when not joined
+    float advance;          // the pen's move past it
+    bool joined;            // a character in the same face came before it
+} FontStep;
+
+// Moves `pen` past `codepoint`, set in `font`, and says what that step is. A caller adds its own
+// spacing between joined characters -- the UI's tracking -- and scales the step to its size.
+FontStep font_pen_step(FontPen* pen, const Font* font, uint32_t codepoint);
 
 // TextMesh
 TextMesh* create_text_mesh(Font* font, const char* text, float font_size);
@@ -205,7 +226,8 @@ void text_mesh_set_text(TextMesh* mesh, const char* text);
 void text_mesh_set_color(TextMesh* mesh, vec4 color);
 void text_mesh_set_font_size(TextMesh* mesh, float size);
 
-// Per-character animation
+// Per-character animation. `index` counts characters, not bytes: in "héllo" 1 is the é and 2 the
+// first l. An index past the last character is ignored. Setting the text clears both.
 void text_mesh_set_char_color(TextMesh* mesh, size_t index, vec4 color);
 void text_mesh_set_char_offset(TextMesh* mesh, size_t index, vec3 offset);
 
