@@ -705,6 +705,19 @@ static void _padding_from(const UIElement* el, const UIStyle* s, float out[4]) {
         out[i] = glm_max(out[i], 0.0f); // a negative side is none
 }
 
+// A label's lines, made cleared on first use; NULL out of memory.
+static UILines* _label_lines(UIElement* el) {
+    if (!el->lines) {
+        el->lines = calloc(1, sizeof(UILines));
+        if (!el->lines) {
+            log_error("ui: out of memory keeping a label's lines");
+            return NULL;
+        }
+        ui_lines_clear(el->lines);
+    }
+    return el->lines;
+}
+
 // The text an element lays out and draws: its own, in a resolved style, with its runs.
 static UIText _element_text(const UISystem* ui, const UIElement* el, const UIStyle* s) {
     return ui_text_make(ui->dl, el->text, el->text ? strlen(el->text) : 0, s, el->runs,
@@ -716,13 +729,19 @@ static UIText _element_text(const UISystem* ui, const UIElement* el, const UISty
  * say. The height of a wrapping label is its lines, which its width decided: that is why the
  * layout settles every width before it measures any height.
  */
-static float _intrinsic(const UISystem* ui, const UIElement* el, int axis) {
+static float _intrinsic(const UISystem* ui, UIElement* el, int axis) {
     const UIStyle s = _resolve(ui, el, UI_STATE_NORMAL);
     float v = 0.0f;
     if (el->text && el->text[0] && s.font) {
         if (axis == 0) {
             const UIText t = _element_text(ui, el, &s);
-            v = el->wrap ? ui_text_longest_word(&t) : ui_text_widest_line(&t);
+            UILines* lines = el->kind == UI_LABEL ? _label_lines(el) : NULL;
+            if (lines) {
+                if (ui_lines_measure(lines, &t, el->wrap, &v))
+                    el->measures++;
+            } else {
+                v = el->wrap ? ui_text_longest_word(&t) : ui_text_widest_line(&t);
+            }
         } else {
             // One line height PER LINE: a label's, as it broke them; any other element's, one a
             // '\n', since ui_draw_text starts a new line at each. Charging one made an authored
@@ -1104,13 +1123,8 @@ static void _break_lines(const UISystem* ui, UIElement* el) {
     const UIStyle s = _resolve(ui, el, UI_STATE_NORMAL);
     float pad[4];
     _padding_from(el, &s, pad);
-    if (!el->lines) {
-        el->lines = calloc(1, sizeof(UILines));
-        if (!el->lines) {
-            log_error("ui: out of memory breaking a label into lines");
-            return;
-        }
-    }
+    if (!_label_lines(el))
+        return;
     const UIText t = _element_text(ui, el, &s);
     if (ui_lines_break(el->lines, &t, el->wrap ? el->rect.w - pad[1] - pad[3] : INFINITY))
         el->wraps++;

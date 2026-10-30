@@ -27727,7 +27727,10 @@ def run_ui_gate(workdir):
                      padding, and draws no glyph past its width; given no width,
                      it measures as its longest word (spec 14.2).
       ui-wrap-cache  laying a wrapped label out again at the same width breaks
-                     nothing again; a new width, and new text, each break it once.
+                     nothing again; a new width, new text and a new size each break it
+                     once. Its text is measured across once, and again only for new
+                     text or a new size: a new width keeps the measure, which is the
+                     label's longest word in its face.
       ui-runs-draw   a styled run colours exactly its bytes' glyphs, the rest
                      keep the label's colour, and a run in another face draws that
                      face's glyph.
@@ -28121,10 +28124,14 @@ def run_ui_gate(workdir):
     if not p:
         ok, detail = False, "the probe produced nothing"
     else:
-        seq = [p[(k, "wraps")][0] for k in ("first", "again", "wider", "retext")]
-        ok = seq == [1, 1, 2, 3]
+        steps = ("first", "again", "wider", "retext", "restyle")
+        seq = [p[(k, "wraps")][0] for k in steps]
+        measured = [p[(k, "measures")][0] for k in steps]
+        ok = seq == [1, 1, 2, 3, 4] and measured == [1, 1, 1, 2, 3]
         detail = (f"broken {seq[0]:.0f} time(s) first, {seq[1]:.0f} after two more layouts, "
-                  f"{seq[2]:.0f} at a new width, {seq[3]:.0f} after new text (want 1, 1, 2, 3)")
+                  f"{seq[2]:.0f} at a new width, {seq[3]:.0f} after new text, {seq[4]:.0f} in a "
+                  f"new size (want 1, 1, 2, 3, 4); measured "
+                  + ", ".join(f"{m:.0f}" for m in measured) + " (want 1, 1, 1, 2, 3)")
     print(f"  ui-wrap-cache         {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-wrap-cache", ok)
 

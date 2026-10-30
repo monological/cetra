@@ -104,7 +104,7 @@ static void _sync(UIField* f) {
     f->text.length = (size_t)f->len;
     f->text.runs = f->el->runs;
     f->text.run_count = f->el->run_count;
-    f->rows.count = 0;
+    ui_lines_clear(&f->rows);
     _break_rows(f);
 }
 
@@ -374,7 +374,7 @@ void ui_field_break(const UISystem* ui, UIElement* el, const UIStyle* s, float w
     // Runs set since the last break are a new copy at a new address -- or none -- so a pointer that
     // moved is new runs, in faces the rows were not broken for.
     if (f->text.runs != el->runs || f->text.run_count != el->run_count)
-        f->rows.count = 0;
+        ui_lines_clear(&f->rows);
     f->text = ui_text_make(ui_draw_list(ui), f->buf, (size_t)f->len, s, el->runs, el->run_count);
     glm_vec4_copy((float*)s->fg, f->color);
     f->text.color = f->color;

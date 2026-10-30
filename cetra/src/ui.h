@@ -346,10 +346,11 @@ struct UIElement {
     UIElement* parent;
     UIElement** children;
     size_t child_count, child_capacity;
-    // A wrapping or styled label's lines as its last layout broke them, kept until its text, its
-    // runs, its style or its width changes.
+    // A label's lines as its last layout broke them, and its text's measures, kept until its text,
+    // its runs or its style changes -- and for the lines, its width.
     struct UILines* lines;
-    unsigned wraps; // how many times the layout has broken them: a test of the keeping
+    unsigned wraps;    // how many times the layout has broken them: a test of the keeping
+    unsigned measures; // how many times the layout has walked its text to measure it: the same
     // A scrolling pane's offset down its content, in points: `scroll` is what is drawn, eased
     // toward `scroll_target` after a key or a reveal and set with it by the wheel and the bar.
     // `scroll_content` is its children's whole height, from the last layout.

@@ -597,10 +597,35 @@ float ui_text_baseline(const UIText* t, float top) {
     return _text_ok(t) ? top + t->font->ascent * (t->size / t->font->base_size) : top;
 }
 
-// Whether `lines` are broken for this width and style.
-static bool _lines_hold(const UILines* lines, const UIText* t, float width) {
-    return lines->count > 0 && lines->width == width && lines->font == t->font &&
-           lines->size == t->size && lines->tracking == t->tracking;
+void ui_lines_clear(UILines* lines) {
+    lines->count = 0;
+    lines->widest_line = lines->longest_word = -1.0f;
+}
+
+// Makes `lines` the text's style's, cleared when they were another's.
+static void _lines_for(UILines* lines, const UIText* t) {
+    if (lines->font == t->font && lines->size == t->size && lines->tracking == t->tracking)
+        return;
+    ui_lines_clear(lines);
+    lines->font = t->font;
+    lines->size = t->size;
+    lines->tracking = t->tracking;
+}
+
+bool ui_lines_measure(UILines* lines, const UIText* t, bool wrap, float* width) {
+    _lines_for(lines, t);
+    float* kept = wrap ? &lines->longest_word : &lines->widest_line;
+    const bool walk = *kept < 0.0f;
+    if (walk)
+        *kept = wrap ? ui_text_longest_word(t) : ui_text_widest_line(t);
+    *width = *kept;
+    return walk;
+}
+
+// Whether `lines` are broken for this width and the text's style.
+static bool _lines_hold(UILines* lines, const UIText* t, float width) {
+    _lines_for(lines, t);
+    return lines->count > 0 && lines->width == width;
 }
 
 // Breaks `t` from line `line` on, the lines before it kept.
@@ -621,9 +646,6 @@ static bool _break_from(UILines* lines, const UIText* t, float width, size_t lin
         from = t->text[end] == '\n' ? end + 1 : end;
     }
     lines->width = width;
-    lines->font = t->font;
-    lines->size = t->size;
-    lines->tracking = t->tracking;
     return true;
 }
 
