@@ -631,10 +631,12 @@ typedef struct UIInput {
     double time;                     // seconds, any monotonic clock: double clicks measure on it
 } UIInput;
 
-// Fills `in`'s wheel, typing and time from the engine's input this frame: the wheel and typing the
-// poll delivered, and the time from the wall clock in a window and the frame count headless, so a
-// headless double click is the same on every run. The pointer half stays the caller's.
-void ui_input_add_keyboard(UIInput* in, const struct Engine* engine);
+// Fills `in` with what the engine read this frame: the pointer, in window points, with its left
+// button's edges and the modifiers held at its press; the wheel and the typing the poll delivered;
+// and the time, the wall clock in a window and the frame count headless, so a headless double
+// click is the same on every run. The navigation, accept and back are left as they were: they are
+// the app's, from its own bindings, before or after this.
+void ui_input_read(UIInput* in, const struct Engine* engine);
 
 /*
  * The INPUT pass. Lay the top screen out, hit-test the pointer, move focus,

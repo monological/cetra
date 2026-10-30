@@ -12,6 +12,18 @@ struct SceneNode;
 // Typing events held between two polls; more in one batch are dropped, and said once.
 #define INPUT_KEY_EVENTS 64
 
+// The platform's modifiers, as bits of InputKeyEvent.mods, for a shortcut (select all, copy, a
+// line's end) and for a word at a time: Cmd and Option on macOS, Ctrl for both elsewhere. The text
+// field, the input script's `mod` and an app's own shortcuts read these, so the three agree.
+// GLFW's values, which engine.c holds them to.
+#ifdef __APPLE__
+#define INPUT_MOD_SHORTCUT 0x0008 // GLFW_MOD_SUPER
+#define INPUT_MOD_WORD     0x0004 // GLFW_MOD_ALT
+#else
+#define INPUT_MOD_SHORTCUT 0x0002 // GLFW_MOD_CONTROL
+#define INPUT_MOD_WORD     0x0002 // GLFW_MOD_CONTROL
+#endif
+
 // One thing typed: a key pressed or repeated (`key` a GLFW key code, `mods` its GLFW modifier
 // bits, `codepoint` 0), or a character the keyboard produced (`codepoint`, `key` 0). A press of
 // a letter brings both, the key first, as GLFW sends them.
@@ -29,8 +41,15 @@ typedef struct InputKeyEvent {
 // ENGINE-OWNED throughout, with one exception: an app may clear selected_node
 // on a press to keep the engine's drag off a node it handles itself.
 typedef struct InputState {
-    bool is_dragging;  // The left button is down
-    bool shift_held;   // Shift was down at the press
+    bool is_dragging; // The left button is down
+    // The cursor as it last moved, the script's included; off the window until it first does.
+    float pointer_fb_x;
+    float pointer_fb_y;
+    // The left button since the previous frame ended, on the wheel's schedule: a click that went
+    // down and up between two polls is both. A press the debug GUI takes is not recorded.
+    bool pointer_pressed;
+    bool pointer_released;
+    int press_mods;    // GLFW's modifier bits held at the last press
     float center_fb_x; // Where the press landed
     float center_fb_y;
     float drag_fb_x; // The cursor's offset from the press, not a per-frame delta

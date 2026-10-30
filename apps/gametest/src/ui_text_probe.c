@@ -581,7 +581,7 @@ static int probe_field_edit(UISystem* ui) {
     one_key(ui, GLFW_KEY_LEFT, 0);
     one_key(ui, GLFW_KEY_LEFT, 0);
     printf("ui field-edit left caret %d\n", cursor_of(field));
-    one_key(ui, GLFW_KEY_LEFT, ENGINE_MOD_WORD);
+    one_key(ui, GLFW_KEY_LEFT, INPUT_MOD_WORD);
     printf("ui field-edit word caret %d\n", cursor_of(field));
     one_key(ui, GLFW_KEY_HOME, 0);
     printf("ui field-edit home caret %d\n", cursor_of(field));
@@ -589,7 +589,7 @@ static int probe_field_edit(UISystem* ui) {
     printf("ui field-edit end caret %d\n", cursor_of(field));
     one_key(ui, GLFW_KEY_BACKSPACE, 0);
     say_text("field-edit", "backspace", field, "hello worl");
-    one_key(ui, GLFW_KEY_BACKSPACE, ENGINE_MOD_WORD);
+    one_key(ui, GLFW_KEY_BACKSPACE, INPUT_MOD_WORD);
     say_text("field-edit", "wordback", field, "hello ");
     one_key(ui, GLFW_KEY_HOME, 0);
     one_key(ui, GLFW_KEY_DELETE, 0);
@@ -635,7 +635,7 @@ static int probe_field_select(Game* game, UISystem* ui, Font* font) {
     for (int i = 0; i < 5; i++)
         one_key(ui, GLFW_KEY_RIGHT, GLFW_MOD_SHIFT);
     say_field("field-select", "shift", field);
-    one_key(ui, GLFW_KEY_A, ENGINE_MOD_SHORTCUT);
+    one_key(ui, GLFW_KEY_A, INPUT_MOD_SHORTCUT);
     say_field("field-select", "all", field);
 
     // Two presses close together on "beta" select it; a third, the whole line.
@@ -660,8 +660,8 @@ static int probe_field_select(Game* game, UISystem* ui, Font* font) {
     printf("ui field-select runs ok %d\n", ui_set_text_runs(ro, &run, 1) ? 1 : 0);
     ui_set_focus(s, ro);
     pass(ui, &(UIInput){.pointer_x = -1.0f, .pointer_y = -1.0f});
-    one_key(ui, GLFW_KEY_A, ENGINE_MOD_SHORTCUT);
-    one_key(ui, GLFW_KEY_C, ENGINE_MOD_SHORTCUT);
+    one_key(ui, GLFW_KEY_A, INPUT_MOD_SHORTCUT);
+    one_key(ui, GLFW_KEY_C, INPUT_MOD_SHORTCUT);
     const char* clip = engine_clipboard_get(game->engine);
     printf("ui field-select copied plain %d\n", strcmp(clip, "net SDA ok") == 0 ? 1 : 0);
     // An editable field refuses runs.
@@ -675,21 +675,21 @@ static int probe_field_clipboard(const Game* game, UISystem* ui) {
     ui_field_set_text(field, "hello world");
     for (int i = 0; i < 5; i++)
         one_key(ui, GLFW_KEY_LEFT, GLFW_MOD_SHIFT);
-    one_key(ui, GLFW_KEY_C, ENGINE_MOD_SHORTCUT);
+    one_key(ui, GLFW_KEY_C, INPUT_MOD_SHORTCUT);
     printf("ui field-clipboard copied clip %d\n",
            strcmp(engine_clipboard_get(engine), "world") == 0 ? 1 : 0);
     one_key(ui, GLFW_KEY_HOME, 0);
-    one_key(ui, GLFW_KEY_V, ENGINE_MOD_SHORTCUT);
+    one_key(ui, GLFW_KEY_V, INPUT_MOD_SHORTCUT);
     say_text("field-clipboard", "pasted", field, "worldhello world");
     // A single-line field takes a pasted newline as a space.
     engine_clipboard_set(engine, "a\nb");
     one_key(ui, GLFW_KEY_END, 0);
-    one_key(ui, GLFW_KEY_V, ENGINE_MOD_SHORTCUT);
+    one_key(ui, GLFW_KEY_V, INPUT_MOD_SHORTCUT);
     say_text("field-clipboard", "flattened", field, "worldhello worlda b");
     // Cut takes the selection to the clipboard.
     for (int i = 0; i < 3; i++)
         one_key(ui, GLFW_KEY_LEFT, GLFW_MOD_SHIFT);
-    one_key(ui, GLFW_KEY_X, ENGINE_MOD_SHORTCUT);
+    one_key(ui, GLFW_KEY_X, INPUT_MOD_SHORTCUT);
     say_text("field-clipboard", "cut", field, "worldhello world");
     printf("ui field-clipboard cutcopied clip %d\n",
            strcmp(engine_clipboard_get(engine), "a b") == 0 ? 1 : 0);
@@ -699,11 +699,11 @@ static int probe_field_clipboard(const Game* game, UISystem* ui) {
     ui_field_set_text(ro, "fixed");
     ui_set_focus(s, ro);
     pass(ui, &(UIInput){.pointer_x = -1.0f, .pointer_y = -1.0f});
-    one_key(ui, GLFW_KEY_A, ENGINE_MOD_SHORTCUT);
-    one_key(ui, GLFW_KEY_X, ENGINE_MOD_SHORTCUT);
+    one_key(ui, GLFW_KEY_A, INPUT_MOD_SHORTCUT);
+    one_key(ui, GLFW_KEY_X, INPUT_MOD_SHORTCUT);
     printf("ui field-clipboard rocopied clip %d\n",
            strcmp(engine_clipboard_get(engine), "fixed") == 0 ? 1 : 0);
-    one_key(ui, GLFW_KEY_V, ENGINE_MOD_SHORTCUT);
+    one_key(ui, GLFW_KEY_V, INPUT_MOD_SHORTCUT);
     ev_text("typed");
     type_pass(ui);
     say_text("field-clipboard", "readonly", ro, "fixed");
@@ -714,13 +714,13 @@ static int probe_field_undo(UISystem* ui) {
     const UIElement* field = field_fixture(ui, 0, NULL);
     ev_text("abc def");
     type_pass(ui);
-    one_key(ui, GLFW_KEY_Z, ENGINE_MOD_SHORTCUT);
+    one_key(ui, GLFW_KEY_Z, INPUT_MOD_SHORTCUT);
     say_text("field-undo", "undo1", field, "abc");
-    one_key(ui, GLFW_KEY_Z, ENGINE_MOD_SHORTCUT);
+    one_key(ui, GLFW_KEY_Z, INPUT_MOD_SHORTCUT);
     say_text("field-undo", "undo2", field, "");
-    one_key(ui, GLFW_KEY_Z, ENGINE_MOD_SHORTCUT | GLFW_MOD_SHIFT);
+    one_key(ui, GLFW_KEY_Z, INPUT_MOD_SHORTCUT | GLFW_MOD_SHIFT);
     say_text("field-undo", "redo1", field, "abc");
-    one_key(ui, GLFW_KEY_Z, ENGINE_MOD_SHORTCUT | GLFW_MOD_SHIFT);
+    one_key(ui, GLFW_KEY_Z, INPUT_MOD_SHORTCUT | GLFW_MOD_SHIFT);
     say_text("field-undo", "redo2", field, "abc def");
     return 0;
 }
@@ -920,7 +920,7 @@ static int probe_field_append(UISystem* ui) {
     // "hello" selected, as a reader copying it would have it.
     ui_set_focus(ui_top(ui), field);
     pass(ui, &(UIInput){.pointer_x = -1.0f, .pointer_y = -1.0f});
-    one_key(ui, GLFW_KEY_A, ENGINE_MOD_SHORTCUT);
+    one_key(ui, GLFW_KEY_A, INPUT_MOD_SHORTCUT);
     const unsigned builds = pane->row_builds;
     const float before = row->rect.h;
     // A word with a run of its own, then a sentence long enough to wrap onto rows of its own.

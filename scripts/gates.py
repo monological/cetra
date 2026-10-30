@@ -27837,12 +27837,16 @@ def run_ui_gate(workdir):
                      "zo" filters the commands to Zoom in and Zoom out, the first
                      lit at its first two bytes, with the text in the field (end to
                      end).
+      ui-click-palette the same palette, and a scripted click on its second row:
+                     the press and release the engine read reach the UI through
+                     ui_input_read, Zoom out runs and the palette closes (end to
+                     end).
       ui-history-clip apps/canvas --history: the column's padding above its pane,
                      and the gap below it down to the input line, are the column's own
                      colour, though the pane is scrolled to the end of 200 messages,
                      and the pane shows text (end to end).
       ui-typed       an input script's typing reaches the UI through
-                     ui_input_add_keyboard, every event in its order: characters
+                     ui_input_read, every event in its order: characters
                      past ASCII as their codepoints, a key with the platform's
                      shortcut modifier for `mod`, and a later line's key on its own
                      frame (spec 14.2, end to end).
@@ -28631,6 +28635,29 @@ def run_ui_gate(workdir):
                   f"in the field (want over 30)")
     print(f"  ui-type-palette       {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-type-palette", ok)
+
+    # ---- a click on a palette row, the pointer read by the engine (spec 14.3)
+    if not out or not field:
+        ok, detail = False, "no palette to click: ui-type-palette's run failed"
+    else:
+        fb_h, fb_w = _ppm_array(out).shape[:2]
+        s = fb_w / 400.0  # framebuffer pixels a point, at _canvas_shot's 400 points across
+        # The second row, Zoom out: under the field by the box's 6-point gap, a 30-point row and
+        # half of the next. The script's pointer is framebuffer pixels with +Y up.
+        x = (field[0] + min(field[2], fb_w)) // 2
+        y = fb_h - round(field[3] + (6 + 30 + 15) * s)
+        script = os.path.join(workdir, "ui_click.script")
+        with open(script, "w", encoding="utf-8") as f:
+            f.write(f"2 key=mod+k\n4 type=zo\n6 at={x},{y}\n7 at={x},{y} down\n8 at={x},{y}\n")
+        _, probe = _canvas_run(workdir, "click", "--sheet", "board", "--palette",
+                               "--input-script", script, frames=12)
+        ran = probe.get(("palette", "ran"), [None])[0]
+        state = [int(v) for v in probe.get(("palette", "state"), [])]
+        ok = ran == "3" and state[:1] == [0]
+        detail = (f"a click on the second row ran command {ran} (want 3, Zoom out) and the palette "
+                  f"is {'closed' if state[:1] == [0] else 'open'} (want closed)")
+    print(f"  ui-click-palette      {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-click-palette", ok)
 
     # ---- the history column, end to end
     out, probe = _canvas_run(workdir, "history", "--sheet", "board", "--history")

@@ -9,7 +9,11 @@ void init_input_state(InputState* state) {
         return;
 
     state->is_dragging = false;
-    state->shift_held = false;
+    state->pointer_fb_x = -1.0f;
+    state->pointer_fb_y = -1.0f;
+    state->pointer_pressed = false;
+    state->pointer_released = false;
+    state->press_mods = 0;
     state->center_fb_x = 0.0f;
     state->center_fb_y = 0.0f;
     state->drag_fb_x = 0.0f;
