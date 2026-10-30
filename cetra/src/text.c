@@ -1,5 +1,6 @@
 #include "text.h"
 #include "program.h"
+#include "thread.h"
 #include "uniform.h"
 #include "util.h"
 #include "common.h"
@@ -148,6 +149,8 @@ bool text_utf8_is_continuation(char byte) {
     return ((unsigned char)byte & 0xc0) == 0x80;
 }
 
+static void _free_pairs(struct FontPairs* p);
+
 // --- FontPool ---
 
 FontPool* create_font_pool(void) {
@@ -185,6 +188,7 @@ void free_font_pool(FontPool* pool) {
 
         if (font->atlas_texture_id)
             glDeleteTextures(1, &font->atlas_texture_id);
+        _free_pairs(font->pairs);
         free(font->name);
         free(font->filepath);
         free(font->ttf_buffer);
@@ -197,6 +201,77 @@ void free_font_pool(FontPool* pool) {
 }
 
 // --- Font Loading ---
+
+/*
+ * The kerning of every pair of the atlas's glyphs, built at load (spec 14.3). A font's pairs are
+ * asked for at every step of every text walk, and stb_truetype answers each from the face's own
+ * tables -- two cmap searches and a GPOS lookup -- which measured three quarters of a walk. Built
+ * whole and only read after, so the threads that build the canvas's text read it safely, as they
+ * read the rest of the font.
+ */
+typedef struct FontPairs {
+    size_t count;        // the atlas's glyphs, and the table's side
+    uint16_t latin[256]; // a codepoint under 256's row, plus one; 0 for one the atlas lacks
+    int16_t* kern;       // count * count, in the face's units
+    float scale;         // the face's units to base-size pixels
+    int* glyph;          // each row's glyph index in the face, while it is built
+    const stbtt_fontinfo* info;
+} FontPairs;
+
+static void _pairs_band(void* ctx, int begin, int end) {
+    FontPairs* p = ctx;
+    for (int a = begin; a < end; a++)
+        for (size_t b = 0; b < p->count; b++)
+            p->kern[(size_t)a * p->count + b] =
+                (int16_t)stbtt_GetGlyphKernAdvance(p->info, p->glyph[a], p->glyph[b]);
+}
+
+static void _build_pairs(Font* font) {
+    size_t count = 0;
+    for (const GlyphInfo* g = font->glyph_cache; g; g = g->hh.next)
+        count++;
+    FontPairs* p = calloc(1, sizeof(FontPairs));
+    if (!p || count == 0 || count > UINT16_MAX) {
+        free(p);
+        return;
+    }
+    p->count = count;
+    p->info = (const stbtt_fontinfo*)font->stb_font_info;
+    p->scale = stbtt_ScaleForPixelHeight(p->info, font->base_size);
+    p->kern = malloc(count * count * sizeof(int16_t));
+    p->glyph = malloc(count * sizeof(int));
+    if (!p->kern || !p->glyph) {
+        free(p->kern);
+        free(p->glyph);
+        free(p);
+        return;
+    }
+    size_t row = 0;
+    for (GlyphInfo* g = font->glyph_cache; g; g = g->hh.next, row++) {
+        g->pair_row = (uint16_t)row;
+        p->glyph[row] = stbtt_FindGlyphIndex(p->info, (int)g->codepoint);
+        if (g->codepoint < 256)
+            p->latin[g->codepoint] = (uint16_t)(row + 1);
+    }
+    cetra_bake_bands((int)count, cetra_bake_workers(0, (int)count), _pairs_band, p);
+    free(p->glyph);
+    p->glyph = NULL;
+    font->pairs = p;
+}
+
+// A codepoint's row in its font's pairs, or -1 for one the atlas does not hold.
+static int _pair_row(const Font* font, uint32_t codepoint) {
+    if (codepoint < 256)
+        return (int)font->pairs->latin[codepoint] - 1;
+    const GlyphInfo* g = font_get_glyph(font, codepoint);
+    return g ? g->pair_row : -1;
+}
+
+static void _free_pairs(struct FontPairs* p) {
+    if (p)
+        free(p->kern);
+    free(p);
+}
 
 static void generate_glyph_atlas(Font* font) {
     if (!font || !font->stb_font_info)
@@ -435,6 +510,7 @@ Font* load_font(FontPool* pool, const char* filepath, float base_size, bool use_
 
     // Generate atlas
     generate_glyph_atlas(font);
+    _build_pairs(font);
 
     // Add to cache
     HASH_ADD_KEYPTR(hh, pool->font_cache, font->name, strlen(font->name), font);
@@ -758,6 +834,13 @@ void text_mesh_upload(TextMesh* mesh) {
 float font_kern_advance(const Font* font, uint32_t prev_codepoint, uint32_t codepoint) {
     if (!font || !font->stb_font_info || prev_codepoint == 0 || font->base_size <= 0.0f)
         return 0.0f;
+    const FontPairs* p = font->pairs;
+    if (p) {
+        const int a = _pair_row(font, prev_codepoint), b = _pair_row(font, codepoint);
+        if (a >= 0 && b >= 0)
+            return (float)p->kern[(size_t)a * p->count + (size_t)b] * p->scale;
+    }
+    // A character the atlas does not hold, which a layout still spaces.
     const stbtt_fontinfo* info = (const stbtt_fontinfo*)font->stb_font_info;
     const int kern = stbtt_GetCodepointKernAdvance(info, (int)prev_codepoint, (int)codepoint);
     if (kern == 0)

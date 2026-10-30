@@ -29431,6 +29431,10 @@ def run_canvas_gate(workdir):
                      edge through a pixel as straight, and its curls are not.
       canvas-text-width a kerned string's width from canvas_text_width against the font's own
                      advances and pair adjustments, summed by the app in double: within 1e-5.
+      canvas-kern-pairs every pair of the atlas's glyphs, font_kern_advance against stb_truetype's
+                     own pair adjustment at the font's base size: equal for every pair, and some
+                     pairs kerned. The font answers from a table it builds at load, since asking
+                     stb at every step was three quarters of a text walk.
       canvas-overlap-once two capsules crossing in a layer at half opacity: the crossing the same
                      code as one arm, half of white. A layer's coverage is resolved before it is
                      painted, so it is translucent as a whole and not shape by shape.
@@ -29693,6 +29697,17 @@ def run_canvas_gate(workdir):
         detail = f"{got} units against the font's {want:.1f} (want within 1e-5)"
     print(f"  canvas-text-width   {'PASS' if ok else 'FAIL'}  {detail}")
     note("canvas-text-width", ok)
+
+    pairs = probe.get(("glyphs", "pairs"))
+    if not pairs:
+        ok, detail = False, "the app printed no pairs"
+    else:
+        count, kerned, differ = int(pairs[0]), int(pairs[2]), int(pairs[4])
+        ok = count > 0 and kerned > 0 and differ == 0
+        detail = (f"{count} pairs, {kerned} of them kerned, {differ} differing from stb_truetype's "
+                  f"own (want some kerned and none differing)")
+    print(f"  canvas-kern-pairs   {'PASS' if ok else 'FAIL'}  {detail}")
+    note("canvas-kern-pairs", ok)
 
     # ---- layers and tags
     path, probe = _canvas_run(workdir, "overlap", "--sheet", "overlap")
