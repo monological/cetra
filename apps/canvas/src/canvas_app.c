@@ -2443,6 +2443,22 @@ int main(int argc, char** argv) {
             printf("\n");
         }
     }
+    // The editor as the run left it: its text, as hex, and its selections.
+    if (probe && g_editor_sheet.doc) {
+        size_t len = 0;
+        char* text = text_doc_text(g_editor_sheet.doc, &len);
+        printf("canvas editor hex ");
+        for (size_t i = 0; text && i < len; i++)
+            printf("%02x", (unsigned char)text[i]);
+        printf("\n");
+        free(text);
+        const TextSelection* s = NULL;
+        const size_t n = ui_editor_selections(g_editor_sheet.editor, &s, NULL);
+        printf("canvas editor sel %zu", n);
+        for (size_t i = 0; i < n; i++)
+            printf(" %zu %zu", s[i].anchor, s[i].head);
+        printf("\n");
+    }
     board_late_settle(true);
     free_ui_system(ui);
     for (int i = 0; i < 3; i++)

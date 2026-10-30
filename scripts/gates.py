@@ -27897,6 +27897,30 @@ def run_ui_gate(workdir):
       ui-editor-anchor three lines put in above the view, every line above it
                      measured where its rows were guessed, and a new width all keep
                      the line at the view's top; the wheel moves it.
+      ui-editor-keys each of the editor's standard bindings on a fixture: a
+                     character, a word (to its end on macOS, the next one's start
+                     elsewhere), a row, the line's first character then its start,
+                     the text's start, the deletes, Enter indenting, Tab and
+                     Shift+Tab, select all, copy, cut and paste, typing past ASCII,
+                     undo and redo; and every command listed once, named and
+                     described.
+      ui-editor-carets typing at five carets as one action; selections that overlap
+                     merged; five lines pasted one to each caret; Cmd+D taking the
+                     word and then its next matches; Esc back to the primary; a
+                     caret added a row below twice at its column; Option+click
+                     adding one; and find's next match selected.
+      ui-editor-mode a vim-like mode made through the editor's public calls and
+                     nothing else: x, dw, a count before j, i into an insert mode
+                     that types and takes the standard mode's arrows, and Esc back
+                     to a normal mode that types nothing. What makes a vim mode an
+                     addition.
+      ui-editor-host-undo with the text keeping no undo, a host's mode over the
+                     standard one binds Cmd+Z to its own command: the command runs,
+                     the text is untouched, the editor's own undo refuses.
+      ui-editor-script apps/canvas --editor on a file, driven by a script: a caret
+                     added below, "XY" typed at both, undone, Esc to one caret, the
+                     word at it taken by Cmd+D and found again round the text's end
+                     (end to end).
       ui-type-palette apps/canvas --palette driven by a script: mod+K opens it and
                      "zo" filters the commands to Zoom in and Zoom out, the first
                      lit at its first two bytes, with the text in the field (end to
@@ -28809,6 +28833,59 @@ def run_ui_gate(workdir):
                            "its top; the wheel moves it")
     print(f"  ui-editor-anchor      {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-editor-anchor", ok)
+
+    ok, detail = doc_flags("editor-keys", 19, "every standard binding's effect: characters, words, "
+                           "rows, the line's first character then its start, the text's start, "
+                           "deletes, Enter indenting, Tab and Shift+Tab, select all, copy, cut, "
+                           "paste, typing past ASCII, undo and redo; every command listed once")
+    print(f"  ui-editor-keys        {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-editor-keys", ok)
+
+    ok, detail = doc_flags("editor-carets", 8, "typing at five carets as one action, overlapping "
+                           "selections merged, five lines pasted one to each caret, Cmd+D's word "
+                           "and next matches, Esc to the primary, a caret added a row below twice, "
+                           "Option+click, and find's next match")
+    print(f"  ui-editor-carets      {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-editor-carets", ok)
+
+    ok, detail = doc_flags("editor-mode", 6, "a vim-like mode built through the public calls "
+                           "alone: x, dw, a count before j, i into an insert mode that types and "
+                           "takes the standard mode's arrows, Esc back to a normal mode that types "
+                           "nothing")
+    print(f"  ui-editor-mode        {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-editor-mode", ok)
+
+    ok, detail = doc_flags("editor-host-undo", 3, "with keep_undo off, a host's mode binding Cmd+Z "
+                           "to its own command runs it, the text untouched, and the editor's own "
+                           "undo refuses")
+    print(f"  ui-editor-host-undo   {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-editor-host-undo", ok)
+
+    # ---- the editor end to end: a file opened, two carets typed at, undone, a word found
+    text_path = os.path.join(workdir, "editor_script.txt")
+    with open(text_path, "w", encoding="utf-8", newline="") as f:
+        f.write("one two\none four\n")
+    script = os.path.join(workdir, "editor_script.script")
+    find_key = "mod+g" if sys.platform == "darwin" else "f3"
+    with open(script, "w", encoding="utf-8") as f:
+        f.write(f"3 key=mod+alt+down\n5 type=XY\n7 key=mod+z\n9 key=escape\n11 key=mod+d\n"
+                f"13 key={find_key}\n")
+    _, typed = _canvas_run(workdir, "editor_typed", "--editor", text_path, "--input-script",
+                           script, frames=7)
+    _, done = _canvas_run(workdir, "editor_done", "--editor", text_path, "--input-script", script,
+                          frames=16)
+    typed_hex = (typed.get(("editor", "hex")) or [""])[0]
+    done_hex = (done.get(("editor", "hex")) or [""])[0]
+    typed_sel = [int(v) for v in typed.get(("editor", "sel"), [])]
+    done_sel = [int(v) for v in done.get(("editor", "sel"), [])]
+    ok = (typed_hex == b"XYone two\nXYone four\n".hex() and typed_sel == [2, 2, 2, 12, 12]
+          and done_hex == b"one two\none four\n".hex() and done_sel == [1, 0, 3])
+    detail = (f"typed at two carets {bytes.fromhex(typed_hex)!r} {typed_sel} (want "
+              f"b'XYone two\\nXYone four\\n' [2, 2, 2, 12, 12]); undone, the word at the caret "
+              f"taken and found again {bytes.fromhex(done_hex)!r} {done_sel} (want the file as it "
+              f"was, [1, 0, 3])")
+    print(f"  ui-editor-script      {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-editor-script", ok)
 
     # ---- the palette, end to end
     script = os.path.join(workdir, "ui_palette.script")

@@ -9,7 +9,6 @@
  */
 
 #include <assert.h>
-#include <ctype.h>
 #include <math.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -20,6 +19,7 @@
 #include "ui.h"
 #include "ui_field.h"
 #include "ui_text.h"
+#include "ui_typing.h"
 #include "util.h"
 
 /*
@@ -41,13 +41,7 @@ typedef struct UIField UIField;
 
 // A field's text past this is refused, so a paste cannot take the process's memory.
 #define FIELD_MAX_BYTES (1 << 20)
-// Two presses this close in time and place are one double press.
-#define FIELD_PRESS_SECONDS 0.4
-#define FIELD_PRESS_POINTS  4.0f
-// The caret's blink: lit, then dark, ImGui's rhythm.
-#define CARET_LIT_SECONDS  0.8
-#define CARET_DARK_SECONDS 0.4
-#define CARET_WIDTH        1.5f
+#define CARET_WIDTH     UI_TYPING_CARET_WIDTH
 
 struct UIField {
     UIElement* el; // the element it belongs to: its runs, its callbacks' first argument
@@ -150,52 +144,13 @@ static int _prev_index(const UIField* f, int i) {
     return (int)(p - f->buf);
 }
 
-// What a byte starts, for word moves: 0 blank, 1 punctuation, 2 a word's (letters, digits, `_`
-// and anything past ASCII, so a word in another script is a word).
-static int _class(const UIField* f, int i) {
-    const unsigned char c = (unsigned char)f->buf[i];
-    if (c == ' ' || c == '\t' || c == '\n')
-        return 0;
-    if (c >= 0x80 || isalnum(c) || c == '_')
-        return 2;
-    return 1;
-}
-
-// Back past any blanks, then back over the run of one class before them.
+// The platform's word moves (ui_typing.h), in stb_textedit's int offsets.
 static int _word_left(const UIField* f, int i) {
-    i = _prev_index(f, i);
-    while (i > 0 && _class(f, i) == 0)
-        i = _prev_index(f, i);
-    if (i <= 0)
-        return 0;
-    const int k = _class(f, i);
-    for (int p = _prev_index(f, i); p >= 0 && _class(f, p) == k; p = _prev_index(f, p))
-        i = p;
-    return i;
+    return (int)ui_typing_word_left(f->buf, (size_t)f->len, i > 0 ? (size_t)i : 0);
 }
 
-// Forward to the end of the next word on macOS, as its fields move; to the start of the one after
-// elsewhere, as Windows' do.
 static int _word_right(const UIField* f, int i) {
-    const int n = f->len;
-#ifdef __APPLE__
-    while (i < n && _class(f, i) == 0)
-        i = _next_index(f, i);
-    if (i >= n)
-        return n;
-    const int k = _class(f, i);
-    while (i < n && _class(f, i) == k)
-        i = _next_index(f, i);
-#else
-    if (i < n && _class(f, i) != 0) {
-        const int k = _class(f, i);
-        while (i < n && _class(f, i) == k)
-            i = _next_index(f, i);
-    }
-    while (i < n && _class(f, i) == 0)
-        i = _next_index(f, i);
-#endif
-    return i > n ? n : i;
+    return (int)ui_typing_word_right(f->buf, (size_t)f->len, i > 0 ? (size_t)i : 0);
 }
 
 // The visible row's start and end, a wrapped row's as well as a line's: what Home and End, and
@@ -569,22 +524,7 @@ static void _paste(const UISystem* ui, UIField* f) {
     char* text = malloc(n);
     if (!text)
         return;
-    size_t k = 0;
-    const bool multi = f->flags & UI_FIELD_MULTILINE;
-    for (size_t i = 0; i < n; i++) {
-        unsigned char c = (unsigned char)clip[i];
-        if (c == '\r') {
-            if (clip[i + 1] == '\n')
-                continue;
-            c = '\n';
-        }
-        if (c == '\n')
-            text[k++] = multi ? '\n' : ' ';
-        else if (c == '\t')
-            text[k++] = ' ';
-        else if (c >= 0x20 && c != 0x7f)
-            text[k++] = (char)c;
-    }
+    const size_t k = ui_typing_clean(clip, n, text, (f->flags & UI_FIELD_MULTILINE) != 0, false);
     if (k > 0)
         stb_textedit_paste(f, &f->state, text, (int)k);
     free(text);
@@ -803,22 +743,11 @@ bool ui_field_key(const UISystem* ui, UIElement* el, UIRect content, const Input
 
 // ------------------------------------------------------------------- the pointer
 
-// A word round the caret, of the class of the character at it -- or before it, at a word's end.
+// The word round the caret (ui_typing.h).
 static void _select_word(UIField* f) {
-    int at = f->state.cursor;
-    if (at >= f->len || (at > 0 && _class(f, at) == 0 && _class(f, _prev_index(f, at)) != 0))
-        at = _prev_index(f, at);
-    if (at < 0) {
-        _select(f, 0, 0);
-        return;
-    }
-    const int k = _class(f, at);
-    int a = at, b = _next_index(f, at);
-    for (int p = _prev_index(f, a); p >= 0 && _class(f, p) == k; p = _prev_index(f, p))
-        a = p;
-    while (b < f->len && _class(f, b) == k)
-        b = _next_index(f, b);
-    _select(f, a, b > f->len ? f->len : b);
+    size_t a = 0, b = 0;
+    ui_typing_word_round(f->buf, (size_t)f->len, (size_t)f->state.cursor, &a, &b);
+    _select(f, (int)a, (int)b);
 }
 
 void ui_field_press(UIElement* el, UIRect content, float x, float y, bool extend, double now) {
@@ -826,9 +755,7 @@ void ui_field_press(UIElement* el, UIRect content, float x, float y, bool extend
     if (!f)
         return;
     const float lx = x - content.x + f->scroll_x, ly = y - content.y + f->scroll_y;
-    const bool again = now - f->last_press < FIELD_PRESS_SECONDS &&
-                       fabsf(x - f->press_x) < FIELD_PRESS_POINTS &&
-                       fabsf(y - f->press_y) < FIELD_PRESS_POINTS;
+    const bool again = ui_typing_again(now, f->last_press, x, y, f->press_x, f->press_y);
     f->presses = again ? f->presses + 1 : 1;
     f->last_press = now;
     f->press_x = x;
@@ -965,15 +892,7 @@ double ui_field_draw(const UISystem* ui, UIElement* el, const UIStyle* s, UIRect
             f->caret_time = now;
             f->caret_moved = false;
         }
-        bool lit = true;
-        if (blink) {
-            const double period = CARET_LIT_SECONDS + CARET_DARK_SECONDS;
-            double phase = fmod(now - f->caret_time, period);
-            phase = phase < 0.0 ? 0.0 : phase;
-            lit = phase < CARET_LIT_SECONDS;
-            wake = (lit ? CARET_LIT_SECONDS : period) - phase;
-        }
-        if (lit) {
+        if (ui_typing_caret_lit(now, f->caret_time, blink, &wake)) {
             float cx, cy;
             _caret_at(f, &cx, &cy);
             ui_draw_quad(dl, (UIRect){ox + cx, oy + cy, CARET_WIDTH, f->line_h}, f->color);
