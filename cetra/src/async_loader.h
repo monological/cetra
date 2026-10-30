@@ -105,16 +105,17 @@ typedef struct AsyncLoader {
     atomic_size_t pending_count;
     atomic_size_t completed_count;
 
-    // Called on a WORKER thread each time one finishes with a request
-    // (async_loader_set_notify): what wakes a loop that waits rather than polls.
+    // Called on a WORKER thread each time one finishes with a request, decoded
+    // or not: what wakes a loop that waits rather than polls. NULL for none.
     void (*notify)(void* user);
     void* notify_user;
 } AsyncLoader;
 
 /*
- * Lifecycle
+ * Lifecycle. `notify(user)` runs on a worker thread each time one finishes with
+ * a request; given here, before the workers start, so no worker reads it half set.
  */
-AsyncLoader* create_async_loader(void);
+AsyncLoader* create_async_loader(void (*notify)(void* user), void* user);
 void free_async_loader(AsyncLoader* loader);
 
 /*
@@ -182,11 +183,5 @@ size_t async_loader_process_pending(AsyncLoader* loader, size_t max_per_frame);
  */
 bool async_loader_is_busy(AsyncLoader* loader);
 size_t async_loader_pending_count(AsyncLoader* loader);
-// True while a finished decode waits for async_loader_process_pending.
-bool async_loader_has_results(AsyncLoader* loader);
-
-// `notify(user)` runs on a worker thread each time it finishes with a request, decoded or not.
-// Set once, before anything is submitted. NULL for none.
-void async_loader_set_notify(AsyncLoader* loader, void (*notify)(void* user), void* user);
 
 #endif // ASYNC_LOADER_H

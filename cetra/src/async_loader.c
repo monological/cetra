@@ -332,13 +332,15 @@ static int async_loader_worker_count(void) {
 /*
  * Create async loader with thread pool
  */
-AsyncLoader* create_async_loader(void) {
+AsyncLoader* create_async_loader(void (*notify)(void* user), void* user) {
     AsyncLoader* loader = calloc(1, sizeof(AsyncLoader));
     if (!loader) {
         log_error("Failed to allocate AsyncLoader");
         return NULL;
     }
 
+    loader->notify = notify;
+    loader->notify_user = user;
     atomic_store(&loader->shutdown, false);
     atomic_store(&loader->pending_count, 0);
     atomic_store(&loader->completed_count, 0);
@@ -708,20 +710,4 @@ size_t async_loader_pending_count(AsyncLoader* loader) {
         return 0;
     }
     return atomic_load(&loader->pending_count);
-}
-
-bool async_loader_has_results(AsyncLoader* loader) {
-    if (!loader)
-        return false;
-    cetra_mutex_lock(&loader->complete_mutex);
-    const bool waiting = loader->complete_head != NULL;
-    cetra_mutex_unlock(&loader->complete_mutex);
-    return waiting;
-}
-
-void async_loader_set_notify(AsyncLoader* loader, void (*notify)(void* user), void* user) {
-    if (!loader)
-        return;
-    loader->notify = notify;
-    loader->notify_user = user;
 }

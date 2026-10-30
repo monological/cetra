@@ -66,11 +66,6 @@ struct UISystem {
     // Seeded off-screen so the first frame counts as movement without a second
     // field to say the first frame has not happened yet.
     float last_pointer_x, last_pointer_y;
-
-    // The last build left something moving -- an ease short of its target, a
-    // screen still entering, an element whose program reads uTime -- so the
-    // next frame draws something new and idle mode is asked for it (spec 14.1).
-    bool animating;
 };
 
 // ------------------------------------------------------------------- theme
@@ -398,12 +393,8 @@ void ui_set_draw(UIElement* el, UIDrawFn draw, void* user) {
 }
 
 void ui_set_element_program(UIElement* el, ShaderProgram* program) {
-    if (!el)
-        return;
-    el->program = program;
-    // A uniform the program never reads is not active and has no location: one reading uTime
-    // draws something new every frame.
-    el->program_animates = program && glGetUniformLocation(program->id, "uTime") >= 0;
+    if (el)
+        el->program = program;
 }
 
 void ui_set_size(UIElement* el, UISize x_mode, float x, UISize y_mode, float y) {
@@ -799,8 +790,8 @@ static bool _ease(UIElement* el, float dt) {
     el->t_hover = _ease_toward(el->t_hover, hover_target, k);
     el->t_focus = _ease_toward(el->t_focus, focus_target, k);
     el->t_value = _ease_toward(el->t_value, value_target, k);
-    bool moving = el->t_hover != hover_target || el->t_focus != focus_target ||
-                  el->t_value != value_target || (el->program && el->program_animates);
+    bool moving =
+        el->t_hover != hover_target || el->t_focus != focus_target || el->t_value != value_target;
     for (size_t i = 0; i < el->child_count; i++)
         moving |= _ease(el->children[i], dt);
     return moving;
@@ -1072,9 +1063,9 @@ static float _screen_t(const UIScreen* s) {
     return s->t_in;
 }
 
-void ui_build(UISystem* ui, float width, float height, float dt) {
+bool ui_build(UISystem* ui, float width, float height, float dt) {
     if (!ui || !ui->dl || width <= 0.0f || height <= 0.0f)
-        return;
+        return false;
     ui_draw_list_begin(ui->dl, (int)width, (int)height);
     // Bottom to top: a pause screen over a HUD draws both, and the one on top
     // is simply the one emitted last -- from the highest opaque screen, which
@@ -1086,7 +1077,7 @@ void ui_build(UISystem* ui, float width, float height, float dt) {
             break;
         }
     }
-    ui->animating = false;
+    bool moving = false;
     for (size_t i = from; i < ui->stack_count; i++) {
         UIScreen* s = ui->stack[i];
         if (!s || !s->root)
@@ -1096,8 +1087,8 @@ void ui_build(UISystem* ui, float width, float height, float dt) {
             if (s->t_in > 1.0f)
                 s->t_in = 1.0f;
         }
-        ui->animating |= _screen_t(s) < 1.0f;
-        ui->animating |= _ease(s->root, dt);
+        moving |= _screen_t(s) < 1.0f;
+        moving |= _ease(s->root, dt);
         ui_layout(s, width, height);
         // Locals, because the subtree reads the entrance through the DRAW
         // LIST's offset and alpha -- which is what _emit actually consults.
@@ -1114,6 +1105,7 @@ void ui_build(UISystem* ui, float width, float height, float dt) {
     // otherwise inherit a transition it has nothing to do with.
     ui_draw_list_set_offset(ui->dl, 0.0f, 0.0f);
     ui_draw_list_set_alpha(ui->dl, 1.0f);
+    return moving;
 }
 
 // ---------------------------------------------------------------- the system
@@ -1155,9 +1147,10 @@ static void _ui_overlay(Engine* engine, void* user) {
      * no gate arm can, since every probe passes a dt of its own.
      */
     const float dt = engine->headless ? (float)ENGINE_FIXED_FRAME_DT : (float)engine->delta_time;
-    ui_build(ui, (float)engine->win_width, (float)engine->win_height, dt);
-    ui_draw_list_render(ui->dl);
-    if (ui->animating)
+    // Something still moving, or a program reading the clock, draws something new next frame,
+    // and idle mode is asked for it (spec 14.1).
+    const bool moving = ui_build(ui, (float)engine->win_width, (float)engine->win_height, dt);
+    if (ui_draw_list_render(ui->dl) || moving)
         engine_request_frame(engine);
 }
 

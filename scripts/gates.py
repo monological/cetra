@@ -28517,23 +28517,32 @@ def _shapes_pointer_run(workdir, tag, script, frames):
     return _pointer_run(workdir, _bin("shapes"), f"canvas_{tag}", script, frames)
 
 
-def _canvas_run(workdir, tag, *args):
-    """apps/canvas headless at 400x300 points under --canvas-probe: its picture's path and its probe
-    lines keyed by (sheet, name). A run that failed or hung prints the tail of its output and gives
-    None and no lines, so an arm reads an empty dict and fails rather than the group stopping."""
-    out = os.path.join(workdir, f"canvas_{tag}.ppm")
-    cmd = [_bin("canvas"), "-x", "-f", "2", "-W", "400", "-H", "300", "-S", out,
-           "--canvas-probe", *args]
+def _canvas_shot(out, frames, *args):
+    """apps/canvas headless at 400x300 points, its picture written to `out`: its stdout, or None
+    for a run that failed or hung, which prints the tail of its output so an arm reads nothing and
+    fails rather than the group stopping."""
+    cmd = [_bin("canvas"), "-x", "-f", str(frames), "-W", "400", "-H", "300", "-S", out, *args]
+    tag = os.path.splitext(os.path.basename(out))[0]
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=_PROBE_TIMEOUT)
     except subprocess.TimeoutExpired:
         print(f"    apps/canvas {tag}: no exit in {_PROBE_TIMEOUT} s")
-        return None, {}
+        return None
     if r.returncode != 0 or not os.path.exists(out):
         print(f"    apps/canvas {tag} failed: {(r.stdout + r.stderr)[-400:]}")
+        return None
+    return r.stdout
+
+
+def _canvas_run(workdir, tag, *args):
+    """apps/canvas under --canvas-probe: its picture's path and its probe lines keyed by
+    (sheet, name), or None and no lines for a run that failed."""
+    out = os.path.join(workdir, f"canvas_{tag}.ppm")
+    stdout = _canvas_shot(out, 2, "--canvas-probe", *args)
+    if stdout is None:
         return None, {}
     probe = {}
-    for line in r.stdout.splitlines():
+    for line in stdout.splitlines():
         p = line.split()
         if len(p) >= 3 and p[0] == "canvas":
             probe[(p[1], p[2])] = p[3:]
@@ -29042,25 +29051,17 @@ def _canvas_coverage(path):
     return _ppm_array(path)[:, :, 0] / 255.0
 
 
-def _idle_run(workdir, tag, *args, frames=50, idle=True, binary=None):
-    """An app headless at 400x300 points, under --idle unless told otherwise: its picture's path,
-    and from apps/canvas's idle lines each frame's delta_time, the run's frames drawn and seconds
-    waited, and the size of a texture it loaded, as {"deltas": [...], "frames": n, "waited": s,
-    "loaded": (w, h)}. A run that failed or hung prints the tail of its output and gives None and
-    an empty dict."""
+def _idle_run(workdir, tag, *args, frames=50, idle=True):
+    """apps/canvas under --idle unless told otherwise: its picture's path, and from its idle lines
+    each frame's delta_time, the run's frames drawn and seconds waited, and the size of a texture it
+    loaded, as {"deltas": [...], "frames": n, "waited": s, "loaded": (w, h)}; None and an empty
+    dict for a run that failed."""
     out = os.path.join(workdir, f"idle_{tag}.ppm")
-    cmd = [binary or _bin("canvas"), "-x", "-f", str(frames), "-W", "400", "-H", "300", "-S", out,
-           *(["--idle"] if idle else []), *args]
-    try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=_PROBE_TIMEOUT)
-    except subprocess.TimeoutExpired:
-        print(f"    {os.path.basename(cmd[0])} {tag}: no exit in {_PROBE_TIMEOUT} s")
-        return None, {}
-    if r.returncode != 0 or not os.path.exists(out):
-        print(f"    {os.path.basename(cmd[0])} {tag} failed: {(r.stdout + r.stderr)[-400:]}")
+    stdout = _canvas_shot(out, frames, *(["--idle"] if idle else []), *args)
+    if stdout is None:
         return None, {}
     said = {"deltas": []}
-    for line in r.stdout.splitlines():
+    for line in stdout.splitlines():
         p = line.split()
         if p[:3] == ["canvas", "idle", "frame"] and len(p) == 6:
             said["deltas"].append(float(p[5]))
@@ -29084,13 +29085,16 @@ def run_idle_gate(workdir):
                      frames, from the first to the last at least the 0.5 s asked for, and each
                      delta_time under the wake it followed. The wait is kept out of the clock: a
                      frame after a wait advances what animates by a frame and not by the wait.
-      idle-thread    the board filled on a thread while the loop runs, between engine_begin_work
-                     and engine_end_work: the loop waits rather than drawing, 2 frames, and the
-                     last is the board drawn without idle mode, 0 px. A headless run does not
-                     end while work is out.
+      idle-thread    the board filled on a thread started on the frame a 0.5 s wake draws, between
+                     engine_begin_work and engine_end_work: the loop waits rather than drawing, 3
+                     frames, and the last is the board drawn without idle mode, 0 px. A headless
+                     run does not end while work is out. The thread is started past the first
+                     tenth of a second: something a hidden window is sent then wakes a waiting
+                     loop, and a board ready inside it was drawn with the empty event removed.
       idle-pointer   a scripted drag across the shapes sheet: a frame each frame the script
-                     plays, none after, and the last is the same drag without idle mode at that
-                     frame, 0 px. The drag must move the sheet, or two still frames would agree.
+                     plays and one for its last, none after, and the last is the same drag
+                     without idle mode at that frame, 0 px. The drag must move the sheet, or two
+                     still frames would agree.
       idle-3d        apps/render --idle on a 3D fixture draws every one of its frames -- a scene
                      with anything in it keeps the loop drawing -- and its last is the fixture
                      without idle mode, 0 px.
@@ -29104,9 +29108,7 @@ def run_idle_gate(workdir):
                      ended at the first.
       idle-load      a 2048x1608 texture asked for on the frame a 0.5 s wake draws: the loop waits
                      while it decodes rather than drawing, 3 frames, the third delivering it. The
-                     loader's thread wakes the loop when the decode is done. Asked for on the
-                     first frame instead, it passed with no wake at all: something a hidden window
-                     is sent in its first tenth of a second woke the loop after the decode.
+                     loader's thread wakes the loop when the decode is done.
     """
     failed = []
 
@@ -29138,15 +29140,16 @@ def run_idle_gate(workdir):
     print(f"  idle-timed          {'PASS' if ok else 'FAIL'}  {detail}")
     note("idle-timed", ok)
 
-    late, said = _idle_run(workdir, "thread", "--sheet", "board", "--edit-thread")
+    late, said = _idle_run(workdir, "thread", "--sheet", "board", "--edit-thread", "--idle-wake",
+                           "0.5")
     board, _ = _idle_run(workdir, "board_plain", "--sheet", "board", frames=2, idle=False)
     if not late or not board or "frames" not in said:
         ok, detail = False, "a run failed"
     else:
         ae, _ = compare(board, late)
-        ok = said["frames"] == 2 and said["waited"] > 0.0 and ae == 0
-        detail = (f"{said['frames']} frames (want 2), {said['waited']:.3f} s waited for the "
-                  f"thread (want > 0), {ae} px from the board drawn plainly (want 0)")
+        ok = said["frames"] == 3 and said["waited"] > 0.5 and ae == 0
+        detail = (f"{said['frames']} frames (want 3), {said['waited']:.3f} s waited for the wake "
+                  f"and the thread (want > 0.5), {ae} px from the board drawn plainly (want 0)")
     print(f"  idle-thread         {'PASS' if ok else 'FAIL'}  {detail}")
     note("idle-thread", ok)
 
@@ -29168,13 +29171,14 @@ def run_idle_gate(workdir):
     print(f"  idle-pointer        {'PASS' if ok else 'FAIL'}  {detail}")
     note("idle-pointer", ok)
 
-    fixture = ("-m", asset("mask_fixture.cscn"))
-    shot, _ = _idle_run(workdir, "3d", *fixture, "--screenshot-every", "12", frames=12,
-                        binary=RENDER)
-    shot_plain, _ = _idle_run(workdir, "3d_plain", *fixture, frames=12, idle=False, binary=RENDER)
+    fixture = asset("mask_fixture.cscn")
+    shot = os.path.join(workdir, "idle_3d.ppm")
+    shot_plain = os.path.join(workdir, "idle_3d_plain.ppm")
     last = os.path.join(workdir, "idle_3d_000012.ppm")
-    if not shot or not shot_plain:
-        ok, detail = False, "a run failed"
+    failure = (render(fixture, shot, ["--idle", "--screenshot-every", "12"], frames=12)
+               or render(fixture, shot_plain, [], frames=12))
+    if failure:
+        ok, detail = False, f"a run failed: {failure[-300:]}"
     else:
         ae, _ = compare(shot_plain, shot)
         ok = os.path.exists(last) and ae == 0

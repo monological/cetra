@@ -731,9 +731,10 @@ uint64_t ui_draw_list_signature(const UIDrawList* dl) {
     return fnv1a64(FNV1A64_BASIS, dl->verts, dl->vcount * sizeof(UIVertex));
 }
 
-void ui_draw_list_render(UIDrawList* dl) {
+bool ui_draw_list_render(UIDrawList* dl) {
     if (!dl || dl->icount == 0 || !dl->program)
-        return;
+        return false;
+    bool animates = false;
 
     // Save every piece of state this touches. The frame is live here -- the
     // post chain has written it and the debug GUI draws next -- so leaving the
@@ -790,6 +791,9 @@ void ui_draw_list_render(UIDrawList* dl) {
         const float resolution[2] = {(float)dl->width, (float)dl->height};
         uniform_set_vec2(u, "uResolution", resolution);
         uniform_set_float(u, "uTime", dl->time);
+        // A uniform a program never reads has no location: one that reads the clock draws
+        // something new every frame, however it was bound.
+        animates |= uniform_location(u, "uTime") >= 0;
         uniform_set_float(u, "uFocus", b->focus);
         const float rect[4] = {b->rect.x, b->rect.y, b->rect.w, b->rect.h};
         uniform_set_vec4(u, "uRect", rect);
@@ -830,4 +834,5 @@ void ui_draw_list_render(UIDrawList* dl) {
         glEnable(GL_DEPTH_TEST);
     if (had_cull)
         glEnable(GL_CULL_FACE);
+    return animates;
 }
