@@ -383,20 +383,24 @@ earlier draft of this entry named each item after a UIKit call, which read as a 
   8. **One home for UTF-8**, in `text.c`: `next`, its exact mirror `prev`, `encode` and
      `is_continuation`, refusing what is no character both ways, and a codepoint is a `uint32_t`
      throughout.
-  9. **One way a label lays out its text**: every label with text keeps its lines.
+  9. **One way a label lays out its text**: every element with text keeps its lines, and a label
+     draws through them.
 
   Two of 14.2's own additions were settled with them: the modifier bits are `INPUT_MOD_SHORTCUT`
   and `INPUT_MOD_WORD` in `input.h`, and a negative padding means none, as a negative spacing does.
 - **Measured** (`gametest --ui-bench`, release; each was built only past the bar it was given):
   10. **Laying out only when something changed: not built.** The heaviest screen's two layouts
       took 0.117 ms a frame, against a bar of 1. Apps keep writing fields directly.
-  11. **A label's measures kept: built**, its text's share of the layouts being over the quarter
-      the bar set. It bought little: only 8 of the settings screen's 40 elements are labels.
-  12. **A kerning table: built**, at load, kerning being three quarters of a text walk. A walk went
-      from 1.09 ms to 0.31.
+  11. **The text's measures kept: built**, its text's share of the layouts being over the quarter
+      the bar set. Built for labels alone it bought nothing, 8 of the settings screen's 40
+      elements being labels; the closing reviews gave every element with text its lines and so
+      its measures, and stopped measuring a FIXED axis, and that screen's two layouts went from
+      0.117 ms to 0.014.
+  12. **A kerning table: built**, at load, kerning being three quarters of a text walk. With the
+      glyphs under U+0100 found without the hash, a walk went from 1.09 ms to 0.18.
   13. **Re-breaking only the edited line: not built.** With the kerning table, a keystroke in a
-      20 KB field takes 0.6 ms, under the 1 ms bar. The editor's own core decides it again at its
-      sizes: at 1,000 KB a keystroke is still 27 ms.
+      20 KB field takes 0.37 ms, under the 1 ms bar. The editor's own core decides it again at its
+      sizes: at 1,000 KB a keystroke is still 16 ms.
   14. **The atlas: built in bands across threads**, the packing still serial, so the atlas is the
       same to the byte: 157 ms to 33 for Roboto at 64.
 - **Not done:** clearing the keys pressed while a loading screen is up. They arrive together in the
