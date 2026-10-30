@@ -6,6 +6,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "input.h"
 #include "text.h"
 #include "texture.h"
 
@@ -478,7 +479,19 @@ typedef struct UIInput {
     bool nav_up, nav_down, nav_left, nav_right; // edges
     bool accept;                                // edge: activate the focused element
     bool back;                                  // edge: leave the top screen
+
+    // What a desktop keyboard and wheel add (spec 14.2); zero from an app that has neither, which
+    // is every game.
+    float wheel_y;                   // the wheel this frame, in its own units; + is away
+    const InputKeyEvent* key_events; // typed this frame, in order; borrowed for the call
+    int key_event_count;             //
+    double time;                     // seconds, any monotonic clock: double clicks measure on it
 } UIInput;
+
+// Fills `in`'s wheel, typing and time from the engine's input this frame: the wheel and typing the
+// poll delivered, and the time from the wall clock in a window and the frame count headless, so a
+// headless double click is the same on every run. The pointer half stays the caller's.
+void ui_input_add_keyboard(UIInput* in, const struct Engine* engine);
 
 /*
  * The INPUT pass. Lay the top screen out, hit-test the pointer, move focus,

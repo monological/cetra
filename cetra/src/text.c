@@ -16,10 +16,70 @@
 #define STB_TRUETYPE_IMPLEMENTATION
 #include "ext/stb_truetype.h"
 
-// Default character set for atlas generation
-static const char* DEFAULT_CHARSET = " !\"#$%&'()*+,-./0123456789:;<=>?@"
-                                     "ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`"
-                                     "abcdefghijklmnopqrstuvwxyz{|}~";
+// The codepoints an atlas holds, as inclusive ranges: printable ASCII, Latin-1, Greek, and the
+// symbols technical prose reaches for. One the face lacks is left out, and draws as the UI's
+// missing-glyph box rather than as the face's own .notdef.
+static const int ATLAS_RANGES[][2] = {
+    {0x20, 0x7e},     // printable ASCII
+    {0xa0, 0xff},     // Latin-1
+    {0x391, 0x3a9},   // Greek capitals
+    {0x3b1, 0x3c9},   // Greek small letters
+    {0x2013, 0x2014}, // en and em dash
+    {0x2018, 0x201d}, // curly quotes
+    {0x2022, 0x2022}, // bullet
+    {0x2026, 0x2026}, // ellipsis
+    {0x2030, 0x2030}, // per mille
+    {0x20ac, 0x20ac}, // euro
+    {0x2126, 0x2126}, // ohm
+    {0x2190, 0x2193}, // arrows
+    {0x2212, 0x2212}, // minus
+    {0x221e, 0x221e}, // infinity
+    {0x2248, 0x2248}, // almost equal
+    {0x2260, 0x2260}, // not equal
+    {0x2264, 0x2265}, // less and greater or equal
+};
+#define ATLAS_CODEPOINTS_MAX 512 // over the ranges' total, which _atlas_codepoints holds it to
+
+// The ranges' codepoints the face holds, in order.
+static size_t _atlas_codepoints(const stbtt_fontinfo* info, int out[ATLAS_CODEPOINTS_MAX]) {
+    size_t n = 0;
+    for (size_t r = 0; r < sizeof(ATLAS_RANGES) / sizeof(ATLAS_RANGES[0]); r++)
+        for (int cp = ATLAS_RANGES[r][0]; cp <= ATLAS_RANGES[r][1] && n < ATLAS_CODEPOINTS_MAX;
+             cp++)
+            if (stbtt_FindGlyphIndex(info, cp) != 0)
+                out[n++] = cp;
+    return n;
+}
+
+int text_utf8_next(const unsigned char** s) {
+    const unsigned char* p = *s;
+    int cp, extra;
+    if (p[0] < 0x80) {
+        *s = p + 1;
+        return p[0];
+    }
+    if ((p[0] & 0xe0) == 0xc0)
+        cp = p[0] & 0x1f, extra = 1;
+    else if ((p[0] & 0xf0) == 0xe0)
+        cp = p[0] & 0x0f, extra = 2;
+    else if ((p[0] & 0xf8) == 0xf0)
+        cp = p[0] & 0x07, extra = 3;
+    else
+        extra = -1, cp = 0;
+    for (int i = 1; i <= extra; i++) {
+        if ((p[i] & 0xc0) != 0x80) {
+            extra = -1;
+            break;
+        }
+        cp = cp << 6 | (p[i] & 0x3f);
+    }
+    if (extra < 0) {
+        *s = p + 1;
+        return 0xfffd;
+    }
+    *s = p + 1 + extra;
+    return cp;
+}
 
 // --- FontPool ---
 
@@ -71,7 +131,7 @@ void free_font_pool(FontPool* pool) {
 
 // --- Font Loading ---
 
-static void generate_glyph_atlas(Font* font, const char* charset) {
+static void generate_glyph_atlas(Font* font) {
     if (!font || !font->stb_font_info)
         return;
 
@@ -108,10 +168,10 @@ static void generate_glyph_atlas(Font* font, const char* charset) {
     int cursor_y = padding;
     int row_height = 0;
 
-    // Process each character
-    size_t charset_len = strlen(charset);
-    for (size_t i = 0; i < charset_len; i++) {
-        int codepoint = (unsigned char)charset[i];
+    int codepoints[ATLAS_CODEPOINTS_MAX];
+    const size_t codepoint_count = _atlas_codepoints(info, codepoints);
+    for (size_t i = 0; i < codepoint_count; i++) {
+        int codepoint = codepoints[i];
 
         // Get glyph metrics
         int advance, left_bearing;
@@ -203,9 +263,9 @@ static void generate_glyph_atlas(Font* font, const char* charset) {
         if (sdf_data)
             stbtt_FreeSDF(sdf_data, NULL);
 
-        // Create glyph info with UVs based on current atlas_size
-        // Note: if atlas resizes later, these UVs become invalid, but we resize
-        // BEFORE placing glyphs, so this glyph's UVs use the correct final size
+        // The UVs are PIXELS until every glyph is placed, and divided by the atlas's final size
+        // below: the atlas doubles as it fills, and a glyph placed before a doubling divided by
+        // the old size sampled the wrong quarter of the new one.
         GlyphInfo* glyph = calloc(1, sizeof(GlyphInfo));
         if (glyph) {
             glyph->codepoint = codepoint;
@@ -216,11 +276,10 @@ static void generate_glyph_atlas(Font* font, const char* charset) {
             glyph->x1 = (float)x1;
             glyph->y1 = (float)y1;
 
-            // UV coordinates (normalized)
-            glyph->u0 = (float)cursor_x / atlas_size;
-            glyph->v0 = (float)cursor_y / atlas_size;
-            glyph->u1 = (float)(cursor_x + glyph_w) / atlas_size;
-            glyph->v1 = (float)(cursor_y + glyph_h) / atlas_size;
+            glyph->u0 = (float)cursor_x;
+            glyph->v0 = (float)cursor_y;
+            glyph->u1 = (float)(cursor_x + glyph_w);
+            glyph->v1 = (float)(cursor_y + glyph_h);
 
             HASH_ADD_INT(font->glyph_cache, codepoint, glyph);
         }
@@ -228,6 +287,12 @@ static void generate_glyph_atlas(Font* font, const char* charset) {
         cursor_x += glyph_w + padding;
         if (glyph_h > row_height)
             row_height = glyph_h;
+    }
+    for (GlyphInfo* g = font->glyph_cache; g; g = g->hh.next) {
+        g->u0 /= (float)atlas_size;
+        g->v0 /= (float)atlas_size;
+        g->u1 /= (float)atlas_size;
+        g->v1 /= (float)atlas_size;
     }
 
     // Create OpenGL texture
@@ -302,7 +367,7 @@ Font* load_font(FontPool* pool, const char* filepath, float base_size, bool use_
     font->ref_count = 1;
 
     // Generate atlas
-    generate_glyph_atlas(font, DEFAULT_CHARSET);
+    generate_glyph_atlas(font);
 
     // Add to cache
     HASH_ADD_KEYPTR(hh, pool->font_cache, font->name, strlen(font->name), font);

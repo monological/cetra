@@ -102,15 +102,15 @@ int main(int argc, char** argv) {
      */
     bool headless = false;
     int frames = 0;
-    const char* pointer_script = NULL;
+    const char* input_script = NULL;
     for (int i = 1; i < argc; i++) {
         const char* a = argv[i];
         if (!strcmp(a, "-x") || !strcmp(a, "--headless"))
             headless = true;
         else if ((!strcmp(a, "-f") || !strcmp(a, "--frames")) && i + 1 < argc)
             frames = atoi(argv[++i]);
-        else if (!strcmp(a, "--pointer-script") && i + 1 < argc)
-            pointer_script = argv[++i];
+        else if (!strcmp(a, "--input-script") && i + 1 < argc)
+            input_script = argv[++i];
         else if (!strcmp(a, "--trace-camera"))
             trace_camera = true;
     }
@@ -229,7 +229,7 @@ int main(int argc, char** argv) {
     scene_print(scene);
 
     engine->exit_after_frames = frames;
-    if (pointer_script && !engine_set_pointer_script(engine, pointer_script)) {
+    if (input_script && !engine_set_input_script(engine, input_script)) {
         free_engine(engine);
         return 1;
     }

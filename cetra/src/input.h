@@ -2,12 +2,24 @@
 #define _INPUT_H_
 
 #include <stdbool.h>
+#include <stdint.h>
 #include <cglm/types.h>
 
 struct SceneNode;
 
 // GLFW's key codes run up to GLFW_KEY_LAST, 348; engine.c holds the two together.
 #define INPUT_KEYS 349
+// Typing events held between two polls; more in one batch are dropped, and said once.
+#define INPUT_KEY_EVENTS 64
+
+// One thing typed: a key pressed or repeated (`key` a GLFW key code, `mods` its GLFW modifier
+// bits, `codepoint` 0), or a character the keyboard produced (`codepoint`, `key` 0). A press of
+// a letter brings both, the key first, as GLFW sends them.
+typedef struct InputKeyEvent {
+    int key;
+    int mods;
+    uint32_t codepoint;
+} InputKeyEvent;
 
 // The engine's own reading of the pointer, written by its GLFW callbacks
 // before the app's are called. Positions are FRAMEBUFFER pixels with +Y up,
@@ -38,6 +50,11 @@ typedef struct InputState {
     // a tap that went down and up between two polls of the keys is still a press. Keys a GUI
     // field takes reach ImGui and not this.
     bool key_pressed[INPUT_KEYS];
+    // What was typed since the previous frame ended, on the same schedule, in the order it came:
+    // order is the point, since a character then Backspace is not Backspace then the character.
+    // Presses and repeats both, which is what a text field needs and key_pressed is not.
+    InputKeyEvent key_events[INPUT_KEY_EVENTS];
+    int key_event_count;
 } InputState;
 
 void init_input_state(InputState* state);

@@ -147,6 +147,10 @@ Font* get_font(FontPool* pool, const char* name);
 void font_retain(Font* font);
 void font_release(Font* font);
 
+// The next codepoint of a UTF-8 string, stepping past it; a byte that starts no whole sequence
+// is one U+FFFD. Stops at a NUL inside a sequence, so a NUL-terminated string is never overread.
+int text_utf8_next(const unsigned char** s);
+
 // Glyph access. NULL for a codepoint the atlas does not hold.
 GlyphInfo* font_get_glyph(const Font* font, int codepoint);
 // A codepoint's advance in base-size pixels, whether the atlas holds it or not:

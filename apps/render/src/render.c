@@ -90,7 +90,7 @@ static void print_usage(const char* prog) {
         stderr,
         "      --cam-target x,y,z Explicit look-at target (overrides --yaw/--pitch/--distance)\n");
     fprintf(stderr, "      --cam-up x,y,z     Explicit up vector (default: 0,1,0)\n");
-    fprintf(stderr, "      --pointer-script F Replay a mouse from a text file (spec 12.19)\n");
+    fprintf(stderr, "      --input-script F Replay a mouse and typing from a text file\n");
     fprintf(stderr, "      --trace-camera     Print the frame's camera pose on stdout\n");
     fprintf(stderr, "  -E, --exposure <f>     Fixed exposure: a linear multiplier, or an EV bias\n"
                     "                         (any sign) under a post.camera. Pins the frame\n");
@@ -1007,12 +1007,12 @@ static int parse_args(int argc, char** argv, RenderArgs* args) {
                 return -1;
             }
             args->cam_up_set = 1;
-        } else if (strcmp(argv[i], "--pointer-script") == 0) {
+        } else if (strcmp(argv[i], "--input-script") == 0) {
             if (++i >= argc) {
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i - 1]);
                 return -1;
             }
-            args->pointer_script = argv[i];
+            args->input_script = argv[i];
         } else if (strcmp(argv[i], "--trace-camera") == 0) {
             trace_camera = true;
         } else if (strcmp(argv[i], "-E") == 0 || strcmp(argv[i], "--exposure") == 0) {
@@ -5033,7 +5033,7 @@ int main(int argc, char** argv) {
 
     // After the framing above, so the script's first drag starts from the pose a
     // run without it would have had.
-    if (args.pointer_script && !engine_set_pointer_script(engine, args.pointer_script)) {
+    if (args.input_script && !engine_set_input_script(engine, args.input_script)) {
         free_engine(engine);
         return 1;
     }
