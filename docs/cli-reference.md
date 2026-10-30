@@ -1809,12 +1809,13 @@ It takes the capture set `-x`, `-f`, `-S`, `-W` and `-H`, and:
   `glFinish` calls. Both are what the `canvas` gate group reads.
 - `--idle` turns on the engine's idle mode (spec 14.1): a frame is drawn only when something asks
   for one. Under it:
-  - `--edit-thread` stops joining its thread: the board is filled while the loop runs, after a
-    pause standing for a parse, and applied on the frame its end wakes.
-  - `--idle-wake S,...` asks for timed wakes, each on its frame in turn.
-  - `--idle-load PATH` loads a texture, named from the working directory, once those wakes are
-    spent.
-  - `--ui-enter`, with `--ui`, fades the panel in and puts focus on a button in it.
+  - `--idle-wake S,...` asks for timed wakes, each on its frame in turn. On the first frame with
+    none left to ask for, the late work below starts.
+  - `--edit-thread` fills the board on a thread started as late work, after a pause standing for
+    a parse, and applies it on the frame the thread's end wakes.
+  - `--idle-load PATH` loads a texture, named from the working directory, as late work.
+  - `--ui-enter` puts the UI panel up (as `--ui` does), fades it in, and puts focus on a button
+    in it.
   - `--gui-click` opens the debug GUI and hands it a click on the first frame.
 
   Headless, the run ends at the first frame after which nothing asks for another. It prints each

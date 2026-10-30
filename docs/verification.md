@@ -595,17 +595,20 @@ headless end, and that a 3D scene is drawn every frame as without it. It drives 
 `apps/canvas --idle` and `apps/render --idle`.
 
 **A hidden window is woken once in its first tenth of a second on macOS**, a spurious return from
-`glfwWaitEvents` that GLFW's documentation allows for. Work that finishes inside that window is
-drawn whether or not anything woke the loop for it, which is how the first idle-load and
-idle-thread arms passed with the loader's wake, or the empty event, removed. Their late work now
-comes after it: a 0.5 s timed wake before the load, a 300 ms pause on the board's thread.
+`glfwWaitEvents` that GLFW's documentation allows for. A headless wait asks again after any wake,
+but a request already made is then found, so work that ends inside that window was drawn with the
+empty event removed, and the first idle-thread arm passed so. The arms' late work -- the board's
+thread, the late load -- now starts on the frame a 0.5 s timed wake draws, past it. With the
+empty event removed, or the loader's wake, those runs now wait for good.
 
-**What no suite covers is real input waking the wait**, and the window-refresh, focus and
-cursor-enter callbacks that wake it too. Closing it is a look: run `./out/bin/canvas --idle
---sheet board` windowed and press F. The readout's count of frames drawn should stand still while
-nothing moves, the process should sit at 0% CPU in Activity Monitor, and a drag, the wheel, G's
-debug GUI and its clicks should each draw at once. **Done on macOS (2026-10-29):** 0.0% CPU
-still. Linux and Windows are owed the same look.
+**What no suite covers is real input waking the wait.** In a window any wake draws a frame, so
+every event does, with nothing for a callback to mark. Neither does any suite cover a windowed
+pointer script's last frame, which the frame after the wait draws; headless drew it either way.
+Closing it is a look: run `./out/bin/canvas --idle --sheet board` windowed and press F. The
+readout's count of frames drawn should stand still while nothing moves, the process should sit at
+0% CPU in Activity Monitor, and a drag, the wheel, G's debug GUI and its clicks should each draw at
+once. **Done on macOS (2026-10-29):** 0.0% CPU still, before the reviews' restructure; owed again
+after it, and on Linux and Windows.
 
 ### The real-character path
 
