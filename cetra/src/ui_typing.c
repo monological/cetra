@@ -11,6 +11,8 @@
 static size_t _next(const char* s, size_t len, size_t i) {
     if (i >= len)
         return len;
+    if ((unsigned char)s[i] < 0x80)
+        return i + 1;
     char buf[5] = {0};
     memcpy(buf, s + i, len - i < 4 ? len - i : 4);
     const char* p = buf;

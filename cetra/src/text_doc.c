@@ -132,6 +132,9 @@ static void _free_step(TextUndoStep* s) {
 void free_text_doc(TextDoc* doc) {
     if (!doc)
         return;
+    for (size_t i = 0; i < doc->view_count; i++)
+        if (doc->views[i].gone)
+            doc->views[i].gone(doc->views[i].view);
     for (size_t i = 0; i < doc->line_count; i++)
         _free_line(doc, &doc->lines[i]);
     for (size_t i = 0; i < doc->undo_count + doc->redo_count; i++)

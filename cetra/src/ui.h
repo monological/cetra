@@ -586,9 +586,9 @@ void ui_field_set_on_key(UIElement* el, UIKeyFn on_key, void* user);
 
 /*
  * The code editor (spec 14.4): a TextDoc shown and edited, its lines wrapped at its width, in the
- * theme's monospaced face. It borrows the text, which must outlive it, and two editors may show
- * one. It measures nothing, so it is sized FIXED or GROW, and grows by default. Its carets, keys
- * and modes are ui_editor_*, in ui_editor.h.
+ * theme's monospaced face. It borrows the text, and two editors may show one; a text freed first
+ * leaves it showing nothing. It measures nothing, so it is sized FIXED or GROW, and grows by
+ * default. Its carets, keys and modes are ui_editor_*, in ui_editor.h.
  */
 UIElement* ui_editor(UIElement* parent, struct TextDoc* doc);
 // Whether the UI takes the keyboard: a text field or an editor holds the top screen's focus, or a

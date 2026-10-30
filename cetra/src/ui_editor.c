@@ -39,6 +39,12 @@
 #define WHEEL_ROWS 3.0f
 // The face's size when the theme names none, in points.
 #define EDITOR_SIZE 13.0f
+// What the budget does a frame, past what is drawn: the bytes of guessed lines it wraps, and the
+// lines a stateful highlighter's walk colours. Counted rather than timed, so a headless run
+// repeats; sized from the bench to stay under a millisecond.
+#define SETTLE_BYTES  (192 * 1024)
+#define SETTLE_LINES  2000
+#define SETTLE_VISITS (256 * 1024) // the most lines a frame's walk looks at, wrapped or not
 
 typedef struct UIEditor UIEditor;
 
@@ -83,12 +89,32 @@ struct UIEditor {
     char* find;
     size_t find_len;
     unsigned find_flags;
+    // The budget's walk: the lines whose rows are still a guess, where the walk looks for them
+    // next, and the furthest line drawn, which a stateful highlighter's walk reaches for.
+    size_t guessed;
+    size_t settle_line;
+    size_t drawn_to;
 };
+
+// The editor an element is, while the text it shows lives; NULL for anything else, and once the
+// text is freed: an editor whose text is gone draws and does nothing.
+static UIEditor* _of(UIElement* el) {
+    UIEditor* ed = el && el->kind == UI_EDITOR ? el->editor : NULL;
+    return ed && ed->doc ? ed : NULL;
+}
+
+// The same, for a call that only reads.
+static const UIEditor* _seen(const UIElement* el) {
+    const UIEditor* ed = el && el->kind == UI_EDITOR ? el->editor : NULL;
+    return ed && ed->doc ? ed : NULL;
+}
 
 // ---- Characters
 
 // The codepoint at s[*i] of a run `len` long, never reading past it, *i moved past it.
 static uint32_t _next(const char* s, size_t len, size_t* i) {
+    if ((unsigned char)s[*i] < 0x80)
+        return (uint32_t)(unsigned char)s[(*i)++];
     char buf[5] = {0};
     const size_t n = len - *i < 4 ? len - *i : 4;
     memcpy(buf, s + *i, n);
@@ -181,6 +207,8 @@ static size_t _wrap_line(UIEditor* ed, size_t line, int* hang) {
         const size_t was = ed->rows[line] ? ed->rows[line] : _estimate(ed, line);
         if (was != count && ed->tops_good > line)
             ed->tops_good = line;
+        if (!ed->rows[line])
+            ed->guessed--;
         ed->rows[line] = count;
     }
     return count;
@@ -188,6 +216,33 @@ static size_t _wrap_line(UIEditor* ed, size_t line, int* hang) {
 
 static size_t _rows_of(UIEditor* ed, size_t line) {
     return ed->rows[line] ? ed->rows[line] : _wrap_line(ed, line, NULL);
+}
+
+// A frame's share of the work past what is drawn: guessed lines wrapped, up to SETTLE_BYTES of
+// them, looked for round the text from where the last frame stopped, and a stateful
+// highlighter's walk toward the furthest line drawn. Whether any is left.
+static bool _settle(UIEditor* ed) {
+    size_t bytes = 0, visited = 0;
+    const size_t lines = ed->doc->line_count;
+    while (ed->guessed && bytes < SETTLE_BYTES && visited < SETTLE_VISITS) {
+        if (ed->settle_line >= lines)
+            ed->settle_line = 0;
+        if (!ed->rows[ed->settle_line]) {
+            size_t len = 0;
+            text_doc_line(ed->doc, ed->settle_line, &len);
+            _wrap_line(ed, ed->settle_line, NULL);
+            bytes += len + 1;
+        }
+        ed->settle_line++;
+        visited++;
+    }
+    const bool colouring = text_doc_highlight_step(ed->doc, ed->drawn_to + 1, SETTLE_LINES);
+    return ed->guessed || colouring;
+}
+
+bool ui_editor_settled(const UIElement* el) {
+    const UIEditor* ed = _seen(el);
+    return !ed || !ed->guessed;
 }
 
 // The rows above `line`, guessed for the lines not wrapped yet.
@@ -359,9 +414,12 @@ static void _view_lines(void* view, size_t first, size_t removed, size_t inserte
     if (!grow_array((void**)&ed->rows, &ed->line_capacity, count, sizeof(uint32_t), 64) ||
         !grow_array((void**)&ed->tops, &ed->tops_capacity, count + 1, sizeof(uint64_t), 64))
         return;
+    for (size_t i = first; i < first + removed; i++)
+        ed->guessed -= ed->rows[i] == 0;
     memmove(&ed->rows[first + inserted], &ed->rows[first + removed],
             (old - first - removed) * sizeof(uint32_t));
     memset(&ed->rows[first], 0, inserted * sizeof(uint32_t));
+    ed->guessed += inserted;
     if (ed->tops_good > first)
         ed->tops_good = first;
     // The view keeps its place in the text: a line above the change stays, one below it moves with
@@ -403,6 +461,10 @@ static void _view_set(void* view, const TextSelection* s, size_t count) {
     _set(view, s, count);
 }
 
+static void _view_gone(void* view) {
+    ((UIEditor*)view)->doc = NULL;
+}
+
 UIEditor* ui_editor_make(UIElement* el, TextDoc* doc) {
     UIEditor* ed = calloc(1, sizeof(UIEditor));
     if (!ed)
@@ -416,6 +478,7 @@ UIEditor* ui_editor_make(UIElement* el, TextDoc* doc) {
     ed->tops = calloc(lines + 1, sizeof(uint64_t));
     ed->line_capacity = lines;
     ed->tops_capacity = lines + 1;
+    ed->guessed = lines;
     if (!ed->rows || !ed->tops || !_room(ed, 1)) {
         ui_editor_free(ed);
         return NULL;
@@ -428,7 +491,8 @@ UIEditor* ui_editor_make(UIElement* el, TextDoc* doc) {
                                           .lines = _view_lines,
                                           .map = _view_map,
                                           .selections = _view_selections,
-                                          .set_selections = _view_set});
+                                          .set_selections = _view_set,
+                                          .gone = _view_gone});
     return ed;
 }
 
@@ -488,6 +552,8 @@ static void _layout(UIEditor* ed, const UISystem* ui, UIRect content) {
     if (cols != ed->cols) {
         memset(ed->rows, 0, ed->doc->line_count * sizeof(uint32_t));
         ed->tops_good = 0;
+        ed->guessed = ed->doc->line_count;
+        ed->settle_line = 0;
         ed->cols = cols;
     }
     if (ed->top_line >= ed->doc->line_count)
@@ -538,7 +604,7 @@ static void _line_at_row(UIEditor* ed, uint64_t row, size_t* line, size_t* in) {
 
 // The offset a point at (x, y) is nearest, in the rows as last laid out.
 size_t ui_editor_offset_at(UIElement* el, float x, float y) {
-    UIEditor* ed = el ? el->editor : NULL;
+    UIEditor* ed = _of(el);
     if (!ed || ed->row <= 0.0f)
         return 0;
     float down = (y - ed->text.y) / ed->row + ed->top_frac;
@@ -582,7 +648,7 @@ size_t ui_editor_offset_at(UIElement* el, float x, float y) {
 }
 
 bool ui_editor_point_of(UIElement* el, size_t offset, float* x, float* y) {
-    UIEditor* ed = el ? el->editor : NULL;
+    UIEditor* ed = _of(el);
     if (!ed || ed->row <= 0.0f || offset > ed->doc->length)
         return false;
     const size_t line = text_doc_line_of(ed->doc, offset);
@@ -609,14 +675,14 @@ bool ui_editor_point_of(UIElement* el, size_t offset, float* x, float* y) {
 }
 
 void ui_editor_top(const UIElement* el, size_t* line, size_t* row, int* columns) {
-    const UIEditor* ed = el ? el->editor : NULL;
+    const UIEditor* ed = _seen(el);
     *line = ed ? ed->top_line : 0;
     *row = ed ? ed->top_row : 0;
     *columns = ed ? ed->cols : 0;
 }
 
 void ui_editor_reveal(UIElement* el, size_t offset) {
-    UIEditor* ed = el ? el->editor : NULL;
+    UIEditor* ed = _of(el);
     if (!ed || ed->row <= 0.0f)
         return;
     offset = offset > ed->doc->length ? ed->doc->length : offset;
@@ -659,7 +725,7 @@ void ui_editor_reveal(UIElement* el, size_t offset) {
 // ---- Selections, public
 
 size_t ui_editor_selections(const UIElement* el, const TextSelection** out, size_t* primary) {
-    const UIEditor* ed = el && el->kind == UI_EDITOR ? el->editor : NULL;
+    const UIEditor* ed = _seen(el);
     if (out)
         *out = ed ? ed->sel : NULL;
     if (primary)
@@ -668,16 +734,17 @@ size_t ui_editor_selections(const UIElement* el, const TextSelection** out, size
 }
 
 void ui_editor_set_selections(UIElement* el, const TextSelection* selections, size_t count) {
-    if (!el || el->kind != UI_EDITOR || !el->editor) {
-        log_error("ui_editor_set_selections: not an editor");
+    UIEditor* ed = _of(el);
+    if (!ed) {
+        log_error("ui_editor_set_selections: not an editor showing a text");
         return;
     }
     if (!selections || !count) {
         log_error("ui_editor_set_selections: an editor keeps one selection at least");
         return;
     }
-    _set(el->editor, selections, count);
-    text_doc_seal_undo(el->editor->doc);
+    _set(ed, selections, count);
+    text_doc_seal_undo(ed->doc);
 }
 
 // ---- The pointer
@@ -704,7 +771,7 @@ static void _unit(UIEditor* ed, size_t offset, int count, size_t* from, size_t* 
 
 void ui_editor_press(const UISystem* ui, UIElement* el, UIRect content, float x, float y, int mods,
                      double time) {
-    UIEditor* ed = el ? el->editor : NULL;
+    UIEditor* ed = _of(el);
     if (!ed)
         return;
     _layout(ed, ui, content);
@@ -751,7 +818,7 @@ void ui_editor_press(const UISystem* ui, UIElement* el, UIRect content, float x,
 }
 
 void ui_editor_drag(const UISystem* ui, UIElement* el, UIRect content, float x, float y) {
-    UIEditor* ed = el ? el->editor : NULL;
+    UIEditor* ed = _of(el);
     if (!ed)
         return;
     _layout(ed, ui, content);
@@ -787,7 +854,7 @@ void ui_editor_drag(const UISystem* ui, UIElement* el, UIRect content, float x, 
 }
 
 void ui_editor_wheel(const UISystem* ui, UIElement* el, UIRect content, float wheel) {
-    UIEditor* ed = el ? el->editor : NULL;
+    UIEditor* ed = _of(el);
     if (!ed)
         return;
     _layout(ed, ui, content);
@@ -1149,7 +1216,7 @@ static size_t _motion(UIEditor* ed, UIEditorMotion motion, size_t offset, int co
 }
 
 size_t ui_editor_motion(UIElement* el, UIEditorMotion motion, size_t offset, int count) {
-    UIEditor* ed = el && el->kind == UI_EDITOR ? el->editor : NULL;
+    UIEditor* ed = _of(el);
     if (!ed)
         return offset;
     int want = -1;
@@ -1159,7 +1226,7 @@ size_t ui_editor_motion(UIElement* el, UIEditorMotion motion, size_t offset, int
 // ---- Text objects
 
 bool ui_editor_object(UIElement* el, UIEditorObject object, size_t offset, TextSelection* out) {
-    UIEditor* ed = el && el->kind == UI_EDITOR ? el->editor : NULL;
+    UIEditor* ed = _of(el);
     if (!ed || !out)
         return false;
     offset = offset > ed->doc->length ? ed->doc->length : offset;
@@ -1394,7 +1461,7 @@ static void _indent(UIEditor* ed, bool in) {
 }
 
 void ui_editor_apply(UIElement* el, UIEditorOperator op, UIEditorMotion motion, int count) {
-    UIEditor* ed = el && el->kind == UI_EDITOR ? el->editor : NULL;
+    UIEditor* ed = _of(el);
     if (!ed)
         return;
     if (op == UI_OP_PASTE) {
@@ -1468,7 +1535,7 @@ static void _type(UIEditor* ed, const char* text, size_t len, bool typed) {
 }
 
 void ui_editor_type(UIElement* el, const char* text) {
-    UIEditor* ed = el && el->kind == UI_EDITOR ? el->editor : NULL;
+    UIEditor* ed = _of(el);
     if (!ed || !text || !*text)
         return;
     size_t len = 0;
@@ -1493,7 +1560,9 @@ static bool _run_step(UIElement* el, void* user) {
 
 // Home: the line's first character that is not a blank, then the row's start, back and forth.
 static bool _run_home(UIElement* el, void* user) {
-    UIEditor* ed = el->editor;
+    UIEditor* ed = _of(el);
+    if (!ed)
+        return false;
     const bool extend = user != NULL;
     for (size_t i = 0; i < ed->sel_count; i++) {
         TextSelection* s = &ed->sel[i];
@@ -1514,7 +1583,9 @@ static bool _run_home(UIElement* el, void* user) {
 // Enter: a line break at each caret, the new line indented as the caret's line is up to the caret.
 static bool _run_newline(UIElement* el, void* user) {
     (void)user;
-    UIEditor* ed = el->editor;
+    UIEditor* ed = _of(el);
+    if (!ed)
+        return false;
     TextEdit* edits = calloc(ed->sel_count, sizeof(TextEdit));
     char** texts = calloc(ed->sel_count, sizeof(char*));
     if (!edits || !texts) {
@@ -1550,7 +1621,9 @@ static bool _run_newline(UIElement* el, void* user) {
 // Tab: the lines a selection spans indented, or spaces to the next tab stop at each caret.
 static bool _run_tab(UIElement* el, void* user) {
     (void)user;
-    UIEditor* ed = el->editor;
+    UIEditor* ed = _of(el);
+    if (!ed)
+        return false;
     for (size_t i = 0; i < ed->sel_count; i++) {
         const TextSelection* s = &ed->sel[i];
         if (text_doc_line_of(ed->doc, s->anchor) != text_doc_line_of(ed->doc, s->head)) {
@@ -1574,7 +1647,9 @@ static bool _run_tab(UIElement* el, void* user) {
 }
 
 static bool _run_undo(UIElement* el, void* user) {
-    UIEditor* ed = el->editor;
+    UIEditor* ed = _of(el);
+    if (!ed)
+        return false;
     const bool done = user ? text_doc_redo_in(ed->doc, ed) : text_doc_undo_in(ed->doc, ed);
     if (done) {
         ed->caret_moved = true;
@@ -1599,7 +1674,9 @@ static bool _add_selection(UIEditor* ed, TextSelection s) {
 // Cmd+D: with nothing selected the word at the caret; then the next match of the selection.
 static bool _run_add_next(UIElement* el, void* user) {
     (void)user;
-    UIEditor* ed = el->editor;
+    UIEditor* ed = _of(el);
+    if (!ed)
+        return false;
     TextSelection* p = &ed->sel[ed->primary];
     if (p->anchor == p->head) {
         TextSelection w;
@@ -1631,7 +1708,9 @@ static bool _run_add_next(UIElement* el, void* user) {
 
 // A caret a row above the topmost, or below the bottommost, at the primary's column.
 static bool _run_add_row(UIElement* el, void* user) {
-    UIEditor* ed = el->editor;
+    UIEditor* ed = _of(el);
+    if (!ed)
+        return false;
     const bool below = user != NULL;
     const TextSelection* edge = &ed->sel[below ? ed->sel_count - 1 : 0];
     int want = ed->want[ed->primary];
@@ -1654,7 +1733,9 @@ static bool _run_add_row(UIElement* el, void* user) {
 // Esc: one caret, the primary; with one already, nothing, so the key falls to the screen.
 static bool _run_single(UIElement* el, void* user) {
     (void)user;
-    UIEditor* ed = el->editor;
+    UIEditor* ed = _of(el);
+    if (!ed)
+        return false;
     if (ed->sel_count < 2)
         return false;
     ed->sel[0] = ed->sel[ed->primary];
@@ -1667,7 +1748,9 @@ static bool _run_single(UIElement* el, void* user) {
 
 // The next or the previous match, selected; with no query, the selection's text is the query.
 static bool _run_find(UIElement* el, void* user) {
-    UIEditor* ed = el->editor;
+    UIEditor* ed = _of(el);
+    if (!ed)
+        return false;
     const bool forward = user == NULL;
     TextSelection* p = &ed->sel[ed->primary];
     if (!ed->find_len && p->anchor != p->head) {
@@ -1729,7 +1812,9 @@ STEP(S_OUTDENT, UI_OP_OUTDENT, UI_MOTION_NONE);
 
 static bool _run_select_all(UIElement* el, void* user) {
     (void)user;
-    UIEditor* ed = el->editor;
+    UIEditor* ed = _of(el);
+    if (!ed)
+        return false;
     ed->sel[0] = (TextSelection){0, ed->doc->length};
     ed->want[0] = -1;
     ed->sel_count = 1;
@@ -1820,7 +1905,7 @@ static const UIEditorCommand* _command(const char* name) {
 
 bool ui_editor_run(UIElement* el, const char* name) {
     const UIEditorCommand* c = _command(name);
-    if (!el || el->kind != UI_EDITOR || !el->editor || !c)
+    if (!_of(el) || !c)
         return false;
     return c->run(el, c->user);
 }
@@ -1933,12 +2018,12 @@ void ui_editor_set_mode(UIElement* el, const UIEditorMode* mode) {
 }
 
 const UIEditorMode* ui_editor_mode(const UIElement* el) {
-    const UIEditor* ed = el && el->kind == UI_EDITOR ? el->editor : NULL;
+    const UIEditor* ed = _seen(el);
     return ed && ed->mode ? ed->mode : ui_editor_standard_mode();
 }
 
 void ui_editor_find(UIElement* el, const char* query, unsigned flags) {
-    UIEditor* ed = el && el->kind == UI_EDITOR ? el->editor : NULL;
+    UIEditor* ed = _of(el);
     if (!ed)
         return;
     free(ed->find);
@@ -1958,7 +2043,7 @@ void ui_editor_find(UIElement* el, const char* query, unsigned flags) {
 // ---- Keys
 
 bool ui_editor_key(const UISystem* ui, UIElement* el, UIRect content, const InputKeyEvent* ev) {
-    UIEditor* ed = el ? el->editor : NULL;
+    UIEditor* ed = _of(el);
     if (!ed || !ev)
         return false;
     _layout(ed, ui, content);
@@ -2040,7 +2125,7 @@ static size_t _ranges_in(const TextDoc* doc, size_t from, size_t to, TextRange* 
 
 double ui_editor_draw(const UISystem* ui, UIElement* el, const UIStyle* s, UIRect content,
                       bool focused, double now, bool blink) {
-    UIEditor* ed = el ? el->editor : NULL;
+    UIEditor* ed = _of(el);
     UIDrawList* dl = ui_draw_list(ui);
     if (!ed || !dl)
         return INFINITY;
@@ -2215,7 +2300,14 @@ double ui_editor_draw(const UISystem* ui, UIElement* el, const UIStyle* s, UIRec
         line++;
         row = 0;
     }
+    ed->drawn_to = line;
     ui_pop_clip(dl);
+
+    // The rest of the text's rows, and a stateful highlighter's walk, a frame's share at a time,
+    // asking for the frames that finish them; idle mode waits once they are done.
+    Engine* engine = ui_system_engine(ui);
+    if (_settle(ed) && engine)
+        engine_request_frame(engine);
 
     // The bar, while the text is taller than the view.
     UIRect track, thumb;
