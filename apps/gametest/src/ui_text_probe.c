@@ -1209,6 +1209,102 @@ static void say_match(const char* label, const char* query, const char* name) {
     }
 }
 
+// ---- the most an element measures, and lengths that are none
+
+// A panel `w` by `h` points, FIXED both ways, in `parent`.
+static UIElement* fixed_panel(UIElement* parent, float w, float h) {
+    UIElement* p = ui_panel(parent);
+    ui_set_size(p, UI_FIXED, w, UI_FIXED, h);
+    return p;
+}
+
+// A row 600 points across with no padding and no gaps, whose room is all its children's.
+static UIElement* bare_row(UIElement* parent) {
+    UIElement* row = fixed_panel(parent, 600.0f, 30.0f);
+    row->dir = UI_ROW;
+    for (int i = 0; i < 4; i++)
+        row->padding[i] = -1.0f;
+    row->spacing = -1.0f;
+    return row;
+}
+
+static UIElement* growing(UIElement* parent, float most) {
+    UIElement* c = ui_panel(parent);
+    ui_set_size(c, UI_GROW, 0.0f, UI_FIXED, 20.0f);
+    c->max_size[0] = most;
+    return c;
+}
+
+static int probe_max_size(UISystem* ui) {
+    UIScreen* s = ui_screen(ui, "max");
+    ui_screen_set_modal(s, false);
+    UIElement* root = ui_screen_root(s);
+    // A fitting pane of 30 rows held to 200 points: that tall, and scrolling the rest.
+    UIElement* pane = ui_scroll(root);
+    ui_set_size(pane, UI_FIXED, 300.0f, UI_FIT, 0.0f);
+    pane->max_size[1] = 200.0f;
+    pane->spacing = ROW_GAP;
+    for (int i = 0; i < 30; i++)
+        ui_set_size(ui_panel(pane), UI_GROW, 0.0f, UI_FIXED, ROW_H);
+    // Three growing children of a 600-point row, the first held to 100: it takes 100, and the
+    // other two share the rest.
+    UIElement* shared = bare_row(root);
+    const UIElement* held = growing(shared, 100.0f);
+    const UIElement* const rest[2] = {growing(shared, 0.0f), growing(shared, 0.0f)};
+    // Two growing children both held to 100, centred: the room neither takes is the alignment's.
+    UIElement* centred = bare_row(root);
+    centred->align_main = UI_ALIGN_CENTER;
+    const UIElement* const both[2] = {growing(centred, 100.0f), growing(centred, 100.0f)};
+    // A fixed element ignores its most.
+    UIElement* fixed = fixed_panel(root, 50.0f, 20.0f);
+    fixed->max_size[0] = 10.0f;
+    ui_push(ui, s);
+    pass(ui, &(UIInput){.pointer_x = -1.0f, .pointer_y = -1.0f});
+    printf("ui max-size pane height %.6f\n", (double)pane->rect.h);
+    printf("ui max-size pane content %.6f\n", (double)pane->scroll_content);
+    pass(ui, &(UIInput){.pointer_x = pane->rect.x + 50.0f,
+                        .pointer_y = pane->rect.y + 50.0f,
+                        .wheel_y = -1.0f});
+    printf("ui max-size pane scrolled %.6f\n", (double)pane->scroll);
+    printf("ui max-size held width %.6f\n", (double)held->rect.w);
+    printf("ui max-size rest widths %.6f %.6f\n", (double)rest[0]->rect.w, (double)rest[1]->rect.w);
+    printf("ui max-size centred widths %.6f %.6f\n", (double)both[0]->rect.w,
+           (double)both[1]->rect.w);
+    printf("ui max-size centred offset %.6f\n", (double)(both[0]->rect.x - centred->rect.x));
+    printf("ui max-size fixed width %.6f\n", (double)fixed->rect.w);
+    return 0;
+}
+
+static int probe_padding_none(UISystem* ui) {
+    UIScreen* s = ui_screen(ui, "padding");
+    ui_screen_set_modal(s, false);
+    UIElement* root = ui_screen_root(s);
+    // Negative padding and spacing: none, so two 20-point children stack to 40 at the top-left.
+    UIElement* none = ui_panel(root);
+    for (int i = 0; i < 4; i++)
+        none->padding[i] = -1.0f;
+    none->spacing = -1.0f;
+    const UIElement* first = fixed_panel(none, 20.0f, 20.0f);
+    fixed_panel(none, 20.0f, 20.0f);
+    // Zero: the style's padding and the theme's spacing, so the same two take more.
+    UIElement* inherit = ui_panel(root);
+    fixed_panel(inherit, 20.0f, 20.0f);
+    fixed_panel(inherit, 20.0f, 20.0f);
+    // Per side: none above and below, 6 either side.
+    UIElement* sides = ui_panel(root);
+    sides->padding[0] = sides->padding[2] = -1.0f;
+    sides->padding[1] = sides->padding[3] = 6.0f;
+    fixed_panel(sides, 20.0f, 20.0f);
+    ui_push(ui, s);
+    pass(ui, &(UIInput){.pointer_x = -1.0f, .pointer_y = -1.0f});
+    ui_probe_rect("padding-none", "none", none->rect);
+    printf("ui padding-none first offset %.6f %.6f\n", (double)(first->rect.x - none->rect.x),
+           (double)(first->rect.y - none->rect.y));
+    ui_probe_rect("padding-none", "inherit", inherit->rect);
+    ui_probe_rect("padding-none", "sides", sides->rect);
+    return 0;
+}
+
 // ---- UTF-8
 
 static int probe_utf8(void) {
@@ -1332,6 +1428,10 @@ int run_ui_text_probe(Game* game, UISystem* ui, Font* font, const char* which) {
         return probe_match();
     if (!strcmp(which, "utf8"))
         return probe_utf8();
+    if (!strcmp(which, "max-size"))
+        return probe_max_size(ui);
+    if (!strcmp(which, "padding-none"))
+        return probe_padding_none(ui);
     if (!strcmp(which, "rows-built"))
         return probe_rows_built(ui);
     if (!strcmp(which, "rows-measure"))

@@ -1832,8 +1832,7 @@ static void build_palette_row(UIElement* holder, int index, void* user) {
 
 /*
  * The list for what is in the field: every item that matches, best first and in the list's own
- * order among equals, a row each. The pane is as tall as the rows up to PALETTE_ROWS of them and
- * scrolls past that, so a short list takes only its own room.
+ * order among equals, a row each.
  */
 static void palette_filter(void) {
     const char* query = ui_field_text(g_pal_field);
@@ -1847,10 +1846,6 @@ static void palette_filter(void) {
     qsort(g_pal_hits, (size_t)found, sizeof(Hit), hit_order);
     g_pal_count = found;
     g_pal_selected = 0;
-    if (found > PALETTE_ROWS)
-        ui_set_size(g_pal_list, UI_GROW, 0.0f, UI_FIXED, PALETTE_ROWS * PALETTE_ROW_HEIGHT);
-    else
-        ui_set_size(g_pal_list, UI_GROW, 0.0f, UI_FIT, 0.0f);
     ui_scroll_set_rows(g_pal_list, found, PALETTE_ROW_HEIGHT, build_palette_row, NULL);
 }
 
@@ -1926,8 +1921,11 @@ static void build_palette(UISystem* ui) {
     ui_set_size(g_pal_field, UI_GROW, 0.0f, UI_FIT, 0.0f);
     ui_field_set_on_change(g_pal_field, on_palette_change, NULL);
     ui_field_set_on_key(g_pal_field, on_palette_key, NULL);
-    // The rows in a pane with no gaps between them.
+    // The rows in a pane with no gaps between them, as tall as they are up to PALETTE_ROWS of them,
+    // and scrolling past that.
     g_pal_list = ui_scroll(box);
+    ui_set_size(g_pal_list, UI_GROW, 0.0f, UI_FIT, 0.0f);
+    g_pal_list->max_size[1] = PALETTE_ROWS * PALETTE_ROW_HEIGHT;
     g_pal_list->spacing = -1.0f;
 }
 
