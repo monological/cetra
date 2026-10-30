@@ -130,21 +130,31 @@ static int probe_wrap_label(UISystem* ui, Font* font) {
     return 0;
 }
 
+// A layout step's breaks and measures of the label so far.
+static void say_cache(const char* step, const UIElement* label) {
+    printf("ui wrap-cache %s wraps %.6f\n", step, (double)label->wraps);
+    printf("ui wrap-cache %s measures %.6f\n", step, (double)label->measures);
+}
+
 static int probe_wrap_cache(UISystem* ui) {
     UIElement* label = NULL;
     UIElement* panel = wrap_fixture(ui, &label, 300.0f, PARAGRAPH);
     UIScreen* s = ui_top(ui);
     ui_layout(s, 1280.0f, 720.0f);
-    printf("ui wrap-cache first wraps %.6f\n", (double)label->wraps);
+    say_cache("first", label);
     ui_layout(s, 1280.0f, 720.0f);
     ui_layout(s, 1280.0f, 720.0f);
-    printf("ui wrap-cache again wraps %.6f\n", (double)label->wraps);
+    say_cache("again", label);
     panel->size[0] = 420.0f;
     ui_layout(s, 1280.0f, 720.0f);
-    printf("ui wrap-cache wider wraps %.6f\n", (double)label->wraps);
+    say_cache("wider", label);
     ui_set_text(label, "a new text, which breaks afresh");
     ui_layout(s, 1280.0f, 720.0f);
-    printf("ui wrap-cache retext wraps %.6f\n", (double)label->wraps);
+    say_cache("retext", label);
+    // A style changes the face's size without touching the text: its key, not a call, drops both.
+    ui_set_style(label, &(UIStyle){.font_size = 30.0f});
+    ui_layout(s, 1280.0f, 720.0f);
+    say_cache("restyle", label);
     ui_pop(ui);
     return 0;
 }

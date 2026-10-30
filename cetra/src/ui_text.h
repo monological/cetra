@@ -58,22 +58,29 @@ float ui_text_baseline(const UIText* t, float top);
 
 /*
  * A text's lines -- a label's, or a multi-line field's rows: wrapped at a width, or at its '\n's
- * alone. Kept while what they were broken for is unchanged.
+ * alone -- and its measures. Kept while what they were taken for is unchanged: a long text is a
+ * walk of all of it, and the layout runs several times a frame.
  */
 typedef struct UILines {
     size_t* starts; // the byte each line starts at
     size_t count, capacity;
     float width; // what they were broken at; INFINITY for '\n's alone
+    // The face, size and tracking the lines and the measures are for. A text in another drops both.
     const Font* font;
     float size, tracking;
+    float widest_line, longest_word; // -1 until asked
 } UILines;
 
+// Drops the lines and the measures, for a text that changed. Lines start out cleared.
+void ui_lines_clear(UILines* lines);
+// Sets `*width` to the text's widest line, or its longest word when `wrap`: what a label is
+// measured by across. Kept until the text changes or is in another face, size or tracking; true
+// when it walked the text for it.
+bool ui_lines_measure(UILines* lines, const UIText* t, bool wrap, float* width);
 /*
  * Breaks `t` into `lines` at `width` -- INFINITY breaks only at its '\n's -- unless they hold the
- * lines of the same width, face, size and tracking already: a caller whose text changed sets
- * `count` to 0 first. A long text is a walk of all of it, and the layout runs several times a
- * frame. True when it broke them; false when it kept them, or ran out of memory, which leaves
- * `count` 0.
+ * lines of the same width, face, size and tracking already. True when it broke them; false when it
+ * kept them, or ran out of memory, which leaves `count` 0.
  */
 bool ui_lines_break(UILines* lines, const UIText* t, float width);
 // Breaks `t` again from line `line` on, keeping the lines before it: for a text changed only at or
