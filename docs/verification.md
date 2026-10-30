@@ -607,8 +607,9 @@ pointer script's last frame, which the frame after the wait draws; headless drew
 Closing it is a look: run `./out/bin/canvas --idle --sheet board` windowed and press F. The
 readout's count of frames drawn should stand still while nothing moves, the process should sit at
 0% CPU in Activity Monitor, and a drag, the wheel, G's debug GUI and its clicks should each draw at
-once. **Done on macOS (2026-10-29):** 0.0% CPU still, before the reviews' restructure; owed again
-after it, and on Linux and Windows.
+once. **Done on macOS (2026-10-29):** 0.0% CPU still, before the reviews' restructure and after
+it, the process's CPU time standing at its start-up's 1.11 s. Linux and Windows are owed the
+same look.
 
 ### The real-character path
 
