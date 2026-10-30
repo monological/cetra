@@ -206,7 +206,7 @@ that waited was a minimized window, which blocks on `glfwWaitEventsTimeout(0.1)`
 - **A still 3D view drawn on demand moved to item 3** (below), with what keeps a 3D frame alive and
   the accumulation pcb's ARCH asks for. Only with pcb's 3D view is there a board to judge it on.
 - **Who says something changed:**
-  - input, through every window callback, refresh, focus and cursor-enter added;
+  - input: in a window any wake draws a frame, so every event does;
   - `engine_request_frame`, from any thread, which wakes a waiting loop with `glfwPostEmptyEvent`;
   - `engine_request_frame_after`, a timed wake, for pcb's blink;
   - `engine_begin_work` and `engine_end_work`, around a thread's result, such as a parse;

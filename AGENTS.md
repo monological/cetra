@@ -194,9 +194,9 @@ Each G-buffer target is only written when a post pass that consumes it is active
     whole draws only the screen: step 9 settles the scene's panels and variants and
     draws no camera pass, step 10 runs no post chain and no GUI, and steps 5 to 8 go
     on loading.
-11. Screenshot capture (headless/CI), swap buffers, then the poll for events. Under **idle
-    mode** (`Engine.idle`, spec 14.1, off by default) the loop then WAITS until something asks
-    for the next frame -- see below.
+11. Screenshot capture (headless/CI), swap buffers, then the poll for events -- or under **idle
+    mode** (`Engine.idle`, spec 14.1, off by default) a WAIT until something asks for the next
+    frame (see below) -- then the scripted pointer's frame.
 
 **Idle mode draws a frame only when something asks for one** (spec 14.1), for an app that is
 mostly still, as pcb's schematic and editor are; every game and every other app leave it off. Four
@@ -205,21 +205,25 @@ things about it are easy to get backwards.
   an IBL, a sky, water, falling rain, a fire, a particle system. A still 3D view drawn on demand,
   and stopping TAA's accumulation, are roadmap item 3's; until then idle mode only ever waits
   when no 3D scene is drawn. A game asks for every frame through `game_run`.
-- **What asks**: input (every window callback marks the wait woken), `engine_request_frame` from
-  any thread, `engine_request_frame_after` for a time, `engine_end_work` when a thread's result
-  is in, and the engine's own -- the UI while an ease or an entrance plays, the debug GUI while
-  ImGui takes queued input, the loader when a decode is done, the loading screen, a pointer
-  script. **A change made inside a frame is drawn by that frame**; the calls are for changes
-  made anywhere else. A request posts `glfwPostEmptyEvent` only while the loop is waiting, and
-  the two order their atomics so neither misses the other.
-- **The wait is kept out of every clock** -- `delta_time` through `last_frame_time`, the windowed
-  `render_time` through `time_waited` -- and **`total_frames` does not advance**, since a gap in
-  it is how the shadow tiles and the fog's histories tell lost history.
+- **What asks**: in a window any wake draws -- an event, a request -- so no callback marks
+  anything. Then `engine_request_frame` from any thread, `engine_request_frame_after` for a time,
+  `engine_end_work` when a thread's result is in, and whatever in the engine wants a frame, which
+  asks DURING the frame: the scene with content, the UI while an ease or an entrance plays or a
+  program reads `uTime`, the debug GUI while it takes ImGui's queued input, the loader when a
+  decode is done or five delivered leave more, the loading screen. Only the pointer script is
+  asked at the frame's end, since its frame plays after the wait. **A change made inside a frame is
+  drawn by that frame**; the calls are for changes made anywhere else. A request posts
+  `glfwPostEmptyEvent` only while the loop is waiting, and the two order their atomics so neither
+  misses the other.
+- **The wait is kept out of every clock**: the engine's clock is the wall clock less
+  `time_waited`, so a timed change -- a blink -- is timed by `glfwGetTime` instead. **`total_frames`
+  does not advance** across a wait, since a gap in it is how the shadow tiles and the fog's
+  histories tell lost history.
 - **Headless, a run ends at the first frame after which nothing asks for another and no work is
   out** (an `engine_begin_work` not yet ended, a decode in flight, a timed wake), and that frame
   is its screenshot; `--frames` stays the most it draws. A hidden window is sent something in
-  its first tenth of a second on macOS that wakes a waiting loop, which is why the `idle` arms
-  ask for their late work past it.
+  its first tenth of a second on macOS that wakes a waiting loop; headless asks again after any
+  wake, but the `idle` arms still start their late work past it.
 
 **Step 4 is where an app puts anything the frame's geometry depends on** (spec
 11.96): its camera, and any node it adds, removes or moves. It exists because
