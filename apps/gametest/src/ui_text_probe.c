@@ -406,6 +406,11 @@ static int probe_scroll_into_view(UISystem* ui) {
     ui_set_focus(s, rows[15]);
     pass(ui, &(UIInput){.pointer_x = -1.0f, .pointer_y = -1.0f});
     say_scroll("scroll-into-view", "set", pane);
+    // The app shows row 2, above the view, with the focus left on row 15: its top comes into view.
+    ui_scroll_into_view(ui, rows[2]);
+    pass(ui, &(UIInput){.pointer_x = -1.0f, .pointer_y = -1.0f});
+    say_scroll("scroll-into-view", "app", pane);
+    printf("ui scroll-into-view app focus %.6f\n", ui_focused(s) == rows[15] ? 1.0 : 0.0);
     return 0;
 }
 
@@ -831,6 +836,127 @@ static int probe_field_multiline(UISystem* ui, Font* font) {
     one_key(ui, GLFW_KEY_UP, 0);
     one_key(ui, GLFW_KEY_END, 0);
     printf("ui field-multiline end caret %d\n", cursor_of(field));
+    // With no most, it grows to every row it has.
+    const char* longer = "one two three four five six seven eight nine ten eleven twelve thirteen "
+                         "fourteen fifteen sixteen seventeen eighteen nineteen twenty";
+    field->max_rows = 0;
+    ui_field_set_text(field, longer);
+    pass(ui, &(UIInput){.pointer_x = -1.0f, .pointer_y = -1.0f});
+    ui_field_inspect(field, NULL, NULL, NULL, NULL, NULL, &rows);
+    printf("ui field-multiline nomost rows %zu\n", rows);
+    printf("ui field-multiline nomost height %.6f\n", (double)field->rect.h);
+    // Held to three rows, Page Down moves the caret down by the three it shows.
+    field->max_rows = 3;
+    pass(ui, &(UIInput){.pointer_x = -1.0f, .pointer_y = -1.0f});
+    one_key(ui, GLFW_KEY_HOME, GLFW_MOD_CONTROL);
+    float scroll_before = 0.0f, scroll_after = 0.0f;
+    ui_field_inspect(field, NULL, NULL, NULL, NULL, &scroll_before, NULL);
+    ui_build(ui, 1280.0f, 720.0f, 0.0f);
+    caret_quad(ui, &before);
+    one_key(ui, GLFW_KEY_PAGE_DOWN, 0);
+    ui_build(ui, 1280.0f, 720.0f, 0.0f);
+    ui_field_inspect(field, NULL, NULL, NULL, NULL, &scroll_after, NULL);
+    caret_quad(ui, &after);
+    const float lh = ui_line_height(font, PROBE_SIZE, 1.0f);
+    printf("ui field-multiline page rows %.6f\n",
+           (double)(((after.y + scroll_after) - (before.y + scroll_before)) / lh));
+    return 0;
+}
+
+// ---- the placeholder, and appending
+
+static int probe_field_placeholder(UISystem* ui) {
+    UIElement* field = field_fixture(ui, 0, NULL);
+    const UIRect bare = field->rect;
+    // A hint far longer than the field: drawn dim while the field is empty, and sizing nothing.
+    ui_field_set_placeholder(field,
+                             "a hint far longer than the field is wide, which sizes nothing");
+    pass(ui, &(UIInput){.pointer_x = -1.0f, .pointer_y = -1.0f});
+    printf("ui field-placeholder size same %d\n",
+           field->rect.w == bare.w && field->rect.h == bare.h ? 1 : 0);
+    UIRect rects[128];
+    vec4 colors[128];
+    ui_build(ui, 1280.0f, 720.0f, 0.0f);
+    size_t n = glyph_quads(ui, rects, colors, 128), dim = 0;
+    for (size_t i = 0; i < n; i++)
+        dim += colors[i][3] < 0.6f;
+    printf("ui field-placeholder empty glyphs %zu\n", n);
+    printf("ui field-placeholder empty dim %zu\n", dim);
+    // Typed into, the hint goes, and the text is drawn at full strength.
+    ev_text("ok");
+    type_pass(ui);
+    ui_build(ui, 1280.0f, 720.0f, 0.0f);
+    n = glyph_quads(ui, rects, colors, 128), dim = 0;
+    for (size_t i = 0; i < n; i++)
+        dim += colors[i][3] < 0.6f;
+    printf("ui field-placeholder typed glyphs %zu\n", n);
+    printf("ui field-placeholder typed dim %zu\n", dim);
+    // A field's text is not ui_set_text's: refused, and neither the text nor the hint changes.
+    ui_set_text(field, "replaced");
+    printf("ui field-placeholder settext refused %d\n",
+           strcmp(ui_field_text(field), "ok") == 0 && field->text == NULL ? 1 : 0);
+    return 0;
+}
+
+// A pane's one row: a read-only, multi-line field holding "hello", as a history's message is.
+static void build_append_row(UIElement* row, int index, void* user) {
+    (void)index;
+    (void)user;
+    UIElement* f = ui_text_field(row, UI_FIELD_MULTILINE | UI_FIELD_READ_ONLY, NULL, NULL);
+    ui_set_size(f, UI_GROW, 0.0f, UI_FIT, 0.0f);
+    ui_field_set_text(f, "hello");
+}
+
+static int probe_field_append(UISystem* ui) {
+    UIElement* pane = pane_fixture(ui, NULL, 0, false, false);
+    ui_scroll_set_rows(pane, 1, 30.0f, build_append_row, NULL);
+    pass(ui, &(UIInput){.pointer_x = -1.0f, .pointer_y = -1.0f});
+    const UIElement* row = ui_scroll_find_row(pane, 0);
+    printf("ui field-append found row %d\n", row && row->child_count ? 1 : 0);
+    printf("ui field-append found none %d\n", ui_scroll_find_row(pane, 1) == NULL ? 1 : 0);
+    if (!row || !row->child_count)
+        return 1;
+    UIElement* field = row->children[0];
+    // "hello" selected, as a reader copying it would have it.
+    ui_set_focus(ui_top(ui), field);
+    pass(ui, &(UIInput){.pointer_x = -1.0f, .pointer_y = -1.0f});
+    one_key(ui, GLFW_KEY_A, ENGINE_MOD_SHORTCUT);
+    const unsigned builds = pane->row_builds;
+    const float before = row->rect.h;
+    // A word with a run of its own, then a sentence long enough to wrap onto rows of its own.
+    const UITextRun lit = {.start = 1, .length = 5, .color = {1.0f, 0.5f, 0.0f, 1.0f}};
+    const bool added = ui_field_append(field, " world", &lit, 1) &&
+                       ui_field_append(field,
+                                       " and then a sentence long enough to wrap the field onto "
+                                       "rows of its own",
+                                       NULL, 0);
+    pass(ui, &(UIInput){.pointer_x = -1.0f, .pointer_y = -1.0f});
+    printf("ui field-append added ok %d\n", added ? 1 : 0);
+    say_text("field-append", "joined", field,
+             "hello world and then a sentence long enough to wrap the field onto rows of its own");
+    int start = -1, end = -1;
+    ui_field_inspect(field, NULL, &start, &end, NULL, NULL, NULL);
+    printf("ui field-append selection kept %d\n", start == 0 && end == 5 ? 1 : 0);
+    printf("ui field-append run start %zu\n",
+           field->run_count ? field->runs[field->run_count - 1].start : (size_t)0);
+    printf("ui field-append row builds %u\n", pane->row_builds - builds);
+    printf("ui field-append row grew %d\n", row->rect.h > before ? 1 : 0);
+    // Past the most, refused whole.
+    const size_t most = (size_t)1 << 20;
+    char* big = malloc(most + 1);
+    if (big) {
+        memset(big, 'x', most);
+        big[most] = '\0';
+        const size_t had = strlen(ui_field_text(field));
+        printf("ui field-append toolong refused %d\n",
+               !ui_field_append(field, big, NULL, 0) && strlen(ui_field_text(field)) == had ? 1
+                                                                                            : 0);
+        free(big);
+    }
+    // An editable field stays in one style: an append with runs is refused.
+    UIElement* editable = ui_text_field(ui_screen_root(ui_top(ui)), 0, NULL, NULL);
+    printf("ui field-append editable refused %d\n",
+           !ui_field_append(editable, "x", &lit, 1) && !ui_field_text(editable)[0] ? 1 : 0);
     return 0;
 }
 
@@ -874,6 +1000,7 @@ static int probe_field_keys(UISystem* ui) {
     UIScreen* chat = ui_screen(ui, "chat");
     UIElement* input = ui_text_field(
         ui_screen_root(chat), UI_FIELD_MULTILINE | UI_FIELD_SUBMIT_ON_ENTER, on_submit, NULL);
+    input->max_rows = 6;
     ui_push(ui, chat);
     ui_set_focus(chat, input);
     // The keys of the pass the app focused it in came before it had the focus.
@@ -1193,6 +1320,10 @@ int run_ui_text_probe(Game* game, UISystem* ui, Font* font, const char* which) {
         return probe_field_scroll_x(ui);
     if (!strcmp(which, "field-multiline"))
         return probe_field_multiline(ui, font);
+    if (!strcmp(which, "field-placeholder"))
+        return probe_field_placeholder(ui);
+    if (!strcmp(which, "field-append"))
+        return probe_field_append(ui);
     if (!strcmp(which, "field-keys"))
         return probe_field_keys(ui);
     if (!strcmp(which, "field-focus"))

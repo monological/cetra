@@ -1563,31 +1563,41 @@ static int history_push(bool agent, const char* said, bool mono) {
 }
 
 /*
+ * A message's styled runs from byte `from` of its text on, counted from `from`: the speaker in a
+ * colour, and a part it names in the second face. The same for a row built whole and for a reply
+ * appended to as it streams, so the two look alike.
+ */
+static size_t message_runs(const Message* m, size_t from, UITextRun runs[2]) {
+    size_t count = 0;
+    if (from == 0) {
+        const bool agent = m->agent;
+        runs[count++] = (UITextRun){
+            .start = 0,
+            .length = strcspn(m->text, ":"),
+            .color = {agent ? 0.45f : 0.55f, agent ? 0.70f : 0.85f, agent ? 1.0f : 0.55f, 1.0f}};
+    }
+    const char* part = strstr(m->text + from, "C12");
+    if (g_mono && m->mono && part)
+        runs[count++] =
+            (UITextRun){.start = (size_t)(part - m->text) - from, .length = 3, .font = g_mono};
+    return count;
+}
+
+/*
  * A message's row: a read-only field, so its text can be selected and copied, wrapped across the
- * column, in the column's colour with no border, the speaker in a colour and a part it names in
- * the second face.
+ * column and as tall as its text, in the column's colour with no border.
  */
 static void build_message(UIElement* row, int index, void* user) {
     (void)user;
     UIElement* f = ui_text_field(row, UI_FIELD_MULTILINE | UI_FIELD_READ_ONLY, NULL, NULL);
     ui_set_size(f, UI_GROW, 0.0f, UI_FIT, 0.0f);
-    f->max_rows = 1000;
     ui_set_style(f, &(UIStyle){.bg = {0.10f, 0.11f, 0.14f, 1.0f},
                                .border = {0.10f, 0.11f, 0.14f, 1.0f},
                                .padding = {1.0f, 1.0f, 1.0f, 1.0f}});
     const Message* m = &g_msgs[index];
-    const char* text = m->text;
-    ui_field_set_text(f, text);
-    const bool agent = m->agent;
-    UITextRun runs[2] = {
-        {.start = 0,
-         .length = strcspn(text, ":"),
-         .color = {agent ? 0.45f : 0.55f, agent ? 0.70f : 0.85f, agent ? 1.0f : 0.55f, 1.0f}}};
-    size_t count = 1;
-    const char* part = strstr(text, "C12");
-    if (g_mono && m->mono && part)
-        runs[count++] = (UITextRun){.start = (size_t)(part - text), .length = 3, .font = g_mono};
-    ui_set_text_runs(f, runs, count);
+    ui_field_set_text(f, m->text);
+    UITextRun runs[2];
+    ui_set_text_runs(f, runs, message_runs(m, 0, runs));
 }
 
 // The input line's Enter: the message joins the history and a reply starts to stream.
@@ -1604,7 +1614,8 @@ static void on_history_submit(UIElement* el, void* user) {
 }
 
 // The next word of the reply, a frame at a time headless and every 50 ms in a window, asking for
-// the frame it will be drawn in. Its row is built again with each word.
+// the frame it will be drawn in. A built row has the word appended, keeping whatever is selected
+// in it; a row built later is built from the message as it then is.
 static void history_stream(Engine* engine) {
     if (g_reply < 0)
         return;
@@ -1617,11 +1628,17 @@ static void history_stream(Engine* engine) {
     const char* rest = HISTORY_REPLY + g_reply_at;
     const char* space = strchr(rest + (*rest == ' '), ' ');
     g_reply_at = space ? (size_t)(space - HISTORY_REPLY) : strlen(HISTORY_REPLY);
+    Message* m = &g_msgs[g_reply];
+    const size_t had = strlen(m->text);
     char text[520];
     snprintf(text, sizeof(text), "agent: %.*s", (int)g_reply_at, HISTORY_REPLY);
-    free(g_msgs[g_reply].text);
-    g_msgs[g_reply].text = strdup(text);
-    ui_scroll_rows_changed(g_history_pane, g_reply, 1);
+    free(m->text);
+    m->text = strdup(text);
+    UIElement* row = ui_scroll_find_row(g_history_pane, g_reply);
+    if (row && row->child_count) {
+        UITextRun runs[2];
+        ui_field_append(row->children[0], m->text + had, runs, message_runs(m, had, runs));
+    }
     if (!space) {
         g_reply = -1;
         return;
@@ -1662,7 +1679,7 @@ static void build_history(UISystem* ui, Font* mono) {
     ui_scroll_set_rows(pane, g_msg_count, 40.0f, build_message, NULL);
     g_history_input = ui_text_field(column, UI_FIELD_MULTILINE | UI_FIELD_SUBMIT_ON_ENTER,
                                     on_history_submit, NULL);
-    ui_set_text(g_history_input, "Message");
+    ui_field_set_placeholder(g_history_input, "Message");
     ui_set_size(g_history_input, UI_GROW, 0.0f, UI_FIT, 0.0f);
     g_history_input->max_rows = 6;
     ui_push(ui, s);
@@ -1916,7 +1933,7 @@ static void build_palette(UISystem* ui) {
 
 static void palette_open(bool jump) {
     g_pal_jump = jump;
-    ui_set_text(g_pal_field, jump ? "Jump to a part or net" : "Type a command");
+    ui_field_set_placeholder(g_pal_field, jump ? "Jump to a part or net" : "Type a command");
     ui_field_set_text(g_pal_field, "");
     palette_filter();
     if (!ui_on_stack(g_ui_live, g_palette))

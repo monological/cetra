@@ -34,9 +34,10 @@ float ui_field_content_height(const UIElement* el);
 // they moved it, and on_change fires when they edited the text.
 void ui_field_keys_begin(UIElement* el);
 void ui_field_keys_end(UIElement* el);
-// One key or character to the focused field, the field's on_key first. False for a key it does
-// not use -- Esc, Tab, and Page Up or Page Down on one line -- which is the screen's.
-bool ui_field_key(const UISystem* ui, UIElement* el, const InputKeyEvent* ev);
+// One key or character to the focused field, `content` its content box, the field's on_key first.
+// False for a key it does not use -- Esc, Tab, and Page Up or Page Down on one line -- which is the
+// screen's.
+bool ui_field_key(const UISystem* ui, UIElement* el, UIRect content, const InputKeyEvent* ev);
 // A press on the field at the pointer, `content` its content box: the caret placed, the selection
 // extended with Shift held, a word selected by a second press close in time and the line by a
 // third.

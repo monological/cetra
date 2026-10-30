@@ -44,6 +44,10 @@ float ui_text_longest_word(const UIText* t);
 // The widest of the text's '\n'-separated lines: what a text that does not wrap is measured by,
 // each line placed by its own width rather than by the longest one's.
 float ui_text_widest_line(const UIText* t);
+// Whether `runs` fit the first `length` bytes of `text`: in order, apart, inside it, and starting
+// and ending on a character. Refused by name otherwise, `who` naming the call.
+bool ui_text_runs_check(const char* who, const char* text, size_t length, const UITextRun* runs,
+                        size_t count);
 // The line height of the text's face at its size, times `line_spacing` (0 is 1).
 float ui_text_line_height(const UIText* t, float line_spacing);
 // Draws bytes [from, to) with its pen starting at `x` and its baseline at `baseline`.
@@ -72,6 +76,10 @@ typedef struct UILines {
  * `count` 0.
  */
 bool ui_lines_break(UILines* lines, const UIText* t, float width);
+// Breaks `t` again from line `line` on, keeping the lines before it: for a text changed only at or
+// after where that line starts, as an append is. Every line is broken when they are not this
+// width's and style's. True once broken; false out of memory, which leaves `count` 0.
+bool ui_lines_break_from(UILines* lines, const UIText* t, float width, size_t line);
 // The end of line `i`, its '\n' and any spaces it wrapped at left off.
 size_t ui_lines_end(const UILines* lines, const UIText* t, size_t i);
 // Draws each of `lines` a line height below the last, from `r`'s top, placed by `align` on its own

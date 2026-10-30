@@ -40,8 +40,6 @@ typedef struct UIField UIField;
 
 // A field's text past this is refused, so a paste cannot take the process's memory.
 #define FIELD_MAX_BYTES (1 << 20)
-// A multi-line field's tallest, when the element names none.
-#define FIELD_ROWS_DEFAULT 6
 // Two presses this close in time and place are one double press.
 #define FIELD_PRESS_SECONDS 0.4
 #define FIELD_PRESS_POINTS  4.0f
@@ -55,6 +53,7 @@ struct UIField {
     unsigned flags;
     char* buf; // UTF-8, always NUL-terminated
     int len, cap;
+    char* placeholder; // the dim hint while `buf` is empty; owned, NULL for none
     STB_TexteditState state;
     // The two members ImGui's copy of stb_textedit writes by name; see the block above.
     ImS8 LastMoveDirectionLR;
@@ -340,6 +339,7 @@ void ui_field_free(struct UIField* f) {
     if (!f)
         return;
     free(f->buf);
+    free(f->placeholder);
     free(f->rows.starts);
     free(f);
 }
@@ -389,14 +389,76 @@ float ui_field_content_height(const UIElement* el) {
         return 0.0f;
     size_t rows = 1;
     if (f->flags & UI_FIELD_MULTILINE) {
-        const size_t most = el->max_rows > 0 ? (size_t)el->max_rows : FIELD_ROWS_DEFAULT;
-        rows = f->rows.count < 1 ? 1 : (f->rows.count > most ? most : f->rows.count);
+        rows = f->rows.count < 1 ? 1 : f->rows.count;
+        if (el->max_rows > 0 && rows > (size_t)el->max_rows)
+            rows = (size_t)el->max_rows;
     }
     return f->line_h * (float)rows;
 }
 
 const char* ui_field_text(const UIElement* el) {
     return (el && el->field) ? el->field->buf : "";
+}
+
+void ui_field_set_placeholder(UIElement* el, const char* text) {
+    if (!el || !el->field) {
+        log_error("ui_field_set_placeholder: not a text field");
+        return;
+    }
+    free(el->field->placeholder);
+    el->field->placeholder = text ? safe_strdup(text) : NULL;
+}
+
+/*
+ * The text so far stays as it is, so only the last row can break otherwise: every row before it
+ * ended where the text ran past its width, inside the old text. The merged runs are this field's
+ * own and its text follows them, so the layout's next break finds the rows already current.
+ */
+bool ui_field_append(UIElement* el, const char* text, const UITextRun* runs, size_t run_count) {
+    if (!el || !el->field) {
+        log_error("ui_field_append: not a text field");
+        return false;
+    }
+    UIField* f = el->field;
+    text = text ? text : "";
+    const size_t n = strlen(text);
+    if (run_count > 0 && !(f->flags & UI_FIELD_READ_ONLY)) {
+        log_error("ui_field_append: an editable field stays in one style, and takes no runs");
+        return false;
+    }
+    if (run_count > 0 &&
+        (!runs || !ui_text_runs_check("ui_field_append", text, n, runs, run_count)))
+        return false;
+    if ((size_t)f->len + n > FIELD_MAX_BYTES || !_reserve(f, f->len + (int)n)) {
+        log_error("ui_field_append: %zu bytes more is more than a field holds", n);
+        return false;
+    }
+    if (n == 0)
+        return true;
+    if (run_count > 0) {
+        UITextRun* merged = realloc(el->runs, (el->run_count + run_count) * sizeof(UITextRun));
+        if (!merged) {
+            log_error("ui_field_append: out of memory for its runs");
+            return false;
+        }
+        for (size_t i = 0; i < run_count; i++) {
+            merged[el->run_count + i] = runs[i];
+            merged[el->run_count + i].start += (size_t)f->len;
+        }
+        el->runs = merged;
+        el->run_count += run_count;
+    }
+    memcpy(f->buf + f->len, text, n + 1);
+    f->len += (int)n;
+    f->text.text = f->buf;
+    f->text.length = (size_t)f->len;
+    f->text.runs = el->runs;
+    f->text.run_count = el->run_count;
+    if (f->state.single_line)
+        _break_rows(f);
+    else
+        ui_lines_break_from(&f->rows, &f->text, f->wrap, f->rows.count ? f->rows.count - 1 : 0);
+    return true;
 }
 
 void ui_field_set_text(UIElement* el, const char* text) {
@@ -559,7 +621,8 @@ static void _type(UIField* f, uint32_t cp) {
  * the line, Ctrl+Home and Ctrl+End the text. Shift extends the selection throughout. False for a
  * key the field does not use.
  */
-static bool _key(const UISystem* ui, UIElement* el, UIField* f, const InputKeyEvent* ev) {
+static bool _key(const UISystem* ui, UIElement* el, UIField* f, UIRect content,
+                 const InputKeyEvent* ev) {
     const int mods = ev->mods;
     const int sh = (mods & GLFW_MOD_SHIFT) ? STB_TEXTEDIT_K_SHIFT : 0;
     const bool shortcut = (mods & ENGINE_MOD_SHORTCUT) != 0;
@@ -624,7 +687,9 @@ static bool _key(const UISystem* ui, UIElement* el, UIField* f, const InputKeyEv
         case GLFW_KEY_PAGE_DOWN:
             if (!multi)
                 return false; // a pane round a one-line field pages instead
-            f->state.row_count_per_page = el->max_rows > 0 ? el->max_rows : FIELD_ROWS_DEFAULT;
+            // By the rows it shows, whatever held it to its height.
+            f->state.row_count_per_page =
+                f->line_h > 0.0f && content.h >= f->line_h ? (int)(content.h / f->line_h) : 1;
             stb_textedit_key(
                 f, &f->state,
                 (ev->key == GLFW_KEY_PAGE_UP ? STB_TEXTEDIT_K_PGUP : STB_TEXTEDIT_K_PGDOWN) | sh);
@@ -706,7 +771,7 @@ void ui_field_keys_end(UIElement* el) {
         f->on_change(el, f->change_user);
 }
 
-bool ui_field_key(const UISystem* ui, UIElement* el, const InputKeyEvent* ev) {
+bool ui_field_key(const UISystem* ui, UIElement* el, UIRect content, const InputKeyEvent* ev) {
     UIField* f = el ? el->field : NULL;
     if (!f || !ev)
         return false;
@@ -716,7 +781,7 @@ bool ui_field_key(const UISystem* ui, UIElement* el, const InputKeyEvent* ev) {
     }
     if (f->on_key && f->on_key(el, ev, f->key_user))
         return true;
-    return _key(ui, el, f, ev);
+    return _key(ui, el, f, content, ev);
 }
 
 // ------------------------------------------------------------------- the pointer
@@ -865,10 +930,10 @@ double ui_field_draw(const UISystem* ui, UIElement* el, const UIStyle* s, UIRect
     }
 
     // The text, or the placeholder while there is none.
-    if (f->len == 0 && el->text && el->text[0]) {
+    if (f->len == 0 && f->placeholder && f->placeholder[0]) {
         UIStyle dim = *s;
         dim.fg[3] *= 0.45f;
-        ui_draw_text(dl, (UIRect){ox, oy, content.w + f->scroll_x, f->line_h}, el->text, &dim,
+        ui_draw_text(dl, (UIRect){ox, oy, content.w + f->scroll_x, f->line_h}, f->placeholder, &dim,
                      UI_ALIGN_START);
     } else {
         for (size_t i = first; i < last; i++)
