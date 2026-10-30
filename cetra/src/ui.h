@@ -355,6 +355,10 @@ struct UIElement {
     // `scroll_content` is its children's whole height, from the last layout.
     float scroll, scroll_target, scroll_content;
     struct UIField* field; // a text field's buffer, caret and editing; ui_field_* reads it
+    // A pane's virtual rows (ui_scroll_set_rows): their heights and where each starts, and which
+    // child holds which row. `row_builds` counts the rows built, a test of the building.
+    struct UIRows* rows;
+    unsigned row_builds;
 
     // BY FUNCTION
     char* text;                    // ui_set_text (owned)
@@ -487,6 +491,25 @@ UIRect ui_slider_track(const UISystem* ui, const UIElement* el);
 UIElement* ui_scroll(UIElement* parent);
 // Scrolls every pane round `el` by the least that shows it whole, easing there.
 void ui_scroll_into_view(const UISystem* ui, UIElement* el);
+
+/*
+ * VIRTUAL ROWS, for a history too long to lay out whole: the pane's content becomes `count` rows
+ * that `build` fills on demand -- each into a container the pane makes, with no look of its own,
+ * stretched across the pane -- and only the rows in view are built, with one either side and the
+ * one holding the focus. A row's height is measured when it is first built and kept; one never
+ * built counts at `estimate` points. A height changing above the view moves the scroll with it,
+ * so the first row in view stays put. Calling it again starts the rows over, and frees whatever
+ * the pane held.
+ */
+typedef void (*UIRowFn)(UIElement* row, int index, void* user);
+void ui_scroll_set_rows(UIElement* pane, int count, float estimate, UIRowFn build, void* user);
+// Grows or shrinks the rows at their end, keeping every height measured: a message appended.
+void ui_scroll_set_row_count(UIElement* pane, int count);
+// Rows `first` to `first + count` change: those built are built again at the next layout, and
+// measured again.
+void ui_scroll_rows_changed(UIElement* pane, int first, int count);
+// Scrolls the pane by the least that shows row `index`, easing there.
+void ui_scroll_to_row(const UISystem* ui, UIElement* pane, int index);
 // Whether the point, in window points, is over anything a screen on the stack draws as of its last
 // layout -- a pane's children only where the pane shows them -- or a modal screen is up: what an
 // app asks before it takes the wheel or a drag for itself.

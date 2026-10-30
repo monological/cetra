@@ -1534,33 +1534,60 @@ static const char* HISTORY_REPLY =
     "checking the board for that now: the ground pour keeps 0.3 mm from every pad and the "
     "mounting hole has its own clearance, so the pour stops where the clearance does";
 
+#define HISTORY_MAX 4096 // messages kept; past it the oldest is not dropped, the newest refused
+
 static UIScreen* g_history; // the column's screen
 static UIElement* g_history_pane;
 static UIElement* g_history_input;
-static Font* g_mono;       // the second face, for a part's name
-static UIElement* g_reply; // the message being streamed into, or NULL
-static size_t g_reply_at;  // how much of HISTORY_REPLY is in it
-static Engine* g_engine;   // for the input's submit, which has no engine of its own
+static Font* g_mono;     // the second face, for a part's name
+static Engine* g_engine; // for the input's submit, which has no engine of its own
+// The history, the app's own: each message's text, whether the agent said it, and whether a part
+// it names is set in the second face. The pane builds rows from it.
+static char* g_msgs[HISTORY_MAX];
+static bool g_msg_agent[HISTORY_MAX], g_msg_mono[HISTORY_MAX];
+static int g_msg_count;
+static int g_reply = -1;  // the message being streamed into, or -1
+static size_t g_reply_at; // how much of HISTORY_REPLY is in it
 
-// One message at the end of the history: the speaker in a colour, and on a line naming C12, the
-// part in the second face.
-static UIElement* history_add(const char* speaker, const char* said) {
+// A message at the end of the history, and a row for it; its index, or -1 when the history is full.
+static int history_push(bool agent, const char* said, bool mono) {
+    if (g_msg_count >= HISTORY_MAX)
+        return -1;
     char text[512];
-    snprintf(text, sizeof(text), "%s: %s", speaker, said);
-    UIElement* msg = ui_label(g_history_pane, text);
-    msg->wrap = true;
-    msg->size_mode[0] = UI_GROW;
-    const bool agent = speaker[0] == 'a';
+    snprintf(text, sizeof(text), "%s: %s", agent ? "agent" : "you", said);
+    g_msgs[g_msg_count] = strdup(text);
+    g_msg_agent[g_msg_count] = agent;
+    g_msg_mono[g_msg_count] = mono;
+    if (g_history_pane && g_history_pane->rows)
+        ui_scroll_set_row_count(g_history_pane, g_msg_count + 1);
+    return g_msg_count++;
+}
+
+/*
+ * A message's row: a read-only field, so its text can be selected and copied, wrapped across the
+ * column, in the column's colour with no border, the speaker in a colour and a part it names in
+ * the second face.
+ */
+static void build_message(UIElement* row, int index, void* user) {
+    (void)user;
+    UIElement* f = ui_text_field(row, UI_FIELD_MULTILINE | UI_FIELD_READ_ONLY, NULL, NULL);
+    ui_set_size(f, UI_GROW, 0.0f, UI_FIT, 0.0f);
+    f->max_rows = 1000;
+    ui_set_style(f, &(UIStyle){.bg = {0.10f, 0.11f, 0.14f, 1.0f},
+                               .border = {0.10f, 0.11f, 0.14f, 1.0f},
+                               .padding = {1.0f, 1.0f, 1.0f, 1.0f}});
+    const char* text = g_msgs[index];
+    ui_field_set_text(f, text);
+    const bool agent = g_msg_agent[index];
     UITextRun runs[2] = {
         {.start = 0,
-         .length = strlen(speaker),
+         .length = agent ? 5 : 3,
          .color = {agent ? 0.45f : 0.55f, agent ? 0.70f : 0.85f, agent ? 1.0f : 0.55f, 1.0f}}};
     size_t count = 1;
     const char* part = strstr(text, "C12");
-    if (g_mono && part)
+    if (g_mono && g_msg_mono[index] && part)
         runs[count++] = (UITextRun){.start = (size_t)(part - text), .length = 3, .font = g_mono};
-    ui_set_text_runs(msg, runs, count);
-    return msg;
+    ui_set_text_runs(f, runs, count);
 }
 
 // The input line's Enter: the message joins the history and a reply starts to stream.
@@ -1568,18 +1595,18 @@ static void on_history_submit(UIElement* el, void* user) {
     (void)user;
     if (!ui_field_text(el)[0])
         return;
-    history_add("you", ui_field_text(el));
+    history_push(false, ui_field_text(el), true);
     ui_field_set_text(el, "");
-    g_reply = history_add("agent", "");
+    g_reply = history_push(true, "", true);
     g_reply_at = 0;
     if (g_engine)
         engine_request_frame(g_engine);
 }
 
 // The next word of the reply, a frame at a time headless and every 50 ms in a window, asking for
-// the frame it will be drawn in.
+// the frame it will be drawn in. Its row is built again with each word.
 static void history_stream(Engine* engine) {
-    if (!g_reply)
+    if (g_reply < 0)
         return;
     static double next;
     const double now = glfwGetTime();
@@ -1590,15 +1617,13 @@ static void history_stream(Engine* engine) {
     const char* rest = HISTORY_REPLY + g_reply_at;
     const char* space = strchr(rest + (*rest == ' '), ' ');
     g_reply_at = space ? (size_t)(space - HISTORY_REPLY) : strlen(HISTORY_REPLY);
-    char said[512];
-    snprintf(said, sizeof(said), "%.*s", (int)g_reply_at, HISTORY_REPLY);
     char text[520];
-    snprintf(text, sizeof(text), "agent: %s", said);
-    ui_set_text(g_reply, text);
-    const UITextRun speaker = {.start = 0, .length = 5, .color = {0.45f, 0.70f, 1.0f, 1.0f}};
-    ui_set_text_runs(g_reply, &speaker, 1);
+    snprintf(text, sizeof(text), "agent: %.*s", (int)g_reply_at, HISTORY_REPLY);
+    free(g_msgs[g_reply]);
+    g_msgs[g_reply] = strdup(text);
+    ui_scroll_rows_changed(g_history_pane, g_reply, 1);
     if (!space) {
-        g_reply = NULL;
+        g_reply = -1;
         return;
     }
     next = now + 0.05;
@@ -1622,20 +1647,19 @@ static void build_history(UISystem* ui, Font* mono) {
                                     .corner_radius = 1.0f,
                                     .padding = {12.0f, 12.0f, 12.0f, 12.0f}});
     column->spacing = 10.0f;
-    UIElement* pane = ui_scroll(column);
-    g_history_pane = pane;
-    ui_set_size(pane, UI_GROW, 0.0f, UI_GROW, 0.0f);
-    pane->follow_end = true;
-    pane->spacing = 10.0f;
     const size_t kinds = sizeof(HISTORY_LINES) / sizeof(HISTORY_LINES[0]);
     for (int i = 0; i < HISTORY_MESSAGES; i++) {
         char said[256];
         snprintf(said, sizeof(said), "%s (%d)", HISTORY_LINES[(size_t)i % kinds], i);
         // Every fifth line naming C12 shows it in the second face.
-        UIElement* msg = history_add(i % 3 != 1 ? "agent" : "you", said);
-        if (i % 5 != 0 && msg->run_count > 1)
-            ui_set_text_runs(msg, msg->runs, 1);
+        history_push(i % 3 != 1, said, i % 5 == 0);
     }
+    UIElement* pane = ui_scroll(column);
+    g_history_pane = pane;
+    ui_set_size(pane, UI_GROW, 0.0f, UI_GROW, 0.0f);
+    pane->follow_end = true;
+    pane->spacing = 10.0f;
+    ui_scroll_set_rows(pane, g_msg_count, 40.0f, build_message, NULL);
     g_history_input = ui_text_field(column, UI_FIELD_MULTILINE | UI_FIELD_SUBMIT_ON_ENTER,
                                     on_history_submit, NULL);
     ui_set_text(g_history_input, "Message");
@@ -1722,12 +1746,16 @@ static const Command COMMANDS[] = {
 };
 #define COMMAND_COUNT ((int)(sizeof(COMMANDS) / sizeof(COMMANDS[0])))
 
+#define PALETTE_ROW_HEIGHT 30.0f
+
+typedef struct Hit {
+    int index, score;
+} Hit;
+
 static UIScreen* g_palette;
 static UIElement* g_pal_field;
-static UIElement* g_pal_rows[PALETTE_ROWS];
-static UIElement* g_pal_names[PALETTE_ROWS];
-static UIElement* g_pal_keys[PALETTE_ROWS];
-static int g_pal_match[PALETTE_ROWS];
+static UIElement* g_pal_list;      // the pane of rows, one a hit
+static Hit g_pal_hits[JUMP_NAMES]; // what the field matches, best first
 static int g_pal_count, g_pal_selected;
 static bool g_pal_jump; // the list is the jump's names rather than the commands
 static char g_jump_names[JUMP_NAMES][24];
@@ -1739,20 +1767,6 @@ static const char* pal_name(int i) {
     return g_pal_jump ? g_jump_names[i] : COMMANDS[i].name;
 }
 
-// The highlighted row in the theme's focus colour, the rest bare.
-static void palette_restyle(void) {
-    for (int r = 0; r < PALETTE_ROWS; r++) {
-        const bool lit = r == g_pal_selected && r < g_pal_count;
-        ui_set_style(g_pal_rows[r], &(UIStyle){.bg = {0.16f, 0.34f, 0.62f, lit ? 1.0f : 0.0f},
-                                               .corner_radius = 5.0f,
-                                               .padding = {5.0f, 10.0f, 5.0f, 10.0f}});
-    }
-}
-
-typedef struct Hit {
-    int index, score;
-} Hit;
-
 static int hit_order(const void* a, const void* b) {
     const Hit* x = a;
     const Hit* y = b;
@@ -1761,53 +1775,72 @@ static int hit_order(const void* a, const void* b) {
     return x->index - y->index;
 }
 
-// The list for what is in the field: every item that matches, best first and in the list's own
-// order among equals, the first PALETTE_ROWS of them shown with their matched letters lit.
+// The runs lighting what the field matched in `name`, one a matched character; how many.
+static size_t palette_lit(const char* name, UITextRun* lit) {
+    const char* query = ui_field_text(g_pal_field);
+    size_t at[FUZZY_QUERY_MAX];
+    size_t n = 0;
+    if (!query[0] || fuzzy_match(query, name, at, FUZZY_QUERY_MAX) < 0)
+        return 0;
+    for (const unsigned char* p = (const unsigned char*)query; *p && n < FUZZY_QUERY_MAX; n++) {
+        text_utf8_next(&p);
+        const unsigned char* end = (const unsigned char*)name + at[n];
+        text_utf8_next(&end);
+        lit[n] = (UITextRun){.start = at[n],
+                             .length = (size_t)(end - ((const unsigned char*)name + at[n])),
+                             .color = {1.0f, 0.78f, 0.30f, 1.0f}};
+    }
+    return n;
+}
+
+static void on_palette_row(UIElement* el, void* user);
+
+/*
+ * Hit `index`'s row: its name with the matched letters lit, its key at the right, on the focus
+ * colour when it is the one Enter runs. A click runs it.
+ */
+static void build_palette_row(UIElement* holder, int index, void* user) {
+    (void)user;
+    const int item = g_pal_hits[index].index;
+    UIElement* row = ui_panel(holder);
+    row->dir = UI_ROW;
+    row->focusable = true;
+    row->action = on_palette_row;
+    row->action_user = (void*)(intptr_t)index;
+    ui_set_size(row, UI_GROW, 0.0f, UI_FIXED, PALETTE_ROW_HEIGHT);
+    const bool lit = index == g_pal_selected;
+    ui_set_style(row, &(UIStyle){.bg = {0.16f, 0.34f, 0.62f, lit ? 1.0f : 0.0f},
+                                 .corner_radius = 5.0f,
+                                 .padding = {5.0f, 10.0f, 5.0f, 10.0f}});
+    UIElement* name = ui_label(row, pal_name(item));
+    ui_set_size(name, UI_GROW, 0.0f, UI_FIT, 0.0f);
+    UITextRun runs[FUZZY_QUERY_MAX];
+    ui_set_text_runs(name, runs, palette_lit(pal_name(item), runs));
+    ui_label(row, g_pal_jump ? "" : COMMANDS[item].key);
+}
+
+/*
+ * The list for what is in the field: every item that matches, best first and in the list's own
+ * order among equals, a row each. The pane is as tall as the rows up to PALETTE_ROWS of them and
+ * scrolls past that, so a short list takes only its own room.
+ */
 static void palette_filter(void) {
-    static Hit hits[JUMP_NAMES];
     const char* query = ui_field_text(g_pal_field);
     const int total = g_pal_jump ? JUMP_NAMES : COMMAND_COUNT;
     int found = 0;
     for (int i = 0; i < total; i++) {
         const int score = fuzzy_match(query, pal_name(i), NULL, 0);
         if (score >= 0)
-            hits[found++] = (Hit){i, score};
+            g_pal_hits[found++] = (Hit){i, score};
     }
-    qsort(hits, (size_t)found, sizeof(Hit), hit_order);
-    g_pal_count = found < PALETTE_ROWS ? found : PALETTE_ROWS;
-    for (int r = 0; r < PALETTE_ROWS; r++) {
-        UIElement* row = g_pal_rows[r];
-        if (r >= g_pal_count) {
-            ui_set_size(row, UI_GROW, 0.0f, UI_FIXED, 0.0f);
-            row->disabled = true;
-            ui_set_text(g_pal_names[r], "");
-            ui_set_text(g_pal_keys[r], "");
-            continue;
-        }
-        const int item = hits[r].index;
-        g_pal_match[r] = item;
-        ui_set_size(row, UI_GROW, 0.0f, UI_FIT, 0.0f);
-        row->disabled = false;
-        ui_set_text(g_pal_names[r], pal_name(item));
-        ui_set_text(g_pal_keys[r], g_pal_jump ? "" : COMMANDS[item].key);
-        size_t at[FUZZY_QUERY_MAX];
-        UITextRun lit[FUZZY_QUERY_MAX];
-        size_t n = 0;
-        if (query[0] && fuzzy_match(query, pal_name(item), at, FUZZY_QUERY_MAX) >= 0)
-            for (const unsigned char* p = (const unsigned char*)query; *p && n < FUZZY_QUERY_MAX;) {
-                text_utf8_next(&p);
-                const unsigned char* c = (const unsigned char*)pal_name(item) + at[n];
-                const unsigned char* end = c;
-                text_utf8_next(&end);
-                lit[n] = (UITextRun){.start = at[n],
-                                     .length = (size_t)(end - c),
-                                     .color = {1.0f, 0.78f, 0.30f, 1.0f}};
-                n++;
-            }
-        ui_set_text_runs(g_pal_names[r], lit, n);
-    }
+    qsort(g_pal_hits, (size_t)found, sizeof(Hit), hit_order);
+    g_pal_count = found;
     g_pal_selected = 0;
-    palette_restyle();
+    if (found > PALETTE_ROWS)
+        ui_set_size(g_pal_list, UI_GROW, 0.0f, UI_FIXED, PALETTE_ROWS * PALETTE_ROW_HEIGHT);
+    else
+        ui_set_size(g_pal_list, UI_GROW, 0.0f, UI_FIT, 0.0f);
+    ui_scroll_set_rows(g_pal_list, found, PALETTE_ROW_HEIGHT, build_palette_row, NULL);
 }
 
 static void palette_close(void) {
@@ -1821,7 +1854,7 @@ static void palette_close(void) {
 static void palette_run(int r) {
     if (r < 0 || r >= g_pal_count)
         return;
-    const int item = g_pal_match[r];
+    const int item = g_pal_hits[r].index;
     palette_close();
     if (g_pal_jump)
         printf("canvas jump %s\n", g_jump_names[item]);
@@ -1846,7 +1879,7 @@ static void on_palette_row(UIElement* el, void* user) {
     palette_run((int)(intptr_t)user);
 }
 
-// Up and Down move the highlight while the caret stays in the field.
+// Up and Down move the highlight while the caret stays in the field, the list scrolled to show it.
 static bool on_palette_key(UIElement* el, const InputKeyEvent* key, void* user) {
     (void)el;
     (void)user;
@@ -1855,8 +1888,10 @@ static bool on_palette_key(UIElement* el, const InputKeyEvent* key, void* user) 
     const int step = key->key == GLFW_KEY_UP ? -1 : 1;
     const int to = g_pal_selected + step;
     if (to >= 0 && to < g_pal_count) {
+        ui_scroll_rows_changed(g_pal_list, g_pal_selected, 1);
+        ui_scroll_rows_changed(g_pal_list, to, 1);
         g_pal_selected = to;
-        palette_restyle();
+        ui_scroll_to_row(g_ui_live, g_pal_list, to);
     }
     return true;
 }
@@ -1880,23 +1915,10 @@ static void build_palette(UISystem* ui) {
     ui_set_size(g_pal_field, UI_GROW, 0.0f, UI_FIT, 0.0f);
     ui_field_set_on_change(g_pal_field, on_palette_change, NULL);
     ui_field_set_on_key(g_pal_field, on_palette_key, NULL);
-    // The rows in a pane that fits them, a container with no look of its own, and no gaps between
-    // them, so the rows a short list hides take no room at all. A spacing of zero is the theme's,
-    // so a thousandth of a point stands for none.
-    UIElement* list = ui_scroll(box);
-    ui_set_size(list, UI_GROW, 0.0f, UI_FIT, 0.0f);
-    list->spacing = 0.001f;
-    for (int r = 0; r < PALETTE_ROWS; r++) {
-        UIElement* row = ui_panel(list);
-        row->dir = UI_ROW;
-        row->focusable = true;
-        row->action = on_palette_row;
-        row->action_user = (void*)(intptr_t)r;
-        g_pal_rows[r] = row;
-        g_pal_names[r] = ui_label(row, "");
-        ui_set_size(g_pal_names[r], UI_GROW, 0.0f, UI_FIT, 0.0f);
-        g_pal_keys[r] = ui_label(row, "");
-    }
+    // The rows in a pane with no gaps between them. A spacing of zero is the theme's, so a
+    // thousandth of a point stands for none.
+    g_pal_list = ui_scroll(box);
+    g_pal_list->spacing = 0.001f;
 }
 
 static void palette_open(bool jump) {
@@ -2215,14 +2237,19 @@ int main(int argc, char** argv) {
     engine_run(engine, on_update, NULL, NULL);
     if (g_idle_say)
         printf("canvas idle frames %zu waited %.6f\n", engine->total_frames, engine->time_waited);
-    // The palette as the run left it: whether it is open, its text's length, the rows it shows, the
-    // first row's item and that item's matched bytes; and its field's box in framebuffer pixels.
+    // The palette as the run left it: whether it is open, its text's length, the rows it holds,
+    // the first row's item and that item's matched bytes; the rows built; and its field's box in
+    // framebuffer pixels.
     if (probe && g_palette) {
         printf("canvas palette state %d %zu %d %d", ui_on_stack(ui, g_palette) ? 1 : 0,
-               strlen(ui_field_text(g_pal_field)), g_pal_count, g_pal_count ? g_pal_match[0] : -1);
-        for (size_t i = 0; g_pal_count && i < g_pal_names[0]->run_count; i++)
-            printf(" %zu", g_pal_names[0]->runs[i].start);
+               strlen(ui_field_text(g_pal_field)), g_pal_count,
+               g_pal_count ? g_pal_hits[0].index : -1);
+        UITextRun lit[FUZZY_QUERY_MAX];
+        const size_t n = g_pal_count ? palette_lit(pal_name(g_pal_hits[0].index), lit) : 0;
+        for (size_t i = 0; i < n; i++)
+            printf(" %zu", lit[i].start);
         printf("\n");
+        printf("canvas palette list rows %d built %zu\n", g_pal_count, g_pal_list->child_count);
         const double s = ctx.fb_scale;
         const UIRect r = g_pal_field->rect;
         printf("canvas palette field %ld %ld %ld %ld\n", lround(r.x * s), lround(r.y * s),

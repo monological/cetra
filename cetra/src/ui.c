@@ -364,6 +364,77 @@ static void _drop_lines(UIElement* el) {
     el->lines = NULL;
 }
 
+/*
+ * A pane's virtual rows (ui_scroll_set_rows). Heights and tops are per row; the pane's children
+ * are the rows built, in row order, `child_row` saying which row each holds. Building and freeing
+ * happen in the layout, where the system is in hand to let go of anything it held in a freed row.
+ */
+struct UIRows {
+    int count, capacity;
+    float estimate;
+    UIRowFn build;
+    void* user;
+    float* height; // measured, or the estimate
+    bool* measured;
+    bool* stale; // built again at the next layout
+    float* top;  // where each row starts, the gaps before it included; count + 1 of them
+    float gap;   // the pane's spacing the tops were summed with
+    bool dirty;  // the tops need summing again
+    int* child_row;
+    size_t child_row_capacity;
+    float width;  // the content width the heights were measured at
+    float anchor; // what heights above the view grew by in the last measure
+    bool restart; // every child freed before the rows are built
+    int reveal;   // the row ui_scroll_to_row asked for, until it is measured; -1 for none
+};
+
+static void _rows_free(struct UIRows* r) {
+    if (!r)
+        return;
+    free(r->height);
+    free(r->measured);
+    free(r->stale);
+    free(r->top);
+    free(r->child_row);
+    free(r);
+}
+
+static bool _rows_reserve(struct UIRows* r, int count) {
+    if (count <= r->capacity)
+        return true;
+    int cap = r->capacity > 0 ? r->capacity : 64;
+    while (cap < count)
+        cap *= 2;
+    float* height = realloc(r->height, (size_t)cap * sizeof(float));
+    if (height)
+        r->height = height;
+    bool* measured = realloc(r->measured, (size_t)cap * sizeof(bool));
+    if (measured)
+        r->measured = measured;
+    bool* stale = realloc(r->stale, (size_t)cap * sizeof(bool));
+    if (stale)
+        r->stale = stale;
+    float* top = realloc(r->top, ((size_t)cap + 1) * sizeof(float));
+    if (top)
+        r->top = top;
+    if (!height || !measured || !stale || !top) {
+        log_error("ui: out of memory for %d rows", count);
+        return false;
+    }
+    r->capacity = cap;
+    return true;
+}
+
+// Rows [from, to) as new: the estimate's height, never measured.
+static void _rows_fresh(struct UIRows* r, int from, int to) {
+    for (int i = from; i < to; i++) {
+        r->height[i] = r->estimate;
+        r->measured[i] = false;
+        r->stale[i] = false;
+    }
+    r->dirty = true;
+}
+
 static void _free_element(UIElement* el) {
     if (!el)
         return;
@@ -374,8 +445,67 @@ static void _free_element(UIElement* el) {
     free(el->runs);
     _drop_lines(el);
     ui_field_free(el->field);
+    _rows_free(el->rows);
     free(el->style);
     free(el);
+}
+
+void ui_scroll_set_rows(UIElement* pane, int count, float estimate, UIRowFn build, void* user) {
+    if (!pane || pane->kind != UI_SCROLL || !build || count < 0) {
+        log_error(
+            "ui_scroll_set_rows: wants a scrolling pane, a count of none or more, and a build");
+        return;
+    }
+    struct UIRows* r = pane->rows;
+    if (!r) {
+        r = calloc(1, sizeof(struct UIRows));
+        if (!r) {
+            log_error("ui_scroll_set_rows: out of memory");
+            return;
+        }
+        pane->rows = r;
+    }
+    r->count = 0;
+    if (!_rows_reserve(r, count > 0 ? count : 1))
+        return;
+    r->count = count;
+    r->estimate = estimate > 0.0f ? estimate : 1.0f;
+    r->build = build;
+    r->user = user;
+    r->width = -1.0f;
+    r->anchor = 0.0f;
+    r->restart = true;
+    r->reveal = -1;
+    _rows_fresh(r, 0, count);
+    pane->scroll = pane->scroll_target = 0.0f;
+}
+
+void ui_scroll_set_row_count(UIElement* pane, int count) {
+    if (!pane || !pane->rows || count < 0) {
+        log_error("ui_scroll_set_row_count: not a pane with rows, or a count under none");
+        return;
+    }
+    struct UIRows* r = pane->rows;
+    if (!_rows_reserve(r, count > 0 ? count : 1))
+        return;
+    if (count > r->count)
+        _rows_fresh(r, r->count, count);
+    r->count = count;
+    r->dirty = true;
+}
+
+void ui_scroll_rows_changed(UIElement* pane, int first, int count) {
+    if (!pane || !pane->rows) {
+        log_error("ui_scroll_rows_changed: not a pane with rows");
+        return;
+    }
+    struct UIRows* r = pane->rows;
+    const int lo = first < 0 ? 0 : first;
+    const int hi = (first + count) < r->count ? first + count : r->count;
+    for (int i = lo; i < hi; i++) {
+        r->stale[i] = true;
+        r->measured[i] = false;
+    }
 }
 
 UIElement* ui_panel(UIElement* parent) {
@@ -721,6 +851,79 @@ static float* _len(UIRect* r, int axis) {
     return axis == 0 ? &r->w : &r->h;
 }
 
+// Sums a pane's row tops again when a height, the count or its spacing has changed.
+static void _rows_tops(const UISystem* ui, UIElement* pane) {
+    struct UIRows* r = pane->rows;
+    const float gap = _spacing_of(ui, pane);
+    if (!r->dirty && gap == r->gap)
+        return;
+    r->gap = gap;
+    r->top[0] = 0.0f;
+    for (int i = 0; i < r->count; i++)
+        r->top[i + 1] = r->top[i] + r->height[i] + (i + 1 < r->count ? gap : 0.0f);
+    r->dirty = false;
+}
+
+// The least scroll from the pane's target that shows row `index` whole in `view` points -- its
+// top, if it is taller than the view.
+static float _row_reveal_target(const UIElement* pane, int index, float view) {
+    const struct UIRows* r = pane->rows;
+    const float y0 = r->top[index], y1 = y0 + r->height[index];
+    float t = pane->scroll_target;
+    if (y0 < t)
+        t = y0;
+    else if (y1 > t + view)
+        t = y1 - view < y0 ? y1 - view : y0;
+    return t;
+}
+
+// The row at `y` down a pane's content: the last that starts at or above it.
+static int _row_at(const struct UIRows* r, float y) {
+    if (r->count <= 0)
+        return 0;
+    int lo = 0, hi = r->count;
+    while (hi - lo > 1) {
+        const int mid = (lo + hi) / 2;
+        if (r->top[mid] <= y)
+            lo = mid;
+        else
+            hi = mid;
+    }
+    return lo;
+}
+
+/*
+ * The heights of a pane's built rows, as this measure found them, kept. A new width makes every
+ * kept height an estimate again, measured as each row is next built. A height that changed above
+ * the first row in view is gathered into `anchor`, which the arrange adds to the scroll, so the
+ * row in view does not move.
+ */
+static void _rows_measure(const UISystem* ui, UIElement* pane) {
+    struct UIRows* r = pane->rows;
+    float pad[4];
+    _padding_of(ui, pane, pad);
+    const float width = pane->rect.w - pad[1] - pad[3];
+    if (width != r->width) {
+        for (int i = 0; i < r->count; i++)
+            r->measured[i] = false;
+        r->width = width;
+    }
+    _rows_tops(ui, pane);
+    const int first = _row_at(r, pane->scroll);
+    for (size_t k = 0; k < pane->child_count; k++) {
+        const int row = r->child_row[k];
+        const float h = pane->children[k]->rect.h;
+        if (row >= r->count || (r->measured[row] && r->height[row] == h))
+            continue;
+        if (row < first)
+            r->anchor += h - r->height[row];
+        r->height[row] = h;
+        r->measured[row] = true;
+        r->dirty = true;
+    }
+    _rows_tops(ui, pane);
+}
+
 /*
  * Pass 1, bottom-up: every element gets the size its own content wants. A GROW
  * axis is measured too, at its FIT size -- that is the MINIMUM it will accept,
@@ -733,7 +936,13 @@ static void _measure(const UISystem* ui, UIElement* el, int axis) {
 
     float v = _intrinsic(ui, el, axis);
 
-    if (el->child_count > 0) {
+    if (el->rows && axis == 1) {
+        // A pane of rows is as tall as all of them, built or not.
+        _rows_measure(ui, el);
+        float pad[4];
+        _padding_of(ui, el, pad);
+        v = el->rows->top[el->rows->count] + pad[0] + pad[2];
+    } else if (el->child_count > 0) {
         float pad[4];
         _padding_of(ui, el, pad);
         const float gap = _spacing_of(ui, el);
@@ -825,6 +1034,30 @@ static void _arrange(const UISystem* ui, UIElement* el, UIRect screen, int axis)
                     *cp += in_len - *cl;
             }
             _arrange(ui, c, screen, axis);
+        }
+        return;
+    }
+
+    // A pane's rows each at their own top, less the scroll -- moved first by whatever the heights
+    // above the view grew by, so the row in view stays where it was.
+    if (el->rows && axis == 1) {
+        struct UIRows* r = el->rows;
+        el->scroll += r->anchor;
+        el->scroll_target += r->anchor;
+        r->anchor = 0.0f;
+        // A row asked for is aimed at again from what is measured now, until it is measured
+        // itself: its place was an estimate's.
+        if (r->reveal >= 0 && r->reveal < r->count) {
+            el->scroll_target = _row_reveal_target(el, r->reveal, in_len);
+            if (r->measured[r->reveal])
+                r->reveal = -1;
+        }
+        const float scroll = _scroll_settle(el, r->top[r->count], in_len);
+        for (size_t i = 0; i < el->child_count; i++) {
+            UIElement* c = el->children[i];
+            const int row = r->child_row[i] < r->count ? r->child_row[i] : r->count;
+            *_pos(&c->rect, 1) = in_pos - scroll + r->top[row];
+            _arrange(ui, c, screen, 1);
         }
         return;
     }
@@ -929,10 +1162,111 @@ static void _break_lines(const UISystem* ui, UIElement* el) {
     el->wraps++;
 }
 
-void ui_layout(UIScreen* screen, float width, float height) {
-    if (!screen || !screen->root || !screen->ui)
-        return;
-    const UIRect full = {0.0f, 0.0f, width, height};
+static float _pane_view(const UISystem* ui, const UIElement* el);
+
+static bool _contains(const UIElement* el, const UIElement* target) {
+    for (const UIElement* p = target; p; p = p->parent)
+        if (p == el)
+            return true;
+    return false;
+}
+
+// Frees a pane's child `k`, letting go of anything the system or a screen held inside it.
+static void _rows_drop(UISystem* ui, UIElement* pane, size_t k) {
+    UIElement* c = pane->children[k];
+    if (ui->pressed && _contains(c, ui->pressed))
+        ui->pressed = NULL;
+    if (ui->bar_drag && _contains(c, ui->bar_drag))
+        ui->bar_drag = NULL;
+    if (ui->focus_seen && _contains(c, ui->focus_seen))
+        ui->focus_seen = NULL;
+    for (size_t i = 0; i < ui->screen_count; i++)
+        if (ui->screens[i]->focused && _contains(c, ui->screens[i]->focused))
+            ui->screens[i]->focused = NULL;
+    _free_element(c);
+    struct UIRows* r = pane->rows;
+    for (size_t i = k + 1; i < pane->child_count; i++) {
+        pane->children[i - 1] = pane->children[i];
+        r->child_row[i - 1] = r->child_row[i];
+    }
+    pane->child_count--;
+}
+
+/*
+ * The rows a pane should hold for this layout, from where the last one left its scroll and its
+ * height: those in view, one either side, and the one holding the focus. Freed are the rest, the
+ * rows past the count and the rows changed; built are the ones missing, kept in row order. True
+ * when anything was built or freed, so the layout runs again on what is held now.
+ */
+static bool _rows_settle(UISystem* ui, const UIScreen* screen, UIElement* pane) {
+    struct UIRows* r = pane->rows;
+    bool changed = false;
+    if (r->restart) {
+        while (pane->child_count > 0)
+            _rows_drop(ui, pane, pane->child_count - 1);
+        r->restart = false;
+        changed = true;
+    }
+    _rows_tops(ui, pane);
+    const float view = _pane_view(ui, pane);
+    const int first = _row_at(r, pane->scroll);
+    const int last = _row_at(r, pane->scroll + (view > 0.0f ? view : 0.0f));
+    const int lo = first > 0 ? first - 1 : 0;
+    const int hi = last + 2 < r->count ? last + 2 : r->count;
+    int keep = -1;
+    for (size_t k = 0; k < pane->child_count; k++)
+        if (screen->focused && _contains(pane->children[k], screen->focused))
+            keep = r->child_row[k];
+    for (size_t k = pane->child_count; k-- > 0;) {
+        const int row = r->child_row[k];
+        const bool gone = row >= r->count || ((row < lo || row >= hi) && row != keep);
+        if (gone || r->stale[row]) {
+            if (!gone)
+                r->stale[row] = false;
+            _rows_drop(ui, pane, k);
+            changed = true;
+        }
+    }
+    for (int row = lo; row < hi; row++) {
+        bool held = false;
+        for (size_t k = 0; k < pane->child_count && !held; k++)
+            held = r->child_row[k] == row;
+        if (held)
+            continue;
+        if (!grow_array((void**)&r->child_row, &r->child_row_capacity, pane->child_count + 1,
+                        sizeof(int), 16))
+            break;
+        UIElement* c = _new_element(pane, UI_ROOT);
+        if (!c)
+            break;
+        c->size_mode[0] = UI_GROW;
+        r->child_row[pane->child_count - 1] = row;
+        r->stale[row] = false;
+        r->build(c, row, r->user);
+        pane->row_builds++;
+        changed = true;
+    }
+    // Row order, for drawing, hit testing and Tab: an insertion sort, the list being nearly sorted.
+    for (size_t k = 1; k < pane->child_count; k++)
+        for (size_t j = k; j > 0 && r->child_row[j - 1] > r->child_row[j]; j--) {
+            UIElement* c = pane->children[j];
+            pane->children[j] = pane->children[j - 1];
+            pane->children[j - 1] = c;
+            const int t = r->child_row[j];
+            r->child_row[j] = r->child_row[j - 1];
+            r->child_row[j - 1] = t;
+        }
+    return changed;
+}
+
+static bool _settle_rows(UISystem* ui, const UIScreen* screen, UIElement* el) {
+    bool changed = el->rows ? _rows_settle(ui, screen, el) : false;
+    for (size_t i = 0; i < el->child_count; i++)
+        changed |= _settle_rows(ui, screen, el->children[i]);
+    return changed;
+}
+
+static void _layout_once(UIScreen* screen, UIRect full) {
     UIElement* root = screen->root;
     _measure(screen->ui, root, 0);
     root->rect.x = full.x;
@@ -943,6 +1277,20 @@ void ui_layout(UIScreen* screen, float width, float height) {
     root->rect.y = full.y;
     root->rect.h = full.h;
     _arrange(screen->ui, root, full, 1);
+}
+
+void ui_layout(UIScreen* screen, float width, float height) {
+    if (!screen || !screen->root || !screen->ui)
+        return;
+    const UIRect full = {0.0f, 0.0f, width, height};
+    // A pane of rows decides what to build from where the last layout left it, so the rows it
+    // builds can change what this one finds: a first layout gave it no height, a row measured
+    // taller than its estimate moves what is in view. It runs again on what is built then, three
+    // times at the most; a screen with no rows lays out once.
+    _settle_rows(screen->ui, screen, screen->root);
+    _layout_once(screen, full);
+    for (int again = 0; again < 2 && _settle_rows(screen->ui, screen, screen->root); again++)
+        _layout_once(screen, full);
 }
 
 // --------------------------------------------------------------------- emit
@@ -1292,6 +1640,16 @@ static void _reveal(const UISystem* ui, UIElement* el) {
             t += (y1 - bottom < y0 - top) ? y1 - bottom : y0 - top;
         _scroll_to(ui, p, t, false);
     }
+}
+
+void ui_scroll_to_row(const UISystem* ui, UIElement* pane, int index) {
+    if (!ui || !pane || !pane->rows || index < 0 || index >= pane->rows->count) {
+        log_error("ui_scroll_to_row: not a pane with rows, or no row %d", index);
+        return;
+    }
+    _rows_tops(ui, pane);
+    pane->rows->reveal = index;
+    _scroll_to(ui, pane, _row_reveal_target(pane, index, _pane_view(ui, pane)), false);
 }
 
 void ui_scroll_into_view(const UISystem* ui, UIElement* el) {

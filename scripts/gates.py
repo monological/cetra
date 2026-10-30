@@ -27749,6 +27749,20 @@ def run_ui_gate(workdir):
                      down the track as the content is scrolled; dragging it 50
                      points scrolls by that share of the track's room, and a press
                      on the track below it pages down by nine tenths of the view.
+      ui-rows-built  100,000 virtual rows in a 200-point pane: the content is every
+                     row at its estimate and the gaps, only the rows in view and one
+                     either side are built, at the top and at row 50,000, which is
+                     shown, and laying out again builds nothing.
+      ui-rows-measure a row's height is measured when it is built and kept: the
+                     content holds the built rows at their measure, laying out again
+                     builds nothing, a new width measures again without building
+                     the rows again, and a row marked changed is built again.
+      ui-rows-anchor a row scrolled to is shown at the pane's bottom though the rows
+                     above it measured twice their estimate; a row above the view
+                     measured taller as the wheel brings it in moves the first row in
+                     view by the wheel's step and nothing more.
+      ui-rows-focus  the focused row stays built and focused when the pane is
+                     scrolled far from it, beside the rows in view.
       ui-field-type  typed characters make the field's text, the caret at its end,
                      and on_change fires once for a pass that changed it and not
                      for one that did not.
@@ -28216,6 +28230,78 @@ def run_ui_gate(workdir):
                   f"below it pages {paged:.1f} (want {0.9 * view:.0f})")
     print(f"  ui-scroll-bar         {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-scroll-bar", ok)
+
+    # ---- virtual rows: 30-point rows 8 points apart in a 200-point pane
+    row_h, row_gap = 30.0, 8.0
+    # The rows in view at most, and one either side.
+    held_most = math.ceil(200.0 / (row_h + row_gap)) + 3
+    p = _ui_probe("rows-built")
+    if not p:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        near, far = p[("near", "held")][0], p[("far", "held")][0]
+        near_builds, far_builds = p[("near", "builds")][0], p[("far", "builds")][0]
+        content = p[("near", "content")][0]
+        want_content = 100000 * row_h + 99999 * row_gap
+        ok = (close(content, want_content) and 0 < near <= held_most and near_builds == near
+              and 0 < far <= held_most and far_builds <= near_builds + far
+              and p[("far", "shown")][0] == 1 and p[("again", "builds")][0] == 0)
+        detail = (f"content {content:.0f} (want {want_content:.0f}); {near:.0f} rows held at the "
+                  f"top and {far:.0f} at row 50,000 (want at most {held_most}), {far_builds:.0f} "
+                  f"built in all (want at most {near_builds + far:.0f}); row 50,000 shown "
+                  f"{p[('far', 'shown')][0]:.0f}, laid out again {p[('again', 'builds')][0]:.0f} "
+                  f"built (want 0)")
+    print(f"  ui-rows-built         {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-rows-built", ok)
+
+    p = _ui_probe("rows-measure")
+    if not p:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        count = p[("built", "count")][0]
+        built = p[("built", "height")][0]
+        content = p[("content", "height")][0]
+        narrow, wide = p[("wider", "content")]
+        wider = p[("wider", "builds")][0]
+        # Every row is at least its estimate, and the built ones are at their measure.
+        floor = built + (50 - count) * row_h + 49 * row_gap
+        ok = (content > 50 * row_h + 49 * row_gap and content >= floor - 1e-3
+              and p[("again", "builds")][0] == 0 and close(narrow, content) and wide < narrow
+              and wider <= 2 and p[("changed", "builds")][0] == wider + 1)
+        detail = (f"content {content:.0f} (want at least {floor:.0f}, the built rows' {built:.0f} "
+                  f"and the rest at the estimate); laid out again "
+                  f"{p[('again', 'builds')][0]:.0f} built (want 0); wider, {narrow:.0f} to "
+                  f"{wide:.0f} with {wider:.0f} built (want fewer points, at most 2 built); a "
+                  f"changed row {p[('changed', 'builds')][0]:.0f} (want {wider + 1:.0f})")
+    print(f"  ui-rows-measure       {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-rows-measure", ok)
+
+    p = _ui_probe("rows-anchor")
+    if not p:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        shown = p[("reveal", "shown")][0]
+        bottoms = p.get(("reveal", "bottoms"), [0.0, -1.0])
+        moved, step = p[("first", "moved")][0], p[("step", "points")][0]
+        ok = shown == 1 and close(bottoms[0], bottoms[1]) and close(moved, step)
+        detail = (f"row 100 shown {shown:.0f}, its bottom {bottoms[0]:.1f} (want the pane's "
+                  f"{bottoms[1]:.1f}); the first row in view moved {moved:.2f} (want the step "
+                  f"{step:.0f})")
+    print(f"  ui-rows-anchor        {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-rows-anchor", ok)
+
+    p = _ui_probe("rows-focus")
+    if not p:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        held = p[("far", "held")][0]
+        ok = (p[("first", "built")][0] == 1 and p[("far", "scroll")][0] > 1000.0
+              and p[("far", "kept")][0] == 1 and held <= held_most + 1)
+        detail = (f"focused row built {p[('first', 'built')][0]:.0f}; scrolled to "
+                  f"{p[('far', 'scroll')][0]:.0f}, kept {p[('far', 'kept')][0]:.0f} with "
+                  f"{held:.0f} rows held (want at most {held_most + 1})")
+    print(f"  ui-rows-focus         {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-rows-focus", ok)
 
     # ---- the text field: each probe line says 1 where its text was the one it wanted
     def flags_ok(p, keys):

@@ -913,6 +913,145 @@ static int probe_field_focus(UISystem* ui) {
     return 0;
 }
 
+// ---- virtual rows
+
+static float g_built_h = 30.0f; // the height a button row is built at
+
+static void build_button_row(UIElement* row, int index, void* user) {
+    (void)user;
+    char name[32];
+    snprintf(name, sizeof(name), "Row %d", index);
+    ui_set_size(ui_button(row, name, NULL, NULL), UI_GROW, 0.0f, UI_FIXED, g_built_h);
+}
+
+// A row of text one to four sentences long, so rows differ in height and a width changes them.
+static void build_text_row(UIElement* row, int index, void* user) {
+    (void)user;
+    char text[512] = "";
+    for (int i = 0; i <= index % 4; i++)
+        strncat(text, "the quick brown fox jumps over the lazy dog ",
+                sizeof(text) - strlen(text) - 1);
+    UIElement* label = ui_label(row, text);
+    label->wrap = true;
+    label->size_mode[0] = UI_GROW;
+}
+
+// The row `index`'s element, if built: a row container's first child, named by its text.
+static UIElement* built_row(const UIElement* pane, int index) {
+    char name[32];
+    snprintf(name, sizeof(name), "Row %d", index);
+    for (size_t k = 0; k < pane->child_count; k++) {
+        const UIElement* row = pane->children[k];
+        if (row->child_count && row->children[0]->text && strcmp(row->children[0]->text, name) == 0)
+            return row->children[0];
+    }
+    return NULL;
+}
+
+static int probe_rows_built(UISystem* ui) {
+    UIElement* pane = pane_fixture(ui, NULL, 0, false, false);
+    ui_scroll_set_rows(pane, 100000, 30.0f, build_button_row, NULL);
+    ui_layout(ui_top(ui), 1280.0f, 720.0f);
+    printf("ui rows-built near held %zu\n", pane->child_count);
+    printf("ui rows-built near builds %u\n", pane->row_builds);
+    printf("ui rows-built near content %.6f\n", (double)pane->scroll_content);
+    ui_scroll_to_row(ui, pane, 50000);
+    pass(ui, &(UIInput){.pointer_x = -1.0f, .pointer_y = -1.0f});
+    printf("ui rows-built far held %zu\n", pane->child_count);
+    printf("ui rows-built far builds %u\n", pane->row_builds);
+    printf("ui rows-built far shown %d\n", built_row(pane, 50000) ? 1 : 0);
+    // Laying out again with nothing moved builds nothing.
+    const unsigned builds = pane->row_builds;
+    ui_layout(ui_top(ui), 1280.0f, 720.0f);
+    printf("ui rows-built again builds %u\n", pane->row_builds - builds);
+    return 0;
+}
+
+static int probe_rows_measure(UISystem* ui) {
+    UIElement* pane = pane_fixture(ui, NULL, 0, false, false);
+    ui_scroll_set_rows(pane, 50, 30.0f, build_text_row, NULL);
+    ui_layout(ui_top(ui), 1280.0f, 720.0f);
+    const unsigned first = pane->row_builds;
+    // Heights measured: the content is the built rows' heights, the rest at the estimate, and the
+    // gaps.
+    float built = 0.0f;
+    for (size_t k = 0; k < pane->child_count; k++)
+        built += pane->children[k]->rect.h;
+    printf("ui rows-measure built count %zu\n", pane->child_count);
+    printf("ui rows-measure built height %.6f\n", (double)built);
+    printf("ui rows-measure content height %.6f\n", (double)pane->scroll_content);
+    ui_layout(ui_top(ui), 1280.0f, 720.0f);
+    printf("ui rows-measure again builds %u\n", pane->row_builds - first);
+    // A new width measures the built rows again, without building them again.
+    const float narrow = pane->scroll_content;
+    pane->size[0] = 500.0f;
+    ui_layout(ui_top(ui), 1280.0f, 720.0f);
+    printf("ui rows-measure wider builds %u\n", pane->row_builds - first);
+    printf("ui rows-measure wider content %.6f %.6f\n", (double)narrow,
+           (double)pane->scroll_content);
+    // A changed row is built again.
+    ui_scroll_rows_changed(pane, 0, 1);
+    ui_layout(ui_top(ui), 1280.0f, 720.0f);
+    printf("ui rows-measure changed builds %u\n", pane->row_builds - first);
+    return 0;
+}
+
+static int probe_rows_anchor(UISystem* ui) {
+    UIElement* pane = pane_fixture(ui, NULL, 0, false, false);
+    g_built_h = 60.0f; // built twice as tall as the estimate
+    ui_scroll_set_rows(pane, 200, 30.0f, build_button_row, NULL);
+    ui_layout(ui_top(ui), 1280.0f, 720.0f);
+    ui_scroll_to_row(ui, pane, 100);
+    for (int i = 0; i < 3; i++)
+        pass(ui, &(UIInput){.pointer_x = -1.0f, .pointer_y = -1.0f});
+    const UIElement* target = built_row(pane, 100);
+    printf("ui rows-anchor reveal shown %d\n", target ? 1 : 0);
+    if (target)
+        printf("ui rows-anchor reveal bottoms %.6f %.6f\n",
+               (double)(target->rect.y + target->rect.h), (double)(pane->rect.y + pane->rect.h));
+    // The first row in view, and where it is.
+    int first = -1;
+    float before = 0.0f;
+    for (int row = 0; row < 200 && first < 0; row++) {
+        const UIElement* b = built_row(pane, row);
+        if (b && b->rect.y + b->rect.h > pane->rect.y) {
+            first = row;
+            before = b->rect.y;
+        }
+    }
+    // The wheel up a unit brings a row above into the built set, measured twice its estimate: the
+    // first row moves down by the wheel's step and nothing more.
+    pass(ui, &(UIInput){.pointer_x = pane->rect.x + 50.0f,
+                        .pointer_y = pane->rect.y + 50.0f,
+                        .wheel_y = 1.0f});
+    const UIElement* again = built_row(pane, first);
+    printf("ui rows-anchor first moved %.6f\n", again ? (double)(again->rect.y - before) : -1.0);
+    printf("ui rows-anchor step points %.6f\n", (double)PROBE_SIZE);
+    g_built_h = 30.0f;
+    return 0;
+}
+
+static int probe_rows_focus(UISystem* ui) {
+    UIElement* pane = pane_fixture(ui, NULL, 0, false, false);
+    ui_scroll_set_rows(pane, 1000, 30.0f, build_button_row, NULL);
+    UIScreen* s = ui_top(ui);
+    ui_layout(s, 1280.0f, 720.0f);
+    // The pointer onto the pane, where the wheel will turn, focuses the row under it -- a menu's
+    // hover -- and holding still then leaves it focused.
+    const float px = pane->rect.x + 50.0f, py = pane->rect.y + 50.0f;
+    pass(ui, &(UIInput){.pointer_x = px, .pointer_y = py});
+    const UIElement* focused = ui_focused(s);
+    const int row = focused && focused->text ? atoi(focused->text + 4) : -1;
+    printf("ui rows-focus first built %d\n", focused && focused == built_row(pane, row) ? 1 : 0);
+    // Scrolled far away, the focused row stays built and focused.
+    pass(ui, &(UIInput){.pointer_x = px, .pointer_y = py, .wheel_y = -1000.0f});
+    printf("ui rows-focus far scroll %.6f\n", (double)pane->scroll);
+    printf("ui rows-focus far kept %d\n",
+           ui_focused(s) && ui_focused(s) == focused && focused == built_row(pane, row) ? 1 : 0);
+    printf("ui rows-focus far held %zu\n", pane->child_count);
+    return 0;
+}
+
 // ---- the matcher
 
 static void say_match(const char* label, const char* query, const char* name) {
@@ -988,5 +1127,13 @@ int run_ui_text_probe(Game* game, UISystem* ui, Font* font, const char* which) {
         return probe_field_focus(ui);
     if (!strcmp(which, "match"))
         return probe_match();
+    if (!strcmp(which, "rows-built"))
+        return probe_rows_built(ui);
+    if (!strcmp(which, "rows-measure"))
+        return probe_rows_measure(ui);
+    if (!strcmp(which, "rows-anchor"))
+        return probe_rows_anchor(ui);
+    if (!strcmp(which, "rows-focus"))
+        return probe_rows_focus(ui);
     return -1;
 }
