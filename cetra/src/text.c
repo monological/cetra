@@ -149,8 +149,6 @@ bool text_utf8_is_continuation(char byte) {
     return ((unsigned char)byte & 0xc0) == 0x80;
 }
 
-static void _free_pairs(struct FontPairs* p);
-
 // --- FontPool ---
 
 FontPool* create_font_pool(void) {
@@ -188,7 +186,7 @@ void free_font_pool(FontPool* pool) {
 
         if (font->atlas_texture_id)
             glDeleteTextures(1, &font->atlas_texture_id);
-        _free_pairs(font->pairs);
+        free(font->kern_pairs);
         free(font->name);
         free(font->filepath);
         free(font->ttf_buffer);
@@ -202,81 +200,14 @@ void free_font_pool(FontPool* pool) {
 
 // --- Font Loading ---
 
-/*
- * The kerning of every pair of the atlas's glyphs, built at load (spec 14.3). A font's pairs are
- * asked for at every step of every text walk, and stb_truetype answers each from the face's own
- * tables -- two cmap searches and a GPOS lookup -- which measured three quarters of a walk. Built
- * whole and only read after, so the threads that build the canvas's text read it safely, as they
- * read the rest of the font.
- */
-typedef struct FontPairs {
-    size_t count;        // the atlas's glyphs, and the table's side
-    uint16_t latin[256]; // a codepoint under 256's row, plus one; 0 for one the atlas lacks
-    int16_t* kern;       // count * count, in the face's units
-    float scale;         // the face's units to base-size pixels
-    int* glyph;          // each row's glyph index in the face, while it is built
-    const stbtt_fontinfo* info;
-} FontPairs;
-
-static void _pairs_band(void* ctx, int begin, int end) {
-    FontPairs* p = ctx;
-    for (int a = begin; a < end; a++)
-        for (size_t b = 0; b < p->count; b++)
-            p->kern[(size_t)a * p->count + b] =
-                (int16_t)stbtt_GetGlyphKernAdvance(p->info, p->glyph[a], p->glyph[b]);
-}
-
-static void _build_pairs(Font* font) {
-    size_t count = 0;
-    for (const GlyphInfo* g = font->glyph_cache; g; g = g->hh.next)
-        count++;
-    FontPairs* p = calloc(1, sizeof(FontPairs));
-    if (!p || count == 0 || count > UINT16_MAX) {
-        free(p);
-        return;
-    }
-    p->count = count;
-    p->info = (const stbtt_fontinfo*)font->stb_font_info;
-    p->scale = stbtt_ScaleForPixelHeight(p->info, font->base_size);
-    p->kern = malloc(count * count * sizeof(int16_t));
-    p->glyph = malloc(count * sizeof(int));
-    if (!p->kern || !p->glyph) {
-        free(p->kern);
-        free(p->glyph);
-        free(p);
-        return;
-    }
-    size_t row = 0;
-    for (GlyphInfo* g = font->glyph_cache; g; g = g->hh.next, row++) {
-        g->pair_row = (uint16_t)row;
-        p->glyph[row] = stbtt_FindGlyphIndex(p->info, (int)g->codepoint);
-        if (g->codepoint < 256)
-            p->latin[g->codepoint] = (uint16_t)(row + 1);
-    }
-    cetra_bake_bands((int)count, cetra_bake_workers(0, (int)count), _pairs_band, p);
-    free(p->glyph);
-    p->glyph = NULL;
-    font->pairs = p;
-}
-
-// A codepoint's row in its font's pairs, or -1 for one the atlas does not hold.
-static int _pair_row(const Font* font, uint32_t codepoint) {
-    if (codepoint < 256)
-        return (int)font->pairs->latin[codepoint] - 1;
-    const GlyphInfo* g = font_get_glyph(font, codepoint);
-    return g ? g->pair_row : -1;
-}
-
-static void _free_pairs(struct FontPairs* p) {
-    if (p)
-        free(p->kern);
-    free(p);
-}
+_Static_assert(ATLAS_CODEPOINTS_MAX <= UINT16_MAX, "a glyph's pair_row is 16 bits");
 
 /*
- * Every glyph's distance field, rasterised across threads before any is packed (spec 14.3): the
- * rasterising was nearly all of a font's load, each glyph's field is a function of the glyph alone,
- * and the packing stays serial, so the atlas is the same to the byte.
+ * What a font keeps of each of its glyphs, built across threads before any is packed (spec 14.3):
+ * its distance field, and its row of kerning pairs. Rasterising was nearly all of a font's load,
+ * and stb answering each pair from the face's own tables -- two cmap searches and a GPOS lookup --
+ * was three quarters of a text walk. Each glyph's are a function of the glyph alone, and the
+ * packing stays serial, so the atlas is the same to the byte.
  */
 typedef struct AtlasGlyph {
     unsigned char* sdf; // NULL for a glyph with no outline
@@ -285,8 +216,10 @@ typedef struct AtlasGlyph {
 
 typedef struct AtlasBake {
     const stbtt_fontinfo* info;
-    const uint32_t* codepoints;
-    AtlasGlyph* glyphs;
+    const int* glyph_index; // each glyph's index in the face, by its row
+    size_t count;
+    AtlasGlyph* fields; // NULL for a font that is not a distance field
+    int16_t* kern;      // count * count; NULL for a face with no kerning
     float scale, pixel_dist_scale;
     int spread, on_edge;
 } AtlasBake;
@@ -294,6 +227,11 @@ typedef struct AtlasBake {
 static void _atlas_band(void* ctx, int begin, int end) {
     const AtlasBake* b = ctx;
     for (int i = begin; i < end; i++) {
+        for (size_t j = 0; b->kern && j < b->count; j++)
+            b->kern[(size_t)i * b->count + j] =
+                (int16_t)stbtt_GetGlyphKernAdvance(b->info, b->glyph_index[i], b->glyph_index[j]);
+        if (!b->fields)
+            continue;
         /*
          * ONE SDF call per glyph, and its pixels are kept.
          *
@@ -312,11 +250,30 @@ static void _atlas_band(void* ctx, int begin, int end) {
          * The discarded return was also a leaked rasterisation per glyph, and rasterising twice is
          * the expensive half of building an atlas.
          */
-        AtlasGlyph* g = &b->glyphs[i];
-        g->sdf =
-            stbtt_GetCodepointSDF(b->info, b->scale, (int)b->codepoints[i], b->spread, b->on_edge,
-                                  b->pixel_dist_scale, &g->w, &g->h, &g->x0, &g->y0);
+        AtlasGlyph* f = &b->fields[i];
+        f->sdf = stbtt_GetGlyphSDF(b->info, b->scale, b->glyph_index[i], b->spread, b->on_edge,
+                                   b->pixel_dist_scale, &f->w, &f->h, &f->x0, &f->y0);
     }
+}
+
+/*
+ * Doubles the atlas until it is at least `w` by `h` pixels, every texel kept where it was. False
+ * out of memory, the atlas left as it was.
+ */
+static bool _grow_atlas(unsigned char** data, int* size, int w, int h) {
+    while (w > *size || h > *size) {
+        const int grown = *size * 2;
+        unsigned char* bigger = calloc((size_t)grown * (size_t)grown, 1);
+        if (!bigger)
+            return false;
+        for (int row = 0; row < *size; row++)
+            memcpy(bigger + (size_t)row * (size_t)grown, *data + (size_t)row * (size_t)*size,
+                   (size_t)*size);
+        free(*data);
+        *data = bigger;
+        *size = grown;
+    }
+    return true;
 }
 
 static void generate_glyph_atlas(Font* font) {
@@ -347,32 +304,42 @@ static void generate_glyph_atlas(Font* font) {
         font->sdf_falloff = pixel_dist_scale / 255.0f;
     }
 
+    // A glyph's row is its place in `codepoints`: its kerning row, and GlyphInfo.pair_row.
     uint32_t codepoints[ATLAS_CODEPOINTS_MAX];
-    const size_t codepoint_count = _atlas_codepoints(info, codepoints);
-    AtlasGlyph* fields = calloc(codepoint_count ? codepoint_count : 1, sizeof(AtlasGlyph));
+    int glyph_index[ATLAS_CODEPOINTS_MAX];
+    const size_t count = _atlas_codepoints(info, codepoints);
+    for (size_t i = 0; i < count; i++)
+        glyph_index[i] = stbtt_FindGlyphIndex(info, (int)codepoints[i]);
+    AtlasGlyph* fields = font->is_sdf ? calloc(count ? count : 1, sizeof(AtlasGlyph)) : NULL;
     unsigned char* atlas_data = calloc(atlas_size * atlas_size, 1);
-    if (!fields || !atlas_data) {
+    if ((font->is_sdf && !fields) || !atlas_data) {
         free(fields);
         free(atlas_data);
         return;
     }
-    if (font->is_sdf) {
-        AtlasBake bake = {.info = info,
-                          .codepoints = codepoints,
-                          .glyphs = fields,
-                          .scale = scale,
-                          .pixel_dist_scale = pixel_dist_scale,
-                          .spread = (int)font->sdf_spread,
-                          .on_edge = on_edge_value};
-        const int count = (int)codepoint_count;
-        cetra_bake_bands(count, cetra_bake_workers(0, count), _atlas_band, &bake);
+    // A face with no kerning keeps no table: stb answers it at once.
+    if ((info->kern || info->gpos) && count > 0) {
+        font->kern_pairs = malloc(count * count * sizeof(int16_t));
+        font->kern_side = font->kern_pairs ? count : 0;
+        font->kern_scale = scale;
     }
+    AtlasBake bake = {.info = info,
+                      .glyph_index = glyph_index,
+                      .count = count,
+                      .fields = fields,
+                      .kern = font->kern_pairs,
+                      .scale = scale,
+                      .pixel_dist_scale = pixel_dist_scale,
+                      .spread = (int)font->sdf_spread,
+                      .on_edge = on_edge_value};
+    cetra_bake_bands((int)count, cetra_bake_workers(0, (int)count), _atlas_band, &bake);
 
     int cursor_x = padding;
     int cursor_y = padding;
     int row_height = 0;
 
-    for (size_t i = 0; i < codepoint_count; i++) {
+    bool placed = true;
+    for (size_t i = 0; i < count; i++) {
         const int codepoint = (int)codepoints[i]; // stb_truetype's own type, inside this loop only
 
         // Get glyph metrics
@@ -381,15 +348,13 @@ static void generate_glyph_atlas(Font* font) {
 
         int x0 = 0, y0 = 0, x1 = 0, y1 = 0;
         int glyph_w = 0, glyph_h = 0;
-        unsigned char* sdf_data = NULL;
+        const AtlasGlyph* field = fields ? &fields[i] : NULL;
 
-        if (font->is_sdf) {
-            sdf_data = fields[i].sdf;
-            fields[i].sdf = NULL; // freed below, once copied
-            glyph_w = fields[i].w;
-            glyph_h = fields[i].h;
-            x0 = fields[i].x0;
-            y0 = fields[i].y0;
+        if (field) {
+            glyph_w = field->w;
+            glyph_h = field->h;
+            x0 = field->x0;
+            y0 = field->y0;
             x1 = x0 + glyph_w;
             y1 = y0 + glyph_h;
         } else {
@@ -412,44 +377,24 @@ static void generate_glyph_atlas(Font* font) {
          * copy ran into the next row, and the last ran off the end of the
          * allocation.
          */
-        while (cursor_x + glyph_w + padding > atlas_size ||
-               cursor_y + glyph_h + padding > atlas_size) {
-            // Reallocate with larger size
-            int new_size = atlas_size * 2;
-            unsigned char* new_data = calloc(new_size * new_size, 1);
-            if (!new_data) {
-                if (sdf_data)
-                    stbtt_FreeSDF(sdf_data, NULL);
-                for (size_t k = i; k < codepoint_count; k++)
-                    if (fields[k].sdf)
-                        stbtt_FreeSDF(fields[k].sdf, NULL);
-                free(fields);
-                free(atlas_data);
-                return;
-            }
-            // Copy old data row by row (stride changes)
-            for (int row = 0; row < atlas_size; row++) {
-                memcpy(new_data + row * new_size, atlas_data + row * atlas_size, atlas_size);
-            }
-            free(atlas_data);
-            atlas_data = new_data;
-            atlas_size = new_size;
+        if (!_grow_atlas(&atlas_data, &atlas_size, cursor_x + glyph_w + padding,
+                         cursor_y + glyph_h + padding)) {
+            placed = false;
+            break;
         }
 
-        // Render glyph to atlas, from the pixels the one call above returned.
+        // Render glyph to atlas, from the pixels its one SDF call returned.
         if (glyph_w > 0 && glyph_h > 0) {
             unsigned char* dest = atlas_data + cursor_y * atlas_size + cursor_x;
 
-            if (sdf_data) {
-                for (int row = 0; row < glyph_h; row++)
-                    memcpy(dest + row * atlas_size, sdf_data + row * glyph_w, glyph_w);
-            } else if (!font->is_sdf) {
+            if (field) {
+                for (int row = 0; field->sdf && row < glyph_h; row++)
+                    memcpy(dest + row * atlas_size, field->sdf + row * glyph_w, glyph_w);
+            } else {
                 stbtt_MakeCodepointBitmap(info, dest, glyph_w, glyph_h, atlas_size, scale, scale,
                                           codepoint);
             }
         }
-        if (sdf_data)
-            stbtt_FreeSDF(sdf_data, NULL);
 
         // The UVs are PIXELS until every glyph is placed, and divided by the atlas's final size
         // below: the atlas doubles as it fills, and a glyph placed before a doubling divided by
@@ -457,6 +402,7 @@ static void generate_glyph_atlas(Font* font) {
         GlyphInfo* glyph = calloc(1, sizeof(GlyphInfo));
         if (glyph) {
             glyph->codepoint = codepoints[i];
+            glyph->pair_row = (uint16_t)i;
             glyph->advance_x = advance * scale;
             glyph->left_bearing = left_bearing * scale;
             glyph->x0 = (float)x0;
@@ -470,13 +416,21 @@ static void generate_glyph_atlas(Font* font) {
             glyph->v1 = (float)(cursor_y + glyph_h);
 
             HASH_ADD(hh, font->glyph_cache, codepoint, sizeof(uint32_t), glyph);
+            if (glyph->codepoint < 256)
+                font->glyph_latin[glyph->codepoint] = glyph;
         }
 
         cursor_x += glyph_w + padding;
         if (glyph_h > row_height)
             row_height = glyph_h;
     }
+    for (size_t i = 0; fields && i < count; i++)
+        stbtt_FreeSDF(fields[i].sdf, NULL);
     free(fields);
+    if (!placed) {
+        free(atlas_data);
+        return;
+    }
     for (GlyphInfo* g = font->glyph_cache; g; g = g->hh.next) {
         g->u0 /= (float)atlas_size;
         g->v0 /= (float)atlas_size;
@@ -557,7 +511,6 @@ Font* load_font(FontPool* pool, const char* filepath, float base_size, bool use_
 
     // Generate atlas
     generate_glyph_atlas(font);
-    _build_pairs(font);
 
     // Add to cache
     HASH_ADD_KEYPTR(hh, pool->font_cache, font->name, strlen(font->name), font);
@@ -597,6 +550,8 @@ void font_release(Font* font) {
 GlyphInfo* font_get_glyph(const Font* font, uint32_t codepoint) {
     if (!font)
         return NULL;
+    if (codepoint < 256)
+        return font->glyph_latin[codepoint];
 
     GlyphInfo* glyph;
     HASH_FIND(hh, font->glyph_cache, &codepoint, sizeof(uint32_t), glyph);
@@ -765,8 +720,9 @@ void text_mesh_rebuild(TextMesh* mesh) {
     size_t ii = 0;
     size_t char_idx = 0;
 
-    for (size_t i = 0; i < char_count; i++) {
-        const uint32_t codepoint = (unsigned char)mesh->text[i];
+    // A quad a character, of which a string has at most one a byte; char_idx counts characters.
+    for (const char* p = mesh->text; *p;) {
+        const uint32_t codepoint = text_utf8_next(&p);
 
         // Handle newlines (Y-down: increase y to go down)
         if (codepoint == '\n') {
@@ -881,13 +837,14 @@ void text_mesh_upload(TextMesh* mesh) {
 float font_kern_advance(const Font* font, uint32_t prev_codepoint, uint32_t codepoint) {
     if (!font || !font->stb_font_info || prev_codepoint == 0 || font->base_size <= 0.0f)
         return 0.0f;
-    const FontPairs* p = font->pairs;
-    if (p) {
-        const int a = _pair_row(font, prev_codepoint), b = _pair_row(font, codepoint);
-        if (a >= 0 && b >= 0)
-            return (float)p->kern[(size_t)a * p->count + (size_t)b] * p->scale;
+    if (font->kern_pairs) {
+        const GlyphInfo* a = font_get_glyph(font, prev_codepoint);
+        const GlyphInfo* b = font_get_glyph(font, codepoint);
+        if (a && b)
+            return (float)font->kern_pairs[(size_t)a->pair_row * font->kern_side + b->pair_row] *
+                   font->kern_scale;
     }
-    // A character the atlas does not hold, which a layout still spaces.
+    // A character the atlas does not hold, which a layout still spaces, or a face with no kerning.
     const stbtt_fontinfo* info = (const stbtt_fontinfo*)font->stb_font_info;
     const int kern = stbtt_GetCodepointKernAdvance(info, (int)prev_codepoint, (int)codepoint);
     if (kern == 0)
@@ -905,15 +862,16 @@ float text_measure_width(const Font* font, const char* text, float size) {
     float width = 0.0f;
     float max_width = 0.0f;
 
-    for (const char* p = text; *p; p++) {
-        if (*p == '\n') {
+    for (const char* p = text; *p;) {
+        const uint32_t codepoint = text_utf8_next(&p);
+        if (codepoint == '\n') {
             if (width > max_width)
                 max_width = width;
             width = 0.0f;
             continue;
         }
 
-        const GlyphInfo* glyph = font_get_glyph(font, (unsigned char)*p);
+        const GlyphInfo* glyph = font_get_glyph(font, codepoint);
         if (glyph) {
             width += glyph->advance_x * scale;
         }
@@ -944,8 +902,8 @@ void text_measure_bounds(const Font* font, const char* text, float size, float* 
     float max_x = -1e9f, max_y = -1e9f;
     bool has_glyphs = false;
 
-    for (const char* p = text; *p; p++) {
-        const uint32_t codepoint = (unsigned char)*p;
+    for (const char* p = text; *p;) {
+        const uint32_t codepoint = text_utf8_next(&p);
 
         if (codepoint == '\n') {
             cursor_x = 0.0f;

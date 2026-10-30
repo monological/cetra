@@ -14,7 +14,7 @@ struct ShaderProgram;
 // Glyph information for a single character
 typedef struct GlyphInfo {
     uint32_t codepoint;
-    uint16_t pair_row; // its row and column in the font's kerning pairs
+    uint16_t pair_row; // its row and column in the font's kern_pairs
     float advance_x;
     float left_bearing;
 
@@ -37,11 +37,12 @@ typedef struct Font {
     int atlas_width;
     int atlas_height;
 
-    // Glyph data, built once at load: printable ASCII and nothing else. Every
+    // Glyph data, built once at load: the atlas's characters and nothing else. Every
     // length is in pixels at the base size, the atlas's own.
     GlyphInfo* glyph_cache;
-    float base_size; // ascent to descent
-    float em_size;   // the em square's side
+    GlyphInfo* glyph_latin[256]; // the glyphs under U+0100 by codepoint, found without the hash
+    float base_size;             // ascent to descent
+    float em_size;               // the em square's side
     float line_height;
     float ascent;
     float descent;
@@ -57,8 +58,11 @@ typedef struct Font {
     // atlas does not hold.
     unsigned char* ttf_buffer;
     void* stb_font_info;
-    // The kerning of every pair of the atlas's glyphs, built at load and only read after.
-    struct FontPairs* pairs;
+    // The kerning of every pair of the atlas's glyphs, by their pair_rows, in the face's units:
+    // built at load and only read after. NULL for a face with no kerning.
+    int16_t* kern_pairs;
+    size_t kern_side; // the glyphs a side
+    float kern_scale; // the face's units to base-size pixels
 
     size_t ref_count;
     UT_hash_handle hh;
