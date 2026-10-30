@@ -238,11 +238,11 @@ size_t ui_text_wrap_point(const Font* font, float size, float tracking, const ch
  * ===========================================================================
  * The element tree.
  *
- * THE ELEMENT LIST IS CLOSED: panel, label, button, toggle, slider, selector.
- * That is not a stage the layer is passing through on its way to a widget
- * toolkit -- it is the property that keeps this a menu layer instead of a worse
- * Dear ImGui. A seventh kind is a later spec with its own argument, never a
- * patch to this one.
+ * THE ELEMENT LIST IS CLOSED: panel, label, button, toggle, slider, selector,
+ * and since spec 14.2, which argued for them, the scrolling pane. That is not a
+ * stage the layer is passing through on its way to a widget toolkit -- it is the
+ * property that keeps this a UI layer instead of a worse Dear ImGui. Another
+ * kind is a later spec with its own argument, never a patch to this one.
  *
  * What that costs is nothing, because three escape hatches sit under it and
  * each keeps strictly more than the last: ui_set_draw keeps layout, focus and
@@ -260,7 +260,7 @@ typedef enum { UI_ROW = 0, UI_COLUMN = 1 } UIDir;
 typedef enum { UI_FIT = 0, UI_FIXED = 1, UI_GROW = 2 } UISize;
 
 /*
- * UI_ROOT is a container and not a seventh element: it has no constructor, an
+ * UI_ROOT is a container and not an element of the list: it has no constructor, an
  * app cannot make one, and `ui-elements-closed` counts constructors rather than
  * enum entries. It exists because a screen's root must have NO look at all --
  * zero padding, no background, no corner radius -- and borrowing UI_PANEL's
@@ -276,6 +276,7 @@ typedef enum {
     UI_TOGGLE,
     UI_SLIDER,
     UI_SELECTOR,
+    UI_SCROLL,
     UI_KIND_COUNT
 } UIKind;
 
@@ -307,6 +308,11 @@ typedef struct UITheme {
     UIStyle toggle[UI_STATE_COUNT];
     UIStyle slider[UI_STATE_COUNT];
     UIStyle selector[UI_STATE_COUNT];
+    // A scrolling pane: `bg` behind its content, `fg` its bar's thumb, and FOCUS -- which a pane
+    // takes while the focus is anywhere inside it -- its border, the subtle one round the pane
+    // the keys are in.
+    UIStyle scroll[UI_STATE_COUNT];
+    float scroll_step; // points a wheel unit scrolls; 0 = the theme's font size
 } UITheme;
 
 typedef struct UIElement UIElement;
@@ -338,6 +344,10 @@ struct UIElement {
     // runs, its style or its width changes.
     struct UILines* lines;
     unsigned wraps; // how many times the layout has broken them: a test of the keeping
+    // A scrolling pane's offset down its content, in points: `scroll` is what is drawn, eased
+    // toward `scroll_target` after a key or a reveal and set with it by the wheel and the bar.
+    // `scroll_content` is its children's whole height, from the last layout.
+    float scroll, scroll_target, scroll_content;
 
     // BY FUNCTION
     char* text;                    // ui_set_text (owned)
@@ -361,6 +371,9 @@ struct UIElement {
     // A label's text breaks into lines at the width its parent gives it. Its own width measures
     // as its longest word, so it is given one: grown, fixed, or stretched across a column.
     bool wrap;
+    // A scrolling pane at its end stays at its end as its content grows, as a terminal does; one
+    // scrolled up stays where it was.
+    bool follow_end;
 
     // What a control writes through. Borrowed, and exactly one is non-NULL for
     // the kind that uses it: the control is a VIEW of the app's own variable,
@@ -442,7 +455,7 @@ void ui_set_focus(UIScreen* screen, UIElement* el);
 // input on, and what input_set_suppressed is driven from.
 bool ui_captures_input(const UISystem* ui);
 
-// The six. Each appends to `parent` and returns the new element.
+// The elements. Each appends to `parent` and returns the new element.
 UIElement* ui_panel(UIElement* parent);
 UIElement* ui_label(UIElement* parent, const char* text);
 UIElement* ui_button(UIElement* parent, const char* text, UIActionFn action, void* user);
@@ -455,6 +468,21 @@ UIElement* ui_selector(UIElement* parent, const char* text, const char* const* o
 // Where a slider's track lies in the rect the last layout gave it, in window points: what a drag
 // is measured along, for a draw of its own (ui_set_draw) to put the track there too.
 UIRect ui_slider_track(const UISystem* ui, const UIElement* el);
+
+/*
+ * A SCROLLING PANE (spec 14.2): a column whose children are laid out at their whole height and
+ * seen through the pane's rect, moved by the wheel over it, by Page Up, Page Down, Home and End
+ * while the focus is in it, by dragging its bar, and by navigation, which scrolls a focused child
+ * into view. Vertical only. Give it a height -- grown or fixed -- since a pane that fits its
+ * content has nothing to scroll.
+ */
+UIElement* ui_scroll(UIElement* parent);
+// Scrolls every pane round `el` by the least that shows it whole, easing there.
+void ui_scroll_into_view(const UISystem* ui, UIElement* el);
+// Whether the point, in window points, is over anything a screen on the stack draws as of its last
+// layout -- a pane's children only where the pane shows them -- or a modal screen is up: what an
+// app asks before it takes the wheel or a drag for itself.
+bool ui_pointer_over(const UISystem* ui, float x, float y);
 
 // Replaces the text, and clears its runs: they name bytes of the text they were given for.
 void ui_set_text(UIElement* el, const char* text);

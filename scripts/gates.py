@@ -26075,9 +26075,11 @@ _UI_CTOR = re.compile(r"^UIElement\* (ui_\w+)\(UIElement\* parent", re.M)
 _UI_HEADER = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                           "..", "cetra", "src", "ui.h")
 
-# What ui.h is allowed to export. Spelled out rather than counted, so adding a
-# seventh element fails by NAME and the failure says which one arrived.
-_UI_KINDS = ["ui_panel", "ui_label", "ui_button", "ui_toggle", "ui_slider", "ui_selector"]
+# What ui.h is allowed to export, in its order. Spelled out rather than counted, so
+# adding an element fails by NAME and the failure says which one arrived. The pane is
+# spec 14.2's, which argued for it.
+_UI_KINDS = ["ui_panel", "ui_label", "ui_button", "ui_toggle", "ui_slider", "ui_selector",
+             "ui_scroll"]
 
 
 def _ui_probe(case, env=None):
@@ -27705,7 +27707,8 @@ def run_ui_gate(workdir):
                      to the vertex as it does alone once it is opaque; popped, the
                      screen under it draws as it did (spec 13.49). The two screens
                      look different, or the last comparison would prove nothing.
-      ui-elements-closed ui.h exports exactly the six element constructors. The
+      ui-elements-closed ui.h exports exactly the element constructors the
+                     list names, six since spec 12.2 and the pane since 14.2. The
                      scope ratchet, asserted rather than promised.
       ui-settings-roundtrip write, read back into a ZEROED struct, and every field
                      survives; the window mode rides the file as a name; an absent
@@ -27727,6 +27730,29 @@ def run_ui_gate(workdir):
       ui-runs-refused runs out of order, overlapping, past the text or inside a
                      UTF-8 sequence are each refused and leave the runs set before;
                      setting the text clears them.
+      ui-scroll-layout a pane's content measures its rows and gaps exactly, its
+                     rows start at its top, and the wheel moves every row up by the
+                     same scroll.
+      ui-scroll-wheel a wheel unit scrolls one step, the theme's font size; the
+                     scroll stops at either end; a wheel off the pane moves nothing,
+                     and the inner of two panes takes it.
+      ui-scroll-clip a row in view takes a click and one laid out below the pane,
+                     under the same point, does not; the pointer is over the UI only
+                     where the pane shows it; only the rows in view are emitted.
+      ui-scroll-into-view navigating onto a row half out of view scrolls by exactly
+                     what shows it, back up returns to the top, and a focus the app
+                     sets is revealed -- but the pointer moving onto that half row
+                     focuses it and scrolls nothing.
+      ui-scroll-follow a pane following its end begins there, stays there as rows
+                     are added, and stays where it was once scrolled up.
+      ui-scroll-bar  the thumb is the share of the content in view, and as far
+                     down the track as the content is scrolled; dragging it 50
+                     points scrolls by that share of the track's room, and a press
+                     on the track below it pages down by nine tenths of the view.
+      ui-history-clip apps/canvas --history: the column's padding above and below
+                     its pane is the column's own colour, though the pane is
+                     scrolled to the end of 200 messages, and the pane shows text
+                     (end to end).
       ui-typed       an input script's typing reaches the UI through
                      ui_input_add_keyboard, every event in its order: characters
                      past ASCII as their codepoints, a key with the platform's
@@ -28049,6 +28075,130 @@ def run_ui_gate(workdir):
                   f"refusals (want 3), {retext:.0f} after new text (want 0)")
     print(f"  ui-runs-refused       {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-runs-refused", ok)
+
+    # ---- the scrolling pane: 20 rows 30 tall, 8 apart, in a 300x200 pane at (490, 260)
+    row_pitch, view, content = 38.0, 200.0, 20 * 30.0 + 19 * 8.0
+    p = _ui_probe("scroll-layout")
+    if not p:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        px, py, _, _ = p[("pane", "rect")]
+        at, moved = p[("rows", "at")], p[("moved", "at")]
+        scroll = p[("wheeled", "scroll")][0]
+        ok = (close(p[("content", "height")][0], content)
+              and all(close(a, py + i * row_pitch) for a, i in zip(at, (0, 1, 3)))
+              and scroll > 0 and all(close(m, a - scroll) for m, a in zip(moved, at)))
+        detail = (f"content {p[('content', 'height')][0]:.1f} (want {content:.0f}), rows at "
+                  f"{at} (want pitch {row_pitch:.0f} from {py:.0f}), wheeled {scroll:.1f} and "
+                  f"every row moved up by it: {moved}")
+    print(f"  ui-scroll-layout      {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-scroll-layout", ok)
+
+    p = _ui_probe("scroll-wheel")
+    if not p:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        step = p[("step", "points")][0]
+        got = {k: p[(k, "scroll")] for k in ("three", "bottom", "top", "outside", "inner",
+                                             "outer")}
+        ok = (got["three"] == [3 * step, 3 * step] and got["bottom"] == [content - view] * 2
+              and got["top"] == [0.0, 0.0] and got["outside"] == [0.0, 0.0]
+              and got["inner"][0] == 2 * step and got["outer"][0] == 0.0)
+        detail = (f"three units {got['three'][0]:.1f} (want {3 * step:.0f}), the bottom "
+                  f"{got['bottom'][0]:.1f} (want {content - view:.0f}), the top "
+                  f"{got['top'][0]:.1f}, off the pane {got['outside'][0]:.1f} (want 0); nested, "
+                  f"inner {got['inner'][0]:.1f} (want {2 * step:.0f}) and outer "
+                  f"{got['outer'][0]:.1f} (want 0)")
+    print(f"  ui-scroll-wheel       {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-scroll-wheel", ok)
+
+    p = _ui_probe("scroll-clip")
+    if not p:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        cin, cout = p[("clicks", "in")][0], p[("clicks", "out")][0]
+        oin, oout = p[("over", "in")][0], p[("over", "out")][0]
+        drawn, outside = p[("rows", "drawn")][0], p[("rows", "outside")][0]
+        # Rows 0 to 5 reach into the 200-point view: row 5 starts 190 down.
+        ok = cin == 1 and cout == 0 and oin == 1 and oout == 0 and drawn == 6 and outside == 0
+        detail = (f"clicks in view {cin:.0f} and below it {cout:.0f} (want 1, 0); over the UI "
+                  f"{oin:.0f} and {oout:.0f} (want 1, 0); {drawn:.0f} rows emitted (want 6), "
+                  f"{outside:.0f} wholly outside (want 0)")
+    print(f"  ui-scroll-clip        {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-scroll-clip", ok)
+
+    p = _ui_probe("scroll-into-view")
+    if not p:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        down, up = p[("down", "scroll")][1], p[("up", "scroll")][1]
+        to_set = p[("set", "scroll")][1]
+        hover_focus, hover_moved = p[("hover", "focused")][0], p[("hover", "moved")][0]
+        want_down = 5 * row_pitch + 30.0 - view
+        want_set = 15 * row_pitch + 30.0 - view
+        ok = (p[("focus", "row5")][0] == 1 and close(down, want_down) and up == 0.0
+              and close(to_set, want_set) and hover_focus == 1 and hover_moved == 0.0)
+        detail = (f"down to row 5 scrolls {down:.1f} (want {want_down:.0f}), back up {up:.1f} "
+                  f"(want 0), a focus set on row 15 {to_set:.1f} (want {want_set:.0f}); hovering "
+                  f"row 5 focuses it ({hover_focus:.0f}) and scrolls {hover_moved:.1f} (want 0)")
+    print(f"  ui-scroll-into-view   {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-scroll-into-view", ok)
+
+    p = _ui_probe("scroll-follow")
+    if not p:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        first, grown = p[("first", "scroll")][0], p[("grown", "scroll")][0]
+        up, kept = p[("up", "scroll")][0], p[("kept", "scroll")][0]
+        h0, h1 = p[("content", "height")][0], p[("grown", "height")][0]
+        ok = (close(first, h0 - view) and close(grown, h1 - view) and up < grown
+              and close(kept, up))
+        detail = (f"begins at {first:.0f} (want its end {h0 - view:.0f}), grown {grown:.0f} "
+                  f"(want {h1 - view:.0f}); scrolled up to {up:.0f}, a row added leaves it at "
+                  f"{kept:.0f}")
+    print(f"  ui-scroll-follow      {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-scroll-follow", ok)
+
+    p = _ui_probe("scroll-bar")
+    if not p:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        px, py, pw, ph = p[("pane", "rect")]
+        tx, ty, tw, th = p[("thumb", "rect")]
+        track = ph - 4.0
+        want_h = track * view / content
+        dragged = p[("dragged", "scroll")][0]
+        want_drag = 50.0 / (track - th) * (content - view)
+        paged = p[("paged", "by")][0]
+        ok = (close(th, want_h) and close(ty, py + 2.0) and close(tx, px + pw - 8.0)
+              and close(dragged, want_drag) and close(paged, 0.9 * view))
+        detail = (f"thumb {th:.2f} tall (want {want_h:.2f}) at {ty:.1f} (want {py + 2:.0f}); "
+                  f"dragged 50 points it scrolls {dragged:.2f} (want {want_drag:.2f}); a press "
+                  f"below it pages {paged:.1f} (want {0.9 * view:.0f})")
+    print(f"  ui-scroll-bar         {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-scroll-bar", ok)
+
+    # ---- the history column, end to end
+    out, probe = _canvas_run(workdir, "history", "--sheet", "board", "--history")
+    hist = probe.get(("history", "column"))
+    if not out or not hist:
+        ok, detail = False, "the run failed or printed no column"
+    else:
+        cx0, cy0, cx1, cy1 = (int(v) for v in hist[:4])
+        qx0, qy0, qx1, qy1 = (int(v) for v in hist[5:9])
+        want = int(hist[10], 16)
+        a = _ppm_array(out)[:, :, :3].astype(int)
+        target = np.array([(want >> 16) & 255, (want >> 8) & 255, want & 255])
+        # Two pixels in from the column's own edges, which its anti-aliasing blends with what is
+        # behind it.
+        strips = np.concatenate([a[cy0 + 2:qy0, cx0 + 4:cx1 - 4], a[qy1:cy1 - 2, cx0 + 4:cx1 - 4]])
+        stray = int((np.abs(strips - target).max(axis=2) > 2).sum())
+        ink = int((np.abs(a[qy0:qy1, qx0:qx1] - target).max(axis=2) > 2).sum())
+        ok = stray == 0 and ink > 5000 and qy0 > cy0 and qy1 < cy1
+        detail = (f"{stray} px off the column's colour in its padding above and below the pane "
+                  f"(want 0), {ink} px of text in the pane (want over 5000)")
+    print(f"  ui-history-clip       {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-history-clip", ok)
 
     # ---- typing, from the engine to the UI's input (spec 14.2)
     script = os.path.join(workdir, "ui_typed.script")
