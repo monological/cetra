@@ -28897,10 +28897,10 @@ def run_ui_gate(workdir):
     print(f"  ui-editor-script      {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-editor-script", ok)
 
-    ok, detail = doc_flags("editor-host-edit", 7, "a selection through the host's edits before it, "
+    ok, detail = doc_flags("editor-host-edit", 8, "a selection through the host's edits before it, "
                            "after it and inside it, a caret under replaced bytes and at an "
-                           "insertion, a whole new text changing past the caret, and a second "
-                           "editor of the same text")
+                           "insertion, a whole new text changing past the caret, a second editor "
+                           "of the same text, and both letting go of the text when it is freed")
     print(f"  ui-editor-host-edit   {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-editor-host-edit", ok)
 
@@ -30234,6 +30234,10 @@ def run_idle_gate(workdir):
       idle-type      the palette opened, typed into, moved in and closed by a script (spec 14.2):
                      a frame for each of its eight frames, and the end within 30, since a caret
                      headless does not blink and nothing else is left to ask.
+      idle-editor    the code editor on a 3 MB text (spec 14.4): its budget wraps the rows it
+                     guessed a frame's share at a time and asks for each frame, so the run draws
+                     more than the 10 frames that takes at least, and ends on its own once every
+                     row is wrapped, short of the 400 allowed.
     """
     failed = []
 
@@ -30354,6 +30358,27 @@ def run_idle_gate(workdir):
         detail = f"{said['frames']} frames of 200 (want 9 to 30: the script's, and an end)"
     print(f"  idle-type           {'PASS' if ok else 'FAIL'}  {detail}")
     note("idle-type", ok)
+
+    # The code editor on 3 MB: its budget wraps the guessed rows a frame's share at a time, asking
+    # for each frame, and once every row is wrapped nothing asks and the run ends.
+    big = os.path.join(workdir, "idle_editor.ckt")
+    line = "    (sig IO_L1N_T0L_N1_DBC_44 :io :bank 44 :byte 0 :strobe :domain VCCO_44)\n"
+    with open(big, "w", encoding="utf-8", newline="") as f:
+        f.write(line * (3 * 1024 * 1024 // len(line)))
+    out = os.path.join(workdir, "idle_editor.ppm")
+    stdout = _canvas_shot(out, 400, "--idle", "--canvas-probe", "--editor", big) or ""
+    frames, settled = None, None
+    for text in stdout.splitlines():
+        p = text.split()
+        if p[:3] == ["canvas", "idle", "frames"] and len(p) == 6:
+            frames = int(p[3])
+        elif p[:3] == ["canvas", "editor", "settled"] and len(p) == 4:
+            settled = int(p[3])
+    ok = frames is not None and 10 <= frames < 400 and settled == 1
+    detail = (f"{frames} frames of the 400 allowed, every row wrapped {settled} (want more than "
+              f"the 10 a 3 MB text's budget takes at least, the end before 400, and 1)")
+    print(f"  idle-editor         {'PASS' if ok else 'FAIL'}  {detail}")
+    note("idle-editor", ok)
 
     return failed
 

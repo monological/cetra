@@ -134,7 +134,7 @@ struct TextDoc {
 // A text of `len` bytes, copied. Its line ending is CRLF when its first line ends so, else LF.
 // NULL with `len` 0 is an empty text.
 TextDoc* create_text_doc(const char* bytes, size_t len);
-// A text must outlive every editor showing it.
+// An editor still showing the text lets go of it, and shows nothing from then on.
 void free_text_doc(TextDoc* doc);
 
 size_t text_doc_length(const TextDoc* doc);

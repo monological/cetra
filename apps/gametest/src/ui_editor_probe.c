@@ -1148,6 +1148,13 @@ static int probe_editor_host_edit(UISystem* ui) {
     ui_editor_set_selections(ed, &(TextSelection){0, 0}, 1);
     type(ui, "ab");
     say_flag("editor-host-edit", "twin", "moved", one_selection(twin, 14, 14));
+    // The text freed while two editors still show it: they let go of it, and a pass reaches
+    // nothing freed.
+    free_text_doc(doc);
+    type(ui, "c");
+    say_flag("editor-host-edit", "freed", "inert",
+             ui_editor_selections(ed, NULL, NULL) == 0 &&
+                 ui_editor_selections(twin, NULL, NULL) == 0);
     return 0;
 }
 

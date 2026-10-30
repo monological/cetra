@@ -2662,6 +2662,7 @@ int main(int argc, char** argv) {
         for (size_t i = 0; i < count; i++)
             printf(" %zu %zu", r[i].start, r[i].end);
         printf("\n");
+        printf("canvas editor settled %d\n", ui_editor_settled(g_editor_sheet.editor) ? 1 : 0);
         float ex = 0.0f, ey = 0.0f;
         if (count && ui_editor_point_of(g_editor_sheet.editor, r[0].start, &ex, &ey))
             printf("canvas editor error_at %ld %ld\n", lround(ex * ctx.fb_scale),

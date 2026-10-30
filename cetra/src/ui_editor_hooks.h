@@ -42,5 +42,7 @@ bool ui_editor_point_of(UIElement* el, size_t offset, float* x, float* y);
 size_t ui_editor_offset_at(UIElement* el, float x, float y);
 // The line and row at the top of the view, and the columns a row holds.
 void ui_editor_top(const UIElement* el, size_t* line, size_t* row, int* columns);
+// Whether every line's rows are wrapped rather than guessed: the budget has nothing left to do.
+bool ui_editor_settled(const UIElement* el);
 
 #endif // _UI_EDITOR_HOOKS_H_

@@ -42,6 +42,8 @@ struct TextDocView {
     void (*map)(void* view, size_t start, size_t removed, size_t inserted, bool actor);
     size_t (*selections)(void* view, const TextSelection** out);
     void (*set_selections)(void* view, const TextSelection* selections, size_t count);
+    // The text is being freed: the editor lets go of it, and shows nothing from then on.
+    void (*gone)(void* view);
 };
 
 struct TextUndoStep {

@@ -3,7 +3,9 @@
  *   - a frame's UI work and its two layouts, on screens the size pcb's will be;
  *   - a long text walked, and its kerning alone;
  *   - one keystroke in a multi-line field of 1, 20 and 1,000 KB;
- *   - the font atlas's build.
+ *   - the font atlas's build;
+ *   - the code editor on texts of 80 KB, 10 MB and 64 MB: opening, the first frame, a keystroke
+ *     at one caret and at a hundred, a jump, a resize, and the budget's walk to every row wrapped.
  * Wall-clock milliseconds, each the median of five runs with their spread beside it. Numbers from a
  * debug build say little: run it from a release build.
  */
@@ -17,7 +19,11 @@
 #include <GLFW/glfw3.h>
 
 #include "cetra/engine.h"
+#include "cetra/glyph_cache.h"
+#include "cetra/internal/ui_editor_hooks.h" // whether the budget has settled every row
 #include "cetra/text.h"
+#include "cetra/text_doc.h"
+#include "cetra/ui_editor.h"
 
 #define BENCH_W      1280.0f
 #define BENCH_H      720.0f
@@ -223,6 +229,155 @@ static void _time_keystroke(UISystem* ui, size_t bytes) {
     ui_pop(ui);
 }
 
+// ---- The code editor (spec 14.4)
+
+#define EDITOR_FONT "assets/fonts/JetBrainsMono-Regular.ttf"
+#define EDITOR_W    900.0f
+#define EDITOR_H    700.0f
+
+static const char* CODE_LINE =
+    "    (sig IO_L1N_T0L_N1_DBC_44 :io :bank 44 :byte 0 :strobe :domain VCCO_44) ; a ball\n";
+
+// A text of about `bytes`, pcb's lines over and over.
+static char* _code(size_t bytes, size_t* len) {
+    const size_t line = strlen(CODE_LINE);
+    const size_t lines = bytes / line + 1;
+    char* text = malloc(lines * line + 1);
+    if (!text)
+        return NULL;
+    for (size_t i = 0; i < lines; i++)
+        memcpy(text + i * line, CODE_LINE, line);
+    *len = lines * line;
+    text[*len] = '\0';
+    return text;
+}
+
+// Brackets and `:keywords`, stateless: a highlighter of the kind pcb hands the editor.
+static size_t _colour(const char* s, size_t len, uint32_t* state, TextSpan* spans, size_t max,
+                      void* user) {
+    (void)user;
+    size_t n = 0;
+    for (size_t i = 0; i < len; i++) {
+        if (s[i] == ';') {
+            if (n < max)
+                spans[n] = (TextSpan){(uint32_t)i, (uint32_t)(len - i), 1};
+            n++;
+            break;
+        }
+        if (s[i] == '(' || s[i] == ')' || s[i] == ':') {
+            size_t j = i + 1;
+            while (s[i] == ':' && j < len && s[j] != ' ' && s[j] != ')')
+                j++;
+            if (n < max)
+                spans[n] = (TextSpan){(uint32_t)i, (uint32_t)(j - i), 2};
+            n++;
+            i = j - 1;
+        }
+    }
+    *state = 0;
+    return n;
+}
+
+static void _editor_frame(UISystem* ui, const UIInput* in) {
+    ui_update(ui, in, BENCH_W, BENCH_H);
+    ui_build(ui, BENCH_W, BENCH_H, 0.0f);
+}
+
+// The editor on a text of `bytes`: opening it, its first frame, a keystroke at one caret and at a
+// hundred spread through it, a jump far down, a resize, and the budget's walk to every row settled.
+static void _time_editor(UISystem* ui, GlyphCache* face, size_t bytes, const char* label) {
+    size_t len = 0;
+    char* text = _code(bytes, &len);
+    if (!text)
+        return;
+    double runs[BENCH_RUNS];
+    TextDoc* doc = NULL;
+    for (int r = 0; r < BENCH_RUNS; r++) {
+        free_text_doc(doc);
+        const double t0 = _now_ms();
+        doc = create_text_doc(text, len);
+        runs[r] = _now_ms() - t0;
+    }
+    free(text);
+    _say(label, "open_ms", runs);
+    text_doc_set_highlighter(doc, _colour, NULL, false);
+    UITheme theme = *ui_theme(ui);
+    theme.editor_face = face;
+    theme.editor_size = 13.0f;
+    ui_set_theme(ui, &theme);
+    UIScreen* s = ui_screen(ui, "bench-editor");
+    UIElement* ed = ui_editor(ui_screen_root(s), doc);
+    ui_set_size(ed, UI_FIXED, EDITOR_W, UI_FIXED, EDITOR_H);
+    ui_push(ui, s);
+    ui_set_focus(s, ed);
+    const UIInput idle = {.pointer_x = -1.0f, .pointer_y = -1.0f};
+    double t0 = _now_ms();
+    _editor_frame(ui, &idle);
+    printf("ui-bench %s first_frame_ms %.4f\n", label, _now_ms() - t0);
+    // The budget's walk, a frame's share at a time, to every row wrapped: first, so the timings
+    // after it are the editor's own and not the budget's share of their frames.
+    int frames = 0;
+    double total = 0.0, longest = 0.0;
+    while (!ui_editor_settled(ed) && frames < 100000) {
+        t0 = _now_ms();
+        _editor_frame(ui, &idle);
+        const double ms = _now_ms() - t0;
+        total += ms;
+        longest = ms > longest ? ms : longest;
+        frames++;
+    }
+    printf("ui-bench %s settle_frames %d total_ms %.4f longest_ms %.4f\n", label, frames, total,
+           longest);
+    const InputKeyEvent typed = {.codepoint = 'x'};
+    const UIInput key = {
+        .pointer_x = -1.0f, .pointer_y = -1.0f, .key_events = &typed, .key_event_count = 1};
+    // One caret in the middle of the text.
+    const size_t lines = text_doc_line_count(doc);
+    const size_t mid = text_doc_line_start(doc, lines / 2);
+    ui_editor_set_selections(ed, &(TextSelection){mid, mid}, 1);
+    ui_editor_reveal(ed, mid);
+    _editor_frame(ui, &idle);
+    for (int r = 0; r < BENCH_RUNS; r++) {
+        t0 = _now_ms();
+        _editor_frame(ui, &key);
+        runs[r] = _now_ms() - t0;
+    }
+    _say(label, "keystroke_ms", runs);
+    // A hundred carets, a line each, spread through the text.
+    TextSelection spread[100];
+    for (size_t i = 0; i < 100; i++) {
+        const size_t at = text_doc_line_start(doc, (lines - 1) * i / 100);
+        spread[i] = (TextSelection){at, at};
+    }
+    ui_editor_set_selections(ed, spread, 100);
+    _editor_frame(ui, &idle);
+    for (int r = 0; r < BENCH_RUNS; r++) {
+        t0 = _now_ms();
+        _editor_frame(ui, &key);
+        runs[r] = _now_ms() - t0;
+    }
+    _say(label, "keystroke100_ms", runs);
+    // A jump far down, or back up: the view's lines found, wrapped and drawn.
+    for (int r = 0; r < BENCH_RUNS; r++) {
+        const size_t to = text_doc_line_start(doc, r % 2 ? lines / 7 : lines * 6 / 7);
+        t0 = _now_ms();
+        ui_editor_reveal(ed, to);
+        _editor_frame(ui, &idle);
+        runs[r] = _now_ms() - t0;
+    }
+    _say(label, "jump_ms", runs);
+    // A resize: every line's rows guessed again, the view's wrapped now.
+    for (int r = 0; r < BENCH_RUNS; r++) {
+        ui_set_size(ed, UI_FIXED, r % 2 ? EDITOR_W : EDITOR_W - 200.0f, UI_FIXED, EDITOR_H);
+        t0 = _now_ms();
+        _editor_frame(ui, &idle);
+        runs[r] = _now_ms() - t0;
+    }
+    _say(label, "resize_ms", runs);
+    ui_pop(ui);
+    free_text_doc(doc);
+}
+
 // The atlas built from nothing: a pool of its own, so nothing is cached.
 static void _time_atlas(void) {
     double runs[BENCH_RUNS];
@@ -249,5 +404,12 @@ int run_ui_bench(UISystem* ui, const Font* font) {
     _time_keystroke(ui, 20 * 1024);
     _time_keystroke(ui, 1000 * 1024); // under the field's 1 MiB, which would refuse the keystroke
     _time_atlas();
+    GlyphCache* face = create_glyph_cache(EDITOR_FONT, 26.0f);
+    if (face) {
+        _time_editor(ui, face, 80 * 1024, "editor80k");
+        _time_editor(ui, face, 10 * 1024 * 1024, "editor10m");
+        _time_editor(ui, face, 64 * 1024 * 1024, "editor64m");
+        free_glyph_cache(face);
+    }
     return 0;
 }
