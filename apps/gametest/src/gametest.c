@@ -9605,6 +9605,8 @@ int main(int argc, const char* argv[]) {
             ik_probe = argv[++i];
         } else if (!strcmp(a, "--ui-probe") && i + 1 < argc) {
             ui_probe = argv[++i];
+        } else if (!strcmp(a, "--ui-bench")) {
+            ui_probe = "bench"; // the UI's timings (spec 14.3), on the probe's engine and font
         } else if (!strcmp(a, "--cam-probe") && i + 1 < argc) {
             cam_probe = argv[++i];
         } else if (!strcmp(a, "--gait-probe") && i + 1 < argc) {

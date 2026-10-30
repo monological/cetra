@@ -1,0 +1,282 @@
+/*
+ * The UI's timings (spec 14.3), measured before any of its items 10 to 14 is built:
+ *   10. the layouts of a frame on screens the size pcb's will be;
+ *   11. the share of those layouts spent measuring labels' text;
+ *   12. the share of a text walk spent on kerning;
+ *   13. one keystroke in a long multi-line field;
+ *   14. the font atlas's build.
+ * Wall-clock milliseconds, each the median of five runs with their spread beside it. Numbers from a
+ * debug build say little: run it from a release build.
+ */
+
+#include "ui_bench.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+
+#include "cetra/engine.h"
+#include "cetra/text.h"
+
+#define BENCH_W      1280.0f
+#define BENCH_H      720.0f
+#define BENCH_SIZE   22.0f
+#define BENCH_RUNS   5
+#define BENCH_FONT   "apps/splash/assets/Roboto-Bold.ttf"
+#define FRAMES_A_RUN 100
+
+static const char* MESSAGE =
+    "the ground pour keeps 0.3 mm from every pad, and the mounting hole "
+    "has a clearance of its own, so the pour stops where the clearance does";
+
+static double _now_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec * 1e3 + (double)ts.tv_nsec / 1e6;
+}
+
+static int _by_value(const void* a, const void* b) {
+    const double x = *(const double*)a, y = *(const double*)b;
+    return (x > y) - (x < y);
+}
+
+// The median of BENCH_RUNS values, and how far they spread.
+static void _say(const char* what, const char* how, double runs[BENCH_RUNS]) {
+    qsort(runs, BENCH_RUNS, sizeof(double), _by_value);
+    printf("ui-bench %s %s %.4f spread %.4f\n", what, how, runs[BENCH_RUNS / 2],
+           runs[BENCH_RUNS - 1] - runs[0]);
+}
+
+// A frame's UI work, the input pass and the build -- each lays the screen out -- and the layouts
+// alone, twice as a frame has them; milliseconds a frame.
+static void _time_screen(UISystem* ui, const char* what) {
+    UIScreen* s = ui_top(ui);
+    const UIInput idle = {.pointer_x = -1.0f, .pointer_y = -1.0f};
+    for (int i = 0; i < 5; i++) {
+        ui_update(ui, &idle, BENCH_W, BENCH_H);
+        ui_build(ui, BENCH_W, BENCH_H, 0.0f);
+    }
+    double frame[BENCH_RUNS], layouts[BENCH_RUNS];
+    for (int r = 0; r < BENCH_RUNS; r++) {
+        double t0 = _now_ms();
+        for (int i = 0; i < FRAMES_A_RUN; i++) {
+            ui_update(ui, &idle, BENCH_W, BENCH_H);
+            ui_build(ui, BENCH_W, BENCH_H, 0.0f);
+        }
+        frame[r] = (_now_ms() - t0) / FRAMES_A_RUN;
+        t0 = _now_ms();
+        for (int i = 0; i < FRAMES_A_RUN; i++) {
+            ui_layout(s, BENCH_W, BENCH_H);
+            ui_layout(s, BENCH_W, BENCH_H);
+        }
+        layouts[r] = (_now_ms() - t0) / FRAMES_A_RUN;
+    }
+    _say(what, "frame_ms", frame);
+    _say(what, "layouts_ms", layouts);
+}
+
+// Every text an element of `el`'s tree measures in its width pass, measured once each: what one
+// layout spends on text, of which a frame has two.
+static void _measure_texts(const UIElement* el, const Font* font) {
+    if (el->text && el->text[0])
+        (void)ui_text_width(font, BENCH_SIZE, 0.0f, el->text);
+    for (size_t i = 0; i < el->child_count; i++)
+        _measure_texts(el->children[i], font);
+}
+
+static void _time_texts(UISystem* ui, const Font* font, const char* what) {
+    const UIElement* root = ui_screen_root(ui_top(ui));
+    double runs[BENCH_RUNS];
+    for (int r = 0; r < BENCH_RUNS; r++) {
+        const double t0 = _now_ms();
+        for (int i = 0; i < FRAMES_A_RUN; i++) {
+            _measure_texts(root, font);
+            _measure_texts(root, font);
+        }
+        runs[r] = (_now_ms() - t0) / FRAMES_A_RUN;
+    }
+    _say(what, "texts_ms", runs);
+}
+
+// ---- the screens
+
+static char g_names[5000][24];
+
+static void build_message(UIElement* row, int index, void* user) {
+    (void)index;
+    (void)user;
+    UIElement* f = ui_text_field(row, UI_FIELD_MULTILINE | UI_FIELD_READ_ONLY, NULL, NULL);
+    ui_set_size(f, UI_GROW, 0.0f, UI_FIT, 0.0f);
+    ui_field_set_text(f, MESSAGE);
+}
+
+// The chat's column: `count` messages as virtual rows over an input line.
+static UIScreen* history_screen(UISystem* ui, int count) {
+    UIScreen* s = ui_screen(ui, "bench-history");
+    ui_screen_set_modal(s, false);
+    UIElement* column = ui_panel(ui_screen_root(s));
+    ui_set_size(column, UI_FIXED, 360.0f, UI_GROW, 0.0f);
+    UIElement* pane = ui_scroll(column);
+    ui_set_size(pane, UI_GROW, 0.0f, UI_GROW, 0.0f);
+    pane->follow_end = true;
+    ui_scroll_set_rows(pane, count, 40.0f, build_message, NULL);
+    UIElement* input = ui_text_field(column, UI_FIELD_MULTILINE, NULL, NULL);
+    ui_set_size(input, UI_GROW, 0.0f, UI_FIT, 0.0f);
+    input->max_rows = 6;
+    return s;
+}
+
+static void build_name(UIElement* holder, int index, void* user) {
+    (void)user;
+    UIElement* row = ui_panel(holder);
+    row->dir = UI_ROW;
+    ui_set_size(row, UI_GROW, 0.0f, UI_FIXED, 30.0f);
+    ui_set_size(ui_label(row, g_names[index]), UI_GROW, 0.0f, UI_FIT, 0.0f);
+    ui_label(row, "N");
+}
+
+// The jump: a field over a list of 5,000 names, twelve shown.
+static UIScreen* palette_screen(UISystem* ui) {
+    for (int i = 0; i < 5000; i++)
+        snprintf(g_names[i], sizeof(g_names[i]), "net_%04d", i);
+    UIScreen* s = ui_screen(ui, "bench-palette");
+    UIElement* box = ui_panel(ui_screen_root(s));
+    ui_set_size(box, UI_FIXED, 420.0f, UI_FIT, 0.0f);
+    ui_set_size(ui_text_field(box, 0, NULL, NULL), UI_GROW, 0.0f, UI_FIT, 0.0f);
+    UIElement* list = ui_scroll(box);
+    ui_set_size(list, UI_GROW, 0.0f, UI_FIT, 0.0f);
+    list->max_size[1] = 12 * 30.0f;
+    list->spacing = -1.0f;
+    ui_scroll_set_rows(list, 5000, 30.0f, build_name, NULL);
+    return s;
+}
+
+// A settings screen of 40 elements: labels, sliders, toggles, selectors and buttons in turn.
+static UIScreen* settings_screen(UISystem* ui) {
+    static float values[8];
+    static bool flags[8];
+    static int picks[8];
+    static const char* options[] = {"Windowed", "Borderless", "Fullscreen"};
+    UIScreen* s = ui_screen(ui, "bench-settings");
+    UIElement* column = ui_panel(ui_screen_root(s));
+    for (int i = 0; i < 8; i++) {
+        char name[32];
+        snprintf(name, sizeof(name), "Setting number %d", i);
+        ui_label(column, name);
+        ui_slider(column, name, 0.0f, 1.0f, &values[i], NULL, NULL);
+        ui_toggle(column, name, &flags[i], NULL, NULL);
+        ui_selector(column, name, options, 3, &picks[i], NULL, NULL);
+        ui_button(column, "Apply", NULL, NULL);
+    }
+    return s;
+}
+
+static void _time_one(UISystem* ui, const Font* font, UIScreen* s, const char* what) {
+    ui_push(ui, s);
+    _time_screen(ui, what);
+    _time_texts(ui, font, what);
+    ui_pop(ui);
+}
+
+// ---- the text
+
+// A walk of a long text against the kerning pairs it asks for.
+static void _time_kerning(const Font* font) {
+    const size_t repeats = 100;
+    char* text = malloc(strlen(MESSAGE) * repeats + 1);
+    if (!text)
+        return;
+    text[0] = '\0';
+    for (size_t i = 0; i < repeats; i++)
+        strcat(text, MESSAGE);
+    double walk[BENCH_RUNS], kern[BENCH_RUNS];
+    for (int r = 0; r < BENCH_RUNS; r++) {
+        double t0 = _now_ms();
+        (void)ui_text_width(font, BENCH_SIZE, 0.0f, text);
+        walk[r] = _now_ms() - t0;
+        t0 = _now_ms();
+        volatile float sum = 0.0f;
+        uint32_t prev = 0;
+        for (const char* p = text; *p;) {
+            const uint32_t cp = text_utf8_next(&p);
+            sum += font_kern_advance(font, prev, cp);
+            prev = cp;
+        }
+        (void)sum;
+        kern[r] = _now_ms() - t0;
+    }
+    printf("ui-bench text bytes %zu\n", strlen(text));
+    _say("text", "walk_ms", walk);
+    _say("text", "kern_ms", kern);
+    free(text);
+}
+
+// One keystroke -- the input pass that types it and the build that draws it -- in a multi-line
+// field holding `bytes` of text, the caret at its end.
+static void _time_keystroke(UISystem* ui, size_t bytes) {
+    char* text = malloc(bytes + 1);
+    if (!text)
+        return;
+    const size_t m = strlen(MESSAGE);
+    for (size_t i = 0; i < bytes; i++)
+        text[i] = i % (m + 1) == m ? ' ' : MESSAGE[i % (m + 1)];
+    text[bytes] = '\0';
+    UIScreen* s = ui_screen(ui, "bench-field");
+    UIElement* field = ui_text_field(ui_screen_root(s), UI_FIELD_MULTILINE, NULL, NULL);
+    ui_set_size(field, UI_FIXED, 600.0f, UI_FIT, 0.0f);
+    field->max_rows = 20;
+    ui_field_set_text(field, text);
+    free(text);
+    ui_push(ui, s);
+    ui_set_focus(s, field);
+    const UIInput idle = {.pointer_x = -1.0f, .pointer_y = -1.0f};
+    ui_update(ui, &idle, BENCH_W, BENCH_H);
+    ui_build(ui, BENCH_W, BENCH_H, 0.0f);
+    const InputKeyEvent typed = {.codepoint = 'x'};
+    const UIInput key = {
+        .pointer_x = -1.0f, .pointer_y = -1.0f, .key_events = &typed, .key_event_count = 1};
+    double runs[BENCH_RUNS];
+    for (int r = 0; r < BENCH_RUNS; r++) {
+        const double t0 = _now_ms();
+        ui_update(ui, &key, BENCH_W, BENCH_H);
+        ui_build(ui, BENCH_W, BENCH_H, 0.0f);
+        runs[r] = _now_ms() - t0;
+    }
+    char what[32];
+    snprintf(what, sizeof(what), "field%zu", bytes);
+    _say(what, "keystroke_ms", runs);
+    ui_pop(ui);
+}
+
+// The atlas built from nothing: a pool of its own, so nothing is cached.
+static void _time_atlas(void) {
+    double runs[BENCH_RUNS];
+    size_t glyphs = 0;
+    for (int r = 0; r < BENCH_RUNS; r++) {
+        FontPool* pool = create_font_pool();
+        const double t0 = _now_ms();
+        const Font* font = load_font(pool, BENCH_FONT, 64.0f, true);
+        runs[r] = _now_ms() - t0;
+        glyphs = 0;
+        for (const GlyphInfo* g = font ? font->glyph_cache : NULL; g; g = g->hh.next)
+            glyphs++;
+        free_font_pool(pool);
+    }
+    printf("ui-bench atlas glyphs %zu\n", glyphs);
+    _say("atlas", "load_ms", runs);
+}
+
+int run_ui_bench(Game* game, UISystem* ui, const Font* font) {
+    (void)game;
+    _time_one(ui, font, history_screen(ui, 200), "history200");
+    _time_one(ui, font, history_screen(ui, 4000), "history4000");
+    _time_one(ui, font, palette_screen(ui), "palette");
+    _time_one(ui, font, settings_screen(ui), "settings");
+    _time_kerning(font);
+    _time_keystroke(ui, 1024);
+    _time_keystroke(ui, 20 * 1024);
+    _time_keystroke(ui, 1000 * 1024); // under the field's 1 MiB, which would refuse the keystroke
+    _time_atlas();
+    return 0;
+}
