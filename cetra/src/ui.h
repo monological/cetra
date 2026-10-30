@@ -156,6 +156,18 @@ void ui_draw_textured_quad_uv(UIDrawList* dl, UIRect r, const Texture* tex, cons
 // edges stretch along one axis and the centre stretches along both. `insets`
 // is top, right, bottom, left in texture pixels.
 void ui_draw_9slice(UIDrawList* dl, UIRect r, const Texture* tex, const float insets[4], vec4 tint);
+/*
+ * A part of a label's text in its own colour and face (spec 14.2): what highlights the letters a
+ * search matched, or sets a name in a monospace face inside a sentence. `start` and `length` are
+ * BYTES of the UTF-8 text. A run changes the colour and the face, never the size: the line keeps
+ * the element's height and baseline, so a run in another face sits in the line.
+ */
+typedef struct UITextRun {
+    size_t start, length;
+    vec4 color; // alpha 0 = the element's text colour
+    Font* font; // NULL = the element's face; borrowed
+} UITextRun;
+
 // Text positioned horizontally by `align` and vertically on the font's baseline
 // inside `r`, starting a new line at every '\n' it carries.
 //
@@ -164,9 +176,9 @@ void ui_draw_9slice(UIDrawList* dl, UIRect r, const Texture* tex, const float in
 // the way to ask, and it is what the layout pass already uses.
 void ui_draw_text(UIDrawList* dl, UIRect r, const char* text, const UIStyle* style, UIAlign align);
 
-// Shifts everything emitted after it, in points. One number rather than an
-// offset applied to each rect, so furniture a control computes internally moves
-// with the element that owns it.
+// Shifts everything emitted after it, in points -- a quad, its rounded corners, a clip pushed and
+// a program's rect alike. One number rather than an offset applied to each rect, so furniture a
+// control computes internally moves with the element that owns it.
 void ui_draw_list_set_offset(UIDrawList* dl, float dx, float dy);
 
 // Multiplies the alpha of everything emitted after it. Here rather than on a
@@ -194,6 +206,12 @@ void ui_pop_clip(UIDrawList* dl);
  * layouts, and is only ever compared against another taken the same frame.
  */
 uint64_t ui_draw_list_signature(const UIDrawList* dl);
+
+// The quads the list holds, in the order they were emitted, read back: quad `i`'s corners in
+// points, its colour and its kind (0 a fill, 1 an image, 2 a glyph). For a test or a tool asserting
+// what a draw produced; false past the end, with the outputs untouched.
+size_t ui_draw_list_quad_count(const UIDrawList* dl);
+bool ui_draw_list_quad(const UIDrawList* dl, size_t i, UIRect* rect, vec4 color, int* kind);
 
 // An element's own fragment program for the next primitives emitted; NULL
 // returns to the default. The uniform contract a replacement is written
@@ -316,9 +334,15 @@ struct UIElement {
     UIElement* parent;
     UIElement** children;
     size_t child_count, child_capacity;
+    // A wrapping or styled label's lines as its last layout broke them, kept until its text, its
+    // runs, its style or its width changes.
+    struct UILines* lines;
+    unsigned wraps; // how many times the layout has broken them: a test of the keeping
 
     // BY FUNCTION
     char* text;                    // ui_set_text (owned)
+    UITextRun* runs;               // ui_set_text_runs (owned copy)
+    size_t run_count;              //   "
     UIStyle* style;                // ui_set_style (owned copy); NULL = the theme's
     UIDrawFn draw;                 // ui_set_draw
     void* draw_user;               //   "
@@ -334,6 +358,9 @@ struct UIElement {
     bool focusable;
     bool disabled;
     bool fill; // ignore layout and cover the whole screen (a backdrop)
+    // A label's text breaks into lines at the width its parent gives it. Its own width measures
+    // as its longest word, so it is given one: grown, fixed, or stretched across a column.
+    bool wrap;
 
     // What a control writes through. Borrowed, and exactly one is non-NULL for
     // the kind that uses it: the control is a VIEW of the app's own variable,
@@ -429,7 +456,12 @@ UIElement* ui_selector(UIElement* parent, const char* text, const char* const* o
 // is measured along, for a draw of its own (ui_set_draw) to put the track there too.
 UIRect ui_slider_track(const UISystem* ui, const UIElement* el);
 
+// Replaces the text, and clears its runs: they name bytes of the text they were given for.
 void ui_set_text(UIElement* el, const char* text);
+// A label's styled runs, copied; NULL or none clears them. Refused by name, and the runs left as
+// they were, when they are out of order, overlap, reach past the text or start or end inside a
+// UTF-8 sequence, or the element is not a label.
+bool ui_set_text_runs(UIElement* el, const UITextRun* runs, size_t count);
 void ui_set_style(UIElement* el, const UIStyle* style);
 void ui_set_draw(UIElement* el, UIDrawFn draw, void* user);
 void ui_set_element_program(UIElement* el, struct ShaderProgram* program);
