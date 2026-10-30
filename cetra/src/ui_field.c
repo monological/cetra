@@ -11,6 +11,7 @@
 #include <assert.h>
 #include <ctype.h>
 #include <math.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -84,28 +85,38 @@ struct UIField {
     void* key_user;
 };
 
-// The rows the text breaks into, kept by ui_lines_break until the width or the style changes. A
-// single-line field is one row, whatever it holds.
-static void _break_rows(UIField* f) {
-    if (!f->state.single_line) {
-        ui_lines_break(&f->rows, &f->text, f->wrap);
-        return;
-    }
+// A single-line field's one row, whatever it holds.
+static void _one_row(UIField* f) {
     if (grow_array((void**)&f->rows.starts, &f->rows.capacity, 1, sizeof(size_t), 8)) {
         f->rows.starts[0] = 0;
         f->rows.count = 1;
     }
 }
 
-// After an edit the measuring text follows the buffer, and the rows are broken again for it at
-// once: stb_textedit asks for them before the next layout.
-static void _sync(UIField* f) {
+// The rows the text breaks into, kept by ui_lines_break until the width or the style changes.
+static void _break_rows(UIField* f) {
+    if (f->state.single_line)
+        _one_row(f);
+    else
+        ui_lines_break(&f->rows, &f->text, f->wrap);
+}
+
+// After an edit the measuring text follows the buffer and its runs, and the rows are broken again
+// for it at once from row `row` on, the rows before it kept: stb_textedit asks for them before the
+// next layout.
+static void _sync_from(UIField* f, size_t row) {
     f->text.text = f->buf;
     f->text.length = (size_t)f->len;
     f->text.runs = f->el->runs;
     f->text.run_count = f->el->run_count;
-    ui_lines_clear(&f->rows);
-    _break_rows(f);
+    if (f->state.single_line)
+        _one_row(f);
+    else
+        ui_lines_break_from(&f->rows, &f->text, f->wrap, row);
+}
+
+static void _sync(UIField* f) {
+    _sync_from(f, 0);
 }
 
 // The row holding byte `at`: the last that starts at or before it.
@@ -367,14 +378,15 @@ void ui_field_inspect(const UIElement* el, int* cursor, int* select_start, int* 
         *rows = f->rows.count;
 }
 
+void ui_field_runs_changed(UIElement* el) {
+    if (el && el->field)
+        _sync(el->field);
+}
+
 void ui_field_break(const UISystem* ui, UIElement* el, const UIStyle* s, float width) {
     UIField* f = el->field;
     if (!f)
         return;
-    // Runs set since the last break are a new copy at a new address -- or none -- so a pointer that
-    // moved is new runs, in faces the rows were not broken for.
-    if (f->text.runs != el->runs || f->text.run_count != el->run_count)
-        ui_lines_clear(&f->rows);
     f->text = ui_text_make(ui_draw_list(ui), f->buf, (size_t)f->len, s, el->runs, el->run_count);
     glm_vec4_copy((float*)s->fg, f->color);
     f->text.color = f->color;
@@ -426,13 +438,21 @@ bool ui_field_append(UIElement* el, const char* text, const UITextRun* runs, siz
         log_error("ui_field_append: an editable field stays in one style, and takes no runs");
         return false;
     }
-    if (run_count > 0 &&
-        (!runs || !ui_text_runs_check("ui_field_append", text, n, runs, run_count)))
+    if (run_count > 0 && !ui_text_runs_check("ui_field_append", text, n, runs, run_count))
         return false;
-    if ((size_t)f->len + n > FIELD_MAX_BYTES || !_reserve(f, f->len + (int)n)) {
+    if ((size_t)f->len + n > FIELD_MAX_BYTES) {
         log_error("ui_field_append: %zu bytes more is more than a field holds", n);
         return false;
     }
+    // The text may be the field's own, which growing the buffer would move: kept as an offset.
+    const uintptr_t own = (uintptr_t)text - (uintptr_t)f->buf;
+    const bool inside = own <= (uintptr_t)f->len;
+    if (!_reserve(f, f->len + (int)n)) {
+        log_error("ui_field_append: out of memory for %zu bytes more", n);
+        return false;
+    }
+    if (inside)
+        text = f->buf + own;
     if (n == 0)
         return true;
     if (run_count > 0) {
@@ -448,16 +468,12 @@ bool ui_field_append(UIElement* el, const char* text, const UITextRun* runs, siz
         el->runs = merged;
         el->run_count += run_count;
     }
-    memcpy(f->buf + f->len, text, n + 1);
+    // Its own text ends at the buffer's end, so the two ranges never overlap; its NUL is the first
+    // byte written over, which is why the terminator is written apart.
+    memcpy(f->buf + f->len, text, n);
     f->len += (int)n;
-    f->text.text = f->buf;
-    f->text.length = (size_t)f->len;
-    f->text.runs = el->runs;
-    f->text.run_count = el->run_count;
-    if (f->state.single_line)
-        _break_rows(f);
-    else
-        ui_lines_break_from(&f->rows, &f->text, f->wrap, f->rows.count ? f->rows.count - 1 : 0);
+    f->buf[f->len] = '\0';
+    _sync_from(f, f->rows.count ? f->rows.count - 1 : 0);
     return true;
 }
 
@@ -687,9 +703,10 @@ static bool _key(const UISystem* ui, UIElement* el, UIField* f, UIRect content,
         case GLFW_KEY_PAGE_DOWN:
             if (!multi)
                 return false; // a pane round a one-line field pages instead
-            // By the rows it shows, whatever held it to its height.
+            // By the rows it shows, whatever held it to its height. A content box a whole number of
+            // rows tall comes back from the layout's padding round trip a rounding under it.
             f->state.row_count_per_page =
-                f->line_h > 0.0f && content.h >= f->line_h ? (int)(content.h / f->line_h) : 1;
+                f->line_h > 0.0f ? (int)glm_max(content.h / f->line_h + 1e-3f, 1.0f) : 1;
             stb_textedit_key(
                 f, &f->state,
                 (ev->key == GLFW_KEY_PAGE_UP ? STB_TEXTEDIT_K_PGUP : STB_TEXTEDIT_K_PGDOWN) | sh);

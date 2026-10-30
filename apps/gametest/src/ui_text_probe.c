@@ -5,7 +5,6 @@
  */
 
 #include "ui_text_probe.h"
-#include "ui_bench.h"
 
 #include <math.h>
 #include <stdint.h>
@@ -918,7 +917,7 @@ static void build_append_row(UIElement* row, int index, void* user) {
     ui_field_set_text(f, "hello");
 }
 
-static int probe_field_append(UISystem* ui) {
+static int probe_field_append(Game* game, UISystem* ui) {
     UIElement* pane = pane_fixture(ui, NULL, 0, false, false);
     ui_scroll_set_rows(pane, 1, 30.0f, build_append_row, NULL);
     pass(ui, &(UIInput){.pointer_x = -1.0f, .pointer_y = -1.0f});
@@ -963,6 +962,29 @@ static int probe_field_append(UISystem* ui) {
                !ui_field_append(field, big, NULL, 0) && strlen(ui_field_text(field)) == had ? 1
                                                                                             : 0);
         free(big);
+    }
+    // The runs changed to a wider face and appended to with no layout between: the rows are the
+    // text's in the new face, as a field made beside it with the same text and runs breaks them
+    // from scratch at its first layout.
+    Font* wide = wide_font(game);
+    if (wide) {
+        size_t was = 0, rows = 0, fresh = 0;
+        ui_field_inspect(field, NULL, NULL, NULL, NULL, NULL, &was);
+        const UITextRun wider = {.start = 0,
+                                 .length = strlen(ui_field_text(field)),
+                                 .font = wide,
+                                 .color = {1.0f, 1.0f, 1.0f, 1.0f}};
+        ui_set_text_runs(field, &wider, 1);
+        ui_field_append(field, ".", NULL, 0);
+        UIElement* twin = ui_text_field(ui_scroll_find_row(pane, 0),
+                                        UI_FIELD_MULTILINE | UI_FIELD_READ_ONLY, NULL, NULL);
+        ui_set_size(twin, UI_GROW, 0.0f, UI_FIT, 0.0f);
+        ui_field_set_text(twin, ui_field_text(field));
+        ui_set_text_runs(twin, field->runs, field->run_count);
+        pass(ui, &(UIInput){.pointer_x = -1.0f, .pointer_y = -1.0f});
+        ui_field_inspect(field, NULL, NULL, NULL, NULL, NULL, &rows);
+        ui_field_inspect(twin, NULL, NULL, NULL, NULL, NULL, &fresh);
+        printf("ui field-append restyled rows %zu %zu %zu\n", rows, fresh, was);
     }
     // An editable field stays in one style: an append with runs is refused.
     UIElement* editable = ui_text_field(ui_screen_root(ui_top(ui)), 0, NULL, NULL);
@@ -1088,16 +1110,10 @@ static void build_text_row(UIElement* row, int index, void* user) {
     label->size_mode[0] = UI_GROW;
 }
 
-// The row `index`'s element, if built: a row container's first child, named by its text.
+// The row `index`'s element while it is built: its container's first child.
 static UIElement* built_row(const UIElement* pane, int index) {
-    char name[32];
-    snprintf(name, sizeof(name), "Row %d", index);
-    for (size_t k = 0; k < pane->child_count; k++) {
-        const UIElement* row = pane->children[k];
-        if (row->child_count && row->children[0]->text && strcmp(row->children[0]->text, name) == 0)
-            return row->children[0];
-    }
-    return NULL;
+    const UIElement* row = ui_scroll_find_row(pane, index);
+    return row && row->child_count ? row->children[0] : NULL;
 }
 
 static int probe_rows_built(UISystem* ui) {
@@ -1430,7 +1446,7 @@ int run_ui_text_probe(Game* game, UISystem* ui, Font* font, const char* which) {
     if (!strcmp(which, "field-placeholder"))
         return probe_field_placeholder(ui);
     if (!strcmp(which, "field-append"))
-        return probe_field_append(ui);
+        return probe_field_append(game, ui);
     if (!strcmp(which, "field-keys"))
         return probe_field_keys(ui);
     if (!strcmp(which, "field-focus"))
@@ -1439,8 +1455,6 @@ int run_ui_text_probe(Game* game, UISystem* ui, Font* font, const char* which) {
         return probe_match();
     if (!strcmp(which, "utf8"))
         return probe_utf8();
-    if (!strcmp(which, "bench"))
-        return run_ui_bench(game, ui, font);
     if (!strcmp(which, "max-size"))
         return probe_max_size(ui);
     if (!strcmp(which, "padding-none"))

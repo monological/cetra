@@ -1,10 +1,9 @@
 /*
- * The UI's timings (spec 14.3), measured before any of its items 10 to 14 is built:
- *   10. the layouts of a frame on screens the size pcb's will be;
- *   11. the share of those layouts spent measuring labels' text;
- *   12. the share of a text walk spent on kerning;
- *   13. one keystroke in a long multi-line field;
- *   14. the font atlas's build.
+ * The UI's timings:
+ *   - a frame's UI work and its two layouts, on screens the size pcb's will be;
+ *   - a long text walked, and its kerning alone;
+ *   - one keystroke in a multi-line field of 1, 20 and 1,000 KB;
+ *   - the font atlas's build.
  * Wall-clock milliseconds, each the median of five runs with their spread beside it. Numbers from a
  * debug build say little: run it from a release build.
  */
@@ -14,7 +13,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
+
+#include <GLFW/glfw3.h>
 
 #include "cetra/engine.h"
 #include "cetra/text.h"
@@ -31,9 +31,7 @@ static const char* MESSAGE =
     "has a clearance of its own, so the pour stops where the clearance does";
 
 static double _now_ms(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (double)ts.tv_sec * 1e3 + (double)ts.tv_nsec / 1e6;
+    return glfwGetTime() * 1e3;
 }
 
 static int _by_value(const void* a, const void* b) {
@@ -74,29 +72,6 @@ static void _time_screen(UISystem* ui, const char* what) {
     }
     _say(what, "frame_ms", frame);
     _say(what, "layouts_ms", layouts);
-}
-
-// Every text an element of `el`'s tree measures in its width pass, measured once each: what one
-// layout spends on text, of which a frame has two.
-static void _measure_texts(const UIElement* el, const Font* font) {
-    if (el->text && el->text[0])
-        (void)ui_text_width(font, BENCH_SIZE, 0.0f, el->text);
-    for (size_t i = 0; i < el->child_count; i++)
-        _measure_texts(el->children[i], font);
-}
-
-static void _time_texts(UISystem* ui, const Font* font, const char* what) {
-    const UIElement* root = ui_screen_root(ui_top(ui));
-    double runs[BENCH_RUNS];
-    for (int r = 0; r < BENCH_RUNS; r++) {
-        const double t0 = _now_ms();
-        for (int i = 0; i < FRAMES_A_RUN; i++) {
-            _measure_texts(root, font);
-            _measure_texts(root, font);
-        }
-        runs[r] = (_now_ms() - t0) / FRAMES_A_RUN;
-    }
-    _say(what, "texts_ms", runs);
 }
 
 // ---- the screens
@@ -172,10 +147,9 @@ static UIScreen* settings_screen(UISystem* ui) {
     return s;
 }
 
-static void _time_one(UISystem* ui, const Font* font, UIScreen* s, const char* what) {
+static void _time_one(UISystem* ui, UIScreen* s, const char* what) {
     ui_push(ui, s);
     _time_screen(ui, what);
-    _time_texts(ui, font, what);
     ui_pop(ui);
 }
 
@@ -258,21 +232,18 @@ static void _time_atlas(void) {
         const double t0 = _now_ms();
         const Font* font = load_font(pool, BENCH_FONT, 64.0f, true);
         runs[r] = _now_ms() - t0;
-        glyphs = 0;
-        for (const GlyphInfo* g = font ? font->glyph_cache : NULL; g; g = g->hh.next)
-            glyphs++;
+        glyphs = font ? HASH_COUNT(font->glyph_cache) : 0;
         free_font_pool(pool);
     }
     printf("ui-bench atlas glyphs %zu\n", glyphs);
     _say("atlas", "load_ms", runs);
 }
 
-int run_ui_bench(Game* game, UISystem* ui, const Font* font) {
-    (void)game;
-    _time_one(ui, font, history_screen(ui, 200), "history200");
-    _time_one(ui, font, history_screen(ui, 4000), "history4000");
-    _time_one(ui, font, palette_screen(ui), "palette");
-    _time_one(ui, font, settings_screen(ui), "settings");
+int run_ui_bench(UISystem* ui, const Font* font) {
+    _time_one(ui, history_screen(ui, 200), "history200");
+    _time_one(ui, history_screen(ui, 4000), "history4000");
+    _time_one(ui, palette_screen(ui), "palette");
+    _time_one(ui, settings_screen(ui), "settings");
     _time_kerning(font);
     _time_keystroke(ui, 1024);
     _time_keystroke(ui, 20 * 1024);

@@ -27,6 +27,9 @@ void ui_field_inspect(const UIElement* el, int* cursor, int* select_start, int* 
 // Breaks the field into rows at `width`, its content's width, after the layout's width pass, in
 // its resolved style: a multi-line field wraps there, a single-line field is one row.
 void ui_field_break(const UISystem* ui, UIElement* el, const UIStyle* s, float width);
+// The element's runs were set: the field's rows are broken again in their faces now, for an edit
+// or an append before the next layout.
+void ui_field_runs_changed(UIElement* el);
 // The height of the field's content: one line, or its rows up to its most.
 float ui_field_content_height(const UIElement* el);
 

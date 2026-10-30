@@ -553,6 +553,10 @@ float ui_text_longest_word(const UIText* t) {
 
 bool ui_text_runs_check(const char* who, const char* text, size_t length, const UITextRun* runs,
                         size_t count) {
+    if (count > 0 && !runs) {
+        log_error("%s: %zu runs and no array of them", who, count);
+        return false;
+    }
     size_t reached = 0;
     for (size_t i = 0; i < count; i++) {
         const UITextRun* r = &runs[i];
@@ -597,16 +601,17 @@ float ui_text_baseline(const UIText* t, float top) {
     return _text_ok(t) ? top + t->font->ascent * (t->size / t->font->base_size) : top;
 }
 
-void ui_lines_clear(UILines* lines) {
-    lines->count = 0;
-    lines->widest_line = lines->longest_word = -1.0f;
+// The measures dropped, for a text that changed or is now in another style.
+static void _drop_measures(UILines* lines) {
+    lines->has_widest_line = lines->has_longest_word = false;
 }
 
-// Makes `lines` the text's style's, cleared when they were another's.
+// Makes `lines` the text's style's, emptied when they were another's.
 static void _lines_for(UILines* lines, const UIText* t) {
     if (lines->font == t->font && lines->size == t->size && lines->tracking == t->tracking)
         return;
-    ui_lines_clear(lines);
+    lines->count = 0;
+    _drop_measures(lines);
     lines->font = t->font;
     lines->size = t->size;
     lines->tracking = t->tracking;
@@ -614,10 +619,13 @@ static void _lines_for(UILines* lines, const UIText* t) {
 
 bool ui_lines_measure(UILines* lines, const UIText* t, bool wrap, float* width) {
     _lines_for(lines, t);
+    bool* has = wrap ? &lines->has_longest_word : &lines->has_widest_line;
     float* kept = wrap ? &lines->longest_word : &lines->widest_line;
-    const bool walk = *kept < 0.0f;
-    if (walk)
+    const bool walk = !*has;
+    if (walk) {
         *kept = wrap ? ui_text_longest_word(t) : ui_text_widest_line(t);
+        *has = true;
+    }
     *width = *kept;
     return walk;
 }
@@ -640,7 +648,11 @@ static bool _break_from(UILines* lines, const UIText* t, float width, size_t lin
             return false;
         }
         lines->starts[lines->count++] = from;
-        const size_t end = ui_text_break(t, from, width);
+        // At no width a line ends only at a '\n', which needs no walk of its glyphs to find.
+        const char* nl = isinf(width) ? memchr(t->text + from, '\n', t->length - from) : NULL;
+        const size_t end = !isinf(width) ? ui_text_break(t, from, width)
+                           : nl          ? (size_t)(nl - t->text)
+                                         : t->length;
         if (end >= t->length)
             break;
         from = t->text[end] == '\n' ? end + 1 : end;
@@ -656,7 +668,9 @@ bool ui_lines_break(UILines* lines, const UIText* t, float width) {
 }
 
 bool ui_lines_break_from(UILines* lines, const UIText* t, float width, size_t line) {
-    return _break_from(lines, t, width, _lines_hold(lines, t, width) ? line : 0);
+    const bool hold = _lines_hold(lines, t, width);
+    _drop_measures(lines);
+    return _break_from(lines, t, width, hold ? line : 0);
 }
 
 size_t ui_lines_end(const UILines* lines, const UIText* t, size_t i) {

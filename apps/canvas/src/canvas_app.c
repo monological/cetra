@@ -2276,8 +2276,8 @@ int main(int argc, char** argv) {
     if (g_idle_say)
         printf("canvas idle frames %zu waited %.6f\n", engine->total_frames, engine->time_waited);
     // The palette as the run left it: whether it is open, its text's length, the rows it holds,
-    // the first row's item and that item's matched bytes; the rows built; and its field's box in
-    // framebuffer pixels.
+    // the first row's item and that item's matched bytes; the rows built; and its field's box and
+    // its second row's, while built, in framebuffer pixels.
     if (probe && g_palette) {
         printf("canvas palette state %d %zu %d %d", ui_on_stack(ui, g_palette) ? 1 : 0,
                strlen(ui_field_text(g_pal_field)), g_pal_count,
@@ -2291,6 +2291,12 @@ int main(int argc, char** argv) {
         printf("canvas palette field");
         say_box(g_pal_field->rect, ctx.fb_scale);
         printf("\n");
+        const UIElement* second = ui_scroll_find_row(g_pal_list, 1);
+        if (second) {
+            printf("canvas palette second");
+            say_box(second->rect, ctx.fb_scale);
+            printf("\n");
+        }
     }
     board_late_settle(true);
     free_ui_system(ui);
