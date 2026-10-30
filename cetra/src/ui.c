@@ -67,7 +67,24 @@ struct UISystem {
     // Seeded off-screen so the first frame counts as movement without a second
     // field to say the first frame has not happened yet.
     float last_pointer_x, last_pointer_y;
+
+    // The pane whose bar the pointer holds, and how far down its thumb it took hold.
+    UIElement* bar_drag;
+    float bar_grab;
+    // The focus as the last input pass left it. A top screen's focus that differs was set by the
+    // app or arrived with a screen, and is scrolled into view like one navigated to; one the
+    // pointer moved is not, or hovering a row half out of a pane would scroll it.
+    UIElement* focus_seen;
 };
+
+// A scrolling pane's bar: the thumb's width, its inset from the pane's edge, the shortest it is
+// drawn, and the strip along the edge a press lands on.
+#define UI_BAR_W     6.0f
+#define UI_BAR_INSET 2.0f
+#define UI_BAR_MIN   24.0f
+#define UI_BAR_HIT   14.0f
+// How close an eased scroll comes before it is there: a tenth of a point, under any pixel.
+#define UI_SCROLL_SNAP 0.1f
 
 // ------------------------------------------------------------------- theme
 
@@ -103,6 +120,19 @@ static UIStyle _default_style(UIKind kind, UIState state) {
             s.bg[3] = 0.88f;
             s.corner_radius = 10.0f;
             s.padding[0] = s.padding[1] = s.padding[2] = s.padding[3] = 16.0f;
+            break;
+        case UI_SCROLL:
+            // A window onto its content: no fill and no padding of its own, a faint thumb, and a
+            // subtle border while the focus is inside it.
+            s.fg[0] = s.fg[1] = s.fg[2] = 1.0f;
+            s.fg[3] = 0.35f;
+            if (state == UI_STATE_FOCUS || state == UI_STATE_ACTIVE) {
+                s.border[0] = 0.45f;
+                s.border[1] = 0.70f;
+                s.border[2] = 1.00f;
+                s.border[3] = 0.45f;
+                s.border_width = 1.0f;
+            }
             break;
         default: // the four controls share a shape and differ by state
             s.fg[0] = s.fg[1] = s.fg[2] = 0.90f;
@@ -202,6 +232,8 @@ static const UIStyle* _theme_entry(const UITheme* t, UIKind kind, UIState state)
             return &t->slider[state];
         case UI_SELECTOR:
             return &t->selector[state];
+        case UI_SCROLL:
+            return &t->scroll[state];
         default:
             return &t->panel;
     }
@@ -313,6 +345,10 @@ static void _free_element(UIElement* el) {
 
 UIElement* ui_panel(UIElement* parent) {
     return _new_element(parent, UI_PANEL);
+}
+
+UIElement* ui_scroll(UIElement* parent) {
+    return _new_element(parent, UI_SCROLL);
 }
 
 UIElement* ui_label(UIElement* parent, const char* text) {
@@ -651,8 +687,35 @@ static void _measure(const UISystem* ui, UIElement* el, int axis) {
         const float kids = (along ? sum : most) + (axis == 0 ? pad[1] + pad[3] : pad[0] + pad[2]);
         v = kids > v ? kids : v;
     }
+    // A growing pane asks nothing of its parent down the axis it scrolls: whatever height it is
+    // given, its content is seen through it. Fitting, it is as tall as its content.
+    if (el->kind == UI_SCROLL && axis == 1 && el->size_mode[1] == UI_GROW) {
+        float pad[4];
+        _padding_of(ui, el, pad);
+        v = pad[0] + pad[2];
+    }
 
     *_len(&el->rect, axis) = (el->size_mode[axis] == UI_FIXED) ? el->size[axis] : v;
+}
+
+static float _clampf(float v, float lo, float hi) {
+    return v < lo ? lo : (v > hi ? hi : v);
+}
+
+/*
+ * A pane's scroll for this layout, its content `content` points tall seen through `view`: kept
+ * inside what the content allows, and moved to the end if it was at the end, the content grew and
+ * the pane follows its end. A pane that follows begins at its end, since nothing has been seen.
+ */
+static float _scroll_settle(UIElement* el, float content, float view) {
+    const float was_max = el->scroll_content - view > 0.0f ? el->scroll_content - view : 0.0f;
+    const float max = content - view > 0.0f ? content - view : 0.0f;
+    if (el->follow_end && content > el->scroll_content && el->scroll_target >= was_max - 0.5f)
+        el->scroll = el->scroll_target = max;
+    el->scroll_content = content;
+    el->scroll_target = _clampf(el->scroll_target, 0.0f, max);
+    el->scroll = _clampf(el->scroll, 0.0f, max);
+    return el->scroll;
 }
 
 // Pass 2, top-down: `el` already has its final extent on `axis`; place the children along it,
@@ -723,6 +786,9 @@ static void _arrange(const UISystem* ui, UIElement* el, UIRect screen, int axis)
         else if (el->align_main == UI_ALIGN_END)
             cursor += leftover;
     }
+    // A pane's content runs on past it, moved up by its scroll; the rects stay window positions.
+    if (el->kind == UI_SCROLL && axis == 1)
+        cursor -= _scroll_settle(el, used, in_len);
 
     for (size_t i = 0; i < el->child_count; i++) {
         UIElement* c = el->children[i];
@@ -833,6 +899,39 @@ UIRect ui_slider_track(const UISystem* ui, const UIElement* el) {
                     el->rect.w - s.padding[1] - s.padding[3], UI_TRACK_H};
 }
 
+// The height a pane shows its content through: its rect less its padding.
+static float _pane_view(const UISystem* ui, const UIElement* el) {
+    float pad[4];
+    _padding_of(ui, el, pad);
+    return el->rect.h - pad[0] - pad[2];
+}
+
+// How far a pane's content can scroll; 0 while it fits.
+static float _scroll_max(const UISystem* ui, const UIElement* el) {
+    const float m = el->scroll_content - _pane_view(ui, el);
+    return m > 0.0f ? m : 0.0f;
+}
+
+/*
+ * A pane's bar: the track along its right edge and the thumb in it, the thumb's length the share
+ * of the content in view and its place the share scrolled. False while the content fits, when
+ * there is no bar. ONE definition, read by the draw and by the press alike.
+ */
+static bool _pane_bar(const UISystem* ui, const UIElement* el, UIRect* track, UIRect* thumb) {
+    const float max = _scroll_max(ui, el);
+    if (max <= 0.0f || el->scroll_content <= 0.0f)
+        return false;
+    *track = (UIRect){el->rect.x + el->rect.w - UI_BAR_W - UI_BAR_INSET, el->rect.y + UI_BAR_INSET,
+                      UI_BAR_W, el->rect.h - 2.0f * UI_BAR_INSET};
+    float h = track->h * _pane_view(ui, el) / el->scroll_content;
+    const float floor = UI_BAR_MIN < track->h ? UI_BAR_MIN : track->h;
+    h = h < floor ? floor : h;
+    *thumb = (UIRect){track->x, track->y + (track->h - h) * (el->scroll / max), UI_BAR_W, h};
+    return true;
+}
+
+static void _emit_pane(UISystem* ui, UIElement* el, const UIStyle* s);
+
 static void _emit(UISystem* ui, UIElement* el) {
     UIDrawList* dl = ui->dl;
     const UIState state = _state_of(el);
@@ -859,6 +958,7 @@ static void _emit(UISystem* ui, UIElement* el) {
                 }
                 break;
             case UI_PANEL:
+            case UI_SCROLL:
                 ui_draw_rect(dl, el->rect, &s);
                 break;
             case UI_TOGGLE: {
@@ -938,8 +1038,33 @@ static void _emit(UISystem* ui, UIElement* el) {
     if (el->program)
         ui_set_draw_program(dl, NULL, el->rect, 0.0f);
 
+    if (el->kind == UI_SCROLL) {
+        _emit_pane(ui, el, &s);
+        return;
+    }
     for (size_t i = 0; i < el->child_count; i++)
         _emit(ui, el->children[i]);
+}
+
+/*
+ * A pane's content, seen through it: clipped inside its border so nothing scrolled draws over the
+ * border or outside the pane, the children wholly out of view not emitted at all, and the bar over
+ * them. The pane's fill and border were drawn before, under the content.
+ */
+static void _emit_pane(UISystem* ui, UIElement* el, const UIStyle* s) {
+    UIDrawList* dl = ui->dl;
+    const float b = s->border[3] > 0.0f ? s->border_width : 0.0f;
+    const UIRect view = ui_rect_inset(el->rect, b, b, b, b);
+    ui_push_clip(dl, view);
+    for (size_t i = 0; i < el->child_count; i++) {
+        UIElement* c = el->children[i];
+        if (c->rect.y < view.y + view.h && c->rect.y + c->rect.h > view.y)
+            _emit(ui, c);
+    }
+    ui_pop_clip(dl);
+    UIRect track, thumb;
+    if (_pane_bar(ui, el, &track, &thumb))
+        ui_draw_rounded(dl, thumb, UI_BAR_W * 0.5f, (float*)s->fg, NULL, 0.0f);
 }
 
 // One eased value a step toward its target, and onto it once within a quarter of an 8-bit code:
@@ -965,6 +1090,14 @@ static bool _ease(UIElement* el, float dt) {
     el->t_value = _ease_toward(el->t_value, value_target, k);
     bool moving =
         el->t_hover != hover_target || el->t_focus != focus_target || el->t_value != value_target;
+    // A pane's scroll eases after a key or a reveal, by the same rate, onto its target within a
+    // tenth of a point: the 1/1024 of a weight would be a thousand points' tail.
+    if (el->kind == UI_SCROLL && el->scroll != el->scroll_target) {
+        el->scroll += (el->scroll_target - el->scroll) * k;
+        if (fabsf(el->scroll_target - el->scroll) < UI_SCROLL_SNAP)
+            el->scroll = el->scroll_target;
+        moving |= el->scroll != el->scroll_target;
+    }
     for (size_t i = 0; i < el->child_count; i++)
         moving |= _ease(el->children[i], dt);
     return moving;
@@ -988,12 +1121,105 @@ static bool _ease(UIElement* el, float dt) {
 static UIElement* _hit(UIElement* el, float x, float y) {
     if (!el || el->disabled)
         return NULL;
+    // A pane's content is under the pointer only where the pane shows it.
+    if (el->kind == UI_SCROLL && !ui_rect_hit(el->rect, x, y))
+        return NULL;
     for (size_t i = el->child_count; i-- > 0;) {
         UIElement* got = _hit(el->children[i], x, y);
         if (got)
             return got;
     }
     return (el->focusable && ui_rect_hit(el->rect, x, y)) ? el : NULL;
+}
+
+// The deepest pane showing the point, or NULL: what the wheel and a press on a bar reach.
+static UIElement* _pane_at(UIElement* el, float x, float y) {
+    if (!el || el->disabled)
+        return NULL;
+    if (el->kind == UI_SCROLL && !ui_rect_hit(el->rect, x, y))
+        return NULL;
+    for (size_t i = el->child_count; i-- > 0;) {
+        UIElement* got = _pane_at(el->children[i], x, y);
+        if (got)
+            return got;
+    }
+    return el->kind == UI_SCROLL ? el : NULL;
+}
+
+// The pane round `el`, the nearest, or NULL.
+static UIElement* _pane_of(UIElement* el) {
+    for (UIElement* p = el ? el->parent : NULL; p; p = p->parent)
+        if (p->kind == UI_SCROLL)
+            return p;
+    return NULL;
+}
+
+// Whether anything under `el` but `el` itself is drawn at the point: a pane's content only where
+// the pane shows it.
+static bool _over(const UIElement* el, float x, float y, bool is_root) {
+    if (!is_root && ui_rect_hit(el->rect, x, y))
+        return true;
+    if (el->kind == UI_SCROLL)
+        return false; // the point is outside it, so outside all it shows
+    for (size_t i = 0; i < el->child_count; i++)
+        if (_over(el->children[i], x, y, false))
+            return true;
+    return false;
+}
+
+// The points one wheel unit scrolls: the theme's step, else its font size.
+static float _scroll_step(const UISystem* ui) {
+    if (ui->theme.scroll_step > 0.0f)
+        return ui->theme.scroll_step;
+    const float size = ui->theme.font_size > 0.0f ? ui->theme.font_size : ui->font_size;
+    return size > 0.0f ? size : 16.0f;
+}
+
+static void _scroll_to(const UISystem* ui, UIElement* pane, float target, bool now) {
+    pane->scroll_target = _clampf(target, 0.0f, _scroll_max(ui, pane));
+    if (now)
+        pane->scroll = pane->scroll_target;
+}
+
+/*
+ * Scrolls every pane round `el` by the least that shows it whole -- or its top, if it is taller
+ * than the pane -- measured where the pane is going rather than where it is drawn mid-ease, so a
+ * reveal during a reveal does not overshoot.
+ */
+static void _reveal(const UISystem* ui, UIElement* el) {
+    if (!el)
+        return;
+    for (UIElement* p = _pane_of(el); p; p = _pane_of(p)) {
+        float pad[4];
+        _padding_of(ui, p, pad);
+        const float top = p->rect.y + pad[0], bottom = p->rect.y + p->rect.h - pad[2];
+        const float y0 = el->rect.y + (p->scroll - p->scroll_target), y1 = y0 + el->rect.h;
+        float t = p->scroll_target;
+        if (y0 < top)
+            t -= top - y0;
+        else if (y1 > bottom)
+            t += (y1 - bottom < y0 - top) ? y1 - bottom : y0 - top;
+        _scroll_to(ui, p, t, false);
+    }
+}
+
+void ui_scroll_into_view(const UISystem* ui, UIElement* el) {
+    if (!ui || !el) {
+        log_error("ui_scroll_into_view: NULL system or element");
+        return;
+    }
+    _reveal(ui, el);
+}
+
+bool ui_pointer_over(const UISystem* ui, float x, float y) {
+    if (!ui)
+        return false;
+    if (ui_captures_input(ui))
+        return true;
+    for (size_t i = 0; i < ui->stack_count; i++)
+        if (ui->stack[i] && ui->stack[i]->root && _over(ui->stack[i]->root, x, y, true))
+            return true;
+    return false;
 }
 
 static void _gather(UIElement* el, UIElement** out, size_t* n, size_t cap) {
@@ -1153,7 +1379,53 @@ void ui_update(UISystem* ui, const UIInput* in, float width, float height) {
     if (!in)
         return;
 
-    UIElement* hovered = _hit(top->root, in->pointer_x, in->pointer_y);
+    // A focus the app set, or one a screen arrived with, is scrolled into view as one navigated
+    // to is.
+    if (top->focused && top->focused != ui->focus_seen)
+        _reveal(ui, top->focused);
+
+    // A pane's bar: a press on it is a press on the bar and on nothing under it, and the thumb
+    // held follows the pointer down the track.
+    bool on_bar = false;
+    if (in->pointer_pressed) {
+        UIElement* pane = _pane_at(top->root, in->pointer_x, in->pointer_y);
+        UIRect track, thumb;
+        if (pane && _pane_bar(ui, pane, &track, &thumb) &&
+            in->pointer_x >= pane->rect.x + pane->rect.w - UI_BAR_HIT) {
+            on_bar = true;
+            if (in->pointer_y >= thumb.y && in->pointer_y < thumb.y + thumb.h) {
+                ui->bar_drag = pane;
+                ui->bar_grab = in->pointer_y - thumb.y;
+            } else {
+                // A page toward the pointer, as a press on a track does everywhere.
+                const float page = _pane_view(ui, pane) * 0.9f;
+                _scroll_to(ui, pane, pane->scroll_target + (in->pointer_y < thumb.y ? -page : page),
+                           false);
+            }
+        }
+    }
+    if (ui->bar_drag) {
+        UIElement* pane = ui->bar_drag;
+        UIRect track, thumb;
+        if (!in->pointer_down || !_pane_bar(ui, pane, &track, &thumb)) {
+            ui->bar_drag = NULL;
+        } else {
+            const float room = track.h - thumb.h;
+            const float t = room > 0.0f ? (in->pointer_y - ui->bar_grab - track.y) / room : 0.0f;
+            _scroll_to(ui, pane, _clampf(t, 0.0f, 1.0f) * _scroll_max(ui, pane), true);
+        }
+    }
+
+    // The wheel scrolls the deepest pane under the pointer, at once: a trackpad's own momentum is
+    // already in what it sends.
+    if (in->wheel_y != 0.0f) {
+        UIElement* pane = _pane_at(top->root, in->pointer_x, in->pointer_y);
+        if (pane)
+            _scroll_to(ui, pane, pane->scroll_target - in->wheel_y * _scroll_step(ui), true);
+    }
+
+    UIElement* hovered =
+        (on_bar || ui->bar_drag) ? NULL : _hit(top->root, in->pointer_x, in->pointer_y);
 
     // Moving the pointer over an item highlights it, which is what a menu does
     // everywhere -- and it keeps pointer and pad on ONE highlight instead of a
@@ -1207,9 +1479,31 @@ void ui_update(UISystem* ui, const UIInput* in, float width, float height) {
         // moves focus.
         if (!(dx != 0 && _adjust(top->focused, dx))) {
             UIElement* next = _nav(top->root, top->focused, dx, dy);
-            if (next)
+            if (next) {
                 top->focused = next;
+                _reveal(ui, next);
+            }
         }
+    }
+
+    // Page Up, Page Down, Home and End scroll the pane the focus is in, or with nothing focused
+    // the pane under the pointer, easing there.
+    for (int i = 0; i < in->key_event_count; i++) {
+        const int key = in->key_events[i].key;
+        if (key != GLFW_KEY_PAGE_UP && key != GLFW_KEY_PAGE_DOWN && key != GLFW_KEY_HOME &&
+            key != GLFW_KEY_END)
+            continue;
+        UIElement* pane =
+            top->focused ? (top->focused->kind == UI_SCROLL ? top->focused : _pane_of(top->focused))
+                         : _pane_at(top->root, in->pointer_x, in->pointer_y);
+        if (!pane)
+            continue;
+        const float page = _pane_view(ui, pane) * 0.9f;
+        const float to = key == GLFW_KEY_PAGE_UP     ? pane->scroll_target - page
+                         : key == GLFW_KEY_PAGE_DOWN ? pane->scroll_target + page
+                         : key == GLFW_KEY_HOME      ? 0.0f
+                                                     : _scroll_max(ui, pane);
+        _scroll_to(ui, pane, to, false);
     }
 
     if (in->accept && top->focused)
@@ -1222,10 +1516,15 @@ void ui_update(UISystem* ui, const UIInput* in, float width, float height) {
     // hovered.
     if (top->focused && top->focused->state != UI_STATE_DISABLED)
         top->focused->state = UI_STATE_FOCUS;
+    // A pane is focused while the focus is anywhere inside it: what draws its border.
+    for (UIElement* p = _pane_of(top->focused); p; p = _pane_of(p))
+        if (p->state != UI_STATE_DISABLED)
+            p->state = UI_STATE_FOCUS;
     if (hovered && hovered->state != UI_STATE_DISABLED && hovered != top->focused)
         hovered->state = UI_STATE_HOVER;
     if (ui->pressed && in->pointer_down && ui->pressed->state != UI_STATE_DISABLED)
         ui->pressed->state = UI_STATE_ACTIVE;
+    ui->focus_seen = ui_top(ui) ? ui_top(ui)->focused : NULL;
 }
 
 // How far this screen's entrance has played, 0..1. A screen with no transition

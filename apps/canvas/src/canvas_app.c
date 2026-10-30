@@ -1317,9 +1317,12 @@ static const Sheet* find_sheet(const char* name) {
  * The window.
  */
 
-// The window's views, each an equal share of its width.
+// The column --history keeps at the window's right, in points; 0 without it.
+static float g_side_width;
+
+// The window's views, each an equal share of its width less the side column.
 static void lay_out_views(const Engine* engine) {
-    const float part = (float)engine->win_width / (float)g_view_count;
+    const float part = ((float)engine->win_width - g_side_width) / (float)g_view_count;
     for (int i = 0; i < g_view_count; i++) {
         g_views[i].x = part * (float)i;
         g_views[i].y = 0.0f;
@@ -1375,6 +1378,24 @@ static bool g_gui_click;        // --gui-click: a click handed to the debug GUI 
 static UISystem* g_ui_enter;    // --ui-enter: the UI, given an input pass of nothing each frame
 static bool g_say_typed;        // --canvas-probe: say what each frame's input was given to type
 static const char* g_ui_text;   // --ui-text: a label in the --ui panel
+static UISystem* g_ui_live;     // the UI given the real pointer and keyboard each frame
+// The pointer's button as the callbacks saw it since the last frame, for the UI's input pass.
+static bool g_ptr_down, g_ptr_pressed, g_ptr_released;
+
+// The UI's input pass with the real pointer and keyboard; the presses and releases seen since the
+// last frame are spent.
+static void live_ui_update(Engine* engine) {
+    if (!g_ui_live)
+        return;
+    UIInput in = {.pointer_x = g_last_x,
+                  .pointer_y = g_last_y,
+                  .pointer_down = g_ptr_down,
+                  .pointer_pressed = g_ptr_pressed,
+                  .pointer_released = g_ptr_released};
+    ui_input_add_keyboard(&in, engine);
+    ui_update(g_ui_live, &in, (float)engine->win_width, (float)engine->win_height);
+    g_ptr_pressed = g_ptr_released = false;
+}
 
 // What the UI is handed to type this frame, through the helper an app uses, one token an event:
 // `c<hex>` a character, `k<key>+<mods>` a key.
@@ -1424,6 +1445,7 @@ static void on_update(Engine* engine, float dt) {
         engine_request_frame_after(engine, g_wakes[g_wake_next++]);
     if (g_say_typed)
         say_typed(engine);
+    live_ui_update(engine);
     // The input pass an app owes its UI, with no input: it is what settles the focused button's
     // state, which its ease then follows.
     if (g_ui_enter)
@@ -1454,17 +1476,86 @@ static void on_cursor(Engine* engine, double fb_x, double fb_y) {
     g_last_x = x, g_last_y = y;
 }
 
+// Whether the pointer is over the live UI, which then takes the press or the wheel the canvas
+// would have.
+static bool over_ui(void) {
+    return g_ui_live && ui_pointer_over(g_ui_live, g_last_x, g_last_y);
+}
+
 static void on_button(Engine* engine, int button, int action, int mods) {
     (void)engine;
     (void)mods;
-    if (button == GLFW_MOUSE_BUTTON_LEFT)
-        g_drag_view = action == GLFW_PRESS ? view_at(g_last_x) : -1;
+    if (button != GLFW_MOUSE_BUTTON_LEFT)
+        return;
+    g_ptr_down = action == GLFW_PRESS;
+    g_ptr_pressed |= action == GLFW_PRESS;
+    g_ptr_released |= action == GLFW_RELEASE;
+    g_drag_view = (action == GLFW_PRESS && !over_ui()) ? view_at(g_last_x) : -1;
 }
 
 static void on_scroll(Engine* engine, double xoffset, double yoffset) {
     (void)engine;
     (void)xoffset;
-    canvas_view_zoom_at(&g_views[view_at(g_last_x)], g_last_x, g_last_y, pow(1.15, yoffset));
+    if (!over_ui())
+        canvas_view_zoom_at(&g_views[view_at(g_last_x)], g_last_x, g_last_y, pow(1.15, yoffset));
+}
+
+/*
+ * --history: a column at the window's right with a history in a scrolling pane, the shape a chat
+ * takes -- wrapped messages, some with styled runs, at the end of a pane that follows its end. It
+ * tests the engine's pane and text; what a message says is made up, and is no sketch of pcb's.
+ */
+#define HISTORY_WIDTH    360.0f
+#define HISTORY_MESSAGES 200
+
+static const char* HISTORY_LINES[] = {
+    "moved C12 next to U3 pin 7",
+    "routed SDA from U1 to J2 in three segments, keeping clear of the crystal",
+    "the check found two problems near the USB connector: a clearance of 0.09 mm and an unrouted "
+    "pad on J1",
+    "placed R17 and R18 beside the regulator",
+    "why does the ground pour stop short of the mounting hole?",
+    "widened VBUS to 0.5 mm along its whole length",
+    "ok",
+    "flipped U4 to the bottom side and moved its decoupling with it",
+};
+
+static void build_history(UISystem* ui, Font* mono) {
+    UIScreen* s = ui_screen(ui, "history");
+    ui_screen_set_modal(s, false);
+    UIElement* root = ui_screen_root(s);
+    root->dir = UI_ROW;
+    root->align_main = UI_ALIGN_END;
+    UIElement* column = ui_panel(root);
+    ui_set_size(column, UI_FIXED, HISTORY_WIDTH, UI_GROW, 0.0f);
+    ui_set_style(column, &(UIStyle){.bg = {0.10f, 0.11f, 0.14f, 1.0f},
+                                    .corner_radius = 1.0f,
+                                    .padding = {12.0f, 12.0f, 12.0f, 12.0f}});
+    UIElement* pane = ui_scroll(column);
+    ui_set_size(pane, UI_GROW, 0.0f, UI_GROW, 0.0f);
+    pane->follow_end = true;
+    pane->spacing = 10.0f;
+    const size_t kinds = sizeof(HISTORY_LINES) / sizeof(HISTORY_LINES[0]);
+    for (int i = 0; i < HISTORY_MESSAGES; i++) {
+        const bool agent = i % 3 != 1;
+        const char* speaker = agent ? "agent" : "you";
+        char text[256];
+        snprintf(text, sizeof(text), "%s: %s (%d)", speaker, HISTORY_LINES[(size_t)i % kinds], i);
+        UIElement* msg = ui_label(pane, text);
+        msg->wrap = true;
+        msg->size_mode[0] = UI_GROW;
+        // The speaker in a colour, and on every fifth message a part's name in the second face.
+        UITextRun runs[2] = {
+            {.start = 0,
+             .length = strlen(speaker),
+             .color = {agent ? 0.45f : 0.55f, agent ? 0.70f : 0.85f, agent ? 1.0f : 0.55f, 1.0f}}};
+        size_t count = 1;
+        const char* part = strstr(text, "C12");
+        if (mono && i % 5 == 0 && part)
+            runs[count++] = (UITextRun){.start = (size_t)(part - text), .length = 3, .font = mono};
+        ui_set_text_runs(msg, runs, count);
+    }
+    ui_push(ui, s);
 }
 
 // G opens the debug GUI and F the FPS readout, which under --idle counts the frames drawn.
@@ -1486,7 +1577,7 @@ static void usage(const char* argv0) {
             "          [--tile-shift N] [--canvas-probe] [--picture] [--edit-thread]\n"
             "          [--split] [--only-view 0|1] [--ui] [--budget]\n"
             "          [--idle] [--idle-wake S,...] [--idle-load PATH] [--input-script PATH]\n"
-            "          [--ui-enter] [--ui-text TEXT] [--gui-click]\n",
+            "          [--ui-enter] [--ui-text TEXT] [--gui-click] [--history]\n",
             argv0);
 }
 
@@ -1504,6 +1595,7 @@ static const char* IDENTITY_PASS = "#version 330 core\n"
 int main(int argc, char** argv) {
     bool headless = false, mirror = false, probe = false, picture = false, edit_thread = false;
     bool split = false, with_ui = false, budget = false, idle = false, ui_enter = false;
+    bool history = false;
     int frames = 0, width = 960, height = 600, tile_shift = 0, only_view = -1;
     const char* screenshot = NULL;
     const char* input_script = NULL;
@@ -1563,6 +1655,8 @@ int main(int argc, char** argv) {
         } else if (strcmp(argv[i], "--ui-enter") == 0) {
             with_ui = true;
             ui_enter = true;
+        } else if (strcmp(argv[i], "--history") == 0) {
+            history = true;
         } else if (strcmp(argv[i], "--ui-text") == 0 && more) {
             with_ui = true;
             g_ui_text = argv[++i];
@@ -1623,7 +1717,9 @@ int main(int argc, char** argv) {
     const double cy = isnan(view_y) ? sheet->centre_mm[1] : view_y;
     const double cw = isnan(view_w) ? sheet->width_mm : view_w;
     CanvasView* view = &g_views[0];
-    *view = (CanvasView){.points_per_unit = (double)width / (double)g_view_count / (cw * 1e6),
+    g_side_width = history ? HISTORY_WIDTH : 0.0f;
+    *view = (CanvasView){.points_per_unit =
+                             ((double)width - g_side_width) / (double)g_view_count / (cw * 1e6),
                          .mirror_x = mirror,
                          .background = sheet->background};
     // The centre in whole units plus its fraction, from millimetres and the offset.
@@ -1667,11 +1763,34 @@ int main(int argc, char** argv) {
     g_probe_target = probe;
     g_say_typed = probe;
 
-    // Under --ui, a panel of the game UI over the canvas, at the UI's order.
+    // Under --ui, a panel of the game UI over the canvas, at the UI's order; under --history, the
+    // side column, given the real pointer and keyboard.
     UISystem* ui = NULL;
-    if (with_ui) {
+    if (with_ui || history) {
         ui = create_ui_system(engine);
         ui_set_font(ui, font, 18.0f);
+        ui_attach(ui, engine);
+    }
+    if (history) {
+        Font* mono = load_font(engine->text_renderer->font_pool,
+                               "apps/splash/assets/PressStart2P.ttf", 64.0f, true);
+        build_history(ui, mono);
+        g_ui_live = ui;
+        UIScreen* screen = ui_top(ui);
+        ui_layout(screen, (float)width, (float)height);
+        if (probe) {
+            const double s = ctx.fb_scale;
+            const UIElement* column = ui_screen_root(screen)->children[0];
+            const UIElement* pane = column->children[0];
+            printf("canvas history column %ld %ld %ld %ld pane %ld %ld %ld %ld want 1a1c24\n",
+                   lround(column->rect.x * s), lround(column->rect.y * s),
+                   lround((column->rect.x + column->rect.w) * s),
+                   lround((column->rect.y + column->rect.h) * s), lround(pane->rect.x * s),
+                   lround(pane->rect.y * s), lround((pane->rect.x + pane->rect.w) * s),
+                   lround((pane->rect.y + pane->rect.h) * s));
+        }
+    }
+    if (with_ui) {
         UIScreen* screen = ui_screen(ui, "panel");
         UIElement* panel = ui_panel(ui_screen_root(screen));
         ui_set_size(panel, UI_FIXED, 160.0f, UI_FIXED, 90.0f);
@@ -1686,7 +1805,6 @@ int main(int argc, char** argv) {
             g_ui_enter = ui;
         }
         ui_push(ui, screen);
-        ui_attach(ui, engine);
         ui_layout(screen, (float)width, (float)height);
         if (probe) {
             const double s = ctx.fb_scale;

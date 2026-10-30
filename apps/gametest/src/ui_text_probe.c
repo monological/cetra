@@ -6,6 +6,7 @@
 
 #include "ui_text_probe.h"
 
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -239,6 +240,223 @@ static int probe_runs_refused(UISystem* ui) {
     return 0;
 }
 
+// ---- the scrolling pane
+
+#define PANE_ROWS 20
+#define ROW_H     30.0f
+#define ROW_GAP   8.0f
+
+static int g_activated[PANE_ROWS + 4];
+
+static void on_row(UIElement* el, void* user) {
+    (void)el;
+    g_activated[(int)(intptr_t)user]++;
+}
+
+// A 300x200 pane centred on a 1280x720 screen that is not modal, holding rows 30 points tall 8
+// apart: buttons when `focusable`, which navigation and the pointer reach. `follow` is set before
+// the first layout.
+static UIElement* pane_fixture(UISystem* ui, UIElement** rows, int n, bool focusable, bool follow) {
+    UIScreen* s = ui_screen(ui, "pane");
+    ui_screen_set_modal(s, false);
+    UIElement* pane = ui_scroll(ui_screen_root(s));
+    ui_set_size(pane, UI_FIXED, 300.0f, UI_FIXED, 200.0f);
+    pane->spacing = ROW_GAP;
+    pane->follow_end = follow;
+    for (int i = 0; i < n; i++) {
+        char name[32];
+        snprintf(name, sizeof(name), "Row %d", i);
+        rows[i] = focusable ? ui_button(pane, name, on_row, (void*)(intptr_t)i) : ui_panel(pane);
+        ui_set_size(rows[i], UI_GROW, 0.0f, UI_FIXED, ROW_H);
+    }
+    ui_push(ui, s);
+    ui_layout(s, 1280.0f, 720.0f);
+    return pane;
+}
+
+// One input pass with the pointer at (x, y) and nothing else, then the eases run out and the
+// layout settles on what the pass decided.
+static void pass(UISystem* ui, const UIInput* in) {
+    ui_update(ui, in, 1280.0f, 720.0f);
+    ui_build(ui, 1280.0f, 720.0f, 1.0f);
+    ui_layout(ui_top(ui), 1280.0f, 720.0f);
+}
+
+static void say_scroll(const char* which, const char* label, const UIElement* pane) {
+    printf("ui %s %s scroll %.6f %.6f\n", which, label, (double)pane->scroll,
+           (double)pane->scroll_target);
+}
+
+static int probe_scroll_layout(UISystem* ui) {
+    UIElement* rows[PANE_ROWS];
+    UIElement* pane = pane_fixture(ui, rows, PANE_ROWS, false, false);
+    probe_rect("scroll-layout", "pane", pane->rect);
+    printf("ui scroll-layout content height %.6f\n", (double)pane->scroll_content);
+    printf("ui scroll-layout rows at %.6f %.6f %.6f\n", (double)rows[0]->rect.y,
+           (double)rows[1]->rect.y, (double)rows[3]->rect.y);
+    const float cx = pane->rect.x + 100.0f, cy = pane->rect.y + 100.0f;
+    pass(ui, &(UIInput){.pointer_x = cx, .pointer_y = cy, .wheel_y = -3.0f});
+    say_scroll("scroll-layout", "wheeled", pane);
+    printf("ui scroll-layout moved at %.6f %.6f %.6f\n", (double)rows[0]->rect.y,
+           (double)rows[1]->rect.y, (double)rows[3]->rect.y);
+    return 0;
+}
+
+static int probe_scroll_wheel(UISystem* ui) {
+    UIElement* rows[PANE_ROWS];
+    UIElement* pane = pane_fixture(ui, rows, PANE_ROWS, false, false);
+    const float cx = pane->rect.x + 100.0f, cy = pane->rect.y + 100.0f;
+    printf("ui scroll-wheel step points %.6f\n", (double)PROBE_SIZE);
+    pass(ui, &(UIInput){.pointer_x = cx, .pointer_y = cy, .wheel_y = -3.0f});
+    say_scroll("scroll-wheel", "three", pane);
+    pass(ui, &(UIInput){.pointer_x = cx, .pointer_y = cy, .wheel_y = -1000.0f});
+    say_scroll("scroll-wheel", "bottom", pane);
+    pass(ui, &(UIInput){.pointer_x = cx, .pointer_y = cy, .wheel_y = 1000.0f});
+    say_scroll("scroll-wheel", "top", pane);
+    pass(ui, &(UIInput){.pointer_x = 20.0f, .pointer_y = 20.0f, .wheel_y = -3.0f});
+    say_scroll("scroll-wheel", "outside", pane);
+    ui_pop(ui);
+
+    // A pane in a pane: the inner one under the pointer takes the wheel.
+    UIScreen* s = ui_screen(ui, "nested");
+    UIElement* outer = ui_scroll(ui_screen_root(s));
+    ui_set_size(outer, UI_FIXED, 300.0f, UI_FIXED, 200.0f);
+    UIElement* inner = ui_scroll(outer);
+    ui_set_size(inner, UI_GROW, 0.0f, UI_FIXED, 100.0f);
+    for (int i = 0; i < 10; i++)
+        ui_set_size(ui_panel(inner), UI_GROW, 0.0f, UI_FIXED, ROW_H);
+    for (int i = 0; i < 10; i++)
+        ui_set_size(ui_panel(outer), UI_GROW, 0.0f, UI_FIXED, ROW_H);
+    ui_push(ui, s);
+    ui_layout(s, 1280.0f, 720.0f);
+    pass(ui, &(UIInput){.pointer_x = inner->rect.x + 50.0f,
+                        .pointer_y = inner->rect.y + 50.0f,
+                        .wheel_y = -2.0f});
+    say_scroll("scroll-wheel", "inner", inner);
+    say_scroll("scroll-wheel", "outer", outer);
+    return 0;
+}
+
+static int probe_scroll_clip(UISystem* ui) {
+    UIElement* rows[PANE_ROWS];
+    UIElement* pane = pane_fixture(ui, rows, PANE_ROWS, true, false);
+    // A row in view takes a click; one laid out below the pane, under the point, does not.
+    const float x = pane->rect.x + 100.0f;
+    const float in_view = rows[2]->rect.y + ROW_H * 0.5f;
+    const float out_of_view = rows[10]->rect.y + ROW_H * 0.5f;
+    pass(ui,
+         &(UIInput){
+             .pointer_x = x, .pointer_y = in_view, .pointer_pressed = true, .pointer_down = true});
+    pass(ui, &(UIInput){.pointer_x = x, .pointer_y = in_view, .pointer_released = true});
+    pass(ui, &(UIInput){.pointer_x = x,
+                        .pointer_y = out_of_view,
+                        .pointer_pressed = true,
+                        .pointer_down = true});
+    pass(ui, &(UIInput){.pointer_x = x, .pointer_y = out_of_view, .pointer_released = true});
+    printf("ui scroll-clip clicks in %.6f\n", (double)g_activated[2]);
+    printf("ui scroll-clip clicks out %.6f\n", (double)g_activated[10]);
+    printf("ui scroll-clip over in %.6f\n", ui_pointer_over(ui, x, in_view) ? 1.0 : 0.0);
+    printf("ui scroll-clip over out %.6f\n", ui_pointer_over(ui, x, out_of_view) ? 1.0 : 0.0);
+
+    // What is emitted: the rows the pane shows, and none wholly out of it.
+    ui_build(ui, 1280.0f, 720.0f, 1.0f);
+    const UIDrawList* dl = ui_draw_list(ui);
+    int rows_drawn = 0, outside = 0;
+    for (size_t i = 0; i < ui_draw_list_quad_count(dl); i++) {
+        UIRect r;
+        int kind = 0;
+        ui_draw_list_quad(dl, i, &r, NULL, &kind);
+        if (kind != 0 || r.h != ROW_H)
+            continue;
+        rows_drawn++;
+        if (r.y >= pane->rect.y + pane->rect.h || r.y + r.h <= pane->rect.y)
+            outside++;
+    }
+    printf("ui scroll-clip rows drawn %.6f\n", (double)rows_drawn);
+    printf("ui scroll-clip rows outside %.6f\n", (double)outside);
+    return 0;
+}
+
+static int probe_scroll_into_view(UISystem* ui) {
+    UIElement* rows[PANE_ROWS];
+    UIElement* pane = pane_fixture(ui, rows, PANE_ROWS, true, false);
+    UIScreen* s = ui_top(ui);
+    // The pointer moving onto row 5, which is half out of view, focuses it and scrolls nothing:
+    // hovering is not navigating.
+    pass(ui, &(UIInput){.pointer_x = pane->rect.x + 50.0f, .pointer_y = 0.0f});
+    pass(ui, &(UIInput){.pointer_x = pane->rect.x + 50.0f, .pointer_y = rows[5]->rect.y + 4.0f});
+    printf("ui scroll-into-view hover focused %.6f\n", ui_focused(s) == rows[5] ? 1.0 : 0.0);
+    printf("ui scroll-into-view hover moved %.6f\n", (double)pane->scroll_target);
+    ui_set_focus(s, NULL);
+    pass(ui, &(UIInput){.pointer_x = -1.0f, .pointer_y = -1.0f});
+    // Down from nothing focused acquires row 0; five more presses reach row 5, the first not
+    // wholly in view.
+    for (int i = 0; i < 6; i++)
+        pass(ui, &(UIInput){.pointer_x = -1.0f, .pointer_y = -1.0f, .nav_down = true});
+    printf("ui scroll-into-view focus row5 %.6f\n", ui_focused(s) == rows[5] ? 1.0 : 0.0);
+    say_scroll("scroll-into-view", "down", pane);
+    for (int i = 0; i < 5; i++)
+        pass(ui, &(UIInput){.pointer_x = -1.0f, .pointer_y = -1.0f, .nav_up = true});
+    say_scroll("scroll-into-view", "up", pane);
+    ui_set_focus(s, rows[15]);
+    pass(ui, &(UIInput){.pointer_x = -1.0f, .pointer_y = -1.0f});
+    say_scroll("scroll-into-view", "set", pane);
+    return 0;
+}
+
+static int probe_scroll_follow(UISystem* ui) {
+    UIElement* rows[PANE_ROWS];
+    // Following from its first layout, the pane begins at its end.
+    UIElement* pane = pane_fixture(ui, rows, PANE_ROWS, false, true);
+    say_scroll("scroll-follow", "first", pane);
+    printf("ui scroll-follow content height %.6f\n", (double)pane->scroll_content);
+    ui_set_size(ui_panel(pane), UI_GROW, 0.0f, UI_FIXED, ROW_H);
+    ui_layout(ui_top(ui), 1280.0f, 720.0f);
+    say_scroll("scroll-follow", "grown", pane);
+    printf("ui scroll-follow grown height %.6f\n", (double)pane->scroll_content);
+    pass(ui, &(UIInput){.pointer_x = pane->rect.x + 100.0f,
+                        .pointer_y = pane->rect.y + 100.0f,
+                        .wheel_y = 3.0f});
+    say_scroll("scroll-follow", "up", pane);
+    ui_set_size(ui_panel(pane), UI_GROW, 0.0f, UI_FIXED, ROW_H);
+    ui_layout(ui_top(ui), 1280.0f, 720.0f);
+    say_scroll("scroll-follow", "kept", pane);
+    return 0;
+}
+
+static int probe_scroll_bar(UISystem* ui) {
+    UIElement* rows[PANE_ROWS];
+    UIElement* pane = pane_fixture(ui, rows, PANE_ROWS, false, false);
+    // The thumb, read from what the pane emits: the 6-point quad at its right edge.
+    UIRect thumb = {0};
+    const UIDrawList* dl = ui_draw_list(ui);
+    ui_build(ui, 1280.0f, 720.0f, 1.0f);
+    for (size_t i = 0; i < ui_draw_list_quad_count(dl); i++) {
+        UIRect r;
+        ui_draw_list_quad(dl, i, &r, NULL, NULL);
+        if (r.w == 6.0f && r.x > pane->rect.x + pane->rect.w - 10.0f)
+            thumb = r;
+    }
+    probe_rect("scroll-bar", "pane", pane->rect);
+    probe_rect("scroll-bar", "thumb", thumb);
+    printf("ui scroll-bar content height %.6f\n", (double)pane->scroll_content);
+    const float tx = thumb.x + 3.0f, ty = thumb.y + thumb.h * 0.5f;
+    pass(ui, &(UIInput){
+                 .pointer_x = tx, .pointer_y = ty, .pointer_pressed = true, .pointer_down = true});
+    pass(ui, &(UIInput){.pointer_x = tx, .pointer_y = ty + 50.0f, .pointer_down = true});
+    say_scroll("scroll-bar", "dragged", pane);
+    pass(ui, &(UIInput){.pointer_x = tx, .pointer_y = ty + 50.0f, .pointer_released = true});
+    // A press on the track below the thumb pages down.
+    const float before = pane->scroll_target;
+    const float below = pane->rect.y + pane->rect.h - 4.0f;
+    pass(ui,
+         &(UIInput){
+             .pointer_x = tx, .pointer_y = below, .pointer_pressed = true, .pointer_down = true});
+    pass(ui, &(UIInput){.pointer_x = tx, .pointer_y = below, .pointer_released = true});
+    printf("ui scroll-bar paged by %.6f\n", (double)(pane->scroll_target - before));
+    return 0;
+}
+
 int run_ui_text_probe(Game* game, UISystem* ui, Font* font, const char* which) {
     if (!strcmp(which, "wrap-label"))
         return probe_wrap_label(ui, font);
@@ -250,5 +468,17 @@ int run_ui_text_probe(Game* game, UISystem* ui, Font* font, const char* which) {
         return probe_runs_wrap(game, ui, font);
     if (!strcmp(which, "runs-refused"))
         return probe_runs_refused(ui);
+    if (!strcmp(which, "scroll-layout"))
+        return probe_scroll_layout(ui);
+    if (!strcmp(which, "scroll-wheel"))
+        return probe_scroll_wheel(ui);
+    if (!strcmp(which, "scroll-clip"))
+        return probe_scroll_clip(ui);
+    if (!strcmp(which, "scroll-into-view"))
+        return probe_scroll_into_view(ui);
+    if (!strcmp(which, "scroll-follow"))
+        return probe_scroll_follow(ui);
+    if (!strcmp(which, "scroll-bar"))
+        return probe_scroll_bar(ui);
     return -1;
 }
