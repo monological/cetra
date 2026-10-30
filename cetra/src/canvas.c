@@ -909,7 +909,7 @@ static void _glyphs_upload(CanvasData* d) {
         float* base = texels + slot * per_font * 4;
         const float numbers[4] = {em, font->sdf_edge, font->sdf_falloff, font->sdf_spread};
         memcpy(base, numbers, sizeof(numbers));
-        for (int cp = 1; cp < CANVAS_GLYPH_CODEPOINTS; cp++) {
+        for (uint32_t cp = 1; cp < CANVAS_GLYPH_CODEPOINTS; cp++) {
             const GlyphInfo* g = font_get_glyph(font, cp);
             if (!g)
                 continue;

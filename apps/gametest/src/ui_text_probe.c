@@ -470,8 +470,8 @@ static double g_clock; // the input's clock, a second a pass apart unless a test
 static int g_submits, g_changes, g_keys_taken;
 
 static void ev_text(const char* s) {
-    for (const unsigned char* p = (const unsigned char*)s; *p && g_event_count < 256;)
-        g_events[g_event_count++] = (InputKeyEvent){.codepoint = (uint32_t)text_utf8_next(&p)};
+    for (const char* p = s; *p && g_event_count < 256;)
+        g_events[g_event_count++] = (InputKeyEvent){.codepoint = text_utf8_next(&p)};
 }
 
 static void ev_key(int key, int mods) {
@@ -606,8 +606,8 @@ static int probe_field_utf8(UISystem* ui) {
     say_field("field-utf8", "erased", field);
     // The text decodes whole: every codepoint printed, no U+FFFD among them.
     printf("ui field-utf8 erased codepoints");
-    for (const unsigned char* p = (const unsigned char*)ui_field_text(field); *p;)
-        printf(" %d", text_utf8_next(&p));
+    for (const char* p = ui_field_text(field); *p;)
+        printf(" %u", (unsigned)text_utf8_next(&p));
     printf("\n");
     return 0;
 }
@@ -1070,18 +1070,75 @@ static int probe_rows_focus(UISystem* ui) {
 // ---- the matcher
 
 static void say_match(const char* label, const char* query, const char* name) {
-    size_t pos[FUZZY_QUERY_MAX];
-    const int score = fuzzy_match(query, name, pos, FUZZY_QUERY_MAX);
+    FuzzyPositions matched;
+    const int score = fuzzy_match(query, name, &matched);
     printf("ui match %s score %d\n", label, score);
-    if (score >= 0 && query[0]) {
-        size_t n = 0;
-        for (const unsigned char* p = (const unsigned char*)query; *p; n++)
-            text_utf8_next(&p);
+    printf("ui match %s count %zu\n", label, matched.count);
+    if (matched.count) {
         printf("ui match %s at", label);
-        for (size_t i = 0; i < n; i++)
-            printf(" %zu", pos[i]);
+        for (size_t i = 0; i < matched.count; i++)
+            printf(" %zu", matched.at[i]);
         printf("\n");
     }
+}
+
+// ---- UTF-8
+
+static int probe_utf8(void) {
+    // Every length's first and last codepoint, encoded and decoded back.
+    static const uint32_t edges[] = {0x7f, 0x80, 0x7ff, 0x800, 0xffff, 0x10000, 0x10ffff};
+    int round = 0;
+    for (size_t i = 0; i < sizeof(edges) / sizeof(edges[0]); i++) {
+        char buf[5] = {0};
+        const size_t n = text_utf8_encode(edges[i], buf);
+        const char* p = buf;
+        if (n > 0 && text_utf8_next(&p) == edges[i] && p == buf + n)
+            round++;
+    }
+    printf("ui utf8 roundtrip ok %d\n", round);
+    // No character: surrogate halves and past the last plane.
+    static const uint32_t none[] = {0xd800, 0xdfff, 0x110000};
+    int refused = 0;
+    for (size_t i = 0; i < sizeof(none) / sizeof(none[0]); i++) {
+        char buf[4];
+        refused += text_utf8_encode(none[i], buf) == 0;
+    }
+    printf("ui utf8 encode refused %d\n", refused);
+    // Nothing but malformed bytes: overlong forms, a surrogate, lead bytes past F4, a value past
+    // U+10FFFF, and a sequence cut short. Each byte is one U+FFFD.
+    const char* bad = "\xc0\x80"
+                      "\xe0\x80\x80"
+                      "\xed\xa0\x80"
+                      "\xf5\x80"
+                      "\xf4\x90\x80\x80"
+                      "\xe2\x82";
+    size_t replaced = 0;
+    for (const char* p = bad; *p;)
+        replaced += text_utf8_next(&p) == 0xfffd;
+    printf("ui utf8 malformed fffd %zu\n", replaced);
+    printf("ui utf8 malformed bytes %zu\n", strlen(bad));
+    // prev mirrors next over good and bad bytes alike: from where next left off, prev returns what
+    // next did and lands where next began.
+    const char* mixed = "a\xc3\xa9\xe2\x82\xac\xf0\x9f\x98\x80"
+                        "\x80\xe2\x82"
+                        "b\xf0\x9f\x98"
+                        "c\xc0\x80z";
+    int steps = 0, off = 0;
+    for (const char* p = mixed; *p; steps++) {
+        const char* q = p;
+        const uint32_t cp = text_utf8_next(&q);
+        const char* back = q;
+        if (text_utf8_prev(&back, mixed) != cp || back != p)
+            off++;
+        p = q;
+    }
+    printf("ui utf8 mirror steps %d\n", steps);
+    printf("ui utf8 mirror off %d\n", off);
+    const char* at_start = mixed;
+    const uint32_t none_before = text_utf8_prev(&at_start, mixed);
+    printf("ui utf8 start returns %u\n", (unsigned)none_before);
+    printf("ui utf8 start moved %d\n", at_start != mixed ? 1 : 0);
+    return 0;
 }
 
 static int probe_match(void) {
@@ -1142,6 +1199,8 @@ int run_ui_text_probe(Game* game, UISystem* ui, Font* font, const char* which) {
         return probe_field_focus(ui);
     if (!strcmp(which, "match"))
         return probe_match();
+    if (!strcmp(which, "utf8"))
+        return probe_utf8();
     if (!strcmp(which, "rows-built"))
         return probe_rows_built(ui);
     if (!strcmp(which, "rows-measure"))

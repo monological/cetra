@@ -1853,7 +1853,7 @@ static bool _script_typed(InputScriptRange* r, InputKeyEvent ev, const char* pat
 
 // `type=` text: UTF-8, `\s` a space and `\\` a backslash, since a space ends the token.
 static bool _script_type(InputScriptRange* r, const char* text, const char* path, int line) {
-    for (const unsigned char* s = (const unsigned char*)text; *s;) {
+    for (const char* s = text; *s;) {
         uint32_t cp;
         if (s[0] == '\\') {
             if (s[1] != 's' && s[1] != '\\') {
@@ -1863,7 +1863,7 @@ static bool _script_type(InputScriptRange* r, const char* text, const char* path
             cp = s[1] == 's' ? ' ' : '\\';
             s += 2;
         } else {
-            cp = (uint32_t)text_utf8_next(&s);
+            cp = text_utf8_next(&s);
         }
         if (!_script_typed(r, (InputKeyEvent){.codepoint = cp}, path, line))
             return false;

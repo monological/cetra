@@ -1,5 +1,6 @@
 #include "fuzzy.h"
 
+#include <stdbool.h>
 #include <stdint.h>
 
 #include "text.h"
@@ -15,20 +16,20 @@
 #define FIRST_MULTIPLIER  2
 #define NONE              (-30000) // no placement ends here
 
-static int _fold(int c) {
+static uint32_t _fold(uint32_t c) {
     return (c >= 'A' && c <= 'Z') ? c + ('a' - 'A') : c;
 }
 
-static int _starts_word_after(int c) {
+static bool _starts_word_after(uint32_t c) {
     return c == ' ' || c == '\t' || c == '_' || c == '-' || c == '/' || c == '.' || c == ':' ||
            c == '[';
 }
 
 // The bonus a match at name position `j` earns from where it stands.
-static int _bonus(const int* cps, int j) {
+static int _bonus(const uint32_t* cps, int j) {
     if (j == 0 || _starts_word_after(cps[j - 1]))
         return BONUS_BOUNDARY;
-    const int prev = cps[j - 1], cur = cps[j];
+    const uint32_t prev = cps[j - 1], cur = cps[j];
     if (prev >= 'a' && prev <= 'z' && cur >= 'A' && cur <= 'Z')
         return BONUS_CAMEL;
     if (!(prev >= '0' && prev <= '9') && cur >= '0' && cur <= '9')
@@ -36,21 +37,23 @@ static int _bonus(const int* cps, int j) {
     return 0;
 }
 
-int fuzzy_match(const char* query, const char* name, size_t* positions, size_t cap) {
+int fuzzy_match(const char* query, const char* name, FuzzyPositions* positions) {
+    if (positions)
+        positions->count = 0;
     if (!query || !name)
         return -1;
-    int q[FUZZY_QUERY_MAX];
+    uint32_t q[FUZZY_QUERY_MAX];
     int m = 0;
-    for (const unsigned char* p = (const unsigned char*)query; *p && m < FUZZY_QUERY_MAX;)
+    for (const char* p = query; *p && m < FUZZY_QUERY_MAX;)
         q[m++] = _fold(text_utf8_next(&p));
     if (m == 0)
         return 0;
 
-    int cps[FUZZY_NAME_MAX];
+    uint32_t cps[FUZZY_NAME_MAX];
     size_t offs[FUZZY_NAME_MAX];
     int n = 0;
-    for (const unsigned char* p = (const unsigned char*)name; *p && n < FUZZY_NAME_MAX;) {
-        offs[n] = (size_t)((const char*)p - name);
+    for (const char* p = name; *p && n < FUZZY_NAME_MAX;) {
+        offs[n] = (size_t)(p - name);
         cps[n++] = text_utf8_next(&p);
     }
 
@@ -106,10 +109,11 @@ int fuzzy_match(const char* query, const char* name, size_t* positions, size_t c
 
     // Back from the end: each character came from a run if a run gives its score, else from the
     // nearest gap start that does.
-    if (positions && cap >= (size_t)m) {
+    if (positions) {
+        positions->count = (size_t)m;
         int j = end;
         for (int i = m - 1; i >= 0; i--) {
-            positions[i] = offs[j];
+            positions->at[i] = offs[j];
             if (i == 0)
                 break;
             const int b = _bonus(cps, j), here = best[i][j];
