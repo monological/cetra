@@ -93,7 +93,7 @@ void camera_drag_update(CameraDrag* drag, float time) {
         return;
     }
 
-    if (in->shift_held) {
+    if (in->press_mods & GLFW_MOD_SHIFT) {
         // Pan the ANCHOR in the camera's own plane, as an absolute offset from
         // where it was latched -- so the events do not accumulate and a drag
         // returning to its start returns the camera to its start.

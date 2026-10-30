@@ -625,8 +625,8 @@ static bool _key(const UISystem* ui, UIElement* el, UIField* f, UIRect content,
                  const InputKeyEvent* ev) {
     const int mods = ev->mods;
     const int sh = (mods & GLFW_MOD_SHIFT) ? STB_TEXTEDIT_K_SHIFT : 0;
-    const bool shortcut = (mods & ENGINE_MOD_SHORTCUT) != 0;
-    const bool word = (mods & ENGINE_MOD_WORD) != 0;
+    const bool shortcut = (mods & INPUT_MOD_SHORTCUT) != 0;
+    const bool word = (mods & INPUT_MOD_WORD) != 0;
     const bool ro = (f->flags & UI_FIELD_READ_ONLY) != 0;
     const bool multi = (f->flags & UI_FIELD_MULTILINE) != 0;
 #ifdef __APPLE__

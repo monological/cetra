@@ -2098,11 +2098,22 @@ static double _ui_clock(const Engine* engine) {
     return engine->headless ? (double)engine->total_frames * ENGINE_FIXED_FRAME_DT : glfwGetTime();
 }
 
-void ui_input_add_keyboard(UIInput* in, const Engine* engine) {
+void ui_input_read(UIInput* in, const Engine* engine) {
     if (!in || !engine) {
-        log_error("ui_input_add_keyboard: NULL input or engine");
+        log_error("ui_input_read: NULL input or engine");
         return;
     }
+    // The engine's framebuffer pixels, +Y up, into the UI's window points, +Y down.
+    const InputState* is = &engine->input;
+    if (engine->fb_width > 0 && engine->fb_height > 0) {
+        in->pointer_x = is->pointer_fb_x / (float)engine->fb_width * (float)engine->win_width;
+        in->pointer_y =
+            (1.0f - is->pointer_fb_y / (float)engine->fb_height) * (float)engine->win_height;
+    }
+    in->pointer_down = is->is_dragging;
+    in->pointer_pressed = is->pointer_pressed;
+    in->pointer_released = is->pointer_released;
+    in->pointer_mods = is->press_mods;
     in->wheel_y = (float)engine->input.scroll_dy;
     in->key_events = engine->input.key_events;
     in->key_event_count = engine->input.key_event_count;

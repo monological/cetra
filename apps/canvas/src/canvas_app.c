@@ -1377,34 +1377,24 @@ static const char* g_idle_load; // --idle-load: a texture asked for as late work
 static bool g_late_started;     // the late work has been started
 static bool g_gui_click;        // --gui-click: a click handed to the debug GUI on the first frame
 static UISystem* g_ui_enter;    // --ui-enter: the UI, given an input pass of nothing each frame
-static bool g_say_typed;        // --canvas-probe: say what each frame's input was given to type
+static bool g_probe;            // --canvas-probe: the run says what it did
 static const char* g_ui_text;   // --ui-text: a label in the --ui panel
 static UISystem* g_ui_live;     // the UI given the real pointer and keyboard each frame
-// The pointer's button as the callbacks saw it since the last frame, for the UI's input pass.
-static bool g_ptr_down, g_ptr_pressed, g_ptr_released;
-static int g_ptr_mods; // the modifiers held at the last press
 
-// The UI's input pass with the real pointer and keyboard; the presses and releases seen since the
-// last frame are spent.
+// The UI's input pass with the real pointer and keyboard, as the engine read them this frame.
 static void live_ui_update(Engine* engine) {
     if (!g_ui_live)
         return;
-    UIInput in = {.pointer_x = g_last_x,
-                  .pointer_y = g_last_y,
-                  .pointer_down = g_ptr_down,
-                  .pointer_pressed = g_ptr_pressed,
-                  .pointer_released = g_ptr_released,
-                  .pointer_mods = g_ptr_mods};
-    ui_input_add_keyboard(&in, engine);
+    UIInput in = {0};
+    ui_input_read(&in, engine);
     ui_update(g_ui_live, &in, (float)engine->win_width, (float)engine->win_height);
-    g_ptr_pressed = g_ptr_released = false;
 }
 
 // What the UI is handed to type this frame, through the helper an app uses, one token an event:
 // `c<hex>` a character, `k<key>+<mods>` a key.
 static void say_typed(const Engine* engine) {
     UIInput in = {0};
-    ui_input_add_keyboard(&in, engine);
+    ui_input_read(&in, engine);
     if (in.key_event_count == 0)
         return;
     printf("canvas typed");
@@ -1448,7 +1438,7 @@ static void on_update(Engine* engine, float dt) {
     start_late_work(engine);
     if (g_wake_next < g_wake_count)
         engine_request_frame_after(engine, g_wakes[g_wake_next++]);
-    if (g_say_typed)
+    if (g_probe)
         say_typed(engine);
     live_ui_update(engine);
     history_stream(engine);
@@ -1490,13 +1480,9 @@ static bool over_ui(void) {
 
 static void on_button(Engine* engine, int button, int action, int mods) {
     (void)engine;
+    (void)mods;
     if (button != GLFW_MOUSE_BUTTON_LEFT)
         return;
-    if (action == GLFW_PRESS)
-        g_ptr_mods = mods;
-    g_ptr_down = action == GLFW_PRESS;
-    g_ptr_pressed |= action == GLFW_PRESS;
-    g_ptr_released |= action == GLFW_RELEASE;
     g_drag_view = (action == GLFW_PRESS && !over_ui()) ? view_at(g_last_x) : -1;
 }
 
@@ -1862,10 +1848,13 @@ static void palette_run(int r) {
         return;
     const int item = g_pal_hits[r].index;
     palette_close();
-    if (g_pal_jump)
+    if (g_pal_jump) {
         printf("canvas jump %s\n", g_jump_names[item]);
-    else
-        COMMANDS[item].run(g_engine);
+        return;
+    }
+    if (g_probe)
+        printf("canvas palette ran %d\n", item);
+    COMMANDS[item].run(g_engine);
 }
 
 static void on_palette_change(UIElement* el, void* user) {
@@ -1946,7 +1935,7 @@ static void on_key(Engine* engine, int key, int scancode, int action, int mods) 
     (void)scancode;
     if (action != GLFW_PRESS || (g_ui_live && ui_wants_keyboard(g_ui_live)))
         return;
-    const bool shortcut = (mods & ENGINE_MOD_SHORTCUT) != 0;
+    const bool shortcut = (mods & INPUT_MOD_SHORTCUT) != 0;
     if (g_palette && key == GLFW_KEY_K && shortcut)
         palette_open(false);
     else if (g_palette && key == GLFW_KEY_SLASH && !mods)
@@ -2167,7 +2156,7 @@ int main(int argc, char** argv) {
     g_only_view = only_view;
     g_budget = budget;
     g_probe_target = probe;
-    g_say_typed = probe;
+    g_probe = probe;
 
     // Under --ui, a panel of the game UI over the canvas, at the UI's order; under --history, the
     // side column, and under --palette the palette, given the real pointer and keyboard.

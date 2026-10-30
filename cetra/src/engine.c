@@ -907,6 +907,8 @@ static void _engine_clear_latches(Engine* engine) {
     engine->input.scroll_dy = 0.0;
     memset(engine->input.key_pressed, 0, sizeof(engine->input.key_pressed));
     engine->input.key_event_count = 0;
+    engine->input.pointer_pressed = false;
+    engine->input.pointer_released = false;
 }
 
 // Close out a loop iteration: advance the frame clock and honour the engine's
@@ -1600,6 +1602,8 @@ bool engine_cursor_fb(const Engine* engine, double* fb_x, double* fb_y) {
  * asserting the code a hand reaches.
  */
 static void _engine_pointer_move(Engine* engine, double fb_x, double fb_y) {
+    engine->input.pointer_fb_x = (float)fb_x;
+    engine->input.pointer_fb_y = (float)fb_y;
     if (engine->input.is_dragging) {
         engine->input.drag_fb_x = (float)(fb_x - engine->input.center_fb_x);
         engine->input.drag_fb_y = (float)(fb_y - engine->input.center_fb_y);
@@ -1641,14 +1645,15 @@ static void _engine_pointer_button(Engine* engine, int button, int action, int m
     // doesn't want the pointer. Either way the app callback fires exactly once.
     if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_RELEASE) {
         engine->input.is_dragging = false;
-        engine->input.shift_held = false;
+        engine->input.pointer_released = true;
         engine->input.center_fb_x = (float)mouse_fb_x;
         engine->input.center_fb_y = (float)mouse_fb_y;
     } else if (engine_gui_wants_mouse()) {
         return;
     } else if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
         engine->input.is_dragging = true;
-        engine->input.shift_held = (mods & GLFW_MOD_SHIFT) != 0;
+        engine->input.pointer_pressed = true;
+        engine->input.press_mods = mods;
         engine->input.center_fb_x = (float)mouse_fb_x;
         engine->input.center_fb_y = (float)mouse_fb_y;
         engine->input.drag_fb_x = 0.0f;
@@ -1684,6 +1689,13 @@ static void _engine_mouse_button_callback(GLFWwindow* window, int button, int ac
 }
 
 _Static_assert(INPUT_KEYS == GLFW_KEY_LAST + 1, "InputState.key_pressed takes every GLFW key");
+#ifdef __APPLE__
+_Static_assert(INPUT_MOD_SHORTCUT == GLFW_MOD_SUPER && INPUT_MOD_WORD == GLFW_MOD_ALT,
+               "input.h's modifier bits are GLFW's");
+#else
+_Static_assert(INPUT_MOD_SHORTCUT == GLFW_MOD_CONTROL && INPUT_MOD_WORD == GLFW_MOD_CONTROL,
+               "input.h's modifier bits are GLFW's");
+#endif
 
 // One typing event into the frame's list. A batch past the list's size loses the rest, which a
 // hand cannot type between two frames; it is said once.
@@ -1914,7 +1926,7 @@ static int _script_mod_bit(const char* name, size_t n) {
     if (n == 5 && strncmp(name, "super", 5) == 0)
         return GLFW_MOD_SUPER;
     if (n == 3 && strncmp(name, "mod", 3) == 0)
-        return ENGINE_MOD_SHORTCUT;
+        return INPUT_MOD_SHORTCUT;
     return 0;
 }
 

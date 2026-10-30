@@ -793,17 +793,6 @@ bool engine_gui_wants_mouse(void);
 // ask the same question itself, or typing in a slider also walks.
 bool engine_gui_wants_keyboard(void);
 
-// The platform's modifiers, as GLFW bits, for a shortcut (select all, copy, a line's end) and for
-// a word at a time: Cmd and Option on macOS, Ctrl for both elsewhere. The text field, the input
-// script's `mod` and an app's own shortcuts read these, so the three agree.
-#ifdef __APPLE__
-#define ENGINE_MOD_SHORTCUT GLFW_MOD_SUPER
-#define ENGINE_MOD_WORD     GLFW_MOD_ALT
-#else
-#define ENGINE_MOD_SHORTCUT GLFW_MOD_CONTROL
-#define ENGINE_MOD_WORD     GLFW_MOD_CONTROL
-#endif
-
 // The clipboard's text, UTF-8, never NULL: the system's in a window, and headless one the engine
 // keeps, so a test run never reads or overwrites the user's. The pointer is valid until the next
 // clipboard call.
