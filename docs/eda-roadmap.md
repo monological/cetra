@@ -54,14 +54,14 @@ These come from pcb's `ARCH.md` sections 8 and 9, and every item below has to re
 | 2 | Idle mode: drawing only when something changed | **Built**, spec 14.1, for frames that draw no 3D scene | 6 | 14.1 |
 | 3 | Skipping the 3D scene pass when no 3D view is shown | Not started; takes a still 3D view drawn on demand, moved from item 2 | 8, the 3D view | |
 | 4 | Drawing the 3D scene into part of the window | Not started | 8 | |
-| 5 | Text input and scrolling panes in the UI | Not started | 6 (the command palette and the `/` jump); 9 (the chat) | |
-| 6 | The text editor widget | Not started | 6 (the code view) | |
+| 5 | Text input and scrolling panes in the UI | **Built**, spec 14.2; composing text in an input method, glyphs past the atlas and the rest below are left for later | 6 (the command palette and the `/` jump); 9 (the chat) | 14.2 |
+| 6 | The text editor widget | Not started; a second text core, sharing 14.2's keys, UTF-8 walk and measuring | 6 (the code view) | |
 | 7 | Rendering at any scale, in true units | **Built**, specs 13.57 and 13.58; the macro depth of field left | Already used by pcb's pictures | |
 | 8 | What the glTF import does not read, or reads otherwise | Not needed by pcb; three bugs worth fixing for cetra's own sake | None | |
 
-**Proposed order**: 1, 2, 5, 6, then 3 and 4 together when pcb starts its 3D view. The canvas goes
-first because the schematic and the layout both stand on it, and it is the largest. Item 8's bugs
-and the macro depth of field can be taken whenever they fit.
+**Proposed order**: 1, 2, 5, 6, then 3 and 4 together when pcb starts its 3D view. 1, 2 and 5 are
+built, so 6 is next. The canvas went first because the schematic and the layout both stand on it,
+and it is the largest. Item 8's bugs and the macro depth of field can be taken whenever they fit.
 
 pcb's build steps, for reference: 6 is the window (code editor, schematic, keys, palette, help,
 shared selection, diff overlays and blink); 7 the layout view; 8 the 3D view; 9 the agent; 10
@@ -211,7 +211,8 @@ that waited was a minimized window, which blocks on `glfwWaitEventsTimeout(0.1)`
   - `engine_request_frame_after`, a timed wake, for pcb's blink;
   - `engine_begin_work` and `engine_end_work`, around a thread's result, such as a parse;
   - the engine's own: the UI while it eases or a screen enters, the debug GUI while ImGui takes
-    queued input, the texture loader when a decode is done, the loading screen, a pointer script.
+    queued input, the texture loader when a decode is done, the loading screen, an input script
+    (the pointer script, renamed in spec 14.2 when it learned to type).
 
   A change made inside a frame is drawn by that frame, so pcb asks only for changes made elsewhere.
 - **The clock across a wait.** The wait is kept out of `delta_time` and the windowed `render_time`,
@@ -301,26 +302,60 @@ plan rather than stated in `ARCH.md`: the command palette (Cmd+K, a few letters 
 list of commands, each shown with its key) and the `/` jump to any part or net by name, fuzzy, which
 are both a text field over a list, and are wanted in step 6, before the chat.
 
-**What cetra has today:**
+**What cetra had before 14.2**: a closed list of six UI elements (panel, label, button, toggle,
+slider, selector) with no text field and no container that clips and scrolls; typed characters
+reaching only ImGui; a font atlas of printable ASCII; and wrapping as a helper that apps called and
+broke lines with by hand.
 
-- **The UI's element list is closed**: panel, label, button, toggle, slider, selector (`ui.h`). There
-  is no text field, no scrolling pane, and no container that clips and scrolls.
-- **Typed characters reach only ImGui.** The engine binds GLFW's character callback to ImGui
-  (`engine.c`, `glfwSetCharCallback`); the game UI takes its input as a struct of values with no
-  characters in it.
-- **Wrapped text** already exists (`ui_text_width`, `ui_text_wrap_point`), and the draw list already
-  batches by clip rectangle.
+**Built in spec 14.2** (`specs/14.2-text-input-and-scrolling-panes.md` has the reasons):
 
-**To decide in its spec:**
+- **Typed input reaches the UI.** The engine records keys, repeats and characters in one ordered
+  list on `InputState` (`key_events`), which `ui_input_add_keyboard` hands the UI with the wheel and
+  the clock. The clipboard is the engine's (`engine_clipboard_get`/`_set`), GLFW's in a window and
+  the engine's own string headless, so a test never touches the user's. The pointer script became
+  the input script and types (`type=`, `key=` with `mod` for Cmd or Ctrl).
+- **UTF-8 throughout**, with one decoder (`text_utf8_next`), and an atlas of ASCII, Latin-1, Greek
+  and the symbols a board's prose wants (Ω, µ, ±, ≤, arrows, dashes). A character the atlas lacks
+  is kept, copied and stepped over whole, and draws as an outlined box.
+- **Wrapped labels and styled runs.** The layout runs one axis at a time, so a label with `wrap`
+  breaks at the width it was given, and keeps its lines until its text, width or style change. A
+  label or a read-only field takes runs (`UITextRun`, `ui_set_text_runs`): a byte range with its
+  own colour and face, in the element's size and line.
+- **The scrolling pane** (`ui_scroll`): clipped, hit only where it shows, the wheel over it, Page
+  Up, Page Down, Home and End, a bar to drag or page on, a focus scrolled into view, `follow_end`.
+  The focused pane takes its FOCUS look while the focus is anywhere in it, which is ARCH's "subtle
+  border". **Virtual rows** (`ui_scroll_set_rows`) build only the rows in view, measure each once and
+  keep the first row in view still as heights above it change: 100,000 rows lay out a screenful.
+- **The text field** (`ui_text_field`): single-line, multi-line growing to `max_rows`, or read-only
+  with runs; a caret, a selection, the clipboard, undo a word at a time, the platform's keys, a
+  click, double click and triple click, and a caret that blinks on a timed wake under idle mode.
+- **Focus and keys**: `ui_wants_keyboard` is true while a field holds the focus or a modal screen
+  is up, which is when pcb's keys stand down; Esc closes a modal screen (the palette) and lets go
+  in one that is not (the chat); Tab moves in tree order; the pointer passing over no longer takes
+  a field's focus; a field's `on_key` sees each key first, so a list's Up and Down work while the
+  caret stays in the field.
+- **The matcher** (`fuzzy_match`, `fuzzy.h`): one query against one name, a score and the matched
+  byte offsets, the best placement by dynamic program after fzf's. It searches nothing: pcb loops
+  over its own lists and keeps its own tie-break.
+- **What ARCH left open, as settled**:
+  - **Matching** is the matcher in cetra; the lists and their order stay pcb's.
+  - **Row layout** is rows of ordinary elements the app builds, with runs for the matched letters.
+  - **A chat message's format** is pcb's step 9, built from rows and runs: change lines, accept and
+    reject, speakers and Markdown need nothing more from cetra.
+  - **Input methods**: finished characters arrive, from dead keys, Option combinations, the emoji
+    picker and a Chinese or Japanese input method once a character is chosen.
+- **`apps/canvas`** exercises it: `--palette` (Cmd+K over the app's commands, `/` over 5,000 names)
+  and `--history` (a column of read-only messages with an input line and a streamed reply).
 
-- **The text field**: a caret, a selection, the clipboard (GLFW has it), key repeat, UTF-8, and
-  whether input methods for other scripts are in scope.
-- **The scrolling pane**: clipping, the wheel and the keys, scrolling to keep something in view, and
-  long histories without laying out every line every frame.
-- **Focus and keys**: keys belong to a view, Esc returns from the chat to the view, and the focused
-  pane has a subtle border.
-- **One text core or two.** A single-line field is a small case of item 6's buffer. Whether the two
-  share their editing core is a decision for whichever spec comes first.
+**Left for later:**
+
+- **Showing text while an input method composes it**, and placing its window at the caret: GLFW 3.4
+  reports neither.
+- **Glyphs past the atlas** (Chinese, Japanese, emoji): stored and copied, drawn as a box.
+- **Right-to-left text**, and caret moves by grapheme rather than codepoint.
+- **Horizontal scrolling panes**; **selecting across messages**, each being its own field.
+- **Runs in an editable field**, and runs that change the size.
+- **More fonts**: only Roboto-Bold and a pixel face ship, and pcb chooses its own.
 
 ---
 
@@ -335,7 +370,18 @@ later and not a rewrite. The widget goes in cetra. What stays in pcb:
 - **The link** that lands edits made in other views in the open buffer.
 - **Undo**: typing shares the project's one undo timeline, which is pcb's.
 
-**What cetra has today**: nothing of an editor; SDF text and the UI draw list's glyph runs.
+**What cetra has today**: SDF text and the UI draw list's glyph runs, and since spec 14.2 a text
+field. **Spec 14.2 decided on two text cores, not one.** The field edits a flat UTF-8 buffer
+through stb_textedit and walks its rows from the start of the text, which suits a few thousand
+characters. The editor needs large files, colour spans from the host and the host's undo, which
+want a piece table or an array of lines. What 14.2 wrote once for both:
+
+- the platform's key conventions (word and line moves, the shortcut modifier), private to
+  `ui_field.c` until the editor hoists them;
+- the UTF-8 walk (`text_utf8_next`);
+- the one measure of a glyph's advance and kerning across styled runs (`ui_text.h`'s walk), which
+  gives the editor its colouring's measure too;
+- typed input, the clipboard and the input script that drives them headless.
 
 **To decide in its spec:**
 

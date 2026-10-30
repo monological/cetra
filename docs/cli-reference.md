@@ -1826,6 +1826,33 @@ It takes the capture set `-x`, `-f`, `-S`, `-W` and `-H`, and:
   frame's `delta_time`, the frames drawn and the seconds waited, which the `idle` gate group reads.
 - `--input-script PATH` replays a scripted pointer and typing (the render app's entry above has
   the grammar) in place of the mouse.
+- `--palette` (spec 14.2) gives the app a command palette, modal, over its own commands with
+  their keys. **Cmd+K** opens it (Ctrl+K off macOS), and typing filters and orders the commands by
+  `fuzzy_match`, with the matched letters lit. Up and Down move the highlight, Enter or a click
+  runs it, and Esc closes. **`/`** opens the jump over 5,000 generated part and net names, and a
+  name chosen there is printed, since there is nothing to jump to. Both lists are virtual rows
+  over every match, twelve shown at a time. A key opens them after the frame's input pass, so the
+  key isn't typed into the field. Under `--canvas-probe` the run prints the palette as it left it
+  (`canvas palette state`: open, the text's length, the matches, the first one's item and its lit
+  bytes), the rows built (`canvas palette list`), and the field's box.
+- `--history` (spec 14.2) adds a 360-point column at the window's right, and the views share what
+  is left:
+  - 200 messages as virtual rows of read-only fields, which follow the end, each speaker in a
+    colour and every fortieth message a part's name in a second face, a pixel font;
+  - under them a multi-line input line that submits on Enter, Shift+Enter starting a new line;
+  - Enter in a view puts the caret in the input line, and Esc returns to the view;
+  - a sent message is answered by a reply that streams in a word a frame headless, and every 50 ms
+    in a window;
+  - the wheel over the column scrolls it, and elsewhere zooms the view.
+
+  Under `--canvas-probe` it prints the column's box, the pane's box, the column's colour and the
+  input line's top (`canvas history column`), which `ui-history-clip` reads.
+- `--ui-text TEXT` sets the text of the `--ui` panel's label (implies `--ui`). The glyph arms draw
+  é, Ω and a codepoint the atlas lacks through it.
+
+The app's own keys stand down while the UI wants the keyboard (`ui_wants_keyboard`): a field holds
+the focus, or the palette is up.
 
 In a window a drag pans and the wheel zooms the view under the cursor. G opens the debug GUI, and F
-the FPS readout, which under `--idle` counts the frames drawn.
+the FPS readout, which under `--idle` counts the frames drawn; = and - zoom, 0 resets the view and
+P prints its centre.
