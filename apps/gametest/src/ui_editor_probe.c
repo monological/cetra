@@ -485,6 +485,12 @@ static int glyphs_wrong(const GlyphCache* c, const uint32_t* cps, size_t n, int*
     const stbtt_fontinfo* info = c->font_info;
     int wrong = 0;
     *checked = 0;
+    // All asked for first, so a glyph packed early is checked after every later one, and every
+    // growth of the atlas they cause, has had its chance to overwrite it.
+    for (size_t i = 0; i < n; i++) {
+        GlyphBitmap g;
+        glyph_cache_get((GlyphCache*)c, cps[i], &g);
+    }
     for (size_t i = 0; i < n; i++) {
         GlyphBitmap g;
         if (!glyph_cache_get((GlyphCache*)c, cps[i], &g) || g.missing || !g.width)
