@@ -29102,10 +29102,11 @@ def run_idle_gate(workdir):
                      while the fade plays and the focus eases, then the end, within 60 frames of
                      the 200 allowed. The ease snaps to its target within a quarter of a code;
                      an exponential approach that never arrived held the loop to the last frame.
-      idle-gui       a click handed to the debug GUI on the first frame: at least 3 frames, as
+      idle-gui       a click handed to the debug GUI on the first frame: at least 4 frames, as
                      ImGui takes the press and the release a frame apart and shows the second a
                      frame later, then the end, within 10. With nothing to ask for them the run
-                     ended at the first.
+                     ended at the first, and with no frame after the one that took the release, at
+                     the third.
       idle-load      a 2048x1608 texture asked for on the frame a 0.5 s wake draws: the loop waits
                      while it decodes rather than drawing, 3 frames, the third delivering it. The
                      loader's thread wakes the loop when the decode is done.
@@ -29201,8 +29202,8 @@ def run_idle_gate(workdir):
     if "frames" not in said:
         ok, detail = False, "the run failed"
     else:
-        ok = 3 <= said["frames"] <= 10
-        detail = f"{said['frames']} frames of 200 (want 3 to 10)"
+        ok = 4 <= said["frames"] <= 10
+        detail = f"{said['frames']} frames of 200 (want 4 to 10)"
     print(f"  idle-gui            {'PASS' if ok else 'FAIL'}  {detail}")
     note("idle-gui", ok)
 
