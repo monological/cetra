@@ -385,7 +385,7 @@ struct UIElement {
     // A scrolling pane at its end stays at its end as its content grows, as a terminal does; one
     // scrolled up stays where it was.
     bool follow_end;
-    int max_rows; // the most rows a multi-line field grows to before it scrolls; 0 = 6
+    int max_rows; // the most rows a multi-line field grows to before it scrolls; 0 = no most
 
     // What a control writes through. Borrowed, and exactly one is non-NULL for
     // the kind that uses it: the control is a VIEW of the app's own variable,
@@ -510,6 +510,10 @@ void ui_scroll_set_row_count(UIElement* pane, int count);
 void ui_scroll_rows_changed(UIElement* pane, int first, int count);
 // Scrolls the pane by the least that shows row `index`, easing there.
 void ui_scroll_to_row(const UISystem* ui, UIElement* pane, int index);
+// Row `index`'s container while it is built, NULL while it is not: what an app changes in place,
+// a message growing, rather than having the row built again. Valid until the next layout, which
+// frees a row ui_scroll_rows_changed marked.
+UIElement* ui_scroll_find_row(const UIElement* pane, int index);
 // Whether the point, in window points, is over anything a screen on the stack draws as of its last
 // layout -- a pane's children only where the pane shows them -- or a modal screen is up: what an
 // app asks before it takes the wheel or a drag for itself.
@@ -522,11 +526,12 @@ bool ui_pointer_over(const UISystem* ui, float x, float y);
  * closes a modal screen -- and Tab moves the focus on, the keys after it in the pass going where
  * it put the focus. A field the app focuses takes none of the next pass's keys, which came before
  * it had the focus, so an app may focus one from its own key callback and the key that asked is
- * not typed into it. Its element's `text` is the placeholder, drawn dim while it is empty. Fixed
- * at 240 points wide by default, as a slider is.
+ * not typed into it. Its element's `text` is not used: the text is ui_field_set_text's, and the dim
+ * hint shown while it is empty ui_field_set_placeholder's. Fixed at 240 points wide by default,
+ * as a slider is.
  */
 enum {
-    UI_FIELD_MULTILINE = 1,       // wraps, and grows to `max_rows` rows, then scrolls inside itself
+    UI_FIELD_MULTILINE = 1,       // wraps, growing to `max_rows` rows, if any, then scrolls inside
     UI_FIELD_READ_ONLY = 2,       // selected and copied, never edited; may carry styled runs
     UI_FIELD_SUBMIT_ON_ENTER = 4, // multi-line: Enter submits and Shift+Enter starts a line
 };
@@ -539,6 +544,13 @@ const char* ui_field_text(const UIElement* el);
 // Replaces the text -- no on_change, since the app did it -- with the caret at its end, its undo
 // forgotten and its runs cleared.
 void ui_field_set_text(UIElement* el, const char* text);
+// The dim hint shown while the field is empty: "Type a command". Copied; NULL for none.
+void ui_field_set_placeholder(UIElement* el, const char* text);
+// Adds `text` to the end, with styled runs of its own counted from its start: a reply streamed
+// into a message. The caret, the selection, the scroll and undo stay, there is no on_change, and
+// only the last line is broken again. Refused, and nothing added, when the field would pass its
+// most (1 MiB), or for runs that do not fit `text` or are given to an editable field.
+bool ui_field_append(UIElement* el, const char* text, const UITextRun* runs, size_t run_count);
 // Once after a pass whose keys edited the text.
 void ui_field_set_on_change(UIElement* el, UIActionFn on_change, void* user);
 void ui_field_set_on_key(UIElement* el, UIKeyFn on_key, void* user);

@@ -27749,7 +27749,8 @@ def run_ui_gate(workdir):
       ui-scroll-into-view navigating onto a row half out of view scrolls by exactly
                      what shows it, back up returns to the top, and a focus the app
                      sets is revealed -- but the pointer moving onto that half row
-                     focuses it and scrolls nothing.
+                     focuses it and scrolls nothing; ui_scroll_into_view shows a row
+                     above the view by its top and moves no focus.
       ui-scroll-follow a pane following its end begins there, stays there as rows
                      are added, and stays where it was once scrolled up.
       ui-scroll-bar  the thumb is the share of the content in view, and as far
@@ -27793,7 +27794,17 @@ def run_ui_gate(workdir):
       ui-field-multiline a multi-line field wraps into more rows than its most,
                      stops growing at three rows' height, keeps the caret's x going
                      up a row, Home goes to the wrapped row's start, and End on a
-                     line ending in spaces goes past them to its newline.
+                     line ending in spaces goes past them to its newline; with no
+                     most it grows to every row, and Page Down pages by the three
+                     rows a field held to three shows.
+      ui-field-placeholder a hint far wider than its field sizes nothing, draws dim
+                     while the field is empty and goes once it is typed into;
+                     ui_set_text on a field is refused.
+      ui-field-append ui_scroll_find_row finds a built row and none past it; text
+                     appended to a read-only field joins it with its run placed after
+                     the old text, the selection kept, and the row grown without
+                     being built again; an append past the most is refused whole,
+                     and one with runs refused on an editable field.
       ui-field-keys  Enter submits; the key hook takes Up before the field; Tab
                      and Shift+Tab move the focus in tree order, and a character
                      after two Tabs in one pass reaches the field they reach; Esc
@@ -28205,13 +28216,19 @@ def run_ui_gate(workdir):
         down, up = p[("down", "scroll")][1], p[("up", "scroll")][1]
         to_set = p[("set", "scroll")][1]
         hover_focus, hover_moved = p[("hover", "focused")][0], p[("hover", "moved")][0]
+        app = p.get(("app", "scroll"), [None, None])[1]
+        app_focus = p.get(("app", "focus"), [None])[0]
         want_down = 5 * row_pitch + 30.0 - view
         want_set = 15 * row_pitch + 30.0 - view
+        want_app = 2 * row_pitch
         ok = (p[("focus", "row5")][0] == 1 and close(down, want_down) and up == 0.0
-              and close(to_set, want_set) and hover_focus == 1 and hover_moved == 0.0)
+              and close(to_set, want_set) and hover_focus == 1 and hover_moved == 0.0
+              and app is not None and close(app, want_app) and app_focus == 1)
         detail = (f"down to row 5 scrolls {down:.1f} (want {want_down:.0f}), back up {up:.1f} "
                   f"(want 0), a focus set on row 15 {to_set:.1f} (want {want_set:.0f}); hovering "
-                  f"row 5 focuses it ({hover_focus:.0f}) and scrolls {hover_moved:.1f} (want 0)")
+                  f"row 5 focuses it ({hover_focus:.0f}) and scrolls {hover_moved:.1f} (want 0); "
+                  f"the app showing row 2 scrolls to {app} (want {want_app:.0f}), the focus kept "
+                  f"({app_focus})")
     print(f"  ui-scroll-into-view   {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-scroll-into-view", ok)
 
@@ -28437,14 +28454,56 @@ def run_ui_gate(workdir):
         x0, x1 = p[("up", "x")]
         dy = p[("up", "dy")][0]
         end = p.get(("end", "caret"), [None])[0]
+        nomost_rows = p.get(("nomost", "rows"), [0])[0]
+        nomost_h = p.get(("nomost", "height"), [0])[0]
+        paged = p.get(("page", "rows"), [None])[0]
         ok = (rows > 3 and close(h, 3 * lh + 16.0) and abs(x0 - x1) < 12.0 and close(dy, lh)
-              and p[("home", "caret")][0] > 0 and p[("home", "space")][0] == 1 and end == 6)
+              and p[("home", "caret")][0] > 0 and p[("home", "space")][0] == 1 and end == 6
+              and nomost_rows > 3 and close(nomost_h, nomost_rows * lh + 16.0)
+              and paged is not None and close(paged, 3.0))
         detail = (f"{rows:.0f} rows (want over 3) in {h:.1f} points (want {3 * lh + 16:.0f}); up "
                   f"a row the caret's x moves {abs(x0 - x1):.2f} (want under a glyph) and its y "
                   f"{dy:.1f} (want {lh:.0f}); Home at {p[('home', 'caret')][0]:.0f}, a word's "
-                  f"start; End on 'abc   ' at {end} (want 6, past its spaces)")
+                  f"start; End on 'abc   ' at {end} (want 6, past its spaces); with no most "
+                  f"{nomost_rows:.0f} rows in {nomost_h:.0f} points (want "
+                  f"{nomost_rows * lh + 16:.0f}); Page Down over three rows shown moves {paged} "
+                  f"rows (want 3)")
     print(f"  ui-field-multiline    {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-field-multiline", ok)
+
+    p = _ui_probe("field-placeholder")
+    if not p:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        empty, dim = p[("empty", "glyphs")][0], p[("empty", "dim")][0]
+        typed, typed_dim = p[("typed", "glyphs")][0], p[("typed", "dim")][0]
+        # The full-strength glyphs on the empty field are the fixture's button; typed, "ok" joins
+        # them and the hint goes.
+        ok = (p[("size", "same")][0] == 1 and dim > 0 and typed_dim == 0
+              and typed == empty - dim + 2 and p[("settext", "refused")][0] == 1)
+        detail = (f"the hint sizes nothing ({p[('size', 'same')][0]:.0f}); {dim:.0f} of {empty:.0f} "
+                  f"glyphs dim while empty, {typed_dim:.0f} once 'ok' is typed (want 0) with "
+                  f"{typed:.0f} glyphs (want {empty - dim + 2:.0f}); ui_set_text on a field refused "
+                  f"({p[('settext', 'refused')][0]:.0f})")
+    print(f"  ui-field-placeholder  {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-field-placeholder", ok)
+
+    p = _ui_probe("field-append")
+    if not p:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        want = {("found", "row"): 1, ("found", "none"): 1, ("added", "ok"): 1,
+                ("joined", "text"): 1, ("selection", "kept"): 1, ("run", "start"): 6,
+                ("row", "builds"): 0, ("row", "grew"): 1, ("toolong", "refused"): 1,
+                ("editable", "refused"): 1}
+        wrong = _probe_wrong(p, want)
+        ok = not wrong
+        detail = ("the built row found and none past it; two appends joined, the selection and "
+                  "the appended run's place (byte 6) kept, the row grown and not built again; past "
+                  "the most refused whole; runs refused on an editable field" if ok
+                  else f"wrong: {wrong}")
+    print(f"  ui-field-append       {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-field-append", ok)
 
     p = _ui_probe("field-keys")
     if not p:

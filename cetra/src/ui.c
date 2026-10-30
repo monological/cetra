@@ -587,10 +587,13 @@ UIElement* ui_selector(UIElement* parent, const char* text, const char* const* o
 void ui_set_text(UIElement* el, const char* text) {
     if (!el)
         return;
+    if (el->kind == UI_TEXT_FIELD) {
+        log_error("ui_set_text: a text field's text is ui_field_set_text, and its hint "
+                  "ui_field_set_placeholder");
+        return;
+    }
     free(el->text);
     el->text = text ? safe_strdup(text) : NULL;
-    if (el->kind == UI_TEXT_FIELD)
-        return; // a field's text is its placeholder, and its runs are its buffer's
     free(el->runs);
     el->runs = NULL;
     el->run_count = 0;
@@ -611,27 +614,8 @@ bool ui_set_text_runs(UIElement* el, const UITextRun* runs, size_t count) {
             return false;
         }
         const char* text = el->kind == UI_TEXT_FIELD ? ui_field_text(el) : el->text ? el->text : "";
-        const size_t len = strlen(text);
-        size_t reached = 0;
-        for (size_t i = 0; i < count; i++) {
-            const UITextRun* r = &runs[i];
-            if (r->start < reached) {
-                log_error("ui_set_text_runs: run %zu starts at byte %zu, before the run before it "
-                          "ends at %zu",
-                          i, r->start, reached);
-                return false;
-            }
-            if (r->start > len || r->length > len - r->start) {
-                log_error("ui_set_text_runs: run %zu reaches past the text's %zu bytes", i, len);
-                return false;
-            }
-            if (text_utf8_is_continuation(text[r->start]) ||
-                text_utf8_is_continuation(text[r->start + r->length])) {
-                log_error("ui_set_text_runs: run %zu starts or ends inside a UTF-8 sequence", i);
-                return false;
-            }
-            reached = r->start + r->length;
-        }
+        if (!ui_text_runs_check("ui_set_text_runs", text, strlen(text), runs, count))
+            return false;
     }
     UITextRun* copy = NULL;
     if (runs && count > 0) {
@@ -736,8 +720,7 @@ static UIText _element_text(const UISystem* ui, const UIElement* el, const UISty
 static float _intrinsic(const UISystem* ui, const UIElement* el, int axis) {
     const UIStyle s = _resolve(ui, el, UI_STATE_NORMAL);
     float v = 0.0f;
-    // A field's `text` is its placeholder, which sizes nothing: its height is its rows.
-    if (el->kind != UI_TEXT_FIELD && el->text && el->text[0] && s.font) {
+    if (el->text && el->text[0] && s.font) {
         if (axis == 0) {
             const UIText t = _element_text(ui, el, &s);
             v = el->wrap ? ui_text_longest_word(&t) : ui_text_widest_line(&t);
@@ -1583,6 +1566,15 @@ static void _reveal(const UISystem* ui, UIElement* el) {
     }
 }
 
+UIElement* ui_scroll_find_row(const UIElement* pane, int index) {
+    if (!pane || !pane->rows)
+        return NULL;
+    for (size_t k = 0; k < pane->child_count; k++)
+        if (pane->rows->child_row[k] == index)
+            return pane->children[k];
+    return NULL;
+}
+
 void ui_scroll_to_row(const UISystem* ui, UIElement* pane, int index) {
     if (!ui || !pane || !pane->rows || index < 0 || index >= pane->rows->count) {
         log_error("ui_scroll_to_row: not a pane with rows, or no row %d", index);
@@ -1809,7 +1801,7 @@ static bool _route_keys(UISystem* ui, UIScreen* top, const UIInput* in, const UI
             field = f;
         }
         const InputKeyEvent* ev = &in->key_events[i];
-        if ((f && ui_field_key(ui, f, ev)) || ev->codepoint)
+        if ((f && ui_field_key(ui, f, _content_rect(ui, f), ev)) || ev->codepoint)
             continue;
         if (ev->key == GLFW_KEY_TAB) {
             _tab(ui, top, (ev->mods & GLFW_MOD_SHIFT) ? -1 : 1);
