@@ -793,8 +793,8 @@ static float _intrinsic(const UISystem* ui, const UIElement* el, int axis) {
 }
 
 static float _spacing_of(const UISystem* ui, const UIElement* el) {
-    if (el->spacing > 0.0f)
-        return el->spacing;
+    if (el->spacing != 0.0f)
+        return el->spacing > 0.0f ? el->spacing : 0.0f;
     return ui->theme.spacing > 0.0f ? ui->theme.spacing : 8.0f;
 }
 
@@ -947,23 +947,19 @@ static void _measure(const UISystem* ui, UIElement* el, int axis) {
     *_len(&el->rect, axis) = (el->size_mode[axis] == UI_FIXED) ? el->size[axis] : v;
 }
 
-static float _clampf(float v, float lo, float hi) {
-    return v < lo ? lo : (v > hi ? hi : v);
-}
-
 /*
  * A pane's scroll for this layout, its content `content` points tall seen through `view`: kept
  * inside what the content allows, and moved to the end if it was at the end, the content grew and
  * the pane follows its end. A pane that follows begins at its end, since nothing has been seen.
  */
 static float _scroll_settle(UIElement* el, float content, float view) {
-    const float was_max = el->scroll_content - view > 0.0f ? el->scroll_content - view : 0.0f;
-    const float max = content - view > 0.0f ? content - view : 0.0f;
+    const float was_max = glm_max(el->scroll_content - view, 0.0f);
+    const float max = glm_max(content - view, 0.0f);
     if (el->follow_end && content > el->scroll_content && el->scroll_target >= was_max - 0.5f)
         el->scroll = el->scroll_target = max;
     el->scroll_content = content;
-    el->scroll_target = _clampf(el->scroll_target, 0.0f, max);
-    el->scroll = _clampf(el->scroll, 0.0f, max);
+    el->scroll_target = glm_clamp(el->scroll_target, 0.0f, max);
+    el->scroll = glm_clamp(el->scroll, 0.0f, max);
     return el->scroll;
 }
 
@@ -1290,15 +1286,12 @@ static UIRect _content_rect(const UISystem* ui, const UIElement* el) {
 
 // The height a pane shows its content through: its rect less its padding.
 static float _pane_view(const UISystem* ui, const UIElement* el) {
-    float pad[4];
-    _padding_of(ui, el, pad);
-    return el->rect.h - pad[0] - pad[2];
+    return _content_rect(ui, el).h;
 }
 
 // How far a pane's content can scroll; 0 while it fits.
 static float _scroll_max(const UISystem* ui, const UIElement* el) {
-    const float m = el->scroll_content - _pane_view(ui, el);
-    return m > 0.0f ? m : 0.0f;
+    return glm_max(el->scroll_content - _pane_view(ui, el), 0.0f);
 }
 
 /*
@@ -1464,12 +1457,13 @@ static void _emit_pane(UISystem* ui, UIElement* el, const UIStyle* s) {
         ui_draw_rounded(dl, thumb, UI_BAR_W * 0.5f, (float*)s->fg, NULL, 0.0f);
 }
 
-// One eased value a step toward its target, and onto it once within a quarter of an 8-bit code:
-// an exponential approach never arrives, and a UI that asks for frames until it is still would
-// ask for them forever.
-static float _ease_toward(float t, float target, float k) {
+// One eased value a step toward its target, and onto it once within `snap` of it: an exponential
+// approach never arrives, and a UI that asks for frames until it is still would ask for them
+// forever. A weight snaps within a quarter of an 8-bit code.
+#define UI_WEIGHT_SNAP (1.0f / 1024.0f)
+static float _ease_toward(float t, float target, float k, float snap) {
     t += (target - t) * k;
-    return fabsf(target - t) < 1.0f / 1024.0f ? target : t;
+    return fabsf(target - t) < snap ? target : t;
 }
 
 // Eases `el` and its subtree; true while anything in it is still moving.
@@ -1482,17 +1476,15 @@ static bool _ease(UIElement* el, float dt) {
     const float value_target =
         (el->kind == UI_TOGGLE && el->bound_bool && *el->bound_bool) ? 1.0f : 0.0f;
     const float k = step < 1.0f ? step : 1.0f;
-    el->t_hover = _ease_toward(el->t_hover, hover_target, k);
-    el->t_focus = _ease_toward(el->t_focus, focus_target, k);
-    el->t_value = _ease_toward(el->t_value, value_target, k);
+    el->t_hover = _ease_toward(el->t_hover, hover_target, k, UI_WEIGHT_SNAP);
+    el->t_focus = _ease_toward(el->t_focus, focus_target, k, UI_WEIGHT_SNAP);
+    el->t_value = _ease_toward(el->t_value, value_target, k, UI_WEIGHT_SNAP);
     bool moving =
         el->t_hover != hover_target || el->t_focus != focus_target || el->t_value != value_target;
     // A pane's scroll eases after a key or a reveal, by the same rate, onto its target within a
     // tenth of a point: the 1/1024 of a weight would be a thousand points' tail.
     if (el->kind == UI_SCROLL && el->scroll != el->scroll_target) {
-        el->scroll += (el->scroll_target - el->scroll) * k;
-        if (fabsf(el->scroll_target - el->scroll) < UI_SCROLL_SNAP)
-            el->scroll = el->scroll_target;
+        el->scroll = _ease_toward(el->scroll, el->scroll_target, k, UI_SCROLL_SNAP);
         moving |= el->scroll != el->scroll_target;
     }
     for (size_t i = 0; i < el->child_count; i++)
@@ -1503,44 +1495,46 @@ static bool _ease(UIElement* el, float dt) {
 // --------------------------------------------------------------------- input
 
 /*
- * The deepest, topmost element claiming the point, or NULL.
+ * The deepest, topmost element at the point that `claims` accepts, or NULL.
  *
  * REVERSE child order: a child draws after its parent and a later sibling over
  * an earlier one, so the last match is the one actually on top and the one the
  * player believes they clicked. This is UIKit's hitTest walking subviews
  * backwards, for exactly the same reason.
- *
- * Only a focusable element claims. A panel or a label is transparent to the
- * pointer by construction -- the equivalent of pointer-events: none, defaulted
- * the safe way round, so decoration never swallows a click meant for the
- * control underneath it.
  */
-static UIElement* _hit(UIElement* el, float x, float y) {
+static UIElement* _deepest_at(UIElement* el, float x, float y, bool (*claims)(const UIElement*)) {
     if (!el || el->disabled)
         return NULL;
+    const bool in = ui_rect_hit(el->rect, x, y);
     // A pane's content is under the pointer only where the pane shows it.
-    if (el->kind == UI_SCROLL && !ui_rect_hit(el->rect, x, y))
+    if (el->kind == UI_SCROLL && !in)
         return NULL;
     for (size_t i = el->child_count; i-- > 0;) {
-        UIElement* got = _hit(el->children[i], x, y);
+        UIElement* got = _deepest_at(el->children[i], x, y, claims);
         if (got)
             return got;
     }
-    return (el->focusable && ui_rect_hit(el->rect, x, y)) ? el : NULL;
+    return (in && claims(el)) ? el : NULL;
+}
+
+static bool _is_focusable(const UIElement* el) {
+    return el->focusable;
+}
+
+static bool _is_pane(const UIElement* el) {
+    return el->kind == UI_SCROLL;
+}
+
+// The element a press at the point is on. Only a focusable element claims: a panel or a label is
+// transparent to the pointer by construction -- the equivalent of pointer-events: none, defaulted
+// the safe way round, so decoration never swallows a click meant for the control underneath it.
+static UIElement* _hit(UIElement* el, float x, float y) {
+    return _deepest_at(el, x, y, _is_focusable);
 }
 
 // The deepest pane showing the point, or NULL: what the wheel and a press on a bar reach.
 static UIElement* _pane_at(UIElement* el, float x, float y) {
-    if (!el || el->disabled)
-        return NULL;
-    if (el->kind == UI_SCROLL && !ui_rect_hit(el->rect, x, y))
-        return NULL;
-    for (size_t i = el->child_count; i-- > 0;) {
-        UIElement* got = _pane_at(el->children[i], x, y);
-        if (got)
-            return got;
-    }
-    return el->kind == UI_SCROLL ? el : NULL;
+    return _deepest_at(el, x, y, _is_pane);
 }
 
 // The pane round `el`, the nearest, or NULL.
@@ -1573,7 +1567,7 @@ static float _scroll_step(const UISystem* ui) {
 }
 
 static void _scroll_to(const UISystem* ui, UIElement* pane, float target, bool now) {
-    pane->scroll_target = _clampf(target, 0.0f, _scroll_max(ui, pane));
+    pane->scroll_target = glm_clamp(target, 0.0f, _scroll_max(ui, pane));
     if (now)
         pane->scroll = pane->scroll_target;
 }
@@ -1895,7 +1889,7 @@ void ui_update(UISystem* ui, const UIInput* in, float width, float height) {
         } else {
             const float room = track.h - thumb.h;
             const float t = room > 0.0f ? (in->pointer_y - ui->bar_grab - track.y) / room : 0.0f;
-            _scroll_to(ui, pane, _clampf(t, 0.0f, 1.0f) * _scroll_max(ui, pane), true);
+            _scroll_to(ui, pane, glm_clamp(t, 0.0f, 1.0f) * _scroll_max(ui, pane), true);
         }
     }
 
@@ -2075,6 +2069,16 @@ bool ui_build(UISystem* ui, float width, float height, float dt) {
 
 // ---------------------------------------------------------------- the system
 
+/*
+ * The clock a double click and a caret's blink are timed on: the wall clock, and not the engine's,
+ * which idle mode keeps its waits out of -- two clicks a long wait apart would read as a double
+ * click, and a wait for the blink would never pass. Headless it is the frames times the fixed
+ * step, so a run repeats itself.
+ */
+static double _ui_clock(const Engine* engine) {
+    return engine->headless ? (double)engine->total_frames * ENGINE_FIXED_FRAME_DT : glfwGetTime();
+}
+
 void ui_input_add_keyboard(UIInput* in, const Engine* engine) {
     if (!in || !engine) {
         log_error("ui_input_add_keyboard: NULL input or engine");
@@ -2083,10 +2087,7 @@ void ui_input_add_keyboard(UIInput* in, const Engine* engine) {
     in->wheel_y = (float)engine->input.scroll_dy;
     in->key_events = engine->input.key_events;
     in->key_event_count = engine->input.key_event_count;
-    // The wall clock and not the engine's: idle mode keeps its waits out of that one, and two
-    // clicks a long wait apart would read as a double click.
-    in->time =
-        engine->headless ? (double)engine->total_frames * ENGINE_FIXED_FRAME_DT : glfwGetTime();
+    in->time = _ui_clock(engine);
 }
 
 static void _ui_overlay(Engine* engine, void* user) {
@@ -2126,9 +2127,8 @@ static void _ui_overlay(Engine* engine, void* user) {
      * no gate arm can, since every probe passes a dt of its own.
      */
     const float dt = engine->headless ? (float)ENGINE_FIXED_FRAME_DT : (float)engine->delta_time;
-    // A caret blinks on the wall clock and not the engine's, which idle mode keeps its waits out
-    // of: on that one a wait for the blink would never pass. Headless it does not blink at all.
-    ui->now = engine->headless ? 0.0 : glfwGetTime();
+    // Headless a caret does not blink at all (the draw's `blink`), so a picture repeats.
+    ui->now = _ui_clock(engine);
     // Something still moving, or a program reading the clock, draws something new next frame,
     // and idle mode is asked for it (spec 14.1); a caret asks for the moment it next changes.
     const bool moving = ui_build(ui, (float)engine->win_width, (float)engine->win_height, dt);

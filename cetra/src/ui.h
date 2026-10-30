@@ -374,7 +374,7 @@ struct UIElement {
     UISize size_mode[2]; // x, y
     float size[2];       // the number FIXED uses
     float padding[4];    // top, right, bottom, left; 0 = the style's
-    float spacing;       // gap between children; 0 = the theme's
+    float spacing;       // gap between children; 0 = the theme's, negative = none
     UIAlign align_main, align_cross;
     bool focusable;
     bool disabled;
