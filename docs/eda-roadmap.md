@@ -55,13 +55,14 @@ These come from pcb's `ARCH.md` sections 8 and 9, and every item below has to re
 | 3 | Skipping the 3D scene pass when no 3D view is shown | Not started; takes a still 3D view drawn on demand, moved from item 2 | 8, the 3D view | |
 | 4 | Drawing the 3D scene into part of the window | Not started | 8 | |
 | 5 | Text input and scrolling panes in the UI | **Built**, spec 14.2, and its follow-ups, spec 14.3; composing text in an input method, glyphs past the atlas and the rest below are left for later | 6 (the command palette and the `/` jump); 9 (the chat) | 14.2, 14.3 |
-| 6 | The text editor widget | **Started**, spec 14.4: a second text core, sharing 14.2's keys and 14.3's UTF-8 home | 6 (the code view) | 14.4 |
+| 6 | The text editor widget | **Built**, spec 14.4; sideways scrolling, a regular-expression find and the vim mode itself are left for later | 6 (the code view) | 14.4 |
 | 7 | Rendering at any scale, in true units | **Built**, specs 13.57 and 13.58; the macro depth of field left | Already used by pcb's pictures | |
 | 8 | What the glTF import does not read, or reads otherwise | Not needed by pcb; three bugs worth fixing for cetra's own sake | None | |
 
 **Proposed order**: 1, 2, 5, 6, then 3 and 4 together when pcb starts its 3D view. 1, 2 and 5 are
-built, 5 with its follow-ups (14.3). 6 is under way in spec 14.4, and stands on several of them:
-the UTF-8 home, typed input, the clipboard and the input script. The canvas went first because
+built, 5 with its follow-ups (14.3), and 6 in spec 14.4, which stands on several of them: the
+UTF-8 home, typed input, the clipboard and the input script. 3 and 4 are next, once pcb starts its
+3D view. The canvas went first because
 the schematic and the layout both stand on it, and it is the largest. Item 8's bugs and the macro
 depth of field can be taken whenever they fit.
 
@@ -413,7 +414,7 @@ earlier draft of this entry named each item after a UIKit call, which read as a 
 
 ---
 
-## 6. The text editor widget
+## 6. The text editor widget — built
 
 **What pcb needs** (`ARCH.md` section 8): pcb's code view, an editor of its own in C, borrowing
 freely from rxi's lite (MIT) and vis (ISC) and keeping their licence notices on copied code.
@@ -466,6 +467,44 @@ want a piece table or an array of lines. What 14.2 wrote once for both:
   distance fields, which go soft at code sizes.
 - **Wrapping from the start**; sideways scrolling is left for later.
 - **Headless** as the field is: the input script drives it, a probe reads it.
+
+**Built in spec 14.4.**
+
+- **`text_doc.c/h`** is the text, with the editor's half in `text_doc_edit.h`.
+- **`glyph_cache.c/h`** is the face, with JetBrains Mono under `assets/fonts/`.
+- **`ui_editor.c/h`** is the editor, the UI's ninth element.
+- **`ui_typing.c/h`** holds the platform's editing conventions, which the field shares.
+- **pcb's seams, as built:**
+  - `text_doc_set_on_action` reports each action;
+  - `text_doc_replace` and `text_doc_set_text` land the host's edits;
+  - `text_doc_map` brings pcb's own positions forward;
+  - `text_doc_set_highlighter` colours a line at a time, stateless for pcb;
+  - `text_doc_set_ranges` takes errors and the shared selection, given at the version they were
+    read from;
+  - `keep_undo` off, and Cmd+Z bound in a mode of pcb's whose parent is
+    `ui_editor_standard_mode()`;
+  - `ui_editor_commands` lists the editor's commands for pcb's command table.
+
+  `apps/canvas --editor` stands in for pcb through all of these.
+- **Speed at 10 MB:** a keystroke 0.17 ms, at 100 carets 0.82 ms, a jump 0.15 ms, opening 2 ms. A
+  budget of 192 KB a frame wraps the rest of the rows in the background, asking idle mode for the
+  frames it needs.
+- **No code was copied from lite or vis**, only their designs: lite's array of lines and per-line
+  colours, vis's motions, text objects and operators, and modes that fall to their parents. So no
+  notice of theirs is owed.
+
+**Left for later:**
+
+- sideways scrolling;
+- a regular-expression find (find matches plain text within a line);
+- wide characters as two cells, and moving by grapheme (item 5 lists these too);
+- bold and italic styles;
+- a fallback face for what JetBrains Mono lacks;
+- input methods;
+- the vim mode itself, which the `ui-editor-mode` arm shows is an addition;
+- folding and gutter markers;
+- a keystroke at 100 carets in a 64 MB text, 3.2 ms. The line starts are worked out again from the
+  first caret's line, and a tree of line lengths would make that a logarithm.
 
 ---
 

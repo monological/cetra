@@ -460,7 +460,9 @@ with tokens `at=x,y` (framebuffer pixels, +Y up), `by=dx,dy`, `down`, `shift` an
 range states the pointer's STATE, so a press is `down` appearing and a release is it going. Typing
 is events: `type=TEXT` (UTF-8, `\s` a space and `\\` a backslash) and `key=NAME` with modifiers
 joined before it by `+` (`shift`, `ctrl`, `alt`, `super`, and `mod`, the platform's shortcut key:
-`key=mod+k`), delivered on every frame of their range in the line's order. It
+`key=mod+k`), delivered on every frame of their range in the line's order. A NAME is a letter, a
+digit, `f1` to `f25` (since spec 14.4), or one of `left`, `right`, `up`, `down`, `home`, `end`,
+`pageup`, `pagedown`, `backspace`, `delete`, `enter`, `tab`, `escape`, `space` and `slash`. It
 drives the engine's own pointer path, so a replayed drag reaches the drag state, the ray picking
 and the app's forwarded callback exactly as a hand does — which is what let the `camera` group
 assert a viewer camera that nothing could press before. `apps/tree` and `apps/shapes` take both
@@ -1570,7 +1572,11 @@ the median of five runs and the spread between the fastest and the slowest, and 
   at 200 and at 4,000 messages, the jump over 5,000 names, and a settings screen of 40 elements;
 - a 13.7 KB text walked, and the share of it spent kerning;
 - one keystroke in a multi-line field of 1, 20 and 1,000 KB;
-- `load_font` from an empty pool.
+- `load_font` from an empty pool;
+- the code editor (spec 14.4) on texts of pcb's lines at 80 KB, 10 MB and 64 MB, in a 900 by 700
+  editor: opening the text (`open_ms`), the first frame, the budget's walk until every row is
+  wrapped (`settle_frames`, its total and its longest frame), then a keystroke at one caret and at
+  100 spread through the text, a jump far down, and a resize.
 
 Run it from a release build (`./build.sh --release`, then `out/release/bin/gametest -x
 --ui-bench`): a debug build's numbers say little. No gate reads it, since timing does not travel;
@@ -1861,9 +1867,27 @@ It takes the capture set `-x`, `-f`, `-S`, `-W` and `-H`, and:
   input line's top (`canvas history column`), which `ui-history-clip` reads.
 - `--ui-text TEXT` sets the text of the `--ui` panel's label (implies `--ui`). The glyph arms draw
   é, Ω and a codepoint the atlas lacks through it.
+- `--font-sheet` (spec 14.4) draws one line of code in JetBrains Mono at 11, 13 and 16 points, each
+  first from the code editor's bitmaps made at the size shown and then as the UI's distance field
+  of the same face.
+- `--editor FILE` (spec 14.4) opens FILE in the code editor over the whole window, focused, and
+  stands in for pcb round it:
+  - an S-expression highlighter on pcb's lexical rules (comments, strings, `:keywords`, numbers,
+    brackets, a form's head);
+  - a parse on a thread of its own after each change, whose errors -- a bracket left open or
+    closing nothing, a string its line ends inside -- come back at the version it read and are
+    underlined where the typing since moved them;
+  - F6 lands `(note landed)` at the text's start, as an edit from another view, and marks it;
+  - F7 reads the file again, through the text's whole new text.
 
-The app's own keys stand down while the UI wants the keyboard (`ui_wants_keyboard`): a field holds
-the focus, or the palette is up.
+  `--editor-lag N` takes each parse's result N frames after it began (1 by default), joining its
+  thread if it has not finished, so a headless run repeats. Under `--canvas-probe` the run prints
+  the text as hex (`canvas editor hex`), the selections, the errors as they stand and where the
+  first is drawn, and whether every row is wrapped (`canvas editor settled`), which the
+  `ui-editor-*` and `idle-editor` arms read.
+
+The app's own keys stand down while the UI wants the keyboard (`ui_wants_keyboard`): a field or the
+editor holds the focus, or the palette is up.
 
 In a window a drag pans and the wheel zooms the view under the cursor. G opens the debug GUI, and F
 the FPS readout, which under `--idle` counts the frames drawn; = and - zoom, 0 resets the view and
