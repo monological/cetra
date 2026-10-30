@@ -1564,6 +1564,18 @@ pure function of (tree, width, height) and the input pass takes a struct of valu
 device. `CETRA_SETTINGS_DIR` points the settings case, and any gametest run, at a directory of
 its own rather than the player's real one; the gate and the golden bake both set it.
 
+`--ui-bench` (spec 14.3) prints the UI's timings as `ui-bench <what> <how> <ms> spread <ms>`, each
+the median of five runs and the spread between the fastest and the slowest, and exits:
+- a frame's UI work and its two layouts on four screens the size pcb's will be: the chat's column
+  at 200 and at 4,000 messages, the jump over 5,000 names, and a settings screen of 40 elements;
+- a 13.7 KB text walked, and the share of it spent kerning;
+- one keystroke in a multi-line field of 1, 20 and 1,000 KB;
+- `load_font` from an empty pool.
+
+Run it from a release build (`./build.sh --release`, then `out/release/bin/gametest -x
+--ui-bench`): a debug build's numbers say little. No gate reads it, since timing does not travel;
+the spec it was written for records its numbers and what they decided.
+
 **Display modes (spec 12.15).** `--fullscreen` and `--borderless` start the run in that mode
 rather than switching into it after a windowed frame, and `--monitor <name>` says which display —
 `--list-monitors` prints the names this build can see and exits. Both non-windowed modes take the

@@ -54,14 +54,14 @@ These come from pcb's `ARCH.md` sections 8 and 9, and every item below has to re
 | 2 | Idle mode: drawing only when something changed | **Built**, spec 14.1, for frames that draw no 3D scene | 6 | 14.1 |
 | 3 | Skipping the 3D scene pass when no 3D view is shown | Not started; takes a still 3D view drawn on demand, moved from item 2 | 8, the 3D view | |
 | 4 | Drawing the 3D scene into part of the window | Not started | 8 | |
-| 5 | Text input and scrolling panes in the UI | **Built**, spec 14.2; its follow-ups are spec 14.3, next; composing text in an input method, glyphs past the atlas and the rest below are left for later | 6 (the command palette and the `/` jump); 9 (the chat) | 14.2, 14.3 |
+| 5 | Text input and scrolling panes in the UI | **Built**, spec 14.2, and its follow-ups, spec 14.3; composing text in an input method, glyphs past the atlas and the rest below are left for later | 6 (the command palette and the `/` jump); 9 (the chat) | 14.2, 14.3 |
 | 6 | The text editor widget | Not started; a second text core, sharing 14.2's keys, UTF-8 walk and measuring | 6 (the code view) | |
 | 7 | Rendering at any scale, in true units | **Built**, specs 13.57 and 13.58; the macro depth of field left | Already used by pcb's pictures | |
 | 8 | What the glTF import does not read, or reads otherwise | Not needed by pcb; three bugs worth fixing for cetra's own sake | None | |
 
 **Proposed order**: 1, 2, 5, 6, then 3 and 4 together when pcb starts its 3D view. 1, 2 and 5 are
-built; 14.3, item 5's follow-ups, is next, then 6, which several of them feed (the UTF-8 home, one
-label layout, the kerning cache, re-breaking only the edited line). The canvas went first because
+built, 5 with its follow-ups (14.3). 6 is next, and stands on several of them: the UTF-8 home, one
+way a label lays out and the font's kerning table. The canvas went first because
 the schematic and the layout both stand on it, and it is the largest. Item 8's bugs and the macro
 depth of field can be taken whenever they fit.
 
@@ -312,8 +312,8 @@ broke lines with by hand.
 **Built in spec 14.2** (`specs/14.2-text-input-and-scrolling-panes.md` has the reasons):
 
 - **Typed input reaches the UI.** The engine records keys, repeats and characters in one ordered
-  list on `InputState` (`key_events`), which `ui_input_add_keyboard` hands the UI with the wheel and
-  the clock. The clipboard is the engine's (`engine_clipboard_get`/`_set`), GLFW's in a window and
+  list on `InputState` (`key_events`), which `ui_input_add_keyboard` handed the UI with the wheel
+  and the clock; since 14.3 `ui_input_read` does, with the pointer too. The clipboard is the engine's (`engine_clipboard_get`/`_set`), GLFW's in a window and
   the engine's own string headless, so a test never touches the user's. The pointer script became
   the input script and types (`type=`, `key=` with `mod` for Cmd or Ctrl).
 - **UTF-8 throughout**, with one decoder (`text_utf8_next`), and an atlas of ASCII, Latin-1, Greek
@@ -360,45 +360,46 @@ broke lines with by hand.
 - **Runs in an editable field**, and runs that change the size.
 - **More fonts**: only Roboto-Bold and a pixel face ship, and pcb chooses its own.
 
-**Next: spec 14.3, 14.2's follow-ups.** 14.2's closing reviews found these, and the call was to
-do them properly now rather than as each first gets in the way. Several bring the UI closer to
-how UIKit and Cocoa do the same thing. 14.3 is planned in plan mode, and every new public name in
-it goes to the user for approval.
+**Spec 14.3, 14.2's follow-ups: built.** 14.2's closing reviews found these, and the call was to
+do them properly before the editor builds on the same UI. Each was designed from the problem it
+solves and cetra's own rules: plain C, a retained tree, plain fields, a closed list of elements.
+UIKit, Cocoa and Dear ImGui were a check afterwards, for a case missed, and never a template. An
+earlier draft of this entry named each item after a UIKit call, which read as a plan to copy it.
 
-- **To do:**
-  1. **A field's own placeholder** (`ui_field_set_placeholder`, as `UITextField.placeholder`).
-     Today it rides the element's `text`, which takes a special case in the layout and another in
-     `ui_set_text`.
-  2. **A maximum height on any element**, as an Auto Layout `≤` constraint or SwiftUI's
-     `frame(maxHeight:)`. The palette's "as tall as its rows, up to 12, then scroll" is faked by
-     switching the list between fitting and fixed on every keystroke.
-  3. **`ui_scroll_into_view` tested.** It has no caller and no arm; keep it, as
-     `scrollRectToVisible`, and hold it to its contract.
-  4. **A read-only field that grows to fit**, as a `UITextView` with scrolling off: each history
-     message sets `max_rows = 1000` to mean "no cap".
-  5. **Appending to a read-only field, and reaching a built row** (as `cellForRow(at:)` and
-     `NSTextStorage`'s append). A streamed reply rebuilds its whole row at every word, which costs
-     a walk of the message each time and drops a selection made in it.
-  6. **The pointer half of the UI's input from the engine**, as the keys already are. Every app
-     collects its own presses, releases and modifiers for the UI; pcb would copy `apps/canvas`'s.
-  7. **`fuzzy_match` says how many positions it wrote**, as `snprintf` reports its length, so a
-     caller does not walk the query again to count them.
-  8. **One home for UTF-8**: an encoder beside `text_utf8_next` in `text.c`, and one test for
-     whether a character starts at a byte, which `ui.c` and `ui_field.c` each write out today.
-  9. **One way a label lays out its text**, as `UILabel` has: three paths today, by whether it
-     wraps or carries runs.
-- **To measure, and do where the numbers justify it.** Each adds a cache or a flag, which pays
-  only if the cost is real, and serves stale data wherever something forgets to clear it:
-  10. **Laying out only when something changed**, as `setNeedsLayout`. The UI lays out for input and
-      again to draw. cetra's elements are plain fields an app writes directly, which a flag cannot
-      see, so this one is setters against fields as well as speed.
-  11. **A label's measured width kept**, as `intrinsicContentSize`, instead of measured at every
-      layout.
-  12. **A kerning cache.** Every glyph step asks the font file for its pair.
-  13. **Re-breaking only the edited line** of a field while typing, as TextKit does.
-  14. **The atlas build**, about 2.75 times longer since 14.2's larger character set: cooked, built
-      in bands across threads, or built on first use.
-- **Not to do:** clearing the keys pressed while a loading screen is up. They arrive together in the
+- **Built:**
+  1. **A field's own placeholder**, `ui_field_set_placeholder`, so a field's `text` stays NULL and
+     the layout and `ui_set_text` lose their special cases; `ui_set_text` on a field is refused.
+  2. **A maximum size on any element**, `max_size[2]`, for FIT and GROW. The palette's list is as
+     tall as its rows up to twelve, then scrolls, with no mode switched per keystroke; a GROW child
+     held at its most leaves its room to its growing siblings.
+  3. **`ui_scroll_into_view` kept and tested**, for an app revealing an element rather than a row.
+  4. **`max_rows` 0 means no most**, as `max_size`'s 0 does, and a field pages by the rows it shows.
+  5. **`ui_field_append` and `ui_scroll_find_row`**: a streamed reply appends to its built row,
+     breaking only the last line again, with the caret, the selection, the scroll and undo kept.
+  6. **The pointer from the engine**: `InputState` latches the press, the release and their
+     modifiers as it does the keys, and `ui_input_read` hands all of it to the UI, replacing
+     `ui_input_add_keyboard` and every app's own pointer state.
+  7. **`fuzzy_match` fills a `FuzzyPositions`**, which says how many it wrote.
+  8. **One home for UTF-8**, in `text.c`: `next`, its exact mirror `prev`, `encode` and
+     `is_continuation`, refusing what is no character both ways, and a codepoint is a `uint32_t`
+     throughout.
+  9. **One way a label lays out its text**: every label with text keeps its lines.
+
+  Two of 14.2's own additions were settled with them: the modifier bits are `INPUT_MOD_SHORTCUT`
+  and `INPUT_MOD_WORD` in `input.h`, and a negative padding means none, as a negative spacing does.
+- **Measured** (`gametest --ui-bench`, release; each was built only past the bar it was given):
+  10. **Laying out only when something changed: not built.** The heaviest screen's two layouts
+      took 0.117 ms a frame, against a bar of 1. Apps keep writing fields directly.
+  11. **A label's measures kept: built**, its text's share of the layouts being over the quarter
+      the bar set. It bought little: only 8 of the settings screen's 40 elements are labels.
+  12. **A kerning table: built**, at load, kerning being three quarters of a text walk. A walk went
+      from 1.09 ms to 0.31.
+  13. **Re-breaking only the edited line: not built.** With the kerning table, a keystroke in a
+      20 KB field takes 0.6 ms, under the 1 ms bar. The editor's own core decides it again at its
+      sizes: at 1,000 KB a keystroke is still 27 ms.
+  14. **The atlas: built in bands across threads**, the packing still serial, so the atlas is the
+      same to the byte: 157 ms to 33 for Roboto at 64.
+- **Not done:** clearing the keys pressed while a loading screen is up. They arrive together in the
   first frame, but silent's loading screen takes the press that starts the game through that same
   poll, so clearing there would swallow it.
 
