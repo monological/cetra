@@ -28291,9 +28291,12 @@ def run_ui_gate(workdir):
     if not p:
         ok, detail = False, "the probe produced nothing"
     else:
-        ok = flags_ok(p, [("undo1", "text"), ("undo2", "text"), ("redo1", "text"),
-                          ("redo2", "text")])
-        detail = "'abc def' undoes to 'abc' then nothing, and redoes back a word at a time"
+        steps = ("undo1", "undo2", "redo1", "redo2")
+        wrong = [k for k in steps if p.get((k, "text"), [0])[0] != 1]
+        ok = not wrong
+        detail = ("'abc def' undoes to 'abc' then nothing, and redoes back a word at a time"
+                  if ok else f"the text was not the one wanted after {wrong} (want 'abc', '', "
+                  f"'abc', 'abc def'; the probe's stderr names each)")
     print(f"  ui-field-undo         {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-field-undo", ok)
 
