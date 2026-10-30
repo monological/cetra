@@ -239,10 +239,11 @@ size_t ui_text_wrap_point(const Font* font, float size, float tracking, const ch
  * The element tree.
  *
  * THE ELEMENT LIST IS CLOSED: panel, label, button, toggle, slider, selector,
- * and since spec 14.2, which argued for them, the scrolling pane. That is not a
- * stage the layer is passing through on its way to a widget toolkit -- it is the
- * property that keeps this a UI layer instead of a worse Dear ImGui. Another
- * kind is a later spec with its own argument, never a patch to this one.
+ * and since spec 14.2, which argued for them, the scrolling pane and the text
+ * field. That is not a stage the layer is passing through on its way to a widget
+ * toolkit -- it is the property that keeps this a UI layer instead of a worse
+ * Dear ImGui. Another kind is a later spec with its own argument, never a patch
+ * to this one.
  *
  * What that costs is nothing, because three escape hatches sit under it and
  * each keeps strictly more than the last: ui_set_draw keeps layout, focus and
@@ -277,6 +278,7 @@ typedef enum {
     UI_SLIDER,
     UI_SELECTOR,
     UI_SCROLL,
+    UI_TEXT_FIELD,
     UI_KIND_COUNT
 } UIKind;
 
@@ -313,6 +315,10 @@ typedef struct UITheme {
     // the keys are in.
     UIStyle scroll[UI_STATE_COUNT];
     float scroll_step; // points a wheel unit scrolls; 0 = the theme's font size
+    // A text field: `fg` its text and caret, its placeholder `fg` dimmed; FOCUS its border while
+    // it takes the keys.
+    UIStyle text_field[UI_STATE_COUNT];
+    vec4 selection; // behind a field's selected text; alpha 0 = the engine's
 } UITheme;
 
 typedef struct UIElement UIElement;
@@ -348,6 +354,7 @@ struct UIElement {
     // toward `scroll_target` after a key or a reveal and set with it by the wheel and the bar.
     // `scroll_content` is its children's whole height, from the last layout.
     float scroll, scroll_target, scroll_content;
+    struct UIField* field; // a text field's buffer, caret and editing; ui_field_* reads it
 
     // BY FUNCTION
     char* text;                    // ui_set_text (owned)
@@ -374,6 +381,7 @@ struct UIElement {
     // A scrolling pane at its end stays at its end as its content grows, as a terminal does; one
     // scrolled up stays where it was.
     bool follow_end;
+    int max_rows; // the most rows a multi-line field grows to before it scrolls; 0 = 6
 
     // What a control writes through. Borrowed, and exactly one is non-NULL for
     // the kind that uses it: the control is a VIEW of the app's own variable,
@@ -484,11 +492,39 @@ void ui_scroll_into_view(const UISystem* ui, UIElement* el);
 // app asks before it takes the wheel or a drag for itself.
 bool ui_pointer_over(const UISystem* ui, float x, float y);
 
+/*
+ * A TEXT FIELD (spec 14.2): a caret, a selection, the clipboard and undo over a UTF-8 buffer,
+ * driven by the keys and characters UIInput carries and by the pointer. It takes the keys while it
+ * holds the focus: arrows move its caret rather than the focus, Enter submits, Esc lets go -- or
+ * closes a modal screen -- and Tab moves the focus on. Its element's `text` is the placeholder,
+ * drawn dim while it is empty. Fixed at 240 points wide by default, as a slider is.
+ */
+enum {
+    UI_FIELD_MULTILINE = 1,       // wraps, and grows to `max_rows` rows, then scrolls inside itself
+    UI_FIELD_READ_ONLY = 2,       // selected and copied, never edited; may carry styled runs
+    UI_FIELD_SUBMIT_ON_ENTER = 4, // multi-line: Enter submits and Shift+Enter starts a line
+};
+// A key the focused field sees before it acts on it; true takes it.
+typedef bool (*UIKeyFn)(UIElement* el, const InputKeyEvent* key, void* user);
+
+UIElement* ui_text_field(UIElement* parent, unsigned flags, UIActionFn on_submit, void* user);
+// The field's text, UTF-8; valid until it next changes. "" for anything not a field.
+const char* ui_field_text(const UIElement* el);
+// Replaces the text -- no on_change, since the app did it -- with the caret at its end, its undo
+// forgotten and its runs cleared.
+void ui_field_set_text(UIElement* el, const char* text);
+// After any pass that changed the text, once.
+void ui_field_set_on_change(UIElement* el, UIActionFn on_change, void* user);
+void ui_field_set_on_key(UIElement* el, UIKeyFn on_key, void* user);
+// Whether the UI takes the keyboard: a text field holds the top screen's focus, or a modal screen
+// is up. An app's own keys -- a view's bindings -- go where this is false.
+bool ui_wants_keyboard(const UISystem* ui);
+
 // Replaces the text, and clears its runs: they name bytes of the text they were given for.
 void ui_set_text(UIElement* el, const char* text);
-// A label's styled runs, copied; NULL or none clears them. Refused by name, and the runs left as
-// they were, when they are out of order, overlap, reach past the text or start or end inside a
-// UTF-8 sequence, or the element is not a label.
+// A label's or a read-only field's styled runs, copied; NULL or none clears them. Refused by name,
+// and the runs left as they were, when they are out of order, overlap, reach past the text or start
+// or end inside a UTF-8 sequence, or the element is neither.
 bool ui_set_text_runs(UIElement* el, const UITextRun* runs, size_t count);
 void ui_set_style(UIElement* el, const UIStyle* style);
 void ui_set_draw(UIElement* el, UIDrawFn draw, void* user);
@@ -535,6 +571,7 @@ typedef struct UIInput {
     bool pointer_down;     // held this frame
     bool pointer_pressed;  // went down this frame
     bool pointer_released; // came up this frame
+    int pointer_mods;      // GLFW's modifier bits held at the press: Shift extends a selection
 
     bool nav_up, nav_down, nav_left, nav_right; // edges
     bool accept;                                // edge: activate the focused element

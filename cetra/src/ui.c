@@ -6,6 +6,7 @@
 #include "engine.h"
 #include "ext/log.h"
 #include "ui.h"
+#include "ui_field.h"
 #include "ui_text.h"
 #include "util.h"
 
@@ -75,6 +76,12 @@ struct UISystem {
     // app or arrived with a screen, and is scrolled into view like one navigated to; one the
     // pointer moved is not, or hovering a row half out of a pane would scroll it.
     UIElement* focus_seen;
+
+    // The draw's clock, which a focused field's caret blinks on: the wall clock in a window, set
+    // by the overlay, and 0 to a build an app calls itself. And the seconds until that caret next
+    // changes, which the overlay asks idle mode to wake for; INFINITY when it does not.
+    double now;
+    double caret_wake;
 };
 
 // A scrolling pane's bar: the thumb's width, its inset from the pane's edge, the shortest it is
@@ -120,6 +127,31 @@ static UIStyle _default_style(UIKind kind, UIState state) {
             s.bg[3] = 0.88f;
             s.corner_radius = 10.0f;
             s.padding[0] = s.padding[1] = s.padding[2] = s.padding[3] = 16.0f;
+            break;
+        case UI_TEXT_FIELD:
+            // A well rather than a raised control: darker than a button, a faint edge, and the
+            // focus colour's border while it takes the keys.
+            s.fg[0] = s.fg[1] = s.fg[2] = 0.92f;
+            s.fg[3] = 1.0f;
+            s.bg[0] = 0.05f;
+            s.bg[1] = 0.06f;
+            s.bg[2] = 0.08f;
+            s.bg[3] = 0.95f;
+            s.border[0] = s.border[1] = s.border[2] = 1.0f;
+            s.border[3] = 0.14f;
+            s.border_width = 1.0f;
+            s.corner_radius = 6.0f;
+            s.padding[0] = s.padding[2] = 8.0f;
+            s.padding[1] = s.padding[3] = 10.0f;
+            if (state == UI_STATE_FOCUS || state == UI_STATE_ACTIVE) {
+                s.border[0] = 0.45f;
+                s.border[1] = 0.70f;
+                s.border[2] = 1.00f;
+                s.border[3] = 1.0f;
+                s.border_width = 1.5f;
+            } else if (state == UI_STATE_DISABLED) {
+                s.fg[0] = s.fg[1] = s.fg[2] = 0.45f;
+            }
             break;
         case UI_SCROLL:
             // A window onto its content: no fill and no padding of its own, a faint thumb, and a
@@ -234,6 +266,8 @@ static const UIStyle* _theme_entry(const UITheme* t, UIKind kind, UIState state)
             return &t->selector[state];
         case UI_SCROLL:
             return &t->scroll[state];
+        case UI_TEXT_FIELD:
+            return &t->text_field[state];
         default:
             return &t->panel;
     }
@@ -307,8 +341,8 @@ static UIElement* _new_element(UIElement* parent, UIKind kind) {
     el->size_mode[1] = UI_FIT;
     el->align_main = UI_ALIGN_START;
     el->align_cross = UI_ALIGN_START;
-    el->focusable =
-        (kind == UI_BUTTON || kind == UI_TOGGLE || kind == UI_SLIDER || kind == UI_SELECTOR);
+    el->focusable = (kind == UI_BUTTON || kind == UI_TOGGLE || kind == UI_SLIDER ||
+                     kind == UI_SELECTOR || kind == UI_TEXT_FIELD);
     el->parent = parent;
 
     if (parent) {
@@ -339,6 +373,7 @@ static void _free_element(UIElement* el) {
     free(el->text);
     free(el->runs);
     _drop_lines(el);
+    ui_field_free(el->field);
     free(el->style);
     free(el);
 }
@@ -349,6 +384,31 @@ UIElement* ui_panel(UIElement* parent) {
 
 UIElement* ui_scroll(UIElement* parent) {
     return _new_element(parent, UI_SCROLL);
+}
+
+UIElement* ui_text_field(UIElement* parent, unsigned flags, UIActionFn on_submit, void* user) {
+    UIElement* el = _new_element(parent, UI_TEXT_FIELD);
+    if (!el)
+        return NULL;
+    el->field = ui_field_make(el, flags);
+    el->action = on_submit;
+    el->action_user = user;
+    // A field with no width has nowhere to type, so its width defaults away from FIT, as a
+    // slider's does.
+    el->size_mode[0] = UI_FIXED;
+    el->size[0] = 240.0f;
+    return el;
+}
+
+Engine* ui_system_engine(const UISystem* ui) {
+    return ui ? ui->engine : NULL;
+}
+
+bool ui_wants_keyboard(const UISystem* ui) {
+    const UIScreen* top = ui_top(ui);
+    if (top && top->focused && top->focused->kind == UI_TEXT_FIELD)
+        return true;
+    return ui_captures_input(ui);
 }
 
 UIElement* ui_label(UIElement* parent, const char* text) {
@@ -435,11 +495,14 @@ bool ui_set_text_runs(UIElement* el, const UITextRun* runs, size_t count) {
         return false;
     }
     if (runs && count > 0) {
-        if (el->kind != UI_LABEL) {
-            log_error("ui_set_text_runs: only a label takes styled runs");
+        const bool read_only =
+            el->kind == UI_TEXT_FIELD && (ui_field_flags(el) & UI_FIELD_READ_ONLY);
+        if (el->kind != UI_LABEL && !read_only) {
+            log_error("ui_set_text_runs: only a label or a read-only field takes styled runs; an "
+                      "editable field stays in one style");
             return false;
         }
-        const char* text = el->text ? el->text : "";
+        const char* text = el->kind == UI_TEXT_FIELD ? ui_field_text(el) : el->text ? el->text : "";
         const size_t len = strlen(text);
         size_t reached = 0;
         for (size_t i = 0; i < count; i++) {
@@ -578,7 +641,8 @@ static float _widest_line(const UIText* t) {
 static float _intrinsic(const UISystem* ui, const UIElement* el, int axis) {
     const UIStyle s = _resolve(ui, el, UI_STATE_NORMAL);
     float v = 0.0f;
-    if (el->text && el->text[0] && s.font) {
+    // A field's `text` is its placeholder, which sizes nothing: its height is its rows.
+    if (el->kind != UI_TEXT_FIELD && el->text && el->text[0] && s.font) {
         if (axis == 0) {
             const UIText t = _element_text(ui, el, &s);
             v = el->wrap ? ui_text_longest_word(&t) : _widest_line(&t);
@@ -614,6 +678,10 @@ static float _intrinsic(const UISystem* ui, const UIElement* el, int axis) {
             // rather than the width.
             if (axis == 1)
                 v += UI_FURNITURE_GAP + UI_TRACK_H;
+            break;
+        case UI_TEXT_FIELD:
+            if (axis == 1)
+                v = ui_field_content_height(el);
             break;
         default:
             break;
@@ -812,6 +880,14 @@ static void _arrange(const UISystem* ui, UIElement* el, UIRect screen, int axis)
 static void _break_lines(const UISystem* ui, UIElement* el) {
     for (size_t i = 0; i < el->child_count; i++)
         _break_lines(ui, el->children[i]);
+    if (el->kind == UI_TEXT_FIELD) {
+        // A field keeps rows of its own, through every edit; this gives it the width.
+        const UIStyle s = _resolve(ui, el, UI_STATE_NORMAL);
+        float pad[4];
+        _padding_from(el, &s, pad);
+        ui_field_break(ui, el, &s, el->rect.w - pad[1] - pad[3]);
+        return;
+    }
     if (el->kind != UI_LABEL || !el->text || !(el->wrap || el->runs)) {
         _drop_lines(el);
         return;
@@ -899,6 +975,13 @@ UIRect ui_slider_track(const UISystem* ui, const UIElement* el) {
                     el->rect.w - s.padding[1] - s.padding[3], UI_TRACK_H};
 }
 
+// An element's rect less its padding: where a field's text is.
+static UIRect _content_rect(const UISystem* ui, const UIElement* el) {
+    float pad[4];
+    _padding_of(ui, el, pad);
+    return ui_rect_inset(el->rect, pad[0], pad[1], pad[2], pad[3]);
+}
+
 // The height a pane shows its content through: its rect less its padding.
 static float _pane_view(const UISystem* ui, const UIElement* el) {
     float pad[4];
@@ -961,6 +1044,14 @@ static void _emit(UISystem* ui, UIElement* el) {
             case UI_SCROLL:
                 ui_draw_rect(dl, el->rect, &s);
                 break;
+            case UI_TEXT_FIELD: {
+                const UIScreen* top = ui_top(ui);
+                const bool blink = ui->engine && !ui->engine->headless;
+                const double wake = ui_field_draw(ui, el, &s, _content_rect(ui, el),
+                                                  top && top->focused == el, ui->now, blink);
+                ui->caret_wake = wake < ui->caret_wake ? wake : ui->caret_wake;
+                break;
+            }
             case UI_TOGGLE: {
                 ui_draw_rect(dl, el->rect, &s);
                 // The label stops where the knob begins -- the same reservation
@@ -1355,6 +1446,31 @@ static void _clear_states(UIElement* el) {
         _clear_states(el->children[i]);
 }
 
+// Esc or back from a focused field: a modal screen closes -- the palette -- and any other lets go,
+// so the keys return to the app.
+static void _let_go(UISystem* ui, UIScreen* top) {
+    if (top->modal)
+        ui_pop(ui);
+    else
+        top->focused = NULL;
+}
+
+// Tab and Shift+Tab: the next or previous focusable element in tree order, wrapping, and scrolled
+// into view. Tree order and not the geometry, since that is the order a form is filled in.
+static void _tab(const UISystem* ui, UIScreen* top, int dir) {
+    UIElement* items[UI_NAV_MAX];
+    size_t n = 0;
+    _gather(top->root, items, &n, UI_NAV_MAX);
+    if (n == 0)
+        return;
+    size_t at = dir > 0 ? n - 1 : 0; // nothing focused: the first forward, the last back
+    for (size_t i = 0; i < n; i++)
+        if (items[i] == top->focused)
+            at = i;
+    top->focused = items[(at + n + (size_t)(dir > 0 ? 1 : -1)) % n];
+    _reveal(ui, top->focused);
+}
+
 void ui_update(UISystem* ui, const UIInput* in, float width, float height) {
     if (!ui)
         return;
@@ -1434,7 +1550,9 @@ void ui_update(UISystem* ui, const UIInput* in, float width, float height) {
     const bool moved = in->pointer_x != ui->last_pointer_x || in->pointer_y != ui->last_pointer_y;
     ui->last_pointer_x = in->pointer_x;
     ui->last_pointer_y = in->pointer_y;
-    if (moved && hovered)
+    // A text field holding the focus keeps it as the pointer passes over other things, since the
+    // keys are going to it; a press moves it.
+    if (moved && hovered && !(top->focused && top->focused->kind == UI_TEXT_FIELD))
         top->focused = hovered;
 
     // Press captures. Release over the captured element activates it; release
@@ -1444,7 +1562,16 @@ void ui_update(UISystem* ui, const UIInput* in, float width, float height) {
         ui->pressed = hovered;
         if (hovered)
             top->focused = hovered;
+        else if (!top->modal && !on_bar)
+            top->focused = NULL; // a press on nothing lets go, where nothing holds the screen
+        if (hovered && hovered->kind == UI_TEXT_FIELD)
+            ui_field_press(hovered, _content_rect(ui, hovered), in->pointer_x, in->pointer_y,
+                           (in->pointer_mods & GLFW_MOD_SHIFT) != 0, in->time);
     }
+    // A held field selects to the pointer, from the captured element as a slider does.
+    if (ui->pressed && ui->pressed->kind == UI_TEXT_FIELD && in->pointer_down &&
+        !in->pointer_pressed)
+        ui_field_drag(ui->pressed, _content_rect(ui, ui->pressed), in->pointer_x, in->pointer_y);
     // A held slider tracks the pointer: pressing anywhere on the row jumps the
     // value there and holding drags it, which is what every slider does. It
     // runs off the CAPTURED element rather than the hovered one, so the drag
@@ -1466,13 +1593,31 @@ void ui_update(UISystem* ui, const UIInput* in, float width, float height) {
 
     if (in->pointer_released) {
         // A slider was already set by the drag above; activating it again on
-        // release would fire its callback a second time for one gesture.
-        if (ui->pressed && ui->pressed == hovered && ui->pressed->kind != UI_SLIDER)
+        // release would fire its callback a second time for one gesture. A field's
+        // action is its submit, which a click is not.
+        if (ui->pressed && ui->pressed == hovered && ui->pressed->kind != UI_SLIDER &&
+            ui->pressed->kind != UI_TEXT_FIELD)
             _activate(ui->pressed);
         ui->pressed = NULL;
     }
 
-    if (in->nav_up || in->nav_down || in->nav_left || in->nav_right) {
+    // A focused field takes the keys and characters -- the focus as the pointer left it. Navigation
+    // and accept are then not the pass's to act on -- an app that maps the arrows to navigation
+    // would move the focus out of the field with every caret move -- and back lets go of it.
+    const bool typing = top->focused && top->focused->kind == UI_TEXT_FIELD;
+    if (typing) {
+        const UIFieldVerdict v = ui_field_keys(ui, top->focused, in);
+        if (v == UI_FIELD_BACK || in->back)
+            _let_go(ui, top);
+        else if (v == UI_FIELD_NEXT || v == UI_FIELD_PREVIOUS)
+            _tab(ui, top, v == UI_FIELD_NEXT ? 1 : -1);
+    }
+
+    for (int i = 0; !typing && i < in->key_event_count; i++)
+        if (in->key_events[i].key == GLFW_KEY_TAB)
+            _tab(ui, top, (in->key_events[i].mods & GLFW_MOD_SHIFT) ? -1 : 1);
+
+    if (!typing && (in->nav_up || in->nav_down || in->nav_left || in->nav_right)) {
         const int dx = (in->nav_right ? 1 : 0) - (in->nav_left ? 1 : 0);
         const int dy = (in->nav_down ? 1 : 0) - (in->nav_up ? 1 : 0);
         // Sideways on a value control adjusts it; only an unconsumed press
@@ -1493,6 +1638,8 @@ void ui_update(UISystem* ui, const UIInput* in, float width, float height) {
         if (key != GLFW_KEY_PAGE_UP && key != GLFW_KEY_PAGE_DOWN && key != GLFW_KEY_HOME &&
             key != GLFW_KEY_END)
             continue;
+        if (typing && ui_field_uses_key(top->focused, key))
+            continue;
         UIElement* pane =
             top->focused ? (top->focused->kind == UI_SCROLL ? top->focused : _pane_of(top->focused))
                          : _pane_at(top->root, in->pointer_x, in->pointer_y);
@@ -1506,9 +1653,9 @@ void ui_update(UISystem* ui, const UIInput* in, float width, float height) {
         _scroll_to(ui, pane, to, false);
     }
 
-    if (in->accept && top->focused)
+    if (!typing && in->accept && top->focused)
         _activate(top->focused);
-    if (in->back)
+    if (!typing && in->back)
         ui_pop(ui);
 
     // States for this frame's draw. Focus first, then hover over it, then the
@@ -1539,6 +1686,7 @@ bool ui_build(UISystem* ui, float width, float height, float dt) {
     if (!ui || !ui->dl || width <= 0.0f || height <= 0.0f)
         return false;
     ui_draw_list_begin(ui->dl, (int)width, (int)height);
+    ui->caret_wake = INFINITY;
     // Bottom to top: a pause screen over a HUD draws both, and the one on top
     // is simply the one emitted last -- from the highest opaque screen, which
     // hides everything under it.
@@ -1633,11 +1781,16 @@ static void _ui_overlay(Engine* engine, void* user) {
      * no gate arm can, since every probe passes a dt of its own.
      */
     const float dt = engine->headless ? (float)ENGINE_FIXED_FRAME_DT : (float)engine->delta_time;
+    // A caret blinks on the wall clock and not the engine's, which idle mode keeps its waits out
+    // of: on that one a wait for the blink would never pass. Headless it does not blink at all.
+    ui->now = engine->headless ? 0.0 : glfwGetTime();
     // Something still moving, or a program reading the clock, draws something new next frame,
-    // and idle mode is asked for it (spec 14.1).
+    // and idle mode is asked for it (spec 14.1); a caret asks for the moment it next changes.
     const bool moving = ui_build(ui, (float)engine->win_width, (float)engine->win_height, dt);
     if (ui_draw_list_render(ui->dl) || moving)
         engine_request_frame(engine);
+    if (isfinite(ui->caret_wake))
+        engine_request_frame_after(engine, ui->caret_wake);
 }
 
 UISystem* create_ui_system(Engine* engine) {

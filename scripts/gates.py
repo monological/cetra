@@ -26076,10 +26076,10 @@ _UI_HEADER = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                           "..", "cetra", "src", "ui.h")
 
 # What ui.h is allowed to export, in its order. Spelled out rather than counted, so
-# adding an element fails by NAME and the failure says which one arrived. The pane is
-# spec 14.2's, which argued for it.
+# adding an element fails by NAME and the failure says which one arrived. The pane and
+# the field are spec 14.2's, which argued for them.
 _UI_KINDS = ["ui_panel", "ui_label", "ui_button", "ui_toggle", "ui_slider", "ui_selector",
-             "ui_scroll"]
+             "ui_scroll", "ui_text_field"]
 
 
 def _ui_probe(case, env=None):
@@ -27708,8 +27708,8 @@ def run_ui_gate(workdir):
                      screen under it draws as it did (spec 13.49). The two screens
                      look different, or the last comparison would prove nothing.
       ui-elements-closed ui.h exports exactly the element constructors the
-                     list names, six since spec 12.2 and the pane since 14.2. The
-                     scope ratchet, asserted rather than promised.
+                     list names, six since spec 12.2 and the pane and the field
+                     since 14.2. The scope ratchet, asserted rather than promised.
       ui-settings-roundtrip write, read back into a ZEROED struct, and every field
                      survives; the window mode rides the file as a name; an absent
                      file leaves defaults rather than zeros; and apply reaches the
@@ -27749,10 +27749,49 @@ def run_ui_gate(workdir):
                      down the track as the content is scrolled; dragging it 50
                      points scrolls by that share of the track's room, and a press
                      on the track below it pages down by nine tenths of the view.
-      ui-history-clip apps/canvas --history: the column's padding above and below
-                     its pane is the column's own colour, though the pane is
-                     scrolled to the end of 200 messages, and the pane shows text
-                     (end to end).
+      ui-field-type  typed characters make the field's text, the caret at its end,
+                     and on_change fires once for a pass that changed it and not
+                     for one that did not.
+      ui-field-edit  arrows, a word left, Home, End, Backspace, a word's Backspace
+                     and Delete each leave the text and the caret they should.
+      ui-field-utf8  é, Ω and a four-byte codepoint: the caret steps a whole
+                     codepoint, Backspace takes one whole, and the text decodes
+                     with no U+FFFD.
+      ui-field-select Shift+arrows, select all, one press, two (a word) and three
+                     (the line); a read-only field takes runs and copies plain
+                     text, and an editable one refuses runs.
+      ui-field-clipboard copy, paste, a single-line paste flattening a newline,
+                     cut, and a read-only field that copies but neither cuts nor
+                     pastes nor takes typing -- all through the engine's
+                     clipboard, which headless is its own.
+      ui-field-undo  typing undoes and redoes a word at a time.
+      ui-field-caret-x at every index of a line with kerning pairs, the caret is
+                     where the glyph there is drawn, to the pixel snap.
+      ui-field-scroll-x a line longer than its field keeps the caret inside it at
+                     the end, and Home scrolls back to the start.
+      ui-field-multiline a multi-line field wraps into more rows than its most,
+                     stops growing at three rows' height, keeps the caret's x going
+                     up a row, and Home goes to the wrapped row's start.
+      ui-field-keys  Enter submits; the key hook takes Up before the field; Tab
+                     and Shift+Tab move the focus in tree order; Esc lets go in a
+                     screen that is not modal and closes a modal one; Shift+Enter
+                     is a new line in a field that submits on Enter.
+      ui-field-focus the pointer passing over a button leaves a field focused; a
+                     press on nothing lets go; a press on the field or the button
+                     takes the focus there; ui_wants_keyboard follows the field.
+      ui-match       fuzzy_match: no match is -1; word starts outrank letters
+                     inside words ("rn": "route net" over "print"); case does not
+                     matter; the best placement is found, not the first ("st" in
+                     "fast stop" at 5 and 6); positions are byte offsets in a UTF-8
+                     name; an empty query matches at 0.
+      ui-type-palette apps/canvas --palette driven by a script: mod+K opens it and
+                     "zo" filters the commands to Zoom in and Zoom out, the first
+                     lit at its first two bytes, with the text in the field (end to
+                     end).
+      ui-history-clip apps/canvas --history: the column's padding above its pane,
+                     and the gap below it down to the input line, are the column's own
+                     colour, though the pane is scrolled to the end of 200 messages,
+                     and the pane shows text (end to end).
       ui-typed       an input script's typing reaches the UI through
                      ui_input_add_keyboard, every event in its order: characters
                      past ASCII as their codepoints, a key with the platform's
@@ -28178,6 +28217,197 @@ def run_ui_gate(workdir):
     print(f"  ui-scroll-bar         {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-scroll-bar", ok)
 
+    # ---- the text field: each probe line says 1 where its text was the one it wanted
+    def flags_ok(p, keys):
+        return all(p.get((label, key), [0])[0] == 1 for label, key in keys)
+
+    p = _ui_probe("field-type")
+    if not p:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        caret = p[("first", "caret")]
+        changes = [p[(k, "changes")][0] for k in ("first", "second", "idle")]
+        ok = (flags_ok(p, [("first", "text"), ("second", "text")]) and caret[0] == 5
+              and changes == [1, 2, 2])
+        detail = (f"typed 'hello' then ' world', the caret at {caret[0]:.0f} (want 5), on_change "
+                  f"{changes} (want 1, 2, 2)")
+    print(f"  ui-field-type         {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-field-type", ok)
+
+    p = _ui_probe("field-edit")
+    if not p:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        carets = [p[(k, "caret")][0] for k in ("left", "word", "home", "end", "delete")]
+        ok = (carets == [9, 6, 0, 11, 0]
+              and flags_ok(p, [("backspace", "text"), ("wordback", "text"), ("delete", "text")]))
+        detail = (f"carets after left, a word left, Home, End and Delete {carets} (want 9, 6, 0, "
+                  f"11, 0); Backspace, a word's Backspace and Delete left the texts they should")
+    print(f"  ui-field-edit         {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-field-edit", ok)
+
+    p = _ui_probe("field-utf8")
+    if not p:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        typed, erased = p[("typed", "caret")], p[("erased", "caret")]
+        lefts = [p[("left1", "caret")][0], p[("left2", "caret")][0]]
+        cps = p[("erased", "codepoints")]
+        ok = (typed[0] == 9 and typed[3] == 9 and lefts == [5, 3] and erased[0] == 1
+              and erased[3] == 7 and cps == [97, 937, 128512])
+        detail = (f"typed a, é, Ω and a four-byte codepoint: {typed[3]:.0f} bytes, caret "
+                  f"{typed[0]:.0f} (want 9, 9); left twice {lefts} (want 5, 3); Backspace leaves "
+                  f"{erased[3]:.0f} bytes and caret {erased[0]:.0f} (want 7, 1), codepoints {cps}")
+    print(f"  ui-field-utf8         {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-field-utf8", ok)
+
+    p = _ui_probe("field-select")
+    if not p:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        sel = {k: p[(k, "caret")][1:3] for k in ("shift", "all", "double", "triple")}
+        ok = (sel["shift"] == [0, 5] and sel["all"] == [0, 16] and sel["double"] == [6, 10]
+              and sel["triple"] == [0, 16] and p[("runs", "ok")][0] == 1
+              and p[("copied", "plain")][0] == 1 and p[("editable", "runs")][0] == 0)
+        detail = (f"selections {sel} (want shift 0-5, all 0-16, double 6-10, triple 0-16); a "
+                  f"read-only field took runs and copied plain text; an editable one refused runs")
+    print(f"  ui-field-select       {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-field-select", ok)
+
+    p = _ui_probe("field-clipboard")
+    if not p:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        keys = [("copied", "clip"), ("pasted", "text"), ("flattened", "text"), ("cut", "text"),
+                ("cutcopied", "clip"), ("rocopied", "clip"), ("readonly", "text")]
+        wrong = [label for label, key in keys if p.get((label, key), [0])[0] != 1]
+        ok = not wrong
+        detail = ("copy, paste, a flattened newline, cut, and a read-only field's copy that "
+                  "neither cuts nor pastes, each as it should be" if ok else f"wrong: {wrong}")
+    print(f"  ui-field-clipboard    {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-field-clipboard", ok)
+
+    p = _ui_probe("field-undo")
+    if not p:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        ok = flags_ok(p, [("undo1", "text"), ("undo2", "text"), ("redo1", "text"),
+                          ("redo2", "text")])
+        detail = "'abc def' undoes to 'abc' then nothing, and redoes back a word at a time"
+    print(f"  ui-field-undo         {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-field-undo", ok)
+
+    p = _ui_probe("field-caret-x")
+    if not p:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        worst = p[("worst", "off")][0]
+        ok = worst <= 0.5
+        detail = (f"the caret at most {worst:.3f} points from where the glyph at its index is "
+                  f"drawn (want within the pixel snap, 0.5)")
+    print(f"  ui-field-caret-x      {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-field-caret-x", ok)
+
+    p = _ui_probe("field-scroll-x")
+    if not p:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        left, right = p[("content", "edges")]
+        end, home = p[("end", "caret")][0], p[("home", "caret")][0]
+        end_scroll, home_scroll = p[("end", "scroll")][0], p[("home", "scroll")][0]
+        ok = (left <= end <= right and end_scroll > 0 and close(home, left) and home_scroll == 0)
+        detail = (f"at the end the caret is at {end:.1f} inside {left:.0f}-{right:.0f}, scrolled "
+                  f"{end_scroll:.1f}; Home puts it at {home:.1f} with the scroll {home_scroll:.1f}")
+    print(f"  ui-field-scroll-x     {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-field-scroll-x", ok)
+
+    p = _ui_probe("field-multiline")
+    if not p:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        rows, lh = p[("rows", "count")][0], p[("line", "height")][0]
+        h = p[("field", "rect")][3]
+        x0, x1 = p[("up", "x")]
+        dy = p[("up", "dy")][0]
+        ok = (rows > 3 and close(h, 3 * lh + 16.0) and abs(x0 - x1) < 12.0 and close(dy, lh)
+              and p[("home", "caret")][0] > 0 and p[("home", "space")][0] == 1)
+        detail = (f"{rows:.0f} rows (want over 3) in {h:.1f} points (want {3 * lh + 16:.0f}); up "
+                  f"a row the caret's x moves {abs(x0 - x1):.2f} (want under a glyph) and its y "
+                  f"{dy:.1f} (want {lh:.0f}); Home at {p[('home', 'caret')][0]:.0f}, a word's start")
+    print(f"  ui-field-multiline    {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-field-multiline", ok)
+
+    p = _ui_probe("field-keys")
+    if not p:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        want = {("enter", "submits"): 1, ("hook", "taken"): 1, ("hook", "caret"): 3,
+                ("tab", "button"): 1, ("backtab", "field"): 1, ("escape", "focus"): 1,
+                ("escape", "onstack"): 1, ("newline", "text"): 1, ("chat", "submits"): 1,
+                ("modal", "before"): 1, ("modal", "after"): 0}
+        wrong = {f"{a} {b}": p.get((a, b), [None])[0] for (a, b), v in want.items()
+                 if p.get((a, b), [None])[0] != v}
+        ok = not wrong
+        detail = "every key did what it should" if ok else f"wrong: {wrong}"
+    print(f"  ui-field-keys         {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-field-keys", ok)
+
+    p = _ui_probe("field-focus")
+    if not p:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        want = {("wants", "editing"): 1, ("hover", "kept"): 1, ("nothing", "focus"): 1,
+                ("wants", "after"): 0, ("click", "field"): 1, ("click", "button"): 1,
+                ("wants", "button"): 0}
+        wrong = {f"{a} {b}": p.get((a, b), [None])[0] for (a, b), v in want.items()
+                 if p.get((a, b), [None])[0] != v}
+        ok = not wrong
+        detail = "the focus went where it should" if ok else f"wrong: {wrong}"
+    print(f"  ui-field-focus        {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-field-focus", ok)
+
+    # ---- the matcher
+    p = _ui_probe("match")
+    if not p:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        s = {k: p[(k, "score")][0] for k in ("none", "starts", "inside", "upper", "best", "utf8",
+                                             "empty")}
+        ok = (s["none"] == -1 and s["starts"] > s["inside"] > 0 and s["upper"] == s["starts"]
+              and p[("best", "at")] == [5, 6] and p[("utf8", "at")] == [3, 4, 5]
+              and p[("starts", "at")] == [0, 6] and s["empty"] == 0)
+        detail = (f"scores {s}; 'st' in 'fast stop' at {p.get(('best', 'at'))} (want 5, 6), 'sum' "
+                  f"in 'résumé' at {p.get(('utf8', 'at'))} (want bytes 3, 4, 5)")
+    print(f"  ui-match              {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-match", ok)
+
+    # ---- the palette, end to end
+    script = os.path.join(workdir, "ui_palette.script")
+    with open(script, "w", encoding="utf-8") as f:
+        f.write("2 key=mod+k\n4 type=zo\n")
+    out = os.path.join(workdir, "ui_palette.ppm")
+    said = _canvas_shot(out, 8, "--sheet", "board", "--palette", "--canvas-probe",
+                        "--input-script", script)
+    state = field = None
+    for line in (said or "").splitlines():
+        t = line.split()
+        if t[:3] == ["canvas", "palette", "state"]:
+            state = [int(v) for v in t[3:]]
+        elif t[:3] == ["canvas", "palette", "field"]:
+            field = [int(v) for v in t[3:7]]
+    if not state or not field:
+        ok, detail = False, "the run failed or printed no palette"
+    else:
+        x0, y0, x1, y1 = field
+        a = _ppm_array(out)[y0 + 6:y1 - 6, x0 + 6:x1 - 6, :3].astype(int)
+        ink = int((a.max(axis=2) > 150).sum())
+        # Open, two bytes typed, two rows, the first Zoom in (the third command) lit at 0 and 1.
+        ok = state == [1, 2, 2, 2, 0, 1] and ink > 30
+        detail = (f"open/typed/rows/first/lit {state} (want [1, 2, 2, 2, 0, 1]), {ink} px of text "
+                  f"in the field (want over 30)")
+    print(f"  ui-type-palette       {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-type-palette", ok)
+
     # ---- the history column, end to end
     out, probe = _canvas_run(workdir, "history", "--sheet", "board", "--history")
     hist = probe.get(("history", "column"))
@@ -28187,11 +28417,12 @@ def run_ui_gate(workdir):
         cx0, cy0, cx1, cy1 = (int(v) for v in hist[:4])
         qx0, qy0, qx1, qy1 = (int(v) for v in hist[5:9])
         want = int(hist[10], 16)
+        input_y = int(hist[12])
         a = _ppm_array(out)[:, :, :3].astype(int)
         target = np.array([(want >> 16) & 255, (want >> 8) & 255, want & 255])
-        # Two pixels in from the column's own edges, which its anti-aliasing blends with what is
-        # behind it.
-        strips = np.concatenate([a[cy0 + 2:qy0, cx0 + 4:cx1 - 4], a[qy1:cy1 - 2, cx0 + 4:cx1 - 4]])
+        # Above the pane, two pixels in from the column's own edges, which its anti-aliasing
+        # blends with what is behind it; below it, the gap down to the input line.
+        strips = np.concatenate([a[cy0 + 2:qy0, cx0 + 4:cx1 - 4], a[qy1:input_y, cx0 + 4:cx1 - 4]])
         stray = int((np.abs(strips - target).max(axis=2) > 2).sum())
         ink = int((np.abs(a[qy0:qy1, qx0:qx1] - target).max(axis=2) > 2).sum())
         ok = stray == 0 and ink > 5000 and qy0 > cy0 and qy1 < cy1
@@ -29400,6 +29631,9 @@ def run_idle_gate(workdir):
       idle-load      a 2048x1608 texture asked for on the frame a 0.5 s wake draws: the loop waits
                      while it decodes rather than drawing, 3 frames, the third delivering it. The
                      loader's thread wakes the loop when the decode is done.
+      idle-type      the palette opened, typed into, moved in and closed by a script (spec 14.2):
+                     a frame for each of its eight frames, and the end within 30, since a caret
+                     headless does not blink and nothing else is left to ask.
     """
     failed = []
 
@@ -29507,6 +29741,19 @@ def run_idle_gate(workdir):
                   f"and the decode, delivered at {said.get('loaded')} (want (2048, 1608))")
     print(f"  idle-load           {'PASS' if ok else 'FAIL'}  {detail}")
     note("idle-load", ok)
+
+    script = os.path.join(workdir, "idle_type.script")
+    with open(script, "w", encoding="utf-8") as f:
+        f.write("2 key=mod+k\n4 type=zo\n6 key=down\n8 key=escape\n")
+    _, said = _idle_run(workdir, "type", "--sheet", "shapes", "--palette", "--input-script", script,
+                        frames=200)
+    if "frames" not in said:
+        ok, detail = False, "the run failed"
+    else:
+        ok = 9 <= said["frames"] <= 30
+        detail = f"{said['frames']} frames of 200 (want 9 to 30: the script's, and an end)"
+    print(f"  idle-type           {'PASS' if ok else 'FAIL'}  {detail}")
+    note("idle-type", ok)
 
     return failed
 

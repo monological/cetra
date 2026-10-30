@@ -6,12 +6,17 @@
 
 #include "ui_text_probe.h"
 
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
+#include <GLFW/glfw3.h>
+
 #include "cetra/engine.h"
-#include "cetra/internal/ui_text.h" // a label's lines, which the wrap arms count
+#include "cetra/fuzzy.h"
+#include "cetra/internal/ui_field.h" // a field's caret and rows, which the field arms read
+#include "cetra/internal/ui_text.h"  // a label's lines, which the wrap arms count
 #include "cetra/text.h"
 
 #define PROBE_SIZE 22.0f
@@ -457,6 +462,485 @@ static int probe_scroll_bar(UISystem* ui) {
     return 0;
 }
 
+// ---- the text field
+
+#ifdef __APPLE__
+#define SHORTCUT GLFW_MOD_SUPER
+#define WORD     GLFW_MOD_ALT
+#else
+#define SHORTCUT GLFW_MOD_CONTROL
+#define WORD     GLFW_MOD_CONTROL
+#endif
+
+static InputKeyEvent g_events[256];
+static int g_event_count;
+static double g_clock; // the input's clock, a second a pass apart unless a test says otherwise
+static int g_submits, g_changes, g_keys_taken;
+
+static void ev_text(const char* s) {
+    for (const unsigned char* p = (const unsigned char*)s; *p && g_event_count < 256;)
+        g_events[g_event_count++] = (InputKeyEvent){.codepoint = (uint32_t)text_utf8_next(&p)};
+}
+
+static void ev_key(int key, int mods) {
+    if (g_event_count < 256)
+        g_events[g_event_count++] = (InputKeyEvent){.key = key, .mods = mods};
+}
+
+// One pass with the queued typing and the pointer off the screen; the queue is spent.
+static void type_pass(UISystem* ui) {
+    g_clock += 1.0;
+    pass(ui, &(UIInput){.pointer_x = -1.0f,
+                        .pointer_y = -1.0f,
+                        .key_events = g_events,
+                        .key_event_count = g_event_count,
+                        .time = g_clock});
+    g_event_count = 0;
+}
+
+static void one_key(UISystem* ui, int key, int mods) {
+    ev_key(key, mods);
+    type_pass(ui);
+}
+
+static void on_submit(UIElement* el, void* user) {
+    (void)el;
+    (void)user;
+    g_submits++;
+}
+
+static void on_change(UIElement* el, void* user) {
+    (void)el;
+    (void)user;
+    g_changes++;
+}
+
+static bool take_up(UIElement* el, const InputKeyEvent* key, void* user) {
+    (void)el;
+    (void)user;
+    if (key->key != GLFW_KEY_UP)
+        return false;
+    g_keys_taken++;
+    return true;
+}
+
+// A screen that is not modal holding a 240-point field, focused, and a button under it.
+static UIElement* field_fixture(UISystem* ui, unsigned flags, UIElement** button) {
+    UIScreen* s = ui_screen(ui, "field");
+    ui_screen_set_modal(s, false);
+    UIElement* panel = ui_panel(ui_screen_root(s));
+    UIElement* field = ui_text_field(panel, flags, on_submit, NULL);
+    ui_field_set_on_change(field, on_change, NULL);
+    UIElement* b = ui_button(panel, "After", NULL, NULL);
+    if (button)
+        *button = b;
+    ui_push(ui, s);
+    ui_set_focus(s, field);
+    pass(ui, &(UIInput){.pointer_x = -1.0f, .pointer_y = -1.0f});
+    return field;
+}
+
+static int cursor_of(const UIElement* field) {
+    int c = -1;
+    ui_field_inspect(field, &c, NULL, NULL, NULL, NULL, NULL);
+    return c;
+}
+
+static void say_field(const char* which, const char* label, const UIElement* field) {
+    int c = 0, a = 0, b = 0;
+    ui_field_inspect(field, &c, &a, &b, NULL, NULL, NULL);
+    printf("ui %s %s caret %d %d %d %zu\n", which, label, c, a, b, strlen(ui_field_text(field)));
+}
+
+// Whether the field's text is `want`, said as 1 or 0, since a probe line carries only numbers.
+static void say_text(const char* which, const char* label, const UIElement* field,
+                     const char* want) {
+    printf("ui %s %s text %d\n", which, label, strcmp(ui_field_text(field), want) == 0 ? 1 : 0);
+    if (strcmp(ui_field_text(field), want) != 0)
+        fprintf(stderr, "ui-probe %s %s: text is '%s', want '%s'\n", which, label,
+                ui_field_text(field), want);
+}
+
+static int probe_field_type(UISystem* ui) {
+    const UIElement* field = field_fixture(ui, 0, NULL);
+    ev_text("hello");
+    type_pass(ui);
+    say_text("field-type", "first", field, "hello");
+    say_field("field-type", "first", field);
+    printf("ui field-type first changes %d\n", g_changes);
+    ev_text(" world");
+    type_pass(ui);
+    say_text("field-type", "second", field, "hello world");
+    printf("ui field-type second changes %d\n", g_changes);
+    // A pass that types nothing changes nothing.
+    type_pass(ui);
+    printf("ui field-type idle changes %d\n", g_changes);
+    return 0;
+}
+
+static int probe_field_edit(UISystem* ui) {
+    UIElement* field = field_fixture(ui, 0, NULL);
+    ui_field_set_text(field, "hello world");
+    one_key(ui, GLFW_KEY_LEFT, 0);
+    one_key(ui, GLFW_KEY_LEFT, 0);
+    printf("ui field-edit left caret %d\n", cursor_of(field));
+    one_key(ui, GLFW_KEY_LEFT, WORD);
+    printf("ui field-edit word caret %d\n", cursor_of(field));
+    one_key(ui, GLFW_KEY_HOME, 0);
+    printf("ui field-edit home caret %d\n", cursor_of(field));
+    one_key(ui, GLFW_KEY_END, 0);
+    printf("ui field-edit end caret %d\n", cursor_of(field));
+    one_key(ui, GLFW_KEY_BACKSPACE, 0);
+    say_text("field-edit", "backspace", field, "hello worl");
+    one_key(ui, GLFW_KEY_BACKSPACE, WORD);
+    say_text("field-edit", "wordback", field, "hello ");
+    one_key(ui, GLFW_KEY_HOME, 0);
+    one_key(ui, GLFW_KEY_DELETE, 0);
+    say_text("field-edit", "delete", field, "ello ");
+    printf("ui field-edit delete caret %d\n", cursor_of(field));
+    return 0;
+}
+
+static int probe_field_utf8(UISystem* ui) {
+    UIElement* field = field_fixture(ui, 0, NULL);
+    ev_text("a\xc3\xa9\xce\xa9\xf0\x9f\x98\x80"); // a, é, Ω, 😀
+    type_pass(ui);
+    say_field("field-utf8", "typed", field);
+    one_key(ui, GLFW_KEY_LEFT, 0);
+    printf("ui field-utf8 left1 caret %d\n", cursor_of(field));
+    one_key(ui, GLFW_KEY_LEFT, 0);
+    printf("ui field-utf8 left2 caret %d\n", cursor_of(field));
+    one_key(ui, GLFW_KEY_BACKSPACE, 0);
+    say_field("field-utf8", "erased", field);
+    // The text decodes whole: every codepoint printed, no U+FFFD among them.
+    printf("ui field-utf8 erased codepoints");
+    for (const unsigned char* p = (const unsigned char*)ui_field_text(field); *p;)
+        printf(" %d", text_utf8_next(&p));
+    printf("\n");
+    return 0;
+}
+
+// The x, in window points, of byte `at` of a single-line field's text: its content box's left plus
+// the text's width up to there, as the field's own walk measures it.
+static float field_x(const UIElement* field, Font* font, const char* text, size_t at) {
+    char prefix[256];
+    const size_t n = at < sizeof(prefix) - 1 ? at : sizeof(prefix) - 1;
+    memcpy(prefix, text, n);
+    prefix[n] = '\0';
+    return field->rect.x + 10.0f + ui_text_width(font, PROBE_SIZE, 0.0f, prefix);
+}
+
+static int probe_field_select(Game* game, UISystem* ui, Font* font) {
+    UIElement* field = field_fixture(ui, 0, NULL);
+    const char* text = "alpha beta gamma";
+    ui_field_set_text(field, text);
+    one_key(ui, GLFW_KEY_HOME, 0);
+    for (int i = 0; i < 5; i++)
+        one_key(ui, GLFW_KEY_RIGHT, GLFW_MOD_SHIFT);
+    say_field("field-select", "shift", field);
+    one_key(ui, GLFW_KEY_A, SHORTCUT);
+    say_field("field-select", "all", field);
+
+    // Two presses close together on "beta" select it; a third, the whole line.
+    const float x = field_x(field, font, text, 8), y = field->rect.y + field->rect.h * 0.5f;
+    for (int i = 0; i < 3; i++) {
+        g_clock += 0.1;
+        pass(ui, &(UIInput){.pointer_x = x,
+                            .pointer_y = y,
+                            .pointer_pressed = true,
+                            .pointer_down = true,
+                            .time = g_clock});
+        pass(ui,
+             &(UIInput){.pointer_x = x, .pointer_y = y, .pointer_released = true, .time = g_clock});
+        say_field("field-select", i == 0 ? "click" : i == 1 ? "double" : "triple", field);
+    }
+
+    // A read-only field with runs selects and copies its text, plain.
+    UIScreen* s = ui_top(ui);
+    UIElement* ro = ui_text_field(ui_screen_root(s), UI_FIELD_READ_ONLY, NULL, NULL);
+    ui_field_set_text(ro, "net SDA ok");
+    const UITextRun run = {.start = 4, .length = 3, .color = {1.0f, 0.5f, 0.0f, 1.0f}};
+    printf("ui field-select runs ok %d\n", ui_set_text_runs(ro, &run, 1) ? 1 : 0);
+    ui_set_focus(s, ro);
+    pass(ui, &(UIInput){.pointer_x = -1.0f, .pointer_y = -1.0f});
+    one_key(ui, GLFW_KEY_A, SHORTCUT);
+    one_key(ui, GLFW_KEY_C, SHORTCUT);
+    const char* clip = engine_clipboard_get(game->engine);
+    printf("ui field-select copied plain %d\n", strcmp(clip, "net SDA ok") == 0 ? 1 : 0);
+    // An editable field refuses runs.
+    printf("ui field-select editable runs %d\n", ui_set_text_runs(field, &run, 1) ? 1 : 0);
+    return 0;
+}
+
+static int probe_field_clipboard(const Game* game, UISystem* ui) {
+    Engine* engine = game->engine;
+    UIElement* field = field_fixture(ui, 0, NULL);
+    ui_field_set_text(field, "hello world");
+    for (int i = 0; i < 5; i++)
+        one_key(ui, GLFW_KEY_LEFT, GLFW_MOD_SHIFT);
+    one_key(ui, GLFW_KEY_C, SHORTCUT);
+    printf("ui field-clipboard copied clip %d\n",
+           strcmp(engine_clipboard_get(engine), "world") == 0 ? 1 : 0);
+    one_key(ui, GLFW_KEY_HOME, 0);
+    one_key(ui, GLFW_KEY_V, SHORTCUT);
+    say_text("field-clipboard", "pasted", field, "worldhello world");
+    // A single-line field takes a pasted newline as a space.
+    engine_clipboard_set(engine, "a\nb");
+    one_key(ui, GLFW_KEY_END, 0);
+    one_key(ui, GLFW_KEY_V, SHORTCUT);
+    say_text("field-clipboard", "flattened", field, "worldhello worlda b");
+    // Cut takes the selection to the clipboard.
+    for (int i = 0; i < 3; i++)
+        one_key(ui, GLFW_KEY_LEFT, GLFW_MOD_SHIFT);
+    one_key(ui, GLFW_KEY_X, SHORTCUT);
+    say_text("field-clipboard", "cut", field, "worldhello world");
+    printf("ui field-clipboard cutcopied clip %d\n",
+           strcmp(engine_clipboard_get(engine), "a b") == 0 ? 1 : 0);
+    // Read-only copies, and neither cuts nor pastes.
+    UIScreen* s = ui_top(ui);
+    UIElement* ro = ui_text_field(ui_screen_root(s), UI_FIELD_READ_ONLY, NULL, NULL);
+    ui_field_set_text(ro, "fixed");
+    ui_set_focus(s, ro);
+    pass(ui, &(UIInput){.pointer_x = -1.0f, .pointer_y = -1.0f});
+    one_key(ui, GLFW_KEY_A, SHORTCUT);
+    one_key(ui, GLFW_KEY_X, SHORTCUT);
+    printf("ui field-clipboard rocopied clip %d\n",
+           strcmp(engine_clipboard_get(engine), "fixed") == 0 ? 1 : 0);
+    one_key(ui, GLFW_KEY_V, SHORTCUT);
+    ev_text("typed");
+    type_pass(ui);
+    say_text("field-clipboard", "readonly", ro, "fixed");
+    return 0;
+}
+
+static int probe_field_undo(UISystem* ui) {
+    const UIElement* field = field_fixture(ui, 0, NULL);
+    ev_text("abc def");
+    type_pass(ui);
+    one_key(ui, GLFW_KEY_Z, SHORTCUT);
+    say_text("field-undo", "undo1", field, "abc");
+    one_key(ui, GLFW_KEY_Z, SHORTCUT);
+    say_text("field-undo", "undo2", field, "");
+    one_key(ui, GLFW_KEY_Z, SHORTCUT | GLFW_MOD_SHIFT);
+    say_text("field-undo", "redo1", field, "abc");
+    one_key(ui, GLFW_KEY_Z, SHORTCUT | GLFW_MOD_SHIFT);
+    say_text("field-undo", "redo2", field, "abc def");
+    return 0;
+}
+
+// The caret's quad in the list: the 1.5-point bar the focused field draws.
+static bool caret_quad(UISystem* ui, UIRect* out) {
+    const UIDrawList* dl = ui_draw_list(ui);
+    for (size_t i = 0; i < ui_draw_list_quad_count(dl); i++) {
+        UIRect r;
+        int kind = 0;
+        ui_draw_list_quad(dl, i, &r, NULL, &kind);
+        if (kind == 0 && r.w == 1.5f) {
+            *out = r;
+            return true;
+        }
+    }
+    return false;
+}
+
+static int probe_field_caret_x(UISystem* ui, Font* font) {
+    UIElement* field = field_fixture(ui, 0, NULL);
+    const char* text = "Wave AVATAR fly";
+    ui_field_set_text(field, text);
+    one_key(ui, GLFW_KEY_HOME, 0);
+    const float scale = PROBE_SIZE / font->base_size;
+    float worst = 0.0f;
+    const size_t n = strlen(text);
+    for (size_t i = 0; i <= n; i++) {
+        ui_build(ui, 1280.0f, 720.0f, 0.0f);
+        UIRect caret;
+        if (!caret_quad(ui, &caret)) {
+            printf("ui field-caret-x missing caret %zu\n", i);
+            return 0;
+        }
+        // Where the glyph at i is drawn, its pen recovered from its quad; past the last, the
+        // text's width.
+        float pen;
+        if (i < n) {
+            UIRect rects[64];
+            vec4 colors[64];
+            size_t glyph = 0; // a space draws no quad, so the glyph's index skips them
+            const size_t count = glyph_quads(ui, rects, colors, 64);
+            for (size_t c = 0; c < i; c++)
+                if (text[c] != ' ')
+                    glyph++;
+            if (text[i] == ' ') {
+                one_key(ui, GLFW_KEY_RIGHT, 0);
+                continue;
+            }
+            const GlyphInfo* g = font_get_glyph(font, (unsigned char)text[i]);
+            pen = glyph < count ? rects[glyph].x - g->x0 * scale : 0.0f;
+        } else {
+            pen = field->rect.x + 10.0f + ui_text_width(font, PROBE_SIZE, 0.0f, text);
+        }
+        const float off = fabsf(caret.x - pen);
+        worst = off > worst ? off : worst;
+        one_key(ui, GLFW_KEY_RIGHT, 0);
+    }
+    printf("ui field-caret-x worst off %.6f\n", (double)worst);
+    return 0;
+}
+
+static int probe_field_scroll_x(UISystem* ui) {
+    UIElement* field = field_fixture(ui, 0, NULL);
+    ev_text("the quick brown fox jumps over the lazy dog and keeps going");
+    type_pass(ui);
+    ui_build(ui, 1280.0f, 720.0f, 0.0f);
+    UIRect caret = {0};
+    caret_quad(ui, &caret);
+    const float left = field->rect.x + 10.0f, right = field->rect.x + field->rect.w - 10.0f;
+    printf("ui field-scroll-x content edges %.6f %.6f\n", (double)left, (double)right);
+    printf("ui field-scroll-x end caret %.6f\n", (double)caret.x);
+    float sx = 0.0f;
+    ui_field_inspect(field, NULL, NULL, NULL, &sx, NULL, NULL);
+    printf("ui field-scroll-x end scroll %.6f\n", (double)sx);
+    one_key(ui, GLFW_KEY_HOME, 0);
+    ui_build(ui, 1280.0f, 720.0f, 0.0f);
+    caret_quad(ui, &caret);
+    ui_field_inspect(field, NULL, NULL, NULL, &sx, NULL, NULL);
+    printf("ui field-scroll-x home caret %.6f\n", (double)caret.x);
+    printf("ui field-scroll-x home scroll %.6f\n", (double)sx);
+    return 0;
+}
+
+static int probe_field_multiline(UISystem* ui, Font* font) {
+    UIElement* field = field_fixture(ui, UI_FIELD_MULTILINE, NULL);
+    field->max_rows = 3;
+    ev_text("one two three four five six seven eight nine ten eleven twelve thirteen fourteen "
+            "fifteen sixteen seventeen eighteen");
+    type_pass(ui);
+    size_t rows = 0;
+    ui_field_inspect(field, NULL, NULL, NULL, NULL, NULL, &rows);
+    printf("ui field-multiline rows count %zu\n", rows);
+    probe_rect("field-multiline", "field", field->rect);
+    printf("ui field-multiline line height %.6f\n", (double)ui_line_height(font, PROBE_SIZE, 1.0f));
+    // Up from the end keeps the caret's x, give or take a glyph.
+    ui_build(ui, 1280.0f, 720.0f, 0.0f);
+    UIRect before = {0}, after = {0};
+    caret_quad(ui, &before);
+    one_key(ui, GLFW_KEY_UP, 0);
+    ui_build(ui, 1280.0f, 720.0f, 0.0f);
+    caret_quad(ui, &after);
+    printf("ui field-multiline up x %.6f %.6f\n", (double)before.x, (double)after.x);
+    printf("ui field-multiline up dy %.6f\n", (double)(before.y - after.y));
+    // Home goes to the wrapped row's start, not the text's: a word's start, after a space.
+    one_key(ui, GLFW_KEY_HOME, 0);
+    const int home = cursor_of(field);
+    printf("ui field-multiline home caret %d\n", home);
+    printf("ui field-multiline home space %d\n",
+           home > 0 && ui_field_text(field)[home - 1] == ' ' ? 1 : 0);
+    return 0;
+}
+
+static int probe_field_keys(UISystem* ui) {
+    UIElement* button = NULL;
+    UIElement* field = field_fixture(ui, 0, &button);
+    UIScreen* s = ui_top(ui);
+    one_key(ui, GLFW_KEY_ENTER, 0);
+    printf("ui field-keys enter submits %d\n", g_submits);
+    // The key hook sees Up first and takes it; the caret stays.
+    ui_field_set_text(field, "abc");
+    ui_field_set_on_key(field, take_up, NULL);
+    one_key(ui, GLFW_KEY_UP, 0);
+    printf("ui field-keys hook taken %d\n", g_keys_taken);
+    printf("ui field-keys hook caret %d\n", cursor_of(field));
+    // Tab moves on to the button, Shift+Tab back.
+    one_key(ui, GLFW_KEY_TAB, 0);
+    printf("ui field-keys tab button %d\n", ui_focused(s) == button ? 1 : 0);
+    one_key(ui, GLFW_KEY_TAB, GLFW_MOD_SHIFT);
+    printf("ui field-keys backtab field %d\n", ui_focused(s) == field ? 1 : 0);
+    // Esc in a screen that is not modal lets go of the focus.
+    one_key(ui, GLFW_KEY_ESCAPE, 0);
+    printf("ui field-keys escape focus %d\n", ui_focused(s) == NULL ? 1 : 0);
+    printf("ui field-keys escape onstack %d\n", ui_on_stack(ui, s) ? 1 : 0);
+    ui_pop(ui);
+
+    // A multi-line field that submits on Enter: Shift+Enter is a new line.
+    UIScreen* chat = ui_screen(ui, "chat");
+    UIElement* input = ui_text_field(
+        ui_screen_root(chat), UI_FIELD_MULTILINE | UI_FIELD_SUBMIT_ON_ENTER, on_submit, NULL);
+    ui_push(ui, chat);
+    ui_set_focus(chat, input);
+    ev_text("hi");
+    ev_key(GLFW_KEY_ENTER, GLFW_MOD_SHIFT);
+    ev_text("there");
+    type_pass(ui);
+    say_text("field-keys", "newline", input, "hi\nthere");
+    const int submits = g_submits;
+    one_key(ui, GLFW_KEY_ENTER, 0);
+    printf("ui field-keys chat submits %d\n", g_submits - submits);
+    // Esc in a modal screen closes it.
+    printf("ui field-keys modal before %d\n", ui_on_stack(ui, chat) ? 1 : 0);
+    one_key(ui, GLFW_KEY_ESCAPE, 0);
+    printf("ui field-keys modal after %d\n", ui_on_stack(ui, chat) ? 1 : 0);
+    return 0;
+}
+
+static int probe_field_focus(UISystem* ui) {
+    UIElement* button = NULL;
+    UIElement* field = field_fixture(ui, 0, &button);
+    UIScreen* s = ui_top(ui);
+    printf("ui field-focus wants editing %d\n", ui_wants_keyboard(ui) ? 1 : 0);
+    // The pointer passing over the button leaves the field focused.
+    const float bx = button->rect.x + button->rect.w * 0.5f;
+    const float by = button->rect.y + button->rect.h * 0.5f;
+    pass(ui, &(UIInput){.pointer_x = bx, .pointer_y = by});
+    pass(ui, &(UIInput){.pointer_x = bx + 1.0f, .pointer_y = by});
+    printf("ui field-focus hover kept %d\n", ui_focused(s) == field ? 1 : 0);
+    // A press on nothing lets go, and the keyboard is the app's again.
+    pass(ui,
+         &(UIInput){
+             .pointer_x = 5.0f, .pointer_y = 5.0f, .pointer_pressed = true, .pointer_down = true});
+    pass(ui, &(UIInput){.pointer_x = 5.0f, .pointer_y = 5.0f, .pointer_released = true});
+    printf("ui field-focus nothing focus %d\n", ui_focused(s) == NULL ? 1 : 0);
+    printf("ui field-focus wants after %d\n", ui_wants_keyboard(ui) ? 1 : 0);
+    // A press on the field takes the focus back, and one on the button moves it there.
+    const float fx = field->rect.x + 20.0f, fy = field->rect.y + field->rect.h * 0.5f;
+    pass(ui, &(UIInput){
+                 .pointer_x = fx, .pointer_y = fy, .pointer_pressed = true, .pointer_down = true});
+    pass(ui, &(UIInput){.pointer_x = fx, .pointer_y = fy, .pointer_released = true});
+    printf("ui field-focus click field %d\n", ui_focused(s) == field ? 1 : 0);
+    pass(ui, &(UIInput){
+                 .pointer_x = bx, .pointer_y = by, .pointer_pressed = true, .pointer_down = true});
+    pass(ui, &(UIInput){.pointer_x = bx, .pointer_y = by, .pointer_released = true});
+    printf("ui field-focus click button %d\n", ui_focused(s) == button ? 1 : 0);
+    printf("ui field-focus wants button %d\n", ui_wants_keyboard(ui) ? 1 : 0);
+    return 0;
+}
+
+// ---- the matcher
+
+static void say_match(const char* label, const char* query, const char* name) {
+    size_t pos[FUZZY_QUERY_MAX];
+    const int score = fuzzy_match(query, name, pos, FUZZY_QUERY_MAX);
+    printf("ui match %s score %d\n", label, score);
+    if (score >= 0 && query[0]) {
+        size_t n = 0;
+        for (const unsigned char* p = (const unsigned char*)query; *p; n++)
+            text_utf8_next(&p);
+        printf("ui match %s at", label);
+        for (size_t i = 0; i < n; i++)
+            printf(" %zu", pos[i]);
+        printf("\n");
+    }
+}
+
+static int probe_match(void) {
+    say_match("none", "abc", "xyz");
+    say_match("starts", "rn", "route net");
+    say_match("inside", "rn", "print");
+    say_match("upper", "RN", "route net");
+    say_match("best", "st", "fast stop");
+    say_match("utf8", "sum", "r\xc3\xa9sum\xc3\xa9");
+    say_match("empty", "", "anything");
+    return 0;
+}
+
 int run_ui_text_probe(Game* game, UISystem* ui, Font* font, const char* which) {
     if (!strcmp(which, "wrap-label"))
         return probe_wrap_label(ui, font);
@@ -480,5 +964,29 @@ int run_ui_text_probe(Game* game, UISystem* ui, Font* font, const char* which) {
         return probe_scroll_follow(ui);
     if (!strcmp(which, "scroll-bar"))
         return probe_scroll_bar(ui);
+    if (!strcmp(which, "field-type"))
+        return probe_field_type(ui);
+    if (!strcmp(which, "field-edit"))
+        return probe_field_edit(ui);
+    if (!strcmp(which, "field-utf8"))
+        return probe_field_utf8(ui);
+    if (!strcmp(which, "field-select"))
+        return probe_field_select(game, ui, font);
+    if (!strcmp(which, "field-clipboard"))
+        return probe_field_clipboard(game, ui);
+    if (!strcmp(which, "field-undo"))
+        return probe_field_undo(ui);
+    if (!strcmp(which, "field-caret-x"))
+        return probe_field_caret_x(ui, font);
+    if (!strcmp(which, "field-scroll-x"))
+        return probe_field_scroll_x(ui);
+    if (!strcmp(which, "field-multiline"))
+        return probe_field_multiline(ui, font);
+    if (!strcmp(which, "field-keys"))
+        return probe_field_keys(ui);
+    if (!strcmp(which, "field-focus"))
+        return probe_field_focus(ui);
+    if (!strcmp(which, "match"))
+        return probe_match();
     return -1;
 }
