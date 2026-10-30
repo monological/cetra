@@ -519,8 +519,11 @@ bool ui_pointer_over(const UISystem* ui, float x, float y);
  * A TEXT FIELD (spec 14.2): a caret, a selection, the clipboard and undo over a UTF-8 buffer,
  * driven by the keys and characters UIInput carries and by the pointer. It takes the keys while it
  * holds the focus: arrows move its caret rather than the focus, Enter submits, Esc lets go -- or
- * closes a modal screen -- and Tab moves the focus on. Its element's `text` is the placeholder,
- * drawn dim while it is empty. Fixed at 240 points wide by default, as a slider is.
+ * closes a modal screen -- and Tab moves the focus on, the keys after it in the pass going where
+ * it put the focus. A field the app focuses takes none of the next pass's keys, which came before
+ * it had the focus, so an app may focus one from its own key callback and the key that asked is
+ * not typed into it. Its element's `text` is the placeholder, drawn dim while it is empty. Fixed
+ * at 240 points wide by default, as a slider is.
  */
 enum {
     UI_FIELD_MULTILINE = 1,       // wraps, and grows to `max_rows` rows, then scrolls inside itself
@@ -536,7 +539,7 @@ const char* ui_field_text(const UIElement* el);
 // Replaces the text -- no on_change, since the app did it -- with the caret at its end, its undo
 // forgotten and its runs cleared.
 void ui_field_set_text(UIElement* el, const char* text);
-// After any pass that changed the text, once.
+// Once after a pass whose keys edited the text.
 void ui_field_set_on_change(UIElement* el, UIActionFn on_change, void* user);
 void ui_field_set_on_key(UIElement* el, UIKeyFn on_key, void* user);
 // Whether the UI takes the keyboard: a text field holds the top screen's focus, or a modal screen
@@ -556,11 +559,13 @@ void ui_set_element_program(UIElement* el, struct ShaderProgram* program);
 void ui_set_size(UIElement* el, UISize x_mode, float x, UISize y_mode, float y);
 
 /*
- * Settles every element's rect for a screen at this size, in points. PURE: no
- * GL, no clock, no input, no allocation beyond the tree that already exists.
+ * Settles every element's rect for a screen at this size, in points. No GL, no
+ * clock and no input. A pane of virtual rows builds and frees its rows here, from
+ * where the last layout left its scroll, and lays out again on what it built; a
+ * screen with none allocates nothing beyond the lines its labels keep.
  *
- * A menu's geometry is a function of a tree and a size, so keeping it pure is
- * what lets it be checked numerically with no window and no GPU at all.
+ * A menu's geometry is a function of a tree and a size, so keeping it free of the
+ * GPU and the clock is what lets it be checked numerically with no window at all.
  */
 void ui_layout(UIScreen* screen, float width, float height);
 

@@ -27785,11 +27785,15 @@ def run_ui_gate(workdir):
                      the end, and Home scrolls back to the start.
       ui-field-multiline a multi-line field wraps into more rows than its most,
                      stops growing at three rows' height, keeps the caret's x going
-                     up a row, and Home goes to the wrapped row's start.
+                     up a row, Home goes to the wrapped row's start, and End on a
+                     line ending in spaces goes past them to its newline.
       ui-field-keys  Enter submits; the key hook takes Up before the field; Tab
-                     and Shift+Tab move the focus in tree order; Esc lets go in a
-                     screen that is not modal and closes a modal one; Shift+Enter
-                     is a new line in a field that submits on Enter.
+                     and Shift+Tab move the focus in tree order, and a character
+                     after two Tabs in one pass reaches the field they reach; Esc
+                     lets go in a screen that is not modal, a page key after it in
+                     the same pass finding nothing focused, and closes a modal one;
+                     the keys of the pass the app focused a field in are not its;
+                     Shift+Enter is a new line in a field that submits on Enter.
       ui-field-focus the pointer passing over a button leaves a field focused; a
                      press on nothing lets go; a press on the field or the button
                      takes the focus there; ui_wants_keyboard follows the field.
@@ -28418,11 +28422,13 @@ def run_ui_gate(workdir):
         h = p[("field", "rect")][3]
         x0, x1 = p[("up", "x")]
         dy = p[("up", "dy")][0]
+        end = p.get(("end", "caret"), [None])[0]
         ok = (rows > 3 and close(h, 3 * lh + 16.0) and abs(x0 - x1) < 12.0 and close(dy, lh)
-              and p[("home", "caret")][0] > 0 and p[("home", "space")][0] == 1)
+              and p[("home", "caret")][0] > 0 and p[("home", "space")][0] == 1 and end == 6)
         detail = (f"{rows:.0f} rows (want over 3) in {h:.1f} points (want {3 * lh + 16:.0f}); up "
                   f"a row the caret's x moves {abs(x0 - x1):.2f} (want under a glyph) and its y "
-                  f"{dy:.1f} (want {lh:.0f}); Home at {p[('home', 'caret')][0]:.0f}, a word's start")
+                  f"{dy:.1f} (want {lh:.0f}); Home at {p[('home', 'caret')][0]:.0f}, a word's "
+                  f"start; End on 'abc   ' at {end} (want 6, past its spaces)")
     print(f"  ui-field-multiline    {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-field-multiline", ok)
 
@@ -28431,9 +28437,10 @@ def run_ui_gate(workdir):
         ok, detail = False, "the probe produced nothing"
     else:
         want = {("enter", "submits"): 1, ("hook", "taken"): 1, ("hook", "caret"): 3,
-                ("tab", "button"): 1, ("backtab", "field"): 1, ("escape", "focus"): 1,
-                ("escape", "onstack"): 1, ("newline", "text"): 1, ("chat", "submits"): 1,
-                ("modal", "before"): 1, ("modal", "after"): 0}
+                ("tab", "button"): 1, ("backtab", "field"): 1, ("tabcarry", "text"): 1,
+                ("escape", "focus"): 1, ("escape", "onstack"): 1, ("before", "text"): 1,
+                ("newline", "text"): 1, ("chat", "submits"): 1, ("modal", "before"): 1,
+                ("modal", "after"): 0}
         wrong = {f"{a} {b}": p.get((a, b), [None])[0] for (a, b), v in want.items()
                  if p.get((a, b), [None])[0] != v}
         ok = not wrong

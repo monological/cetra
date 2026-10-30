@@ -30,18 +30,13 @@ void ui_field_break(const UISystem* ui, UIElement* el, const UIStyle* s, float w
 // The height of the field's content: one line, or its rows up to its most.
 float ui_field_content_height(const UIElement* el);
 
-// What a field did with a pass's input that the UI has to act on.
-typedef enum {
-    UI_FIELD_KEPT = 0, // nothing for the UI
-    UI_FIELD_BACK,     // Esc: close a modal screen, or let go of the focus
-    UI_FIELD_NEXT,     // Tab: the next focusable element in tree order
-    UI_FIELD_PREVIOUS, // Shift+Tab: the one before
-} UIFieldVerdict;
-
-// The focused field takes the pass's keys and characters, in order, the field's on_key first.
-UIFieldVerdict ui_field_keys(const UISystem* ui, UIElement* el, const UIInput* in);
-// Whether the focused field uses a key itself, so a pane round it does not scroll for it.
-bool ui_field_uses_key(const UIElement* el, int key);
+// Around the keys a focused field takes in one turn of a pass: the caret restarts its blink when
+// they moved it, and on_change fires when they edited the text.
+void ui_field_keys_begin(UIElement* el);
+void ui_field_keys_end(UIElement* el);
+// One key or character to the focused field, the field's on_key first. False for a key it does
+// not use -- Esc, Tab, and Page Up or Page Down on one line -- which is the screen's.
+bool ui_field_key(const UISystem* ui, UIElement* el, const InputKeyEvent* ev);
 // A press on the field at the pointer, `content` its content box: the caret placed, the selection
 // extended with Shift held, a word selected by a second press close in time and the line by a
 // third.

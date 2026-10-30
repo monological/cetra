@@ -69,10 +69,14 @@ struct UIField {
     UILines rows;
 
     float scroll_x, scroll_y; // the content's offset inside the field's box
-    bool caret_moved;         // since the blink last restarted
-    double caret_time;        // when it did, on the draw's clock
-    double last_press;        // the pointer's last press, on the input's clock
-    int presses;              // how many in a row, for a word or a line
+    unsigned edits;           // every insert and delete, counted: what on_change watches
+    // The caret, the selection and the edits as a turn of keys began (ui_field_keys_begin).
+    int was_cursor, was_start, was_end;
+    unsigned was_edits;
+    bool caret_moved;  // since the blink last restarted
+    double caret_time; // when it did, on the draw's clock
+    double last_press; // the pointer's last press, on the input's clock
+    int presses;       // how many in a row, for a word or a line
     float press_x, press_y;
 
     UIActionFn on_change;
@@ -193,10 +197,18 @@ static int _row_start(const UIField* f, const STB_TexteditState* s, int cursor) 
     return (int)f->rows.starts[_row_of(f, cursor)];
 }
 
+// A line's end is before its newline, its trailing spaces in it; a wrapped row's is before the
+// spaces it broke at, which leaves the caret on the row rather than at the next one's start.
 static int _row_end(const UIField* f, const STB_TexteditState* s, int cursor) {
     if (s->single_line)
         return f->len;
-    return (int)ui_lines_end(&f->rows, &f->text, _row_of(f, cursor));
+    const size_t row = _row_of(f, cursor);
+    if (row + 1 >= f->rows.count)
+        return f->len;
+    const size_t next = f->rows.starts[row + 1];
+    if (f->buf[next - 1] == '\n')
+        return (int)next - 1;
+    return (int)ui_lines_end(&f->rows, &f->text, row);
 }
 
 // A codepoint's width at byte `line_start + i`: from where it is drawn to where the next is, so
@@ -237,6 +249,7 @@ static bool _reserve(UIField* f, int need) {
 static void _delete_chars(UIField* f, int at, int n) {
     memmove(f->buf + at, f->buf + at + n, (size_t)(f->len - at - n + 1));
     f->len -= n;
+    f->edits++;
     _sync(f);
 }
 
@@ -246,6 +259,7 @@ static int _insert_chars(UIField* f, int at, const char* text, int n) {
     memmove(f->buf + at + n, f->buf + at, (size_t)(f->len - at + 1));
     memcpy(f->buf + at, text, (size_t)n);
     f->len += n;
+    f->edits++;
     _sync(f);
     return n;
 }
@@ -541,9 +555,10 @@ static void _type(UIField* f, uint32_t cp) {
 /*
  * One key, on the platform's conventions. macOS: Option moves a word, Cmd to a line's or the text's
  * end, and Option- or Cmd-Backspace deletes that far. Elsewhere: Ctrl moves a word, Home and End
- * the line, Ctrl+Home and Ctrl+End the text. Shift extends the selection throughout.
+ * the line, Ctrl+Home and Ctrl+End the text. Shift extends the selection throughout. False for a
+ * key the field does not use.
  */
-static UIFieldVerdict _key(const UISystem* ui, UIElement* el, UIField* f, const InputKeyEvent* ev) {
+static bool _key(const UISystem* ui, UIElement* el, UIField* f, const InputKeyEvent* ev) {
     const int mods = ev->mods;
     const int sh = (mods & GLFW_MOD_SHIFT) ? STB_TEXTEDIT_K_SHIFT : 0;
     const bool shortcut = (mods & SHORTCUT_MOD) != 0;
@@ -557,9 +572,8 @@ static UIFieldVerdict _key(const UISystem* ui, UIElement* el, UIField* f, const 
 #endif
     switch (ev->key) {
         case GLFW_KEY_ESCAPE:
-            return UI_FIELD_BACK;
         case GLFW_KEY_TAB:
-            return sh ? UI_FIELD_PREVIOUS : UI_FIELD_NEXT;
+            return false;
         case GLFW_KEY_ENTER:
         case GLFW_KEY_KP_ENTER:
             if (!multi || ((f->flags & UI_FIELD_SUBMIT_ON_ENTER) && !sh)) {
@@ -607,13 +621,12 @@ static UIFieldVerdict _key(const UISystem* ui, UIElement* el, UIField* f, const 
             break;
         case GLFW_KEY_PAGE_UP:
         case GLFW_KEY_PAGE_DOWN:
-            if (multi) {
-                f->state.row_count_per_page = el->max_rows > 0 ? el->max_rows : FIELD_ROWS_DEFAULT;
-                stb_textedit_key(
-                    f, &f->state,
-                    (ev->key == GLFW_KEY_PAGE_UP ? STB_TEXTEDIT_K_PGUP : STB_TEXTEDIT_K_PGDOWN) |
-                        sh);
-            }
+            if (!multi)
+                return false; // a pane round a one-line field pages instead
+            f->state.row_count_per_page = el->max_rows > 0 ? el->max_rows : FIELD_ROWS_DEFAULT;
+            stb_textedit_key(
+                f, &f->state,
+                (ev->key == GLFW_KEY_PAGE_UP ? STB_TEXTEDIT_K_PGUP : STB_TEXTEDIT_K_PGDOWN) | sh);
             break;
         case GLFW_KEY_BACKSPACE:
             if (ro)
@@ -665,51 +678,44 @@ static UIFieldVerdict _key(const UISystem* ui, UIElement* el, UIField* f, const 
         default:
             break;
     }
-    return UI_FIELD_KEPT;
+    return true;
 }
 
-UIFieldVerdict ui_field_keys(const UISystem* ui, UIElement* el, const UIInput* in) {
+void ui_field_keys_begin(UIElement* el) {
     UIField* f = el ? el->field : NULL;
-    if (!f || !in)
-        return UI_FIELD_KEPT;
-    const int len = f->len;
-    const STB_TexteditState before = f->state;
-    // A change is told by the text itself, since an edit -- a paste over a selection -- can leave
-    // the length as it was.
-    char* snapshot = NULL;
-    if (f->on_change) {
-        snapshot = malloc((size_t)f->len + 1);
-        if (snapshot)
-            memcpy(snapshot, f->buf, (size_t)f->len + 1);
-    }
-    UIFieldVerdict verdict = UI_FIELD_KEPT;
-    for (int i = 0; i < in->key_event_count && verdict == UI_FIELD_KEPT; i++) {
-        const InputKeyEvent* ev = &in->key_events[i];
-        if (ev->codepoint) {
-            _type(f, ev->codepoint);
-            continue;
-        }
-        if (f->on_key && f->on_key(el, ev, f->key_user))
-            continue;
-        verdict = _key(ui, el, f, ev);
-    }
-    if (f->state.cursor != before.cursor || f->state.select_start != before.select_start ||
-        f->state.select_end != before.select_end || f->len != len)
-        f->caret_moved = true;
-    if (f->on_change && (snapshot ? strcmp(snapshot, f->buf) != 0 : f->len != len))
-        f->on_change(el, f->change_user);
-    free(snapshot);
-    return verdict;
+    if (!f)
+        return;
+    f->was_cursor = f->state.cursor;
+    f->was_start = f->state.select_start;
+    f->was_end = f->state.select_end;
+    f->was_edits = f->edits;
 }
 
-bool ui_field_uses_key(const UIElement* el, int key) {
-    const UIField* f = el->field;
+// An edit is told by the count of them rather than the length, since a paste over a selection can
+// leave the length as it was.
+void ui_field_keys_end(UIElement* el) {
+    UIField* f = el ? el->field : NULL;
     if (!f)
+        return;
+    const bool edited = f->edits != f->was_edits;
+    if (edited || f->state.cursor != f->was_cursor || f->state.select_start != f->was_start ||
+        f->state.select_end != f->was_end)
+        f->caret_moved = true;
+    if (edited && f->on_change)
+        f->on_change(el, f->change_user);
+}
+
+bool ui_field_key(const UISystem* ui, UIElement* el, const InputKeyEvent* ev) {
+    UIField* f = el ? el->field : NULL;
+    if (!f || !ev)
         return false;
-    if (key == GLFW_KEY_HOME || key == GLFW_KEY_END)
+    if (ev->codepoint) {
+        _type(f, ev->codepoint);
         return true;
-    return (key == GLFW_KEY_PAGE_UP || key == GLFW_KEY_PAGE_DOWN) &&
-           (f->flags & UI_FIELD_MULTILINE);
+    }
+    if (f->on_key && f->on_key(el, ev, f->key_user))
+        return true;
+    return _key(ui, el, f, ev);
 }
 
 // ------------------------------------------------------------------- the pointer

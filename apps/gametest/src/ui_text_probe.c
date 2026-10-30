@@ -834,6 +834,11 @@ static int probe_field_multiline(UISystem* ui, Font* font) {
     printf("ui field-multiline home caret %d\n", home);
     printf("ui field-multiline home space %d\n",
            home > 0 && ui_field_text(field)[home - 1] == ' ' ? 1 : 0);
+    // End on a line ending in spaces goes past them, to its newline at byte 6.
+    ui_field_set_text(field, "abc   \ndef");
+    one_key(ui, GLFW_KEY_UP, 0);
+    one_key(ui, GLFW_KEY_END, 0);
+    printf("ui field-multiline end caret %d\n", cursor_of(field));
     return 0;
 }
 
@@ -854,8 +859,21 @@ static int probe_field_keys(UISystem* ui) {
     printf("ui field-keys tab button %d\n", ui_focused(s) == button ? 1 : 0);
     one_key(ui, GLFW_KEY_TAB, GLFW_MOD_SHIFT);
     printf("ui field-keys backtab field %d\n", ui_focused(s) == field ? 1 : 0);
-    // Esc in a screen that is not modal lets go of the focus.
-    one_key(ui, GLFW_KEY_ESCAPE, 0);
+    // A key after a Tab in one pass goes where the Tab put the focus: past the button to a second
+    // field, which takes the character.
+    const UIElement* second = ui_text_field(field->parent, 0, NULL, NULL);
+    ev_key(GLFW_KEY_TAB, 0);
+    ev_key(GLFW_KEY_TAB, 0);
+    ev_text("x");
+    type_pass(ui);
+    say_text("field-keys", "tabcarry", second, "x");
+    ui_set_focus(s, field);
+    type_pass(ui);
+    // Esc in a screen that is not modal lets go of the focus, and a page key after it in the same
+    // pass finds nothing focused.
+    ev_key(GLFW_KEY_ESCAPE, 0);
+    ev_key(GLFW_KEY_HOME, 0);
+    type_pass(ui);
     printf("ui field-keys escape focus %d\n", ui_focused(s) == NULL ? 1 : 0);
     printf("ui field-keys escape onstack %d\n", ui_on_stack(ui, s) ? 1 : 0);
     ui_pop(ui);
@@ -866,6 +884,10 @@ static int probe_field_keys(UISystem* ui) {
         ui_screen_root(chat), UI_FIELD_MULTILINE | UI_FIELD_SUBMIT_ON_ENTER, on_submit, NULL);
     ui_push(ui, chat);
     ui_set_focus(chat, input);
+    // The keys of the pass the app focused it in came before it had the focus.
+    ev_text("no");
+    type_pass(ui);
+    say_text("field-keys", "before", input, "");
     ev_text("hi");
     ev_key(GLFW_KEY_ENTER, GLFW_MOD_SHIFT);
     ev_text("there");
