@@ -534,9 +534,15 @@ Engine* ui_system_engine(const UISystem* ui) {
     return ui ? ui->engine : NULL;
 }
 
+// Whether `el` takes the keys while it holds the focus: a text field does, everything else leaves
+// them to the screen and the app.
+static bool _takes_keys(const UIElement* el) {
+    return el && el->kind == UI_TEXT_FIELD;
+}
+
 bool ui_wants_keyboard(const UISystem* ui) {
     const UIScreen* top = ui_top(ui);
-    if (top && top->focused && top->focused->kind == UI_TEXT_FIELD)
+    if (top && _takes_keys(top->focused))
         return true;
     return ui_captures_input(ui);
 }
@@ -1835,6 +1841,62 @@ static void _tab(const UISystem* ui, UIScreen* top, int dir) {
     _reveal(ui, top->focused);
 }
 
+// Page Up, Page Down, Home or End: the pane the focus is in, or with nothing focused the pane
+// under the pointer, scrolled a page or to an end, easing there.
+static void _scroll_key(const UISystem* ui, const UIScreen* top, const UIInput* in, int key) {
+    UIElement* pane =
+        top->focused ? (top->focused->kind == UI_SCROLL ? top->focused : _pane_of(top->focused))
+                     : _pane_at(top->root, in->pointer_x, in->pointer_y);
+    if (!pane)
+        return;
+    const float page = _pane_view(ui, pane) * 0.9f;
+    const float to = key == GLFW_KEY_PAGE_UP     ? pane->scroll_target - page
+                     : key == GLFW_KEY_PAGE_DOWN ? pane->scroll_target + page
+                     : key == GLFW_KEY_HOME      ? 0.0f
+                                                 : _scroll_max(ui, pane);
+    _scroll_to(ui, pane, to, false);
+}
+
+/*
+ * A pass's keys and characters, each in order to what holds the focus at its turn: a focused field
+ * first, and what it does not use -- or every key, with anything else focused -- to the screen:
+ * Tab moves the focus in tree order, Esc lets go of a field, and Page Up, Page Down, Home and End
+ * scroll. The keys stop at a screen closed by one of them, being meant for it. A field the app
+ * focused since the last pass takes none of them, since they came before it had the focus: the
+ * key that opened a palette is not typed into it. True when Esc let go of a field.
+ */
+static bool _route_keys(UISystem* ui, UIScreen* top, const UIInput* in, const UIElement* app_set) {
+    if (app_set && top->focused == app_set && _takes_keys(app_set))
+        return false;
+    UIElement* field = NULL; // the field taking keys, between its begin and its end
+    bool let_go = false;
+    for (int i = 0; i < in->key_event_count && ui_top(ui) == top; i++) {
+        UIElement* f = _takes_keys(top->focused) ? top->focused : NULL;
+        if (f != field) {
+            if (field)
+                ui_field_keys_end(field);
+            if (f)
+                ui_field_keys_begin(f);
+            field = f;
+        }
+        const InputKeyEvent* ev = &in->key_events[i];
+        if ((f && ui_field_key(ui, f, ev)) || ev->codepoint)
+            continue;
+        if (ev->key == GLFW_KEY_TAB) {
+            _tab(ui, top, (ev->mods & GLFW_MOD_SHIFT) ? -1 : 1);
+        } else if (ev->key == GLFW_KEY_ESCAPE && f) {
+            _let_go(ui, top);
+            let_go = true;
+        } else if (ev->key == GLFW_KEY_PAGE_UP || ev->key == GLFW_KEY_PAGE_DOWN ||
+                   ev->key == GLFW_KEY_HOME || ev->key == GLFW_KEY_END) {
+            _scroll_key(ui, top, in, ev->key);
+        }
+    }
+    if (field)
+        ui_field_keys_end(field);
+    return let_go;
+}
+
 void ui_update(UISystem* ui, const UIInput* in, float width, float height) {
     if (!ui)
         return;
@@ -1861,8 +1923,9 @@ void ui_update(UISystem* ui, const UIInput* in, float width, float height) {
 
     // A focus the app set, or one a screen arrived with, is scrolled into view as one navigated
     // to is.
-    if (top->focused && top->focused != ui->focus_seen)
-        _reveal(ui, top->focused);
+    UIElement* const app_set = top->focused != ui->focus_seen ? top->focused : NULL;
+    if (app_set)
+        _reveal(ui, app_set);
 
     // A pane's bar: a press on it is a press on the bar and on nothing under it, and the thumb
     // held follows the pointer down the track.
@@ -1916,7 +1979,7 @@ void ui_update(UISystem* ui, const UIInput* in, float width, float height) {
     ui->last_pointer_y = in->pointer_y;
     // A text field holding the focus keeps it as the pointer passes over other things, since the
     // keys are going to it; a press moves it.
-    if (moved && hovered && !(top->focused && top->focused->kind == UI_TEXT_FIELD))
+    if (moved && hovered && !_takes_keys(top->focused))
         top->focused = hovered;
 
     // Press captures. Release over the captured element activates it; release
@@ -1965,21 +2028,17 @@ void ui_update(UISystem* ui, const UIInput* in, float width, float height) {
         ui->pressed = NULL;
     }
 
-    // A focused field takes the keys and characters -- the focus as the pointer left it. Navigation
-    // and accept are then not the pass's to act on -- an app that maps the arrows to navigation
-    // would move the focus out of the field with every caret move -- and back lets go of it.
-    const bool typing = top->focused && top->focused->kind == UI_TEXT_FIELD;
-    if (typing) {
-        const UIFieldVerdict v = ui_field_keys(ui, top->focused, in);
-        if (v == UI_FIELD_BACK || in->back)
-            _let_go(ui, top);
-        else if (v == UI_FIELD_NEXT || v == UI_FIELD_PREVIOUS)
-            _tab(ui, top, v == UI_FIELD_NEXT ? 1 : -1);
+    // While a field holds the focus -- as the pointer left it -- navigation and accept are not the
+    // pass's to act on: an app that maps the arrows to navigation would move the focus out of the
+    // field with every caret move. Back lets go of it, as Esc does.
+    const bool typing = _takes_keys(top->focused);
+    const bool let_go = _route_keys(ui, top, in, app_set);
+    if (ui_top(ui) != top) {
+        // A key closed the screen -- a palette's Enter -- and the rest of the pass was the
+        // screen's.
+        ui->focus_seen = ui_top(ui) ? ui_top(ui)->focused : NULL;
+        return;
     }
-
-    for (int i = 0; !typing && i < in->key_event_count; i++)
-        if (in->key_events[i].key == GLFW_KEY_TAB)
-            _tab(ui, top, (in->key_events[i].mods & GLFW_MOD_SHIFT) ? -1 : 1);
 
     if (!typing && (in->nav_up || in->nav_down || in->nav_left || in->nav_right)) {
         const int dx = (in->nav_right ? 1 : 0) - (in->nav_left ? 1 : 0);
@@ -1995,32 +2054,14 @@ void ui_update(UISystem* ui, const UIInput* in, float width, float height) {
         }
     }
 
-    // Page Up, Page Down, Home and End scroll the pane the focus is in, or with nothing focused
-    // the pane under the pointer, easing there.
-    for (int i = 0; i < in->key_event_count; i++) {
-        const int key = in->key_events[i].key;
-        if (key != GLFW_KEY_PAGE_UP && key != GLFW_KEY_PAGE_DOWN && key != GLFW_KEY_HOME &&
-            key != GLFW_KEY_END)
-            continue;
-        if (typing && ui_field_uses_key(top->focused, key))
-            continue;
-        UIElement* pane =
-            top->focused ? (top->focused->kind == UI_SCROLL ? top->focused : _pane_of(top->focused))
-                         : _pane_at(top->root, in->pointer_x, in->pointer_y);
-        if (!pane)
-            continue;
-        const float page = _pane_view(ui, pane) * 0.9f;
-        const float to = key == GLFW_KEY_PAGE_UP     ? pane->scroll_target - page
-                         : key == GLFW_KEY_PAGE_DOWN ? pane->scroll_target + page
-                         : key == GLFW_KEY_HOME      ? 0.0f
-                                                     : _scroll_max(ui, pane);
-        _scroll_to(ui, pane, to, false);
-    }
-
     if (!typing && in->accept && top->focused)
         _activate(top->focused);
-    if (!typing && in->back)
-        ui_pop(ui);
+    if (in->back && !let_go) {
+        if (typing)
+            _let_go(ui, top);
+        else
+            ui_pop(ui);
+    }
 
     // States for this frame's draw. Focus first, then hover over it, then the
     // held element, so a pressed control looks pressed rather than merely

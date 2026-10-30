@@ -1438,7 +1438,6 @@ static void start_late_work(Engine* engine) {
                             texture_desc(true), on_idle_loaded, NULL);
 }
 
-static void open_asked(void);
 static void history_stream(Engine* engine);
 
 static void on_update(Engine* engine, float dt) {
@@ -1452,7 +1451,6 @@ static void on_update(Engine* engine, float dt) {
     if (g_say_typed)
         say_typed(engine);
     live_ui_update(engine);
-    open_asked();
     history_stream(engine);
     // The input pass an app owes its UI, with no input: it is what settles the focused button's
     // state, which its ease then follows.
@@ -1759,9 +1757,6 @@ static Hit g_pal_hits[JUMP_NAMES]; // what the field matches, best first
 static int g_pal_count, g_pal_selected;
 static bool g_pal_jump; // the list is the jump's names rather than the commands
 static char g_jump_names[JUMP_NAMES][24];
-// Asked for by a key and done after the next input pass: 1 the palette, 2 the jump, 3 the caret
-// into the history's input line.
-static int g_open_palette;
 
 static const char* pal_name(int i) {
     return g_pal_jump ? g_jump_names[i] : COMMANDS[i].name;
@@ -1944,11 +1939,11 @@ static void on_key(Engine* engine, int key, int scancode, int action, int mods) 
     const bool shortcut = (mods & GLFW_MOD_CONTROL) != 0;
 #endif
     if (g_palette && key == GLFW_KEY_K && shortcut)
-        g_open_palette = 1;
+        palette_open(false);
     else if (g_palette && key == GLFW_KEY_SLASH && !mods)
-        g_open_palette = 2;
+        palette_open(true);
     else if (g_history && (key == GLFW_KEY_ENTER || key == GLFW_KEY_KP_ENTER))
-        g_open_palette = 3;
+        ui_set_focus(g_history, g_history_input);
     else if (key == GLFW_KEY_G)
         cmd_gui(engine);
     else if (key == GLFW_KEY_F)
@@ -1961,17 +1956,6 @@ static void on_key(Engine* engine, int key, int scancode, int action, int mods) 
         cmd_reset(engine);
     else if (key == GLFW_KEY_P)
         cmd_print(engine);
-}
-
-// The palette is opened after the frame's input pass, so the key that asked for it -- `/` brings
-// its character too -- is not typed into it; and the input line is focused after it for the same
-// reason, or its Enter would be its first key.
-static void open_asked(void) {
-    if (g_open_palette == 3)
-        ui_set_focus(g_history, g_history_input);
-    else if (g_open_palette)
-        palette_open(g_open_palette == 2);
-    g_open_palette = 0;
 }
 
 static void usage(const char* argv0) {
