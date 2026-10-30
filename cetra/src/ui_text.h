@@ -57,9 +57,9 @@ void ui_text_draw_span(UIDrawList* dl, const UIText* t, size_t from, size_t to, 
 float ui_text_baseline(const UIText* t, float top);
 
 /*
- * A text's lines -- a label's, or a multi-line field's rows: wrapped at a width, or at its '\n's
+ * A text's lines -- an element's, or a multi-line field's rows: wrapped at a width, or at its '\n's
  * alone -- and its measures. Kept while what they were taken for is unchanged: a long text is a
- * walk of all of it, and the layout runs several times a frame.
+ * walk of all of it, and the layout runs several times a frame. Zeroed, they hold nothing.
  */
 typedef struct UILines {
     size_t* starts; // the byte each line starts at
@@ -68,12 +68,11 @@ typedef struct UILines {
     // The face, size and tracking the lines and the measures are for. A text in another drops both.
     const Font* font;
     float size, tracking;
-    float widest_line, longest_word; // -1 until asked
+    float widest_line, longest_word; // each kept while its flag says it was taken
+    bool has_widest_line, has_longest_word;
 } UILines;
 
-// Drops the lines and the measures, for a text that changed. Lines start out cleared.
-void ui_lines_clear(UILines* lines);
-// Sets `*width` to the text's widest line, or its longest word when `wrap`: what a label is
+// Sets `*width` to the text's widest line, or its longest word when `wrap`: what an element is
 // measured by across. Kept until the text changes or is in another face, size or tracking; true
 // when it walked the text for it.
 bool ui_lines_measure(UILines* lines, const UIText* t, bool wrap, float* width);
@@ -83,9 +82,10 @@ bool ui_lines_measure(UILines* lines, const UIText* t, bool wrap, float* width);
  * kept them, or ran out of memory, which leaves `count` 0.
  */
 bool ui_lines_break(UILines* lines, const UIText* t, float width);
-// Breaks `t` again from line `line` on, keeping the lines before it: for a text changed only at or
-// after where that line starts, as an append is. Every line is broken when they are not this
-// width's and style's. True once broken; false out of memory, which leaves `count` 0.
+// Breaks `t` again from line `line` on, keeping the lines before it: for a text changed at or after
+// where that line starts, as an append is, or anywhere from line 0. The measures go with the old
+// text. Every line is broken when they are not this width's and style's. True once broken; false
+// out of memory, which leaves `count` 0.
 bool ui_lines_break_from(UILines* lines, const UIText* t, float width, size_t line);
 // The end of line `i`, its '\n' and any spaces it wrapped at left off.
 size_t ui_lines_end(const UILines* lines, const UIText* t, size_t i);

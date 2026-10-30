@@ -630,6 +630,7 @@ bool ui_set_text_runs(UIElement* el, const UITextRun* runs, size_t count) {
     el->runs = copy;
     el->run_count = copy ? count : 0;
     _drop_lines(el);
+    ui_field_runs_changed(el);
     return true;
 }
 
@@ -705,15 +706,12 @@ static void _padding_from(const UIElement* el, const UIStyle* s, float out[4]) {
         out[i] = glm_max(out[i], 0.0f); // a negative side is none
 }
 
-// A label's lines, made cleared on first use; NULL out of memory.
-static UILines* _label_lines(UIElement* el) {
+// An element's lines, made on first use; NULL out of memory.
+static UILines* _text_lines(UIElement* el) {
     if (!el->lines) {
         el->lines = calloc(1, sizeof(UILines));
-        if (!el->lines) {
-            log_error("ui: out of memory keeping a label's lines");
-            return NULL;
-        }
-        ui_lines_clear(el->lines);
+        if (!el->lines)
+            log_error("ui: out of memory keeping an element's lines");
     }
     return el->lines;
 }
@@ -732,30 +730,16 @@ static UIText _element_text(const UISystem* ui, const UIElement* el, const UISty
 static float _intrinsic(const UISystem* ui, UIElement* el, int axis) {
     const UIStyle s = _resolve(ui, el, UI_STATE_NORMAL);
     float v = 0.0f;
-    if (el->text && el->text[0] && s.font) {
-        if (axis == 0) {
-            const UIText t = _element_text(ui, el, &s);
-            UILines* lines = el->kind == UI_LABEL ? _label_lines(el) : NULL;
-            if (lines) {
-                if (ui_lines_measure(lines, &t, el->wrap, &v))
-                    el->measures++;
-            } else {
-                v = el->wrap ? ui_text_longest_word(&t) : ui_text_widest_line(&t);
-            }
-        } else {
-            // One line height PER LINE: a label's, as it broke them; any other element's, one a
-            // '\n', since ui_draw_text starts a new line at each. Charging one made an authored
-            // two-line label measure half its height and draw outside its own rect and its
-            // parent's -- with the layout numbers all looking correct.
-            size_t lines = 1;
-            if (el->lines)
-                lines = el->lines->count;
-            else
-                for (const char* p = el->text; *p; p++)
-                    if (*p == '\n')
-                        lines++;
-            v = ui_line_height(s.font, s.font_size, s.line_spacing) * (float)lines;
-        }
+    UILines* lines = el->text && el->text[0] && s.font ? _text_lines(el) : NULL;
+    if (lines && axis == 0) {
+        const UIText t = _element_text(ui, el, &s);
+        if (ui_lines_measure(lines, &t, el->wrap, &v))
+            el->measures++;
+    } else if (lines) {
+        // One line height PER LINE, as the layout broke them. Charging one made an authored
+        // two-line label measure half its height and draw outside its own rect and its parent's --
+        // with the layout numbers all looking correct.
+        v = ui_line_height(s.font, s.font_size, s.line_spacing) * (float)lines->count;
     }
 
     switch (el->kind) {
@@ -822,10 +806,12 @@ static float _at_most(const UIElement* el, int axis, float len) {
     return el->max_size[axis] > 0.0f ? glm_min(len, el->max_size[axis]) : len;
 }
 
-// Whether a growing child can take no more room along `axis`: it is at its most.
-static bool _grown_full(const UIElement* el, int axis) {
-    const float len = axis == 0 ? el->rect.w : el->rect.h;
-    return el->max_size[axis] > 0.0f && len >= el->max_size[axis];
+// Whether a child in the flow grows along `axis` and can take more room there: it is not at its
+// most.
+static bool _still_growing(const UIElement* c, int axis) {
+    const float len = axis == 0 ? c->rect.w : c->rect.h;
+    return !c->fill && c->size_mode[axis] == UI_GROW &&
+           !(c->max_size[axis] > 0.0f && len >= c->max_size[axis]);
 }
 
 // Sums a pane's row tops again when a height, the count or its spacing has changed.
@@ -913,7 +899,9 @@ static void _measure(const UISystem* ui, UIElement* el, int axis) {
     for (size_t i = 0; i < el->child_count; i++)
         _measure(ui, el->children[i], axis);
 
-    float v = _intrinsic(ui, el, axis);
+    // A FIXED axis is its own size, so its content is not measured: a slider's label and a
+    // selector's options were walked at every layout for a size thrown away.
+    float v = el->size_mode[axis] == UI_FIXED ? 0.0f : _intrinsic(ui, el, axis);
 
     if (el->rows && axis == 1) {
         // A pane of rows is as tall as all of them, built or not.
@@ -1021,9 +1009,8 @@ static void _arrange(const UISystem* ui, UIElement* el, UIRect screen, int axis)
         // measured itself: its place was an estimate's.
         if (r->reveal >= 0 && r->reveal < r->count) {
             el->scroll_target = _row_reveal_target(el, r->reveal, in_len);
-            for (size_t i = 0; i < el->child_count; i++)
-                if (r->child_row[i] == r->reveal)
-                    r->reveal = -1;
+            if (ui_scroll_find_row(el, r->reveal))
+                r->reveal = -1;
         }
         const float scroll = _scroll_settle(el, r->top[r->count], in_len);
         for (size_t i = 0; i < el->child_count; i++) {
@@ -1042,7 +1029,7 @@ static void _arrange(const UISystem* ui, UIElement* el, UIRect screen, int axis)
         if (c->fill)
             continue;
         used += *_len(&c->rect, axis);
-        if (c->size_mode[axis] == UI_GROW && !_grown_full(c, axis))
+        if (_still_growing(c, axis))
             growing++;
         counted++;
     }
@@ -1058,7 +1045,7 @@ static void _arrange(const UISystem* ui, UIElement* el, UIRect screen, int axis)
         bool held = false;
         for (size_t i = 0; i < el->child_count; i++) {
             UIElement* c = el->children[i];
-            if (c->fill || c->size_mode[axis] != UI_GROW || _grown_full(c, axis))
+            if (!_still_growing(c, axis))
                 continue;
             float* cl = _len(&c->rect, axis);
             if (c->max_size[axis] > 0.0f && *cl + share >= c->max_size[axis]) {
@@ -1072,7 +1059,7 @@ static void _arrange(const UISystem* ui, UIElement* el, UIRect screen, int axis)
             continue;
         for (size_t i = 0; i < el->child_count; i++) {
             UIElement* c = el->children[i];
-            if (!c->fill && c->size_mode[axis] == UI_GROW && !_grown_full(c, axis))
+            if (_still_growing(c, axis))
                 *_len(&c->rect, axis) += share;
         }
         room = 0.0f;
@@ -1100,10 +1087,11 @@ static void _arrange(const UISystem* ui, UIElement* el, UIRect screen, int axis)
 }
 
 /*
- * Every label with text keeps its lines, one way however it is drawn: broken at the width the
- * first pass gave it when it wraps, at its '\n's alone when it does not, and kept by
- * ui_lines_break while that and the style are unchanged. The text and the runs drop them when
- * set, so a kept break is never for other text.
+ * Every element with text keeps its lines, which its height counts and its measures ride with: a
+ * label with `wrap` broken at the width the first pass gave it, any other at its '\n's alone, and
+ * kept by ui_lines_break while that and the style are unchanged. The text and the runs drop them
+ * when set, so a kept break is never for other text. Only a label draws through them; a control
+ * draws its text with ui_draw_text, which starts a line at each '\n' as they do.
  */
 static void _break_lines(const UISystem* ui, UIElement* el) {
     for (size_t i = 0; i < el->child_count; i++)
@@ -1116,17 +1104,18 @@ static void _break_lines(const UISystem* ui, UIElement* el) {
         ui_field_break(ui, el, &s, el->rect.w - pad[1] - pad[3]);
         return;
     }
-    if (el->kind != UI_LABEL || !el->text || !el->text[0]) {
+    if (!el->text || !el->text[0]) {
         _drop_lines(el);
         return;
     }
     const UIStyle s = _resolve(ui, el, UI_STATE_NORMAL);
     float pad[4];
     _padding_from(el, &s, pad);
-    if (!_label_lines(el))
+    if (!_text_lines(el))
         return;
     const UIText t = _element_text(ui, el, &s);
-    if (ui_lines_break(el->lines, &t, el->wrap ? el->rect.w - pad[1] - pad[3] : INFINITY))
+    const bool wraps = el->kind == UI_LABEL && el->wrap;
+    if (ui_lines_break(el->lines, &t, wraps ? el->rect.w - pad[1] - pad[3] : INFINITY))
         el->wraps++;
     else if (el->lines->count == 0)
         _drop_lines(el);
@@ -1209,10 +1198,7 @@ static bool _rows_settle(UISystem* ui, const UIScreen* screen, UIElement* pane) 
     for (int row = lo[0] < lo[1] ? lo[0] : lo[1]; row < (hi[0] > hi[1] ? hi[0] : hi[1]); row++) {
         if (!(row >= lo[0] && row < hi[0]) && !(row >= lo[1] && row < hi[1]))
             continue;
-        bool held = false;
-        for (size_t k = 0; k < pane->child_count && !held; k++)
-            held = r->child_row[k] == row;
-        if (held)
+        if (ui_scroll_find_row(pane, row))
             continue;
         if (!grow_array((void**)&r->child_row, &r->child_row_capacity, pane->child_count + 1,
                         sizeof(int), 16))

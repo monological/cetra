@@ -34,6 +34,7 @@
 #include "cetra/text.h"
 #include "cetra/ui.h"
 #include "ui_backdrop.h"
+#include "ui_bench.h"
 #include "ui_text_probe.h"
 #include "cetra/game/game.h"
 #include "cetra/game/entity.h"
@@ -7314,6 +7315,8 @@ static int run_ui_screens_probe(Game* game, const char* which) {
         printf("ui opaque plain differs %.6f\n", sig_plain != sig_over ? 1.0 : 0.0);
         printf("ui opaque covered match %.6f\n", sig_opaque == sig_over ? 1.0 : 0.0);
         printf("ui opaque popped match %.6f\n", sig_popped == sig_under ? 1.0 : 0.0);
+    } else if (!strcmp(which, "bench")) {
+        rc = run_ui_bench(ui, font);
     } else if ((rc = run_ui_text_probe(game, ui, font, which)) < 0) {
         fprintf(stderr, "ui-probe: unknown case '%s'\n", which);
         rc = 1;

@@ -346,8 +346,8 @@ struct UIElement {
     UIElement* parent;
     UIElement** children;
     size_t child_count, child_capacity;
-    // A label's lines as its last layout broke them, and its text's measures, kept until its text,
-    // its runs or its style changes -- and for the lines, its width.
+    // An element's text broken into lines by its last layout, and its text's measures, kept until
+    // its text, its runs or its style changes -- and for a wrapping label's lines, its width.
     struct UILines* lines;
     unsigned wraps;    // how many times the layout has broken them: a test of the keeping
     unsigned measures; // how many times the layout has walked its text to measure it: the same
@@ -378,7 +378,8 @@ struct UIElement {
     // it scrolls; anything else draws past it.
     float max_size[2];
     // An element's two inheritable lengths: 0 takes the style's or the theme's, and a negative one
-    // is none. The padding goes per side: top, right, bottom, left.
+    // is none. The padding is top, right, bottom, left, and taken whole: all four 0 is the style's,
+    // and otherwise each side is its own, a 0 side none as a negative one is.
     float padding[4];
     float spacing; // the gap between children
     UIAlign align_main, align_cross;

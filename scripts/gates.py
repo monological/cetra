@@ -27813,7 +27813,12 @@ def run_ui_gate(workdir):
                      appended to a read-only field joins it with its run placed after
                      the old text, the selection kept, and the row grown without
                      being built again; an append past the most is refused whole,
-                     and one with runs refused on an editable field.
+                     and one with runs refused on an editable field. Runs set in a
+                     wider face and an append made before a layout leave the field
+                     broken into the rows a field made beside it with the same text
+                     and runs takes from scratch: the runs' change breaks it again at
+                     once, where it used to wait for a layout that the append's own
+                     break could hide it from.
       ui-field-keys  Enter submits; the key hook takes Up before the field; Tab
                      and Shift+Tab move the focus in tree order, and a character
                      after two Tabs in one pass reaches the field they reach; Esc
@@ -28535,12 +28540,12 @@ def run_ui_gate(workdir):
         typed, typed_dim = p[("typed", "glyphs")][0], p[("typed", "dim")][0]
         # The full-strength glyphs on the empty field are the fixture's button; typed, "ok" joins
         # them and the hint goes.
-        ok = (p[("size", "same")][0] == 1 and dim > 0 and typed_dim == 0
-              and typed == empty - dim + 2 and p[("settext", "refused")][0] == 1)
-        detail = (f"the hint sizes nothing ({p[('size', 'same')][0]:.0f}); {dim:.0f} of {empty:.0f} "
-                  f"glyphs dim while empty, {typed_dim:.0f} once 'ok' is typed (want 0) with "
-                  f"{typed:.0f} glyphs (want {empty - dim + 2:.0f}); ui_set_text on a field refused "
-                  f"({p[('settext', 'refused')][0]:.0f})")
+        flags = flags_ok(p, [("size", "same"), ("settext", "refused")])
+        ok = flags and dim > 0 and typed_dim == 0 and typed == empty - dim + 2
+        detail = (f"the hint sizes nothing and ui_set_text on a field is refused "
+                  f"({'yes' if flags else 'no'}); {dim:.0f} of {empty:.0f} glyphs dim while empty, "
+                  f"{typed_dim:.0f} once 'ok' is typed (want 0) with {typed:.0f} glyphs (want "
+                  f"{empty - dim + 2:.0f})")
     print(f"  ui-field-placeholder  {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-field-placeholder", ok)
 
@@ -28553,11 +28558,16 @@ def run_ui_gate(workdir):
                 ("row", "builds"): 0, ("row", "grew"): 1, ("toolong", "refused"): 1,
                 ("editable", "refused"): 1}
         wrong = _probe_wrong(p, want)
-        ok = not wrong
+        rows, fresh, was = (p.get(("restyled", "rows")) or [0, 0, 0])[:3]
+        restyled = rows == fresh and fresh != was
+        ok = not wrong and restyled
         detail = ("the built row found and none past it; two appends joined, the selection and "
                   "the appended run's place (byte 6) kept, the row grown and not built again; past "
-                  "the most refused whole; runs refused on an editable field" if ok
-                  else f"wrong: {wrong}")
+                  "the most refused whole; runs refused on an editable field; " if not wrong
+                  else f"wrong: {wrong}; ") + (
+                  f"restyled and appended to before a layout, {rows:.0f} rows against "
+                  f"{fresh:.0f} broken from scratch, {was:.0f} before (want equal, and not "
+                  f"{was:.0f})")
     print(f"  ui-field-append       {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-field-append", ok)
 
@@ -28630,6 +28640,7 @@ def run_ui_gate(workdir):
                              "--input-script", script, frames=8)
     state = [int(v) for v in probe.get(("palette", "state"), [])]
     field = [int(v) for v in probe.get(("palette", "field"), [])[:4]]
+    second = [int(v) for v in probe.get(("palette", "second"), [])[:4]]
     if not out or not state or not field:
         ok, detail = False, "the run failed or printed no palette"
     else:
@@ -28644,15 +28655,14 @@ def run_ui_gate(workdir):
     note("ui-type-palette", ok)
 
     # ---- a click on a palette row, the pointer read by the engine (spec 14.3)
-    if not out or not field:
-        ok, detail = False, "no palette to click: ui-type-palette's run failed"
+    if not out or not second:
+        ok, detail = False, "no second row to click: ui-type-palette's run failed or built none"
     else:
+        # The second row's middle, Zoom out, as the app laid it out; the script's pointer is
+        # framebuffer pixels with +Y up.
         fb_h, fb_w = _ppm_array(out).shape[:2]
-        s = fb_w / 400.0  # framebuffer pixels a point, at _canvas_shot's 400 points across
-        # The second row, Zoom out: under the field by the box's 6-point gap, a 30-point row and
-        # half of the next. The script's pointer is framebuffer pixels with +Y up.
-        x = (field[0] + min(field[2], fb_w)) // 2
-        y = fb_h - round(field[3] + (6 + 30 + 15) * s)
+        x = (second[0] + min(second[2], fb_w)) // 2
+        y = fb_h - (second[1] + second[3]) // 2
         script = os.path.join(workdir, "ui_click.script")
         with open(script, "w", encoding="utf-8") as f:
             f.write(f"2 key=mod+k\n4 type=zo\n6 at={x},{y}\n7 at={x},{y} down\n8 at={x},{y}\n")

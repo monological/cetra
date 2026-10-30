@@ -1643,17 +1643,21 @@ static void _engine_pointer_button(Engine* engine, int button, int action, int m
     // otherwise a button-up that lands on a panel leaves the camera stuck
     // orbiting. A press is acted on (drag-start, picking) only when the GUI
     // doesn't want the pointer. Either way the app callback fires exactly once.
+    // A press or release is where the pointer is, whatever moves were missed: a window shown again
+    // under a cursor that moved elsewhere, or moves the GUI took.
     if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_RELEASE) {
         engine->input.is_dragging = false;
         engine->input.pointer_released = true;
-        engine->input.center_fb_x = (float)mouse_fb_x;
-        engine->input.center_fb_y = (float)mouse_fb_y;
+        engine->input.pointer_fb_x = engine->input.center_fb_x = (float)mouse_fb_x;
+        engine->input.pointer_fb_y = engine->input.center_fb_y = (float)mouse_fb_y;
     } else if (engine_gui_wants_mouse()) {
         return;
     } else if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
         engine->input.is_dragging = true;
         engine->input.pointer_pressed = true;
         engine->input.press_mods = mods;
+        engine->input.pointer_fb_x = (float)mouse_fb_x;
+        engine->input.pointer_fb_y = (float)mouse_fb_y;
         engine->input.center_fb_x = (float)mouse_fb_x;
         engine->input.center_fb_y = (float)mouse_fb_y;
         engine->input.drag_fb_x = 0.0f;
