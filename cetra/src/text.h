@@ -14,6 +14,7 @@ struct ShaderProgram;
 // Glyph information for a single character
 typedef struct GlyphInfo {
     uint32_t codepoint;
+    uint16_t pair_row; // its row and column in the font's kerning pairs
     float advance_x;
     float left_bearing;
 
@@ -56,6 +57,8 @@ typedef struct Font {
     // atlas does not hold.
     unsigned char* ttf_buffer;
     void* stb_font_info;
+    // The kerning of every pair of the atlas's glyphs, built at load and only read after.
+    struct FontPairs* pairs;
 
     size_t ref_count;
     UT_hash_handle hh;
