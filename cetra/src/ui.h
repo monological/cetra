@@ -565,8 +565,9 @@ void ui_field_set_on_key(UIElement* el, UIKeyFn on_key, void* user);
 // is up. An app's own keys -- a view's bindings -- go where this is false.
 bool ui_wants_keyboard(const UISystem* ui);
 
-// Replaces the text, and clears its runs: they name bytes of the text they were given for. On a
-// text field it is the placeholder, and the runs, which name the field's own text, stay.
+// Replaces the text, and clears its runs: they name bytes of the text they were given for. Refused
+// by name on a text field, whose text is ui_field_set_text and whose hint is
+// ui_field_set_placeholder.
 void ui_set_text(UIElement* el, const char* text);
 // A label's or a read-only field's styled runs, copied; NULL or none clears them. Refused by name,
 // and the runs left as they were, when they are out of order, overlap, reach past the text or start

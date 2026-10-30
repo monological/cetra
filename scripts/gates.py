@@ -27850,6 +27850,34 @@ def run_ui_gate(workdir):
                      lead bytes and a cut sequence decode to one U+FFFD a byte; prev
                      mirrors next at every step over good and bad bytes, and does
                      not move at the start.
+      ui-doc-roundtrip the code editor's text (spec 14.4) gives back exactly the
+                     bytes it was made from -- LF, CRLF, mixed, a lone CR, a
+                     byte-order mark, no final newline, nothing -- loaded, with a
+                     line break put in and taken out again; the line ending is
+                     found from the first line.
+      ui-doc-random  3000 seeded replaces of random bytes, line breaks and
+                     characters past ASCII, each checked against a flat string:
+                     the text, its length and line count, every line's start and
+                     content, line_of and copies; every step undone gives the
+                     first text and redone the last.
+      ui-doc-map     an offset held at an old version lands where the changes
+                     since put it: kept before an insertion at it, moved after,
+                     sent to the end of bytes that replaced it. A range is cut
+                     where a change cuts into it, dropped when one replaces it
+                     whole, grown round one inside it, and follows the changes
+                     after; a version too new or too far back is refused.
+      ui-doc-set-text a whole new text lands as the one change between the two,
+                     the shared ends on characters' edges, a caret moved through
+                     it; the same text again is no change; the host's own edit
+                     inside a character is refused.
+      ui-doc-undo    typing joins into words, a space starting the next; a sealed
+                     caret splits typing; two carets' typing is one step and joins
+                     as one caret's does; undo and redo restore the text and the
+                     carets as they were; with keep_undo off nothing is kept.
+      ui-doc-highlight a line is coloured once and again only once it changes; a
+                     stateful line waits on the walk from the top, and a changed
+                     line asks again of the lines after it only while the state
+                     it leaves has changed.
       ui-type-palette apps/canvas --palette driven by a script: mod+K opens it and
                      "zo" filters the commands to Zoom in and Zoom out, the first
                      lit at its first two bytes, with the text in the field (end to
@@ -28669,6 +28697,61 @@ def run_ui_gate(workdir):
                   f"malformed bytes (want one a byte)")
     print(f"  ui-utf8               {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-utf8", ok)
+
+    # ---- the code editor's text (spec 14.4): every probe line a 1, and as many as the case says
+    def doc_flags(case, lines, what):
+        p = _ui_probe(case)
+        if not p:
+            return False, "the probe produced nothing"
+        wrong = {f"{k[0]} {k[1]}": v[0] for k, v in p.items() if v[0] != 1}
+        if wrong or len(p) != lines:
+            return False, f"wrong: {wrong}; {len(p)} lines of {lines}"
+        return True, what
+
+    ok, detail = doc_flags("doc-roundtrip", 30, "LF, CRLF, mixed, a lone CR, a byte-order mark, "
+                           "no final newline and nothing: each byte-exact loaded, edited and undone, "
+                           "and the line ending found")
+    print(f"  ui-doc-roundtrip      {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-doc-roundtrip", ok)
+
+    p = _ui_probe("doc-random")
+    if not p:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        steps, wrong = p[("checked", "steps")][0], p[("wrong", "count")][0]
+        undone = p[("undone", "steps")][0]
+        ok = (steps == 3000 and wrong == 0 and undone > 0 and p[("undone", "first")][0] == 1
+              and p[("redone", "last")][0] == 1)
+        detail = (f"{steps:.0f} seeded replaces, {wrong:.0f} disagreeing with a flat string in its "
+                  f"text, lines, line starts, line_of or copies; {undone:.0f} steps undone to the "
+                  f"first text {p[('undone', 'first')][0]:.0f}, redone to the last "
+                  f"{p[('redone', 'last')][0]:.0f}")
+    print(f"  ui-doc-random         {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-doc-random", ok)
+
+    ok, detail = doc_flags("doc-map", 13, "offsets and ranges held at an old version land where "
+                           "the changes since put them, cut or dropped inside replaced bytes, and "
+                           "follow later changes; a version too new or too old is refused")
+    print(f"  ui-doc-map            {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-doc-map", ok)
+
+    ok, detail = doc_flags("doc-set-text", 7, "a whole new text lands as the one change between "
+                           "the two, on characters' edges, a caret moved through it; the same text "
+                           "is no change; the host's edit inside a character is refused")
+    print(f"  ui-doc-set-text       {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-doc-set-text", ok)
+
+    ok, detail = doc_flags("doc-undo", 17, "typing joins into words, a sealed caret splits it, "
+                           "two carets are one step, undo and redo restore the text and the "
+                           "carets, and with keep_undo off nothing is kept")
+    print(f"  ui-doc-undo           {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-doc-undo", ok)
+
+    ok, detail = doc_flags("doc-highlight", 8, "a line is coloured once until it changes; a "
+                           "stateful line waits on the walk, and a changed line asks again of the "
+                           "lines after it only while the state it leaves has changed")
+    print(f"  ui-doc-highlight      {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-doc-highlight", ok)
 
     # ---- the palette, end to end
     script = os.path.join(workdir, "ui_palette.script")
