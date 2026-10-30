@@ -34,6 +34,7 @@
 #include "cetra/canvas.h"
 #include "cetra/engine.h"
 #include "cetra/fuzzy.h"
+#include "cetra/glyph_cache.h"
 #include "cetra/internal/ext/stb_truetype.h"
 #include "cetra/internal/thread.h"
 #include "cetra/postfx.h"
@@ -1441,6 +1442,86 @@ static bool g_probe;            // --canvas-probe: the run says what it did
 static const char* g_ui_text;   // --ui-text: a label in the --ui panel
 static UISystem* g_ui_live;     // the UI given the real pointer and keyboard each frame
 
+// ---- --font-sheet: the code editor's face (spec 14.4), as bitmaps made at the size shown and,
+// under each, as the UI's distance field of the same face at the same size.
+
+#define EDITOR_FONT "assets/fonts/JetBrainsMono-Regular.ttf"
+static const float FONT_SHEET_SIZES[] = {11.0f, 13.0f, 16.0f};
+static const char* FONT_SHEET_TEXT =
+    "(inst u1 tpd4e05 :value 4.7k) ; 0O 1lI \xce\xa9\xc2\xb5 \xc3\xa9";
+
+typedef struct FontSheet {
+    Engine* engine;
+    GlyphCache* caches[3];
+    Font* field; // the same face as a distance field
+    Font* label;
+} FontSheet;
+
+static FontSheet g_font_sheet;
+
+// One line from a glyph cache, its pen on whole framebuffer pixels: what the editor draws.
+static void draw_bitmap_line(UIDrawList* dl, GlyphCache* c, float x, float baseline,
+                             const char* text, float px_per_point, const vec4 color) {
+    const float x_px = roundf(x * px_per_point), base_px = roundf(baseline * px_per_point);
+    int col = 0;
+    for (const char* p = text; *p; col++) {
+        const uint32_t cp = text_utf8_next(&p);
+        GlyphBitmap g;
+        if (!glyph_cache_get(c, cp, &g) || !g.width)
+            continue;
+        const float gx = x_px + (float)(col * c->cell_width + g.left);
+        const float gy = base_px + (float)g.top;
+        const UIRect r = {gx / px_per_point, gy / px_per_point, (float)g.width / px_per_point,
+                          (float)g.height / px_per_point};
+        ui_draw_textured_quad_uv(dl, r, &c->atlas, g.uv, (float*)color);
+    }
+}
+
+static void draw_font_sheet(UIElement* el, UIDrawList* dl, void* user) {
+    FontSheet* s = user;
+    const float px = (float)s->engine->fb_width / (float)s->engine->win_width;
+    const vec4 ink = {0.86f, 0.87f, 0.84f, 1.0f};
+    ui_draw_quad(dl, el->rect, (vec4){0.09f, 0.10f, 0.12f, 1.0f});
+    float y = el->rect.y + 20.0f;
+    for (int i = 0; i < 3; i++) {
+        const float size = FONT_SHEET_SIZES[i];
+        GlyphCache* c = s->caches[i];
+        glyph_cache_set_size(c, size * px);
+        char label[64];
+        snprintf(label, sizeof(label), "%.0f pt: bitmap, then distance field", (double)size);
+        ui_draw_text(dl, (UIRect){el->rect.x + 20.0f, y, 600.0f, 16.0f}, label,
+                     &(UIStyle){.fg = {0.5f, 0.55f, 0.6f, 1.0f}, .font = s->label, .font_size = 12},
+                     UI_ALIGN_START);
+        y += 22.0f;
+        draw_bitmap_line(dl, c, el->rect.x + 20.0f, y + (float)c->ascent / px, FONT_SHEET_TEXT, px,
+                         ink);
+        y += (float)c->line_height / px + 4.0f;
+        ui_draw_text(
+            dl, (UIRect){el->rect.x + 20.0f, y, 900.0f, size * 1.4f}, FONT_SHEET_TEXT,
+            &(UIStyle){.fg = {ink[0], ink[1], ink[2], ink[3]}, .font = s->field, .font_size = size},
+            UI_ALIGN_START);
+        y += size * 1.4f + 18.0f;
+    }
+}
+
+static bool build_font_sheet(UISystem* ui, Engine* engine, Font* label) {
+    g_font_sheet.engine = engine;
+    g_font_sheet.label = label;
+    g_font_sheet.field = load_font(engine->text_renderer->font_pool, EDITOR_FONT, 64.0f, true);
+    for (int i = 0; i < 3; i++)
+        g_font_sheet.caches[i] = create_glyph_cache(EDITOR_FONT, FONT_SHEET_SIZES[i]);
+    if (!g_font_sheet.field || !g_font_sheet.caches[0] || !g_font_sheet.caches[1] ||
+        !g_font_sheet.caches[2])
+        return false;
+    UIScreen* screen = ui_screen(ui, "font-sheet");
+    UIElement* panel = ui_panel(ui_screen_root(screen));
+    ui_set_size(panel, UI_GROW, 0.0f, UI_GROW, 0.0f);
+    ui_set_style(panel, &(UIStyle){.bg = {0.09f, 0.10f, 0.12f, 1.0f}});
+    ui_set_draw(panel, draw_font_sheet, &g_font_sheet);
+    ui_push(ui, screen);
+    return true;
+}
+
 // The UI's input pass with the real pointer and keyboard, as the engine read them this frame.
 static void live_ui_update(Engine* engine) {
     if (!g_ui_live)
@@ -2027,7 +2108,8 @@ static void usage(const char* argv0) {
             "          [--tile-shift N] [--canvas-probe] [--picture] [--edit-thread]\n"
             "          [--split] [--only-view 0|1] [--ui] [--budget]\n"
             "          [--idle] [--idle-wake S,...] [--idle-load PATH] [--input-script PATH]\n"
-            "          [--ui-enter] [--ui-text TEXT] [--gui-click] [--history] [--palette]\n",
+            "          [--ui-enter] [--ui-text TEXT] [--gui-click] [--history] [--palette]\n"
+            "          [--font-sheet]\n",
             argv0);
 }
 
@@ -2045,7 +2127,7 @@ static const char* IDENTITY_PASS = "#version 330 core\n"
 int main(int argc, char** argv) {
     bool headless = false, mirror = false, probe = false, picture = false, edit_thread = false;
     bool split = false, with_ui = false, budget = false, idle = false, ui_enter = false;
-    bool history = false, palette = false;
+    bool history = false, palette = false, font_sheet = false;
     int frames = 0, width = 960, height = 600, tile_shift = 0, only_view = -1;
     const char* screenshot = NULL;
     const char* input_script = NULL;
@@ -2107,6 +2189,8 @@ int main(int argc, char** argv) {
             ui_enter = true;
         } else if (strcmp(argv[i], "--history") == 0) {
             history = true;
+        } else if (strcmp(argv[i], "--font-sheet") == 0) {
+            font_sheet = true;
         } else if (strcmp(argv[i], "--palette") == 0) {
             palette = true;
         } else if (strcmp(argv[i], "--ui-text") == 0 && more) {
@@ -2220,10 +2304,17 @@ int main(int argc, char** argv) {
     g_engine = engine;
     g_home_view = g_views[0];
     UISystem* ui = NULL;
-    if (with_ui || history || palette) {
+    if (with_ui || history || palette || font_sheet) {
         ui = create_ui_system(engine);
         ui_set_font(ui, font, 18.0f);
         ui_attach(ui, engine);
+    }
+    if (font_sheet && !build_font_sheet(ui, engine, font)) {
+        fprintf(stderr, "canvas: --font-sheet could not load %s\n", EDITOR_FONT);
+        free_ui_system(ui);
+        free_canvas(g_canvas);
+        free_engine(engine);
+        return 1;
     }
     if (palette) {
         build_palette(ui);
@@ -2305,6 +2396,8 @@ int main(int argc, char** argv) {
     }
     board_late_settle(true);
     free_ui_system(ui);
+    for (int i = 0; i < 3; i++)
+        free_glyph_cache(g_font_sheet.caches[i]);
     free_canvas(g_canvas);
     free_engine(engine);
     return 0;

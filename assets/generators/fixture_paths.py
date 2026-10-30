@@ -36,7 +36,7 @@ ASSETS = os.path.dirname(HERE)
 KIND = {".gltf": "models", ".glb": "models", ".fbx": "models",
         ".cscn": "scenes", ".ies": "ies", ".cube": "lut", ".r16": "data",
         ".png": "textures", ".jpg": "textures", ".jpeg": "textures", ".hdr": "textures",
-        ".json": "textures", ".glsl": "shaders"}
+        ".json": "textures", ".glsl": "shaders", ".ttf": "fonts"}
 
 
 def asset_subpath(filename):

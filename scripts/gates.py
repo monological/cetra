@@ -27878,6 +27878,13 @@ def run_ui_gate(workdir):
                      stateful line waits on the walk from the top, and a changed
                      line asks again of the lines after it only while the state
                      it leaves has changed.
+      ui-glyph-cache the code editor's glyphs (spec 14.4): every glyph of JetBrains
+                     Mono from ASCII through Cyrillic, packed as asked for until
+                     the atlas grows, is stb_truetype's own bitmap at that size
+                     byte for byte where the atlas holds it; the cell is the
+                     advance rounded; a codepoint the face lacks is missing; the
+                     same size again keeps the atlas, another makes the glyphs
+                     again at its scale.
       ui-type-palette apps/canvas --palette driven by a script: mod+K opens it and
                      "zo" filters the commands to Zoom in and Zoom out, the first
                      lit at its first two bytes, with the text in the field (end to
@@ -28752,6 +28759,18 @@ def run_ui_gate(workdir):
                            "lines after it only while the state it leaves has changed")
     print(f"  ui-doc-highlight      {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-doc-highlight", ok)
+
+    p = _ui_probe("glyph-cache")
+    if not p:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        checked, wrong = p[("glyphs", "checked")][0], p[("glyphs", "wrong")][0]
+        flags = {k: v[0] for k, v in p.items() if k[0] != "glyphs"}
+        ok = checked > 500 and wrong == 0 and all(v == 1 for v in flags.values()) and len(flags) == 6
+        detail = (f"{checked:.0f} glyphs of JetBrains Mono, {wrong:.0f} differing from "
+                  f"stb_truetype's own bitmap in the atlas; {flags}")
+    print(f"  ui-glyph-cache        {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-glyph-cache", ok)
 
     # ---- the palette, end to end
     script = os.path.join(workdir, "ui_palette.script")

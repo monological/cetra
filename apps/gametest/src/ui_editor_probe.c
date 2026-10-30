@@ -6,12 +6,15 @@
 
 #include "ui_editor_probe.h"
 
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include "cetra/internal/text_doc_edit.h" // the editor's half of the text, which the arms drive
+#include "cetra/glyph_cache.h"
+#include "cetra/internal/ext/stb_truetype.h" // the rasteriser the glyph cache's bitmaps are held to
+#include "cetra/internal/text_doc_edit.h"    // the editor's half of the text, which the arms drive
 #include "cetra/text.h"
 #include "cetra/text_doc.h"
 
@@ -471,6 +474,77 @@ static int probe_doc_highlight(void) {
     return 0;
 }
 
+// ---- glyph-cache
+
+#define EDITOR_FONT "assets/fonts/JetBrainsMono-Regular.ttf"
+
+// Whether every glyph the cache holds is, in its atlas, the bitmap stb_truetype makes of it at the
+// cache's scale, byte for byte: so no glyph was packed over another, and none moved as the atlas
+// grew.
+static int glyphs_wrong(const GlyphCache* c, const uint32_t* cps, size_t n, int* checked) {
+    const stbtt_fontinfo* info = c->font_info;
+    int wrong = 0;
+    *checked = 0;
+    for (size_t i = 0; i < n; i++) {
+        GlyphBitmap g;
+        if (!glyph_cache_get((GlyphCache*)c, cps[i], &g) || g.missing || !g.width)
+            continue;
+        int w = 0, h = 0, xo = 0, yo = 0;
+        unsigned char* want =
+            stbtt_GetCodepointBitmap(info, c->scale, c->scale, (int)cps[i], &w, &h, &xo, &yo);
+        const int x = (int)lroundf(g.uv[0] * (float)c->atlas.width);
+        const int y = (int)lroundf(g.uv[1] * (float)c->atlas.height);
+        bool same = want && w == g.width && h == g.height && xo == g.left && yo == g.top;
+        for (int r = 0; same && r < h; r++)
+            same = !memcmp(c->pixels + (size_t)(y + r) * (size_t)c->atlas.width + (size_t)x,
+                           want + (size_t)r * (size_t)w, (size_t)w);
+        stbtt_FreeBitmap(want, NULL);
+        wrong += !same;
+        (*checked)++;
+    }
+    return wrong;
+}
+
+static int probe_glyph_cache(void) {
+    GlyphCache* c = create_glyph_cache(EDITOR_FONT, 26.0f);
+    if (!c) {
+        fprintf(stderr, "glyph-cache: %s did not load\n", EDITOR_FONT);
+        return 1;
+    }
+    const stbtt_fontinfo* info = c->font_info;
+    int advance, bearing;
+    stbtt_GetCodepointHMetrics(info, 'M', &advance, &bearing);
+    const float scale = stbtt_ScaleForPixelHeight(info, 26.0f);
+    printf("ui glyph-cache cell rounded %d\n",
+           c->cell_width == (int)lroundf((float)advance * scale));
+    // Every codepoint the face has from ASCII through Cyrillic, enough to grow the atlas.
+    static uint32_t cps[0x500];
+    size_t n = 0;
+    for (uint32_t cp = 0x20; cp < 0x500; cp++)
+        if (stbtt_FindGlyphIndex(info, (int)cp))
+            cps[n++] = cp;
+    const int first_height = c->atlas.height;
+    int checked = 0;
+    const int wrong = glyphs_wrong(c, cps, n, &checked);
+    printf("ui glyph-cache glyphs checked %d\n", checked);
+    printf("ui glyph-cache glyphs wrong %d\n", wrong);
+    printf("ui glyph-cache atlas grew %d\n", c->atlas.height > first_height);
+    GlyphBitmap g;
+    printf("ui glyph-cache missing box %d\n", glyph_cache_get(c, 0x4e00, &g) && g.missing);
+    // The same size changes nothing; another empties the atlas and makes the glyphs again.
+    const int pen = c->pen_x + c->pen_y * c->atlas.width;
+    glyph_cache_set_size(c, 26.0f);
+    printf("ui glyph-cache same kept %d\n", pen == c->pen_x + c->pen_y * c->atlas.width);
+    glyph_cache_set_size(c, 39.0f);
+    const float big = stbtt_ScaleForPixelHeight(info, 39.0f);
+    printf("ui glyph-cache resize cell %d\n", c->cell_width == (int)lroundf((float)advance * big));
+    const uint32_t some[] = {'A', 'g', '@', 0xe9, 0x3a9};
+    const int resized_wrong = glyphs_wrong(c, some, 5, &checked);
+    printf("ui glyph-cache resize redrawn %d\n", resized_wrong == 0 && checked == 5);
+    free_glyph_cache(c);
+    return 0;
+}
+
 int run_ui_editor_probe(Game* game, UISystem* ui, Font* font, const char* which) {
     (void)game;
     (void)ui;
@@ -487,5 +561,7 @@ int run_ui_editor_probe(Game* game, UISystem* ui, Font* font, const char* which)
         return probe_doc_undo();
     if (!strcmp(which, "doc-highlight"))
         return probe_doc_highlight();
+    if (!strcmp(which, "glyph-cache"))
+        return probe_glyph_cache();
     return -1;
 }
