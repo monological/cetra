@@ -15,7 +15,6 @@
  * the struct's banner says which few fields are not like that.
  */
 
-#include <stdatomic.h>
 #include <stdint.h>
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
@@ -127,8 +126,8 @@ typedef struct Engine {
     //
     // ENGINE-OWNED, read only: the window and its sizes, every GL name, every
     // *_actual / *_ready / target_* record of what was built, the matrices,
-    // the frame clock and counters, idle mode's state behind `idle` (written
-    // through engine_request_frame and its kin), the program cache, the async loader, the
+    // the frame clock and counters, idle mode's `time_waited` and `wake`, the
+    // program cache, the async loader, the
     // input state, the capture state (`capturing`, `capture_kind`), and the
     // owned subsystems (postfx, the text renderer, the profiler). What an app
     // may change among them has a function: engine_set_camera,
@@ -479,7 +478,6 @@ typedef struct Engine {
     // Latched at NewFrame time: an ImGui frame is open this iteration and must
     // be closed with a matching igRender. Pairs the begin/end across the loop.
     bool gui_frame_active;
-    bool gui_had_input; // this frame's GUI took queued input, so idle mode draws it once more
 
     // The frame's animation clock. Every pass that animates from time reads
     // these two, so they cannot disagree -- wind displaces the shadow caster and
@@ -528,15 +526,10 @@ typedef struct Engine {
     void* user_data;       // Opaque context for engine_run's callbacks (GLFW-style)
 
     // Idle mode (spec 14.1). `idle` is a setting, read at each frame's end; the rest is the
-    // engine's: what asks for the next frame, and the time spent waiting for one.
-    bool idle;                   // true = draw only when something asks for a frame
-    bool scene_draws;            // this frame's scene had something to draw: the next is drawn too
-    bool woken;                  // an input event arrived since the frame began
-    atomic_bool frame_requested; // engine_request_frame since the frame began
-    atomic_bool waiting;         // the loop is waiting, so a request must wake it
-    atomic_int work_out;         // engine_begin_work calls not yet ended
-    double wake_at;              // the earliest timed wake, on glfwGetTime's clock; 0 = none
-    double time_waited;          // seconds spent waiting, kept out of every clock
+    // engine's.
+    bool idle;               // true = draw only when something asks for a frame
+    double time_waited;      // seconds spent waiting for a frame, kept out of every clock
+    struct EngineWake* wake; // what asks for the next frame, across threads; private
 
     // Bone visualization
     ShaderProgram* bone_program;
@@ -863,16 +856,20 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
  * frame. These calls are for changes made anywhere else.
  *
  * The time spent waiting is kept out of every clock, so a frame after a wait advances what
- * animates by one frame and not by the wait. Headless, a run in idle mode ends at the first frame
- * after which nothing asks for another and no work is out, and that frame is its screenshot;
- * --frames stays the most it draws.
+ * animates by one frame and not by the wait: a change timed in real seconds, a blink, is timed by
+ * the wall clock (glfwGetTime), which the wait is not kept out of. Headless, a run in idle mode
+ * ends at the first frame after which nothing asks for another and no work is out, and that frame
+ * is its screenshot; --frames stays the most it draws.
  */
 // Asks for the next frame. Any thread: from another one, it wakes a waiting loop.
 void engine_request_frame(Engine* engine);
-// Asks for a frame `seconds` from now; the earliest of several is kept. Main thread.
+// Asks for a frame `seconds` from now, at most a day. There is one deadline: the earlier of two
+// requests is kept and the later is dropped, so a wake that recurs asks again on the frame it
+// draws. Main thread.
 void engine_request_frame_after(Engine* engine, double seconds);
 // A result is coming from another thread that will be drawn: a headless run in idle mode does not
-// end while one is out. Any thread.
+// end while one is out. Called before the frame that must not be the last ends -- by the code
+// that starts the work, not by the worker, which may not have run yet. Any thread.
 void engine_begin_work(Engine* engine);
 // The result is in: ends what engine_begin_work began and asks for a frame. Any thread.
 void engine_end_work(Engine* engine);

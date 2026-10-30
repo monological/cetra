@@ -66,7 +66,7 @@ typedef struct SheetContext {
     double fb_scale;        // framebuffer pixels per window point
     bool probe;             // print where its shapes land
     bool edit_thread;       // fill the edit on a thread of its own, where a sheet can
-    Engine* idle;           // non-NULL under --idle: that thread fills it while the loop runs
+    Engine* engine;         // under idle mode that thread fills the edit while the loop runs
     const Font* font;       // what its text is set in
 
     // Written by a sheet that has two sides: the layers a split's mirrored
@@ -1124,17 +1124,22 @@ static void* board_thread(void* edit) {
     return NULL;
 }
 
+// The board's shapes in, then one trace queued for removal: its pad and its via stay.
+static void board_finish(Canvas* canvas, CanvasEdit* edit) {
+    canvas_apply(canvas, edit);
+    canvas_edit_remove_object(edit, BOARD_REMOVED);
+}
+
 /*
  * Under --idle with --edit-thread the board arrives as pcb's would: filled on a
- * thread while the loop runs, after a pause standing for a parse. The loop
- * waits for it rather than drawing, and the update hook applies it on the frame
- * its end wakes.
+ * thread while the loop runs, after a pause standing for a parse so that it
+ * ends while the loop waits. The update hook starts it late (start_late_work)
+ * and applies it on the frame its end wakes.
  */
-// Past the first tenth of a second, in which a hidden window is sent something that wakes a
-// waiting loop: a board ready inside it was drawn whether or not its thread woke the loop.
-enum { BOARD_LATE_MS = 300 };
-static CanvasEdit* g_late_edit;
-static atomic_bool g_late_ready;
+enum { BOARD_LATE_MS = 50 };
+static CanvasEdit* g_late_edit;  // the board's edit, until it is applied
+static atomic_bool g_late_ready; // the thread has filled it
+static bool g_late_thread_live;  // a thread was started and not yet joined
 static cetra_thread_t g_late_thread;
 
 static void* board_late_thread(void* engine) {
@@ -1145,13 +1150,25 @@ static void* board_late_thread(void* engine) {
     return NULL;
 }
 
-static void board_late_apply(void) {
-    if (!g_late_edit || !atomic_load(&g_late_ready))
+static void board_late_start(Engine* engine) {
+    g_late_thread_live = cetra_thread_create(&g_late_thread, board_late_thread, engine);
+    if (!g_late_thread_live)
+        board_late_thread(engine);
+}
+
+// Applies the board once its thread has filled it, or at exit only joins the thread, which may
+// still be filling it, and drops it: a thread outliving the engine would end its work on freed
+// memory.
+static void board_late_settle(bool at_exit) {
+    if (!g_late_edit || (!at_exit && !atomic_load(&g_late_ready)))
         return;
-    cetra_thread_join(g_late_thread);
-    canvas_apply(g_canvas, g_late_edit);
-    canvas_edit_remove_object(g_late_edit, BOARD_REMOVED);
-    canvas_apply(g_canvas, g_late_edit);
+    if (g_late_thread_live)
+        cetra_thread_join(g_late_thread);
+    g_late_thread_live = false;
+    if (!at_exit) {
+        board_finish(g_canvas, g_late_edit);
+        canvas_apply(g_canvas, g_late_edit);
+    }
     free_canvas_edit(g_late_edit);
     g_late_edit = NULL;
 }
@@ -1240,24 +1257,19 @@ static void sheet_board(SheetContext* ctx) {
                             : (CanvasTagState){.dim = 0.35f});
     canvas_tags_set(tags, BOARD_PICKED, (CanvasTagState){.outline = 0xffffffffu});
 
-    if (ctx->edit_thread && ctx->idle) {
+    if (ctx->edit_thread && ctx->engine->idle) {
+        // Begun here, before the first frame can be the last; the thread is started late.
         g_late_edit = create_canvas_edit(canvas);
-        engine_begin_work(ctx->idle);
-        if (!cetra_thread_create(&g_late_thread, board_late_thread, ctx->idle)) {
-            board_fill(g_late_edit, b);
-            atomic_store(&g_late_ready, true);
-            engine_end_work(ctx->idle);
-        }
+        engine_begin_work(ctx->engine);
     } else if (ctx->edit_thread) {
         cetra_thread_t thread;
         if (cetra_thread_create(&thread, board_thread, ctx->edit))
             cetra_thread_join(thread);
+        board_finish(canvas, ctx->edit);
     } else {
         board_fill(ctx->edit, b);
+        board_finish(canvas, ctx->edit);
     }
-    // One trace removed after the rest is in: its pad and its via stay.
-    canvas_apply(canvas, ctx->edit);
-    canvas_edit_remove_object(ctx->edit, BOARD_REMOVED);
     if (ctx->probe)
         g_after_draw = board_script;
 
@@ -1357,11 +1369,10 @@ enum { IDLE_WAKES_MAX = 8 };
 static double g_wakes[IDLE_WAKES_MAX];
 static int g_wake_count, g_wake_next;
 static bool g_idle_say;
-static const char* g_idle_load;  // --idle-load: a texture asked for once the timed wakes are spent
-static TexturePool* g_idle_pool; //   the pool it goes into
-static bool g_idle_load_asked;
-static bool g_gui_click;     // --gui-click: a click handed to the debug GUI on the first frame
-static UISystem* g_ui_enter; // --ui-enter: the UI, given an input pass of nothing each frame
+static const char* g_idle_load; // --idle-load: a texture asked for as late work
+static bool g_late_started;     // the late work has been started
+static bool g_gui_click;        // --gui-click: a click handed to the debug GUI on the first frame
+static UISystem* g_ui_enter;    // --ui-enter: the UI, given an input pass of nothing each frame
 
 static void on_idle_loaded(Texture* tex, void* user) {
     (void)user;
@@ -1369,18 +1380,26 @@ static void on_idle_loaded(Texture* tex, void* user) {
         printf("canvas idle loaded %d %d\n", tex ? tex->width : 0, tex ? tex->height : 0);
 }
 
+// The work the board's thread and --idle-load stand for, started on the first frame with no timed
+// wake left to ask for. After a wake the run is past the first tenth of a second, in which a hidden
+// window is sent something that wakes a waiting loop, so nothing but the work can wake it.
+static void start_late_work(Engine* engine) {
+    if (g_late_started || g_wake_next < g_wake_count)
+        return;
+    g_late_started = true;
+    if (g_late_edit)
+        board_late_start(engine);
+    if (g_idle_load)
+        engine_load_texture(engine, engine_get_scene(engine)->tex_pool, g_idle_load,
+                            texture_desc(true), on_idle_loaded, NULL);
+}
+
 static void on_update(Engine* engine, float dt) {
     (void)dt;
-    board_late_apply();
+    board_late_settle(false);
     if (g_idle_say)
         printf("canvas idle frame %zu delta %.6f\n", engine->total_frames + 1, engine->delta_time);
-    // On the first frame with no timed wake left to ask for. After a wake, the run is past what a
-    // window's first moments send it, any of which could wake the loop in the load's place.
-    if (g_idle_load && !g_idle_load_asked && g_wake_next == g_wake_count) {
-        engine_load_texture(engine, g_idle_pool, g_idle_load, texture_desc(true), on_idle_loaded,
-                            NULL);
-        g_idle_load_asked = true;
-    }
+    start_late_work(engine);
     if (g_wake_next < g_wake_count)
         engine_request_frame_after(engine, g_wakes[g_wake_next++]);
     // The input pass an app owes its UI, with no input: it is what settles the focused button's
@@ -1520,6 +1539,7 @@ int main(int argc, char** argv) {
         } else if (strcmp(argv[i], "--idle-load") == 0 && more) {
             g_idle_load = argv[++i];
         } else if (strcmp(argv[i], "--ui-enter") == 0) {
+            with_ui = true;
             ui_enter = true;
         } else if (strcmp(argv[i], "--gui-click") == 0) {
             g_gui_click = true;
@@ -1555,9 +1575,8 @@ int main(int argc, char** argv) {
     glm_vec3_zero(engine->clear_color);
     // A scene not loaded from a file has no texture directory: --idle-load names its file from
     // the working directory.
-    g_idle_pool = scene->tex_pool;
     if (g_idle_load)
-        set_texture_pool_directory(g_idle_pool, ".");
+        set_texture_pool_directory(scene->tex_pool, ".");
     engine->show_gui = g_gui_click;
     if (picture) {
         ShaderProgram* pass = create_post_pass_program("canvas_identity", IDENTITY_PASS);
@@ -1603,7 +1622,7 @@ int main(int argc, char** argv) {
                         .fb_scale = (double)engine->fb_width / (double)engine->win_width,
                         .probe = probe,
                         .edit_thread = edit_thread,
-                        .idle = idle ? engine : NULL,
+                        .engine = engine,
                         .font = font};
     sheet->build(&ctx);
     canvas_apply(g_canvas, ctx.edit);
@@ -1659,6 +1678,7 @@ int main(int argc, char** argv) {
     engine_run(engine, on_update, NULL, NULL);
     if (g_idle_say)
         printf("canvas idle frames %zu waited %.6f\n", engine->total_frames, engine->time_waited);
+    board_late_settle(true);
     free_ui_system(ui);
     free_canvas(g_canvas);
     free_engine(engine);

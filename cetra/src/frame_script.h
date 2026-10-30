@@ -53,4 +53,7 @@ bool frame_script_parse(char* text, const char* path, size_t stride, const void*
 const void* frame_script_at(const void* ranges, size_t count, size_t stride, const void* idle,
                             int frame);
 
+// The last frame any range covers, past which every frame is idle; -1 for none.
+int frame_script_last(const void* ranges, size_t count, size_t stride);
+
 #endif // _FRAME_SCRIPT_H_

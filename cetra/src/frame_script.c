@@ -111,3 +111,14 @@ const void* frame_script_at(const void* ranges, size_t count, size_t stride, con
     }
     return found;
 }
+
+int frame_script_last(const void* ranges, size_t count, size_t stride) {
+    int last = -1;
+    const char* base = ranges;
+    for (size_t i = 0; i < count; i++) {
+        const FrameScriptRange* r = (const FrameScriptRange*)(base + i * stride);
+        if (r->to > last)
+            last = r->to;
+    }
+    return last;
+}

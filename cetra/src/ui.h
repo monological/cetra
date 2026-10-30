@@ -127,8 +127,9 @@ void ui_draw_list_begin(UIDrawList* dl, int width_points, int height_points);
 // Uploads and issues the frame's batches. Blend on, depth test off, and both
 // are RESTORED to what they were rather than forced to a default -- this draws
 // into a live frame between the post chain and the debug GUI, and clobbering
-// the depth state there is a defect the text renderer already has.
-void ui_draw_list_render(UIDrawList* dl);
+// the depth state there is a defect the text renderer already has. True when a
+// program it drew with reads uTime, so the next frame draws something new.
+bool ui_draw_list_render(UIDrawList* dl);
 
 // Solid fill, with the style's corner radius and border applied. The rounding
 // is evaluated in the fragment stage rather than tessellated, so a radius costs
@@ -321,7 +322,6 @@ struct UIElement {
     UIDrawFn draw;                 // ui_set_draw
     void* draw_user;               //   "
     struct ShaderProgram* program; // ui_set_element_program
-    bool program_animates;         //   " -- it reads uTime, so it moves with nothing changed
 
     // SETTINGS: plain writes at any time.
     UIDir dir;           // how this element's CHILDREN are laid out
@@ -445,13 +445,15 @@ void ui_set_size(UIElement* el, UISize x_mode, float x, UISize y_mode, float y);
 void ui_layout(UIScreen* screen, float width, float height);
 
 // Advances the hover/focus easing and emits the stack's geometry into the
-// system's draw list. Reads no input.
+// system's draw list. Reads no input. True while anything is still moving --
+// an ease short of its target, a screen still entering -- so the next frame
+// draws something new.
 //
 // It is NOT what ui_update calls, and ui_update is not this plus an input pass:
 // the two are separate walks fired from different frame hooks -- ui_update from
 // the frame-input hook before the fixed steps, this one from the overlay after
 // tone mapping -- and each lays out what it is about to use.
-void ui_build(UISystem* ui, float width, float height, float dt);
+bool ui_build(UISystem* ui, float width, float height, float dt);
 
 /*
  * One frame of input, as VALUES rather than as a device.
