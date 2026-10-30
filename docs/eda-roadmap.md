@@ -324,8 +324,9 @@ broke lines with by hand.
 - **The scrolling pane** (`ui_scroll`): clipped, hit only where it shows, the wheel over it, Page
   Up, Page Down, Home and End, a bar to drag or page on, a focus scrolled into view, `follow_end`.
   The focused pane takes its FOCUS look while the focus is anywhere in it, which is ARCH's "subtle
-  border". **Virtual rows** (`ui_scroll_set_rows`) build only the rows in view, measure each once and
-  keep the first row in view still as heights above it change: 100,000 rows lay out a screenful.
+  border". **Virtual rows** (`ui_scroll_set_rows`) build only the rows in view, keep each height
+  measured for when its row is not built, and keep the first row in view still as heights above
+  it change: 100,000 rows lay out a screenful.
 - **The text field** (`ui_text_field`): single-line, multi-line growing to `max_rows`, or read-only
   with runs; a caret, a selection, the clipboard, undo a word at a time, the platform's keys, a
   click, double click and triple click, and a caret that blinks on a timed wake under idle mode.
@@ -355,6 +356,9 @@ broke lines with by hand.
 - **Right-to-left text**, and caret moves by grapheme rather than codepoint.
 - **Horizontal scrolling panes**; **selecting across messages**, each being its own field.
 - **Runs in an editable field**, and runs that change the size.
+- **Appending to a read-only field.** A reply streamed into a history today rebuilds its row at
+  every word, which costs a walk of the message each time and drops a selection made in it; pcb's
+  step 9 wants an append that breaks only the last line.
 - **More fonts**: only Roboto-Bold and a pixel face ship, and pcb chooses its own.
 
 ---

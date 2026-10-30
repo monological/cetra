@@ -1831,8 +1831,8 @@ It takes the capture set `-x`, `-f`, `-S`, `-W` and `-H`, and:
   `fuzzy_match`, with the matched letters lit. Up and Down move the highlight, Enter or a click
   runs it, and Esc closes. **`/`** opens the jump over 5,000 generated part and net names, and a
   name chosen there is printed, since there is nothing to jump to. Both lists are virtual rows
-  over every match, twelve shown at a time. A key opens them after the frame's input pass, so the
-  key isn't typed into the field. Under `--canvas-probe` the run prints the palette as it left it
+  over every match, twelve shown at a time. The key that opens one isn't typed into its field: a
+  field the app focuses takes none of that pass's keys. Under `--canvas-probe` the run prints the palette as it left it
   (`canvas palette state`: open, the text's length, the matches, the first one's item and its lit
   bytes), the rows built (`canvas palette list`), and the field's box.
 - `--history` (spec 14.2) adds a 360-point column at the window's right, and the views share what
