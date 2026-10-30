@@ -15,8 +15,10 @@
 #include "cetra/glyph_cache.h"
 #include "cetra/internal/ext/stb_truetype.h" // the rasteriser the glyph cache's bitmaps are held to
 #include "cetra/internal/text_doc_edit.h"    // the editor's half of the text, which the arms drive
+#include "cetra/internal/ui_editor_hooks.h"  // the editor's wrapping and where it put things
 #include "cetra/text.h"
 #include "cetra/text_doc.h"
+#include "cetra/ui_editor.h"
 
 // ---- A stand-in for an editor: carets the text moves, as an editor's would be.
 
@@ -551,6 +553,200 @@ static int probe_glyph_cache(void) {
     return 0;
 }
 
+// ---- The editor on screen
+
+#define EDITOR_W 300.0f
+#define EDITOR_H 220.0f
+
+static GlyphCache* g_face;
+
+// An editor of a fixed size alone on a screen, its face the editor's own at 13 points.
+static UIElement* editor_fixture(UISystem* ui, TextDoc* doc, float w, float h) {
+    if (!g_face)
+        g_face = create_glyph_cache(EDITOR_FONT, 13.0f);
+    UITheme theme = *ui_theme(ui);
+    theme.editor_face = g_face;
+    theme.editor_size = 13.0f;
+    ui_set_theme(ui, &theme);
+    UIScreen* s = ui_screen(ui, "editor");
+    ui_screen_set_modal(s, false);
+    UIElement* ed = ui_editor(ui_screen_root(s), doc);
+    ui_set_size(ed, UI_FIXED, w, UI_FIXED, h);
+    ui_push(ui, s);
+    ui_set_focus(s, ed);
+    return ed;
+}
+
+// One input pass of nothing and one build, so the editor is laid out and drawn.
+static void editor_pass(UISystem* ui) {
+    ui_update(ui, &(UIInput){.pointer_x = -1.0f, .pointer_y = -1.0f}, 1280.0f, 720.0f);
+    ui_build(ui, 1280.0f, 720.0f, 1.0f);
+}
+
+static void say_flag(const char* which, const char* label, const char* key, bool ok) {
+    printf("ui %s %s %s %d\n", which, label, key, ok ? 1 : 0);
+}
+
+static int probe_editor_wrap(void) {
+    static const struct {
+        const char* label;
+        const char* text;
+        int cols;
+        size_t starts[4];
+        size_t count;
+        int hang;
+    } cases[] = {
+        {"space", "aaaa bbbb cccc", 10, {0, 10}, 2, 0},
+        {"long", "abcdefghijklmnop", 5, {0, 5, 10, 15}, 4, 0},
+        {"hang", "    word word word", 10, {0, 9, 14}, 3, 4},
+        {"tab", "ab\tcd", 4, {0, 3}, 2, 0},
+        {"utf8", "\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9", 2, {0, 4, 8}, 3, 0},
+        {"wide", "        xx", 10, {0}, 1, 0},
+        {"fits", "exactly ten", 11, {0}, 1, 0},
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        size_t starts[8];
+        int hang = -1;
+        const size_t n = ui_editor_wrap(cases[i].text, strlen(cases[i].text), cases[i].cols, 4,
+                                        starts, 8, &hang);
+        bool ok = n == cases[i].count && hang == cases[i].hang;
+        for (size_t k = 0; ok && k < n; k++)
+            ok = starts[k] == cases[i].starts[k];
+        if (!ok) {
+            fprintf(stderr, "editor-wrap %s: %zu rows, hang %d:", cases[i].label, n, hang);
+            for (size_t k = 0; k < n && k < 8; k++)
+                fprintf(stderr, " %zu", starts[k]);
+            fprintf(stderr, "\n");
+        }
+        say_flag("editor-wrap", cases[i].label, "rows", ok);
+    }
+    return 0;
+}
+
+// What a click lands on: every glyph the editor drew, clicked in the left quarter of its cell,
+// lands on the offset whose cell that is; and every character's offset, clicked at its caret's
+// place, lands on itself.
+static int probe_editor_hit(UISystem* ui) {
+    const char* text = "first line\twith a tab\n"
+                       "  a long second line that wraps round the editor's narrow width more "
+                       "than once, to be sure\n"
+                       "short \xc3\xa9 \xc3\xbc \xce\xa9\n"
+                       "\n"
+                       "last";
+    TextDoc* doc = create_text_doc(text, strlen(text));
+    UIElement* ed = editor_fixture(ui, doc, EDITOR_W, EDITOR_H);
+    editor_pass(ui);
+    const UIDrawList* dl = ui_draw_list(ui);
+    float tx = 0.0f, ty = 0.0f;
+    ui_editor_point_of(ed, 0, &tx, &ty);
+    // The cell's width in points, from two neighbouring carets.
+    float x1 = 0.0f, y1 = 0.0f;
+    ui_editor_point_of(ed, 1, &x1, &y1);
+    const float cw = x1 - tx;
+    int glyphs = 0, misplaced = 0;
+    for (size_t i = 0; i < ui_draw_list_quad_count(dl); i++) {
+        UIRect r;
+        vec4 colour;
+        int kind = 0;
+        ui_draw_list_quad(dl, i, &r, colour, &kind);
+        const float cx = r.x + r.w * 0.5f, cy = r.y + r.h * 0.5f;
+        if (kind != 1 || cx < tx)
+            continue; // a fill, or a line number
+        const float col = floorf((cx - tx) / cw);
+        const float cell_x = tx + col * cw;
+        const size_t at = ui_editor_offset_at(ed, cell_x + cw * 0.25f, cy);
+        float px = 0.0f, py = 0.0f;
+        const bool shown = ui_editor_point_of(ed, at, &px, &py);
+        glyphs++;
+        if (!shown || fabsf(px - cell_x) > 0.01f || cy < py) {
+            misplaced++;
+            fprintf(stderr, "editor-hit: a glyph at %.2f,%.2f clicked to byte %zu at %.2f,%.2f\n",
+                    (double)cx, (double)cy, at, (double)px, (double)py);
+        }
+    }
+    int round = 0, round_wrong = 0;
+    for (size_t i = 0; i <= strlen(text); i++) {
+        if (i < strlen(text) && text_utf8_is_continuation(text[i]))
+            continue;
+        float px = 0.0f, py = 0.0f;
+        if (!ui_editor_point_of(ed, i, &px, &py))
+            continue;
+        round++;
+        const size_t at = ui_editor_offset_at(ed, px, py + 2.0f);
+        if (at != i) {
+            round_wrong++;
+            fprintf(stderr, "editor-hit: byte %zu at %.2f,%.2f clicked back to %zu\n", i,
+                    (double)px, (double)py, at);
+        }
+    }
+    printf("ui editor-hit glyphs checked %d\n", glyphs);
+    printf("ui editor-hit glyphs wrong %d\n", misplaced);
+    printf("ui editor-hit roundtrip checked %d\n", round);
+    printf("ui editor-hit roundtrip wrong %d\n", round_wrong);
+    return 0;
+}
+
+// What holds the view where it is: an edit above it, a guess put right, and a new width all keep
+// the line at its top.
+static int probe_editor_anchor(UISystem* ui) {
+    // 300 lines, each a numbered sentence long enough to wrap in a narrow editor.
+    static char text[300 * 128];
+    size_t len = 0;
+    for (int i = 0; i < 300; i++)
+        len +=
+            (size_t)snprintf(text + len, sizeof(text) - len,
+                             "line %03d of a text whose lines are long enough to wrap twice\n", i);
+    TextDoc* doc = create_text_doc(text, len);
+    UIElement* ed = editor_fixture(ui, doc, 200.0f, EDITOR_H);
+    editor_pass(ui);
+    // Down to line 150, by revealing it: every line above is still a guess.
+    ui_editor_reveal(ed, text_doc_line_start(doc, 150));
+    editor_pass(ui);
+    size_t line = 0, row = 0;
+    int cols = 0;
+    ui_editor_top(ed, &line, &row, &cols);
+    size_t want_len = 0;
+    const char* top = text_doc_line(doc, line, &want_len);
+    char want[128];
+    memcpy(want, top, want_len);
+    // Three lines put in above it.
+    text_doc_replace(doc, text_doc_line_start(doc, 10), text_doc_line_start(doc, 10),
+                     "new\nnew\nnew\n", 12);
+    editor_pass(ui);
+    size_t l2 = 0, r2 = 0;
+    int c2 = 0;
+    ui_editor_top(ed, &l2, &r2, &c2);
+    size_t got_len = 0;
+    const char* got = text_doc_line(doc, l2, &got_len);
+    say_flag("editor-anchor", "edit", "kept",
+             l2 == line + 3 && r2 == row && got_len == want_len && !memcmp(got, want, want_len));
+    // Every line above measured: clicking far above walks the rows to the top, wrapping each.
+    ui_editor_offset_at(ed, 0.0f, -100000.0f);
+    editor_pass(ui);
+    size_t l3 = 0, r3 = 0;
+    int c3 = 0;
+    ui_editor_top(ed, &l3, &r3, &c3);
+    say_flag("editor-anchor", "measured", "kept", l3 == l2 && r3 == r2);
+    // A new width wraps every line again, and keeps the line.
+    ui_set_size(ed, UI_FIXED, 320.0f, UI_FIXED, EDITOR_H);
+    editor_pass(ui);
+    size_t l4 = 0, r4 = 0;
+    int c4 = 0;
+    ui_editor_top(ed, &l4, &r4, &c4);
+    say_flag("editor-anchor", "resize", "kept", l4 == l2 && c4 != c3);
+    // And the wheel moves it a row at a time.
+    ui_update(ui,
+              &(UIInput){.pointer_x = ed->rect.x + 50.0f,
+                         .pointer_y = ed->rect.y + 50.0f,
+                         .wheel_y = -1.0f},
+              1280.0f, 720.0f);
+    size_t l5 = 0, r5 = 0;
+    int c5 = 0;
+    ui_editor_top(ed, &l5, &r5, &c5);
+    say_flag("editor-anchor", "wheel", "moved", l5 > l4 || (l5 == l4 && r5 > r4));
+    return 0;
+}
+
 int run_ui_editor_probe(Game* game, UISystem* ui, Font* font, const char* which) {
     (void)game;
     (void)ui;
@@ -569,5 +765,11 @@ int run_ui_editor_probe(Game* game, UISystem* ui, Font* font, const char* which)
         return probe_doc_highlight();
     if (!strcmp(which, "glyph-cache"))
         return probe_glyph_cache();
+    if (!strcmp(which, "editor-wrap"))
+        return probe_editor_wrap();
+    if (!strcmp(which, "editor-hit"))
+        return probe_editor_hit(ui);
+    if (!strcmp(which, "editor-anchor"))
+        return probe_editor_anchor(ui);
     return -1;
 }

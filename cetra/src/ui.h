@@ -11,7 +11,9 @@
 #include "texture.h"
 
 struct Engine;
+struct GlyphCache;
 struct ShaderProgram;
+struct TextDoc;
 
 /*
  * The game UI layer (spec 12.2): what a player looks at that is not the world.
@@ -279,8 +281,20 @@ typedef enum {
     UI_SELECTOR,
     UI_SCROLL,
     UI_TEXT_FIELD,
+    UI_EDITOR,
     UI_KIND_COUNT
 } UIKind;
+
+// How the code editor draws a span its text's highlighter coloured, or a range its host marked: the
+// text's colour, a fill behind it and a line under it, each alpha 0 for none -- the text's own
+// colour, then, for `text`. Style 0 is plain text.
+typedef struct UIEditorStyle {
+    vec4 text;
+    vec4 background;
+    vec4 underline;
+} UIEditorStyle;
+
+#define UI_EDITOR_STYLES 32
 
 typedef enum {
     UI_STATE_NORMAL = 0,
@@ -319,6 +333,13 @@ typedef struct UITheme {
     // it takes the keys.
     UIStyle text_field[UI_STATE_COUNT];
     vec4 selection; // behind a field's selected text; alpha 0 = the engine's
+    // The code editor (spec 14.4): `bg` behind its text, `fg` its plain text and carets, its line
+    // numbers `fg` dimmed; FOCUS its border while it takes the keys. Its face is drawn from
+    // bitmaps made at the size shown, not from `font`.
+    UIStyle editor[UI_STATE_COUNT];
+    struct GlyphCache* editor_face;                // borrowed; NULL draws no text
+    float editor_size;                             // points; 0 = 13
+    UIEditorStyle editor_styles[UI_EDITOR_STYLES]; // a span's or a range's style, by its index
 } UITheme;
 
 typedef struct UIElement UIElement;
@@ -355,7 +376,8 @@ struct UIElement {
     // toward `scroll_target` after a key or a reveal and set with it by the wheel and the bar.
     // `scroll_content` is its children's whole height, from the last layout.
     float scroll, scroll_target, scroll_content;
-    struct UIField* field; // a text field's buffer, caret and editing; ui_field_* reads it
+    struct UIField* field;   // a text field's buffer, caret and editing; ui_field_* reads it
+    struct UIEditor* editor; // a code editor's carets, rows and scroll; ui_editor_* reads it
     // A pane's virtual rows (ui_scroll_set_rows): their heights and where each starts, and which
     // child holds which row. `row_builds` counts the rows built, a test of the building.
     struct UIRows* rows;
@@ -561,8 +583,16 @@ bool ui_field_append(UIElement* el, const char* text, const UITextRun* runs, siz
 // Once after a pass whose keys edited the text.
 void ui_field_set_on_change(UIElement* el, UIActionFn on_change, void* user);
 void ui_field_set_on_key(UIElement* el, UIKeyFn on_key, void* user);
-// Whether the UI takes the keyboard: a text field holds the top screen's focus, or a modal screen
-// is up. An app's own keys -- a view's bindings -- go where this is false.
+
+/*
+ * The code editor (spec 14.4): a TextDoc shown and edited, its lines wrapped at its width, in the
+ * theme's monospaced face. It borrows the text, which must outlive it, and two editors may show
+ * one. It measures nothing, so it is sized FIXED or GROW, and grows by default. Its carets, keys
+ * and modes are ui_editor_*, in ui_editor.h.
+ */
+UIElement* ui_editor(UIElement* parent, struct TextDoc* doc);
+// Whether the UI takes the keyboard: a text field or an editor holds the top screen's focus, or a
+// modal screen is up. An app's own keys -- a view's bindings -- go where this is false.
 bool ui_wants_keyboard(const UISystem* ui);
 
 // Replaces the text, and clears its runs: they name bytes of the text they were given for. Refused

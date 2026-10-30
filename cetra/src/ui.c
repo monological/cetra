@@ -7,6 +7,7 @@
 #include "engine.h"
 #include "ext/log.h"
 #include "ui.h"
+#include "ui_editor_hooks.h"
 #include "ui_field.h"
 #include "ui_text.h"
 #include "util.h"
@@ -154,6 +155,28 @@ static UIStyle _default_style(UIKind kind, UIState state) {
                 s.fg[0] = s.fg[1] = s.fg[2] = 0.45f;
             }
             break;
+        case UI_EDITOR:
+            // The field's well, squarer and with less padding: a code editor fills its pane.
+            s.fg[0] = 0.86f;
+            s.fg[1] = 0.87f;
+            s.fg[2] = 0.84f;
+            s.fg[3] = 1.0f;
+            s.bg[0] = 0.07f;
+            s.bg[1] = 0.075f;
+            s.bg[2] = 0.09f;
+            s.bg[3] = 1.0f;
+            s.border[0] = s.border[1] = s.border[2] = 1.0f;
+            s.border[3] = 0.10f;
+            s.border_width = 1.0f;
+            s.corner_radius = 4.0f;
+            s.padding[0] = s.padding[1] = s.padding[2] = s.padding[3] = 6.0f;
+            if (state == UI_STATE_FOCUS || state == UI_STATE_ACTIVE) {
+                s.border[0] = 0.45f;
+                s.border[1] = 0.70f;
+                s.border[2] = 1.00f;
+                s.border[3] = 0.6f;
+            }
+            break;
         case UI_SCROLL:
             // A window onto its content: no fill and no padding of its own, a faint thumb, and a
             // subtle border while the focus is inside it.
@@ -269,6 +292,8 @@ static const UIStyle* _theme_entry(const UITheme* t, UIKind kind, UIState state)
             return &t->scroll[state];
         case UI_TEXT_FIELD:
             return &t->text_field[state];
+        case UI_EDITOR:
+            return &t->editor[state];
         default:
             return &t->panel;
     }
@@ -343,7 +368,7 @@ static UIElement* _new_element(UIElement* parent, UIKind kind) {
     el->align_main = UI_ALIGN_START;
     el->align_cross = UI_ALIGN_START;
     el->focusable = (kind == UI_BUTTON || kind == UI_TOGGLE || kind == UI_SLIDER ||
-                     kind == UI_SELECTOR || kind == UI_TEXT_FIELD);
+                     kind == UI_SELECTOR || kind == UI_TEXT_FIELD || kind == UI_EDITOR);
     el->parent = parent;
 
     if (parent) {
@@ -427,6 +452,7 @@ static void _free_element(UIElement* el) {
     free(el->runs);
     _drop_lines(el);
     ui_field_free(el->field);
+    ui_editor_free(el->editor);
     _rows_free(el->rows);
     free(el->style);
     free(el);
@@ -505,14 +531,32 @@ UIElement* ui_text_field(UIElement* parent, unsigned flags, UIActionFn on_submit
     return el;
 }
 
+UIElement* ui_editor(UIElement* parent, TextDoc* doc) {
+    if (!doc) {
+        log_error("ui_editor: wants a text to show");
+        return NULL;
+    }
+    UIElement* el = _new_element(parent, UI_EDITOR);
+    if (!el)
+        return NULL;
+    el->editor = ui_editor_make(el, doc);
+    if (!el->editor) {
+        log_error("ui_editor: out of memory");
+        return el;
+    }
+    el->size_mode[0] = UI_GROW;
+    el->size_mode[1] = UI_GROW;
+    return el;
+}
+
 Engine* ui_system_engine(const UISystem* ui) {
     return ui ? ui->engine : NULL;
 }
 
-// Whether `el` takes the keys while it holds the focus: a text field does, everything else leaves
-// them to the screen and the app.
+// Whether `el` takes the keys while it holds the focus: a text field and an editor do, everything
+// else leaves them to the screen and the app.
 static bool _takes_keys(const UIElement* el) {
-    return el && el->kind == UI_TEXT_FIELD;
+    return el && (el->kind == UI_TEXT_FIELD || el->kind == UI_EDITOR);
 }
 
 bool ui_wants_keyboard(const UISystem* ui) {
@@ -1382,6 +1426,14 @@ static void _emit(UISystem* ui, UIElement* el) {
                 ui->caret_wake = wake < ui->caret_wake ? wake : ui->caret_wake;
                 break;
             }
+            case UI_EDITOR: {
+                const UIScreen* top = ui_top(ui);
+                const bool blink = ui->engine && !ui->engine->headless;
+                const double wake = ui_editor_draw(ui, el, &s, _content_rect(ui, el),
+                                                   top && top->focused == el, ui->now, blink);
+                ui->caret_wake = wake < ui->caret_wake ? wake : ui->caret_wake;
+                break;
+            }
             case UI_TOGGLE: {
                 ui_draw_rect(dl, el->rect, &s);
                 // The label stops where the knob begins -- the same reservation
@@ -1850,15 +1902,19 @@ static bool _route_keys(UISystem* ui, UIScreen* top, const UIInput* in, const UI
     bool let_go = false;
     for (int i = 0; i < in->key_event_count && ui_top(ui) == top; i++) {
         UIElement* f = _takes_keys(top->focused) ? top->focused : NULL;
-        if (f != field) {
+        UIElement* typing = f && f->kind == UI_TEXT_FIELD ? f : NULL;
+        if (typing != field) {
             if (field)
                 ui_field_keys_end(field);
-            if (f)
-                ui_field_keys_begin(f);
-            field = f;
+            if (typing)
+                ui_field_keys_begin(typing);
+            field = typing;
         }
         const InputKeyEvent* ev = &in->key_events[i];
-        if ((f && ui_field_key(ui, f, _content_rect(ui, f), ev)) || ev->codepoint)
+        const bool used =
+            f && (f->kind == UI_EDITOR ? ui_editor_key(ui, f, _content_rect(ui, f), ev)
+                                       : ui_field_key(ui, f, _content_rect(ui, f), ev));
+        if (used || ev->codepoint)
             continue;
         if (ev->key == GLFW_KEY_TAB) {
             _tab(ui, top, (ev->mods & GLFW_MOD_SHIFT) ? -1 : 1);
@@ -1940,8 +1996,11 @@ void ui_update(UISystem* ui, const UIInput* in, float width, float height) {
     // The wheel scrolls the deepest pane under the pointer, at once: a trackpad's own momentum is
     // already in what it sends.
     if (in->wheel_y != 0.0f) {
+        UIElement* editor = _hit(top->root, in->pointer_x, in->pointer_y);
         UIElement* pane = _pane_at(top->root, in->pointer_x, in->pointer_y);
-        if (pane)
+        if (editor && editor->kind == UI_EDITOR)
+            ui_editor_wheel(ui, editor, _content_rect(ui, editor), in->wheel_y);
+        else if (pane)
             _scroll_to(ui, pane, pane->scroll_target - in->wheel_y * _scroll_step(ui), true);
     }
 
@@ -1972,11 +2031,17 @@ void ui_update(UISystem* ui, const UIInput* in, float width, float height) {
         if (hovered && hovered->kind == UI_TEXT_FIELD)
             ui_field_press(hovered, _content_rect(ui, hovered), in->pointer_x, in->pointer_y,
                            (in->pointer_mods & GLFW_MOD_SHIFT) != 0, in->time);
+        if (hovered && hovered->kind == UI_EDITOR)
+            ui_editor_press(ui, hovered, _content_rect(ui, hovered), in->pointer_x, in->pointer_y,
+                            in->pointer_mods, in->time);
     }
-    // A held field selects to the pointer, from the captured element as a slider does.
+    // A held field or editor selects to the pointer, from the captured element as a slider does.
     if (ui->pressed && ui->pressed->kind == UI_TEXT_FIELD && in->pointer_down &&
         !in->pointer_pressed)
         ui_field_drag(ui->pressed, _content_rect(ui, ui->pressed), in->pointer_x, in->pointer_y);
+    if (ui->pressed && ui->pressed->kind == UI_EDITOR && in->pointer_down && !in->pointer_pressed)
+        ui_editor_drag(ui, ui->pressed, _content_rect(ui, ui->pressed), in->pointer_x,
+                       in->pointer_y);
     // A held slider tracks the pointer: pressing anywhere on the row jumps the
     // value there and holding drags it, which is what every slider does. It
     // runs off the CAPTURED element rather than the hovered one, so the drag
@@ -2001,7 +2066,7 @@ void ui_update(UISystem* ui, const UIInput* in, float width, float height) {
         // release would fire its callback a second time for one gesture. A field's
         // action is its submit, which a click is not.
         if (ui->pressed && ui->pressed == hovered && ui->pressed->kind != UI_SLIDER &&
-            ui->pressed->kind != UI_TEXT_FIELD)
+            !_takes_keys(ui->pressed))
             _activate(ui->pressed);
         ui->pressed = NULL;
     }

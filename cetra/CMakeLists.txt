@@ -41,7 +41,7 @@ set(CETRA_PUBLIC_HEADERS
     particle_system.h postfx.h probe.h probe_set.h program.h rain.h scene.h shader.h
     shader_hook.h shader_params.h shadow.h sky.h springbone.h text.h text_doc.h texture.h
     transform.h
-    triangulate.h ui.h
+    triangulate.h ui.h ui_editor.h
     uniform.h util.h
     water.h wind.h
     ext/log.h ext/cwalk.h)

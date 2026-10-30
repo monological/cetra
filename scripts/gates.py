@@ -26077,9 +26077,9 @@ _UI_HEADER = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 
 # What ui.h is allowed to export, in its order. Spelled out rather than counted, so
 # adding an element fails by NAME and the failure says which one arrived. The pane and
-# the field are spec 14.2's, which argued for them.
+# the field are spec 14.2's, which argued for them, and the code editor spec 14.4's.
 _UI_KINDS = ["ui_panel", "ui_label", "ui_button", "ui_toggle", "ui_slider", "ui_selector",
-             "ui_scroll", "ui_text_field"]
+             "ui_scroll", "ui_text_field", "ui_editor"]
 
 
 def _ui_probe(case, env=None):
@@ -27715,8 +27715,9 @@ def run_ui_gate(workdir):
                      screen under it draws as it did (spec 13.49). The two screens
                      look different, or the last comparison would prove nothing.
       ui-elements-closed ui.h exports exactly the element constructors the
-                     list names, six since spec 12.2 and the pane and the field
-                     since 14.2. The scope ratchet, asserted rather than promised.
+                     list names, six since spec 12.2, the pane and the field
+                     since 14.2 and the code editor since 14.4. The scope
+                     ratchet, asserted rather than promised.
       ui-settings-roundtrip write, read back into a ZEROED struct, and every field
                      survives; the window mode rides the file as a name; an absent
                      file leaves defaults rather than zeros; and apply reaches the
@@ -27885,6 +27886,17 @@ def run_ui_gate(workdir):
                      advance rounded; a codepoint the face lacks is missing; the
                      same size again keeps the atlas, another makes the glyphs
                      again at its scale.
+      ui-editor-wrap the code editor's rows: a line breaks after its last space
+                     that fits, at the edge for a word longer than a row, tabs and
+                     characters past ASCII at their columns; a wrapped line's later
+                     rows hang at its indent, unless that is over half the row.
+      ui-editor-hit  every glyph an editor drew, clicked in its cell, lands on the
+                     offset drawn there, and every character's caret, clicked,
+                     lands back on itself -- across a tab, a wrapped line,
+                     characters past ASCII and an empty line.
+      ui-editor-anchor three lines put in above the view, every line above it
+                     measured where its rows were guessed, and a new width all keep
+                     the line at the view's top; the wheel moves it.
       ui-type-palette apps/canvas --palette driven by a script: mod+K opens it and
                      "zo" filters the commands to Zoom in and Zoom out, the first
                      lit at its first two bytes, with the text in the field (end to
@@ -28771,6 +28783,32 @@ def run_ui_gate(workdir):
                   f"stb_truetype's own bitmap in the atlas; {flags}")
     print(f"  ui-glyph-cache        {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-glyph-cache", ok)
+
+    ok, detail = doc_flags("editor-wrap", 7, "a line breaks after its last space that fits, at the "
+                           "edge for a word longer than a row, past tabs and characters past "
+                           "ASCII at their columns, its later rows hung at its indent unless "
+                           "that is over half the row")
+    print(f"  ui-editor-wrap        {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-editor-wrap", ok)
+
+    p = _ui_probe("editor-hit")
+    if not p:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        glyphs, glyphs_wrong = p[("glyphs", "checked")][0], p[("glyphs", "wrong")][0]
+        trips, trips_wrong = p[("roundtrip", "checked")][0], p[("roundtrip", "wrong")][0]
+        ok = glyphs > 80 and glyphs_wrong == 0 and trips > 100 and trips_wrong == 0
+        detail = (f"{glyphs:.0f} glyphs drawn, {glyphs_wrong:.0f} whose cell a click does not "
+                  f"land on the offset drawn there; {trips:.0f} carets, {trips_wrong:.0f} a click "
+                  f"at does not land back on")
+    print(f"  ui-editor-hit         {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-editor-hit", ok)
+
+    ok, detail = doc_flags("editor-anchor", 4, "lines put in above the view, every line above it "
+                           "measured where it was guessed, and a new width all keep the line at "
+                           "its top; the wheel moves it")
+    print(f"  ui-editor-anchor      {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-editor-anchor", ok)
 
     # ---- the palette, end to end
     script = os.path.join(workdir, "ui_palette.script")

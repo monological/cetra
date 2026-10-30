@@ -41,8 +41,11 @@
 #include "cetra/program.h"
 #include "cetra/scene.h"
 #include "cetra/text.h"
+#include "cetra/text_doc.h"
 #include "cetra/triangulate.h"
 #include "cetra/ui.h"
+#include "cetra/ui_editor.h"
+#include "cetra/util.h"
 
 // Dear ImGui via cimgui, for --gui-click's click handed to the debug GUI.
 #define CIMGUI_DEFINE_ENUMS_AND_STRUCTS
@@ -1522,6 +1525,39 @@ static bool build_font_sheet(UISystem* ui, Engine* engine, Font* label) {
     return true;
 }
 
+// ---- --editor FILE: the code editor (spec 14.4) over the whole window, on a file's text.
+
+typedef struct EditorSheet {
+    TextDoc* doc;
+    GlyphCache* face;
+    UIElement* editor;
+} EditorSheet;
+
+static EditorSheet g_editor_sheet;
+
+static bool build_editor(UISystem* ui, const char* path) {
+    long len = 0;
+    char* bytes = read_entire_file(path, &len);
+    if (!bytes)
+        return false;
+    g_editor_sheet.doc = create_text_doc(bytes, (size_t)len);
+    free(bytes);
+    g_editor_sheet.face = create_glyph_cache(EDITOR_FONT, 13.0f);
+    if (!g_editor_sheet.doc || !g_editor_sheet.face)
+        return false;
+    UITheme theme = *ui_theme(ui);
+    theme.editor_face = g_editor_sheet.face;
+    theme.editor_size = 13.0f;
+    ui_set_theme(ui, &theme);
+    UIScreen* screen = ui_screen(ui, "editor");
+    ui_screen_set_modal(screen, false);
+    UIElement* root = ui_screen_root(screen);
+    g_editor_sheet.editor = ui_editor(root, g_editor_sheet.doc);
+    ui_push(ui, screen);
+    ui_set_focus(screen, g_editor_sheet.editor);
+    return true;
+}
+
 // The UI's input pass with the real pointer and keyboard, as the engine read them this frame.
 static void live_ui_update(Engine* engine) {
     if (!g_ui_live)
@@ -2109,7 +2145,7 @@ static void usage(const char* argv0) {
             "          [--split] [--only-view 0|1] [--ui] [--budget]\n"
             "          [--idle] [--idle-wake S,...] [--idle-load PATH] [--input-script PATH]\n"
             "          [--ui-enter] [--ui-text TEXT] [--gui-click] [--history] [--palette]\n"
-            "          [--font-sheet]\n",
+            "          [--font-sheet] [--editor FILE]\n",
             argv0);
 }
 
@@ -2128,6 +2164,7 @@ int main(int argc, char** argv) {
     bool headless = false, mirror = false, probe = false, picture = false, edit_thread = false;
     bool split = false, with_ui = false, budget = false, idle = false, ui_enter = false;
     bool history = false, palette = false, font_sheet = false;
+    const char* editor_file = NULL;
     int frames = 0, width = 960, height = 600, tile_shift = 0, only_view = -1;
     const char* screenshot = NULL;
     const char* input_script = NULL;
@@ -2191,6 +2228,8 @@ int main(int argc, char** argv) {
             history = true;
         } else if (strcmp(argv[i], "--font-sheet") == 0) {
             font_sheet = true;
+        } else if (strcmp(argv[i], "--editor") == 0 && more) {
+            editor_file = argv[++i];
         } else if (strcmp(argv[i], "--palette") == 0) {
             palette = true;
         } else if (strcmp(argv[i], "--ui-text") == 0 && more) {
@@ -2304,10 +2343,20 @@ int main(int argc, char** argv) {
     g_engine = engine;
     g_home_view = g_views[0];
     UISystem* ui = NULL;
-    if (with_ui || history || palette || font_sheet) {
+    if (with_ui || history || palette || font_sheet || editor_file) {
         ui = create_ui_system(engine);
         ui_set_font(ui, font, 18.0f);
         ui_attach(ui, engine);
+    }
+    if (editor_file) {
+        if (!build_editor(ui, editor_file)) {
+            fprintf(stderr, "canvas: --editor could not open %s\n", editor_file);
+            free_ui_system(ui);
+            free_canvas(g_canvas);
+            free_engine(engine);
+            return 1;
+        }
+        g_ui_live = ui;
     }
     if (font_sheet && !build_font_sheet(ui, engine, font)) {
         fprintf(stderr, "canvas: --font-sheet could not load %s\n", EDITOR_FONT);
@@ -2398,6 +2447,8 @@ int main(int argc, char** argv) {
     free_ui_system(ui);
     for (int i = 0; i < 3; i++)
         free_glyph_cache(g_font_sheet.caches[i]);
+    free_glyph_cache(g_editor_sheet.face);
+    free_text_doc(g_editor_sheet.doc);
     free_canvas(g_canvas);
     free_engine(engine);
     return 0;

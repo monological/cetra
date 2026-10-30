@@ -335,6 +335,7 @@ static bool _replace(TextDoc* doc, size_t start, size_t end, const char* text, s
     const size_t first = text_doc_line_of(doc, start);
     const size_t first_at = text_doc_line_start(doc, first);
     TextLine* l = &doc->lines[first];
+    size_t lines_removed = 1, lines_inserted = 1; // the lines from `first` the change rewrote
     const bool inside = end <= first_at + l->len;
     const bool plain = !memchr(text, '\n', len) && !memchr(text, '\r', len);
     if (inside && plain) {
@@ -398,6 +399,8 @@ static bool _replace(TextDoc* doc, size_t start, size_t end, const char* text, s
         doc->line_count = doc->line_count - old + count;
         doc->lines[first].start = first_at;
         _lines_changed(doc, first);
+        lines_removed = old;
+        lines_inserted = count;
     }
 changed:
     doc->length = doc->length - (end - start) + len;
@@ -408,6 +411,8 @@ changed:
     _map_ranges(doc, start, end - start, len);
     for (size_t i = 0; i < doc->view_count; i++) {
         const TextDocView* v = &doc->views[i];
+        if (v->lines)
+            v->lines(v->view, first, lines_removed, lines_inserted);
         v->map(v->view, start, end - start, len, v->view == actor);
     }
     return true;
