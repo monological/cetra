@@ -911,6 +911,9 @@ void engine_set_render_time(Engine* engine, double time, double delta);
 // position and the engine's stored sizes. False, with the outputs untouched,
 // while the window has no area.
 bool engine_cursor_fb(const Engine* engine, double* fb_x, double* fb_y);
+// A framebuffer position, +Y up, as WINDOW POINTS with +Y down: the space GLFW's cursor and the
+// UI speak. False, with the outputs untouched, while the framebuffer has no area.
+bool engine_fb_to_points(const Engine* engine, double fb_x, double fb_y, double* x, double* y);
 
 /*
  * Replay a POINTER and TYPING from a text file (specs 12.19 and 14.2), the way
