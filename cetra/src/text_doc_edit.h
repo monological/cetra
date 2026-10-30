@@ -31,12 +31,14 @@ struct TextLine {
     uint8_t coloured; // TEXT_COLOURED_*
 };
 
-// An editor showing the text. `map` moves its carets and scroll through one change; the editor
-// whose action it is gets `actor` true, and keeps a caret at an insertion after the new bytes,
-// where any other keeps it before them.
+// An editor showing the text. `lines` tells it which lines a change rewrote -- `removed` lines
+// from `first` became `inserted` new ones, 1 and 1 for an edit inside one line -- before `map`
+// moves its carets through the change; the editor whose action it is gets `actor` true, and keeps
+// a caret at an insertion after the new bytes, where any other keeps it before them.
 struct TextDocView {
     void* view;
     struct UIElement* element;
+    void (*lines)(void* view, size_t first, size_t removed, size_t inserted);
     void (*map)(void* view, size_t start, size_t removed, size_t inserted, bool actor);
     size_t (*selections)(void* view, const TextSelection** out);
     void (*set_selections)(void* view, const TextSelection* selections, size_t count);
