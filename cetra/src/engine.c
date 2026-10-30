@@ -1590,6 +1590,14 @@ bool engine_cursor_fb(const Engine* engine, double* fb_x, double* fb_y) {
     return _window_to_fb(engine, wx, wy, fb_x, fb_y);
 }
 
+bool engine_fb_to_points(const Engine* engine, double fb_x, double fb_y, double* x, double* y) {
+    if (!engine || !x || !y || engine->fb_width <= 0 || engine->fb_height <= 0)
+        return false;
+    *x = (fb_x / engine->fb_width) * engine->win_width;
+    *y = (1.0 - fb_y / engine->fb_height) * engine->win_height;
+    return true;
+}
+
 /*
  * The pointer, at a FRAMEBUFFER position with +Y up.
  *

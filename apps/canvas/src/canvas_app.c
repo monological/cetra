@@ -1511,14 +1511,11 @@ static void on_update(Engine* engine, float dt) {
     }
 }
 
-static void to_points(const Engine* engine, double fb_x, double fb_y, float* x, float* y) {
-    *x = (float)(fb_x * engine->win_width / engine->fb_width);
-    *y = (float)((engine->fb_height - fb_y) * engine->win_height / engine->fb_height);
-}
-
 static void on_cursor(Engine* engine, double fb_x, double fb_y) {
-    float x, y;
-    to_points(engine, fb_x, fb_y, &x, &y);
+    double px, py;
+    if (!engine_fb_to_points(engine, fb_x, fb_y, &px, &py))
+        return;
+    const float x = (float)px, y = (float)py;
     if (g_drag_view >= 0)
         canvas_view_pan(&g_views[g_drag_view], x - g_last_x, y - g_last_y);
     g_last_x = x, g_last_y = y;

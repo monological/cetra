@@ -2103,12 +2103,11 @@ void ui_input_read(UIInput* in, const Engine* engine) {
         log_error("ui_input_read: NULL input or engine");
         return;
     }
-    // The engine's framebuffer pixels, +Y up, into the UI's window points, +Y down.
     const InputState* is = &engine->input;
-    if (engine->fb_width > 0 && engine->fb_height > 0) {
-        in->pointer_x = is->pointer_fb_x / (float)engine->fb_width * (float)engine->win_width;
-        in->pointer_y =
-            (1.0f - is->pointer_fb_y / (float)engine->fb_height) * (float)engine->win_height;
+    double x, y;
+    if (engine_fb_to_points(engine, is->pointer_fb_x, is->pointer_fb_y, &x, &y)) {
+        in->pointer_x = (float)x;
+        in->pointer_y = (float)y;
     }
     in->pointer_down = is->is_dragging;
     in->pointer_pressed = is->pointer_pressed;
