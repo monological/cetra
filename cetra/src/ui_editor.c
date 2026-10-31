@@ -85,9 +85,11 @@ struct UIEditor {
     uint64_t wrapped_version;
     int wrapped_cols, wrapped_tab, wrapped_hang;
     size_t wrapped_count;
-    // The keys' mode, NULL the standard one; the UI it was last laid out in, for the clipboard; and
+    // The keys' mode, NULL the standard one, and whether a key it used has its press's character
+    // still to come, which goes with it; the UI it was last laid out in, for the clipboard; and
     // find's query.
     const UIEditorMode* mode;
+    bool swallow;
     const UISystem* ui;
     char* find;
     size_t find_len;
@@ -898,6 +900,15 @@ static TextSelection _line_round(const UIEditor* ed, size_t offset) {
     return (TextSelection){l.at, last ? l.at + l.len : text_doc_line_start(ed->doc, l.line + 1)};
 }
 
+static const UIEditorMode* _look(const UIElement* el);
+
+// The mode told that the pointer changed the selections.
+static void _pointed(UIElement* el) {
+    const UIEditorMode* m = _look(el);
+    if (m->pointer)
+        m->pointer(el, m->user);
+}
+
 // What a run of presses takes at `offset`: a caret, then the word round it, then its line.
 static TextSelection _unit(const UIEditor* ed, size_t offset, int presses) {
     return presses >= 3   ? _line_round(ed, offset)
@@ -928,6 +939,7 @@ static void _press(const UISystem* ui, UIElement* el, UIRect content, float x, f
     _normalize(ed);
     ed->caret.moved = true;
     text_doc_seal_undo(ed->doc);
+    _pointed(el);
 }
 
 // The pointer held after a press: the selection follows it, by the unit the press took, and the
@@ -953,6 +965,7 @@ static void _drag(const UISystem* ui, UIElement* el, UIRect content, float x, fl
     ed->want[ed->primary] = -1;
     _normalize(ed);
     ed->caret.moved = true;
+    _pointed(el);
 }
 
 // ---- Motions
@@ -2105,6 +2118,15 @@ const UIEditorMode* ui_editor_mode(const UIElement* el) {
     return ed && ed->mode ? ed->mode : ui_editor_standard_mode();
 }
 
+// What the editor reads of its mode besides the keys: the first mode up the chain that is not a
+// layer.
+static const UIEditorMode* _look(const UIElement* el) {
+    const UIEditorMode* m = ui_editor_mode(el);
+    while (m->layer && m->parent)
+        m = m->parent;
+    return m;
+}
+
 void ui_editor_find(UIElement* el, const char* query, unsigned flags) {
     UIEditor* ed = _of(el);
     if (!ed)
@@ -2117,26 +2139,23 @@ void ui_editor_find(UIElement* el, const char* query, unsigned flags) {
 
 // ---- Keys
 
-// Each mode up the chain, its own reader first and then its table; then, in a mode that types, a
-// character typed at every caret.
-static bool _key(const UISystem* ui, UIElement* el, UIRect content, const InputKeyEvent* ev) {
-    (void)ui;
-    (void)content;
-    UIEditor* ed = _of(el);
-    if (!ed || !ev)
-        return false;
-    const UIEditorMode* top = ui_editor_mode(el);
+// Each mode up the chain, its own reader first and then its table, a binding whose command did
+// nothing handing the key on; then, in a mode that types, a character typed at every caret.
+static bool _walk(UIElement* el, UIEditor* ed, const InputKeyEvent* ev) {
     const int mods = ev->mods & (SHIFT | CTRL | ALT | SUPER);
-    for (const UIEditorMode* m = top; m; m = m->parent) {
+    for (const UIEditorMode* m = ui_editor_mode(el); m; m = m->parent) {
         if (m->read_key && m->read_key(el, ev, m->user))
             return true;
         for (size_t i = 0; ev->key && i < m->binding_count; i++) {
             const UIEditorBinding* b = &m->bindings[i];
-            if (b->key == ev->key && b->mods == mods && b->command)
-                return b->command->run(el, b->command->user);
+            if (b->key == ev->key && b->mods == mods && b->command) {
+                if (b->command->run(el, b->command->user))
+                    return true;
+                break;
+            }
         }
     }
-    if (ev->codepoint && top->types && ev->codepoint >= 0x20 && ev->codepoint != 0x7f) {
+    if (ev->codepoint && _look(el)->types && ev->codepoint >= 0x20 && ev->codepoint != 0x7f) {
         char utf8[4];
         const size_t n = text_utf8_encode(ev->codepoint, utf8);
         if (n)
@@ -2144,6 +2163,36 @@ static bool _key(const UISystem* ui, UIElement* el, UIRect content, const InputK
         return true;
     }
     return false;
+}
+
+// Whether a key's press goes on to make a character: a printable key, with neither Ctrl nor Cmd
+// held. Enter, Tab, Backspace and the arrows make none.
+static bool _makes_char(const InputKeyEvent* ev) {
+    const int k = ev->key;
+    const bool printable = (k >= GLFW_KEY_SPACE && k <= GLFW_KEY_WORLD_2) ||
+                           (k >= GLFW_KEY_KP_0 && k <= GLFW_KEY_KP_ADD) || k == GLFW_KEY_KP_EQUAL;
+    return printable && !(ev->mods & (CTRL | SUPER));
+}
+
+// A press is a key, then the character it makes: a key the mode used takes that character with
+// it, so a binding on Space does not also type one. A character arriving on its own -- an input
+// method's, a script's -- is read as any other.
+static bool _key(const UISystem* ui, UIElement* el, UIRect content, const InputKeyEvent* ev) {
+    (void)ui;
+    (void)content;
+    UIEditor* ed = _of(el);
+    if (!ed || !ev)
+        return false;
+    if (ed->swallow && ev->codepoint && !ev->key) {
+        ed->swallow = false;
+        return true;
+    }
+    const bool used = _walk(el, ed, ev);
+    // A mode may have let go of the text in a key: the editor is read again.
+    ed = _of(el);
+    if (ed)
+        ed->swallow = used && _makes_char(ev);
+    return used;
 }
 
 #undef SHIFT
@@ -2212,6 +2261,22 @@ static size_t _first_reaching(const UIEditor* ed, size_t offset) {
     return lo;
 }
 
+// What a selection's band covers as the mode takes it: from its start to its end, the character at
+// its far end too, or the lines it touches whole with their line breaks. In order with the
+// selections, whatever the shape.
+static void _drawn(UIEditor* ed, const TextSelection* s, UIEditorSelectionShape shape, size_t* lo,
+                   size_t* hi) {
+    *lo = _sel_min(s);
+    *hi = _sel_max(s);
+    if (shape == UI_SELECTION_INCLUSIVE) {
+        *hi = _char_right(ed, *hi);
+    } else if (shape == UI_SELECTION_LINES) {
+        const size_t last = text_doc_line_of(ed->doc, *hi);
+        *lo = text_doc_line_start(ed->doc, text_doc_line_of(ed->doc, *lo));
+        *hi = text_doc_line_start(ed->doc, last + 1);
+    }
+}
+
 // A band across row `r` of a line from the column of byte `a` to that of byte `b`, `more` columns
 // past it, at `y` and `h` tall.
 static void _band(UIDrawList* dl, const UIEditor* ed, const Line* l, Rows rows, size_t r, size_t a,
@@ -2259,8 +2324,8 @@ static double _draw(const UISystem* ui, UIElement* el, const UIStyle* s, UIRect 
 
     double wake = INFINITY;
     const bool lit = focused && ui_typing_caret_lit(&ed->caret, now, blink, &wake);
-    // A mode may draw its caret a cell wide: a vim mode's normal mode.
-    const UIEditorMode* mode = ui_editor_mode(el);
+    // A mode may draw its caret a cell wide, and its selections as it takes them: a vim mode's.
+    const UIEditorMode* mode = _look(el);
     const float caret_w = mode->block_caret ? ed->cell : UI_TYPING_CARET_WIDTH;
     vec4 caret_colour = {fg[0], fg[1], fg[2], mode->block_caret ? 0.45f : fg[3]};
     const Query q = _query(ed);
@@ -2319,8 +2384,11 @@ static double _draw(const UISystem* ui, UIElement* el, const UIStyle* s, UIRect 
                     _band(dl, ed, &l, rows, row, i > from ? i : from,
                           i + q.len < to ? i + q.len : to, 0, y, ed->row, tint);
             }
-            for (size_t k = first_sel; k < ed->sel_count && _sel_min(&ed->sel[k]) <= row_to; k++) {
-                const size_t lo = _sel_min(&ed->sel[k]), hi = _sel_max(&ed->sel[k]);
+            for (size_t k = first_sel; k < ed->sel_count; k++) {
+                size_t lo, hi;
+                _drawn(ed, &ed->sel[k], mode->selection, &lo, &hi);
+                if (lo > row_to)
+                    break;
                 if (lo == hi || hi < l.at + from || (lo == row_to && !last_row))
                     continue;
                 // A selection running on past the line's end shows its line break as a cell.

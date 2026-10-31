@@ -27917,6 +27917,23 @@ def run_ui_gate(workdir):
       ui-editor-host-undo with the text keeping no undo, a host's mode over the
                      standard one binds Cmd+Z to its own command: the command runs,
                      the text is untouched, the editor's own undo refuses.
+      ui-editor-layer a layer over a mode takes the mode's look (spec 14.5): its
+                     block caret drawn a cell wide, and nothing typed where the
+                     mode types nothing; its own key runs, and its name is its own.
+      ui-editor-decline a layer's command that does nothing hands the key to the
+                     mode under it, whose binding for it runs.
+      ui-editor-paired-char a press is a key and then its character: a binding that
+                     takes Space takes the space with it; a space arriving alone,
+                     as an input method's would, is typed; a key nothing binds
+                     types its character.
+      ui-editor-shapes a selection of three characters drawn by each shape: three
+                     cells, four with the character at its far end (a vim mode's
+                     visual mode), and its line whole with the line break (visual
+                     line mode); the block caret over the character at the head.
+      ui-editor-steps each action told with its step: typing joined into words
+                     shares one; a group holds one over typing, a Backspace and
+                     more typing, one undo takes the group back and one redo makes
+                     it again; the steps are the same with keep_undo off.
       ui-editor-script apps/canvas --editor on a file, driven by a script: a caret
                      added below, "XY" typed at both, undone, Esc to one caret, the
                      word at it taken by Cmd+D and found again round the text's end
@@ -28874,6 +28891,36 @@ def run_ui_gate(workdir):
                            "undo refuses")
     print(f"  ui-editor-host-undo   {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-editor-host-undo", ok)
+
+    # ---- the seams a mode stands on (spec 14.5)
+    ok, detail = doc_flags("editor-layer", 4, "a layer over a mode draws its block caret and types "
+                           "nothing where it types nothing, runs its own key, and keeps its own name")
+    print(f"  ui-editor-layer       {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-editor-layer", ok)
+
+    ok, detail = doc_flags("editor-decline", 1, "a layer's command that does nothing hands its key "
+                           "to the mode under it, whose binding runs")
+    print(f"  ui-editor-decline     {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-editor-decline", ok)
+
+    ok, detail = doc_flags("editor-paired-char", 3, "a binding taking Space takes the space its "
+                           "press makes, a space arriving alone is typed, and a key nothing binds "
+                           "types its character")
+    print(f"  ui-editor-paired-char {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-editor-paired-char", ok)
+
+    ok, detail = doc_flags("editor-shapes", 4, "a selection of three characters drawn three cells "
+                           "wide, four with the character at its far end, and its line whole with "
+                           "the line break; the block caret over the character at the head")
+    print(f"  ui-editor-shapes      {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-editor-shapes", ok)
+
+    ok, detail = doc_flags("editor-steps", 6, "typing joined into words shares a step, a group "
+                           "holds one over typing, a Backspace and more typing, and one undo takes "
+                           "the group back and one redo makes it again; the steps the same with "
+                           "keep_undo off")
+    print(f"  ui-editor-steps       {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-editor-steps", ok)
 
     # ---- the editor end to end: a file opened, two carets typed at, undone, a word found
     text_path = os.path.join(workdir, "editor_script.txt")

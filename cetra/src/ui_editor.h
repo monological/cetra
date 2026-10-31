@@ -113,7 +113,23 @@ typedef struct UIEditorBinding {
 
 // A mode's own reader of keys, which sees each one first; true takes it.
 typedef bool (*UIEditorKeyFn)(UIElement* el, const InputKeyEvent* key, void* user);
+// Told after a press or a drag changed the selections.
+typedef void (*UIEditorPointerFn)(UIElement* el, void* user);
 
+// How a selection's band is drawn: what the mode acting on it takes it to cover.
+typedef enum UIEditorSelectionShape {
+    UI_SELECTION_SPAN,      // from its start up to its end
+    UI_SELECTION_INCLUSIVE, // the character at its far end too: a vim mode's visual mode
+    UI_SELECTION_LINES,     // every line it touches, whole: a vim mode's visual line mode
+} UIEditorSelectionShape;
+
+/*
+ * A key goes to the mode's reader, then its table, then its parent's, and so on up: a binding
+ * whose command does nothing hands the key on too. A key a mode uses takes the character its press
+ * makes with it, so a binding on Space types no space. A LAYER only adds keys over its parent: what
+ * the editor reads of a mode besides its keys -- `name` to `pointer` -- is the first mode up the
+ * chain that is not a layer.
+ */
 typedef struct UIEditorMode {
     const char* name;                  // what a status line shows: "insert", "normal"
     const struct UIEditorMode* parent; // where a key it does not take goes
@@ -121,8 +137,11 @@ typedef struct UIEditorMode {
     size_t binding_count;
     UIEditorKeyFn read_key; // NULL for none
     void* user;
+    bool layer;       // keys only, the rest its parent's: a host's commands over a mode
     bool types;       // a typed character is put in at every caret
-    bool block_caret; // the caret is drawn a cell wide
+    bool block_caret; // the caret is drawn a cell wide, over the character at the head
+    UIEditorSelectionShape selection;
+    UIEditorPointerFn pointer; // NULL for none; given `user`
 } UIEditorMode;
 
 // The editor's own commands, every one the standard mode binds and more.
@@ -134,6 +153,7 @@ bool ui_editor_run(UIElement* el, const char* name);
 const UIEditorMode* ui_editor_standard_mode(void);
 // Borrowed, and outliving the editor; NULL is the standard mode.
 void ui_editor_set_mode(UIElement* el, const UIEditorMode* mode);
+// The mode set; a layer's look is its base's.
 const UIEditorMode* ui_editor_mode(const UIElement* el);
 
 // What find looks for: matches are lit in view, and UI_MOTION_FIND_NEXT and _PREV go to them.

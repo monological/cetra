@@ -1724,7 +1724,7 @@ static const UIEditorCommand HOST_RELOAD = {"reload", "Read the file again", hos
 static const UIEditorBinding HOST_KEYS[] = {{GLFW_KEY_F6, 0, &HOST_LAND},
                                             {GLFW_KEY_F7, 0, &HOST_RELOAD}};
 static UIEditorMode g_host_mode = {
-    .name = "pcb", .bindings = HOST_KEYS, .binding_count = 2, .types = true};
+    .name = "pcb", .bindings = HOST_KEYS, .binding_count = 2, .layer = true};
 
 static bool build_editor(UISystem* ui, const char* path) {
     long len = 0;

@@ -1184,7 +1184,7 @@ static int probe_editor_host_undo(UISystem* ui) {
                                .parent = ui_editor_standard_mode(),
                                .bindings = HOST_KEYS,
                                .binding_count = 1,
-                               .types = true};
+                               .layer = true};
     ui_editor_set_mode(ed, &host);
     type(ui, "ab");
     key(ui, GLFW_KEY_Z, SHORT);
@@ -1192,6 +1192,234 @@ static int probe_editor_host_undo(UISystem* ui) {
     say_flag("editor-host-undo", "text", "kept", doc_is_str(doc, "ab"));
     say_flag("editor-host-undo", "own", "refused", !ui_editor_run(ed, "undo"));
     ui_editor_set_mode(ed, NULL);
+    return 0;
+}
+
+// ---- The seams a mode stands on (spec 14.5)
+
+// How often the layer's command and the base's have run.
+static int g_seam_runs[2];
+
+static bool seam_run(UIElement* el, void* user) {
+    (void)el;
+    (*(int*)user)++;
+    return true;
+}
+
+static bool seam_decline(UIElement* el, void* user) {
+    (void)el;
+    (void)user;
+    return false;
+}
+
+static const UIEditorCommand SEAM_LAYER = {"seam-layer", "The layer's own", seam_run,
+                                           &g_seam_runs[0]};
+static const UIEditorCommand SEAM_BASE = {"seam-base", "The base's own", seam_run, &g_seam_runs[1]};
+static const UIEditorCommand SEAM_DECLINE = {"seam-decline", "Does nothing", seam_decline, NULL};
+static const UIEditorBinding SEAM_LAYER_KEYS[] = {{GLFW_KEY_F6, 0, &SEAM_LAYER},
+                                                  {GLFW_KEY_SPACE, 0, &SEAM_DECLINE}};
+static const UIEditorBinding SEAM_BASE_KEYS[] = {{GLFW_KEY_SPACE, 0, &SEAM_BASE}};
+
+#define SEAM_TEXT "hello world\nsecond line\nthird"
+
+// The flat quads drawn on the row at y in colour c: how many cells wide they come to together.
+static float band_cells(const UISystem* ui, float y, const float* c, float cell) {
+    const UIDrawList* dl = ui_draw_list(ui);
+    float w = 0.0f;
+    for (size_t i = 0; i < ui_draw_list_quad_count(dl); i++) {
+        UIRect r;
+        vec4 colour;
+        int kind = 0;
+        ui_draw_list_quad(dl, i, &r, colour, &kind);
+        if (kind == 0 && fabsf(r.y - y) < 0.01f && fabsf(colour[0] - c[0]) < 1e-4f &&
+            fabsf(colour[1] - c[1]) < 1e-4f && fabsf(colour[2] - c[2]) < 1e-4f &&
+            fabsf(colour[3] - c[3]) < 1e-4f)
+            w += r.w;
+    }
+    return w / cell;
+}
+
+// The width of the caret drawn at `offset`: the narrowest flat quad starting at its place.
+static float caret_drawn(UISystem* ui, UIElement* ed, size_t offset) {
+    float x = 0.0f, y = 0.0f;
+    if (!ui_editor_point_of(ed, offset, &x, &y))
+        return -1.0f;
+    const UIDrawList* dl = ui_draw_list(ui);
+    float w = -1.0f;
+    for (size_t i = 0; i < ui_draw_list_quad_count(dl); i++) {
+        UIRect r;
+        vec4 colour;
+        int kind = 0;
+        ui_draw_list_quad(dl, i, &r, colour, &kind);
+        if (kind == 0 && fabsf(r.x - x) < 0.01f && fabsf(r.y - y) < 0.01f && (w < 0 || r.w < w))
+            w = r.w;
+    }
+    return w;
+}
+
+// A layer takes its base's caret, typing and selection shape, and adds its own keys.
+static int probe_editor_layer(UISystem* ui) {
+    TextDoc* doc = create_text_doc(SEAM_TEXT, strlen(SEAM_TEXT));
+    UIElement* ed = editor_fixture(ui, doc, 600.0f, 300.0f);
+    const UIEditorMode base = {.name = "base", .block_caret = true};
+    const UIEditorMode layer = {.name = "layer",
+                                .parent = &base,
+                                .bindings = SEAM_LAYER_KEYS,
+                                .binding_count = 1,
+                                .layer = true,
+                                .types = true};
+    ui_editor_set_mode(ed, &layer);
+    editor_pass(ui);
+    float x0 = 0.0f, x1 = 0.0f, y = 0.0f;
+    ui_editor_point_of(ed, 0, &x0, &y);
+    ui_editor_point_of(ed, 1, &x1, &y);
+    say_flag("editor-layer", "caret", "block", fabsf(caret_drawn(ui, ed, 0) - (x1 - x0)) < 0.01f);
+    type(ui, "a");
+    say_flag("editor-layer", "typing", "base", doc_is_str(doc, SEAM_TEXT));
+    key(ui, GLFW_KEY_F6, 0);
+    say_flag("editor-layer", "keys", "own", g_seam_runs[0] == 1);
+    say_flag("editor-layer", "name", "set", !strcmp(ui_editor_mode(ed)->name, "layer"));
+    ui_editor_set_mode(ed, NULL);
+    free_text_doc(doc);
+    return 0;
+}
+
+// A layer's command that does nothing hands its key to the base, whose binding then runs.
+static int probe_editor_decline(UISystem* ui) {
+    TextDoc* doc = create_text_doc(SEAM_TEXT, strlen(SEAM_TEXT));
+    UIElement* ed = editor_fixture(ui, doc, 600.0f, 300.0f);
+    const UIEditorMode base = {
+        .name = "base", .bindings = SEAM_BASE_KEYS, .binding_count = 1, .types = true};
+    const UIEditorMode layer = {.name = "layer",
+                                .parent = &base,
+                                .bindings = SEAM_LAYER_KEYS,
+                                .binding_count = 2,
+                                .layer = true};
+    ui_editor_set_mode(ed, &layer);
+    editor_pass(ui);
+    g_seam_runs[1] = 0;
+    key(ui, GLFW_KEY_SPACE, 0);
+    say_flag("editor-decline", "declined", "parent", g_seam_runs[1] == 1);
+    ui_editor_set_mode(ed, NULL);
+    free_text_doc(doc);
+    return 0;
+}
+
+// A press is a key and then its character: a binding taking the key takes the character too, and a
+// character arriving alone is typed.
+static int probe_editor_paired_char(UISystem* ui) {
+    TextDoc* doc = create_text_doc("", 0);
+    UIElement* ed = editor_fixture(ui, doc, 600.0f, 300.0f);
+    const UIEditorMode base = {
+        .name = "base", .bindings = SEAM_BASE_KEYS, .binding_count = 1, .types = true};
+    ui_editor_set_mode(ed, &base);
+    editor_pass(ui);
+    g_seam_runs[1] = 0;
+    const InputKeyEvent press[] = {{.key = GLFW_KEY_SPACE}, {.codepoint = ' '}};
+    send_keys(ui, press, 2);
+    say_flag("editor-paired-char", "used", "swallowed", g_seam_runs[1] == 1 && doc_is_str(doc, ""));
+    type(ui, " ");
+    say_flag("editor-paired-char", "alone", "typed", doc_is_str(doc, " "));
+    const InputKeyEvent letter[] = {{.key = GLFW_KEY_A}, {.codepoint = 'a'}};
+    send_keys(ui, letter, 2);
+    say_flag("editor-paired-char", "unbound", "typed", doc_is_str(doc, " a"));
+    ui_editor_set_mode(ed, NULL);
+    free_text_doc(doc);
+    return 0;
+}
+
+// The selection {2, 5} on the first line drawn as each shape: three cells, four with the character
+// at its far end, and the line whole with its line break; the block caret over the character at
+// the head.
+static int probe_editor_shapes(UISystem* ui) {
+    TextDoc* doc = create_text_doc(SEAM_TEXT, strlen(SEAM_TEXT));
+    UIElement* ed = editor_fixture(ui, doc, 600.0f, 300.0f);
+    const UITheme* t = ui_theme(ui);
+    vec4 sel = {t->selection[0], t->selection[1], t->selection[2], t->selection[3]};
+    if (sel[3] <= 0.0f)
+        glm_vec4_copy((vec4){0.25f, 0.45f, 0.85f, 0.45f}, sel);
+    static const struct {
+        const char* label;
+        UIEditorSelectionShape shape;
+        float cells;
+    } shapes[] = {
+        {"span", UI_SELECTION_SPAN, 3.0f},
+        {"inclusive", UI_SELECTION_INCLUSIVE, 4.0f},
+        {"lines", UI_SELECTION_LINES, 12.0f},
+    };
+    for (size_t i = 0; i < sizeof(shapes) / sizeof(shapes[0]); i++) {
+        const UIEditorMode mode = {.name = shapes[i].label,
+                                   .types = true,
+                                   .block_caret = true,
+                                   .selection = shapes[i].shape};
+        ui_editor_set_mode(ed, &mode);
+        ui_editor_set_selections(ed, &(TextSelection){2, 5}, 1);
+        editor_pass(ui);
+        float x0 = 0.0f, x1 = 0.0f, y = 0.0f;
+        ui_editor_point_of(ed, 0, &x0, &y);
+        ui_editor_point_of(ed, 1, &x1, &y);
+        const float cells = band_cells(ui, y, sel, x1 - x0);
+        if (fabsf(cells - shapes[i].cells) > 0.01f)
+            fprintf(stderr, "editor-shapes %s: %.2f cells, want %.0f\n", shapes[i].label,
+                    (double)cells, (double)shapes[i].cells);
+        say_flag("editor-shapes", shapes[i].label, "band", fabsf(cells - shapes[i].cells) < 0.01f);
+        if (i == 1)
+            say_flag("editor-shapes", "caret", "head",
+                     fabsf(caret_drawn(ui, ed, 5) - (x1 - x0)) < 0.01f);
+    }
+    ui_editor_set_mode(ed, NULL);
+    free_text_doc(doc);
+    return 0;
+}
+
+// Each action told with its step: typing joined into words shares one, a group holds one open over
+// any actions -- typing, a Backspace, more typing -- and one undo takes it all back. The same with
+// keep_undo off.
+static uint64_t g_steps[16];
+static int g_step_count;
+
+static void note_step(TextDoc* doc, const TextDocAction* action, void* user) {
+    (void)doc;
+    (void)user;
+    if (g_step_count < 16)
+        g_steps[g_step_count++] = action->step;
+}
+
+static int probe_editor_steps(UISystem* ui) {
+    for (int keep = 1; keep >= 0; keep--) {
+        TextDoc* doc = create_text_doc("", 0);
+        doc->keep_undo = keep;
+        UIElement* ed = editor_fixture(ui, doc, 600.0f, 300.0f);
+        editor_pass(ui);
+        text_doc_set_on_action(doc, note_step, NULL);
+        g_step_count = 0;
+        type(ui, "ab c");
+        const char* which = keep ? "kept" : "off";
+        // "ab" one step, " c" the next.
+        say_flag("editor-steps", which, "words",
+                 g_step_count == 4 && g_steps[0] == g_steps[1] && g_steps[2] != g_steps[1] &&
+                     g_steps[3] == g_steps[2]);
+        g_step_count = 0;
+        text_doc_group(doc, true);
+        type(ui, "x");
+        key(ui, GLFW_KEY_BACKSPACE, 0);
+        type(ui, "yz");
+        text_doc_group(doc, false);
+        type(ui, "w");
+        bool grouped = g_step_count == 5 && g_steps[0] != 0;
+        for (int i = 1; grouped && i < 4; i++)
+            grouped = g_steps[i] == g_steps[0];
+        say_flag("editor-steps", which, "grouped", grouped && g_steps[4] != g_steps[0]);
+        if (keep) {
+            text_doc_undo(doc);
+            text_doc_undo(doc);
+            say_flag("editor-steps", which, "undone", doc_is_str(doc, "ab c"));
+            text_doc_redo(doc);
+            say_flag("editor-steps", which, "redone", doc_is_str(doc, "ab cyz"));
+        }
+        ui_editor_set_mode(ed, NULL);
+        free_text_doc(doc);
+    }
     return 0;
 }
 
@@ -1280,5 +1508,15 @@ int run_ui_editor_probe(Game* game, UISystem* ui, Font* font, const char* which)
         return probe_editor_host_undo(ui);
     if (!strcmp(which, "editor-host-edit"))
         return probe_editor_host_edit(ui);
+    if (!strcmp(which, "editor-layer"))
+        return probe_editor_layer(ui);
+    if (!strcmp(which, "editor-decline"))
+        return probe_editor_decline(ui);
+    if (!strcmp(which, "editor-paired-char"))
+        return probe_editor_paired_char(ui);
+    if (!strcmp(which, "editor-shapes"))
+        return probe_editor_shapes(ui);
+    if (!strcmp(which, "editor-steps"))
+        return probe_editor_steps(ui);
     return -1;
 }
