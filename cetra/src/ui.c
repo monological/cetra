@@ -9,6 +9,7 @@
 #include "ui.h"
 #include "ui_editor_hooks.h"
 #include "ui_field.h"
+#include "ui_internal.h"
 #include "ui_text.h"
 #include "util.h"
 
@@ -71,7 +72,7 @@ struct UISystem {
     // field to say the first frame has not happened yet.
     float last_pointer_x, last_pointer_y;
 
-    // The pane whose bar the pointer holds, and how far down its thumb it took hold.
+    // The element whose bar the pointer holds, and how far down its thumb it took hold.
     UIElement* bar_drag;
     float bar_grab;
     // The focus as the last input pass left it. A top screen's focus that differs was set by the
@@ -86,12 +87,6 @@ struct UISystem {
     double caret_wake;
 };
 
-// A scrolling pane's bar: the thumb's width, its inset from the pane's edge, the shortest it is
-// drawn, and the strip along the edge a press lands on.
-#define UI_BAR_W     6.0f
-#define UI_BAR_INSET 2.0f
-#define UI_BAR_MIN   24.0f
-#define UI_BAR_HIT   14.0f
 // How close an eased scroll comes before it is there: a tenth of a point, under any pixel.
 #define UI_SCROLL_SNAP 0.1f
 
@@ -553,10 +548,19 @@ Engine* ui_system_engine(const UISystem* ui) {
     return ui ? ui->engine : NULL;
 }
 
+// The calls an element with state of its own is reached through; NULL for every other kind.
+static const UIWidgetOps* _ops(const UIElement* el) {
+    if (el && el->kind == UI_TEXT_FIELD && el->field)
+        return &ui_field_ops;
+    if (el && el->kind == UI_EDITOR && el->editor)
+        return &ui_editor_ops;
+    return NULL;
+}
+
 // Whether `el` takes the keys while it holds the focus: a text field and an editor do, everything
 // else leaves them to the screen and the app.
 static bool _takes_keys(const UIElement* el) {
-    return el && (el->kind == UI_TEXT_FIELD || el->kind == UI_EDITOR);
+    return _ops(el) != NULL;
 }
 
 bool ui_wants_keyboard(const UISystem* ui) {
@@ -1146,12 +1150,15 @@ static void _arrange(const UISystem* ui, UIElement* el, UIRect screen, int axis)
 static void _break_lines(const UISystem* ui, UIElement* el) {
     for (size_t i = 0; i < el->child_count; i++)
         _break_lines(ui, el->children[i]);
-    if (el->kind == UI_TEXT_FIELD) {
+    const UIWidgetOps* ops = _ops(el);
+    if (ops) {
         // A field keeps rows of its own, through every edit; this gives it the width.
-        const UIStyle s = _resolve(ui, el, UI_STATE_NORMAL);
-        float pad[4];
-        _padding_from(el, &s, pad);
-        ui_field_break(ui, el, &s, el->rect.w - pad[1] - pad[3]);
+        if (ops->width) {
+            const UIStyle s = _resolve(ui, el, UI_STATE_NORMAL);
+            float pad[4];
+            _padding_from(el, &s, pad);
+            ops->width(ui, el, &s, el->rect.w - pad[1] - pad[3]);
+        }
         return;
     }
     if (!el->text || !el->text[0]) {
@@ -1294,6 +1301,17 @@ static void _layout_once(UIScreen* screen, UIRect full) {
     _arrange(screen->ui, root, full, 1);
 }
 
+static UIRect _content_rect(const UISystem* ui, const UIElement* el);
+
+// Every element with state of its own given its content rect, once the layout has placed it.
+static void _place_widgets(const UISystem* ui, UIElement* el) {
+    for (size_t i = 0; i < el->child_count; i++)
+        _place_widgets(ui, el->children[i]);
+    const UIWidgetOps* ops = _ops(el);
+    if (ops && ops->place)
+        ops->place(ui, el, _content_rect(ui, el));
+}
+
 void ui_layout(UIScreen* screen, float width, float height) {
     if (!screen || !screen->root || !screen->ui)
         return;
@@ -1306,6 +1324,7 @@ void ui_layout(UIScreen* screen, float width, float height) {
     _layout_once(screen, full);
     for (int again = 0; again < 2 && _settle_rows(screen->ui, screen, screen->root); again++)
         _layout_once(screen, full);
+    _place_widgets(screen->ui, screen->root);
 }
 
 // --------------------------------------------------------------------- emit
@@ -1371,22 +1390,47 @@ static float _scroll_max(const UISystem* ui, const UIElement* el) {
     return glm_max(el->scroll_content - _pane_view(ui, el), 0.0f);
 }
 
-/*
- * A pane's bar: the track along its right edge and the thumb in it, the thumb's length the share
- * of the content in view and its place the share scrolled. False while the content fits, when
- * there is no bar. ONE definition, read by the draw and by the press alike.
- */
-static bool _pane_bar(const UISystem* ui, const UIElement* el, UIRect* track, UIRect* thumb) {
-    const float max = _scroll_max(ui, el);
-    if (max <= 0.0f || el->scroll_content <= 0.0f)
+bool ui_bar_place(UIRect rect, const UIScrollPlace* place, UIRect* track, UIRect* thumb) {
+    if (place->total <= place->view || place->total <= 0.0f)
         return false;
-    *track = (UIRect){el->rect.x + el->rect.w - UI_BAR_W - UI_BAR_INSET, el->rect.y + UI_BAR_INSET,
-                      UI_BAR_W, el->rect.h - 2.0f * UI_BAR_INSET};
-    float h = track->h * _pane_view(ui, el) / el->scroll_content;
+    *track = (UIRect){rect.x + rect.w - UI_BAR_W - UI_BAR_INSET, rect.y + UI_BAR_INSET, UI_BAR_W,
+                      rect.h - 2.0f * UI_BAR_INSET};
+    float h = track->h * place->view / place->total;
     const float floor = UI_BAR_MIN < track->h ? UI_BAR_MIN : track->h;
     h = h < floor ? floor : h;
-    *thumb = (UIRect){track->x, track->y + (track->h - h) * (el->scroll / max), UI_BAR_W, h};
+    *thumb = (UIRect){track->x, track->y + (track->h - h) * glm_clamp(place->at, 0.0f, 1.0f),
+                      UI_BAR_W, h};
     return true;
+}
+
+float ui_bar_at(UIRect track, UIRect thumb, float y, float grab) {
+    const float room = track.h - thumb.h;
+    return room > 0.0f ? glm_clamp((y - grab - track.y) / room, 0.0f, 1.0f) : 0.0f;
+}
+
+static float _scroll_step(const UISystem* ui);
+
+// Where an element that scrolls is: a pane, in points, or anything else that scrolls itself, in
+// its own units. False for anything that does not scroll, or while everything shows.
+static bool _scroll_place(const UISystem* ui, const UIElement* el, UIScrollPlace* place) {
+    if (el->kind == UI_SCROLL) {
+        const float max = _scroll_max(ui, el);
+        *place = (UIScrollPlace){_pane_view(ui, el), el->scroll_content,
+                                 max > 0.0f ? el->scroll / max : 0.0f, _scroll_step(ui)};
+        return max > 0.0f;
+    }
+    const UIWidgetOps* ops = _ops(el);
+    return ops && ops->scroll && ops->scroll(el, place);
+}
+
+/*
+ * The bar of an element that scrolls: the track along its right edge and the thumb in it. False
+ * while everything shows, when there is no bar. ONE definition, read by the draw and by the press
+ * alike, for a pane and an editor both.
+ */
+static bool _bar(const UISystem* ui, const UIElement* el, UIRect* track, UIRect* thumb) {
+    UIScrollPlace place;
+    return _scroll_place(ui, el, &place) && ui_bar_place(el->rect, &place, track, thumb);
 }
 
 static void _emit_pane(UISystem* ui, UIElement* el, const UIStyle* s);
@@ -1418,20 +1462,21 @@ static void _emit(UISystem* ui, UIElement* el) {
             case UI_SCROLL:
                 ui_draw_rect(dl, el->rect, &s);
                 break;
-            case UI_TEXT_FIELD: {
-                const UIScreen* top = ui_top(ui);
-                const bool blink = ui->engine && !ui->engine->headless;
-                const double wake = ui_field_draw(ui, el, &s, _content_rect(ui, el),
-                                                  top && top->focused == el, ui->now, blink);
-                ui->caret_wake = wake < ui->caret_wake ? wake : ui->caret_wake;
-                break;
-            }
+            case UI_TEXT_FIELD:
             case UI_EDITOR: {
+                const UIWidgetOps* ops = _ops(el);
+                if (!ops) {
+                    ui_draw_rect(dl, el->rect, &s);
+                    break;
+                }
                 const UIScreen* top = ui_top(ui);
                 const bool blink = ui->engine && !ui->engine->headless;
-                const double wake = ui_editor_draw(ui, el, &s, _content_rect(ui, el),
-                                                   top && top->focused == el, ui->now, blink);
+                const double wake = ops->draw(ui, el, &s, _content_rect(ui, el),
+                                              top && top->focused == el, ui->now, blink);
                 ui->caret_wake = wake < ui->caret_wake ? wake : ui->caret_wake;
+                UIRect track, thumb;
+                if (_bar(ui, el, &track, &thumb))
+                    ui_draw_rounded(dl, thumb, UI_BAR_W * 0.5f, (float*)s.fg, NULL, 0.0f);
                 break;
             }
             case UI_TOGGLE: {
@@ -1540,7 +1585,7 @@ static void _emit_pane(UISystem* ui, UIElement* el, const UIStyle* s) {
     }
     ui_pop_clip(dl);
     UIRect track, thumb;
-    if (_pane_bar(ui, el, &track, &thumb))
+    if (_bar(ui, el, &track, &thumb))
         ui_draw_rounded(dl, thumb, UI_BAR_W * 0.5f, (float*)s->fg, NULL, 0.0f);
 }
 
@@ -1612,6 +1657,12 @@ static bool _is_pane(const UIElement* el) {
     return el->kind == UI_SCROLL;
 }
 
+// A pane, or anything else that scrolls itself: what the wheel and a press on a bar reach.
+static bool _scrolls(const UIElement* el) {
+    const UIWidgetOps* ops = _ops(el);
+    return el->kind == UI_SCROLL || (ops && ops->scroll);
+}
+
 // The element a press at the point is on. Only a focusable element claims: a panel or a label is
 // transparent to the pointer by construction -- the equivalent of pointer-events: none, defaulted
 // the safe way round, so decoration never swallows a click meant for the control underneath it.
@@ -1619,9 +1670,15 @@ static UIElement* _hit(UIElement* el, float x, float y) {
     return _deepest_at(el, x, y, _is_focusable);
 }
 
-// The deepest pane showing the point, or NULL: what the wheel and a press on a bar reach.
+// The deepest pane showing the point, or NULL.
 static UIElement* _pane_at(UIElement* el, float x, float y) {
     return _deepest_at(el, x, y, _is_pane);
+}
+
+// The deepest element that scrolls showing the point, or NULL: what the wheel and a press on a bar
+// reach, so an editor in a pane scrolls itself and not the pane.
+static UIElement* _scroller_at(UIElement* el, float x, float y) {
+    return _deepest_at(el, x, y, _scrolls);
 }
 
 // The pane round `el`, the nearest, or NULL.
@@ -1657,6 +1714,22 @@ static void _scroll_to(const UISystem* ui, UIElement* pane, float target, bool n
     pane->scroll_target = glm_clamp(target, 0.0f, _scroll_max(ui, pane));
     if (now)
         pane->scroll = pane->scroll_target;
+}
+
+// An element that scrolls moved by `by` of its units: a pane easing there unless `now`.
+static void _scroll_by(const UISystem* ui, UIElement* el, float by, bool now) {
+    if (el->kind == UI_SCROLL)
+        _scroll_to(ui, el, el->scroll_target + by, now);
+    else if (_ops(el) && _ops(el)->scroll_by)
+        _ops(el)->scroll_by(el, by);
+}
+
+// An element that scrolls put `at` the share along, 0..1, at once: its bar's thumb held there.
+static void _scroll_at(const UISystem* ui, UIElement* el, float at) {
+    if (el->kind == UI_SCROLL)
+        _scroll_to(ui, el, at * _scroll_max(ui, el), true);
+    else if (_ops(el) && _ops(el)->scroll_to)
+        _ops(el)->scroll_to(el, at);
 }
 
 /*
@@ -1898,22 +1971,19 @@ static void _scroll_key(const UISystem* ui, const UIScreen* top, const UIInput* 
 static bool _route_keys(UISystem* ui, UIScreen* top, const UIInput* in, const UIElement* app_set) {
     if (app_set && top->focused == app_set && _takes_keys(app_set))
         return false;
-    UIElement* field = NULL; // the field taking keys, between its begin and its end
+    UIElement* taking = NULL; // the element taking keys, between its begin and its end
     bool let_go = false;
     for (int i = 0; i < in->key_event_count && ui_top(ui) == top; i++) {
         UIElement* f = _takes_keys(top->focused) ? top->focused : NULL;
-        UIElement* typing = f && f->kind == UI_TEXT_FIELD ? f : NULL;
-        if (typing != field) {
-            if (field)
-                ui_field_keys_end(field);
-            if (typing)
-                ui_field_keys_begin(typing);
-            field = typing;
+        if (f != taking) {
+            if (taking && _ops(taking)->keys_end)
+                _ops(taking)->keys_end(taking);
+            if (f && _ops(f)->keys_begin)
+                _ops(f)->keys_begin(f);
+            taking = f;
         }
         const InputKeyEvent* ev = &in->key_events[i];
-        const bool used =
-            f && (f->kind == UI_EDITOR ? ui_editor_key(ui, f, _content_rect(ui, f), ev)
-                                       : ui_field_key(ui, f, _content_rect(ui, f), ev));
+        const bool used = f && _ops(f)->key(ui, f, _content_rect(ui, f), ev);
         if (used || ev->codepoint)
             continue;
         if (ev->key == GLFW_KEY_TAB) {
@@ -1926,8 +1996,8 @@ static bool _route_keys(UISystem* ui, UIScreen* top, const UIInput* in, const UI
             _scroll_key(ui, top, in, ev->key);
         }
     }
-    if (field)
-        ui_field_keys_end(field);
+    if (taking && _ops(taking)->keys_end)
+        _ops(taking)->keys_end(taking);
     return let_go;
 }
 
@@ -1961,47 +2031,42 @@ void ui_update(UISystem* ui, const UIInput* in, float width, float height) {
     if (app_set)
         _reveal(ui, app_set);
 
-    // A pane's bar: a press on it is a press on the bar and on nothing under it, and the thumb
-    // held follows the pointer down the track.
+    // A bar, a pane's or an editor's: a press on it is a press on the bar and on nothing under it,
+    // and the thumb held follows the pointer down the track.
     bool on_bar = false;
     if (in->pointer_pressed) {
-        UIElement* pane = _pane_at(top->root, in->pointer_x, in->pointer_y);
+        UIElement* el = _scroller_at(top->root, in->pointer_x, in->pointer_y);
+        UIScrollPlace place;
         UIRect track, thumb;
-        if (pane && _pane_bar(ui, pane, &track, &thumb) &&
-            in->pointer_x >= pane->rect.x + pane->rect.w - UI_BAR_HIT) {
+        if (el && _scroll_place(ui, el, &place) && ui_bar_place(el->rect, &place, &track, &thumb) &&
+            in->pointer_x >= el->rect.x + el->rect.w - UI_BAR_HIT) {
             on_bar = true;
             if (in->pointer_y >= thumb.y && in->pointer_y < thumb.y + thumb.h) {
-                ui->bar_drag = pane;
+                ui->bar_drag = el;
                 ui->bar_grab = in->pointer_y - thumb.y;
             } else {
                 // A page toward the pointer, as a press on a track does everywhere.
-                const float page = _pane_view(ui, pane) * 0.9f;
-                _scroll_to(ui, pane, pane->scroll_target + (in->pointer_y < thumb.y ? -page : page),
-                           false);
+                const float page = place.view * 0.9f;
+                _scroll_by(ui, el, in->pointer_y < thumb.y ? -page : page, false);
             }
         }
     }
     if (ui->bar_drag) {
-        UIElement* pane = ui->bar_drag;
+        UIElement* el = ui->bar_drag;
         UIRect track, thumb;
-        if (!in->pointer_down || !_pane_bar(ui, pane, &track, &thumb)) {
+        if (!in->pointer_down || !_bar(ui, el, &track, &thumb))
             ui->bar_drag = NULL;
-        } else {
-            const float room = track.h - thumb.h;
-            const float t = room > 0.0f ? (in->pointer_y - ui->bar_grab - track.y) / room : 0.0f;
-            _scroll_to(ui, pane, glm_clamp(t, 0.0f, 1.0f) * _scroll_max(ui, pane), true);
-        }
+        else
+            _scroll_at(ui, el, ui_bar_at(track, thumb, in->pointer_y, ui->bar_grab));
     }
 
-    // The wheel scrolls the deepest pane under the pointer, at once: a trackpad's own momentum is
-    // already in what it sends.
+    // The wheel scrolls the deepest thing that scrolls under the pointer, at once: a trackpad's own
+    // momentum is already in what it sends.
     if (in->wheel_y != 0.0f) {
-        UIElement* editor = _hit(top->root, in->pointer_x, in->pointer_y);
-        UIElement* pane = _pane_at(top->root, in->pointer_x, in->pointer_y);
-        if (editor && editor->kind == UI_EDITOR)
-            ui_editor_wheel(ui, editor, _content_rect(ui, editor), in->wheel_y);
-        else if (pane)
-            _scroll_to(ui, pane, pane->scroll_target - in->wheel_y * _scroll_step(ui), true);
+        UIElement* el = _scroller_at(top->root, in->pointer_x, in->pointer_y);
+        UIScrollPlace place;
+        if (el && _scroll_place(ui, el, &place))
+            _scroll_by(ui, el, -in->wheel_y * place.step, true);
     }
 
     UIElement* hovered =
@@ -2028,20 +2093,14 @@ void ui_update(UISystem* ui, const UIInput* in, float width, float height) {
             top->focused = hovered;
         else if (!top->modal && !on_bar)
             top->focused = NULL; // a press on nothing lets go, where nothing holds the screen
-        if (hovered && hovered->kind == UI_TEXT_FIELD)
-            ui_field_press(hovered, _content_rect(ui, hovered), in->pointer_x, in->pointer_y,
-                           (in->pointer_mods & GLFW_MOD_SHIFT) != 0, in->time);
-        if (hovered && hovered->kind == UI_EDITOR)
-            ui_editor_press(ui, hovered, _content_rect(ui, hovered), in->pointer_x, in->pointer_y,
-                            in->pointer_mods, in->time);
+        if (_takes_keys(hovered))
+            _ops(hovered)->press(ui, hovered, _content_rect(ui, hovered), in->pointer_x,
+                                 in->pointer_y, in->pointer_mods, in->time);
     }
     // A held field or editor selects to the pointer, from the captured element as a slider does.
-    if (ui->pressed && ui->pressed->kind == UI_TEXT_FIELD && in->pointer_down &&
-        !in->pointer_pressed)
-        ui_field_drag(ui->pressed, _content_rect(ui, ui->pressed), in->pointer_x, in->pointer_y);
-    if (ui->pressed && ui->pressed->kind == UI_EDITOR && in->pointer_down && !in->pointer_pressed)
-        ui_editor_drag(ui, ui->pressed, _content_rect(ui, ui->pressed), in->pointer_x,
-                       in->pointer_y);
+    if (_takes_keys(ui->pressed) && in->pointer_down && !in->pointer_pressed)
+        _ops(ui->pressed)
+            ->drag(ui, ui->pressed, _content_rect(ui, ui->pressed), in->pointer_x, in->pointer_y);
     // A held slider tracks the pointer: pressing anywhere on the row jumps the
     // value there and holding drags it, which is what every slider does. It
     // runs off the CAPTURED element rather than the hovered one, so the drag

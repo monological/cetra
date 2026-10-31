@@ -343,6 +343,14 @@ static void _time_editor(UISystem* ui, GlyphCache* face, size_t bytes, const cha
         runs[r] = _now_ms() - t0;
     }
     _say(label, "keystroke_ms", runs);
+    // Enter there: a line more, which moves every line after it.
+    for (int r = 0; r < BENCH_RUNS; r++) {
+        t0 = _now_ms();
+        ui_editor_run(ed, "newline");
+        _editor_frame(ui, &idle);
+        runs[r] = _now_ms() - t0;
+    }
+    _say(label, "newline_ms", runs);
     // A hundred carets, a line each, spread through the text.
     TextSelection spread[100];
     for (size_t i = 0; i < 100; i++) {
@@ -357,6 +365,14 @@ static void _time_editor(UISystem* ui, GlyphCache* face, size_t bytes, const cha
         runs[r] = _now_ms() - t0;
     }
     _say(label, "keystroke100_ms", runs);
+    // Enter at the hundred: a line more at each, which moves every line after it.
+    for (int r = 0; r < BENCH_RUNS; r++) {
+        t0 = _now_ms();
+        ui_editor_run(ed, "newline");
+        _editor_frame(ui, &idle);
+        runs[r] = _now_ms() - t0;
+    }
+    _say(label, "newline100_ms", runs);
     // A jump far down, or back up: the view's lines found, wrapped and drawn.
     for (int r = 0; r < BENCH_RUNS; r++) {
         const size_t to = text_doc_line_start(doc, r % 2 ? lines / 7 : lines * 6 / 7);

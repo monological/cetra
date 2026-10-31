@@ -1575,8 +1575,8 @@ the median of five runs and the spread between the fastest and the slowest, and 
 - `load_font` from an empty pool;
 - the code editor (spec 14.4) on texts of pcb's lines at 80 KB, 10 MB and 64 MB, in a 900 by 700
   editor: opening the text (`open_ms`), the first frame, the budget's walk until every row is
-  wrapped (`settle_frames`, its total and its longest frame), then a keystroke at one caret and at
-  100 spread through the text, a jump far down, and a resize.
+  wrapped (`settle_frames`, its total and its longest frame), then a keystroke and Enter at one
+  caret and at 100 spread through the text, a jump far down, and a resize.
 
 Run it from a release build (`./build.sh --release`, then `out/release/bin/gametest -x
 --ui-bench`): a debug build's numbers say little. No gate reads it, since timing does not travel;
@@ -1880,8 +1880,9 @@ It takes the capture set `-x`, `-f`, `-S`, `-W` and `-H`, and:
   - F6 lands `(note landed)` at the text's start, as an edit from another view, and marks it;
   - F7 reads the file again, through the text's whole new text.
 
-  `--editor-lag N` takes each parse's result N frames after it began (1 by default), joining its
-  thread if it has not finished, so a headless run repeats. Under `--canvas-probe` the run prints
+  A parse's result is taken on the frame its thread's end wakes, as the board thread's is.
+  `--editor-lag N` takes it N frames after it began instead, joining its thread if it has not
+  finished, so a headless run repeats. Under `--canvas-probe` the run prints
   the text as hex (`canvas editor hex`), the selections, the errors as they stand and where the
   first is drawn, and whether every row is wrapped (`canvas editor settled`), which the
   `ui-editor-*` and `idle-editor` arms read.

@@ -6,18 +6,23 @@
 
 #include "text.h"
 
-// The byte past the character at `i`, never reading past `len`: an editor's line is not
-// NUL-terminated.
-static size_t _next(const char* s, size_t len, size_t i) {
-    if (i >= len)
-        return len;
-    if ((unsigned char)s[i] < 0x80)
-        return i + 1;
+uint32_t ui_typing_next(const char* s, size_t len, size_t* i) {
+    if (*i >= len)
+        return 0;
+    if ((unsigned char)s[*i] < 0x80)
+        return (uint32_t)(unsigned char)s[(*i)++];
     char buf[5] = {0};
-    memcpy(buf, s + i, len - i < 4 ? len - i : 4);
+    memcpy(buf, s + *i, len - *i < 4 ? len - *i : 4);
     const char* p = buf;
-    text_utf8_next(&p);
-    return i + (p > buf ? (size_t)(p - buf) : 1);
+    const uint32_t cp = text_utf8_next(&p);
+    *i += p > buf ? (size_t)(p - buf) : 1;
+    return cp;
+}
+
+// The byte past the character at `i`.
+static size_t _next(const char* s, size_t len, size_t i) {
+    ui_typing_next(s, len, &i);
+    return i < len ? i : len;
 }
 
 static size_t _prev(const char* s, size_t i) {
@@ -30,7 +35,7 @@ static size_t _prev(const char* s, size_t i) {
 
 int ui_typing_class(char byte) {
     const unsigned char c = (unsigned char)byte;
-    if (c == ' ' || c == '\t' || c == '\n' || c == '\r')
+    if (c == ' ' || c == '\t' || c == '\n')
         return 0;
     if (c >= 0x80 || isalnum(c) || c == '_')
         return 2;
@@ -57,9 +62,8 @@ size_t ui_typing_word_left(const char* s, size_t len, size_t at) {
     return i;
 }
 
-size_t ui_typing_word_right(const char* s, size_t len, size_t at) {
+size_t ui_typing_word_end(const char* s, size_t len, size_t at) {
     size_t i = at > len ? len : at;
-#ifdef __APPLE__
     while (i < len && ui_typing_class(s[i]) == 0)
         i = _next(s, len, i);
     if (i >= len)
@@ -67,7 +71,14 @@ size_t ui_typing_word_right(const char* s, size_t len, size_t at) {
     const int k = ui_typing_class(s[i]);
     while (i < len && ui_typing_class(s[i]) == k)
         i = _next(s, len, i);
+    return i;
+}
+
+size_t ui_typing_word_right(const char* s, size_t len, size_t at) {
+#ifdef __APPLE__
+    return ui_typing_word_end(s, len, at);
 #else
+    size_t i = at > len ? len : at;
     if (i < len && ui_typing_class(s[i]) != 0) {
         const int k = ui_typing_class(s[i]);
         while (i < len && ui_typing_class(s[i]) == k)
@@ -75,8 +86,8 @@ size_t ui_typing_word_right(const char* s, size_t len, size_t at) {
     }
     while (i < len && ui_typing_class(s[i]) == 0)
         i = _next(s, len, i);
+    return i;
 #endif
-    return i > len ? len : i;
 }
 
 void ui_typing_word_round(const char* s, size_t len, size_t at, size_t* from, size_t* to) {
@@ -122,17 +133,27 @@ size_t ui_typing_clean(const char* in, size_t len, char* out, bool lines, bool t
     return k;
 }
 
-bool ui_typing_again(double now, double then, float x, float y, float px, float py) {
-    return now - then < UI_TYPING_PRESS_SECONDS && fabsf(x - px) < UI_TYPING_PRESS_POINTS &&
-           fabsf(y - py) < UI_TYPING_PRESS_POINTS;
+int ui_typing_press(UITypingPresses* p, double now, float x, float y, int cycle) {
+    const bool again = p->count > 0 && now - p->time < UI_TYPING_PRESS_SECONDS &&
+                       fabsf(x - p->x) < UI_TYPING_PRESS_POINTS &&
+                       fabsf(y - p->y) < UI_TYPING_PRESS_POINTS;
+    p->count = again && (!cycle || p->count < cycle) ? p->count + 1 : 1;
+    p->time = now;
+    p->x = x;
+    p->y = y;
+    return p->count;
 }
 
-bool ui_typing_caret_lit(double now, double since, bool blink, double* wake) {
+bool ui_typing_caret_lit(UITypingCaret* c, double now, bool blink, double* wake) {
+    if (c->moved) {
+        c->since = now;
+        c->moved = false;
+    }
     *wake = INFINITY;
     if (!blink)
         return true;
     const double period = UI_TYPING_CARET_LIT_SECONDS + UI_TYPING_CARET_DARK_SECONDS;
-    double phase = fmod(now - since, period);
+    double phase = fmod(now - c->since, period);
     phase = phase < 0.0 ? 0.0 : phase;
     const bool lit = phase < UI_TYPING_CARET_LIT_SECONDS;
     *wake = (lit ? UI_TYPING_CARET_LIT_SECONDS : period) - phase;

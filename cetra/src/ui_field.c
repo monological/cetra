@@ -18,6 +18,7 @@
 #include "ext/log.h"
 #include "ui.h"
 #include "ui_field.h"
+#include "ui_internal.h"
 #include "ui_text.h"
 #include "ui_typing.h"
 #include "util.h"
@@ -41,7 +42,6 @@ typedef struct UIField UIField;
 
 // A field's text past this is refused, so a paste cannot take the process's memory.
 #define FIELD_MAX_BYTES (1 << 20)
-#define CARET_WIDTH     UI_TYPING_CARET_WIDTH
 
 struct UIField {
     UIElement* el; // the element it belongs to: its runs, its callbacks' first argument
@@ -64,14 +64,11 @@ struct UIField {
 
     float scroll_x, scroll_y; // the content's offset inside the field's box
     unsigned edits;           // every insert and delete, counted: what on_change watches
-    // The caret, the selection and the edits as a turn of keys began (ui_field_keys_begin).
+    // The caret, the selection and the edits as a turn of keys began (_keys_begin).
     int was_cursor, was_start, was_end;
     unsigned was_edits;
-    bool caret_moved;  // since the blink last restarted
-    double caret_time; // when it did, on the draw's clock
-    double last_press; // the pointer's last press, on the input's clock
-    int presses;       // how many in a row, for a word or a line
-    float press_x, press_y;
+    UITypingCaret caret;     // its blink, on the draw's clock
+    UITypingPresses presses; // the pointer's run of presses, on the input's clock
 
     UIActionFn on_change;
     void* change_user;
@@ -338,7 +335,9 @@ void ui_field_runs_changed(UIElement* el) {
         _sync(el->field);
 }
 
-void ui_field_break(const UISystem* ui, UIElement* el, const UIStyle* s, float width) {
+// The field broken into rows at its content's width, in its resolved style, after the layout's
+// width pass: a multi-line field wraps there, a single-line field is one row.
+static void _width(const UISystem* ui, UIElement* el, const UIStyle* s, float width) {
     UIField* f = el->field;
     if (!f)
         return;
@@ -457,7 +456,7 @@ void ui_field_set_text(UIElement* el, const char* text) {
     stb_textedit_initialize_state(&f->state, !(f->flags & UI_FIELD_MULTILINE));
     f->state.cursor = f->state.select_start = f->state.select_end = f->len;
     f->scroll_x = f->scroll_y = 0.0f;
-    f->caret_moved = true;
+    f->caret.moved = true;
     _sync(f);
 }
 
@@ -704,7 +703,9 @@ static bool _key(const UISystem* ui, UIElement* el, UIField* f, UIRect content,
     return true;
 }
 
-void ui_field_keys_begin(UIElement* el) {
+// Around the keys of one turn of a pass: the caret restarts its blink when they moved it, and
+// on_change fires when they edited the text.
+static void _keys_begin(UIElement* el) {
     UIField* f = el ? el->field : NULL;
     if (!f)
         return;
@@ -716,19 +717,21 @@ void ui_field_keys_begin(UIElement* el) {
 
 // An edit is told by the count of them rather than the length, since a paste over a selection can
 // leave the length as it was.
-void ui_field_keys_end(UIElement* el) {
+static void _keys_end(UIElement* el) {
     UIField* f = el ? el->field : NULL;
     if (!f)
         return;
     const bool edited = f->edits != f->was_edits;
     if (edited || f->state.cursor != f->was_cursor || f->state.select_start != f->was_start ||
         f->state.select_end != f->was_end)
-        f->caret_moved = true;
+        f->caret.moved = true;
     if (edited && f->on_change)
         f->on_change(el, f->change_user);
 }
 
-bool ui_field_key(const UISystem* ui, UIElement* el, UIRect content, const InputKeyEvent* ev) {
+// One key or character, the field's on_key first: false for a key it does not use -- Esc, Tab, and
+// Page Up or Page Down on one line.
+static bool _take_key(const UISystem* ui, UIElement* el, UIRect content, const InputKeyEvent* ev) {
     UIField* f = el ? el->field : NULL;
     if (!f || !ev)
         return false;
@@ -750,37 +753,39 @@ static void _select_word(UIField* f) {
     _select(f, (int)a, (int)b);
 }
 
-void ui_field_press(UIElement* el, UIRect content, float x, float y, bool extend, double now) {
+// The caret placed, the selection extended with Shift held, a word selected by a second press close
+// in time and the line by a third.
+static void _press(const UISystem* ui, UIElement* el, UIRect content, float x, float y, int mods,
+                   double now) {
+    (void)ui;
     UIField* f = el->field;
     if (!f)
         return;
     const float lx = x - content.x + f->scroll_x, ly = y - content.y + f->scroll_y;
-    const bool again = ui_typing_again(now, f->last_press, x, y, f->press_x, f->press_y);
-    f->presses = again ? f->presses + 1 : 1;
-    f->last_press = now;
-    f->press_x = x;
-    f->press_y = y;
-    if (extend)
+    const int presses = ui_typing_press(&f->presses, now, x, y, 0);
+    if (mods & GLFW_MOD_SHIFT)
         stb_textedit_drag(f, &f->state, lx, ly);
     else
         stb_textedit_click(f, &f->state, lx, ly);
-    if (f->presses == 2) {
+    if (presses == 2) {
         _select_word(f);
-    } else if (f->presses >= 3) {
+    } else if (presses >= 3) {
         const int c = f->state.cursor;
         _select(f, _row_start(f, &f->state, c), _row_end(f, &f->state, c));
     }
-    f->caret_moved = true;
+    f->caret.moved = true;
 }
 
-void ui_field_drag(UIElement* el, UIRect content, float x, float y) {
+// The pointer held after a press: the selection follows it.
+static void _drag(const UISystem* ui, UIElement* el, UIRect content, float x, float y) {
+    (void)ui;
     UIField* f = el->field;
-    if (!f || f->presses >= 2)
+    if (!f || f->presses.count >= 2)
         return; // a word or a line held stays selected
     const int cursor = f->state.cursor;
     stb_textedit_drag(f, &f->state, x - content.x + f->scroll_x, y - content.y + f->scroll_y);
     if (f->state.cursor != cursor)
-        f->caret_moved = true;
+        f->caret.moved = true;
 }
 
 // ------------------------------------------------------------------- drawing
@@ -796,8 +801,8 @@ static void _caret_at(const UIField* f, float* x, float* y) {
 static void _keep_caret_in_view(UIField* f, UIRect content) {
     float cx, cy;
     _caret_at(f, &cx, &cy);
-    if (cx - f->scroll_x > content.w - CARET_WIDTH)
-        f->scroll_x = cx - content.w + CARET_WIDTH;
+    if (cx - f->scroll_x > content.w - UI_TYPING_CARET_WIDTH)
+        f->scroll_x = cx - content.w + UI_TYPING_CARET_WIDTH;
     if (cx < f->scroll_x)
         f->scroll_x = cx;
     if (cy + f->line_h - f->scroll_y > content.h)
@@ -811,7 +816,7 @@ static void _keep_caret_in_view(UIField* f, UIRect content) {
 static void _clamp_scroll(UIField* f, UIRect content) {
     const float wide =
         f->state.single_line ? ui_text_span_width(&f->text, 0, (size_t)f->len) : 0.0f;
-    const float max_x = glm_max(wide + CARET_WIDTH - content.w, 0.0f);
+    const float max_x = glm_max(wide + UI_TYPING_CARET_WIDTH - content.w, 0.0f);
     const float max_y = glm_max(f->line_h * (float)f->rows.count - content.h, 0.0f);
     f->scroll_x = glm_clamp(f->scroll_x, 0.0f, max_x);
     f->scroll_y = glm_clamp(f->scroll_y, 0.0f, max_y);
@@ -829,8 +834,10 @@ static void _rows_shown(const UIField* f, UIRect content, size_t* first, size_t*
     *last = hi < f->rows.count ? hi : f->rows.count;
 }
 
-double ui_field_draw(const UISystem* ui, UIElement* el, const UIStyle* s, UIRect content,
-                     bool focused, double now, bool blink) {
+// Its box, its selection, its text or its placeholder, and -- while it holds the focus, is editable
+// and the caret is lit -- its caret.
+static double _draw(const UISystem* ui, UIElement* el, const UIStyle* s, UIRect content,
+                    bool focused, double now, bool blink) {
     UIField* f = el->field;
     UIDrawList* dl = ui_draw_list(ui);
     ui_draw_rect(dl, el->rect, s);
@@ -887,17 +894,22 @@ double ui_field_draw(const UISystem* ui, UIElement* el, const UIStyle* s, UIRect
 
     // The caret, while the field is focused and editable.
     double wake = INFINITY;
-    if (focused && !(f->flags & UI_FIELD_READ_ONLY)) {
-        if (f->caret_moved) {
-            f->caret_time = now;
-            f->caret_moved = false;
-        }
-        if (ui_typing_caret_lit(now, f->caret_time, blink, &wake)) {
-            float cx, cy;
-            _caret_at(f, &cx, &cy);
-            ui_draw_quad(dl, (UIRect){ox + cx, oy + cy, CARET_WIDTH, f->line_h}, f->color);
-        }
+    if (focused && !(f->flags & UI_FIELD_READ_ONLY) &&
+        ui_typing_caret_lit(&f->caret, now, blink, &wake)) {
+        float cx, cy;
+        _caret_at(f, &cx, &cy);
+        ui_draw_quad(dl, (UIRect){ox + cx, oy + cy, UI_TYPING_CARET_WIDTH, f->line_h}, f->color);
     }
     ui_pop_clip(dl);
     return wake;
 }
+
+const UIWidgetOps ui_field_ops = {
+    .width = _width,
+    .keys_begin = _keys_begin,
+    .keys_end = _keys_end,
+    .key = _take_key,
+    .press = _press,
+    .drag = _drag,
+    .draw = _draw,
+};

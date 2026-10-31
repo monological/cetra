@@ -3,7 +3,7 @@
 
 /*
  * A monospaced face's glyphs as coverage bitmaps made at the exact pixel size they are drawn at
- * (spec 14.4), for the code editor. The UI's own text is a distance field, which scales freely
+ * (spec 14.4). The UI's own text is a distance field, which scales freely
  * but goes soft and thin at the 12 to 14 pixels code is read at, most of all on a screen that is
  * not a Retina one; a bitmap made at the size it is shown is what lite and every terminal draw.
  *
@@ -46,6 +46,7 @@ typedef struct GlyphCache {
     unsigned char* pixels; // the atlas's bytes, a row of atlas.width after another
     int pen_x, pen_y;      // where the next glyph is packed
     int row_height;        // the tallest glyph in the row being packed
+    bool stale;            // the texture is behind the pixels: uploaded whole at the next glyph
     GlyphCacheEntry* ascii[128];
     GlyphCacheEntry* others; // the rest, by codepoint
 } GlyphCache;

@@ -15,10 +15,10 @@
 
 #include "cetra/engine.h"
 #include "cetra/glyph_cache.h"
-#include "cetra/internal/ui_field.h"         // ui_system_engine, for the clipboard
 #include "cetra/internal/ext/stb_truetype.h" // the rasteriser the glyph cache's bitmaps are held to
 #include "cetra/internal/text_doc_edit.h"    // the editor's half of the text, which the arms drive
 #include "cetra/internal/ui_editor_hooks.h"  // the editor's wrapping and where it put things
+#include "cetra/internal/ui_internal.h"      // ui_system_engine, for the clipboard
 #include "cetra/text.h"
 #include "cetra/text_doc.h"
 #include "cetra/ui_editor.h"
@@ -798,6 +798,30 @@ static void type(UISystem* ui, const char* text) {
     send_keys(ui, e, n);
 }
 
+// A press at (x0, y0) held to (x1, y1) over a pass, then let go there, a second apart.
+static void press_drag(UISystem* ui, float x0, float y0, float x1, float y1, int mods) {
+    ui_update(ui,
+              &(UIInput){.pointer_x = x0,
+                         .pointer_y = y0,
+                         .pointer_pressed = true,
+                         .pointer_down = true,
+                         .pointer_mods = mods,
+                         .time = (g_key_time += 1.0)},
+              1280.0f, 720.0f);
+    ui_update(
+        ui,
+        &(UIInput){
+            .pointer_x = x1, .pointer_y = y1, .pointer_down = true, .time = (g_key_time += 1.0)},
+        1280.0f, 720.0f);
+    ui_update(ui,
+              &(UIInput){.pointer_x = x1,
+                         .pointer_y = y1,
+                         .pointer_released = true,
+                         .time = (g_key_time += 1.0)},
+              1280.0f, 720.0f);
+    ui_build(ui, 1280.0f, 720.0f, 1.0f);
+}
+
 // The editor's one selection is (anchor, head).
 static bool one_selection(const UIElement* ed, size_t anchor, size_t head) {
     const TextSelection* s = NULL;
@@ -999,6 +1023,27 @@ static int probe_editor_carets(UISystem* ui) {
               1280.0f, 720.0f);
     const size_t clicked[] = {0, 9};
     say_flag("editor-carets", "alt_click", "two", selections_are(ed, clicked, 2));
+    // The bar's thumb dragged scrolls the view, and a drag in the text after it selects: the bar
+    // is the UI's, and lets go when the pointer does.
+    char lines[200 * 8];
+    size_t n = 0;
+    for (int i = 0; i < 200; i++)
+        n += (size_t)snprintf(lines + n, sizeof(lines) - n, "line%d\n", i);
+    text_doc_set_text(doc, lines, n);
+    ui_editor_set_selections(ed, &(TextSelection){0, 0}, 1);
+    editor_pass(ui);
+    press_drag(ui, ed->rect.x + ed->rect.w - 4.0f, ed->rect.y + 8.0f,
+               ed->rect.x + ed->rect.w - 4.0f, ed->rect.y + 108.0f, 0);
+    size_t top = 0, top_row = 0;
+    int cols = 0;
+    ui_editor_top(ed, &top, &top_row, &cols);
+    press_drag(ui, ed->rect.x + 120.0f, ed->rect.y + 60.0f, ed->rect.x + 180.0f,
+               ed->rect.y + 100.0f, 0);
+    const TextSelection* s = NULL;
+    ui_editor_selections(ed, &s, NULL);
+    say_flag("editor-carets", "bar_then_drag", "selects", top > 0 && s[0].anchor != s[0].head);
+    text_doc_set_text(doc, CARETS_TEXT, strlen(CARETS_TEXT));
+    editor_pass(ui);
     // Find: the next match of the query after the caret, selected.
     ui_editor_set_selections(ed, &(TextSelection){0, 0}, 1);
     ui_editor_find(ed, "f", 0);
@@ -1027,22 +1072,26 @@ static int probe_editor_carets(UISystem* ui) {
 
 // ---- A vim-like mode, built through the public calls alone
 
-static UIEditorMode g_normal, g_insert;
-static int g_count, g_pending;
+// The modes and what the normal one has read so far: a count, and an operator waiting for its
+// motion. Both modes carry it as their `user`, as a host's would.
+typedef struct Vim {
+    UIEditorMode normal, insert;
+    int count, pending;
+} Vim;
 
 static bool vim_normal(UIElement* el, const InputKeyEvent* k, void* user) {
-    (void)user;
+    Vim* v = user;
     if (!k->codepoint)
         return false; // a key: the standard mode's, below
     const uint32_t c = k->codepoint;
     if (c >= '1' && c <= '9') {
-        g_count = g_count * 10 + (int)(c - '0');
+        v->count = v->count * 10 + (int)(c - '0');
         return true;
     }
-    const int n = g_count ? g_count : 1;
-    g_count = 0;
-    if (g_pending == 'd') {
-        g_pending = 0;
+    const int n = v->count ? v->count : 1;
+    v->count = 0;
+    if (v->pending == 'd') {
+        v->pending = 0;
         if (c == 'w')
             ui_editor_apply(el, UI_OP_DELETE, UI_MOTION_WORD_END, n);
         return true;
@@ -1052,10 +1101,10 @@ static bool vim_normal(UIElement* el, const InputKeyEvent* k, void* user) {
             ui_editor_apply(el, UI_OP_DELETE, UI_MOTION_CHAR_RIGHT, n);
             break;
         case 'i':
-            ui_editor_set_mode(el, &g_insert);
+            ui_editor_set_mode(el, &v->insert);
             break;
         case 'd':
-            g_pending = 'd';
+            v->pending = 'd';
             break;
         case 'j':
             ui_editor_apply(el, UI_OP_MOVE, UI_MOTION_LINE_DOWN, n);
@@ -1067,28 +1116,31 @@ static bool vim_normal(UIElement* el, const InputKeyEvent* k, void* user) {
 }
 
 static bool vim_insert(UIElement* el, const InputKeyEvent* k, void* user) {
-    (void)user;
+    Vim* v = user;
     if (k->key != GLFW_KEY_ESCAPE)
         return false;
-    ui_editor_set_mode(el, &g_normal);
+    ui_editor_set_mode(el, &v->normal);
     return true;
 }
 
 #define MODE_TEXT "hello world\nsecond line\nthird line"
 
 static int probe_editor_mode(UISystem* ui) {
-    g_normal = (UIEditorMode){.name = "normal",
-                              .parent = ui_editor_standard_mode(),
-                              .read_key = vim_normal,
-                              .block_caret = true};
-    g_insert = (UIEditorMode){.name = "insert",
-                              .parent = ui_editor_standard_mode(),
-                              .read_key = vim_insert,
-                              .types = true};
+    static Vim vim;
+    vim.normal = (UIEditorMode){.name = "normal",
+                                .parent = ui_editor_standard_mode(),
+                                .read_key = vim_normal,
+                                .user = &vim,
+                                .block_caret = true};
+    vim.insert = (UIEditorMode){.name = "insert",
+                                .parent = ui_editor_standard_mode(),
+                                .read_key = vim_insert,
+                                .user = &vim,
+                                .types = true};
     TextDoc* doc = create_text_doc(MODE_TEXT, strlen(MODE_TEXT));
     UIElement* ed = editor_fixture(ui, doc, 600.0f, 300.0f);
     editor_pass(ui);
-    ui_editor_set_mode(ed, &g_normal);
+    ui_editor_set_mode(ed, &vim.normal);
     type(ui, "x");
     say_flag("editor-mode", "x", "deletes", doc_is_str(doc, "ello world\nsecond line\nthird line"));
     type(ui, "dw");
