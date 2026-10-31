@@ -1,7 +1,7 @@
 /*
  * The --ui-probe cases of spec 14.4, the code editor: its text first, which needs no window, then
- * the editor that shows it. Each prints `ui <case> <label> <key> <numbers>` lines, as the cases of
- * ui_text_probe.c do.
+ * the editor that shows it; then spec 14.6's, elements taken out and moved. Each prints
+ * `ui <case> <label> <key> <numbers>` lines, as the cases of ui_text_probe.c do.
  */
 
 #include "ui_editor_probe.h"
@@ -18,7 +18,8 @@
 #include "cetra/internal/ext/stb_truetype.h" // the rasteriser the glyph cache's bitmaps are held to
 #include "cetra/internal/text_doc_edit.h"    // the editor's half of the text, which the arms drive
 #include "cetra/internal/ui_editor_hooks.h"  // the editor's wrapping and where it put things
-#include "cetra/internal/ui_internal.h"      // ui_system_engine, for the clipboard
+#include "cetra/internal/ui_editor_internal.h" // the view scrolled by rows
+#include "cetra/internal/ui_internal.h" // ui_system_engine, for the clipboard; what a system holds
 #include "cetra/text.h"
 #include "cetra/text_doc.h"
 #include "cetra/ui_editor.h"
@@ -1965,6 +1966,268 @@ static int probe_editor_host_edit(UISystem* ui) {
     return 0;
 }
 
+// ---- Elements taken out and moved (spec 14.6)
+
+static int g_presses;
+
+static void count_press(UIElement* el, void* user) {
+    (void)el;
+    (void)user;
+    g_presses++;
+}
+
+static UISystem* g_remover;
+
+// A button's action and an editor's key each taking their own element out, inside the pass.
+static void remove_self(UIElement* el, void* user) {
+    (void)user;
+    ui_remove(g_remover, el);
+}
+
+static bool remove_editor(UIElement* el, void* user) {
+    (void)user;
+    ui_remove(g_remover, el);
+    return true;
+}
+
+static const UIEditorCommand REMOVE_EDITOR = {"remove", "Takes the editor out", remove_editor,
+                                              NULL};
+static const UIEditorBinding REMOVE_KEYS[] = {{GLFW_KEY_F9, 0, &REMOVE_EDITOR}};
+
+static void pointer_pass(UISystem* ui, float x, float y, bool pressed, bool down, bool released) {
+    ui_update(ui,
+              &(UIInput){.pointer_x = x,
+                         .pointer_y = y,
+                         .pointer_pressed = pressed,
+                         .pointer_down = down,
+                         .pointer_released = released,
+                         .time = (g_key_time += 1.0)},
+              1280.0f, 720.0f);
+}
+
+static void centre_of(const UIElement* el, float* x, float* y) {
+    *x = el->rect.x + el->rect.w * 0.5f;
+    *y = el->rect.y + el->rect.h * 0.5f;
+}
+
+static void build_row(UIElement* row, int index, void* user) {
+    (void)index;
+    (void)user;
+    ui_label(row, "a row");
+}
+
+static int probe_ui_remove(UISystem* ui) {
+    g_remover = ui;
+    UIScreen* s = ui_screen(ui, "remove");
+    ui_screen_set_modal(s, false);
+    UIElement* root = ui_screen_root(s);
+    root->align_main = UI_ALIGN_START;
+    UIElement* inner = ui_panel(root);
+    UIElement* inner_button = ui_button(inner, "inner", count_press, NULL);
+    const UIElement* after = ui_button(root, "after", count_press, NULL);
+    UIElement* pressed = ui_button(root, "pressed", count_press, NULL);
+    const UIElement* self = ui_button(root, "self", remove_self, NULL);
+    UIElement* pane = ui_scroll(root);
+    ui_set_size(pane, UI_FIXED, 200.0f, UI_FIXED, 80.0f);
+    for (int i = 0; i < 30; i++)
+        ui_label(pane, "a line");
+    UIElement* rows = ui_scroll(root);
+    ui_set_size(rows, UI_FIXED, 200.0f, UI_FIXED, 80.0f);
+    ui_scroll_set_rows(rows, 10, 20.0f, build_row, NULL);
+    ui_push(ui, s);
+    ui_layout(s, 1280.0f, 720.0f);
+    const UIElement *p = NULL, *b = NULL, *seen = NULL;
+
+    // The focus inside what goes, as an input pass last saw it: both let go, and the next layout
+    // puts the element after it where it stood.
+    ui_set_focus(s, inner_button);
+    pointer_pass(ui, -1.0f, -1.0f, false, false, false);
+    const float inner_y = inner->rect.y;
+    const size_t children = root->child_count;
+    ui_remove(ui, inner);
+    ui_system_held(ui, &p, &b, &seen);
+    say_flag("remove", "focus", "nothing", ui_focused(s) == NULL);
+    say_flag("remove", "seen", "nothing", seen == NULL);
+    ui_layout(s, 1280.0f, 720.0f);
+    say_flag("remove", "layout", "whole",
+             root->child_count == children - 1 && root->children[0] == after &&
+                 fabsf(after->rect.y - inner_y) < 0.01f);
+
+    // A press held on what goes: let go, and its release activates nothing.
+    float x = 0.0f, y = 0.0f;
+    centre_of(pressed, &x, &y);
+    pointer_pass(ui, x, y, true, true, false);
+    ui_system_held(ui, &p, &b, &seen);
+    const bool was_pressed = p == pressed;
+    ui_remove(ui, pressed);
+    ui_system_held(ui, &p, &b, &seen);
+    pointer_pass(ui, x, y, false, false, true);
+    say_flag("remove", "pressed", "let_go", was_pressed && p == NULL && g_presses == 0);
+
+    // A button whose own action takes it out, inside the pass that released it.
+    ui_layout(s, 1280.0f, 720.0f);
+    centre_of(self, &x, &y);
+    const size_t before_self = root->child_count;
+    pointer_pass(ui, x, y, true, true, false);
+    pointer_pass(ui, x, y, false, false, true);
+    ui_system_held(ui, &p, &b, &seen);
+    say_flag("remove", "own_action", "freed", root->child_count == before_self - 1 && p == NULL);
+
+    // A bar held on the pane that goes.
+    ui_layout(s, 1280.0f, 720.0f);
+    const float bx = pane->rect.x + pane->rect.w - 5.0f, by = pane->rect.y + 10.0f;
+    pointer_pass(ui, bx, by, true, true, false);
+    ui_system_held(ui, &p, &b, &seen);
+    const bool was_held = b == pane;
+    ui_remove(ui, pane);
+    ui_system_held(ui, &p, &b, &seen);
+    pointer_pass(ui, bx, by + 20.0f, false, true, false);
+    say_flag("remove", "bar", "let_go", was_held && b == NULL);
+
+    // Refused: a screen's root, a pane's row, and an element of another system's screen.
+    const size_t kept = root->child_count;
+    ui_remove(ui, root);
+    say_flag("remove", "root", "refused", ui_screen_root(s) == root && root->child_count == kept);
+    ui_layout(s, 1280.0f, 720.0f);
+    UIElement* row = ui_scroll_find_row(rows, 0);
+    ui_remove(ui, row);
+    say_flag("remove", "row", "refused", row && ui_scroll_find_row(rows, 0) == row);
+    UISystem* other = create_ui_system(ui_system_engine(ui));
+    UIScreen* os = ui_screen(other, "other");
+    UIElement* stranger = ui_panel(ui_screen_root(os));
+    ui_remove(ui, stranger);
+    say_flag("remove", "other", "refused",
+             ui_screen_root(os)->child_count == 1 && ui_screen_root(os)->children[0] == stranger);
+    free_ui_system(other);
+
+    // An editor its own key takes out, inside the pass the key came in: freed as the pass ends,
+    // its text forgetting it.
+    TextDoc* doc = create_text_doc("text\n", 5);
+    UIElement* ed = editor_fixture(ui, doc, 300.0f, 120.0f);
+    const UIEditorMode mode = {.name = "remover",
+                               .parent = ui_editor_standard_mode(),
+                               .bindings = REMOVE_KEYS,
+                               .binding_count = 1,
+                               .layer = true};
+    ui_editor_set_mode(ed, &mode);
+    editor_pass(ui);
+    const UIElement* holder = ui_screen_root(ui_top(ui));
+    key(ui, GLFW_KEY_F9, 0);
+    say_flag("remove", "editor_key", "freed", holder->child_count == 0 && doc->view_count == 0);
+
+    // An editor taken out mid-insert: its text closes the insert's group.
+    UIEditorVim* vim = create_ui_editor_vim();
+    UIElement* ved = vim_fixture(ui, doc, vim, 0);
+    vim_keys(ui, "iab");
+    const bool open = doc->grouping;
+    ui_remove(ui, ved);
+    say_flag("remove", "insert", "closed", open && !doc->grouping && doc->view_count == 0);
+    free_ui_editor_vim(vim);
+    free_text_doc(doc);
+    return 0;
+}
+
+#define MOVE_LINES 40
+
+// A row of the editor's text, for a view to be scrolled down it.
+static char* move_text(size_t* len) {
+    char* text = malloc(MOVE_LINES * 16);
+    size_t n = 0;
+    for (int i = 0; i < MOVE_LINES; i++)
+        n += (size_t)snprintf(text + n, 16, "line %d\n", i);
+    *len = n;
+    return text;
+}
+
+static bool children_are(const UIElement* parent, UIElement* const* want, size_t n) {
+    if (parent->child_count != n)
+        return false;
+    for (size_t i = 0; i < n; i++)
+        if (parent->children[i] != want[i])
+            return false;
+    return true;
+}
+
+static int probe_ui_move(UISystem* ui) {
+    size_t len = 0;
+    char* text = move_text(&len);
+    TextDoc* doc = create_text_doc(text, len);
+    free(text);
+    UIElement* ed = editor_fixture(ui, doc, 300.0f, 120.0f);
+    UIScreen* s = ui_top(ui);
+    UIElement* root = ui_screen_root(s);
+    UIElement* field = ui_text_field(root, 0, NULL, NULL);
+    ui_field_set_text(field, "kept");
+    editor_pass(ui);
+    const TextSelection carets[2] = {{8, 8}, {16, 18}};
+    ui_editor_set_selections(ed, carets, 2);
+    ui_editor_scroll_rows(ed, 5.0f);
+    editor_pass(ui);
+    size_t line = 0, top_row = 0;
+    int cols = 0;
+    ui_editor_top(ed, &line, &top_row, &cols);
+
+    // The editor under a new row, beside the field: its carets, its view and the focus kept.
+    UIElement* row = ui_panel(root);
+    row->dir = UI_ROW;
+    ui_move(ed, row, 0);
+    ui_move(field, row, 99);
+    editor_pass(ui);
+    const TextSelection* now = NULL;
+    const size_t n = ui_editor_selections(ed, &now, NULL);
+    say_flag("move", "carets", "kept",
+             n == 2 && now[0].anchor == 8 && now[0].head == 8 && now[1].anchor == 16 &&
+                 now[1].head == 18);
+    size_t line2 = 0, top_row2 = 0;
+    ui_editor_top(ed, &line2, &top_row2, &cols);
+    say_flag("move", "scroll", "kept", line > 0 && line2 == line && top_row2 == top_row);
+    ui_editor_set_selections(ed, &(TextSelection){0, 0}, 1);
+    type(ui, "z");
+    char typed[3] = {0};
+    text_doc_copy(doc, 0, 2, typed);
+    say_flag("move", "focus", "kept",
+             ui_focused(s) == ed && text_doc_length(doc) == len + 1 && !strcmp(typed, "zl"));
+    say_flag("move", "field", "kept",
+             field->parent == row && row->children[1] == field &&
+                 !strcmp(ui_field_text(field), "kept"));
+
+    // The index: among the children once the element is out, the end when past them.
+    UIElement* col = ui_panel(root);
+    UIElement* a = ui_panel(col);
+    UIElement* b = ui_panel(col);
+    UIElement* c = ui_panel(col);
+    ui_move(a, col, 2);
+    const bool to_end = children_are(col, (UIElement* const[]){b, c, a}, 3);
+    ui_move(a, col, 0);
+    const bool to_start = children_are(col, (UIElement* const[]){a, b, c}, 3);
+    ui_move(c, col, 1);
+    say_flag("move", "index", "order",
+             to_end && to_start && children_are(col, (UIElement* const[]){a, c, b}, 3));
+
+    // Refused: a screen's root, into itself or under it, a pane's row or into a pane with rows,
+    // and to another screen.
+    ui_move(root, col, 0);
+    say_flag("move", "root", "refused", root->parent == NULL && col->child_count == 3);
+    ui_move(row, row, 0);
+    ui_move(row, ed, 0);
+    say_flag("move", "under", "refused", row->parent == root && ed->parent == row);
+    UIElement* rows = ui_scroll(root);
+    ui_set_size(rows, UI_FIXED, 200.0f, UI_FIXED, 80.0f);
+    ui_scroll_set_rows(rows, 10, 20.0f, build_row, NULL);
+    editor_pass(ui);
+    UIElement* first = ui_scroll_find_row(rows, 0);
+    ui_move(a, rows, 0);
+    ui_move(first, col, 0);
+    say_flag("move", "rows", "refused",
+             a->parent == col && first && first->parent == rows && col->child_count == 3);
+    UIScreen* elsewhere = ui_screen(ui, "elsewhere");
+    ui_move(a, ui_screen_root(elsewhere), 0);
+    say_flag("move", "screen", "refused",
+             a->parent == col && ui_screen_root(elsewhere)->child_count == 0);
+    free_text_doc(doc);
+    return 0;
+}
+
 int run_ui_editor_probe(Game* game, UISystem* ui, Font* font, const char* which) {
     (void)game;
     (void)ui;
@@ -2019,5 +2282,9 @@ int run_ui_editor_probe(Game* game, UISystem* ui, Font* font, const char* which)
         return probe_vim_host(ui);
     if (!strcmp(which, "vim-carets"))
         return probe_vim_carets(ui);
+    if (!strcmp(which, "remove"))
+        return probe_ui_remove(ui);
+    if (!strcmp(which, "move"))
+        return probe_ui_move(ui);
     return -1;
 }

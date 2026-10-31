@@ -85,6 +85,13 @@ struct UISystem {
     // changes, which the overlay asks idle mode to wake for; INFINITY when it does not.
     double now;
     double caret_wake;
+
+    // How many of the passes -- a layout, an input pass, a build -- are running, and the elements
+    // ui_remove took out during one, freed as the last ends: what removed them may be a callback of
+    // their own, a key an editor took, whose caller goes on to read them.
+    int passes;
+    UIElement** removed;
+    size_t removed_count, removed_cap;
 };
 
 // How close an eased scroll comes before it is there: a tenth of a point, under any pixel.
@@ -546,6 +553,13 @@ UIElement* ui_editor(UIElement* parent, TextDoc* doc) {
 
 Engine* ui_system_engine(const UISystem* ui) {
     return ui ? ui->engine : NULL;
+}
+
+void ui_system_held(const UISystem* ui, const UIElement** pressed, const UIElement** bar,
+                    const UIElement** seen) {
+    *pressed = ui->pressed;
+    *bar = ui->bar_drag;
+    *seen = ui->focus_seen;
 }
 
 // The calls an element with state of its own is reached through; NULL for every other kind.
@@ -1186,18 +1200,41 @@ static bool _contains(const UIElement* el, const UIElement* target) {
     return false;
 }
 
+static const UIElement* _root_of(const UIElement* el) {
+    while (el->parent)
+        el = el->parent;
+    return el;
+}
+
+// Lets go of anything the system or a screen holds inside `el`, before it is freed: the pressed
+// element, the bar being dragged, the focus last seen, and each screen's focus, left on nothing.
+static void _forget(UISystem* ui, const UIElement* el) {
+    if (ui->pressed && _contains(el, ui->pressed))
+        ui->pressed = NULL;
+    if (ui->bar_drag && _contains(el, ui->bar_drag))
+        ui->bar_drag = NULL;
+    if (ui->focus_seen && _contains(el, ui->focus_seen))
+        ui->focus_seen = NULL;
+    for (size_t i = 0; i < ui->screen_count; i++)
+        if (ui->screens[i]->focused && _contains(el, ui->screens[i]->focused))
+            ui->screens[i]->focused = NULL;
+}
+
+// Takes `el` out of its parent's children, keeping their order.
+static void _detach(UIElement* el) {
+    UIElement* p = el->parent;
+    size_t k = 0;
+    while (p->children[k] != el)
+        k++;
+    memmove(&p->children[k], &p->children[k + 1], (p->child_count - k - 1) * sizeof(UIElement*));
+    p->child_count--;
+    el->parent = NULL;
+}
+
 // Frees a pane's child `k`, letting go of anything the system or a screen held inside it.
 static void _rows_drop(UISystem* ui, UIElement* pane, size_t k) {
     UIElement* c = pane->children[k];
-    if (ui->pressed && _contains(c, ui->pressed))
-        ui->pressed = NULL;
-    if (ui->bar_drag && _contains(c, ui->bar_drag))
-        ui->bar_drag = NULL;
-    if (ui->focus_seen && _contains(c, ui->focus_seen))
-        ui->focus_seen = NULL;
-    for (size_t i = 0; i < ui->screen_count; i++)
-        if (ui->screens[i]->focused && _contains(c, ui->screens[i]->focused))
-            ui->screens[i]->focused = NULL;
+    _forget(ui, c);
     _free_element(c);
     struct UIRows* r = pane->rows;
     for (size_t i = k + 1; i < pane->child_count; i++) {
@@ -1205,6 +1242,92 @@ static void _rows_drop(UISystem* ui, UIElement* pane, size_t k) {
         r->child_row[i - 1] = r->child_row[i];
     }
     pane->child_count--;
+}
+
+static void _pass_begin(UISystem* ui) {
+    ui->passes++;
+}
+
+// The removed are let go of again before they are freed, since the pass that removed one may have
+// taken hold of it since: a press captured before the callback that removed it.
+static void _pass_end(UISystem* ui) {
+    if (--ui->passes > 0)
+        return;
+    for (size_t i = 0; i < ui->removed_count; i++) {
+        _forget(ui, ui->removed[i]);
+        _free_element(ui->removed[i]);
+    }
+    ui->removed_count = 0;
+}
+
+void ui_remove(UISystem* ui, UIElement* el) {
+    if (!ui || !el) {
+        log_error("ui_remove: NULL system or element");
+        return;
+    }
+    if (!el->parent) {
+        log_error("ui_remove: a screen's root goes with its screen");
+        return;
+    }
+    if (el->parent->rows) {
+        log_error("ui_remove: a pane's row is the pane's to build and free");
+        return;
+    }
+    const UIElement* root = _root_of(el);
+    size_t s = 0;
+    while (s < ui->screen_count && ui->screens[s]->root != root)
+        s++;
+    if (s == ui->screen_count) {
+        log_error("ui_remove: not an element of this system's screens");
+        return;
+    }
+    if (ui->passes > 0 && !grow_array((void**)&ui->removed, &ui->removed_cap, ui->removed_count + 1,
+                                      sizeof(UIElement*), 8)) {
+        log_error("ui_remove: out of memory");
+        return;
+    }
+    _forget(ui, el);
+    _detach(el);
+    if (ui->passes > 0)
+        ui->removed[ui->removed_count++] = el;
+    else
+        _free_element(el);
+}
+
+void ui_move(UIElement* el, UIElement* parent, size_t index) {
+    if (!el || !parent) {
+        log_error("ui_move: NULL element or parent");
+        return;
+    }
+    if (!el->parent) {
+        log_error("ui_move: a screen's root does not move");
+        return;
+    }
+    if (el->parent->rows || parent->rows) {
+        log_error("ui_move: a pane with rows builds and frees its own children");
+        return;
+    }
+    if (_contains(el, parent)) {
+        log_error("ui_move: an element does not move into itself or under itself");
+        return;
+    }
+    if (_root_of(el) != _root_of(parent)) {
+        log_error("ui_move: an element stays on its screen, whose focus may be inside it");
+        return;
+    }
+    if (parent != el->parent && !grow_array((void**)&parent->children, &parent->child_capacity,
+                                            parent->child_count + 1, sizeof(UIElement*), 8)) {
+        log_error("ui_move: out of memory");
+        return;
+    }
+    _detach(el);
+    if (index > parent->child_count)
+        index = parent->child_count;
+    memmove(&parent->children[index + 1], &parent->children[index],
+            (parent->child_count - index) * sizeof(UIElement*));
+    parent->children[index] = el;
+    parent->child_count++;
+    el->parent = parent;
 }
 
 // The rows [*lo, *hi) in view with the pane scrolled to `scroll`, and one either side.
@@ -1315,6 +1438,7 @@ static void _place_widgets(const UISystem* ui, UIElement* el) {
 void ui_layout(UIScreen* screen, float width, float height) {
     if (!screen || !screen->root || !screen->ui)
         return;
+    _pass_begin(screen->ui);
     const UIRect full = {0.0f, 0.0f, width, height};
     // A pane of rows decides what to build from where the last layout left it, so the rows it
     // builds can change what this one finds: a first layout gave it no height, a row measured
@@ -1325,6 +1449,7 @@ void ui_layout(UIScreen* screen, float width, float height) {
     for (int again = 0; again < 2 && _settle_rows(screen->ui, screen, screen->root); again++)
         _layout_once(screen, full);
     _place_widgets(screen->ui, screen->root);
+    _pass_end(screen->ui);
 }
 
 // --------------------------------------------------------------------- emit
@@ -2001,9 +2126,7 @@ static bool _route_keys(UISystem* ui, UIScreen* top, const UIInput* in, const UI
     return let_go;
 }
 
-void ui_update(UISystem* ui, const UIInput* in, float width, float height) {
-    if (!ui)
-        return;
+static void _update(UISystem* ui, const UIInput* in, float width, float height) {
     UIScreen* top = ui_top(ui);
     if (!top || !top->root) {
         ui->pressed = NULL;
@@ -2181,6 +2304,14 @@ void ui_update(UISystem* ui, const UIInput* in, float width, float height) {
     ui->focus_seen = ui_top(ui) ? ui_top(ui)->focused : NULL;
 }
 
+void ui_update(UISystem* ui, const UIInput* in, float width, float height) {
+    if (!ui)
+        return;
+    _pass_begin(ui);
+    _update(ui, in, width, height);
+    _pass_end(ui);
+}
+
 // How far this screen's entrance has played, 0..1. A screen with no transition
 // is always 1, so every consumer reads one number and no caller branches.
 static float _screen_t(const UIScreen* s) {
@@ -2192,6 +2323,7 @@ static float _screen_t(const UIScreen* s) {
 bool ui_build(UISystem* ui, float width, float height, float dt) {
     if (!ui || !ui->dl || width <= 0.0f || height <= 0.0f)
         return false;
+    _pass_begin(ui);
     ui_draw_list_begin(ui->dl, (int)width, (int)height);
     ui->caret_wake = INFINITY;
     // Bottom to top: a pause screen over a HUD draws both, and the one on top
@@ -2232,6 +2364,7 @@ bool ui_build(UISystem* ui, float width, float height, float dt) {
     // otherwise inherit a transition it has nothing to do with.
     ui_draw_list_set_offset(ui->dl, 0.0f, 0.0f);
     ui_draw_list_set_alpha(ui->dl, 1.0f);
+    _pass_end(ui);
     return moving;
 }
 
@@ -2350,6 +2483,9 @@ void free_ui_system(UISystem* ui) {
             free(ui->screens[i]);
         }
     }
+    for (size_t i = 0; i < ui->removed_count; i++)
+        _free_element(ui->removed[i]);
+    free(ui->removed);
     free(ui->screens);
     free(ui->stack);
     free_ui_draw_list(ui->dl);

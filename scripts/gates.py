@@ -28326,6 +28326,20 @@ def run_ui_gate(workdir):
                      host put in at it; a whole new text changing past the caret
                      keeping it; a second editor of the same text moved by typing in
                      the first.
+      ui-remove      an element taken out (spec 14.6): the focus inside it, as the
+                     last input pass saw it, left on nothing and the next layout
+                     putting the element after it where it stood; a held press let
+                     go, its release activating nothing; a button whose own action
+                     takes it out, and an editor its own key takes out, freed as the
+                     pass ends, the text forgetting the editor; a held bar let go; an
+                     editor taken out mid-insert closing its text's group; a root, a
+                     pane's row and another system's element refused.
+      ui-move        an element moved (spec 14.6): an editor under a new row
+                     keeping its carets, its view and the focus, typing still
+                     reaching it; a field keeping its text; an index among the
+                     children once it is out, the end past them, within one parent
+                     too; a root, a move into itself or under it, a pane's row or
+                     into a pane with rows, and a move to another screen refused.
       ui-editor-ranges-late apps/canvas --editor's parse on its own thread, taken six
                      frames after it began: the text it read had an unclosed '(' at
                      byte 9, three bytes were typed before it since, and the error is
@@ -29420,6 +29434,21 @@ def run_ui_gate(workdir):
                            "of the same text, and both letting go of the text when it is freed")
     print(f"  ui-editor-host-edit   {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-editor-host-edit", ok)
+
+    # ---- elements taken out and moved (spec 14.6)
+    ok, detail = doc_flags("remove", 11, "the focus, the focus last seen, a held press and a held "
+                           "bar let go of what goes; the next layout whole; a button's action and "
+                           "an editor's key taking their own element out, freed as the pass ends; "
+                           "an insert's group closed; a root, a row and another system's element "
+                           "refused")
+    print(f"  ui-remove             {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-remove", ok)
+
+    ok, detail = doc_flags("move", 9, "an editor moved under a row keeping its carets, its view "
+                           "and the focus, a field its text, the index in order, and the four "
+                           "refusals")
+    print(f"  ui-move               {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-move", ok)
 
     # ---- a parse's errors, read a few versions back, underlined where the typing since put them
     late_path = os.path.join(workdir, "editor_late.ckt")
