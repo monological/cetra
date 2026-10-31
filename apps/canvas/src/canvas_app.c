@@ -1535,7 +1535,8 @@ static bool build_font_sheet(UISystem* ui, Engine* engine, Font* label) {
  *   few versions behind and are underlined where the typing since has moved them;
  * - F6, an edit landed at the text's start as another view's would be;
  * - F7, the file read again through the text's whole new text.
- * --editor-lag N takes each parse's result N frames after it began, so a headless run repeats.
+ * A parse's result is taken on the frame its thread's end wakes; --editor-lag N takes it N frames
+ * after it began instead, waiting for it then, so a headless run repeats.
  */
 
 enum {
@@ -1559,7 +1560,9 @@ typedef struct ParseJob {
     size_t error_count;
     cetra_thread_t thread;
     bool running;
-    size_t started; // the frame it began on
+    size_t started;   // the frame it began on
+    atomic_bool done; // the thread has finished, and ended its work with the engine
+    Engine* engine;
 } ParseJob;
 
 typedef struct EditorSheet {
@@ -1572,7 +1575,7 @@ typedef struct EditorSheet {
     int lag;         // frames from a parse's start to its result being taken
 } EditorSheet;
 
-static EditorSheet g_editor_sheet = {.parsed = UINT64_MAX, .lag = 1};
+static EditorSheet g_editor_sheet = {.parsed = UINT64_MAX};
 
 // A byte that ends an atom, on pcb's rules: whitespace, a bracket, a quote or a comment's start.
 static bool sexpr_stop(char c) {
@@ -1654,15 +1657,19 @@ static void* parse_thread(void* arg) {
     }
     for (size_t d = 0; d < depth && d < 256 && job->error_count < PARSE_ERRORS_MAX; d++)
         job->errors[job->error_count++] = (TextRange){open[d], open[d] + 1, STYLE_ERROR};
+    atomic_store(&job->done, true);
+    engine_end_work(job->engine);
     return NULL;
 }
 
-// Once a frame: a parse begun on a text that changed, and its result taken `lag` frames after,
-// at the version it read.
-static void editor_host_frame(const Engine* engine) {
+// Once a frame: a parse begun on a text that changed, and its result taken, at the version it
+// read, on the frame its end wakes -- or `lag` frames after it began, waiting for it then.
+static void editor_host_frame(Engine* engine) {
     EditorSheet* s = &g_editor_sheet;
     ParseJob* job = &s->job;
-    if (job->running && engine->total_frames - job->started >= (size_t)s->lag) {
+    const bool due = s->lag > 0 ? engine->total_frames - job->started >= (size_t)s->lag
+                                : atomic_load(&job->done);
+    if (job->running && due) {
         cetra_thread_join(job->thread);
         job->running = false;
         text_doc_set_ranges(s->doc, 0, job->version, job->errors, job->error_count);
@@ -1674,8 +1681,12 @@ static void editor_host_frame(const Engine* engine) {
         job->text = text_doc_text(s->doc, &job->len);
         job->version = s->doc->version;
         job->started = engine->total_frames;
+        job->engine = engine;
+        atomic_store(&job->done, false);
+        engine_begin_work(engine);
         job->running = job->text && cetra_thread_create(&job->thread, parse_thread, job);
         if (!job->running) {
+            engine_end_work(engine);
             free(job->text);
             job->text = NULL;
         }

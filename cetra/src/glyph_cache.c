@@ -60,13 +60,14 @@ static void _forget(GlyphCache* c) {
     }
 }
 
-// Every glyph let go and the atlas cleared, for a new size.
+// Every glyph let go and the atlas cleared, for a new size; the texture is cleared when next a
+// glyph is asked for, so a size can be set where nothing touches GL.
 static void _empty(GlyphCache* c) {
     _forget(c);
     memset(c->pixels, 0, (size_t)c->atlas.width * (size_t)c->atlas.height);
     c->pen_x = c->pen_y = ATLAS_GAP;
     c->row_height = 0;
-    _upload_all(c);
+    c->stale = true;
 }
 
 GlyphCache* create_glyph_cache(const char* ttf_path, float pixel_size) {
@@ -80,19 +81,11 @@ GlyphCache* create_glyph_cache(const char* ttf_path, float pixel_size) {
     unsigned char* pixels = calloc((size_t)ATLAS_WIDTH * ATLAS_FIRST_HEIGHT, 1);
     if (!c || !info || !pixels) {
         log_error("create_glyph_cache: out of memory");
-        free(c);
-        free(info);
-        free(pixels);
-        free(ttf);
-        return NULL;
+        goto fail;
     }
     if (!stbtt_InitFont(info, ttf, stbtt_GetFontOffsetForIndex(ttf, 0))) {
         log_error("create_glyph_cache: %s is not a TrueType font", ttf_path);
-        free(c);
-        free(info);
-        free(pixels);
-        free(ttf);
-        return NULL;
+        goto fail;
     }
     c->ttf = ttf;
     c->font_info = info;
@@ -114,14 +107,19 @@ GlyphCache* create_glyph_cache(const char* ttf_path, float pixel_size) {
     _metrics(c);
     _empty(c);
     return c;
+fail:
+    free(c);
+    free(info);
+    free(pixels);
+    free(ttf);
+    return NULL;
 }
 
 void free_glyph_cache(GlyphCache* c) {
     if (!c)
         return;
     _forget(c);
-    if (c->atlas.id)
-        glDeleteTextures(1, &c->atlas.id);
+    gl_delete_texture(&c->atlas.id);
     free(c->pixels);
     free(c->font_info);
     free(c->ttf);
@@ -212,6 +210,10 @@ static GlyphCacheEntry* _make(GlyphCache* c, uint32_t codepoint) {
 bool glyph_cache_get(GlyphCache* c, uint32_t codepoint, GlyphBitmap* out) {
     if (!c || !out)
         return false;
+    if (c->stale) {
+        _upload_all(c);
+        c->stale = false;
+    }
     GlyphCacheEntry* e = NULL;
     if (codepoint < 128)
         e = c->ascii[codepoint];

@@ -486,9 +486,9 @@ want a piece table or an array of lines. What 14.2 wrote once for both:
   - `ui_editor_commands` lists the editor's commands for pcb's command table.
 
   `apps/canvas --editor` stands in for pcb through all of these.
-- **Speed at 10 MB:** a keystroke 0.17 ms, at 100 carets 0.82 ms, a jump 0.15 ms, opening 2 ms. A
-  budget of 192 KB a frame wraps the rest of the rows in the background, asking idle mode for the
-  frames it needs.
+- **Speed at 10 MB, after the reviews:** a keystroke 0.11 ms, at 100 carets 0.50 ms, Enter 0.20 ms,
+  a jump 0.12 ms, opening 2 ms. A budget of 192 KB a frame wraps the rest of the rows in the
+  background, asking idle mode for the frames it needs.
 - **No code was copied from lite or vis**, only their designs: lite's array of lines and per-line
   colours, vis's motions, text objects and operators, and modes that fall to their parents. So no
   notice of theirs is owed.
@@ -503,8 +503,12 @@ want a piece table or an array of lines. What 14.2 wrote once for both:
 - input methods;
 - the vim mode itself, which the `ui-editor-mode` arm shows is an addition;
 - folding and gutter markers;
-- a keystroke at 100 carets in a 64 MB text, 3.2 ms. The line starts are worked out again from the
-  first caret's line, and a tree of line lengths would make that a logarithm.
+- a keystroke at 100 carets in a 64 MB text, 2.25 ms. The line starts are worked out again from the
+  first caret's line, and a tree of line lengths would make that a logarithm;
+- Enter at 100 carets: 6.45 ms at 10 MB and 42 ms at 64 MB, over the 1 ms bar. Each line break
+  moves every line after it in the text's array and in each editor's rows, once per caret; built
+  once an action instead, it would cost one pass. A question for whoever plans the next editor
+  work, since the fix reaches across the text and every view.
 
 ---
 

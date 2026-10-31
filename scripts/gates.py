@@ -28751,12 +28751,12 @@ def run_ui_gate(workdir):
     print(f"  ui-utf8               {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-utf8", ok)
 
-    # ---- the code editor's text (spec 14.4): every probe line a 1, and as many as the case says
+    # ---- the code editor (spec 14.4): every probe line a 1, and as many as the case says
     def doc_flags(case, lines, what):
         p = _ui_probe(case)
         if not p:
             return False, "the probe produced nothing"
-        wrong = {f"{k[0]} {k[1]}": v[0] for k, v in p.items() if v[0] != 1}
+        wrong = _probe_wrong(p, {k: 1 for k in p})
         if wrong or len(p) != lines:
             return False, f"wrong: {wrong}; {len(p)} lines of {lines}"
         return True, what
@@ -28852,10 +28852,11 @@ def run_ui_gate(workdir):
     print(f"  ui-editor-keys        {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-editor-keys", ok)
 
-    ok, detail = doc_flags("editor-carets", 10, "typing at five carets as one action, overlapping "
+    ok, detail = doc_flags("editor-carets", 11, "typing at five carets as one action, overlapping "
                            "selections merged, five lines pasted one to each caret, Cmd+D's word "
                            "and next matches, Esc to the primary, a caret added a row below twice, "
-                           "Option+click, find's next match, touching selections typed over each "
+                           "Option+click, a drag in the text selecting after the bar's thumb was "
+                           "dragged, find's next match, touching selections typed over each "
                            "landing after its own text, and a caret merged into a selection it "
                            "starts")
     print(f"  ui-editor-carets      {'PASS' if ok else 'FAIL'}  {detail}")
@@ -30372,16 +30373,11 @@ def run_idle_gate(workdir):
         path = os.path.join(workdir, f"idle_editor_{tag}.ckt")
         with open(path, "w", encoding="utf-8", newline="") as f:
             f.write(line * max(1, int(megabytes * 1024 * 1024) // len(line)))
-        out = os.path.join(workdir, f"idle_editor_{tag}.ppm")
-        stdout = _canvas_shot(out, 400, "--idle", "--canvas-probe", "--editor", path) or ""
-        frames, settled = None, None
-        for text in stdout.splitlines():
-            p = text.split()
-            if p[:3] == ["canvas", "idle", "frames"] and len(p) == 6:
-                frames = int(p[3])
-            elif p[:3] == ["canvas", "editor", "settled"] and len(p) == 4:
-                settled = int(p[3])
-        return frames, settled
+        _, probe = _canvas_run(workdir, f"idle_editor_{tag}", "--idle", "--editor", path,
+                               frames=400)
+        frames = probe.get(("idle", "frames"))
+        settled = probe.get(("editor", "settled"))
+        return (int(frames[0]) if frames else None), (int(settled[0]) if settled else None)
 
     small, _ = editor_run("small", 0.001)
     frames, settled = editor_run("big", 24)
