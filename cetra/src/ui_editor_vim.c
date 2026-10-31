@@ -137,8 +137,9 @@ struct UIEditorVim {
     // runs them, how deep in it they are, which keeps the group open across them.
     TextDoc* grouped;
     int held;
-    // The editor the last key reached: compared, never read, since it may be gone.
-    const UIElement* el;
+    // The editor the last key reached, and the text it showed, by its serial: an editor freed and
+    // another made at its address, or one shown another text, is another editor.
+    uint64_t editor;
     // Visual block mode: its corners, and the cursor's wanted column, INT_MAX when its right edge
     // is each line's end ($). The editor's selections are then the piece of each line between
     // them. While `.` makes a block again its columns are given, not found from its corners.
@@ -4902,9 +4903,10 @@ static bool _line_key(Ctx* c, uint32_t k) {
 // line, an insert, a visual area -- is let go, and the group it held forgotten rather than closed,
 // since that editor and its text may be gone; the text keeps that group to that editor's actions.
 static void _switch(UIEditorVim* v, const UIElement* el) {
-    if (el == v->el)
+    const uint64_t editor = ui_editor_serial(el);
+    if (editor == v->editor)
         return;
-    v->el = el;
+    v->editor = editor;
     v->grouped = NULL;
     v->held = 0;
     v->line_kind = v->asked = 0;
@@ -4944,7 +4946,7 @@ static bool _read_key(UIElement* el, const InputKeyEvent* ev, void* user) {
 // over the characters it crossed, its head on the last it reached.
 static void _pointer(UIElement* el, void* user) {
     UIEditorVim* v = user;
-    if (el != v->el && ui_editor_doc(el))
+    if (ui_editor_doc(el))
         _switch(v, el);
     if (v->state == UI_VIM_INSERT)
         return;

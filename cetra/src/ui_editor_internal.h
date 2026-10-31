@@ -8,6 +8,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #include "text_doc_edit.h"
 #include "ui_editor.h"
@@ -16,6 +17,10 @@ struct Engine;
 
 // The text an editor shows; NULL for anything else, and once the text is freed.
 TextDoc* ui_editor_doc(const UIElement* el);
+// Which editor this is, and showing which text: new when an editor is made and each time it is
+// shown another text, never reused, so a mode remembering the last editor it saw knows another at
+// the same address. 0 for anything else.
+uint64_t ui_editor_serial(const UIElement* el);
 // The engine the editor was last laid out under, for the clipboard; NULL before.
 struct Engine* ui_editor_engine(const UIElement* el);
 // Edits from the carets as one action, those that overlap merged, leaving the selections `after`
@@ -33,9 +38,6 @@ const int* ui_editor_wants(UIElement* el);
 int ui_editor_rows_shown(const UIElement* el);
 // The offset starting the row `down` rows below the view's top, held to the text's last row.
 size_t ui_editor_row_at(UIElement* el, int down);
-// The view scrolled so the row holding `offset` stands `where` of the way down it: 0 at the top,
-// 0.5 in the middle, 1 at the bottom.
-void ui_editor_scroll_place(UIElement* el, size_t offset, float where);
 // The view scrolled by rows, the carets left where they are.
 void ui_editor_scroll_rows(UIElement* el, float rows);
 

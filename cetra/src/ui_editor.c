@@ -55,6 +55,7 @@ typedef struct UIEditor UIEditor;
 struct UIEditor {
     UIElement* el;
     TextDoc* doc;
+    uint64_t serial; // ui_editor_serial: new at each text shown
     // The selections, sorted by start, and each one's wanted column for moving by row, -1 for none.
     TextSelection* sel;
     int* want;
@@ -649,35 +650,67 @@ static void _view_gone(void* view) {
     ((UIEditor*)view)->doc = NULL;
 }
 
+// Serials handed out so far; the UI is the main thread's.
+static uint64_t g_serials;
+
+// Shows `doc` from its start, as a new editor would: one caret at 0, the view at the top, every
+// line's rows a guess and the budget starting afresh, under a new serial. NULL shows nothing. False
+// out of memory, when it shows nothing.
+static bool _show(UIEditor* ed, TextDoc* doc) {
+    ed->doc = NULL;
+    ed->serial = ++g_serials;
+    _carets_one(ed, (TextSelection){0, 0});
+    ed->top_line = ed->top_row = 0;
+    ed->top_frac = 0.0f;
+    ed->tops_good = 0;
+    ed->wrapped_line = SIZE_MAX;
+    ed->hint_count = 0;
+    ed->settle_line = ed->drawn_to = 0;
+    ed->colouring = false;
+    if (!doc)
+        return true;
+    const size_t lines = doc->line_count;
+    if (!grow_array((void**)&ed->rows, &ed->line_capacity, lines, sizeof(uint32_t), 64) ||
+        !grow_array((void**)&ed->tops, &ed->tops_capacity, lines + 1, sizeof(uint64_t), 64))
+        return false;
+    memset(ed->rows, 0, lines * sizeof(uint32_t));
+    ed->guessed = lines;
+    ed->doc = doc;
+    text_doc_add_view(doc, &(TextDocView){.view = ed,
+                                          .element = ed->el,
+                                          .changed = _view_changed,
+                                          .selections = _view_selections,
+                                          .set_selections = _set,
+                                          .gone = _view_gone});
+    return true;
+}
+
 UIEditor* ui_editor_make(UIElement* el, TextDoc* doc) {
     UIEditor* ed = calloc(1, sizeof(UIEditor));
     if (!ed)
         return NULL;
     ed->el = el;
-    ed->doc = doc;
     ed->cols = 1;
     ed->px = 1.0f;
-    ed->wrapped_line = SIZE_MAX;
-    const size_t lines = doc->line_count;
-    ed->rows = calloc(lines, sizeof(uint32_t));
-    ed->tops = calloc(lines + 1, sizeof(uint64_t));
-    ed->line_capacity = lines;
-    ed->tops_capacity = lines + 1;
-    ed->guessed = lines;
-    if (!ed->rows || !ed->tops || !_room(ed, 1)) {
+    if (!_room(ed, 1) || !_show(ed, doc)) {
         ui_editor_free(ed);
         return NULL;
     }
-    ed->sel[0] = (TextSelection){0, 0};
-    ed->want[0] = -1;
-    ed->sel_count = 1;
-    text_doc_add_view(doc, &(TextDocView){.view = ed,
-                                          .element = el,
-                                          .changed = _view_changed,
-                                          .selections = _view_selections,
-                                          .set_selections = _set,
-                                          .gone = _view_gone});
     return ed;
+}
+
+void ui_editor_set_doc(UIElement* el, TextDoc* doc) {
+    UIEditor* ed = el && el->kind == UI_EDITOR ? el->editor : NULL;
+    if (!ed) {
+        log_error("ui_editor_set_doc: not an editor");
+        return;
+    }
+    if (doc == ed->doc)
+        return;
+    if (ed->doc)
+        text_doc_remove_view(ed->doc, ed);
+    if (!_show(ed, doc))
+        log_error("ui_editor_set_doc: out of memory, so the editor shows nothing");
 }
 
 void ui_editor_free(UIEditor* ed) {
@@ -839,11 +872,20 @@ bool ui_editor_point_of(UIElement* el, size_t offset, float* x, float* y) {
     return true;
 }
 
-void ui_editor_top(const UIElement* el, size_t* line, size_t* row, int* columns) {
+void ui_editor_view_top(const UIElement* el, size_t* line, size_t* row, int* columns) {
     const UIEditor* ed = _seen(el);
     *line = ed ? ed->top_line : 0;
     *row = ed ? ed->top_row : 0;
     *columns = ed ? ed->cols : 0;
+}
+
+size_t ui_editor_top(const UIElement* el) {
+    UIEditor* ed = _seen(el);
+    if (!ed)
+        return 0;
+    size_t line, row;
+    _top(ed, &line, &row);
+    return text_doc_line_start(ed->doc, line) + _wrap_line(ed, line).starts[row];
 }
 
 void ui_editor_reveal(UIElement* el, size_t offset) {
@@ -2485,6 +2527,10 @@ static double _draw(const UISystem* ui, UIElement* el, const UIStyle* s, UIRect 
 TextDoc* ui_editor_doc(const UIElement* el) {
     const UIEditor* ed = _seen(el);
     return ed ? ed->doc : NULL;
+}
+
+uint64_t ui_editor_serial(const UIElement* el) {
+    return el && el->kind == UI_EDITOR && el->editor ? el->editor->serial : 0;
 }
 
 void ui_editor_edit(UIElement* el, TextEdit* edits, size_t n, const TextSelection* after,
