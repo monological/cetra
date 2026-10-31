@@ -28794,9 +28794,10 @@ def run_ui_gate(workdir):
     print(f"  ui-doc-set-text       {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-doc-set-text", ok)
 
-    ok, detail = doc_flags("doc-undo", 17, "typing joins into words, a sealed caret splits it, "
+    ok, detail = doc_flags("doc-undo", 19, "typing joins into words, a sealed caret splits it, "
                            "two carets are one step, undo and redo restore the text and the "
-                           "carets, and with keep_undo off nothing is kept")
+                           "carets, with keep_undo off nothing is kept, and a change asked for "
+                           "inside on_action is refused")
     print(f"  ui-doc-undo           {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-doc-undo", ok)
 
@@ -28851,10 +28852,12 @@ def run_ui_gate(workdir):
     print(f"  ui-editor-keys        {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-editor-keys", ok)
 
-    ok, detail = doc_flags("editor-carets", 8, "typing at five carets as one action, overlapping "
+    ok, detail = doc_flags("editor-carets", 10, "typing at five carets as one action, overlapping "
                            "selections merged, five lines pasted one to each caret, Cmd+D's word "
                            "and next matches, Esc to the primary, a caret added a row below twice, "
-                           "Option+click, and find's next match")
+                           "Option+click, find's next match, touching selections typed over each "
+                           "landing after its own text, and a caret merged into a selection it "
+                           "starts")
     print(f"  ui-editor-carets      {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-editor-carets", ok)
 

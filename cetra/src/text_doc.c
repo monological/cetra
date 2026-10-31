@@ -10,9 +10,9 @@
 
 // The most undo steps kept; past it the oldest go.
 #define UNDO_MAX 10000
-// The most lines holding their colour at once. Past it every line's is let go, and the lines in
-// view colour themselves again, which costs microseconds against a scan of every line to choose.
-#define SPAN_LINES_MAX 8192
+// Spans the ring holds: the lines coloured last keep theirs, and a line whose spans were written
+// over colours itself again when it is next drawn. Many screens of lines, a few hundred KB.
+#define SPAN_RING 65536
 
 static const char* const ENDINGS[] = {"", "\n", "\r\n"};
 
@@ -24,19 +24,22 @@ static size_t _raw_len(const TextLine* l) {
     return l->len + _ending_len(l->ending);
 }
 
-static void _free_spans(TextDoc* doc, TextLine* l) {
-    if (l->coloured & TEXT_COLOURED_SPANS)
-        doc->span_lines--;
-    free(l->spans);
-    l->spans = NULL;
-    l->span_count = 0;
-    l->coloured &= (uint8_t)~TEXT_COLOURED_SPANS;
+// A line whose bytes changed: its colour, and the state it leaves, are unknown.
+static void _uncolour(TextLine* l) {
+    l->state_known = false;
+    l->spans_known = false;
 }
 
-static void _free_line(TextDoc* doc, TextLine* l) {
+static void _free_line(TextLine* l) {
     if (l->capacity)
         free(l->bytes);
-    _free_spans(doc, l);
+}
+
+static void* _dup(const void* p, size_t bytes) {
+    void* out = malloc(bytes ? bytes : 1);
+    if (out && bytes)
+        memcpy(out, p, bytes);
+    return out;
 }
 
 // Splits `len` bytes into lines, each owning its bytes when `own`, else pointing into them. A
@@ -136,7 +139,7 @@ void free_text_doc(TextDoc* doc) {
         if (doc->views[i].gone)
             doc->views[i].gone(doc->views[i].view);
     for (size_t i = 0; i < doc->line_count; i++)
-        _free_line(doc, &doc->lines[i]);
+        _free_line(&doc->lines[i]);
     for (size_t i = 0; i < doc->undo_count + doc->redo_count; i++)
         _free_step(&doc->undo[i]);
     for (int i = 0; i < TEXT_DOC_LAYERS; i++)
@@ -144,6 +147,7 @@ void free_text_doc(TextDoc* doc) {
     free(doc->undo);
     free(doc->views);
     free(doc->lines);
+    free(doc->span_ring);
     free(doc->span_scratch);
     free(doc->block);
     free(doc);
@@ -256,8 +260,9 @@ char* text_doc_text(const TextDoc* doc, size_t* len) {
     return out;
 }
 
-// The byte at `offset`, which is inside the text.
-static char _byte_at(TextDoc* doc, size_t offset) {
+char text_doc_byte(TextDoc* doc, size_t offset) {
+    if (!doc || offset >= doc->length)
+        return 0;
     const size_t line = text_doc_line_of(doc, offset);
     const TextLine* l = &doc->lines[line];
     const size_t at = offset - text_doc_line_start(doc, line);
@@ -272,6 +277,11 @@ size_t text_doc_map_offset(size_t offset, size_t start, size_t removed, size_t i
     if (offset > end || (offset == end && removed))
         return offset - removed + inserted;
     return start + inserted;
+}
+
+void text_doc_map_selection(TextSelection* s, const TextViewChange* c) {
+    s->anchor = text_doc_map_offset(s->anchor, c->start, c->removed, c->inserted, c->actor);
+    s->head = text_doc_map_offset(s->head, c->start, c->removed, c->inserted, c->actor);
 }
 
 // A range moved through a change, the new bytes kept outside it; false once it is empty.
@@ -299,8 +309,8 @@ static void _map_ranges(TextDoc* doc, size_t start, size_t removed, size_t inser
     }
 }
 
-// Lines [first, first + count) are new: their colour is unknown, and so is every stateful line's
-// after them.
+// Lines from `first` changed: the starts after it, and every stateful line's state from it, are
+// unknown.
 static void _lines_changed(TextDoc* doc, size_t first) {
     if (doc->highlight_known > first)
         doc->highlight_known = first;
@@ -308,8 +318,11 @@ static void _lines_changed(TextDoc* doc, size_t first) {
         doc->starts_good = first + 1;
 }
 
-// Makes a line's bytes its own, with room for `need`.
+// Makes a line's bytes its own, with room for `need`. A line still in the block is copied whole
+// before it is edited, so its room is for the longer of what it holds and what it will.
 static bool _own(TextLine* l, size_t need) {
+    if (!l->capacity && need < l->len)
+        need = l->len;
     if (need > UINT32_MAX)
         return false;
     if (l->capacity >= need && l->capacity)
@@ -329,83 +342,93 @@ static bool _own(TextLine* l, size_t need) {
     return true;
 }
 
+// The change made inside line `first`'s content, the line edited in place: false when it touches a
+// line break, or would leave a CR just before the line's LF, which makes the two one ending.
+static bool _replace_in_line(TextDoc* doc, size_t first, size_t first_at, size_t start, size_t end,
+                             const char* text, size_t len, bool* failed) {
+    TextLine* l = &doc->lines[first];
+    if (end > first_at + l->len || memchr(text, '\n', len) || memchr(text, '\r', len))
+        return false;
+    const size_t from = start - first_at, to = end - first_at;
+    if (l->ending == TEXT_ENDING_LF && to == l->len && !len && from > 0 &&
+        l->bytes[from - 1] == '\r')
+        return false;
+    const size_t n = l->len - (to - from) + len;
+    if (!_own(l, n)) {
+        log_error("text_doc: out of memory for a line of %zu bytes", n);
+        *failed = true;
+        return false;
+    }
+    memmove(l->bytes + from + len, l->bytes + to, l->len - to);
+    memcpy(l->bytes + from, text, len);
+    l->len = (uint32_t)n;
+    _uncolour(l);
+    return true;
+}
+
+// The change made by writing out the lines it touches, from the first's start to the last's
+// ending, with the change made and split afresh: how many lines replaced the old ones, SIZE_MAX
+// out of memory.
+static size_t _replace_lines(TextDoc* doc, size_t first, size_t first_at, size_t start, size_t end,
+                             const char* text, size_t len, size_t* old) {
+    const size_t last = text_doc_line_of(doc, end);
+    const size_t last_at = text_doc_line_start(doc, last);
+    const TextLine* l = &doc->lines[first];
+    const TextLine* ll = &doc->lines[last];
+    const size_t head = start - first_at;
+    const size_t tail = _raw_len(ll) - (end - last_at);
+    char* joined = malloc(head + len + tail + 1);
+    if (!joined) {
+        log_error("text_doc: out of memory for a change of %zu bytes", len);
+        return SIZE_MAX;
+    }
+    _raw_copy(l, 0, head, joined);
+    memcpy(joined + head, text, len);
+    _raw_copy(ll, end - last_at, _raw_len(ll), joined + head + len);
+    TextLine* fresh = NULL;
+    size_t fresh_capacity = 0;
+    const bool trailing = ll->ending == TEXT_ENDING_NONE;
+    const size_t count = _split(joined, head + len + tail, trailing, true, &fresh, &fresh_capacity);
+    free(joined);
+    *old = last - first + 1;
+    if (count == SIZE_MAX || !grow_array((void**)&doc->lines, &doc->line_capacity,
+                                         doc->line_count - *old + count, sizeof(TextLine), 64)) {
+        for (size_t i = 0; count != SIZE_MAX && i < count; i++)
+            free(fresh[i].bytes);
+        free(fresh);
+        log_error("text_doc: out of memory for a change of %zu bytes", len);
+        return SIZE_MAX;
+    }
+    for (size_t i = first; i <= last; i++)
+        _free_line(&doc->lines[i]);
+    memmove(&doc->lines[first + count], &doc->lines[last + 1],
+            (doc->line_count - last - 1) * sizeof(TextLine));
+    memcpy(&doc->lines[first], fresh, count * sizeof(TextLine));
+    free(fresh);
+    doc->line_count = doc->line_count - *old + count;
+    doc->lines[first].start = first_at;
+    return count;
+}
+
 // The one place the text changes: [start, end) becomes `text`, both checked by the caller. Moves
-// every view, every range, the history and the version.
+// every range, the history, the version and every view but `held`, `actor`'s as an actor's.
 static bool _replace(TextDoc* doc, size_t start, size_t end, const char* text, size_t len,
-                     const void* actor) {
+                     const void* actor, const void* held) {
     if (start == end && !len)
         return true;
     const size_t first = text_doc_line_of(doc, start);
     const size_t first_at = text_doc_line_start(doc, first);
-    TextLine* l = &doc->lines[first];
-    size_t lines_removed = 1, lines_inserted = 1; // the lines from `first` the change rewrote
-    const bool inside = end <= first_at + l->len;
-    const bool plain = !memchr(text, '\n', len) && !memchr(text, '\r', len);
-    if (inside && plain) {
-        // Within one line's content and touching no line break: the line edited in place, unless
-        // what is left before an LF would end in a CR, which makes the two one ending.
-        const size_t from = start - first_at, to = end - first_at;
-        const size_t n = l->len - (to - from) + len;
-        const bool cr_joins = l->ending == TEXT_ENDING_LF && to == l->len && !len && from > 0 &&
-                              l->bytes[from - 1] == '\r';
-        if (!cr_joins) {
-            if (!_own(l, n)) {
-                log_error("text_doc: out of memory for a line of %zu bytes", n);
-                return false;
-            }
-            memmove(l->bytes + from + len, l->bytes + to, l->len - to);
-            memcpy(l->bytes + from, text, len);
-            l->len = (uint32_t)n;
-            _free_spans(doc, l);
-            l->coloured = 0;
-            _lines_changed(doc, first);
-            goto changed;
-        }
-    }
-    {
-        // The general case: the lines the change touches, from the first's start to the last's
-        // ending, written out again with the change made and split afresh.
-        const size_t last = text_doc_line_of(doc, end);
-        const size_t last_at = text_doc_line_start(doc, last);
-        const TextLine* ll = &doc->lines[last];
-        const size_t head = start - first_at;
-        const size_t tail = _raw_len(ll) - (end - last_at);
-        char* joined = malloc(head + len + tail + 1);
-        if (!joined) {
-            log_error("text_doc: out of memory for a change of %zu bytes", len);
+    TextViewChange c = {first, 1, 1, start, end - start, len, false, false};
+    bool failed = false;
+    if (!_replace_in_line(doc, first, first_at, start, end, text, len, &failed)) {
+        if (failed)
             return false;
-        }
-        _raw_copy(l, 0, head, joined);
-        memcpy(joined + head, text, len);
-        _raw_copy(ll, end - last_at, _raw_len(ll), joined + head + len);
-        TextLine* fresh = NULL;
-        size_t fresh_capacity = 0;
-        const bool trailing = ll->ending == TEXT_ENDING_NONE;
-        const size_t count =
-            _split(joined, head + len + tail, trailing, true, &fresh, &fresh_capacity);
-        free(joined);
-        const size_t old = last - first + 1;
-        if (count == SIZE_MAX || !grow_array((void**)&doc->lines, &doc->line_capacity,
-                                             doc->line_count - old + count, sizeof(TextLine), 64)) {
-            for (size_t i = 0; count != SIZE_MAX && i < count; i++)
-                free(fresh[i].bytes);
-            free(fresh);
-            log_error("text_doc: out of memory for a change of %zu bytes", len);
+        c.lines_inserted =
+            _replace_lines(doc, first, first_at, start, end, text, len, &c.lines_removed);
+        if (c.lines_inserted == SIZE_MAX)
             return false;
-        }
-        for (size_t i = first; i <= last; i++)
-            _free_line(doc, &doc->lines[i]);
-        memmove(&doc->lines[first + count], &doc->lines[last + 1],
-                (doc->line_count - last - 1) * sizeof(TextLine));
-        memcpy(&doc->lines[first], fresh, count * sizeof(TextLine));
-        free(fresh);
-        doc->line_count = doc->line_count - old + count;
-        doc->lines[first].start = first_at;
-        _lines_changed(doc, first);
-        lines_removed = old;
-        lines_inserted = count;
     }
-changed:
+    _lines_changed(doc, first);
     doc->length = doc->length - (end - start) + len;
     doc->history[doc->version % TEXT_DOC_HISTORY].start = start;
     doc->history[doc->version % TEXT_DOC_HISTORY].removed = end - start;
@@ -414,9 +437,9 @@ changed:
     _map_ranges(doc, start, end - start, len);
     for (size_t i = 0; i < doc->view_count; i++) {
         const TextDocView* v = &doc->views[i];
-        if (v->lines)
-            v->lines(v->view, first, lines_removed, lines_inserted);
-        v->map(v->view, start, end - start, len, v->view == actor);
+        c.actor = v->view == actor;
+        c.held = v->view == held;
+        v->changed(v->view, &c);
     }
     return true;
 }
@@ -430,21 +453,18 @@ static TextDocView* _view(TextDoc* doc, const void* view) {
     return NULL;
 }
 
-static TextSelection* _copy_selections(const TextSelection* s, size_t n) {
-    if (!n)
-        return NULL;
-    TextSelection* out = malloc(n * sizeof(*s));
-    if (out)
-        memcpy(out, s, n * sizeof(*s));
+// A copy of selections, which the caller frees; NULL for none, or out of memory.
+static TextSelection* _copy_selections(const TextSelection* s, size_t n, size_t* count) {
+    TextSelection* out = n ? _dup(s, n * sizeof(*s)) : NULL;
+    *count = out ? n : 0;
     return out;
 }
 
-static size_t _view_selections(TextDoc* doc, const void* view, TextSelection** out) {
-    TextDocView* v = _view(doc, view);
+static TextSelection* _view_selections(TextDoc* doc, const void* view, size_t* count) {
+    const TextDocView* v = _view(doc, view);
     const TextSelection* s = NULL;
     const size_t n = v && v->selections ? v->selections(v->view, &s) : 0;
-    *out = _copy_selections(s, n);
-    return *out ? n : 0;
+    return _copy_selections(s, n, count);
 }
 
 static void _drop_redo(TextDoc* doc) {
@@ -453,18 +473,27 @@ static void _drop_redo(TextDoc* doc) {
     doc->redo_count = 0;
 }
 
+static void _forget_undo(TextDoc* doc) {
+    _drop_redo(doc);
+    for (size_t i = 0; i < doc->undo_count; i++)
+        _free_step(&doc->undo[i]);
+    doc->undo_count = 0;
+    doc->undo_sealed = true;
+}
+
 static bool _is_space(char c) {
     return c == ' ' || c == '\t';
 }
 
 // Whether typing `changes` continues the last step at each of its carets: each change an insert
-// right where that caret's text in the step ends, and not a word's start -- a space after a
-// character that is not one, the field's rule.
+// right where that caret's text in the step ends, and not a word's start -- a blank after a
+// character that is not one. The step is typing while the history is not sealed, since every
+// other step seals it.
 static bool _joins(TextDoc* doc, const TextDocChange* changes, size_t count, const void* view) {
     if (doc->undo_sealed || !doc->undo_count)
         return false;
     const TextUndoStep* s = &doc->undo[doc->undo_count - 1];
-    if (!s->typed || s->view != view || s->change_count != count)
+    if (s->view != view || s->change_count != count)
         return false;
     // The step's changes run from the highest start down; after it, change i's text begins at its
     // start moved by every change below it.
@@ -481,13 +510,6 @@ static bool _joins(TextDoc* doc, const TextDocChange* changes, size_t count, con
         below += (long long)old->inserted_len - (long long)old->removed_len;
     }
     return true;
-}
-
-static char* _dup_bytes(const char* p, size_t n) {
-    char* out = malloc(n ? n : 1);
-    if (out && n)
-        memcpy(out, p, n);
-    return out;
 }
 
 // Keeps an action as an undo step, joining typing to the step before it.
@@ -509,8 +531,7 @@ static void _keep(TextDoc* doc, const TextDocChange* changes, size_t count,
             c->inserted_len += changes[i].inserted_len;
         }
         free(s->after);
-        s->after = _copy_selections(after, after_count);
-        s->after_count = s->after ? after_count : 0;
+        s->after = _copy_selections(after, after_count, &s->after_count);
         return;
     }
     if (doc->undo_count == UNDO_MAX) {
@@ -528,16 +549,13 @@ static void _keep(TextDoc* doc, const TextDocChange* changes, size_t count,
         return;
     for (size_t i = 0; i < count; i++) {
         s->changes[i] = changes[i];
-        s->changes[i].removed = _dup_bytes(changes[i].removed, changes[i].removed_len);
-        s->changes[i].inserted = _dup_bytes(changes[i].inserted, changes[i].inserted_len);
+        s->changes[i].removed = _dup(changes[i].removed, changes[i].removed_len);
+        s->changes[i].inserted = _dup(changes[i].inserted, changes[i].inserted_len);
     }
     s->change_count = count;
-    s->before = _copy_selections(before, before_count);
-    s->before_count = s->before ? before_count : 0;
-    s->after = _copy_selections(after, after_count);
-    s->after_count = s->after ? after_count : 0;
+    s->before = _copy_selections(before, before_count, &s->before_count);
+    s->after = _copy_selections(after, after_count, &s->after_count);
     s->view = view;
-    s->typed = typed;
     doc->undo_count++;
     doc->undo_sealed = !typed;
 }
@@ -563,71 +581,102 @@ static void _tell(TextDoc* doc, const TextDocChange* changes, size_t count,
         .editor = v ? v->element : NULL,
         .version = version,
     };
+    doc->telling = true;
     doc->on_action(doc, &action, doc->on_action_user);
+    doc->telling = false;
 }
 
-static int _by_start_down(const void* a, const void* b) {
-    const TextEdit* x = a;
-    const TextEdit* y = b;
-    return x->start < y->start ? 1 : x->start > y->start ? -1 : 0;
+// Whether the text may change now, saying by name why not: not from inside on_action.
+static bool _may_change(const TextDoc* doc, const char* who) {
+    if (doc->telling)
+        log_error("%s: the text is not changed from inside on_action", who);
+    return !doc->telling;
 }
 
-bool text_doc_apply(TextDoc* doc, TextEdit* edits, size_t count, void* view, bool typed) {
-    if (!doc || (!edits && count))
+// The one way changes are made: `changes`, from the highest start down, each in the text as the
+// first found it. Every view but `held` has its carets moved through each, `actor`'s as an
+// actor's. Out of memory part way, the changes made stand, and the undo history, which no longer
+// matches the text, is let go. Returns how many were made.
+static size_t _run(TextDoc* doc, const TextDocChange* changes, size_t count, const void* actor,
+                   const void* held) {
+    size_t made = 0;
+    while (made < count &&
+           _replace(doc, changes[made].start, changes[made].start + changes[made].removed_len,
+                    changes[made].inserted, changes[made].inserted_len, actor, held))
+        made++;
+    if (made < count)
+        _forget_undo(doc);
+    return made;
+}
+
+// The changes `edits` make, from the highest start down, with the bytes each removes copied into
+// one block for the caller to free; NULL out of memory.
+static TextDocChange* _changes_of(TextDoc* doc, const TextEdit* edits, size_t count,
+                                  char** removed) {
+    size_t total = 1;
+    for (size_t i = 0; i < count; i++)
+        total += edits[i].end - edits[i].start;
+    TextDocChange* changes = malloc((count ? count : 1) * sizeof(TextDocChange));
+    *removed = malloc(total);
+    if (!changes || !*removed) {
+        free(changes);
+        free(*removed);
+        *removed = NULL;
+        return NULL;
+    }
+    size_t at = 0;
+    for (size_t i = 0; i < count; i++) {
+        const TextEdit* e = &edits[count - 1 - i];
+        const size_t n = text_doc_copy(doc, e->start, e->end, *removed + at);
+        changes[i] = (TextDocChange){e->start, *removed + at, n, e->text ? e->text : "", e->len};
+        at += n;
+    }
+    return changes;
+}
+
+bool text_doc_apply(TextDoc* doc, const TextEdit* edits, size_t count, void* view,
+                    const TextSelection* after, size_t after_count, bool typed) {
+    if (!doc || (!edits && count) || !_may_change(doc, "text_doc_apply"))
         return false;
-    qsort(edits, count, sizeof(TextEdit), _by_start_down);
     for (size_t i = 0; i < count; i++) {
         if (edits[i].start > edits[i].end || edits[i].end > doc->length ||
-            (i && edits[i].end > edits[i - 1].start)) {
-            log_error("text_doc_apply: edit %zu, bytes %zu to %zu, overlaps another or is past "
-                      "the text's %zu bytes",
+            (i && edits[i].start < edits[i - 1].end)) {
+            log_error("text_doc_apply: edit %zu, bytes %zu to %zu, is out of order, overlaps "
+                      "another or is past the text's %zu bytes",
                       i, edits[i].start, edits[i].end, doc->length);
             return false;
         }
     }
-    TextSelection* before = NULL;
-    const size_t before_count = _view_selections(doc, view, &before);
-    TextDocChange* changes = calloc(count ? count : 1, sizeof(TextDocChange));
-    char** removed = calloc(count ? count : 1, sizeof(char*));
-    bool ok = changes && removed;
-    const uint64_t version = doc->version;
-    size_t made = 0;
-    for (size_t i = 0; ok && i < count; i++) {
-        const TextEdit* e = &edits[i];
-        if (e->start == e->end && !e->len)
-            continue;
-        removed[i] = malloc(e->end - e->start + 1);
-        ok = removed[i] != NULL;
-        if (ok) {
-            text_doc_copy(doc, e->start, e->end, removed[i]);
-            ok = _replace(doc, e->start, e->end, e->text ? e->text : "", e->len, view);
-        }
-        if (ok) {
-            changes[made++] = (TextDocChange){e->start, removed[i], e->end - e->start,
-                                              e->text ? e->text : "", e->len};
-        }
-    }
-    if (!ok && !made)
+    char* removed = NULL;
+    TextDocChange* changes = _changes_of(doc, edits, count, &removed);
+    if (!changes) {
         log_error("text_doc_apply: out of memory");
-    if (made) {
-        TextSelection* after = NULL;
-        const size_t after_count = _view_selections(doc, view, &after);
-        _keep(doc, changes, made, before, before_count, after, after_count, view, typed);
-        _tell(doc, changes, made, before, before_count, after, after_count, view, version);
-        free(after);
+        return false;
     }
-    for (size_t i = 0; removed && i < count; i++)
-        free(removed[i]);
-    free(removed);
-    free(changes);
+    size_t before_count = 0;
+    TextSelection* before = _view_selections(doc, view, &before_count);
+    const uint64_t version = doc->version;
+    const size_t made = _run(doc, changes, count, view, after ? view : NULL);
+    if (made) {
+        size_t now_count = after_count;
+        TextSelection* now = after ? NULL : _view_selections(doc, view, &now_count);
+        const TextSelection* left = after ? after : now;
+        if (made == count)
+            _keep(doc, changes, made, before, before_count, left, now_count, view, typed);
+        _tell(doc, changes, made, before, before_count, left, now_count, view, version);
+        free(now);
+    }
     free(before);
-    return ok;
+    free(changes);
+    free(removed);
+    return made == count;
 }
 
 // A step taken back (`undo`) or made again: its changes, or their inverses, applied from the
 // highest start down, the editor given the step's selections, and the action told.
 static bool _step(TextDoc* doc, void* view, bool undo) {
-    if (!doc || !doc->keep_undo || (undo ? !doc->undo_count : !doc->redo_count))
+    if (!doc || !doc->keep_undo || (undo ? !doc->undo_count : !doc->redo_count) ||
+        !_may_change(doc, undo ? "text_doc_undo" : "text_doc_redo"))
         return false;
     TextUndoStep* s = &doc->undo[undo ? doc->undo_count - 1 : doc->undo_count];
     const size_t n = s->change_count;
@@ -650,13 +699,17 @@ static bool _step(TextDoc* doc, void* view, bool undo) {
         below += (long long)c->inserted_len - (long long)c->removed_len;
     }
     const void* target = view ? view : s->view;
-    for (size_t i = 0; i < n; i++)
-        _replace(doc, made[i].start, made[i].start + made[i].removed_len, made[i].inserted,
-                 made[i].inserted_len, target);
-    TextDocView* v = _view(doc, target);
     const TextSelection* sel = undo ? s->before : s->after;
     const size_t sel_count = undo ? s->before_count : s->after_count;
-    if (v && v->set_selections && sel_count)
+    // The editor given the step's selections is not moved through its changes.
+    const TextDocView* v = sel_count ? _view(doc, target) : NULL;
+    if (v && !v->set_selections)
+        v = NULL;
+    if (_run(doc, made, n, target, v ? target : NULL) < n) {
+        free(made);
+        return false;
+    }
+    if (v)
         v->set_selections(v->view, sel, sel_count);
     if (undo) {
         doc->undo_count--;
@@ -691,11 +744,11 @@ bool text_doc_redo(TextDoc* doc) {
 // ---- The host's edits
 
 static bool _splits_char(TextDoc* doc, size_t offset) {
-    return offset < doc->length && text_utf8_is_continuation(_byte_at(doc, offset));
+    return text_utf8_is_continuation(text_doc_byte(doc, offset));
 }
 
 bool text_doc_replace(TextDoc* doc, size_t start, size_t end, const char* text, size_t len) {
-    if (!doc || (!text && len))
+    if (!doc || (!text && len) || !_may_change(doc, "text_doc_replace"))
         return false;
     if (start > end || end > doc->length) {
         log_error("text_doc_replace: bytes %zu to %zu are not inside the text's %zu", start, end,
@@ -706,23 +759,25 @@ bool text_doc_replace(TextDoc* doc, size_t start, size_t end, const char* text, 
         log_error("text_doc_replace: bytes %zu to %zu start or end inside a character", start, end);
         return false;
     }
-    char* removed = malloc(end - start + 1);
-    if (!removed) {
+    if (start == end && !len)
+        return true;
+    const TextEdit edit = {start, end, text, len};
+    char* removed = NULL;
+    TextDocChange* change = _changes_of(doc, &edit, 1, &removed);
+    if (!change) {
         log_error("text_doc_replace: out of memory");
         return false;
     }
-    text_doc_copy(doc, start, end, removed);
-    const bool ok = _replace(doc, start, end, text ? text : "", len, NULL);
-    if (ok && (start != end || len)) {
-        const TextDocChange change = {start, removed, end - start, text ? text : "", len};
-        _keep(doc, &change, 1, NULL, 0, NULL, 0, NULL, false);
-    }
+    const bool ok = _run(doc, change, 1, NULL, NULL) == 1;
+    if (ok)
+        _keep(doc, change, 1, NULL, 0, NULL, 0, NULL, false);
+    free(change);
     free(removed);
     return ok;
 }
 
 bool text_doc_set_text(TextDoc* doc, const char* text, size_t len) {
-    if (!doc || (!text && len))
+    if (!doc || (!text && len) || !_may_change(doc, "text_doc_set_text"))
         return false;
     size_t old_len = 0;
     char* old = text_doc_text(doc, &old_len);
@@ -748,14 +803,18 @@ bool text_doc_set_text(TextDoc* doc, const char* text, size_t len) {
     return text_doc_replace(doc, head, old_len - tail, text + head, len - tail - head);
 }
 
+// Whether every change since `version` is still in the history, saying by name when not.
+static bool _history_reaches(const TextDoc* doc, uint64_t version, const char* who) {
+    if (version <= doc->version && doc->version - version <= TEXT_DOC_HISTORY)
+        return true;
+    log_error("%s: version %llu is not within the last %d changes of the text's %llu", who,
+              (unsigned long long)version, TEXT_DOC_HISTORY, (unsigned long long)doc->version);
+    return false;
+}
+
 bool text_doc_map(const TextDoc* doc, uint64_t version, size_t* offset) {
-    if (!doc || !offset)
+    if (!doc || !offset || !_history_reaches(doc, version, "text_doc_map"))
         return false;
-    if (version > doc->version || doc->version - version > TEXT_DOC_HISTORY) {
-        log_error("text_doc_map: version %llu is not within the last %d changes of the text's %llu",
-                  (unsigned long long)version, TEXT_DOC_HISTORY, (unsigned long long)doc->version);
-        return false;
-    }
     size_t at = *offset;
     for (uint64_t v = version; v < doc->version; v++) {
         const size_t i = v % TEXT_DOC_HISTORY;
@@ -814,12 +873,8 @@ bool text_doc_set_ranges(TextDoc* doc, int layer, uint64_t version, const TextRa
         log_error("text_doc_set_ranges: layer %d is not one of the %d", layer, TEXT_DOC_LAYERS);
         return false;
     }
-    if (version > doc->version || doc->version - version > TEXT_DOC_HISTORY) {
-        log_error("text_doc_set_ranges: version %llu is not within the last %d changes of the "
-                  "text's %llu",
-                  (unsigned long long)version, TEXT_DOC_HISTORY, (unsigned long long)doc->version);
+    if (!_history_reaches(doc, version, "text_doc_set_ranges"))
         return false;
-    }
     if (!grow_array((void**)&doc->ranges[layer], &doc->range_capacity[layer], count ? count : 1,
                     sizeof(TextRange), 16))
         return false;
@@ -854,30 +909,35 @@ const TextRange* text_doc_ranges(const TextDoc* doc, int layer, size_t* count) {
 
 // ---- Colour
 
-static void _forget_colour(TextDoc* doc) {
-    for (size_t i = 0; i < doc->line_count; i++) {
-        _free_spans(doc, &doc->lines[i]);
-        doc->lines[i].coloured = 0;
-    }
-    doc->highlight_known = 0;
-}
-
 void text_doc_set_highlighter(TextDoc* doc, TextHighlightFn fn, void* user, bool stateful) {
     if (!doc)
         return;
-    _forget_colour(doc);
+    for (size_t i = 0; i < doc->line_count; i++)
+        _uncolour(&doc->lines[i]);
+    doc->highlight_known = 0;
     // Room for a line's spans, so only a line with more than this asks its highlighter twice.
-    if (fn)
-        grow_array((void**)&doc->span_scratch, &doc->span_scratch_capacity, 64, sizeof(TextSpan),
-                   64);
+    if (fn && (!grow_array((void**)&doc->span_scratch, &doc->span_scratch_capacity, 64,
+                           sizeof(TextSpan), 64) ||
+               (!doc->span_ring && !(doc->span_ring = malloc(SPAN_RING * sizeof(TextSpan)))))) {
+        log_error("text_doc_set_highlighter: out of memory");
+        fn = NULL;
+    }
     doc->highlight = fn;
     doc->highlight_user = user;
     doc->highlight_stateful = stateful;
 }
 
-// Colours a line from `state_in`: its state out always, its spans kept when `keep`.
-static bool _colour(TextDoc* doc, size_t line, uint32_t state_in, bool keep) {
+// Whether a line's spans are still in the ring: written no further back than its length.
+static bool _spans_kept(const TextDoc* doc, const TextLine* l) {
+    return l->spans_known && doc->span_written - l->span_at <= SPAN_RING;
+}
+
+// A line coloured from `state_in`, unless it already is: its state out always, and its spans,
+// written into the ring, when `spans`. Whether it now is.
+static bool _coloured(TextDoc* doc, size_t line, uint32_t state_in, bool spans) {
     TextLine* l = &doc->lines[line];
+    if (l->state_known && l->state_in == state_in && (!spans || _spans_kept(doc, l)))
+        return true;
     uint32_t state = state_in;
     size_t n = doc->highlight(l->bytes, l->len, &state, doc->span_scratch,
                               doc->span_scratch_capacity, doc->highlight_user);
@@ -891,23 +951,22 @@ static bool _colour(TextDoc* doc, size_t line, uint32_t state_in, bool keep) {
         if (n > doc->span_scratch_capacity)
             n = doc->span_scratch_capacity;
     }
-    _free_spans(doc, l);
     l->state_in = state_in;
     l->state_out = state;
-    l->coloured = TEXT_COLOURED_STATE;
-    if (!keep)
+    l->state_known = true;
+    l->spans_known = spans;
+    if (!spans)
         return true;
-    if (doc->span_lines >= SPAN_LINES_MAX) {
-        for (size_t i = 0; i < doc->line_count; i++)
-            _free_spans(doc, &doc->lines[i]);
-    }
-    l->spans = malloc((n ? n : 1) * sizeof(TextSpan));
-    if (!l->spans)
-        return false;
-    memcpy(l->spans, doc->span_scratch, n * sizeof(TextSpan));
+    if (n > SPAN_RING)
+        n = SPAN_RING;
+    // A line's spans are one piece: ones that would run past the ring's end start it again.
+    uint64_t at = doc->span_written;
+    if (at % SPAN_RING + n > SPAN_RING)
+        at += SPAN_RING - at % SPAN_RING;
+    memcpy(&doc->span_ring[at % SPAN_RING], doc->span_scratch, n * sizeof(TextSpan));
+    doc->span_written = at + n;
+    l->span_at = at;
     l->span_count = (uint32_t)n;
-    l->coloured |= TEXT_COLOURED_SPANS;
-    doc->span_lines++;
     return true;
 }
 
@@ -922,14 +981,12 @@ bool text_doc_line_spans(TextDoc* doc, size_t line, const TextSpan** spans, size
             return false;
         state_in = doc->lines[line - 1].state_out;
     }
-    const TextLine* l = &doc->lines[line];
-    if (!(l->coloured & TEXT_COLOURED_SPANS) || l->state_in != state_in) {
-        if (!_colour(doc, line, state_in, true))
-            return false;
-    }
+    if (!_coloured(doc, line, state_in, true))
+        return false;
     if (doc->highlight_stateful && line == doc->highlight_known)
         doc->highlight_known = line + 1;
-    *spans = l->spans;
+    const TextLine* l = &doc->lines[line];
+    *spans = &doc->span_ring[l->span_at % SPAN_RING];
     *count = l->span_count;
     return true;
 }
@@ -945,8 +1002,8 @@ bool text_doc_highlight_step(TextDoc* doc, size_t up_to, size_t max_lines) {
         const uint32_t state_in = line ? doc->lines[line - 1].state_out : 0;
         const TextLine* l = &doc->lines[line];
         // A line already worked out from the same state leaves what it left before.
-        if (!(l->coloured & TEXT_COLOURED_STATE) || l->state_in != state_in) {
-            if (!_colour(doc, line, state_in, false))
+        if (!l->state_known || l->state_in != state_in) {
+            if (!_coloured(doc, line, state_in, false))
                 return false;
             coloured++;
         }

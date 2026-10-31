@@ -30,12 +30,10 @@ typedef struct FakeView {
     size_t count;
 } FakeView;
 
-static void fake_map(void* view, size_t start, size_t removed, size_t inserted, bool actor) {
+static void fake_changed(void* view, const TextViewChange* c) {
     FakeView* v = view;
-    for (size_t i = 0; i < v->count; i++) {
-        v->sel[i].anchor = text_doc_map_offset(v->sel[i].anchor, start, removed, inserted, actor);
-        v->sel[i].head = text_doc_map_offset(v->sel[i].head, start, removed, inserted, actor);
-    }
+    for (size_t i = 0; !c->held && i < v->count; i++)
+        text_doc_map_selection(&v->sel[i], c);
 }
 
 static size_t fake_selections(void* view, const TextSelection** out) {
@@ -52,17 +50,17 @@ static void fake_set(void* view, const TextSelection* s, size_t n) {
 
 static void fake_attach(TextDoc* doc, FakeView* v) {
     text_doc_add_view(doc, &(TextDocView){.view = v,
-                                          .map = fake_map,
+                                          .changed = fake_changed,
                                           .selections = fake_selections,
                                           .set_selections = fake_set});
 }
 
-// Types `text` at every caret of `v`, as one action.
+// Types `text` at every caret of `v`, which are in order, as one action.
 static void fake_type(TextDoc* doc, FakeView* v, const char* text) {
     TextEdit edits[8];
     for (size_t i = 0; i < v->count; i++)
         edits[i] = (TextEdit){v->sel[i].head, v->sel[i].head, text, strlen(text)};
-    text_doc_apply(doc, edits, v->count, v, true);
+    text_doc_apply(doc, edits, v->count, v, NULL, 0, true);
 }
 
 // Whether the text is exactly `want`, byte for byte.
@@ -363,6 +361,16 @@ static void count_action(TextDoc* doc, const TextDocAction* action, void* user) 
     g_action_changes = action->change_count;
 }
 
+static bool g_inside_refused;
+
+// Tries to change the text while an action is told, and reads the bytes the action reports.
+static void edit_in_action(TextDoc* doc, const TextDocAction* action, void* user) {
+    (void)user;
+    g_inside_refused = !text_doc_replace(doc, 0, 0, "q", 1) && action->change_count == 1 &&
+                       action->changes[0].removed_len == 2 &&
+                       !memcmp(action->changes[0].removed, "ab", 2);
+}
+
 static int probe_doc_undo(void) {
     TextDoc* doc = create_text_doc("", 0);
     FakeView v = {.sel = {{0, 0}}, .count = 1};
@@ -415,6 +423,17 @@ static int probe_doc_undo(void) {
     fake_type(doc, &off, "z");
     printf("ui doc-undo off steps %d\n", doc->undo_count == 0);
     printf("ui doc-undo off refused %d\n", !text_doc_undo(doc) && doc_is_str(doc, "z"));
+    free_text_doc(doc);
+
+    // A change asked for from inside on_action is refused, while the undo it reports stands.
+    doc = create_text_doc("", 0);
+    FakeView told = {.sel = {{0, 0}}, .count = 1};
+    fake_attach(doc, &told);
+    fake_type(doc, &told, "ab");
+    text_doc_set_on_action(doc, edit_in_action, NULL);
+    text_doc_undo(doc);
+    printf("ui doc-undo inside refused %d\n", g_inside_refused && doc_is_str(doc, ""));
+    printf("ui doc-undo inside redo %d\n", text_doc_redo(doc) && doc_is_str(doc, "ab"));
     free_text_doc(doc);
     return 0;
 }
@@ -986,6 +1005,23 @@ static int probe_editor_carets(UISystem* ui) {
     const bool found = ui_editor_run(ed, "find-next") && one_selection(ed, 14, 15);
     const bool again = ui_editor_run(ed, "find-next") && one_selection(ed, 19, 20);
     say_flag("editor-carets", "find", "next", found && again);
+    // Selections that touch, typed over twice: each becomes a caret after its own new text, not
+    // after the next one's.
+    text_doc_set_text(doc, "\nx", 2);
+    const TextSelection touching[] = {{0, 1}, {1, 2}};
+    ui_editor_set_selections(ed, touching, 2);
+    type(ui, "z");
+    type(ui, "y");
+    const size_t landed[] = {2, 4};
+    say_flag("editor-carets", "touching", "typed",
+             doc_is_str(doc, "zyzy") && selections_are(ed, landed, 2));
+    // A caret where a selection starts is one with it, whichever came first.
+    text_doc_set_text(doc, "\nx", 2);
+    const TextSelection at_start[] = {{0, 0}, {1, 0}};
+    ui_editor_set_selections(ed, at_start, 2);
+    type(ui, "z");
+    say_flag("editor-carets", "caret_at_start", "merged",
+             doc_is_str(doc, "zx") && one_selection(ed, 1, 1));
     return 0;
 }
 
