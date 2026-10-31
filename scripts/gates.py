@@ -30358,6 +30358,14 @@ def run_canvas_gate(workdir):
                      the plane, the bottom copper and the outline, each with its own active
                      layer: each half equals its view drawn alone, 0 px. The views share one
                      target and one tile table, both refilled per view.
+      canvas-panes   apps/canvas --editor twice, the editors as panes (spec 14.6), driven by a
+                     script: one pane opens on the first file; F8 splits it, the new pane taking
+                     the focus and "X" typed into the first file there; F10 shows the second file
+                     in it and "Y" is typed there; a click on the first pane and F6 land an edit
+                     at the first file's start; a click back and F10 return the second pane to
+                     the first file with its caret at 15 -- the 1 it left at, brought through the
+                     14 bytes landed since. Then F9 closes it from its own key: one pane is left,
+                     with the focus, and "Z" typed lands in the first file (end to end).
       canvas-under-ui the game UI's panel over the board: its centre the panel's colour, and
                      outside it the canvas as it is with no UI, 0 px. The canvas is an overlay
                      under UI_OVERLAY_ORDER.
@@ -30719,6 +30727,53 @@ def run_canvas_gate(workdir):
                   f"{unlike} px")
     print(f"  canvas-split        {'PASS' if ok else 'FAIL'}  {detail}")
     note("canvas-split", ok)
+
+    # ---- the editor as panes (spec 14.6)
+    pane_a, pane_b = os.path.join(workdir, "pane_a.ckt"), os.path.join(workdir, "pane_b.ckt")
+    with open(pane_a, "w", encoding="utf-8", newline="") as f:
+        f.write("(a one)\n(a two)\n")
+    with open(pane_b, "w", encoding="utf-8", newline="") as f:
+        f.write("(b one)\n")
+    files = ("--editor", pane_a, "--editor", pane_b)
+    opened, first = _canvas_run(workdir, "panes_open", *files)
+    if not opened:
+        ok, detail = False, "the app failed on two files"
+    else:
+        # A click on each pane's middle, the two side by side, in framebuffer pixels.
+        fb_h, fb_w = _ppm_array(opened).shape[:2]
+        left, right, mid = fb_w // 4, 3 * fb_w // 4, fb_h // 2
+        steps = (f"2 key=f8\n4 type=X\n6 key=f10\n8 type=Y\n10 at={left},{mid}\n"
+                 f"11 at={left},{mid} down\n12 at={left},{mid}\n14 key=f6\n16 at={right},{mid}\n"
+                 f"17 at={right},{mid} down\n18 at={right},{mid}\n20 key=f10\n")
+        split_script = os.path.join(workdir, "panes_split.script")
+        close_script = os.path.join(workdir, "panes_close.script")
+        with open(split_script, "w", encoding="utf-8") as f:
+            f.write(steps)
+        with open(close_script, "w", encoding="utf-8") as f:
+            f.write(steps + "22 key=f9\n24 type=Z\n")
+        _, two = _canvas_run(workdir, "panes_split", *files, "--input-script", split_script,
+                             frames=24)
+        _, one = _canvas_run(workdir, "panes_close", *files, "--input-script", close_script,
+                             frames=28)
+        landed = b"(note landed)\nX(a one)\n(a two)\n"
+        want = {
+            "opened": (first.get(("pane", "0"), [])[:6] == ["file", "0", "top", "0", "focused", "1"]
+                       and ("pane", "1") not in first
+                       and first.get(("file", "1")) == [b"(b one)\n".hex()]),
+            "split": (two.get(("pane", "0"), [])[:6] == ["file", "0", "top", "0", "focused", "0"]
+                      and two.get(("pane", "1")) == ["file", "0", "top", "0", "focused", "1",
+                                                     "sel", "1", "15", "15"]
+                      and two.get(("file", "0")) == [landed.hex()]
+                      and two.get(("file", "1")) == [b"Y(b one)\n".hex()]),
+            "closed": (one.get(("pane", "0"), [])[:6] == ["file", "0", "top", "0", "focused", "1"]
+                       and ("pane", "1") not in one
+                       and one.get(("file", "0")) == [(landed + b"Z").hex()]),
+        }
+        ok = all(want.values())
+        detail = (f"{want} -- second pane after the round trip "
+                  f"{' '.join(two.get(('pane', '1'), ['none']))} (want its caret at 15)")
+    print(f"  canvas-panes        {'PASS' if ok else 'FAIL'}  {detail}")
+    note("canvas-panes", ok)
 
     under, probe = _canvas_run(workdir, "board_ui", "--sheet", "board", "--ui")
     panel = probe.get(("ui", "panel"))
