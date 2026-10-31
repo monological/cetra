@@ -1722,26 +1722,24 @@ static void editor_prompt_open(UIElement* el, char kind, void* user) {
 // A search's matches lit as it is typed.
 static void editor_prompt_change(UIElement* el, void* user) {
     const EditorSheet* s = user;
-    if (s->kind != '/' && s->kind != '?')
-        return;
-    const char* text = ui_field_text(el);
-    bool capital = false;
-    for (const char* p = text; *p; p++)
-        capital = capital || (*p >= 'A' && *p <= 'Z');
-    ui_editor_find(s->editor, text, capital ? UI_EDITOR_FIND_CASE : 0);
+    if (s->kind == '/' || s->kind == '?')
+        ui_editor_vim_light(s->vim, s->editor, ui_field_text(el));
 }
 
-// Enter: the line handed to the vim mode, and what it came to said when it found nothing.
+// Enter: the line handed to the vim mode, and what it came to said when it found nothing. The line
+// is copied whole first, since closing empties the field.
 static void editor_prompt_submit(UIElement* el, void* user) {
     EditorSheet* s = user;
-    char text[128];
-    snprintf(text, sizeof(text), "%s", ui_field_text(el));
+    char* text = strdup(ui_field_text(el));
+    if (!text)
+        return;
     const char kind = s->kind;
     editor_prompt_close(s);
     if (kind == ':' && !ui_editor_vim_command(s->vim, s->editor, text))
         snprintf(s->message, sizeof(s->message), "Not an editor command: %s", text);
     else if (kind != ':' && !ui_editor_vim_search(s->vim, s->editor, text, kind == '?'))
         snprintf(s->message, sizeof(s->message), "Pattern not found: %s", text);
+    free(text);
 }
 
 // Esc in the line: let go, the vim mode told.

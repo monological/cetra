@@ -48,6 +48,9 @@ void ui_editor_vim_set_prompt(UIEditorVim* vim, UIEditorVimPromptFn fn, void* us
 // moved to its next match -- or an operator waiting for it taken there. Plain text, ignoring case
 // unless the query has a capital; "" searches again. False with no match.
 bool ui_editor_vim_search(UIEditorVim* vim, UIElement* el, const char* query, bool backward);
+// A search line's matches lit in `el` as it is typed, as ui_editor_vim_search will take them; ""
+// or NULL lights the last search's again.
+void ui_editor_vim_light(UIEditorVim* vim, UIElement* el, const char* query);
 // A command line, without its ':', that vim knows: a line number, $, and noh. False for any other,
 // which is the host's.
 bool ui_editor_vim_command(UIEditorVim* vim, UIElement* el, const char* line);

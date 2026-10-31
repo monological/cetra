@@ -6,7 +6,7 @@
  *   - the font atlas's build;
  *   - the code editor on texts of 80 KB, 10 MB and 64 MB: opening, the first frame, a keystroke
  *     at one caret and at a hundred, a jump, a resize, and the budget's walk to every row wrapped;
- *     on the 10 MB text, the vim mode's x, dw, p and `.`.
+ *     on the 10 MB text, the vim mode's x, dw, p and `.`, and a search that finds nothing.
  * Wall-clock milliseconds, each the median of five runs with their spread beside it. Numbers from a
  * debug build say little: run it from a release build.
  */
@@ -285,8 +285,8 @@ static void _editor_frame(UISystem* ui, const UIInput* in) {
     ui_build(ui, BENCH_W, BENCH_H, 0.0f);
 }
 
-// The vim mode's keystrokes on the editor `ed`, settled, at one caret in its middle: x, dw, p and
-// `.`, each a frame that reads it and draws what it did.
+// The vim mode's keystrokes on the editor `ed`, settled, at one caret in its middle: x, dw, p, `.`
+// and a search that finds nothing, each a frame that reads it and draws what it did.
 static void _time_vim(UISystem* ui, UIElement* ed, TextDoc* doc, const char* label) {
     const UIInput idle = {.pointer_x = -1.0f, .pointer_y = -1.0f};
     for (int frames = 0; !ui_editor_settled(ed) && frames < 100000; frames++)
@@ -302,14 +302,18 @@ static void _time_vim(UISystem* ui, UIElement* ed, TextDoc* doc, const char* lab
     static const struct {
         const char* keys;
         const char* how;
-    } STROKES[] = {
-        {"x", "vim_x_ms"}, {"dw", "vim_dw_ms"}, {"p", "vim_p_ms"}, {".", "vim_repeat_ms"}};
+    } STROKES[] = {{"x", "vim_x_ms"},
+                   {"dw", "vim_dw_ms"},
+                   {"p", "vim_p_ms"},
+                   {".", "vim_repeat_ms"},
+                   {"/zq\n", "vim_search_miss_ms"}};
     double runs[BENCH_RUNS];
     for (size_t s = 0; s < sizeof STROKES / sizeof STROKES[0]; s++) {
-        InputKeyEvent typed[2] = {{0}};
+        InputKeyEvent typed[8] = {{0}};
         size_t n = 0;
         for (const char* k = STROKES[s].keys; *k; k++)
-            typed[n++] = (InputKeyEvent){.codepoint = (uint32_t)*k};
+            typed[n++] = *k == '\n' ? (InputKeyEvent){.key = GLFW_KEY_ENTER}
+                                    : (InputKeyEvent){.codepoint = (uint32_t)*k};
         const UIInput key = {
             .pointer_x = -1.0f, .pointer_y = -1.0f, .key_events = typed, .key_event_count = n};
         for (int r = 0; r < BENCH_RUNS; r++) {

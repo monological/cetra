@@ -484,9 +484,16 @@ static void _sort(UIEditor* ed) {
     free(c);
 }
 
+static const UIEditorMode* _look_of(const UIEditor* ed);
+static void _drawn(UIEditor* ed, const TextSelection* s, UIEditorSelectionShape shape, size_t* lo,
+                   size_t* hi);
+
 // Selections in order merged where they overlap, or touch where either is a caret, in place, the
-// primary followed. A merged selection runs the way the first that is not a caret ran.
+// primary followed -- overlapping as drawn, so in a shape that takes the far character or whole
+// lines, two sharing a character or a line are one. A merged selection runs the way the first that
+// is not a caret ran.
 static void _merge(UIEditor* ed) {
+    const UIEditorSelectionShape shape = _look_of(ed)->selection;
     size_t n = 0;
     for (size_t i = 0; i < ed->sel_count; i++) {
         if (n) {
@@ -494,7 +501,12 @@ static void _merge(UIEditor* ed) {
             const TextSelection* s = &ed->sel[i];
             const size_t lo = _sel_min(s), hi = _sel_max(s);
             const size_t llo = _sel_min(last), lhi = _sel_max(last);
-            if (lo < lhi || (lo == lhi && (lo == hi || llo == lhi))) {
+            size_t dlo = lo, dhi = lhi, unused = 0;
+            if (shape != UI_SELECTION_SPAN) {
+                _drawn(ed, s, shape, &dlo, &unused);
+                _drawn(ed, last, shape, &unused, &dhi);
+            }
+            if (lo < lhi || (lo == lhi && (lo == hi || llo == lhi)) || dlo < dhi) {
                 const size_t to = hi > lhi ? hi : lhi;
                 const TextSelection* way = llo == lhi ? s : last;
                 *last =
@@ -1475,31 +1487,6 @@ static void _copy(UIEditor* ed, const TextEdit* ranges, size_t n) {
 }
 
 // The text's own line ending, which typed and pasted line breaks are written as.
-static const char* _newline(const UIEditor* ed) {
-    return ed->doc->newline == TEXT_NEWLINE_CRLF ? "\r\n" : "\n";
-}
-
-// Text whose line breaks are '\n', with each one the text's own line ending: into a buffer the
-// caller frees.
-static char* _with_newlines(const UIEditor* ed, const char* text, size_t len, size_t* out_len) {
-    const char* nl = _newline(ed);
-    const size_t nl_len = strlen(nl);
-    char* out = malloc(len * nl_len + 1);
-    if (!out)
-        return NULL;
-    size_t k = 0;
-    for (size_t i = 0; i < len; i++) {
-        if (text[i] == '\n') {
-            memcpy(out + k, nl, nl_len);
-            k += nl_len;
-        } else {
-            out[k++] = text[i];
-        }
-    }
-    *out_len = k;
-    return out;
-}
-
 // An edit over each selection, with no text yet, for the caller to fill and free; NULL out of
 // memory.
 static TextEdit* _caret_edits(const UIEditor* ed) {
@@ -1541,7 +1528,7 @@ static void _paste(UIEditor* ed) {
             piece = (nl ? (size_t)(nl - clean) : len) - from;
             from += piece + 1;
         }
-        texts[i] = _with_newlines(ed, clean + start, piece, &edits[i].len);
+        texts[i] = text_doc_with_newlines(ed->doc, clean + start, piece, &edits[i].len);
         edits[i].text = texts[i] ? texts[i] : "";
         edits[i].len = texts[i] ? edits[i].len : 0;
     }
@@ -1670,7 +1657,7 @@ void ui_editor_type(UIElement* el, const char* text) {
     if (!ed || !text || !*text)
         return;
     size_t len = 0;
-    char* t = _with_newlines(ed, text, strlen(text), &len);
+    char* t = text_doc_with_newlines(ed->doc, text, strlen(text), &len);
     if (t)
         _type(ed, t, len, true);
     free(t);
@@ -1733,7 +1720,7 @@ static bool _run_newline(UIElement* el, void* user) {
         free(texts);
         return false;
     }
-    const char* nl = _newline(ed);
+    const char* nl = text_doc_newline(ed->doc);
     const size_t nl_len = strlen(nl);
     for (size_t i = 0; i < ed->sel_count; i++) {
         const Line l = _line(ed, edits[i].start);
@@ -2150,11 +2137,15 @@ const UIEditorMode* ui_editor_mode(const UIElement* el) {
 
 // What the editor reads of its mode besides the keys: the first mode up the chain that is not a
 // layer.
-static const UIEditorMode* _look(const UIElement* el) {
-    const UIEditorMode* m = ui_editor_mode(el);
+static const UIEditorMode* _look_of(const UIEditor* ed) {
+    const UIEditorMode* m = ed && ed->mode ? ed->mode : ui_editor_standard_mode();
     while (m->layer && m->parent)
         m = m->parent;
     return m;
+}
+
+static const UIEditorMode* _look(const UIElement* el) {
+    return _look_of(_seen(el));
 }
 
 void ui_editor_find(UIElement* el, const char* query, unsigned flags) {
@@ -2223,6 +2214,14 @@ static bool _key(const UISystem* ui, UIElement* el, UIRect content, const InputK
     if (ed)
         ed->swallow = used && _makes_char(ev);
     return used;
+}
+
+// A key's character comes in the same turn as the key, if at all: one made by no key -- a scripted
+// key's -- leaves nothing to take into the next.
+static void _keys_end(UIElement* el) {
+    UIEditor* ed = _of(el);
+    if (ed)
+        ed->swallow = false;
 }
 
 #undef SHIFT
@@ -2354,7 +2353,7 @@ static double _draw(const UISystem* ui, UIElement* el, const UIStyle* s, UIRect 
 
     double wake = INFINITY;
     const bool lit = focused && ui_typing_caret_lit(&ed->caret, now, blink, &wake);
-    // A mode may draw its caret a cell wide, and its selections as it takes them: a vim mode's.
+    // A mode may draw its caret a cell wide, and its selections as it takes them.
     const UIEditorMode* mode = _look(el);
     const float caret_w = mode->block_caret ? ed->cell : UI_TYPING_CARET_WIDTH;
     vec4 caret_colour = {fg[0], fg[1], fg[2], mode->block_caret ? 0.45f : fg[3]};
@@ -2505,7 +2504,7 @@ void ui_editor_set_carets(UIElement* el, const TextSelection* sels, const int* w
     _follow(ed);
 }
 
-int* ui_editor_wants(UIElement* el) {
+const int* ui_editor_wants(UIElement* el) {
     const UIEditor* ed = _of(el);
     return ed ? ed->want : NULL;
 }
@@ -2554,6 +2553,7 @@ void ui_editor_scroll_rows(UIElement* el, float rows) {
 
 const UIWidgetOps ui_editor_ops = {
     .place = _place,
+    .keys_end = _keys_end,
     .key = _key,
     .press = _press,
     .drag = _drag,

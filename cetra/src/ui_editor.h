@@ -32,8 +32,8 @@ void ui_editor_reveal(UIElement* el, size_t offset);
 /*
  * What an edit is made of, after vis: a MOTION says where a caret goes, a TEXT OBJECT what range
  * lies round it, and an OPERATOR what is done to a range. Each runs once per caret. A mode turns
- * keys into them: the standard mode by a table, a vim mode later by reading "d2w" as delete, twice,
- * by word. Nothing in the editor changes for that.
+ * keys into them: the standard mode by a table, another by reading a sequence such as "d2w" as
+ * delete, twice, by word. Nothing in the editor changes for that.
  */
 typedef enum UIEditorMotion {
     UI_MOTION_NONE = 0, // no motion: the operator takes each caret's selection
@@ -119,8 +119,8 @@ typedef void (*UIEditorPointerFn)(UIElement* el, void* user);
 // How a selection's band is drawn: what the mode acting on it takes it to cover.
 typedef enum UIEditorSelectionShape {
     UI_SELECTION_SPAN,      // from its start up to its end
-    UI_SELECTION_INCLUSIVE, // the character at its far end too: a vim mode's visual mode
-    UI_SELECTION_LINES,     // every line it touches, whole: a vim mode's visual line mode
+    UI_SELECTION_INCLUSIVE, // the character at its far end too
+    UI_SELECTION_LINES,     // every line it touches, whole
 } UIEditorSelectionShape;
 
 /*

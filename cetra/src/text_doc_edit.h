@@ -60,12 +60,13 @@ typedef struct TextUndoPart {
 // run of typing joined into words, or every action a group held.
 struct TextUndoStep {
     TextUndoPart* parts;
-    size_t part_count;
+    size_t part_count, part_capacity;
     TextSelection* before;
     size_t before_count;
     TextSelection* after;
     size_t after_count;
-    void* view; // the editor that made it; NULL for the host's, or once that editor is gone
+    void* view;       // the editor that made it; NULL for the host's, or once that editor is gone
+    uint64_t version; // the text's after its last action: only an action from there may join it
 };
 
 // One replacement an action makes, in the text as the action finds it.
@@ -78,6 +79,12 @@ typedef struct TextEdit {
 void text_doc_add_view(TextDoc* doc, const TextDocView* view);
 void text_doc_remove_view(TextDoc* doc, const void* view);
 
+// The text's line ending: "\r\n" or "\n".
+const char* text_doc_newline(const TextDoc* doc);
+// `len` bytes of text whose line breaks are '\n', each made the text's own line ending, in a new
+// string the caller frees, *out its length; NULL out of memory.
+char* text_doc_with_newlines(const TextDoc* doc, const char* text, size_t len, size_t* out);
+
 // One action by the editor `view`: the edits, in order and not overlapping, applied from the
 // highest start down, every other view's carets moved through each, then kept for undo and told to
 // on_action. `after` is where the action leaves the editor's selections, which the editor sets
@@ -88,18 +95,22 @@ bool text_doc_apply(TextDoc* doc, const TextEdit* edits, size_t count, void* vie
                     const TextSelection* after, size_t after_count, bool typed);
 // The next typing starts a step of its own: a caret moved.
 void text_doc_seal_undo(TextDoc* doc);
-// Opened, the next action starts a step and every action after it joins that step until it is
-// closed, whatever it is and whoever made it -- a vim mode's insert, from i to Esc. The step starts
-// at the editor `view`'s selections as the group opened, not its first action's: an insert at
-// several carets is taken back to the one cursor it began from. A host's edit inside it is a step
-// of its own, and the group's next action starts another.
+// Opened, the next action of the editor `view` starts a step and every action of it after joins
+// that step until it is closed, whatever it is -- a whole insert, from its start to its end; with
+// no view, every editor's actions. The step starts at `view`'s selections as the group opened, not
+// its first action's: an insert at several carets is taken back to the one cursor it began from.
+// A host's edit, or another editor's, inside it is a step of its own, and the group's next action
+// starts another.
 void text_doc_group(TextDoc* doc, bool open, const void* view);
 // A step of undo that changes nothing, which an undo takes back doing nothing but putting the
-// editor `view`'s selections back: vim's operator over nothing. Inside a group's step, nothing.
+// editor `view`'s selections back: an operator over nothing. Inside a group's step, nothing.
 void text_doc_empty_step(TextDoc* doc, void* view);
 // Undo or redo from an editor, which is given the step's selections whoever made it.
 bool text_doc_undo_in(TextDoc* doc, void* view);
 bool text_doc_redo_in(TextDoc* doc, void* view);
+// The step the last undo took back, or with `redo` the step the last redo made again; NULL for
+// none.
+const TextUndoStep* text_doc_step_taken(const TextDoc* doc, bool redo);
 
 // `offset` moved through one change: kept before an insertion at it, or put after it with `after`.
 size_t text_doc_map_offset(size_t offset, size_t start, size_t removed, size_t inserted,

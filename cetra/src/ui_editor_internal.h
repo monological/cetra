@@ -2,8 +2,8 @@
 #define _UI_EDITOR_INTERNAL_H_
 
 /*
- * What a mode built inside cetra -- the vim mode -- reaches of the editor besides its public calls
- * (spec 14.5). Private.
+ * What a mode built inside cetra reaches of the editor besides its public calls (spec 14.5).
+ * Private.
  */
 
 #include <stdbool.h>
@@ -28,7 +28,7 @@ void ui_editor_set_carets(UIElement* el, const TextSelection* sels, const int* w
                           size_t primary);
 // Each caret's wanted column for moving by line, in the order of the selections: -1 for none, and
 // INT_MAX for its line's end. Valid until the selections change; NULL for no editor.
-int* ui_editor_wants(UIElement* el);
+const int* ui_editor_wants(UIElement* el);
 // The rows the editor shows whole, at least one.
 int ui_editor_rows_shown(const UIElement* el);
 // The offset starting the row `down` rows below the view's top, held to the text's last row.
