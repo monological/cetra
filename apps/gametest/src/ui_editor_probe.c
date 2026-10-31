@@ -2319,11 +2319,14 @@ static int probe_vim_set_doc(UISystem* ui) {
     say_flag("vim-set-doc", "visual", "let_go",
              doc_is_str(b, "ne abtwo\n") && ui_editor_vim_state(vim) == UI_VIM_NORMAL);
     // Freed with an operator half typed, and another editor made in its place, most likely at
-    // its address: w there only moves.
-    vim_keys(ui, "d");
+    // its address: w there only moves. Esc first, so this case stands apart from those above.
+    vim_keys(ui, "<Esc>d");
     UIElement* parent = ed->parent;
     ui_remove(ui, ed);
+    const void* was = ed;
     UIElement* again = ui_editor(parent, a);
+    fprintf(stderr, "vim-set-doc freed: the new editor %s the old one's address\n",
+            (const void*)again == was ? "took" : "did not take");
     ui_set_size(again, UI_FIXED, 600.0f, UI_FIXED, 300.0f);
     ui_editor_set_mode(again, ui_editor_vim_mode(vim));
     ui_set_focus(ui_top(ui), again);
