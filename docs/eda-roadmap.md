@@ -530,8 +530,9 @@ beside the standard one, for any app to use, and pcb stacks a layer of its keys 
 - **The vim mode** (`ui_editor_vim.c/h`), one per host shared by its editors, as vim's state is
   the person's: normal, insert, visual, visual line and visual block; counts, the motions, the
   operators over every motion and text object, the edits, `.`, a block's `I` and `A` at every
-  line; `/ ? n N * #` and `:` (a line number, `$`, `noh`, anything else the host's); undo by vim's
-  units, through the host's timeline when it keeps one; the register the system clipboard.
+  line; `/ ? n N * #` and `:` (a line number, `$`, `noh`, anything else the host's), a host's line
+  lit as it is typed through `ui_editor_vim_light`; undo by vim's units, through the host's
+  timeline when it keeps one; the register the system clipboard.
 - **Held to vim 9.2 itself**: 6,624 cases of a corpus and 1,600 seeded random sequences run
   through both, text and cursor compared byte for byte; 8,000 more sequences checked once. A
   keystroke at 10 MB costs 0.12 to 0.25 ms.
