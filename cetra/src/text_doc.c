@@ -1023,6 +1023,12 @@ void text_doc_remove_view(TextDoc* doc, const void* view) {
     for (size_t i = 0; i < doc->undo_count + doc->redo_count; i++)
         if (doc->undo[i].view == view)
             doc->undo[i].view = NULL;
+    // A group held to it, and its typing, end with it: a view made later at its address must not
+    // add to either. The group's step stays as far as it got.
+    if (doc->grouping && doc->group_view == view)
+        text_doc_group(doc, false, NULL);
+    if (doc->typing.view == view)
+        doc->typing.count = 0;
 }
 
 void text_doc_set_on_action(TextDoc* doc, TextDocActionFn fn, void* user) {

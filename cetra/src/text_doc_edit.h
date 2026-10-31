@@ -77,6 +77,7 @@ typedef struct TextEdit {
 } TextEdit;
 
 void text_doc_add_view(TextDoc* doc, const TextDocView* view);
+// The text forgets the view: its steps become no editor's, and a group held to it is closed.
 void text_doc_remove_view(TextDoc* doc, const void* view);
 
 // The text's line ending: "\r\n" or "\n".
