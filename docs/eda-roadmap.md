@@ -55,14 +55,16 @@ These come from pcb's `ARCH.md` sections 8 and 9, and every item below has to re
 | 3 | Skipping the 3D scene pass when no 3D view is shown | Not started; takes a still 3D view drawn on demand, moved from item 2 | 8, the 3D view | |
 | 4 | Drawing the 3D scene into part of the window | Not started | 8 | |
 | 5 | Text input and scrolling panes in the UI | **Built**, spec 14.2, and its follow-ups, spec 14.3; composing text in an input method, glyphs past the atlas and the rest below are left for later | 6 (the command palette and the `/` jump); 9 (the chat) | 14.2, 14.3 |
-| 6 | The text editor widget | **Built**, spec 14.4; sideways scrolling, a regular-expression find and the vim mode itself are left for later | 6 (the code view) | 14.4 |
+| 6 | The text editor widget | **Built**, spec 14.4; sideways scrolling, a regular-expression find and the rest below are left for later | 6 (the code view) | 14.4 |
+| 6a | The editor's vim mode | **Built**, spec 14.5, held to vim 9.2 itself; named registers, macros, marks and the rest below are left for later | 6 (the code view, which is vim only) | 14.5 |
 | 7 | Rendering at any scale, in true units | **Built**, specs 13.57 and 13.58; the macro depth of field left | Already used by pcb's pictures | |
 | 8 | What the glTF import does not read, or reads otherwise | Not needed by pcb; three bugs worth fixing for cetra's own sake | None | |
 
 **Proposed order**: 1, 2, 5, 6, then 3 and 4 together when pcb starts its 3D view. 1, 2 and 5 are
 built, 5 with its follow-ups (14.3), and 6 in spec 14.4, which stands on several of them: the
-UTF-8 home, typed input, the clipboard and the input script. 3 and 4 are next, once pcb starts its
-3D view. The canvas went first because
+UTF-8 home, typed input, the clipboard and the input script. 6a, the vim mode, came next (14.5),
+since pcb's code view is to be vim only and its window, spec 6.1, starts there. 3 and 4 are next,
+once pcb starts its 3D view. The canvas went first because
 the schematic and the layout both stand on it, and it is the largest. Item 8's bugs and the macro
 depth of field can be taken whenever they fit.
 
@@ -501,7 +503,6 @@ want a piece table or an array of lines. What 14.2 wrote once for both:
 - bold and italic styles;
 - a fallback face for what JetBrains Mono lacks;
 - input methods;
-- the vim mode itself, which the `ui-editor-mode` arm shows is an addition;
 - folding and gutter markers;
 - a keystroke at 100 carets in a 64 MB text, 2.25 ms. The line starts are worked out again from the
   first caret's line, and a tree of line lengths would make that a logarithm;
@@ -509,6 +510,45 @@ want a piece table or an array of lines. What 14.2 wrote once for both:
   moves every line after it in the text's array and in each editor's rows, once per caret; built
   once an action instead, it would cost one pass. A question for whoever plans the next editor
   work, since the fix reaches across the text and every view.
+
+---
+
+## 6a. The editor's vim mode — built
+
+**What pcb needs**: its code view is vim only, decided with the user on 2026-10-30 -- `i` and Esc,
+the visual modes, `/` searching the text. pcb's own keys go over it: Space for help in normal mode,
+`/` searching whatever view has the focus, `:` its command line. So the mode is built in cetra,
+beside the standard one, for any app to use, and pcb stacks a layer of its keys on it.
+
+**What spec 14.5 built:**
+
+- **The editor's seams**, general rather than vim's: a mode may be a layer, keys only over its
+  parent; a command that declines hands its key to the parent; a key a mode used takes its
+  character with it; three selection shapes (a span, inclusive of the far character, whole lines);
+  a hook after the pointer moves the selections; and undo steps made of parts with a serial a
+  host's timeline groups by, held open across actions by a group.
+- **The vim mode** (`ui_editor_vim.c/h`), one per host shared by its editors, as vim's state is
+  the person's: normal, insert, visual, visual line and visual block; counts, the motions, the
+  operators over every motion and text object, the edits, `.`, a block's `I` and `A` at every
+  line; `/ ? n N * #` and `:` (a line number, `$`, `noh`, anything else the host's); undo by vim's
+  units, through the host's timeline when it keeps one; the register the system clipboard.
+- **Held to vim 9.2 itself**: 6,624 cases of a corpus and 1,600 seeded random sequences run
+  through both, text and cursor compared byte for byte; 8,000 more sequences checked once. A
+  keystroke at 10 MB costs 0.12 to 0.25 ms.
+- **Otherwise than the plan said**: the character of a key a mode used is dropped in the editor,
+  not in `_route_keys`, since the text field takes every key event; Esc in normal mode is always
+  taken, since declined it let go of the editor; and with no prompt from the host, the mode reads
+  a `/`, `?` or `:` line from the keys itself.
+
+**Left for later:**
+
+- named registers, macros, marks and the jump list (Ctrl+O, Ctrl+I);
+- `:s` and ranges, replace mode `R`, `gv`, `=` and `gq`, Ctrl+A and Ctrl+X, insert completion and
+  tag objects;
+- regular expressions in a search, as in item 6's find;
+- the differences from vim the spec lists: `A` after an area ending inside a character of several
+  bytes, `.` after `v$` and after a visual `A` or `I`, `p` of lines over a block of empty lines
+  then `u`, `r` with Enter in visual mode, and a quote object growing a visual area.
 
 ---
 

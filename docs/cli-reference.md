@@ -1886,6 +1886,13 @@ It takes the capture set `-x`, `-f`, `-S`, `-W` and `-H`, and:
   the text as hex (`canvas editor hex`), the selections, the errors as they stand and where the
   first is drawn, and whether every row is wrapped (`canvas editor settled`), which the
   `ui-editor-*` and `idle-editor` arms read.
+- `--vim` (spec 14.5), with `--editor`, puts the editor in the vim mode, the app's own keys a
+  layer over it. A line under the editor shows vim's state (`-- INSERT --`, `-- VISUAL --`...)
+  and the keys of a half-typed command; `/`, `?` and `:` from normal mode type into it, a search
+  lit as it is typed, Enter handing the line to the vim mode and Esc letting it go, and "Pattern
+  not found" or "Not an editor command" said there until the next key. Under `--canvas-probe` the
+  run also prints `canvas editor vim` with the state and that message, which `ui-vim-script`
+  reads.
 
 The app's own keys stand down while the UI wants the keyboard (`ui_wants_keyboard`): a field or the
 editor holds the focus, or the palette is up.
