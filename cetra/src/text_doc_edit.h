@@ -50,9 +50,17 @@ struct TextDocView {
     void (*gone)(void* view);
 };
 
-struct TextUndoStep {
-    TextDocChange* changes; // owning their bytes
+// One action a step holds: its changes, owning their bytes, from the highest start down.
+typedef struct TextUndoPart {
+    TextDocChange* changes;
     size_t change_count;
+} TextUndoPart;
+
+// What one undo takes back: the actions of one step, in the order they were made -- one action, a
+// run of typing joined into words, or every action a group held.
+struct TextUndoStep {
+    TextUndoPart* parts;
+    size_t part_count;
     TextSelection* before;
     size_t before_count;
     TextSelection* after;
@@ -80,6 +88,10 @@ bool text_doc_apply(TextDoc* doc, const TextEdit* edits, size_t count, void* vie
                     const TextSelection* after, size_t after_count, bool typed);
 // The next typing starts a step of its own: a caret moved.
 void text_doc_seal_undo(TextDoc* doc);
+// Opened, the next action starts a step and every action after it joins that step until it is
+// closed, whatever it is and whoever made it -- a vim mode's insert, from i to Esc. A host's edit
+// inside it is a step of its own, and the group's next action starts another.
+void text_doc_group(TextDoc* doc, bool open);
 // Undo or redo from an editor, which is given the step's selections whoever made it.
 bool text_doc_undo_in(TextDoc* doc, void* view);
 bool text_doc_redo_in(TextDoc* doc, void* view);
