@@ -5,7 +5,8 @@
  *   - one keystroke in a multi-line field of 1, 20 and 1,000 KB;
  *   - the font atlas's build;
  *   - the code editor on texts of 80 KB, 10 MB and 64 MB: opening, the first frame, a keystroke
- *     at one caret and at a hundred, a jump, a resize, and the budget's walk to every row wrapped.
+ *     at one caret and at a hundred, a jump, a resize, and the budget's walk to every row wrapped;
+ *     on the 10 MB text, the vim mode's x, dw, p and `.`.
  * Wall-clock milliseconds, each the median of five runs with their spread beside it. Numbers from a
  * debug build say little: run it from a release build.
  */
@@ -24,6 +25,7 @@
 #include "cetra/text.h"
 #include "cetra/text_doc.h"
 #include "cetra/ui_editor.h"
+#include "cetra/ui_editor_vim.h"
 
 #define BENCH_W      1280.0f
 #define BENCH_H      720.0f
@@ -283,9 +285,49 @@ static void _editor_frame(UISystem* ui, const UIInput* in) {
     ui_build(ui, BENCH_W, BENCH_H, 0.0f);
 }
 
+// The vim mode's keystrokes on the editor `ed`, settled, at one caret in its middle: x, dw, p and
+// `.`, each a frame that reads it and draws what it did.
+static void _time_vim(UISystem* ui, UIElement* ed, TextDoc* doc, const char* label) {
+    const UIInput idle = {.pointer_x = -1.0f, .pointer_y = -1.0f};
+    for (int frames = 0; !ui_editor_settled(ed) && frames < 100000; frames++)
+        _editor_frame(ui, &idle);
+    UIEditorVim* vim = create_ui_editor_vim();
+    if (!vim)
+        return;
+    ui_editor_set_mode(ed, ui_editor_vim_mode(vim));
+    const size_t mid = text_doc_line_start(doc, text_doc_line_count(doc) / 2) + 4;
+    ui_editor_set_selections(ed, &(TextSelection){mid, mid}, 1);
+    ui_editor_reveal(ed, mid);
+    _editor_frame(ui, &idle);
+    static const struct {
+        const char* keys;
+        const char* how;
+    } STROKES[] = {
+        {"x", "vim_x_ms"}, {"dw", "vim_dw_ms"}, {"p", "vim_p_ms"}, {".", "vim_repeat_ms"}};
+    double runs[BENCH_RUNS];
+    for (size_t s = 0; s < sizeof STROKES / sizeof STROKES[0]; s++) {
+        InputKeyEvent typed[2] = {{0}};
+        size_t n = 0;
+        for (const char* k = STROKES[s].keys; *k; k++)
+            typed[n++] = (InputKeyEvent){.codepoint = (uint32_t)*k};
+        const UIInput key = {
+            .pointer_x = -1.0f, .pointer_y = -1.0f, .key_events = typed, .key_event_count = n};
+        for (int r = 0; r < BENCH_RUNS; r++) {
+            const double t0 = _now_ms();
+            _editor_frame(ui, &key);
+            runs[r] = _now_ms() - t0;
+        }
+        _say(label, STROKES[s].how, runs);
+    }
+    ui_editor_set_mode(ed, NULL);
+    free_ui_editor_vim(vim);
+}
+
 // The editor on a text of `bytes`: opening it, its first frame, a keystroke at one caret and at a
-// hundred spread through it, a jump far down, a resize, and the budget's walk to every row settled.
-static void _time_editor(UISystem* ui, GlyphCache* face, size_t bytes, const char* label) {
+// hundred spread through it, a jump far down, a resize, and the budget's walk to every row settled;
+// with `vim`, the vim mode's keystrokes after.
+static void _time_editor(UISystem* ui, GlyphCache* face, size_t bytes, const char* label,
+                         bool vim) {
     size_t len = 0;
     char* text = _code(bytes, &len);
     if (!text)
@@ -390,6 +432,8 @@ static void _time_editor(UISystem* ui, GlyphCache* face, size_t bytes, const cha
         runs[r] = _now_ms() - t0;
     }
     _say(label, "resize_ms", runs);
+    if (vim)
+        _time_vim(ui, ed, doc, label);
     ui_pop(ui);
     free_text_doc(doc);
 }
@@ -422,9 +466,9 @@ int run_ui_bench(UISystem* ui, const Font* font) {
     _time_atlas();
     GlyphCache* face = create_glyph_cache(EDITOR_FONT, 26.0f);
     if (face) {
-        _time_editor(ui, face, 80 * 1024, "editor80k");
-        _time_editor(ui, face, 10 * 1024 * 1024, "editor10m");
-        _time_editor(ui, face, 64 * 1024 * 1024, "editor64m");
+        _time_editor(ui, face, 80 * 1024, "editor80k", false);
+        _time_editor(ui, face, 10 * 1024 * 1024, "editor10m", true);
+        _time_editor(ui, face, 64 * 1024 * 1024, "editor64m", false);
         free_glyph_cache(face);
     }
     return 0;

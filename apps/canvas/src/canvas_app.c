@@ -1676,18 +1676,23 @@ static void* parse_thread(void* arg) {
 }
 
 // The vim mode's state on the line under the editor, as vim's own status line shows it, with the
-// keys of a command half typed at its end -- or what the last line typed came to.
+// keys of a command half typed at its end -- less the line's own kind while a line is typed, which
+// stands before the field -- or what the last line typed came to.
 static void editor_vim_status(EditorSheet* s) {
     if (!s->vim || !s->status)
         return;
     static const char* const SHOWN[] = {"", "-- INSERT --", "-- VISUAL --", "-- VISUAL LINE --",
                                         "-- VISUAL BLOCK --"};
     char text[sizeof(s->status_text)];
+    const char* pending = ui_editor_vim_pending(s->vim);
+    int keys = (int)strlen(pending);
+    if (s->kind && keys && pending[keys - 1] == s->kind)
+        keys--;
     if (s->message[0] && !s->kind)
         snprintf(text, sizeof(text), "%s", s->message);
     else
-        snprintf(text, sizeof(text), "%-20s %s", SHOWN[ui_editor_vim_state(s->vim)],
-                 ui_editor_vim_pending(s->vim));
+        snprintf(text, sizeof(text), "%-20s %.*s", SHOWN[ui_editor_vim_state(s->vim)], keys,
+                 pending);
     if (strcmp(text, s->status_text)) {
         memcpy(s->status_text, text, sizeof(text));
         ui_set_text(s->status, text);
