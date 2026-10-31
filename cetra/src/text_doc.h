@@ -116,9 +116,11 @@ struct TextDoc {
     void* highlight_user;
     bool highlight_stateful;
     size_t highlight_known; // stateful: lines below this have the state they leave worked out
-    size_t span_lines;      // lines holding their spans
+    TextSpan* span_ring;   // the lines' spans, written in turn: a line's are lost once written over
+    uint64_t span_written; // spans written into the ring since the text was made
     TextSpan* span_scratch; // what a highlighter writes into
     size_t span_scratch_capacity;
+    bool telling; // inside on_action, where the text is not changed
     TextRange* ranges[TEXT_DOC_LAYERS];
     size_t range_count[TEXT_DOC_LAYERS];
     size_t range_capacity[TEXT_DOC_LAYERS];
@@ -176,7 +178,8 @@ bool text_doc_set_ranges(TextDoc* doc, int layer, uint64_t version, const TextRa
 // inside something an earlier line opened -- C's /* */ -- so each line's colour waits on the
 // line above; with it false every line starts from state 0 and is coloured on its own.
 void text_doc_set_highlighter(TextDoc* doc, TextHighlightFn fn, void* user, bool stateful);
-// Told of every action once it is made, from any editor showing the text.
+// Told of every action once it is made, from any editor showing the text. The text is not changed
+// from inside it: a change asked for there is refused by name.
 void text_doc_set_on_action(TextDoc* doc, TextDocActionFn fn, void* user);
 
 // The last step taken back, or put back again: the editor that made it is given its selections

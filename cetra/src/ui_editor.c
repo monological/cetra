@@ -330,11 +330,16 @@ static size_t _sel_max(const TextSelection* s) {
 static size_t _edge(TextDoc* doc, size_t offset) {
     if (offset > doc->length)
         offset = doc->length;
-    char byte = 0;
-    while (offset > 0 && offset < doc->length && text_doc_copy(doc, offset, offset + 1, &byte) &&
-           text_utf8_is_continuation(byte))
+    while (offset > 0 && text_utf8_is_continuation(text_doc_byte(doc, offset)))
         offset--;
     return offset;
+}
+
+// Whether selection a comes before b: by start, then by end, so a caret comes before a selection
+// starting where it is.
+static bool _sel_before(const TextSelection* a, const TextSelection* b) {
+    const size_t x = _sel_min(a), y = _sel_min(b);
+    return x < y || (x == y && _sel_max(a) < _sel_max(b));
 }
 
 typedef struct {
@@ -343,46 +348,66 @@ typedef struct {
     bool primary;
 } Caret;
 
-static int _by_caret_start(const void* a, const void* b) {
-    const size_t x = _sel_min(&((const Caret*)a)->s), y = _sel_min(&((const Caret*)b)->s);
-    return x < y ? -1 : x > y ? 1 : 0;
+static int _by_caret(const void* a, const void* b) {
+    const TextSelection* x = &((const Caret*)a)->s;
+    const TextSelection* y = &((const Caret*)b)->s;
+    return _sel_before(x, y) ? -1 : _sel_before(y, x) ? 1 : 0;
 }
 
-// Sorted by start and merged where they overlap, or are carets at one place, the primary followed.
-static void _normalize(UIEditor* ed) {
-    if (!ed->sel_count)
+// The selections in order, the primary followed.
+static void _sort(UIEditor* ed) {
+    size_t i = 1;
+    while (i < ed->sel_count && !_sel_before(&ed->sel[i], &ed->sel[i - 1]))
+        i++;
+    if (i >= ed->sel_count)
         return;
     Caret* c = malloc(ed->sel_count * sizeof(Caret));
     if (!c)
         return;
-    for (size_t i = 0; i < ed->sel_count; i++)
+    for (i = 0; i < ed->sel_count; i++)
         c[i] = (Caret){ed->sel[i], ed->want[i], i == ed->primary};
-    qsort(c, ed->sel_count, sizeof(Caret), _by_caret_start);
-    size_t n = 0;
-    for (size_t i = 0; i < ed->sel_count; i++) {
-        if (n) {
-            Caret* last = &c[n - 1];
-            const size_t lo = _sel_min(&c[i].s), hi = _sel_max(&c[i].s);
-            const size_t llo = _sel_min(&last->s), lhi = _sel_max(&last->s);
-            if (lo < lhi || (lo == lhi && lo == hi && llo == lhi)) {
-                const size_t to = hi > lhi ? hi : lhi;
-                const bool forward = last->s.head >= last->s.anchor;
-                last->s = forward ? (TextSelection){llo, to} : (TextSelection){to, llo};
-                last->primary |= c[i].primary;
-                continue;
-            }
-        }
-        c[n++] = c[i];
-    }
-    ed->sel_count = n;
-    ed->primary = n - 1;
-    for (size_t i = 0; i < n; i++) {
+    qsort(c, ed->sel_count, sizeof(Caret), _by_caret);
+    for (i = 0; i < ed->sel_count; i++) {
         ed->sel[i] = c[i].s;
         ed->want[i] = c[i].want;
         if (c[i].primary)
             ed->primary = i;
     }
     free(c);
+}
+
+// Selections in order merged where they overlap, or touch where either is a caret, in place, the
+// primary followed. A merged selection runs the way the first that is not a caret ran.
+static void _merge(UIEditor* ed) {
+    size_t n = 0;
+    for (size_t i = 0; i < ed->sel_count; i++) {
+        if (n) {
+            TextSelection* last = &ed->sel[n - 1];
+            const TextSelection* s = &ed->sel[i];
+            const size_t lo = _sel_min(s), hi = _sel_max(s);
+            const size_t llo = _sel_min(last), lhi = _sel_max(last);
+            if (lo < lhi || (lo == lhi && (lo == hi || llo == lhi))) {
+                const size_t to = hi > lhi ? hi : lhi;
+                const TextSelection* way = llo == lhi ? s : last;
+                *last =
+                    way->head >= way->anchor ? (TextSelection){llo, to} : (TextSelection){to, llo};
+                if (ed->primary == i)
+                    ed->primary = n - 1;
+                continue;
+            }
+        }
+        ed->sel[n] = ed->sel[i];
+        ed->want[n] = ed->want[i];
+        if (ed->primary == i)
+            ed->primary = n;
+        n++;
+    }
+    ed->sel_count = n;
+}
+
+static void _normalize(UIEditor* ed) {
+    _sort(ed);
+    _merge(ed);
 }
 
 static bool _room(UIEditor* ed, size_t count) {
@@ -407,8 +432,10 @@ static void _set(UIEditor* ed, const TextSelection* s, size_t count) {
 
 // ---- The text's calls
 
-static void _view_lines(void* view, size_t first, size_t removed, size_t inserted) {
-    UIEditor* ed = view;
+// The lines a change rewrote: their row counts unknown, the view kept at its place in the text --
+// a line above the change stays, one below it moves with its lines, and one the change rewrote is
+// held to what replaced it, which is at least one line.
+static void _change_lines(UIEditor* ed, size_t first, size_t removed, size_t inserted) {
     const size_t count = ed->doc->line_count;
     const size_t old = count - inserted + removed;
     if (!grow_array((void**)&ed->rows, &ed->line_capacity, count, sizeof(uint32_t), 64) ||
@@ -416,38 +443,35 @@ static void _view_lines(void* view, size_t first, size_t removed, size_t inserte
         return;
     for (size_t i = first; i < first + removed; i++)
         ed->guessed -= ed->rows[i] == 0;
-    memmove(&ed->rows[first + inserted], &ed->rows[first + removed],
-            (old - first - removed) * sizeof(uint32_t));
+    if (inserted != removed)
+        memmove(&ed->rows[first + inserted], &ed->rows[first + removed],
+                (old - first - removed) * sizeof(uint32_t));
     memset(&ed->rows[first], 0, inserted * sizeof(uint32_t));
     ed->guessed += inserted;
     if (ed->tops_good > first)
         ed->tops_good = first;
-    // The view keeps its place in the text: a line above the change stays, one below it moves with
-    // its lines, and one the change rewrote is held to what replaced it.
     if (ed->top_line >= first + removed) {
         ed->top_line = ed->top_line - removed + inserted;
     } else if (ed->top_line >= first) {
         const size_t into = ed->top_line - first;
-        ed->top_line = first + (inserted && into < inserted ? into : (inserted ? inserted - 1 : 0));
-    }
-    if (ed->top_line >= count) {
-        ed->top_line = count - 1;
-        ed->top_row = 0;
+        ed->top_line = first + (into < inserted ? into : inserted - 1);
     }
 }
 
-static void _view_map(void* view, size_t start, size_t removed, size_t inserted, bool actor) {
+static void _view_changed(void* view, const TextViewChange* c) {
     UIEditor* ed = view;
+    _change_lines(ed, c->first_line, c->lines_removed, c->lines_inserted);
+    if (c->held)
+        return;
+    // A change moves every offset the same way, so the selections stay in order.
     for (size_t i = 0; i < ed->sel_count; i++) {
-        TextSelection* s = &ed->sel[i];
-        const TextSelection was = *s;
-        s->anchor = text_doc_map_offset(s->anchor, start, removed, inserted, actor);
-        s->head = text_doc_map_offset(s->head, start, removed, inserted, actor);
-        if (s->head != was.head)
+        const size_t was = ed->sel[i].head;
+        text_doc_map_selection(&ed->sel[i], c);
+        if (ed->sel[i].head != was)
             ed->want[i] = -1;
     }
-    _normalize(ed);
-    if (actor)
+    _merge(ed);
+    if (c->actor)
         ed->caret_moved = true;
 }
 
@@ -488,8 +512,7 @@ UIEditor* ui_editor_make(UIElement* el, TextDoc* doc) {
     ed->sel_count = 1;
     text_doc_add_view(doc, &(TextDocView){.view = ed,
                                           .element = el,
-                                          .lines = _view_lines,
-                                          .map = _view_map,
+                                          .changed = _view_changed,
                                           .selections = _view_selections,
                                           .set_selections = _view_set,
                                           .gone = _view_gone});
@@ -1054,43 +1077,41 @@ static size_t _line_first(UIEditor* ed, size_t offset) {
     return l.at + i;
 }
 
-// A byte of the text, 0 past its end.
-static char _byte(UIEditor* ed, size_t offset) {
-    char c = 0;
-    if (offset < ed->doc->length)
-        text_doc_copy(ed->doc, offset, offset + 1, &c);
-    return c;
-}
-
 static const char BRACKET_OPEN[] = "([{";
 static const char BRACKET_CLOSE[] = ")]}";
 
 // From an opening bracket at `from`, its closer: or from a closer, its opener; SIZE_MAX for none.
+// Read a line's content at a time, since no line ending holds a bracket.
 static size_t _bracket_match(UIEditor* ed, size_t from) {
-    const char c = _byte(ed, from);
+    const char c = text_doc_byte(ed->doc, from);
     const char* o = c ? strchr(BRACKET_OPEN, c) : NULL;
     const char* k = c ? strchr(BRACKET_CLOSE, c) : NULL;
     if (!o && !k)
         return SIZE_MAX;
     const char open = o ? c : BRACKET_OPEN[k - BRACKET_CLOSE];
     const char close = o ? BRACKET_CLOSE[o - BRACKET_OPEN] : c;
+    const int sign = o ? 1 : -1; // the depth the bracket at `from` opens, walking away from it
     int depth = 0;
-    if (o) {
-        for (size_t i = from; i < ed->doc->length; i++) {
-            const char b = _byte(ed, i);
-            depth += b == open ? 1 : b == close ? -1 : 0;
-            if (!depth)
-                return i;
-        }
-    } else {
-        for (size_t i = from + 1; i-- > 0;) {
-            const char b = _byte(ed, i);
-            depth += b == close ? 1 : b == open ? -1 : 0;
-            if (!depth)
-                return i;
+    size_t line = text_doc_line_of(ed->doc, from);
+    for (Line l = _line_at(ed, line);; l = _line_at(ed, o ? ++line : --line)) {
+        if (o) {
+            for (size_t i = l.at < from ? from - l.at : 0; i < l.len; i++) {
+                depth += l.s[i] == open ? sign : l.s[i] == close ? -sign : 0;
+                if (!depth)
+                    return l.at + i;
+            }
+            if (line + 1 >= ed->doc->line_count)
+                return SIZE_MAX;
+        } else {
+            for (size_t i = from - l.at < l.len ? from - l.at + 1 : l.len; i-- > 0;) {
+                depth += l.s[i] == open ? sign : l.s[i] == close ? -sign : 0;
+                if (!depth)
+                    return l.at + i;
+            }
+            if (!line)
+                return SIZE_MAX;
         }
     }
-    return SIZE_MAX;
 }
 
 static bool _is_word_byte(char c) {
@@ -1245,21 +1266,24 @@ bool ui_editor_object(UIElement* el, UIEditorObject object, size_t offset, TextS
         }
         case UI_OBJECT_BRACKETS:
         case UI_OBJECT_BRACKETS_INNER: {
-            // Back to the innermost opener not closed before the caret, then on to its closer.
+            // Back to the innermost opener not closed before the caret, a line at a time, then on
+            // to its closer.
             int depth[3] = {0, 0, 0};
-            for (size_t i = offset; i-- > 0;) {
-                const char c = _byte(ed, i);
-                const char* k = strchr(BRACKET_CLOSE, c);
-                const char* o = strchr(BRACKET_OPEN, c);
-                if (c && k)
-                    depth[k - BRACKET_CLOSE]++;
-                else if (c && o && depth[o - BRACKET_OPEN]-- == 0) {
-                    const size_t close = _bracket_match(ed, i);
-                    if (close == SIZE_MAX || close < offset)
-                        return false;
-                    *out = object == UI_OBJECT_BRACKETS ? (TextSelection){i, close + 1}
-                                                        : (TextSelection){i + 1, close};
-                    return true;
+            for (size_t line = text_doc_line_of(ed->doc, offset) + 1; line-- > 0;) {
+                const Line l = _line_at(ed, line);
+                for (size_t i = offset - l.at < l.len ? offset - l.at : l.len; i-- > 0;) {
+                    const char* k = l.s[i] ? strchr(BRACKET_CLOSE, l.s[i]) : NULL;
+                    const char* o = l.s[i] ? strchr(BRACKET_OPEN, l.s[i]) : NULL;
+                    if (k) {
+                        depth[k - BRACKET_CLOSE]++;
+                    } else if (o && depth[o - BRACKET_OPEN]-- == 0) {
+                        const size_t at = l.at + i, close = _bracket_match(ed, at);
+                        if (close == SIZE_MAX || close < offset)
+                            return false;
+                        *out = object == UI_OBJECT_BRACKETS ? (TextSelection){at, close + 1}
+                                                            : (TextSelection){at + 1, close};
+                        return true;
+                    }
                 }
             }
             return false;
@@ -1313,14 +1337,47 @@ static int _by_edit_start(const void* a, const void* b) {
     return x < y ? -1 : x > y ? 1 : 0;
 }
 
-// Applies edits from every caret as one action, those that overlap merged, and follows the
-// primary caret.
+// Where edits in order, none overlapping, leave the selections. A selection an edit covers -- the
+// last edit starting at or before it, when that one reaches its end -- becomes a caret after what
+// the edit writes, which is the caret's own edit even where another ends at it. Any other's ends
+// are moved through every edit as an actor's. NULL out of memory.
+static TextSelection* _landed(const UIEditor* ed, const TextEdit* e, size_t n) {
+    TextSelection* out = malloc(ed->sel_count * sizeof(TextSelection));
+    if (!out)
+        return NULL;
+    size_t k = 0;        // edits starting at or before the selection
+    long long below = 0; // what the edits before e[k - 1] added
+    for (size_t i = 0; i < ed->sel_count; i++) {
+        const TextSelection* s = &ed->sel[i];
+        const size_t lo = _sel_min(s), hi = _sel_max(s);
+        for (; k < n && e[k].start <= lo; k++)
+            if (k)
+                below += (long long)e[k - 1].len - (long long)(e[k - 1].end - e[k - 1].start);
+        if (k && e[k - 1].end >= hi) {
+            const size_t to = (size_t)((long long)e[k - 1].start + below) + e[k - 1].len;
+            out[i] = (TextSelection){to, to};
+            continue;
+        }
+        out[i] = *s;
+        for (size_t j = n; j-- > 0;) {
+            const size_t removed = e[j].end - e[j].start;
+            out[i].anchor = text_doc_map_offset(out[i].anchor, e[j].start, removed, e[j].len, true);
+            out[i].head = text_doc_map_offset(out[i].head, e[j].start, removed, e[j].len, true);
+        }
+    }
+    return out;
+}
+
+// Applies edits from every caret as one action, those that overlap merged and those that change
+// nothing dropped, and follows the primary caret.
 static void _edit(UIEditor* ed, TextEdit* edits, size_t n, bool typed) {
     if (!n)
         return;
     qsort(edits, n, sizeof(TextEdit), _by_edit_start);
     size_t kept = 0;
     for (size_t i = 0; i < n; i++) {
+        if (edits[i].start == edits[i].end && !edits[i].len)
+            continue;
         if (kept && edits[i].start < edits[kept - 1].end) {
             if (edits[i].end > edits[kept - 1].end)
                 edits[kept - 1].end = edits[i].end;
@@ -1328,9 +1385,22 @@ static void _edit(UIEditor* ed, TextEdit* edits, size_t n, bool typed) {
         }
         edits[kept++] = edits[i];
     }
-    text_doc_apply(ed->doc, edits, kept, ed, typed);
-    for (size_t i = 0; i < ed->sel_count; i++)
+    if (!kept)
+        return;
+    TextSelection* after = _landed(ed, edits, kept);
+    const bool ok =
+        text_doc_apply(ed->doc, edits, kept, ed, after, after ? ed->sel_count : 0, typed);
+    // The action leaves the selections where they landed, in order with the primary kept; any
+    // part of an action made out of memory leaves them held to the text.
+    for (size_t i = 0; i < ed->sel_count; i++) {
+        if (ok && after)
+            ed->sel[i] = after[i];
+        ed->sel[i] =
+            (TextSelection){_edge(ed->doc, ed->sel[i].anchor), _edge(ed->doc, ed->sel[i].head)};
         ed->want[i] = -1;
+    }
+    free(after);
+    _merge(ed);
     ed->caret_moved = true;
     ui_editor_reveal(ed->el, ed->sel[ed->primary].head);
 }
