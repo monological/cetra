@@ -26199,6 +26199,11 @@ _VIM_SEQUENCES = [
     "<C-v>jlV", "vj<C-v>", "Vj<C-v>d", "<C-v>jlyjj<C-v>jp", "<C-v>jly3p", "<C-v>jlp",
     "<C-v>jlyjj<C-v>jP", "yiw<C-v>jp", "yiw<C-v>jlP", "yy<C-v>jp", "yy<C-v>jP", "<C-v>jlpu",
     "yiw<C-v>jpu", "yiw<C-v>j2p", "yy<C-v>jPu",
+    # What the random sequences found, held here where no seed has to happen on it: a closer before
+    # the next opener using it up, a put from nothing undone, Esc taking an autoindent, a change
+    # made again that fails, and P made again.
+    "Goq) (z)<Esc>^da(", "Goq) (z)<Esc>^di(", "Goq (z)<Esc>^da(", "Jpuu", "o<Esc>k", "A<CR><Esc>k",
+    "cca<CR>b<Esc>G2.", "ywwvP.p", "<C-v>2jly$p",
     # Search, and the command line. A line let go ends its sequence: fed as typeahead, vim drops
     # the keys after it, where typed ones go on.
     "/a<CR>", "/a<CR>n", "/a<CR>N", "?a<CR>", "?a<CR>n", "?a<CR>N", "2/a<CR>", "/a<CR>3n",
