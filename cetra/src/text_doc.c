@@ -150,6 +150,7 @@ void free_text_doc(TextDoc* doc) {
         free(doc->ranges[i]);
     free(doc->typing.ends);
     free(doc->typing.last);
+    free(doc->group_before);
     free(doc->undo);
     free(doc->views);
     free(doc->lines);
@@ -625,12 +626,22 @@ void text_doc_seal_undo(TextDoc* doc) {
         doc->undo_sealed = true;
 }
 
-void text_doc_group(TextDoc* doc, bool open) {
+// The selections a group's step starts at, let go once its first action has taken them.
+static void _drop_group_before(TextDoc* doc) {
+    free(doc->group_before);
+    doc->group_before = NULL;
+    doc->group_before_count = 0;
+}
+
+void text_doc_group(TextDoc* doc, bool open, const void* view) {
     if (!doc)
         return;
     doc->grouping = open;
     doc->group_fresh = open;
     doc->undo_sealed = true;
+    _drop_group_before(doc);
+    if (open && view)
+        doc->group_before = _view_selections(doc, view, &doc->group_before_count);
 }
 
 void text_doc_empty_step(TextDoc* doc, void* view) {
@@ -758,11 +769,17 @@ bool text_doc_apply(TextDoc* doc, const TextEdit* edits, size_t count, void* vie
         TextSelection* now = after ? NULL : _view_selections(doc, view, &now_count);
         const TextSelection* left = after ? after : now;
         const Keep how = _joining(doc, changes, made, view, typed);
+        // A group's first action is kept and told from where the group began.
+        const bool first = how == KEEP_STEP && doc->group_before;
+        const TextSelection* was = first ? doc->group_before : before;
+        const size_t was_count = first ? doc->group_before_count : before_count;
         if (made == count)
-            _keep(doc, how, changes, made, before, before_count, left, now_count, view);
+            _keep(doc, how, changes, made, was, was_count, left, now_count, view);
         _note_typing(doc, changes, made, view, typed && made == count);
         doc->undo_sealed = !typed;
-        _tell(doc, changes, made, before, before_count, left, now_count, view, version);
+        _tell(doc, changes, made, was, was_count, left, now_count, view, version);
+        if (first)
+            _drop_group_before(doc);
         free(now);
     }
     free(before);
@@ -798,6 +815,7 @@ static bool _step(TextDoc* doc, void* view, bool undo) {
     if (v && !v->set_selections)
         v = NULL;
     doc->grouping = false;
+    _drop_group_before(doc);
     doc->typing.count = 0;
     doc->step++;
     for (size_t p = 0; p < s->part_count; p++) {
@@ -889,6 +907,7 @@ bool text_doc_replace(TextDoc* doc, size_t start, size_t end, const char* text, 
     doc->typing.count = 0;
     doc->undo_sealed = true;
     doc->group_fresh = doc->grouping;
+    _drop_group_before(doc);
     if (ok)
         _keep(doc, KEEP_STEP, change, 1, NULL, 0, NULL, 0, NULL);
     free(change);

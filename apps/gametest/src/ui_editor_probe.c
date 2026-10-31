@@ -1402,11 +1402,11 @@ static int probe_editor_steps(UISystem* ui) {
                  g_step_count == 4 && g_steps[0] == g_steps[1] && g_steps[2] != g_steps[1] &&
                      g_steps[3] == g_steps[2]);
         g_step_count = 0;
-        text_doc_group(doc, true);
+        text_doc_group(doc, true, NULL);
         type(ui, "x");
         key(ui, GLFW_KEY_BACKSPACE, 0);
         type(ui, "yz");
-        text_doc_group(doc, false);
+        text_doc_group(doc, false, NULL);
         type(ui, "w");
         bool grouped = g_step_count == 5 && g_steps[0] != 0;
         for (int i = 1; grouped && i < 4; i++)
@@ -1618,6 +1618,82 @@ static int probe_vim_state(UISystem* ui) {
     ui_editor_point_of(ed, 3, &ex, &ey);
     press_drag(ui, ex + 400.0f, ey + 2.0f, ex + 400.0f, ey + 2.0f, 0);
     say_flag("vim-state", "click", "held", one_selection(ed, 10, 10));
+    // The visual modes, each named and drawn its own way, and Esc back to normal mode.
+    static const struct {
+        const char* keys;
+        UIEditorVimState state;
+        const char* name;
+        UIEditorSelectionShape shape;
+    } VISUAL[] = {{"v", UI_VIM_VISUAL, "VISUAL", UI_SELECTION_INCLUSIVE},
+                  {"V", UI_VIM_VISUAL_LINE, "V-LINE", UI_SELECTION_LINES},
+                  {"<C-v>", UI_VIM_VISUAL_BLOCK, "V-BLOCK", UI_SELECTION_INCLUSIVE}};
+    bool visual = true;
+    for (size_t i = 0; i < sizeof(VISUAL) / sizeof(VISUAL[0]); i++) {
+        vim_keys(ui, VISUAL[i].keys);
+        visual = visual && ui_editor_vim_state(vim) == VISUAL[i].state &&
+                 !strcmp(ui_editor_mode(ed)->name, VISUAL[i].name) &&
+                 ui_editor_mode(ed)->selection == VISUAL[i].shape;
+    }
+    vim_keys(ui, "<Esc>");
+    say_flag("vim-state", "visual", "named",
+             visual && ui_editor_vim_state(vim) == UI_VIM_NORMAL && one_selection(ed, 10, 10));
+    // A drag from the first character to the fifth: visual mode over the five, its head on the
+    // last it reached.
+    float x4 = 0.0f;
+    ui_editor_point_of(ed, 4, &x4, &y);
+    press_drag(ui, x0 + 1.0f, y + 2.0f, x4 + cell * 0.6f, y + 2.0f, 0);
+    say_flag("vim-state", "drag", "visual",
+             ui_editor_vim_state(vim) == UI_VIM_VISUAL && one_selection(ed, 0, 4));
+    ui_editor_set_mode(ed, NULL);
+    free_text_doc(doc);
+    free_ui_editor_vim(vim);
+    return 0;
+}
+
+#define VIM_CARETS_TEXT "alpha beta\nalpha beta\nalpha beta\n"
+
+// The carets at the first character of each line, as a host would put them.
+static void three_carets(UIElement* ed) {
+    const TextSelection three[] = {{0, 0}, {11, 11}, {22, 22}};
+    ui_editor_set_selections(ed, three, 3);
+}
+
+// Several carets, which vim itself has none of: a block's I and A type on every line and leave one
+// cursor at its top left, which undo puts back; and each of several carets takes a count, an
+// operator over a motion, and a visual area of its own.
+static int probe_vim_carets(UISystem* ui) {
+    TextDoc* doc = create_text_doc(VIM_CARETS_TEXT, strlen(VIM_CARETS_TEXT));
+    UIEditorVim* vim = create_ui_editor_vim();
+    UIElement* ed = vim_fixture(ui, doc, vim, 6);
+    vim_keys(ui, "<C-v>jjI");
+    say_flag("vim-carets", "block", "insert",
+             ui_editor_vim_state(vim) == UI_VIM_INSERT &&
+                 ui_editor_selections(ed, NULL, NULL) == 3);
+    vim_keys(ui, "Z<Esc>");
+    say_flag("vim-carets", "block", "typed",
+             doc_is_str(doc, "alpha Zbeta\nalpha Zbeta\nalpha Zbeta\n") && one_selection(ed, 6, 6));
+    vim_keys(ui, "u");
+    say_flag("vim-carets", "block", "undone",
+             doc_is_str(doc, VIM_CARETS_TEXT) && one_selection(ed, 6, 6));
+    vim_keys(ui, "<C-v>jjeAZ<Esc>");
+    say_flag("vim-carets", "block", "append",
+             doc_is_str(doc, "alpha betaZ\nalpha betaZ\nalpha betaZ\n") && one_selection(ed, 6, 6));
+    vim_keys(ui, "u");
+    three_carets(ed);
+    vim_keys(ui, "3x");
+    say_flag("vim-carets", "count", "each",
+             doc_is_str(doc, "ha beta\nha beta\nha beta\n") &&
+                 ui_editor_selections(ed, NULL, NULL) == 3);
+    vim_keys(ui, "u");
+    three_carets(ed);
+    vim_keys(ui, "dw");
+    say_flag("vim-carets", "operator", "each", doc_is_str(doc, "beta\nbeta\nbeta\n"));
+    vim_keys(ui, "u");
+    three_carets(ed);
+    vim_keys(ui, "vlld");
+    say_flag("vim-carets", "visual", "each",
+             doc_is_str(doc, "ha beta\nha beta\nha beta\n") &&
+                 ui_editor_vim_state(vim) == UI_VIM_NORMAL);
     ui_editor_set_mode(ed, NULL);
     free_text_doc(doc);
     free_ui_editor_vim(vim);
@@ -1842,5 +1918,7 @@ int run_ui_editor_probe(Game* game, UISystem* ui, Font* font, const char* which)
         return probe_vim_undo(ui);
     if (!strcmp(which, "vim-host"))
         return probe_vim_host(ui);
+    if (!strcmp(which, "vim-carets"))
+        return probe_vim_carets(ui);
     return -1;
 }

@@ -26162,7 +26162,50 @@ _VIM_SEQUENCES = [
     "dw.", "dd.", "x..", "cwZ<Esc>w.", "x3.", "AZ<Esc>j.", "iab<Esc>2.", "Afoo<Esc>u",
     "ihello<Esc>u<C-r>", "dwu", "ddu", "xxu", "xxuu", "dwu<C-r>", "3dd.u", "yku", "dju", "dku",
     "cwZ<Esc>u", "Jxu", ">>u", "g~~u", "ddu<C-r>", "xpu<C-r>", "d0u", "x<Esc>u", "jxu",
+    # Text objects after an operator, and repeated.
+    "diw", "daw", "diW", "daW", "d2aw", "d3iw", "c2iwZ<Esc>", "di(", "da(", "di)", "di[", "da[",
+    "di{", "da{", "di<", "da<", "dib", "dab", "diB", "daB", "2di(", "2da(", "ci(Z<Esc>", "yi(P",
+    "ya(p", 'di"', 'da"', "di'", "da'", "di`", 'ci"Z<Esc>', "dip", "dap", "d2ap", "d2ip", "yapP",
+    "cipZ<Esc>", ">ip", "gUiw", "g~aw", "guap", "diw.", "daw.", "di(u", "ciwZ<Esc>w.",
+    # Visual and visual line mode: moving, switching, and every operator over the area.
+    "v", "vl", "vj", "vjj", "vk", "v$", "v0", "vw", "vb", "ve", "vG", "vgg", "v<Esc>", "vj<Esc>",
+    "vjo", "vjv", "vjV", "V", "Vj", "Vk", "vd", "vjd", "vkd", "v$d", "vwd", "vjjd", "vx", "vjX",
+    "vjD", "Vd", "Vjd", "Vkd", "VGd", "Vggd", "vy", "vjy", "vky", "Vjy", "Vky", "vjY", "vjyP",
+    "Vjyp", "vjcZ<Esc>", "VjcZ<Esc>", "vjCZ<Esc>", "vjSZ<Esc>", "vjRZ<Esc>", "vjsZ<Esc>", "vj>",
+    "vj<", "Vj>", "V3>", "vj~", "vjU", "vju", "Vg~", "vjgU", "vjJ", "vJ", "VjjJ", "vjgJ", "vrx",
+    "vjrx", "Vrx", "vjIZ<Esc>", "vjAZ<Esc>", "vkAZ<Esc>", "v$AZ<Esc>", "VIZ<Esc>", "VAZ<Esc>",
+    "vj$AZ<Esc>", "vj0AZ<Esc>",
+    # Puts over an area, repeats of a visual change, undo, and counts before v and V.
+    "yiwvp", "yiwvep", "yiwveP", "yyvep", "yyVp", "yiwVp", "yiwVjp", "yyVjP", "ywvjp", "yy3Vp",
+    "yiwv$p", "yiwvj$p", "yyv$p", "vepu", "yiwvepu<C-r>", "yiwvepp", "yiwvePp", "vjdj.", "vlld.",
+    "Vjd.", "vj>.", "vj~j.", "vjrxj.", "VjcZ<Esc>j.", "vjcZ<Esc>j.", "vjJj.", "vjUu", "vjdu",
+    "Vjdu<C-r>", "vjcZ<Esc>u", "vjrxu", "vjJu", "vj>u", "3vd", "3Vd", "2vy", "vjy2v", "vly3vd",
+    "Vjy2Vd", "vjjd2.", "V2>", "vj3<",
+    # Text objects in visual mode, made and grown.
+    "viw", "vaw", "viW", "vaW", "v2iw", "v3aw", "viwiw", "vawaw", "viwiwd", "vawawd", "vi(", "va(",
+    "vi(d", "va(d", "vi(i(", "va(a(", "vi(i(d", "vib", "vab", "vi[", "va[", "vi{", "va{", "vi<",
+    "va<", "v2i(", "v2a(d", "vip", "vap", "vipd", "vapd", "vipip", "vapap", "v2ip", "v2ap",
+    "vipipd", "Vip", "Vap", "Vipd", "viwy", 'vi"', 'va"', 'vi"d', 'va"d', "vi'", "viwcZ<Esc>",
+    "Viw", "Viwd", "Vi(", "vjiw", "vjiwd", "vkiw", "vkiwd", "vjip", "vkap", "vlaw", "vhiw", "vhaw",
+    "vbiw", "vbaw", "vkip", "vjjip",
+    # Visual block mode.
+    "<C-v>", "<C-v>j", "<C-v>jl", "<C-v>jjl", "<C-v>j$", "<C-v>jo", "<C-v>jlO", "<C-v>j<Esc>",
+    "<C-v>jld", "<C-v>jjld", "<C-v>jlx", "<C-v>jlX", "<C-v>jD", "<C-v>jly", "<C-v>jlY",
+    "<C-v>jlyP", "<C-v>jlyp", "<C-v>jlyjp", "<C-v>jly$p", "<C-v>jlcZ<Esc>", "<C-v>jCZ<Esc>",
+    "<C-v>jSZ<Esc>", "<C-v>jIZ<Esc>", "<C-v>jlAZ<Esc>", "<C-v>j$AZ<Esc>", "<C-v>jjIZ<Esc>",
+    "<C-v>jjlAZ<Esc>", "<C-v>jlrx", "<C-v>jl~", "<C-v>jlU", "<C-v>jlu", "<C-v>j>", "<C-v>j<",
+    "<C-v>j2>", "<C-v>jJ", "<C-v>jgJ", "<C-v>jldu", "<C-v>jlIZ<Esc>u", "<C-v>jldj.",
+    "<C-v>jIZ<Esc>j.", "<C-v>jlrxj.", "<C-v>jlyGp", "<C-v>jlyGP", "2<C-v>", "<C-v>jlv",
+    "<C-v>jlV", "vj<C-v>", "Vj<C-v>d", "<C-v>jlyjj<C-v>jp", "<C-v>jly3p", "<C-v>jlp",
+    "<C-v>jlyjj<C-v>jP", "yiw<C-v>jp", "yiw<C-v>jlP", "yy<C-v>jp", "yy<C-v>jP", "<C-v>jlpu",
+    "yiw<C-v>jpu", "yiw<C-v>j2p", "yy<C-v>jPu",
 ]
+
+# What the corpus leaves out on a fixture, each a place the vim mode differs from vim on purpose:
+# vim's A after an area ending on a character of several bytes inserts inside that character.
+_VIM_NOT_ON = {
+    "utf8": {"vjAZ<Esc>", "vkAZ<Esc>", "VAZ<Esc>", "vj0AZ<Esc>"},
+}
 
 
 def _vim_corpus(sequences):
@@ -26170,7 +26213,9 @@ def _vim_corpus(sequences):
     by the sequence's place in the list so every start is used."""
     cases = []
     for j, keys in enumerate(sequences):
-        for text in _VIM_FIXTURES.values():
+        for name, text in _VIM_FIXTURES.items():
+            if keys in _VIM_NOT_ON.get(name, ()):
+                continue
             starts = _vim_starts(text)
             for k in (0, 3, 7):
                 line, col = starts[(j + k) % len(starts)]
@@ -28116,15 +28161,20 @@ def run_ui_gate(workdir):
                      it again; the steps are the same with keep_undo off.
       ui-vim-oracle  the vim mode held to vim itself (spec 14.5): every sequence
                      of a fixed corpus -- each motion, operator and edit, with
-                     counts, operators over every kind of motion, `.`, undo and
-                     redo -- run on pcb-like texts, CRLF and letters past ASCII
-                     among them, through the mode and through vim 9 fed the keys
-                     as typed; the text, byte for byte, and the cursor must
-                     agree. Skips without vim on the path.
+                     counts, operators over every kind of motion and text object,
+                     the three visual modes and every operator over them, puts
+                     over an area, `.`, undo and redo -- run on pcb-like texts,
+                     CRLF, tabs and letters past ASCII among them, through the mode
+                     and through vim 9 fed the keys as typed; the text, byte for
+                     byte, and the cursor must agree. Skips without vim on the
+                     path.
       ui-vim-state   the vim mode's state as a host shows it: NORMAL and INSERT
                      named, a block caret and a bar, the keys of a half-typed
-                     command ("2d") shown and dropped by Esc, and a click past a
-                     line's end held on its last character.
+                     command ("2d") shown and dropped by Esc, a click past a line's
+                     end held on its last character, VISUAL, V-LINE and V-BLOCK
+                     named and drawn inclusive, as lines and as pieces, and a drag
+                     entering visual mode with its head on the last character it
+                     reached.
       ui-vim-undo    undo by vim's units: an insert from i to Esc, an Enter and a
                      Backspace in it, is one step, and cw with what it typed is
                      one -- undone and redone whole, and told to a host as one step
@@ -28133,6 +28183,10 @@ def run_ui_gate(workdir):
                      and takes the space its press makes, in insert mode hands the
                      key back and the space is typed; the host's undo takes u and
                      Ctrl+R.
+      ui-vim-carets  several carets, which vim has none of: Ctrl+V and I puts a
+                     caret on each line, Z typed at every one, Esc and then u each
+                     leaving one cursor at the block's top left; A after the block;
+                     and three carets each taking 3x, dw and vlld.
       ui-editor-script apps/canvas --editor on a file, driven by a script: a caret
                      added below, "XY" typed at both, undone, Esc to one caret, the
                      word at it taken by Cmd+D and found again round the text's end
@@ -29138,9 +29192,10 @@ def run_ui_gate(workdir):
         print(f"  ui-vim-oracle         {'PASS' if ok else 'FAIL'}  {detail}")
         note("ui-vim-oracle", ok)
 
-    ok, detail = doc_flags("vim-state", 8, "NORMAL and INSERT named, the block caret and the bar, "
-                           "the keys of a half-typed command shown and dropped by Esc, and a "
-                           "click past a line's end held on its last character")
+    ok, detail = doc_flags("vim-state", 10, "NORMAL and INSERT named, the block caret and the bar, "
+                           "the keys of a half-typed command shown and dropped by Esc, a click "
+                           "past a line's end held on its last character, the three visual modes "
+                           "named and drawn their own ways, and a drag entering visual mode")
     print(f"  ui-vim-state          {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-vim-state", ok)
 
@@ -29155,6 +29210,12 @@ def run_ui_gate(workdir):
                            "the host's name over vim's look, and the host's undo takes u and Ctrl+R")
     print(f"  ui-vim-host           {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-vim-host", ok)
+
+    ok, detail = doc_flags("vim-carets", 7, "a block's I a caret on each line, what is typed on "
+                           "every one, one cursor at the top left after Esc and after undo, A after "
+                           "the block; and each of three carets taking 3x, dw and a visual area")
+    print(f"  ui-vim-carets         {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-vim-carets", ok)
 
     # ---- the editor end to end: a file opened, two carets typed at, undone, a word found
     text_path = os.path.join(workdir, "editor_script.txt")
