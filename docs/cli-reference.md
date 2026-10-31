@@ -1869,7 +1869,9 @@ It takes the capture set `-x`, `-f`, `-S`, `-W` and `-H`, and:
   é, Ω and a codepoint the atlas lacks through it.
 - `--font-sheet` (spec 14.4) draws one line of code in JetBrains Mono at 11, 13 and 16 points, each
   first from the code editor's bitmaps made at the size shown and then as the UI's distance field
-  of the same face.
+  of the same face. The app's fonts are built into it (spec 14.6); under `--canvas-probe`, run from
+  the source root, it holds each to the file it was built from -- the bytes, the font and the
+  editor face made from them -- and prints `canvas fonts`, which `canvas-font-memory` reads.
 - `--editor FILE` (spec 14.4) opens FILE in the code editor over the whole window, focused, and
   stands in for pcb round it:
   - an S-expression highlighter on pcb's lexical rules (comments, strings, `:keywords`, numbers,
@@ -1885,7 +1887,20 @@ It takes the capture set `-x`, `-f`, `-S`, `-W` and `-H`, and:
   finished, so a headless run repeats. Under `--canvas-probe` the run prints
   the text as hex (`canvas editor hex`), the selections, the errors as they stand and where the
   first is drawn, and whether every row is wrapped (`canvas editor settled`), which the
-  `ui-editor-*` and `idle-editor` arms read.
+  `ui-editor-*` and `idle-editor` arms read -- of the focused pane, below.
+
+  `--editor` may be given up to eight times (spec 14.6), each file a text of its own with its own
+  parse, and the editors are panes, the first opening on the first file:
+  - F8 splits the focused pane: a row takes its place, it moves into the row, and a second editor
+    on the same text, with carets of its own, goes beside it and takes the focus;
+  - F9 closes the focused pane, the focus going to the pane left in its place; a row left holding
+    one pane hands it to the row's own parent. The last pane stays;
+  - F10 shows the next file in the focused pane, its carets and its view where that pane last was
+    in that file, brought through the edits made there since.
+
+  F6 and F7 act on the focused pane's file. Under `--canvas-probe` the run also prints each pane in
+  the window's order (`canvas pane K file F top OFFSET focused 0|1 sel ...`) and each file's text
+  as hex (`canvas file F`), which `canvas-panes` reads.
 - `--vim` (spec 14.5), with `--editor`, puts the editor in the vim mode, the app's own keys a
   layer over it. A line under the editor shows vim's state (`-- INSERT --`, `-- VISUAL --`...)
   and the keys of a half-typed command; `/`, `?` and `:` from normal mode type into it, a search
