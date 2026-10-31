@@ -113,11 +113,13 @@ struct TextDoc {
     size_t undo_count;  // steps that can be undone
     size_t redo_count;  // steps after them that can be redone
     size_t undo_capacity;
-    bool undo_sealed; // the next typing starts a step of its own
-    uint64_t step;    // the last action's step
-    bool grouping;    // a group holds the step open
-    bool group_fresh; // and its next action starts one
-    struct {          // the last action, while it was typing: where each caret's text ends
+    bool undo_sealed;            // the next typing starts a step of its own
+    uint64_t step;               // the last action's step
+    bool grouping;               // a group holds the step open
+    bool group_fresh;            // and its next action starts one
+    TextSelection* group_before; // the selections as the group opened, which its step starts at
+    size_t group_before_count;
+    struct { // the last action, while it was typing: where each caret's text ends
         const void* view;
         size_t* ends;
         char* last; // the last byte each caret typed

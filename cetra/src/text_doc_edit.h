@@ -89,9 +89,11 @@ bool text_doc_apply(TextDoc* doc, const TextEdit* edits, size_t count, void* vie
 // The next typing starts a step of its own: a caret moved.
 void text_doc_seal_undo(TextDoc* doc);
 // Opened, the next action starts a step and every action after it joins that step until it is
-// closed, whatever it is and whoever made it -- a vim mode's insert, from i to Esc. A host's edit
-// inside it is a step of its own, and the group's next action starts another.
-void text_doc_group(TextDoc* doc, bool open);
+// closed, whatever it is and whoever made it -- a vim mode's insert, from i to Esc. The step starts
+// at the editor `view`'s selections as the group opened, not its first action's: an insert at
+// several carets is taken back to the one cursor it began from. A host's edit inside it is a step
+// of its own, and the group's next action starts another.
+void text_doc_group(TextDoc* doc, bool open, const void* view);
 // A step of undo that changes nothing, which an undo takes back doing nothing but putting the
 // editor `view`'s selections back: vim's operator over nothing. Inside a group's step, nothing.
 void text_doc_empty_step(TextDoc* doc, void* view);
