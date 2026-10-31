@@ -193,7 +193,6 @@ void free_font_pool(FontPool* pool) {
             glDeleteTextures(1, &font->atlas_texture_id);
         free(font->kern_pairs);
         free(font->name);
-        free(font->filepath);
         free(font->ttf_buffer);
         free(font->stb_font_info);
         free(font);
@@ -463,18 +462,15 @@ static void generate_glyph_atlas(Font* font) {
 
 // The font the pool keeps under `name`, a reference more; NULL when it keeps none.
 static Font* _pooled(FontPool* pool, const char* name) {
-    Font* existing;
-    HASH_FIND_STR(pool->font_cache, name, existing);
-    if (existing)
-        existing->ref_count++;
+    Font* existing = get_font(pool, name);
+    font_retain(existing);
     return existing;
 }
 
 // The one way a font is made: from a TrueType file's bytes, which it takes and keeps, since
-// stb_truetype reads them for as long as the font lives. `filepath` is the file they were read
-// from, NULL for bytes handed in.
-static Font* _make_font(FontPool* pool, const char* name, const char* filepath,
-                        unsigned char* ttf_buffer, float base_size, bool use_sdf) {
+// stb_truetype reads them for as long as the font lives.
+static Font* _make_font(FontPool* pool, const char* name, unsigned char* ttf_buffer,
+                        float base_size, bool use_sdf) {
     stbtt_fontinfo* info = malloc(sizeof(stbtt_fontinfo));
     if (!info) {
         free(ttf_buffer);
@@ -497,7 +493,6 @@ static Font* _make_font(FontPool* pool, const char* name, const char* filepath,
     }
 
     font->name = safe_strdup(name);
-    font->filepath = filepath ? safe_strdup(filepath) : NULL;
     font->ttf_buffer = ttf_buffer;
     font->stb_font_info = info;
     font->base_size = base_size;
@@ -535,7 +530,7 @@ Font* load_font(FontPool* pool, const char* filepath, float base_size, bool use_
         log_error("Failed to read font file: %s", filepath);
         return NULL;
     }
-    return _make_font(pool, filepath, filepath, ttf_buffer, base_size, use_sdf);
+    return _make_font(pool, filepath, ttf_buffer, base_size, use_sdf);
 }
 
 Font* load_font_memory(FontPool* pool, const char* name, const void* bytes, size_t size,
@@ -553,7 +548,7 @@ Font* load_font_memory(FontPool* pool, const char* name, const void* bytes, size
         return NULL;
     }
     memcpy(ttf_buffer, bytes, size);
-    return _make_font(pool, name, NULL, ttf_buffer, base_size, use_sdf);
+    return _make_font(pool, name, ttf_buffer, base_size, use_sdf);
 }
 
 Font* get_font(FontPool* pool, const char* name) {

@@ -653,10 +653,13 @@ static void _view_gone(void* view) {
 // Serials handed out so far; the UI is the main thread's.
 static uint64_t g_serials;
 
-// Shows `doc` from its start, as a new editor would: one caret at 0, the view at the top, every
-// line's rows a guess and the budget starting afresh, under a new serial. NULL shows nothing. False
-// out of memory, when it shows nothing.
+// Leaves the text it shows, if any, and shows `doc` from its start, as a new editor would: one
+// caret at 0, the view at the top, every line's rows a guess and the budget starting afresh, no
+// press under way, under a new serial. NULL shows nothing. False out of memory, when it shows
+// nothing.
 static bool _show(UIEditor* ed, TextDoc* doc) {
+    if (ed->doc)
+        text_doc_remove_view(ed->doc, ed);
     ed->doc = NULL;
     ed->serial = ++g_serials;
     _carets_one(ed, (TextSelection){0, 0});
@@ -667,6 +670,9 @@ static bool _show(UIEditor* ed, TextDoc* doc) {
     ed->hint_count = 0;
     ed->settle_line = ed->drawn_to = 0;
     ed->colouring = false;
+    ed->presses = (UITypingPresses){0};
+    ed->grab_from = ed->grab_to = 0;
+    ed->caret.moved = true;
     if (!doc)
         return true;
     const size_t lines = doc->line_count;
@@ -674,6 +680,7 @@ static bool _show(UIEditor* ed, TextDoc* doc) {
         !grow_array((void**)&ed->tops, &ed->tops_capacity, lines + 1, sizeof(uint64_t), 64))
         return false;
     memset(ed->rows, 0, lines * sizeof(uint32_t));
+    ed->tops[0] = 0; // the rows above the first line: every other top is summed from it
     ed->guessed = lines;
     ed->doc = doc;
     text_doc_add_view(doc, &(TextDocView){.view = ed,
@@ -707,8 +714,6 @@ void ui_editor_set_doc(UIElement* el, TextDoc* doc) {
     }
     if (doc == ed->doc)
         return;
-    if (ed->doc)
-        text_doc_remove_view(ed->doc, ed);
     if (!_show(ed, doc))
         log_error("ui_editor_set_doc: out of memory, so the editor shows nothing");
 }
@@ -879,13 +884,18 @@ void ui_editor_view_top(const UIElement* el, size_t* line, size_t* row, int* col
     *columns = ed ? ed->cols : 0;
 }
 
-size_t ui_editor_top(const UIElement* el) {
-    UIEditor* ed = _seen(el);
-    if (!ed)
-        return 0;
+// The offset starting the row `down` rows below the view's top, held to the text's last row.
+static size_t _row_down_from_top(UIEditor* ed, int down) {
     size_t line, row;
     _top(ed, &line, &row);
+    for (int k = 0; k < down && _row_down(ed, &line, &row); k++) {
+    }
     return text_doc_line_start(ed->doc, line) + _wrap_line(ed, line).starts[row];
+}
+
+size_t ui_editor_top(const UIElement* el) {
+    UIEditor* ed = _seen(el);
+    return ed ? _row_down_from_top(ed, 0) : 0;
 }
 
 void ui_editor_reveal(UIElement* el, size_t offset) {
@@ -2228,15 +2238,6 @@ static bool _walk(UIElement* el, UIEditor* ed, const InputKeyEvent* ev) {
     return false;
 }
 
-// Whether a key's press goes on to make a character: a printable key, with neither Ctrl nor Cmd
-// held. Enter, Tab, Backspace and the arrows make none.
-static bool _makes_char(const InputKeyEvent* ev) {
-    const int k = ev->key;
-    const bool printable = (k >= GLFW_KEY_SPACE && k <= GLFW_KEY_WORLD_2) ||
-                           (k >= GLFW_KEY_KP_0 && k <= GLFW_KEY_KP_ADD) || k == GLFW_KEY_KP_EQUAL;
-    return printable && !(ev->mods & (CTRL | SUPER));
-}
-
 // A press is a key, then the character it makes: a key the mode used takes that character with
 // it, so a binding on Space does not also type one. A character arriving on its own -- an input
 // method's, a script's -- is read as any other.
@@ -2254,7 +2255,7 @@ static bool _key(const UISystem* ui, UIElement* el, UIRect content, const InputK
     // A mode may have let go of the text in a key: the editor is read again.
     ed = _of(el);
     if (ed)
-        ed->swallow = used && _makes_char(ev);
+        ed->swallow = used && ui_typing_makes_char(ev->key, ev->mods);
     return used;
 }
 
@@ -2568,13 +2569,7 @@ int ui_editor_rows_shown(const UIElement* el) {
 
 size_t ui_editor_row_at(UIElement* el, int down) {
     UIEditor* ed = _of(el);
-    if (!ed)
-        return 0;
-    size_t line, row;
-    _top(ed, &line, &row);
-    for (int k = 0; k < down && _row_down(ed, &line, &row); k++) {
-    }
-    return text_doc_line_start(ed->doc, line) + _wrap_line(ed, line).starts[row];
+    return ed ? _row_down_from_top(ed, down) : 0;
 }
 
 void ui_editor_scroll_place(UIElement* el, size_t offset, float where) {

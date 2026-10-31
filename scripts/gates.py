@@ -26083,6 +26083,12 @@ _UI_KINDS = ["ui_panel", "ui_label", "ui_button", "ui_toggle", "ui_slider", "ui_
              "ui_scroll", "ui_text_field", "ui_editor"]
 
 
+# Freed memory written over at once, by macOS's allocator and glibc's: a run reading what it freed
+# reads garbage and fails, where with memory left as it was it reads what was there and passes. What
+# the arms of an element freed late are run under (spec 14.6).
+_SCRIBBLED = dict(os.environ, MallocScribble="1", MALLOC_PERTURB_="85")
+
+
 def _ui_probe(case, env=None):
     """{(label, key): [numbers]} from one gametest --ui-probe run, or None.
 
@@ -28333,13 +28339,18 @@ def run_ui_gate(workdir):
                      takes it out, and an editor its own key takes out, freed as the
                      pass ends, the text forgetting the editor; a held bar let go; an
                      editor taken out mid-insert closing its text's group; a root, a
-                     pane's row and another system's element refused.
+                     pane's row and another system's element refused. Run with freed
+                     memory scribbled over, so an element freed inside the pass
+                     that took it out crashes the run rather than passing.
       ui-move        an element moved (spec 14.6): an editor under a new row
                      keeping its carets, its view and the focus, typing still
                      reaching it; a field keeping its text; an index among the
                      children once it is out, the end past them, within one parent
-                     too; a root, a move into itself or under it, a pane's row or
-                     into a pane with rows, and a move to another screen refused.
+                     too; a root, a move into itself or under it, a pane's row, a
+                     move into a pane with rows or into one of its rows, and a move
+                     to another screen refused; and a key that makes a character,
+                     used by a command that moves the focus to another editor, its
+                     character going with it rather than typed into that editor.
       ui-editor-set-doc an editor shown another text (spec 14.6): one caret at its
                      start and the view at its top; the text left forgetting it, an
                      edit there moving none of its carets while a second editor on
@@ -29177,8 +29188,8 @@ def run_ui_gate(workdir):
     note("ui-utf8", ok)
 
     # ---- the code editor (spec 14.4): every probe line a 1, and as many as the case says
-    def doc_flags(case, lines, what):
-        p = _ui_probe(case)
+    def doc_flags(case, lines, what, env=None):
+        p = _ui_probe(case, env=env)
         if not p:
             return False, "the probe produced nothing"
         wrong = _probe_wrong(p, {k: 1 for k in p})
@@ -29452,13 +29463,13 @@ def run_ui_gate(workdir):
                            "bar let go of what goes; the next layout whole; a button's action and "
                            "an editor's key taking their own element out, freed as the pass ends; "
                            "an insert's group closed; a root, a row and another system's element "
-                           "refused")
+                           "refused; freed memory scribbled over", env=_SCRIBBLED)
     print(f"  ui-remove             {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-remove", ok)
 
-    ok, detail = doc_flags("move", 9, "an editor moved under a row keeping its carets, its view "
-                           "and the focus, a field its text, the index in order, and the four "
-                           "refusals")
+    ok, detail = doc_flags("move", 10, "an editor moved under a row keeping its carets, its view "
+                           "and the focus, a field its text, the index in order, the four refusals, "
+                           "and a key moving the focus taking its character with it")
     print(f"  ui-move               {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-move", ok)
 
@@ -30173,14 +30184,14 @@ def _shapes_pointer_run(workdir, tag, script, frames):
     return _pointer_run(workdir, _bin("shapes"), f"canvas_{tag}", script, frames)
 
 
-def _canvas_shot(out, frames, *args):
+def _canvas_shot(out, frames, *args, env=None):
     """apps/canvas headless at 400x300 points, its picture written to `out`: its stdout, or None
     for a run that failed or hung, which prints the tail of its output so an arm reads nothing and
     fails rather than the group stopping."""
     cmd = [_bin("canvas"), "-x", "-f", str(frames), "-W", "400", "-H", "300", "-S", out, *args]
     tag = os.path.splitext(os.path.basename(out))[0]
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=_PROBE_TIMEOUT)
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=_PROBE_TIMEOUT, env=env)
     except subprocess.TimeoutExpired:
         print(f"    apps/canvas {tag}: no exit in {_PROBE_TIMEOUT} s")
         return None
@@ -30190,11 +30201,11 @@ def _canvas_shot(out, frames, *args):
     return r.stdout
 
 
-def _canvas_run(workdir, tag, *args, frames=2):
+def _canvas_run(workdir, tag, *args, frames=2, env=None):
     """apps/canvas under --canvas-probe for `frames` frames: its picture's path and its probe
     lines keyed by (sheet, name), or None and no lines for a run that failed."""
     out = os.path.join(workdir, f"canvas_{tag}.ppm")
-    stdout = _canvas_shot(out, frames, "--canvas-probe", *args)
+    stdout = _canvas_shot(out, frames, "--canvas-probe", *args, env=env)
     if stdout is None:
         return None, {}
     probe = {}
@@ -30365,7 +30376,9 @@ def run_canvas_gate(workdir):
                      at the first file's start; a click back and F10 return the second pane to
                      the first file with its caret at 15 -- the 1 it left at, brought through the
                      14 bytes landed since. Then F9 closes it from its own key: one pane is left,
-                     with the focus, and "Z" typed lands in the first file (end to end).
+                     with the focus, and "Z" typed lands in the first file (end to end). The close
+                     runs with freed memory scribbled over, so a pane freed inside the key that
+                     closed it crashes the run rather than passing.
       canvas-under-ui the game UI's panel over the board: its centre the panel's colour, and
                      outside it the canvas as it is with no UI, 0 px. The canvas is an overlay
                      under UI_OVERLAY_ORDER.
@@ -30753,8 +30766,10 @@ def run_canvas_gate(workdir):
             f.write(steps + "22 key=f9\n24 type=Z\n")
         _, two = _canvas_run(workdir, "panes_split", *files, "--input-script", split_script,
                              frames=24)
+        # Closing a pane from its own key frees it as the pass ends; freed memory scribbled over,
+        # one freed sooner crashes the run.
         _, one = _canvas_run(workdir, "panes_close", *files, "--input-script", close_script,
-                             frames=28)
+                             frames=28, env=_SCRIBBLED)
         landed = b"(note landed)\nX(a one)\n(a two)\n"
         want = {
             "opened": (first.get(("pane", "0"), [])[:6] == ["file", "0", "top", "0", "focused", "1"]

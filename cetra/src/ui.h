@@ -515,7 +515,8 @@ void ui_remove(UISystem* ui, UIElement* el);
 // Takes `el` out of its parent and puts it under `parent` at `index` of the children there once it
 // is out, the end when `index` is past them. It keeps everything it holds -- an editor's carets and
 // scroll, a field's text, the focus. Refused by name: a screen's root, a move into `el` or under
-// it, a pane's virtual row or a move into a pane with rows, and a move to another screen.
+// it, a pane's virtual row, a move into a pane with rows or into one of its rows, which the pane
+// frees, and a move to another screen.
 void ui_move(UIElement* el, UIElement* parent, size_t index);
 // Where a slider's track lies in the rect the last layout gave it, in window points: what a drag
 // is measured along, for a draw of its own (ui_set_draw) to put the track there too.
