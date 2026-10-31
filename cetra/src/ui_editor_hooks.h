@@ -23,7 +23,7 @@ bool ui_editor_point_of(UIElement* el, size_t offset, float* x, float* y);
 // The offset a press at the point places a caret at, as the last pass laid the editor out.
 size_t ui_editor_offset_at(UIElement* el, float x, float y);
 // The line and row at the top of the view, and the columns a row holds.
-void ui_editor_top(const UIElement* el, size_t* line, size_t* row, int* columns);
+void ui_editor_view_top(const UIElement* el, size_t* line, size_t* row, int* columns);
 // Whether the budget has nothing left to do: every line's rows wrapped rather than guessed, and a
 // stateful highlighter's walk past every line drawn.
 bool ui_editor_settled(const UIElement* el);

@@ -28340,6 +28340,18 @@ def run_ui_gate(workdir):
                      children once it is out, the end past them, within one parent
                      too; a root, a move into itself or under it, a pane's row or
                      into a pane with rows, and a move to another screen refused.
+      ui-editor-set-doc an editor shown another text (spec 14.6): one caret at its
+                     start and the view at its top; the text left forgetting it, an
+                     edit there moving none of its carets while a second editor on
+                     it keeps its own; typing reaching the new text; the same text
+                     again changing nothing; NULL showing nothing; and back to the
+                     first text where it was, the carets and the top a host kept
+                     brought through the edit made there since.
+      ui-vim-set-doc what the vim mode held unfinished in an editor -- a half-typed
+                     operator, an insert, whose group on the text left is closed, a
+                     visual area -- let go when the editor is shown another text,
+                     and an operator let go when the editor is freed and another
+                     made in its place.
       ui-editor-ranges-late apps/canvas --editor's parse on its own thread, taken six
                      frames after it began: the text it read had an unclosed '(' at
                      byte 9, three bytes were typed before it since, and the error is
@@ -29449,6 +29461,20 @@ def run_ui_gate(workdir):
                            "refusals")
     print(f"  ui-move               {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-move", ok)
+
+    # ---- an editor shown another text (spec 14.6)
+    ok, detail = doc_flags("set-doc", 7, "another text from its start, the one left forgetting the "
+                           "editor while a second editor keeps its carets, typing reaching the new "
+                           "text, the same text a no-op, NULL nothing, and the view and carets back "
+                           "where a host kept them")
+    print(f"  ui-editor-set-doc     {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-editor-set-doc", ok)
+
+    ok, detail = doc_flags("vim-set-doc", 4, "an operator, an insert and a visual area let go when "
+                           "the editor is shown another text, and an operator when it is freed and "
+                           "another made in its place")
+    print(f"  ui-vim-set-doc        {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-vim-set-doc", ok)
 
     # ---- a parse's errors, read a few versions back, underlined where the typing since put them
     late_path = os.path.join(workdir, "editor_late.ckt")

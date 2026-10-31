@@ -729,7 +729,7 @@ static int probe_editor_anchor(UISystem* ui) {
     editor_pass(ui);
     size_t line = 0, row = 0;
     int cols = 0;
-    ui_editor_top(ed, &line, &row, &cols);
+    ui_editor_view_top(ed, &line, &row, &cols);
     size_t want_len = 0;
     const char* top = text_doc_line(doc, line, &want_len);
     char want[128];
@@ -740,7 +740,7 @@ static int probe_editor_anchor(UISystem* ui) {
     editor_pass(ui);
     size_t l2 = 0, r2 = 0;
     int c2 = 0;
-    ui_editor_top(ed, &l2, &r2, &c2);
+    ui_editor_view_top(ed, &l2, &r2, &c2);
     size_t got_len = 0;
     const char* got = text_doc_line(doc, l2, &got_len);
     say_flag("editor-anchor", "edit", "kept",
@@ -750,14 +750,14 @@ static int probe_editor_anchor(UISystem* ui) {
     editor_pass(ui);
     size_t l3 = 0, r3 = 0;
     int c3 = 0;
-    ui_editor_top(ed, &l3, &r3, &c3);
+    ui_editor_view_top(ed, &l3, &r3, &c3);
     say_flag("editor-anchor", "measured", "kept", l3 == l2 && r3 == r2);
     // A new width wraps every line again, and keeps the line.
     ui_set_size(ed, UI_FIXED, 320.0f, UI_FIXED, EDITOR_H);
     editor_pass(ui);
     size_t l4 = 0, r4 = 0;
     int c4 = 0;
-    ui_editor_top(ed, &l4, &r4, &c4);
+    ui_editor_view_top(ed, &l4, &r4, &c4);
     say_flag("editor-anchor", "resize", "kept", l4 == l2 && c4 != c3);
     // And the wheel moves it a row at a time.
     ui_update(ui,
@@ -767,7 +767,7 @@ static int probe_editor_anchor(UISystem* ui) {
               1280.0f, 720.0f);
     size_t l5 = 0, r5 = 0;
     int c5 = 0;
-    ui_editor_top(ed, &l5, &r5, &c5);
+    ui_editor_view_top(ed, &l5, &r5, &c5);
     say_flag("editor-anchor", "wheel", "moved", l5 > l4 || (l5 == l4 && r5 > r4));
     return 0;
 }
@@ -1039,7 +1039,7 @@ static int probe_editor_carets(UISystem* ui) {
                ed->rect.x + ed->rect.w - 4.0f, ed->rect.y + 108.0f, 0);
     size_t top = 0, top_row = 0;
     int cols = 0;
-    ui_editor_top(ed, &top, &top_row, &cols);
+    ui_editor_view_top(ed, &top, &top_row, &cols);
     press_drag(ui, ed->rect.x + 120.0f, ed->rect.y + 60.0f, ed->rect.x + 180.0f,
                ed->rect.y + 100.0f, 0);
     const TextSelection* s = NULL;
@@ -2165,7 +2165,7 @@ static int probe_ui_move(UISystem* ui) {
     editor_pass(ui);
     size_t line = 0, top_row = 0;
     int cols = 0;
-    ui_editor_top(ed, &line, &top_row, &cols);
+    ui_editor_view_top(ed, &line, &top_row, &cols);
 
     // The editor under a new row, beside the field: its carets, its view and the focus kept.
     UIElement* row = ui_panel(root);
@@ -2179,7 +2179,7 @@ static int probe_ui_move(UISystem* ui) {
              n == 2 && now[0].anchor == 8 && now[0].head == 8 && now[1].anchor == 16 &&
                  now[1].head == 18);
     size_t line2 = 0, top_row2 = 0;
-    ui_editor_top(ed, &line2, &top_row2, &cols);
+    ui_editor_view_top(ed, &line2, &top_row2, &cols);
     say_flag("move", "scroll", "kept", line > 0 && line2 == line && top_row2 == top_row);
     ui_editor_set_selections(ed, &(TextSelection){0, 0}, 1);
     type(ui, "z");
@@ -2225,6 +2225,118 @@ static int probe_ui_move(UISystem* ui) {
     say_flag("move", "screen", "refused",
              a->parent == col && ui_screen_root(elsewhere)->child_count == 0);
     free_text_doc(doc);
+    return 0;
+}
+
+// ---- An editor shown another text (spec 14.6)
+
+static int probe_editor_set_doc(UISystem* ui) {
+    size_t len = 0;
+    char* text = move_text(&len);
+    TextDoc* a = create_text_doc(text, len);
+    free(text);
+    TextDoc* b = create_text_doc("other\ntext\n", 11);
+    UIElement* ed = editor_fixture(ui, a, 300.0f, 120.0f);
+    UIElement* twin = ui_editor(ui_screen_root(ui_top(ui)), a);
+    ui_set_size(twin, UI_FIXED, 300.0f, UI_FIXED, 120.0f);
+    editor_pass(ui);
+    ui_editor_set_selections(twin, &(TextSelection){10, 10}, 1);
+
+    // Where the view was in the first text, to go back to.
+    const TextSelection carets[2] = {{24, 24}, {40, 44}};
+    ui_editor_set_selections(ed, carets, 2);
+    ui_editor_scroll_place(ed, 100, 0.0f);
+    editor_pass(ui);
+    size_t top = ui_editor_top(ed);
+    const uint64_t seen = a->version;
+
+    // Another text: one caret at its start, the view at its top.
+    ui_editor_set_doc(ed, b);
+    editor_pass(ui);
+    say_flag("set-doc", "start", "fresh", one_selection(ed, 0, 0) && ui_editor_top(ed) == 0);
+    // The first text has forgotten it -- an edit there moves none of its carets -- while the
+    // second editor on it keeps its own.
+    text_doc_replace(a, 0, 0, "xx", 2);
+    say_flag("set-doc", "old", "forgotten", one_selection(ed, 0, 0) && a->view_count == 1);
+    say_flag("set-doc", "twin", "kept", one_selection(twin, 12, 12));
+    type(ui, "q");
+    say_flag("set-doc", "typing", "new",
+             doc_is_str(b, "qother\ntext\n") && text_doc_length(a) == len + 2);
+    // The text it shows already changes nothing.
+    ui_editor_set_selections(ed, &(TextSelection){3, 3}, 1);
+    ui_editor_set_doc(ed, b);
+    say_flag("set-doc", "same", "kept", one_selection(ed, 3, 3));
+    // Nothing, then back to the first text where it was, as a host goes back: what it kept brought
+    // through the edit made there since.
+    ui_editor_set_doc(ed, NULL);
+    say_flag("set-doc", "null", "nothing", ui_editor_selections(ed, NULL, NULL) == 0);
+    ui_editor_set_doc(ed, a);
+    editor_pass(ui);
+    TextSelection back[2] = {carets[0], carets[1]};
+    bool mapped = text_doc_map(a, seen, &top);
+    for (size_t i = 0; i < 2; i++)
+        mapped = mapped && text_doc_map(a, seen, &back[i].anchor) &&
+                 text_doc_map(a, seen, &back[i].head);
+    ui_editor_set_selections(ed, back, 2);
+    ui_editor_scroll_place(ed, top, 0.0f);
+    editor_pass(ui);
+    const TextSelection* now = NULL;
+    const size_t n = ui_editor_selections(ed, &now, NULL);
+    say_flag("set-doc", "back", "where",
+             mapped && top == 96 && ui_editor_top(ed) == top && n == 2 && now[0].head == 26 &&
+                 now[1].anchor == 42 && now[1].head == 46);
+    free_text_doc(a);
+    free_text_doc(b);
+    return 0;
+}
+
+// What vim held unfinished in an editor let go when the editor is shown another text, and when it
+// is freed and another made in its place.
+static int probe_vim_set_doc(UISystem* ui) {
+    TextDoc* a = create_text_doc(VIM_TEXT, strlen(VIM_TEXT));
+    TextDoc* b = create_text_doc("one two\n", 8);
+    UIEditorVim* vim = create_ui_editor_vim();
+    UIElement* ed = vim_fixture(ui, a, vim, 0);
+    // A half-typed operator: w after the switch only moves.
+    vim_keys(ui, "d");
+    ui_editor_set_doc(ed, b);
+    vim_keys(ui, "w");
+    say_flag("vim-set-doc", "operator", "let_go",
+             doc_is_str(b, "one two\n") && !strcmp(ui_editor_vim_pending(vim), "") &&
+                 one_selection(ed, 4, 4));
+    // An insert: its group on the text left is closed, and x on the next is normal mode's.
+    vim_keys(ui, "iab");
+    const bool open = b->grouping;
+    ui_editor_set_doc(ed, a);
+    vim_keys(ui, "x");
+    say_flag("vim-set-doc", "insert", "let_go",
+             open && !b->grouping && doc_is_str(a, &VIM_TEXT[1]) &&
+                 ui_editor_vim_state(vim) == UI_VIM_NORMAL);
+    // A visual area: x after the switch takes one character.
+    vim_keys(ui, "vll");
+    ui_editor_set_doc(ed, b);
+    vim_keys(ui, "x");
+    say_flag("vim-set-doc", "visual", "let_go",
+             doc_is_str(b, "ne abtwo\n") && ui_editor_vim_state(vim) == UI_VIM_NORMAL);
+    // Freed with an operator half typed, and another editor made in its place, most likely at
+    // its address: w there only moves.
+    vim_keys(ui, "d");
+    UIElement* parent = ed->parent;
+    ui_remove(ui, ed);
+    UIElement* again = ui_editor(parent, a);
+    ui_set_size(again, UI_FIXED, 600.0f, UI_FIXED, 300.0f);
+    ui_editor_set_mode(again, ui_editor_vim_mode(vim));
+    ui_set_focus(ui_top(ui), again);
+    editor_pass(ui);
+    const size_t a_len = text_doc_length(a);
+    vim_keys(ui, "w");
+    say_flag("vim-set-doc", "freed", "let_go",
+             text_doc_length(a) == a_len && !strcmp(ui_editor_vim_pending(vim), "") &&
+                 one_selection(again, 5, 5));
+    ui_editor_set_mode(again, NULL);
+    free_text_doc(a);
+    free_text_doc(b);
+    free_ui_editor_vim(vim);
     return 0;
 }
 
@@ -2286,5 +2398,9 @@ int run_ui_editor_probe(Game* game, UISystem* ui, Font* font, const char* which)
         return probe_ui_remove(ui);
     if (!strcmp(which, "move"))
         return probe_ui_move(ui);
+    if (!strcmp(which, "set-doc"))
+        return probe_editor_set_doc(ui);
+    if (!strcmp(which, "vim-set-doc"))
+        return probe_vim_set_doc(ui);
     return -1;
 }

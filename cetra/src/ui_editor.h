@@ -28,6 +28,16 @@ size_t ui_editor_selections(const UIElement* el, const TextSelection** out, size
 void ui_editor_set_selections(UIElement* el, const TextSelection* selections, size_t count);
 // Scrolls the least that shows the row holding `offset`.
 void ui_editor_reveal(UIElement* el, size_t offset);
+// The view scrolled so the row holding `offset` stands `where` of the way down it: 0 at the top,
+// 0.5 in the middle, 1 at the bottom.
+void ui_editor_scroll_place(UIElement* el, size_t offset, float where);
+// The offset starting the row at the view's top: where ui_editor_scroll_place(el, top, 0) puts the
+// view back to.
+size_t ui_editor_top(const UIElement* el);
+// The editor leaves its text and shows `doc` from its start, as a new editor would: one caret at 0,
+// the view at the top. Its mode, find's query and its look stay. NULL shows nothing, as a text
+// freed first does; the text it shows already changes nothing.
+void ui_editor_set_doc(UIElement* el, TextDoc* doc);
 
 /*
  * What an edit is made of, after vis: a MOTION says where a caret goes, a TEXT OBJECT what range
