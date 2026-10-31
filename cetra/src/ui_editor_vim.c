@@ -43,6 +43,7 @@ enum {
     K_PGDN,
     K_COPY,  // Cmd+C on macOS
     K_PASTE, // Cmd+V on macOS
+    K_DROP,  // no key: a visual delete leaving the register alone, as `.` makes P's again
 };
 #define K_CTRL(c) (0x120000u + (uint32_t)(c))
 
@@ -144,6 +145,12 @@ struct UIEditorVim {
     bool block_end;
     bool box_given;
     int box_left, box_right;
+    // While `.` makes an area again: its operator starts at the cursor, lines and all.
+    bool again;
+    // While a delete leaves the register alone: P's, made again by `.`.
+    bool drop;
+    // An operator failed while `.` made a change again: vim's beep drops the change's other keys.
+    bool failed;
     // The area the visual operator being read took, and the last change's, for `.`; and the last
     // any visual operator took, which a count before v, V or Ctrl+V selects again.
     VisualArea area, change_area, reselect;
@@ -154,9 +161,14 @@ struct UIEditorVim {
     int insert_count;
     size_t insert_from;
     bool indent_pending;
-    bool block_insert;
+    bool block_insert, block_corner;
     size_t insert_top;
     int insert_left;
+    // A block's A: the lines it filled out with spaces and by how many, taken out again at Esc when
+    // nothing was typed, and the text's length once they were in.
+    size_t* pad_lines;
+    size_t* pad_widths;
+    size_t pad_count, padded_length;
     // The last f, F, t or T and its character. The last search: its text, whether it went back,
     // whether it ignores case whatever capitals it holds (from * and #), whether a match must
     // start and end on a word's edge, and whether its matches are lit.
@@ -202,13 +214,16 @@ static void _pending_add(UIEditorVim* v, uint32_t k) {
     }
 }
 
-// The command read whole, or let go: nothing waits. An insert's keys are kept until it ends.
+// The command read whole, or let go: nothing waits. An insert's keys are kept until it ends, and
+// the area it changes; a command that failed leaves no area for the next change.
 static void _reset(UIEditorVim* v) {
     v->count = v->op_count = 0;
     v->op = v->prefix = 0;
     v->pending[0] = '\0';
-    if (v->state != UI_VIM_INSERT)
+    if (v->state != UI_VIM_INSERT) {
         v->key_count = 0;
+        v->area.on = false;
+    }
 }
 
 static void _record(UIEditorVim* v, uint32_t k) {
@@ -458,16 +473,22 @@ static bool _in_indent(const Ctx* c, size_t off) {
     return true;
 }
 
-// The line's leading blanks, copied for the caller to free; *n their length.
-static char* _indent_of(const Ctx* c, size_t line, size_t* n) {
+// The line's indent, for the caller to free, *n its length: its leading blanks as they are -- what
+// a changed line keeps -- or, `spaces`, their width in spaces, as autoindent makes a new line's
+// with expandtab.
+static char* _indent_of(const Ctx* c, size_t line, bool spaces, size_t* n) {
     size_t len = 0;
     const char* s = _lt(c, line, &len);
-    *n = 0;
-    while (*n < len && _blank((unsigned char)s[*n]))
-        (*n)++;
+    size_t blanks = 0;
+    while (blanks < len && _blank((unsigned char)s[blanks]))
+        blanks++;
+    *n = spaces ? (size_t)_vcol(c, _ls(c, line) + blanks) : blanks;
     char* out = malloc(*n + 1);
     if (out) {
-        memcpy(out, s, *n);
+        if (spaces)
+            memset(out, ' ', *n);
+        else
+            memcpy(out, s, *n);
         out[*n] = '\0';
     }
     return out;
@@ -480,6 +501,12 @@ static const char* _nl(const Ctx* c) {
 // Whether the text ends with a line break, which is then the last line's own.
 static bool _ends_broken(const Ctx* c) {
     return text_doc_line_count(c->doc) > c->lines;
+}
+
+// Whether the text is one empty line, all a delete of every line leaves: vim's empty buffer, which
+// a delete leaves alone, the register and undo with it.
+static bool _bare(const Ctx* c) {
+    return c->lines == 1 && _empty(c, 0);
 }
 
 // ---- Word motions, vim's
@@ -913,7 +940,8 @@ static bool _word_more(const Ctx* c, size_t* off, int count, bool include, bool 
 
 // iw, aw, iW and aW: the word or the blanks under the cursor, `count` of them; a word with the
 // blanks after it, or before it when none follow, for aw. Refused when the text ends first, `end`
-// then where the search for it stopped, which a visual area's cursor goes to.
+// then where the search for it stopped, which a visual area's cursor goes to, and `start` the
+// object's start once its first word was found, else `from`, where the area begins.
 static Obj _obj_word(const Ctx* c, size_t from, int count, bool include, bool big) {
     Obj o = {from, from, true, false, false};
     size_t off = from;
@@ -922,6 +950,7 @@ static Obj _obj_word(const Ctx* c, size_t from, int count, bool include, bool bi
     bool include_white = false;
     if ((_cls(c, off, big) == 0) == include) {
         if (!_end_word(c, &off, 1, big, true, true)) {
+            o.start = from;
             o.end = off;
             return o;
         }
@@ -997,12 +1026,19 @@ static size_t _unclosed_after(const Ctx* c, size_t from, uint32_t open, uint32_t
     return SIZE_MAX;
 }
 
-// The next `open` after `from`, for a cursor in no block: vim then takes the next one.
-static size_t _next_open(const Ctx* c, size_t from, uint32_t open) {
+// The next `open` after `from` that no `close` before it has used up, for a cursor in no block:
+// vim then takes the next one. A closer on the way counts against the next opener, as vim's
+// search for an unmatched bracket counts it.
+static size_t _next_open(const Ctx* c, size_t from, uint32_t open, uint32_t close) {
     size_t p = from;
-    while (_inc(c, &p) != -1)
-        if (_gc(c, p) == open)
+    size_t closed = 0;
+    while (_inc(c, &p) != -1) {
+        const uint32_t ch = _gc(c, p);
+        if (ch == close)
+            closed++;
+        else if (ch == open && closed-- == 0)
             return p;
+    }
     return SIZE_MAX;
 }
 
@@ -1023,7 +1059,8 @@ static Obj _obj_block(const Ctx* c, size_t from, int count, bool include, uint32
     size_t start = SIZE_MAX;
     const bool inside = _unclosed_before(c, p, open, close) != SIZE_MAX;
     for (; count > 0; count--) {
-        const size_t q = inside ? _unclosed_before(c, p, open, close) : _next_open(c, p, open);
+        const size_t q =
+            inside ? _unclosed_before(c, p, open, close) : _next_open(c, p, open, close);
         if (q == SIZE_MAX)
             return o;
         p = start = q;
@@ -1428,7 +1465,11 @@ static Moved _motion(Ctx* c, uint32_t prefix, uint32_t key, uint32_t arg, size_t
                 return (Moved){from, false, false, true, WANT_KEEP};
             const size_t to = down ? (line + (size_t)n < c->lines ? line + (size_t)n : c->lines - 1)
                                    : (line >= (size_t)n ? line - (size_t)n : 0);
-            const int w = want >= 0 || want == INT_MAX ? want : _vcol(c, from);
+            // Normal mode's cursor on a tab stands at its last column, as vim draws it; a visual
+            // area's head gives its column first.
+            const int w = want >= 0 || want == INT_MAX ? want
+                          : c->visual                  ? _vcol(c, from)
+                                                       : _vcol_end(c, from) - 1;
             return (Moved){_at_col(c, to, w, c->visual), true, false, true, w};
         }
         case '+':
@@ -1758,7 +1799,7 @@ static char* _with_nl(const Ctx* c, const char* text, size_t len, size_t* out) {
 // range: `x` on an empty line, then `u`, takes back nothing. Not for one part of a command made of
 // others, whose later parts make its step.
 static void _empty_step(Ctx* c) {
-    if (!c->v->held)
+    if (!c->v->held && !_bare(c))
         text_doc_empty_step(c->doc, c->el->editor);
 }
 
@@ -1780,12 +1821,15 @@ static void _group(Ctx* c, bool open) {
 // as the step began, when that is on the step's first changed line or the line above it, else
 // that line's first character not a blank. `s` is the step.
 static size_t _undone_at(const Ctx* c, const TextUndoStep* s) {
-    const TextUndoPart* part = s->part_count ? &s->parts[0] : NULL;
-    if (!part || !part->change_count || !s->before_count)
+    // The least start of any change: nothing before it moved, so it is the same offset whichever
+    // way the step was just taken. Where that line is gone -- the last lines deleted -- the cursor
+    // goes to the line now last.
+    size_t first = SIZE_MAX;
+    for (size_t p = 0; p < s->part_count; p++)
+        for (size_t i = 0; i < s->parts[p].change_count; i++)
+            first = s->parts[p].changes[i].start < first ? s->parts[p].changes[i].start : first;
+    if (first == SIZE_MAX || !s->before_count)
         return SIZE_MAX;
-    // Changes run from the highest start down: the last is the first in the text. Where that line
-    // is gone -- the last lines deleted -- the cursor goes to the line now last.
-    const size_t first = part->changes[part->change_count - 1].start;
     if (first > _le(c, c->lines - 1))
         return _first_nonblank(c, c->lines - 1);
     const size_t top = _lof(c, first);
@@ -1815,9 +1859,13 @@ static void _undo(Ctx* c, bool redo, int count) {
                                 ? (redo ? (doc->undo_count ? &doc->undo[doc->undo_count - 1] : NULL)
                                         : (doc->redo_count ? &doc->undo[doc->undo_count] : NULL))
                                 : NULL;
-    const size_t to = s && n == 1 ? _undone_at(&now, s) : SIZE_MAX;
-    if (at && to != SIZE_MAX)
+    // A step begun at one caret comes back to one, however many it typed at -- a block's I.
+    const size_t to = s && (n == 1 || s->before_count == 1) ? _undone_at(&now, s) : SIZE_MAX;
+    if (at && to != SIZE_MAX) {
         at[0] = to;
+        n = 1;
+        primary = 0;
+    }
     if (at)
         _place(&now, at, NULL, n, primary, true);
     free(at);
@@ -1831,6 +1879,7 @@ typedef struct {
     size_t first, last; // its lines, when whole
     bool lines;
     bool ok;
+    bool inclusive; // its motion's last character counts: never empty to vim, even on an empty line
 } Range;
 
 // The range a motion makes from `from`, by vim's rules: an exclusive motion ending at a line's
@@ -1877,6 +1926,7 @@ static Range _range(const Ctx* c, size_t from, const Moved* m, uint32_t op) {
     }
     r.lo = lo;
     r.hi = inclusive && hi < _le(c, _lof(c, hi)) ? _after(c, hi) : hi;
+    r.inclusive = inclusive;
     return r;
 }
 
@@ -1897,9 +1947,14 @@ static char* _lines_text(const Ctx* c, size_t first, size_t last, size_t* n) {
 }
 
 // The bytes a linewise delete of lines [first, last] takes: their line breaks with them, or the
-// one before them when they run to a text with no final break.
+// one before them when they run to a text with no final break. Every line of a text with a final
+// break leaves that break, one empty line: vim's empty buffer.
 static void _lines_span(const Ctx* c, size_t first, size_t last, size_t* lo, size_t* hi) {
     *lo = _ls(c, first);
+    if (first == 0 && last + 1 >= c->lines && _ends_broken(c)) {
+        *hi = _le(c, last);
+        return;
+    }
     if (last + 1 < c->lines || _ends_broken(c)) {
         *hi = _ls(c, last + 1);
         if (last + 1 >= c->lines && first > 0 && !_ends_broken(c)) {
@@ -2006,8 +2061,9 @@ static void _operate_on(Ctx* c, uint32_t op, const Carets* kp, const Range* r, c
 // operator doubled, the last line's first character not a blank, or for a yank its column; for an
 // object, its start. That is where vim leaves the cursor after a yank or a change of case, and
 // where its undo and redo put it back: so the carets are moved there before the edit, which the
-// text's undo step keeps.
-static void _operate(Ctx* c, uint32_t op, uint32_t prefix, uint32_t key, uint32_t arg, int count0) {
+// text's undo step keeps. False when no caret's motion or object was found: vim beeps, and it is
+// no change for `.` to make again.
+static bool _operate(Ctx* c, uint32_t op, uint32_t prefix, uint32_t key, uint32_t arg, int count0) {
     Carets k = _carets(c->el);
     Range* r = calloc(k.count ? k.count : 1, sizeof(Range));
     size_t* start = calloc(k.count ? k.count : 1, sizeof(size_t));
@@ -2015,7 +2071,7 @@ static void _operate(Ctx* c, uint32_t op, uint32_t prefix, uint32_t key, uint32_
         _free_carets(&k);
         free(r);
         free(start);
-        return;
+        return false;
     }
     const bool doubled = key == op || (op == '~' && key == '~') || (op == 'u' && key == 'u') ||
                          (op == 'U' && key == 'U');
@@ -2049,15 +2105,21 @@ static void _operate(Ctx* c, uint32_t op, uint32_t prefix, uint32_t key, uint32_
             m = _motion(c, prefix, key, arg, head, count0, op, k.want[i]);
             r[i] = _range(c, head, &m, op);
         }
-        if (r[i].ok && m.to < start[i])
+        // y_ leaves the cursor where it is: vim's _ does not go to the first character not a blank
+        // under a yank.
+        const bool stays = op == 'y' && key == '_' && !prefix;
+        if (r[i].ok && m.to < start[i] && !stays)
             start[i] = m.to;
         any = any || r[i].ok;
     }
     if (any)
         _operate_on(c, op, &k, r, start, 1);
+    else if (c->v->replaying)
+        c->v->failed = true;
     _free_carets(&k);
     free(r);
     free(start);
+    return any;
 }
 
 // `op` over ranges already found, one a caret: the register takes the primary's text, the carets
@@ -2069,8 +2131,13 @@ static void _operate_on(Ctx* c, uint32_t op, const Carets* kp, const Range* r, c
     Change* ch = calloc(k.count ? k.count : 1, sizeof(Change));
     if (!ch)
         return;
+    // The register takes the primary's text -- but not from a delete or a change over nothing,
+    // which vim leaves it alone for. A change over an empty line's end by an inclusive motion is
+    // not nothing to vim, and leaves the register empty.
     const Range* pr = &r[k.primary];
-    if (pr->ok && (op == 'd' || op == 'c' || op == 'y')) {
+    const bool empty = !pr->lines && pr->lo == pr->hi && !(op == 'c' && pr->inclusive);
+    const bool nothing = op != 'y' && (empty || _bare(c));
+    if (pr->ok && !nothing && !c->v->drop && (op == 'd' || op == 'c' || op == 'y')) {
         size_t n = 0;
         char* text = pr->lines ? _lines_text(c, pr->first, pr->last, &n)
                                : _range_text(c, pr->lo, pr->hi, &n);
@@ -2078,7 +2145,7 @@ static void _operate_on(Ctx* c, uint32_t op, const Carets* kp, const Range* r, c
             _put_register(c, text, n, pr->lines ? REG_LINES : REG_CHARS);
         free(text);
     }
-    _place(c, start, op == 'y' ? k.want : NULL, k.count, k.primary, true);
+    _place(c, start, NULL, k.count, k.primary, true);
     if (op == 'y') {
         free(ch);
         return;
@@ -2100,7 +2167,7 @@ static void _operate_on(Ctx* c, uint32_t op, const Carets* kp, const Range* r, c
             if (r[i].lines) {
                 // The lines become one, keeping the first one's indent, which typing follows.
                 size_t ind = 0;
-                x->owned = _indent_of(c, r[i].first, &ind);
+                x->owned = _indent_of(c, r[i].first, false, &ind);
                 x->e = (TextEdit){_ls(c, r[i].first), _le(c, r[i].last), x->owned ? x->owned : "",
                                   x->owned ? ind : 0};
                 x->within = x->owned ? ind : 0;
@@ -2113,10 +2180,15 @@ static void _operate_on(Ctx* c, uint32_t op, const Carets* kp, const Range* r, c
             // Each line its own edit: gathered in a second pass below.
             x->within = SIZE_MAX;
         } else {
-            // A change of case: the cursor stays at the operator's start, inside the text.
+            // A change of case: the cursor stays at the operator's start, inside the text. Over
+            // nothing at a line's start, vim's takes the line's first character on the first line
+            // and the whole line on any other.
             size_t n = 0;
             const size_t lo = r[i].lines ? _ls(c, r[i].first) : r[i].lo;
-            const size_t hi = r[i].lines ? _le(c, r[i].last) : r[i].hi;
+            size_t hi = r[i].lines ? _le(c, r[i].last) : r[i].hi;
+            const size_t at_line = _lof(c, lo);
+            if (!r[i].lines && lo == hi && lo == _ls(c, at_line))
+                hi = at_line ? _le(c, at_line) : _after(c, lo);
             x->owned = _cased(c, lo, hi, op, &n);
             if (x->owned) {
                 x->e = (TextEdit){lo, hi, x->owned, n};
@@ -2138,6 +2210,10 @@ static void _operate_on(Ctx* c, uint32_t op, const Carets* kp, const Range* r, c
         size_t n = 0, cap = 0, texts_cap = 0;
         size_t last_done = SIZE_MAX;
         bool shifted = false;
+        // Each caret's first line, found before the edit moves the offsets it is found from.
+        size_t* at = calloc(k.count ? k.count : 1, sizeof(size_t));
+        for (size_t i = 0; at && i < k.count; i++)
+            at[i] = !r[i].ok ? SIZE_MAX : r[i].lines ? r[i].first : _lof(c, r[i].lo);
         for (size_t i = 0; i < k.count; i++) {
             if (!r[i].ok)
                 continue;
@@ -2172,10 +2248,8 @@ static void _operate_on(Ctx* c, uint32_t op, const Carets* kp, const Range* r, c
         free(texts);
         free(edits);
         Ctx now = _ctx(v, c->el);
-        size_t* at = calloc(k.count, sizeof(size_t));
         for (size_t i = 0; at && i < k.count; i++)
-            at[i] = r[i].ok ? _first_nonblank(&now, r[i].lines ? r[i].first : _lof(c, r[i].lo))
-                            : k.sel[i].head;
+            at[i] = at[i] != SIZE_MAX ? _first_nonblank(&now, at[i]) : k.sel[i].head;
         if (at)
             _place(&now, at, NULL, k.count, k.primary, true);
         free(at);
@@ -2196,6 +2270,10 @@ static void _operate_on(Ctx* c, uint32_t op, const Carets* kp, const Range* r, c
     free(ch);
     if (op == 'c') {
         _enter_insert(c, 'c', 1);
+        // Lines changed keep their indent only once something is typed after it.
+        for (size_t i = 0; i < k.count; i++)
+            v->indent_pending =
+                v->indent_pending || (r[i].ok && r[i].lines && _blank(_gc(c, _ls(c, r[i].first))));
         return;
     }
     _group(c, false);
@@ -2296,12 +2374,15 @@ static void _put_text(Ctx* c, const char* clip, RegKind kind, int width, bool af
     _free_carets(&k);
 }
 
-// p and P: the register after or before the cursor, `count` times.
+// p and P: the register after or before the cursor, `count` times. From nothing, a step that
+// changes nothing, which vim's saves before it finds the register empty.
 static void _put(Ctx* c, bool after, int count) {
     RegKind kind = REG_CHARS;
     const char* clip = _get_register(c, &kind);
     if (clip)
         _put_text(c, clip, kind, kind == REG_BLOCK ? c->v->yank_width + 1 : -1, after, count);
+    else
+        _empty_step(c);
 }
 
 // J and gJ: `count` lines joined, at least two, J putting one space where the lines meet unless
@@ -2510,7 +2591,7 @@ static void _enter_insert(Ctx* c, uint32_t cmd, int count) {
         for (size_t i = 0; k.sel && x && i < k.count; i++) {
             const size_t line = _lof(c, k.sel[i].head);
             size_t ind = 0;
-            char* indent = _indent_of(c, line, &ind);
+            char* indent = _indent_of(c, line, true, &ind);
             const char* nl = _nl(c);
             const size_t nl_len = strlen(nl);
             x[i].owned = malloc(nl_len + ind + 1);
@@ -2562,35 +2643,48 @@ static void _enter_insert(Ctx* c, uint32_t cmd, int count) {
     _reset(v);
 }
 
-// A line's blanks taken out where an Enter or an `o` put them and nothing was typed after.
-static void _drop_indent(Ctx* c) {
+// A line's blanks taken out where an Enter or an `o` put them and nothing was typed after. The
+// column each caret wants after, freed by the caller: where the blanks ended for a caret whose were
+// taken, as vim keeps it, and -1 for its own column; NULL when none were.
+static int* _drop_indent(Ctx* c, size_t* count) {
     if (!c->v->indent_pending)
-        return;
+        return NULL;
     c->v->indent_pending = false;
     Carets k = _carets(c->el);
     Change* x = calloc(k.count ? k.count : 1, sizeof(Change));
+    int* wants = calloc(k.count ? k.count : 1, sizeof(int));
     bool any = false;
-    for (size_t i = 0; k.sel && x && i < k.count; i++) {
+    for (size_t i = 0; k.sel && x && wants && i < k.count; i++) {
         const size_t head = k.sel[i].head, line = _lof(c, head);
         x[i].within = head;
+        wants[i] = -1;
         if (head != _le(c, line) || head == _ls(c, line) || !_in_indent(c, head))
             continue;
         x[i].e = (TextEdit){_ls(c, line), head, "", 0};
         x[i].edits = true;
         x[i].within = 0;
+        wants[i] = _vcol(c, head);
         any = true;
     }
     if (any)
         _apply(c, x, k.count, k.primary);
     free(x);
     _free_carets(&k);
+    if (!any) {
+        free(wants);
+        return NULL;
+    }
+    *count = k.count;
+    return wants;
 }
 
 static bool _feed(UIEditorVim* v, UIElement* el, uint32_t k);
+static void _insert_break(Ctx* c);
 
-// Esc: an insert given a count typed again count less one times -- an `o` or `O` opening a line
-// each time -- the indent nothing followed taken out, the cursor back onto the character before
-// it, and normal mode. The keys kept for `.` are the insert's own, the repeats aside.
+// Esc: an insert given a count typed again count less one times -- after an `o` or `O`, after an
+// Enter each time, so each line goes below the last -- the indent nothing followed taken out, the
+// cursor back onto the character before it, and normal mode. The keys kept for `.` are the
+// insert's own, the repeats aside.
 static void _leave_insert(Ctx* c) {
     UIEditorVim* v = c->v;
     const size_t kept = v->key_count;
@@ -2607,8 +2701,7 @@ static void _leave_insert(Ctx* c) {
             for (int t = 0; t < times; t++) {
                 if (cmd == 'o' || cmd == 'O') {
                     Ctx now = _ctx(v, c->el);
-                    _drop_indent(&now);
-                    _enter_insert(&now, cmd, 1);
+                    _insert_break(&now);
                 }
                 for (size_t i = 0; i < n; i++)
                     _feed(v, c->el, typed[i]);
@@ -2619,7 +2712,21 @@ static void _leave_insert(Ctx* c) {
     }
     v->key_count = kept;
     Ctx now = _ctx(v, c->el);
-    _drop_indent(&now);
+    size_t want_count = 0;
+    int* wants = _drop_indent(&now, &want_count);
+    // A block's A that typed nothing in the end takes its padding out again: vim pads only lines
+    // it puts text on.
+    if (v->block_insert && v->pad_count && text_doc_length(now.doc) == v->padded_length) {
+        TextEdit* cut = calloc(v->pad_count, sizeof(TextEdit));
+        for (size_t i = 0; cut && i < v->pad_count; i++) {
+            const size_t e = _le(&now, v->pad_lines[i]);
+            cut[i] = (TextEdit){e - v->pad_widths[i], e, "", 0};
+        }
+        if (cut)
+            ui_editor_edit(c->el, cut, v->pad_count, NULL, 0, 0);
+        free(cut);
+    }
+    v->pad_count = 0;
     Ctx after = _ctx(v, c->el);
     size_t n = 0, primary = 0;
     size_t* at = _heads(c->el, &n, &primary);
@@ -2628,17 +2735,24 @@ static void _leave_insert(Ctx* c) {
         if (at[i] > _ls(&after, line))
             at[i] = _before(&after, at[i]);
     }
-    // An insert a block began leaves one cursor, at the block's top left.
+    // An insert a block began leaves one cursor: for I and A at the block's top left, for a change
+    // where the top line's caret is.
     if (at && v->block_insert && v->insert_top < after.lines) {
-        at[0] = _at_col(&after, v->insert_top, v->insert_left, false);
+        if (v->block_corner)
+            at[0] = _at_col(&after, v->insert_top, v->insert_left, false);
         n = 1;
         primary = 0;
+    }
+    if (wants && want_count != n) {
+        free(wants);
+        wants = NULL;
     }
     v->block_insert = false;
     _set_state(v, UI_VIM_NORMAL);
     if (at)
-        _place(&after, at, NULL, n, primary, true);
+        _place(&after, at, wants, n, primary, true);
     free(at);
+    free(wants);
     _group(c, false);
     _keep_change(v, v->change_count);
     _reset(v);
@@ -2700,9 +2814,11 @@ static void _insert_break(Ctx* c) {
         const size_t h = k.sel[i].head, line = _lof(c, h), at = _ls(c, line), end = _le(c, line);
         size_t len = 0;
         const char* s = _lt(c, line, &len);
-        size_t ind = 0;
-        while (ind < h - at && _blank((unsigned char)s[ind]))
-            ind++;
+        size_t blanks = 0;
+        while (blanks < h - at && blanks < len && _blank((unsigned char)s[blanks]))
+            blanks++;
+        // The new line's indent: the blanks' width in spaces, expandtab's.
+        const size_t ind = (size_t)_vcol(c, at + blanks);
         size_t skip = h;
         while (skip < end && _blank(_gc(c, skip)))
             skip = _after(c, skip);
@@ -2714,7 +2830,7 @@ static void _insert_break(Ctx* c) {
         if (!x[i].owned)
             continue;
         memcpy(x[i].owned, nl, nl_len);
-        memcpy(x[i].owned + nl_len, s, ind);
+        memset(x[i].owned + nl_len, ' ', ind);
         x[i].e = (TextEdit){from, skip, x[i].owned, nl_len + ind};
         x[i].within = nl_len + ind;
         x[i].edits = true;
@@ -2954,8 +3070,12 @@ static void _visual(Ctx* c, UIEditorVimState to) {
         k.sel[0] = (TextSelection){v->block_anchor, v->block_head};
         k.want[0] = v->block_want;
     } else if (was < UI_VIM_VISUAL) {
-        for (size_t i = 0; i < k.count; i++)
+        // Each cursor's column as normal mode had it -- on a tab its last -- kept into the area.
+        for (size_t i = 0; i < k.count; i++) {
             k.sel[i].anchor = k.sel[i].head;
+            if (k.want[i] < 0)
+                k.want[i] = _vcol_end(c, k.sel[i].head) - 1;
+        }
     }
     _set_state(v, to);
     c->visual = true;
@@ -3029,11 +3149,18 @@ static void _visual_swap(Ctx* c, bool across) {
     _free_carets(&k);
 }
 
+// The column a visual head wants when none is kept: on a tab past the area's other end, the tab's
+// last, as vim draws the cursor there.
+static int _head_want(const Ctx* c, size_t head, size_t anchor, int want) {
+    return want >= 0 || want == INT_MAX || head <= anchor ? want : _vcol_end(c, head) - 1;
+}
+
 // A motion in visual mode: each area's head moves, its other end stays; a block's cursor moves.
 static bool _visual_move(Ctx* c, uint32_t prefix, uint32_t key, uint32_t arg, int count0) {
     UIEditorVim* v = c->v;
     if (v->state == UI_VIM_VISUAL_BLOCK) {
-        const Moved m = _motion(c, prefix, key, arg, v->block_head, count0, 0, v->block_want);
+        const int want = _head_want(c, v->block_head, v->block_anchor, v->block_want);
+        const Moved m = _motion(c, prefix, key, arg, v->block_head, count0, 0, want);
         if (m.ok) {
             v->block_head = m.to;
             if (m.want != WANT_KEEP)
@@ -3046,7 +3173,8 @@ static bool _visual_move(Ctx* c, uint32_t prefix, uint32_t key, uint32_t arg, in
     Carets k = _carets(c->el);
     bool moved = false;
     for (size_t i = 0; k.sel && i < k.count; i++) {
-        const Moved m = _motion(c, prefix, key, arg, k.sel[i].head, count0, 0, k.want[i]);
+        const int want = _head_want(c, k.sel[i].head, k.sel[i].anchor, k.want[i]);
+        const Moved m = _motion(c, prefix, key, arg, k.sel[i].head, count0, 0, want);
         if (!m.ok)
             continue;
         k.sel[i].head = m.to;
@@ -3082,7 +3210,8 @@ static Obj _visual_block_obj(const Ctx* c, size_t a, size_t h, int count, bool i
     size_t start = SIZE_MAX;
     const bool inside = _unclosed_before(c, p, open, close) != SIZE_MAX;
     for (; count > 0; count--) {
-        const size_t q = inside ? _unclosed_before(c, p, open, close) : _next_open(c, p, open);
+        const size_t q =
+            inside ? _unclosed_before(c, p, open, close) : _next_open(c, p, open, close);
         if (q == SIZE_MAX)
             return o;
         p = start = q;
@@ -3092,7 +3221,10 @@ static Obj _visual_block_obj(const Ctx* c, size_t a, size_t h, int count, bool i
         return o;
     bool sol = false;
     while (!include) {
+        // An empty block has nothing inside to select, and vim's i( fails there.
         _incl(c, &start);
+        if (start == end)
+            return o;
         sol = end == _ls(c, _lof(c, end));
         _decl(c, &end);
         while (_in_indent_by(c, end, 1)) {
@@ -3169,7 +3301,9 @@ static uint32_t _block_open(uint32_t key) {
 // i and a objects in visual mode: each area made the object at its cursor -- characters for words,
 // blocks and quotes, lines for paragraphs -- or, when it already covers more than a character, a
 // word or a paragraph grown by more and a block by the one round it. A word's cursor goes as far
-// as the search got even when the text ends first; so does a paragraph's.
+// as the search got even when the text ends first, and the mode is kept then; a paragraph's
+// growing goes as far too, and keeps the mode always. A quote is found on one line only, so an
+// area across lines takes none.
 static void _visual_object(Ctx* c, uint32_t ia, uint32_t key, int count0) {
     UIEditorVim* v = c->v;
     if (v->state == UI_VIM_VISUAL_BLOCK)
@@ -3180,17 +3314,18 @@ static void _visual_object(Ctx* c, uint32_t ia, uint32_t key, int count0) {
     const bool quote = key == '"' || key == '\'' || key == '`';
     const uint32_t open = _block_open(key);
     Carets k = _carets(c->el);
-    bool any = false;
+    bool any = false, kept = false;
     for (size_t i = 0; k.sel && i < k.count; i++) {
         const size_t a = k.sel[i].anchor, h = k.sel[i].head;
         TextSelection to = {a, h};
         bool ok = true;
         if (word && a != h) {
             bool inclusive = true;
-            _word_more(c, &to.head, n, include, key == 'W', h < a, &inclusive);
+            kept = kept || !_word_more(c, &to.head, n, include, key == 'W', h < a, &inclusive);
         } else if (word) {
             const Obj o = _obj_word(c, h, n, include, key == 'W');
-            to = (TextSelection){o.ok ? o.start : a, o.end};
+            to = (TextSelection){o.start, o.end};
+            kept = kept || !o.ok;
         } else if (par) {
             // In V mode a paragraph found starting at the cursor's own line is grown instead,
             // or ip again on one blank line would find the same line.
@@ -3201,6 +3336,7 @@ static void _visual_object(Ctx* c, uint32_t ia, uint32_t key, int count0) {
                 size_t line = _lof(c, h);
                 _par_more(c, &line, _lof(c, a), n, include);
                 to.head = _ls(c, line);
+                kept = true;
             } else if ((ok = o.ok)) {
                 to = (TextSelection){_lof(c, a) == _lof(c, o.start) ? a : o.start, o.end};
             }
@@ -3210,7 +3346,7 @@ static void _visual_object(Ctx* c, uint32_t ia, uint32_t key, int count0) {
             const size_t hi =
                 o.inclusive && o.end < _le(c, _lof(c, o.end)) ? _after(c, o.end) : o.end;
             to = (TextSelection){o.start, hi > o.start ? _before(c, hi) : hi};
-            ok = o.ok;
+            ok = o.ok && _lof(c, a) == _lof(c, h);
         } else if (open) {
             const uint32_t close = open == '(' ? ')' : open == '[' ? ']' : open == '{' ? '}' : '>';
             const Obj o = _visual_block_obj(c, a, h, n, include, open, close);
@@ -3226,7 +3362,8 @@ static void _visual_object(Ctx* c, uint32_t ia, uint32_t key, int count0) {
         any = true;
     }
     if (any) {
-        _set_state(v, par ? UI_VIM_VISUAL_LINE : UI_VIM_VISUAL);
+        if (!kept)
+            _set_state(v, par ? UI_VIM_VISUAL_LINE : UI_VIM_VISUAL);
         ui_editor_set_carets(c->el, k.sel, k.want, k.count, k.primary);
     }
     _free_carets(&k);
@@ -3337,17 +3474,20 @@ static void _visual_count(Ctx* c, UIEditorVimState mode, int count) {
 
 // Each caret's visual area as an operator takes it: its characters from one end to the other with
 // the far one's in -- from a line's end, its line break, unless it is the last line's -- or with
-// `lines` the lines it touches. And in `start`, where vim starts the operator: the area's first
-// character, or in a mode of lines (`line_mode`) the start of the line the area began on when that
-// is the first, else the cursor.
-static void _visual_ranges(const Ctx* c, const Carets* k, bool lines, bool line_mode, Range* r,
-                           size_t* start) {
+// `lines` the lines it touches. And in `start`, where vim starts the operator `op`: the area's
+// first character; or in a mode of lines (`line_mode`) its first line's start when the area began
+// on that line, the cursor otherwise -- r its first line's start always; or, made again by `.`, the
+// cursor.
+static void _visual_ranges(const Ctx* c, const Carets* k, bool lines, bool line_mode, uint32_t op,
+                           Range* r, size_t* start) {
     for (size_t i = 0; i < k->count; i++) {
         const size_t a = k->sel[i].anchor, h = k->sel[i].head;
         const size_t lo = a < h ? a : h, e = a < h ? h : a;
         Range* x = &r[i];
         *x = (Range){lo, lo, _lof(c, lo), _lof(c, e), lines, true};
-        start[i] = line_mode && _lof(c, a) <= _lof(c, h) ? _ls(c, _lof(c, a)) : lo;
+        start[i] = lo;
+        if (line_mode && !c->v->again)
+            start[i] = op == 'r' || _lof(c, a) <= _lof(c, h) ? _ls(c, x->first) : h;
         if (lines) {
             x->lo = _ls(c, x->first);
             x->hi =
@@ -3378,7 +3518,7 @@ static void _visual_operate(Ctx* c, uint32_t op, bool upper, int count0) {
     Range* r = calloc(k.count ? k.count : 1, sizeof(Range));
     size_t* start = calloc(k.count ? k.count : 1, sizeof(size_t));
     if (k.sel && r && start) {
-        _visual_ranges(c, &k, lines, line_mode, r, start);
+        _visual_ranges(c, &k, lines, line_mode, op, r, start);
         const TextSelection p = k.sel[k.primary];
         _note_area(c, upper ? UI_VIM_VISUAL_LINE : v->state, p.anchor, p.head, k.want[k.primary]);
         v->area.on = op != 'y';
@@ -3399,18 +3539,19 @@ static size_t _top_left(const Ctx* c, const Box* b) {
 }
 
 // The blanks starting at `lo` on its line rebuilt as spaces, `by` columns more -- fewer when
-// negative, never below none -- as vim's block shift with expandtab does. NULL when `lo` is not on
-// a blank and nothing is taken away.
-static char* _block_shifted(const Ctx* c, size_t lo, int by, size_t* run_end, size_t* n) {
+// negative, never taking the `before` columns of a tab left of the block -- as vim's block shift
+// with expandtab does. NULL when `lo` is not on a blank and nothing is taken away.
+static char* _block_shifted(const Ctx* c, size_t lo, int by, int before, size_t* run_end,
+                            size_t* n) {
     const size_t le = _le(c, _lof(c, lo));
     size_t e = lo;
     while (e < le && _blank(_gc(c, e)))
         e = _after(c, e);
     *run_end = e;
     const int had = _vcol(c, e) - _vcol(c, lo);
-    if (by < 0 && !had)
+    if (by < 0 && had <= before)
         return NULL;
-    const int now = had + by > 0 ? had + by : 0;
+    const int now = by > 0 ? had + by : before + (had - before + by > 0 ? had - before + by : 0);
     char* sp = malloc((size_t)now + 1);
     if (!sp)
         return NULL;
@@ -3445,17 +3586,29 @@ static void _block_operate(Ctx* c, uint32_t op, bool to_end, int count0, const c
         goto done;
     for (size_t i = 0; i < n; i++)
         cut[i] = _cut(c, b.top + i, &b);
-    if (op == 'd' || op == 'c' || op == 'y' || op == 'p') {
-        // The register: each line's piece as text, a line each.
+    // A delete on one empty line is nothing at all to vim: no register, no step.
+    const bool nothing = op == 'd' && n == 1 && _empty(c, b.top);
+    if (op == 'y' || ((op == 'd' || op == 'c' || op == 'p') && !_bare(c) && !nothing && !v->drop)) {
+        // The register: each line's piece as text, a line each -- a line ending before the block
+        // the block's width in spaces, as vim's yank fills it, which after `$` runs to the end of
+        // the longest line and one column past.
         char** pieces = calloc(n, sizeof(char*));
         size_t* lens = calloc(n, sizeof(size_t));
         size_t total = 0;
         int widest = 0;
-        for (size_t i = 0; pieces && lens && i < n; i++) {
-            pieces[i] = _cut_text(c, &cut[i], 'y', NULL, 0, &lens[i]);
-            total += lens[i] + 1;
+        for (size_t i = 0; i < n; i++) {
             const int w = _vcol(c, _le(c, b.top + i)) - b.left;
             widest = w > widest ? w : widest;
+        }
+        const int width = b.right == INT_MAX ? widest + 1 : b.right - b.left + 1;
+        for (size_t i = 0; pieces && lens && i < n; i++) {
+            if (cut[i].reach) {
+                pieces[i] = _cut_text(c, &cut[i], 'y', NULL, 0, &lens[i]);
+            } else if ((pieces[i] = malloc((size_t)width + 1))) {
+                _spaces(pieces[i], width);
+                lens[i] = (size_t)width;
+            }
+            total += lens[i] + 1;
         }
         char* text = pieces && lens ? malloc(total + 1) : NULL;
         size_t len = 0;
@@ -3492,22 +3645,34 @@ static void _block_operate(Ctx* c, uint32_t op, bool to_end, int count0, const c
         const Cut* k = &cut[i];
         size_t from = k->lo, to = k->hi, len = 0;
         char* text = NULL;
-        if (op == '>' && k->lo == k->hi && !_empty(c, b.top + i)) {
-            // A line ending before the block takes the spaces at its end.
+        if (op == '>' && k->lo == k->hi && k->reach && !_empty(c, b.top + i)) {
+            // A line ending at the block's left takes the spaces at its end.
             text = malloc((size_t)sw + 1);
             len = text ? (size_t)sw : 0;
             if (text)
                 _spaces(text, sw);
-        } else if (op == '<' || op == '>') {
+        } else if (op == '>' && k->lo < k->hi) {
+            // The blanks just before the block are rebuilt with it.
+            while (from > _ls(c, b.top + i) && _blank(_gc(c, _before(c, from))))
+                from = _before(c, from);
+            text = _block_shifted(c, from, sw, 0, &to, &len);
+        } else if (op == '<') {
             if (k->lo < k->hi)
-                text = _block_shifted(c, k->lo, op == '>' ? sw : -sw, &to, &len);
+                text = _block_shifted(c, k->lo, -sw, k->before, &to, &len);
         } else if (k->lo < k->hi || (op == 'p' && k->reach)) {
             text = op == 'd' || op == 'c' || op == 'r' || op == 'p'
                        ? _cut_text(c, k, op, with, wlen, &len)
                        : _cased(c, k->lo, k->hi, op, &len);
         }
-        if (op == 'c' && k->reach && carets)
-            carets[caret_count++] = (size_t)((long long)from + shift + k->before);
+        if (op == 'c' && k->reach && carets) {
+            // The top line's caret after the spaces a split tab left -- on the last of them when
+            // they end the line, where vim's delete leaves its cursor.
+            size_t at = from + (size_t)k->before;
+            const size_t end = _le(c, b.top + i) - (to - from) + len;
+            if (i == 0 && k->before && at >= end)
+                at = end - 1;
+            carets[caret_count++] = (size_t)((long long)at + shift);
+        }
         if (!text)
             continue;
         owned[m] = text;
@@ -3520,7 +3685,7 @@ static void _block_operate(Ctx* c, uint32_t op, bool to_end, int count0, const c
     _group(c, true);
     if (m)
         ui_editor_edit(c->el, edits, m, NULL, 0, 0);
-    else
+    else if (!nothing)
         _empty_step(c);
     Ctx now = _ctx(v, c->el);
     if (op == 'c' && carets && caret_count) {
@@ -3532,6 +3697,8 @@ static void _block_operate(Ctx* c, uint32_t op, bool to_end, int count0, const c
         free(s);
         free(carets);
         v->block_insert = true;
+        v->block_corner = false;
+        v->pad_count = 0;
         v->insert_top = b.top;
         v->insert_left = b.left;
         _enter_insert(&now, 'c', 1);
@@ -3572,6 +3739,11 @@ static void _block_insert(Ctx* c, bool append) {
     v->box_given = false;
     size_t count = 0, m = 0;
     long long shift = 0;
+    v->pad_count = 0;
+    free(v->pad_lines);
+    free(v->pad_widths);
+    v->pad_lines = calloc(n, sizeof(size_t));
+    v->pad_widths = calloc(n, sizeof(size_t));
     for (size_t i = 0; at && pads && owned && i < n; i++) {
         const size_t line = b.top + i;
         const Cut k = _cut(c, line, &b);
@@ -3601,6 +3773,10 @@ static void _block_insert(Ctx* c, bool append) {
             from = to = _le(c, line);
             pad = b.right + 1 - width;
             caret = from + (size_t)pad;
+            if (v->pad_lines && v->pad_widths) {
+                v->pad_lines[v->pad_count] = line;
+                v->pad_widths[v->pad_count++] = (size_t)pad;
+            }
         }
         at[count++] = (size_t)((long long)caret + shift);
         if (!pad || !(owned[m] = malloc((size_t)pad + 1)))
@@ -3610,12 +3786,18 @@ static void _block_insert(Ctx* c, bool append) {
         m++;
         shift += (long long)pad - (long long)(to - from);
     }
-    // The cursor at the top left first, where taking the step back leaves it.
-    const size_t corner = _top_left(c, &b);
+    // The cursor where taking the step back leaves it first: for I the top left, for A where the
+    // top line's text goes in, before any padding -- the top line's end when it is short.
+    size_t corner = _top_left(c, &b);
+    if (append) {
+        const size_t le = _le(c, b.top);
+        corner = b.right != INT_MAX && _vcol(c, le) > b.right ? _cut(c, b.top, &b).hi : le;
+    }
     _place(c, &corner, NULL, 1, 0, true);
     _group(c, true);
     if (m)
         ui_editor_edit(c->el, pads, m, NULL, 0, 0);
+    v->padded_length = text_doc_length(c->doc);
     TextSelection* s = calloc(count ? count : 1, sizeof(TextSelection));
     for (size_t i = 0; s && at && i < count; i++)
         s[i] = (TextSelection){at[i], at[i]};
@@ -3628,6 +3810,7 @@ static void _block_insert(Ctx* c, bool append) {
     free(pads);
     free(at);
     v->block_insert = true;
+    v->block_corner = true;
     v->insert_top = b.top;
     v->insert_left = b.left;
     Ctx now = _ctx(v, c->el);
@@ -3692,8 +3875,9 @@ static bool _visual_join(Ctx* c, bool spaces) {
             const TextSelection p = k.sel[k.primary];
             _note_area(c, v->state, p.anchor, p.head, k.want[k.primary]);
         }
-        // Each cursor at its area's start as an operator takes it, which the step keeps; a join
-        // running past the last line fails, the cursor left there.
+        // Each cursor at its area's start as an operator takes it, which the step keeps -- made
+        // again by `.`, where the cursor stood; a join running past the last line fails, the
+        // cursor left there.
         bool fits = true;
         const bool line_mode = v->state == UI_VIM_VISUAL_LINE;
         for (size_t i = 0; i < k.count; i++) {
@@ -3702,7 +3886,7 @@ static bool _visual_join(Ctx* c, bool spaces) {
             const size_t top = first < last ? first : last;
             counts[i] = (int)(first < last ? last - first : first - last) + 1;
             fits = fits && top + (size_t)(counts[i] > 2 ? counts[i] : 2) <= c->lines;
-            at[i] = line_mode && first <= last ? _ls(c, first) : a < h ? a : h;
+            at[i] = line_mode && first <= last && !v->again ? _ls(c, first) : a < h ? a : h;
         }
         _set_state(v, UI_VIM_NORMAL);
         c->visual = false;
@@ -3742,7 +3926,7 @@ static bool _visual_replace(Ctx* c, uint32_t ch) {
         free(x);
         return false;
     }
-    _visual_ranges(c, &k, lines, lines, r, start);
+    _visual_ranges(c, &k, lines, lines, 'r', r, start);
     const TextSelection p = k.sel[k.primary];
     _note_area(c, v->state, p.anchor, p.head, k.want[k.primary]);
     char utf8[4];
@@ -3828,6 +4012,7 @@ static void _visual_put(Ctx* c, bool keep, int count0) {
         } else {
             // The block's pieces deleted, and the register put at its top left, as one step.
             const Box b = _box(c);
+            const size_t head_line = _lof(c, v->block_head);
             const size_t corner = _top_left(c, &b);
             _place(c, &corner, NULL, 1, 0, true);
             _group(c, true);
@@ -3838,16 +4023,22 @@ static void _visual_put(Ctx* c, bool keep, int count0) {
             if (reg && kind == REG_BLOCK) {
                 _put_block(&now, reg, reg_width, b.top, b.left, times);
             } else if (reg && kind == REG_LINES) {
-                // Lines go below the block with p; with P above it, or below its top line when
-                // the delete left that line short of the block's left column.
+                // Lines go below the cursor's line with p -- the block's end, as vim keeps it; with
+                // P above the top line, or below it when the delete left that line short of the
+                // block's left column.
                 const size_t gap = _at_col(&now, b.top, b.left, true);
                 const bool below = !keep || _hold(&now, gap) < gap;
-                const size_t line = keep ? b.top : b.bottom < now.lines ? b.bottom : now.lines - 1;
+                const size_t line = keep                    ? b.top
+                                    : head_line < now.lines ? head_line
+                                                            : now.lines - 1;
                 const size_t at = _ls(&now, line);
                 _place(&now, &at, NULL, 1, 0, true);
                 _put_text(&now, reg, kind, -1, below, times);
             } else if (reg) {
-                _put_text(&now, reg, kind, -1, false, times);
+                // Characters go before the cursor, or after it when the delete left the top line
+                // short of the block's left column.
+                const size_t gap = _at_col(&now, b.top, b.left, true);
+                _put_text(&now, reg, kind, -1, _hold(&now, gap) < gap, times);
             }
             v->held--;
             _group(c, false);
@@ -3868,19 +4059,31 @@ static void _visual_put(Ctx* c, bool keep, int count0) {
     size_t body_len = 0;
     if (!k.sel || !r || !start || !x)
         goto done;
-    _visual_ranges(c, &k, lines, lines, r, start);
+    _visual_ranges(c, &k, lines, lines, 'p', r, start);
     const TextSelection p = k.sel[k.primary];
     _note_area(c, v->state, p.anchor, p.head, k.want[k.primary]);
-    // What the area held, for the register after p.
+    // What the area held, for the register after p -- nothing from an empty text, where vim's
+    // delete yanks nothing.
     size_t held_len = 0;
     const Range* pr = &r[k.primary];
-    char* held = lines ? _lines_text(c, pr->first, pr->last, &held_len)
-                       : _range_text(c, pr->lo, pr->hi, &held_len);
-    // The register as it goes in: whole lines end in a line break.
+    char* held = _bare(c) ? NULL
+                 : lines  ? _lines_text(c, pr->first, pr->last, &held_len)
+                          : _range_text(c, pr->lo, pr->hi, &held_len);
+    // A block put over characters: the area deleted, and the block put down where it began.
+    const bool block_in = reg && kind == REG_BLOCK && !lines;
+    const size_t block_line = _lof(c, pr->lo);
+    const int block_col = _vcol(c, pr->lo);
+    // The register as it goes in: whole lines end in a line break -- a block's pieces each a line,
+    // its last too however it ends, and characters' too, so characters ending in a break put as
+    // lines end in an empty one, as vim's pieces do.
     const bool put_lines = lines || kind == REG_LINES;
-    const size_t one = reg_len + (put_lines && (!reg_len || reg[reg_len - 1] != '\n') ? 1 : 0);
+    const bool broken = reg_len && reg[reg_len - 1] == '\n' && kind == REG_LINES;
+    const size_t one = reg_len + (put_lines && !broken ? 1 : 0);
     char* raw = malloc(one * (size_t)times + 2);
-    if (raw) {
+    if (raw && block_in) {
+        raw[0] = '\0';
+        body = _with_nl(c, raw, 0, &body_len);
+    } else if (raw) {
         size_t len = 0;
         if (put_lines && !lines && reg)
             raw[len++] = '\n';
@@ -3898,8 +4101,12 @@ static void _visual_put(Ctx* c, bool keep, int count0) {
     for (size_t i = 0; body && i < k.count; i++) {
         size_t lo = r[i].lo, hi = r[i].hi, len = body_len;
         if (lines) {
-            // The last lines of a text with no final line break: put without one.
-            if (r[i].last + 1 >= c->lines && !_ends_broken(c)) {
+            // Nothing to put: the lines deleted, as d deletes them. The last lines of a text with
+            // no final line break: put without one.
+            if (!reg) {
+                _lines_span(c, r[i].first, r[i].last, &lo, &hi);
+                len = 0;
+            } else if (r[i].last + 1 >= c->lines && !_ends_broken(c)) {
                 hi = _le(c, r[i].last);
                 len = body_len >= nl_len ? body_len - nl_len : 0;
             }
@@ -3918,11 +4125,14 @@ static void _visual_put(Ctx* c, bool keep, int count0) {
     // The carets at the areas' starts first, where taking the step back leaves them.
     _place(c, start, NULL, k.count, k.primary, true);
     _group(c, true);
+    v->held++;
     if (body)
         _apply(c, x, k.count, k.primary);
-    {
+    Ctx now = _ctx(v, c->el);
+    if (block_in) {
+        _put_block(&now, reg, reg_width, block_line, block_col, times);
+    } else {
         // Lines put leave the cursor on the first's first character not a blank.
-        Ctx now = _ctx(v, c->el);
         size_t m = 0, primary = 0;
         size_t* at = _heads(c->el, &m, &primary);
         for (size_t i = 0; at && put_lines && i < m; i++)
@@ -3931,6 +4141,7 @@ static void _visual_put(Ctx* c, bool keep, int count0) {
             _place(&now, at, NULL, m, primary, true);
         free(at);
     }
+    v->held--;
     _group(c, false);
     if (held && !keep)
         _put_register(c, held, held_len, lines ? REG_LINES : REG_CHARS);
@@ -4140,26 +4351,21 @@ static bool _second(Ctx* c, uint32_t p, uint32_t k) {
         }
         v->find_kind = p;
         v->find_char = k;
-        if (op)
-            _operate(c, op, 0, p, k, count0);
-        else if (c->visual)
-            _visual_move(c, 0, p, k, count0);
-        else
-            _move(c, 0, p, k, count0);
-        if (op && op != 'y')
+        if (op && _operate(c, op, 0, p, k, count0) && op != 'y')
             _keep_change(v, count0);
+        else if (!op && c->visual)
+            _visual_move(c, 0, p, k, count0);
+        else if (!op)
+            _move(c, 0, p, k, count0);
         _reset(v);
         return true;
     }
     if ((p == 'i' || p == 'a') && (op || c->visual)) {
         // A text object after an operator -- diw, ci(, yap -- or made the visual area.
-        if (k < K_ESC && c->visual) {
+        if (k < K_ESC && c->visual)
             _visual_object(c, p, k, count0);
-        } else if (k < K_ESC) {
-            _operate(c, op, p, k, 0, count0);
-            if (op != 'y')
-                _keep_change(v, count0);
-        }
+        else if (k < K_ESC && _operate(c, op, p, k, 0, count0) && op != 'y')
+            _keep_change(v, count0);
         _reset(v);
         return true;
     }
@@ -4202,10 +4408,8 @@ static bool _second(Ctx* c, uint32_t p, uint32_t k) {
         if (k == '~' || k == 'u' || k == 'U') {
             if (op) {
                 // g~g~, gugu, gUgU: the operator doubled, a line.
-                if (op == k) {
-                    _operate(c, op, 0, k, 0, count0);
+                if (op == k && _operate(c, op, 0, k, 0, count0))
                     _keep_change(v, count0);
-                }
                 _reset(v);
                 return true;
             }
@@ -4221,8 +4425,7 @@ static bool _second(Ctx* c, uint32_t p, uint32_t k) {
         }
         if (_is_motion('g', k)) {
             if (op) {
-                _operate(c, op, 'g', k, 0, count0);
-                if (op != 'y')
+                if (_operate(c, op, 'g', k, 0, count0) && op != 'y')
                     _keep_change(v, count0);
             } else if (c->visual) {
                 _visual_move(c, 'g', k, 0, count0);
@@ -4278,34 +4481,20 @@ static bool _command(Ctx* c, uint32_t k) {
             return true;
         case 'x':
         case K_DEL:
-            _operate(c, 'd', 0, 'l', 0, count0);
-            _keep_change(v, count0);
-            _reset(v);
-            return true;
         case 'X':
-            _operate(c, 'd', 0, 'h', 0, count0);
-            _keep_change(v, count0);
-            _reset(v);
-            return true;
         case 'D':
-            _operate(c, 'd', 0, '$', 0, count0);
-            _keep_change(v, count0);
+            if (_operate(c, 'd', 0, k == 'X' ? 'h' : k == 'D' ? '$' : 'l', 0, count0))
+                _keep_change(v, count0);
             _reset(v);
             return true;
         case 'C':
-            v->count = v->op_count = 0;
-            _operate(c, 'c', 0, '$', 0, count0);
-            v->change_count = count0;
-            return true;
         case 's':
-            v->count = v->op_count = 0;
-            _operate(c, 'c', 0, 'l', 0, count0);
-            v->change_count = count0;
-            return true;
         case 'S':
             v->count = v->op_count = 0;
-            _operate(c, 'c', 0, 'c', 0, count0);
-            v->change_count = count0;
+            if (_operate(c, 'c', 0, k == 'C' ? '$' : k == 's' ? 'l' : 'c', 0, count0))
+                v->change_count = count0;
+            else
+                _reset(v);
             return true;
         case 'Y':
             _operate(c, 'y', 0, 'y', 0, count0);
@@ -4457,6 +4646,12 @@ static bool _visual_command(Ctx* c, uint32_t k) {
             _visual_operate(c, 'd', k == 'D' || (k == 'X' && !block), count0);
             _keep_change(v, count0);
             break;
+        case K_DROP:
+            v->drop = true;
+            _visual_operate(c, 'd', false, count0);
+            v->drop = false;
+            _keep_change(v, count0);
+            break;
         case 'y':
         case 'Y':
         case K_COPY:
@@ -4488,7 +4683,11 @@ static bool _visual_command(Ctx* c, uint32_t k) {
         case 'p':
         case 'P':
         case K_PASTE:
+            // What `.` makes again is the delete under the put, over an area as large -- P's into
+            // nothing, which leaves the register alone: vim's.
             _visual_put(c, k == 'P', count0);
+            v->key_count = 0;
+            _record(v, k == 'P' ? K_DROP : 'd');
             _keep_change(v, count0);
             break;
         case 'I':
@@ -4540,8 +4739,7 @@ static bool _after_op(Ctx* c, uint32_t k) {
         _reset(v);
         return true;
     }
-    _operate(c, op, 0, k, 0, count0);
-    if (op != 'y')
+    if (_operate(c, op, 0, k, 0, count0) && op != 'y')
         _keep_change(v, count0);
     _reset(v);
     return true;
@@ -4571,10 +4769,11 @@ static bool _normal_key(Ctx* c, uint32_t k) {
 }
 
 // `.`: the last change made again, with the count given now if there is one -- a visual one over
-// an area made again at the cursor.
+// an area made again at the cursor, with its own count whatever is given now, as vim's.
 static void _repeat(Ctx* c) {
     UIEditorVim* v = c->v;
-    const int count = v->count ? v->count : v->change_count;
+    const VisualArea area = v->change_area;
+    const int count = v->count && !area.on ? v->count : v->change_count;
     _reset(v);
     if (!v->change_len)
         return;
@@ -4583,15 +4782,17 @@ static void _repeat(Ctx* c) {
         return;
     const size_t n = v->change_len;
     memcpy(keys, v->change, n * sizeof(uint32_t));
-    const VisualArea area = v->change_area;
     v->replaying++;
-    if (area.on)
+    if (area.on) {
         _visual_again(c, &area);
+        v->again = true;
+    }
     v->count = count;
-    for (size_t i = 0; i < n; i++)
+    v->failed = false;
+    for (size_t i = 0; i < n && !v->failed; i++)
         _feed(v, c->el, keys[i]);
     v->replaying--;
-    v->box_given = false;
+    v->box_given = v->again = v->failed = false;
     v->change_count = count;
     free(keys);
     _reset(v);
@@ -4689,8 +4890,7 @@ static bool _line_done(Ctx* c, char kind, const char* text) {
     const int count0 = _count0(v);
     const uint32_t op = v->op;
     if (op) {
-        _operate(c, op, 0, 'n', 0, count0);
-        if (op != 'y')
+        if (_operate(c, op, 0, 'n', 0, count0) && op != 'y')
             _keep_change(v, count0);
     } else if (c->visual) {
         _visual_move(c, 0, 'n', 0, count0);
@@ -4817,6 +5017,8 @@ void free_ui_editor_vim(UIEditorVim* vim) {
         return;
     free(vim->yank);
     free(vim->search);
+    free(vim->pad_lines);
+    free(vim->pad_widths);
     free(vim);
 }
 

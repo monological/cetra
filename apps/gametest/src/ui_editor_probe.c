@@ -1497,10 +1497,24 @@ static size_t vim_events(const char* keys, InputKeyEvent* out, size_t max) {
     return n;
 }
 
+// Whether the text was emptied to one empty line on the way -- vim's empty buffer, where its
+// bytes and vim's no longer agree.
+static bool g_vim_emptied;
+
+static void note_vim_emptied(TextDoc* doc, const TextDocAction* action, void* user) {
+    (void)action;
+    (void)user;
+    char text[3] = {0};
+    const size_t len = text_doc_length(doc);
+    if (len <= 2)
+        text_doc_copy(doc, 0, len, text);
+    g_vim_emptied = g_vim_emptied || len == 0 || !strcmp(text, "\n") || !strcmp(text, "\r\n");
+}
+
 // Each case of the file CETRA_VIM_CASES names -- "<text in hex> <line> <column> <keys in hex>",
 // the keys in vim's notation -- run on a fresh text, editor and vim mode, the cursor put where
-// vim's cursor() would put it. Prints "vim <case> <line> <column> <the text in hex>", as vim's
-// line('.') and col('.') count.
+// vim's cursor() would put it. Prints "vim <case> <line> <column> <the text in hex> <emptied>", as
+// vim's line('.') and col('.') count, the last 1 when the text was emptied on the way.
 static int probe_vim_run(UISystem* ui) {
     const char* path = getenv("CETRA_VIM_CASES");
     long size = 0;
@@ -1526,6 +1540,8 @@ static int probe_vim_run(UISystem* ui) {
             TextDoc* doc = text ? create_text_doc(text, text_len) : NULL;
             UIEditorVim* vim = create_ui_editor_vim();
             if (doc && vim && keys) {
+                g_vim_emptied = false;
+                text_doc_set_on_action(doc, note_vim_emptied, NULL);
                 UIElement* ed = editor_fixture(ui, doc, 600.0f, 300.0f);
                 ui_editor_set_mode(ed, ui_editor_vim_mode(vim));
                 if (engine)
@@ -1547,7 +1563,7 @@ static int probe_vim_run(UISystem* ui) {
                 printf("vim %d %zu %zu ", index, l + 1, head - text_doc_line_start(doc, l) + 1);
                 for (size_t i = 0; out && i < out_len; i++)
                     printf("%02x", (unsigned char)out[i]);
-                printf("\n");
+                printf(" %d\n", g_vim_emptied ? 1 : 0);
                 free(out);
                 ui_editor_set_mode(ed, NULL);
                 ui_pop(ui);

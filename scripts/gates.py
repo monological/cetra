@@ -26211,6 +26211,66 @@ _VIM_SEQUENCES = [
     "/a<CR>u", "/a<CR>x", ":noh<CR>n", "/a<CR>:noh<CR>n", "*:2<CR>n",
 ]
 
+# The random sequences' vocabulary: whole commands, composed at random. It leaves out what the corpus
+# leaves out as known differences, and so whatever they would combine into: visual I and A, $
+# inside a character or line area, a line let go; and a quote object in visual mode, which vim
+# grows over an area wider than a character where the mode makes it afresh. Every insert ends in
+# Esc: where vim leaves a cursor still inserting at the end of its keys is its harness's, not vim's.
+_VIM_MOTIONS = ["h", "j", "k", "l", "w", "b", "e", "W", "B", "E", "ge", "0", "^", "$", "gg", "G",
+                "2G", "f(", "t)", "F(", ";", ",", "%", "{", "}", "+", "-", "_", "2j", "3w", "<CR>",
+                "/a<CR>", "?e<CR>", "n", "N", "*", "#"]
+_VIM_AREA_MOTIONS = [m for m in _VIM_MOTIONS if m not in ("$", "<CR>")]
+_VIM_OBJECTS = ["iw", "aw", "iW", "i(", "a(", "ip", "ap", 'i"']
+_VIM_AREA_OBJECTS = [o for o in _VIM_OBJECTS if o != 'i"']
+# What is typed in an insert. A change whose motion fails types it in normal mode instead, so it
+# holds only keys the mode has: vim reads Z, q and ( as commands it does not.
+_VIM_TEXTS = ["k", "ab", "x y", "é", "a<CR>b", "w<BS>", "<CR>"]
+
+
+def _vim_random_command(rnd):
+    """One command of the random sequences, in vim's notation, where a '<' is "<lt>"."""
+    kind = rnd.randrange(10)
+    if kind <= 2:
+        return rnd.choice(_VIM_MOTIONS)
+    if kind == 3:
+        op = rnd.choice(["d", "y", "c", ">", "<lt>", "g~", "gU"])
+        target = rnd.choice(_VIM_MOTIONS + _VIM_OBJECTS + ["<lt>" if op == "<lt>" else op[-1]])
+        return op + target + (rnd.choice(_VIM_TEXTS) + "<Esc>" if op == "c" else "")
+    if kind == 4:
+        return rnd.choice(["x", "3x", "X", "D", "J", "gJ", "rx", "~", "p", "P", "u", "<C-r>", ".",
+                           "dd", "yy", ">>", "Y", ":2<CR>", "2."])
+    if kind == 5:
+        return rnd.choice(["i", "a", "I", "A", "o", "O", "s", "S", "C", "cc", "cw"]) + \
+            rnd.choice(_VIM_TEXTS) + "<Esc>"
+    if kind <= 7:
+        area = rnd.choice(["v", "V"]) + "".join(rnd.choice(_VIM_AREA_MOTIONS)
+                                                for _ in range(rnd.randint(1, 2)))
+        if rnd.random() < 0.3:
+            area += rnd.choice(_VIM_AREA_OBJECTS)
+        op = rnd.choice(["d", "x", "y", "c", ">", "<lt>", "~", "u", "U", "J", "rx", "p", "P",
+                         "o<Esc>"])
+        return area + op + (rnd.choice(_VIM_TEXTS) + "<Esc>" if op == "c" else "")
+    block = "<C-v>" + "".join(rnd.choice(["j", "k", "l", "h", "w", "2j", "e", "$"])
+                              for _ in range(rnd.randint(1, 3)))
+    op = rnd.choice(["d", "y", "c", ">", "<lt>", "~", "U", "rx", "p", "I", "A", "D", "C"])
+    return block + op + (rnd.choice(_VIM_TEXTS[:4]) + "<Esc>" if op in "cIAC" else "")
+
+
+def _vim_random_cases(seed, count):
+    """`count` random sequences of two to six commands from `seed`, each on one fixture at one of
+    its starts: the same cases for the same seed on every run."""
+    import random
+    rnd = random.Random(seed)
+    names = sorted(_VIM_FIXTURES)
+    cases = []
+    for _ in range(count):
+        text = _VIM_FIXTURES[rnd.choice(names)]
+        line, col = rnd.choice(_vim_starts(text))
+        keys = "".join(_vim_random_command(rnd) for _ in range(rnd.randint(2, 6)))
+        cases.append((text, line, col, keys))
+    return cases
+
+
 # What the corpus leaves out on a fixture, each a place the vim mode differs from vim on purpose:
 # vim's A after an area ending on a character of several bytes inserts inside that character.
 _VIM_NOT_ON = {
@@ -26296,8 +26356,9 @@ def _vim_reference(case, path):
 
 
 def _vim_cetra(cases, workdir, tag):
-    """[(line, column, lines)] the vim mode leaves each case at, from one gametest run; None
-    for a case it printed nothing for."""
+    """[(line, column, bytes, emptied)] the vim mode leaves each case at, from one gametest run --
+    `emptied` whether the text was emptied whole on the way; None for a case it printed nothing
+    for."""
     path = os.path.join(workdir, f"vim_cases_{tag}.txt")
     with open(path, "w", encoding="ascii") as f:
         for text, line, col, keys in cases:
@@ -26308,9 +26369,30 @@ def _vim_cetra(cases, workdir, tag):
     except subprocess.TimeoutExpired:
         return [None] * len(cases)
     got = {}
-    for m in re.finditer(r"^vim (\d+) (\d+) (\d+) ([0-9a-f]*)$", r.stdout, re.M):
-        got[int(m.group(1))] = (int(m.group(2)), int(m.group(3)), bytes.fromhex(m.group(4)))
+    for m in re.finditer(r"^vim (\d+) (\d+) (\d+) ([0-9a-f]*) ([01])$", r.stdout, re.M):
+        got[int(m.group(1))] = (int(m.group(2)), int(m.group(3)), bytes.fromhex(m.group(4)),
+                                m.group(5) == "1")
     return [got.get(i) for i in range(len(cases))]
+
+
+def _vim_agrees(ref, got):
+    """Whether the vim mode left a case where vim did. Two differences are known and let pass. Vim
+    keeps a file's final line break apart from its lines, so once a text is emptied whole, the two
+    may differ by that break alone. And a block shift whose left column is past its top line's end
+    leaves vim's cursor past that end, in normal mode, where vim's next command finds it on the
+    line's last character -- where the mode puts it at once."""
+    if got is None:
+        return False
+    if ref == got[:3]:
+        return True
+    if ref[0] == got[0] and ref[2] == got[2] and got[1] >= 1:
+        line = ref[2].split(b"\n")[ref[0] - 1].rstrip(b"\r")
+        last = line[got[1] - 1:].decode("utf-8", "replace")
+        if ref[1] == len(line) + 1 and len(last) == 1:
+            return True
+    brk = b"\r\n" if b"\r\n" in ref[2] + got[2] else b"\n"
+    return (got[3] and ref[:2] == got[:2]
+            and (ref[2] == got[2] + brk or got[2] == ref[2] + brk))
 
 
 def _vim_oracle(cases, workdir, tag):
@@ -26324,7 +26406,8 @@ def _vim_oracle(cases, workdir, tag):
                             enumerate(cases)))
     got = _vim_cetra(cases, workdir, tag)
     ran = sum(r is not None for r in ref)
-    return [(c, r, g) for c, r, g in zip(cases, ref, got) if r is not None and r != g], ran
+    return [(c, r, g) for c, r, g in zip(cases, ref, got)
+            if r is not None and not _vim_agrees(r, g)], ran
 
 
 def _probe_wrong(p, want):
@@ -28178,6 +28261,13 @@ def run_ui_gate(workdir):
                      and through vim 9 fed the keys as typed; the text, byte for
                      byte, and the cursor must agree. Skips without vim on the
                      path.
+      ui-vim-random  the same, on 1600 sequences no one wrote: two to six whole
+                     commands each -- motions, operators over motions and objects,
+                     edits, inserts, undo, `.`, searches, areas in the three visual
+                     modes with operators over them, blocks run to their lines'
+                     ends -- drawn from four fixed seeds, so every run tries the
+                     same ones; a difference names its seed and its keys. Skips
+                     without vim on the path.
       ui-vim-state   the vim mode's state as a host shows it: NORMAL and INSERT
                      named, a block caret and a bar, the keys of a half-typed
                      command ("2d") shown and dropped by Esc, a click past a line's
@@ -29207,6 +29297,28 @@ def run_ui_gate(workdir):
                   + (f": {shown}" if shown else ""))
         print(f"  ui-vim-oracle         {'PASS' if ok else 'FAIL'}  {detail}")
         note("ui-vim-oracle", ok)
+
+    # ---- the vim mode held to vim on sequences no one wrote (spec 14.5)
+    if not _VIM:
+        print("  ui-vim-random         SKIP  (no vim on the path)")
+    else:
+        seeds = (1, 2, 3, 4)
+        cases, seed_of = [], {}
+        for seed in seeds:
+            for case in _vim_random_cases(seed, 400):
+                seed_of.setdefault(case, seed)
+                cases.append(case)
+        diffs, ran = _vim_oracle(cases, workdir, "random")
+        ok = ran == len(cases) and not diffs
+        shown = "; ".join(f"seed {seed_of[case]} {case[3]!r} at {case[1]}:{case[2]}: vim "
+                          f"{r[0]}:{r[1]}, the mode "
+                          + (f"{g[0]}:{g[1]}{'' if g[2] == r[2] else ', text differs'}"
+                             if g else "nothing")
+                          for case, r, g in diffs[:3])
+        detail = (f"{len(cases)} sequences from seeds {', '.join(map(str, seeds))}, vim ran "
+                  f"{ran}, {len(diffs)} differ from it" + (f": {shown}" if shown else ""))
+        print(f"  ui-vim-random         {'PASS' if ok else 'FAIL'}  {detail}")
+        note("ui-vim-random", ok)
 
     ok, detail = doc_flags("vim-state", 10, "NORMAL and INSERT named, the block caret and the bar, "
                            "the keys of a half-typed command shown and dropped by Esc, a click "
