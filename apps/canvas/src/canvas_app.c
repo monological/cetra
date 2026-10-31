@@ -1640,6 +1640,15 @@ static bool build_font_sheet(UISystem* ui, Engine* engine, Font* label) {
  * A parse's result is taken on the frame its thread's end wakes; --editor-lag N takes it N frames
  * after it began instead, waiting for it then, so a headless run repeats. --vim puts the vim mode
  * (spec 14.5) under the app's keys, with its state on a line under the editor.
+ *
+ * --editor may be given more than once, and the editors are PANES (spec 14.6), a test bed for
+ * taking elements out, moving them and showing an editor another text -- not pcb's panes, whose
+ * keys are pcb's:
+ * - F8 splits the focused pane: a row takes its place, it moves into the row, and a second editor
+ *   on the same text, with carets of its own, goes beside it;
+ * - F9 closes the focused pane, the focus going to the pane left in its place; a row left holding
+ *   one pane hands it to the row's own parent;
+ * - F10 shows the next file in the focused pane, where that pane last was in it.
  */
 
 enum {
@@ -1668,28 +1677,87 @@ typedef struct ParseJob {
     Engine* engine;
 } ParseJob;
 
-typedef struct EditorSheet {
-    TextDoc* doc;
-    GlyphCache* face;
-    UIElement* editor;
+#define EDITOR_FILES_MAX 8
+#define EDITOR_PANES_MAX 16
+
+// A file the editors show: its text, and the parse that reads it.
+typedef struct EditorFile {
     const char* path;
+    TextDoc* doc;
     ParseJob job;
     uint64_t parsed; // the version the last result was for; UINT64_MAX for none
-    int lag;         // frames from a parse's start to its result being taken
+} EditorFile;
+
+// Where a pane last was in a file: its selections, the primary last, and the offset at its view's
+// top, at the text's version then; `sel` NULL for a file it has not left.
+typedef struct PaneSpot {
+    TextSelection* sel;
+    size_t count;
+    size_t top;
+    uint64_t version;
+} PaneSpot;
+
+typedef struct EditorPane {
+    UIElement* editor; // NULL for a slot no pane holds
+    int file;
+    PaneSpot spots[EDITOR_FILES_MAX];
+} EditorPane;
+
+typedef struct EditorSheet {
+    EditorFile files[EDITOR_FILES_MAX];
+    int file_count;
+    EditorPane panes[EDITOR_PANES_MAX];
+    UIElement* area; // the panes' container, a row
+    GlyphCache* face;
+    UISystem* ui;
+    UIScreen* screen;
+    int lag; // frames from a parse's start to its result being taken
     // With --vim: the vim mode under the app's own, and a line under the editor saying its state,
     // with the line / ? and : are typed in after it -- its kind shown before it -- and what the
-    // last such line came to, said until the next key.
+    // last such line came to, said until the next key; and the editor that asked for the line.
     UIEditorVim* vim;
-    UIScreen* screen;
     UIElement* status;
     UIElement* prompt_kind;
     UIElement* prompt;
+    UIElement* asking;
     char kind;
     char message[160];
     char status_text[192];
 } EditorSheet;
 
-static EditorSheet g_editor_sheet = {.parsed = UINT64_MAX};
+static EditorSheet g_editor_sheet;
+
+static EditorPane* pane_of(const UIElement* editor) {
+    for (int i = 0; i < EDITOR_PANES_MAX; i++)
+        if (editor && g_editor_sheet.panes[i].editor == editor)
+            return &g_editor_sheet.panes[i];
+    return NULL;
+}
+
+// The file the editor shows.
+static EditorFile* file_of(const UIElement* editor) {
+    const EditorPane* p = pane_of(editor);
+    return p ? &g_editor_sheet.files[p->file] : NULL;
+}
+
+// The pane holding the focus, or the first pane when the focus is elsewhere -- in the line under
+// the editor.
+static EditorPane* pane_focused(void) {
+    EditorPane* p = pane_of(ui_focused(g_editor_sheet.screen));
+    for (int i = 0; !p && i < EDITOR_PANES_MAX; i++)
+        if (g_editor_sheet.panes[i].editor)
+            p = &g_editor_sheet.panes[i];
+    return p;
+}
+
+static void spot_drop(PaneSpot* spot) {
+    free(spot->sel);
+    spot->sel = NULL;
+    spot->count = 0;
+}
+
+// A pane's editor on the file's text, in the app's keys.
+static UIElement* pane_open(EditorPane* pane, UIElement* parent, int file);
 
 // A byte that ends an atom, on pcb's rules: whitespace, a bracket, a quote or a comment's start.
 static bool sexpr_stop(char c) {
@@ -1800,19 +1868,20 @@ static void editor_vim_status(EditorSheet* s) {
     }
 }
 
-// The line / ? and : are typed in, done with: emptied, its kind put away, the editor focused again.
+// The line / ? and : are typed in, done with: emptied, its kind put away, the editor that asked for
+// it focused again.
 static void editor_prompt_close(EditorSheet* s) {
     s->kind = 0;
     ui_set_text(s->prompt_kind, "");
     ui_field_set_text(s->prompt, "");
-    ui_set_focus(s->screen, s->editor);
+    ui_set_focus(s->screen, s->asking);
 }
 
 // The vim mode asking for a line: the field under the editor focused, its kind before it.
 static void editor_prompt_open(UIElement* el, char kind, void* user) {
-    (void)el;
     EditorSheet* s = user;
     const char shown[2] = {kind, '\0'};
+    s->asking = el;
     s->kind = kind;
     s->message[0] = '\0';
     ui_set_text(s->prompt_kind, shown);
@@ -1824,7 +1893,7 @@ static void editor_prompt_open(UIElement* el, char kind, void* user) {
 static void editor_prompt_change(UIElement* el, void* user) {
     const EditorSheet* s = user;
     if (s->kind == '/' || s->kind == '?')
-        ui_editor_vim_light(s->vim, s->editor, ui_field_text(el));
+        ui_editor_vim_light(s->vim, s->asking, ui_field_text(el));
 }
 
 // Enter: the line handed to the vim mode, and what it came to said when it found nothing. The line
@@ -1836,9 +1905,9 @@ static void editor_prompt_submit(UIElement* el, void* user) {
         return;
     const char kind = s->kind;
     editor_prompt_close(s);
-    if (kind == ':' && !ui_editor_vim_command(s->vim, s->editor, text))
+    if (kind == ':' && !ui_editor_vim_command(s->vim, s->asking, text))
         snprintf(s->message, sizeof(s->message), "Not an editor command: %s", text);
-    else if (kind != ':' && !ui_editor_vim_search(s->vim, s->editor, text, kind == '?'))
+    else if (kind != ':' && !ui_editor_vim_search(s->vim, s->asking, text, kind == '?'))
         snprintf(s->message, sizeof(s->message), "Pattern not found: %s", text);
     free(text);
 }
@@ -1852,31 +1921,30 @@ static bool editor_prompt_key(UIElement* el, const InputKeyEvent* key, void* use
     const char kind = s->kind;
     editor_prompt_close(s);
     if (kind == ':')
-        ui_editor_vim_command(s->vim, s->editor, NULL);
+        ui_editor_vim_command(s->vim, s->asking, NULL);
     else
-        ui_editor_vim_search(s->vim, s->editor, NULL, kind == '?');
+        ui_editor_vim_search(s->vim, s->asking, NULL, kind == '?');
     return true;
 }
 
-// Once a frame: a parse begun on a text that changed, and its result taken, at the version it
-// read, on the frame its end wakes -- or `lag` frames after it began, waiting for it then.
-static void editor_host_frame(Engine* engine) {
-    EditorSheet* s = &g_editor_sheet;
-    ParseJob* job = &s->job;
-    editor_vim_status(s);
-    const bool due = s->lag > 0 ? engine->total_frames - job->started >= (size_t)s->lag
-                                : atomic_load(&job->done);
+// Once a frame for each file: a parse begun on a text that changed, and its result taken, at the
+// version it read, on the frame its end wakes -- or `lag` frames after it began, waiting for it
+// then.
+static void editor_parse_frame(Engine* engine, EditorFile* f, int lag) {
+    ParseJob* job = &f->job;
+    const bool due =
+        lag > 0 ? engine->total_frames - job->started >= (size_t)lag : atomic_load(&job->done);
     if (job->running && due) {
         cetra_thread_join(job->thread);
         job->running = false;
-        text_doc_set_ranges(s->doc, 0, job->version, job->errors, job->error_count);
-        s->parsed = job->version;
+        text_doc_set_ranges(f->doc, 0, job->version, job->errors, job->error_count);
+        f->parsed = job->version;
         free(job->text);
         job->text = NULL;
     }
-    if (!job->running && s->parsed != s->doc->version) {
-        job->text = text_doc_text(s->doc, &job->len);
-        job->version = s->doc->version;
+    if (!job->running && f->parsed != f->doc->version) {
+        job->text = text_doc_text(f->doc, &job->len);
+        job->version = f->doc->version;
         job->started = engine->total_frames;
         job->engine = engine;
         atomic_store(&job->done, false);
@@ -1890,11 +1958,18 @@ static void editor_host_frame(Engine* engine) {
     }
 }
 
-// F6: an edit made in another view landed at the text's start, marked where it landed.
+static void editor_host_frame(Engine* engine) {
+    EditorSheet* s = &g_editor_sheet;
+    editor_vim_status(s);
+    for (int i = 0; i < s->file_count; i++)
+        editor_parse_frame(engine, &s->files[i], s->lag);
+}
+
+// F6: an edit made in another view landed at the start of the text the editor shows, marked where
+// it landed.
 static bool host_land(UIElement* el, void* user) {
-    (void)el;
     (void)user;
-    TextDoc* doc = g_editor_sheet.doc;
+    TextDoc* doc = file_of(el)->doc;
     static const char LANDED[] = "(note landed)\n";
     text_doc_replace(doc, 0, 0, LANDED, sizeof(LANDED) - 1);
     const TextRange mark = {0, sizeof(LANDED) - 2, STYLE_LANDED};
@@ -1902,16 +1977,117 @@ static bool host_land(UIElement* el, void* user) {
     return true;
 }
 
-// F7: the file read again, as after an undo on pcb's timeline wrote it.
+// F7: the editor's file read again, as after an undo on pcb's timeline wrote it.
 static bool host_reload(UIElement* el, void* user) {
-    (void)el;
     (void)user;
+    const EditorFile* f = file_of(el);
     long len = 0;
-    char* bytes = read_entire_file(g_editor_sheet.path, &len);
+    char* bytes = read_entire_file(f->path, &len);
     if (!bytes)
         return false;
-    text_doc_set_text(g_editor_sheet.doc, bytes, (size_t)len);
+    text_doc_set_text(f->doc, bytes, (size_t)len);
     free(bytes);
+    return true;
+}
+
+static size_t index_in(const UIElement* el) {
+    size_t at = 0;
+    while (el->parent->children[at] != el)
+        at++;
+    return at;
+}
+
+// F8: the pane split. A row takes its place, it moves into the row, and a second editor on the same
+// text goes beside it, with carets of its own and the focus.
+static bool host_split(UIElement* el, void* user) {
+    (void)user;
+    EditorSheet* s = &g_editor_sheet;
+    EditorPane* fresh = NULL;
+    for (int i = 0; !fresh && i < EDITOR_PANES_MAX; i++)
+        if (!s->panes[i].editor)
+            fresh = &s->panes[i];
+    if (!fresh)
+        return false;
+    UIElement* parent = el->parent;
+    UIElement* row = ui_panel(parent);
+    row->dir = UI_ROW;
+    ui_set_size(row, UI_GROW, 0.0f, UI_GROW, 0.0f);
+    for (int k = 0; k < 4; k++)
+        row->padding[k] = -1.0f;
+    row->spacing = 4.0f;
+    ui_move(row, parent, index_in(el));
+    ui_move(el, row, 0);
+    ui_set_focus(s->screen, pane_open(fresh, row, pane_of(el)->file));
+    return true;
+}
+
+// F9: the pane closed, from inside its own key, and the focus given to the pane left in its place.
+// A row left holding one pane hands it to the row's own parent. The last pane stays.
+static bool host_close(UIElement* el, void* user) {
+    (void)user;
+    EditorSheet* s = &g_editor_sheet;
+    int open = 0;
+    for (int i = 0; i < EDITOR_PANES_MAX; i++)
+        open += s->panes[i].editor != NULL;
+    if (open < 2)
+        return false;
+    EditorPane* pane = pane_of(el);
+    for (int f = 0; f < EDITOR_FILES_MAX; f++)
+        spot_drop(&pane->spots[f]);
+    pane->editor = NULL;
+    UIElement* parent = el->parent;
+    size_t at = index_in(el);
+    ui_remove(s->ui, el);
+    if (parent != s->area && parent->child_count == 1) {
+        UIElement* up = parent->parent;
+        at = index_in(parent);
+        ui_move(parent->children[0], up, at);
+        ui_remove(s->ui, parent);
+        parent = up;
+    }
+    UIElement* next = parent->children[at < parent->child_count ? at : parent->child_count - 1];
+    while (next->kind != UI_EDITOR)
+        next = next->children[0];
+    ui_set_focus(s->screen, next);
+    return true;
+}
+
+// F10: the next file in the pane, where the pane last was in it. What it kept is brought through
+// the edits made to that text since, as pcb's panes will.
+static bool host_next_file(UIElement* el, void* user) {
+    (void)user;
+    EditorSheet* s = &g_editor_sheet;
+    if (s->file_count < 2)
+        return false;
+    EditorPane* pane = pane_of(el);
+    PaneSpot* left = &pane->spots[pane->file];
+    const TextSelection* sel = NULL;
+    size_t primary = 0;
+    const size_t count = ui_editor_selections(el, &sel, &primary);
+    spot_drop(left);
+    left->sel = malloc(count * sizeof(TextSelection));
+    if (left->sel) {
+        // The primary last, where ui_editor_set_selections takes it from.
+        for (size_t i = 0, k = 0; i < count; i++)
+            if (i != primary)
+                left->sel[k++] = sel[i];
+        left->sel[count - 1] = sel[primary];
+        left->count = count;
+        left->top = ui_editor_top(el);
+        left->version = s->files[pane->file].doc->version;
+    }
+    pane->file = (pane->file + 1) % s->file_count;
+    TextDoc* doc = s->files[pane->file].doc;
+    ui_editor_set_doc(el, doc);
+    PaneSpot* back = &pane->spots[pane->file];
+    bool mapped = back->sel && text_doc_map(doc, back->version, &back->top);
+    for (size_t i = 0; mapped && i < back->count; i++)
+        mapped = text_doc_map(doc, back->version, &back->sel[i].anchor) &&
+                 text_doc_map(doc, back->version, &back->sel[i].head);
+    if (mapped) {
+        ui_editor_set_selections(el, back->sel, back->count);
+        ui_editor_scroll_place(el, back->top, 0.0f);
+    }
     return true;
 }
 
@@ -1927,28 +2103,53 @@ static bool host_any_key(UIElement* el, const InputKeyEvent* key, void* user) {
 static const UIEditorCommand HOST_LAND = {"land-edit", "Land an edit from another view", host_land,
                                           NULL};
 static const UIEditorCommand HOST_RELOAD = {"reload", "Read the file again", host_reload, NULL};
-static const UIEditorBinding HOST_KEYS[] = {{GLFW_KEY_F6, 0, &HOST_LAND},
-                                            {GLFW_KEY_F7, 0, &HOST_RELOAD}};
+static const UIEditorCommand HOST_SPLIT = {"split", "Split the pane", host_split, NULL};
+static const UIEditorCommand HOST_CLOSE = {"close", "Close the pane", host_close, NULL};
+static const UIEditorCommand HOST_NEXT_FILE = {"next-file", "Show the next file in the pane",
+                                               host_next_file, NULL};
+static const UIEditorBinding HOST_KEYS[] = {
+    {GLFW_KEY_F6, 0, &HOST_LAND},       {GLFW_KEY_F7, 0, &HOST_RELOAD},
+    {GLFW_KEY_F8, 0, &HOST_SPLIT},      {GLFW_KEY_F9, 0, &HOST_CLOSE},
+    {GLFW_KEY_F10, 0, &HOST_NEXT_FILE},
+};
 static UIEditorMode g_host_mode = {.name = "pcb",
                                    .bindings = HOST_KEYS,
-                                   .binding_count = 2,
+                                   .binding_count = sizeof(HOST_KEYS) / sizeof(HOST_KEYS[0]),
                                    .read_key = host_any_key,
                                    .layer = true};
 
-static bool build_editor(UISystem* ui, const char* path, bool vim) {
-    long len = 0;
-    char* bytes = read_entire_file(path, &len);
-    if (!bytes)
+static UIElement* pane_open(EditorPane* pane, UIElement* parent, int file) {
+    pane->file = file;
+    pane->editor = ui_editor(parent, g_editor_sheet.files[file].doc);
+    ui_editor_set_mode(pane->editor, &g_host_mode);
+    return pane->editor;
+}
+
+static bool build_editor(UISystem* ui, const char* const* paths, int count, bool vim) {
+    EditorSheet* s = &g_editor_sheet;
+    s->ui = ui;
+    for (int i = 0; i < count && i < EDITOR_FILES_MAX; i++) {
+        EditorFile* f = &s->files[s->file_count];
+        long len = 0;
+        char* bytes = read_entire_file(paths[i], &len);
+        if (!bytes) {
+            fprintf(stderr, "canvas: --editor could not open %s\n", paths[i]);
+            return false;
+        }
+        f->path = paths[i];
+        f->doc = create_text_doc(bytes, (size_t)len);
+        f->parsed = UINT64_MAX;
+        free(bytes);
+        if (!f->doc)
+            return false;
+        text_doc_set_highlighter(f->doc, sexpr_line, NULL, false);
+        s->file_count++;
+    }
+    s->face = built_in_face(CANVAS_FONTS_EDITOR, 13.0f);
+    if (!s->face)
         return false;
-    g_editor_sheet.path = path;
-    g_editor_sheet.doc = create_text_doc(bytes, (size_t)len);
-    free(bytes);
-    g_editor_sheet.face = built_in_face(CANVAS_FONTS_EDITOR, 13.0f);
-    if (!g_editor_sheet.doc || !g_editor_sheet.face)
-        return false;
-    text_doc_set_highlighter(g_editor_sheet.doc, sexpr_line, NULL, false);
     UITheme theme = *ui_theme(ui);
-    theme.editor_face = g_editor_sheet.face;
+    theme.editor_face = s->face;
     theme.editor_size = 13.0f;
     UIEditorStyle* st = theme.editor_styles;
     glm_vec4_copy((vec4){0.45f, 0.55f, 0.45f, 1.0f}, st[STYLE_COMMENT].text);
@@ -1962,15 +2163,21 @@ static bool build_editor(UISystem* ui, const char* path, bool vim) {
     ui_set_theme(ui, &theme);
     UIScreen* screen = ui_screen(ui, "editor");
     ui_screen_set_modal(screen, false);
+    s->screen = screen;
     UIElement* root = ui_screen_root(screen);
-    g_editor_sheet.editor = ui_editor(root, g_editor_sheet.doc);
+    // The panes' row, with no padding of its own, so one pane stands where the editor alone did.
+    s->area = ui_panel(root);
+    s->area->dir = UI_ROW;
+    ui_set_size(s->area, UI_GROW, 0.0f, UI_GROW, 0.0f);
+    for (int k = 0; k < 4; k++)
+        s->area->padding[k] = -1.0f;
+    s->area->spacing = 4.0f;
+    UIElement* first = pane_open(&s->panes[0], s->area, 0);
     g_host_mode.parent = ui_editor_standard_mode();
     if (vim) {
-        EditorSheet* s = &g_editor_sheet;
         s->vim = create_ui_editor_vim();
         if (!s->vim)
             return false;
-        s->screen = screen;
         g_host_mode.parent = ui_editor_vim_mode(s->vim);
         ui_editor_vim_set_prompt(s->vim, editor_prompt_open, s);
         root->align_cross = UI_ALIGN_START;
@@ -1989,10 +2196,43 @@ static bool build_editor(UISystem* ui, const char* path, bool vim) {
         ui_field_set_on_key(s->prompt, editor_prompt_key, s);
         editor_vim_status(s);
     }
-    ui_editor_set_mode(g_editor_sheet.editor, &g_host_mode);
     ui_push(ui, screen);
-    ui_set_focus(screen, g_editor_sheet.editor);
+    ui_set_focus(screen, first);
     return true;
+}
+
+// "canvas <what> <the text, as hex>".
+static void say_text(const char* what, const TextDoc* doc) {
+    size_t len = 0;
+    char* text = text_doc_text(doc, &len);
+    printf("canvas %s ", what);
+    for (size_t i = 0; text && i < len; i++)
+        printf("%02x", (unsigned char)text[i]);
+    printf("\n");
+    free(text);
+}
+
+// " <count> <anchor> <head> ..." for an editor's selections, the line left open.
+static void say_selections(const UIElement* editor) {
+    const TextSelection* s = NULL;
+    const size_t n = ui_editor_selections(editor, &s, NULL);
+    printf(" %zu", n);
+    for (size_t i = 0; i < n; i++)
+        printf(" %zu %zu", s[i].anchor, s[i].head);
+}
+
+// "canvas pane <k> file <f> top <offset> focused <0 or 1> sel <selections>" for each pane under
+// `el`, in the window's order.
+static void say_panes(const UIElement* el, int* k, const UIElement* focused) {
+    if (el->kind == UI_EDITOR) {
+        printf("canvas pane %d file %d top %zu focused %d sel", (*k)++, pane_of(el)->file,
+               ui_editor_top(el), el == focused);
+        say_selections(el);
+        printf("\n");
+        return;
+    }
+    for (size_t i = 0; i < el->child_count; i++)
+        say_panes(el->children[i], k, focused);
 }
 
 // The UI's input pass with the real pointer and keyboard, as the engine read them this frame.
@@ -2055,7 +2295,7 @@ static void on_update(Engine* engine, float dt) {
     if (g_probe)
         say_typed(engine);
     live_ui_update(engine);
-    if (g_editor_sheet.doc)
+    if (g_editor_sheet.file_count)
         editor_host_frame(engine);
     history_stream(engine);
     // The input pass an app owes its UI, with no input: it is what settles the focused button's
@@ -2603,7 +2843,8 @@ int main(int argc, char** argv) {
     bool headless = false, mirror = false, probe = false, picture = false, edit_thread = false;
     bool split = false, with_ui = false, budget = false, idle = false, ui_enter = false;
     bool history = false, palette = false, font_sheet = false, vim = false;
-    const char* editor_file = NULL;
+    const char* editor_files[EDITOR_FILES_MAX];
+    int editor_count = 0;
     int frames = 0, width = 960, height = 600, tile_shift = 0, only_view = -1;
     const char* screenshot = NULL;
     const char* input_script = NULL;
@@ -2668,7 +2909,11 @@ int main(int argc, char** argv) {
         } else if (strcmp(argv[i], "--font-sheet") == 0) {
             font_sheet = true;
         } else if (strcmp(argv[i], "--editor") == 0 && more) {
-            editor_file = argv[++i];
+            if (editor_count == EDITOR_FILES_MAX) {
+                fprintf(stderr, "canvas: --editor %d files at the most\n", EDITOR_FILES_MAX);
+                return 1;
+            }
+            editor_files[editor_count++] = argv[++i];
         } else if (strcmp(argv[i], "--editor-lag") == 0 && more) {
             g_editor_sheet.lag = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--vim") == 0) {
@@ -2785,14 +3030,14 @@ int main(int argc, char** argv) {
     g_engine = engine;
     g_home_view = g_views[0];
     UISystem* ui = NULL;
-    if (with_ui || history || palette || font_sheet || editor_file) {
+    if (with_ui || history || palette || font_sheet || editor_count) {
         ui = create_ui_system(engine);
         ui_set_font(ui, font, 18.0f);
         ui_attach(ui, engine);
     }
-    if (editor_file) {
-        if (!build_editor(ui, editor_file, vim)) {
-            fprintf(stderr, "canvas: --editor could not open %s\n", editor_file);
+    if (editor_count) {
+        if (!build_editor(ui, editor_files, editor_count, vim)) {
+            fprintf(stderr, "canvas: --editor could not be set up\n");
             free_ui_system(ui);
             free_canvas(g_canvas);
             free_engine(engine);
@@ -2885,29 +3130,22 @@ int main(int argc, char** argv) {
             printf("\n");
         }
     }
-    // The editor as the run left it: its text, as hex, and its selections.
-    if (probe && g_editor_sheet.doc) {
-        size_t len = 0;
-        char* text = text_doc_text(g_editor_sheet.doc, &len);
-        printf("canvas editor hex ");
-        for (size_t i = 0; text && i < len; i++)
-            printf("%02x", (unsigned char)text[i]);
-        printf("\n");
-        free(text);
-        const TextSelection* s = NULL;
-        const size_t n = ui_editor_selections(g_editor_sheet.editor, &s, NULL);
-        printf("canvas editor sel %zu", n);
-        for (size_t i = 0; i < n; i++)
-            printf(" %zu %zu", s[i].anchor, s[i].head);
+    // The editor as the run left it, the focused pane's: its text, as hex, and its selections.
+    if (probe && g_editor_sheet.file_count) {
+        const EditorPane* pane = pane_focused();
+        const TextDoc* doc = g_editor_sheet.files[pane->file].doc;
+        say_text("editor hex", doc);
+        printf("canvas editor sel");
+        say_selections(pane->editor);
         printf("\n");
         // The parse's errors as they stand, and where the first is drawn, in framebuffer pixels.
         size_t count = 0;
-        const TextRange* r = text_doc_ranges(g_editor_sheet.doc, 0, &count);
+        const TextRange* r = text_doc_ranges(doc, 0, &count);
         printf("canvas editor errors %zu", count);
         for (size_t i = 0; i < count; i++)
             printf(" %zu %zu", r[i].start, r[i].end);
         printf("\n");
-        printf("canvas editor settled %d\n", ui_editor_settled(g_editor_sheet.editor) ? 1 : 0);
+        printf("canvas editor settled %d\n", ui_editor_settled(pane->editor) ? 1 : 0);
         // With --vim: its state, and what the last line typed came to, as hex.
         if (g_editor_sheet.vim) {
             printf("canvas editor vim %d ", (int)ui_editor_vim_state(g_editor_sheet.vim));
@@ -2916,13 +3154,18 @@ int main(int argc, char** argv) {
             printf("\n");
         }
         float ex = 0.0f, ey = 0.0f;
-        if (count && ui_editor_point_of(g_editor_sheet.editor, r[0].start, &ex, &ey))
+        if (count && ui_editor_point_of(pane->editor, r[0].start, &ex, &ey))
             printf("canvas editor error_at %ld %ld\n", lround(ex * ctx.fb_scale),
                    lround(ey * ctx.fb_scale));
-    }
-    if (g_editor_sheet.job.running) {
-        cetra_thread_join(g_editor_sheet.job.thread);
-        free(g_editor_sheet.job.text);
+        // Every pane in the window's order -- the file it shows, the offset at its view's top and
+        // its selections, the focused one marked -- then every file's text.
+        int k = 0;
+        say_panes(g_editor_sheet.area, &k, ui_focused(g_editor_sheet.screen));
+        for (int f = 0; f < g_editor_sheet.file_count; f++) {
+            char name[32];
+            snprintf(name, sizeof(name), "file %d", f);
+            say_text(name, g_editor_sheet.files[f].doc);
+        }
     }
     board_late_settle(true);
     free_ui_system(ui);
@@ -2930,7 +3173,17 @@ int main(int argc, char** argv) {
     for (int i = 0; i < 3; i++)
         free_glyph_cache(g_font_sheet.caches[i]);
     free_glyph_cache(g_editor_sheet.face);
-    free_text_doc(g_editor_sheet.doc);
+    for (int p = 0; p < EDITOR_PANES_MAX; p++)
+        for (int f = 0; f < EDITOR_FILES_MAX; f++)
+            spot_drop(&g_editor_sheet.panes[p].spots[f]);
+    for (int f = 0; f < g_editor_sheet.file_count; f++) {
+        ParseJob* job = &g_editor_sheet.files[f].job;
+        if (job->running) {
+            cetra_thread_join(job->thread);
+            free(job->text);
+        }
+        free_text_doc(g_editor_sheet.files[f].doc);
+    }
     free_canvas(g_canvas);
     free_engine(engine);
     return 0;
