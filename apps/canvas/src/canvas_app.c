@@ -47,6 +47,7 @@
 #include "cetra/triangulate.h"
 #include "cetra/ui.h"
 #include "cetra/ui_editor.h"
+#include "cetra/ui_editor_vim.h"
 #include "cetra/util.h"
 
 // Dear ImGui via cimgui, for --gui-click's click handed to the debug GUI.
@@ -1536,7 +1537,8 @@ static bool build_font_sheet(UISystem* ui, Engine* engine, Font* label) {
  * - F6, an edit landed at the text's start as another view's would be;
  * - F7, the file read again through the text's whole new text.
  * A parse's result is taken on the frame its thread's end wakes; --editor-lag N takes it N frames
- * after it began instead, waiting for it then, so a headless run repeats.
+ * after it began instead, waiting for it then, so a headless run repeats. --vim puts the vim mode
+ * (spec 14.5) under the app's keys, with its state on a line under the editor.
  */
 
 enum {
@@ -1573,6 +1575,10 @@ typedef struct EditorSheet {
     ParseJob job;
     uint64_t parsed; // the version the last result was for; UINT64_MAX for none
     int lag;         // frames from a parse's start to its result being taken
+    // With --vim: the vim mode under the app's own, and a line under the editor saying its state.
+    UIEditorVim* vim;
+    UIElement* status;
+    char status_text[64];
 } EditorSheet;
 
 static EditorSheet g_editor_sheet = {.parsed = UINT64_MAX};
@@ -1662,11 +1668,28 @@ static void* parse_thread(void* arg) {
     return NULL;
 }
 
+// The vim mode's state on the line under the editor, as vim's own status line shows it, with the
+// keys of a command half typed at its end.
+static void editor_vim_status(EditorSheet* s) {
+    if (!s->vim || !s->status)
+        return;
+    static const char* const SHOWN[] = {"", "-- INSERT --", "-- VISUAL --", "-- VISUAL LINE --",
+                                        "-- VISUAL BLOCK --"};
+    char text[64];
+    snprintf(text, sizeof(text), "%-20s %s", SHOWN[ui_editor_vim_state(s->vim)],
+             ui_editor_vim_pending(s->vim));
+    if (strcmp(text, s->status_text)) {
+        memcpy(s->status_text, text, sizeof(text));
+        ui_set_text(s->status, text);
+    }
+}
+
 // Once a frame: a parse begun on a text that changed, and its result taken, at the version it
 // read, on the frame its end wakes -- or `lag` frames after it began, waiting for it then.
 static void editor_host_frame(Engine* engine) {
     EditorSheet* s = &g_editor_sheet;
     ParseJob* job = &s->job;
+    editor_vim_status(s);
     const bool due = s->lag > 0 ? engine->total_frames - job->started >= (size_t)s->lag
                                 : atomic_load(&job->done);
     if (job->running && due) {
@@ -1726,7 +1749,7 @@ static const UIEditorBinding HOST_KEYS[] = {{GLFW_KEY_F6, 0, &HOST_LAND},
 static UIEditorMode g_host_mode = {
     .name = "pcb", .bindings = HOST_KEYS, .binding_count = 2, .layer = true};
 
-static bool build_editor(UISystem* ui, const char* path) {
+static bool build_editor(UISystem* ui, const char* path, bool vim) {
     long len = 0;
     char* bytes = read_entire_file(path, &len);
     if (!bytes)
@@ -1756,6 +1779,16 @@ static bool build_editor(UISystem* ui, const char* path) {
     UIElement* root = ui_screen_root(screen);
     g_editor_sheet.editor = ui_editor(root, g_editor_sheet.doc);
     g_host_mode.parent = ui_editor_standard_mode();
+    if (vim) {
+        g_editor_sheet.vim = create_ui_editor_vim();
+        if (!g_editor_sheet.vim)
+            return false;
+        g_host_mode.parent = ui_editor_vim_mode(g_editor_sheet.vim);
+        root->align_cross = UI_ALIGN_START;
+        g_editor_sheet.status = ui_label(root, "");
+        ui_set_size(g_editor_sheet.status, UI_GROW, 0.0f, UI_FIT, 0.0f);
+        editor_vim_status(&g_editor_sheet);
+    }
     ui_editor_set_mode(g_editor_sheet.editor, &g_host_mode);
     ui_push(ui, screen);
     ui_set_focus(screen, g_editor_sheet.editor);
@@ -2351,7 +2384,7 @@ static void usage(const char* argv0) {
             "          [--split] [--only-view 0|1] [--ui] [--budget]\n"
             "          [--idle] [--idle-wake S,...] [--idle-load PATH] [--input-script PATH]\n"
             "          [--ui-enter] [--ui-text TEXT] [--gui-click] [--history] [--palette]\n"
-            "          [--font-sheet] [--editor FILE] [--editor-lag FRAMES]\n",
+            "          [--font-sheet] [--editor FILE] [--editor-lag FRAMES] [--vim]\n",
             argv0);
 }
 
@@ -2369,7 +2402,7 @@ static const char* IDENTITY_PASS = "#version 330 core\n"
 int main(int argc, char** argv) {
     bool headless = false, mirror = false, probe = false, picture = false, edit_thread = false;
     bool split = false, with_ui = false, budget = false, idle = false, ui_enter = false;
-    bool history = false, palette = false, font_sheet = false;
+    bool history = false, palette = false, font_sheet = false, vim = false;
     const char* editor_file = NULL;
     int frames = 0, width = 960, height = 600, tile_shift = 0, only_view = -1;
     const char* screenshot = NULL;
@@ -2438,6 +2471,8 @@ int main(int argc, char** argv) {
             editor_file = argv[++i];
         } else if (strcmp(argv[i], "--editor-lag") == 0 && more) {
             g_editor_sheet.lag = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--vim") == 0) {
+            vim = true;
         } else if (strcmp(argv[i], "--palette") == 0) {
             palette = true;
         } else if (strcmp(argv[i], "--ui-text") == 0 && more) {
@@ -2557,7 +2592,7 @@ int main(int argc, char** argv) {
         ui_attach(ui, engine);
     }
     if (editor_file) {
-        if (!build_editor(ui, editor_file)) {
+        if (!build_editor(ui, editor_file, vim)) {
             fprintf(stderr, "canvas: --editor could not open %s\n", editor_file);
             free_ui_system(ui);
             free_canvas(g_canvas);
@@ -2685,6 +2720,7 @@ int main(int argc, char** argv) {
     }
     board_late_settle(true);
     free_ui_system(ui);
+    free_ui_editor_vim(g_editor_sheet.vim);
     for (int i = 0; i < 3; i++)
         free_glyph_cache(g_font_sheet.caches[i]);
     free_glyph_cache(g_editor_sheet.face);

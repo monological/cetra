@@ -26092,6 +26092,186 @@ def _ui_probe(case, env=None):
     return _gametest_probe("--ui-probe", _UI_PROBE, case, env=env)
 
 
+# ---- The vim mode held to vim itself (spec 14.5)
+
+# Vim, where the oracle's arms find it; they skip without it.
+_VIM = shutil.which("vim")
+
+# The settings the vim mode keeps: autoindent, spaces for a tab at the text's width of 4, a search
+# that ignores case unless the query has a capital, Backspace over anything, and J one space.
+_VIM_SET = ("set nocompatible autoindent expandtab tabstop=4 shiftwidth=4 softtabstop=0 "
+            "ignorecase smartcase backspace=indent,eol,start nojoinspaces")
+
+# The texts the oracle runs on: pcb's own shape, the same with CRLF, words and punctuation with
+# blank lines and tabs, and letters past ASCII. None lacks a final line break: vim keeps whether a
+# file had one apart from its lines, and once such a text's last line is emptied, the bytes alone
+# no longer say whether an empty line follows (the spec's "what differs from vim").
+_VIM_FIXTURES = {
+    "sexpr": (b"(block memory-bank (count)\n"
+              b"  (port addr :width 17)\n"
+              b"  (port dq :width (* count 16))\n"
+              b"\n"
+              b"  ; one chip a lane\n"
+              b"  (for (i 0 count)\n"
+              b"    (inst (mem i) mt40a512m16\n"
+              b"      (connect A addr)\n"
+              b"      (connect DQ (slice dq (* i 16) 16)))))\n"),
+    "crlf": (b"(part u1 \"lm317\"\r\n"
+             b"  (pin 1 adj)\r\n"
+             b"\r\n"
+             b"  (pin 2 out) (pin 3 in))\r\n"),
+    "words": (b"alpha beta-gamma delta_epsilon\n"
+              b"    zeta  eta\n"
+              b"\ttheta, iota; kappa.\n"
+              b"\n"
+              b"\n"
+              b"lambda mu (nu) [xi] {omicron}\n"),
+    "utf8": "café naïve résumé\nΩmega über straße\n".encode(),
+}
+
+
+# The fixed corpus, in vim's notation: every motion, operator and edit the vim mode has, alone, with
+# counts, and in the combinations whose rules interact -- an operator over each motion, `.` after a
+# change, undo and redo after one. A sequence never begins with a space, which vim would read as
+# nothing; "1 " is a space.
+_VIM_SEQUENCES = [
+    # Motions.
+    "h", "3h", "l", "4l", "j", "2j", "k", "3k", "w", "3w", "W", "2W", "b", "3b", "B", "e", "3e",
+    "E", "ge", "2ge", "gE", "0", "^", "$", "2$", "gg", "G", "2G", "3gg", "+", "-", "_", "2_",
+    "<CR>", "<BS>", "1 ", "3 ", "g_", "5|", "f(", "2f)", "F(", "t)", "T(", "f(;", "f(;;", "t);",
+    "f(,", "%", "{", "}", "2}", "jjk", "$j", "j$k",
+    # Deletes, over every kind of motion.
+    "x", "3x", "X", "2X", "D", "dd", "2dd", "3dd", "9dd", "dj", "dk", "dG", "dgg", "d}", "d{",
+    "dw", "2dw", "d2w", "de", "dE", "db", "dB", "dge", "d$", "d2$", "d0", "d^", "dt)", "df(",
+    "dT(", "dF(", "d%", "dh", "dl", "d ", "d2l", "d_", "d2_", "d+", "d-", "d<CR>", "d<BS>",
+    # Changes, which end in insert mode.
+    "cwZ<Esc>", "cWZ<Esc>", "ceZ<Esc>", "ccZ<Esc>", "c$Z<Esc>", "cbZ<Esc>", "CZ<Esc>", "sZ<Esc>",
+    "SZ<Esc>", "3sZ<Esc>", "c2wZ<Esc>", "cjZ<Esc>",
+    # Yanks and puts.
+    "yyP", "yyp", "ywP", "yep", "y$p", "yjp", "ykP", "2yyp", "ddp", "ddP", "xp", "Xp", "dwp",
+    "yy3p", "yw2P", "y2wP",
+    # Joins, replaces, case and shifts.
+    "J", "3J", "gJ", "2gJ", "9J", "rx", "3rx", "~", "5~", "g~w", "g~~", "guw", "gUU", "gU$",
+    "g~g~", "gugu", ">>", "3>>", "<<", ">j", "<k", ">G", "<gg", ">w", "3<<",
+    # Inserts.
+    "iZ<Esc>", "aZ<Esc>", "IZ<Esc>", "AZ<Esc>", "oZ<Esc>", "OZ<Esc>", "o<Esc>", "O<Esc>",
+    "3iab<Esc>", "2ofoo<Esc>", "3aX<Esc>", "A<CR>x<Esc>", "i<CR><Esc>", "o<CR>x<Esc>",
+    "i<BS><BS><Esc>", "A<BS>x<Esc>", "i<Tab>x<Esc>", "ifoo<Left>X<Esc>", "A<CR><CR>x<Esc>",
+    "o<CR><Esc>", "3o<Esc>",
+    # Repeats, undo and redo.
+    "dw.", "dd.", "x..", "cwZ<Esc>w.", "x3.", "AZ<Esc>j.", "iab<Esc>2.", "Afoo<Esc>u",
+    "ihello<Esc>u<C-r>", "dwu", "ddu", "xxu", "xxuu", "dwu<C-r>", "3dd.u", "yku", "dju", "dku",
+    "cwZ<Esc>u", "Jxu", ">>u", "g~~u", "ddu<C-r>", "xpu<C-r>", "d0u", "x<Esc>u", "jxu",
+]
+
+
+def _vim_corpus(sequences):
+    """The cases a list of sequences makes: each on every fixture, at three of its starts, turned
+    by the sequence's place in the list so every start is used."""
+    cases = []
+    for j, keys in enumerate(sequences):
+        for text in _VIM_FIXTURES.values():
+            starts = _vim_starts(text)
+            for k in (0, 3, 7):
+                line, col = starts[(j + k) % len(starts)]
+                cases.append((text, line, col, keys))
+    return cases
+
+
+def _vim_starts(text):
+    """Where a case starts in a text, as vim's cursor() counts: the first character, the
+    middle and the last of a few lines spread through it, each on a character's first byte."""
+    lines = text.decode("utf-8").replace("\r\n", "\n").rstrip("\n").split("\n")
+    picks = sorted({0, 1, len(lines) // 2, len(lines) - 1})
+    starts = []
+    for i in picks:
+        if i >= len(lines):
+            continue
+        cols = [0]
+        for ch in lines[i][:-1]:
+            cols.append(cols[-1] + len(ch.encode()))
+        for at in sorted({cols[0], cols[len(cols) // 2], cols[-1]}):
+            starts.append((i + 1, at + 1))
+    return starts
+
+
+def _vim_exe_keys(keys):
+    """Keys in vim's notation as the inside of a double-quoted vim string."""
+    out, i = [], 0
+    while i < len(keys):
+        if keys[i] == "<":
+            j = keys.find(">", i)
+            if j > i:
+                name = keys[i + 1:j]
+                out.append("<" if name == "lt" else "\\<" + name + ">")
+                i = j + 1
+                continue
+        out.append({"\\": "\\\\", '"': '\\"'}.get(keys[i], keys[i]))
+        i += 1
+    return "".join(out)
+
+
+def _vim_reference(case, path):
+    """(line, column, bytes) vim leaves `case` at -- its text, the cursor's line and column, and
+    its keys -- or None when vim did not run. The text is the buffer as vim writes it, in the
+    file's own line endings. The keys are fed as typed, so each command is its own step of undo
+    and a key after one that failed is still read, as when a person types them; normal! would
+    make every command one step and let go of the keys after a failure."""
+    text, line, col, keys = case
+    with open(path, "wb") as f:
+        f.write(text)
+    out, pos = path + ".out", path + ".pos"
+    for p in (out, pos):
+        if os.path.exists(p):
+            os.remove(p)
+    cmd = [_VIM, "-Nu", "NONE", "-i", "NONE", "-n", "-es", "-c", _VIM_SET,
+           "-c", f"call cursor({line}, {col})",
+           "-c", f"call feedkeys(\"{_vim_exe_keys(keys)}\", 'xt')",
+           "-c", f"call writefile([line('.') . ' ' . col('.')], '{pos}')",
+           "-c", f"silent w! {out}", "-c", "qa!", path]
+    try:
+        subprocess.run(cmd, capture_output=True, timeout=20, stdin=subprocess.DEVNULL)
+        with open(pos, "rb") as f:
+            l, c = f.read().split()
+        with open(out, "rb") as f:
+            data = f.read()
+    except (subprocess.TimeoutExpired, OSError, ValueError):
+        return None
+    return int(l), int(c), data
+
+
+def _vim_cetra(cases, workdir, tag):
+    """[(line, column, lines)] the vim mode leaves each case at, from one gametest run; None
+    for a case it printed nothing for."""
+    path = os.path.join(workdir, f"vim_cases_{tag}.txt")
+    with open(path, "w", encoding="ascii") as f:
+        for text, line, col, keys in cases:
+            f.write(f"{text.hex()} {line} {col} {keys.encode().hex()}\n")
+    try:
+        r = subprocess.run([GAMETEST, "--ui-probe", "vim-run"], capture_output=True, text=True,
+                           env=dict(os.environ, CETRA_VIM_CASES=path), timeout=1800)
+    except subprocess.TimeoutExpired:
+        return [None] * len(cases)
+    got = {}
+    for m in re.finditer(r"^vim (\d+) (\d+) (\d+) ([0-9a-f]*)$", r.stdout, re.M):
+        got[int(m.group(1))] = (int(m.group(2)), int(m.group(3)), bytes.fromhex(m.group(4)))
+    return [got.get(i) for i in range(len(cases))]
+
+
+def _vim_oracle(cases, workdir, tag):
+    """The cases on which the vim mode and vim itself differ, as (case, vim's, the mode's), and
+    how many vim ran."""
+    from concurrent.futures import ThreadPoolExecutor
+    folder = os.path.join(workdir, f"vim_{tag}")
+    os.makedirs(folder, exist_ok=True)
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        ref = list(pool.map(lambda ic: _vim_reference(ic[1], os.path.join(folder, f"{ic[0]}.txt")),
+                            enumerate(cases)))
+    got = _vim_cetra(cases, workdir, tag)
+    ran = sum(r is not None for r in ref)
+    return [(c, r, g) for c, r, g in zip(cases, ref, got) if r is not None and r != g], ran
+
+
 def _probe_wrong(p, want):
     """The probe keys whose first number is not the one `want` names, as {"label key": got}:
     empty when every one holds. A key the probe never printed reads as None."""
@@ -27934,6 +28114,25 @@ def run_ui_gate(workdir):
                      shares one; a group holds one over typing, a Backspace and
                      more typing, one undo takes the group back and one redo makes
                      it again; the steps are the same with keep_undo off.
+      ui-vim-oracle  the vim mode held to vim itself (spec 14.5): every sequence
+                     of a fixed corpus -- each motion, operator and edit, with
+                     counts, operators over every kind of motion, `.`, undo and
+                     redo -- run on pcb-like texts, CRLF and letters past ASCII
+                     among them, through the mode and through vim 9 fed the keys
+                     as typed; the text, byte for byte, and the cursor must
+                     agree. Skips without vim on the path.
+      ui-vim-state   the vim mode's state as a host shows it: NORMAL and INSERT
+                     named, a block caret and a bar, the keys of a half-typed
+                     command ("2d") shown and dropped by Esc, and a click past a
+                     line's end held on its last character.
+      ui-vim-undo    undo by vim's units: an insert from i to Esc, an Enter and a
+                     Backspace in it, is one step, and cw with what it typed is
+                     one -- undone and redone whole, and told to a host as one step
+                     with keep_undo off.
+      ui-vim-host    a host's layer over the vim mode: its Space acts in normal mode
+                     and takes the space its press makes, in insert mode hands the
+                     key back and the space is typed; the host's undo takes u and
+                     Ctrl+R.
       ui-editor-script apps/canvas --editor on a file, driven by a script: a caret
                      added below, "XY" typed at both, undone, Esc to one caret, the
                      word at it taken by Cmd+D and found again round the text's end
@@ -28921,6 +29120,41 @@ def run_ui_gate(workdir):
                            "keep_undo off")
     print(f"  ui-editor-steps       {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-editor-steps", ok)
+
+    # ---- the vim mode held to vim itself (spec 14.5)
+    if not _VIM:
+        print("  ui-vim-oracle         SKIP  (no vim on the path)")
+    else:
+        cases = _vim_corpus(_VIM_SEQUENCES)
+        diffs, ran = _vim_oracle(cases, workdir, "oracle")
+        ok = ran == len(cases) and not diffs
+        shown = "; ".join(f"{keys!r} at {line}:{col}: vim {r[0]}:{r[1]}, the mode "
+                          + (f"{g[0]}:{g[1]}{'' if g[2] == r[2] else ', text differs'}"
+                             if g else "nothing")
+                          for (_, line, col, keys), r, g in diffs[:3])
+        detail = (f"{len(cases)} cases of {len(_VIM_SEQUENCES)} sequences over "
+                  f"{len(_VIM_FIXTURES)} texts, vim ran {ran}, {len(diffs)} differ from it"
+                  + (f": {shown}" if shown else ""))
+        print(f"  ui-vim-oracle         {'PASS' if ok else 'FAIL'}  {detail}")
+        note("ui-vim-oracle", ok)
+
+    ok, detail = doc_flags("vim-state", 8, "NORMAL and INSERT named, the block caret and the bar, "
+                           "the keys of a half-typed command shown and dropped by Esc, and a "
+                           "click past a line's end held on its last character")
+    print(f"  ui-vim-state          {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-vim-state", ok)
+
+    ok, detail = doc_flags("vim-undo", 7, "an insert from i to Esc, an Enter and a Backspace in it, "
+                           "is one step, and so is cw with what it typed: each undone and redone "
+                           "whole, and told as one step with keep_undo off too")
+    print(f"  ui-vim-undo           {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-vim-undo", ok)
+
+    ok, detail = doc_flags("vim-host", 4, "a host's Space over the vim mode acts in normal mode and "
+                           "takes its space, hands it back in insert mode where it is typed, keeps "
+                           "the host's name over vim's look, and the host's undo takes u and Ctrl+R")
+    print(f"  ui-vim-host           {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-vim-host", ok)
 
     # ---- the editor end to end: a file opened, two carets typed at, undone, a word found
     text_path = os.path.join(workdir, "editor_script.txt")

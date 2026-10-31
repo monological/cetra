@@ -22,6 +22,7 @@
 #include "text.h"
 #include "text_doc_edit.h"
 #include "ui_editor_hooks.h"
+#include "ui_editor_internal.h"
 #include "ui_internal.h"
 #include "ui_typing.h"
 #include "util.h"
@@ -524,20 +525,26 @@ static bool _room(UIEditor* ed, size_t count) {
     return grow_array((void**)&ed->want, &cap, count, sizeof(int), 4);
 }
 
-// The selections given, held to the text, the last the primary. The text's call as well as the
-// editor's, so it takes the editor as a view.
-static void _set(void* view, const TextSelection* s, size_t count) {
-    UIEditor* ed = view;
+// The selections given, held to the text, with their wanted columns (NULL for none) and the
+// primary.
+static void _set_at(UIEditor* ed, const TextSelection* s, const int* wants, size_t count,
+                    size_t primary) {
     if (!count || !_room(ed, count))
         return;
     for (size_t i = 0; i < count; i++) {
         ed->sel[i] = (TextSelection){_edge(ed->doc, s[i].anchor), _edge(ed->doc, s[i].head)};
-        ed->want[i] = -1;
+        ed->want[i] = wants ? wants[i] : -1;
     }
     ed->sel_count = count;
-    ed->primary = count - 1;
+    ed->primary = primary < count ? primary : count - 1;
     _normalize(ed);
     ed->caret.moved = true;
+}
+
+// The selections given, held to the text, the last the primary. The text's call as well as the
+// editor's, so it takes the editor as a view.
+static void _set(void* view, const TextSelection* s, size_t count) {
+    _set_at(view, s, NULL, count, count - 1);
 }
 
 // One selection, the primary.
@@ -1383,8 +1390,10 @@ static TextSelection* _landed(const UIEditor* ed, const TextEdit* e, size_t n) {
 }
 
 // Applies edits from every caret as one action, those that overlap merged and those that change
-// nothing dropped, and follows the primary caret.
-static void _edit(UIEditor* ed, TextEdit* edits, size_t n, bool typed) {
+// nothing dropped, leaves the selections `to` -- or each caret after its own edit, with `to` NULL
+// -- and follows the primary caret.
+static void _edit_to(UIEditor* ed, TextEdit* edits, size_t n, bool typed, const TextSelection* to,
+                     size_t to_count, size_t to_primary) {
     if (!n)
         return;
     qsort(edits, n, sizeof(TextEdit), _by_edit_start);
@@ -1399,8 +1408,25 @@ static void _edit(UIEditor* ed, TextEdit* edits, size_t n, bool typed) {
         }
         edits[kept++] = edits[i];
     }
-    if (!kept)
+    if (!kept) {
+        // Nothing changes, and the carets still go where they were asked to.
+        if (to && to_count) {
+            _set_at(ed, to, NULL, to_count, to_primary);
+            _follow(ed);
+        }
         return;
+    }
+    if (to) {
+        const bool ok = to_count && text_doc_apply(ed->doc, edits, kept, ed, to, to_count, typed);
+        // The selections given, held to the text: any part of an action made out of memory
+        // leaves the editor's own held to it instead.
+        if (ok)
+            _set_at(ed, to, NULL, to_count, to_primary);
+        else
+            _set_at(ed, ed->sel, NULL, ed->sel_count, ed->primary);
+        _follow(ed);
+        return;
+    }
     TextSelection* after = _landed(ed, edits, kept);
     const bool ok =
         text_doc_apply(ed->doc, edits, kept, ed, after, after ? ed->sel_count : 0, typed);
@@ -1416,6 +1442,10 @@ static void _edit(UIEditor* ed, TextEdit* edits, size_t n, bool typed) {
     free(after);
     _merge(ed);
     _follow(ed);
+}
+
+static void _edit(UIEditor* ed, TextEdit* edits, size_t n, bool typed) {
+    _edit_to(ed, edits, n, typed, NULL, 0, 0);
 }
 
 static Engine* _engine(const UIEditor* ed) {
@@ -2449,6 +2479,77 @@ static double _draw(const UISystem* ui, UIElement* el, const UIStyle* s, UIRect 
     if (_settle(ed) || uncoloured || ed->face->atlas.height != atlas_height)
         wake = 0.0;
     return wake;
+}
+
+// ---- For a mode built in cetra (ui_editor_internal.h)
+
+TextDoc* ui_editor_doc(const UIElement* el) {
+    const UIEditor* ed = _seen(el);
+    return ed ? ed->doc : NULL;
+}
+
+void ui_editor_edit(UIElement* el, TextEdit* edits, size_t n, const TextSelection* after,
+                    size_t after_count, size_t primary) {
+    UIEditor* ed = _of(el);
+    if (ed)
+        _edit_to(ed, edits, n, false, after, after_count, primary);
+}
+
+void ui_editor_set_carets(UIElement* el, const TextSelection* sels, const int* wants, size_t count,
+                          size_t primary) {
+    UIEditor* ed = _of(el);
+    if (!ed || !sels || !count)
+        return;
+    _set_at(ed, sels, wants, count, primary);
+    text_doc_seal_undo(ed->doc);
+    _follow(ed);
+}
+
+int* ui_editor_wants(UIElement* el) {
+    const UIEditor* ed = _of(el);
+    return ed ? ed->want : NULL;
+}
+
+Engine* ui_editor_engine(const UIElement* el) {
+    const UIEditor* ed = _seen(el);
+    return ed ? _engine(ed) : NULL;
+}
+
+int ui_editor_rows_shown(const UIElement* el) {
+    const UIEditor* ed = _seen(el);
+    const int rows = ed ? (int)floorf(_view_rows(ed)) : 1;
+    return rows > 1 ? rows : 1;
+}
+
+size_t ui_editor_row_at(UIElement* el, int down) {
+    UIEditor* ed = _of(el);
+    if (!ed)
+        return 0;
+    size_t line, row;
+    _top(ed, &line, &row);
+    for (int k = 0; k < down && _row_down(ed, &line, &row); k++) {
+    }
+    return text_doc_line_start(ed->doc, line) + _wrap_line(ed, line).starts[row];
+}
+
+void ui_editor_scroll_place(UIElement* el, size_t offset, float where) {
+    UIEditor* ed = _of(el);
+    if (!ed || ed->row <= 0.0f)
+        return;
+    size_t line, row;
+    _place_of(ed, offset > ed->doc->length ? ed->doc->length : offset, &line, &row, NULL);
+    const int up = (int)floorf((float)(ui_editor_rows_shown(el) - 1) * where);
+    for (int k = 0; k < up && _row_up(ed, &line, &row); k++) {
+    }
+    ed->top_line = line;
+    ed->top_row = row;
+    ed->top_frac = 0.0f;
+}
+
+void ui_editor_scroll_rows(UIElement* el, float rows) {
+    UIEditor* ed = _of(el);
+    if (ed)
+        _scroll_rows(ed, rows);
 }
 
 const UIWidgetOps ui_editor_ops = {

@@ -633,6 +633,33 @@ void text_doc_group(TextDoc* doc, bool open) {
     doc->undo_sealed = true;
 }
 
+void text_doc_empty_step(TextDoc* doc, void* view) {
+    if (!doc || (doc->grouping && !doc->group_fresh))
+        return;
+    doc->group_fresh = false;
+    doc->step++;
+    doc->typing.count = 0;
+    doc->undo_sealed = true;
+    if (!doc->keep_undo)
+        return;
+    _drop_redo(doc);
+    if (doc->undo_count == UNDO_MAX) {
+        _free_step(&doc->undo[0]);
+        memmove(&doc->undo[0], &doc->undo[1], (UNDO_MAX - 1) * sizeof(TextUndoStep));
+        doc->undo_count--;
+    }
+    if (!grow_array((void**)&doc->undo, &doc->undo_capacity, doc->undo_count + 1,
+                    sizeof(TextUndoStep), 16))
+        return;
+    TextUndoStep* s = &doc->undo[doc->undo_count++];
+    memset(s, 0, sizeof(*s));
+    size_t n = 0;
+    s->before = _view_selections(doc, view, &n);
+    s->before_count = n;
+    s->after = _copy_selections(s->before, n, &s->after_count);
+    s->view = view;
+}
+
 static void _tell(TextDoc* doc, const TextDocChange* changes, size_t count,
                   const TextSelection* before, size_t before_count, const TextSelection* after,
                   size_t after_count, const void* view, uint64_t version) {
@@ -752,6 +779,7 @@ static bool _step(TextDoc* doc, void* view, bool undo) {
         !_may_change(doc, undo ? "text_doc_undo" : "text_doc_redo"))
         return false;
     TextUndoStep* s = &doc->undo[undo ? doc->undo_count - 1 : doc->undo_count];
+    // An empty step takes nothing back and puts the selections back as it found them.
     size_t most = 1;
     for (size_t p = 0; p < s->part_count; p++)
         most = s->parts[p].change_count > most ? s->parts[p].change_count : most;
