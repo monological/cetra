@@ -1575,10 +1575,17 @@ typedef struct EditorSheet {
     ParseJob job;
     uint64_t parsed; // the version the last result was for; UINT64_MAX for none
     int lag;         // frames from a parse's start to its result being taken
-    // With --vim: the vim mode under the app's own, and a line under the editor saying its state.
+    // With --vim: the vim mode under the app's own, and a line under the editor saying its state,
+    // with the line / ? and : are typed in after it -- its kind shown before it -- and what the
+    // last such line came to, said until the next key.
     UIEditorVim* vim;
+    UIScreen* screen;
     UIElement* status;
-    char status_text[64];
+    UIElement* prompt_kind;
+    UIElement* prompt;
+    char kind;
+    char message[160];
+    char status_text[192];
 } EditorSheet;
 
 static EditorSheet g_editor_sheet = {.parsed = UINT64_MAX};
@@ -1669,19 +1676,82 @@ static void* parse_thread(void* arg) {
 }
 
 // The vim mode's state on the line under the editor, as vim's own status line shows it, with the
-// keys of a command half typed at its end.
+// keys of a command half typed at its end -- or what the last line typed came to.
 static void editor_vim_status(EditorSheet* s) {
     if (!s->vim || !s->status)
         return;
     static const char* const SHOWN[] = {"", "-- INSERT --", "-- VISUAL --", "-- VISUAL LINE --",
                                         "-- VISUAL BLOCK --"};
-    char text[64];
-    snprintf(text, sizeof(text), "%-20s %s", SHOWN[ui_editor_vim_state(s->vim)],
-             ui_editor_vim_pending(s->vim));
+    char text[sizeof(s->status_text)];
+    if (s->message[0] && !s->kind)
+        snprintf(text, sizeof(text), "%s", s->message);
+    else
+        snprintf(text, sizeof(text), "%-20s %s", SHOWN[ui_editor_vim_state(s->vim)],
+                 ui_editor_vim_pending(s->vim));
     if (strcmp(text, s->status_text)) {
         memcpy(s->status_text, text, sizeof(text));
         ui_set_text(s->status, text);
     }
+}
+
+// The line / ? and : are typed in, done with: emptied, its kind put away, the editor focused again.
+static void editor_prompt_close(EditorSheet* s) {
+    s->kind = 0;
+    ui_set_text(s->prompt_kind, "");
+    ui_field_set_text(s->prompt, "");
+    ui_set_focus(s->screen, s->editor);
+}
+
+// The vim mode asking for a line: the field under the editor focused, its kind before it.
+static void editor_prompt_open(UIElement* el, char kind, void* user) {
+    (void)el;
+    EditorSheet* s = user;
+    const char shown[2] = {kind, '\0'};
+    s->kind = kind;
+    s->message[0] = '\0';
+    ui_set_text(s->prompt_kind, shown);
+    ui_field_set_text(s->prompt, "");
+    ui_set_focus(s->screen, s->prompt);
+}
+
+// A search's matches lit as it is typed.
+static void editor_prompt_change(UIElement* el, void* user) {
+    const EditorSheet* s = user;
+    if (s->kind != '/' && s->kind != '?')
+        return;
+    const char* text = ui_field_text(el);
+    bool capital = false;
+    for (const char* p = text; *p; p++)
+        capital = capital || (*p >= 'A' && *p <= 'Z');
+    ui_editor_find(s->editor, text, capital ? UI_EDITOR_FIND_CASE : 0);
+}
+
+// Enter: the line handed to the vim mode, and what it came to said when it found nothing.
+static void editor_prompt_submit(UIElement* el, void* user) {
+    EditorSheet* s = user;
+    char text[128];
+    snprintf(text, sizeof(text), "%s", ui_field_text(el));
+    const char kind = s->kind;
+    editor_prompt_close(s);
+    if (kind == ':' && !ui_editor_vim_command(s->vim, s->editor, text))
+        snprintf(s->message, sizeof(s->message), "Not an editor command: %s", text);
+    else if (kind != ':' && !ui_editor_vim_search(s->vim, s->editor, text, kind == '?'))
+        snprintf(s->message, sizeof(s->message), "Pattern not found: %s", text);
+}
+
+// Esc in the line: let go, the vim mode told.
+static bool editor_prompt_key(UIElement* el, const InputKeyEvent* key, void* user) {
+    (void)el;
+    EditorSheet* s = user;
+    if (key->key != GLFW_KEY_ESCAPE)
+        return false;
+    const char kind = s->kind;
+    editor_prompt_close(s);
+    if (kind == ':')
+        ui_editor_vim_command(s->vim, s->editor, NULL);
+    else
+        ui_editor_vim_search(s->vim, s->editor, NULL, kind == '?');
+    return true;
 }
 
 // Once a frame: a parse begun on a text that changed, and its result taken, at the version it
@@ -1741,13 +1811,25 @@ static bool host_reload(UIElement* el, void* user) {
     return true;
 }
 
+// Any key in the editor: what the last line came to is said no longer; the key goes on.
+static bool host_any_key(UIElement* el, const InputKeyEvent* key, void* user) {
+    (void)el;
+    (void)key;
+    (void)user;
+    g_editor_sheet.message[0] = '\0';
+    return false;
+}
+
 static const UIEditorCommand HOST_LAND = {"land-edit", "Land an edit from another view", host_land,
                                           NULL};
 static const UIEditorCommand HOST_RELOAD = {"reload", "Read the file again", host_reload, NULL};
 static const UIEditorBinding HOST_KEYS[] = {{GLFW_KEY_F6, 0, &HOST_LAND},
                                             {GLFW_KEY_F7, 0, &HOST_RELOAD}};
-static UIEditorMode g_host_mode = {
-    .name = "pcb", .bindings = HOST_KEYS, .binding_count = 2, .layer = true};
+static UIEditorMode g_host_mode = {.name = "pcb",
+                                   .bindings = HOST_KEYS,
+                                   .binding_count = 2,
+                                   .read_key = host_any_key,
+                                   .layer = true};
 
 static bool build_editor(UISystem* ui, const char* path, bool vim) {
     long len = 0;
@@ -1780,14 +1862,28 @@ static bool build_editor(UISystem* ui, const char* path, bool vim) {
     g_editor_sheet.editor = ui_editor(root, g_editor_sheet.doc);
     g_host_mode.parent = ui_editor_standard_mode();
     if (vim) {
-        g_editor_sheet.vim = create_ui_editor_vim();
-        if (!g_editor_sheet.vim)
+        EditorSheet* s = &g_editor_sheet;
+        s->vim = create_ui_editor_vim();
+        if (!s->vim)
             return false;
-        g_host_mode.parent = ui_editor_vim_mode(g_editor_sheet.vim);
+        s->screen = screen;
+        g_host_mode.parent = ui_editor_vim_mode(s->vim);
+        ui_editor_vim_set_prompt(s->vim, editor_prompt_open, s);
         root->align_cross = UI_ALIGN_START;
-        g_editor_sheet.status = ui_label(root, "");
-        ui_set_size(g_editor_sheet.status, UI_GROW, 0.0f, UI_FIT, 0.0f);
-        editor_vim_status(&g_editor_sheet);
+        // Under the editor: its state, then the line / ? and : are typed in, after its kind.
+        UIElement* row = ui_panel(root);
+        row->dir = UI_ROW;
+        ui_set_size(row, UI_GROW, 0.0f, UI_FIT, 0.0f);
+        row->align_cross = UI_ALIGN_CENTER;
+        s->status = ui_label(row, "");
+        ui_set_size(s->status, UI_FIXED, 320.0f, UI_FIT, 0.0f);
+        s->prompt_kind = ui_label(row, "");
+        ui_set_size(s->prompt_kind, UI_FIXED, 14.0f, UI_FIT, 0.0f);
+        s->prompt = ui_text_field(row, 0, editor_prompt_submit, s);
+        ui_set_size(s->prompt, UI_GROW, 0.0f, UI_FIT, 0.0f);
+        ui_field_set_on_change(s->prompt, editor_prompt_change, s);
+        ui_field_set_on_key(s->prompt, editor_prompt_key, s);
+        editor_vim_status(s);
     }
     ui_editor_set_mode(g_editor_sheet.editor, &g_host_mode);
     ui_push(ui, screen);
@@ -2709,6 +2805,13 @@ int main(int argc, char** argv) {
             printf(" %zu %zu", r[i].start, r[i].end);
         printf("\n");
         printf("canvas editor settled %d\n", ui_editor_settled(g_editor_sheet.editor) ? 1 : 0);
+        // With --vim: its state, and what the last line typed came to, as hex.
+        if (g_editor_sheet.vim) {
+            printf("canvas editor vim %d ", (int)ui_editor_vim_state(g_editor_sheet.vim));
+            for (const char* p = g_editor_sheet.message; *p; p++)
+                printf("%02x", (unsigned char)*p);
+            printf("\n");
+        }
         float ex = 0.0f, ey = 0.0f;
         if (count && ui_editor_point_of(g_editor_sheet.editor, r[0].start, &ex, &ey))
             printf("canvas editor error_at %ld %ld\n", lround(ex * ctx.fb_scale),

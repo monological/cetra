@@ -1755,7 +1755,14 @@ static int probe_vim_undo(UISystem* ui) {
 // A host over the vim mode: its Space acts in normal mode only and takes the space with it, in
 // insert mode handing the key back so the space is typed; its own undo takes u and Ctrl+R.
 static int g_vim_host_help, g_vim_host_undos, g_vim_host_redos;
+static char g_vim_host_asked;
 static UIEditorVim* g_vim_host;
+
+static void vim_host_prompt(UIElement* el, char kind, void* user) {
+    (void)el;
+    (void)user;
+    g_vim_host_asked = kind;
+}
 
 static bool vim_host_help(UIElement* el, void* user) {
     (void)el;
@@ -1809,6 +1816,28 @@ static int probe_vim_host(UISystem* ui) {
     vim_keys(ui, "u<C-r>");
     say_flag("vim-host", "undo", "host",
              g_vim_host_undos == 1 && g_vim_host_redos == 1 && doc_is_str(doc, " " VIM_TEXT));
+    // The host's line: / and : ask for it, and what it answers is the search or the command.
+    ui_editor_vim_set_prompt(g_vim_host, vim_host_prompt, NULL);
+    vim_keys(ui, "gg/");
+    const char asked_search = g_vim_host_asked;
+    const bool found = ui_editor_vim_search(g_vim_host, ed, "gamma", false);
+    say_flag("vim-host", "prompt", "search",
+             asked_search == '/' && found && one_selection(ed, 14, 14));
+    vim_keys(ui, ":");
+    const char asked_command = g_vim_host_asked;
+    const bool known = ui_editor_vim_command(g_vim_host, ed, "3");
+    say_flag("vim-host", "prompt", "command",
+             asked_command == ':' && known && one_selection(ed, 26, 26) &&
+                 !ui_editor_vim_command(g_vim_host, ed, "w"));
+    // d/ answered by the host, and . making the change again with the same search, asking nothing.
+    vim_keys(ui, "gglld/");
+    ui_editor_vim_search(g_vim_host, ed, "a", false);
+    const bool deleted = doc_is_str(doc, " ala beta\n  gamma delta\nlast line\n");
+    g_vim_host_asked = 0;
+    vim_keys(ui, ".");
+    say_flag("vim-host", "prompt", "repeat",
+             deleted && g_vim_host_asked == 0 &&
+                 doc_is_str(doc, " ala\n  gamma delta\nlast line\n"));
     ui_editor_set_mode(ed, NULL);
     free_text_doc(doc);
     free_ui_editor_vim(g_vim_host);

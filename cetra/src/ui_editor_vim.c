@@ -98,8 +98,9 @@ static uint32_t _vkey(const InputKeyEvent* ev) {
 
 // ---- The state
 
-#define KEYS_MAX    4096
-#define PENDING_MAX 64
+#define KEYS_MAX       4096
+#define PENDING_MAX    64
+#define LINE_MAX_BYTES 256
 
 // What the register holds: characters, whole lines, or a block's pieces, a line each.
 typedef enum { REG_CHARS, REG_LINES, REG_BLOCK } RegKind;
@@ -156,10 +157,20 @@ struct UIEditorVim {
     bool block_insert;
     size_t insert_top;
     int insert_left;
-    // The last f, F, t or T and its character; the last search.
+    // The last f, F, t or T and its character. The last search: its text, whether it went back,
+    // whether it ignores case whatever capitals it holds (from * and #), whether a match must
+    // start and end on a word's edge, and whether its matches are lit.
     uint32_t find_kind, find_char;
     char* search;
     bool search_back;
+    bool search_fold, search_word_start, search_word_end;
+    bool lit;
+    // A line read for / ? or :, its kind and what is typed of it -- or the host's, asked for and
+    // not yet answered -- and the pending keys with it, for a status line.
+    char line_kind, asked;
+    char line[LINE_MAX_BYTES];
+    size_t line_len;
+    char shown[PENDING_MAX + LINE_MAX_BYTES + 1];
     // What vim last put on the clipboard, what it holds, and a block's width less one.
     char* yank;
     RegKind yank_kind;
@@ -691,6 +702,137 @@ static bool _paragraph(const Ctx* c, size_t* off, int count, bool fwd, bool* inc
     return true;
 }
 
+// ---- Search
+
+static uint32_t _case(uint32_t cp, uint32_t how);
+static char* _range_text(const Ctx* c, size_t lo, size_t hi, size_t* n);
+
+// Whether a search's text holds a capital, which makes it match case.
+static bool _has_capital(const char* s) {
+    const size_t len = strlen(s);
+    for (size_t i = 0; i < len;) {
+        const uint32_t cp = ui_typing_next(s, len, &i);
+        if (_case(cp, 'u') != cp)
+            return true;
+    }
+    return false;
+}
+
+// Whether the last search matches at byte `i` of a line: its case folded unless it holds a capital
+// -- whatever it holds, after * and # -- and on a word's edge at either end where it asks.
+static bool _match_at(const Ctx* c, const char* s, size_t len, size_t i) {
+    const UIEditorVim* v = c->v;
+    const char* q = v->search;
+    const size_t qlen = strlen(q);
+    const bool fold = v->search_fold || !_has_capital(q);
+    size_t a = i, b = 0;
+    while (b < qlen) {
+        if (a >= len)
+            return false;
+        uint32_t x = ui_typing_next(s, len, &a), y = ui_typing_next(q, qlen, &b);
+        if (fold) {
+            x = _case(x, 'u');
+            y = _case(y, 'u');
+        }
+        if (x != y)
+            return false;
+    }
+    if (v->search_word_start && i > 0) {
+        const char* p = s + i;
+        text_utf8_prev(&p, s);
+        size_t at = (size_t)(p - s);
+        if (_class_of(ui_typing_next(s, len, &at)) == 2)
+            return false;
+    }
+    if (v->search_word_end && a < len) {
+        size_t at = a;
+        if (_class_of(ui_typing_next(s, len, &at)) == 2)
+            return false;
+    }
+    return true;
+}
+
+// The last search's next match after `from`, or before it going `back`, round the text's end -- on
+// `from`'s own line last, where it matches at `from` itself; SIZE_MAX for none.
+static size_t _search_next(const Ctx* c, size_t from, bool back) {
+    if (!c->v->search || !*c->v->search)
+        return SIZE_MAX;
+    const size_t first = _lof(c, from), col = from - _ls(c, first);
+    for (size_t step = 0; step <= c->lines; step++) {
+        const size_t line =
+            back ? (first + c->lines - step % c->lines) % c->lines : (first + step) % c->lines;
+        size_t len = 0;
+        const char* s = _lt(c, line, &len);
+        // Where a match may start on this line: past the cursor on its own line first, and up to it
+        // once round; going back, before it first and from it once round.
+        const bool own = step == 0, again = step == c->lines;
+        size_t found = SIZE_MAX;
+        for (size_t i = 0; i < len; ui_typing_next(s, len, &i)) {
+            const bool after = i > col, before = i < col;
+            const bool may =
+                !back ? (own ? after : !again || !after) : (own ? before : !again || !before);
+            if (!may || !_match_at(c, s, len, i))
+                continue;
+            found = i;
+            if (!back)
+                break;
+        }
+        if (found != SIZE_MAX)
+            return _ls(c, line) + found;
+    }
+    return SIZE_MAX;
+}
+
+// * and #: the word nearest the cursor, as vim finds it -- the keyword under it or the first after
+// it on the line, else the run of non-blanks under it or after it -- made the search, whole where
+// its ends are a word's, its case ignored. Its start in *start; false for a line with none.
+static bool _search_word(Ctx* c, size_t from, bool back, size_t* start) {
+    UIEditorVim* v = c->v;
+    const size_t line = _lof(c, from), le = _le(c, line);
+    size_t lo = SIZE_MAX, hi = SIZE_MAX;
+    for (int want = 2; want >= 1 && lo == SIZE_MAX; want--) {
+        size_t p = from;
+        while (p < le && _class_of(_gc(c, p)) < want)
+            p = _after(c, p);
+        if (p >= le)
+            continue;
+        const int cls = _class_of(_gc(c, p));
+        lo = p;
+        while (lo > _ls(c, line) && _class_of(_gc(c, _before(c, lo))) == cls)
+            lo = _before(c, lo);
+        hi = p;
+        while (hi < le && (want == 2 ? _class_of(_gc(c, hi)) == cls : _class_of(_gc(c, hi)) != 0))
+            hi = _after(c, hi);
+    }
+    if (lo == SIZE_MAX)
+        return false;
+    size_t n = 0;
+    char* word = _range_text(c, lo, hi, &n);
+    if (!word)
+        return false;
+    free(v->search);
+    v->search = word;
+    v->search_back = back;
+    v->search_fold = true;
+    v->search_word_start = _class_of(_gc(c, lo)) == 2;
+    v->search_word_end = _class_of(_gc(c, _before(c, hi))) == 2;
+    *start = lo;
+    return true;
+}
+
+// The last search's matches lit, as long as nothing has put the light out.
+static void _light(Ctx* c) {
+    const UIEditorVim* v = c->v;
+    if (!v->search) {
+        ui_editor_find(c->el, NULL, 0);
+        return;
+    }
+    unsigned flags = v->search_fold || !_has_capital(v->search) ? 0 : UI_EDITOR_FIND_CASE;
+    if (v->search_word_start && v->search_word_end)
+        flags |= UI_EDITOR_FIND_WORD;
+    ui_editor_find(c->el, v->lit ? v->search : NULL, flags);
+}
+
 // ---- Text objects
 
 // What a text object covers: from `start` to `end`, the character at `end` in it or not, or the
@@ -1138,6 +1280,10 @@ static bool _is_motion(uint32_t prefix, uint32_t k) {
         case 'H':
         case 'M':
         case 'L':
+        case 'n':
+        case 'N':
+        case '*':
+        case '#':
         case ' ':
         case K_CR:
         case K_BS:
@@ -1396,6 +1542,27 @@ static Moved _motion(Ctx* c, uint32_t prefix, uint32_t key, uint32_t arg, size_t
             const int rows = ui_editor_rows_shown(c->el);
             const int down = key == 'H' ? n - 1 : key == 'L' ? rows - n : (rows - 1) / 2;
             return _to_line(c, _lof(c, ui_editor_row_at(c->el, down < 0 ? 0 : down)));
+        }
+        case 'n':
+        case 'N':
+        case '*':
+        case '#': {
+            // The search's `count`th match: n the way it went, N the other; * and # from the
+            // start of the word they make the search.
+            size_t at = from;
+            if ((key == '*' || key == '#') && !_search_word(c, from, key == '#', &at))
+                return (Moved){from, false, false, false, -1};
+            if (!c->v->search)
+                return (Moved){from, false, false, false, -1};
+            const bool back = c->v->search_back != (key == 'N');
+            for (int k = 0; k < n && at != SIZE_MAX; k++)
+                at = _search_next(c, at, back);
+            c->v->lit = true;
+            _light(c);
+            if (at == SIZE_MAX)
+                return (Moved){from, false, false, false, -1};
+            m.to = at;
+            return m;
         }
         default:
             return (Moved){from, false, false, false, -1};
@@ -4073,6 +4240,7 @@ static bool _second(Ctx* c, uint32_t p, uint32_t k) {
 }
 
 static void _repeat(Ctx* c);
+static bool _line_start(Ctx* c, char kind);
 
 // Normal mode's commands: everything that is not an operator's motion.
 static bool _command(Ctx* c, uint32_t k) {
@@ -4182,6 +4350,10 @@ static bool _command(Ctx* c, uint32_t k) {
         case '.':
             _repeat(c);
             return true;
+        case '/':
+        case '?':
+        case ':':
+            return _line_start(c, (char)k);
         case 'v':
         case 'V':
         case K_CTRL('v'):
@@ -4323,6 +4495,15 @@ static bool _visual_command(Ctx* c, uint32_t k) {
         case 'A':
             _visual_insert(c, k == 'A');
             break;
+        case '/':
+        case '?':
+            return _line_start(c, (char)k);
+        case ':':
+            // No ranges: the command line from visual mode is normal mode's.
+            _visual_leave(c);
+            _reset(v);
+            _pending_add(v, k);
+            return _line_start(c, ':');
         default:
             if (!_is_motion(0, k)) {
                 _reset(v);
@@ -4348,6 +4529,10 @@ static bool _after_op(Ctx* c, uint32_t k) {
         v->prefix = k;
         _pending_add(v, k);
         return true;
+    }
+    if (k == '/' || k == '?') {
+        _pending_add(v, k);
+        return _line_start(c, (char)k);
     }
     const bool doubled =
         k == op || (op == '~' && k == '~') || (op == 'u' && k == 'u') || (op == 'U' && k == 'U');
@@ -4412,12 +4597,166 @@ static void _repeat(Ctx* c) {
     _reset(v);
 }
 
+// ---- The line after / ? and :
+
+// What a status line shows while a line is read: the command's keys, the line's kind among them,
+// and what is typed of it.
+static void _shown(UIEditorVim* v) {
+    snprintf(v->shown, sizeof(v->shown), "%s%.*s", v->pending, (int)v->line_len, v->line);
+}
+
+// A line for / ? or :, read from the keys -- or the host's, when it has a line of its own and the
+// keys are not a change being made again.
+static bool _line_start(Ctx* c, char kind) {
+    UIEditorVim* v = c->v;
+    if (v->prompt && !v->replaying) {
+        v->asked = kind;
+        v->prompt(c->el, kind, v->prompt_user);
+        return true;
+    }
+    v->line_kind = kind;
+    v->line_len = 0;
+    v->line[0] = '\0';
+    _shown(v);
+    return true;
+}
+
+// A command line vim knows: a line number -- past the last line, an error that moves nothing -- $
+// for the last line, and noh -- nohlsearch to at least its first three letters -- which puts the
+// search's light out until the next search. An empty one does nothing. False for any other.
+static bool _ex(Ctx* c, const char* line) {
+    while (*line == ' ' || *line == ':')
+        line++;
+    size_t len = strlen(line);
+    while (len && line[len - 1] == ' ')
+        len--;
+    if (!len)
+        return true;
+    bool digits = true;
+    size_t n = 0;
+    for (size_t i = 0; i < len && digits; i++) {
+        digits = line[i] >= '0' && line[i] <= '9';
+        n = n < SIZE_MAX / 10 ? n * 10 + (size_t)(line[i] - '0') : SIZE_MAX;
+    }
+    if (digits || (len == 1 && line[0] == '$')) {
+        if (digits && n > c->lines)
+            return true;
+        const size_t at = _first_nonblank(c, !digits ? c->lines - 1 : n ? n - 1 : 0);
+        _place(c, &at, NULL, 1, 0, true);
+        return true;
+    }
+    if (len >= 3 && len <= 10 && !strncmp(line, "nohlsearch", len)) {
+        c->v->lit = false;
+        _light(c);
+        return true;
+    }
+    return false;
+}
+
+// The line read for / ? or : let go (`text` NULL) or run. A search's text, or the last search
+// again for an empty one, moves each cursor to its match, or takes the operator waiting to it, or
+// grows each visual area to it. Whether the search matches from the primary cursor, or the command
+// line was known.
+static bool _line_done(Ctx* c, char kind, const char* text) {
+    UIEditorVim* v = c->v;
+    v->line_kind = v->asked = 0;
+    v->line_len = 0;
+    if (!text || kind == ':') {
+        // Let go: the light as it was before the line lit what was typed.
+        const bool ok = text && _ex(c, text);
+        if (!text && kind != ':')
+            _light(c);
+        _reset(v);
+        return ok;
+    }
+    if (*text) {
+        char* copy = malloc(strlen(text) + 1);
+        if (copy) {
+            strcpy(copy, text);
+            free(v->search);
+            v->search = copy;
+            v->search_fold = v->search_word_start = v->search_word_end = false;
+        }
+    }
+    v->search_back = kind == '?';
+    if (!v->search) {
+        _reset(v);
+        return false;
+    }
+    Carets k = _carets(c->el);
+    const bool ok = k.sel && _search_next(c, k.sel[k.primary].head, v->search_back) != SIZE_MAX;
+    _free_carets(&k);
+    const int count0 = _count0(v);
+    const uint32_t op = v->op;
+    if (op) {
+        _operate(c, op, 0, 'n', 0, count0);
+        if (op != 'y')
+            _keep_change(v, count0);
+    } else if (c->visual) {
+        _visual_move(c, 0, 'n', 0, count0);
+    } else {
+        _move(c, 0, 'n', 0, count0);
+    }
+    _reset(v);
+    return ok;
+}
+
+// A key while a line is read: typed into it -- Ctrl+U clearing it, Backspace taking back its last
+// character, or from an empty line letting it go as Esc does -- or Enter running it. A search's
+// matches are lit as it is typed.
+static bool _line_key(Ctx* c, uint32_t k) {
+    UIEditorVim* v = c->v;
+    _record(v, k);
+    const char kind = v->line_kind;
+    const bool back = k == K_BS || k == K_CTRL('h');
+    if (k == K_ESC || k == K_CTRL('c') || (back && !v->line_len)) {
+        _line_done(c, kind, NULL);
+        return true;
+    }
+    if (k == K_CR) {
+        char text[LINE_MAX_BYTES];
+        memcpy(text, v->line, v->line_len);
+        text[v->line_len] = '\0';
+        _line_done(c, kind, text);
+        return true;
+    }
+    if (back) {
+        const char* p = v->line + v->line_len;
+        text_utf8_prev(&p, v->line);
+        v->line_len = (size_t)(p - v->line);
+    } else if (k == K_CTRL('u')) {
+        v->line_len = 0;
+    } else if (k < K_ESC) {
+        char utf8[4];
+        const size_t n = text_utf8_encode(k, utf8);
+        if (v->line_len + n < LINE_MAX_BYTES) {
+            memcpy(v->line + v->line_len, utf8, n);
+            v->line_len += n;
+        }
+    }
+    v->line[v->line_len] = '\0';
+    if (kind != ':' && v->line_len)
+        ui_editor_find(c->el, v->line, _has_capital(v->line) ? UI_EDITOR_FIND_CASE : 0);
+    else if (kind != ':')
+        _light(c);
+    _shown(v);
+    return true;
+}
+
 // ---- The mode
 
+// A key: into the line being read, if one is; a host's line asked for and not answered is let go,
+// the key read afresh.
 static bool _feed(UIEditorVim* v, UIElement* el, uint32_t k) {
     Ctx c = _ctx(v, el);
     if (!c.doc)
         return false;
+    if (v->line_kind)
+        return _line_key(&c, k);
+    if (v->asked && !v->replaying) {
+        v->asked = 0;
+        _reset(v);
+    }
     if (v->state == UI_VIM_INSERT)
         return _insert_key(&c, k);
     return _normal_key(&c, k);
@@ -4490,7 +4829,7 @@ UIEditorVimState ui_editor_vim_state(const UIEditorVim* vim) {
 }
 
 const char* ui_editor_vim_pending(const UIEditorVim* vim) {
-    return vim ? vim->pending : "";
+    return !vim ? "" : vim->line_kind ? vim->shown : vim->pending;
 }
 
 void ui_editor_vim_set_prompt(UIEditorVim* vim, UIEditorVimPromptFn fn, void* user) {
@@ -4510,18 +4849,29 @@ void ui_editor_vim_set_undo(UIEditorVim* vim, UIEditorCommandFn undo, UIEditorCo
 }
 
 bool ui_editor_vim_search(UIEditorVim* vim, UIElement* el, const char* query, bool backward) {
-    (void)vim;
-    (void)el;
-    (void)query;
-    (void)backward;
-    return false;
+    if (!vim || !el)
+        return false;
+    Ctx c = _ctx(vim, el);
+    if (!c.doc)
+        return false;
+    // The host's line answers what / or ? asked: its text joins the keys, so `.` makes an
+    // operator's change again with the same search.
+    if ((vim->asked == '/' || vim->asked == '?') && query && vim->op) {
+        const size_t len = strlen(query);
+        for (size_t i = 0; i < len;)
+            _record(vim, ui_typing_next(query, len, &i));
+        _record(vim, K_CR);
+    }
+    return _line_done(&c, backward ? '?' : '/', query);
 }
 
 bool ui_editor_vim_command(UIEditorVim* vim, UIElement* el, const char* line) {
-    (void)vim;
-    (void)el;
-    (void)line;
-    return false;
+    if (!vim || !el)
+        return false;
+    Ctx c = _ctx(vim, el);
+    if (!c.doc)
+        return false;
+    return _line_done(&c, ':', line);
 }
 
 static const UIEditorVimKey KEYS[] = {
@@ -4549,6 +4899,9 @@ static const UIEditorVimKey KEYS[] = {
     {"r ~", "Replace a character, swap a character's case"},
     {"u Ctrl+R", "Undo, redo"},
     {".", "Repeat the last change"},
+    {"/ ? n N", "Search forward or back, and again either way"},
+    {"* #", "Search for the word under the cursor, forward or back"},
+    {":N :noh", "Go to line N; put out the search's light"},
     {"zz zt zb", "Scroll the cursor's line to the middle, top or bottom"},
     {"Ctrl+D Ctrl+U Ctrl+F Ctrl+B", "Half a page down or up, a page down or up"},
 };

@@ -35,18 +35,20 @@ void free_ui_editor_vim(UIEditorVim* vim);
 // caret but in insert mode, and visual selections drawn as vim takes them.
 const UIEditorMode* ui_editor_vim_mode(const UIEditorVim* vim);
 UIEditorVimState ui_editor_vim_state(const UIEditorVim* vim);
-// The keys of a command not yet whole -- "2d" -- for a status line; "" for none.
+// The keys of a command not yet whole -- "2d", or "d/fo" while a line is read -- for a status line;
+// "" for none.
 const char* ui_editor_vim_pending(const UIEditorVim* vim);
 
 // Asked when a key wants a line typed: '/' or '?' for a search, ':' for a command. The host shows
-// its line, and passes what was typed on to ui_editor_vim_search or ui_editor_vim_command -- or
-// nothing, when it is let go.
+// its line, and passes what was typed on to ui_editor_vim_search or ui_editor_vim_command -- NULL
+// when it is let go. With none set, vim reads the line from the keys, shown as pending.
 typedef void (*UIEditorVimPromptFn)(UIElement* el, char kind, void* user);
 void ui_editor_vim_set_prompt(UIEditorVim* vim, UIEditorVimPromptFn fn, void* user);
-// A search as / makes it, or ? with `backward`: kept for n and N, and the cursor moved to the next
-// match. Plain text, ignoring case unless the query has a capital. False with no match.
+// A search as / makes it, or ? with `backward`: kept for n and N, its matches lit, and each cursor
+// moved to its next match -- or an operator waiting for it taken there. Plain text, ignoring case
+// unless the query has a capital; "" searches again. False with no match.
 bool ui_editor_vim_search(UIEditorVim* vim, UIElement* el, const char* query, bool backward);
-// A command line, without its ':', that vim knows: a line number, and "noh". False for any other,
+// A command line, without its ':', that vim knows: a line number, $, and noh. False for any other,
 // which is the host's.
 bool ui_editor_vim_command(UIEditorVim* vim, UIElement* el, const char* line);
 // Undo and redo -- u and Ctrl+R -- through a host's own from then on; NULL for the text's own.
