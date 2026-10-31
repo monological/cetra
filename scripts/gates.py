@@ -26199,6 +26199,16 @@ _VIM_SEQUENCES = [
     "<C-v>jlV", "vj<C-v>", "Vj<C-v>d", "<C-v>jlyjj<C-v>jp", "<C-v>jly3p", "<C-v>jlp",
     "<C-v>jlyjj<C-v>jP", "yiw<C-v>jp", "yiw<C-v>jlP", "yy<C-v>jp", "yy<C-v>jP", "<C-v>jlpu",
     "yiw<C-v>jpu", "yiw<C-v>j2p", "yy<C-v>jPu",
+    # Search, and the command line. A line let go ends its sequence: fed as typeahead, vim drops
+    # the keys after it, where typed ones go on.
+    "/a<CR>", "/a<CR>n", "/a<CR>N", "?a<CR>", "?a<CR>n", "?a<CR>N", "2/a<CR>", "/a<CR>3n",
+    "/xyzzy<CR>", "/xyzzy<CR>x", "d/a<CR>", "d?a<CR>", "c/a<CR>Z<Esc>", "y/a<CR>P", "/e<CR>",
+    "/E<CR>", "/A<CR>", "*", "#", "2*", "*n", "*N", "#n", "d*", "d#", "/e<CR>dn", "/e<CR>dN",
+    "d/e<CR>.", ":3<CR>", ":$<CR>", ":0<CR>", ":99<CR>", ":2<CR>", ":1<CR>j", ":noh<CR>", "/<CR>",
+    "/a<CR>/<CR>", "/a<CR>?<CR>", "v/a<CR>d", "V/a<CR>d", "v?a<CR>y", "/ab<BS><BS>e<CR>",
+    "/x<C-u>e<CR>", "/ab<Esc>", "/<BS>", ":<Esc>", "w*", "b#", "$*", "0#", "3*", "/eta<CR>",
+    "/éta<CR>", "/Ω<CR>", "/über<CR>", "/Über<CR>", "/ÜBER<CR>", "/(<CR>", "/)<CR>n", "d/)<CR>",
+    "/a<CR>u", "/a<CR>x", ":noh<CR>n", "/a<CR>:noh<CR>n", "*:2<CR>n",
 ]
 
 # What the corpus leaves out on a fixture, each a place the vim mode differs from vim on purpose:
@@ -28182,7 +28192,9 @@ def run_ui_gate(workdir):
       ui-vim-host    a host's layer over the vim mode: its Space acts in normal mode
                      and takes the space its press makes, in insert mode hands the
                      key back and the space is typed; the host's undo takes u and
-                     Ctrl+R.
+                     Ctrl+R; / and : ask for the host's line, its answers search
+                     and go to line 3, "w" is not vim's, and d/ answered by the host
+                     is made again by . without asking.
       ui-vim-carets  several carets, which vim has none of: Ctrl+V and I puts a
                      caret on each line, Z typed at every one, Esc and then u each
                      leaving one cursor at the block's top left; A after the block;
@@ -28190,6 +28202,10 @@ def run_ui_gate(workdir):
       ui-editor-script apps/canvas --editor on a file, driven by a script: a caret
                      added below, "XY" typed at both, undone, Esc to one caret, the
                      word at it taken by Cmd+D and found again round the text's end
+                     (end to end).
+      ui-vim-script  apps/canvas --editor --vim, driven by a script: dw, a search
+                     typed in the app's own line under the editor, x, :1 there, .
+                     made again, and a search finding nothing said on the line
                      (end to end).
       ui-editor-host-edit the host's edits through an editor: a selection moved by an
                      edit before it, kept by one after it, grown by one inside it; a
@@ -29205,9 +29221,11 @@ def run_ui_gate(workdir):
     print(f"  ui-vim-undo           {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-vim-undo", ok)
 
-    ok, detail = doc_flags("vim-host", 4, "a host's Space over the vim mode acts in normal mode and "
+    ok, detail = doc_flags("vim-host", 7, "a host's Space over the vim mode acts in normal mode and "
                            "takes its space, hands it back in insert mode where it is typed, keeps "
-                           "the host's name over vim's look, and the host's undo takes u and Ctrl+R")
+                           "the host's name over vim's look, and the host's undo takes u and Ctrl+R; "
+                           "/ and : ask the host's line, whose answers search and go to a line, and "
+                           "d/ answered there is made again by . asking nothing")
     print(f"  ui-vim-host           {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-vim-host", ok)
 
@@ -29242,6 +29260,24 @@ def run_ui_gate(workdir):
               f"was, [1, 0, 3])")
     print(f"  ui-editor-script      {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-editor-script", ok)
+
+    # ---- the vim mode end to end: dw, a search and a line number through the app's own line, x
+    # and . made again, and a search finding nothing said so
+    with open(script, "w", encoding="utf-8") as f:
+        f.write("3 type=dw\n5 type=/\n7 type=four\n9 key=enter\n11 type=x\n13 type=:\n"
+                "15 type=1\n17 key=enter\n19 type=.\n21 type=/\n23 type=zzz\n25 key=enter\n")
+    _, run = _canvas_run(workdir, "vim_script", "--editor", text_path, "--vim", "--input-script",
+                         script, frames=28)
+    run_hex = (run.get(("editor", "hex")) or [""])[0]
+    run_sel = [int(v) for v in run.get(("editor", "sel"), [])]
+    vim_said = run.get(("editor", "vim"), [])
+    message = bytes.fromhex(vim_said[1]).decode() if len(vim_said) > 1 else ""
+    ok = (run_hex == b"wo\none our\n".hex() and run_sel == [1, 0, 0] and vim_said[:1] == ["0"]
+          and message == "Pattern not found: zzz")
+    detail = (f"{bytes.fromhex(run_hex)!r} {run_sel}, normal mode {vim_said[:1] == ['0']}, said "
+              f"{message!r} (want b'wo\\none our\\n' [1, 0, 0], 'Pattern not found: zzz')")
+    print(f"  ui-vim-script         {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-vim-script", ok)
 
     ok, detail = doc_flags("editor-host-edit", 8, "a selection through the host's edits before it, "
                            "after it and inside it, a caret under replaced bytes and at an "
