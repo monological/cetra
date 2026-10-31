@@ -712,19 +712,27 @@ static void sheet_symbol(SheetContext* ctx) {
  */
 static const char GLYPHS[] = "Bg@We";
 
+// A font's atlas read back from the GPU; NULL out of memory.
+static unsigned char* atlas_of(const Font* font) {
+    unsigned char* atlas = malloc((size_t)font->atlas_width * (size_t)font->atlas_height);
+    if (!atlas)
+        return NULL;
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glBindTexture(GL_TEXTURE_2D, font->atlas_texture_id);
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_RED, GL_UNSIGNED_BYTE, atlas);
+    return atlas;
+}
+
 // Every glyph's texels in the font's atlas against stb's own distance field for it, rasterised here
 // with the parameters the font states, and the count of glyphs whose texels differ.
 static void probe_atlas(const Font* font) {
     const stbtt_fontinfo* info = (const stbtt_fontinfo*)font->stb_font_info;
     const int side = font->atlas_width;
-    unsigned char* atlas = malloc((size_t)side * (size_t)font->atlas_height);
-    if (!atlas || font->atlas_height != side) {
-        free(atlas);
+    if (font->atlas_height != side)
         return;
-    }
-    glPixelStorei(GL_PACK_ALIGNMENT, 1);
-    glBindTexture(GL_TEXTURE_2D, font->atlas_texture_id);
-    glGetTexImage(GL_TEXTURE_2D, 0, GL_RED, GL_UNSIGNED_BYTE, atlas);
+    unsigned char* atlas = atlas_of(font);
+    if (!atlas)
+        return;
     const float scale = stbtt_ScaleForPixelHeight(info, font->base_size);
     const int on_edge =
         (int)lroundf(font->sdf_edge * 255.0f + 0.5f); // the edge is half a code under
@@ -1453,27 +1461,15 @@ static UISystem* g_ui_live;     // the UI given the real pointer and keyboard ea
 // ---- The fonts built into the program (spec 14.6): the table canvas_fonts.h holds, which the
 // build writes from its list, indexed by what each is for (CANVAS_FONTS_LABEL and the rest).
 
-// A built-in font as a distance field, at the size every font of the app is made at.
-static Font* built_in_font(Engine* engine, int which) {
+// A built-in font as a distance field in `pool`, at the size every font of the app is made at.
+static Font* built_in_font(FontPool* pool, int which) {
     const CetraEmbeddedFile* f = &canvas_fonts[which];
-    return load_font_memory(engine->text_renderer->font_pool, f->name, f->bytes, f->size, 64.0f,
-                            true);
+    return load_font_memory(pool, f->name, f->bytes, f->size, 64.0f, true);
 }
 
 static GlyphCache* built_in_face(int which, float pixel_size) {
     return create_glyph_cache_memory(canvas_fonts[which].bytes, canvas_fonts[which].size,
                                      pixel_size);
-}
-
-// A font's atlas read back from the GPU; NULL out of memory.
-static unsigned char* atlas_of(const Font* font) {
-    unsigned char* atlas = malloc((size_t)font->atlas_width * (size_t)font->atlas_height);
-    if (!atlas)
-        return NULL;
-    glPixelStorei(GL_PACK_ALIGNMENT, 1);
-    glBindTexture(GL_TEXTURE_2D, font->atlas_texture_id);
-    glGetTexImage(GL_TEXTURE_2D, 0, GL_RED, GL_UNSIGNED_BYTE, atlas);
-    return atlas;
 }
 
 // Two fonts the same: every glyph's metrics and place, the kerning table and the atlas.
@@ -1534,8 +1530,8 @@ static void probe_built_in_fonts(void) {
         free(file);
         FontPool* by_path = create_font_pool();
         FontPool* by_bytes = create_font_pool();
-        fonts += fonts_equal(load_font(by_path, f->source, 64.0f, true),
-                             load_font_memory(by_bytes, f->name, f->bytes, f->size, 64.0f, true));
+        fonts +=
+            fonts_equal(load_font(by_path, f->source, 64.0f, true), built_in_font(by_bytes, i));
         free_font_pool(by_path);
         free_font_pool(by_bytes);
         GlyphCache* a = create_glyph_cache(f->source, 13.0f);
@@ -1612,7 +1608,7 @@ static void draw_font_sheet(UIElement* el, UIDrawList* dl, void* user) {
 static bool build_font_sheet(UISystem* ui, Engine* engine, Font* label) {
     g_font_sheet.engine = engine;
     g_font_sheet.label = label;
-    g_font_sheet.field = built_in_font(engine, CANVAS_FONTS_EDITOR);
+    g_font_sheet.field = built_in_font(engine->text_renderer->font_pool, CANVAS_FONTS_EDITOR);
     for (int i = 0; i < 3; i++)
         g_font_sheet.caches[i] = built_in_face(CANVAS_FONTS_EDITOR, FONT_SHEET_SIZES[i]);
     if (!g_font_sheet.field || !g_font_sheet.caches[0] || !g_font_sheet.caches[1] ||
@@ -1698,7 +1694,7 @@ typedef struct PaneSpot {
 } PaneSpot;
 
 typedef struct EditorPane {
-    UIElement* editor; // NULL for a slot no pane holds
+    UIElement* editor;
     int file;
     PaneSpot spots[EDITOR_FILES_MAX];
 } EditorPane;
@@ -1706,7 +1702,8 @@ typedef struct EditorPane {
 typedef struct EditorSheet {
     EditorFile files[EDITOR_FILES_MAX];
     int file_count;
-    EditorPane panes[EDITOR_PANES_MAX];
+    EditorPane panes[EDITOR_PANES_MAX]; // in the order they were opened
+    int pane_count;
     UIElement* area; // the panes' container, a row
     GlyphCache* face;
     UISystem* ui;
@@ -1728,8 +1725,8 @@ typedef struct EditorSheet {
 static EditorSheet g_editor_sheet;
 
 static EditorPane* pane_of(const UIElement* editor) {
-    for (int i = 0; i < EDITOR_PANES_MAX; i++)
-        if (editor && g_editor_sheet.panes[i].editor == editor)
+    for (int i = 0; i < g_editor_sheet.pane_count; i++)
+        if (g_editor_sheet.panes[i].editor == editor)
             return &g_editor_sheet.panes[i];
     return NULL;
 }
@@ -1744,10 +1741,7 @@ static EditorFile* file_of(const UIElement* editor) {
 // the editor.
 static EditorPane* pane_focused(void) {
     EditorPane* p = pane_of(ui_focused(g_editor_sheet.screen));
-    for (int i = 0; !p && i < EDITOR_PANES_MAX; i++)
-        if (g_editor_sheet.panes[i].editor)
-            p = &g_editor_sheet.panes[i];
-    return p;
+    return p ? p : &g_editor_sheet.panes[0];
 }
 
 static void spot_drop(PaneSpot* spot) {
@@ -1756,8 +1750,25 @@ static void spot_drop(PaneSpot* spot) {
     spot->count = 0;
 }
 
-// A pane's editor on the file's text, in the app's keys.
+// What a pane kept of the files it left.
+static void pane_free(EditorPane* pane) {
+    for (int f = 0; f < EDITOR_FILES_MAX; f++)
+        spot_drop(&pane->spots[f]);
+}
+
+// A pane's editor on the file's text, in the app's keys, in the slot `pane`.
 static UIElement* pane_open(EditorPane* pane, UIElement* parent, int file);
+
+// A row of panes, with no padding of its own, so one pane in it stands where the row does.
+static UIElement* pane_row(UIElement* parent) {
+    UIElement* row = ui_panel(parent);
+    row->dir = UI_ROW;
+    ui_set_size(row, UI_GROW, 0.0f, UI_GROW, 0.0f);
+    for (int k = 0; k < 4; k++)
+        row->padding[k] = -1.0f;
+    row->spacing = 4.0f;
+    return row;
+}
 
 // A byte that ends an atom, on pcb's rules: whitespace, a bracket, a quote or a comment's start.
 static bool sexpr_stop(char c) {
@@ -2002,39 +2013,29 @@ static size_t index_in(const UIElement* el) {
 static bool host_split(UIElement* el, void* user) {
     (void)user;
     EditorSheet* s = &g_editor_sheet;
-    EditorPane* fresh = NULL;
-    for (int i = 0; !fresh && i < EDITOR_PANES_MAX; i++)
-        if (!s->panes[i].editor)
-            fresh = &s->panes[i];
-    if (!fresh)
+    if (s->pane_count == EDITOR_PANES_MAX)
         return false;
+    const int file = pane_of(el)->file;
     UIElement* parent = el->parent;
-    UIElement* row = ui_panel(parent);
-    row->dir = UI_ROW;
-    ui_set_size(row, UI_GROW, 0.0f, UI_GROW, 0.0f);
-    for (int k = 0; k < 4; k++)
-        row->padding[k] = -1.0f;
-    row->spacing = 4.0f;
+    UIElement* row = pane_row(parent);
     ui_move(row, parent, index_in(el));
     ui_move(el, row, 0);
-    ui_set_focus(s->screen, pane_open(fresh, row, pane_of(el)->file));
+    ui_set_focus(s->screen, pane_open(&s->panes[s->pane_count++], row, file));
     return true;
 }
 
-// F9: the pane closed, from inside its own key, and the focus given to the pane left in its place.
-// A row left holding one pane hands it to the row's own parent. The last pane stays.
+// F9: the pane closed, from inside its own key, and the focus given to the pane left in its place,
+// as is the vim line when the pane had asked for it. A row left holding one pane hands it to the
+// row's own parent. The last pane stays.
 static bool host_close(UIElement* el, void* user) {
     (void)user;
     EditorSheet* s = &g_editor_sheet;
-    int open = 0;
-    for (int i = 0; i < EDITOR_PANES_MAX; i++)
-        open += s->panes[i].editor != NULL;
-    if (open < 2)
+    if (s->pane_count < 2)
         return false;
     EditorPane* pane = pane_of(el);
-    for (int f = 0; f < EDITOR_FILES_MAX; f++)
-        spot_drop(&pane->spots[f]);
-    pane->editor = NULL;
+    pane_free(pane);
+    memmove(pane, pane + 1, (size_t)(&s->panes[s->pane_count] - (pane + 1)) * sizeof(EditorPane));
+    s->pane_count--;
     UIElement* parent = el->parent;
     size_t at = index_in(el);
     ui_remove(s->ui, el);
@@ -2049,6 +2050,8 @@ static bool host_close(UIElement* el, void* user) {
     while (next->kind != UI_EDITOR)
         next = next->children[0];
     ui_set_focus(s->screen, next);
+    if (s->asking == el)
+        s->asking = next;
     return true;
 }
 
@@ -2119,8 +2122,7 @@ static UIEditorMode g_host_mode = {.name = "pcb",
                                    .layer = true};
 
 static UIElement* pane_open(EditorPane* pane, UIElement* parent, int file) {
-    pane->file = file;
-    pane->editor = ui_editor(parent, g_editor_sheet.files[file].doc);
+    *pane = (EditorPane){.editor = ui_editor(parent, g_editor_sheet.files[file].doc), .file = file};
     ui_editor_set_mode(pane->editor, &g_host_mode);
     return pane->editor;
 }
@@ -2165,14 +2167,9 @@ static bool build_editor(UISystem* ui, const char* const* paths, int count, bool
     ui_screen_set_modal(screen, false);
     s->screen = screen;
     UIElement* root = ui_screen_root(screen);
-    // The panes' row, with no padding of its own, so one pane stands where the editor alone did.
-    s->area = ui_panel(root);
-    s->area->dir = UI_ROW;
-    ui_set_size(s->area, UI_GROW, 0.0f, UI_GROW, 0.0f);
-    for (int k = 0; k < 4; k++)
-        s->area->padding[k] = -1.0f;
-    s->area->spacing = 4.0f;
-    UIElement* first = pane_open(&s->panes[0], s->area, 0);
+    // The panes' row, so one pane stands where the editor alone did.
+    s->area = pane_row(root);
+    UIElement* first = pane_open(&s->panes[s->pane_count++], s->area, 0);
     g_host_mode.parent = ui_editor_standard_mode();
     if (vim) {
         s->vim = create_ui_editor_vim();
@@ -2992,7 +2989,7 @@ int main(int argc, char** argv) {
     view->fraction[1] = uy - floor(uy);
     lay_out_views(engine);
 
-    Font* font = built_in_font(engine, CANVAS_FONTS_LABEL);
+    Font* font = built_in_font(engine->text_renderer->font_pool, CANVAS_FONTS_LABEL);
     if (!font) {
         free_canvas(g_canvas);
         free_engine(engine);
@@ -3058,7 +3055,7 @@ int main(int argc, char** argv) {
         g_ui_live = ui;
     }
     if (history) {
-        Font* mono = built_in_font(engine, CANVAS_FONTS_PIXEL);
+        Font* mono = built_in_font(engine->text_renderer->font_pool, CANVAS_FONTS_PIXEL);
         build_history(ui, mono);
         g_ui_live = ui;
         UIScreen* screen = ui_top(ui);
@@ -3173,9 +3170,8 @@ int main(int argc, char** argv) {
     for (int i = 0; i < 3; i++)
         free_glyph_cache(g_font_sheet.caches[i]);
     free_glyph_cache(g_editor_sheet.face);
-    for (int p = 0; p < EDITOR_PANES_MAX; p++)
-        for (int f = 0; f < EDITOR_FILES_MAX; f++)
-            spot_drop(&g_editor_sheet.panes[p].spots[f]);
+    for (int p = 0; p < g_editor_sheet.pane_count; p++)
+        pane_free(&g_editor_sheet.panes[p]);
     for (int f = 0; f < g_editor_sheet.file_count; f++) {
         ParseJob* job = &g_editor_sheet.files[f].job;
         if (job->running) {

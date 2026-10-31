@@ -29,8 +29,7 @@ typedef struct GlyphInfo {
 
 // Font with glyph atlas
 typedef struct Font {
-    char* name;
-    char* filepath; // the file it was read from; NULL for one made from bytes
+    char* name; // what the pool keeps it under: its file's path, or the name it was given
 
     // Atlas texture
     GLuint atlas_texture_id;
