@@ -4,7 +4,7 @@ The master plan for the 14.x series: what cetra has to gain so that an EDA progr
 designing circuit boards, can be built on it rather than a game. The program is pcb, kept closed in
 its own repository with cetra as a submodule (`apps/pcb`, spec 11.105): one window holding a code
 editor, a schematic, a board layout, a 3D view of the board, datasheet pages and an agent's chat.
-pcb's `ARCH.md` (section 9, "cetra changes this needs") lists eight changes it wants from the
+pcb's `ARCH.md` (section 9, "cetra changes this needs") lists nine changes it wants from the
 engine. This document takes each of them, says what cetra already has toward it, what is still to
 decide, and which step of pcb's build first needs it.
 
@@ -17,7 +17,7 @@ engine feature that pcb happens to be the first user of.
 `AGENTS.md` (Planning Workflow) requires: the item's status, the decisions its spec made, anything
 it did differently from what is written here and why, and any new item it found.
 
-_Last updated: 2026-10-30._
+_Last updated: 2026-10-31._
 
 ---
 
@@ -28,9 +28,14 @@ These come from pcb's `ARCH.md` sections 8 and 9, and every item below has to re
 - **One window, one GL context.** Every view stays loaded in memory and on the GPU, so switching
   views costs one frame. The 2D and 3D views share the window, the text, the UI, the headless
   capture and the test suite; a second rendering engine for 2D was considered and refused.
-- **The layout of the window.** A main area holding one view, or two side by side (the split); a
-  status line under it; the agent's chat always visible down the right, collapsible by one key. The
-  background is black and there are no toolbars, menus or panels.
+- **The layout of the window** (pcb spec 6.1, `ARCH.md` section 8). The main area is a tree of
+  PANES, each showing one view: `|` splits the focused pane left and right, `\` top and bottom,
+  Space Enter opens another, `:q` closes the focused one, and two panes may show one view -- one
+  file twice with a cursor in each. A code pane goes to another file through Cmd+P. Space m shows
+  the messages along the bottom, under every pane, by splitting the top of the tree, and hides them
+  again; Space a shows the agent's chat at the right edge. One status line runs along the bottom
+  for whatever has focus, vim's line while `/` or `:` is typed. The background is black, with no
+  toolbars, menus or panels, and the fonts are built into the binary.
 - **Speed.** Input reaches the screen within one frame. The main thread only draws and applies
   results; parsing, checks, routing and AI calls run on other threads and publish finished,
   unchanging snapshots, so drawing never waits on a lock. Nothing is drawn unless something changed;
@@ -59,11 +64,13 @@ These come from pcb's `ARCH.md` sections 8 and 9, and every item below has to re
 | 6a | The editor's vim mode | **Built**, spec 14.5, held to vim 9.2 itself; named registers, macros, marks and the rest below are left for later | 6 (the code view, which is vim only) | 14.5 |
 | 7 | Rendering at any scale, in true units | **Built**, specs 13.57 and 13.58; the macro depth of field left | Already used by pcb's pictures | |
 | 8 | What the glTF import does not read, or reads otherwise | Not needed by pcb; three bugs worth fixing for cetra's own sake | None | |
+| 9 | What the panes and the fonts need of the UI | **Built**, spec 14.6 | 6 (the window's panes, and its fonts built into pcb's binary) | 14.6 |
 
 **Proposed order**: 1, 2, 5, 6, then 3 and 4 together when pcb starts its 3D view. 1, 2 and 5 are
 built, 5 with its follow-ups (14.3), and 6 in spec 14.4, which stands on several of them: the
 UTF-8 home, typed input, the clipboard and the input script. 6a, the vim mode, came next (14.5),
-since pcb's code view is to be vim only and its window, spec 6.1, starts there. 3 and 4 are next,
+since pcb's code view is to be vim only and its window, spec 6.1, starts there; and 9, the panes
+and the fonts (14.6), which that window is made of. 3 and 4 are next,
 once pcb starts its 3D view. The canvas went first because
 the schematic and the layout both stand on it, and it is the largest. Item 8's bugs and the macro
 depth of field can be taken whenever they fit.
@@ -361,7 +368,8 @@ broke lines with by hand.
 - **Right-to-left text**, and caret moves by grapheme rather than codepoint.
 - **Horizontal scrolling panes**; **selecting across messages**, each being its own field.
 - **Runs in an editable field**, and runs that change the size.
-- **More fonts**: only Roboto-Bold and a pixel face ship, and pcb chooses its own.
+- **More fonts**: only Roboto-Bold and a pixel face ship, and pcb chooses its own, built into its
+  binary since spec 14.6 (item 9).
 
 **Spec 14.3, 14.2's follow-ups: built.** 14.2's closing reviews found these, and the call was to
 do them properly before the editor builds on the same UI. Each was designed from the problem it
@@ -611,7 +619,37 @@ beside each `.glb`, by material name.
 
 ---
 
-## Not among the eight, but on the way
+## 9. What the panes and the fonts need of the UI — built
+
+**What pcb needs** (`ARCH.md` sections 8 and 9, pcb spec 6.1): a closed pane goes; a split puts a
+pane beside the one it splits; Space m puts the messages under every pane and takes them away; a
+code pane moves between files, back where it was in each; and the fonts are built into the binary.
+
+**What spec 14.6 built:**
+
+- **`ui_remove` and `ui_move`**: an element taken out of the UI and freed, and one moved under
+  another parent at an index, keeping everything it holds. A split is a row put at the pane's place,
+  the pane moved into it and a new pane beside it; the messages are a column at the root's place
+  with the old content moved into it; a close is a removal. Whatever the UI held inside what goes is
+  let go first, and an element removed during a pass -- `:q` closing a pane from its own key -- is
+  freed only as the pass ends.
+- **`ui_editor_set_doc`**: an editor shown another text, from its start, the text it leaves
+  forgetting it and closing an undo group held to it. `ui_editor_top` and a public
+  `ui_editor_scroll_place` give a view back; a host keeps the carets and the top with the text's
+  version and brings them through the edits since with `text_doc_map` before putting them back. An
+  editor's serial, new at each text, is how the vim mode knows another editor from the last it saw.
+- **Fonts from bytes**: `load_font_memory` and `create_glyph_cache_memory`, the same font to the byte
+  as the file. `cetra_embed_files` builds files into a program as a table indexed by what each is
+  for, so a font's file is named only in the build's list.
+- **A test bed**: `apps/canvas --editor A --editor B`, whose F8, F9 and F10 split, close and switch
+  files, and whose fonts are built in. It is not pcb's panes, whose keys are pcb's.
+
+**Left for later**: dividers dragged to resize, a pane filling the window, and the layout kept per
+project are pcb's own, on these calls; nothing in cetra is missing for them.
+
+---
+
+## Not among the nine, but on the way
 
 - **A second window**, for a second monitor. pcb lists it as an open question and as a cetra change;
   nothing is decided.
