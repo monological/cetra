@@ -66,8 +66,8 @@ typedef struct TextDocAction {
     size_t after_count;
     const struct UIElement* editor; // the editor it was made in; NULL for an undo called directly
     uint64_t version;               // the text's version as the action began
-    uint64_t step; // the actions sharing one are one step of undo: typing joined into words, a
-                   // vim mode's insert from i to Esc; kept the same with keep_undo off
+    uint64_t step; // the actions sharing one are one step of undo: typing joined into words, or
+                   // every action a group held; kept the same with keep_undo off
 } TextDocAction;
 
 typedef void (*TextDocActionFn)(TextDoc* doc, const TextDocAction* action, void* user);
@@ -113,16 +113,19 @@ struct TextDoc {
     size_t undo_count;  // steps that can be undone
     size_t redo_count;  // steps after them that can be redone
     size_t undo_capacity;
-    bool undo_sealed;            // the next typing starts a step of its own
     uint64_t step;               // the last action's step
     bool grouping;               // a group holds the step open
     bool group_fresh;            // and its next action starts one
+    const void* group_view;      // the editor whose actions it holds; NULL for every editor's
     TextSelection* group_before; // the selections as the group opened, which its step starts at
     size_t group_before_count;
-    struct { // the last action, while it was typing: where each caret's text ends
+    struct { // the last action, while it was typing: where each caret's text ends, and the last
+             // byte it typed
         const void* view;
-        size_t* ends;
-        char* last; // the last byte each caret typed
+        struct {
+            size_t end;
+            char last;
+        }* carets;
         size_t count, capacity;
     } typing;
     TextHighlightFn highlight;

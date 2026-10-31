@@ -1325,6 +1325,10 @@ static int probe_editor_paired_char(UISystem* ui) {
     const InputKeyEvent letter[] = {{.key = GLFW_KEY_A}, {.codepoint = 'a'}};
     send_keys(ui, letter, 2);
     say_flag("editor-paired-char", "unbound", "typed", doc_is_str(doc, " a"));
+    // A used key with no character after it in its pass -- a script's -- takes none from the next.
+    key(ui, GLFW_KEY_SPACE, 0);
+    type(ui, "x");
+    say_flag("editor-paired-char", "stale", "typed", g_seam_runs[1] == 2 && doc_is_str(doc, " ax"));
     ui_editor_set_mode(ed, NULL);
     free_text_doc(doc);
     return 0;
@@ -1377,14 +1381,22 @@ static int probe_editor_shapes(UISystem* ui) {
 // Each action told with its step: typing joined into words shares one, a group holds one open over
 // any actions -- typing, a Backspace, more typing -- and one undo takes it all back. The same with
 // keep_undo off.
-static uint64_t g_steps[16];
+static uint64_t g_steps[64];
 static int g_step_count;
 
 static void note_step(TextDoc* doc, const TextDocAction* action, void* user) {
     (void)doc;
     (void)user;
-    if (g_step_count < 16)
+    if (g_step_count < 64)
         g_steps[g_step_count++] = action->step;
+}
+
+// Whether every action told since the count was cleared shares one step.
+static bool one_step(void) {
+    for (int i = 1; i < g_step_count; i++)
+        if (g_steps[i] != g_steps[0])
+            return false;
+    return g_step_count > 0;
 }
 
 static int probe_editor_steps(UISystem* ui) {
@@ -1420,6 +1432,17 @@ static int probe_editor_steps(UISystem* ui) {
                      doc_is_str(doc, "ab c") && doc->undo_count == 2);
             text_doc_redo(doc);
             say_flag("editor-steps", which, "redone", doc_is_str(doc, "ab cyz"));
+            // Typing with keep_undo off is no step's: typing on once it is back on starts a step
+            // of its own, which taking back leaves the rest as it was.
+            doc->keep_undo = false;
+            type(ui, "Q");
+            doc->keep_undo = true;
+            size_t was_len = 0;
+            char* was = text_doc_text(doc, &was_len);
+            type(ui, "R");
+            text_doc_undo(doc);
+            say_flag("editor-steps", which, "rejoined", was && doc_is(doc, was, was_len));
+            free(was);
         }
         ui_editor_set_mode(ed, NULL);
         free_text_doc(doc);
@@ -1497,6 +1520,15 @@ static size_t vim_events(const char* keys, InputKeyEvent* out, size_t max) {
     return n;
 }
 
+// An editor in a fresh vim mode on `text`, laid out, the caret at `at`.
+static UIElement* vim_fixture(UISystem* ui, TextDoc* doc, UIEditorVim* vim, size_t at) {
+    UIElement* ed = editor_fixture(ui, doc, 600.0f, 300.0f);
+    ui_editor_set_mode(ed, ui_editor_vim_mode(vim));
+    editor_pass(ui);
+    ui_editor_set_selections(ed, &(TextSelection){at, at}, 1);
+    return ed;
+}
+
 // Whether the text was emptied to one empty line on the way -- vim's empty buffer, where its
 // bytes and vim's no longer agree.
 static bool g_vim_emptied;
@@ -1542,13 +1574,10 @@ static int probe_vim_run(UISystem* ui) {
             if (doc && vim && keys) {
                 g_vim_emptied = false;
                 text_doc_set_on_action(doc, note_vim_emptied, NULL);
-                UIElement* ed = editor_fixture(ui, doc, 600.0f, 300.0f);
-                ui_editor_set_mode(ed, ui_editor_vim_mode(vim));
                 if (engine)
                     engine_clipboard_set(engine, "");
-                editor_pass(ui);
                 const size_t start = text_doc_line_start(doc, at_line - 1) + at_col - 1;
-                ui_editor_set_selections(ed, &(TextSelection){start, start}, 1);
+                UIElement* ed = vim_fixture(ui, doc, vim, start);
                 // A key at a time, as typed.
                 const size_t n = vim_events(keys, events, 4096);
                 for (size_t i = 0; i < n; i++)
@@ -1579,15 +1608,6 @@ static int probe_vim_run(UISystem* ui) {
     free(events);
     free(all);
     return 0;
-}
-
-// An editor in a fresh vim mode on `text`, laid out, the caret at `at`.
-static UIElement* vim_fixture(UISystem* ui, TextDoc* doc, UIEditorVim* vim, size_t at) {
-    UIElement* ed = editor_fixture(ui, doc, 600.0f, 300.0f);
-    ui_editor_set_mode(ed, ui_editor_vim_mode(vim));
-    editor_pass(ui);
-    ui_editor_set_selections(ed, &(TextSelection){at, at}, 1);
-    return ed;
 }
 
 // Keys in vim's notation, a pass each, as typed.
@@ -1660,6 +1680,10 @@ static int probe_vim_state(UISystem* ui) {
     press_drag(ui, x0 + 1.0f, y + 2.0f, x4 + cell * 0.6f, y + 2.0f, 0);
     say_flag("vim-state", "drag", "visual",
              ui_editor_vim_state(vim) == UI_VIM_VISUAL && one_selection(ed, 0, 4));
+    // A count past the most a put makes: refused, the text as it was.
+    vim_keys(ui, "<Esc>gg0yl999999999p");
+    say_flag("vim-state", "count", "held",
+             doc_is_str(doc, "Z" VIM_TEXT) && ui_editor_vim_state(vim) == UI_VIM_NORMAL);
     ui_editor_set_mode(ed, NULL);
     free_text_doc(doc);
     free_ui_editor_vim(vim);
@@ -1710,28 +1734,16 @@ static int probe_vim_carets(UISystem* ui) {
     say_flag("vim-carets", "visual", "each",
              doc_is_str(doc, "ha beta\nha beta\nha beta\n") &&
                  ui_editor_vim_state(vim) == UI_VIM_NORMAL);
+    // Two areas sharing a character are one: d takes them whole.
+    vim_keys(ui, "u");
+    const TextSelection touching[] = {{0, 0}, {3, 3}};
+    ui_editor_set_selections(ed, touching, 2);
+    vim_keys(ui, "vllld");
+    say_flag("vim-carets", "visual", "touching", doc_is_str(doc, "eta\nalpha beta\nalpha beta\n"));
     ui_editor_set_mode(ed, NULL);
     free_text_doc(doc);
     free_ui_editor_vim(vim);
     return 0;
-}
-
-static uint64_t g_vim_steps[64];
-static int g_vim_step_count;
-
-static void note_vim_step(TextDoc* doc, const TextDocAction* action, void* user) {
-    (void)doc;
-    (void)user;
-    if (g_vim_step_count < 64)
-        g_vim_steps[g_vim_step_count++] = action->step;
-}
-
-// Whether every action told since the count was cleared shares one step.
-static bool one_step(void) {
-    for (int i = 1; i < g_vim_step_count; i++)
-        if (g_vim_steps[i] != g_vim_steps[0])
-            return false;
-    return g_vim_step_count > 0;
 }
 
 // Undo by vim's units: an insert from i to Esc is one step, Enters and Backspaces in it included;
@@ -1741,19 +1753,19 @@ static int probe_vim_undo(UISystem* ui) {
         const char* which = keep ? "kept" : "off";
         TextDoc* doc = create_text_doc(VIM_TEXT, strlen(VIM_TEXT));
         doc->keep_undo = keep;
-        text_doc_set_on_action(doc, note_vim_step, NULL);
+        text_doc_set_on_action(doc, note_step, NULL);
         UIEditorVim* vim = create_ui_editor_vim();
         UIElement* ed = vim_fixture(ui, doc, vim, 0);
-        g_vim_step_count = 0;
+        g_step_count = 0;
         vim_keys(ui, "ione<CR>two<BS>o three<Esc>");
-        say_flag("vim-undo", which, "insert", one_step() && g_vim_step_count > 3);
+        say_flag("vim-undo", which, "insert", one_step() && g_step_count > 3);
         if (keep) {
             vim_keys(ui, "u");
             say_flag("vim-undo", which, "insert_undone", doc_is_str(doc, VIM_TEXT));
         }
-        g_vim_step_count = 0;
+        g_step_count = 0;
         vim_keys(ui, "jwcwnew<Esc>");
-        say_flag("vim-undo", which, "change", one_step() && g_vim_step_count >= 2);
+        say_flag("vim-undo", which, "change", one_step() && g_step_count >= 2);
         if (keep) {
             vim_keys(ui, "u");
             say_flag("vim-undo", which, "change_undone", doc_is_str(doc, VIM_TEXT));
@@ -1765,6 +1777,23 @@ static int probe_vim_undo(UISystem* ui) {
         free_text_doc(doc);
         free_ui_editor_vim(vim);
     }
+    // An insert of more keys than any fixed record would hold: made again whole by `.`, which
+    // ends in normal mode.
+    TextDoc* doc = create_text_doc("", 0);
+    UIEditorVim* vim = create_ui_editor_vim();
+    UIElement* ed = vim_fixture(ui, doc, vim, 0);
+    vim_keys(ui, "i");
+    InputKeyEvent xs[50];
+    for (size_t i = 0; i < 50; i++)
+        xs[i] = (InputKeyEvent){.codepoint = 'x'};
+    for (int pass = 0; pass < 100; pass++)
+        send_keys(ui, xs, 50);
+    vim_keys(ui, "<Esc>.");
+    say_flag("vim-undo", "long", "repeated",
+             text_doc_length(doc) == 10000 && ui_editor_vim_state(vim) == UI_VIM_NORMAL);
+    ui_editor_set_mode(ed, NULL);
+    free_text_doc(doc);
+    free_ui_editor_vim(vim);
     return 0;
 }
 
@@ -1854,6 +1883,31 @@ static int probe_vim_host(UISystem* ui) {
     say_flag("vim-host", "prompt", "repeat",
              deleted && g_vim_host_asked == 0 &&
                  doc_is_str(doc, " ala\n  gamma delta\nlast line\n"));
+    // One vim shared by two editors: an insert left unfinished in the first is let go when keys
+    // reach the second, which reads them in normal mode, so its x deletes.
+    ui_editor_vim_set_prompt(g_vim_host, NULL, NULL);
+    vim_keys(ui, "iq");
+    TextDoc* other = create_text_doc("xyz\n", 4);
+    UIElement* ed2 = vim_fixture(ui, other, g_vim_host, 0);
+    vim_keys(ui, "x");
+    say_flag("vim-host", "shared", "let_go",
+             doc_is_str(other, "yz\n") && ui_editor_vim_state(g_vim_host) == UI_VIM_NORMAL);
+#ifdef __APPLE__
+    // A paste in insert mode is made again by `.` as the text it typed, whatever the clipboard
+    // holds by then.
+    engine_clipboard_set(ui_system_engine(ui), "pq");
+    vim_keys(ui, "0i");
+    const InputKeyEvent paste = {.key = GLFW_KEY_V, .mods = GLFW_MOD_SUPER};
+    send_keys(ui, &paste, 1);
+    vim_keys(ui, "<Esc>");
+    engine_clipboard_set(ui_system_engine(ui), "zz");
+    vim_keys(ui, ".");
+    say_flag("vim-host", "paste", "repeated", doc_is_str(other, "ppqqyz\n"));
+#else
+    say_flag("vim-host", "paste", "repeated", true); // the paste key is macOS's Cmd+V
+#endif
+    ui_editor_set_mode(ed2, NULL);
+    free_text_doc(other);
     ui_editor_set_mode(ed, NULL);
     free_text_doc(doc);
     free_ui_editor_vim(g_vim_host);

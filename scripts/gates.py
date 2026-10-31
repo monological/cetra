@@ -17443,16 +17443,17 @@ def run_gamepad_gate(workdir):
 _PROBE_TIMEOUT = 300
 
 
-def _gametest_probe_text(flag, case, env=None, extra=None):
-    """(combined output, returncode) from one gametest --<x>-probe run.
+def _gametest_probe_text(flag, case, env=None, extra=None, timeout=None):
+    """(combined output, returncode) from one gametest --<x>-probe run, given `timeout`
+    seconds or _PROBE_TIMEOUT.
 
     stderr is merged in deliberately: a probe that refuses by name says so there, and an
     arm that sees neither the numbers nor the reason is a worse failure than a red one.
     A timeout reads as a failed run, since that is what a caller can act on.
     """
     try:
-        r = subprocess.run([GAMETEST, flag, case] + (extra or []),
-                           capture_output=True, text=True, env=env, timeout=_PROBE_TIMEOUT)
+        r = subprocess.run([GAMETEST, flag, case] + (extra or []), capture_output=True,
+                           text=True, env=env, timeout=timeout or _PROBE_TIMEOUT)
     except subprocess.TimeoutExpired:
         return "", 1
     return r.stdout + r.stderr, r.returncode
@@ -26204,6 +26205,9 @@ _VIM_SEQUENCES = [
     # made again that fails, and P made again.
     "Goq) (z)<Esc>^da(", "Goq) (z)<Esc>^di(", "Goq (z)<Esc>^da(", "Jpuu", "o<Esc>k", "A<CR><Esc>k",
     "cca<CR>b<Esc>G2.", "ywwvP.p", "<C-v>2jly$p",
+    # A change on an empty line, its step one with what it typed: two undos take back the change
+    # before it too.
+    "x4GSfoo<Esc>uu", "x4Gccfoo<Esc>uu", "x4GCfoo<Esc>uu",
     # Search, and the command line. A line let go ends its sequence: fed as typeahead, vim drops
     # the keys after it, where typed ones go on.
     "/a<CR>", "/a<CR>n", "/a<CR>N", "?a<CR>", "?a<CR>n", "?a<CR>N", "2/a<CR>", "/a<CR>3n",
@@ -26368,13 +26372,10 @@ def _vim_cetra(cases, workdir, tag):
     with open(path, "w", encoding="ascii") as f:
         for text, line, col, keys in cases:
             f.write(f"{text.hex()} {line} {col} {keys.encode().hex()}\n")
-    try:
-        r = subprocess.run([GAMETEST, "--ui-probe", "vim-run"], capture_output=True, text=True,
-                           env=dict(os.environ, CETRA_VIM_CASES=path), timeout=1800)
-    except subprocess.TimeoutExpired:
-        return [None] * len(cases)
+    out, _ = _gametest_probe_text("--ui-probe", "vim-run",
+                                  env=dict(os.environ, CETRA_VIM_CASES=path), timeout=1800)
     got = {}
-    for m in re.finditer(r"^vim (\d+) (\d+) (\d+) ([0-9a-f]*) ([01])$", r.stdout, re.M):
+    for m in re.finditer(r"^vim (\d+) (\d+) (\d+) ([0-9a-f]*) ([01])$", out, re.M):
         got[int(m.group(1))] = (int(m.group(2)), int(m.group(3)), bytes.fromhex(m.group(4)),
                                 m.group(5) == "1")
     return [got.get(i) for i in range(len(cases))]
@@ -26402,17 +26403,26 @@ def _vim_agrees(ref, got):
 
 def _vim_oracle(cases, workdir, tag):
     """The cases on which the vim mode and vim itself differ, as (case, vim's, the mode's), and
-    how many vim ran."""
+    how many vim ran. The mode's one run goes beside vim's many."""
     from concurrent.futures import ThreadPoolExecutor
     folder = os.path.join(workdir, f"vim_{tag}")
     os.makedirs(folder, exist_ok=True)
-    with ThreadPoolExecutor(max_workers=8) as pool:
+    with ThreadPoolExecutor(max_workers=9) as pool:
+        mode = pool.submit(_vim_cetra, cases, workdir, tag)
         ref = list(pool.map(lambda ic: _vim_reference(ic[1], os.path.join(folder, f"{ic[0]}.txt")),
                             enumerate(cases)))
-    got = _vim_cetra(cases, workdir, tag)
+        got = mode.result()
     ran = sum(r is not None for r in ref)
     return [(c, r, g) for c, r, g in zip(cases, ref, got)
             if r is not None and not _vim_agrees(r, g)], ran
+
+
+def _vim_shown(diffs, label):
+    """The first three differences as an arm reports them, `label` naming each case."""
+    return "; ".join(f"{label(case)}: vim {r[0]}:{r[1]}, the mode "
+                     + (f"{g[0]}:{g[1]}{'' if g[2] == r[2] else ', text differs'}" if g
+                        else "nothing")
+                     for case, r, g in diffs[:3])
 
 
 def _probe_wrong(p, want):
@@ -28248,7 +28258,8 @@ def run_ui_gate(workdir):
       ui-editor-paired-char a press is a key and then its character: a binding that
                      takes Space takes the space with it; a space arriving alone,
                      as an input method's would, is typed; a key nothing binds
-                     types its character.
+                     types its character; a used key with no character in its pass
+                     -- a script's -- takes none from the next.
       ui-editor-shapes a selection of three characters drawn by each shape: three
                      cells, four with the character at its far end (a vim mode's
                      visual mode), and its line whole with the line break (visual
@@ -28256,7 +28267,9 @@ def run_ui_gate(workdir):
       ui-editor-steps each action told with its step: typing joined into words
                      shares one; a group holds one over typing, a Backspace and
                      more typing, one undo takes the group back and one redo makes
-                     it again; the steps are the same with keep_undo off.
+                     it again; typing after keep_undo was off is a step of its own,
+                     never added to one from before; the steps are the same with
+                     keep_undo off.
       ui-vim-oracle  the vim mode held to vim itself (spec 14.5): every sequence
                      of a fixed corpus -- each motion, operator and edit, with
                      counts, operators over every kind of motion and text object,
@@ -28277,23 +28290,28 @@ def run_ui_gate(workdir):
                      named, a block caret and a bar, the keys of a half-typed
                      command ("2d") shown and dropped by Esc, a click past a line's
                      end held on its last character, VISUAL, V-LINE and V-BLOCK
-                     named and drawn inclusive, as lines and as pieces, and a drag
+                     named and drawn inclusive, as lines and as pieces, a drag
                      entering visual mode with its head on the last character it
-                     reached.
+                     reached, and a put 999,999,999 times refused.
       ui-vim-undo    undo by vim's units: an insert from i to Esc, an Enter and a
                      Backspace in it, is one step, and cw with what it typed is
                      one -- undone and redone whole, and told to a host as one step
-                     with keep_undo off.
+                     with keep_undo off; an insert of 5,000 keys made again whole by
+                     ., in normal mode after.
       ui-vim-host    a host's layer over the vim mode: its Space acts in normal mode
                      and takes the space its press makes, in insert mode hands the
                      key back and the space is typed; the host's undo takes u and
                      Ctrl+R; / and : ask for the host's line, its answers search
                      and go to line 3, "w" is not vim's, and d/ answered by the host
-                     is made again by . without asking.
+                     is made again by . without asking; one vim over two editors,
+                     an insert left in the first let go when keys reach the second;
+                     a paste in insert mode made again by . as the text it typed
+                     (macOS, where the paste key is).
       ui-vim-carets  several carets, which vim has none of: Ctrl+V and I puts a
                      caret on each line, Z typed at every one, Esc and then u each
                      leaving one cursor at the block's top left; A after the block;
-                     and three carets each taking 3x, dw and vlld.
+                     three carets each taking 3x, dw and vlld; and two areas sharing
+                     a character deleted as one.
       ui-editor-script apps/canvas --editor on a file, driven by a script: a caret
                      added below, "XY" typed at both, undone, Esc to one caret, the
                      word at it taken by Cmd+D and found again round the text's end
@@ -29267,9 +29285,10 @@ def run_ui_gate(workdir):
     print(f"  ui-editor-decline     {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-editor-decline", ok)
 
-    ok, detail = doc_flags("editor-paired-char", 3, "a binding taking Space takes the space its "
-                           "press makes, a space arriving alone is typed, and a key nothing binds "
-                           "types its character")
+    ok, detail = doc_flags("editor-paired-char", 4, "a binding taking Space takes the space its "
+                           "press makes, a space arriving alone is typed, a key nothing binds "
+                           "types its character, and a used key with no character in its pass "
+                           "takes none from the next")
     print(f"  ui-editor-paired-char {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-editor-paired-char", ok)
 
@@ -29279,10 +29298,10 @@ def run_ui_gate(workdir):
     print(f"  ui-editor-shapes      {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-editor-shapes", ok)
 
-    ok, detail = doc_flags("editor-steps", 6, "typing joined into words shares a step, a group "
+    ok, detail = doc_flags("editor-steps", 7, "typing joined into words shares a step, a group "
                            "holds one over typing, a Backspace and more typing, and one undo takes "
-                           "the group back and one redo makes it again; the steps the same with "
-                           "keep_undo off")
+                           "the group back and one redo makes it again; typing after keep_undo "
+                           "was off a step of its own; the steps the same with keep_undo off")
     print(f"  ui-editor-steps       {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-editor-steps", ok)
 
@@ -29293,10 +29312,7 @@ def run_ui_gate(workdir):
         cases = _vim_corpus(_VIM_SEQUENCES)
         diffs, ran = _vim_oracle(cases, workdir, "oracle")
         ok = ran == len(cases) and not diffs
-        shown = "; ".join(f"{keys!r} at {line}:{col}: vim {r[0]}:{r[1]}, the mode "
-                          + (f"{g[0]}:{g[1]}{'' if g[2] == r[2] else ', text differs'}"
-                             if g else "nothing")
-                          for (_, line, col, keys), r, g in diffs[:3])
+        shown = _vim_shown(diffs, lambda case: f"{case[3]!r} at {case[1]}:{case[2]}")
         detail = (f"{len(cases)} cases of {len(_VIM_SEQUENCES)} sequences over "
                   f"{len(_VIM_FIXTURES)} texts, vim ran {ran}, {len(diffs)} differ from it"
                   + (f": {shown}" if shown else ""))
@@ -29315,40 +29331,42 @@ def run_ui_gate(workdir):
                 cases.append(case)
         diffs, ran = _vim_oracle(cases, workdir, "random")
         ok = ran == len(cases) and not diffs
-        shown = "; ".join(f"seed {seed_of[case]} {case[3]!r} at {case[1]}:{case[2]}: vim "
-                          f"{r[0]}:{r[1]}, the mode "
-                          + (f"{g[0]}:{g[1]}{'' if g[2] == r[2] else ', text differs'}"
-                             if g else "nothing")
-                          for case, r, g in diffs[:3])
+        shown = _vim_shown(diffs, lambda case: f"seed {seed_of[case]} {case[3]!r} at "
+                                               f"{case[1]}:{case[2]}")
         detail = (f"{len(cases)} sequences from seeds {', '.join(map(str, seeds))}, vim ran "
                   f"{ran}, {len(diffs)} differ from it" + (f": {shown}" if shown else ""))
         print(f"  ui-vim-random         {'PASS' if ok else 'FAIL'}  {detail}")
         note("ui-vim-random", ok)
 
-    ok, detail = doc_flags("vim-state", 10, "NORMAL and INSERT named, the block caret and the bar, "
+    ok, detail = doc_flags("vim-state", 11, "NORMAL and INSERT named, the block caret and the bar, "
                            "the keys of a half-typed command shown and dropped by Esc, a click "
                            "past a line's end held on its last character, the three visual modes "
-                           "named and drawn their own ways, and a drag entering visual mode")
+                           "named and drawn their own ways, a drag entering visual mode, and a "
+                           "count past the most a put makes refused")
     print(f"  ui-vim-state          {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-vim-state", ok)
 
-    ok, detail = doc_flags("vim-undo", 7, "an insert from i to Esc, an Enter and a Backspace in it, "
+    ok, detail = doc_flags("vim-undo", 8, "an insert from i to Esc, an Enter and a Backspace in it, "
                            "is one step, and so is cw with what it typed: each undone and redone "
-                           "whole, and told as one step with keep_undo off too")
+                           "whole, and told as one step with keep_undo off too; an insert of "
+                           "5,000 keys made again whole by .")
     print(f"  ui-vim-undo           {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-vim-undo", ok)
 
-    ok, detail = doc_flags("vim-host", 7, "a host's Space over the vim mode acts in normal mode and "
+    ok, detail = doc_flags("vim-host", 9, "a host's Space over the vim mode acts in normal mode and "
                            "takes its space, hands it back in insert mode where it is typed, keeps "
                            "the host's name over vim's look, and the host's undo takes u and Ctrl+R; "
                            "/ and : ask the host's line, whose answers search and go to a line, and "
-                           "d/ answered there is made again by . asking nothing")
+                           "d/ answered there is made again by . asking nothing; one vim over two "
+                           "editors lets the first's insert go when keys reach the second, and a "
+                           "paste in insert mode is made again as the text it typed")
     print(f"  ui-vim-host           {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-vim-host", ok)
 
-    ok, detail = doc_flags("vim-carets", 7, "a block's I a caret on each line, what is typed on "
+    ok, detail = doc_flags("vim-carets", 8, "a block's I a caret on each line, what is typed on "
                            "every one, one cursor at the top left after Esc and after undo, A after "
-                           "the block; and each of three carets taking 3x, dw and a visual area")
+                           "the block; each of three carets taking 3x, dw and a visual area; and two "
+                           "areas sharing a character deleted as one")
     print(f"  ui-vim-carets         {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-vim-carets", ok)
 

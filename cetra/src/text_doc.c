@@ -117,7 +117,6 @@ TextDoc* create_text_doc(const char* bytes, size_t len) {
     doc->newline = doc->lines[0].ending == TEXT_ENDING_CRLF ? TEXT_NEWLINE_CRLF : TEXT_NEWLINE_LF;
     doc->tab_width = 4;
     doc->keep_undo = true;
-    doc->undo_sealed = true;
     return doc;
 }
 
@@ -148,8 +147,7 @@ void free_text_doc(TextDoc* doc) {
         _free_step(&doc->undo[i]);
     for (int i = 0; i < TEXT_DOC_LAYERS; i++)
         free(doc->ranges[i]);
-    free(doc->typing.ends);
-    free(doc->typing.last);
+    free(doc->typing.carets);
     free(doc->group_before);
     free(doc->undo);
     free(doc->views);
@@ -485,7 +483,7 @@ static void _forget_undo(TextDoc* doc) {
     for (size_t i = 0; i < doc->undo_count; i++)
         _free_step(&doc->undo[i]);
     doc->undo_count = 0;
-    doc->undo_sealed = true;
+    doc->typing.count = 0;
 }
 
 static bool _is_space(char c) {
@@ -497,14 +495,13 @@ static bool _is_space(char c) {
 // that is not one. Kept apart from the undo history, so a host keeping its own joins the same.
 static bool _joins(const TextDoc* doc, const TextDocChange* changes, size_t count,
                    const void* view) {
-    if (doc->undo_sealed || !doc->typing.count || doc->typing.view != view ||
-        doc->typing.count != count)
+    if (!doc->typing.count || doc->typing.view != view || doc->typing.count != count)
         return false;
     for (size_t k = 0; k < count; k++) {
         const TextDocChange* now = &changes[k];
-        if (now->removed_len || !now->inserted_len || now->start != doc->typing.ends[k])
+        if (now->removed_len || !now->inserted_len || now->start != doc->typing.carets[k].end)
             return false;
-        if (_is_space(now->inserted[0]) && !_is_space(doc->typing.last[k]))
+        if (_is_space(now->inserted[0]) && !_is_space(doc->typing.carets[k].last))
             return false;
     }
     return true;
@@ -516,16 +513,15 @@ static bool _joins(const TextDoc* doc, const TextDocChange* changes, size_t coun
 static void _note_typing(TextDoc* doc, const TextDocChange* changes, size_t count, const void* view,
                          bool typed) {
     doc->typing.count = 0;
-    size_t cap = doc->typing.capacity;
     if (!typed || !count ||
-        !grow_array((void**)&doc->typing.ends, &doc->typing.capacity, count, sizeof(size_t), 4) ||
-        !grow_array((void**)&doc->typing.last, &cap, count, sizeof(char), 4))
+        !grow_array((void**)&doc->typing.carets, &doc->typing.capacity, count,
+                    sizeof(*doc->typing.carets), 4))
         return;
     long long below = 0;
     for (size_t k = count; k-- > 0;) {
         const TextDocChange* c = &changes[k];
-        doc->typing.ends[k] = (size_t)((long long)c->start + below) + c->inserted_len;
-        doc->typing.last[k] = c->inserted_len ? c->inserted[c->inserted_len - 1] : ' ';
+        doc->typing.carets[k].end = (size_t)((long long)c->start + below) + c->inserted_len;
+        doc->typing.carets[k].last = c->inserted_len ? c->inserted[c->inserted_len - 1] : ' ';
         below += (long long)c->inserted_len - (long long)c->removed_len;
     }
     doc->typing.view = view;
@@ -535,6 +531,28 @@ static void _note_typing(TextDoc* doc, const TextDocChange* changes, size_t coun
 // How an action is kept: a step of its own, another action of the last step, or its typing added
 // to the last action's.
 typedef enum { KEEP_STEP, KEEP_PART, KEEP_MERGE } Keep;
+
+// A step begins that nothing before it joins: a new serial, and the typing before it sealed.
+static void _new_step(TextDoc* doc) {
+    doc->step++;
+    doc->typing.count = 0;
+}
+
+// Room for a step at the end of the undo list, zeroed, the oldest let go past UNDO_MAX; NULL out
+// of memory. The caller fills it and counts it.
+static TextUndoStep* _push_step(TextDoc* doc) {
+    if (doc->undo_count == UNDO_MAX) {
+        _free_step(&doc->undo[0]);
+        memmove(&doc->undo[0], &doc->undo[1], (UNDO_MAX - 1) * sizeof(TextUndoStep));
+        doc->undo_count--;
+    }
+    if (!grow_array((void**)&doc->undo, &doc->undo_capacity, doc->undo_count + 1,
+                    sizeof(TextUndoStep), 16))
+        return NULL;
+    TextUndoStep* s = &doc->undo[doc->undo_count];
+    memset(s, 0, sizeof(*s));
+    return s;
+}
 
 // The changes, their bytes copied, into a part; false out of memory.
 static bool _part(TextUndoPart* part, const TextDocChange* changes, size_t count) {
@@ -550,18 +568,22 @@ static bool _part(TextUndoPart* part, const TextDocChange* changes, size_t count
     return true;
 }
 
-// Keeps an action for undo, as `how` says; with no last step to join, a step of its own.
-static void _keep(TextDoc* doc, Keep how, const TextDocChange* changes, size_t count,
+// Keeps an action, made from the text's version `from`, for undo as `how` says; with no last step
+// to join, a step of its own. The last step is joined only when its last action is the one before
+// this -- nothing made since went unkept with keep_undo off -- and a step kept empty, a group's
+// first when it changed nothing, takes the group's next action as its first part.
+static void _keep(TextDoc* doc, Keep how, uint64_t from, const TextDocChange* changes, size_t count,
                   const TextSelection* before, size_t before_count, const TextSelection* after,
                   size_t after_count, void* view) {
     if (!doc->keep_undo)
         return;
     _drop_redo(doc);
     TextUndoStep* s = doc->undo_count ? &doc->undo[doc->undo_count - 1] : NULL;
-    if (how != KEEP_STEP && s && s->part_count) {
-        // Typing joins the last action's text caret by caret, which kept it with as many changes;
-        // one kept before keep_undo was turned on may not have.
-        if (how == KEEP_MERGE && s->parts[s->part_count - 1].change_count == count) {
+    if (how != KEEP_STEP && s && s->version == from) {
+        s->version = doc->version;
+        // Typing joins the last action's text caret by caret, which kept it with as many changes.
+        if (how == KEEP_MERGE && s->part_count &&
+            s->parts[s->part_count - 1].change_count == count) {
             TextUndoPart* part = &s->parts[s->part_count - 1];
             for (size_t i = 0; i < count; i++) {
                 TextDocChange* c = &part->changes[i];
@@ -574,11 +596,9 @@ static void _keep(TextDoc* doc, Keep how, const TextDocChange* changes, size_t c
                 c->inserted_len += changes[i].inserted_len;
             }
         } else {
-            TextUndoPart* parts = realloc(s->parts, (s->part_count + 1) * sizeof(TextUndoPart));
-            if (!parts)
-                return;
-            s->parts = parts;
-            if (!_part(&s->parts[s->part_count], changes, count))
+            if (!grow_array((void**)&s->parts, &s->part_capacity, s->part_count + 1,
+                            sizeof(TextUndoPart), 4) ||
+                !_part(&s->parts[s->part_count], changes, count))
                 return;
             s->part_count++;
         }
@@ -586,26 +606,20 @@ static void _keep(TextDoc* doc, Keep how, const TextDocChange* changes, size_t c
         s->after = _copy_selections(after, after_count, &s->after_count);
         return;
     }
-    if (doc->undo_count == UNDO_MAX) {
-        _free_step(&doc->undo[0]);
-        memmove(&doc->undo[0], &doc->undo[1], (UNDO_MAX - 1) * sizeof(TextUndoStep));
-        doc->undo_count--;
-    }
-    if (!grow_array((void**)&doc->undo, &doc->undo_capacity, doc->undo_count + 1,
-                    sizeof(TextUndoStep), 16))
-        return;
-    s = &doc->undo[doc->undo_count];
-    memset(s, 0, sizeof(*s));
-    s->parts = calloc(1, sizeof(TextUndoPart));
-    if (!s->parts || !_part(&s->parts[0], changes, count)) {
-        free(s->parts);
-        s->parts = NULL;
+    s = _push_step(doc);
+    if (!s || !grow_array((void**)&s->parts, &s->part_capacity, 1, sizeof(TextUndoPart), 4) ||
+        !_part(&s->parts[0], changes, count)) {
+        if (s) {
+            free(s->parts);
+            s->parts = NULL;
+        }
         return;
     }
     s->part_count = 1;
     s->before = _copy_selections(before, before_count, &s->before_count);
     s->after = _copy_selections(after, after_count, &s->after_count);
     s->view = view;
+    s->version = doc->version;
     doc->undo_count++;
 }
 
@@ -614,16 +628,49 @@ static void _keep(TextDoc* doc, Keep how, const TextDocChange* changes, size_t c
 static Keep _joining(TextDoc* doc, const TextDocChange* changes, size_t count, const void* view,
                      bool typed) {
     const bool words = typed && _joins(doc, changes, count, view);
-    const bool grouped = doc->grouping && !doc->group_fresh;
-    doc->group_fresh = false;
+    const bool mine = doc->grouping && (!doc->group_view || view == doc->group_view);
+    const bool grouped = mine && !doc->group_fresh;
+    if (mine)
+        doc->group_fresh = false;
     if (!words && !grouped)
         doc->step++;
     return words ? KEEP_MERGE : grouped ? KEEP_PART : KEEP_STEP;
 }
 
+// Undone, the first of the steps to redo; redone, the last of the steps to undo.
+const TextUndoStep* text_doc_step_taken(const TextDoc* doc, bool redo) {
+    if (redo)
+        return doc->undo_count ? &doc->undo[doc->undo_count - 1] : NULL;
+    return doc->redo_count ? &doc->undo[doc->undo_count] : NULL;
+}
+
+const char* text_doc_newline(const TextDoc* doc) {
+    return doc->newline == TEXT_NEWLINE_CRLF ? "\r\n" : "\n";
+}
+
+char* text_doc_with_newlines(const TextDoc* doc, const char* text, size_t len, size_t* out) {
+    const char* nl = text_doc_newline(doc);
+    const size_t nl_len = strlen(nl);
+    char* s = malloc(len * nl_len + 1);
+    if (!s)
+        return NULL;
+    size_t k = 0;
+    for (size_t i = 0; i < len; i++) {
+        if (text[i] == '\n') {
+            memcpy(s + k, nl, nl_len);
+            k += nl_len;
+        } else {
+            s[k++] = text[i];
+        }
+    }
+    s[k] = '\0';
+    *out = k;
+    return s;
+}
+
 void text_doc_seal_undo(TextDoc* doc) {
     if (doc)
-        doc->undo_sealed = true;
+        doc->typing.count = 0;
 }
 
 // The selections a group's step starts at, let go once its first action has taken them.
@@ -638,7 +685,8 @@ void text_doc_group(TextDoc* doc, bool open, const void* view) {
         return;
     doc->grouping = open;
     doc->group_fresh = open;
-    doc->undo_sealed = true;
+    doc->group_view = open ? view : NULL;
+    doc->typing.count = 0;
     _drop_group_before(doc);
     if (open && view)
         doc->group_before = _view_selections(doc, view, &doc->group_before_count);
@@ -648,27 +696,20 @@ void text_doc_empty_step(TextDoc* doc, void* view) {
     if (!doc || (doc->grouping && !doc->group_fresh))
         return;
     doc->group_fresh = false;
-    doc->step++;
-    doc->typing.count = 0;
-    doc->undo_sealed = true;
+    _new_step(doc);
     if (!doc->keep_undo)
         return;
     _drop_redo(doc);
-    if (doc->undo_count == UNDO_MAX) {
-        _free_step(&doc->undo[0]);
-        memmove(&doc->undo[0], &doc->undo[1], (UNDO_MAX - 1) * sizeof(TextUndoStep));
-        doc->undo_count--;
-    }
-    if (!grow_array((void**)&doc->undo, &doc->undo_capacity, doc->undo_count + 1,
-                    sizeof(TextUndoStep), 16))
+    TextUndoStep* s = _push_step(doc);
+    if (!s)
         return;
-    TextUndoStep* s = &doc->undo[doc->undo_count++];
-    memset(s, 0, sizeof(*s));
+    doc->undo_count++;
     size_t n = 0;
     s->before = _view_selections(doc, view, &n);
     s->before_count = n;
     s->after = _copy_selections(s->before, n, &s->after_count);
     s->view = view;
+    s->version = doc->version;
 }
 
 static void _tell(TextDoc* doc, const TextDocChange* changes, size_t count,
@@ -774,9 +815,8 @@ bool text_doc_apply(TextDoc* doc, const TextEdit* edits, size_t count, void* vie
         const TextSelection* was = first ? doc->group_before : before;
         const size_t was_count = first ? doc->group_before_count : before_count;
         if (made == count)
-            _keep(doc, how, changes, made, was, was_count, left, now_count, view);
+            _keep(doc, how, version, changes, made, was, was_count, left, now_count, view);
         _note_typing(doc, changes, made, view, typed && made == count);
-        doc->undo_sealed = !typed;
         _tell(doc, changes, made, was, was_count, left, now_count, view, version);
         if (first)
             _drop_group_before(doc);
@@ -816,8 +856,7 @@ static bool _step(TextDoc* doc, void* view, bool undo) {
         v = NULL;
     doc->grouping = false;
     _drop_group_before(doc);
-    doc->typing.count = 0;
-    doc->step++;
+    _new_step(doc);
     for (size_t p = 0; p < s->part_count; p++) {
         const size_t part = undo ? s->part_count - 1 - p : p;
         const TextUndoPart* a = &s->parts[part];
@@ -853,7 +892,6 @@ static bool _step(TextDoc* doc, void* view, bool undo) {
         doc->undo_count++;
         doc->redo_count--;
     }
-    doc->undo_sealed = true;
     free(made);
     return true;
 }
@@ -903,13 +941,11 @@ bool text_doc_replace(TextDoc* doc, size_t start, size_t end, const char* text, 
     }
     const bool ok = _run(doc, change, 1, NULL, NULL) == 1;
     // A step of its own, the typing before it sealed and a group's next action a new step.
-    doc->step++;
-    doc->typing.count = 0;
-    doc->undo_sealed = true;
+    _new_step(doc);
     doc->group_fresh = doc->grouping;
     _drop_group_before(doc);
     if (ok)
-        _keep(doc, KEEP_STEP, change, 1, NULL, 0, NULL, 0, NULL);
+        _keep(doc, KEEP_STEP, 0, change, 1, NULL, 0, NULL, 0, NULL);
     free(change);
     free(removed);
     return ok;
