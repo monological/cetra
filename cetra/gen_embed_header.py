@@ -42,18 +42,19 @@ def main():
              'enum {\n']
     parts += [f'    {prefix}_{index.upper()},\n' for index, _ in entries]
     parts.append(f'    {prefix}_COUNT\n}};\n\n')
+    sizes = []
     for k, (_, path) in enumerate(entries):
         with open(path, 'rb') as f:
             data = f.read()
+        sizes.append(len(data))
         rows = (', '.join(f'0x{b:02x}' for b in data[i:i + ROW]) for i in range(0, len(data), ROW))
         parts.append(f'static const unsigned char {args.table}_{k}[] = {{\n    '
                      + ',\n    '.join(rows) + '\n};\n')
     parts.append(f'\nstatic const CetraEmbeddedFile {args.table}[{prefix}_COUNT] = {{\n')
     for k, (index, path) in enumerate(entries):
         source = os.path.relpath(path, args.root).replace(os.sep, '/')
-        size = os.path.getsize(path)
         parts.append(f'    [{prefix}_{index.upper()}] = {{"{os.path.basename(path)}", "{source}", '
-                     f'{args.table}_{k}, {size}}},\n')
+                     f'{args.table}_{k}, {sizes[k]}}},\n')
     parts.append('};\n')
     # Written only when it changed, so an unchanged list rebuilds nothing that includes it.
     write_if_changed(args.out, ''.join(parts))
