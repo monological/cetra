@@ -163,6 +163,43 @@ function(cetra_embed_shaders target dir)
     target_include_directories(${target} PRIVATE ${_out_dir})
 endfunction()
 
+# Files of bytes built into an app (spec 14.6): cetra_embed_files(<target> <name> <INDEX> <file>
+# ...) writes <target>_<name>.h, for the target alone to include, holding the table
+# `<target>_<name>[]` of CetraEmbeddedFile -- each file's own name, its path from the source root,
+# its bytes and their size -- indexed by `<TARGET>_<NAME>_<INDEX>`. A font built in so, the program
+# is one file, and the list here is the one place the file is named. Relative paths are the
+# caller's directory's.
+function(cetra_embed_files target name)
+    set(_generator ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/gen_embed_header.py)
+    set(_pairs)
+    set(_files)
+    set(_is_path FALSE)
+    foreach(_arg ${ARGN})
+        if(_is_path)
+            get_filename_component(_abs ${_arg} ABSOLUTE)
+            list(APPEND _pairs ${_abs})
+            list(APPEND _files ${_abs})
+            set(_is_path FALSE)
+        else()
+            list(APPEND _pairs ${_arg})
+            set(_is_path TRUE)
+        endif()
+    endforeach()
+    set(_out_dir ${CMAKE_CURRENT_BINARY_DIR}/${target}_generated)
+    set(_out ${_out_dir}/${target}_${name}.h)
+    file(MAKE_DIRECTORY ${_out_dir})
+    add_custom_command(
+        OUTPUT ${_out}
+        COMMAND ${CETRA_SHADER_PYTHON} ${_generator} ${target}_${name} ${CMAKE_SOURCE_DIR} ${_out}
+            ${_pairs}
+        DEPENDS ${_files} ${_generator} ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/gen_shader_header.py
+        COMMENT "Embedding ${target}'s ${name}"
+        VERBATIM
+    )
+    target_sources(${target} PRIVATE ${_out})
+    target_include_directories(${target} PRIVATE ${_out_dir})
+endfunction()
+
 # Collect source files
 file(GLOB CETRA_SOURCES
     src/*.c

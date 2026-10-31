@@ -54,6 +54,8 @@
 #define CIMGUI_DEFINE_ENUMS_AND_STRUCTS
 #include "cimgui.h"
 
+#include "canvas_fonts.h" // the fonts built into the program, by cetra_embed_files
+
 #define MM(v) ((int64_t)llround((v) * 1e6))
 
 static Canvas* g_canvas;
@@ -1448,10 +1450,107 @@ static bool g_probe;            // --canvas-probe: the run says what it did
 static const char* g_ui_text;   // --ui-text: a label in the --ui panel
 static UISystem* g_ui_live;     // the UI given the real pointer and keyboard each frame
 
+// ---- The fonts built into the program (spec 14.6): the table canvas_fonts.h holds, which the
+// build writes from its list, indexed by what each is for (CANVAS_FONTS_LABEL and the rest).
+
+// A built-in font as a distance field, at the size every font of the app is made at.
+static Font* built_in_font(Engine* engine, int which) {
+    const CetraEmbeddedFile* f = &canvas_fonts[which];
+    return load_font_memory(engine->text_renderer->font_pool, f->name, f->bytes, f->size, 64.0f,
+                            true);
+}
+
+static GlyphCache* built_in_face(int which, float pixel_size) {
+    return create_glyph_cache_memory(canvas_fonts[which].bytes, canvas_fonts[which].size,
+                                     pixel_size);
+}
+
+// A font's atlas read back from the GPU; NULL out of memory.
+static unsigned char* atlas_of(const Font* font) {
+    unsigned char* atlas = malloc((size_t)font->atlas_width * (size_t)font->atlas_height);
+    if (!atlas)
+        return NULL;
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glBindTexture(GL_TEXTURE_2D, font->atlas_texture_id);
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_RED, GL_UNSIGNED_BYTE, atlas);
+    return atlas;
+}
+
+// Two fonts the same: every glyph's metrics and place, the kerning table and the atlas.
+static bool fonts_equal(const Font* a, const Font* b) {
+    if (!a || !b || a->atlas_width != b->atlas_width || a->atlas_height != b->atlas_height ||
+        a->kern_side != b->kern_side || a->em_size != b->em_size ||
+        a->line_height != b->line_height || a->sdf_edge != b->sdf_edge ||
+        HASH_COUNT(a->glyph_cache) != HASH_COUNT(b->glyph_cache))
+        return false;
+    for (const GlyphInfo* g = a->glyph_cache; g; g = g->hh.next) {
+        const GlyphInfo* h = font_get_glyph(b, g->codepoint);
+        if (!h || g->pair_row != h->pair_row || g->advance_x != h->advance_x ||
+            g->left_bearing != h->left_bearing || g->x0 != h->x0 || g->y0 != h->y0 ||
+            g->x1 != h->x1 || g->y1 != h->y1 || g->u0 != h->u0 || g->v0 != h->v0 ||
+            g->u1 != h->u1 || g->v1 != h->v1)
+            return false;
+    }
+    const size_t pairs = a->kern_side * a->kern_side * sizeof(int16_t);
+    if ((a->kern_pairs == NULL) != (b->kern_pairs == NULL) ||
+        (a->kern_pairs && memcmp(a->kern_pairs, b->kern_pairs, pairs)))
+        return false;
+    unsigned char *pa = atlas_of(a), *pb = atlas_of(b);
+    const bool same = pa && pb && !memcmp(pa, pb, (size_t)a->atlas_width * (size_t)a->atlas_height);
+    free(pa);
+    free(pb);
+    return same;
+}
+
+// Two editor faces the same: the same glyphs asked of each in turn land in the same places with
+// the same bitmaps.
+static bool faces_equal(GlyphCache* a, GlyphCache* b) {
+    if (!a || !b || a->cell_width != b->cell_width || a->line_height != b->line_height ||
+        a->ascent != b->ascent)
+        return false;
+    static const uint32_t MORE[] = {0x3a9, 0xb5, 0xe9, 0x2192};
+    for (uint32_t i = 0; i < 95 + 4; i++) {
+        const uint32_t cp = i < 95 ? 32 + i : MORE[i - 95];
+        GlyphBitmap ga, gb;
+        if (glyph_cache_get(a, cp, &ga) != glyph_cache_get(b, cp, &gb) || ga.left != gb.left ||
+            ga.top != gb.top || ga.width != gb.width || ga.height != gb.height ||
+            ga.missing != gb.missing || memcmp(ga.uv, gb.uv, sizeof(ga.uv)))
+            return false;
+    }
+    return a->atlas.width == b->atlas.width && a->atlas.height == b->atlas.height &&
+           !memcmp(a->pixels, b->pixels, (size_t)a->atlas.width * (size_t)a->atlas.height);
+}
+
+// Under --font-sheet --canvas-probe, run from the source root: each built-in font's bytes against
+// the file it was built from, and a font and an editor face made from them against the same made
+// from the file.
+static void probe_built_in_fonts(void) {
+    int bytes = 0, fonts = 0, faces = 0;
+    for (int i = 0; i < CANVAS_FONTS_COUNT; i++) {
+        const CetraEmbeddedFile* f = &canvas_fonts[i];
+        long len = 0;
+        char* file = read_entire_file(f->source, &len);
+        bytes += file && (size_t)len == f->size && !memcmp(file, f->bytes, f->size);
+        free(file);
+        FontPool* by_path = create_font_pool();
+        FontPool* by_bytes = create_font_pool();
+        fonts += fonts_equal(load_font(by_path, f->source, 64.0f, true),
+                             load_font_memory(by_bytes, f->name, f->bytes, f->size, 64.0f, true));
+        free_font_pool(by_path);
+        free_font_pool(by_bytes);
+        GlyphCache* a = create_glyph_cache(f->source, 13.0f);
+        GlyphCache* b = built_in_face(i, 13.0f);
+        faces += faces_equal(a, b);
+        free_glyph_cache(a);
+        free_glyph_cache(b);
+    }
+    printf("canvas fonts bytes %d fonts %d faces %d of %d\n", bytes, fonts, faces,
+           CANVAS_FONTS_COUNT);
+}
+
 // ---- --font-sheet: the code editor's face (spec 14.4), as bitmaps made at the size shown and,
 // under each, as the UI's distance field of the same face at the same size.
 
-#define EDITOR_FONT "assets/fonts/JetBrainsMono-Regular.ttf"
 static const float FONT_SHEET_SIZES[] = {11.0f, 13.0f, 16.0f};
 static const char* FONT_SHEET_TEXT =
     "(inst u1 tpd4e05 :value 4.7k) ; 0O 1lI \xce\xa9\xc2\xb5 \xc3\xa9";
@@ -1513,12 +1612,14 @@ static void draw_font_sheet(UIElement* el, UIDrawList* dl, void* user) {
 static bool build_font_sheet(UISystem* ui, Engine* engine, Font* label) {
     g_font_sheet.engine = engine;
     g_font_sheet.label = label;
-    g_font_sheet.field = load_font(engine->text_renderer->font_pool, EDITOR_FONT, 64.0f, true);
+    g_font_sheet.field = built_in_font(engine, CANVAS_FONTS_EDITOR);
     for (int i = 0; i < 3; i++)
-        g_font_sheet.caches[i] = create_glyph_cache(EDITOR_FONT, FONT_SHEET_SIZES[i]);
+        g_font_sheet.caches[i] = built_in_face(CANVAS_FONTS_EDITOR, FONT_SHEET_SIZES[i]);
     if (!g_font_sheet.field || !g_font_sheet.caches[0] || !g_font_sheet.caches[1] ||
         !g_font_sheet.caches[2])
         return false;
+    if (g_probe)
+        probe_built_in_fonts();
     UIScreen* screen = ui_screen(ui, "font-sheet");
     UIElement* panel = ui_panel(ui_screen_root(screen));
     ui_set_size(panel, UI_GROW, 0.0f, UI_GROW, 0.0f);
@@ -1842,7 +1943,7 @@ static bool build_editor(UISystem* ui, const char* path, bool vim) {
     g_editor_sheet.path = path;
     g_editor_sheet.doc = create_text_doc(bytes, (size_t)len);
     free(bytes);
-    g_editor_sheet.face = create_glyph_cache(EDITOR_FONT, 13.0f);
+    g_editor_sheet.face = built_in_face(CANVAS_FONTS_EDITOR, 13.0f);
     if (!g_editor_sheet.doc || !g_editor_sheet.face)
         return false;
     text_doc_set_highlighter(g_editor_sheet.doc, sexpr_line, NULL, false);
@@ -2646,8 +2747,7 @@ int main(int argc, char** argv) {
     view->fraction[1] = uy - floor(uy);
     lay_out_views(engine);
 
-    Font* font = load_font(engine->text_renderer->font_pool, "apps/splash/assets/Roboto-Bold.ttf",
-                           64.0f, true);
+    Font* font = built_in_font(engine, CANVAS_FONTS_LABEL);
     if (!font) {
         free_canvas(g_canvas);
         free_engine(engine);
@@ -2701,7 +2801,8 @@ int main(int argc, char** argv) {
         g_ui_live = ui;
     }
     if (font_sheet && !build_font_sheet(ui, engine, font)) {
-        fprintf(stderr, "canvas: --font-sheet could not load %s\n", EDITOR_FONT);
+        fprintf(stderr, "canvas: --font-sheet could not make its built-in font %s\n",
+                canvas_fonts[CANVAS_FONTS_EDITOR].name);
         free_ui_system(ui);
         free_canvas(g_canvas);
         free_engine(engine);
@@ -2712,8 +2813,7 @@ int main(int argc, char** argv) {
         g_ui_live = ui;
     }
     if (history) {
-        Font* mono = load_font(engine->text_renderer->font_pool,
-                               "apps/splash/assets/PressStart2P.ttf", 64.0f, true);
+        Font* mono = built_in_font(engine, CANVAS_FONTS_PIXEL);
         build_history(ui, mono);
         g_ui_live = ui;
         UIScreen* screen = ui_top(ui);

@@ -461,26 +461,20 @@ static void generate_glyph_atlas(Font* font) {
     free(atlas_data);
 }
 
-Font* load_font(FontPool* pool, const char* filepath, float base_size, bool use_sdf) {
-    if (!pool || !filepath)
-        return NULL;
-
-    // Check if already loaded
+// The font the pool keeps under `name`, a reference more; NULL when it keeps none.
+static Font* _pooled(FontPool* pool, const char* name) {
     Font* existing;
-    HASH_FIND_STR(pool->font_cache, filepath, existing);
-    if (existing) {
+    HASH_FIND_STR(pool->font_cache, name, existing);
+    if (existing)
         existing->ref_count++;
-        return existing;
-    }
+    return existing;
+}
 
-    // Load TTF file
-    unsigned char* ttf_buffer = (unsigned char*)read_entire_file(filepath, NULL);
-    if (!ttf_buffer) {
-        log_error("Failed to read font file: %s", filepath);
-        return NULL;
-    }
-
-    // Initialize stb_truetype
+// The one way a font is made: from a TrueType file's bytes, which it takes and keeps, since
+// stb_truetype reads them for as long as the font lives. `filepath` is the file they were read
+// from, NULL for bytes handed in.
+static Font* _make_font(FontPool* pool, const char* name, const char* filepath,
+                        unsigned char* ttf_buffer, float base_size, bool use_sdf) {
     stbtt_fontinfo* info = malloc(sizeof(stbtt_fontinfo));
     if (!info) {
         free(ttf_buffer);
@@ -488,7 +482,7 @@ Font* load_font(FontPool* pool, const char* filepath, float base_size, bool use_
     }
 
     if (!stbtt_InitFont(info, ttf_buffer, stbtt_GetFontOffsetForIndex(ttf_buffer, 0))) {
-        log_error("Failed to initialize font: %s", filepath);
+        log_error("Failed to initialize font: %s", name);
         free(info);
         free(ttf_buffer);
         return NULL;
@@ -502,8 +496,8 @@ Font* load_font(FontPool* pool, const char* filepath, float base_size, bool use_
         return NULL;
     }
 
-    font->name = safe_strdup(filepath);
-    font->filepath = safe_strdup(filepath);
+    font->name = safe_strdup(name);
+    font->filepath = filepath ? safe_strdup(filepath) : NULL;
     font->ttf_buffer = ttf_buffer;
     font->stb_font_info = info;
     font->base_size = base_size;
@@ -524,10 +518,42 @@ Font* load_font(FontPool* pool, const char* filepath, float base_size, bool use_
     }
     pool->fonts[pool->font_count++] = font;
 
-    log_info("Loaded font: %s (size=%.0f, sdf=%d, atlas=%dx%d)", filepath, base_size, use_sdf,
+    log_info("Loaded font: %s (size=%.0f, sdf=%d, atlas=%dx%d)", name, base_size, use_sdf,
              font->atlas_width, font->atlas_height);
 
     return font;
+}
+
+Font* load_font(FontPool* pool, const char* filepath, float base_size, bool use_sdf) {
+    if (!pool || !filepath)
+        return NULL;
+    Font* existing = _pooled(pool, filepath);
+    if (existing)
+        return existing;
+    unsigned char* ttf_buffer = (unsigned char*)read_entire_file(filepath, NULL);
+    if (!ttf_buffer) {
+        log_error("Failed to read font file: %s", filepath);
+        return NULL;
+    }
+    return _make_font(pool, filepath, filepath, ttf_buffer, base_size, use_sdf);
+}
+
+Font* load_font_memory(FontPool* pool, const char* name, const void* bytes, size_t size,
+                       float base_size, bool use_sdf) {
+    if (!pool || !name || !bytes || !size) {
+        log_error("load_font_memory: NULL pool, name or bytes");
+        return NULL;
+    }
+    Font* existing = _pooled(pool, name);
+    if (existing)
+        return existing;
+    unsigned char* ttf_buffer = malloc(size);
+    if (!ttf_buffer) {
+        log_error("load_font_memory: out of memory for %s", name);
+        return NULL;
+    }
+    memcpy(ttf_buffer, bytes, size);
+    return _make_font(pool, name, NULL, ttf_buffer, base_size, use_sdf);
 }
 
 Font* get_font(FontPool* pool, const char* name) {

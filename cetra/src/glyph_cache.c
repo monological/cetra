@@ -70,12 +70,9 @@ static void _empty(GlyphCache* c) {
     c->stale = true;
 }
 
-GlyphCache* create_glyph_cache(const char* ttf_path, float pixel_size) {
-    unsigned char* ttf = (unsigned char*)read_entire_file(ttf_path, NULL);
-    if (!ttf) {
-        log_error("create_glyph_cache: cannot read %s", ttf_path ? ttf_path : "(null)");
-        return NULL;
-    }
+// The one way a face is made: from a TrueType file's bytes, which it takes and keeps. `what` names
+// them for an error.
+static GlyphCache* _make_face(unsigned char* ttf, float pixel_size, const char* what) {
     GlyphCache* c = calloc(1, sizeof(GlyphCache));
     stbtt_fontinfo* info = calloc(1, sizeof(stbtt_fontinfo));
     unsigned char* pixels = calloc((size_t)ATLAS_WIDTH * ATLAS_FIRST_HEIGHT, 1);
@@ -84,7 +81,7 @@ GlyphCache* create_glyph_cache(const char* ttf_path, float pixel_size) {
         goto fail;
     }
     if (!stbtt_InitFont(info, ttf, stbtt_GetFontOffsetForIndex(ttf, 0))) {
-        log_error("create_glyph_cache: %s is not a TrueType font", ttf_path);
+        log_error("create_glyph_cache: %s is not a TrueType font", what);
         goto fail;
     }
     c->ttf = ttf;
@@ -113,6 +110,25 @@ fail:
     free(pixels);
     free(ttf);
     return NULL;
+}
+
+GlyphCache* create_glyph_cache(const char* ttf_path, float pixel_size) {
+    unsigned char* ttf = (unsigned char*)read_entire_file(ttf_path, NULL);
+    if (!ttf) {
+        log_error("create_glyph_cache: cannot read %s", ttf_path ? ttf_path : "(null)");
+        return NULL;
+    }
+    return _make_face(ttf, pixel_size, ttf_path);
+}
+
+GlyphCache* create_glyph_cache_memory(const void* bytes, size_t size, float pixel_size) {
+    unsigned char* ttf = bytes && size ? malloc(size) : NULL;
+    if (!ttf) {
+        log_error("create_glyph_cache_memory: no bytes, or out of memory for them");
+        return NULL;
+    }
+    memcpy(ttf, bytes, size);
+    return _make_face(ttf, pixel_size, "the bytes given");
 }
 
 void free_glyph_cache(GlyphCache* c) {
