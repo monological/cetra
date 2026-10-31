@@ -28247,7 +28247,10 @@ def run_ui_gate(workdir):
                      merged; five lines pasted one to each caret; Cmd+D taking the
                      word and then its next matches; Esc back to the primary; a
                      caret added a row below twice at its column; Option+click
-                     adding one; and find's next match selected.
+                     adding one; and find's next match selected. Run with freed
+                     memory scribbled over: the bar's place is summed from the
+                     rows above the first line, which a new editor once left unset,
+                     and the drag on the bar read that garbage (spec 14.6's review).
       ui-editor-mode a vim-like mode made through the editor's public calls and
                      nothing else: x, dw, a count before j, i into an insert mode
                      that types and takes the standard mode's arrows, and Esc back
@@ -29294,7 +29297,8 @@ def run_ui_gate(workdir):
                            "Option+click, a drag in the text selecting after the bar's thumb was "
                            "dragged, find's next match, touching selections typed over each "
                            "landing after its own text, and a caret merged into a selection it "
-                           "starts")
+                           "starts; freed memory scribbled over, so the bar's place reads no "
+                           "memory left unset", env=_SCRIBBLED)
     print(f"  ui-editor-carets      {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-editor-carets", ok)
 
