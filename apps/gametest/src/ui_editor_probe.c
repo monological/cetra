@@ -1411,9 +1411,11 @@ static int probe_editor_steps(UISystem* ui) {
             grouped = g_steps[i] == g_steps[0];
         say_flag("editor-steps", which, "grouped", grouped && g_steps[4] != g_steps[0]);
         if (keep) {
+            // "w", then the group whole: "ab" and " c" are the steps left.
             text_doc_undo(doc);
             text_doc_undo(doc);
-            say_flag("editor-steps", which, "undone", doc_is_str(doc, "ab c"));
+            say_flag("editor-steps", which, "undone",
+                     doc_is_str(doc, "ab c") && doc->undo_count == 2);
             text_doc_redo(doc);
             say_flag("editor-steps", which, "redone", doc_is_str(doc, "ab cyz"));
         }
