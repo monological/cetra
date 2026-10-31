@@ -30,7 +30,7 @@ typedef struct GlyphInfo {
 // Font with glyph atlas
 typedef struct Font {
     char* name;
-    char* filepath;
+    char* filepath; // the file it was read from; NULL for one made from bytes
 
     // Atlas texture
     GLuint atlas_texture_id;
@@ -151,8 +151,13 @@ typedef struct TextRenderer {
 FontPool* create_font_pool(void);
 void free_font_pool(FontPool* pool);
 
-// Font loading
+// Font loading. A font is kept in the pool under its file's path, or the name it was given, and a
+// second load of that name shares it.
 Font* load_font(FontPool* pool, const char* filepath, float base_size, bool use_sdf);
+// A font from a TrueType file's bytes, copied, since the font reads them for as long as it lives:
+// one built into a program. The same bytes make the same font as the file loaded by path.
+Font* load_font_memory(FontPool* pool, const char* name, const void* bytes, size_t size,
+                       float base_size, bool use_sdf);
 Font* get_font(FontPool* pool, const char* name);
 void font_retain(Font* font);
 void font_release(Font* font);

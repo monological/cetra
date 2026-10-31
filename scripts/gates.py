@@ -30328,6 +30328,12 @@ def run_canvas_gate(workdir):
                      and the glyph's metrics with them. The fields are rasterised across threads
                      and packed afterwards, so a band handing one glyph's field to another's
                      place is what this sees.
+      canvas-font-memory the app's three fonts are built into it (spec 14.6): each one's bytes
+                     equal its file's; a distance-field font made from them equals one loaded by
+                     path, every glyph's metrics and place, the kerning table and the atlas read
+                     back; and an editor face made from them equals one made by path, the same
+                     glyphs landing in the same places with the same bitmaps. The font sheet then
+                     draws from the built-in JetBrains Mono.
       canvas-overlap-once two capsules crossing in a layer at half opacity: the crossing the same
                      code as one arm, half of white. A layer's coverage is resolved before it is
                      painted, so it is translucent as a whole and not shape by shape.
@@ -30614,6 +30620,21 @@ def run_canvas_gate(workdir):
                   f"(want over 200 and none)")
     print(f"  canvas-atlas-fields {'PASS' if ok else 'FAIL'}  {detail}")
     note("canvas-atlas-fields", ok)
+
+    # ---- the fonts built into the program (spec 14.6)
+    sheet, probe = _canvas_run(workdir, "font_memory", "--font-sheet")
+    fonts = probe.get(("fonts", "bytes"), [])
+    if not sheet or len(fonts) != 7:
+        ok, detail = False, "the app failed or printed no fonts line"
+    else:
+        same, made, faces, count = int(fonts[0]), int(fonts[2]), int(fonts[4]), int(fonts[6])
+        ink = int((_ppm_array(sheet)[..., :3].max(axis=2) > 150).sum())
+        ok = count == 3 and same == made == faces == count and ink > 2000
+        detail = (f"of {count} built-in fonts, {same} with their file's bytes, {made} making the "
+                  f"font the file makes and {faces} the face (want all 3); {ink} px of the sheet's "
+                  f"text (want over 2000)")
+    print(f"  canvas-font-memory  {'PASS' if ok else 'FAIL'}  {detail}")
+    note("canvas-font-memory", ok)
 
     # ---- layers and tags
     path, probe = _canvas_run(workdir, "overlap", "--sheet", "overlap")

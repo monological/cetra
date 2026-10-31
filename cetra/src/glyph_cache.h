@@ -19,6 +19,7 @@
  */
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "texture.h"
@@ -53,6 +54,8 @@ typedef struct GlyphCache {
 
 // A face from a TrueType file, at `pixel_size`. NULL when the file cannot be read or is not a font.
 GlyphCache* create_glyph_cache(const char* ttf_path, float pixel_size);
+// The same from a TrueType file's bytes, copied: a face built into a program.
+GlyphCache* create_glyph_cache_memory(const void* bytes, size_t size, float pixel_size);
 void free_glyph_cache(GlyphCache* cache);
 
 // Makes the bitmaps at another size from now on; the same size again changes nothing.
