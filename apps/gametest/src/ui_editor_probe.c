@@ -22,6 +22,8 @@
 #include "cetra/text.h"
 #include "cetra/text_doc.h"
 #include "cetra/ui_editor.h"
+#include "cetra/ui_editor_vim.h"
+#include "cetra/util.h"
 
 // ---- A stand-in for an editor: carets the text moves, as an editor's would be.
 
@@ -1425,6 +1427,318 @@ static int probe_editor_steps(UISystem* ui) {
     return 0;
 }
 
+// ---- The vim mode against vim itself (spec 14.5)
+
+// A hex digit's value; -1 for none.
+static int hex_digit(char c) {
+    return c >= '0' && c <= '9'   ? c - '0'
+           : c >= 'a' && c <= 'f' ? c - 'a' + 10
+           : c >= 'A' && c <= 'F' ? c - 'A' + 10
+                                  : -1;
+}
+
+// `hex` decoded into a buffer the caller frees, NUL-terminated; *n its length.
+static char* unhex(const char* hex, size_t len, size_t* n) {
+    char* out = malloc(len / 2 + 1);
+    if (!out)
+        return NULL;
+    *n = 0;
+    for (size_t i = 0; i + 1 < len; i += 2)
+        out[(*n)++] = (char)(hex_digit(hex[i]) * 16 + hex_digit(hex[i + 1]));
+    out[*n] = '\0';
+    return out;
+}
+
+// Vim's notation for keys -- <Esc>, <CR>, <BS>, <Del>, <Tab>, the arrows, <C-x>, <lt> -- read
+// into the events a press makes: a key for each of those, a character for anything else.
+static size_t vim_events(const char* keys, InputKeyEvent* out, size_t max) {
+    static const struct {
+        const char* name;
+        int key;
+    } named[] = {{"Esc", GLFW_KEY_ESCAPE},  {"CR", GLFW_KEY_ENTER}, {"BS", GLFW_KEY_BACKSPACE},
+                 {"Del", GLFW_KEY_DELETE},  {"Tab", GLFW_KEY_TAB},  {"Left", GLFW_KEY_LEFT},
+                 {"Right", GLFW_KEY_RIGHT}, {"Up", GLFW_KEY_UP},    {"Down", GLFW_KEY_DOWN},
+                 {"Home", GLFW_KEY_HOME},   {"End", GLFW_KEY_END}};
+    size_t n = 0;
+    for (const char* p = keys; *p && n < max;) {
+        if (*p == '<') {
+            const char* end = strchr(p, '>');
+            const size_t len = end ? (size_t)(end - p - 1) : 0;
+            if (end && len == 2 && !strncmp(p + 1, "lt", 2)) {
+                out[n++] = (InputKeyEvent){.codepoint = '<'};
+                p = end + 1;
+                continue;
+            }
+            if (end && len == 3 && (p[1] == 'C' || p[1] == 'c') && p[2] == '-') {
+                const char ch = p[3];
+                if (ch == '[')
+                    out[n++] =
+                        (InputKeyEvent){.key = GLFW_KEY_LEFT_BRACKET, .mods = GLFW_MOD_CONTROL};
+                else
+                    out[n++] = (InputKeyEvent){.key = GLFW_KEY_A + (ch | 0x20) - 'a',
+                                               .mods = GLFW_MOD_CONTROL};
+                p = end + 1;
+                continue;
+            }
+            bool found = false;
+            for (size_t k = 0; end && k < sizeof(named) / sizeof(named[0]); k++) {
+                if (strlen(named[k].name) == len && !strncmp(p + 1, named[k].name, len)) {
+                    out[n++] = (InputKeyEvent){.key = named[k].key};
+                    p = end + 1;
+                    found = true;
+                    break;
+                }
+            }
+            if (found)
+                continue;
+        }
+        out[n++] = (InputKeyEvent){.codepoint = text_utf8_next(&p)};
+    }
+    return n;
+}
+
+// Each case of the file CETRA_VIM_CASES names -- "<text in hex> <line> <column> <keys in hex>",
+// the keys in vim's notation -- run on a fresh text, editor and vim mode, the cursor put where
+// vim's cursor() would put it. Prints "vim <case> <line> <column> <the text in hex>", as vim's
+// line('.') and col('.') count.
+static int probe_vim_run(UISystem* ui) {
+    const char* path = getenv("CETRA_VIM_CASES");
+    long size = 0;
+    char* all = path ? read_entire_file(path, &size) : NULL;
+    if (!all) {
+        fprintf(stderr, "vim-run: CETRA_VIM_CASES names no file to read\n");
+        return 1;
+    }
+    Engine* engine = ui_system_engine(ui);
+    InputKeyEvent* events = malloc(4096 * sizeof(InputKeyEvent));
+    int index = 0;
+    for (char* line = all; events && line < all + size;) {
+        char* end = memchr(line, '\n', (size_t)(all + size - line));
+        if (!end)
+            end = all + size;
+        *end = '\0';
+        char text_hex[1 << 16], keys_hex[1 << 14];
+        size_t at_line = 0, at_col = 0;
+        if (sscanf(line, "%65535s %zu %zu %16383s", text_hex, &at_line, &at_col, keys_hex) == 4) {
+            size_t text_len = 0, keys_len = 0;
+            char* text = unhex(text_hex, strlen(text_hex), &text_len);
+            char* keys = unhex(keys_hex, strlen(keys_hex), &keys_len);
+            TextDoc* doc = text ? create_text_doc(text, text_len) : NULL;
+            UIEditorVim* vim = create_ui_editor_vim();
+            if (doc && vim && keys) {
+                UIElement* ed = editor_fixture(ui, doc, 600.0f, 300.0f);
+                ui_editor_set_mode(ed, ui_editor_vim_mode(vim));
+                if (engine)
+                    engine_clipboard_set(engine, "");
+                editor_pass(ui);
+                const size_t start = text_doc_line_start(doc, at_line - 1) + at_col - 1;
+                ui_editor_set_selections(ed, &(TextSelection){start, start}, 1);
+                // A key at a time, as typed.
+                const size_t n = vim_events(keys, events, 4096);
+                for (size_t i = 0; i < n; i++)
+                    send_keys(ui, &events[i], 1);
+                const TextSelection* s = NULL;
+                size_t primary = 0;
+                ui_editor_selections(ed, &s, &primary);
+                const size_t head = s ? s[primary].head : 0;
+                const size_t l = text_doc_line_of(doc, head);
+                size_t out_len = 0;
+                char* out = text_doc_text(doc, &out_len);
+                printf("vim %d %zu %zu ", index, l + 1, head - text_doc_line_start(doc, l) + 1);
+                for (size_t i = 0; out && i < out_len; i++)
+                    printf("%02x", (unsigned char)out[i]);
+                printf("\n");
+                free(out);
+                ui_editor_set_mode(ed, NULL);
+                ui_pop(ui);
+            }
+            free_text_doc(doc);
+            free_ui_editor_vim(vim);
+            free(text);
+            free(keys);
+        }
+        index++;
+        line = end + 1;
+    }
+    free(events);
+    free(all);
+    return 0;
+}
+
+// An editor in a fresh vim mode on `text`, laid out, the caret at `at`.
+static UIElement* vim_fixture(UISystem* ui, TextDoc* doc, UIEditorVim* vim, size_t at) {
+    UIElement* ed = editor_fixture(ui, doc, 600.0f, 300.0f);
+    ui_editor_set_mode(ed, ui_editor_vim_mode(vim));
+    editor_pass(ui);
+    ui_editor_set_selections(ed, &(TextSelection){at, at}, 1);
+    return ed;
+}
+
+// Keys in vim's notation, a pass each, as typed.
+static void vim_keys(UISystem* ui, const char* keys) {
+    InputKeyEvent events[256];
+    const size_t n = vim_events(keys, events, 256);
+    for (size_t i = 0; i < n; i++)
+        send_keys(ui, &events[i], 1);
+}
+
+#define VIM_TEXT "alpha beta\n  gamma delta\nlast line\n"
+
+// The state a host shows: its names, the keys of a command half typed, the caret's shape, and a
+// click past a line's end leaving the cursor on its last character.
+static int probe_vim_state(UISystem* ui) {
+    TextDoc* doc = create_text_doc(VIM_TEXT, strlen(VIM_TEXT));
+    UIEditorVim* vim = create_ui_editor_vim();
+    UIElement* ed = vim_fixture(ui, doc, vim, 0);
+    say_flag("vim-state", "normal", "named",
+             ui_editor_vim_state(vim) == UI_VIM_NORMAL &&
+                 !strcmp(ui_editor_mode(ed)->name, "NORMAL"));
+    float x0 = 0.0f, x1 = 0.0f, y = 0.0f;
+    ui_editor_point_of(ed, 0, &x0, &y);
+    ui_editor_point_of(ed, 1, &x1, &y);
+    const float cell = x1 - x0;
+    say_flag("vim-state", "normal", "block", fabsf(caret_drawn(ui, ed, 0) - cell) < 0.01f);
+    vim_keys(ui, "2d");
+    say_flag("vim-state", "pending", "shown", !strcmp(ui_editor_vim_pending(vim), "2d"));
+    vim_keys(ui, "<Esc>");
+    say_flag("vim-state", "pending", "dropped",
+             !strcmp(ui_editor_vim_pending(vim), "") && doc_is_str(doc, VIM_TEXT));
+    vim_keys(ui, "i");
+    say_flag("vim-state", "insert", "named",
+             ui_editor_vim_state(vim) == UI_VIM_INSERT &&
+                 !strcmp(ui_editor_mode(ed)->name, "INSERT"));
+    editor_pass(ui);
+    say_flag("vim-state", "insert", "bar", caret_drawn(ui, ed, 0) < cell * 0.5f);
+    vim_keys(ui, "Z<Esc>");
+    say_flag("vim-state", "escape", "normal",
+             ui_editor_vim_state(vim) == UI_VIM_NORMAL && one_selection(ed, 0, 0) &&
+                 doc_is_str(doc, "Z" VIM_TEXT));
+    // A click well past the first line's end: on its last character, not past it.
+    float ex = 0.0f, ey = 0.0f;
+    ui_editor_point_of(ed, 3, &ex, &ey);
+    press_drag(ui, ex + 400.0f, ey + 2.0f, ex + 400.0f, ey + 2.0f, 0);
+    say_flag("vim-state", "click", "held", one_selection(ed, 10, 10));
+    ui_editor_set_mode(ed, NULL);
+    free_text_doc(doc);
+    free_ui_editor_vim(vim);
+    return 0;
+}
+
+static uint64_t g_vim_steps[64];
+static int g_vim_step_count;
+
+static void note_vim_step(TextDoc* doc, const TextDocAction* action, void* user) {
+    (void)doc;
+    (void)user;
+    if (g_vim_step_count < 64)
+        g_vim_steps[g_vim_step_count++] = action->step;
+}
+
+// Whether every action told since the count was cleared shares one step.
+static bool one_step(void) {
+    for (int i = 1; i < g_vim_step_count; i++)
+        if (g_vim_steps[i] != g_vim_steps[0])
+            return false;
+    return g_vim_step_count > 0;
+}
+
+// Undo by vim's units: an insert from i to Esc is one step, Enters and Backspaces in it included;
+// `cw` and what it typed is one; each is told to a host as one step too, with keep_undo off.
+static int probe_vim_undo(UISystem* ui) {
+    for (int keep = 1; keep >= 0; keep--) {
+        const char* which = keep ? "kept" : "off";
+        TextDoc* doc = create_text_doc(VIM_TEXT, strlen(VIM_TEXT));
+        doc->keep_undo = keep;
+        text_doc_set_on_action(doc, note_vim_step, NULL);
+        UIEditorVim* vim = create_ui_editor_vim();
+        UIElement* ed = vim_fixture(ui, doc, vim, 0);
+        g_vim_step_count = 0;
+        vim_keys(ui, "ione<CR>two<BS>o three<Esc>");
+        say_flag("vim-undo", which, "insert", one_step() && g_vim_step_count > 3);
+        if (keep) {
+            vim_keys(ui, "u");
+            say_flag("vim-undo", which, "insert_undone", doc_is_str(doc, VIM_TEXT));
+        }
+        g_vim_step_count = 0;
+        vim_keys(ui, "jwcwnew<Esc>");
+        say_flag("vim-undo", which, "change", one_step() && g_vim_step_count >= 2);
+        if (keep) {
+            vim_keys(ui, "u");
+            say_flag("vim-undo", which, "change_undone", doc_is_str(doc, VIM_TEXT));
+            vim_keys(ui, "<C-r>");
+            say_flag("vim-undo", which, "change_redone",
+                     doc_is_str(doc, "alpha beta\n  new delta\nlast line\n"));
+        }
+        ui_editor_set_mode(ed, NULL);
+        free_text_doc(doc);
+        free_ui_editor_vim(vim);
+    }
+    return 0;
+}
+
+// A host over the vim mode: its Space acts in normal mode only and takes the space with it, in
+// insert mode handing the key back so the space is typed; its own undo takes u and Ctrl+R.
+static int g_vim_host_help, g_vim_host_undos, g_vim_host_redos;
+static UIEditorVim* g_vim_host;
+
+static bool vim_host_help(UIElement* el, void* user) {
+    (void)el;
+    (void)user;
+    if (ui_editor_vim_state(g_vim_host) != UI_VIM_NORMAL)
+        return false;
+    g_vim_host_help++;
+    return true;
+}
+
+static bool vim_host_undo(UIElement* el, void* user) {
+    (void)el;
+    (void)user;
+    g_vim_host_undos++;
+    return true;
+}
+
+static bool vim_host_redo(UIElement* el, void* user) {
+    (void)el;
+    (void)user;
+    g_vim_host_redos++;
+    return true;
+}
+
+static const UIEditorCommand VIM_HOST_HELP = {"help", "The host's help", vim_host_help, NULL};
+static const UIEditorBinding VIM_HOST_KEYS[] = {{GLFW_KEY_SPACE, 0, &VIM_HOST_HELP}};
+
+static int probe_vim_host(UISystem* ui) {
+    TextDoc* doc = create_text_doc(VIM_TEXT, strlen(VIM_TEXT));
+    doc->keep_undo = false;
+    g_vim_host = create_ui_editor_vim();
+    ui_editor_vim_set_undo(g_vim_host, vim_host_undo, vim_host_redo, NULL);
+    UIElement* ed = vim_fixture(ui, doc, g_vim_host, 0);
+    const UIEditorMode host = {.name = "pcb",
+                               .parent = ui_editor_vim_mode(g_vim_host),
+                               .bindings = VIM_HOST_KEYS,
+                               .binding_count = 1,
+                               .layer = true};
+    ui_editor_set_mode(ed, &host);
+    // A press of Space: its key, then its character.
+    const InputKeyEvent space[] = {{.key = GLFW_KEY_SPACE}, {.codepoint = ' '}};
+    send_keys(ui, space, 2);
+    say_flag("vim-host", "space", "normal", g_vim_host_help == 1 && one_selection(ed, 0, 0));
+    vim_keys(ui, "i");
+    send_keys(ui, space, 2);
+    vim_keys(ui, "<Esc>");
+    say_flag("vim-host", "space", "insert", g_vim_host_help == 1 && doc_is_str(doc, " " VIM_TEXT));
+    say_flag("vim-host", "layer", "look",
+             !strcmp(ui_editor_mode(ed)->name, "pcb") &&
+                 ui_editor_vim_state(g_vim_host) == UI_VIM_NORMAL);
+    vim_keys(ui, "u<C-r>");
+    say_flag("vim-host", "undo", "host",
+             g_vim_host_undos == 1 && g_vim_host_redos == 1 && doc_is_str(doc, " " VIM_TEXT));
+    ui_editor_set_mode(ed, NULL);
+    free_text_doc(doc);
+    free_ui_editor_vim(g_vim_host);
+    return 0;
+}
+
 // ---- The host's edits: carets, selections and the view through them
 
 #define HOST_TEXT "abc def ghi\nline two\n"
@@ -1520,5 +1834,13 @@ int run_ui_editor_probe(Game* game, UISystem* ui, Font* font, const char* which)
         return probe_editor_shapes(ui);
     if (!strcmp(which, "editor-steps"))
         return probe_editor_steps(ui);
+    if (!strcmp(which, "vim-run"))
+        return probe_vim_run(ui);
+    if (!strcmp(which, "vim-state"))
+        return probe_vim_state(ui);
+    if (!strcmp(which, "vim-undo"))
+        return probe_vim_undo(ui);
+    if (!strcmp(which, "vim-host"))
+        return probe_vim_host(ui);
     return -1;
 }

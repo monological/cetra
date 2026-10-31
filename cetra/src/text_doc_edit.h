@@ -92,6 +92,9 @@ void text_doc_seal_undo(TextDoc* doc);
 // closed, whatever it is and whoever made it -- a vim mode's insert, from i to Esc. A host's edit
 // inside it is a step of its own, and the group's next action starts another.
 void text_doc_group(TextDoc* doc, bool open);
+// A step of undo that changes nothing, which an undo takes back doing nothing but putting the
+// editor `view`'s selections back: vim's operator over nothing. Inside a group's step, nothing.
+void text_doc_empty_step(TextDoc* doc, void* view);
 // Undo or redo from an editor, which is given the step's selections whoever made it.
 bool text_doc_undo_in(TextDoc* doc, void* view);
 bool text_doc_redo_in(TextDoc* doc, void* view);
