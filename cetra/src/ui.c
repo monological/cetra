@@ -2495,8 +2495,10 @@ static void _ui_overlay(Engine* engine, void* user) {
     const bool moving = ui_build(ui, (float)engine->win_width, (float)engine->win_height, dt);
     if (ui_draw_list_render(ui->dl) || moving)
         engine_request_frame(engine);
+    // Asked less the time the build took since `now`, so the same change is asked for at the same
+    // instant every frame rather than a build's length later each time.
     if (isfinite(ui->caret_wake))
-        engine_request_frame_after(engine, ui->caret_wake);
+        engine_request_frame_after(engine, ui->caret_wake - (_ui_clock(engine) - ui->now));
 }
 
 UISystem* create_ui_system(Engine* engine) {
