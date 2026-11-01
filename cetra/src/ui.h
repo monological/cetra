@@ -258,9 +258,13 @@ size_t ui_text_wrap_point(const Font* font, float size, float tracking, const ch
 typedef enum { UI_ROW = 0, UI_COLUMN = 1 } UIDir;
 
 // How an axis is sized. FIT hugs the content, GROW shares what the parent has
-// left over, FIXED is the authored number. Two passes settle them: measure
-// bottom-up for FIT, arrange top-down for GROW.
-typedef enum { UI_FIT = 0, UI_FIXED = 1, UI_GROW = 2 } UISize;
+// left over, FIXED is the authored number, and SHARE (spec 14.9) is that share of
+// the parent's inner length -- less the gaps between its children, along the
+// parent's main axis -- rounded down to a whole point. A share is settled before
+// GROW, so a GROW sibling takes exactly the rest, and adds nothing to a FIT
+// parent's measure. Two passes settle them: measure bottom-up for FIT, arrange
+// top-down for GROW and SHARE.
+typedef enum { UI_FIT = 0, UI_FIXED = 1, UI_GROW = 2, UI_SHARE = 3 } UISize;
 
 /*
  * UI_ROOT is a container and not an element of the list: it has no constructor, an
@@ -397,9 +401,9 @@ struct UIElement {
     // SETTINGS: plain writes at any time.
     UIDir dir;           // how this element's CHILDREN are laid out
     UISize size_mode[2]; // x, y
-    float size[2];       // the number FIXED uses
-    // The most a FIT or GROW element measures along each axis; 0 = no most. A scrolling pane past
-    // it scrolls; anything else draws past it.
+    float size[2];       // FIXED's length, SHARE's share (0 to 1); FIT and GROW ignore it
+    // The most a FIT, GROW or SHARE element measures along each axis; 0 = no most. A scrolling pane
+    // past it scrolls; anything else draws past it.
     float max_size[2];
     // An element's two inheritable lengths: 0 takes the style's or the theme's, and a negative one
     // is none. The padding is top, right, bottom, left, and taken whole: all four 0 is the style's,

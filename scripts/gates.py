@@ -28179,6 +28179,14 @@ def run_ui_gate(workdir):
                      scrolls; a growing child held to 100 takes it and its siblings
                      share the rest; two held and centred leave the rest to the
                      alignment; a fixed element ignores its most.
+      ui-share       UI_SHARE (spec 14.9), as exact rects: a share of 0.7 is that
+                     share of the row's inner length less its gap, rounded down to
+                     a whole point, and its GROW sibling the rest exactly, at
+                     widths whose 0.7 is whole and is not, and with the GROW side a
+                     row measuring its own gap; a share across the main axis; one
+                     held at its most; two halves of an odd length leaving a point;
+                     two of 0.7 overflowing as FIXED lengths; half of a parent that
+                     fits its children, which it adds nothing to; and a share of 0.
       ui-padding-none a negative padding and spacing are none, a zero one the
                      style's and the theme's, and the padding goes per side.
       ui-control-lines a button and a slider whose text is two lines draw it through
@@ -29014,6 +29022,58 @@ def run_ui_gate(workdir):
                   f"most of 10 keeps {fixed:.0f} (want 50)")
     print(f"  ui-max-size           {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-max-size", ok)
+
+    # ---- a size as a share of the parent; every length here is exact in float, so == holds
+    p = _ui_probe("share")
+    if not p:
+        ok, detail = False, "the probe produced nothing"
+    else:
+        def rect(label, key):
+            return p.get((label, key), [float("nan")] * 4)
+
+        def share_of(f, room):
+            return max(math.floor(np.float32(f) * np.float32(room)), 0)
+
+        pad, gap, wrong = 8.0, 6.0, []
+        for label in ("split0", "split1", "split2", "nested"):
+            row, a, b = rect(label, "row"), rect(label, "share"), rect(label, "grow")
+            room = row[2] - 2 * pad - gap
+            want = share_of(0.7, room)
+            if (a[0], a[2], b[0], b[2]) != (row[0] + pad, want, a[0] + want + gap, room - want):
+                wrong.append(f"{label} {a[2]:g} + {b[2]:g} in {room:g} (want {want} + "
+                             f"{room - want:g})")
+        row, a = rect("across", "row"), rect("across", "share")
+        if (a[1], a[3]) != (row[1], share_of(0.5, row[3])):
+            wrong.append(f"across {a[3]:g} of {row[3]:g} (want {share_of(0.5, row[3])})")
+        row, a, b = rect("held", "row"), rect("held", "share"), rect("held", "grow")
+        room = row[2] - 2 * pad - gap
+        if (a[2], b[2]) != (100.0, room - 100.0):
+            wrong.append(f"held {a[2]:g} + {b[2]:g} (want 100 + {room - 100:g})")
+        row, a, b = rect("halves", "row"), rect("halves", "a"), rect("halves", "b")
+        room = row[2] - 2 * pad - gap
+        left = row[0] + row[2] - pad - (b[0] + b[2])
+        if (a[2], b[2], b[0], left) != (share_of(0.5, room),) * 2 + (a[0] + a[2] + gap, 1.0):
+            wrong.append(f"halves {a[2]:g} + {b[2]:g} leaving {left:g} (want 1)")
+        row, a, b = rect("over", "row"), rect("over", "a"), rect("over", "b")
+        room = row[2] - 2 * pad - gap
+        if (a[2], b[2], b[0]) != (share_of(0.7, room),) * 2 + (a[0] + a[2] + gap,):
+            wrong.append(f"over {a[2]:g} + {b[2]:g} at {b[0] - row[0]:g}")
+        row, a = rect("fit", "row"), rect("fit", "share")
+        if (row[2], a[0], a[2]) != (100.0, row[0] + 100.0, 50.0):
+            wrong.append(f"fit: the row {row[2]:g} (want 100), its share {a[2]:g} (want 50)")
+        row, a, b = rect("zero", "row"), rect("zero", "share"), rect("zero", "grow")
+        room = row[2] - 2 * pad - gap
+        if (a[2], b[0], b[2]) != (0.0, a[0] + gap, room):
+            wrong.append(f"zero {a[2]:g} + {b[2]:g} (want 0 + {room:g})")
+        ok = not wrong
+        splits = ", ".join(f"{rect(k, 'share')[2]:g} + {rect(k, 'grow')[2]:g}"
+                           for k in ("split0", "split1", "split2"))
+        detail = ("; ".join(wrong) if wrong else
+                  f"0.7 and GROW in 578, 579 and 311.5 points: {splits}; nested, across, held, two "
+                  f"halves leaving a point, two past 1, under a FIT parent and of 0 as the rule "
+                  f"says")
+    print(f"  ui-share              {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-share", ok)
 
     p = _ui_probe("padding-none")
     if not p:
