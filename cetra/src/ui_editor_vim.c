@@ -154,8 +154,6 @@ struct UIEditorVim {
     bool drop;
     // An operator failed while `.` made a change again: vim's beep drops the change's other keys.
     bool failed;
-    // The command being read was refused, the text being read-only, and kept for `.` as it was.
-    bool refused;
     // The area the visual operator being read took, and the last change's, for `.`; and the last
     // any visual operator took, which a count before v, V or Ctrl+V selects again.
     VisualArea area, change_area, reselect;
@@ -230,7 +228,6 @@ static void _reset(UIEditorVim* v) {
     v->op = v->prefix = 0;
     v->pending[0] = '\0';
     v->missed = NULL;
-    v->refused = false;
     if (v->state != UI_VIM_INSERT) {
         v->key_count = 0;
         v->area.on = false;
@@ -255,9 +252,9 @@ static int _count0(const UIEditorVim* v) {
 }
 
 // The command just read changed the text: it is what `.` repeats, with the visual area it took,
-// unless it is being replayed, or was refused and kept then.
+// unless it is being replayed.
 static void _keep_change(UIEditorVim* v, int count) {
-    if (!v->replaying && !v->refused &&
+    if (!v->replaying &&
         grow_array((void**)&v->change, &v->change_cap, v->key_count, sizeof(uint32_t), 64)) {
         if (v->key_count)
             memcpy(v->change, v->keys, v->key_count * sizeof(uint32_t));
@@ -301,19 +298,16 @@ static Ctx _ctx(UIEditorVim* v, UIElement* el) {
 
 // Whether a command that would change the text is refused, the text being read-only: told to the
 // host once, where vim says E21, before anything of it is done -- the register keeps what it held.
-// Vim keeps it for `.` all the same, `kept`, unless it would have begun an insert; made again, it
-// is refused again, and the rest of what `.` was making is dropped, as vim drops it after an error.
-static bool _refused(Ctx* c, bool kept) {
-    UIEditorVim* v = c->v;
+// Asked only once the command could change something, since vim beeps at one that could not. Vim
+// keeps a refused command for `.` all the same, so the functions that refuse report it as made and
+// their callers keep it; made again by `.`, it is refused again, and the rest of what `.` was
+// making is dropped, as vim drops it after an error.
+static bool _refused(Ctx* c) {
     if (!c->doc->read_only)
         return false;
     text_doc_refuse(c->doc, c->el->editor);
-    if (v->replaying)
-        v->failed = true;
-    if (kept) {
-        _keep_change(v, _count0(v));
-        v->refused = true;
-    }
+    if (c->v->replaying)
+        c->v->failed = true;
     return true;
 }
 
@@ -2123,7 +2117,7 @@ static bool _operate_on(Ctx* c, uint32_t op, const Carets* kp, const Range* r, c
 // object, its start. That is where vim leaves the cursor after a yank or a change of case, and
 // where its undo and redo put it back: so the carets are moved there before the edit, which the
 // text's undo step keeps. False when no caret's motion or object was found: vim beeps, and it is
-// no change for `.` to make again; and false when a read-only text refused it.
+// no change for `.` to make again. A read-only text's refusal is a change made, which vim keeps.
 static bool _operate(Ctx* c, uint32_t op, uint32_t prefix, uint32_t key, uint32_t arg, int count0) {
     Carets k = _carets(c->el);
     Range* r = calloc(k.count ? k.count : 1, sizeof(Range));
@@ -2184,15 +2178,18 @@ static bool _operate(Ctx* c, uint32_t op, uint32_t prefix, uint32_t key, uint32_
 
 // `op` over ranges already found, one a caret: the register takes the primary's text, the carets
 // go to each operator's start, and the edit is made as one step; `shifts` times for > and <. False
-// when a read-only text refused it, the carets at the operator's start as vim's E21 leaves them,
-// or out of memory.
+// out of memory. Refused by a read-only text it is reported as made, since vim keeps it for `.`,
+// with the carets at the operator's start as vim's E21 leaves them -- and a change takes the Esc
+// its insert would have ended with, so `.` on a text made writable again does not leave one open.
 static bool _operate_on(Ctx* c, uint32_t op, const Carets* kp, const Range* r, const size_t* start,
                         int shifts) {
     UIEditorVim* v = c->v;
     const Carets k = *kp;
-    if (op != 'y' && _refused(c, true)) {
+    if (op != 'y' && _refused(c)) {
         _place(c, start, NULL, k.count, k.primary, true);
-        return false;
+        if (op == 'c')
+            _record(v, K_ESC);
+        return true;
     }
     Change* ch = calloc(k.count ? k.count : 1, sizeof(Change));
     if (!ch)
@@ -2443,7 +2440,7 @@ static void _put_text(Ctx* c, const char* clip, RegKind kind, int width, bool af
 // p and P: the register after or before the cursor, `count` times. From nothing, a step that
 // changes nothing, which vim's saves before it finds the register empty.
 static void _put(Ctx* c, bool after, int count) {
-    if (_refused(c, true))
+    if (_refused(c))
         return;
     RegKind kind = REG_CHARS;
     const char* clip = _get_register(c, &kind);
@@ -2459,8 +2456,6 @@ static void _put(Ctx* c, bool after, int count) {
 // and only take the cursor to the line's start, where two fail. `counts`, when given, is each
 // caret's own.
 static bool _join(Ctx* c, int count0, bool spaces, const int* counts) {
-    if (_refused(c, true))
-        return false;
     Carets k = _carets(c->el);
     Change* ch = calloc(k.count ? k.count : 1, sizeof(Change));
     bool any = false;
@@ -2519,7 +2514,9 @@ static bool _join(Ctx* c, int count0, bool spaces, const int* counts) {
         ch[i].within = at_join;
         any = true;
     }
-    if (any) {
+    // Refused only where it would do something: vim beeps at a J on the last line and keeps it for
+    // nothing, and refuses a 3J there, which would move the cursor to the line's start.
+    if (any && !_refused(c)) {
         _group(c, true);
         bool joins = false;
         for (size_t i = 0; i < k.count; i++)
@@ -2538,10 +2535,10 @@ static bool _join(Ctx* c, int count0, bool spaces, const int* counts) {
     return any;
 }
 
-// r{c}: `count` characters from the cursor each made `ch`; refused past the line's end.
+// r{c}: `count` characters from the cursor each made `ch`; refused past the line's end. A read-only
+// text refuses it only where it could be made, and it is no change for `.`: vim keeps a refused r
+// for nothing.
 static bool _replace(Ctx* c, uint32_t ch, int count0) {
-    if (_refused(c, true))
-        return false;
     const int n = count0 ? count0 : 1;
     Carets k = _carets(c->el);
     Change* x = calloc(k.count ? k.count : 1, sizeof(Change));
@@ -2579,7 +2576,8 @@ static bool _replace(Ctx* c, uint32_t ch, int count0) {
         x[i].edits = true;
         any = true;
     }
-    if (any) {
+    const bool refused = any && _refused(c);
+    if (any && !refused) {
         _group(c, true);
         _apply(c, x, k.count, k.primary);
         _group(c, false);
@@ -2589,13 +2587,13 @@ static bool _replace(Ctx* c, uint32_t ch, int count0) {
     }
     free(x);
     _free_carets(&k);
-    return any;
+    return any && !refused;
 }
 
-// ~: the case of `count` characters from the cursor swapped, the cursor going on past them.
-static void _tilde(Ctx* c, int count0) {
-    if (_refused(c, true))
-        return;
+// ~: the case of `count` characters from the cursor swapped, the cursor going on past them. False
+// on an empty line, where vim beeps and keeps nothing for `.`; a read-only text refuses it only
+// where there is a character to swap, and it is kept, as vim keeps it.
+static bool _tilde(Ctx* c, int count0) {
     const int n = count0 ? count0 : 1;
     Carets k = _carets(c->el);
     Change* x = calloc(k.count ? k.count : 1, sizeof(Change));
@@ -2618,14 +2616,18 @@ static void _tilde(Ctx* c, int count0) {
         x[i].edits = true;
         any = true;
     }
-    if (any) {
+    if (any && !_refused(c)) {
         _group(c, true);
         _apply(c, x, k.count, k.primary);
         _hold_heads(c, false);
         _group(c, false);
+    } else {
+        for (size_t i = 0; x && i < k.count; i++)
+            free(x[i].owned);
     }
     free(x);
     _free_carets(&k);
+    return any;
 }
 
 // ---- Insert mode
@@ -2768,21 +2770,18 @@ static void _leave_insert(Ctx* c) {
     int* wants = _drop_indent(c, &want_count);
     // A block's I or A that put nothing in -- typed nothing, or a read-only text refused it, which
     // vim tells by length too -- ends as any insert does, not at the block's corner; and an A takes
-    // its padding out again from every line but the top, since vim pads the others only once text
-    // goes on them, and the top line before its insert begins.
+    // its padding out again -- every line's but the top's, which _block_insert does not record,
+    // since vim pads the others only once text goes on them.
     const bool nothing_in =
         v->block_insert && v->block_corner && text_doc_length(c->doc) == v->padded_length;
     if (nothing_in && v->pad_count) {
         TextEdit* cut = calloc(v->pad_count, sizeof(TextEdit));
-        size_t m = 0;
         for (size_t i = 0; cut && i < v->pad_count; i++) {
-            if (v->pad_lines[i] == v->insert_top)
-                continue;
             const size_t e = _le(c, v->pad_lines[i]);
-            cut[m++] = (TextEdit){e - v->pad_widths[i], e, "", 0};
+            cut[i] = (TextEdit){e - v->pad_widths[i], e, "", 0};
         }
-        if (cut && m)
-            ui_editor_edit(c->el, cut, m, NULL, 0, 0);
+        if (cut)
+            ui_editor_edit(c->el, cut, v->pad_count, NULL, 0, 0);
         free(cut);
     }
     v->pad_count = 0;
@@ -2859,8 +2858,11 @@ static void _insert_move(Ctx* c, uint32_t k) {
 
 // Enter in insert mode, as vim's autoindent makes it: each caret's line broken there, the new line
 // indented as the text before the caret is and the blanks after the caret dropped. A line of only
-// the indent an Enter or an `o` put in, nothing typed after it, loses its blanks.
+// the indent an Enter or an `o` put in, nothing typed after it, loses its blanks. Refused whole on
+// a text made read-only during the insert, so it leaves no indent for Esc to take out.
 static void _insert_break(Ctx* c) {
+    if (_refused(c))
+        return;
     UIEditorVim* v = c->v;
     Carets k = _carets(c->el);
     Change* x = calloc(k.count ? k.count : 1, sizeof(Change));
@@ -3630,9 +3632,13 @@ static void _block_operate(Ctx* c, uint32_t op, bool to_end, int count0, const c
     v->box_given = false;
     if (!cut || !edits || !owned)
         goto done;
-    if (op != 'y' && _refused(c, true)) {
+    // Refused, the cursor at the top left as a made block operator leaves it, and a change with
+    // the Esc its insert would have ended with, as _operate_on's.
+    if (op != 'y' && _refused(c)) {
         const size_t at = _top_left(c, &b);
         _place(c, &at, NULL, 1, 0, true);
+        if (op == 'c')
+            _record(v, K_ESC);
         goto done;
     }
     for (size_t i = 0; i < n; i++)
@@ -3784,14 +3790,16 @@ static void _block_insert(Ctx* c, bool append) {
     UIEditorVim* v = c->v;
     const Box b = _box(c);
     _note_box(c, &b);
-    if (append && b.right != INT_MAX && _vcol(c, _le(c, b.top)) <= b.right && _refused(c, false)) {
+    const bool room = !c->doc->read_only;
+    const bool top_short = append && b.right != INT_MAX && _vcol(c, _le(c, b.top)) <= b.right;
+    if (!room && top_short) {
+        _refused(c);
         _set_state(v, UI_VIM_NORMAL);
         v->box_given = false;
         const size_t at = _hold(c, _le(c, b.top));
         _place(c, &at, NULL, 1, 0, true);
         return;
     }
-    const bool room = !c->doc->read_only;
     const size_t n = b.bottom - b.top + 1;
     size_t* at = calloc(n, sizeof(size_t));
     TextEdit* pads = calloc(n, sizeof(TextEdit));
@@ -3834,7 +3842,9 @@ static void _block_insert(Ctx* c, bool append) {
             from = to = _le(c, line);
             pad = b.right + 1 - width;
             caret = from + (size_t)pad;
-            if (room && v->pad_lines && v->pad_widths) {
+            // The padding an insert that put nothing in takes out again: never the top line's,
+            // which vim makes before its insert begins.
+            if (room && line != b.top && v->pad_lines && v->pad_widths) {
                 v->pad_lines[v->pad_count] = line;
                 v->pad_widths[v->pad_count++] = (size_t)pad;
             }
@@ -3991,11 +4001,20 @@ static bool _visual_replace(Ctx* c, uint32_t ch) {
     _visual_ranges(c, &k, lines, lines, 'r', r, start);
     const TextSelection p = k.sel[k.primary];
     _note_area(c, v->state, p.anchor, p.head, k.want[k.primary]);
-    // Refused, the area is let go as a made change leaves it, with nothing changed.
-    const bool refused = _refused(c, true);
+    // Refused, the area is let go as a made change leaves it, with nothing changed, and kept for
+    // `.` as a made one is: a visual r is an operator, which vim keeps.
+    if (_refused(c)) {
+        _set_state(v, UI_VIM_NORMAL);
+        _place(c, start, NULL, k.count, k.primary, true);
+        free(x);
+        free(r);
+        free(start);
+        _free_carets(&k);
+        return true;
+    }
     char utf8[4];
     const size_t clen = text_utf8_encode(ch, utf8);
-    for (size_t i = 0; !refused && i < k.count; i++) {
+    for (size_t i = 0; i < k.count; i++) {
         const size_t lo = r[i].lo, hi = lines ? _le(c, r[i].last) : r[i].hi;
         size_t bytes = 0;
         for (size_t q = lo; q < hi;) {
@@ -4026,17 +4045,15 @@ static bool _visual_replace(Ctx* c, uint32_t ch) {
     }
     _set_state(v, UI_VIM_NORMAL);
     _place(c, start, NULL, k.count, k.primary, true);
-    if (!refused) {
-        _group(c, true);
-        _apply(c, x, k.count, k.primary);
-        _hold_heads(c, false);
-        _group(c, false);
-    }
+    _group(c, true);
+    _apply(c, x, k.count, k.primary);
+    _hold_heads(c, false);
+    _group(c, false);
     free(x);
     free(r);
     free(start);
     _free_carets(&k);
-    return !refused;
+    return true;
 }
 
 // p and P over each visual area: the area replaced by the register, `count` times -- as lines when
@@ -4536,10 +4553,15 @@ static bool _command(Ctx* c, uint32_t k) {
         case 's':
         case 'S':
             v->count = v->op_count = 0;
-            if (_operate(c, 'c', 0, k == 'C' ? '$' : k == 's' ? 'l' : 'c', 0, count0))
-                v->change_count = count0;
-            else
-                _reset(v);
+            if (_operate(c, 'c', 0, k == 'C' ? '$' : k == 's' ? 'l' : 'c', 0, count0)) {
+                // Kept as its insert ends -- or now, refused by a read-only text before one began.
+                if (v->state == UI_VIM_INSERT) {
+                    v->change_count = count0;
+                    return true;
+                }
+                _keep_change(v, count0);
+            }
+            _reset(v);
             return true;
         case 'Y':
             _operate(c, 'y', 0, 'y', 0, count0);
@@ -4558,8 +4580,8 @@ static bool _command(Ctx* c, uint32_t k) {
             _reset(v);
             return true;
         case '~':
-            _tilde(c, count0);
-            _keep_change(v, count0);
+            if (_tilde(c, count0))
+                _keep_change(v, count0);
             _reset(v);
             return true;
         case 'i':
@@ -4568,9 +4590,10 @@ static bool _command(Ctx* c, uint32_t k) {
         case 'A':
         case 'o':
         case 'O':
-            // Refused before the cursor moves, staying in normal mode, as vim does. A visual I or
-            // A goes into the insert, where each character typed is refused: vim's.
-            if (_refused(c, false)) {
+            // Refused before the cursor moves, staying in normal mode and kept for nothing, as vim
+            // does. A visual I or A goes into the insert, where each character typed is refused:
+            // vim's.
+            if (_refused(c)) {
                 _reset(v);
                 return true;
             }
@@ -4710,14 +4733,15 @@ static bool _visual_command(Ctx* c, uint32_t k) {
             break;
         case 'S':
         case 'R':
-            if (block)
-                _visual(c, UI_VIM_VISUAL_LINE);
-            _visual_operate(c, 'c', true, count0);
-            break;
         case 'c':
         case 's':
         case 'C':
-            _visual_operate(c, 'c', k == 'C', count0);
+            if ((k == 'S' || k == 'R') && block)
+                _visual(c, UI_VIM_VISUAL_LINE);
+            _visual_operate(c, 'c', k == 'S' || k == 'R' || k == 'C', count0);
+            // Kept as its insert ends -- or now, refused by a read-only text before one began.
+            if (v->state != UI_VIM_INSERT)
+                _keep_change(v, count0);
             break;
         case '<':
         case '>':

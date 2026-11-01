@@ -539,6 +539,7 @@ typedef struct Engine {
     // What is asked when the window is asked to close; NULL closes it (engine_set_close_hook).
     EngineCloseFunc close_hook;
     void* close_user;
+    bool ending; // the run was ending as the window's events were read: a close then asks nothing
 
     // Bone visualization
     ShaderProgram* bone_program;
@@ -887,9 +888,10 @@ void engine_request_frame(Engine* engine);
 void engine_request_frame_after(Engine* engine, double seconds);
 // A result is coming from another thread that will be drawn: a headless run in idle mode does not
 // end while one is out, and draws no frame until it is in, so the frame after the one that began
-// it has it on any machine (spec 14.7). Called as the work starts -- by the code that starts it,
-// not by the worker, which may not have run yet -- and never frames ahead of its start: headless,
-// the frame that would start it would wait for it. Any thread.
+// it has it on any machine (spec 14.7). So the work counted must end on its own, with no frame
+// drawn in between: begun as it starts -- by the code that starts it, not by the worker, which may
+// not have run yet -- never frames ahead, and ended by the worker, never by a frame that drains
+// what it posted. Either way the frame it needs would wait for it. Any thread.
 void engine_begin_work(Engine* engine);
 // The result is in: ends what engine_begin_work began and asks for a frame. Any thread.
 void engine_end_work(Engine* engine);

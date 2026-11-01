@@ -108,7 +108,8 @@ void text_doc_seal_undo(TextDoc* doc);
 // starts another.
 void text_doc_group(TextDoc* doc, bool open, const void* view);
 // A step of undo that changes nothing, which an undo takes back doing nothing but putting the
-// editor `view`'s selections back: an operator over nothing. Inside a group's step, nothing.
+// editor `view`'s selections back: an operator over nothing. Inside a group's step, or on a
+// read-only text, nothing.
 void text_doc_empty_step(TextDoc* doc, void* view);
 // Undo or redo from an editor, which is given the step's selections whoever made it. Refused and
 // told to on_refused while the text is read-only.

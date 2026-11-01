@@ -1239,10 +1239,10 @@ static void board_late_start(Engine* engine) {
 
 // Applies the board once its thread has filled it, or at exit only joins the thread, which may
 // still be filling it, and drops it: a thread outliving the engine would end its work on freed
-// memory.
-static void board_late_settle(bool at_exit) {
+// memory. True when it applied the board.
+static bool board_late_settle(bool at_exit) {
     if (!g_late_edit || (!at_exit && !atomic_load(&g_late_ready)))
-        return;
+        return false;
     if (g_late_thread_live)
         cetra_thread_join(g_late_thread);
     g_late_thread_live = false;
@@ -1252,6 +1252,7 @@ static void board_late_settle(bool at_exit) {
     }
     free_canvas_edit(g_late_edit);
     g_late_edit = NULL;
+    return !at_exit;
 }
 
 static void board_script(void) {
@@ -1461,17 +1462,15 @@ static const char* g_ui_text;   // --ui-text: a label in the --ui panel
 static UISystem* g_ui_live;     // the UI given the real pointer and keyboard each frame
 
 // --refuse-close (spec 14.7): the first close the window is asked for refused and said, as an app
-// holding unsaved work would; the next taken.
+// holding unsaved work would; the next taken. So one close was refused once one was asked.
 static bool g_refuse_close;
-static int g_close_asked, g_close_refused;
+static int g_close_asked;
 
 static bool canvas_close(Engine* engine, void* user) {
     (void)engine;
     (void)user;
-    g_close_asked++;
-    if (g_close_refused)
+    if (g_close_asked++)
         return true;
-    g_close_refused++;
     printf("canvas: the close was refused; ask again to close\n");
     fflush(stdout);
     return false;
@@ -2177,13 +2176,18 @@ static bool build_editor(UISystem* ui, const char* const* paths, int count, bool
 }
 
 // "canvas <what> <the text, as hex>".
+// "canvas <what> <bytes as hex>" for the probe; NULL bytes print none.
+static void say_hex(const char* what, const char* bytes, size_t len) {
+    printf("canvas %s ", what);
+    for (size_t i = 0; bytes && i < len; i++)
+        printf("%02x", (unsigned char)bytes[i]);
+    printf("\n");
+}
+
 static void say_text(const char* what, const TextDoc* doc) {
     size_t len = 0;
     char* text = text_doc_text(doc, &len);
-    printf("canvas %s ", what);
-    for (size_t i = 0; text && i < len; i++)
-        printf("%02x", (unsigned char)text[i]);
-    printf("\n");
+    say_hex(what, text, len);
     free(text);
 }
 
@@ -2283,9 +2287,7 @@ static void history_stream(Engine* engine);
 
 static void on_update(Engine* engine, float dt) {
     (void)dt;
-    const bool late = g_late_edit && g_late_started;
-    board_late_settle(false);
-    if (g_idle_say && late && !g_late_edit)
+    if (board_late_settle(false) && g_idle_say)
         printf("canvas idle work landed %zu\n", engine->total_frames + 1);
     if (g_idle_say)
         printf("canvas idle frame %zu delta %.6f\n", engine->total_frames + 1, engine->delta_time);
@@ -3117,7 +3119,7 @@ int main(int argc, char** argv) {
     engine_run(engine, on_update, NULL, NULL);
     // How often the window was asked to close and refused it, and the frames the run drew.
     if (probe)
-        printf("canvas close asked %d refused %d frames %zu\n", g_close_asked, g_close_refused,
+        printf("canvas close asked %d refused %d frames %zu\n", g_close_asked, g_close_asked > 0,
                engine->total_frames);
     if (g_idle_say)
         printf("canvas idle frames %zu waited %.6f\n", engine->total_frames, engine->time_waited);
@@ -3162,16 +3164,14 @@ int main(int argc, char** argv) {
         printf("canvas editor settled %d\n", ui_editor_settled(pane) ? 1 : 0);
         // What the texts refused, being read-only, and the clipboard, as hex.
         printf("canvas editor refused %d\n", g_editor_sheet.refused);
-        printf("canvas editor clip ");
-        for (const char* p = engine_clipboard_get(engine); p && *p; p++)
-            printf("%02x", (unsigned char)*p);
-        printf("\n");
+        const char* clip = engine_clipboard_get(engine);
+        say_hex("editor clip", clip, clip ? strlen(clip) : 0);
         // With --vim: its state, and what the last line typed came to, as hex.
         if (g_editor_sheet.vim) {
-            printf("canvas editor vim %d ", (int)ui_editor_vim_state(g_editor_sheet.vim));
-            for (const char* p = g_editor_sheet.message; *p; p++)
-                printf("%02x", (unsigned char)*p);
-            printf("\n");
+            char what[32];
+            snprintf(what, sizeof(what), "editor vim %d",
+                     (int)ui_editor_vim_state(g_editor_sheet.vim));
+            say_hex(what, g_editor_sheet.message, strlen(g_editor_sheet.message));
         }
         float ex = 0.0f, ey = 0.0f;
         if (count && ui_editor_point_of(pane, r[0].start, &ex, &ey))

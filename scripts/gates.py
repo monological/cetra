@@ -28395,18 +28395,23 @@ def run_ui_gate(workdir):
                      which the probe says, and the arm says when it did not.
       ui-editor-read-only apps/canvas --editor --read-only, driven by a script (spec
                      14.7): typing, Backspace, cut and paste change nothing; the
-                     word Cmd+D takes copied, and cut, to the clipboard; the caret
-                     moves; each action one refusal (end to end).
+                     word Cmd+D takes is cut with nothing copied before, and reaches
+                     the clipboard; the caret moves; each action one refusal (end to
+                     end).
       ui-vim-read-only the vim mode on a read-only text, as vim with 'nomodifiable'
-                     (spec 14.7): 3dd and 5J one refusal each, told with the
-                     editor; a visual delete letting the area go with the cursor at
-                     its start; . making the refused command again, refused again,
-                     and with the text writable making it; a block's I into an insert
-                     whose typing is refused; a text made read-only during an insert
-                     keeping the insert open until Esc. Then apps/canvas --editor
-                     --vim --read-only by a script: x, dd, p, ., cw, i and o change
-                     nothing, w and j move, yiw yanks to the clipboard, and the
-                     refusals are counted (end to end).
+                     (spec 14.7): a visual delete letting the area go with the cursor
+                     at its start, told with the editor; 3dd and 5J one refusal each;
+                     . making the refused command again, refused again, and with the
+                     text writable making it; a block's I into an insert whose typing
+                     is refused; a text made read-only during an insert keeping the
+                     insert open until Esc. Against vim 9.2: what . makes of a refused
+                     visual put (the delete under it) and a refused 3s (its count)
+                     once the text is writable, a J on the last line, an r past the
+                     line's end and a ~ on an empty line beeped at rather than
+                     refused, and a refused r kept for nothing. Then apps/canvas
+                     --editor --vim --read-only by a script: yiw yanks first, x, dd,
+                     p, ., cw, i and o change nothing and leave the clipboard as
+                     yanked, w and j move, and the refusals are counted (end to end).
       ui-vim-read-only-oracle the oracle's corpus again on a read-only text, beside vim
                      with 'nomodifiable': the text and the cursor must agree. Three
                      sequences are left out by name: with their `o` refused, what
@@ -29478,15 +29483,12 @@ def run_ui_gate(workdir):
                            script, frames=7)
     _, done = _canvas_run(workdir, "editor_done", "--editor", text_path, "--input-script", script,
                           frames=16)
-    typed_hex = (typed.get(("editor", "hex")) or [""])[0]
-    done_hex = (done.get(("editor", "hex")) or [""])[0]
-    typed_sel = [int(v) for v in typed.get(("editor", "sel"), [])]
-    done_sel = [int(v) for v in done.get(("editor", "sel"), [])]
-    ok = (typed_hex == b"XYone two\nXYone four\n".hex() and typed_sel == [2, 2, 2, 12, 12]
-          and done_hex == b"one two\none four\n".hex() and done_sel == [1, 0, 3])
-    detail = (f"typed at two carets {bytes.fromhex(typed_hex)!r} {typed_sel} (want "
+    typed, done = _canvas_editor(typed), _canvas_editor(done)
+    ok = (typed["text"] == b"XYone two\nXYone four\n" and typed["sel"] == [2, 2, 2, 12, 12]
+          and done["text"] == b"one two\none four\n" and done["sel"] == [1, 0, 3])
+    detail = (f"typed at two carets {typed['text']!r} {typed['sel']} (want "
               f"b'XYone two\\nXYone four\\n' [2, 2, 2, 12, 12]); undone, the word at the caret "
-              f"taken and found again {bytes.fromhex(done_hex)!r} {done_sel} (want the file as it "
+              f"taken and found again {done['text']!r} {done['sel']} (want the file as it "
               f"was, [1, 0, 3])")
     print(f"  ui-editor-script      {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-editor-script", ok)
@@ -29498,14 +29500,11 @@ def run_ui_gate(workdir):
                 "15 type=1\n17 key=enter\n19 type=.\n21 type=/\n23 type=zzz\n25 key=enter\n")
     _, run = _canvas_run(workdir, "vim_script", "--editor", text_path, "--vim", "--input-script",
                          script, frames=28)
-    run_hex = (run.get(("editor", "hex")) or [""])[0]
-    run_sel = [int(v) for v in run.get(("editor", "sel"), [])]
-    vim_said = run.get(("editor", "vim"), [])
-    message = bytes.fromhex(vim_said[1]).decode() if len(vim_said) > 1 else ""
-    ok = (run_hex == b"wo\none our\n".hex() and run_sel == [1, 0, 0] and vim_said[:1] == ["0"]
-          and message == "Pattern not found: zzz")
-    detail = (f"{bytes.fromhex(run_hex)!r} {run_sel}, normal mode {vim_said[:1] == ['0']}, said "
-              f"{message!r} (want b'wo\\none our\\n' [1, 0, 0], 'Pattern not found: zzz')")
+    run = _canvas_editor(run)
+    ok = (run["text"] == b"wo\none our\n" and run["sel"] == [1, 0, 0] and run["vim"] == 0
+          and run["said"] == "Pattern not found: zzz")
+    detail = (f"{run['text']!r} {run['sel']}, normal mode {run['vim'] == 0}, said "
+              f"{run['said']!r} (want b'wo\\none our\\n' [1, 0, 0], 'Pattern not found: zzz')")
     print(f"  ui-vim-script         {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-vim-script", ok)
 
@@ -29561,48 +29560,48 @@ def run_ui_gate(workdir):
     ro_path = os.path.join(workdir, "editor_read_only.txt")
     with open(ro_path, "w", encoding="utf-8", newline="") as f:
         f.write("one two\nthree four\n")
-    ro_text = b"one two\nthree four\n".hex()
+    ro_text = b"one two\nthree four\n"
     ro_script = os.path.join(workdir, "editor_read_only.script")
+    # The word Cmd+D takes is cut with nothing copied before, so the clipboard says the cut copied.
     with open(ro_script, "w", encoding="utf-8") as f:
-        f.write("3 type=XY\n5 key=backspace\n7 key=mod+d\n9 key=mod+c\n11 key=mod+x\n"
-                "13 key=mod+v\n15 key=right\n")
+        f.write("3 type=XY\n5 key=backspace\n7 key=mod+d\n9 key=mod+x\n11 key=mod+v\n"
+                "13 key=right\n")
     _, ro = _canvas_run(workdir, "editor_read_only", "--editor", ro_path, "--read-only",
-                        "--input-script", ro_script, frames=18)
-    ro_hex = (ro.get(("editor", "hex")) or [""])[0]
-    ro_sel = [int(v) for v in ro.get(("editor", "sel"), [])]
-    ro_clip = bytes.fromhex((ro.get(("editor", "clip")) or [""])[0])
-    ro_refused = int((ro.get(("editor", "refused")) or ["-1"])[0])
+                        "--input-script", ro_script, frames=16)
+    ro = _canvas_editor(ro)
     # The two letters, the cut and the paste: Backspace at the text's start deletes nothing.
-    ok = ro_hex == ro_text and ro_sel == [1, 3, 3] and ro_clip == b"one" and ro_refused == 4
-    detail = (f"the text {'unchanged' if ro_hex == ro_text else 'changed'}, selections {ro_sel}, "
-              f"clipboard {ro_clip!r}, {ro_refused} refused (want unchanged, [1, 3, 3], b'one', "
-              f"4)")
+    ok = (ro["text"] == ro_text and ro["sel"] == [1, 3, 3] and ro["clip"] == b"one"
+          and ro["refused"] == 4)
+    detail = (f"the text {'unchanged' if ro['text'] == ro_text else 'changed'}, selections "
+              f"{ro['sel']}, clipboard {ro['clip']!r}, {ro['refused']} refused (want unchanged, "
+              f"[1, 3, 3], b'one', 4)")
     print(f"  ui-editor-read-only   {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-editor-read-only", ok)
 
     # ---- the vim mode on a read-only text: the probe, then end to end
-    ok, detail = doc_flags("vim-read-only", 8, "3dd and 5J one refusal each, told with the editor, "
-                           "a visual delete letting the area go with the cursor at its start, . "
-                           "refusing the refused command again and making it once writable, a "
-                           "block's I into an insert whose typing is refused, and an insert the "
-                           "text was made read-only in kept open until Esc")
+    ok, detail = doc_flags("vim-read-only", 14, "a visual delete letting the area go with the "
+                           "cursor at its start, told with the editor, 3dd and 5J one refusal "
+                           "each, . refusing the refused command again and making it once "
+                           "writable, a block's I into an insert whose typing is refused, an insert "
+                           "the text was made read-only in kept open until Esc; and against vim, "
+                           "what . makes of a refused visual put and 3s once writable, and a J, r "
+                           "and ~ that could change nothing beeped at rather than refused, a "
+                           "refused r kept for nothing")
+    # The clipboard yanked first, which none of the refused commands after may change.
     with open(ro_script, "w", encoding="utf-8") as f:
-        f.write("3 type=x\n5 type=dd\n7 type=p\n9 type=.\n11 type=cw\n13 type=i\n15 type=w\n"
-                "17 type=yiw\n19 type=o\n21 type=j\n")
+        f.write("3 type=yiw\n5 type=x\n7 type=dd\n9 type=p\n11 type=.\n13 type=cw\n15 type=i\n"
+                "17 type=w\n19 type=o\n21 type=j\n")
     _, rv = _canvas_run(workdir, "vim_read_only", "--editor", ro_path, "--vim", "--read-only",
                         "--input-script", ro_script, frames=24)
-    rv_hex = (rv.get(("editor", "hex")) or [""])[0]
-    rv_sel = [int(v) for v in rv.get(("editor", "sel"), [])]
-    rv_clip = bytes.fromhex((rv.get(("editor", "clip")) or [""])[0])
-    rv_refused = int((rv.get(("editor", "refused")) or ["-1"])[0])
-    rv_normal = (rv.get(("editor", "vim")) or ["-1"])[0] == "0"
+    rv = _canvas_editor(rv)
     # x, dd, p, the p `.` makes again, cw, i and o.
-    script_ok = (rv_hex == ro_text and rv_sel == [1, 12, 12] and rv_clip == b"two"
-                 and rv_refused == 7 and rv_normal)
+    script_ok = (rv["text"] == ro_text and rv["sel"] == [1, 12, 12] and rv["clip"] == b"one"
+                 and rv["refused"] == 7 and rv["vim"] == 0)
     ok = ok and script_ok
-    detail += (f"; by a script, the text {'unchanged' if rv_hex == ro_text else 'changed'}, "
-               f"selections {rv_sel}, clipboard {rv_clip!r}, {rv_refused} refused, normal mode "
-               f"{rv_normal} (want unchanged, [1, 12, 12], b'two', 7, True)")
+    detail += (f"; by a script, the text {'unchanged' if rv['text'] == ro_text else 'changed'}, "
+               f"selections {rv['sel']}, clipboard {rv['clip']!r}, {rv['refused']} refused, "
+               f"normal mode {rv['vim'] == 0} (want unchanged, [1, 12, 12], b'one' as yanked "
+               f"first, 7, True)")
     print(f"  ui-vim-read-only      {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-vim-read-only", ok)
 
@@ -30353,6 +30352,22 @@ def _canvas_run(workdir, tag, *args, frames=2, env=None):
     return out, probe
 
 
+def _canvas_editor(probe):
+    """The editor's lines from a _canvas_run probe: the focused pane's text as bytes ("text"), its
+    selections, the count then each anchor and head ("sel"), the changes the texts refused
+    ("refused", -1 for no line), the clipboard as bytes ("clip"), and with --vim its state ("vim",
+    -1 for no line) and what its line said ("said")."""
+    vim = probe.get(("editor", "vim")) or []
+    return {
+        "text": bytes.fromhex((probe.get(("editor", "hex")) or [""])[0]),
+        "sel": [int(v) for v in probe.get(("editor", "sel"), [])],
+        "refused": int((probe.get(("editor", "refused")) or ["-1"])[0]),
+        "clip": bytes.fromhex((probe.get(("editor", "clip")) or [""])[0]),
+        "vim": int(vim[0]) if vim else -1,
+        "said": bytes.fromhex(vim[1]).decode() if len(vim) > 1 else "",
+    }
+
+
 def _canvas_cell(tokens):
     """A probe line's cell: its box in framebuffer pixels and its named measures."""
     box = tuple(int(v) for v in tokens[1:5])
@@ -31001,9 +31016,10 @@ def _canvas_coverage(path):
 
 def _idle_run(workdir, tag, *args, frames=50, idle=True):
     """apps/canvas under --idle unless told otherwise: its picture's path, and from its idle lines
-    each frame's delta_time, the run's frames drawn and seconds waited, and the size of a texture it
-    loaded, as {"deltas": [...], "frames": n, "waited": s, "loaded": (w, h)}; None and an empty
-    dict for a run that failed."""
+    each frame's delta_time, the run's frames drawn and seconds waited, the size of a texture it
+    loaded, and the frames its late work was begun and landed in, as {"deltas": [...], "frames": n,
+    "waited": s, "loaded": (w, h), "begun": n, "landed": n}; None and an empty dict for a run that
+    failed."""
     out = os.path.join(workdir, f"idle_{tag}.ppm")
     stdout = _canvas_shot(out, frames, *(["--idle"] if idle else []), *args)
     if stdout is None:
@@ -31017,6 +31033,8 @@ def _idle_run(workdir, tag, *args, frames=50, idle=True):
             said["frames"], said["waited"] = int(p[3]), float(p[5])
         elif p[:3] == ["canvas", "idle", "loaded"] and len(p) == 5:
             said["loaded"] = (int(p[3]), int(p[4]))
+        elif p[:3] == ["canvas", "idle", "work"] and len(p) == 5:
+            said[p[3]] = int(p[4])
     return out, said
 
 
@@ -31073,7 +31091,7 @@ def run_idle_gate(workdir):
       engine-close-hook the window's close, which the app may refuse (spec 14.7), asked by an
                      input script's close as the close button asks it: refused the first time and
                      taken the second, the run ending on the frame of the second; with no hook
-                     the first ends it; and a close over four frames asked once.
+                     the first ends it; and a close over four frames asked once, on the first.
     """
     failed = []
 
@@ -31228,14 +31246,8 @@ def run_idle_gate(workdir):
         f.write("0-20 idle\n")
 
     def work_run(delay):
-        out = os.path.join(workdir, f"idle_work_{delay}.ppm")
-        stdout = _canvas_shot(out, 50, "--idle", "--sheet", "board", "--edit-thread",
-                              "--work-delay", str(delay), "--input-script", script)
-        said = {}
-        for line in (stdout or "").splitlines():
-            p = line.split()
-            if p[:3] == ["canvas", "idle", "work"] and len(p) == 5:
-                said[p[3]] = int(p[4])
+        _, said = _idle_run(workdir, f"work_{delay}", "--sheet", "board", "--edit-thread",
+                            "--work-delay", str(delay), "--input-script", script)
         return said.get("begun"), said.get("landed")
 
     runs = {delay: work_run(delay) for delay in (0, 300)}
@@ -31260,11 +31272,13 @@ def run_idle_gate(workdir):
     twice = close_run("twice", "5 close\n9 close\n", "--refuse-close")
     alone = close_run("alone", "5 close\n9 close\n")
     held = close_run("held", "3-6 close\n", "--refuse-close")
+    first = close_run("first", "3-6 close\n")
     # The script's frame N ends as the run's frame N + 2, as its typing reaches that frame.
-    ok = twice == (2, 1, 11) and alone == (0, 0, 7) and held == (1, 1, 30)
+    ok = (twice == (2, 1, 11) and alone == (0, 0, 7) and held == (1, 1, 30)
+          and first == (0, 0, 5))
     detail = (f"asked, refused and frames drawn: refused then taken {twice} (want (2, 1, 11)), "
               f"no hook {alone} (want (0, 0, 7)), a close over frames 3 to 6 {held} (want "
-              f"(1, 1, 30))")
+              f"(1, 1, 30)) and with no hook {first} (want (0, 0, 5), its first frame)")
     print(f"  engine-close-hook   {'PASS' if ok else 'FAIL'}  {detail}")
     note("engine-close-hook", ok)
 

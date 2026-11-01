@@ -958,15 +958,16 @@ static void _engine_frame_end_requests(Engine* engine) {
         engine_request_frame(engine);
 }
 
-typedef enum { IDLE_DRAW, IDLE_WAIT, IDLE_DONE } IdleNext;
+typedef enum { IDLE_DRAW, IDLE_WAIT, IDLE_WAIT_WORK, IDLE_DONE } IdleNext;
 
-// Under idle mode, what follows this frame: the next drawn, a wait for something to ask, or --
-// headless, with nothing asking and nothing out that will -- the end of the run.
+// Under idle mode, what follows this frame: the next drawn, a wait for something to ask, a wait for
+// the work out, or -- headless, with nothing asking and nothing out that will -- the end of the
+// run.
 //
 // Everything that knows it wants a frame asks during the frame (engine_request_frame); the input
 // script alone is asked here, since its frame plays after this is decided, at the end of the
-// frame's events. The work out is read BEFORE the request: engine_end_work asks before it lowers
-// its count, so this sees one or the other and never neither.
+// frame's events. The work out is read BEFORE the request: engine_end_work stores its request
+// before it lowers its count, so this sees one or the other and never neither.
 //
 // Headless, work out is waited for before anything else that asks (spec 14.7), so what a frame
 // began has landed by the next on any machine: a script's frame N + 1 sees the work frame N began.
@@ -976,7 +977,7 @@ static IdleNext _engine_idle_next(const Engine* engine) {
     const EngineWake* w = engine->wake;
     const bool working = atomic_load(&w->work_out) > 0;
     if (working && engine->headless)
-        return IDLE_WAIT;
+        return IDLE_WAIT_WORK;
     const bool pending =
         working || async_loader_is_busy(engine->async_loader) || isfinite(w->wake_at);
     if (atomic_load(&w->requested) || glfwGetTime() >= w->wake_at ||
@@ -998,12 +999,18 @@ static IdleNext _engine_idle_next(const Engine* engine) {
  * advance: the next frame is adjacent to this one, and every history that tests for a gap keeps
  * what it had.
  *
- * Headless work that never ends would hold the run here in silence, so it is said once, after
- * ENGINE_WORK_WARN_SECONDS; the run goes on waiting.
+ * Waiting for headless work, a timed wake cannot draw the next frame, so it is no deadline: the
+ * wait runs until the work's end wakes it. Work that never ends would hold the run here in silence,
+ * so it is said once, after ENGINE_WORK_WARN_SECONDS, and the run goes on waiting.
+ *
+ * A close request read here is asked of the app only when the run was not ending already: the frame
+ * limit, idle mode's headless end or the app itself setting the window's flag decided that, and a
+ * refusal clearing the flag must not undo it.
  */
 #define ENGINE_WORK_WARN_SECONDS 10.0
 
 static void _engine_frame_events(Engine* engine) {
+    engine->ending = glfwWindowShouldClose(engine->window);
     if (!engine->idle) {
         glfwPollEvents();
         return;
@@ -1012,23 +1019,22 @@ static void _engine_frame_events(Engine* engine) {
     // Raised before anything is read, as a request stores its flag before it reads this: either the
     // request sees the loop waiting and wakes it, or the loop sees the request.
     atomic_store(&w->waiting, true);
-    const double began = glfwGetTime();
-    bool warned = false;
-    while (_engine_idle_next(engine) == IDLE_WAIT && !glfwWindowShouldClose(engine->window)) {
+    double warn_at = glfwGetTime() + ENGINE_WORK_WARN_SECONDS;
+    IdleNext next;
+    while (((next = _engine_idle_next(engine)) == IDLE_WAIT || next == IDLE_WAIT_WORK) &&
+           !glfwWindowShouldClose(engine->window)) {
         const double start = glfwGetTime();
-        const bool working = engine->headless && atomic_load(&w->work_out) > 0;
-        const double until =
-            working && !warned ? fmin(w->wake_at, began + ENGINE_WORK_WARN_SECONDS) : w->wake_at;
+        const double until = next == IDLE_WAIT_WORK ? warn_at : w->wake_at;
         if (isfinite(until))
             glfwWaitEventsTimeout(until > start ? until - start : 0.0);
         else
             glfwWaitEvents();
         engine->time_waited += glfwGetTime() - start;
-        if (working && !warned && glfwGetTime() - began >= ENGINE_WORK_WARN_SECONDS) {
+        if (next == IDLE_WAIT_WORK && glfwGetTime() >= warn_at) {
             log_warn("headless: work begun with engine_begin_work, %d of it, has not ended in %.0f "
                      "s; the run waits for it",
                      atomic_load(&w->work_out), ENGINE_WORK_WARN_SECONDS);
-            warned = true;
+            warn_at = INFINITY;
         }
         if (!engine->headless)
             break;
@@ -1043,16 +1049,21 @@ static void _engine_frame_events(Engine* engine) {
         w->wake_at = INFINITY;
 }
 
+// A loop waiting for events sees no flag: an empty event wakes it, GLFW's one call that may be made
+// from any thread. Called after the store the loop is to see, as the wait raises `waiting` before
+// its reads.
+static void _engine_wake(EngineWake* w) {
+    if (atomic_load(&w->waiting))
+        glfwPostEmptyEvent();
+}
+
 void engine_request_frame(Engine* engine) {
     if (!engine) {
         log_error("engine_request_frame: NULL engine");
         return;
     }
     atomic_store(&engine->wake->requested, true);
-    // A loop waiting for events sees no flag: an empty event wakes it, GLFW's one call that may be
-    // made from any thread. After the store, as the wait raises `waiting` before its reads.
-    if (atomic_load(&engine->wake->waiting))
-        glfwPostEmptyEvent();
+    _engine_wake(engine->wake);
 }
 
 // A day: past anything a frame is asked for, and short of Win32's 49-day millisecond wait.
@@ -1086,9 +1097,10 @@ void engine_end_work(Engine* engine) {
         log_error("engine_end_work: NULL engine");
         return;
     }
-    // The request first. The loop reads the work count before the request, so it sees either the
-    // work still out or the request already made, and never neither.
-    engine_request_frame(engine);
+    // The request is stored before the count falls, and the loop reads the count before the
+    // request, so it sees either the work still out or the request already made, and never
+    // neither. The one wake comes after both, so a waiting loop wakes to the count already fallen.
+    atomic_store(&engine->wake->requested, true);
     atomic_int* out = &engine->wake->work_out;
     int was = atomic_load(out);
     do {
@@ -1097,10 +1109,7 @@ void engine_end_work(Engine* engine) {
             return;
         }
     } while (!atomic_compare_exchange_weak(out, &was, was - 1));
-    // And a wake after it. Headless the loop waits while work is out whatever has asked, so a loop
-    // the request woke before the count fell has gone back to waiting, and only this wakes it.
-    if (atomic_load(&engine->wake->waiting))
-        glfwPostEmptyEvent();
+    _engine_wake(engine->wake);
 }
 
 void engine_set_close_hook(Engine* engine, EngineCloseFunc fn, void* user) {
@@ -1121,9 +1130,10 @@ static void _engine_close_asked(Engine* engine) {
     }
 }
 
+// Asked only when the run was not ending already as the events were read (_engine_frame_events).
 static void _engine_close_callback(GLFWwindow* window) {
     Engine* engine = glfwGetWindowUserPointer(window);
-    if (engine)
+    if (engine && !engine->ending)
         _engine_close_asked(engine);
 }
 
@@ -2120,10 +2130,11 @@ static void _engine_input_script_frame(Engine* engine) {
 }
 
 // A `close` the frame playing holds, asked as the frame ends, as the close button would ask it:
-// the window's flag set first, as GLFW sets it.
+// the window's flag set first, as GLFW sets it. Not asked when the app ended the run in this frame
+// already, which a refusal must not undo.
 static void _engine_input_script_close(Engine* engine) {
     InputScript* s = engine->input_script;
-    if (!s || !s->close_due)
+    if (!s || !s->close_due || glfwWindowShouldClose(engine->window))
         return;
     s->close_due = false;
     glfwSetWindowShouldClose(engine->window, GLFW_TRUE);
@@ -4065,7 +4076,8 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
         _engine_frame_end_requests(engine);
         profiler_end_frame(engine->profiler);
 
-        // A script's close, before the frame limit below, which a refusal must not undo.
+        // A script's close, asked before the screenshot below, so one taken makes this frame the
+        // run's last and its screenshot.
         _engine_input_script_close(engine);
 
         // Engine-owned frame limit (CI/headless): requests close so the
