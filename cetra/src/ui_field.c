@@ -72,8 +72,6 @@ struct UIField {
 
     UIActionFn on_change;
     void* change_user;
-    UIKeyFn on_key;
-    void* key_user;
 };
 
 // A single-line field's one row, whatever it holds.
@@ -469,15 +467,6 @@ void ui_field_set_on_change(UIElement* el, UIActionFn on_change, void* user) {
     el->field->change_user = user;
 }
 
-void ui_field_set_on_key(UIElement* el, UIKeyFn on_key, void* user) {
-    if (!el || !el->field) {
-        log_error("ui_field_set_on_key: not a text field");
-        return;
-    }
-    el->field->on_key = on_key;
-    el->field->key_user = user;
-}
-
 // ------------------------------------------------------------------- the keys
 
 static bool _has_selection(const UIField* f) {
@@ -739,8 +728,8 @@ static void _keys_end(UIElement* el) {
         f->on_change(el, f->change_user);
 }
 
-// One key or character, the field's on_key first: false for a key it does not use -- Esc, Tab,
-// Page Up or Page Down on one line, and a key it types from the character after it.
+// One key or character: false for a key it does not use -- Esc, Tab, Page Up or Page Down on one
+// line, and a key it types from the character after it.
 static bool _take_key(const UISystem* ui, UIElement* el, UIRect content, const InputKeyEvent* ev) {
     UIField* f = el ? el->field : NULL;
     if (!f || !ev)
@@ -749,8 +738,6 @@ static bool _take_key(const UISystem* ui, UIElement* el, UIRect content, const I
         _type(f, ev->codepoint);
         return true;
     }
-    if (f->on_key && f->on_key(el, ev, f->key_user))
-        return true;
     return _key(ui, el, f, content, ev);
 }
 

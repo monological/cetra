@@ -1460,6 +1460,30 @@ static bool g_probe;            // --canvas-probe: the run says what it did
 static const char* g_ui_text;   // --ui-text: a label in the --ui panel
 static UISystem* g_ui_live;     // the UI given the real pointer and keyboard each frame
 
+// --ui-keys (spec 14.10): the --ui panel takes keys through a hook, as a pane an app draws would,
+// and its label says the last two things it was handed. It takes every character and no key, so
+// Tab and Esc reach the screen.
+static bool g_ui_keys;
+static UIElement* g_keys_label;
+static char g_keys_said[2][32];
+
+static bool panel_keys(UIElement* el, const InputKeyEvent* k, void* user) {
+    (void)el;
+    (void)user;
+    memcpy(g_keys_said[0], g_keys_said[1], sizeof(g_keys_said[1]));
+    if (k->codepoint) {
+        char ch[5] = {0};
+        text_utf8_encode(k->codepoint, ch);
+        snprintf(g_keys_said[1], sizeof(g_keys_said[1]), "char %s", ch);
+    } else {
+        snprintf(g_keys_said[1], sizeof(g_keys_said[1]), "key %d mods %d", k->key, k->mods);
+    }
+    char text[80];
+    snprintf(text, sizeof(text), "%s\n%s", g_keys_said[0], g_keys_said[1]);
+    ui_set_text(g_keys_label, text);
+    return k->codepoint != 0;
+}
+
 // --refuse-close (spec 14.7): the first close the window is asked for refused and said, as an app
 // holding unsaved work would; the next taken. So one close was refused once one was asked.
 static bool g_refuse_close;
@@ -2294,7 +2318,7 @@ static bool build_editor(UISystem* ui, const char* const* paths, int count, bool
         s->prompt = ui_text_field(row, 0, editor_prompt_submit, s);
         ui_set_size(s->prompt, UI_GROW, 0.0f, UI_FIT, 0.0f);
         ui_field_set_on_change(s->prompt, editor_prompt_change, s);
-        ui_field_set_on_key(s->prompt, editor_prompt_key, s);
+        ui_set_on_key(s->prompt, editor_prompt_key, s);
         editor_vim_status(s);
     }
     ui_push(ui, screen);
@@ -2902,7 +2926,7 @@ static void build_palette(UISystem* ui) {
     g_pal_field = ui_text_field(box, 0, on_palette_submit, NULL);
     ui_set_size(g_pal_field, UI_GROW, 0.0f, UI_FIT, 0.0f);
     ui_field_set_on_change(g_pal_field, on_palette_change, NULL);
-    ui_field_set_on_key(g_pal_field, on_palette_key, NULL);
+    ui_set_on_key(g_pal_field, on_palette_key, NULL);
     // The rows in a pane with no gaps between them, as tall as they are up to PALETTE_ROWS of them,
     // and scrolling past that.
     g_pal_list = ui_scroll(box);
@@ -2964,7 +2988,8 @@ static void usage(const char* argv0) {
             "MS]\n"
             "          [--split] [--only-view 0|1] [--ui] [--budget]\n"
             "          [--idle] [--idle-wake S,...] [--idle-load PATH] [--input-script PATH]\n"
-            "          [--ui-enter] [--ui-text TEXT] [--gui-click] [--history] [--palette]\n"
+            "          [--ui-enter] [--ui-text TEXT] [--ui-keys] [--gui-click] [--history] "
+            "[--palette]\n"
             "          [--font-sheet] [--editor FILE] [--editor-lag FRAMES] [--vim] [--read-only]\n"
             "          [--refuse-close]\n",
             argv0);
@@ -3077,6 +3102,9 @@ int main(int argc, char** argv) {
         } else if (strcmp(argv[i], "--ui-text") == 0 && more) {
             with_ui = true;
             g_ui_text = argv[++i];
+        } else if (strcmp(argv[i], "--ui-keys") == 0) {
+            with_ui = true;
+            g_ui_keys = true;
         } else if (strcmp(argv[i], "--gui-click") == 0) {
             g_gui_click = true;
         } else {
@@ -3234,6 +3262,16 @@ int main(int argc, char** argv) {
         ui_set_style(panel, &(UIStyle){.bg = {0.2f, 0.6f, 0.9f, 1.0f}});
         if (g_ui_text)
             ui_label(panel, g_ui_text);
+        // Under --ui-keys the panel is focused by a press and takes the keys, and a field under it
+        // is something to move the pointer across while it holds the focus.
+        if (g_ui_keys) {
+            panel->focusable = true;
+            g_keys_label = ui_label(panel, "click, then type");
+            ui_set_on_key(panel, panel_keys, NULL);
+            ui_text_field(ui_screen_root(screen), 0, NULL, NULL);
+            ui_screen_set_modal(screen, false);
+            g_ui_live = ui;
+        }
         // Under --ui-enter, the panel fades in and a button in it takes focus, so the UI has a
         // screen entering and an ease to play out before it is still.
         if (ui_enter) {
