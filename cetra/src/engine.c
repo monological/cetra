@@ -84,13 +84,31 @@ static bool _engine_input_script_running(const Engine* engine);
 static SceneNode* _perform_engine_ray_picking(Engine* engine, double mouse_fb_x, double mouse_fb_y);
 static void _destroy_msaa_attachments(Engine* engine);
 
+// The timed wakes held at once (spec 14.9), and how near two must be to be one.
+#define ENGINE_WAKES_MAX          64
+#define ENGINE_WAKE_MERGE_SECONDS 0.001
+
 // Idle mode's handshake (spec 14.1): what the frame's own sources and other threads tell the wait.
 typedef struct EngineWake {
     atomic_bool requested; // engine_request_frame since the last frame began
     atomic_bool waiting;   // the loop is waiting, so a request must wake it
     atomic_int work_out;   // engine_begin_work calls not yet ended
-    double wake_at;        // the earliest timed wake, on glfwGetTime's clock; INFINITY = none
+    // The timed wakes not yet come, soonest first and more than a merge apart, on glfwGetTime's
+    // clock; one slot over the most, for the one a full list is asked for.
+    double wakes[ENGINE_WAKES_MAX + 1];
+    int wake_count;
+    bool wakes_full_said; // a full list has been warned about
 } EngineWake;
+
+// The soonest timed wake, INFINITY for none.
+static double _engine_wake_soonest(const EngineWake* w) {
+    return w->wake_count ? w->wakes[0] : INFINITY;
+}
+
+static void _engine_wake_remove(EngineWake* w, int i) {
+    w->wake_count--;
+    memmove(w->wakes + i, w->wakes + i + 1, (size_t)(w->wake_count - i) * sizeof(double));
+}
 
 // One scene-MRT color attachment. The engine drives several draw buffers into a
 // single multisample framebuffer; describing each one's format + clear + write
@@ -342,7 +360,6 @@ static Engine* _engine_alloc(const EngineConfig* cfg) {
     atomic_init(&engine->wake->requested, false);
     atomic_init(&engine->wake->waiting, false);
     atomic_init(&engine->wake->work_out, 0);
-    engine->wake->wake_at = INFINITY;
 
     engine->ltc = NULL;
     engine->brdf_lut = 0;
@@ -978,9 +995,8 @@ static IdleNext _engine_idle_next(const Engine* engine) {
     const bool working = atomic_load(&w->work_out) > 0;
     if (working && engine->headless)
         return IDLE_WAIT_WORK;
-    const bool pending =
-        working || async_loader_is_busy(engine->async_loader) || isfinite(w->wake_at);
-    if (atomic_load(&w->requested) || glfwGetTime() >= w->wake_at ||
+    const bool pending = working || async_loader_is_busy(engine->async_loader) || w->wake_count > 0;
+    if (atomic_load(&w->requested) || glfwGetTime() >= _engine_wake_soonest(w) ||
         _engine_input_script_running(engine))
         return IDLE_DRAW;
     return pending || !engine->headless ? IDLE_WAIT : IDLE_DONE;
@@ -1009,10 +1025,23 @@ static IdleNext _engine_idle_next(const Engine* engine) {
  */
 #define ENGINE_WORK_WARN_SECONDS 10.0
 
+// Every timed wake that has come is answered by the frame about to begin. Dropped without idle mode
+// too, where nothing waits on them: the caret asks for its next blink every frame, and a list never
+// emptied would fill.
+static void _engine_drop_passed_wakes(EngineWake* w) {
+    const double now = glfwGetTime();
+    int passed = 0;
+    while (passed < w->wake_count && w->wakes[passed] <= now)
+        passed++;
+    w->wake_count -= passed;
+    memmove(w->wakes, w->wakes + passed, (size_t)w->wake_count * sizeof(double));
+}
+
 static void _engine_frame_events(Engine* engine) {
     engine->ending = glfwWindowShouldClose(engine->window);
     if (!engine->idle) {
         glfwPollEvents();
+        _engine_drop_passed_wakes(engine->wake);
         return;
     }
     EngineWake* w = engine->wake;
@@ -1024,7 +1053,7 @@ static void _engine_frame_events(Engine* engine) {
     while (((next = _engine_idle_next(engine)) == IDLE_WAIT || next == IDLE_WAIT_WORK) &&
            !glfwWindowShouldClose(engine->window)) {
         const double start = glfwGetTime();
-        const double until = next == IDLE_WAIT_WORK ? warn_at : w->wake_at;
+        const double until = next == IDLE_WAIT_WORK ? warn_at : _engine_wake_soonest(w);
         if (isfinite(until))
             glfwWaitEventsTimeout(until > start ? until - start : 0.0);
         else
@@ -1045,8 +1074,7 @@ static void _engine_frame_events(Engine* engine) {
     glfwPollEvents();
     // What asked is answered by the frame about to begin.
     atomic_store(&w->requested, false);
-    if (glfwGetTime() >= w->wake_at)
-        w->wake_at = INFINITY;
+    _engine_drop_passed_wakes(w);
 }
 
 // A loop waiting for events sees no flag: an empty event wakes it, GLFW's one call that may be made
@@ -1080,8 +1108,32 @@ void engine_request_frame_after(Engine* engine, double seconds) {
         return;
     }
     const double at = glfwGetTime() + fmax(seconds, 0.0);
-    if (at < engine->wake->wake_at)
-        engine->wake->wake_at = at;
+    EngineWake* w = engine->wake;
+    int k = w->wake_count;
+    while (k > 0 && w->wakes[k - 1] > at)
+        k--;
+    memmove(w->wakes + k + 1, w->wakes + k, (size_t)(w->wake_count - k) * sizeof(double));
+    w->wakes[k] = at;
+    w->wake_count++;
+    // Two times within a merge are one, at the later: every caller's time has passed when its frame
+    // comes, a merge late and never early, and a caller asking for the same time every frame holds
+    // one. Held times are more than a merge apart, so the new one meets one neighbour at most once
+    // the later is taken.
+    if (k + 1 < w->wake_count && w->wakes[k + 1] - at <= ENGINE_WAKE_MERGE_SECONDS)
+        _engine_wake_remove(w, k);
+    else if (k > 0 && at - w->wakes[k - 1] <= ENGINE_WAKE_MERGE_SECONDS)
+        _engine_wake_remove(w, k - 1);
+    else if (w->wake_count > ENGINE_WAKES_MAX) {
+        // Full: merged with the next time held, or the latest held moved to it, so it comes late
+        // and none is lost.
+        if (!w->wakes_full_said) {
+            log_warn("engine_request_frame_after: %d timed wakes are held, the most; one asked "
+                     "for past that is merged with the next later one",
+                     ENGINE_WAKES_MAX);
+            w->wakes_full_said = true;
+        }
+        _engine_wake_remove(w, k + 1 < w->wake_count ? k : k - 1);
+    }
 }
 
 void engine_begin_work(Engine* engine) {
