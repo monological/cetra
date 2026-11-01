@@ -3710,6 +3710,14 @@ void engine_run(Engine* engine, EngineUpdateFunc update, EnginePreRenderFunc pre
     // around that draw.
     EngineRenderFunc draw = render ? render : engine_render_scene;
 
+    // A headless run is a capture, judged by the frames it saves, so it starts with every texture
+    // its start-up asked for. Streamed in, at five uploads a frame and as fast as the machine
+    // decodes, a frame N showed a room half loaded on a busy machine and a whole one on an idle
+    // one. A window draws at once and lets them arrive. Before the clock is read, so the first
+    // frame's delta does not hold the wait.
+    if (engine->headless)
+        engine_finish_texture_loads(engine);
+
     engine->last_frame_time = glfwGetTime() - engine->time_waited;
 
     while (!glfwWindowShouldClose(engine->window)) {
