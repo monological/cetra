@@ -2313,14 +2313,17 @@ static int probe_editor_set_doc(UISystem* ui) {
              top == 94 && ui_editor_top(ed) == top + 2 && n == 2 && now[0].head == 26 &&
                  now[1].anchor == 42 && now[1].head == 46);
     // A new editor placed before its first layout, as a split shows the view it split: placed at
-    // that layout.
+    // that layout, once its rows and its height are known -- half way down its view, as the laid
+    // out editor of that size places it, where before the layout the view has no rows to go down.
     UIElement* fresh = ui_editor(ui_screen_root(ui_top(ui)), a);
     ui_set_size(fresh, UI_FIXED, 300.0f, UI_FIXED, 120.0f);
     ui_editor_set_selections(fresh, &(TextSelection){100, 100}, 1);
-    ui_editor_scroll_place(fresh, top + 2, 0.0f);
+    ui_editor_scroll_place(fresh, top + 2, 0.5f);
+    ui_editor_scroll_place(ed, top + 2, 0.5f);
     editor_pass(ui);
+    const size_t placed = ui_editor_top(ed);
     say_flag("set-doc", "fresh", "placed",
-             ui_editor_top(fresh) == top + 2 && one_selection(fresh, 100, 100));
+             placed < top + 2 && ui_editor_top(fresh) == placed && one_selection(fresh, 100, 100));
     // A text freed while the editor is parked on it: its place let go, and the editor goes on.
     TextDoc* c = create_text_doc("third\n", 6);
     ui_editor_set_doc(ed, c);
@@ -2328,7 +2331,7 @@ static int probe_editor_set_doc(UISystem* ui) {
     free_text_doc(c);
     ui_editor_set_doc(ed, a);
     editor_pass(ui);
-    say_flag("set-doc", "parked", "freed", ui_editor_top(ed) == top + 2);
+    say_flag("set-doc", "parked", "freed", ui_editor_top(ed) == placed);
     free_text_doc(a);
     free_text_doc(b);
     return 0;
