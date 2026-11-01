@@ -1212,23 +1212,26 @@ static void board_finish(Canvas* canvas, CanvasEdit* edit) {
  * Under --idle with --edit-thread the board arrives as pcb's would: filled on a
  * thread while the loop runs, after a pause standing for a parse so that it
  * ends while the loop waits. The update hook starts it late (start_late_work)
- * and applies it on the frame its end wakes.
+ * and applies it on the frame its end wakes. --work-delay MS sets the pause.
  */
-enum { BOARD_LATE_MS = 50 };
+static unsigned g_work_delay_ms = 50;
 static CanvasEdit* g_late_edit;  // the board's edit, until it is applied
 static atomic_bool g_late_ready; // the thread has filled it
 static bool g_late_thread_live;  // a thread was started and not yet joined
 static cetra_thread_t g_late_thread;
 
 static void* board_late_thread(void* engine) {
-    cetra_sleep_ms(BOARD_LATE_MS);
+    cetra_sleep_ms(g_work_delay_ms);
     board_fill(g_late_edit, &g_board);
     atomic_store(&g_late_ready, true);
     engine_end_work(engine);
     return NULL;
 }
 
+// Begun as the thread starts and not before: headless, frames wait for work out (spec 14.7), so
+// work begun frames ahead of its start would hold the run waiting for a frame that starts it.
 static void board_late_start(Engine* engine) {
+    engine_begin_work(engine);
     g_late_thread_live = cetra_thread_create(&g_late_thread, board_late_thread, engine);
     if (!g_late_thread_live)
         board_late_thread(engine);
@@ -1336,9 +1339,8 @@ static void sheet_board(SheetContext* ctx) {
     canvas_tags_set(tags, BOARD_PICKED, (CanvasTagState){.outline = 0xffffffffu});
 
     if (ctx->edit_thread && ctx->engine->idle) {
-        // Begun here, before the first frame can be the last; the thread is started late.
+        // The thread is started late, and its work begun as it starts.
         g_late_edit = create_canvas_edit(canvas);
-        engine_begin_work(ctx->engine);
     } else if (ctx->edit_thread) {
         cetra_thread_t thread;
         if (cetra_thread_create(&thread, board_thread, ctx->edit))
@@ -1651,7 +1653,8 @@ static bool build_font_sheet(UISystem* ui, Engine* engine, Font* label) {
  * - F6, an edit landed at the text's start as another view's would be;
  * - F7, the file read again through the text's whole new text.
  * A parse's result is taken on the frame its thread's end wakes; --editor-lag N takes it N frames
- * after it began instead, waiting for it then, so a headless run repeats. --vim puts the vim mode
+ * after it began instead, waiting for it then, so a headless run repeats without idle mode too,
+ * whose frames do not wait for work as an idle run's do (spec 14.7). --vim puts the vim mode
  * (spec 14.5) under the app's keys, with its state on a line under the editor. --read-only makes
  * every file's text read-only (spec 14.7): nothing typed changes it, and each refusal is counted
  * and, with --vim, said on that line.
@@ -2266,8 +2269,11 @@ static void start_late_work(Engine* engine) {
     if (g_late_started || g_wake_next < g_wake_count)
         return;
     g_late_started = true;
-    if (g_late_edit)
+    if (g_late_edit) {
         board_late_start(engine);
+        if (g_idle_say)
+            printf("canvas idle work begun %zu\n", engine->total_frames + 1);
+    }
     if (g_idle_load)
         engine_load_texture(engine, engine_get_scene(engine)->tex_pool, g_idle_load,
                             texture_desc(true), on_idle_loaded, NULL);
@@ -2277,7 +2283,10 @@ static void history_stream(Engine* engine);
 
 static void on_update(Engine* engine, float dt) {
     (void)dt;
+    const bool late = g_late_edit && g_late_started;
     board_late_settle(false);
+    if (g_idle_say && late && !g_late_edit)
+        printf("canvas idle work landed %zu\n", engine->total_frames + 1);
     if (g_idle_say)
         printf("canvas idle frame %zu delta %.6f\n", engine->total_frames + 1, engine->delta_time);
     start_late_work(engine);
@@ -2811,7 +2820,8 @@ static void usage(const char* argv0) {
     fprintf(stderr,
             "usage: %s [-x] [-f frames] [-S out.ppm] [-W points] [-H points]\n"
             "          [--sheet NAME] [--view X,Y,WIDTH (mm)] [--offset UNITS] [--mirror]\n"
-            "          [--tile-shift N] [--canvas-probe] [--picture] [--edit-thread]\n"
+            "          [--tile-shift N] [--canvas-probe] [--picture] [--edit-thread] [--work-delay "
+            "MS]\n"
             "          [--split] [--only-view 0|1] [--ui] [--budget]\n"
             "          [--idle] [--idle-wake S,...] [--idle-load PATH] [--input-script PATH]\n"
             "          [--ui-enter] [--ui-text TEXT] [--gui-click] [--history] [--palette]\n"
@@ -2874,6 +2884,9 @@ int main(int argc, char** argv) {
             picture = true;
         } else if (strcmp(argv[i], "--edit-thread") == 0) {
             edit_thread = true;
+        } else if (strcmp(argv[i], "--work-delay") == 0 && more) {
+            const int ms = atoi(argv[++i]);
+            g_work_delay_ms = ms > 0 ? (unsigned)ms : 0u;
         } else if (strcmp(argv[i], "--split") == 0) {
             split = true;
         } else if (strcmp(argv[i], "--only-view") == 0 && more) {
