@@ -688,11 +688,18 @@ project are pcb's own, on these calls; nothing in cetra is missing for them.
   None is needed by pcb's 6.2. pcb takes them up in its 6.1.2. A host's own key sequences, a
   `:map`, wait until pcb wants a command vim has no meaning for; completion (Ctrl+X Ctrl+O) is a
   spec of its own, later.
-- **Any element takes keys** -- spec 14.10, specced, not built: `ui_set_on_key` on any element, a
-  plain one with a hook taking keys and keeping the focus under a passing pointer as a text field
-  does. Only a text field and the code editor do today, so pcb's schematic pane (its 6.2), and
-  every pane kind after it, could not be given keys without a workaround. `ui_field_set_on_key`
-  becomes the general call.
+- **Any element takes keys** -- spec 14.10, built, for pcb's schematic pane (its 6.2) and every
+  pane kind after it, which only a text field and the code editor could be before:
+  - `ui_set_on_key` on any element but a code editor, whose keys are its modes'. An element with a
+    hook takes the keys as a text field does: it keeps the focus under a passing pointer, and what
+    the hook declines goes to the screen, Tab and Esc among them.
+  - The hook is handed every key and every character, so pcb's `+` is a character on any keyboard
+    layout. A field's hook is the same call, asked about a character before the field types it.
+  - A hook does not make a pane `focusable`; pcb sets that on its pane so a click focuses it.
+
+  `ui_field_set_on_key` is gone: pcb's `go.c` and `status.c` take `ui_set_on_key` when it moves
+  its submodule. Its hooks there match one key each, so seeing characters changes nothing for them.
+  A schematic pane that should keep the focus through Esc takes Esc, as the vim mode does.
 - **A second window**, for a second monitor. pcb lists it as an open question and as a cetra change;
   nothing is decided.
 - **The physical depth of field** of item 7, likely wanted before pcb's 3D view is judged on its
