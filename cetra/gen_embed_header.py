@@ -14,6 +14,15 @@ ROW = 16
 
 IDENTIFIER = r'[A-Za-z_][A-Za-z0-9_]*'
 
+def c_string(text):
+    """`text` as a C string literal: a backslash and a quote escaped, and any byte outside printable
+    ASCII as an octal escape."""
+    out = []
+    for b in text.encode('utf-8'):
+        c = chr(b)
+        out.append('\\' + c if c in '\\"' else c if 32 <= b < 127 else f'\\{b:03o}')
+    return '"' + ''.join(out) + '"'
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('table', help="the table's name, a C identifier: canvas_fonts")
@@ -29,18 +38,13 @@ def main():
         raise SystemExit(f"{args.table}: every file wants an index name before it")
     entries = list(zip(args.pairs[0::2], args.pairs[1::2]))
     prefix = args.table.upper()
-    indexes, names = {}, {}
+    indexes = {}
     for index, path in entries:
         if not re.fullmatch(IDENTIFIER, index):
             raise SystemExit(f"{args.table}: {index!r} is not a name C can use")
         if index.upper() in indexes:
             raise SystemExit(f"{args.table}: {index} and {indexes[index.upper()]} are one index")
         indexes[index.upper()] = index
-        # A font pool keeps a font under its file's name, so two files of one name would be one.
-        name = os.path.basename(path)
-        if name in names:
-            raise SystemExit(f"{args.table}: {path} and {names[name]} are both named {name}")
-        names[name] = path
         if os.path.getsize(path) == 0:
             raise SystemExit(f"{args.table}: {path} is empty")
     guard = guard_for(args.header)
@@ -64,8 +68,8 @@ def main():
     source.append(f'const CetraEmbeddedFile {args.table}[{prefix}_COUNT] = {{\n')
     for k, (index, path) in enumerate(entries):
         rel = os.path.relpath(path, args.root).replace(os.sep, '/')
-        source.append(f'    [{prefix}_{index.upper()}] = {{"{os.path.basename(path)}", "{rel}", '
-                      f'{args.table}_{k}, sizeof({args.table}_{k})}},\n')
+        source.append(f'    [{prefix}_{index.upper()}] = {{{c_string(rel)}, {args.table}_{k}, '
+                      f'sizeof({args.table}_{k})}},\n')
     source.append('};\n')
     # Written only when they changed, so an unchanged list rebuilds nothing.
     write_if_changed(args.header, ''.join(header))

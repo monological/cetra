@@ -144,7 +144,7 @@ add_custom_command(
 # engine's chunks, which is what lets an app shader name noise.glsl without the app holding a
 # copy. The interpreter is captured HERE, because a function runs in its caller's scope and a
 # parent project adding this directory need not have looked one up.
-set(CETRA_SHADER_PYTHON ${Python3_EXECUTABLE} CACHE INTERNAL "")
+set(CETRA_PYTHON ${Python3_EXECUTABLE} CACHE INTERNAL "")
 function(cetra_embed_shaders target dir)
     set(_generator ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/gen_shader_header.py)
     get_filename_component(_dir ${dir} ABSOLUTE)
@@ -154,7 +154,7 @@ function(cetra_embed_shaders target dir)
     file(MAKE_DIRECTORY ${_out_dir})
     add_custom_command(
         OUTPUT ${_out}
-        COMMAND ${CETRA_SHADER_PYTHON} ${_generator} --raw ${_dir} ${_out}
+        COMMAND ${CETRA_PYTHON} ${_generator} --raw ${_dir} ${_out}
         DEPENDS ${_files} ${_generator}
         COMMENT "Embedding ${target}'s shaders"
         VERBATIM
@@ -165,11 +165,10 @@ endfunction()
 
 # Files of bytes built into an app (spec 14.6): cetra_embed_files(<target> <name> <INDEX> <file>
 # ...) makes the table `<target>_<name>[]` of CetraEmbeddedFile (embedded_file.h) -- each file's
-# own name, its path from the source root, its bytes and their size -- indexed by
-# `<TARGET>_<NAME>_<INDEX>`, declared in <target>_<name>.h for the target to include and defined in
-# a source file of its own, so the bytes are compiled only when a file changes. A font built in so,
-# the program is one file, and the list here is the one place the file is named. Relative paths are
-# the caller's directory's.
+# path from the source root, its bytes and their size -- indexed by `<TARGET>_<NAME>_<INDEX>`,
+# declared in <target>_<name>.h for the target to include and defined in a source file of its own,
+# so the bytes are compiled only when a file changes. A font built in so, the program is one file,
+# and the list here is the one place the file is named. Relative paths are the caller's directory's.
 function(cetra_embed_files target name)
     set(_generator ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/gen_embed_header.py)
     set(_pairs)
@@ -186,13 +185,17 @@ function(cetra_embed_files target name)
             set(_is_path TRUE)
         endif()
     endforeach()
+    if(_is_path OR NOT _files)
+        message(FATAL_ERROR "cetra_embed_files(${target} ${name}): wants each file after the name of "
+                            "what it is for, and at least one")
+    endif()
     set(_out_dir ${CMAKE_CURRENT_BINARY_DIR}/${target}_generated)
     set(_header ${_out_dir}/${target}_${name}.h)
     set(_source ${_out_dir}/${target}_${name}.c)
     file(MAKE_DIRECTORY ${_out_dir})
     add_custom_command(
         OUTPUT ${_header} ${_source}
-        COMMAND ${CETRA_SHADER_PYTHON} ${_generator} ${target}_${name} ${CMAKE_SOURCE_DIR}
+        COMMAND ${CETRA_PYTHON} ${_generator} ${target}_${name} ${CMAKE_SOURCE_DIR}
             ${_header} ${_source} ${_pairs}
         DEPENDS ${_files} ${_generator} ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/gen_shader_header.py
         COMMENT "Embedding ${target}'s ${name}"

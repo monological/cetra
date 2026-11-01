@@ -133,9 +133,10 @@ struct UIEditorVim {
     size_t change_len, change_cap;
     int change_count;
     int replaying;
-    // The text an undo group is held open in, while one is; and, while a command made of others
-    // runs them, how deep in it they are, which keeps the group open across them.
-    TextDoc* grouped;
+    // Whether an undo group is held open, in the text of the editor the last key reached --
+    // reaching another lets go of it -- and, while a command made of others runs them, how deep in
+    // it they are, which keeps the group open across them.
+    bool grouped;
     int held;
     // The editor the last key reached, and the text it showed, by its serial: an editor freed and
     // another made at its address, or one shown another text, is another editor.
@@ -1854,17 +1855,17 @@ static void _empty_step(Ctx* c) {
 }
 
 // One step of undo held open over a command's actions, or an insert's, from its first key to its
-// last: opened once, however many times asked -- again when an undo closed it in the meantime --
-// and closed in the text it was opened in.
+// last: opened once, however many times asked -- again when an undo closed it in the meantime. The
+// text is the one it was opened in, as a key reaching another editor, or this one shown another
+// text, lets go of the group first.
 static void _group(Ctx* c, bool open) {
     UIEditorVim* v = c->v;
-    if (open && (v->grouped != c->doc || !c->doc->grouping)) {
+    if (open && (!v->grouped || !c->doc->grouping)) {
         text_doc_group(c->doc, true, c->el->editor);
-        v->grouped = c->doc;
+        v->grouped = true;
     } else if (!open && v->grouped && !v->held) {
-        if (v->grouped == c->doc)
-            text_doc_group(c->doc, false, NULL);
-        v->grouped = NULL;
+        text_doc_group(c->doc, false, NULL);
+        v->grouped = false;
     }
 }
 
@@ -4901,13 +4902,14 @@ static bool _line_key(Ctx* c, uint32_t k) {
 
 // The vim reaching another editor than the last: what was unfinished in that one -- a command, a
 // line, an insert, a visual area -- is let go, and the group it held forgotten rather than closed,
-// since that editor and its text may be gone; the text keeps that group to that editor's actions.
+// since that editor and its text may be gone: a text closes a group held to an editor that leaves
+// it, and keeps one to the editor that opened it.
 static void _switch(UIEditorVim* v, const UIElement* el) {
     const uint64_t editor = ui_editor_serial(el);
     if (editor == v->editor)
         return;
     v->editor = editor;
-    v->grouped = NULL;
+    v->grouped = false;
     v->held = 0;
     v->line_kind = v->asked = 0;
     v->line_len = 0;
@@ -4919,13 +4921,23 @@ static void _switch(UIEditorVim* v, const UIElement* el) {
     _reset(v);
 }
 
+// The vim reaching an editor -- a key, the pointer, the host's line -- with *c the context: what
+// was unfinished in another editor let go first. False for an editor showing no text, which is left
+// alone.
+static bool _enter(UIEditorVim* v, UIElement* el, Ctx* c) {
+    *c = _ctx(v, el);
+    if (!c->doc)
+        return false;
+    _switch(v, el);
+    return true;
+}
+
 // A key: into the line being read, if one is; a host's line asked for and not answered is let go,
 // the key read afresh.
 static bool _feed(UIEditorVim* v, UIElement* el, uint32_t k) {
-    Ctx c = _ctx(v, el);
-    if (!c.doc)
+    Ctx c;
+    if (!_enter(v, el, &c))
         return false;
-    _switch(v, el);
     if (v->line_kind)
         return _line_key(&c, k);
     if (v->asked && !v->replaying) {
@@ -4946,12 +4958,8 @@ static bool _read_key(UIElement* el, const InputKeyEvent* ev, void* user) {
 // over the characters it crossed, its head on the last it reached.
 static void _pointer(UIElement* el, void* user) {
     UIEditorVim* v = user;
-    if (ui_editor_doc(el))
-        _switch(v, el);
-    if (v->state == UI_VIM_INSERT)
-        return;
-    Ctx c = _ctx(v, el);
-    if (!c.doc)
+    Ctx c;
+    if (!_enter(v, el, &c) || v->state == UI_VIM_INSERT)
         return;
     Carets k = _carets(el);
     size_t* at = calloc(k.count ? k.count : 1, sizeof(size_t));
@@ -5029,12 +5037,9 @@ void ui_editor_vim_set_undo(UIEditorVim* vim, UIEditorCommandFn undo, UIEditorCo
 }
 
 bool ui_editor_vim_search(UIEditorVim* vim, UIElement* el, const char* query, bool backward) {
-    if (!vim || !el)
+    Ctx c;
+    if (!vim || !el || !_enter(vim, el, &c))
         return false;
-    Ctx c = _ctx(vim, el);
-    if (!c.doc)
-        return false;
-    _switch(vim, el);
     // The host's line answers what / or ? asked: its text joins the keys, so `.` makes an
     // operator's change again with the same search.
     if ((vim->asked == '/' || vim->asked == '?') && query && vim->op) {
@@ -5055,12 +5060,9 @@ void ui_editor_vim_light(UIEditorVim* vim, UIElement* el, const char* query) {
 }
 
 bool ui_editor_vim_command(UIEditorVim* vim, UIElement* el, const char* line) {
-    if (!vim || !el)
+    Ctx c;
+    if (!vim || !el || !_enter(vim, el, &c))
         return false;
-    Ctx c = _ctx(vim, el);
-    if (!c.doc)
-        return false;
-    _switch(vim, el);
     return _line_done(&c, ':', line);
 }
 

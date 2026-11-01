@@ -1028,7 +1028,7 @@ void text_doc_remove_view(TextDoc* doc, const void* view) {
     if (doc->grouping && doc->group_view == view)
         text_doc_group(doc, false, NULL);
     if (doc->typing.view == view)
-        doc->typing.count = 0;
+        text_doc_seal_undo(doc);
 }
 
 void text_doc_set_on_action(TextDoc* doc, TextDocActionFn fn, void* user) {

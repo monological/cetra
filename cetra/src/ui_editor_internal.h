@@ -15,8 +15,6 @@
 
 struct Engine;
 
-// The text an editor shows; NULL for anything else, and once the text is freed.
-TextDoc* ui_editor_doc(const UIElement* el);
 // Which editor this is, and showing which text: new when an editor is made and each time it is
 // shown another text, never reused, so a mode remembering the last editor it saw knows another at
 // the same address. 0 for anything else.

@@ -59,8 +59,5 @@ int ui_typing_press(UITypingPresses* p, double now, float x, float y, int cycle)
 // Whether the caret is lit `now`, its blink restarted now if it moved: always without `blink`.
 // *wake is the seconds until it next changes, INFINITY without `blink`.
 bool ui_typing_caret_lit(UITypingCaret* c, double now, bool blink, double* wake);
-// Whether a key's press goes on to make a character: a printable key with neither Ctrl nor Cmd
-// held. Enter, Tab, Backspace and the arrows make none.
-bool ui_typing_makes_char(int key, int mods);
 
 #endif // _UI_TYPING_H_

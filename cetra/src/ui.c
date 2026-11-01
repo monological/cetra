@@ -9,9 +9,9 @@
 #include "ui.h"
 #include "ui_editor_hooks.h"
 #include "ui_field.h"
+#include "ui_hooks.h"
 #include "ui_internal.h"
 #include "ui_text.h"
-#include "ui_typing.h"
 #include "util.h"
 
 // How fast hover and focus reach their target, in seconds. Short enough that a
@@ -90,10 +90,9 @@ struct UISystem {
     // How many of the passes -- a layout, an input pass, a build -- are running, and the elements
     // taken out during one -- by ui_remove, or a pane's rows dropped -- freed as the last ends:
     // what removed them may be a callback of their own, a key an editor took, whose caller goes on
-    // to read them. Empty outside a pass.
+    // to read them. A list through UIElement.removed_next, empty outside a pass.
     int passes;
-    UIElement** removed;
-    size_t removed_count, removed_cap;
+    UIElement* removed;
 };
 
 // How close an eased scroll comes before it is there: a tenth of a point, under any pixel.
@@ -536,10 +535,6 @@ UIElement* ui_text_field(UIElement* parent, unsigned flags, UIActionFn on_submit
 }
 
 UIElement* ui_editor(UIElement* parent, TextDoc* doc) {
-    if (!doc) {
-        log_error("ui_editor: wants a text to show");
-        return NULL;
-    }
     UIElement* el = _new_element(parent, UI_EDITOR);
     if (!el)
         return NULL;
@@ -1202,10 +1197,11 @@ static bool _contains(const UIElement* el, const UIElement* target) {
     return false;
 }
 
-static const UIElement* _root_of(const UIElement* el) {
+// The screen `el` stands on, from its root; NULL for an element taken out, whose root is its own.
+static UIScreen* _screen_of(const UIElement* el) {
     while (el->parent)
         el = el->parent;
-    return el;
+    return el->screen;
 }
 
 // Lets go of anything the system or a screen holds inside `el`, before it is freed: the pressed
@@ -1243,57 +1239,49 @@ static bool _in_rows(const UIElement* el) {
 
 // An element out of the tree, gone: whatever the system or a screen held inside it let go of, and
 // freed -- as the pass ends while one runs, since the pass may go on reading it: the editor whose
-// own key removed it, the button whose own action did. Out of memory to hold it until then, it is
-// freed at once.
+// own key removed it, the button whose own action did, a pane's row the layout dropped. Every
+// element held so has no parent, as it is out of the tree.
 static void _leave(UISystem* ui, UIElement* el) {
     _forget(ui, el);
-    if (ui->passes > 0 && grow_array((void**)&ui->removed, &ui->removed_cap, ui->removed_count + 1,
-                                     sizeof(UIElement*), 8))
-        ui->removed[ui->removed_count++] = el;
-    else
+    if (ui->passes > 0) {
+        el->removed_next = ui->removed;
+        ui->removed = el;
+    } else {
         _free_element(el);
+    }
 }
 
 // Takes a pane's child `k` out and lets it go.
 static void _rows_drop(UISystem* ui, UIElement* pane, size_t k) {
     UIElement* c = pane->children[k];
+    int* child_row = pane->rows->child_row;
+    memmove(&child_row[k], &child_row[k + 1], (pane->child_count - k - 1) * sizeof(int));
+    _detach(c);
     _leave(ui, c);
-    struct UIRows* r = pane->rows;
-    for (size_t i = k + 1; i < pane->child_count; i++) {
-        pane->children[i - 1] = pane->children[i];
-        r->child_row[i - 1] = r->child_row[i];
-    }
-    pane->child_count--;
 }
 
 static void _pass_begin(UISystem* ui) {
     ui->passes++;
 }
 
-// The removed are let go of again before they are freed, since the pass that removed one may have
-// taken hold of it since: a press captured before the callback that removed it.
 static void _pass_end(UISystem* ui) {
     if (--ui->passes > 0)
         return;
-    for (size_t i = 0; i < ui->removed_count; i++) {
-        _forget(ui, ui->removed[i]);
-        _free_element(ui->removed[i]);
+    while (ui->removed) {
+        UIElement* el = ui->removed;
+        ui->removed = el->removed_next;
+        _free_element(el);
     }
-    ui->removed_count = 0;
 }
 
-void ui_remove(UISystem* ui, UIElement* el) {
-    if (!ui || !el) {
-        log_error("ui_remove: NULL system or element");
+void ui_remove(UIElement* el) {
+    if (!el) {
+        log_error("ui_remove: NULL element");
         return;
     }
-    const UIElement* root = _root_of(el);
-    size_t s = 0;
-    while (s < ui->screen_count && ui->screens[s]->root != root)
-        s++;
-    if (s == ui->screen_count) {
-        log_error(
-            "ui_remove: not an element of this system's screens: another's, or removed already");
+    const UIScreen* screen = _screen_of(el);
+    if (!screen) {
+        log_error("ui_remove: an element taken out already");
         return;
     }
     if (!el->parent) {
@@ -1304,27 +1292,24 @@ void ui_remove(UISystem* ui, UIElement* el) {
         log_error("ui_remove: a pane's row is the pane's to build and free");
         return;
     }
-    // Room to hold it until the pass ends, made before it is taken out, so it is never freed at
-    // once inside a pass.
-    if (ui->passes > 0 && !grow_array((void**)&ui->removed, &ui->removed_cap, ui->removed_count + 1,
-                                      sizeof(UIElement*), 8)) {
-        log_error("ui_remove: out of memory");
-        return;
-    }
     _detach(el);
-    _leave(ui, el);
+    _leave(screen->ui, el);
 }
 
-void ui_move(UIElement* el, UIElement* parent, size_t index) {
+void ui_move(UIElement* el, UIElement* parent, const UIElement* before) {
     if (!el || !parent) {
         log_error("ui_move: NULL element or parent");
         return;
     }
     if (!el->parent) {
-        log_error("ui_move: a screen's root does not move");
+        log_error("ui_move: a screen's root, or an element taken out, does not move");
         return;
     }
-    if (el->parent->rows || parent->rows || _in_rows(parent)) {
+    if (before && before->parent != parent) {
+        log_error("ui_move: what it is to go in front of is not a child of the parent");
+        return;
+    }
+    if (el->parent->rows || _in_rows(parent) || parent->rows) {
         log_error("ui_move: a pane with rows builds and frees its own children, rows and all");
         return;
     }
@@ -1332,21 +1317,25 @@ void ui_move(UIElement* el, UIElement* parent, size_t index) {
         log_error("ui_move: an element does not move into itself or under itself");
         return;
     }
-    if (_root_of(el) != _root_of(parent)) {
+    if (_screen_of(el) != _screen_of(parent)) {
         log_error("ui_move: an element stays on its screen, whose focus may be inside it");
         return;
     }
+    if (before == el)
+        return; // in front of itself: where it is
     if (parent != el->parent && !grow_array((void**)&parent->children, &parent->child_capacity,
                                             parent->child_count + 1, sizeof(UIElement*), 8)) {
         log_error("ui_move: out of memory");
         return;
     }
     _detach(el);
-    if (index > parent->child_count)
-        index = parent->child_count;
-    memmove(&parent->children[index + 1], &parent->children[index],
-            (parent->child_count - index) * sizeof(UIElement*));
-    parent->children[index] = el;
+    size_t at = parent->child_count;
+    if (before)
+        for (at = 0; parent->children[at] != before; at++) {
+        }
+    memmove(&parent->children[at + 1], &parent->children[at],
+            (parent->child_count - at) * sizeof(UIElement*));
+    parent->children[at] = el;
     parent->child_count++;
     el->parent = parent;
 }
@@ -2106,6 +2095,15 @@ static void _scroll_key(const UISystem* ui, const UIScreen* top, const UIInput* 
     _scroll_to(ui, pane, to, false);
 }
 
+// Whether a key's press goes on to make a character: a printable key with neither Ctrl nor Cmd
+// held. Enter, Tab, Backspace and the arrows make none.
+static bool _makes_char(const InputKeyEvent* ev) {
+    const int k = ev->key;
+    const bool printable = (k >= GLFW_KEY_SPACE && k <= GLFW_KEY_WORLD_2) ||
+                           (k >= GLFW_KEY_KP_0 && k <= GLFW_KEY_KP_ADD) || k == GLFW_KEY_KP_EQUAL;
+    return printable && !(ev->mods & (GLFW_MOD_CONTROL | GLFW_MOD_SUPER));
+}
+
 /*
  * A pass's keys and characters, each in order to what holds the focus at its turn: a focused field
  * first, and what it does not use -- or every key, with anything else focused -- to the screen:
@@ -2113,22 +2111,26 @@ static void _scroll_key(const UISystem* ui, const UIScreen* top, const UIInput* 
  * scroll. The keys stop at a screen closed by one of them, being meant for it. A field the app
  * focused since the last pass takes none of them, since they came before it had the focus: the
  * key that opened a palette is not typed into it. True when Esc let go of a field.
+ *
+ * A press is a key and then the character it makes, and a key something used takes that character
+ * with it: a binding on Space types no space, and a split bound to `|` types no `|` into the pane
+ * it made, wherever the key put the focus. So a widget says it used a key only when it acted on it;
+ * a letter it types from the character is not used as a key. A character arriving on its own -- an
+ * input method's, a script's -- is read as any other.
  */
 static bool _route_keys(UISystem* ui, UIScreen* top, const UIInput* in, const UIElement* app_set) {
     if (app_set && top->focused == app_set && _takes_keys(app_set))
         return false;
     UIElement* taking = NULL; // the element taking keys, between its begin and its end
-    // The element that used the last key, while that key's character is still to come. A press is
-    // a key and then its character, and the character goes where its key went though the key
-    // moved the focus: a split bound to `|` would otherwise type a `|` into the pane it made.
-    UIElement* pressed_by = NULL;
+    bool owes_char = false;   // the last key was used, and its character is still to come
     bool let_go = false;
     for (int i = 0; i < in->key_event_count && ui_top(ui) == top; i++) {
         const InputKeyEvent* ev = &in->key_events[i];
-        UIElement* f = ev->codepoint && !ev->key && pressed_by ? pressed_by
-                       : _takes_keys(top->focused)             ? top->focused
-                                                               : NULL;
-        pressed_by = NULL;
+        const bool its_char = owes_char && ev->codepoint && !ev->key;
+        owes_char = false;
+        if (its_char)
+            continue;
+        UIElement* f = _takes_keys(top->focused) ? top->focused : NULL;
         if (f != taking) {
             if (taking && _ops(taking)->keys_end)
                 _ops(taking)->keys_end(taking);
@@ -2137,8 +2139,7 @@ static bool _route_keys(UISystem* ui, UIScreen* top, const UIInput* in, const UI
             taking = f;
         }
         const bool used = f && _ops(f)->key(ui, f, _content_rect(ui, f), ev);
-        if (used && ui_typing_makes_char(ev->key, ev->mods))
-            pressed_by = f;
+        owes_char = used && _makes_char(ev);
         if (used || ev->codepoint)
             continue;
         if (ev->key == GLFW_KEY_TAB) {
@@ -2513,7 +2514,6 @@ void free_ui_system(UISystem* ui) {
             free(ui->screens[i]);
         }
     }
-    free(ui->removed);
     free(ui->screens);
     free(ui->stack);
     free_ui_draw_list(ui->dl);
@@ -2579,6 +2579,7 @@ UIScreen* ui_screen(UISystem* ui, const char* name) {
         free(s);
         return NULL;
     }
+    s->root->screen = s;
     // A screen's root fills the screen and holds no look of its own: a backdrop
     // is an explicit child, so a screen over live gameplay does not dim it by
     // accident.
@@ -2660,8 +2661,13 @@ UIElement* ui_focused(const UIScreen* screen) {
 }
 
 void ui_set_focus(UIScreen* screen, UIElement* el) {
-    if (screen)
-        screen->focused = el;
+    if (!screen)
+        return;
+    if (el && _screen_of(el) != screen) {
+        log_error("ui_set_focus: not an element of this screen: another's, or taken out");
+        return;
+    }
+    screen->focused = el;
 }
 
 bool ui_captures_input(const UISystem* ui) {
