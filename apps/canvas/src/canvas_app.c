@@ -1718,6 +1718,7 @@ typedef struct EditorSheet {
     int lag;        // frames from a parse's start to its result being taken
     bool read_only; // every file's text read-only
     int refused;    // what the texts refused, being read-only
+    bool lookup;    // --vim-lookup: the vim mode's lookups answered, saying what they asked
     // With --vim: the vim mode under the app's own, and a line under the editor saying its state,
     // with the line / ? and : are typed in after it -- its kind shown before it -- and what the
     // last such line came to, said until the next key; and the editor that asked for the line.
@@ -2083,6 +2084,38 @@ static void editor_refused(TextDoc* doc, const UIElement* editor, void* user) {
     snprintf(s->message, sizeof(s->message), "Cannot make changes, the text is read only");
 }
 
+// --vim-lookup: a host standing in for pcb's reader, which says on the vim line what it was asked
+// and the name it was asked about -- the atom at the caret on pcb's rules, or a visual area's text
+// -- and answers that it went there.
+static bool editor_lookup(UIElement* el, UIEditorVimLookup kind, void* user) {
+    static const char* const ASKED[] = {"gd", "gD", "Ctrl+]", "K"};
+    EditorSheet* s = user;
+    TextDoc* doc = ui_editor_doc(el);
+    const TextSelection* sel = NULL;
+    size_t primary = 0;
+    if (!doc || !ui_editor_selections(el, &sel, &primary))
+        return false;
+    const TextSelection at = sel[primary];
+    const size_t line = text_doc_line_of(doc, at.head), start = text_doc_line_start(doc, line);
+    size_t len = 0;
+    const char* text = text_doc_line(doc, line, &len);
+    size_t lo = (at.anchor < at.head ? at.anchor : at.head) - start;
+    size_t hi = (at.anchor < at.head ? at.head : at.anchor) - start;
+    if (at.anchor == at.head) {
+        while (lo > 0 && !sexpr_stop(text[lo - 1]))
+            lo--;
+        while (hi < len && !sexpr_stop(text[hi]))
+            hi++;
+    } else if (hi < len) {
+        // A visual area holds the character at its far end.
+        hi++;
+        while (hi < len && text_utf8_is_continuation((unsigned char)text[hi]))
+            hi++;
+    }
+    snprintf(s->message, sizeof(s->message), "%s %.*s", ASKED[kind], (int)(hi - lo), text + lo);
+    return true;
+}
+
 // Any key in the editor: what the last line came to is said no longer; the key goes on.
 static bool host_any_key(UIElement* el, const InputKeyEvent* key, void* user) {
     (void)el;
@@ -2171,6 +2204,8 @@ static bool build_editor(UISystem* ui, const char* const* paths, int count, bool
         }
         g_host_mode.parent = ui_editor_vim_mode(s->vim);
         ui_editor_vim_set_prompt(s->vim, editor_prompt_open, s);
+        if (s->lookup)
+            ui_editor_vim_set_lookup(s->vim, editor_lookup, s);
         root->align_cross = UI_ALIGN_START;
         // Under the editor: its state, then the line / ? and : are typed in, after its kind.
         UIElement* row = ui_panel(root);
@@ -2957,6 +2992,8 @@ int main(int argc, char** argv) {
             g_split_share = (float)atof(argv[++i]);
         } else if (strcmp(argv[i], "--vim") == 0) {
             vim = true;
+        } else if (strcmp(argv[i], "--vim-lookup") == 0) {
+            g_editor_sheet.lookup = true;
         } else if (strcmp(argv[i], "--read-only") == 0) {
             g_editor_sheet.read_only = true;
         } else if (strcmp(argv[i], "--refuse-close") == 0) {
