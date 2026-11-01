@@ -2316,30 +2316,6 @@ static int _shift_width(const Ctx* c, int times) {
     return w > SHIFT_MAX ? SHIFT_MAX : (int)w;
 }
 
-// A line's indent shifted `times` tab stops in, or out with `out`, built again from its column with
-// spaces as vim's shift with expandtab does: the new indent, for the caller to free, and in *cut
-// the bytes of the old. NULL for an empty line, which is left alone.
-static char* _shifted(const Ctx* c, size_t line, bool out, int times, size_t* n, size_t* cut) {
-    size_t len = 0;
-    const char* s = _lt(c, line, &len);
-    size_t blanks = 0;
-    int col = 0;
-    while (blanks < len && _blank((unsigned char)s[blanks]))
-        col = _col_after(c, col, (unsigned char)s[blanks++]);
-    *cut = blanks;
-    if (!len)
-        return NULL;
-    const int by = _shift_width(c, times);
-    const int to = out ? (col - by > 0 ? col - by : 0) : col + by;
-    char* sp = malloc((size_t)to + 1);
-    if (!sp)
-        return NULL;
-    memset(sp, ' ', (size_t)to);
-    sp[to] = '\0';
-    *n = (size_t)to;
-    return sp;
-}
-
 // ---- = and gq, answered by the host (spec 14.9)
 
 // Whether = and gq have a host to answer them; every other operator always does.
@@ -2362,18 +2338,6 @@ static char* _indent_edit(const Ctx* c, size_t line, int col, TextEdit* e) {
     const size_t at = _ls(c, line);
     *e = (TextEdit){at, at + blanks, sp, n};
     return sp;
-}
-
-// `line`'s indent made `col` columns of spaces by an edit of its own; false when it is that
-// already.
-static bool _set_indent(Ctx* c, size_t line, int col) {
-    TextEdit e;
-    char* sp = _indent_edit(c, line, col, &e);
-    if (!sp)
-        return false;
-    ui_editor_edit(c->el, &e, 1, NULL, 0, 0);
-    free(sp);
-    return true;
 }
 
 // The columns `line`'s indent reaches: what a host's -1 keeps, rebuilt of spaces as vim's
@@ -2440,78 +2404,76 @@ static size_t _line_runs(const Ctx* c, const Range* r, size_t n, LineRun* runs, 
     return count;
 }
 
-// > and <: every line of the carets' runs shifted `shifts` stops in, or out, as one action; each
-// caret to its own first line's first character that is not a blank.
-static void _shift_lines(Ctx* c, const Carets* k, const Range* r, bool out, int shifts) {
+// The column the host gives each line of a run, into `cols`: -1 keeps a line's indent, rebuilt of
+// spaces as vim's set_indent rebuilds the indent indentexpr keeps, and a line of blanks is emptied
+// whatever it says, as vim's = empties one without asking. False when the host declines the run.
+static bool _host_indents(Ctx* c, size_t first, size_t last, int* cols) {
+    const UIEditorVim* v = c->v;
+    if (!v->indent(c->el, first, last, cols, v->indent_user))
+        return false;
+    for (size_t line = first; line <= last; line++) {
+        int* col = &cols[line - first];
+        if (_white_line(c, line))
+            *col = 0;
+        else if (*col < 0)
+            *col = _indent_cols(c, line);
+    }
+    return true;
+}
+
+// =, > and <: every line of the carets' runs given a new indent built of spaces, as expandtab
+// builds it, in one action, and each caret to its own first line's first character that is not a
+// blank. A shift moves a line `shifts` tab stops in, or out, and leaves an empty one alone; = takes
+// the host's columns, a run at a time, and leaves a run the host declines.
+static void _indent_lines(Ctx* c, const Carets* k, const Range* r, uint32_t op, int shifts) {
     const size_t n = k->count ? k->count : 1;
     LineRun* runs = calloc(n, sizeof(LineRun));
     size_t* at = calloc(n, sizeof(size_t));
-    TextEdit* edits = NULL;
-    char** texts = NULL;
-    size_t m = 0, cap = 0, texts_cap = 0;
-    bool shifted = false;
     const size_t count = runs && at ? _line_runs(c, r, k->count, runs, NULL, at) : 0;
-    for (size_t g = 0; g < count; g++) {
-        for (size_t line = runs[g].first; line <= runs[g].last; line++) {
-            size_t len = 0, cut = 0;
-            char* sp = _shifted(c, line, out, shifts, &len, &cut);
-            if (!sp)
+    size_t lines = 0;
+    for (size_t g = 0; g < count; g++)
+        lines += runs[g].last - runs[g].first + 1;
+    TextEdit* edits = calloc(lines ? lines : 1, sizeof(TextEdit));
+    int* cols = calloc(lines ? lines : 1, sizeof(int));
+    if (!runs || !at || !edits || !cols) {
+        free(edits);
+        free(cols);
+        free(runs);
+        free(at);
+        return;
+    }
+    const int by = _shift_width(c, shifts);
+    size_t m = 0;
+    for (size_t g = 0, i = 0; g < count; i += runs[g].last - runs[g].first + 1, g++) {
+        int* col = cols + i;
+        if (op == '=') {
+            if (!_host_indents(c, runs[g].first, runs[g].last, col))
                 continue;
-            if (!grow_array((void**)&edits, &cap, m + 1, sizeof(TextEdit), 16) ||
-                !grow_array((void**)&texts, &texts_cap, m + 1, sizeof(char*), 16)) {
-                free(sp);
-                break;
+        } else {
+            for (size_t line = runs[g].first; line <= runs[g].last; line++) {
+                const int now = _indent_cols(c, line);
+                col[line - runs[g].first] = _empty(c, line) ? -1
+                                            : op == '<'     ? (now > by ? now - by : 0)
+                                                            : now + by;
             }
-            size_t ll = 0;
-            const char* s = _lt(c, line, &ll);
-            shifted = shifted || len != cut || memcmp(s, sp, cut) != 0;
-            texts[m] = sp;
-            edits[m++] = (TextEdit){_ls(c, line), _ls(c, line) + cut, sp, len};
+        }
+        for (size_t line = runs[g].first; line <= runs[g].last; line++) {
+            const int to = col[line - runs[g].first];
+            if (to >= 0 && _indent_edit(c, line, to, &edits[m]))
+                m++;
         }
     }
-    if (shifted)
+    if (m)
         ui_editor_edit(c->el, edits, m, NULL, 0, 0);
     else
         _empty_step(c);
-    if (runs && at) {
-        for (size_t i = 0; i < k->count; i++)
-            at[i] = at[i] != SIZE_MAX ? _first_nonblank(c, at[i]) : k->sel[i].head;
-        _place(c, at, NULL, k->count, k->primary, true);
-    }
     for (size_t i = 0; i < m; i++)
-        free(texts[i]);
-    free(texts);
+        free((char*)edits[i].text);
+    for (size_t i = 0; i < k->count; i++)
+        at[i] = at[i] != SIZE_MAX ? _first_nonblank(c, at[i]) : k->sel[i].head;
+    _place(c, at, NULL, k->count, k->primary, true);
     free(edits);
-    free(runs);
-    free(at);
-}
-
-// =: the carets' runs re-indented as vim's indentexpr re-indents them. Each line is asked once the
-// lines above it are re-indented, so the host reads them as they now stand -- an edit a line for
-// that reason -- and a line of blanks is emptied without asking. Each caret goes to its own first
-// line's first character that is not a blank.
-static void _reindent(Ctx* c, const Carets* k, const Range* r) {
-    UIEditorVim* v = c->v;
-    const size_t n = k->count ? k->count : 1;
-    LineRun* runs = calloc(n, sizeof(LineRun));
-    size_t* at = calloc(n, sizeof(size_t));
-    if (runs && at) {
-        const size_t count = _line_runs(c, r, k->count, runs, NULL, at);
-        bool changed = false;
-        for (size_t g = 0; g < count; g++) {
-            for (size_t line = runs[g].first; line <= runs[g].last; line++) {
-                int col = _white_line(c, line) ? 0 : v->indent(c->el, line, v->indent_user);
-                if (col < 0)
-                    col = _indent_cols(c, line);
-                changed = _set_indent(c, line, col) || changed;
-            }
-        }
-        if (!changed)
-            _empty_step(c);
-        for (size_t i = 0; i < k->count; i++)
-            at[i] = at[i] != SIZE_MAX ? _first_nonblank(c, at[i]) : k->sel[i].head;
-        _place(c, at, NULL, k->count, k->primary, true);
-    }
+    free(cols);
     free(runs);
     free(at);
 }
@@ -2572,9 +2534,9 @@ static void _format(Ctx* c, const Carets* k, const Range* r, const size_t* start
 }
 
 // The lines the carets stand on -- those `which` marks, when it says of each of them -- given the
-// host's indent in place of the one copied from above, as vim's indentexpr indents a line that o,
-// O or Enter has just made, or a change of whole lines; each caret goes after its line's indent.
-// -1 keeps the indent a line has, rebuilt of spaces as vim's set_indent rebuilds it. With no host
+// host's indent in place of the one copied from above, each asked as a run of one, as vim's
+// indentexpr indents a line that o, O or Enter has just made, or a change of whole lines; each
+// caret goes after its line's indent. A line the host declines keeps what was copied. With no host
 // nothing changes and `indented` is returned; else whether a marked line is left with blanks at
 // its start.
 static bool _indent_new_lines(Ctx* c, const bool* which, size_t n, bool indented) {
@@ -2594,7 +2556,11 @@ static bool _indent_new_lines(Ctx* c, const bool* which, size_t n, bool indented
         size_t len = 0;
         const char* s = _lt(c, line, &len);
         const size_t blanks = _blanks(s, len);
-        int col = v->indent(c->el, line, v->indent_user);
+        int col = -1;
+        if (!v->indent(c->el, line, line, &col, v->indent_user)) {
+            indented = indented || blanks > 0;
+            continue;
+        }
         if (col < 0)
             col = _indent_cols(c, line);
         indented = indented || col > 0;
@@ -2703,12 +2669,10 @@ static bool _operate_on(Ctx* c, uint32_t op, const Carets* kp, const Range* r, c
     if (op == '<' || op == '>' || op == '=' || op == 'q') {
         _place(c, start, NULL, k.count, k.primary, true);
         _group(c, true);
-        if (op == '=')
-            _reindent(c, &k, r);
-        else if (op == 'q')
+        if (op == 'q')
             _format(c, &k, r, start);
         else
-            _shift_lines(c, &k, r, op == '<', shifts);
+            _indent_lines(c, &k, r, op, shifts);
         _group(c, false);
         return true;
     }

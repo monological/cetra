@@ -1660,29 +1660,46 @@ static int layout_columns(const TextDoc* doc, const char* s, size_t len) {
     return col;
 }
 
-// The indent of the line above that is not blank, two more for each ( it opens and two fewer for
-// each ) it closes, never below 0; a line opening with ; keeps its own.
-static int layout_indent(UIElement* el, size_t line, void* user) {
-    (void)user;
-    TextDoc* doc = ui_editor_doc(el);
-    size_t len = 0;
-    const char* s = text_doc_line(doc, line, &len);
-    size_t i = 0;
-    while (i < len && (s[i] == ' ' || s[i] == '\t'))
-        i++;
-    if (i < len && s[i] == ';')
-        return -1;
-    size_t prev = line;
-    do {
-        if (prev == 0)
-            return 0;
-        s = text_doc_line(doc, --prev, &len);
-    } while (layout_blank(s, len));
+static int layout_opens(const char* s, size_t len) {
     int opens = 0;
     for (size_t k = 0; k < len; k++)
         opens += (s[k] == '(') - (s[k] == ')');
-    const int col = layout_columns(doc, s, len) + 2 * opens;
-    return col > 0 ? col : 0;
+    return opens;
+}
+
+// The indent of the line above that is not blank, two more for each ( it opens and two fewer for
+// each ) it closes, never below 0; a line opening with ; keeps its own. Worked down the lines, each
+// from the one above as it will stand, as vim asks indentexpr a line at a time.
+static bool layout_indent(UIElement* el, size_t first, size_t last, int* cols, void* user) {
+    (void)user;
+    TextDoc* doc = ui_editor_doc(el);
+    size_t len = 0;
+    const char* s = NULL;
+    int above = -1, opens = 0; // the indent and the opens of the line above that is not blank
+    for (size_t prev = first; prev-- > 0;) {
+        s = text_doc_line(doc, prev, &len);
+        if (!layout_blank(s, len)) {
+            above = layout_columns(doc, s, len);
+            opens = layout_opens(s, len);
+            break;
+        }
+    }
+    for (size_t line = first; line <= last; line++) {
+        s = text_doc_line(doc, line, &len);
+        size_t i = 0;
+        while (i < len && (s[i] == ' ' || s[i] == '\t'))
+            i++;
+        const int col = i < len && s[i] == ';'  ? -1
+                        : above < 0             ? 0
+                        : above + 2 * opens > 0 ? above + 2 * opens
+                                                : 0;
+        cols[line - first] = col;
+        if (!layout_blank(s, len)) {
+            above = col < 0 ? layout_columns(doc, s, len) : col;
+            opens = layout_opens(s, len);
+        }
+    }
+    return true;
 }
 
 static bool layout_put(char** buf, size_t* n, size_t* cap, const char* s, size_t k) {

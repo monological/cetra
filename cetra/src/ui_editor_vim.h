@@ -76,12 +76,15 @@ typedef bool (*UIEditorVimLookupFn)(UIElement* el, UIEditorVimLookup kind, void*
 // NULL for none.
 void ui_editor_vim_set_lookup(UIEditorVim* vim, UIEditorVimLookupFn fn, void* user);
 
-// The column `line`'s indent should reach (lines from 0), or -1 to keep the indent it has: vim's
-// indentexpr with indentkeys=o,O. Asked by =, a line at a time after the lines above it are
-// re-indented, a line of blanks emptied without asking; and for a line just made by o, O or
-// Enter, or by a change of whole lines (cc, S), in place of the indent copied from above. The
-// indent is built of spaces. With none, = does nothing and a new line copies its indent.
-typedef int (*UIEditorVimIndentFn)(UIElement* el, size_t line, void* user);
+// The indent for lines `first` to `last` (lines from 0), a column each into `cols`, -1 to keep a
+// line's own: worked out top to bottom as they will stand, each line as though the lines above it
+// were already re-indented, as vim's indentexpr is asked a line at a time with indentkeys=o,O.
+// Asked once for all the lines = re-indents, which change as one edit, a line of blanks emptied
+// whatever the answer; and for the one line o, O or Enter has just made, or a change of whole
+// lines (cc, S) leaves, in place of the indent copied from above. Every indent is built of spaces.
+// False leaves the lines. With none, = does nothing and a new line copies its indent.
+typedef bool (*UIEditorVimIndentFn)(UIElement* el, size_t first, size_t last, int* cols,
+                                    void* user);
 void ui_editor_vim_set_indent(UIEditorVim* vim, UIEditorVimIndentFn fn, void* user);
 // Lines `first` to `last` laid out again: their new text in *out, malloc'd and freed by the vim
 // mode, *len bytes from the first line's start to the last's end without its break, the text's own
