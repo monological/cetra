@@ -31066,6 +31066,10 @@ def run_idle_gate(workdir):
                      over 30 frames more than one on a line of text -- whose frames are the UI's
                      own eases -- and ends on its own once every row is wrapped, short of the 400
                      allowed.
+      engine-close-hook the window's close, which the app may refuse (spec 14.7), asked by an
+                     input script's close as the close button asks it: refused the first time and
+                     taken the second, the run ending on the frame of the second; with no hook
+                     the first ends it; and a close over four frames asked once.
     """
     failed = []
 
@@ -31211,6 +31215,28 @@ def run_idle_gate(workdir):
               f"takes at 192 KB a frame, the end before 400, and 1)")
     print(f"  idle-editor         {'PASS' if ok else 'FAIL'}  {detail}")
     note("idle-editor", ok)
+
+    # The window's close, which the app may refuse (spec 14.7): a script's close asks the hook as
+    # the close button would, as the frame it is on ends.
+    def close_run(tag, lines, *flags):
+        script = os.path.join(workdir, f"close_{tag}.script")
+        with open(script, "w", encoding="utf-8") as f:
+            f.write(lines)
+        _, probe = _canvas_run(workdir, f"close_{tag}", *flags, "--input-script", script,
+                               frames=30)
+        said = probe.get(("close", "asked"))
+        return (int(said[0]), int(said[2]), int(said[4])) if said and len(said) == 5 else None
+
+    twice = close_run("twice", "5 close\n9 close\n", "--refuse-close")
+    alone = close_run("alone", "5 close\n9 close\n")
+    held = close_run("held", "3-6 close\n", "--refuse-close")
+    # The script's frame N ends as the run's frame N + 2, as its typing reaches that frame.
+    ok = twice == (2, 1, 11) and alone == (0, 0, 7) and held == (1, 1, 30)
+    detail = (f"asked, refused and frames drawn: refused then taken {twice} (want (2, 1, 11)), "
+              f"no hook {alone} (want (0, 0, 7)), a close over frames 3 to 6 {held} (want "
+              f"(1, 1, 30))")
+    print(f"  engine-close-hook   {'PASS' if ok else 'FAIL'}  {detail}")
+    note("engine-close-hook", ok)
 
     return failed
 

@@ -1458,6 +1458,23 @@ static bool g_probe;            // --canvas-probe: the run says what it did
 static const char* g_ui_text;   // --ui-text: a label in the --ui panel
 static UISystem* g_ui_live;     // the UI given the real pointer and keyboard each frame
 
+// --refuse-close (spec 14.7): the first close the window is asked for refused and said, as an app
+// holding unsaved work would; the next taken.
+static bool g_refuse_close;
+static int g_close_asked, g_close_refused;
+
+static bool canvas_close(Engine* engine, void* user) {
+    (void)engine;
+    (void)user;
+    g_close_asked++;
+    if (g_close_refused)
+        return true;
+    g_close_refused++;
+    printf("canvas: the close was refused; ask again to close\n");
+    fflush(stdout);
+    return false;
+}
+
 // ---- The fonts built into the program (spec 14.6): the table canvas_fonts.h holds, which the
 // build writes from its list, indexed by what each is for (CANVAS_FONTS_LABEL and the rest).
 
@@ -2791,16 +2808,16 @@ static void say_box(UIRect r, double s) {
 }
 
 static void usage(const char* argv0) {
-    fprintf(
-        stderr,
-        "usage: %s [-x] [-f frames] [-S out.ppm] [-W points] [-H points]\n"
-        "          [--sheet NAME] [--view X,Y,WIDTH (mm)] [--offset UNITS] [--mirror]\n"
-        "          [--tile-shift N] [--canvas-probe] [--picture] [--edit-thread]\n"
-        "          [--split] [--only-view 0|1] [--ui] [--budget]\n"
-        "          [--idle] [--idle-wake S,...] [--idle-load PATH] [--input-script PATH]\n"
-        "          [--ui-enter] [--ui-text TEXT] [--gui-click] [--history] [--palette]\n"
-        "          [--font-sheet] [--editor FILE] [--editor-lag FRAMES] [--vim] [--read-only]\n",
-        argv0);
+    fprintf(stderr,
+            "usage: %s [-x] [-f frames] [-S out.ppm] [-W points] [-H points]\n"
+            "          [--sheet NAME] [--view X,Y,WIDTH (mm)] [--offset UNITS] [--mirror]\n"
+            "          [--tile-shift N] [--canvas-probe] [--picture] [--edit-thread]\n"
+            "          [--split] [--only-view 0|1] [--ui] [--budget]\n"
+            "          [--idle] [--idle-wake S,...] [--idle-load PATH] [--input-script PATH]\n"
+            "          [--ui-enter] [--ui-text TEXT] [--gui-click] [--history] [--palette]\n"
+            "          [--font-sheet] [--editor FILE] [--editor-lag FRAMES] [--vim] [--read-only]\n"
+            "          [--refuse-close]\n",
+            argv0);
 }
 
 // An after-tonemap pass that changes nothing, so the frame is drawn into the
@@ -2895,6 +2912,8 @@ int main(int argc, char** argv) {
             vim = true;
         } else if (strcmp(argv[i], "--read-only") == 0) {
             g_editor_sheet.read_only = true;
+        } else if (strcmp(argv[i], "--refuse-close") == 0) {
+            g_refuse_close = true;
         } else if (strcmp(argv[i], "--palette") == 0) {
             palette = true;
         } else if (strcmp(argv[i], "--ui-text") == 0 && more) {
@@ -3079,8 +3098,14 @@ int main(int argc, char** argv) {
     engine_set_mouse_button_callback(engine, on_button);
     engine_set_scroll_callback(engine, on_scroll);
     engine_set_key_callback(engine, on_key);
+    if (g_refuse_close)
+        engine_set_close_hook(engine, canvas_close, NULL);
 
     engine_run(engine, on_update, NULL, NULL);
+    // How often the window was asked to close and refused it, and the frames the run drew.
+    if (probe)
+        printf("canvas close asked %d refused %d frames %zu\n", g_close_asked, g_close_refused,
+               engine->total_frames);
     if (g_idle_say)
         printf("canvas idle frames %zu waited %.6f\n", engine->total_frames, engine->time_waited);
     // The palette as the run left it: whether it is open, its text's length, the rows it holds,

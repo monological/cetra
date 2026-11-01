@@ -88,6 +88,10 @@ typedef void (*ScrollCallback)(struct Engine* engine, double xoffset, double yof
 // emit is captured headless -- which is what lets an overlay be a golden.
 typedef void (*EngineOverlayFunc)(struct Engine* engine, void* user);
 
+// Asked when the window is asked to close (engine_set_close_hook): true closes it, false keeps it
+// open and draws a frame, in which the app can say why.
+typedef bool (*EngineCloseFunc)(struct Engine* engine, void* user);
+
 // The most overlays an engine draws; engine_add_overlay refuses past it.
 #define ENGINE_OVERLAY_MAX 8
 
@@ -141,7 +145,8 @@ typedef struct Engine {
     // string), the five callbacks and user_data (installs), and the animation
     // clock (engine_set_render_clock samples a borrowed one each frame, and
     // engine_set_render_time sets a frame's directly for a loop that is not
-    // engine_run), and the overlays (engine_add_overlay, engine_remove_overlay).
+    // engine_run), the overlays (engine_add_overlay, engine_remove_overlay),
+    // and the close hook (engine_set_close_hook).
     //
     // Everything else -- the feature toggles, the draw levers, the overlays,
     // the run's counts, clear_color, current_render_mode -- is
@@ -531,6 +536,10 @@ typedef struct Engine {
     double time_waited;      // seconds spent waiting for a frame, kept out of every clock
     struct EngineWake* wake; // what asks for the next frame, across threads; private
 
+    // What is asked when the window is asked to close; NULL closes it (engine_set_close_hook).
+    EngineCloseFunc close_hook;
+    void* close_user;
+
     // Bone visualization
     ShaderProgram* bone_program;
     GLuint bone_line_vao;
@@ -883,6 +892,15 @@ void engine_begin_work(Engine* engine);
 // The result is in: ends what engine_begin_work began and asks for a frame. Any thread.
 void engine_end_work(Engine* engine);
 
+/*
+ * What is asked when the window is asked to close (spec 14.7): its close button, Alt+F4 on Windows
+ * and Linux, and on macOS the app menu's Quit and its Cmd+Q, all of which GLFW sends as one close
+ * request; and an input script's `close`. NULL, the default, closes the window. A run ended any
+ * other way is not asked: the frame limit, idle mode's headless end, and the app setting the
+ * window's should-close flag itself (game_quit), which are the engine or the app deciding.
+ */
+void engine_set_close_hook(Engine* engine, EngineCloseFunc fn, void* user);
+
 // Draws `scene` through every scene pass, into the engine's scene target. What
 // a `render` hook calls with the scene it was handed, which is the one the
 // engine just propagated. Animation time comes from engine->render_time,
@@ -937,6 +955,10 @@ bool engine_fb_to_points(const Engine* engine, double fb_x, double fb_y, double*
  * left right up down home end pageup pagedown backspace delete enter tab escape
  * space slash. They are EVENTS, delivered on every frame of their range in the
  * line's order, and they add to the keyboard rather than replacing it.
+ *
+ * `close` asks to close the window as its close button would (engine_set_close_hook),
+ * once, as the first frame of its range ends: taken, that frame is the run's last and
+ * its screenshot.
  *
  * It drives the engine's own paths, so a replayed drag reaches the drag state,
  * the ray picking and the app's forwarded callback exactly as a hand does, and a
