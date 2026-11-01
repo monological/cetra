@@ -627,17 +627,20 @@ code pane moves between files, back where it was in each; and the fonts are buil
 
 **What spec 14.6 built:**
 
-- **`ui_remove` and `ui_move`**: an element taken out of the UI and freed, and one moved under
-  another parent at an index, keeping everything it holds. A split is a row put at the pane's place,
-  the pane moved into it and a new pane beside it; the messages are a column at the root's place
-  with the old content moved into it; a close is a removal. Whatever the UI held inside what goes is
-  let go first, and an element removed during a pass -- `:q` closing a pane from its own key -- is
-  freed only as the pass ends.
-- **`ui_editor_set_doc`**: an editor shown another text, from its start, the text it leaves
-  forgetting it and closing an undo group held to it. `ui_editor_top` and a public
-  `ui_editor_scroll_place` give a view back; a host keeps the carets and the top with the text's
-  version and brings them through the edits since with `text_doc_map` before putting them back. An
-  editor's serial, new at each text, is how the vim mode knows another editor from the last it saw.
+- **`ui_remove(el)` and `ui_move(el, parent, before)`**: an element taken out of the UI and freed,
+  and one moved under another parent in front of a sibling (NULL the end), keeping everything it
+  holds. A split is a row put in front of the pane, the pane moved into it and a new pane beside it;
+  the messages are a column put in front of the root's content with the content moved into it; a
+  close is a removal. Whatever the UI held inside what goes is let go first, and an element removed
+  during a pass -- `:q` closing a pane from its own key -- is freed only as the pass ends. A key
+  that something used takes its press's character with it, so a split bound to `|` types no `|`
+  into the pane it made.
+- **`ui_editor_set_doc`**: an editor shown another text, and back where it was in each text it has
+  shown, as a vim window is: its carets, its view and its rows kept on the text while it shows
+  another and brought through every edit made there, so pcb keeps nothing per pane and file. A text
+  new to it starts at its top. `ui_editor_top` and a public `ui_editor_scroll_place` give a view to
+  a new pane, held for its first layout; `ui_editor_doc` says what a pane shows. An editor's
+  serial, new at each text, is how the vim mode knows another editor from the last it saw.
 - **Fonts from bytes**: `load_font_memory` and `create_glyph_cache_memory`, the same font to the byte
   as the file. `cetra_embed_files` builds files into a program as a table indexed by what each is
   for, so a font's file is named only in the build's list.
