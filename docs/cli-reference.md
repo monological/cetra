@@ -1881,6 +1881,12 @@ It takes the capture set `-x`, `-f`, `-S`, `-W` and `-H`, and:
   input line's top (`canvas history column`), which `ui-history-clip` reads.
 - `--ui-text TEXT` sets the text of the `--ui` panel's label (implies `--ui`). The glyph arms draw
   é, Ω and a codepoint the atlas lacks through it.
+- `--ui-keys` (spec 14.10) makes the `--ui` panel focusable and gives it a key hook (implies
+  `--ui`), as a pane an app draws would have: a click focuses it, and its label says the last two
+  things it was handed, a key by its code and modifiers and a character as itself. It takes every
+  character and no key, so Tab moves the focus on and Esc lets go. A text field under it is there to
+  move the pointer across: the panel keeps the focus until a press moves it. The app's own keys --
+  = and - to zoom -- stand down while it holds the focus.
 - `--font-sheet` (spec 14.4) draws one line of code in JetBrains Mono at 11, 13 and 16 points, each
   first from the code editor's bitmaps made at the size shown and then as the UI's distance field
   of the same face. The app's fonts are built into it (spec 14.6); under `--canvas-probe`, run from
