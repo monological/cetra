@@ -1642,14 +1642,118 @@ static void note_vim_emptied(TextDoc* doc, const TextDocAction* action, void* us
     g_vim_emptied = g_vim_emptied || len == 0 || !strcmp(text, "\n") || !strcmp(text, "\r\n");
 }
 
+// ---- The rules of scripts/vim_layout.vim as a host's indent and format hooks (spec 14.9), which
+// the layout oracle holds beside vim's indentexpr and formatexpr: change one and change the other.
+
+static bool layout_blank(const char* s, size_t len) {
+    for (size_t i = 0; i < len; i++)
+        if (s[i] != ' ' && s[i] != '\t')
+            return false;
+    return true;
+}
+
+// The columns a line's leading blanks reach, tabs to the text's stops: vim's indent().
+static int layout_columns(const TextDoc* doc, const char* s, size_t len) {
+    int col = 0;
+    for (size_t i = 0; i < len && (s[i] == ' ' || s[i] == '\t'); i++)
+        col = s[i] == '\t' ? col + doc->tab_width - col % doc->tab_width : col + 1;
+    return col;
+}
+
+// The indent of the line above that is not blank, two more for each ( it opens and two fewer for
+// each ) it closes, never below 0; a line opening with ; keeps its own.
+static int layout_indent(UIElement* el, size_t line, void* user) {
+    (void)user;
+    TextDoc* doc = ui_editor_doc(el);
+    size_t len = 0;
+    const char* s = text_doc_line(doc, line, &len);
+    size_t i = 0;
+    while (i < len && (s[i] == ' ' || s[i] == '\t'))
+        i++;
+    if (i < len && s[i] == ';')
+        return -1;
+    size_t prev = line;
+    do {
+        if (prev == 0)
+            return 0;
+        s = text_doc_line(doc, --prev, &len);
+    } while (layout_blank(s, len));
+    int opens = 0;
+    for (size_t k = 0; k < len; k++)
+        opens += (s[k] == '(') - (s[k] == ')');
+    const int col = layout_columns(doc, s, len) + 2 * opens;
+    return col > 0 ? col : 0;
+}
+
+static bool layout_put(char** buf, size_t* n, size_t* cap, const char* s, size_t k) {
+    if (!grow_array((void**)buf, cap, *n + k + 1, 1, 64))
+        return false;
+    memcpy(*buf + *n, s, k);
+    *n += k;
+    return true;
+}
+
+// The lines' words, split at blanks, laid out again at the first line's indent, as many to a line
+// as fit in 24 bytes with the indent; no words make one empty line.
+static bool layout_format(UIElement* el, size_t first, size_t last, char** out, size_t* len,
+                          void* user) {
+    (void)user;
+    TextDoc* doc = ui_editor_doc(el);
+    size_t first_len = 0;
+    const int ind = layout_columns(doc, text_doc_line(doc, first, &first_len), first_len);
+    const char* nl = text_doc_newline(doc);
+    char spaces[256];
+    memset(spaces, ' ', sizeof(spaces));
+    const size_t indent = (size_t)ind < sizeof(spaces) ? (size_t)ind : sizeof(spaces);
+    char* buf = NULL;
+    size_t n = 0, cap = 0, line_len = 0;
+    bool ok = layout_put(&buf, &n, &cap, "", 0);
+    for (size_t line = first; ok && line <= last; line++) {
+        size_t ll = 0;
+        const char* s = text_doc_line(doc, line, &ll);
+        for (size_t i = 0; ok && i < ll;) {
+            if (s[i] == ' ' || s[i] == '\t') {
+                i++;
+                continue;
+            }
+            size_t j = i;
+            while (j < ll && s[j] != ' ' && s[j] != '\t')
+                j++;
+            const size_t w = j - i;
+            if (!line_len) {
+                ok = layout_put(&buf, &n, &cap, spaces, indent);
+            } else if (indent + line_len + 1 + w <= 24) {
+                ok = layout_put(&buf, &n, &cap, " ", 1);
+                line_len++;
+            } else {
+                ok = layout_put(&buf, &n, &cap, nl, strlen(nl)) &&
+                     layout_put(&buf, &n, &cap, spaces, indent);
+                line_len = 0;
+            }
+            ok = ok && layout_put(&buf, &n, &cap, s + i, w);
+            line_len += w;
+            i = j;
+        }
+    }
+    if (!ok) {
+        free(buf);
+        return false;
+    }
+    *out = buf;
+    *len = n;
+    return true;
+}
+
 // Each case of the file CETRA_VIM_CASES names -- "<text in hex> <line> <column> <keys in hex>",
 // the keys in vim's notation -- run on a fresh text, editor and vim mode, the cursor put where
-// vim's cursor() would put it, the text read-only with CETRA_VIM_READ_ONLY set. Prints "vim <case>
-// <line> <column> <the text in hex> <emptied>", as vim's line('.') and col('.') count, the last 1
-// when the text was emptied on the way.
+// vim's cursor() would put it, the text read-only with CETRA_VIM_READ_ONLY set, and the layout
+// rules installed as the host's hooks with CETRA_VIM_LAYOUT. Prints "vim <case> <line> <column>
+// <the text in hex> <emptied>", as vim's line('.') and col('.') count, the last 1 when the text was
+// emptied on the way.
 static int probe_vim_run(UISystem* ui) {
     const char* path = getenv("CETRA_VIM_CASES");
     const bool read_only = getenv("CETRA_VIM_READ_ONLY") != NULL;
+    const bool layout = getenv("CETRA_VIM_LAYOUT") != NULL;
     long size = 0;
     char* all = path ? read_entire_file(path, &size) : NULL;
     if (!all) {
@@ -1672,6 +1776,10 @@ static int probe_vim_run(UISystem* ui) {
             char* keys = unhex(keys_hex, strlen(keys_hex), &keys_len);
             TextDoc* doc = text ? create_text_doc(text, text_len) : NULL;
             UIEditorVim* vim = create_ui_editor_vim();
+            if (vim && layout) {
+                ui_editor_vim_set_indent(vim, layout_indent, NULL);
+                ui_editor_vim_set_format(vim, layout_format, NULL);
+            }
             if (doc && vim && keys) {
                 g_vim_emptied = false;
                 text_doc_set_on_action(doc, note_vim_emptied, NULL);

@@ -76,6 +76,21 @@ typedef bool (*UIEditorVimLookupFn)(UIElement* el, UIEditorVimLookup kind, void*
 // NULL for none.
 void ui_editor_vim_set_lookup(UIEditorVim* vim, UIEditorVimLookupFn fn, void* user);
 
+// The column `line`'s indent should reach (lines from 0), or -1 to keep the indent it has: vim's
+// indentexpr with indentkeys=o,O. Asked by =, a line at a time after the lines above it are
+// re-indented, a line of blanks emptied without asking; and for a line just made by o, O or
+// Enter, or by a change of whole lines (cc, S), in place of the indent copied from above. The
+// indent is built of spaces. With none, = does nothing and a new line copies its indent.
+typedef int (*UIEditorVimIndentFn)(UIElement* el, size_t line, void* user);
+void ui_editor_vim_set_indent(UIEditorVim* vim, UIEditorVimIndentFn fn, void* user);
+// Lines `first` to `last` laid out again: their new text in *out, malloc'd and freed by the vim
+// mode, *len bytes from the first line's start to the last's end without its break, the text's own
+// breaks between lines. Vim's formatexpr, asked by gq; the cursor goes to the last new line's
+// first character that is not a blank. False leaves the lines; with none, gq does nothing.
+typedef bool (*UIEditorVimFormatFn)(UIElement* el, size_t first, size_t last, char** out,
+                                    size_t* len, void* user);
+void ui_editor_vim_set_format(UIEditorVim* vim, UIEditorVimFormatFn fn, void* user);
+
 // A key, or a sequence of them, and what it does, for a host's help.
 typedef struct UIEditorVimKey {
     const char* keys;

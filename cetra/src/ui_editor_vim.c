@@ -204,6 +204,10 @@ struct UIEditorVim {
     void* prompt_user;
     UIEditorVimLookupFn lookup;
     void* lookup_user;
+    UIEditorVimIndentFn indent;
+    void* indent_user;
+    UIEditorVimFormatFn format;
+    void* format_user;
 };
 
 // The look an editor takes from the state.
@@ -2061,10 +2065,26 @@ static void _group(Ctx* c, bool open) {
     }
 }
 
-// Where vim leaves the cursor after taking a step back or making it again: where the cursor stood
-// as the step began, when that is on the step's first changed line or the line above it, else
-// that line's first character not a blank. `s` is the step.
-static size_t _undone_at(const Ctx* c, const TextUndoStep* s) {
+// Where the cursor stood as a step began, as a line and a byte column -- read in the text the step
+// began from, which is the text before a redo makes it again and after an undo takes it back.
+// Line SIZE_MAX for a step that kept no cursor.
+typedef struct {
+    size_t line, col;
+} StepStart;
+
+static StepStart _step_start(const Ctx* c, const TextUndoStep* s) {
+    if (!s || !s->before_count)
+        return (StepStart){SIZE_MAX, 0};
+    const size_t at = s->before[s->before_count - 1].head, line = _lof(c, at);
+    return (StepStart){line, at - _ls(c, line)};
+}
+
+// Where vim leaves the cursor after taking a step back or making it again: at the line and column
+// it stood at as the step began, held to the line, when that is the step's first changed line or
+// the line above it; else that line's first character not a blank. A column and not an offset,
+// since a step made again whose change began before the cursor on its line -- an indent, from =,
+// gq or > -- has moved every offset after it. `s` is the step.
+static size_t _undone_at(const Ctx* c, const TextUndoStep* s, StepStart start) {
     // The least start of any change: nothing before it moved, so it is the same offset whichever
     // way the step was just taken. Where that line is gone -- the last lines deleted -- the cursor
     // goes to the line now last.
@@ -2072,35 +2092,44 @@ static size_t _undone_at(const Ctx* c, const TextUndoStep* s) {
     for (size_t p = 0; p < s->part_count; p++)
         for (size_t i = 0; i < s->parts[p].change_count; i++)
             first = s->parts[p].changes[i].start < first ? s->parts[p].changes[i].start : first;
-    if (first == SIZE_MAX || !s->before_count)
+    if (first == SIZE_MAX || start.line == SIZE_MAX)
         return SIZE_MAX;
     if (first > _le(c, _lines(c) - 1))
         return _first_nonblank(c, _lines(c) - 1);
     const size_t top = _lof(c, first);
-    const size_t at = s->before[s->before_count - 1].head;
-    const size_t line = _lof(c, at);
-    return line == top || line + 1 == top ? at : _first_nonblank(c, top);
+    if (start.line != top && start.line + 1 != top)
+        return _first_nonblank(c, top);
+    const size_t at = _ls(c, start.line) + start.col, end = _le(c, start.line);
+    return at < end ? at : end;
 }
 
 static void _undo(Ctx* c, bool redo, int count) {
     UIEditorVim* v = c->v;
+    const bool own = !(redo ? v->redo : v->undo) && c->doc;
     bool any = false;
+    StepStart start = {SIZE_MAX, 0};
     for (int i = 0; i < (count ? count : 1); i++) {
+        // Before a redo the text is the one the step began from: where its cursor stood is read
+        // there.
+        const StepStart was =
+            own && redo ? _step_start(c, text_doc_step_taken(c->doc, false)) : start;
         const bool done =
             redo ? (v->redo ? v->redo(c->el, v->undo_user) : ui_editor_run(c->el, "redo"))
                  : (v->undo ? v->undo(c->el, v->undo_user) : ui_editor_run(c->el, "undo"));
         if (!done)
             break;
         any = true;
+        start = was;
     }
     size_t n = 0, primary = 0;
     size_t* at = _heads(c->el, &n, &primary);
     // With the text's own undo, the step just taken back or made again says where vim's cursor
     // goes.
-    const TextUndoStep* s =
-        any && !(redo ? v->redo : v->undo) && c->doc ? text_doc_step_taken(c->doc, redo) : NULL;
+    const TextUndoStep* s = any && own ? text_doc_step_taken(c->doc, redo) : NULL;
+    if (s && !redo)
+        start = _step_start(c, s);
     // A step begun at one caret comes back to one, however many it typed at -- a block's I.
-    const size_t to = s && (n == 1 || s->before_count == 1) ? _undone_at(c, s) : SIZE_MAX;
+    const size_t to = s && (n == 1 || s->before_count == 1) ? _undone_at(c, s, start) : SIZE_MAX;
     if (at && to != SIZE_MAX) {
         at[0] = to;
         n = 1;
@@ -2283,6 +2312,195 @@ static char* _shifted(const Ctx* c, size_t line, bool out, int times, size_t* n,
     return sp;
 }
 
+// ---- = and gq, answered by the host (spec 14.9)
+
+// Whether = and gq have a host to answer them; every other operator always does.
+static bool _laid_out(const UIEditorVim* v, uint32_t op) {
+    return op == '=' ? v->indent != NULL : op == 'q' ? v->format != NULL : true;
+}
+
+// `line`'s indent made `col` columns of spaces, as expandtab builds it, by an edit of its own;
+// false when it is that already.
+static bool _set_indent(Ctx* c, size_t line, int col) {
+    size_t len = 0;
+    const char* s = _lt(c, line, &len);
+    const size_t blanks = _blanks(s, len), n = (size_t)(col < SHIFT_MAX ? col : SHIFT_MAX);
+    if (blanks == n && !memchr(s, '\t', blanks))
+        return false;
+    char* sp = malloc(n + 1);
+    if (!sp)
+        return false;
+    memset(sp, ' ', n);
+    const size_t at = _ls(c, line);
+    ui_editor_edit(c->el, &(TextEdit){at, at + blanks, sp, n}, 1, NULL, 0, 0);
+    free(sp);
+    return true;
+}
+
+// The lines each caret's range covers: an operator over characters takes theirs whole, as = and gq
+// always work on lines. SIZE_MAX for a caret with none.
+static void _range_lines(const Ctx* c, const Range* r, size_t n, size_t* first, size_t* last) {
+    for (size_t i = 0; i < n; i++) {
+        first[i] = !r[i].ok ? SIZE_MAX : r[i].lines ? r[i].first : _lof(c, r[i].lo);
+        last[i] = !r[i].ok ? SIZE_MAX : r[i].lines ? r[i].last : _lof(c, r[i].hi);
+    }
+}
+
+// =: each caret's lines re-indented as vim's indentexpr re-indents them. Each line is asked once
+// the lines above it are re-indented, so the host reads them as they now stand, and a line of
+// blanks is emptied without asking. Each caret goes to its first line's first character that is
+// not a blank.
+static void _reindent(Ctx* c, const Carets* k, const Range* r) {
+    UIEditorVim* v = c->v;
+    size_t* first = calloc(k->count ? k->count : 1, sizeof(size_t));
+    size_t* last = calloc(k->count ? k->count : 1, sizeof(size_t));
+    size_t* at = calloc(k->count ? k->count : 1, sizeof(size_t));
+    if (!first || !last || !at) {
+        free(first);
+        free(last);
+        free(at);
+        return;
+    }
+    _range_lines(c, r, k->count, first, last);
+    bool changed = false;
+    size_t done = SIZE_MAX; // the last line re-indented, where carets' lines meet
+    for (size_t i = 0; i < k->count; i++) {
+        if (first[i] == SIZE_MAX)
+            continue;
+        for (size_t line = first[i]; line <= last[i]; line++) {
+            if (done != SIZE_MAX && line <= done)
+                continue;
+            const int col = _white_line(c, line) ? 0 : v->indent(c->el, line, v->indent_user);
+            if (col >= 0)
+                changed = _set_indent(c, line, col) || changed;
+        }
+        done = done != SIZE_MAX && done > last[i] ? done : last[i];
+    }
+    if (!changed)
+        _empty_step(c);
+    for (size_t i = 0; i < k->count; i++)
+        at[i] = first[i] != SIZE_MAX ? _first_nonblank(c, first[i]) : k->sel[i].head;
+    _place(c, at, NULL, k->count, k->primary, true);
+    free(first);
+    free(last);
+    free(at);
+}
+
+// gq: each caret's lines replaced by the host's text for them, as vim's formatexpr lays them out --
+// the lowest first, so the lines above keep their numbers -- carets whose lines meet sharing one
+// layout. Each caret goes to the last new line's first character that is not a blank, or where its
+// operator started when the host left its lines.
+static void _format(Ctx* c, const Carets* k, const Range* r, const size_t* start) {
+    UIEditorVim* v = c->v;
+    const size_t n = k->count ? k->count : 1;
+    size_t* first = calloc(n, sizeof(size_t));
+    size_t* last = calloc(n, sizeof(size_t));
+    size_t* lead = calloc(n, sizeof(size_t));     // the caret whose layout each shares
+    size_t* new_last = calloc(n, sizeof(size_t)); // SIZE_MAX: the host left the lines
+    long long* lines_by = calloc(n, sizeof(long long));
+    long long* bytes_by = calloc(n, sizeof(long long));
+    size_t* at = calloc(n, sizeof(size_t));
+    if (!first || !last || !lead || !new_last || !lines_by || !bytes_by || !at)
+        goto out;
+    _range_lines(c, r, k->count, first, last);
+    for (size_t i = 0; i < k->count; i++) {
+        lead[i] = i;
+        new_last[i] = SIZE_MAX;
+        for (size_t j = i; j-- > 0;) {
+            if (first[j] == SIZE_MAX || lead[j] != j)
+                continue;
+            if (first[i] != SIZE_MAX && first[i] <= last[j]) {
+                lead[i] = j;
+                last[j] = last[i] > last[j] ? last[i] : last[j];
+            }
+            break;
+        }
+    }
+    bool changed = false;
+    for (size_t i = k->count; i-- > 0;) {
+        if (first[i] == SIZE_MAX || lead[i] != i)
+            continue;
+        char* text = NULL;
+        size_t len = 0;
+        if (!v->format(c->el, first[i], last[i], &text, &len, v->format_user) || !text) {
+            free(text);
+            continue;
+        }
+        const size_t lo = _ls(c, first[i]), hi = _le(c, last[i]);
+        size_t breaks = 0;
+        for (size_t b = 0; b < len; b++)
+            breaks += text[b] == '\n';
+        ui_editor_edit(c->el, &(TextEdit){lo, hi, text, len}, 1, NULL, 0, 0);
+        free(text);
+        new_last[i] = first[i] + breaks;
+        lines_by[i] = (long long)breaks - (long long)(last[i] - first[i]);
+        bytes_by[i] = (long long)len - (long long)(hi - lo);
+        changed = true;
+    }
+    if (!changed)
+        _empty_step(c);
+    for (size_t i = 0; i < k->count; i++) {
+        const size_t g = lead[i];
+        long long lines = 0, bytes = 0;
+        for (size_t j = 0; j < g; j++) {
+            if (lead[j] == j && new_last[j] != SIZE_MAX) {
+                lines += lines_by[j];
+                bytes += bytes_by[j];
+            }
+        }
+        at[i] = first[g] == SIZE_MAX ? k->sel[i].head
+                : new_last[g] != SIZE_MAX
+                    ? _first_nonblank(c, (size_t)((long long)new_last[g] + lines))
+                    : (size_t)((long long)start[i] + bytes);
+    }
+    _place(c, at, NULL, k->count, k->primary, true);
+out:
+    free(first);
+    free(last);
+    free(lead);
+    free(new_last);
+    free(lines_by);
+    free(bytes_by);
+    free(at);
+}
+
+// The lines the carets stand on given the host's indent in place of the one copied from above, as
+// vim's indentexpr indents a line that o, O or Enter has just made, or a change of whole lines;
+// each caret goes after the new indent, and -1 keeps the indent a line has. True when any line is
+// left with blanks at its start.
+static bool _indent_new_lines(Ctx* c) {
+    UIEditorVim* v = c->v;
+    Carets k = _carets(c->el);
+    Change* x = calloc(k.count ? k.count : 1, sizeof(Change));
+    bool indented = false;
+    for (size_t i = 0; k.sel && x && i < k.count; i++) {
+        const size_t head = k.sel[i].head, line = _lof(c, head), at = _ls(c, line);
+        size_t len = 0;
+        const char* s = _lt(c, line, &len);
+        const size_t blanks = _blanks(s, len);
+        x[i].within = head;
+        const int col = v->indent(c->el, line, v->indent_user);
+        if (col < 0) {
+            indented = indented || blanks > 0;
+            continue;
+        }
+        const size_t n = (size_t)(col < SHIFT_MAX ? col : SHIFT_MAX);
+        x[i].owned = malloc(n + 1);
+        if (!x[i].owned)
+            continue;
+        memset(x[i].owned, ' ', n);
+        x[i].e = (TextEdit){at, at + blanks, x[i].owned, n};
+        x[i].within = n + (head - at > blanks ? head - at - blanks : 0);
+        x[i].edits = true;
+        indented = indented || n > 0;
+    }
+    if (k.sel && x)
+        _apply(c, x, k.count, k.primary);
+    free(x);
+    _free_carets(&k);
+    return indented;
+}
+
 static bool _operate_on(Ctx* c, uint32_t op, const Carets* kp, const Range* r, const size_t* start,
                         int shifts);
 
@@ -2296,6 +2514,8 @@ static bool _operate_on(Ctx* c, uint32_t op, const Carets* kp, const Range* r, c
 // text's undo step keeps. False when no caret's motion or object was found: vim beeps, and it is
 // no change for `.` to make again. A read-only text's refusal is a change made, which vim keeps.
 static bool _operate(Ctx* c, uint32_t op, uint32_t prefix, uint32_t key, uint32_t arg, int count0) {
+    if (!_laid_out(c->v, op))
+        return false;
     Carets k = _carets(c->el);
     Range* r = calloc(k.count ? k.count : 1, sizeof(Range));
     size_t* start = calloc(k.count ? k.count : 1, sizeof(size_t));
@@ -2392,6 +2612,15 @@ static bool _operate_on(Ctx* c, uint32_t op, const Carets* kp, const Range* r, c
         return true;
     }
     _group(c, true);
+    if (op == '=' || op == 'q') {
+        if (op == '=')
+            _reindent(c, &k, r);
+        else
+            _format(c, &k, r, start);
+        free(ch);
+        _group(c, false);
+        return true;
+    }
     for (size_t i = 0; i < k.count; i++) {
         Change* x = &ch[i];
         x->within = k.sel[i].head;
@@ -2495,6 +2724,12 @@ static bool _operate_on(Ctx* c, uint32_t op, const Carets* kp, const Range* r, c
         free(at);
     } else {
         _apply(c, ch, k.count, k.primary);
+        // A change of whole lines is indented by the host, as vim's fix_indent asks indentexpr.
+        bool lines = op == 'c' && v->indent;
+        for (size_t i = 0; lines && i < k.count; i++)
+            lines = !r[i].ok || r[i].lines;
+        if (lines)
+            _indent_new_lines(c);
         // A linewise delete leaves the cursor on its line's first character not a blank.
         size_t n = 0, primary = 0;
         size_t* at = _heads(c->el, &n, &primary);
@@ -2812,8 +3047,8 @@ static bool _tilde(Ctx* c, int count0) {
 
 // Into insert mode at each caret, as `cmd` puts it: i before the cursor, a after it, I at the
 // line's first character not a blank, A at its end, o and O on a new line below or above, keeping
-// the line's indent; c has put the carets already. The insert's step begins where its typing
-// does, or for o and O on the line the cursor left.
+// the line's indent or taking the host's; c has put the carets already. The insert's step begins
+// where its typing does, or for o and O on the line the cursor left.
 static void _enter_insert(Ctx* c, uint32_t cmd, int count) {
     UIEditorVim* v = c->v;
     if (cmd == 'o' || cmd == 'O')
@@ -2851,6 +3086,8 @@ static void _enter_insert(Ctx* c, uint32_t cmd, int count) {
             _apply(c, x, k.count, k.primary);
         free(x);
         _free_carets(&k);
+        if (v->indent)
+            _indent_new_lines(c);
         v->indent_pending = true;
     } else if (cmd != 'c' && cmd != 'i') {
         Carets k = _carets(c->el);
@@ -3035,9 +3272,10 @@ static void _insert_move(Ctx* c, uint32_t k) {
 }
 
 // Enter in insert mode, as vim's autoindent makes it: each caret's line broken there, the new line
-// indented as the text before the caret is and the blanks after the caret dropped. A line of only
-// the indent an Enter or an `o` put in, nothing typed after it, loses its blanks. Refused whole on
-// a text made read-only during the insert, so it leaves no indent for Esc to take out.
+// indented as the text before the caret is -- or as the host's indent says -- and the blanks after
+// the caret dropped. A line of only the indent an Enter or an `o` put in, nothing typed after it,
+// loses its blanks. Refused whole on a text made read-only during the insert, so it leaves no
+// indent for Esc to take out.
 static void _insert_break(Ctx* c) {
     if (_refused(c))
         return;
@@ -3077,6 +3315,8 @@ static void _insert_break(Ctx* c) {
         _apply(c, x, k.count, k.primary);
     free(x);
     _free_carets(&k);
+    if (v->indent)
+        indented = _indent_new_lines(c);
     v->indent_pending = indented;
 }
 
@@ -3734,17 +3974,18 @@ static void _block_operate(Ctx* c, uint32_t op, bool to_end, int count0, const c
 // An operator over each visual area: d c y < > and the case ones, `upper` for the uppercase
 // commands, which take the area's lines whole -- in block mode, D and C to each line's end. Visual
 // mode ends; c goes on into insert mode.
-static void _visual_operate(Ctx* c, uint32_t op, bool upper, int count0) {
+static bool _visual_operate(Ctx* c, uint32_t op, bool upper, int count0) {
     UIEditorVim* v = c->v;
     if (v->state == UI_VIM_VISUAL_BLOCK) {
         _block_operate(c, op, upper, count0, NULL, 0);
-        return;
+        return true;
     }
     const bool line_mode = upper || v->state == UI_VIM_VISUAL_LINE;
-    const bool lines = line_mode || op == '<' || op == '>';
+    const bool lines = line_mode || op == '<' || op == '>' || op == '=' || op == 'q';
     Carets k = _carets(c->el);
     Range* r = calloc(k.count ? k.count : 1, sizeof(Range));
     size_t* start = calloc(k.count ? k.count : 1, sizeof(size_t));
+    bool done = false;
     if (k.sel && r && start) {
         _visual_ranges(c, &k, lines, line_mode, op, r, start);
         const TextSelection p = k.sel[k.primary];
@@ -3753,16 +3994,41 @@ static void _visual_operate(Ctx* c, uint32_t op, bool upper, int count0) {
         for (size_t i = 0; i < k.count; i++)
             k.want[i] = -1;
         _set_state(v, UI_VIM_NORMAL);
-        _operate_on(c, op, &k, r, start, count0 ? count0 : 1);
+        done = _operate_on(c, op, &k, r, start, count0 ? count0 : 1);
     }
     _free_carets(&k);
     free(r);
     free(start);
+    return done;
 }
 
 // The block's top line at its left column, where every block operator leaves the cursor.
 static size_t _top_left(const Ctx* c, const Box* b) {
     return _hold(c, _at_col(c, b->top, b->left, false));
+}
+
+// = and gq on a visual area, over its lines. A block is its lines whole, the operator starting at
+// its top left as every block operator's does -- where a refusal leaves the cursor and an undo
+// brings it back. With no host to answer, visual mode ends and nothing changes.
+static bool _visual_layout(Ctx* c, uint32_t op, int count0) {
+    UIEditorVim* v = c->v;
+    if (!_laid_out(v, op)) {
+        _visual_leave(c);
+        return false;
+    }
+    if (v->state != UI_VIM_VISUAL_BLOCK)
+        return _visual_operate(c, op, false, count0);
+    const Box b = _box(c);
+    _note_box(c, &b);
+    v->area.on = true;
+    _set_state(v, UI_VIM_NORMAL);
+    v->box_given = false;
+    size_t corner = _top_left(c, &b);
+    TextSelection sel = {corner, corner};
+    int want = -1;
+    const Carets k = {&sel, &want, 1, 0};
+    const Range r = {_ls(c, b.top), _lines_end(c, b.bottom), b.top, b.bottom, true, true, false};
+    return _operate_on(c, op, &k, &r, &corner, 1);
 }
 
 // The blanks starting at `lo` on its line rebuilt as spaces, `by` columns more -- fewer when
@@ -4674,6 +4940,12 @@ static bool _second(Ctx* c, uint32_t p, uint32_t k) {
         return true;
     }
     if (p == 'g') {
+        if (_in_visual(c) && k == 'q') {
+            if (_visual_layout(c, 'q', count0))
+                _keep_change(v, count0);
+            _reset(v);
+            return true;
+        }
         if (_in_visual(c) && (k == '~' || k == 'u' || k == 'U' || k == 'J')) {
             const bool changed = k != 'J' || _visual_join(c, false);
             if (k != 'J')
@@ -4683,9 +4955,10 @@ static bool _second(Ctx* c, uint32_t p, uint32_t k) {
             _reset(v);
             return true;
         }
-        if (k == '~' || k == 'u' || k == 'U') {
+        // gq is the operator q within the mode, which has no macros for q to be.
+        if (k == '~' || k == 'u' || k == 'U' || k == 'q') {
             if (op) {
-                // g~g~, gugu, gUgU: the operator doubled, a line.
+                // g~g~, gugu, gUgU, gqgq: the operator doubled, a line.
                 if (op == k && _operate(c, op, 0, k, 0, count0))
                     _keep_change(v, count0);
                 _reset(v);
@@ -4742,6 +5015,7 @@ static bool _command(Ctx* c, uint32_t k) {
         case 'y':
         case '<':
         case '>':
+        case '=':
             v->op = k;
             return true;
         case 'g':
@@ -4968,6 +5242,10 @@ static bool _visual_command(Ctx* c, uint32_t k) {
         case 'U':
             _visual_operate(c, k, false, count0);
             _keep_change(v, count0);
+            break;
+        case '=':
+            if (_visual_layout(c, '=', count0))
+                _keep_change(v, count0);
             break;
         case 'J':
             if (_visual_join(c, true))
@@ -5368,6 +5646,20 @@ void ui_editor_vim_set_lookup(UIEditorVim* vim, UIEditorVimLookupFn fn, void* us
     vim->lookup_user = user;
 }
 
+void ui_editor_vim_set_indent(UIEditorVim* vim, UIEditorVimIndentFn fn, void* user) {
+    if (!vim)
+        return;
+    vim->indent = fn;
+    vim->indent_user = user;
+}
+
+void ui_editor_vim_set_format(UIEditorVim* vim, UIEditorVimFormatFn fn, void* user) {
+    if (!vim)
+        return;
+    vim->format = fn;
+    vim->format_user = user;
+}
+
 bool ui_editor_vim_search(UIEditorVim* vim, UIElement* el, const char* query, bool backward) {
     Ctx c;
     if (!vim || !el || !_enter(vim, el, &c))
@@ -5412,6 +5704,8 @@ static const UIEditorVimKey KEYS[] = {
     {"H M L", "The top, middle and bottom of the view"},
     {"d c y", "Delete, change and yank over a motion; dd cc yy a line"},
     {"> <", "Indent and outdent over a motion; >> << a line"},
+    {"= ==", "Indent as the language does, over a motion; == a line"},
+    {"gq gqq", "Lay lines out again as the language does, over a motion; gqq a line"},
     {"g~ gu gU", "Swap, lower and raise case over a motion"},
     {"iw aw ip ap", "A word or a paragraph, after an operator or in visual mode"},
     {"i( a( i[ a[ i{ a{ i\" a\"", "What a bracket or a quote holds, or it with them"},

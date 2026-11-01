@@ -1719,6 +1719,7 @@ typedef struct EditorSheet {
     bool read_only; // every file's text read-only
     int refused;    // what the texts refused, being read-only
     bool lookup;    // --vim-lookup: the vim mode's lookups answered, saying what they asked
+    bool layout;    // --vim-layout: = and gq and new lines' indents answered
     // With --vim: the vim mode under the app's own, and a line under the editor saying its state,
     // with the line / ? and : are typed in after it -- its kind shown before it -- and what the
     // last such line came to, said until the next key; and the editor that asked for the line.
@@ -2116,6 +2117,72 @@ static bool editor_lookup(UIElement* el, UIEditorVimLookup kind, void* user) {
     return true;
 }
 
+// --vim-layout: a host's indent for an S-expression, two spaces for every bracket still open where
+// the line starts -- brackets in comments and strings counted too, as a sketch of pcb's reader --
+// with a line that opens with a closing bracket one level less.
+static int editor_indent(UIElement* el, size_t line, void* user) {
+    (void)user;
+    TextDoc* doc = ui_editor_doc(el);
+    int open = 0;
+    for (size_t l = 0; doc && l < line; l++) {
+        size_t len = 0;
+        const char* s = text_doc_line(doc, l, &len);
+        for (size_t i = 0; i < len; i++)
+            open += (s[i] == '(') - (s[i] == ')');
+    }
+    size_t len = 0;
+    const char* s = doc ? text_doc_line(doc, line, &len) : NULL;
+    size_t i = 0;
+    while (s && i < len && (s[i] == ' ' || s[i] == '\t'))
+        i++;
+    if (s && i < len && s[i] == ')')
+        open--;
+    return open > 0 ? 2 * open : 0;
+}
+
+// --vim-layout: the lines' words joined on one line at the first line's indent.
+static bool editor_format(UIElement* el, size_t first, size_t last, char** out, size_t* len,
+                          void* user) {
+    (void)user;
+    TextDoc* doc = ui_editor_doc(el);
+    if (!doc)
+        return false;
+    size_t bytes = 0;
+    for (size_t l = first; l <= last; l++) {
+        size_t ll = 0;
+        text_doc_line(doc, l, &ll);
+        bytes += ll + 1;
+    }
+    char* buf = malloc(bytes + 1);
+    if (!buf)
+        return false;
+    size_t n = 0;
+    for (size_t l = first; l <= last; l++) {
+        size_t ll = 0;
+        const char* s = text_doc_line(doc, l, &ll);
+        size_t i = 0;
+        // The first line keeps its indent; every other line's is dropped with its break.
+        if (l == first) {
+            while (i < ll && (s[i] == ' ' || s[i] == '\t'))
+                buf[n++] = s[i++];
+        }
+        for (; i < ll; i++) {
+            const bool blank = s[i] == ' ' || s[i] == '\t';
+            if (!blank)
+                buf[n++] = s[i];
+            else if (n && buf[n - 1] != ' ' && i + 1 < ll)
+                buf[n++] = ' ';
+        }
+        if (l < last && n && buf[n - 1] != ' ')
+            buf[n++] = ' ';
+    }
+    while (n && buf[n - 1] == ' ')
+        n--;
+    *out = buf;
+    *len = n;
+    return true;
+}
+
 // Any key in the editor: what the last line came to is said no longer; the key goes on.
 static bool host_any_key(UIElement* el, const InputKeyEvent* key, void* user) {
     (void)el;
@@ -2206,6 +2273,10 @@ static bool build_editor(UISystem* ui, const char* const* paths, int count, bool
         ui_editor_vim_set_prompt(s->vim, editor_prompt_open, s);
         if (s->lookup)
             ui_editor_vim_set_lookup(s->vim, editor_lookup, s);
+        if (s->layout) {
+            ui_editor_vim_set_indent(s->vim, editor_indent, s);
+            ui_editor_vim_set_format(s->vim, editor_format, s);
+        }
         root->align_cross = UI_ALIGN_START;
         // Under the editor: its state, then the line / ? and : are typed in, after its kind.
         UIElement* row = ui_panel(root);
@@ -2994,6 +3065,8 @@ int main(int argc, char** argv) {
             vim = true;
         } else if (strcmp(argv[i], "--vim-lookup") == 0) {
             g_editor_sheet.lookup = true;
+        } else if (strcmp(argv[i], "--vim-layout") == 0) {
+            g_editor_sheet.layout = true;
         } else if (strcmp(argv[i], "--read-only") == 0) {
             g_editor_sheet.read_only = true;
         } else if (strcmp(argv[i], "--refuse-close") == 0) {
