@@ -72,6 +72,10 @@ typedef struct TextDocAction {
 
 typedef void (*TextDocActionFn)(TextDoc* doc, const TextDocAction* action, void* user);
 
+// What a person did in the editor `editor` and the text refused, being read-only: an action, an
+// undo, a redo, or a command that would have made one.
+typedef void (*TextDocRefusedFn)(TextDoc* doc, const struct UIElement* editor, void* user);
+
 // A run of one style in a line, in bytes of the line's content.
 typedef struct TextSpan {
     uint32_t start;
@@ -140,13 +144,17 @@ struct TextDoc {
     TextRange* ranges[TEXT_DOC_LAYERS];
     size_t range_count[TEXT_DOC_LAYERS];
     size_t range_capacity[TEXT_DOC_LAYERS];
-    /* BY FUNCTION: text_doc_set_on_action */
+    /* BY FUNCTION: text_doc_set_on_action, text_doc_set_on_refused */
     TextDocActionFn on_action;
     void* on_action_user;
+    TextDocRefusedFn on_refused;
+    void* on_refused_user;
     /* SETTINGS */
     TextNewline newline; // what typed and pasted line breaks are written as; found at load
     int tab_width;       // columns between tab stops
     bool keep_undo;      // false: no undo is kept, for a host that keeps its own
+    bool read_only;      // true: what a person does in an editor changes nothing; the host's own
+                         // edits, undo and redo still do
 };
 
 // A text of `len` bytes, copied. Its line ending is CRLF when its first line ends so, else LF.
@@ -197,9 +205,14 @@ void text_doc_set_highlighter(TextDoc* doc, TextHighlightFn fn, void* user, bool
 // Told of every action once it is made, from any editor showing the text. The text is not changed
 // from inside it: a change asked for there is refused by name.
 void text_doc_set_on_action(TextDoc* doc, TextDocActionFn fn, void* user);
+// Told of everything a person tries in an editor that a read-only text refuses, once for each:
+// a keystroke at every caret is one, a vim command one however many changes it would make. A
+// refusal is the text doing what it was set to, so nothing is logged.
+void text_doc_set_on_refused(TextDoc* doc, TextDocRefusedFn fn, void* user);
 
 // The last step taken back, or put back again: the editor that made it is given its selections
-// from before, or after. False with nothing to undo or redo, and while keep_undo is false.
+// from before, or after. False with nothing to undo or redo, and while keep_undo is false. These
+// are the host's, and a read-only text takes them.
 bool text_doc_undo(TextDoc* doc);
 bool text_doc_redo(TextDoc* doc);
 

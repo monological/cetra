@@ -441,6 +441,57 @@ static int probe_doc_undo(void) {
     return 0;
 }
 
+// ---- doc-read-only
+
+static int g_refusals;
+
+static void count_refusal(TextDoc* doc, const UIElement* editor, void* user) {
+    (void)doc;
+    (void)editor;
+    (void)user;
+    g_refusals++;
+}
+
+// A read-only text (spec 14.7): what is done through an editor refused and told once each, the
+// host's own edits, undo and redo taken; writable again, nothing differs.
+static int probe_doc_read_only(void) {
+    TextDoc* doc = create_text_doc("ab", 2);
+    FakeView v = {.sel = {{0, 0}, {2, 2}}, .count = 2};
+    fake_attach(doc, &v);
+    fake_type(doc, &v, "x");
+    text_doc_set_on_action(doc, count_action, NULL);
+    text_doc_set_on_refused(doc, count_refusal, NULL);
+    g_actions = g_refusals = 0;
+    doc->read_only = true;
+    const uint64_t version = doc->version;
+    // Typing at two carets is one action, and one refusal.
+    fake_type(doc, &v, "y");
+    printf("ui doc-read-only action refused %d\n",
+           doc_is_str(doc, "xabx") && doc->version == version && g_refusals == 1 && g_actions == 0);
+    printf("ui doc-read-only undo refused %d\n",
+           !text_doc_undo_in(doc, &v) && doc_is_str(doc, "xabx") && g_refusals == 2);
+    printf("ui doc-read-only redo refused %d\n",
+           !text_doc_redo_in(doc, &v) && doc_is_str(doc, "xabx") && g_refusals == 3);
+    // The host's edits land, and are told to neither hook.
+    const bool replaced = text_doc_replace(doc, 0, 0, "h", 1) && doc_is_str(doc, "hxabx");
+    const bool set = text_doc_set_text(doc, "new", 3) && doc_is_str(doc, "new");
+    printf("ui doc-read-only host taken %d\n",
+           replaced && set && g_refusals == 3 && g_actions == 0);
+    // The host's undo and redo take the host's steps.
+    printf("ui doc-read-only host undo %d\n", text_doc_undo(doc) && doc_is_str(doc, "hxabx") &&
+                                                  text_doc_redo(doc) && doc_is_str(doc, "new") &&
+                                                  g_refusals == 3);
+    // Writable again: typed, told, nothing refused.
+    doc->read_only = false;
+    g_actions = 0;
+    v = (FakeView){.sel = {{3, 3}}, .count = 1};
+    fake_type(doc, &v, "z");
+    printf("ui doc-read-only writable same %d\n",
+           doc_is_str(doc, "newz") && g_actions == 1 && g_refusals == 3);
+    free_text_doc(doc);
+    return 0;
+}
+
 // ---- doc-highlight
 
 static int g_asked[8];
@@ -1592,10 +1643,12 @@ static void note_vim_emptied(TextDoc* doc, const TextDocAction* action, void* us
 
 // Each case of the file CETRA_VIM_CASES names -- "<text in hex> <line> <column> <keys in hex>",
 // the keys in vim's notation -- run on a fresh text, editor and vim mode, the cursor put where
-// vim's cursor() would put it. Prints "vim <case> <line> <column> <the text in hex> <emptied>", as
-// vim's line('.') and col('.') count, the last 1 when the text was emptied on the way.
+// vim's cursor() would put it, the text read-only with CETRA_VIM_READ_ONLY set. Prints "vim <case>
+// <line> <column> <the text in hex> <emptied>", as vim's line('.') and col('.') count, the last 1
+// when the text was emptied on the way.
 static int probe_vim_run(UISystem* ui) {
     const char* path = getenv("CETRA_VIM_CASES");
+    const bool read_only = getenv("CETRA_VIM_READ_ONLY") != NULL;
     long size = 0;
     char* all = path ? read_entire_file(path, &size) : NULL;
     if (!all) {
@@ -1625,6 +1678,7 @@ static int probe_vim_run(UISystem* ui) {
                     engine_clipboard_set(engine, "");
                 const size_t start = text_doc_line_start(doc, at_line - 1) + at_col - 1;
                 UIElement* ed = vim_fixture(ui, doc, vim, start);
+                doc->read_only = read_only;
                 // A key at a time, as typed.
                 const size_t n = vim_events(keys, events, 4096);
                 for (size_t i = 0; i < n; i++)
@@ -1787,6 +1841,70 @@ static int probe_vim_carets(UISystem* ui) {
     ui_editor_set_selections(ed, touching, 2);
     vim_keys(ui, "vllld");
     say_flag("vim-carets", "visual", "touching", doc_is_str(doc, "eta\nalpha beta\nalpha beta\n"));
+    ui_editor_set_mode(ed, NULL);
+    free_text_doc(doc);
+    free_ui_editor_vim(vim);
+    return 0;
+}
+
+static const UIElement* g_refused_by;
+
+static void note_refusal(TextDoc* doc, const UIElement* editor, void* user) {
+    count_refusal(doc, editor, user);
+    g_refused_by = editor;
+}
+
+#define VIM_RO_TEXT "lpha beta\n  gamma delta\nlast line\n"
+
+// The vim mode on a read-only text (spec 14.7), as vim with 'nomodifiable': a command one refusal
+// however many changes it would make, told with its editor; a visual one letting the area go with
+// the cursor at its start; a refused command kept for `.`, which refuses it again; a block's I into
+// an insert that refuses what is typed; and a text made read-only during an insert leaving the
+// insert open.
+static int probe_vim_read_only(UISystem* ui) {
+    TextDoc* doc = create_text_doc(VIM_TEXT, strlen(VIM_TEXT));
+    UIEditorVim* vim = create_ui_editor_vim();
+    UIElement* ed = vim_fixture(ui, doc, vim, 0);
+    text_doc_set_on_refused(doc, note_refusal, NULL);
+    g_refusals = 0;
+    g_refused_by = NULL;
+    vim_keys(ui, "x");
+    doc->read_only = true;
+    vim_keys(ui, "3dd");
+    say_flag("vim-read-only", "command", "once",
+             g_refusals == 1 && g_refused_by == ed && doc_is_str(doc, VIM_RO_TEXT));
+    vim_keys(ui, "5J");
+    say_flag("vim-read-only", "join", "once", g_refusals == 2 && doc_is_str(doc, VIM_RO_TEXT));
+    ui_editor_set_selections(ed, &(TextSelection){5, 5}, 1);
+    vim_keys(ui, "vlld");
+    say_flag("vim-read-only", "visual", "let_go",
+             g_refusals == 3 && ui_editor_vim_state(vim) == UI_VIM_NORMAL &&
+                 one_selection(ed, 5, 5) && doc_is_str(doc, VIM_RO_TEXT));
+    vim_keys(ui, ".");
+    say_flag("vim-read-only", "repeat", "refused",
+             g_refusals == 4 && one_selection(ed, 5, 5) && doc_is_str(doc, VIM_RO_TEXT));
+    // Writable again, `.` makes the last refused command, the delete over an area of three.
+    doc->read_only = false;
+    ui_editor_set_selections(ed, &(TextSelection){0, 0}, 1);
+    vim_keys(ui, ".");
+    say_flag("vim-read-only", "repeat", "kept",
+             doc_is_str(doc, "a beta\n  gamma delta\nlast line\n"));
+    doc->read_only = true;
+    vim_keys(ui, "<C-v>jI");
+    const bool block_in = ui_editor_vim_state(vim) == UI_VIM_INSERT;
+    vim_keys(ui, "Z");
+    say_flag("vim-read-only", "block", "insert",
+             block_in && g_refusals == 5 && doc_is_str(doc, "a beta\n  gamma delta\nlast line\n"));
+    vim_keys(ui, "<Esc>");
+    doc->read_only = false;
+    vim_keys(ui, "ib");
+    doc->read_only = true;
+    vim_keys(ui, "cd");
+    say_flag("vim-read-only", "insert", "open",
+             ui_editor_vim_state(vim) == UI_VIM_INSERT && g_refusals == 7 &&
+                 doc_is_str(doc, "ba beta\n  gamma delta\nlast line\n"));
+    vim_keys(ui, "<Esc>");
+    say_flag("vim-read-only", "insert", "left", ui_editor_vim_state(vim) == UI_VIM_NORMAL);
     ui_editor_set_mode(ed, NULL);
     free_text_doc(doc);
     free_ui_editor_vim(vim);
@@ -2405,6 +2523,8 @@ int run_ui_editor_probe(Game* game, UISystem* ui, Font* font, const char* which)
         return probe_doc_set_text();
     if (!strcmp(which, "doc-undo"))
         return probe_doc_undo();
+    if (!strcmp(which, "doc-read-only"))
+        return probe_doc_read_only();
     if (!strcmp(which, "doc-highlight"))
         return probe_doc_highlight();
     if (!strcmp(which, "glyph-cache"))
@@ -2443,6 +2563,8 @@ int run_ui_editor_probe(Game* game, UISystem* ui, Font* font, const char* which)
         return probe_vim_undo(ui);
     if (!strcmp(which, "vim-host"))
         return probe_vim_host(ui);
+    if (!strcmp(which, "vim-read-only"))
+        return probe_vim_read_only(ui);
     if (!strcmp(which, "vim-carets"))
         return probe_vim_carets(ui);
     if (!strcmp(which, "remove"))

@@ -91,9 +91,13 @@ char* text_doc_with_newlines(const TextDoc* doc, const char* text, size_t len, s
 // on_action. `after` is where the action leaves the editor's selections, which the editor sets
 // itself, its carets not moved through the edits; NULL moves them through each as an actor's.
 // `typed` is typing, which joins the step before it into words. Refused by name for edits out of
-// order, overlapping or reaching past the text.
+// order, overlapping or reaching past the text; refused and told to on_refused, an action with any
+// edits, while the text is read-only.
 bool text_doc_apply(TextDoc* doc, const TextEdit* edits, size_t count, void* view,
                     const TextSelection* after, size_t after_count, bool typed);
+// A change the editor `view` refused itself, since the text is read-only, before asking for it --
+// a vim command that would change the text -- told to on_refused as text_doc_apply tells its own.
+void text_doc_refuse(TextDoc* doc, const void* view);
 // The next typing starts a step of its own: a caret moved.
 void text_doc_seal_undo(TextDoc* doc);
 // Opened, the next action of the editor `view` starts a step and every action of it after joins
@@ -106,7 +110,8 @@ void text_doc_group(TextDoc* doc, bool open, const void* view);
 // A step of undo that changes nothing, which an undo takes back doing nothing but putting the
 // editor `view`'s selections back: an operator over nothing. Inside a group's step, nothing.
 void text_doc_empty_step(TextDoc* doc, void* view);
-// Undo or redo from an editor, which is given the step's selections whoever made it.
+// Undo or redo from an editor, which is given the step's selections whoever made it. Refused and
+// told to on_refused while the text is read-only.
 bool text_doc_undo_in(TextDoc* doc, void* view);
 bool text_doc_redo_in(TextDoc* doc, void* view);
 // The step the last undo took back, or with `redo` the step the last redo made again; NULL for
