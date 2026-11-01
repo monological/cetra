@@ -323,11 +323,12 @@ def render(scene, out, extra, frames=30):
       - Animation, wind, particles and the water FFT are pure functions of the
         frame INDEX headless, so frame N is pose N -- a floor and a ceiling at
         once for any arm that reads motion, and irrelevant to one that does not.
-      - The one unconditional floor is the async texture loader at five uploads
-        per frame, plus one more frame for the material texture array. Most
-        fixtures here load zero or one texture; the worst is layer_fixture at
-        seven. So the real floor for a static, pinned, fog-free capture is about
-        two frames.
+      - The async texture loader was the one unconditional floor, at five
+        uploads per frame plus one more frame for the material texture array.
+        Since spec 14.8 a headless run's start-up textures are in before frame
+        1, and the array is built in frame 1 before anything draws, so the floor
+        for a static, pinned, fog-free capture is one frame -- which is what
+        textures-in holds.
 
     It is NOT lowered, and that is a measurement rather than caution: a frame at
     this size costs ~0.0013 s, so thirty frames cost 0.04 s more than one and
@@ -7311,12 +7312,17 @@ LADDER_FIRE = {"alpha_ladder_leaves.png": -1, "alpha_ladder_specks.png": -1,
 # uniform level's fractional target.
 LADDER_TRUTH_MIN = 10.0
 # Alpha-to-coverage carries the dither through the live path: MSAA 4 + TAA
-# reads 13.9 / 18.8 / 20.1 on those cards, 0.89 of the truth's mean, where
-# one sample reads 4.9 / 4.5 / 3.7 -- 0.22 -- because a binary test under a
-# clamped history cannot hold an 11% haze. The bar is the mean ratio. With
-# the lookup's A2C gate removed the ratio falls to 0.72: the net loss that
-# put the gate there, above the bar but red on ladder-still.
-LADDER_A2C_MIN_RATIO = 0.6
+# settles at 11.1 / 10.6 / 14.1 on those cards, 0.60 of the truth's mean,
+# where one sample settles at 4.3 / 4.0 / 3.1 -- 0.19 -- because a binary test
+# under a clamped history cannot hold an 11% haze. The bar is the mean ratio,
+# two thirds of the settled reading and twice one sample's.
+#
+# MEASURED SETTLED, frames 62 to 602 alike, since spec 14.8 put the textures in
+# before frame 1. Until then the cards drew untextured for their first frames,
+# and at frame 62 TAA's history was still fading from them: 0.89, the reading
+# this bar (then 0.6) was set against, and 0.72 with the lookup's A2C gate
+# removed. Run long, the build before 14.8 settles where this one does.
+LADDER_A2C_MIN_RATIO = 0.4
 # And it is STILL there: dots-row strong flips (> LADDER_FLIP_CODES) between
 # adjacent frames of one MSAA 4 + TAA run, measured 8 -- against 358 at one
 # sample with the lookup, 2,917 without it, and 454 with the lookup let
@@ -13943,8 +13949,9 @@ def _pixels_past(pix_a, pix_b, w, h, box, codes):
 
 
 def _ladder_pair(workdir, scene, tag, extra):
-    """Frames 61 and 62 of ONE run -- adjacent, from one process, so the load
-    order they share cannot differ between them (the _taa_churn arrangement).
+    """Frames 61 and 62 of ONE run -- adjacent, from one process (the _taa_churn
+    arrangement), so they share a history. They also shared a load order once,
+    before spec 14.8 put a headless run's textures in before frame 1.
     Returns (pix61, pix62, w, h) or None."""
     base = os.path.join(workdir, f"ladder_{tag}.ppm")
     cmd = [RENDER, "-m", scene, "-x", "-f", "62", "--screenshot-every", "61",
@@ -13974,10 +13981,11 @@ def run_ladder_gate(workdir):
                      dots cards past the first fire hold their coverage.
 
       ladder-a2c     and alpha-to-coverage carries it through the live path:
-                     MSAA 4 + TAA holds the truth's coverage on those cards
-                     where one sample keeps a quarter of it -- a binary test
-                     under a clamped history cannot hold a fractional haze.
-                     This is the finding: the MSAA path IS the live-path fix.
+                     MSAA 4 + TAA holds three fifths of the truth's coverage
+                     on those cards where one sample keeps a fifth -- a binary
+                     test under a clamped history cannot hold a fractional
+                     haze. This is the finding: the MSAA path IS the live-path
+                     fix.
 
       ladder-still   and it holds it STILL: adjacent-frame strong flips on the
                      dots row of one MSAA 4 + TAA run stay under the bar, at
@@ -14003,8 +14011,9 @@ def run_ladder_gate(workdir):
     WHAT IS NOT CLAIMED. The one-sample path's lost coverage: no lookup
     recovers it, and no arm pretends to. Two-process jittered frames are
     byte-compared only by ladder-gate, whose 0 px identity has held on this
-    small fixture; if it ever reads a handful of pixels, the async-load
-    caveat in apps/render/src/render.c is the first suspect, not the gate.
+    small fixture. The first suspect for a handful of pixels there used to be
+    the async-load caveat in apps/render/src/render.c; since spec 14.8 a
+    headless run's start-up textures are in before frame 1, so it no longer is.
     """
     arms = ("ladder-fire", "ladder-truth", "ladder-a2c", "ladder-still", "ladder-churn",
             "ladder-gate")
@@ -14059,7 +14068,7 @@ def run_ladder_gate(workdir):
     ok = ratio >= LADDER_A2C_MIN_RATIO
     print(f"  ladder-a2c {'PASS' if ok else 'FAIL'}  MSAA 4 + TAA, the same cards lift "
           f"{' / '.join(f'{v:.1f}' for v in lifts)}, {ratio:.2f} of the truth (want >= "
-          f"{LADDER_A2C_MIN_RATIO}; one sample reads 0.22 -- a binary test under a clamped "
+          f"{LADDER_A2C_MIN_RATIO}; one sample reads 0.19 -- a binary test under a clamped "
           f"history cannot hold a fractional haze)")
     if not ok:
         failures.append("ladder-a2c")
@@ -14139,6 +14148,10 @@ TAA_ORTHO_SCALE = "0.67"
 # reads 531,282 in both of two runs, the ratio 1.28 to 1.41 over the
 # perspective leg's same spread, and the bar stays at 1.21x the worst correct
 # reading rather than moving.
+# Since spec 14.8 the spread is gone: a headless run's textures are in before
+# frame 1, so the two processes no longer differ in load order, and both legs
+# repeat exactly -- 485,976 and 375,977 in each of two runs, ratio 1.29. The bar
+# stays, 1.32x that reading.
 TAA_ORTHO_RATIO_MAX = 1.7
 
 
@@ -14173,7 +14186,9 @@ def run_taa_ortho_gate(workdir):
     # 626,734 across runs of one build -- bimodal rather than noisy, which is the
     # async texture-load timing this fixture streams through, and the reason the
     # ladder group takes both its frames from ONE process. A ratio across two
-    # processes cannot do that, so it waits for loading to settle instead.
+    # processes cannot do that, so it waited for loading to settle instead. Since
+    # spec 14.8 the loading is done before frame 1; the pair stays where it was
+    # measured.
     pair = {"frames": 120, "first": 119}
     persp = _taa_churn(workdir, scene, "ortho_persp", scaled, **pair)
     orth = _taa_churn(workdir, scene, "ortho_ortho", scaled + ["--ortho", TAA_ORTHO_HEIGHT],
@@ -23224,7 +23239,9 @@ def run_layers_gate(workdir):
 
     def vt_shot(name, extra=None, frames=8, overrides=None):
         # 8, derived: two frames of texture uploads, one for the material
-        # array, one for the bake that samples it, and margin.
+        # array, one for the bake that samples it, and margin. Since spec 14.8
+        # the uploads are done before frame 1, so it is margin now; kept where
+        # every reading below was taken.
         out = os.path.join(workdir, f"layers_vt_{name}.ppm")
         # The committed fixture is ROAD-FREE and stays that way: its golden and
         # every arm above render it unmutated, so a road arm builds its variant
