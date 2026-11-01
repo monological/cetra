@@ -462,8 +462,10 @@ is events: `type=TEXT` (UTF-8, `\s` a space and `\\` a backslash) and `key=NAME`
 joined before it by `+` (`shift`, `ctrl`, `alt`, `super`, and `mod`, the platform's shortcut key:
 `key=mod+k`), delivered on every frame of their range in the line's order. A NAME is a letter, a
 digit, `f1` to `f25` (since spec 14.4), or one of `left`, `right`, `up`, `down`, `home`, `end`,
-`pageup`, `pagedown`, `backspace`, `delete`, `enter`, `tab`, `escape`, `space` and `slash`. It
-drives the engine's own pointer path, so a replayed drag reaches the drag state, the ray picking
+`pageup`, `pagedown`, `backspace`, `delete`, `enter`, `tab`, `escape`, `space` and `slash`.
+`close` (spec 14.7) asks to close the window as its close button would, through the app's close
+hook: once, as the first frame of its range ends, so a close taken makes that frame the run's last
+and its screenshot. It drives the engine's own pointer path, so a replayed drag reaches the drag state, the ray picking
 and the app's forwarded callback exactly as a hand does — which is what let the `camera` group
 assert a viewer camera that nothing could press before. `apps/tree` and `apps/shapes` take both
 too, and shapes gained `-x` and `-f` with them: it is `PlaneDrag`'s only caller, so the plane
@@ -1834,7 +1836,10 @@ It takes the capture set `-x`, `-f`, `-S`, `-W` and `-H`, and:
   - `--idle-wake S,...` asks for timed wakes, each on its frame in turn. On the first frame with
     none left to ask for, the late work below starts.
   - `--edit-thread` fills the board on a thread started as late work, after a pause standing for
-    a parse, and applies it on the frame the thread's end wakes.
+    a parse, and applies it on the frame the thread's end wakes. `--work-delay MS` sets the pause,
+    50 by default (spec 14.7); headless, the frame after the one that started the thread waits for
+    it, whatever the pause, and the run prints `canvas idle work begun N` and
+    `canvas idle work landed M`, which `idle-work-waits` reads.
   - `--idle-load PATH` loads a texture, named from the working directory, as late work.
   - `--ui-enter` puts the UI panel up (as `--ui` does), fades it in, and puts focus on a button
     in it.
@@ -1843,7 +1848,12 @@ It takes the capture set `-x`, `-f`, `-S`, `-W` and `-H`, and:
   Headless, the run ends at the first frame after which nothing asks for another. It prints each
   frame's `delta_time`, the frames drawn and the seconds waited, which the `idle` gate group reads.
 - `--input-script PATH` replays a scripted pointer and typing (the render app's entry above has
-  the grammar) in place of the mouse.
+  the grammar) in place of the mouse. Its `close` asks to close the window as the close button
+  would, once, as the first frame of its line's range ends.
+- `--refuse-close` (spec 14.7) refuses the first close the window is asked for -- its close button,
+  Alt+F4, the macOS menu's Quit and Cmd+Q, or a script's `close` -- says so on stdout, and takes the
+  next. Under `--canvas-probe` the run prints `canvas close asked N refused M frames K`, which
+  `engine-close-hook` reads.
 - `--palette` (spec 14.2) gives the app a command palette, modal, over its own commands with
   their keys. **Cmd+K** opens it (Ctrl+K off macOS), and typing filters and orders the commands by
   `fuzzy_match`, with the matched letters lit. Up and Down move the highlight, Enter or a click
@@ -1884,10 +1894,16 @@ It takes the capture set `-x`, `-f`, `-S`, `-W` and `-H`, and:
 
   A parse's result is taken on the frame its thread's end wakes, as the board thread's is.
   `--editor-lag N` takes it N frames after it began instead, joining its thread if it has not
-  finished, so a headless run repeats. Under `--canvas-probe` the run prints
+  finished, so a headless run repeats without idle mode too, whose frames do not wait for work as
+  an idle run's do (spec 14.7). Under `--canvas-probe` the run prints
   the text as hex (`canvas editor hex`), the selections, the errors as they stand and where the
-  first is drawn, and whether every row is wrapped (`canvas editor settled`), which the
-  `ui-editor-*` and `idle-editor` arms read -- of the focused pane, below.
+  first is drawn, whether every row is wrapped (`canvas editor settled`), how many changes the
+  texts refused (`canvas editor refused`) and the clipboard as hex (`canvas editor clip`), which
+  the `ui-editor-*`, `ui-vim-*` and `idle-editor` arms read -- of the focused pane, below.
+
+  `--read-only` (spec 14.7) makes every file's text read-only: nothing typed in the editor changes
+  it, in the standard mode or the vim mode, and each refusal is counted and, with `--vim`, said on
+  its line ("Cannot make changes, the text is read only") until the next key.
 
   `--editor` may be given up to eight times (spec 14.6), each file a text of its own with its own
   parse, and the editors are panes, the first opening on the first file:
