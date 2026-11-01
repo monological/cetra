@@ -654,6 +654,17 @@ project are pcb's own, on these calls; nothing in cetra is missing for them.
 
 ## Not among the nine, but on the way
 
+- **Read-only texts, a close the app can refuse, and headless frames that wait for work** -- spec
+  14.7, planned, from pcb 6.1's reviews. pcb's messages pane and its conflict pane want a text no one
+  can type into. pcb wants to refuse a close while a file is in conflict, and on macOS the menu's
+  Cmd+Q is the same close request as the close button. Its window tests want scripted frames that
+  wait for work, rather than the app waiting for it. pcb takes these up in a spec of its own once
+  14.7 lands.
+- **Host key sequences in the vim mode**, for pcb's `gd` and its leader key. pcb now reads vim's
+  pending keys to spot them, which breaks if the vim mode ever does `gd` itself. Wanted with pcb's
+  6.2, whose view keys will want them too; not yet a spec.
+- **Grow weights in the UI's layout**, so a pane split's ratio sizes it rather than the app
+  rewriting fixed sizes each frame. Nothing visible depends on it; not yet a spec.
 - **A second window**, for a second monitor. pcb lists it as an open question and as a cetra change;
   nothing is decided.
 - **The physical depth of field** of item 7, likely wanted before pcb's 3D view is judged on its
