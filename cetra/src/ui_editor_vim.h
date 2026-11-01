@@ -58,6 +58,24 @@ bool ui_editor_vim_command(UIEditorVim* vim, UIElement* el, const char* line);
 void ui_editor_vim_set_undo(UIEditorVim* vim, UIEditorCommandFn undo, UIEditorCommandFn redo,
                             void* user);
 
+// What a key asks of a host that knows the language (spec 14.9), as vim asks its tagfunc and
+// keywordprg: where the name at the cursor is declared, in its block (gd) or the whole text (gD),
+// where it is defined (Ctrl+]), and what it is (K).
+typedef enum UIEditorVimLookup {
+    UI_VIM_LOOKUP_DECLARATION,
+    UI_VIM_LOOKUP_GLOBAL,
+    UI_VIM_LOOKUP_TAG,
+    UI_VIM_LOOKUP_KEYWORD,
+} UIEditorVimLookup;
+// The host reads the name from the editor -- its caret, or in visual mode its one-line selection,
+// still in place -- and goes where it likes, another text included. False when it found nothing:
+// gd and gD are then vim's own search, and Ctrl+] and K do nothing. Asked in normal mode with no
+// operator waiting, and Ctrl+] and K in visual mode too; gd and gD after an operator or in visual
+// mode are vim's motions.
+typedef bool (*UIEditorVimLookupFn)(UIElement* el, UIEditorVimLookup kind, void* user);
+// NULL for none.
+void ui_editor_vim_set_lookup(UIEditorVim* vim, UIEditorVimLookupFn fn, void* user);
+
 // A key, or a sequence of them, and what it does, for a host's help.
 typedef struct UIEditorVimKey {
     const char* keys;

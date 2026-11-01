@@ -1592,9 +1592,10 @@ static size_t vim_events(const char* keys, InputKeyEvent* out, size_t max) {
             }
             if (end && len == 3 && (p[1] == 'C' || p[1] == 'c') && p[2] == '-') {
                 const char ch = p[3];
-                if (ch == '[')
-                    out[n++] =
-                        (InputKeyEvent){.key = GLFW_KEY_LEFT_BRACKET, .mods = GLFW_MOD_CONTROL};
+                if (ch == '[' || ch == ']')
+                    out[n++] = (InputKeyEvent){.key = ch == '[' ? GLFW_KEY_LEFT_BRACKET
+                                                                : GLFW_KEY_RIGHT_BRACKET,
+                                               .mods = GLFW_MOD_CONTROL};
                 else
                     out[n++] = (InputKeyEvent){.key = GLFW_KEY_A + (ch | 0x20) - 'a',
                                                .mods = GLFW_MOD_CONTROL};
@@ -2119,6 +2120,136 @@ static int probe_vim_host(UISystem* ui) {
     return 0;
 }
 
+// ---- The host answering what a name is (spec 14.9)
+
+#define LOOKUP_TEXT "alpha beta\ngamma alpha\nbeta x\n"
+
+// The recording host: each kind asked, the selection and the state it saw, and its answer -- true
+// moving the caret to the text's start, to show it went somewhere, or showing the editor another
+// text when one is given.
+static int g_lookups;
+static UIEditorVimLookup g_lookup_kinds[16];
+static bool g_lookup_answer = true;
+static TextSelection g_lookup_seen;
+static UIEditorVimState g_lookup_state;
+static TextDoc* g_lookup_elsewhere;
+
+static bool lookup_host(UIElement* el, UIEditorVimLookup kind, void* user) {
+    const UIEditorVim* vim = user;
+    if (g_lookups < 16)
+        g_lookup_kinds[g_lookups] = kind;
+    g_lookups++;
+    const TextSelection* s = NULL;
+    size_t primary = 0;
+    if (ui_editor_selections(el, &s, &primary))
+        g_lookup_seen = s[primary];
+    g_lookup_state = ui_editor_vim_state(vim);
+    if (g_lookup_elsewhere)
+        ui_editor_set_doc(el, g_lookup_elsewhere);
+    else if (g_lookup_answer)
+        ui_editor_set_selections(el, &(TextSelection){0, 0}, 1);
+    return g_lookup_answer;
+}
+
+static void caret_at(UIElement* ed, size_t at) {
+    ui_editor_set_selections(ed, &(TextSelection){at, at}, 1);
+}
+
+static int probe_vim_lookup(UISystem* ui) {
+    TextDoc* doc = create_text_doc(LOOKUP_TEXT, strlen(LOOKUP_TEXT));
+    UIEditorVim* vim = create_ui_editor_vim();
+    ui_editor_vim_set_lookup(vim, lookup_host, vim);
+    UIElement* ed = vim_fixture(ui, doc, vim, 17);
+    // gd, gD, Ctrl+] and K in normal mode: each asked once, of its own kind, and the host's caret
+    // kept.
+    static const char* const ASKS[] = {"gd", "gD", "<C-]>", "K"};
+    bool went = true;
+    for (int i = 0; i < 4; i++) {
+        caret_at(ed, 17);
+        vim_keys(ui, ASKS[i]);
+        went = went && one_selection(ed, 0, 0) && !*ui_editor_vim_pending(vim);
+    }
+    say_flag("vim-lookup", "normal", "asked",
+             went && g_lookups == 4 && g_lookup_kinds[0] == UI_VIM_LOOKUP_DECLARATION &&
+                 g_lookup_kinds[1] == UI_VIM_LOOKUP_GLOBAL &&
+                 g_lookup_kinds[2] == UI_VIM_LOOKUP_TAG &&
+                 g_lookup_kinds[3] == UI_VIM_LOOKUP_KEYWORD && g_lookup_seen.head == 17);
+    // g, Esc, then d: nothing asked, and the d waits for its motion.
+    vim_keys(ui, "g<Esc>d");
+    say_flag("vim-lookup", "escaped", "waiting",
+             g_lookups == 4 && !strcmp(ui_editor_vim_pending(vim), "d"));
+    vim_keys(ui, "<Esc>");
+    // dgd and gd in visual mode: vim's motions, nothing asked. The delete ends at a line's start,
+    // so it stops before that line's break, as vim's exclusive motions do.
+    caret_at(ed, 23);
+    vim_keys(ui, "dgd");
+    const bool deleted = doc_is_str(doc, "alpha \nbeta x\n") && one_selection(ed, 5, 5);
+    vim_keys(ui, "u");
+    caret_at(ed, 23);
+    vim_keys(ui, "vgd");
+    const bool visual = ui_editor_vim_state(vim) == UI_VIM_VISUAL && one_selection(ed, 23, 6);
+    vim_keys(ui, "<Esc>");
+    say_flag("vim-lookup", "motions", "vim", g_lookups == 4 && deleted && visual);
+    // Ctrl+] and K in visual mode: asked once each with the area in place, then out of visual
+    // mode at the area's head, where the host left it.
+    g_lookup_answer = false;
+    caret_at(ed, 17);
+    vim_keys(ui, "viw<C-]>");
+    const bool tag = g_lookups == 5 && g_lookup_kinds[4] == UI_VIM_LOOKUP_TAG &&
+                     g_lookup_seen.anchor == 17 && g_lookup_seen.head == 21 &&
+                     g_lookup_state == UI_VIM_VISUAL && ui_editor_vim_state(vim) == UI_VIM_NORMAL &&
+                     one_selection(ed, 21, 21);
+    caret_at(ed, 17);
+    vim_keys(ui, "viwK");
+    const bool keyword = g_lookups == 6 && g_lookup_kinds[5] == UI_VIM_LOOKUP_KEYWORD &&
+                         ui_editor_vim_state(vim) == UI_VIM_NORMAL;
+    say_flag("vim-lookup", "visual", "asked", tag && keyword);
+    // An area over two lines is no name: nothing asked, and the area kept, as vim keeps it.
+    caret_at(ed, 17);
+    vim_keys(ui, "vj<C-]>");
+    say_flag("vim-lookup", "visual", "lines",
+             g_lookups == 6 && ui_editor_vim_state(vim) == UI_VIM_VISUAL);
+    vim_keys(ui, "<Esc>");
+    // A host that finds nothing: gd is vim's own, and Ctrl+] and K leave the caret.
+    caret_at(ed, 23);
+    vim_keys(ui, "gd");
+    const bool own = g_lookups == 7 && one_selection(ed, 6, 6);
+    caret_at(ed, 17);
+    vim_keys(ui, "<C-]>K");
+    say_flag("vim-lookup", "declined", "vim", own && g_lookups == 9 && one_selection(ed, 17, 17));
+    // . after a lookup makes the change before it again, not the lookup.
+    g_lookup_answer = true;
+    caret_at(ed, 0);
+    vim_keys(ui, "x");
+    caret_at(ed, 16);
+    vim_keys(ui, "gd.");
+    say_flag("vim-lookup", "repeat", "change",
+             g_lookups == 10 && doc_is_str(doc, "pha beta\ngamma alpha\nbeta x\n"));
+    // A read-only text still asks: a lookup changes nothing.
+    doc->read_only = true;
+    caret_at(ed, 16);
+    vim_keys(ui, "gdK");
+    say_flag("vim-lookup", "read_only", "asked", g_lookups == 12);
+    doc->read_only = false;
+    // A host showing the editor another text from visual mode: the mode back in normal mode, the
+    // other text's caret left where it was, and the next key read there.
+    TextDoc* other = create_text_doc("xyz\n", 4);
+    g_lookup_elsewhere = other;
+    caret_at(ed, 17);
+    vim_keys(ui, "viw<C-]>");
+    g_lookup_elsewhere = NULL;
+    const bool away = ui_editor_doc(ed) == other && ui_editor_vim_state(vim) == UI_VIM_NORMAL &&
+                      one_selection(ed, 0, 0);
+    vim_keys(ui, "x");
+    say_flag("vim-lookup", "elsewhere", "normal", away && doc_is_str(other, "yz\n"));
+    ui_editor_set_mode(ed, NULL);
+    ui_editor_set_doc(ed, NULL);
+    free_text_doc(other);
+    free_text_doc(doc);
+    free_ui_editor_vim(vim);
+    return 0;
+}
+
 // ---- The host's edits: carets, selections and the view through them
 
 #define HOST_TEXT "abc def ghi\nline two\n"
@@ -2615,5 +2746,7 @@ int run_ui_editor_probe(Game* game, UISystem* ui, Font* font, const char* which)
         return probe_editor_set_doc(ui);
     if (!strcmp(which, "vim-set-doc"))
         return probe_vim_set_doc(ui);
+    if (!strcmp(which, "vim-lookup"))
+        return probe_vim_lookup(ui);
     return -1;
 }

@@ -26279,6 +26279,14 @@ _VIM_SEQUENCES = [
     "/x<C-u>e<CR>", "/ab<Esc>", "/<BS>", ":<Esc>", "w*", "b#", "$*", "0#", "3*", "/eta<CR>",
     "/éta<CR>", "/Ω<CR>", "/über<CR>", "/Über<CR>", "/ÜBER<CR>", "/(<CR>", "/)<CR>n", "d/)<CR>",
     "/a<CR>u", "/a<CR>x", ":noh<CR>n", "/a<CR>:noh<CR>n", "*:2<CR>n",
+    # gd and gD with no host (spec 14.9): vim's own search for a declaration, its counts -- 1 is
+    # this block only -- the search it leaves for n and N, under operators and in visual mode, and
+    # from the end of the text, where every word has an earlier use. An operator over gd comes
+    # first: vim's gd leaves the operator the kind of the motion before it, linewise after a j,
+    # which the mode does not imitate.
+    "gd", "gD", "1gd", "1gD", "3gd", "gdn", "gdN", "gDn", "gDN", "dgd", "dgD", "ygDP", "ygdp",
+    "cgdZ<Esc>", "cgDZ<Esc>", "vgdd", "vgDy", "VgDd", "gd.", "xgd.", "gdx", "Ggd", "GgD", "G$gd",
+    "jgd", "2jgdn", "wgd", "wgD", "<C-v>gdd",
 ]
 
 # The random sequences' vocabulary: whole commands, composed at random. It leaves out what the corpus
@@ -28395,6 +28403,17 @@ def run_ui_gate(workdir):
                      an insert left in the first let go when keys reach the second;
                      a paste in insert mode made again by . as the text it typed
                      (macOS, where the paste key is).
+      ui-vim-lookup  a host answering what a name is (spec 14.9), recording what it
+                     is asked: gd, gD, Ctrl+] and K in normal mode each asked once,
+                     of its kind; g, Esc and d asking nothing and leaving d waiting;
+                     dgd and gd in visual mode vim's motions, asking nothing; Ctrl+]
+                     and K in visual mode asked with the area in place and leaving
+                     visual mode at its head, and an area over two lines asking
+                     nothing and kept, as vim keeps it; a host finding nothing
+                     giving vim's own gd and leaving the caret for Ctrl+] and K; .
+                     after a lookup making the change before it again; a read-only
+                     text still asking; and a host showing the editor another text
+                     from visual mode leaving the mode normal there.
       ui-vim-carets  several carets, which vim has none of: Ctrl+V and I puts a
                      caret on each line, Z typed at every one, Esc and then u each
                      leaving one cursor at the block's top left; A after the block;
@@ -29573,6 +29592,16 @@ def run_ui_gate(workdir):
                            "paste in insert mode is made again as the text it typed")
     print(f"  ui-vim-host           {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-vim-host", ok)
+
+    ok, detail = doc_flags("vim-lookup", 9, "gd, gD, Ctrl+] and K asked of the host once each, of "
+                           "their kinds; g Esc d asking nothing; dgd and visual gd vim's motions; "
+                           "Ctrl+] and K in a one-line visual area asked with it in place and "
+                           "leaving visual mode, over two lines asking nothing; a host finding "
+                           "nothing giving vim's gd; . repeating the change before a lookup; a "
+                           "read-only text asking; another text shown from visual mode left "
+                           "normal")
+    print(f"  ui-vim-lookup         {'PASS' if ok else 'FAIL'}  {detail}")
+    note("ui-vim-lookup", ok)
 
     ok, detail = doc_flags("vim-carets", 8, "a block's I a caret on each line, what is typed on "
                            "every one, one cursor at the top left after Esc and after undo, A after "

@@ -60,7 +60,9 @@ static uint32_t _vkey(const InputKeyEvent* ev) {
     if (mods == GLFW_MOD_CONTROL) {
         if (ev->key >= GLFW_KEY_A && ev->key <= GLFW_KEY_Z)
             return K_CTRL('a' + (ev->key - GLFW_KEY_A));
-        return ev->key == GLFW_KEY_LEFT_BRACKET ? K_ESC : 0;
+        return ev->key == GLFW_KEY_LEFT_BRACKET    ? K_ESC
+               : ev->key == GLFW_KEY_RIGHT_BRACKET ? K_CTRL(']')
+                                                   : 0;
     }
     if (mods)
         return 0;
@@ -200,6 +202,8 @@ struct UIEditorVim {
     void* undo_user;
     UIEditorVimPromptFn prompt;
     void* prompt_user;
+    UIEditorVimLookupFn lookup;
+    void* lookup_user;
 };
 
 // The look an editor takes from the state.
@@ -877,14 +881,13 @@ static size_t _search_next(const Ctx* c, size_t from, bool back) {
     return SIZE_MAX;
 }
 
-// * and #: the word nearest the cursor, as vim finds it -- the keyword under it or the first after
-// it on the line, else the run of non-blanks under it or after it -- made the search, whole where
-// its ends are a word's, its case ignored. Its start in *start; false for a line with none.
-static bool _search_word(Ctx* c, size_t from, bool back, size_t* start) {
-    UIEditorVim* v = c->v;
+// The word nearest the cursor, as vim finds it: the keyword under it or the first after it on the
+// line, else with `any` the run of non-blanks under it or after it. [*lo, *hi); false for a line
+// with none.
+static bool _word_near(const Ctx* c, size_t from, bool any, size_t* lo_out, size_t* hi_out) {
     const size_t line = _lof(c, from), le = _le(c, line);
     size_t lo = SIZE_MAX, hi = SIZE_MAX;
-    for (int want = 2; want >= 1 && lo == SIZE_MAX; want--) {
+    for (int want = 2; want >= (any ? 1 : 2) && lo == SIZE_MAX; want--) {
         size_t p = from;
         while (p < le && _class_of(_gc(c, p)) < want)
             p = _after(c, p);
@@ -898,7 +901,17 @@ static bool _search_word(Ctx* c, size_t from, bool back, size_t* start) {
         while (hi < le && (want == 2 ? _class_of(_gc(c, hi)) == cls : _class_of(_gc(c, hi)) != 0))
             hi = _after(c, hi);
     }
-    if (lo == SIZE_MAX)
+    *lo_out = lo;
+    *hi_out = hi;
+    return lo != SIZE_MAX;
+}
+
+// * and #: the word nearest the cursor made the search, whole where its ends are a word's, its case
+// ignored. Its start in *start; false for a line with none.
+static bool _search_word(Ctx* c, size_t from, bool back, size_t* start) {
+    UIEditorVim* v = c->v;
+    size_t lo, hi;
+    if (!_word_near(c, from, true, &lo, &hi))
         return false;
     size_t n = 0;
     char* word = _range_text(c, lo, hi, &n);
@@ -1345,7 +1358,8 @@ typedef struct {
 // Whether a key, after its prefix, is a motion.
 static bool _is_motion(uint32_t prefix, uint32_t k) {
     if (prefix == 'g')
-        return k == 'g' || k == 'e' || k == 'E' || k == 'j' || k == 'k' || k == '_';
+        return k == 'g' || k == 'e' || k == 'E' || k == 'j' || k == 'k' || k == '_' || k == 'd' ||
+               k == 'D';
     if (prefix)
         return false;
     switch (k) {
@@ -1413,6 +1427,166 @@ static bool _down(const Ctx* c, size_t line, size_t n, size_t* to) {
     return true;
 }
 
+// ---- gd and gD, as vim's find_decl finds a declaration (spec 14.9)
+
+// Whether a line begins, past its blanks, with a leader of vim's default 'comments': /*, */, //, %,
+// XCOMM or >, or *, # or - with a blank or the line's end after it.
+static bool _comment_line(const Ctx* c, size_t line) {
+    static const struct {
+        const char* lead;
+        bool blank_after;
+    } LEADERS[] = {{"/*", false}, {"*/", false}, {"//", false}, {"%", false}, {"XCOMM", false},
+                   {">", false},  {"*", true},   {"#", true},   {"-", true}};
+    size_t len = 0;
+    const char* s = _lt(c, line, &len);
+    const size_t i = _blanks(s, len);
+    for (size_t k = 0; k < sizeof(LEADERS) / sizeof(LEADERS[0]); k++) {
+        const size_t n = strlen(LEADERS[k].lead);
+        if (len - i >= n && !memcmp(s + i, LEADERS[k].lead, n) &&
+            (!LEADERS[k].blank_after || i + n == len || _blank((unsigned char)s[i + n])))
+            return true;
+    }
+    return false;
+}
+
+// Whether byte `col` of a line stands outside a C comment and a string, as vim's gd judges a use: a
+// quote opens a string that the same quote not after a backslash closes, /* opens a comment */
+// closes, and // makes the rest of the line one.
+static bool _in_code(const char* s, size_t len, size_t col) {
+    bool comment = false;
+    char quote = 0, prev = 0;
+    for (size_t i = 0; i < col && i < len; i++) {
+        const char ch = s[i];
+        if (quote) {
+            if (prev != '\\' && ch == quote)
+                quote = 0;
+        } else if ((ch == '"' || ch == '\'') && !comment) {
+            quote = ch;
+        } else if (comment) {
+            if (prev == '*' && ch == '/')
+                comment = false;
+        } else if (prev == '/' && ch == '*') {
+            comment = true;
+        } else if (prev == '/' && ch == '/') {
+            return false;
+        }
+        prev = ch;
+    }
+    return !comment && !quote;
+}
+
+// The first match of `q` from `from` to the text's end -- at `from` itself only with `at` -- never
+// round the end; SIZE_MAX for none, and from SIZE_MAX.
+static size_t _match_from(const Ctx* c, const Query* q, size_t from, bool at) {
+    if (from == SIZE_MAX)
+        return SIZE_MAX;
+    for (size_t line = _lof(c, from); line < _lines(c); line++) {
+        size_t len = 0;
+        const char* s = _lt(c, line, &len);
+        const size_t base = _ls(c, line);
+        for (size_t i = 0; i < len;) {
+            const size_t here = i;
+            uint32_t x = ui_typing_next(s, len, &i);
+            if (base + here < from || (base + here == from && !at))
+                continue;
+            if (q->fold)
+                x = _case(x, 'u');
+            if (x == q->first && _match_at(c, q, s, len, here))
+                return base + here;
+        }
+    }
+    return SIZE_MAX;
+}
+
+/*
+ * gd and gD: the identifier under or after the cursor made the search, whole, and the cursor taken
+ * to its declaration. For gD that is its first use in the text. For gd it is its first use in the
+ * block: from the blank line above the nearest { in column 0 above the cursor, or else from the
+ * top, the first use past the brace -- or the last before it, if one was found there, which is K&R
+ * C's parameter list.
+ *
+ * The search ignores case, whatever capitals the word holds. A use on a line that begins as a
+ * comment, or in a C comment or quotes on its line, does not count, and one on the cursor's own
+ * line or past it is no use at all. With a count of 1, a use inside a block that closes above
+ * the cursor is passed over. The search is the word's whether a use is found or not, going forward
+ * once one is, and then follows the case of its capitals as a typed one does: vim's find_decl.
+ */
+static Moved _declaration(Ctx* c, size_t from, bool local, bool this_block) {
+    UIEditorVim* v = c->v;
+    const Moved none = {from, false, false, false, -1};
+    size_t lo, hi, n = 0;
+    char* word = _word_near(c, from, false, &lo, &hi) ? _range_text(c, lo, hi, &n) : NULL;
+    if (!word)
+        return none;
+    free(v->search);
+    v->search = word;
+    v->missed = NULL;
+    v->search_fold = false;
+    v->search_word_start = v->search_word_end = true;
+    v->lit = true;
+    _light(c);
+    Query q = _query(v);
+    q.fold = true;
+    q.first = _case(q.first, 'u');
+
+    const size_t line = _lof(c, from);
+    size_t brace = 0;
+    for (size_t l = line; local && l-- > 0;) {
+        size_t len = 0;
+        const char* s = _lt(c, l, &len);
+        if (len && s[0] == '{') {
+            brace = l;
+            break;
+        }
+    }
+    size_t top = brace;
+    while (top > 0 && !_white_line(c, top))
+        top--;
+
+    size_t pos = _ls(c, top), found = SIZE_MAX, m;
+    bool at = true;
+    for (;;) {
+        m = _match_from(c, &q, pos, at);
+        if (m != SIZE_MAX && _lof(c, m) >= line)
+            m = SIZE_MAX;
+        if (m != SIZE_MAX && this_block) {
+            const size_t close = _unclosed(c, m, '{', '}', true);
+            if (close != SIZE_MAX && _lof(c, close) < line) {
+                pos = close;
+                continue;
+            }
+        }
+        if (m == SIZE_MAX) {
+            if (found == SIZE_MAX)
+                return none;
+            m = found;
+            break;
+        }
+        const size_t ml = _lof(c, m);
+        if (_comment_line(c, ml)) {
+            pos = ml + 1 < _lines(c) ? _ls(c, ml + 1) : SIZE_MAX;
+            continue;
+        }
+        size_t len = 0;
+        const char* s = _lt(c, ml, &len);
+        const bool valid = _in_code(s, len, m - _ls(c, ml));
+        if (!valid && found != SIZE_MAX) {
+            m = found;
+            break;
+        }
+        if (valid && (!local || ml >= brace)) {
+            if (found != SIZE_MAX)
+                m = found;
+            break;
+        }
+        found = valid ? m : SIZE_MAX;
+        pos = m;
+        at = false;
+    }
+    v->search_back = false;
+    return (Moved){m, true, false, false, -1};
+}
+
 // `key` (after `prefix`, with its character `arg` for f and the like) from `from`, `count0`
 // times or 0 for none given, under the operator `op` or none.
 static Moved _motion(Ctx* c, uint32_t prefix, uint32_t key, uint32_t arg, size_t from, int count0,
@@ -1448,6 +1622,9 @@ static Moved _motion(Ctx* c, uint32_t prefix, uint32_t key, uint32_t arg, size_t
                 m.to = _hold(c, ui_editor_motion(c->el, motion, from, n));
                 return m;
             }
+            case 'd':
+            case 'D':
+                return _declaration(c, from, key == 'd', count0 == 1);
             default:
                 return (Moved){from, false, false, false, -1};
         }
@@ -2128,7 +2305,8 @@ static bool _operate(Ctx* c, uint32_t op, uint32_t prefix, uint32_t key, uint32_
         free(start);
         return false;
     }
-    const bool doubled = key == op;
+    // Not after a prefix: dgd is d over gd.
+    const bool doubled = key == op && !prefix;
     bool any = false;
     for (size_t i = 0; i < k.count; i++) {
         const size_t head = k.sel[i].head;
@@ -4414,6 +4592,34 @@ static bool _target(Ctx* c, uint32_t prefix, uint32_t key, uint32_t arg, int cou
                          : _move(c, prefix, key, arg, count0);
 }
 
+static void _switch(UIEditorVim* v, const UIElement* el);
+
+// A name looked up by the host, which may answer anywhere, another text included; false when there
+// is none or it found nothing. Never kept for `.`.
+static bool _ask_host(Ctx* c, UIEditorVimLookup kind) {
+    const UIEditorVim* v = c->v;
+    return v->lookup && v->lookup(c->el, kind, v->lookup_user);
+}
+
+// Ctrl+] and K in visual mode: the host asked with the area in place, then visual mode ended with
+// the cursor on its head. An area over more than one line is no name: vim beeps at it and keeps
+// it. A host that showed the editor another text left nothing of the area to end.
+static void _visual_lookup(Ctx* c, UIEditorVimLookup kind) {
+    UIEditorVim* v = c->v;
+    const TextSelection* s = NULL;
+    size_t primary = 0;
+    ui_editor_selections(c->el, &s, &primary);
+    const bool block = v->state == UI_VIM_VISUAL_BLOCK;
+    const size_t a = block ? v->block_anchor : s ? s[primary].anchor : 0;
+    const size_t h = block ? v->block_head : s ? s[primary].head : 0;
+    if (_lof(c, a) != _lof(c, h))
+        return;
+    _ask_host(c, kind);
+    _switch(v, c->el);
+    if (_in_visual(c))
+        _visual_leave(c);
+}
+
 // A command whose first key `p` waited for the next, `k`.
 static bool _second(Ctx* c, uint32_t p, uint32_t k) {
     UIEditorVim* v = c->v;
@@ -4492,6 +4698,12 @@ static bool _second(Ctx* c, uint32_t p, uint32_t k) {
         if (k == 'J') {
             if (_join(c, count0, false, NULL))
                 _keep_change(v, count0);
+            _reset(v);
+            return true;
+        }
+        // gd and gD ask the host first, in normal mode alone: an operator can reach no other text.
+        if ((k == 'd' || k == 'D') && !op && !_in_visual(c) &&
+            _ask_host(c, k == 'd' ? UI_VIM_LOOKUP_DECLARATION : UI_VIM_LOOKUP_GLOBAL)) {
             _reset(v);
             return true;
         }
@@ -4612,6 +4824,12 @@ static bool _command(Ctx* c, uint32_t k) {
             return true;
         case '.':
             _repeat(c);
+            return true;
+        case 'K':
+        case K_CTRL(']'):
+            // With no host, nothing: vim's Ctrl+] with no tags.
+            _ask_host(c, k == 'K' ? UI_VIM_LOOKUP_KEYWORD : UI_VIM_LOOKUP_TAG);
+            _reset(v);
             return true;
         case '/':
         case '?':
@@ -4768,6 +4986,10 @@ static bool _visual_command(Ctx* c, uint32_t k) {
         case 'I':
         case 'A':
             _visual_insert(c, k == 'A');
+            break;
+        case 'K':
+        case K_CTRL(']'):
+            _visual_lookup(c, k == 'K' ? UI_VIM_LOOKUP_KEYWORD : UI_VIM_LOOKUP_TAG);
             break;
         case '/':
         case '?':
@@ -5139,6 +5361,13 @@ void ui_editor_vim_set_undo(UIEditorVim* vim, UIEditorCommandFn undo, UIEditorCo
     vim->undo_user = user;
 }
 
+void ui_editor_vim_set_lookup(UIEditorVim* vim, UIEditorVimLookupFn fn, void* user) {
+    if (!vim)
+        return;
+    vim->lookup = fn;
+    vim->lookup_user = user;
+}
+
 bool ui_editor_vim_search(UIEditorVim* vim, UIElement* el, const char* query, bool backward) {
     Ctx c;
     if (!vim || !el || !_enter(vim, el, &c))
@@ -5196,6 +5425,8 @@ static const UIEditorVimKey KEYS[] = {
     {".", "Repeat the last change"},
     {"/ ? n N", "Search forward or back, and again either way"},
     {"* #", "Search for the word under the cursor, forward or back"},
+    {"gd gD", "To where the name under the cursor is declared, in its block or the text"},
+    {"Ctrl+] K", "Ask where the name under the cursor is defined, or what it is"},
     {":N :noh", "Go to line N; put out the search's light"},
     {"zz zt zb", "Scroll the cursor's line to the middle, top or bottom"},
     {"Ctrl+D Ctrl+U Ctrl+F Ctrl+B", "Half a page down or up, a page down or up"},
