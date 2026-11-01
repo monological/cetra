@@ -882,7 +882,8 @@ running the work being measured (the terrain group forces it wholesale, because 
 varies a worker count the cook key deliberately omits); `--cook` is the pre-warm verb, a headless
 run whose deliverable is the per-artefact `cook site=...` rows and the `cook-summary`; on render
 it exits when the async loader has drained, so a texture-heavy model warms fully rather than at
-five publishes per frame. A `--cook` against an already-warm directory exits 0 with `cooked=0`,
+five publishes per frame. Since spec 14.8 a headless run drains the loader before frame 1, so for
+what the start-up asked that is the second frame. A `--cook` against an already-warm directory exits 0 with `cooked=0`,
 which is success. Note `--terrain-erosion-probe` under a cook hit refuses by name rather than
 printing stats — the sim it describes never ran; pass `--no-cook` to measure it. Measured on the
 gate fixture (eroded 257×60, single samples off the suite's own runs): cold ~6.7 s debug, warm
@@ -1202,7 +1203,8 @@ the first.
   `still=` is the longest the loading screen stood without a chance to draw in it, and the `lit`
   row's `worst-still=` the longest of the held frames after the first three (spec 13.39, the
   engine's `engine_loading_screen_take_longest_wait`). `frame0` holds the sounds' last decoding,
-  which `game_run` waits for before the first frame. It is counted headless too, so
+  which `game_run` waits for before the first frame, and headless any texture still loading, which
+  `engine_run` waits for after it (spec 14.8). It is counted headless too, so
   `-x --loading-screen --capture-budget-ms 100` measures what a window would freeze for:
   `--loading-screen` keeps the screen up headless, and the budget paces the captures as a window
   does while loading. The `lit` row is followed by the GI volumes' `stream gi` lines, each with a

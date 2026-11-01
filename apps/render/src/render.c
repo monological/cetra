@@ -3059,10 +3059,12 @@ static void stream_probe_print(const Scene* scene, int frame) {
 static void render_frame_update(Engine* engine, float dt) {
     (void)dt;
     // --cook exits when the async loader has DRAINED rather than at a frame
-    // count: uploads publish at <=5 per frame and the workers may still be
-    // decoding at frame 1, so a one-frame run under-warms any texture-heavy
-    // model -- the exact scene the verb exists for. Two frames minimum, so a
-    // model with no async textures still renders once before leaving.
+    // count, so a texture-heavy model -- the exact scene the verb exists for --
+    // warms fully. It runs headless, and a headless run drains the loader
+    // before frame 1 (spec 14.8), so for what the start-up asked that is the
+    // second frame; the test still waits out anything asked for later. Two
+    // frames minimum, so a model with no async textures still renders once
+    // before leaving.
     if (frame_schedule->cook && engine->total_frames >= 2 &&
         !async_loader_is_busy(engine->async_loader))
         glfwSetWindowShouldClose(engine->window, GLFW_TRUE);
@@ -3846,8 +3848,9 @@ int main(int argc, char** argv) {
     // deterministic (jitter + history accumulation would vary run to run).
     // --taa additionally exercises the temporal passes (TAA/AO/GI
     // accumulation) headless as a diagnostic: jitter + history make output
-    // run-to-run sensitive to async load timing, so it is not for
-    // byte-compared screenshots.
+    // depend on the frame a texture lands in. Headless, what the start-up
+    // asked for lands before frame 1 (spec 14.8), but one asked for later
+    // still streams, so it is not for byte-compared screenshots.
     const bool taa_policy = !args.headless || args.force_taa;
     cfg.taa = taa_policy;
     if (taa_policy)

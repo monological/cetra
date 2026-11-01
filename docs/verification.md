@@ -31,10 +31,11 @@ change, build the commit that last baked the corpus clean and check it.** 13.58'
 08edbd32, built after the update, failed the same ten by the same counts and drew all 33 exactly
 as master did. Build it from an export, so `out/` keeps master's: `git archive` into a scratch
 directory, the seven submodules linked in, a `VERSION` file, and `cmake -S <export> -B
-<export>/out -G Ninja -DCMAKE_BUILD_TYPE=Debug`. Nine were re-baked. **`local_exposure` was not**:
-its recipe takes frame 30 while the render app's textures are still streaming, which a headless run
-does not wait for, so on a machine under load the frame is a room half loaded, 614,671 px from the
-golden, and the re-bake's two renders disagree. On an idle machine it reads 3,181 px.
+<export>/out -G Ninja -DCMAKE_BUILD_TYPE=Debug`. Nine were re-baked at once. **`local_exposure` had
+to wait for spec 14.8**: its recipe takes frame 30, and until then a headless run did not wait for
+its textures, so on a machine under load the frame was a room half loaded, 614,671 px from the
+golden, and the re-bake's two renders disagreed. On an idle machine it read 3,181 px, which is what
+its re-bake moved once the textures were in before frame 1.
 
 ## Contents
 
@@ -121,7 +122,8 @@ shared 400x300 costs ~0.0013 s: thirty frames cost **0.04 s** more than one. The
 ~339 process STARTUPS, not pixels, so lowering a frame count saves ~5 s across the whole suite
 while risking an arm that reads a pose silently reading a different one. Frame counts are a
 correctness question here, not a performance one — `render()`'s docstring records what the engine
-actually forces, which is about two frames for a static pinned capture, and 60 / 150 / 240 / 400
+actually forces, which is one frame for a static pinned capture since spec 14.8 put its textures
+in before frame 1, and 60 / 150 / 240 / 400
 where the accumulators, the meter, the trace cadence and the walk geometry genuinely demand them.
 
 ### Reading a `--profiler` table
@@ -231,7 +233,9 @@ Auto-exposure adapts per FRAME (a fixed 0.04 blend plus a snap deadband, not a
 delta-scaled rate -- see exposure.c), so two equal-length headless runs of one
 build adapt identically and compare at exactly 0 -- which looks like proof and
 is not. Across two builds the approach path can differ (async texture arrival
-order perturbs the frames the meter reads), exposure lands somewhere slightly
+order perturbed the frames the meter reads; since spec 14.8 a headless run's
+start-up textures are all in before frame 1, which takes that cause away for
+them but not for a texture asked for later), exposure lands somewhere slightly
 different, and since it multiplies the whole frame, **every pixel in the image
 changes**.
 
@@ -249,7 +253,7 @@ first.
 
 | source | deterministic across BUILDS? | how to pin |
 |---|---|---|
-| **Auto-exposure** | **Converged: YES.** The snap makes steady state a pure function of the scene, then bit-identical across runs. BEFORE convergence, no -- the approach path shifts with async-load arrival order, and exposure scales every pixel. WHEN it converges is scene-dependent: frame 91 on `postfx_convergence_fixture`, not the deadband's first touch around 18 | **`--no-auto-exposure -E 1.0` (still the rule for before/after)** -- cheaper than reasoning about whether your frame count cleared it. `--exposure-probe` prints `target_log2` and `adapted_log2`; equal means converged |
+| **Auto-exposure** | **Converged: YES.** The snap makes steady state a pure function of the scene, then bit-identical across runs. BEFORE convergence, no -- the approach path shifts with async-load arrival order (headless, only for a texture asked for after the run began: start-up's are in before frame 1 since spec 14.8), and exposure scales every pixel. WHEN it converges is scene-dependent: frame 91 on `postfx_convergence_fixture`, not the deadband's first touch around 18 | **`--no-auto-exposure -E 1.0` (still the rule for before/after)** -- cheaper than reasoning about whether your frame count cleared it. `--exposure-probe` prints `target_log2` and `adapted_log2`; equal means converged |
 | **Wind** (`wind_response` materials) | YES in headless (spec 11.2) -- rides the fixed-step frame clock, frame N is phase N | (automatic) |
 | **Spring bones** (`springbone.c`) | YES in headless -- stepped by the animation clock, which is the frame clock | `--no-springs` only to isolate spring motion in an A/B |
 | **Particles** (falling leaves, spores) | YES in headless (spec 11.2) -- ticked from the frame clock; game-loop step count is exactly one per frame | (automatic) |
@@ -1068,9 +1072,10 @@ that app is 0 px run-to-run (the row above says so). The recipes reproduced at 0
 standalone through `goldens.py --only`, but inside full runs `menu` failed more than once --
 1212 px once, 48,886 px once -- and never reproduced on a re-run of the same binary. Spec 13.6
 dropped both. What was never explained is recorded for whoever brings one back: the first
-suspect is the async texture upload budget (<=5/frame), the one part of a gametest frame that
-depends on how busy the machine is, and a new recipe should give the loads enough frames to
-have certainly landed.
+suspect was the async texture upload budget (<=5/frame), the one part of a gametest frame that
+depended on how busy the machine is. Since spec 14.8 a headless run's start-up textures are in
+before frame 1, which clears that suspect for anything loaded at start-up; a texture a menu asks
+for after the run has begun still streams, and a recipe should give it frames to land.
 
 ---
 

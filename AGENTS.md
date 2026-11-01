@@ -180,7 +180,8 @@ Each G-buffer target is only written when a post pass that consumes it is active
    occlusion layer** (`shadow_render_rain_layer`, spec 13.9) whenever the scene rains, shadows
    on or off: switching shadows off does not put a roof over the street.
 7. Bind scene MSAA FBO, set supersampled viewport + draw buffers, clear.
-8. Async texture uploads (<=5/frame), mask-array build, POM height resolve.
+8. Async texture uploads (<=5/frame), mask-array build, POM height resolve. Headless, what the
+   app's start-up asked for is already in: `engine_run` waits for it before frame 1 (spec 14.8).
 9. App render callback -> `engine_render_scene`, or `engine_render_scene` itself
    when the app passed no callback (spec 11.107).
 10. `engine_present_frame` -> PostFX chain, then the app's **overlays**
@@ -231,7 +232,9 @@ things about it are easy to get backwards.
   input script's frames included, so what one frame began has landed by the next on any machine
   and a scripted test repeats with no wait of its own. A window draws what asks at once. Only
   `engine_begin_work`'s work is waited for, never the loader's decodes, whose count falls only as a
-  frame delivers them, so a wait on it would never end. **`engine_end_work` stores its request
+  frame delivers them, so a wait on it would never end. Those decodes are only ever a texture
+  asked for after the run began: what its start-up asked for is in before frame 1 (spec 14.8).
+  **`engine_end_work` stores its request
   before its count falls and wakes the loop once, after both**: the request first is what keeps a
   run from ending before the result is drawn, and a wake after the count has fallen is the one a
   waiting loop needs. Waiting for work is its own state (`IDLE_WAIT_WORK`), in which a timed wake is
@@ -2216,6 +2219,11 @@ as the callbacks -- which is how a headless run opens the palette and types into
 **Under idle mode (spec 14.1) a headless run ends when nothing more will ask for a frame**, and
 that frame is its screenshot: `-f N` is then the most it draws, not the count. A run with no idle
 mode is unchanged.
+**A headless run starts with every texture its start-up asked for** (spec 14.8): `engine_run`
+waits for the loader before frame 1, so frame N is the same picture on a busy machine as on an
+idle one. Streamed in at five uploads a frame, `local_exposure`'s frame 30 was a room half loaded
+under load, and its re-bake's two renders disagreed. A window still draws its first frame at once,
+and a texture asked for after the run has begun still streams; `textures-in` holds it.
 **`--screenshot-every` was the half of that claim
 that was not true until 11.62**: forest and spores parsed `-S` but not it, so capturing a
 TRANSITION cost one full process per frame -- which on forest is a terrain bake and a 5,000-prop
