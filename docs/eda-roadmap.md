@@ -688,6 +688,11 @@ project are pcb's own, on these calls; nothing in cetra is missing for them.
   None is needed by pcb's 6.2. pcb takes them up in its 6.1.2. A host's own key sequences, a
   `:map`, wait until pcb wants a command vim has no meaning for; completion (Ctrl+X Ctrl+O) is a
   spec of its own, later.
+- **Any element takes keys** -- spec 14.10, specced, not built: `ui_set_on_key` on any element, a
+  plain one with a hook taking keys and keeping the focus under a passing pointer as a text field
+  does. Only a text field and the code editor do today, so pcb's schematic pane (its 6.2), and
+  every pane kind after it, could not be given keys without a workaround. `ui_field_set_on_key`
+  becomes the general call.
 - **A second window**, for a second monitor. pcb lists it as an open question and as a cetra change;
   nothing is decided.
 - **The physical depth of field** of item 7, likely wanted before pcb's 3D view is judged on its
