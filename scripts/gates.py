@@ -26157,6 +26157,9 @@ def _ui_probe(case, env=None):
 # Vim, where the oracle's arms find it; they skip without it.
 _VIM = shutil.which("vim")
 
+# The indent and format rules the layout oracle sources on vim's side (spec 14.9).
+_VIM_LAYOUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vim_layout.vim")
+
 # The settings the vim mode keeps: autoindent, spaces for a tab at the text's width of 4, a search
 # that ignores case unless the query has a capital, Backspace over anything, and J one space.
 _VIM_SET = ("set nocompatible autoindent expandtab tabstop=4 shiftwidth=4 softtabstop=0 "
@@ -26289,6 +26292,25 @@ _VIM_SEQUENCES = [
     "jgd", "2jgdn", "wgd", "wgD", "<C-v>gdd",
 ]
 
+# The layout oracle (spec 14.9): every fixture, and one indented badly on purpose -- brackets
+# opening and closing over lines, a tab, comment lines the rule leaves alone, a line of blanks --
+# with the rules of _VIM_LAYOUT on both sides. = over every kind of range, in visual modes and
+# with counts; the new lines o, O and Enter make; changes of whole lines; gq over ranges; and .,
+# u and Ctrl+R after them.
+_VIM_LAYOUT_FIXTURES = dict(_VIM_FIXTURES, crooked=(
+    b"(block bad\n(port a\n      :width 4)\n   (net b)\n; kept\n        ; also kept\n"
+    b"\t(inst (u 1)\nx))\n  \n  (tail one two three four five)\n"))
+_VIM_LAYOUT_SEQUENCES = [
+    "==", "=j", "=k", "=G", "=gg", "3==", "=2j", "=ip", "=ap", "=i(", "=a(", "=}", "V=", "Vj=",
+    "vj=", "VG=", "<C-v>j=", "==.", "=j.", "j==j.", "==u", "=Gu", "=Gu<C-r>", "=G.",
+    "oZ<Esc>", "OZ<Esc>", "o<Esc>", "O<Esc>", "o(<CR>x<Esc>", "A<CR>x<Esc>", "A(<CR>x<Esc>",
+    "i<CR><Esc>", "i<CR>x<Esc>", "3oZ<Esc>", "2O(<Esc>", "oZ<Esc>u", "oZ<Esc>j.",
+    "ccZ<Esc>", "SZ<Esc>", "cc<Esc>", "cjZ<Esc>", "c}Z<Esc>", "VjcZ<Esc>", "VjSZ<Esc>",
+    "ccZ<Esc>j.", "3SZ<Esc>",
+    "gqq", "gqj", "gqk", "gqap", "gqip", "gqG", "gqgg", "3gqq", "gqgq", "Vjgq", "vjgq", "V2jgq",
+    "<C-v>jgq", "gqj.", "gqq.", "gqju", "gqju<C-r>", "gqGu",
+]
+
 # The random sequences' vocabulary: whole commands, composed at random. It leaves out what the corpus
 # leaves out as known differences, and so whatever they would combine into: visual I and A, $
 # inside a character or line area, a line let go; and a quote object in visual mode, which vim
@@ -26356,12 +26378,13 @@ _VIM_NOT_ON = {
 }
 
 
-def _vim_corpus(sequences):
-    """The cases a list of sequences makes: each on every fixture, at three of its starts, turned
-    by the sequence's place in the list so every start is used."""
+def _vim_corpus(sequences, fixtures=None):
+    """The cases a list of sequences makes: each on every fixture -- _VIM_FIXTURES unless others
+    are given -- at three of its starts, turned by the sequence's place in the list so every start
+    is used."""
     cases = []
     for j, keys in enumerate(sequences):
-        for name, text in _VIM_FIXTURES.items():
+        for name, text in (fixtures or _VIM_FIXTURES).items():
             if keys in _VIM_NOT_ON.get(name, ()):
                 continue
             starts = _vim_starts(text)
@@ -26404,13 +26427,14 @@ def _vim_exe_keys(keys):
     return "".join(out)
 
 
-def _vim_reference(case, path, read_only=False):
+def _vim_reference(case, path, read_only=False, layout=False):
     """(line, column, bytes) vim leaves `case` at -- its text, the cursor's line and column, and
     its keys -- or None when vim did not run. The text is the buffer as vim writes it, in the
     file's own line endings. The keys are fed as typed, so each command is its own step of undo
     and a key after one that failed is still read, as when a person types them; normal! would
     make every command one step and let go of the keys after a failure. `read_only` sets
-    'nomodifiable' on the buffer, which is what a read-only text is held to."""
+    'nomodifiable' on the buffer, which is what a read-only text is held to; `layout` sources the
+    indent and format rules a host's hooks answer with (spec 14.9)."""
     text, line, col, keys = case
     with open(path, "wb") as f:
         f.write(text)
@@ -26419,6 +26443,7 @@ def _vim_reference(case, path, read_only=False):
         if os.path.exists(p):
             os.remove(p)
     cmd = [_VIM, "-Nu", "NONE", "-i", "NONE", "-n", "-es", "-c", _VIM_SET,
+           *(["-c", f"source {_VIM_LAYOUT}"] if layout else []),
            *(["-c", "set nomodifiable"] if read_only else []),
            "-c", f"call cursor({line}, {col})",
            "-c", f"call feedkeys(\"{_vim_exe_keys(keys)}\", 'xt')",
@@ -26435,10 +26460,11 @@ def _vim_reference(case, path, read_only=False):
     return int(l), int(c), data
 
 
-def _vim_cetra(cases, workdir, tag, read_only=False):
+def _vim_cetra(cases, workdir, tag, read_only=False, layout=False):
     """[(line, column, bytes, emptied)] the vim mode leaves each case at, from one gametest run --
     `emptied` whether the text was emptied whole on the way; None for a case it printed nothing
-    for. `read_only` makes every case's text read-only."""
+    for. `read_only` makes every case's text read-only; `layout` installs the rules of
+    _VIM_LAYOUT as the host's indent and format hooks."""
     path = os.path.join(workdir, f"vim_cases_{tag}.txt")
     with open(path, "w", encoding="ascii") as f:
         for text, line, col, keys in cases:
@@ -26446,6 +26472,8 @@ def _vim_cetra(cases, workdir, tag, read_only=False):
     env = dict(os.environ, CETRA_VIM_CASES=path)
     if read_only:
         env["CETRA_VIM_READ_ONLY"] = "1"
+    if layout:
+        env["CETRA_VIM_LAYOUT"] = "1"
     out, _ = _gametest_probe_text("--ui-probe", "vim-run", env=env, timeout=1800)
     got = {}
     for m in re.finditer(r"^vim (\d+) (\d+) (\d+) ([0-9a-f]*) ([01])$", out, re.M):
@@ -26474,17 +26502,18 @@ def _vim_agrees(ref, got):
             and (ref[2] == got[2] + brk or got[2] == ref[2] + brk))
 
 
-def _vim_oracle(cases, workdir, tag, read_only=False):
+def _vim_oracle(cases, workdir, tag, read_only=False, layout=False):
     """The cases on which the vim mode and vim itself differ, as (case, vim's, the mode's), and
     how many vim ran. The mode's one run goes beside vim's many. `read_only` runs every case on a
-    read-only text beside vim's 'nomodifiable'."""
+    read-only text beside vim's 'nomodifiable'; `layout` gives both sides the rules of
+    _VIM_LAYOUT."""
     from concurrent.futures import ThreadPoolExecutor
     folder = os.path.join(workdir, f"vim_{tag}")
     os.makedirs(folder, exist_ok=True)
     with ThreadPoolExecutor(max_workers=9) as pool:
-        mode = pool.submit(_vim_cetra, cases, workdir, tag, read_only)
+        mode = pool.submit(_vim_cetra, cases, workdir, tag, read_only, layout)
         ref = list(pool.map(lambda ic: _vim_reference(ic[1], os.path.join(folder, f"{ic[0]}.txt"),
-                                                      read_only),
+                                                      read_only, layout),
                             enumerate(cases)))
         got = mode.result()
     ran = sum(r is not None for r in ref)
@@ -28426,7 +28455,9 @@ def run_ui_gate(workdir):
       ui-vim-script  apps/canvas --editor --vim, driven by a script: dw, a search
                      typed in the app's own line under the editor, x, :1 there, .
                      made again, and a search finding nothing said on the line
-                     (end to end).
+                     (end to end); and with --vim-lookup --vim-layout (spec 14.9),
+                     == re-indenting a line by its bracket and gd saying itself on
+                     the line.
       ui-editor-host-edit the host's edits through an editor: a selection moved by an
                      edit before it, kept by one after it, grown by one inside it; a
                      caret under replaced bytes at their end, and before bytes the
@@ -28496,6 +28527,13 @@ def run_ui_gate(workdir):
                      they would insert is read as commands, and it holds `q` and
                      `(`, a macro and a sentence motion the mode leaves out. Skips
                      without vim on the path.
+      ui-vim-layout-oracle = and gq and the new lines that ask for an indent, held to vim
+                     (spec 14.9): the layout corpus on every fixture and a crooked
+                     one, vim sourcing scripts/vim_layout.vim as its indentexpr and
+                     formatexpr, the mode given the same two rules in C as a host's
+                     hooks; then again read-only beside 'nomodifiable', the three
+                     sequences that type ( into a refused insert left out, as above.
+                     Skips without vim on the path.
       ui-editor-ranges-late apps/canvas --editor's parse on its own thread, taken six
                      frames after it began: the text it read had an unclosed '(' at
                      byte 9, three bytes were typed before it since, and the error is
@@ -29645,6 +29683,19 @@ def run_ui_gate(workdir):
           and run["said"] == "Pattern not found: zzz")
     detail = (f"{run['text']!r} {run['sel']}, normal mode {run['vim'] == 0}, said "
               f"{run['said']!r} (want b'wo\\none our\\n' [1, 0, 0], 'Pattern not found: zzz')")
+    # The app's own lookup and layout (spec 14.9): == re-indents the second line by its bracket,
+    # and gd on the first line's head says itself on the vim line.
+    sexpr_path = os.path.join(workdir, "vim_layout.ckt")
+    with open(sexpr_path, "w", encoding="utf-8", newline="") as f:
+        f.write("(block a\n(port b)\n)\n")
+    with open(script, "w", encoding="utf-8") as f:
+        f.write("3 type=j\n5 type===\n7 type=ggw\n9 type=gd\n")
+    _, laid = _canvas_run(workdir, "vim_layout", "--editor", sexpr_path, "--vim", "--vim-lookup",
+                          "--vim-layout", "--input-script", script, frames=12)
+    laid = _canvas_editor(laid)
+    ok = ok and laid["text"] == b"(block a\n  (port b)\n)\n" and laid["said"] == "gd block"
+    detail += (f"; with the app's lookup and layout {laid['text']!r}, said {laid['said']!r} "
+               f"(want b'(block a\\n  (port b)\\n)\\n', 'gd block')")
     print(f"  ui-vim-script         {'PASS' if ok else 'FAIL'}  {detail}")
     note("ui-vim-script", ok)
 
@@ -29762,6 +29813,33 @@ def run_ui_gate(workdir):
                      else ""))
         print(f"  ui-vim-read-only-oracle {'PASS' if ok else 'FAIL'}  {detail}")
         note("ui-vim-read-only-oracle", ok)
+
+    # ---- the host's indent and format held to vim's indentexpr and formatexpr (spec 14.9)
+    if not _VIM:
+        print("  ui-vim-layout-oracle  SKIP  (no vim on the path)")
+    else:
+        # Refused, these leave ( to be read as a command: vim's sentence motion, which the mode
+        # leaves out.
+        absent = {"o(<CR>x<Esc>", "A(<CR>x<Esc>", "2O(<Esc>"}
+        runs = []
+        for read_only in (False, True):
+            seqs = [s for s in _VIM_LAYOUT_SEQUENCES if not (read_only and s in absent)]
+            cases = _vim_corpus(seqs, _VIM_LAYOUT_FIXTURES)
+            diffs, ran = _vim_oracle(cases, workdir, "layout_ro" if read_only else "layout",
+                                     read_only=read_only, layout=True)
+            runs.append((len(cases), ran, diffs))
+        missing = absent - set(_VIM_LAYOUT_SEQUENCES)
+        ok = all(ran == n and not diffs for n, ran, diffs in runs) and not missing
+        detail = "; ".join(
+            f"{label}: {n} cases of {len(_VIM_LAYOUT_SEQUENCES)} sequences over "
+            f"{len(_VIM_LAYOUT_FIXTURES)} texts, vim ran {ran}, {len(diffs)} differ"
+            + (f": {_vim_shown(diffs, lambda case: f'{case[3]!r} at {case[1]}:{case[2]}')}"
+               if diffs else "")
+            for label, (n, ran, diffs) in zip(("writable", "read-only"), runs))
+        if missing:
+            detail += f"; left out but no longer in the corpus: {sorted(missing)}"
+        print(f"  ui-vim-layout-oracle  {'PASS' if ok else 'FAIL'}  {detail}")
+        note("ui-vim-layout-oracle", ok)
 
     # ---- a parse's errors, read a few versions back, underlined where the typing since put them
     late_path = os.path.join(workdir, "editor_late.ckt")
