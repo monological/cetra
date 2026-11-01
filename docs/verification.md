@@ -22,6 +22,20 @@ do not travel and should not be read as regressions: **timing arms** are meaning
 software rasterizer, and **goldens** compare real pixels, so a genuine rasterizer difference shows
 up as a difference. The corpus must not be re-baked off macOS.
 
+**A macOS update moves goldens too, and no flag reaches it.** macOS 27.2 (installed 2026-10-28)
+moved ten, every moved pixel by one code (12 of `cornell_rooms`' by two), in bands where a smooth
+gradient crosses a code: `aerial_fixture` 588 px, `ao_fixture` 1,450, `cloud_fixture` 3,316,
+`cloud_fixture_lowsun` 14,842, `cornell_rooms` 20,465, `froxel_fog` 2,246, `layer_vt_fixture` 100,
+`local_exposure` 3,181, `water_fixture` 3,381, `water_submerged` 100. **To tell an update from a
+change, build the commit that last baked the corpus clean and check it.** 13.58's bake commit,
+08edbd32, built after the update, failed the same ten by the same counts and drew all 33 exactly
+as master did. Build it from an export, so `out/` keeps master's: `git archive` into a scratch
+directory, the seven submodules linked in, a `VERSION` file, and `cmake -S <export> -B
+<export>/out -G Ninja -DCMAKE_BUILD_TYPE=Debug`. Nine were re-baked. **`local_exposure` was not**:
+its recipe takes frame 30 while the render app's textures are still streaming, which a headless run
+does not wait for, so on a machine under load the frame is a room half loaded, 614,671 px from the
+golden, and the re-bake's two renders disagree. On an idle machine it reads 3,181 px.
+
 ## Contents
 
 - [Running the gates](#running-the-gates) — which binaries a number describes, what a release run
