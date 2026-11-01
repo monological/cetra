@@ -1835,8 +1835,10 @@ It takes the capture set `-x`, `-f`, `-S`, `-W` and `-H`, and:
   `glFinish` calls. Both are what the `canvas` gate group reads.
 - `--idle` turns on the engine's idle mode (spec 14.1): a frame is drawn only when something asks
   for one. Under it:
-  - `--idle-wake S,...` asks for timed wakes, each on its frame in turn. On the first frame with
-    none left to ask for, the late work below starts.
+  - `--idle-wake S,...` asks for timed wakes, each on its frame in turn; times joined by `+` are
+    asked on the same frame (`0.6+0.2`, spec 14.9). On the first frame with none left to ask for,
+    the late work below starts. Each frame prints its wall clock (`canvas idle at N T`), which
+    `idle-wakes-kept` reads.
   - `--edit-thread` fills the board on a thread started as late work, after a pause standing for
     a parse, and applies it on the frame the thread's end wakes. `--work-delay MS` sets the pause,
     50 by default (spec 14.7); headless, the frame after the one that started the thread waits for
@@ -1916,6 +1918,10 @@ It takes the capture set `-x`, `-f`, `-S`, `-W` and `-H`, and:
   - F10 shows the next file in the focused pane, its carets and its view where that pane last was
     in that file, brought through the edits made there since.
 
+  `--split-share F` (spec 14.9) gives F8's first side `UI_SHARE` F across its row and the new pane
+  the rest, so a split holds its share as the window is resized; without it both sides share the
+  row evenly.
+
   F6 and F7 act on the focused pane's file. Under `--canvas-probe` the run also prints each pane in
   the window's order (`canvas pane K file F top OFFSET focused 0|1 sel ...`), each file's text
   as hex (`canvas file F`), the panes' tree with each pane its number and each row its children in
@@ -1928,6 +1934,13 @@ It takes the capture set `-x`, `-f`, `-S`, `-W` and `-H`, and:
   not found" or "Not an editor command" said there until the next key. Under `--canvas-probe` the
   run also prints `canvas editor vim` with the state and that message, which `ui-vim-script`
   reads.
+  - `--vim-lookup` (spec 14.9) answers `gd`, `gD`, Ctrl+] and `K` as a host would: it says on the
+    line what it was asked and the name -- the atom at the caret on pcb's rules, or a one-line
+    visual area's text -- as `gd memory-bank`, and answers that it went. Without it no host is
+    set, and `gd` and `gD` are vim's own search.
+  - `--vim-layout` (spec 14.9) answers `=`, `gq` and a new line's indent: two spaces for every
+    bracket still open where a line starts, one fewer for a line opening with `)`; and `gq`
+    joining the lines' words on one line at the first line's indent.
 
 The app's own keys stand down while the UI wants the keyboard (`ui_wants_keyboard`): a field or the
 editor holds the focus, or the palette is up.
