@@ -666,18 +666,24 @@ project are pcb's own, on these calls; nothing in cetra is missing for them.
     that would start it waits for it: pcb's spec checks its two `engine_begin_work` sites.
 
   pcb takes these up in a spec of its own.
-- **Vim keys the host answers, sizes by share, and every timed wake** -- spec 14.9, specced, not
-  built, the rest of pcb 6.1's reviews:
+- **Vim keys the host answers, sizes by share, and every timed wake** -- spec 14.9, built, the
+  rest of pcb 6.1's reviews:
   - hooks for vim's own keys that need the language, as vim's `tagfunc`, `keywordprg`,
-    `indentexpr` and `formatexpr` are: `gd`, `gD` and Ctrl+] ask the host where a name is
-    declared, `K` what it is, `=` and a new line its indent, `gq` its lines laid out. pcb now spots
-    its `gd` by reading the vim mode's half-typed keys, which breaks if the vim mode ever does `gd`
-    itself; with no host, `gd` becomes vim's own text search.
-  - `UI_SHARE`, a size as a share of the parent, so a pane split's ratio sizes it rather than the
-    app rewriting fixed sizes before and after each layout. It replaced "grow weights": a weight
-    on GROW comes on top of what a side measures, so a split would miss its ratio by its gap.
-  - `engine_request_frame_after` keeping every time asked, where it keeps only the soonest; pcb
-    asks its three each frame until they come.
+    `indentexpr` and `formatexpr` are: `ui_editor_vim_set_lookup` for `gd`, `gD`, Ctrl+] and `K`,
+    `ui_editor_vim_set_indent` for `=` and every new line's indent, `ui_editor_vim_set_format`
+    for `gq`. pcb's peek at the vim mode's half-typed keys for its `gd` can go. Built differently
+    from the plan in two places:
+    - Ctrl+] and `K` in visual mode ask only for an area on one line, as vim's do.
+    - Every change of whole lines asks for an indent, not only `cc` and `S`, since vim's
+      `op_change` re-indents any linewise change.
+  - With no host, `gd` and `gD` are vim's own `find_decl`, held to vim by the oracle. Under an
+    operator they are always characterwise, where vim's take the kind of the motion before them.
+  - `UI_SHARE`, a size as a share of the parent, rounded down to a whole point as pcb's split
+    floors it, so a pane split's ratio sizes it rather than the app rewriting fixed sizes before
+    and after each layout. It replaced "grow weights": a weight on GROW comes on top of what a side
+    measures, so a split would miss its ratio by its gap. pcb's `size_under` and its two calls can
+    go: a split is one side at `UI_SHARE` and the other GROW.
+  - `engine_request_frame_after` keeps every time asked, 64 at once, so pcb asks its three once.
 
   None is needed by pcb's 6.2. pcb takes them up in its 6.1.2. A host's own key sequences, a
   `:map`, wait until pcb wants a command vim has no meaning for; completion (Ctrl+X Ctrl+O) is a
