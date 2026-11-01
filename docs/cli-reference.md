@@ -1899,8 +1899,10 @@ It takes the capture set `-x`, `-f`, `-S`, `-W` and `-H`, and:
     in that file, brought through the edits made there since.
 
   F6 and F7 act on the focused pane's file. Under `--canvas-probe` the run also prints each pane in
-  the window's order (`canvas pane K file F top OFFSET focused 0|1 sel ...`) and each file's text
-  as hex (`canvas file F`), which `canvas-panes` reads.
+  the window's order (`canvas pane K file F top OFFSET focused 0|1 sel ...`), each file's text
+  as hex (`canvas file F`), the panes' tree with each pane its number and each row its children in
+  parentheses (`canvas panes tree ((0,1))` after one split, `(0)` for one pane), and the pane the
+  vim line is answering (`canvas panes asking K`, -1 for none), which `canvas-panes` reads.
 - `--vim` (spec 14.5), with `--editor`, puts the editor in the vim mode, the app's own keys a
   layer over it. A line under the editor shows vim's state (`-- INSERT --`, `-- VISUAL --`...)
   and the keys of a half-typed command; `/`, `?` and `:` from normal mode type into it, a search
